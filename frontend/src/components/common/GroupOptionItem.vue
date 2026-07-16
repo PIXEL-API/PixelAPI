@@ -29,10 +29,11 @@
       <span v-if="rateMultiplier !== undefined" :class="['inline-flex items-center whitespace-nowrap rounded-full px-3 py-1 text-xs font-semibold', ratePillClass]">
         <template v-if="hasCustomRate">
           <span class="mr-1 line-through opacity-50">{{ rateMultiplier }}x</span>
-          <span class="font-bold">{{ userRateMultiplier }}x</span>
+          <span class="font-bold">{{ effectiveDisplayRate }}x</span>
+          <span v-if="rateSourceLabel" class="ml-1 text-[11px] font-medium opacity-80">{{ rateSourceLabel }}</span>
         </template>
         <template v-else>
-          {{ rateMultiplier }}x 倍率
+          {{ rateMultiplier }}x {{ rateSourceLabel || t('groups.rateLabel') }}
         </template>
       </span>
       <!-- Checkmark -->
@@ -52,6 +53,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import GroupBadge from './GroupBadge.vue'
 import type { SubscriptionType, GroupPlatform, GroupScope } from '@/types'
 
@@ -62,6 +64,8 @@ interface Props {
   subscriptionType?: SubscriptionType
   rateMultiplier?: number
   userRateMultiplier?: number | null
+  effectiveRateMultiplier?: number | null
+  rateMultiplierSource?: string | null
   description?: string | null
   selected?: boolean
   showCheckmark?: boolean
@@ -71,17 +75,37 @@ const props = withDefaults(defineProps<Props>(), {
   subscriptionType: 'standard',
   selected: false,
   showCheckmark: true,
-  userRateMultiplier: null
+  userRateMultiplier: null,
+  effectiveRateMultiplier: null,
+  rateMultiplierSource: null
 })
+const { t } = useI18n()
 
-// Whether user has a custom rate different from default
+const effectiveDisplayRate = computed(() => props.effectiveRateMultiplier ?? props.userRateMultiplier ?? null)
+
+// Whether user has an effective rate different from default
 const hasCustomRate = computed(() => {
   return (
-    props.userRateMultiplier !== null &&
-    props.userRateMultiplier !== undefined &&
+    effectiveDisplayRate.value !== null &&
+    effectiveDisplayRate.value !== undefined &&
     props.rateMultiplier !== undefined &&
-    props.userRateMultiplier !== props.rateMultiplier
+    effectiveDisplayRate.value !== props.rateMultiplier
   )
+})
+
+const rateSourceLabel = computed(() => {
+  switch (props.rateMultiplierSource) {
+    case 'new_user_group':
+      return t('groups.rateSources.newUserGroup')
+    case 'user_group':
+      return t('groups.rateSources.userGroup')
+    case 'account_share':
+      return t('groups.rateSources.accountShare')
+    case 'group_default':
+      return t('groups.rateLabel')
+    default:
+      return props.userRateMultiplier != null ? t('groups.rateSources.userGroup') : t('groups.rateLabel')
+  }
 })
 
 // Rate pill color matches platform badge color

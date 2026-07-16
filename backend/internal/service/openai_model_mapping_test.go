@@ -20,22 +20,29 @@ func TestResolveOpenAIForwardModel(t *testing.T) {
 			expectedModel:      "gpt-4o-mini",
 		},
 		{
-			name: "does not fall back to group default for invalid gpt model",
+			name: "uses exact messages dispatch mapping for an unknown claude family",
 			account: &Account{
 				Credentials: map[string]any{},
 			},
-			requestedModel:     "gpt6",
-			defaultMappedModel: "gpt-5.4",
-			expectedModel:      "gpt6",
+			requestedModel:     "claude-fable-5",
+			defaultMappedModel: " gpt-5.6-sol ",
+			expectedModel:      "gpt-5.6-sol",
 		},
 		{
-			name: "preserves explicit gpt-5.4 instead of group default",
+			name: "ordinary invalid gpt model has no messages dispatch fallback",
 			account: &Account{
 				Credentials: map[string]any{},
 			},
-			requestedModel:     "gpt-5.4",
-			defaultMappedModel: "gpt-4o-mini",
-			expectedModel:      "gpt-5.4",
+			requestedModel: "gpt6",
+			expectedModel:  "gpt6",
+		},
+		{
+			name: "ordinary explicit gpt-5.4 keeps requested model",
+			account: &Account{
+				Credentials: map[string]any{},
+			},
+			requestedModel: "gpt-5.4",
+			expectedModel:  "gpt-5.4",
 		},
 		{
 			name: "preserves exact passthrough mapping instead of group default",
@@ -77,40 +84,36 @@ func TestResolveOpenAIForwardModel(t *testing.T) {
 			expectedModel:      "gpt-5.4",
 		},
 		{
-			name: "preserves codex spark instead of group default",
+			name: "ordinary codex spark keeps requested model",
 			account: &Account{
 				Credentials: map[string]any{},
 			},
-			requestedModel:     "gpt-5.3-codex-spark",
-			defaultMappedModel: "gpt-5.4",
-			expectedModel:      "gpt-5.3-codex-spark",
+			requestedModel: "gpt-5.3-codex-spark",
+			expectedModel:  "gpt-5.3-codex-spark",
 		},
 		{
-			name: "preserves gpt-5.5 instead of group default",
+			name: "ordinary gpt-5.5 keeps requested model",
 			account: &Account{
 				Credentials: map[string]any{},
 			},
-			requestedModel:     "gpt-5.5",
-			defaultMappedModel: "gpt-5.4",
-			expectedModel:      "gpt-5.5",
+			requestedModel: "gpt-5.5",
+			expectedModel:  "gpt-5.5",
 		},
 		{
-			name: "preserves openai namespaced gpt-5.5 instead of group default",
+			name: "ordinary namespaced gpt-5.5 keeps requested model",
 			account: &Account{
 				Credentials: map[string]any{},
 			},
-			requestedModel:     "openai/gpt-5.5",
-			defaultMappedModel: "gpt-5.4",
-			expectedModel:      "openai/gpt-5.5",
+			requestedModel: "openai/gpt-5.5",
+			expectedModel:  "openai/gpt-5.5",
 		},
 		{
-			name: "preserves compact gpt-5.5 instead of group default",
+			name: "ordinary compact gpt-5.5 keeps requested model",
 			account: &Account{
 				Credentials: map[string]any{},
 			},
-			requestedModel:     "gpt-5.5-openai-compact",
-			defaultMappedModel: "gpt-5.4",
-			expectedModel:      "gpt-5.5-openai-compact",
+			requestedModel: "gpt-5.5-openai-compact",
+			expectedModel:  "gpt-5.5-openai-compact",
 		},
 	}
 
@@ -240,19 +243,25 @@ func TestNormalizeOpenAIModelForUpstream(t *testing.T) {
 	}{
 		{
 			name:    "oauth keeps codex normalization behavior",
-			account: &Account{Type: AccountTypeOAuth},
+			account: &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth},
 			model:   "gemini-3-flash-preview",
 			want:    "gpt-5.4",
 		},
 		{
+			name:    "grok oauth preserves mapped grok model",
+			account: &Account{Platform: PlatformGrok, Type: AccountTypeOAuth},
+			model:   "grok-4.5",
+			want:    "grok-4.5",
+		},
+		{
 			name:    "apikey preserves custom compatible model",
-			account: &Account{Type: AccountTypeAPIKey},
+			account: &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey},
 			model:   "gemini-3-flash-preview",
 			want:    "gemini-3-flash-preview",
 		},
 		{
 			name:    "apikey preserves official non codex model",
-			account: &Account{Type: AccountTypeAPIKey},
+			account: &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey},
 			model:   "gpt-4.1",
 			want:    "gpt-4.1",
 		},

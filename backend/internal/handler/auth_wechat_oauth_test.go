@@ -1467,6 +1467,10 @@ func (s *wechatOAuthRefreshTokenCacheStub) GetRefreshToken(context.Context, stri
 	return nil, service.ErrRefreshTokenNotFound
 }
 
+func (s *wechatOAuthRefreshTokenCacheStub) RotateRefreshToken(context.Context, string, string, *service.RefreshTokenData, time.Duration) error {
+	return nil
+}
+
 func (s *wechatOAuthRefreshTokenCacheStub) DeleteRefreshToken(context.Context, string) error {
 	return nil
 }

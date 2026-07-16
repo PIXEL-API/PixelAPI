@@ -33,9 +33,10 @@ func NormalizeUserAccountCredentialImportLimit(limit int) int {
 type AccountCredentialImportKind string
 
 const (
-	AccountCredentialImportKindOAuthCredentials   AccountCredentialImportKind = "oauth_credentials"
-	AccountCredentialImportKindOpenAIRefreshToken AccountCredentialImportKind = "openai_refresh_token"
-	AccountCredentialImportKindClaudeSessionKey   AccountCredentialImportKind = "claude_session_key"
+	AccountCredentialImportKindOAuthCredentials    AccountCredentialImportKind = "oauth_credentials"
+	AccountCredentialImportKindOpenAIRefreshToken  AccountCredentialImportKind = "openai_refresh_token"
+	AccountCredentialImportKindClaudeSessionKey    AccountCredentialImportKind = "claude_session_key"
+	AccountCredentialImportKindOpenAIAgentIdentity AccountCredentialImportKind = "openai_agent_identity"
 )
 
 type AccountCredentialImportSource struct {
@@ -134,6 +135,9 @@ func DeriveAccountCredentialImportName(platform string, credentials, extra map[s
 			return name
 		}
 	}
+	if platform == PlatformOpenAI && strings.EqualFold(importStringField(credentials, "auth_mode"), OpenAIAuthModeAgentIdentity) {
+		return fmt.Sprintf("OpenAI Agent Identity #%d", sequence)
+	}
 	switch platform {
 	case PlatformAnthropic:
 		return fmt.Sprintf("Claude OAuth Account #%d", sequence)
@@ -141,6 +145,8 @@ func DeriveAccountCredentialImportName(platform string, credentials, extra map[s
 		return fmt.Sprintf("Gemini OAuth Account #%d", sequence)
 	case PlatformAntigravity:
 		return fmt.Sprintf("Antigravity OAuth Account #%d", sequence)
+	case PlatformGrok:
+		return fmt.Sprintf("Grok OAuth Account #%d", sequence)
 	default:
 		return fmt.Sprintf("OpenAI OAuth Account #%d", sequence)
 	}
@@ -238,6 +244,9 @@ func accountCredentialImportSourcesFromValue(value any) ([]AccountCredentialImpo
 }
 
 func accountCredentialImportSourceFromMap(item map[string]any) (AccountCredentialImportSource, error) {
+	if source, handled, err := accountCredentialImportSourceFromAgentIdentity(item); handled || err != nil {
+		return source, err
+	}
 	if source, handled, err := accountCredentialImportSourceFromCodexManagerExport(item); handled || err != nil {
 		return source, err
 	}
@@ -364,6 +373,94 @@ func accountCredentialImportSourceFromMap(item map[string]any) (AccountCredentia
 		return accountCredentialImportSourceFromString(value, name, notes)
 	}
 	return AccountCredentialImportSource{}, fmt.Errorf("unsupported credential import item")
+}
+
+func accountCredentialImportSourceFromAgentIdentity(item map[string]any) (AccountCredentialImportSource, bool, error) {
+	authMode := importStringField(item, "auth_mode", "authMode")
+	identityValue, hasIdentity := importAnyField(item, "agent_identity", "agentIdentity")
+	isAgentAuthMode := strings.EqualFold(strings.TrimSpace(authMode), OpenAIAuthModeAgentIdentity)
+	if !hasIdentity && !isAgentAuthMode {
+		return AccountCredentialImportSource{}, false, nil
+	}
+	if authMode != "" && !isAgentAuthMode {
+		return AccountCredentialImportSource{}, true, fmt.Errorf("Agent Identity auth_mode is invalid")
+	}
+
+	identity := item
+	if hasIdentity {
+		var ok bool
+		identity, ok = identityValue.(map[string]any)
+		if !ok {
+			return AccountCredentialImportSource{}, true, fmt.Errorf("agent_identity must be an object")
+		}
+	}
+
+	runtimeID := importStringField(identity, "agent_runtime_id", "agentRuntimeId")
+	privateKey := importStringField(identity, "agent_private_key", "agentPrivateKey")
+	if runtimeID == "" || privateKey == "" {
+		return AccountCredentialImportSource{}, true, fmt.Errorf("Agent Identity requires agent_runtime_id and agent_private_key")
+	}
+	if err := ValidateOpenAIAgentIdentityPrivateKey(privateKey); err != nil {
+		return AccountCredentialImportSource{}, true, err
+	}
+
+	// Detection and key validation must happen before the generic credential
+	// safety scan. Remove only the recognized auth discriminator from a copy;
+	// all unrelated fields, including nested ones, remain subject to the scan.
+	safetyItem := copyImportMap(item)
+	removeImportMapField(safetyItem, "auth_mode")
+	removeImportMapField(safetyItem, "authMode")
+	if hasIdentity {
+		safetyIdentity := copyImportMap(identity)
+		removeImportMapField(safetyIdentity, "auth_mode")
+		removeImportMapField(safetyIdentity, "authMode")
+		removeImportMapField(safetyItem, "agent_identity")
+		removeImportMapField(safetyItem, "agentIdentity")
+		safetyItem["agent_identity"] = safetyIdentity
+	}
+	if field, found := findDisallowedCredentialImportField(safetyItem); found {
+		return AccountCredentialImportSource{}, true, fmt.Errorf("disallowed credential field: %s", field)
+	}
+
+	credentials := map[string]any{
+		"auth_mode":         OpenAIAuthModeAgentIdentity,
+		"agent_runtime_id":  runtimeID,
+		"agent_private_key": privateKey,
+	}
+	for _, field := range []struct {
+		target string
+		keys   []string
+	}{
+		{target: "task_id", keys: []string{"task_id", "taskId"}},
+		{target: "chatgpt_account_id", keys: []string{"chatgpt_account_id", "chatgptAccountId", "account_id", "accountId"}},
+		{target: "chatgpt_user_id", keys: []string{"chatgpt_user_id", "chatgptUserId"}},
+		{target: "email", keys: []string{"email"}},
+		{target: "plan_type", keys: []string{"plan_type", "planType"}},
+	} {
+		if value := importStringField(identity, field.keys...); value != "" {
+			credentials[field.target] = value
+		}
+	}
+	if value, ok := importAnyField(identity, "chatgpt_account_is_fedramp", "chatgptAccountIsFedramp"); ok {
+		fedRAMP, valid := value.(bool)
+		if !valid {
+			return AccountCredentialImportSource{}, true, fmt.Errorf("chatgpt_account_is_fedramp must be a boolean")
+		}
+		credentials["chatgpt_account_is_fedramp"] = fedRAMP
+	}
+
+	name := credentialImportFirstNonEmptyString(
+		importStringField(item, "name", "label"),
+		importStringField(identity, "name", "label", "email"),
+	)
+	return AccountCredentialImportSource{
+		Kind:        AccountCredentialImportKindOpenAIAgentIdentity,
+		Name:        name,
+		Notes:       importOptionalStringField(item, "notes", "note", "description"),
+		Platform:    PlatformOpenAI,
+		Credentials: credentials,
+		Extra:       importMapField(item, "extra", "metadata"),
+	}, true, nil
 }
 
 func accountCredentialImportSourceFromCodexManagerExport(item map[string]any) (AccountCredentialImportSource, bool, error) {
@@ -580,6 +677,8 @@ func normalizeCredentialImportPlatform(platform string) string {
 		return PlatformGemini
 	case "antigravity":
 		return PlatformAntigravity
+	case "grok", "xai", "x.ai":
+		return PlatformGrok
 	default:
 		return ""
 	}

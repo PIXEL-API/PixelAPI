@@ -5,6 +5,7 @@ import "time"
 type OpsSystemLog struct {
 	ID              int64          `json:"id"`
 	CreatedAt       time.Time      `json:"created_at"`
+	Host            string         `json:"host"`
 	Level           string         `json:"level"`
 	Component       string         `json:"component"`
 	Message         string         `json:"message"`

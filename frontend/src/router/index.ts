@@ -51,6 +51,16 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: "/oidc/authorize",
+    name: "OidcAuthorize",
+    component: () => import("@/views/auth/OidcAuthorizeView.vue"),
+    meta: {
+      requiresAuth: true,
+      title: "Authorize Application",
+      titleKey: "auth.oidcAuthorize.title",
+    },
+  },
+  {
     path: "/register",
     name: "Register",
     component: () => import("@/views/auth/RegisterView.vue"),
@@ -398,6 +408,18 @@ const routes: RouteRecordRaw[] = [
       requiresAuth: false,
       requiresAdmin: false,
       title: "Airwallex Payment",
+      titleKey: "payment.title",
+      requiresPayment: false,
+    },
+  },
+  {
+    path: "/payment/alipay-jsapi",
+    name: "AlipayJSAPIPayment",
+    component: () => import("@/views/user/AlipayJSAPIPaymentView.vue"),
+    meta: {
+      requiresAuth: false,
+      requiresAdmin: false,
+      title: "Alipay Payment",
       titleKey: "payment.title",
       requiresPayment: false,
     },
@@ -820,6 +842,7 @@ const BACKEND_MODE_ALLOWED_PATHS = [
   "/setup",
   "/payment/result",
   "/payment/airwallex",
+  "/payment/alipay-jsapi",
   "/legal",
   "/store",
 ];

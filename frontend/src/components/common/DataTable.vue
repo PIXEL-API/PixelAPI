@@ -149,7 +149,7 @@
           </td>
         </tr>
 
-        <!-- Data rows (virtual scroll) -->
+        <!-- Data rows: windowed for large desktop lists, fully rendered for small lists -->
         <template v-else>
           <tr v-if="virtualPaddingTop > 0" aria-hidden="true">
             <td :colspan="columns.length"
@@ -157,11 +157,11 @@
             </td>
           </tr>
           <tr
-            v-for="virtualRow in virtualItems"
-            :key="resolveRowKey(sortedData[virtualRow.index], virtualRow.index)"
-            :data-row-id="resolveRowKey(sortedData[virtualRow.index], virtualRow.index)"
-            :data-index="virtualRow.index"
-            :ref="measureElement"
+            v-for="item in renderRows"
+            :key="resolveRowKey(item.row, item.index)"
+            :data-row-id="resolveRowKey(item.row, item.index)"
+            :data-index="item.index"
+            :ref="item.measure ? measureElement : undefined"
             class="hover:bg-gray-50 dark:hover:bg-dark-800"
           >
             <td
@@ -175,12 +175,12 @@
               ]"
             >
               <slot :name="`cell-${column.key}`"
-                    :row="sortedData[virtualRow.index]"
-                    :value="sortedData[virtualRow.index][column.key]"
+                    :row="item.row"
+                    :value="item.row[column.key]"
                     :expanded="actionsExpanded">
                 {{ column.formatter
-                   ? column.formatter(sortedData[virtualRow.index][column.key], sortedData[virtualRow.index])
-                   : sortedData[virtualRow.index][column.key] }}
+                   ? column.formatter(item.row[column.key], item.row)
+                   : item.row[column.key] }}
               </slot>
             </td>
           </tr>
@@ -361,6 +361,8 @@ interface Props {
   estimateRowHeight?: number
   /** Number of rows to render beyond the visible area (default 5) */
   overscan?: number
+  /** Only virtualize desktop lists whose row count exceeds this threshold (default 100) */
+  virtualizeThreshold?: number
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -489,18 +491,20 @@ const compareSortValues = (a: any, b: any): number => {
   if (res === 0) return 0
   return res < 0 ? -1 : 1
 }
-const resolveRowKey = (row: any, index: number) => {
+const resolveStableRowKey = (row: any): string | number | undefined => {
   if (typeof props.rowKey === 'function') {
     const key = props.rowKey(row)
-    return key ?? index
+    return key ?? undefined
   }
   if (typeof props.rowKey === 'string' && props.rowKey) {
     const key = row?.[props.rowKey]
-    return key ?? index
+    return key ?? undefined
   }
   const key = row?.id
-  return key ?? index
+  return key ?? undefined
 }
+
+const resolveRowKey = (row: any, index: number) => resolveStableRowKey(row) ?? index
 
 const dataColumns = computed(() => props.columns.filter((column) => column.key !== 'actions'))
 const columnsSignature = computed(() =>
@@ -573,9 +577,19 @@ const sortedData = computed(() => {
 })
 
 // --- Virtual scrolling ---
+// Small desktop result sets render in full. This avoids scroll compensation from
+// estimated heights while preserving the existing card layout on mobile.
+const shouldVirtualize = computed(() =>
+  isDesktopViewport.value && (sortedData.value?.length ?? 0) > (props.virtualizeThreshold ?? 100)
+)
+
 const rowVirtualizer = useVirtualizer(computed(() => ({
-  count: isDesktopViewport.value ? (sortedData.value?.length ?? 0) : 0,
+  count: shouldVirtualize.value ? (sortedData.value?.length ?? 0) : 0,
   getScrollElement: () => tableWrapperRef.value,
+  getItemKey: (index: number) => {
+    const row = sortedData.value?.[index]
+    return row == null ? index : resolveRowKey(row, index)
+  },
   estimateSize: () => props.estimateRowHeight ?? 56,
   overscan: props.overscan ?? 5,
 })))
@@ -598,6 +612,62 @@ const measureElement = (el: any) => {
     rowVirtualizer.value.measureElement(el as Element)
   }
 }
+
+type RowIdentityToken = string | number | object | symbol
+
+const rowIdentityKeys = computed<RowIdentityToken[]>(() =>
+  (sortedData.value ?? []).map((row) => {
+    const stableKey = resolveStableRowKey(row)
+    if (stableKey !== undefined) return stableKey
+    return row !== null && typeof row === 'object' ? row : Symbol('unstable-row')
+  })
+)
+
+const hasSameRowIdentitySet = (current: RowIdentityToken[], previous: RowIdentityToken[]) => {
+  if (current.length !== previous.length) return false
+  const currentKeys = new Set(current)
+  const previousKeys = new Set(previous)
+  if (currentKeys.size !== current.length || previousKeys.size !== previous.length) return false
+  return [...currentKeys].every((key) => previousKeys.has(key))
+}
+
+let virtualMeasurementResetPending = false
+const resetVirtualMeasurements = () => {
+  if (virtualMeasurementResetPending) return
+  virtualMeasurementResetPending = true
+  void nextTick(() => {
+    virtualMeasurementResetPending = false
+    rowVirtualizer.value.measureElement(null)
+    rowVirtualizer.value.measure()
+  })
+}
+
+watch(
+  rowIdentityKeys,
+  (current, previous) => {
+    if (!previous || hasSameRowIdentitySet(current, previous)) return
+    resetVirtualMeasurements()
+  },
+  { flush: 'post' }
+)
+
+watch(
+  [() => props.data, columnsSignature, () => props.rowKey],
+  resetVirtualMeasurements,
+  { flush: 'post' }
+)
+
+const renderRows = computed<Array<{ index: number; row: any; measure: boolean }>>(() => {
+  const data = sortedData.value ?? []
+  if (shouldVirtualize.value) {
+    return virtualItems.value.map((virtualRow) => ({
+      index: virtualRow.index,
+      row: data[virtualRow.index],
+      measure: true
+    }))
+  }
+  return data.map((row, index) => ({ index, row, measure: false }))
+})
 
 const hasActionsColumn = computed(() => {
   return props.columns.some(column => column.key === 'actions')
@@ -698,6 +768,7 @@ watch(
 
 defineExpose({
   virtualizer: rowVirtualizer,
+  shouldVirtualize,
   sortedData,
   resolveRowKey,
   tableWrapperEl: tableWrapperRef,

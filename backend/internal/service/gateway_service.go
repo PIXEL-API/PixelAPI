@@ -46,7 +46,7 @@ const (
 	claudeAPIURL            = "https://api.anthropic.com/v1/messages?beta=true"
 	claudeAPICountTokensURL = "https://api.anthropic.com/v1/messages/count_tokens?beta=true"
 	stickySessionTTL        = time.Hour // 粘性会话TTL
-	defaultMaxLineSize      = 500 * 1024 * 1024
+	defaultMaxLineSize      = 40 * 1024 * 1024
 	// Canonical Claude Code banner. Keep it EXACT (no trailing whitespace/newlines)
 	// to match real Claude CLI traffic as closely as possible. When we need a visual
 	// separator between system blocks, we add "\n\n" at concatenation time.
@@ -551,6 +551,10 @@ func IsBillableStreamUsageError(err error) bool {
 	return errors.As(err, &target)
 }
 
+func ForwardResultHasBillableUsage(result *ForwardResult) bool {
+	return result != nil && claudeUsageHasBillableTokens(&result.Usage)
+}
+
 func claudeUsageHasBillableTokens(usage *ClaudeUsage) bool {
 	if usage == nil {
 		return false
@@ -568,17 +572,72 @@ func streamingResultHasBillableUsage(result *streamingResult) bool {
 	return result != nil && claudeUsageHasBillableTokens(result.usage)
 }
 
-// UpstreamFailoverError indicates an upstream error that should trigger account failover.
+// GatewayFailureStage identifies which request stage failed. The zero value is
+// inference so existing failover errors retain their behavior.
+type GatewayFailureStage string
+
+const (
+	GatewayFailureStageInference   GatewayFailureStage = "inference"
+	GatewayFailureStageAccountAuth GatewayFailureStage = "account_auth"
+)
+
+// GatewayFailureScope identifies whether selecting another account can help.
+type GatewayFailureScope string
+
+const (
+	GatewayFailureScopeAccount  GatewayFailureScope = "account"
+	GatewayFailureScopeProvider GatewayFailureScope = "provider"
+	GatewayFailureScopeRequest  GatewayFailureScope = "request"
+)
+
+// NextAccountAction keeps legacy retry as the zero value for compatibility.
+type NextAccountAction uint8
+
+const (
+	NextAccountLegacyRetry NextAccountAction = iota
+	NextAccountRetry
+	NextAccountStop
+)
+
+type GatewayFailureReason string
+
+// UpstreamFailoverError indicates an upstream or credential error that may
+// trigger account failover.
 type UpstreamFailoverError struct {
-	StatusCode             int
-	ResponseBody           []byte      // 上游响应体，用于错误透传规则匹配
-	ResponseHeaders        http.Header // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
-	ForceCacheBilling      bool        // Antigravity 粘性会话切换时设为 true
-	RetryableOnSameAccount bool        // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
+	StatusCode               int
+	ResponseBody             []byte      // 上游响应体，用于错误透传规则匹配
+	ResponseHeaders          http.Header // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
+	ForceCacheBilling        bool        // Antigravity 粘性会话切换时设为 true
+	RetryableOnSameAccount   bool        // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
+	SafeToFailoverAfterWrite bool        // 仅写出 SSE 注释等非语义字节时，仍可在同一客户端流中切换账号
+	Stage                    GatewayFailureStage
+	Scope                    GatewayFailureScope
+	Reason                   GatewayFailureReason
+	NextAccountAction        NextAccountAction
+	ClientStatusCode         int
+	ClientMessage            string
 }
 
 func (e *UpstreamFailoverError) Error() string {
+	if e != nil && e.Stage == GatewayFailureStageAccountAuth {
+		return fmt.Sprintf("credential failure: %s (failover)", e.Reason)
+	}
 	return fmt.Sprintf("upstream error: %d (failover)", e.StatusCode)
+}
+
+func (e *UpstreamFailoverError) ShouldRetryNextAccount() bool {
+	return e != nil && e.NextAccountAction != NextAccountStop
+}
+
+func (e *UpstreamFailoverError) IsCredentialFailure() bool {
+	return e != nil && e.Stage == GatewayFailureStageAccountAuth
+}
+
+func (e *UpstreamFailoverError) ShouldReportAccountScheduleFailure() bool {
+	if e == nil {
+		return false
+	}
+	return !e.IsCredentialFailure() || e.Scope == GatewayFailureScopeAccount
 }
 
 // sseStreamErrorEventError 表示上游 SSE 流内出现 event:error 帧。
@@ -721,6 +780,7 @@ func NewGatewayService(
 	}
 	svc.userGroupRateResolver = newUserGroupRateResolver(
 		userGroupRateRepo,
+		usageLogRepo,
 		svc.userGroupRateCache,
 		userGroupRateTTL,
 		&svc.userGroupRateSF,
@@ -4186,6 +4246,11 @@ const (
 
 	// 首响应保护：上游长时间不返回响应头时，若尚未写客户端，则尽快切换账号。
 	upstreamFirstResponseFailoverTimeout = 12 * time.Second
+
+	// 非流式响应已经拿到响应头后，继续读取完整 body 以提取 usage 的默认最长时间。
+	defaultDetachedNonStreamingReadTimeout = 180 * time.Second
+	// 客户端断开后继续 drain 流式上游的硬上限，防止长流在无下游消费者时堆积资源。
+	defaultDetachedStreamDrainTimeout = 30 * time.Second
 )
 
 func (s *GatewayService) shouldRetryUpstreamError(account *Account, statusCode int) bool {
@@ -5209,7 +5274,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	retryStart := time.Now()
 	for attempt := 1; attempt <= maxRetryAttempts; attempt++ {
 		// 构建上游请求（每次重试需要重新构建，因为请求体需要重新读取）
-		upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, reqStream)
+		upstreamCtx, releaseUpstreamCtx := s.detachClaudeMessagesUpstreamContext(ctx)
 		upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, body, token, tokenType, reqModel, reqStream, shouldMimicClaudeCode)
 		releaseUpstreamCtx()
 		if err != nil {
@@ -5297,7 +5362,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					//    also downgrade tool_use/tool_result blocks to text.
 
 					filteredBody := FilterThinkingBlocksForRetryForModel(body, reqModel)
-					retryCtx, releaseRetryCtx := detachStreamUpstreamContext(ctx, reqStream)
+					retryCtx, releaseRetryCtx := s.detachClaudeMessagesUpstreamContext(ctx)
 					retryReq, buildErr := s.buildUpstreamRequest(retryCtx, c, account, filteredBody, token, tokenType, reqModel, reqStream, shouldMimicClaudeCode)
 					releaseRetryCtx()
 					if buildErr == nil {
@@ -5332,7 +5397,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 								if looksLikeToolSignatureError(msg2) && time.Since(retryStart) < maxRetryElapsed {
 									logger.LegacyPrintf("service.gateway", "Account %d: signature retry still failing and looks tool-related, retrying with tool blocks downgraded", account.ID)
 									filteredBody2 := FilterSignatureSensitiveBlocksForRetryForModel(body, reqModel)
-									retryCtx2, releaseRetryCtx2 := detachStreamUpstreamContext(ctx, reqStream)
+									retryCtx2, releaseRetryCtx2 := s.detachClaudeMessagesUpstreamContext(ctx)
 									retryReq2, buildErr2 := s.buildUpstreamRequest(retryCtx2, c, account, filteredBody2, token, tokenType, reqModel, reqStream, shouldMimicClaudeCode)
 									releaseRetryCtx2()
 									if buildErr2 == nil {
@@ -5403,7 +5468,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					rectifiedBody, applied := RectifyThinkingBudget(body)
 					if applied && time.Since(retryStart) < maxRetryElapsed {
 						logger.LegacyPrintf("service.gateway", "Account %d: detected budget_tokens constraint error, retrying with rectified budget (budget_tokens=%d, max_tokens=%d)", account.ID, BudgetRectifyBudgetTokens, BudgetRectifyMaxTokens)
-						budgetRetryCtx, releaseBudgetRetryCtx := detachStreamUpstreamContext(ctx, reqStream)
+						budgetRetryCtx, releaseBudgetRetryCtx := s.detachClaudeMessagesUpstreamContext(ctx)
 						budgetRetryReq, buildErr := s.buildUpstreamRequest(budgetRetryCtx, c, account, rectifiedBody, token, tokenType, reqModel, reqStream, shouldMimicClaudeCode)
 						releaseBudgetRetryCtx()
 						if buildErr == nil {
@@ -5759,7 +5824,7 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 	var resp *http.Response
 	retryStart := time.Now()
 	for attempt := 1; attempt <= maxRetryAttempts; attempt++ {
-		upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, input.RequestStream)
+		upstreamCtx, releaseUpstreamCtx := s.detachClaudeMessagesUpstreamContext(ctx)
 		upstreamReq, err := s.buildUpstreamRequestAnthropicAPIKeyPassthrough(upstreamCtx, c, account, input.Body, token)
 		releaseUpstreamCtx()
 		if err != nil {
@@ -6012,7 +6077,7 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 	req.Header.Del("x-api-key")
 	req.Header.Del("x-goog-api-key")
 	req.Header.Del("cookie")
-	setHeaderRaw(req.Header, "x-api-key", token)
+	setAnthropicAPIKeyAuthHeader(req.Header, account, token)
 
 	if getHeaderRaw(req.Header, "content-type") == "" {
 		setHeaderRaw(req.Header, "content-type", "application/json")
@@ -6020,6 +6085,7 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 	if getHeaderRaw(req.Header, "anthropic-version") == "" {
 		setHeaderRaw(req.Header, "anthropic-version", "2023-06-01")
 	}
+	account.ApplyHeaderOverrides(req.Header)
 
 	return req, nil
 }
@@ -6133,23 +6199,32 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 					// 兜底补刷，确保最后一个未以空行结尾的事件也能及时送达客户端。
 					flusher.Flush()
 				}
-				if !sawTerminalEvent {
-					if clientDisconnected && streamIdleTimedOut() {
+				if clientDisconnected {
+					if streamIdleTimedOut() {
 						return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, fmt.Errorf("stream usage incomplete after timeout")
 					}
+					if streamErr := s.clientDisconnectIncompleteUsageError(ctx); streamErr != nil {
+						return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, streamErr
+					}
+				}
+				if !sawTerminalEvent {
 					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected}, fmt.Errorf("stream usage incomplete: missing terminal event")
 				}
 				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected}, nil
 			}
 			if ev.err != nil {
-				if sawTerminalEvent {
-					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected}, nil
-				}
 				if clientDisconnected {
 					if streamIdleTimedOut() {
 						return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, fmt.Errorf("stream usage incomplete after timeout")
 					}
-					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, fmt.Errorf("stream usage incomplete after disconnect: %w", ev.err)
+					streamErr := s.clientDisconnectIncompleteUsageError(ctx)
+					if streamErr == nil && !sawTerminalEvent {
+						streamErr = fmt.Errorf("stream usage incomplete after disconnect: %w", ev.err)
+					}
+					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, streamErr
+				}
+				if sawTerminalEvent {
+					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected}, nil
 				}
 				if errors.Is(ev.err, context.Canceled) || errors.Is(ev.err, context.DeadlineExceeded) {
 					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, fmt.Errorf("stream usage incomplete: %w", ev.err)
@@ -6183,10 +6258,12 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 				restored := string(reverseToolNamesIfPresent(c, []byte(line)))
 				if _, err := io.WriteString(w, restored); err != nil {
 					clientDisconnected = true
-					logger.LegacyPrintf("service.gateway", "[Anthropic passthrough] Client disconnected during streaming, continue draining upstream for usage: account=%d", account.ID)
+					s.stopUpstreamOnClientDisconnect(ctx, resp.Body)
+					s.legacyLogClientDisconnectDrainDecision(ctx, "[Anthropic passthrough] Client disconnected during streaming, continue draining upstream for usage: account=%d", account.ID)
 				} else if _, err := io.WriteString(w, "\n"); err != nil {
 					clientDisconnected = true
-					logger.LegacyPrintf("service.gateway", "[Anthropic passthrough] Client disconnected during streaming, continue draining upstream for usage: account=%d", account.ID)
+					s.stopUpstreamOnClientDisconnect(ctx, resp.Body)
+					s.legacyLogClientDisconnectDrainDecision(ctx, "[Anthropic passthrough] Client disconnected during streaming, continue draining upstream for usage: account=%d", account.ID)
 				} else if line == "" {
 					// 按 SSE 事件边界刷出，减少每行 flush 带来的 syscall 开销。
 					flusher.Flush()
@@ -6392,7 +6469,9 @@ func (s *GatewayService) handleNonStreamingResponseAnthropicAPIKeyPassthrough(
 		s.rateLimitService.UpdateSessionWindow(ctx, account, resp.Header)
 	}
 
-	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, anthropicTooLargeError)
+	readCtx, cancelRead := s.detachedNonStreamingReadContext(ctx)
+	defer cancelRead()
+	body, err := ReadUpstreamResponseBodyWithContext(readCtx, resp.Body, s.cfg, c, anthropicTooLargeError)
 	if err != nil {
 		return nil, err
 	}
@@ -6867,6 +6946,8 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	// 设置认证头（保持原始大小写）
 	if tokenType == "oauth" {
 		setHeaderRaw(req.Header, "authorization", "Bearer "+token)
+	} else if account.Type == AccountTypeAPIKey {
+		setAnthropicAPIKeyAuthHeader(req.Header, account, token)
 	} else {
 		setHeaderRaw(req.Header, "x-api-key", token)
 	}
@@ -6954,6 +7035,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 			}
 		}
 	}
+	account.ApplyHeaderOverrides(req.Header)
 
 	// === DEBUG: 打印上游转发请求（headers + body 摘要），与 CLIENT_ORIGINAL 对比 ===
 	s.debugLogGatewaySnapshot("UPSTREAM_FORWARD", req.Header, body, map[string]string{
@@ -8247,7 +8329,8 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 					restored := reverseToolNamesIfPresent(c, []byte(block))
 					if _, werr := fmt.Fprint(w, string(restored)); werr != nil {
 						clientDisconnected = true
-						logger.LegacyPrintf("service.gateway", "Client disconnected during streaming, continuing to drain upstream for billing")
+						s.stopUpstreamOnClientDisconnect(ctx, resp.Body)
+						s.legacyLogClientDisconnectDrainDecision(ctx, "Client disconnected during streaming, continuing to drain upstream for billing")
 						break
 					}
 					flusher.Flush()
@@ -8280,13 +8363,21 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 						return streamResultWithCurrentUsage(clientDisconnected), err
 					}
 					if clientDisconnected {
-						return streamResultWithCurrentUsage(true), nil
+						if streamErr := s.clientDisconnectIncompleteUsageError(ctx); streamErr != nil {
+							return streamResultWithCurrentUsage(true), streamErr
+						}
+						return streamResultWithCurrentUsage(true), err
 					}
 					return nil, err
 				}
 				// 上游完成，返回结果
 				if !sawTerminalEvent {
 					return streamResultWithCurrentUsage(clientDisconnected), fmt.Errorf("stream usage incomplete: missing terminal event")
+				}
+				if clientDisconnected {
+					if streamErr := s.clientDisconnectIncompleteUsageError(ctx); streamErr != nil {
+						return streamResultWithCurrentUsage(true), streamErr
+					}
 				}
 				return streamResultWithCurrentUsage(clientDisconnected), nil
 			}
@@ -8296,9 +8387,20 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 						return streamResultWithCurrentUsage(clientDisconnected), err
 					}
 					if clientDisconnected {
-						return streamResultWithCurrentUsage(true), nil
+						if streamErr := s.clientDisconnectIncompleteUsageError(ctx); streamErr != nil {
+							return streamResultWithCurrentUsage(true), streamErr
+						}
+						return streamResultWithCurrentUsage(true), err
 					}
 					return nil, err
+				}
+				if clientDisconnected {
+					if streamErr := s.clientDisconnectIncompleteUsageError(ctx); streamErr != nil {
+						return streamResultWithCurrentUsage(true), streamErr
+					}
+					if !sawTerminalEvent {
+						return streamResultWithCurrentUsage(true), fmt.Errorf("stream usage incomplete after disconnect: %w", ev.err)
+					}
 				}
 				if sawTerminalEvent {
 					return streamResultWithCurrentUsage(clientDisconnected), nil
@@ -8306,10 +8408,6 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 				// 检测 context 取消（客户端断开会导致 context 取消，进而影响上游读取）
 				if errors.Is(ev.err, context.Canceled) || errors.Is(ev.err, context.DeadlineExceeded) {
 					return streamResultWithCurrentUsage(true), fmt.Errorf("stream usage incomplete: %w", ev.err)
-				}
-				// 客户端已通过写入失败检测到断开，上游也出错了，返回已收集的 usage
-				if clientDisconnected {
-					return streamResultWithCurrentUsage(true), fmt.Errorf("stream usage incomplete after disconnect: %w", ev.err)
 				}
 				// 客户端未断开，正常的错误处理
 				if errors.Is(ev.err, bufio.ErrTooLong) {
@@ -8355,7 +8453,10 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 						return streamResultWithCurrentUsage(clientDisconnected), err
 					}
 					if clientDisconnected {
-						return streamResultWithCurrentUsage(true), nil
+						if streamErr := s.clientDisconnectIncompleteUsageError(ctx); streamErr != nil {
+							return streamResultWithCurrentUsage(true), streamErr
+						}
+						return streamResultWithCurrentUsage(true), err
 					}
 					return nil, err
 				}
@@ -8391,7 +8492,8 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			// 同时保持连接活跃防止 Cloudflare Tunnel 等代理断开
 			if _, werr := fmt.Fprint(w, "event: ping\ndata: {\"type\": \"ping\"}\n\n"); werr != nil {
 				clientDisconnected = true
-				logger.LegacyPrintf("service.gateway", "Client disconnected during keepalive ping, continuing to drain upstream for billing")
+				s.stopUpstreamOnClientDisconnect(ctx, resp.Body)
+				s.legacyLogClientDisconnectDrainDecision(ctx, "Client disconnected during keepalive ping, continuing to drain upstream for billing")
 				continue
 			}
 			flusher.Flush()
@@ -8636,7 +8738,9 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 	// 更新5h窗口状态
 	s.rateLimitService.UpdateSessionWindow(ctx, account, resp.Header)
 
-	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, anthropicTooLargeError)
+	readCtx, cancelRead := s.detachedNonStreamingReadContext(ctx)
+	defer cancelRead()
+	body, err := ReadUpstreamResponseBodyWithContext(readCtx, resp.Body, s.cfg, c, anthropicTooLargeError)
 	if err != nil {
 		return nil, err
 	}
@@ -8728,6 +8832,7 @@ func (s *GatewayService) getUserGroupRateMultiplier(ctx context.Context, userID,
 	if resolver == nil {
 		resolver = newUserGroupRateResolver(
 			s.userGroupRateRepo,
+			s.usageLogRepo,
 			s.userGroupRateCache,
 			resolveUserGroupRateCacheTTL(s.cfg),
 			&s.userGroupRateSF,
@@ -8735,6 +8840,33 @@ func (s *GatewayService) getUserGroupRateMultiplier(ctx context.Context, userID,
 		)
 	}
 	return resolver.Resolve(ctx, userID, groupID, groupDefaultMultiplier)
+}
+
+func (s *GatewayService) getEffectiveGroupRateMultiplier(ctx context.Context, user *User, group *Group, groupDefaultMultiplier float64) (float64, error) {
+	resolution, err := s.getEffectiveGroupRateResolution(ctx, user, group, groupDefaultMultiplier)
+	if err != nil {
+		return 0, err
+	}
+	return resolution.Multiplier, nil
+}
+
+func (s *GatewayService) getEffectiveGroupRateResolution(ctx context.Context, user *User, group *Group, groupDefaultMultiplier float64) (effectiveGroupRateResolution, error) {
+	if s == nil {
+		return effectiveGroupRateResolution{Multiplier: groupDefaultMultiplier, Source: RateMultiplierSourceGroupDefault}, nil
+	}
+	resolver := s.userGroupRateResolver
+	if resolver == nil {
+		resolver = newUserGroupRateResolver(
+			s.userGroupRateRepo,
+			s.usageLogRepo,
+			s.userGroupRateCache,
+			resolveUserGroupRateCacheTTL(s.cfg),
+			&s.userGroupRateSF,
+			"service.gateway",
+		)
+		s.userGroupRateResolver = resolver
+	}
+	return resolver.ResolveEffectiveDetailed(ctx, user, group, groupDefaultMultiplier)
 }
 
 // RecordUsageInput 记录使用量的输入参数
@@ -8903,6 +9035,9 @@ func finalizeLegacyUsageBillingWallet(p *postUsageBillingParams, deps *billingDe
 }
 
 func resolveUsageBillingRequestID(ctx context.Context, upstreamRequestID string) string {
+	if requestID := strings.TrimSpace(upstreamRequestID); requestID != "" {
+		return requestID
+	}
 	if ctx != nil {
 		if clientRequestID, _ := ctx.Value(ctxkey.ClientRequestID).(string); strings.TrimSpace(clientRequestID) != "" {
 			return "client:" + strings.TrimSpace(clientRequestID)
@@ -8910,9 +9045,6 @@ func resolveUsageBillingRequestID(ctx context.Context, upstreamRequestID string)
 		if requestID, _ := ctx.Value(ctxkey.RequestID).(string); strings.TrimSpace(requestID) != "" {
 			return "local:" + strings.TrimSpace(requestID)
 		}
-	}
-	if requestID := strings.TrimSpace(upstreamRequestID); requestID != "" {
-		return requestID
 	}
 	return "generated:" + generateRequestID()
 }
@@ -9255,6 +9387,92 @@ func detachStreamUpstreamContext(ctx context.Context, stream bool) (context.Cont
 	return context.WithoutCancel(ctx), func() {}
 }
 
+func detachClaudeMessagesUpstreamContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		return context.Background(), func() {}
+	}
+	return context.WithoutCancel(ctx), func() {}
+}
+
+func detachUpstreamContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		return context.Background(), func() {}
+	}
+	return context.WithoutCancel(ctx), func() {}
+}
+
+func (s *GatewayService) detachedUsageDrainEnabled(ctx context.Context) bool {
+	if s == nil || s.settingService == nil {
+		return true
+	}
+	return s.settingService.IsDetachedUsageDrainEnabled(ctx)
+}
+
+func (s *GatewayService) detachStreamUpstreamContext(ctx context.Context, stream bool) (context.Context, context.CancelFunc) {
+	if !stream || !s.detachedUsageDrainEnabled(ctx) {
+		if ctx == nil {
+			return context.Background(), func() {}
+		}
+		return ctx, func() {}
+	}
+	return detachStreamUpstreamContext(ctx, stream)
+}
+
+func (s *GatewayService) detachClaudeMessagesUpstreamContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if !s.detachedUsageDrainEnabled(ctx) {
+		if ctx == nil {
+			return context.Background(), func() {}
+		}
+		return ctx, func() {}
+	}
+	return detachClaudeMessagesUpstreamContext(ctx)
+}
+
+func (s *GatewayService) stopUpstreamOnClientDisconnect(ctx context.Context, body io.Closer) {
+	if s.detachedUsageDrainEnabled(ctx) || body == nil {
+		return
+	}
+	_ = body.Close()
+}
+
+func (s *GatewayService) clientDisconnectIncompleteUsageError(ctx context.Context) error {
+	if s.detachedUsageDrainEnabled(ctx) {
+		return nil
+	}
+	return errors.New("stream usage incomplete after disconnect: detached usage drain disabled")
+}
+
+func (s *GatewayService) legacyLogClientDisconnectDrainDecision(ctx context.Context, format string, args ...any) {
+	if s.detachedUsageDrainEnabled(ctx) {
+		logger.LegacyPrintf("service.gateway", format, args...)
+		return
+	}
+	format = strings.NewReplacer(
+		"continuing to drain upstream for billing", "closed upstream because detached usage drain is disabled",
+		"continue draining upstream for billing", "closed upstream because detached usage drain is disabled",
+		"continuing to drain upstream for usage", "closed upstream because detached usage drain is disabled",
+		"continue draining upstream for usage", "closed upstream because detached usage drain is disabled",
+	).Replace(format)
+	logger.LegacyPrintf("service.gateway", format, args...)
+}
+
+func (s *GatewayService) detachedNonStreamingReadContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	timeout := defaultDetachedNonStreamingReadTimeout
+	if s != nil && s.cfg != nil && s.cfg.Gateway.StreamDataIntervalTimeout > 0 {
+		timeout = time.Duration(s.cfg.Gateway.StreamDataIntervalTimeout) * time.Second
+	}
+
+	base := context.Background()
+	if ctx != nil {
+		if s.detachedUsageDrainEnabled(ctx) {
+			base = context.WithoutCancel(ctx)
+		} else {
+			base = ctx
+		}
+	}
+	return context.WithTimeout(base, timeout)
+}
+
 // billingDeps 扣费逻辑依赖的服务（由各 gateway service 提供）
 type billingDeps struct {
 	accountRepo            AccountRepository
@@ -9434,9 +9652,15 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	if s.cfg != nil {
 		multiplier = s.cfg.Default.RateMultiplier
 	}
+	rateMultiplierSource := RateMultiplierSourceSystemDefault
 	if apiKey.GroupID != nil && apiKey.Group != nil {
 		groupDefault := apiKey.Group.RateMultiplier
-		multiplier = s.getUserGroupRateMultiplier(ctx, user.ID, *apiKey.GroupID, groupDefault)
+		rateResolution, err := s.getEffectiveGroupRateResolution(ctx, user, apiKey.Group, groupDefault)
+		if err != nil {
+			return err
+		}
+		multiplier = rateResolution.Multiplier
+		rateMultiplierSource = rateResolution.Source
 	}
 	var accountShareMembership *AccountShareMembership
 	var accountShareListing *AccountShareListing
@@ -9451,8 +9675,10 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 		}
 		if IsAccountShareModeOwnerSelfUse(accountShareMembership, accountShareListing) {
 			multiplier = AccountShareModeOwnerSelfUseMultiplier
+			rateMultiplierSource = RateMultiplierSourceAccountShare
 		} else if accountShareListing != nil {
 			multiplier = accountShareListing.RateMultiplier
+			rateMultiplierSource = RateMultiplierSourceAccountShare
 		}
 	}
 
@@ -9495,7 +9721,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	// 创建使用日志
 	accountRateMultiplier := account.BillingRateMultiplier()
 	usageLog := s.buildRecordUsageLog(ctx, input, result, apiKey, user, account, subscription,
-		requestedModel, multiplier, accountRateMultiplier, billingType, cacheTTLOverridden, cost, opts)
+		requestedModel, multiplier, rateMultiplierSource, accountRateMultiplier, billingType, cacheTTLOverridden, cost, opts)
 
 	// 计算账号统计定价费用（使用最终上游模型匹配自定义规则）
 	if apiKey.GroupID != nil {
@@ -9687,6 +9913,7 @@ func (s *GatewayService) buildRecordUsageLog(
 	subscription *UserSubscription,
 	requestedModel string,
 	multiplier float64,
+	rateMultiplierSource string,
 	accountRateMultiplier float64,
 	billingType int8,
 	cacheTTLOverridden bool,
@@ -9714,6 +9941,7 @@ func (s *GatewayService) buildRecordUsageLog(
 		CacheCreation1hTokens: result.Usage.CacheCreation1hTokens,
 		ImageOutputTokens:     result.Usage.ImageOutputTokens,
 		RateMultiplier:        multiplier,
+		RateMultiplierSource:  rateMultiplierSource,
 		AccountRateMultiplier: &accountRateMultiplier,
 		BillingType:           billingType,
 		BillingMode:           resolveBillingMode(result, cost),
@@ -10223,7 +10451,7 @@ func (s *GatewayService) buildCountTokensRequestAnthropicAPIKeyPassthrough(
 	req.Header.Del("x-api-key")
 	req.Header.Del("x-goog-api-key")
 	req.Header.Del("cookie")
-	req.Header.Set("x-api-key", token)
+	setAnthropicAPIKeyAuthHeader(req.Header, account, token)
 
 	if req.Header.Get("content-type") == "" {
 		req.Header.Set("content-type", "application/json")
@@ -10231,6 +10459,7 @@ func (s *GatewayService) buildCountTokensRequestAnthropicAPIKeyPassthrough(
 	if req.Header.Get("anthropic-version") == "" {
 		req.Header.Set("anthropic-version", "2023-06-01")
 	}
+	account.ApplyHeaderOverrides(req.Header)
 
 	return req, nil
 }
@@ -10303,6 +10532,8 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	// 设置认证头（保持原始大小写）
 	if tokenType == "oauth" {
 		setHeaderRaw(req.Header, "authorization", "Bearer "+token)
+	} else if account.Type == AccountTypeAPIKey {
+		setAnthropicAPIKeyAuthHeader(req.Header, account, token)
 	} else {
 		setHeaderRaw(req.Header, "x-api-key", token)
 	}
@@ -10379,6 +10610,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 			}
 		}
 	}
+	account.ApplyHeaderOverrides(req.Header)
 
 	if c != nil && tokenType == "oauth" {
 		c.Set(claudeMimicDebugInfoKey, buildClaudeMimicDebugLine(req, body, account, tokenType, mimicClaudeCode))

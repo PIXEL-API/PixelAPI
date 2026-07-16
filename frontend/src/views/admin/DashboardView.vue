@@ -299,13 +299,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 
 const { t } = useI18n()
 import { adminAPI } from '@/api/admin'
+import type { TrendParams } from '@/api/admin/dashboard'
 import type {
   DashboardStats,
   TrendDataPoint,
@@ -361,30 +362,60 @@ const rankingItems = ref<UserSpendingRankingItem[]>([])
 const rankingTotalActualCost = ref(0)
 const rankingTotalRequests = ref(0)
 const rankingTotalTokens = ref(0)
-let chartLoadSeq = 0
-let usersTrendLoadSeq = 0
-let rankingLoadSeq = 0
+let dashboardLoadSeq = 0
+let dashboardAbortController: AbortController | null = null
 const rankingLimit = 12
+
+type DashboardRangeParams = Pick<TrendParams, 'start_date' | 'end_date' | 'start_time' | 'end_time'>
 
 // Helper function to format date in local timezone
 const formatLocalDate = (date: Date): string => {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 }
 
-const getLast24HoursRangeDates = (): { start: string; end: string } => {
+const getLast24HoursRange = (): {
+  startDate: string
+  endDate: string
+  startTime: string
+  endTime: string
+} => {
   const end = new Date()
+  // Minute alignment keeps the range exact while allowing short snapshot
+  // caches to be reused by repeated refreshes.
+  end.setSeconds(0, 0)
   const start = new Date(end.getTime() - 24 * 60 * 60 * 1000)
   return {
-    start: formatLocalDate(start),
-    end: formatLocalDate(end)
+    startDate: formatLocalDate(start),
+    endDate: formatLocalDate(end),
+    startTime: start.toISOString(),
+    endTime: end.toISOString()
   }
 }
 
 // Date range
 const granularity = ref<'day' | 'hour'>('hour')
-const defaultRange = getLast24HoursRangeDates()
-const startDate = ref(defaultRange.start)
-const endDate = ref(defaultRange.end)
+const defaultRange = getLast24HoursRange()
+const startDate = ref(defaultRange.startDate)
+const endDate = ref(defaultRange.endDate)
+const activeRangePreset = ref<string | null>('last24Hours')
+let lastLoadedRange: DashboardRangeParams = {
+  start_time: defaultRange.startTime,
+  end_time: defaultRange.endTime
+}
+
+const buildDashboardRangeParams = (): DashboardRangeParams => {
+  if (activeRangePreset.value === 'last24Hours') {
+    const range = getLast24HoursRange()
+    return {
+      start_time: range.startTime,
+      end_time: range.endTime
+    }
+  }
+  return {
+    start_date: startDate.value,
+    end_date: endDate.value
+  }
+}
 
 // Granularity options for Select component
 const granularityOptions = computed(() => [
@@ -568,8 +599,7 @@ const goToUserUsage = (item: UserSpendingRankingItem) => {
     path: '/admin/usage',
     query: {
       user_id: String(item.user_id),
-      start_date: startDate.value,
-      end_date: endDate.value
+      ...lastLoadedRange
     }
   })
 }
@@ -580,6 +610,8 @@ const onDateRangeChange = (range: {
   endDate: string
   preset: string | null
 }) => {
+  activeRangePreset.value = range.preset
+
   // Auto-select granularity based on date range
   const start = new Date(range.startDate)
   const end = new Date(range.endDate)
@@ -592,85 +624,120 @@ const onDateRangeChange = (range: {
     granularity.value = 'day'
   }
 
-  loadDashboardStats()
+  loadDashboardRangeStats()
 }
 
 // Load data
-const loadDashboardSnapshot = async (includeStats: boolean) => {
-  const currentSeq = ++chartLoadSeq
-  if (includeStats && !stats.value) {
+const loadDashboardOverviewStats = async (currentSeq: number, signal: AbortSignal) => {
+  if (!stats.value) {
     loading.value = true
   }
-  chartsLoading.value = true
   try {
-    const response = await adminAPI.dashboard.getSnapshotV2({
-      start_date: startDate.value,
-      end_date: endDate.value,
-      granularity: granularity.value,
-      include_stats: includeStats,
-      include_trend: true,
-      include_model_stats: true,
-      include_group_stats: false,
-      include_users_trend: false
-    })
-    if (currentSeq !== chartLoadSeq) return
-    if (includeStats && response.stats) {
-      stats.value = response.stats
-    }
-    trendData.value = response.trend || []
-    modelStats.value = response.models || []
+    const response = await adminAPI.dashboard.getStats({ signal })
+    if (currentSeq !== dashboardLoadSeq || signal.aborted) return
+    stats.value = response
   } catch (error) {
-    if (currentSeq !== chartLoadSeq) return
+    if (currentSeq !== dashboardLoadSeq || signal.aborted) return
     appStore.showError(t('admin.dashboard.failedToLoad'))
-    console.error('Error loading dashboard snapshot:', error)
+    console.error('Error loading dashboard overview statistics:', error)
   } finally {
-    if (currentSeq === chartLoadSeq) {
+    if (currentSeq === dashboardLoadSeq && !signal.aborted) {
       loading.value = false
-      chartsLoading.value = false
     }
   }
 }
 
-const loadUsersTrend = async () => {
-  const currentSeq = ++usersTrendLoadSeq
+const loadDashboardSnapshot = async (
+  includeStats: boolean,
+  includeCharts: boolean,
+  rangeParams: DashboardRangeParams,
+  currentSeq: number,
+  signal: AbortSignal
+) => {
+  if (includeStats && !stats.value) {
+    loading.value = true
+  }
+  if (includeCharts) {
+    chartsLoading.value = true
+  }
+  try {
+    const response = await adminAPI.dashboard.getSnapshotV2({
+      ...rangeParams,
+      granularity: granularity.value,
+      include_stats: includeStats,
+      include_trend: includeCharts,
+      include_model_stats: includeCharts,
+      include_group_stats: false,
+      include_users_trend: false
+    }, { signal })
+    if (currentSeq !== dashboardLoadSeq || signal.aborted) return
+    if (includeStats && response.stats) {
+      stats.value = response.stats
+    }
+    if (includeCharts) {
+      trendData.value = response.trend || []
+      modelStats.value = response.models || []
+    }
+  } catch (error) {
+    if (currentSeq !== dashboardLoadSeq || signal.aborted) return
+    appStore.showError(t('admin.dashboard.failedToLoad'))
+    console.error('Error loading dashboard snapshot:', error)
+  } finally {
+    if (currentSeq === dashboardLoadSeq && !signal.aborted) {
+      if (includeStats) {
+        loading.value = false
+      }
+      if (includeCharts) {
+        chartsLoading.value = false
+      }
+    }
+  }
+}
+
+const loadUsersTrend = async (
+  rangeParams: DashboardRangeParams,
+  currentSeq: number,
+  signal: AbortSignal
+) => {
   userTrendLoading.value = true
   try {
     const response = await adminAPI.dashboard.getUserUsageTrend({
-      start_date: startDate.value,
-      end_date: endDate.value,
+      ...rangeParams,
       granularity: granularity.value,
       limit: 12
-    })
-    if (currentSeq !== usersTrendLoadSeq) return
+    }, { signal })
+    if (currentSeq !== dashboardLoadSeq || signal.aborted) return
     userTrend.value = response.trend || []
   } catch (error) {
-    if (currentSeq !== usersTrendLoadSeq) return
+    if (currentSeq !== dashboardLoadSeq || signal.aborted) return
     console.error('Error loading users trend:', error)
     userTrend.value = []
   } finally {
-    if (currentSeq === usersTrendLoadSeq) {
+    if (currentSeq === dashboardLoadSeq && !signal.aborted) {
       userTrendLoading.value = false
     }
   }
 }
 
-const loadUserSpendingRanking = async () => {
-  const currentSeq = ++rankingLoadSeq
+const loadUserSpendingRanking = async (
+  rangeParams: DashboardRangeParams,
+  currentSeq: number,
+  signal: AbortSignal
+) => {
   rankingLoading.value = true
   rankingError.value = false
   try {
     const response = await adminAPI.dashboard.getUserSpendingRanking({
-      start_date: startDate.value,
-      end_date: endDate.value,
+      ...rangeParams,
       limit: rankingLimit
-    })
-    if (currentSeq !== rankingLoadSeq) return
+    }, { signal })
+    if (currentSeq !== dashboardLoadSeq || signal.aborted) return
     rankingItems.value = response.ranking || []
     rankingTotalActualCost.value = response.total_actual_cost || 0
     rankingTotalRequests.value = response.total_requests || 0
     rankingTotalTokens.value = response.total_tokens || 0
   } catch (error) {
-    if (currentSeq !== rankingLoadSeq) return
+    if (currentSeq !== dashboardLoadSeq || signal.aborted) return
     console.error('Error loading user spending ranking:', error)
     rankingItems.value = []
     rankingTotalActualCost.value = 0
@@ -678,30 +745,67 @@ const loadUserSpendingRanking = async () => {
     rankingTotalTokens.value = 0
     rankingError.value = true
   } finally {
-    if (currentSeq === rankingLoadSeq) {
+    if (currentSeq === dashboardLoadSeq && !signal.aborted) {
       rankingLoading.value = false
     }
   }
 }
 
-const loadDashboardStats = async () => {
+const beginDashboardLoad = () => {
+  dashboardAbortController?.abort()
+  dashboardAbortController = new AbortController()
+  return {
+    currentSeq: ++dashboardLoadSeq,
+    signal: dashboardAbortController.signal
+  }
+}
+
+const loadDashboardData = async (includeOverview: boolean) => {
+  const rangeParams = buildDashboardRangeParams()
+  const { currentSeq, signal } = beginDashboardLoad()
+  lastLoadedRange = rangeParams
+  rankingLoading.value = true
+  userTrendLoading.value = true
+  if (includeOverview) {
+    await loadDashboardOverviewStats(currentSeq, signal)
+    if (currentSeq !== dashboardLoadSeq || signal.aborted) return
+  }
+  await loadDashboardSnapshot(true, true, rangeParams, currentSeq, signal)
+  if (currentSeq !== dashboardLoadSeq || signal.aborted) return
   await Promise.all([
-    loadDashboardSnapshot(true),
-    loadUsersTrend(),
-    loadUserSpendingRanking()
+    loadUsersTrend(rangeParams, currentSeq, signal),
+    loadUserSpendingRanking(rangeParams, currentSeq, signal)
   ])
 }
 
+const loadDashboardStats = async () => loadDashboardData(true)
+
+const loadDashboardRangeStats = async () => loadDashboardData(false)
+
 const loadChartData = async () => {
+  if (!stats.value) {
+    await loadDashboardStats()
+    return
+  }
+  const rangeParams = buildDashboardRangeParams()
+  const { currentSeq, signal } = beginDashboardLoad()
+  lastLoadedRange = rangeParams
+  rankingLoading.value = true
+  userTrendLoading.value = true
+  await loadDashboardSnapshot(false, true, rangeParams, currentSeq, signal)
+  if (currentSeq !== dashboardLoadSeq || signal.aborted) return
   await Promise.all([
-    loadDashboardSnapshot(false),
-    loadUsersTrend(),
-    loadUserSpendingRanking()
+    loadUsersTrend(rangeParams, currentSeq, signal),
+    loadUserSpendingRanking(rangeParams, currentSeq, signal)
   ])
 }
 
 onMounted(() => {
   loadDashboardStats()
+})
+
+onUnmounted(() => {
+  dashboardAbortController?.abort()
 })
 </script>
 

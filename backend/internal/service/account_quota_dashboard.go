@@ -5,12 +5,17 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 )
 
 const accountQuotaDashboardPageSize = 1000
+
+// accountQuotaPoolDashboardBuildTimeout bounds a single coalesced dashboard
+// rebuild so a slow/stuck query cannot pin the singleflight slot forever.
+const accountQuotaPoolDashboardBuildTimeout = 30 * time.Second
 
 type AccountQuotaDashboard struct {
 	GeneratedAt    time.Time                  `json:"generated_at"`
@@ -142,6 +147,46 @@ func (s *AccountService) GetQuotaPoolDashboard(ctx context.Context, ownerUserID 
 		return cached, nil
 	}
 
+	// Coalesce concurrent misses for the same user into a single DB load.
+	// Without this, a burst of dashboard requests each triggers a full
+	// quota-pool account scan, which under load exhausted memory (OOM).
+	key := strconv.FormatInt(ownerUserID, 10)
+	ch := s.quotaPoolDashboardCache.group.DoChan(key, func() (any, error) {
+		// A peer goroutine may have populated the cache while we waited.
+		if cached := s.getQuotaPoolDashboardCache(ownerUserID); cached != nil {
+			return cached, nil
+		}
+		// Detach from the leader's request cancellation so a client
+		// disconnecting mid-load does not fail all coalesced callers, and
+		// bound the load so it can never hang indefinitely.
+		buildCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), accountQuotaPoolDashboardBuildTimeout)
+		defer cancel()
+		dashboard, err := s.buildQuotaPoolDashboard(buildCtx, ownerUserID)
+		if err != nil {
+			return nil, err
+		}
+		s.setQuotaPoolDashboardCache(ownerUserID, dashboard)
+		return dashboard, nil
+	})
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case res := <-ch:
+		if res.Err != nil {
+			return nil, res.Err
+		}
+		dashboard, _ := res.Val.(*UserAccountQuotaPoolDashboard)
+		if dashboard == nil {
+			return nil, fmt.Errorf("quota pool dashboard is unavailable")
+		}
+		// The singleflight result is shared across coalesced callers; hand
+		// each caller its own copy.
+		return cloneUserAccountQuotaPoolDashboard(dashboard), nil
+	}
+}
+
+func (s *AccountService) buildQuotaPoolDashboard(ctx context.Context, ownerUserID int64) (*UserAccountQuotaPoolDashboard, error) {
 	generatedAt := time.Now().UTC()
 	mine := newAccountQuotaDashboardBuilder(generatedAt)
 	mineGroups := newAccountQuotaGroupDashboardBuilder(generatedAt)
@@ -181,13 +226,11 @@ func (s *AccountService) GetQuotaPoolDashboard(ctx context.Context, ownerUserID 
 	platformDashboard := platform.finalize()
 	platformDashboard.GroupSummaries = platformGroups.finalize()
 
-	dashboard := &UserAccountQuotaPoolDashboard{
+	return &UserAccountQuotaPoolDashboard{
 		GeneratedAt: generatedAt,
 		Mine:        mineDashboard,
 		Platform:    platformDashboard,
-	}
-	s.setQuotaPoolDashboardCache(ownerUserID, dashboard)
-	return dashboard, nil
+	}, nil
 }
 
 func (s *AccountService) getQuotaPoolDashboardCache(ownerUserID int64) *UserAccountQuotaPoolDashboard {
@@ -197,21 +240,45 @@ func (s *AccountService) getQuotaPoolDashboardCache(ownerUserID int64) *UserAcco
 	now := time.Now()
 	s.quotaPoolDashboardCache.mu.Lock()
 	defer s.quotaPoolDashboardCache.mu.Unlock()
-	if s.quotaPoolDashboardCache.userID != ownerUserID || s.quotaPoolDashboardCache.value == nil || !now.Before(s.quotaPoolDashboardCache.expires) {
+	entry, ok := s.quotaPoolDashboardCache.entries[ownerUserID]
+	if !ok || entry.value == nil || !now.Before(entry.expires) {
 		return nil
 	}
-	return cloneUserAccountQuotaPoolDashboard(s.quotaPoolDashboardCache.value)
+	return cloneUserAccountQuotaPoolDashboard(entry.value)
 }
 
 func (s *AccountService) setQuotaPoolDashboardCache(ownerUserID int64, dashboard *UserAccountQuotaPoolDashboard) {
 	if s == nil || dashboard == nil {
 		return
 	}
+	now := time.Now()
 	s.quotaPoolDashboardCache.mu.Lock()
 	defer s.quotaPoolDashboardCache.mu.Unlock()
-	s.quotaPoolDashboardCache.userID = ownerUserID
-	s.quotaPoolDashboardCache.expires = time.Now().Add(accountQuotaPoolDashboardCacheTTL)
-	s.quotaPoolDashboardCache.value = cloneUserAccountQuotaPoolDashboard(dashboard)
+	if s.quotaPoolDashboardCache.entries == nil {
+		s.quotaPoolDashboardCache.entries = make(map[int64]accountQuotaPoolDashboardCacheEntry)
+	}
+	s.evictQuotaPoolDashboardCacheLocked(now)
+	s.quotaPoolDashboardCache.entries[ownerUserID] = accountQuotaPoolDashboardCacheEntry{
+		expires: now.Add(accountQuotaPoolDashboardCacheTTL),
+		value:   cloneUserAccountQuotaPoolDashboard(dashboard),
+	}
+}
+
+// evictQuotaPoolDashboardCacheLocked drops expired entries and, if still over
+// the size cap, sheds arbitrary entries to keep the cache bounded. Callers must
+// hold quotaPoolDashboardCache.mu.
+func (s *AccountService) evictQuotaPoolDashboardCacheLocked(now time.Time) {
+	for id, entry := range s.quotaPoolDashboardCache.entries {
+		if entry.value == nil || !now.Before(entry.expires) {
+			delete(s.quotaPoolDashboardCache.entries, id)
+		}
+	}
+	for id := range s.quotaPoolDashboardCache.entries {
+		if len(s.quotaPoolDashboardCache.entries) < accountQuotaPoolDashboardCacheMaxEntries {
+			break
+		}
+		delete(s.quotaPoolDashboardCache.entries, id)
+	}
 }
 
 func cloneUserAccountQuotaPoolDashboard(in *UserAccountQuotaPoolDashboard) *UserAccountQuotaPoolDashboard {

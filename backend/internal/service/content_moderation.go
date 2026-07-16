@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"log/slog"
 	"net/http"
@@ -22,6 +23,7 @@ import (
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
 )
 
 const (
@@ -85,6 +87,9 @@ const (
 	contentModerationCleanupInterval = 24 * time.Hour
 	contentModerationCleanupTimeout  = 30 * time.Minute
 	contentModerationCleanupDelay    = 5 * time.Minute
+
+	contentModerationRuntimeCacheTTL       = time.Second
+	contentModerationRuntimeRefreshTimeout = 5 * time.Second
 
 	contentModerationScopeTypeGroup            = "group"
 	contentModerationScopeTypeAccountShareMode = "account_share_mode"
@@ -295,23 +300,44 @@ type UpdateContentModerationConfigInput struct {
 }
 
 type ContentModerationCheckInput struct {
-	RequestID  string
-	UserID     int64
-	UserEmail  string
-	APIKeyID   int64
-	APIKeyName string
-	GroupID    *int64
-	GroupName  string
-	Endpoint   string
-	Provider   string
-	Model      string
-	Protocol   string
-	Body       []byte
+	RequestID     string
+	UserID        int64
+	UserEmail     string
+	APIKeyID      int64
+	APIKeyName    string
+	GroupID       *int64
+	GroupName     string
+	Endpoint      string
+	Provider      string
+	Model         string
+	Protocol      string
+	Body          []byte
+	Content       *ContentModerationInput
+	ContentSource ContentModerationInputSource
+}
+
+type ContentModerationInputSource interface {
+	ContentModerationInputCopy() ContentModerationInput
+	CyberPreflightInputCopy() ContentModerationInput
 }
 
 type ContentModerationInput struct {
-	Text   string
-	Images []string
+	Text            string
+	Images          []string
+	allImageDigests [][sha256.Size]byte
+}
+
+func (in ContentModerationInput) Clone() ContentModerationInput {
+	clone := ContentModerationInput{
+		Text: in.Text,
+	}
+	if len(in.Images) > 0 {
+		clone.Images = append([]string(nil), in.Images...)
+	}
+	if len(in.allImageDigests) > 0 {
+		clone.allImageDigests = append([][sha256.Size]byte(nil), in.allImageDigests...)
+	}
+	return clone
 }
 
 func (in *ContentModerationInput) Normalize() {
@@ -352,12 +378,26 @@ func (in ContentModerationInput) Hash() string {
 	h := sha256.New()
 	_, _ = h.Write([]byte("text:"))
 	_, _ = h.Write([]byte(in.Text))
-	for _, image := range in.Images {
-		imageHash := sha256.Sum256([]byte(image))
-		_, _ = h.Write([]byte("\nimage:"))
-		_, _ = h.Write([]byte(hex.EncodeToString(imageHash[:])))
+	if len(in.allImageDigests) > 0 {
+		for _, imageDigest := range in.allImageDigests {
+			writeContentModerationImageDigest(h, imageDigest)
+		}
+	} else {
+		for _, image := range in.Images {
+			writeContentModerationImageDigest(h, sha256.Sum256([]byte(image)))
+		}
 	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+func writeContentModerationImageDigest(h hash.Hash, imageDigest [sha256.Size]byte) {
+	if h == nil {
+		return
+	}
+	var encoded [sha256.Size * 2]byte
+	hex.Encode(encoded[:], imageDigest[:])
+	_, _ = h.Write([]byte("\nimage:"))
+	_, _ = h.Write(encoded[:])
 }
 
 type ContentModerationDecision struct {
@@ -495,12 +535,17 @@ type ContentModerationHashCache interface {
 	UpdateUserTrustState(ctx context.Context, userID int64, ttl time.Duration, mutate ContentModerationUserTrustStateMutator) (*ContentModerationUserTrustState, error)
 }
 
+type ContentModerationUserAPIKeyHashChecker interface {
+	APIKeyHashExists(ctx context.Context, apiKeyHash string, excludeOwnerUserID, excludeAccountID int64) (bool, error)
+}
+
 type ContentModerationService struct {
 	settingRepo               SettingRepository
 	repo                      ContentModerationRepository
 	hashCache                 ContentModerationHashCache
 	groupRepo                 GroupRepository
 	accountShareModeResolver  ContentModerationAccountShareModeResolver
+	userAPIKeyHashChecker     ContentModerationUserAPIKeyHashChecker
 	userRepo                  UserRepository
 	authCacheInvalidator      APIKeyAuthCacheInvalidator
 	emailService              *EmailService
@@ -522,8 +567,19 @@ type ContentModerationService struct {
 	lastCleanupUnix           atomic.Int64
 	lastCleanupDeletedHit     atomic.Int64
 	lastCleanupDeletedNonHit  atomic.Int64
+	runtimeSnapshot           atomic.Pointer[contentModerationRuntimeSnapshot]
+	runtimeRefreshMu          sync.Mutex
+	runtimeCacheTTL           time.Duration
+	runtimeRefreshRetryAt     atomic.Int64
 	keyHealthMu               sync.Mutex
 	keyHealth                 map[string]*contentModerationKeyHealth
+}
+
+type contentModerationRuntimeSnapshot struct {
+	riskControlEnabled bool
+	config             *ContentModerationConfig
+	configDigest       [sha256.Size]byte
+	loadedAt           time.Time
 }
 
 type contentModerationTask struct {
@@ -565,7 +621,7 @@ func NewContentModerationService(
 		userRepo:             userRepo,
 		authCacheInvalidator: authCacheInvalidator,
 		emailService:         emailService,
-		httpClient:           &http.Client{},
+		httpClient:           servertiming.InstrumentClient(nil),
 		workerCount:          maxContentModerationWorkerCount,
 		asyncQueue:           make(chan contentModerationTask, maxContentModerationQueueSize),
 		keyHealth:            make(map[string]*contentModerationKeyHealth),
@@ -591,6 +647,13 @@ func (s *ContentModerationService) SetAccountShareModeResolver(resolver ContentM
 		return
 	}
 	s.accountShareModeResolver = resolver
+}
+
+func (s *ContentModerationService) SetUserAPIKeyHashChecker(checker ContentModerationUserAPIKeyHashChecker) {
+	if s == nil {
+		return
+	}
+	s.userAPIKeyHashChecker = checker
 }
 
 func (s *ContentModerationService) GetConfig(ctx context.Context) (*ContentModerationConfigView, error) {
@@ -694,6 +757,9 @@ func (s *ContentModerationService) UpdateConfig(ctx context.Context, input Updat
 			cfg.APIKey = ""
 		}
 		if input.APIKeys != nil {
+			if err := s.ensureAPIKeysNotUsedByUserModeration(ctx, *input.APIKeys); err != nil {
+				return nil, err
+			}
 			if apiKeysMode == contentModerationAPIKeysModeReplace {
 				cfg.APIKeys = normalizeModerationAPIKeys(*input.APIKeys)
 			} else {
@@ -702,6 +768,9 @@ func (s *ContentModerationService) UpdateConfig(ctx context.Context, input Updat
 			cfg.APIKey = ""
 		}
 		if input.APIKey != nil && strings.TrimSpace(*input.APIKey) != "" {
+			if err := s.ensureAPIKeysNotUsedByUserModeration(ctx, []string{*input.APIKey}); err != nil {
+				return nil, err
+			}
 			cfg.APIKeys = normalizeModerationAPIKeys(append(cfg.APIKeys, *input.APIKey))
 			cfg.APIKey = ""
 		}
@@ -717,6 +786,7 @@ func (s *ContentModerationService) UpdateConfig(ctx context.Context, input Updat
 	if err := s.settingRepo.Set(ctx, SettingKeyContentModerationConfig, string(raw)); err != nil {
 		return nil, fmt.Errorf("save content moderation config: %w", err)
 	}
+	s.replaceRuntimeConfig(raw)
 	return s.configView(cfg), nil
 }
 
@@ -796,16 +866,7 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 			"protocol", input.Protocol)
 		return allow, nil
 	}
-	if !s.isRiskControlEnabled(ctx) {
-		slog.Info("content_moderation.skip_feature_disabled",
-			"user_id", input.UserID,
-			"api_key_id", input.APIKeyID,
-			"group_id", contentModerationLogGroupID(input.GroupID),
-			"endpoint", input.Endpoint,
-			"protocol", input.Protocol)
-		return allow, nil
-	}
-	cfg, err := s.loadConfig(ctx)
+	runtimeSnapshot, err := s.loadRuntimeSnapshot(ctx)
 	if err != nil {
 		slog.Warn("content_moderation.skip_config_load_failed",
 			"user_id", input.UserID,
@@ -816,6 +877,16 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 			"error", err)
 		return allow, nil
 	}
+	if !runtimeSnapshot.riskControlEnabled {
+		slog.Info("content_moderation.skip_feature_disabled",
+			"user_id", input.UserID,
+			"api_key_id", input.APIKeyID,
+			"group_id", contentModerationLogGroupID(input.GroupID),
+			"endpoint", input.Endpoint,
+			"protocol", input.Protocol)
+		return allow, nil
+	}
+	cfg := runtimeSnapshot.config
 	inScope, scopeCtx := s.resolveScope(ctx, cfg, input)
 	slog.Info("content_moderation.config_loaded",
 		"user_id", input.UserID,
@@ -871,7 +942,14 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 			"scope_type", scopeCtx.ScopeType)
 		return allow, nil
 	}
-	content := ExtractContentModerationInput(input.Protocol, input.Body)
+	var content ContentModerationInput
+	if input.Content != nil {
+		content = input.Content.Clone()
+	} else if input.ContentSource != nil {
+		content = input.ContentSource.ContentModerationInputCopy()
+	} else {
+		content = ExtractContentModerationInput(input.Protocol, input.Body)
+	}
 	if content.IsEmpty() {
 		slog.Info("content_moderation.skip_empty_input",
 			"user_id", input.UserID,
@@ -1088,6 +1166,9 @@ func (s *ContentModerationService) enqueueAsync(input ContentModerationCheckInpu
 		s.asyncDropped.Add(1)
 		return
 	}
+	input.Body = nil
+	input.Content = nil
+	input.ContentSource = nil
 	task := contentModerationTask{
 		input:      input,
 		content:    content,
@@ -1108,8 +1189,14 @@ func (s *ContentModerationService) enqueueAsync(input ContentModerationCheckInpu
 func (s *ContentModerationService) worker(id int) {
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), maxContentModerationTimeoutMS*time.Millisecond+10*time.Second)
-		cfg, err := s.loadConfig(ctx)
-		if err != nil || !cfg.Enabled || cfg.Mode == ContentModerationModeOff || len(cfg.apiKeys()) == 0 || id >= cfg.WorkerCount {
+		runtimeSnapshot, err := s.loadRuntimeSnapshot(ctx)
+		if err != nil || runtimeSnapshot == nil || runtimeSnapshot.config == nil {
+			cancel()
+			time.Sleep(time.Second)
+			continue
+		}
+		cfg := runtimeSnapshot.config
+		if !runtimeSnapshot.riskControlEnabled || !cfg.Enabled || cfg.Mode == ContentModerationModeOff || len(cfg.apiKeys()) == 0 || id >= cfg.WorkerCount {
 			cancel()
 			time.Sleep(time.Second)
 			continue
@@ -1376,15 +1463,18 @@ func (s *ContentModerationService) runCleanupOnce() {
 }
 
 func (s *ContentModerationService) loadConfig(ctx context.Context) (*ContentModerationConfig, error) {
-	cfg := defaultContentModerationConfig()
 	raw, err := s.settingRepo.GetValue(ctx, SettingKeyContentModerationConfig)
 	if err != nil {
 		if errors.Is(err, ErrSettingNotFound) {
-			cfg.normalize()
-			return cfg, nil
+			return parseContentModerationConfig("")
 		}
 		return nil, fmt.Errorf("get content moderation config: %w", err)
 	}
+	return parseContentModerationConfig(raw)
+}
+
+func parseContentModerationConfig(raw string) (*ContentModerationConfig, error) {
+	cfg := defaultContentModerationConfig()
 	if strings.TrimSpace(raw) == "" {
 		cfg.normalize()
 		return cfg, nil
@@ -1394,6 +1484,115 @@ func (s *ContentModerationService) loadConfig(ctx context.Context) (*ContentMode
 	}
 	cfg.normalize()
 	return cfg, nil
+}
+
+func (s *ContentModerationService) loadRuntimeSnapshot(ctx context.Context) (*contentModerationRuntimeSnapshot, error) {
+	if s == nil || s.settingRepo == nil {
+		return nil, errors.New("content moderation setting repository unavailable")
+	}
+	now := time.Now()
+	if snapshot := s.runtimeSnapshot.Load(); snapshot != nil {
+		if now.Sub(snapshot.loadedAt) < s.runtimeSnapshotTTL() {
+			return snapshot, nil
+		}
+		s.triggerRuntimeSnapshotRefresh()
+		return snapshot, nil
+	}
+
+	s.runtimeRefreshMu.Lock()
+	defer s.runtimeRefreshMu.Unlock()
+	if snapshot := s.runtimeSnapshot.Load(); snapshot != nil {
+		return snapshot, nil
+	}
+	return s.refreshRuntimeSnapshot(ctx)
+}
+
+func (s *ContentModerationService) runtimeSnapshotTTL() time.Duration {
+	if s != nil && s.runtimeCacheTTL > 0 {
+		return s.runtimeCacheTTL
+	}
+	return contentModerationRuntimeCacheTTL
+}
+
+func (s *ContentModerationService) triggerRuntimeSnapshotRefresh() {
+	if s == nil || s.runtimeRefreshDeferred() || !s.runtimeRefreshMu.TryLock() {
+		return
+	}
+	if s.runtimeRefreshDeferred() {
+		s.runtimeRefreshMu.Unlock()
+		return
+	}
+	go func() {
+		defer s.runtimeRefreshMu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), contentModerationRuntimeRefreshTimeout)
+		defer cancel()
+		if _, err := s.refreshRuntimeSnapshot(ctx); err != nil {
+			s.runtimeRefreshRetryAt.Store(time.Now().Add(s.runtimeSnapshotTTL()).UnixNano())
+			slog.Warn("content_moderation.runtime_snapshot_refresh_failed", "error", err)
+		}
+	}()
+}
+
+func (s *ContentModerationService) runtimeRefreshDeferred() bool {
+	return s != nil && time.Now().UnixNano() < s.runtimeRefreshRetryAt.Load()
+}
+
+func (s *ContentModerationService) refreshRuntimeSnapshot(ctx context.Context) (*contentModerationRuntimeSnapshot, error) {
+	values, err := s.settingRepo.GetMultiple(ctx, []string{
+		SettingKeyRiskControlEnabled,
+		SettingKeyContentModerationConfig,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get content moderation runtime settings: %w", err)
+	}
+	rawConfig := values[SettingKeyContentModerationConfig]
+	configDigest := sha256.Sum256([]byte(rawConfig))
+	if current := s.runtimeSnapshot.Load(); current != nil && current.configDigest == configDigest {
+		snapshot := &contentModerationRuntimeSnapshot{
+			riskControlEnabled: values[SettingKeyRiskControlEnabled] == "true",
+			config:             current.config,
+			configDigest:       configDigest,
+			loadedAt:           time.Now(),
+		}
+		s.runtimeSnapshot.Store(snapshot)
+		s.runtimeRefreshRetryAt.Store(0)
+		return snapshot, nil
+	}
+	cfg, err := parseContentModerationConfig(rawConfig)
+	if err != nil {
+		return nil, err
+	}
+	snapshot := &contentModerationRuntimeSnapshot{
+		riskControlEnabled: values[SettingKeyRiskControlEnabled] == "true",
+		config:             cfg,
+		configDigest:       configDigest,
+		loadedAt:           time.Now(),
+	}
+	s.runtimeSnapshot.Store(snapshot)
+	s.runtimeRefreshRetryAt.Store(0)
+	return snapshot, nil
+}
+
+func (s *ContentModerationService) replaceRuntimeConfig(raw []byte) {
+	if s == nil || s.runtimeSnapshot.Load() == nil {
+		return
+	}
+	cfg, err := parseContentModerationConfig(string(raw))
+	if err != nil {
+		return
+	}
+	s.runtimeRefreshMu.Lock()
+	defer s.runtimeRefreshMu.Unlock()
+	current := s.runtimeSnapshot.Load()
+	if current == nil {
+		return
+	}
+	s.runtimeSnapshot.Store(&contentModerationRuntimeSnapshot{
+		riskControlEnabled: current.riskControlEnabled,
+		config:             cfg,
+		configDigest:       sha256.Sum256(raw),
+		loadedAt:           time.Now(),
+	})
 }
 
 func (s *ContentModerationService) isRiskControlEnabled(ctx context.Context) bool {
@@ -1437,6 +1636,26 @@ func (s *ContentModerationService) validateConfig(ctx context.Context, cfg *Cont
 	}
 	if err := validateCyberPreflightRulesConfig(cfg.CyberPreflightRules); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (s *ContentModerationService) ensureAPIKeysNotUsedByUserModeration(ctx context.Context, keys []string) error {
+	if s == nil || s.userAPIKeyHashChecker == nil {
+		return nil
+	}
+	for _, key := range normalizeModerationAPIKeys(keys) {
+		keyHash := moderationAPIKeyHash(key)
+		if keyHash == "" {
+			continue
+		}
+		exists, err := s.userAPIKeyHashChecker.APIKeyHashExists(ctx, keyHash, 0, 0)
+		if err != nil {
+			return err
+		}
+		if exists {
+			return infraerrors.BadRequest("CONTENT_MODERATION_API_KEY_DUPLICATED", "api_key is already used by user moderation config")
+		}
 	}
 	return nil
 }

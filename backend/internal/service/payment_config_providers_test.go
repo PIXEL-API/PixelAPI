@@ -387,6 +387,15 @@ func TestUpdateProviderInstanceRejectsProtectedConfigChangesWhilePendingOrders(t
 			wantValue:     "alipay-app-test",
 		},
 		{
+			name:          "alipay opAppId",
+			providerKey:   payment.TypeAlipay,
+			createConfig:  validAlipayProviderConfigWithOpAppID,
+			supportedType: []string{payment.TypeAlipay},
+			updateConfig:  map[string]string{"opAppId": "alipay-op-app-updated"},
+			fieldName:     "opAppId",
+			wantValue:     "alipay-op-app-test",
+		},
+		{
 			name:          "easypay pid",
 			providerKey:   payment.TypeEasyPay,
 			createConfig:  validEasyPayProviderConfig,
@@ -465,6 +474,15 @@ func TestUpdateProviderInstanceAllowsSafeConfigChangesWhilePendingOrders(t *test
 			updateConfig:  map[string]string{"appId": "alipay-app-test"},
 			fieldName:     "appId",
 			wantValue:     "alipay-app-test",
+		},
+		{
+			name:          "alipay same opAppId",
+			providerKey:   payment.TypeAlipay,
+			createConfig:  validAlipayProviderConfigWithOpAppID,
+			supportedType: []string{payment.TypeAlipay},
+			updateConfig:  map[string]string{"opAppId": "alipay-op-app-test"},
+			fieldName:     "opAppId",
+			wantValue:     "alipay-op-app-test",
 		},
 	}
 
@@ -563,6 +581,14 @@ func validAlipayProviderConfig(t *testing.T) map[string]string {
 		"notifyUrl":  "https://merchant.example.com/alipay/notify",
 		"returnUrl":  "https://merchant.example.com/alipay/return",
 	}
+}
+
+func validAlipayProviderConfigWithOpAppID(t *testing.T) map[string]string {
+	t.Helper()
+
+	cfg := validAlipayProviderConfig(t)
+	cfg["opAppId"] = "alipay-op-app-test"
+	return cfg
 }
 
 func validEasyPayProviderConfig(t *testing.T) map[string]string {

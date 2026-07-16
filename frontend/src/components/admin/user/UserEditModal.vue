@@ -30,6 +30,13 @@
         <input v-model="form.username" type="text" class="input" />
       </div>
       <div>
+        <label class="input-label">{{ t('admin.users.form.roleLabel') }}</label>
+        <select v-model="form.role" class="input" @change="normalizeConcurrencyInput">
+          <option value="user">{{ t('admin.users.roles.user') }}</option>
+          <option value="admin">{{ t('admin.users.roles.admin') }}</option>
+        </select>
+      </div>
+      <div>
         <label class="input-label">{{ t('admin.users.notes') }}</label>
         <textarea v-model="form.notes" rows="3" class="input"></textarea>
       </div>
@@ -38,11 +45,14 @@
         <input
           v-model.number="form.concurrency"
           type="number"
-          min="1"
+          :min="concurrencyMinimum"
+          step="1"
           class="input"
           @input="normalizeConcurrencyInput"
         />
-        <p class="input-hint">{{ t('admin.users.concurrencyRangeHint') }}</p>
+        <p class="input-hint">
+          {{ t(form.role === 'admin' ? 'admin.users.adminConcurrencyRangeHint' : 'admin.users.concurrencyRangeHint') }}
+        </p>
       </div>
       <div>
         <label class="input-label">{{ t('admin.users.form.rpmLimit') }}</label>
@@ -167,7 +177,16 @@ const emit = defineEmits(['close', 'success'])
 const { t } = useI18n(); const appStore = useAppStore(); const { copyToClipboard } = useClipboard()
 
 const submitting = ref(false); const passwordCopied = ref(false)
-const form = reactive({ email: '', password: '', username: '', notes: '', concurrency: 1, rpm_limit: 0, customAttributes: {} as UserAttributeValuesMap })
+const form = reactive({
+  email: '',
+  password: '',
+  username: '',
+  notes: '',
+  role: 'user' as 'admin' | 'user',
+  concurrency: 1,
+  rpm_limit: 0,
+  customAttributes: {} as UserAttributeValuesMap
+})
 const affiliatePolicy = reactive({
   loading: false,
   loaded: false,
@@ -183,8 +202,14 @@ const affiliatePolicy = reactive({
 })
 let affiliatePolicyRequestSeq = 0
 
+const concurrencyMinimum = computed(() => form.role === 'admin' ? 0 : 1)
+
 const normalizeConcurrencyInput = () => {
-  form.concurrency = Math.max(1, form.concurrency || 1)
+  const value = Number(form.concurrency)
+  form.concurrency = Math.max(
+    concurrencyMinimum.value,
+    Number.isFinite(value) ? Math.trunc(value) : concurrencyMinimum.value
+  )
 }
 
 const normalizeAffiliateWeeklyLimitValue = (value: unknown) => {
@@ -277,7 +302,16 @@ const affiliatePolicyExpiryText = computed(() => {
 
 watch(() => props.user, (u) => {
   if (u) {
-    Object.assign(form, { email: u.email, password: '', username: u.username || '', notes: u.notes || '', concurrency: u.concurrency, rpm_limit: u.rpm_limit ?? 0, customAttributes: {} })
+    Object.assign(form, {
+      email: u.email,
+      password: '',
+      username: u.username || '',
+      notes: u.notes || '',
+      role: u.role || 'user',
+      concurrency: u.concurrency,
+      rpm_limit: u.rpm_limit ?? 0,
+      customAttributes: {}
+    })
     passwordCopied.value = false
     void loadAffiliatePolicy(u.id)
   } else {
@@ -302,8 +336,8 @@ const handleUpdateUser = async () => {
     return
   }
   normalizeConcurrencyInput()
-  if (form.concurrency < 1) {
-    appStore.showError(t('admin.users.concurrencyRange'))
+  if (form.concurrency < concurrencyMinimum.value) {
+    appStore.showError(t(form.role === 'admin' ? 'admin.users.adminConcurrencyRange' : 'admin.users.concurrencyRange'))
     return
   }
   normalizeAffiliateWeeklyLimitInput()
@@ -314,7 +348,14 @@ const handleUpdateUser = async () => {
   }
   submitting.value = true
   try {
-    const data: any = { email: form.email, username: form.username, notes: form.notes, concurrency: form.concurrency, rpm_limit: form.rpm_limit }
+    const data: any = {
+      email: form.email,
+      username: form.username,
+      notes: form.notes,
+      role: form.role,
+      concurrency: form.concurrency,
+      rpm_limit: form.rpm_limit
+    }
     if (form.password.trim()) data.password = form.password.trim()
     await adminAPI.users.update(props.user.id, data)
     if (affiliatePolicyDirty.value) {

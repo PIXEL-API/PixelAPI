@@ -462,9 +462,6 @@ function initTheme() {
 onMounted(() => {
   initTheme()
 
-  // Check auth state
-  authStore.checkAuth()
-
   // Ensure public settings are loaded (will use cache if already loaded from injected config)
   if (!appStore.publicSettingsLoaded) {
     appStore.fetchPublicSettings()

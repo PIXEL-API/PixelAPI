@@ -106,6 +106,8 @@ type CreatePaymentRequest struct {
 	NotifyURL          string // Webhook callback URL
 	ReturnURL          string // Browser redirect URL after payment
 	OpenID             string // WeChat JSAPI payer OpenID when available
+	BuyerID            string // Alipay JSAPI buyer user_id when available
+	BuyerOpenID        string // Alipay JSAPI buyer open_id when available
 	ClientIP           string // Payer's IP address
 	IsMobile           bool   // Whether the request comes from a mobile device
 	InstanceSubMethods string // Comma-separated sub-methods from instance supported_types (for Stripe)
@@ -140,6 +142,12 @@ type WechatJSAPIPayload struct {
 	PaySign   string `json:"paySign,omitempty"`
 }
 
+// AlipayJSAPIPayload contains the fields the frontend needs to invoke Alipay JSAPI payment.
+type AlipayJSAPIPayload struct {
+	TradeNO string `json:"tradeNO,omitempty"`
+	AppID   string `json:"appId,omitempty"`
+}
+
 // CreatePaymentResponse is returned after successfully initiating a payment.
 type CreatePaymentResponse struct {
 	TradeNo      string                  // Third-party transaction ID
@@ -153,6 +161,7 @@ type CreatePaymentResponse struct {
 	ResultType   CreatePaymentResultType // Typed result contract for frontend flows
 	OAuth        *WechatOAuthInfo        // WeChat OAuth bootstrap payload when required
 	JSAPI        *WechatJSAPIPayload     // WeChat JSAPI invocation payload when ready
+	AlipayJSAPI  *AlipayJSAPIPayload     // Alipay JSAPI invocation payload when ready
 }
 
 // QueryOrderResponse describes the payment status from the upstream provider.

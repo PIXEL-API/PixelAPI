@@ -16,11 +16,14 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+
+	"golang.org/x/sync/singleflight"
 )
 
 var (
 	ErrAccountNotFound                           = infraerrors.NotFound("ACCOUNT_NOT_FOUND", "account not found")
 	ErrAccountNilInput                           = infraerrors.BadRequest("ACCOUNT_NIL_INPUT", "account input cannot be nil")
+	ErrAccountPlatformUnsupported                = infraerrors.BadRequest("ACCOUNT_PLATFORM_UNSUPPORTED", "account platform is not supported")
 	ErrCodexQuotaLimitPercentInvalid             = infraerrors.BadRequest("CODEX_QUOTA_LIMIT_PERCENT_INVALID", "Codex quota limit percent must be between 1 and 100")
 	ErrOwnedAccountAlreadyExists                 = infraerrors.Conflict("OWNED_ACCOUNT_ALREADY_EXISTS", "account already exists")
 	ErrOwnedAccountTypeNotAllowed                = infraerrors.BadRequest("OWNED_ACCOUNT_TYPE_NOT_ALLOWED", "user accounts only support official OAuth accounts")
@@ -32,7 +35,8 @@ var (
 	ErrOwnedAccountLoadFactorCreditsInsufficient = infraerrors.BadRequest("OWNED_ACCOUNT_LOAD_FACTOR_CREDITS_INSUFFICIENT", "load factor credits are insufficient")
 	ErrOwnedAccountLevelNotAllowed               = infraerrors.BadRequest("OWNED_ACCOUNT_LEVEL_NOT_ALLOWED", "user accounts cannot manually change account level")
 	ErrOwnedOpenAIAccountLevelRequired           = infraerrors.BadRequest("OWNED_OPENAI_ACCOUNT_LEVEL_REQUIRED", "OpenAI user accounts must select an account level before import")
-	ErrOwnedOpenAIAccountProxyRequired           = infraerrors.BadRequest("OWNED_OPENAI_ACCOUNT_PROXY_REQUIRED", "Pro OpenAI user accounts must use account login with a selected proxy IP")
+	ErrOwnedAccountProxyRequired                 = infraerrors.BadRequest("OWNED_ACCOUNT_PROXY_REQUIRED", "user OAuth accounts must use account login with a selected proxy IP")
+	ErrOwnedOpenAIAccountProxyRequired           = ErrOwnedAccountProxyRequired
 	ErrOwnedAccountGroupPlatformMismatch         = infraerrors.BadRequest("OWNED_ACCOUNT_GROUP_PLATFORM_MISMATCH", "account group platform does not match account platform")
 	ErrOwnedAccountGroupValidationUnavailable    = infraerrors.InternalServer("OWNED_ACCOUNT_GROUP_VALIDATION_UNAVAILABLE", "owned account group validation is unavailable")
 	ErrOwnedAccountPublicPoolUnavailable         = infraerrors.BadRequest("OWNED_ACCOUNT_PUBLIC_POOL_UNAVAILABLE", "public shared account pool group is not configured for this account platform")
@@ -52,7 +56,14 @@ const ownedPersonalDefaultConcurrency = ownedPersonalMinConcurrency
 const ownedPersonalDefaultPriority = 1
 const ownedPersonalDefaultOpenAICompactMode = "force_on"
 const ownedPersonalDefaultOpenAIWSMode = OpenAIWSIngressModeOff
-const accountQuotaPoolDashboardCacheTTL = 15 * time.Second
+
+// 覆盖前端 60 秒轮询周期，避免每次轮询都重建个人与公共额度池。
+const accountQuotaPoolDashboardCacheTTL = 90 * time.Second
+
+// accountQuotaPoolDashboardCacheMaxEntries bounds the per-user dashboard cache
+// so a large user base cannot grow it without limit. Each entry only holds the
+// small aggregated summary, not the raw account rows.
+const accountQuotaPoolDashboardCacheMaxEntries = 4096
 
 const (
 	AccountLevelUnknown = domain.AccountLevelUnknown
@@ -60,6 +71,7 @@ const (
 	AccountLevelPlus    = domain.AccountLevelPlus
 	AccountLevelPro     = domain.AccountLevelPro
 	AccountLevelTeam    = domain.AccountLevelTeam
+	AccountLevelK12     = domain.AccountLevelK12
 )
 
 type AccountRepository interface {
@@ -187,6 +199,8 @@ type AccountService struct {
 	userRepo                accountUserRepository
 	userSubRepo             accountSubscriptionLookupRepository
 	accountSharePolicyRepo  AccountSharePolicyRepository
+	accountShareModeGroups  accountShareModeGroupClassifier
+	settingService          *SettingService
 	privateGroupProvisioner UserPrivateGroupProvisioner
 	systemNoticeService     *SystemNoticeService
 	proxyRepo               ownedAccountProxyRepository
@@ -195,7 +209,11 @@ type AccountService struct {
 
 type accountQuotaPoolDashboardCache struct {
 	mu      sync.Mutex
-	userID  int64
+	entries map[int64]accountQuotaPoolDashboardCacheEntry
+	group   singleflight.Group
+}
+
+type accountQuotaPoolDashboardCacheEntry struct {
 	expires time.Time
 	value   *UserAccountQuotaPoolDashboard
 }
@@ -225,6 +243,10 @@ type ownedAccountFilterRepository interface {
 	ListOwnedWithFilters(ctx context.Context, ownerUserID int64, params pagination.PaginationParams, platform, accountType, status, search string, groupID, proxyID int64, privacyMode string) ([]Account, *pagination.PaginationResult, error)
 }
 
+type ownedAccountIDBatchRepository interface {
+	ListOwnedAccountIDs(ctx context.Context, ownerUserID int64, accountIDs []int64) ([]int64, error)
+}
+
 type ownedLoadFactorCreditAccountRepository interface {
 	UpdateOwnedAccountWithLoadFactorCredits(ctx context.Context, ownerUserID int64, account *Account) (*Account, error)
 }
@@ -235,6 +257,10 @@ type accountQuotaPoolRepository interface {
 
 type accountShareModeListingAccountRepository interface {
 	IsAccountShareModeListingAccount(ctx context.Context, accountID int64) (bool, error)
+}
+
+type accountShareModeGroupClassifier interface {
+	IsModeGroup(ctx context.Context, groupID int64) (bool, error)
 }
 
 type ownedAccountDuplicateKey struct {
@@ -297,11 +323,36 @@ func (s *AccountService) SetAccountSharePolicyRepository(repo AccountSharePolicy
 	s.accountSharePolicyRepo = repo
 }
 
+func (s *AccountService) SetAccountShareModeRepository(repo AccountShareModeRepository) {
+	if s == nil {
+		return
+	}
+	s.accountShareModeGroups = repo
+}
+
+func (s *AccountService) SetSettingService(settingService *SettingService) {
+	if s == nil {
+		return
+	}
+	s.settingService = settingService
+}
+
 func (s *AccountService) SetSystemNoticeService(noticeService *SystemNoticeService) {
 	if s == nil {
 		return
 	}
 	s.systemNoticeService = noticeService
+}
+
+func (s *AccountService) openAIAccountLevelConfigs(ctx context.Context) ([]OpenAIAccountLevelConfig, error) {
+	if s == nil || s.settingService == nil {
+		return DefaultOpenAIAccountLevelConfigs(), nil
+	}
+	configs, err := s.settingService.GetOpenAIAccountLevelConfigs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return configs, nil
 }
 
 // Create 创建账号
@@ -311,6 +362,10 @@ func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (
 		return nil, err
 	}
 	req.Extra = extra
+	levelConfigs, err := s.openAIAccountLevelConfigs(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	// 验证分组是否存在（如果指定了分组）
 	if len(req.GroupIDs) > 0 {
@@ -324,7 +379,7 @@ func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (
 		Name:         req.Name,
 		Notes:        normalizeAccountNotes(req.Notes),
 		Platform:     req.Platform,
-		AccountLevel: NormalizeOpenAIAccountLevel(req.Platform, req.AccountLevel, req.Credentials, req.Extra),
+		AccountLevel: NormalizeOpenAIAccountLevelWithConfigs(req.Platform, req.AccountLevel, req.Credentials, req.Extra, levelConfigs),
 		Type:         req.Type,
 		Credentials:  req.Credentials,
 		Extra:        req.Extra,
@@ -426,6 +481,39 @@ func (s *AccountService) GetOwnedByID(ctx context.Context, ownerUserID, accountI
 	return account, nil
 }
 
+// EnsureOwnedByIDs 在一次轻量查询中验证所有账号都属于指定用户。
+// 只要任一 ID 不存在、已删除或属于其他用户，整批就以统一的不可见语义失败。
+func (s *AccountService) EnsureOwnedByIDs(ctx context.Context, ownerUserID int64, accountIDs []int64) error {
+	if ownerUserID <= 0 {
+		return ErrUserNotFound
+	}
+	ids := normalizeOwnedBulkAccountIDs(accountIDs)
+	if len(ids) == 0 {
+		return nil
+	}
+	repo, ok := s.accountRepo.(ownedAccountIDBatchRepository)
+	if !ok {
+		return fmt.Errorf("batch owned account validation is not supported by repository")
+	}
+	ownedIDs, err := repo.ListOwnedAccountIDs(ctx, ownerUserID, ids)
+	if err != nil {
+		return fmt.Errorf("validate owned accounts: %w", err)
+	}
+	if len(ownedIDs) != len(ids) {
+		return ErrAccountNotFound
+	}
+	owned := make(map[int64]struct{}, len(ownedIDs))
+	for _, id := range ownedIDs {
+		owned[id] = struct{}{}
+	}
+	for _, id := range ids {
+		if _, ok := owned[id]; !ok {
+			return ErrAccountNotFound
+		}
+	}
+	return nil
+}
+
 func (s *AccountService) EnsureOwnedAccountCanEnterPublicShare(ctx context.Context, ownerUserID, accountID int64) error {
 	account, err := s.GetOwnedByID(ctx, ownerUserID, accountID)
 	if err != nil {
@@ -446,28 +534,46 @@ func (s *AccountService) EnsureOwnedProxyAvailableForNewAccount(ctx context.Cont
 	return s.ensureOwnedProxyAvailableForNewAccount(ctx, ownerUserID, proxyID)
 }
 
+func (s *AccountService) EnsureOwnedProxyUsableForLogin(ctx context.Context, ownerUserID, proxyID int64) error {
+	_, err := s.ensureOwnedProxyUsableForLogin(ctx, ownerUserID, proxyID)
+	return err
+}
+
 func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req CreateAccountRequest) (*Account, error) {
 	if ownerUserID <= 0 {
 		return nil, ErrUserNotFound
 	}
+	if !IsSupportedAccountPlatform(req.Platform) {
+		return nil, ErrAccountPlatformUnsupported
+	}
 	targetLevel := NormalizeAccountLevel(req.AccountLevel)
-	preserveProxy := req.Platform == PlatformOpenAI && RequiresUserOpenAIProxyLogin(targetLevel)
+	levelConfigs, err := s.openAIAccountLevelConfigs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	preserveProxy := RequiresUserAccountOAuthProxyWithConfigs(req.Platform, targetLevel, levelConfigs)
 	proxyID := req.ProxyID
 	if err := applyOwnedPersonalAccountTemplateToCreate(&req); err != nil {
 		return nil, err
 	}
 	if req.Platform == PlatformOpenAI {
-		if !IsUserSelectableOpenAIAccountLevel(targetLevel) {
+		if !IsUserSelectableOpenAIAccountLevelWithConfigs(targetLevel, levelConfigs) {
 			return nil, ErrOwnedOpenAIAccountLevelRequired
 		}
 		if preserveProxy {
 			if proxyID == nil || *proxyID <= 0 {
-				return nil, ErrOwnedOpenAIAccountProxyRequired
+				return nil, ErrOwnedAccountProxyRequired
 			}
 			req.ProxyID = proxyID
 		}
 		req.AccountLevel = targetLevel
 	} else {
+		if preserveProxy {
+			if proxyID == nil || *proxyID <= 0 {
+				return nil, ErrOwnedAccountProxyRequired
+			}
+			req.ProxyID = proxyID
+		}
 		req.AccountLevel = AccountLevelUnknown
 	}
 	if err := validateOwnedAccountSource(req.Type, req.Credentials, req.Extra); err != nil {
@@ -489,7 +595,7 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 		shareStatus = AccountShareStatusPending
 	}
 
-	accountLevel, err := resolveOwnedOpenAIAccountLevel(req.Platform, targetLevel, req.Credentials, req.Extra)
+	accountLevel, err := resolveOwnedOpenAIAccountLevel(req.Platform, targetLevel, req.Credentials, req.Extra, levelConfigs)
 	if err != nil {
 		return nil, err
 	}
@@ -579,18 +685,18 @@ func validateOwnedAccountSource(accountType string, credentials, extra map[strin
 	return nil
 }
 
-func resolveOwnedOpenAIAccountLevel(platform, targetLevel string, credentials, extra map[string]any) (string, error) {
+func resolveOwnedOpenAIAccountLevel(platform, targetLevel string, credentials, extra map[string]any, configs []OpenAIAccountLevelConfig) (string, error) {
 	if platform != PlatformOpenAI {
 		return AccountLevelUnknown, nil
 	}
 
 	target := NormalizeAccountLevel(targetLevel)
-	if !IsUserSelectableOpenAIAccountLevel(target) {
+	if !IsUserSelectableOpenAIAccountLevelWithConfigs(target, configs) {
 		return "", ErrOwnedOpenAIAccountLevelRequired
 	}
 
-	actual := InferOpenAIAccountLevel(credentials, extra)
-	if !IsConcreteAccountLevel(actual) {
+	actual := InferOpenAIAccountLevelWithConfigs(credentials, extra, configs)
+	if OpenAIAccountLevelConfigByKey(configs, actual) == nil {
 		actual = AccountLevelFree
 		if target == AccountLevelFree {
 			return actual, nil
@@ -723,18 +829,9 @@ func validateOwnedPersonalAccountLoadFactor(loadFactor int) error {
 }
 
 func (s *AccountService) ensureOwnedProxyAvailableForNewAccount(ctx context.Context, ownerUserID, proxyID int64) error {
-	if proxyID <= 0 {
-		return nil
-	}
-	if s == nil || s.proxyRepo == nil {
-		return ErrOwnedAccountProxyValidationUnavailable
-	}
-	proxy, err := s.proxyRepo.GetVisibleByID(ctx, ownerUserID, proxyID)
+	proxy, err := s.ensureOwnedProxyUsableForLogin(ctx, ownerUserID, proxyID)
 	if err != nil {
 		return err
-	}
-	if proxy == nil || !proxy.IsActive() {
-		return ErrProxyNotFound
 	}
 	if proxy.MaxAccounts <= 0 {
 		return nil
@@ -748,6 +845,23 @@ func (s *AccountService) ensureOwnedProxyAvailableForNewAccount(ctx context.Cont
 		return ProxyAccountLimitExceededError(proxyID, current, limit, 1)
 	}
 	return nil
+}
+
+func (s *AccountService) ensureOwnedProxyUsableForLogin(ctx context.Context, ownerUserID, proxyID int64) (*Proxy, error) {
+	if proxyID <= 0 {
+		return nil, ErrOwnedAccountProxyRequired
+	}
+	if s == nil || s.proxyRepo == nil {
+		return nil, ErrOwnedAccountProxyValidationUnavailable
+	}
+	proxy, err := s.proxyRepo.GetVisibleByID(ctx, ownerUserID, proxyID)
+	if err != nil {
+		return nil, err
+	}
+	if proxy == nil || !proxy.IsActive() {
+		return nil, ErrProxyNotFound
+	}
+	return proxy, nil
 }
 
 func applyOwnedPersonalAccountTemplateToCreate(req *CreateAccountRequest) error {
@@ -776,7 +890,6 @@ func sanitizeOwnedPersonalAccountUpdate(account *Account, req *UpdateAccountRequ
 		return nil
 	}
 	req.GroupIDs = nil
-	req.ProxyID = nil
 	if req.Concurrency != nil {
 		if err := validateOwnedPersonalAccountConcurrency(*req.Concurrency); err != nil {
 			return err
@@ -809,6 +922,13 @@ func sanitizeOwnedPersonalAccountUpdate(account *Account, req *UpdateAccountRequ
 		req.Extra = &nextExtra
 	}
 	return nil
+}
+
+func ownedPersonalAccountRequiresProxy(account *Account, levelConfigs []OpenAIAccountLevelConfig) bool {
+	if account == nil {
+		return false
+	}
+	return RequiresUserAccountOAuthProxyWithConfigs(account.Platform, account.AccountLevel, levelConfigs)
 }
 
 var ownedPersonalLockedCredentialKeys = []string{
@@ -980,6 +1100,10 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 	if req.AccountLevel != nil {
 		account.AccountLevel = NormalizeAccountLevel(*req.AccountLevel)
 	}
+	levelConfigs, err := s.openAIAccountLevelConfigs(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	if req.ProxyID != nil {
 		account.ProxyID = req.ProxyID
@@ -992,7 +1116,7 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 	if req.LoadFactor != nil {
 		account.LoadFactor = normalizeLoadFactor(req.LoadFactor)
 	}
-	account.AccountLevel = NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, account.Credentials, account.Extra)
+	account.AccountLevel = NormalizeOpenAIAccountLevelWithConfigs(account.Platform, account.AccountLevel, account.Credentials, account.Extra, levelConfigs)
 	if err := ValidateOpenAIPlusConcurrency(account.Platform, account.AccountLevel, account.Concurrency); err != nil {
 		return nil, err
 	}
@@ -1068,6 +1192,7 @@ func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID
 		return nil, err
 	}
 	before := cloneAccountForNotice(account)
+	existingProxyID := account.ProxyID
 	if err := sanitizeOwnedPersonalAccountUpdate(account, &req); err != nil {
 		return nil, err
 	}
@@ -1088,16 +1213,43 @@ func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID
 		}
 		account.Extra = extra
 	}
-	if req.ProxyID != nil {
-		account.ProxyID = req.ProxyID
-	}
 	if req.Concurrency != nil {
 		account.Concurrency = *req.Concurrency
 	}
 	if req.LoadFactor != nil {
 		account.LoadFactor = normalizeLoadFactor(req.LoadFactor)
 	}
-	account.AccountLevel = NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, account.Credentials, account.Extra)
+	levelConfigs, err := s.openAIAccountLevelConfigs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	account.AccountLevel = NormalizeOpenAIAccountLevelWithConfigs(account.Platform, account.AccountLevel, account.Credentials, account.Extra, levelConfigs)
+	if req.ProxyID != nil {
+		proxyRequired := ownedPersonalAccountRequiresProxy(account, levelConfigs)
+		if *req.ProxyID <= 0 {
+			if proxyRequired {
+				return nil, ErrOwnedAccountProxyRequired
+			}
+			account.ProxyID = nil
+		} else if existingProxyID != nil && *existingProxyID == *req.ProxyID {
+			if _, err := s.ensureOwnedProxyUsableForLogin(ctx, ownerUserID, *req.ProxyID); err != nil {
+				return nil, err
+			}
+		} else if err := s.ensureOwnedProxyAvailableForNewAccount(ctx, ownerUserID, *req.ProxyID); err != nil {
+			return nil, err
+		} else {
+			proxyID := *req.ProxyID
+			account.ProxyID = &proxyID
+		}
+	}
+	if (req.Credentials != nil || req.Extra != nil) && ownedPersonalAccountRequiresProxy(account, levelConfigs) {
+		if account.ProxyID == nil || *account.ProxyID <= 0 {
+			return nil, ErrOwnedAccountProxyRequired
+		}
+		if _, err := s.ensureOwnedProxyUsableForLogin(ctx, ownerUserID, *account.ProxyID); err != nil {
+			return nil, err
+		}
+	}
 	if err := ValidateOpenAIPlusConcurrency(account.Platform, account.AccountLevel, account.Concurrency); err != nil {
 		return nil, err
 	}
@@ -1201,9 +1353,13 @@ func (s *AccountService) SetOwnedOpenAIAccountLevel(ctx context.Context, ownerUs
 		return nil, infraerrors.BadRequest("OWNED_ACCOUNT_LEVEL_UNSUPPORTED", "account level verification only supports OpenAI OAuth accounts")
 	}
 
+	levelConfigs, err := s.openAIAccountLevelConfigs(ctx)
+	if err != nil {
+		return nil, err
+	}
 	level := NormalizeAccountLevel(accountLevel)
-	if level != AccountLevelFree && level != AccountLevelPlus {
-		return nil, infraerrors.BadRequest("OWNED_ACCOUNT_LEVEL_INVALID", "user accounts can only set free or plus levels")
+	if !IsUserSelectableOpenAIAccountLevelWithConfigs(level, levelConfigs) {
+		return nil, infraerrors.BadRequest("OWNED_ACCOUNT_LEVEL_INVALID", "invalid OpenAI account level")
 	}
 	if err := validateOwnedAccountSource(account.Type, account.Credentials, account.Extra); err != nil {
 		return nil, err
@@ -1578,6 +1734,10 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 	if input.Extra == nil {
 		input.Extra = map[string]any{}
 	}
+	levelConfigs, err := s.openAIAccountLevelConfigs(ctx)
+	if err != nil {
+		return nil, err
+	}
 	updatedIdentityAccounts := make([]*Account, 0, len(accountIDs))
 	for _, accountID := range accountIDs {
 		account := accountsByID[accountID]
@@ -1606,7 +1766,7 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 		if input.LoadFactor != nil {
 			nextLoadFactor = normalizeLoadFactor(input.LoadFactor)
 		}
-		nextAccountLevel := NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, nextCredentials, nextExtra)
+		nextAccountLevel := NormalizeOpenAIAccountLevelWithConfigs(account.Platform, account.AccountLevel, nextCredentials, nextExtra, levelConfigs)
 		if input.AccountLevel != nil {
 			nextAccountLevel = NormalizeAccountLevel(*input.AccountLevel)
 		}
@@ -2039,7 +2199,11 @@ func (s *AccountService) repairedOpenAIAccountGroupIDs(ctx context.Context, acco
 	}
 	for i := range groups {
 		group := groups[i]
-		if !isOwnedPublicSharePoolGroup(&group, account.Platform) {
+		eligible, err := s.isOwnedPublicSharePoolGroup(ctx, &group, account.Platform)
+		if err != nil {
+			return nil, err
+		}
+		if !eligible {
 			continue
 		}
 		if NormalizeOpenAISharedPoolRequiredLevel(group.RequiredAccountLevel) == AccountLevelFree {
@@ -2087,8 +2251,12 @@ func (s *AccountService) resolveOwnedPublicShareGroup(ctx context.Context, accou
 		return nil, fmt.Errorf("list public share groups: %w", err)
 	}
 	if account.Platform == PlatformOpenAI {
-		accountLevel := NormalizeOpenAISharedPoolAccountLevel(NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, account.Credentials, account.Extra))
-		if OpenAISharedPoolLevelRank(accountLevel) == 0 {
+		levelConfigs, err := s.openAIAccountLevelConfigs(ctx)
+		if err != nil {
+			return nil, err
+		}
+		accountLevel := NormalizeOpenAISharedPoolAccountLevel(NormalizeOpenAIAccountLevelWithConfigs(account.Platform, account.AccountLevel, account.Credentials, account.Extra, levelConfigs))
+		if OpenAISharedPoolLevelRankWithConfigs(accountLevel, levelConfigs) == 0 {
 			return nil, ErrOwnedAccountPublicPoolUnavailable.WithMetadata(map[string]string{
 				"platform":      platform,
 				"account_level": accountLevel,
@@ -2099,10 +2267,17 @@ func (s *AccountService) resolveOwnedPublicShareGroup(ctx context.Context, accou
 		for i := range groups {
 			group := groups[i]
 			requiredLevel := NormalizeOpenAISharedPoolRequiredLevel(group.RequiredAccountLevel)
-			if requiredLevel == "" || !isOwnedPublicSharePoolGroup(&group, platform) || !CanOpenAIAccountJoinSharedPool(accountLevel, requiredLevel) {
+			if requiredLevel == "" || !CanOpenAIAccountJoinSharedPoolWithConfigs(accountLevel, requiredLevel, levelConfigs) {
 				continue
 			}
-			requiredRank := OpenAISharedPoolLevelRank(requiredLevel)
+			eligible, err := s.isOwnedPublicSharePoolGroup(ctx, &group, platform)
+			if err != nil {
+				return nil, err
+			}
+			if !eligible {
+				continue
+			}
+			requiredRank := OpenAISharedPoolLevelRankWithConfigs(requiredLevel, levelConfigs)
 			if matchedGroup == nil || requiredRank > bestRank {
 				candidate := group
 				matchedGroup = &candidate
@@ -2119,7 +2294,14 @@ func (s *AccountService) resolveOwnedPublicShareGroup(ctx context.Context, accou
 	}
 	for i := range groups {
 		group := groups[i]
-		if isOwnedPublicSharePoolGroup(&group, platform) && NormalizeRequiredAccountLevel(group.RequiredAccountLevel) == "" {
+		if NormalizeRequiredAccountLevel(group.RequiredAccountLevel) != "" {
+			continue
+		}
+		eligible, err := s.isOwnedPublicSharePoolGroup(ctx, &group, platform)
+		if err != nil {
+			return nil, err
+		}
+		if eligible {
 			return &group, nil
 		}
 	}
@@ -2139,6 +2321,24 @@ func isOwnedPublicSharePoolGroup(group *Group, platform string) bool {
 		return false
 	}
 	return true
+}
+
+func (s *AccountService) isOwnedPublicSharePoolGroup(ctx context.Context, group *Group, platform string) (bool, error) {
+	if !isOwnedPublicSharePoolGroup(group, platform) {
+		return false, nil
+	}
+	classifier := s.accountShareModeGroups
+	if classifier == nil {
+		classifier, _ = s.groupRepo.(accountShareModeGroupClassifier)
+	}
+	if classifier == nil {
+		return false, ErrOwnedAccountGroupValidationUnavailable
+	}
+	isModeGroup, err := classifier.IsModeGroup(ctx, group.ID)
+	if err != nil {
+		return false, fmt.Errorf("classify account share mode group: %w", err)
+	}
+	return !isModeGroup, nil
 }
 
 func (s *AccountService) validateOwnedPublicSharePolicy(ctx context.Context, account *Account, group *Group) error {
@@ -2240,7 +2440,7 @@ func isOAuthOnlyGroup(group *Group) bool {
 		return false
 	}
 	switch group.Platform {
-	case PlatformOpenAI, PlatformAntigravity, PlatformAnthropic, PlatformGemini:
+	case PlatformOpenAI, PlatformAntigravity, PlatformAnthropic, PlatformGemini, PlatformGrok:
 		return true
 	default:
 		return false

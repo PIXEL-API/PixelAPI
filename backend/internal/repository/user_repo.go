@@ -17,6 +17,7 @@ import (
 	dbgroup "github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/identityadoptiondecision"
 	"github.com/Wei-Shaw/sub2api/ent/predicate"
+	"github.com/Wei-Shaw/sub2api/ent/schema/mixins"
 	dbuser "github.com/Wei-Shaw/sub2api/ent/user"
 	"github.com/Wei-Shaw/sub2api/ent/userallowedgroup"
 	"github.com/Wei-Shaw/sub2api/ent/usersubscription"
@@ -24,6 +25,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/lib/pq"
 
+	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
 )
 
@@ -31,6 +33,13 @@ type userRepository struct {
 	client *dbent.Client
 	sql    sqlExecutor
 }
+
+var (
+	_ service.AdminUserGovernanceRepository             = (*userRepository)(nil)
+	_ service.RedeemUserConcurrencyAdjustmentRepository = (*userRepository)(nil)
+)
+
+const adminRoleMutationLockKey = "users:admin-role-mutation"
 
 func NewUserRepository(client *dbent.Client, sqlDB *sql.DB) service.UserRepository {
 	return newUserRepositoryWithSQL(client, sqlDB)
@@ -47,24 +56,20 @@ func (r *userRepository) Create(ctx context.Context, userIn *service.User) error
 
 	// 统一使用 ent 的事务：保证用户与允许分组的更新原子化，
 	// 并避免基于 *sql.Tx 手动构造 ent client 导致的 ExecQuerier 断言错误。
-	tx, err := r.client.Tx(ctx)
-	if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
-		return err
-	}
-
 	var txClient *dbent.Client
 	txCtx := ctx
-	if err == nil {
+	var tx *dbent.Tx
+	if existingTx := dbent.TxFromContext(ctx); existingTx != nil {
+		txClient = existingTx.Client()
+	} else {
+		var err error
+		tx, err = r.client.Tx(ctx)
+		if err != nil {
+			return err
+		}
 		defer func() { _ = tx.Rollback() }()
 		txClient = tx.Client()
 		txCtx = dbent.NewTxContext(ctx, tx)
-	} else {
-		// 已处于外部事务中（ErrTxStarted），复用当前事务 client 并由调用方负责提交/回滚。
-		if existingTx := dbent.TxFromContext(ctx); existingTx != nil {
-			txClient = existingTx.Client()
-		} else {
-			txClient = r.client
-		}
 	}
 
 	releaseEmailLock, err := lockRepositoryScopedKeys(
@@ -120,7 +125,27 @@ func (r *userRepository) Create(ctx context.Context, userIn *service.User) error
 }
 
 func (r *userRepository) GetByID(ctx context.Context, id int64) (*service.User, error) {
-	m, err := r.client.User.Query().Where(dbuser.IDEQ(id)).Only(ctx)
+	client := clientFromContext(ctx, r.client)
+	m, err := client.User.Query().Where(dbuser.IDEQ(id)).Only(ctx)
+	if err != nil {
+		return nil, translatePersistenceError(err, service.ErrUserNotFound, nil)
+	}
+
+	out := userEntityToService(m)
+	groups, err := r.loadAllowedGroups(ctx, []int64{id})
+	if err != nil {
+		return nil, err
+	}
+	if v, ok := groups[id]; ok {
+		out.AllowedGroups = v
+	}
+	return out, nil
+}
+
+func (r *userRepository) GetByIDIncludeDeleted(ctx context.Context, id int64) (*service.User, error) {
+	ctx = mixins.SkipSoftDelete(ctx)
+	client := clientFromContext(ctx, r.client)
+	m, err := client.User.Query().Where(dbuser.IDEQ(id)).Only(ctx)
 	if err != nil {
 		return nil, translatePersistenceError(err, service.ErrUserNotFound, nil)
 	}
@@ -137,7 +162,8 @@ func (r *userRepository) GetByID(ctx context.Context, id int64) (*service.User, 
 }
 
 func (r *userRepository) GetByEmail(ctx context.Context, email string) (*service.User, error) {
-	matches, err := r.client.User.Query().
+	client := clientFromContext(ctx, r.client)
+	matches, err := client.User.Query().
 		Where(userEmailLookupPredicate(email)).
 		Order(dbent.Asc(dbuser.FieldID)).
 		All(ctx)
@@ -164,29 +190,55 @@ func (r *userRepository) GetByEmail(ctx context.Context, email string) (*service
 }
 
 func (r *userRepository) Update(ctx context.Context, userIn *service.User) error {
+	_, err := r.updateUser(ctx, userIn, nil)
+	return err
+}
+
+func (r *userRepository) UpdateWithAdminGovernanceGuard(
+	ctx context.Context,
+	userIn *service.User,
+	fields service.AdminUserGovernanceUpdate,
+) (*service.AdminUserGovernanceUpdateResult, error) {
+	return r.updateUser(ctx, userIn, &fields)
+}
+
+func (r *userRepository) updateUser(
+	ctx context.Context,
+	userIn *service.User,
+	governance *service.AdminUserGovernanceUpdate,
+) (*service.AdminUserGovernanceUpdateResult, error) {
 	if userIn == nil {
-		return nil
+		return nil, nil
 	}
 
-	// 使用 ent 事务包裹用户更新与 allowed_groups 同步，避免跨层事务不一致。
-	tx, err := r.client.Tx(ctx)
-	if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
-		return err
-	}
-
+	// 使用 ent 事务包裹用户更新与 allowed_groups 同步；若调用方已开启事务，
+	// 必须复用该事务，避免角色守卫与最终更新落在不同事务中。
+	var tx *dbent.Tx
 	var txClient *dbent.Client
 	txCtx := ctx
-	if err == nil {
+	if existingTx := dbent.TxFromContext(ctx); existingTx != nil {
+		txClient = existingTx.Client()
+	} else {
+		var err error
+		tx, err = r.client.Tx(ctx)
+		if err != nil {
+			return nil, err
+		}
 		defer func() { _ = tx.Rollback() }()
 		txClient = tx.Client()
 		txCtx = dbent.NewTxContext(ctx, tx)
-	} else {
-		// 已处于外部事务中（ErrTxStarted），复用当前事务 client 并由调用方负责提交/回滚。
-		if existingTx := dbent.TxFromContext(ctx); existingTx != nil {
-			txClient = existingTx.Client()
-		} else {
-			txClient = r.client
+	}
+
+	if governance != nil {
+		exec := txAwareSQLExecutor(txCtx, r.sql, r.client)
+		if exec == nil {
+			return nil, fmt.Errorf("admin role update requires a transaction-aware SQL executor")
 		}
+		releaseRoleLock, err := lockRepositoryScopedKeys(txCtx, txClient, exec, adminRoleMutationLockKey)
+		if err != nil {
+			return nil, fmt.Errorf("lock admin role mutation: %w", err)
+		}
+		defer releaseRoleLock()
 	}
 
 	releaseEmailLock, err := lockRepositoryScopedKeys(
@@ -196,26 +248,80 @@ func (r *userRepository) Update(ctx context.Context, userIn *service.User) error
 		normalizedEmailUniquenessLockKey(userIn.Email),
 	)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer releaseEmailLock()
 
 	if err := ensureNormalizedEmailAvailableWithClient(txCtx, txClient, userIn.ID, userIn.Email); err != nil {
-		return err
+		return nil, err
 	}
 
-	existing, err := clientFromContext(txCtx, txClient).User.Get(txCtx, userIn.ID)
+	existingQuery := clientFromContext(txCtx, txClient).User.Query().Where(
+		dbuser.IDEQ(userIn.ID),
+		dbuser.DeletedAtIsNil(),
+	)
+	if governance != nil && txClient.Driver().Dialect() == dialect.Postgres {
+		existingQuery = existingQuery.ForUpdate()
+	}
+	existing, err := existingQuery.Only(txCtx)
 	if err != nil {
-		return translatePersistenceError(err, service.ErrUserNotFound, nil)
+		return nil, translatePersistenceError(err, service.ErrUserNotFound, nil)
 	}
 	oldEmail := existing.Email
+	governanceUpdate := &service.AdminUserGovernanceUpdateResult{
+		OldRole:   existing.Role,
+		NewRole:   existing.Role,
+		OldStatus: existing.Status,
+		NewStatus: existing.Status,
+	}
+	if governance != nil {
+		if governance.UpdateRole && userIn.Role != service.RoleAdmin && userIn.Role != service.RoleUser {
+			return nil, service.ErrUserRoleInvalid
+		}
+		if governance.UpdateRole {
+			governanceUpdate.NewRole = userIn.Role
+		}
+		if governance.UpdateStatus {
+			governanceUpdate.NewStatus = userIn.Status
+		}
+		if governanceUpdate.NewRole == service.RoleAdmin && governanceUpdate.NewStatus == service.StatusDisabled {
+			return nil, service.ErrAdminDisableForbidden
+		}
+		if governanceUpdate.NewRole == service.RoleUser && userIn.Concurrency < service.UserMinConcurrency {
+			return nil, service.ErrUserConcurrencyRange
+		}
+		if governanceUpdate.NewRole == service.RoleAdmin && userIn.Concurrency < 0 {
+			return nil, service.ErrAdminConcurrencyRange
+		}
+		wasActiveAdmin := existing.Role == service.RoleAdmin && existing.Status == service.StatusActive
+		willBeActiveAdmin := governanceUpdate.NewRole == service.RoleAdmin && governanceUpdate.NewStatus == service.StatusActive
+		if wasActiveAdmin && !willBeActiveAdmin {
+			adminCount, err := txClient.User.Query().Where(
+				dbuser.RoleEQ(service.RoleAdmin),
+				dbuser.StatusEQ(service.StatusActive),
+				dbuser.DeletedAtIsNil(),
+			).Count(txCtx)
+			if err != nil {
+				return nil, fmt.Errorf("count active administrators: %w", err)
+			}
+			if adminCount <= 1 {
+				return nil, service.ErrLastAdminDemotion
+			}
+		}
+		userIn.Role = governanceUpdate.NewRole
+		userIn.Status = governanceUpdate.NewStatus
+	} else {
+		// Role mutations are only allowed through the governance update path.
+		// Preserving the current value also prevents a stale profile update from
+		// undoing a concurrent administrator role change.
+		userIn.Role = existing.Role
+	}
 
 	updateOp := txClient.User.UpdateOneID(userIn.ID).
 		SetEmail(userIn.Email).
 		SetUsername(userIn.Username).
 		SetNotes(userIn.Notes).
 		SetPasswordHash(userIn.PasswordHash).
-		SetRole(userIn.Role).
 		SetBalance(userIn.Balance).
 		SetPointsBalance(userIn.PointsBalance).
 		SetLoadFactorCreditsBalance(userIn.LoadFactorCreditsBalance).
@@ -229,6 +335,9 @@ func (r *userRepository) Update(ctx context.Context, userIn *service.User) error
 		SetBalanceNotifyExtraEmails(marshalExtraEmails(userIn.BalanceNotifyExtraEmails)).
 		SetTotalRecharged(userIn.TotalRecharged).
 		SetRpmLimit(userIn.RPMLimit)
+	if governance != nil && governance.UpdateRole {
+		updateOp = updateOp.SetRole(userIn.Role)
+	}
 	if userIn.SignupSource != "" {
 		updateOp = updateOp.SetSignupSource(userIn.SignupSource)
 	}
@@ -243,24 +352,28 @@ func (r *userRepository) Update(ctx context.Context, userIn *service.User) error
 	}
 	updated, err := updateOp.Save(txCtx)
 	if err != nil {
-		return translatePersistenceError(err, service.ErrUserNotFound, service.ErrEmailExists)
+		return nil, translatePersistenceError(err, service.ErrUserNotFound, service.ErrEmailExists)
 	}
 
 	if err := r.syncUserAllowedGroupsWithClient(txCtx, txClient, updated.ID, userIn.AllowedGroups); err != nil {
-		return err
+		return nil, err
 	}
 	if err := replaceEmailAuthIdentityWithClient(txCtx, txClient, updated.ID, oldEmail, updated.Email, "user_repo_update"); err != nil {
-		return err
+		return nil, err
 	}
 
 	if tx != nil {
 		if err := tx.Commit(); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
+	userIn.Role = updated.Role
+	userIn.Status = updated.Status
 	userIn.UpdatedAt = updated.UpdatedAt
-	return nil
+	governanceUpdate.NewRole = updated.Role
+	governanceUpdate.NewStatus = updated.Status
+	return governanceUpdate, nil
 }
 
 func ensureEmailAuthIdentityWithClient(ctx context.Context, client *dbent.Client, userID int64, email string, source string) error {
@@ -416,6 +529,13 @@ func (r *userRepository) List(ctx context.Context, params pagination.PaginationP
 }
 
 func (r *userRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, filters service.UserListFilters) ([]service.User, *pagination.PaginationResult, error) {
+	// 只对 User 主查询跳过软删除；订阅、分组等关联查询继续使用原始 ctx，
+	// 避免把关联实体中已软删除的数据一并带出。
+	userCtx := ctx
+	if filters.IncludeDeleted {
+		userCtx = mixins.SkipSoftDelete(ctx)
+	}
+
 	q := r.client.User.Query()
 
 	if filters.Status != "" {
@@ -456,7 +576,7 @@ func (r *userRepository) ListWithFilters(ctx context.Context, params pagination.
 		q = q.Where(dbuser.IDIn(allowedUserIDs...))
 	}
 
-	total, err := q.Clone().Count(ctx)
+	total, err := q.Clone().Count(userCtx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -468,7 +588,7 @@ func (r *userRepository) ListWithFilters(ctx context.Context, params pagination.
 		usersQuery = usersQuery.Order(order)
 	}
 
-	users, err := usersQuery.All(ctx)
+	users, err := usersQuery.All(userCtx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1052,8 +1172,40 @@ func (r *userRepository) UpdateConcurrency(ctx context.Context, id int64, amount
 	return nil
 }
 
+func (r *userRepository) ApplyRedeemConcurrencyAdjustment(ctx context.Context, userID int64, delta int) error {
+	if userID <= 0 {
+		return service.ErrUserNotFound
+	}
+	exec := txAwareSQLExecutor(ctx, r.sql, r.client)
+	if exec == nil {
+		return fmt.Errorf("redeem concurrency adjustment requires a transaction-aware SQL executor")
+	}
+
+	const updateSQL = `
+		UPDATE users
+		SET concurrency = GREATEST(
+			concurrency + $1,
+			CASE WHEN role = $2 THEN $3 ELSE 0 END
+		), updated_at = NOW()
+		WHERE id = $4 AND deleted_at IS NULL
+	`
+	result, err := exec.ExecContext(ctx, updateSQL, delta, service.RoleUser, service.UserMinConcurrency, userID)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return service.ErrUserNotFound
+	}
+	return nil
+}
+
 func (r *userRepository) ExistsByEmail(ctx context.Context, email string) (bool, error) {
-	return r.client.User.Query().Where(userEmailLookupPredicate(email)).Exist(ctx)
+	client := clientFromContext(ctx, r.client)
+	return client.User.Query().Where(userEmailLookupPredicate(email)).Exist(ctx)
 }
 
 func ensureNormalizedEmailAvailableWithClient(ctx context.Context, client *dbent.Client, userID int64, email string) error {
@@ -1138,7 +1290,8 @@ func (r *userRepository) RemoveGroupFromUserAllowedGroups(ctx context.Context, u
 }
 
 func (r *userRepository) GetFirstAdmin(ctx context.Context) (*service.User, error) {
-	m, err := r.client.User.Query().
+	client := clientFromContext(ctx, r.client)
+	m, err := client.User.Query().
 		Where(
 			dbuser.RoleEQ(service.RoleAdmin),
 			dbuser.StatusEQ(service.StatusActive),
@@ -1166,7 +1319,8 @@ func (r *userRepository) loadAllowedGroups(ctx context.Context, userIDs []int64)
 		return out, nil
 	}
 
-	rows, err := r.client.UserAllowedGroup.Query().
+	client := clientFromContext(ctx, r.client)
+	rows, err := client.UserAllowedGroup.Query().
 		Where(userallowedgroup.UserIDIn(userIDs...)).
 		All(ctx)
 	if err != nil {

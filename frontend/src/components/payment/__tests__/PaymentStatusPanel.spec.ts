@@ -128,4 +128,29 @@ describe('PaymentStatusPanel', () => {
 
     openSpy.mockRestore()
   })
+
+  it('shows alipay jsapi scan guidance without reopening the app scheme on desktop', async () => {
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: 'https://app.example.com/payment/alipay-jsapi?resume_token=resume-token',
+        payUrl: 'alipays://platformapi/startapp?appId=20000067',
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'alipay',
+        paymentMode: 'jsapi',
+        orderType: 'balance',
+      },
+      global: {
+        stubs: {
+          Icon: true,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('payment.qr.scanAlipayJSAPI')
+    expect(wrapper.text()).toContain('payment.qr.scanAlipayJSAPIHint')
+    expect(wrapper.text()).not.toContain('payment.qr.openPayWindow')
+  })
 })

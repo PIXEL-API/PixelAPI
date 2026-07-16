@@ -5,9 +5,8 @@
 
 import { apiClient } from './client'
 import type {
-  PaymentConfig,
-  SubscriptionPlan,
-  PaymentChannel,
+	PaymentConfig,
+	SubscriptionPlan,
   MethodLimitsResponse,
   CheckoutInfoResponse,
   CreateOrderRequest,
@@ -25,11 +24,6 @@ export const paymentAPI = {
   /** Get available subscription plans */
   getPlans() {
     return apiClient.get<SubscriptionPlan[]>('/payment/plans')
-  },
-
-  /** Get available payment channels */
-  getChannels() {
-    return apiClient.get<PaymentChannel[]>('/payment/channels')
   },
 
   /** Get all checkout page data in a single call */
@@ -75,6 +69,14 @@ export const paymentAPI = {
   /** Resolve an order from a signed resume token without auth */
   resolveOrderPublicByResumeToken(resumeToken: string) {
     return apiClient.post<PaymentOrder>('/payment/public/orders/resolve', { resume_token: resumeToken })
+  },
+
+  /** Start an Alipay JSAPI trade inside Alipay after buyer authorization */
+  startAlipayJSAPI(data: {
+    resume_token: string
+    auth_code: string
+  }) {
+    return apiClient.post<CreateOrderResult>('/payment/public/alipay/jsapi/start', data)
   },
 
   /** Request a refund for a completed order */

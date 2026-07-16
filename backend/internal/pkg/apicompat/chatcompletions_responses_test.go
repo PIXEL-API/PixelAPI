@@ -2,6 +2,7 @@ package apicompat
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -25,11 +26,64 @@ func TestChatCompletionsToResponses_BasicText(t *testing.T) {
 	assert.Equal(t, "gpt-4o", resp.Model)
 	assert.True(t, resp.Stream) // always forced true
 	assert.False(t, *resp.Store)
+	assert.Empty(t, resp.PromptCacheKey)
+	assert.Nil(t, resp.PromptCacheOptions)
 
 	var items []ResponsesInputItem
 	require.NoError(t, json.Unmarshal(resp.Input, &items))
 	require.Len(t, items, 1)
 	assert.Equal(t, "user", items[0].Role)
+}
+
+func TestChatCompletionsToResponses_PromptCacheControls(t *testing.T) {
+	req := &ChatCompletionsRequest{
+		Model:          "gpt-5.6-sol",
+		PromptCacheKey: "tenant:acme:support-v1",
+		PromptCacheOptions: &PromptCacheOptions{
+			Mode: "explicit",
+			TTL:  "30m",
+		},
+		Messages: []ChatMessage{{
+			Role: "system",
+			Content: json.RawMessage(`[
+				{"type":"text","text":"stable prefix","prompt_cache_breakpoint":{"mode":"explicit"}},
+				{"type":"image_url","image_url":{"url":"https://example.com/reference.png"},"prompt_cache_breakpoint":{"mode":"explicit"}}
+			]`),
+		}},
+	}
+
+	resp, err := ChatCompletionsToResponses(req)
+	require.NoError(t, err)
+	require.Equal(t, req.PromptCacheKey, resp.PromptCacheKey)
+	require.Equal(t, req.PromptCacheOptions, resp.PromptCacheOptions)
+
+	var items []ResponsesInputItem
+	require.NoError(t, json.Unmarshal(resp.Input, &items))
+	require.Len(t, items, 1)
+	var parts []ResponsesContentPart
+	require.NoError(t, json.Unmarshal(items[0].Content, &parts))
+	require.Len(t, parts, 2)
+	require.NotNil(t, parts[0].PromptCacheBreakpoint)
+	require.Equal(t, "explicit", parts[0].PromptCacheBreakpoint.Mode)
+	require.Equal(t, "input_image", parts[1].Type)
+	require.NotNil(t, parts[1].PromptCacheBreakpoint)
+	require.Equal(t, "explicit", parts[1].PromptCacheBreakpoint.Mode)
+}
+
+func TestResponsesUsageUnmarshal_CanonicalCacheWriteTokens(t *testing.T) {
+	var usage ResponsesUsage
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"input_tokens": 2006,
+		"output_tokens": 300,
+		"total_tokens": 2306,
+		"input_tokens_details": {
+			"cached_tokens": 1920,
+			"cache_write_tokens": 64
+		}
+	}`), &usage))
+	require.Equal(t, 64, usage.CacheCreationInputTokens)
+	require.NotNil(t, usage.InputTokensDetails)
+	require.Equal(t, 64, usage.InputTokensDetails.CacheWriteTokens)
 }
 
 func TestChatCompletionsToResponses_SystemMessage(t *testing.T) {
@@ -294,6 +348,75 @@ func TestChatCompletionsToResponses_ServiceTier(t *testing.T) {
 	resp, err := ChatCompletionsToResponses(req)
 	require.NoError(t, err)
 	assert.Equal(t, "flex", resp.ServiceTier)
+}
+
+func TestChatCompletionsToResponses_ParallelToolCalls(t *testing.T) {
+	for _, value := range []bool{false, true} {
+		value := value
+		t.Run(fmt.Sprintf("value_%t", value), func(t *testing.T) {
+			req := &ChatCompletionsRequest{
+				Model:             "gpt-4o",
+				Messages:          []ChatMessage{{Role: "user", Content: json.RawMessage(`"Hi"`)}},
+				ParallelToolCalls: &value,
+			}
+
+			resp, err := ChatCompletionsToResponses(req)
+			require.NoError(t, err)
+			require.NotNil(t, resp.ParallelToolCalls)
+			assert.Equal(t, value, *resp.ParallelToolCalls)
+
+			encoded, err := json.Marshal(resp)
+			require.NoError(t, err)
+			var payload map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(encoded, &payload))
+			rawValue, exists := payload["parallel_tool_calls"]
+			require.True(t, exists, "explicit false must not be omitted during JSON serialization")
+			assert.JSONEq(t, fmt.Sprintf("%t", value), string(rawValue))
+		})
+	}
+}
+
+func TestResponsesToChatCompletionsRequest_ParallelToolCalls(t *testing.T) {
+	for _, value := range []bool{false, true} {
+		value := value
+		t.Run(fmt.Sprintf("value_%t", value), func(t *testing.T) {
+			req := &ResponsesRequest{
+				Model:             "gpt-4o",
+				Input:             json.RawMessage(`"Hi"`),
+				ParallelToolCalls: &value,
+			}
+
+			chatReq, err := ResponsesToChatCompletionsRequest(req)
+			require.NoError(t, err)
+			require.NotNil(t, chatReq.ParallelToolCalls)
+			assert.Equal(t, value, *chatReq.ParallelToolCalls)
+
+			encoded, err := json.Marshal(chatReq)
+			require.NoError(t, err)
+			var payload map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(encoded, &payload))
+			rawValue, exists := payload["parallel_tool_calls"]
+			require.True(t, exists, "explicit false must not be omitted during JSON serialization")
+			assert.JSONEq(t, fmt.Sprintf("%t", value), string(rawValue))
+		})
+	}
+}
+
+func TestResponsesToChatCompletionsRequest_PromptCacheControls(t *testing.T) {
+	req := &ResponsesRequest{
+		Model:          "gpt-5.6-sol",
+		Input:          json.RawMessage(`"Hi"`),
+		PromptCacheKey: "tenant:acme:support-v1",
+		PromptCacheOptions: &PromptCacheOptions{
+			Mode: "explicit",
+			TTL:  "30m",
+		},
+	}
+
+	chatReq, err := ResponsesToChatCompletionsRequest(req)
+	require.NoError(t, err)
+	require.Equal(t, req.PromptCacheKey, chatReq.PromptCacheKey)
+	require.Equal(t, req.PromptCacheOptions, chatReq.PromptCacheOptions)
 }
 
 func TestChatCompletionsToResponses_AssistantWithTextAndToolCalls(t *testing.T) {

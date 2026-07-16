@@ -25,6 +25,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyutil"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 )
 
@@ -92,6 +93,7 @@ func buildClient(opts Options) (*http.Client, error) {
 	if opts.ValidateResolvedIP && !opts.AllowPrivateHosts {
 		rt = newValidatedTransport(transport)
 	}
+	rt = servertiming.WrapRoundTripper(rt)
 	return &http.Client{
 		Transport: rt,
 		Timeout:   opts.Timeout,
@@ -159,6 +161,15 @@ type validatedTransport struct {
 	base           http.RoundTripper
 	validatedHosts sync.Map // map[string]time.Time, value 为过期时间
 	now            func() time.Time
+}
+
+func (t *validatedTransport) CloseIdleConnections() {
+	if t == nil {
+		return
+	}
+	if closer, ok := t.base.(interface{ CloseIdleConnections() }); ok {
+		closer.CloseIdleConnections()
+	}
 }
 
 func newValidatedTransport(base http.RoundTripper) *validatedTransport {

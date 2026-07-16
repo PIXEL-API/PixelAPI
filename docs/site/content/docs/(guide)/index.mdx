@@ -1,0 +1,178 @@
+---
+title: 快速开始
+description: 帮普通用户从账号、余额、分组、API Key、Base URL 到第一次调用完整跑通；帮号主用户接入自己的账号并开始共享收益。
+---
+
+如果你只是想用模型，先按普通用户路径从账号、余额、分组、API Key、Base URL、网页测试到客户端接入完整跑一遍；如果你手里有可用的 OpenAI、Claude、Gemini 或 Antigravity 账号，按号主用户路径把账号接入平台，设置自用或共享，并在产生调用后查看收益。
+
+## 先选你的身份
+
+Pixel API 里最常见的是两类用户，两条教程路径完全独立，从哪条开始都可以：
+
+<Cards>
+  <Card title="普通用户" href="/docs/normal-first-message" description="使用别人共享的号池或账号，发送消息、调用模型。适合『什么都不懂，但想跟着文档跑通一次』的读者。" />
+  <Card title="号主用户" href="/docs/owner-start" description="有 OpenAI、Claude、Gemini 或 Antigravity 账号，想把账号接入平台，自用或共享给别人获得收益。" />
+</Cards>
+
+## 普通用户一条龙路径
+
+目标：从完全不会 API 开始，最后能在自己的客户端里正常收到模型回复。
+
+<Steps>
+  <Step>
+    先读 [一条龙跑通总览](/docs/normal-first-message)，知道这组教程最终要拿到账号、余额、分组、API Key、Base URL、模型名和使用记录。
+  </Step>
+  <Step>
+    打开 [开始前准备](/docs/normal-prerequisites)，确认你有 QQ 邮箱、浏览器、注册赠送的 `0.1` 测试额度，以及一个安全保存 API Key 的地方。
+  </Step>
+  <Step>
+    按 [打开站点并确认余额](/docs/normal-login-wallet) 用 QQ 邮箱注册或登录控制台，确认 `0.1` 测试额度到账，并找到「API 密钥」「可用渠道」「使用记录」「充值/订阅」这些入口。
+  </Step>
+  <Step>
+    按 [选择分组和模型](/docs/normal-groups-models) 选一个普通共享分组，并从页面复制当前分组支持的模型名。
+  </Step>
+  <Step>
+    按 [创建 API Key](/docs/normal-create-api-key) 创建第一个 Key。第一次只填名称和分组，先不要开启多分组路由、IP 限制或复杂限额。
+  </Step>
+  <Step>
+    按 [确认 Base URL](/docs/normal-base-url) 分清站点地址、带 `/v1` 的 Base URL 和完整接口地址。
+  </Step>
+  <Step>
+    按 [发送第一条消息](/docs/normal-send-test-message) 在 API 参考页填入 Base URL、API Key、模型和测试消息，点击 `Send`。
+  </Step>
+  <Step>
+    按 [查看使用记录](/docs/normal-check-usage) 确认刚才的请求、模型、分组、Token 和费用都符合预期。
+  </Step>
+  <Step>
+    最后按 [配置客户端](/docs/normal-client-setup) 把同一套 Base URL、API Key 和模型名填进 Codex、Claude Code、Gemini CLI、OpenCode 或通用客户端。
+  </Step>
+</Steps>
+
+完整教程见：
+
+- [一条龙跑通总览](/docs/normal-first-message)
+- [开始前准备](/docs/normal-prerequisites)
+- [打开站点并确认余额](/docs/normal-login-wallet)
+- [选择分组和模型](/docs/normal-groups-models)
+- [创建 API Key](/docs/normal-create-api-key)
+- [确认 Base URL](/docs/normal-base-url)
+- [发送第一条消息](/docs/normal-send-test-message)
+- [查看使用记录](/docs/normal-check-usage)
+- [配置客户端](/docs/normal-client-setup)
+- [使用账号广场](/docs/normal-account-mode)
+- [常见问题处理](/docs/normal-troubleshooting)
+
+## 号主用户最短路径
+
+目标：把自己的账号添加到平台，完成私有自用或公共共享，并理解如何产生收益。
+
+<Steps>
+  <Step>
+    先读 [收益路径总览](/docs/owner-start)，理解私有模式、公共模式和账号广场三条路分别能不能产生收益。
+  </Step>
+  <Step>
+    按 [准备账号](/docs/owner-prerequisites) 确认平台、账号等级、凭证类型、代理 IP 和共享风险。
+  </Step>
+  <Step>
+    按 [添加第一个账号](/docs/owner-create-first-account) 进入「我的账号」，先用私有模式新增或导入 1 个账号。
+  </Step>
+  <Step>
+    按 [测试私有自用](/docs/owner-test-private-account) 创建私有分组 Key，先自己发一条测试消息。
+  </Step>
+  <Step>
+    按 [开启公共共享](/docs/owner-public-share) 切公共模式并等待共享校验；如果要用户主动选择你的账号，再按 [上架账号广场](/docs/owner-account-marketplace) 和 [设置定价和限制](/docs/owner-pricing-limits) 配参数。
+  </Step>
+  <Step>
+    按 [查看收益流水](/docs/owner-check-income) 确认收益到账，再按 [提现和收款码](/docs/owner-withdrawal-setup) 提交提现。
+  </Step>
+</Steps>
+
+完整教程见：
+
+- [收益路径总览](/docs/owner-start)
+- [准备账号](/docs/owner-prerequisites)
+- [添加第一个账号](/docs/owner-create-first-account)
+- [测试私有自用](/docs/owner-test-private-account)
+- [开启公共共享](/docs/owner-public-share)
+- [上架账号广场](/docs/owner-account-marketplace)
+- [设置定价和限制](/docs/owner-pricing-limits)
+- [查看收益流水](/docs/owner-check-income)
+- [提现和收款码](/docs/owner-withdrawal-setup)
+- [号主问题排查](/docs/owner-troubleshooting)
+- [添加和导入账号](/docs/owner-add-account)
+- [参数说明](/docs/owner-params)
+- [收益和提现](/docs/owner-income)
+
+## 最小验证请求
+
+普通用户和号主自用都可以用 [ChatCompletions 格式](/docs/api/chat-completions) 验证链路。最简单的验证方式：
+
+1. 打开 [ChatCompletions 格式](/docs/api/chat-completions)。
+2. 选择 `Chat Completions`。
+3. 填入站点地址、API Key、模型和测试消息。
+4. 点击 `Send`。
+5. 返回区出现 `Pixel API 已连接` 即说明链路已打通。
+
+如果你已经熟悉终端，也可以使用同等的 cURL 请求：
+
+```bash
+curl "https://ai-pixel.online/v1/chat/completions" \
+  -H "Authorization: Bearer sk-你的密钥" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-5.5",
+    "messages": [
+      { "role": "user", "content": "你好，请只回复：Pixel API 已连接" }
+    ]
+  }'
+```
+
+## 常见分组
+
+| 分组类型 | 适用场景 | 说明 |
+| --- | --- | --- |
+| `XXX 共享分组` | 日常模型调用 | 选择你有权限、页面显示可用、余额/订阅满足要求的分组 |
+| `XXX 兜底分组` | 主共享分组临时不可用时回落 | 稳定性更强，成本可能更高 |
+| 账号模式分组 | 在账号广场选择具体账号 | 需要先创建账号模式 API Key |
+| 私有分组 | 调用自己的托管账号 | 只对账号本人可见 |
+
+<Callout title="担心号池临时不可用？">
+  可以在 API Key 中开启多分组路由，让请求按优先级自动回落到 `XXX 兜底分组`。详见[管理与使用 API Key](/docs/api-keys)。
+</Callout>
+
+## 文档模块结构
+
+这个文档站按使用场景拆成多个顶部模块，进入任意模块后，左侧目录会切换为该模块自己的目录树：
+
+<Cards>
+  <Card title="使用指南" href="/docs" description="普通用户教程、号主用户教程、核心概念和功能参考。" />
+  <Card title="钱包与商城" href="/docs/wallet" description="充值订阅、发卡商城、兑换码、订单发票、余额与积分。" />
+  <Card title="福利与邀请" href="/docs/rewards" description="消费抽奖福利活动、邀请返利和优惠码。" />
+  <Card title="API 参考" href="/docs/api" description="OpenAI、Claude、Gemini、Images、Models 和 Antigravity 模型接口。" />
+  <Card title="帮助支持" href="/docs/operations/troubleshooting" description="问题排查、状态码说明、常见问题和安全使用建议。" />
+</Cards>
+
+## 钱包与福利快捷入口
+
+<Cards>
+  <Card title="充值与订阅" href="/docs/wallet/purchase" description="把余额充进来，或购买订阅套餐。" />
+  <Card title="发卡商城" href="/docs/wallet/store" description="购买卡密、抽卡、负载额度等数字商品。" />
+  <Card title="兑换码" href="/docs/wallet/redeem" description="输入兑换码，即时到账余额/积分/并发/订阅。" />
+  <Card title="福利活动" href="/docs/rewards/activities" description="消费达标获得抽奖机会，赢余额和奖品。" />
+  <Card title="邀请返利" href="/docs/rewards/affiliate" description="邀请新用户，赚实时返利。" />
+</Cards>
+
+## 不知道从哪里开始
+
+按这条顺序读：
+
+1. [一条龙跑通总览](/docs/normal-first-message)
+2. [开始前准备](/docs/normal-prerequisites)
+3. [打开站点并确认余额](/docs/normal-login-wallet)
+4. [选择分组和模型](/docs/normal-groups-models)
+5. [创建 API Key](/docs/normal-create-api-key)
+6. [确认 Base URL](/docs/normal-base-url)
+7. [发送第一条消息](/docs/normal-send-test-message)
+8. [查看使用记录](/docs/normal-check-usage)
+9. [配置客户端](/docs/normal-client-setup)
+10. [核心概念](/docs/concepts)

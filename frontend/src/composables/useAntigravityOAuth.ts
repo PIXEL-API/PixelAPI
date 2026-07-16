@@ -3,6 +3,7 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
 import { accountsAPI } from '@/api/accounts'
+import { extractApiErrorMessage } from '@/utils/apiError'
 import type { AntigravityTokenInfo } from '@/api/admin/antigravity'
 import type { AccountApiScope } from '@/composables/useAccountOAuth'
 
@@ -44,8 +45,10 @@ export function useAntigravityOAuth(scope: AccountApiScope = 'admin') {
       state.value = response.state || ''
       return true
     } catch (err: any) {
-      error.value =
-        err.response?.data?.detail || t('admin.accounts.oauth.antigravity.failedToGenerateUrl')
+      error.value = extractApiErrorMessage(
+        err,
+        t('admin.accounts.oauth.antigravity.failedToGenerateUrl')
+      )
       appStore.showError(error.value)
       return false
     } finally {
@@ -82,8 +85,10 @@ export function useAntigravityOAuth(scope: AccountApiScope = 'admin') {
           : await adminAPI.antigravity.exchangeCode(payload as any)
       return tokenInfo as AntigravityTokenInfo
     } catch (err: any) {
-      error.value =
-        err.response?.data?.detail || t('admin.accounts.oauth.antigravity.failedToExchangeCode')
+      error.value = extractApiErrorMessage(
+        err,
+        t('admin.accounts.oauth.antigravity.failedToExchangeCode')
+      )
       appStore.showError(error.value)
       return null
     } finally {
@@ -113,8 +118,10 @@ export function useAntigravityOAuth(scope: AccountApiScope = 'admin') {
             )
       return tokenInfo as AntigravityTokenInfo
     } catch (err: any) {
-      error.value =
-        err.response?.data?.detail || t('admin.accounts.oauth.antigravity.failedToValidateRT')
+      error.value = extractApiErrorMessage(
+        err,
+        t('admin.accounts.oauth.antigravity.failedToValidateRT')
+      )
       // Don't show global error toast for batch validation to avoid spamming
       // appStore.showError(error.value)
       return null
@@ -123,7 +130,10 @@ export function useAntigravityOAuth(scope: AccountApiScope = 'admin') {
     }
   }
 
-  const buildCredentials = (tokenInfo: AntigravityTokenInfo): Record<string, unknown> => {
+  const buildCredentials = (
+    tokenInfo: AntigravityTokenInfo,
+    fallbackRefreshToken?: string
+  ): Record<string, unknown> => {
     let expiresAt: string | undefined
     if (typeof tokenInfo.expires_at === 'number' && Number.isFinite(tokenInfo.expires_at)) {
       expiresAt = Math.floor(tokenInfo.expires_at).toString()
@@ -131,9 +141,13 @@ export function useAntigravityOAuth(scope: AccountApiScope = 'admin') {
       expiresAt = tokenInfo.expires_at.trim()
     }
 
+    const refreshToken = tokenInfo.refresh_token?.trim()
+      ? tokenInfo.refresh_token
+      : fallbackRefreshToken
+
     return {
       access_token: tokenInfo.access_token,
-      refresh_token: tokenInfo.refresh_token,
+      refresh_token: refreshToken,
       token_type: tokenInfo.token_type,
       expires_at: expiresAt,
       project_id: tokenInfo.project_id,

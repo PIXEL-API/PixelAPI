@@ -112,9 +112,50 @@
           <TokenUsageTrend :trend-data="trendData" :loading="chartsLoading" />
         </div>
       </div>
-      <UsageFilters v-model="filters" :start-date="startDate" :end-date="endDate" :exporting="exporting" @change="applyFilters" @refresh="refreshData" @reset="resetFilters" @cleanup="openCleanupDialog" @export="exportToExcel">
-        <template #after-reset>
-          <div class="relative" ref="columnDropdownRef">
+      <div class="card overflow-hidden">
+        <div
+          class="flex overflow-x-auto border-b border-gray-200 px-2 dark:border-dark-700 sm:px-4"
+          role="tablist"
+          :aria-label="t('admin.usage.title')"
+        >
+          <button
+            v-for="tab in detailTabs"
+            :key="tab.key"
+            :id="getDetailTabId(tab.key)"
+            type="button"
+            role="tab"
+            class="-mb-px inline-flex min-h-11 min-w-11 shrink-0 items-center gap-1.5 border-b-2 px-3 py-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500 sm:px-4"
+            :aria-controls="getDetailPanelId(tab.key)"
+            :aria-selected="activeDetailTab === tab.key"
+            :tabindex="activeDetailTab === tab.key ? 0 : -1"
+            :class="activeDetailTab === tab.key
+              ? 'border-primary-500 text-primary-600 dark:text-primary-400'
+              : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 dark:text-gray-400 dark:hover:border-dark-500 dark:hover:text-gray-200'"
+            @click="switchDetailTab(tab.key)"
+            @keydown="handleDetailTabKeydown($event, tab.key)"
+          >
+            <Icon :name="tab.icon" size="sm" />
+            {{ tab.label }}
+          </button>
+        </div>
+
+        <UsageFilters
+          ref="usageFiltersRef"
+          v-model="filters"
+          flat
+          :mode="activeDetailTab"
+          class="border-b border-gray-100 dark:border-dark-700/50"
+          :start-date="startDate"
+          :end-date="endDate"
+          :exporting="exporting"
+          @change="applyFilters"
+          @refresh="refreshData"
+          @reset="resetFilters"
+          @cleanup="openCleanupDialog"
+          @export="exportToExcel"
+        >
+          <template #after-reset>
+          <div v-if="activeDetailTab === 'usage'" class="relative" ref="columnDropdownRef">
             <button
               @click="showColumnDropdown = !showColumnDropdown"
               class="btn btn-secondary px-2 md:px-3"
@@ -146,19 +187,83 @@
               </button>
             </div>
           </div>
-        </template>
-      </UsageFilters>
-      <UsageTable
-        :data="usageLogs"
-        :loading="loading"
-        :columns="visibleColumns"
-        :server-side-sort="true"
-        :default-sort-key="'created_at'"
-        :default-sort-order="'desc'"
-        @sort="handleSort"
-        @userClick="handleUserClick"
-      />
-      <Pagination v-if="pagination.total > 0" :page="pagination.page" :total="pagination.total" :page-size="pagination.page_size" @update:page="handlePageChange" @update:pageSize="handlePageSizeChange" />
+          </template>
+        </UsageFilters>
+
+        <div
+          v-show="activeDetailTab === 'usage'"
+          :id="getDetailPanelId('usage')"
+          role="tabpanel"
+          :aria-labelledby="getDetailTabId('usage')"
+        >
+          <UsageTable
+            flat
+            :data="usageLogs"
+            :loading="loading"
+            :columns="visibleColumns"
+            :server-side-sort="true"
+            :default-sort-key="'created_at'"
+            :default-sort-order="'desc'"
+            @sort="handleSort"
+            @userClick="handleUserClick"
+          />
+          <Pagination v-if="pagination.total > 0" :page="pagination.page" :total="pagination.total" :page-size="pagination.page_size" @update:page="handlePageChange" @update:pageSize="handlePageSizeChange" />
+        </div>
+
+        <div
+          v-show="activeDetailTab === 'errors'"
+          :id="getDetailPanelId('errors')"
+          role="tabpanel"
+          :aria-labelledby="getDetailTabId('errors')"
+          class="min-h-[16rem] overflow-hidden"
+        >
+          <div
+            v-if="errorMessage"
+            class="m-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300 sm:m-6"
+            role="alert"
+          >
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <span>{{ errorMessage }}</span>
+              <button
+                type="button"
+                class="btn btn-secondary min-h-11 min-w-11 shrink-0"
+                :disabled="errorLoading"
+                @click="loadAdminErrors"
+              >
+                {{ t('usage.errors.retry') }}
+              </button>
+            </div>
+          </div>
+          <OpsErrorLogTable
+            v-else
+            :rows="errorRows"
+            :total="errorTotal"
+            :loading="errorLoading"
+            :page="errorPage"
+            :page-size="errorPageSize"
+            @openErrorDetail="openErrorDetail"
+            @update:page="handleErrorPageChange"
+            @update:pageSize="handleErrorPageSizeChange"
+          />
+        </div>
+
+        <div
+          v-show="activeDetailTab === 'ranking'"
+          :id="getDetailPanelId('ranking')"
+          role="tabpanel"
+          :aria-labelledby="getDetailTabId('ranking')"
+        >
+          <UserTokenRanking
+            v-if="rankingMounted"
+            ref="rankingRef"
+            :start-date="startDate"
+            :end-date="endDate"
+            :filters="breakdownFilters"
+            :model="filters.model"
+            @select-user="handleRankingSelectUser"
+          />
+        </div>
+      </div>
       </template>
 
       <template v-else>
@@ -379,6 +484,11 @@
       </template>
     </div>
   </AppLayout>
+  <OpsErrorDetailModal
+    v-model:show="showErrorModal"
+    :error-id="selectedErrorId"
+    error-type="request"
+  />
   <UsageExportProgress :show="exportProgress.show" :progress="exportProgress.progress" :current="exportProgress.current" :total="exportProgress.total" :estimated-time="exportProgress.estimatedTime" @cancel="cancelExport" />
   <UsageCleanupDialog
     :show="cleanupDialogVisible"
@@ -405,12 +515,18 @@ import { useAppStore } from '@/stores/app'; import { adminAPI } from '@/api/admi
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { formatDateTime, formatReasoningEffort } from '@/utils/format'
 import { formatCacheHitRate } from '@/utils/formatters'
+import { extractApiErrorMessage } from '@/utils/apiError'
 import { resolveUsageRequestType, requestTypeToLegacyStream } from '@/utils/usageRequestType'
 import AppLayout from '@/components/layout/AppLayout.vue'; import Pagination from '@/components/common/Pagination.vue'; import Select from '@/components/common/Select.vue'; import DateRangePicker from '@/components/common/DateRangePicker.vue'; import DataTable from '@/components/common/DataTable.vue'
 import UsageStatsCards from '@/components/admin/usage/UsageStatsCards.vue'; import UsageFilters from '@/components/admin/usage/UsageFilters.vue'
 import UsageTable from '@/components/admin/usage/UsageTable.vue'; import UsageExportProgress from '@/components/admin/usage/UsageExportProgress.vue'
+import UserTokenRanking from '@/components/admin/usage/UserTokenRanking.vue'
 import UsageCleanupDialog from '@/components/admin/usage/UsageCleanupDialog.vue'
 import UserBalanceHistoryModal from '@/components/admin/user/UserBalanceHistoryModal.vue'
+import OpsErrorLogTable from '@/views/admin/ops/components/OpsErrorLogTable.vue'
+import OpsErrorDetailModal from '@/views/admin/ops/components/OpsErrorDetailModal.vue'
+import { listRequestErrors } from '@/api/admin/ops'
+import type { OpsErrorLog, OpsErrorListQueryParams } from '@/api/admin/ops'
 import ModelDistributionChart from '@/components/charts/ModelDistributionChart.vue'; import GroupDistributionChart from '@/components/charts/GroupDistributionChart.vue'; import TokenUsageTrend from '@/components/charts/TokenUsageTrend.vue'
 import EndpointDistributionChart from '@/components/charts/EndpointDistributionChart.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -423,6 +539,11 @@ type DistributionMetric = 'tokens' | 'actual_cost'
 type EndpointSource = 'inbound' | 'upstream' | 'path'
 type ModelDistributionSource = 'requested' | 'upstream' | 'mapping'
 type AdminUsageTab = 'requests' | 'balanceLedger'
+type DetailTab = 'usage' | 'errors' | 'ranking'
+type UsageDetailFilters = AdminUsageQueryParams & {
+  error_phase?: string
+  status_code?: number
+}
 type BalanceLedgerTableRow = UserBalanceLedgerEntry & {
   reasonLabel: string
   amountLabel: string
@@ -432,6 +553,32 @@ type BalanceLedgerTableRow = UserBalanceLedgerEntry & {
 const route = useRoute()
 const usageStats = ref<AdminUsageStatsResponse | null>(null); const usageLogs = ref<AdminUsageLog[]>([]); const loading = ref(false); const exporting = ref(false)
 const activeAdminUsageTab = ref<AdminUsageTab>('requests')
+const activeDetailTab = ref<DetailTab>('usage')
+const detailTabs = computed(() => [
+  { key: 'usage' as const, label: t('usage.tabs.usage'), icon: 'document' as const },
+  { key: 'errors' as const, label: t('usage.tabs.errors'), icon: 'exclamationTriangle' as const },
+  { key: 'ranking' as const, label: t('usage.tabs.ranking'), icon: 'chart' as const }
+])
+const detailTabKeyboardActions = {
+  ArrowLeft: -1,
+  ArrowRight: 1,
+  Home: 'first',
+  End: 'last'
+} as const
+const getDetailTabId = (tab: DetailTab) => `admin-usage-detail-tab-${tab}`
+const getDetailPanelId = (tab: DetailTab) => `admin-usage-detail-panel-${tab}`
+const usageFiltersRef = ref<InstanceType<typeof UsageFilters> | null>(null)
+const rankingMounted = ref(false)
+const rankingRef = ref<InstanceType<typeof UserTokenRanking> | null>(null)
+const errorRows = ref<OpsErrorLog[]>([])
+const errorLoading = ref(false)
+const errorMessage = ref('')
+const errorPage = ref(1)
+const errorPageSize = ref(getPersistedPageSize())
+const errorTotal = ref(0)
+const showErrorModal = ref(false)
+const selectedErrorId = ref<number | null>(null)
+let errorRequestSequence = 0
 const balanceLedger = ref<UserBalanceLedgerEntry[]>([])
 const balanceLedgerStats = ref<AdminBalanceLedgerStatsResponse | null>(null)
 const ledgerLoading = ref(false)
@@ -482,6 +629,13 @@ const handleUserClick = async (userId: number) => {
   } catch {
     appStore.showError(t('admin.usage.failedToLoadUser'))
   }
+}
+
+const handleRankingSelectUser = (userId: number, email: string) => {
+  filters.value = { ...filters.value, user_id: userId }
+  usageFiltersRef.value?.setUserKeyword(email || '')
+  activeDetailTab.value = 'usage'
+  applyFilters()
 }
 
 const granularityOptions = computed(() => [{ value: 'day', label: t('admin.dashboard.day') }, { value: 'hour', label: t('admin.dashboard.hour') }])
@@ -563,7 +717,7 @@ const defaultRange = { start: defaultExactRange.start, end: defaultExactRange.en
 const startDate = ref(defaultRange.start); const endDate = ref(defaultRange.end)
 const startDateTime = ref(defaultExactRange.startTime)
 const endDateTime = ref(defaultExactRange.endTime)
-const filters = ref<AdminUsageQueryParams>({ user_id: undefined, model: undefined, group_id: undefined, request_type: undefined, billing_type: null, start_date: startDate.value, end_date: endDate.value })
+const filters = ref<UsageDetailFilters>({ user_id: undefined, model: undefined, group_id: undefined, request_type: undefined, billing_type: null, start_date: startDate.value, end_date: endDate.value })
 const pagination = reactive({ page: 1, page_size: getPersistedPageSize(), total: 0 })
 const ledgerFilters = reactive<AdminBalanceLedgerQueryParams>({
   user_id: undefined,
@@ -631,6 +785,91 @@ const buildExactTimeParams = (): Pick<AdminUsageQueryParams, 'start_time' | 'end
   end_time: dateTimeInputToISOString(endDateTime.value),
   timezone: getClientTimezone()
 })
+
+const loadAdminErrors = async () => {
+  const sequence = ++errorRequestSequence
+  errorLoading.value = true
+  errorMessage.value = ''
+  const exactTime = buildExactTimeParams()
+  const params: OpsErrorListQueryParams = {
+    page: errorPage.value,
+    page_size: errorPageSize.value,
+    view: 'all',
+    start_time: exactTime.start_time,
+    end_time: exactTime.end_time,
+    account_id: filters.value.account_id,
+    group_id: filters.value.group_id,
+    phase: filters.value.error_phase || undefined,
+    status_codes: filters.value.status_code != null ? String(filters.value.status_code) : undefined
+  }
+
+  try {
+    const response = await listRequestErrors(params)
+    if (sequence !== errorRequestSequence) return
+    errorRows.value = response.items
+    errorTotal.value = response.total
+  } catch (error) {
+    if (sequence !== errorRequestSequence) return
+    console.error('Failed to load admin errors:', error)
+    errorRows.value = []
+    errorTotal.value = 0
+    errorMessage.value = extractApiErrorMessage(error, t('usage.errors.failedToLoad'))
+    appStore.showError(errorMessage.value)
+  } finally {
+    if (sequence === errorRequestSequence) errorLoading.value = false
+  }
+}
+
+const switchDetailTab = (tab: DetailTab) => {
+  activeDetailTab.value = tab
+  if (tab === 'errors') void loadAdminErrors()
+  if (tab === 'ranking') rankingMounted.value = true
+}
+
+const focusDetailTab = (tab: DetailTab) => {
+  window.requestAnimationFrame(() => {
+    document.getElementById(getDetailTabId(tab))?.focus()
+  })
+}
+
+const handleDetailTabKeydown = (event: KeyboardEvent, tab: DetailTab) => {
+  const action = detailTabKeyboardActions[event.key as keyof typeof detailTabKeyboardActions]
+  if (action === undefined) return
+
+  event.preventDefault()
+  const currentIndex = detailTabs.value.findIndex((item) => item.key === tab)
+  let nextIndex = currentIndex < 0 ? 0 : currentIndex
+
+  if (action === 'first') {
+    nextIndex = 0
+  } else if (action === 'last') {
+    nextIndex = detailTabs.value.length - 1
+  } else {
+    nextIndex = (nextIndex + action + detailTabs.value.length) % detailTabs.value.length
+  }
+
+  const nextTab = detailTabs.value[nextIndex]?.key
+  if (!nextTab) return
+
+  switchDetailTab(nextTab)
+  focusDetailTab(nextTab)
+}
+
+const handleErrorPageChange = (page: number) => {
+  errorPage.value = page
+  void loadAdminErrors()
+}
+
+const handleErrorPageSizeChange = (pageSize: number) => {
+  errorPageSize.value = pageSize
+  errorPage.value = 1
+  void loadAdminErrors()
+}
+
+const openErrorDetail = (id: number) => {
+  selectedErrorId.value = id
+  showErrorModal.value = true
+}
 
 const validateExactTimeRange = (): boolean => {
   const start = dateTimeInputToDate(startDateTime.value)
@@ -739,6 +978,13 @@ const onDateRangeChange = (range: { startDate: string; endDate: string; preset: 
   }
 }
 
+const buildUsageApiFilters = (): AdminUsageQueryParams => {
+  const params = { ...filters.value }
+  delete params.error_phase
+  delete params.status_code
+  return params
+}
+
 const buildUsageListParams = (
   page: number,
   pageSize: number,
@@ -750,7 +996,7 @@ const buildUsageListParams = (
     page,
     page_size: pageSize,
     exact_total: exactTotal,
-    ...filters.value,
+    ...buildUsageApiFilters(),
     ...buildExactTimeParams(),
     stream: legacyStream === null ? undefined : legacyStream,
     sort_by: sortState.sort_by,
@@ -842,7 +1088,7 @@ const loadStats = async () => {
     const requestType = filters.value.request_type
     const legacyStream = requestType ? requestTypeToLegacyStream(requestType) : filters.value.stream
     const s = await adminAPI.usage.getStats({
-      ...filters.value,
+      ...buildUsageApiFilters(),
       ...buildExactTimeParams(),
       stream: legacyStream === null ? undefined : legacyStream
     })
@@ -963,6 +1209,14 @@ const applyFilters = () => {
   loadStats()
   loadModelStats(modelDistributionSource.value, true)
   loadChartData()
+  errorPage.value = 1
+  if (activeDetailTab.value === 'errors') {
+    void loadAdminErrors()
+  } else {
+    errorRows.value = []
+    errorTotal.value = 0
+    errorMessage.value = ''
+  }
 }
 const applyLedgerFilters = () => {
   if (!validateExactTimeRange()) return
@@ -978,6 +1232,8 @@ const refreshData = () => {
   loadStats()
   loadModelStats(modelDistributionSource.value, true)
   loadChartData()
+  if (activeDetailTab.value === 'errors') void loadAdminErrors()
+  if (rankingMounted.value) rankingRef.value?.reload()
 }
 const refreshLedgerData = () => {
   if (!validateExactTimeRange()) return
@@ -990,7 +1246,16 @@ const resetFilters = () => {
   endDate.value = range.end
   startDateTime.value = range.startTime
   endDateTime.value = range.endTime
-  filters.value = { ...buildExactTimeParams(), start_date: startDate.value, end_date: endDate.value, request_type: undefined, billing_type: null, billing_mode: undefined }
+  filters.value = {
+    ...buildExactTimeParams(),
+    start_date: startDate.value,
+    end_date: endDate.value,
+    request_type: undefined,
+    billing_type: null,
+    billing_mode: undefined,
+    error_phase: undefined,
+    status_code: undefined
+  }
   ledgerFilters.start_date = startDate.value
   ledgerFilters.end_date = endDate.value
   granularity.value = getGranularityForRange(startDate.value, endDate.value)
@@ -1062,6 +1327,9 @@ const switchAdminUsageTab = (tab: AdminUsageTab) => {
     if (!validateExactTimeRange()) return
     syncDateFieldsFromExactTime()
     loadBalanceLedger()
+  }
+  if (tab === 'requests' && activeDetailTab.value === 'errors') {
+    void loadAdminErrors()
   }
 }
 
@@ -1444,8 +1712,7 @@ const allColumns = computed(() => [
   { key: 'billing_mode', label: t('admin.usage.billingMode'), sortable: false },
   { key: 'tokens', label: t('usage.tokens'), sortable: false },
   { key: 'cost', label: t('usage.cost'), sortable: false },
-  { key: 'first_token', label: t('usage.firstToken'), sortable: false },
-  { key: 'duration', label: t('usage.duration'), sortable: false },
+  { key: 'latency', label: t('usage.latency'), sortable: false },
   { key: 'created_at', label: t('usage.time'), sortable: true },
   { key: 'user_agent', label: t('usage.userAgent'), sortable: false },
   { key: 'ip_address', label: t('admin.usage.ipAddress'), sortable: false }
@@ -1525,6 +1792,7 @@ onMounted(() => {
   document.addEventListener('click', handleLedgerUserClickOutside)
 })
 onUnmounted(() => {
+  errorRequestSequence++
   abortController?.abort()
   ledgerAbortController?.abort()
   exportAbortController?.abort()

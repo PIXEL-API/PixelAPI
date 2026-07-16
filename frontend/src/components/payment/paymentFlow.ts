@@ -1,6 +1,7 @@
 import type {
   CreateOrderRequest,
   CreateOrderResult,
+  AlipayJSAPIPayload,
   MethodLimit,
   OrderType,
   WechatJSAPIPayload,
@@ -29,6 +30,8 @@ export type PaymentLaunchKind =
   | 'airwallex_route'
   | 'wechat_oauth'
   | 'wechat_jsapi'
+  | 'alipay_app_redirect'
+  | 'alipay_jsapi'
   | 'unhandled'
 
 export interface PaymentRecoverySnapshot {
@@ -56,6 +59,7 @@ export interface PaymentLaunchContext {
   orderType: OrderType
   isMobile: boolean
   isWechatBrowser?: boolean
+  currentOrigin?: string
   now?: number
   stripePopupUrl?: string
   stripeRouteUrl?: string
@@ -69,6 +73,7 @@ export interface PaymentLaunchDecision {
   stripeMethod?: StripeVisibleMethod
   oauth?: WechatOAuthInfo
   jsapi?: WechatJSAPIPayload
+  alipayJSAPI?: AlipayJSAPIPayload
 }
 
 export interface BuildCreateOrderPayloadInput {
@@ -193,17 +198,36 @@ export function decidePaymentLaunch(
     return { kind: 'wechat_oauth', paymentState: baseState, recovery: baseState, oauth: result.oauth }
   }
 
+  if (visibleMethod === 'alipay' && normalizedPaymentMode(result.payment_mode) === 'jsapi') {
+    if (result.result_type === 'jsapi_ready' && result.alipay_jsapi?.tradeNO) {
+      return { kind: 'alipay_jsapi', paymentState: baseState, recovery: baseState, alipayJSAPI: result.alipay_jsapi }
+    }
+    if (context.isMobile && baseState.payUrl && baseState.resumeToken) {
+      return { kind: 'alipay_app_redirect', paymentState: baseState, recovery: baseState }
+    }
+    const alipayH5Url = extractAlipayJSAPIH5URL(baseState.payUrl, {
+      resumeToken: baseState.resumeToken,
+      outTradeNo: baseState.outTradeNo,
+      currentOrigin: context.currentOrigin,
+    })
+    if (alipayH5Url) {
+      const paymentState = { ...baseState, qrCode: alipayH5Url }
+      return { kind: 'qr_waiting', paymentState, recovery: paymentState }
+    }
+    return { kind: 'unhandled', paymentState: baseState, recovery: baseState }
+  }
+
   const jsapiPayload = result.jsapi ?? result.jsapi_payload
   if (result.result_type === 'jsapi_ready' && jsapiPayload) {
     return { kind: 'wechat_jsapi', paymentState: baseState, recovery: baseState, jsapi: jsapiPayload }
   }
 
-  const normalizedPaymentMode = baseState.paymentMode.trim().toLowerCase()
-  const prefersRedirect = normalizedPaymentMode === 'redirect'
-    || normalizedPaymentMode === 'popup'
+  const mode = normalizedPaymentMode(baseState.paymentMode)
+  const prefersRedirect = mode === 'redirect'
+    || mode === 'popup'
     || (context.isMobile && !!baseState.payUrl)
-  const prefersQr = normalizedPaymentMode === 'qrcode'
-    || normalizedPaymentMode === 'native'
+  const prefersQr = mode === 'qrcode'
+    || mode === 'native'
     || (!prefersRedirect && !!baseState.qrCode)
 
   if (visibleMethod === 'wxpay' && context.isWechatBrowser && baseState.payUrl && !baseState.qrCode) {
@@ -223,6 +247,47 @@ export function decidePaymentLaunch(
   }
 
   return { kind: 'unhandled', paymentState: baseState, recovery: baseState }
+}
+
+function normalizedPaymentMode(mode: string | undefined): string {
+  return (mode || '').trim().toLowerCase()
+}
+
+export function extractAlipayJSAPIH5URL(
+  appOpenURL: string,
+  expected: {
+    resumeToken: string
+    outTradeNo?: string
+    currentOrigin?: string
+  },
+): string {
+  const resumeToken = expected.resumeToken.trim()
+  if (!resumeToken) return ''
+  const currentOrigin = (expected.currentOrigin || '').trim().replace(/\/+$/, '')
+  if (!currentOrigin) return ''
+
+  try {
+    const openURL = new URL(appOpenURL)
+    if (openURL.protocol !== 'alipays:' || openURL.hostname !== 'platformapi' || openURL.pathname !== '/startapp') {
+      return ''
+    }
+    const h5URLRaw = openURL.searchParams.get('url') || ''
+    if (!h5URLRaw) return ''
+
+    const h5URL = new URL(h5URLRaw)
+    if (h5URL.protocol !== 'https:' && h5URL.protocol !== 'http:') return ''
+    if (h5URL.pathname !== '/payment/alipay-jsapi') return ''
+    if (h5URL.searchParams.get('resume_token') !== resumeToken) return ''
+
+    const outTradeNo = (expected.outTradeNo || '').trim()
+    if (outTradeNo && h5URL.searchParams.get('out_trade_no') !== outTradeNo) return ''
+
+    if (h5URL.origin !== currentOrigin) return ''
+
+    return h5URL.toString()
+  } catch {
+    return ''
+  }
 }
 
 export function createPaymentRecoverySnapshot(

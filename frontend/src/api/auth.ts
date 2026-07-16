@@ -3,7 +3,7 @@
  * Handles user login, registration, and logout operations
  */
 
-import { apiClient } from './client'
+import { apiClient, refreshAuthTokenPair } from './client'
 import type {
   LoginRequest,
   RegisterRequest,
@@ -20,6 +20,39 @@ import type {
  * Login response type - can be either full auth or 2FA required
  */
 export type LoginResponse = AuthResponse | TotpLoginResponse
+
+export type CompleteAuthResponse = AuthResponse & {
+  refresh_token: string
+  expires_in: number
+}
+
+export function assertCompleteAuthResponse(
+  response: AuthResponse
+): asserts response is CompleteAuthResponse {
+  if (
+    !response.access_token?.trim() ||
+    !response.refresh_token?.trim() ||
+    typeof response.expires_in !== 'number' ||
+    !Number.isFinite(response.expires_in) ||
+    response.expires_in <= 0 ||
+    !response.user
+  ) {
+    throw new Error('Authentication response is missing a complete token pair')
+  }
+}
+
+function persistCompleteAuthResponse(response: AuthResponse): void {
+  try {
+    assertCompleteAuthResponse(response)
+  } catch (error) {
+    clearAuthToken()
+    throw error
+  }
+  setAuthToken(response.access_token)
+  setRefreshToken(response.refresh_token)
+  setTokenExpiresAt(response.expires_in)
+  localStorage.setItem('auth_user', JSON.stringify(response.user))
+}
 
 /**
  * Type guard to check if login response requires 2FA
@@ -93,14 +126,7 @@ export async function login(credentials: LoginRequest): Promise<LoginResponse> {
 
   // Only store token if 2FA is not required
   if (!isTotp2FARequired(data)) {
-    setAuthToken(data.access_token)
-    if (data.refresh_token) {
-      setRefreshToken(data.refresh_token)
-    }
-    if (data.expires_in) {
-      setTokenExpiresAt(data.expires_in)
-    }
-    localStorage.setItem('auth_user', JSON.stringify(data.user))
+    persistCompleteAuthResponse(data)
   }
 
   return data
@@ -114,15 +140,7 @@ export async function login(credentials: LoginRequest): Promise<LoginResponse> {
 export async function login2FA(request: TotpLogin2FARequest): Promise<AuthResponse> {
   const { data } = await apiClient.post<AuthResponse>('/auth/login/2fa', request)
 
-  // Store token and user data
-  setAuthToken(data.access_token)
-  if (data.refresh_token) {
-    setRefreshToken(data.refresh_token)
-  }
-  if (data.expires_in) {
-    setTokenExpiresAt(data.expires_in)
-  }
-  localStorage.setItem('auth_user', JSON.stringify(data.user))
+  persistCompleteAuthResponse(data)
 
   return data
 }
@@ -135,15 +153,7 @@ export async function login2FA(request: TotpLogin2FARequest): Promise<AuthRespon
 export async function register(userData: RegisterRequest): Promise<AuthResponse> {
   const { data } = await apiClient.post<AuthResponse>('/auth/register', userData)
 
-  // Store token and user data
-  setAuthToken(data.access_token)
-  if (data.refresh_token) {
-    setRefreshToken(data.refresh_token)
-  }
-  if (data.expires_in) {
-    setTokenExpiresAt(data.expires_in)
-  }
-  localStorage.setItem('auth_user', JSON.stringify(data.user))
+  persistCompleteAuthResponse(data)
 
   return data
 }
@@ -273,12 +283,15 @@ export function hasPendingOAuthSuggestedProfile(
 }
 
 export function persistOAuthTokenContext(tokens: Partial<OAuthTokenResponse>): void {
-  if (tokens.refresh_token) {
-    setRefreshToken(tokens.refresh_token)
+  const refreshToken = tokens.refresh_token?.trim() || ''
+  const expiresIn = tokens.expires_in
+  if (!refreshToken || typeof expiresIn !== 'number' || !Number.isFinite(expiresIn) || expiresIn <= 0) {
+    localStorage.removeItem('refresh_token')
+    localStorage.removeItem('token_expires_at')
+    return
   }
-  if (tokens.expires_in) {
-    setTokenExpiresAt(tokens.expires_in)
-  }
+  setRefreshToken(refreshToken)
+  setTokenExpiresAt(expiresIn)
 }
 
 export async function prepareOAuthBindAccessTokenCookie(): Promise<void> {
@@ -292,22 +305,9 @@ export async function prepareOAuthBindAccessTokenCookie(): Promise<void> {
  * Refresh the access token using the refresh token
  * @returns New token pair
  */
-export async function refreshToken(): Promise<RefreshTokenResponse> {
-  const currentRefreshToken = getRefreshToken()
-  if (!currentRefreshToken) {
-    throw new Error('No refresh token available')
-  }
-
-  const { data } = await apiClient.post<RefreshTokenResponse>('/auth/refresh', {
-    refresh_token: currentRefreshToken
-  })
-
-  // Update tokens in localStorage
-  setAuthToken(data.access_token)
-  setRefreshToken(data.refresh_token)
-  setTokenExpiresAt(data.expires_in)
-
-  return data
+export async function refreshToken(refreshTokenOverride?: string): Promise<RefreshTokenResponse> {
+  const data = await refreshAuthTokenPair(refreshTokenOverride)
+  return { ...data, token_type: 'Bearer' }
 }
 
 /**

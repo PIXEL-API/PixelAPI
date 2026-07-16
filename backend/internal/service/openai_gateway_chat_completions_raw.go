@@ -39,10 +39,10 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 		return nil, errors.New("missing model in request")
 	}
 	clientStream := gjson.GetBytes(body, "stream").Bool()
-	reasoningEffort := extractOpenAIReasoningEffortFromBody(body, originalModel)
 
 	billingModel := resolveOpenAIForwardModel(account, originalModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
+	reasoningEffort := extractOpenAIReasoningEffortFromBody(body, upstreamModel, billingModel, originalModel)
 
 	upstreamBody := body
 	if upstreamModel != originalModel {
@@ -80,7 +80,9 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	}
 	targetURL := buildOpenAIChatCompletionsURL(validatedURL)
 
-	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(upstreamBody))
+	upstreamCtx, releaseUpstreamCtx := s.detachOpenAIUpstreamContext(ctx)
+	upstreamReq, err := http.NewRequestWithContext(upstreamCtx, http.MethodPost, targetURL, bytes.NewReader(upstreamBody))
+	releaseUpstreamCtx()
 	if err != nil {
 		return nil, fmt.Errorf("build upstream request: %w", err)
 	}
@@ -104,11 +106,13 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	if userAgent := strings.TrimSpace(account.GetOpenAIUserAgent()); userAgent != "" {
 		upstreamReq.Header.Set("user-agent", userAgent)
 	}
+	account.ApplyHeaderOverrides(upstreamReq.Header)
 
 	proxyURL := ""
 	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
+	upstreamReq = upstreamReq.WithContext(WithHTTPUpstreamProfile(upstreamReq.Context(), HTTPUpstreamProfileOpenAI))
 	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 	if err != nil {
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
@@ -155,12 +159,13 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	}
 
 	if clientStream {
-		return s.streamRawChatCompletions(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+		return s.streamRawChatCompletions(ctx, c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	}
-	return s.bufferRawChatCompletions(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+	return s.bufferRawChatCompletions(ctx, c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 }
 
 func (s *OpenAIGatewayService) streamRawChatCompletions(
+	ctx context.Context,
 	c *gin.Context,
 	resp *http.Response,
 	originalModel string,
@@ -188,12 +193,26 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
 
 	var usage OpenAIUsage
+	usageComplete := false
 	var firstTokenMs *int
+	clientDisconnected := false
+	var cancelDisconnectedDrain context.CancelFunc
+	defer func() {
+		if cancelDisconnectedDrain != nil {
+			cancelDisconnectedDrain()
+		}
+	}()
+	startDisconnectedDrain := func() {
+		if cancelDisconnectedDrain == nil {
+			cancelDisconnectedDrain = s.startDisconnectedStreamDrainDeadline(ctx, resp.Body, requestID)
+		}
+	}
 	for scanner.Scan() {
 		line := scanner.Text()
 		if payload, ok := extractOpenAISSEDataLine(line); ok && strings.TrimSpace(payload) != "[DONE]" {
 			usageOnlyChunk := isOpenAIChatUsageOnlyStreamChunk(payload)
 			if u := extractOpenAIChatStreamUsage(payload); u != nil {
+				usageComplete = true
 				usage = *u
 			}
 			if firstTokenMs == nil && !usageOnlyChunk {
@@ -201,14 +220,14 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 				firstTokenMs = &ms
 			}
 		}
-		if _, err := c.Writer.WriteString(line + "\n"); err != nil {
-			logger.L().Info("openai chat_completions raw: client disconnected",
-				zap.String("request_id", requestID),
-			)
-			break
-		}
-		if line == "" {
-			c.Writer.Flush()
+		if !clientDisconnected {
+			if _, err := c.Writer.WriteString(line + "\n"); err != nil {
+				clientDisconnected = true
+				startDisconnectedDrain()
+				s.logClientDisconnectDrainDecision(ctx, "openai chat_completions raw", requestID, "write_line")
+			} else if line == "" {
+				c.Writer.Flush()
+			}
 		}
 	}
 	if err := scanner.Err(); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
@@ -216,6 +235,24 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 			zap.Error(err),
 			zap.String("request_id", requestID),
 		)
+	}
+	if clientDisconnected {
+		streamErr := s.clientDisconnectIncompleteUsageError(ctx)
+		if streamErr == nil && !usageComplete {
+			streamErr = errors.New("stream usage incomplete after disconnect: missing terminal usage")
+		}
+		return &OpenAIForwardResult{
+			RequestID:       requestID,
+			Usage:           usage,
+			Model:           originalModel,
+			BillingModel:    billingModel,
+			UpstreamModel:   upstreamModel,
+			ReasoningEffort: reasoningEffort,
+			ServiceTier:     serviceTier,
+			Stream:          true,
+			Duration:        time.Since(startTime),
+			FirstTokenMs:    firstTokenMs,
+		}, streamErr
 	}
 
 	return &OpenAIForwardResult{
@@ -257,6 +294,7 @@ func extractOpenAIChatStreamUsage(payload string) *OpenAIUsage {
 }
 
 func (s *OpenAIGatewayService) bufferRawChatCompletions(
+	ctx context.Context,
 	c *gin.Context,
 	resp *http.Response,
 	originalModel string,
@@ -268,7 +306,9 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 
-	respBody, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
+	readCtx, cancelRead := s.detachedNonStreamingReadContext(ctx)
+	defer cancelRead()
+	respBody, err := ReadUpstreamResponseBodyWithContext(readCtx, resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
 		if !errors.Is(err, ErrUpstreamResponseBodyTooLarge) {
 			writeChatCompletionsError(c, http.StatusBadGateway, "api_error", "Failed to read upstream response")
@@ -311,12 +351,11 @@ func openAIUsageFromChatCompletionsUsage(payload string) *OpenAIUsage {
 	if !usageResult.Exists() || !usageResult.IsObject() {
 		return nil
 	}
-	u := OpenAIUsage{
-		InputTokens:          int(gjson.Get(payload, "usage.prompt_tokens").Int()),
-		OutputTokens:         int(gjson.Get(payload, "usage.completion_tokens").Int()),
-		CacheReadInputTokens: int(gjson.Get(payload, "usage.prompt_tokens_details.cached_tokens").Int()),
+	usage, ok := openAIUsageFromGJSON(usageResult)
+	if !ok {
+		return nil
 	}
-	return &u
+	return &usage
 }
 
 func buildOpenAIChatCompletionsURL(base string) string {

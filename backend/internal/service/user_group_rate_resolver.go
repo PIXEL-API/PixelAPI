@@ -17,13 +17,24 @@ var userGroupRateCacheRegistry sync.Map
 
 type userGroupRateResolver struct {
 	repo         UserGroupRateRepository
+	usageLogRepo UsageLogRepository
 	cache        *gocache.Cache
 	cacheTTL     time.Duration
 	sf           *singleflight.Group
 	logComponent string
 }
 
-func newUserGroupRateResolver(repo UserGroupRateRepository, cache *gocache.Cache, cacheTTL time.Duration, sf *singleflight.Group, logComponent string) *userGroupRateResolver {
+type userGroupRateResolution struct {
+	multiplier  float64
+	hasUserRate bool
+}
+
+type effectiveGroupRateResolution struct {
+	Multiplier float64
+	Source     string
+}
+
+func newUserGroupRateResolver(repo UserGroupRateRepository, usageLogRepo UsageLogRepository, cache *gocache.Cache, cacheTTL time.Duration, sf *singleflight.Group, logComponent string) *userGroupRateResolver {
 	if cacheTTL <= 0 {
 		cacheTTL = defaultUserGroupRateCacheTTL
 	}
@@ -42,6 +53,7 @@ func newUserGroupRateResolver(repo UserGroupRateRepository, cache *gocache.Cache
 
 	return &userGroupRateResolver{
 		repo:         repo,
+		usageLogRepo: usageLogRepo,
 		cache:        cache,
 		cacheTTL:     cacheTTL,
 		sf:           sf,
@@ -50,30 +62,72 @@ func newUserGroupRateResolver(repo UserGroupRateRepository, cache *gocache.Cache
 }
 
 func (r *userGroupRateResolver) Resolve(ctx context.Context, userID, groupID int64, groupDefaultMultiplier float64) float64 {
+	resolution, ok := r.resolveUserRate(ctx, userID, groupID)
+	if ok && resolution.hasUserRate {
+		return resolution.multiplier
+	}
+	return groupDefaultMultiplier
+}
+
+func (r *userGroupRateResolver) ResolveEffective(ctx context.Context, user *User, group *Group, groupDefaultMultiplier float64) (float64, error) {
+	resolution, err := r.ResolveEffectiveDetailed(ctx, user, group, groupDefaultMultiplier)
+	if err != nil {
+		return 0, err
+	}
+	return resolution.Multiplier, nil
+}
+
+func (r *userGroupRateResolver) ResolveEffectiveDetailed(ctx context.Context, user *User, group *Group, groupDefaultMultiplier float64) (effectiveGroupRateResolution, error) {
+	source := RateMultiplierSourceGroupDefault
+	if group != nil {
+		groupDefaultMultiplier = group.RateMultiplier
+	}
+	if user == nil || group == nil || user.ID <= 0 || group.ID <= 0 {
+		return resolveNewUserGroupRateMultiplier(ctx, r, user, group, groupDefaultMultiplier, time.Now())
+	}
+	resolution, ok := r.resolveUserRate(ctx, user.ID, group.ID)
+	if ok && resolution.hasUserRate {
+		return effectiveGroupRateResolution{Multiplier: resolution.multiplier, Source: RateMultiplierSourceUserGroup}, nil
+	}
+	if !ok && r != nil && r.repo != nil {
+		return effectiveGroupRateResolution{Multiplier: groupDefaultMultiplier, Source: source}, nil
+	}
+	return resolveNewUserGroupRateMultiplier(ctx, r, user, group, groupDefaultMultiplier, time.Now())
+}
+
+func (r *userGroupRateResolver) resolveUserRate(ctx context.Context, userID, groupID int64) (userGroupRateResolution, bool) {
 	if r == nil || userID <= 0 || groupID <= 0 {
-		return groupDefaultMultiplier
+		return userGroupRateResolution{}, false
 	}
 
 	key := fmt.Sprintf("%d:%d", userID, groupID)
 	if r.cache != nil {
 		if cached, ok := r.cache.Get(key); ok {
+			if resolution, castOK := cached.(userGroupRateResolution); castOK {
+				userGroupRateCacheHitTotal.Add(1)
+				return resolution, true
+			}
 			if multiplier, castOK := cached.(float64); castOK {
 				userGroupRateCacheHitTotal.Add(1)
-				return multiplier
+				return userGroupRateResolution{multiplier: multiplier, hasUserRate: true}, true
 			}
 		}
 	}
 	if r.repo == nil {
-		return groupDefaultMultiplier
+		return userGroupRateResolution{}, false
 	}
 	userGroupRateCacheMissTotal.Add(1)
 
 	value, err, shared := r.sf.Do(key, func() (any, error) {
 		if r.cache != nil {
 			if cached, ok := r.cache.Get(key); ok {
+				if resolution, castOK := cached.(userGroupRateResolution); castOK {
+					userGroupRateCacheHitTotal.Add(1)
+					return resolution, nil
+				}
 				if multiplier, castOK := cached.(float64); castOK {
 					userGroupRateCacheHitTotal.Add(1)
-					return multiplier, nil
+					return userGroupRateResolution{multiplier: multiplier, hasUserRate: true}, nil
 				}
 			}
 		}
@@ -84,14 +138,15 @@ func (r *userGroupRateResolver) Resolve(ctx context.Context, userID, groupID int
 			return nil, repoErr
 		}
 
-		multiplier := groupDefaultMultiplier
+		resolution := userGroupRateResolution{}
 		if userRate != nil {
-			multiplier = *userRate
+			resolution.multiplier = *userRate
+			resolution.hasUserRate = true
 		}
 		if r.cache != nil {
-			r.cache.Set(key, multiplier, r.cacheTTL)
+			r.cache.Set(key, resolution, r.cacheTTL)
 		}
-		return multiplier, nil
+		return resolution, nil
 	})
 	if shared {
 		userGroupRateCacheSFSharedTotal.Add(1)
@@ -99,15 +154,56 @@ func (r *userGroupRateResolver) Resolve(ctx context.Context, userID, groupID int
 	if err != nil {
 		userGroupRateCacheFallbackTotal.Add(1)
 		logger.LegacyPrintf(r.logComponent, "get user group rate failed, fallback to group default: user=%d group=%d err=%v", userID, groupID, err)
-		return groupDefaultMultiplier
+		return userGroupRateResolution{}, false
 	}
 
-	multiplier, ok := value.(float64)
+	resolution, ok := value.(userGroupRateResolution)
 	if !ok {
 		userGroupRateCacheFallbackTotal.Add(1)
-		return groupDefaultMultiplier
+		return userGroupRateResolution{}, false
 	}
-	return multiplier
+	return resolution, true
+}
+
+func resolveNewUserGroupRateMultiplier(ctx context.Context, resolver *userGroupRateResolver, user *User, group *Group, groupDefaultMultiplier float64, now time.Time) (effectiveGroupRateResolution, error) {
+	defaultResolution := effectiveGroupRateResolution{Multiplier: groupDefaultMultiplier, Source: RateMultiplierSourceGroupDefault}
+	if user == nil || group == nil {
+		return defaultResolution, nil
+	}
+	if !group.NewUserRateEnabled || group.NewUserRateMultiplier <= 0 || group.NewUserRateWindowSeconds <= 0 {
+		return defaultResolution, nil
+	}
+	if user.CreatedAt.IsZero() {
+		return defaultResolution, nil
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	expiresAt := user.CreatedAt.Add(time.Duration(group.NewUserRateWindowSeconds) * time.Second)
+	if now.After(expiresAt) {
+		return defaultResolution, nil
+	}
+	if group.NewUserRateQuotaUSD > 0 {
+		if resolver == nil || resolver.usageLogRepo == nil {
+			return effectiveGroupRateResolution{}, fmt.Errorf("new user group rate quota usage repository is nil: user=%d group=%d", user.ID, group.ID)
+		}
+		used, err := resolver.usageLogRepo.SumUserGroupRateSourceActualCost(
+			ctx,
+			user.ID,
+			group.ID,
+			RateMultiplierSourceNewUserGroup,
+			user.CreatedAt,
+			expiresAt,
+		)
+		if err != nil {
+			logger.LegacyPrintf(resolver.logComponent, "get new user group rate quota usage failed: user=%d group=%d err=%v", user.ID, group.ID, err)
+			return effectiveGroupRateResolution{}, fmt.Errorf("get new user group rate quota usage: user=%d group=%d: %w", user.ID, group.ID, err)
+		}
+		if used >= group.NewUserRateQuotaUSD {
+			return defaultResolution, nil
+		}
+	}
+	return effectiveGroupRateResolution{Multiplier: group.NewUserRateMultiplier, Source: RateMultiplierSourceNewUserGroup}, nil
 }
 
 func invalidateUserGroupRateCacheByUserID(userID int64) {

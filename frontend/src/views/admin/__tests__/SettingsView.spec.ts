@@ -362,6 +362,7 @@ const baseSettingsResponse = {
   enable_fingerprint_unification: true,
   enable_metadata_passthrough: false,
   enable_cch_signing: false,
+  detached_usage_drain_enabled: true,
   enable_anthropic_cache_ttl_1h_injection: false,
   payment_enabled: true,
   payment_min_amount: 1,
@@ -416,6 +417,7 @@ function mountView() {
         ProxySelector: true,
         ImageUpload: ImageUploadStub,
         BackupSettings: true,
+        OpenAIFastPolicyUserSelector: true,
       },
     },
   });
@@ -589,6 +591,67 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(updateSettings).toHaveBeenCalledWith(
       expect.objectContaining({
         enable_anthropic_cache_ttl_1h_injection: true,
+      }),
+    );
+  });
+
+  it("submits detached usage drain gateway setting", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      detached_usage_drain_enabled: false,
+    });
+
+    const wrapper = mountView();
+
+    await flushPromises();
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledTimes(1);
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detached_usage_drain_enabled: false,
+      }),
+    );
+  });
+
+  it("preserves user-scoped Fast/Flex rules and omits empty global user scopes", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      openai_fast_policy_settings: {
+        rules: [
+          {
+            service_tier: "priority",
+            action: "filter",
+            scope: "all",
+            user_ids: [7, 9],
+          },
+          {
+            service_tier: "flex",
+            action: "block",
+            scope: "apikey",
+            user_ids: [],
+            error_message: "disabled",
+          },
+        ],
+      },
+    });
+
+    const wrapper = mountView();
+
+    await flushPromises();
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledTimes(1);
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        openai_fast_policy_settings: {
+          rules: [
+            expect.objectContaining({ user_ids: [7, 9] }),
+            expect.not.objectContaining({ user_ids: expect.anything() }),
+          ],
+        },
       }),
     );
   });

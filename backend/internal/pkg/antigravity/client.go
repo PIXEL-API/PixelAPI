@@ -17,6 +17,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyutil"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
 )
 
 // ForbiddenError 表示上游返回 403 Forbidden
@@ -277,6 +278,7 @@ func NewClient(proxyURL string) (*Client, error) {
 		}
 		client.Transport = transport
 	}
+	client.Transport = servertiming.WrapRoundTripper(client.Transport)
 
 	return &Client{
 		httpClient: client,

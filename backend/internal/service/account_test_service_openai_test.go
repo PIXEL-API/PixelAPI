@@ -124,7 +124,67 @@ func TestAccountTestService_OpenAISuccessPersistsSnapshotFromHeaders(t *testing.
 	require.NotEmpty(t, repo.updatedExtra)
 	require.Equal(t, 42.0, repo.updatedExtra["codex_5h_used_percent"])
 	require.Equal(t, 88.0, repo.updatedExtra["codex_7d_used_percent"])
+	require.Len(t, upstream.requests, 1)
+	require.Equal(t, "responses=experimental", upstream.requests[0].Header.Get("OpenAI-Beta"))
+	require.Equal(t, "codex_cli_rs", upstream.requests[0].Header.Get("Originator"))
+	require.Equal(t, codexCLIVersion, upstream.requests[0].Header.Get("Version"))
+	require.Equal(t, codexCLIUserAgent, upstream.requests[0].Header.Get("User-Agent"))
 	require.Contains(t, recorder.Body.String(), "test_complete")
+}
+
+func TestAccountTestService_OpenAITestMasksThirdPartyCustomUserAgent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := newTestContext()
+
+	resp := newJSONResponse(http.StatusOK, "")
+	resp.Body = io.NopCloser(strings.NewReader(`data: {"type":"response.completed"}
+
+`))
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{resp}}
+	svc := &AccountTestService{httpUpstream: upstream}
+	account := &Account{
+		ID:          91,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "test-token",
+			"user_agent":   "custom-codex/1.0",
+		},
+	}
+
+	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
+
+	require.NoError(t, err)
+	require.Len(t, upstream.requests, 1)
+	require.Equal(t, codexCLIUserAgent, upstream.requests[0].Header.Get("User-Agent"))
+	require.Equal(t, "codex_cli_rs", upstream.requests[0].Header.Get("Originator"))
+}
+
+func TestApplyOpenAITestCodexHeadersPairsOnlyOAuthIdentity(t *testing.T) {
+	const tuiUA = "codex-tui/0.140.2 (Mac OS X 14.0; arm64) iTerm (codex-tui; 0.140.2)"
+
+	oauthHeaders := make(http.Header)
+	applyOpenAITestCodexHeaders(oauthHeaders, &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"user_agent": tuiUA,
+		},
+	}, "text/event-stream")
+	require.Equal(t, tuiUA, oauthHeaders.Get("User-Agent"))
+	require.Equal(t, "codex-tui", oauthHeaders.Get("Originator"))
+
+	apiKeyHeaders := make(http.Header)
+	applyOpenAITestCodexHeaders(apiKeyHeaders, &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"user_agent": "third-party-client/1.0",
+		},
+	}, "application/json")
+	require.Equal(t, "third-party-client/1.0", apiKeyHeaders.Get("User-Agent"))
+	require.Equal(t, "codex_cli_rs", apiKeyHeaders.Get("Originator"))
 }
 
 func TestAccountTestService_OpenAIDefaultConnectionTestUsesGPT55(t *testing.T) {
@@ -421,4 +481,21 @@ func TestAccountTestService_OpenAI401SetsPermanentErrorOnly(t *testing.T) {
 	require.Zero(t, repo.rateLimitedID)
 	require.Zero(t, repo.clearedErrorID)
 	require.Nil(t, account.RateLimitResetAt)
+}
+
+func TestAccountTestService_RejectsUnsupportedPlatformInsteadOfTestingClaude(t *testing.T) {
+	ctx, recorder := newTestContext()
+	account := &Account{ID: 81, Platform: "unsupported", Type: AccountTypeOAuth}
+	repo := &openAIAccountTestRepo{
+		mockAccountRepoForGemini: mockAccountRepoForGemini{
+			accountsByID: map[int64]*Account{account.ID: account},
+		},
+	}
+	svc := &AccountTestService{accountRepo: repo}
+
+	err := svc.TestAccountConnection(ctx, account.ID, "", "", AccountTestModeDefault)
+
+	require.ErrorContains(t, err, "Unsupported account platform")
+	require.Contains(t, recorder.Body.String(), "Unsupported account platform")
+	require.NotContains(t, recorder.Body.String(), "claude-sonnet")
 }

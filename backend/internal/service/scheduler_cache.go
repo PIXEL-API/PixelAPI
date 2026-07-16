@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -13,6 +14,36 @@ const (
 	SchedulerModeMixed  = "mixed"
 	SchedulerModeForced = "forced"
 )
+
+var (
+	ErrSchedulerBucketRetired              = errors.New("scheduler bucket retired")
+	ErrSchedulerBucketWriteFenced          = errors.New("scheduler bucket write fenced")
+	ErrSchedulerGroupLifecycleLeaseInvalid = errors.New("scheduler group lifecycle lease invalid")
+	ErrSchedulerGroupLifecycleLeaseLost    = errors.New("scheduler group lifecycle lease lost")
+	ErrSchedulerLifecycleCacheRequired     = errors.New("scheduler cache does not support fenced lifecycle operations")
+)
+
+// SchedulerBucketWriteToken fences a snapshot writer to one bucket epoch.
+// The token must be captured before loading accounts from the database.
+type SchedulerBucketWriteToken struct {
+	Bucket SchedulerBucket
+	Epoch  int64
+}
+
+func (t SchedulerBucketWriteToken) ValidFor(bucket SchedulerBucket) bool {
+	return t.Epoch > 0 && t.Bucket == bucket
+}
+
+// SchedulerGroupLifecycleLease identifies the owner of one group's short-lived
+// retirement/reopen critical section.
+type SchedulerGroupLifecycleLease struct {
+	GroupID    int64
+	OwnerToken string
+}
+
+func (l SchedulerGroupLifecycleLease) ValidFor(groupID int64) bool {
+	return groupID > 0 && l.GroupID == groupID && l.OwnerToken != ""
+}
 
 type SchedulerBucket struct {
 	GroupID  int64
@@ -80,10 +111,27 @@ type SchedulerCache interface {
 	SetOutboxWatermark(ctx context.Context, id int64) error
 }
 
+// SchedulerLifecycleCache extends SchedulerCache with epoch-fenced writes and
+// persistent retirement. The legacy SetSnapshot method remains on
+// SchedulerCache for compatibility with narrow readers/test doubles; production
+// snapshot rebuilds must require this extension and fail fast when unavailable.
+type SchedulerLifecycleCache interface {
+	SchedulerCache
+	CaptureBucketWriteToken(ctx context.Context, bucket SchedulerBucket) (SchedulerBucketWriteToken, error)
+	SetSnapshotFenced(ctx context.Context, bucket SchedulerBucket, token SchedulerBucketWriteToken, accounts []Account) error
+	RetireBucket(ctx context.Context, bucket SchedulerBucket) error
+	ReopenBucket(ctx context.Context, bucket SchedulerBucket) (SchedulerBucketWriteToken, error)
+	TryAcquireGroupLifecycleLease(ctx context.Context, groupID int64, ttl time.Duration) (SchedulerGroupLifecycleLease, bool, error)
+	ReleaseGroupLifecycleLease(ctx context.Context, lease SchedulerGroupLifecycleLease) error
+}
+
 // SchedulerCandidateCache is an optional extension for caches that can return a
 // small sampled candidate set instead of materializing a whole scheduler bucket.
 type SchedulerCandidateCache interface {
-	// GetCandidateSnapshot reads a manually enabled candidate sample for bucket.
-	// hit=false means callers should fall back to the full scheduler snapshot.
-	GetCandidateSnapshot(ctx context.Context, bucket SchedulerBucket, limit int) ([]*Account, bool, error)
+	// GetCandidateSnapshot reads a capped candidate sample for bucket. Sampling
+	// applies when globalEnabled is true (dynamic system setting) or the bucket
+	// is in the static config allowlist, and only for buckets whose size exceeds
+	// threshold (threshold<=0 falls back to the built-in default). hit=false
+	// means callers should fall back to the full scheduler snapshot.
+	GetCandidateSnapshot(ctx context.Context, bucket SchedulerBucket, limit, threshold int, globalEnabled bool) ([]*Account, bool, error)
 }

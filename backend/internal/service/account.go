@@ -2,6 +2,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,7 +16,10 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
+
+const OpenAIAuthModeAgentIdentity = "agentIdentity"
 
 type Account struct {
 	ID            int64
@@ -75,6 +79,14 @@ type Account struct {
 	modelMappingCacheRawPtr         uintptr
 	modelMappingCacheRawLen         int
 	modelMappingCacheRawSig         uint64
+
+	// header_overrides 热路径缓存（非持久化字段，同 model_mapping 缓存先例）
+	headerOverrideCache               map[string]string
+	headerOverrideCacheReady          bool
+	headerOverrideCacheCredentialsPtr uintptr
+	headerOverrideCacheRawPtr         uintptr
+	headerOverrideCacheRawLen         int
+	headerOverrideCacheRawSig         uint64
 }
 
 const (
@@ -114,45 +126,81 @@ const (
 )
 
 func NormalizeAccountLevel(level string) string {
-	switch strings.ToLower(strings.TrimSpace(level)) {
-	case AccountLevelFree:
-		return AccountLevelFree
-	case AccountLevelPlus:
-		return AccountLevelPlus
-	case AccountLevelPro:
-		return AccountLevelPro
-	case AccountLevelTeam:
-		return AccountLevelTeam
-	default:
+	normalized := NormalizeAccountLevelKey(level)
+	if normalized == "" {
 		return AccountLevelUnknown
 	}
+	return normalized
+}
+
+func NormalizeAccountLevelKey(level string) string {
+	normalized := strings.ToLower(strings.TrimSpace(level))
+	normalized = strings.NewReplacer(" ", "-", "_", "-").Replace(normalized)
+	var b strings.Builder
+	lastDash := false
+	for _, r := range normalized {
+		switch {
+		case r >= 'a' && r <= 'z':
+			_, _ = b.WriteRune(r)
+			lastDash = false
+		case r >= '0' && r <= '9':
+			_, _ = b.WriteRune(r)
+			lastDash = false
+		case r == '-':
+			if b.Len() > 0 && !lastDash {
+				_, _ = b.WriteRune(r)
+				lastDash = true
+			}
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }
 
 func IsConcreteAccountLevel(level string) bool {
-	switch NormalizeAccountLevel(level) {
-	case AccountLevelFree, AccountLevelPlus, AccountLevelPro, AccountLevelTeam:
-		return true
-	default:
-		return false
-	}
+	return NormalizeAccountLevel(level) != AccountLevelUnknown
 }
 
 func IsUserSelectableOpenAIAccountLevel(level string) bool {
-	switch NormalizeAccountLevel(level) {
-	case AccountLevelFree, AccountLevelPlus, AccountLevelPro, AccountLevelTeam:
+	return IsUserSelectableOpenAIAccountLevelWithConfigs(level, DefaultOpenAIAccountLevelConfigs())
+}
+
+func RequiresUserOpenAIProxyLogin(level string) bool {
+	return RequiresUserOpenAIProxyLoginWithConfigs(level, DefaultOpenAIAccountLevelConfigs())
+}
+
+func RequiresUserAccountOAuthProxy(platform, accountLevel string) bool {
+	return RequiresUserAccountOAuthProxyWithConfigs(platform, accountLevel, DefaultOpenAIAccountLevelConfigs())
+}
+
+func RequiresUserAccountOAuthProxyWithConfigs(platform, accountLevel string, configs []OpenAIAccountLevelConfig) bool {
+	switch platform {
+	case PlatformAnthropic, PlatformGemini, PlatformAntigravity, PlatformGrok:
 		return true
+	case PlatformOpenAI:
+		return RequiresUserOpenAIProxyLoginWithConfigs(accountLevel, configs)
 	default:
 		return false
 	}
 }
 
-func RequiresUserOpenAIProxyLogin(level string) bool {
-	switch NormalizeAccountLevel(level) {
-	case AccountLevelPro:
-		return true
-	default:
-		return false
+func IsUserSelectableOpenAIAccountLevelWithConfigs(level string, configs []OpenAIAccountLevelConfig) bool {
+	normalized := NormalizeAccountLevel(level)
+	for _, cfg := range NormalizeOpenAIAccountLevelConfigs(configs) {
+		if cfg.Enabled && cfg.Key == normalized {
+			return true
+		}
 	}
+	return false
+}
+
+func RequiresUserOpenAIProxyLoginWithConfigs(level string, configs []OpenAIAccountLevelConfig) bool {
+	normalized := NormalizeAccountLevel(level)
+	for _, cfg := range NormalizeOpenAIAccountLevelConfigs(configs) {
+		if cfg.Enabled && cfg.Key == normalized {
+			return cfg.RequiresProxyLogin
+		}
+	}
+	return false
 }
 
 func IsOpenAIPlusAccount(platform, accountLevel string) bool {
@@ -160,27 +208,35 @@ func IsOpenAIPlusAccount(platform, accountLevel string) bool {
 }
 
 func NormalizeOpenAIAccountLevel(platform, accountLevel string, credentials, extra map[string]any) string {
+	return NormalizeOpenAIAccountLevelWithConfigs(platform, accountLevel, credentials, extra, DefaultOpenAIAccountLevelConfigs())
+}
+
+func NormalizeOpenAIAccountLevelWithConfigs(platform, accountLevel string, credentials, extra map[string]any, configs []OpenAIAccountLevelConfig) string {
 	level := NormalizeAccountLevel(accountLevel)
 	if platform != PlatformOpenAI {
 		return level
 	}
-	if IsConcreteAccountLevel(level) {
+	if OpenAIAccountLevelConfigByKeyIncludingDisabled(configs, level) != nil {
 		return level
 	}
-	if inferred := InferOpenAIAccountLevel(credentials, extra); IsConcreteAccountLevel(inferred) {
+	if inferred := InferOpenAIAccountLevelWithConfigs(credentials, extra, configs); OpenAIAccountLevelConfigByKeyIncludingDisabled(configs, inferred) != nil {
 		return inferred
 	}
 	return level
 }
 
 func InferOpenAIAccountLevel(credentials, extra map[string]any) string {
+	return InferOpenAIAccountLevelWithConfigs(credentials, extra, DefaultOpenAIAccountLevelConfigs())
+}
+
+func InferOpenAIAccountLevelWithConfigs(credentials, extra map[string]any, configs []OpenAIAccountLevelConfig) string {
 	for _, values := range []map[string]any{credentials, extra} {
 		for _, key := range []string{"plan_type", "chatgpt_plan_type", "subscription_plan"} {
 			raw, ok := values[key].(string)
 			if !ok {
 				continue
 			}
-			if inferred := NormalizeOpenAIPlanAccountLevel(raw); inferred != AccountLevelUnknown {
+			if inferred := NormalizeOpenAIPlanAccountLevelWithConfigs(raw, configs); inferred != AccountLevelUnknown {
 				return inferred
 			}
 		}
@@ -204,23 +260,25 @@ func OpenAIAccountPlanType(credentials, extra map[string]any) string {
 }
 
 func NormalizeOpenAIPlanAccountLevel(planType string) string {
-	if level := NormalizeAccountLevel(planType); IsConcreteAccountLevel(level) {
-		return level
-	}
-	normalized := strings.ToLower(strings.TrimSpace(planType))
-	normalized = strings.NewReplacer(" ", "", "-", "", "_", "").Replace(normalized)
-	switch {
-	case normalized == "chatgptfree":
-		return AccountLevelFree
-	case normalized == "chatgptplus" || strings.HasPrefix(normalized, "plus"):
-		return AccountLevelPlus
-	case normalized == "chatgptpro" || strings.HasPrefix(normalized, "chatgptpro") || normalized == "pro" || strings.HasPrefix(normalized, "pro"):
-		return AccountLevelPro
-	case normalized == "chatgptteam":
-		return AccountLevelTeam
-	default:
+	return NormalizeOpenAIPlanAccountLevelWithConfigs(planType, DefaultOpenAIAccountLevelConfigs())
+}
+
+func NormalizeOpenAIPlanAccountLevelWithConfigs(planType string, configs []OpenAIAccountLevelConfig) string {
+	token := normalizeOpenAIPlanAliasToken(planType)
+	if token == "" {
 		return AccountLevelUnknown
 	}
+	for _, cfg := range NormalizeOpenAIAccountLevelConfigs(configs) {
+		if !cfg.Enabled {
+			continue
+		}
+		for _, alias := range openAIAccountLevelAliasTokens(cfg) {
+			if matchOpenAIPlanAliasToken(token, alias) {
+				return cfg.Key
+			}
+		}
+	}
+	return AccountLevelUnknown
 }
 
 func NormalizeOpenAISharedPoolAccountLevel(level string) string {
@@ -237,50 +295,252 @@ func NormalizeOpenAISharedPoolRequiredLevel(level string) string {
 }
 
 func OpenAISharedPoolLevelRank(level string) int {
-	switch NormalizeOpenAISharedPoolAccountLevel(level) {
-	case AccountLevelFree:
-		return 1
-	case AccountLevelPlus:
-		return 2
-	case AccountLevelPro:
-		return 3
-	case AccountLevelTeam:
-		return 4
-	default:
-		return 0
+	return OpenAISharedPoolLevelRankWithConfigs(level, DefaultOpenAIAccountLevelConfigs())
+}
+
+func OpenAISharedPoolLevelRankWithConfigs(level string, configs []OpenAIAccountLevelConfig) int {
+	normalized := NormalizeOpenAISharedPoolAccountLevel(level)
+	for index, cfg := range NormalizeOpenAIAccountLevelConfigs(configs) {
+		if cfg.Enabled && cfg.Key == normalized {
+			return index + 1
+		}
 	}
+	return 0
 }
 
 func CanOpenAIAccountJoinSharedPool(accountLevel, requiredLevel string) bool {
+	return CanOpenAIAccountJoinSharedPoolWithConfigs(accountLevel, requiredLevel, DefaultOpenAIAccountLevelConfigs())
+}
+
+func CanOpenAIAccountJoinSharedPoolWithConfigs(accountLevel, requiredLevel string, configs []OpenAIAccountLevelConfig) bool {
 	required := NormalizeOpenAISharedPoolRequiredLevel(requiredLevel)
 	if required == "" {
 		return true
 	}
 	account := NormalizeOpenAISharedPoolAccountLevel(accountLevel)
-	accountRank := OpenAISharedPoolLevelRank(account)
-	requiredRank := OpenAISharedPoolLevelRank(required)
-	return accountRank > 0 && requiredRank > 0 && account == required
+	normalizedConfigs := NormalizeOpenAIAccountLevelConfigs(configs)
+	accountRank := OpenAISharedPoolLevelRankWithConfigs(account, normalizedConfigs)
+	requiredRank := OpenAISharedPoolLevelRankWithConfigs(required, normalizedConfigs)
+	if accountRank > 0 || requiredRank > 0 {
+		return accountRank > 0 && requiredRank > 0 && account == required
+	}
+	return account == required
 }
 
 func OpenAISharedPoolAllowedAccountLevels(requiredLevel string) []string {
+	return OpenAISharedPoolAllowedAccountLevelsWithConfigs(requiredLevel, DefaultOpenAIAccountLevelConfigs())
+}
+
+func OpenAISharedPoolAllowedAccountLevelsWithConfigs(requiredLevel string, configs []OpenAIAccountLevelConfig) []string {
 	required := NormalizeOpenAISharedPoolRequiredLevel(requiredLevel)
 	if required == "" {
 		return nil
 	}
-	requiredRank := OpenAISharedPoolLevelRank(required)
+	normalizedConfigs := NormalizeOpenAIAccountLevelConfigs(configs)
+	requiredRank := OpenAISharedPoolLevelRankWithConfigs(required, normalizedConfigs)
 	if requiredRank == 0 {
-		return nil
+		return []string{required}
 	}
-	levels := make([]string, 0, 5)
+	levels := make([]string, 0, 6)
 	if required == AccountLevelFree {
 		levels = append(levels, AccountLevelUnknown)
 	}
-	for _, level := range []string{AccountLevelFree, AccountLevelPlus, AccountLevelPro, AccountLevelTeam} {
-		if CanOpenAIAccountJoinSharedPool(level, required) {
-			levels = append(levels, level)
+	for _, cfg := range normalizedConfigs {
+		if cfg.Enabled && CanOpenAIAccountJoinSharedPoolWithConfigs(cfg.Key, required, normalizedConfigs) {
+			levels = append(levels, cfg.Key)
 		}
 	}
 	return levels
+}
+
+func ValidateConfiguredOpenAIAccountLevel(platform, level string, configs []OpenAIAccountLevelConfig) error {
+	if platform != PlatformOpenAI {
+		return nil
+	}
+	normalized := NormalizeAccountLevel(level)
+	if normalized == AccountLevelUnknown {
+		return nil
+	}
+	if OpenAIAccountLevelConfigByKeyIncludingDisabled(configs, normalized) == nil {
+		return fmt.Errorf("invalid OpenAI account level: %s", normalized)
+	}
+	return nil
+}
+
+func DefaultOpenAIAccountLevelConfigs() []OpenAIAccountLevelConfig {
+	return []OpenAIAccountLevelConfig{
+		{Key: AccountLevelFree, Label: "Free", Aliases: []string{"free", "chatgptfree"}, SortOrder: 10, Enabled: true},
+		{Key: AccountLevelPlus, Label: "Plus", Aliases: []string{"plus", "plus*", "chatgptplus"}, SortOrder: 20, Enabled: true},
+		{Key: AccountLevelPro, Label: "Pro", Aliases: []string{"pro", "pro*", "chatgptpro", "chatgptpro*"}, SortOrder: 30, Enabled: true, RequiresProxyLogin: true},
+		{Key: AccountLevelTeam, Label: "Team", Aliases: []string{"team", "team*", "chatgptteam"}, SortOrder: 40, Enabled: true},
+		{Key: AccountLevelK12, Label: "K12", Aliases: []string{"k12", "chatgptk12", "chatgpt-k12"}, SortOrder: 50, Enabled: true},
+	}
+}
+
+func NormalizeOpenAIAccountLevelConfigs(configs []OpenAIAccountLevelConfig) []OpenAIAccountLevelConfig {
+	if len(configs) == 0 {
+		configs = DefaultOpenAIAccountLevelConfigs()
+	}
+	out := make([]OpenAIAccountLevelConfig, 0, len(configs))
+	seenKeys := make(map[string]struct{}, len(configs))
+	seenAliases := make(map[string]string)
+	for _, cfg := range configs {
+		key := NormalizeAccountLevelKey(cfg.Key)
+		if key == "" || key == AccountLevelUnknown {
+			continue
+		}
+		if _, ok := seenKeys[key]; ok {
+			continue
+		}
+		label := strings.TrimSpace(cfg.Label)
+		if label == "" {
+			label = key
+		}
+		aliases := make([]string, 0, len(cfg.Aliases)+1)
+		for _, alias := range append([]string{key}, cfg.Aliases...) {
+			normalizedAlias := normalizeOpenAIPlanAliasPattern(alias)
+			if normalizedAlias == "" {
+				continue
+			}
+			if owner, ok := seenAliases[normalizedAlias]; ok && owner != key {
+				continue
+			}
+			seenAliases[normalizedAlias] = key
+			if !containsString(aliases, normalizedAlias) {
+				aliases = append(aliases, normalizedAlias)
+			}
+		}
+		if len(aliases) == 0 {
+			aliases = []string{key}
+		}
+		enabled := cfg.Enabled
+		out = append(out, OpenAIAccountLevelConfig{
+			Key:                key,
+			Label:              label,
+			Aliases:            aliases,
+			SortOrder:          cfg.SortOrder,
+			Enabled:            enabled,
+			RequiresProxyLogin: cfg.RequiresProxyLogin,
+		})
+		seenKeys[key] = struct{}{}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].SortOrder == out[j].SortOrder {
+			return out[i].Key < out[j].Key
+		}
+		return out[i].SortOrder < out[j].SortOrder
+	})
+	return out
+}
+
+func OpenAIAccountLevelConfigSelectable(configs []OpenAIAccountLevelConfig) []OpenAIAccountLevelConfig {
+	normalized := NormalizeOpenAIAccountLevelConfigs(configs)
+	out := make([]OpenAIAccountLevelConfig, 0, len(normalized))
+	for _, cfg := range normalized {
+		if cfg.Enabled {
+			out = append(out, cfg)
+		}
+	}
+	return out
+}
+
+func ValidateOpenAIAccountLevelConfigs(configs []OpenAIAccountLevelConfig) ([]OpenAIAccountLevelConfig, error) {
+	if len(configs) == 0 {
+		return nil, fmt.Errorf("openai_account_levels cannot be empty")
+	}
+	seenAliases := make(map[string]string)
+	for _, cfg := range configs {
+		key := NormalizeAccountLevelKey(cfg.Key)
+		if key == "" || key == AccountLevelUnknown {
+			continue
+		}
+		for _, alias := range append([]string{key}, cfg.Aliases...) {
+			normalizedAlias := normalizeOpenAIPlanAliasPattern(alias)
+			if normalizedAlias == "" {
+				continue
+			}
+			if owner, ok := seenAliases[normalizedAlias]; ok && owner != key {
+				return nil, fmt.Errorf("openai_account_levels alias %q is used by both %q and %q", normalizedAlias, owner, key)
+			}
+			seenAliases[normalizedAlias] = key
+		}
+	}
+	normalized := NormalizeOpenAIAccountLevelConfigs(configs)
+	if len(normalized) == 0 {
+		return nil, fmt.Errorf("openai_account_levels must contain at least one valid level")
+	}
+	enabledCount := 0
+	for _, cfg := range normalized {
+		if cfg.Enabled {
+			enabledCount++
+		}
+	}
+	if enabledCount == 0 {
+		return nil, fmt.Errorf("openai_account_levels must contain at least one enabled level")
+	}
+	return normalized, nil
+}
+
+func OpenAIAccountLevelConfigByKey(configs []OpenAIAccountLevelConfig, key string) *OpenAIAccountLevelConfig {
+	return OpenAIAccountLevelConfigByKeyWithEnabled(configs, key, true)
+}
+
+func OpenAIAccountLevelConfigByKeyIncludingDisabled(configs []OpenAIAccountLevelConfig, key string) *OpenAIAccountLevelConfig {
+	return OpenAIAccountLevelConfigByKeyWithEnabled(configs, key, false)
+}
+
+func OpenAIAccountLevelConfigByKeyWithEnabled(configs []OpenAIAccountLevelConfig, key string, requireEnabled bool) *OpenAIAccountLevelConfig {
+	normalized := NormalizeAccountLevel(key)
+	for _, cfg := range NormalizeOpenAIAccountLevelConfigs(configs) {
+		if cfg.Key == normalized && (!requireEnabled || cfg.Enabled) {
+			candidate := cfg
+			return &candidate
+		}
+	}
+	return nil
+}
+
+func openAIAccountLevelAliasTokens(cfg OpenAIAccountLevelConfig) []string {
+	return NormalizeOpenAIAccountLevelConfigs([]OpenAIAccountLevelConfig{cfg})[0].Aliases
+}
+
+func normalizeOpenAIPlanAliasToken(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	normalized = strings.NewReplacer(" ", "", "-", "", "_", "").Replace(normalized)
+	return normalized
+}
+
+func normalizeOpenAIPlanAliasPattern(value string) string {
+	trimmed := strings.TrimSpace(value)
+	hasWildcard := strings.HasSuffix(trimmed, "*")
+	if hasWildcard {
+		trimmed = strings.TrimSuffix(trimmed, "*")
+	}
+	normalized := normalizeOpenAIPlanAliasToken(trimmed)
+	if normalized == "" {
+		return ""
+	}
+	if hasWildcard {
+		return normalized + "*"
+	}
+	return normalized
+}
+
+func matchOpenAIPlanAliasToken(token, pattern string) bool {
+	if strings.HasSuffix(pattern, "*") {
+		prefix := strings.TrimSuffix(pattern, "*")
+		return prefix != "" && strings.HasPrefix(token, prefix)
+	}
+	return token == pattern
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func DefaultOAuthAccountConcurrencyForPlatform(platform string) int {
@@ -429,6 +689,9 @@ func (a *Account) isSchedulableAt(now time.Time, includeCodexQuotaProtection boo
 	if a.TempUnschedulableUntil != nil && now.Before(*a.TempUnschedulableUntil) {
 		return false
 	}
+	if paused, _ := shouldAutoPauseGrokAccountByQuotaAt(a, now); paused {
+		return false
+	}
 	if a.IsAPIKeyOrBedrock() && a.IsQuotaExceededAt(now) {
 		return false
 	}
@@ -478,6 +741,18 @@ func (a *Account) IsPrivacySet() bool {
 
 func (a *Account) IsGemini() bool {
 	return a.Platform == PlatformGemini
+}
+
+func (a *Account) IsGrok() bool {
+	return a.Platform == PlatformGrok
+}
+
+func (a *Account) IsGrokOAuth() bool {
+	return a.IsGrok() && a.Type == AccountTypeOAuth
+}
+
+func (a *Account) IsOpenAICompatible() bool {
+	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok)
 }
 
 func (a *Account) GeminiOAuthType() string {
@@ -798,6 +1073,9 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 		if a.Platform == domain.PlatformAntigravity {
 			return domain.DefaultAntigravityModelMapping
 		}
+		if a.Platform == domain.PlatformGrok {
+			return xai.DefaultModelMapping()
+		}
 		// Bedrock 默认映射由 forwardBedrock 统一处理（需配合 region prefix 调整）
 		return nil
 	}
@@ -805,6 +1083,9 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 		// Antigravity 平台使用默认映射
 		if a.Platform == domain.PlatformAntigravity {
 			return domain.DefaultAntigravityModelMapping
+		}
+		if a.Platform == domain.PlatformGrok {
+			return xai.DefaultModelMapping()
 		}
 		return nil
 	}
@@ -829,6 +1110,9 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 	// Antigravity 平台使用默认映射
 	if a.Platform == domain.PlatformAntigravity {
 		return domain.DefaultAntigravityModelMapping
+	}
+	if a.Platform == domain.PlatformGrok {
+		return xai.DefaultModelMapping()
 	}
 	return nil
 }
@@ -1230,6 +1514,72 @@ func isPoolModeRetryableStatus(statusCode int) bool {
 	}
 }
 
+// GetPoolModeRetryStatusCodes returns account-level retryable statuses for pool-mode retries.
+func (a *Account) GetPoolModeRetryStatusCodes() []int {
+	if a == nil || a.Credentials == nil {
+		return nil
+	}
+	raw, ok := a.Credentials["pool_mode_retry_status_codes"]
+	if !ok || raw == nil {
+		return nil
+	}
+	arr, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	seen := make(map[int]struct{}, len(arr))
+	codes := make([]int, 0, len(arr))
+	for _, v := range arr {
+		var code int
+		switch n := v.(type) {
+		case float64:
+			code = int(n)
+		case int:
+			code = n
+		case int64:
+			code = int(n)
+		case json.Number:
+			i, err := n.Int64()
+			if err != nil {
+				continue
+			}
+			code = int(i)
+		case string:
+			i, err := strconv.Atoi(strings.TrimSpace(n))
+			if err != nil {
+				continue
+			}
+			code = i
+		default:
+			continue
+		}
+		if code < 100 || code > 599 {
+			continue
+		}
+		if _, exists := seen[code]; exists {
+			continue
+		}
+		seen[code] = struct{}{}
+		codes = append(codes, code)
+	}
+	sort.Ints(codes)
+	return codes
+}
+
+// IsPoolModeRetryableStatus checks account-level pool-mode retry statuses.
+func (a *Account) IsPoolModeRetryableStatus(statusCode int) bool {
+	codes := a.GetPoolModeRetryStatusCodes()
+	if codes == nil {
+		return isPoolModeRetryableStatus(statusCode)
+	}
+	for _, code := range codes {
+		if code == statusCode {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *Account) GetCustomErrorCodes() []int {
 	if a.Credentials == nil {
 		return nil
@@ -1301,6 +1651,48 @@ func (a *Account) IsAnthropic() bool {
 
 func (a *Account) IsOpenAIOAuth() bool {
 	return a.IsOpenAI() && a.Type == AccountTypeOAuth
+}
+
+// IsOpenAIAgentIdentity reports whether the account uses Codex Agent Identity
+// credentials instead of a refreshable OpenAI OAuth token.
+func (a *Account) IsOpenAIAgentIdentity() bool {
+	if a == nil || !a.IsOpenAIOAuth() {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(a.GetCredential("auth_mode")), OpenAIAuthModeAgentIdentity)
+}
+
+// ValidateOpenAIAgentIdentityPrivateKey validates the base64-encoded PKCS#8
+// Ed25519 private key without returning or logging any key material.
+func ValidateOpenAIAgentIdentityPrivateKey(encoded string) error {
+	_, err := parseAgentIdentityPrivateKey(encoded)
+	return err
+}
+
+type accountCredentialFieldExistenceChecker interface {
+	ExistsByCredentialField(ctx context.Context, key, value string) (bool, error)
+}
+
+func credentialFieldExists(ctx context.Context, repository any, key, value string) (bool, error) {
+	checker, ok := repository.(accountCredentialFieldExistenceChecker)
+	if !ok {
+		return false, errors.New("account repository does not support credential field lookup")
+	}
+	return checker.ExistsByCredentialField(ctx, key, value)
+}
+
+// OpenAIAgentIdentityRuntimeIDExists performs a narrow JSONB lookup.
+// Repositories that cannot provide the lookup are rejected instead of falling
+// back to loading and scanning every account.
+func (s *AccountService) OpenAIAgentIdentityRuntimeIDExists(ctx context.Context, runtimeID string) (bool, error) {
+	runtimeID = strings.TrimSpace(runtimeID)
+	if runtimeID == "" {
+		return false, errors.New("Agent Identity runtime id is required")
+	}
+	if s == nil || s.accountRepo == nil {
+		return false, errors.New("account repository is required for Agent Identity duplicate detection")
+	}
+	return credentialFieldExists(ctx, s.accountRepo, "agent_runtime_id", runtimeID)
 }
 
 func (a *Account) GetCodex5hLimitPercent() float64 {
@@ -1640,6 +2032,48 @@ func (a *Account) GetOpenAIAccessToken() string {
 
 func (a *Account) GetOpenAIRefreshToken() string {
 	if !a.IsOpenAIOAuth() {
+		return ""
+	}
+	return a.GetCredential("refresh_token")
+}
+
+func (a *Account) GetGrokBaseURL() string {
+	if !a.IsGrok() {
+		return ""
+	}
+	if a.IsGrokOAuth() {
+		// OAuth subscription credentials must never be sent to an account-level
+		// custom host, even when unsafe development overrides are enabled.
+		return xai.DefaultCLIBaseURL
+	}
+	baseURL := a.GetCredential("base_url")
+	if baseURL != "" {
+		return baseURL
+	}
+	return xai.DefaultBaseURL
+}
+
+func (a *Account) GetGrokMediaBaseURL() string {
+	if !a.IsGrok() {
+		return ""
+	}
+	if a.IsGrokOAuth() {
+		// OAuth text requests use the CLI gateway, while large media payloads
+		// must use xAI's official API route.
+		return xai.DefaultBaseURL
+	}
+	return a.GetGrokBaseURL()
+}
+
+func (a *Account) GetGrokAccessToken() string {
+	if !a.IsGrok() {
+		return ""
+	}
+	return a.GetCredential("access_token")
+}
+
+func (a *Account) GetGrokRefreshToken() string {
+	if !a.IsGrokOAuth() {
 		return ""
 	}
 	return a.GetCredential("refresh_token")

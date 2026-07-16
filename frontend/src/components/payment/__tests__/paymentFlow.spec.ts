@@ -4,6 +4,7 @@ import {
   buildCreateOrderPayload,
   clearPaymentRecoverySnapshot,
   decidePaymentLaunch,
+  extractAlipayJSAPIH5URL,
   getVisibleMethods,
   readPaymentRecoverySnapshot,
   readPaymentRecoverySnapshotFromStorage,
@@ -33,6 +34,13 @@ function createOrderResult(overrides: Partial<CreateOrderResult> = {}): CreateOr
     expires_at: '2099-01-01T00:10:00.000Z',
     ...overrides,
   }
+}
+
+function alipayAppOpenURL(targetURL: string): string {
+  const openURL = new URL('alipays://platformapi/startapp')
+  openURL.searchParams.set('appId', '20000067')
+  openURL.searchParams.set('url', targetURL)
+  return openURL.toString()
 }
 
 describe('getVisibleMethods', () => {
@@ -197,6 +205,94 @@ describe('decidePaymentLaunch', () => {
     expect(decision.kind).toBe('wechat_jsapi')
     expect(decision.jsapi?.appId).toBe('wx123')
     expect(decision.paymentState.orderType).toBe('subscription')
+  })
+
+  it('returns alipay app redirect when jsapi mode waits for in-app payment', () => {
+    const h5URL = 'https://app.example.com/payment/alipay-jsapi?resume_token=resume-alipay&out_trade_no=sub2_alipay'
+    const decision = decidePaymentLaunch(createOrderResult({
+      pay_url: alipayAppOpenURL(h5URL),
+      payment_mode: 'jsapi',
+      resume_token: 'resume-alipay',
+      out_trade_no: 'sub2_alipay',
+    }), {
+      visibleMethod: 'alipay',
+      orderType: 'balance',
+      isMobile: true,
+    })
+
+    expect(decision.kind).toBe('alipay_app_redirect')
+    expect(decision.paymentState.payUrl).toContain('alipays://platformapi/startapp')
+    expect(decision.recovery.resumeToken).toBe('resume-alipay')
+  })
+
+  it('renders a same-origin alipay jsapi h5 url as QR on desktop', () => {
+    const h5URL = 'https://app.example.com/payment/alipay-jsapi?resume_token=resume-alipay&out_trade_no=sub2_alipay'
+    const decision = decidePaymentLaunch(createOrderResult({
+      pay_url: alipayAppOpenURL(h5URL),
+      payment_mode: 'jsapi',
+      resume_token: 'resume-alipay',
+      out_trade_no: 'sub2_alipay',
+    }), {
+      visibleMethod: 'alipay',
+      orderType: 'balance',
+      isMobile: false,
+      currentOrigin: 'https://app.example.com',
+    })
+
+    expect(decision.kind).toBe('qr_waiting')
+    expect(decision.paymentState.payUrl).toContain('alipays://platformapi/startapp')
+    expect(decision.paymentState.qrCode).toBe(h5URL)
+    expect(decision.paymentState.paymentMode).toBe('jsapi')
+    expect(decision.recovery.resumeToken).toBe('resume-alipay')
+  })
+
+  it('rejects alipay jsapi QR extraction when origin, token, or order number mismatches', () => {
+    const validURL = alipayAppOpenURL('https://app.example.com/payment/alipay-jsapi?resume_token=resume-alipay&out_trade_no=sub2_alipay')
+    const mismatchedOriginURL = alipayAppOpenURL('https://evil.example.com/payment/alipay-jsapi?resume_token=resume-alipay&out_trade_no=sub2_alipay')
+    const mismatchedTokenURL = alipayAppOpenURL('https://app.example.com/payment/alipay-jsapi?resume_token=other-token&out_trade_no=sub2_alipay')
+    const mismatchedOrderURL = alipayAppOpenURL('https://app.example.com/payment/alipay-jsapi?resume_token=resume-alipay&out_trade_no=other_order')
+
+    expect(extractAlipayJSAPIH5URL(validURL, {
+      resumeToken: 'resume-alipay',
+      outTradeNo: 'sub2_alipay',
+      currentOrigin: 'https://app.example.com',
+    })).toBe('https://app.example.com/payment/alipay-jsapi?resume_token=resume-alipay&out_trade_no=sub2_alipay')
+    expect(extractAlipayJSAPIH5URL(mismatchedOriginURL, {
+      resumeToken: 'resume-alipay',
+      outTradeNo: 'sub2_alipay',
+      currentOrigin: 'https://app.example.com',
+    })).toBe('')
+    expect(extractAlipayJSAPIH5URL(mismatchedTokenURL, {
+      resumeToken: 'resume-alipay',
+      outTradeNo: 'sub2_alipay',
+      currentOrigin: 'https://app.example.com',
+    })).toBe('')
+    expect(extractAlipayJSAPIH5URL(mismatchedOrderURL, {
+      resumeToken: 'resume-alipay',
+      outTradeNo: 'sub2_alipay',
+      currentOrigin: 'https://app.example.com',
+    })).toBe('')
+    expect(extractAlipayJSAPIH5URL(validURL, {
+      resumeToken: 'resume-alipay',
+      outTradeNo: 'sub2_alipay',
+    })).toBe('')
+  })
+
+  it('returns alipay jsapi launch when tradeNO is ready', () => {
+    const decision = decidePaymentLaunch(createOrderResult({
+      result_type: 'jsapi_ready',
+      payment_mode: 'jsapi',
+      alipay_jsapi: {
+        tradeNO: '2026070122001400000000000001',
+      },
+    }), {
+      visibleMethod: 'alipay',
+      orderType: 'balance',
+      isMobile: true,
+    })
+
+    expect(decision.kind).toBe('alipay_jsapi')
+    expect(decision.alipayJSAPI?.tradeNO).toBe('2026070122001400000000000001')
   })
 })
 

@@ -1,13 +1,58 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestCoderOpenAIWSClientConnDoesNotSupportIdlePingWithoutReader(t *testing.T) {
+	var conn *coderOpenAIWSClientConn
+	require.False(t, conn.SupportsIdlePingWithoutReader())
+}
+
+func TestCoderOpenAIWSClientDialer_PreservesBoundedHandshakeBodyWithoutLoggingIt(t *testing.T) {
+	const responseBody = `{"error":{"code":"invalid_task_id","secret":"must-not-log"}}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Request-Id", "request-401")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(responseBody))
+	}))
+	defer server.Close()
+
+	dialer := newDefaultOpenAIWSClientDialer()
+	_, status, headers, err := dialer.Dial(context.Background(), "ws"+strings.TrimPrefix(server.URL, "http"), nil, "")
+	require.Error(t, err)
+	require.Equal(t, http.StatusUnauthorized, status)
+	require.Equal(t, "request-401", headers.Get("X-Request-Id"))
+	var handshakeErr *openAIWSHandshakeError
+	require.ErrorAs(t, err, &handshakeErr)
+	require.Equal(t, responseBody, string(handshakeErr.Body))
+	require.NotContains(t, err.Error(), "must-not-log")
+}
+
+func TestCoderOpenAIWSClientDialer_BoundsOversizedHandshakeBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(strings.Repeat("x", (8<<10)+1)))
+	}))
+	defer server.Close()
+
+	dialer := newDefaultOpenAIWSClientDialer()
+	_, _, _, err := dialer.Dial(context.Background(), "ws"+strings.TrimPrefix(server.URL, "http"), nil, "")
+	require.Error(t, err)
+	var handshakeErr *openAIWSHandshakeError
+	require.ErrorAs(t, err, &handshakeErr)
+	require.NotEmpty(t, handshakeErr.Body)
+	require.LessOrEqual(t, len(handshakeErr.Body), 8<<10)
+	require.NotContains(t, err.Error(), strings.Repeat("x", 32))
+}
 
 func TestCoderOpenAIWSClientDialer_ProxyHTTPClientReuse(t *testing.T) {
 	dialer := newDefaultOpenAIWSClientDialer()

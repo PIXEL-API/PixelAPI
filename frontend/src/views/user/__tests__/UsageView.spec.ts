@@ -307,6 +307,13 @@ describe('user UsageView tooltip', () => {
       reader.onerror = () => reject(reader.error)
       reader.readAsText(exportedBlob!)
     })
+    const csvBytes = await new Promise<Uint8Array>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(new Uint8Array(reader.result as ArrayBuffer))
+      reader.onerror = () => reject(reader.error)
+      reader.readAsArrayBuffer(exportedBlob!)
+    })
+    expect(Array.from(csvBytes.slice(0, 3))).toEqual([0xef, 0xbb, 0xbf])
     expect(csvText).toContain('Cache Hit Rate')
     expect(csvText).toContain('98.6%')
     const hasSortedExportQuery = query.mock.calls.some((call) => {

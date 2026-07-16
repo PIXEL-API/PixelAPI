@@ -101,6 +101,7 @@ export default {
       claude: "Claude",
       gemini: "Gemini",
       antigravity: "Antigravity",
+      grok: "Grok",
       more: "更多",
     },
     // CTA 区块
@@ -582,6 +583,17 @@ export default {
       completing: "正在完成注册...",
       completeRegistrationFailed: "注册失败，请检查邀请码后重试。",
     },
+    oidcAuthorize: {
+      title: "授权应用",
+      authorizing: "正在授权",
+      authorizingHint: "正在确认您的 Pixel 账户并返回社区，请稍候。",
+      failed: "授权未完成",
+      failedHint: "暂时无法完成授权，请重试。",
+      missingRequest: "缺少授权请求标识，请返回社区重新发起登录。",
+      invalidRedirect: "授权服务返回了无效的跳转地址，已停止跳转。",
+      retry: "重试授权",
+      backHome: "返回首页",
+    },
     oauthFlow: {
       profileDetailsTitle: "使用 {providerName} 资料",
       profileDetailsDescription:
@@ -737,6 +749,12 @@ export default {
   groups: {
     subscription: "订阅",
     private: "私有",
+    rateLabel: "倍率",
+    rateSources: {
+      newUserGroup: "新客",
+      userGroup: "专属",
+      accountShare: "账号",
+    },
   },
 
   accountShare: {
@@ -808,6 +826,13 @@ export default {
     shareValidationFailedToRun: "重新校验失败",
     setFreeLevel: "标记为 Free",
     verifyPlus: "校验 Plus",
+    bulkMarkFree: "批量标记 Free",
+    bulkVerifyPlus: "批量校验 Plus",
+    noLevelVerifiableAccounts: "请选择 OpenAI OAuth 账号后再执行账号等级操作",
+    bulkMarkFreeSubmitted: "已提交批量标记 Free 任务，共 {count} 个账号",
+    bulkMarkFreeCompleted: "批量标记 Free 已完成，共 {count} 个账号",
+    bulkVerifyPlusSubmitted: "已提交批量校验 Plus 任务，共 {count} 个账号",
+    bulkVerifyPlusCompleted: "批量校验 Plus 已完成，共 {count} 个账号",
     levelUpdatingFree: "正在更新账号等级...",
     levelVerifyingPlus: "正在使用 gpt-5.4 校验 Plus 可用性...",
     levelFreeUpdated: "账号等级已更新为 Free",
@@ -856,9 +881,44 @@ export default {
     geminiAIStudio: "AI Studio",
     geminiAIStudioDesc: "管理员配置的 OAuth 客户端",
     apiKeyRequired: "请输入 API Key",
-    created: "创建时间",
-    lastUsedAt: "上次使用",
-    neverUsed: "从未使用",
+    moderationSettings: "审核设置",
+    moderationEnable: "启用审核",
+    moderationMode: "审核模式",
+    moderationModeObserve: "仅观察",
+    moderationModePreBlock: "发送前阻断",
+    moderationProvider: "审核服务商",
+    moderationProviderOpenAI: "OpenAI",
+    moderationProviderZhipu: "智谱",
+    moderationModel: "审核模型",
+    moderationApiKey: "审核 API Key",
+    moderationApiKeyConfigured: "当前 Key：{key}",
+    moderationApiKeyKeep: "留空则保留当前 Key",
+    moderationApiKeyRequired: "请输入审核 API Key",
+    moderationSampleRate: "采样率",
+    moderationBlockMessage: "阻断提示",
+    moderationDefaultBlockMessage: "内容审核命中风险规则，请调整输入后重试",
+    moderationTest: "审核测试",
+    moderationRunTest: "运行测试",
+    moderationTestPlaceholder: "输入测试内容。用户日志不会展示原始 prompt。",
+    moderationResult: "结果",
+    moderationHit: "命中",
+    moderationPass: "通过",
+    moderationCategory: "类型",
+    moderationAction: "动作",
+    moderationAllowed: "放行",
+    moderationBlocked: "阻断",
+    moderationLogs: "审核日志",
+    moderationTime: "时间",
+    moderationNoLogs: "暂无审核日志",
+    moderationSaved: "审核设置已保存",
+    moderationLoadFailed: "加载审核设置失败",
+    moderationSaveFailed: "保存审核设置失败",
+    moderationTestFailed: "审核测试失败",
+    moderationLogsFailed: "加载审核日志失败",
+	created: "创建时间",
+	lastUsedAt: "上次使用",
+	lastUsedIP: "最近使用 IP",
+	neverUsed: "从未使用",
     selectedGroups: "已选 {count} 个分组",
     importTitle: "导入个人账号",
     importHint: "粘贴账号凭证或导入文件，个人导入只会创建官方 OAuth 账号。",
@@ -867,33 +927,41 @@ export default {
     importWarningChoosePlatform:
       "请先选择导入平台。单次最多导入 {max} 个账号；API Key、URL、Upstream、Cookie 会被拒绝。",
     importWarningOpenAI:
-      "单次最多导入 {max} 个 OpenAI 账号。Free / Plus / Team 支持 JSON 或 Refresh Token；Pro 必须通过账号登录导入。",
+      "单次最多导入 {max} 个 OpenAI 账号。可导入等级由管理员后台配置；标记为需要代理登录的等级必须通过账号登录导入。",
     importWarningClaude:
       "单次最多导入 {max} 个 Claude 账号。支持 Sub2API OAuth JSON 或 Claude Session Key。",
     importWarningGemini:
       "单次最多导入 {max} 个 Gemini 账号。仅支持带 Gemini 平台信息的官方 OAuth JSON。",
     importWarningAntigravity:
       "单次最多导入 {max} 个 Antigravity 账号。仅支持带 Antigravity 平台信息的官方 OAuth JSON。",
+    importWarningGrok:
+      "单次最多导入 {max} 个 Grok 账号。仅支持带 Grok/xAI 平台信息的官方 OAuth JSON。",
     importPlatform: "导入平台",
     importPlatformRequired: "请先选择导入平台",
     importPlatformOpenAI: "ChatGPT / Codex 账号",
     importPlatformClaude: "Claude 官方账号",
     importPlatformGemini: "Gemini 官方账号",
     importPlatformAntigravity: "Antigravity 官方账号",
+    importPlatformGrok: "Grok / xAI 官方账号",
     importPlatformHintClaude:
       "Claude 导入不会使用 OpenAI 账号等级。请选择 Claude OAuth JSON 或 Claude Session Key。",
     importPlatformHintGemini:
       "Gemini 导入不会使用 OpenAI 账号等级。请导入包含 platform: gemini 的 OAuth JSON。",
     importPlatformHintAntigravity:
       "Antigravity 导入不会使用 OpenAI 账号等级。请导入包含 platform: antigravity 的 OAuth JSON。",
+    importPlatformHintGrok:
+      "Grok 导入不会使用 OpenAI 账号等级。请导入包含 platform: grok 或 platform: xai 的 OAuth JSON。",
     importAccountLevel: "OpenAI 账号等级",
     importAccountLevelHint:
-      "仅导入 OpenAI 账号时需要选择。OpenAI 会按所选等级严格校验；无法确认等级时按 Free 处理；Pro 必须通过账号登录导入。",
+      "仅导入 OpenAI 账号时需要选择。OpenAI 会按所选等级严格校验；无法确认等级时按后台默认规则处理；需要代理登录的等级必须通过账号登录导入。",
     importAccountLevelRequired: "请先选择 OpenAI 账号等级",
     importLevelFree: "无法确认等级时归入 Free",
     importLevelPlus: "只接受实际 Plus 账号",
     importLevelPro: "必须账号登录并选择 IP",
     importLevelTeam: "支持 JSON 导入，仅接受实际 Team 账号",
+    importLevelK12: "支持 JSON 导入，仅接受实际 K12 账号",
+    importLevelDirect: "{level} 支持凭证导入",
+    importLevelRequiresProxy: "{level} 需要账号登录并选择代理 IP",
     importOAuthOnlyHint:
       "当前等级只能通过 OpenAI 账号登录导入。请先选择代理 IP，再生成登录链接并粘贴回调结果。",
     importOAuthNamePlaceholder: "可选；留空则使用 OpenAI 邮箱",
@@ -936,6 +1004,25 @@ export default {
     proxyPortInvalid: "代理端口必须在 1-65535 之间",
     proxyCreateFailed: "添加代理 IP 失败",
     proxyCreatedSuccess: "代理 IP 已添加并选中",
+    manageProxies: "管理代理 IP",
+    proxyManagerTitle: "我的代理 IP",
+    proxyManagerDescription: "修改或删除自己添加的代理 IP，修改后所有关联账号会立即使用新配置。",
+    proxyManagerDeleteRule: "仍被账号使用的代理不能删除，请先将这些账号替换到其它代理。",
+    proxyManagerEmpty: "暂未添加自己的代理 IP",
+    proxyEditTitle: "编辑代理 IP",
+    proxyPasswordKeepHint: "密码不会回显；留空表示保持当前密码不变。",
+    proxyPasswordKeepPlaceholder: "留空保持当前密码",
+    proxyClearPassword: "清除已保存的代理密码",
+    proxyUpdatedSuccess: "代理 IP 已更新",
+    proxyUpdateFailed: "更新代理 IP 失败",
+    proxyDeletedSuccess: "代理 IP 已删除",
+    proxyDeleteFailed: "删除代理 IP 失败",
+    proxyDeleteTitle: "删除代理 IP",
+    proxyDeleteConfirm: "确定删除代理“{name}”吗？此操作无法撤销。",
+    proxyDeleteBlocked: "该代理仍被账号使用，请先替换关联账号的代理 IP",
+    proxyAccountCount: "{count} 个账号",
+    proxyRequiredReplaceOnly: "此账号必须使用代理 IP，只能替换为其它代理，不能解除关联。",
+    proxyOptionalEditHint: "可以替换代理，或选择“无代理”解除当前关联。",
     importOAuthCallbackRequired:
       "请先生成登录链接，并粘贴包含 code 和 state 的 OpenAI 回调结果",
     importTextMode: "批量文本",
@@ -954,6 +1041,8 @@ export default {
       "Gemini 仅接受包含 Gemini 平台信息的 OAuth JSON，不接收普通 Token。",
     importTextHintAntigravity:
       "Antigravity 仅接受包含 Antigravity 平台信息的 OAuth JSON，不接收普通 Token。",
+    importTextHintGrok:
+      "Grok 仅接受包含 Grok/xAI 平台信息的 OAuth JSON，不接收普通 Token。",
     importTextRequired: "请粘贴账号数据",
     importFile: "数据文件",
     importSelectFile: "请选择 JSON 或 TXT 数据文件",
@@ -1007,10 +1096,12 @@ export default {
     },
     allGroups: "全部分组",
     allStatus: "全部状态",
+    columnSettings: "列设置",
     createKey: "创建密钥",
     editKey: "编辑密钥",
     deleteKey: "删除密钥",
     deleteConfirmMessage: "确定要删除 '{name}' 吗？此操作无法撤销。",
+    id: "ID",
     apiKey: "API 密钥",
     group: "分组",
     noGroup: "无分组",
@@ -1022,6 +1113,13 @@ export default {
     importToCcSwitch: "导入到 CCS",
     openImagePlayground: "图片",
     openImagePlaygroundFailed: "打开图片项目失败",
+    imagePlaygroundModelDialog: {
+      title: "选择图片模型",
+      description: "图片项目不会再自动补充默认模型。请输入本次调用要使用的图片模型。",
+      modelLabel: "图片模型",
+      modelPlaceholder: "例如 gpt-image-1.5",
+      open: "打开图片项目",
+    },
     enable: "启用",
     disable: "禁用",
     nameLabel: "名称",
@@ -1046,6 +1144,23 @@ export default {
     groupChangedSuccess: "分组更换成功",
     failedToChangeGroup: "更换分组失败",
     groupRequired: "请选择分组",
+    accountShareConflict: {
+      deleteTitle: "暂时无法删除 API 密钥",
+      changeGroupTitle: "暂时无法更换分组",
+      blockedKey: "API 密钥“{name}”仍有关联账号",
+      description: "为避免正在进行的请求中断或预约失效，请先处理账号广场中的关联记录。",
+      activeLabel: "正在使用",
+      queuedLabel: "预约中",
+      detailsUnavailable: "已确认存在使用中或预约中的关联，但暂时无法加载数量。请前往账号广场查看并处理。",
+      stepsTitle: "完成以下操作后即可重试",
+      stepOpen: "前往账号广场的关联处理页面。",
+      stepResolve: "结束正在使用的账号，并将预约项移出队列。",
+      stepRetry: "全部处理完成后返回 API 密钥页面，重新执行当前操作。",
+      later: "稍后处理",
+      resolve: "前往账号广场处理",
+      checkFailed: "无法确认账号广场关联状态，当前操作已停止，请稍后重试",
+      navigationFailed: "打开账号广场失败",
+    },
     usage: "用量",
     today: "今日",
     total: "近30天",
@@ -1063,6 +1178,11 @@ export default {
         "此 API 密钥尚未分配分组，请先在密钥列表中点击分组列进行分配，然后才能查看使用配置。",
       openai: {
         description: "将以下配置文件添加到 Codex CLI 配置目录中。",
+        authModeTitle: "Codex 认证模式",
+        authModeDescription:
+          "兼容模式保留旧版 Codex 配置；API Key Mode 用于启用客户端图片执行器。",
+        authModeLegacy: "兼容模式",
+        authModeApiKey: "API Key Mode",
         configTomlHint: "请确保以下内容位于 config.toml 文件的开头部分",
         note: "请确保配置目录存在。macOS/Linux 用户可运行 mkdir -p ~/.codex 创建目录。",
         noteWindows:
@@ -1073,6 +1193,7 @@ export default {
         geminiCli: "Gemini CLI",
         codexCli: "Codex CLI",
         codexCliWs: "Codex CLI (WebSocket)",
+        grokCli: "Grok CLI",
         opencode: "OpenCode",
       },
       antigravity: {
@@ -1090,6 +1211,15 @@ export default {
           "将以下环境变量添加到您的终端配置文件或直接在终端中运行，以配置 Gemini CLI 访问。",
         modelComment: "如果你有 Gemini 3 权限可以填：gemini-3-pro-preview",
         note: "这些环境变量将在当前终端会话中生效。如需永久配置，请将其添加到 ~/.bashrc、~/.zshrc 或相应的配置文件中。",
+      },
+      grok: {
+        description:
+          "配置 Grok Build 或 OpenCode，让 Responses API 请求通过当前 Grok 分组发送。",
+        configTomlHint:
+          "如已有 config.toml，请先备份再合并此模型配置。保存后运行 grok inspect 验证生效配置。",
+        note: "保存为 ~/.grok/config.toml，然后运行 grok inspect，并在 /model 中选择 grok。",
+        noteWindows:
+          "保存为 %USERPROFILE%\\.grok\\config.toml，然后运行 grok inspect，并在 /model 中选择 grok。",
       },
       opencode: {
         title: "OpenCode 配置示例",
@@ -1135,6 +1265,7 @@ export default {
     quotaResetSuccess: "额度重置成功",
     failedToResetQuota: "重置额度失败",
     rateLimitColumn: "速率限制",
+    currentConcurrency: "当前并发",
     rateLimitSection: "速率限制",
     resetUsage: "重置",
     rateLimit5h: "5小时限额 (USD)",
@@ -1189,6 +1320,9 @@ export default {
     accountBilled: "账号计费",
     accountMultiplier: "账号倍率",
     avgDuration: "平均耗时",
+    latency: "延迟健康",
+    latencyFirstToken: "首字",
+    latencyDuration: "总耗时",
     inSelectedRange: "所选范围内",
     perRequest: "每次请求",
     apiKeyFilter: "API 密钥",
@@ -1232,6 +1366,24 @@ export default {
     tabs: {
       requests: "请求记录",
       balanceLedger: "余额流水",
+      usage: "用量明细",
+      errors: "错误请求",
+      ranking: "用户排行",
+    },
+    errors: {
+      phase: "阶段",
+      statusCode: "状态码",
+      allPhases: "全部阶段",
+      allStatuses: "全部状态码",
+      failedToLoad: "加载错误请求失败",
+      retry: "重试",
+      phases: {
+        request: "请求",
+        auth: "鉴权",
+        routing: "路由",
+        network: "网络",
+        internal: "内部",
+      },
     },
     balanceLedger: {
       direction: "方向",
@@ -1341,6 +1493,8 @@ export default {
       openai: "OpenAI",
       anthropic: "Anthropic",
       gemini: "Gemini",
+      antigravity: "Antigravity",
+      grok: "Grok",
     },
     extraModelsHeader: "附加模型",
     extraModelsEmpty: "无附加模型",
@@ -1429,8 +1583,17 @@ export default {
     description: "查看您可访问的渠道与其支持的模型、定价",
     searchPlaceholder: "搜索渠道或模型...",
     empty: "暂无可用渠道",
+    emptyHint: "请尝试调整搜索关键词，或稍后刷新页面",
     noModels: "未配置模型",
+    noGroups: "暂无可访问分组",
     noPricing: "未配置定价",
+    viewModelDetails: "查看 {model} 详情",
+    summary: "{channels} 个渠道 · {platforms} 个平台 · {models} 个模型",
+    counts: {
+      platforms: "{count} 个平台",
+      groups: "{count} 个分组",
+      models: "{count} 个模型",
+    },
     exclusive: "专属",
     public: "公开",
     exclusiveTooltip: "管理员授权给你的专属分组",
@@ -1447,6 +1610,7 @@ export default {
       supportedModels: "支持模型",
     },
     pricing: {
+      title: "模型定价",
       billingMode: "计费模式",
       billingModeToken: "按 Token",
       billingModePerRequest: "按次",
@@ -2291,9 +2455,10 @@ export default {
       activeUsers: "活跃用户",
       accounts: "账号",
       totalAccounts: "账号总数",
-      activeAccounts: "活跃账号",
-      todayRequests: "今日请求",
-      totalRequests: "总请求数",
+		activeAccounts: "活跃账号",
+		todayRequests: "今日请求",
+		totalRequests: "总请求数",
+		newUsersToday: "今日新增用户",
       todayCost: "今日消费",
       totalCost: "总消费",
       actual: "实际",
@@ -2304,9 +2469,13 @@ export default {
       input: "输入",
       output: "输出",
       cacheToday: "今日缓存",
-      performance: "性能指标",
-      avgResponse: "平均响应",
-      averageTime: "平均时间",
+		performance: "性能指标",
+		avgResponse: "平均响应",
+		averageTime: "平均时间",
+		active: "活跃",
+		ok: "正常",
+		err: "错误",
+		create: "创建",
       timeRange: "时间范围",
       granularity: "粒度",
       day: "按天",
@@ -2314,8 +2483,9 @@ export default {
       modelDistribution: "模型分布",
       groupDistribution: "分组使用分布",
       metricTokens: "按 Token",
-      metricActualCost: "按实际消费",
-      tokenUsageTrend: "Token 使用趋势",
+		metricActualCost: "按实际消费",
+		tokenUsageTrend: "Token 使用趋势",
+		userUsageTrend: "用户使用趋势（Top 12）",
       noDataAvailable: "暂无数据",
       model: "模型",
       group: "分组",
@@ -2392,7 +2562,6 @@ export default {
         usage: "用量拆账",
         platformLedger: "平台台账",
         adjustments: "调整项",
-        breakdown: "Top 明细",
       },
       fields: {
         paidAmount: "已支付金额",
@@ -2432,43 +2601,6 @@ export default {
         sharePlatformFee: "共享平台留存",
         shareNetProfit: "共享净收益",
         shareSettlementCount: "共享结算笔数",
-      },
-      breakdown: {
-        consumers: "消费用户",
-        shareOwners: "账号主收益",
-        users: "用户",
-        groups: "分组",
-        accounts: "账号",
-        models: "模型",
-      },
-      breakdownHints: {
-        consumers:
-          "按调用方聚合，展示用户消费给平台带来的用量收入、成本、分成支出和净收益；这里不是调用方的个人收入。",
-        shareOwners:
-          "按公开账号拥有者聚合，只统计别人调用该用户账号产生的分成；自用账号不会计入这里。",
-        groups: "按调度分组聚合，展示平台用量收入、成本、分成支出和净收益。",
-        accounts:
-          "按被调用账号聚合，展示平台用量收入、成本、分成支出和净收益。",
-        models: "按请求模型聚合，展示平台用量收入、成本、分成支出和净收益。",
-      },
-      table: {
-        name: "名称",
-        requests: "请求",
-        tokens: "Token",
-        revenue: "收入",
-        cost: "成本",
-        profit: "利润",
-        margin: "利润率",
-        platformRevenue: "平台收入",
-        consumerCharge: "他人消费",
-        ownerCredit: "分成收入",
-        platformFee: "平台留存",
-        shareExpense: "分成支出",
-        netProfit: "净收益",
-        netMargin: "净利率",
-        platformNetProfit: "平台净收益",
-        platformNetMargin: "平台净利率",
-        shareRatio: "分成比例",
       },
       noData: "暂无数据",
       loadFailed: "加载收益数据失败",
@@ -3072,6 +3204,8 @@ export default {
       concurrencyMin: "并发数不能小于1",
       concurrencyRange: "个人用户并发数不能小于 1",
       concurrencyRangeHint: "个人用户并发数至少为 1。",
+      adminConcurrencyRange: "管理员并发数不能小于 0",
+      adminConcurrencyRangeHint: "管理员并发数可以为 0 或更大值。",
       soraStorageQuota: "Sora 存储配额",
       soraStorageQuotaHint: "单位 GB，0 表示使用分组或系统默认配额",
       amountRequired: "请输入有效金额",
@@ -3235,12 +3369,14 @@ export default {
       sortOrderHint: "拖拽分组调整显示顺序，排在前面的分组会优先显示",
       sortOrderUpdated: "排序已更新",
       failedToUpdateSortOrder: "更新排序失败",
+      columnSettings: "列设置",
       deleteConfirm:
         "确定要删除分组 '{name}' 吗？所有关联的 API 密钥将不再属于任何分组。",
       deleteConfirmSubscription:
         "确定要删除订阅分组 '{name}' 吗？此操作会让所有绑定此订阅的用户的 API Key 失效，并删除所有相关的订阅记录。此操作无法撤销。",
       columns: {
         name: "名称",
+        id: "ID",
         platform: "平台",
         rateMultiplier: "费率倍数",
         rpmOverride: "RPM 覆盖",
@@ -3282,6 +3418,14 @@ export default {
         descriptionPlaceholder: "请输入描述（可选）",
         rateMultiplierLabel: "费率倍数",
         rateMultiplierHint: "1.0 = 标准费率，0.5 = 半价，2.0 = 双倍",
+        newUserRate: "新用户倍率",
+        newUserRateMultiplier: "新用户倍率",
+        newUserRateDays: "天数",
+        newUserRateHours: "小时",
+        newUserRateQuotaUSD: "额度上限 (USD)",
+        newUserRateQuotaPlaceholder: "0 表示不限制",
+        newUserRateHint:
+          "新注册用户在配置窗口内使用该倍率；累计额度达到上限后，下次请求恢复原分组倍率。用户专属倍率仍优先生效。",
         rpmLimit: "每分钟请求数 (RPM)",
         rpmLimitPlaceholder: "0 表示不限制",
         rpmLimitHint:
@@ -3321,6 +3465,7 @@ export default {
         openai: "OpenAI",
         gemini: "Gemini",
         antigravity: "Antigravity",
+        grok: "Grok",
       },
       saving: "保存中...",
       noGroups: "暂无分组",
@@ -3343,6 +3488,27 @@ export default {
         private: "用户私有",
       },
       rateAndAccounts: "{rate}x 费率 · {count} 个账号",
+      newUserRateAction: "新客",
+      newUserRateShort: "新客",
+      newUserRateTitle: "新用户倍率配置",
+      newUserRateEnableLabel: "启用新用户倍率",
+      newUserRateDefaultRate: "原分组倍率：{rate}x",
+      newUserRateSwitchRule:
+        "时间窗口过期或额度上限达到后，该用户下一次请求恢复原分组倍率；达到额度的当次整单仍按新用户倍率计费。",
+      newUserRateRulesTitle: "生效与恢复规则",
+      newUserRateRuleWindow: "注册时间超过有效期后，下一次请求恢复原分组倍率。",
+      newUserRateRuleQuota: "有效期内用量达到额度上限后，下一次请求恢复原分组倍率。",
+      newUserRateRuleWholeOrder: "触达额度上限的当次整单仍按新用户倍率计费。",
+      newUserRateSummary: "新用户 {duration}: {rate}x · 额度 {quota}",
+      newUserRateDurationDaysHours: "{days} 天 {hours} 小时",
+      newUserRateDurationDays: "{days} 天",
+      newUserRateDurationHours: "{hours} 小时",
+      newUserRateQuotaUnlimited: "不限制",
+      newUserRateSaved: "新用户倍率已保存",
+      failedToSaveNewUserRate: "保存新用户倍率失败",
+      invalidNewUserRate: "新用户倍率必须大于 0",
+      invalidNewUserRateWindow: "启用新用户倍率时，有效期必须大于 0",
+      invalidNewUserRateQuota: "新用户倍率额度必须大于等于 0",
       accountsCount: "{count} 个账号",
       enterGroupName: "请输入分组名称",
       optionalDescription: "可选描述",
@@ -3423,6 +3589,25 @@ export default {
         title: "图片生成计费",
         description: "配置图片生成模型的图片生成价格，留空则使用默认价格",
       },
+      videoPricing: {
+        title: "Grok 视频生成计费",
+        description: "按视频时长配置 USD/秒价格，留空使用服务端对应模型的默认价格",
+        independentMultiplier: "使用独立视频倍率",
+        videoMultiplier: "视频倍率",
+        modeHint: "关闭独立倍率时沿用分组倍率",
+        finalPricePreview: "单价预览：{price}",
+        serverModelDefault: "使用服务端模型默认价",
+        defaultPricePlaceholder: "服务端默认",
+        invalidMultiplier: "视频倍率必须是大于 0 的有限数字",
+        invalidPrice: "视频价格必须是大于或等于 0 的有限数字",
+      },
+      webSearchPricing: {
+        title: "Codex 网页搜索按次计费",
+        pricePerCall: "每次搜索价格（USD）",
+        pricePerCallHint: "留空使用默认 $0.01；填写 0 表示免费",
+        finalPricePreview: "按分组倍率后的单次扣费：{price}",
+        invalidPrice: "网页搜索价格必须是大于或等于 0 的有限数字",
+      },
       claudeCode: {
         title: "Claude Code 客户端限制",
         tooltip:
@@ -3494,13 +3679,21 @@ export default {
         searchAccountPlaceholder: "搜索账号...",
         accountsHint: "选择此模型模式优先使用的账号",
       },
-      mcpXml: {
-        title: "MCP XML 协议注入",
-        tooltip:
-          "启用后，当请求包含 MCP 工具时，会在 system prompt 中注入 XML 格式调用协议提示词。关闭此选项可避免对某些客户端造成干扰。",
-        enabled: "已启用",
-        disabled: "已禁用",
-      },
+		mcpXml: {
+			title: "MCP XML 协议注入",
+			tooltip:
+				"启用后，当请求包含 MCP 工具时，会在 system prompt 中注入 XML 格式调用协议提示词。关闭此选项可避免对某些客户端造成干扰。",
+			enabled: "已启用",
+			disabled: "已禁用",
+		},
+		claudeMaxSimulation: {
+			title: "Claude Max 用量模拟",
+			tooltip:
+				"启用后，对于没有上游缓存写入用量的 Claude 模型，系统会确定性地将 token 映射为少量输入加 1h 缓存创建，同时保持总 token 不变。",
+			enabled: "已启用（模拟 1h 缓存）",
+			disabled: "已禁用",
+			hint: "仅调整用量计费日志中的 token 类别。不会持久化每个请求的映射状态。",
+		},
       supportedScopes: {
         title: "支持的模型系列",
         tooltip: "选择此分组支持的模型系列。未勾选的系列将不会被路由到此分组。",
@@ -3620,6 +3813,26 @@ export default {
         imageTokenPrice: "图片输出",
         imageOutputPrice: "图片输出价格",
         pricePlaceholder: "默认",
+        longContextPricingTitle: "OpenAI API 长上下文倍率",
+        longContextPricingDescription:
+          "总输入超过阈值后按模型价卡倍率对整次请求计费",
+        longContextPricingOn: "开启",
+        longContextPricingOff: "关闭",
+        longContextInherited: "默认关闭（未显式开启）",
+        longContextExplicitlyEnabled: "已显式开启",
+        longContextExplicitlyDisabled: "已显式关闭",
+        longContextCustomIntervals: "自定义上下文区间已接管",
+        longContextConflictStatus: "配置冲突：请关闭倍率或删除自定义区间",
+        longContextThreshold: "输入 Token 阈值",
+        longContextThresholdPlaceholder: "请输入阈值",
+        longContextThresholdHint:
+          "请输入 1 至 2147483647 的整数；修改阈值会将策略设为显式开启。",
+        longContextAddIntervalBlocked:
+          "已显式开启 OpenAI API 长上下文倍率，关闭后才能添加自定义区间。",
+        longContextIntervalConflict:
+          "OpenAI API 长上下文倍率与自定义上下文区间不能同时启用",
+        longContextThresholdRequired:
+          "启用 OpenAI API 长上下文倍率时，输入 Token 阈值必须是 1 至 2147483647 的整数",
         intervals: "上下文区间定价（可选）",
         addInterval: "添加区间",
         requestTiers: "按次计费层级",
@@ -4312,6 +4525,9 @@ export default {
       title: "账号管理",
       description: "管理 AI 平台账号和 Cookie",
       createAccount: "添加账号",
+      duplicateAccount: "安全复制账号",
+      duplicateSuccess: "已创建暂停调度的账号“{name}”，请检查配置后再启用调度。",
+      duplicateFailed: "复制账号失败",
       autoRefresh: "自动刷新",
       enableAutoRefresh: "启用自动刷新",
       refreshInterval5s: "5 秒",
@@ -4401,6 +4617,7 @@ export default {
         plus: "Plus",
         pro: "Pro",
         team: "Team",
+        k12: "K12",
       },
       syncFromCrs: "从 CRS 同步",
       dataExport: "导出",
@@ -4410,9 +4627,9 @@ export default {
       credentialImport: "凭证导入",
       credentialImportTitle: "导入账号凭证",
       credentialImportHint:
-        "粘贴账号凭证或导入文件，后台凭证导入会创建平台 OAuth 账号。",
+		"粘贴账号凭证或导入文件，后台凭证导入会创建平台 OAuth 或 OpenAI Agent Identity 账号。",
       credentialImportWarning:
-        "该入口只接收官方 OAuth 凭证：Sub2API OAuth JSON、Codex-Manager ChatGPT Token JSON、OpenAI Refresh Token、Claude Session Key；API Key、URL、Upstream、Cookie 会被拒绝。管理员仍可通过添加账号或数据导入管理其他账号类型。",
+		"该入口只接收官方 OAuth 凭证与 OpenAI Agent Identity JSON：Sub2API OAuth JSON、Codex-Manager ChatGPT Token JSON、OpenAI Refresh Token、Claude Session Key；API Key、URL、Upstream、Cookie 会被拒绝。Agent Identity 仅支持管理员私有账号，不支持归属用户或公开共享。",
       dataExportConfirmMessage:
         "导出的数据包含账号与代理的敏感信息，请妥善保存。",
       dataExportConfirm: "确认导出",
@@ -4624,6 +4841,7 @@ export default {
         anthropic: "Anthropic",
         gemini: "Gemini",
         antigravity: "Antigravity",
+        grok: "Grok",
       },
       types: {
         oauth: "OAuth",
@@ -4718,7 +4936,26 @@ export default {
         gemini3Image: "G31FI",
         claude: "Claude",
         passiveSampled: "被动采样",
+        localSnapshot: "本地快照",
+        snapshotUnavailable: "暂无本地快照，请点击查询",
         activeQuery: "查询",
+        grokProbe: "探测",
+        grokProbeTooltip: "主动向 xAI 发起一次轻量请求，刷新 Grok quota headers 快照",
+        grokResetUnsupported: "不可重置",
+        grokResetUnsupportedTooltip: "xAI 当前未提供 Grok OAuth 订阅额度重置接口",
+        grokRequests: "请求",
+        grokTokens: "Token",
+        grokRequestsShort: "Req",
+        grokTokensShort: "Tok",
+        grokFreeQuota24hHint: "按 sub2api 近 24 小时本地 Token 用量估算（上限 2M）",
+        grokWeeklyUsage: "周额度已用 {percent}%",
+        grokUnknown: "Grok 配额需等待计费探测，或首次上游响应返回 xAI rate-limit 头后显示。",
+        grokRetryAfter: "重试 {time}",
+        grokNoHeaders: "等待 xAI quota headers",
+        grokLocalUsage24h: "最近 24 小时本地用量",
+        grokLastStatus: "状态 {status}",
+        grokLastProbe: "探测 {time}",
+        grokLastHeadersSeen: "响应头 {time}",
       },
       openaiQuotaReset: {
         count: "次数",
@@ -4894,6 +5131,10 @@ export default {
       openai: {
         baseUrlHint: "留空使用官方 OpenAI API",
         apiKeyHint: "您的 OpenAI API Key",
+        planType: "订阅档位覆盖",
+        planTypeDesc:
+          "按需填写上游订阅档位标识。留空将删除手动覆盖并恢复自动识别；后续 OAuth 刷新或限流同步可能再次更新真实档位。",
+        planTypePlaceholder: "请输入上游订阅档位标识",
         oauthPassthrough: "自动透传（仅替换认证）",
         oauthPassthroughDesc:
           "开启后，该 OpenAI 账号将自动透传请求与响应，仅替换认证并保留计费/并发/审计及必要安全过滤；如遇兼容性问题可随时关闭回滚。",
@@ -5229,6 +5470,14 @@ export default {
           failedToExchangeCode: "OpenAI 授权码兑换失败",
           failedToValidateRT: "验证 Refresh Token 失败",
           errors: {
+            OPENAI_OAUTH_SESSION_NOT_FOUND:
+              "授权会话不存在或已过期，请重新生成授权链接，使用最新链接完成授权后再提交。",
+            OPENAI_OAUTH_STATE_REQUIRED:
+              "授权回调缺少 state 参数，请粘贴完整回调链接，或重新生成授权链接后重试。",
+            OPENAI_OAUTH_INVALID_STATE:
+              "授权回调 state 与当前授权链接不匹配，请重新生成授权链接并使用最新回调链接。",
+            OPENAI_OAUTH_REQUEST_INVALID:
+              "授权请求无效，请重新生成授权链接后重试。",
             OPENAI_OAUTH_PROXY_REQUIRED:
               "未设置代理，当前服务器无法直连 OpenAI，导致 OpenAI OAuth 请求失败。请先选择可访问 OpenAI 的代理后重试；如果授权码已失效，请重新生成授权链接。",
           },
@@ -5345,6 +5594,63 @@ export default {
           validateAndCreate: "验证并创建账号",
           pleaseEnterRefreshToken: "请输入 Refresh Token",
           failedToValidateRT: "验证 Refresh Token 失败",
+        },
+        // Grok specific
+        grok: {
+          title: "Grok 账户授权",
+          followSteps: "请按照以下步骤完成 Grok 账户的授权：",
+          step1GenerateUrl: "生成授权链接",
+          generateAuthUrl: "生成授权链接",
+          step2OpenUrl: "在浏览器中打开链接并完成授权",
+          openUrlDesc:
+            "请在新标签页中打开授权链接，登录您的 xAI/Grok 账户并授权。",
+          importantNotice:
+            "重要提示：授权完成后请复制浏览器跳转后的完整回调链接，系统会自动解析 code 和 state。",
+          step3EnterCode: "输入回调链接或 Code",
+          authCodeDesc:
+            "授权完成后，复制浏览器跳转后的回调链接（推荐）或仅复制 code，粘贴到下方即可。",
+          authCode: "回调链接或 Code",
+          authCodePlaceholder:
+            "方式1（推荐）：粘贴回调链接\n方式2：仅粘贴 code 参数的值",
+          authCodeHint: "系统会自动从链接中解析 code/state。",
+          failedToGenerateUrl: "生成 Grok 授权链接失败",
+          missingExchangeParams: "缺少 code / session_id / state",
+          failedToExchangeCode: "Grok 授权码兑换失败",
+          refreshTokenAuth: "手动输入 RT",
+          refreshTokenDesc:
+            "输入您已有的 Grok Refresh Token，支持批量输入（每行一个），系统将自动验证并创建账号。",
+          refreshTokenPlaceholder:
+            "粘贴您的 Grok Refresh Token...\n支持多个，每行一个",
+          ssoCookieAuth: "SSO Cookie 导入",
+          ssoCookieDesc:
+            "每行粘贴一个 Grok Web SSO key，服务端将完成 xAI Device Flow 并转换为 Grok Build OAuth 凭证。",
+          ssoCookieLabel: "Grok Web SSO Key",
+          ssoCookiePlaceholder: "每行一个 SSO key\n支持多个，每行一个",
+          ssoCookieHint:
+            "每行一个 SSO key。多个 key 以 3 路并发导入，每批预计约 90 秒；必要时请使用相同地区的代理。",
+          convertingSSO: "转换中...",
+          convertSSOAndCreate: "转换并创建账号",
+          validating: "验证中...",
+          validateAndCreate: "验证并创建账号",
+          pleaseEnterRefreshToken: "请输入 Refresh Token",
+          failedToValidateRT: "验证 Refresh Token 失败",
+          failedToConvertSSO: "Grok SSO 转换失败",
+          errors: {
+            GROK_OAUTH_SESSION_NOT_FOUND:
+              "授权会话不存在或已过期，请重新生成授权链接后重试。",
+            GROK_OAUTH_INVALID_STATE:
+              "回调 state 与当前授权会话不匹配，请重新生成链接并使用该链接对应的回调。",
+            GROK_OAUTH_STATE_REQUIRED:
+              "授权回调缺少 state 参数，请粘贴完整回调链接，或重新生成授权链接。",
+            GROK_OAUTH_CODE_REQUIRED:
+              "授权回调缺少 code，请粘贴完整回调链接或输入授权码。",
+            GROK_OAUTH_NO_REFRESH_TOKEN:
+              "Grok 未返回 Refresh Token，请重新授权账号后重试。",
+            GROK_OAUTH_PROXY_NOT_AVAILABLE:
+              "当前没有可用于完成 Grok 授权的代理，请检查账号代理配置。",
+            GROK_OAUTH_PROXY_NOT_FOUND:
+              "未找到已配置的代理，请选择可用代理后重试。",
+          },
         },
       },
       // Gemini specific (platform-wide)
@@ -5491,6 +5797,7 @@ export default {
       openaiAccount: "OpenAI 账号",
       geminiAccount: "Gemini 账号",
       antigravityAccount: "Antigravity 账号",
+      grokAccount: "Grok 账号",
       inputMethod: "输入方式",
       reAuthorizedSuccess: "账号重新授权成功",
       // Test Modal
@@ -6133,6 +6440,23 @@ export default {
       ipAddress: "IP",
       clickToViewBalance: "点击查看充值记录",
       failedToLoadUser: "加载用户信息失败",
+      tokenRanking: {
+        subtitle: "当前筛选条件和时间范围内的用户 Token 用量",
+        rowHint: "点击查看该用户的用量明细",
+        userCount: "共 {count} 位用户",
+        searchPlaceholder: "按邮箱搜索用户",
+        loadFailed: "加载用户 Token 排行失败",
+        retry: "重试",
+        columns: {
+          user: "用户",
+          requests: "请求数",
+          inputTokens: "输入 Token",
+          outputTokens: "输出 Token",
+          cacheTokens: "缓存 Token",
+          totalTokens: "总 Token",
+          cost: "费用",
+        },
+      },
       cleanup: {
         button: "清理",
         title: "清理使用记录",
@@ -7039,6 +7363,18 @@ export default {
           withdrawalManagement: "提现管理",
           withdrawalManagementHint:
             "关闭后用户资料页提现入口和管理员提现菜单隐藏，提现接口停止受理。",
+          withdrawalRateLimit: "提现频次限制",
+          withdrawalRateLimitHint:
+            "按滚动时间窗口统计全部已创建的提现申请，包括后来取消或被驳回的申请。",
+          withdrawalRateLimitWindowDays: "统计周期（天）",
+          withdrawalRateLimitMax: "周期内最多申请次数",
+          withdrawalRateLimitMaxHint: "填写 0 表示不限制提现申请次数。",
+          withdrawalRateLimitSummary: "当前限制：每 {days} 天最多 {max} 次。",
+          withdrawalRateLimitUnlimited: "当前不限制提现申请次数。",
+          withdrawalRateLimitWindowDaysError:
+            "提现统计周期必须是 1 到 365 之间的整数。",
+          withdrawalRateLimitMaxError:
+            "提现申请次数必须是 0 到 1000 之间的整数。",
         },
         riskControl: {
           title: "内容风控",
@@ -7273,6 +7609,29 @@ export default {
         subscriptionGroup: "订阅分组",
         subscriptionValidityDays: "有效期（天）",
       },
+      openaiAccountLevels: {
+        title: "OpenAI 账号等级",
+        description:
+          "配置 OpenAI 账号等级、别名和登录要求；账号导入、分组匹配和共享账号筛选会使用这里的配置。",
+        addLevel: "添加等级",
+        resetDefaults: "恢复默认等级",
+        empty: "暂无账号等级。至少需要保留一个启用或停用的等级配置。",
+        key: "等级标识",
+        label: "显示名称",
+        aliases: "识别别名",
+        sortOrder: "排序",
+        enabled: "可选",
+        enabledHint: "关闭后前端不再提供选择，但历史数据仍可显示。",
+        requiresProxyLogin: "需要代理登录",
+        requiresProxyLoginHint: "开启后用户导入该等级时走 OpenAI 登录流程。",
+        saveHint:
+          "等级标识只能包含字母、数字和短横线；别名用逗号分隔，支持末尾 * 前缀匹配。",
+        invalidKey: "第 {index} 行等级标识无效，不能留空或使用 unknown。",
+        duplicateKey: "OpenAI 账号等级标识重复：{key}",
+        missingLabel: "OpenAI 账号等级 {key} 缺少显示名称。",
+        emptyInvalid: "至少需要配置一个 OpenAI 账号等级。",
+        noEnabledLevel: "至少需要启用一个 OpenAI 账号等级。",
+      },
       claudeCode: {
         title: "Claude Code 设置",
         description: "控制 Claude Code 客户端访问要求",
@@ -7304,6 +7663,9 @@ export default {
         cleanRelay: "洁净中继模式",
         cleanRelayHint:
           "开启后，OpenAI OAuth 请求会使用中转站维护的上游 installation/session/cache 标识；首次进站或账号迁移时会清理 previous_response_id、加密 reasoning 和旧 turn state。",
+        detachedUsageDrain: "断连后继续采集用量",
+        detachedUsageDrainHint:
+          "开启后，客户端断开时服务端会在超时内继续读取 Claude/OpenAI 上游以采集完整 usage；关闭可减少异常断开时的上游连接占用，但可能增加漏计费。",
         cchSigning: "CCH 签名",
         cchSigningHint:
           "对转发请求的 billing header 进行 CCH 哈希签名。关闭时保留原始占位符。",
@@ -7555,6 +7917,7 @@ export default {
         modeRedirect: "跳转",
         modeQRCode: "二维码",
         modePopup: "弹窗",
+        modeJSAPI: "JSAPI",
         validationNameRequired: "服务商名称不能为空",
         validationTypesRequired: "请至少选择一种支持的支付方式",
         validationFieldRequired: "{field} 不能为空",
@@ -7564,6 +7927,7 @@ export default {
         callbackBaseUrl: "回调基础地址",
         field_privateKey: "私钥",
         field_publicKey: "公钥",
+        field_opAppId: "经营小程序 App ID",
         field_mpAppId: "公众号 App ID",
         field_mchId: "商户号",
         field_apiV3Key: "API v3 密钥",
@@ -7950,6 +8314,15 @@ export default {
         scopeOAuth: "仅 OAuth 账号",
         scopeAPIKey: "仅 API Key 账号",
         scopeBedrock: "仅 Bedrock 账号",
+        userIds: "指定用户",
+        userIdsHint:
+          "输入任意邮箱关键词进行模糊搜索。留空表示对全部 Sub2API 用户生效；选中用户的 API Key 请求优先匹配用户规则。",
+        userSearchPlaceholder: "输入用户邮箱搜索",
+        userSearchEmpty: "未找到匹配用户",
+        userSearchFailed: "用户搜索失败，请重试",
+        userDeleted: "（已删除）",
+        userLoadFailed: "已保存用户 #{id} 加载失败",
+        removeUser: "移除用户",
         errorMessage: "错误消息",
         errorMessagePlaceholder: "拦截时返回的自定义错误消息",
         errorMessageHint: "留空则使用默认错误消息。",
@@ -8051,6 +8424,15 @@ export default {
         threshold: "Free 判定周限额阈值（USD）",
         thresholdHint:
           "例如 60 表示周限额小于或等于 60 美元且 7 天额度 100% 时触发修复。",
+      },
+      schedulerCandidateSampling: {
+        title: "调度候选采样",
+        description:
+          "默认关闭。开启后，账号数超过阈值的调度分组每次选号只加载有限候选，显著降低大号池的调度内存占用。",
+        limit: "候选上限",
+        limitHint: "每次调度最多加载的候选账号数，范围 1–1024，默认 256。",
+        threshold: "生效阈值",
+        thresholdHint: "仅当调度分组内账号数超过该值时才启用候选采样，默认 5000。",
       },
       saveSettings: "保存设置",
       saving: "保存中...",
@@ -8565,6 +8947,13 @@ export default {
     },
   },
 
+  withdrawal: {
+    errors: {
+      WITHDRAWAL_RATE_LIMIT_EXCEEDED:
+        "每 {window_days} 天最多可提交 {max} 次提现申请，当前已达到限制。",
+    },
+  },
+
   // Payment System
   payment: {
     title: "充值/订阅",
@@ -8617,8 +9006,11 @@ export default {
     qr: {
       scanToPay: "请扫码支付",
       scanAlipay: "支付宝扫码支付",
+      scanAlipayJSAPI: "使用支付宝扫码继续支付",
       scanWxpay: "微信扫码支付",
       scanAlipayHint: "请使用手机打开支付宝，扫描二维码完成支付",
+      scanAlipayJSAPIHint:
+        "请使用手机支付宝扫一扫，打开后在支付宝内置浏览器完成支付。",
       scanWxpayHint: "请使用手机打开微信，扫描二维码完成支付",
       payInNewWindow: "请在新窗口中完成支付",
       payInNewWindowHint:
@@ -8802,6 +9194,11 @@ export default {
       allStatuses: "全部状态",
       allPaymentTypes: "全部支付方式",
       allOrderTypes: "全部订单类型",
+      exportOrders: "导出订单",
+      exportingOrders: "导出中...",
+      exportOrdersHint: "导出全部符合当前筛选条件的订单明细",
+      orderExportSuccess: "订单导出成功",
+      orderExportFailed: "订单导出失败",
       orderDetail: "订单详情",
       orderType: "订单类型",
       orders: "订单",

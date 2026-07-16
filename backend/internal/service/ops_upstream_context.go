@@ -37,9 +37,64 @@ const (
 	// OpsSkipPassthroughKey 由 applyErrorPassthroughRule 在命中 skip_monitoring=true 的规则时设置。
 	// ops_error_logger 中间件检查此 key，为 true 时跳过错误记录。
 	OpsSkipPassthroughKey = "ops_skip_passthrough"
+	OpsStreamErrorKey     = "ops_stream_error"
 )
 
-const opsUpstreamRequestBodyContextMaxBytes = opsMaxStoredRequestBodyBytes
+const (
+	ResponseCommittedKey                  = "response_committed"
+	opsUpstreamRequestBodyContextMaxBytes = opsMaxStoredRequestBodyBytes
+)
+
+func MarkResponseCommitted(c *gin.Context) {
+	if c != nil {
+		c.Set(ResponseCommittedKey, true)
+	}
+}
+
+func IsResponseCommitted(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	v, ok := c.Get(ResponseCommittedKey)
+	if !ok {
+		return false
+	}
+	committed, _ := v.(bool)
+	return committed
+}
+
+type OpsStreamError struct {
+	ErrType        string
+	Message        string
+	IntendedStatus int
+}
+
+// MarkOpsStreamError keeps the first in-band SSE error as the request's root cause.
+func MarkOpsStreamError(c *gin.Context, errType, message string, intendedStatus int) {
+	if c == nil {
+		return
+	}
+	if _, exists := c.Get(OpsStreamErrorKey); exists {
+		return
+	}
+	c.Set(OpsStreamErrorKey, OpsStreamError{
+		ErrType:        strings.TrimSpace(errType),
+		Message:        strings.TrimSpace(message),
+		IntendedStatus: intendedStatus,
+	})
+}
+
+func GetOpsStreamError(c *gin.Context) (OpsStreamError, bool) {
+	if c == nil {
+		return OpsStreamError{}, false
+	}
+	v, ok := c.Get(OpsStreamErrorKey)
+	if !ok {
+		return OpsStreamError{}, false
+	}
+	streamErr, ok := v.(OpsStreamError)
+	return streamErr, ok
+}
 
 func setOpsUpstreamRequestBody(c *gin.Context, body []byte) {
 	if c == nil {

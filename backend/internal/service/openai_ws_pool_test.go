@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,6 +14,93 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
 )
+
+func TestNormalizeOpenAIWSBetaFeatures(t *testing.T) {
+	headers := make(http.Header)
+	headers.Add("X-Codex-Beta-Features", "remote_compaction_v2, responses_websockets_v2")
+	headers.Add("x-codex-beta-features", "responses_websockets_v2, another_feature")
+	require.Equal(t, "another_feature,remote_compaction_v2,responses_websockets_v2", normalizeOpenAIWSBetaFeatures(headers))
+	require.Empty(t, normalizeOpenAIWSBetaFeatures(nil))
+}
+
+func TestOpenAIWSConnPoolIsolatesBetaFeatureConnections(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+	pool := newOpenAIWSConnPool(cfg)
+	defer pool.Close()
+	dialer := &openAIWSCountingDialer{}
+	pool.clientDialer = dialer
+	account := &Account{ID: 901, Concurrency: 1}
+
+	remoteHeaders := make(http.Header)
+	remoteHeaders.Set("x-codex-beta-features", "remote_compaction_v2")
+	remoteLease, err := pool.Acquire(context.Background(), openAIWSAcquireRequest{
+		Account: account,
+		WSURL:   "wss://example.com/v1/responses",
+		Headers: remoteHeaders,
+	})
+	require.NoError(t, err)
+	remoteConnID := remoteLease.ConnID()
+	remoteLease.Release()
+
+	plainLease, err := pool.Acquire(context.Background(), openAIWSAcquireRequest{
+		Account: account,
+		WSURL:   "wss://example.com/v1/responses",
+	})
+	require.NoError(t, err)
+	defer plainLease.Release()
+	require.NotEqual(t, remoteConnID, plainLease.ConnID())
+	require.Equal(t, 2, dialer.DialCount())
+
+	ap, ok := pool.getAccountPool(account.ID)
+	require.True(t, ok)
+	ap.mu.Lock()
+	require.Len(t, ap.conns, 1)
+	for _, conn := range ap.conns {
+		require.Empty(t, conn.betaFeatures)
+	}
+	ap.mu.Unlock()
+}
+
+func TestOpenAIWSConnPoolDoesNotRetainAcquireCredentials(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+	pool := newOpenAIWSConnPool(cfg)
+	defer pool.Close()
+	pool.clientDialer = &openAIWSFakeDialer{}
+	account := &Account{
+		ID:       902,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"auth_mode":   OpenAIAuthModeAgentIdentity,
+			"private_key": "sensitive-private-key",
+		},
+	}
+	lease, err := pool.Acquire(context.Background(), openAIWSAcquireRequest{
+		Account: account,
+		WSURL:   "wss://example.com/v1/responses",
+		HeadersFactory: func(_ context.Context, headers http.Header) (http.Header, error) {
+			if headers == nil {
+				headers = make(http.Header)
+			}
+			headers.Set("Authorization", "AgentAssertion sensitive")
+			return headers, nil
+		},
+	})
+	require.NoError(t, err)
+	defer lease.Release()
+
+	ap, ok := pool.getAccountPool(account.ID)
+	require.True(t, ok)
+	ap.mu.Lock()
+	require.Nil(t, ap.lastAcquire)
+	require.Equal(t, 1, ap.effectiveMaxConns)
+	ap.mu.Unlock()
+}
 
 func TestOpenAIWSConnPool_CleanupStaleAndTrimIdle(t *testing.T) {
 	cfg := &config.Config{}
@@ -585,7 +673,7 @@ func TestOpenAIWSConnPool_EffectiveMaxConnsByAccount_ModeRouterV2UsesAccountConc
 	pool := newOpenAIWSConnPool(cfg)
 
 	high := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 20}
-	require.Equal(t, 20, pool.effectiveMaxConnsByAccount(high), "v2 路径应直接使用账号并发数作为池上限")
+	require.Equal(t, 8, pool.effectiveMaxConnsByAccount(high), "v2 路径不得突破全局连接硬上限")
 
 	nonPositive := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: 0}
 	require.Equal(t, 0, pool.effectiveMaxConnsByAccount(nonPositive), "并发数<=0 时应不可调度")
@@ -1686,6 +1774,139 @@ func TestOpenAIWSConnPool_DialConnNilConnection(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "nil connection")
+}
+
+func TestOpenAIWSConnPool_DialConnBuildsEphemeralHeadersPerDial(t *testing.T) {
+	pool := newOpenAIWSConnPool(&config.Config{})
+	dialer := &openAIWSHeaderRecordingDialer{}
+	pool.setClientDialerForTest(dialer)
+	account := &Account{ID: 92, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	baseHeaders := http.Header{"X-Stable": []string{"stable"}}
+	var factoryCalls atomic.Int32
+	req := openAIWSAcquireRequest{
+		Account: account,
+		WSURL:   "wss://example.com/v1/responses",
+		Headers: baseHeaders,
+		HeadersFactory: func(_ context.Context, headers http.Header) (http.Header, error) {
+			call := factoryCalls.Add(1)
+			headers.Set("Authorization", "AgentAssertion dial-"+strconv.Itoa(int(call)))
+			return headers, nil
+		},
+	}
+
+	first, err := pool.dialConn(context.Background(), req)
+	require.NoError(t, err)
+	second, err := pool.dialConn(context.Background(), req)
+	require.NoError(t, err)
+	first.close()
+	second.close()
+
+	require.EqualValues(t, 2, factoryCalls.Load())
+	require.Empty(t, baseHeaders.Get("Authorization"), "ephemeral authorization must not mutate cached base headers")
+	require.Equal(t, []string{"AgentAssertion dial-1", "AgentAssertion dial-2"}, dialer.AuthorizationValues())
+}
+
+func TestOpenAIWSConnPool_ClearAccountClosesConnectionsAndResetsReusableState(t *testing.T) {
+	pool := newOpenAIWSConnPool(&config.Config{})
+	accountID := int64(93)
+	ap := pool.getOrCreateAccountPool(accountID)
+	firstTransport := &openAIWSFakeConn{}
+	secondTransport := &openAIWSFakeConn{}
+	first := newOpenAIWSConn("first", accountID, firstTransport, nil)
+	second := newOpenAIWSConn("second", accountID, secondTransport, nil)
+	ap.conns[first.id] = first
+	ap.conns[second.id] = second
+	ap.pinnedConns[first.id] = 1
+	ap.lastAcquire = &openAIWSAcquireRequest{Account: &Account{ID: accountID}}
+	ap.prewarmUntil = time.Now().Add(time.Minute)
+	ap.prewarmFails = 2
+	ap.prewarmFailAt = time.Now()
+
+	pool.ClearAccount(accountID)
+
+	ap.mu.Lock()
+	require.Empty(t, ap.conns)
+	require.Empty(t, ap.pinnedConns)
+	require.Nil(t, ap.lastAcquire)
+	require.EqualValues(t, 1, ap.generation)
+	require.True(t, ap.prewarmUntil.IsZero())
+	require.Zero(t, ap.prewarmFails)
+	require.True(t, ap.prewarmFailAt.IsZero())
+	ap.mu.Unlock()
+	require.True(t, firstTransport.closed)
+	require.True(t, secondTransport.closed)
+}
+
+func TestOpenAIWSConnPool_ClearAccountRejectsInFlightPrewarmGeneration(t *testing.T) {
+	pool := newOpenAIWSConnPool(&config.Config{})
+	dialer := &openAIWSBlockingDialer{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		conn:    &openAIWSFakeConn{},
+	}
+	pool.setClientDialerForTest(dialer)
+	accountID := int64(94)
+	account := &Account{ID: accountID, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	ap := pool.getOrCreateAccountPool(accountID)
+	ap.lastAcquire = &openAIWSAcquireRequest{Account: account, WSURL: "wss://example.com/v1/responses"}
+	ap.prewarmActive = true
+	ap.creating = 1
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		pool.prewarmConns(accountID, *ap.lastAcquire, 1, ap.generation)
+	}()
+	<-dialer.started
+	pool.ClearAccount(accountID)
+	close(dialer.release)
+	<-done
+
+	ap.mu.Lock()
+	require.Empty(t, ap.conns)
+	require.Nil(t, ap.lastAcquire)
+	require.EqualValues(t, 1, ap.generation)
+	ap.mu.Unlock()
+	require.True(t, dialer.conn.closed, "pre-recovery prewarm connection must be closed instead of re-entering the pool")
+}
+
+type openAIWSHeaderRecordingDialer struct {
+	mu      sync.Mutex
+	headers []http.Header
+}
+
+func (d *openAIWSHeaderRecordingDialer) Dial(_ context.Context, _ string, headers http.Header, _ string) (openAIWSClientConn, int, http.Header, error) {
+	d.mu.Lock()
+	d.headers = append(d.headers, cloneHeader(headers))
+	d.mu.Unlock()
+	return &openAIWSFakeConn{}, http.StatusSwitchingProtocols, nil, nil
+}
+
+func (d *openAIWSHeaderRecordingDialer) AuthorizationValues() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	values := make([]string, 0, len(d.headers))
+	for _, headers := range d.headers {
+		values = append(values, headers.Get("Authorization"))
+	}
+	return values
+}
+
+type openAIWSBlockingDialer struct {
+	started chan struct{}
+	release chan struct{}
+	conn    *openAIWSFakeConn
+	once    sync.Once
+}
+
+func (d *openAIWSBlockingDialer) Dial(ctx context.Context, _ string, _ http.Header, _ string) (openAIWSClientConn, int, http.Header, error) {
+	d.once.Do(func() { close(d.started) })
+	select {
+	case <-ctx.Done():
+		return nil, 0, nil, ctx.Err()
+	case <-d.release:
+		return d.conn, http.StatusSwitchingProtocols, nil, nil
+	}
 }
 
 func TestOpenAIWSConnPool_SnapshotTransportMetrics(t *testing.T) {

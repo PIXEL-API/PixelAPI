@@ -8,6 +8,7 @@ var SensitiveCredentialKeys = []string{
 	"access_token",
 	"refresh_token",
 	"id_token",
+	"agent_private_key",
 	// API key and browser-session credentials
 	"api_key",
 	"session_key",

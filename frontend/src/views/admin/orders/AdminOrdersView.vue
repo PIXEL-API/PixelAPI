@@ -7,11 +7,21 @@
           <div class="flex-1 sm:max-w-64">
             <input v-model="orderSearch" type="text" :placeholder="t('payment.admin.searchOrders')" class="input" @input="debounceLoadOrders" />
           </div>
-          <Select v-model="orderFilters.status" :options="statusFilterOptions" class="w-36" @change="loadOrders" />
-          <Select v-model="orderFilters.payment_type" :options="paymentTypeFilterOptions" class="w-40" @change="loadOrders" />
-          <Select v-model="orderFilters.order_type" :options="orderTypeFilterOptions" class="w-36" @change="loadOrders" />
-          <div class="flex flex-1 flex-wrap items-center justify-end gap-2">
-            <button @click="loadOrders" :disabled="ordersLoading" class="btn btn-secondary" :title="t('common.refresh')">
+          <Select v-model="orderFilters.status" :options="statusFilterOptions" class="w-36" @change="handleOrderFilterChange" />
+          <Select v-model="orderFilters.payment_type" :options="paymentTypeFilterOptions" class="w-40" @change="handleOrderFilterChange" />
+          <Select v-model="orderFilters.order_type" :options="orderTypeFilterOptions" class="w-36" @change="handleOrderFilterChange" />
+          <div class="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto sm:flex-1">
+            <button
+              type="button"
+              class="btn btn-secondary min-h-11 flex-1 sm:flex-none"
+              :disabled="ordersExporting"
+              :title="t('payment.admin.exportOrdersHint')"
+              @click="handleExportOrders"
+            >
+              <Icon name="download" size="md" />
+              <span>{{ ordersExporting ? t('payment.admin.exportingOrders') : t('payment.admin.exportOrders') }}</span>
+            </button>
+            <button type="button" @click="loadOrders" :disabled="ordersLoading" class="btn btn-secondary min-h-11 min-w-11" :title="t('common.refresh')" :aria-label="t('common.refresh')">
               <Icon name="refresh" size="md" :class="ordersLoading ? 'animate-spin' : ''" />
             </button>
           </div>
@@ -209,10 +219,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { saveAs } from 'file-saver'
 import { useAppStore } from '@/stores/app'
-import { adminPaymentAPI } from '@/api/admin/payment'
+import { adminPaymentAPI, type AdminOrderFilters } from '@/api/admin/payment'
 import { adminStoreAPI } from '@/api/admin/store'
 import { extractI18nErrorMessage } from '@/utils/apiError'
 import { formatStoreDrawReward } from '@/utils/storeRewards'
@@ -235,6 +246,7 @@ const appStore = useAppStore()
 const { copyToClipboard } = useClipboard()
 
 const ordersLoading = ref(false)
+const ordersExporting = ref(false)
 const orders = ref<PaymentOrder[]>([])
 const orderSearch = ref('')
 const orderFilters = reactive({ status: '', payment_type: '', order_type: '' })
@@ -251,9 +263,33 @@ const manualFulfillTarget = ref<PaymentOrder | null>(null)
 const manualFulfillForm = reactive({ paid_amount: '', trade_no: '', reason: '' })
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
+let exportAbortController: AbortController | null = null
+
+function buildOrderFilters(): AdminOrderFilters {
+  return {
+    keyword: orderSearch.value.trim() || undefined,
+    status: orderFilters.status || undefined,
+    payment_type: orderFilters.payment_type || undefined,
+    order_type: orderFilters.order_type || undefined,
+  }
+}
+
 function debounceLoadOrders() {
   if (debounceTimer) clearTimeout(debounceTimer)
-  debounceTimer = setTimeout(() => loadOrders(), 300)
+  debounceTimer = setTimeout(() => {
+    debounceTimer = null
+    orderPagination.page = 1
+    void loadOrders()
+  }, 300)
+}
+
+function handleOrderFilterChange() {
+  if (debounceTimer) {
+    clearTimeout(debounceTimer)
+    debounceTimer = null
+  }
+  orderPagination.page = 1
+  void loadOrders()
 }
 
 async function loadOrders() {
@@ -261,14 +297,48 @@ async function loadOrders() {
   try {
     const res = await adminPaymentAPI.getOrders({
       page: orderPagination.page, page_size: orderPagination.page_size,
-      keyword: orderSearch.value || undefined, status: orderFilters.status || undefined,
-      payment_type: orderFilters.payment_type || undefined, order_type: orderFilters.order_type || undefined,
+      ...buildOrderFilters(),
     })
     orders.value = res.data.items || []
     orderPagination.total = res.data.total || 0
   } catch (err: unknown) {
     appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
   } finally { ordersLoading.value = false }
+}
+
+function fallbackOrderExportFilename(): string {
+  const digits = new Date().toISOString().replace(/\D/g, '').slice(0, 14)
+  return `orders-${digits.slice(0, 8)}-${digits.slice(8)}.csv`
+}
+
+function resolveOrderExportFilename(value: unknown): string {
+  if (typeof value === 'string' && /^orders-\d{8}-\d{6}\.csv$/.test(value)) {
+    return value
+  }
+  return fallbackOrderExportFilename()
+}
+
+async function handleExportOrders() {
+  if (ordersExporting.value) return
+
+  const controller = new AbortController()
+  exportAbortController = controller
+  ordersExporting.value = true
+  try {
+    const response = await adminPaymentAPI.exportOrders(buildOrderFilters(), controller.signal)
+    const filename = resolveOrderExportFilename(response.headers['x-export-filename'])
+    saveAs(response.data, filename)
+    appStore.showSuccess(t('payment.admin.orderExportSuccess'))
+  } catch (err: unknown) {
+    if (!controller.signal.aborted) {
+      appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('payment.admin.orderExportFailed')))
+    }
+  } finally {
+    if (exportAbortController === controller) {
+      exportAbortController = null
+      ordersExporting.value = false
+    }
+  }
 }
 
 function handleOrderPageChange(page: number) { orderPagination.page = page; loadOrders() }
@@ -423,4 +493,8 @@ function paymentMethodLabel(order: PaymentOrder): string {
 }
 
 onMounted(() => loadOrders())
+onBeforeUnmount(() => {
+  if (debounceTimer) clearTimeout(debounceTimer)
+  exportAbortController?.abort()
+})
 </script>

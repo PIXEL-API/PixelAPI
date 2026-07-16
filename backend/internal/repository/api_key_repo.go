@@ -15,9 +15,11 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/schema/mixins"
 	"github.com/Wei-Shaw/sub2api/ent/user"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/lib/pq"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 
+	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
 )
 
@@ -166,6 +168,7 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 				user.FieldLastLoginAt,
 				user.FieldLastActiveAt,
 				user.FieldRpmLimit,
+				user.FieldCreatedAt,
 			)
 		}).
 		WithGroup(func(q *dbent.GroupQuery) {
@@ -177,12 +180,25 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 				group.FieldScope,
 				group.FieldSubscriptionType,
 				group.FieldRateMultiplier,
+				group.FieldNewUserRateEnabled,
+				group.FieldNewUserRateMultiplier,
+				group.FieldNewUserRateWindowSeconds,
+				group.FieldNewUserRateQuotaUsd,
 				group.FieldDailyLimitUsd,
 				group.FieldWeeklyLimitUsd,
 				group.FieldMonthlyLimitUsd,
+				group.FieldAllowImageGeneration,
+				group.FieldImageRateIndependent,
+				group.FieldImageRateMultiplier,
 				group.FieldImagePrice1k,
 				group.FieldImagePrice2k,
 				group.FieldImagePrice4k,
+				group.FieldVideoRateIndependent,
+				group.FieldVideoRateMultiplier,
+				group.FieldVideoPrice480p,
+				group.FieldVideoPrice720p,
+				group.FieldVideoPrice1080p,
+				group.FieldWebSearchPricePerCall,
 				group.FieldClaudeCodeOnly,
 				group.FieldFallbackGroupID,
 				group.FieldFallbackGroupIDOnInvalidRequest,
@@ -364,8 +380,95 @@ func (r *apiKeyRepository) ListByUserID(ctx context.Context, userID int64, param
 	for i := range keys {
 		outKeys = append(outKeys, *apiKeyEntityToService(keys[i]))
 	}
+	if err := r.attachLastUsedIPs(ctx, outKeys); err != nil {
+		return nil, nil, err
+	}
 
 	return outKeys, paginationResultFromTotal(int64(total), params), nil
+}
+
+func (r *apiKeyRepository) attachLastUsedIPs(ctx context.Context, keys []service.APIKey) error {
+	if len(keys) == 0 || r.sql == nil {
+		return nil
+	}
+
+	apiKeyIDs := make([]int64, 0, len(keys))
+	for i := range keys {
+		apiKeyIDs = append(apiKeyIDs, keys[i].ID)
+	}
+	lastUsedIPs, err := r.latestUsageLogIPs(ctx, apiKeyIDs)
+	if err != nil {
+		return err
+	}
+	for i := range keys {
+		if lastUsedIP, ok := lastUsedIPs[keys[i].ID]; ok {
+			keys[i].LastUsedIP = &lastUsedIP
+		}
+	}
+	return nil
+}
+
+func (r *apiKeyRepository) latestUsageLogIPs(ctx context.Context, apiKeyIDs []int64) (map[int64]string, error) {
+	if len(apiKeyIDs) == 0 || r.sql == nil {
+		return map[int64]string{}, nil
+	}
+
+	query, args := latestUsageLogIPsQuery(apiKeyIDs, r.client.Driver().Dialect())
+	rows, err := r.sql.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[int64]string, len(apiKeyIDs))
+	for rows.Next() {
+		var apiKeyID int64
+		var ipAddress string
+		if err := rows.Scan(&apiKeyID, &ipAddress); err != nil {
+			return nil, err
+		}
+		result[apiKeyID] = ipAddress
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func latestUsageLogIPsQuery(apiKeyIDs []int64, dialectName string) (string, []any) {
+	if dialectName == dialect.Postgres {
+		// Bound each key to one ordered index probe instead of ranking its full history.
+		return `
+		SELECT requested.api_key_id, latest.ip_address
+		FROM unnest($1::bigint[]) AS requested(api_key_id)
+		CROSS JOIN LATERAL (
+			SELECT ul.ip_address
+			FROM usage_logs AS ul
+			WHERE ul.api_key_id = requested.api_key_id
+				AND ul.ip_address IS NOT NULL
+				AND ul.ip_address <> ''
+			ORDER BY ul.created_at DESC, ul.id DESC
+			LIMIT 1
+		) AS latest`, []any{pq.Array(apiKeyIDs)}
+	}
+
+	placeholders := make([]string, len(apiKeyIDs))
+	args := make([]any, len(apiKeyIDs))
+	for i, id := range apiKeyIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	return fmt.Sprintf(`
+		SELECT api_key_id, ip_address
+		FROM (
+			SELECT api_key_id, ip_address,
+				ROW_NUMBER() OVER (PARTITION BY api_key_id ORDER BY created_at DESC, id DESC) AS rn
+			FROM usage_logs
+			WHERE api_key_id IN (%s)
+				AND ip_address IS NOT NULL
+				AND ip_address <> ''
+		) ranked
+		WHERE rn = 1`, strings.Join(placeholders, ", ")), args
 }
 
 func (r *apiKeyRepository) VerifyOwnership(ctx context.Context, userID int64, apiKeyIDs []int64) ([]int64, error) {
@@ -736,12 +839,25 @@ func apiKeyGroupRouteQueryOptions(q *dbent.APIKeyGroupRouteQuery) {
 			group.FieldScope,
 			group.FieldSubscriptionType,
 			group.FieldRateMultiplier,
+			group.FieldNewUserRateEnabled,
+			group.FieldNewUserRateMultiplier,
+			group.FieldNewUserRateWindowSeconds,
+			group.FieldNewUserRateQuotaUsd,
 			group.FieldDailyLimitUsd,
 			group.FieldWeeklyLimitUsd,
 			group.FieldMonthlyLimitUsd,
+			group.FieldAllowImageGeneration,
+			group.FieldImageRateIndependent,
+			group.FieldImageRateMultiplier,
 			group.FieldImagePrice1k,
 			group.FieldImagePrice2k,
 			group.FieldImagePrice4k,
+			group.FieldVideoRateIndependent,
+			group.FieldVideoRateMultiplier,
+			group.FieldVideoPrice480p,
+			group.FieldVideoPrice720p,
+			group.FieldVideoPrice1080p,
+			group.FieldWebSearchPricePerCall,
 			group.FieldClaudeCodeOnly,
 			group.FieldFallbackGroupID,
 			group.FieldFallbackGroupIDOnInvalidRequest,
@@ -809,6 +925,7 @@ func userEntityToService(u *dbent.User) *service.User {
 		RPMLimit:                   u.RpmLimit,
 		CreatedAt:                  u.CreatedAt,
 		UpdatedAt:                  u.UpdatedAt,
+		DeletedAt:                  u.DeletedAt,
 	}
 	// Parse extra emails JSON (supports both old []string and new []NotifyEmailEntry format)
 	if u.BalanceNotifyExtraEmails != "" && u.BalanceNotifyExtraEmails != "[]" {
@@ -827,6 +944,10 @@ func groupEntityToService(g *dbent.Group) *service.Group {
 		Description:                     derefString(g.Description),
 		Platform:                        g.Platform,
 		RateMultiplier:                  g.RateMultiplier,
+		NewUserRateEnabled:              g.NewUserRateEnabled,
+		NewUserRateMultiplier:           g.NewUserRateMultiplier,
+		NewUserRateWindowSeconds:        g.NewUserRateWindowSeconds,
+		NewUserRateQuotaUSD:             g.NewUserRateQuotaUsd,
 		IsExclusive:                     g.IsExclusive,
 		Status:                          g.Status,
 		Hydrated:                        true,
@@ -843,6 +964,12 @@ func groupEntityToService(g *dbent.Group) *service.Group {
 		ImagePrice1K:                    g.ImagePrice1k,
 		ImagePrice2K:                    g.ImagePrice2k,
 		ImagePrice4K:                    g.ImagePrice4k,
+		VideoRateIndependent:            g.VideoRateIndependent,
+		VideoRateMultiplier:             g.VideoRateMultiplier,
+		VideoPrice480P:                  g.VideoPrice480p,
+		VideoPrice720P:                  g.VideoPrice720p,
+		VideoPrice1080P:                 g.VideoPrice1080p,
+		WebSearchPricePerCall:           g.WebSearchPricePerCall,
 		DefaultValidityDays:             g.DefaultValidityDays,
 		ClaudeCodeOnly:                  g.ClaudeCodeOnly,
 		FallbackGroupID:                 g.FallbackGroupID,

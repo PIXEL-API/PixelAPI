@@ -14,6 +14,14 @@ type ownedAccountGroupRepoStub struct {
 	groups map[int64]*Group
 }
 
+func TestAccountServiceCreateOwnedRejectsUnsupportedPlatform(t *testing.T) {
+	svc := &AccountService{}
+
+	_, err := svc.CreateOwned(context.Background(), 1, CreateAccountRequest{Platform: "unsupported"})
+
+	require.ErrorIs(t, err, ErrAccountPlatformUnsupported)
+}
+
 func (s *ownedAccountGroupRepoStub) GetByID(_ context.Context, id int64) (*Group, error) {
 	group := s.groups[id]
 	if group == nil {
@@ -79,7 +87,9 @@ func (s *ownedAccountUserRepoStub) GetByID(_ context.Context, _ int64) (*User, e
 
 type ownedPublicShareGroupRepoStub struct {
 	groupRepoNoop
-	groups []Group
+	groups       []Group
+	modeGroupIDs map[int64]bool
+	modeGroupErr error
 }
 
 func (s *ownedPublicShareGroupRepoStub) ListActiveByPlatform(_ context.Context, platform string) ([]Group, error) {
@@ -90,6 +100,13 @@ func (s *ownedPublicShareGroupRepoStub) ListActiveByPlatform(_ context.Context, 
 		}
 	}
 	return out, nil
+}
+
+func (s *ownedPublicShareGroupRepoStub) IsModeGroup(_ context.Context, groupID int64) (bool, error) {
+	if s.modeGroupErr != nil {
+		return false, s.modeGroupErr
+	}
+	return s.modeGroupIDs[groupID], nil
 }
 
 type ownedPublicSharePolicyRepoStub struct {
@@ -554,6 +571,59 @@ func TestAccountServiceResolveOwnedPublicShareGroup(t *testing.T) {
 	require.Equal(t, int64(11), group.ID)
 }
 
+func TestAccountServiceResolveOwnedPublicShareGroupExcludesAccountModeGroups(t *testing.T) {
+	for _, platform := range []string{PlatformAnthropic, PlatformGemini, PlatformAntigravity, PlatformGrok} {
+		t.Run(platform, func(t *testing.T) {
+			svc := &AccountService{
+				groupRepo: &ownedPublicShareGroupRepoStub{
+					groups: []Group{
+						{ID: 10, Name: "账号模式分组", Platform: platform, Status: StatusActive, Scope: GroupScopePublic},
+						{ID: 11, Name: "共享号池", Platform: platform, Status: StatusActive, Scope: GroupScopePublic},
+					},
+					modeGroupIDs: map[int64]bool{10: true},
+				},
+			}
+
+			group, err := svc.resolveOwnedPublicShareGroup(context.Background(), &Account{Platform: platform})
+
+			require.NoError(t, err)
+			require.Equal(t, int64(11), group.ID)
+		})
+	}
+}
+
+func TestAccountServiceResolveOwnedPublicShareGroupExcludesMisconfiguredOpenAIAccountModeGroup(t *testing.T) {
+	svc := &AccountService{
+		groupRepo: &ownedPublicShareGroupRepoStub{
+			groups: []Group{
+				{ID: 10, Name: "OpenAI账号模式", Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopePublic, RequiredAccountLevel: AccountLevelPlus},
+				{ID: 11, Name: "PLUS共享号池", Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopePublic, RequiredAccountLevel: AccountLevelPlus},
+			},
+			modeGroupIDs: map[int64]bool{10: true},
+		},
+	}
+
+	group, err := svc.resolveOwnedPublicShareGroup(context.Background(), &Account{Platform: PlatformOpenAI, AccountLevel: AccountLevelPlus})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(11), group.ID)
+}
+
+func TestAccountServiceResolveOwnedPublicShareGroupFailsWhenModeGroupClassificationFails(t *testing.T) {
+	svc := &AccountService{
+		groupRepo: &ownedPublicShareGroupRepoStub{
+			groups: []Group{
+				{ID: 10, Name: "Anthropic共享号池", Platform: PlatformAnthropic, Status: StatusActive, Scope: GroupScopePublic},
+			},
+			modeGroupErr: ErrServiceUnavailable,
+		},
+	}
+
+	_, err := svc.resolveOwnedPublicShareGroup(context.Background(), &Account{Platform: PlatformAnthropic})
+
+	require.ErrorIs(t, err, ErrServiceUnavailable)
+}
+
 func TestAccountServiceResolveOwnedPublicShareGroupRejectsHigherLevelFallbackToLowerPool(t *testing.T) {
 	svc := &AccountService{
 		groupRepo: &ownedPublicShareGroupRepoStub{
@@ -583,6 +653,27 @@ func TestAccountServiceResolveOwnedPublicShareGroupKeepsTeamPoolStrict(t *testin
 	require.Equal(t, int64(12), group.ID)
 
 	_, err = svc.resolveOwnedPublicShareGroup(context.Background(), &Account{Platform: PlatformOpenAI, AccountLevel: AccountLevelPlus})
+	require.ErrorIs(t, err, ErrOwnedAccountPublicPoolUnavailable)
+}
+
+func TestAccountServiceResolveOwnedPublicShareGroupKeepsK12PoolStrict(t *testing.T) {
+	svc := &AccountService{
+		groupRepo: &ownedPublicShareGroupRepoStub{
+			groups: []Group{
+				{ID: 14, Name: "K12共享号池", Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopePublic, RequiredAccountLevel: AccountLevelK12},
+			},
+		},
+	}
+
+	group, err := svc.resolveOwnedPublicShareGroup(context.Background(), &Account{
+		Platform:    PlatformOpenAI,
+		Credentials: map[string]any{"plan_type": "k12"},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(14), group.ID)
+
+	_, err = svc.resolveOwnedPublicShareGroup(context.Background(), &Account{Platform: PlatformOpenAI, AccountLevel: AccountLevelTeam})
 	require.ErrorIs(t, err, ErrOwnedAccountPublicPoolUnavailable)
 }
 
@@ -1033,11 +1124,18 @@ func TestAccountServiceCreateOwnedAllowsOpenAITeamWithoutProxy(t *testing.T) {
 
 func TestAccountServiceCreateOwnedKeepsAllowedPersonalConcurrency(t *testing.T) {
 	ownerID := int64(101)
+	proxyID := int64(7)
 	repo := &ownedAccountDuplicateRepoStub{}
 	svc := &AccountService{
 		accountRepo: repo,
 		privateGroupProvisioner: &ownedPrivateGroupProvisionerStub{
 			group: &Group{ID: 99, Platform: PlatformAnthropic, Status: StatusActive, Scope: GroupScopeUserPrivate},
+		},
+		proxyRepo: &ownedAccountProxyRepoStub{
+			proxies: map[int64]*Proxy{
+				proxyID: {ID: proxyID, OwnerUserID: &ownerID, Status: StatusActive, MaxAccounts: 2},
+			},
+			counts: map[int64]int64{proxyID: 0},
 		},
 	}
 
@@ -1046,6 +1144,7 @@ func TestAccountServiceCreateOwnedKeepsAllowedPersonalConcurrency(t *testing.T) 
 		Platform:    PlatformAnthropic,
 		Type:        AccountTypeOAuth,
 		Credentials: map[string]any{"access_token": "token"},
+		ProxyID:     &proxyID,
 		Concurrency: ownedPersonalMaxConcurrency,
 		Priority:    ownedPersonalDefaultPriority,
 	})
@@ -1053,8 +1152,12 @@ func TestAccountServiceCreateOwnedKeepsAllowedPersonalConcurrency(t *testing.T) 
 	require.NoError(t, err)
 	require.NotNil(t, account)
 	require.Equal(t, ownedPersonalMaxConcurrency, account.Concurrency)
+	require.NotNil(t, account.ProxyID)
+	require.Equal(t, proxyID, *account.ProxyID)
 	require.Len(t, repo.createdAccounts, 1)
 	require.Equal(t, ownedPersonalMaxConcurrency, repo.createdAccounts[0].Concurrency)
+	require.NotNil(t, repo.createdAccounts[0].ProxyID)
+	require.Equal(t, proxyID, *repo.createdAccounts[0].ProxyID)
 }
 
 func TestValidateOwnedAccountSourceAllowsOAuthMetadataURLs(t *testing.T) {
@@ -1127,8 +1230,37 @@ func TestAccountServiceCreateAllowsAdminOpenAIAPIKeyBaseURL(t *testing.T) {
 	require.Equal(t, "sk-test", repo.createdAccounts[0].Credentials["api_key"])
 }
 
+func TestAccountServiceKeepsGrokAPIKeyAdminOnly(t *testing.T) {
+	err := validateOwnedAccountSource(AccountTypeAPIKey, map[string]any{
+		"api_key":  "xai-secret",
+		"base_url": "https://api.x.ai/v1",
+	}, nil)
+	require.ErrorIs(t, err, ErrOwnedAccountTypeNotAllowed)
+
+	repo := &ownedAccountDuplicateRepoStub{}
+	svc := &AccountService{accountRepo: repo}
+	account, err := svc.Create(context.Background(), CreateAccountRequest{
+		Name:         "admin-grok-api-key",
+		Platform:     PlatformGrok,
+		Type:         AccountTypeAPIKey,
+		Credentials:  map[string]any{"api_key": "xai-secret", "base_url": "https://api.x.ai/v1"},
+		ShareMode:    AccountShareModePrivate,
+		Concurrency:  1,
+		LoadFactor:   intPtr(1),
+		Priority:     1,
+		AccountLevel: AccountLevelUnknown,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, account)
+	require.Len(t, repo.createdAccounts, 1)
+	require.Equal(t, PlatformGrok, repo.createdAccounts[0].Platform)
+	require.Equal(t, AccountTypeAPIKey, repo.createdAccounts[0].Type)
+}
+
 func TestAccountServiceUpdateOwnedRejectsDuplicateAnthropicIdentity(t *testing.T) {
 	ownerID := int64(101)
+	proxyID := int64(7)
 	repo := &ownedAccountDuplicateRepoStub{
 		getByIDAccounts: map[int64]*Account{
 			2: {
@@ -1137,6 +1269,7 @@ func TestAccountServiceUpdateOwnedRejectsDuplicateAnthropicIdentity(t *testing.T
 				Type:        AccountTypeOAuth,
 				OwnerUserID: &ownerID,
 				Credentials: map[string]any{"access_token": "token"},
+				ProxyID:     &proxyID,
 				Status:      StatusActive,
 				Schedulable: true,
 				Concurrency: 1,
@@ -1161,7 +1294,15 @@ func TestAccountServiceUpdateOwnedRejectsDuplicateAnthropicIdentity(t *testing.T
 			},
 		},
 	}
-	svc := &AccountService{accountRepo: repo}
+	svc := &AccountService{
+		accountRepo: repo,
+		proxyRepo: &ownedAccountProxyRepoStub{
+			proxies: map[int64]*Proxy{
+				proxyID: {ID: proxyID, OwnerUserID: &ownerID, Status: StatusActive, MaxAccounts: 1},
+			},
+			counts: map[int64]int64{proxyID: 1},
+		},
+	}
 	credentials := map[string]any{"access_token": "token", "org_uuid": "org-a", "account_uuid": "acc-a"}
 
 	account, err := svc.UpdateOwned(context.Background(), ownerID, 2, UpdateAccountRequest{Credentials: &credentials})
@@ -1181,6 +1322,228 @@ func TestAccountServiceUpdateOwnedRejectsManualAccountLevel(t *testing.T) {
 
 	require.Nil(t, account)
 	require.ErrorIs(t, err, ErrOwnedAccountLevelNotAllowed)
+	require.Empty(t, repo.updatedAccounts)
+}
+
+func TestAccountServiceUpdateOwnedBindsProxyForRequiredOAuthAccount(t *testing.T) {
+	ownerID := int64(101)
+	accountID := int64(2)
+	proxyID := int64(7)
+	repo := &ownedAccountDuplicateRepoStub{
+		getByIDAccounts: map[int64]*Account{
+			accountID: {
+				ID:          accountID,
+				Name:        "claude",
+				Platform:    PlatformAnthropic,
+				Type:        AccountTypeOAuth,
+				Credentials: map[string]any{"access_token": "old"},
+				OwnerUserID: &ownerID,
+				Concurrency: ownedPersonalDefaultConcurrency,
+				Priority:    ownedPersonalDefaultPriority,
+				Status:      StatusActive,
+			},
+		},
+	}
+	svc := &AccountService{
+		accountRepo: repo,
+		proxyRepo: &ownedAccountProxyRepoStub{
+			proxies: map[int64]*Proxy{
+				proxyID: {ID: proxyID, OwnerUserID: &ownerID, Status: StatusActive, MaxAccounts: 2},
+			},
+			counts: map[int64]int64{proxyID: 0},
+		},
+	}
+	credentials := map[string]any{"access_token": "new"}
+
+	account, err := svc.UpdateOwned(context.Background(), ownerID, accountID, UpdateAccountRequest{
+		Credentials: &credentials,
+		ProxyID:     &proxyID,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, account)
+	require.NotNil(t, account.ProxyID)
+	require.Equal(t, proxyID, *account.ProxyID)
+	require.Len(t, repo.updatedAccounts, 1)
+	require.NotNil(t, repo.updatedAccounts[0].ProxyID)
+	require.Equal(t, proxyID, *repo.updatedAccounts[0].ProxyID)
+}
+
+func TestAccountServiceUpdateOwnedAllowsExistingProxyWhenAtCapacity(t *testing.T) {
+	ownerID := int64(101)
+	accountID := int64(2)
+	proxyID := int64(7)
+	repo := &ownedAccountDuplicateRepoStub{
+		getByIDAccounts: map[int64]*Account{
+			accountID: {
+				ID:          accountID,
+				Name:        "claude",
+				Platform:    PlatformAnthropic,
+				Type:        AccountTypeOAuth,
+				Credentials: map[string]any{"access_token": "old"},
+				OwnerUserID: &ownerID,
+				ProxyID:     &proxyID,
+				Concurrency: ownedPersonalDefaultConcurrency,
+				Priority:    ownedPersonalDefaultPriority,
+				Status:      StatusActive,
+			},
+		},
+	}
+	svc := &AccountService{
+		accountRepo: repo,
+		proxyRepo: &ownedAccountProxyRepoStub{
+			proxies: map[int64]*Proxy{
+				proxyID: {ID: proxyID, OwnerUserID: &ownerID, Status: StatusActive, MaxAccounts: 1},
+			},
+			counts: map[int64]int64{proxyID: 1},
+		},
+	}
+	credentials := map[string]any{"access_token": "new"}
+
+	account, err := svc.UpdateOwned(context.Background(), ownerID, accountID, UpdateAccountRequest{
+		Credentials: &credentials,
+		ProxyID:     &proxyID,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, account)
+	require.NotNil(t, account.ProxyID)
+	require.Equal(t, proxyID, *account.ProxyID)
+	require.Len(t, repo.updatedAccounts, 1)
+}
+
+func TestAccountServiceUpdateOwnedRejectsCredentialUpdateWithoutRequiredProxy(t *testing.T) {
+	ownerID := int64(101)
+	accountID := int64(2)
+	repo := &ownedAccountDuplicateRepoStub{
+		getByIDAccounts: map[int64]*Account{
+			accountID: {
+				ID:          accountID,
+				Name:        "claude",
+				Platform:    PlatformAnthropic,
+				Type:        AccountTypeOAuth,
+				Credentials: map[string]any{"access_token": "old"},
+				OwnerUserID: &ownerID,
+				Concurrency: ownedPersonalDefaultConcurrency,
+				Priority:    ownedPersonalDefaultPriority,
+				Status:      StatusActive,
+			},
+		},
+	}
+	svc := &AccountService{accountRepo: repo}
+	credentials := map[string]any{"access_token": "new"}
+
+	account, err := svc.UpdateOwned(context.Background(), ownerID, accountID, UpdateAccountRequest{
+		Credentials: &credentials,
+	})
+
+	require.Nil(t, account)
+	require.ErrorIs(t, err, ErrOwnedAccountProxyRequired)
+	require.Empty(t, repo.updatedAccounts)
+}
+
+func TestAccountServiceUpdateOwnedAllowsOptionalProxyForNonRequiredOAuthAccount(t *testing.T) {
+	ownerID := int64(101)
+	accountID := int64(2)
+	proxyID := int64(7)
+	repo := &ownedAccountDuplicateRepoStub{
+		getByIDAccounts: map[int64]*Account{
+			accountID: {
+				ID:           accountID,
+				Name:         "openai",
+				Platform:     PlatformOpenAI,
+				AccountLevel: AccountLevelFree,
+				Type:         AccountTypeOAuth,
+				Credentials:  map[string]any{"access_token": "old", "plan_type": "free"},
+				OwnerUserID:  &ownerID,
+				Concurrency:  ownedPersonalDefaultConcurrency,
+				Priority:     ownedPersonalDefaultPriority,
+				Status:       StatusActive,
+			},
+		},
+	}
+	svc := &AccountService{
+		accountRepo: repo,
+		proxyRepo: &ownedAccountProxyRepoStub{
+			proxies: map[int64]*Proxy{
+				proxyID: {ID: proxyID, OwnerUserID: &ownerID, Status: StatusActive},
+			},
+		},
+	}
+	credentials := map[string]any{"access_token": "new", "plan_type": "free"}
+
+	account, err := svc.UpdateOwned(context.Background(), ownerID, accountID, UpdateAccountRequest{
+		Credentials: &credentials,
+		ProxyID:     &proxyID,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, account)
+	require.NotNil(t, account.ProxyID)
+	require.Equal(t, proxyID, *account.ProxyID)
+	require.Len(t, repo.updatedAccounts, 1)
+}
+
+func TestAccountServiceUpdateOwnedClearsOptionalProxy(t *testing.T) {
+	ownerID := int64(101)
+	accountID := int64(2)
+	proxyID := int64(7)
+	clearProxyID := int64(0)
+	repo := &ownedAccountDuplicateRepoStub{
+		getByIDAccounts: map[int64]*Account{
+			accountID: {
+				ID:           accountID,
+				Name:         "openai",
+				Platform:     PlatformOpenAI,
+				AccountLevel: AccountLevelFree,
+				Type:         AccountTypeOAuth,
+				Credentials:  map[string]any{"access_token": "old", "plan_type": "free"},
+				OwnerUserID:  &ownerID,
+				ProxyID:      &proxyID,
+				Concurrency:  ownedPersonalDefaultConcurrency,
+				Priority:     ownedPersonalDefaultPriority,
+				Status:       StatusActive,
+			},
+		},
+	}
+	svc := &AccountService{accountRepo: repo}
+
+	account, err := svc.UpdateOwned(context.Background(), ownerID, accountID, UpdateAccountRequest{ProxyID: &clearProxyID})
+
+	require.NoError(t, err)
+	require.NotNil(t, account)
+	require.Nil(t, account.ProxyID)
+	require.Len(t, repo.updatedAccounts, 1)
+	require.Nil(t, repo.updatedAccounts[0].ProxyID)
+}
+
+func TestAccountServiceUpdateOwnedRejectsClearingRequiredProxy(t *testing.T) {
+	ownerID := int64(101)
+	accountID := int64(2)
+	proxyID := int64(7)
+	clearProxyID := int64(0)
+	repo := &ownedAccountDuplicateRepoStub{
+		getByIDAccounts: map[int64]*Account{
+			accountID: {
+				ID:          accountID,
+				Name:        "claude",
+				Platform:    PlatformAnthropic,
+				Type:        AccountTypeOAuth,
+				Credentials: map[string]any{"access_token": "old"},
+				OwnerUserID: &ownerID,
+				ProxyID:     &proxyID,
+				Concurrency: ownedPersonalDefaultConcurrency,
+				Priority:    ownedPersonalDefaultPriority,
+				Status:      StatusActive,
+			},
+		},
+	}
+	svc := &AccountService{accountRepo: repo}
+
+	account, err := svc.UpdateOwned(context.Background(), ownerID, accountID, UpdateAccountRequest{ProxyID: &clearProxyID})
+
+	require.Nil(t, account)
+	require.ErrorIs(t, err, ErrOwnedAccountProxyRequired)
 	require.Empty(t, repo.updatedAccounts)
 }
 

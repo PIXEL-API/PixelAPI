@@ -20,6 +20,9 @@ server:
   # Mode: "debug" for development, "release" for production
   # 运行模式："debug" 用于开发，"release" 用于生产环境
   mode: "release"
+  # Return Server-Timing only for authenticated Admin/User Web API requests (opt-in)
+  # 仅为已认证的管理端/用户端 Web API 请求返回 Server-Timing（默认关闭）
+  enable_server_timing: false
   # Frontend base URL used to generate external links in emails (e.g. password reset)
   # 用于生成邮件中的外部链接（例如：重置密码链接）的前端基础地址
   # Example: "https://example.com"
@@ -149,6 +152,8 @@ gateway:
   # Timeout for waiting upstream response headers (seconds)
   # 等待上游响应头超时时间（秒）
   response_header_timeout: 600
+  # OpenAI/Codex 上游响应头超时（秒，0=禁用；避免长排队被通用超时截断）
+  openai_response_header_timeout: 0
   # Max request body size in bytes (default: 256MB)
   # 请求体最大字节数（默认 256MB）
   max_body_size: 268435456
@@ -231,6 +236,13 @@ gateway:
   # OpenAI 透传模式是否放行客户端超时头（如 x-stainless-timeout）
   # 默认 false：过滤超时头，降低上游提前断流风险。
   openai_passthrough_allow_timeout_headers: false
+  # OpenAI 原生 HTTP Responses 首个语义输出超时（秒，0=禁用）。
+  # 超时从网关收到请求开始计算，包含等待响应头；不适用于 passthrough 或 WebSocket 链路。
+  # 首次输出前单次尝试最多暂存 8 MiB，超限时切换账号且不暴露不完整 SSE 数据。
+  # 注意：超时请求可能已产生上游用量，切换账号重试可能导致上游重复计费。
+  openai_first_output_timeout_seconds: 0
+  # high/xhigh/max 推理可选覆盖值（秒，0=使用普通首输出超时）。
+  openai_high_effort_first_output_timeout_seconds: 0
   # OpenAI Responses WebSocket 配置（默认开启，可按需回滚到 HTTP）
   openai_ws:
     # 新版 WS mode 路由（默认关闭）。关闭时保持当前 legacy 实现行为。
@@ -238,6 +250,12 @@ gateway:
     # ingress 默认模式：off|ctx_pool|passthrough（仅 mode_router_v2_enabled=true 生效）
     # 兼容旧值：shared/dedicated 会按 ctx_pool 处理。
     ingress_mode_default: ctx_pool
+    # 已完成 turn 之间的最长空闲时间（秒，0=禁用）
+    ingress_inter_turn_idle_timeout_seconds: 300
+    # 单个 API Key 在所有实例上的入站 WS 会话上限（0=禁用）
+    max_ingress_connections_per_api_key: 64
+    # WebSocket 升级后等待首条 response.create 消息的总超时（秒）
+    client_first_message_timeout_seconds: 30
     # 全局总开关，默认 true；关闭时所有请求保持原有 HTTP/SSE 路由
     enabled: true
     # 按账号类型细分开关
@@ -309,6 +327,13 @@ gateway:
       queue: 0.7
       error_rate: 0.8
       ttft: 0.5
+  # OpenAI HTTP/2 协议与代理兼容回退策略
+  openai_http2:
+    enabled: true
+    allow_proxy_fallback_to_http1: true
+    fallback_error_threshold: 2
+    fallback_window_seconds: 60
+    fallback_ttl_seconds: 600
   # HTTP upstream connection pool settings (HTTP/2 + multi-proxy scenario defaults)
   # HTTP 上游连接池配置（HTTP/2 + 多代理场景默认值）
   # Max idle connections across all hosts
@@ -340,6 +365,9 @@ gateway:
   # Stream keepalive interval (seconds), 0=disable
   # 流式 keepalive 间隔（秒），0=禁用
   stream_keepalive_interval: 10
+  # Non-streaming Images JSON keepalive interval (seconds), 0=disable; the first heartbeat commits HTTP 200
+  # 图片非流式 JSON keepalive 间隔（秒），0=禁用；首个心跳后 HTTP 状态会固化为 200
+  image_nonstream_keepalive_interval: 0
   # SSE max line size in bytes (default: 40MB)
   # SSE 单行最大字节数（默认 40MB）
   max_line_size: 41943040
@@ -921,6 +949,36 @@ oidc_connect:
   userinfo_email_path: ""
   userinfo_id_path: ""
   userinfo_username_path: ""
+
+# =============================================================================
+# OIDC Provider (Sub2API provides login identities to trusted applications)
+# OIDC 身份提供方（由 Sub2API 向受信任应用提供登录身份）
+# =============================================================================
+oidc_provider:
+  enabled: false
+  # Production must use HTTPS and must not include a query or fragment.
+  # 生产环境必须使用 HTTPS，且不能包含 query 或 fragment。
+  issuer: ""
+  # Example: "https://api.example.com/oidc/authorize"
+  # The backend appends the one-time request_id query parameter.
+  # 后端会追加一次性 request_id 查询参数。
+  frontend_authorize_url: ""
+  # Persistent PEM-encoded RSA private key (PKCS#1 or PKCS#8, at least 2048 bits).
+  # 持久化 PEM RSA 私钥（PKCS#1 或 PKCS#8，至少 2048 位）。
+  signing_key_path: ""
+  # 300 seconds allows enough time for an interactive login/2FA confirmation.
+  # 300 秒可为交互式登录和二次验证预留足够时间。
+  request_ttl_seconds: 300
+  code_ttl_seconds: 120
+  access_token_ttl_seconds: 300
+  # Store only SHA-256 hex digests of client secrets, never plaintext secrets.
+  # 这里只保存客户端密钥的 SHA-256 十六进制摘要，不保存明文密钥。
+  clients: []
+  # clients:
+  #   - id: "trusted-app"
+  #     secret_sha256: "<64-character sha256 hex digest>"
+  #     redirect_uris:
+  #       - "https://trusted-app.example.com/oidc/callback"
 
 # =============================================================================
 # Default Settings

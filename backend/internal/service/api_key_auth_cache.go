@@ -41,13 +41,14 @@ type APIKeyAuthGroupRouteSnapshot struct {
 
 // APIKeyAuthUserSnapshot 用户快照
 type APIKeyAuthUserSnapshot struct {
-	ID                  int64   `json:"id"`
-	Status              string  `json:"status"`
-	Role                string  `json:"role"`
-	Balance             float64 `json:"balance"`
-	PointsBalance       float64 `json:"points_balance"`
-	PreferPointsBilling bool    `json:"prefer_points_billing"`
-	Concurrency         int     `json:"concurrency"`
+	ID                  int64     `json:"id"`
+	Status              string    `json:"status"`
+	Role                string    `json:"role"`
+	Balance             float64   `json:"balance"`
+	PointsBalance       float64   `json:"points_balance"`
+	PreferPointsBilling bool      `json:"prefer_points_billing"`
+	Concurrency         int       `json:"concurrency"`
+	CreatedAt           time.Time `json:"created_at"`
 
 	// Balance notification fields (required for CheckBalanceAfterDeduction)
 	Email                      string             `json:"email"`
@@ -76,6 +77,10 @@ type APIKeyAuthGroupSnapshot struct {
 	Scope                           string   `json:"scope,omitempty"`
 	SubscriptionType                string   `json:"subscription_type"`
 	RateMultiplier                  float64  `json:"rate_multiplier"`
+	NewUserRateEnabled              bool     `json:"new_user_rate_enabled"`
+	NewUserRateMultiplier           float64  `json:"new_user_rate_multiplier"`
+	NewUserRateWindowSeconds        int      `json:"new_user_rate_window_seconds"`
+	NewUserRateQuotaUSD             float64  `json:"new_user_rate_quota_usd"`
 	DailyLimitUSD                   *float64 `json:"daily_limit_usd,omitempty"`
 	WeeklyLimitUSD                  *float64 `json:"weekly_limit_usd,omitempty"`
 	MonthlyLimitUSD                 *float64 `json:"monthly_limit_usd,omitempty"`
@@ -85,6 +90,12 @@ type APIKeyAuthGroupSnapshot struct {
 	ImagePrice1K                    *float64 `json:"image_price_1k,omitempty"`
 	ImagePrice2K                    *float64 `json:"image_price_2k,omitempty"`
 	ImagePrice4K                    *float64 `json:"image_price_4k,omitempty"`
+	VideoRateIndependent            bool     `json:"video_rate_independent"`
+	VideoRateMultiplier             float64  `json:"video_rate_multiplier"`
+	VideoPrice480P                  *float64 `json:"video_price_480p,omitempty"`
+	VideoPrice720P                  *float64 `json:"video_price_720p,omitempty"`
+	VideoPrice1080P                 *float64 `json:"video_price_1080p,omitempty"`
+	WebSearchPricePerCall           *float64 `json:"web_search_price_per_call,omitempty"`
 	ClaudeCodeOnly                  bool     `json:"claude_code_only"`
 	FallbackGroupID                 *int64   `json:"fallback_group_id,omitempty"`
 	FallbackGroupIDOnInvalidRequest *int64   `json:"fallback_group_id_on_invalid_request,omitempty"`

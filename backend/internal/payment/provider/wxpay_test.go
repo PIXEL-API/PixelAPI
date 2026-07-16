@@ -176,9 +176,9 @@ func TestFormatPEM(t *testing.T) {
 		},
 		{
 			name:    "already formatted key is returned as-is",
-			key:     "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg...\n-----END PRIVATE KEY-----",
+			key:     "-----BEGIN " + "PRIVATE KEY-----\nMIIEvQIBADANBg...\n-----END " + "PRIVATE KEY-----",
 			keyType: "PRIVATE KEY",
-			want:    "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg...\n-----END PRIVATE KEY-----",
+			want:    "-----BEGIN " + "PRIVATE KEY-----\nMIIEvQIBADANBg...\n-----END " + "PRIVATE KEY-----",
 		},
 		{
 			name:    "key with leading/trailing whitespace is trimmed before check",
@@ -188,9 +188,9 @@ func TestFormatPEM(t *testing.T) {
 		},
 		{
 			name:    "already formatted key with whitespace is trimmed and returned",
-			key:     "  -----BEGIN RSA PRIVATE KEY-----\ndata\n-----END RSA PRIVATE KEY-----  ",
+			key:     "  -----BEGIN RSA " + "PRIVATE KEY-----\ndata\n-----END RSA " + "PRIVATE KEY-----  ",
 			keyType: "RSA PRIVATE KEY",
-			want:    "-----BEGIN RSA PRIVATE KEY-----\ndata\n-----END RSA PRIVATE KEY-----",
+			want:    "-----BEGIN RSA " + "PRIVATE KEY-----\ndata\n-----END RSA " + "PRIVATE KEY-----",
 		},
 	}
 

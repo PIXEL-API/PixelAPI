@@ -193,87 +193,6 @@
           </section>
         </div>
 
-        <section class="card p-5">
-          <div class="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.revenue.sections.breakdown') }}</h3>
-              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ activeBreakdownHint }}</p>
-            </div>
-            <div class="inline-flex max-w-full overflow-x-auto rounded-lg border border-gray-200 bg-white p-1 dark:border-dark-600 dark:bg-dark-800">
-              <button
-                v-for="tab in breakdownTabs"
-                :key="tab.key"
-                type="button"
-                class="whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium transition-colors"
-                :class="activeBreakdown === tab.key
-                  ? 'bg-gray-900 text-white dark:bg-white dark:text-gray-900'
-                  : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700'"
-                :aria-pressed="activeBreakdown === tab.key"
-                @click="activeBreakdown = tab.key"
-              >
-                {{ tab.label }}
-              </button>
-            </div>
-          </div>
-
-          <div v-if="breakdownsLoading" class="flex h-40 items-center justify-center">
-            <LoadingSpinner />
-          </div>
-          <div v-else-if="activeBreakdownItems.length" class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-gray-200 dark:divide-dark-700">
-              <thead>
-                <tr>
-                  <th class="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                    {{ t('admin.revenue.table.name') }}
-                  </th>
-                  <th class="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                    {{ t('admin.revenue.table.requests') }}
-                  </th>
-                  <th class="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                    {{ t('admin.revenue.table.tokens') }}
-                  </th>
-                  <th class="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                    {{ breakdownColumnLabels.primary }}
-                  </th>
-                  <th class="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                    {{ breakdownColumnLabels.secondary }}
-                  </th>
-                  <th class="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                    {{ breakdownColumnLabels.tertiary }}
-                  </th>
-                  <th class="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                    {{ breakdownColumnLabels.quaternary }}
-                  </th>
-                  <th class="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                    {{ breakdownColumnLabels.quinary }}
-                  </th>
-                </tr>
-              </thead>
-              <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
-                <tr v-for="item in activeBreakdownItems" :key="`${activeBreakdown}-${item.id ?? item.name}`" class="hover:bg-gray-50 dark:hover:bg-dark-800">
-                  <td class="max-w-[240px] px-3 py-3">
-                    <div class="truncate text-sm font-medium text-gray-900 dark:text-white">{{ item.name }}</div>
-                    <div v-if="item.secondary" class="truncate text-xs text-gray-500 dark:text-gray-400">{{ item.secondary }}</div>
-                  </td>
-                  <td class="px-3 py-3 text-right text-sm text-gray-700 dark:text-gray-300">{{ formatInteger(item.requests) }}</td>
-                  <td class="px-3 py-3 text-right text-sm text-gray-700 dark:text-gray-300">{{ formatInteger(item.total_tokens) }}</td>
-                  <td class="px-3 py-3 text-right text-sm text-gray-700 dark:text-gray-300">{{ formatAmount(item.primary_amount) }}</td>
-                  <td class="px-3 py-3 text-right text-sm text-gray-700 dark:text-gray-300">{{ formatAmount(item.secondary_amount) }}</td>
-                  <td class="px-3 py-3 text-right text-sm font-medium text-gray-900 dark:text-white">{{ formatAmount(item.tertiary_amount) }}</td>
-                  <td class="px-3 py-3 text-right text-sm text-gray-700 dark:text-gray-300">
-                    {{ item.quaternary_type === 'percent' ? formatPercent(item.quaternary_amount) : formatAmount(item.quaternary_amount) }}
-                  </td>
-                  <td class="px-3 py-3 text-right text-sm text-gray-700 dark:text-gray-300">
-                    {{ item.quinary_type === 'percent' ? formatPercent(item.quinary_amount) : formatAmount(item.quinary_amount) }}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div v-else class="flex h-40 items-center justify-center text-sm text-gray-500 dark:text-gray-400">
-            {{ t('admin.revenue.noData') }}
-          </div>
-        </section>
       </template>
 
       <SharePolicyPanel v-else-if="activeRevenueTab === 'sharePolicy'" />
@@ -304,10 +223,8 @@ import SharePolicyPanel from '@/components/admin/revenue/SharePolicyPanel.vue'
 import ShareSettlementsPanel from '@/components/admin/revenue/ShareSettlementsPanel.vue'
 import { revenueAPI } from '@/api/admin/revenue'
 import type {
-  RevenueBreakdownItem,
   RevenueGranularity,
   RevenueSummaryParams,
-  RevenueShareOwnerBreakdownItem,
   RevenueSummary
 } from '@/api/admin/revenue'
 import { adminUsageAPI, type SimpleUser } from '@/api/admin/usage'
@@ -317,24 +234,7 @@ import { extractI18nErrorMessage } from '@/utils/apiError'
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend, Filler)
 
 type RangeDays = 1 | 3 | 7 | 30 | 90
-type BreakdownKey = 'consumers' | 'shareOwners' | 'groups' | 'accounts' | 'models'
 type RevenueTab = 'overview' | 'sharePolicy' | 'shareSettlements'
-type BreakdownValueType = 'amount' | 'percent'
-
-interface RevenueBreakdownDisplayItem {
-  id?: number
-  name: string
-  secondary?: string
-  requests: number
-  total_tokens: number
-  primary_amount: number
-  secondary_amount: number
-  tertiary_amount: number
-  quaternary_amount: number
-  quaternary_type: BreakdownValueType
-  quinary_amount: number
-  quinary_type: BreakdownValueType
-}
 
 const DAYS_OPTIONS: RangeDays[] = [1, 3, 7, 30, 90]
 const MAX_REVENUE_RANGE_DAYS = 366
@@ -355,11 +255,10 @@ const userResults = ref<SimpleUser[]>([])
 const showUserDropdown = ref(false)
 const granularity = ref<RevenueGranularity>('day')
 const loading = ref(false)
-const breakdownsLoading = ref(false)
 const summary = ref<RevenueSummary | null>(null)
-const activeBreakdown = ref<BreakdownKey>('shareOwners')
 const activeRevenueTab = ref<RevenueTab>('overview')
 let requestSeq = 0
+let summaryAbortController: AbortController | null = null
 let userSearchTimeout: ReturnType<typeof setTimeout> | null = null
 
 const amountFormatter = computed(() => new Intl.NumberFormat(locale.value, {
@@ -631,101 +530,6 @@ const adjustmentRows = computed(() => {
   ]
 })
 
-const breakdownTabs = computed(() => [
-  { key: 'consumers' as const, label: t('admin.revenue.breakdown.consumers') },
-  { key: 'shareOwners' as const, label: t('admin.revenue.breakdown.shareOwners') },
-  { key: 'groups' as const, label: t('admin.revenue.breakdown.groups') },
-  { key: 'accounts' as const, label: t('admin.revenue.breakdown.accounts') },
-  { key: 'models' as const, label: t('admin.revenue.breakdown.models') }
-])
-
-const activeBreakdownHint = computed(() => {
-  switch (activeBreakdown.value) {
-    case 'shareOwners':
-      return t('admin.revenue.breakdownHints.shareOwners')
-    case 'groups':
-      return t('admin.revenue.breakdownHints.groups')
-    case 'accounts':
-      return t('admin.revenue.breakdownHints.accounts')
-    case 'models':
-      return t('admin.revenue.breakdownHints.models')
-    case 'consumers':
-    default:
-      return t('admin.revenue.breakdownHints.consumers')
-  }
-})
-
-const breakdownColumnLabels = computed(() => {
-  if (activeBreakdown.value === 'shareOwners') {
-    return {
-      primary: t('admin.revenue.table.consumerCharge'),
-      secondary: t('admin.revenue.table.cost'),
-      tertiary: t('admin.revenue.table.ownerCredit'),
-      quaternary: t('admin.revenue.table.platformFee'),
-      quinary: t('admin.revenue.table.shareRatio')
-    }
-  }
-  return {
-    primary: t('admin.revenue.table.platformRevenue'),
-    secondary: t('admin.revenue.table.cost'),
-    tertiary: t('admin.revenue.table.shareExpense'),
-    quaternary: t('admin.revenue.table.platformNetProfit'),
-    quinary: t('admin.revenue.table.platformNetMargin')
-  }
-})
-
-const activeBreakdownItems = computed<RevenueBreakdownDisplayItem[]>(() => {
-  const data = summary.value
-  if (!data) return []
-  switch (activeBreakdown.value) {
-    case 'shareOwners':
-      return data.top_share_owners.map(mapShareOwnerBreakdownItem)
-    case 'groups':
-      return data.top_groups.map(mapUsageBreakdownItem)
-    case 'accounts':
-      return data.top_accounts.map(mapUsageBreakdownItem)
-    case 'models':
-      return data.top_models.map(mapUsageBreakdownItem)
-    case 'consumers':
-    default:
-      return data.top_users.map(mapUsageBreakdownItem)
-  }
-})
-
-function mapUsageBreakdownItem(item: RevenueBreakdownItem): RevenueBreakdownDisplayItem {
-  return {
-    id: item.id,
-    name: item.name,
-    secondary: item.secondary,
-    requests: item.requests,
-    total_tokens: item.total_tokens,
-    primary_amount: item.consumed_revenue,
-    secondary_amount: item.account_cost,
-    tertiary_amount: item.share_owner_credit,
-    quaternary_amount: item.net_profit,
-    quaternary_type: 'amount',
-    quinary_amount: item.net_margin,
-    quinary_type: 'percent'
-  }
-}
-
-function mapShareOwnerBreakdownItem(item: RevenueShareOwnerBreakdownItem): RevenueBreakdownDisplayItem {
-  return {
-    id: item.id,
-    name: item.name,
-    secondary: item.secondary,
-    requests: item.requests,
-    total_tokens: item.total_tokens,
-    primary_amount: item.consumer_charge,
-    secondary_amount: item.account_cost,
-    tertiary_amount: item.owner_credit,
-    quaternary_amount: item.platform_fee,
-    quaternary_type: 'amount',
-    quinary_amount: item.owner_share_ratio,
-    quinary_type: 'percent'
-  }
-}
-
 function isRangeDisabled(days: RangeDays): boolean {
   return granularity.value === 'hour' && days > MAX_HOURLY_REVENUE_RANGE_DAYS
 }
@@ -754,51 +558,31 @@ function setGranularity(value: RevenueGranularity) {
 }
 
 async function loadSummary() {
-  if (!validateDateRange()) return
+  if (!validateDateRange()) {
+    requestSeq++
+    summaryAbortController?.abort()
+    loading.value = false
+    return
+  }
 
   const currentRequest = ++requestSeq
   loading.value = true
-  breakdownsLoading.value = false
   const params = buildRevenueQueryParams()
+  summaryAbortController?.abort()
+  summaryAbortController = new AbortController()
+  const { signal } = summaryAbortController
   try {
-    const res = await revenueAPI.getSummary({ ...params, include_breakdowns: false })
-    if (currentRequest === requestSeq) {
+    const res = await revenueAPI.getSummary(params, { signal })
+    if (currentRequest === requestSeq && !signal.aborted) {
       summary.value = res.data
-      void loadBreakdowns(currentRequest, params)
     }
   } catch (err: unknown) {
-    if (currentRequest === requestSeq) {
+    if (currentRequest === requestSeq && !signal.aborted) {
       appStore.showError(extractI18nErrorMessage(err, t, 'admin.revenue.errors', t('admin.revenue.loadFailed')))
-      breakdownsLoading.value = false
     }
   } finally {
-    if (currentRequest === requestSeq) {
+    if (currentRequest === requestSeq && !signal.aborted) {
       loading.value = false
-    }
-  }
-}
-
-async function loadBreakdowns(currentRequest: number, params: RevenueSummaryParams) {
-  breakdownsLoading.value = true
-  try {
-    const res = await revenueAPI.getBreakdowns(params)
-    if (currentRequest === requestSeq && summary.value) {
-      summary.value = {
-        ...summary.value,
-        top_users: res.data.top_users ?? [],
-        top_groups: res.data.top_groups ?? [],
-        top_accounts: res.data.top_accounts ?? [],
-        top_models: res.data.top_models ?? [],
-        top_share_owners: res.data.top_share_owners ?? []
-      }
-    }
-  } catch (err: unknown) {
-    if (currentRequest === requestSeq) {
-      appStore.showError(extractI18nErrorMessage(err, t, 'admin.revenue.errors', t('admin.revenue.loadFailed')))
-    }
-  } finally {
-    if (currentRequest === requestSeq) {
-      breakdownsLoading.value = false
     }
   }
 }
@@ -808,7 +592,6 @@ function buildRevenueQueryParams(): RevenueSummaryParams {
     start_date: startDate.value,
     end_date: endDate.value,
     granularity: granularity.value,
-    top_limit: 10,
     user_id: selectedUserId.value ?? undefined
   }
 }
@@ -931,6 +714,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  summaryAbortController?.abort()
   document.removeEventListener('click', onDocumentClick)
   if (userSearchTimeout) {
     clearTimeout(userSearchTimeout)

@@ -1,14 +1,17 @@
 package httpclient
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
 	"github.com/stretchr/testify/require"
 )
 
@@ -17,6 +20,13 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
+
+type closeTrackingTransport struct {
+	roundTripFunc
+	closed bool
+}
+
+func (t *closeTrackingTransport) CloseIdleConnections() { t.closed = true }
 
 func TestValidatedTransport_CacheHostValidation(t *testing.T) {
 	originalValidate := validateResolvedIP
@@ -112,4 +122,34 @@ func TestValidatedTransport_ValidationErrorStopsRoundTrip(t *testing.T) {
 	_, err = transport.RoundTrip(req)
 	require.ErrorIs(t, err, expectedErr)
 	require.Equal(t, int32(0), atomic.LoadInt32(&baseCalls))
+}
+
+func TestValidatedTransportPreservesIdleConnectionCleanup(t *testing.T) {
+	base := &closeTrackingTransport{}
+	newValidatedTransport(base).CloseIdleConnections()
+	require.True(t, base.closed)
+}
+
+func TestBuildClientRecordsDependencyWithoutChangingPoolSettings(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	client, err := buildClient(Options{Timeout: 3 * time.Second})
+	require.NoError(t, err)
+	require.Equal(t, 3*time.Second, client.Timeout)
+
+	collector := servertiming.New(time.Now())
+	req, err := http.NewRequestWithContext(
+		servertiming.WithCollector(context.Background(), collector),
+		http.MethodGet,
+		server.URL,
+		nil,
+	)
+	require.NoError(t, err)
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	require.Contains(t, collector.HeaderValue(time.Now(), "bypass"), "dep_http;dur=")
 }

@@ -55,8 +55,8 @@ func (r *dashboardAggregationRepository) AggregateRange(ctx context.Context, sta
 		return nil
 	}
 
-	hourStart := startLocal.Truncate(time.Hour)
-	hourEnd := endLocal.Truncate(time.Hour)
+	hourStart := startOfHourInLocation(startLocal, loc)
+	hourEnd := startOfHourInLocation(endLocal, loc)
 	if endLocal.After(hourEnd) {
 		hourEnd = hourEnd.Add(time.Hour)
 	}
@@ -110,8 +110,8 @@ func (r *dashboardAggregationRepository) RecomputeRange(ctx context.Context, sta
 		return nil
 	}
 
-	hourStart := startLocal.Truncate(time.Hour)
-	hourEnd := endLocal.Truncate(time.Hour)
+	hourStart := startOfHourInLocation(startLocal, loc)
+	hourEnd := startOfHourInLocation(endLocal, loc)
 	if endLocal.After(hourEnd) {
 		hourEnd = hourEnd.Add(time.Hour)
 	}

@@ -45,6 +45,20 @@ func (Group) Fields() []ent.Field {
 		field.Float("rate_multiplier").
 			SchemaType(map[string]string{dialect.Postgres: "decimal(10,4)"}).
 			Default(1.0),
+		field.Bool("new_user_rate_enabled").
+			Default(false).
+			Comment("是否启用新注册用户临时倍率"),
+		field.Float("new_user_rate_multiplier").
+			SchemaType(map[string]string{dialect.Postgres: "decimal(10,4)"}).
+			Default(1.0).
+			Comment("新注册用户临时倍率，仅 new_user_rate_enabled=true 且窗口未过期时生效"),
+		field.Int("new_user_rate_window_seconds").
+			Default(0).
+			Comment("新注册用户倍率生效窗口，单位秒；0 表示不生效"),
+		field.Float("new_user_rate_quota_usd").
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,10)"}).
+			Default(0).
+			Comment("新注册用户倍率额度上限，单位 USD；0 表示不限制额度"),
 		field.Bool("is_exclusive").
 			Default(false),
 		field.String("status").
@@ -64,9 +78,9 @@ func (Group) Fields() []ent.Field {
 			MaxLen(50).
 			Default(domain.PlatformAnthropic),
 		field.String("required_account_level").
-			MaxLen(20).
+			MaxLen(64).
 			Default("").
-			Comment("Required account capability level for this group: empty/free/plus/pro/team."),
+			Comment("Required OpenAI account capability level key for this group; empty allows any level."),
 		field.String("subscription_type").
 			MaxLen(20).
 			Default(domain.SubscriptionTypeStandard),
@@ -108,6 +122,33 @@ func (Group) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}),
+		field.Bool("video_rate_independent").
+			Default(false).
+			Comment("视频生成是否使用独立倍率；false 表示共享分组有效倍率"),
+		field.Float("video_rate_multiplier").
+			SchemaType(map[string]string{dialect.Postgres: "decimal(10,4)"}).
+			Default(1.0).
+			Comment("视频生成独立倍率，仅 video_rate_independent=true 时生效"),
+		field.Float("video_price_480p").
+			Optional().
+			Nillable().
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}).
+			Comment("480p 视频生成每秒单价（USD/s），Grok 平台使用"),
+		field.Float("video_price_720p").
+			Optional().
+			Nillable().
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}).
+			Comment("720p 视频生成每秒单价（USD/s），Grok 平台使用"),
+		field.Float("video_price_1080p").
+			Optional().
+			Nillable().
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}).
+			Comment("1080p 视频生成每秒单价（USD/s），Grok 平台使用"),
+		field.Float("web_search_price_per_call").
+			Optional().
+			Nillable().
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}).
+			Comment("Codex alpha/search 网页搜索单次价格（USD/次）；nil 表示默认 0.01"),
 
 		// Claude Code 客户端限制 (added by migration 029)
 		field.Bool("claude_code_only").

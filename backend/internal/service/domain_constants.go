@@ -42,7 +42,47 @@ const (
 	PlatformOpenAI      = domain.PlatformOpenAI
 	PlatformGemini      = domain.PlatformGemini
 	PlatformAntigravity = domain.PlatformAntigravity
+	PlatformGrok        = domain.PlatformGrok
 )
+
+// supportedAccountPlatforms is the single service-level source for account platform validation.
+var supportedAccountPlatforms = [...]string{
+	PlatformAnthropic,
+	PlatformOpenAI,
+	PlatformGemini,
+	PlatformAntigravity,
+	PlatformGrok,
+}
+
+// SupportedAccountPlatforms returns all canonical account platforms.
+func SupportedAccountPlatforms() []string {
+	platforms := make([]string, len(supportedAccountPlatforms))
+	copy(platforms, supportedAccountPlatforms[:])
+	return platforms
+
+}
+
+// IsSupportedAccountPlatform reports whether platform is a canonical account platform.
+func IsSupportedAccountPlatform(platform string) bool {
+	for _, supported := range supportedAccountPlatforms {
+		if platform == supported {
+			return true
+		}
+	}
+	return false
+}
+
+// AllowedQuotaPlatforms is the single service-level source for user platform quotas.
+var AllowedQuotaPlatforms = SupportedAccountPlatforms()
+
+func IsAllowedQuotaPlatform(s string) bool {
+	for _, p := range AllowedQuotaPlatforms {
+		if p == s {
+			return true
+		}
+	}
+	return false
+}
 
 // Account type constants
 const (
@@ -203,6 +243,8 @@ const (
 	SettingKeyRiskControlEnabled               = "risk_control_enabled"                 // 是否启用风控中心
 	SettingKeyInvoiceManagementEnabled         = "invoice_management_enabled"           // 是否启用发票管理（默认关闭）
 	SettingKeyWithdrawalManagementEnabled      = "withdrawal_management_enabled"        // 是否启用提现管理（默认开启）
+	SettingKeyWithdrawalRateLimitWindowDays    = "withdrawal_rate_limit_window_days"    // 提现滚动频次限制窗口（天）
+	SettingKeyWithdrawalRateLimitMax           = "withdrawal_rate_limit_max"            // 窗口内最多提现申请次数，0 表示不限制
 	SettingKeyContentModerationConfig          = "content_moderation_config"            // 内容审计配置（JSON）
 	SettingKeyAccountShareCommentReviewEnabled = "account_share_comment_review_enabled" // 账号广场评论审核开关
 	SettingKeyAccountShareCommentReviewURL     = "account_share_comment_review_url"     // 账号广场评论审核模型 URL
@@ -363,6 +405,10 @@ const (
 	// anthropic-beta header.
 	SettingKeyOpenAIFastPolicySettings = "openai_fast_policy_settings"
 
+	// SettingKeyOpenAIAccountLevels stores JSON config for OpenAI account
+	// levels and plan_type aliases.
+	SettingKeyOpenAIAccountLevels = "openai_account_levels"
+
 	// =========================
 	// Claude Code Version Check
 	// =========================
@@ -400,6 +446,8 @@ const (
 	SettingKeyClaudeOAuthSystemPromptBlocks = "claude_oauth_system_prompt_blocks"
 	// SettingKeyOpenAICleanRelayEnabled 是否启用 OpenAI 洁净中继模式（默认 false）
 	SettingKeyOpenAICleanRelayEnabled = "openai_clean_relay_enabled"
+	// SettingKeyDetachedUsageDrainEnabled 客户端断开后是否继续读取上游以采集完整 usage（默认 true）
+	SettingKeyDetachedUsageDrainEnabled = "detached_usage_drain_enabled"
 	// SettingKeyEnableAnthropicCacheTTL1hInjection 是否对 Anthropic OAuth/SetupToken 请求体注入 1h cache_control ttl（默认 false）
 	SettingKeyEnableAnthropicCacheTTL1hInjection = "enable_anthropic_cache_ttl_1h_injection"
 

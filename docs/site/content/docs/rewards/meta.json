@@ -1,0 +1,13 @@
+{
+  "title": "福利与邀请",
+  "description": "消费抽奖福利活动、邀请返利和优惠码，用消费和分享换更多余额与积分。",
+  "icon": "Gift",
+  "root": true,
+  "defaultOpen": true,
+  "pages": [
+    "index",
+    "activities",
+    "affiliate",
+    "coupons"
+  ]
+}

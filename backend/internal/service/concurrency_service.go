@@ -4,12 +4,15 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"os"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"go.uber.org/zap"
 )
 
 // ConcurrencyCache 定义并发控制的缓存接口
@@ -48,6 +51,137 @@ type ConcurrencyCache interface {
 	CleanupStaleProcessSlots(ctx context.Context, activeRequestPrefix string) error
 }
 
+type APIKeyConcurrencyCache interface {
+	TrackAPIKeySlot(ctx context.Context, apiKeyID int64, requestID string) error
+	ReleaseAPIKeySlot(ctx context.Context, apiKeyID int64, requestID string) error
+	GetAPIKeyConcurrencyBatch(ctx context.Context, apiKeyIDs []int64) (map[int64]int, error)
+}
+
+// OpenAIWSIngressLeaseCache owns the short-lived distributed lease used to
+// bound live client WebSocket sessions. It is deliberately independent of the
+// request-slot namespace: idle ingress connections do not occupy turn slots.
+type OpenAIWSIngressLeaseCache interface {
+	AcquireOpenAIWSIngressLease(ctx context.Context, apiKeyID int64, maxConnections int, leaseID string) (bool, error)
+	RefreshOpenAIWSIngressLease(ctx context.Context, apiKeyID int64, leaseID string) (bool, error)
+	ReleaseOpenAIWSIngressLease(ctx context.Context, apiKeyID int64, leaseID string) error
+}
+
+const (
+	openAIWSIngressLeaseTTL             = 60 * time.Second
+	openAIWSIngressLeaseRefreshInterval = 20 * time.Second
+	openAIWSIngressLeaseOperationTO     = 2 * time.Second
+)
+
+var ErrOpenAIWSIngressLeaseLost = errors.New("openai websocket ingress lease lost")
+
+// OpenAIWSIngressLease keeps a Redis-backed ingress lease alive and cancels
+// its context if Redis cannot confirm ownership for a full lease lifetime.
+// Call Release on every handler exit to reclaim capacity immediately.
+type OpenAIWSIngressLease struct {
+	ctx      context.Context
+	cancel   context.CancelCauseFunc
+	cache    OpenAIWSIngressLeaseCache
+	apiKeyID int64
+	leaseID  string
+
+	stopOnce    sync.Once
+	stopCh      chan struct{}
+	refreshDone chan struct{}
+}
+
+func (l *OpenAIWSIngressLease) Context() context.Context {
+	if l == nil || l.ctx == nil {
+		return context.Background()
+	}
+	return l.ctx
+}
+
+func (l *OpenAIWSIngressLease) Release() {
+	if l == nil {
+		return
+	}
+	l.stopOnce.Do(func() {
+		if l.stopCh != nil {
+			close(l.stopCh)
+		}
+		if l.cancel != nil {
+			l.cancel(nil)
+		}
+		if l.refreshDone != nil {
+			<-l.refreshDone
+		}
+		if l.cache == nil || l.apiKeyID <= 0 || l.leaseID == "" {
+			return
+		}
+		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), openAIWSIngressLeaseOperationTO)
+		defer releaseCancel()
+		if err := l.cache.ReleaseOpenAIWSIngressLease(releaseCtx, l.apiKeyID, l.leaseID); err != nil {
+			logger.L().Warn("openai_ws_ingress_lease_release_failed",
+				zap.Int64("api_key_id", l.apiKeyID),
+				zap.Error(err),
+			)
+		}
+	})
+}
+
+func (l *OpenAIWSIngressLease) refreshLoop() {
+	defer func() {
+		if l != nil && l.refreshDone != nil {
+			close(l.refreshDone)
+		}
+	}()
+	if l == nil || l.cache == nil {
+		return
+	}
+	ticker := time.NewTicker(openAIWSIngressLeaseRefreshInterval)
+	defer ticker.Stop()
+	lastConfirmedAt := time.Now()
+	for {
+		select {
+		case <-l.ctx.Done():
+			return
+		case <-l.stopCh:
+			return
+		case <-ticker.C:
+			var lost bool
+			lastConfirmedAt, lost = l.refresh(lastConfirmedAt)
+			if lost {
+				l.cancel(ErrOpenAIWSIngressLeaseLost)
+				return
+			}
+		}
+	}
+}
+
+// refresh confirms the lease is still owned. A missing member is an immediate
+// lease loss; transient Redis errors are tolerated only for one full lease TTL.
+func (l *OpenAIWSIngressLease) refresh(lastConfirmedAt time.Time) (time.Time, bool) {
+	refreshCtx, refreshCancel := context.WithTimeout(context.Background(), openAIWSIngressLeaseOperationTO)
+	owned, err := l.cache.RefreshOpenAIWSIngressLease(refreshCtx, l.apiKeyID, l.leaseID)
+	refreshCancel()
+	if err == nil && owned {
+		return time.Now(), false
+	}
+	if err == nil {
+		err = ErrOpenAIWSIngressLeaseLost
+	}
+	elapsed := time.Since(lastConfirmedAt)
+	logger.L().Warn("openai_ws_ingress_lease_refresh_failed",
+		zap.Int64("api_key_id", l.apiKeyID),
+		zap.Duration("unconfirmed_for", elapsed),
+		zap.Error(err),
+	)
+	if errors.Is(err, ErrOpenAIWSIngressLeaseLost) || elapsed >= openAIWSIngressLeaseTTL {
+		logger.L().Error("openai_ws_ingress_lease_lost",
+			zap.Int64("api_key_id", l.apiKeyID),
+			zap.Duration("unconfirmed_for", elapsed),
+			zap.Error(err),
+		)
+		return lastConfirmedAt, true
+	}
+	return lastConfirmedAt, false
+}
+
 var (
 	requestIDPrefix  = initRequestIDPrefix()
 	requestIDCounter atomic.Uint64
@@ -80,7 +214,10 @@ func (s *ConcurrencyService) CleanupStaleProcessSlots(ctx context.Context) error
 
 const (
 	// Default extra wait slots beyond concurrency limit
-	defaultExtraWaitSlots = 20
+	defaultExtraWaitSlots         = 20
+	apiKeyConcurrencyFetchTimeout = 800 * time.Millisecond
+	apiKeySlotTrackTimeout        = 300 * time.Millisecond
+	apiKeySlotReleaseTimeout      = time.Second
 )
 
 // ConcurrencyService manages concurrent request limiting for accounts and users
@@ -97,6 +234,47 @@ type accountShareMembershipConcurrencyCache interface {
 // NewConcurrencyService creates a new ConcurrencyService
 func NewConcurrencyService(cache ConcurrencyCache) *ConcurrencyService {
 	return &ConcurrencyService{cache: cache}
+}
+
+// AcquireOpenAIWSIngressLease atomically reserves one live ingress connection
+// for an API key. A non-positive limit explicitly disables this protection.
+func (s *ConcurrencyService) AcquireOpenAIWSIngressLease(ctx context.Context, apiKeyID int64, maxConnections int) (*OpenAIWSIngressLease, bool, error) {
+	if maxConnections <= 0 {
+		return nil, true, nil
+	}
+	if s == nil || s.cache == nil || apiKeyID <= 0 {
+		return nil, false, errors.New("openai websocket ingress lease cache is unavailable")
+	}
+	cache, ok := s.cache.(OpenAIWSIngressLeaseCache)
+	if !ok {
+		return nil, false, errors.New("openai websocket ingress lease cache is unsupported")
+	}
+	leaseID := generateRequestID()
+	baseCtx := context.Background()
+	if ctx != nil {
+		baseCtx = context.WithoutCancel(ctx)
+	}
+	acquireCtx, acquireCancel := context.WithTimeout(baseCtx, openAIWSIngressLeaseOperationTO)
+	acquired, err := cache.AcquireOpenAIWSIngressLease(acquireCtx, apiKeyID, maxConnections, leaseID)
+	acquireCancel()
+	if err != nil || !acquired {
+		return nil, acquired, err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	leaseCtx, leaseCancel := context.WithCancelCause(ctx)
+	lease := &OpenAIWSIngressLease{
+		ctx:         leaseCtx,
+		cancel:      leaseCancel,
+		cache:       cache,
+		apiKeyID:    apiKeyID,
+		leaseID:     leaseID,
+		stopCh:      make(chan struct{}),
+		refreshDone: make(chan struct{}),
+	}
+	go lease.refreshLoop()
+	return lease, true, nil
 }
 
 // AcquireResult represents the result of acquiring a concurrency slot
@@ -250,6 +428,77 @@ func (s *ConcurrencyService) AcquireAccountShareMembershipSlot(ctx context.Conte
 		Acquired:    false,
 		ReleaseFunc: nil,
 	}, nil
+}
+
+// TrackAPIKeySlot records one active request slot for an API key without
+// applying key-level concurrency limits. Redis failures are treated as stats
+// loss only, so request admission behavior stays unchanged.
+func (s *ConcurrencyService) TrackAPIKeySlot(ctx context.Context, apiKeyID int64) func() {
+	if s == nil || s.cache == nil || apiKeyID <= 0 {
+		return func() {}
+	}
+	cache, ok := s.cache.(APIKeyConcurrencyCache)
+	if !ok {
+		return func() {}
+	}
+
+	requestID := generateRequestID()
+	baseCtx := context.Background()
+	if ctx != nil {
+		baseCtx = context.WithoutCancel(ctx)
+	}
+	trackCtx, cancel := context.WithTimeout(baseCtx, apiKeySlotTrackTimeout)
+	err := cache.TrackAPIKeySlot(trackCtx, apiKeyID, requestID)
+	cancel()
+	if err != nil {
+		logger.LegacyPrintf("service.concurrency", "Warning: failed to track api key slot for %d (req=%s): %v", apiKeyID, requestID, err)
+		return func() {}
+	}
+
+	return func() {
+		bgCtx, cancel := context.WithTimeout(context.Background(), apiKeySlotReleaseTimeout)
+		defer cancel()
+		if err := cache.ReleaseAPIKeySlot(bgCtx, apiKeyID, requestID); err != nil {
+			logger.LegacyPrintf("service.concurrency", "Warning: failed to release api key slot for %d (req=%s): %v", apiKeyID, requestID, err)
+		}
+	}
+}
+
+// GetAPIKeyConcurrencyBatch gets real-time active request counts for API keys.
+// The result is best-effort: missing Redis support or Redis errors return zeroes.
+func (s *ConcurrencyService) GetAPIKeyConcurrencyBatch(ctx context.Context, apiKeyIDs []int64) (map[int64]int, error) {
+	result := zeroAPIKeyConcurrencyMap(apiKeyIDs)
+	if len(apiKeyIDs) == 0 {
+		return result, nil
+	}
+	if s == nil || s.cache == nil {
+		return result, nil
+	}
+	cache, ok := s.cache.(APIKeyConcurrencyCache)
+	if !ok {
+		return result, nil
+	}
+
+	redisCtx, cancel := context.WithTimeout(context.Background(), apiKeyConcurrencyFetchTimeout)
+	defer cancel()
+
+	counts, err := cache.GetAPIKeyConcurrencyBatch(redisCtx, apiKeyIDs)
+	if err != nil {
+		logger.LegacyPrintf("service.concurrency", "Warning: get api key concurrency batch failed: %v", err)
+		return result, nil
+	}
+	for _, apiKeyID := range apiKeyIDs {
+		result[apiKeyID] = counts[apiKeyID]
+	}
+	return result, nil
+}
+
+func zeroAPIKeyConcurrencyMap(apiKeyIDs []int64) map[int64]int {
+	result := make(map[int64]int, len(apiKeyIDs))
+	for _, apiKeyID := range apiKeyIDs {
+		result[apiKeyID] = 0
+	}
+	return result
 }
 
 func (s *ConcurrencyService) GetAccountShareMembershipConcurrency(ctx context.Context, membershipID int64) (int, error) {

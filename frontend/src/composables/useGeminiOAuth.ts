@@ -3,6 +3,7 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
 import { accountsAPI } from '@/api/accounts'
+import { extractApiErrorMessage } from '@/utils/apiError'
 import type { GeminiOAuthCapabilities } from '@/api/admin/gemini'
 import type { AccountApiScope } from '@/composables/useAccountOAuth'
 
@@ -67,7 +68,7 @@ export function useGeminiOAuth(scope: AccountApiScope = 'admin') {
       state.value = response.state || ''
       return true
     } catch (err: any) {
-      error.value = err.response?.data?.detail || t('admin.accounts.oauth.gemini.failedToGenerateUrl')
+      error.value = extractApiErrorMessage(err, t('admin.accounts.oauth.gemini.failedToGenerateUrl'))
       appStore.showError(error.value)
       return false
     } finally {
@@ -110,7 +111,7 @@ export function useGeminiOAuth(scope: AccountApiScope = 'admin') {
       return tokenInfo as GeminiTokenInfo
     } catch (err: any) {
       // Check for specific missing project_id error
-      const errorMessage = err.message || err.response?.data?.message || ''
+      const errorMessage = extractApiErrorMessage(err, '')
       if (errorMessage.includes('missing project_id')) {
         error.value = t('admin.accounts.oauth.gemini.missingProjectId')
       } else {

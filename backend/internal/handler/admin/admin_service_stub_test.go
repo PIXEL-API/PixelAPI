@@ -158,6 +158,10 @@ func (s *stubAdminService) GetUser(ctx context.Context, id int64) (*service.User
 	return &user, nil
 }
 
+func (s *stubAdminService) GetUserIncludeDeleted(ctx context.Context, id int64) (*service.User, error) {
+	return s.GetUser(ctx, id)
+}
+
 func (s *stubAdminService) CreateUser(ctx context.Context, input *service.CreateUserInput) (*service.User, error) {
 	user := service.User{ID: 100, Email: input.Email, Status: service.StatusActive}
 	return &user, nil
@@ -364,6 +368,15 @@ func (s *stubAdminService) CreateAccount(ctx context.Context, input *service.Cre
 	}
 	account := service.Account{ID: 300, Name: input.Name, Status: service.StatusActive}
 	return &account, nil
+}
+
+func (s *stubAdminService) DuplicateAccount(context.Context, int64, string, string) (*service.Account, error) {
+	account := service.Account{ID: 301, Name: "account (Copy)", Status: service.StatusActive, Schedulable: false}
+	return &account, nil
+}
+
+func (s *stubAdminService) RecoverDuplicateAccount(context.Context, int64, string, string) (*service.Account, error) {
+	return nil, nil
 }
 
 func (s *stubAdminService) UpdateAccount(ctx context.Context, id int64, input *service.UpdateAccountInput) (*service.Account, error) {

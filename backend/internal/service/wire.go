@@ -51,6 +51,7 @@ func ProvideTokenRefreshService(
 	openaiOAuthService *OpenAIOAuthService,
 	geminiOAuthService *GeminiOAuthService,
 	antigravityOAuthService *AntigravityOAuthService,
+	grokOAuthService *GrokOAuthService,
 	cacheInvalidator TokenCacheInvalidator,
 	schedulerCache SchedulerCache,
 	cfg *config.Config,
@@ -59,7 +60,7 @@ func ProvideTokenRefreshService(
 	proxyRepo ProxyRepository,
 	refreshAPI *OAuthRefreshAPI,
 ) *TokenRefreshService {
-	svc := NewTokenRefreshService(accountRepo, oauthService, openaiOAuthService, geminiOAuthService, antigravityOAuthService, cacheInvalidator, schedulerCache, cfg, tempUnschedCache)
+	svc := NewTokenRefreshService(accountRepo, oauthService, openaiOAuthService, geminiOAuthService, antigravityOAuthService, cacheInvalidator, schedulerCache, cfg, tempUnschedCache, grokOAuthService)
 	// 注入 OpenAI privacy opt-out 依赖
 	svc.SetPrivacyDeps(privacyClientFactory, proxyRepo)
 	// 注入统一 OAuth 刷新 API（消除 TokenRefreshService 与 TokenProvider 之间的竞争条件）
@@ -103,8 +104,41 @@ func ProvideOpenAIQuotaService(
 	proxyRepo ProxyRepository,
 	tokenProvider *OpenAITokenProvider,
 	privacyClientFactory PrivacyClientFactory,
+	agentIdentityWSInvalidator *AgentIdentityWSInvalidatorProxy,
 ) *OpenAIQuotaService {
-	return NewOpenAIQuotaService(accountRepo, proxyRepo, tokenProvider, privacyClientFactory)
+	svc := NewOpenAIQuotaService(accountRepo, proxyRepo, tokenProvider, privacyClientFactory)
+	svc.SetAgentIdentityWSInvalidator(agentIdentityWSInvalidator)
+	return svc
+}
+
+func ProvideGrokQuotaService(
+	accountRepo AccountRepository,
+	proxyRepo ProxyRepository,
+	tokenProvider *GrokTokenProvider,
+	httpUpstream HTTPUpstream,
+	usageLogRepo UsageLogRepository,
+	cfg *config.Config,
+	settingService *SettingService,
+) *GrokQuotaService {
+	svc := NewGrokQuotaService(accountRepo, proxyRepo, tokenProvider, httpUpstream, usageLogRepo)
+	svc.SetURLSecurityPolicy(cfg, settingService)
+	return svc
+}
+
+// ProvideGrokTokenProvider creates GrokTokenProvider with OAuthRefreshAPI injection.
+func ProvideGrokTokenProvider(
+	accountRepo AccountRepository,
+	tokenCache GeminiTokenCache,
+	grokOAuthService *GrokOAuthService,
+	refreshAPI *OAuthRefreshAPI,
+	tempUnschedCache TempUnschedCache,
+) *GrokTokenProvider {
+	p := NewGrokTokenProvider(accountRepo, tokenCache)
+	executor := NewGrokTokenRefresher(grokOAuthService)
+	p.SetRefreshAPI(refreshAPI, executor)
+	p.SetRefreshPolicy(AntigravityProviderRefreshPolicy())
+	p.SetTempUnschedCache(tempUnschedCache)
+	return p
 }
 
 // ProvideGeminiTokenProvider creates GeminiTokenProvider with OAuthRefreshAPI injection
@@ -233,9 +267,11 @@ func ProvideSchedulerSnapshotService(
 	outboxRepo SchedulerOutboxRepository,
 	accountRepo AccountRepository,
 	groupRepo GroupRepository,
+	settingRepo SettingRepository,
 	cfg *config.Config,
 ) *SchedulerSnapshotService {
 	svc := NewSchedulerSnapshotService(cache, outboxRepo, accountRepo, groupRepo, cfg)
+	svc.SetSettingRepository(settingRepo)
 	svc.Start()
 	return svc
 }
@@ -411,15 +447,19 @@ func ProvideAPIKeyService(
 	groupRepo GroupRepository,
 	userSubRepo UserSubscriptionRepository,
 	userGroupRateRepo UserGroupRateRepository,
+	usageLogRepo UsageLogRepository,
 	cache APIKeyCache,
 	cfg *config.Config,
 	settingService *SettingService,
 	billingCacheService *BillingCacheService,
+	concurrencyService *ConcurrencyService,
 ) *APIKeyService {
 	svc := NewAPIKeyService(apiKeyRepo, userRepo, groupRepo, userSubRepo, userGroupRateRepo, cache, cfg)
 	svc.SetAccountShareAPIKeyBindingChecker(accountShareBindingChecker)
 	svc.SetSettingService(settingService)
 	svc.SetRateLimitCacheInvalidator(billingCacheService)
+	svc.SetUsageLogRepository(usageLogRepo)
+	svc.SetConcurrencyService(concurrencyService)
 	return svc
 }
 
@@ -519,13 +559,25 @@ func ProvideAccountService(
 	userSubRepo UserSubscriptionRepository,
 	proxyRepo ProxyRepository,
 	accountSharePolicyRepo AccountSharePolicyRepository,
+	accountShareModeRepo AccountShareModeRepository,
 	privateGroupProvisioner UserPrivateGroupProvisioner,
 	systemNoticeService *SystemNoticeService,
+	settingService *SettingService,
 ) *AccountService {
 	svc := NewAccountService(accountRepo, groupRepo, userRepo, userSubRepo, proxyRepo)
 	svc.SetAccountSharePolicyRepository(accountSharePolicyRepo)
+	svc.SetAccountShareModeRepository(accountShareModeRepo)
 	svc.SetUserPrivateGroupProvisioner(privateGroupProvisioner)
 	svc.SetSystemNoticeService(systemNoticeService)
+	svc.SetSettingService(settingService)
+	return svc
+}
+
+func ProvideOpenAIOAuthService(cfg *config.Config, proxyRepo ProxyRepository, oauthClient OpenAIOAuthClient) *OpenAIOAuthService {
+	svc := NewOpenAIOAuthService(proxyRepo, oauthClient)
+	if cfg != nil {
+		svc.SetSessionTokenSecret(cfg.JWT.Secret)
+	}
 	return svc
 }
 
@@ -547,6 +599,7 @@ func ProvideAccountShareModeService(
 	billingService *BillingService,
 	modelPricingResolver *ModelPricingResolver,
 	settingRepo SettingRepository,
+	settingService *SettingService,
 ) *AccountShareModeService {
 	svc := NewAccountShareModeService(repo, accountRepo, apiKeyRepo, userRepo, proxyRepo, openaiOAuthService, oauthService)
 	if cfg != nil {
@@ -555,6 +608,7 @@ func ProvideAccountShareModeService(
 	svc.SetRuntimeDependencies(concurrencyService, authCacheInvalidator, accountTestService, rateLimitService)
 	svc.SetBillingCacheService(billingCacheService)
 	svc.SetRecommendationPricingDependencies(billingService, modelPricingResolver)
+	svc.SetSettingService(settingService)
 	svc.SetRecommendationUsageProfileRepository(usageLogRepo)
 	svc.SetReviewModerationSettingRepository(settingRepo)
 	svc.StartSeatBillingWorker()
@@ -631,6 +685,119 @@ func ProvideGatewayService(
 	)
 }
 
+func ProvideOpenAIGatewayService(
+	accountRepo AccountRepository,
+	accountSharePolicyRepo AccountSharePolicyRepository,
+	usageLogRepo UsageLogRepository,
+	usageBillingRepo UsageBillingRepository,
+	userRepo UserRepository,
+	userSubRepo UserSubscriptionRepository,
+	userGroupRateRepo UserGroupRateRepository,
+	cache GatewayCache,
+	cfg *config.Config,
+	schedulerSnapshot *SchedulerSnapshotService,
+	concurrencyService *ConcurrencyService,
+	billingService *BillingService,
+	rateLimitService *RateLimitService,
+	billingCacheService *BillingCacheService,
+	httpUpstream HTTPUpstream,
+	deferredService *DeferredService,
+	openAITokenProvider *OpenAITokenProvider,
+	grokTokenProvider *GrokTokenProvider,
+	resolver *ModelPricingResolver,
+	channelService *ChannelService,
+	balanceNotifyService *BalanceNotifyService,
+	settingService *SettingService,
+	accountService *AccountService,
+	agentIdentityWSInvalidator *AgentIdentityWSInvalidatorProxy,
+	accountShareModeServices ...*AccountShareModeService,
+) *OpenAIGatewayService {
+	svc := NewOpenAIGatewayService(
+		accountRepo,
+		accountSharePolicyRepo,
+		usageLogRepo,
+		usageBillingRepo,
+		userRepo,
+		userSubRepo,
+		userGroupRateRepo,
+		cache,
+		cfg,
+		schedulerSnapshot,
+		concurrencyService,
+		billingService,
+		rateLimitService,
+		billingCacheService,
+		httpUpstream,
+		deferredService,
+		openAITokenProvider,
+		resolver,
+		channelService,
+		balanceNotifyService,
+		settingService,
+		accountService,
+		accountShareModeServices...,
+	)
+	svc.SetGrokTokenProvider(grokTokenProvider)
+	agentIdentityWSInvalidator.SetTarget(svc)
+	return svc
+}
+
+func ProvideAccountTestService(
+	accountRepo AccountRepository,
+	geminiTokenProvider *GeminiTokenProvider,
+	claudeTokenProvider *ClaudeTokenProvider,
+	antigravityGatewayService *AntigravityGatewayService,
+	httpUpstream HTTPUpstream,
+	cfg *config.Config,
+	tlsFPProfileService *TLSFingerprintProfileService,
+	settingService *SettingService,
+	grokTokenProvider *GrokTokenProvider,
+	agentIdentityWSInvalidator *AgentIdentityWSInvalidatorProxy,
+) *AccountTestService {
+	svc := NewAccountTestService(
+		accountRepo,
+		geminiTokenProvider,
+		claudeTokenProvider,
+		antigravityGatewayService,
+		httpUpstream,
+		cfg,
+		tlsFPProfileService,
+		settingService,
+		agentIdentityWSInvalidator,
+	)
+	svc.SetGrokTokenProvider(grokTokenProvider)
+	return svc
+}
+
+func ProvideAccountUsageService(
+	accountRepo AccountRepository,
+	usageLogRepo UsageLogRepository,
+	usageFetcher ClaudeUsageFetcher,
+	geminiQuotaService *GeminiQuotaService,
+	antigravityQuotaFetcher *AntigravityQuotaFetcher,
+	grokQuotaFetcher *GrokQuotaFetcher,
+	grokQuotaService *GrokQuotaService,
+	cache *UsageCache,
+	identityCache IdentityCache,
+	tlsFPProfileService *TLSFingerprintProfileService,
+	agentIdentityWSInvalidator *AgentIdentityWSInvalidatorProxy,
+) *AccountUsageService {
+	svc := NewAccountUsageService(
+		accountRepo,
+		usageLogRepo,
+		usageFetcher,
+		geminiQuotaService,
+		antigravityQuotaFetcher,
+		cache,
+		identityCache,
+		tlsFPProfileService,
+		grokQuotaFetcher,
+	)
+	svc.SetAgentIdentityWSInvalidator(agentIdentityWSInvalidator)
+	svc.SetGrokQuotaService(grokQuotaService)
+	return svc
+}
+
 func ProvideSubscriptionService(
 	groupRepo GroupRepository,
 	userSubRepo UserSubscriptionRepository,
@@ -662,6 +829,7 @@ func ProvideAdminService(
 	accountRepo AccountRepository,
 	proxyRepo ProxyRepository,
 	apiKeyRepo APIKeyRepository,
+	accountShareBindingChecker AccountShareAPIKeyBindingChecker,
 	redeemCodeRepo RedeemCodeRepository,
 	userGroupRateRepo UserGroupRateRepository,
 	userRPMCache UserRPMCache,
@@ -683,6 +851,7 @@ func ProvideAdminService(
 		accountRepo,
 		proxyRepo,
 		apiKeyRepo,
+		accountShareBindingChecker,
 		redeemCodeRepo,
 		userGroupRateRepo,
 		userRPMCache,
@@ -705,6 +874,7 @@ var ProviderSet = wire.NewSet(
 	// Core services
 	ProvideAuthService,
 	NewUserService,
+	NewOIDCProviderService,
 	ProvideAPIKeyService,
 	ProvideAPIKeyAuthCacheInvalidator,
 	NewGroupService,
@@ -726,9 +896,11 @@ var ProviderSet = wire.NewSet(
 	NewSystemNoticeService,
 	ProvideAdminService,
 	ProvideGatewayService,
-	NewOpenAIGatewayService,
+	ProvideOpenAIGatewayService,
+	NewAgentIdentityWSInvalidatorProxy,
 	NewOAuthService,
-	NewOpenAIOAuthService,
+	ProvideOpenAIOAuthService,
+	NewGrokOAuthService,
 	NewGeminiOAuthService,
 	NewGeminiQuotaService,
 	NewCompositeTokenCacheInvalidator,
@@ -738,13 +910,15 @@ var ProviderSet = wire.NewSet(
 	ProvideGeminiTokenProvider,
 	NewGeminiMessagesCompatService,
 	ProvideAntigravityTokenProvider,
+	ProvideGrokTokenProvider,
 	ProvideOpenAITokenProvider,
 	ProvideOpenAIQuotaService,
+	ProvideGrokQuotaService,
 	ProvideClaudeTokenProvider,
 	NewAntigravityGatewayService,
 	ProvideRateLimitService,
-	NewAccountUsageService,
-	NewAccountTestService,
+	ProvideAccountUsageService,
+	ProvideAccountTestService,
 	ProvideSettingService,
 	NewDataManagementService,
 	ProvideBackupService,
@@ -779,6 +953,7 @@ var ProviderSet = wire.NewSet(
 	ProvideAccountBatchTaskServices,
 	ProvideDeferredService,
 	NewAntigravityQuotaFetcher,
+	NewGrokQuotaFetcher,
 	NewUserAttributeService,
 	NewUsageCache,
 	NewTotpService,
@@ -794,6 +969,7 @@ var ProviderSet = wire.NewSet(
 	NewChannelService,
 	NewModelPricingResolver,
 	ProvideContentModerationService,
+	NewUserContentModerationService,
 	NewAffiliateService,
 	ProvideAffiliateCodeCycleService,
 	NewRevenueService,
@@ -842,6 +1018,7 @@ func ProvideContentModerationService(
 	hashCache ContentModerationHashCache,
 	groupRepo GroupRepository,
 	accountShareModeService *AccountShareModeService,
+	userContentModerationRepo UserContentModerationRepository,
 	userRepo UserRepository,
 	authCacheInvalidator APIKeyAuthCacheInvalidator,
 	emailService *EmailService,
@@ -849,6 +1026,7 @@ func ProvideContentModerationService(
 ) *ContentModerationService {
 	svc := NewContentModerationService(settingRepo, repo, hashCache, groupRepo, userRepo, authCacheInvalidator, emailService)
 	svc.SetAccountShareModeResolver(accountShareModeService)
+	svc.SetUserAPIKeyHashChecker(userContentModerationRepo)
 	svc.SetSystemNoticeService(systemNoticeService)
 	return svc
 }

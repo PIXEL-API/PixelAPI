@@ -1,0 +1,110 @@
+---
+title: API 参考
+description: 面向模型调用的接口文档，按 OpenAI、Claude、Gemini、Images、Models 和 Antigravity 格式组织。
+---
+
+这里按 OpenAI、Claude、Gemini、Images、Models 和 Antigravity 格式整理模型调用接口。接入时优先保持官方 SDK/客户端的请求格式，只把官方域名替换成 Pixel API 站点地址。
+
+## 基础地址
+
+基础地址就是站点域名本身，不带 `/v1`。把官方文档里的域名替换成 Pixel API 站点地址，接口路径保持对应平台的官方格式。
+
+<div className="api-base-panel">
+  <div className="api-base-origin">
+    <span>Base URL</span>
+    <code>https://ai-pixel.online</code>
+  </div>
+  <div className="api-base-list" aria-label="模型接口基础路径">
+    <div className="api-base-row">
+      <span className="api-base-method api-base-method-post">POST</span>
+      <strong><a href="/docs/api/chat-completions">OpenAI Chat Completions</a></strong>
+      <code><span>https://ai-pixel.online</span><b>/v1/chat/completions</b></code>
+    </div>
+    <div className="api-base-row">
+      <span className="api-base-method api-base-method-post">POST</span>
+      <strong><a href="/docs/api/responses">OpenAI Responses</a></strong>
+      <code><span>https://ai-pixel.online</span><b>/v1/responses</b></code>
+    </div>
+    <div className="api-base-row">
+      <span className="api-base-method api-base-method-post">POST</span>
+      <strong><a href="/docs/api/claude-messages">Claude Messages</a></strong>
+      <code><span>https://ai-pixel.online</span><b>/v1/messages</b></code>
+    </div>
+    <div className="api-base-row">
+      <span className="api-base-method api-base-method-post">POST</span>
+      <strong><a href="/docs/api/gemini-generate-content">Gemini Generate Content</a></strong>
+      <code><span>https://ai-pixel.online</span><b>/v1beta/models/{"{model}"}:generateContent</b></code>
+    </div>
+    <div className="api-base-row">
+      <span className="api-base-method api-base-method-get">GET</span>
+      <strong><a href="/docs/api/models">Models</a></strong>
+      <code><span>https://ai-pixel.online</span><b>/v1/models</b></code>
+    </div>
+    <div className="api-base-row">
+      <span className="api-base-method api-base-method-post">POST</span>
+      <strong><a href="/docs/api/antigravity-messages">Antigravity Messages</a></strong>
+      <code><span>https://ai-pixel.online</span><b>/antigravity/v1/messages</b></code>
+    </div>
+  </div>
+</div>
+
+## 认证方式
+
+```http
+Authorization: Bearer sk-user-key
+```
+
+<Callout type="warn" title="只使用控制台的 API 密钥">
+  这个 Key 来自控制台「API 密钥」。不要把登录 JWT、管理员密钥或账号 token 填到这里。
+</Callout>
+
+## 接口分类
+
+| 分类 | 页面 | 适合场景 |
+| --- | --- | --- |
+| 聊天（Chat） | [ChatCompletions 格式](/docs/api/chat-completions) | OpenAI 兼容客户端、通用聊天工具、脚本调用 |
+| 聊天（Chat） | [Responses 格式](/docs/api/responses) | Codex、新版 OpenAI 客户端、工具调用和结构化输出 |
+| 聊天（Chat） | [原生 Claude 格式](/docs/api/claude-messages) | Claude Code、Claude SDK、Anthropic Messages 客户端 |
+| 聊天（Chat） | [Gemini 文本聊天](/docs/api/gemini-generate-content) | Gemini SDK、Gemini CLI、原生 Gemini v1beta 调用 |
+| 图像（Images） | [生成图像](/docs/api/image-generations) | OpenAI 图片生成 |
+| 图像（Images） | [编辑图像](/docs/api/image-edits) | OpenAI 图片编辑 |
+| 模型（Models） | [列出模型](/docs/api/models) | 查看当前 Key 可访问的模型 |
+| 模型（Models） | [列出 Gemini 模型](/docs/api/gemini-models) | Gemini 原生模型列表 |
+| 模型（Models） | [查询用量](/docs/api/usage) | 查询当前 API Key 用量 |
+| 模型（Models） | [API Key 用量查询](/docs/api/key-usage) | 公开工具：粘贴一个 Key 查它的实时用量 |
+| Antigravity | [Antigravity Messages](/docs/api/antigravity-messages) | 强制使用 Antigravity 账号的 Claude 格式入口 |
+| Antigravity | [Antigravity Gemini](/docs/api/antigravity-gemini) | 强制使用 Antigravity 账号的 Gemini 格式入口 |
+
+## 调用规则
+
+1. 接口页中的 `Send` 只用于验证模型接口连通性，API Key 不会写入文档站存储。
+2. 选择模型前，优先用 [列出模型](/docs/api/models) 或 [列出 Gemini 模型](/docs/api/gemini-models) 查询当前 Key 可访问模型。
+3. `Images` 接口只支持 OpenAI 平台分组；其他平台分组会返回不支持。
+4. Gemini 原生接口使用 `/v1beta` 前缀，路径中的 `{model}` 要替换为实际模型名。
+5. Antigravity 专用接口会强制走 Antigravity 账号，不与普通分组混合调度。
+
+## 阅读顺序
+
+如果你是第一次接入：
+
+1. 先看 [ChatCompletions 格式](/docs/api/chat-completions)，这是最常见的 OpenAI 兼容调用。
+2. 使用 Codex 或新版客户端时，再看 [Responses 格式](/docs/api/responses)。
+3. 使用 Claude Code 时，看 [原生 Claude 格式](/docs/api/claude-messages)。
+4. 使用 Gemini CLI 或 SDK 时，看 [Gemini 文本聊天](/docs/api/gemini-generate-content)。
+5. 模型名报错时，看 [列出模型](/docs/api/models)。
+
+## 最小测试
+
+```bash
+curl -X POST "https://ai-pixel.online/v1/chat/completions" \
+  -H "Authorization: Bearer sk-你的密钥" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-5.5",
+    "messages": [
+      { "role": "user", "content": "你好，请只回复：Pixel API 已连接" }
+    ]
+  }'
+```
+
+收到模型回复后，再回到控制台“使用记录”确认请求、模型、分组和消耗是否符合预期。

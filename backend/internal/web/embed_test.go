@@ -21,6 +21,12 @@ func init() {
 	gin.SetMode(gin.TestMode)
 }
 
+func TestShouldBypassEmbeddedFrontendForGrokVideoAliases(t *testing.T) {
+	for _, path := range []string{"/videos/edits", "/videos/extensions", "/videos/request-123"} {
+		require.True(t, shouldBypassEmbeddedFrontend(path), "path=%s", path)
+	}
+}
+
 func TestInjectSiteTitle(t *testing.T) {
 	t.Run("replaces_title_with_site_name", func(t *testing.T) {
 		html := []byte(`<html><head><title>Sub2API - AI API Gateway</title></head><body></body></html>`)
@@ -433,6 +439,7 @@ func TestFrontendServer_Middleware(t *testing.T) {
 
 		apiPaths := []string{
 			"/api/v1/users",
+			"/.well-known/openid-configuration",
 			"/v1/models",
 			"/v1beta/chat",
 			"/backend-api/codex/responses",
@@ -440,6 +447,7 @@ func TestFrontendServer_Middleware(t *testing.T) {
 			"/antigravity/test",
 			"/setup/init",
 			"/health",
+			"/models",
 			"/responses",
 			"/responses/compact",
 		}
@@ -642,6 +650,7 @@ func TestServeEmbeddedFrontend(t *testing.T) {
 
 		apiPaths := []string{
 			"/api/users",
+			"/.well-known/openid-configuration",
 			"/v1/models",
 			"/v1beta/chat",
 			"/backend-api/codex/responses",
@@ -649,6 +658,7 @@ func TestServeEmbeddedFrontend(t *testing.T) {
 			"/antigravity/test",
 			"/setup/init",
 			"/health",
+			"/models",
 			"/responses",
 			"/responses/compact",
 		}

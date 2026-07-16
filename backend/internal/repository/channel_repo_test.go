@@ -3,12 +3,16 @@
 package repository
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 )
@@ -234,4 +238,68 @@ func TestChannelListOrderBy_AllowsDescendingIDSort(t *testing.T) {
 	}
 
 	require.Equal(t, "c.id DESC, c.id DESC", channelListOrderBy(params))
+}
+
+func TestScanModelPricingRows_LongContextPolicy(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	now := time.Now().UTC()
+	rows := sqlmock.NewRows([]string{
+		"id", "channel_id", "platform", "models", "billing_mode",
+		"input_price", "output_price", "cache_write_price", "cache_read_price",
+		"image_input_price", "image_cache_read_price", "image_output_price", "per_request_price",
+		"long_context_pricing_enabled", "long_context_input_token_threshold", "created_at", "updated_at",
+	}).AddRow(
+		int64(11), int64(7), service.PlatformOpenAI, []byte(`["gpt-5.6-sol"]`), service.BillingModeToken,
+		nil, nil, nil, nil, nil, nil, nil, nil, true, 128000, now, now,
+	).AddRow(
+		int64(12), int64(7), service.PlatformOpenAI, []byte(`["gpt-5.6-terra"]`), service.BillingModeToken,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, now, now,
+	)
+	mock.ExpectQuery("SELECT").WillReturnRows(rows)
+
+	sqlRows, err := db.QueryContext(context.Background(), "SELECT")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, sqlRows.Close()) }()
+
+	pricing, ids, err := scanModelPricingRows(sqlRows)
+	require.NoError(t, err)
+	require.Equal(t, []int64{11, 12}, ids)
+	require.Len(t, pricing, 2)
+	require.NotNil(t, pricing[0].LongContextPricingEnabled)
+	require.True(t, *pricing[0].LongContextPricingEnabled)
+	require.Equal(t, 128000, *pricing[0].LongContextInputTokenThreshold)
+	require.Nil(t, pricing[1].LongContextPricingEnabled)
+	require.Nil(t, pricing[1].LongContextInputTokenThreshold)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCreateModelPricingExec_PersistsLongContextPolicy(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	enabled := true
+	threshold := 128000
+	now := time.Now().UTC()
+	pricing := &service.ChannelModelPricing{
+		ChannelID:                      7,
+		Platform:                       service.PlatformOpenAI,
+		Models:                         []string{"gpt-5.6-sol"},
+		BillingMode:                    service.BillingModeToken,
+		LongContextPricingEnabled:      &enabled,
+		LongContextInputTokenThreshold: &threshold,
+	}
+	mock.ExpectQuery("INSERT INTO channel_model_pricing").
+		WithArgs(
+			int64(7), service.PlatformOpenAI, []byte(`["gpt-5.6-sol"]`), service.BillingModeToken,
+			nil, nil, nil, nil, nil, nil, nil, nil, true, int64(128000),
+		).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "updated_at"}).AddRow(int64(11), now, now))
+
+	require.NoError(t, createModelPricingExec(context.Background(), db, pricing))
+	require.Equal(t, int64(11), pricing.ID)
+	require.NoError(t, mock.ExpectationsWereMet())
 }

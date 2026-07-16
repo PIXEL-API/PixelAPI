@@ -10,6 +10,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestOpenAITokenRefresherCanRefreshExcludesAgentIdentity(t *testing.T) {
+	refresher := &OpenAITokenRefresher{}
+	regular := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	agent := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"auth_mode": OpenAIAuthModeAgentIdentity}}
+
+	require.True(t, refresher.CanRefresh(regular))
+	require.False(t, refresher.CanRefresh(agent))
+	require.False(t, refresher.CanRefresh(nil))
+}
+
 func TestClaudeTokenRefresher_NeedsRefresh(t *testing.T) {
 	refresher := &ClaudeTokenRefresher{}
 	refreshWindow := 30 * time.Minute
@@ -192,6 +202,12 @@ func TestClaudeTokenRefresher_CanRefresh(t *testing.T) {
 			name:     "anthropic oauth - can refresh",
 			platform: PlatformAnthropic,
 			accType:  AccountTypeOAuth,
+			want:     true,
+		},
+		{
+			name:     "anthropic setup-token - can refresh",
+			platform: PlatformAnthropic,
+			accType:  AccountTypeSetupToken,
 			want:     true,
 		},
 		{

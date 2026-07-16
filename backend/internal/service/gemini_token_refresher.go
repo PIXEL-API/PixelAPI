@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -28,7 +29,11 @@ func (r *GeminiTokenRefresher) NeedsRefresh(account *Account, refreshWindow time
 	}
 	expiresAt := account.GetCredentialAsTime("expires_at")
 	if expiresAt == nil {
-		return false
+		// expires_at 缺失（例如通过凭证导入创建、只带 access_token/refresh_token 的账号）时，
+		// 无法判断过期时间。若存在 refresh_token 则主动刷新一次，让后台补齐 expires_at，
+		// 使账号回到正常刷新轨道；否则（无 refresh_token）无法刷新，跳过。
+		// 该行为与运行时 GeminiTokenProvider.GetAccessToken 对 expires_at 缺失即刷新的判断保持一致。
+		return strings.TrimSpace(account.GetCredential("refresh_token")) != ""
 	}
 	return time.Until(*expiresAt) < refreshWindow
 }

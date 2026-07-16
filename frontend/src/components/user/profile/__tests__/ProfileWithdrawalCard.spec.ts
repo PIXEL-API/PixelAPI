@@ -81,4 +81,38 @@ describe('ProfileWithdrawalCard', () => {
     expect(wrapper.text()).toContain('$1.23')
     expect(showErrorMock).not.toHaveBeenCalled()
   })
+
+  it('shows the configured frequency limit and rejection reason directly', async () => {
+    listWithdrawalsMock.mockResolvedValue({
+      items: [{
+        id: 42,
+        amount: 12,
+        total_deducted: 12,
+        status: 'REJECTED',
+        rejection_reason: '收款码无法识别，请重新上传',
+        created_at: '2026-07-10T08:00:00Z'
+      }],
+      total: 1,
+      page: 1,
+      page_size: 5,
+      pages: 1
+    })
+
+    const wrapper = mount(ProfileWithdrawalCard, {
+      props: {
+        rateLimitWindowDays: 7,
+        rateLimitMax: 3
+      },
+      global: {
+        stubs: {
+          Icon: true
+        }
+      }
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('每 7 天最多提交 3 次提现申请')
+    expect(wrapper.text()).toContain('驳回原因')
+    expect(wrapper.text()).toContain('收款码无法识别，请重新上传')
+  })
 })

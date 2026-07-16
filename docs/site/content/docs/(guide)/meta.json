@@ -1,0 +1,14 @@
+{
+  "title": "使用指南",
+  "description": "按普通用户和号主用户两条路径，从零跑通调用、共享账号和收益结算。",
+  "icon": "Book",
+  "root": true,
+  "pages": [
+    "index",
+    "concepts",
+    "(normal-user)",
+    "(owner-user)",
+    "(user)",
+    "glossary"
+  ]
+}

@@ -48,6 +48,7 @@ export interface AdminBalanceLedgerStatsResponse {
 export interface SimpleUser {
   id: number
   email: string
+  deleted: boolean
 }
 
 export interface SimpleApiKey {

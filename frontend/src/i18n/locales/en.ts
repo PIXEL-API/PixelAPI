@@ -101,6 +101,7 @@ export default {
       claude: "Claude",
       gemini: "Gemini",
       antigravity: "Antigravity",
+      grok: "Grok",
       more: "More",
     },
     // CTA section
@@ -602,6 +603,17 @@ export default {
       completeRegistrationFailed:
         "Registration failed. Please check your invitation code and try again.",
     },
+    oidcAuthorize: {
+      title: "Authorize Application",
+      authorizing: "Authorizing",
+      authorizingHint: "Confirming your Pixel account and returning you to the community.",
+      failed: "Authorization incomplete",
+      failedHint: "Authorization could not be completed. Please try again.",
+      missingRequest: "The authorization request is missing. Return to the community and start sign-in again.",
+      invalidRedirect: "The authorization service returned an invalid redirect URL, so navigation was stopped.",
+      retry: "Retry authorization",
+      backHome: "Back to home",
+    },
     oauthFlow: {
       profileDetailsTitle: "Use {providerName} profile details",
       profileDetailsDescription:
@@ -771,6 +783,12 @@ export default {
   groups: {
     subscription: "Sub",
     private: "Private",
+    rateLabel: "Rate",
+    rateSources: {
+      newUserGroup: "New",
+      userGroup: "Custom",
+      accountShare: "Account",
+    },
   },
 
   accountShare: {
@@ -846,6 +864,18 @@ export default {
     shareValidationFailedToRun: "Failed to revalidate public sharing",
     setFreeLevel: "Mark as Free",
     verifyPlus: "Verify Plus",
+    bulkMarkFree: "Mark Free",
+    bulkVerifyPlus: "Verify Plus",
+    noLevelVerifiableAccounts:
+      "Select OpenAI OAuth accounts before running account level actions",
+    bulkMarkFreeSubmitted:
+      "Free marking task submitted for {count} account(s)",
+    bulkMarkFreeCompleted:
+      "Free marking completed for {count} account(s)",
+    bulkVerifyPlusSubmitted:
+      "Plus verification task submitted for {count} account(s)",
+    bulkVerifyPlusCompleted:
+      "Plus verification completed for {count} account(s)",
     levelUpdatingFree: "Updating account level...",
     levelVerifyingPlus: "Verifying Plus access with gpt-5.4...",
     levelFreeUpdated: "Account level updated to Free",
@@ -897,9 +927,45 @@ export default {
     geminiAIStudio: "AI Studio",
     geminiAIStudioDesc: "Admin-configured OAuth client",
     apiKeyRequired: "Please enter an API Key",
-    created: "Created",
-    lastUsedAt: "Last Used",
-    neverUsed: "Never",
+    moderationSettings: "Moderation",
+    moderationEnable: "Enable moderation",
+    moderationMode: "Mode",
+    moderationModeObserve: "Observe only",
+    moderationModePreBlock: "Block before sending",
+    moderationProvider: "Moderation Provider",
+    moderationProviderOpenAI: "OpenAI",
+    moderationProviderZhipu: "Zhipu",
+    moderationModel: "Moderation Model",
+    moderationApiKey: "Moderation API Key",
+    moderationApiKeyConfigured: "Current key: {key}",
+    moderationApiKeyKeep: "Leave blank to keep current key",
+    moderationApiKeyRequired: "Please enter a moderation API Key",
+    moderationSampleRate: "Sampling rate",
+    moderationBlockMessage: "Block message",
+    moderationDefaultBlockMessage:
+      "Content moderation detected a policy risk. Please adjust your input and try again.",
+    moderationTest: "Test moderation",
+    moderationRunTest: "Run test",
+    moderationTestPlaceholder: "Enter test content. The raw prompt will not appear in user logs.",
+    moderationResult: "Result",
+    moderationHit: "Hit",
+    moderationPass: "Pass",
+    moderationCategory: "Category",
+    moderationAction: "Action",
+    moderationAllowed: "Allowed",
+    moderationBlocked: "Blocked",
+    moderationLogs: "Moderation Logs",
+    moderationTime: "Time",
+    moderationNoLogs: "No moderation logs yet",
+    moderationSaved: "Moderation settings saved",
+    moderationLoadFailed: "Failed to load moderation settings",
+    moderationSaveFailed: "Failed to save moderation settings",
+    moderationTestFailed: "Moderation test failed",
+    moderationLogsFailed: "Failed to load moderation logs",
+	created: "Created",
+	lastUsedAt: "Last Used",
+	lastUsedIP: "Last Used IP",
+	neverUsed: "Never",
     selectedGroups: "{count} groups selected",
     importTitle: "Import Personal Accounts",
     importHint:
@@ -909,34 +975,42 @@ export default {
     importWarningChoosePlatform:
       "Select the import platform first. You can import up to {max} accounts at a time. API keys, URLs, upstream endpoints and cookies are rejected.",
     importWarningOpenAI:
-      "You can import up to {max} OpenAI accounts. Free / Plus / Team support JSON or Refresh Tokens; Pro must use account login.",
+      "You can import up to {max} OpenAI accounts. Available levels are configured by administrators; levels marked as requiring proxy login must use account login.",
     importWarningClaude:
       "You can import up to {max} Claude accounts. Supports Sub2API OAuth JSON or Claude Session Key.",
     importWarningGemini:
       "You can import up to {max} Gemini accounts. Only official OAuth JSON with Gemini platform metadata is accepted.",
     importWarningAntigravity:
       "You can import up to {max} Antigravity accounts. Only official OAuth JSON with Antigravity platform metadata is accepted.",
+    importWarningGrok:
+      "You can import up to {max} Grok accounts. Only official OAuth JSON with Grok/xAI platform metadata is accepted.",
     importPlatform: "Import Platform",
     importPlatformRequired: "Select the import platform first",
     importPlatformOpenAI: "ChatGPT / Codex account",
     importPlatformClaude: "Claude official account",
     importPlatformGemini: "Gemini official account",
     importPlatformAntigravity: "Antigravity official account",
+    importPlatformGrok: "Grok / xAI official account",
     importPlatformHintClaude:
       "Claude imports do not use OpenAI account levels. Use Claude OAuth JSON or Claude Session Key.",
     importPlatformHintGemini:
       "Gemini imports do not use OpenAI account levels. Import OAuth JSON containing platform: gemini.",
     importPlatformHintAntigravity:
       "Antigravity imports do not use OpenAI account levels. Import OAuth JSON containing platform: antigravity.",
+    importPlatformHintGrok:
+      "Grok imports do not use OpenAI account levels. Import OAuth JSON containing platform: grok or platform: xai.",
     importAccountLevel: "OpenAI Account Level",
     importAccountLevelHint:
-      "Required only for OpenAI imports. OpenAI imports are checked strictly against the selected level; unconfirmed accounts are treated as Free; Pro must use account login.",
+      "Required only for OpenAI imports. OpenAI imports are checked strictly against the selected level; unconfirmed accounts follow the configured default rules; levels requiring proxy login must use account login.",
     importAccountLevelRequired: "Select the OpenAI account level first",
     importLevelFree: "Unconfirmed accounts go to Free",
     importLevelPlus: "Only actual Plus accounts",
     importLevelPro: "Requires login and proxy IP",
     importLevelTeam:
       "Supports JSON import and only accepts actual Team accounts",
+    importLevelK12: "Supports JSON import and only accepts actual K12 accounts",
+    importLevelDirect: "{level} supports credential import",
+    importLevelRequiresProxy: "{level} requires account login and proxy IP",
     importOAuthOnlyHint:
       "This level can only be imported through OpenAI account login. Select a proxy IP, generate the login URL, then paste the callback result.",
     importOAuthNamePlaceholder: "Optional; OpenAI email is used when blank",
@@ -981,6 +1055,25 @@ export default {
     proxyPortInvalid: "Proxy port must be between 1 and 65535",
     proxyCreateFailed: "Failed to add proxy IP",
     proxyCreatedSuccess: "Proxy IP added and selected",
+    manageProxies: "Manage proxy IPs",
+    proxyManagerTitle: "My proxy IPs",
+    proxyManagerDescription: "Edit or remove proxy IPs you added. Linked accounts use an updated configuration immediately.",
+    proxyManagerDeleteRule: "A proxy still used by an account cannot be deleted. Replace it on every linked account first.",
+    proxyManagerEmpty: "You have not added any proxy IPs",
+    proxyEditTitle: "Edit proxy IP",
+    proxyPasswordKeepHint: "Passwords are never displayed. Leave this blank to keep the current password.",
+    proxyPasswordKeepPlaceholder: "Leave blank to keep current password",
+    proxyClearPassword: "Clear the saved proxy password",
+    proxyUpdatedSuccess: "Proxy IP updated",
+    proxyUpdateFailed: "Failed to update proxy IP",
+    proxyDeletedSuccess: "Proxy IP deleted",
+    proxyDeleteFailed: "Failed to delete proxy IP",
+    proxyDeleteTitle: "Delete proxy IP",
+    proxyDeleteConfirm: "Delete proxy “{name}”? This action cannot be undone.",
+    proxyDeleteBlocked: "This proxy is still used by an account. Replace the linked account proxy first.",
+    proxyAccountCount: "{count} accounts",
+    proxyRequiredReplaceOnly: "This account requires a proxy IP. You can replace it, but cannot remove the association.",
+    proxyOptionalEditHint: "Replace the proxy, or select No proxy to remove the current association.",
     importOAuthCallbackRequired:
       "Generate the login URL first, then paste an OpenAI callback containing code and state",
     importTextMode: "Bulk Text",
@@ -1000,6 +1093,8 @@ export default {
       "Gemini only accepts OAuth JSON with Gemini platform metadata; plain tokens are not accepted.",
     importTextHintAntigravity:
       "Antigravity only accepts OAuth JSON with Antigravity platform metadata; plain tokens are not accepted.",
+    importTextHintGrok:
+      "Grok only accepts OAuth JSON with Grok/xAI platform metadata; plain tokens are not accepted.",
     importTextRequired: "Please paste account data",
     importFile: "Data File",
     importSelectFile: "Select JSON or text data files",
@@ -1057,11 +1152,13 @@ export default {
     },
     allGroups: "All Groups",
     allStatus: "All Status",
+    columnSettings: "Column Settings",
     createKey: "Create API Key",
     editKey: "Edit API Key",
     deleteKey: "Delete API Key",
     deleteConfirmMessage:
       "Are you sure you want to delete '{name}'? This action cannot be undone.",
+    id: "ID",
     apiKey: "API Key",
     group: "Group",
     noGroup: "No group",
@@ -1073,6 +1170,13 @@ export default {
     importToCcSwitch: "Import to CCS",
     openImagePlayground: "Image",
     openImagePlaygroundFailed: "Failed to open image playground",
+    imagePlaygroundModelDialog: {
+      title: "Choose an image model",
+      description: "The image playground no longer supplies a default model. Enter the image model for this request.",
+      modelLabel: "Image model",
+      modelPlaceholder: "For example, gpt-image-1.5",
+      open: "Open image playground",
+    },
     enable: "Enable",
     disable: "Disable",
     nameLabel: "Name",
@@ -1097,6 +1201,23 @@ export default {
     groupChangedSuccess: "Group changed successfully",
     failedToChangeGroup: "Failed to change group",
     groupRequired: "Please select a group",
+    accountShareConflict: {
+      deleteTitle: "This API key cannot be deleted yet",
+      changeGroupTitle: "This API key cannot change groups yet",
+      blockedKey: "API key “{name}” still has linked accounts",
+      description: "Resolve its Account Plaza usage and reservations first to avoid interrupting requests or invalidating queue entries.",
+      activeLabel: "In use",
+      queuedLabel: "Reserved",
+      detailsUnavailable: "An active or queued link exists, but its counts could not be loaded. Open Account Plaza to review and resolve it.",
+      stepsTitle: "Complete these steps, then retry",
+      stepOpen: "Open the linked-account resolution view in Account Plaza.",
+      stepResolve: "End active usage and remove every queued reservation.",
+      stepRetry: "Return to API Keys after all links are cleared and retry the action.",
+      later: "Resolve later",
+      resolve: "Open Account Plaza",
+      checkFailed: "The Account Plaza link status could not be verified. The action was stopped; please retry later.",
+      navigationFailed: "Failed to open Account Plaza",
+    },
     usage: "Usage",
     today: "Today",
     total: "Last 30d",
@@ -1116,6 +1237,11 @@ export default {
       openai: {
         description:
           "Add the following configuration files to your Codex CLI config directory.",
+        authModeTitle: "Codex authentication mode",
+        authModeDescription:
+          "Compatibility mode keeps the existing setup for older Codex clients. API Key Mode enables the client-side image executor.",
+        authModeLegacy: "Compatibility mode",
+        authModeApiKey: "API Key Mode",
         configTomlHint:
           "Make sure the following content is at the beginning of the config.toml file",
         note: "Make sure the config directory exists. macOS/Linux users can run mkdir -p ~/.codex to create it.",
@@ -1127,6 +1253,7 @@ export default {
         geminiCli: "Gemini CLI",
         codexCli: "Codex CLI",
         codexCliWs: "Codex CLI (WebSocket)",
+        grokCli: "Grok CLI",
         opencode: "OpenCode",
       },
       antigravity: {
@@ -1145,6 +1272,15 @@ export default {
         modelComment:
           "If you have Gemini 3 access, you can use: gemini-3-pro-preview",
         note: "These environment variables will be active in the current terminal session. For permanent configuration, add them to ~/.bashrc, ~/.zshrc, or the appropriate configuration file.",
+      },
+      grok: {
+        description:
+          "Configure Grok Build or OpenCode to send Responses API traffic through the current Grok group.",
+        configTomlHint:
+          "Back up an existing config.toml before merging this model entry. Run grok inspect after saving to verify the effective configuration.",
+        note: "Save the file as ~/.grok/config.toml, then run grok inspect and select grok from /model.",
+        noteWindows:
+          "Save the file as %USERPROFILE%\\.grok\\config.toml, then run grok inspect and select grok from /model.",
       },
       opencode: {
         title: "OpenCode Example",
@@ -1195,6 +1331,7 @@ export default {
     quotaResetSuccess: "Quota reset successfully",
     failedToResetQuota: "Failed to reset quota",
     rateLimitColumn: "Rate Limit",
+    currentConcurrency: "Concurrency",
     rateLimitSection: "Rate Limit",
     resetUsage: "Reset",
     rateLimit5h: "5-Hour Limit (USD)",
@@ -1250,6 +1387,9 @@ export default {
     accountBilled: "Account billed",
     accountMultiplier: "Account rate",
     avgDuration: "Avg Duration",
+    latency: "Latency Health",
+    latencyFirstToken: "First Token",
+    latencyDuration: "Total Duration",
     inSelectedRange: "in selected range",
     perRequest: "per request",
     apiKeyFilter: "API Key",
@@ -1293,6 +1433,24 @@ export default {
     tabs: {
       requests: "Requests",
       balanceLedger: "Balance Ledger",
+      usage: "Usage Details",
+      errors: "Error Requests",
+      ranking: "User Ranking",
+    },
+    errors: {
+      phase: "Phase",
+      statusCode: "Status Code",
+      allPhases: "All Phases",
+      allStatuses: "All Status Codes",
+      failedToLoad: "Failed to load error requests",
+      retry: "Retry",
+      phases: {
+        request: "Request",
+        auth: "Authentication",
+        routing: "Routing",
+        network: "Network",
+        internal: "Internal",
+      },
     },
     balanceLedger: {
       direction: "Direction",
@@ -1403,6 +1561,8 @@ export default {
       openai: "OpenAI",
       anthropic: "Anthropic",
       gemini: "Gemini",
+      antigravity: "Antigravity",
+      grok: "Grok",
     },
     extraModelsHeader: "Extra Models",
     extraModelsEmpty: "No extra models",
@@ -1494,8 +1654,17 @@ export default {
       "Channels you can access, along with their supported models and pricing",
     searchPlaceholder: "Search channels or models...",
     empty: "No available channels",
+    emptyHint: "Try a different search or refresh the page",
     noModels: "No models configured",
+    noGroups: "No accessible groups",
     noPricing: "Pricing not configured",
+    viewModelDetails: "View details for {model}",
+    summary: "{channels} channels · {platforms} platforms · {models} models",
+    counts: {
+      platforms: "{count} platforms",
+      groups: "{count} groups",
+      models: "{count} models",
+    },
     exclusive: "Exclusive",
     public: "Public",
     exclusiveTooltip: "Exclusive groups granted to you by an admin",
@@ -1513,6 +1682,7 @@ export default {
       supportedModels: "Supported Models",
     },
     pricing: {
+      title: "Model Pricing",
       billingMode: "Billing Mode",
       billingModeToken: "Per Token",
       billingModePerRequest: "Per Request",
@@ -2474,7 +2644,6 @@ export default {
         usage: "Usage Breakdown",
         platformLedger: "Platform Ledger",
         adjustments: "Adjustments",
-        breakdown: "Top Breakdown",
       },
       fields: {
         paidAmount: "Paid Amount",
@@ -2514,45 +2683,6 @@ export default {
         sharePlatformFee: "Share Platform Retention",
         shareNetProfit: "Share Net Profit",
         shareSettlementCount: "Share Settlements",
-      },
-      breakdown: {
-        consumers: "Consumers",
-        shareOwners: "Account Owners",
-        users: "Users",
-        groups: "Groups",
-        accounts: "Accounts",
-        models: "Models",
-      },
-      breakdownHints: {
-        consumers:
-          "Grouped by caller, showing platform usage revenue, cost, owner-share expense and net profit generated by each consumer. This is not the caller’s personal income.",
-        shareOwners:
-          "Grouped by public account owner. Only external usage of that user-owned account is counted; owner self-use is excluded.",
-        groups:
-          "Grouped by routing group, showing platform usage revenue, cost, owner-share expense and net profit.",
-        accounts:
-          "Grouped by called account, showing platform usage revenue, cost, owner-share expense and net profit.",
-        models:
-          "Grouped by requested model, showing platform usage revenue, cost, owner-share expense and net profit.",
-      },
-      table: {
-        name: "Name",
-        requests: "Requests",
-        tokens: "Tokens",
-        revenue: "Revenue",
-        cost: "Cost",
-        profit: "Profit",
-        margin: "Margin",
-        platformRevenue: "Platform Revenue",
-        consumerCharge: "External Spend",
-        ownerCredit: "Owner Income",
-        platformFee: "Platform Retention",
-        shareExpense: "Share Expense",
-        netProfit: "Net Profit",
-        netMargin: "Net Margin",
-        platformNetProfit: "Platform Net Profit",
-        platformNetMargin: "Platform Net Margin",
-        shareRatio: "Share Ratio",
       },
       noData: "No data available",
       loadFailed: "Failed to load revenue data",
@@ -3065,6 +3195,7 @@ export default {
       creating: "Creating...",
       updating: "Updating...",
       form: {
+        roleLabel: "Role",
         rpmLimit: "Requests Per Minute (RPM)",
         rpmLimitPlaceholder: "0 = unlimited",
         rpmLimitHint:
@@ -3150,6 +3281,8 @@ export default {
       concurrencyMin: "Concurrency must be at least 1",
       concurrencyRange: "User concurrency must be at least 1",
       concurrencyRangeHint: "Personal user concurrency must be at least 1.",
+      adminConcurrencyRange: "Administrator concurrency must be at least 0",
+      adminConcurrencyRangeHint: "Administrator concurrency may be 0 or greater.",
       soraStorageQuota: "Sora Storage Quota",
       soraStorageQuotaHint: "In GB, 0 means use group or system default quota",
       amountRequired: "Please enter a valid amount",
@@ -3326,6 +3459,7 @@ export default {
         "Drag groups to adjust display order, groups at the top will be displayed first",
       sortOrderUpdated: "Sort order updated",
       failedToUpdateSortOrder: "Failed to update sort order",
+      columnSettings: "Column Settings",
       allPlatforms: "All Platforms",
       allStatus: "All Status",
       allGroups: "All Groups",
@@ -3339,6 +3473,7 @@ export default {
       },
       columns: {
         name: "Name",
+        id: "ID",
         platform: "Platform",
         rateMultiplier: "Rate Multiplier",
         rpmOverride: "RPM Override",
@@ -3365,6 +3500,28 @@ export default {
       accountsTotal: "Total:",
       accountsUnit: "",
       rateAndAccounts: "{rate}x rate · {count} accounts",
+      newUserRateAction: "New Rate",
+      newUserRateShort: "New",
+      newUserRateTitle: "New User Rate Configuration",
+      newUserRateEnableLabel: "Enable new user rate",
+      newUserRateDefaultRate: "Original group rate: {rate}x",
+      newUserRateSwitchRule:
+        "When the time window expires or the quota is reached, the next request uses the original group rate. The order that reaches the quota still uses the new user rate.",
+      newUserRateRulesTitle: "Activation and Recovery Rules",
+      newUserRateRuleWindow: "After the registration window expires, the next request uses the original group rate.",
+      newUserRateRuleQuota: "If usage reaches the quota within the window, the next request uses the original group rate.",
+      newUserRateRuleWholeOrder: "The order that reaches the quota still uses the new user rate.",
+      newUserRateSummary: "New users for {duration}: {rate}x · quota {quota}",
+      newUserRateDurationDaysHours: "{days}d {hours}h",
+      newUserRateDurationDays: "{days}d",
+      newUserRateDurationHours: "{hours}h",
+      newUserRateQuotaUnlimited: "unlimited",
+      newUserRateSaved: "New user rate saved",
+      failedToSaveNewUserRate: "Failed to save new user rate",
+      invalidNewUserRate: "New user rate must be greater than 0",
+      invalidNewUserRateWindow:
+        "New user rate window must be greater than 0 when enabled",
+      invalidNewUserRateQuota: "New user rate quota must be greater than or equal to 0",
       accountsCount: "{count} accounts",
       form: {
         name: "Name",
@@ -3373,6 +3530,14 @@ export default {
         rateMultiplier: "Rate Multiplier",
         status: "Status",
         exclusive: "Exclusive Group",
+        newUserRate: "New User Rate",
+        newUserRateMultiplier: "New User Rate",
+        newUserRateDays: "Days",
+        newUserRateHours: "Hours",
+        newUserRateQuotaUSD: "Quota Limit (USD)",
+        newUserRateQuotaPlaceholder: "0 = unlimited",
+        newUserRateHint:
+          "Applies to newly registered users during the configured window. After cumulative quota reaches the limit, the next request uses the original group rate. User-specific rates still take priority.",
         rpmLimit: "Requests Per Minute (RPM)",
         rpmLimitPlaceholder: "0 = unlimited",
         rpmLimitHint:
@@ -3464,6 +3629,7 @@ export default {
         openai: "OpenAI",
         gemini: "Gemini",
         antigravity: "Antigravity",
+        grok: "Grok",
       },
       deleteConfirm:
         "Are you sure you want to delete '{name}'? All associated API keys will no longer belong to any group.",
@@ -3489,6 +3655,29 @@ export default {
         title: "Image Generation Pricing",
         description:
           "Configure pricing for image generation models. Leave empty to use default prices.",
+      },
+      videoPricing: {
+        title: "Grok Video Pricing",
+        description:
+          "Configure USD-per-second prices. Leave empty to use the server default for the requested model.",
+        independentMultiplier: "Use an independent video multiplier",
+        videoMultiplier: "Video multiplier",
+        modeHint: "When disabled, the group multiplier is used.",
+        finalPricePreview: "Per-second preview: {price}",
+        serverModelDefault: "use server model default",
+        defaultPricePlaceholder: "Server default",
+        invalidMultiplier:
+          "The video multiplier must be a finite number greater than 0.",
+        invalidPrice:
+          "Video prices must be finite numbers greater than or equal to 0.",
+      },
+      webSearchPricing: {
+        title: "Codex Web Search Per-Call Pricing",
+        pricePerCall: "Price per search (USD)",
+        pricePerCallHint: "Empty uses the default $0.01; 0 makes searches free.",
+        finalPricePreview: "Per-call charge after group multiplier: {price}",
+        invalidPrice:
+          "The web search price must be a finite number greater than or equal to 0.",
       },
       claudeCode: {
         title: "Claude Code Client Restriction",
@@ -3703,6 +3892,26 @@ export default {
         imageTokenPrice: "Image Output",
         imageOutputPrice: "Image Output Price",
         pricePlaceholder: "Default",
+        longContextPricingTitle: "OpenAI API Long-context Multipliers",
+        longContextPricingDescription:
+          "When total input exceeds the threshold, apply the model price-card multipliers to the entire request.",
+        longContextPricingOn: "On",
+        longContextPricingOff: "Off",
+        longContextInherited: "Disabled by default (not explicitly enabled)",
+        longContextExplicitlyEnabled: "Explicitly enabled",
+        longContextExplicitlyDisabled: "Explicitly disabled",
+        longContextCustomIntervals: "Custom context intervals take precedence",
+        longContextConflictStatus: "Configuration conflict: turn off multipliers or remove custom intervals",
+        longContextThreshold: "Input Token Threshold",
+        longContextThresholdPlaceholder: "Enter a threshold",
+        longContextThresholdHint:
+          "Enter an integer from 1 to 2147483647. Editing the threshold explicitly enables this policy.",
+        longContextAddIntervalBlocked:
+          "OpenAI API long-context multipliers are explicitly enabled. Turn them off before adding a custom interval.",
+        longContextIntervalConflict:
+          "OpenAI API long-context multipliers and custom context intervals cannot be enabled together",
+        longContextThresholdRequired:
+          "When OpenAI API long-context multipliers are enabled, the Input Token threshold must be an integer from 1 to 2147483647",
         intervals: "Context Intervals (optional)",
         addInterval: "Add Interval",
         requestTiers: "Request Tiers",
@@ -4424,6 +4633,9 @@ export default {
       title: "Account Management",
       description: "Manage AI platform accounts and credentials",
       createAccount: "Create Account",
+      duplicateAccount: "Duplicate Account",
+      duplicateSuccess: 'Created "{name}" in a paused state. Review it before enabling scheduling.',
+      duplicateFailed: "Failed to duplicate account",
       autoRefresh: "Auto Refresh",
       enableAutoRefresh: "Enable auto refresh",
       refreshInterval5s: "5 seconds",
@@ -4517,6 +4729,7 @@ export default {
         plus: "Plus",
         pro: "Pro",
         team: "Team",
+        k12: "K12",
       },
       syncFromCrs: "Sync from CRS",
       dataExport: "Export",
@@ -4527,9 +4740,9 @@ export default {
       credentialImport: "Credential Import",
       credentialImportTitle: "Import Account Credentials",
       credentialImportHint:
-        "Paste account credentials or import files. Admin credential import creates platform OAuth accounts.",
+		"Paste account credentials or import files. Admin credential import creates platform OAuth or OpenAI Agent Identity accounts.",
       credentialImportWarning:
-        "This entry only accepts official OAuth credentials: Sub2API OAuth JSON, Codex-Manager ChatGPT token JSON, OpenAI Refresh Token, and Claude Session Key. API keys, URLs, upstream endpoints and cookies are rejected. Admins can still manage other account types through Add Account or Data Import.",
+		"This entry only accepts official OAuth credentials and OpenAI Agent Identity JSON: Sub2API OAuth JSON, Codex-Manager ChatGPT token JSON, OpenAI Refresh Token, and Claude Session Key. API keys, URLs, upstream endpoints and cookies are rejected. Agent Identity is admin-private only and cannot be user-owned or publicly shared.",
       dataExportConfirmMessage:
         "The exported data contains sensitive account and proxy information. Store it securely.",
       dataExportConfirm: "Confirm Export",
@@ -4619,6 +4832,7 @@ export default {
         openai: "OpenAI",
         gemini: "Gemini",
         antigravity: "Antigravity",
+        grok: "Grok",
       },
       types: {
         oauth: "OAuth",
@@ -4952,6 +5166,10 @@ export default {
       openai: {
         baseUrlHint: "Leave default for official OpenAI API",
         apiKeyHint: "Your OpenAI API Key",
+        planType: "Subscription tier override",
+        planTypeDesc:
+          "Enter the upstream plan identifier exactly as needed. Leave blank to remove the manual override and resume automatic detection; OAuth refresh or rate-limit sync may update it later.",
+        planTypePlaceholder: "Upstream plan identifier",
         oauthPassthrough: "Auto passthrough (auth only)",
         oauthPassthroughDesc:
           "When enabled, this OpenAI account uses automatic passthrough: the gateway forwards request/response as-is and only swaps auth, while keeping billing/concurrency/audit and necessary safety filtering.",
@@ -5309,6 +5527,14 @@ export default {
           failedToExchangeCode: "Failed to exchange OpenAI auth code",
           failedToValidateRT: "Failed to validate refresh token",
           errors: {
+            OPENAI_OAUTH_SESSION_NOT_FOUND:
+              "The authorization session was not found or has expired. Generate a new authorization URL and submit the latest callback URL.",
+            OPENAI_OAUTH_STATE_REQUIRED:
+              "The authorization callback is missing the state parameter. Paste the full callback URL or generate a new authorization URL.",
+            OPENAI_OAUTH_INVALID_STATE:
+              "The callback state does not match the current authorization URL. Generate a new URL and use the latest callback URL.",
+            OPENAI_OAUTH_REQUEST_INVALID:
+              "The authorization request is invalid. Generate a new authorization URL and try again.",
             OPENAI_OAUTH_PROXY_REQUIRED:
               "No proxy is configured and this server could not reach OpenAI directly, so the OpenAI OAuth request failed. Select a proxy that can access OpenAI and retry; if the authorization code has expired, regenerate the authorization URL.",
           },
@@ -5430,6 +5656,65 @@ export default {
           validateAndCreate: "Validate & Create",
           pleaseEnterRefreshToken: "Please enter Refresh Token",
           failedToValidateRT: "Failed to validate Refresh Token",
+        },
+        // Grok specific
+        grok: {
+          title: "Grok Account Authorization",
+          followSteps: "Follow these steps to authorize your Grok account:",
+          step1GenerateUrl: "Generate the authorization URL",
+          generateAuthUrl: "Generate Auth URL",
+          step2OpenUrl:
+            "Open the URL in your browser and complete authorization",
+          openUrlDesc:
+            "Open the authorization URL in a new tab, log in to your xAI/Grok account and authorize.",
+          importantNotice:
+            "Important: after authorization, copy the full callback URL. The system will extract code and state automatically.",
+          step3EnterCode: "Enter Callback URL or Code",
+          authCodeDesc:
+            "After authorization, copy the callback URL (recommended) or just the code and paste it below.",
+          authCode: "Callback URL or Code",
+          authCodePlaceholder:
+            "Option 1 (recommended): Paste the callback URL\nOption 2: Paste only the code value",
+          authCodeHint: "The system will auto-extract code/state from the URL.",
+          failedToGenerateUrl: "Failed to generate Grok auth URL",
+          missingExchangeParams: "Missing code, session ID, or state",
+          failedToExchangeCode: "Failed to exchange Grok auth code",
+          refreshTokenAuth: "Manual RT",
+          refreshTokenDesc:
+            "Enter your existing Grok Refresh Token. Supports batch input (one per line). The system will automatically validate and create accounts.",
+          refreshTokenPlaceholder:
+            "Paste your Grok Refresh Token...\nSupports multiple tokens, one per line",
+          ssoCookieAuth: "SSO Cookie Import",
+          ssoCookieDesc:
+            "Paste one Grok Web SSO key per line. The server will complete the xAI Device Flow and convert them into Grok Build OAuth credentials.",
+          ssoCookieLabel: "Grok Web SSO Key",
+          ssoCookiePlaceholder:
+            "One SSO key per line\nSupports multiple, one per line",
+          ssoCookieHint:
+            "One SSO key per line. Multiple keys are imported with 3-way concurrency; expect about 90 seconds per batch. Use a matching-region proxy if needed.",
+          convertingSSO: "Converting...",
+          convertSSOAndCreate: "Convert & Create Account",
+          validating: "Validating...",
+          validateAndCreate: "Validate & Create",
+          pleaseEnterRefreshToken: "Please enter Refresh Token",
+          failedToValidateRT: "Failed to validate Refresh Token",
+          failedToConvertSSO: "Failed to convert Grok SSO cookie",
+          errors: {
+            GROK_OAUTH_SESSION_NOT_FOUND:
+              "The authorization session was not found or has expired. Generate a new authorization URL and try again.",
+            GROK_OAUTH_INVALID_STATE:
+              "The callback state does not match the current authorization session. Generate a new URL and use its callback.",
+            GROK_OAUTH_STATE_REQUIRED:
+              "The callback is missing the state parameter. Paste the full callback URL or generate a new authorization URL.",
+            GROK_OAUTH_CODE_REQUIRED:
+              "The callback is missing the authorization code. Paste the full callback URL or enter the code.",
+            GROK_OAUTH_NO_REFRESH_TOKEN:
+              "Grok did not return a refresh token. Re-authorize the account and try again.",
+            GROK_OAUTH_PROXY_NOT_AVAILABLE:
+              "No available proxy can complete Grok authorization. Check the account proxy configuration.",
+            GROK_OAUTH_PROXY_NOT_FOUND:
+              "The configured proxy was not found. Select an available proxy and try again.",
+          },
         },
       }, // Gemini specific (platform-wide)
       gemini: {
@@ -5580,6 +5865,7 @@ export default {
       openaiAccount: "OpenAI Account",
       geminiAccount: "Gemini Account",
       antigravityAccount: "Antigravity Account",
+      grokAccount: "Grok Account",
       inputMethod: "Input Method",
       reAuthorizedSuccess: "Account re-authorized successfully",
       // Test Modal
@@ -5659,7 +5945,26 @@ export default {
         gemini3Image: "G31FI",
         claude: "Claude",
         passiveSampled: "Passive",
+        localSnapshot: "Local snapshot",
+        snapshotUnavailable: "No local snapshot yet; click Query",
         activeQuery: "Query",
+        grokProbe: "Probe",
+        grokProbeTooltip: "Send a lightweight xAI request to refresh the Grok quota header snapshot",
+        grokResetUnsupported: "No reset",
+        grokResetUnsupportedTooltip: "xAI does not currently expose a quota reset endpoint for Grok OAuth subscriptions",
+        grokRequests: "Requests",
+        grokTokens: "Tokens",
+        grokRequestsShort: "Req",
+        grokTokensShort: "Tok",
+        grokFreeQuota24hHint: "Estimated from local token usage over the rolling 24-hour window (2M limit)",
+        grokWeeklyUsage: "Weekly {percent}%",
+        grokUnknown: "Grok quota is unknown until billing is probed or an upstream response includes xAI rate-limit headers.",
+        grokRetryAfter: "Retry {time}",
+        grokNoHeaders: "Waiting for xAI quota headers",
+        grokLocalUsage24h: "Local usage in the last 24 hours",
+        grokLastStatus: "Status {status}",
+        grokLastProbe: "Probe {time}",
+        grokLastHeadersSeen: "Headers {time}",
       },
       openaiQuotaReset: {
         count: "Credits",
@@ -6224,6 +6529,23 @@ export default {
       ipAddress: "IP",
       clickToViewBalance: "Click to view balance history",
       failedToLoadUser: "Failed to load user info",
+      tokenRanking: {
+        subtitle: "Per-user token usage for the current filters and time range",
+        rowHint: "Click to view this user's usage details",
+        userCount: "{count} users",
+        searchPlaceholder: "Search users by email",
+        loadFailed: "Failed to load user token ranking",
+        retry: "Retry",
+        columns: {
+          user: "User",
+          requests: "Requests",
+          inputTokens: "Input Tokens",
+          outputTokens: "Output Tokens",
+          cacheTokens: "Cache Tokens",
+          totalTokens: "Total Tokens",
+          cost: "Cost",
+        },
+      },
       cleanup: {
         button: "Cleanup",
         title: "Cleanup Usage Records",
@@ -7208,6 +7530,20 @@ export default {
           withdrawalManagement: "Withdrawal Management",
           withdrawalManagementHint:
             "When disabled, withdrawal entries are hidden and withdrawal APIs stop accepting requests.",
+          withdrawalRateLimit: "Withdrawal frequency limit",
+          withdrawalRateLimitHint:
+            "Uses a rolling window and counts every created withdrawal request, including requests later cancelled or rejected.",
+          withdrawalRateLimitWindowDays: "Window (days)",
+          withdrawalRateLimitMax: "Maximum requests per window",
+          withdrawalRateLimitMaxHint: "Enter 0 for unlimited withdrawal requests.",
+          withdrawalRateLimitSummary:
+            "Current limit: up to {max} requests every {days} days.",
+          withdrawalRateLimitUnlimited:
+            "Withdrawal request frequency is currently unlimited.",
+          withdrawalRateLimitWindowDaysError:
+            "The withdrawal window must be an integer between 1 and 365.",
+          withdrawalRateLimitMaxError:
+            "The withdrawal request limit must be an integer between 0 and 1000.",
         },
         riskControl: {
           title: "Content Risk Control",
@@ -7461,6 +7797,33 @@ export default {
         subscriptionGroup: "Subscription Group",
         subscriptionValidityDays: "Validity (days)",
       },
+      openaiAccountLevels: {
+        title: "OpenAI Account Levels",
+        description:
+          "Configure OpenAI account levels, aliases, and login requirements. Account import, group matching, and shared-account filters use this configuration.",
+        addLevel: "Add Level",
+        resetDefaults: "Restore Defaults",
+        empty:
+          "No account levels configured. Keep at least one enabled or disabled level.",
+        key: "Level key",
+        label: "Display label",
+        aliases: "Aliases",
+        sortOrder: "Sort",
+        enabled: "Selectable",
+        enabledHint:
+          "When disabled, the frontend no longer offers this level, while existing records can still display it.",
+        requiresProxyLogin: "Requires proxy login",
+        requiresProxyLoginHint:
+          "When enabled, user imports for this level use the OpenAI login flow.",
+        saveHint:
+          "Level keys may contain letters, numbers, and hyphens only. Separate aliases with commas; a trailing * enables prefix matching.",
+        invalidKey:
+          "Row {index} has an invalid level key. It cannot be empty or unknown.",
+        duplicateKey: "Duplicate OpenAI account level key: {key}",
+        missingLabel: "OpenAI account level {key} is missing a display label.",
+        emptyInvalid: "Configure at least one OpenAI account level.",
+        noEnabledLevel: "Enable at least one OpenAI account level.",
+      },
       claudeCode: {
         title: "Claude Code Settings",
         description: "Control Claude Code client access requirements",
@@ -7493,6 +7856,9 @@ export default {
         cleanRelay: "Clean Relay Mode",
         cleanRelayHint:
           "Uses gateway-managed upstream installation/session/cache identifiers for OpenAI OAuth requests. First entry or account migration clears previous_response_id, encrypted reasoning, and old turn state.",
+        detachedUsageDrain: "Continue Usage Collection After Disconnect",
+        detachedUsageDrainHint:
+          "When enabled, the server keeps reading Claude/OpenAI upstream responses within the timeout after the client disconnects to collect complete usage. Disable it to reduce upstream connection occupancy during abnormal disconnects, at the cost of more missed billing.",
         cchSigning: "CCH Signing",
         cchSigningHint:
           "Sign the billing header in forwarded requests with CCH hash. When disabled, the placeholder is preserved.",
@@ -7759,6 +8125,7 @@ export default {
         modeRedirect: "Redirect",
         modeQRCode: "QR Code",
         modePopup: "Popup",
+        modeJSAPI: "JSAPI",
         validationNameRequired: "Provider name is required",
         validationTypesRequired:
           "Please select at least one supported payment type",
@@ -7769,6 +8136,7 @@ export default {
         callbackBaseUrl: "Callback Base URL",
         field_privateKey: "Private Key",
         field_publicKey: "Public Key",
+        field_opAppId: "Operation App ID",
         field_mpAppId: "MP App ID",
         field_mchId: "Merchant ID",
         field_apiV3Key: "API v3 Key",
@@ -8183,6 +8551,15 @@ export default {
         scopeOAuth: "OAuth only",
         scopeAPIKey: "API Key only",
         scopeBedrock: "Bedrock only",
+        userIds: "Specific users",
+        userIdsHint:
+          "Type any part of a user email to search. Leave empty to apply to all Sub2API users. Selected users match requests from their API keys and take precedence over global rules.",
+        userSearchPlaceholder: "Search by user email",
+        userSearchEmpty: "No matching users found",
+        userSearchFailed: "User search failed. Please try again.",
+        userDeleted: "(deleted)",
+        userLoadFailed: "Failed to load saved user #{id}",
+        removeUser: "Remove user",
         errorMessage: "Error message",
         errorMessagePlaceholder: "Custom error message when blocked",
         errorMessageHint: "Leave empty for the default message.",
@@ -8296,6 +8673,17 @@ export default {
         threshold: "Free detection weekly limit threshold (USD)",
         thresholdHint:
           "For example, 60 triggers repair when weekly limit is less than or equal to 60 USD and 7-day usage reaches 100%.",
+      },
+      schedulerCandidateSampling: {
+        title: "Scheduler candidate sampling",
+        description:
+          "Off by default. When enabled, scheduling buckets larger than the threshold load only a capped candidate set per selection, greatly reducing scheduler memory for large account pools.",
+        limit: "Candidate limit",
+        limitHint:
+          "Max candidate accounts loaded per scheduling lookup (1–1024, default 256).",
+        threshold: "Activation threshold",
+        thresholdHint:
+          "Candidate sampling applies only to buckets with more accounts than this value (default 5000).",
       },
       saveSettings: "Save Settings",
       saving: "Saving...",
@@ -8825,6 +9213,13 @@ export default {
     },
   },
 
+  withdrawal: {
+    errors: {
+      WITHDRAWAL_RATE_LIMIT_EXCEEDED:
+        "You can submit at most {max} withdrawal requests every {window_days} days. The limit has been reached.",
+    },
+  },
+
   // Payment System
   payment: {
     title: "Recharge / Subscription",
@@ -8878,8 +9273,11 @@ export default {
     qr: {
       scanToPay: "Scan to Pay",
       scanAlipay: "Alipay QR Payment",
+      scanAlipayJSAPI: "Scan with Alipay to Continue",
       scanWxpay: "WeChat QR Payment",
       scanAlipayHint: "Open Alipay on your phone and scan the QR code to pay",
+      scanAlipayJSAPIHint:
+        "Use Alipay Scan on your phone, then complete the payment inside Alipay's in-app browser.",
       scanWxpayHint: "Open WeChat on your phone and scan the QR code to pay",
       payInNewWindow: "Complete Payment in New Window",
       payInNewWindowHint:
@@ -9074,6 +9472,11 @@ export default {
       allStatuses: "All Statuses",
       allPaymentTypes: "All Payment Types",
       allOrderTypes: "All Order Types",
+      exportOrders: "Export Orders",
+      exportingOrders: "Exporting...",
+      exportOrdersHint: "Export every order matching the current filters",
+      orderExportSuccess: "Orders exported successfully",
+      orderExportFailed: "Failed to export orders",
       orderDetail: "Order Detail",
       orderType: "Order Type",
       orders: "Orders",

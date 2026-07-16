@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/payment/provider"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
 )
 
 // --- Cancel & Expire ---
@@ -175,7 +176,9 @@ func (s *PaymentService) checkPaid(ctx context.Context, o *dbent.PaymentOrder) s
 	if queryRef == "" {
 		return ""
 	}
+	finishProviderCall := servertiming.ObserveDependency(ctx, "payment")
 	resp, err := prov.QueryOrder(ctx, queryRef)
+	finishProviderCall()
 	if err != nil {
 		slog.Warn("query upstream failed", "orderID", o.ID, "error", err)
 		return ""
@@ -214,7 +217,9 @@ func (s *PaymentService) checkPaid(ctx context.Context, o *dbent.PaymentOrder) s
 		return checkPaidResultAlreadyPaid
 	}
 	if cp, ok := prov.(payment.CancelableProvider); ok {
+		finishProviderCall := servertiming.ObserveDependency(ctx, "payment")
 		_ = cp.CancelPayment(ctx, queryRef)
+		finishProviderCall()
 	}
 	return ""
 }
@@ -223,7 +228,9 @@ func requeryPaidOrderOnce(ctx context.Context, prov payment.Provider, queryRef s
 	if prov == nil || strings.TrimSpace(queryRef) == "" {
 		return nil, false
 	}
+	finishProviderCall := servertiming.ObserveDependency(ctx, "payment")
 	resp, err := prov.QueryOrder(ctx, queryRef)
+	finishProviderCall()
 	if err != nil {
 		slog.Warn("query upstream retry failed", "queryRef", queryRef, "error", err)
 		return nil, false

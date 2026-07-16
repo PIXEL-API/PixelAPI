@@ -165,19 +165,33 @@ type AnthropicDelta struct {
 
 // ResponsesRequest is the request body for POST /v1/responses.
 type ResponsesRequest struct {
-	Model           string              `json:"model"`
-	Instructions    string              `json:"instructions,omitempty"`
-	Input           json.RawMessage     `json:"input"` // string or []ResponsesInputItem
-	MaxOutputTokens *int                `json:"max_output_tokens,omitempty"`
-	Temperature     *float64            `json:"temperature,omitempty"`
-	TopP            *float64            `json:"top_p,omitempty"`
-	Stream          bool                `json:"stream,omitempty"`
-	Tools           []ResponsesTool     `json:"tools,omitempty"`
-	Include         []string            `json:"include,omitempty"`
-	Store           *bool               `json:"store,omitempty"`
-	Reasoning       *ResponsesReasoning `json:"reasoning,omitempty"`
-	ToolChoice      json.RawMessage     `json:"tool_choice,omitempty"`
-	ServiceTier     string              `json:"service_tier,omitempty"`
+	Model              string              `json:"model"`
+	Instructions       string              `json:"instructions,omitempty"`
+	Input              json.RawMessage     `json:"input"` // string or []ResponsesInputItem
+	MaxOutputTokens    *int                `json:"max_output_tokens,omitempty"`
+	Temperature        *float64            `json:"temperature,omitempty"`
+	TopP               *float64            `json:"top_p,omitempty"`
+	Stream             bool                `json:"stream,omitempty"`
+	Tools              []ResponsesTool     `json:"tools,omitempty"`
+	Include            []string            `json:"include,omitempty"`
+	Store              *bool               `json:"store,omitempty"`
+	ParallelToolCalls  *bool               `json:"parallel_tool_calls,omitempty"`
+	Reasoning          *ResponsesReasoning `json:"reasoning,omitempty"`
+	ToolChoice         json.RawMessage     `json:"tool_choice,omitempty"`
+	ServiceTier        string              `json:"service_tier,omitempty"`
+	PromptCacheKey     string              `json:"prompt_cache_key,omitempty"`
+	PromptCacheOptions *PromptCacheOptions `json:"prompt_cache_options,omitempty"`
+}
+
+// PromptCacheOptions controls GPT-5.6 prompt cache breakpoint selection.
+type PromptCacheOptions struct {
+	Mode string `json:"mode,omitempty"`
+	TTL  string `json:"ttl,omitempty"`
+}
+
+// PromptCacheBreakpoint marks the end of an explicitly cacheable prompt prefix.
+type PromptCacheBreakpoint struct {
+	Mode string `json:"mode"`
 }
 
 // ResponsesReasoning configures reasoning effort in the Responses API.
@@ -208,18 +222,39 @@ type ResponsesInputItem struct {
 
 // ResponsesContentPart is a typed content part in a Responses message.
 type ResponsesContentPart struct {
-	Type     string `json:"type"` // "input_text" | "output_text" | "input_image"
-	Text     string `json:"text,omitempty"`
-	ImageURL string `json:"image_url,omitempty"` // data URI for input_image
+	Type                  string                 `json:"type"` // "input_text" | "output_text" | "input_image"
+	Text                  string                 `json:"text,omitempty"`
+	ImageURL              string                 `json:"image_url,omitempty"` // data URI for input_image
+	PromptCacheBreakpoint *PromptCacheBreakpoint `json:"prompt_cache_breakpoint,omitempty"`
 }
 
 // ResponsesTool describes a tool in the Responses API.
 type ResponsesTool struct {
-	Type        string          `json:"type"` // "function" | "web_search" | "local_shell" etc.
+	Type        string          `json:"type"` // "function" | "custom" | "namespace" | "tool_search" etc.
 	Name        string          `json:"name,omitempty"`
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
 	Strict      *bool           `json:"strict,omitempty"`
+
+	// Namespace declarations use either tools or children for their function children.
+	Tools    []ResponsesTool `json:"tools,omitempty"`
+	Children []ResponsesTool `json:"children,omitempty"`
+}
+
+// UnmarshalJSON accepts the compact string form used by Codex for custom tools.
+func (t *ResponsesTool) UnmarshalJSON(data []byte) error {
+	var name string
+	if err := json.Unmarshal(data, &name); err == nil {
+		*t = ResponsesTool{Type: "custom", Name: name}
+		return nil
+	}
+	type alias ResponsesTool
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*t = ResponsesTool(decoded)
+	return nil
 }
 
 // ResponsesResponse is the non-streaming response from POST /v1/responses.
@@ -268,9 +303,78 @@ type ResponsesOutput struct {
 	CallID    string `json:"call_id,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
+
+	// type=custom_tool_call
+	Input string `json:"input,omitempty"`
 
 	// type=web_search_call
 	Action *WebSearchAction `json:"action,omitempty"`
+}
+
+// MarshalJSON renders tool_search_call arguments as a JSON value and declares
+// client execution, while preserving the existing shape of every other item.
+func (o ResponsesOutput) MarshalJSON() ([]byte, error) {
+	type alias ResponsesOutput
+	if o.Type != "tool_search_call" {
+		return json.Marshal(alias(o))
+	}
+	wire := map[string]any{
+		"type":      o.Type,
+		"id":        o.ID,
+		"call_id":   o.CallID,
+		"execution": "client",
+		"arguments": ToolSearchCallArgumentsJSON(o.Arguments),
+	}
+	if o.Status != "" {
+		wire["status"] = o.Status
+	}
+	return json.Marshal(wire)
+}
+
+// UnmarshalJSON accepts both string and object arguments for tool_search_call.
+func (o *ResponsesOutput) UnmarshalJSON(data []byte) error {
+	type alias ResponsesOutput
+	var discriminator struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(data, &discriminator); err != nil {
+		return err
+	}
+	if discriminator.Type != "tool_search_call" {
+		var decoded alias
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			return err
+		}
+		*o = ResponsesOutput(decoded)
+		return nil
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	arguments, hasArguments := fields["arguments"]
+	delete(fields, "arguments")
+	normalized, err := json.Marshal(fields)
+	if err != nil {
+		return err
+	}
+	var decoded alias
+	if err := json.Unmarshal(normalized, &decoded); err != nil {
+		return err
+	}
+	*o = ResponsesOutput(decoded)
+	if !hasArguments || string(arguments) == "null" {
+		return nil
+	}
+	var argumentString string
+	if err := json.Unmarshal(arguments, &argumentString); err == nil {
+		o.Arguments = argumentString
+	} else {
+		o.Arguments = string(arguments)
+	}
+	return nil
 }
 
 // WebSearchAction describes the search action in a web_search_call output item.
@@ -287,18 +391,91 @@ type ResponsesSummary struct {
 
 // ResponsesUsage holds token counts in Responses API format.
 type ResponsesUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
-	TotalTokens  int `json:"total_tokens"`
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	TotalTokens              int `json:"total_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
 
 	// Optional detailed breakdown
 	InputTokensDetails  *ResponsesInputTokensDetails  `json:"input_tokens_details,omitempty"`
 	OutputTokensDetails *ResponsesOutputTokensDetails `json:"output_tokens_details,omitempty"`
 }
 
+func (u *ResponsesUsage) UnmarshalJSON(data []byte) error {
+	type responsesUsageAlias ResponsesUsage
+	type cacheTokenPresence struct {
+		CacheCreationTokens *int `json:"cache_creation_tokens"`
+		CacheWriteTokens    *int `json:"cache_write_tokens"`
+	}
+	var aux struct {
+		responsesUsageAlias
+		PromptTokens            int                           `json:"prompt_tokens"`
+		CompletionTokens        int                           `json:"completion_tokens"`
+		CacheCreationTokens     int                           `json:"cache_creation_tokens"`
+		CacheWriteInputTokens   int                           `json:"cache_write_input_tokens"`
+		CacheWriteTokens        int                           `json:"cache_write_tokens"`
+		PromptTokensDetails     *ResponsesInputTokensDetails  `json:"prompt_tokens_details,omitempty"`
+		CompletionTokensDetails *ResponsesOutputTokensDetails `json:"completion_tokens_details,omitempty"`
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	var nestedPresence struct {
+		InputTokensDetails  *cacheTokenPresence `json:"input_tokens_details"`
+		PromptTokensDetails *cacheTokenPresence `json:"prompt_tokens_details"`
+	}
+	if err := json.Unmarshal(data, &nestedPresence); err != nil {
+		return err
+	}
+	*u = ResponsesUsage(aux.responsesUsageAlias)
+	if u.InputTokens == 0 && aux.PromptTokens != 0 {
+		u.InputTokens = aux.PromptTokens
+	}
+	if u.OutputTokens == 0 && aux.CompletionTokens != 0 {
+		u.OutputTokens = aux.CompletionTokens
+	}
+	if u.CacheCreationInputTokens == 0 {
+		switch {
+		case aux.CacheWriteInputTokens > 0:
+			u.CacheCreationInputTokens = aux.CacheWriteInputTokens
+		case aux.CacheCreationTokens > 0:
+			u.CacheCreationInputTokens = aux.CacheCreationTokens
+		case aux.CacheWriteTokens > 0:
+			u.CacheCreationInputTokens = aux.CacheWriteTokens
+		}
+	}
+	if u.InputTokensDetails == nil && aux.PromptTokensDetails != nil {
+		u.InputTokensDetails = aux.PromptTokensDetails
+	}
+	if u.OutputTokensDetails == nil && aux.CompletionTokensDetails != nil {
+		u.OutputTokensDetails = aux.CompletionTokensDetails
+	}
+	var canonicalCacheCreationTokens *int
+	switch {
+	case nestedPresence.InputTokensDetails != nil && nestedPresence.InputTokensDetails.CacheWriteTokens != nil:
+		canonicalCacheCreationTokens = nestedPresence.InputTokensDetails.CacheWriteTokens
+	case nestedPresence.PromptTokensDetails != nil && nestedPresence.PromptTokensDetails.CacheWriteTokens != nil:
+		canonicalCacheCreationTokens = nestedPresence.PromptTokensDetails.CacheWriteTokens
+	case nestedPresence.InputTokensDetails != nil && nestedPresence.InputTokensDetails.CacheCreationTokens != nil:
+		canonicalCacheCreationTokens = nestedPresence.InputTokensDetails.CacheCreationTokens
+	case nestedPresence.PromptTokensDetails != nil && nestedPresence.PromptTokensDetails.CacheCreationTokens != nil:
+		canonicalCacheCreationTokens = nestedPresence.PromptTokensDetails.CacheCreationTokens
+	}
+	if canonicalCacheCreationTokens != nil {
+		u.CacheCreationInputTokens = max(*canonicalCacheCreationTokens, 0)
+	}
+	if u.TotalTokens == 0 && (u.InputTokens != 0 || u.OutputTokens != 0) {
+		u.TotalTokens = u.InputTokens + u.OutputTokens
+	}
+	return nil
+}
+
 // ResponsesInputTokensDetails breaks down input token usage.
 type ResponsesInputTokensDetails struct {
-	CachedTokens int `json:"cached_tokens,omitempty"`
+	CachedTokens        int `json:"cached_tokens,omitempty"`
+	AudioTokens         int `json:"audio_tokens,omitempty"`
+	CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
+	CacheWriteTokens    int `json:"cache_write_tokens,omitempty"`
 }
 
 // ResponsesOutputTokensDetails breaks down output token usage.
@@ -317,6 +494,8 @@ type ResponsesStreamEvent struct {
 
 	// response.created / response.completed / response.failed / response.incomplete
 	Response *ResponsesResponse `json:"response,omitempty"`
+	// 部分兼容上游把 usage 放在终止事件顶层，而不是 response.usage。
+	Usage *ResponsesUsage `json:"usage,omitempty"`
 
 	// response.output_item.added / response.output_item.done
 	Item *ResponsesOutput `json:"item,omitempty"`
@@ -333,9 +512,15 @@ type ResponsesStreamEvent struct {
 	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments,omitempty"`
 
+	// response.custom_tool_call_input.done
+	Input string `json:"input,omitempty"`
+
 	// response.reasoning_summary_text.delta / done
 	// Reuses Text/Delta fields above, SummaryIndex identifies which summary part
 	SummaryIndex int `json:"summary_index,omitempty"`
+
+	// response.content_part.* and response.reasoning_summary_part.*
+	Part *ResponsesContentPart `json:"part,omitempty"`
 
 	// error event fields
 	Code  string `json:"code,omitempty"`
@@ -351,20 +536,23 @@ type ResponsesStreamEvent struct {
 
 // ChatCompletionsRequest is the request body for POST /v1/chat/completions.
 type ChatCompletionsRequest struct {
-	Model               string             `json:"model"`
-	Messages            []ChatMessage      `json:"messages"`
-	Instructions        string             `json:"instructions,omitempty"` // OpenAI Responses API compat
-	MaxTokens           *int               `json:"max_tokens,omitempty"`
-	MaxCompletionTokens *int               `json:"max_completion_tokens,omitempty"`
-	Temperature         *float64           `json:"temperature,omitempty"`
-	TopP                *float64           `json:"top_p,omitempty"`
-	Stream              bool               `json:"stream,omitempty"`
-	StreamOptions       *ChatStreamOptions `json:"stream_options,omitempty"`
-	Tools               []ChatTool         `json:"tools,omitempty"`
-	ToolChoice          json.RawMessage    `json:"tool_choice,omitempty"`
-	ReasoningEffort     string             `json:"reasoning_effort,omitempty"` // "low" | "medium" | "high" | "xhigh"
-	ServiceTier         string             `json:"service_tier,omitempty"`
-	Stop                json.RawMessage    `json:"stop,omitempty"` // string or []string
+	Model               string              `json:"model"`
+	Messages            []ChatMessage       `json:"messages"`
+	Instructions        string              `json:"instructions,omitempty"` // OpenAI Responses API compat
+	MaxTokens           *int                `json:"max_tokens,omitempty"`
+	MaxCompletionTokens *int                `json:"max_completion_tokens,omitempty"`
+	Temperature         *float64            `json:"temperature,omitempty"`
+	TopP                *float64            `json:"top_p,omitempty"`
+	Stream              bool                `json:"stream,omitempty"`
+	StreamOptions       *ChatStreamOptions  `json:"stream_options,omitempty"`
+	Tools               []ChatTool          `json:"tools,omitempty"`
+	ParallelToolCalls   *bool               `json:"parallel_tool_calls,omitempty"`
+	ToolChoice          json.RawMessage     `json:"tool_choice,omitempty"`
+	ReasoningEffort     string              `json:"reasoning_effort,omitempty"` // "low" | "medium" | "high" | "xhigh"
+	ServiceTier         string              `json:"service_tier,omitempty"`
+	PromptCacheKey      string              `json:"prompt_cache_key,omitempty"`
+	PromptCacheOptions  *PromptCacheOptions `json:"prompt_cache_options,omitempty"`
+	Stop                json.RawMessage     `json:"stop,omitempty"` // string or []string
 
 	// Legacy function calling (deprecated but still supported)
 	Functions    []ChatFunction  `json:"functions,omitempty"`
@@ -391,9 +579,10 @@ type ChatMessage struct {
 
 // ChatContentPart is a typed content part in a multi-modal message.
 type ChatContentPart struct {
-	Type     string        `json:"type"` // "text" | "image_url"
-	Text     string        `json:"text,omitempty"`
-	ImageURL *ChatImageURL `json:"image_url,omitempty"`
+	Type                  string                 `json:"type"` // "text" | "image_url"
+	Text                  string                 `json:"text,omitempty"`
+	ImageURL              *ChatImageURL          `json:"image_url,omitempty"`
+	PromptCacheBreakpoint *PromptCacheBreakpoint `json:"prompt_cache_breakpoint,omitempty"`
 }
 
 // ChatImageURL contains the URL for an image content part.
@@ -460,7 +649,13 @@ type ChatUsage struct {
 
 // ChatTokenDetails provides a breakdown of token usage.
 type ChatTokenDetails struct {
-	CachedTokens int `json:"cached_tokens,omitempty"`
+	CachedTokens             int `json:"cached_tokens,omitempty"`
+	AudioTokens              int `json:"audio_tokens,omitempty"`
+	CacheCreationTokens      int `json:"cache_creation_tokens,omitempty"`
+	CacheWriteTokens         int `json:"cache_write_tokens,omitempty"`
+	ReasoningTokens          int `json:"reasoning_tokens,omitempty"`
+	AcceptedPredictionTokens int `json:"accepted_prediction_tokens,omitempty"`
+	RejectedPredictionTokens int `json:"rejected_prediction_tokens,omitempty"`
 }
 
 // ChatCompletionsChunk is a single streaming chunk from POST /v1/chat/completions.

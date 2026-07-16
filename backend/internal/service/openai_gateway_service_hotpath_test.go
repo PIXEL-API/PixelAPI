@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -86,6 +88,13 @@ func TestExtractOpenAIReasoningEffortFromBody(t *testing.T) {
 			wantValue: "high",
 		},
 		{
+			name:      "GPT-5.6 保留 max",
+			body:      []byte(`{"reasoning":{"effort":"max"}}`),
+			model:     "gpt-5.6-sol",
+			wantNil:   false,
+			wantValue: "max",
+		},
+		{
 			name:    "未知后缀不返回",
 			body:    []byte(`{"input":"hi"}`),
 			model:   "gpt-5-unknown",
@@ -104,6 +113,20 @@ func TestExtractOpenAIReasoningEffortFromBody(t *testing.T) {
 			require.Equal(t, tt.wantValue, *got)
 		})
 	}
+}
+
+func TestNormalizeOpenAICodexCompactReasoningEffort(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.6-sol","reasoning":{"effort":"max"}}`)
+
+	normalized, changed, err := normalizeOpenAICodexCompactReasoningEffort(body, "gpt-5.6-sol")
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.JSONEq(t, `{"model":"gpt-5.6-sol","reasoning":{"effort":"xhigh"}}`, string(normalized))
+
+	unchanged, changed, err := normalizeOpenAICodexCompactReasoningEffort(body, "gpt-5.5")
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.Equal(t, body, unchanged)
 }
 
 func TestGetOpenAIRequestBodyMap_DoesNotUseContextCache(t *testing.T) {
@@ -136,6 +159,26 @@ func TestGetOpenAIRequestBodyMap_DoesNotWriteBackContextCache(t *testing.T) {
 
 	_, ok := c.Get("openai_parsed_request_body")
 	require.False(t, ok)
+}
+
+func TestOpenAIDetachedStreamDrainTimeoutCapsLongConfig(t *testing.T) {
+	svc := &OpenAIGatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{StreamDataIntervalTimeout: 180},
+		},
+	}
+
+	require.Equal(t, 30*time.Second, svc.detachedStreamDrainTimeout())
+}
+
+func TestOpenAIDetachedStreamDrainTimeoutKeepsShorterConfig(t *testing.T) {
+	svc := &OpenAIGatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{StreamDataIntervalTimeout: 10},
+		},
+	}
+
+	require.Equal(t, 10*time.Second, svc.detachedStreamDrainTimeout())
 }
 
 func TestSanitizeEmptyBase64InputImagesInOpenAIRequestBodyMap(t *testing.T) {

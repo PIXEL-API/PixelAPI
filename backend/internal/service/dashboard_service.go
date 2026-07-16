@@ -30,7 +30,15 @@ type DashboardStatsCache interface {
 }
 
 type dashboardStatsRangeFetcher interface {
-	GetDashboardStatsWithRange(ctx context.Context, start, end time.Time) (*usagestats.DashboardStats, error)
+	GetDashboardStatsWithRange(ctx context.Context, start, end time.Time, options DashboardStatsRangeOptions) (*usagestats.DashboardStats, error)
+}
+
+// DashboardStatsRangeOptions controls which pre-aggregated data is safe to use
+// for a range query. The service derives the guaranteed coverage window from
+// runtime configuration so the repository never assumes a fixed retention.
+type DashboardStatsRangeOptions struct {
+	UseHourlyAggregates bool
+	HourlyMaxAge        time.Duration
 }
 
 type dashboardStatsCacheEntry struct {
@@ -51,6 +59,7 @@ type DashboardService struct {
 	aggInterval    time.Duration
 	aggLookback    time.Duration
 	aggUsageDays   int
+	aggHourlyDays  int
 }
 
 func NewDashboardService(usageRepo UsageLogRepository, aggRepo DashboardAggregationRepository, cache DashboardStatsCache, cfg *config.Config) *DashboardService {
@@ -61,6 +70,7 @@ func NewDashboardService(usageRepo UsageLogRepository, aggRepo DashboardAggregat
 	aggInterval := time.Minute
 	aggLookback := 2 * time.Minute
 	aggUsageDays := 90
+	aggHourlyDays := 180
 	if cfg != nil {
 		if !cfg.Dashboard.Enabled {
 			cache = nil
@@ -84,6 +94,9 @@ func NewDashboardService(usageRepo UsageLogRepository, aggRepo DashboardAggregat
 		if cfg.DashboardAgg.Retention.UsageLogsDays > 0 {
 			aggUsageDays = cfg.DashboardAgg.Retention.UsageLogsDays
 		}
+		if cfg.DashboardAgg.Retention.HourlyDays > 0 {
+			aggHourlyDays = cfg.DashboardAgg.Retention.HourlyDays
+		}
 	}
 	if aggRepo == nil {
 		aggEnabled = false
@@ -99,6 +112,7 @@ func NewDashboardService(usageRepo UsageLogRepository, aggRepo DashboardAggregat
 		aggInterval:    aggInterval,
 		aggLookback:    aggLookback,
 		aggUsageDays:   aggUsageDays,
+		aggHourlyDays:  aggHourlyDays,
 	}
 }
 
@@ -130,12 +144,33 @@ func (s *DashboardService) GetDashboardStatsWithRange(ctx context.Context, start
 		return nil, errors.New("dashboard stats range fetcher unavailable")
 	}
 
-	stats, err := fetcher.GetDashboardStatsWithRange(ctx, start, end)
+	stats, err := fetcher.GetDashboardStatsWithRange(ctx, start, end, s.dashboardStatsRangeOptions())
 	if err != nil {
 		return nil, fmt.Errorf("get dashboard stats with range: %w", err)
 	}
 	s.applyAggregationStatus(ctx, stats)
 	return stats, nil
+}
+
+func (s *DashboardService) dashboardStatsRangeOptions() DashboardStatsRangeOptions {
+	if s == nil || !s.aggEnabled {
+		return DashboardStatsRangeOptions{}
+	}
+	coverageDays := min(s.aggUsageDays, s.aggHourlyDays)
+	if coverageDays <= 0 {
+		return DashboardStatsRangeOptions{}
+	}
+	// Retention cleanup uses an exact timestamp rather than an hour boundary.
+	// Keep one hour of safety margin so a query at the configured cutoff cannot
+	// race cleanup and lose its oldest completed bucket.
+	hourlyMaxAge := time.Duration(coverageDays)*24*time.Hour - time.Hour
+	if hourlyMaxAge <= 0 {
+		return DashboardStatsRangeOptions{}
+	}
+	return DashboardStatsRangeOptions{
+		UseHourlyAggregates: true,
+		HourlyMaxAge:        hourlyMaxAge,
+	}
 }
 
 func (s *DashboardService) GetUsageTrendWithFilters(ctx context.Context, startTime, endTime time.Time, granularity string, userID, apiKeyID, accountID, groupID int64, model string, requestType *int16, stream *bool, billingType *int8) ([]usagestats.TrendDataPoint, error) {
@@ -255,7 +290,7 @@ func (s *DashboardService) fetchDashboardStats(ctx context.Context) (*usagestats
 		if fetcher, ok := s.usageRepo.(dashboardStatsRangeFetcher); ok {
 			now := time.Now().UTC()
 			start := truncateToDayUTC(now.AddDate(0, 0, -s.aggUsageDays))
-			return fetcher.GetDashboardStatsWithRange(ctx, start, now)
+			return fetcher.GetDashboardStatsWithRange(ctx, start, now, DashboardStatsRangeOptions{})
 		}
 	}
 	return s.usageRepo.GetDashboardStats(ctx)

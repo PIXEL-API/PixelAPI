@@ -226,6 +226,34 @@ func (h *AccountHandler) createAccountFromCredentialImportSource(
 		if input.Name == "" {
 			input.Name = service.DeriveAccountCredentialImportName(input.Platform, input.Credentials, input.Extra, sequence)
 		}
+	case service.AccountCredentialImportKindOpenAIAgentIdentity:
+		if defaults.OwnerUserID != nil || strings.EqualFold(strings.TrimSpace(defaults.ShareMode), service.AccountShareModePublic) ||
+			strings.TrimSpace(defaults.ShareStatus) != "" || defaults.SharePolicyID != nil {
+			return nil, fmt.Errorf("Agent Identity accounts cannot be owned or publicly shared")
+		}
+		runtimeID, _ := source.Credentials["agent_runtime_id"].(string)
+		runtimeID = strings.TrimSpace(runtimeID)
+		if runtimeID == "" {
+			return nil, fmt.Errorf("Agent Identity runtime id is required")
+		}
+		exists, err := h.accountService.OpenAIAgentIdentityRuntimeIDExists(ctx, runtimeID)
+		if err != nil {
+			return nil, fmt.Errorf("check Agent Identity runtime id: %w", err)
+		}
+		if exists {
+			return nil, fmt.Errorf("Agent Identity runtime id already exists")
+		}
+		input.Platform = service.PlatformOpenAI
+		input.Type = service.AccountTypeOAuth
+		input.OwnerUserID = nil
+		input.ShareMode = ""
+		input.ShareStatus = ""
+		input.SharePolicyID = nil
+		input.ExpiresAt = nil
+		input.AutoPauseOnExpired = nil
+		if input.Name == "" {
+			input.Name = service.DeriveAccountCredentialImportName(input.Platform, input.Credentials, input.Extra, sequence)
+		}
 	case service.AccountCredentialImportKindOpenAIRefreshToken:
 		proxyURL, err := h.resolveCredentialImportProxyURL(ctx, defaults.ProxyID)
 		if err != nil {
@@ -284,9 +312,11 @@ func (h *AccountHandler) createAccountFromCredentialImportSource(
 	if err != nil {
 		return nil, err
 	}
-	h.adminService.ForceAntigravityPrivacy(ctx, account)
-	h.adminService.ForceOpenAIPrivacy(ctx, account)
-	h.enqueueOwnedPublicShareValidation(account)
+	if source.Kind != service.AccountCredentialImportKindOpenAIAgentIdentity {
+		h.adminService.ForceAntigravityPrivacy(ctx, account)
+		h.adminService.ForceOpenAIPrivacy(ctx, account)
+		h.enqueueOwnedPublicShareValidation(account)
+	}
 	return account, nil
 }
 
@@ -467,6 +497,7 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 			privacyAccounts = append(privacyAccounts, created)
 		}
 		h.enqueueOwnedPublicShareValidation(created)
+		h.scheduleGrokImportProbe(created)
 		result.AccountCreated++
 	}
 

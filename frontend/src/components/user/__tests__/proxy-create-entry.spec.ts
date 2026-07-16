@@ -1,6 +1,7 @@
 import { defineComponent } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
 
 const {
   listProxiesMock,
@@ -208,6 +209,7 @@ function findButtonByText(wrapper: ReturnType<typeof mount>, text: string) {
 
 describe('user proxy create entry buttons', () => {
   beforeEach(() => {
+    setActivePinia(createPinia())
     listProxiesMock.mockResolvedValue([])
     createProxyMock.mockResolvedValue({
       id: 123,
@@ -239,7 +241,7 @@ describe('user proxy create entry buttons', () => {
 
     await findButtonByText(wrapper, 'OpenAI').trigger('click')
     await wrapper.vm.$nextTick()
-    await findButtonByText(wrapper, 'admin.accounts.accountLevel.pro').trigger('click')
+    await findButtonByText(wrapper, 'Pro').trigger('click')
     await flushPromises()
 
     const openPanelButton = wrapper.find('[data-testid="import-open-user-proxy-panel"]')
@@ -268,7 +270,7 @@ describe('user proxy create entry buttons', () => {
 
     await findButtonByText(wrapper, 'OpenAI').trigger('click')
     await wrapper.vm.$nextTick()
-    await findButtonByText(wrapper, 'admin.accounts.accountLevel.pro').trigger('click')
+    await findButtonByText(wrapper, 'Pro').trigger('click')
     await wrapper.vm.$nextTick()
 
     const openPanelButton = wrapper.find('[data-testid="create-open-user-proxy-panel"]')

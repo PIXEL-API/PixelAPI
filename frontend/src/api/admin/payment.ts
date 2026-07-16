@@ -64,6 +64,19 @@ export interface UpdatePaymentConfigRequest {
   help_text?: string
 }
 
+export interface AdminOrderFilters {
+  status?: string
+  payment_type?: string
+  user_id?: number
+  keyword?: string
+  order_type?: string
+}
+
+export interface AdminOrderListParams extends AdminOrderFilters {
+  page?: number
+  page_size?: number
+}
+
 export const adminPaymentAPI = {
   // ==================== Config ====================
 
@@ -89,18 +102,20 @@ export const adminPaymentAPI = {
   // ==================== Orders ====================
 
   /** Get all orders (paginated, with filters) */
-  getOrders(params?: {
-    page?: number
-    page_size?: number
-    status?: string
-    payment_type?: string
-    user_id?: number
-    keyword?: string
-    start_date?: string
-    end_date?: string
-    order_type?: string
-  }) {
+  getOrders(params?: AdminOrderListParams) {
     return apiClient.get<BasePaginationResponse<PaymentOrder>>('/admin/payment/orders', { params })
+  },
+
+  /** Export all orders matching the current filters as UTF-8 CSV. */
+  exportOrders(params?: AdminOrderFilters, signal?: AbortSignal) {
+    return apiClient.get<Blob>('/admin/payment/orders/export', {
+      params,
+      responseType: 'blob',
+      signal,
+      // Allow large exports more time than ordinary API calls while retaining a
+      // hard failure boundary. Navigation still cancels via AbortController.
+      timeout: 5 * 60 * 1000,
+    })
   },
 
   /** Get withdrawal requests */

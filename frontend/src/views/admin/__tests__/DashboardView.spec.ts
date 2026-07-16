@@ -4,7 +4,8 @@ import { flushPromises, mount } from '@vue/test-utils'
 import type { DashboardStats } from '@/types'
 import DashboardView from '../DashboardView.vue'
 
-const { getSnapshotV2, getUserUsageTrend, getUserSpendingRanking } = vi.hoisted(() => ({
+const { getStats, getSnapshotV2, getUserUsageTrend, getUserSpendingRanking } = vi.hoisted(() => ({
+  getStats: vi.fn(),
   getSnapshotV2: vi.fn(),
   getUserUsageTrend: vi.fn(),
   getUserSpendingRanking: vi.fn()
@@ -13,6 +14,7 @@ const { getSnapshotV2, getUserUsageTrend, getUserSpendingRanking } = vi.hoisted(
 vi.mock('@/api/admin', () => ({
   adminAPI: {
     dashboard: {
+      getStats,
       getSnapshotV2,
       getUserUsageTrend,
       getUserSpendingRanking
@@ -41,13 +43,6 @@ vi.mock('vue-i18n', async () => {
     })
   }
 })
-
-const formatLocalDate = (date: Date): string => {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
 
 const createDashboardStats = (): DashboardStats => ({
   total_users: 0,
@@ -87,10 +82,12 @@ const createDashboardStats = (): DashboardStats => ({
 
 describe('admin DashboardView', () => {
   beforeEach(() => {
+    getStats.mockReset()
     getSnapshotV2.mockReset()
     getUserUsageTrend.mockReset()
     getUserSpendingRanking.mockReset()
 
+    getStats.mockResolvedValue(createDashboardStats())
     getSnapshotV2.mockResolvedValue({
       stats: createDashboardStats(),
       trend: [],
@@ -130,15 +127,20 @@ describe('admin DashboardView', () => {
 
     await flushPromises()
 
-    const now = new Date()
-    const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000)
-
+    expect(getStats).toHaveBeenCalledWith(expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(getSnapshotV2).toHaveBeenCalledTimes(1)
     expect(getSnapshotV2).toHaveBeenCalledWith(expect.objectContaining({
-      start_date: formatLocalDate(yesterday),
-      end_date: formatLocalDate(now),
+      start_time: expect.any(String),
+      end_time: expect.any(String),
       granularity: 'hour'
-    }))
+    }), expect.objectContaining({ signal: expect.any(AbortSignal) }))
+
+    const firstParams = getSnapshotV2.mock.calls[0]?.[0]
+    const startTime = new Date(String(firstParams?.start_time)).getTime()
+    const endTime = new Date(String(firstParams?.end_time)).getTime()
+    expect(endTime - startTime).toBe(24 * 60 * 60 * 1000)
+    expect(firstParams).not.toHaveProperty('start_date')
+    expect(firstParams).not.toHaveProperty('end_date')
   })
 
   it('refreshes summary stats when date range changes', async () => {
@@ -172,17 +174,73 @@ describe('admin DashboardView', () => {
     })
 
     await flushPromises()
+    expect(getStats).toHaveBeenCalledTimes(1)
     getSnapshotV2.mockClear()
 
     await wrapper.get('[data-test="date-range"]').trigger('click')
     await flushPromises()
 
     expect(getSnapshotV2).toHaveBeenCalledTimes(1)
+    expect(getStats).toHaveBeenCalledTimes(1)
     expect(getSnapshotV2).toHaveBeenCalledWith(expect.objectContaining({
       start_date: '2026-05-01',
       end_date: '2026-05-07',
       granularity: 'day',
-      include_stats: true
-    }))
+      include_stats: true,
+      include_trend: true,
+      include_model_stats: true
+    }), expect.objectContaining({ signal: expect.any(AbortSignal) }))
+  })
+
+  it('cancels the in-flight dashboard request when the range changes', async () => {
+    let resolveFirstRequest: ((value: unknown) => void) | undefined
+    getSnapshotV2
+      .mockImplementationOnce(() => new Promise(resolve => {
+        resolveFirstRequest = resolve
+      }))
+      .mockResolvedValue({
+        stats: createDashboardStats(),
+        trend: [],
+        models: []
+      })
+
+    const wrapper = mount(DashboardView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          LoadingSpinner: true,
+          Icon: true,
+          DateRangePicker: {
+            template: '<button data-test="date-range" @click="emitChange">change</button>',
+            emits: ['update:startDate', 'update:endDate', 'change'],
+            methods: {
+              emitChange() {
+                this.$emit('update:startDate', '2026-06-01')
+                this.$emit('update:endDate', '2026-06-02')
+                this.$emit('change', {
+                  startDate: '2026-06-01',
+                  endDate: '2026-06-02',
+                  preset: null
+                })
+              }
+            }
+          },
+          Select: true,
+          ModelDistributionChart: true,
+          TokenUsageTrend: true,
+          Line: true
+        }
+      }
+    })
+
+    await flushPromises()
+    const firstSignal = getSnapshotV2.mock.calls[0]?.[1]?.signal as AbortSignal
+    expect(firstSignal.aborted).toBe(false)
+
+    await wrapper.get('[data-test="date-range"]').trigger('click')
+    expect(firstSignal.aborted).toBe(true)
+
+    resolveFirstRequest?.({ stats: createDashboardStats(), trend: [], models: [] })
+    await flushPromises()
   })
 })

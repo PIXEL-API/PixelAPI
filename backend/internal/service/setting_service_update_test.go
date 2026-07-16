@@ -395,6 +395,22 @@ func TestSettingService_UpdateSettings_PaymentVisibleMethodsAndAdvancedScheduler
 	require.Equal(t, "true", repo.updates[openAIAdvancedSchedulerSettingKey])
 }
 
+func TestSettingService_UpdateSettings_DefaultsOpenAIAccountLevelsWhenOmitted(t *testing.T) {
+	repo := &settingUpdateRepoStub{}
+	svc := NewSettingService(repo, &config.Config{})
+
+	err := svc.UpdateSettings(context.Background(), &SystemSettings{
+		TableDefaultPageSize: 20,
+	})
+	require.NoError(t, err)
+
+	var got []OpenAIAccountLevelConfig
+	require.NoError(t, json.Unmarshal([]byte(repo.updates[SettingKeyOpenAIAccountLevels]), &got))
+	expected, err := ValidateOpenAIAccountLevelConfigs(DefaultOpenAIAccountLevelConfigs())
+	require.NoError(t, err)
+	require.Equal(t, expected, got)
+}
+
 func TestSettingService_UpdateSettings_RejectsInvalidPaymentVisibleMethodSource(t *testing.T) {
 	repo := &settingUpdateRepoStub{}
 	svc := NewSettingService(repo, &config.Config{})

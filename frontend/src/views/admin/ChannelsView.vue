@@ -407,6 +407,7 @@
                   :key="idx"
                   :entry="entry"
                   :platform="section.platform"
+                  show-long-context-pricing
                   @update="updatePricingEntry(sIdx, idx, $event)"
                   @remove="removePricingEntry(sIdx, idx)"
                 />
@@ -592,7 +593,18 @@ import { extractApiErrorMessage } from '@/utils/apiError'
 import { adminAPI } from '@/api/admin'
 import type { Channel, ChannelModelPricing, CreateChannelRequest, UpdateChannelRequest, AccountStatsPricingRule } from '@/api/admin/channels'
 import type { PricingFormEntry } from '@/components/admin/channel/types'
-import { mTokToPerToken, perTokenToMTok, apiIntervalsToForm, formIntervalsToAPI, findModelConflict, validateIntervals } from '@/components/admin/channel/types'
+import {
+  apiIntervalsToForm,
+  apiLongContextPricingToForm,
+  createPricingFormEntry,
+  findModelConflict,
+  formIntervalsToAPI,
+  formLongContextPricingToAPI,
+  mTokToPerToken,
+  perTokenToMTok,
+  validateIntervals,
+  validateLongContextPricing,
+} from '@/components/admin/channel/types'
 import type { AdminGroup, GroupPlatform } from '@/types'
 import type { Column } from '@/components/common/types'
 import { platformTextClass, platformBadgeLightClass } from '@/utils/platformColors'
@@ -718,7 +730,7 @@ const form = reactive({
 let abortController: AbortController | null = null
 
 // ── Platform config ──
-const platformOrder: GroupPlatform[] = ['anthropic', 'openai', 'gemini', 'antigravity']
+const platformOrder: GroupPlatform[] = ['anthropic', 'openai', 'gemini', 'antigravity', 'grok']
 
 // ── Helpers ──
 function formatDate(value: string): string {
@@ -804,19 +816,10 @@ function toggleGroupInSection(sectionIdx: number, groupId: number) {
 
 // ── Pricing helpers ──
 function addPricingEntry(sectionIdx: number) {
-  form.platforms[sectionIdx].model_pricing.push({
-    models: [],
-    billing_mode: 'token',
-    input_price: null,
-    output_price: null,
-    cache_write_price: null,
-    cache_read_price: null,
-    image_input_price: null,
-    image_cache_read_price: null,
-    image_output_price: null,
-    per_request_price: null,
-    intervals: []
-  })
+  const section = form.platforms[sectionIdx]
+  section.model_pricing.push(createPricingFormEntry({
+    longContextPricingEnabled: section.platform === 'openai' ? false : null,
+  }))
 }
 
 function updatePricingEntry(sectionIdx: number, idx: number, updated: PricingFormEntry) {
@@ -864,19 +867,9 @@ function addAccountStatsRule(sectionIdx: number) {
 }
 
 function addRulePricingEntry(sectionIdx: number, ruleIndex: number) {
-  form.platforms[sectionIdx].account_stats_pricing_rules[ruleIndex].pricing.push({
-    models: [],
-    billing_mode: 'token',
-    input_price: null,
-    output_price: null,
-    cache_write_price: null,
-    cache_read_price: null,
-    image_input_price: null,
-    image_cache_read_price: null,
-    image_output_price: null,
-    per_request_price: null,
-    intervals: []
-  })
+  form.platforms[sectionIdx].account_stats_pricing_rules[ruleIndex].pricing.push(
+    createPricingFormEntry(),
+  )
 }
 
 function removeAccountStatsRule(sectionIdx: number, ruleIndex: number) {
@@ -984,6 +977,8 @@ function accountStatsRulesToAPI(): AccountStatsPricingRule[] {
             platform: section.platform,
             models: p.models,
             billing_mode: p.billing_mode,
+            long_context_pricing_enabled: null,
+            long_context_input_token_threshold: null,
             input_price: mTokToPerToken(p.input_price),
             output_price: mTokToPerToken(p.output_price),
             cache_write_price: mTokToPerToken(p.cache_write_price),
@@ -1026,6 +1021,7 @@ function formToAPI(): { group_ids: number[], model_pricing: ChannelModelPricing[
         platform: section.platform,
         models: entry.models,
         billing_mode: entry.billing_mode,
+        ...formLongContextPricingToAPI(entry),
         input_price: mTokToPerToken(entry.input_price),
         output_price: mTokToPerToken(entry.output_price),
         cache_write_price: mTokToPerToken(entry.cache_write_price),
@@ -1090,6 +1086,7 @@ function apiToForm(channel: Channel): PlatformSection[] {
       .map(p => ({
         models: p.models || [],
         billing_mode: p.billing_mode,
+        ...apiLongContextPricingToForm(p),
         input_price: perTokenToMTok(p.input_price),
         output_price: perTokenToMTok(p.output_price),
         cache_write_price: perTokenToMTok(p.cache_write_price),
@@ -1275,6 +1272,8 @@ function distributeRulesToPlatforms(apiRules: AccountStatsPricingRule[]) {
       pricing: (apiRule.pricing || []).map(p => ({
         models: [...(p.models || [])],
         billing_mode: p.billing_mode,
+        long_context_pricing_enabled: null,
+        long_context_input_token_threshold: null,
         input_price: perTokenToMTok(p.input_price),
         output_price: perTokenToMTok(p.output_price),
         cache_write_price: perTokenToMTok(p.cache_write_price),
@@ -1396,6 +1395,17 @@ async function handleSubmit() {
   // 校验区间合法性（范围、重叠等）
   for (const section of form.platforms.filter(s => s.enabled)) {
     for (const entry of section.model_pricing) {
+      if (section.platform === 'openai' && entry.billing_mode === 'token') {
+        const longContextErr = validateLongContextPricing(entry)
+        if (longContextErr) {
+          const errorKey = longContextErr === 'interval_conflict'
+            ? 'admin.channels.form.longContextIntervalConflict'
+            : 'admin.channels.form.longContextThresholdRequired'
+          appStore.showError(t(errorKey))
+          activeTab.value = section.platform
+          return
+        }
+      }
       if (!entry.intervals || entry.intervals.length === 0) continue
       const intervalErr = validateIntervals(entry.intervals)
       if (intervalErr) {

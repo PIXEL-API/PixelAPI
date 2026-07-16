@@ -52,15 +52,15 @@ const (
 // defaultUserAgentVersion 可通过环境变量 ANTIGRAVITY_USER_AGENT_VERSION 配置，默认 1.20.5
 var defaultUserAgentVersion = "1.21.9"
 
-// defaultClientSecret 可通过环境变量 ANTIGRAVITY_OAUTH_CLIENT_SECRET 配置
-var defaultClientSecret = "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"
+// defaultClientSecret 必须通过环境变量 ANTIGRAVITY_OAUTH_CLIENT_SECRET 配置。
+var defaultClientSecret string
 
 func init() {
 	// 从环境变量读取版本号，未设置则使用默认值
 	if version := os.Getenv("ANTIGRAVITY_USER_AGENT_VERSION"); version != "" {
 		defaultUserAgentVersion = version
 	}
-	// 从环境变量读取 client_secret，未设置则使用默认值
+	// 从环境变量读取 client_secret，未设置则在 OAuth 交换时快速失败。
 	if secret := os.Getenv(AntigravityOAuthClientSecretEnv); secret != "" {
 		defaultClientSecret = secret
 	}

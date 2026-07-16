@@ -1,0 +1,19 @@
+{
+  "title": "号主用户教程",
+  "defaultOpen": true,
+  "pages": [
+    "owner-start",
+    "owner-prerequisites",
+    "owner-create-first-account",
+    "owner-test-private-account",
+    "owner-public-share",
+    "owner-account-marketplace",
+    "owner-pricing-limits",
+    "owner-check-income",
+    "owner-withdrawal-setup",
+    "owner-troubleshooting",
+    "owner-add-account",
+    "owner-params",
+    "owner-income"
+  ]
+}

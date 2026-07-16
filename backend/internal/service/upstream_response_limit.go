@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -59,6 +60,33 @@ func ReadUpstreamResponseBody(reader io.Reader, cfg *config.Config, c *gin.Conte
 		return nil, err
 	}
 	return body, nil
+}
+
+// ReadUpstreamResponseBodyWithContext 在 ReadUpstreamResponseBody 的字节上限基础上，
+// 允许调用方为客户端断开后的上游 body drain 设置独立超时。
+func ReadUpstreamResponseBodyWithContext(ctx context.Context, reader io.Reader, cfg *config.Config, c *gin.Context, onTooLarge TooLargeWriter) ([]byte, error) {
+	if ctx == nil || ctx.Done() == nil {
+		return ReadUpstreamResponseBody(reader, cfg, c, onTooLarge)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			if closer, ok := reader.(io.Closer); ok {
+				_ = closer.Close()
+			}
+		case <-done:
+		}
+	}()
+	defer close(done)
+
+	body, err := ReadUpstreamResponseBody(reader, cfg, c, onTooLarge)
+	if err != nil && ctx.Err() != nil {
+		setOpsUpstreamError(c, http.StatusBadGateway, "upstream response read timeout", "")
+		return nil, ctx.Err()
+	}
+	return body, err
 }
 
 // anthropicTooLargeError 以 Anthropic Messages API 格式写入超限错误。

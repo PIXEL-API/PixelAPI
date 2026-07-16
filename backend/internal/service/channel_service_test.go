@@ -2325,6 +2325,154 @@ func TestValidatePricingBillingMode(t *testing.T) {
 	}
 }
 
+func TestValidateLongContextPricingPolicies(t *testing.T) {
+	tests := []struct {
+		name    string
+		pricing ChannelModelPricing
+		wantErr string
+	}{
+		{
+			name:    "nil policy keeps long context pricing disabled",
+			pricing: ChannelModelPricing{Models: []string{"gpt-5.6-sol"}},
+		},
+		{
+			name: "nil policy with intervals remains valid",
+			pricing: ChannelModelPricing{
+				Models:    []string{"gpt-5.6-sol"},
+				Intervals: []PricingInterval{{MinTokens: 0, InputPrice: testPtrFloat64(1e-6)}},
+			},
+		},
+		{
+			name: "explicit disable without threshold is valid",
+			pricing: ChannelModelPricing{
+				Platform:                  PlatformOpenAI,
+				Models:                    []string{"gpt-5.6-sol"},
+				LongContextPricingEnabled: testPtrBool(false),
+			},
+		},
+		{
+			name: "explicit enable with threshold is valid",
+			pricing: ChannelModelPricing{
+				Platform:                       PlatformOpenAI,
+				Models:                         []string{"gpt-5.6-sol"},
+				LongContextPricingEnabled:      testPtrBool(true),
+				LongContextInputTokenThreshold: testPtrInt(128000),
+			},
+		},
+		{
+			name: "explicit enable accepts PostgreSQL integer maximum",
+			pricing: ChannelModelPricing{
+				Platform:                       PlatformOpenAI,
+				Models:                         []string{"gpt-5.6-sol"},
+				LongContextPricingEnabled:      testPtrBool(true),
+				LongContextInputTokenThreshold: testPtrInt(maxLongContextInputTokenThreshold),
+			},
+		},
+		{
+			name: "enable requires threshold",
+			pricing: ChannelModelPricing{
+				Platform:                  PlatformOpenAI,
+				Models:                    []string{"gpt-5.6-sol"},
+				LongContextPricingEnabled: testPtrBool(true),
+			},
+			wantErr: "LONG_CONTEXT_THRESHOLD_REQUIRED",
+		},
+		{
+			name: "threshold requires explicit enable",
+			pricing: ChannelModelPricing{
+				Platform:                       PlatformOpenAI,
+				Models:                         []string{"gpt-5.6-sol"},
+				LongContextInputTokenThreshold: testPtrInt(128000),
+			},
+			wantErr: "LONG_CONTEXT_THRESHOLD_REQUIRES_ENABLED",
+		},
+		{
+			name: "disabled policy cannot retain threshold",
+			pricing: ChannelModelPricing{
+				Platform:                       PlatformOpenAI,
+				Models:                         []string{"gpt-5.6-sol"},
+				LongContextPricingEnabled:      testPtrBool(false),
+				LongContextInputTokenThreshold: testPtrInt(128000),
+			},
+			wantErr: "LONG_CONTEXT_THRESHOLD_REQUIRES_ENABLED",
+		},
+		{
+			name: "threshold must be positive",
+			pricing: ChannelModelPricing{
+				Platform:                       PlatformOpenAI,
+				Models:                         []string{"gpt-5.6-sol"},
+				LongContextPricingEnabled:      testPtrBool(true),
+				LongContextInputTokenThreshold: testPtrInt(0),
+			},
+			wantErr: "INVALID_LONG_CONTEXT_THRESHOLD",
+		},
+		{
+			name: "threshold must fit PostgreSQL integer",
+			pricing: ChannelModelPricing{
+				Platform:                       PlatformOpenAI,
+				Models:                         []string{"gpt-5.6-sol"},
+				LongContextPricingEnabled:      testPtrBool(true),
+				LongContextInputTokenThreshold: testPtrInt(maxLongContextInputTokenThreshold + 1),
+			},
+			wantErr: "INVALID_LONG_CONTEXT_THRESHOLD",
+		},
+		{
+			name: "explicit enable conflicts with intervals",
+			pricing: ChannelModelPricing{
+				Platform:                       PlatformOpenAI,
+				Models:                         []string{"gpt-5.6-sol"},
+				LongContextPricingEnabled:      testPtrBool(true),
+				LongContextInputTokenThreshold: testPtrInt(128000),
+				Intervals:                      []PricingInterval{{MinTokens: 0, InputPrice: testPtrFloat64(1e-6)}},
+			},
+			wantErr: "LONG_CONTEXT_INTERVAL_CONFLICT",
+		},
+		{
+			name: "policy is restricted to OpenAI",
+			pricing: ChannelModelPricing{
+				Platform:                  PlatformAnthropic,
+				Models:                    []string{"claude-sonnet-4"},
+				LongContextPricingEnabled: testPtrBool(false),
+			},
+			wantErr: "LONG_CONTEXT_PRICING_OPENAI_ONLY",
+		},
+		{
+			name: "policy is restricted to token mode",
+			pricing: ChannelModelPricing{
+				Platform:                  PlatformOpenAI,
+				Models:                    []string{"gpt-image-2"},
+				BillingMode:               BillingModeImage,
+				LongContextPricingEnabled: testPtrBool(false),
+			},
+			wantErr: "LONG_CONTEXT_PRICING_TOKEN_MODE_ONLY",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateLongContextPricingPolicies([]ChannelModelPricing{tt.pricing})
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestValidateAccountStatsPricingEntriesRejectsLongContextPolicy(t *testing.T) {
+	tests := []ChannelModelPricing{
+		{Models: []string{"gpt-5.6-sol"}, LongContextPricingEnabled: testPtrBool(false)},
+		{Models: []string{"gpt-5.6-sol"}, LongContextInputTokenThreshold: testPtrInt(128000)},
+	}
+	for _, pricing := range tests {
+		err := validateAccountStatsPricingEntries([]ChannelModelPricing{pricing})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "ACCOUNT_STATS_LONG_CONTEXT_POLICY_UNSUPPORTED")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // 12. Antigravity wildcard mapping isolation
 // ---------------------------------------------------------------------------

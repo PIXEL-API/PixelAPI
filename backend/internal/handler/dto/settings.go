@@ -29,6 +29,15 @@ type PaymentRechargeCenterItem struct {
 	URL         string `json:"url"`
 }
 
+type OpenAIAccountLevelConfig struct {
+	Key                string   `json:"key"`
+	Label              string   `json:"label"`
+	Aliases            []string `json:"aliases"`
+	SortOrder          int      `json:"sort_order"`
+	Enabled            bool     `json:"enabled"`
+	RequiresProxyLogin bool     `json:"requires_proxy_login"`
+}
+
 // SystemSettings represents the admin settings API response payload.
 type SystemSettings struct {
 	RegistrationEnabled              bool                     `json:"registration_enabled"`
@@ -185,6 +194,7 @@ type SystemSettings struct {
 	ClaudeOAuthSystemPrompt                string `json:"claude_oauth_system_prompt"`
 	ClaudeOAuthSystemPromptBlocks          string `json:"claude_oauth_system_prompt_blocks"`
 	OpenAICleanRelayEnabled                bool   `json:"openai_clean_relay_enabled"`
+	DetachedUsageDrainEnabled              bool   `json:"detached_usage_drain_enabled"`
 	EnableAnthropicCacheTTL1hInjection     bool   `json:"enable_anthropic_cache_ttl_1h_injection"`
 
 	// Web Search Emulation
@@ -197,9 +207,15 @@ type SystemSettings struct {
 	PaymentVisibleMethodWxpayEnabled  bool   `json:"payment_visible_method_wxpay_enabled"`
 
 	// OpenAI account scheduling
-	OpenAIAdvancedSchedulerEnabled            bool    `json:"openai_advanced_scheduler_enabled"`
-	OpenAIFreeAccountRepairEnabled            bool    `json:"openai_free_account_repair_enabled"`
-	OpenAIFreeAccountRepairWeeklyThresholdUSD float64 `json:"openai_free_account_repair_weekly_threshold_usd"`
+	OpenAIAdvancedSchedulerEnabled            bool                       `json:"openai_advanced_scheduler_enabled"`
+	OpenAIAccountLevels                       []OpenAIAccountLevelConfig `json:"openai_account_levels"`
+	OpenAIFreeAccountRepairEnabled            bool                       `json:"openai_free_account_repair_enabled"`
+	OpenAIFreeAccountRepairWeeklyThresholdUSD float64                    `json:"openai_free_account_repair_weekly_threshold_usd"`
+
+	// Scheduler candidate sampling (dynamic global toggle)
+	SchedulerCandidateSamplingEnabled   bool `json:"scheduler_candidate_sampling_enabled"`
+	SchedulerCandidateSamplingLimit     int  `json:"scheduler_candidate_sampling_limit"`
+	SchedulerCandidateSamplingThreshold int  `json:"scheduler_candidate_sampling_threshold"`
 
 	// Payment configuration
 	PaymentEnabled                   bool                        `json:"payment_enabled"`
@@ -257,8 +273,10 @@ type SystemSettings struct {
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
 
 	// Functional module switches
-	InvoiceManagementEnabled    bool `json:"invoice_management_enabled"`
-	WithdrawalManagementEnabled bool `json:"withdrawal_management_enabled"`
+	InvoiceManagementEnabled      bool `json:"invoice_management_enabled"`
+	WithdrawalManagementEnabled   bool `json:"withdrawal_management_enabled"`
+	WithdrawalRateLimitWindowDays int  `json:"withdrawal_rate_limit_window_days"`
+	WithdrawalRateLimitMax        int  `json:"withdrawal_rate_limit_max"`
 
 	// User-owned account import limit
 	UserAccountImportLimit int `json:"user_account_import_limit"`
@@ -330,10 +348,14 @@ type PublicSettings struct {
 
 	UserAccountImportLimit int `json:"user_account_import_limit"`
 
-	AffiliateEnabled            bool `json:"affiliate_enabled"`
-	InvoiceManagementEnabled    bool `json:"invoice_management_enabled"`
-	WithdrawalManagementEnabled bool `json:"withdrawal_management_enabled"`
-	RiskControlEnabled          bool `json:"risk_control_enabled"`
+	OpenAIAccountLevels []OpenAIAccountLevelConfig `json:"openai_account_levels"`
+
+	AffiliateEnabled              bool `json:"affiliate_enabled"`
+	InvoiceManagementEnabled      bool `json:"invoice_management_enabled"`
+	WithdrawalManagementEnabled   bool `json:"withdrawal_management_enabled"`
+	WithdrawalRateLimitWindowDays int  `json:"withdrawal_rate_limit_window_days"`
+	WithdrawalRateLimitMax        int  `json:"withdrawal_rate_limit_max"`
+	RiskControlEnabled            bool `json:"risk_control_enabled"`
 }
 
 type LoginAgreementDocument struct {
@@ -387,6 +409,7 @@ type OpenAIFastPolicyRule struct {
 	ServiceTier          string   `json:"service_tier"`
 	Action               string   `json:"action"`
 	Scope                string   `json:"scope"`
+	UserIDs              []int64  `json:"user_ids,omitempty"`
 	ErrorMessage         string   `json:"error_message,omitempty"`
 	ModelWhitelist       []string `json:"model_whitelist,omitempty"`
 	FallbackAction       string   `json:"fallback_action,omitempty"`

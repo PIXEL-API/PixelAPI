@@ -53,7 +53,9 @@ export interface PaymentConfig {
 }
 
 export interface MethodLimit {
+  payment_type?: string
   currency?: string
+  payment_mode?: string
   daily_limit: number
   daily_used: number
   daily_remaining: number
@@ -226,6 +228,11 @@ export interface WechatJSAPIPayload {
   paySign?: string
 }
 
+export interface AlipayJSAPIPayload {
+  tradeNO?: string
+  appId?: string
+}
+
 export interface CreateOrderResult {
   order_id: number
   amount: number
@@ -247,6 +254,7 @@ export interface CreateOrderResult {
   oauth?: WechatOAuthInfo
   jsapi?: WechatJSAPIPayload
   jsapi_payload?: WechatJSAPIPayload
+  alipay_jsapi?: AlipayJSAPIPayload
 }
 
 export interface DashboardStats {

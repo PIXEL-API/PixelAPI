@@ -1,4 +1,4 @@
-import type { BillingMode, PricingInterval } from '@/api/admin/channels'
+import type { BillingMode, ChannelModelPricing, PricingInterval } from '@/api/admin/channels'
 
 export interface IntervalFormEntry {
   min_tokens: number
@@ -15,6 +15,8 @@ export interface IntervalFormEntry {
 export interface PricingFormEntry {
   models: string[]
   billing_mode: BillingMode
+  long_context_pricing_enabled: boolean | null
+  long_context_input_token_threshold: number | string | null
   input_price: number | string | null
   output_price: number | string | null
   cache_write_price: number | string | null
@@ -26,6 +28,32 @@ export interface PricingFormEntry {
   intervals: IntervalFormEntry[]
 }
 
+export const MAX_LONG_CONTEXT_INPUT_TOKEN_THRESHOLD = 2_147_483_647
+
+export type LongContextPricingValidationError = 'interval_conflict' | 'threshold_required'
+
+interface CreatePricingFormEntryOptions {
+  longContextPricingEnabled?: boolean | null
+}
+
+export function createPricingFormEntry(options: CreatePricingFormEntryOptions = {}): PricingFormEntry {
+  return {
+    models: [],
+    billing_mode: 'token',
+    long_context_pricing_enabled: options.longContextPricingEnabled ?? null,
+    long_context_input_token_threshold: null,
+    input_price: null,
+    output_price: null,
+    cache_write_price: null,
+    cache_read_price: null,
+    image_input_price: null,
+    image_cache_read_price: null,
+    image_output_price: null,
+    per_request_price: null,
+    intervals: [],
+  }
+}
+
 // 价格转换：后端存 per-token，前端显示 per-MTok ($/1M tokens)
 const MTOK = 1_000_000
 
@@ -33,6 +61,41 @@ export function toNullableNumber(val: number | string | null | undefined): numbe
   if (val === null || val === undefined || val === '') return null
   const num = Number(val)
   return isNaN(num) ? null : num
+}
+
+export function toPositiveInteger(val: number | string | null | undefined): number | null {
+  const num = toNullableNumber(val)
+  return num !== null && Number.isInteger(num) && num > 0 && num <= MAX_LONG_CONTEXT_INPUT_TOKEN_THRESHOLD
+    ? num
+    : null
+}
+
+export function apiLongContextPricingToForm(
+  pricing: Pick<ChannelModelPricing, 'long_context_pricing_enabled' | 'long_context_input_token_threshold'>,
+): Pick<PricingFormEntry, 'long_context_pricing_enabled' | 'long_context_input_token_threshold'> {
+  return {
+    long_context_pricing_enabled: pricing.long_context_pricing_enabled ?? null,
+    long_context_input_token_threshold: pricing.long_context_input_token_threshold ?? null,
+  }
+}
+
+export function formLongContextPricingToAPI(
+  entry: Pick<PricingFormEntry, 'long_context_pricing_enabled' | 'long_context_input_token_threshold'>,
+): Pick<ChannelModelPricing, 'long_context_pricing_enabled' | 'long_context_input_token_threshold'> {
+  const enabled = entry.long_context_pricing_enabled ?? null
+  return {
+    long_context_pricing_enabled: enabled,
+    long_context_input_token_threshold: enabled === true
+      ? toPositiveInteger(entry.long_context_input_token_threshold)
+      : null,
+  }
+}
+
+export function validateLongContextPricing(entry: PricingFormEntry): LongContextPricingValidationError | null {
+  if (entry.long_context_pricing_enabled !== true) return null
+  if (entry.intervals.length > 0) return 'interval_conflict'
+  if (toPositiveInteger(entry.long_context_input_token_threshold) === null) return 'threshold_required'
+  return null
 }
 
 /** 前端显示值($/MTok) → 后端存储值(per-token) */

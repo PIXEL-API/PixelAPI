@@ -22,6 +22,7 @@ type User struct {
 	LastActiveAt               *time.Time `json:"last_active_at,omitempty"`
 	CreatedAt                  time.Time  `json:"created_at"`
 	UpdatedAt                  time.Time  `json:"updated_at"`
+	DeletedAt                  *time.Time `json:"deleted_at,omitempty"`
 
 	// 余额不足通知
 	BalanceNotifyEnabled       bool               `json:"balance_notify_enabled"`
@@ -57,21 +58,23 @@ type AdminUser struct {
 }
 
 type APIKey struct {
-	ID          int64              `json:"id"`
-	UserID      int64              `json:"user_id"`
-	Key         string             `json:"key"`
-	Name        string             `json:"name"`
-	GroupID     *int64             `json:"group_id"`
-	GroupRoutes []APIKeyGroupRoute `json:"group_routes,omitempty"`
-	Status      string             `json:"status"`
-	IPWhitelist []string           `json:"ip_whitelist"`
-	IPBlacklist []string           `json:"ip_blacklist"`
-	LastUsedAt  *time.Time         `json:"last_used_at"`
-	Quota       float64            `json:"quota"`      // Quota limit in USD (0 = unlimited)
-	QuotaUsed   float64            `json:"quota_used"` // Used quota amount in USD
-	ExpiresAt   *time.Time         `json:"expires_at"` // Expiration time (nil = never expires)
-	CreatedAt   time.Time          `json:"created_at"`
-	UpdatedAt   time.Time          `json:"updated_at"`
+	ID                 int64              `json:"id"`
+	UserID             int64              `json:"user_id"`
+	Key                string             `json:"key"`
+	Name               string             `json:"name"`
+	GroupID            *int64             `json:"group_id"`
+	GroupRoutes        []APIKeyGroupRoute `json:"group_routes,omitempty"`
+	Status             string             `json:"status"`
+	IPWhitelist        []string           `json:"ip_whitelist"`
+	IPBlacklist        []string           `json:"ip_blacklist"`
+	LastUsedAt         *time.Time         `json:"last_used_at"`
+	LastUsedIP         *string            `json:"last_used_ip"`
+	Quota              float64            `json:"quota"`      // Quota limit in USD (0 = unlimited)
+	QuotaUsed          float64            `json:"quota_used"` // Used quota amount in USD
+	ExpiresAt          *time.Time         `json:"expires_at"` // Expiration time (nil = never expires)
+	CreatedAt          time.Time          `json:"created_at"`
+	UpdatedAt          time.Time          `json:"updated_at"`
+	CurrentConcurrency int                `json:"current_concurrency"`
 
 	// Rate limit fields
 	RateLimit5h   float64    `json:"rate_limit_5h"`
@@ -105,16 +108,22 @@ type APIKeyGroupRoute struct {
 }
 
 type Group struct {
-	ID                   int64   `json:"id"`
-	Name                 string  `json:"name"`
-	Description          string  `json:"description"`
-	Platform             string  `json:"platform"`
-	RequiredAccountLevel string  `json:"required_account_level"`
-	RateMultiplier       float64 `json:"rate_multiplier"`
-	IsExclusive          bool    `json:"is_exclusive"`
-	Status               string  `json:"status"`
-	OwnerUserID          *int64  `json:"owner_user_id,omitempty"`
-	Scope                string  `json:"scope"`
+	ID                            int64    `json:"id"`
+	Name                          string   `json:"name"`
+	Description                   string   `json:"description"`
+	Platform                      string   `json:"platform"`
+	RequiredAccountLevel          string   `json:"required_account_level"`
+	RateMultiplier                float64  `json:"rate_multiplier"`
+	EffectiveRateMultiplier       *float64 `json:"effective_rate_multiplier,omitempty"`
+	EffectiveRateMultiplierSource string   `json:"effective_rate_multiplier_source,omitempty"`
+	NewUserRateEnabled            bool     `json:"new_user_rate_enabled"`
+	NewUserRateMultiplier         float64  `json:"new_user_rate_multiplier"`
+	NewUserRateWindowSeconds      int      `json:"new_user_rate_window_seconds"`
+	NewUserRateQuotaUSD           float64  `json:"new_user_rate_quota_usd"`
+	IsExclusive                   bool     `json:"is_exclusive"`
+	Status                        string   `json:"status"`
+	OwnerUserID                   *int64   `json:"owner_user_id,omitempty"`
+	Scope                         string   `json:"scope"`
 
 	SubscriptionType string   `json:"subscription_type"`
 	DailyLimitUSD    *float64 `json:"daily_limit_usd"`
@@ -122,12 +131,18 @@ type Group struct {
 	MonthlyLimitUSD  *float64 `json:"monthly_limit_usd"`
 
 	// 图片生成计费配置（仅 antigravity 平台使用）
-	AllowImageGeneration bool     `json:"allow_image_generation"`
-	ImageRateIndependent bool     `json:"image_rate_independent"`
-	ImageRateMultiplier  float64  `json:"image_rate_multiplier"`
-	ImagePrice1K         *float64 `json:"image_price_1k"`
-	ImagePrice2K         *float64 `json:"image_price_2k"`
-	ImagePrice4K         *float64 `json:"image_price_4k"`
+	AllowImageGeneration  bool     `json:"allow_image_generation"`
+	ImageRateIndependent  bool     `json:"image_rate_independent"`
+	ImageRateMultiplier   float64  `json:"image_rate_multiplier"`
+	ImagePrice1K          *float64 `json:"image_price_1k"`
+	ImagePrice2K          *float64 `json:"image_price_2k"`
+	ImagePrice4K          *float64 `json:"image_price_4k"`
+	VideoRateIndependent  bool     `json:"video_rate_independent"`
+	VideoRateMultiplier   float64  `json:"video_rate_multiplier"`
+	VideoPrice480P        *float64 `json:"video_price_480p"`
+	VideoPrice720P        *float64 `json:"video_price_720p"`
+	VideoPrice1080P       *float64 `json:"video_price_1080p"`
+	WebSearchPricePerCall *float64 `json:"web_search_price_per_call"`
 
 	// Claude Code 客户端限制
 	ClaudeCodeOnly  bool   `json:"claude_code_only"`
@@ -428,16 +443,17 @@ type UsageLog struct {
 	CacheCreation5mTokens int `json:"cache_creation_5m_tokens"`
 	CacheCreation1hTokens int `json:"cache_creation_1h_tokens"`
 
-	InputCost         float64 `json:"input_cost"`
-	OutputCost        float64 `json:"output_cost"`
-	CacheCreationCost float64 `json:"cache_creation_cost"`
-	CacheReadCost     float64 `json:"cache_read_cost"`
-	TotalCost         float64 `json:"total_cost"`
-	ActualCost        float64 `json:"actual_cost"`
-	RateMultiplier    float64 `json:"rate_multiplier"`
-	PointsDeducted    float64 `json:"points_deducted"`
-	BalanceDeducted   float64 `json:"balance_deducted"`
-	BillingWalletType string  `json:"billing_wallet_type"`
+	InputCost            float64 `json:"input_cost"`
+	OutputCost           float64 `json:"output_cost"`
+	CacheCreationCost    float64 `json:"cache_creation_cost"`
+	CacheReadCost        float64 `json:"cache_read_cost"`
+	TotalCost            float64 `json:"total_cost"`
+	ActualCost           float64 `json:"actual_cost"`
+	RateMultiplier       float64 `json:"rate_multiplier"`
+	RateMultiplierSource string  `json:"rate_multiplier_source"`
+	PointsDeducted       float64 `json:"points_deducted"`
+	BalanceDeducted      float64 `json:"balance_deducted"`
+	BillingWalletType    string  `json:"billing_wallet_type"`
 
 	BillingType  int8   `json:"billing_type"`
 	RequestType  string `json:"request_type"`
@@ -447,9 +463,12 @@ type UsageLog struct {
 	FirstTokenMs *int   `json:"first_token_ms"`
 
 	// 图片生成字段
-	ImageCount int     `json:"image_count"`
-	ImageSize  *string `json:"image_size"`
-	MediaType  *string `json:"media_type"`
+	ImageCount           int     `json:"image_count"`
+	ImageSize            *string `json:"image_size"`
+	MediaType            *string `json:"media_type"`
+	VideoCount           int     `json:"video_count"`
+	VideoResolution      *string `json:"video_resolution"`
+	VideoDurationSeconds *int    `json:"video_duration_seconds"`
 
 	// User-Agent
 	UserAgent *string `json:"user_agent"`

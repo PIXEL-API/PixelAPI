@@ -8,6 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -76,6 +79,9 @@ type RedeemCodeResponse struct {
 }
 
 func validateRedeemCodeValue(codeType string, value float64) error {
+	if codeType != RedeemTypeInvitation && (math.IsNaN(value) || math.IsInf(value, 0)) {
+		return errors.New("value must be finite")
+	}
 	switch codeType {
 	case RedeemTypeInvitation:
 		return nil
@@ -83,10 +89,29 @@ func validateRedeemCodeValue(codeType string, value float64) error {
 		if value <= 0 {
 			return errors.New("points value must be greater than 0")
 		}
+	case RedeemTypeConcurrency:
+		return validateConcurrencyRedeemValue(value)
 	default:
 		if value == 0 {
 			return errors.New("value must not be zero")
 		}
+	}
+	return nil
+}
+
+func validateConcurrencyRedeemValue(value float64) error {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return errors.New("concurrency value must be finite")
+	}
+	if value == 0 {
+		return errors.New("concurrency value must not be zero")
+	}
+	if math.Trunc(value) != value {
+		return errors.New("concurrency value must be an integer")
+	}
+	limit := math.Ldexp(1, strconv.IntSize-1)
+	if value < -limit || value >= limit {
+		return errors.New("concurrency value is outside the supported integer range")
 	}
 	return nil
 }
@@ -274,6 +299,13 @@ func (s *RedeemService) releaseRedeemLock(ctx context.Context, code string) {
 
 // Redeem 使用兑换码
 func (s *RedeemService) Redeem(ctx context.Context, userID int64, code string) (*RedeemCode, error) {
+	return s.redeemWithTransactionGuard(ctx, userID, code, nil)
+}
+
+// redeemWithTransactionGuard lets payment fulfillment fence entitlement writes
+// with an order-row lock in the same transaction. General redemption passes no
+// guard and keeps the public behavior unchanged.
+func (s *RedeemService) redeemWithTransactionGuard(ctx context.Context, userID int64, code string, guard func(context.Context) error) (*RedeemCode, error) {
 	// 检查限流
 	if err := s.checkRedeemRateLimit(ctx, userID); err != nil {
 		return nil, err
@@ -308,6 +340,14 @@ func (s *RedeemService) Redeem(ctx context.Context, userID int64, code string) (
 	if redeemCode.Type == RedeemTypeSubscription && redeemCode.GroupID == nil {
 		return nil, infraerrors.BadRequest("REDEEM_CODE_INVALID", "invalid subscription redeem code: missing group_id")
 	}
+	if redeemCode.Type == RedeemTypeSubscription && s.subscriptionService == nil {
+		return nil, errors.New("subscription redemption service is unavailable")
+	}
+	if redeemCode.Type == RedeemTypeConcurrency {
+		if err := validateConcurrencyRedeemValue(redeemCode.Value); err != nil {
+			return nil, infraerrors.BadRequest("REDEEM_CODE_INVALID", "invalid concurrency redeem code: "+err.Error())
+		}
+	}
 
 	// 获取用户信息
 	user, err := s.userRepo.GetByID(ctx, userID)
@@ -324,6 +364,11 @@ func (s *RedeemService) Redeem(ctx context.Context, userID int64, code string) (
 
 	// 将事务放入 context，使 repository 方法能够使用同一事务
 	txCtx := dbent.NewTxContext(ctx, tx)
+	if guard != nil {
+		if err := guard(txCtx); err != nil {
+			return nil, fmt.Errorf("redeem transaction guard: %w", err)
+		}
+	}
 
 	// 【关键】先标记兑换码为已使用，确保并发安全
 	// 利用数据库乐观锁（WHERE status = 'unused'）保证原子性
@@ -333,6 +378,10 @@ func (s *RedeemService) Redeem(ctx context.Context, userID int64, code string) (
 		}
 		return nil, fmt.Errorf("mark code as used: %w", err)
 	}
+
+	var subscriptionNotification *UserSubscription
+	var subscriptionNotificationEvent string
+	var subscriptionNotificationDays int
 
 	// 执行兑换逻辑（兑换码已被锁定，此时可安全操作）
 	switch redeemCode.Type {
@@ -370,17 +419,24 @@ func (s *RedeemService) Redeem(ctx context.Context, userID int64, code string) (
 
 	case RedeemTypeConcurrency:
 		delta := int(redeemCode.Value)
-		if user.Role == RoleUser {
-			nextConcurrency := user.Concurrency + delta
-			if nextConcurrency < UserMinConcurrency {
-				delta = UserMinConcurrency - user.Concurrency
-				nextConcurrency = UserMinConcurrency
+		if delta < 0 {
+			concurrencyRepo, ok := s.userRepo.(RedeemUserConcurrencyAdjustmentRepository)
+			if !ok {
+				return nil, errors.New("redeem concurrency adjustment repository capability is unavailable")
 			}
-			if err := validatePersonalUserConcurrency(nextConcurrency); err != nil {
+			if err := concurrencyRepo.ApplyRedeemConcurrencyAdjustment(txCtx, userID, delta); err != nil {
+				return nil, fmt.Errorf("update user concurrency: %w", err)
+			}
+			break
+		}
+		maxInt := int(^uint(0) >> 1)
+		if user.Concurrency > maxInt-delta {
+			return nil, infraerrors.BadRequest("REDEEM_CODE_INVALID", "concurrency redeem code would overflow the supported integer range")
+		}
+		if user.Role == RoleUser {
+			if err := validatePersonalUserConcurrency(user.Concurrency + delta); err != nil {
 				return nil, err
 			}
-		} else if delta < 0 && user.Concurrency+delta < 0 {
-			delta = -user.Concurrency
 		}
 		if err := s.userRepo.UpdateConcurrency(txCtx, userID, delta); err != nil {
 			return nil, fmt.Errorf("update user concurrency: %w", err)
@@ -390,23 +446,34 @@ func (s *RedeemService) Redeem(ctx context.Context, userID int64, code string) (
 		validityDays := redeemCode.ValidityDays
 		if validityDays < 0 {
 			// 负数天数：缩短订阅，减到 0 则取消订阅
-			if err := s.reduceOrCancelSubscription(txCtx, userID, *redeemCode.GroupID, -validityDays, redeemCode.Code); err != nil {
+			notes := fmt.Sprintf("通过兑换码 %s 退款扣减 %d 天", redeemCode.Code, -validityDays)
+			adjustedSub, err := s.subscriptionService.reduceOrCancelSubscription(txCtx, userID, *redeemCode.GroupID, -validityDays, notes)
+			if err != nil {
 				return nil, fmt.Errorf("reduce or cancel subscription: %w", err)
 			}
+			subscriptionNotification = adjustedSub
+			subscriptionNotificationEvent = "adjusted"
+			subscriptionNotificationDays = validityDays
 		} else {
 			if validityDays == 0 {
 				validityDays = 30
 			}
-			_, _, err := s.subscriptionService.AssignOrExtendSubscription(txCtx, &AssignSubscriptionInput{
+			assignedSub, extended, err := s.subscriptionService.assignOrExtendSubscription(txCtx, &AssignSubscriptionInput{
 				UserID:       userID,
 				GroupID:      *redeemCode.GroupID,
 				ValidityDays: validityDays,
 				AssignedBy:   0, // 系统分配
 				Notes:        fmt.Sprintf("通过兑换码 %s 兑换", redeemCode.Code),
-			})
+			}, true)
 			if err != nil {
 				return nil, fmt.Errorf("assign or extend subscription: %w", err)
 			}
+			subscriptionNotification = assignedSub
+			subscriptionNotificationEvent = "created"
+			if extended {
+				subscriptionNotificationEvent = "extended"
+			}
+			subscriptionNotificationDays = validityDays
 		}
 
 	default:
@@ -418,16 +485,30 @@ func (s *RedeemService) Redeem(ctx context.Context, userID int64, code string) (
 		return nil, fmt.Errorf("commit transaction: %w", err)
 	}
 
-	// 事务提交成功后失效缓存
-	s.invalidateRedeemCaches(ctx, userID, redeemCode)
-
-	// 重新获取更新后的兑换码
-	redeemCode, err = s.redeemRepo.GetByID(ctx, redeemCode.ID)
-	if err != nil {
-		return nil, fmt.Errorf("get updated redeem code: %w", err)
+	// 事务提交成功后失效缓存。使用独立 context，避免请求取消让已提交
+	// 权益继续暴露旧缓存或漏发通知。
+	postCommitCtx, cancelPostCommit := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelPostCommit()
+	s.invalidateRedeemCaches(postCommitCtx, userID, redeemCode)
+	if subscriptionNotification != nil {
+		s.subscriptionService.notifySubscription(postCommitCtx, subscriptionNotificationEvent, subscriptionNotification, subscriptionNotificationDays)
 	}
 
-	return redeemCode, nil
+	// The entitlement and code-use transaction is already committed. Reload is
+	// best-effort so a transient read failure cannot turn a successful payment
+	// fulfillment into a FAILED order.
+	committedCode := *redeemCode
+	committedCode.Status = StatusUsed
+	committedCode.UsedBy = &userID
+	usedAt := time.Now()
+	committedCode.UsedAt = &usedAt
+	if reloaded, reloadErr := s.redeemRepo.GetByID(postCommitCtx, redeemCode.ID); reloadErr == nil {
+		committedCode = *reloaded
+	} else {
+		slog.Warn("redeem.reload_after_commit_failed", "redeem_code_id", redeemCode.ID, "user_id", userID, "error", reloadErr)
+	}
+
+	return &committedCode, nil
 }
 
 // invalidateRedeemCaches 失效兑换相关的缓存
@@ -453,19 +534,13 @@ func (s *RedeemService) invalidateRedeemCaches(ctx context.Context, userID int64
 			return
 		}
 	case RedeemTypeSubscription:
+		if s.subscriptionService != nil && redeemCode.GroupID != nil {
+			if err := s.subscriptionService.invalidateSubscriptionCaches(userID, *redeemCode.GroupID); err != nil {
+				slog.Warn("redeem.subscription_cache_invalidation_failed", "user_id", userID, "group_id", *redeemCode.GroupID, "error", err)
+			}
+		}
 		if s.authCacheInvalidator != nil {
 			s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
-		}
-		if s.billingCacheService == nil {
-			return
-		}
-		if redeemCode.GroupID != nil {
-			groupID := *redeemCode.GroupID
-			go func() {
-				cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				_ = s.billingCacheService.InvalidateSubscription(cacheCtx, userID, groupID)
-			}()
 		}
 	}
 }
@@ -726,52 +801,4 @@ func currentPointsBalanceWithQueryer(ctx context.Context, queryer serviceSQLQuer
 		return 0, err
 	}
 	return balanceBefore, nil
-}
-
-// reduceOrCancelSubscription 缩短订阅天数，剩余天数 <= 0 时取消订阅
-func (s *RedeemService) reduceOrCancelSubscription(ctx context.Context, userID, groupID int64, reduceDays int, code string) error {
-	sub, err := s.subscriptionService.userSubRepo.GetByUserIDAndGroupID(ctx, userID, groupID)
-	if err != nil {
-		return ErrSubscriptionNotFound
-	}
-
-	now := time.Now()
-	remaining := int(sub.ExpiresAt.Sub(now).Hours() / 24)
-	if remaining < 0 {
-		remaining = 0
-	}
-
-	notes := fmt.Sprintf("通过兑换码 %s 退款扣减 %d 天", code, reduceDays)
-
-	if remaining <= reduceDays {
-		// 剩余天数不足，直接取消订阅
-		if err := s.subscriptionService.userSubRepo.UpdateStatus(ctx, sub.ID, SubscriptionStatusExpired); err != nil {
-			return fmt.Errorf("cancel subscription: %w", err)
-		}
-		// 设置过期时间为当前时间
-		if err := s.subscriptionService.userSubRepo.ExtendExpiry(ctx, sub.ID, now); err != nil {
-			return fmt.Errorf("set subscription expiry: %w", err)
-		}
-	} else {
-		// 缩短天数
-		newExpiresAt := sub.ExpiresAt.AddDate(0, 0, -reduceDays)
-		if err := s.subscriptionService.userSubRepo.ExtendExpiry(ctx, sub.ID, newExpiresAt); err != nil {
-			return fmt.Errorf("reduce subscription: %w", err)
-		}
-	}
-
-	// 追加备注
-	newNotes := sub.Notes
-	if newNotes != "" {
-		newNotes += "\n"
-	}
-	newNotes += notes
-	if err := s.subscriptionService.userSubRepo.UpdateNotes(ctx, sub.ID, newNotes); err != nil {
-		return fmt.Errorf("update subscription notes: %w", err)
-	}
-
-	// 失效缓存
-	s.subscriptionService.InvalidateSubCache(userID, groupID)
-
-	return nil
 }

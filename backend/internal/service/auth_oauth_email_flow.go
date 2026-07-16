@@ -281,6 +281,9 @@ func (s *AuthService) FinalizeOAuthEmailAccount(
 	}
 
 	s.updateOAuthSignupSource(ctx, user.ID, signupSource)
+	if err := s.provisionUserPrivateGroups(ctx, user.ID); err != nil {
+		return err
+	}
 	grantPlan := s.resolveSignupGrantPlan(ctx, signupSource)
 	s.assignSubscriptions(ctx, user.ID, grantPlan.Subscriptions, "auto assigned by signup defaults")
 	return nil

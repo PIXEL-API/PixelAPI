@@ -111,6 +111,7 @@ export interface User {
   last_active_at?: string | null;
   created_at: string;
   updated_at: string;
+  deleted_at?: string | null;
 }
 
 export type ReceiptCodePaymentMethod = "alipay" | "wechat";
@@ -148,6 +149,7 @@ export interface WithdrawalRequest {
   status: WithdrawalStatus;
   user_cancel_reason?: string | null;
   admin_note?: string | null;
+  rejection_reason?: string | null;
   processed_by_user_id?: number | null;
   processed_at?: string | null;
   created_at: string;
@@ -369,6 +371,15 @@ export interface LoginAgreementDocument {
   content_md: string;
 }
 
+export interface OpenAIAccountLevelConfig {
+  key: string;
+  label: string;
+  aliases?: string[];
+  enabled: boolean;
+  requires_proxy_login: boolean;
+  sort_order: number;
+}
+
 export interface PublicSettings {
   registration_enabled: boolean;
   email_verify_enabled: boolean;
@@ -396,6 +407,8 @@ export interface PublicSettings {
   risk_control_enabled?: boolean;
   invoice_management_enabled?: boolean;
   withdrawal_management_enabled?: boolean;
+  withdrawal_rate_limit_window_days?: number;
+  withdrawal_rate_limit_max?: number;
   table_default_page_size: number;
   table_page_size_options: number[];
   custom_menu_items: CustomMenuItem[];
@@ -418,6 +431,7 @@ export interface PublicSettings {
   channel_monitor_default_interval_seconds: number;
   available_channels_enabled: boolean;
   user_account_import_limit?: number;
+  openai_account_levels?: OpenAIAccountLevelConfig[];
   affiliate_enabled: boolean;
 }
 
@@ -777,7 +791,7 @@ export interface PaginationConfig {
 
 // ==================== API Key & Group Types ====================
 
-export type GroupPlatform = "anthropic" | "openai" | "gemini" | "antigravity";
+export type GroupPlatform = "anthropic" | "openai" | "gemini" | "antigravity" | "grok";
 
 export type SubscriptionType = "standard" | "subscription";
 export type GroupScope = "public" | "user_private";
@@ -794,8 +808,14 @@ export interface Group {
   name: string;
   description: string | null;
   platform: GroupPlatform;
-  required_account_level?: Exclude<AccountLevel, "unknown"> | "";
+  required_account_level?: AccountLevel | "";
   rate_multiplier: number;
+  effective_rate_multiplier?: number | null;
+  effective_rate_multiplier_source?: string | null;
+  new_user_rate_enabled?: boolean;
+  new_user_rate_multiplier?: number;
+  new_user_rate_window_seconds?: number;
+  new_user_rate_quota_usd?: number;
   rpm_limit?: number; // Group-level RPM cap (0 = unlimited); overrides user-level rpm_limit when set
   is_exclusive: boolean;
   status: "active" | "inactive";
@@ -809,6 +829,14 @@ export interface Group {
   image_price_1k: number | null;
   image_price_2k: number | null;
   image_price_4k: number | null;
+  // Grok 视频生成按秒计费（价格单位 USD/秒）
+  video_rate_independent: boolean;
+  video_rate_multiplier: number;
+  video_price_480p: number | null;
+  video_price_720p: number | null;
+  video_price_1080p: number | null;
+  // Codex 网页搜索按次计费；null 表示使用默认价格
+  web_search_price_per_call: number | null;
   // Claude Code 客户端限制
   claude_code_only: boolean;
   fallback_group_id: number | null;
@@ -858,11 +886,13 @@ export interface ApiKey {
   ip_whitelist: string[];
   ip_blacklist: string[];
   last_used_at: string | null;
+  last_used_ip: string | null;
   quota: number; // Quota limit in USD (0 = unlimited)
   quota_used: number; // Used quota amount in USD
   expires_at: string | null; // Expiration time (null = never expires)
   created_at: string;
   updated_at: string;
+  current_concurrency?: number;
   group?: Group;
   rate_limit_5h: number;
   rate_limit_1d: number;
@@ -922,8 +952,12 @@ export interface CreateGroupRequest {
   name: string;
   description?: string | null;
   platform?: GroupPlatform;
-  required_account_level?: Exclude<AccountLevel, "unknown"> | "";
+  required_account_level?: AccountLevel | "";
   rate_multiplier?: number;
+  new_user_rate_enabled?: boolean;
+  new_user_rate_multiplier?: number;
+  new_user_rate_window_seconds?: number;
+  new_user_rate_quota_usd?: number;
   is_exclusive?: boolean;
   subscription_type?: SubscriptionType;
   daily_limit_usd?: number | null;
@@ -932,6 +966,12 @@ export interface CreateGroupRequest {
   image_price_1k?: number | null;
   image_price_2k?: number | null;
   image_price_4k?: number | null;
+  video_rate_independent?: boolean;
+  video_rate_multiplier?: number;
+  video_price_480p?: number | null;
+  video_price_720p?: number | null;
+  video_price_1080p?: number | null;
+  web_search_price_per_call?: number | null;
   claude_code_only?: boolean;
   fallback_group_id?: number | null;
   fallback_group_id_on_invalid_request?: number | null;
@@ -947,8 +987,12 @@ export interface UpdateGroupRequest {
   name?: string;
   description?: string | null;
   platform?: GroupPlatform;
-  required_account_level?: Exclude<AccountLevel, "unknown"> | "";
+  required_account_level?: AccountLevel | "";
   rate_multiplier?: number;
+  new_user_rate_enabled?: boolean;
+  new_user_rate_multiplier?: number;
+  new_user_rate_window_seconds?: number;
+  new_user_rate_quota_usd?: number;
   is_exclusive?: boolean;
   status?: "active" | "inactive";
   subscription_type?: SubscriptionType;
@@ -958,6 +1002,12 @@ export interface UpdateGroupRequest {
   image_price_1k?: number | null;
   image_price_2k?: number | null;
   image_price_4k?: number | null;
+  video_rate_independent?: boolean;
+  video_rate_multiplier?: number;
+  video_price_480p?: number | null;
+  video_price_720p?: number | null;
+  video_price_1080p?: number | null;
+  web_search_price_per_call?: number | null;
   claude_code_only?: boolean;
   fallback_group_id?: number | null;
   fallback_group_id_on_invalid_request?: number | null;
@@ -970,7 +1020,7 @@ export interface UpdateGroupRequest {
 
 // ==================== Account & Proxy Types ====================
 
-export type AccountPlatform = "anthropic" | "openai" | "gemini" | "antigravity";
+export type AccountPlatform = "anthropic" | "openai" | "gemini" | "antigravity" | "grok";
 export type AccountType =
   | "oauth"
   | "setup-token"
@@ -978,7 +1028,7 @@ export type AccountType =
   | "upstream"
   | "bedrock"
   | "service_account";
-export type AccountLevel = "unknown" | "free" | "plus" | "pro" | "team";
+export type AccountLevel = "unknown" | (string & {});
 export type AccountShareMode = "private" | "public";
 export type AccountShareStatus = "pending" | "approved" | "suspended";
 export type AccountStatus = "active" | "inactive" | "disabled" | "error";
@@ -1316,8 +1366,43 @@ export interface AntigravityModelQuota {
   reset_time: string; // 重置时间 ISO8601
 }
 
+export interface GrokQuotaWindow {
+  limit?: number | null;
+  remaining?: number | null;
+  reset_unix?: number | null;
+  reset_at?: string | null;
+}
+
+export interface GrokBillingProductUsage {
+  product: string;
+  usage_percent?: number | null;
+}
+
+export interface GrokBillingSummary {
+  period_type?: string;
+  usage_percent?: number | null;
+  period_start?: string;
+  period_end?: string;
+  product_usage?: GrokBillingProductUsage[];
+  monthly_limit_cents?: number | null;
+  used_cents?: number | null;
+  included_used_cents?: number | null;
+  billing_period_start?: string;
+  billing_period_end?: string;
+  used_percent?: number | null;
+  plan?: string;
+  status_code?: number;
+  source?: string;
+  fetched_at?: string;
+  updated_at?: string;
+  weekly_updated_at?: string;
+  monthly_updated_at?: string;
+  partial?: boolean;
+  failed_windows?: string[];
+}
+
 export interface AccountUsageInfo {
-  source?: "passive" | "active";
+  source?: "local" | "passive" | "active";
   updated_at: string | null;
   five_hour: UsageProgress | null;
   seven_day: UsageProgress | null;
@@ -1329,6 +1414,21 @@ export interface AccountUsageInfo {
   gemini_pro_minute?: UsageProgress | null;
   gemini_flash_minute?: UsageProgress | null;
   antigravity_quota?: Record<string, AntigravityModelQuota> | null;
+  grok_request_quota?: GrokQuotaWindow | null;
+  grok_token_quota?: GrokQuotaWindow | null;
+  grok_retry_after_seconds?: number | null;
+  grok_entitlement_status?: string;
+  grok_quota_snapshot_state?: string;
+  grok_last_quota_probe_at?: string;
+  grok_last_headers_seen_at?: string;
+  grok_last_status_code?: number;
+  grok_local_usage?: WindowStats | null;
+  grok_local_usage_24h?: WindowStats | null;
+  grok_local_usage_7d?: WindowStats | null;
+  grok_local_usage_monthly?: WindowStats | null;
+  grok_billing?: GrokBillingSummary | null;
+  subscription_tier?: string;
+  subscription_tier_raw?: string;
   ai_credits?: Array<{
     credit_type?: string;
     amount?: number;
@@ -1611,6 +1711,7 @@ export interface UsageLog {
   total_cost: number;
   actual_cost: number;
   rate_multiplier: number;
+  rate_multiplier_source?: string;
   points_deducted?: number;
   balance_deducted?: number;
   billing_wallet_type?:
@@ -1631,6 +1732,11 @@ export interface UsageLog {
   // 图片生成字段
   image_count: number;
   image_size: string | null;
+
+  // Grok 视频生成审计字段
+  video_count: number;
+  video_resolution: string | null;
+  video_duration_seconds: number | null;
 
   // User-Agent
   user_agent: string | null;
@@ -1874,6 +1980,9 @@ export interface UserBreakdownItem {
   user_id: number;
   email: string;
   requests: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_tokens: number;
   total_tokens: number;
   cost: number;
   actual_cost: number;

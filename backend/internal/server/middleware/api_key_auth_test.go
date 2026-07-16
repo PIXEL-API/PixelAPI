@@ -75,9 +75,18 @@ func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 			DailyUsageUSD:    0,
 		}
 		maintenanceCalled := make(chan struct{}, 1)
+		refreshedWindowStart := time.Now()
 		subscriptionRepo := &stubUserSubscriptionRepo{
 			getActive: func(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
 				clone := *sub
+				return &clone, nil
+			},
+			getByID: func(ctx context.Context, id int64) (*service.UserSubscription, error) {
+				require.Equal(t, sub.ID, id)
+				clone := *sub
+				clone.DailyWindowStart = &refreshedWindowStart
+				clone.WeeklyWindowStart = &refreshedWindowStart
+				clone.MonthlyWindowStart = &refreshedWindowStart
 				return &clone, nil
 			},
 			updateStatus:   func(ctx context.Context, subscriptionID int64, status string) error { return nil },
@@ -142,13 +151,15 @@ func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 
 		now := time.Now()
 		sub := &service.UserSubscription{
-			ID:               55,
-			UserID:           user.ID,
-			GroupID:          group.ID,
-			Status:           service.SubscriptionStatusActive,
-			ExpiresAt:        now.Add(24 * time.Hour),
-			DailyWindowStart: &now,
-			DailyUsageUSD:    10,
+			ID:                 55,
+			UserID:             user.ID,
+			GroupID:            group.ID,
+			Status:             service.SubscriptionStatusActive,
+			ExpiresAt:          now.Add(24 * time.Hour),
+			DailyWindowStart:   &now,
+			WeeklyWindowStart:  &now,
+			MonthlyWindowStart: &now,
+			DailyUsageUSD:      10,
 		}
 		subscriptionRepo := &stubUserSubscriptionRepo{
 			getActive: func(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
@@ -604,6 +615,7 @@ func (r *stubApiKeyRepo) GetRateLimitData(ctx context.Context, id int64) (*servi
 
 type stubUserSubscriptionRepo struct {
 	getActive      func(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error)
+	getByID        func(ctx context.Context, id int64) (*service.UserSubscription, error)
 	updateStatus   func(ctx context.Context, subscriptionID int64, status string) error
 	activateWindow func(ctx context.Context, id int64, start time.Time) error
 	resetDaily     func(ctx context.Context, id int64, start time.Time) error
@@ -616,6 +628,9 @@ func (r *stubUserSubscriptionRepo) Create(ctx context.Context, sub *service.User
 }
 
 func (r *stubUserSubscriptionRepo) GetByID(ctx context.Context, id int64) (*service.UserSubscription, error) {
+	if r.getByID != nil {
+		return r.getByID(ctx, id)
+	}
 	return nil, errors.New("not implemented")
 }
 
@@ -680,21 +695,38 @@ func (r *stubUserSubscriptionRepo) ActivateWindows(ctx context.Context, id int64
 	return errors.New("not implemented")
 }
 
-func (r *stubUserSubscriptionRepo) ResetDailyUsage(ctx context.Context, id int64, newWindowStart time.Time) error {
+func (r *stubUserSubscriptionRepo) ResetUsageWindows(ctx context.Context, id int64, resetDaily, resetWeekly, resetMonthly bool, newWindowStart time.Time) error {
+	if resetDaily {
+		if err := r.ResetDailyUsage(ctx, id, nil, newWindowStart); err != nil {
+			return err
+		}
+	}
+	if resetWeekly {
+		if err := r.ResetWeeklyUsage(ctx, id, nil, newWindowStart); err != nil {
+			return err
+		}
+	}
+	if resetMonthly {
+		return r.ResetMonthlyUsage(ctx, id, nil, newWindowStart)
+	}
+	return nil
+}
+
+func (r *stubUserSubscriptionRepo) ResetDailyUsage(ctx context.Context, id int64, _ *time.Time, newWindowStart time.Time) error {
 	if r.resetDaily != nil {
 		return r.resetDaily(ctx, id, newWindowStart)
 	}
 	return errors.New("not implemented")
 }
 
-func (r *stubUserSubscriptionRepo) ResetWeeklyUsage(ctx context.Context, id int64, newWindowStart time.Time) error {
+func (r *stubUserSubscriptionRepo) ResetWeeklyUsage(ctx context.Context, id int64, _ *time.Time, newWindowStart time.Time) error {
 	if r.resetWeekly != nil {
 		return r.resetWeekly(ctx, id, newWindowStart)
 	}
 	return errors.New("not implemented")
 }
 
-func (r *stubUserSubscriptionRepo) ResetMonthlyUsage(ctx context.Context, id int64, newWindowStart time.Time) error {
+func (r *stubUserSubscriptionRepo) ResetMonthlyUsage(ctx context.Context, id int64, _ *time.Time, newWindowStart time.Time) error {
 	if r.resetMonthly != nil {
 		return r.resetMonthly(ctx, id, newWindowStart)
 	}

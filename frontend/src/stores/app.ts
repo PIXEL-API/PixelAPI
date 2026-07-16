@@ -368,6 +368,8 @@ export const useAppStore = defineStore("app", () => {
         affiliate_enabled: false,
         invoice_management_enabled: false,
         withdrawal_management_enabled: true,
+        withdrawal_rate_limit_window_days: 1,
+        withdrawal_rate_limit_max: 0,
       };
     }
 

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,7 +35,13 @@ func (s *openAIFastPolicyRepoStub) Set(ctx context.Context, key, value string) e
 }
 
 func (s *openAIFastPolicyRepoStub) GetMultiple(ctx context.Context, keys []string) (map[string]string, error) {
-	panic("unexpected GetMultiple call")
+	result := make(map[string]string, len(keys))
+	for _, key := range keys {
+		if v, ok := s.values[key]; ok {
+			result[key] = v
+		}
+	}
+	return result, nil
 }
 
 func (s *openAIFastPolicyRepoStub) SetMultiple(ctx context.Context, settings map[string]string) error {
@@ -283,4 +290,51 @@ func TestSetOpenAIFastPolicySettings_Validation(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got.Rules, 1)
 	require.Equal(t, OpenAIFastTierPriority, got.Rules[0].ServiceTier)
+}
+
+func TestEvaluateOpenAIFastPolicyUserRulePrecedesGlobalRule(t *testing.T) {
+	settings := &OpenAIFastPolicySettings{Rules: []OpenAIFastPolicyRule{
+		{
+			ServiceTier: OpenAIFastTierPriority,
+			Action:      BetaPolicyActionFilter,
+			Scope:       BetaPolicyScopeAll,
+		},
+		{
+			ServiceTier: OpenAIFastTierPriority,
+			Action:      BetaPolicyActionPass,
+			Scope:       BetaPolicyScopeAll,
+			UserIDs:     []int64{42},
+		},
+	}}
+	svc := newOpenAIGatewayServiceWithSettings(t, settings)
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+
+	userCtx := context.WithValue(context.Background(), ctxkey.AuthenticatedUserID, int64(42))
+	action, _ := svc.evaluateOpenAIFastPolicy(userCtx, account, "gpt-5.5", OpenAIFastTierPriority)
+	require.Equal(t, BetaPolicyActionPass, action)
+
+	otherCtx := context.WithValue(context.Background(), ctxkey.AuthenticatedUserID, int64(43))
+	action, _ = svc.evaluateOpenAIFastPolicy(otherCtx, account, "gpt-5.5", OpenAIFastTierPriority)
+	require.Equal(t, BetaPolicyActionFilter, action)
+
+	action, _ = svc.evaluateOpenAIFastPolicy(context.Background(), account, "gpt-5.5", OpenAIFastTierPriority)
+	require.Equal(t, BetaPolicyActionFilter, action)
+}
+
+func TestSetOpenAIFastPolicySettingsRejectsInvalidUserIDs(t *testing.T) {
+	repo := &openAIFastPolicyRepoStub{values: map[string]string{}}
+	svc := NewSettingService(repo, &config.Config{})
+
+	for _, userIDs := range [][]int64{{0}, {-1}, {7, 7}} {
+		err := svc.SetOpenAIFastPolicySettings(context.Background(), &OpenAIFastPolicySettings{
+			Rules: []OpenAIFastPolicyRule{{
+				ServiceTier: OpenAIFastTierPriority,
+				Action:      BetaPolicyActionPass,
+				Scope:       BetaPolicyScopeAll,
+				UserIDs:     userIDs,
+			}},
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "user_ids")
+	}
 }

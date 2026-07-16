@@ -28,6 +28,11 @@ export interface OpenAITokenInfo {
 
 export type OpenAIOAuthPlatform = 'openai'
 
+export interface OpenAIOAuthOptions {
+  redirectUri?: string
+  accountLevel?: string | null
+}
+
 export function useOpenAIOAuth(scope: AccountApiScope = 'admin') {
   const appStore = useAppStore()
   const { t } = useI18n()
@@ -52,7 +57,7 @@ export function useOpenAIOAuth(scope: AccountApiScope = 'admin') {
   // Generate auth URL for OpenAI OAuth
   const generateAuthUrl = async (
     proxyId?: number | null,
-    redirectUri?: string
+    options?: string | OpenAIOAuthOptions
   ): Promise<boolean> => {
     loading.value = true
     authUrl.value = ''
@@ -62,11 +67,16 @@ export function useOpenAIOAuth(scope: AccountApiScope = 'admin') {
 
     try {
       const payload: Record<string, unknown> = {}
+      const redirectUri = typeof options === 'string' ? options : options?.redirectUri
+      const accountLevel = typeof options === 'string' ? undefined : options?.accountLevel
       if (proxyId) {
         payload.proxy_id = proxyId
       }
       if (redirectUri) {
         payload.redirect_uri = redirectUri
+      }
+      if (accountLevel) {
+        payload.account_level = accountLevel
       }
 
       const response =
@@ -96,7 +106,8 @@ export function useOpenAIOAuth(scope: AccountApiScope = 'admin') {
     code: string,
     currentSessionId: string,
     state: string,
-    proxyId?: number | null
+    proxyId?: number | null,
+    accountLevel?: string | null
   ): Promise<OpenAITokenInfo | null> => {
     if (!code.trim() || !currentSessionId || !state.trim()) {
       error.value = 'Missing auth code, session ID, or state'
@@ -107,13 +118,16 @@ export function useOpenAIOAuth(scope: AccountApiScope = 'admin') {
     error.value = ''
 
     try {
-      const payload: { session_id: string; code: string; state: string; proxy_id?: number } = {
+      const payload: { session_id: string; code: string; state: string; proxy_id?: number; account_level?: string } = {
         session_id: currentSessionId,
         code: code.trim(),
         state: state.trim()
       }
       if (proxyId) {
         payload.proxy_id = proxyId
+      }
+      if (accountLevel) {
+        payload.account_level = accountLevel
       }
 
       const tokenInfo = await adminAPI.accounts.exchangeCode(`${endpointPrefix}/exchange-code`, payload)

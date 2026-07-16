@@ -34,8 +34,10 @@ type UserAccountHandler struct {
 	oauthService            *service.OAuthService
 	openaiOAuthService      *service.OpenAIOAuthService
 	openaiQuotaService      *service.OpenAIQuotaService
+	userModerationService   *service.UserContentModerationService
 	geminiOAuthService      *service.GeminiOAuthService
 	antigravityOAuthService *service.AntigravityOAuthService
+	grokOAuthService        *service.GrokOAuthService
 	sessionLimitCache       service.SessionLimitCache
 	rpmCache                service.RPMCache
 	accountBatchTaskService *service.AccountBatchTaskService
@@ -93,11 +95,19 @@ func (h *UserAccountHandler) SetOpenAIQuotaService(openaiQuotaService *service.O
 	h.openaiQuotaService = openaiQuotaService
 }
 
+func (h *UserAccountHandler) SetUserContentModerationService(userModerationService *service.UserContentModerationService) {
+	h.userModerationService = userModerationService
+}
+
+func (h *UserAccountHandler) SetGrokOAuthService(grokOAuthService *service.GrokOAuthService) {
+	h.grokOAuthService = grokOAuthService
+}
+
 type createUserAccountRequest struct {
 	Name               string         `json:"name" binding:"required"`
 	Notes              *string        `json:"notes"`
 	Platform           string         `json:"platform" binding:"required"`
-	AccountLevel       string         `json:"account_level" binding:"omitempty,oneof=unknown free plus pro team"`
+	AccountLevel       string         `json:"account_level"`
 	Type               string         `json:"type" binding:"required,oneof=oauth"`
 	Credentials        map[string]any `json:"credentials" binding:"required"`
 	Extra              map[string]any `json:"extra"`
@@ -113,8 +123,9 @@ type createUserAccountRequest struct {
 
 type importUserAccountCredentialsRequest struct {
 	Contents           []string `json:"contents" binding:"required"`
-	Platform           string   `json:"platform" binding:"required,oneof=anthropic openai gemini antigravity"`
-	AccountLevel       string   `json:"account_level" binding:"omitempty,oneof=unknown free plus pro team"`
+	Platform           string   `json:"platform" binding:"required,oneof=anthropic openai gemini antigravity grok"`
+	AccountLevel       string   `json:"account_level"`
+	ProxyID            *int64   `json:"proxy_id"`
 	ShareMode          string   `json:"share_mode" binding:"omitempty,oneof=private public"`
 	Concurrency        int      `json:"concurrency"`
 	LoadFactor         *int     `json:"load_factor"`
@@ -127,7 +138,7 @@ type importUserAccountCredentialsRequest struct {
 type updateUserAccountRequest struct {
 	Name               *string         `json:"name"`
 	Notes              *string         `json:"notes"`
-	AccountLevel       *string         `json:"account_level" binding:"omitempty,oneof=unknown free plus pro team"`
+	AccountLevel       *string         `json:"account_level"`
 	Credentials        *map[string]any `json:"credentials"`
 	Extra              *map[string]any `json:"extra"`
 	ShareMode          *string         `json:"share_mode" binding:"omitempty,oneof=private public"`
@@ -151,7 +162,7 @@ type bulkUpdateUserAccountsRequest struct {
 	RateMultiplier *float64       `json:"rate_multiplier"`
 	Status         string         `json:"status" binding:"omitempty,oneof=active disabled inactive"`
 	Schedulable    *bool          `json:"schedulable"`
-	AccountLevel   *string        `json:"account_level" binding:"omitempty,oneof=unknown free plus pro team"`
+	AccountLevel   *string        `json:"account_level"`
 	ShareMode      *string        `json:"share_mode" binding:"omitempty,oneof=private public"`
 	GroupIDs       *[]int64       `json:"group_ids"`
 	Credentials    map[string]any `json:"credentials"`
@@ -168,7 +179,7 @@ type bulkDeleteUserAccountsRequest struct {
 }
 
 type verifyUserAccountLevelRequest struct {
-	TargetLevel string `json:"target_level" binding:"required,oneof=free plus"`
+	TargetLevel string `json:"target_level" binding:"required"`
 }
 
 type verifyUserAccountLevelResponse struct {
@@ -193,6 +204,11 @@ type userAccountBatchTaskRequest struct {
 	AccountIDs []int64 `json:"account_ids"`
 }
 
+type userAccountLevelBatchTaskRequest struct {
+	AccountIDs  []int64 `json:"account_ids"`
+	TargetLevel string  `json:"target_level" binding:"required"`
+}
+
 const userOwnedDefaultConcurrency = 3
 const userOwnedDefaultPriority = 1
 const userAccountLevelVerifyLimitPerMinute = 5
@@ -208,16 +224,18 @@ type userExchangeCodeRequest struct {
 }
 
 type userOpenAIGenerateAuthURLRequest struct {
-	ProxyID     *int64 `json:"proxy_id"`
-	RedirectURI string `json:"redirect_uri"`
+	ProxyID      *int64 `json:"proxy_id"`
+	AccountLevel string `json:"account_level"`
+	RedirectURI  string `json:"redirect_uri"`
 }
 
 type userOpenAIExchangeCodeRequest struct {
-	SessionID   string `json:"session_id" binding:"required"`
-	Code        string `json:"code" binding:"required"`
-	State       string `json:"state" binding:"required"`
-	RedirectURI string `json:"redirect_uri"`
-	ProxyID     *int64 `json:"proxy_id"`
+	SessionID    string `json:"session_id" binding:"required"`
+	Code         string `json:"code" binding:"required"`
+	State        string `json:"state" binding:"required"`
+	RedirectURI  string `json:"redirect_uri"`
+	ProxyID      *int64 `json:"proxy_id"`
+	AccountLevel string `json:"account_level"`
 }
 
 type userGeminiGenerateAuthURLRequest struct {
@@ -245,6 +263,19 @@ type userAntigravityExchangeCodeRequest struct {
 	State     string `json:"state" binding:"required"`
 	Code      string `json:"code" binding:"required"`
 	ProxyID   *int64 `json:"proxy_id"`
+}
+
+type userGrokGenerateAuthURLRequest struct {
+	ProxyID     *int64 `json:"proxy_id"`
+	RedirectURI string `json:"redirect_uri"`
+}
+
+type userGrokExchangeCodeRequest struct {
+	SessionID   string `json:"session_id" binding:"required"`
+	State       string `json:"state"`
+	Code        string `json:"code" binding:"required"`
+	RedirectURI string `json:"redirect_uri"`
+	ProxyID     *int64 `json:"proxy_id"`
 }
 
 type userBatchTodayStatsRequest struct {
@@ -292,27 +323,76 @@ func rejectUserProxyID(c *gin.Context, proxyID *int64) bool {
 	return false
 }
 
+func (h *UserAccountHandler) requireUserOAuthProxy(c *gin.Context, ownerUserID int64, proxyID *int64) bool {
+	if proxyID == nil || *proxyID <= 0 {
+		response.BadRequest(c, "proxy_id is required for user OAuth login")
+		return false
+	}
+	if h.accountService == nil {
+		response.ErrorFrom(c, service.ErrServiceUnavailable)
+		return false
+	}
+	if err := h.accountService.EnsureOwnedProxyUsableForLogin(c.Request.Context(), ownerUserID, *proxyID); err != nil {
+		response.ErrorFrom(c, err)
+		return false
+	}
+	return true
+}
+
+func (h *UserAccountHandler) validateUserOpenAIOAuthProxy(c *gin.Context, ownerUserID int64, accountLevel string, proxyID *int64) bool {
+	levelConfigs, err := h.openAIAccountLevelConfigs(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return false
+	}
+	targetLevel := service.NormalizeAccountLevel(accountLevel)
+	if !service.IsUserSelectableOpenAIAccountLevelWithConfigs(targetLevel, levelConfigs) {
+		response.BadRequest(c, "OpenAI account level must be selected before login")
+		return false
+	}
+	if !service.RequiresUserOpenAIProxyLoginWithConfigs(targetLevel, levelConfigs) {
+		return rejectUserProxyID(c, proxyID)
+	}
+	return h.requireUserOAuthProxy(c, ownerUserID, proxyID)
+}
+
 func rejectUserManualCredentialAuth(c *gin.Context) {
 	response.BadRequest(c, "manual credential account creation is not allowed for user accounts; use official OAuth or import OAuth credentials")
 }
 
-func (h *UserAccountHandler) prepareUserOpenAIAccountRequest(c *gin.Context, ownerUserID int64, req *createUserAccountRequest) bool {
+func (h *UserAccountHandler) openAIAccountLevelConfigs(ctx context.Context) ([]service.OpenAIAccountLevelConfig, error) {
+	if h == nil || h.settingService == nil {
+		return service.DefaultOpenAIAccountLevelConfigs(), nil
+	}
+	return h.settingService.GetOpenAIAccountLevelConfigs(ctx)
+}
+
+func (h *UserAccountHandler) prepareUserAccountRequest(c *gin.Context, ownerUserID int64, req *createUserAccountRequest) bool {
 	if req == nil {
 		response.BadRequest(c, "Invalid account request")
 		return false
 	}
+	levelConfigs, err := h.openAIAccountLevelConfigs(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return false
+	}
 	if req.Platform != service.PlatformOpenAI {
+		if service.RequiresUserAccountOAuthProxyWithConfigs(req.Platform, service.AccountLevelUnknown, levelConfigs) {
+			req.AccountLevel = service.AccountLevelUnknown
+			return h.requireUserOAuthProxy(c, ownerUserID, req.ProxyID)
+		}
 		req.AccountLevel = service.AccountLevelUnknown
 		return rejectUserProxyID(c, req.ProxyID)
 	}
 
 	targetLevel := service.NormalizeAccountLevel(req.AccountLevel)
-	if !service.IsUserSelectableOpenAIAccountLevel(targetLevel) {
+	if !service.IsUserSelectableOpenAIAccountLevelWithConfigs(targetLevel, levelConfigs) {
 		response.BadRequest(c, "OpenAI account level must be selected before import")
 		return false
 	}
 	req.AccountLevel = targetLevel
-	if !service.RequiresUserOpenAIProxyLogin(targetLevel) {
+	if !service.RequiresUserOpenAIProxyLoginWithConfigs(targetLevel, levelConfigs) {
 		return rejectUserProxyID(c, req.ProxyID)
 	}
 	if h.openaiOAuthService == nil {
@@ -326,12 +406,12 @@ func (h *UserAccountHandler) prepareUserOpenAIAccountRequest(c *gin.Context, own
 	return true
 }
 
-func normalizeUserCredentialImportTargetLevel(req *importUserAccountCredentialsRequest) {
+func normalizeUserCredentialImportTargetLevel(req *importUserAccountCredentialsRequest, configs []service.OpenAIAccountLevelConfig) {
 	if req == nil {
 		return
 	}
 	targetLevel := service.NormalizeAccountLevel(req.AccountLevel)
-	if service.IsUserSelectableOpenAIAccountLevel(targetLevel) {
+	if service.IsUserSelectableOpenAIAccountLevelWithConfigs(targetLevel, configs) {
 		req.AccountLevel = targetLevel
 		return
 	}
@@ -371,12 +451,12 @@ func validateCredentialImportTargetPlatform(defaults importUserAccountCredential
 	return nil
 }
 
-func validateOpenAIImportTargetLevel(defaults importUserAccountCredentialsRequest) (string, error) {
+func validateOpenAIImportTargetLevel(defaults importUserAccountCredentialsRequest, configs []service.OpenAIAccountLevelConfig) (string, error) {
 	targetLevel := service.NormalizeAccountLevel(defaults.AccountLevel)
-	if !service.IsUserSelectableOpenAIAccountLevel(targetLevel) {
+	if !service.IsUserSelectableOpenAIAccountLevelWithConfigs(targetLevel, configs) {
 		return "", service.ErrOwnedOpenAIAccountLevelRequired
 	}
-	if service.RequiresUserOpenAIProxyLogin(targetLevel) {
+	if service.RequiresUserOpenAIProxyLoginWithConfigs(targetLevel, configs) {
 		return "", service.ErrOwnedOpenAIAccountProxyRequired
 	}
 	return targetLevel, nil
@@ -619,6 +699,8 @@ func (h *UserAccountHandler) registerAccountBatchExecutors() {
 	h.accountBatchTaskService.RegisterExecutor(service.AccountBatchTaskOperationUserRefreshCredentials, h.executeUserRefreshCredentialsTaskItem)
 	h.accountBatchTaskService.RegisterExecutor(service.AccountBatchTaskOperationUserRevalidateShare, h.executeUserRevalidateShareTaskItem)
 	h.accountBatchTaskService.RegisterExecutor(service.AccountBatchTaskOperationUserSetPublicShare, h.executeUserSetPublicShareTaskItem)
+	h.accountBatchTaskService.RegisterExecutor(service.AccountBatchTaskOperationUserVerifyOpenAIPlus, h.executeUserVerifyOpenAIPlusTaskItem)
+	h.accountBatchTaskService.RegisterExecutor(service.AccountBatchTaskOperationUserMarkOpenAIFree, h.executeUserMarkOpenAIFreeTaskItem)
 }
 
 func (h *UserAccountHandler) executeUserRefreshCredentialsTaskItem(ctx context.Context, task *service.AccountBatchTask, item service.AccountBatchTaskItem) (map[string]any, error) {
@@ -680,6 +762,42 @@ func (h *UserAccountHandler) executeUserSetPublicShareTaskItem(ctx context.Conte
 		"account_id":   updated.ID,
 		"share_mode":   updated.ShareMode,
 		"share_status": updated.ShareStatus,
+	}, nil
+}
+
+func (h *UserAccountHandler) executeUserVerifyOpenAIPlusTaskItem(ctx context.Context, task *service.AccountBatchTask, item service.AccountBatchTaskItem) (map[string]any, error) {
+	if task == nil || task.OwnerUserID == nil {
+		return nil, service.ErrAccountNotFound
+	}
+	result, err := h.verifyOwnedOpenAIAccountLevel(ctx, *task.OwnerUserID, item.AccountID, service.AccountLevelPlus)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"account_id":    result.Account.ID,
+		"verified":      result.Verified,
+		"target_level":  result.TargetLevel,
+		"applied_level": result.AppliedLevel,
+		"reason":        result.Reason,
+		"error_message": result.ErrorMessage,
+	}, nil
+}
+
+func (h *UserAccountHandler) executeUserMarkOpenAIFreeTaskItem(ctx context.Context, task *service.AccountBatchTask, item service.AccountBatchTaskItem) (map[string]any, error) {
+	if task == nil || task.OwnerUserID == nil {
+		return nil, service.ErrAccountNotFound
+	}
+	result, err := h.verifyOwnedOpenAIAccountLevel(ctx, *task.OwnerUserID, item.AccountID, service.AccountLevelFree)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"account_id":    result.Account.ID,
+		"verified":      result.Verified,
+		"target_level":  result.TargetLevel,
+		"applied_level": result.AppliedLevel,
+		"reason":        result.Reason,
+		"error_message": result.ErrorMessage,
 	}, nil
 }
 
@@ -911,17 +1029,24 @@ func (h *UserAccountHandler) GetUsage(c *gin.Context) {
 		return
 	}
 
-	if _, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, accountID); err != nil {
+	account, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, accountID)
+	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
 
-	source := c.DefaultQuery("source", "active")
+	source := strings.ToLower(strings.TrimSpace(c.DefaultQuery("source", "local")))
 	var usage *service.UsageInfo
-	if source == "passive" {
-		usage, err = h.accountUsageService.GetPassiveUsage(c.Request.Context(), accountID)
-	} else {
-		usage, err = h.accountUsageService.GetUsage(c.Request.Context(), accountID)
+	switch source {
+	case "local":
+		usage, err = h.accountUsageService.GetLocalUsageForAccount(c.Request.Context(), account)
+	case "passive":
+		usage, err = h.accountUsageService.GetPassiveUsageForAccount(c.Request.Context(), account)
+	case "active":
+		usage, err = h.accountUsageService.GetUsageForAccount(c.Request.Context(), account)
+	default:
+		response.BadRequest(c, "Invalid usage source")
+		return
 	}
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -1061,11 +1186,9 @@ func (h *UserAccountHandler) GetBatchTodayStats(c *gin.Context) {
 		return
 	}
 
-	for _, accountID := range accountIDs {
-		if _, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, accountID); err != nil {
-			response.ErrorFrom(c, err)
-			return
-		}
+	if err := h.accountService.EnsureOwnedByIDs(c.Request.Context(), subject.UserID, accountIDs); err != nil {
+		response.ErrorFrom(c, err)
+		return
 	}
 
 	stats, err := h.accountUsageService.GetTodayStatsBatch(c.Request.Context(), accountIDs)
@@ -1087,7 +1210,7 @@ func (h *UserAccountHandler) Create(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	if !h.prepareUserOpenAIAccountRequest(c, subject.UserID, &req) {
+	if !h.prepareUserAccountRequest(c, subject.UserID, &req) {
 		return
 	}
 	if req.Concurrency <= 0 {
@@ -1137,7 +1260,7 @@ func (h *UserAccountHandler) Import(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	if !h.prepareUserOpenAIAccountRequest(c, subject.UserID, &req) {
+	if !h.prepareUserAccountRequest(c, subject.UserID, &req) {
 		return
 	}
 	if req.Concurrency <= 0 {
@@ -1200,7 +1323,17 @@ func (h *UserAccountHandler) ImportCredentials(c *gin.Context) {
 		response.BadRequest(c, "No importable account credentials found")
 		return
 	}
-	normalizeUserCredentialImportTargetLevel(&req)
+	levelConfigs, err := h.openAIAccountLevelConfigs(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	normalizeUserCredentialImportTargetLevel(&req, levelConfigs)
+	if service.RequiresUserAccountOAuthProxyWithConfigs(req.Platform, service.AccountLevelUnknown, levelConfigs) {
+		if !h.requireUserOAuthProxy(c, subject.UserID, req.ProxyID) {
+			return
+		}
+	}
 	importLimit, err := h.userAccountImportLimit(c.Request.Context())
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -1257,7 +1390,11 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 
 	openAIAccountLevel := service.AccountLevelUnknown
 	if credentialImportSourceIsOpenAI(source) {
-		targetLevel, err := validateOpenAIImportTargetLevel(defaults)
+		levelConfigs, err := h.openAIAccountLevelConfigs(ctx)
+		if err != nil {
+			return nil, err
+		}
+		targetLevel, err := validateOpenAIImportTargetLevel(defaults, levelConfigs)
 		if err != nil {
 			return nil, err
 		}
@@ -1273,7 +1410,7 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 		Credentials:        source.Credentials,
 		Extra:              source.Extra,
 		ShareMode:          defaults.ShareMode,
-		ProxyID:            nil,
+		ProxyID:            defaults.ProxyID,
 		Concurrency:        defaults.Concurrency,
 		LoadFactor:         defaults.LoadFactor,
 		Priority:           defaults.Priority,
@@ -1310,7 +1447,7 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 	case service.AccountCredentialImportKindClaudeSessionKey:
 		tokenInfo, err := h.oauthService.CookieAuth(ctx, &service.CookieAuthInput{
 			SessionKey: source.Token,
-			ProxyID:    nil,
+			ProxyID:    defaults.ProxyID,
 			Scope:      "full",
 		})
 		if err != nil {
@@ -1361,9 +1498,6 @@ func (h *UserAccountHandler) Update(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	if !rejectUserProxyID(c, req.ProxyID) {
-		return
-	}
 	status := normalizeUserAccountStatus(req.Status)
 	account, err := h.accountService.UpdateOwned(c.Request.Context(), subject.UserID, accountID, service.UpdateAccountRequest{
 		Name:               req.Name,
@@ -1372,7 +1506,7 @@ func (h *UserAccountHandler) Update(c *gin.Context) {
 		Credentials:        req.Credentials,
 		Extra:              req.Extra,
 		ShareMode:          req.ShareMode,
-		ProxyID:            nil,
+		ProxyID:            req.ProxyID,
 		Concurrency:        req.Concurrency,
 		LoadFactor:         req.LoadFactor,
 		Priority:           req.Priority,
@@ -1501,6 +1635,63 @@ func (h *UserAccountHandler) CreateBatchRevalidatePublicShareTask(c *gin.Context
 	task, err := h.accountBatchTaskService.CreateTask(c.Request.Context(), service.CreateAccountBatchTaskInput{
 		Scope:       service.AccountBatchTaskScopeUser,
 		Operation:   service.AccountBatchTaskOperationUserRevalidateShare,
+		AccountIDs:  accountIDs,
+		CreatedBy:   subject.UserID,
+		OwnerUserID: &ownerUserID,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, task)
+}
+
+func (h *UserAccountHandler) CreateBatchVerifyLevelTask(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	if h.accountBatchTaskService == nil {
+		response.Error(c, 503, "Account batch task service is unavailable")
+		return
+	}
+	var req userAccountLevelBatchTaskRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	accountIDs := normalizeUserAccountIDList(req.AccountIDs)
+	if len(accountIDs) == 0 {
+		response.BadRequest(c, "account_ids is required")
+		return
+	}
+	targetLevel := service.NormalizeAccountLevel(req.TargetLevel)
+	operation := ""
+	switch targetLevel {
+	case service.AccountLevelPlus:
+		operation = service.AccountBatchTaskOperationUserVerifyOpenAIPlus
+	case service.AccountLevelFree:
+		operation = service.AccountBatchTaskOperationUserMarkOpenAIFree
+	default:
+		response.BadRequest(c, "target_level must be free or plus")
+		return
+	}
+	for _, accountID := range accountIDs {
+		account, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, accountID)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		if account.Platform != service.PlatformOpenAI || account.Type != service.AccountTypeOAuth {
+			response.ErrorFrom(c, infraerrors.BadRequest("OWNED_ACCOUNT_LEVEL_UNSUPPORTED", "account level verification only supports OpenAI OAuth accounts"))
+			return
+		}
+	}
+	ownerUserID := subject.UserID
+	task, err := h.accountBatchTaskService.CreateTask(c.Request.Context(), service.CreateAccountBatchTaskInput{
+		Scope:       service.AccountBatchTaskScopeUser,
+		Operation:   operation,
 		AccountIDs:  accountIDs,
 		CreatedBy:   subject.UserID,
 		OwnerUserID: &ownerUserID,
@@ -1779,6 +1970,107 @@ func (h *UserAccountHandler) RecoverState(c *gin.Context) {
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
 }
 
+func (h *UserAccountHandler) verifyOwnedOpenAIAccountLevel(ctx context.Context, ownerUserID, accountID int64, targetLevel string) (verifyUserAccountLevelResponse, error) {
+	levelConfigs, err := h.openAIAccountLevelConfigs(ctx)
+	if err != nil {
+		return verifyUserAccountLevelResponse{}, err
+	}
+	targetLevel = service.NormalizeAccountLevel(targetLevel)
+	if targetLevel != service.AccountLevelFree && targetLevel != service.AccountLevelPlus {
+		return verifyUserAccountLevelResponse{}, infraerrors.BadRequest("OWNED_ACCOUNT_LEVEL_TARGET_INVALID", "target_level must be free or plus")
+	}
+
+	account, err := h.accountService.GetOwnedByID(ctx, ownerUserID, accountID)
+	if err != nil {
+		return verifyUserAccountLevelResponse{}, err
+	}
+	if account.Platform != service.PlatformOpenAI || account.Type != service.AccountTypeOAuth {
+		return verifyUserAccountLevelResponse{}, infraerrors.BadRequest("OWNED_ACCOUNT_LEVEL_UNSUPPORTED", "account level verification only supports OpenAI OAuth accounts")
+	}
+
+	currentLevel := service.NormalizeAccountLevel(account.AccountLevel)
+	if targetLevel == service.AccountLevelPlus {
+		currentRank := service.OpenAISharedPoolLevelRankWithConfigs(currentLevel, levelConfigs)
+		plusRank := service.OpenAISharedPoolLevelRankWithConfigs(service.AccountLevelPlus, levelConfigs)
+		if currentRank > 0 && plusRank > 0 && currentRank >= plusRank {
+			return verifyUserAccountLevelResponse{
+				Account:      h.buildAccountResponseWithRuntime(ctx, account),
+				Verified:     true,
+				TargetLevel:  targetLevel,
+				AppliedLevel: currentLevel,
+				Reason:       "already_has_plus_access",
+			}, nil
+		}
+	}
+
+	if targetLevel == service.AccountLevelFree {
+		updated, err := h.accountService.SetOwnedOpenAIAccountLevel(ctx, ownerUserID, accountID, service.AccountLevelFree, "")
+		if err != nil {
+			return verifyUserAccountLevelResponse{}, err
+		}
+		return verifyUserAccountLevelResponse{
+			Account:      h.buildAccountResponseWithRuntime(ctx, updated),
+			Verified:     true,
+			TargetLevel:  targetLevel,
+			AppliedLevel: updated.AccountLevel,
+		}, nil
+	}
+
+	if !h.allowAccountLevelVerification(accountID, time.Now()) {
+		return verifyUserAccountLevelResponse{}, infraerrors.TooManyRequests("ACCOUNT_LEVEL_VERIFY_RATE_LIMITED", "too many account level verifications, please try again later")
+	}
+	if h.accountTestService == nil {
+		return verifyUserAccountLevelResponse{}, infraerrors.ServiceUnavailable("ACCOUNT_TEST_SERVICE_UNAVAILABLE", "account test service is unavailable")
+	}
+	testCtx, cancel := context.WithTimeout(ctx, userAccountLevelVerificationTimeout)
+	defer cancel()
+	result, testErr := h.accountTestService.RunTestBackground(testCtx, accountID, openaipkg.DefaultPlusVerificationModel)
+	if testErr == nil && result != nil && strings.TrimSpace(result.Status) == "success" {
+		updated, err := h.accountService.SetOwnedOpenAIAccountLevel(ctx, ownerUserID, accountID, service.AccountLevelPlus, "")
+		if err != nil {
+			return verifyUserAccountLevelResponse{}, err
+		}
+		return verifyUserAccountLevelResponse{
+			Account:      h.buildAccountResponseWithRuntime(ctx, updated),
+			Verified:     true,
+			TargetLevel:  targetLevel,
+			AppliedLevel: updated.AccountLevel,
+		}, nil
+	}
+
+	message := accountLevelVerificationMessage(testErr, result)
+	if message == "" {
+		message = "OpenAI plus verification failed"
+	}
+	if isOpenAIPlusAccessFailure(message) && !isOpenAIPlusTransientFailure(message) {
+		updated, err := h.accountService.SetOwnedOpenAIAccountLevel(ctx, ownerUserID, accountID, service.AccountLevelFree, message)
+		if err != nil {
+			return verifyUserAccountLevelResponse{}, err
+		}
+		return verifyUserAccountLevelResponse{
+			Account:      h.buildAccountResponseWithRuntime(ctx, updated),
+			Verified:     false,
+			TargetLevel:  targetLevel,
+			AppliedLevel: updated.AccountLevel,
+			Reason:       "plus_access_unavailable",
+			ErrorMessage: message,
+		}, nil
+	}
+
+	current, err := h.accountService.GetOwnedByID(ctx, ownerUserID, accountID)
+	if err != nil {
+		return verifyUserAccountLevelResponse{}, err
+	}
+	return verifyUserAccountLevelResponse{
+		Account:      h.buildAccountResponseWithRuntime(ctx, current),
+		Verified:     false,
+		TargetLevel:  targetLevel,
+		AppliedLevel: current.AccountLevel,
+		Reason:       "plus_verification_unavailable",
+		ErrorMessage: message,
+	}, nil
+}
+
 func (h *UserAccountHandler) VerifyLevel(c *gin.Context) {
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
@@ -1801,107 +2093,12 @@ func (h *UserAccountHandler) VerifyLevel(c *gin.Context) {
 		response.BadRequest(c, "target_level must be free or plus")
 		return
 	}
-
-	account, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, accountID)
+	result, err := h.verifyOwnedOpenAIAccountLevel(c.Request.Context(), subject.UserID, accountID, targetLevel)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
-	if account.Platform != service.PlatformOpenAI || account.Type != service.AccountTypeOAuth {
-		response.ErrorFrom(c, infraerrors.BadRequest("OWNED_ACCOUNT_LEVEL_UNSUPPORTED", "account level verification only supports OpenAI OAuth accounts"))
-		return
-	}
-
-	currentLevel := service.NormalizeAccountLevel(account.AccountLevel)
-	if targetLevel == service.AccountLevelPlus {
-		switch currentLevel {
-		case service.AccountLevelPlus, service.AccountLevelPro, service.AccountLevelTeam:
-			response.Success(c, verifyUserAccountLevelResponse{
-				Account:      h.buildAccountResponseWithRuntime(c.Request.Context(), account),
-				Verified:     true,
-				TargetLevel:  targetLevel,
-				AppliedLevel: currentLevel,
-				Reason:       "already_has_plus_access",
-			})
-			return
-		}
-	}
-
-	if targetLevel == service.AccountLevelFree {
-		updated, err := h.accountService.SetOwnedOpenAIAccountLevel(c.Request.Context(), subject.UserID, accountID, service.AccountLevelFree, "")
-		if err != nil {
-			response.ErrorFrom(c, err)
-			return
-		}
-		response.Success(c, verifyUserAccountLevelResponse{
-			Account:      h.buildAccountResponseWithRuntime(c.Request.Context(), updated),
-			Verified:     true,
-			TargetLevel:  targetLevel,
-			AppliedLevel: updated.AccountLevel,
-		})
-		return
-	}
-
-	if !h.allowAccountLevelVerification(accountID, time.Now()) {
-		response.ErrorFrom(c, infraerrors.TooManyRequests("ACCOUNT_LEVEL_VERIFY_RATE_LIMITED", "too many account level verifications, please try again later"))
-		return
-	}
-	if h.accountTestService == nil {
-		response.ErrorFrom(c, infraerrors.ServiceUnavailable("ACCOUNT_TEST_SERVICE_UNAVAILABLE", "account test service is unavailable"))
-		return
-	}
-	testCtx, cancel := context.WithTimeout(c.Request.Context(), userAccountLevelVerificationTimeout)
-	defer cancel()
-	result, testErr := h.accountTestService.RunTestBackground(testCtx, accountID, openaipkg.DefaultPlusVerificationModel)
-	if testErr == nil && result != nil && strings.TrimSpace(result.Status) == "success" {
-		updated, err := h.accountService.SetOwnedOpenAIAccountLevel(c.Request.Context(), subject.UserID, accountID, service.AccountLevelPlus, "")
-		if err != nil {
-			response.ErrorFrom(c, err)
-			return
-		}
-		response.Success(c, verifyUserAccountLevelResponse{
-			Account:      h.buildAccountResponseWithRuntime(c.Request.Context(), updated),
-			Verified:     true,
-			TargetLevel:  targetLevel,
-			AppliedLevel: updated.AccountLevel,
-		})
-		return
-	}
-
-	message := accountLevelVerificationMessage(testErr, result)
-	if message == "" {
-		message = "OpenAI plus verification failed"
-	}
-	if isOpenAIPlusAccessFailure(message) && !isOpenAIPlusTransientFailure(message) {
-		updated, err := h.accountService.SetOwnedOpenAIAccountLevel(c.Request.Context(), subject.UserID, accountID, service.AccountLevelFree, message)
-		if err != nil {
-			response.ErrorFrom(c, err)
-			return
-		}
-		response.Success(c, verifyUserAccountLevelResponse{
-			Account:      h.buildAccountResponseWithRuntime(c.Request.Context(), updated),
-			Verified:     false,
-			TargetLevel:  targetLevel,
-			AppliedLevel: updated.AccountLevel,
-			Reason:       "plus_access_unavailable",
-			ErrorMessage: message,
-		})
-		return
-	}
-
-	current, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, accountID)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, verifyUserAccountLevelResponse{
-		Account:      h.buildAccountResponseWithRuntime(c.Request.Context(), current),
-		Verified:     false,
-		TargetLevel:  targetLevel,
-		AppliedLevel: current.AccountLevel,
-		Reason:       "plus_verification_unavailable",
-		ErrorMessage: message,
-	})
+	response.Success(c, result)
 }
 
 func (h *UserAccountHandler) refreshOwnedAccount(ctx context.Context, ownerUserID int64, account *service.Account) (*service.Account, string, error) {
@@ -2111,17 +2308,19 @@ func (h *UserAccountHandler) SetPrivacy(c *gin.Context) {
 }
 
 func (h *UserAccountHandler) GenerateAnthropicOAuthURL(c *gin.Context) {
-	if !requireUserAccountAuth(c) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
 		return
 	}
 	var req userOAuthProxyRequest
 	if !bindOptionalJSON(c, &req) {
 		return
 	}
-	if !rejectUserProxyID(c, req.ProxyID) {
+	if !h.requireUserOAuthProxy(c, subject.UserID, req.ProxyID) {
 		return
 	}
-	result, err := h.oauthService.GenerateAuthURL(c.Request.Context(), nil)
+	result, err := h.oauthService.GenerateAuthURL(c.Request.Context(), req.ProxyID)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -2134,7 +2333,9 @@ func (h *UserAccountHandler) GenerateAnthropicSetupTokenURL(c *gin.Context) {
 }
 
 func (h *UserAccountHandler) ExchangeAnthropicOAuthCode(c *gin.Context) {
-	if !requireUserAccountAuth(c) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
 		return
 	}
 	var req userExchangeCodeRequest
@@ -2142,13 +2343,13 @@ func (h *UserAccountHandler) ExchangeAnthropicOAuthCode(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	if !rejectUserProxyID(c, req.ProxyID) {
+	if !h.requireUserOAuthProxy(c, subject.UserID, req.ProxyID) {
 		return
 	}
 	tokenInfo, err := h.oauthService.ExchangeCode(c.Request.Context(), &service.ExchangeCodeInput{
 		SessionID: req.SessionID,
 		Code:      req.Code,
-		ProxyID:   nil,
+		ProxyID:   req.ProxyID,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -2170,7 +2371,9 @@ func (h *UserAccountHandler) AnthropicSetupTokenCookieAuth(c *gin.Context) {
 }
 
 func (h *UserAccountHandler) GenerateOpenAIOAuthURL(c *gin.Context) {
-	if !requireUserAccountAuth(c) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
 		return
 	}
 	var req userOpenAIGenerateAuthURLRequest
@@ -2181,20 +2384,8 @@ func (h *UserAccountHandler) GenerateOpenAIOAuthURL(c *gin.Context) {
 		response.ErrorFrom(c, service.ErrServiceUnavailable)
 		return
 	}
-	if req.ProxyID != nil {
-		subject, ok := middleware2.GetAuthSubjectFromContext(c)
-		if !ok {
-			response.Unauthorized(c, "User not authenticated")
-			return
-		}
-		if h.accountService == nil {
-			response.ErrorFrom(c, service.ErrServiceUnavailable)
-			return
-		}
-		if err := h.accountService.EnsureOwnedProxyAvailableForNewAccount(c.Request.Context(), subject.UserID, *req.ProxyID); err != nil {
-			response.ErrorFrom(c, err)
-			return
-		}
+	if !h.validateUserOpenAIOAuthProxy(c, subject.UserID, req.AccountLevel, req.ProxyID) {
+		return
 	}
 	result, err := h.openaiOAuthService.GenerateAuthURL(
 		c.Request.Context(),
@@ -2210,7 +2401,9 @@ func (h *UserAccountHandler) GenerateOpenAIOAuthURL(c *gin.Context) {
 }
 
 func (h *UserAccountHandler) ExchangeOpenAIOAuthCode(c *gin.Context) {
-	if !requireUserAccountAuth(c) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
 		return
 	}
 	var req userOpenAIExchangeCodeRequest
@@ -2218,20 +2411,12 @@ func (h *UserAccountHandler) ExchangeOpenAIOAuthCode(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	if req.ProxyID != nil {
-		subject, ok := middleware2.GetAuthSubjectFromContext(c)
-		if !ok {
-			response.Unauthorized(c, "User not authenticated")
-			return
-		}
-		if h.openaiOAuthService == nil {
-			response.ErrorFrom(c, service.ErrServiceUnavailable)
-			return
-		}
-		if err := h.openaiOAuthService.EnsureProxyVisibleToUser(c.Request.Context(), subject.UserID, req.ProxyID); err != nil {
-			response.ErrorFrom(c, err)
-			return
-		}
+	if h.openaiOAuthService == nil {
+		response.ErrorFrom(c, service.ErrServiceUnavailable)
+		return
+	}
+	if !h.validateUserOpenAIOAuthProxy(c, subject.UserID, req.AccountLevel, req.ProxyID) {
+		return
 	}
 	tokenInfo, err := h.openaiOAuthService.ExchangeCode(c.Request.Context(), &service.OpenAIExchangeCodeInput{
 		SessionID:   req.SessionID,
@@ -2259,7 +2444,9 @@ func (h *UserAccountHandler) GetGeminiOAuthCapabilities(c *gin.Context) {
 }
 
 func (h *UserAccountHandler) GenerateGeminiOAuthURL(c *gin.Context) {
-	if !requireUserAccountAuth(c) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
 		return
 	}
 	var req userGeminiGenerateAuthURLRequest
@@ -2267,7 +2454,7 @@ func (h *UserAccountHandler) GenerateGeminiOAuthURL(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	if !rejectUserProxyID(c, req.ProxyID) {
+	if !h.requireUserOAuthProxy(c, subject.UserID, req.ProxyID) {
 		return
 	}
 
@@ -2282,7 +2469,7 @@ func (h *UserAccountHandler) GenerateGeminiOAuthURL(c *gin.Context) {
 
 	result, err := h.geminiOAuthService.GenerateAuthURL(
 		c.Request.Context(),
-		nil,
+		req.ProxyID,
 		deriveUserGeminiRedirectURI(c),
 		req.ProjectID,
 		oauthType,
@@ -2305,7 +2492,9 @@ func (h *UserAccountHandler) GenerateGeminiOAuthURL(c *gin.Context) {
 }
 
 func (h *UserAccountHandler) ExchangeGeminiOAuthCode(c *gin.Context) {
-	if !requireUserAccountAuth(c) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
 		return
 	}
 	var req userGeminiExchangeCodeRequest
@@ -2313,7 +2502,7 @@ func (h *UserAccountHandler) ExchangeGeminiOAuthCode(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	if !rejectUserProxyID(c, req.ProxyID) {
+	if !h.requireUserOAuthProxy(c, subject.UserID, req.ProxyID) {
 		return
 	}
 
@@ -2330,7 +2519,7 @@ func (h *UserAccountHandler) ExchangeGeminiOAuthCode(c *gin.Context) {
 		SessionID: req.SessionID,
 		State:     req.State,
 		Code:      req.Code,
-		ProxyID:   nil,
+		ProxyID:   req.ProxyID,
 		OAuthType: oauthType,
 		TierID:    req.TierID,
 	})
@@ -2342,17 +2531,19 @@ func (h *UserAccountHandler) ExchangeGeminiOAuthCode(c *gin.Context) {
 }
 
 func (h *UserAccountHandler) GenerateAntigravityOAuthURL(c *gin.Context) {
-	if !requireUserAccountAuth(c) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
 		return
 	}
 	var req userAntigravityGenerateAuthURLRequest
 	if !bindOptionalJSON(c, &req) {
 		return
 	}
-	if !rejectUserProxyID(c, req.ProxyID) {
+	if !h.requireUserOAuthProxy(c, subject.UserID, req.ProxyID) {
 		return
 	}
-	result, err := h.antigravityOAuthService.GenerateAuthURL(c.Request.Context(), nil)
+	result, err := h.antigravityOAuthService.GenerateAuthURL(c.Request.Context(), req.ProxyID)
 	if err != nil {
 		response.InternalError(c, "Failed to generate auth URL: "+err.Error())
 		return
@@ -2361,7 +2552,9 @@ func (h *UserAccountHandler) GenerateAntigravityOAuthURL(c *gin.Context) {
 }
 
 func (h *UserAccountHandler) ExchangeAntigravityOAuthCode(c *gin.Context) {
-	if !requireUserAccountAuth(c) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
 		return
 	}
 	var req userAntigravityExchangeCodeRequest
@@ -2369,14 +2562,14 @@ func (h *UserAccountHandler) ExchangeAntigravityOAuthCode(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	if !rejectUserProxyID(c, req.ProxyID) {
+	if !h.requireUserOAuthProxy(c, subject.UserID, req.ProxyID) {
 		return
 	}
 	tokenInfo, err := h.antigravityOAuthService.ExchangeCode(c.Request.Context(), &service.AntigravityExchangeCodeInput{
 		SessionID: req.SessionID,
 		State:     req.State,
 		Code:      req.Code,
-		ProxyID:   nil,
+		ProxyID:   req.ProxyID,
 	})
 	if err != nil {
 		response.BadRequest(c, "Failed to exchange code: "+err.Error())
@@ -2386,6 +2579,67 @@ func (h *UserAccountHandler) ExchangeAntigravityOAuthCode(c *gin.Context) {
 }
 
 func (h *UserAccountHandler) RefreshAntigravityToken(c *gin.Context) {
+	rejectUserManualCredentialAuth(c)
+}
+
+func (h *UserAccountHandler) GenerateGrokOAuthURL(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	var req userGrokGenerateAuthURLRequest
+	if !bindOptionalJSON(c, &req) {
+		return
+	}
+	if h.grokOAuthService == nil {
+		response.ErrorFrom(c, service.ErrServiceUnavailable)
+		return
+	}
+	if !h.requireUserOAuthProxy(c, subject.UserID, req.ProxyID) {
+		return
+	}
+	result, err := h.grokOAuthService.GenerateAuthURL(c.Request.Context(), req.ProxyID, req.RedirectURI)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
+func (h *UserAccountHandler) ExchangeGrokOAuthCode(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	var req userGrokExchangeCodeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if h.grokOAuthService == nil {
+		response.ErrorFrom(c, service.ErrServiceUnavailable)
+		return
+	}
+	if !h.requireUserOAuthProxy(c, subject.UserID, req.ProxyID) {
+		return
+	}
+	tokenInfo, err := h.grokOAuthService.ExchangeCode(c.Request.Context(), &service.GrokExchangeCodeInput{
+		SessionID:   req.SessionID,
+		State:       req.State,
+		Code:        req.Code,
+		RedirectURI: req.RedirectURI,
+		ProxyID:     req.ProxyID,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, tokenInfo)
+}
+
+func (h *UserAccountHandler) RefreshGrokToken(c *gin.Context) {
 	rejectUserManualCredentialAuth(c)
 }
 

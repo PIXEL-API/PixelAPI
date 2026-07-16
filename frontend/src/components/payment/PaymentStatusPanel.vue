@@ -84,7 +84,7 @@
             </div>
           </div>
           <p v-if="scanHint" class="text-center text-sm text-gray-500 dark:text-gray-400">{{ scanHint }}</p>
-          <button v-if="payUrl" class="btn btn-secondary text-sm" @click="reopenPopup">
+          <button v-if="payUrl && !isAlipayJSAPIMode" class="btn btn-secondary text-sm" @click="reopenPopup">
             {{ t('payment.qr.openPayWindow') }}
           </button>
         </div>
@@ -142,6 +142,7 @@ const props = defineProps<{
   paymentType: string
   payUrl?: string
   orderType?: string
+  paymentMode?: string
 }>()
 
 type PaymentOutcome = 'success' | 'cancelled' | 'expired'
@@ -166,6 +167,7 @@ let countdownTimer: ReturnType<typeof setInterval> | null = null
 
 const isAlipay = computed(() => props.paymentType.includes('alipay'))
 const isWxpay = computed(() => props.paymentType.includes('wxpay'))
+const isAlipayJSAPIMode = computed(() => isAlipay.value && (props.paymentMode || '').trim().toLowerCase() === 'jsapi')
 
 const qrBorderClass = computed(() => {
   if (isAlipay.value) return 'border-[#00AEEF] bg-blue-50 dark:border-[#00AEEF]/70 dark:bg-blue-950/20'
@@ -180,12 +182,14 @@ const qrLogoBgClass = computed(() => {
 })
 
 const scanTitle = computed(() => {
+  if (isAlipayJSAPIMode.value) return t('payment.qr.scanAlipayJSAPI')
   if (isAlipay.value) return t('payment.qr.scanAlipay')
   if (isWxpay.value) return t('payment.qr.scanWxpay')
   return t('payment.qr.scanToPay')
 })
 
 const scanHint = computed(() => {
+  if (isAlipayJSAPIMode.value) return t('payment.qr.scanAlipayJSAPIHint')
   if (isAlipay.value) return t('payment.qr.scanAlipayHint')
   if (isWxpay.value) return t('payment.qr.scanWxpayHint')
   return ''

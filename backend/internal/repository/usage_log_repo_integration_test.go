@@ -826,7 +826,7 @@ func (s *UsageLogRepoSuite) TestDashboardStatsWithRange_Fallback() {
 	_, err = s.repo.Create(s.ctx, logToday)
 	s.Require().NoError(err)
 
-	stats, err := s.repo.GetDashboardStatsWithRange(s.ctx, rangeStart, rangeEnd)
+	stats, err := s.repo.GetDashboardStatsWithRange(s.ctx, rangeStart, rangeEnd, service.DashboardStatsRangeOptions{})
 	s.Require().NoError(err)
 	s.Require().Equal(int64(2), stats.TotalRequests)
 	s.Require().Equal(int64(15), stats.TotalInputTokens)

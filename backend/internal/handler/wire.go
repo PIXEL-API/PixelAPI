@@ -23,6 +23,7 @@ func ProvideAdminHandlers(
 	openaiOAuthHandler *admin.OpenAIOAuthHandler,
 	geminiOAuthHandler *admin.GeminiOAuthHandler,
 	antigravityOAuthHandler *admin.AntigravityOAuthHandler,
+	grokOAuthHandler *admin.GrokOAuthHandler,
 	proxyHandler *admin.ProxyHandler,
 	redeemHandler *admin.RedeemHandler,
 	promoHandler *admin.PromoHandler,
@@ -63,6 +64,7 @@ func ProvideAdminHandlers(
 		OpenAIOAuth:            openaiOAuthHandler,
 		GeminiOAuth:            geminiOAuthHandler,
 		AntigravityOAuth:       antigravityOAuthHandler,
+		GrokOAuth:              grokOAuthHandler,
 		Proxy:                  proxyHandler,
 		Redeem:                 redeemHandler,
 		Promo:                  promoHandler,
@@ -100,6 +102,47 @@ func ProvideSettingHandler(settingService *service.SettingService, buildInfo Bui
 	return NewSettingHandler(settingService, buildInfo.Version)
 }
 
+func ProvideAdminAccountHandler(
+	adminService service.AdminService,
+	accountService *service.AccountService,
+	oauthService *service.OAuthService,
+	openaiOAuthService *service.OpenAIOAuthService,
+	geminiOAuthService *service.GeminiOAuthService,
+	antigravityOAuthService *service.AntigravityOAuthService,
+	grokOAuthService *service.GrokOAuthService,
+	rateLimitService *service.RateLimitService,
+	accountUsageService *service.AccountUsageService,
+	accountTestService *service.AccountTestService,
+	concurrencyService *service.ConcurrencyService,
+	crsSyncService *service.CRSSyncService,
+	sessionLimitCache service.SessionLimitCache,
+	rpmCache service.RPMCache,
+	tokenCacheInvalidator service.TokenCacheInvalidator,
+	accountBatchTaskService *service.AccountBatchTaskService,
+	grokQuotaService *service.GrokQuotaService,
+) *admin.AccountHandler {
+	h := admin.NewAccountHandler(
+		adminService,
+		accountService,
+		oauthService,
+		openaiOAuthService,
+		geminiOAuthService,
+		antigravityOAuthService,
+		rateLimitService,
+		accountUsageService,
+		accountTestService,
+		concurrencyService,
+		crsSyncService,
+		sessionLimitCache,
+		rpmCache,
+		tokenCacheInvalidator,
+		accountBatchTaskService,
+	)
+	h.SetGrokOAuthService(grokOAuthService)
+	h.SetGrokImportProber(grokQuotaService)
+	return h
+}
+
 func ProvideUserAccountHandler(
 	accountService *service.AccountService,
 	accountUsageService *service.AccountUsageService,
@@ -109,8 +152,10 @@ func ProvideUserAccountHandler(
 	oauthService *service.OAuthService,
 	openaiOAuthService *service.OpenAIOAuthService,
 	openaiQuotaService *service.OpenAIQuotaService,
+	userContentModerationService *service.UserContentModerationService,
 	geminiOAuthService *service.GeminiOAuthService,
 	antigravityOAuthService *service.AntigravityOAuthService,
+	grokOAuthService *service.GrokOAuthService,
 	concurrencyService *service.ConcurrencyService,
 	sessionLimitCache service.SessionLimitCache,
 	rpmCache service.RPMCache,
@@ -129,6 +174,8 @@ func ProvideUserAccountHandler(
 		accountBatchTaskService,
 	)
 	h.SetOpenAIQuotaService(openaiQuotaService)
+	h.SetUserContentModerationService(userContentModerationService)
+	h.SetGrokOAuthService(grokOAuthService)
 	h.SetRuntimeCapacityProviders(concurrencyService, sessionLimitCache, rpmCache)
 	return h
 }
@@ -136,6 +183,7 @@ func ProvideUserAccountHandler(
 // ProvideHandlers creates the Handlers struct
 func ProvideHandlers(
 	authHandler *AuthHandler,
+	oidcProviderHandler *OIDCProviderHandler,
 	userHandler *UserHandler,
 	apiKeyHandler *APIKeyHandler,
 	accountShareModeHandler *AccountShareModeHandler,
@@ -164,6 +212,7 @@ func ProvideHandlers(
 ) *Handlers {
 	return &Handlers{
 		Auth:             authHandler,
+		OIDCProvider:     oidcProviderHandler,
 		User:             userHandler,
 		APIKey:           apiKeyHandler,
 		AccountShareMode: accountShareModeHandler,
@@ -194,6 +243,7 @@ func ProvideHandlers(
 var ProviderSet = wire.NewSet(
 	// Top-level handlers
 	NewAuthHandler,
+	NewOIDCProviderHandler,
 	NewUserHandler,
 	NewAPIKeyHandler,
 	NewAccountShareModeHandler,
@@ -221,7 +271,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewDashboardHandler,
 	admin.NewUserHandler,
 	admin.NewGroupHandler,
-	admin.NewAccountHandler,
+	ProvideAdminAccountHandler,
 	admin.NewAccountSharePolicyHandler,
 	admin.NewAccountShareModePolicyHandler,
 	admin.NewAnnouncementHandler,
@@ -232,6 +282,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewOpenAIOAuthHandler,
 	admin.NewGeminiOAuthHandler,
 	admin.NewAntigravityOAuthHandler,
+	admin.NewGrokOAuthHandler,
 	admin.NewProxyHandler,
 	admin.NewRedeemHandler,
 	admin.NewPromoHandler,

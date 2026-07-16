@@ -2,6 +2,7 @@
 package schema
 
 import (
+	"regexp"
 	"time"
 
 	"entgo.io/ent"
@@ -100,6 +101,10 @@ func (UsageLog) Fields() []ent.Field {
 		field.Float("rate_multiplier").
 			Default(1).
 			SchemaType(map[string]string{dialect.Postgres: "decimal(10,4)"}),
+		field.String("rate_multiplier_source").
+			MaxLen(50).
+			Default("").
+			Comment("费率倍率来源快照，如 group_default/new_user_group/user_group/account_share"),
 
 		// account_rate_multiplier: 账号计费倍率快照（NULL 表示按 1.0 处理）
 		field.Float("account_rate_multiplier").
@@ -134,6 +139,22 @@ func (UsageLog) Fields() []ent.Field {
 			MaxLen(10).
 			Optional().
 			Nillable(),
+		field.Int("video_count").
+			NonNegative().
+			Default(0).
+			Comment("视频生成数量；大于 0 表示本行是视频生成用量"),
+		field.String("video_resolution").
+			Match(regexp.MustCompile(`^(480p|720p|1080p)$`)).
+			MaxLen(10).
+			Optional().
+			Nillable().
+			Comment("计费用视频分辨率：480p/720p/1080p"),
+		field.Int("video_duration_seconds").
+			Min(1).
+			Max(15).
+			Optional().
+			Nillable().
+			Comment("提交时请求的视频时长（秒），用于按秒计费"),
 		// Cache TTL Override 标记（管理员强制替换了缓存 TTL 计费）
 		field.Bool("cache_ttl_overridden").
 			Default(false),

@@ -697,6 +697,8 @@ func accountLevelLabel(level string) string {
 		return "Pro"
 	case AccountLevelTeam:
 		return "Team"
+	case AccountLevelK12:
+		return "K12"
 	default:
 		return "Unknown"
 	}

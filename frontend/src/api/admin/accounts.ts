@@ -149,6 +149,50 @@ export async function create(accountData: CreateAccountRequest): Promise<Account
   return data
 }
 
+const duplicateOperationKeys = new Map<number, string>()
+
+function duplicateOperationStorageKey(id: number): string {
+  return `sub2api:admin:account-duplicate:${id}`
+}
+
+function getStoredDuplicateOperationKey(id: number): string | null {
+  if (!globalThis.sessionStorage) {
+    throw new Error('sessionStorage is required to safely duplicate accounts')
+  }
+  return globalThis.sessionStorage.getItem(duplicateOperationStorageKey(id))
+}
+
+function storeDuplicateOperationKey(id: number, key: string | null): void {
+  if (!globalThis.sessionStorage) {
+    throw new Error('sessionStorage is required to safely duplicate accounts')
+  }
+  if (key) globalThis.sessionStorage.setItem(duplicateOperationStorageKey(id), key)
+  else globalThis.sessionStorage.removeItem(duplicateOperationStorageKey(id))
+}
+
+/**
+ * Duplicate a static-credential account without exposing its credentials to the browser.
+ */
+export async function duplicate(id: number): Promise<Account> {
+  let idempotencyKey = duplicateOperationKeys.get(id) ?? getStoredDuplicateOperationKey(id)
+  if (!idempotencyKey) {
+    const requestID = globalThis.crypto?.randomUUID?.()
+    if (!requestID) {
+      throw new Error('crypto.randomUUID is required to safely duplicate accounts')
+    }
+    idempotencyKey = `account-duplicate-${id}-${requestID}`
+  }
+  duplicateOperationKeys.set(id, idempotencyKey)
+  storeDuplicateOperationKey(id, idempotencyKey)
+
+  const { data } = await apiClient.post<Account>(`/admin/accounts/${id}/duplicate`, undefined, {
+    headers: { 'Idempotency-Key': idempotencyKey }
+  })
+  duplicateOperationKeys.delete(id)
+  storeDuplicateOperationKey(id, null)
+  return data
+}
+
 /**
  * Update account
  * @param id - Account ID
@@ -246,9 +290,14 @@ export async function clearError(id: number): Promise<Account> {
  * @param id - Account ID
  * @returns Account usage info
  */
-export async function getUsage(id: number, source?: 'passive' | 'active'): Promise<AccountUsageInfo> {
+export async function getUsage(
+  id: number,
+  source: 'local' | 'passive' | 'active',
+  options: { signal?: AbortSignal } = {}
+): Promise<AccountUsageInfo> {
   const { data } = await apiClient.get<AccountUsageInfo>(`/admin/accounts/${id}/usage`, {
-    params: source ? { source } : undefined
+    params: source ? { source } : undefined,
+    signal: options.signal
   })
   return data
 }
@@ -569,7 +618,7 @@ export async function importData(payload: {
   return data
 }
 
-export interface AdminImportCredentialContentsRequest extends ImportCredentialContentsRequest {
+export interface AdminImportCredentialContentsRequest extends Omit<ImportCredentialContentsRequest, 'proxy_id'> {
   owner_user_id?: number | null
   share_status?: 'pending' | 'approved' | 'suspended'
   share_policy_id?: number | null
@@ -726,6 +775,7 @@ export const accountsAPI = {
   getQuotaDashboard,
   getById,
   create,
+  duplicate,
   update,
   checkMixedChannelRisk,
   delete: deleteAccount,

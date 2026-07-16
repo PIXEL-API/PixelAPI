@@ -1074,6 +1074,22 @@
                   </div>
                 </div>
 
+                <!-- User Scope -->
+                <div class="mt-3">
+                  <label
+                    class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
+                  >
+                    {{ t("admin.settings.openaiFastPolicy.userIds") }}
+                  </label>
+                  <p class="mb-2 text-xs text-gray-400 dark:text-gray-500">
+                    {{ t("admin.settings.openaiFastPolicy.userIdsHint") }}
+                  </p>
+                  <OpenAIFastPolicyUserSelector
+                    :model-value="rule.user_ids || []"
+                    @update:model-value="rule.user_ids = $event"
+                  />
+                </div>
+
                 <!-- Error Message (only when action=block) -->
                 <div v-if="rule.action === 'block'" class="mt-3">
                   <label
@@ -3015,6 +3031,143 @@
             <div
               class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
             >
+              <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                    {{ t("admin.settings.openaiAccountLevels.title") }}
+                  </h2>
+                  <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.openaiAccountLevels.description") }}
+                  </p>
+                </div>
+                <div class="flex shrink-0 gap-2">
+                  <button
+                    type="button"
+                    class="btn btn-secondary btn-sm"
+                    @click="openAIAccountLevelHandlers.reset"
+                  >
+                    {{ t("admin.settings.openaiAccountLevels.resetDefaults") }}
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn-primary btn-sm"
+                    @click="openAIAccountLevelHandlers.add"
+                  >
+                    {{ t("admin.settings.openaiAccountLevels.addLevel") }}
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="space-y-4 p-6">
+              <div
+                v-if="form.openai_account_levels.length === 0"
+                class="rounded border border-dashed border-gray-300 px-4 py-3 text-sm text-gray-500 dark:border-dark-600 dark:text-gray-400"
+              >
+                {{ t("admin.settings.openaiAccountLevels.empty") }}
+              </div>
+              <div v-else class="space-y-3">
+                <div
+                  v-for="(level, index) in form.openai_account_levels"
+                  :key="`${level.key || 'new'}-${index}`"
+                  class="rounded-lg border border-gray-200 p-4 dark:border-dark-700"
+                >
+                  <div class="grid grid-cols-1 gap-3 lg:grid-cols-[1.1fr_1.1fr_2fr_120px_auto]">
+                    <div>
+                      <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                        {{ t("admin.settings.openaiAccountLevels.key") }}
+                      </label>
+                      <input
+                        v-model.trim="level.key"
+                        type="text"
+                        class="input h-[42px] font-mono text-sm"
+                        placeholder="plus"
+                      />
+                    </div>
+                    <div>
+                      <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                        {{ t("admin.settings.openaiAccountLevels.label") }}
+                      </label>
+                      <input
+                        v-model.trim="level.label"
+                        type="text"
+                        class="input h-[42px]"
+                        placeholder="Plus"
+                      />
+                    </div>
+                    <div>
+                      <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                        {{ t("admin.settings.openaiAccountLevels.aliases") }}
+                      </label>
+                      <input
+                        :value="openAIAccountLevelHandlers.formatAliases(level)"
+                        type="text"
+                        class="input h-[42px] font-mono text-sm"
+                        placeholder="plus, plus*, chatgptplus"
+                        @input="
+                          openAIAccountLevelHandlers.updateAliases(
+                            index,
+                            ($event.target as HTMLInputElement).value,
+                          )
+                        "
+                      />
+                    </div>
+                    <div>
+                      <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                        {{ t("admin.settings.openaiAccountLevels.sortOrder") }}
+                      </label>
+                      <input
+                        v-model.number="level.sort_order"
+                        type="number"
+                        step="1"
+                        class="input h-[42px]"
+                      />
+                    </div>
+                    <div class="flex items-end">
+                      <button
+                        type="button"
+                        class="btn btn-secondary h-[42px] w-full text-red-600 hover:text-red-700 dark:text-red-400"
+                        @click="openAIAccountLevelHandlers.remove(index)"
+                      >
+                        {{ t("common.delete") }}
+                      </button>
+                    </div>
+                  </div>
+                  <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <label class="flex items-center justify-between rounded border border-gray-200 px-3 py-2 dark:border-dark-700">
+                      <span>
+                        <span class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                          {{ t("admin.settings.openaiAccountLevels.enabled") }}
+                        </span>
+                        <span class="text-xs text-gray-500 dark:text-gray-400">
+                          {{ t("admin.settings.openaiAccountLevels.enabledHint") }}
+                        </span>
+                      </span>
+                      <Toggle v-model="level.enabled" />
+                    </label>
+                    <label class="flex items-center justify-between rounded border border-gray-200 px-3 py-2 dark:border-dark-700">
+                      <span>
+                        <span class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                          {{ t("admin.settings.openaiAccountLevels.requiresProxyLogin") }}
+                        </span>
+                        <span class="text-xs text-gray-500 dark:text-gray-400">
+                          {{ t("admin.settings.openaiAccountLevels.requiresProxyLoginHint") }}
+                        </span>
+                      </span>
+                      <Toggle v-model="level.requires_proxy_login" />
+                    </label>
+                  </div>
+                </div>
+              </div>
+              <p class="text-xs text-gray-500 dark:text-gray-400">
+                {{ t("admin.settings.openaiAccountLevels.saveHint") }}
+              </p>
+            </div>
+          </div>
+
+          <div class="card">
+            <div
+              class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
+            >
               <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
                 {{ t("admin.settings.authSourceDefaults.title") }}
               </h2>
@@ -3450,6 +3603,75 @@
                   }}
                 </p>
               </div>
+
+              <div class="flex items-center justify-between">
+                <div>
+                  <label
+                    class="text-sm font-medium text-gray-700 dark:text-gray-300"
+                  >
+                    {{ t("admin.settings.schedulerCandidateSampling.title") }}
+                  </label>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{
+                      t("admin.settings.schedulerCandidateSampling.description")
+                    }}
+                  </p>
+                </div>
+                <Toggle
+                  v-model="form.scheduler_candidate_sampling_enabled"
+                />
+              </div>
+
+              <div
+                v-if="form.scheduler_candidate_sampling_enabled"
+                class="grid grid-cols-1 gap-4 sm:grid-cols-2"
+              >
+                <div>
+                  <label
+                    class="block text-sm font-medium text-gray-700 dark:text-gray-300"
+                  >
+                    {{ t("admin.settings.schedulerCandidateSampling.limit") }}
+                  </label>
+                  <input
+                    v-model.number="form.scheduler_candidate_sampling_limit"
+                    type="number"
+                    min="1"
+                    max="1024"
+                    step="1"
+                    class="input mt-1"
+                    placeholder="256"
+                  />
+                  <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{
+                      t("admin.settings.schedulerCandidateSampling.limitHint")
+                    }}
+                  </p>
+                </div>
+                <div>
+                  <label
+                    class="block text-sm font-medium text-gray-700 dark:text-gray-300"
+                  >
+                    {{
+                      t("admin.settings.schedulerCandidateSampling.threshold")
+                    }}
+                  </label>
+                  <input
+                    v-model.number="form.scheduler_candidate_sampling_threshold"
+                    type="number"
+                    min="1"
+                    step="1"
+                    class="input mt-1"
+                    placeholder="5000"
+                  />
+                  <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{
+                      t(
+                        "admin.settings.schedulerCandidateSampling.thresholdHint",
+                      )
+                    }}
+                  </p>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -3523,6 +3745,25 @@
                   </p>
                 </div>
                 <Toggle v-model="form.openai_clean_relay_enabled" />
+              </div>
+
+              <!-- Detached Usage Drain -->
+              <div class="flex items-center justify-between">
+                <div>
+                  <label
+                    class="text-sm font-medium text-gray-700 dark:text-gray-300"
+                  >
+                    {{ t("admin.settings.gatewayForwarding.detachedUsageDrain") }}
+                  </label>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{
+                      t(
+                        "admin.settings.gatewayForwarding.detachedUsageDrainHint",
+                      )
+                    }}
+                  </p>
+                </div>
+                <Toggle v-model="form.detached_usage_drain_enabled" />
               </div>
 
               <!-- CCH Signing -->
@@ -5082,26 +5323,110 @@
                 </div>
                 <Toggle v-model="form.invoice_management_enabled" />
               </div>
-              <div class="flex items-center justify-between gap-4 px-6 py-5">
-                <div>
-                  <label
-                    class="text-sm font-medium text-gray-700 dark:text-gray-300"
-                  >
+              <div class="px-6 py-5">
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <label
+                      class="text-sm font-medium text-gray-700 dark:text-gray-300"
+                    >
+                      {{
+                        t(
+                          "admin.settings.features.businessModules.withdrawalManagement",
+                        )
+                      }}
+                    </label>
+                    <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                      {{
+                        t(
+                          "admin.settings.features.businessModules.withdrawalManagementHint",
+                        )
+                      }}
+                    </p>
+                  </div>
+                  <Toggle v-model="form.withdrawal_management_enabled" />
+                </div>
+
+                <div
+                  class="mt-4 rounded-lg border border-gray-100 bg-gray-50/70 p-4 dark:border-dark-700 dark:bg-dark-900/30"
+                  :class="{ 'opacity-60': !form.withdrawal_management_enabled }"
+                >
+                  <div>
+                    <p class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{
+                        t(
+                          "admin.settings.features.businessModules.withdrawalRateLimit",
+                        )
+                      }}
+                    </p>
+                    <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                      {{
+                        t(
+                          "admin.settings.features.businessModules.withdrawalRateLimitHint",
+                        )
+                      }}
+                    </p>
+                  </div>
+                  <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <label class="input-label">
+                        {{
+                          t(
+                            "admin.settings.features.businessModules.withdrawalRateLimitWindowDays",
+                          )
+                        }}
+                      </label>
+                      <input
+                        v-model.number="form.withdrawal_rate_limit_window_days"
+                        type="number"
+                        min="1"
+                        max="365"
+                        step="1"
+                        class="input min-h-11"
+                        :disabled="!form.withdrawal_management_enabled"
+                      />
+                    </div>
+                    <div>
+                      <label class="input-label">
+                        {{
+                          t(
+                            "admin.settings.features.businessModules.withdrawalRateLimitMax",
+                          )
+                        }}
+                      </label>
+                      <input
+                        v-model.number="form.withdrawal_rate_limit_max"
+                        type="number"
+                        min="0"
+                        max="1000"
+                        step="1"
+                        class="input min-h-11"
+                        :disabled="!form.withdrawal_management_enabled"
+                      />
+                      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        {{
+                          t(
+                            "admin.settings.features.businessModules.withdrawalRateLimitMaxHint",
+                          )
+                        }}
+                      </p>
+                    </div>
+                  </div>
+                  <p class="mt-3 text-xs font-medium text-primary-600 dark:text-primary-300">
                     {{
-                      t(
-                        "admin.settings.features.businessModules.withdrawalManagement",
-                      )
-                    }}
-                  </label>
-                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-                    {{
-                      t(
-                        "admin.settings.features.businessModules.withdrawalManagementHint",
-                      )
+                      form.withdrawal_rate_limit_max > 0
+                        ? t(
+                            "admin.settings.features.businessModules.withdrawalRateLimitSummary",
+                            {
+                              days: form.withdrawal_rate_limit_window_days,
+                              max: form.withdrawal_rate_limit_max,
+                            },
+                          )
+                        : t(
+                            "admin.settings.features.businessModules.withdrawalRateLimitUnlimited",
+                          )
                     }}
                   </p>
                 </div>
-                <Toggle v-model="form.withdrawal_management_enabled" />
               </div>
             </div>
           </div>
@@ -7029,6 +7354,7 @@ import type {
   AdminGroup,
   LoginAgreementDocument,
   NotifyEmailEntry,
+  OpenAIAccountLevelConfig,
   Proxy,
 } from "@/types";
 import type { ProviderInstance } from "@/types/payment";
@@ -7044,6 +7370,7 @@ import Toggle from "@/components/common/Toggle.vue";
 import ProxySelector from "@/components/common/ProxySelector.vue";
 import ImageUpload from "@/components/common/ImageUpload.vue";
 import BackupSettings from "@/views/admin/BackupView.vue";
+import OpenAIFastPolicyUserSelector from "@/views/admin/settings/OpenAIFastPolicyUserSelector.vue";
 import { useClipboard } from "@/composables/useClipboard";
 import {
   affiliatesAPI,
@@ -7062,6 +7389,10 @@ import {
   normalizeRegistrationEmailSuffixDomains,
   parseRegistrationEmailSuffixWhitelistInput,
 } from "@/utils/registrationEmailPolicy";
+import {
+  DEFAULT_OPENAI_ACCOUNT_LEVELS,
+  normalizeOpenAIAccountLevelConfigs,
+} from "@/utils/openaiAccountLevels";
 
 const { t, locale } = useI18n();
 const appStore = useAppStore();
@@ -7313,13 +7644,18 @@ type SettingsForm = Omit<
   payment_receipt_code_oss_secret_access_key: string;
   account_share_comment_review_api_key: string;
   force_email_on_third_party_signup: boolean;
+  openai_account_levels: OpenAIAccountLevelConfig[];
   openai_advanced_scheduler_enabled: boolean;
   openai_free_account_repair_enabled: boolean;
   openai_free_account_repair_weekly_threshold_usd: number;
+  scheduler_candidate_sampling_enabled: boolean;
+  scheduler_candidate_sampling_limit: number;
+  scheduler_candidate_sampling_threshold: number;
   enable_claude_oauth_system_prompt_injection: boolean;
   claude_oauth_system_prompt: string;
   claude_oauth_system_prompt_blocks: string;
   openai_clean_relay_enabled: boolean;
+  detached_usage_drain_enabled: boolean;
 };
 
 const USER_ACCOUNT_IMPORT_LIMIT_DEFAULT = 100;
@@ -7515,6 +7851,9 @@ const form = reactive<SettingsForm>({
   openai_advanced_scheduler_enabled: false,
   openai_free_account_repair_enabled: false,
   openai_free_account_repair_weekly_threshold_usd: 60,
+  scheduler_candidate_sampling_enabled: false,
+  scheduler_candidate_sampling_limit: 256,
+  scheduler_candidate_sampling_threshold: 5000,
   // Gateway forwarding behavior
   enable_fingerprint_unification: true,
   enable_metadata_passthrough: false,
@@ -7523,6 +7862,7 @@ const form = reactive<SettingsForm>({
   claude_oauth_system_prompt: "",
   claude_oauth_system_prompt_blocks: "",
   openai_clean_relay_enabled: false,
+  detached_usage_drain_enabled: true,
   enable_anthropic_cache_ttl_1h_injection: false,
   // Balance & quota notification
   balance_low_notify_enabled: false,
@@ -7538,6 +7878,8 @@ const form = reactive<SettingsForm>({
   user_account_import_limit: USER_ACCOUNT_IMPORT_LIMIT_DEFAULT,
   invoice_management_enabled: false,
   withdrawal_management_enabled: true,
+  withdrawal_rate_limit_window_days: 1,
+  withdrawal_rate_limit_max: 0,
   // Affiliate (邀请返利) feature switch
   affiliate_enabled: false,
   // Risk control feature switch
@@ -7549,6 +7891,7 @@ const form = reactive<SettingsForm>({
   account_share_comment_review_api_key: "",
   account_share_comment_review_api_key_configured: false,
   account_share_comment_review_model: "",
+  openai_account_levels: normalizeOpenAIAccountLevelConfigs(DEFAULT_OPENAI_ACCOUNT_LEVELS),
 });
 
 const authSourceDefaults = reactive<AuthSourceDefaultsState>(
@@ -8061,6 +8404,129 @@ function moveMenuItem(index: number, direction: -1 | 1) {
   });
 }
 
+function parseOpenAIAccountLevelAliases(raw: string): string[] {
+  return raw
+    .split(/[,，\n]/)
+    .map((item) => item.trim())
+    .filter((item, index, aliases) => item && aliases.indexOf(item) === index);
+}
+
+function formatOpenAIAccountLevelAliases(level: OpenAIAccountLevelConfig): string {
+  return (level.aliases || []).join(", ");
+}
+
+function updateOpenAIAccountLevelAliases(index: number, raw: string) {
+  const level = form.openai_account_levels[index];
+  if (!level) return;
+  level.aliases = parseOpenAIAccountLevelAliases(raw);
+}
+
+function createOpenAIAccountLevel(): OpenAIAccountLevelConfig {
+  const nextOrder =
+    form.openai_account_levels.reduce(
+      (max, level) => Math.max(max, Number(level.sort_order) || 0),
+      0,
+    ) + 10;
+  return {
+    key: "",
+    label: "",
+    aliases: [],
+    enabled: true,
+    requires_proxy_login: false,
+    sort_order: nextOrder,
+  };
+}
+
+function addOpenAIAccountLevel() {
+  form.openai_account_levels.push(createOpenAIAccountLevel());
+}
+
+function removeOpenAIAccountLevel(index: number) {
+  form.openai_account_levels.splice(index, 1);
+}
+
+function resetOpenAIAccountLevels() {
+  form.openai_account_levels = normalizeOpenAIAccountLevelConfigs(
+    DEFAULT_OPENAI_ACCOUNT_LEVELS,
+  );
+}
+
+const openAIAccountLevelHandlers = {
+  formatAliases: formatOpenAIAccountLevelAliases,
+  updateAliases: updateOpenAIAccountLevelAliases,
+  add: addOpenAIAccountLevel,
+  remove: removeOpenAIAccountLevel,
+  reset: resetOpenAIAccountLevels,
+};
+
+function normalizeOpenAIAccountLevelFormKey(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, "-")
+    .replace(/[^a-z0-9-]/g, "")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function normalizeOpenAIAccountLevelsForSave(): OpenAIAccountLevelConfig[] | null {
+  const normalized: OpenAIAccountLevelConfig[] = [];
+  const seen = new Set<string>();
+
+  for (let index = 0; index < form.openai_account_levels.length; index += 1) {
+    const source = form.openai_account_levels[index];
+    const key = normalizeOpenAIAccountLevelFormKey(source.key);
+    const label = String(source.label || "").trim();
+    if (!key || key === "unknown") {
+      appStore.showError(
+        t("admin.settings.openaiAccountLevels.invalidKey", {
+          index: index + 1,
+        }),
+      );
+      return null;
+    }
+    if (seen.has(key)) {
+      appStore.showError(
+        t("admin.settings.openaiAccountLevels.duplicateKey", { key }),
+      );
+      return null;
+    }
+    if (!label) {
+      appStore.showError(
+        t("admin.settings.openaiAccountLevels.missingLabel", {
+          key,
+        }),
+      );
+      return null;
+    }
+    seen.add(key);
+    normalized.push({
+      key,
+      label,
+      aliases: Array.isArray(source.aliases)
+        ? source.aliases.map((item) => String(item).trim()).filter(Boolean)
+        : [],
+      enabled: source.enabled !== false,
+      requires_proxy_login: source.requires_proxy_login === true,
+      sort_order: Number.isFinite(Number(source.sort_order))
+        ? Number(source.sort_order)
+        : (index + 1) * 10,
+    });
+  }
+
+  if (normalized.length === 0) {
+    appStore.showError(t("admin.settings.openaiAccountLevels.emptyInvalid"));
+    return null;
+  }
+  if (!normalized.some((level) => level.enabled)) {
+    appStore.showError(t("admin.settings.openaiAccountLevels.noEnabledLevel"));
+    return null;
+  }
+
+  return normalizeOpenAIAccountLevelConfigs(normalized);
+}
+
 // Custom endpoint management
 function addEndpoint() {
   form.custom_endpoints.push({ name: "", endpoint: "", description: "" });
@@ -8183,6 +8649,9 @@ async function loadSettings() {
     form.default_subscriptions = normalizeDefaultSubscriptionSettings(
       settings.default_subscriptions,
     );
+    form.openai_account_levels = normalizeOpenAIAccountLevelConfigs(
+      settings.openai_account_levels,
+    );
     registrationEmailSuffixWhitelistTags.value =
       normalizeRegistrationEmailSuffixDomains(
         settings.registration_email_suffix_whitelist,
@@ -8279,6 +8748,7 @@ async function loadSettings() {
       openaiFastPolicyForm.rules =
         settings.openai_fast_policy_settings.rules.map((rule) => ({
           ...rule,
+          user_ids: rule.user_ids ? [...rule.user_ids] : [],
           model_whitelist: rule.model_whitelist
             ? [...rule.model_whitelist]
             : [],
@@ -8483,6 +8953,37 @@ function parseUpstreamAllowlistInput(): string[] | null {
 async function saveSettings() {
   saving.value = true;
   try {
+    const withdrawalRateLimitWindowDays = Number(
+      form.withdrawal_rate_limit_window_days,
+    );
+    const withdrawalRateLimitMax = Number(form.withdrawal_rate_limit_max);
+    if (
+      !Number.isInteger(withdrawalRateLimitWindowDays) ||
+      withdrawalRateLimitWindowDays < 1 ||
+      withdrawalRateLimitWindowDays > 365
+    ) {
+      appStore.showError(
+        t(
+          "admin.settings.features.businessModules.withdrawalRateLimitWindowDaysError",
+        ),
+      );
+      return;
+    }
+    if (
+      !Number.isInteger(withdrawalRateLimitMax) ||
+      withdrawalRateLimitMax < 0 ||
+      withdrawalRateLimitMax > 1000
+    ) {
+      appStore.showError(
+        t(
+          "admin.settings.features.businessModules.withdrawalRateLimitMaxError",
+        ),
+      );
+      return;
+    }
+    form.withdrawal_rate_limit_window_days = withdrawalRateLimitWindowDays;
+    form.withdrawal_rate_limit_max = withdrawalRateLimitMax;
+
     const normalizedTableDefaultPageSize = Math.floor(
       Number(form.table_default_page_size),
     );
@@ -8569,6 +9070,10 @@ async function saveSettings() {
           groupId: duplicateDefaultSubscription.group_id,
         }),
       );
+      return;
+    }
+    const normalizedOpenAIAccountLevels = normalizeOpenAIAccountLevelsForSave();
+    if (!normalizedOpenAIAccountLevels) {
       return;
     }
 
@@ -8706,6 +9211,7 @@ async function saveSettings() {
       table_page_size_options: form.table_page_size_options,
       custom_menu_items: form.custom_menu_items,
       custom_endpoints: form.custom_endpoints,
+      openai_account_levels: normalizedOpenAIAccountLevels,
       frontend_url: form.frontend_url,
       smtp_host: form.smtp_host,
       smtp_port: form.smtp_port,
@@ -8802,6 +9308,7 @@ async function saveSettings() {
       claude_oauth_system_prompt: form.claude_oauth_system_prompt,
       claude_oauth_system_prompt_blocks: form.claude_oauth_system_prompt_blocks,
       openai_clean_relay_enabled: form.openai_clean_relay_enabled,
+      detached_usage_drain_enabled: form.detached_usage_drain_enabled,
       enable_anthropic_cache_ttl_1h_injection:
         form.enable_anthropic_cache_ttl_1h_injection,
       // Payment configuration
@@ -8871,6 +9378,12 @@ async function saveSettings() {
         form.openai_free_account_repair_enabled,
       openai_free_account_repair_weekly_threshold_usd:
         Number(form.openai_free_account_repair_weekly_threshold_usd) || 0,
+      scheduler_candidate_sampling_enabled:
+        form.scheduler_candidate_sampling_enabled,
+      scheduler_candidate_sampling_limit:
+        Number(form.scheduler_candidate_sampling_limit) || 256,
+      scheduler_candidate_sampling_threshold:
+        Number(form.scheduler_candidate_sampling_threshold) || 5000,
       // Balance & quota notification
       balance_low_notify_enabled: form.balance_low_notify_enabled,
       balance_low_notify_threshold:
@@ -8892,6 +9405,9 @@ async function saveSettings() {
       ),
       invoice_management_enabled: form.invoice_management_enabled,
       withdrawal_management_enabled: form.withdrawal_management_enabled,
+      withdrawal_rate_limit_window_days:
+        form.withdrawal_rate_limit_window_days,
+      withdrawal_rate_limit_max: form.withdrawal_rate_limit_max,
       account_share_comment_review_enabled:
         form.account_share_comment_review_enabled,
       account_share_comment_review_url: commentReviewURL,
@@ -8914,6 +9430,10 @@ async function saveSettings() {
             service_tier: rule.service_tier,
             action: rule.action,
             scope: rule.scope,
+            user_ids:
+              rule.user_ids && rule.user_ids.length > 0
+                ? [...rule.user_ids]
+                : undefined,
             error_message:
               rule.action === "block" ? rule.error_message : undefined,
             model_whitelist: hasWhitelist ? whitelist : undefined,
@@ -8991,6 +9511,7 @@ async function saveSettings() {
       openaiFastPolicyForm.rules =
         updated.openai_fast_policy_settings.rules.map((rule) => ({
           ...rule,
+          user_ids: rule.user_ids ? [...rule.user_ids] : [],
           model_whitelist: rule.model_whitelist
             ? [...rule.model_whitelist]
             : [],
@@ -9368,6 +9889,7 @@ function addOpenAIFastPolicyRule() {
     service_tier: "priority",
     action: "filter",
     scope: "all",
+    user_ids: [],
     error_message: "",
     model_whitelist: [],
     fallback_action: "pass",

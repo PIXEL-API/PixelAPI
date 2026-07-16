@@ -6,6 +6,8 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +17,147 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDashboardHourlyRangeBounds_Rolling24Hours(t *testing.T) {
+	now := time.Date(2026, 7, 10, 12, 34, 0, 0, time.FixedZone("UTC+8", 8*60*60))
+	start := now.Add(-24 * time.Hour)
+
+	fullStart, fullEnd, effectiveEnd, buckets := dashboardHourlyRangeBounds(start, now, now)
+	if buckets != 23 {
+		t.Fatalf("buckets = %d, want 23", buckets)
+	}
+	if got, want := fullStart, time.Date(2026, 7, 9, 5, 0, 0, 0, time.UTC); !got.Equal(want) {
+		t.Fatalf("fullStart = %s, want %s", got, want)
+	}
+	if got, want := fullEnd, time.Date(2026, 7, 10, 4, 0, 0, 0, time.UTC); !got.Equal(want) {
+		t.Fatalf("fullEnd = %s, want %s", got, want)
+	}
+	if !effectiveEnd.Equal(now) {
+		t.Fatalf("effectiveEnd = %s, want %s", effectiveEnd, now)
+	}
+}
+
+func TestDashboardHourlyRangeBounds_ClampsFutureEnd(t *testing.T) {
+	now := time.Date(2026, 7, 10, 12, 20, 0, 0, time.UTC)
+	start := now.Add(-2 * time.Hour)
+	_, _, effectiveEnd, buckets := dashboardHourlyRangeBounds(start, now.Add(12*time.Hour), now)
+	if !effectiveEnd.Equal(now) {
+		t.Fatalf("effectiveEnd = %s, want %s", effectiveEnd, now)
+	}
+	if buckets != 1 {
+		t.Fatalf("buckets = %d, want 1", buckets)
+	}
+}
+
+func TestShouldUseDashboardHourlyRange_RejectsOldRange(t *testing.T) {
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	options := service.DashboardStatsRangeOptions{UseHourlyAggregates: true, HourlyMaxAge: 31 * 24 * time.Hour}
+	if shouldUseDashboardHourlyRange(now.Add(-32*24*time.Hour), now, now, options) {
+		t.Fatal("range older than hourly coverage safety window must not use recent aggregates")
+	}
+	if !shouldUseDashboardHourlyRange(now.Add(-24*time.Hour), now, now, options) {
+		t.Fatal("recent rolling range should use hourly aggregates")
+	}
+	if shouldUseDashboardHourlyRange(now.Add(-24*time.Hour), now, now, service.DashboardStatsRangeOptions{}) {
+		t.Fatal("disabled hourly aggregation must not use aggregate tables")
+	}
+}
+
+func TestDashboardHourlyRangeBounds_UsesConfiguredHalfHourOffset(t *testing.T) {
+	loc := time.FixedZone("UTC+5:30", 5*60*60+30*60)
+	now := time.Date(2026, 7, 10, 12, 34, 0, 0, loc)
+	start := now.Add(-24 * time.Hour)
+
+	fullStart, fullEnd, _, buckets := dashboardHourlyRangeBoundsInLocation(start, now, now, loc)
+	require.Equal(t, 23, buckets)
+	require.Equal(t, time.Date(2026, 7, 9, 7, 30, 0, 0, time.UTC), fullStart.UTC())
+	require.Equal(t, time.Date(2026, 7, 10, 6, 30, 0, 0, time.UTC), fullEnd.UTC())
+}
+
+func TestDashboardHourlyAggregatesReady_RequiresWatermarkCoverage(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageLogRepository{sql: db}
+	fullStart := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+	fullEnd := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery("SELECT[[:space:]]+\\(SELECT last_aggregated_at FROM usage_dashboard_aggregation_watermark").
+		WillReturnRows(sqlmock.NewRows([]string{"last_aggregated_at", "coverage_start"}).
+			AddRow(fullEnd.Add(-time.Minute), fullStart.Add(-time.Hour)))
+	ready, err := repo.dashboardHourlyAggregatesReady(context.Background(), fullStart, fullEnd)
+	require.NoError(t, err)
+	require.False(t, ready)
+
+	mock.ExpectQuery("SELECT[[:space:]]+\\(SELECT last_aggregated_at FROM usage_dashboard_aggregation_watermark").
+		WillReturnRows(sqlmock.NewRows([]string{"last_aggregated_at", "coverage_start"}).
+			AddRow(fullEnd, fullStart.Add(time.Hour)))
+	ready, err = repo.dashboardHourlyAggregatesReady(context.Background(), fullStart, fullEnd)
+	require.NoError(t, err)
+	require.False(t, ready)
+
+	mock.ExpectQuery("SELECT[[:space:]]+\\(SELECT last_aggregated_at FROM usage_dashboard_aggregation_watermark").
+		WillReturnRows(sqlmock.NewRows([]string{"last_aggregated_at", "coverage_start"}).
+			AddRow(fullEnd, nil))
+	ready, err = repo.dashboardHourlyAggregatesReady(context.Background(), fullStart, fullEnd)
+	require.NoError(t, err)
+	require.False(t, ready)
+
+	mock.ExpectQuery("SELECT[[:space:]]+\\(SELECT last_aggregated_at FROM usage_dashboard_aggregation_watermark").
+		WillReturnRows(sqlmock.NewRows([]string{"last_aggregated_at", "coverage_start"}).
+			AddRow(fullEnd, fullStart))
+	ready, err = repo.dashboardHourlyAggregatesReady(context.Background(), fullStart, fullEnd)
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFillDashboardUsageStatsWithSnapshots_FallsBackWhenHourlyCoverageStartsTooLate(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageLogRepository{sql: db}
+	now := time.Date(2026, 7, 10, 12, 34, 0, 0, time.UTC)
+	start := now.Add(-24 * time.Hour)
+	fullStart, fullEnd, _, _ := dashboardHourlyRangeBounds(start, now, now)
+
+	mock.ExpectQuery("SELECT[[:space:]]+\\(SELECT last_aggregated_at FROM usage_dashboard_aggregation_watermark").
+		WillReturnRows(sqlmock.NewRows([]string{"last_aggregated_at", "coverage_start"}).
+			AddRow(fullEnd, fullStart.Add(time.Hour)))
+	mock.ExpectQuery("COUNT\\(\\*\\) FILTER").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"total_requests",
+			"total_input_tokens",
+			"total_output_tokens",
+			"total_cache_creation_tokens",
+			"total_cache_read_tokens",
+			"total_cost",
+			"total_actual_cost",
+			"total_account_cost",
+			"total_duration_ms",
+			"today_requests",
+			"today_input_tokens",
+			"today_output_tokens",
+			"today_cache_creation_tokens",
+			"today_cache_read_tokens",
+			"today_cost",
+			"today_actual_cost",
+			"today_account_cost",
+		}).AddRow(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17))
+	mock.ExpectQuery("COUNT\\(DISTINCT CASE").
+		WillReturnRows(sqlmock.NewRows([]string{"active_users", "hourly_active_users"}).AddRow(2, 1))
+
+	stats := &DashboardStats{}
+	err := repo.fillDashboardUsageStatsWithSnapshots(
+		context.Background(),
+		stats,
+		start,
+		now,
+		time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC),
+		now,
+		service.DashboardStatsRangeOptions{UseHourlyAggregates: true, HourlyMaxAge: 31 * 24 * time.Hour},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, int64(1), stats.TotalRequests)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
 
 func TestUsageLogRepositoryCreateSyncRequestTypeAndLegacyFields(t *testing.T) {
 	db, mock := newSQLMock(t)
@@ -65,6 +208,7 @@ func TestUsageLogRepositoryCreateSyncRequestTypeAndLegacyFields(t *testing.T) {
 			log.TotalCost,
 			log.ActualCost,
 			log.RateMultiplier,
+			log.RateMultiplierSource,
 			log.AccountRateMultiplier,
 			log.BillingType,
 			int16(service.RequestTypeWSV2),
@@ -76,6 +220,9 @@ func TestUsageLogRepositoryCreateSyncRequestTypeAndLegacyFields(t *testing.T) {
 			sqlmock.AnyArg(), // ip_address
 			log.ImageCount,
 			sqlmock.AnyArg(), // image_size
+			log.VideoCount,
+			sqlmock.AnyArg(), // video_resolution
+			sqlmock.AnyArg(), // video_duration_seconds
 			sqlmock.AnyArg(), // service_tier
 			sqlmock.AnyArg(), // reasoning_effort
 			sqlmock.AnyArg(), // inbound_endpoint
@@ -144,6 +291,7 @@ func TestUsageLogRepositoryCreate_PersistsServiceTier(t *testing.T) {
 			log.TotalCost,
 			log.ActualCost,
 			log.RateMultiplier,
+			log.RateMultiplierSource,
 			log.AccountRateMultiplier,
 			log.BillingType,
 			int16(service.RequestTypeSync),
@@ -154,6 +302,9 @@ func TestUsageLogRepositoryCreate_PersistsServiceTier(t *testing.T) {
 			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
 			log.ImageCount,
+			sqlmock.AnyArg(),
+			log.VideoCount,
+			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
 			serviceTier,
 			sqlmock.AnyArg(),
@@ -228,6 +379,38 @@ func TestPrepareUsageLogInsert_ArgCountMatchesTypes(t *testing.T) {
 	})
 
 	require.Len(t, prepared.args, len(usageLogInsertArgTypes))
+}
+
+func TestUsageBillingUsageLogInsertQuery_ArgCountMatchesPreparedInsert(t *testing.T) {
+	prepared := prepareUsageLogInsert(&service.UsageLog{
+		UserID:               1,
+		APIKeyID:             2,
+		AccountID:            3,
+		RequestID:            "req-billing-arg-count",
+		Model:                "gpt-5",
+		RequestedModel:       "gpt-5",
+		RateMultiplierSource: service.RateMultiplierSourceNewUserGroup,
+		CreatedAt:            time.Date(2025, 1, 5, 12, 0, 0, 0, time.UTC),
+	})
+
+	query := usageBillingUsageLogInsertQuery()
+	matches := placeholderPattern.FindAllString(query, -1)
+	seen := make(map[int]struct{}, len(matches))
+	maxPlaceholder := 0
+	for _, match := range matches {
+		n, err := strconv.Atoi(strings.TrimPrefix(match, "$"))
+		require.NoError(t, err)
+		seen[n] = struct{}{}
+		if n > maxPlaceholder {
+			maxPlaceholder = n
+		}
+	}
+
+	require.Contains(t, query, "rate_multiplier_source")
+	require.Len(t, matches, len(usageLogInsertArgTypes))
+	require.Len(t, seen, len(usageLogInsertArgTypes))
+	require.Equal(t, len(usageLogInsertArgTypes), maxPlaceholder)
+	require.Len(t, prepared.args, maxPlaceholder)
 }
 
 func TestCoalesceTrimmedString(t *testing.T) {
@@ -475,7 +658,6 @@ func TestUsageLogRepositoryGetStatsWithFiltersAlwaysReturnsAccountCost(t *testin
 			"total_account_cost", "avg_duration_ms",
 		}).AddRow(int64(50), int64(1000), int64(2000), int64(100), int64(25), int64(75), 15.0, 12.5, 11.0, 100.0))
 	mock.ExpectQuery("FROM user_balance_ledger").
-		WithArgs(accountShareSeatPrepayReason, accountShareSeatRefundReason, accountShareSeatWaiverRefundReason).
 		WillReturnRows(sqlmock.NewRows([]string{"total"}).AddRow(1.25))
 	mock.ExpectQuery("SELECT COALESCE\\(NULLIF\\(TRIM\\(inbound_endpoint\\)").
 		WillReturnRows(sqlmock.NewRows([]string{"endpoint", "requests", "total_tokens", "cost", "actual_cost"}))
@@ -669,6 +851,7 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			1.0,               // total_cost
 			0.9,               // actual_cost
 			1.0,               // rate_multiplier
+			sql.NullString{},  // rate_multiplier_source
 			sql.NullFloat64{}, // account_rate_multiplier
 			int16(service.BillingTypeBalance),
 			int16(service.RequestTypeWSV2),
@@ -680,6 +863,9 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},
 			0,
 			sql.NullString{},
+			0,                // video_count
+			sql.NullString{}, // video_resolution
+			sql.NullInt64{},  // video_duration_seconds
 			sql.NullString{Valid: true, String: "priority"},
 			sql.NullString{},
 			sql.NullString{},
@@ -717,6 +903,7 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			0, 0.0, // image_output_tokens, image_output_cost
 			0.1, 0.2, 0.3, 0.4, 1.0, 0.9,
 			1.0,
+			sql.NullString{}, // rate_multiplier_source
 			sql.NullFloat64{},
 			int16(service.BillingTypeBalance),
 			int16(service.RequestTypeUnknown),
@@ -728,6 +915,9 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},
 			0,
 			sql.NullString{},
+			0,                // video_count
+			sql.NullString{}, // video_resolution
+			sql.NullInt64{},  // video_duration_seconds
 			sql.NullString{Valid: true, String: "flex"},
 			sql.NullString{},
 			sql.NullString{},
@@ -765,6 +955,7 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			0, 0.0, // image_output_tokens, image_output_cost
 			0.1, 0.2, 0.3, 0.4, 1.0, 0.9,
 			1.0,
+			sql.NullString{}, // rate_multiplier_source
 			sql.NullFloat64{},
 			int16(service.BillingTypeBalance),
 			int16(service.RequestTypeSync),
@@ -776,6 +967,9 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},
 			0,
 			sql.NullString{},
+			1, // video_count
+			sql.NullString{Valid: true, String: "720p"}, // video_resolution
+			sql.NullInt64{Valid: true, Int64: 8},        // video_duration_seconds
 			sql.NullString{Valid: true, String: "priority"},
 			sql.NullString{},
 			sql.NullString{},
@@ -791,6 +985,11 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, log.ServiceTier)
 		require.Equal(t, "priority", *log.ServiceTier)
+		require.Equal(t, 1, log.VideoCount)
+		require.NotNil(t, log.VideoResolution)
+		require.Equal(t, "720p", *log.VideoResolution)
+		require.NotNil(t, log.VideoDurationSeconds)
+		require.Equal(t, 8, *log.VideoDurationSeconds)
 	})
 
 }

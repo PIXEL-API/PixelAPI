@@ -3,6 +3,7 @@ package config
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -77,6 +78,7 @@ type Config struct {
 	LinuxDo                 LinuxDoConnectConfig          `mapstructure:"linuxdo_connect"`
 	WeChat                  WeChatConnectConfig           `mapstructure:"wechat_connect"`
 	OIDC                    OIDCConnectConfig             `mapstructure:"oidc_connect"`
+	OIDCProvider            OIDCProviderConfig            `mapstructure:"oidc_provider"`
 	GitHubOAuth             EmailOAuthProviderConfig      `mapstructure:"github_oauth"`
 	GoogleOAuth             EmailOAuthProviderConfig      `mapstructure:"google_oauth"`
 	Default                 DefaultConfig                 `mapstructure:"default"`
@@ -273,6 +275,26 @@ type OIDCConnectConfig struct {
 	UserInfoEmailPath    string `mapstructure:"userinfo_email_path"`
 	UserInfoIDPath       string `mapstructure:"userinfo_id_path"`
 	UserInfoUsernamePath string `mapstructure:"userinfo_username_path"`
+}
+
+// OIDCProviderConfig configures Sub2API as an OpenID Connect Provider.
+// Client secrets are never stored in plaintext: SecretSHA256 must contain the
+// lowercase or uppercase hexadecimal SHA-256 digest of the client secret.
+type OIDCProviderConfig struct {
+	Enabled               bool                       `mapstructure:"enabled"`
+	Issuer                string                     `mapstructure:"issuer"`
+	FrontendAuthorizeURL  string                     `mapstructure:"frontend_authorize_url"`
+	SigningKeyPath        string                     `mapstructure:"signing_key_path"`
+	RequestTTLSeconds     int                        `mapstructure:"request_ttl_seconds"`
+	CodeTTLSeconds        int                        `mapstructure:"code_ttl_seconds"`
+	AccessTokenTTLSeconds int                        `mapstructure:"access_token_ttl_seconds"`
+	Clients               []OIDCProviderClientConfig `mapstructure:"clients"`
+}
+
+type OIDCProviderClientConfig struct {
+	ID           string   `mapstructure:"id"`
+	SecretSHA256 string   `mapstructure:"secret_sha256"`
+	RedirectURIs []string `mapstructure:"redirect_uris"`
 }
 
 const (
@@ -527,6 +549,7 @@ type ServerConfig struct {
 	Host               string    `mapstructure:"host"`
 	Port               int       `mapstructure:"port"`
 	Mode               string    `mapstructure:"mode"`                  // debug/release
+	EnableServerTiming bool      `mapstructure:"enable_server_timing"`  // 已认证管理端/用户端 Web API 性能指标
 	FrontendURL        string    `mapstructure:"frontend_url"`          // 前端基础 URL，用于生成邮件中的外部链接
 	ReadHeaderTimeout  int       `mapstructure:"read_header_timeout"`   // 读取请求头超时（秒）
 	IdleTimeout        int       `mapstructure:"idle_timeout"`          // 空闲连接超时（秒）
@@ -748,6 +771,14 @@ type GatewayConfig struct {
 	// 等待上游响应头的超时时间（秒），0表示无超时
 	// 注意：这不影响流式数据传输，只控制等待响应头的时间
 	ResponseHeaderTimeout int `mapstructure:"response_header_timeout"`
+	// OpenAIResponseHeaderTimeout: OpenAI/Codex 上游等待响应头的超时时间（秒），0表示无超时。
+	// OpenAI/Codex 请求可能在上游排队较久；默认不使用通用响应头超时截断。
+	OpenAIResponseHeaderTimeout int `mapstructure:"openai_response_header_timeout"`
+	// OpenAIFirstOutputTimeoutSeconds: OpenAI 原生 HTTP Responses 首个语义输出超时（秒），0 表示禁用。
+	OpenAIFirstOutputTimeoutSeconds int `mapstructure:"openai_first_output_timeout_seconds"`
+	// OpenAIHighEffortFirstOutputTimeoutSeconds: high/xhigh/max 推理的首个语义输出超时（秒）。
+	// 0 表示回退到 OpenAIFirstOutputTimeoutSeconds。
+	OpenAIHighEffortFirstOutputTimeoutSeconds int `mapstructure:"openai_high_effort_first_output_timeout_seconds"`
 	// 请求体最大字节数，用于网关请求体大小限制
 	MaxBodySize int64 `mapstructure:"max_body_size"`
 	// 非流式上游响应体读取上限（字节），用于防止无界读取导致内存放大
@@ -772,6 +803,8 @@ type GatewayConfig struct {
 	OpenAIPassthroughAllowTimeoutHeaders bool `mapstructure:"openai_passthrough_allow_timeout_headers"`
 	// OpenAIWS: OpenAI Responses WebSocket 配置（默认开启，可按需回滚到 HTTP）
 	OpenAIWS GatewayOpenAIWSConfig `mapstructure:"openai_ws"`
+	// OpenAIHTTP2: OpenAI HTTP 上游协议策略（默认启用 HTTP/2，可按代理能力回退 HTTP/1.1）
+	OpenAIHTTP2 GatewayOpenAIHTTP2Config `mapstructure:"openai_http2"`
 
 	// HTTP 上游连接池配置（性能优化：支持高并发场景调优）
 	// MaxIdleConns: 所有主机的最大空闲连接总数
@@ -803,6 +836,8 @@ type GatewayConfig struct {
 	StreamDataIntervalTimeout int `mapstructure:"stream_data_interval_timeout"`
 	// StreamKeepaliveInterval: 流式 keepalive 间隔（秒），0表示禁用
 	StreamKeepaliveInterval int `mapstructure:"stream_keepalive_interval"`
+	// ImageNonstreamKeepaliveInterval: 图片非流式 JSON keepalive 间隔（秒），0表示禁用
+	ImageNonstreamKeepaliveInterval int `mapstructure:"image_nonstream_keepalive_interval"`
 	// MaxLineSize: 上游 SSE 单行最大字节数（0使用默认值）
 	MaxLineSize int `mapstructure:"max_line_size"`
 
@@ -842,6 +877,16 @@ type GatewayConfig struct {
 	// UserMessageQueue: 用户消息串行队列配置
 	// 对 role:"user" 的真实用户消息实施账号级串行化 + RPM 自适应延迟
 	UserMessageQueue UserMessageQueueConfig `mapstructure:"user_message_queue"`
+}
+
+// GatewayOpenAIHTTP2Config OpenAI HTTP 上游协议配置。
+// 默认启用 HTTP/2；在部分代理不兼容时按策略回退 HTTP/1.1。
+type GatewayOpenAIHTTP2Config struct {
+	Enabled                   bool `mapstructure:"enabled"`
+	AllowProxyFallbackToHTTP1 bool `mapstructure:"allow_proxy_fallback_to_http1"`
+	FallbackErrorThreshold    int  `mapstructure:"fallback_error_threshold"`
+	FallbackWindowSeconds     int  `mapstructure:"fallback_window_seconds"`
+	FallbackTTLSeconds        int  `mapstructure:"fallback_ttl_seconds"`
 }
 
 // UserMessageQueueConfig 用户消息串行队列配置
@@ -893,6 +938,13 @@ type GatewayOpenAIWSConfig struct {
 	ModeRouterV2Enabled bool `mapstructure:"mode_router_v2_enabled"`
 	// IngressModeDefault: ingress 默认模式（off/ctx_pool/passthrough）
 	IngressModeDefault string `mapstructure:"ingress_mode_default"`
+	// IngressInterTurnIdleTimeoutSeconds: 客户端在两个已完成 turn 之间允许的最长空闲时间；0 表示禁用。
+	IngressInterTurnIdleTimeoutSeconds int `mapstructure:"ingress_inter_turn_idle_timeout_seconds"`
+	// MaxIngressConnectionsPerAPIKey: 单个 API Key 在所有实例上的入站 WS 会话上限；0 表示禁用。
+	MaxIngressConnectionsPerAPIKey int `mapstructure:"max_ingress_connections_per_api_key"`
+	// ClientFirstMessageTimeoutSeconds: WebSocket 升级后读取并解压首条
+	// response.create 消息的总超时。必须为正数。
+	ClientFirstMessageTimeoutSeconds int `mapstructure:"client_first_message_timeout_seconds"`
 	// Enabled: 全局总开关（默认 true）
 	Enabled bool `mapstructure:"enabled"`
 	// OAuthEnabled: 是否允许 OpenAI OAuth 账号使用 WS
@@ -974,11 +1026,12 @@ type GatewayOpenAIWSConfig struct {
 
 // GatewayOpenAIWSSchedulerScoreWeights 账号调度打分权重。
 type GatewayOpenAIWSSchedulerScoreWeights struct {
-	Priority  float64 `mapstructure:"priority"`
-	Load      float64 `mapstructure:"load"`
-	Queue     float64 `mapstructure:"queue"`
-	ErrorRate float64 `mapstructure:"error_rate"`
-	TTFT      float64 `mapstructure:"ttft"`
+	Priority      float64 `mapstructure:"priority"`
+	Load          float64 `mapstructure:"load"`
+	Queue         float64 `mapstructure:"queue"`
+	ErrorRate     float64 `mapstructure:"error_rate"`
+	TTFT          float64 `mapstructure:"ttft"`
+	QuotaHeadroom float64 `mapstructure:"quota_headroom"`
 }
 
 // GatewayUsageRecordConfig 使用量记录异步队列配置
@@ -1489,6 +1542,9 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	// 环境变量支持
 	viper.AutomaticEnv()
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	if err := viper.BindEnv("server.enable_server_timing", "ENABLE_SERVER_TIMING"); err != nil {
+		return nil, fmt.Errorf("bind ENABLE_SERVER_TIMING: %w", err)
+	}
 
 	// 默认值
 	setDefaults()
@@ -1545,6 +1601,15 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	cfg.OIDC.UserInfoUsernamePath = strings.TrimSpace(cfg.OIDC.UserInfoUsernamePath)
 	cfg.OIDC.UsePKCEExplicit = hasExplicitConfigOrEnv("oidc_connect.use_pkce", "OIDC_CONNECT_USE_PKCE")
 	cfg.OIDC.ValidateIDTokenExplicit = hasExplicitConfigOrEnv("oidc_connect.validate_id_token", "OIDC_CONNECT_VALIDATE_ID_TOKEN")
+	cfg.OIDCProvider.Issuer = strings.TrimRight(strings.TrimSpace(cfg.OIDCProvider.Issuer), "/")
+	cfg.OIDCProvider.FrontendAuthorizeURL = strings.TrimSpace(cfg.OIDCProvider.FrontendAuthorizeURL)
+	cfg.OIDCProvider.SigningKeyPath = strings.TrimSpace(cfg.OIDCProvider.SigningKeyPath)
+	for i := range cfg.OIDCProvider.Clients {
+		client := &cfg.OIDCProvider.Clients[i]
+		client.ID = strings.TrimSpace(client.ID)
+		client.SecretSHA256 = strings.ToLower(strings.TrimSpace(client.SecretSHA256))
+		client.RedirectURIs = normalizeStringSlice(client.RedirectURIs)
+	}
 	cfg.Dashboard.KeyPrefix = strings.TrimSpace(cfg.Dashboard.KeyPrefix)
 	cfg.CORS.AllowedOrigins = normalizeStringSlice(cfg.CORS.AllowedOrigins)
 	cfg.Security.ResponseHeaders.AdditionalAllowed = normalizeStringSlice(cfg.Security.ResponseHeaders.AdditionalAllowed)
@@ -1637,6 +1702,7 @@ func setDefaults() {
 	viper.SetDefault("server.host", "0.0.0.0")
 	viper.SetDefault("server.port", 8080)
 	viper.SetDefault("server.mode", "release")
+	viper.SetDefault("server.enable_server_timing", false)
 	viper.SetDefault("server.frontend_url", "")
 	viper.SetDefault("server.read_header_timeout", 30) // 30秒读取请求头
 	viper.SetDefault("server.idle_timeout", 120)       // 120秒空闲超时
@@ -1768,6 +1834,16 @@ func setDefaults() {
 	viper.SetDefault("oidc_connect.userinfo_id_path", "")
 	viper.SetDefault("oidc_connect.userinfo_username_path", "")
 
+	// OIDC Provider (Sub2API acts as the identity provider)
+	viper.SetDefault("oidc_provider.enabled", false)
+	viper.SetDefault("oidc_provider.issuer", "")
+	viper.SetDefault("oidc_provider.frontend_authorize_url", "")
+	viper.SetDefault("oidc_provider.signing_key_path", "")
+	viper.SetDefault("oidc_provider.request_ttl_seconds", 120)
+	viper.SetDefault("oidc_provider.code_ttl_seconds", 120)
+	viper.SetDefault("oidc_provider.access_token_ttl_seconds", 300)
+	viper.SetDefault("oidc_provider.clients", []OIDCProviderClientConfig{})
+
 	// Database
 	viper.SetDefault("database.host", "localhost")
 	viper.SetDefault("database.port", 5432)
@@ -1775,8 +1851,8 @@ func setDefaults() {
 	viper.SetDefault("database.password", "postgres")
 	viper.SetDefault("database.dbname", "sub2api")
 	viper.SetDefault("database.sslmode", "prefer")
-	viper.SetDefault("database.max_open_conns", 256)
-	viper.SetDefault("database.max_idle_conns", 128)
+	viper.SetDefault("database.max_open_conns", 350)
+	viper.SetDefault("database.max_idle_conns", 100)
 	viper.SetDefault("database.conn_max_lifetime_minutes", 30)
 	viper.SetDefault("database.conn_max_idle_time_minutes", 5)
 
@@ -1911,6 +1987,9 @@ func setDefaults() {
 
 	// Gateway
 	viper.SetDefault("gateway.response_header_timeout", 600) // 600秒(10分钟)等待上游响应头，LLM高负载时可能排队较久
+	viper.SetDefault("gateway.openai_response_header_timeout", 0)
+	viper.SetDefault("gateway.openai_first_output_timeout_seconds", 0)
+	viper.SetDefault("gateway.openai_high_effort_first_output_timeout_seconds", 0)
 	viper.SetDefault("gateway.log_upstream_error_body", true)
 	viper.SetDefault("gateway.log_upstream_error_body_max_bytes", 2048)
 	viper.SetDefault("gateway.inject_beta_for_apikey", false)
@@ -1923,6 +2002,9 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_ws.enabled", true)
 	viper.SetDefault("gateway.openai_ws.mode_router_v2_enabled", false)
 	viper.SetDefault("gateway.openai_ws.ingress_mode_default", "ctx_pool")
+	viper.SetDefault("gateway.openai_ws.ingress_inter_turn_idle_timeout_seconds", 300)
+	viper.SetDefault("gateway.openai_ws.max_ingress_connections_per_api_key", 64)
+	viper.SetDefault("gateway.openai_ws.client_first_message_timeout_seconds", 30)
 	viper.SetDefault("gateway.openai_ws.oauth_enabled", true)
 	viper.SetDefault("gateway.openai_ws.apikey_enabled", true)
 	viper.SetDefault("gateway.openai_ws.force_http", false)
@@ -1965,6 +2047,13 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.queue", 0.7)
 	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.error_rate", 0.8)
 	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.ttft", 0.5)
+	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.quota_headroom", 0.0)
+	// OpenAI HTTP upstream protocol strategy
+	viper.SetDefault("gateway.openai_http2.enabled", true)
+	viper.SetDefault("gateway.openai_http2.allow_proxy_fallback_to_http1", true)
+	viper.SetDefault("gateway.openai_http2.fallback_error_threshold", 2)
+	viper.SetDefault("gateway.openai_http2.fallback_window_seconds", 60)
+	viper.SetDefault("gateway.openai_http2.fallback_ttl_seconds", 600)
 	viper.SetDefault("gateway.antigravity_fallback_cooldown_minutes", 1)
 	viper.SetDefault("gateway.antigravity_extra_retries", 10)
 	viper.SetDefault("gateway.max_body_size", int64(256*1024*1024))
@@ -1982,6 +2071,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.concurrency_slot_ttl_minutes", 30) // 并发槽位过期时间（支持超长请求）
 	viper.SetDefault("gateway.stream_data_interval_timeout", 180)
 	viper.SetDefault("gateway.stream_keepalive_interval", 10)
+	viper.SetDefault("gateway.image_nonstream_keepalive_interval", 0)
 	viper.SetDefault("gateway.max_line_size", 500*1024*1024)
 	viper.SetDefault("gateway.scheduling.sticky_session_max_waiting", 3)
 	viper.SetDefault("gateway.scheduling.sticky_session_wait_timeout", 120*time.Second)
@@ -2006,7 +2096,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.usage_record.worker_count", 128)
 	viper.SetDefault("gateway.usage_record.queue_size", 16384)
 	viper.SetDefault("gateway.usage_record.task_timeout_seconds", 5)
-	viper.SetDefault("gateway.usage_record.overflow_policy", UsageRecordOverflowPolicySample)
+	viper.SetDefault("gateway.usage_record.overflow_policy", UsageRecordOverflowPolicySync)
 	viper.SetDefault("gateway.usage_record.overflow_sample_percent", 10)
 	viper.SetDefault("gateway.usage_record.auto_scale_enabled", true)
 	viper.SetDefault("gateway.usage_record.auto_scale_min_workers", 128)
@@ -2377,6 +2467,11 @@ func (c *Config) Validate() error {
 		warnIfInsecureURL("oidc_connect.redirect_url", c.OIDC.RedirectURL)
 		warnIfInsecureURL("oidc_connect.frontend_redirect_url", c.OIDC.FrontendRedirectURL)
 	}
+	if c.OIDCProvider.Enabled {
+		if err := c.validateOIDCProvider(); err != nil {
+			return err
+		}
+	}
 	if c.Billing.CircuitBreaker.Enabled {
 		if c.Billing.CircuitBreaker.FailureThreshold <= 0 {
 			return fmt.Errorf("billing.circuit_breaker.failure_threshold must be positive")
@@ -2612,6 +2707,20 @@ func (c *Config) Validate() error {
 	if c.Gateway.ProxyProbeResponseReadMaxBytes <= 0 {
 		return fmt.Errorf("gateway.proxy_probe_response_read_max_bytes must be positive")
 	}
+	if c.Gateway.ResponseHeaderTimeout < 0 {
+		return fmt.Errorf("gateway.response_header_timeout must be non-negative")
+	}
+	if c.Gateway.OpenAIResponseHeaderTimeout < 0 {
+		return fmt.Errorf("gateway.openai_response_header_timeout must be non-negative")
+	}
+	if c.Gateway.OpenAIFirstOutputTimeoutSeconds < 0 || c.Gateway.OpenAIFirstOutputTimeoutSeconds > 600 ||
+		(c.Gateway.OpenAIFirstOutputTimeoutSeconds > 0 && c.Gateway.OpenAIFirstOutputTimeoutSeconds < 30) {
+		return fmt.Errorf("gateway.openai_first_output_timeout_seconds must be 0 or between 30-600 seconds")
+	}
+	if c.Gateway.OpenAIHighEffortFirstOutputTimeoutSeconds < 0 || c.Gateway.OpenAIHighEffortFirstOutputTimeoutSeconds > 1800 ||
+		(c.Gateway.OpenAIHighEffortFirstOutputTimeoutSeconds > 0 && c.Gateway.OpenAIHighEffortFirstOutputTimeoutSeconds < 30) {
+		return fmt.Errorf("gateway.openai_high_effort_first_output_timeout_seconds must be 0 or between 30-1800 seconds")
+	}
 	if strings.TrimSpace(c.Gateway.ConnectionPoolIsolation) != "" {
 		switch c.Gateway.ConnectionPoolIsolation {
 		case ConnectionPoolIsolationProxy, ConnectionPoolIsolationAccount, ConnectionPoolIsolationAccountProxy:
@@ -2658,12 +2767,28 @@ func (c *Config) Validate() error {
 		(c.Gateway.StreamKeepaliveInterval < 5 || c.Gateway.StreamKeepaliveInterval > 30) {
 		return fmt.Errorf("gateway.stream_keepalive_interval must be 0 or between 5-30 seconds")
 	}
+	if c.Gateway.ImageNonstreamKeepaliveInterval < 0 {
+		return fmt.Errorf("gateway.image_nonstream_keepalive_interval must be non-negative")
+	}
+	if c.Gateway.ImageNonstreamKeepaliveInterval != 0 &&
+		(c.Gateway.ImageNonstreamKeepaliveInterval < 5 || c.Gateway.ImageNonstreamKeepaliveInterval > 60) {
+		return fmt.Errorf("gateway.image_nonstream_keepalive_interval must be 0 or between 5-60 seconds")
+	}
 	// 兼容旧键 sticky_previous_response_ttl_seconds
 	if c.Gateway.OpenAIWS.StickyResponseIDTTLSeconds <= 0 && c.Gateway.OpenAIWS.StickyPreviousResponseTTLSeconds > 0 {
 		c.Gateway.OpenAIWS.StickyResponseIDTTLSeconds = c.Gateway.OpenAIWS.StickyPreviousResponseTTLSeconds
 	}
 	if c.Gateway.OpenAIWS.MaxConnsPerAccount <= 0 {
 		return fmt.Errorf("gateway.openai_ws.max_conns_per_account must be positive")
+	}
+	if c.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds < 0 {
+		return fmt.Errorf("gateway.openai_ws.ingress_inter_turn_idle_timeout_seconds must be non-negative")
+	}
+	if c.Gateway.OpenAIWS.MaxIngressConnectionsPerAPIKey < 0 {
+		return fmt.Errorf("gateway.openai_ws.max_ingress_connections_per_api_key must be non-negative")
+	}
+	if c.Gateway.OpenAIWS.ClientFirstMessageTimeoutSeconds <= 0 {
+		return fmt.Errorf("gateway.openai_ws.client_first_message_timeout_seconds must be positive")
 	}
 	if c.Gateway.OpenAIWS.MinIdlePerAccount < 0 {
 		return fmt.Errorf("gateway.openai_ws.min_idle_per_account must be non-negative")
@@ -2761,16 +2886,27 @@ func (c *Config) Validate() error {
 		c.Gateway.OpenAIWS.SchedulerScoreWeights.Load < 0 ||
 		c.Gateway.OpenAIWS.SchedulerScoreWeights.Queue < 0 ||
 		c.Gateway.OpenAIWS.SchedulerScoreWeights.ErrorRate < 0 ||
-		c.Gateway.OpenAIWS.SchedulerScoreWeights.TTFT < 0 {
+		c.Gateway.OpenAIWS.SchedulerScoreWeights.TTFT < 0 ||
+		c.Gateway.OpenAIWS.SchedulerScoreWeights.QuotaHeadroom < 0 {
 		return fmt.Errorf("gateway.openai_ws.scheduler_score_weights.* must be non-negative")
 	}
 	weightSum := c.Gateway.OpenAIWS.SchedulerScoreWeights.Priority +
 		c.Gateway.OpenAIWS.SchedulerScoreWeights.Load +
 		c.Gateway.OpenAIWS.SchedulerScoreWeights.Queue +
 		c.Gateway.OpenAIWS.SchedulerScoreWeights.ErrorRate +
-		c.Gateway.OpenAIWS.SchedulerScoreWeights.TTFT
+		c.Gateway.OpenAIWS.SchedulerScoreWeights.TTFT +
+		c.Gateway.OpenAIWS.SchedulerScoreWeights.QuotaHeadroom
 	if weightSum <= 0 {
 		return fmt.Errorf("gateway.openai_ws.scheduler_score_weights must not all be zero")
+	}
+	if c.Gateway.OpenAIHTTP2.FallbackErrorThreshold < 0 {
+		return fmt.Errorf("gateway.openai_http2.fallback_error_threshold must be non-negative")
+	}
+	if c.Gateway.OpenAIHTTP2.FallbackWindowSeconds < 0 {
+		return fmt.Errorf("gateway.openai_http2.fallback_window_seconds must be non-negative")
+	}
+	if c.Gateway.OpenAIHTTP2.FallbackTTLSeconds < 0 {
+		return fmt.Errorf("gateway.openai_http2.fallback_ttl_seconds must be non-negative")
 	}
 	if c.Gateway.MaxLineSize < 0 {
 		return fmt.Errorf("gateway.max_line_size must be non-negative")
@@ -2923,6 +3059,111 @@ func (c *Config) Validate() error {
 	}
 	if c.Concurrency.PingInterval < 5 || c.Concurrency.PingInterval > 30 {
 		return fmt.Errorf("concurrency.ping_interval must be between 5-30 seconds")
+	}
+	return nil
+}
+
+func (c *Config) validateOIDCProvider() error {
+	provider := c.OIDCProvider
+	if provider.Issuer == "" {
+		return fmt.Errorf("oidc_provider.issuer is required when oidc_provider.enabled=true")
+	}
+	if provider.FrontendAuthorizeURL == "" {
+		return fmt.Errorf("oidc_provider.frontend_authorize_url is required when oidc_provider.enabled=true")
+	}
+	if provider.SigningKeyPath == "" {
+		return fmt.Errorf("oidc_provider.signing_key_path is required when oidc_provider.enabled=true")
+	}
+	if provider.RequestTTLSeconds <= 0 || provider.RequestTTLSeconds > 600 {
+		return fmt.Errorf("oidc_provider.request_ttl_seconds must be between 1 and 600")
+	}
+	if provider.CodeTTLSeconds <= 0 || provider.CodeTTLSeconds > 600 {
+		return fmt.Errorf("oidc_provider.code_ttl_seconds must be between 1 and 600")
+	}
+	if provider.AccessTokenTTLSeconds <= 0 || provider.AccessTokenTTLSeconds > 3600 {
+		return fmt.Errorf("oidc_provider.access_token_ttl_seconds must be between 1 and 3600")
+	}
+
+	if err := validateOIDCProviderEndpoint("oidc_provider.issuer", provider.Issuer, c.Server.Mode == "release"); err != nil {
+		return err
+	}
+	issuerURL, err := url.Parse(provider.Issuer)
+	if err != nil {
+		return fmt.Errorf("oidc_provider.issuer invalid: %w", err)
+	}
+	if issuerURL.EscapedPath() != "" && issuerURL.EscapedPath() != "/" {
+		return fmt.Errorf("oidc_provider.issuer must not include a path because provider endpoints are served from the origin root")
+	}
+	if err := validateOIDCProviderEndpoint("oidc_provider.frontend_authorize_url", provider.FrontendAuthorizeURL, c.Server.Mode == "release"); err != nil {
+		return err
+	}
+	if key, err := os.ReadFile(provider.SigningKeyPath); err != nil {
+		return fmt.Errorf("oidc_provider.signing_key_path is not readable: %w", err)
+	} else if len(key) == 0 {
+		return fmt.Errorf("oidc_provider.signing_key_path is empty")
+	}
+
+	if len(provider.Clients) == 0 {
+		return fmt.Errorf("oidc_provider.clients must contain at least one client")
+	}
+	clientIDs := make(map[string]struct{}, len(provider.Clients))
+	for i, client := range provider.Clients {
+		prefix := fmt.Sprintf("oidc_provider.clients[%d]", i)
+		if client.ID == "" {
+			return fmt.Errorf("%s.id is required", prefix)
+		}
+		if _, exists := clientIDs[client.ID]; exists {
+			return fmt.Errorf("%s.id is duplicated", prefix)
+		}
+		clientIDs[client.ID] = struct{}{}
+		secretDigest, err := hex.DecodeString(client.SecretSHA256)
+		if err != nil || len(secretDigest) != sha256.Size {
+			return fmt.Errorf("%s.secret_sha256 must be a 64-character hexadecimal SHA-256 digest", prefix)
+		}
+		if len(client.RedirectURIs) == 0 {
+			return fmt.Errorf("%s.redirect_uris must contain at least one URI", prefix)
+		}
+		redirects := make(map[string]struct{}, len(client.RedirectURIs))
+		for j, redirectURI := range client.RedirectURIs {
+			field := fmt.Sprintf("%s.redirect_uris[%d]", prefix, j)
+			if err := ValidateAbsoluteHTTPURL(redirectURI); err != nil {
+				return fmt.Errorf("%s invalid: %w", field, err)
+			}
+			u, err := url.Parse(redirectURI)
+			if err != nil {
+				return fmt.Errorf("%s invalid: %w", field, err)
+			}
+			if u.User != nil {
+				return fmt.Errorf("%s must not include userinfo", field)
+			}
+			if c.Server.Mode == "release" && !strings.EqualFold(u.Scheme, "https") {
+				return fmt.Errorf("%s must use https in release mode", field)
+			}
+			if _, exists := redirects[redirectURI]; exists {
+				return fmt.Errorf("%s is duplicated", field)
+			}
+			redirects[redirectURI] = struct{}{}
+		}
+	}
+	return nil
+}
+
+func validateOIDCProviderEndpoint(field, raw string, requireHTTPS bool) error {
+	if err := ValidateAbsoluteHTTPURL(raw); err != nil {
+		return fmt.Errorf("%s invalid: %w", field, err)
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("%s invalid: %w", field, err)
+	}
+	if u.User != nil {
+		return fmt.Errorf("%s must not include userinfo", field)
+	}
+	if u.RawQuery != "" || u.ForceQuery {
+		return fmt.Errorf("%s must not include query", field)
+	}
+	if requireHTTPS && !strings.EqualFold(u.Scheme, "https") {
+		return fmt.Errorf("%s must use https in release mode", field)
 	}
 	return nil
 }

@@ -85,6 +85,66 @@ func (r *streamReadCloser) Read(p []byte) (int, error) {
 
 func (r *streamReadCloser) Close() error { return nil }
 
+type contextBoundReadCloser struct {
+	ctx         context.Context
+	reader      io.Reader
+	onFirstRead func()
+	readStarted bool
+}
+
+func (r *contextBoundReadCloser) Read(p []byte) (int, error) {
+	if !r.readStarted {
+		r.readStarted = true
+		if r.onFirstRead != nil {
+			r.onFirstRead()
+		}
+	}
+	select {
+	case <-r.ctx.Done():
+		return 0, r.ctx.Err()
+	default:
+		return r.reader.Read(p)
+	}
+}
+
+func (r *contextBoundReadCloser) Close() error {
+	return nil
+}
+
+type contextBoundAnthropicUpstream struct {
+	cancelInbound context.CancelFunc
+	body          string
+	requestID     string
+}
+
+func (u *contextBoundAnthropicUpstream) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
+	return u.DoWithTLS(req, proxyURL, accountID, accountConcurrency, nil)
+}
+
+func (u *contextBoundAnthropicUpstream) DoWithTLS(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, profile *tlsfingerprint.Profile) (*http.Response, error) {
+	if req != nil && req.Body != nil {
+		b, _ := io.ReadAll(req.Body)
+		_ = req.Body.Close()
+		req.Body = io.NopCloser(bytes.NewReader(b))
+	}
+	reqCtx := context.Background()
+	if req != nil {
+		reqCtx = req.Context()
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Type": []string{"application/json"},
+			"X-Request-Id": []string{u.requestID},
+		},
+		Body: &contextBoundReadCloser{
+			ctx:         reqCtx,
+			reader:      strings.NewReader(u.body),
+			onFirstRead: u.cancelInbound,
+		},
+	}, nil
+}
+
 type failWriteResponseWriter struct {
 	gin.ResponseWriter
 }
@@ -1042,6 +1102,78 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardDirect_NonStreamingSuc
 	require.Equal(t, upstreamJSON, rec.Body.String())
 }
 
+func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardDirect_NonStreamingClientCancelStillReturnsUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	inboundCtx, cancelInbound := context.WithCancel(context.Background())
+	body := []byte(`{"model":"claude-3-5-sonnet-latest","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`)
+	upstreamJSON := `{"id":"msg_1","type":"message","usage":{"input_tokens":21,"output_tokens":8,"cache_creation":{"ephemeral_5m_input_tokens":3,"ephemeral_1h_input_tokens":4},"cached_tokens":5}}`
+	upstream := &contextBoundAnthropicUpstream{
+		cancelInbound: cancelInbound,
+		body:          upstreamJSON,
+		requestID:     "rid-pass-nonstream-cancel",
+	}
+	svc := &GatewayService{
+		cfg:              &config.Config{},
+		httpUpstream:     upstream,
+		rateLimitService: &RateLimitService{},
+	}
+
+	result, err := svc.forwardAnthropicAPIKeyPassthrough(inboundCtx, c, newAnthropicAPIKeyAccountForTest(), body, "claude-3-5-sonnet-latest", "claude-3-5-sonnet-latest", false, time.Now())
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "rid-pass-nonstream-cancel", result.RequestID)
+	require.Equal(t, 21, result.Usage.InputTokens)
+	require.Equal(t, 8, result.Usage.OutputTokens)
+	require.Equal(t, 7, result.Usage.CacheCreationInputTokens)
+	require.Equal(t, 5, result.Usage.CacheReadInputTokens)
+	require.Equal(t, upstreamJSON, rec.Body.String())
+	require.ErrorIs(t, inboundCtx.Err(), context.Canceled)
+}
+
+func TestGatewayService_AnthropicForward_NonStreamingClientCancelStillReturnsUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	inboundCtx, cancelInbound := context.WithCancel(context.Background())
+	body := []byte(`{"model":"claude-3-5-sonnet-latest","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`)
+	parsed := &ParsedRequest{
+		Body:   body,
+		Model:  "claude-3-5-sonnet-latest",
+		Stream: false,
+	}
+	upstreamJSON := `{"id":"msg_1","type":"message","model":"claude-3-5-sonnet-latest","usage":{"input_tokens":31,"output_tokens":9,"cache_creation":{"ephemeral_5m_input_tokens":2,"ephemeral_1h_input_tokens":6},"cached_tokens":7}}`
+	upstream := &contextBoundAnthropicUpstream{
+		cancelInbound: cancelInbound,
+		body:          upstreamJSON,
+		requestID:     "rid-nonstream-cancel",
+	}
+	svc := &GatewayService{
+		cfg:              &config.Config{},
+		httpUpstream:     upstream,
+		rateLimitService: &RateLimitService{},
+	}
+	account := newAnthropicAPIKeyAccountForTest()
+	account.Extra = map[string]any{}
+
+	result, err := svc.Forward(inboundCtx, c, account, parsed)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "rid-nonstream-cancel", result.RequestID)
+	require.Equal(t, 31, result.Usage.InputTokens)
+	require.Equal(t, 9, result.Usage.OutputTokens)
+	require.Equal(t, 2, result.Usage.CacheCreation5mTokens)
+	require.Equal(t, 6, result.Usage.CacheCreation1hTokens)
+	require.Equal(t, 7, result.Usage.CacheReadInputTokens)
+	require.Equal(t, int64(7), gjson.Get(rec.Body.String(), "usage.cache_read_input_tokens").Int())
+	require.ErrorIs(t, inboundCtx.Err(), context.Canceled)
+}
+
 func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardDirect_StreamIncompleteReturnsBillableUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
@@ -1462,4 +1594,40 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_StreamingUpstreamReadErrorAft
 	require.NotNil(t, result)
 	require.True(t, result.clientDisconnect)
 	require.Equal(t, 8, result.usage.InputTokens)
+}
+
+func TestGatewayService_AnthropicAPIKeyPassthrough_ClientDisconnectDisabledDrainReturnsError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Writer = &failWriteResponseWriter{ResponseWriter: c.Writer}
+
+	svc := &GatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{
+				MaxLineSize: defaultMaxLineSize,
+			},
+		},
+		settingService: newOpenAIDetachedDrainSettingServiceForTest(t, false),
+	}
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"usage":{"input_tokens":8}}}`,
+			"",
+			`data: {"type":"message_delta","usage":{"output_tokens":3}}`,
+			"",
+			`data: {"type":"message_stop"}`,
+			"",
+		}, "\n"))),
+	}
+
+	result, err := svc.handleStreamingResponseAnthropicAPIKeyPassthrough(context.Background(), resp, c, &Account{ID: 4}, time.Now(), "claude-3-7-sonnet-20250219")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "stream usage incomplete after disconnect")
+	require.NotNil(t, result)
+	require.True(t, result.clientDisconnect)
 }

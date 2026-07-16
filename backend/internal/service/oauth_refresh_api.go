@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -19,7 +20,51 @@ type OAuthRefreshExecutor interface {
 	CacheKey(account *Account) string
 }
 
+// GrokOAuthRefreshSuccessRepository atomically compares the credential/proxy
+// snapshot used by the provider call before persisting rotated credentials.
+type GrokOAuthRefreshSuccessRepository interface {
+	UpdateGrokOAuthCredentialsIfUnchanged(
+		ctx context.Context,
+		id int64,
+		expectedCredentials map[string]any,
+		expectedProxyID *int64,
+		credentials map[string]any,
+	) (bool, error)
+}
+
 const defaultRefreshLockTTL = 60 * time.Second
+const oauthRefreshCleanupTimeout = 2 * time.Second
+
+type oauthRefreshRequestPathKey struct{}
+
+func withOAuthRefreshRequestPath(ctx context.Context) context.Context {
+	return context.WithValue(ctx, oauthRefreshRequestPathKey{}, true)
+}
+
+func isOAuthRefreshRequestPath(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	requestPath, _ := ctx.Value(oauthRefreshRequestPathKey{}).(bool)
+	return requestPath
+}
+
+type oauthRefreshLocalLock struct{ token chan struct{} }
+
+func newOAuthRefreshLocalLock() *oauthRefreshLocalLock {
+	return &oauthRefreshLocalLock{token: make(chan struct{}, 1)}
+}
+
+func (l *oauthRefreshLocalLock) Lock(ctx context.Context) error {
+	select {
+	case l.token <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (l *oauthRefreshLocalLock) Unlock() { <-l.token }
 
 // OAuthRefreshResult 统一刷新结果
 type OAuthRefreshResult struct {
@@ -35,7 +80,7 @@ type OAuthRefreshAPI struct {
 	accountRepo AccountRepository
 	tokenCache  GeminiTokenCache // 可选，nil = 无分布式锁
 	lockTTL     time.Duration
-	localLocks  sync.Map // key: cacheKey string -> value: *sync.Mutex
+	localLocks  sync.Map // key: cacheKey string -> value: *oauthRefreshLocalLock
 }
 
 // NewOAuthRefreshAPI 创建统一刷新 API
@@ -53,11 +98,11 @@ func NewOAuthRefreshAPI(accountRepo AccountRepository, tokenCache GeminiTokenCac
 }
 
 // getLocalLock 返回指定 cacheKey 的进程内互斥锁
-func (api *OAuthRefreshAPI) getLocalLock(cacheKey string) *sync.Mutex {
-	actual, _ := api.localLocks.LoadOrStore(cacheKey, &sync.Mutex{})
-	mu, ok := actual.(*sync.Mutex)
+func (api *OAuthRefreshAPI) getLocalLock(cacheKey string) *oauthRefreshLocalLock {
+	actual, _ := api.localLocks.LoadOrStore(cacheKey, newOAuthRefreshLocalLock())
+	mu, ok := actual.(*oauthRefreshLocalLock)
 	if !ok {
-		mu = &sync.Mutex{}
+		mu = newOAuthRefreshLocalLock()
 		api.localLocks.Store(cacheKey, mu)
 	}
 	return mu
@@ -78,15 +123,29 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	executor OAuthRefreshExecutor,
 	refreshWindow time.Duration,
 ) (*OAuthRefreshResult, error) {
+	if api == nil || api.accountRepo == nil {
+		return nil, errors.New("oauth refresh account repository is not configured")
+	}
+	if account == nil {
+		return nil, errors.New("oauth refresh account is nil")
+	}
+	if executor == nil {
+		return nil, errors.New("oauth refresh executor is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	requestPath := isOAuthRefreshRequestPath(ctx)
 	cacheKey := executor.CacheKey(account)
 
 	// 0. 获取进程内互斥锁（防止同一进程内的并发刷新竞争）
 	localMu := api.getLocalLock(cacheKey)
-	localMu.Lock()
+	if err := localMu.Lock(ctx); err != nil {
+		return nil, fmt.Errorf("oauth refresh local lock: %w", err)
+	}
 	defer localMu.Unlock()
 
 	// 1. 获取分布式锁
-	lockAcquired := false
 	if api.tokenCache != nil {
 		acquired, lockErr := api.tokenCache.AcquireRefreshLock(ctx, cacheKey, api.lockTTL)
 		if lockErr != nil {
@@ -100,22 +159,37 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 			// 锁被其他 worker 持有
 			return &OAuthRefreshResult{LockHeld: true}, nil
 		} else {
-			lockAcquired = true
-			defer func() { _ = api.tokenCache.ReleaseRefreshLock(ctx, cacheKey) }()
+			defer api.releaseRefreshLock(ctx, cacheKey)
 		}
 	}
 
 	// 2. 从 DB 重读最新 account（锁保护下，确保使用最新的 refresh_token）
 	freshAccount, err := api.accountRepo.GetByID(ctx, account.ID)
 	if err != nil {
-		slog.Warn("oauth_refresh_db_reread_failed",
-			"account_id", account.ID,
-			"error", err,
-		)
-		// 降级使用传入的 account
-		freshAccount = account
+		if account.IsGrokOAuth() {
+			return nil, fmt.Errorf("%w: %v", errOAuthRefreshAccountRereadFailed, err)
+		}
+		slog.Warn("oauth_refresh_db_reread_failed", "account_id", account.ID, "error", err)
+		freshAccount = account // 保留非 Grok 平台既有降级语义
 	} else if freshAccount == nil {
+		if account.IsGrokOAuth() {
+			return nil, fmt.Errorf("%w: account not found", errOAuthRefreshAccountStateChanged)
+		}
 		freshAccount = account
+	}
+	if freshAccount.ID != account.ID {
+		return nil, fmt.Errorf("%w: account identity mismatch", errOAuthRefreshAccountRereadFailed)
+	}
+	if requestPath && freshAccount.IsGrokOAuth() {
+		if eligibilityErr := grokOAuthRequestAccountEligibilityError(freshAccount); eligibilityErr != nil {
+			return nil, withGrokCredentialFailureSnapshot(eligibilityErr, freshAccount)
+		}
+	}
+	if !executor.CanRefresh(freshAccount) {
+		if requestPath && freshAccount.IsGrokOAuth() && strings.TrimSpace(freshAccount.GetGrokRefreshToken()) == "" {
+			return nil, withGrokCredentialFailureSnapshot(errGrokOAuthRefreshTokenMissing, freshAccount)
+		}
+		return &OAuthRefreshResult{Account: freshAccount}, nil
 	}
 
 	// 3. 二次检查是否仍需刷新（另一条路径可能已刷新）
@@ -126,12 +200,22 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	}
 
 	// 4. 执行平台特定刷新逻辑
+	attemptedCredentials := shallowCopyMap(freshAccount.Credentials)
+	attemptedProxyID := cloneGrokProxyID(freshAccount.ProxyID)
 	newCredentials, refreshErr := executor.Refresh(ctx, freshAccount)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
 	if refreshErr != nil {
 		// 竞争恢复：invalid_grant 可能是另一个 worker 已消费了旧 refresh_token
 		// 重新读取 DB，如果 refresh_token 已更新则说明是竞争，返回成功
 		if isInvalidGrantError(refreshErr) {
 			if recoveredAccount, recovered := api.tryRecoverFromRefreshRace(ctx, freshAccount); recovered {
+				if requestPath && recoveredAccount.IsGrokOAuth() {
+					if eligibilityErr := grokOAuthRequestAccountEligibilityError(recoveredAccount); eligibilityErr != nil {
+						return nil, withGrokCredentialFailureSnapshot(eligibilityErr, recoveredAccount)
+					}
+				}
 				slog.Info("oauth_refresh_race_recovered",
 					"account_id", freshAccount.ID,
 					"platform", freshAccount.Platform,
@@ -141,13 +225,49 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 				}, nil
 			}
 		}
-		return nil, refreshErr
+		if requestPath && freshAccount.IsGrokOAuth() {
+			return &OAuthRefreshResult{Account: freshAccount}, withGrokCredentialFailureSnapshot(refreshErr, freshAccount)
+		}
+		return &OAuthRefreshResult{Account: freshAccount}, refreshErr
 	}
 
 	// 5. 设置版本号 + 更新 DB
 	if newCredentials != nil {
 		newCredentials["_token_version"] = time.Now().UnixMilli()
-		if updateErr := persistAccountCredentials(ctx, api.accountRepo, freshAccount, newCredentials); updateErr != nil {
+		if freshAccount.IsGrokOAuth() {
+			conditionalRepo, ok := api.accountRepo.(GrokOAuthRefreshSuccessRepository)
+			if !ok {
+				return nil, &providerConfigurationRefreshError{err: errors.New("grok OAuth refresh success CAS repository is not configured")}
+			}
+			applied, updateErr := conditionalRepo.UpdateGrokOAuthCredentialsIfUnchanged(
+				ctx,
+				freshAccount.ID,
+				attemptedCredentials,
+				attemptedProxyID,
+				newCredentials,
+			)
+			if updateErr != nil {
+				return nil, &providerCycleContainmentRefreshError{err: fmt.Errorf("grok OAuth credential persistence failed: %w", updateErr)}
+			}
+			if !applied {
+				currentAccount, readErr := api.accountRepo.GetByID(ctx, freshAccount.ID)
+				if readErr != nil || currentAccount == nil {
+					if readErr == nil {
+						readErr = errors.New("account not found after Grok OAuth success CAS miss")
+					}
+					return nil, &providerCycleContainmentRefreshError{err: fmt.Errorf("grok OAuth success CAS lost and current state is unavailable: %w", readErr)}
+				}
+				return &OAuthRefreshResult{Account: currentAccount}, nil
+			}
+			durableAccount, readErr := api.loadGrokDurableAccountAfterPersist(ctx, cacheKey, freshAccount.ID)
+			if readErr != nil || durableAccount == nil {
+				if readErr == nil {
+					readErr = errors.New("account not found after Grok OAuth success CAS")
+				}
+				return nil, &providerCycleContainmentRefreshError{err: fmt.Errorf("grok OAuth success persisted but durable account state is unavailable: %w", readErr)}
+			}
+			freshAccount = durableAccount
+		} else if updateErr := persistAccountCredentials(ctx, api.accountRepo, freshAccount, newCredentials); updateErr != nil {
 			slog.Error("oauth_refresh_update_failed",
 				"account_id", freshAccount.ID,
 				"error", updateErr,
@@ -155,14 +275,44 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 			return nil, fmt.Errorf("oauth refresh succeeded but DB update failed: %w", updateErr)
 		}
 	}
-
-	_ = lockAcquired // suppress unused warning when tokenCache is nil
+	if requestPath && freshAccount.IsGrokOAuth() {
+		if eligibilityErr := grokOAuthRequestAccountEligibilityError(freshAccount); eligibilityErr != nil {
+			return nil, withGrokCredentialFailureSnapshot(eligibilityErr, freshAccount)
+		}
+	}
 
 	return &OAuthRefreshResult{
 		Refreshed:      true,
 		NewCredentials: newCredentials,
 		Account:        freshAccount,
 	}, nil
+}
+
+func (api *OAuthRefreshAPI) releaseRefreshLock(parent context.Context, cacheKey string) {
+	cleanupParent := context.Background()
+	if parent != nil {
+		cleanupParent = context.WithoutCancel(parent)
+	}
+	ctx, cancel := context.WithTimeout(cleanupParent, oauthRefreshCleanupTimeout)
+	defer cancel()
+	if err := api.tokenCache.ReleaseRefreshLock(ctx, cacheKey); err != nil {
+		slog.Warn("oauth_refresh_lock_release_failed", "cache_key", cacheKey, "error", err)
+	}
+}
+
+func (api *OAuthRefreshAPI) loadGrokDurableAccountAfterPersist(parent context.Context, cacheKey string, accountID int64) (*Account, error) {
+	cleanupParent := context.Background()
+	if parent != nil {
+		cleanupParent = context.WithoutCancel(parent)
+	}
+	ctx, cancel := context.WithTimeout(cleanupParent, oauthRefreshCleanupTimeout)
+	defer cancel()
+	if api.tokenCache != nil {
+		if err := api.tokenCache.DeleteAccessToken(ctx, cacheKey); err != nil {
+			slog.Warn("oauth_refresh_post_persist_cache_delete_failed", "account_id", accountID, "error", err)
+		}
+	}
+	return api.accountRepo.GetByID(ctx, accountID)
 }
 
 // isInvalidGrantError 检查错误是否为 invalid_grant

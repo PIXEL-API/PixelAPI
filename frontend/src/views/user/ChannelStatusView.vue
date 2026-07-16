@@ -23,18 +23,39 @@
         @refresh="reloadQuotaPool(false)"
       />
 
-      <AccountQuotaDashboardPanel
-        :dashboard="quotaPoolDashboard?.platform ?? null"
-        :loading="quotaPoolLoading"
-        :error="quotaPoolError"
-        :show-summary-breakdown="false"
-        :group-capacity-by-id="groupCapacityById"
-        :title="t('channelStatus.quotaPool.platformTitle')"
-        :subtitle="t('channelStatus.quotaPool.platformSubtitle')"
-        :empty-message="t('channelStatus.quotaPool.platformEmpty')"
-        :load-failed-message="t('channelStatus.quotaPool.loadFailed')"
-        @refresh="reloadQuotaPool(false)"
-      />
+      <div class="min-w-0">
+        <AccountQuotaDashboardPanel
+          :dashboard="quotaPoolDashboard?.platform ?? null"
+          :loading="quotaPoolLoading"
+          :error="quotaPoolError"
+          :show-summary-breakdown="false"
+          :group-capacity-by-id="groupCapacityById"
+          :title="t('channelStatus.quotaPool.platformTitle')"
+          :subtitle="t('channelStatus.quotaPool.platformSubtitle')"
+          :empty-message="t('channelStatus.quotaPool.platformEmpty')"
+          :load-failed-message="t('channelStatus.quotaPool.loadFailed')"
+          @refresh="reloadPlatformPool(false)"
+        />
+        <div
+          v-if="capacityLoading"
+          class="mt-2 text-xs text-gray-500 dark:text-gray-400"
+        >
+          {{ t('common.loading') }}
+        </div>
+        <div
+          v-else-if="capacityError"
+          class="mt-2 flex items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300"
+        >
+          <span>{{ t('channelStatus.capacity.loadFailed') }}</span>
+          <button
+            type="button"
+            class="min-h-11 rounded-md px-3 font-medium hover:bg-red-100 dark:hover:bg-red-900/40"
+            @click="reloadCapacity(false)"
+          >
+            {{ t('common.refresh') }}
+          </button>
+        </div>
+      </div>
     </div>
 
     <MonitorCardGrid
@@ -95,6 +116,8 @@ const quotaPoolDashboard = ref<UserAccountQuotaPoolDashboard | null>(null)
 const quotaPoolLoading = ref(false)
 const quotaPoolError = ref(false)
 const groupCapacityById = ref<Record<number, { concurrency_used: number; concurrency_max: number }>>({})
+const capacityLoading = ref(false)
+const capacityError = ref(false)
 const currentWindow = ref<MonitorWindow>('7d')
 const detailCache = reactive<Record<number, UserMonitorDetail>>({})
 const showDetail = ref(false)
@@ -102,13 +125,14 @@ const detailTarget = ref<UserMonitorView | null>(null)
 
 let abortController: AbortController | null = null
 let quotaPoolAbortController: AbortController | null = null
+let capacityAbortController: AbortController | null = null
 
 const autoRefresh = useAutoRefresh({
   storageKey: 'channel-status-auto-refresh',
   intervals: [30, 60, 120] as const,
   defaultInterval: DEFAULT_INTERVAL_SECONDS,
   onRefresh: () => reloadAll(true),
-  shouldPause: () => document.hidden || loading.value || quotaPoolLoading.value,
+  shouldPause: () => document.hidden || loading.value || quotaPoolLoading.value || capacityLoading.value,
 })
 const countdown = autoRefresh.countdown
 
@@ -148,7 +172,7 @@ async function reload(silent = false) {
   } finally {
     if (abortController === ctrl) {
       if (!silent) loading.value = false
-      countdown.value = DEFAULT_INTERVAL_SECONDS
+      autoRefresh.resetCountdown()
       abortController = null
     }
   }
@@ -161,22 +185,9 @@ async function reloadQuotaPool(silent = false) {
   if (!silent) quotaPoolLoading.value = true
   quotaPoolError.value = false
   try {
-    const [dashboard, capacity] = await Promise.all([
-      fetchQuotaPoolDashboard({ signal: ctrl.signal }),
-      fetchChannelCapacitySummary({ signal: ctrl.signal })
-    ])
+    const dashboard = await fetchQuotaPoolDashboard({ signal: ctrl.signal })
     if (ctrl.signal.aborted || quotaPoolAbortController !== ctrl) return
     quotaPoolDashboard.value = dashboard
-    groupCapacityById.value = capacity.items.reduce<Record<number, { concurrency_used: number; concurrency_max: number }>>(
-      (acc, item) => {
-        acc[item.group_id] = {
-          concurrency_used: item.concurrency_used,
-          concurrency_max: item.concurrency_max,
-        }
-        return acc
-      },
-      {}
-    )
   } catch (err: unknown) {
     const e = err as { name?: string; code?: string }
     if (e?.name === 'AbortError' || e?.code === 'ERR_CANCELED') return
@@ -190,10 +201,50 @@ async function reloadQuotaPool(silent = false) {
   }
 }
 
+async function reloadCapacity(silent = false) {
+  capacityAbortController?.abort()
+  const ctrl = new AbortController()
+  capacityAbortController = ctrl
+  if (!silent) capacityLoading.value = true
+  capacityError.value = false
+  try {
+    const capacity = await fetchChannelCapacitySummary({ signal: ctrl.signal })
+    if (ctrl.signal.aborted || capacityAbortController !== ctrl) return
+    groupCapacityById.value = capacity.items.reduce<Record<number, { concurrency_used: number; concurrency_max: number }>>(
+      (acc, item) => {
+        acc[item.group_id] = {
+          concurrency_used: item.concurrency_used,
+          concurrency_max: item.concurrency_max,
+        }
+        return acc
+      },
+      {}
+    )
+  } catch (err: unknown) {
+    const e = err as { name?: string; code?: string }
+    if (e?.name === 'AbortError' || e?.code === 'ERR_CANCELED') return
+    capacityError.value = true
+    appStore.showError(extractApiErrorMessage(err, t('channelStatus.capacity.loadFailed')))
+  } finally {
+    if (capacityAbortController === ctrl) {
+      if (!silent) capacityLoading.value = false
+      capacityAbortController = null
+    }
+  }
+}
+
 async function reloadAll(silent = false) {
   await Promise.all([
     reload(silent),
-    reloadQuotaPool(silent)
+    reloadQuotaPool(silent),
+    reloadCapacity(silent)
+  ])
+}
+
+async function reloadPlatformPool(silent = false) {
+  await Promise.all([
+    reloadQuotaPool(silent),
+    reloadCapacity(silent)
   ])
 }
 
@@ -250,13 +301,18 @@ watch(
 
 onMounted(() => {
   void reloadAll(false)
-  if (appStore.cachedPublicSettings?.channel_monitor_enabled !== false) {
-    autoRefresh.setEnabled(true)
+  if (
+    appStore.cachedPublicSettings?.channel_monitor_enabled !== false &&
+    autoRefresh.enabled.value
+  ) {
+    autoRefresh.resetCountdown()
+    autoRefresh.start()
   }
 })
 
 onBeforeUnmount(() => {
   if (abortController) abortController.abort()
   if (quotaPoolAbortController) quotaPoolAbortController.abort()
+  if (capacityAbortController) capacityAbortController.abort()
 })
 </script>

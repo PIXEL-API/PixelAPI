@@ -408,10 +408,10 @@ func TestBuildAuthorizationURL_WithProjectID(t *testing.T) {
 	}
 }
 
-func TestBuildAuthorizationURL_UsesBuiltinSecretFallback(t *testing.T) {
+func TestBuildAuthorizationURL_NoEnvSecretReturnsConfigError(t *testing.T) {
 	t.Setenv(GeminiCLIOAuthClientSecretEnv, "")
 
-	authURL, err := BuildAuthorizationURL(
+	_, err := BuildAuthorizationURL(
 		OAuthConfig{},
 		"test-state",
 		"test-challenge",
@@ -419,11 +419,15 @@ func TestBuildAuthorizationURL_UsesBuiltinSecretFallback(t *testing.T) {
 		"",
 		"code_assist",
 	)
-	if err != nil {
-		t.Fatalf("BuildAuthorizationURL() 不应报错: %v", err)
+	if err == nil {
+		t.Fatal("BuildAuthorizationURL() 未配置内置客户端 secret 时应报错")
 	}
-	if !strings.Contains(authURL, "client_id="+GeminiCLIOAuthClientID) {
-		t.Errorf("应使用内置 Gemini CLI client_id，实际 URL: %s", authURL)
+	errText := err.Error()
+	if !strings.Contains(errText, "GEMINI_CLI_OAUTH_CLIENT_SECRET_MISSING") {
+		t.Errorf("错误应包含缺失 secret 的 reason，实际: %v", err)
+	}
+	if !strings.Contains(errText, GeminiCLIOAuthClientSecretEnv) {
+		t.Errorf("错误应提示配置环境变量 %s，实际: %v", GeminiCLIOAuthClientSecretEnv, err)
 	}
 }
 
@@ -686,18 +690,19 @@ func TestEffectiveOAuthConfig_WhitespaceTriming(t *testing.T) {
 	}
 }
 
-func TestEffectiveOAuthConfig_NoEnvSecret(t *testing.T) {
+func TestEffectiveOAuthConfig_NoEnvSecretReturnsConfigError(t *testing.T) {
 	t.Setenv(GeminiCLIOAuthClientSecretEnv, "")
 
-	cfg, err := EffectiveOAuthConfig(OAuthConfig{}, "code_assist")
-	if err != nil {
-		t.Fatalf("不设置环境变量时应回退到内置 secret，实际报错: %v", err)
+	_, err := EffectiveOAuthConfig(OAuthConfig{}, "code_assist")
+	if err == nil {
+		t.Fatal("不设置环境变量时应拒绝使用内置客户端")
 	}
-	if strings.TrimSpace(cfg.ClientSecret) == "" {
-		t.Error("ClientSecret 不应为空")
+	errText := err.Error()
+	if !strings.Contains(errText, "GEMINI_CLI_OAUTH_CLIENT_SECRET_MISSING") {
+		t.Errorf("错误应包含缺失 secret 的 reason，实际: %v", err)
 	}
-	if cfg.ClientID != GeminiCLIOAuthClientID {
-		t.Errorf("ClientID 应回退为内置客户端 ID，实际: %q", cfg.ClientID)
+	if !strings.Contains(errText, GeminiCLIOAuthClientSecretEnv) {
+		t.Errorf("错误应提示配置环境变量 %s，实际: %v", GeminiCLIOAuthClientSecretEnv, err)
 	}
 }
 

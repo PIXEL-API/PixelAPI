@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,19 +18,57 @@ const (
 
 	WithdrawalMinimumAmount = 1.00
 	WithdrawalFirstFee      = 0.10
+
+	WithdrawalRateLimitWindowDaysDefault = 1
+	WithdrawalRateLimitWindowDaysMin     = 1
+	WithdrawalRateLimitWindowDaysMax     = 365
+	WithdrawalRateLimitMaxDefault        = 0
+	WithdrawalRateLimitMaxAllowed        = 1000
 )
 
 var (
-	ErrWithdrawalAmountInvalid       = infraerrors.BadRequest("WITHDRAWAL_AMOUNT_INVALID", "withdrawal amount must be at least 1.00 and use at most two decimal places")
-	ErrWithdrawalReceiptCodeRequired = infraerrors.BadRequest("WITHDRAWAL_RECEIPT_CODE_REQUIRED", "receipt code is required")
-	ErrWithdrawalInsufficientBalance = infraerrors.Forbidden("WITHDRAWAL_INSUFFICIENT_BALANCE", "insufficient balance")
-	ErrWithdrawalPendingExists       = infraerrors.Conflict("WITHDRAWAL_PENDING_EXISTS", "user already has a pending withdrawal")
-	ErrWithdrawalNotFound            = infraerrors.NotFound("WITHDRAWAL_NOT_FOUND", "withdrawal request not found")
-	ErrWithdrawalCannotCancel        = infraerrors.Conflict("WITHDRAWAL_CANNOT_CANCEL", "only pending withdrawals can be cancelled")
-	ErrWithdrawalCannotSettle        = infraerrors.Conflict("WITHDRAWAL_CANNOT_SETTLE", "only pending withdrawals can be settled")
-	ErrWithdrawalCannotReject        = infraerrors.Conflict("WITHDRAWAL_CANNOT_REJECT", "only pending withdrawals can be rejected")
-	ErrWithdrawalManagementDisabled  = infraerrors.Forbidden("WITHDRAWAL_MANAGEMENT_DISABLED", "withdrawal management is disabled")
+	ErrWithdrawalAmountInvalid           = infraerrors.BadRequest("WITHDRAWAL_AMOUNT_INVALID", "withdrawal amount must be at least 1.00 and use at most two decimal places")
+	ErrWithdrawalReceiptCodeRequired     = infraerrors.BadRequest("WITHDRAWAL_RECEIPT_CODE_REQUIRED", "receipt code is required")
+	ErrWithdrawalInsufficientBalance     = infraerrors.Forbidden("WITHDRAWAL_INSUFFICIENT_BALANCE", "insufficient balance")
+	ErrWithdrawalPendingExists           = infraerrors.Conflict("WITHDRAWAL_PENDING_EXISTS", "user already has a pending withdrawal")
+	ErrWithdrawalNotFound                = infraerrors.NotFound("WITHDRAWAL_NOT_FOUND", "withdrawal request not found")
+	ErrWithdrawalCannotCancel            = infraerrors.Conflict("WITHDRAWAL_CANNOT_CANCEL", "only pending withdrawals can be cancelled")
+	ErrWithdrawalCannotSettle            = infraerrors.Conflict("WITHDRAWAL_CANNOT_SETTLE", "only pending withdrawals can be settled")
+	ErrWithdrawalCannotReject            = infraerrors.Conflict("WITHDRAWAL_CANNOT_REJECT", "only pending withdrawals can be rejected")
+	ErrWithdrawalManagementDisabled      = infraerrors.Forbidden("WITHDRAWAL_MANAGEMENT_DISABLED", "withdrawal management is disabled")
+	ErrWithdrawalRejectionReasonRequired = infraerrors.BadRequest("WITHDRAWAL_REJECTION_REASON_REQUIRED", "withdrawal rejection reason is required")
 )
+
+type WithdrawalRateLimitConfig struct {
+	WindowDays  int
+	MaxRequests int
+}
+
+func ValidateWithdrawalRateLimitConfig(config WithdrawalRateLimitConfig) error {
+	if config.WindowDays < WithdrawalRateLimitWindowDaysMin || config.WindowDays > WithdrawalRateLimitWindowDaysMax {
+		return infraerrors.BadRequest(
+			"WITHDRAWAL_RATE_LIMIT_CONFIG_INVALID",
+			"withdrawal rate limit window days must be between 1 and 365",
+		)
+	}
+	if config.MaxRequests < WithdrawalRateLimitMaxDefault || config.MaxRequests > WithdrawalRateLimitMaxAllowed {
+		return infraerrors.BadRequest(
+			"WITHDRAWAL_RATE_LIMIT_CONFIG_INVALID",
+			"withdrawal rate limit max must be between 0 and 1000",
+		)
+	}
+	return nil
+}
+
+func NewWithdrawalRateLimitExceededError(config WithdrawalRateLimitConfig) error {
+	return infraerrors.TooManyRequests(
+		"WITHDRAWAL_RATE_LIMIT_EXCEEDED",
+		"withdrawal request rate limit exceeded",
+	).WithMetadata(map[string]string{
+		"window_days": strconv.Itoa(config.WindowDays),
+		"max":         strconv.Itoa(config.MaxRequests),
+	})
+}
 
 type WithdrawalRequest struct {
 	ID                         int64      `json:"id"`
@@ -51,6 +90,7 @@ type WithdrawalRequest struct {
 	Status                     string     `json:"status"`
 	UserCancelReason           *string    `json:"user_cancel_reason,omitempty"`
 	AdminNote                  *string    `json:"admin_note,omitempty"`
+	RejectionReason            *string    `json:"rejection_reason,omitempty"`
 	ProcessedByUserID          *int64     `json:"processed_by_user_id,omitempty"`
 	ProcessedAt                *time.Time `json:"processed_at,omitempty"`
 	CreatedAt                  time.Time  `json:"created_at"`
@@ -70,6 +110,7 @@ type WithdrawalSubmitInput struct {
 	UserID        int64
 	Amount        float64
 	PaymentMethod string
+	RateLimit     WithdrawalRateLimitConfig
 }
 
 type WithdrawalRepository interface {
@@ -114,6 +155,11 @@ func (s *WithdrawalService) Submit(ctx context.Context, input WithdrawalSubmitIn
 	if err := s.ensureEnabled(ctx); err != nil {
 		return nil, err
 	}
+	rateLimit, err := s.getRateLimitConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	input.RateLimit = rateLimit
 	input.PaymentMethod = normalizeReceiptCodePaymentMethod(input.PaymentMethod)
 	if input.PaymentMethod == "" {
 		return nil, ErrReceiptCodePaymentMethodInvalid
@@ -154,6 +200,9 @@ func (s *WithdrawalService) ListMine(ctx context.Context, userID int64, page, pa
 	}
 	if err := s.attachReceiptURLs(ctx, items); err != nil {
 		return nil, 0, err
+	}
+	for i := range items {
+		prepareWithdrawalForUser(&items[i])
 	}
 	return items, total, nil
 }
@@ -199,7 +248,11 @@ func (s *WithdrawalService) AdminReject(ctx context.Context, id, adminUserID int
 	if err := s.ensureEnabled(ctx); err != nil {
 		return nil, err
 	}
-	req, err := s.repo.Reject(ctx, id, adminUserID, strings.TrimSpace(note))
+	rejectionReason := strings.TrimSpace(note)
+	if rejectionReason == "" {
+		return nil, ErrWithdrawalRejectionReasonRequired
+	}
+	req, err := s.repo.Reject(ctx, id, adminUserID, rejectionReason)
 	if err != nil {
 		return nil, err
 	}
@@ -223,6 +276,29 @@ func (s *WithdrawalService) ensureEnabled(ctx context.Context) error {
 		return ErrWithdrawalManagementDisabled
 	}
 	return nil
+}
+
+func (s *WithdrawalService) getRateLimitConfig(ctx context.Context) (WithdrawalRateLimitConfig, error) {
+	if s == nil || s.settingService == nil {
+		return WithdrawalRateLimitConfig{
+			WindowDays:  WithdrawalRateLimitWindowDaysDefault,
+			MaxRequests: WithdrawalRateLimitMaxDefault,
+		}, nil
+	}
+	return s.settingService.GetWithdrawalRateLimitConfig(ctx)
+}
+
+func prepareWithdrawalForUser(req *WithdrawalRequest) {
+	if req == nil {
+		return
+	}
+	if req.Status == WithdrawalStatusRejected && req.AdminNote != nil {
+		if reason := strings.TrimSpace(*req.AdminNote); reason != "" {
+			req.RejectionReason = &reason
+		}
+	}
+	req.AdminNote = nil
+	req.ProcessedByUserID = nil
 }
 
 func (s *WithdrawalService) invalidateBalance(ctx context.Context, userID int64) {

@@ -6,6 +6,7 @@ import (
 	"context"
 	"testing"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
 )
@@ -221,6 +222,153 @@ func TestAdminService_CreateGroup_NilImagePricing(t *testing.T) {
 	require.Nil(t, repo.created.ImagePrice4K)
 }
 
+func TestAdminService_CreateGroup_PreservesGrokVideoAndDropsCrossPlatformWebSearchPricing(t *testing.T) {
+	repo := &groupRepoStubForAdmin{}
+	svc := &adminServiceImpl{groupRepo: repo}
+	videoPrice := 0.07
+	freeWebSearch := 0.0
+	videoMultiplier := 1.5
+
+	group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+		Name:                  "grok-media",
+		Platform:              PlatformGrok,
+		RateMultiplier:        1,
+		VideoRateIndependent:  true,
+		VideoRateMultiplier:   &videoMultiplier,
+		VideoPrice720P:        &videoPrice,
+		WebSearchPricePerCall: &freeWebSearch,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, group)
+	require.NotNil(t, repo.created)
+	require.True(t, repo.created.VideoRateIndependent)
+	require.InDelta(t, videoMultiplier, repo.created.VideoRateMultiplier, 1e-12)
+	require.NotNil(t, repo.created.VideoPrice720P)
+	require.InDelta(t, videoPrice, *repo.created.VideoPrice720P, 1e-12)
+	require.Nil(t, repo.created.WebSearchPricePerCall)
+}
+
+func TestAdminService_CreateGroup_RejectsInvalidIndependentVideoMultiplier(t *testing.T) {
+	repo := &groupRepoStubForAdmin{}
+	svc := &adminServiceImpl{groupRepo: repo}
+	invalidMultiplier := 0.0
+
+	group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+		Name:                 "grok-invalid-video-rate",
+		Platform:             PlatformGrok,
+		RateMultiplier:       1,
+		VideoRateIndependent: true,
+		VideoRateMultiplier:  &invalidMultiplier,
+	})
+
+	require.Error(t, err)
+	require.Nil(t, group)
+	require.Nil(t, repo.created)
+	require.Contains(t, err.Error(), "video_rate_multiplier")
+}
+
+func TestAdminService_CreateGroup_PreservesOpenAIFreeWebSearchAndDropsVideoPricing(t *testing.T) {
+	repo := &groupRepoStubForAdmin{}
+	svc := &adminServiceImpl{groupRepo: repo}
+	videoPrice := 0.07
+	freeWebSearch := 0.0
+	videoMultiplier := 1.5
+
+	group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+		Name:                  "openai-search",
+		Platform:              PlatformOpenAI,
+		RateMultiplier:        1,
+		VideoRateIndependent:  true,
+		VideoRateMultiplier:   &videoMultiplier,
+		VideoPrice720P:        &videoPrice,
+		WebSearchPricePerCall: &freeWebSearch,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, group)
+	require.NotNil(t, repo.created)
+	require.False(t, repo.created.VideoRateIndependent)
+	require.InDelta(t, 1.0, repo.created.VideoRateMultiplier, 1e-12)
+	require.Nil(t, repo.created.VideoPrice720P)
+	require.NotNil(t, repo.created.WebSearchPricePerCall)
+	require.Zero(t, *repo.created.WebSearchPricePerCall)
+}
+
+func TestAdminService_UpdateGroup_NegativeMediaPricesClearOverrides(t *testing.T) {
+	existingVideoPrice := 0.07
+	existingSearchPrice := 0.02
+	repo := &groupRepoStubForAdmin{getByID: &Group{
+		ID:                    17,
+		Name:                  "openai",
+		Platform:              PlatformOpenAI,
+		RateMultiplier:        1,
+		VideoPrice720P:        &existingVideoPrice,
+		WebSearchPricePerCall: &existingSearchPrice,
+	}}
+	svc := &adminServiceImpl{groupRepo: repo}
+	clear := -1.0
+
+	_, err := svc.UpdateGroup(context.Background(), 17, &UpdateGroupInput{
+		VideoPrice720P:        &clear,
+		WebSearchPricePerCall: &clear,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, repo.updated)
+	require.Nil(t, repo.updated.VideoPrice720P)
+	require.Nil(t, repo.updated.WebSearchPricePerCall)
+}
+
+func TestAdminService_UpdateGroup_PlatformChangeClearsInactivePricingWithoutSentinels(t *testing.T) {
+	existingVideoPrice := 0.07
+	existingSearchPrice := 0.02
+	repo := &groupRepoStubForAdmin{getByID: &Group{
+		ID:                    18,
+		Name:                  "grok",
+		Platform:              PlatformGrok,
+		RateMultiplier:        1,
+		VideoRateIndependent:  true,
+		VideoRateMultiplier:   1.5,
+		VideoPrice720P:        &existingVideoPrice,
+		WebSearchPricePerCall: &existingSearchPrice,
+	}}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	group, err := svc.UpdateGroup(context.Background(), 18, &UpdateGroupInput{Platform: PlatformAnthropic})
+
+	require.NoError(t, err)
+	require.NotNil(t, group)
+	require.NotNil(t, repo.updated)
+	require.False(t, repo.updated.VideoRateIndependent)
+	require.InDelta(t, 1.0, repo.updated.VideoRateMultiplier, 1e-12)
+	require.Nil(t, repo.updated.VideoPrice720P)
+	require.Nil(t, repo.updated.WebSearchPricePerCall)
+}
+
+func TestAdminService_UpdateGroup_RejectsInvalidIndependentVideoMultiplier(t *testing.T) {
+	repo := &groupRepoStubForAdmin{getByID: &Group{
+		ID:                  19,
+		Name:                "grok",
+		Platform:            PlatformGrok,
+		RateMultiplier:      1,
+		VideoRateMultiplier: 1,
+	}}
+	svc := &adminServiceImpl{groupRepo: repo}
+	independent := true
+	invalidMultiplier := 0.0
+
+	group, err := svc.UpdateGroup(context.Background(), 19, &UpdateGroupInput{
+		VideoRateIndependent: &independent,
+		VideoRateMultiplier:  &invalidMultiplier,
+	})
+
+	require.Error(t, err)
+	require.Nil(t, group)
+	require.Nil(t, repo.updated)
+	require.Contains(t, err.Error(), "video_rate_multiplier")
+}
+
 func TestAdminService_CreateGroupCopyAccounts_RejectsMismatchedOpenAILevelBeforeCreate(t *testing.T) {
 	repo := &groupRepoStubForAdmin{
 		getByIDByID: map[int64]*Group{
@@ -250,6 +398,8 @@ func TestAdminService_CreateGroupCopyAccounts_RejectsMismatchedOpenAILevelBefore
 	})
 
 	require.Error(t, err)
+	require.True(t, infraerrors.IsBadRequest(err))
+	require.Equal(t, "GROUP_INVALID_INPUT", infraerrors.Reason(err))
 	require.Contains(t, err.Error(), "account_level mismatch")
 	require.Nil(t, repo.created)
 	require.Empty(t, repo.bindAccountsAccountIDs)
@@ -285,9 +435,29 @@ func TestAdminService_CreateGroupCopyAccounts_RejectsHigherOpenAILevelIntoLowerP
 
 	require.Nil(t, group)
 	require.Error(t, err)
+	require.True(t, infraerrors.IsBadRequest(err))
+	require.Equal(t, "GROUP_INVALID_INPUT", infraerrors.Reason(err))
 	require.Contains(t, err.Error(), "account_level mismatch")
 	require.Nil(t, repo.created)
 	require.Empty(t, repo.bindAccountsAccountIDs)
+}
+
+func TestAdminService_CreateGroup_InvalidRequiredAccountLevelReturnsBadRequest(t *testing.T) {
+	repo := &groupRepoStubForAdmin{}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	_, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+		Name:                 "Enterprise Pool",
+		Platform:             PlatformOpenAI,
+		RateMultiplier:       1,
+		RequiredAccountLevel: "enterprise",
+	})
+
+	require.Error(t, err)
+	require.True(t, infraerrors.IsBadRequest(err))
+	require.Equal(t, "GROUP_INVALID_INPUT", infraerrors.Reason(err))
+	require.Contains(t, infraerrors.Message(err), "required_account_level")
+	require.Nil(t, repo.created)
 }
 
 func TestAdminService_UpdateGroupCopyAccounts_RejectsMismatchedOpenAILevelBeforeClearingBindings(t *testing.T) {
@@ -323,6 +493,8 @@ func TestAdminService_UpdateGroupCopyAccounts_RejectsMismatchedOpenAILevelBefore
 	})
 
 	require.Error(t, err)
+	require.True(t, infraerrors.IsBadRequest(err))
+	require.Equal(t, "GROUP_INVALID_INPUT", infraerrors.Reason(err))
 	require.Contains(t, err.Error(), "account_level mismatch")
 	require.Nil(t, repo.updated)
 	require.Zero(t, repo.deleteAccountGroupsByGroupID)
@@ -353,6 +525,91 @@ func TestAdminService_UpdateGroupCopyAccounts_KeepsTeamRequiredLevelStrict(t *te
 	require.Equal(t, AccountLevelTeam, updated.RequiredAccountLevel)
 	require.NotNil(t, repo.updated)
 	require.Equal(t, AccountLevelTeam, repo.updated.RequiredAccountLevel)
+}
+
+func TestAdminService_UpdateGroup_InvalidRequiredAccountLevelReturnsBadRequest(t *testing.T) {
+	existing := &Group{
+		ID:             2,
+		Name:           "OpenAI Pool",
+		Platform:       PlatformOpenAI,
+		RateMultiplier: 1,
+		Status:         StatusActive,
+	}
+	repo := &groupRepoStubForAdmin{getByID: existing}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	_, err := svc.UpdateGroup(context.Background(), 2, &UpdateGroupInput{
+		RequiredAccountLevel: ptrString("enterprise"),
+	})
+
+	require.Error(t, err)
+	require.True(t, infraerrors.IsBadRequest(err))
+	require.Equal(t, "GROUP_INVALID_INPUT", infraerrors.Reason(err))
+	require.Contains(t, infraerrors.Message(err), "required_account_level")
+	require.Nil(t, repo.updated)
+}
+
+func TestAdminService_UpdateGroup_PartialUpdateKeepsExistingUsageLimits(t *testing.T) {
+	daily := 10.0
+	weekly := 50.0
+	monthly := 100.0
+	existing := &Group{
+		ID:              2,
+		Name:            "OpenAI Pool",
+		Platform:        PlatformOpenAI,
+		RateMultiplier:  1,
+		Status:          StatusActive,
+		DailyLimitUSD:   &daily,
+		WeeklyLimitUSD:  &weekly,
+		MonthlyLimitUSD: &monthly,
+	}
+	repo := &groupRepoStubForAdmin{getByID: existing}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	enabled := true
+	multiplier := 0.5
+	windowSeconds := 7 * 24 * 60 * 60
+	quotaUSD := 3.0
+	updated, err := svc.UpdateGroup(context.Background(), 2, &UpdateGroupInput{
+		NewUserRateEnabled:       &enabled,
+		NewUserRateMultiplier:    &multiplier,
+		NewUserRateWindowSeconds: &windowSeconds,
+		NewUserRateQuotaUSD:      &quotaUSD,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	require.NotNil(t, repo.updated)
+	require.Same(t, existing.DailyLimitUSD, repo.updated.DailyLimitUSD)
+	require.Same(t, existing.WeeklyLimitUSD, repo.updated.WeeklyLimitUSD)
+	require.Same(t, existing.MonthlyLimitUSD, repo.updated.MonthlyLimitUSD)
+	require.InDelta(t, 10.0, *repo.updated.DailyLimitUSD, 0.0001)
+	require.InDelta(t, 50.0, *repo.updated.WeeklyLimitUSD, 0.0001)
+	require.InDelta(t, 100.0, *repo.updated.MonthlyLimitUSD, 0.0001)
+}
+
+func TestAdminService_UpdateGroup_ExplicitNilUsageLimitClearsLimit(t *testing.T) {
+	daily := 10.0
+	existing := &Group{
+		ID:             2,
+		Name:           "OpenAI Pool",
+		Platform:       PlatformOpenAI,
+		RateMultiplier: 1,
+		Status:         StatusActive,
+		DailyLimitUSD:  &daily,
+	}
+	repo := &groupRepoStubForAdmin{getByID: existing}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	updated, err := svc.UpdateGroup(context.Background(), 2, &UpdateGroupInput{
+		DailyLimitUSDProvided: true,
+		DailyLimitUSD:         nil,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	require.NotNil(t, repo.updated)
+	require.Nil(t, repo.updated.DailyLimitUSD)
 }
 
 // TestAdminService_UpdateGroup_WithImagePricing 测试更新分组时 ImagePrice 字段正确更新

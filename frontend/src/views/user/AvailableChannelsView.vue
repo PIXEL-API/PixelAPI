@@ -1,50 +1,49 @@
 <template>
   <AppLayout>
-    <TablePageLayout>
-      <template #filters>
-        <div class="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
-          <div class="flex flex-1 flex-wrap items-center gap-3">
-            <div class="relative w-full sm:w-80">
-              <Icon
-                name="search"
-                size="md"
-                class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500"
-              />
-              <input
-                v-model="searchQuery"
-                type="text"
-                :placeholder="t('availableChannels.searchPlaceholder')"
-                class="input pl-10"
-              />
-            </div>
+    <div class="mx-auto w-full max-w-[1800px] space-y-4">
+      <section class="rounded-xl border border-gray-200 bg-white/90 p-3 shadow-sm backdrop-blur-sm dark:border-dark-700 dark:bg-dark-900/70 sm:p-4">
+        <div class="flex flex-col justify-between gap-3 lg:flex-row lg:items-center">
+          <div class="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:items-center">
+            <SearchInput
+              v-model="searchQuery"
+              :placeholder="t('availableChannels.searchPlaceholder')"
+              :debounce-ms="0"
+              class="w-full sm:max-w-xl"
+            />
+            <p v-if="!loading" class="shrink-0 text-xs tabular-nums text-gray-500 dark:text-gray-400">
+              {{
+                t('availableChannels.summary', {
+                  channels: filteredChannels.length,
+                  platforms: filteredPlatformCount,
+                  models: filteredModelCount,
+                })
+              }}
+            </p>
           </div>
 
-          <div class="flex w-full flex-shrink-0 flex-wrap items-center justify-end gap-3 lg:w-auto">
-            <button
-              @click="loadChannels"
-              :disabled="loading"
-              class="btn btn-secondary"
-              :title="t('common.refresh', 'Refresh')"
-            >
-              <Icon name="refresh" size="md" :class="loading ? 'animate-spin' : ''" />
-            </button>
-          </div>
+          <button
+            type="button"
+            class="btn btn-secondary h-11 w-11 shrink-0 self-end p-0 lg:self-auto"
+            :disabled="loading"
+            :title="t('common.refresh', 'Refresh')"
+            :aria-label="t('common.refresh', 'Refresh')"
+            @click="loadChannels"
+          >
+            <Icon name="refresh" size="md" :class="loading ? 'animate-spin' : ''" />
+          </button>
         </div>
-      </template>
+      </section>
 
-      <template #table>
-        <AvailableChannelsTable
-          :columns="columnLabels"
-          :rows="filteredChannels"
-          :loading="loading"
-          :user-group-rates="userGroupRates"
-          pricing-key-prefix="availableChannels.pricing"
-          :no-pricing-label="t('availableChannels.noPricing')"
-          :no-models-label="t('availableChannels.noModels')"
-          :empty-label="t('availableChannels.empty')"
-        />
-      </template>
-    </TablePageLayout>
+      <AvailableChannelsTable
+        :rows="filteredChannels"
+        :loading="loading"
+        :user-group-rates="userGroupRates"
+        pricing-key-prefix="availableChannels.pricing"
+        :no-pricing-label="t('availableChannels.noPricing')"
+        :no-models-label="t('availableChannels.noModels')"
+        :empty-label="t('availableChannels.empty')"
+      />
+    </div>
   </AppLayout>
 </template>
 
@@ -52,8 +51,8 @@
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
+import SearchInput from '@/components/common/SearchInput.vue'
 import AvailableChannelsTable from '@/components/channels/AvailableChannelsTable.vue'
 import userChannelsAPI, { type UserAvailableChannel } from '@/api/channels'
 import userGroupsAPI from '@/api/groups'
@@ -67,14 +66,6 @@ const channels = ref<UserAvailableChannel[]>([])
 const userGroupRates = ref<Record<number, number>>({})
 const loading = ref(false)
 const searchQuery = ref('')
-
-const columnLabels = computed(() => ({
-  name: t('availableChannels.columns.name'),
-  description: t('availableChannels.columns.description'),
-  platform: t('availableChannels.columns.platform'),
-  groups: t('availableChannels.columns.groups'),
-  supportedModels: t('availableChannels.columns.supportedModels'),
-}))
 
 /**
  * 搜索过滤：
@@ -101,6 +92,22 @@ const filteredChannels = computed(() => {
     })
     .filter((ch): ch is UserAvailableChannel => ch !== null)
 })
+
+const filteredPlatformCount = computed(() =>
+  filteredChannels.value.reduce((count, channel) => count + channel.platforms.length, 0),
+)
+
+const filteredModelCount = computed(() =>
+  filteredChannels.value.reduce(
+    (count, channel) =>
+      count +
+      channel.platforms.reduce(
+        (platformCount, platform) => platformCount + platform.supported_models.length,
+        0,
+      ),
+    0,
+  ),
+)
 
 async function loadChannels() {
   loading.value = true

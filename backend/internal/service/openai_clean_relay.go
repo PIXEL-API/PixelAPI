@@ -13,6 +13,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 const (
@@ -76,22 +78,26 @@ func (s *OpenAIGatewayService) applyOpenAICleanRelayToRawBody(
 	if !s.isOpenAICleanRelayActive(ctx, account) {
 		return body, nil, false, nil
 	}
-	var reqBody map[string]any
-	if err := json.Unmarshal(body, &reqBody); err != nil {
-		return body, nil, false, fmt.Errorf("openai clean relay parse request body: %w", err)
+	if !gjson.ValidBytes(body) {
+		return body, nil, false, errors.New("openai clean relay parse request body: invalid json")
 	}
 	if len(bodyForSession) == 0 {
 		bodyForSession = body
 	}
-	state, changed, err := s.applyOpenAICleanRelayToRequestBody(ctx, c, account, reqBody, bodyForSession)
-	if err != nil || state == nil || !changed {
-		return body, state, changed, err
+	if existing := getOpenAICleanRelayState(c); existing != nil && account != nil && existing.Mapping.AccountID == account.ID {
+		rewritten, changed, err := applyOpenAICleanRelayMappingToRawBody(body, existing)
+		return rewritten, existing, changed, err
 	}
-	rebuilt, err := json.Marshal(reqBody)
+	state, err := s.resolveOpenAICleanRelayStateFromBody(ctx, c, account, bodyForSession)
+	if err != nil || state == nil {
+		return body, state, false, err
+	}
+	rewritten, changed, err := applyOpenAICleanRelayMappingToRawBody(body, state)
 	if err != nil {
-		return body, state, false, fmt.Errorf("openai clean relay serialize request body: %w", err)
+		return body, state, false, err
 	}
-	return rebuilt, state, true, nil
+	setOpenAICleanRelayState(c, state)
+	return rewritten, state, changed, nil
 }
 
 func (s *OpenAIGatewayService) SelectAccountWithCleanRelayScheduler(
@@ -203,12 +209,11 @@ func (s *OpenAIGatewayService) loadOpenAICleanRelayCachedMapping(
 	if !s.IsOpenAICleanRelayEnabled(ctx) || c == nil || len(bodyForSession) == 0 || s.cache == nil {
 		return openAICleanRelayMapping{}, false, nil
 	}
-	var reqBody map[string]any
-	if err := json.Unmarshal(bodyForSession, &reqBody); err != nil {
-		return openAICleanRelayMapping{}, false, fmt.Errorf("openai clean relay parse request body before account selection: %w", err)
+	if !gjson.ValidBytes(bodyForSession) {
+		return openAICleanRelayMapping{}, false, errors.New("openai clean relay parse request body before account selection: invalid json")
 	}
-	clientInstallationID := openAICleanRelayClientInstallationID(c, reqBody)
-	sessionSignal := openAICleanRelayClientSessionSignal(c, reqBody, bodyForSession)
+	clientInstallationID := openAICleanRelayClientInstallationIDFromBody(c, bodyForSession)
+	sessionSignal := openAICleanRelayClientSessionSignalFromBody(c, bodyForSession)
 	if strings.TrimSpace(sessionSignal) == "" {
 		return openAICleanRelayMapping{}, false, nil
 	}
@@ -302,6 +307,34 @@ func (s *OpenAIGatewayService) resolveOpenAICleanRelayState(
 	upstreamInstallationID := openAICleanRelayInstallationID(accountID)
 	clientInstallationID := openAICleanRelayClientInstallationID(c, reqBody)
 	sessionSignal := openAICleanRelayClientSessionSignal(c, reqBody, bodyForSession)
+	return s.resolveOpenAICleanRelayStateFromSignals(ctx, c, accountID, upstreamInstallationID, clientInstallationID, sessionSignal)
+}
+
+func (s *OpenAIGatewayService) resolveOpenAICleanRelayStateFromBody(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	bodyForSession []byte,
+) (*openAICleanRelayState, error) {
+	if !s.isOpenAICleanRelayActive(ctx, account) {
+		return nil, nil
+	}
+
+	accountID := account.ID
+	upstreamInstallationID := openAICleanRelayInstallationID(accountID)
+	clientInstallationID := openAICleanRelayClientInstallationIDFromBody(c, bodyForSession)
+	sessionSignal := openAICleanRelayClientSessionSignalFromBody(c, bodyForSession)
+	return s.resolveOpenAICleanRelayStateFromSignals(ctx, c, accountID, upstreamInstallationID, clientInstallationID, sessionSignal)
+}
+
+func (s *OpenAIGatewayService) resolveOpenAICleanRelayStateFromSignals(
+	ctx context.Context,
+	c *gin.Context,
+	accountID int64,
+	upstreamInstallationID string,
+	clientInstallationID string,
+	sessionSignal string,
+) (*openAICleanRelayState, error) {
 	allowBodyClientMetadata := !isOpenAICleanRelayCompactRequest(c)
 	if sessionSignal == "" {
 		return &openAICleanRelayState{
@@ -435,6 +468,15 @@ func openAICleanRelayClientInstallationID(c *gin.Context, reqBody map[string]any
 	return strings.TrimSpace(openAICleanRelayClientMetadataString(reqBody, openAICleanRelayInstallationField))
 }
 
+func openAICleanRelayClientInstallationIDFromBody(c *gin.Context, body []byte) string {
+	if c != nil {
+		if value := strings.TrimSpace(c.GetHeader(openAICleanRelayInstallationField)); value != "" {
+			return value
+		}
+	}
+	return strings.TrimSpace(gjson.GetBytes(body, "client_metadata."+openAICleanRelayInstallationField).String())
+}
+
 func openAICleanRelayClientSessionSignal(c *gin.Context, reqBody map[string]any, bodyForSession []byte) string {
 	if signal := strings.TrimSpace(explicitOpenAISessionID(c, bodyForSession)); signal != "" {
 		return signal
@@ -443,6 +485,13 @@ func openAICleanRelayClientSessionSignal(c *gin.Context, reqBody map[string]any,
 		return signal
 	}
 	return ""
+}
+
+func openAICleanRelayClientSessionSignalFromBody(c *gin.Context, bodyForSession []byte) string {
+	if signal := strings.TrimSpace(explicitOpenAISessionID(c, bodyForSession)); signal != "" {
+		return signal
+	}
+	return strings.TrimSpace(gjson.GetBytes(bodyForSession, "prompt_cache_key").String())
 }
 
 func applyOpenAICleanRelayMappingToBody(reqBody map[string]any, state *openAICleanRelayState) bool {
@@ -474,6 +523,95 @@ func applyOpenAICleanRelayMappingToBody(reqBody map[string]any, state *openAICle
 		state.bodyCleaned = true
 	}
 	return changed
+}
+
+func applyOpenAICleanRelayMappingToRawBody(body []byte, state *openAICleanRelayState) ([]byte, bool, error) {
+	if len(body) == 0 || state == nil {
+		return body, false, nil
+	}
+	rewritten := body
+	changed := false
+	mapping := state.Mapping
+	if strings.TrimSpace(mapping.PromptCacheKey) != "" && strings.TrimSpace(gjson.GetBytes(rewritten, "prompt_cache_key").String()) != mapping.PromptCacheKey {
+		next, err := sjson.SetBytes(rewritten, "prompt_cache_key", mapping.PromptCacheKey)
+		if err != nil {
+			return body, false, fmt.Errorf("openai clean relay set prompt_cache_key: %w", err)
+		}
+		rewritten = next
+		changed = true
+	}
+	if state.AllowBodyClientMetadata {
+		currentInstallationID := strings.TrimSpace(gjson.GetBytes(rewritten, "client_metadata."+openAICleanRelayInstallationField).String())
+		if strings.TrimSpace(mapping.InstallationID) != "" && currentInstallationID != mapping.InstallationID {
+			next, err := sjson.SetBytes(rewritten, "client_metadata."+openAICleanRelayInstallationField, mapping.InstallationID)
+			if err != nil {
+				return body, false, fmt.Errorf("openai clean relay set client_metadata: %w", err)
+			}
+			rewritten = next
+			changed = true
+		}
+	} else if gjson.GetBytes(rewritten, "client_metadata").Exists() {
+		next, err := sjson.DeleteBytes(rewritten, "client_metadata")
+		if err != nil {
+			return body, false, fmt.Errorf("openai clean relay delete client_metadata: %w", err)
+		}
+		rewritten = next
+		changed = true
+	}
+	if state.CleanStart && !state.bodyCleaned {
+		if gjson.GetBytes(rewritten, "previous_response_id").Exists() {
+			next, err := sjson.DeleteBytes(rewritten, "previous_response_id")
+			if err != nil {
+				return body, false, fmt.Errorf("openai clean relay delete previous_response_id: %w", err)
+			}
+			rewritten = next
+			changed = true
+		}
+		next, trimmed, err := trimOpenAIEncryptedReasoningItemsInRawBody(rewritten)
+		if err != nil {
+			return body, false, err
+		}
+		if trimmed {
+			rewritten = next
+			changed = true
+		}
+		state.bodyCleaned = true
+	}
+	return rewritten, changed, nil
+}
+
+func trimOpenAIEncryptedReasoningItemsInRawBody(body []byte) ([]byte, bool, error) {
+	input := gjson.GetBytes(body, "input")
+	if !input.Exists() || !strings.Contains(input.Raw, `"encrypted_content"`) {
+		return body, false, nil
+	}
+	var inputValue any
+	if err := json.Unmarshal([]byte(input.Raw), &inputValue); err != nil {
+		return body, false, fmt.Errorf("openai clean relay parse input for encrypted reasoning cleanup: %w", err)
+	}
+	reqBody := map[string]any{
+		"input": inputValue,
+	}
+	if !trimOpenAIEncryptedReasoningItems(reqBody) {
+		return body, false, nil
+	}
+	cleanedInput, ok := reqBody["input"]
+	if !ok {
+		next, err := sjson.DeleteBytes(body, "input")
+		if err != nil {
+			return body, false, fmt.Errorf("openai clean relay delete empty input: %w", err)
+		}
+		return next, true, nil
+	}
+	raw, err := json.Marshal(cleanedInput)
+	if err != nil {
+		return body, false, fmt.Errorf("openai clean relay serialize cleaned input: %w", err)
+	}
+	next, err := sjson.SetRawBytes(body, "input", raw)
+	if err != nil {
+		return body, false, fmt.Errorf("openai clean relay set cleaned input: %w", err)
+	}
+	return next, true, nil
 }
 
 func (s *OpenAIGatewayService) applyOpenAICleanRelayHeaders(c *gin.Context, req *http.Request) {

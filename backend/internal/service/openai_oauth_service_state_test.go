@@ -3,10 +3,12 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/stretchr/testify/require"
 )
@@ -51,7 +53,7 @@ func TestOpenAIOAuthService_ExchangeCode_StateRequired(t *testing.T) {
 		Code:      "auth-code",
 	})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "oauth state is required")
+	require.Equal(t, "OPENAI_OAUTH_STATE_REQUIRED", infraerrors.Reason(err))
 	require.Equal(t, int32(0), atomic.LoadInt32(&client.exchangeCalled))
 }
 
@@ -73,7 +75,7 @@ func TestOpenAIOAuthService_ExchangeCode_StateMismatch(t *testing.T) {
 		State:     "wrong-state",
 	})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "invalid oauth state")
+	require.Equal(t, "OPENAI_OAUTH_INVALID_STATE", infraerrors.Reason(err))
 	require.Equal(t, int32(0), atomic.LoadInt32(&client.exchangeCalled))
 }
 
@@ -103,4 +105,49 @@ func TestOpenAIOAuthService_ExchangeCode_StateMatch(t *testing.T) {
 
 	_, ok := svc.sessionStore.Get("sid")
 	require.False(t, ok)
+}
+
+func TestOpenAIOAuthService_ExchangeCode_StatelessSessionSurvivesMemoryLoss(t *testing.T) {
+	client := &openaiOAuthClientStateStub{}
+	svc := NewOpenAIOAuthService(nil, client)
+	svc.SetSessionTokenSecret(strings.Repeat("s", 32))
+	defer svc.Stop()
+
+	result, err := svc.GenerateAuthURL(context.Background(), nil, "", PlatformOpenAI)
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(result.SessionID, openAIOAuthSessionTokenPrefix))
+	require.NotEmpty(t, result.AuthURL)
+
+	session, ok := svc.sessionStore.Get(result.SessionID)
+	require.True(t, ok)
+	state := session.State
+
+	svc.sessionStore.Delete(result.SessionID)
+
+	info, err := svc.ExchangeCode(context.Background(), &OpenAIExchangeCodeInput{
+		SessionID: result.SessionID,
+		Code:      "auth-code",
+		State:     state,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, info)
+	require.Equal(t, "at", info.AccessToken)
+	require.Equal(t, openai.ClientID, client.lastClientID)
+	require.Equal(t, int32(1), atomic.LoadInt32(&client.exchangeCalled))
+}
+
+func TestOpenAIOAuthService_ExchangeCode_LegacyMissingSessionUsesChineseError(t *testing.T) {
+	client := &openaiOAuthClientStateStub{}
+	svc := NewOpenAIOAuthService(nil, client)
+	defer svc.Stop()
+
+	_, err := svc.ExchangeCode(context.Background(), &OpenAIExchangeCodeInput{
+		SessionID: "missing-session",
+		Code:      "auth-code",
+		State:     "state",
+	})
+	require.Error(t, err)
+	require.Equal(t, "OPENAI_OAUTH_SESSION_NOT_FOUND", infraerrors.Reason(err))
+	require.Equal(t, "授权会话不存在或已过期，请重新生成授权链接后再完成授权", infraerrors.Message(err))
+	require.Equal(t, int32(0), atomic.LoadInt32(&client.exchangeCalled))
 }

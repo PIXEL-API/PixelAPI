@@ -27,6 +27,7 @@ type OpsSystemLogSinkHealth struct {
 
 type OpsSystemLogSink struct {
 	opsRepo OpsRepository
+	host    string
 
 	queue chan *logger.LogEvent
 
@@ -47,8 +48,19 @@ type OpsSystemLogSink struct {
 
 func NewOpsSystemLogSink(opsRepo OpsRepository) *OpsSystemLogSink {
 	ctx, cancel := context.WithCancel(context.Background())
+	host, err := os.Hostname()
+	if err != nil || strings.TrimSpace(host) == "" {
+		if err == nil {
+			err = fmt.Errorf("hostname is empty")
+		}
+		_, _ = fmt.Fprintf(os.Stderr, "time=%s level=WARN msg=\"resolve ops system log host failed\" err=%v\n",
+			time.Now().Format(time.RFC3339Nano), err,
+		)
+		host = "unknown"
+	}
 	s := &OpsSystemLogSink{
 		opsRepo:       opsRepo,
+		host:          strings.TrimSpace(host),
 		queue:         make(chan *logger.LogEvent, 5000),
 		batchSize:     200,
 		flushInterval: time.Second,
@@ -219,6 +231,7 @@ func (s *OpsSystemLogSink) flushBatch(baseCtx context.Context, batch []*logger.L
 
 		inputs = append(inputs, &OpsInsertSystemLogInput{
 			CreatedAt:       createdAt,
+			Host:            s.host,
 			Level:           strings.ToLower(strings.TrimSpace(event.Level)),
 			Component:       component,
 			Message:         message,

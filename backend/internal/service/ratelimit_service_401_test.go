@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 type rateLimitAccountRepoStub struct {
 	mockAccountRepoForGemini
 	setErrorCalls          int
+	rateLimitCalls         []time.Time
 	tempCalls              int
 	updateCredentialsCalls int
 	modelRateLimitCalls    []modelRateLimitCall
@@ -38,6 +40,11 @@ func (r *rateLimitAccountRepoStub) SetTempUnschedulable(ctx context.Context, id 
 	return nil
 }
 
+func (r *rateLimitAccountRepoStub) SetRateLimited(ctx context.Context, id int64, resetAt time.Time) error {
+	r.rateLimitCalls = append(r.rateLimitCalls, resetAt)
+	return nil
+}
+
 func (r *rateLimitAccountRepoStub) UpdateCredentials(ctx context.Context, id int64, credentials map[string]any) error {
 	r.updateCredentialsCalls++
 	r.lastCredentials = cloneCredentials(credentials)
@@ -46,6 +53,11 @@ func (r *rateLimitAccountRepoStub) UpdateCredentials(ctx context.Context, id int
 
 func (r *rateLimitAccountRepoStub) SetModelRateLimit(ctx context.Context, id int64, modelKey string, resetAt time.Time) error {
 	r.modelRateLimitCalls = append(r.modelRateLimitCalls, modelRateLimitCall{accountID: id, modelKey: modelKey, resetAt: resetAt})
+	return nil
+}
+
+func (r *rateLimitAccountRepoStub) UpdateExtra(ctx context.Context, id int64, updates map[string]any) error {
+	r.mockAccountRepoForGemini.UpdateExtra(ctx, id, updates)
 	return nil
 }
 
@@ -192,4 +204,36 @@ func TestRateLimitService_HandleUpstreamError_OAuth401UsesCredentialsUpdater(t *
 	require.True(t, shouldDisable)
 	require.Equal(t, 1, repo.updateCredentialsCalls)
 	require.NotEmpty(t, repo.lastCredentials["expires_at"])
+}
+
+func TestRateLimitService_HandleUpstreamError_Anthropic7dOiOnlyMarksFableModel(t *testing.T) {
+	reset5h := time.Now().Add(3 * time.Hour).UTC().Truncate(time.Second)
+	resetOI := time.Now().Add(72 * time.Hour).UTC().Truncate(time.Second)
+	headers := http.Header{}
+	headers.Set("anthropic-ratelimit-unified-5h-status", "allowed")
+	headers.Set("anthropic-ratelimit-unified-5h-utilization", "0.3")
+	headers.Set("anthropic-ratelimit-unified-5h-reset", strconv.FormatInt(reset5h.Unix(), 10))
+	headers.Set("anthropic-ratelimit-unified-7d-status", "allowed")
+	headers.Set("anthropic-ratelimit-unified-7d-utilization", "0.5")
+	headers.Set("anthropic-ratelimit-unified-7d-reset", strconv.FormatInt(resetOI.Unix(), 10))
+	headers.Set("anthropic-ratelimit-unified-7d_oi-status", "rejected")
+	headers.Set("anthropic-ratelimit-unified-7d_oi-utilization", "1.0")
+	headers.Set("anthropic-ratelimit-unified-7d_oi-reset", strconv.FormatInt(resetOI.Unix(), 10))
+
+	repo := &rateLimitAccountRepoStub{}
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	account := &Account{
+		ID:       200,
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeOAuth,
+	}
+
+	shouldDisable := service.HandleUpstreamError(context.Background(), account, http.StatusTooManyRequests, headers, nil)
+
+	require.False(t, shouldDisable)
+	require.Len(t, repo.modelRateLimitCalls, 1)
+	require.Equal(t, anthropicFableRateLimitKey, repo.modelRateLimitCalls[0].modelKey)
+	require.True(t, repo.modelRateLimitCalls[0].resetAt.Equal(resetOI))
+	require.Empty(t, repo.rateLimitCalls)
+	require.Equal(t, 0, repo.tempCalls)
 }

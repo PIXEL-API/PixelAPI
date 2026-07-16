@@ -177,6 +177,7 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import Select from '@/components/common/Select.vue'
 import { Icon } from '@/components/icons'
 import { useClipboard } from '@/composables/useClipboard'
+import { ADMIN_UI_REQUEST_HEADER, USER_UI_REQUEST_HEADER } from '@/api/adminUIRequest'
 import { adminAPI } from '@/api/admin'
 import type { Account, ClaudeModel } from '@/types'
 
@@ -216,13 +217,15 @@ const isImageGenerationModel = (modelId: string) => {
   return (
     modelID.startsWith(['gpt', generationSegment].join('-') + '-') ||
     (modelID.startsWith('gemini-') && modelID.includes(`-${generationSegment}`)) ||
-    (modelID.startsWith('grok-') && modelID.includes(`-${generationSegment}`)) ||
+    (modelID.startsWith('grok-') && (modelID.includes(`-${generationSegment}`) || modelID.includes('-video'))) ||
+    modelID === 'grok-imagine' ||
     modelID.startsWith('cog' + 'view')
   )
 }
 const isUserScope = computed(() => props.accountScope === 'user')
 const testEndpointBase = computed(() => props.testEndpointBase ?? '/api/v1/admin/accounts')
 const defaultOpenAITestModel = 'gpt-5.5'
+const defaultGrokTestModel = 'grok-4.5'
 
 const sortTestModels = (models: ClaudeModel[]) => {
   const priorityMap = new Map(prioritizedGeminiModels.map((id, index) => [id, index]))
@@ -268,6 +271,9 @@ const loadAvailableModels = async () => {
       } else if (props.account.platform === 'openai') {
         const defaultModel = availableModels.value.find((m) => m.id === defaultOpenAITestModel)
         selectedModelId.value = defaultModel?.id || availableModels.value[0].id
+      } else if (props.account.platform === 'grok') {
+        const defaultModel = availableModels.value.find((m) => m.id === defaultGrokTestModel)
+        selectedModelId.value = defaultModel?.id || availableModels.value[0].id
       } else {
         // Try to select Sonnet as default, otherwise use first model
         const sonnetModel = availableModels.value.find((m) => m.id.includes('sonnet'))
@@ -292,6 +298,8 @@ const getUserDefaultTestModels = (account: Account): ClaudeModel[] => {
       return [{ id: 'gemini-2.5-flash', type: 'model', display_name: 'gemini-2.5-flash', created_at: '' }]
     case 'antigravity':
       return [{ id: 'gemini-2.5-flash', type: 'model', display_name: 'gemini-2.5-flash', created_at: '' }]
+    case 'grok':
+      return [{ id: defaultGrokTestModel, type: 'model', display_name: defaultGrokTestModel, created_at: '' }]
     default:
       return [{ id: 'claude-sonnet-4-5-20250929', type: 'model', display_name: 'Claude Sonnet 4.5', created_at: '' }]
   }
@@ -350,7 +358,8 @@ const startTest = async () => {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${localStorage.getItem('auth_token')}`,
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        [isUserScope.value ? USER_UI_REQUEST_HEADER : ADMIN_UI_REQUEST_HEADER]: '1'
       },
       body: JSON.stringify({
         model_id: selectedModelId.value,

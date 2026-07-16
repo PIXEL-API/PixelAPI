@@ -276,7 +276,7 @@ func (h *DashboardHandler) GetUsageTrend(c *gin.Context) {
 	response.Success(c, gin.H{
 		"trend":       trend,
 		"start_date":  startTime.Format("2006-01-02"),
-		"end_date":    endTime.Add(-24 * time.Hour).Format("2006-01-02"),
+		"end_date":    endTime.Add(-time.Nanosecond).Format("2006-01-02"),
 		"granularity": granularity,
 	})
 }
@@ -361,7 +361,7 @@ func (h *DashboardHandler) GetModelStats(c *gin.Context) {
 	response.Success(c, gin.H{
 		"models":     stats,
 		"start_date": startTime.Format("2006-01-02"),
-		"end_date":   endTime.Add(-24 * time.Hour).Format("2006-01-02"),
+		"end_date":   endTime.Add(-time.Nanosecond).Format("2006-01-02"),
 	})
 }
 
@@ -436,7 +436,7 @@ func (h *DashboardHandler) GetGroupStats(c *gin.Context) {
 	response.Success(c, gin.H{
 		"groups":     stats,
 		"start_date": startTime.Format("2006-01-02"),
-		"end_date":   endTime.Add(-24 * time.Hour).Format("2006-01-02"),
+		"end_date":   endTime.Add(-time.Nanosecond).Format("2006-01-02"),
 	})
 }
 
@@ -466,7 +466,7 @@ func (h *DashboardHandler) GetAPIKeyUsageTrend(c *gin.Context) {
 	response.Success(c, gin.H{
 		"trend":       trend,
 		"start_date":  startTime.Format("2006-01-02"),
-		"end_date":    endTime.Add(-24 * time.Hour).Format("2006-01-02"),
+		"end_date":    endTime.Add(-time.Nanosecond).Format("2006-01-02"),
 		"granularity": granularity,
 	})
 }
@@ -497,7 +497,7 @@ func (h *DashboardHandler) GetUserUsageTrend(c *gin.Context) {
 	response.Success(c, gin.H{
 		"trend":       trend,
 		"start_date":  startTime.Format("2006-01-02"),
-		"end_date":    endTime.Add(-24 * time.Hour).Format("2006-01-02"),
+		"end_date":    endTime.Add(-time.Nanosecond).Format("2006-01-02"),
 		"granularity": granularity,
 	})
 }
@@ -560,7 +560,7 @@ func (h *DashboardHandler) GetUserSpendingRanking(c *gin.Context) {
 		"total_requests":    ranking.TotalRequests,
 		"total_tokens":      ranking.TotalTokens,
 		"start_date":        startTime.Format("2006-01-02"),
-		"end_date":          endTime.Add(-24 * time.Hour).Format("2006-01-02"),
+		"end_date":          endTime.Add(-time.Nanosecond).Format("2006-01-02"),
 	}
 	dashboardUsersRankingCache.Set(cacheKey, payload)
 	c.Header("X-Snapshot-Cache", "miss")
@@ -652,7 +652,8 @@ func (h *DashboardHandler) GetBatchAPIKeysUsage(c *gin.Context) {
 
 // GetUserBreakdown handles getting per-user usage breakdown within a dimension.
 // GET /api/v1/admin/dashboard/user-breakdown
-// Query params: start_date, end_date, group_id, model, endpoint, endpoint_type, limit
+// Query params: start_date, end_date, group_id, model, endpoint, endpoint_type,
+// request_type, sort_by, limit
 func (h *DashboardHandler) GetUserBreakdown(c *gin.Context) {
 	startTime, endTime, err := parseTimeRange(c)
 	if err != nil {
@@ -692,11 +693,14 @@ func (h *DashboardHandler) GetUserBreakdown(c *gin.Context) {
 			dim.AccountID = id
 		}
 	}
-	if v := c.Query("request_type"); v != "" {
-		if rt, err := strconv.ParseInt(v, 10, 16); err == nil {
-			rtVal := int16(rt)
-			dim.RequestType = &rtVal
+	if v := strings.TrimSpace(c.Query("request_type")); v != "" {
+		parsed, err := service.ParseUsageRequestType(v)
+		if err != nil {
+			response.BadRequest(c, err.Error())
+			return
 		}
+		rtVal := int16(parsed)
+		dim.RequestType = &rtVal
 	}
 	if v := c.Query("stream"); v != "" {
 		if s, err := strconv.ParseBool(v); err == nil {
@@ -709,6 +713,12 @@ func (h *DashboardHandler) GetUserBreakdown(c *gin.Context) {
 			dim.BillingType = &btVal
 		}
 	}
+	sortBy, ok := usagestats.ParseUserBreakdownSortBy(c.Query("sort_by"))
+	if !ok {
+		response.BadRequest(c, "Invalid sort_by, use requests/input_tokens/output_tokens/cache_tokens/total_tokens/cost/actual_cost")
+		return
+	}
+	dim.SortBy = sortBy
 
 	limit := 50
 	if v := c.Query("limit"); v != "" {
@@ -728,6 +738,6 @@ func (h *DashboardHandler) GetUserBreakdown(c *gin.Context) {
 	response.Success(c, gin.H{
 		"users":      stats,
 		"start_date": startTime.Format("2006-01-02"),
-		"end_date":   endTime.Add(-24 * time.Hour).Format("2006-01-02"),
+		"end_date":   endTime.Add(-time.Nanosecond).Format("2006-01-02"),
 	})
 }

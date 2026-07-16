@@ -668,6 +668,10 @@ func TestBuildAuthorizationURL_特殊字符编码(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestConstants_值正确(t *testing.T) {
+	old := defaultClientSecret
+	defaultClientSecret = "test-antigravity-client-secret"
+	t.Cleanup(func() { defaultClientSecret = old })
+
 	if AuthorizeURL != "https://accounts.google.com/o/oauth2/v2/auth" {
 		t.Errorf("AuthorizeURL 不匹配: got %s", AuthorizeURL)
 	}
@@ -684,7 +688,7 @@ func TestConstants_值正确(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getClientSecret 应返回默认值，但报错: %v", err)
 	}
-	if secret != "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" {
+	if secret != "test-antigravity-client-secret" {
 		t.Errorf("默认 client_secret 不匹配: got %s", secret)
 	}
 	if RedirectURI != "http://localhost:8085/callback" {

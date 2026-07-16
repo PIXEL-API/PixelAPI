@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
@@ -25,6 +26,23 @@ func openAIAccountShareModeRequestContext(c *gin.Context, apiKey *service.APIKey
 		return ctx
 	}
 	return service.WithAccountShareModeRequest(ctx, userID, apiKey.ID)
+}
+
+func openAICompatibleRoutingPlatform(apiKey *service.APIKey) string {
+	if apiKey != nil && apiKey.Group != nil && apiKey.Group.Platform == service.PlatformGrok {
+		return service.PlatformGrok
+	}
+	return service.PlatformOpenAI
+}
+
+func openAICompatibleRequestContext(ctx context.Context, apiKey *service.APIKey) context.Context {
+	if openAICompatibleRoutingPlatform(apiKey) != service.PlatformGrok {
+		return ctx
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, ctxkey.ForcePlatform, service.PlatformGrok)
 }
 
 func (h *OpenAIGatewayHandler) handleAccountShareModeSelectionError(c *gin.Context, err error, streamStarted bool) bool {

@@ -118,6 +118,83 @@ func (_u *GroupUpdate) AddRateMultiplier(v float64) *GroupUpdate {
 	return _u
 }
 
+// SetNewUserRateEnabled sets the "new_user_rate_enabled" field.
+func (_u *GroupUpdate) SetNewUserRateEnabled(v bool) *GroupUpdate {
+	_u.mutation.SetNewUserRateEnabled(v)
+	return _u
+}
+
+// SetNillableNewUserRateEnabled sets the "new_user_rate_enabled" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableNewUserRateEnabled(v *bool) *GroupUpdate {
+	if v != nil {
+		_u.SetNewUserRateEnabled(*v)
+	}
+	return _u
+}
+
+// SetNewUserRateMultiplier sets the "new_user_rate_multiplier" field.
+func (_u *GroupUpdate) SetNewUserRateMultiplier(v float64) *GroupUpdate {
+	_u.mutation.ResetNewUserRateMultiplier()
+	_u.mutation.SetNewUserRateMultiplier(v)
+	return _u
+}
+
+// SetNillableNewUserRateMultiplier sets the "new_user_rate_multiplier" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableNewUserRateMultiplier(v *float64) *GroupUpdate {
+	if v != nil {
+		_u.SetNewUserRateMultiplier(*v)
+	}
+	return _u
+}
+
+// AddNewUserRateMultiplier adds value to the "new_user_rate_multiplier" field.
+func (_u *GroupUpdate) AddNewUserRateMultiplier(v float64) *GroupUpdate {
+	_u.mutation.AddNewUserRateMultiplier(v)
+	return _u
+}
+
+// SetNewUserRateWindowSeconds sets the "new_user_rate_window_seconds" field.
+func (_u *GroupUpdate) SetNewUserRateWindowSeconds(v int) *GroupUpdate {
+	_u.mutation.ResetNewUserRateWindowSeconds()
+	_u.mutation.SetNewUserRateWindowSeconds(v)
+	return _u
+}
+
+// SetNillableNewUserRateWindowSeconds sets the "new_user_rate_window_seconds" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableNewUserRateWindowSeconds(v *int) *GroupUpdate {
+	if v != nil {
+		_u.SetNewUserRateWindowSeconds(*v)
+	}
+	return _u
+}
+
+// AddNewUserRateWindowSeconds adds value to the "new_user_rate_window_seconds" field.
+func (_u *GroupUpdate) AddNewUserRateWindowSeconds(v int) *GroupUpdate {
+	_u.mutation.AddNewUserRateWindowSeconds(v)
+	return _u
+}
+
+// SetNewUserRateQuotaUsd sets the "new_user_rate_quota_usd" field.
+func (_u *GroupUpdate) SetNewUserRateQuotaUsd(v float64) *GroupUpdate {
+	_u.mutation.ResetNewUserRateQuotaUsd()
+	_u.mutation.SetNewUserRateQuotaUsd(v)
+	return _u
+}
+
+// SetNillableNewUserRateQuotaUsd sets the "new_user_rate_quota_usd" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableNewUserRateQuotaUsd(v *float64) *GroupUpdate {
+	if v != nil {
+		_u.SetNewUserRateQuotaUsd(*v)
+	}
+	return _u
+}
+
+// AddNewUserRateQuotaUsd adds value to the "new_user_rate_quota_usd" field.
+func (_u *GroupUpdate) AddNewUserRateQuotaUsd(v float64) *GroupUpdate {
+	_u.mutation.AddNewUserRateQuotaUsd(v)
+	return _u
+}
+
 // SetIsExclusive sets the "is_exclusive" field.
 func (_u *GroupUpdate) SetIsExclusive(v bool) *GroupUpdate {
 	_u.mutation.SetIsExclusive(v)
@@ -458,6 +535,149 @@ func (_u *GroupUpdate) AddImagePrice4k(v float64) *GroupUpdate {
 // ClearImagePrice4k clears the value of the "image_price_4k" field.
 func (_u *GroupUpdate) ClearImagePrice4k() *GroupUpdate {
 	_u.mutation.ClearImagePrice4k()
+	return _u
+}
+
+// SetVideoRateIndependent sets the "video_rate_independent" field.
+func (_u *GroupUpdate) SetVideoRateIndependent(v bool) *GroupUpdate {
+	_u.mutation.SetVideoRateIndependent(v)
+	return _u
+}
+
+// SetNillableVideoRateIndependent sets the "video_rate_independent" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableVideoRateIndependent(v *bool) *GroupUpdate {
+	if v != nil {
+		_u.SetVideoRateIndependent(*v)
+	}
+	return _u
+}
+
+// SetVideoRateMultiplier sets the "video_rate_multiplier" field.
+func (_u *GroupUpdate) SetVideoRateMultiplier(v float64) *GroupUpdate {
+	_u.mutation.ResetVideoRateMultiplier()
+	_u.mutation.SetVideoRateMultiplier(v)
+	return _u
+}
+
+// SetNillableVideoRateMultiplier sets the "video_rate_multiplier" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableVideoRateMultiplier(v *float64) *GroupUpdate {
+	if v != nil {
+		_u.SetVideoRateMultiplier(*v)
+	}
+	return _u
+}
+
+// AddVideoRateMultiplier adds value to the "video_rate_multiplier" field.
+func (_u *GroupUpdate) AddVideoRateMultiplier(v float64) *GroupUpdate {
+	_u.mutation.AddVideoRateMultiplier(v)
+	return _u
+}
+
+// SetVideoPrice480p sets the "video_price_480p" field.
+func (_u *GroupUpdate) SetVideoPrice480p(v float64) *GroupUpdate {
+	_u.mutation.ResetVideoPrice480p()
+	_u.mutation.SetVideoPrice480p(v)
+	return _u
+}
+
+// SetNillableVideoPrice480p sets the "video_price_480p" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableVideoPrice480p(v *float64) *GroupUpdate {
+	if v != nil {
+		_u.SetVideoPrice480p(*v)
+	}
+	return _u
+}
+
+// AddVideoPrice480p adds value to the "video_price_480p" field.
+func (_u *GroupUpdate) AddVideoPrice480p(v float64) *GroupUpdate {
+	_u.mutation.AddVideoPrice480p(v)
+	return _u
+}
+
+// ClearVideoPrice480p clears the value of the "video_price_480p" field.
+func (_u *GroupUpdate) ClearVideoPrice480p() *GroupUpdate {
+	_u.mutation.ClearVideoPrice480p()
+	return _u
+}
+
+// SetVideoPrice720p sets the "video_price_720p" field.
+func (_u *GroupUpdate) SetVideoPrice720p(v float64) *GroupUpdate {
+	_u.mutation.ResetVideoPrice720p()
+	_u.mutation.SetVideoPrice720p(v)
+	return _u
+}
+
+// SetNillableVideoPrice720p sets the "video_price_720p" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableVideoPrice720p(v *float64) *GroupUpdate {
+	if v != nil {
+		_u.SetVideoPrice720p(*v)
+	}
+	return _u
+}
+
+// AddVideoPrice720p adds value to the "video_price_720p" field.
+func (_u *GroupUpdate) AddVideoPrice720p(v float64) *GroupUpdate {
+	_u.mutation.AddVideoPrice720p(v)
+	return _u
+}
+
+// ClearVideoPrice720p clears the value of the "video_price_720p" field.
+func (_u *GroupUpdate) ClearVideoPrice720p() *GroupUpdate {
+	_u.mutation.ClearVideoPrice720p()
+	return _u
+}
+
+// SetVideoPrice1080p sets the "video_price_1080p" field.
+func (_u *GroupUpdate) SetVideoPrice1080p(v float64) *GroupUpdate {
+	_u.mutation.ResetVideoPrice1080p()
+	_u.mutation.SetVideoPrice1080p(v)
+	return _u
+}
+
+// SetNillableVideoPrice1080p sets the "video_price_1080p" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableVideoPrice1080p(v *float64) *GroupUpdate {
+	if v != nil {
+		_u.SetVideoPrice1080p(*v)
+	}
+	return _u
+}
+
+// AddVideoPrice1080p adds value to the "video_price_1080p" field.
+func (_u *GroupUpdate) AddVideoPrice1080p(v float64) *GroupUpdate {
+	_u.mutation.AddVideoPrice1080p(v)
+	return _u
+}
+
+// ClearVideoPrice1080p clears the value of the "video_price_1080p" field.
+func (_u *GroupUpdate) ClearVideoPrice1080p() *GroupUpdate {
+	_u.mutation.ClearVideoPrice1080p()
+	return _u
+}
+
+// SetWebSearchPricePerCall sets the "web_search_price_per_call" field.
+func (_u *GroupUpdate) SetWebSearchPricePerCall(v float64) *GroupUpdate {
+	_u.mutation.ResetWebSearchPricePerCall()
+	_u.mutation.SetWebSearchPricePerCall(v)
+	return _u
+}
+
+// SetNillableWebSearchPricePerCall sets the "web_search_price_per_call" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableWebSearchPricePerCall(v *float64) *GroupUpdate {
+	if v != nil {
+		_u.SetWebSearchPricePerCall(*v)
+	}
+	return _u
+}
+
+// AddWebSearchPricePerCall adds value to the "web_search_price_per_call" field.
+func (_u *GroupUpdate) AddWebSearchPricePerCall(v float64) *GroupUpdate {
+	_u.mutation.AddWebSearchPricePerCall(v)
+	return _u
+}
+
+// ClearWebSearchPricePerCall clears the value of the "web_search_price_per_call" field.
+func (_u *GroupUpdate) ClearWebSearchPricePerCall() *GroupUpdate {
+	_u.mutation.ClearWebSearchPricePerCall()
 	return _u
 }
 
@@ -1068,6 +1288,27 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.AddedRateMultiplier(); ok {
 		_spec.AddField(group.FieldRateMultiplier, field.TypeFloat64, value)
 	}
+	if value, ok := _u.mutation.NewUserRateEnabled(); ok {
+		_spec.SetField(group.FieldNewUserRateEnabled, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.NewUserRateMultiplier(); ok {
+		_spec.SetField(group.FieldNewUserRateMultiplier, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedNewUserRateMultiplier(); ok {
+		_spec.AddField(group.FieldNewUserRateMultiplier, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.NewUserRateWindowSeconds(); ok {
+		_spec.SetField(group.FieldNewUserRateWindowSeconds, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedNewUserRateWindowSeconds(); ok {
+		_spec.AddField(group.FieldNewUserRateWindowSeconds, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.NewUserRateQuotaUsd(); ok {
+		_spec.SetField(group.FieldNewUserRateQuotaUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedNewUserRateQuotaUsd(); ok {
+		_spec.AddField(group.FieldNewUserRateQuotaUsd, field.TypeFloat64, value)
+	}
 	if value, ok := _u.mutation.IsExclusive(); ok {
 		_spec.SetField(group.FieldIsExclusive, field.TypeBool, value)
 	}
@@ -1166,6 +1407,51 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.ImagePrice4kCleared() {
 		_spec.ClearField(group.FieldImagePrice4k, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.VideoRateIndependent(); ok {
+		_spec.SetField(group.FieldVideoRateIndependent, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.VideoRateMultiplier(); ok {
+		_spec.SetField(group.FieldVideoRateMultiplier, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedVideoRateMultiplier(); ok {
+		_spec.AddField(group.FieldVideoRateMultiplier, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.VideoPrice480p(); ok {
+		_spec.SetField(group.FieldVideoPrice480p, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedVideoPrice480p(); ok {
+		_spec.AddField(group.FieldVideoPrice480p, field.TypeFloat64, value)
+	}
+	if _u.mutation.VideoPrice480pCleared() {
+		_spec.ClearField(group.FieldVideoPrice480p, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.VideoPrice720p(); ok {
+		_spec.SetField(group.FieldVideoPrice720p, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedVideoPrice720p(); ok {
+		_spec.AddField(group.FieldVideoPrice720p, field.TypeFloat64, value)
+	}
+	if _u.mutation.VideoPrice720pCleared() {
+		_spec.ClearField(group.FieldVideoPrice720p, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.VideoPrice1080p(); ok {
+		_spec.SetField(group.FieldVideoPrice1080p, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedVideoPrice1080p(); ok {
+		_spec.AddField(group.FieldVideoPrice1080p, field.TypeFloat64, value)
+	}
+	if _u.mutation.VideoPrice1080pCleared() {
+		_spec.ClearField(group.FieldVideoPrice1080p, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.WebSearchPricePerCall(); ok {
+		_spec.SetField(group.FieldWebSearchPricePerCall, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedWebSearchPricePerCall(); ok {
+		_spec.AddField(group.FieldWebSearchPricePerCall, field.TypeFloat64, value)
+	}
+	if _u.mutation.WebSearchPricePerCallCleared() {
+		_spec.ClearField(group.FieldWebSearchPricePerCall, field.TypeFloat64)
 	}
 	if value, ok := _u.mutation.ClaudeCodeOnly(); ok {
 		_spec.SetField(group.FieldClaudeCodeOnly, field.TypeBool, value)
@@ -1675,6 +1961,83 @@ func (_u *GroupUpdateOne) AddRateMultiplier(v float64) *GroupUpdateOne {
 	return _u
 }
 
+// SetNewUserRateEnabled sets the "new_user_rate_enabled" field.
+func (_u *GroupUpdateOne) SetNewUserRateEnabled(v bool) *GroupUpdateOne {
+	_u.mutation.SetNewUserRateEnabled(v)
+	return _u
+}
+
+// SetNillableNewUserRateEnabled sets the "new_user_rate_enabled" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableNewUserRateEnabled(v *bool) *GroupUpdateOne {
+	if v != nil {
+		_u.SetNewUserRateEnabled(*v)
+	}
+	return _u
+}
+
+// SetNewUserRateMultiplier sets the "new_user_rate_multiplier" field.
+func (_u *GroupUpdateOne) SetNewUserRateMultiplier(v float64) *GroupUpdateOne {
+	_u.mutation.ResetNewUserRateMultiplier()
+	_u.mutation.SetNewUserRateMultiplier(v)
+	return _u
+}
+
+// SetNillableNewUserRateMultiplier sets the "new_user_rate_multiplier" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableNewUserRateMultiplier(v *float64) *GroupUpdateOne {
+	if v != nil {
+		_u.SetNewUserRateMultiplier(*v)
+	}
+	return _u
+}
+
+// AddNewUserRateMultiplier adds value to the "new_user_rate_multiplier" field.
+func (_u *GroupUpdateOne) AddNewUserRateMultiplier(v float64) *GroupUpdateOne {
+	_u.mutation.AddNewUserRateMultiplier(v)
+	return _u
+}
+
+// SetNewUserRateWindowSeconds sets the "new_user_rate_window_seconds" field.
+func (_u *GroupUpdateOne) SetNewUserRateWindowSeconds(v int) *GroupUpdateOne {
+	_u.mutation.ResetNewUserRateWindowSeconds()
+	_u.mutation.SetNewUserRateWindowSeconds(v)
+	return _u
+}
+
+// SetNillableNewUserRateWindowSeconds sets the "new_user_rate_window_seconds" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableNewUserRateWindowSeconds(v *int) *GroupUpdateOne {
+	if v != nil {
+		_u.SetNewUserRateWindowSeconds(*v)
+	}
+	return _u
+}
+
+// AddNewUserRateWindowSeconds adds value to the "new_user_rate_window_seconds" field.
+func (_u *GroupUpdateOne) AddNewUserRateWindowSeconds(v int) *GroupUpdateOne {
+	_u.mutation.AddNewUserRateWindowSeconds(v)
+	return _u
+}
+
+// SetNewUserRateQuotaUsd sets the "new_user_rate_quota_usd" field.
+func (_u *GroupUpdateOne) SetNewUserRateQuotaUsd(v float64) *GroupUpdateOne {
+	_u.mutation.ResetNewUserRateQuotaUsd()
+	_u.mutation.SetNewUserRateQuotaUsd(v)
+	return _u
+}
+
+// SetNillableNewUserRateQuotaUsd sets the "new_user_rate_quota_usd" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableNewUserRateQuotaUsd(v *float64) *GroupUpdateOne {
+	if v != nil {
+		_u.SetNewUserRateQuotaUsd(*v)
+	}
+	return _u
+}
+
+// AddNewUserRateQuotaUsd adds value to the "new_user_rate_quota_usd" field.
+func (_u *GroupUpdateOne) AddNewUserRateQuotaUsd(v float64) *GroupUpdateOne {
+	_u.mutation.AddNewUserRateQuotaUsd(v)
+	return _u
+}
+
 // SetIsExclusive sets the "is_exclusive" field.
 func (_u *GroupUpdateOne) SetIsExclusive(v bool) *GroupUpdateOne {
 	_u.mutation.SetIsExclusive(v)
@@ -2015,6 +2378,149 @@ func (_u *GroupUpdateOne) AddImagePrice4k(v float64) *GroupUpdateOne {
 // ClearImagePrice4k clears the value of the "image_price_4k" field.
 func (_u *GroupUpdateOne) ClearImagePrice4k() *GroupUpdateOne {
 	_u.mutation.ClearImagePrice4k()
+	return _u
+}
+
+// SetVideoRateIndependent sets the "video_rate_independent" field.
+func (_u *GroupUpdateOne) SetVideoRateIndependent(v bool) *GroupUpdateOne {
+	_u.mutation.SetVideoRateIndependent(v)
+	return _u
+}
+
+// SetNillableVideoRateIndependent sets the "video_rate_independent" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableVideoRateIndependent(v *bool) *GroupUpdateOne {
+	if v != nil {
+		_u.SetVideoRateIndependent(*v)
+	}
+	return _u
+}
+
+// SetVideoRateMultiplier sets the "video_rate_multiplier" field.
+func (_u *GroupUpdateOne) SetVideoRateMultiplier(v float64) *GroupUpdateOne {
+	_u.mutation.ResetVideoRateMultiplier()
+	_u.mutation.SetVideoRateMultiplier(v)
+	return _u
+}
+
+// SetNillableVideoRateMultiplier sets the "video_rate_multiplier" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableVideoRateMultiplier(v *float64) *GroupUpdateOne {
+	if v != nil {
+		_u.SetVideoRateMultiplier(*v)
+	}
+	return _u
+}
+
+// AddVideoRateMultiplier adds value to the "video_rate_multiplier" field.
+func (_u *GroupUpdateOne) AddVideoRateMultiplier(v float64) *GroupUpdateOne {
+	_u.mutation.AddVideoRateMultiplier(v)
+	return _u
+}
+
+// SetVideoPrice480p sets the "video_price_480p" field.
+func (_u *GroupUpdateOne) SetVideoPrice480p(v float64) *GroupUpdateOne {
+	_u.mutation.ResetVideoPrice480p()
+	_u.mutation.SetVideoPrice480p(v)
+	return _u
+}
+
+// SetNillableVideoPrice480p sets the "video_price_480p" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableVideoPrice480p(v *float64) *GroupUpdateOne {
+	if v != nil {
+		_u.SetVideoPrice480p(*v)
+	}
+	return _u
+}
+
+// AddVideoPrice480p adds value to the "video_price_480p" field.
+func (_u *GroupUpdateOne) AddVideoPrice480p(v float64) *GroupUpdateOne {
+	_u.mutation.AddVideoPrice480p(v)
+	return _u
+}
+
+// ClearVideoPrice480p clears the value of the "video_price_480p" field.
+func (_u *GroupUpdateOne) ClearVideoPrice480p() *GroupUpdateOne {
+	_u.mutation.ClearVideoPrice480p()
+	return _u
+}
+
+// SetVideoPrice720p sets the "video_price_720p" field.
+func (_u *GroupUpdateOne) SetVideoPrice720p(v float64) *GroupUpdateOne {
+	_u.mutation.ResetVideoPrice720p()
+	_u.mutation.SetVideoPrice720p(v)
+	return _u
+}
+
+// SetNillableVideoPrice720p sets the "video_price_720p" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableVideoPrice720p(v *float64) *GroupUpdateOne {
+	if v != nil {
+		_u.SetVideoPrice720p(*v)
+	}
+	return _u
+}
+
+// AddVideoPrice720p adds value to the "video_price_720p" field.
+func (_u *GroupUpdateOne) AddVideoPrice720p(v float64) *GroupUpdateOne {
+	_u.mutation.AddVideoPrice720p(v)
+	return _u
+}
+
+// ClearVideoPrice720p clears the value of the "video_price_720p" field.
+func (_u *GroupUpdateOne) ClearVideoPrice720p() *GroupUpdateOne {
+	_u.mutation.ClearVideoPrice720p()
+	return _u
+}
+
+// SetVideoPrice1080p sets the "video_price_1080p" field.
+func (_u *GroupUpdateOne) SetVideoPrice1080p(v float64) *GroupUpdateOne {
+	_u.mutation.ResetVideoPrice1080p()
+	_u.mutation.SetVideoPrice1080p(v)
+	return _u
+}
+
+// SetNillableVideoPrice1080p sets the "video_price_1080p" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableVideoPrice1080p(v *float64) *GroupUpdateOne {
+	if v != nil {
+		_u.SetVideoPrice1080p(*v)
+	}
+	return _u
+}
+
+// AddVideoPrice1080p adds value to the "video_price_1080p" field.
+func (_u *GroupUpdateOne) AddVideoPrice1080p(v float64) *GroupUpdateOne {
+	_u.mutation.AddVideoPrice1080p(v)
+	return _u
+}
+
+// ClearVideoPrice1080p clears the value of the "video_price_1080p" field.
+func (_u *GroupUpdateOne) ClearVideoPrice1080p() *GroupUpdateOne {
+	_u.mutation.ClearVideoPrice1080p()
+	return _u
+}
+
+// SetWebSearchPricePerCall sets the "web_search_price_per_call" field.
+func (_u *GroupUpdateOne) SetWebSearchPricePerCall(v float64) *GroupUpdateOne {
+	_u.mutation.ResetWebSearchPricePerCall()
+	_u.mutation.SetWebSearchPricePerCall(v)
+	return _u
+}
+
+// SetNillableWebSearchPricePerCall sets the "web_search_price_per_call" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableWebSearchPricePerCall(v *float64) *GroupUpdateOne {
+	if v != nil {
+		_u.SetWebSearchPricePerCall(*v)
+	}
+	return _u
+}
+
+// AddWebSearchPricePerCall adds value to the "web_search_price_per_call" field.
+func (_u *GroupUpdateOne) AddWebSearchPricePerCall(v float64) *GroupUpdateOne {
+	_u.mutation.AddWebSearchPricePerCall(v)
+	return _u
+}
+
+// ClearWebSearchPricePerCall clears the value of the "web_search_price_per_call" field.
+func (_u *GroupUpdateOne) ClearWebSearchPricePerCall() *GroupUpdateOne {
+	_u.mutation.ClearWebSearchPricePerCall()
 	return _u
 }
 
@@ -2655,6 +3161,27 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	if value, ok := _u.mutation.AddedRateMultiplier(); ok {
 		_spec.AddField(group.FieldRateMultiplier, field.TypeFloat64, value)
 	}
+	if value, ok := _u.mutation.NewUserRateEnabled(); ok {
+		_spec.SetField(group.FieldNewUserRateEnabled, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.NewUserRateMultiplier(); ok {
+		_spec.SetField(group.FieldNewUserRateMultiplier, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedNewUserRateMultiplier(); ok {
+		_spec.AddField(group.FieldNewUserRateMultiplier, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.NewUserRateWindowSeconds(); ok {
+		_spec.SetField(group.FieldNewUserRateWindowSeconds, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedNewUserRateWindowSeconds(); ok {
+		_spec.AddField(group.FieldNewUserRateWindowSeconds, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.NewUserRateQuotaUsd(); ok {
+		_spec.SetField(group.FieldNewUserRateQuotaUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedNewUserRateQuotaUsd(); ok {
+		_spec.AddField(group.FieldNewUserRateQuotaUsd, field.TypeFloat64, value)
+	}
 	if value, ok := _u.mutation.IsExclusive(); ok {
 		_spec.SetField(group.FieldIsExclusive, field.TypeBool, value)
 	}
@@ -2753,6 +3280,51 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if _u.mutation.ImagePrice4kCleared() {
 		_spec.ClearField(group.FieldImagePrice4k, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.VideoRateIndependent(); ok {
+		_spec.SetField(group.FieldVideoRateIndependent, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.VideoRateMultiplier(); ok {
+		_spec.SetField(group.FieldVideoRateMultiplier, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedVideoRateMultiplier(); ok {
+		_spec.AddField(group.FieldVideoRateMultiplier, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.VideoPrice480p(); ok {
+		_spec.SetField(group.FieldVideoPrice480p, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedVideoPrice480p(); ok {
+		_spec.AddField(group.FieldVideoPrice480p, field.TypeFloat64, value)
+	}
+	if _u.mutation.VideoPrice480pCleared() {
+		_spec.ClearField(group.FieldVideoPrice480p, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.VideoPrice720p(); ok {
+		_spec.SetField(group.FieldVideoPrice720p, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedVideoPrice720p(); ok {
+		_spec.AddField(group.FieldVideoPrice720p, field.TypeFloat64, value)
+	}
+	if _u.mutation.VideoPrice720pCleared() {
+		_spec.ClearField(group.FieldVideoPrice720p, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.VideoPrice1080p(); ok {
+		_spec.SetField(group.FieldVideoPrice1080p, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedVideoPrice1080p(); ok {
+		_spec.AddField(group.FieldVideoPrice1080p, field.TypeFloat64, value)
+	}
+	if _u.mutation.VideoPrice1080pCleared() {
+		_spec.ClearField(group.FieldVideoPrice1080p, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.WebSearchPricePerCall(); ok {
+		_spec.SetField(group.FieldWebSearchPricePerCall, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedWebSearchPricePerCall(); ok {
+		_spec.AddField(group.FieldWebSearchPricePerCall, field.TypeFloat64, value)
+	}
+	if _u.mutation.WebSearchPricePerCallCleared() {
+		_spec.ClearField(group.FieldWebSearchPricePerCall, field.TypeFloat64)
 	}
 	if value, ok := _u.mutation.ClaudeCodeOnly(); ok {
 		_spec.SetField(group.FieldClaudeCodeOnly, field.TypeBool, value)

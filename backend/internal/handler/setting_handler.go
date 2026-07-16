@@ -83,9 +83,31 @@ func (h *SettingHandler) GetPublicSettings(c *gin.Context) {
 
 		UserAccountImportLimit: settings.UserAccountImportLimit,
 
-		AffiliateEnabled:   settings.AffiliateEnabled,
-		RiskControlEnabled: settings.RiskControlEnabled,
+		OpenAIAccountLevels: openAIAccountLevelsToDTO(settings.OpenAIAccountLevels),
+
+		AffiliateEnabled:              settings.AffiliateEnabled,
+		RiskControlEnabled:            settings.RiskControlEnabled,
+		InvoiceManagementEnabled:      settings.InvoiceManagementEnabled,
+		WithdrawalManagementEnabled:   settings.WithdrawalManagementEnabled,
+		WithdrawalRateLimitWindowDays: settings.WithdrawalRateLimitWindowDays,
+		WithdrawalRateLimitMax:        settings.WithdrawalRateLimitMax,
 	})
+}
+
+func openAIAccountLevelsToDTO(levels []service.OpenAIAccountLevelConfig) []dto.OpenAIAccountLevelConfig {
+	normalized := service.OpenAIAccountLevelConfigSelectable(levels)
+	out := make([]dto.OpenAIAccountLevelConfig, 0, len(normalized))
+	for _, level := range normalized {
+		out = append(out, dto.OpenAIAccountLevelConfig{
+			Key:                level.Key,
+			Label:              level.Label,
+			Aliases:            append([]string(nil), level.Aliases...),
+			SortOrder:          level.SortOrder,
+			Enabled:            level.Enabled,
+			RequiresProxyLogin: level.RequiresProxyLogin,
+		})
+	}
+	return out
 }
 
 func loginAgreementDocumentsToDTO(docs []service.LoginAgreementDocument) []dto.LoginAgreementDocument {

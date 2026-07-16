@@ -3,19 +3,20 @@ package service
 import "strings"
 
 // resolveOpenAIForwardModel determines the upstream model for OpenAI-compatible
-// forwarding. The group-level messages default only applies to Claude-family
-// dispatch requests that did not match an explicit model_mapping rule.
-func resolveOpenAIForwardModel(account *Account, requestedModel, defaultMappedModel string) string {
+// forwarding. messagesDispatchMappedModel is an exact /v1/messages dispatch
+// result resolved by the caller; ordinary OpenAI requests must pass it empty.
+func resolveOpenAIForwardModel(account *Account, requestedModel, messagesDispatchMappedModel string) string {
+	messagesDispatchMappedModel = strings.TrimSpace(messagesDispatchMappedModel)
 	if account == nil {
-		if defaultMappedModel != "" && claudeMessagesDispatchFamily(requestedModel) != "" {
-			return defaultMappedModel
+		if messagesDispatchMappedModel != "" {
+			return messagesDispatchMappedModel
 		}
 		return requestedModel
 	}
 
 	mappedModel, matched := account.ResolveMappedModel(requestedModel)
-	if !matched && defaultMappedModel != "" && claudeMessagesDispatchFamily(requestedModel) != "" {
-		return defaultMappedModel
+	if !matched && messagesDispatchMappedModel != "" {
+		return messagesDispatchMappedModel
 	}
 	return mappedModel
 }

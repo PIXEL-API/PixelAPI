@@ -28,6 +28,56 @@
       >
         {{ selectedPlatformHint }}
       </div>
+      <div v-if="requiresCredentialImportProxy" class="space-y-2">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <label class="input-label mb-0">{{ t('userAccounts.importProxy') }}</label>
+          <div class="flex flex-wrap items-center justify-end gap-2">
+            <button
+              type="button"
+              class="text-xs font-medium text-primary-600 hover:text-primary-700 disabled:cursor-not-allowed disabled:opacity-60 dark:text-primary-400"
+              :disabled="proxyLoading"
+              @click="loadProxies(true)"
+            >
+              {{ proxyLoading ? t('common.loading') : t('common.refresh') }}
+            </button>
+            <button
+              type="button"
+              class="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:border-sky-300 hover:bg-sky-50 dark:border-dark-700 dark:bg-dark-800 dark:text-dark-200 dark:hover:border-sky-500/70 dark:hover:bg-sky-900/20"
+              @click="openProxyPurchase()"
+            >
+              <Icon name="externalLink" size="xs" />
+              {{ t('userAccounts.proxyActionBuyTitle') }}
+            </button>
+            <button
+              type="button"
+              class="inline-flex items-center gap-1 rounded-md border border-primary-200 bg-primary-50 px-2.5 py-1.5 text-xs font-medium text-primary-700 hover:border-primary-300 hover:bg-primary-100 dark:border-primary-500/30 dark:bg-primary-500/10 dark:text-primary-300 dark:hover:bg-primary-500/20"
+              :aria-expanded="showProxyDialog"
+              data-testid="import-credential-user-proxy-panel"
+              @click="openAddProxyDialog()"
+            >
+              <Icon name="plus" size="xs" />
+              {{ t('userAccounts.proxyActionAddTitle') }}
+            </button>
+          </div>
+        </div>
+        <ProxySelector
+          v-model="selectedProxyId"
+          :proxies="proxies"
+          :allow-empty="false"
+          :can-test="false"
+          disable-full
+          hide-endpoint
+        />
+        <p class="input-hint">
+          {{ proxyHelperText }}
+        </p>
+        <UserProxyQuickCreatePanel
+          v-if="showProxyDialog"
+          class="mt-4"
+          @created="handleProxyCreated"
+          @cancel="closeProxyDialog"
+        />
+      </div>
     </template>
   </CredentialImportModal>
 
@@ -175,6 +225,7 @@ import { useAppStore } from '@/stores/app'
 import { useOpenAIOAuth } from '@/composables/useOpenAIOAuth'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { isProxyAccountFull, normalizeProxyAccountCount, normalizeProxyMaxAccounts } from '@/utils/proxyCapacity'
+import { openAIAccountLevelLabel, selectableOpenAIAccountLevels } from '@/utils/openaiAccountLevels'
 import type { ImportCredentialContentsRequest, ImportCredentialContentsResponse } from '@/api/accounts'
 import type { AccountLevel, AccountPlatform, Proxy } from '@/types'
 
@@ -217,12 +268,28 @@ const importLimit = computed(() => {
     : PERSONAL_ACCOUNT_IMPORT_LIMIT
 })
 
-const requiresOAuthLogin = computed(() => selectedPlatform.value === 'openai' && selectedAccountLevel.value === 'pro')
+const openAIAccountLevelConfigs = computed(() => appStore.cachedPublicSettings?.openai_account_levels)
+
+const requiresOAuthLogin = computed(() =>
+  selectedPlatform.value === 'openai' &&
+  selectableOpenAIAccountLevels(openAIAccountLevelConfigs.value)
+    .some(level => level.key === selectedAccountLevel.value && level.requires_proxy_login)
+)
+
+const requiresCredentialImportProxy = computed(() =>
+  selectedPlatform.value === 'anthropic' ||
+  selectedPlatform.value === 'gemini' ||
+  selectedPlatform.value === 'antigravity' ||
+  selectedPlatform.value === 'grok'
+)
 
 const canSubmitCredentialImport = computed(() => {
   if (!selectedPlatform.value) return false
   if (selectedPlatform.value === 'openai') {
-    return Boolean(selectedAccountLevel.value && selectedAccountLevel.value !== 'pro')
+    return Boolean(selectedAccountLevel.value && !requiresOAuthLogin.value)
+  }
+  if (requiresCredentialImportProxy.value) {
+    return Boolean(selectedProxyId.value && !selectedProxyCapacityMessage.value)
   }
   return true
 })
@@ -237,6 +304,8 @@ const importWarningText = computed(() => {
       return t('userAccounts.importWarningGemini', { max: importLimit.value })
     case 'antigravity':
       return t('userAccounts.importWarningAntigravity', { max: importLimit.value })
+    case 'grok':
+      return t('userAccounts.importWarningGrok', { max: importLimit.value })
     default:
       return t('userAccounts.importWarningChoosePlatform', { max: importLimit.value })
   }
@@ -252,6 +321,8 @@ const importTextHint = computed(() => {
       return t('userAccounts.importTextHintGemini')
     case 'antigravity':
       return t('userAccounts.importTextHintAntigravity')
+    case 'grok':
+      return t('userAccounts.importTextHintGrok')
     default:
       return t('userAccounts.importTextHintChoosePlatform')
   }
@@ -265,6 +336,8 @@ const selectedPlatformHint = computed(() => {
       return t('userAccounts.importPlatformHintGemini')
     case 'antigravity':
       return t('userAccounts.importPlatformHintAntigravity')
+    case 'grok':
+      return t('userAccounts.importPlatformHintGrok')
     default:
       return ''
   }
@@ -320,11 +393,12 @@ const PlatformSelector = defineComponent({
       { value: 'anthropic', label: 'Claude', desc: t('userAccounts.importPlatformClaude') },
       { value: 'openai', label: 'OpenAI', desc: t('userAccounts.importPlatformOpenAI') },
       { value: 'gemini', label: 'Gemini', desc: t('userAccounts.importPlatformGemini') },
-      { value: 'antigravity', label: 'Antigravity', desc: t('userAccounts.importPlatformAntigravity') }
+      { value: 'antigravity', label: 'Antigravity', desc: t('userAccounts.importPlatformAntigravity') },
+      { value: 'grok', label: 'Grok', desc: t('userAccounts.importPlatformGrok') }
     ]
     return () => h('div', { class: 'space-y-2' }, [
       h('label', { class: 'input-label' }, t('userAccounts.importPlatform')),
-      h('div', { class: 'grid gap-2 sm:grid-cols-2 lg:grid-cols-4' }, options.map(option =>
+      h('div', { class: 'grid gap-2 sm:grid-cols-2 xl:grid-cols-5' }, options.map(option =>
         h(
           'button',
           {
@@ -357,12 +431,16 @@ const AccountLevelSelector = defineComponent({
   },
   emits: ['select'],
   setup(props, { emit }) {
-    const options: Array<{ value: SelectableOpenAILevel; label: string; desc: string }> = [
-      { value: 'free', label: t('admin.accounts.accountLevel.free'), desc: t('userAccounts.importLevelFree') },
-      { value: 'plus', label: t('admin.accounts.accountLevel.plus'), desc: t('userAccounts.importLevelPlus') },
-      { value: 'pro', label: t('admin.accounts.accountLevel.pro'), desc: t('userAccounts.importLevelPro') },
-      { value: 'team', label: t('admin.accounts.accountLevel.team'), desc: t('userAccounts.importLevelTeam') }
-    ]
+    const appStore = useAppStore()
+    const options = computed<Array<{ value: SelectableOpenAILevel; label: string; desc: string }>>(() =>
+      selectableOpenAIAccountLevels(appStore.cachedPublicSettings?.openai_account_levels).map(level => ({
+        value: level.key as SelectableOpenAILevel,
+        label: level.label,
+        desc: level.requires_proxy_login
+          ? t('userAccounts.importLevelRequiresProxy', { level: level.label })
+          : t('userAccounts.importLevelDirect', { level: level.label })
+      }))
+    )
     return () => h('div', { class: 'space-y-2' }, [
       h('div', { class: 'flex items-center justify-between gap-3' }, [
         h('label', { class: 'input-label mb-0' }, t('userAccounts.importAccountLevel')),
@@ -378,7 +456,7 @@ const AccountLevelSelector = defineComponent({
             )
           : null
       ]),
-      h('div', { class: 'grid gap-2 sm:grid-cols-4' }, options.map(option =>
+      h('div', { class: 'grid gap-2 sm:grid-cols-4' }, options.value.map(option =>
         h(
           'button',
           {
@@ -415,17 +493,20 @@ watch(
     openaiOAuth.error.value = ''
     openaiOAuth.resetState()
     oauthFlowRef.value?.reset()
+    if (requiresCredentialImportProxy.value) {
+      loadProxies()
+    }
   }
 )
 
 watch(
   () => selectedAccountLevel.value,
-  (level) => {
+  () => {
     proxyLoadMessage.value = ''
     openaiOAuth.error.value = ''
     openaiOAuth.resetState()
     oauthFlowRef.value?.reset()
-    if (selectedPlatform.value === 'openai' && level === 'pro') {
+    if (selectedPlatform.value === 'openai' && requiresOAuthLogin.value) {
       loadProxies()
     } else {
       selectedProxyId.value = null
@@ -510,6 +591,17 @@ function importPersonalCredentials(contents: string[]): Promise<ImportCredential
     }
     request.account_level = accountLevel
   }
+  if (requiresCredentialImportProxy.value) {
+    if (!selectedProxyId.value) {
+      appStore.showError(t('userAccounts.importProxyRequired'))
+      return Promise.reject(new Error(t('userAccounts.importProxyRequired')))
+    }
+    if (selectedProxyCapacityMessage.value) {
+      appStore.showError(selectedProxyCapacityMessage.value)
+      return Promise.reject(new Error(selectedProxyCapacityMessage.value))
+    }
+    request.proxy_id = selectedProxyId.value
+  }
   return accountsAPI.importCredentialContents(request)
 }
 
@@ -573,7 +665,7 @@ async function generateOAuthUrl(): Promise<void> {
     appStore.showError(selectedProxyCapacityMessage.value)
     return
   }
-  await openaiOAuth.generateAuthUrl(selectedProxyId.value)
+  await openaiOAuth.generateAuthUrl(selectedProxyId.value, { accountLevel: selectedAccountLevel.value })
 }
 
 function handleClose(): void {
@@ -611,7 +703,8 @@ async function submitOAuthImport(): Promise<void> {
       authCode,
       openaiOAuth.sessionId.value,
       oauthState,
-      selectedProxyId.value
+      selectedProxyId.value,
+      selectedAccountLevel.value
     )
     if (!tokenInfo) return
 
@@ -621,7 +714,7 @@ async function submitOAuthImport(): Promise<void> {
       openaiOAuth.buildExtraInfo(tokenInfo)
     )
     await accountsAPI.create({
-      name: oauthAccountName.value || tokenInfo.email || `${t('admin.accounts.accountLevel.' + selectedAccountLevel.value)} OpenAI`,
+      name: oauthAccountName.value || tokenInfo.email || `${openAIAccountLevelLabel(selectedAccountLevel.value, openAIAccountLevelConfigs.value)} OpenAI`,
       platform: 'openai',
       account_level: selectedAccountLevel.value,
       type: 'oauth',

@@ -18,7 +18,7 @@ const (
 	defaultUsageRecordWorkerCount          = 128
 	defaultUsageRecordQueueSize            = 16384
 	defaultUsageRecordTaskTimeoutSeconds   = 5
-	defaultUsageRecordOverflowPolicy       = config.UsageRecordOverflowPolicySample
+	defaultUsageRecordOverflowPolicy       = config.UsageRecordOverflowPolicySync
 	defaultUsageRecordOverflowSampleRatio  = 10
 	defaultUsageRecordAutoScaleEnabled     = true
 	defaultUsageRecordAutoScaleMinWorkers  = 128

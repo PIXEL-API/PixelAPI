@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
+	"go.uber.org/zap"
 )
 
 func TestOpenAIHandleStreamingAwareError_JSONEscaping(t *testing.T) {
@@ -89,6 +90,73 @@ func TestOpenAIHandleStreamingAwareError_JSONEscaping(t *testing.T) {
 			assert.Equal(t, tt.message, errorObj["message"])
 		})
 	}
+}
+
+func TestOpenAIEnsureForwardErrorResponseImageKeepalivePaddingRemainsJSON(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+	stop := service.StartOpenAIImagesJSONKeepalive(c, time.Millisecond)
+	defer stop()
+	require.Eventually(t, c.Writer.Written, time.Second, time.Millisecond)
+	require.Equal(t, -1, service.OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c))
+
+	h := &OpenAIGatewayHandler{}
+	require.True(t, h.ensureForwardErrorResponse(c, false))
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &payload))
+	errorPayload, ok := payload["error"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "Upstream request failed", errorPayload["message"])
+	require.NotContains(t, recorder.Body.String(), "event: error")
+}
+
+func TestOpenAIEnsureForwardErrorResponseDoesNotAppendSecondImageJSON(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+	stop := service.StartOpenAIImagesJSONKeepalive(c, time.Hour)
+	defer stop()
+	c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": "upstream rejected"}})
+	originalBody := recorder.Body.String()
+
+	h := &OpenAIGatewayHandler{}
+	require.False(t, h.ensureForwardErrorResponse(c, false))
+	require.Equal(t, originalBody, recorder.Body.String())
+}
+
+func TestAppendOpenAIProxyLogFields(t *testing.T) {
+	base := []zap.Field{zap.Int64("account_id", 7)}
+
+	require.Len(t, appendOpenAIProxyLogFields(append([]zap.Field(nil), base...), nil), 1)
+	require.Len(t, appendOpenAIProxyLogFields(append([]zap.Field(nil), base...), &service.Account{}), 1)
+
+	proxyID := int64(10)
+	proxyIDOnlyFields := appendOpenAIProxyLogFields(append([]zap.Field(nil), base...), &service.Account{ProxyID: &proxyID})
+	require.Len(t, proxyIDOnlyFields, 2)
+	require.Equal(t, "proxy_id", proxyIDOnlyFields[1].Key)
+	require.Equal(t, proxyID, proxyIDOnlyFields[1].Integer)
+
+	fields := appendOpenAIProxyLogFields(append([]zap.Field(nil), base...), &service.Account{
+		Proxy: &service.Proxy{
+			ID:   11,
+			Name: "edge-proxy",
+			Host: "proxy.example.com",
+			Port: 8443,
+		},
+	})
+	require.Len(t, fields, 5)
+	require.Equal(t, "proxy_id", fields[1].Key)
+	require.Equal(t, int64(11), fields[1].Integer)
+	require.Equal(t, "proxy_name", fields[2].Key)
+	require.Equal(t, "edge-proxy", fields[2].String)
+	require.Equal(t, "proxy_host", fields[3].Key)
+	require.Equal(t, "proxy.example.com", fields[3].String)
+	require.Equal(t, "proxy_port", fields[4].Key)
+	require.Equal(t, int64(8443), fields[4].Integer)
 }
 
 func TestOpenAIHandleStreamingAwareError_NonStreaming(t *testing.T) {
@@ -795,4 +863,31 @@ func newOpenAIWSHandlerTestServer(t *testing.T, h *OpenAIGatewayHandler, subject
 	})
 	router.GET("/openai/v1/responses", h.ResponsesWebSocket)
 	return httptest.NewServer(router)
+}
+
+func TestOpenAIForwardMayFailoverOnlyBeforeSemanticWriteOrWhenExplicitlySafe(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	writtenBefore := service.OpenAICompactKeepaliveAdjustedWrittenSize(c)
+
+	require.True(t, openAIForwardMayFailover(c, writtenBefore, nil))
+
+	_, err := c.Writer.Write([]byte("semantic-output"))
+	require.NoError(t, err)
+	require.False(t, openAIForwardMayFailover(c, writtenBefore, nil))
+	require.False(t, openAIForwardMayFailover(c, writtenBefore, &service.UpstreamFailoverError{}))
+	require.True(t, openAIForwardMayFailover(c, writtenBefore, &service.UpstreamFailoverError{SafeToFailoverAfterWrite: true}))
+}
+
+func TestOpenAIFirstOutputFailoverExhaustedAllowsOnlyOneAccountSwitch(t *testing.T) {
+	failoverErr := &service.UpstreamFailoverError{SafeToFailoverAfterWrite: true}
+	switchCount := 0
+
+	require.False(t, openAIFirstOutputFailoverExhausted(failoverErr, &switchCount))
+	require.Equal(t, 1, switchCount)
+	require.True(t, openAIFirstOutputFailoverExhausted(failoverErr, &switchCount))
+	require.Equal(t, 1, switchCount)
+
+	require.False(t, openAIFirstOutputFailoverExhausted(&service.UpstreamFailoverError{}, &switchCount))
+	require.False(t, openAIFirstOutputFailoverExhausted(nil, &switchCount))
 }

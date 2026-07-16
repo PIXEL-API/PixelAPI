@@ -16,11 +16,19 @@ type Group struct {
 	Description    string
 	Platform       string
 	RateMultiplier float64
-	IsExclusive    bool
-	Status         string
-	Hydrated       bool // indicates the group was loaded from a trusted repository source
-	OwnerUserID    *int64
-	Scope          string
+	// EffectiveRateMultiplier 是用户视角下当前真正生效的分组倍率，仅在有用户上下文的接口中填充。
+	EffectiveRateMultiplier       *float64
+	EffectiveRateMultiplierSource string
+	// NewUserRateEnabled 启用后，新注册用户在窗口期内可使用 NewUserRateMultiplier。
+	NewUserRateEnabled       bool
+	NewUserRateMultiplier    float64
+	NewUserRateWindowSeconds int
+	NewUserRateQuotaUSD      float64
+	IsExclusive              bool
+	Status                   string
+	Hydrated                 bool // indicates the group was loaded from a trusted repository source
+	OwnerUserID              *int64
+	Scope                    string
 
 	SubscriptionType     string
 	RequiredAccountLevel string
@@ -29,13 +37,19 @@ type Group struct {
 	MonthlyLimitUSD      *float64
 	DefaultValidityDays  int
 
-	// 图片生成计费配置（antigravity 和 gemini 平台使用）
-	AllowImageGeneration bool
-	ImageRateIndependent bool
-	ImageRateMultiplier  float64
-	ImagePrice1K         *float64
-	ImagePrice2K         *float64
-	ImagePrice4K         *float64
+	// 媒体与网页搜索计费配置。
+	AllowImageGeneration  bool
+	ImageRateIndependent  bool
+	ImageRateMultiplier   float64
+	ImagePrice1K          *float64
+	ImagePrice2K          *float64
+	ImagePrice4K          *float64
+	VideoRateIndependent  bool
+	VideoRateMultiplier   float64
+	VideoPrice480P        *float64
+	VideoPrice720P        *float64
+	VideoPrice1080P       *float64
+	WebSearchPricePerCall *float64
 
 	// Claude Code 客户端限制
 	ClaudeCodeOnly  bool
@@ -122,6 +136,20 @@ func (g *Group) GetImagePrice(imageSize string) *float64 {
 	}
 }
 
+// GetVideoPrice 返回指定分辨率的视频生成每秒价格；nil 表示使用内置价格。
+func (g *Group) GetVideoPrice(resolution string) *float64 {
+	switch NormalizeVideoBillingResolutionOrDefault(resolution) {
+	case VideoBillingResolution480P:
+		return g.VideoPrice480P
+	case VideoBillingResolution720P:
+		return g.VideoPrice720P
+	case VideoBillingResolution1080P:
+		return g.VideoPrice1080P
+	default:
+		return g.VideoPrice480P
+	}
+}
+
 // IsGroupContextValid reports whether a group from context has the fields required for routing decisions.
 func IsGroupContextValid(group *Group) bool {
 	if group == nil {
@@ -203,7 +231,7 @@ func IsValidRequiredAccountLevel(level string) bool {
 }
 
 func SupportedUserPrivateGroupPlatforms() []string {
-	return []string{PlatformAnthropic, PlatformOpenAI, PlatformGemini, PlatformAntigravity}
+	return SupportedAccountPlatforms()
 }
 
 func IsSupportedUserPrivateGroupPlatform(platform string) bool {

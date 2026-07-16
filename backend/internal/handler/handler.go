@@ -20,6 +20,7 @@ type AdminHandlers struct {
 	OpenAIOAuth            *admin.OpenAIOAuthHandler
 	GeminiOAuth            *admin.GeminiOAuthHandler
 	AntigravityOAuth       *admin.AntigravityOAuthHandler
+	GrokOAuth              *admin.GrokOAuthHandler
 	Proxy                  *admin.ProxyHandler
 	Redeem                 *admin.RedeemHandler
 	Promo                  *admin.PromoHandler
@@ -49,6 +50,7 @@ type AdminHandlers struct {
 // Handlers contains all HTTP handlers
 type Handlers struct {
 	Auth             *AuthHandler
+	OIDCProvider     *OIDCProviderHandler
 	User             *UserHandler
 	APIKey           *APIKeyHandler
 	AccountShareMode *AccountShareModeHandler

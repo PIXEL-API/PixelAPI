@@ -12,7 +12,10 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 )
 
-const tokenRefreshRetryExhaustedReasonPrefix = "token refresh retry exhausted:"
+const (
+	tokenRefreshTempUnschedDuration        = 10 * time.Minute
+	tokenRefreshRetryExhaustedReasonPrefix = "token refresh retry exhausted:"
+)
 
 type oauthRefreshCandidateLister interface {
 	ListOAuthRefreshCandidates(ctx context.Context, refreshWindow time.Duration) ([]Account, error)
@@ -51,6 +54,7 @@ func NewTokenRefreshService(
 	schedulerCache SchedulerCache,
 	cfg *config.Config,
 	tempUnschedCache TempUnschedCache,
+	grokOAuthServices ...*GrokOAuthService,
 ) *TokenRefreshService {
 	s := &TokenRefreshService{
 		accountRepo:      accountRepo,
@@ -67,6 +71,10 @@ func NewTokenRefreshService(
 	claudeRefresher := NewClaudeTokenRefresher(oauthService)
 	geminiRefresher := NewGeminiTokenRefresher(geminiOAuthService)
 	agRefresher := NewAntigravityTokenRefresher(antigravityOAuthService)
+	var grokRefresher *GrokTokenRefresher
+	if len(grokOAuthServices) > 0 && grokOAuthServices[0] != nil {
+		grokRefresher = NewGrokTokenRefresher(grokOAuthServices[0])
+	}
 
 	// 注册平台特定的刷新器（TokenRefresher 接口）
 	s.refreshers = []TokenRefresher{
@@ -75,6 +83,9 @@ func NewTokenRefreshService(
 		geminiRefresher,
 		agRefresher,
 	}
+	if grokRefresher != nil {
+		s.refreshers = append(s.refreshers, grokRefresher)
+	}
 
 	// 注册对应的 OAuthRefreshExecutor（带 CacheKey 方法）
 	s.executors = []OAuthRefreshExecutor{
@@ -82,6 +93,9 @@ func NewTokenRefreshService(
 		openAIRefresher,
 		geminiRefresher,
 		agRefresher,
+	}
+	if grokRefresher != nil {
+		s.executors = append(s.executors, grokRefresher)
 	}
 
 	return s
@@ -423,7 +437,14 @@ func IsNonRetryableRefreshError(err error) bool {
 		"access_denied",          // 访问被拒绝
 		"missing_project_id",     // 缺少 project_id
 		"refresh_token_reused",
+		"refresh_token_invalidated",
 		"no refresh token available",
+		"grok_oauth_entitlement_denied",
+		"entitlement_denied",
+		"invalid_scope",
+		"unknown scope",
+		"subscription required",
+		"no active grok subscription",
 		"please try signing in again",
 	}
 	for _, needle := range nonRetryable {

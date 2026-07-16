@@ -4,7 +4,13 @@
  */
 
 import { apiClient } from "../client";
-import type { CustomMenuItem, CustomEndpoint, LoginAgreementDocument, NotifyEmailEntry } from "@/types";
+import type {
+  CustomMenuItem,
+  CustomEndpoint,
+  LoginAgreementDocument,
+  NotifyEmailEntry,
+  OpenAIAccountLevelConfig,
+} from "@/types";
 
 export interface DefaultSubscriptionSetting {
   group_id: number;
@@ -493,6 +499,7 @@ export interface SystemSettings {
   claude_oauth_system_prompt: string;
   claude_oauth_system_prompt_blocks: string;
   openai_clean_relay_enabled: boolean;
+  detached_usage_drain_enabled: boolean;
   enable_anthropic_cache_ttl_1h_injection: boolean;
   web_search_emulation_enabled?: boolean;
 
@@ -541,6 +548,9 @@ export interface SystemSettings {
   openai_advanced_scheduler_enabled?: boolean;
   openai_free_account_repair_enabled?: boolean;
   openai_free_account_repair_weekly_threshold_usd?: number;
+  scheduler_candidate_sampling_enabled?: boolean;
+  scheduler_candidate_sampling_limit?: number;
+  scheduler_candidate_sampling_threshold?: number;
 
   // Balance & quota notification
   balance_low_notify_enabled: boolean;
@@ -556,10 +566,13 @@ export interface SystemSettings {
   // Available Channels feature switch
   available_channels_enabled: boolean;
   user_account_import_limit: number;
+  openai_account_levels?: OpenAIAccountLevelConfig[];
 
   // Functional module switches
   invoice_management_enabled: boolean;
   withdrawal_management_enabled: boolean;
+  withdrawal_rate_limit_window_days: number;
+  withdrawal_rate_limit_max: number;
 
   // Affiliate (邀请返利) feature switch
   affiliate_enabled: boolean;
@@ -732,6 +745,7 @@ export interface UpdateSettingsRequest {
   claude_oauth_system_prompt?: string;
   claude_oauth_system_prompt_blocks?: string;
   openai_clean_relay_enabled?: boolean;
+  detached_usage_drain_enabled?: boolean;
   enable_anthropic_cache_ttl_1h_injection?: boolean;
   // Payment configuration
   payment_enabled?: boolean;
@@ -777,6 +791,9 @@ export interface UpdateSettingsRequest {
   openai_advanced_scheduler_enabled?: boolean;
   openai_free_account_repair_enabled?: boolean;
   openai_free_account_repair_weekly_threshold_usd?: number;
+  scheduler_candidate_sampling_enabled?: boolean;
+  scheduler_candidate_sampling_limit?: number;
+  scheduler_candidate_sampling_threshold?: number;
   // Balance & quota notification
   balance_low_notify_enabled?: boolean;
   balance_low_notify_threshold?: number;
@@ -791,10 +808,13 @@ export interface UpdateSettingsRequest {
   // Available Channels feature switch
   available_channels_enabled?: boolean;
   user_account_import_limit?: number;
+  openai_account_levels?: OpenAIAccountLevelConfig[];
 
   // Functional module switches
   invoice_management_enabled?: boolean;
   withdrawal_management_enabled?: boolean;
+  withdrawal_rate_limit_window_days?: number;
+  withdrawal_rate_limit_max?: number;
 
   // Affiliate (邀请返利) feature switch
   affiliate_enabled?: boolean;
@@ -1047,6 +1067,7 @@ export interface OpenAIFastPolicyRule {
   service_tier: "all" | "priority" | "flex";
   action: "pass" | "filter" | "block";
   scope: "all" | "oauth" | "apikey" | "bedrock";
+  user_ids?: number[];
   error_message?: string;
   model_whitelist?: string[];
   fallback_action?: "pass" | "filter" | "block";

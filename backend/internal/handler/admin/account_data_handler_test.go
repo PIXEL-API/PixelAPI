@@ -2,6 +2,7 @@ package admin
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,34 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAgentIdentityCredentialImportRejectsOwnershipAndSharing(t *testing.T) {
+	ownerID := int64(7)
+	policyID := int64(9)
+	tests := []struct {
+		name     string
+		defaults CredentialImportRequest
+	}{
+		{name: "owned", defaults: CredentialImportRequest{OwnerUserID: &ownerID}},
+		{name: "public", defaults: CredentialImportRequest{ShareMode: service.AccountShareModePublic}},
+		{name: "share status", defaults: CredentialImportRequest{ShareStatus: service.AccountShareStatusPending}},
+		{name: "share policy", defaults: CredentialImportRequest{SharePolicyID: &policyID}},
+	}
+
+	source := service.AccountCredentialImportSource{
+		Kind:     service.AccountCredentialImportKindOpenAIAgentIdentity,
+		Platform: service.PlatformOpenAI,
+		Credentials: map[string]any{
+			"agent_runtime_id": "runtime-1",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := (&AccountHandler{}).createAccountFromCredentialImportSource(context.Background(), source, test.defaults, 1)
+			require.ErrorContains(t, err, "cannot be owned or publicly shared")
+		})
+	}
+}
 
 type dataResponse struct {
 	Code int         `json:"code"`

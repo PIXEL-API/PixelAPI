@@ -5,6 +5,12 @@
 
 import { apiClient } from './client'
 import type {
+  GrokAuthUrlRequest,
+  GrokAuthUrlResponse,
+  GrokExchangeCodeRequest,
+  GrokTokenInfo,
+} from '@/api/admin/grok'
+import type {
   Account,
   AccountUsageInfo,
   AccountUsageStatsResponse,
@@ -20,8 +26,59 @@ import type {
 
 const USER_ACCOUNT_BULK_OPERATION_TIMEOUT_MS = 120000
 const USER_ACCOUNT_LEVEL_VERIFY_TIMEOUT_MS = 90000
+const GOOGLE_OAUTH_EXCHANGE_TIMEOUT_MS = 120000
 
 export type UserAccountVerifyLevelTarget = 'free' | 'plus'
+export type UserContentModerationMode = 'observe' | 'pre_block'
+export type UserContentModerationProvider = 'openai' | 'zhipu'
+
+export interface UserContentModerationConfig {
+  id?: number
+  owner_user_id: number
+  account_id: number
+  enabled: boolean
+  mode: UserContentModerationMode
+  provider: UserContentModerationProvider
+  base_url: string
+  model: string
+  api_key_configured: boolean
+  api_key_masked?: string
+  sample_rate: number
+  block_message: string
+  created_at?: string
+  updated_at?: string
+}
+
+export interface UpdateUserContentModerationConfigRequest {
+  enabled?: boolean
+  mode?: UserContentModerationMode
+  provider?: UserContentModerationProvider
+  api_key?: string
+  clear_api_key?: boolean
+  sample_rate?: number
+  block_message?: string
+}
+
+export interface UserContentModerationLog {
+  id: number
+  request_id: string
+  account_id: number
+  endpoint: string
+  provider: string
+  model: string
+  mode: UserContentModerationMode
+  action: string
+  flagged: boolean
+  highest_category: string
+  sampled: boolean
+  error?: string
+  created_at: string
+}
+
+export interface UserContentModerationTestResult {
+  flagged: boolean
+  highest_category: string
+}
 
 export interface VerifyAccountLevelResponse {
   account: Account
@@ -89,6 +146,7 @@ export interface ImportCredentialContentsRequest {
   contents: string[]
   platform?: Account['platform']
   account_level?: Account['account_level']
+  proxy_id?: number
   share_mode?: 'private' | 'public'
   concurrency?: number
   load_factor?: number | null
@@ -256,14 +314,30 @@ export async function createBatchRevalidatePublicShareTask(accountIds: number[])
   return data
 }
 
+export async function createBatchVerifyLevelTask(
+  accountIds: number[],
+  targetLevel: UserAccountVerifyLevelTarget
+): Promise<AccountBatchTask> {
+  const { data } = await apiClient.post<AccountBatchTask>('/accounts/batch-verify-level/async', {
+    account_ids: accountIds,
+    target_level: targetLevel
+  })
+  return data
+}
+
 export async function getBatchTask(taskId: number): Promise<AccountBatchTask> {
   const { data } = await apiClient.get<AccountBatchTask>(`/accounts/batch-tasks/${taskId}`)
   return data
 }
 
-export async function getUsage(id: number, source?: 'passive' | 'active'): Promise<AccountUsageInfo> {
+export async function getUsage(
+  id: number,
+  source: 'local' | 'passive' | 'active',
+  options: { signal?: AbortSignal } = {}
+): Promise<AccountUsageInfo> {
   const { data } = await apiClient.get<AccountUsageInfo>(`/accounts/${id}/usage`, {
-    params: source ? { source } : undefined
+    params: source ? { source } : undefined,
+    signal: options.signal
   })
   return data
 }
@@ -347,6 +421,52 @@ export async function setPrivacy(id: number): Promise<Account> {
   return data
 }
 
+export async function getModerationConfig(id: number): Promise<UserContentModerationConfig> {
+  const { data } = await apiClient.get<UserContentModerationConfig>(`/accounts/${id}/moderation/config`)
+  return data
+}
+
+export async function updateModerationConfig(
+  id: number,
+  payload: UpdateUserContentModerationConfigRequest
+): Promise<UserContentModerationConfig> {
+  const { data } = await apiClient.put<UserContentModerationConfig>(
+    `/accounts/${id}/moderation/config`,
+    payload
+  )
+  return data
+}
+
+export async function testModeration(
+  id: number,
+  prompt: string
+): Promise<UserContentModerationTestResult> {
+  const { data } = await apiClient.post<UserContentModerationTestResult>(
+    `/accounts/${id}/moderation/test`,
+    { prompt }
+  )
+  return data
+}
+
+export async function listModerationLogs(
+  id: number,
+  page = 1,
+  pageSize = 20,
+  result?: string
+): Promise<PaginatedResponse<UserContentModerationLog>> {
+  const { data } = await apiClient.get<PaginatedResponse<UserContentModerationLog>>(
+    `/accounts/${id}/moderation/logs`,
+    {
+      params: {
+        page,
+        page_size: pageSize,
+        ...(result ? { result } : {})
+      }
+    }
+  )
+  return data
+}
+
 export interface UserBatchTodayStatsResponse {
   stats: Record<string, WindowStats>
 }
@@ -366,6 +486,7 @@ export interface UserOAuthAuthUrlResponse {
 
 export interface UserOAuthProxyPayload {
   proxy_id?: number
+  account_level?: Account['account_level']
 }
 
 export interface UserOAuthExchangeCodePayload {
@@ -373,6 +494,7 @@ export interface UserOAuthExchangeCodePayload {
   code: string
   state?: string
   proxy_id?: number
+  account_level?: Account['account_level']
   redirect_uri?: string
   oauth_type?: 'code_assist' | 'google_one' | 'ai_studio'
   tier_id?: string
@@ -515,7 +637,8 @@ export async function exchangeGeminiOAuthCode(
 ): Promise<Record<string, unknown>> {
   const { data } = await apiClient.post<Record<string, unknown>>(
     '/account-oauth/gemini/exchange-code',
-    compactPayload(payload)
+    compactPayload(payload),
+    { timeout: GOOGLE_OAUTH_EXCHANGE_TIMEOUT_MS }
   )
   return data
 }
@@ -535,6 +658,40 @@ export async function exchangeAntigravityOAuthCode(
 ): Promise<Record<string, unknown>> {
   const { data } = await apiClient.post<Record<string, unknown>>(
     '/account-oauth/antigravity/exchange-code',
+    compactPayload(payload),
+    { timeout: GOOGLE_OAUTH_EXCHANGE_TIMEOUT_MS }
+  )
+  return data
+}
+
+export async function generateGrokOAuthUrl(
+  payload?: GrokAuthUrlRequest
+): Promise<GrokAuthUrlResponse> {
+  const { data } = await apiClient.post<GrokAuthUrlResponse>(
+    '/account-oauth/grok/auth-url',
+    compactPayload(payload)
+  )
+  return data
+}
+
+export async function exchangeGrokOAuthCode(
+  payload: GrokExchangeCodeRequest
+): Promise<GrokTokenInfo> {
+  const { data } = await apiClient.post<GrokTokenInfo>(
+    '/account-oauth/grok/exchange-code',
+    compactPayload(payload)
+  )
+  return data
+}
+
+export async function refreshGrokToken(
+  refreshToken: string,
+  proxyId?: number | null
+): Promise<GrokTokenInfo> {
+  const payload: { refresh_token: string; proxy_id?: number } = { refresh_token: refreshToken }
+  if (proxyId) payload.proxy_id = proxyId
+  const { data } = await apiClient.post<GrokTokenInfo>(
+    '/account-oauth/grok/refresh-token',
     compactPayload(payload)
   )
   return data
@@ -548,7 +705,8 @@ export async function refreshAntigravityToken(
   if (proxyId) payload.proxy_id = proxyId
   const { data } = await apiClient.post<Record<string, unknown>>(
     '/account-oauth/antigravity/refresh-token',
-    compactPayload(payload)
+    compactPayload(payload),
+    { timeout: GOOGLE_OAUTH_EXCHANGE_TIMEOUT_MS }
   )
   return data
 }
@@ -570,6 +728,7 @@ export const accountsAPI = {
   bulkDelete,
   createBatchRefreshTask,
   createBatchRevalidatePublicShareTask,
+  createBatchVerifyLevelTask,
   getBatchTask,
   getUsage,
   queryOpenAIQuota,
@@ -581,6 +740,10 @@ export const accountsAPI = {
   refreshCredentials,
   recoverState,
   setPrivacy,
+  getModerationConfig,
+  updateModerationConfig,
+  testModeration,
+  listModerationLogs,
   generateAnthropicOAuthUrl,
   exchangeAnthropicOAuthCode,
   generateAnthropicSetupTokenUrl,
@@ -595,6 +758,9 @@ export const accountsAPI = {
   exchangeGeminiOAuthCode,
   generateAntigravityOAuthUrl,
   exchangeAntigravityOAuthCode,
+  generateGrokOAuthUrl,
+  exchangeGrokOAuthCode,
+  refreshGrokToken,
   refreshAntigravityToken
 }
 

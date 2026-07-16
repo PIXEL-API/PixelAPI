@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/redis/go-redis/v9"
@@ -27,6 +28,12 @@ const (
 	accountSlotKeyPrefix = "concurrency:account:"
 	// 格式: concurrency:user:{userID}
 	userSlotKeyPrefix = "concurrency:user:"
+	// 格式: concurrency:api_key:{apiKeyID}
+	apiKeySlotKeyPrefix = "concurrency:api_key:"
+	// API-key-scoped client WebSocket ingress leases use a shorter TTL than
+	// ordinary request slots, because idle ingress sessions do not hold a turn slot.
+	openAIWSIngressLeaseKeyPrefix  = "concurrency:openai_ws_ingress:api_key:"
+	openAIWSIngressLeaseTTLSeconds = 60
 	// 格式: concurrency:account_share_membership:{membershipID}
 	accountShareMembershipSlotKeyPrefix = "concurrency:account_share_membership:"
 	// 等待队列计数器格式: concurrency:wait:{userID}
@@ -91,6 +98,49 @@ var (
 
 		redis.call('ZREMRANGEBYSCORE', key, '-inf', expireBefore)
 		return redis.call('ZCARD', key)
+	`)
+
+	// acquireOpenAIWSIngressLeaseScript atomically reaps crashed members and
+	// acquires or refreshes one API-key-scoped ingress lease using Redis TIME.
+	acquireOpenAIWSIngressLeaseScript = redis.NewScript(`
+		redis.replicate_commands()
+		local key = KEYS[1]
+		local maxConnections = tonumber(ARGV[1])
+		local ttl = tonumber(ARGV[2])
+		local leaseID = ARGV[3]
+		local now = tonumber(redis.call('TIME')[1])
+		local expireBefore = now - ttl
+		redis.call('ZREMRANGEBYSCORE', key, '-inf', expireBefore)
+		if redis.call('ZSCORE', key, leaseID) ~= false then
+			redis.call('ZADD', key, now, leaseID)
+			redis.call('EXPIRE', key, ttl)
+			return 1
+		end
+		if redis.call('ZCARD', key) < maxConnections then
+			redis.call('ZADD', key, now, leaseID)
+			redis.call('EXPIRE', key, ttl)
+			return 1
+		end
+		return 0
+	`)
+
+	// refreshOpenAIWSIngressLeaseScript does not recreate a missing member: a
+	// process that lost its lease must terminate its local WebSocket instead of
+	// silently continuing beyond the distributed cap.
+	refreshOpenAIWSIngressLeaseScript = redis.NewScript(`
+		redis.replicate_commands()
+		local key = KEYS[1]
+		local ttl = tonumber(ARGV[1])
+		local leaseID = ARGV[2]
+		local now = tonumber(redis.call('TIME')[1])
+		local expireBefore = now - ttl
+		redis.call('ZREMRANGEBYSCORE', key, '-inf', expireBefore)
+		if redis.call('ZSCORE', key, leaseID) == false then
+			return 0
+		end
+		redis.call('ZADD', key, now, leaseID)
+		redis.call('EXPIRE', key, ttl)
+		return 1
 	`)
 
 	// incrementWaitScript - refreshes TTL on each increment to keep queue depth accurate
@@ -195,6 +245,8 @@ type concurrencyCache struct {
 	waitQueueTTLSeconds int // 等待队列过期时间（秒）
 }
 
+var _ service.OpenAIWSIngressLeaseCache = (*concurrencyCache)(nil)
+
 // NewConcurrencyCache 创建并发控制缓存
 // slotTTLMinutes: 槽位过期时间（分钟），0 或负数使用默认值 15 分钟
 // waitQueueTTLSeconds: 等待队列过期时间（秒），0 或负数使用 slot TTL
@@ -219,6 +271,14 @@ func accountSlotKey(accountID int64) string {
 
 func userSlotKey(userID int64) string {
 	return fmt.Sprintf("%s%d", userSlotKeyPrefix, userID)
+}
+
+func apiKeySlotKey(apiKeyID int64) string {
+	return fmt.Sprintf("%s%d", apiKeySlotKeyPrefix, apiKeyID)
+}
+
+func openAIWSIngressLeaseKey(apiKeyID int64) string {
+	return fmt.Sprintf("%s%d", openAIWSIngressLeaseKeyPrefix, apiKeyID)
 }
 
 func accountShareMembershipSlotKey(membershipID int64) string {
@@ -371,6 +431,105 @@ func (c *concurrencyCache) GetAccountShareMembershipConcurrency(ctx context.Cont
 	result, err := getCountScript.Run(ctx, c.rdb, []string{key}, c.slotTTLSeconds, now).Int()
 	if err != nil {
 		return 0, err
+	}
+	return result, nil
+}
+
+func (c *concurrencyCache) TrackAPIKeySlot(ctx context.Context, apiKeyID int64, requestID string) error {
+	key := apiKeySlotKey(apiKeyID)
+	now, err := c.redisUnixTime(ctx)
+	if err != nil {
+		return err
+	}
+	pipe := c.rdb.Pipeline()
+	pipe.ZAdd(ctx, key, redis.Z{Score: float64(now), Member: requestID})
+	pipe.Expire(ctx, key, time.Duration(c.slotTTLSeconds)*time.Second)
+	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
+		return fmt.Errorf("pipeline exec: %w", err)
+	}
+	return nil
+}
+
+func (c *concurrencyCache) ReleaseAPIKeySlot(ctx context.Context, apiKeyID int64, requestID string) error {
+	key := apiKeySlotKey(apiKeyID)
+	return c.rdb.ZRem(ctx, key, requestID).Err()
+}
+
+func (c *concurrencyCache) AcquireOpenAIWSIngressLease(ctx context.Context, apiKeyID int64, maxConnections int, leaseID string) (bool, error) {
+	if c == nil || c.rdb == nil || apiKeyID <= 0 || maxConnections <= 0 || leaseID == "" {
+		return false, nil
+	}
+	result, err := acquireOpenAIWSIngressLeaseScript.Run(
+		ctx,
+		c.rdb,
+		[]string{openAIWSIngressLeaseKey(apiKeyID)},
+		maxConnections,
+		openAIWSIngressLeaseTTLSeconds,
+		leaseID,
+	).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
+}
+
+func (c *concurrencyCache) RefreshOpenAIWSIngressLease(ctx context.Context, apiKeyID int64, leaseID string) (bool, error) {
+	if c == nil || c.rdb == nil || apiKeyID <= 0 || leaseID == "" {
+		return false, nil
+	}
+	result, err := refreshOpenAIWSIngressLeaseScript.Run(
+		ctx,
+		c.rdb,
+		[]string{openAIWSIngressLeaseKey(apiKeyID)},
+		openAIWSIngressLeaseTTLSeconds,
+		leaseID,
+	).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
+}
+
+func (c *concurrencyCache) ReleaseOpenAIWSIngressLease(ctx context.Context, apiKeyID int64, leaseID string) error {
+	if c == nil || c.rdb == nil || apiKeyID <= 0 || leaseID == "" {
+		return nil
+	}
+	return c.rdb.ZRem(ctx, openAIWSIngressLeaseKey(apiKeyID), leaseID).Err()
+}
+
+func (c *concurrencyCache) GetAPIKeyConcurrencyBatch(ctx context.Context, apiKeyIDs []int64) (map[int64]int, error) {
+	if len(apiKeyIDs) == 0 {
+		return map[int64]int{}, nil
+	}
+
+	now, err := c.rdb.Time(ctx).Result()
+	if err != nil {
+		return nil, fmt.Errorf("redis TIME: %w", err)
+	}
+	cutoffTime := now.Unix() - int64(c.slotTTLSeconds)
+
+	pipe := c.rdb.Pipeline()
+	type apiKeyCmd struct {
+		apiKeyID int64
+		zcardCmd *redis.IntCmd
+	}
+	cmds := make([]apiKeyCmd, 0, len(apiKeyIDs))
+	for _, apiKeyID := range apiKeyIDs {
+		slotKey := apiKeySlotKeyPrefix + strconv.FormatInt(apiKeyID, 10)
+		pipe.ZRemRangeByScore(ctx, slotKey, "-inf", strconv.FormatInt(cutoffTime, 10))
+		cmds = append(cmds, apiKeyCmd{
+			apiKeyID: apiKeyID,
+			zcardCmd: pipe.ZCard(ctx, slotKey),
+		})
+	}
+
+	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
+		return nil, fmt.Errorf("pipeline exec: %w", err)
+	}
+
+	result := make(map[int64]int, len(apiKeyIDs))
+	for _, cmd := range cmds {
+		result[cmd.apiKeyID] = int(cmd.zcardCmd.Val())
 	}
 	return result, nil
 }

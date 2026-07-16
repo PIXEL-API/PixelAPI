@@ -339,8 +339,25 @@ func (s *EmailService) SendVerifyCode(ctx context.Context, email, siteName strin
 	return nil
 }
 
-// VerifyCode 验证验证码
+// VerifyCode 验证验证码，成功后消费验证码。
 func (s *EmailService) VerifyCode(ctx context.Context, email, code string) error {
+	return s.verifyCode(ctx, email, code, true)
+}
+
+// VerifyCodeWithoutConsume 验证验证码但不消费。
+// 注册流程会先完成所有可失败的账号初始化，再消费验证码，避免出现账号已创建但验证码已失效的半成功状态。
+func (s *EmailService) VerifyCodeWithoutConsume(ctx context.Context, email, code string) error {
+	return s.verifyCode(ctx, email, code, false)
+}
+
+// ConsumeVerifyCode 消费已验证的验证码。
+func (s *EmailService) ConsumeVerifyCode(ctx context.Context, email string) {
+	if err := s.cache.DeleteVerificationCode(ctx, email); err != nil {
+		slog.Error("failed to delete verification code after success", "email", email, "error", err)
+	}
+}
+
+func (s *EmailService) verifyCode(ctx context.Context, email, code string, consume bool) error {
 	data, err := s.cache.GetVerificationCode(ctx, email)
 	if err != nil || data == nil {
 		return ErrInvalidVerifyCode
@@ -367,9 +384,8 @@ func (s *EmailService) VerifyCode(ctx context.Context, email, code string) error
 		return ErrInvalidVerifyCode
 	}
 
-	// 验证成功，删除验证码
-	if err := s.cache.DeleteVerificationCode(ctx, email); err != nil {
-		slog.Error("failed to delete verification code after success", "email", email, "error", err)
+	if consume {
+		s.ConsumeVerifyCode(ctx, email)
 	}
 	return nil
 }

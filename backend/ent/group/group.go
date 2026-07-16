@@ -28,6 +28,14 @@ const (
 	FieldDescription = "description"
 	// FieldRateMultiplier holds the string denoting the rate_multiplier field in the database.
 	FieldRateMultiplier = "rate_multiplier"
+	// FieldNewUserRateEnabled holds the string denoting the new_user_rate_enabled field in the database.
+	FieldNewUserRateEnabled = "new_user_rate_enabled"
+	// FieldNewUserRateMultiplier holds the string denoting the new_user_rate_multiplier field in the database.
+	FieldNewUserRateMultiplier = "new_user_rate_multiplier"
+	// FieldNewUserRateWindowSeconds holds the string denoting the new_user_rate_window_seconds field in the database.
+	FieldNewUserRateWindowSeconds = "new_user_rate_window_seconds"
+	// FieldNewUserRateQuotaUsd holds the string denoting the new_user_rate_quota_usd field in the database.
+	FieldNewUserRateQuotaUsd = "new_user_rate_quota_usd"
 	// FieldIsExclusive holds the string denoting the is_exclusive field in the database.
 	FieldIsExclusive = "is_exclusive"
 	// FieldStatus holds the string denoting the status field in the database.
@@ -62,6 +70,18 @@ const (
 	FieldImagePrice2k = "image_price_2k"
 	// FieldImagePrice4k holds the string denoting the image_price_4k field in the database.
 	FieldImagePrice4k = "image_price_4k"
+	// FieldVideoRateIndependent holds the string denoting the video_rate_independent field in the database.
+	FieldVideoRateIndependent = "video_rate_independent"
+	// FieldVideoRateMultiplier holds the string denoting the video_rate_multiplier field in the database.
+	FieldVideoRateMultiplier = "video_rate_multiplier"
+	// FieldVideoPrice480p holds the string denoting the video_price_480p field in the database.
+	FieldVideoPrice480p = "video_price_480p"
+	// FieldVideoPrice720p holds the string denoting the video_price_720p field in the database.
+	FieldVideoPrice720p = "video_price_720p"
+	// FieldVideoPrice1080p holds the string denoting the video_price_1080p field in the database.
+	FieldVideoPrice1080p = "video_price_1080p"
+	// FieldWebSearchPricePerCall holds the string denoting the web_search_price_per_call field in the database.
+	FieldWebSearchPricePerCall = "web_search_price_per_call"
 	// FieldClaudeCodeOnly holds the string denoting the claude_code_only field in the database.
 	FieldClaudeCodeOnly = "claude_code_only"
 	// FieldFallbackGroupID holds the string denoting the fallback_group_id field in the database.
@@ -180,6 +200,10 @@ var Columns = []string{
 	FieldName,
 	FieldDescription,
 	FieldRateMultiplier,
+	FieldNewUserRateEnabled,
+	FieldNewUserRateMultiplier,
+	FieldNewUserRateWindowSeconds,
+	FieldNewUserRateQuotaUsd,
 	FieldIsExclusive,
 	FieldStatus,
 	FieldOwnerUserID,
@@ -197,6 +221,12 @@ var Columns = []string{
 	FieldImagePrice1k,
 	FieldImagePrice2k,
 	FieldImagePrice4k,
+	FieldVideoRateIndependent,
+	FieldVideoRateMultiplier,
+	FieldVideoPrice480p,
+	FieldVideoPrice720p,
+	FieldVideoPrice1080p,
+	FieldWebSearchPricePerCall,
 	FieldClaudeCodeOnly,
 	FieldFallbackGroupID,
 	FieldFallbackGroupIDOnInvalidRequest,
@@ -250,6 +280,14 @@ var (
 	NameValidator func(string) error
 	// DefaultRateMultiplier holds the default value on creation for the "rate_multiplier" field.
 	DefaultRateMultiplier float64
+	// DefaultNewUserRateEnabled holds the default value on creation for the "new_user_rate_enabled" field.
+	DefaultNewUserRateEnabled bool
+	// DefaultNewUserRateMultiplier holds the default value on creation for the "new_user_rate_multiplier" field.
+	DefaultNewUserRateMultiplier float64
+	// DefaultNewUserRateWindowSeconds holds the default value on creation for the "new_user_rate_window_seconds" field.
+	DefaultNewUserRateWindowSeconds int
+	// DefaultNewUserRateQuotaUsd holds the default value on creation for the "new_user_rate_quota_usd" field.
+	DefaultNewUserRateQuotaUsd float64
 	// DefaultIsExclusive holds the default value on creation for the "is_exclusive" field.
 	DefaultIsExclusive bool
 	// DefaultStatus holds the default value on creation for the "status" field.
@@ -280,6 +318,10 @@ var (
 	DefaultImageRateIndependent bool
 	// DefaultImageRateMultiplier holds the default value on creation for the "image_rate_multiplier" field.
 	DefaultImageRateMultiplier float64
+	// DefaultVideoRateIndependent holds the default value on creation for the "video_rate_independent" field.
+	DefaultVideoRateIndependent bool
+	// DefaultVideoRateMultiplier holds the default value on creation for the "video_rate_multiplier" field.
+	DefaultVideoRateMultiplier float64
 	// DefaultClaudeCodeOnly holds the default value on creation for the "claude_code_only" field.
 	DefaultClaudeCodeOnly bool
 	// DefaultModelRoutingEnabled holds the default value on creation for the "model_routing_enabled" field.
@@ -342,6 +384,26 @@ func ByDescription(opts ...sql.OrderTermOption) OrderOption {
 // ByRateMultiplier orders the results by the rate_multiplier field.
 func ByRateMultiplier(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldRateMultiplier, opts...).ToFunc()
+}
+
+// ByNewUserRateEnabled orders the results by the new_user_rate_enabled field.
+func ByNewUserRateEnabled(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldNewUserRateEnabled, opts...).ToFunc()
+}
+
+// ByNewUserRateMultiplier orders the results by the new_user_rate_multiplier field.
+func ByNewUserRateMultiplier(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldNewUserRateMultiplier, opts...).ToFunc()
+}
+
+// ByNewUserRateWindowSeconds orders the results by the new_user_rate_window_seconds field.
+func ByNewUserRateWindowSeconds(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldNewUserRateWindowSeconds, opts...).ToFunc()
+}
+
+// ByNewUserRateQuotaUsd orders the results by the new_user_rate_quota_usd field.
+func ByNewUserRateQuotaUsd(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldNewUserRateQuotaUsd, opts...).ToFunc()
 }
 
 // ByIsExclusive orders the results by the is_exclusive field.
@@ -427,6 +489,36 @@ func ByImagePrice2k(opts ...sql.OrderTermOption) OrderOption {
 // ByImagePrice4k orders the results by the image_price_4k field.
 func ByImagePrice4k(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldImagePrice4k, opts...).ToFunc()
+}
+
+// ByVideoRateIndependent orders the results by the video_rate_independent field.
+func ByVideoRateIndependent(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldVideoRateIndependent, opts...).ToFunc()
+}
+
+// ByVideoRateMultiplier orders the results by the video_rate_multiplier field.
+func ByVideoRateMultiplier(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldVideoRateMultiplier, opts...).ToFunc()
+}
+
+// ByVideoPrice480p orders the results by the video_price_480p field.
+func ByVideoPrice480p(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldVideoPrice480p, opts...).ToFunc()
+}
+
+// ByVideoPrice720p orders the results by the video_price_720p field.
+func ByVideoPrice720p(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldVideoPrice720p, opts...).ToFunc()
+}
+
+// ByVideoPrice1080p orders the results by the video_price_1080p field.
+func ByVideoPrice1080p(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldVideoPrice1080p, opts...).ToFunc()
+}
+
+// ByWebSearchPricePerCall orders the results by the web_search_price_per_call field.
+func ByWebSearchPricePerCall(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldWebSearchPricePerCall, opts...).ToFunc()
 }
 
 // ByClaudeCodeOnly orders the results by the claude_code_only field.

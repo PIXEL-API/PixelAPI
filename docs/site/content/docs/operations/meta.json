@@ -1,0 +1,15 @@
+{
+  "title": "帮助支持",
+  "description": "问题排查、状态码说明、常见问题和安全使用建议。",
+  "icon": "Shield",
+  "root": true,
+  "defaultOpen": true,
+  "pages": [
+    "changelog",
+    "troubleshooting",
+    "status-codes",
+    "faq",
+    "security",
+    "contact"
+  ]
+}

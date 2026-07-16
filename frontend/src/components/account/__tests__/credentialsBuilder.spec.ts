@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { applyInterceptWarmup } from '../credentialsBuilder'
+import { applyInterceptWarmup, applyPlanType, readPlanType } from '../credentialsBuilder'
 
 describe('applyInterceptWarmup', () => {
   it('create + enabled=true: should set intercept_warmup_requests to true', () => {
@@ -42,5 +42,39 @@ describe('applyInterceptWarmup', () => {
     expect(creds.api_key).toBe('sk')
     expect(creds.base_url).toBe('url')
     expect('intercept_warmup_requests' in creds).toBe(false)
+  })
+})
+
+describe('OpenAI plan_type override helpers', () => {
+  it('reads only trimmed string values', () => {
+    expect(readPlanType({ plan_type: '  self_serve_business  ' })).toBe('self_serve_business')
+    expect(readPlanType({ plan_type: 42 })).toBe('')
+    expect(readPlanType(undefined)).toBe('')
+  })
+
+  it('writes arbitrary non-empty values without changing other credentials', () => {
+    const credentials: Record<string, unknown> = {
+      access_token: 'token',
+      model_mapping: { source: 'target' }
+    }
+
+    applyPlanType(credentials, '  team_custom  ')
+
+    expect(credentials).toEqual({
+      access_token: 'token',
+      model_mapping: { source: 'target' },
+      plan_type: 'team_custom'
+    })
+  })
+
+  it('removes only plan_type when the override is cleared', () => {
+    const credentials: Record<string, unknown> = {
+      access_token: 'token',
+      plan_type: 'plus'
+    }
+
+    applyPlanType(credentials, '   ')
+
+    expect(credentials).toEqual({ access_token: 'token' })
   })
 })

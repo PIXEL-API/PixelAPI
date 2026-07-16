@@ -3,7 +3,7 @@
     <div class="mx-auto flex w-full max-w-[1680px] flex-col gap-5">
       <div class="lg:hidden">
         <h1 class="text-2xl font-semibold text-gray-950 dark:text-white">账号广场</h1>
-        <p class="mt-1 text-sm text-gray-500 dark:text-dark-300">选择共享账号后会进入预约队列，当前账号不可用时按顺序自动接续。</p>
+        <p class="mt-1 text-sm text-gray-500 dark:text-dark-300">预约不会仅靠页面等待在后台激活；下一次使用绑定 Key 发出 API 请求时，系统会按顺序尝试激活并接续。</p>
       </div>
 
       <section class="account-share-hero">
@@ -15,17 +15,23 @@
             <div class="min-w-0">
               <h2 class="text-base font-semibold text-gray-950 dark:text-white">账号模式共享席位</h2>
               <p class="mt-1 max-w-3xl text-sm leading-6 text-gray-500 dark:text-dark-300">
-                OpenAI 与 Anthropic OAuth 账号会按账号模式上架，消费者最多可为一个账号模式 Key 预约 5 个账号并按顺序接续调度。
+                OpenAI 与 Anthropic OAuth 账号会按账号模式上架。每个账号模式 Key 最多预约 5 个账号，并在下一次 API 请求时按顺序尝试激活。
               </p>
             </div>
           </div>
-          <button class="account-share-guide-button" type="button" @click="openUsageGuideDialog">
-            <Icon name="book" size="sm" class="mr-2" />
-            使用说明
-          </button>
+          <div class="hero-utility-actions">
+            <button class="account-share-guide-button" type="button" @click="openUsageGuideDialog">
+              <Icon name="book" size="sm" class="mr-2" />
+              使用说明
+            </button>
+            <button class="account-share-spend-button" type="button" @click="openMySpendDialog()">
+              <Icon name="dollar" size="sm" class="mr-2" />
+              我的消费
+            </button>
+          </div>
           <div class="hero-actions">
-            <button class="btn-secondary h-10" type="button" :disabled="loading" @click="loadListings">
-              <Icon name="refresh" size="sm" class="mr-2" :class="{ 'animate-spin': loading }" />
+            <button class="btn-secondary h-10" type="button" :disabled="loading || isAnyModeKeysLoading" @click="refreshPageData">
+              <Icon name="refresh" size="sm" class="mr-2" :class="{ 'animate-spin': loading || isAnyModeKeysLoading }" />
               刷新
             </button>
             <button class="btn-primary h-10" type="button" @click="toggleCreatePanel">
@@ -87,6 +93,53 @@
         </div>
       </section>
 
+      <section
+        v-if="isKeyResolutionMode"
+        class="key-resolution-panel"
+        :class="keyResolutionPanelToneClass"
+        role="region"
+        aria-label="API Key 关联处置"
+        :aria-busy="keyResolutionLoading"
+      >
+        <div class="key-resolution-main">
+          <span class="key-resolution-icon" aria-hidden="true">
+            <Icon :name="keyResolutionAllClear ? 'checkCircle' : (keyResolutionError ? 'exclamationCircle' : 'key')" size="md" />
+          </span>
+          <div class="key-resolution-copy" aria-live="polite">
+            <span class="key-resolution-eyebrow">API Key 关联处置</span>
+            <h2>{{ keyResolutionAllClear ? '关联已全部解除' : `正在处理 ${keyResolutionKeyLabel}` }}</h2>
+            <p>{{ keyResolutionStatusMessage }}</p>
+          </div>
+        </div>
+
+        <div class="key-resolution-counts" aria-label="待处理关联数量">
+          <div>
+            <span>正在使用</span>
+            <strong>{{ (keyResolutionLoading && !keyResolutionLoaded) || keyResolutionError ? '—' : keyResolutionActiveCount }}</strong>
+          </div>
+          <div>
+            <span>预约中</span>
+            <strong>{{ (keyResolutionLoading && !keyResolutionLoaded) || keyResolutionError ? '—' : keyResolutionQueuedCount }}</strong>
+          </div>
+        </div>
+
+        <div class="key-resolution-actions">
+          <button
+            type="button"
+            class="key-resolution-refresh-button"
+            :disabled="keyResolutionLoading"
+            @click="refreshKeyResolutionContext"
+          >
+            <Icon name="refresh" size="sm" :class="{ 'animate-spin': keyResolutionLoading }" />
+            {{ keyResolutionLoading ? '核对中' : '刷新状态' }}
+          </button>
+          <button type="button" class="key-resolution-return-button" @click="returnToApiKeyManagement">
+            <Icon name="arrowLeft" size="sm" />
+            返回 API Key 管理
+          </button>
+        </div>
+      </section>
+
       <BaseDialog
         :show="showUsageGuideDialog"
         title="账号模式使用说明"
@@ -112,7 +165,7 @@
             <div class="account-share-guide-step">
               <span>2</span>
               <strong>激活使用</strong>
-              <p>轮到该账号后开始占用席位，请求费用按模型实际用量和账号倍率实时结算。</p>
+              <p>预约不会仅靠页面等待自动激活；下一次使用绑定 Key 发出 API 请求时，系统才会按预约顺序尝试激活并开始占用席位。</p>
             </div>
             <div class="account-share-guide-step">
               <span>3</span>
@@ -240,36 +293,41 @@
         @close="closeRecommendationDialog"
       >
         <section class="recommendation-panel recommendation-dialog-panel">
-        <div class="recommendation-head">
-          <div class="min-w-0">
-            <h2>测算参数</h2>
-            <p>{{ platformLabel(activeListingPlatform) }} · {{ accountModeGroupName(activeListingPlatform) }}</p>
+          <div class="recommendation-head">
+            <div class="recommendation-heading">
+              <span class="recommendation-heading-icon">
+                <Icon name="sparkles" size="sm" />
+              </span>
+              <div class="min-w-0">
+                <h2>智能测算</h2>
+                <p>{{ platformLabel(activeListingPlatform) }} · {{ accountModeGroupName(activeListingPlatform) }} · 按预计每小时额度升序推荐</p>
+              </div>
+            </div>
+            <div class="recommendation-preset-row" aria-label="测算预设">
+              <button
+                v-for="preset in recommendationPresets"
+                :key="preset.key"
+                type="button"
+                class="recommendation-preset"
+                :class="{ 'recommendation-preset-active': selectedRecommendationPreset === preset.key }"
+                @click="applyRecommendationPreset(preset.key)"
+              >
+                {{ preset.label }}
+              </button>
+              <button
+                type="button"
+                class="recommendation-profile-button"
+                :disabled="recommendationUsageProfileLoading || recommendationLoading"
+                @click="applyRecentUsageProfile"
+              >
+                <Icon name="clock" size="sm" class="mr-1.5" :class="{ 'animate-spin': recommendationUsageProfileLoading }" />
+                {{ recommendationUsageProfileLoading ? '读取中' : '近3天均值' }}
+              </button>
+            </div>
+            <p class="recommendation-profile-help">
+              近3天均值会读取你近 3 天历史请求中的单次输入 Token、单次输出 Token、单次 Cache 写入和单次 Cache 读取均值，再按每小时请求量测算预计使用额度。
+            </p>
           </div>
-          <div class="recommendation-preset-row">
-            <button
-              v-for="preset in recommendationPresets"
-              :key="preset.key"
-              type="button"
-              class="recommendation-preset"
-              :class="{ 'recommendation-preset-active': selectedRecommendationPreset === preset.key }"
-              @click="applyRecommendationPreset(preset.key)"
-            >
-              {{ preset.label }}
-            </button>
-            <button
-              type="button"
-              class="recommendation-profile-button"
-              :disabled="recommendationUsageProfileLoading || recommendationLoading"
-              @click="applyRecentUsageProfile"
-            >
-              <Icon name="clock" size="sm" class="mr-1.5" :class="{ 'animate-spin': recommendationUsageProfileLoading }" />
-              {{ recommendationUsageProfileLoading ? '读取中' : '近3天均值' }}
-            </button>
-          </div>
-          <p class="recommendation-profile-help">
-            近3天均值会读取你近 3 天历史请求中的单次输入 Token、单次输出 Token、单次 Cache 写入和单次 Cache 读取均值，再按每小时请求量测算预计使用额度。
-          </p>
-        </div>
 
         <div class="recommendation-layout">
           <div class="recommendation-form-grid">
@@ -324,10 +382,10 @@
             <p v-if="recommendationUsageProfileMessage" class="recommendation-profile-message">{{ recommendationUsageProfileMessage }}</p>
             <p v-if="recommendationError" class="recommendation-error">{{ recommendationError }}</p>
             <div v-if="recommendationResult" class="recommendation-summary">
-              <small>预计每小时使用额度</small>
+              <small>最低预计每小时额度</small>
               <span>{{ recommendationInputSummary }}</span>
               <strong>{{ recommendationBest ? formatRecommendationCost(recommendationEstimatedHourlyCost(recommendationBest)) : '无可用推荐' }}</strong>
-              <small>候选 {{ recommendationResult.candidate_count }} 个</small>
+              <small>可推荐 {{ recommendationCandidates.length }} 个 / 扫描候选 {{ recommendationResult.candidate_count }} 个</small>
             </div>
           </div>
         </div>
@@ -337,8 +395,35 @@
             当前平台没有匹配模型、席位和可用状态的账号。
           </div>
           <template v-else>
+            <div class="recommendation-results-head">
+              <div>
+                <strong>推荐结果</strong>
+                <span>{{ recommendationPageRangeText }} · 按预计每小时额度从小到大</span>
+              </div>
+              <div class="recommendation-page-controls">
+                <button
+                  type="button"
+                  class="recommendation-page-button"
+                  :disabled="recommendationPage <= 1"
+                  aria-label="上一页"
+                  @click="setRecommendationPage(recommendationPage - 1)"
+                >
+                  <Icon name="chevronLeft" size="sm" />
+                </button>
+                <span>{{ recommendationPage }} / {{ recommendationPageCount }}</span>
+                <button
+                  type="button"
+                  class="recommendation-page-button"
+                  :disabled="recommendationPage >= recommendationPageCount"
+                  aria-label="下一页"
+                  @click="setRecommendationPage(recommendationPage + 1)"
+                >
+                  <Icon name="chevronRight" size="sm" />
+                </button>
+              </div>
+            </div>
             <article
-              v-for="candidate in recommendationCandidates"
+              v-for="candidate in recommendationPagedCandidates"
               :key="candidate.listing.id"
               class="recommendation-card"
             >
@@ -358,6 +443,26 @@
 
               <div class="recommendation-tag-row">
                 <span v-for="tag in candidate.tags" :key="tag">{{ tag }}</span>
+              </div>
+
+              <div class="recommendation-score-panel">
+                <div class="recommendation-score-overview">
+                  <span>综合匹配度</span>
+                  <strong>{{ formatRecommendationScore(recommendationScoreBreakdown(candidate).overall_score) }}</strong>
+                </div>
+                <div class="recommendation-score-grid">
+                  <div
+                    v-for="item in recommendationScoreItems(candidate)"
+                    :key="item.key"
+                    class="recommendation-score-item"
+                  >
+                    <div>
+                      <span>{{ item.label }}</span>
+                      <strong>{{ formatRecommendationScore(item.value) }}</strong>
+                    </div>
+                    <i class="recommendation-score-bar" :style="{ '--score-width': recommendationScoreWidth(item.value) }"></i>
+                  </div>
+                </div>
               </div>
 
               <div class="recommendation-metrics">
@@ -396,7 +501,7 @@
               </div>
 
               <div class="recommendation-card-actions">
-                <span>席位 {{ candidate.listing.active_seats }}/{{ candidate.listing.seat_limit }} · 并发 {{ candidate.listing.current_concurrency }}/{{ candidate.listing.account_concurrency }}</span>
+                <span>席位 {{ candidate.listing.active_seats }}/{{ candidate.listing.seat_limit }} · 并发 {{ recommendationConcurrencyLabel(candidate.listing) }}</span>
                 <button class="btn-primary h-10" type="button" :disabled="joiningId === candidate.listing.id" @click="useRecommendedListing(candidate)">
                   <Icon name="login" size="sm" class="mr-2" />
                   加入使用
@@ -1050,6 +1155,10 @@
         {{ errorMessage }}
       </div>
 
+      <div v-if="visibleQueueSnapshotWarning" class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+        {{ visibleQueueSnapshotWarning }}
+      </div>
+
       <div v-if="loading" class="rounded-lg border border-gray-200 bg-white p-8 text-center text-sm text-gray-500 shadow-sm dark:border-dark-700 dark:bg-dark-900 dark:text-dark-300">
         正在加载账号广场...
       </div>
@@ -1059,6 +1168,7 @@
           v-for="listing in displayedListings"
           :key="listing.id"
           class="listing-card"
+          :class="{ 'key-resolution-listing-card': isKeyResolutionListing(listing) }"
         >
           <div class="listing-card-head">
             <div class="listing-card-identity">
@@ -1343,17 +1453,6 @@
               </div>
             </div>
 
-            <div v-if="canOpenMySpend(listing)" class="listing-spend-action-row">
-              <button
-                type="button"
-                class="btn-secondary h-9"
-                :title="mySpendButtonTitle(listing)"
-                @click="openMySpendDialog(listing)"
-              >
-                <Icon name="dollar" size="xs" class="mr-2" />
-                我的消费
-              </button>
-            </div>
           </div>
 
           <template v-if="isManagementView">
@@ -1479,102 +1578,141 @@
           <div v-if="listing.queue_membership_id" class="account-share-membership-panel">
             <div class="membership-status-head">
               <div>
-                <div class="font-medium">
-                  {{ listing.current_membership_id ? '正在使用' : '预约队列' }}，绑定 Key #{{ listing.queue_api_key_id || listing.current_api_key_id }}
+                <div class="membership-title">
+                  {{ listing.current_membership_id ? '正在使用' : '预约队列' }}，绑定 {{ boundApiKeyDisplayName(listing) }}
                 </div>
-                <div class="mt-1 text-xs opacity-80">
+                <div class="membership-subtitle">
                   {{ listing.current_membership_id ? idleTimeoutSummary(listing) : queueIdleTimeoutSummary(listing) }}
+                  <span v-if="boundApiKeyID(listing)"> · ID #{{ boundApiKeyID(listing) }}</span>
                 </div>
               </div>
               <span :class="queueStatusPillClass(listing)">{{ queueStatusLabel(listing) }}</span>
             </div>
-            <div class="membership-detail-grid">
-              <div v-if="listing.queue_rank">
-                <span>预约顺序</span>
-                <strong>第 {{ listing.queue_rank }} 位</strong>
-              </div>
-              <div v-if="listing.current_joined_at">
-                <span>激活时间</span>
-                <strong>{{ formatDate(listing.current_joined_at) }}</strong>
-              </div>
-              <div v-if="listing.current_last_request_at">
-                <span>最近请求</span>
-                <strong>{{ formatDate(listing.current_last_request_at) }}</strong>
-              </div>
-              <div v-if="listing.current_paid_until">
-                <span>下次预付</span>
-                <strong>{{ formatCountdownUntil(listing.current_paid_until) }}</strong>
-              </div>
-              <div v-if="listing.current_billed_until">
-                <span>已结算到</span>
-                <strong>{{ formatDate(listing.current_billed_until) }}</strong>
-              </div>
-              <div v-if="listing.current_membership_id && listing.hourly_fee_waiver_minimum > 0">
-                <span>低消核销</span>
-                <strong>最长 1 小时</strong>
-              </div>
-              <div v-if="listing.queue_dispatch_cooldown_until">
-                <span>失败冷却</span>
-                <strong>{{ formatRelativeUntil(listing.queue_dispatch_cooldown_until) }}</strong>
-              </div>
-            </div>
-            <div class="idle-timeout-control">
-              <label :for="`idle-timeout-current-${listing.id}`">激活后空闲退出</label>
-              <div class="idle-timeout-row">
-                <input
-                  :id="`idle-timeout-current-${listing.id}`"
-                  v-model.number="idleTimeoutByListing[listing.id]"
-                  class="input h-10"
-                  type="number"
-                  min="1"
-                  :max="ACCOUNT_SHARE_IDLE_TIMEOUT_MAX_MINUTES"
-                  step="1"
-                />
-                <span>分钟</span>
-                <button
-                  class="btn-secondary h-10"
-                  type="button"
-                  :disabled="savingIdleTimeoutId === listing.queue_membership_id"
-                  @click="saveIdleTimeout(listing)"
+            <div class="membership-compact-body">
+              <div class="membership-main">
+                <div class="membership-detail-grid">
+                  <div v-if="listing.queue_rank">
+                    <span>预约顺序</span>
+                    <strong>第 {{ listing.queue_rank }} 位</strong>
+                  </div>
+                  <div v-if="listing.current_joined_at">
+                    <span>激活时间</span>
+                    <strong>{{ formatDate(listing.current_joined_at) }}</strong>
+                  </div>
+                  <div v-if="waiverProgressVisible(listing)">
+                    <span>窗口剩余</span>
+                    <strong>{{ waiverProgressRemainingLabel(listing) }}</strong>
+                  </div>
+                  <div v-else-if="listing.current_paid_until">
+                    <span>下次预付</span>
+                    <strong>{{ formatCountdownUntil(listing.current_paid_until) }}</strong>
+                  </div>
+                  <div v-if="listing.current_last_request_at || listing.current_waiver_progress?.last_request_at">
+                    <span>最近请求</span>
+                    <strong>{{ formatDate(listing.current_waiver_progress?.last_request_at || listing.current_last_request_at) }}</strong>
+                  </div>
+                  <div v-if="listing.current_billed_until && !waiverProgressVisible(listing)">
+                    <span>已结算到</span>
+                    <strong>{{ formatDate(listing.current_billed_until) }}</strong>
+                  </div>
+                  <div v-if="listing.queue_dispatch_cooldown_until">
+                    <span>失败冷却</span>
+                    <strong>{{ formatRelativeUntil(listing.queue_dispatch_cooldown_until) }}</strong>
+                  </div>
+                </div>
+
+                <div
+                  v-if="waiverProgressVisible(listing)"
+                  class="waiver-progress-card"
+                  :class="waiverProgressToneClass(listing)"
                 >
-                  保存
-                </button>
+                  <div class="waiver-progress-top">
+                    <div>
+                      <span>低消进度</span>
+                      <strong>{{ waiverProgressTitle(listing) }}</strong>
+                    </div>
+                    <span class="waiver-progress-badge">{{ waiverProgressStatusLabel(listing) }}</span>
+                  </div>
+                  <div class="waiver-progress-track" role="progressbar" :aria-valuenow="waiverProgressPercent(listing)" aria-valuemin="0" aria-valuemax="100">
+                    <span :style="waiverProgressPercentStyle(listing)"></span>
+                  </div>
+                  <div class="waiver-progress-foot">
+                    <span>{{ waiverProgressAmountLabel(listing) }}</span>
+                    <span>{{ waiverProgressMetaLabel(listing) }}</span>
+                  </div>
+                </div>
               </div>
-              <div class="idle-timeout-hint">{{ listing.current_membership_id ? (isOwnListing(listing) ? '连续空闲达到设定分钟数后会自动解除绑定，不能填 0。' : '连续空闲达到设定分钟数后会自动退出并停止占位，不能填 0。') : '该设置会在预约项被激活后生效，不能填 0。' }}</div>
-            </div>
-            <div class="mt-3 flex flex-wrap gap-2">
-              <button
-                class="btn-secondary h-9"
-                type="button"
-                :disabled="!canMoveQueueItem(listing, -1)"
-                @click="moveQueueItem(listing, -1)"
-              >
-                <Icon name="chevronUp" size="xs" class="mr-2" />
-                上移
-              </button>
-              <button
-                class="btn-secondary h-9"
-                type="button"
-                :disabled="!canMoveQueueItem(listing, 1)"
-                @click="moveQueueItem(listing, 1)"
-              >
-                <Icon name="chevronDown" size="xs" class="mr-2" />
-                下移
-              </button>
-              <button class="h-9 rounded-lg bg-emerald-700 px-3 text-sm font-medium text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60" type="button" :disabled="endingId === listing.queue_membership_id" @click="openEndUseConfirm(listing)">
-                {{ listing.current_membership_id ? '结束使用' : '移出预约' }}
-              </button>
+
+              <div class="membership-controls">
+                <div class="idle-timeout-control">
+                  <label :for="`idle-timeout-current-${listing.id}`">空闲退出</label>
+                  <div class="idle-timeout-row">
+                    <input
+                      :id="`idle-timeout-current-${listing.id}`"
+                      v-model.number="idleTimeoutByListing[listing.id]"
+                      class="input h-9"
+                      type="number"
+                      min="1"
+                      :max="ACCOUNT_SHARE_IDLE_TIMEOUT_MAX_MINUTES"
+                      step="1"
+                    />
+                    <span>分钟</span>
+                    <button
+                      class="btn-secondary h-9"
+                      type="button"
+                      :disabled="savingIdleTimeoutId === listing.queue_membership_id"
+                      @click="saveIdleTimeout(listing)"
+                    >
+                      保存
+                    </button>
+                  </div>
+                </div>
+                <div class="membership-action-row">
+                  <button
+                    class="btn-secondary h-9"
+                    type="button"
+                    :disabled="!canMoveQueueItem(listing, -1)"
+                    @click="moveQueueItem(listing, -1)"
+                  >
+                    <Icon name="chevronUp" size="xs" class="mr-2" />
+                    上移
+                  </button>
+                  <button
+                    class="btn-secondary h-9"
+                    type="button"
+                    :disabled="!canMoveQueueItem(listing, 1)"
+                    @click="moveQueueItem(listing, 1)"
+                  >
+                    <Icon name="chevronDown" size="xs" class="mr-2" />
+                    下移
+                  </button>
+                  <button
+                    class="membership-end-button"
+                    type="button"
+                    :disabled="endingId !== null"
+                    @click="openEndUseConfirm(listing)"
+                  >
+                    {{ listing.current_membership_id ? '结束使用' : '移出预约' }}
+                  </button>
+                </div>
+                <div
+                  class="idle-timeout-hint"
+                  :title="listing.current_membership_id ? (isOwnListing(listing) ? '连续空闲达到设定分钟数后会自动解除绑定，不能填 0。' : '连续空闲达到设定分钟数后会自动退出并停止占位，不能填 0。') : '该设置会在预约项被激活后生效，不能填 0。'"
+                >
+                  {{ listing.current_membership_id ? (isOwnListing(listing) ? '空闲到时自动解除绑定' : '空闲到时自动退出并停止占位') : '预约激活后生效' }}
+                </div>
+              </div>
             </div>
           </div>
         </article>
       </section>
 
       <div v-else class="rounded-lg border border-dashed border-gray-300 bg-white p-8 text-center text-sm text-gray-500 dark:border-dark-700 dark:bg-dark-900 dark:text-dark-300">
-        {{ pagination.total === 0 ? (hasResultFilters ? '没有匹配的共享账号。' : (isManagementView ? '暂无可管理账号。' : '当前分类暂无账号。')) : '当前页暂无账号。' }}
+        {{ isKeyResolutionMode ? (keyResolutionError ? '关联账号详情暂时无法加载，请在上方刷新状态后重试。' : '当前 API Key 没有需要处理的关联账号。') : (pagination.total === 0 ? (hasResultFilters ? '没有匹配的共享账号。' : (isManagementView ? '暂无可管理账号。' : '当前分类暂无账号。')) : '当前页暂无账号。') }}
       </div>
 
       <Pagination
-        v-if="!loading && pagination.total > pagination.page_size"
+        v-if="!isKeyResolutionMode && !loading && pagination.total > pagination.page_size"
         class="overflow-hidden rounded-lg border border-gray-200 shadow-sm dark:border-dark-700"
         :page="pagination.page"
         :total="pagination.total"
@@ -1685,7 +1823,7 @@
 
         <div class="join-usage-reminder">
           <Icon name="infoCircle" size="sm" />
-          <span>{{ pendingJoinIsOwnerSelfUse ? `确认使用后，连续空闲达到 ${pendingJoinIdleTimeoutLabel} 会自动解除绑定；自用期间不产生小时费和号主收益。` : `确认加入后，小时费按分钟预扣；低消按激活窗口核销，最长 1 小时，达标后退回该窗口预扣小时费。连续空闲达到 ${pendingJoinIdleTimeoutLabel} 会自动退出并停止占位。` }}</span>
+          <span>{{ pendingJoinIsOwnerSelfUse ? `确认使用后，连续空闲达到 ${pendingJoinIdleTimeoutLabel} 会自动解除绑定；自用期间不产生小时费和号主收益。` : `若进入预约，下一次使用该 Key 发出 API 请求时才会按顺序尝试激活。激活后小时费按分钟预扣，连续空闲达到 ${pendingJoinIdleTimeoutLabel} 会自动退出并停止占位。` }}</span>
         </div>
 
         <div class="join-model-confirmation">
@@ -1757,6 +1895,54 @@
       @close="closeMySpendDialog"
     >
       <div class="my-spend-panel">
+        <div class="my-spend-account-picker">
+          <div class="my-spend-account-picker-head">
+            <div>
+              <span>选择使用过的账号</span>
+              <strong>{{ mySpendAccountPickerTitle }}</strong>
+              <small>包含正在使用、预约中和历史使用记录；选择账号后下方统计会按该账号刷新。</small>
+            </div>
+            <button type="button" class="btn-secondary h-9" :disabled="mySpendAccountsLoading" @click="loadMySpendAccountOptions()">
+              <Icon name="refresh" size="xs" class="mr-2" :class="{ 'animate-spin': mySpendAccountsLoading }" />
+              刷新账号
+            </button>
+          </div>
+
+          <div v-if="mySpendAccountsError" class="notice-row border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-300">
+            <Icon name="exclamationCircle" size="sm" class="mt-0.5 flex-shrink-0" />
+            <span>{{ mySpendAccountsError }}</span>
+          </div>
+
+          <div v-if="mySpendAccountsLoading && mySpendAccountOptions.length === 0" class="my-spend-loading">
+            正在加载使用过的账号...
+          </div>
+          <div v-else-if="!mySpendAccountsLoading && mySpendAccountOptions.length === 0" class="my-spend-empty">
+            暂无可统计的账号。加入或使用账号后，这里会展示账号选择和消费统计。
+          </div>
+          <div v-else class="my-spend-account-grid">
+            <button
+              v-for="option in mySpendAccountOptions"
+              :key="option.key"
+              type="button"
+              class="my-spend-account-option"
+              :class="{ active: mySpendSelectedOptionKey === option.key }"
+              :title="mySpendAccountOptionTitle(option)"
+              @click="selectMySpendAccount(option)"
+            >
+              <span class="my-spend-account-option-top">
+                <span class="feature-badge">{{ platformLabel(listingPlatform(option.listing)) }}</span>
+                <span>{{ mySpendAccountSourceLabel(option.source) }}</span>
+              </span>
+              <strong>{{ listingDisplayName(option.listing) }}</strong>
+              <small>{{ mySpendAccountUsagePeriod(option.listing) }}</small>
+              <span class="my-spend-account-option-foot">
+                <span>记录 #{{ option.membershipID }}</span>
+                <span>{{ mySpendAccountStatusLabel(option.listing) }}</span>
+              </span>
+            </button>
+          </div>
+        </div>
+
         <div v-if="mySpendListing" class="my-spend-context">
           <span class="my-spend-context-icon">
             <Icon name="dollar" size="md" />
@@ -1791,6 +1977,10 @@
             <Icon name="refresh" size="xs" class="mr-2" />
             刷新
           </button>
+        </div>
+
+        <div v-if="!mySpendLoading && !mySpendListing && mySpendAccountOptions.length > 0" class="my-spend-empty">
+          请选择一个账号查看使用时间段、费用明细和统计面板。
         </div>
 
         <div v-if="mySpendError" class="notice-row border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-300">
@@ -1832,7 +2022,8 @@
             </div>
             <div>
               <span>绑定 Key</span>
-              <strong>{{ mySpendSummary.membership ? `Key #${mySpendSummary.membership.api_key_id}` : '-' }}</strong>
+              <strong>{{ mySpendBoundApiKeyName(mySpendSummary.membership) }}</strong>
+              <small v-if="mySpendSummary.membership?.api_key_id">ID #{{ mySpendSummary.membership.api_key_id }}</small>
             </div>
             <div>
               <span>使用状态</span>
@@ -1854,7 +2045,7 @@
 
           <div class="my-spend-hourly-panel">
             <div>
-              <span>小时费预扣</span>
+              <span>小时费已预扣</span>
               <strong>{{ formatSpendCost(mySpendSummary.hourly_charge) }}</strong>
             </div>
             <div>
@@ -1866,7 +2057,7 @@
               <strong>{{ formatSpendCost(mySpendSummary.hourly_waiver_refund) }}</strong>
             </div>
             <div>
-              <span>小时费净扣</span>
+              <span>实际扣费</span>
               <strong>{{ formatSpendCost(mySpendSummary.hourly_net_cost) }}</strong>
             </div>
           </div>
@@ -1931,6 +2122,7 @@
     <ReAuthAccountModal
       :show="showReAuthModal"
       :account="reAuthAccount"
+      :proxies="proxies"
       :account-scope="managedAccountScope"
       @close="closeReAuthModal"
       @reauthorized="handleManagedAccountReauthorized"
@@ -2178,16 +2370,30 @@
       </template>
     </BaseDialog>
 
-    <ConfirmDialog
+    <BaseDialog
       :show="pendingEndUse !== null"
       title="确认结束使用"
-      :message="endUseConfirmMessage"
-      confirm-text="结束使用"
-      cancel-text="取消"
-      danger
-      @confirm="confirmEndUse"
-      @cancel="cancelEndUse"
-    />
+      width="narrow"
+      :close-on-escape="endingId === null"
+      @close="cancelEndUse"
+    >
+      <p class="text-sm text-gray-600 dark:text-gray-400">{{ endUseConfirmMessage }}</p>
+
+      <template #footer>
+        <div class="flex justify-end space-x-3">
+          <button type="button" class="btn btn-secondary" :disabled="endingId !== null" @click="cancelEndUse">
+            取消
+          </button>
+          <button type="button" class="btn btn-danger" :disabled="endingId !== null" @click="confirmEndUse">
+            <svg v-if="endingId !== null" class="-ml-1 mr-2 h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            {{ endingId !== null ? '处理中...' : (pendingEndUse?.status === 'queued' ? '移出预约' : '结束使用') }}
+          </button>
+        </div>
+      </template>
+    </BaseDialog>
 
     <BaseDialog
       :show="pendingReview !== null"
@@ -2365,14 +2571,21 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
-import { accountShareAPI, type AccountShareListing, type AccountShareListingFeatureTag, type AccountShareListingFilters, type AccountShareListingSortBy, type AccountShareListingSortKey, type AccountShareListingSortOrder, type AccountShareListingStatus, type AccountShareListingTab, type AccountShareMembership, type AccountShareMySpendRange, type AccountShareMySpendSummary, type AccountShareRecommendationCandidate, type AccountShareRecommendationResult, type AccountShareRecommendationUsageProfile, type AccountShareReview, type UpdateAccountShareListingRequest } from '@/api/accountShare'
-import { accountsAPI, adminAPI, keysAPI, userGroupsAPI } from '@/api'
-import type { Account, AccountLevel, AccountUsageStatsResponse, ApiKey, Group, Proxy, ProxyProtocol, UsageProgress } from '@/types'
+import { useRoute, useRouter } from 'vue-router'
+import { accountShareAPI, type AccountShareListing, type AccountShareListingFeatureTag, type AccountShareListingFilters, type AccountShareListingSortBy, type AccountShareListingSortKey, type AccountShareListingSortOrder, type AccountShareListingStatus, type AccountShareListingTab, type AccountShareMembership, type AccountShareMySpendRange, type AccountShareMySpendSummary, type AccountShareRecommendationCandidate, type AccountShareRecommendationResult, type AccountShareRecommendationScoreBreakdown, type AccountShareRecommendationUsageProfile, type AccountShareReview, type UpdateAccountShareListingRequest } from '@/api/accountShare'
+import { accountsAPI, adminAPI, keysAPI } from '@/api'
+import type { Account, AccountLevel, AccountUsageStatsResponse, ApiKey, Proxy, ProxyProtocol, UsageProgress } from '@/types'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { useClipboard } from '@/composables/useClipboard'
 import { extractApiErrorCode, extractApiErrorMessage } from '@/utils/apiError'
+import { normalizeTablePageSize } from '@/utils/tablePreferences'
+import {
+  normalizeOpenAIAccountLevelConfigs,
+  normalizeOpenAIAccountLevelKey,
+  openAIAccountLevelLabel,
+  openAIAccountLevelOptions
+} from '@/utils/openaiAccountLevels'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -2395,6 +2608,20 @@ interface FilterOption {
 type ListingStatusFilterValue = AccountShareListingStatus | 'available' | 'all' | ''
 type AccountLevelFilterValue = AccountLevel | 'all' | ''
 type ListingSortKey = AccountShareListingSortKey
+type AccountShareListingWithClientMeta = AccountShareListing & {
+  waiver_progress_received_at_ms?: number
+}
+
+interface WaiverProgressSnapshot {
+  status: 'in_progress' | 'met' | string
+  requiredAmount: number
+  usageAmount: number
+  remainingAmount: number
+  progressPercent: number
+  estimatedHourlyFeeRefund: number
+  requestCount: number
+  remainingSeconds: number
+}
 
 interface ListingSortOption {
   key: ListingSortKey
@@ -2423,6 +2650,13 @@ interface ListingFilterState {
   seatLimits: number[]
   featureTags: AccountShareListingFeatureTag[]
   models: string[]
+}
+
+interface ListingPreferenceState extends ListingFilterState {
+  platform: AccountSharePlatform
+  tab: AccountShareListingTab
+  search: string
+  pageSize: number
 }
 
 type ListingFilterPopover = 'status' | 'level' | 'seat' | 'feature' | 'model'
@@ -2473,6 +2707,7 @@ type AccountSharePlatform = 'openai' | 'anthropic'
 type RecommendationPresetKey = 'light' | 'balanced' | 'heavy' | 'history'
 type MySpendMetricTone = 'total' | 'request' | 'hourly' | 'usage'
 type MySpendMetricIcon = 'dollar' | 'creditCard' | 'clock' | 'chart'
+type MySpendAccountOptionSource = 'using' | 'history'
 
 interface RecommendationPreset {
   key: RecommendationPresetKey
@@ -2496,6 +2731,12 @@ interface RecommendationFormState {
   cache_read_tokens_per_request: number
 }
 
+interface RecommendationScoreItem {
+  key: 'cost' | 'stable' | 'available' | 'risk'
+  label: string
+  value: number
+}
+
 interface PendingJoinConfirmation {
   listing: AccountShareListing
   apiKeyID: number
@@ -2505,8 +2746,14 @@ interface PendingJoinConfirmation {
 interface PendingEndUseState {
   membershipID: number
   apiKeyID?: number
+  apiKeyName?: string
   status?: string
   listing: AccountShareListing
+}
+
+interface QueueSnapshotLoadResult {
+  snapshots: Record<number, AccountShareMembership[]>
+  failedApiKeyIDs: number[]
 }
 
 interface ReviewDialogState {
@@ -2530,6 +2777,13 @@ interface MySpendMetric {
   note: string
   icon: MySpendMetricIcon
   tone: MySpendMetricTone
+}
+
+interface MySpendAccountOption {
+  key: string
+  listing: AccountShareListing
+  source: MySpendAccountOptionSource
+  membershipID: number
 }
 
 type OwnerDialogTab = 'listings' | 'reviews'
@@ -2562,7 +2816,8 @@ const DEFAULT_ACCOUNT_SHARE_ALLOWED_MODELS_BY_PLATFORM: Record<AccountSharePlatf
   openai: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'codex-auto-review'],
   anthropic: ['claude-sonnet-4-6', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-fable-5', 'claude-opus-4-6', 'claude-haiku-4-5']
 }
-const ACCOUNT_SHARE_RECOMMENDATION_LIMIT = 5
+const ACCOUNT_SHARE_RECOMMENDATION_LIMIT = 10
+const ACCOUNT_SHARE_RECOMMENDATION_PAGE_SIZE = 5
 const recommendationPresets: RecommendationPreset[] = [
   {
     key: 'light',
@@ -2596,8 +2851,12 @@ const recommendationPresets: RecommendationPreset[] = [
   }
 ]
 const ACCOUNT_SHARE_PAGE_SIZE = 10
+const ACCOUNT_SHARE_MODE_KEY_PAGE_SIZE = 100
+const ACCOUNT_SHARE_LISTING_PREFERENCES_STORAGE_KEY = 'account-share-listing-preferences'
 const MODEL_PREVIEW_LIMIT = 5
 const ACCOUNT_SHARE_IDLE_TIMEOUT_MAX_MINUTES = 10080
+const ACCOUNT_SHARE_STATUS_REFRESH_THROTTLE_MS = 15_000
+const ACCOUNT_SHARE_QUEUE_WARNING_THROTTLE_MS = 30_000
 const MY_SPEND_RANGE_OPTIONS: MySpendRangeOption[] = [
   { value: 'current_membership', label: '本次使用' },
   { value: 'today', label: '今天' },
@@ -2606,6 +2865,7 @@ const MY_SPEND_RANGE_OPTIONS: MySpendRangeOption[] = [
 
 const appStore = useAppStore()
 const authStore = useAuthStore()
+const route = useRoute()
 const router = useRouter()
 const { copyToClipboard } = useClipboard()
 const seatOptions = Array.from({ length: ACCOUNT_SHARE_MAX_SEATS - ACCOUNT_SHARE_MIN_SEATS + 1 }, (_, index) => index + ACCOUNT_SHARE_MIN_SEATS)
@@ -2660,14 +2920,20 @@ const listingStatusFilterOptions: Array<{ value: ListingStatusFilterValue; label
   { value: 'disabled', label: '已下架' },
   { value: 'all', label: '全部状态' }
 ]
-const accountLevelFilterOptions: Array<{ value: AccountLevelFilterValue; label: string }> = [
-  { value: 'all', label: '全部等级' },
-  { value: 'free', label: 'Free' },
-  { value: 'plus', label: 'Plus' },
-  { value: 'pro', label: 'Pro' },
-  { value: 'team', label: 'Team' },
-  { value: 'unknown', label: 'UNKNOWN' }
-]
+const openAIAccountLevelConfigs = computed(() =>
+  normalizeOpenAIAccountLevelConfigs(appStore.cachedPublicSettings?.openai_account_levels)
+)
+const accountLevelFilterOptions = computed<Array<{ value: AccountLevelFilterValue; label: string }>>(() =>
+  openAIAccountLevelOptions(openAIAccountLevelConfigs.value, {
+    includeEmpty: true,
+    emptyLabel: '全部等级',
+    includeUnknown: true,
+    unknownLabel: 'UNKNOWN'
+  }).map(option => ({
+    value: (option.value === '' ? 'all' : option.value) as AccountLevelFilterValue,
+    label: option.label
+  }))
+)
 const accountShareJoinErrorMessages: Record<string, string> = {
   ACCOUNT_SHARE_ACCOUNT_UNAVAILABLE: '该共享账号当前不可加入，请换一个账号或稍后再试',
   ACCOUNT_SHARE_ALREADY_USING: '你当前已有正在使用的共享账号，请先结束后再加入新的账号',
@@ -2698,6 +2964,180 @@ const accountShareRecommendationErrorMessages: Record<string, string> = {
   SERVICE_UNAVAILABLE: '账号推荐服务暂时不可用，请稍后再试',
   USER_NOT_FOUND: '当前用户状态异常，请重新登录后再试'
 }
+const accountShareEndErrorMessages: Record<string, string> = {
+  ...accountShareJoinErrorMessages,
+  ACCOUNT_SHARE_LISTING_NOT_FOUND: '这次使用或预约状态已变化，请刷新账号广场后确认'
+}
+
+function getListingPreferencesStorageKey(): string {
+  const userID = Number(authStore.user?.id || 0)
+  return userID > 0
+    ? `${ACCOUNT_SHARE_LISTING_PREFERENCES_STORAGE_KEY}:user:${userID}`
+    : ACCOUNT_SHARE_LISTING_PREFERENCES_STORAGE_KEY
+}
+
+function defaultListingPreferences(): ListingPreferenceState {
+  return {
+    platform: 'openai',
+    tab: 'all',
+    search: '',
+    pageSize: ACCOUNT_SHARE_PAGE_SIZE,
+    status: '',
+    accountLevel: 'all',
+    sortKeys: [],
+    seatLimits: [],
+    featureTags: [],
+    models: []
+  }
+}
+
+function filterForListingTab(tab: AccountShareListingTab): FilterOption {
+  return [ownerFilter, ...filters].find(option => option.tab === tab) || filters[2]
+}
+
+function normalizeListingPlatform(value: unknown): AccountSharePlatform {
+  return value === 'anthropic' ? 'anthropic' : 'openai'
+}
+
+function normalizeListingTab(value: unknown): AccountShareListingTab {
+  if (typeof value !== 'string') return defaultListingPreferences().tab
+  return filterForListingTab(value as AccountShareListingTab).tab
+}
+
+function normalizeListingStatus(value: unknown): ListingStatusFilterValue {
+  return listingStatusFilterOptions.some(option => option.value === value)
+    ? value as ListingStatusFilterValue
+    : ''
+}
+
+function normalizeListingAccountLevel(value: unknown, platform: AccountSharePlatform): AccountLevelFilterValue {
+  if (platform !== 'openai') return 'all'
+  if (value === 'all' || value === '') return 'all'
+  const normalized = normalizeOpenAIAccountLevelKey(value)
+  return normalized ? normalized as AccountLevelFilterValue : 'all'
+}
+
+function normalizeListingSortKeys(value: unknown): ListingSortKey[] {
+  if (!Array.isArray(value)) return []
+  const normalized: ListingSortKey[] = []
+  const seenSortFields = new Set<AccountShareListingSortBy>()
+  for (const item of value) {
+    if (typeof item !== 'string') continue
+    const option = listingSortOptions.find(candidate => candidate.key === item)
+    if (!option?.sortBy || seenSortFields.has(option.sortBy)) continue
+    seenSortFields.add(option.sortBy)
+    normalized.push(option.key)
+  }
+  return normalized
+}
+
+function normalizeListingSeatLimits(value: unknown): number[] {
+  if (!Array.isArray(value)) return []
+  const validSeats = new Set(seatOptions)
+  return Array.from(
+    new Set(
+      value
+        .map(item => Number(item))
+        .filter(item => Number.isInteger(item) && validSeats.has(item))
+    )
+  ).sort((a, b) => a - b)
+}
+
+function normalizeListingFeatureTags(value: unknown, platform: AccountSharePlatform): AccountShareListingFeatureTag[] {
+  if (!Array.isArray(value)) return []
+  const validTags = new Set(listingFeatureTagOptions.map(option => option.value))
+  const tags: AccountShareListingFeatureTag[] = []
+  const seen = new Set<AccountShareListingFeatureTag>()
+  for (const item of value) {
+    if (!validTags.has(item as AccountShareListingFeatureTag)) continue
+    const tag = item as AccountShareListingFeatureTag
+    if (seen.has(tag)) continue
+    if (platform !== 'openai' && (tag === 'image_generation' || tag === 'codex_cli_only' || tag === 'non_codex_cli_only')) continue
+    seen.add(tag)
+    tags.push(tag)
+  }
+  return tags
+}
+
+function normalizeListingModels(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const models: string[] = []
+  const seen = new Set<string>()
+  for (const item of value) {
+    if (typeof item !== 'string') continue
+    const model = normalizeModelFilterValue(item)
+    if (!model) continue
+    const key = model.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    models.push(model)
+  }
+  return models
+}
+
+function normalizeListingPageSize(value: unknown): number {
+  return normalizeTablePageSize(value || ACCOUNT_SHARE_PAGE_SIZE)
+}
+
+function normalizeListingPreferences(value: unknown): ListingPreferenceState {
+  const defaults = defaultListingPreferences()
+  if (!value || typeof value !== 'object') return defaults
+  const raw = value as Partial<ListingPreferenceState>
+  const platform = normalizeListingPlatform(raw.platform)
+  return {
+    platform,
+    tab: normalizeListingTab(raw.tab),
+    search: typeof raw.search === 'string' ? raw.search.trim() : '',
+    pageSize: normalizeListingPageSize(raw.pageSize),
+    status: normalizeListingStatus(raw.status),
+    accountLevel: normalizeListingAccountLevel(raw.accountLevel, platform),
+    sortKeys: normalizeListingSortKeys(raw.sortKeys),
+    seatLimits: normalizeListingSeatLimits(raw.seatLimits),
+    featureTags: normalizeListingFeatureTags(raw.featureTags, platform),
+    models: normalizeListingModels(raw.models)
+  }
+}
+
+function readListingPreferences(): ListingPreferenceState {
+  if (typeof window === 'undefined') return defaultListingPreferences()
+  const storageKey = getListingPreferencesStorageKey()
+  try {
+    const raw = window.localStorage.getItem(storageKey)
+    if (!raw) return defaultListingPreferences()
+    return normalizeListingPreferences(JSON.parse(raw))
+  } catch (error) {
+    window.localStorage.removeItem(storageKey)
+    console.warn('Failed to read account share listing preferences:', error)
+    return defaultListingPreferences()
+  }
+}
+
+function buildCurrentListingPreferences(): ListingPreferenceState {
+  return normalizeListingPreferences({
+    platform: activeListingPlatform.value,
+    tab: activeFilter.value.tab,
+    search: searchQuery.value,
+    pageSize: pagination.page_size,
+    status: listingFilters.status,
+    accountLevel: listingFilters.accountLevel,
+    sortKeys: listingFilters.sortKeys,
+    seatLimits: listingFilters.seatLimits,
+    featureTags: listingFilters.featureTags,
+    models: listingFilters.models
+  })
+}
+
+function persistListingPreferences(): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(
+      getListingPreferencesStorageKey(),
+      JSON.stringify(buildCurrentListingPreferences())
+    )
+  } catch (error) {
+    console.warn('Failed to persist account share listing preferences:', error)
+  }
+}
 
 function buildDefaultRecommendationForm(): RecommendationFormState {
   const preset = recommendationPresets[1]
@@ -2713,8 +3153,9 @@ function buildDefaultRecommendationForm(): RecommendationFormState {
   }
 }
 
-const activeFilter = ref<FilterOption>(filters[2])
-const activeListingPlatform = ref<AccountSharePlatform>('openai')
+const initialListingPreferences = readListingPreferences()
+const activeFilter = ref<FilterOption>(filterForListingTab(initialListingPreferences.tab))
+const activeListingPlatform = ref<AccountSharePlatform>(initialListingPreferences.platform)
 const listings = ref<AccountShareListing[]>([])
 const selectedRecommendationPreset = ref<RecommendationPresetKey>('balanced')
 const recommendationForm = reactive<RecommendationFormState>(buildDefaultRecommendationForm())
@@ -2723,12 +3164,18 @@ const recommendationUsageProfileLoading = ref(false)
 const recommendationUsageProfileMessage = ref('')
 const recommendationError = ref('')
 const recommendationResult = ref<AccountShareRecommendationResult | null>(null)
+const recommendationPage = ref(1)
 const showUsageGuideDialog = ref(false)
 const showRecommendationDialog = ref(false)
 const queueMembershipsByApiKey = ref<Record<number, AccountShareMembership[]>>({})
+const keyResolutionMemberships = ref<AccountShareMembership[]>([])
+const keyResolutionListings = ref<AccountShareListing[]>([])
+const keyResolutionLoading = ref(false)
+const keyResolutionLoaded = ref(false)
+const keyResolutionError = ref('')
 const pagination = reactive({
   page: 1,
-  page_size: ACCOUNT_SHARE_PAGE_SIZE,
+  page_size: initialListingPreferences.pageSize,
   total: 0,
   pages: 1
 })
@@ -2771,6 +3218,11 @@ const ownerDialog = reactive({
 })
 const showMySpendDialog = ref(false)
 const mySpendListing = ref<AccountShareListing | null>(null)
+const mySpendSelectedMembershipID = ref(0)
+const mySpendSelectedOptionKey = ref('')
+const mySpendAccountOptions = ref<MySpendAccountOption[]>([])
+const mySpendAccountsLoading = ref(false)
+const mySpendAccountsError = ref('')
 const mySpendRange = ref<AccountShareMySpendRange>('current_membership')
 const mySpendSummary = ref<AccountShareMySpendSummary | null>(null)
 const mySpendLoading = ref(false)
@@ -2800,18 +3252,33 @@ const savingModelsId = ref<number | null>(null)
 const selectedKeyByListing = reactive<Record<number, number>>({})
 const idleTimeoutByListing = reactive<Record<number, number>>({})
 const savingIdleTimeoutId = ref<number | null>(null)
-const availableGroups = ref<Group[]>([])
+const modeGroupIDsByPlatform = reactive<Record<AccountSharePlatform, number>>({
+  openai: 0,
+  anthropic: 0
+})
 const modeApiKeysByPlatform = reactive<Record<AccountSharePlatform, ApiKey[]>>({
   openai: [],
   anthropic: []
 })
-const modeKeysLoading = ref(false)
-const modeKeysLoaded = ref(false)
+const modeKeysLoadingByPlatform = reactive<Record<AccountSharePlatform, boolean>>({
+  openai: false,
+  anthropic: false
+})
+const modeKeysLoadedByPlatform = reactive<Record<AccountSharePlatform, boolean>>({
+  openai: false,
+  anthropic: false
+})
+const modeKeysErrorByPlatform = reactive<Record<AccountSharePlatform, string>>({
+  openai: '',
+  anthropic: ''
+})
+const unavailableQueueSnapshotApiKeyIDs = ref<Set<number>>(new Set())
+const visibleQueueSnapshotWarning = ref('')
 const proxies = ref<Proxy[]>([])
 const knownListings = ref<AccountShareListing[]>([])
 const proxyLoading = ref(false)
 const proxyLoadMessage = ref('')
-const searchQuery = ref('')
+const searchQuery = ref(initialListingPreferences.search)
 const modelFilterInput = ref('')
 const filterPanelRef = ref<HTMLElement | null>(null)
 const openFilterPopover = ref<ListingFilterPopover | null>(null)
@@ -2828,16 +3295,23 @@ let editSessionRenewTimer: number | null = null
 let suppressNextSearchRefresh = false
 let listingsRequestController: AbortController | null = null
 let listingsRequestSeq = 0
+let mySpendAccountsRequestController: AbortController | null = null
+let mySpendAccountsRequestSeq = 0
 let mySpendRequestController: AbortController | null = null
 let mySpendRequestSeq = 0
+let modeKeysRequestSeq = 0
+let keyResolutionRequestSeq = 0
+let lastMembershipStatusRefreshAt = 0
+let lastQueueSnapshotWarningAt = 0
+let membershipStatusRefreshTimer: number | null = null
 
 const listingFilters = reactive<ListingFilterState>({
-  status: '',
-  accountLevel: 'all',
-  sortKeys: [],
-  seatLimits: [],
-  featureTags: [],
-  models: []
+  status: initialListingPreferences.status,
+  accountLevel: initialListingPreferences.accountLevel,
+  sortKeys: [...initialListingPreferences.sortKeys],
+  seatLimits: [...initialListingPreferences.seatLimits],
+  featureTags: [...initialListingPreferences.featureTags],
+  models: [...initialListingPreferences.models]
 })
 
 const proxyForm = reactive<UserProxyFormState>({
@@ -2937,8 +3411,27 @@ function accountModeGroupName(platform: AccountSharePlatform): string {
   return ACCOUNT_MODE_GROUP_NAME_BY_PLATFORM[platform]
 }
 
-function isAccountModeGroupForPlatform(group: Group, platform: AccountSharePlatform): boolean {
-  return group.platform === platform && (group.name === accountModeGroupName(platform) || group.name.includes('账号模式'))
+function isUsableModeApiKey(key: ApiKey, accountModeGroupID: number): boolean {
+  if (Number(key.group_id || 0) !== accountModeGroupID || key.status !== 'active') return false
+
+  if (key.expires_at) {
+    const expiresAtMs = Date.parse(key.expires_at)
+    if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) return false
+  }
+
+  const quota = Number(key.quota)
+  const quotaUsed = Number(key.quota_used)
+  if (!Number.isFinite(quota) || !Number.isFinite(quotaUsed)) return false
+  return quota <= 0 || quotaUsed < quota
+}
+
+function clearInvalidSelectedModeApiKeys(platform: AccountSharePlatform, keys: ApiKey[]): void {
+  const usableIDs = new Set(keys.map(key => key.id))
+  for (const listing of knownListings.value) {
+    if (listingPlatform(listing) !== platform) continue
+    const selectedID = Number(selectedKeyByListing[listing.id] || 0)
+    if (selectedID > 0 && !usableIDs.has(selectedID)) selectedKeyByListing[listing.id] = 0
+  }
 }
 
 function modeApiKeysForPlatform(platform: AccountSharePlatform): ApiKey[] {
@@ -2947,6 +3440,14 @@ function modeApiKeysForPlatform(platform: AccountSharePlatform): ApiKey[] {
 
 function modeApiKeysForListing(listing: AccountShareListing): ApiKey[] {
   return modeApiKeysForPlatform(listingPlatform(listing))
+}
+
+function modeKeysLoadingForPlatform(platform: AccountSharePlatform): boolean {
+  return modeKeysLoadingByPlatform[platform]
+}
+
+function modeKeysLoadedForPlatform(platform: AccountSharePlatform): boolean {
+  return modeKeysLoadedByPlatform[platform]
 }
 
 function singleModeApiKeyForListing(listing: AccountShareListing): ApiKey | null {
@@ -2960,10 +3461,16 @@ function singleModeApiKeyLabelForListing(listing: AccountShareListing): string {
 }
 
 const modeApiKeys = computed(() => modeApiKeysForPlatform(activeListingPlatform.value))
+const modeKeysLoading = computed(() => modeKeysLoadingForPlatform(activeListingPlatform.value))
+const modeKeysLoaded = computed(() => modeKeysLoadedForPlatform(activeListingPlatform.value))
+const isAnyModeKeysLoading = computed(() =>
+  ACCOUNT_SHARE_PLATFORM_OPTIONS.some(option => modeKeysLoadingForPlatform(option.value))
+)
 
 function modeApiKeyPlaceholderForListing(listing: AccountShareListing): string {
-  if (modeKeysLoading.value) return '正在加载账号模式 API Key'
-  if (!modeKeysLoaded.value) return '账号模式 API Key 未加载'
+  const platform = listingPlatform(listing)
+  if (modeKeysLoadingForPlatform(platform)) return '正在加载账号模式 API Key'
+  if (!modeKeysLoadedForPlatform(platform)) return '账号模式 API Key 未加载'
   return `选择${accountModeGroupName(listingPlatform(listing))} Key`
 }
 const pendingJoinListing = computed(() => pendingJoinConfirmation.value?.listing ?? null)
@@ -2994,7 +3501,7 @@ const pendingJoinPriceWarnings = computed(() => {
   return warnings
 })
 const endUseConfirmMessage = computed(() => {
-  const apiKeyLabel = pendingEndUse.value?.apiKeyID ? ` Key #${pendingEndUse.value.apiKeyID}` : '当前 Key'
+  const apiKeyLabel = pendingEndUse.value ? formatApiKeyDisplayName(pendingEndUse.value.apiKeyName, pendingEndUse.value.apiKeyID, '当前 Key') : '当前 Key'
   if (pendingEndUse.value?.status === 'queued') {
     return `确认将该账号从${apiKeyLabel}的预约列表中移出？`
   }
@@ -3145,7 +3652,39 @@ const forceEditConfirmMessage = computed(() => {
   return `当前账号已有 ${listing.active_seats}/${listing.seat_limit} 个席位正在使用。强制编辑可能导致正在使用的用户短时间内看到旧配置，请确认已理解风险后再继续。`
 })
 
-const displayedListings = computed(() => listings.value)
+const isKeyResolutionMode = computed(() => routeQueryString(route.query.mode) === 'resolve-key-binding')
+const keyResolutionApiKeyID = computed(() => {
+  const value = Number(routeQueryString(route.query.api_key_id))
+  return Number.isSafeInteger(value) && value > 0 ? value : 0
+})
+const keyResolutionApiKeyName = computed(() => routeQueryString(route.query.api_key_name).trim())
+const keyResolutionKeyLabel = computed(() => keyResolutionApiKeyName.value || (keyResolutionApiKeyID.value > 0 ? `API Key #${keyResolutionApiKeyID.value}` : '指定 API Key'))
+const keyResolutionActiveCount = computed(() => keyResolutionMemberships.value.filter(item => item.status === 'active').length)
+const keyResolutionQueuedCount = computed(() => keyResolutionMemberships.value.filter(item => item.status === 'queued').length)
+const keyResolutionConflictCount = computed(() => keyResolutionActiveCount.value + keyResolutionQueuedCount.value)
+const keyResolutionAllClear = computed(() =>
+  keyResolutionLoaded.value && !keyResolutionLoading.value && !keyResolutionError.value && keyResolutionConflictCount.value === 0
+)
+const keyResolutionListingIDs = computed(() => new Set(keyResolutionMemberships.value.map(item => Number(item.listing_id))))
+const keyResolutionPanelToneClass = computed(() => ({
+  'key-resolution-panel-loading': keyResolutionLoading.value,
+  'key-resolution-panel-error': Boolean(keyResolutionError.value),
+  'key-resolution-panel-clear': keyResolutionAllClear.value
+}))
+const keyResolutionStatusMessage = computed(() => {
+  if (keyResolutionLoading.value) return `正在核对 ${keyResolutionKeyLabel.value} 的使用与预约记录，请稍候。`
+  if (keyResolutionError.value) return keyResolutionError.value
+  if (keyResolutionAllClear.value) return '可以返回 API Key 管理重新执行删除或更换分组；系统不会自动继续原操作。'
+  return '请在下方关联账号中结束使用或移出预约。全部处理完成后，状态会自动重新核对。'
+})
+const displayedListings = computed(() => isKeyResolutionMode.value ? keyResolutionListings.value : listings.value)
+const mySpendAccountPickerTitle = computed(() => {
+  if (mySpendAccountsLoading.value && mySpendAccountOptions.value.length === 0) return '加载中'
+  const usingCount = mySpendAccountOptions.value.filter(option => option.source === 'using').length
+  const historyCount = mySpendAccountOptions.value.filter(option => option.source === 'history').length
+  if (mySpendAccountOptions.value.length === 0) return '暂无记录'
+  return `使用/预约 ${usingCount} 个 · 历史 ${historyCount} 个`
+})
 const mySpendMetrics = computed<MySpendMetric[]>(() => {
   const summary = mySpendSummary.value
   if (!summary) return []
@@ -3168,9 +3707,9 @@ const mySpendMetrics = computed<MySpendMetric[]>(() => {
     },
     {
       key: 'hourly',
-      label: '小时费净扣',
+      label: '小时费实际扣费',
       value: formatSpendCost(summary.hourly_net_cost),
-      note: `预扣 ${formatSpendCost(summary.hourly_charge)} · 退回 ${formatSpendCost(summary.hourly_refund + summary.hourly_waiver_refund)}`,
+      note: `已预扣 ${formatSpendCost(summary.hourly_charge)} · 已退回 ${formatSpendCost(summary.hourly_refund + summary.hourly_waiver_refund)}`,
       icon: 'clock',
       tone: 'hourly'
     },
@@ -3212,8 +3751,25 @@ const recommendationModelOptions = computed(() => {
   return Array.from(models).sort((a, b) => a.localeCompare(b))
 })
 const recommendationKeyOptions = computed(() => modeApiKeys.value)
-const recommendationCandidates = computed<AccountShareRecommendationCandidate[]>(() => recommendationResult.value?.items || [])
-const recommendationBest = computed<AccountShareRecommendationCandidate | null>(() => recommendationResult.value?.recommended || recommendationCandidates.value[0] || null)
+const recommendationCandidates = computed<AccountShareRecommendationCandidate[]>(() => {
+  const items = recommendationResult.value?.items || []
+  return [...items].sort(compareRecommendationCandidates)
+})
+const recommendationBest = computed<AccountShareRecommendationCandidate | null>(() => recommendationCandidates.value[0] || null)
+const recommendationPageCount = computed(() => Math.max(1, Math.ceil(recommendationCandidates.value.length / ACCOUNT_SHARE_RECOMMENDATION_PAGE_SIZE)))
+const recommendationPagedCandidates = computed<AccountShareRecommendationCandidate[]>(() => {
+  const safePage = Math.min(Math.max(recommendationPage.value, 1), recommendationPageCount.value)
+  const start = (safePage - 1) * ACCOUNT_SHARE_RECOMMENDATION_PAGE_SIZE
+  return recommendationCandidates.value.slice(start, start + ACCOUNT_SHARE_RECOMMENDATION_PAGE_SIZE)
+})
+const recommendationPageRangeText = computed(() => {
+  const total = recommendationCandidates.value.length
+  if (total === 0) return '暂无可展示结果'
+  const safePage = Math.min(Math.max(recommendationPage.value, 1), recommendationPageCount.value)
+  const start = (safePage - 1) * ACCOUNT_SHARE_RECOMMENDATION_PAGE_SIZE + 1
+  const end = Math.min(start + ACCOUNT_SHARE_RECOMMENDATION_PAGE_SIZE - 1, total)
+  return `第 ${start}-${end} 条，共 ${total} 条`
+})
 const recommendationInputSummary = computed(() => {
   const input = recommendationResult.value?.input
   if (!input) return ''
@@ -3242,7 +3798,7 @@ const statusFilterSummary = computed(() => (
   listingStatusFilterOptions.find(option => option.value === listingFilters.status)?.label || '默认状态'
 ))
 const accountLevelFilterSummary = computed(() => (
-  accountLevelFilterOptions.find(option => option.value === listingFilters.accountLevel)?.label || '全部等级'
+  accountLevelFilterOptions.value.find(option => option.value === listingFilters.accountLevel)?.label || '全部等级'
 ))
 const selectedSortOptions = computed(() =>
   listingFilters.sortKeys
@@ -3260,7 +3816,7 @@ const activeFilterChips = computed<ActiveFilterChip[]>(() => {
     })
   }
 
-  const levelOption = accountLevelFilterOptions.find(option => option.value === listingFilters.accountLevel)
+  const levelOption = accountLevelFilterOptions.value.find(option => option.value === listingFilters.accountLevel)
   if (isOpenAIListingPlatform.value && listingFilters.accountLevel !== 'all' && levelOption) {
     chips.push({
       key: `level:${listingFilters.accountLevel}`,
@@ -3614,6 +4170,7 @@ function applyListingFilters(): void {
   clearSearchDebounceTimer()
   closeFilterPopover()
   pagination.page = 1
+  persistListingPreferences()
   void loadListings()
 }
 
@@ -3632,6 +4189,7 @@ function resetListingFilters(): void {
   }
   clearSearchDebounceTimer()
   pagination.page = 1
+  persistListingPreferences()
   void loadListings()
 }
 
@@ -3641,10 +4199,11 @@ function handlePageChange(page: number): void {
   void loadListings()
 }
 
-function handlePageSizeChange(): void {
+function handlePageSizeChange(pageSize: number): void {
   clearSearchDebounceTimer()
-  pagination.page_size = ACCOUNT_SHARE_PAGE_SIZE
+  pagination.page_size = normalizeListingPageSize(pageSize)
   pagination.page = 1
+  persistListingPreferences()
   void loadListings()
 }
 
@@ -3674,9 +4233,73 @@ function normalizeRecommendationActiveHours(value: number): number {
   return Number.isFinite(activeHours) && activeHours > 0 ? activeHours : 1
 }
 
+function recommendationEstimatedHourlyCostForInput(candidate: AccountShareRecommendationCandidate, activeHours: number): number {
+  const totalCost = Number(candidate.estimate.total_cost || 0)
+  if (!Number.isFinite(totalCost)) return 0
+  return totalCost / normalizeRecommendationActiveHours(activeHours)
+}
+
 function recommendationEstimatedHourlyCost(candidate: AccountShareRecommendationCandidate): number {
   const activeHours = normalizeRecommendationActiveHours(recommendationResult.value?.input.active_hours || recommendationForm.active_hours)
-  return Number(candidate.estimate.total_cost || 0) / activeHours
+  return recommendationEstimatedHourlyCostForInput(candidate, activeHours)
+}
+
+function recommendationScoreBreakdown(candidate: AccountShareRecommendationCandidate): AccountShareRecommendationScoreBreakdown {
+  return candidate.score_breakdown
+}
+
+function recommendationScoreItems(candidate: AccountShareRecommendationCandidate): RecommendationScoreItem[] {
+  const score = recommendationScoreBreakdown(candidate)
+  return [
+    { key: 'cost', label: '省钱', value: score.cost_saving_score },
+    { key: 'stable', label: '稳定', value: score.stability_score },
+    { key: 'available', label: '可用', value: score.availability_score },
+    { key: 'risk', label: '控险', value: score.risk_control_score }
+  ]
+}
+
+function recommendationScoreWidth(value: number): string {
+  const amount = Math.min(Math.max(Number(value), 0), 100)
+  return `${Number.isFinite(amount) ? amount : 0}%`
+}
+
+function recommendationOverallScore(candidate: AccountShareRecommendationCandidate): number {
+  const score = Number(recommendationScoreBreakdown(candidate).overall_score)
+  return Number.isFinite(score) ? score : 0
+}
+
+function formatRecommendationScore(value: number): string {
+  const score = Math.min(Math.max(Number(value), 0), 100)
+  return (Number.isFinite(score) ? score : 0).toFixed(1).replace(/\.0$/, '')
+}
+
+function compareRecommendationCandidates(left: AccountShareRecommendationCandidate, right: AccountShareRecommendationCandidate): number {
+  const activeHours = normalizeRecommendationActiveHours(recommendationResult.value?.input.active_hours || recommendationForm.active_hours)
+  const leftHourlyCost = recommendationEstimatedHourlyCostForInput(left, activeHours)
+  const rightHourlyCost = recommendationEstimatedHourlyCostForInput(right, activeHours)
+  if (leftHourlyCost !== rightHourlyCost) return leftHourlyCost - rightHourlyCost
+  const leftRequestCost = Number(left.estimate.request_cost || 0)
+  const rightRequestCost = Number(right.estimate.request_cost || 0)
+  if (leftRequestCost !== rightRequestCost) return leftRequestCost - rightRequestCost
+  const leftHourlyNet = Number(left.estimate.hourly_net_cost || 0)
+  const rightHourlyNet = Number(right.estimate.hourly_net_cost || 0)
+  if (leftHourlyNet !== rightHourlyNet) return leftHourlyNet - rightHourlyNet
+  const leftScore = recommendationOverallScore(left)
+  const rightScore = recommendationOverallScore(right)
+  if (leftScore !== rightScore) return rightScore - leftScore
+  const leftRating = Number(left.listing.rating_avg || 0)
+  const rightRating = Number(right.listing.rating_avg || 0)
+  if (leftRating !== rightRating) return rightRating - leftRating
+  return left.listing.id - right.listing.id
+}
+
+function setRecommendationPage(page: number): void {
+  recommendationPage.value = Math.min(Math.max(Math.trunc(Number(page) || 1), 1), recommendationPageCount.value)
+}
+
+function recommendationConcurrencyLabel(listing: AccountShareListing): string {
+  const current = listing.current_concurrency ?? 0
+  return `${current}/${listing.account_concurrency}`
 }
 
 function recommendationRequestCostLabel(candidate: AccountShareRecommendationCandidate): string {
@@ -3780,50 +4403,176 @@ function formatCountdownUntil(value?: string | null): string {
   return date.getTime() <= nowMs.value ? '现在' : `${formatRelativeUntil(value)}后`
 }
 
-function accountLevelLabel(level?: AccountLevel | string): string {
-  switch ((level || '').toLowerCase()) {
-    case 'free':
-      return 'Free'
-    case 'plus':
-      return 'Plus'
-    case 'pro':
-      return 'Pro'
-    case 'team':
-      return 'Team'
-    default:
-      return 'UNKNOWN'
+function formatDurationCompact(seconds?: number | null): string {
+  const totalSeconds = Math.max(0, Math.floor(Number(seconds || 0)))
+  if (totalSeconds <= 0) return '现在'
+  const days = Math.floor(totalSeconds / 86_400)
+  const hours = Math.floor((totalSeconds % 86_400) / 3_600)
+  const minutes = Math.floor((totalSeconds % 3_600) / 60)
+  if (days > 0) return `${days}天${hours > 0 ? `${hours}小时` : ''}`
+  if (hours > 0) return `${hours}小时${minutes > 0 ? `${minutes}分钟` : ''}`
+  if (minutes > 0) return `${minutes}分钟`
+  return `${totalSeconds}秒`
+}
+
+function waiverProgressVisible(listing: AccountShareListing): boolean {
+  const progress = listing.current_waiver_progress
+  return Boolean(listing.current_membership_id && progress?.enabled)
+}
+
+function finiteNonNegativeNumber(value: unknown): number {
+  const amount = Number(value || 0)
+  return Number.isFinite(amount) && amount > 0 ? amount : 0
+}
+
+function currentWaiverProgressSnapshot(listing: AccountShareListing): WaiverProgressSnapshot | null {
+  const progress = listing.current_waiver_progress
+  if (!progress?.enabled) return null
+
+  const serverNow = normalizeDateInput(progress.now)
+  const windowStart = normalizeDateInput(progress.window_start)
+  const windowEnd = normalizeDateInput(progress.window_end)
+  const receivedAt = Number((listing as AccountShareListingWithClientMeta).waiver_progress_received_at_ms || 0)
+  const baselineNowMs = serverNow?.getTime() || receivedAt
+  const effectiveNowMs = baselineNowMs > 0 && receivedAt > 0
+    ? baselineNowMs + Math.max(0, nowMs.value - receivedAt)
+    : nowMs.value
+  const windowStartMs = windowStart?.getTime()
+  const windowEndMs = windowEnd?.getTime()
+  const effectiveEndMs = typeof windowEndMs === 'number' ? Math.min(effectiveNowMs, windowEndMs) : effectiveNowMs
+  const elapsedMs = typeof windowStartMs === 'number'
+    ? Math.max(0, effectiveEndMs - windowStartMs)
+    : Math.max(0, finiteNonNegativeNumber(progress.elapsed_seconds) * 1000)
+  const waiverMinimum = finiteNonNegativeNumber(progress.waiver_minimum)
+  const requiredAmount = waiverMinimum > 0
+    ? waiverMinimum * elapsedMs / 3_600_000
+    : finiteNonNegativeNumber(progress.required_amount)
+  const usageAmount = finiteNonNegativeNumber(progress.usage_amount)
+  const remainingAmount = Math.max(0, requiredAmount - usageAmount)
+  const progressPercent = requiredAmount > 0 ? Math.min(100, usageAmount * 100 / requiredAmount) : 0
+  const status = requiredAmount > 0 && usageAmount >= requiredAmount ? 'met' : 'in_progress'
+  const hourlyRate = finiteNonNegativeNumber(progress.hourly_rate)
+  const estimatedHourlyFeeRefund = hourlyRate > 0 ? hourlyRate * elapsedMs / 3_600_000 : finiteNonNegativeNumber(progress.estimated_hourly_fee_refund)
+  const remainingSeconds = typeof windowEndMs === 'number'
+    ? Math.max(0, Math.floor((windowEndMs - effectiveNowMs) / 1000))
+    : Math.max(0, Math.floor(finiteNonNegativeNumber(progress.remaining_seconds)))
+
+  return {
+    status,
+    requiredAmount,
+    usageAmount,
+    remainingAmount,
+    progressPercent,
+    estimatedHourlyFeeRefund,
+    requestCount: Math.max(0, Math.trunc(Number(progress.request_count || 0))),
+    remainingSeconds
   }
+}
+
+function waiverProgressPercent(listing: AccountShareListing): number {
+  const value = currentWaiverProgressSnapshot(listing)?.progressPercent || 0
+  if (!Number.isFinite(value) || value <= 0) return 0
+  return Math.min(100, value)
+}
+
+function waiverProgressPercentStyle(listing: AccountShareListing): Record<string, string> {
+  return { width: `${waiverProgressPercent(listing)}%` }
+}
+
+function waiverProgressToneClass(listing: AccountShareListing): string {
+  const progress = currentWaiverProgressSnapshot(listing)
+  if (progress?.status === 'met') return 'waiver-progress-met'
+  if (waiverProgressPercent(listing) >= 70) return 'waiver-progress-close'
+  return 'waiver-progress-active'
+}
+
+function waiverProgressStatusLabel(listing: AccountShareListing): string {
+  const progress = currentWaiverProgressSnapshot(listing)
+  if (!progress) return '未开启'
+  return progress.status === 'met' ? '已达标' : `还差 ${formatSpendCost(progress.remainingAmount)}`
+}
+
+function waiverProgressTitle(listing: AccountShareListing): string {
+  const progress = currentWaiverProgressSnapshot(listing)
+  if (!progress) return '-'
+  return `${formatSpendCost(progress.usageAmount)} / ${formatSpendCost(progress.requiredAmount)}`
+}
+
+function waiverProgressAmountLabel(listing: AccountShareListing): string {
+  const progress = currentWaiverProgressSnapshot(listing)
+  if (!progress) return ''
+  if (progress.status === 'met') {
+    return `预计退回小时费 ${formatSpendCost(progress.estimatedHourlyFeeRefund)}`
+  }
+  return `已消费 ${formatSpendCost(progress.usageAmount)}，低消要求 ${formatSpendCost(progress.requiredAmount)}`
+}
+
+function waiverProgressMetaLabel(listing: AccountShareListing): string {
+  const progress = currentWaiverProgressSnapshot(listing)
+  if (!progress) return ''
+  return `剩余 ${formatDurationCompact(progress.remainingSeconds)} · 请求 ${formatWholeNumber(progress.requestCount)} 次`
+}
+
+function waiverProgressRemainingLabel(listing: AccountShareListing): string {
+  const remainingSeconds = waiverProgressRemainingSeconds(listing)
+  return remainingSeconds <= 0 ? '等待结算' : formatDurationCompact(remainingSeconds)
+}
+
+function waiverProgressRemainingSeconds(listing: AccountShareListing): number {
+  return currentWaiverProgressSnapshot(listing)?.remainingSeconds || 0
+}
+
+function accountLevelLabel(level?: AccountLevel | string): string {
+  if (!level || level === 'unknown') return 'UNKNOWN'
+  return openAIAccountLevelLabel(level, openAIAccountLevelConfigs.value)
 }
 
 function normalizePlanToken(planType?: string | null): string {
   return (planType || '').trim().toLowerCase().replace(/[\s_-]+/g, '')
 }
 
+function matchConfiguredLevelFromPlan(planType?: string | null): string {
+  const token = normalizePlanToken(planType)
+  if (!token) return ''
+  for (const level of openAIAccountLevelConfigs.value) {
+    const candidates = [level.key, ...(level.aliases || [])]
+    for (const candidate of candidates) {
+      const normalized = normalizePlanToken(candidate.replace(/\*+$/g, ''))
+      if (!normalized) continue
+      if (candidate.endsWith('*')) {
+        if (token.startsWith(normalized)) return level.key
+      } else if (token === normalized) {
+        return level.key
+      }
+    }
+  }
+  return ''
+}
+
 function officialPlanLabel(planType?: string | null): string {
   const raw = (planType || '').trim()
   if (!raw) return ''
+  const matchedLevel = matchConfiguredLevelFromPlan(raw)
+  if (matchedLevel) return openAIAccountLevelLabel(matchedLevel, openAIAccountLevelConfigs.value)
   const token = normalizePlanToken(raw)
-  if (token === 'free' || token === 'chatgptfree') return 'Free'
-  if (token === 'plus' || token === 'chatgptplus' || token.startsWith('plus')) return 'Plus'
-  if (token === 'team' || token === 'chatgptteam') return 'Team'
-  if (token === 'pro' || token === 'chatgptpro') return 'Pro'
   const proMatch = token.match(/^(?:chatgpt)?pro(\d+)x?$/)
   if (proMatch?.[1]) return `Pro${proMatch[1]}x`
   if (token.startsWith('pro') || token.startsWith('chatgptpro')) {
     const multiplier = token.match(/(\d+)x?/)
     return multiplier?.[1] ? `Pro${multiplier[1]}x` : 'Pro'
   }
-  return raw
+  return ''
 }
 
 function accountLevelTone(listing: AccountShareListing): string {
-  const level = (listing.account_level || '').toLowerCase()
+  const level = normalizeOpenAIAccountLevelKey(listing.account_level)
   if (level && level !== 'unknown') return level
+  const matchedLevel = matchConfiguredLevelFromPlan(listing.account_plan_type)
+  if (matchedLevel) return matchedLevel
   const planToken = normalizePlanToken(listing.account_plan_type)
-  if (planToken.includes('team')) return 'team'
-  if (planToken.includes('pro')) return 'pro'
-  if (planToken.includes('plus')) return 'plus'
-  if (planToken.includes('free')) return 'free'
+  for (const levelKey of ['team', 'k12', 'pro', 'plus', 'free']) {
+    if (planToken.includes(levelKey)) return levelKey
+  }
   return 'unknown'
 }
 
@@ -3838,6 +4587,8 @@ function accountLevelBadgeClass(listing: AccountShareListing): string {
       return `${base} account-level-pro`
     case 'team':
       return `${base} account-level-team`
+    case 'k12':
+      return `${base} account-level-k12`
     case 'plus':
       return `${base} account-level-plus`
     case 'free':
@@ -4098,8 +4849,45 @@ function modeKeyLabel(key: ApiKey): string {
   return key.name || `Key #${key.id}`
 }
 
+function formatApiKeyIDLabel(apiKeyID?: number, emptyLabel = 'Key 未知'): string {
+  const normalizedID = Number(apiKeyID || 0)
+  return normalizedID > 0 ? `Key #${normalizedID}` : emptyLabel
+}
+
+function formatApiKeyDisplayName(apiKeyName?: string, apiKeyID?: number, emptyLabel = 'Key 未知'): string {
+  const normalizedName = (apiKeyName || '').trim()
+  if (normalizedName) return `Key「${normalizedName}」`
+  return formatApiKeyIDLabel(apiKeyID, emptyLabel)
+}
+
+function boundApiKeyID(listing: AccountShareListing): number {
+  const primaryID = listing.current_membership_id ? listing.current_api_key_id : listing.queue_api_key_id
+  return Number(primaryID || listing.queue_api_key_id || listing.current_api_key_id || 0)
+}
+
+function boundApiKeyName(listing: AccountShareListing): string {
+  const primaryName = listing.current_membership_id ? listing.current_api_key_name : listing.queue_api_key_name
+  const apiKeyID = boundApiKeyID(listing)
+  if ((primaryName || '').trim()) return primaryName || ''
+  const key = modeApiKeysForListing(listing).find(item => item.id === apiKeyID)
+  return key?.name || ''
+}
+
+function boundApiKeyDisplayName(listing: AccountShareListing): string {
+  return formatApiKeyDisplayName(boundApiKeyName(listing), boundApiKeyID(listing))
+}
+
+function mySpendBoundApiKeyName(membership?: AccountShareMySpendSummary['membership']): string {
+  if (!membership) return '-'
+  return formatApiKeyDisplayName(membership.api_key_name, membership.api_key_id)
+}
+
 function selectedModeApiKeyID(listing: AccountShareListing): number {
-  return singleModeApiKeyForListing(listing)?.id || Number(selectedKeyByListing[listing.id] || 0)
+  const singleKey = singleModeApiKeyForListing(listing)
+  if (singleKey) return singleKey.id
+
+  const selectedID = Number(selectedKeyByListing[listing.id] || 0)
+  return modeApiKeysForListing(listing).some(key => key.id === selectedID) ? selectedID : 0
 }
 
 function showActionError(message: string, title = '操作失败', action: AccountShareActionErrorAction = null): void {
@@ -4119,16 +4907,19 @@ function closeActionErrorDialog(): void {
 function showModeApiKeyRequiredDialog(listing?: AccountShareListing): void {
   const platform = listingPlatform(listing)
   const groupName = accountModeGroupName(platform)
-  if (modeKeysLoading.value) {
+  if (modeKeysLoadingForPlatform(platform)) {
     showActionError('账号模式 API Key 正在加载，请稍候再加入使用。', '正在加载')
     return
   }
-  if (!modeKeysLoaded.value) {
-    showActionError('账号模式 API Key 尚未加载成功，请刷新账号广场后再加入使用。', '无法加入使用')
+  if (!modeKeysLoadedForPlatform(platform)) {
+    const detail = modeKeysErrorByPlatform[platform]
+    showActionError(
+      detail ? `账号模式 API Key 加载失败：${detail}。请点击页面顶部“刷新”后重试。` : '账号模式 API Key 尚未加载成功，请点击页面顶部“刷新”后重试。',
+      '无法加入使用'
+    )
     return
   }
-  const accountModeGroup = availableGroups.value.find(group => isAccountModeGroupForPlatform(group, platform))
-  if (!accountModeGroup) {
+  if (modeGroupIDsByPlatform[platform] <= 0) {
     showActionError(`当前账号没有可用的「${groupName}」分组，请联系管理员开通后再加入。`, '无法加入使用')
     return
   }
@@ -4214,11 +5005,6 @@ function canOpenMySpend(listing: AccountShareListing): boolean {
   return mySpendMembershipID(listing) > 0
 }
 
-function mySpendButtonTitle(listing: AccountShareListing): string {
-  const membershipID = mySpendMembershipID(listing)
-  return membershipID > 0 ? `查看本账号在使用记录 #${membershipID} 下的消费统计` : '暂无可统计的使用记录'
-}
-
 function mySpendRangeLabel(range: string): string {
   switch (range) {
     case 'today':
@@ -4268,28 +5054,192 @@ function mySpendBrowserTimeZone(): string {
   }
 }
 
+function abortMySpendAccountsRequest(): void {
+  mySpendAccountsRequestSeq += 1
+  if (mySpendAccountsRequestController) {
+    mySpendAccountsRequestController.abort()
+    mySpendAccountsRequestController = null
+  }
+}
+
 function abortMySpendRequest(): void {
+  mySpendRequestSeq += 1
   if (mySpendRequestController) {
     mySpendRequestController.abort()
     mySpendRequestController = null
   }
 }
 
-function openMySpendDialog(listing: AccountShareListing): void {
-  if (!canOpenMySpend(listing)) return
-  abortMySpendRequest()
-  mySpendListing.value = listing
-  mySpendRange.value = 'current_membership'
+function mySpendAccountOptionKey(listing: AccountShareListing, source: MySpendAccountOptionSource, membershipID: number): string {
+  return `${source}:${listing.id}:${membershipID}`
+}
+
+function mySpendAccountSourceLabel(source: MySpendAccountOptionSource): string {
+  return source === 'using' ? '使用/预约' : '历史使用'
+}
+
+function mySpendAccountStatusLabel(listing: AccountShareListing): string {
+  if (listing.current_membership_id) return '正在使用'
+  if (listing.queue_membership_id) return listing.queue_status === 'queued' ? `预约第 ${listing.queue_rank || '-'} 位` : '预约中'
+  if (listing.last_used_membership_id) return '已使用'
+  return '可统计'
+}
+
+function mySpendAccountUsagePeriod(listing: AccountShareListing): string {
+  if (listing.current_joined_at) {
+    const lastRequest = listing.current_last_request_at ? ` · 最近请求 ${formatDate(listing.current_last_request_at)}` : ''
+    return `加入 ${formatDate(listing.current_joined_at)}${lastRequest}`
+  }
+  if (listing.last_used_at) return `最近使用 ${formatDate(listing.last_used_at)}`
+  if (listing.queue_membership_id) return `预约记录 #${listing.queue_membership_id}`
+  return `使用记录 #${mySpendMembershipID(listing)}`
+}
+
+function mySpendAccountOptionTitle(option: MySpendAccountOption): string {
+  return `${listingDisplayName(option.listing)} · ${mySpendAccountSourceLabel(option.source)} · 记录 #${option.membershipID}`
+}
+
+function buildMySpendAccountOption(listing: AccountShareListing, source: MySpendAccountOptionSource): MySpendAccountOption | null {
+  const normalized = normalizeListingForMerge(listing)
+  const membershipID = mySpendMembershipID(normalized)
+  if (membershipID <= 0) return null
+  return {
+    key: mySpendAccountOptionKey(normalized, source, membershipID),
+    listing: normalized,
+    source,
+    membershipID
+  }
+}
+
+function mySpendAccountOptionSourceForListing(listing: AccountShareListing): MySpendAccountOptionSource {
+  return listing.current_membership_id || listing.queue_membership_id ? 'using' : 'history'
+}
+
+async function fetchMySpendAccountOptionsByTab(source: MySpendAccountOptionSource, signal: AbortSignal): Promise<MySpendAccountOption[]> {
+  const options: MySpendAccountOption[] = []
+  let page = 1
+  let pages = 1
+  do {
+    const result = await accountShareAPI.listListings(page, 100, { tab: source }, { signal })
+    const items = result.items || []
+    for (const listing of items) {
+      const option = buildMySpendAccountOption(listing, source)
+      if (option) options.push(option)
+    }
+    pages = Math.max(1, Number(result.pages || 1))
+    page += 1
+  } while (page <= pages && !signal.aborted)
+  return options
+}
+
+function mergeMySpendAccountOptions(optionGroups: MySpendAccountOption[][]): MySpendAccountOption[] {
+  const options: MySpendAccountOption[] = []
+  const seenMemberships = new Set<number>()
+  for (const group of optionGroups) {
+    for (const option of group) {
+      if (seenMemberships.has(option.membershipID)) continue
+      seenMemberships.add(option.membershipID)
+      options.push(option)
+    }
+  }
+  return options
+}
+
+function setSelectedMySpendAccount(option: MySpendAccountOption): void {
+  mySpendListing.value = option.listing
+  mySpendSelectedMembershipID.value = option.membershipID
+  mySpendSelectedOptionKey.value = option.key
   mySpendSummary.value = null
   mySpendError.value = ''
-  showMySpendDialog.value = true
+}
+
+function selectMySpendAccount(option: MySpendAccountOption): void {
+  if (mySpendSelectedOptionKey.value === option.key && mySpendSummary.value) return
+  setSelectedMySpendAccount(option)
   void loadMySpendSummary()
 }
 
+async function loadMySpendAccountOptions(preferredListing?: AccountShareListing): Promise<void> {
+  abortMySpendAccountsRequest()
+  const controller = new AbortController()
+  const requestSeq = ++mySpendAccountsRequestSeq
+  mySpendAccountsRequestController = controller
+  mySpendAccountsLoading.value = true
+  mySpendAccountsError.value = ''
+  try {
+    const [usingOptions, historyOptions] = await Promise.all([
+      fetchMySpendAccountOptionsByTab('using', controller.signal),
+      fetchMySpendAccountOptionsByTab('history', controller.signal)
+    ])
+    if (controller.signal.aborted || requestSeq !== mySpendAccountsRequestSeq) return
+    const mergedOptions = mergeMySpendAccountOptions([usingOptions, historyOptions])
+    if (preferredListing && canOpenMySpend(preferredListing)) {
+      const preferredMembershipID = mySpendMembershipID(preferredListing)
+      const hasPreferred = mergedOptions.some(option => option.membershipID === preferredMembershipID)
+      if (!hasPreferred) {
+        const preferredOption = buildMySpendAccountOption(preferredListing, mySpendAccountOptionSourceForListing(preferredListing))
+        if (preferredOption) mergedOptions.unshift(preferredOption)
+      }
+    }
+    mySpendAccountOptions.value = mergedOptions
+    mergeKnownListings(mergedOptions.map(option => option.listing))
+
+    const preferredMembershipID = preferredListing ? mySpendMembershipID(preferredListing) : 0
+    const selectedOption = mergedOptions.find(option => option.membershipID === preferredMembershipID)
+      || mergedOptions.find(option => option.key === mySpendSelectedOptionKey.value)
+      || mergedOptions[0]
+    if (selectedOption) {
+      setSelectedMySpendAccount(selectedOption)
+      void loadMySpendSummary()
+    } else {
+      mySpendListing.value = null
+      mySpendSelectedMembershipID.value = 0
+      mySpendSelectedOptionKey.value = ''
+      mySpendSummary.value = null
+      mySpendError.value = ''
+    }
+  } catch (error: unknown) {
+    if (controller.signal.aborted || requestSeq !== mySpendAccountsRequestSeq || isCanceledRequest(error)) return
+    mySpendAccountOptions.value = []
+    mySpendListing.value = null
+    mySpendSelectedMembershipID.value = 0
+    mySpendSelectedOptionKey.value = ''
+    mySpendSummary.value = null
+    mySpendAccountsError.value = extractApiErrorMessage(error, '加载使用过的账号失败', {
+      USER_NOT_FOUND: '当前用户状态异常，请重新登录后再试'
+    })
+  } finally {
+    if (requestSeq === mySpendAccountsRequestSeq) {
+      mySpendAccountsLoading.value = false
+      if (mySpendAccountsRequestController === controller) mySpendAccountsRequestController = null
+    }
+  }
+}
+
+function openMySpendDialog(listing?: AccountShareListing): void {
+  if (listing && !canOpenMySpend(listing)) return
+  abortMySpendRequest()
+  mySpendListing.value = null
+  mySpendSelectedMembershipID.value = 0
+  mySpendSelectedOptionKey.value = ''
+  mySpendRange.value = 'current_membership'
+  mySpendSummary.value = null
+  mySpendError.value = ''
+  mySpendAccountsError.value = ''
+  showMySpendDialog.value = true
+  void loadMySpendAccountOptions(listing)
+}
+
 function closeMySpendDialog(): void {
+  abortMySpendAccountsRequest()
   abortMySpendRequest()
   showMySpendDialog.value = false
   mySpendListing.value = null
+  mySpendSelectedMembershipID.value = 0
+  mySpendSelectedOptionKey.value = ''
+  mySpendAccountOptions.value = []
+  mySpendAccountsError.value = ''
+  mySpendAccountsLoading.value = false
   mySpendSummary.value = null
   mySpendError.value = ''
   mySpendLoading.value = false
@@ -4311,7 +5261,7 @@ async function loadMySpendSummary(): Promise<void> {
   mySpendLoading.value = true
   mySpendError.value = ''
   try {
-    const membershipID = mySpendRange.value === 'current_membership' ? mySpendMembershipID(listing) : 0
+    const membershipID = mySpendRange.value === 'current_membership' ? mySpendSelectedMembershipID.value : 0
     const summary = await accountShareAPI.getMySpendSummary(listing.id, {
       range: mySpendRange.value,
       membership_id: membershipID > 0 ? membershipID : undefined,
@@ -4356,32 +5306,238 @@ async function refreshMembershipQueue(apiKeyID: number): Promise<AccountShareMem
   return queueMembershipsForApiKey(normalizedApiKeyID)
 }
 
-async function loadQueueSnapshotsForListings(items: AccountShareListing[]): Promise<void> {
-  const apiKeyIDs = Array.from(new Set(items
-    .map(item => Number(item.queue_api_key_id || 0))
-    .filter(apiKeyID => apiKeyID > 0)))
-  if (apiKeyIDs.length === 0) return
+function routeQueryString(value: unknown): string {
+  if (Array.isArray(value)) return typeof value[0] === 'string' ? value[0] : ''
+  return typeof value === 'string' ? value : ''
+}
+
+function prepareKeyResolutionMode(): void {
+  if (!isKeyResolutionMode.value) return
+  clearSearchDebounceTimer()
+  closeFilterPopover()
+  activeFilter.value = filters[0]
+  pagination.page = 1
+}
+
+function clearKeyResolutionState(): void {
+  keyResolutionRequestSeq += 1
+  keyResolutionMemberships.value = []
+  keyResolutionListings.value = []
+  keyResolutionLoading.value = false
+  keyResolutionLoaded.value = false
+  keyResolutionError.value = ''
+}
+
+function resolutionListingFromMemberships(
+  listing: AccountShareListing,
+  memberships: AccountShareMembership[]
+): AccountShareListing {
+  const next = normalizeListingForMerge(listing)
+  delete next.current_membership_id
+  delete next.current_api_key_id
+  delete next.current_api_key_name
+  delete next.current_joined_at
+  delete next.current_paid_until
+  delete next.current_billed_until
+  delete next.current_idle_timeout_minutes
+  delete next.current_last_request_at
+  delete next.current_idle_expires_at
+  delete next.current_waiver_progress
+  delete next.queue_membership_id
+  delete next.queue_api_key_id
+  delete next.queue_api_key_name
+  delete next.queue_rank
+  delete next.queue_status
+  delete next.queue_idle_timeout_minutes
+  delete next.queue_dispatch_cooldown_until
+
+  const membership = memberships.find(item => item.status === 'active') || memberships.find(item => item.status === 'queued')
+  if (!membership) return next
+  const apiKeyName = keyResolutionApiKeyName.value
+  next.queue_membership_id = membership.id
+  next.queue_api_key_id = membership.api_key_id
+  next.queue_api_key_name = apiKeyName
+  next.queue_rank = membership.queue_rank
+  next.queue_status = membership.status
+  next.queue_idle_timeout_minutes = membership.idle_timeout_minutes
+  next.queue_dispatch_cooldown_until = membership.dispatch_cooldown_until
+  if (membership.status === 'active') {
+    next.current_membership_id = membership.id
+    next.current_api_key_id = membership.api_key_id
+    next.current_api_key_name = apiKeyName
+    next.current_joined_at = membership.joined_at
+    next.current_paid_until = membership.paid_until
+    next.current_billed_until = membership.billed_until
+    next.current_idle_timeout_minutes = membership.idle_timeout_minutes
+    next.current_last_request_at = membership.last_request_at
+  }
+  return next
+}
+
+async function loadKeyResolutionState(): Promise<boolean> {
+  if (!isKeyResolutionMode.value) {
+    clearKeyResolutionState()
+    return true
+  }
+
+  const apiKeyID = keyResolutionApiKeyID.value
+  const requestSeq = ++keyResolutionRequestSeq
+  keyResolutionLoading.value = true
+  keyResolutionError.value = ''
+  if (apiKeyID <= 0) {
+    keyResolutionMemberships.value = []
+    keyResolutionListings.value = []
+    keyResolutionLoaded.value = true
+    keyResolutionLoading.value = false
+    keyResolutionError.value = '处置链接缺少有效的 API Key ID，请返回 API Key 管理后重新进入。'
+    return false
+  }
+
+  try {
+    const memberships = (await accountShareAPI.listMembershipQueue(apiKeyID))
+      .filter(item => item.status === 'active' || item.status === 'queued')
+    if (requestSeq !== keyResolutionRequestSeq || apiKeyID !== keyResolutionApiKeyID.value) return false
+
+    const membershipsByListing = new Map<number, AccountShareMembership[]>()
+    for (const membership of memberships) {
+      const listingID = Number(membership.listing_id || 0)
+      if (!Number.isSafeInteger(listingID) || listingID <= 0) {
+        throw new Error('关联记录缺少有效的账号 ID，无法安全展示处置入口。')
+      }
+      const current = membershipsByListing.get(listingID) || []
+      current.push(membership)
+      membershipsByListing.set(listingID, current)
+    }
+
+    const listingIDs = Array.from(membershipsByListing.keys())
+    const details = await Promise.all(listingIDs.map(listingID => accountShareAPI.getListing(listingID)))
+    if (requestSeq !== keyResolutionRequestSeq || apiKeyID !== keyResolutionApiKeyID.value) return false
+
+    const exactListings = details.map(listing => resolutionListingFromMemberships(
+      listing,
+      membershipsByListing.get(listing.id) || []
+    ))
+    keyResolutionMemberships.value = memberships
+    keyResolutionListings.value = exactListings
+    keyResolutionLoaded.value = true
+    queueMembershipsByApiKey.value = {
+      ...queueMembershipsByApiKey.value,
+      [apiKeyID]: memberships
+    }
+    syncIdleTimeoutControls(exactListings)
+    mergeKnownListings(exactListings)
+    if (exactListings.length > 0) {
+      activeListingPlatform.value = listingPlatform(exactListings[0])
+    }
+    return true
+  } catch (error: unknown) {
+    if (requestSeq !== keyResolutionRequestSeq) return false
+    keyResolutionMemberships.value = []
+    keyResolutionListings.value = []
+    keyResolutionLoaded.value = true
+    keyResolutionError.value = extractApiErrorMessage(error, '加载 API Key 关联状态失败，请稍后重试。')
+    return false
+  } finally {
+    if (requestSeq === keyResolutionRequestSeq) {
+      keyResolutionLoading.value = false
+    }
+  }
+}
+
+async function refreshKeyResolutionContext(): Promise<void> {
+  await loadKeyResolutionState()
+}
+
+function isKeyResolutionListing(listing: AccountShareListing): boolean {
+  return isKeyResolutionMode.value && keyResolutionListingIDs.value.has(Number(listing.id))
+}
+
+function returnToApiKeyManagement(): void {
+  const returnTo = routeQueryString(route.query.return_to)
+  void router.push(returnTo === '/keys' ? returnTo : { name: 'Keys' })
+}
+
+async function loadQueueSnapshotsForListings(
+  items: AccountShareListing[],
+  signal: AbortSignal
+): Promise<QueueSnapshotLoadResult> {
+  const apiKeyIDs = queueApiKeyIDsForListings(items)
+  if (apiKeyIDs.length === 0) {
+    return { snapshots: {}, failedApiKeyIDs: [] }
+  }
+
   const entries = await Promise.all(apiKeyIDs.map(async apiKeyID => {
     try {
-      const memberships = await accountShareAPI.listMembershipQueue(apiKeyID)
-      return [apiKeyID, memberships] as const
+      const memberships = await accountShareAPI.listMembershipQueue(apiKeyID, { signal })
+      return { apiKeyID, memberships, failed: false }
     } catch (error: unknown) {
       if (isCanceledRequest(error)) throw error
       if (extractApiErrorCode(error) === 'API_KEY_NOT_FOUND') {
-        return [apiKeyID, [] as AccountShareMembership[]] as const
+        return { apiKeyID, memberships: [] as AccountShareMembership[], failed: false }
       }
-      throw error
+      return { apiKeyID, memberships: [] as AccountShareMembership[], failed: true }
     }
   }))
-  const next = { ...queueMembershipsByApiKey.value }
-  for (const [apiKeyID, memberships] of entries) {
-    next[apiKeyID] = memberships
+
+  const snapshots: Record<number, AccountShareMembership[]> = {}
+  const failedApiKeyIDs: number[] = []
+  for (const entry of entries) {
+    if (entry.failed) {
+      failedApiKeyIDs.push(entry.apiKeyID)
+    } else {
+      snapshots[entry.apiKeyID] = entry.memberships
+    }
   }
-  queueMembershipsByApiKey.value = next
+  return { snapshots, failedApiKeyIDs }
+}
+
+function queueApiKeyIDsForListings(items: AccountShareListing[]): number[] {
+  return Array.from(new Set(items
+    .map(item => Number(item.queue_api_key_id || 0))
+    .filter(apiKeyID => apiKeyID > 0)))
+}
+
+async function refreshQueueSnapshotsForListings(
+  items: AccountShareListing[],
+  controller: AbortController,
+  requestSeq: number
+): Promise<void> {
+  try {
+    const result = await loadQueueSnapshotsForListings(items, controller.signal)
+    if (controller.signal.aborted || requestSeq !== listingsRequestSeq) return
+
+    queueMembershipsByApiKey.value = {
+      ...queueMembershipsByApiKey.value,
+      ...result.snapshots
+    }
+    unavailableQueueSnapshotApiKeyIDs.value = new Set(result.failedApiKeyIDs)
+    visibleQueueSnapshotWarning.value = result.failedApiKeyIDs.length > 0
+      ? '部分预约顺序暂时无法同步，排序操作已禁用；账号列表和预约状态仍已正常加载。'
+      : ''
+    if (
+      result.failedApiKeyIDs.length > 0 &&
+      Date.now() - lastQueueSnapshotWarningAt >= ACCOUNT_SHARE_QUEUE_WARNING_THROTTLE_MS
+    ) {
+      lastQueueSnapshotWarningAt = Date.now()
+      appStore.showWarning('账号列表已更新，但部分预约顺序暂时无法同步；排序操作已禁用，请稍后刷新。')
+    }
+  } catch (error: unknown) {
+    if (controller.signal.aborted || requestSeq !== listingsRequestSeq || isCanceledRequest(error)) return
+    const failedApiKeyIDs = queueApiKeyIDsForListings(items)
+    unavailableQueueSnapshotApiKeyIDs.value = new Set(failedApiKeyIDs)
+    visibleQueueSnapshotWarning.value = failedApiKeyIDs.length > 0
+      ? '预约顺序暂时无法同步，排序操作已禁用；账号列表和预约状态仍已正常加载。'
+      : ''
+  } finally {
+    if (requestSeq === listingsRequestSeq && listingsRequestController === controller) {
+      listingsRequestController = null
+    }
+  }
 }
 
 function canMoveQueueItem(listing: AccountShareListing, direction: -1 | 1): boolean {
   if (!listing.queue_membership_id || reorderingQueueId.value !== null) return false
+  if (unavailableQueueSnapshotApiKeyIDs.value.has(Number(listing.queue_api_key_id || 0))) return false
   const queue = queueMembershipsForApiKey(listing.queue_api_key_id)
   const index = queue.findIndex(item => item.id === listing.queue_membership_id)
   if (index < 0) return false
@@ -4427,6 +5583,7 @@ function setFilter(filter: FilterOption): void {
   closeFilterPopover()
   activeFilter.value = filter
   pagination.page = 1
+  persistListingPreferences()
   void loadListings()
 }
 
@@ -4448,7 +5605,55 @@ function setListingPlatform(platform: AccountSharePlatform): void {
   syncRecommendationFormForPlatform(platform)
   resetRecommendationResult()
   pagination.page = 1
+  persistListingPreferences()
   void loadListings()
+}
+
+async function refreshPageData(): Promise<void> {
+  const tasks: Promise<unknown>[] = [loadListings(), loadModeKeys()]
+  if (isKeyResolutionMode.value) tasks.push(loadKeyResolutionState())
+  await Promise.all(tasks)
+}
+
+function hasVisibleMembershipState(): boolean {
+  return listings.value.some(listing => Boolean(listing.current_membership_id || listing.queue_membership_id))
+}
+
+function clearMembershipStatusRefreshTimer(): void {
+  if (membershipStatusRefreshTimer == null) return
+  window.clearTimeout(membershipStatusRefreshTimer)
+  membershipStatusRefreshTimer = null
+}
+
+function refreshMembershipStatusIfDue(): void {
+  if (document.visibilityState !== 'visible' || !hasVisibleMembershipState()) {
+    clearMembershipStatusRefreshTimer()
+    return
+  }
+
+  const remainingThrottleMs = Math.max(
+    0,
+    ACCOUNT_SHARE_STATUS_REFRESH_THROTTLE_MS - (Date.now() - lastMembershipStatusRefreshAt)
+  )
+  if (loading.value || remainingThrottleMs > 0) {
+    if (membershipStatusRefreshTimer == null) {
+      membershipStatusRefreshTimer = window.setTimeout(() => {
+        membershipStatusRefreshTimer = null
+        refreshMembershipStatusIfDue()
+      }, Math.max(500, remainingThrottleMs))
+    }
+    return
+  }
+
+  void loadListings()
+}
+
+function handleWindowFocus(): void {
+  refreshMembershipStatusIfDue()
+}
+
+function handleDocumentVisibilityChange(): void {
+  refreshMembershipStatusIfDue()
 }
 
 function openUsageGuideDialog(): void {
@@ -4468,7 +5673,7 @@ function openRecommendationDialog(): void {
   syncRecommendationFormForPlatform(activeListingPlatform.value)
   showRecommendationDialog.value = true
   if (!modeKeysLoaded.value && !modeKeysLoading.value) {
-    void loadModeKeys()
+    refreshModeKeysInBackground()
   }
 }
 
@@ -4743,21 +5948,20 @@ function validateEditConfig(): string {
   return ''
 }
 
-async function loadListings(): Promise<void> {
+async function loadListings(): Promise<boolean> {
   abortActiveListingsRequest()
   const requestSeq = ++listingsRequestSeq
   const controller = new AbortController()
   listingsRequestController = controller
+  let queueSnapshotRefreshStarted = false
   loading.value = true
   errorMessage.value = ''
   try {
     const result = await accountShareAPI.listListings(pagination.page, pagination.page_size, buildListingFilters(), {
       signal: controller.signal
     })
-    if (controller.signal.aborted || requestSeq !== listingsRequestSeq) return
+    if (controller.signal.aborted || requestSeq !== listingsRequestSeq) return false
     const realListings = (result.items || []).map(normalizeListingForMerge)
-    await loadQueueSnapshotsForListings(realListings)
-    if (controller.signal.aborted || requestSeq !== listingsRequestSeq) return
     pagination.total = result.total || 0
     pagination.page = result.page || pagination.page
     pagination.page_size = result.page_size || ACCOUNT_SHARE_PAGE_SIZE
@@ -4765,22 +5969,38 @@ async function loadListings(): Promise<void> {
     listings.value = realListings
     syncIdleTimeoutControls(realListings)
     mergeKnownListings(realListings)
+    unavailableQueueSnapshotApiKeyIDs.value = new Set(queueApiKeyIDsForListings(realListings))
+    visibleQueueSnapshotWarning.value = ''
+    lastMembershipStatusRefreshAt = Date.now()
+    clearMembershipStatusRefreshTimer()
+    queueSnapshotRefreshStarted = true
+    void refreshQueueSnapshotsForListings(realListings, controller, requestSeq)
+    return true
   } catch (error: unknown) {
-    if (controller.signal.aborted || requestSeq !== listingsRequestSeq || isCanceledRequest(error)) return
+    if (controller.signal.aborted || requestSeq !== listingsRequestSeq || isCanceledRequest(error)) return false
     listings.value = []
     pagination.total = 0
     pagination.pages = 1
+    visibleQueueSnapshotWarning.value = ''
     errorMessage.value = formatAccountShareLoadError(error, '加载账号广场失败')
+    return false
   } finally {
     if (requestSeq === listingsRequestSeq) {
-      if (listingsRequestController === controller) listingsRequestController = null
       loading.value = false
+    }
+    if (!queueSnapshotRefreshStarted && listingsRequestController === controller) {
+      listingsRequestController = null
     }
   }
 }
 
 function normalizeListingForMerge(listing: AccountShareListing): AccountShareListing {
-  const next = { ...listing }
+  const next: AccountShareListingWithClientMeta = { ...listing }
+  if (listing.current_waiver_progress?.enabled) {
+    next.waiver_progress_received_at_ms = Date.now()
+  } else {
+    delete next.waiver_progress_received_at_ms
+  }
   if (!listing.editing_expires_at || !isFuture(listing.editing_expires_at)) {
     next.editing_by_user_id = undefined
     next.editing_by_username = ''
@@ -4795,6 +6015,10 @@ function mergeListingFields(current: AccountShareListing | undefined, updated: A
   const normalizedUpdate = normalizeListingForMerge(updated)
   if (!current) return normalizedUpdate
   const next = { ...current, ...normalizedUpdate }
+  if (!updated.current_waiver_progress?.enabled) {
+    next.current_waiver_progress = undefined
+    delete (next as AccountShareListingWithClientMeta).waiver_progress_received_at_ms
+  }
   if (!updated.editing_expires_at || !isFuture(updated.editing_expires_at)) {
     next.editing_by_user_id = undefined
     next.editing_by_username = ''
@@ -4892,33 +6116,127 @@ async function loadOwnerReviews(): Promise<void> {
   }
 }
 
+async function listAllModeApiKeys(
+  accountModeGroupID: number,
+  requestSeq: number
+): Promise<ApiKey[]> {
+  const keysByID = new Map<number, ApiKey>()
+  let page = 1
+  let totalPages = 1
+
+  do {
+    if (requestSeq !== modeKeysRequestSeq) return []
+    const result = await keysAPI.list(page, ACCOUNT_SHARE_MODE_KEY_PAGE_SIZE, {
+      group_id: accountModeGroupID,
+      status: 'active'
+    })
+    if (requestSeq !== modeKeysRequestSeq) return []
+
+    for (const key of result.items || []) {
+      if (Number.isSafeInteger(key.id) && key.id > 0) keysByID.set(key.id, key)
+    }
+
+    const reportedPages = Number(result.pages ?? 1)
+    if (!Number.isSafeInteger(reportedPages) || reportedPages < 0) {
+      throw new Error('账号模式 API Key 分页信息无效')
+    }
+    totalPages = Math.max(totalPages, reportedPages, 1)
+    page += 1
+  } while (page <= totalPages)
+
+  return Array.from(keysByID.values())
+}
+
 async function loadModeKeys(): Promise<void> {
-  modeKeysLoading.value = true
-  modeKeysLoaded.value = false
-  modeApiKeysByPlatform.openai = []
-  modeApiKeysByPlatform.anthropic = []
-  try {
-    const groups = await userGroupsAPI.getAvailable()
-    availableGroups.value = groups
-    await Promise.all(ACCOUNT_SHARE_PLATFORM_OPTIONS.map(async option => {
-      const accountModeGroup = groups.find(group => isAccountModeGroupForPlatform(group, option.value))
-      if (!accountModeGroup) {
-        modeApiKeysByPlatform[option.value] = []
-        return
-      }
-      const result = await keysAPI.list(1, 100, { group_id: accountModeGroup.id })
-      modeApiKeysByPlatform[option.value] = result.items || []
-    }))
-    modeKeysLoaded.value = true
-    syncRecommendationApiKey()
-  } finally {
-    modeKeysLoading.value = false
+  const requestSeq = ++modeKeysRequestSeq
+  for (const option of ACCOUNT_SHARE_PLATFORM_OPTIONS) {
+    modeKeysLoadingByPlatform[option.value] = true
+    modeKeysLoadedByPlatform[option.value] = false
+    modeKeysErrorByPlatform[option.value] = ''
   }
+
+  try {
+    const modeGroups = await accountShareAPI.listModeGroups()
+    if (requestSeq !== modeKeysRequestSeq) return
+    for (const option of ACCOUNT_SHARE_PLATFORM_OPTIONS) {
+      const groupID = Number(modeGroups.find(group => group.platform === option.value)?.group_id || 0)
+      if (!Number.isSafeInteger(groupID) || groupID <= 0) {
+        throw new Error(`${option.label} 账号模式分组映射无效`)
+      }
+      modeGroupIDsByPlatform[option.value] = groupID
+    }
+
+    const results = await Promise.allSettled(ACCOUNT_SHARE_PLATFORM_OPTIONS.map(async option => {
+      const platform = option.value
+      try {
+        const accountModeGroupID = modeGroupIDsByPlatform[platform]
+        const allKeys = await listAllModeApiKeys(accountModeGroupID, requestSeq)
+        const keys = allKeys.filter(key => isUsableModeApiKey(key, accountModeGroupID))
+
+        if (requestSeq === modeKeysRequestSeq) {
+          modeApiKeysByPlatform[platform] = keys
+          clearInvalidSelectedModeApiKeys(platform, keys)
+          modeKeysLoadedByPlatform[platform] = true
+          modeKeysErrorByPlatform[platform] = ''
+        }
+      } finally {
+        if (requestSeq === modeKeysRequestSeq) modeKeysLoadingByPlatform[platform] = false
+      }
+    }))
+
+    if (requestSeq !== modeKeysRequestSeq) return
+    results.forEach((result, index) => {
+      const platform = ACCOUNT_SHARE_PLATFORM_OPTIONS[index].value
+      if (result.status === 'fulfilled') return
+
+      modeApiKeysByPlatform[platform] = []
+      clearInvalidSelectedModeApiKeys(platform, [])
+      modeKeysLoadedByPlatform[platform] = false
+      modeKeysErrorByPlatform[platform] = extractApiErrorMessage(result.reason, '加载账号模式 API Key 失败')
+      modeKeysLoadingByPlatform[platform] = false
+    })
+    syncRecommendationApiKey()
+  } catch (error: unknown) {
+    if (requestSeq !== modeKeysRequestSeq) return
+    const message = extractApiErrorMessage(error, '加载可用分组失败')
+    for (const option of ACCOUNT_SHARE_PLATFORM_OPTIONS) {
+      modeGroupIDsByPlatform[option.value] = 0
+      modeApiKeysByPlatform[option.value] = []
+      clearInvalidSelectedModeApiKeys(option.value, [])
+      modeKeysLoadedByPlatform[option.value] = false
+      modeKeysErrorByPlatform[option.value] = message
+    }
+  } finally {
+    if (requestSeq === modeKeysRequestSeq) {
+      for (const option of ACCOUNT_SHARE_PLATFORM_OPTIONS) {
+        modeKeysLoadingByPlatform[option.value] = false
+      }
+    }
+  }
+
+  if (requestSeq === modeKeysRequestSeq) {
+    const failedPlatforms = ACCOUNT_SHARE_PLATFORM_OPTIONS
+      .filter(option => !modeKeysLoadedByPlatform[option.value] && modeKeysErrorByPlatform[option.value])
+      .map(option => option.label)
+    if (failedPlatforms.length > 0) {
+      const suffix = failedPlatforms.length === ACCOUNT_SHARE_PLATFORM_OPTIONS.length
+        ? '请点击页面顶部“刷新”后重试。'
+        : '其他已成功加载的平台仍可正常使用。'
+      appStore.showWarning(`${failedPlatforms.join('、')} 账号模式 Key 加载失败；${suffix}`)
+    }
+  }
+}
+
+function refreshModeKeysInBackground(): void {
+  void loadModeKeys().catch((error: unknown) => {
+    appStore.showWarning(extractApiErrorMessage(error, '账号模式 Key 刷新失败'))
+  })
 }
 
 function resetRecommendationResult(options: { keepUsageProfileMessage?: boolean } = {}): void {
   recommendationResult.value = null
   recommendationError.value = ''
+  recommendationPage.value = 1
   if (!options.keepUsageProfileMessage) {
     recommendationUsageProfileMessage.value = ''
   }
@@ -5052,6 +6370,7 @@ async function runRecommendation(): Promise<void> {
       limit: ACCOUNT_SHARE_RECOMMENDATION_LIMIT
     })
     recommendationResult.value = result
+    recommendationPage.value = 1
     const recommendedListings = (result.items || []).map(item => item.listing)
     mergeKnownListings(recommendedListings)
     syncIdleTimeoutControls(recommendedListings)
@@ -5175,7 +6494,8 @@ async function joinUse(listing: AccountShareListing): Promise<void> {
     showActionError('账号配置正在编辑中，暂时不能加入使用。', '无法加入使用')
     return
   }
-  if (modeKeysLoading.value || !modeKeysLoaded.value) {
+  const platform = listingPlatform(listing)
+  if (modeKeysLoadingForPlatform(platform) || !modeKeysLoadedForPlatform(platform)) {
     showModeApiKeyRequiredDialog(listing)
     return
   }
@@ -5217,17 +6537,31 @@ async function confirmJoinUse(): Promise<void> {
 async function submitJoinUse(pendingJoin: PendingJoinConfirmation): Promise<void> {
   const { listing, apiKeyID, idleTimeoutMinutes } = pendingJoin
   joiningId.value = listing.id
+  let joinSucceeded = false
   try {
     const membership = await accountShareAPI.joinListing(listing.id, {
       api_key_id: apiKeyID,
       idle_timeout_minutes: idleTimeoutMinutes
     })
+    joinSucceeded = true
     pendingJoinConfirmation.value = null
-    await loadListings()
-    appStore.showSuccess(membership.status === 'queued' ? '已加入预约列表' : '已加入使用')
+    const successMessage = membership.status === 'queued'
+      ? '预约已成功；下一次使用该 Key 发出 API 请求时会按顺序尝试激活'
+      : '加入已成功'
+    const refreshed = await loadListings()
+    if (refreshed) {
+      appStore.showSuccess(successMessage)
+    } else {
+      const actionLabel = membership.status === 'queued' ? '预约' : '加入'
+      appStore.showWarning(`${actionLabel}已成功，但状态刷新失败；记录已经创建，请稍后点击页面顶部“刷新”确认状态。`)
+    }
   } catch (error: unknown) {
     pendingJoinConfirmation.value = null
-    showActionError(extractApiErrorMessage(error, '加入使用失败', accountShareJoinErrorMessages), '加入使用失败')
+    if (joinSucceeded) {
+      appStore.showWarning('预约或加入已成功，但状态刷新时发生异常；记录已经创建，请稍后点击页面顶部“刷新”确认状态。')
+    } else {
+      showActionError(extractApiErrorMessage(error, '加入使用失败', accountShareJoinErrorMessages), '加入使用失败')
+    }
   } finally {
     joiningId.value = null
   }
@@ -5235,44 +6569,60 @@ async function submitJoinUse(pendingJoin: PendingJoinConfirmation): Promise<void
 
 function openEndUseConfirm(listing: AccountShareListing): void {
   const membershipID = Number(listing.queue_membership_id || listing.current_membership_id || 0)
-  if (membershipID <= 0 || endingId.value === membershipID) return
+  if (membershipID <= 0 || endingId.value !== null) return
   pendingEndUse.value = {
     membershipID,
     apiKeyID: listing.queue_api_key_id || listing.current_api_key_id,
+    apiKeyName: boundApiKeyName(listing),
     status: listing.queue_status || (listing.current_membership_id ? 'active' : ''),
     listing
   }
 }
 
 function cancelEndUse(): void {
+  if (endingId.value !== null) return
   pendingEndUse.value = null
 }
 
 async function confirmEndUse(): Promise<void> {
   const pending = pendingEndUse.value
   const membershipID = pending?.membershipID
-  if (!membershipID || endingId.value === membershipID) return
-  const membership = await endUse(membershipID)
-  pendingEndUse.value = null
+  if (!pending || !membershipID || endingId.value !== null) return
+  const membership = await endUse(pending)
+  if (pendingEndUse.value === pending) pendingEndUse.value = null
   if (pending && membership && pending.status !== 'queued' && membership.last_request_at) {
     openReviewDialog(pending.listing, membership)
   }
 }
 
-async function endUse(membershipID: number): Promise<AccountShareMembership | null> {
+async function endUse(pending: PendingEndUseState): Promise<AccountShareMembership | null> {
+  const membershipID = pending.membershipID
   errorMessage.value = ''
   endingId.value = membershipID
+  let endSucceeded = false
   try {
     const intent = await accountShareAPI.createEndMembershipIntent(membershipID)
     const membership = await accountShareAPI.endMembership(membershipID, intent.token)
-    await loadListings()
-    appStore.showSuccess(pendingEndUse.value?.status === 'queued' ? '已移出预约' : '已结束使用')
+    endSucceeded = true
+    if (pendingEndUse.value === pending) pendingEndUse.value = null
+    const successMessage = pending.status === 'queued' ? '已移出预约' : '已结束使用'
+    const refreshed = await loadListings()
+    const resolutionRefreshed = !isKeyResolutionMode.value || await loadKeyResolutionState()
+    if (refreshed && resolutionRefreshed) {
+      appStore.showSuccess(successMessage)
+    } else {
+      appStore.showWarning(`${successMessage}，但状态刷新失败；请稍后点击页面顶部“刷新”确认状态。`)
+    }
     return membership
   } catch (error: unknown) {
-    showActionError(extractApiErrorMessage(error, '结束使用失败'), '结束使用失败')
+    if (endSucceeded) {
+      appStore.showWarning('结束操作已成功，但状态刷新时发生异常；请稍后点击页面顶部“刷新”确认状态。')
+    } else {
+      showActionError(extractApiErrorMessage(error, '结束使用失败', accountShareEndErrorMessages), '结束使用失败')
+    }
     return null
   } finally {
-    endingId.value = null
+    if (endingId.value === membershipID) endingId.value = null
   }
 }
 
@@ -5662,6 +7012,9 @@ async function openManagedAccountModal(listing: AccountShareListing, action: Man
       statsAccount.value = account
       showStatsModal.value = true
     } else if (action === 'reauth') {
+      if (managedAccountScope.value === 'user') {
+        await loadProxies()
+      }
       reAuthAccount.value = account
       showReAuthModal.value = true
     }
@@ -5743,12 +7096,31 @@ watch(searchQuery, () => {
   clearSearchDebounceTimer()
   searchDebounceTimer = window.setTimeout(() => {
     pagination.page = 1
+    persistListingPreferences()
     void loadListings()
   }, 300)
 })
 
 watch(modeApiKeys, () => {
   syncRecommendationApiKey()
+})
+
+watch(
+  () => [route.query.mode, route.query.api_key_id, route.query.api_key_name, route.query.return_to],
+  () => {
+    if (!isKeyResolutionMode.value) {
+      clearKeyResolutionState()
+      return
+    }
+    prepareKeyResolutionMode()
+    void Promise.all([loadListings(), loadKeyResolutionState()])
+  }
+)
+
+watch(recommendationPageCount, pages => {
+  if (recommendationPage.value > pages) {
+    recommendationPage.value = pages
+  }
 })
 
 watch(
@@ -5769,11 +7141,16 @@ watch(
 
 onMounted(async () => {
   document.addEventListener('click', handleFilterPanelDocumentClick)
+  document.addEventListener('visibilitychange', handleDocumentVisibilityChange)
+  window.addEventListener('focus', handleWindowFocus)
   clockTimer = window.setInterval(() => {
     nowMs.value = Date.now()
   }, 30_000)
   try {
-    await Promise.all([loadListings(), loadModeKeys(), loadProxies(), loadListingNameIndex()])
+    prepareKeyResolutionMode()
+    const initializationTasks: Promise<unknown>[] = [loadListings(), loadModeKeys(), loadProxies(), loadListingNameIndex()]
+    if (isKeyResolutionMode.value) initializationTasks.push(loadKeyResolutionState())
+    await Promise.all(initializationTasks)
   } catch (error: unknown) {
     errorMessage.value = extractApiErrorMessage(error, '初始化账号广场失败')
   }
@@ -5781,13 +7158,19 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   document.removeEventListener('click', handleFilterPanelDocumentClick)
+  document.removeEventListener('visibilitychange', handleDocumentVisibilityChange)
+  window.removeEventListener('focus', handleWindowFocus)
   if (clockTimer != null) {
     window.clearInterval(clockTimer)
     clockTimer = null
   }
   clearSearchDebounceTimer()
+  clearMembershipStatusRefreshTimer()
   abortActiveListingsRequest()
+  abortMySpendAccountsRequest()
   abortMySpendRequest()
+  modeKeysRequestSeq += 1
+  keyResolutionRequestSeq += 1
   stopEditSessionRenewal()
   void releaseConfigEditSession()
 })
@@ -5840,12 +7223,19 @@ onBeforeUnmount(() => {
   gap: 0.625rem;
 }
 
+.hero-utility-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.625rem;
+}
+
 .hero-actions .btn-primary,
 .hero-actions .btn-secondary {
   min-height: 2.75rem;
 }
 
-.account-share-guide-button {
+.account-share-guide-button,
+.account-share-spend-button {
   display: inline-flex;
   min-height: 2.75rem;
   flex-shrink: 0;
@@ -5862,10 +7252,24 @@ onBeforeUnmount(() => {
   transition: border-color 0.16s ease, background-color 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
 }
 
-.account-share-guide-button:hover {
+.account-share-guide-button:hover,
+.account-share-spend-button:hover {
   border-color: rgb(96 165 250);
   background: rgb(219 234 254);
   box-shadow: 0 8px 18px rgb(37 99 235 / 0.1);
+}
+
+.account-share-spend-button {
+  border-color: rgb(167 243 208);
+  background: rgb(236 253 245);
+  color: rgb(4 120 87);
+}
+
+.account-share-spend-button:hover {
+  border-color: rgb(52 211 153);
+  background: rgb(209 250 229);
+  color: rgb(6 95 70);
+  box-shadow: 0 8px 18px rgb(16 185 129 / 0.12);
 }
 
 .account-share-guide {
@@ -6228,7 +7632,7 @@ onBeforeUnmount(() => {
   border-radius: 0.5rem;
   border: 1px solid rgb(226 232 240);
   background: rgb(255 255 255);
-  box-shadow: 0 12px 32px rgb(15 23 42 / 0.06);
+  box-shadow: 0 18px 46px rgb(15 23 42 / 0.08);
 }
 
 .recommendation-dialog-panel {
@@ -6237,22 +7641,37 @@ onBeforeUnmount(() => {
   box-shadow: none;
 }
 
-.recommendation-dialog-panel .recommendation-head {
-  padding: 0 0 1rem;
+.recommendation-head {
+  display: grid;
+  gap: 0.75rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(226 232 240);
+  background: linear-gradient(180deg, rgb(255 255 255), rgb(248 250 252));
+  padding: 0.875rem;
 }
 
-.recommendation-head {
-  display: flex;
-  flex-direction: column;
-  gap: 0.875rem;
-  border-bottom: 1px solid rgb(226 232 240);
-  padding: 1rem 1.125rem;
+.recommendation-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.recommendation-heading-icon {
+  display: inline-flex;
+  height: 2.5rem;
+  width: 2.5rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  background: rgb(15 23 42);
+  color: white;
 }
 
 .recommendation-head h2 {
   margin: 0;
   color: rgb(17 24 39);
-  font-size: 1rem;
+  font-size: 1.0625rem;
   font-weight: 850;
   line-height: 1.5rem;
 }
@@ -6265,8 +7684,8 @@ onBeforeUnmount(() => {
 }
 
 .recommendation-profile-help {
-  max-width: 62rem;
-  margin: -0.25rem 0 0;
+  max-width: 68rem;
+  margin: 0;
   color: rgb(71 85 105);
   font-size: 0.75rem;
   font-weight: 650;
@@ -6330,12 +7749,7 @@ onBeforeUnmount(() => {
 .recommendation-layout {
   display: grid;
   gap: 1rem;
-  padding: 1rem 1.125rem;
-}
-
-.recommendation-dialog-panel .recommendation-layout {
-  padding-right: 0;
-  padding-left: 0;
+  padding: 1rem 0 0;
 }
 
 .recommendation-form-grid {
@@ -6347,6 +7761,10 @@ onBeforeUnmount(() => {
   display: grid;
   align-content: start;
   gap: 0.75rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(226 232 240);
+  background: rgb(248 250 252);
+  padding: 0.875rem;
 }
 
 .recommendation-profile-message {
@@ -6399,14 +7817,11 @@ onBeforeUnmount(() => {
 .recommendation-results {
   display: grid;
   gap: 0.75rem;
-  border-top: 1px solid rgb(226 232 240);
-  background: rgb(248 250 252);
-  padding: 1rem 1.125rem;
-}
-
-.recommendation-dialog-panel .recommendation-results {
-  margin-top: 0.25rem;
+  margin-top: 1rem;
   border-radius: 0.5rem;
+  border: 1px solid rgb(226 232 240);
+  background: rgb(248 250 252);
+  padding: 0.875rem;
 }
 
 .recommendation-empty {
@@ -6420,13 +7835,77 @@ onBeforeUnmount(() => {
   text-align: center;
 }
 
-.recommendation-card {
+.recommendation-results-head {
   display: grid;
   gap: 0.75rem;
   border-radius: 0.5rem;
   border: 1px solid rgb(226 232 240);
+  background: white;
+  padding: 0.75rem;
+}
+
+.recommendation-results-head strong {
+  display: block;
+  color: rgb(15 23 42);
+  font-size: 0.9375rem;
+  font-weight: 850;
+}
+
+.recommendation-results-head span {
+  display: block;
+  margin-top: 0.125rem;
+  color: rgb(100 116 139);
+  font-size: 0.75rem;
+  font-weight: 750;
+}
+
+.recommendation-page-controls {
+  display: grid;
+  grid-template-columns: 2.25rem minmax(3.5rem, auto) 2.25rem;
+  align-items: center;
+  justify-content: start;
+  gap: 0.375rem;
+}
+
+.recommendation-page-controls > span {
+  margin: 0;
+  text-align: center;
+  color: rgb(51 65 85);
+  font-size: 0.8125rem;
+  font-weight: 850;
+}
+
+.recommendation-page-button {
+  display: inline-flex;
+  min-height: 2.25rem;
+  min-width: 2.25rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(226 232 240);
   background: rgb(255 255 255);
-  padding: 0.875rem;
+  color: rgb(51 65 85);
+  transition: border-color 0.16s ease, background-color 0.16s ease, color 0.16s ease, opacity 0.16s ease;
+}
+
+.recommendation-page-button:hover:not(:disabled) {
+  border-color: rgb(37 99 235);
+  background: rgb(239 246 255);
+  color: rgb(29 78 216);
+}
+
+.recommendation-page-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.recommendation-card {
+  display: grid;
+  gap: 0.625rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(226 232 240);
+  background: rgb(255 255 255);
+  padding: 0.75rem;
 }
 
 .recommendation-card-head {
@@ -6443,8 +7922,8 @@ onBeforeUnmount(() => {
 
 .recommendation-rank {
   display: inline-flex;
-  height: 2.25rem;
-  width: 2.25rem;
+  height: 2rem;
+  width: 2rem;
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
@@ -6482,7 +7961,7 @@ onBeforeUnmount(() => {
   gap: 0.125rem;
   border-radius: 0.5rem;
   background: rgb(236 253 245);
-  padding: 0.625rem 0.75rem;
+  padding: 0.5625rem 0.6875rem;
 }
 
 .recommendation-total span {
@@ -6515,6 +7994,85 @@ onBeforeUnmount(() => {
   font-weight: 800;
 }
 
+.recommendation-score-panel {
+  display: grid;
+  gap: 0.625rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(203 213 225);
+  background: linear-gradient(180deg, rgb(255 255 255), rgb(248 250 252));
+  padding: 0.625rem;
+}
+
+.recommendation-score-overview {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.recommendation-score-overview span {
+  color: rgb(71 85 105);
+  font-size: 0.75rem;
+  font-weight: 850;
+}
+
+.recommendation-score-overview strong {
+  color: rgb(15 23 42);
+  font-size: 1rem;
+  font-weight: 900;
+}
+
+.recommendation-score-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.5rem;
+}
+
+.recommendation-score-item {
+  display: grid;
+  min-width: 0;
+  gap: 0.375rem;
+}
+
+.recommendation-score-item > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.recommendation-score-item span {
+  color: rgb(100 116 139);
+  font-size: 0.6875rem;
+  font-weight: 800;
+}
+
+.recommendation-score-item strong {
+  color: rgb(30 41 59);
+  font-size: 0.75rem;
+  font-weight: 900;
+}
+
+.recommendation-score-bar {
+  position: relative;
+  display: block;
+  height: 0.375rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgb(226 232 240);
+}
+
+.recommendation-score-bar::after {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--score-width, 0%);
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgb(37 99 235), rgb(20 184 166));
+  content: "";
+}
+
 .recommendation-metrics {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -6526,7 +8084,7 @@ onBeforeUnmount(() => {
   border-radius: 0.5rem;
   border: 1px solid rgb(226 232 240);
   background: rgb(248 250 252);
-  padding: 0.625rem;
+  padding: 0.5625rem 0.625rem;
 }
 
 .recommendation-metrics span {
@@ -6587,7 +8145,7 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 0.625rem;
   border-top: 1px solid rgb(226 232 240);
-  padding-top: 0.75rem;
+  padding-top: 0.625rem;
 }
 
 .recommendation-card-actions > span {
@@ -6646,16 +8204,29 @@ onBeforeUnmount(() => {
   color: rgb(147 197 253);
 }
 
-.dark .account-share-guide-button {
+.dark .account-share-guide-button,
+.dark .account-share-spend-button {
   border-color: rgb(59 130 246 / 0.38);
   background: rgb(30 64 175 / 0.22);
   color: rgb(191 219 254);
 }
 
-.dark .account-share-guide-button:hover {
+.dark .account-share-guide-button:hover,
+.dark .account-share-spend-button:hover {
   border-color: rgb(96 165 250 / 0.7);
   background: rgb(30 64 175 / 0.34);
   box-shadow: 0 8px 18px rgb(0 0 0 / 0.2);
+}
+
+.dark .account-share-spend-button {
+  border-color: rgb(16 185 129 / 0.36);
+  background: rgb(6 95 70 / 0.2);
+  color: rgb(167 243 208);
+}
+
+.dark .account-share-spend-button:hover {
+  border-color: rgb(52 211 153 / 0.62);
+  background: rgb(6 95 70 / 0.32);
 }
 
 .dark .account-share-guide {
@@ -6793,14 +8364,28 @@ onBeforeUnmount(() => {
   border-color: rgb(63 63 70);
 }
 
+.dark .recommendation-head {
+  background: linear-gradient(180deg, rgb(24 24 27), rgb(39 39 42 / 0.78));
+}
+
+.dark .recommendation-heading-icon {
+  background: rgb(59 130 246);
+}
+
 .dark .recommendation-head h2,
+.dark .recommendation-results-head strong,
 .dark .recommendation-title strong,
+.dark .recommendation-score-overview strong,
 .dark .recommendation-metrics strong {
   color: white;
 }
 
 .dark .recommendation-head p,
+.dark .recommendation-results-head span,
+.dark .recommendation-page-controls > span,
 .dark .recommendation-title small,
+.dark .recommendation-score-overview span,
+.dark .recommendation-score-item span,
 .dark .recommendation-metrics span,
 .dark .recommendation-card-actions > span {
   color: rgb(161 161 170);
@@ -6868,6 +8453,12 @@ onBeforeUnmount(() => {
   background: rgb(39 39 42 / 0.58);
 }
 
+.dark .recommendation-action-box,
+.dark .recommendation-results-head {
+  border-color: rgb(63 63 70);
+  background: rgb(24 24 27);
+}
+
 .dark .recommendation-empty,
 .dark .recommendation-card {
   border-color: rgb(63 63 70);
@@ -6897,6 +8488,35 @@ onBeforeUnmount(() => {
 
 .dark .recommendation-tag-row span {
   background: rgb(30 64 175 / 0.3);
+  color: rgb(191 219 254);
+}
+
+.dark .recommendation-score-panel {
+  border-color: rgb(63 63 70);
+  background: linear-gradient(180deg, rgb(39 39 42 / 0.72), rgb(24 24 27 / 0.86));
+}
+
+.dark .recommendation-score-item strong {
+  color: rgb(226 232 240);
+}
+
+.dark .recommendation-score-bar {
+  background: rgb(63 63 70);
+}
+
+.dark .recommendation-score-bar::after {
+  background: linear-gradient(90deg, rgb(96 165 250), rgb(45 212 191));
+}
+
+.dark .recommendation-page-button {
+  border-color: rgb(63 63 70);
+  background: rgb(39 39 42 / 0.72);
+  color: rgb(212 212 216);
+}
+
+.dark .recommendation-page-button:hover:not(:disabled) {
+  border-color: rgb(96 165 250);
+  background: rgb(30 64 175 / 0.24);
   color: rgb(191 219 254);
 }
 
@@ -6935,9 +8555,30 @@ onBeforeUnmount(() => {
   }
 
   .recommendation-head {
-    flex-direction: row;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
     justify-content: space-between;
+  }
+
+  .recommendation-profile-help {
+    grid-column: 1 / -1;
+  }
+
+  .recommendation-preset-row {
+    justify-content: flex-end;
+  }
+
+  .recommendation-results-head {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+
+  .recommendation-page-controls {
+    justify-content: end;
+  }
+
+  .recommendation-score-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .recommendation-form-grid {
@@ -6963,7 +8604,12 @@ onBeforeUnmount(() => {
     padding: 1.125rem 1.25rem;
   }
 
-  .account-share-guide-button {
+  .hero-utility-actions {
+    align-items: center;
+  }
+
+  .account-share-guide-button,
+  .account-share-spend-button {
     align-self: center;
   }
 
@@ -6987,6 +8633,10 @@ onBeforeUnmount(() => {
 
   .recommendation-metrics {
     grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  .recommendation-score-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 
@@ -8814,6 +10464,12 @@ onBeforeUnmount(() => {
   color: rgb(19 78 74);
 }
 
+.account-level-k12 {
+  border-color: rgb(14 165 233 / 0.45);
+  background: linear-gradient(180deg, rgb(224 242 254), rgb(14 165 233));
+  color: rgb(12 74 110);
+}
+
 .account-level-plus {
   border-color: rgb(99 102 241 / 0.35);
   background: rgb(238 242 255);
@@ -9102,6 +10758,12 @@ onBeforeUnmount(() => {
   color: rgb(199 210 254);
 }
 
+.dark .account-level-k12 {
+  border-color: rgb(56 189 248 / 0.35);
+  background: rgb(7 89 133 / 0.35);
+  color: rgb(186 230 253);
+}
+
 .dark .account-level-free {
   border-color: rgb(74 222 128 / 0.25);
   background: rgb(20 83 45 / 0.35);
@@ -9188,12 +10850,12 @@ onBeforeUnmount(() => {
 }
 
 .account-share-membership-panel {
-  margin-top: 1rem;
+  margin-top: 0.625rem;
   border-radius: 0.5rem;
-  border: 1px solid rgb(167 243 208);
-  background: rgb(236 253 245);
-  padding: 0.75rem;
-  color: rgb(6 95 70);
+  border: 1px solid rgb(187 247 208);
+  background: linear-gradient(180deg, rgb(240 253 244), rgb(236 253 245 / 0.78));
+  padding: 0.625rem;
+  color: rgb(22 101 52);
   font-size: 0.875rem;
 }
 
@@ -9209,11 +10871,28 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
+.membership-title {
+  color: rgb(20 83 45);
+  font-size: 0.875rem;
+  font-weight: 800;
+  line-height: 1.25rem;
+  overflow-wrap: anywhere;
+}
+
+.membership-subtitle {
+  margin-top: 0.125rem;
+  color: rgb(21 128 61);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1rem;
+  overflow-wrap: anywhere;
+}
+
 .membership-status-pill {
   display: inline-flex;
   flex-shrink: 0;
   align-items: center;
-  border-radius: 999px;
+  border-radius: 0.5rem;
   background: rgb(16 185 129);
   padding: 0.25rem 0.625rem;
   color: white;
@@ -9231,15 +10910,30 @@ onBeforeUnmount(() => {
   color: rgb(120 53 15);
 }
 
-.membership-detail-grid {
-  margin-top: 0.75rem;
+.membership-compact-body {
+  margin-top: 0.5rem;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
-  gap: 0.5rem 0.75rem;
+  gap: 0.5rem;
+}
+
+.membership-main {
+  display: grid;
+  min-width: 0;
+  gap: 0.5rem;
+}
+
+.membership-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.375rem;
 }
 
 .membership-detail-grid div {
   min-width: 0;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(187 247 208 / 0.72);
+  background: rgb(255 255 255 / 0.68);
+  padding: 0.4375rem 0.5rem;
 }
 
 .membership-detail-grid span,
@@ -9254,22 +10948,143 @@ onBeforeUnmount(() => {
 .membership-detail-grid strong {
   display: block;
   margin-top: 0.125rem;
-  color: rgb(6 78 59);
+  color: rgb(20 83 45);
+  font-size: 0.8125rem;
   font-weight: 700;
   overflow-wrap: anywhere;
 }
 
-.idle-timeout-control {
-  margin-top: 0.75rem;
+.waiver-progress-card {
   display: grid;
+  min-width: 0;
   gap: 0.375rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(191 219 254);
+  background: rgb(239 246 255 / 0.82);
+  padding: 0.5rem;
+  color: rgb(30 64 175);
+}
+
+.waiver-progress-top,
+.waiver-progress-foot {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.waiver-progress-top > div {
+  min-width: 0;
+}
+
+.waiver-progress-top span,
+.waiver-progress-foot {
+  font-size: 0.71875rem;
+  font-weight: 700;
+  line-height: 1rem;
+}
+
+.waiver-progress-top strong {
+  display: block;
+  margin-top: 0.0625rem;
+  color: rgb(15 23 42);
+  font-size: 0.875rem;
+  font-weight: 900;
+  line-height: 1.125rem;
+}
+
+.waiver-progress-badge {
+  flex-shrink: 0;
+  border-radius: 0.5rem;
+  background: rgb(219 234 254);
+  padding: 0.1875rem 0.5rem;
+  color: rgb(29 78 216);
+  white-space: nowrap;
+}
+
+.waiver-progress-track {
+  height: 0.5rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgb(191 219 254 / 0.7);
+}
+
+.waiver-progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgb(59 130 246), rgb(14 165 233));
+  transition: width 0.2s ease;
+}
+
+.waiver-progress-foot {
+  flex-wrap: wrap;
+  color: rgb(29 78 216);
+}
+
+.waiver-progress-close {
+  border-color: rgb(253 230 138);
+  background: rgb(255 251 235 / 0.9);
+  color: rgb(146 64 14);
+}
+
+.waiver-progress-close .waiver-progress-track {
+  background: rgb(253 230 138 / 0.75);
+}
+
+.waiver-progress-close .waiver-progress-track span {
+  background: linear-gradient(90deg, rgb(245 158 11), rgb(234 179 8));
+}
+
+.waiver-progress-close .waiver-progress-badge {
+  background: rgb(254 243 199);
+  color: rgb(146 64 14);
+}
+
+.waiver-progress-close .waiver-progress-foot {
+  color: rgb(146 64 14);
+}
+
+.waiver-progress-met {
+  border-color: rgb(134 239 172);
+  background: rgb(220 252 231 / 0.9);
+  color: rgb(22 101 52);
+}
+
+.waiver-progress-met .waiver-progress-track {
+  background: rgb(187 247 208);
+}
+
+.waiver-progress-met .waiver-progress-track span {
+  background: linear-gradient(90deg, rgb(34 197 94), rgb(16 185 129));
+}
+
+.waiver-progress-met .waiver-progress-badge {
+  background: rgb(187 247 208);
+  color: rgb(21 128 61);
+}
+
+.waiver-progress-met .waiver-progress-foot {
+  color: rgb(22 101 52);
+}
+
+.membership-controls {
+  display: grid;
+  min-width: 0;
+  gap: 0.4375rem;
+}
+
+.idle-timeout-control {
+  display: grid;
+  gap: 0.25rem;
 }
 
 .idle-timeout-row {
   display: grid;
-  grid-template-columns: minmax(5rem, 8rem) auto auto;
+  grid-template-columns: minmax(4.5rem, 1fr) auto auto;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.375rem;
 }
 
 .idle-timeout-input-row {
@@ -9308,6 +11123,43 @@ onBeforeUnmount(() => {
   font-size: 0.75rem;
   font-weight: 600;
   white-space: nowrap;
+}
+
+.membership-action-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.375rem;
+}
+
+.membership-action-row .btn-secondary,
+.membership-end-button {
+  min-width: 0;
+  justify-content: center;
+  padding-inline: 0.625rem;
+  white-space: nowrap;
+}
+
+.membership-end-button {
+  display: inline-flex;
+  min-height: 2.25rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  background: rgb(4 120 87);
+  padding: 0.4375rem 0.75rem;
+  color: white;
+  font-size: 0.8125rem;
+  font-weight: 800;
+  transition: background-color 0.15s ease, opacity 0.15s ease;
+}
+
+.membership-end-button:hover {
+  background: rgb(6 95 70);
+}
+
+.membership-end-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .listing-join-section {
@@ -9352,15 +11204,6 @@ onBeforeUnmount(() => {
 }
 
 .listing-action-row .btn-primary {
-  min-width: 6rem;
-}
-
-.listing-spend-action-row {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.listing-spend-action-row .btn-secondary {
   min-width: 6rem;
 }
 
@@ -9427,6 +11270,47 @@ onBeforeUnmount(() => {
   line-height: 1.125rem;
 }
 
+.membership-controls .idle-timeout-hint {
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgb(5 150 105);
+  font-size: 0.71875rem;
+  font-weight: 700;
+  line-height: 1rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@container account-listing-card (min-width: 34rem) {
+  .membership-detail-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@container account-listing-card (min-width: 44rem) {
+  .membership-compact-body {
+    grid-template-columns: minmax(0, 1fr) minmax(13.5rem, 15rem);
+    align-items: start;
+  }
+
+  .membership-detail-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@container account-listing-card (min-width: 52rem) {
+  .membership-main {
+    grid-template-columns: minmax(0, 0.92fr) minmax(14rem, 1fr);
+    align-items: stretch;
+  }
+
+  .membership-detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .idle-timeout-reminder svg,
 .idle-timeout-hint svg,
 .join-usage-reminder svg {
@@ -9435,7 +11319,7 @@ onBeforeUnmount(() => {
 
 .dark .account-share-membership-panel {
   border-color: rgb(16 185 129 / 0.28);
-  background: rgb(6 95 70 / 0.18);
+  background: linear-gradient(180deg, rgb(6 95 70 / 0.18), rgb(20 83 45 / 0.12));
   color: rgb(167 243 208);
 }
 
@@ -9458,6 +11342,19 @@ onBeforeUnmount(() => {
   color: rgb(253 230 138);
 }
 
+.dark .membership-title {
+  color: rgb(209 250 229);
+}
+
+.dark .membership-subtitle {
+  color: rgb(110 231 183);
+}
+
+.dark .membership-detail-grid div {
+  border-color: rgb(16 185 129 / 0.22);
+  background: rgb(24 24 27 / 0.52);
+}
+
 .dark .membership-detail-grid span,
 .dark .idle-timeout-control label,
 .dark .idle-timeout-join span {
@@ -9478,6 +11375,71 @@ onBeforeUnmount(() => {
   color: rgb(191 219 254);
 }
 
+.dark .waiver-progress-card {
+  border-color: rgb(59 130 246 / 0.35);
+  background: rgb(30 64 175 / 0.16);
+  color: rgb(191 219 254);
+}
+
+.dark .waiver-progress-top strong {
+  color: white;
+}
+
+.dark .waiver-progress-badge {
+  background: rgb(59 130 246 / 0.2);
+  color: rgb(191 219 254);
+}
+
+.dark .waiver-progress-track {
+  background: rgb(30 64 175 / 0.5);
+}
+
+.dark .waiver-progress-foot {
+  color: rgb(191 219 254);
+}
+
+.dark .waiver-progress-close {
+  border-color: rgb(245 158 11 / 0.32);
+  background: rgb(146 64 14 / 0.18);
+  color: rgb(253 230 138);
+}
+
+.dark .waiver-progress-close .waiver-progress-badge {
+  background: rgb(245 158 11 / 0.18);
+  color: rgb(253 230 138);
+}
+
+.dark .waiver-progress-close .waiver-progress-foot {
+  color: rgb(253 230 138);
+}
+
+.dark .waiver-progress-met {
+  border-color: rgb(34 197 94 / 0.35);
+  background: rgb(20 83 45 / 0.3);
+  color: rgb(187 247 208);
+}
+
+.dark .waiver-progress-met .waiver-progress-badge {
+  background: rgb(34 197 94 / 0.18);
+  color: rgb(187 247 208);
+}
+
+.dark .waiver-progress-met .waiver-progress-foot {
+  color: rgb(187 247 208);
+}
+
+.dark .membership-end-button {
+  background: rgb(5 150 105);
+}
+
+.dark .membership-end-button:hover {
+  background: rgb(4 120 87);
+}
+
+.dark .membership-controls .idle-timeout-hint {
+  color: rgb(110 231 183);
+}
+
 .dark .idle-timeout-inline-note {
   border-color: rgb(37 99 235 / 0.4);
   background: rgb(30 64 175 / 0.16);
@@ -9488,6 +11450,111 @@ onBeforeUnmount(() => {
   display: grid;
   gap: 1rem;
   color: rgb(51 65 85);
+}
+
+.my-spend-account-picker {
+  display: grid;
+  gap: 0.75rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(226 232 240);
+  background: rgb(248 250 252);
+  padding: 0.875rem;
+}
+
+.my-spend-account-picker-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.my-spend-account-picker-head > div {
+  display: grid;
+  min-width: 0;
+  gap: 0.1875rem;
+}
+
+.my-spend-account-picker-head span {
+  color: rgb(15 23 42);
+  font-size: 0.875rem;
+  font-weight: 850;
+}
+
+.my-spend-account-picker-head strong {
+  color: rgb(37 99 235);
+  font-size: 0.8125rem;
+  font-weight: 800;
+}
+
+.my-spend-account-picker-head small {
+  color: rgb(100 116 139);
+  font-size: 0.75rem;
+  line-height: 1.125rem;
+}
+
+.my-spend-account-grid {
+  display: grid;
+  max-height: 18rem;
+  grid-template-columns: repeat(auto-fit, minmax(13.5rem, 1fr));
+  gap: 0.5rem;
+  overflow-y: auto;
+  padding-right: 0.125rem;
+}
+
+.my-spend-account-option {
+  display: grid;
+  min-width: 0;
+  gap: 0.375rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(226 232 240);
+  background: white;
+  padding: 0.75rem;
+  text-align: left;
+  transition: border-color 0.16s ease, background-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+.my-spend-account-option:hover {
+  border-color: rgb(147 197 253);
+  background: rgb(239 246 255);
+  box-shadow: 0 8px 18px rgb(15 23 42 / 0.08);
+}
+
+.my-spend-account-option.active {
+  border-color: rgb(37 99 235);
+  background: linear-gradient(180deg, rgb(239 246 255), rgb(240 253 250));
+  box-shadow: inset 3px 0 0 rgb(37 99 235), 0 10px 22px rgb(37 99 235 / 0.12);
+}
+
+.my-spend-account-option-top,
+.my-spend-account-option-foot {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.my-spend-account-option-top > span:not(.feature-badge),
+.my-spend-account-option-foot span {
+  color: rgb(100 116 139);
+  font-size: 0.6875rem;
+  font-weight: 800;
+}
+
+.my-spend-account-option strong {
+  min-width: 0;
+  color: rgb(15 23 42);
+  font-size: 0.875rem;
+  font-weight: 850;
+  overflow-wrap: anywhere;
+}
+
+.my-spend-account-option small {
+  color: rgb(71 85 105);
+  font-size: 0.75rem;
+  line-height: 1.125rem;
+  overflow-wrap: anywhere;
 }
 
 .my-spend-context {
@@ -9619,6 +11686,15 @@ onBeforeUnmount(() => {
   font-size: 0.875rem;
   font-weight: 850;
   overflow-wrap: anywhere;
+}
+
+.my-spend-detail-grid small {
+  display: block;
+  margin-top: 0.1875rem;
+  color: rgb(100 116 139);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1rem;
 }
 
 .my-spend-metric-grid {
@@ -9756,6 +11832,40 @@ onBeforeUnmount(() => {
   color: rgb(212 212 216);
 }
 
+.dark .my-spend-account-picker,
+.dark .my-spend-account-option {
+  border-color: rgb(63 63 70);
+  background: rgb(39 39 42 / 0.72);
+}
+
+.dark .my-spend-account-picker-head span,
+.dark .my-spend-account-option strong {
+  color: white;
+}
+
+.dark .my-spend-account-picker-head strong {
+  color: rgb(147 197 253);
+}
+
+.dark .my-spend-account-picker-head small,
+.dark .my-spend-account-option-top > span:not(.feature-badge),
+.dark .my-spend-account-option-foot span,
+.dark .my-spend-account-option small {
+  color: rgb(161 161 170);
+}
+
+.dark .my-spend-account-option:hover {
+  border-color: rgb(96 165 250 / 0.56);
+  background: rgb(30 64 175 / 0.18);
+  box-shadow: 0 8px 18px rgb(0 0 0 / 0.24);
+}
+
+.dark .my-spend-account-option.active {
+  border-color: rgb(96 165 250 / 0.72);
+  background: linear-gradient(180deg, rgb(30 64 175 / 0.24), rgb(20 83 45 / 0.2));
+  box-shadow: inset 3px 0 0 rgb(96 165 250), 0 10px 22px rgb(0 0 0 / 0.22);
+}
+
 .dark .my-spend-context {
   border-color: rgb(96 165 250 / 0.32);
   background: linear-gradient(180deg, rgb(30 41 59 / 0.82), rgb(20 83 45 / 0.24));
@@ -9778,6 +11888,7 @@ onBeforeUnmount(() => {
 .dark .my-spend-context small,
 .dark .my-spend-window span,
 .dark .my-spend-detail-grid span,
+.dark .my-spend-detail-grid small,
 .dark .my-spend-hourly-panel span,
 .dark .my-spend-section-head small,
 .dark .my-spend-metric span,
@@ -9854,6 +11965,22 @@ onBeforeUnmount(() => {
 
   .my-spend-range-tabs {
     width: min(100%, 24rem);
+  }
+}
+
+@media (max-width: 640px) {
+  .hero-utility-actions,
+  .hero-actions {
+    width: 100%;
+  }
+
+  .hero-utility-actions > button,
+  .hero-actions > button {
+    flex: 1 1 9rem;
+  }
+
+  .my-spend-account-picker-head .btn-secondary {
+    width: 100%;
   }
 }
 
@@ -10221,5 +12348,303 @@ onBeforeUnmount(() => {
 .dark .metric-price-danger span,
 .dark .metric-price-danger strong {
   color: rgb(252 165 165);
+}
+
+.key-resolution-panel {
+  display: grid;
+  min-width: 0;
+  gap: 1rem;
+  border: 1px solid rgb(245 158 11 / 0.58);
+  border-radius: 0.625rem;
+  background: rgb(255 251 235);
+  padding: 1rem;
+  box-shadow: inset 0.25rem 0 0 rgb(217 119 6);
+}
+
+.key-resolution-main {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.key-resolution-icon {
+  display: inline-flex;
+  width: 2.75rem;
+  height: 2.75rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  background: rgb(217 119 6);
+  color: white;
+}
+
+.key-resolution-copy {
+  min-width: 0;
+}
+
+.key-resolution-eyebrow {
+  display: block;
+  color: rgb(146 64 14);
+  font-size: 0.75rem;
+  font-weight: 850;
+  letter-spacing: 0.04em;
+}
+
+.key-resolution-copy h2 {
+  margin: 0.1875rem 0 0;
+  color: rgb(69 26 3);
+  font-size: 1rem;
+  font-weight: 900;
+  line-height: 1.375rem;
+  overflow-wrap: anywhere;
+}
+
+.key-resolution-copy p {
+  max-width: 70ch;
+  margin: 0.375rem 0 0;
+  color: rgb(120 53 15);
+  font-size: 0.875rem;
+  line-height: 1.375rem;
+}
+
+.key-resolution-counts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.key-resolution-counts > div {
+  display: grid;
+  min-width: 0;
+  gap: 0.125rem;
+  border: 1px solid rgb(245 158 11 / 0.42);
+  border-radius: 0.5rem;
+  background: rgb(255 255 255 / 0.86);
+  padding: 0.625rem 0.75rem;
+}
+
+.key-resolution-counts span {
+  color: rgb(120 53 15);
+  font-size: 0.75rem;
+  font-weight: 750;
+}
+
+.key-resolution-counts strong {
+  color: rgb(69 26 3);
+  font-size: 1.25rem;
+  font-weight: 900;
+  line-height: 1.5rem;
+}
+
+.key-resolution-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.5rem;
+}
+
+.key-resolution-refresh-button,
+.key-resolution-return-button {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 2.75rem;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 0.5rem;
+  padding: 0.625rem 0.875rem;
+  font-size: 0.875rem;
+  font-weight: 850;
+  line-height: 1.25rem;
+  transition: border-color 180ms ease, background-color 180ms ease, color 180ms ease;
+}
+
+.key-resolution-refresh-button {
+  border: 1px solid rgb(217 119 6);
+  background: rgb(255 255 255);
+  color: rgb(146 64 14);
+}
+
+.key-resolution-refresh-button:hover:not(:disabled) {
+  background: rgb(254 243 199);
+}
+
+.key-resolution-refresh-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
+.key-resolution-return-button {
+  border: 1px solid rgb(30 64 175);
+  background: rgb(30 64 175);
+  color: white;
+}
+
+.key-resolution-return-button:hover {
+  border-color: rgb(30 58 138);
+  background: rgb(30 58 138);
+}
+
+.key-resolution-refresh-button:focus-visible,
+.key-resolution-return-button:focus-visible {
+  outline: 3px solid rgb(59 130 246 / 0.42);
+  outline-offset: 2px;
+}
+
+.key-resolution-panel-loading {
+  border-color: rgb(96 165 250 / 0.72);
+  background: rgb(239 246 255);
+  box-shadow: inset 0.25rem 0 0 rgb(37 99 235);
+}
+
+.key-resolution-panel-loading .key-resolution-icon {
+  background: rgb(37 99 235);
+}
+
+.key-resolution-panel-error {
+  border-color: rgb(248 113 113 / 0.72);
+  background: rgb(254 242 242);
+  box-shadow: inset 0.25rem 0 0 rgb(220 38 38);
+}
+
+.key-resolution-panel-error .key-resolution-icon {
+  background: rgb(220 38 38);
+}
+
+.key-resolution-panel-error .key-resolution-eyebrow,
+.key-resolution-panel-error .key-resolution-copy p,
+.key-resolution-panel-error .key-resolution-counts span {
+  color: rgb(153 27 27);
+}
+
+.key-resolution-panel-error .key-resolution-copy h2,
+.key-resolution-panel-error .key-resolution-counts strong {
+  color: rgb(69 10 10);
+}
+
+.key-resolution-panel-clear {
+  border-color: rgb(52 211 153 / 0.72);
+  background: rgb(236 253 245);
+  box-shadow: inset 0.25rem 0 0 rgb(5 150 105);
+}
+
+.key-resolution-panel-clear .key-resolution-icon {
+  background: rgb(5 150 105);
+}
+
+.key-resolution-panel-clear .key-resolution-eyebrow,
+.key-resolution-panel-clear .key-resolution-copy p,
+.key-resolution-panel-clear .key-resolution-counts span {
+  color: rgb(6 95 70);
+}
+
+.key-resolution-panel-clear .key-resolution-copy h2,
+.key-resolution-panel-clear .key-resolution-counts strong {
+  color: rgb(6 78 59);
+}
+
+.key-resolution-listing-card {
+  border-color: rgb(245 158 11 / 0.72);
+  box-shadow: inset 0.25rem 0 0 rgb(217 119 6), 0 0.75rem 1.75rem rgb(120 53 15 / 0.1);
+}
+
+.dark .key-resolution-panel {
+  border-color: rgb(245 158 11 / 0.48);
+  background: rgb(69 26 3 / 0.42);
+}
+
+.dark .key-resolution-copy h2,
+.dark .key-resolution-counts strong {
+  color: rgb(255 247 237);
+}
+
+.dark .key-resolution-eyebrow,
+.dark .key-resolution-copy p,
+.dark .key-resolution-counts span {
+  color: rgb(253 230 138);
+}
+
+.dark .key-resolution-counts > div {
+  border-color: rgb(245 158 11 / 0.34);
+  background: rgb(41 37 36 / 0.82);
+}
+
+.dark .key-resolution-refresh-button {
+  border-color: rgb(245 158 11 / 0.68);
+  background: rgb(41 37 36);
+  color: rgb(253 230 138);
+}
+
+.dark .key-resolution-refresh-button:hover:not(:disabled) {
+  background: rgb(69 26 3);
+}
+
+.dark .key-resolution-panel-loading {
+  border-color: rgb(96 165 250 / 0.5);
+  background: rgb(30 58 138 / 0.24);
+}
+
+.dark .key-resolution-panel-error {
+  border-color: rgb(248 113 113 / 0.52);
+  background: rgb(127 29 29 / 0.3);
+}
+
+.dark .key-resolution-panel-clear {
+  border-color: rgb(52 211 153 / 0.48);
+  background: rgb(6 78 59 / 0.3);
+}
+
+.dark .key-resolution-panel-error .key-resolution-eyebrow,
+.dark .key-resolution-panel-error .key-resolution-copy p,
+.dark .key-resolution-panel-error .key-resolution-counts span {
+  color: rgb(254 202 202);
+}
+
+.dark .key-resolution-panel-clear .key-resolution-eyebrow,
+.dark .key-resolution-panel-clear .key-resolution-copy p,
+.dark .key-resolution-panel-clear .key-resolution-counts span {
+  color: rgb(167 243 208);
+}
+
+.dark .key-resolution-listing-card {
+  border-color: rgb(245 158 11 / 0.64);
+  box-shadow: inset 0.25rem 0 0 rgb(245 158 11), 0 0.75rem 1.75rem rgb(0 0 0 / 0.28);
+}
+
+@media (min-width: 768px) {
+  .key-resolution-panel {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+
+  .key-resolution-counts {
+    min-width: 15rem;
+  }
+
+  .key-resolution-actions {
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(2, auto);
+    justify-content: flex-end;
+  }
+}
+
+@media (min-width: 1024px) {
+  .key-resolution-panel {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+
+  .key-resolution-actions {
+    grid-column: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .key-resolution-refresh-button,
+  .key-resolution-return-button {
+    transition: none;
+  }
 }
 </style>

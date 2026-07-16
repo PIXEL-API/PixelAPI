@@ -91,6 +91,7 @@ type cachedGatewayForwardingSettings struct {
 	claudeOAuthSystemPrompt          string
 	claudeOAuthSystemPromptBlocks    string
 	openAICleanRelay                 bool
+	detachedUsageDrain               bool
 	anthropicCacheTTL1hInjection     bool
 	expiresAt                        int64 // unix nano
 }
@@ -550,7 +551,19 @@ func (s *SettingService) GetAllSettings(ctx context.Context) (*SystemSettings, e
 		return nil, fmt.Errorf("get all settings: %w", err)
 	}
 
-	return s.parseSettings(settings), nil
+	withdrawalRateLimit, err := parseWithdrawalRateLimitConfig(settings)
+	if err != nil {
+		return nil, fmt.Errorf("parse withdrawal rate limit settings: %w", err)
+	}
+	result := s.parseSettings(settings)
+	result.WithdrawalRateLimitWindowDays = withdrawalRateLimit.WindowDays
+	result.WithdrawalRateLimitMax = withdrawalRateLimit.MaxRequests
+	accountLevels, err := parseOpenAIAccountLevelConfigsSetting(settings[SettingKeyOpenAIAccountLevels])
+	if err != nil {
+		return nil, fmt.Errorf("parse openai account levels: %w", err)
+	}
+	result.OpenAIAccountLevels = accountLevels
+	return result, nil
 }
 
 // GetUpstreamURLAllowlistHosts returns config-defined upstream hosts plus DB-managed additions.
@@ -701,10 +714,13 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyChannelMonitorDefaultIntervalSeconds,
 		SettingKeyAvailableChannelsEnabled,
 		SettingKeyUserAccountImportLimit,
+		SettingKeyOpenAIAccountLevels,
 		SettingKeyAffiliateEnabled,
 		SettingKeyRiskControlEnabled,
 		SettingKeyInvoiceManagementEnabled,
 		SettingKeyWithdrawalManagementEnabled,
+		SettingKeyWithdrawalRateLimitWindowDays,
+		SettingKeyWithdrawalRateLimitMax,
 	}
 
 	settings, err := s.settingRepo.GetMultiple(ctx, keys)
@@ -750,10 +766,18 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		settings[SettingKeyTableDefaultPageSize],
 		settings[SettingKeyTablePageSizeOptions],
 	)
+	openAIAccountLevels, err := parseOpenAIAccountLevelConfigsSetting(settings[SettingKeyOpenAIAccountLevels])
+	if err != nil {
+		return nil, fmt.Errorf("parse public openai account levels: %w", err)
+	}
 
 	var balanceLowNotifyThreshold float64
 	if v, err := strconv.ParseFloat(settings[SettingKeyBalanceLowNotifyThreshold], 64); err == nil && v >= 0 {
 		balanceLowNotifyThreshold = v
+	}
+	withdrawalRateLimit, err := parseWithdrawalRateLimitConfig(settings)
+	if err != nil {
+		return nil, fmt.Errorf("parse public withdrawal rate limit: %w", err)
 	}
 
 	return &PublicSettings{
@@ -809,12 +833,16 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 
 		UserAccountImportLimit: parseUserAccountImportLimit(settings[SettingKeyUserAccountImportLimit]),
 
+		OpenAIAccountLevels: OpenAIAccountLevelConfigSelectable(openAIAccountLevels),
+
 		AffiliateEnabled: settings[SettingKeyAffiliateEnabled] == "true",
 
 		RiskControlEnabled: settings[SettingKeyRiskControlEnabled] == "true",
 
-		InvoiceManagementEnabled:    settings[SettingKeyInvoiceManagementEnabled] == "true",
-		WithdrawalManagementEnabled: !isFalseSettingValue(settings[SettingKeyWithdrawalManagementEnabled]),
+		InvoiceManagementEnabled:      settings[SettingKeyInvoiceManagementEnabled] == "true",
+		WithdrawalManagementEnabled:   !isFalseSettingValue(settings[SettingKeyWithdrawalManagementEnabled]),
+		WithdrawalRateLimitWindowDays: withdrawalRateLimit.WindowDays,
+		WithdrawalRateLimitMax:        withdrawalRateLimit.MaxRequests,
 	}, nil
 }
 
@@ -984,14 +1012,17 @@ type PublicSettingsInjectionPayload struct {
 	// Feature flags — MUST match the opt-in/opt-out registry in
 	// frontend/src/utils/featureFlags.ts. Missing a field here is the bug
 	// that hid the "可用渠道" menu on page refresh.
-	ChannelMonitorEnabled                bool `json:"channel_monitor_enabled"`
-	ChannelMonitorDefaultIntervalSeconds int  `json:"channel_monitor_default_interval_seconds"`
-	AvailableChannelsEnabled             bool `json:"available_channels_enabled"`
-	UserAccountImportLimit               int  `json:"user_account_import_limit"`
-	AffiliateEnabled                     bool `json:"affiliate_enabled"`
-	RiskControlEnabled                   bool `json:"risk_control_enabled"`
-	InvoiceManagementEnabled             bool `json:"invoice_management_enabled"`
-	WithdrawalManagementEnabled          bool `json:"withdrawal_management_enabled"`
+	ChannelMonitorEnabled                bool                       `json:"channel_monitor_enabled"`
+	ChannelMonitorDefaultIntervalSeconds int                        `json:"channel_monitor_default_interval_seconds"`
+	AvailableChannelsEnabled             bool                       `json:"available_channels_enabled"`
+	UserAccountImportLimit               int                        `json:"user_account_import_limit"`
+	OpenAIAccountLevels                  []OpenAIAccountLevelConfig `json:"openai_account_levels"`
+	AffiliateEnabled                     bool                       `json:"affiliate_enabled"`
+	RiskControlEnabled                   bool                       `json:"risk_control_enabled"`
+	InvoiceManagementEnabled             bool                       `json:"invoice_management_enabled"`
+	WithdrawalManagementEnabled          bool                       `json:"withdrawal_management_enabled"`
+	WithdrawalRateLimitWindowDays        int                        `json:"withdrawal_rate_limit_window_days"`
+	WithdrawalRateLimitMax               int                        `json:"withdrawal_rate_limit_max"`
 }
 
 // GetPublicSettingsForInjection returns public settings in a format suitable for HTML injection.
@@ -1052,10 +1083,13 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		ChannelMonitorDefaultIntervalSeconds: settings.ChannelMonitorDefaultIntervalSeconds,
 		AvailableChannelsEnabled:             settings.AvailableChannelsEnabled,
 		UserAccountImportLimit:               settings.UserAccountImportLimit,
+		OpenAIAccountLevels:                  settings.OpenAIAccountLevels,
 		AffiliateEnabled:                     settings.AffiliateEnabled,
 		RiskControlEnabled:                   settings.RiskControlEnabled,
 		InvoiceManagementEnabled:             settings.InvoiceManagementEnabled,
 		WithdrawalManagementEnabled:          settings.WithdrawalManagementEnabled,
+		WithdrawalRateLimitWindowDays:        settings.WithdrawalRateLimitWindowDays,
+		WithdrawalRateLimitMax:               settings.WithdrawalRateLimitMax,
 	}, nil
 }
 
@@ -1812,6 +1846,19 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	// Functional module switches
 	updates[SettingKeyInvoiceManagementEnabled] = strconv.FormatBool(settings.InvoiceManagementEnabled)
 	updates[SettingKeyWithdrawalManagementEnabled] = strconv.FormatBool(settings.WithdrawalManagementEnabled)
+	withdrawalRateLimit := WithdrawalRateLimitConfig{
+		WindowDays:  settings.WithdrawalRateLimitWindowDays,
+		MaxRequests: settings.WithdrawalRateLimitMax,
+	}
+	if withdrawalRateLimit.WindowDays == 0 && withdrawalRateLimit.MaxRequests == 0 {
+		withdrawalRateLimit.WindowDays = WithdrawalRateLimitWindowDaysDefault
+		settings.WithdrawalRateLimitWindowDays = withdrawalRateLimit.WindowDays
+	}
+	if err := ValidateWithdrawalRateLimitConfig(withdrawalRateLimit); err != nil {
+		return nil, err
+	}
+	updates[SettingKeyWithdrawalRateLimitWindowDays] = strconv.Itoa(withdrawalRateLimit.WindowDays)
+	updates[SettingKeyWithdrawalRateLimitMax] = strconv.Itoa(withdrawalRateLimit.MaxRequests)
 
 	// Claude Code version check
 	updates[SettingKeyMinClaudeCodeVersion] = settings.MinClaudeCodeVersion
@@ -1834,12 +1881,30 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	}
 	updates[SettingKeyClaudeOAuthSystemPromptBlocks] = settings.ClaudeOAuthSystemPromptBlocks
 	updates[SettingKeyOpenAICleanRelayEnabled] = strconv.FormatBool(settings.OpenAICleanRelayEnabled)
+	updates[SettingKeyDetachedUsageDrainEnabled] = strconv.FormatBool(settings.DetachedUsageDrainEnabled)
 	updates[SettingKeyEnableAnthropicCacheTTL1hInjection] = strconv.FormatBool(settings.EnableAnthropicCacheTTL1hInjection)
 	updates[SettingPaymentVisibleMethodAlipaySource] = settings.PaymentVisibleMethodAlipaySource
 	updates[SettingPaymentVisibleMethodWxpaySource] = settings.PaymentVisibleMethodWxpaySource
 	updates[SettingPaymentVisibleMethodAlipayEnabled] = strconv.FormatBool(settings.PaymentVisibleMethodAlipayEnabled)
 	updates[SettingPaymentVisibleMethodWxpayEnabled] = strconv.FormatBool(settings.PaymentVisibleMethodWxpayEnabled)
 	updates[openAIAdvancedSchedulerSettingKey] = strconv.FormatBool(settings.OpenAIAdvancedSchedulerEnabled)
+	updates[SettingKeySchedulerCandidateSamplingEnabled] = strconv.FormatBool(settings.SchedulerCandidateSamplingEnabled)
+	updates[SettingKeySchedulerCandidateSamplingLimit] = strconv.Itoa(normalizeSchedulerCandidateSamplingLimit(settings.SchedulerCandidateSamplingLimit))
+	updates[SettingKeySchedulerCandidateSamplingThreshold] = strconv.Itoa(normalizeSchedulerCandidateSamplingThreshold(settings.SchedulerCandidateSamplingThreshold))
+	openAIAccountLevelsInput := settings.OpenAIAccountLevels
+	if len(openAIAccountLevelsInput) == 0 {
+		openAIAccountLevelsInput = DefaultOpenAIAccountLevelConfigs()
+	}
+	openAIAccountLevels, err := ValidateOpenAIAccountLevelConfigs(openAIAccountLevelsInput)
+	if err != nil {
+		return nil, infraerrors.BadRequest("OPENAI_ACCOUNT_LEVELS_INVALID", err.Error())
+	}
+	settings.OpenAIAccountLevels = openAIAccountLevels
+	openAIAccountLevelsJSON, err := json.Marshal(openAIAccountLevels)
+	if err != nil {
+		return nil, fmt.Errorf("marshal openai account levels: %w", err)
+	}
+	updates[SettingKeyOpenAIAccountLevels] = string(openAIAccountLevelsJSON)
 	updates[SettingKeyOpenAIFreeAccountRepairEnabled] = strconv.FormatBool(settings.OpenAIFreeAccountRepairEnabled)
 	if settings.OpenAIFreeAccountRepairWeeklyThresholdUSD < 0 || math.IsNaN(settings.OpenAIFreeAccountRepairWeeklyThresholdUSD) || math.IsInf(settings.OpenAIFreeAccountRepairWeeklyThresholdUSD, 0) {
 		settings.OpenAIFreeAccountRepairWeeklyThresholdUSD = 0
@@ -1969,6 +2034,7 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 		claudeOAuthSystemPrompt:          settings.ClaudeOAuthSystemPrompt,
 		claudeOAuthSystemPromptBlocks:    settings.ClaudeOAuthSystemPromptBlocks,
 		openAICleanRelay:                 settings.OpenAICleanRelayEnabled,
+		detachedUsageDrain:               settings.DetachedUsageDrainEnabled,
 		anthropicCacheTTL1hInjection:     settings.EnableAnthropicCacheTTL1hInjection,
 		expiresAt:                        time.Now().Add(gatewayForwardingCacheTTL).UnixNano(),
 	})
@@ -1986,6 +2052,13 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	openAIAdvancedSchedulerSettingCache.Store(&cachedOpenAIAdvancedSchedulerSetting{
 		enabled:   settings.OpenAIAdvancedSchedulerEnabled,
 		expiresAt: time.Now().Add(openAIAdvancedSchedulerSettingCacheTTL).UnixNano(),
+	})
+	schedulerCandidateSamplingSettingSF.Forget(schedulerCandidateSamplingSettingSFKey)
+	schedulerCandidateSamplingSettingCache.Store(&cachedSchedulerCandidateSamplingSetting{
+		enabled:   settings.SchedulerCandidateSamplingEnabled,
+		limit:     normalizeSchedulerCandidateSamplingLimit(settings.SchedulerCandidateSamplingLimit),
+		threshold: normalizeSchedulerCandidateSamplingThreshold(settings.SchedulerCandidateSamplingThreshold),
+		expiresAt: time.Now().Add(schedulerCandidateSamplingSettingCacheTTL).UnixNano(),
 	})
 	if s.onUpdate != nil {
 		s.onUpdate() // Invalidate cache after settings update
@@ -2088,8 +2161,8 @@ func (s *SettingService) IsBackendModeEnabled(ctx context.Context) bool {
 }
 
 type gatewayForwardingSettingsResult struct {
-	fp, mp, cch, claudeOAuthSystemPromptInjection, cleanRelay, cacheTTL1h bool
-	claudeOAuthSystemPrompt, claudeOAuthSystemPromptBlocks                string
+	fp, mp, cch, claudeOAuthSystemPromptInjection, cleanRelay, detachedUsageDrain, cacheTTL1h bool
+	claudeOAuthSystemPrompt, claudeOAuthSystemPromptBlocks                                    string
 }
 
 func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context) gatewayForwardingSettingsResult {
@@ -2103,6 +2176,7 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 				claudeOAuthSystemPrompt:          cached.claudeOAuthSystemPrompt,
 				claudeOAuthSystemPromptBlocks:    cached.claudeOAuthSystemPromptBlocks,
 				cleanRelay:                       cached.openAICleanRelay,
+				detachedUsageDrain:               cached.detachedUsageDrain,
 				cacheTTL1h:                       cached.anthropicCacheTTL1hInjection,
 			}
 		}
@@ -2118,6 +2192,7 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 					claudeOAuthSystemPrompt:          cached.claudeOAuthSystemPrompt,
 					claudeOAuthSystemPromptBlocks:    cached.claudeOAuthSystemPromptBlocks,
 					cleanRelay:                       cached.openAICleanRelay,
+					detachedUsageDrain:               cached.detachedUsageDrain,
 					cacheTTL1h:                       cached.anthropicCacheTTL1hInjection,
 				}, nil
 			}
@@ -2132,6 +2207,7 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 			SettingKeyClaudeOAuthSystemPrompt,
 			SettingKeyClaudeOAuthSystemPromptBlocks,
 			SettingKeyOpenAICleanRelayEnabled,
+			SettingKeyDetachedUsageDrainEnabled,
 			SettingKeyEnableAnthropicCacheTTL1hInjection,
 		})
 		if err != nil {
@@ -2142,10 +2218,11 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 				cchSigning:                       false,
 				claudeOAuthSystemPromptInjection: true,
 				openAICleanRelay:                 false,
+				detachedUsageDrain:               true,
 				anthropicCacheTTL1hInjection:     false,
 				expiresAt:                        time.Now().Add(gatewayForwardingErrorTTL).UnixNano(),
 			})
-			return gatewayForwardingSettingsResult{fp: true, claudeOAuthSystemPromptInjection: true}, nil
+			return gatewayForwardingSettingsResult{fp: true, claudeOAuthSystemPromptInjection: true, detachedUsageDrain: true}, nil
 		}
 		fp := true
 		if v, ok := values[SettingKeyEnableFingerprintUnification]; ok && v != "" {
@@ -2160,6 +2237,10 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 		systemPrompt := values[SettingKeyClaudeOAuthSystemPrompt]
 		systemPromptBlocks := values[SettingKeyClaudeOAuthSystemPromptBlocks]
 		cleanRelay := values[SettingKeyOpenAICleanRelayEnabled] == "true"
+		detachedUsageDrain := true
+		if v, ok := values[SettingKeyDetachedUsageDrainEnabled]; ok && v != "" {
+			detachedUsageDrain = v == "true"
+		}
 		cacheTTL1h := values[SettingKeyEnableAnthropicCacheTTL1hInjection] == "true"
 		gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{
 			fingerprintUnification:           fp,
@@ -2169,6 +2250,7 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 			claudeOAuthSystemPrompt:          systemPrompt,
 			claudeOAuthSystemPromptBlocks:    systemPromptBlocks,
 			openAICleanRelay:                 cleanRelay,
+			detachedUsageDrain:               detachedUsageDrain,
 			anthropicCacheTTL1hInjection:     cacheTTL1h,
 			expiresAt:                        time.Now().Add(gatewayForwardingCacheTTL).UnixNano(),
 		})
@@ -2180,13 +2262,14 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 			claudeOAuthSystemPrompt:          systemPrompt,
 			claudeOAuthSystemPromptBlocks:    systemPromptBlocks,
 			cleanRelay:                       cleanRelay,
+			detachedUsageDrain:               detachedUsageDrain,
 			cacheTTL1h:                       cacheTTL1h,
 		}, nil
 	})
 	if r, ok := val.(gatewayForwardingSettingsResult); ok {
 		return r
 	}
-	return gatewayForwardingSettingsResult{fp: true, claudeOAuthSystemPromptInjection: true}
+	return gatewayForwardingSettingsResult{fp: true, claudeOAuthSystemPromptInjection: true, detachedUsageDrain: true}
 }
 
 // GetGatewayForwardingSettings returns cached gateway forwarding settings.
@@ -2205,6 +2288,11 @@ func (s *SettingService) IsAnthropicCacheTTL1hInjectionEnabled(ctx context.Conte
 // IsOpenAICleanRelayEnabled 检查是否启用 OpenAI 洁净中继模式。
 func (s *SettingService) IsOpenAICleanRelayEnabled(ctx context.Context) bool {
 	return s.getGatewayForwardingSettingsCached(ctx).cleanRelay
+}
+
+// IsDetachedUsageDrainEnabled 检查客户端断开后是否继续读取上游以采集完整 usage。
+func (s *SettingService) IsDetachedUsageDrainEnabled(ctx context.Context) bool {
+	return s.getGatewayForwardingSettingsCached(ctx).detachedUsageDrain
 }
 
 func (s *SettingService) GetClaudeOAuthSystemPromptInjectionSettings(ctx context.Context) (enabled bool, prompt string, blocks string) {
@@ -2273,6 +2361,48 @@ func (s *SettingService) IsWithdrawalManagementEnabled(ctx context.Context) bool
 		return true
 	}
 	return !isFalseSettingValue(value)
+}
+
+func (s *SettingService) GetWithdrawalRateLimitConfig(ctx context.Context) (WithdrawalRateLimitConfig, error) {
+	settings, err := s.settingRepo.GetMultiple(ctx, []string{
+		SettingKeyWithdrawalRateLimitWindowDays,
+		SettingKeyWithdrawalRateLimitMax,
+	})
+	if err != nil {
+		return WithdrawalRateLimitConfig{}, fmt.Errorf("get withdrawal rate limit settings: %w", err)
+	}
+	return parseWithdrawalRateLimitConfig(settings)
+}
+
+func parseWithdrawalRateLimitConfig(settings map[string]string) (WithdrawalRateLimitConfig, error) {
+	config := WithdrawalRateLimitConfig{
+		WindowDays:  WithdrawalRateLimitWindowDaysDefault,
+		MaxRequests: WithdrawalRateLimitMaxDefault,
+	}
+	if raw := strings.TrimSpace(settings[SettingKeyWithdrawalRateLimitWindowDays]); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil {
+			return WithdrawalRateLimitConfig{}, infraerrors.BadRequest(
+				"WITHDRAWAL_RATE_LIMIT_CONFIG_INVALID",
+				"withdrawal rate limit window days must be an integer",
+			)
+		}
+		config.WindowDays = value
+	}
+	if raw := strings.TrimSpace(settings[SettingKeyWithdrawalRateLimitMax]); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil {
+			return WithdrawalRateLimitConfig{}, infraerrors.BadRequest(
+				"WITHDRAWAL_RATE_LIMIT_CONFIG_INVALID",
+				"withdrawal rate limit max must be an integer",
+			)
+		}
+		config.MaxRequests = value
+	}
+	if err := ValidateWithdrawalRateLimitConfig(config); err != nil {
+		return WithdrawalRateLimitConfig{}, err
+	}
+	return config, nil
 }
 
 // GetAffiliateRebateRatePercent 读取并 clamp 全局返利比例。
@@ -2715,13 +2845,16 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 
 		// User-owned account import limit
 		SettingKeyUserAccountImportLimit: strconv.Itoa(DefaultUserAccountCredentialImportLimit),
+		SettingKeyOpenAIAccountLevels:    mustMarshalOpenAIAccountLevelConfigs(DefaultOpenAIAccountLevelConfigs()),
 
 		// Affiliate (邀请返利) feature (default disabled; opt-in)
 		SettingKeyAffiliateEnabled: "false",
 
 		// Functional modules
-		SettingKeyInvoiceManagementEnabled:    "false",
-		SettingKeyWithdrawalManagementEnabled: "true",
+		SettingKeyInvoiceManagementEnabled:      "false",
+		SettingKeyWithdrawalManagementEnabled:   "true",
+		SettingKeyWithdrawalRateLimitWindowDays: strconv.Itoa(WithdrawalRateLimitWindowDaysDefault),
+		SettingKeyWithdrawalRateLimitMax:        strconv.Itoa(WithdrawalRateLimitMaxDefault),
 
 		// Claude Code version check (default: empty = disabled)
 		SettingKeyMinClaudeCodeVersion: "",
@@ -2733,6 +2866,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyClaudeOAuthSystemPrompt:                   "",
 		SettingKeyClaudeOAuthSystemPromptBlocks:             "",
 		SettingKeyOpenAICleanRelayEnabled:                   "false",
+		SettingKeyDetachedUsageDrainEnabled:                 "true",
 		SettingKeyEnableAnthropicCacheTTL1hInjection:        "false",
 		SettingKeyUserPrivateGroupDailyLimitUSD:             "0",
 		SettingKeyUserPrivateGroupWeeklyLimitUSD:            "0",
@@ -2745,6 +2879,9 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingPaymentVisibleMethodAlipayEnabled:            "false",
 		SettingPaymentVisibleMethodWxpayEnabled:             "false",
 		openAIAdvancedSchedulerSettingKey:                   "false",
+		SettingKeySchedulerCandidateSamplingEnabled:         "false",
+		SettingKeySchedulerCandidateSamplingLimit:           strconv.Itoa(defaultSchedulerCandidateSamplingLimit),
+		SettingKeySchedulerCandidateSamplingThreshold:       strconv.Itoa(defaultSchedulerCandidateSamplingThreshold),
 		SettingKeyOpenAIFreeAccountRepairEnabled:            "false",
 		SettingKeyOpenAIFreeAccountRepairWeeklyThresholdUSD: "60",
 		SettingKeyRiskControlEnabled:                        "false",
@@ -3125,11 +3262,19 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 
 	// User-owned account import limit
 	result.UserAccountImportLimit = parseUserAccountImportLimit(settings[SettingKeyUserAccountImportLimit])
+	if levels, err := parseOpenAIAccountLevelConfigsSetting(settings[SettingKeyOpenAIAccountLevels]); err == nil {
+		result.OpenAIAccountLevels = levels
+	} else {
+		result.OpenAIAccountLevels = DefaultOpenAIAccountLevelConfigs()
+	}
 
 	// Affiliate (邀请返利) feature (default: disabled; strict true)
 	result.AffiliateEnabled = settings[SettingKeyAffiliateEnabled] == "true"
 	result.InvoiceManagementEnabled = settings[SettingKeyInvoiceManagementEnabled] == "true"
 	result.WithdrawalManagementEnabled = !isFalseSettingValue(settings[SettingKeyWithdrawalManagementEnabled])
+	withdrawalRateLimit, _ := parseWithdrawalRateLimitConfig(settings)
+	result.WithdrawalRateLimitWindowDays = withdrawalRateLimit.WindowDays
+	result.WithdrawalRateLimitMax = withdrawalRateLimit.MaxRequests
 	result.RiskControlEnabled = settings[SettingKeyRiskControlEnabled] == "true"
 	result.CyberSessionBlockEnabled = settings[SettingKeyCyberSessionBlockEnabled] == "true"
 	if v, err := strconv.Atoi(strings.TrimSpace(settings[SettingKeyCyberSessionBlockTTLSeconds])); err == nil && v > 0 {
@@ -3166,6 +3311,11 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.ClaudeOAuthSystemPrompt = settings[SettingKeyClaudeOAuthSystemPrompt]
 	result.ClaudeOAuthSystemPromptBlocks = settings[SettingKeyClaudeOAuthSystemPromptBlocks]
 	result.OpenAICleanRelayEnabled = settings[SettingKeyOpenAICleanRelayEnabled] == "true"
+	if v, ok := settings[SettingKeyDetachedUsageDrainEnabled]; ok && v != "" {
+		result.DetachedUsageDrainEnabled = v == "true"
+	} else {
+		result.DetachedUsageDrainEnabled = true
+	}
 	result.EnableAnthropicCacheTTL1hInjection = settings[SettingKeyEnableAnthropicCacheTTL1hInjection] == "true"
 
 	// Web search emulation: quick enabled check from the JSON config
@@ -3180,6 +3330,15 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.PaymentVisibleMethodAlipayEnabled = settings[SettingPaymentVisibleMethodAlipayEnabled] == "true"
 	result.PaymentVisibleMethodWxpayEnabled = settings[SettingPaymentVisibleMethodWxpayEnabled] == "true"
 	result.OpenAIAdvancedSchedulerEnabled = settings[openAIAdvancedSchedulerSettingKey] == "true"
+	result.SchedulerCandidateSamplingEnabled = settings[SettingKeySchedulerCandidateSamplingEnabled] == "true"
+	result.SchedulerCandidateSamplingLimit = defaultSchedulerCandidateSamplingLimit
+	if v, err := strconv.Atoi(strings.TrimSpace(settings[SettingKeySchedulerCandidateSamplingLimit])); err == nil && v > 0 {
+		result.SchedulerCandidateSamplingLimit = normalizeSchedulerCandidateSamplingLimit(v)
+	}
+	result.SchedulerCandidateSamplingThreshold = defaultSchedulerCandidateSamplingThreshold
+	if v, err := strconv.Atoi(strings.TrimSpace(settings[SettingKeySchedulerCandidateSamplingThreshold])); err == nil && v > 0 {
+		result.SchedulerCandidateSamplingThreshold = v
+	}
 	result.OpenAIFreeAccountRepairEnabled = settings[SettingKeyOpenAIFreeAccountRepairEnabled] == "true"
 	if v, err := strconv.ParseFloat(settings[SettingKeyOpenAIFreeAccountRepairWeeklyThresholdUSD], 64); err == nil && v > 0 {
 		result.OpenAIFreeAccountRepairWeeklyThresholdUSD = v
@@ -3219,6 +3378,56 @@ func parsePositiveOptionalFloat(value string) *float64 {
 		return nil
 	}
 	return &parsed
+}
+
+func parseOpenAIAccountLevelConfigsSetting(raw string) ([]OpenAIAccountLevelConfig, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return DefaultOpenAIAccountLevelConfigs(), nil
+	}
+	var configs []OpenAIAccountLevelConfig
+	if err := json.Unmarshal([]byte(raw), &configs); err != nil {
+		return nil, err
+	}
+	return ValidateOpenAIAccountLevelConfigs(configs)
+}
+
+func mustMarshalOpenAIAccountLevelConfigs(configs []OpenAIAccountLevelConfig) string {
+	normalized, err := ValidateOpenAIAccountLevelConfigs(configs)
+	if err != nil {
+		panic(err)
+	}
+	raw, err := json.Marshal(normalized)
+	if err != nil {
+		panic(err)
+	}
+	return string(raw)
+}
+
+func (s *SettingService) GetOpenAIAccountLevelConfigs(ctx context.Context) ([]OpenAIAccountLevelConfig, error) {
+	if s == nil || s.settingRepo == nil {
+		return DefaultOpenAIAccountLevelConfigs(), nil
+	}
+	raw, err := s.settingRepo.GetValue(ctx, SettingKeyOpenAIAccountLevels)
+	if errors.Is(err, ErrSettingNotFound) {
+		return DefaultOpenAIAccountLevelConfigs(), nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get openai account levels: %w", err)
+	}
+	return parseOpenAIAccountLevelConfigsSetting(raw)
+}
+
+func (s *SettingService) SetOpenAIAccountLevelConfigs(ctx context.Context, configs []OpenAIAccountLevelConfig) error {
+	normalized, err := ValidateOpenAIAccountLevelConfigs(configs)
+	if err != nil {
+		return infraerrors.BadRequest("OPENAI_ACCOUNT_LEVELS_INVALID", err.Error())
+	}
+	raw, err := json.Marshal(normalized)
+	if err != nil {
+		return fmt.Errorf("marshal openai account levels: %w", err)
+	}
+	return s.settingRepo.Set(ctx, SettingKeyOpenAIAccountLevels, string(raw))
 }
 
 func clampAffiliateRebateRate(value float64) float64 {
@@ -4331,6 +4540,16 @@ func (s *SettingService) SetOpenAIFastPolicySettings(ctx context.Context, settin
 		}
 		if !validScopes[rule.Scope] {
 			return fmt.Errorf("rule[%d]: invalid scope %q", i, rule.Scope)
+		}
+		seenUserIDs := make(map[int64]struct{}, len(rule.UserIDs))
+		for j, userID := range rule.UserIDs {
+			if userID <= 0 {
+				return fmt.Errorf("rule[%d]: user_ids[%d] must be positive", i, j)
+			}
+			if _, exists := seenUserIDs[userID]; exists {
+				return fmt.Errorf("rule[%d]: user_ids[%d] duplicates user_id %d", i, j, userID)
+			}
+			seenUserIDs[userID] = struct{}{}
 		}
 		for j, pattern := range rule.ModelWhitelist {
 			trimmed := strings.TrimSpace(pattern)

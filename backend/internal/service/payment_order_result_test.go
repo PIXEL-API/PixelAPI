@@ -92,6 +92,83 @@ func TestBuildCreateOrderResponseCopiesJSAPIPayload(t *testing.T) {
 	}
 }
 
+func TestBuildCreateOrderResponseCopiesAlipayJSAPIPayload(t *testing.T) {
+	t.Parallel()
+
+	alipayPayload := &payment.AlipayJSAPIPayload{TradeNO: "2026070122001400000000000001", AppID: "alipay-app-89"}
+	resp := buildCreateOrderResponse(
+		&dbent.PaymentOrder{
+			ID:         89,
+			Amount:     66.88,
+			FeeRate:    0.01,
+			ExpiresAt:  time.Date(2026, 7, 1, 13, 0, 0, 0, time.UTC),
+			OutTradeNo: "sub2_89",
+		},
+		CreateOrderRequest{PaymentType: payment.TypeAlipay},
+		66.88,
+		&payment.InstanceSelection{PaymentMode: "jsapi"},
+		&payment.CreatePaymentResponse{
+			TradeNo:     "2026070122001400000000000001",
+			ResultType:  payment.CreatePaymentResultJSAPIReady,
+			AlipayJSAPI: alipayPayload,
+		},
+		payment.CreatePaymentResultJSAPIReady,
+	)
+
+	if resp.ResultType != payment.CreatePaymentResultJSAPIReady {
+		t.Fatalf("result type = %q, want %q", resp.ResultType, payment.CreatePaymentResultJSAPIReady)
+	}
+	if resp.AlipayJSAPI == nil {
+		t.Fatal("expected alipay jsapi payload to be populated")
+	}
+	if resp.AlipayJSAPI != alipayPayload {
+		t.Fatal("expected alipay jsapi payload to preserve the original pointer")
+	}
+	if resp.AlipayJSAPI.AppID != "alipay-app-89" {
+		t.Fatalf("alipay jsapi appId = %q, want %q", resp.AlipayJSAPI.AppID, "alipay-app-89")
+	}
+}
+
+func TestBuildAlipayJSAPIAppOpenURL(t *testing.T) {
+	t.Parallel()
+
+	openURL, err := buildAlipayJSAPIAppOpenURL(
+		"https://merchant.example/payment/result?status=success&order_id=12",
+		"resume-token",
+		"sub2_123",
+		"alipay-app-123",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	parsed, err := url.Parse(openURL)
+	if err != nil {
+		t.Fatalf("parse open url: %v", err)
+	}
+	if parsed.Scheme != "alipays" || parsed.Host != "platformapi" || parsed.Path != "/startapp" {
+		t.Fatalf("unexpected app open url: %s", openURL)
+	}
+	if parsed.Query().Get("appId") != alipayJSAPIAppOpenAppID {
+		t.Fatalf("appId = %q, want %q", parsed.Query().Get("appId"), alipayJSAPIAppOpenAppID)
+	}
+	target, err := url.Parse(parsed.Query().Get("url"))
+	if err != nil {
+		t.Fatalf("parse target url: %v", err)
+	}
+	if target.Path != "/payment/alipay-jsapi" {
+		t.Fatalf("target path = %q", target.Path)
+	}
+	if target.Query().Get("resume_token") != "resume-token" || target.Query().Get("out_trade_no") != "sub2_123" {
+		t.Fatalf("target query = %s", target.RawQuery)
+	}
+	if target.Query().Get("app_id") != "alipay-app-123" {
+		t.Fatalf("target app_id = %q, want %q", target.Query().Get("app_id"), "alipay-app-123")
+	}
+	if target.Query().Get("status") != "" || target.Query().Get("order_id") != "" {
+		t.Fatalf("target should drop result-only params, query=%s", target.RawQuery)
+	}
+}
+
 func TestMaybeBuildWeChatOAuthRequiredResponse(t *testing.T) {
 	t.Setenv("PAYMENT_RESUME_SIGNING_KEY", "0123456789abcdef0123456789abcdef")
 

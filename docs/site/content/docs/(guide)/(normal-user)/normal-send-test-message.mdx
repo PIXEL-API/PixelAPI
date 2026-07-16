@@ -1,0 +1,105 @@
+---
+title: 发送第一条消息
+description: 使用 API 参考里的在线请求面板，填入 Base URL、Authorization、模型和测试消息，完成第一次 Pixel API 调用。
+---
+
+这一步的目标是：不用安装客户端，直接在文档 API 参考页完成第一次请求。
+
+这样做的好处是排查简单：如果网页测试能通，说明账号、余额、分组、API Key、Base URL 和模型大概率都正常；后面客户端不通时，就重点查客户端配置。
+
+## 第 1 步：打开 ChatCompletions 格式
+
+进入：
+
+[ChatCompletions 格式](/docs/api/chat-completions)
+
+页面里会有请求说明、参数和在线请求面板。
+
+## 第 2 步：准备 4 个值
+
+填写前先准备：
+
+| 项目 | 示例 | 从哪里来 |
+| --- | --- | --- |
+| Base URL | `https://ai-pixel.online` | API Key 的「使用密钥」弹窗或控制台 |
+| API Key | `sk-...` | API Key 列表复制 |
+| 模型名 | `gpt-5.5` | 可用渠道或使用密钥弹窗 |
+| 测试消息 | `你好，请只回复：Pixel API 已连接` | 直接复制 |
+
+## 第 3 步：填写请求面板
+
+按页面请求面板填写：
+
+1. `Base URL` 填控制台显示的站点地址。
+2. 展开 `Authorization` 或认证区域。
+3. 填入你的 `sk-...` API Key。
+4. 在 `Request Body` 里确认 `model` 是你能用的模型。
+5. 把测试消息改成：
+
+```text
+你好，请只回复：Pixel API 已连接
+```
+
+6. 点击 `Send`。
+
+## 第 4 步：看返回结果
+
+成功时，你会看到模型回复包含：
+
+```text
+Pixel API 已连接
+```
+
+这说明请求已经走到模型并拿到回复。
+
+如果页面显示 JSON，重点看 `choices` 或类似字段里的文本内容。
+
+## 备用：用终端测试
+
+如果你已经会用终端，可以用 cURL：
+
+```bash
+curl "https://ai-pixel.online/v1/chat/completions" \
+  -H "Authorization: Bearer sk-你的密钥" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-5.5",
+    "messages": [
+      {
+        "role": "user",
+        "content": "你好，请只回复：Pixel API 已连接"
+      }
+    ]
+  }'
+```
+
+注意把：
+
+- `https://ai-pixel.online` 换成你控制台显示的站点地址。
+- `sk-你的密钥` 换成你的真实 API Key。
+- `gpt-5.5` 换成你当前分组支持的模型。
+
+## 如果失败，先不要换一堆配置
+
+先看返回的状态码和错误文字。
+
+| 现象 | 最可能原因 | 下一步 |
+| --- | --- | --- |
+| 401 | API Key 没填、填错或缺少 `Bearer` | 回 API Key 页面重新复制 |
+| 403 | 分组权限、IP 限制或余额条件不满足 | 检查 Key 分组、IP 限制和余额 |
+| 404 | 接口路径错了 | 用 `/v1/chat/completions` |
+| 429 | 并发或速率限制触发 | 降低频率，稍后重试 |
+| 模型不存在 | 模型名不属于当前分组 | 从可用渠道重新复制模型名 |
+| 余额不足 | 账户余额不够 | 小额充值后重试 |
+
+更完整排查见 [常见问题处理](/docs/normal-troubleshooting)。
+
+## 成功标准
+
+这一页完成后，你应该已经：
+
+1. 在 API 参考页发出一条请求。
+2. 收到包含“Pixel API 已连接”的回复。
+3. 知道如果失败要先看状态码和错误文字。
+
+接下来去 [查看使用记录和余额流水](/docs/normal-check-usage)，确认平台是否记录到了这次请求。

@@ -1395,9 +1395,13 @@ watch(
 );
 
 watch(
-  () => [authStore.isAuthenticated, authStore.isAdmin] as const,
+  [
+    () => authStore.isAuthenticated,
+    () => authStore.isAdmin,
+    () => authStore.user?.id ?? null,
+  ],
   ([authenticated, admin]) => {
-    conversationNotificationStore.stopPolling();
+    conversationNotificationStore.reset();
     if (!authenticated) {
       return;
     }

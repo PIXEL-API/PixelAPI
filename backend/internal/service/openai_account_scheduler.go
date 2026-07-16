@@ -3,6 +3,7 @@ package service
 import (
 	"container/heap"
 	"context"
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"math"
@@ -34,6 +35,12 @@ const (
 	openAIHybridFairnessRatio    = 0.30
 	openAIHybridMaxFairShare     = 0.50
 	openAIHybridOverflowProbeMax = 32
+)
+
+const (
+	openAIQuotaHeadroomNeutralFactor      = 0.5
+	openAIQuotaHeadroomSecondaryLowRemain = 0.10
+	openAIQuotaHeadroomSnapshotStaleAfter = 8 * time.Hour
 )
 
 type cachedOpenAIAdvancedSchedulerSetting struct {
@@ -349,7 +356,7 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 		_ = s.service.deleteStickySessionAccountID(ctx, req.GroupID, sessionHash)
 		return nil, nil
 	}
-	if shouldClearStickySession(account, req.RequestedModel) || !account.IsOpenAI() || !account.IsSchedulable() {
+	if shouldClearStickySession(account, req.RequestedModel) || !account.IsOpenAICompatible() || !account.IsSchedulable() {
 		_ = s.service.deleteStickySessionAccountID(ctx, req.GroupID, sessionHash)
 		return nil, nil
 	}
@@ -946,6 +953,7 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		loadSkew = calcLoadSkewByMoments(loadRateSum, loadRateSumSquares, len(candidates))
 
 		weights := s.service.openAIWSSchedulerWeights()
+		now := time.Now()
 		for i := range candidates {
 			item := &candidates[i]
 			priorityFactor := 1.0
@@ -959,12 +967,17 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 			if item.hasTTFT && hasTTFTSample && maxTTFT > minTTFT {
 				ttftFactor = 1 - clamp01((item.ttft-minTTFT)/(maxTTFT-minTTFT))
 			}
+			quotaHeadroomFactor := 0.0
+			if weights.QuotaHeadroom > 0 {
+				quotaHeadroomFactor = openAIQuotaHeadroomFactor(item.account, now)
+			}
 
 			item.score = weights.Priority*priorityFactor +
 				weights.Load*loadFactor +
 				weights.Queue*queueFactor +
 				weights.ErrorRate*errorFactor +
-				weights.TTFT*ttftFactor
+				weights.TTFT*ttftFactor +
+				weights.QuotaHeadroom*quotaHeadroomFactor
 		}
 	}
 
@@ -1123,7 +1136,7 @@ func (s *defaultOpenAIAccountScheduler) filterOpenAIAccountsForLoadBalance(
 				continue
 			}
 		}
-		if !account.IsSchedulable() || !account.IsOpenAI() {
+		if !account.IsSchedulable() || !account.IsOpenAICompatible() {
 			continue
 		}
 		// require_privacy_set: 跳过 privacy 未设置的账号并标记异常
@@ -1164,7 +1177,7 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatible(account *Acco
 	if req.RequestedModel != "" && !account.IsModelSupported(req.RequestedModel) {
 		return false
 	}
-	return account.SupportsOpenAIImageCapability(req.RequiredImageCapability)
+	return accountSupportsRequestedOpenAIImageCapability(account, req.RequiredImageCapability)
 }
 
 func (s *defaultOpenAIAccountScheduler) ReportResult(accountID int64, success bool, firstTokenMs *int) {
@@ -1377,7 +1390,7 @@ func (s *OpenAIGatewayService) selectAccountShareModeBoundAccount(
 		}
 		if !retryCurrentMembership {
 			decision.SelectedAccountType = account.Type
-			if account.ID != accountID || !account.IsOpenAI() || !account.IsSchedulable() {
+			if account.ID != accountID || !account.IsOpenAICompatible() || !account.IsSchedulable() {
 				lastErr = ErrNoAvailableAccounts
 				retryCurrentMembership = true
 			}
@@ -1389,7 +1402,7 @@ func (s *OpenAIGatewayService) selectAccountShareModeBoundAccount(
 			lastErr = ErrNoAvailableAccounts
 			retryCurrentMembership = true
 		}
-		if !retryCurrentMembership && !account.SupportsOpenAIImageCapability(requiredImageCapability) {
+		if !retryCurrentMembership && !accountSupportsRequestedOpenAIImageCapability(account, requiredImageCapability) {
 			lastErr = ErrNoAvailableAccounts
 			retryCurrentMembership = true
 		}
@@ -1480,7 +1493,7 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 				if selection == nil || selection.Account == nil {
 					return selection, decision, nil
 				}
-				if selection.Account.SupportsOpenAIImageCapability(requiredImageCapability) {
+				if accountSupportsRequestedOpenAIImageCapability(selection.Account, requiredImageCapability) {
 					return selection, decision, nil
 				}
 				if selection.ReleaseFunc != nil {
@@ -1608,7 +1621,7 @@ func (s *OpenAIGatewayService) shouldRetryOpenAISchedulerWithoutCandidateIndex(c
 	if len(cfg.IndexedBuckets) == 0 {
 		return false
 	}
-	bucket := SchedulerBucket{GroupID: 0, Platform: PlatformOpenAI, Mode: SchedulerModeSingle}
+	bucket := SchedulerBucket{GroupID: 0, Platform: openAICompatiblePlatformFromContext(ctx), Mode: SchedulerModeSingle}
 	if groupID != nil && *groupID > 0 {
 		bucket.GroupID = *groupID
 	}
@@ -1623,28 +1636,31 @@ func (s *OpenAIGatewayService) shouldRetryOpenAISchedulerWithoutCandidateIndex(c
 func (s *OpenAIGatewayService) openAIWSSchedulerWeights() GatewayOpenAIWSSchedulerScoreWeightsView {
 	if s != nil && s.cfg != nil {
 		return GatewayOpenAIWSSchedulerScoreWeightsView{
-			Priority:  s.cfg.Gateway.OpenAIWS.SchedulerScoreWeights.Priority,
-			Load:      s.cfg.Gateway.OpenAIWS.SchedulerScoreWeights.Load,
-			Queue:     s.cfg.Gateway.OpenAIWS.SchedulerScoreWeights.Queue,
-			ErrorRate: s.cfg.Gateway.OpenAIWS.SchedulerScoreWeights.ErrorRate,
-			TTFT:      s.cfg.Gateway.OpenAIWS.SchedulerScoreWeights.TTFT,
+			Priority:      s.cfg.Gateway.OpenAIWS.SchedulerScoreWeights.Priority,
+			Load:          s.cfg.Gateway.OpenAIWS.SchedulerScoreWeights.Load,
+			Queue:         s.cfg.Gateway.OpenAIWS.SchedulerScoreWeights.Queue,
+			ErrorRate:     s.cfg.Gateway.OpenAIWS.SchedulerScoreWeights.ErrorRate,
+			TTFT:          s.cfg.Gateway.OpenAIWS.SchedulerScoreWeights.TTFT,
+			QuotaHeadroom: s.cfg.Gateway.OpenAIWS.SchedulerScoreWeights.QuotaHeadroom,
 		}
 	}
 	return GatewayOpenAIWSSchedulerScoreWeightsView{
-		Priority:  1.0,
-		Load:      1.0,
-		Queue:     0.7,
-		ErrorRate: 0.8,
-		TTFT:      0.5,
+		Priority:      1.0,
+		Load:          1.0,
+		Queue:         0.7,
+		ErrorRate:     0.8,
+		TTFT:          0.5,
+		QuotaHeadroom: 0.0,
 	}
 }
 
 type GatewayOpenAIWSSchedulerScoreWeightsView struct {
-	Priority  float64
-	Load      float64
-	Queue     float64
-	ErrorRate float64
-	TTFT      float64
+	Priority      float64
+	Load          float64
+	Queue         float64
+	ErrorRate     float64
+	TTFT          float64
+	QuotaHeadroom float64
 }
 
 func clamp01(value float64) float64 {
@@ -1668,4 +1684,110 @@ func calcLoadSkewByMoments(sum float64, sumSquares float64, count int) float64 {
 		variance = 0
 	}
 	return math.Sqrt(variance)
+}
+
+func openAIQuotaHeadroomFactor(account *Account, now time.Time) float64 {
+	if account == nil || len(account.Extra) == 0 || openAIQuotaHeadroomSnapshotStale(account.Extra, now) {
+		return openAIQuotaHeadroomNeutralFactor
+	}
+	primaryUsedPercent, ok := openAIQuotaHeadroomExtraNumber(account.Extra, "codex_primary_used_percent", "codex_7d_used_percent")
+	if !ok || openAIQuotaWindowResetAny(account.Extra, now, "primary", "7d") {
+		return openAIQuotaHeadroomNeutralFactor
+	}
+
+	factor := 1 - clamp01(primaryUsedPercent/100)
+	if secondaryUsedPercent, ok := openAIQuotaHeadroomExtraNumber(account.Extra, "codex_secondary_used_percent", "codex_5h_used_percent"); ok &&
+		!openAIQuotaWindowResetAny(account.Extra, now, "secondary", "5h") {
+		secondaryRemaining := 1 - clamp01(secondaryUsedPercent/100)
+		if secondaryRemaining < openAIQuotaHeadroomSecondaryLowRemain {
+			factor *= openAIQuotaHeadroomNeutralFactor
+		}
+	}
+	return factor
+}
+
+func openAIQuotaHeadroomExtraNumber(extra map[string]any, keys ...string) (float64, bool) {
+	if len(extra) == 0 {
+		return 0, false
+	}
+	for _, key := range keys {
+		raw, ok := extra[key]
+		if !ok || raw == nil {
+			continue
+		}
+		switch value := raw.(type) {
+		case float64:
+			return openAIQuotaHeadroomFiniteNumber(value)
+		case float32:
+			return openAIQuotaHeadroomFiniteNumber(float64(value))
+		case int:
+			return float64(value), true
+		case int64:
+			return float64(value), true
+		case json.Number:
+			parsed, err := value.Float64()
+			if err == nil {
+				return openAIQuotaHeadroomFiniteNumber(parsed)
+			}
+		case string:
+			parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+			if err == nil {
+				return openAIQuotaHeadroomFiniteNumber(parsed)
+			}
+		default:
+			continue
+		}
+	}
+	return 0, false
+}
+
+func openAIQuotaHeadroomFiniteNumber(value float64) (float64, bool) {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0, false
+	}
+	return value, true
+}
+
+func openAIQuotaHeadroomSnapshotStale(extra map[string]any, now time.Time) bool {
+	updatedRaw, ok := extra["codex_usage_updated_at"]
+	if !ok || updatedRaw == nil {
+		return true
+	}
+	updatedAt, err := parseTime(strings.TrimSpace(fmt.Sprint(updatedRaw)))
+	if err != nil {
+		return true
+	}
+	return now.Sub(updatedAt) >= openAIQuotaHeadroomSnapshotStaleAfter
+}
+
+func openAIQuotaWindowResetAny(extra map[string]any, now time.Time, windows ...string) bool {
+	for _, window := range windows {
+		if openAIQuotaWindowReset(extra, window, now) {
+			return true
+		}
+	}
+	return false
+}
+
+func openAIQuotaWindowReset(extra map[string]any, window string, now time.Time) bool {
+	if len(extra) == 0 {
+		return false
+	}
+	if resetAtRaw, ok := extra["codex_"+window+"_reset_at"]; ok && resetAtRaw != nil {
+		if resetAt, err := parseTime(strings.TrimSpace(fmt.Sprint(resetAtRaw))); err == nil {
+			return !now.Before(resetAt)
+		}
+	}
+	resetAfterSeconds := parseExtraInt(extra["codex_"+window+"_reset_after_seconds"])
+	if resetAfterSeconds <= 0 {
+		return false
+	}
+	base := now
+	if updatedRaw, ok := extra["codex_usage_updated_at"]; ok && updatedRaw != nil {
+		if updatedAt, err := parseTime(strings.TrimSpace(fmt.Sprint(updatedRaw))); err == nil {
+			base = updatedAt
+		}
+	}
+	resetAt := base.Add(time.Duration(resetAfterSeconds) * time.Second)
+	return !now.Before(resetAt)
 }

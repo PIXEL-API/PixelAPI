@@ -5,6 +5,7 @@
         <h3 class="text-lg font-semibold text-gray-900 dark:text-white">余额提现与收款码</h3>
         <p class="mt-1 max-w-3xl text-sm text-gray-500 dark:text-gray-400">
           用户账户余额可提现，最低 1.00 元，金额最多保留两位小数。首次提交提现申请额外扣除 0.10 元。
+          <span v-if="rateLimitDescription">{{ rateLimitDescription }}</span>
         </p>
       </div>
 
@@ -191,6 +192,15 @@
                 <p class="font-medium text-gray-900 dark:text-white">${{ item.total_deducted.toFixed(2) }}</p>
               </div>
             </div>
+            <div
+              v-if="item.status === 'REJECTED'"
+              class="mt-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2.5 text-sm dark:border-red-900/50 dark:bg-red-900/20"
+            >
+              <p class="text-xs font-medium text-red-700 dark:text-red-300">驳回原因</p>
+              <p class="mt-1 break-words text-red-700 dark:text-red-200">
+                {{ rejectionReason(item) }}
+              </p>
+            </div>
             <div class="mt-3 flex flex-wrap items-center justify-between gap-2">
               <span class="text-xs text-gray-500 dark:text-gray-400">{{ formatDate(item.created_at) }}</span>
               <button
@@ -221,7 +231,15 @@ import Icon from '@/components/icons/Icon.vue'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import type { ReceiptCode, ReceiptCodePaymentMethod, WithdrawalRequest, WithdrawalStatus } from '@/types'
-import { extractApiErrorMessage } from '@/utils/apiError'
+import { extractApiErrorMessage, extractI18nErrorMessage } from '@/utils/apiError'
+
+const props = withDefaults(defineProps<{
+  rateLimitWindowDays?: number
+  rateLimitMax?: number
+}>(), {
+  rateLimitWindowDays: 1,
+  rateLimitMax: 0,
+})
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -240,6 +258,10 @@ const submitting = ref(false)
 const actionLoading = ref(false)
 
 const balance = computed(() => Number(authStore.user?.balance || 0))
+const rateLimitDescription = computed(() => {
+  if (props.rateLimitMax <= 0) return ''
+  return `每 ${props.rateLimitWindowDays} 天最多提交 ${props.rateLimitMax} 次提现申请。`
+})
 const currentReceiptCode = computed(() => receiptCodes.value[selectedMethod.value] ?? null)
 const previewUrl = computed(() => draftPreviewUrl.value || currentReceiptCode.value?.url?.trim() || '')
 const hasAnyWithdrawal = computed(() => withdrawals.value.length > 0)
@@ -384,7 +406,9 @@ async function submit() {
     await Promise.all([load(), authStore.refreshUser()])
     appStore.showSuccess('提现申请已提交')
   } catch (error: unknown) {
-    appStore.showError(extractApiErrorMessage(error, '提现申请提交失败'))
+    appStore.showError(
+      extractI18nErrorMessage(error, t, 'withdrawal.errors', '提现申请提交失败')
+    )
   } finally {
     submitting.value = false
   }
@@ -433,6 +457,10 @@ function statusClass(status: WithdrawalStatus): string {
     REJECTED: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300',
   }
   return map[status]
+}
+
+function rejectionReason(item: WithdrawalRequest): string {
+  return item.rejection_reason?.trim() || '未提供具体原因'
 }
 
 function formatDate(raw: string): string {

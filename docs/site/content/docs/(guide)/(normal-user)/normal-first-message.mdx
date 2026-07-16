@@ -1,0 +1,105 @@
+---
+title: 一条龙跑通总览
+description: 面向完全没有 API 经验的普通用户，按顺序跑通账号、余额、分组、API Key、Base URL、第一条请求、用量确认和客户端接入。
+---
+
+这组教程只解决一件事：让完全没接触过 API 的普通用户，能从登录 Pixel API 开始，一步一步发出第一条模型消息，最后把同一套配置接进自己的客户端。
+
+你不需要先理解所有概念。按左侧目录从上往下做，遇到陌生词就回到本页看解释。
+
+## 跑通以后你会得到什么
+
+完成这一组教程后，你应该能做到：
+
+| 你会拿到 | 长什么样 | 用来做什么 |
+| --- | --- | --- |
+| 站点账号 | QQ 邮箱注册后登录 | 进入控制台、充值、看余额、查用量 |
+| 测试额度 | 注册成功后赠送 `0.1` | 用来跑通第一条短消息 |
+| 可用分组 | 创建 Key 时能选择的共享分组 | 决定请求走哪个号池、能用哪些模型、按什么倍率计费 |
+| API Key | 类似 `sk-...` 的一串密钥 | 证明“这次请求是你发的”，也是扣费和用量记录的依据 |
+| Base URL | 类似 `https://ai-pixel.online` | 替换官方接口域名，让请求发到 Pixel API |
+| 模型名 | 例如 `gpt-5.5` | 告诉平台你想调用哪个模型 |
+| 使用记录 | 控制台里的请求明细 | 确认请求是否成功、用了哪个 Key、花了多少余额 |
+
+最小验证动作是发送这句话：
+
+```text
+你好，请只回复：Pixel API 已连接
+```
+
+<Callout type="success" title="怎么算跑通">
+  模型回复里出现“Pixel API 已连接”，并且控制台「使用记录」出现对应请求，就说明账号、余额、分组、API Key、Base URL、模型和请求链路都已经通了。
+</Callout>
+
+## 先看完整路线
+
+<Steps>
+  <Step>
+    读 [开始前准备](/docs/normal-prerequisites)，确认你需要准备 QQ 邮箱、浏览器、注册赠送的 `0.1` 测试额度和一个测试目标。
+  </Step>
+  <Step>
+    读 [打开站点并确认余额](/docs/normal-login-wallet)，用 QQ 邮箱注册或登录控制台，确认 `0.1` 测试额度到账，并找到钱包、API 密钥、可用渠道和使用记录入口。
+  </Step>
+  <Step>
+    读 [选择分组和模型](/docs/normal-groups-models)，知道第一次该选哪个共享分组，模型名从哪里复制。
+  </Step>
+  <Step>
+    读 [创建 API Key](/docs/normal-create-api-key)，按字段创建第一个 Key，并复制保存。
+  </Step>
+  <Step>
+    读 [确认 Base URL](/docs/normal-base-url)，弄清楚站点地址、`/v1`、完整接口地址分别怎么填。
+  </Step>
+  <Step>
+    读 [在 API 参考里发送第一条消息](/docs/normal-send-test-message)，用网页里的请求面板完成第一次调用。
+  </Step>
+  <Step>
+    读 [查看使用记录和余额流水](/docs/normal-check-usage)，确认请求、费用、模型和分组是否正确。
+  </Step>
+  <Step>
+    读 [配置客户端](/docs/normal-client-setup)，把同一个 Base URL 和 API Key 放进 Codex、Claude Code、Gemini CLI、OpenCode 或通用客户端。
+  </Step>
+  <Step>
+    如果你想自己挑共享账号，再读 [使用账号广场](/docs/normal-account-mode)。
+  </Step>
+</Steps>
+
+## 5 个词先讲清楚
+
+| 词 | 小白解释 | 你在哪里会遇到 |
+| --- | --- | --- |
+| API | 软件和模型服务对话的接口。你可以理解成“给模型发消息的通道”。 | API 参考、客户端配置、报错信息 |
+| API Key | 你的调用通行证。没有它，平台不知道是谁在调用，也无法扣费和记录用量。 | API 密钥页、客户端配置、请求头 |
+| Base URL | Pixel API 的站点地址。它负责把请求发到 Pixel API，而不是官方接口。 | API Key 的使用密钥弹窗、客户端配置 |
+| 模型 | 你要调用的 AI 能力，例如 `gpt-5.5`。 | 可用渠道、请求体、客户端模型设置 |
+| 分组 | 平台里的号池和计费规则。Key 必须绑定分组，才知道请求走哪里。 | 创建 API Key、使用记录、可用渠道 |
+
+## 新手不要一开始就做这些
+
+第一次跑通时，先把变量降到最少：
+
+- 不要同时创建很多 API Key。
+- 不要一开始就开启 IP 限制。
+- 不要一开始就开启多分组路由。
+- 不要一开始就接入多个客户端。
+- 不要凭记忆手写模型名。
+- 不要把账号广场、私有账号、自定义密钥一起叠上来测试。
+
+先用一个普通共享分组、一个 API Key、一个模型、一个测试请求跑通。跑通后再逐项增加复杂配置。
+
+## 你应该按哪个顺序阅读
+
+如果你完全小白，照这个顺序：
+
+1. [开始前准备](/docs/normal-prerequisites)
+2. [打开站点并确认余额](/docs/normal-login-wallet)
+3. [选择分组和模型](/docs/normal-groups-models)
+4. [创建 API Key](/docs/normal-create-api-key)
+5. [确认 Base URL](/docs/normal-base-url)
+6. [发送第一条消息](/docs/normal-send-test-message)
+7. [查看使用记录](/docs/normal-check-usage)
+8. [配置客户端](/docs/normal-client-setup)
+9. [常见问题处理](/docs/normal-troubleshooting)
+
+如果你已经会用 OpenAI 兼容 API，可以直接从 [创建 API Key](/docs/normal-create-api-key) 开始。
+
+如果你要在账号广场自己选择账号，先把普通共享分组跑通，再看 [使用账号广场](/docs/normal-account-mode)。

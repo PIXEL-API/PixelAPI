@@ -168,8 +168,8 @@ func (s *AuthService) RegisterWithVerification(ctx context.Context, email, passw
 		if verifyCode == "" {
 			return "", nil, ErrEmailVerifyRequired
 		}
-		// 验证邮箱验证码
-		if err := s.emailService.VerifyCode(ctx, email, verifyCode); err != nil {
+		// 先验证邮箱验证码但不消费。只有账号初始化全部成功后才消费，避免失败重试时验证码失效。
+		if err := s.emailService.VerifyCodeWithoutConsume(ctx, email, verifyCode); err != nil {
 			return "", nil, fmt.Errorf("verify code: %w", err)
 		}
 	}
@@ -209,13 +209,18 @@ func (s *AuthService) RegisterWithVerification(ctx context.Context, email, passw
 		Status:       StatusActive,
 	}
 
-	if err := s.createUserWithInvitation(ctx, user, effectiveInvitationCode, invitationRequired); err != nil {
+	var token string
+	if err := s.createEmailRegistrationUser(ctx, user, effectiveInvitationCode, invitationRequired, func(context.Context) error {
+		generated, tokenErr := s.GenerateToken(user)
+		if tokenErr != nil {
+			return fmt.Errorf("generate token: %w", tokenErr)
+		}
+		token = generated
+		return nil
+	}); err != nil {
 		return "", nil, err
 	}
-	s.postAuthUserBootstrap(ctx, user, "email", true)
-	if err := s.provisionUserPrivateGroups(ctx, user.ID); err != nil {
-		return "", nil, err
-	}
+
 	s.assignSubscriptions(ctx, user.ID, grantPlan.Subscriptions, "auto assigned by signup defaults")
 	// 应用优惠码（如果提供且功能已启用）
 	if promoCode != "" && s.promoService != nil && s.settingService != nil && s.settingService.IsPromoCodeEnabled(ctx) {
@@ -230,13 +235,72 @@ func (s *AuthService) RegisterWithVerification(ctx context.Context, email, passw
 		}
 	}
 
-	// 生成token
-	token, err := s.GenerateToken(user)
-	if err != nil {
-		return "", nil, fmt.Errorf("generate token: %w", err)
+	s.consumeRegistrationVerifyCode(ctx, email)
+	return token, user, nil
+}
+
+func (s *AuthService) createEmailRegistrationUser(ctx context.Context, user *User, invitationCode string, required bool, beforeCommit func(context.Context) error) error {
+	if s == nil || user == nil {
+		return ErrServiceUnavailable
 	}
 
-	return token, user, nil
+	if s.entClient == nil {
+		if err := s.createUserWithInvitation(ctx, user, invitationCode, required); err != nil {
+			return err
+		}
+		s.postAuthUserBootstrap(ctx, user, "email", true)
+		if err := s.provisionUserPrivateGroups(ctx, user.ID); err != nil {
+			s.rollbackCreatedRegistrationUser(ctx, user.ID, "private group provisioning failed")
+			return err
+		}
+		if beforeCommit != nil {
+			if err := beforeCommit(ctx); err != nil {
+				s.rollbackCreatedRegistrationUser(ctx, user.ID, "registration pre-commit failed")
+				return err
+			}
+		}
+		return nil
+	}
+
+	if dbent.TxFromContext(ctx) != nil {
+		if err := s.createUserWithInvitation(ctx, user, invitationCode, required); err != nil {
+			return err
+		}
+		s.postAuthUserBootstrap(ctx, user, "email", true)
+		if err := s.provisionUserPrivateGroups(ctx, user.ID); err != nil {
+			return err
+		}
+		if beforeCommit != nil {
+			return beforeCommit(ctx)
+		}
+		return nil
+	}
+
+	tx, err := s.entClient.Tx(ctx)
+	if err != nil {
+		logger.LegacyPrintf("service.auth", "[Auth] Failed to begin email registration transaction: %v", err)
+		return ErrServiceUnavailable
+	}
+	defer func() { _ = tx.Rollback() }()
+	txCtx := dbent.NewTxContext(ctx, tx)
+
+	if err := s.createUserWithInvitation(txCtx, user, invitationCode, required); err != nil {
+		return err
+	}
+	s.postAuthUserBootstrap(txCtx, user, "email", true)
+	if err := s.provisionUserPrivateGroups(txCtx, user.ID); err != nil {
+		return err
+	}
+	if beforeCommit != nil {
+		if err := beforeCommit(txCtx); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		logger.LegacyPrintf("service.auth", "[Auth] Failed to commit email registration transaction: %v", err)
+		return ErrServiceUnavailable
+	}
+	return nil
 }
 
 func (s *AuthService) resolveRegistrationInvitationCode(ctx context.Context, invitationCode, affiliateCode string) (string, bool, error) {
@@ -299,19 +363,11 @@ func (s *AuthService) createUserWithInvitation(ctx context.Context, user *User, 
 		if required {
 			return ErrServiceUnavailable
 		}
-		if err := s.userRepo.Create(ctx, user); err != nil {
-			if errors.Is(err, ErrEmailExists) {
-				return ErrEmailExists
-			}
-			logger.LegacyPrintf("service.auth", "[Auth] Database error creating user: %v", err)
-			return ErrServiceUnavailable
-		}
-		if s.affiliateService != nil {
-			if err := s.affiliateService.ConsumeInvitationCodeWithWeeklyLimit(ctx, user.ID, invitationCode, required); err != nil {
-				logger.LegacyPrintf("service.auth", "[Auth] Failed to consume optional affiliate invitation code for user %d: %v", user.ID, err)
-			}
-		}
-		return nil
+		return s.createUserAndConsumeInvitation(ctx, user, invitationCode, required)
+	}
+
+	if dbent.TxFromContext(ctx) != nil {
+		return s.createUserAndConsumeInvitation(ctx, user, invitationCode, required)
 	}
 
 	tx, err := s.entClient.Tx(ctx)
@@ -322,7 +378,18 @@ func (s *AuthService) createUserWithInvitation(ctx context.Context, user *User, 
 	defer func() { _ = tx.Rollback() }()
 	txCtx := dbent.NewTxContext(ctx, tx)
 
-	if err := s.userRepo.Create(txCtx, user); err != nil {
+	if err := s.createUserAndConsumeInvitation(txCtx, user, invitationCode, required); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		logger.LegacyPrintf("service.auth", "[Auth] Failed to commit registration transaction: %v", err)
+		return ErrServiceUnavailable
+	}
+	return nil
+}
+
+func (s *AuthService) createUserAndConsumeInvitation(ctx context.Context, user *User, invitationCode string, required bool) error {
+	if err := s.userRepo.Create(ctx, user); err != nil {
 		if errors.Is(err, ErrEmailExists) {
 			return ErrEmailExists
 		}
@@ -330,16 +397,12 @@ func (s *AuthService) createUserWithInvitation(ctx context.Context, user *User, 
 		return ErrServiceUnavailable
 	}
 	if s.affiliateService != nil {
-		if err := s.affiliateService.ConsumeInvitationCodeWithWeeklyLimit(txCtx, user.ID, invitationCode, required); err != nil {
+		if err := s.affiliateService.ConsumeInvitationCodeWithWeeklyLimit(ctx, user.ID, invitationCode, required); err != nil {
 			if required {
 				return ErrInvitationCodeInvalid
 			}
 			logger.LegacyPrintf("service.auth", "[Auth] Failed to consume optional affiliate invitation code for user %d: %v", user.ID, err)
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		logger.LegacyPrintf("service.auth", "[Auth] Failed to commit registration transaction: %v", err)
-		return ErrServiceUnavailable
 	}
 	return nil
 }
@@ -810,6 +873,24 @@ func (s *AuthService) provisionUserPrivateGroups(ctx context.Context, userID int
 	return nil
 }
 
+func (s *AuthService) rollbackCreatedRegistrationUser(ctx context.Context, userID int64, reason string) {
+	if s == nil || s.userRepo == nil || userID <= 0 {
+		return
+	}
+	if err := s.userRepo.Delete(ctx, userID); err != nil {
+		logger.LegacyPrintf("service.auth", "[Auth] Failed to rollback created registration user: user_id=%d reason=%s err=%v", userID, reason, err)
+	}
+}
+
+func (s *AuthService) consumeRegistrationVerifyCode(ctx context.Context, email string) {
+	if s == nil || s.emailService == nil || strings.TrimSpace(email) == "" {
+		return
+	}
+	if s.settingService != nil && s.settingService.IsEmailVerifyEnabled(ctx) {
+		s.emailService.ConsumeVerifyCode(ctx, email)
+	}
+}
+
 func (s *AuthService) resolveSignupGrantPlan(ctx context.Context, signupSource string) signupGrantPlan {
 	plan := signupGrantPlan{}
 	if s != nil && s.cfg != nil {
@@ -894,13 +975,14 @@ func (s *AuthService) postAuthUserBootstrap(ctx context.Context, user *User, sig
 }
 
 func (s *AuthService) updateUserSignupSource(ctx context.Context, userID int64, signupSource string) {
-	if s == nil || s.entClient == nil || userID <= 0 {
+	client := s.authEntClient(ctx)
+	if client == nil || userID <= 0 {
 		return
 	}
 	if strings.TrimSpace(signupSource) == "" {
 		return
 	}
-	if err := s.entClient.User.UpdateOneID(userID).
+	if err := client.User.UpdateOneID(userID).
 		SetSignupSource(signupSource).
 		Exec(ctx); err != nil {
 		logger.LegacyPrintf("service.auth", "[Auth] Failed to update signup source: user_id=%d source=%s err=%v", userID, signupSource, err)
@@ -908,16 +990,27 @@ func (s *AuthService) updateUserSignupSource(ctx context.Context, userID int64, 
 }
 
 func (s *AuthService) touchUserLogin(ctx context.Context, userID int64) {
-	if s == nil || s.entClient == nil || userID <= 0 {
+	client := s.authEntClient(ctx)
+	if client == nil || userID <= 0 {
 		return
 	}
 	now := time.Now().UTC()
-	if err := s.entClient.User.UpdateOneID(userID).
+	if err := client.User.UpdateOneID(userID).
 		SetLastLoginAt(now).
 		SetLastActiveAt(now).
 		Exec(ctx); err != nil {
 		logger.LegacyPrintf("service.auth", "[Auth] Failed to touch login timestamps: user_id=%d err=%v", userID, err)
 	}
+}
+
+func (s *AuthService) authEntClient(ctx context.Context) *dbent.Client {
+	if s == nil || s.entClient == nil {
+		return nil
+	}
+	if tx := dbent.TxFromContext(ctx); tx != nil {
+		return tx.Client()
+	}
+	return s.entClient
 }
 
 func (s *AuthService) backfillEmailIdentityOnSuccessfulLogin(ctx context.Context, user *User) {
@@ -1453,34 +1546,9 @@ func (s *AuthService) GenerateTokenPair(ctx context.Context, user *User, familyI
 
 // generateRefreshToken 生成并存储Refresh Token
 func (s *AuthService) generateRefreshToken(ctx context.Context, user *User, familyID string) (string, error) {
-	// 生成随机Token
-	tokenBytes := make([]byte, 32)
-	if _, err := rand.Read(tokenBytes); err != nil {
-		return "", fmt.Errorf("generate random bytes: %w", err)
-	}
-	rawToken := refreshTokenPrefix + hex.EncodeToString(tokenBytes)
-
-	// 计算Token哈希（存储哈希而非原始Token）
-	tokenHash := hashToken(rawToken)
-
-	// 如果没有提供familyID，生成新的
-	if familyID == "" {
-		familyBytes := make([]byte, 16)
-		if _, err := rand.Read(familyBytes); err != nil {
-			return "", fmt.Errorf("generate family id: %w", err)
-		}
-		familyID = hex.EncodeToString(familyBytes)
-	}
-
-	now := time.Now()
-	ttl := time.Duration(s.cfg.JWT.RefreshTokenExpireDays) * 24 * time.Hour
-
-	data := &RefreshTokenData{
-		UserID:       user.ID,
-		TokenVersion: resolvedTokenVersion(user),
-		FamilyID:     familyID,
-		CreatedAt:    now,
-		ExpiresAt:    now.Add(ttl),
+	rawToken, tokenHash, data, ttl, err := s.newRefreshToken(user, familyID)
+	if err != nil {
+		return "", err
 	}
 
 	// 存储Token数据
@@ -1495,12 +1563,39 @@ func (s *AuthService) generateRefreshToken(ctx context.Context, user *User, fami
 	}
 
 	// 添加到家族Token集合
-	if err := s.refreshTokenCache.AddToFamilyTokenSet(ctx, familyID, tokenHash, ttl); err != nil {
+	if err := s.refreshTokenCache.AddToFamilyTokenSet(ctx, data.FamilyID, tokenHash, ttl); err != nil {
 		logger.LegacyPrintf("service.auth", "[Auth] Failed to add token to family set: %v", err)
 		// 不影响主流程
 	}
 
 	return rawToken, nil
+}
+
+func (s *AuthService) newRefreshToken(user *User, familyID string) (string, string, *RefreshTokenData, time.Duration, error) {
+	if user == nil {
+		return "", "", nil, 0, errors.New("user is required")
+	}
+	tokenBytes := make([]byte, 32)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		return "", "", nil, 0, fmt.Errorf("generate random bytes: %w", err)
+	}
+	rawToken := refreshTokenPrefix + hex.EncodeToString(tokenBytes)
+	if familyID == "" {
+		familyBytes := make([]byte, 16)
+		if _, err := rand.Read(familyBytes); err != nil {
+			return "", "", nil, 0, fmt.Errorf("generate family id: %w", err)
+		}
+		familyID = hex.EncodeToString(familyBytes)
+	}
+	now := time.Now()
+	ttl := time.Duration(s.cfg.JWT.RefreshTokenExpireDays) * 24 * time.Hour
+	return rawToken, hashToken(rawToken), &RefreshTokenData{
+		UserID:       user.ID,
+		TokenVersion: resolvedTokenVersion(user),
+		FamilyID:     familyID,
+		CreatedAt:    now,
+		ExpiresAt:    now.Add(ttl),
+	}, ttl, nil
 }
 
 // RefreshTokenPair 使用Refresh Token刷新Token对
@@ -1563,20 +1658,28 @@ func (s *AuthService) RefreshTokenPair(ctx context.Context, refreshToken string)
 		return nil, ErrTokenRevoked
 	}
 
-	// Token轮转：立即使旧Token失效
-	if err := s.refreshTokenCache.DeleteRefreshToken(ctx, tokenHash); err != nil {
-		logger.LegacyPrintf("service.auth", "[Auth] Failed to delete old refresh token: %v", err)
-		// 继续处理，不影响主流程
-	}
-
-	// 生成新的Token对，保持同一个家族ID
-	pair, err := s.GenerateTokenPair(ctx, user, data.FamilyID)
+	accessToken, err := s.GenerateToken(user)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("generate access token: %w", err)
+	}
+	newRawToken, newTokenHash, newData, ttl, err := s.newRefreshToken(user, data.FamilyID)
+	if err != nil {
+		return nil, fmt.Errorf("generate refresh token: %w", err)
+	}
+	if err := s.refreshTokenCache.RotateRefreshToken(ctx, tokenHash, newTokenHash, newData, ttl); err != nil {
+		if errors.Is(err, ErrRefreshTokenAlreadyConsumed) {
+			return nil, ErrRefreshTokenInvalid
+		}
+		logger.LegacyPrintf("service.auth", "[Auth] Failed to rotate refresh token: %v", err)
+		return nil, ErrServiceUnavailable
 	}
 	return &TokenPairWithUser{
-		TokenPair: *pair,
-		UserRole:  user.Role,
+		TokenPair: TokenPair{
+			AccessToken:  accessToken,
+			RefreshToken: newRawToken,
+			ExpiresIn:    s.GetAccessTokenExpiresIn(),
+		},
+		UserRole: user.Role,
 	}, nil
 }
 

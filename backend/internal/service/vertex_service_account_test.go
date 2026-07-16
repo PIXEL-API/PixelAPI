@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -63,18 +64,21 @@ func TestBuildVertexGeminiURLRejectsInvalidLocation(t *testing.T) {
 }
 
 func TestParseVertexServiceAccountKey(t *testing.T) {
-	raw := `{
-		"type": "service_account",
-		"project_id": "vertex-proj",
+	privateKey := "-----BEGIN " + "PRIVATE KEY-----\nabc\n-----END " + "PRIVATE KEY-----\n"
+	payload := map[string]string{
+		"type":           "service_account",
+		"project_id":     "vertex-proj",
 		"private_key_id": "kid",
-		"private_key": "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n",
-		"client_email": "svc@vertex-proj.iam.gserviceaccount.com"
-	}`
+		"private_key":    privateKey,
+		"client_email":   "svc@vertex-proj.iam.gserviceaccount.com",
+	}
+	rawBytes, err := json.Marshal(payload)
+	require.NoError(t, err)
 	account := &Account{
 		Type:     AccountTypeServiceAccount,
 		Platform: PlatformGemini,
 		Credentials: map[string]any{
-			"service_account_json": raw,
+			"service_account_json": string(rawBytes),
 		},
 	}
 	key, err := parseVertexServiceAccountKey(account)
@@ -82,7 +86,7 @@ func TestParseVertexServiceAccountKey(t *testing.T) {
 	require.Equal(t, "vertex-proj", key.ProjectID)
 	require.Equal(t, "svc@vertex-proj.iam.gserviceaccount.com", key.ClientEmail)
 	require.Equal(t, vertexDefaultTokenURL, key.TokenURI)
-	require.True(t, strings.Contains(key.PrivateKey, "BEGIN PRIVATE KEY"))
+	require.True(t, strings.Contains(key.PrivateKey, "BEGIN "+"PRIVATE KEY"))
 }
 
 func TestVertexServiceAccountProxyURL(t *testing.T) {
@@ -99,6 +103,24 @@ func TestVertexServiceAccountProxyURL(t *testing.T) {
 	require.Equal(t, "http://proxy.example.com:8080", vertexServiceAccountProxyURL(account))
 	require.Empty(t, vertexServiceAccountProxyURL(&Account{Proxy: account.Proxy}))
 	require.Empty(t, vertexServiceAccountProxyURL(&Account{ProxyID: &proxyID}))
+}
+
+func TestVertexServiceAccountHTTPClientRecordsDependency(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	client, err := newVertexServiceAccountHTTPClient("")
+	require.NoError(t, err)
+	collector := servertiming.New(time.Now())
+	ctx := servertiming.WithCollector(context.Background(), collector)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL, nil)
+	require.NoError(t, err)
+	response, err := client.Do(request)
+	require.NoError(t, err)
+	require.NoError(t, response.Body.Close())
+	require.Contains(t, collector.HeaderValue(time.Now(), "bypass"), "dep_http;dur=")
 }
 
 func TestExchangeVertexServiceAccountTokenUsesProxy(t *testing.T) {

@@ -1,0 +1,191 @@
+package repository
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/lib/pq"
+	"github.com/stretchr/testify/require"
+)
+
+func TestUsageBillingRepositoryApplyRetriesDeadlockWithFreshTransaction(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageBillingRepository{db: db}
+	cmd := newUsageBillingRetryTestCommand()
+
+	mock.ExpectBegin()
+	expectUsageBillingClaim(mock, cmd)
+	mock.ExpectQuery(`SELECT request_fingerprint\s+FROM usage_billing_dedup_archive`).
+		WithArgs(cmd.RequestID, cmd.APIKeyID).
+		WillReturnError(&pq.Error{Code: "40P01"})
+	mock.ExpectRollback()
+
+	mock.ExpectBegin()
+	expectUsageBillingClaimAndArchiveMiss(mock, cmd)
+	mock.ExpectCommit()
+
+	result, err := repo.Apply(context.Background(), cmd)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.Applied)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUsageBillingRepositoryApplyRetriesDeadlockFromCommit(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageBillingRepository{db: db}
+	cmd := newUsageBillingRetryTestCommand()
+
+	mock.ExpectBegin()
+	expectUsageBillingClaimAndArchiveMiss(mock, cmd)
+	mock.ExpectCommit().WillReturnError(&pq.Error{Code: "40P01"})
+
+	mock.ExpectBegin()
+	expectUsageBillingClaimAndArchiveMiss(mock, cmd)
+	mock.ExpectCommit()
+
+	result, err := repo.Apply(context.Background(), cmd)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.Applied)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUsageBillingRepositoryApplyStopsAfterDeadlockRetryLimit(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageBillingRepository{db: db}
+	cmd := newUsageBillingRetryTestCommand()
+	lastErr := &pq.Error{Code: "40P01", Message: "retry limit"}
+
+	for attempt := 1; attempt <= usageBillingMaxAttempts; attempt++ {
+		mock.ExpectBegin()
+		expectUsageBillingClaim(mock, cmd)
+		deadlockErr := &pq.Error{Code: "40P01"}
+		if attempt == usageBillingMaxAttempts {
+			deadlockErr = lastErr
+		}
+		mock.ExpectQuery(`SELECT request_fingerprint\s+FROM usage_billing_dedup_archive`).
+			WithArgs(cmd.RequestID, cmd.APIKeyID).
+			WillReturnError(deadlockErr)
+		mock.ExpectRollback()
+	}
+
+	result, err := repo.Apply(context.Background(), cmd)
+	require.Nil(t, result)
+	require.Same(t, lastErr, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUsageBillingRepositoryApplyDoesNotRetryOtherErrors(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageBillingRepository{db: db}
+	cmd := newUsageBillingRetryTestCommand()
+	wantErr := errors.New("query failed")
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`INSERT INTO usage_billing_dedup`).
+		WithArgs(cmd.RequestID, cmd.APIKeyID, sqlmock.AnyArg()).
+		WillReturnError(wantErr)
+	mock.ExpectRollback()
+
+	result, err := repo.Apply(context.Background(), cmd)
+	require.Nil(t, result)
+	require.ErrorIs(t, err, wantErr)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestIsUsageBillingDeadlock(t *testing.T) {
+	var typedNil *pq.Error
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "deadlock", err: &pq.Error{Code: "40P01"}, want: true},
+		{name: "wrapped deadlock", err: fmt.Errorf("wrapped: %w", &pq.Error{Code: "40P01"}), want: true},
+		{name: "serialization failure", err: &pq.Error{Code: "40001"}, want: false},
+		{name: "ordinary error", err: errors.New("deadlock detected"), want: false},
+		{name: "typed nil", err: typedNil, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, isUsageBillingDeadlock(tt.err))
+		})
+	}
+}
+
+func TestWaitUsageBillingRetryHonorsContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := waitUsageBillingRetry(ctx, time.Second)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestAccountShareModeUsageRequestPeriodFallsBackToUsageOccurredAt(t *testing.T) {
+	occurredAt := time.Date(2026, 7, 11, 8, 30, 0, 0, time.FixedZone("UTC+8", 8*60*60))
+	snapshot := &service.AccountShareModeBillingSnapshot{DurationMs: 1500}
+	cmd := &service.UsageBillingCommand{UsageOccurredAt: occurredAt}
+
+	startedAt, endedAt := accountShareModeUsageRequestPeriod(cmd, snapshot)
+	require.Equal(t, occurredAt.UTC(), endedAt)
+	require.Equal(t, occurredAt.UTC().Add(-1500*time.Millisecond), startedAt)
+}
+
+func TestDeductUsageBillingWalletUsesNoKeyUpdateLock(t *testing.T) {
+	db, mock := newSQLMock(t)
+	mock.ExpectBegin()
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	mock.ExpectQuery(`SELECT balance, points_balance\s+FROM users\s+WHERE id = \$1 AND deleted_at IS NULL\s+FOR NO KEY UPDATE`).
+		WithArgs(int64(42)).
+		WillReturnRows(sqlmock.NewRows([]string{"balance", "points_balance"}).AddRow(10.0, 5.0))
+	mock.ExpectExec(`UPDATE users\s+SET points_balance = \$1::numeric,\s+balance = \$2::numeric`).
+		WithArgs("0.0000000000", "8.0000000000", int64(42)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectRollback()
+
+	newPoints, newBalance, pointsDeducted, balanceDeducted, err := deductUsageBillingWallet(
+		context.Background(),
+		tx,
+		42,
+		7,
+		true,
+	)
+	require.NoError(t, err)
+	require.InDelta(t, 0, newPoints, 1e-9)
+	require.InDelta(t, 8, newBalance, 1e-9)
+	require.InDelta(t, 5, pointsDeducted, 1e-9)
+	require.InDelta(t, 2, balanceDeducted, 1e-9)
+	require.NoError(t, tx.Rollback())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func newUsageBillingRetryTestCommand() *service.UsageBillingCommand {
+	return &service.UsageBillingCommand{
+		RequestID: "req-deadlock-retry",
+		APIKeyID:  17,
+	}
+}
+
+func expectUsageBillingClaim(mock sqlmock.Sqlmock, cmd *service.UsageBillingCommand) {
+	mock.ExpectQuery(`INSERT INTO usage_billing_dedup`).
+		WithArgs(cmd.RequestID, cmd.APIKeyID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)))
+}
+
+func expectUsageBillingClaimAndArchiveMiss(mock sqlmock.Sqlmock, cmd *service.UsageBillingCommand) {
+	expectUsageBillingClaim(mock, cmd)
+	mock.ExpectQuery(`SELECT request_fingerprint\s+FROM usage_billing_dedup_archive`).
+		WithArgs(cmd.RequestID, cmd.APIKeyID).
+		WillReturnError(sql.ErrNoRows)
+}

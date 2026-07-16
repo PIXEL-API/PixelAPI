@@ -3,9 +3,12 @@
 package repository
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
 
@@ -74,4 +77,21 @@ func TestBuildSchedulerMetadataAccount_KeepsSlimGroupMembership(t *testing.T) {
 	require.Nil(t, got.AccountGroups[0].Group)
 	require.Equal(t, int64(11), got.AccountGroups[1].GroupID)
 	require.Nil(t, got.Groups)
+}
+
+func TestSchedulerCacheWriteAccountsSkipsUnencodableTime(t *testing.T) {
+	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:0"})
+	t.Cleanup(func() { _ = rdb.Close() })
+	cache := &schedulerCache{rdb: rdb, writeChunkSize: 16}
+	invalidTime := time.Date(10000, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+	cacheable, err := cache.writeAccounts(context.Background(), []service.Account{{
+		ID:         99,
+		Platform:   service.PlatformOpenAI,
+		Status:     service.StatusActive,
+		LastUsedAt: &invalidTime,
+	}})
+
+	require.NoError(t, err)
+	require.Empty(t, cacheable)
 }

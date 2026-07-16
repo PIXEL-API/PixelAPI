@@ -32,6 +32,7 @@
     <QuotaBadge v-if="showDailyQuota" :used="account.quota_daily_used ?? 0" :limit="account.quota_daily_limit!" label="D" />
     <QuotaBadge v-if="showWeeklyQuota" :used="account.quota_weekly_used ?? 0" :limit="account.quota_weekly_limit!" label="W" />
     <QuotaBadge v-if="showTotalQuota" :used="account.quota_used ?? 0" :limit="account.quota_limit!" />
+    <GrokQuotaProbeCell :account="account" />
   </div>
 </template>
 
@@ -41,6 +42,7 @@ import { useI18n } from 'vue-i18n'
 import type { Account } from '@/types'
 import CapacityBadge from '@/components/account/CapacityBadge.vue'
 import QuotaBadge from '@/components/account/QuotaBadge.vue'
+import GrokQuotaProbeCell from '@/components/account/GrokQuotaProbeCell.vue'
 
 const props = defineProps<{
   account: Account

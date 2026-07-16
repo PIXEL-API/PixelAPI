@@ -7,6 +7,121 @@ import (
 	"time"
 )
 
+func TestAccountUsageService_GetOpenAILocalUsage_DoesNotProbeUpstream(t *testing.T) {
+	t.Parallel()
+
+	svc := &AccountUsageService{cache: NewUsageCache()}
+	account := &Account{
+		ID:       31,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Extra: map[string]any{
+			"codex_5h_used_percent": 42.0,
+			"codex_5h_reset_at":     time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+		},
+	}
+
+	usage, err := svc.GetLocalUsageForAccount(context.Background(), account)
+	if err != nil {
+		t.Fatalf("GetLocalUsageForAccount() error = %v", err)
+	}
+	if usage.Source != "local" {
+		t.Fatalf("usage source = %q, want local", usage.Source)
+	}
+	if usage.FiveHour == nil || usage.FiveHour.Utilization != 42 {
+		t.Fatalf("local five-hour snapshot = %#v", usage.FiveHour)
+	}
+	if _, found := svc.cache.openAIProbeCache.Load(account.ID); found {
+		t.Fatal("local OpenAI usage must not enter the upstream probe gate")
+	}
+}
+
+func TestAccountUsageService_GetUsageForAccount_MarksActiveQueryMode(t *testing.T) {
+	t.Parallel()
+
+	svc := &AccountUsageService{cache: NewUsageCache()}
+	account := &Account{
+		ID:       32,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Extra: map[string]any{
+			"codex_5h_used_percent": 10.0,
+			"codex_5h_reset_at":     time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+			"codex_7d_used_percent": 20.0,
+			"codex_7d_reset_at":     time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339),
+		},
+	}
+
+	usage, err := svc.GetUsageForAccount(context.Background(), account)
+	if err != nil {
+		t.Fatalf("GetUsageForAccount() error = %v", err)
+	}
+	if usage.Source != "active" {
+		t.Fatalf("usage source = %q, want active", usage.Source)
+	}
+}
+
+func TestAccountUsageService_GetUsageForAccount_DoesNotMutateAntigravityCache(t *testing.T) {
+	t.Parallel()
+
+	resetAt := time.Now().Add(time.Hour)
+	cachedUsage := &UsageInfo{
+		Source: "passive",
+		FiveHour: &UsageProgress{
+			ResetsAt:         &resetAt,
+			RemainingSeconds: 7,
+		},
+	}
+	cache := NewUsageCache()
+	cache.antigravityCache.Store(int64(33), &antigravityUsageCache{
+		usageInfo: cachedUsage,
+		timestamp: time.Now(),
+	})
+	svc := &AccountUsageService{
+		cache:                   cache,
+		antigravityQuotaFetcher: &AntigravityQuotaFetcher{},
+	}
+
+	usage, err := svc.GetUsageForAccount(context.Background(), &Account{
+		ID:          33,
+		Platform:    PlatformAntigravity,
+		Type:        AccountTypeOAuth,
+		Credentials: map[string]any{"access_token": "token"},
+	})
+	if err != nil {
+		t.Fatalf("GetUsageForAccount() error = %v", err)
+	}
+	if usage.Source != "active" {
+		t.Fatalf("usage source = %q, want active", usage.Source)
+	}
+	if cachedUsage.Source != "passive" {
+		t.Fatalf("cached source mutated to %q", cachedUsage.Source)
+	}
+	if cachedUsage.FiveHour.RemainingSeconds != 7 {
+		t.Fatalf("cached remaining seconds mutated to %d", cachedUsage.FiveHour.RemainingSeconds)
+	}
+	if usage == cachedUsage || usage.FiveHour == cachedUsage.FiveHour {
+		t.Fatal("active response must not share mutable usage pointers with the cache")
+	}
+}
+
+func TestAccountUsageService_GetAntigravityLocalUsage_ColdCacheDoesNotFetch(t *testing.T) {
+	t.Parallel()
+
+	svc := &AccountUsageService{cache: NewUsageCache()}
+	usage, err := svc.GetLocalUsageForAccount(context.Background(), &Account{
+		ID:       41,
+		Platform: PlatformAntigravity,
+		Type:     AccountTypeOAuth,
+	})
+	if err != nil {
+		t.Fatalf("GetLocalUsageForAccount() error = %v", err)
+	}
+	if usage.Source != "local" || usage.ErrorCode != "snapshot_unavailable" {
+		t.Fatalf("cold local Antigravity usage = %#v", usage)
+	}
+}
+
 type accountUsageCodexProbeRepo struct {
 	stubOpenAIAccountRepo
 	updateExtraCh chan map[string]any

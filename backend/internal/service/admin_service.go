@@ -2,11 +2,13 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"sort"
 	"strconv"
@@ -21,6 +23,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/util/httputil"
+	"go.uber.org/zap"
 )
 
 // AdminService interface defines admin management operations
@@ -28,6 +31,7 @@ type AdminService interface {
 	// User management
 	ListUsers(ctx context.Context, page, pageSize int, filters UserListFilters, sortBy, sortOrder string) ([]User, int64, error)
 	GetUser(ctx context.Context, id int64) (*User, error)
+	GetUserIncludeDeleted(ctx context.Context, id int64) (*User, error)
 	CreateUser(ctx context.Context, input *CreateUserInput) (*User, error)
 	UpdateUser(ctx context.Context, id int64, input *UpdateUserInput) (*User, error)
 	DeleteUser(ctx context.Context, id int64) error
@@ -71,6 +75,10 @@ type AdminService interface {
 	GetAccount(ctx context.Context, id int64) (*Account, error)
 	GetAccountsByIDs(ctx context.Context, ids []int64) ([]*Account, error)
 	CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error)
+	// DuplicateAccount creates an independent, initially unschedulable account from static credentials.
+	DuplicateAccount(ctx context.Context, id int64, actorScope, operationKey string) (*Account, error)
+	// RecoverDuplicateAccount only looks up an already committed duplicate for an ambiguous retry.
+	RecoverDuplicateAccount(ctx context.Context, id int64, actorScope, operationKey string) (*Account, error)
 	UpdateAccount(ctx context.Context, id int64, input *UpdateAccountInput) (*Account, error)
 	DeleteAccount(ctx context.Context, id int64) error
 	RefreshAccountCredentials(ctx context.Context, id int64) (*Account, error)
@@ -121,10 +129,12 @@ type CreateUserInput struct {
 	Password      string
 	Username      string
 	Notes         string
+	Role          string
 	Balance       float64
 	Concurrency   int
 	RPMLimit      int
 	AllowedGroups []int64
+	ActorAdminID  int64
 }
 
 type UpdateUserInput struct {
@@ -132,6 +142,7 @@ type UpdateUserInput struct {
 	Password      string
 	Username      *string
 	Notes         *string
+	Role          string
 	Balance       *float64 // 使用指针区分"未提供"和"设置为0"
 	Concurrency   *int     // 使用指针区分"未提供"和"设置为0"
 	RPMLimit      *int     // 使用指针区分"未提供"和"设置为0"
@@ -139,7 +150,8 @@ type UpdateUserInput struct {
 	AllowedGroups *[]int64 // 使用指针区分"未提供"和"设置为空数组"
 	// GroupRates 用户专属分组倍率配置
 	// map[groupID]*rate，nil 表示删除该分组的专属倍率
-	GroupRates map[int64]*float64
+	GroupRates   map[int64]*float64
+	ActorAdminID int64
 }
 
 type AdminBindAuthIdentityInput struct {
@@ -181,25 +193,35 @@ type AdminBoundAuthIdentityChannel struct {
 }
 
 type CreateGroupInput struct {
-	Name                 string
-	Description          string
-	Platform             string
-	RateMultiplier       float64
-	IsExclusive          bool
-	SubscriptionType     string // standard/subscription
-	RequiredAccountLevel string
-	DailyLimitUSD        *float64 // 日限额 (USD)
-	WeeklyLimitUSD       *float64 // 周限额 (USD)
-	MonthlyLimitUSD      *float64 // 月限额 (USD)
+	Name                     string
+	Description              string
+	Platform                 string
+	RateMultiplier           float64
+	NewUserRateEnabled       bool
+	NewUserRateMultiplier    float64
+	NewUserRateWindowSeconds int
+	NewUserRateQuotaUSD      float64
+	IsExclusive              bool
+	SubscriptionType         string // standard/subscription
+	RequiredAccountLevel     string
+	DailyLimitUSD            *float64 // 日限额 (USD)
+	WeeklyLimitUSD           *float64 // 周限额 (USD)
+	MonthlyLimitUSD          *float64 // 月限额 (USD)
 	// 图片生成计费配置（仅 antigravity 平台使用）
-	AllowImageGeneration bool
-	ImageRateIndependent bool
-	ImageRateMultiplier  *float64
-	ImagePrice1K         *float64
-	ImagePrice2K         *float64
-	ImagePrice4K         *float64
-	ClaudeCodeOnly       bool   // 仅允许 Claude Code 客户端
-	FallbackGroupID      *int64 // 降级分组 ID
+	AllowImageGeneration  bool
+	ImageRateIndependent  bool
+	ImageRateMultiplier   *float64
+	ImagePrice1K          *float64
+	ImagePrice2K          *float64
+	ImagePrice4K          *float64
+	VideoRateIndependent  bool
+	VideoRateMultiplier   *float64
+	VideoPrice480P        *float64
+	VideoPrice720P        *float64
+	VideoPrice1080P       *float64
+	WebSearchPricePerCall *float64
+	ClaudeCodeOnly        bool   // 仅允许 Claude Code 客户端
+	FallbackGroupID       *int64 // 降级分组 ID
 	// 无效请求兜底分组 ID（仅 anthropic 平台使用）
 	FallbackGroupIDOnInvalidRequest *int64
 	// 模型路由配置（仅 anthropic 平台使用）
@@ -221,26 +243,39 @@ type CreateGroupInput struct {
 }
 
 type UpdateGroupInput struct {
-	Name                 string
-	Description          string
-	Platform             string
-	RateMultiplier       *float64 // 使用指针以支持设置为0
-	IsExclusive          *bool
-	Status               string
-	SubscriptionType     string // standard/subscription
-	RequiredAccountLevel *string
-	DailyLimitUSD        *float64 // 日限额 (USD)
-	WeeklyLimitUSD       *float64 // 周限额 (USD)
-	MonthlyLimitUSD      *float64 // 月限额 (USD)
+	Name                     string
+	Description              string
+	Platform                 string
+	RateMultiplier           *float64 // 使用指针以支持设置为0
+	NewUserRateEnabled       *bool
+	NewUserRateMultiplier    *float64
+	NewUserRateWindowSeconds *int
+	NewUserRateQuotaUSD      *float64
+	IsExclusive              *bool
+	Status                   string
+	SubscriptionType         string // standard/subscription
+	RequiredAccountLevel     *string
+	DailyLimitUSD            *float64 // 日限额 (USD)
+	DailyLimitUSDProvided    bool
+	WeeklyLimitUSD           *float64 // 周限额 (USD)
+	WeeklyLimitUSDProvided   bool
+	MonthlyLimitUSD          *float64 // 月限额 (USD)
+	MonthlyLimitUSDProvided  bool
 	// 图片生成计费配置（仅 antigravity 平台使用）
-	AllowImageGeneration *bool
-	ImageRateIndependent *bool
-	ImageRateMultiplier  *float64
-	ImagePrice1K         *float64
-	ImagePrice2K         *float64
-	ImagePrice4K         *float64
-	ClaudeCodeOnly       *bool  // 仅允许 Claude Code 客户端
-	FallbackGroupID      *int64 // 降级分组 ID
+	AllowImageGeneration  *bool
+	ImageRateIndependent  *bool
+	ImageRateMultiplier   *float64
+	ImagePrice1K          *float64
+	ImagePrice2K          *float64
+	ImagePrice4K          *float64
+	VideoRateIndependent  *bool
+	VideoRateMultiplier   *float64
+	VideoPrice480P        *float64
+	VideoPrice720P        *float64
+	VideoPrice1080P       *float64
+	WebSearchPricePerCall *float64
+	ClaudeCodeOnly        *bool  // 仅允许 Claude Code 客户端
+	FallbackGroupID       *int64 // 降级分组 ID
 	// 无效请求兜底分组 ID（仅 anthropic 平台使用）
 	FallbackGroupIDOnInvalidRequest *int64
 	// 模型路由配置（仅 anthropic 平台使用）
@@ -286,6 +321,13 @@ type CreateAccountInput struct {
 	// SkipMixedChannelCheck skips the mixed channel risk check when binding groups.
 	// This should only be set when the caller has explicitly confirmed the risk.
 	SkipMixedChannelCheck bool
+}
+
+// AdminAccountRepository exposes the atomic persistence boundary required by
+// account duplication. The account and its exact per-group priorities must
+// commit or roll back together.
+type AdminAccountRepository interface {
+	CreateWithAccountGroups(ctx context.Context, account *Account, groups []AccountGroup) error
 }
 
 type UpdateAccountInput struct {
@@ -531,25 +573,27 @@ var ErrRPMStatusUnavailable = infraerrors.New(http.StatusNotImplemented, "RPM_ST
 
 // adminServiceImpl implements AdminService
 type adminServiceImpl struct {
-	userRepo                UserRepository
-	groupRepo               GroupRepository
-	accountRepo             AccountRepository
-	proxyRepo               ProxyRepository
-	apiKeyRepo              APIKeyRepository
-	redeemCodeRepo          RedeemCodeRepository
-	userGroupRateRepo       UserGroupRateRepository
-	userRPMCache            UserRPMCache
-	billingCacheService     *BillingCacheService
-	proxyProber             ProxyExitInfoProber
-	proxyLatencyCache       ProxyLatencyCache
-	authCacheInvalidator    APIKeyAuthCacheInvalidator
-	entClient               *dbent.Client // 用于开启数据库事务
-	settingService          *SettingService
-	defaultSubAssigner      DefaultSubscriptionAssigner
-	userSubRepo             UserSubscriptionRepository
-	privacyClientFactory    PrivacyClientFactory
-	privateGroupProvisioner UserPrivateGroupProvisioner
-	systemNoticeService     *SystemNoticeService
+	userRepo                   UserRepository
+	groupRepo                  GroupRepository
+	accountRepo                AccountRepository
+	accountDuplicateRepo       AdminAccountRepository
+	proxyRepo                  ProxyRepository
+	apiKeyRepo                 APIKeyRepository
+	accountShareBindingChecker AccountShareAPIKeyBindingChecker
+	redeemCodeRepo             RedeemCodeRepository
+	userGroupRateRepo          UserGroupRateRepository
+	userRPMCache               UserRPMCache
+	billingCacheService        *BillingCacheService
+	proxyProber                ProxyExitInfoProber
+	proxyLatencyCache          ProxyLatencyCache
+	authCacheInvalidator       APIKeyAuthCacheInvalidator
+	entClient                  *dbent.Client // 用于开启数据库事务
+	settingService             *SettingService
+	defaultSubAssigner         DefaultSubscriptionAssigner
+	userSubRepo                UserSubscriptionRepository
+	privacyClientFactory       PrivacyClientFactory
+	privateGroupProvisioner    UserPrivateGroupProvisioner
+	systemNoticeService        *SystemNoticeService
 }
 
 type userGroupRateBatchReader interface {
@@ -563,6 +607,7 @@ func NewAdminService(
 	accountRepo AccountRepository,
 	proxyRepo ProxyRepository,
 	apiKeyRepo APIKeyRepository,
+	accountShareBindingChecker AccountShareAPIKeyBindingChecker,
 	redeemCodeRepo RedeemCodeRepository,
 	userGroupRateRepo UserGroupRateRepository,
 	userRPMCache UserRPMCache,
@@ -576,24 +621,27 @@ func NewAdminService(
 	userSubRepo UserSubscriptionRepository,
 	privacyClientFactory PrivacyClientFactory,
 ) AdminService {
+	accountDuplicateRepo, _ := accountRepo.(AdminAccountRepository)
 	return &adminServiceImpl{
-		userRepo:             userRepo,
-		groupRepo:            groupRepo,
-		accountRepo:          accountRepo,
-		proxyRepo:            proxyRepo,
-		apiKeyRepo:           apiKeyRepo,
-		redeemCodeRepo:       redeemCodeRepo,
-		userGroupRateRepo:    userGroupRateRepo,
-		userRPMCache:         userRPMCache,
-		billingCacheService:  billingCacheService,
-		proxyProber:          proxyProber,
-		proxyLatencyCache:    proxyLatencyCache,
-		authCacheInvalidator: authCacheInvalidator,
-		entClient:            entClient,
-		settingService:       settingService,
-		defaultSubAssigner:   defaultSubAssigner,
-		userSubRepo:          userSubRepo,
-		privacyClientFactory: privacyClientFactory,
+		userRepo:                   userRepo,
+		groupRepo:                  groupRepo,
+		accountRepo:                accountRepo,
+		accountDuplicateRepo:       accountDuplicateRepo,
+		proxyRepo:                  proxyRepo,
+		apiKeyRepo:                 apiKeyRepo,
+		accountShareBindingChecker: accountShareBindingChecker,
+		redeemCodeRepo:             redeemCodeRepo,
+		userGroupRateRepo:          userGroupRateRepo,
+		userRPMCache:               userRPMCache,
+		billingCacheService:        billingCacheService,
+		proxyProber:                proxyProber,
+		proxyLatencyCache:          proxyLatencyCache,
+		authCacheInvalidator:       authCacheInvalidator,
+		entClient:                  entClient,
+		settingService:             settingService,
+		defaultSubAssigner:         defaultSubAssigner,
+		userSubRepo:                userSubRepo,
+		privacyClientFactory:       privacyClientFactory,
 	}
 }
 
@@ -609,6 +657,47 @@ func SetAdminSystemNoticeService(svc AdminService, noticeService *SystemNoticeSe
 		impl.systemNoticeService = noticeService
 	}
 	return svc
+}
+
+func (s *adminServiceImpl) openAIAccountLevelConfigs(ctx context.Context) ([]OpenAIAccountLevelConfig, error) {
+	if s == nil || s.settingService == nil {
+		return DefaultOpenAIAccountLevelConfigs(), nil
+	}
+	return s.settingService.GetOpenAIAccountLevelConfigs(ctx)
+}
+
+func invalidGroupInput(message string) error {
+	return infraerrors.BadRequest("GROUP_INVALID_INPUT", message)
+}
+
+func invalidAccountInput(message string) error {
+	return infraerrors.BadRequest("ACCOUNT_INVALID_INPUT", message)
+}
+
+func invalidBulkAccountInput(message string) error {
+	return infraerrors.BadRequest("ACCOUNT_BULK_UPDATE_INVALID", message)
+}
+
+func (s *adminServiceImpl) validateRequiredOpenAIAccountLevel(ctx context.Context, platform, level string) (string, error) {
+	trimmed := strings.TrimSpace(level)
+	if trimmed != "" && NormalizeAccountLevelKey(trimmed) == "" {
+		return "", invalidGroupInput("required_account_level must be empty or an enabled OpenAI account level")
+	}
+	normalized := NormalizeRequiredAccountLevel(level)
+	if normalized == "" {
+		return "", nil
+	}
+	if platform != PlatformOpenAI {
+		return normalized, nil
+	}
+	configs, err := s.openAIAccountLevelConfigs(ctx)
+	if err != nil {
+		return "", err
+	}
+	if OpenAIAccountLevelConfigByKey(configs, normalized) == nil {
+		return "", invalidGroupInput("required_account_level must be empty or an enabled OpenAI account level")
+	}
+	return normalized, nil
 }
 
 // User management implementations
@@ -694,19 +783,66 @@ func (s *adminServiceImpl) GetUser(ctx context.Context, id int64) (*User, error)
 	return user, nil
 }
 
+func (s *adminServiceImpl) GetUserIncludeDeleted(ctx context.Context, id int64) (*User, error) {
+	reader, ok := s.userRepo.(AdminDeletedUserReader)
+	if !ok {
+		return nil, errors.New("admin deleted-user reader capability is unavailable")
+	}
+	return reader.GetByIDIncludeDeleted(ctx, id)
+}
+
+func normalizeAdminManagedUserRole(role, fallback string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(role))
+	if normalized == "" {
+		return fallback, nil
+	}
+	if normalized != RoleUser && normalized != RoleAdmin {
+		return "", ErrUserRoleInvalid
+	}
+	return normalized, nil
+}
+
+func validateAdminManagedUserConcurrency(role string, concurrency int) error {
+	if role == RoleUser {
+		return validatePersonalUserConcurrency(concurrency)
+	}
+	if concurrency < 0 {
+		return ErrAdminConcurrencyRange
+	}
+	return nil
+}
+
+func auditAdminUserRole(action string, actorAdminID, targetUserID int64, oldRole, newRole string) {
+	logger.With(
+		zap.String("component", "audit.admin_user_role"),
+		zap.String("action", action),
+		zap.Int64("actor_admin_id", actorAdminID),
+		zap.Int64("target_user_id", targetUserID),
+		zap.String("old_role", oldRole),
+		zap.String("new_role", newRole),
+	).Info("admin user role changed")
+}
+
 func (s *adminServiceImpl) CreateUser(ctx context.Context, input *CreateUserInput) (*User, error) {
 	if input == nil {
 		return nil, errors.New("user input is required")
 	}
-	concurrency := defaultPersonalUserConcurrency(input.Concurrency)
-	if err := validatePersonalUserConcurrency(concurrency); err != nil {
+	role, err := normalizeAdminManagedUserRole(input.Role, RoleUser)
+	if err != nil {
+		return nil, err
+	}
+	concurrency := input.Concurrency
+	if role == RoleUser {
+		concurrency = defaultPersonalUserConcurrency(concurrency)
+	}
+	if err := validateAdminManagedUserConcurrency(role, concurrency); err != nil {
 		return nil, err
 	}
 	user := &User{
 		Email:         input.Email,
 		Username:      input.Username,
 		Notes:         input.Notes,
-		Role:          RoleUser, // Always create as regular user, never admin
+		Role:          role,
 		Balance:       input.Balance,
 		Concurrency:   concurrency,
 		RPMLimit:      input.RPMLimit,
@@ -719,6 +855,7 @@ func (s *adminServiceImpl) CreateUser(ctx context.Context, input *CreateUserInpu
 	if err := s.userRepo.Create(ctx, user); err != nil {
 		return nil, err
 	}
+	auditAdminUserRole("created", input.ActorAdminID, user.ID, "", user.Role)
 	if s.privateGroupProvisioner != nil {
 		if err := s.privateGroupProvisioner.ProvisionUserPrivateGroups(ctx, user.ID); err != nil {
 			return nil, err
@@ -746,6 +883,9 @@ func (s *adminServiceImpl) assignDefaultSubscriptions(ctx context.Context, userI
 }
 
 func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *UpdateUserInput) (*User, error) {
+	if input == nil {
+		return nil, errors.New("user input is required")
+	}
 	// 校验用户专属分组倍率：必须 > 0（nil 合法，表示清除专属倍率）
 	if input.GroupRates != nil {
 		for groupID, rate := range input.GroupRates {
@@ -759,10 +899,19 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 	if err != nil {
 		return nil, err
 	}
+	roleRequested := strings.TrimSpace(input.Role) != ""
+	targetRole, err := normalizeAdminManagedUserRole(input.Role, user.Role)
+	if err != nil {
+		return nil, err
+	}
+	targetStatus := user.Status
+	if input.Status != "" {
+		targetStatus = input.Status
+	}
 
 	// Protect admin users: cannot disable admin accounts
-	if user.Role == "admin" && input.Status == "disabled" {
-		return nil, errors.New("cannot disable admin user")
+	if targetRole == RoleAdmin && targetStatus == StatusDisabled {
+		return nil, ErrAdminDisableForbidden
 	}
 
 	oldConcurrency := user.Concurrency
@@ -799,14 +948,15 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 	if input.Status != "" {
 		user.Status = input.Status
 	}
+	user.Role = targetRole
 
 	if input.Concurrency != nil {
-		if user.Role == RoleUser {
-			if err := validatePersonalUserConcurrency(*input.Concurrency); err != nil {
-				return nil, err
-			}
-		}
 		user.Concurrency = *input.Concurrency
+	}
+	if input.Concurrency != nil || roleRequested {
+		if err := validateAdminManagedUserConcurrency(user.Role, user.Concurrency); err != nil {
+			return nil, err
+		}
 	}
 
 	if input.RPMLimit != nil {
@@ -817,8 +967,34 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 		user.AllowedGroups = *input.AllowedGroups
 	}
 
-	if err := s.userRepo.Update(ctx, user); err != nil {
-		return nil, err
+	governanceRepo, ok := s.userRepo.(AdminUserGovernanceRepository)
+	if !ok {
+		if roleRequested || input.Status != "" || input.Concurrency != nil {
+			return nil, errors.New("admin user governance repository capability is unavailable")
+		}
+		// Read-only/test repository implementations may not expose governance
+		// locking. They can still persist profile-only fields; every production
+		// role, status, or concurrency mutation remains fail-fast above.
+		if err := s.userRepo.Update(ctx, user); err != nil {
+			return nil, err
+		}
+	} else {
+		governanceUpdate, err := governanceRepo.UpdateWithAdminGovernanceGuard(ctx, user, AdminUserGovernanceUpdate{
+			UpdateRole:   roleRequested,
+			UpdateStatus: input.Status != "",
+		})
+		if err != nil {
+			return nil, err
+		}
+		if governanceUpdate != nil {
+			oldRole = governanceUpdate.OldRole
+			oldStatus = governanceUpdate.OldStatus
+			user.Role = governanceUpdate.NewRole
+			user.Status = governanceUpdate.NewStatus
+			if governanceUpdate.OldRole != governanceUpdate.NewRole {
+				auditAdminUserRole("updated", input.ActorAdminID, user.ID, governanceUpdate.OldRole, governanceUpdate.NewRole)
+			}
+		}
 	}
 
 	// 同步用户专属分组倍率
@@ -1826,32 +2002,50 @@ func (s *adminServiceImpl) GetGroup(ctx context.Context, id int64) (*Group, erro
 
 func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupInput) (*Group, error) {
 	if input.RateMultiplier <= 0 {
-		return nil, errors.New("rate_multiplier must be > 0")
-	}
-	if !IsValidRequiredAccountLevel(input.RequiredAccountLevel) {
-		return nil, errors.New("required_account_level must be empty, free, plus, pro, or team")
+		return nil, invalidGroupInput("rate_multiplier must be > 0")
 	}
 
 	platform := input.Platform
 	if platform == "" {
 		platform = PlatformAnthropic
 	}
+	requiredAccountLevel, err := s.validateRequiredOpenAIAccountLevel(ctx, platform, input.RequiredAccountLevel)
+	if err != nil {
+		return nil, err
+	}
 
 	subscriptionType := input.SubscriptionType
 	if subscriptionType == "" {
 		subscriptionType = SubscriptionTypeStandard
+	}
+	newUserRateEnabled, newUserRateMultiplier, newUserRateWindowSeconds, newUserRateQuotaUSD, err := normalizeNewUserRateConfig(
+		input.NewUserRateEnabled,
+		input.NewUserRateMultiplier,
+		input.NewUserRateWindowSeconds,
+		input.NewUserRateQuotaUSD,
+	)
+	if err != nil {
+		return nil, err
 	}
 
 	// 限额字段：nil/负数 表示"无限制"，0 表示"不允许用量"，正数表示具体限额
 	dailyLimit := normalizeLimit(input.DailyLimitUSD)
 	weeklyLimit := normalizeLimit(input.WeeklyLimitUSD)
 	monthlyLimit := normalizeLimit(input.MonthlyLimitUSD)
+	if err := validateVideoRateMultiplier(platform, input.VideoRateIndependent, input.VideoRateMultiplier); err != nil {
+		return nil, err
+	}
 
 	// 图片价格：负数表示清除（使用默认价格），0 保留（表示免费）
-	imageRateMultiplier := normalizeImageRateMultiplier(input.ImageRateMultiplier)
+	imageRateMultiplier := normalizeMediaRateMultiplier(input.ImageRateMultiplier)
 	imagePrice1K := normalizePrice(input.ImagePrice1K)
 	imagePrice2K := normalizePrice(input.ImagePrice2K)
 	imagePrice4K := normalizePrice(input.ImagePrice4K)
+	videoRateMultiplier := normalizeMediaRateMultiplier(input.VideoRateMultiplier)
+	videoPrice480P := normalizePrice(input.VideoPrice480P)
+	videoPrice720P := normalizePrice(input.VideoPrice720P)
+	videoPrice1080P := normalizePrice(input.VideoPrice1080P)
+	webSearchPricePerCall := normalizePrice(input.WebSearchPricePerCall)
 
 	// 校验降级分组
 	if input.FallbackGroupID != nil {
@@ -1896,7 +2090,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 				return nil, fmt.Errorf("source group %d not found: %w", srcGroupID, err)
 			}
 			if srcGroup.Platform != platform {
-				return nil, fmt.Errorf("source group %d platform mismatch: expected %s, got %s", srcGroupID, platform, srcGroup.Platform)
+				return nil, invalidGroupInput(fmt.Sprintf("source group %d platform mismatch: expected %s, got %s", srcGroupID, platform, srcGroup.Platform))
 			}
 		}
 
@@ -1913,10 +2107,14 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		Description:                     input.Description,
 		Platform:                        platform,
 		RateMultiplier:                  input.RateMultiplier,
+		NewUserRateEnabled:              newUserRateEnabled,
+		NewUserRateMultiplier:           newUserRateMultiplier,
+		NewUserRateWindowSeconds:        newUserRateWindowSeconds,
+		NewUserRateQuotaUSD:             newUserRateQuotaUSD,
 		IsExclusive:                     input.IsExclusive,
 		Status:                          StatusActive,
 		SubscriptionType:                subscriptionType,
-		RequiredAccountLevel:            NormalizeRequiredAccountLevel(input.RequiredAccountLevel),
+		RequiredAccountLevel:            requiredAccountLevel,
 		DailyLimitUSD:                   dailyLimit,
 		WeeklyLimitUSD:                  weeklyLimit,
 		MonthlyLimitUSD:                 monthlyLimit,
@@ -1926,6 +2124,12 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		ImagePrice1K:                    imagePrice1K,
 		ImagePrice2K:                    imagePrice2K,
 		ImagePrice4K:                    imagePrice4K,
+		VideoRateIndependent:            input.VideoRateIndependent,
+		VideoRateMultiplier:             videoRateMultiplier,
+		VideoPrice480P:                  videoPrice480P,
+		VideoPrice720P:                  videoPrice720P,
+		VideoPrice1080P:                 videoPrice1080P,
+		WebSearchPricePerCall:           webSearchPricePerCall,
 		ClaudeCodeOnly:                  input.ClaudeCodeOnly,
 		FallbackGroupID:                 input.FallbackGroupID,
 		FallbackGroupIDOnInvalidRequest: fallbackOnInvalidRequest,
@@ -1939,8 +2143,9 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		MessagesDispatchModelConfig:     normalizeOpenAIMessagesDispatchModelConfig(input.MessagesDispatchModelConfig),
 		RPMLimit:                        input.RPMLimit,
 	}
+	sanitizeGroupPlatformPricingFields(group)
 	sanitizeGroupMessagesDispatchFields(group)
-	accountIDsToCopy, err := s.normalizeAccountIDsForGroupBinding(ctx, group, accountIDsToCopy)
+	accountIDsToCopy, err = s.normalizeAccountIDsForGroupBinding(ctx, group, accountIDsToCopy)
 	if err != nil {
 		return nil, err
 	}
@@ -1976,11 +2181,67 @@ func normalizePrice(price *float64) *float64 {
 	return price
 }
 
-func normalizeImageRateMultiplier(multiplier *float64) float64 {
+func normalizeMediaRateMultiplier(multiplier *float64) float64 {
 	if multiplier == nil || *multiplier < 0 {
 		return 1.0
 	}
 	return *multiplier
+}
+
+// sanitizeGroupPlatformPricingFields removes pricing that cannot be consumed by
+// the selected platform. This is enforced server-side so direct API callers and
+// platform changes cannot persist hidden cross-platform configuration.
+func sanitizeGroupPlatformPricingFields(group *Group) {
+	if group == nil {
+		return
+	}
+	if group.Platform != PlatformGrok {
+		group.VideoRateIndependent = false
+		group.VideoRateMultiplier = 1
+		group.VideoPrice480P = nil
+		group.VideoPrice720P = nil
+		group.VideoPrice1080P = nil
+	}
+	if group.Platform != PlatformOpenAI {
+		group.WebSearchPricePerCall = nil
+	}
+}
+
+func validateVideoRateMultiplier(platform string, independent bool, multiplier *float64) error {
+	if platform != PlatformGrok || !independent || multiplier == nil {
+		return nil
+	}
+	if math.IsNaN(*multiplier) || math.IsInf(*multiplier, 0) || *multiplier <= 0 {
+		return invalidGroupInput("video_rate_multiplier must be a finite number > 0 when independent video rate is enabled")
+	}
+	return nil
+}
+
+const maxNewUserRateWindowSeconds = 1<<31 - 1
+
+func normalizeNewUserRateConfig(enabled bool, multiplier float64, windowSeconds int, quotaUSD float64) (bool, float64, int, float64, error) {
+	if !enabled {
+		if multiplier <= 0 {
+			multiplier = 1
+		}
+		if quotaUSD < 0 {
+			quotaUSD = 0
+		}
+		return false, multiplier, 0, quotaUSD, nil
+	}
+	if multiplier <= 0 {
+		return false, 0, 0, 0, invalidGroupInput("new_user_rate_multiplier must be > 0")
+	}
+	if windowSeconds <= 0 {
+		return false, 0, 0, 0, invalidGroupInput("new_user_rate_window_seconds must be > 0 when new user rate is enabled")
+	}
+	if windowSeconds > maxNewUserRateWindowSeconds {
+		return false, 0, 0, 0, invalidGroupInput("new_user_rate_window_seconds is too large")
+	}
+	if quotaUSD < 0 {
+		return false, 0, 0, 0, invalidGroupInput("new_user_rate_quota_usd must be >= 0")
+	}
+	return true, multiplier, windowSeconds, quotaUSD, nil
 }
 
 // validateFallbackGroup 校验降级分组的有效性
@@ -1989,18 +2250,18 @@ func normalizeImageRateMultiplier(multiplier *float64) float64 {
 func (s *adminServiceImpl) validateFallbackGroup(ctx context.Context, currentGroupID, fallbackGroupID int64) error {
 	// 不能将自己设置为降级分组
 	if currentGroupID > 0 && currentGroupID == fallbackGroupID {
-		return fmt.Errorf("cannot set self as fallback group")
+		return invalidGroupInput("cannot set self as fallback group")
 	}
 
 	visited := map[int64]struct{}{}
 	nextID := fallbackGroupID
 	for {
 		if _, seen := visited[nextID]; seen {
-			return fmt.Errorf("fallback group cycle detected")
+			return invalidGroupInput("fallback group cycle detected")
 		}
 		visited[nextID] = struct{}{}
 		if currentGroupID > 0 && nextID == currentGroupID {
-			return fmt.Errorf("fallback group cycle detected")
+			return invalidGroupInput("fallback group cycle detected")
 		}
 
 		// 检查降级分组是否存在
@@ -2011,7 +2272,7 @@ func (s *adminServiceImpl) validateFallbackGroup(ctx context.Context, currentGro
 
 		// 降级分组不能启用 claude_code_only，否则会造成死循环
 		if nextID == fallbackGroupID && fallbackGroup.ClaudeCodeOnly {
-			return fmt.Errorf("fallback group cannot have claude_code_only enabled")
+			return invalidGroupInput("fallback group cannot have claude_code_only enabled")
 		}
 
 		if fallbackGroup.FallbackGroupID == nil {
@@ -2027,13 +2288,13 @@ func (s *adminServiceImpl) validateFallbackGroup(ctx context.Context, currentGro
 // fallbackGroupID: 兜底分组 ID
 func (s *adminServiceImpl) validateFallbackGroupOnInvalidRequest(ctx context.Context, currentGroupID int64, platform, subscriptionType string, fallbackGroupID int64) error {
 	if platform != PlatformAnthropic && platform != PlatformAntigravity {
-		return fmt.Errorf("invalid request fallback only supported for anthropic or antigravity groups")
+		return invalidGroupInput("invalid request fallback only supported for anthropic or antigravity groups")
 	}
 	if subscriptionType == SubscriptionTypeSubscription {
-		return fmt.Errorf("subscription groups cannot set invalid request fallback")
+		return invalidGroupInput("subscription groups cannot set invalid request fallback")
 	}
 	if currentGroupID > 0 && currentGroupID == fallbackGroupID {
-		return fmt.Errorf("cannot set self as invalid request fallback group")
+		return invalidGroupInput("cannot set self as invalid request fallback group")
 	}
 
 	fallbackGroup, err := s.groupRepo.GetByIDLite(ctx, fallbackGroupID)
@@ -2041,13 +2302,13 @@ func (s *adminServiceImpl) validateFallbackGroupOnInvalidRequest(ctx context.Con
 		return fmt.Errorf("fallback group not found: %w", err)
 	}
 	if fallbackGroup.Platform != PlatformAnthropic {
-		return fmt.Errorf("fallback group must be anthropic platform")
+		return invalidGroupInput("fallback group must be anthropic platform")
 	}
 	if fallbackGroup.SubscriptionType == SubscriptionTypeSubscription {
-		return fmt.Errorf("fallback group cannot be subscription type")
+		return invalidGroupInput("fallback group cannot be subscription type")
 	}
 	if fallbackGroup.FallbackGroupIDOnInvalidRequest != nil {
-		return fmt.Errorf("fallback group cannot have invalid request fallback configured")
+		return invalidGroupInput("fallback group cannot have invalid request fallback configured")
 	}
 	return nil
 }
@@ -2070,9 +2331,35 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	}
 	if input.RateMultiplier != nil {
 		if *input.RateMultiplier <= 0 {
-			return nil, errors.New("rate_multiplier must be > 0")
+			return nil, invalidGroupInput("rate_multiplier must be > 0")
 		}
 		group.RateMultiplier = *input.RateMultiplier
+	}
+	if input.NewUserRateEnabled != nil || input.NewUserRateMultiplier != nil || input.NewUserRateWindowSeconds != nil || input.NewUserRateQuotaUSD != nil {
+		enabled := group.NewUserRateEnabled
+		if input.NewUserRateEnabled != nil {
+			enabled = *input.NewUserRateEnabled
+		}
+		multiplier := group.NewUserRateMultiplier
+		if input.NewUserRateMultiplier != nil {
+			multiplier = *input.NewUserRateMultiplier
+		}
+		windowSeconds := group.NewUserRateWindowSeconds
+		if input.NewUserRateWindowSeconds != nil {
+			windowSeconds = *input.NewUserRateWindowSeconds
+		}
+		quotaUSD := group.NewUserRateQuotaUSD
+		if input.NewUserRateQuotaUSD != nil {
+			quotaUSD = *input.NewUserRateQuotaUSD
+		}
+		enabled, multiplier, windowSeconds, quotaUSD, err := normalizeNewUserRateConfig(enabled, multiplier, windowSeconds, quotaUSD)
+		if err != nil {
+			return nil, err
+		}
+		group.NewUserRateEnabled = enabled
+		group.NewUserRateMultiplier = multiplier
+		group.NewUserRateWindowSeconds = windowSeconds
+		group.NewUserRateQuotaUSD = quotaUSD
 	}
 	if input.IsExclusive != nil {
 		group.IsExclusive = *input.IsExclusive
@@ -2086,16 +2373,22 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 		group.SubscriptionType = input.SubscriptionType
 	}
 	if input.RequiredAccountLevel != nil {
-		if !IsValidRequiredAccountLevel(*input.RequiredAccountLevel) {
-			return nil, errors.New("required_account_level must be empty, free, plus, pro, or team")
+		requiredAccountLevel, err := s.validateRequiredOpenAIAccountLevel(ctx, group.Platform, *input.RequiredAccountLevel)
+		if err != nil {
+			return nil, err
 		}
-		group.RequiredAccountLevel = NormalizeRequiredAccountLevel(*input.RequiredAccountLevel)
+		group.RequiredAccountLevel = requiredAccountLevel
 	}
-	// 限额字段：nil/负数 表示"无限制"，0 表示"不允许用量"，正数表示具体限额
-	// 前端始终发送这三个字段，无需 nil 守卫
-	group.DailyLimitUSD = normalizeLimit(input.DailyLimitUSD)
-	group.WeeklyLimitUSD = normalizeLimit(input.WeeklyLimitUSD)
-	group.MonthlyLimitUSD = normalizeLimit(input.MonthlyLimitUSD)
+	// 限额字段：未提供不改动；显式 null/负数 表示"无限制"，0 表示"不允许用量"，正数表示具体限额。
+	if input.DailyLimitUSDProvided {
+		group.DailyLimitUSD = normalizeLimit(input.DailyLimitUSD)
+	}
+	if input.WeeklyLimitUSDProvided {
+		group.WeeklyLimitUSD = normalizeLimit(input.WeeklyLimitUSD)
+	}
+	if input.MonthlyLimitUSDProvided {
+		group.MonthlyLimitUSD = normalizeLimit(input.MonthlyLimitUSD)
+	}
 	// 图片生成计费配置：负数表示清除（使用默认价格）
 	if input.AllowImageGeneration != nil {
 		group.AllowImageGeneration = *input.AllowImageGeneration
@@ -2104,7 +2397,7 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 		group.ImageRateIndependent = *input.ImageRateIndependent
 	}
 	if input.ImageRateMultiplier != nil {
-		group.ImageRateMultiplier = normalizeImageRateMultiplier(input.ImageRateMultiplier)
+		group.ImageRateMultiplier = normalizeMediaRateMultiplier(input.ImageRateMultiplier)
 	}
 	if input.ImagePrice1K != nil {
 		group.ImagePrice1K = normalizePrice(input.ImagePrice1K)
@@ -2114,6 +2407,24 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	}
 	if input.ImagePrice4K != nil {
 		group.ImagePrice4K = normalizePrice(input.ImagePrice4K)
+	}
+	if input.VideoRateIndependent != nil {
+		group.VideoRateIndependent = *input.VideoRateIndependent
+	}
+	if input.VideoRateMultiplier != nil {
+		group.VideoRateMultiplier = normalizeMediaRateMultiplier(input.VideoRateMultiplier)
+	}
+	if input.VideoPrice480P != nil {
+		group.VideoPrice480P = normalizePrice(input.VideoPrice480P)
+	}
+	if input.VideoPrice720P != nil {
+		group.VideoPrice720P = normalizePrice(input.VideoPrice720P)
+	}
+	if input.VideoPrice1080P != nil {
+		group.VideoPrice1080P = normalizePrice(input.VideoPrice1080P)
+	}
+	if input.WebSearchPricePerCall != nil {
+		group.WebSearchPricePerCall = normalizePrice(input.WebSearchPricePerCall)
 	}
 
 	// Claude Code 客户端限制
@@ -2182,6 +2493,14 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	if input.RPMLimit != nil {
 		group.RPMLimit = *input.RPMLimit
 	}
+	sanitizeGroupPlatformPricingFields(group)
+	if err := validateVideoRateMultiplier(group.Platform, group.VideoRateIndependent, input.VideoRateMultiplier); err != nil {
+		return nil, err
+	}
+	if group.Platform == PlatformGrok && group.VideoRateIndependent &&
+		(math.IsNaN(group.VideoRateMultiplier) || math.IsInf(group.VideoRateMultiplier, 0) || group.VideoRateMultiplier <= 0) {
+		return nil, invalidGroupInput("video_rate_multiplier must be a finite number > 0 when independent video rate is enabled")
+	}
 	sanitizeGroupMessagesDispatchFields(group)
 
 	var accountIDsToCopy []int64
@@ -2191,7 +2510,7 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 		uniqueSourceGroupIDs := make([]int64, 0, len(input.CopyAccountsFromGroupIDs))
 		for _, srcGroupID := range input.CopyAccountsFromGroupIDs {
 			if srcGroupID == id {
-				return nil, fmt.Errorf("cannot copy accounts from self")
+				return nil, invalidGroupInput("cannot copy accounts from self")
 			}
 			if _, exists := seen[srcGroupID]; !exists {
 				seen[srcGroupID] = struct{}{}
@@ -2206,7 +2525,7 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 				return nil, fmt.Errorf("source group %d not found: %w", srcGroupID, err)
 			}
 			if srcGroup.Platform != group.Platform {
-				return nil, fmt.Errorf("source group %d platform mismatch: expected %s, got %s", srcGroupID, group.Platform, srcGroup.Platform)
+				return nil, invalidGroupInput(fmt.Sprintf("source group %d platform mismatch: expected %s, got %s", srcGroupID, group.Platform, srcGroup.Platform))
 			}
 		}
 
@@ -2399,6 +2718,8 @@ func (s *adminServiceImpl) AdminUpdateAPIKeyGroupID(ctx context.Context, keyID i
 		return nil, infraerrors.BadRequest("INVALID_GROUP_ID", "group_id must be non-negative")
 	}
 
+	currentAPIKey := *apiKey
+	currentAPIKey.GroupRoutes = append([]APIKeyGroupRoute(nil), apiKey.GroupRoutes...)
 	result := &AdminUpdateAPIKeyGroupIDResult{}
 
 	if *groupID == 0 {
@@ -2406,6 +2727,9 @@ func (s *adminServiceImpl) AdminUpdateAPIKeyGroupID(ctx context.Context, keyID i
 		apiKey.GroupID = nil
 		apiKey.Group = nil
 		apiKey.GroupRoutes = nil
+		if err := s.ensureAdminAPIKeyAccountShareBindingPreserved(ctx, &currentAPIKey, apiKey); err != nil {
+			return nil, err
+		}
 	} else {
 		// 验证目标分组存在且状态为 active
 		group, err := s.groupRepo.GetByID(ctx, *groupID)
@@ -2439,6 +2763,9 @@ func (s *adminServiceImpl) AdminUpdateAPIKeyGroupID(ctx context.Context, keyID i
 			CooldownSeconds: 30,
 			Group:           group,
 		}}
+		if err := s.ensureAdminAPIKeyAccountShareBindingPreserved(ctx, &currentAPIKey, apiKey); err != nil {
+			return nil, err
+		}
 
 		// 专属标准分组：使用事务保证「添加分组权限」与「更新 API Key」的原子性
 		if group.IsExclusive && !group.IsSubscriptionType() {
@@ -2494,6 +2821,20 @@ func (s *adminServiceImpl) AdminUpdateAPIKeyGroupID(ctx context.Context, keyID i
 
 	result.APIKey = apiKey
 	return result, nil
+}
+
+func (s *adminServiceImpl) ensureAdminAPIKeyAccountShareBindingPreserved(ctx context.Context, current, updated *APIKey) error {
+	if s.accountShareBindingChecker == nil || !accountShareBindingWouldBeBroken(current, updated) {
+		return nil
+	}
+	exists, err := s.accountShareBindingChecker.HasActiveOrQueuedMembershipForAPIKey(ctx, current.UserID, current.ID)
+	if err != nil {
+		return fmt.Errorf("check account share api key binding: %w", err)
+	}
+	if exists {
+		return ErrAPIKeyAccountShareBindingExists
+	}
+	return nil
 }
 
 // AdminResetAPIKeyRateLimitUsage resets all API key rate-limit usage windows.
@@ -2612,12 +2953,291 @@ func (s *adminServiceImpl) GetAccountsByIDs(ctx context.Context, ids []int64) ([
 	return accounts, nil
 }
 
-func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error) {
-	extra, err := NormalizeCodexQuotaLimitExtra(input.Platform, input.Type, input.Extra)
+const (
+	maxAccountNameRunes                 = 100
+	duplicateAccountOperationIDExtraKey = "duplicate_operation_id"
+)
+
+func duplicateAccountName(sourceName string) string {
+	const suffix = " (Copy)"
+	nameRunes := []rune(strings.TrimSpace(sourceName))
+	maxBaseRunes := maxAccountNameRunes - len([]rune(suffix))
+	if len(nameRunes) > maxBaseRunes {
+		nameRunes = nameRunes[:maxBaseRunes]
+	}
+	return string(nameRunes) + suffix
+}
+
+func cloneAccountJSONMap(value map[string]any) (map[string]any, error) {
+	if value == nil {
+		return nil, nil
+	}
+	payload, err := json.Marshal(value)
 	if err != nil {
 		return nil, err
 	}
+	cloned := make(map[string]any, len(value))
+	if err := json.Unmarshal(payload, &cloned); err != nil {
+		return nil, err
+	}
+	return cloned, nil
+}
+
+var duplicateAccountDiscardedExtraKeys = map[string]struct{}{
+	// Operation and external synchronization identities are unique to one local row.
+	duplicateAccountOperationIDExtraKey: {},
+	"crs_account_id":                    {},
+	"crs_kind":                          {},
+	"crs_synced_at":                     {},
+
+	// Quota consumption and derived window timestamps must start from a clean state.
+	"quota_used":            {},
+	"quota_daily_used":      {},
+	"quota_weekly_used":     {},
+	"quota_daily_start":     {},
+	"quota_weekly_start":    {},
+	"quota_daily_reset_at":  {},
+	"quota_weekly_reset_at": {},
+
+	// Provider observations, probes, errors, rate limits, and temporary scheduling state.
+	"model_rate_limits":                      {},
+	"session_window_utilization":             {},
+	"session_window_reset_at":                {},
+	"anthropic_5h_reset_at":                  {},
+	"anthropic_7d_reset_at":                  {},
+	"anthropic_usage_updated_at":             {},
+	"passive_usage_7d_utilization":           {},
+	"passive_usage_7d_reset":                 {},
+	"passive_usage_7d_oi_utilization":        {},
+	"passive_usage_7d_oi_reset":              {},
+	"passive_usage_sampled_at":               {},
+	"grok_usage_snapshot":                    {},
+	"grok_billing_snapshot":                  {},
+	"openai_responses_supported":             {},
+	"openai_compact_supported":               {},
+	"openai_compact_checked_at":              {},
+	"openai_compact_last_status":             {},
+	"openai_compact_last_error":              {},
+	"privacy_mode":                           {},
+	"subscription_status":                    {},
+	"subscription_error":                     {},
+	"subscription_tier":                      {},
+	"antigravity_credits_overages":           {},
+	"antigravity_force_token_refresh":        {},
+	"antigravity_force_token_refresh_at":     {},
+	"antigravity_force_token_refresh_reason": {},
+	"drive_storage_limit":                    {},
+	"drive_storage_usage":                    {},
+	"drive_tier_updated_at":                  {},
+
+	// Codex usage snapshots are account-local runtime observations.
+	"codex_primary_used_percent":           {},
+	"codex_primary_reset_after_seconds":    {},
+	"codex_primary_window_minutes":         {},
+	"codex_secondary_used_percent":         {},
+	"codex_secondary_reset_after_seconds":  {},
+	"codex_secondary_window_minutes":       {},
+	"codex_primary_over_secondary_percent": {},
+	"codex_usage_updated_at":               {},
+	"codex_5h_used_percent":                {},
+	"codex_5h_reset_after_seconds":         {},
+	"codex_5h_window_minutes":              {},
+	"codex_5h_reset_at":                    {},
+	"codex_7d_used_percent":                {},
+	"codex_7d_reset_after_seconds":         {},
+	"codex_7d_window_minutes":              {},
+	"codex_7d_reset_at":                    {},
+}
+
+func duplicateAccountExtra(value map[string]any) (map[string]any, error) {
+	cloned, err := cloneAccountJSONMap(value)
+	if err != nil {
+		return nil, err
+	}
+	for key := range duplicateAccountDiscardedExtraKeys {
+		delete(cloned, key)
+	}
+	return cloned, nil
+}
+
+func canDuplicateAccountType(accountType string) bool {
+	switch accountType {
+	case AccountTypeAPIKey, AccountTypeUpstream, AccountTypeBedrock, AccountTypeServiceAccount:
+		return true
+	default:
+		return false
+	}
+}
+
+func duplicateAccountGroups(source *Account) ([]AccountGroup, []int64) {
+	if len(source.AccountGroups) > 0 {
+		groups := make([]AccountGroup, 0, len(source.AccountGroups))
+		groupIDs := make([]int64, 0, len(source.AccountGroups))
+		for _, sourceGroup := range source.AccountGroups {
+			groups = append(groups, AccountGroup{GroupID: sourceGroup.GroupID, Priority: sourceGroup.Priority})
+			groupIDs = append(groupIDs, sourceGroup.GroupID)
+		}
+		return groups, groupIDs
+	}
+
+	groupIDs := append([]int64(nil), source.GroupIDs...)
+	groups := make([]AccountGroup, 0, len(groupIDs))
+	for i, groupID := range groupIDs {
+		groups = append(groups, AccountGroup{GroupID: groupID, Priority: i + 1})
+	}
+	return groups, groupIDs
+}
+
+func duplicateAccountOperationID(sourceID int64, actorScope, operationKey string) string {
+	operationKey = strings.TrimSpace(operationKey)
+	if operationKey == "" {
+		return ""
+	}
+	actorScope = strings.TrimSpace(actorScope)
+	if actorScope == "" {
+		actorScope = "admin:0"
+	}
+	payload := "admin.accounts.duplicate\x00" + actorScope + "\x00" + strconv.FormatInt(sourceID, 10) + "\x00" + operationKey
+	digest := sha256.Sum256([]byte(payload))
+	return fmt.Sprintf("%x", digest)
+}
+
+func cloneAccountValuePointer[T any](value *T) *T {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func (s *adminServiceImpl) findDuplicateByOperationID(ctx context.Context, operationID string) (*Account, error) {
+	if operationID == "" {
+		return nil, nil
+	}
+	accounts, err := s.accountRepo.FindByExtraField(ctx, duplicateAccountOperationIDExtraKey, operationID)
+	if err != nil {
+		return nil, fmt.Errorf("find duplicate account operation: %w", err)
+	}
+	if len(accounts) == 0 {
+		return nil, nil
+	}
+	if len(accounts) > 1 {
+		return nil, fmt.Errorf("duplicate account operation resolved to %d accounts", len(accounts))
+	}
+	account := accounts[0]
+	return &account, nil
+}
+
+func (s *adminServiceImpl) RecoverDuplicateAccount(ctx context.Context, id int64, actorScope, operationKey string) (*Account, error) {
+	return s.findDuplicateByOperationID(ctx, duplicateAccountOperationID(id, actorScope, operationKey))
+}
+
+func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actorScope, operationKey string) (*Account, error) {
+	operationID := duplicateAccountOperationID(id, actorScope, operationKey)
+	existing, err := s.findDuplicateByOperationID(ctx, operationID)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		return existing, nil
+	}
+
+	source, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if source.OwnerUserID != nil || source.AccountShareModeListingID != nil || source.SharePolicyID != nil || NormalizeAccountShareMode(source.ShareMode) == AccountShareModePublic {
+		return nil, infraerrors.BadRequest(
+			"ACCOUNT_DUPLICATE_SHARED_IDENTITY_UNSUPPORTED",
+			"owned or shared accounts cannot be duplicated",
+		)
+	}
+	if !canDuplicateAccountType(source.Type) {
+		return nil, infraerrors.BadRequest(
+			"ACCOUNT_DUPLICATE_CREDENTIAL_TYPE_UNSUPPORTED",
+			"accounts with rotating or unsupported credential types cannot be duplicated",
+		)
+	}
+
+	credentials, err := cloneAccountJSONMap(source.Credentials)
+	if err != nil {
+		return nil, fmt.Errorf("clone account credentials: %w", err)
+	}
+	extra, err := duplicateAccountExtra(source.Extra)
+	if err != nil {
+		return nil, fmt.Errorf("clone account extra configuration: %w", err)
+	}
+	if operationID != "" {
+		if extra == nil {
+			extra = make(map[string]any, 1)
+		}
+		extra[duplicateAccountOperationIDExtraKey] = operationID
+	}
+
+	groups, groupIDs := duplicateAccountGroups(source)
+	var expiresAt *int64
+	if source.ExpiresAt != nil {
+		unix := source.ExpiresAt.Unix()
+		expiresAt = &unix
+	}
+	autoPauseOnExpired := source.AutoPauseOnExpired
+	input := &CreateAccountInput{
+		Name:                 duplicateAccountName(source.Name),
+		Notes:                cloneAccountValuePointer(source.Notes),
+		Platform:             source.Platform,
+		AccountLevel:         source.AccountLevel,
+		Type:                 source.Type,
+		Credentials:          credentials,
+		Extra:                extra,
+		ProxyID:              cloneAccountValuePointer(source.ProxyID),
+		Concurrency:          source.Concurrency,
+		Priority:             source.Priority,
+		RateMultiplier:       cloneAccountValuePointer(source.RateMultiplier),
+		LoadFactor:           cloneAccountValuePointer(source.LoadFactor),
+		GroupIDs:             groupIDs,
+		ExpiresAt:            expiresAt,
+		AutoPauseOnExpired:   &autoPauseOnExpired,
+		SkipDefaultGroupBind: true,
+		// The exact group set is inherited from an already persisted account,
+		// so this operation does not introduce a new platform into a group.
+		SkipMixedChannelCheck: true,
+	}
+	duplicate, preparedGroupIDs, err := s.prepareAccountCreate(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	duplicate.Schedulable = false
+	duplicate.GroupIDs = preparedGroupIDs
+	if s.accountDuplicateRepo == nil {
+		return nil, errors.New("account duplicate repository is not configured")
+	}
+	if err := s.accountDuplicateRepo.CreateWithAccountGroups(ctx, duplicate, groups); err != nil {
+		return nil, fmt.Errorf("create duplicate account: %w", err)
+	}
+	for i := range groups {
+		groups[i].AccountID = duplicate.ID
+	}
+	duplicate.AccountGroups = groups
+	duplicate.GroupIDs = preparedGroupIDs
+	s.notifyAccountCreated(ctx, duplicate)
+	return duplicate, nil
+}
+
+func (s *adminServiceImpl) prepareAccountCreate(ctx context.Context, input *CreateAccountInput) (*Account, []int64, error) {
+	if input == nil {
+		return nil, nil, ErrAccountNilInput
+	}
+	if !IsSupportedAccountPlatform(input.Platform) {
+		return nil, nil, ErrAccountPlatformUnsupported
+	}
+	extra, err := NormalizeCodexQuotaLimitExtra(input.Platform, input.Type, input.Extra)
+	if err != nil {
+		return nil, nil, err
+	}
 	input.Extra = extra
+	if err := NormalizeHeaderOverrideCredentials(input.Credentials); err != nil {
+		return nil, nil, err
+	}
 
 	// 绑定分组
 	groupIDs := input.GroupIDs
@@ -2638,12 +3258,19 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	// 检查混合渠道风险（除非用户已确认）
 	if len(groupIDs) > 0 && !input.SkipMixedChannelCheck {
 		if err := s.checkMixedChannelRisk(ctx, 0, input.Platform, groupIDs); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
-	accountLevel := NormalizeOpenAIAccountLevel(input.Platform, input.AccountLevel, input.Credentials, input.Extra)
+	levelConfigs, err := s.openAIAccountLevelConfigs(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := ValidateConfiguredOpenAIAccountLevel(input.Platform, input.AccountLevel, levelConfigs); err != nil {
+		return nil, nil, invalidAccountInput(err.Error())
+	}
+	accountLevel := NormalizeOpenAIAccountLevelWithConfigs(input.Platform, input.AccountLevel, input.Credentials, input.Extra, levelConfigs)
 	if err := s.validateAccountLevelGroupBinding(ctx, input.Platform, accountLevel, groupIDs); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := s.validateAccountShareGroupBinding(ctx, &Account{
 		Platform:    input.Platform,
@@ -2651,18 +3278,18 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		ShareMode:   NormalizeAccountShareMode(input.ShareMode),
 		ShareStatus: NormalizeAccountShareStatus(input.ShareStatus),
 	}, groupIDs); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	concurrency, err := NormalizeOpenAIPlusConcurrency(input.Platform, accountLevel, input.Concurrency)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := ValidateAccountLoadFactor(input.LoadFactor); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if input.ProxyID != nil && *input.ProxyID > 0 {
 		if err := s.ensureProxyAccountCapacity(ctx, *input.ProxyID, 1); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
@@ -2687,7 +3314,7 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	// 预计算固定时间重置的下次重置时间
 	if account.Extra != nil {
 		if err := ValidateQuotaResetConfig(account.Extra); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		ComputeQuotaResetAt(account.Extra)
 	}
@@ -2702,15 +3329,23 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	}
 	if input.RateMultiplier != nil {
 		if *input.RateMultiplier < 0 {
-			return nil, errors.New("rate_multiplier must be >= 0")
+			return nil, nil, errors.New("rate_multiplier must be >= 0")
 		}
 		account.RateMultiplier = input.RateMultiplier
 	}
 	if input.LoadFactor != nil && *input.LoadFactor > 0 {
 		if err := ValidateAccountLoadFactor(input.LoadFactor); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		account.LoadFactor = input.LoadFactor
+	}
+	return account, append([]int64(nil), groupIDs...), nil
+}
+
+func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error) {
+	account, groupIDs, err := s.prepareAccountCreate(ctx, input)
+	if err != nil {
+		return nil, err
 	}
 	if err := s.accountRepo.Create(ctx, account); err != nil {
 		return nil, err
@@ -2726,7 +3361,7 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 
 	// OAuth 账号：创建后异步设置隐私。
 	// 使用 Ensure（幂等）而非 Force：新建账号 Extra 为空时效果相同，但更安全。
-	if account.Type == AccountTypeOAuth {
+	if shouldEnsureOAuthPrivacyAfterCreate(account) {
 		switch account.Platform {
 		case PlatformOpenAI:
 			go func() {
@@ -2753,6 +3388,10 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	return account, nil
 }
 
+func shouldEnsureOAuthPrivacyAfterCreate(account *Account) bool {
+	return account != nil && account.Type == AccountTypeOAuth && !account.IsOpenAIAgentIdentity()
+}
+
 func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *UpdateAccountInput) (*Account, error) {
 	account, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
@@ -2775,6 +3414,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	}
 	if len(input.Credentials) > 0 {
 		account.Credentials = MergePreservingSensitiveCreds(account.Credentials, input.Credentials)
+		if err := NormalizeHeaderOverrideCredentials(account.Credentials); err != nil {
+			return nil, err
+		}
 	}
 	// Extra 使用 map：需要区分“未提供(nil)”与“显式清空({})”。
 	// 关闭配额限制时前端会删除 quota_* 键并提交 extra:{}，此时也必须落库。
@@ -2810,8 +3452,25 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	}
 	if input.AccountLevel != nil {
 		account.AccountLevel = NormalizeAccountLevel(*input.AccountLevel)
+		if account.Platform == PlatformOpenAI {
+			levelConfigs, err := s.openAIAccountLevelConfigs(ctx)
+			if err != nil {
+				return nil, err
+			}
+			if err := ValidateConfiguredOpenAIAccountLevel(account.Platform, account.AccountLevel, levelConfigs); err != nil {
+				return nil, invalidAccountInput(err.Error())
+			}
+			account.AccountLevel = NormalizeOpenAIAccountLevelWithConfigs(account.Platform, account.AccountLevel, account.Credentials, account.Extra, levelConfigs)
+		}
 	} else {
-		account.AccountLevel = NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, account.Credentials, account.Extra)
+		levelConfigs, err := s.openAIAccountLevelConfigs(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if err := ValidateConfiguredOpenAIAccountLevel(account.Platform, account.AccountLevel, levelConfigs); err != nil {
+			return nil, invalidAccountInput(err.Error())
+		}
+		account.AccountLevel = NormalizeOpenAIAccountLevelWithConfigs(account.Platform, account.AccountLevel, account.Credentials, account.Extra, levelConfigs)
 	}
 	if input.ProxyID != nil {
 		if err := s.ensureAccountProxyCapacityForUpdate(ctx, account, input.ProxyID); err != nil {
@@ -2962,6 +3621,10 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	if len(input.AccountIDs) == 0 {
 		return result, nil
 	}
+	levelConfigs, err := s.openAIAccountLevelConfigs(ctx)
+	if err != nil {
+		return nil, err
+	}
 	if input.GroupIDs != nil {
 		if err := s.validateGroupIDsExist(ctx, *input.GroupIDs); err != nil {
 			return nil, err
@@ -2991,10 +3654,16 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 				continue
 			}
 			credentials := mergeAccountMapPreservingSensitiveCreds(account.Credentials, input.Credentials)
+			if err := NormalizeHeaderOverrideCredentials(credentials); err != nil {
+				return nil, invalidBulkAccountInput(err.Error())
+			}
 			extra := mergeAccountMap(account.Extra, input.Extra)
-			level := NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, credentials, extra)
+			level := NormalizeOpenAIAccountLevelWithConfigs(account.Platform, account.AccountLevel, credentials, extra, levelConfigs)
 			if input.AccountLevel != nil {
 				level = NormalizeAccountLevel(*input.AccountLevel)
+				if err := ValidateConfiguredOpenAIAccountLevel(account.Platform, level, levelConfigs); err != nil {
+					return nil, invalidBulkAccountInput(err.Error())
+				}
 			}
 			groupIDs := account.GroupIDs
 			if input.GroupIDs != nil {
@@ -3083,10 +3752,16 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 				continue
 			}
 			credentials := mergeAccountMapPreservingSensitiveCreds(account.Credentials, input.Credentials)
+			if err := NormalizeHeaderOverrideCredentials(credentials); err != nil {
+				return nil, infraerrors.BadRequest("ACCOUNT_BULK_UPDATE_INVALID", err.Error())
+			}
 			extra := mergeAccountMap(account.Extra, input.Extra)
-			level := NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, credentials, extra)
-			if input.AccountLevel != nil && account.Platform != PlatformOpenAI {
+			level := NormalizeOpenAIAccountLevelWithConfigs(account.Platform, account.AccountLevel, credentials, extra, levelConfigs)
+			if input.AccountLevel != nil {
 				level = NormalizeAccountLevel(*input.AccountLevel)
+				if err := ValidateConfiguredOpenAIAccountLevel(account.Platform, level, levelConfigs); err != nil {
+					return nil, invalidBulkAccountInput(err.Error())
+				}
 			}
 			concurrency := account.Concurrency
 			if input.Concurrency != nil {
@@ -3106,6 +3781,11 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			if err := ValidateAccountLoadFactor(loadFactor); err != nil {
 				return nil, infraerrors.BadRequest("ACCOUNT_BULK_UPDATE_INVALID", err.Error())
 			}
+		}
+	}
+	if len(input.Credentials) > 0 {
+		if err := NormalizeHeaderOverrideCredentials(input.Credentials); err != nil {
+			return nil, infraerrors.BadRequest("ACCOUNT_BULK_UPDATE_INVALID", err.Error())
 		}
 	}
 
@@ -4238,7 +4918,14 @@ func (s *adminServiceImpl) validateAccountLevelGroupBinding(ctx context.Context,
 	if len(groupIDs) == 0 || accountPlatform != PlatformOpenAI {
 		return nil
 	}
+	levelConfigs, err := s.openAIAccountLevelConfigs(ctx)
+	if err != nil {
+		return err
+	}
 	level := NormalizeAccountLevel(accountLevel)
+	if err := ValidateConfiguredOpenAIAccountLevel(accountPlatform, level, levelConfigs); err != nil {
+		return infraerrors.BadRequest("ACCOUNT_GROUP_BINDING_INVALID", err.Error())
+	}
 	for _, groupID := range groupIDs {
 		group, err := s.groupRepo.GetByIDLite(ctx, groupID)
 		if err != nil {
@@ -4248,7 +4935,7 @@ func (s *adminServiceImpl) validateAccountLevelGroupBinding(ctx context.Context,
 		if group.Platform != PlatformOpenAI || required == "" {
 			continue
 		}
-		if !CanOpenAIAccountJoinSharedPool(level, required) {
+		if !CanOpenAIAccountJoinSharedPoolWithConfigs(level, required, levelConfigs) {
 			return infraerrors.BadRequest(
 				"ACCOUNT_GROUP_BINDING_INVALID",
 				fmt.Sprintf("account_level mismatch: OpenAI account level %s cannot bind to group %s requiring %s", NormalizeOpenAISharedPoolAccountLevel(level), group.Name, required),
@@ -4419,7 +5106,8 @@ func (s *adminServiceImpl) normalizeAccountIDsForGroupBinding(ctx context.Contex
 		(group.Platform == PlatformOpenAI ||
 			group.Platform == PlatformAntigravity ||
 			group.Platform == PlatformAnthropic ||
-			group.Platform == PlatformGemini)
+			group.Platform == PlatformGemini ||
+			group.Platform == PlatformGrok)
 	requiredLevel := NormalizeRequiredAccountLevel(group.RequiredAccountLevel)
 	requiresLevelCheck := group.Platform == PlatformOpenAI && requiredLevel != ""
 	if !requiresOAuthFilter && !requiresLevelCheck {
@@ -4432,6 +5120,16 @@ func (s *adminServiceImpl) normalizeAccountIDsForGroupBinding(ctx context.Contex
 	accounts, err := s.accountRepo.GetByIDs(ctx, accountIDs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch accounts for group binding: %w", err)
+	}
+	levelConfigs := DefaultOpenAIAccountLevelConfigs()
+	if requiresLevelCheck {
+		levelConfigs, err = s.openAIAccountLevelConfigs(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if OpenAIAccountLevelConfigByKey(levelConfigs, requiredLevel) == nil {
+			return nil, invalidGroupInput("required_account_level must be empty or an enabled OpenAI account level")
+		}
 	}
 	accountByID := make(map[int64]*Account, len(accounts))
 	for _, account := range accounts {
@@ -4453,8 +5151,8 @@ func (s *adminServiceImpl) normalizeAccountIDsForGroupBinding(ctx context.Contex
 			continue
 		}
 		accountLevel := NormalizeAccountLevel(account.AccountLevel)
-		if requiresLevelCheck && account.Platform == PlatformOpenAI && !CanOpenAIAccountJoinSharedPool(accountLevel, requiredLevel) {
-			return nil, fmt.Errorf("account_level mismatch: OpenAI account %s level %s cannot bind to group %s requiring %s", account.Name, NormalizeOpenAISharedPoolAccountLevel(accountLevel), group.Name, requiredLevel)
+		if requiresLevelCheck && account.Platform == PlatformOpenAI && !CanOpenAIAccountJoinSharedPoolWithConfigs(accountLevel, requiredLevel, levelConfigs) {
+			return nil, invalidGroupInput(fmt.Sprintf("account_level mismatch: OpenAI account %s level %s cannot bind to group %s requiring %s", account.Name, NormalizeOpenAISharedPoolAccountLevel(accountLevel), group.Name, requiredLevel))
 		}
 		filtered = append(filtered, accountID)
 	}
@@ -4464,7 +5162,7 @@ func (s *adminServiceImpl) normalizeAccountIDsForGroupBinding(ctx context.Contex
 // EnsureOpenAIPrivacy 检查 OpenAI OAuth 账号是否已设置 privacy_mode，
 // 未设置则调用 disableOpenAITraining 并持久化到 Extra，返回设置的 mode 值。
 func (s *adminServiceImpl) EnsureOpenAIPrivacy(ctx context.Context, account *Account) string {
-	if account.Platform != PlatformOpenAI || account.Type != AccountTypeOAuth {
+	if account == nil || account.Platform != PlatformOpenAI || account.Type != AccountTypeOAuth || account.IsOpenAIAgentIdentity() {
 		return ""
 	}
 	if s.privacyClientFactory == nil {

@@ -16,6 +16,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/paymentproviderinstance"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/payment/provider"
+	"golang.org/x/sync/singleflight"
 )
 
 // --- Order Status Constants ---
@@ -74,6 +75,8 @@ type CreateOrderRequest struct {
 	Amount          float64
 	PaymentType     string
 	OpenID          string
+	BuyerID         string
+	BuyerOpenID     string
 	ClientIP        string
 	IsMobile        bool
 	IsWeChatBrowser bool
@@ -106,6 +109,7 @@ type CreateOrderResponse struct {
 	OAuth        *payment.WechatOAuthInfo        `json:"oauth,omitempty"`
 	JSAPI        *payment.WechatJSAPIPayload     `json:"jsapi,omitempty"`
 	JSAPIPayload *payment.WechatJSAPIPayload     `json:"jsapi_payload,omitempty"`
+	AlipayJSAPI  *payment.AlipayJSAPIPayload     `json:"alipay_jsapi,omitempty"`
 	ExpiresAt    time.Time                       `json:"expires_at"`
 	PaymentMode  string                          `json:"payment_mode,omitempty"`
 	ResumeToken  string                          `json:"resume_token,omitempty"`
@@ -243,20 +247,21 @@ type ShopPaymentDeliveryReader interface {
 // --- Service ---
 
 type PaymentService struct {
-	providerMu       sync.Mutex
-	providersLoaded  bool
-	entClient        *dbent.Client
-	registry         *payment.Registry
-	loadBalancer     payment.LoadBalancer
-	redeemService    *RedeemService
-	subscriptionSvc  *SubscriptionService
-	configService    *PaymentConfigService
-	userRepo         UserRepository
-	groupRepo        GroupRepository
-	resumeService    *PaymentResumeService
-	affiliateService *AffiliateService
-	shopFulfillment  ShopPaymentFulfillment
-	systemNotice     *SystemNoticeService
+	providerMu         sync.Mutex
+	providersLoaded    bool
+	alipayJSAPIStartSF singleflight.Group
+	entClient          *dbent.Client
+	registry           *payment.Registry
+	loadBalancer       payment.LoadBalancer
+	redeemService      *RedeemService
+	subscriptionSvc    *SubscriptionService
+	configService      *PaymentConfigService
+	userRepo           UserRepository
+	groupRepo          GroupRepository
+	resumeService      *PaymentResumeService
+	affiliateService   *AffiliateService
+	shopFulfillment    ShopPaymentFulfillment
+	systemNotice       *SystemNoticeService
 }
 
 func NewPaymentService(entClient *dbent.Client, registry *payment.Registry, loadBalancer payment.LoadBalancer, redeemService *RedeemService, subscriptionSvc *SubscriptionService, configService *PaymentConfigService, userRepo UserRepository, groupRepo GroupRepository, affiliateService *AffiliateService) *PaymentService {

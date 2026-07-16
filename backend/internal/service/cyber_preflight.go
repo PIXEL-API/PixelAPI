@@ -17,7 +17,20 @@ const (
 	cyberPreflightScore        = 1
 )
 
-var cyberPreflightTargetPattern = regexp.MustCompile(`(?i)(https?://|[a-z0-9][a-z0-9-]{1,62}\.[a-z]{2,}|(?:\d{1,3}\.){3}\d{1,3})`)
+var (
+	cyberPreflightTargetPattern = regexp.MustCompile(`(?i)(https?://|[a-z0-9][a-z0-9-]{1,62}\.[a-z]{2,}|(?:\d{1,3}\.){3}\d{1,3})`)
+	cyberPreflightTextReplacer  = strings.NewReplacer(
+		"／", "/",
+		"．", ".",
+		"：", ":",
+		"＿", "_",
+		"-", " ",
+		"_", " ",
+		"`", " ",
+		"'", " ",
+		"\"", " ",
+	)
+)
 
 type CyberPreflightResult struct {
 	Flagged  bool
@@ -52,7 +65,12 @@ func (s *ContentModerationService) CheckCyberPreflight(ctx context.Context, inpu
 	if !inScope {
 		return allow, nil
 	}
-	content := ExtractCyberPreflightInput(input.Protocol, input.Body)
+	var content ContentModerationInput
+	if input.ContentSource != nil {
+		content = input.ContentSource.CyberPreflightInputCopy()
+	} else {
+		content = ExtractCyberPreflightInput(input.Protocol, input.Body)
+	}
 	if content.IsEmpty() {
 		return allow, nil
 	}
@@ -108,9 +126,24 @@ func (s *ContentModerationService) CheckCyberPreflight(ctx context.Context, inpu
 	return decision, nil
 }
 
+func extractOpenAIResponsesCyberPreflightInput(instructions, input gjson.Result) ContentModerationInput {
+	collector := newModerationInputCollector()
+	if instructions.Exists() {
+		collector.AddText(instructions.String())
+	}
+	collectAllResponsesInputsBounded(input, collector)
+	return collector.Input()
+}
+
 func ExtractCyberPreflightInput(protocol string, body []byte) ContentModerationInput {
 	if len(body) == 0 || !gjson.ValidBytes(body) {
 		return ContentModerationInput{}
+	}
+	if protocol == ContentModerationProtocolOpenAIResponses {
+		return extractOpenAIResponsesCyberPreflightInput(
+			gjson.GetBytes(body, "instructions"),
+			gjson.GetBytes(body, "input"),
+		)
 	}
 	var parts []string
 	var images []string
@@ -120,9 +153,6 @@ func ExtractCyberPreflightInput(protocol string, body []byte) ContentModerationI
 		collectAllAnthropicUserMessages(gjson.GetBytes(body, "messages"), &parts, &images)
 	case ContentModerationProtocolOpenAIChat:
 		collectAllOpenAIChatMessages(gjson.GetBytes(body, "messages"), &parts, &images)
-	case ContentModerationProtocolOpenAIResponses:
-		addModerationText(&parts, gjson.GetBytes(body, "instructions").String())
-		collectAllResponsesInputs(gjson.GetBytes(body, "input"), &parts, &images)
 	case ContentModerationProtocolGemini:
 		collectAllGeminiContents(gjson.GetBytes(body, "contents"), &parts, &images)
 	case ContentModerationProtocolOpenAIImages:
@@ -147,19 +177,19 @@ func EvaluateCyberPreflightText(text string) CyberPreflightResult {
 }
 
 func EvaluateCyberPreflightTextWithRules(text string, rules ContentModerationCyberPreflightRulesConfig) CyberPreflightResult {
-	rules.normalize()
 	normalized := normalizeCyberPreflightText(text)
 	if normalized == "" {
 		return CyberPreflightResult{}
 	}
-	defensive := containsAnyCyberPreflightPhrase(normalized, rules.DefensiveMarkers) != ""
-	standalone := containsAnyCyberPreflightPhrase(normalized, rules.StandaloneBlockMarkers)
-	hardMarker := containsAnyCyberPreflightPhrase(normalized, rules.HardMarkers)
-	intent := containsAnyCyberPreflightPhrase(normalized, rules.OffensiveIntentMarkers)
-	credentialIntent := containsAnyCyberPreflightPhrase(normalized, rules.CredentialAbuseIntentMarkers)
-	technique := containsAnyCyberPreflightPhrase(normalized, rules.TechniqueMarkers)
-	credential := containsAnyCyberPreflightPhrase(normalized, rules.CredentialMarkers)
-	targeted := cyberPreflightTargetPattern.MatchString(normalized) || containsAnyCyberPreflightPhrase(normalized, rules.TargetMarkers) != ""
+	matches := loadCyberPreflightRuleMatcher(rules).Match(normalized)
+	defensive := matches.Defensive != ""
+	standalone := matches.StandaloneBlock
+	hardMarker := matches.Hard
+	intent := matches.OffensiveIntent
+	credentialIntent := matches.CredentialAbuseIntent
+	technique := matches.Technique
+	credential := matches.Credential
+	targeted := cyberPreflightTargetPattern.MatchString(normalized) || matches.Target != ""
 
 	switch {
 	case standalone != "" && !defensive:
@@ -295,6 +325,37 @@ func collectAllResponsesInputs(input gjson.Result, parts *[]string, images *[]st
 	}
 }
 
+func collectAllResponsesInputsBounded(input gjson.Result, collector *moderationInputCollector) {
+	if collector == nil {
+		return
+	}
+	switch {
+	case !input.Exists():
+		return
+	case input.Type == gjson.String:
+		if collector.runeCount < maxModerationInputRunes {
+			collector.AddText(input.String())
+		}
+	case input.IsArray():
+		input.ForEach(func(_, item gjson.Result) bool {
+			if isResponsesUserTextItem(item) || isResponsesSystemTextItem(item) {
+				collectContentValueBounded(item.Get("content"), collector)
+				if item.Get("type").String() == "input_text" || item.Get("text").Exists() {
+					collectContentValueBounded(item, collector)
+				}
+			}
+			return true
+		})
+	case input.IsObject():
+		if isResponsesUserTextItem(input) || isResponsesSystemTextItem(input) {
+			collectContentValueBounded(input.Get("content"), collector)
+			if input.Get("type").String() == "input_text" || input.Get("text").Exists() {
+				collectContentValueBounded(input, collector)
+			}
+		}
+	}
+}
+
 func isResponsesSystemTextItem(item gjson.Result) bool {
 	role := strings.ToLower(strings.TrimSpace(item.Get("role").String()))
 	return role == "system" || role == "developer"
@@ -337,27 +398,7 @@ func cyberPreflightFlag(category string, reason string) CyberPreflightResult {
 
 func normalizeCyberPreflightText(text string) string {
 	text = strings.ToLower(normalizeContentModerationText(text))
-	replacer := strings.NewReplacer(
-		"／", "/",
-		"．", ".",
-		"：", ":",
-		"＿", "_",
-		"-", " ",
-		"_", " ",
-		"`", " ",
-		"'", " ",
-		"\"", " ",
-	)
-	return strings.Join(strings.Fields(replacer.Replace(text)), " ")
-}
-
-func containsAnyCyberPreflightPhrase(text string, phrases []string) string {
-	for _, phrase := range phrases {
-		if strings.Contains(text, phrase) {
-			return phrase
-		}
-	}
-	return ""
+	return strings.Join(strings.Fields(cyberPreflightTextReplacer.Replace(text)), " ")
 }
 
 func normalizeCyberPreflightRulePhrases(phrases []string) []string {

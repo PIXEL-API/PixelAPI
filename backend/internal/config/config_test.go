@@ -29,6 +29,37 @@ func resetViperWithEmptyConfig(t *testing.T) {
 	t.Setenv("DATA_DIR", tempDir)
 }
 
+func TestLoadServerTimingConfig(t *testing.T) {
+	t.Run("disabled by default", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.False(t, cfg.Server.EnableServerTiming)
+	})
+
+	t.Run("enabled by exact environment variable", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		t.Setenv("ENABLE_SERVER_TIMING", "true")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.True(t, cfg.Server.EnableServerTiming)
+	})
+
+	t.Run("yaml value", func(t *testing.T) {
+		resetViperWithConfig(t, "server:\n  enable_server_timing: true\njwt:\n  secret: "+strings.Repeat("x", 32)+"\ntotp:\n  encryption_key: "+strings.Repeat("a", 64)+"\n")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.True(t, cfg.Server.EnableServerTiming)
+	})
+
+	t.Run("invalid environment value fails fast", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		t.Setenv("ENABLE_SERVER_TIMING", "not-a-boolean")
+		_, err := Load()
+		require.Error(t, err)
+	})
+}
+
 func resetViperWithConfig(t *testing.T, content string) string {
 	t.Helper()
 	viper.Reset()
@@ -192,6 +223,15 @@ func TestLoadDefaultOpenAIWSConfig(t *testing.T) {
 	}
 	if cfg.Gateway.OpenAIWS.IngressModeDefault != "ctx_pool" {
 		t.Fatalf("Gateway.OpenAIWS.IngressModeDefault = %q, want %q", cfg.Gateway.OpenAIWS.IngressModeDefault, "ctx_pool")
+	}
+	if cfg.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds != 300 {
+		t.Fatalf("Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds = %d, want 300", cfg.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds)
+	}
+	if cfg.Gateway.OpenAIWS.MaxIngressConnectionsPerAPIKey != 64 {
+		t.Fatalf("Gateway.OpenAIWS.MaxIngressConnectionsPerAPIKey = %d, want 64", cfg.Gateway.OpenAIWS.MaxIngressConnectionsPerAPIKey)
+	}
+	if cfg.Gateway.OpenAIWS.SchedulerScoreWeights.QuotaHeadroom != 0 {
+		t.Fatalf("Gateway.OpenAIWS.SchedulerScoreWeights.QuotaHeadroom = %v, want 0", cfg.Gateway.OpenAIWS.SchedulerScoreWeights.QuotaHeadroom)
 	}
 }
 
@@ -1504,6 +1544,16 @@ func TestValidateConfigErrors(t *testing.T) {
 			wantErr: "gateway.stream_keepalive_interval",
 		},
 		{
+			name:    "gateway image nonstream keepalive negative",
+			mutate:  func(c *Config) { c.Gateway.ImageNonstreamKeepaliveInterval = -1 },
+			wantErr: "gateway.image_nonstream_keepalive_interval must be non-negative",
+		},
+		{
+			name:    "gateway image nonstream keepalive range",
+			mutate:  func(c *Config) { c.Gateway.ImageNonstreamKeepaliveInterval = 4 },
+			wantErr: "gateway.image_nonstream_keepalive_interval must be 0 or between 5-60 seconds",
+		},
+		{
 			name:    "gateway openai ws oauth max conns factor",
 			mutate:  func(c *Config) { c.Gateway.OpenAIWS.OAuthMaxConnsFactor = 0 },
 			wantErr: "gateway.openai_ws.oauth_max_conns_factor",
@@ -1723,6 +1773,16 @@ func TestValidateConfig_OpenAIWSRules(t *testing.T) {
 			wantErr: "gateway.openai_ws.max_conns_per_account",
 		},
 		{
+			name:    "ingress inter-turn idle timeout 不能为负数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds = -1 },
+			wantErr: "gateway.openai_ws.ingress_inter_turn_idle_timeout_seconds",
+		},
+		{
+			name:    "ingress API key 连接上限不能为负数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.MaxIngressConnectionsPerAPIKey = -1 },
+			wantErr: "gateway.openai_ws.max_ingress_connections_per_api_key",
+		},
+		{
 			name:    "min_idle_per_account 不能为负数",
 			mutate:  func(c *Config) { c.Gateway.OpenAIWS.MinIdlePerAccount = -1 },
 			wantErr: "gateway.openai_ws.min_idle_per_account",
@@ -1828,6 +1888,11 @@ func TestValidateConfig_OpenAIWSRules(t *testing.T) {
 			wantErr: "gateway.openai_ws.scheduler_score_weights.* must be non-negative",
 		},
 		{
+			name:    "quota_headroom 权重不能为负数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.SchedulerScoreWeights.QuotaHeadroom = -0.1 },
+			wantErr: "gateway.openai_ws.scheduler_score_weights.* must be non-negative",
+		},
+		{
 			name: "scheduler_score_weights 不能全为 0",
 			mutate: func(c *Config) {
 				c.Gateway.OpenAIWS.SchedulerScoreWeights.Priority = 0
@@ -1835,6 +1900,7 @@ func TestValidateConfig_OpenAIWSRules(t *testing.T) {
 				c.Gateway.OpenAIWS.SchedulerScoreWeights.Queue = 0
 				c.Gateway.OpenAIWS.SchedulerScoreWeights.ErrorRate = 0
 				c.Gateway.OpenAIWS.SchedulerScoreWeights.TTFT = 0
+				c.Gateway.OpenAIWS.SchedulerScoreWeights.QuotaHeadroom = 0
 			},
 			wantErr: "gateway.openai_ws.scheduler_score_weights must not all be zero",
 		},
@@ -1851,6 +1917,18 @@ func TestValidateConfig_OpenAIWSRules(t *testing.T) {
 			require.Contains(t, err.Error(), tc.wantErr)
 		})
 	}
+
+	t.Run("quota_headroom 可作为唯一正权重", func(t *testing.T) {
+		cfg := buildValid(t)
+		cfg.Gateway.OpenAIWS.SchedulerScoreWeights.Priority = 0
+		cfg.Gateway.OpenAIWS.SchedulerScoreWeights.Load = 0
+		cfg.Gateway.OpenAIWS.SchedulerScoreWeights.Queue = 0
+		cfg.Gateway.OpenAIWS.SchedulerScoreWeights.ErrorRate = 0
+		cfg.Gateway.OpenAIWS.SchedulerScoreWeights.TTFT = 0
+		cfg.Gateway.OpenAIWS.SchedulerScoreWeights.QuotaHeadroom = 0.1
+
+		require.NoError(t, cfg.Validate())
+	})
 }
 
 func TestValidateConfig_AutoScaleDisabledIgnoreAutoScaleFields(t *testing.T) {
@@ -1961,8 +2039,8 @@ func TestLoad_DefaultGatewayUsageRecordConfig(t *testing.T) {
 	if cfg.Gateway.UsageRecord.TaskTimeoutSeconds != 5 {
 		t.Fatalf("task_timeout_seconds = %d, want 5", cfg.Gateway.UsageRecord.TaskTimeoutSeconds)
 	}
-	if cfg.Gateway.UsageRecord.OverflowPolicy != UsageRecordOverflowPolicySample {
-		t.Fatalf("overflow_policy = %s, want %s", cfg.Gateway.UsageRecord.OverflowPolicy, UsageRecordOverflowPolicySample)
+	if cfg.Gateway.UsageRecord.OverflowPolicy != UsageRecordOverflowPolicySync {
+		t.Fatalf("overflow_policy = %s, want %s", cfg.Gateway.UsageRecord.OverflowPolicy, UsageRecordOverflowPolicySync)
 	}
 	if cfg.Gateway.UsageRecord.OverflowSamplePercent != 10 {
 		t.Fatalf("overflow_sample_percent = %d, want 10", cfg.Gateway.UsageRecord.OverflowSamplePercent)

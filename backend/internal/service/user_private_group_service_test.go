@@ -15,4 +15,30 @@ func TestDefaultPrivateGroupAllowMessagesDispatch(t *testing.T) {
 	require.False(t, defaultPrivateGroupAllowMessagesDispatch(PlatformAnthropic))
 	require.False(t, defaultPrivateGroupAllowMessagesDispatch(PlatformGemini))
 	require.False(t, defaultPrivateGroupAllowMessagesDispatch(PlatformAntigravity))
+	require.False(t, defaultPrivateGroupAllowMessagesDispatch(PlatformGrok))
+}
+
+func TestSupportedUserPrivateGroupPlatformsIncludesAllAccountPlatforms(t *testing.T) {
+	require.Equal(t, []string{
+		PlatformAnthropic,
+		PlatformOpenAI,
+		PlatformGemini,
+		PlatformAntigravity,
+		PlatformGrok,
+	}, SupportedUserPrivateGroupPlatforms())
+	require.True(t, IsSupportedUserPrivateGroupPlatform(PlatformGrok))
+	require.True(t, IsSupportedUserPrivateGroupPlatform(" Grok "))
+	for _, platform := range SupportedUserPrivateGroupPlatforms() {
+		require.True(t, IsSupportedAccountPlatform(platform))
+	}
+	require.False(t, IsSupportedAccountPlatform("unsupported"))
+}
+
+func TestBuildUserPrivateGroupUsesPositiveNewUserRateMultiplierDefault(t *testing.T) {
+	group := buildUserPrivateGroup(42, PlatformOpenAI, &UserPrivateGroupTemplate{
+		RateMultiplier: 1,
+	})
+
+	require.Equal(t, 1.0, group.NewUserRateMultiplier)
+	require.False(t, group.NewUserRateEnabled)
 }

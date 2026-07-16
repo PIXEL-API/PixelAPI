@@ -1111,6 +1111,7 @@
 import { ref, watch, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
+import { useAdminSettingsStore } from '@/stores/adminSettings'
 import { useAuthStore } from '@/stores/auth'
 import { adminAPI } from '@/api/admin'
 import { accountsAPI } from '@/api/accounts'
@@ -1146,6 +1147,7 @@ import {
   isOpenAIWSModeEnabled,
   resolveOpenAIWSModeConcurrencyHintKey
 } from '@/utils/openaiWsMode'
+import { openAIAccountLevelOptions } from '@/utils/openaiAccountLevels'
 import type { OpenAIWSMode } from '@/utils/openaiWsMode'
 interface Props {
   show: boolean
@@ -1183,6 +1185,7 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const appStore = useAppStore()
 const authStore = useAuthStore()
+const adminSettingsStore = useAdminSettingsStore()
 const accountScope = computed(() => props.accountScope ?? 'admin')
 const isUserScope = computed(() => accountScope.value === 'user')
 const hasAccountShareModeOnly = computed(() => props.hasAccountShareModeOnly === true)
@@ -1389,13 +1392,12 @@ const statusOptions = computed(() => [
   { value: 'active', label: t('common.active') },
   { value: isUserScope.value ? 'disabled' : 'inactive', label: t('common.inactive') }
 ])
-const accountLevelOptions = computed(() => [
-  { value: 'unknown', label: t('admin.accounts.accountLevel.unknown') },
-  { value: 'free', label: t('admin.accounts.accountLevel.free') },
-  { value: 'plus', label: t('admin.accounts.accountLevel.plus') },
-  { value: 'pro', label: t('admin.accounts.accountLevel.pro') },
-  { value: 'team', label: t('admin.accounts.accountLevel.team') }
-])
+const accountLevelOptions = computed(() =>
+  openAIAccountLevelOptions(adminSettingsStore.openAIAccountLevels, {
+    includeUnknown: true,
+    unknownLabel: t('admin.accounts.accountLevel.unknown')
+  })
+)
 const shareModeOptions = computed(() => [
   { value: 'private', label: t('userAccounts.privateMode') },
   { value: 'public', label: t('userAccounts.publicMode') }

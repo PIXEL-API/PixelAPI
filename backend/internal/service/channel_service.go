@@ -590,7 +590,79 @@ func validatePricingEntries(pricing []ChannelModelPricing) error {
 	if err := validatePricingIntervals(pricing); err != nil {
 		return err
 	}
-	return validatePricingBillingMode(pricing)
+	if err := validatePricingBillingMode(pricing); err != nil {
+		return err
+	}
+	return validateLongContextPricingPolicies(pricing)
+}
+
+// validateLongContextPricingPolicies 校验渠道长上下文三态策略：
+// nil/false 均关闭模型价卡长上下文倍率，true 必须同时配置正整数阈值。
+// 自定义上下文区间与显式启用互斥，避免同一请求叠加两套上下文计费规则。
+func validateLongContextPricingPolicies(pricing []ChannelModelPricing) error {
+	for _, p := range pricing {
+		enabled := p.LongContextPricingEnabled
+		threshold := p.LongContextInputTokenThreshold
+		if enabled != nil || threshold != nil {
+			if p.Platform != PlatformOpenAI {
+				return infraerrors.BadRequest(
+					"LONG_CONTEXT_PRICING_OPENAI_ONLY",
+					fmt.Sprintf("long-context pricing policy requires platform=%s for model %v", PlatformOpenAI, p.Models),
+				)
+			}
+			mode := p.BillingMode
+			if mode == "" {
+				mode = BillingModeToken
+			}
+			if mode != BillingModeToken {
+				return infraerrors.BadRequest(
+					"LONG_CONTEXT_PRICING_TOKEN_MODE_ONLY",
+					fmt.Sprintf("long-context pricing policy requires billing_mode=%s for model %v", BillingModeToken, p.Models),
+				)
+			}
+		}
+
+		if threshold != nil && (*threshold <= 0 || *threshold > maxLongContextInputTokenThreshold) {
+			return infraerrors.BadRequest(
+				"INVALID_LONG_CONTEXT_THRESHOLD",
+				fmt.Sprintf("long_context_input_token_threshold must be between 1 and %d for model %v", maxLongContextInputTokenThreshold, p.Models),
+			)
+		}
+		if threshold != nil && (enabled == nil || !*enabled) {
+			return infraerrors.BadRequest(
+				"LONG_CONTEXT_THRESHOLD_REQUIRES_ENABLED",
+				fmt.Sprintf("long_context_input_token_threshold requires long_context_pricing_enabled=true for model %v", p.Models),
+			)
+		}
+		if enabled == nil || !*enabled {
+			continue
+		}
+		if threshold == nil {
+			return infraerrors.BadRequest(
+				"LONG_CONTEXT_THRESHOLD_REQUIRED",
+				fmt.Sprintf("long_context_input_token_threshold is required when long_context_pricing_enabled=true for model %v", p.Models),
+			)
+		}
+		if len(p.Intervals) > 0 {
+			return infraerrors.BadRequest(
+				"LONG_CONTEXT_INTERVAL_CONFLICT",
+				fmt.Sprintf("long_context_pricing_enabled=true conflicts with context pricing intervals for model %v", p.Models),
+			)
+		}
+	}
+	return nil
+}
+
+func validateAccountStatsPricingEntries(pricing []ChannelModelPricing) error {
+	for _, p := range pricing {
+		if p.LongContextPricingEnabled != nil || p.LongContextInputTokenThreshold != nil {
+			return infraerrors.BadRequest(
+				"ACCOUNT_STATS_LONG_CONTEXT_POLICY_UNSUPPORTED",
+				fmt.Sprintf("long-context pricing policy is only supported by main channel pricing, not account stats model %v", p.Models),
+			)
+		}
+	}
+	return validatePricingEntries(pricing)
 }
 
 // validatePricingBillingMode 校验计费模式配置：按次/图片模式必须配价格或区间，所有价格字段不能为负，区间至少有一个价格字段。
@@ -701,7 +773,7 @@ func (s *ChannelService) Create(ctx context.Context, input *CreateChannelInput) 
 		return nil, err
 	}
 	for i, rule := range channel.AccountStatsPricingRules {
-		if err := validatePricingEntries(rule.Pricing); err != nil {
+		if err := validateAccountStatsPricingEntries(rule.Pricing); err != nil {
 			return nil, fmt.Errorf("account stats pricing rule #%d: %w", i+1, err)
 		}
 	}
@@ -745,7 +817,7 @@ func (s *ChannelService) Update(ctx context.Context, id int64, input *UpdateChan
 		return nil, err
 	}
 	for i, rule := range channel.AccountStatsPricingRules {
-		if err := validatePricingEntries(rule.Pricing); err != nil {
+		if err := validateAccountStatsPricingEntries(rule.Pricing); err != nil {
 			return nil, fmt.Errorf("account stats pricing rule #%d: %w", i+1, err)
 		}
 	}

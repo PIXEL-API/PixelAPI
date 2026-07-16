@@ -92,8 +92,8 @@ func ensureLoginUserActive(user *service.User) error {
 	return nil
 }
 
-// respondWithTokenPair 生成 Token 对并返回认证响应
-// 如果 Token 对生成失败，回退到只返回 Access Token（向后兼容）
+// respondWithTokenPair 生成 Token 对并返回认证响应。
+// Refresh Token 持久化失败时必须快速失败，禁止返回无法续期的半成品会话。
 func (h *AuthHandler) respondWithTokenPair(c *gin.Context, user *service.User) {
 	if err := ensureLoginUserActive(user); err != nil {
 		response.ErrorFrom(c, err)
@@ -103,17 +103,7 @@ func (h *AuthHandler) respondWithTokenPair(c *gin.Context, user *service.User) {
 	tokenPair, err := h.authService.GenerateTokenPair(c.Request.Context(), user, "")
 	if err != nil {
 		slog.Error("failed to generate token pair", "error", err, "user_id", user.ID)
-		// 回退到只返回Access Token
-		token, tokenErr := h.authService.GenerateToken(user)
-		if tokenErr != nil {
-			response.InternalError(c, "Failed to generate token")
-			return
-		}
-		response.Success(c, AuthResponse{
-			AccessToken: token,
-			TokenType:   "Bearer",
-			User:        dto.UserFromService(user),
-		})
+		response.ErrorFrom(c, err)
 		return
 	}
 	response.Success(c, AuthResponse{
@@ -256,13 +246,11 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	token, user, err := h.authService.Login(c.Request.Context(), req.Email, req.Password)
+	_, user, err := h.authService.Login(c.Request.Context(), req.Email, req.Password)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
-	_ = token // token 由 authService.Login 返回但此处由 respondWithTokenPair 重新生成
-
 	if err := h.ensureBackendModeAllowsUser(c.Request.Context(), user); err != nil {
 		response.ErrorFrom(c, err)
 		return

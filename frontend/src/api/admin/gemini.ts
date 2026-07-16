@@ -5,6 +5,8 @@
 
 import { apiClient } from '../client'
 
+const GOOGLE_OAUTH_EXCHANGE_TIMEOUT_MS = 120000
+
 export interface GeminiAuthUrlResponse {
   auth_url: string
   session_id: string
@@ -59,7 +61,8 @@ export async function generateAuthUrl(
 export async function exchangeCode(payload: GeminiExchangeCodeRequest): Promise<GeminiTokenInfo> {
   const { data } = await apiClient.post<GeminiTokenInfo>(
     '/admin/gemini/oauth/exchange-code',
-    payload
+    payload,
+    { timeout: GOOGLE_OAUTH_EXCHANGE_TIMEOUT_MS }
   )
   return data
 }

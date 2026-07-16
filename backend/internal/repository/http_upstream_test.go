@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
@@ -40,14 +41,23 @@ func (s *HTTPUpstreamSuite) newService() *httpUpstreamService {
 	return svc
 }
 
-// TestDefaultResponseHeaderTimeout 测试默认响应头超时配置
-// 验证未配置时使用 300 秒默认值
+// TestDefaultResponseHeaderTimeout 验证显式 0 会禁用等待响应头超时。
 func (s *HTTPUpstreamSuite) TestDefaultResponseHeaderTimeout() {
 	svc := s.newService()
 	entry := mustGetOrCreateClient(s.T(), svc, "", 0, 0)
 	transport, ok := entry.client.Transport.(*http.Transport)
 	require.True(s.T(), ok, "expected *http.Transport")
-	require.Equal(s.T(), 300*time.Second, transport.ResponseHeaderTimeout, "ResponseHeaderTimeout mismatch")
+	require.Zero(s.T(), transport.ResponseHeaderTimeout, "ResponseHeaderTimeout mismatch")
+}
+
+func (s *HTTPUpstreamSuite) TestNilConfigResponseHeaderTimeoutFallback() {
+	up := NewHTTPUpstream(nil)
+	svc, ok := up.(*httpUpstreamService)
+	require.True(s.T(), ok, "expected *httpUpstreamService")
+	entry := mustGetOrCreateClient(s.T(), svc, "", 0, 0)
+	transport, ok := entry.client.Transport.(*http.Transport)
+	require.True(s.T(), ok, "expected *http.Transport")
+	require.Equal(s.T(), defaultResponseHeaderTimeout, transport.ResponseHeaderTimeout)
 }
 
 // TestCustomResponseHeaderTimeout 测试自定义响应头超时配置
@@ -65,7 +75,7 @@ func (s *HTTPUpstreamSuite) TestCustomResponseHeaderTimeout() {
 // 验证解析失败时拒绝回退到直连模式
 func (s *HTTPUpstreamSuite) TestGetOrCreateClient_InvalidURLReturnsError() {
 	svc := s.newService()
-	_, err := svc.getClientEntry("://bad-proxy-url", 1, 1, false, false)
+	_, err := svc.getClientEntry("://bad-proxy-url", 1, 1, service.HTTPUpstreamProfileDefault, false, false)
 	require.Error(s.T(), err, "expected error for invalid proxy URL")
 }
 

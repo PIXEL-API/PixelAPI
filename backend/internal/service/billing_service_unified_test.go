@@ -37,6 +37,31 @@ func TestCalculateCostUnified_NilResolver_FallsBackToOldPath(t *testing.T) {
 	require.Empty(t, cost.BillingMode)
 }
 
+func TestCalculateCostUnified_NilResolverLongContextDefaultsOffAndSupportsExplicitEnable(t *testing.T) {
+	svc := newTestBillingService()
+	tokens := UsageTokens{InputTokens: 300000, OutputTokens: 1000}
+
+	disabledCost, err := svc.CalculateCostUnified(CostInput{
+		Model:          "gpt-5.4-2026-03-05",
+		Tokens:         tokens,
+		RateMultiplier: 1,
+	})
+	require.NoError(t, err)
+	require.InDelta(t, float64(tokens.InputTokens)*62.5e-6, disabledCost.InputCost, 1e-10)
+	require.InDelta(t, float64(tokens.OutputTokens)*375e-6, disabledCost.OutputCost, 1e-10)
+
+	enabled := true
+	enabledCost, err := svc.CalculateCostUnified(CostInput{
+		Model:                     "gpt-5.4-2026-03-05",
+		Tokens:                    tokens,
+		RateMultiplier:            1,
+		LongContextBillingEnabled: &enabled,
+	})
+	require.NoError(t, err)
+	require.InDelta(t, disabledCost.InputCost*2, enabledCost.InputCost, 1e-10)
+	require.InDelta(t, disabledCost.OutputCost*1.5, enabledCost.OutputCost, 1e-10)
+}
+
 func TestCalculateCostUnified_TokenMode(t *testing.T) {
 	bs := newTestBillingService()
 	resolver := NewModelPricingResolver(nil, bs)
@@ -58,6 +83,111 @@ func TestCalculateCostUnified_TokenMode(t *testing.T) {
 	require.InDelta(t, expectedTotal, cost.TotalCost, 1e-10)
 	require.InDelta(t, expectedTotal*1.5, cost.ActualCost, 1e-10)
 	require.Equal(t, string(BillingModeToken), cost.BillingMode)
+}
+
+func TestCalculateCostUnified_ChannelLongContextPolicy(t *testing.T) {
+	bs := newTestBillingService()
+	resolver := NewModelPricingResolver(nil, bs)
+	basePricing, err := bs.GetModelPricing("gpt-5.6-sol")
+	require.NoError(t, err)
+
+	tests := []struct {
+		name           string
+		tokens         UsageTokens
+		enabled        *bool
+		threshold      *int
+		wantInputCost  float64
+		wantOutputCost float64
+	}{
+		{
+			name:           "nil keeps long context multiplier disabled by default",
+			tokens:         UsageTokens{InputTokens: 300000, OutputTokens: 1000},
+			wantInputCost:  300000 * 5e-6,
+			wantOutputCost: 1000 * 30e-6,
+		},
+		{
+			name:           "explicit false keeps multiplier disabled",
+			tokens:         UsageTokens{InputTokens: 300000, OutputTokens: 1000},
+			enabled:        testPtrBool(false),
+			wantInputCost:  300000 * 5e-6,
+			wantOutputCost: 1000 * 30e-6,
+		},
+		{
+			name:           "explicit true uses administrator threshold",
+			tokens:         UsageTokens{InputTokens: 2000, OutputTokens: 100},
+			enabled:        testPtrBool(true),
+			threshold:      testPtrInt(1000),
+			wantInputCost:  2000 * 5e-6 * 2,
+			wantOutputCost: 100 * 30e-6 * 1.5,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cost, err := bs.CalculateCostUnified(CostInput{
+				Ctx:            context.Background(),
+				Model:          "gpt-5.6-sol",
+				Tokens:         tt.tokens,
+				RateMultiplier: 1,
+				Resolver:       resolver,
+				Resolved: &ResolvedPricing{
+					Mode:                           BillingModeToken,
+					BasePricing:                    basePricing,
+					LongContextPricingEnabled:      tt.enabled,
+					LongContextInputTokenThreshold: tt.threshold,
+				},
+			})
+			require.NoError(t, err)
+			require.InDelta(t, tt.wantInputCost, cost.InputCost, 1e-12)
+			require.InDelta(t, tt.wantOutputCost, cost.OutputCost, 1e-12)
+		})
+	}
+}
+
+func TestCalculateCostUnified_EnabledLongContextPolicyFailsWithoutThreshold(t *testing.T) {
+	bs := newTestBillingService()
+	resolver := NewModelPricingResolver(nil, bs)
+	basePricing, err := bs.GetModelPricing("gpt-5.6-sol")
+	require.NoError(t, err)
+
+	_, err = bs.CalculateCostUnified(CostInput{
+		Ctx:            context.Background(),
+		Model:          "gpt-5.6-sol",
+		Tokens:         UsageTokens{InputTokens: 300000},
+		RateMultiplier: 1,
+		Resolver:       resolver,
+		Resolved: &ResolvedPricing{
+			Mode:                      BillingModeToken,
+			BasePricing:               basePricing,
+			LongContextPricingEnabled: testPtrBool(true),
+		},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "requires an input token threshold")
+}
+
+func TestCalculateCostUnified_EnabledLongContextPolicyFailsWithIntervals(t *testing.T) {
+	bs := newTestBillingService()
+	resolver := NewModelPricingResolver(nil, bs)
+	basePricing, err := bs.GetModelPricing("gpt-5.6-sol")
+	require.NoError(t, err)
+
+	_, err = bs.CalculateCostUnified(CostInput{
+		Ctx:            context.Background(),
+		Model:          "gpt-5.6-sol",
+		Tokens:         UsageTokens{InputTokens: 2000},
+		RateMultiplier: 1,
+		Resolver:       resolver,
+		Resolved: &ResolvedPricing{
+			Mode:                           BillingModeToken,
+			BasePricing:                    basePricing,
+			Intervals:                      []PricingInterval{{MinTokens: 0, InputPrice: testPtrFloat64(5e-6)}},
+			LongContextPricingEnabled:      testPtrBool(true),
+			LongContextInputTokenThreshold: testPtrInt(1000),
+		},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "conflicts with context pricing intervals")
 }
 
 func TestCalculateCostUnified_ImageTokenPrices(t *testing.T) {
@@ -188,6 +318,32 @@ func TestCalculateCostUnified_ImageMode(t *testing.T) {
 	require.InDelta(t, 0.20, cost.TotalCost, 1e-10)
 	require.InDelta(t, 0.20, cost.ActualCost, 1e-10)
 	require.Equal(t, string(BillingModeImage), cost.BillingMode)
+}
+
+func TestCalculateCostUnified_ExplicitFreeSizeTierDoesNotFallBackToDefaultPrice(t *testing.T) {
+	bs := newTestBillingService()
+	resolver := NewModelPricingResolver(nil, bs)
+	freePrice := 0.0
+
+	cost, err := bs.CalculateCostUnified(CostInput{
+		Ctx:            context.Background(),
+		Model:          "image-model",
+		RequestCount:   2,
+		SizeTier:       "1K",
+		RateMultiplier: 1,
+		Resolver:       resolver,
+		Resolved: &ResolvedPricing{
+			Mode:                   BillingModeImage,
+			DefaultPerRequestPrice: 0.25,
+			RequestTiers: []PricingInterval{{
+				TierLabel:       "1K",
+				PerRequestPrice: &freePrice,
+			}},
+		},
+	})
+	require.NoError(t, err)
+	require.Zero(t, cost.TotalCost)
+	require.Zero(t, cost.ActualCost)
 }
 
 // TestCalculateCostUnified_RateMultiplierZeroProducesZero 锁定新行为：

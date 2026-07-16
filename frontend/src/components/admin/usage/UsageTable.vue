@@ -1,5 +1,5 @@
 <template>
-  <div class="card overflow-hidden">
+  <div :class="flat ? '' : 'card overflow-hidden'">
     <div class="overflow-auto">
       <DataTable
         :columns="columns"
@@ -127,15 +127,24 @@
               </div>
             </div>
             <!-- Token Detail Tooltip -->
-            <div
-              class="group relative"
+            <button
+              type="button"
+              class="group relative inline-flex min-h-11 min-w-11 cursor-help items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-dark-900"
+              :aria-label="t('usage.tokenDetails')"
+              :aria-expanded="isTokenTooltipActive(row)"
+              aria-controls="admin-usage-token-tooltip"
+              :aria-describedby="isTokenTooltipActive(row) ? 'admin-usage-token-tooltip' : undefined"
               @mouseenter="showTokenTooltip($event, row)"
-              @mouseleave="hideTokenTooltip"
+              @mouseleave="hideTokenTooltipOnPointerLeave"
+              @focus="showTokenTooltip($event, row)"
+              @blur="hideTokenTooltip"
+              @click="toggleTokenTooltip($event, row)"
+              @keydown.esc.prevent.stop="hideTokenTooltipOnEscape"
             >
-              <div class="flex h-4 w-4 cursor-help items-center justify-center rounded-full bg-gray-100 transition-colors group-hover:bg-blue-100 dark:bg-gray-700 dark:group-hover:bg-blue-900/50">
+              <span class="flex h-5 w-5 items-center justify-center rounded-full bg-gray-100 transition-colors group-hover:bg-blue-100 group-focus-visible:bg-blue-100 dark:bg-gray-700 dark:group-hover:bg-blue-900/50 dark:group-focus-visible:bg-blue-900/50">
                 <Icon name="infoCircle" size="xs" class="text-gray-400 group-hover:text-blue-500 dark:text-gray-500 dark:group-hover:text-blue-400" />
-              </div>
-            </div>
+              </span>
+            </button>
           </div>
         </template>
 
@@ -144,15 +153,24 @@
             <div class="flex items-center gap-1.5">
               <span class="font-medium text-green-600 dark:text-green-400">${{ row.actual_cost?.toFixed(6) || '0.000000' }}</span>
               <!-- Cost Detail Tooltip -->
-              <div
-                class="group relative"
+              <button
+                type="button"
+                class="group relative inline-flex min-h-11 min-w-11 cursor-help items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-dark-900"
+                :aria-label="t('usage.costDetails')"
+                :aria-expanded="isTooltipActive(row)"
+                aria-controls="admin-usage-cost-tooltip"
+                :aria-describedby="isTooltipActive(row) ? 'admin-usage-cost-tooltip' : undefined"
                 @mouseenter="showTooltip($event, row)"
-                @mouseleave="hideTooltip"
+                @mouseleave="hideTooltipOnPointerLeave"
+                @focus="showTooltip($event, row)"
+                @blur="hideTooltip"
+                @click="toggleTooltip($event, row)"
+                @keydown.esc.prevent.stop="hideTooltipOnEscape"
               >
-                <div class="flex h-4 w-4 cursor-help items-center justify-center rounded-full bg-gray-100 transition-colors group-hover:bg-blue-100 dark:bg-gray-700 dark:group-hover:bg-blue-900/50">
+                <span class="flex h-5 w-5 items-center justify-center rounded-full bg-gray-100 transition-colors group-hover:bg-blue-100 group-focus-visible:bg-blue-100 dark:bg-gray-700 dark:group-hover:bg-blue-900/50 dark:group-focus-visible:bg-blue-900/50">
                   <Icon name="infoCircle" size="xs" class="text-gray-400 group-hover:text-blue-500 dark:text-gray-500 dark:group-hover:text-blue-400" />
-                </div>
-              </div>
+                </span>
+              </button>
             </div>
             <div v-if="row.account_rate_multiplier != null" class="mt-0.5 text-[11px] text-orange-500 dark:text-orange-400">
               A ${{ accountBilled(row).toFixed(6) }}
@@ -160,13 +178,11 @@
           </div>
         </template>
 
-        <template #cell-first_token="{ row }">
-          <span v-if="row.first_token_ms != null" class="text-sm text-gray-600 dark:text-gray-400">{{ formatDuration(row.first_token_ms) }}</span>
-          <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
-        </template>
-
-        <template #cell-duration="{ row }">
-          <span class="text-sm text-gray-600 dark:text-gray-400">{{ formatDuration(row.duration_ms) }}</span>
+        <template #cell-latency="{ row }">
+          <UsageLatencyCell
+            :first-token-ms="row.first_token_ms"
+            :duration-ms="row.duration_ms"
+          />
         </template>
 
         <template #cell-created_at="{ value }">
@@ -192,13 +208,16 @@
   <Teleport to="body">
     <div
       v-if="tokenTooltipVisible"
-      class="fixed z-[9999] pointer-events-none -translate-y-1/2"
-      :style="{
-        left: tokenTooltipPosition.x + 'px',
-        top: tokenTooltipPosition.y + 'px'
-      }"
+      id="admin-usage-token-tooltip"
+      role="tooltip"
+      class="pointer-events-none fixed z-[9999]"
+      :class="{ '-translate-y-1/2': !tokenTooltipCompact }"
+      :style="tokenTooltipStyle"
     >
-      <div class="whitespace-nowrap rounded-lg border border-gray-700 bg-gray-900 px-3 py-2.5 text-xs text-white shadow-xl dark:border-gray-600 dark:bg-gray-800">
+      <div
+        class="rounded-lg border border-gray-700 bg-gray-900 px-3 py-2.5 text-xs text-white shadow-xl dark:border-gray-600 dark:bg-gray-800"
+        :class="tokenTooltipCompact ? 'max-h-[calc(100vh-1rem)] w-full overflow-y-auto whitespace-normal' : 'whitespace-nowrap'"
+      >
         <div class="space-y-1.5">
           <div>
             <div class="text-xs font-semibold text-gray-300 mb-1">{{ t('usage.tokenDetails') }}</div>
@@ -255,7 +274,7 @@
             <span class="font-semibold text-blue-400">{{ ((tokenTooltipData?.input_tokens || 0) + (tokenTooltipData?.output_tokens || 0) + (tokenTooltipData?.cache_creation_tokens || 0) + (tokenTooltipData?.cache_read_tokens || 0)).toLocaleString() }}</span>
           </div>
         </div>
-        <div class="absolute right-full top-1/2 h-0 w-0 -translate-y-1/2 border-b-[6px] border-r-[6px] border-t-[6px] border-b-transparent border-r-gray-900 border-t-transparent dark:border-r-gray-800"></div>
+        <div v-if="!tokenTooltipCompact" class="absolute right-full top-1/2 h-0 w-0 -translate-y-1/2 border-b-[6px] border-r-[6px] border-t-[6px] border-b-transparent border-r-gray-900 border-t-transparent dark:border-r-gray-800"></div>
       </div>
     </div>
   </Teleport>
@@ -264,13 +283,16 @@
   <Teleport to="body">
     <div
       v-if="tooltipVisible"
-      class="fixed z-[9999] pointer-events-none -translate-y-1/2"
-      :style="{
-        left: tooltipPosition.x + 'px',
-        top: tooltipPosition.y + 'px'
-      }"
+      id="admin-usage-cost-tooltip"
+      role="tooltip"
+      class="pointer-events-none fixed z-[9999]"
+      :class="{ '-translate-y-1/2': !tooltipCompact }"
+      :style="tooltipStyle"
     >
-      <div class="whitespace-nowrap rounded-lg border border-gray-700 bg-gray-900 px-3 py-2.5 text-xs text-white shadow-xl dark:border-gray-600 dark:bg-gray-800">
+      <div
+        class="rounded-lg border border-gray-700 bg-gray-900 px-3 py-2.5 text-xs text-white shadow-xl dark:border-gray-600 dark:bg-gray-800"
+        :class="tooltipCompact ? 'max-h-[calc(100vh-1rem)] w-full overflow-y-auto whitespace-normal' : 'whitespace-nowrap'"
+      >
         <div class="space-y-1.5">
           <!-- Cost Breakdown -->
           <div class="mb-2 border-b border-gray-700 pb-1.5">
@@ -341,14 +363,13 @@
             </span>
           </div>
         </div>
-        <div class="absolute right-full top-1/2 h-0 w-0 -translate-y-1/2 border-b-[6px] border-r-[6px] border-t-[6px] border-b-transparent border-r-gray-900 border-t-transparent dark:border-r-gray-800"></div>
+        <div v-if="!tooltipCompact" class="absolute right-full top-1/2 h-0 w-0 -translate-y-1/2 border-b-[6px] border-r-[6px] border-t-[6px] border-b-transparent border-r-gray-900 border-t-transparent dark:border-r-gray-800"></div>
       </div>
     </div>
   </Teleport>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { formatDateTime, formatReasoningEffort } from '@/utils/format'
 import { formatCacheHitRate, formatCacheTokens, formatMultiplier } from '@/utils/formatters'
@@ -367,6 +388,8 @@ function accountBilled(row: { total_cost?: number | null; account_stats_cost?: n
 import DataTable from '@/components/common/DataTable.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import Icon from '@/components/icons/Icon.vue'
+import UsageLatencyCell from '@/components/common/UsageLatencyCell.vue'
+import { useUsageDetailTooltip } from '@/composables/useUsageDetailTooltip'
 import type { AdminUsageLog } from '@/types'
 import type { Column } from '@/components/common/types'
 
@@ -377,13 +400,15 @@ interface Props {
   serverSideSort?: boolean
   defaultSortKey?: string
   defaultSortOrder?: 'asc' | 'desc'
+  flat?: boolean
 }
 
 withDefaults(defineProps<Props>(), {
   loading: false,
   serverSideSort: false,
   defaultSortKey: '',
-  defaultSortOrder: 'asc'
+  defaultSortOrder: 'asc',
+  flat: false
 })
 defineEmits<{
   userClick: [userID: number, email?: string]
@@ -391,15 +416,31 @@ defineEmits<{
 }>()
 const { t } = useI18n()
 
-// Tooltip state - cost
-const tooltipVisible = ref(false)
-const tooltipPosition = ref({ x: 0, y: 0 })
-const tooltipData = ref<AdminUsageLog | null>(null)
+const {
+  visible: tooltipVisible,
+  isCompact: tooltipCompact,
+  style: tooltipStyle,
+  data: tooltipData,
+  show: showTooltip,
+  toggle: toggleTooltip,
+  hide: hideTooltip,
+  hideOnPointerLeave: hideTooltipOnPointerLeave,
+  hideOnEscape: hideTooltipOnEscape,
+  isActive: isTooltipActive
+} = useUsageDetailTooltip<AdminUsageLog>()
 
-// Tooltip state - token
-const tokenTooltipVisible = ref(false)
-const tokenTooltipPosition = ref({ x: 0, y: 0 })
-const tokenTooltipData = ref<AdminUsageLog | null>(null)
+const {
+  visible: tokenTooltipVisible,
+  isCompact: tokenTooltipCompact,
+  style: tokenTooltipStyle,
+  data: tokenTooltipData,
+  show: showTokenTooltip,
+  toggle: toggleTokenTooltip,
+  hide: hideTokenTooltip,
+  hideOnPointerLeave: hideTokenTooltipOnPointerLeave,
+  hideOnEscape: hideTokenTooltipOnEscape,
+  isActive: isTokenTooltipActive
+} = useUsageDetailTooltip<AdminUsageLog>()
 
 const getRequestTypeLabel = (row: AdminUsageLog): string => {
   const requestType = resolveUsageRequestType(row)
@@ -423,39 +464,4 @@ const formatUserAgent = (ua: string): string => {
   return ua
 }
 
-const formatDuration = (ms: number | null | undefined): string => {
-  if (ms == null) return '-'
-  if (ms < 1000) return `${ms}ms`
-  return `${(ms / 1000).toFixed(2)}s`
-}
-
-// Cost tooltip functions
-const showTooltip = (event: MouseEvent, row: AdminUsageLog) => {
-  const target = event.currentTarget as HTMLElement
-  const rect = target.getBoundingClientRect()
-  tooltipData.value = row
-  tooltipPosition.value.x = rect.right + 8
-  tooltipPosition.value.y = rect.top + rect.height / 2
-  tooltipVisible.value = true
-}
-
-const hideTooltip = () => {
-  tooltipVisible.value = false
-  tooltipData.value = null
-}
-
-// Token tooltip functions
-const showTokenTooltip = (event: MouseEvent, row: AdminUsageLog) => {
-  const target = event.currentTarget as HTMLElement
-  const rect = target.getBoundingClientRect()
-  tokenTooltipData.value = row
-  tokenTooltipPosition.value.x = rect.right + 8
-  tokenTooltipPosition.value.y = rect.top + rect.height / 2
-  tokenTooltipVisible.value = true
-}
-
-const hideTokenTooltip = () => {
-  tokenTooltipVisible.value = false
-  tokenTooltipData.value = null
-}
 </script>

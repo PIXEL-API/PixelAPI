@@ -45,6 +45,25 @@ SELECT EXISTS (
 	if pendingExists {
 		return nil, service.ErrWithdrawalPendingExists
 	}
+	if input.RateLimit.MaxRequests > 0 {
+		if err := service.ValidateWithdrawalRateLimitConfig(input.RateLimit); err != nil {
+			return nil, err
+		}
+		var recentRequestCount int
+		if err := tx.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM user_withdrawal_requests
+WHERE user_id = $1
+	AND created_at >= NOW() - ($2::integer * INTERVAL '1 day')`,
+			input.UserID,
+			input.RateLimit.WindowDays,
+		).Scan(&recentRequestCount); err != nil {
+			return nil, err
+		}
+		if recentRequestCount >= input.RateLimit.MaxRequests {
+			return nil, service.NewWithdrawalRateLimitExceededError(input.RateLimit)
+		}
+	}
 
 	var hasPriorWithdrawal bool
 	if err := tx.QueryRowContext(ctx, `

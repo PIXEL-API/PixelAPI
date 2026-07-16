@@ -16,6 +16,30 @@ const (
 	tokenFamilyPrefix       = "token_family:"
 )
 
+var rotateRefreshTokenScript = redis.NewScript(`
+	if redis.call('EXISTS', KEYS[1]) == 0 then
+		return 0
+	end
+	if redis.call('EXISTS', KEYS[2]) ~= 0 then
+		return -1
+	end
+	local user_set_type = redis.call('TYPE', KEYS[3]).ok
+	local family_set_type = redis.call('TYPE', KEYS[4]).ok
+	if (user_set_type ~= 'none' and user_set_type ~= 'set') or
+	   (family_set_type ~= 'none' and family_set_type ~= 'set') then
+		return -2
+	end
+	redis.call('SET', KEYS[2], ARGV[1], 'PX', ARGV[2])
+	redis.call('SREM', KEYS[3], ARGV[3])
+	redis.call('SADD', KEYS[3], ARGV[4])
+	redis.call('PEXPIRE', KEYS[3], ARGV[2])
+	redis.call('SREM', KEYS[4], ARGV[3])
+	redis.call('SADD', KEYS[4], ARGV[4])
+	redis.call('PEXPIRE', KEYS[4], ARGV[2])
+	redis.call('DEL', KEYS[1])
+	return 1
+`)
+
 // refreshTokenKey generates the Redis key for a refresh token.
 func refreshTokenKey(tokenHash string) string {
 	return refreshTokenKeyPrefix + tokenHash
@@ -63,6 +87,37 @@ func (c *refreshTokenCache) GetRefreshToken(ctx context.Context, tokenHash strin
 		return nil, fmt.Errorf("unmarshal refresh token data: %w", err)
 	}
 	return &data, nil
+}
+
+func (c *refreshTokenCache) RotateRefreshToken(ctx context.Context, oldTokenHash, newTokenHash string, data *service.RefreshTokenData, ttl time.Duration) error {
+	if oldTokenHash == "" || newTokenHash == "" || data == nil || data.UserID <= 0 || data.FamilyID == "" || ttl <= 0 {
+		return fmt.Errorf("invalid refresh token rotation data")
+	}
+	value, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("marshal refresh token data: %w", err)
+	}
+	result, err := rotateRefreshTokenScript.Run(ctx, c.rdb, []string{
+		refreshTokenKey(oldTokenHash),
+		refreshTokenKey(newTokenHash),
+		userRefreshTokensKey(data.UserID),
+		tokenFamilyKey(data.FamilyID),
+	}, value, ttl.Milliseconds(), oldTokenHash, newTokenHash).Int64()
+	if err != nil {
+		return err
+	}
+	switch result {
+	case 1:
+		return nil
+	case 0:
+		return service.ErrRefreshTokenAlreadyConsumed
+	case -1:
+		return fmt.Errorf("new refresh token hash already exists")
+	case -2:
+		return fmt.Errorf("refresh token tracking index has invalid type")
+	default:
+		return fmt.Errorf("unexpected refresh token rotation result: %d", result)
+	}
 }
 
 func (c *refreshTokenCache) DeleteRefreshToken(ctx context.Context, tokenHash string) error {

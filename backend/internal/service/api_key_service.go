@@ -34,6 +34,7 @@ var (
 		"API_KEY_ACCOUNT_SHARE_BINDING_EXISTS",
 		"api key is bound to active or queued account share mode usage",
 	)
+	ErrAPIKeyInactive = infraerrors.Unauthorized("API_KEY_INACTIVE", "api key is not active")
 	// ErrAPIKeyExpired        = infraerrors.Forbidden("API_KEY_EXPIRED", "api key has expired")
 	ErrAPIKeyExpired = infraerrors.Forbidden("API_KEY_EXPIRED", "api key 已过期")
 	// ErrAPIKeyQuotaExhausted = infraerrors.TooManyRequests("API_KEY_QUOTA_EXHAUSTED", "api key quota exhausted")
@@ -215,10 +216,13 @@ type APIKeyService struct {
 	groupRepo                  GroupRepository
 	userSubRepo                UserSubscriptionRepository
 	userGroupRateRepo          UserGroupRateRepository
+	usageLogRepo               UsageLogRepository
+	userGroupRateResolver      *userGroupRateResolver
 	cache                      APIKeyCache
 	accountShareBindingChecker AccountShareAPIKeyBindingChecker
 	rateLimitCacheInvalid      RateLimitCacheInvalidator // optional: invalidate Redis rate limit cache
 	settingService             *SettingService
+	concurrencyService         *ConcurrencyService
 	cfg                        *config.Config
 	authCacheL1                *ristretto.Cache
 	authCfg                    apiKeyAuthCacheConfig
@@ -246,6 +250,14 @@ func NewAPIKeyService(
 		cache:             cache,
 		cfg:               cfg,
 	}
+	svc.userGroupRateResolver = newUserGroupRateResolver(
+		userGroupRateRepo,
+		nil,
+		nil,
+		resolveUserGroupRateCacheTTL(cfg),
+		nil,
+		"service.api_key",
+	)
 	svc.initAuthCache(cfg)
 	return svc
 }
@@ -264,6 +276,19 @@ func (s *APIKeyService) SetSettingService(settingService *SettingService) {
 // SetAccountShareAPIKeyBindingChecker injects the account-share binding guard.
 func (s *APIKeyService) SetAccountShareAPIKeyBindingChecker(checker AccountShareAPIKeyBindingChecker) {
 	s.accountShareBindingChecker = checker
+}
+
+// SetUsageLogRepository injects usage-log reads needed for user-visible effective group rates.
+func (s *APIKeyService) SetUsageLogRepository(repo UsageLogRepository) {
+	s.usageLogRepo = repo
+	if s.userGroupRateResolver != nil {
+		s.userGroupRateResolver.usageLogRepo = repo
+	}
+}
+
+// SetConcurrencyService injects best-effort API Key concurrency statistics.
+func (s *APIKeyService) SetConcurrencyService(concurrencyService *ConcurrencyService) {
+	s.concurrencyService = concurrencyService
 }
 
 func (s *APIKeyService) compileAPIKeyIPRules(apiKey *APIKey) {
@@ -570,7 +595,38 @@ func (s *APIKeyService) List(ctx context.Context, userID int64, params paginatio
 	if err != nil {
 		return nil, nil, fmt.Errorf("list api keys: %w", err)
 	}
+	s.fillCurrentConcurrency(ctx, keys)
 	return keys, pagination, nil
+}
+
+func (s *APIKeyService) fillCurrentConcurrency(ctx context.Context, keys []APIKey) {
+	if s == nil || s.concurrencyService == nil || len(keys) == 0 {
+		return
+	}
+	ids := make([]int64, 0, len(keys))
+	for i := range keys {
+		if keys[i].ID > 0 {
+			ids = append(ids, keys[i].ID)
+		}
+	}
+	counts, err := s.concurrencyService.GetAPIKeyConcurrencyBatch(ctx, ids)
+	if err != nil {
+		return
+	}
+	for i := range keys {
+		keys[i].CurrentConcurrency = counts[keys[i].ID]
+	}
+}
+
+func (s *APIKeyService) currentConcurrencyForAPIKey(ctx context.Context, apiKeyID int64) int {
+	if s == nil || s.concurrencyService == nil || apiKeyID <= 0 {
+		return 0
+	}
+	counts, err := s.concurrencyService.GetAPIKeyConcurrencyBatch(ctx, []int64{apiKeyID})
+	if err != nil {
+		return 0
+	}
+	return counts[apiKeyID]
 }
 
 func (s *APIKeyService) VerifyOwnership(ctx context.Context, userID int64, apiKeyIDs []int64) ([]int64, error) {
@@ -592,6 +648,9 @@ func (s *APIKeyService) GetByID(ctx context.Context, id int64) (*APIKey, error) 
 		return nil, fmt.Errorf("get api key: %w", err)
 	}
 	s.compileAPIKeyIPRules(apiKey)
+	if apiKey != nil {
+		apiKey.CurrentConcurrency = s.currentConcurrencyForAPIKey(ctx, apiKey.ID)
+	}
 	return apiKey, nil
 }
 
@@ -658,6 +717,8 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 	if apiKey.UserID != userID {
 		return nil, ErrInsufficientPerms
 	}
+	currentAPIKey := *apiKey
+	currentAPIKey.GroupRoutes = append([]APIKeyGroupRoute(nil), apiKey.GroupRoutes...)
 
 	// 验证 IP 白名单格式
 	if len(req.IPWhitelist) > 0 {
@@ -727,12 +788,9 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 		apiKey.GroupRoutes = groupRoutes
 	}
 
+	statusChanged := req.Status != nil && apiKey.Status != *req.Status
 	if req.Status != nil {
 		apiKey.Status = *req.Status
-		// 如果状态改变，清除Redis缓存
-		if s.cache != nil {
-			_ = s.cache.DeleteCreateAttemptCount(ctx, apiKey.UserID)
-		}
 	}
 
 	// Update quota fields
@@ -788,8 +846,21 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 		apiKey.Window7dStart = nil
 	}
 
+	if s.accountShareBindingChecker != nil && accountShareBindingWouldBeBroken(&currentAPIKey, apiKey) {
+		exists, err := s.accountShareBindingChecker.HasActiveOrQueuedMembershipForAPIKey(ctx, userID, id)
+		if err != nil {
+			return nil, fmt.Errorf("check account share api key binding: %w", err)
+		}
+		if exists {
+			return nil, ErrAPIKeyAccountShareBindingExists
+		}
+	}
+
 	if err := s.apiKeyRepo.Update(ctx, apiKey); err != nil {
 		return nil, fmt.Errorf("update api key: %w", err)
+	}
+	if statusChanged && s.cache != nil {
+		_ = s.cache.DeleteCreateAttemptCount(ctx, apiKey.UserID)
 	}
 
 	s.InvalidateAuthCacheByKey(ctx, apiKey.Key)
@@ -801,6 +872,82 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 	}
 
 	return apiKey, nil
+}
+
+func accountShareBindingWouldBeBroken(current, updated *APIKey) bool {
+	if current == nil || updated == nil {
+		return false
+	}
+	if !sameOptionalInt64(current.GroupID, updated.GroupID) {
+		return true
+	}
+	if !sameAPIKeyGroupRoutes(canonicalAPIKeyGroupRoutes(current), canonicalAPIKeyGroupRoutes(updated)) {
+		return true
+	}
+	if current.Status != updated.Status && updated.Status != StatusAPIKeyActive {
+		return true
+	}
+	if current.Quota != updated.Quota && updated.IsQuotaExhausted() {
+		return true
+	}
+	if !sameOptionalTime(current.ExpiresAt, updated.ExpiresAt) && updated.IsExpired() {
+		return true
+	}
+	if current.RateLimit5h != updated.RateLimit5h && updated.RateLimit5h > 0 && updated.EffectiveUsage5h() >= updated.RateLimit5h {
+		return true
+	}
+	if current.RateLimit1d != updated.RateLimit1d && updated.RateLimit1d > 0 && updated.EffectiveUsage1d() >= updated.RateLimit1d {
+		return true
+	}
+	if current.RateLimit7d != updated.RateLimit7d && updated.RateLimit7d > 0 && updated.EffectiveUsage7d() >= updated.RateLimit7d {
+		return true
+	}
+	return false
+}
+
+func canonicalAPIKeyGroupRoutes(apiKey *APIKey) []APIKeyGroupRoute {
+	if apiKey == nil {
+		return nil
+	}
+	if len(apiKey.GroupRoutes) == 0 {
+		return defaultAPIKeyGroupRoute(apiKey.GroupID)
+	}
+	return apiKey.GroupRoutes
+}
+
+func sameOptionalInt64(left, right *int64) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func sameOptionalTime(left, right *time.Time) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
+func sameAPIKeyGroupRoutes(left, right []APIKeyGroupRoute) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	byGroupID := make(map[int64]APIKeyGroupRoute, len(left))
+	for _, route := range left {
+		if _, exists := byGroupID[route.GroupID]; exists {
+			return false
+		}
+		byGroupID[route.GroupID] = route
+	}
+	for _, route := range right {
+		current, ok := byGroupID[route.GroupID]
+		if !ok || current.Priority != route.Priority || current.Weight != route.Weight || current.Enabled != route.Enabled || current.CooldownSeconds != route.CooldownSeconds {
+			return false
+		}
+		delete(byGroupID, route.GroupID)
+	}
+	return len(byGroupID) == 0
 }
 
 // Delete 删除API Key
@@ -849,7 +996,7 @@ func (s *APIKeyService) ValidateKey(ctx context.Context, key string) (*APIKey, *
 
 	// 检查API Key状态
 	if !apiKey.IsActive() {
-		return nil, nil, infraerrors.Unauthorized("API_KEY_INACTIVE", "api key is not active")
+		return nil, nil, ErrAPIKeyInactive
 	}
 
 	// 获取用户信息
@@ -954,8 +1101,37 @@ func (s *APIKeyService) GetAvailableGroups(ctx context.Context, userID int64) ([
 			availableGroups = append(availableGroups, group)
 		}
 	}
+	if err := s.attachEffectiveRateMultipliers(ctx, user, availableGroups); err != nil {
+		return nil, err
+	}
 
 	return availableGroups, nil
+}
+
+func (s *APIKeyService) attachEffectiveRateMultipliers(ctx context.Context, user *User, groups []Group) error {
+	if len(groups) == 0 {
+		return nil
+	}
+	resolver := s.userGroupRateResolver
+	if resolver == nil {
+		resolver = newUserGroupRateResolver(
+			s.userGroupRateRepo,
+			s.usageLogRepo,
+			nil,
+			resolveUserGroupRateCacheTTL(s.cfg),
+			nil,
+			"service.api_key",
+		)
+	}
+	for i := range groups {
+		resolution, err := resolver.ResolveEffectiveDetailed(ctx, user, &groups[i], groups[i].RateMultiplier)
+		if err != nil {
+			return fmt.Errorf("resolve effective group rate: group=%d user=%d: %w", groups[i].ID, user.ID, err)
+		}
+		groups[i].EffectiveRateMultiplier = &resolution.Multiplier
+		groups[i].EffectiveRateMultiplierSource = resolution.Source
+	}
+	return nil
 }
 
 // canUserBindGroupInternal 内部方法，检查用户是否可以绑定分组（使用预加载的订阅数据）

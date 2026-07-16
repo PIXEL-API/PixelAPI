@@ -1,17 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { post } = vi.hoisted(() => ({
+const { get, post } = vi.hoisted(() => ({
+  get: vi.fn(),
   post: vi.fn(),
 }))
 
 vi.mock('@/api/client', () => ({
   apiClient: {
+    get,
     post,
   },
 }))
 
 import {
   bindUserAuthIdentity,
+  getById,
   type AdminBindAuthIdentityRequest,
   type AdminBoundAuthIdentity,
 } from '@/api/admin/users'
@@ -64,9 +67,20 @@ const responseContractExact: Assert<
   IsExact<AdminBoundAuthIdentity, ExpectedAdminBoundAuthIdentity>
 > = true
 
-describe('admin users api auth identity binding', () => {
+describe('admin users API', () => {
   beforeEach(() => {
+    get.mockReset()
     post.mockReset()
+  })
+
+  it('requests soft-deleted users only when explicitly required', async () => {
+    get.mockResolvedValue({ data: { id: 7, email: 'deleted@example.com' } })
+
+    await getById(7, true)
+    await getById(9)
+
+    expect(get).toHaveBeenNthCalledWith(1, '/admin/users/7?include_deleted=true')
+    expect(get).toHaveBeenNthCalledWith(2, '/admin/users/9')
   })
 
   it('posts the backend-compatible auth identity bind payload and returns the backend response shape', async () => {

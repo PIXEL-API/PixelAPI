@@ -66,6 +66,8 @@ const (
 	FieldActualCost = "actual_cost"
 	// FieldRateMultiplier holds the string denoting the rate_multiplier field in the database.
 	FieldRateMultiplier = "rate_multiplier"
+	// FieldRateMultiplierSource holds the string denoting the rate_multiplier_source field in the database.
+	FieldRateMultiplierSource = "rate_multiplier_source"
 	// FieldAccountRateMultiplier holds the string denoting the account_rate_multiplier field in the database.
 	FieldAccountRateMultiplier = "account_rate_multiplier"
 	// FieldBillingType holds the string denoting the billing_type field in the database.
@@ -84,6 +86,12 @@ const (
 	FieldImageCount = "image_count"
 	// FieldImageSize holds the string denoting the image_size field in the database.
 	FieldImageSize = "image_size"
+	// FieldVideoCount holds the string denoting the video_count field in the database.
+	FieldVideoCount = "video_count"
+	// FieldVideoResolution holds the string denoting the video_resolution field in the database.
+	FieldVideoResolution = "video_resolution"
+	// FieldVideoDurationSeconds holds the string denoting the video_duration_seconds field in the database.
+	FieldVideoDurationSeconds = "video_duration_seconds"
 	// FieldCacheTTLOverridden holds the string denoting the cache_ttl_overridden field in the database.
 	FieldCacheTTLOverridden = "cache_ttl_overridden"
 	// FieldCreatedAt holds the string denoting the created_at field in the database.
@@ -166,6 +174,7 @@ var Columns = []string{
 	FieldTotalCost,
 	FieldActualCost,
 	FieldRateMultiplier,
+	FieldRateMultiplierSource,
 	FieldAccountRateMultiplier,
 	FieldBillingType,
 	FieldStream,
@@ -175,6 +184,9 @@ var Columns = []string{
 	FieldIPAddress,
 	FieldImageCount,
 	FieldImageSize,
+	FieldVideoCount,
+	FieldVideoResolution,
+	FieldVideoDurationSeconds,
 	FieldCacheTTLOverridden,
 	FieldCreatedAt,
 }
@@ -230,6 +242,10 @@ var (
 	DefaultActualCost float64
 	// DefaultRateMultiplier holds the default value on creation for the "rate_multiplier" field.
 	DefaultRateMultiplier float64
+	// DefaultRateMultiplierSource holds the default value on creation for the "rate_multiplier_source" field.
+	DefaultRateMultiplierSource string
+	// RateMultiplierSourceValidator is a validator for the "rate_multiplier_source" field. It is called by the builders before save.
+	RateMultiplierSourceValidator func(string) error
 	// DefaultBillingType holds the default value on creation for the "billing_type" field.
 	DefaultBillingType int8
 	// DefaultStream holds the default value on creation for the "stream" field.
@@ -242,6 +258,14 @@ var (
 	DefaultImageCount int
 	// ImageSizeValidator is a validator for the "image_size" field. It is called by the builders before save.
 	ImageSizeValidator func(string) error
+	// DefaultVideoCount holds the default value on creation for the "video_count" field.
+	DefaultVideoCount int
+	// VideoCountValidator is a validator for the "video_count" field. It is called by the builders before save.
+	VideoCountValidator func(int) error
+	// VideoResolutionValidator is a validator for the "video_resolution" field. It is called by the builders before save.
+	VideoResolutionValidator func(string) error
+	// VideoDurationSecondsValidator is a validator for the "video_duration_seconds" field. It is called by the builders before save.
+	VideoDurationSecondsValidator func(int) error
 	// DefaultCacheTTLOverridden holds the default value on creation for the "cache_ttl_overridden" field.
 	DefaultCacheTTLOverridden bool
 	// DefaultCreatedAt holds the default value on creation for the "created_at" field.
@@ -386,6 +410,11 @@ func ByRateMultiplier(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldRateMultiplier, opts...).ToFunc()
 }
 
+// ByRateMultiplierSource orders the results by the rate_multiplier_source field.
+func ByRateMultiplierSource(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRateMultiplierSource, opts...).ToFunc()
+}
+
 // ByAccountRateMultiplier orders the results by the account_rate_multiplier field.
 func ByAccountRateMultiplier(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldAccountRateMultiplier, opts...).ToFunc()
@@ -429,6 +458,21 @@ func ByImageCount(opts ...sql.OrderTermOption) OrderOption {
 // ByImageSize orders the results by the image_size field.
 func ByImageSize(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldImageSize, opts...).ToFunc()
+}
+
+// ByVideoCount orders the results by the video_count field.
+func ByVideoCount(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldVideoCount, opts...).ToFunc()
+}
+
+// ByVideoResolution orders the results by the video_resolution field.
+func ByVideoResolution(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldVideoResolution, opts...).ToFunc()
+}
+
+// ByVideoDurationSeconds orders the results by the video_duration_seconds field.
+func ByVideoDurationSeconds(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldVideoDurationSeconds, opts...).ToFunc()
 }
 
 // ByCacheTTLOverridden orders the results by the cache_ttl_overridden field.

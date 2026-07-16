@@ -138,7 +138,7 @@ func TestVerifyOrderPublicReturnsLegacyOrderState(t *testing.T) {
 	require.NoError(t, err)
 
 	paymentSvc := service.NewPaymentService(client, payment.NewRegistry(), nil, nil, nil, nil, nil, nil, nil)
-	h := NewPaymentHandler(paymentSvc, nil, nil)
+	h := NewPaymentHandler(paymentSvc, nil)
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
@@ -236,7 +236,7 @@ func TestResolveOrderPublicByResumeTokenReturnsFrontendContractFields(t *testing
 
 	configSvc := service.NewPaymentConfigService(client, nil, []byte("0123456789abcdef0123456789abcdef"), nil)
 	paymentSvc := service.NewPaymentService(client, payment.NewRegistry(), nil, nil, nil, configSvc, nil, nil, nil)
-	h := NewPaymentHandler(paymentSvc, nil, nil)
+	h := NewPaymentHandler(paymentSvc, nil)
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
@@ -323,7 +323,7 @@ func TestResolveOrderPublicByResumeTokenReturnsBadRequestForMismatchedToken(t *t
 
 	configSvc := service.NewPaymentConfigService(client, nil, []byte("0123456789abcdef0123456789abcdef"), nil)
 	paymentSvc := service.NewPaymentService(client, payment.NewRegistry(), nil, nil, nil, configSvc, nil, nil, nil)
-	h := NewPaymentHandler(paymentSvc, nil, nil)
+	h := NewPaymentHandler(paymentSvc, nil)
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
@@ -363,7 +363,7 @@ func TestVerifyOrderPublicRejectsBlankOutTradeNo(t *testing.T) {
 	t.Cleanup(func() { _ = client.Close() })
 
 	paymentSvc := service.NewPaymentService(client, payment.NewRegistry(), nil, nil, nil, nil, nil, nil, nil)
-	h := NewPaymentHandler(paymentSvc, nil, nil)
+	h := NewPaymentHandler(paymentSvc, nil)
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)

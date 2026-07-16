@@ -231,6 +231,7 @@ const openAITestModeOptions = computed(() => [
   { value: 'compact', label: t('admin.accounts.openai.testModeCompact') }
 ])
 const defaultOpenAITestModel = 'gpt-5.5'
+const defaultGrokTestModel = 'grok-4.5'
 const prioritizedGeminiModels = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-2.0-flash']
 const isImageGenerationModel = (modelId: string) => {
   const modelID = modelId.toLowerCase()
@@ -238,7 +239,8 @@ const isImageGenerationModel = (modelId: string) => {
   return (
     modelID.startsWith(['gpt', generationSegment].join('-') + '-') ||
     (modelID.startsWith('gemini-') && modelID.includes(`-${generationSegment}`)) ||
-    (modelID.startsWith('grok-') && modelID.includes(`-${generationSegment}`)) ||
+    (modelID.startsWith('grok-') && (modelID.includes(`-${generationSegment}`) || modelID.includes('-video'))) ||
+    modelID === 'grok-imagine' ||
     modelID.startsWith('cog' + 'view')
   )
 }
@@ -288,6 +290,9 @@ const loadAvailableModels = async () => {
       } else if (props.account.platform === 'openai') {
         const defaultModel = availableModels.value.find((m) => m.id === defaultOpenAITestModel)
         selectedModelId.value = defaultModel?.id || availableModels.value[0].id
+      } else if (props.account.platform === 'grok') {
+        const defaultModel = availableModels.value.find((m) => m.id === defaultGrokTestModel)
+        selectedModelId.value = defaultModel?.id || availableModels.value[0].id
       } else {
         // Try to select Sonnet as default, otherwise use first model
         const sonnetModel = availableModels.value.find((m) => m.id.includes('sonnet'))
@@ -311,8 +316,12 @@ const getUserDefaultTestModels = (account: Account): ClaudeModel[] => {
     case 'gemini':
     case 'antigravity':
       return [{ id: 'gemini-2.5-flash', type: 'model', display_name: 'gemini-2.5-flash', created_at: '' }]
-    default:
+    case 'grok':
+      return [{ id: defaultGrokTestModel, type: 'model', display_name: defaultGrokTestModel, created_at: '' }]
+    case 'anthropic':
       return [{ id: 'claude-sonnet-4-5-20250929', type: 'model', display_name: 'Claude Sonnet 4.5', created_at: '' }]
+    default:
+      throw new Error(`Unsupported account platform: ${account.platform}`)
   }
 }
 

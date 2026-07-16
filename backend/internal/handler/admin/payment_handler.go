@@ -49,21 +49,15 @@ func (h *PaymentHandler) GetDashboard(c *gin.Context) {
 // ListOrders returns a paginated list of all payment orders.
 // GET /api/v1/admin/payment/orders
 func (h *PaymentHandler) ListOrders(c *gin.Context) {
-	page, pageSize := response.ParsePagination(c)
-	var userID int64
-	if uid := c.Query("user_id"); uid != "" {
-		if v, err := strconv.ParseInt(uid, 10, 64); err == nil {
-			userID = v
-		}
+	filters, ok := parseAdminOrderFilters(c)
+	if !ok {
+		return
 	}
-	orders, total, err := h.paymentService.AdminListOrders(c.Request.Context(), userID, service.OrderListParams{
-		Page:        page,
-		PageSize:    pageSize,
-		Status:      c.Query("status"),
-		OrderType:   c.Query("order_type"),
-		PaymentType: c.Query("payment_type"),
-		Keyword:     c.Query("keyword"),
-	})
+	page, pageSize := response.ParsePagination(c)
+	params := filters.orderListParams()
+	params.Page = page
+	params.PageSize = pageSize
+	orders, total, err := h.paymentService.AdminListOrders(c.Request.Context(), filters.UserID, params)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

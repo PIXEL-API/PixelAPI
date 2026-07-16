@@ -34,6 +34,10 @@
             <Icon name="upload" size="md" class="mr-2" />
             {{ t('userAccounts.importAccounts') }}
           </button>
+          <button type="button" class="btn btn-secondary" @click="openProxyManager">
+            <Icon name="server" size="md" class="mr-2" />
+            {{ t('userAccounts.manageProxies') }}
+          </button>
           <button type="button" class="btn btn-primary" @click="openCreateModal">
             <Icon name="plus" size="md" class="mr-2" />
             {{ t('userAccounts.createAccount') }}
@@ -111,6 +115,14 @@
             <button type="button" class="btn btn-secondary btn-sm" @click="bulkRevalidatePublicShare">
               {{ t('userAccounts.bulkRevalidateShare') }}
             </button>
+            <button type="button" class="btn btn-secondary btn-sm" @click="bulkVerifyLevel('plus')">
+              <Icon name="badge" size="sm" class="mr-1.5" />
+              {{ t('userAccounts.bulkVerifyPlus') }}
+            </button>
+            <button type="button" class="btn btn-secondary btn-sm" @click="bulkVerifyLevel('free')">
+              <Icon name="check" size="sm" class="mr-1.5" />
+              {{ t('userAccounts.bulkMarkFree') }}
+            </button>
             <button type="button" class="btn btn-success btn-sm" @click="bulkToggleSchedulable(true)">
               {{ t('admin.accounts.bulkActions.enableScheduling') }}
             </button>
@@ -175,6 +187,7 @@
                 :plan-type="row.credentials?.plan_type"
                 :privacy-mode="row.extra?.privacy_mode"
                 :subscription-expires-at="row.credentials?.subscription_expires_at"
+                :account-level-configs="appStore.cachedPublicSettings?.openai_account_levels"
               />
               <span
                 v-if="getOpenAICompactLabel(row)"
@@ -405,10 +418,10 @@
     <EditAccountModal
       :show="showEditModal"
       :account="editingAccount"
-      :proxies="[]"
+      :proxies="userProxies"
       :groups="modalGroups"
       account-scope="user"
-      :allow-proxy="false"
+      :allow-proxy="true"
       :allow-billing-rate="false"
       @close="closeEditModal"
       @updated="handleAccountUpdated"
@@ -468,6 +481,14 @@
       @imported="handleAccountsImported"
     />
 
+    <UserProxyManagerModal
+      :show="showProxyManager"
+      :proxies="userProxies"
+      :loading="userProxiesLoading"
+      @close="showProxyManager = false"
+      @changed="handleProxiesChanged"
+    />
+
     <AccountTestModal
       :show="showTestModal"
       :account="testingAccount"
@@ -486,6 +507,7 @@
     <ReAuthAccountModal
       :show="showReAuthModal"
       :account="reAuthAccount"
+      :proxies="userProxies"
       account-scope="user"
       @close="closeReAuthModal"
       @reauthorized="handleAccountReauthorized"
@@ -501,7 +523,14 @@
       @reauth="handleReAuth"
       @refresh-token="handleRefreshToken"
       @set-privacy="handleSetPrivacy"
+      @moderation="openModerationModal"
       @verify-level="handleVerifyLevel"
+    />
+
+    <UserContentModerationModal
+      :show="showModerationModal"
+      :account="moderationAccount"
+      @close="closeModerationModal"
     />
   </AppLayout>
 </template>
@@ -537,7 +566,9 @@ import AccountStatsModal from '@/components/account/AccountStatsModal.vue'
 import ReAuthAccountModal from '@/components/account/ReAuthAccountModal.vue'
 import AccountTestModal from '@/components/account/AccountTestModal.vue'
 import UserAccountActionMenu from '@/components/account/UserAccountActionMenu.vue'
+import UserContentModerationModal from '@/components/account/UserContentModerationModal.vue'
 import ImportAccountsModal from '@/components/user/ImportAccountsModal.vue'
+import UserProxyManagerModal from '@/components/user/UserProxyManagerModal.vue'
 import { ACCOUNT_STATUS_FILTER_OPTIONS } from '@/constants/account'
 import type { Account, AccountPlatform, AccountType, AdminGroup, Group, Proxy, WindowStats } from '@/types'
 import type { Column } from '@/components/common/types'
@@ -565,11 +596,14 @@ const showExportDataDialog = ref(false)
 const showTestModal = ref(false)
 const showStatsModal = ref(false)
 const showReAuthModal = ref(false)
+const showModerationModal = ref(false)
+const showProxyManager = ref(false)
 const editingAccount = ref<Account | null>(null)
 const accountToDelete = ref<Account | null>(null)
 const testingAccount = ref<Account | null>(null)
 const statsAccount = ref<Account | null>(null)
 const reAuthAccount = ref<Account | null>(null)
+const moderationAccount = ref<Account | null>(null)
 const togglingStatusId = ref<number | null>(null)
 const togglingSchedulableId = ref<number | null>(null)
 const revalidatingShareId = ref<number | null>(null)
@@ -659,7 +693,8 @@ const platformOptions = computed<Array<{ value: AccountPlatform; label: string }
   { value: 'anthropic', label: 'Anthropic' },
   { value: 'openai', label: 'OpenAI' },
   { value: 'gemini', label: 'Gemini' },
-  { value: 'antigravity', label: 'Antigravity' }
+  { value: 'antigravity', label: 'Antigravity' },
+  { value: 'grok', label: 'Grok' }
 ])
 
 const typeOptions = computed<Array<{ value: AccountType; label: string }>>(() => [
@@ -776,6 +811,10 @@ function isRefreshableAccount(account: Account): boolean {
   return account.type === 'oauth' || account.type === 'setup-token'
 }
 
+function supportsOpenAILevelVerification(account: Account): boolean {
+  return account.platform === 'openai' && account.type === 'oauth'
+}
+
 function buildDefaultTodayStats(): WindowStats {
   return {
     requests: 0,
@@ -811,7 +850,7 @@ async function refreshTodayStatsBatch(): Promise<void> {
     todayStatsByAccountId.value = nextStats
   } catch (error) {
     if (reqSeq !== todayStatsReqSeq.value) return
-    todayStatsError.value = 'Failed'
+    todayStatsError.value = t('common.error')
     console.error('Failed to load user account today stats:', error)
   } finally {
     if (reqSeq === todayStatsReqSeq.value) {
@@ -986,6 +1025,10 @@ function isAbortError(error: unknown): boolean {
 
 async function loadAccounts(): Promise<void> {
   abortController?.abort()
+  todayStatsReqSeq.value += 1
+  todayStatsByAccountId.value = {}
+  todayStatsLoading.value = false
+  todayStatsError.value = null
   const controller = new AbortController()
   abortController = controller
   const { signal } = controller
@@ -1002,7 +1045,7 @@ async function loadAccounts(): Promise<void> {
     accounts.value = response.items
     pagination.value.total = response.total
     pagination.value.pages = response.pages
-    await refreshTodayStatsBatch()
+    void refreshTodayStatsBatch()
   } catch (error) {
     if (!isAbortError(error)) {
       console.error('Failed to load user accounts:', error)
@@ -1028,6 +1071,8 @@ async function refreshAccountsPage(): Promise<void> {
   const balanceRefresh = refreshCurrentUserBalance()
   await loadAccounts()
   await balanceRefresh
+  // Keep explicit refresh behavior consistent with the admin account list.
+  usageManualRefreshToken.value += 1
 }
 
 async function loadGroups(): Promise<void> {
@@ -1106,6 +1151,16 @@ function handlePageSizeChange(pageSize: number): void {
 function openEditModal(account: Account): void {
   editingAccount.value = account
   showEditModal.value = true
+  void loadUserProxies()
+}
+
+function openProxyManager(): void {
+  showProxyManager.value = true
+  void loadUserProxies(true)
+}
+
+async function handleProxiesChanged(): Promise<void> {
+  await loadUserProxies(true)
 }
 
 function closeEditModal(): void {
@@ -1231,6 +1286,16 @@ function closeReAuthModal(): void {
   reAuthAccount.value = null
 }
 
+function openModerationModal(account: Account): void {
+  moderationAccount.value = account
+  showModerationModal.value = true
+}
+
+function closeModerationModal(): void {
+  showModerationModal.value = false
+  moderationAccount.value = null
+}
+
 function handleTest(account: Account): void {
   testingAccount.value = account
   showTestModal.value = true
@@ -1244,6 +1309,7 @@ function handleViewStats(account: Account): void {
 function handleReAuth(account: Account): void {
   reAuthAccount.value = account
   showReAuthModal.value = true
+  void loadUserProxies()
 }
 
 async function handleAccountReauthorized(): Promise<void> {
@@ -1314,6 +1380,40 @@ async function handleVerifyLevel(account: Account, targetLevel: UserAccountVerif
     appStore.showError(error?.response?.data?.message || error?.message || t('userAccounts.levelVerifyFailed'))
   } finally {
     verifyingLevelId.value = null
+  }
+}
+
+async function bulkVerifyLevel(targetLevel: UserAccountVerifyLevelTarget): Promise<void> {
+  const selected = selectedAccounts.value.filter(supportsOpenAILevelVerification)
+  if (selected.length === 0) {
+    appStore.showError(t('userAccounts.noLevelVerifiableAccounts'))
+    return
+  }
+  try {
+    const task = await accountsAPI.createBatchVerifyLevelTask(
+      selected.map(account => account.id),
+      targetLevel
+    )
+    appStore.showSuccess(
+      targetLevel === 'plus'
+        ? t('userAccounts.bulkVerifyPlusSubmitted', { count: task.total })
+        : t('userAccounts.bulkMarkFreeSubmitted', { count: task.total })
+    )
+    clearSelection()
+    void pollUserAccountBatchTask(task.id, (completed) => {
+      if (completed.failed > 0) {
+        appStore.showError(t('admin.accounts.bulkActions.partialSuccess', { success: completed.success, failed: completed.failed }))
+        return
+      }
+      appStore.showSuccess(
+        targetLevel === 'plus'
+          ? t('userAccounts.bulkVerifyPlusCompleted', { count: completed.success })
+          : t('userAccounts.bulkMarkFreeCompleted', { count: completed.success })
+      )
+    })
+  } catch (error: any) {
+    console.error('Failed to create user account level verification task:', error)
+    appStore.showError(error?.response?.data?.message || error?.message || t('userAccounts.levelVerifyFailed'))
   }
 }
 
@@ -1559,6 +1659,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   isUnmounted = true
+  todayStatsReqSeq.value += 1
   abortController?.abort()
 })
 </script>

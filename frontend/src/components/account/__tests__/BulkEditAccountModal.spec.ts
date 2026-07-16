@@ -4,6 +4,7 @@ import BulkEditAccountModal from '../BulkEditAccountModal.vue'
 import ModelWhitelistSelector from '../ModelWhitelistSelector.vue'
 import { adminAPI } from '@/api/admin'
 import { accountsAPI } from '@/api/accounts'
+import { createPinia, setActivePinia } from 'pinia'
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
@@ -128,6 +129,7 @@ function mountModal(extraProps: Record<string, unknown> = {}, extraStubs: Record
 
 describe('BulkEditAccountModal', () => {
   beforeEach(() => {
+    setActivePinia(createPinia())
     vi.mocked(adminAPI.accounts.bulkUpdate).mockReset()
     vi.mocked(adminAPI.accounts.checkMixedChannelRisk).mockReset()
     vi.mocked(accountsAPI.bulkUpdate).mockReset()

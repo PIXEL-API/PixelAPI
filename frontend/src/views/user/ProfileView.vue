@@ -11,7 +11,11 @@
         :wechat-mp-enabled="wechatOAuthMPEnabled"
       >
         <template #main-after>
-          <ProfileWithdrawalCard v-if="withdrawalManagementEnabled" />
+          <ProfileWithdrawalCard
+            v-if="withdrawalManagementEnabled"
+            :rate-limit-window-days="withdrawalRateLimitWindowDays"
+            :rate-limit-max="withdrawalRateLimitMax"
+          />
 
           <ProfileBalanceNotifyCard
             v-if="user && balanceLowNotifyEnabled"
@@ -78,6 +82,8 @@ const user = computed(() => authStore.user);
 const contactInfo = ref("");
 const balanceLowNotifyEnabled = ref(false);
 const withdrawalManagementEnabled = ref(true);
+const withdrawalRateLimitWindowDays = ref(1);
+const withdrawalRateLimitMax = ref(0);
 const systemDefaultThreshold = ref(0);
 const linuxdoOAuthEnabled = ref(false);
 const wechatOAuthEnabled = ref(false);
@@ -102,6 +108,9 @@ onMounted(async () => {
         settings.balance_low_notify_enabled ?? false;
       withdrawalManagementEnabled.value =
         settings.withdrawal_management_enabled !== false;
+      withdrawalRateLimitWindowDays.value =
+        settings.withdrawal_rate_limit_window_days ?? 1;
+      withdrawalRateLimitMax.value = settings.withdrawal_rate_limit_max ?? 0;
       systemDefaultThreshold.value = settings.balance_low_notify_threshold ?? 0;
       linuxdoOAuthEnabled.value = settings.linuxdo_oauth_enabled ?? false;
       wechatOAuthEnabled.value = isWeChatWebOAuthEnabled(settings);

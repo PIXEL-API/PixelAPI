@@ -25,6 +25,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -52,6 +53,7 @@ type AccountHandler struct {
 	openaiOAuthService        *service.OpenAIOAuthService
 	geminiOAuthService        *service.GeminiOAuthService
 	antigravityOAuthService   *service.AntigravityOAuthService
+	grokOAuthService          *service.GrokOAuthService
 	rateLimitService          *service.RateLimitService
 	accountUsageService       *service.AccountUsageService
 	accountTestService        *service.AccountTestService
@@ -61,6 +63,7 @@ type AccountHandler struct {
 	rpmCache                  service.RPMCache
 	tokenCacheInvalidator     service.TokenCacheInvalidator
 	accountBatchTaskService   *service.AccountBatchTaskService
+	grokImportProber          grokUsageProber
 	publicShareValidation     chan ownedPublicShareValidationJob
 	publicShareValidationOnce sync.Once
 }
@@ -109,6 +112,17 @@ func NewAccountHandler(
 	return h
 }
 
+func (h *AccountHandler) SetGrokImportProber(prober grokUsageProber) {
+	if h == nil || prober == nil {
+		panic("AccountHandler requires a Grok import prober")
+	}
+	h.grokImportProber = prober
+}
+
+func (h *AccountHandler) SetGrokOAuthService(grokOAuthService *service.GrokOAuthService) {
+	h.grokOAuthService = grokOAuthService
+}
+
 func (h *AccountHandler) registerAccountBatchExecutors() {
 	if h == nil || h.accountBatchTaskService == nil {
 		return
@@ -138,7 +152,7 @@ type CreateAccountRequest struct {
 	Name                    string         `json:"name" binding:"required"`
 	Notes                   *string        `json:"notes"`
 	Platform                string         `json:"platform" binding:"required"`
-	AccountLevel            string         `json:"account_level" binding:"omitempty,oneof=unknown free plus pro team"`
+	AccountLevel            string         `json:"account_level"`
 	Type                    string         `json:"type" binding:"required,oneof=oauth setup-token apikey upstream bedrock service_account"`
 	Credentials             map[string]any `json:"credentials" binding:"required"`
 	Extra                   map[string]any `json:"extra"`
@@ -163,7 +177,7 @@ type UpdateAccountRequest struct {
 	Name                    string         `json:"name"`
 	Notes                   *string        `json:"notes"`
 	Type                    string         `json:"type" binding:"omitempty,oneof=oauth setup-token apikey upstream bedrock service_account"`
-	AccountLevel            *string        `json:"account_level" binding:"omitempty,oneof=unknown free plus pro team"`
+	AccountLevel            *string        `json:"account_level"`
 	Credentials             map[string]any `json:"credentials"`
 	Extra                   map[string]any `json:"extra"`
 	OwnerUserID             *int64         `json:"owner_user_id"`
@@ -194,7 +208,7 @@ type BulkUpdateAccountsRequest struct {
 	LoadFactor              *int                      `json:"load_factor"`
 	Status                  string                    `json:"status" binding:"omitempty,oneof=active inactive error"`
 	Schedulable             *bool                     `json:"schedulable"`
-	AccountLevel            *string                   `json:"account_level" binding:"omitempty,oneof=unknown free plus pro team"`
+	AccountLevel            *string                   `json:"account_level"`
 	GroupIDs                *[]int64                  `json:"group_ids"`
 	Credentials             map[string]any            `json:"credentials"`
 	Extra                   map[string]any            `json:"extra"`
@@ -501,20 +515,21 @@ func (h *AccountHandler) List(c *gin.Context) {
 	for i := range accounts {
 		acc := &accounts[i]
 		if acc.IsAnthropicOAuthOrSetupToken() {
-			if acc.GetWindowCostLimit() > 0 {
+			// lite 列表用于快速呈现页面核心字段，不执行 PostgreSQL 窗口费用聚合。
+			if !lite && acc.GetWindowCostLimit() > 0 {
 				windowCostAccountIDs = append(windowCostAccountIDs, acc.ID)
 			}
-			if acc.GetMaxSessions() > 0 {
+			if !lite && acc.GetMaxSessions() > 0 {
 				sessionLimitAccountIDs = append(sessionLimitAccountIDs, acc.ID)
 				sessionIdleTimeouts[acc.ID] = time.Duration(acc.GetSessionIdleTimeoutMinutes()) * time.Minute
 			}
-			if acc.GetBaseRPM() > 0 {
+			if !lite && acc.GetBaseRPM() > 0 {
 				rpmAccountIDs = append(rpmAccountIDs, acc.ID)
 			}
 		}
 	}
 
-	// 始终获取 RPM 计数（Redis GET，极低开销）
+	// 完整模式获取 RPM 计数；lite 首屏跳过所有非核心运行时统计。
 	if len(rpmAccountIDs) > 0 && h.rpmCache != nil {
 		rpmCounts, _ = h.rpmCache.GetRPMBatch(c.Request.Context(), rpmAccountIDs)
 		if rpmCounts == nil {
@@ -522,7 +537,7 @@ func (h *AccountHandler) List(c *gin.Context) {
 		}
 	}
 
-	// 始终获取活跃会话数（Redis ZCARD，低开销）
+	// 完整模式获取活跃会话数；lite 首屏不阻塞账号核心字段返回。
 	if len(sessionLimitAccountIDs) > 0 && h.sessionLimitCache != nil {
 		activeSessions, _ = h.sessionLimitCache.GetActiveSessionCountBatch(c.Request.Context(), sessionLimitAccountIDs, sessionIdleTimeouts)
 		if activeSessions == nil {
@@ -530,7 +545,7 @@ func (h *AccountHandler) List(c *gin.Context) {
 		}
 	}
 
-	// 始终获取窗口费用（PostgreSQL 聚合查询）
+	// 非 lite 模式获取窗口费用（PostgreSQL 聚合查询）。
 	if len(windowCostAccountIDs) > 0 {
 		windowCosts = make(map[int64]float64)
 		var mu sync.Mutex
@@ -546,16 +561,22 @@ func (h *AccountHandler) List(c *gin.Context) {
 			g.Go(func() error {
 				// 使用统一的窗口开始时间计算逻辑（考虑窗口过期情况）
 				startTime := accCopy.GetCurrentWindowStartTime()
-				stats, err := h.accountUsageService.GetAccountWindowStats(gctx, accCopy.ID, startTime)
-				if err == nil && stats != nil {
+				stats, statsErr := h.accountUsageService.GetAccountWindowStats(gctx, accCopy.ID, startTime)
+				if statsErr != nil {
+					return fmt.Errorf("get account %d window stats: %w", accCopy.ID, statsErr)
+				}
+				if stats != nil {
 					mu.Lock()
 					windowCosts[accCopy.ID] = stats.StandardCost // 使用标准费用
 					mu.Unlock()
 				}
-				return nil // 不返回错误，允许部分失败
+				return nil
 			})
 		}
-		_ = g.Wait()
+		if waitErr := g.Wait(); waitErr != nil {
+			response.ErrorFrom(c, waitErr)
+			return
+		}
 	}
 
 	// Build response with concurrency info
@@ -782,6 +803,7 @@ func (h *AccountHandler) Create(c *gin.Context) {
 		// OpenAI OAuth: 新账号直接设置隐私
 		h.adminService.ForceOpenAIPrivacy(ctx, account)
 		h.enqueueOwnedPublicShareValidation(account)
+		h.scheduleGrokImportProbe(account)
 		return h.buildAccountResponseWithRuntime(ctx, account), nil
 	})
 	if err != nil {
@@ -803,6 +825,61 @@ func (h *AccountHandler) Create(c *gin.Context) {
 		return
 	}
 
+	if result != nil && result.Replayed {
+		c.Header("X-Idempotency-Replayed", "true")
+	}
+	response.Success(c, result.Data)
+}
+
+// Duplicate creates an independent, initially unschedulable account from a
+// supported static-credential account.
+// POST /api/v1/admin/accounts/:id/duplicate
+func (h *AccountHandler) Duplicate(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || accountID <= 0 {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	actorScope := adminActorScope(c)
+	operationKey := strings.TrimSpace(c.GetHeader("Idempotency-Key"))
+	if operationKey == "" {
+		response.ErrorFrom(c, service.ErrIdempotencyKeyRequired)
+		return
+	}
+
+	result, err := executeAdminIdempotent(
+		c,
+		"admin.accounts.duplicate",
+		struct {
+			AccountID int64 `json:"account_id"`
+		}{AccountID: accountID},
+		service.DefaultWriteIdempotencyTTL(),
+		func(ctx context.Context) (any, error) {
+			account, execErr := h.adminService.DuplicateAccount(ctx, accountID, actorScope, operationKey)
+			if execErr != nil {
+				return nil, execErr
+			}
+			return h.buildAccountResponseWithRuntime(ctx, account), nil
+		},
+	)
+	if err != nil {
+		reason := infraerrors.Reason(err)
+		if reason == infraerrors.Reason(service.ErrIdempotencyInProgress) || reason == infraerrors.Reason(service.ErrIdempotencyStoreUnavail) {
+			recovered, recoverErr := h.adminService.RecoverDuplicateAccount(c.Request.Context(), accountID, actorScope, operationKey)
+			if recoverErr != nil {
+				slog.Warn("account_duplicate_recovery_failed", "account_id", accountID, "actor_scope", actorScope, "reason", reason, "error", recoverErr)
+			} else if recovered != nil {
+				c.Header("X-Idempotency-Recovered", "true")
+				response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), recovered))
+				return
+			}
+		}
+		if retryAfter := service.RetryAfterSecondsFromError(err); retryAfter > 0 {
+			c.Header("Retry-After", strconv.Itoa(retryAfter))
+		}
+		response.ErrorFrom(c, err)
+		return
+	}
 	if result != nil && result.Replayed {
 		c.Header("X-Idempotency-Replayed", "true")
 	}
@@ -1095,6 +1172,20 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 			if _, clearErr := h.adminService.ClearAccountError(ctx, account.ID); clearErr != nil {
 				return nil, "", fmt.Errorf("failed to clear account error: %w", clearErr)
 			}
+		}
+	} else if account.Platform == service.PlatformGrok {
+		if h.grokOAuthService == nil {
+			return nil, "", infraerrors.New(http.StatusServiceUnavailable, "GROK_OAUTH_SERVICE_UNAVAILABLE", "grok oauth service unavailable")
+		}
+		tokenInfo, err := h.grokOAuthService.RefreshAccountToken(ctx, account)
+		if err != nil {
+			return nil, "", err
+		}
+
+		newCredentials = h.grokOAuthService.BuildAccountCredentials(tokenInfo)
+		newCredentials = service.MergeCredentials(account.Credentials, newCredentials)
+		if baseURL := strings.TrimSpace(account.GetCredential("base_url")); baseURL != "" {
+			newCredentials["base_url"] = baseURL
 		}
 	} else {
 		// Use Anthropic/Claude OAuth service to refresh token
@@ -1609,6 +1700,7 @@ func (h *AccountHandler) BatchCreate(c *gin.Context) {
 				}
 			}
 			h.enqueueOwnedPublicShareValidation(account)
+			h.scheduleGrokImportProbe(account)
 			success++
 			results = append(results, gin.H{
 				"name":    item.Name,
@@ -1985,7 +2077,7 @@ func (h *OAuthHandler) SetupTokenCookieAuth(c *gin.Context) {
 }
 
 // GetUsage handles getting account usage information
-// GET /api/v1/admin/accounts/:id/usage?source=passive|active
+// GET /api/v1/admin/accounts/:id/usage?source=local|passive|active
 func (h *AccountHandler) GetUsage(c *gin.Context) {
 	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -1993,13 +2085,19 @@ func (h *AccountHandler) GetUsage(c *gin.Context) {
 		return
 	}
 
-	source := c.DefaultQuery("source", "active")
+	source := strings.ToLower(strings.TrimSpace(c.DefaultQuery("source", "local")))
 
 	var usage *service.UsageInfo
-	if source == "passive" {
+	switch source {
+	case "local":
+		usage, err = h.accountUsageService.GetLocalUsage(c.Request.Context(), accountID)
+	case "passive":
 		usage, err = h.accountUsageService.GetPassiveUsage(c.Request.Context(), accountID)
-	} else {
+	case "active":
 		usage, err = h.accountUsageService.GetUsage(c.Request.Context(), accountID)
+	default:
+		response.BadRequest(c, "Invalid usage source")
+		return
 	}
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -2138,34 +2236,31 @@ func (h *AccountHandler) GetBatchTodayStats(c *gin.Context) {
 	}
 
 	cacheKey := buildAccountTodayStatsBatchCacheKey(accountIDs)
-	if cached, ok := accountTodayStatsBatchCache.Get(cacheKey); ok {
-		if cached.ETag != "" {
-			c.Header("ETag", cached.ETag)
-			c.Header("Vary", "If-None-Match")
-			if ifNoneMatchMatched(c.GetHeader("If-None-Match"), cached.ETag) {
-				c.Status(http.StatusNotModified)
-				return
-			}
+	cached, hit, err := accountTodayStatsBatchCache.GetOrLoad(cacheKey, func() (any, error) {
+		stats, loadErr := h.accountUsageService.GetTodayStatsBatch(c.Request.Context(), accountIDs)
+		if loadErr != nil {
+			return nil, loadErr
 		}
-		c.Header("X-Snapshot-Cache", "hit")
-		response.Success(c, cached.Payload)
-		return
-	}
-
-	stats, err := h.accountUsageService.GetTodayStatsBatch(c.Request.Context(), accountIDs)
+		return gin.H{"stats": stats}, nil
+	})
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
-
-	payload := gin.H{"stats": stats}
-	cached := accountTodayStatsBatchCache.Set(cacheKey, payload)
 	if cached.ETag != "" {
 		c.Header("ETag", cached.ETag)
 		c.Header("Vary", "If-None-Match")
+		if hit && ifNoneMatchMatched(c.GetHeader("If-None-Match"), cached.ETag) {
+			c.Status(http.StatusNotModified)
+			return
+		}
 	}
-	c.Header("X-Snapshot-Cache", "miss")
-	response.Success(c, payload)
+	if hit {
+		c.Header("X-Snapshot-Cache", "hit")
+	} else {
+		c.Header("X-Snapshot-Cache", "miss")
+	}
+	response.Success(c, cached.Payload)
 }
 
 // SetSchedulableRequest represents the request body for setting schedulable status
@@ -2295,6 +2390,49 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 		return
 	}
 
+	// Handle Grok/xAI accounts
+	if account.Platform == service.PlatformGrok {
+		rawMapping, _ := account.Credentials["model_mapping"].(map[string]any)
+		if len(rawMapping) == 0 {
+			response.Success(c, xai.DefaultModels())
+			return
+		}
+
+		mapping := account.GetModelMapping()
+		if len(mapping) == 0 {
+			response.Success(c, xai.DefaultModels())
+			return
+		}
+
+		defaultModels := xai.DefaultModels()
+		models := make([]xai.Model, 0, len(mapping))
+		for requestedModel := range mapping {
+			var found bool
+			for _, dm := range defaultModels {
+				if dm.ID == requestedModel {
+					models = append(models, dm)
+					found = true
+					break
+				}
+			}
+			if !found {
+				models = append(models, xai.Model{
+					ID:          requestedModel,
+					Object:      "model",
+					OwnedBy:     "xai",
+					DisplayName: requestedModel,
+				})
+			}
+		}
+		response.Success(c, models)
+		return
+	}
+
+	if !account.IsAnthropic() {
+		response.BadRequest(c, "Unsupported account platform: "+account.Platform)
+		return
+	}
+
 	// Handle Claude/Anthropic accounts
 	// For OAuth and Setup-Token accounts: return default models
 	if account.IsOAuth() {
@@ -2334,6 +2472,95 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 	}
 
 	response.Success(c, models)
+}
+
+// SyncUpstreamModels fetches the live model list exposed by an account's
+// configured upstream.
+// POST /api/v1/admin/accounts/:id/models/sync-upstream
+func (h *AccountHandler) SyncUpstreamModels(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+
+	account, err := h.adminService.GetAccount(c.Request.Context(), accountID)
+	if err != nil {
+		response.NotFound(c, "Account not found")
+		return
+	}
+	if h.accountTestService == nil {
+		response.InternalError(c, "Account test service is not configured")
+		return
+	}
+
+	models, err := h.accountTestService.FetchUpstreamSupportedModels(c.Request.Context(), account)
+	if err != nil {
+		var syncErr *service.UpstreamModelSyncError
+		if errors.As(err, &syncErr) {
+			switch syncErr.Kind {
+			case service.UpstreamModelSyncErrorConfiguration, service.UpstreamModelSyncErrorUnsupported:
+				response.BadRequest(c, syncErr.SafeMessage())
+			default:
+				slog.Warn("sync_upstream_models_failed", "account_id", accountID, "kind", syncErr.Kind)
+				response.Error(c, http.StatusBadGateway, syncErr.SafeMessage())
+			}
+			return
+		}
+		slog.Warn("sync_upstream_models_failed", "account_id", accountID)
+		response.Error(c, http.StatusBadGateway, "Failed to sync upstream models from upstream")
+		return
+	}
+
+	response.Success(c, gin.H{"models": models})
+}
+
+// SyncUpstreamModelsPreview fetches a live model list from credentials that
+// have not been persisted yet.
+// POST /api/v1/admin/accounts/models/sync-upstream-preview
+func (h *AccountHandler) SyncUpstreamModelsPreview(c *gin.Context) {
+	var req struct {
+		Platform string `json:"platform" binding:"required"`
+		Type     string `json:"type" binding:"required"`
+		BaseURL  string `json:"base_url"`
+		APIKey   string `json:"api_key" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if h.accountTestService == nil {
+		response.InternalError(c, "Account test service is not configured")
+		return
+	}
+
+	tempAccount := &service.Account{
+		Platform: req.Platform,
+		Type:     req.Type,
+		Credentials: map[string]any{
+			"api_key":  req.APIKey,
+			"base_url": req.BaseURL,
+		},
+	}
+	models, err := h.accountTestService.FetchUpstreamSupportedModels(c.Request.Context(), tempAccount)
+	if err != nil {
+		var syncErr *service.UpstreamModelSyncError
+		if errors.As(err, &syncErr) {
+			switch syncErr.Kind {
+			case service.UpstreamModelSyncErrorConfiguration, service.UpstreamModelSyncErrorUnsupported:
+				response.BadRequest(c, syncErr.SafeMessage())
+			default:
+				slog.Warn("sync_upstream_models_preview_failed", "platform", req.Platform, "kind", syncErr.Kind)
+				response.Error(c, http.StatusBadGateway, syncErr.SafeMessage())
+			}
+			return
+		}
+		slog.Warn("sync_upstream_models_preview_failed", "platform", req.Platform)
+		response.Error(c, http.StatusBadGateway, "Failed to sync upstream models from upstream")
+		return
+	}
+
+	response.Success(c, gin.H{"models": models})
 }
 
 // SetPrivacy handles setting privacy for a single OpenAI/Antigravity OAuth account

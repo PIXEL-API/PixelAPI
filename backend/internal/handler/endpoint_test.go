@@ -24,22 +24,46 @@ func TestNormalizeInboundEndpoint(t *testing.T) {
 		// Direct canonical paths.
 		{"/v1/messages", EndpointMessages},
 		{"/v1/chat/completions", EndpointChatCompletions},
+		{"/v1/alpha/search", EndpointAlphaSearch},
 		{"/v1/responses", EndpointResponses},
+		{"/v1/responses/compact", EndpointResponsesCompact},
+		{"/v1/responses/compact/detail", EndpointResponsesCompact},
 		{"/v1/images/generations", EndpointImagesGenerations},
 		{"/v1/images/edits", EndpointImagesEdits},
+		{"/v1/videos/generations", EndpointVideosGenerations},
+		{"/v1/videos/edits", EndpointVideosEdits},
+		{"/v1/videos/extensions", EndpointVideosExtensions},
+		{"/v1/videos/request-123", EndpointVideos},
 		{"/v1beta/models", EndpointGeminiModels},
 
 		// Prefixed paths (antigravity, openai).
 		{"/antigravity/v1/messages", EndpointMessages},
 		{"/openai/v1/responses", EndpointResponses},
-		{"/openai/v1/responses/compact", EndpointResponses},
+		{"/openai/v1/responses/compact", EndpointResponsesCompact},
+		{"/openai/v1/responses/compact/detail", EndpointResponsesCompact},
 		{"/openai/v1/images/generations", EndpointImagesGenerations},
 		{"/openai/v1/images/edits", EndpointImagesEdits},
 		{"/antigravity/v1beta/models/gemini:generateContent", EndpointGeminiModels},
 
+		// Bare Responses aliases used by Codex/OpenAI clients.
+		{"/responses", EndpointResponses},
+		{"/responses/compact", EndpointResponsesCompact},
+		{"/responses/compact/detail", EndpointResponsesCompact},
+		{"/backend-api/codex/responses", EndpointResponses},
+		{"/backend-api/codex/responses/compact", EndpointResponsesCompact},
+		{"/backend-api/codex/responses/compact/detail", EndpointResponsesCompact},
+		{"/alpha/search", EndpointAlphaSearch},
+		{"/backend-api/codex/alpha/search", EndpointAlphaSearch},
+		{"/videos/generations", EndpointVideosGenerations},
+		{"/videos/edits", EndpointVideosEdits},
+		{"/videos/extensions", EndpointVideosExtensions},
+		{"/videos/request-456", EndpointVideos},
+
 		// Gin route patterns with wildcards.
 		{"/v1beta/models/*modelAction", EndpointGeminiModels},
 		{"/v1/responses/*subpath", EndpointResponses},
+		{"/foo/responses", "/foo/responses"},
+		{"/foo/responses/compact", "/foo/responses/compact"},
 
 		// Unknown path is returned as-is.
 		{"/v1/embeddings", "/v1/embeddings"},
@@ -73,12 +97,17 @@ func TestDeriveUpstreamEndpoint(t *testing.T) {
 
 		// OpenAI — always /v1/responses.
 		{"openai responses root", EndpointResponses, "/v1/responses", service.PlatformOpenAI, EndpointResponses},
-		{"openai responses compact", EndpointResponses, "/openai/v1/responses/compact", service.PlatformOpenAI, "/v1/responses/compact"},
-		{"openai responses nested", EndpointResponses, "/openai/v1/responses/compact/detail", service.PlatformOpenAI, "/v1/responses/compact/detail"},
+		{"openai responses compact", EndpointResponsesCompact, "/openai/v1/responses/compact", service.PlatformOpenAI, "/v1/responses/compact"},
+		{"openai responses nested", EndpointResponsesCompact, "/openai/v1/responses/compact/detail", service.PlatformOpenAI, "/v1/responses/compact/detail"},
+		{"openai bare responses compact", EndpointResponsesCompact, "/responses/compact", service.PlatformOpenAI, "/v1/responses/compact"},
+		{"openai compact fallback", EndpointResponsesCompact, "", service.PlatformOpenAI, EndpointResponsesCompact},
 		{"openai from messages", EndpointMessages, "/v1/messages", service.PlatformOpenAI, EndpointResponses},
 		{"openai from completions", EndpointChatCompletions, "/v1/chat/completions", service.PlatformOpenAI, EndpointResponses},
 		{"openai image generations", EndpointImagesGenerations, "/v1/images/generations", service.PlatformOpenAI, EndpointImagesGenerations},
 		{"openai image edits", EndpointImagesEdits, "/openai/v1/images/edits", service.PlatformOpenAI, EndpointImagesEdits},
+		{"openai alpha search", EndpointAlphaSearch, "/backend-api/codex/alpha/search", service.PlatformOpenAI, EndpointAlphaSearch},
+		{"grok video edits", EndpointVideosEdits, "/v1/videos/edits", service.PlatformGrok, EndpointVideosEdits},
+		{"grok video extensions", EndpointVideosExtensions, "/videos/extensions", service.PlatformGrok, EndpointVideosExtensions},
 
 		// Antigravity — uses inbound to pick Claude vs Gemini upstream.
 		{"antigravity claude", EndpointMessages, "/antigravity/v1/messages", service.PlatformAntigravity, EndpointMessages},
@@ -146,6 +175,21 @@ func TestGetInboundEndpoint_FallbackWithoutMiddleware(t *testing.T) {
 	// Middleware did not run — fallback to normalizing c.Request.URL.Path.
 	got := GetInboundEndpoint(c)
 	require.Equal(t, EndpointMessages, got)
+}
+
+func TestGetInboundEndpoint_FallbackPrefersRawPathOverRoutePattern(t *testing.T) {
+	router := gin.New()
+	var captured string
+	router.POST("/v1/responses/*subpath", func(c *gin.Context) {
+		captured = GetInboundEndpoint(c)
+		c.Status(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses/compact", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, EndpointResponsesCompact, captured)
 }
 
 func TestGetUpstreamEndpoint_FullFlow(t *testing.T) {

@@ -320,3 +320,48 @@ func TestRollbackOAuthEmailAccountCreationPropagatesDeleteError(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "delete created oauth user")
 }
+
+func TestFinalizeOAuthEmailAccountProvisionsPrivateGroups(t *testing.T) {
+	authService := newOAuthEmailFlowAuthService(
+		&userRepoStub{},
+		&redeemCodeRepoStub{},
+		&refreshTokenCacheStub{},
+		map[string]string{},
+		&emailCacheStub{},
+	)
+	provisioner := &registrationPrivateGroupProvisionerStub{}
+	authService.privateGroupProvisioner = provisioner
+
+	err := authService.FinalizeOAuthEmailAccount(
+		context.Background(),
+		&User{ID: 42},
+		"",
+		"oidc",
+		"",
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, []int64{42}, provisioner.provisionedUserIDs)
+}
+
+func TestFinalizeOAuthEmailAccountReturnsPrivateGroupProvisioningError(t *testing.T) {
+	authService := newOAuthEmailFlowAuthService(
+		&userRepoStub{},
+		&redeemCodeRepoStub{},
+		&refreshTokenCacheStub{},
+		map[string]string{},
+		&emailCacheStub{},
+	)
+	provisionErr := errors.New("private group provisioning failed")
+	authService.privateGroupProvisioner = &registrationPrivateGroupProvisionerStub{err: provisionErr}
+
+	err := authService.FinalizeOAuthEmailAccount(
+		context.Background(),
+		&User{ID: 42},
+		"",
+		"oidc",
+		"",
+	)
+
+	require.ErrorIs(t, err, provisionErr)
+}

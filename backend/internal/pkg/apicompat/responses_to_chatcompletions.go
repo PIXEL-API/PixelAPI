@@ -9,6 +9,112 @@ import (
 	"time"
 )
 
+// ResponsesToChatCompletionsRequest preserves request-level controls when a
+// Responses client is routed to a Chat Completions-only upstream.
+func ResponsesToChatCompletionsRequest(req *ResponsesRequest) (*ChatCompletionsRequest, error) {
+	if req == nil {
+		return nil, fmt.Errorf("responses request is nil")
+	}
+	messages, err := responsesInputToChatMessages(req.Instructions, req.Input)
+	if err != nil {
+		return nil, err
+	}
+	out := &ChatCompletionsRequest{
+		Model:               req.Model,
+		Messages:            messages,
+		MaxCompletionTokens: req.MaxOutputTokens,
+		Temperature:         req.Temperature,
+		TopP:                req.TopP,
+		Stream:              req.Stream,
+		ParallelToolCalls:   req.ParallelToolCalls,
+		ServiceTier:         req.ServiceTier,
+		PromptCacheKey:      req.PromptCacheKey,
+		PromptCacheOptions:  req.PromptCacheOptions,
+	}
+	if req.Reasoning != nil {
+		out.ReasoningEffort = req.Reasoning.Effort
+	}
+	return out, nil
+}
+
+func responsesInputToChatMessages(instructions string, input json.RawMessage) ([]ChatMessage, error) {
+	messages := make([]ChatMessage, 0, 4)
+	if strings.TrimSpace(instructions) != "" {
+		content, _ := json.Marshal(instructions)
+		messages = append(messages, ChatMessage{Role: "system", Content: content})
+	}
+	input = bytesTrimSpace(input)
+	if len(input) == 0 || string(input) == "null" {
+		return messages, nil
+	}
+	var text string
+	if err := json.Unmarshal(input, &text); err == nil {
+		content, _ := json.Marshal(text)
+		return append(messages, ChatMessage{Role: "user", Content: content}), nil
+	}
+	var items []ResponsesInputItem
+	if err := json.Unmarshal(input, &items); err != nil {
+		return nil, fmt.Errorf("parse responses input: %w", err)
+	}
+	for _, item := range items {
+		switch item.Type {
+		case "function_call":
+			toolCall := ChatToolCall{ID: item.CallID, Type: "function", Function: ChatFunctionCall{Name: item.Name, Arguments: item.Arguments}}
+			if len(messages) > 0 && messages[len(messages)-1].Role == "assistant" && len(messages[len(messages)-1].ToolCalls) > 0 {
+				messages[len(messages)-1].ToolCalls = append(messages[len(messages)-1].ToolCalls, toolCall)
+			} else {
+				messages = append(messages, ChatMessage{Role: "assistant", ToolCalls: []ChatToolCall{toolCall}})
+			}
+		case "function_call_output":
+			content, _ := json.Marshal(item.Output)
+			messages = append(messages, ChatMessage{Role: "tool", ToolCallID: item.CallID, Content: content})
+		case "reasoning":
+			continue
+		default:
+			if item.Type != "" && item.Type != "message" {
+				continue
+			}
+			role := item.Role
+			if role == "" {
+				role = "user"
+			}
+			messages = append(messages, ChatMessage{Role: role, Content: item.Content})
+		}
+	}
+	return messages, nil
+}
+
+func bytesTrimSpace(value []byte) []byte {
+	return []byte(strings.TrimSpace(string(value)))
+}
+
+func ChatUsageToResponsesUsage(usage *ChatUsage) *ResponsesUsage {
+	if usage == nil {
+		return nil
+	}
+	out := &ResponsesUsage{
+		InputTokens:  usage.PromptTokens,
+		OutputTokens: usage.CompletionTokens,
+		TotalTokens:  usage.TotalTokens,
+	}
+	if out.TotalTokens == 0 {
+		out.TotalTokens = out.InputTokens + out.OutputTokens
+	}
+	if details := usage.PromptTokensDetails; details != nil && (details.CachedTokens > 0 || details.CacheCreationTokens > 0 || details.CacheWriteTokens > 0) {
+		out.InputTokensDetails = &ResponsesInputTokensDetails{
+			CachedTokens:        details.CachedTokens,
+			CacheCreationTokens: details.CacheCreationTokens,
+			CacheWriteTokens:    details.CacheWriteTokens,
+		}
+		if details.CacheWriteTokens > 0 {
+			out.CacheCreationInputTokens = details.CacheWriteTokens
+		} else {
+			out.CacheCreationInputTokens = details.CacheCreationTokens
+		}
+	}
+	return out
+}
+
 // ---------------------------------------------------------------------------
 // Non-streaming: ResponsesResponse → ChatCompletionsResponse
 // ---------------------------------------------------------------------------
@@ -87,9 +193,20 @@ func ResponsesToChatCompletions(resp *ResponsesResponse, model string) *ChatComp
 			CompletionTokens: resp.Usage.OutputTokens,
 			TotalTokens:      resp.Usage.InputTokens + resp.Usage.OutputTokens,
 		}
-		if resp.Usage.InputTokensDetails != nil && resp.Usage.InputTokensDetails.CachedTokens > 0 {
+		if resp.Usage.InputTokensDetails != nil && (resp.Usage.InputTokensDetails.CachedTokens > 0 ||
+			resp.Usage.InputTokensDetails.CacheCreationTokens > 0 || resp.Usage.InputTokensDetails.CacheWriteTokens > 0) {
 			usage.PromptTokensDetails = &ChatTokenDetails{
-				CachedTokens: resp.Usage.InputTokensDetails.CachedTokens,
+				CachedTokens:        resp.Usage.InputTokensDetails.CachedTokens,
+				CacheCreationTokens: resp.Usage.InputTokensDetails.CacheCreationTokens,
+				CacheWriteTokens:    resp.Usage.InputTokensDetails.CacheWriteTokens,
+			}
+		}
+		if resp.Usage.CacheCreationInputTokens > 0 {
+			if usage.PromptTokensDetails == nil {
+				usage.PromptTokensDetails = &ChatTokenDetails{}
+			}
+			if usage.PromptTokensDetails.CacheWriteTokens == 0 && usage.PromptTokensDetails.CacheCreationTokens == 0 {
+				usage.PromptTokensDetails.CacheCreationTokens = resp.Usage.CacheCreationInputTokens
 			}
 		}
 		out.Usage = usage
@@ -101,8 +218,13 @@ func ResponsesToChatCompletions(resp *ResponsesResponse, model string) *ChatComp
 func responsesStatusToChatFinishReason(status string, details *ResponsesIncompleteDetails, toolCalls []ChatToolCall) string {
 	switch status {
 	case "incomplete":
-		if details != nil && details.Reason == "max_output_tokens" {
-			return "length"
+		if details != nil {
+			switch details.Reason {
+			case "max_output_tokens":
+				return "length"
+			case "content_filter":
+				return "content_filter"
+			}
 		}
 		return "stop"
 	case "completed":
@@ -299,9 +421,20 @@ func resToChatHandleCompleted(evt *ResponsesStreamEvent, state *ResponsesEventTo
 				CompletionTokens: u.OutputTokens,
 				TotalTokens:      u.InputTokens + u.OutputTokens,
 			}
-			if u.InputTokensDetails != nil && u.InputTokensDetails.CachedTokens > 0 {
+			if u.InputTokensDetails != nil && (u.InputTokensDetails.CachedTokens > 0 ||
+				u.InputTokensDetails.CacheCreationTokens > 0 || u.InputTokensDetails.CacheWriteTokens > 0) {
 				usage.PromptTokensDetails = &ChatTokenDetails{
-					CachedTokens: u.InputTokensDetails.CachedTokens,
+					CachedTokens:        u.InputTokensDetails.CachedTokens,
+					CacheCreationTokens: u.InputTokensDetails.CacheCreationTokens,
+					CacheWriteTokens:    u.InputTokensDetails.CacheWriteTokens,
+				}
+			}
+			if u.CacheCreationInputTokens > 0 {
+				if usage.PromptTokensDetails == nil {
+					usage.PromptTokensDetails = &ChatTokenDetails{}
+				}
+				if usage.PromptTokensDetails.CacheWriteTokens == 0 && usage.PromptTokensDetails.CacheCreationTokens == 0 {
+					usage.PromptTokensDetails.CacheCreationTokens = u.CacheCreationInputTokens
 				}
 			}
 			state.Usage = usage
@@ -309,8 +442,13 @@ func resToChatHandleCompleted(evt *ResponsesStreamEvent, state *ResponsesEventTo
 
 		switch evt.Response.Status {
 		case "incomplete":
-			if evt.Response.IncompleteDetails != nil && evt.Response.IncompleteDetails.Reason == "max_output_tokens" {
-				finishReason = "length"
+			if evt.Response.IncompleteDetails != nil {
+				switch evt.Response.IncompleteDetails.Reason {
+				case "max_output_tokens":
+					finishReason = "length"
+				case "content_filter":
+					finishReason = "content_filter"
+				}
 			}
 		case "completed":
 			if state.SawToolCall {

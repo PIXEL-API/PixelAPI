@@ -216,6 +216,7 @@ func TestAPIContracts(t *testing.T) {
 					"ip_whitelist": null,
 					"ip_blacklist": null,
 					"last_used_at": null,
+					"last_used_ip": null,
 					"quota": 0,
 					"quota_used": 0,
 					"rate_limit_5h": 0,
@@ -228,6 +229,7 @@ func TestAPIContracts(t *testing.T) {
 					"window_1d_start": null,
 					"window_7d_start": null,
 					"expires_at": null,
+					"current_concurrency": 0,
 					"created_at": "2025-01-02T03:04:05Z",
 					"updated_at": "2025-01-02T03:04:05Z"
 				}
@@ -265,6 +267,7 @@ func TestAPIContracts(t *testing.T) {
 							"ip_whitelist": null,
 							"ip_blacklist": null,
 							"last_used_at": null,
+							"last_used_ip": null,
 							"quota": 0,
 							"quota_used": 0,
 							"rate_limit_5h": 0,
@@ -277,6 +280,7 @@ func TestAPIContracts(t *testing.T) {
 							"window_1d_start": null,
 							"window_7d_start": null,
 							"expires_at": null,
+							"current_concurrency": 0,
 							"created_at": "2025-01-02T03:04:05Z",
 							"updated_at": "2025-01-02T03:04:05Z"
 						}
@@ -329,6 +333,12 @@ func TestAPIContracts(t *testing.T) {
 						"platform": "anthropic",
 						"required_account_level": "",
 						"rate_multiplier": 1.5,
+						"effective_rate_multiplier": 1.5,
+						"effective_rate_multiplier_source": "group_default",
+						"new_user_rate_enabled": false,
+						"new_user_rate_multiplier": 0,
+						"new_user_rate_quota_usd": 0,
+						"new_user_rate_window_seconds": 0,
 						"is_exclusive": false,
 						"scope": "public",
 						"status": "active",
@@ -341,6 +351,12 @@ func TestAPIContracts(t *testing.T) {
 						"image_price_4k": null,
 						"image_rate_multiplier": 0,
 						"image_rate_independent": false,
+						"video_rate_multiplier": 0,
+						"video_rate_independent": false,
+						"video_price_480p": null,
+						"video_price_720p": null,
+						"video_price_1080p": null,
+						"web_search_price_per_call": null,
 						"allow_image_generation": false,
 						"claude_code_only": false,
 						"allow_messages_dispatch": false,
@@ -497,6 +513,8 @@ func TestAPIContracts(t *testing.T) {
 					"total_tokens": 53,
 					"total_cost": 0.75,
 					"total_actual_cost": 0.75,
+					"total_hourly_cost": 0,
+					"total_request_actual_cost": 0,
 					"average_duration_ms": 200
 				}
 			}`,
@@ -561,6 +579,7 @@ func TestAPIContracts(t *testing.T) {
 						"total_cost": 0.5,
 						"actual_cost": 0.5,
 						"rate_multiplier": 1,
+						"rate_multiplier_source": "",
 						"billing_type": 0,
 						"balance_deducted": 0,
 						"points_deducted": 0,
@@ -571,6 +590,9 @@ func TestAPIContracts(t *testing.T) {
 							"image_count": 0,
 							"image_size": null,
 							"media_type": null,
+							"video_count": 0,
+							"video_resolution": null,
+							"video_duration_seconds": null,
 							"cache_ttl_overridden": false,
 							"created_at": "2025-01-02T03:04:05Z",
 							"user_agent": null
@@ -701,6 +723,13 @@ func TestAPIContracts(t *testing.T) {
 						"oidc_connect_userinfo_email_path": "",
 						"oidc_connect_userinfo_id_path": "",
 						"oidc_connect_userinfo_username_path": "",
+						"openai_account_levels": [
+							{"key": "free", "label": "Free", "enabled": true, "aliases": ["free", "chatgptfree"], "requires_proxy_login": false, "sort_order": 10},
+							{"key": "plus", "label": "Plus", "enabled": true, "aliases": ["plus", "plus*", "chatgptplus"], "requires_proxy_login": false, "sort_order": 20},
+							{"key": "pro", "label": "Pro", "enabled": true, "aliases": ["pro", "pro*", "chatgptpro", "chatgptpro*"], "requires_proxy_login": true, "sort_order": 30},
+							{"key": "team", "label": "Team", "enabled": true, "aliases": ["team", "team*", "chatgptteam"], "requires_proxy_login": false, "sort_order": 40},
+							{"key": "k12", "label": "K12", "enabled": true, "aliases": ["k12", "chatgptk12"], "requires_proxy_login": false, "sort_order": 50}
+						],
 						"ops_monitoring_enabled": false,
 						"ops_realtime_monitoring_enabled": true,
 						"ops_query_mode_default": "auto",
@@ -760,6 +789,8 @@ func TestAPIContracts(t *testing.T) {
 					"affiliate_rebate_duration_days": 0,
 					"affiliate_rebate_per_invitee_cap": 0,
 					"default_user_rpm_limit": 0,
+					"detached_usage_drain_enabled": true,
+					"invoice_management_enabled": false,
 					"default_subscriptions": [],
 					"enable_model_fallback": false,
 					"fallback_model_anthropic": "claude-3-5-sonnet-20241022",
@@ -811,6 +842,9 @@ func TestAPIContracts(t *testing.T) {
 					"openai_advanced_scheduler_enabled": true,
 					"openai_clean_relay_enabled": false,
 					"risk_control_enabled": false,
+					"scheduler_candidate_sampling_enabled": false,
+					"scheduler_candidate_sampling_limit": 256,
+					"scheduler_candidate_sampling_threshold": 5000,
 					"openai_free_account_repair_enabled": false,
 					"openai_free_account_repair_weekly_threshold_usd": 60,
 					"openai_fast_policy_settings": {
@@ -863,6 +897,10 @@ func TestAPIContracts(t *testing.T) {
 					"payment_cancel_rate_limit_window_mode": "",
 					"balance_low_notify_enabled": false,
 					"account_quota_notify_enabled": false,
+					"account_share_comment_review_enabled": false,
+					"account_share_comment_review_url": "",
+					"account_share_comment_review_api_key_configured": false,
+					"account_share_comment_review_model": "",
 					"balance_low_notify_threshold": 0,
 					"balance_low_notify_recharge_url": "",
 					"account_quota_notify_emails": [],
@@ -886,7 +924,10 @@ func TestAPIContracts(t *testing.T) {
 					"wechat_connect_mobile_app_secret_configured": false,
 					"wechat_connect_redirect_url": "",
 					"wechat_connect_frontend_redirect_url": "/auth/wechat/callback",
-					"wechat_connect_scopes": "snsapi_login"
+					"wechat_connect_scopes": "snsapi_login",
+					"withdrawal_management_enabled": true,
+					"withdrawal_rate_limit_window_days": 1,
+					"withdrawal_rate_limit_max": 0
 				}
 			}`,
 		},
@@ -976,6 +1017,13 @@ func TestAPIContracts(t *testing.T) {
 					"oidc_connect_userinfo_email_path": "",
 					"oidc_connect_userinfo_id_path": "",
 					"oidc_connect_userinfo_username_path": "",
+					"openai_account_levels": [
+						{"key": "free", "label": "Free", "enabled": true, "aliases": ["free", "chatgptfree"], "requires_proxy_login": false, "sort_order": 10},
+						{"key": "plus", "label": "Plus", "enabled": true, "aliases": ["plus", "plus*", "chatgptplus"], "requires_proxy_login": false, "sort_order": 20},
+						{"key": "pro", "label": "Pro", "enabled": true, "aliases": ["pro", "pro*", "chatgptpro", "chatgptpro*"], "requires_proxy_login": true, "sort_order": 30},
+						{"key": "team", "label": "Team", "enabled": true, "aliases": ["team", "team*", "chatgptteam"], "requires_proxy_login": false, "sort_order": 40},
+						{"key": "k12", "label": "K12", "enabled": true, "aliases": ["k12", "chatgptk12"], "requires_proxy_login": false, "sort_order": 50}
+					],
 					"site_name": "Sub2API",
 					"claude_oauth_system_prompt": "",
 					"claude_oauth_system_prompt_blocks": "",
@@ -1020,6 +1068,8 @@ func TestAPIContracts(t *testing.T) {
 					"affiliate_rebate_duration_days": 0,
 					"affiliate_rebate_per_invitee_cap": 0,
 					"default_user_rpm_limit": 0,
+					"detached_usage_drain_enabled": true,
+					"invoice_management_enabled": false,
 					"default_subscriptions": [],
 					"enable_model_fallback": false,
 					"fallback_model_anthropic": "claude-3-5-sonnet-20241022",
@@ -1049,6 +1099,9 @@ func TestAPIContracts(t *testing.T) {
 					"openai_advanced_scheduler_enabled": false,
 					"openai_clean_relay_enabled": false,
 					"risk_control_enabled": false,
+					"scheduler_candidate_sampling_enabled": false,
+					"scheduler_candidate_sampling_limit": 256,
+					"scheduler_candidate_sampling_threshold": 5000,
 					"openai_free_account_repair_enabled": false,
 					"openai_free_account_repair_weekly_threshold_usd": 60,
 					"openai_fast_policy_settings": {
@@ -1099,6 +1152,10 @@ func TestAPIContracts(t *testing.T) {
 					"payment_cancel_rate_limit_window_mode": "",
 					"balance_low_notify_enabled": false,
 					"account_quota_notify_enabled": false,
+					"account_share_comment_review_enabled": false,
+					"account_share_comment_review_url": "",
+					"account_share_comment_review_api_key_configured": false,
+					"account_share_comment_review_model": "",
 					"balance_low_notify_threshold": 0,
 					"balance_low_notify_recharge_url": "",
 					"account_quota_notify_emails": [],
@@ -1160,7 +1217,10 @@ func TestAPIContracts(t *testing.T) {
 					"user_account_import_limit": 100,
 					"user_private_group_rate_multiplier": 1,
 					"user_private_group_rpm_limit": 0,
-					"user_private_group_commission_rate": 0.005
+					"user_private_group_commission_rate": 0.005,
+					"withdrawal_management_enabled": true,
+					"withdrawal_rate_limit_window_days": 1,
+					"withdrawal_rate_limit_max": 0
 				}
 			}`,
 		},
@@ -1270,7 +1330,7 @@ func newContractDeps(t *testing.T) *contractDeps {
 	settingService := service.NewSettingService(settingRepo, cfg)
 	apiKeyService.SetSettingService(settingService)
 
-	adminService := service.NewAdminService(userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, redeemRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	adminService := service.NewAdminService(userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, nil, redeemRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	authHandler := handler.NewAuthHandler(cfg, nil, userService, settingService, nil, redeemService, nil)
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyService)
 	usageHandler := handler.NewUsageHandler(usageService, apiKeyService)
@@ -1983,13 +2043,16 @@ func (stubUserSubscriptionRepo) UpdateNotes(ctx context.Context, subscriptionID 
 func (stubUserSubscriptionRepo) ActivateWindows(ctx context.Context, id int64, start time.Time) error {
 	return errors.New("not implemented")
 }
-func (stubUserSubscriptionRepo) ResetDailyUsage(ctx context.Context, id int64, newWindowStart time.Time) error {
+func (stubUserSubscriptionRepo) ResetUsageWindows(ctx context.Context, id int64, resetDaily, resetWeekly, resetMonthly bool, newWindowStart time.Time) error {
 	return errors.New("not implemented")
 }
-func (stubUserSubscriptionRepo) ResetWeeklyUsage(ctx context.Context, id int64, newWindowStart time.Time) error {
+func (stubUserSubscriptionRepo) ResetDailyUsage(ctx context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time) error {
 	return errors.New("not implemented")
 }
-func (stubUserSubscriptionRepo) ResetMonthlyUsage(ctx context.Context, id int64, newWindowStart time.Time) error {
+func (stubUserSubscriptionRepo) ResetWeeklyUsage(ctx context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time) error {
+	return errors.New("not implemented")
+}
+func (stubUserSubscriptionRepo) ResetMonthlyUsage(ctx context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time) error {
 	return errors.New("not implemented")
 }
 func (stubUserSubscriptionRepo) IncrementUsage(ctx context.Context, id int64, costUSD float64) error {
@@ -2392,6 +2455,10 @@ func (r *stubUsageLogRepo) GetUserStatsAggregated(ctx context.Context, userID in
 
 func (r *stubUsageLogRepo) GetAccountShareRecommendationUsageProfile(ctx context.Context, userID int64, model string, startTime, endTime time.Time) (*service.AccountShareRecommendationUsageProfileStats, error) {
 	return &service.AccountShareRecommendationUsageProfileStats{}, nil
+}
+
+func (r *stubUsageLogRepo) SumUserGroupRateSourceActualCost(ctx context.Context, userID, groupID int64, source string, startTime, endTime time.Time) (float64, error) {
+	return 0, nil
 }
 
 func (r *stubUsageLogRepo) GetAPIKeyStatsAggregated(ctx context.Context, apiKeyID int64, startTime, endTime time.Time) (*usagestats.UsageStats, error) {

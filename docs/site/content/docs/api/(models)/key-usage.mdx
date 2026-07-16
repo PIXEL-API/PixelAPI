@@ -1,0 +1,37 @@
+---
+title: API Key 用量查询
+description: 公开的用量查询工具——粘贴一个 API Key 即可查看它的实时消耗和状态，无需登录。
+---
+
+Pixel API 提供一个**公开**的用量查询工具，地址通常是站点的 `/key-usage` 页面。你不用登录，只要粘贴一个 API Key，就能看到这个 Key 的实时消耗和状态。
+
+## 什么时候用
+
+- 手上有一个 Key，但不方便登录控制台，只想快速看它花了多少。
+- 想把某个 Key 的用量给别人核对，又不想给出账号登录权限。
+
+## 怎么用
+
+<Steps>
+  <Step>打开站点的「API Key 用量查询 / <code>/key-usage</code>」页面。</Step>
+  <Step>把要查询的 API Key 粘贴到输入框。</Step>
+  <Step>提交后查看该 Key 的实时消耗、状态等信息。</Step>
+</Steps>
+
+<Callout type="warn" title="这是公开工具，注意保护 Key">
+  查询页是公开的，任何拿到你 Key 的人都能查它的用量。所以：
+
+  - 不要把完整 API Key 发到公开群、截图或仓库里。
+  - Key 只是用来在浏览器本地查询，不代表泄露就安全——泄露后应尽快在控制台删除并重建。
+</Callout>
+
+<Callout type="info" title="要看完整明细还是登录控制台">
+  这个工具只做快速查询。逐条请求明细、余额流水、按分组/时间筛选等，仍以控制台[使用记录](/docs/usage)为准。
+</Callout>
+
+## 相关页面
+
+<Cards>
+  <Card title="查询用量（接口）" href="/docs/api/usage" description="用接口查询当前 API Key 的模型调用用量。" />
+  <Card title="使用记录" href="/docs/usage" description="控制台里的完整请求明细和余额流水。" />
+</Cards>

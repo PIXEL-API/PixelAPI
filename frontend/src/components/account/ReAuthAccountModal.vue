@@ -5,7 +5,7 @@
     width="normal"
     @close="handleClose"
   >
-    <div v-if="account" class="space-y-4">
+      <div v-if="account" class="space-y-4">
       <!-- Account Info -->
       <div
         class="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-dark-600 dark:bg-dark-700"
@@ -18,9 +18,11 @@
                 ? 'from-green-500 to-green-600'
                 : isGemini
                   ? 'from-blue-500 to-blue-600'
-                  : isAntigravity
-                    ? 'from-purple-500 to-purple-600'
-                    : 'from-orange-500 to-orange-600'
+                  : isGrok
+                    ? 'from-cyan-500 to-cyan-600'
+                    : isAntigravity
+                      ? 'from-purple-500 to-purple-600'
+                      : 'from-orange-500 to-orange-600'
             ]"
           >
             <Icon name="sparkles" size="md" class="text-white" />
@@ -35,13 +37,30 @@
                   ? t('admin.accounts.openaiAccount')
                   : isGemini
                     ? t('admin.accounts.geminiAccount')
-                    : isAntigravity
-                      ? t('admin.accounts.antigravityAccount')
-                      : t('admin.accounts.claudeCodeAccount')
+                    : isGrok
+                      ? t('admin.accounts.grokAccount')
+                      : isAntigravity
+                        ? t('admin.accounts.antigravityAccount')
+                        : t('admin.accounts.claudeCodeAccount')
               }}
             </span>
           </div>
         </div>
+      </div>
+
+      <div v-if="requiresUserProxySelection" class="space-y-2">
+        <label class="input-label mb-0">{{ t('userAccounts.importProxy') }}</label>
+        <ProxySelector
+          v-model="selectedProxyId"
+          :proxies="proxyOptions"
+          :allow-empty="false"
+          :can-test="false"
+          disable-full
+          hide-endpoint
+        />
+        <p class="input-hint">
+          {{ selectedProxyCapacityMessage || (proxyOptions.length > 0 ? t('userAccounts.importProxyHint') : t('userAccounts.importProxyEmpty')) }}
+        </p>
       </div>
 
       <!-- Add Method Selection (Claude only) -->
@@ -128,7 +147,7 @@
         :show-cookie-option="isAnthropic"
         :allow-multiple="false"
         :method-label="t('admin.accounts.inputMethod')"
-        :platform="isOpenAI ? 'openai' : isGemini ? 'gemini' : isAntigravity ? 'antigravity' : 'anthropic'"
+        :platform="isOpenAI ? 'openai' : isGemini ? 'gemini' : isGrok ? 'grok' : isAntigravity ? 'antigravity' : 'anthropic'"
         :show-project-id="isGemini && geminiOAuthType === 'code_assist'"
         @generate-url="handleGenerateUrl"
         @cookie-auth="handleCookieAuth"
@@ -193,10 +212,14 @@ import {
 import { useOpenAIOAuth } from '@/composables/useOpenAIOAuth'
 import { useGeminiOAuth } from '@/composables/useGeminiOAuth'
 import { useAntigravityOAuth } from '@/composables/useAntigravityOAuth'
-import type { Account } from '@/types'
+import { useGrokOAuth } from '@/composables/useGrokOAuth'
+import { isProxyAccountFull, normalizeProxyAccountCount, normalizeProxyMaxAccounts } from '@/utils/proxyCapacity'
+import { selectableOpenAIAccountLevels } from '@/utils/openaiAccountLevels'
+import type { Account, Proxy } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import OAuthAuthorizationFlow from './OAuthAuthorizationFlow.vue'
+import ProxySelector from '@/components/common/ProxySelector.vue'
 
 // Type for exposed OAuthAuthorizationFlow component
 // Note: defineExpose automatically unwraps refs, so we use the unwrapped types
@@ -213,10 +236,12 @@ interface Props {
   show: boolean
   account: Account | null
   accountScope?: 'admin' | 'user'
+  proxies?: Proxy[]
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  accountScope: 'admin'
+  accountScope: 'admin',
+  proxies: () => []
 })
 const emit = defineEmits<{
   close: []
@@ -234,6 +259,7 @@ const claudeOAuth = useAccountOAuth(accountScope.value)
 const openaiOAuth = useOpenAIOAuth(accountScope.value)
 const geminiOAuth = useGeminiOAuth(accountScope.value)
 const antigravityOAuth = useAntigravityOAuth(accountScope.value)
+const grokOAuth = useGrokOAuth(accountScope.value)
 
 // Refs
 const oauthFlowRef = ref<OAuthFlowExposed | null>(null)
@@ -241,6 +267,7 @@ const oauthFlowRef = ref<OAuthFlowExposed | null>(null)
 // State
 const addMethod = ref<AddMethod>('oauth')
 const geminiOAuthType = ref<'code_assist' | 'google_one' | 'ai_studio'>('code_assist')
+const selectedProxyId = ref<number | null>(null)
 
 // Computed - check platform
 const isOpenAI = computed(() => props.account?.platform === 'openai')
@@ -248,37 +275,81 @@ const isOpenAILike = computed(() => isOpenAI.value)
 const isGemini = computed(() => props.account?.platform === 'gemini')
 const isAnthropic = computed(() => props.account?.platform === 'anthropic')
 const isAntigravity = computed(() => props.account?.platform === 'antigravity')
+const isGrok = computed(() => props.account?.platform === 'grok')
+const openAIAccountLevelConfigs = computed(() => appStore.cachedPublicSettings?.openai_account_levels)
+const userOpenAIProxyLoginRequired = computed(() => {
+  if (!isUserScope.value || !isOpenAILike.value) return false
+  const accountLevel = props.account?.account_level
+  return selectableOpenAIAccountLevels(openAIAccountLevelConfigs.value)
+    .some(level => level.key === accountLevel && level.requires_proxy_login)
+})
+const requiresUserProxySelection = computed(() => {
+  if (!isUserScope.value) return false
+  if (isOpenAILike.value) return userOpenAIProxyLoginRequired.value
+  return isAnthropic.value || isGemini.value || isAntigravity.value || isGrok.value
+})
+const proxyOptions = computed(() => {
+  const byId = new Map<number, Proxy>()
+  for (const proxy of props.proxies) {
+    byId.set(proxy.id, proxy)
+  }
+  return Array.from(byId.values())
+})
+const selectedProxy = computed(() => {
+  const proxyId = selectedProxyId.value
+  if (!proxyId) return null
+  return proxyOptions.value.find(proxy => proxy.id === proxyId) || null
+})
+const selectedProxyCapacityMessage = computed(() => {
+  const proxy = selectedProxy.value
+  if (!isProxyAccountFull(proxy)) return ''
+  const currentAccountProxyId = props.account?.proxy_id || null
+  if (currentAccountProxyId && proxy?.id === currentAccountProxyId) return ''
+  const count = normalizeProxyAccountCount(proxy)
+  const max = normalizeProxyMaxAccounts(proxy)
+  return `${t('admin.proxies.accountUsageFullTitle', { count, max })}，请选择其它代理 IP。`
+})
+const effectiveProxyId = computed(() => {
+  if (isUserScope.value) {
+    return requiresUserProxySelection.value ? selectedProxyId.value : null
+  }
+  return props.account?.proxy_id || null
+})
 
 // Computed - current OAuth state based on platform
 const currentAuthUrl = computed(() => {
   if (isOpenAILike.value) return openaiOAuth.authUrl.value
   if (isGemini.value) return geminiOAuth.authUrl.value
   if (isAntigravity.value) return antigravityOAuth.authUrl.value
+  if (isGrok.value) return grokOAuth.authUrl.value
   return claudeOAuth.authUrl.value
 })
 const currentSessionId = computed(() => {
   if (isOpenAILike.value) return openaiOAuth.sessionId.value
   if (isGemini.value) return geminiOAuth.sessionId.value
   if (isAntigravity.value) return antigravityOAuth.sessionId.value
+  if (isGrok.value) return grokOAuth.sessionId.value
   return claudeOAuth.sessionId.value
 })
 const currentLoading = computed(() => {
   if (isOpenAILike.value) return openaiOAuth.loading.value
   if (isGemini.value) return geminiOAuth.loading.value
   if (isAntigravity.value) return antigravityOAuth.loading.value
+  if (isGrok.value) return grokOAuth.loading.value
   return claudeOAuth.loading.value
 })
 const currentError = computed(() => {
   if (isOpenAILike.value) return openaiOAuth.error.value
   if (isGemini.value) return geminiOAuth.error.value
   if (isAntigravity.value) return antigravityOAuth.error.value
+  if (isGrok.value) return grokOAuth.error.value
   return claudeOAuth.error.value
 })
 
 // Computed
 const isManualInputMethod = computed(() => {
-  // OpenAI/Gemini/Antigravity always use manual input (no cookie auth option)
-  return isOpenAILike.value || isGemini.value || isAntigravity.value || oauthFlowRef.value?.inputMethod === 'manual'
+  // OpenAI/Gemini/Antigravity/Grok always use manual input (no cookie auth option)
+  return isOpenAILike.value || isGemini.value || isAntigravity.value || isGrok.value || oauthFlowRef.value?.inputMethod === 'manual'
 })
 
 function toPlainRecord(value: unknown): Record<string, unknown> {
@@ -306,6 +377,7 @@ watch(
   () => props.show,
   (newVal) => {
     if (newVal && props.account) {
+      selectedProxyId.value = props.account.proxy_id || null
       // Initialize addMethod based on current account type (Claude only)
       if (
         isAnthropic.value &&
@@ -332,11 +404,26 @@ watch(
 const resetState = () => {
   addMethod.value = 'oauth'
   geminiOAuthType.value = 'code_assist'
+  selectedProxyId.value = null
   claudeOAuth.resetState()
   openaiOAuth.resetState()
   geminiOAuth.resetState()
   antigravityOAuth.resetState()
+  grokOAuth.resetState()
   oauthFlowRef.value?.reset()
+}
+
+function validateProxySelection(): boolean {
+  if (!requiresUserProxySelection.value) return true
+  if (!selectedProxyId.value) {
+    appStore.showError(t('userAccounts.importProxyRequired'))
+    return false
+  }
+  if (selectedProxyCapacityMessage.value) {
+    appStore.showError(selectedProxyCapacityMessage.value)
+    return false
+  }
+  return true
 }
 
 const handleClose = () => {
@@ -345,18 +432,21 @@ const handleClose = () => {
 
 const handleGenerateUrl = async () => {
   if (!props.account) return
+  if (!validateProxySelection()) return
 
   if (isOpenAILike.value) {
-    await openaiOAuth.generateAuthUrl(props.account.proxy_id)
+    await openaiOAuth.generateAuthUrl(effectiveProxyId.value, { accountLevel: props.account.account_level })
   } else if (isGemini.value) {
     const creds = (props.account.credentials || {}) as Record<string, unknown>
     const tierId = typeof creds.tier_id === 'string' ? creds.tier_id : undefined
     const projectId = geminiOAuthType.value === 'code_assist' ? oauthFlowRef.value?.projectId : undefined
-    await geminiOAuth.generateAuthUrl(props.account.proxy_id, projectId, geminiOAuthType.value, tierId)
+    await geminiOAuth.generateAuthUrl(effectiveProxyId.value, projectId, geminiOAuthType.value, tierId)
   } else if (isAntigravity.value) {
-    await antigravityOAuth.generateAuthUrl(props.account.proxy_id)
+    await antigravityOAuth.generateAuthUrl(effectiveProxyId.value)
+  } else if (isGrok.value) {
+    await grokOAuth.generateAuthUrl(effectiveProxyId.value)
   } else {
-    await claudeOAuth.generateAuthUrl(addMethod.value, props.account.proxy_id)
+    await claudeOAuth.generateAuthUrl(addMethod.value, effectiveProxyId.value)
   }
 }
 
@@ -365,6 +455,7 @@ const handleExchangeCode = async () => {
 
   const authCode = oauthFlowRef.value?.authCode || ''
   if (!authCode.trim()) return
+  if (!validateProxySelection()) return
 
   if (isOpenAILike.value) {
     // OpenAI OAuth flow
@@ -382,7 +473,8 @@ const handleExchangeCode = async () => {
       authCode.trim(),
       sessionId,
       stateToUse,
-      props.account.proxy_id
+      effectiveProxyId.value,
+      props.account.account_level
     )
     if (!tokenInfo) return
 
@@ -395,7 +487,8 @@ const handleExchangeCode = async () => {
       await accountAPI.value.update(props.account.id, {
         type: 'oauth', // OpenAI OAuth is always 'oauth' type
         credentials,
-        extra
+        extra,
+        proxy_id: effectiveProxyId.value || undefined
       })
 
       if (!isUserScope.value) {
@@ -421,7 +514,7 @@ const handleExchangeCode = async () => {
       code: authCode.trim(),
       sessionId,
       state: stateToUse,
-      proxyId: props.account.proxy_id,
+      proxyId: effectiveProxyId.value,
       oauthType: geminiOAuthType.value,
       tierId: typeof (props.account.credentials as any)?.tier_id === 'string' ? ((props.account.credentials as any).tier_id as string) : undefined
     })
@@ -432,7 +525,8 @@ const handleExchangeCode = async () => {
     try {
       await accountAPI.value.update(props.account.id, {
         type: 'oauth',
-        credentials
+        credentials,
+        proxy_id: effectiveProxyId.value || undefined
       })
       if (!isUserScope.value) {
         await adminAPI.accounts.clearError(props.account.id)
@@ -457,7 +551,7 @@ const handleExchangeCode = async () => {
       code: authCode.trim(),
       sessionId,
       state: stateToUse,
-      proxyId: props.account.proxy_id
+      proxyId: effectiveProxyId.value
     })
     if (!tokenInfo) return
 
@@ -466,7 +560,8 @@ const handleExchangeCode = async () => {
     try {
       await accountAPI.value.update(props.account.id, {
         type: 'oauth',
-        credentials
+        credentials,
+        proxy_id: effectiveProxyId.value || undefined
       })
       if (!isUserScope.value) {
         await adminAPI.accounts.clearError(props.account.id)
@@ -478,6 +573,46 @@ const handleExchangeCode = async () => {
       antigravityOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
       appStore.showError(antigravityOAuth.error.value)
     }
+  } else if (isGrok.value) {
+    const sessionId = grokOAuth.sessionId.value
+    if (!sessionId) return
+
+    const stateFromInput = oauthFlowRef.value?.oauthState || ''
+    const stateToUse = stateFromInput || grokOAuth.state.value
+    if (!stateToUse) {
+      grokOAuth.error.value = t('admin.accounts.oauth.authFailed')
+      appStore.showError(grokOAuth.error.value)
+      return
+    }
+
+    const tokenInfo = await grokOAuth.exchangeAuthCode({
+      code: authCode.trim(),
+      sessionId,
+      state: stateToUse,
+      proxyId: effectiveProxyId.value
+    })
+    if (!tokenInfo) return
+
+    const credentials = mergeAccountRecord(props.account.credentials, grokOAuth.buildCredentials(tokenInfo))
+    const extra = mergeAccountRecord(props.account.extra, grokOAuth.buildExtraInfo(tokenInfo))
+
+    try {
+      await accountAPI.value.update(props.account.id, {
+        type: 'oauth',
+        credentials,
+        extra,
+        proxy_id: effectiveProxyId.value || undefined
+      })
+      if (!isUserScope.value) {
+        await adminAPI.accounts.clearError(props.account.id)
+      }
+      appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
+      emit('reauthorized')
+      handleClose()
+    } catch (error: any) {
+      grokOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+      appStore.showError(grokOAuth.error.value)
+    }
   } else {
     // Claude OAuth flow
     const sessionId = claudeOAuth.sessionId.value
@@ -487,7 +622,7 @@ const handleExchangeCode = async () => {
     claudeOAuth.error.value = ''
 
     try {
-      const tokenInfo = await claudeOAuth.exchangeAuthCode(addMethod.value, props.account.proxy_id)
+      const tokenInfo = await claudeOAuth.exchangeAuthCode(addMethod.value, effectiveProxyId.value)
       if (!tokenInfo) return
 
       const credentials = mergeAccountRecord(props.account.credentials, tokenInfo as Record<string, unknown>)
@@ -497,7 +632,8 @@ const handleExchangeCode = async () => {
       await accountAPI.value.update(props.account.id, {
         type: addMethod.value, // Update type based on selected method
         credentials,
-        extra
+        extra,
+        proxy_id: effectiveProxyId.value || undefined
       })
 
       if (!isUserScope.value) {
@@ -518,12 +654,13 @@ const handleExchangeCode = async () => {
 
 const handleCookieAuth = async (sessionKey: string) => {
   if (!props.account || isOpenAILike.value) return
+  if (!validateProxySelection()) return
 
   claudeOAuth.loading.value = true
   claudeOAuth.error.value = ''
 
   try {
-    const tokenInfo = await claudeOAuth.cookieAuth(addMethod.value, sessionKey, props.account.proxy_id)
+    const tokenInfo = await claudeOAuth.cookieAuth(addMethod.value, sessionKey, effectiveProxyId.value)
     if (!tokenInfo) return
 
     const credentials = mergeAccountRecord(props.account.credentials, tokenInfo as Record<string, unknown>)
@@ -533,7 +670,8 @@ const handleCookieAuth = async (sessionKey: string) => {
     await accountAPI.value.update(props.account.id, {
       type: addMethod.value, // Update type based on selected method
       credentials,
-      extra
+      extra,
+      proxy_id: effectiveProxyId.value || undefined
     })
 
     if (!isUserScope.value) {

@@ -37,4 +37,16 @@ describe('payment api', () => {
       resume_token: 'resume-token-123',
     })
   })
+
+  it('starts alipay jsapi trades through the public resume-token endpoint', async () => {
+    await paymentAPI.startAlipayJSAPI({
+      resume_token: 'resume-token-123',
+      auth_code: 'auth-code-123',
+    })
+
+    expect(post).toHaveBeenCalledWith('/payment/public/alipay/jsapi/start', {
+      resume_token: 'resume-token-123',
+      auth_code: 'auth-code-123',
+    })
+  })
 })

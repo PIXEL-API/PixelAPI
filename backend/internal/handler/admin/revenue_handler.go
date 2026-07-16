@@ -1,6 +1,8 @@
 package admin
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +20,20 @@ import (
 
 type RevenueHandler struct {
 	revenueService *service.RevenueService
+	summaryCache   *snapshotCache
+}
+
+const (
+	revenueSummaryCacheTTL    = 60 * time.Second
+	revenueSummaryLoadTimeout = 60 * time.Second
+)
+
+type revenueSummaryCacheKey struct {
+	StartTime   string `json:"start_time"`
+	EndTime     string `json:"end_time"`
+	Granularity string `json:"granularity"`
+	Timezone    string `json:"timezone"`
+	UserID      *int64 `json:"user_id,omitempty"`
 }
 
 type createRevenueShareSettlementExportRequest struct {
@@ -29,40 +45,59 @@ type createRevenueShareSettlementExportRequest struct {
 }
 
 func NewRevenueHandler(revenueService *service.RevenueService) *RevenueHandler {
-	return &RevenueHandler{revenueService: revenueService}
+	return &RevenueHandler{
+		revenueService: revenueService,
+		summaryCache:   newSnapshotCache(revenueSummaryCacheTTL),
+	}
 }
 
 // GetSummary returns the read-only revenue management dashboard data.
 // GET /api/v1/admin/revenue/summary
 func (h *RevenueHandler) GetSummary(c *gin.Context) {
-	params, ok := parseRevenueQueryParams(c, true)
+	params, ok := parseRevenueQueryParams(c)
 	if !ok {
 		return
 	}
-	stats, err := h.revenueService.GetSummary(c.Request.Context(), params)
+	cacheKey, err := buildRevenueSummaryCacheKey(params)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
+	requestCtx := c.Request.Context()
+	loadBaseCtx := context.WithoutCancel(requestCtx)
+	cached, hit, err := h.summaryCache.GetOrLoadContext(requestCtx, cacheKey, func() (any, error) {
+		loadCtx, cancel := context.WithTimeout(loadBaseCtx, revenueSummaryLoadTimeout)
+		defer cancel()
+		return h.revenueService.GetSummary(loadCtx, params)
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	stats, err := snapshotPayloadAs[*service.RevenueSummary](cached.Payload)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	c.Header("X-Snapshot-Cache", cacheStatusValue(hit))
 	response.Success(c, stats)
 }
 
-// GetBreakdowns returns the expensive TopN revenue breakdown sections.
-// GET /api/v1/admin/revenue/breakdowns
-func (h *RevenueHandler) GetBreakdowns(c *gin.Context) {
-	params, ok := parseRevenueQueryParams(c, false)
-	if !ok {
-		return
-	}
-	breakdowns, err := h.revenueService.GetBreakdowns(c.Request.Context(), params)
+func buildRevenueSummaryCacheKey(params service.RevenueQueryParams) (string, error) {
+	raw, err := json.Marshal(revenueSummaryCacheKey{
+		StartTime:   params.StartTime.UTC().Format(time.RFC3339Nano),
+		EndTime:     params.EndTime.UTC().Format(time.RFC3339Nano),
+		Granularity: params.Granularity,
+		Timezone:    params.Timezone,
+		UserID:      params.UserID,
+	})
 	if err != nil {
-		response.ErrorFrom(c, err)
-		return
+		return "", fmt.Errorf("marshal revenue summary cache key: %w", err)
 	}
-	response.Success(c, breakdowns)
+	return string(raw), nil
 }
 
-func parseRevenueQueryParams(c *gin.Context, allowIncludeBreakdowns bool) (service.RevenueQueryParams, bool) {
+func parseRevenueQueryParams(c *gin.Context) (service.RevenueQueryParams, bool) {
 	startTime, endTime := parseRevenueTimeRange(c)
 	granularity := strings.ToLower(strings.TrimSpace(c.DefaultQuery("granularity", service.RevenueGranularityDay)))
 	if granularity != service.RevenueGranularityDay && granularity != service.RevenueGranularityHour {
@@ -72,16 +107,6 @@ func parseRevenueQueryParams(c *gin.Context, allowIncludeBreakdowns bool) (servi
 	if !endTime.After(startTime) {
 		response.BadRequest(c, "end_date must be after start_date")
 		return service.RevenueQueryParams{}, false
-	}
-
-	topLimit := 10
-	if rawLimit := strings.TrimSpace(c.Query("top_limit")); rawLimit != "" {
-		parsed, err := strconv.Atoi(rawLimit)
-		if err != nil || parsed <= 0 {
-			response.BadRequest(c, "top_limit must be a positive integer")
-			return service.RevenueQueryParams{}, false
-		}
-		topLimit = parsed
 	}
 
 	var userID *int64
@@ -94,26 +119,12 @@ func parseRevenueQueryParams(c *gin.Context, allowIncludeBreakdowns bool) (servi
 		userID = &parsed
 	}
 
-	skipBreakdowns := false
-	if allowIncludeBreakdowns {
-		if rawInclude := strings.TrimSpace(c.Query("include_breakdowns")); rawInclude != "" {
-			includeBreakdowns, err := strconv.ParseBool(rawInclude)
-			if err != nil {
-				response.BadRequest(c, "include_breakdowns must be true or false")
-				return service.RevenueQueryParams{}, false
-			}
-			skipBreakdowns = !includeBreakdowns
-		}
-	}
-
 	return service.RevenueQueryParams{
-		StartTime:      startTime,
-		EndTime:        endTime,
-		Granularity:    granularity,
-		Timezone:       normalizeRevenueTimezone(c.Query("timezone")),
-		TopLimit:       topLimit,
-		UserID:         userID,
-		SkipBreakdowns: skipBreakdowns,
+		StartTime:   startTime,
+		EndTime:     endTime,
+		Granularity: granularity,
+		Timezone:    normalizeRevenueTimezone(c.Query("timezone")),
+		UserID:      userID,
 	}, true
 }
 

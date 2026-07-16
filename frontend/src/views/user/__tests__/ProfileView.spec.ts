@@ -69,7 +69,9 @@ describe('ProfileView', () => {
       wechat_oauth_open_enabled: true,
       wechat_oauth_mp_enabled: false,
       oidc_oauth_enabled: true,
-      oidc_oauth_provider_name: 'OIDC'
+      oidc_oauth_provider_name: 'OIDC',
+      withdrawal_rate_limit_window_days: 7,
+      withdrawal_rate_limit_max: 3
     })
   })
 
@@ -85,7 +87,10 @@ describe('ProfileView', () => {
           ProfileBalanceNotifyCard: { template: '<div data-testid="profile-balance-notify-card" />' },
           ProfilePasswordForm: { template: '<div data-testid="profile-password-form" />' },
           ProfileTotpCard: { template: '<div data-testid="profile-totp-card" />' },
-          ProfileWithdrawalCard: { template: '<div data-testid="profile-withdrawal-card" />' },
+          ProfileWithdrawalCard: {
+            props: ['rateLimitWindowDays', 'rateLimitMax'],
+            template: '<div data-testid="profile-withdrawal-card" :data-window-days="rateLimitWindowDays" :data-max="rateLimitMax" />'
+          },
           Icon: true
         }
       }
@@ -97,6 +102,8 @@ describe('ProfileView', () => {
     expect(wrapper.get('[data-testid="profile-shell"]').exists()).toBe(true)
     expect(wrapper.get('[data-testid="profile-shell"]').html()).toContain('profile-info-card')
     expect(wrapper.get('[data-testid="profile-shell"]').html()).toContain('profile-withdrawal-card')
+    expect(wrapper.get('[data-testid="profile-withdrawal-card"]').attributes('data-window-days')).toBe('7')
+    expect(wrapper.get('[data-testid="profile-withdrawal-card"]').attributes('data-max')).toBe('3')
     expect(wrapper.get('[data-testid="profile-shell"]').html()).toContain('profile-password-form')
     expect(wrapper.get('[data-testid="profile-shell"]').html()).toContain('profile-totp-card')
   })

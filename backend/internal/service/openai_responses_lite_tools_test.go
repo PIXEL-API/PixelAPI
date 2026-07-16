@@ -1,0 +1,130 @@
+package service
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestNormalizeOpenAIResponsesLiteToolsMovesNamespacesIntoInput(t *testing.T) {
+	functionTool := map[string]any{"type": "function", "name": "read_file"}
+	namespaceTool := map[string]any{
+		"type":  "namespace",
+		"name":  "mcp",
+		"tools": []any{map[string]any{"type": "function", "name": "lookup"}},
+	}
+	req := map[string]any{
+		"input": "hello",
+		"tools": []any{functionTool, namespaceTool},
+	}
+
+	changed, err := normalizeOpenAIResponsesLiteTools(req)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, []any{functionTool}, req["tools"])
+	input := req["input"].([]any)
+	require.Len(t, input, 2)
+	require.Equal(t, "message", input[0].(map[string]any)["type"])
+	additional := input[1].(map[string]any)
+	require.Equal(t, "additional_tools", additional["type"])
+	require.Equal(t, []any{namespaceTool}, additional["tools"])
+}
+
+func TestNormalizeOpenAIResponsesLiteToolsMergesWithoutDuplicating(t *testing.T) {
+	namespaceTool := map[string]any{"type": "namespace", "name": "mcp", "tools": []any{}}
+	req := map[string]any{
+		"input": []any{map[string]any{
+			"type":  "additional_tools",
+			"role":  "developer",
+			"tools": []any{namespaceTool},
+		}},
+		"tools": []any{namespaceTool},
+	}
+
+	changed, err := normalizeOpenAIResponsesLiteTools(req)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.NotContains(t, req, "tools")
+	input := req["input"].([]any)
+	require.Len(t, input, 1)
+	require.Equal(t, []any{namespaceTool}, input[0].(map[string]any)["tools"])
+}
+
+func TestNormalizeOpenAIResponsesLiteToolsRejectsConflictingDefinitions(t *testing.T) {
+	req := map[string]any{
+		"input": []any{map[string]any{
+			"type": "additional_tools",
+			"tools": []any{map[string]any{
+				"type": "namespace", "name": "mcp", "description": "old",
+			}},
+		}},
+		"tools": []any{map[string]any{
+			"type": "namespace", "name": "mcp", "description": "new",
+		}},
+	}
+
+	changed, err := normalizeOpenAIResponsesLiteTools(req)
+	require.ErrorContains(t, err, "conflicts with migrated")
+	require.False(t, changed)
+}
+
+func TestNormalizeOpenAIResponsesLiteToolsRejectsUnsupportedHostedTool(t *testing.T) {
+	req := map[string]any{
+		"input": "hello",
+		"tools": []any{map[string]any{"type": "web_search_preview"}},
+	}
+
+	changed, err := normalizeOpenAIResponsesLiteTools(req)
+	require.ErrorContains(t, err, "does not support top-level tool type")
+	require.False(t, changed)
+}
+
+func TestCodexImageFunctionToolPreventsNativeImageToolInjection(t *testing.T) {
+	req := map[string]any{
+		"model": "gpt-5.4",
+		"tools": []any{map[string]any{
+			"type": "function",
+			"name": codexImageGenerationFunctionToolName,
+		}},
+	}
+
+	require.True(t, hasCodexImageGenerationFunctionTool(req))
+	require.False(t, ensureOpenAIResponsesImageGenerationTool(req))
+	require.False(t, ensureOpenAIResponsesImageGenerationToolChoiceAuto(req))
+	require.False(t, applyCodexImageGenerationBridgeInstructions(req))
+	require.Len(t, req["tools"], 1)
+}
+
+func TestNormalizeCodexToolChoiceFindsResponsesLiteAdditionalTool(t *testing.T) {
+	req := map[string]any{
+		"input": []any{map[string]any{
+			"type":  "additional_tools",
+			"tools": []any{map[string]any{"type": "namespace", "name": "mcp"}},
+		}},
+		"tool_choice": map[string]any{"type": "namespace"},
+	}
+
+	require.False(t, normalizeCodexToolChoice(req))
+	require.Equal(t, map[string]any{"type": "namespace"}, req["tool_choice"])
+}
+
+func TestResponsesLiteImageNamespaceIsDetectedAndStrippedSymmetrically(t *testing.T) {
+	payload := []byte(`{
+		"model":"gpt-5.4",
+		"input":[{
+			"type":"additional_tools",
+			"tools":[
+				{"type":"namespace","name":"image_gen","tools":[]},
+				{"type":"namespace","name":"mcp","tools":[]}
+			]
+		}]
+	}`)
+
+	require.True(t, IsImageGenerationIntent(openAIResponsesEndpoint, "gpt-5.4", payload))
+	stripped, changed, err := stripOpenAIImageGenerationToolsFromRawPayload(payload)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.False(t, IsImageGenerationIntent(openAIResponsesEndpoint, "gpt-5.4", stripped))
+	require.Contains(t, string(stripped), `"name":"mcp"`)
+	require.NotContains(t, string(stripped), `"name":"image_gen"`)
+}

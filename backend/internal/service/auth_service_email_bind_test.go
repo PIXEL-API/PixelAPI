@@ -494,6 +494,105 @@ func TestAuthServiceBindEmailIdentity_RevokesExistingAccessAndRefreshTokens(t *t
 	require.True(t, errors.Is(err, service.ErrTokenRevoked) || errors.Is(err, service.ErrRefreshTokenInvalid))
 }
 
+func TestAuthServiceRefreshTokenPairConcurrentRotationHasSingleWinner(t *testing.T) {
+	ctx := context.Background()
+	user := &service.User{
+		ID:                   52,
+		Email:                "refresh-race@example.com",
+		PasswordHash:         "stable-password-hash",
+		Role:                 service.RoleUser,
+		Status:               service.StatusActive,
+		TokenVersion:         3,
+		TokenVersionResolved: true,
+	}
+	refreshTokenCache := newEmailBindRefreshTokenCacheStub()
+	svc := service.NewAuthService(nil, newEmailBindUserRepoStub(user), nil, refreshTokenCache, &config.Config{
+		JWT: config.JWTConfig{
+			Secret:                   "test-refresh-race-secret",
+			ExpireHour:               1,
+			AccessTokenExpireMinutes: 60,
+			RefreshTokenExpireDays:   7,
+		},
+	}, nil, nil, nil, nil, nil, nil, nil)
+
+	original, err := svc.GenerateTokenPair(ctx, user, "")
+	require.NoError(t, err)
+
+	type refreshResult struct {
+		pair *service.TokenPairWithUser
+		err  error
+	}
+	start := make(chan struct{})
+	results := make(chan refreshResult, 2)
+	var workers sync.WaitGroup
+	for range 2 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			pair, refreshErr := svc.RefreshTokenPair(ctx, original.RefreshToken)
+			results <- refreshResult{pair: pair, err: refreshErr}
+		}()
+	}
+	close(start)
+	workers.Wait()
+	close(results)
+
+	var winner *service.TokenPairWithUser
+	invalidCount := 0
+	for result := range results {
+		if result.err == nil {
+			require.Nil(t, winner, "only one concurrent refresh may rotate the token")
+			winner = result.pair
+			continue
+		}
+		require.ErrorIs(t, result.err, service.ErrRefreshTokenInvalid)
+		invalidCount++
+	}
+	require.NotNil(t, winner)
+	require.Equal(t, 1, invalidCount)
+
+	_, err = svc.RefreshTokenPair(ctx, winner.RefreshToken)
+	require.NoError(t, err, "the winning replacement token must remain usable")
+}
+
+func TestAuthServiceGenerateTokenPairTracksGeneratedFamilyID(t *testing.T) {
+	ctx := context.Background()
+	user := &service.User{
+		ID:                   53,
+		Email:                "refresh-family@example.com",
+		PasswordHash:         "stable-password-hash",
+		Role:                 service.RoleUser,
+		Status:               service.StatusActive,
+		TokenVersion:         1,
+		TokenVersionResolved: true,
+	}
+	refreshTokenCache := newEmailBindRefreshTokenCacheStub()
+	svc := service.NewAuthService(nil, newEmailBindUserRepoStub(user), nil, refreshTokenCache, &config.Config{
+		JWT: config.JWTConfig{
+			Secret:                   "test-refresh-family-secret",
+			ExpireHour:               1,
+			AccessTokenExpireMinutes: 60,
+			RefreshTokenExpireDays:   7,
+		},
+	}, nil, nil, nil, nil, nil, nil, nil)
+
+	_, err := svc.GenerateTokenPair(ctx, user, "")
+	require.NoError(t, err)
+
+	refreshTokenCache.mu.Lock()
+	defer refreshTokenCache.mu.Unlock()
+	require.Len(t, refreshTokenCache.tokens, 1)
+	var stored *service.RefreshTokenData
+	for _, data := range refreshTokenCache.tokens {
+		stored = data
+	}
+	require.NotNil(t, stored)
+	require.NotEmpty(t, stored.FamilyID)
+	require.Empty(t, refreshTokenCache.families[""])
+	require.Len(t, refreshTokenCache.families[stored.FamilyID], 1)
+}
+
 type emailBindSettingRepoStub struct {
 	values map[string]string
 }
@@ -627,6 +726,28 @@ func (s *emailBindRefreshTokenCacheStub) GetRefreshToken(_ context.Context, toke
 	}
 	cloned := *data
 	return &cloned, nil
+}
+
+func (s *emailBindRefreshTokenCacheStub) RotateRefreshToken(_ context.Context, oldTokenHash, newTokenHash string, data *service.RefreshTokenData, _ time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.tokens[oldTokenHash]; !ok {
+		return service.ErrRefreshTokenAlreadyConsumed
+	}
+	delete(s.tokens, oldTokenHash)
+	cloned := *data
+	s.tokens[newTokenHash] = &cloned
+	if s.userSets[data.UserID] == nil {
+		s.userSets[data.UserID] = make(map[string]struct{})
+	}
+	delete(s.userSets[data.UserID], oldTokenHash)
+	s.userSets[data.UserID][newTokenHash] = struct{}{}
+	if s.families[data.FamilyID] == nil {
+		s.families[data.FamilyID] = make(map[string]struct{})
+	}
+	delete(s.families[data.FamilyID], oldTokenHash)
+	s.families[data.FamilyID][newTokenHash] = struct{}{}
+	return nil
 }
 
 func (s *emailBindRefreshTokenCacheStub) DeleteRefreshToken(_ context.Context, tokenHash string) error {
@@ -810,8 +931,8 @@ func (s *emailBindUserRepoStub) UpdateUserLastActiveAt(context.Context, int64, t
 }
 
 func (s *emailBindUserRepoStub) UpdateBalance(context.Context, int64, float64) error { return nil }
-func (s *emailBindUserRepoStub) DeductBalance(context.Context, int64, float64) error  { return nil }
-func (s *emailBindUserRepoStub) UpdateConcurrency(context.Context, int64, int) error   { return nil }
+func (s *emailBindUserRepoStub) DeductBalance(context.Context, int64, float64) error { return nil }
+func (s *emailBindUserRepoStub) UpdateConcurrency(context.Context, int64, int) error { return nil }
 
 func (s *emailBindUserRepoStub) ExistsByEmail(_ context.Context, email string) (bool, error) {
 	s.mu.Lock()

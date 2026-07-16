@@ -83,6 +83,23 @@ type accountShareProxyCreateRequest struct {
 	Password string `json:"password"`
 }
 
+type accountShareProxyUpdateRequest struct {
+	Name     string  `json:"name"`
+	Protocol string  `json:"protocol" binding:"required,oneof=http https socks5 socks5h"`
+	Host     string  `json:"host" binding:"required"`
+	Port     int     `json:"port" binding:"required,min=1,max=65535"`
+	Username string  `json:"username"`
+	Password *string `json:"password"`
+}
+
+func trimOptionalString(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	return &trimmed
+}
+
 type accountShareListingUpdateRequest struct {
 	Name                    *string   `json:"name"`
 	ProxyID                 *int64    `json:"proxy_id"`
@@ -130,6 +147,15 @@ type accountShareIdleTimeoutUpdateRequest struct {
 type accountShareQueueReorderRequest struct {
 	APIKeyID      int64   `json:"api_key_id" binding:"required"`
 	MembershipIDs []int64 `json:"membership_ids" binding:"required"`
+}
+
+func (h *AccountShareModeHandler) ListModeGroups(c *gin.Context) {
+	groups, err := h.service.ListModeGroups(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, groups)
 }
 
 func (h *AccountShareModeHandler) GenerateOpenAIAuthURL(c *gin.Context) {
@@ -422,6 +448,55 @@ func (h *AccountShareModeHandler) CreateProxy(c *gin.Context) {
 	response.Created(c, dto.ProxyFromService(proxy))
 }
 
+func (h *AccountShareModeHandler) UpdateProxy(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	proxyID, err := parseInt64Param(c, "id")
+	if err != nil || proxyID <= 0 {
+		response.BadRequest(c, "Invalid proxy ID")
+		return
+	}
+	var req accountShareProxyUpdateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	proxy, err := h.service.UpdateUserProxy(c.Request.Context(), subject.UserID, proxyID, service.UpdateAccountShareProxyInput{
+		Name:     strings.TrimSpace(req.Name),
+		Protocol: strings.TrimSpace(req.Protocol),
+		Host:     strings.TrimSpace(req.Host),
+		Port:     req.Port,
+		Username: strings.TrimSpace(req.Username),
+		Password: trimOptionalString(req.Password),
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, dto.ProxyFromService(proxy))
+}
+
+func (h *AccountShareModeHandler) DeleteProxy(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	proxyID, err := parseInt64Param(c, "id")
+	if err != nil || proxyID <= 0 {
+		response.BadRequest(c, "Invalid proxy ID")
+		return
+	}
+	if err := h.service.DeleteUserProxy(c.Request.Context(), subject.UserID, proxyID); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"message": "Proxy deleted successfully"})
+}
+
 func (h *AccountShareModeHandler) GetListing(c *gin.Context) {
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
@@ -708,6 +783,17 @@ func (h *AccountShareModeHandler) EndMembership(c *gin.Context) {
 	}
 	membership, err := h.service.EndMembership(c.Request.Context(), subject.UserID, membershipID, req.Token)
 	if err != nil {
+		logger.FromContext(c.Request.Context()).Warn("account share end failed",
+			zap.String("component", "account_share.audit"),
+			zap.Int64("user_id", subject.UserID),
+			zap.Int64("membership_id", membershipID),
+			zap.Int("status_code", infraerrors.Code(err)),
+			zap.String("reason", infraerrors.Reason(err)),
+			zap.String("error", err.Error()),
+			zap.String("client_ip", c.ClientIP()),
+			zap.String("user_agent", c.Request.UserAgent()),
+			zap.String("referer", c.Request.Referer()),
+		)
 		response.ErrorFrom(c, err)
 		return
 	}

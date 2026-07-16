@@ -44,6 +44,17 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	requireColumn(t, tx, "usage_logs", "billing_type", "smallint", 0, false)
 	requireColumn(t, tx, "usage_logs", "request_type", "smallint", 0, false)
 	requireColumn(t, tx, "usage_logs", "openai_ws_mode", "boolean", 0, false)
+	requireColumn(t, tx, "usage_logs", "video_count", "integer", 0, false)
+	requireColumn(t, tx, "usage_logs", "video_resolution", "character varying", 10, true)
+	requireColumn(t, tx, "usage_logs", "video_duration_seconds", "integer", 0, true)
+
+	// groups: Grok video per-second billing and Codex search per-call pricing.
+	requireColumn(t, tx, "groups", "video_rate_independent", "boolean", 0, false)
+	requireColumn(t, tx, "groups", "video_rate_multiplier", "numeric", 0, false)
+	requireColumn(t, tx, "groups", "video_price_480p", "numeric", 0, true)
+	requireColumn(t, tx, "groups", "video_price_720p", "numeric", 0, true)
+	requireColumn(t, tx, "groups", "video_price_1080p", "numeric", 0, true)
+	requireColumn(t, tx, "groups", "web_search_price_per_call", "numeric", 0, true)
 
 	// usage_billing_dedup: billing idempotency narrow table
 	var usageBillingDedupRegclass sql.NullString

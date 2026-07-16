@@ -23,6 +23,11 @@ type ResolvedPricing struct {
 	// Token 模式：区间定价列表（如有，覆盖 BasePricing 中的对应字段）
 	Intervals []PricingInterval
 
+	// Token 模式：渠道级长上下文策略。nil 与 false 均表示关闭。
+	LongContextPricingEnabled *bool
+	// 仅在 LongContextPricingEnabled=true 时覆盖模型价卡阈值。
+	LongContextInputTokenThreshold *int
+
 	// 按次/图片模式：分层定价
 	RequestTiers []PricingInterval
 
@@ -135,6 +140,9 @@ func (r *ModelPricingResolver) applyChannelOverrides(ctx context.Context, groupI
 
 // applyTokenOverrides 应用 token 模式的渠道覆盖
 func (r *ModelPricingResolver) applyTokenOverrides(chPricing *ChannelModelPricing, resolved *ResolvedPricing) {
+	resolved.LongContextPricingEnabled = chPricing.LongContextPricingEnabled
+	resolved.LongContextInputTokenThreshold = chPricing.LongContextInputTokenThreshold
+
 	// 过滤掉所有价格字段都为空的无效 interval
 	validIntervals := filterValidIntervals(chPricing.Intervals)
 
@@ -147,6 +155,9 @@ func (r *ModelPricingResolver) applyTokenOverrides(chPricing *ChannelModelPricin
 	// 否则用 flat 字段覆盖 BasePricing
 	if resolved.BasePricing == nil {
 		resolved.BasePricing = &ModelPricing{}
+	} else {
+		cloned := *resolved.BasePricing
+		resolved.BasePricing = &cloned
 	}
 
 	if chPricing.InputPrice != nil {
@@ -159,6 +170,8 @@ func (r *ModelPricingResolver) applyTokenOverrides(chPricing *ChannelModelPricin
 	}
 	if chPricing.CacheWritePrice != nil {
 		resolved.BasePricing.CacheCreationPricePerToken = *chPricing.CacheWritePrice
+		resolved.BasePricing.CacheCreationPricePerTokenPriority = *chPricing.CacheWritePrice
+		resolved.BasePricing.CacheCreationPriceExplicit = true
 		resolved.BasePricing.CacheCreation5mPrice = *chPricing.CacheWritePrice
 		resolved.BasePricing.CacheCreation1hPrice = *chPricing.CacheWritePrice
 	}
@@ -227,6 +240,8 @@ func intervalToModelPricing(iv *PricingInterval, supportsCacheBreakdown bool) *M
 	}
 	if iv.CacheWritePrice != nil {
 		pricing.CacheCreationPricePerToken = *iv.CacheWritePrice
+		pricing.CacheCreationPricePerTokenPriority = *iv.CacheWritePrice
+		pricing.CacheCreationPriceExplicit = true
 		pricing.CacheCreation5mPrice = *iv.CacheWritePrice
 		pricing.CacheCreation1hPrice = *iv.CacheWritePrice
 	}
@@ -236,21 +251,33 @@ func intervalToModelPricing(iv *PricingInterval, supportsCacheBreakdown bool) *M
 	return pricing
 }
 
-// GetRequestTierPrice 根据层级标签获取按次价格
-func (r *ModelPricingResolver) GetRequestTierPrice(resolved *ResolvedPricing, tierLabel string) float64 {
+// LookupRequestTierPrice 根据层级标签获取按次价格，并区分显式免费与未命中。
+func (r *ModelPricingResolver) LookupRequestTierPrice(resolved *ResolvedPricing, tierLabel string) (float64, bool) {
 	for _, tier := range resolved.RequestTiers {
 		if tier.TierLabel == tierLabel && tier.PerRequestPrice != nil {
-			return *tier.PerRequestPrice
+			return *tier.PerRequestPrice, true
 		}
 	}
-	return 0
+	return 0, false
 }
 
-// GetRequestTierPriceByContext 根据 context token 数获取按次价格
-func (r *ModelPricingResolver) GetRequestTierPriceByContext(resolved *ResolvedPricing, totalContextTokens int) float64 {
+// GetRequestTierPrice 保留纯价格读取语义；需要执行价格回退时应使用 LookupRequestTierPrice。
+func (r *ModelPricingResolver) GetRequestTierPrice(resolved *ResolvedPricing, tierLabel string) float64 {
+	price, _ := r.LookupRequestTierPrice(resolved, tierLabel)
+	return price
+}
+
+// LookupRequestTierPriceByContext 根据 context token 数获取按次价格，并区分显式免费与未命中。
+func (r *ModelPricingResolver) LookupRequestTierPriceByContext(resolved *ResolvedPricing, totalContextTokens int) (float64, bool) {
 	iv := FindMatchingInterval(resolved.RequestTiers, totalContextTokens)
 	if iv != nil && iv.PerRequestPrice != nil {
-		return *iv.PerRequestPrice
+		return *iv.PerRequestPrice, true
 	}
-	return 0
+	return 0, false
+}
+
+// GetRequestTierPriceByContext 保留纯价格读取语义；需要执行价格回退时应使用 LookupRequestTierPriceByContext。
+func (r *ModelPricingResolver) GetRequestTierPriceByContext(resolved *ResolvedPricing, totalContextTokens int) float64 {
+	price, _ := r.LookupRequestTierPriceByContext(resolved, totalContextTokens)
+	return price
 }

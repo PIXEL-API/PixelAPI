@@ -137,6 +137,8 @@ type SystemSettings struct {
 	RiskControlEnabled                        bool
 	InvoiceManagementEnabled                  bool
 	WithdrawalManagementEnabled               bool
+	WithdrawalRateLimitWindowDays             int
+	WithdrawalRateLimitMax                    int
 	CyberSessionBlockEnabled                  bool
 	CyberSessionBlockTTLSeconds               int
 	AccountShareCommentReviewEnabled          bool
@@ -203,6 +205,7 @@ type SystemSettings struct {
 	ClaudeOAuthSystemPrompt                string // Claude OAuth mimic 路径注入的通用扩展 system prompt；空值使用内置默认
 	ClaudeOAuthSystemPromptBlocks          string // Claude OAuth mimic 路径注入的 system blocks JSON 配置；空值使用内置默认
 	OpenAICleanRelayEnabled                bool   // 是否启用 OpenAI 洁净中继模式（默认 false）
+	DetachedUsageDrainEnabled              bool   // 客户端断开后是否继续读取上游以采集完整 usage（默认 true）
 	EnableAnthropicCacheTTL1hInjection     bool   // 是否对 Anthropic OAuth/SetupToken 请求体注入 1h cache_control ttl（默认 false）
 
 	// Web Search Emulation
@@ -216,6 +219,12 @@ type SystemSettings struct {
 
 	// OpenAI account scheduling
 	OpenAIAdvancedSchedulerEnabled bool
+	OpenAIAccountLevels            []OpenAIAccountLevelConfig
+
+	// Scheduler candidate sampling (dynamic, applies to all buckets over threshold)
+	SchedulerCandidateSamplingEnabled   bool
+	SchedulerCandidateSamplingLimit     int
+	SchedulerCandidateSamplingThreshold int
 
 	// OpenAI account repair
 	OpenAIFreeAccountRepairEnabled            bool
@@ -296,12 +305,17 @@ type PublicSettings struct {
 	// User-owned account import limit
 	UserAccountImportLimit int `json:"user_account_import_limit"`
 
+	// OpenAI account levels visible to user-owned account import flows.
+	OpenAIAccountLevels []OpenAIAccountLevelConfig `json:"openai_account_levels"`
+
 	// Affiliate (邀请返利) feature toggle
 	AffiliateEnabled bool `json:"affiliate_enabled"`
 
 	// Functional module switches
-	InvoiceManagementEnabled    bool `json:"invoice_management_enabled"`
-	WithdrawalManagementEnabled bool `json:"withdrawal_management_enabled"`
+	InvoiceManagementEnabled      bool `json:"invoice_management_enabled"`
+	WithdrawalManagementEnabled   bool `json:"withdrawal_management_enabled"`
+	WithdrawalRateLimitWindowDays int  `json:"withdrawal_rate_limit_window_days"`
+	WithdrawalRateLimitMax        int  `json:"withdrawal_rate_limit_max"`
 
 	// 风控中心功能开关
 	RiskControlEnabled bool `json:"risk_control_enabled"`
@@ -311,6 +325,15 @@ type LoginAgreementDocument struct {
 	ID        string `json:"id"`
 	Title     string `json:"title"`
 	ContentMD string `json:"content_md"`
+}
+
+type OpenAIAccountLevelConfig struct {
+	Key                string   `json:"key"`
+	Label              string   `json:"label"`
+	Aliases            []string `json:"aliases"`
+	SortOrder          int      `json:"sort_order"`
+	Enabled            bool     `json:"enabled"`
+	RequiresProxyLogin bool     `json:"requires_proxy_login"`
 }
 
 type WeChatConnectOAuthConfig struct {
@@ -504,6 +527,7 @@ type OpenAIFastPolicyRule struct {
 	ServiceTier          string   `json:"service_tier"`                     // "priority" | "flex" | "auto" | "default" | "scale" | "all"
 	Action               string   `json:"action"`                           // "pass" | "filter" | "block"
 	Scope                string   `json:"scope"`                            // "all" | "oauth" | "apikey" | "bedrock"
+	UserIDs              []int64  `json:"user_ids,omitempty"`               // 空=全局规则；非空=仅匹配指定的可信鉴权用户
 	ErrorMessage         string   `json:"error_message,omitempty"`          // 自定义错误消息 (action=block 时生效)
 	ModelWhitelist       []string `json:"model_whitelist,omitempty"`        // 模型匹配模式列表（为空=对所有模型生效）
 	FallbackAction       string   `json:"fallback_action,omitempty"`        // 未匹配白名单的模型的处理方式

@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
 )
 
 // ---------------------------------------------------------------------------
@@ -298,9 +300,9 @@ func TestNewClient_无代理(t *testing.T) {
 	if client.httpClient.Timeout != clientTimeout {
 		t.Errorf("Timeout 不匹配: got %v, want %v", client.httpClient.Timeout, clientTimeout)
 	}
-	// 无代理时 Transport 应为 nil（使用默认）
-	if client.httpClient.Transport != nil {
-		t.Error("无代理时 Transport 应为 nil")
+	// Server-Timing 包装器保留默认 Transport 语义，但 Transport 本身非 nil。
+	if client.httpClient.Transport == nil {
+		t.Error("无代理时 Transport 应包含 Server-Timing 包装器")
 	}
 }
 
@@ -325,9 +327,37 @@ func TestNewClient_空格代理(t *testing.T) {
 	if client == nil {
 		t.Fatal("NewClient 返回 nil")
 	}
-	// 空格代理应等同于无代理
-	if client.httpClient.Transport != nil {
-		t.Error("空格代理 Transport 应为 nil")
+	// 空格代理应等同于无代理，并保留 Server-Timing 包装器。
+	if client.httpClient.Transport == nil {
+		t.Error("空格代理 Transport 应包含 Server-Timing 包装器")
+	}
+}
+
+func TestNewClient记录请求级依赖耗时(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	client := mustNewClient(t, "")
+	collector := servertiming.New(time.Now())
+	req, err := http.NewRequestWithContext(
+		servertiming.WithCollector(context.Background(), collector),
+		http.MethodGet,
+		server.URL,
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.httpClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resp.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if header := collector.HeaderValue(time.Now(), "bypass"); !strings.Contains(header, "dep_http;dur=") {
+		t.Fatalf("依赖指标缺失: %q", header)
 	}
 }
 

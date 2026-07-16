@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatCompactNumber } from '../format'
+import { formatCompactNumber, formatDateLocalInput } from '../format'
 
 describe('formatCompactNumber', () => {
   it('formats boundary values with K/M/B', () => {
@@ -18,5 +18,15 @@ describe('formatCompactNumber', () => {
   it('returns 0 for nullish input', () => {
     expect(formatCompactNumber(null)).toBe('0')
     expect(formatCompactNumber(undefined)).toBe('0')
+  })
+})
+
+describe('formatDateLocalInput', () => {
+  it('formats a Date with local calendar fields', () => {
+    expect(formatDateLocalInput(new Date(2026, 0, 2, 23, 59, 59))).toBe('2026-01-02')
+  })
+
+  it('returns an empty string for an invalid Date', () => {
+    expect(formatDateLocalInput(new Date(Number.NaN))).toBe('')
   })
 })

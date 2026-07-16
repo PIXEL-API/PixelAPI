@@ -62,13 +62,19 @@ func (s *settingRepoStub) Delete(ctx context.Context, key string) error {
 }
 
 type emailCacheStub struct {
-	data *VerificationCodeData
-	err  error
+	data          *VerificationCodeData
+	err           error
+	deletedEmails []string
 }
 
 type defaultSubscriptionAssignerStub struct {
 	calls []AssignSubscriptionInput
 	err   error
+}
+
+type registrationPrivateGroupProvisionerStub struct {
+	provisionedUserIDs []int64
+	err                error
 }
 
 type refreshTokenCacheStub struct{}
@@ -89,6 +95,10 @@ func (s *refreshTokenCacheStub) StoreRefreshToken(context.Context, string, *Refr
 
 func (s *refreshTokenCacheStub) GetRefreshToken(context.Context, string) (*RefreshTokenData, error) {
 	return nil, ErrRefreshTokenNotFound
+}
+
+func (s *refreshTokenCacheStub) RotateRefreshToken(context.Context, string, string, *RefreshTokenData, time.Duration) error {
+	return nil
 }
 
 func (s *refreshTokenCacheStub) DeleteRefreshToken(context.Context, string) error {
@@ -135,6 +145,7 @@ func (s *emailCacheStub) SetVerificationCode(ctx context.Context, email string, 
 }
 
 func (s *emailCacheStub) DeleteVerificationCode(ctx context.Context, email string) error {
+	s.deletedEmails = append(s.deletedEmails, email)
 	return nil
 }
 
@@ -176,6 +187,15 @@ func (s *emailCacheStub) GetNotifyCodeUserRate(ctx context.Context, userID int64
 
 func (s *emailCacheStub) IncrNotifyCodeUserRate(ctx context.Context, userID int64, window time.Duration) (int64, error) {
 	return 0, nil
+}
+
+func (s *registrationPrivateGroupProvisionerStub) ProvisionUserPrivateGroups(ctx context.Context, userID int64) error {
+	s.provisionedUserIDs = append(s.provisionedUserIDs, userID)
+	return s.err
+}
+
+func (s *registrationPrivateGroupProvisionerStub) GetActiveUserPrivateGroup(ctx context.Context, userID int64, platform string) (*Group, error) {
+	panic("unexpected GetActiveUserPrivateGroup call")
 }
 
 func newAuthService(repo *userRepoStub, settings map[string]string, emailCache EmailCache) *AuthService {
@@ -390,6 +410,53 @@ func TestAuthService_Register_Success(t *testing.T) {
 	require.Equal(t, 2, user.Concurrency)
 	require.Len(t, repo.created, 1)
 	require.True(t, user.CheckPassword("password"))
+}
+
+func TestAuthService_Register_EmailVerifyConsumesCodeAfterSuccessfulRegistration(t *testing.T) {
+	repo := &userRepoStub{nextID: 77}
+	cache := &emailCacheStub{
+		data: &VerificationCodeData{Code: "123456", Attempts: 0},
+	}
+	provisioner := &registrationPrivateGroupProvisionerStub{}
+	service := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled:                 "true",
+		SettingKeyEmailVerifyEnabled:                  "true",
+		SettingKeyAuthSourceDefaultEmailGrantOnSignup: "false",
+	}, cache)
+	service.SetUserPrivateGroupProvisioner(provisioner)
+
+	token, user, err := service.RegisterWithVerification(context.Background(), "verified@test.com", "password", "123456", "", "", "")
+	require.NoError(t, err)
+	require.NotEmpty(t, token)
+	require.NotNil(t, user)
+	require.Equal(t, int64(77), user.ID)
+	require.Equal(t, []int64{77}, provisioner.provisionedUserIDs)
+	require.Equal(t, []string{"verified@test.com"}, cache.deletedEmails)
+	require.Empty(t, repo.deletedIDs)
+}
+
+func TestAuthService_Register_EmailVerifyKeepsCodeAndRollsBackUserWhenPrivateGroupProvisioningFails(t *testing.T) {
+	repo := &userRepoStub{nextID: 88}
+	cache := &emailCacheStub{
+		data: &VerificationCodeData{Code: "123456", Attempts: 0},
+	}
+	provisioner := &registrationPrivateGroupProvisionerStub{err: errors.New("private group failed")}
+	service := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled:                 "true",
+		SettingKeyEmailVerifyEnabled:                  "true",
+		SettingKeyAuthSourceDefaultEmailGrantOnSignup: "false",
+	}, cache)
+	service.SetUserPrivateGroupProvisioner(provisioner)
+
+	token, user, err := service.RegisterWithVerification(context.Background(), "rollback@test.com", "password", "123456", "", "", "")
+	require.Error(t, err)
+	require.ErrorContains(t, err, "provision user private groups")
+	require.Empty(t, token)
+	require.Nil(t, user)
+	require.Equal(t, []int64{88}, provisioner.provisionedUserIDs)
+	require.Equal(t, []int64{88}, repo.deletedIDs)
+	require.Empty(t, cache.deletedEmails)
+	require.Len(t, repo.created, 1)
 }
 
 func TestAuthService_ValidateToken_ExpiredReturnsClaimsWithError(t *testing.T) {

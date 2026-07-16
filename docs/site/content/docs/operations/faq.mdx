@@ -1,0 +1,95 @@
+---
+title: 常见问题
+description: 用户充值、账号托管、共享号池和客户端接入的常见问题。
+---
+
+这里按使用角色整理高频问题：普通用户先看第一组，托管账号或共享账号的号主看第二组。遇到具体问题时，可以直接展开对应条目核对原因和处理方式。
+
+## 普通用户
+
+<Accordions type="multiple">
+  <Accordion title="使用站点需要开代理吗？">
+    访问站点和 API 端点通常不需要额外代理。遇到连接异常时，优先确认本地代理是否影响了客户端请求。
+  </Accordion>
+  <Accordion title="为什么从账号切换成 API 后聊天记录不见了？">
+    本地客户端通常会按服务配置隔离会话。切换账号、API 或模型映射后，旧会话可能不会在新配置下展示。
+  </Accordion>
+  <Accordion title="为什么速度有时很慢？">
+    速度取决于本地网络、站点网关、共享分组可用账号和上游模型状态。共享分组资源紧张时，建议切换到另一个可用的 `XXX 共享分组` 或 `XXX 兜底分组`。
+  </Accordion>
+  <Accordion title="分组倍率是什么意思？">
+    分组倍率决定余额消耗和收益结算。示例：`0.03` 倍率表示 0.3 元约等于 10 额度；共享收益和用户消耗按同一倍率理解。
+  </Accordion>
+  <Accordion title="第一次充值多少合适？">
+    新用户建议先小额充值测试真实使用量，再根据请求频率、模型成本和客户端使用习惯增加余额。
+  </Accordion>
+  <Accordion title="充值金额为什么多出 0.01 或 0.02？">
+    当多名用户同时下单相同金额时，系统可能通过小额差异区分订单。按页面显示金额支付即可按显示金额到账。
+  </Accordion>
+  <Accordion title="Claude 映射后为什么还说自己是 Opus？">
+    这是客户端展示或模型自述造成的现象。实际调用以 CC-Switch 中的模型映射和站点请求记录为准。
+  </Accordion>
+  <Accordion title="我应该选择哪个共享号池？">
+    日常优先使用你有权限、页面显示可用、稳定性最好的 `XXX 共享分组`。不要按固定名字硬选，实际可用分组会随站点配置、账号池和权限变化。
+  </Accordion>
+  <Accordion title="渠道状态怎么看？">
+    优先看 API Key 所属分组、账号池可用性、最近错误和请求日志。不要只凭客户端一次报错判断站点不可用。
+  </Accordion>
+  <Accordion title="可以使用 Codex 以外的软件调用 GPT 系列模型吗？">
+    可以。只要软件支持 OpenAI 兼容 Base URL 和 Bearer Token，就可以接入 Pixel API。
+  </Accordion>
+  <Accordion title="CC-Switch 检测站点失败一定是 API 问题吗？">
+    不一定。常见原因包括 Base URL 错误、本地代理、模型检测配置不匹配和本地路由模式影响。
+  </Accordion>
+  <Accordion title="可以调用生图模型吗？">
+    以站点当前开放的模型和分组为准。如果页面没有展示可用生图模型，不应假设可以调用。
+  </Accordion>
+</Accordions>
+
+## 号主用户
+
+<Accordions type="multiple">
+  <Accordion title="怎么查看自己托管账号的信息？">
+    账号通过公共校验后，可以在「我的账号」页面查看今日统计和用量窗口。
+
+    常见指标：
+
+    - 请求量：账号当天请求次数。
+    - Token 量：输入与输出 Token 消耗。
+    - 账号计费：上游账号实际计费。
+    - 用户计费：通过倍率池产生的用户侧计费。
+    - 5h：5 小时滚动窗口剩余额度。
+    - 7d：7 天滚动窗口剩余额度。
+  </Accordion>
+  <Accordion title="PLUS 账号进入 FREE 池怎么办？">
+    先确认账号类型、校验状态和分组配置。如果校验结果不符合预期，联系站点支持并提供账号状态截图。
+  </Accordion>
+  <Accordion title="账号提示 Token revoked 怎么办？">
+    `Token revoked (401)` 通常表示刷新令牌失效。需要重新授权或重新导入账号凭证。
+  </Accordion>
+  <Accordion title="公共分组和私有分组同时存在时，自己使用如何扣费？">
+    自己从私有分组调用时按私有号池策略计费；从公共共享分组调用时按该共享分组倍率计费。
+  </Accordion>
+  <Accordion title="一个 PLUS 账号大概会产生多少收入？">
+    收入取决于账号可用额度、共享分组倍率、调度量、用户需求和账号稳定性。平台无法承诺固定收入。
+  </Accordion>
+  <Accordion title="为什么账号放上去没有产生收入？">
+    常见原因包括账号未通过公共校验、没有进入共享池、当前用户需求低、优先级较低或账号健康状态异常。
+  </Accordion>
+  <Accordion title="调度规则是什么？">
+    共享号池会综合账号状态、分组、优先级、并发、模型和健康状态进行调度。不要随意提高并发或调整优先级，以免降低稳定性或触发上游风控。
+  </Accordion>
+</Accordions>
+
+## 常用工具
+
+Windows 用户常见工具：
+
+- Codex CLI
+- Claude Code CLI
+- CC-Switch
+- Codex-PlusPlus
+
+<Callout>
+  工具配置完成后，如果客户端没有读取新配置，请完全退出应用再重新启动。
+</Callout>

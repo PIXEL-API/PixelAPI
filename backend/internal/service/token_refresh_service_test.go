@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ type tokenRefreshAccountRepo struct {
 	setErrorCalls          int
 	clearTempCalls         int
 	setTempUnschedCalls    int
+	lastTempUnschedReason  string
 	lastAccount            *Account
 	updateErr              error
 }
@@ -49,6 +51,25 @@ func (r *tokenRefreshAccountRepo) UpdateCredentials(ctx context.Context, id int6
 	return nil
 }
 
+func (r *tokenRefreshAccountRepo) UpdateGrokOAuthCredentialsIfUnchanged(
+	ctx context.Context,
+	id int64,
+	expectedCredentials map[string]any,
+	expectedProxyID *int64,
+	credentials map[string]any,
+) (bool, error) {
+	account := r.accountsByID[id]
+	if account == nil || account.Platform != PlatformGrok || account.Type != AccountTypeOAuth ||
+		!reflect.DeepEqual(account.Credentials, expectedCredentials) ||
+		!reflect.DeepEqual(account.ProxyID, expectedProxyID) {
+		return false, nil
+	}
+	if err := r.UpdateCredentials(ctx, id, credentials); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (r *tokenRefreshAccountRepo) SetError(ctx context.Context, id int64, errorMsg string) error {
 	r.setErrorCalls++
 	return nil
@@ -61,6 +82,7 @@ func (r *tokenRefreshAccountRepo) ClearTempUnschedulable(ctx context.Context, id
 
 func (r *tokenRefreshAccountRepo) SetTempUnschedulable(ctx context.Context, id int64, until time.Time, reason string) error {
 	r.setTempUnschedCalls++
+	r.lastTempUnschedReason = reason
 	return nil
 }
 
@@ -76,9 +98,13 @@ func (s *tokenCacheInvalidatorStub) InvalidateToken(ctx context.Context, account
 
 type tempUnschedCacheStub struct {
 	deleteCalls int
+	setCalls    int
+	lastState   *TempUnschedState
 }
 
 func (s *tempUnschedCacheStub) SetTempUnsched(ctx context.Context, accountID int64, state *TempUnschedState) error {
+	s.setCalls++
+	s.lastState = state
 	return nil
 }
 

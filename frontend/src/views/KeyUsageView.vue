@@ -366,6 +366,7 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import Icon from '@/components/icons/Icon.vue'
+import { formatDateLocalInput } from '@/utils/format'
 
 const { t, locale } = useI18n()
 const appStore = useAppStore()
@@ -425,7 +426,6 @@ function setDateRange(key: DateRangeKey) {
 
 function getDateParams(): string {
   const now = new Date()
-  const fmt = (d: Date) => d.toISOString().split('T')[0]
 
   if (currentRange.value === 'custom') {
     if (customStartDate.value && customEndDate.value) {
@@ -434,13 +434,13 @@ function getDateParams(): string {
     return ''
   }
 
-  const end = fmt(now)
+  const end = formatDateLocalInput(now)
   let start: string
   switch (currentRange.value) {
     case 'today': start = end; break
-    case '7d': start = fmt(new Date(now.getTime() - 7 * 86400000)); break
-    case '30d': start = fmt(new Date(now.getTime() - 30 * 86400000)); break
-    default: start = fmt(new Date(now.getTime() - 30 * 86400000))
+    case '7d': start = formatDateLocalInput(new Date(now.getTime() - 7 * 86400000)); break
+    case '30d': start = formatDateLocalInput(new Date(now.getTime() - 30 * 86400000)); break
+    default: start = formatDateLocalInput(new Date(now.getTime() - 30 * 86400000))
   }
   return `start_date=${start}&end_date=${end}`
 }

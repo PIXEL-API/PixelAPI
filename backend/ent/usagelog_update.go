@@ -542,6 +542,20 @@ func (_u *UsageLogUpdate) AddRateMultiplier(v float64) *UsageLogUpdate {
 	return _u
 }
 
+// SetRateMultiplierSource sets the "rate_multiplier_source" field.
+func (_u *UsageLogUpdate) SetRateMultiplierSource(v string) *UsageLogUpdate {
+	_u.mutation.SetRateMultiplierSource(v)
+	return _u
+}
+
+// SetNillableRateMultiplierSource sets the "rate_multiplier_source" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableRateMultiplierSource(v *string) *UsageLogUpdate {
+	if v != nil {
+		_u.SetRateMultiplierSource(*v)
+	}
+	return _u
+}
+
 // SetAccountRateMultiplier sets the "account_rate_multiplier" field.
 func (_u *UsageLogUpdate) SetAccountRateMultiplier(v float64) *UsageLogUpdate {
 	_u.mutation.ResetAccountRateMultiplier()
@@ -739,6 +753,74 @@ func (_u *UsageLogUpdate) ClearImageSize() *UsageLogUpdate {
 	return _u
 }
 
+// SetVideoCount sets the "video_count" field.
+func (_u *UsageLogUpdate) SetVideoCount(v int) *UsageLogUpdate {
+	_u.mutation.ResetVideoCount()
+	_u.mutation.SetVideoCount(v)
+	return _u
+}
+
+// SetNillableVideoCount sets the "video_count" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableVideoCount(v *int) *UsageLogUpdate {
+	if v != nil {
+		_u.SetVideoCount(*v)
+	}
+	return _u
+}
+
+// AddVideoCount adds value to the "video_count" field.
+func (_u *UsageLogUpdate) AddVideoCount(v int) *UsageLogUpdate {
+	_u.mutation.AddVideoCount(v)
+	return _u
+}
+
+// SetVideoResolution sets the "video_resolution" field.
+func (_u *UsageLogUpdate) SetVideoResolution(v string) *UsageLogUpdate {
+	_u.mutation.SetVideoResolution(v)
+	return _u
+}
+
+// SetNillableVideoResolution sets the "video_resolution" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableVideoResolution(v *string) *UsageLogUpdate {
+	if v != nil {
+		_u.SetVideoResolution(*v)
+	}
+	return _u
+}
+
+// ClearVideoResolution clears the value of the "video_resolution" field.
+func (_u *UsageLogUpdate) ClearVideoResolution() *UsageLogUpdate {
+	_u.mutation.ClearVideoResolution()
+	return _u
+}
+
+// SetVideoDurationSeconds sets the "video_duration_seconds" field.
+func (_u *UsageLogUpdate) SetVideoDurationSeconds(v int) *UsageLogUpdate {
+	_u.mutation.ResetVideoDurationSeconds()
+	_u.mutation.SetVideoDurationSeconds(v)
+	return _u
+}
+
+// SetNillableVideoDurationSeconds sets the "video_duration_seconds" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableVideoDurationSeconds(v *int) *UsageLogUpdate {
+	if v != nil {
+		_u.SetVideoDurationSeconds(*v)
+	}
+	return _u
+}
+
+// AddVideoDurationSeconds adds value to the "video_duration_seconds" field.
+func (_u *UsageLogUpdate) AddVideoDurationSeconds(v int) *UsageLogUpdate {
+	_u.mutation.AddVideoDurationSeconds(v)
+	return _u
+}
+
+// ClearVideoDurationSeconds clears the value of the "video_duration_seconds" field.
+func (_u *UsageLogUpdate) ClearVideoDurationSeconds() *UsageLogUpdate {
+	_u.mutation.ClearVideoDurationSeconds()
+	return _u
+}
+
 // SetCacheTTLOverridden sets the "cache_ttl_overridden" field.
 func (_u *UsageLogUpdate) SetCacheTTLOverridden(v bool) *UsageLogUpdate {
 	_u.mutation.SetCacheTTLOverridden(v)
@@ -877,6 +959,11 @@ func (_u *UsageLogUpdate) check() error {
 			return &ValidationError{Name: "billing_mode", err: fmt.Errorf(`ent: validator failed for field "UsageLog.billing_mode": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.RateMultiplierSource(); ok {
+		if err := usagelog.RateMultiplierSourceValidator(v); err != nil {
+			return &ValidationError{Name: "rate_multiplier_source", err: fmt.Errorf(`ent: validator failed for field "UsageLog.rate_multiplier_source": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.UserAgent(); ok {
 		if err := usagelog.UserAgentValidator(v); err != nil {
 			return &ValidationError{Name: "user_agent", err: fmt.Errorf(`ent: validator failed for field "UsageLog.user_agent": %w`, err)}
@@ -890,6 +977,21 @@ func (_u *UsageLogUpdate) check() error {
 	if v, ok := _u.mutation.ImageSize(); ok {
 		if err := usagelog.ImageSizeValidator(v); err != nil {
 			return &ValidationError{Name: "image_size", err: fmt.Errorf(`ent: validator failed for field "UsageLog.image_size": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.VideoCount(); ok {
+		if err := usagelog.VideoCountValidator(v); err != nil {
+			return &ValidationError{Name: "video_count", err: fmt.Errorf(`ent: validator failed for field "UsageLog.video_count": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.VideoResolution(); ok {
+		if err := usagelog.VideoResolutionValidator(v); err != nil {
+			return &ValidationError{Name: "video_resolution", err: fmt.Errorf(`ent: validator failed for field "UsageLog.video_resolution": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.VideoDurationSeconds(); ok {
+		if err := usagelog.VideoDurationSecondsValidator(v); err != nil {
+			return &ValidationError{Name: "video_duration_seconds", err: fmt.Errorf(`ent: validator failed for field "UsageLog.video_duration_seconds": %w`, err)}
 		}
 	}
 	if _u.mutation.UserCleared() && len(_u.mutation.UserIDs()) > 0 {
@@ -1039,6 +1141,9 @@ func (_u *UsageLogUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.AddedRateMultiplier(); ok {
 		_spec.AddField(usagelog.FieldRateMultiplier, field.TypeFloat64, value)
 	}
+	if value, ok := _u.mutation.RateMultiplierSource(); ok {
+		_spec.SetField(usagelog.FieldRateMultiplierSource, field.TypeString, value)
+	}
 	if value, ok := _u.mutation.AccountRateMultiplier(); ok {
 		_spec.SetField(usagelog.FieldAccountRateMultiplier, field.TypeFloat64, value)
 	}
@@ -1098,6 +1203,27 @@ func (_u *UsageLogUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.ImageSizeCleared() {
 		_spec.ClearField(usagelog.FieldImageSize, field.TypeString)
+	}
+	if value, ok := _u.mutation.VideoCount(); ok {
+		_spec.SetField(usagelog.FieldVideoCount, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedVideoCount(); ok {
+		_spec.AddField(usagelog.FieldVideoCount, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.VideoResolution(); ok {
+		_spec.SetField(usagelog.FieldVideoResolution, field.TypeString, value)
+	}
+	if _u.mutation.VideoResolutionCleared() {
+		_spec.ClearField(usagelog.FieldVideoResolution, field.TypeString)
+	}
+	if value, ok := _u.mutation.VideoDurationSeconds(); ok {
+		_spec.SetField(usagelog.FieldVideoDurationSeconds, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedVideoDurationSeconds(); ok {
+		_spec.AddField(usagelog.FieldVideoDurationSeconds, field.TypeInt, value)
+	}
+	if _u.mutation.VideoDurationSecondsCleared() {
+		_spec.ClearField(usagelog.FieldVideoDurationSeconds, field.TypeInt)
 	}
 	if value, ok := _u.mutation.CacheTTLOverridden(); ok {
 		_spec.SetField(usagelog.FieldCacheTTLOverridden, field.TypeBool, value)
@@ -1777,6 +1903,20 @@ func (_u *UsageLogUpdateOne) AddRateMultiplier(v float64) *UsageLogUpdateOne {
 	return _u
 }
 
+// SetRateMultiplierSource sets the "rate_multiplier_source" field.
+func (_u *UsageLogUpdateOne) SetRateMultiplierSource(v string) *UsageLogUpdateOne {
+	_u.mutation.SetRateMultiplierSource(v)
+	return _u
+}
+
+// SetNillableRateMultiplierSource sets the "rate_multiplier_source" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableRateMultiplierSource(v *string) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetRateMultiplierSource(*v)
+	}
+	return _u
+}
+
 // SetAccountRateMultiplier sets the "account_rate_multiplier" field.
 func (_u *UsageLogUpdateOne) SetAccountRateMultiplier(v float64) *UsageLogUpdateOne {
 	_u.mutation.ResetAccountRateMultiplier()
@@ -1974,6 +2114,74 @@ func (_u *UsageLogUpdateOne) ClearImageSize() *UsageLogUpdateOne {
 	return _u
 }
 
+// SetVideoCount sets the "video_count" field.
+func (_u *UsageLogUpdateOne) SetVideoCount(v int) *UsageLogUpdateOne {
+	_u.mutation.ResetVideoCount()
+	_u.mutation.SetVideoCount(v)
+	return _u
+}
+
+// SetNillableVideoCount sets the "video_count" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableVideoCount(v *int) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetVideoCount(*v)
+	}
+	return _u
+}
+
+// AddVideoCount adds value to the "video_count" field.
+func (_u *UsageLogUpdateOne) AddVideoCount(v int) *UsageLogUpdateOne {
+	_u.mutation.AddVideoCount(v)
+	return _u
+}
+
+// SetVideoResolution sets the "video_resolution" field.
+func (_u *UsageLogUpdateOne) SetVideoResolution(v string) *UsageLogUpdateOne {
+	_u.mutation.SetVideoResolution(v)
+	return _u
+}
+
+// SetNillableVideoResolution sets the "video_resolution" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableVideoResolution(v *string) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetVideoResolution(*v)
+	}
+	return _u
+}
+
+// ClearVideoResolution clears the value of the "video_resolution" field.
+func (_u *UsageLogUpdateOne) ClearVideoResolution() *UsageLogUpdateOne {
+	_u.mutation.ClearVideoResolution()
+	return _u
+}
+
+// SetVideoDurationSeconds sets the "video_duration_seconds" field.
+func (_u *UsageLogUpdateOne) SetVideoDurationSeconds(v int) *UsageLogUpdateOne {
+	_u.mutation.ResetVideoDurationSeconds()
+	_u.mutation.SetVideoDurationSeconds(v)
+	return _u
+}
+
+// SetNillableVideoDurationSeconds sets the "video_duration_seconds" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableVideoDurationSeconds(v *int) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetVideoDurationSeconds(*v)
+	}
+	return _u
+}
+
+// AddVideoDurationSeconds adds value to the "video_duration_seconds" field.
+func (_u *UsageLogUpdateOne) AddVideoDurationSeconds(v int) *UsageLogUpdateOne {
+	_u.mutation.AddVideoDurationSeconds(v)
+	return _u
+}
+
+// ClearVideoDurationSeconds clears the value of the "video_duration_seconds" field.
+func (_u *UsageLogUpdateOne) ClearVideoDurationSeconds() *UsageLogUpdateOne {
+	_u.mutation.ClearVideoDurationSeconds()
+	return _u
+}
+
 // SetCacheTTLOverridden sets the "cache_ttl_overridden" field.
 func (_u *UsageLogUpdateOne) SetCacheTTLOverridden(v bool) *UsageLogUpdateOne {
 	_u.mutation.SetCacheTTLOverridden(v)
@@ -2125,6 +2333,11 @@ func (_u *UsageLogUpdateOne) check() error {
 			return &ValidationError{Name: "billing_mode", err: fmt.Errorf(`ent: validator failed for field "UsageLog.billing_mode": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.RateMultiplierSource(); ok {
+		if err := usagelog.RateMultiplierSourceValidator(v); err != nil {
+			return &ValidationError{Name: "rate_multiplier_source", err: fmt.Errorf(`ent: validator failed for field "UsageLog.rate_multiplier_source": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.UserAgent(); ok {
 		if err := usagelog.UserAgentValidator(v); err != nil {
 			return &ValidationError{Name: "user_agent", err: fmt.Errorf(`ent: validator failed for field "UsageLog.user_agent": %w`, err)}
@@ -2138,6 +2351,21 @@ func (_u *UsageLogUpdateOne) check() error {
 	if v, ok := _u.mutation.ImageSize(); ok {
 		if err := usagelog.ImageSizeValidator(v); err != nil {
 			return &ValidationError{Name: "image_size", err: fmt.Errorf(`ent: validator failed for field "UsageLog.image_size": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.VideoCount(); ok {
+		if err := usagelog.VideoCountValidator(v); err != nil {
+			return &ValidationError{Name: "video_count", err: fmt.Errorf(`ent: validator failed for field "UsageLog.video_count": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.VideoResolution(); ok {
+		if err := usagelog.VideoResolutionValidator(v); err != nil {
+			return &ValidationError{Name: "video_resolution", err: fmt.Errorf(`ent: validator failed for field "UsageLog.video_resolution": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.VideoDurationSeconds(); ok {
+		if err := usagelog.VideoDurationSecondsValidator(v); err != nil {
+			return &ValidationError{Name: "video_duration_seconds", err: fmt.Errorf(`ent: validator failed for field "UsageLog.video_duration_seconds": %w`, err)}
 		}
 	}
 	if _u.mutation.UserCleared() && len(_u.mutation.UserIDs()) > 0 {
@@ -2304,6 +2532,9 @@ func (_u *UsageLogUpdateOne) sqlSave(ctx context.Context) (_node *UsageLog, err 
 	if value, ok := _u.mutation.AddedRateMultiplier(); ok {
 		_spec.AddField(usagelog.FieldRateMultiplier, field.TypeFloat64, value)
 	}
+	if value, ok := _u.mutation.RateMultiplierSource(); ok {
+		_spec.SetField(usagelog.FieldRateMultiplierSource, field.TypeString, value)
+	}
 	if value, ok := _u.mutation.AccountRateMultiplier(); ok {
 		_spec.SetField(usagelog.FieldAccountRateMultiplier, field.TypeFloat64, value)
 	}
@@ -2363,6 +2594,27 @@ func (_u *UsageLogUpdateOne) sqlSave(ctx context.Context) (_node *UsageLog, err 
 	}
 	if _u.mutation.ImageSizeCleared() {
 		_spec.ClearField(usagelog.FieldImageSize, field.TypeString)
+	}
+	if value, ok := _u.mutation.VideoCount(); ok {
+		_spec.SetField(usagelog.FieldVideoCount, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedVideoCount(); ok {
+		_spec.AddField(usagelog.FieldVideoCount, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.VideoResolution(); ok {
+		_spec.SetField(usagelog.FieldVideoResolution, field.TypeString, value)
+	}
+	if _u.mutation.VideoResolutionCleared() {
+		_spec.ClearField(usagelog.FieldVideoResolution, field.TypeString)
+	}
+	if value, ok := _u.mutation.VideoDurationSeconds(); ok {
+		_spec.SetField(usagelog.FieldVideoDurationSeconds, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedVideoDurationSeconds(); ok {
+		_spec.AddField(usagelog.FieldVideoDurationSeconds, field.TypeInt, value)
+	}
+	if _u.mutation.VideoDurationSecondsCleared() {
+		_spec.ClearField(usagelog.FieldVideoDurationSeconds, field.TypeInt)
 	}
 	if value, ok := _u.mutation.CacheTTLOverridden(); ok {
 		_spec.SetField(usagelog.FieldCacheTTLOverridden, field.TypeBool, value)

@@ -123,24 +123,40 @@
       <template #filters>
         <div class="card">
           <div class="border-b border-gray-200 p-2 dark:border-dark-700 sm:p-3">
-            <div class="grid grid-cols-2 gap-1 rounded-lg bg-gray-100 p-1 dark:bg-dark-800 sm:inline-grid sm:w-auto">
+            <div
+              class="grid grid-cols-2 gap-1 rounded-lg bg-gray-100 p-1 dark:bg-dark-800 sm:inline-grid sm:w-auto"
+              role="tablist"
+              :aria-label="t('usage.title')"
+            >
               <button
+                id="user-usage-tab-requests"
                 type="button"
+                role="tab"
+                :aria-selected="activeTab === 'requests'"
+                aria-controls="user-usage-panel"
+                :tabindex="activeTab === 'requests' ? 0 : -1"
                 class="min-h-11 rounded-md px-4 py-2 text-sm font-medium transition-colors"
                 :class="activeTab === 'requests'
                   ? 'bg-white text-gray-900 shadow-sm dark:bg-dark-700 dark:text-white'
                   : 'text-gray-600 hover:text-gray-900 dark:text-dark-300 dark:hover:text-white'"
                 @click="switchUsageTab('requests')"
+                @keydown="handleUsageTabKeydown($event, 'requests')"
               >
                 {{ t('usage.tabs.requests') }}
               </button>
               <button
+                id="user-usage-tab-balance-ledger"
                 type="button"
+                role="tab"
+                :aria-selected="activeTab === 'balanceLedger'"
+                aria-controls="user-usage-panel"
+                :tabindex="activeTab === 'balanceLedger' ? 0 : -1"
                 class="min-h-11 rounded-md px-4 py-2 text-sm font-medium transition-colors"
                 :class="activeTab === 'balanceLedger'
                   ? 'bg-white text-gray-900 shadow-sm dark:bg-dark-700 dark:text-white'
                   : 'text-gray-600 hover:text-gray-900 dark:text-dark-300 dark:hover:text-white'"
                 @click="switchUsageTab('balanceLedger')"
+                @keydown="handleUsageTabKeydown($event, 'balanceLedger')"
               >
                 {{ t('usage.tabs.balanceLedger') }}
               </button>
@@ -303,6 +319,12 @@
       </template>
 
       <template #table>
+        <div
+          id="user-usage-panel"
+          role="tabpanel"
+          class="flex min-h-0 flex-1 flex-col"
+          :aria-labelledby="activeTab === 'requests' ? 'user-usage-tab-requests' : 'user-usage-tab-balance-ledger'"
+        >
         <DataTable
           v-if="activeTab === 'requests'"
           :columns="columns"
@@ -421,21 +443,30 @@
                 </div>
               </div>
               <!-- Token Detail Tooltip -->
-              <div
-                class="group relative"
+              <button
+                type="button"
+                class="group relative inline-flex min-h-11 min-w-11 cursor-help items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-dark-900"
+                :aria-label="t('usage.tokenDetails')"
+                :aria-expanded="isTokenTooltipActive(row)"
+                aria-controls="user-usage-token-tooltip"
+                :aria-describedby="isTokenTooltipActive(row) ? 'user-usage-token-tooltip' : undefined"
                 @mouseenter="showTokenTooltip($event, row)"
-                @mouseleave="hideTokenTooltip"
+                @mouseleave="hideTokenTooltipOnPointerLeave"
+                @focus="showTokenTooltip($event, row)"
+                @blur="hideTokenTooltip"
+                @click="toggleTokenTooltip($event, row)"
+                @keydown.esc.prevent.stop="hideTokenTooltipOnEscape"
               >
-                <div
-                  class="flex h-4 w-4 cursor-help items-center justify-center rounded-full bg-gray-100 transition-colors group-hover:bg-blue-100 dark:bg-gray-700 dark:group-hover:bg-blue-900/50"
+                <span
+                  class="flex h-5 w-5 items-center justify-center rounded-full bg-gray-100 transition-colors group-hover:bg-blue-100 group-focus-visible:bg-blue-100 dark:bg-gray-700 dark:group-hover:bg-blue-900/50 dark:group-focus-visible:bg-blue-900/50"
                 >
                   <Icon
                     name="infoCircle"
                     size="xs"
                     class="text-gray-400 group-hover:text-blue-500 dark:text-gray-500 dark:group-hover:text-blue-400"
                   />
-                </div>
-              </div>
+                </span>
+              </button>
             </div>
           </template>
 
@@ -448,38 +479,38 @@
                 <span v-if="walletDeductionText(row)" class="text-xs text-gray-500 dark:text-gray-400">{{ walletDeductionText(row) }}</span>
               </div>
               <!-- Cost Detail Tooltip -->
-              <div
-                class="group relative"
+              <button
+                type="button"
+                class="group relative inline-flex min-h-11 min-w-11 cursor-help items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-dark-900"
+                :aria-label="t('usage.costDetails')"
+                :aria-expanded="isTooltipActive(row)"
+                aria-controls="user-usage-cost-tooltip"
+                :aria-describedby="isTooltipActive(row) ? 'user-usage-cost-tooltip' : undefined"
                 @mouseenter="showTooltip($event, row)"
-                @mouseleave="hideTooltip"
+                @mouseleave="hideTooltipOnPointerLeave"
+                @focus="showTooltip($event, row)"
+                @blur="hideTooltip"
+                @click="toggleTooltip($event, row)"
+                @keydown.esc.prevent.stop="hideTooltipOnEscape"
               >
-                <div
-                  class="flex h-4 w-4 cursor-help items-center justify-center rounded-full bg-gray-100 transition-colors group-hover:bg-blue-100 dark:bg-gray-700 dark:group-hover:bg-blue-900/50"
+                <span
+                  class="flex h-5 w-5 items-center justify-center rounded-full bg-gray-100 transition-colors group-hover:bg-blue-100 group-focus-visible:bg-blue-100 dark:bg-gray-700 dark:group-hover:bg-blue-900/50 dark:group-focus-visible:bg-blue-900/50"
                 >
                   <Icon
                     name="infoCircle"
                     size="xs"
                     class="text-gray-400 group-hover:text-blue-500 dark:text-gray-500 dark:group-hover:text-blue-400"
                   />
-                </div>
-              </div>
+                </span>
+              </button>
             </div>
           </template>
 
-          <template #cell-first_token="{ row }">
-            <span
-              v-if="row.first_token_ms != null"
-              class="text-sm text-gray-600 dark:text-gray-400"
-            >
-              {{ formatDuration(row.first_token_ms) }}
-            </span>
-            <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
-          </template>
-
-          <template #cell-duration="{ row }">
-            <span class="text-sm text-gray-600 dark:text-gray-400">{{
-              formatDuration(row.duration_ms)
-            }}</span>
+          <template #cell-latency="{ row }">
+            <UsageLatencyCell
+              :first-token-ms="row.first_token_ms"
+              :duration-ms="row.duration_ms"
+            />
           </template>
 
           <template #cell-created_at="{ value }">
@@ -543,6 +574,7 @@
             <EmptyState :message="t('usage.balanceLedger.noRecords')" />
           </template>
         </DataTable>
+        </div>
       </template>
 
       <template #pagination>
@@ -570,14 +602,15 @@
   <Teleport to="body">
     <div
       v-if="tokenTooltipVisible"
-      class="fixed z-[9999] pointer-events-none -translate-y-1/2"
-      :style="{
-        left: tokenTooltipPosition.x + 'px',
-        top: tokenTooltipPosition.y + 'px'
-      }"
+      id="user-usage-token-tooltip"
+      role="tooltip"
+      class="pointer-events-none fixed z-[9999]"
+      :class="{ '-translate-y-1/2': !tokenTooltipCompact }"
+      :style="tokenTooltipStyle"
     >
       <div
-        class="whitespace-nowrap rounded-lg border border-gray-700 bg-gray-900 px-3 py-2.5 text-xs text-white shadow-xl dark:border-gray-600 dark:bg-gray-800"
+        class="rounded-lg border border-gray-700 bg-gray-900 px-3 py-2.5 text-xs text-white shadow-xl dark:border-gray-600 dark:bg-gray-800"
+        :class="tokenTooltipCompact ? 'max-h-[calc(100vh-1rem)] w-full overflow-y-auto whitespace-normal' : 'whitespace-nowrap'"
       >
         <div class="space-y-1.5">
           <!-- Token Breakdown -->
@@ -639,6 +672,7 @@
         </div>
         <!-- Tooltip Arrow (left side) -->
         <div
+          v-if="!tokenTooltipCompact"
           class="absolute right-full top-1/2 h-0 w-0 -translate-y-1/2 border-b-[6px] border-r-[6px] border-t-[6px] border-b-transparent border-r-gray-900 border-t-transparent dark:border-r-gray-800"
         ></div>
       </div>
@@ -649,14 +683,15 @@
   <Teleport to="body">
     <div
       v-if="tooltipVisible"
-      class="fixed z-[9999] pointer-events-none -translate-y-1/2"
-      :style="{
-        left: tooltipPosition.x + 'px',
-        top: tooltipPosition.y + 'px'
-      }"
+      id="user-usage-cost-tooltip"
+      role="tooltip"
+      class="pointer-events-none fixed z-[9999]"
+      :class="{ '-translate-y-1/2': !tooltipCompact }"
+      :style="tooltipStyle"
     >
       <div
-        class="whitespace-nowrap rounded-lg border border-gray-700 bg-gray-900 px-3 py-2.5 text-xs text-white shadow-xl dark:border-gray-600 dark:bg-gray-800"
+        class="rounded-lg border border-gray-700 bg-gray-900 px-3 py-2.5 text-xs text-white shadow-xl dark:border-gray-600 dark:bg-gray-800"
+        :class="tooltipCompact ? 'max-h-[calc(100vh-1rem)] w-full overflow-y-auto whitespace-normal' : 'whitespace-nowrap'"
       >
         <div class="space-y-1.5">
           <!-- Cost Breakdown -->
@@ -719,6 +754,7 @@
         </div>
         <!-- Tooltip Arrow (left side) -->
         <div
+          v-if="!tooltipCompact"
           class="absolute right-full top-1/2 h-0 w-0 -translate-y-1/2 border-b-[6px] border-r-[6px] border-t-[6px] border-b-transparent border-r-gray-900 border-t-transparent dark:border-r-gray-800"
         ></div>
       </div>
@@ -739,6 +775,8 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import Select from '@/components/common/Select.vue'
 import DateRangePicker from '@/components/common/DateRangePicker.vue'
 import Icon from '@/components/icons/Icon.vue'
+import UsageLatencyCell from '@/components/common/UsageLatencyCell.vue'
+import { useUsageDetailTooltip } from '@/composables/useUsageDetailTooltip'
 import type {
   ApiKey,
   BalanceLedgerDirection,
@@ -756,6 +794,7 @@ import { formatTokenPricePerMillion } from '@/utils/usagePricing'
 import { getUsageServiceTierLabel } from '@/utils/usageServiceTier'
 import { resolveUsageRequestType } from '@/utils/usageRequestType'
 import { getBillingModeLabel, getBillingModeBadgeClass } from '@/utils/billingMode'
+import { formatUsageDuration } from '@/utils/latencyHealth'
 import type { UserBalanceLedgerStatsResponse } from '@/api/usage'
 
 const { t } = useI18n()
@@ -763,7 +802,6 @@ const appStore = useAppStore()
 
 let abortController: AbortController | null = null
 let ledgerAbortController: AbortController | null = null
-let ledgerPrefetchTimer: number | null = null
 
 type UsageTab = 'requests' | 'balanceLedger'
 type BalanceLedgerTableRow = UserBalanceLedgerEntry & {
@@ -775,15 +813,33 @@ type BalanceLedgerTableRow = UserBalanceLedgerEntry & {
 
 const activeTab = ref<UsageTab>('requests')
 
-// Tooltip state
-const tooltipVisible = ref(false)
-const tooltipPosition = ref({ x: 0, y: 0 })
-const tooltipData = ref<UsageLog | null>(null)
+const usageTabs: readonly UsageTab[] = ['requests', 'balanceLedger']
 
-// Token tooltip state
-const tokenTooltipVisible = ref(false)
-const tokenTooltipPosition = ref({ x: 0, y: 0 })
-const tokenTooltipData = ref<UsageLog | null>(null)
+const {
+  visible: tooltipVisible,
+  isCompact: tooltipCompact,
+  style: tooltipStyle,
+  data: tooltipData,
+  show: showTooltip,
+  toggle: toggleTooltip,
+  hide: hideTooltip,
+  hideOnPointerLeave: hideTooltipOnPointerLeave,
+  hideOnEscape: hideTooltipOnEscape,
+  isActive: isTooltipActive
+} = useUsageDetailTooltip<UsageLog>()
+
+const {
+  visible: tokenTooltipVisible,
+  isCompact: tokenTooltipCompact,
+  style: tokenTooltipStyle,
+  data: tokenTooltipData,
+  show: showTokenTooltip,
+  toggle: toggleTokenTooltip,
+  hide: hideTokenTooltip,
+  hideOnPointerLeave: hideTokenTooltipOnPointerLeave,
+  hideOnEscape: hideTokenTooltipOnEscape,
+  isActive: isTokenTooltipActive
+} = useUsageDetailTooltip<UsageLog>()
 
 // Usage stats from API
 const usageStats = ref<UsageStatsResponse | null>(null)
@@ -798,8 +854,7 @@ const columns = computed<Column[]>(() => [
   { key: 'payment_source', label: t('usage.paymentSource'), sortable: false },
   { key: 'tokens', label: t('usage.tokens'), sortable: false },
   { key: 'cost', label: t('usage.cost'), sortable: false },
-  { key: 'first_token', label: t('usage.firstToken'), sortable: false },
-  { key: 'duration', label: t('usage.duration'), sortable: false },
+  { key: 'latency', label: t('usage.latency'), sortable: false },
   { key: 'created_at', label: t('usage.time'), sortable: true },
   { key: 'user_agent', label: t('usage.userAgent'), sortable: false }
 ])
@@ -1093,10 +1148,7 @@ const ledgerSortState = reactive({
   sort_order: 'desc' as 'asc' | 'desc'
 })
 
-const formatDuration = (ms: number): string => {
-  if (ms < 1000) return `${ms.toFixed(0)}ms`
-  return `${(ms / 1000).toFixed(2)}s`
-}
+const formatDuration = formatUsageDuration
 
 const formatUserAgent = (ua: string): string => {
   return ua
@@ -1273,35 +1325,44 @@ const switchUsageTab = (tab: UsageTab) => {
   loadUsageStats()
 }
 
+const focusUsageTab = (tab: UsageTab) => {
+  window.requestAnimationFrame(() => {
+    document.getElementById(tab === 'requests' ? 'user-usage-tab-requests' : 'user-usage-tab-balance-ledger')?.focus()
+  })
+}
+
+const handleUsageTabKeydown = (event: KeyboardEvent, tab: UsageTab) => {
+  let nextIndex: number | null = null
+  const currentIndex = usageTabs.indexOf(tab)
+  if (event.key === 'Home') nextIndex = 0
+  if (event.key === 'End') nextIndex = usageTabs.length - 1
+  if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+    nextIndex = (currentIndex - 1 + usageTabs.length) % usageTabs.length
+  }
+  if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+    nextIndex = (currentIndex + 1) % usageTabs.length
+  }
+  if (nextIndex == null) return
+
+  event.preventDefault()
+  const nextTab = usageTabs[nextIndex]
+  if (!nextTab) return
+  switchUsageTab(nextTab)
+  focusUsageTab(nextTab)
+}
+
 const abortBalanceLedgerRequest = () => {
   if (ledgerAbortController) {
     ledgerAbortController.abort()
   }
 }
 
-const clearBalanceLedgerPrefetch = () => {
-  if (typeof window === 'undefined' || ledgerPrefetchTimer === null) return
-  window.clearTimeout(ledgerPrefetchTimer)
-  ledgerPrefetchTimer = null
-}
-
 const invalidateBalanceLedgerCache = () => {
   ledgerLoaded.value = false
-  clearBalanceLedgerPrefetch()
   abortBalanceLedgerRequest()
   ledgerLoading.value = false
   ledgerStatsLoading.value = false
   balanceLedgerStats.value = null
-}
-
-const scheduleBalanceLedgerPrefetch = () => {
-  if (typeof window === 'undefined') return
-  if (ledgerLoaded.value || ledgerLoading.value || ledgerPrefetchTimer !== null) return
-  ledgerPrefetchTimer = window.setTimeout(() => {
-    ledgerPrefetchTimer = null
-    if (activeTab.value !== 'requests' || ledgerLoaded.value || ledgerLoading.value) return
-    loadBalanceLedger()
-  }, 400)
 }
 
 const loadApiKeys = async () => {
@@ -1740,7 +1801,7 @@ const exportToCSV = async () => {
       ...rows.map((row) => row.join(','))
     ].join('\n')
 
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+    const blob = new Blob(['\uFEFF', csvContent], { type: 'text/csv;charset=utf-8;' })
     const url = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
@@ -1757,48 +1818,13 @@ const exportToCSV = async () => {
   }
 }
 
-// Tooltip functions
-const showTooltip = (event: MouseEvent, row: UsageLog) => {
-  const target = event.currentTarget as HTMLElement
-  const rect = target.getBoundingClientRect()
-
-  tooltipData.value = row
-  // Position to the right of the icon, vertically centered
-  tooltipPosition.value.x = rect.right + 8
-  tooltipPosition.value.y = rect.top + rect.height / 2
-  tooltipVisible.value = true
-}
-
-const hideTooltip = () => {
-  tooltipVisible.value = false
-  tooltipData.value = null
-}
-
-// Token tooltip functions
-const showTokenTooltip = (event: MouseEvent, row: UsageLog) => {
-  const target = event.currentTarget as HTMLElement
-  const rect = target.getBoundingClientRect()
-
-  tokenTooltipData.value = row
-  tokenTooltipPosition.value.x = rect.right + 8
-  tokenTooltipPosition.value.y = rect.top + rect.height / 2
-  tokenTooltipVisible.value = true
-}
-
-const hideTokenTooltip = () => {
-  tokenTooltipVisible.value = false
-  tokenTooltipData.value = null
-}
-
 onMounted(() => {
   loadApiKeys()
   loadUsageLogs()
   loadUsageStats()
-  scheduleBalanceLedgerPrefetch()
 })
 
 onUnmounted(() => {
-  clearBalanceLedgerPrefetch()
   if (abortController) {
     abortController.abort()
   }

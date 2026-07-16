@@ -78,14 +78,14 @@ func (f *optionalLimitField) UnmarshalJSON(data []byte) error {
 }
 
 func (f optionalLimitField) ToServiceInput() *float64 {
-	if !f.set {
-		return nil
-	}
 	if f.value != nil {
 		return f.value
 	}
-	zero := 0.0
-	return &zero
+	return nil
+}
+
+func (f optionalLimitField) Provided() bool {
+	return f.set
 }
 
 // NewGroupHandler creates a new admin group handler
@@ -100,16 +100,20 @@ func NewGroupHandler(adminService service.AdminService, dashboardService *servic
 
 // CreateGroupRequest represents create group request
 type CreateGroupRequest struct {
-	Name                 string             `json:"name" binding:"required"`
-	Description          string             `json:"description"`
-	Platform             string             `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity"`
-	RateMultiplier       float64            `json:"rate_multiplier"`
-	IsExclusive          bool               `json:"is_exclusive"`
-	SubscriptionType     string             `json:"subscription_type" binding:"omitempty,oneof=standard subscription"`
-	RequiredAccountLevel string             `json:"required_account_level"`
-	DailyLimitUSD        optionalLimitField `json:"daily_limit_usd"`
-	WeeklyLimitUSD       optionalLimitField `json:"weekly_limit_usd"`
-	MonthlyLimitUSD      optionalLimitField `json:"monthly_limit_usd"`
+	Name                     string             `json:"name" binding:"required"`
+	Description              string             `json:"description"`
+	Platform                 string             `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity grok"`
+	RateMultiplier           float64            `json:"rate_multiplier"`
+	NewUserRateEnabled       bool               `json:"new_user_rate_enabled"`
+	NewUserRateMultiplier    float64            `json:"new_user_rate_multiplier"`
+	NewUserRateWindowSeconds int                `json:"new_user_rate_window_seconds"`
+	NewUserRateQuotaUSD      float64            `json:"new_user_rate_quota_usd"`
+	IsExclusive              bool               `json:"is_exclusive"`
+	SubscriptionType         string             `json:"subscription_type" binding:"omitempty,oneof=standard subscription"`
+	RequiredAccountLevel     string             `json:"required_account_level"`
+	DailyLimitUSD            optionalLimitField `json:"daily_limit_usd"`
+	WeeklyLimitUSD           optionalLimitField `json:"weekly_limit_usd"`
+	MonthlyLimitUSD          optionalLimitField `json:"monthly_limit_usd"`
 	// 图片生成计费配置（antigravity 和 gemini 平台使用，负数表示清除配置）
 	AllowImageGeneration            bool     `json:"allow_image_generation"`
 	ImageRateIndependent            bool     `json:"image_rate_independent"`
@@ -117,6 +121,12 @@ type CreateGroupRequest struct {
 	ImagePrice1K                    *float64 `json:"image_price_1k"`
 	ImagePrice2K                    *float64 `json:"image_price_2k"`
 	ImagePrice4K                    *float64 `json:"image_price_4k"`
+	VideoRateIndependent            bool     `json:"video_rate_independent"`
+	VideoRateMultiplier             *float64 `json:"video_rate_multiplier"`
+	VideoPrice480P                  *float64 `json:"video_price_480p"`
+	VideoPrice720P                  *float64 `json:"video_price_720p"`
+	VideoPrice1080P                 *float64 `json:"video_price_1080p"`
+	WebSearchPricePerCall           *float64 `json:"web_search_price_per_call"`
 	ClaudeCodeOnly                  bool     `json:"claude_code_only"`
 	FallbackGroupID                 *int64   `json:"fallback_group_id"`
 	FallbackGroupIDOnInvalidRequest *int64   `json:"fallback_group_id_on_invalid_request"`
@@ -140,17 +150,21 @@ type CreateGroupRequest struct {
 
 // UpdateGroupRequest represents update group request
 type UpdateGroupRequest struct {
-	Name                 string             `json:"name"`
-	Description          string             `json:"description"`
-	Platform             string             `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity"`
-	RateMultiplier       *float64           `json:"rate_multiplier"`
-	IsExclusive          *bool              `json:"is_exclusive"`
-	Status               string             `json:"status" binding:"omitempty,oneof=active inactive"`
-	SubscriptionType     string             `json:"subscription_type" binding:"omitempty,oneof=standard subscription"`
-	RequiredAccountLevel *string            `json:"required_account_level"`
-	DailyLimitUSD        optionalLimitField `json:"daily_limit_usd"`
-	WeeklyLimitUSD       optionalLimitField `json:"weekly_limit_usd"`
-	MonthlyLimitUSD      optionalLimitField `json:"monthly_limit_usd"`
+	Name                     string             `json:"name"`
+	Description              string             `json:"description"`
+	Platform                 string             `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity grok"`
+	RateMultiplier           *float64           `json:"rate_multiplier"`
+	NewUserRateEnabled       *bool              `json:"new_user_rate_enabled"`
+	NewUserRateMultiplier    *float64           `json:"new_user_rate_multiplier"`
+	NewUserRateWindowSeconds *int               `json:"new_user_rate_window_seconds"`
+	NewUserRateQuotaUSD      *float64           `json:"new_user_rate_quota_usd"`
+	IsExclusive              *bool              `json:"is_exclusive"`
+	Status                   string             `json:"status" binding:"omitempty,oneof=active inactive"`
+	SubscriptionType         string             `json:"subscription_type" binding:"omitempty,oneof=standard subscription"`
+	RequiredAccountLevel     *string            `json:"required_account_level"`
+	DailyLimitUSD            optionalLimitField `json:"daily_limit_usd"`
+	WeeklyLimitUSD           optionalLimitField `json:"weekly_limit_usd"`
+	MonthlyLimitUSD          optionalLimitField `json:"monthly_limit_usd"`
 	// 图片生成计费配置（antigravity 和 gemini 平台使用，负数表示清除配置）
 	AllowImageGeneration            *bool    `json:"allow_image_generation"`
 	ImageRateIndependent            *bool    `json:"image_rate_independent"`
@@ -158,6 +172,12 @@ type UpdateGroupRequest struct {
 	ImagePrice1K                    *float64 `json:"image_price_1k"`
 	ImagePrice2K                    *float64 `json:"image_price_2k"`
 	ImagePrice4K                    *float64 `json:"image_price_4k"`
+	VideoRateIndependent            *bool    `json:"video_rate_independent"`
+	VideoRateMultiplier             *float64 `json:"video_rate_multiplier"`
+	VideoPrice480P                  *float64 `json:"video_price_480p"`
+	VideoPrice720P                  *float64 `json:"video_price_720p"`
+	VideoPrice1080P                 *float64 `json:"video_price_1080p"`
+	WebSearchPricePerCall           *float64 `json:"web_search_price_per_call"`
 	ClaudeCodeOnly                  *bool    `json:"claude_code_only"`
 	FallbackGroupID                 *int64   `json:"fallback_group_id"`
 	FallbackGroupIDOnInvalidRequest *int64   `json:"fallback_group_id_on_invalid_request"`
@@ -281,6 +301,10 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		Description:                     req.Description,
 		Platform:                        req.Platform,
 		RateMultiplier:                  req.RateMultiplier,
+		NewUserRateEnabled:              req.NewUserRateEnabled,
+		NewUserRateMultiplier:           req.NewUserRateMultiplier,
+		NewUserRateWindowSeconds:        req.NewUserRateWindowSeconds,
+		NewUserRateQuotaUSD:             req.NewUserRateQuotaUSD,
 		IsExclusive:                     req.IsExclusive,
 		SubscriptionType:                req.SubscriptionType,
 		RequiredAccountLevel:            req.RequiredAccountLevel,
@@ -293,6 +317,12 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		ImagePrice1K:                    req.ImagePrice1K,
 		ImagePrice2K:                    req.ImagePrice2K,
 		ImagePrice4K:                    req.ImagePrice4K,
+		VideoRateIndependent:            req.VideoRateIndependent,
+		VideoRateMultiplier:             req.VideoRateMultiplier,
+		VideoPrice480P:                  req.VideoPrice480P,
+		VideoPrice720P:                  req.VideoPrice720P,
+		VideoPrice1080P:                 req.VideoPrice1080P,
+		WebSearchPricePerCall:           req.WebSearchPricePerCall,
 		ClaudeCodeOnly:                  req.ClaudeCodeOnly,
 		FallbackGroupID:                 req.FallbackGroupID,
 		FallbackGroupIDOnInvalidRequest: req.FallbackGroupIDOnInvalidRequest,
@@ -336,19 +366,32 @@ func (h *GroupHandler) Update(c *gin.Context) {
 		Description:                     req.Description,
 		Platform:                        req.Platform,
 		RateMultiplier:                  req.RateMultiplier,
+		NewUserRateEnabled:              req.NewUserRateEnabled,
+		NewUserRateMultiplier:           req.NewUserRateMultiplier,
+		NewUserRateWindowSeconds:        req.NewUserRateWindowSeconds,
+		NewUserRateQuotaUSD:             req.NewUserRateQuotaUSD,
 		IsExclusive:                     req.IsExclusive,
 		Status:                          req.Status,
 		SubscriptionType:                req.SubscriptionType,
 		RequiredAccountLevel:            req.RequiredAccountLevel,
 		DailyLimitUSD:                   req.DailyLimitUSD.ToServiceInput(),
+		DailyLimitUSDProvided:           req.DailyLimitUSD.Provided(),
 		WeeklyLimitUSD:                  req.WeeklyLimitUSD.ToServiceInput(),
+		WeeklyLimitUSDProvided:          req.WeeklyLimitUSD.Provided(),
 		MonthlyLimitUSD:                 req.MonthlyLimitUSD.ToServiceInput(),
+		MonthlyLimitUSDProvided:         req.MonthlyLimitUSD.Provided(),
 		AllowImageGeneration:            req.AllowImageGeneration,
 		ImageRateIndependent:            req.ImageRateIndependent,
 		ImageRateMultiplier:             req.ImageRateMultiplier,
 		ImagePrice1K:                    req.ImagePrice1K,
 		ImagePrice2K:                    req.ImagePrice2K,
 		ImagePrice4K:                    req.ImagePrice4K,
+		VideoRateIndependent:            req.VideoRateIndependent,
+		VideoRateMultiplier:             req.VideoRateMultiplier,
+		VideoPrice480P:                  req.VideoPrice480P,
+		VideoPrice720P:                  req.VideoPrice720P,
+		VideoPrice1080P:                 req.VideoPrice1080P,
+		WebSearchPricePerCall:           req.WebSearchPricePerCall,
 		ClaudeCodeOnly:                  req.ClaudeCodeOnly,
 		FallbackGroupID:                 req.FallbackGroupID,
 		FallbackGroupIDOnInvalidRequest: req.FallbackGroupIDOnInvalidRequest,

@@ -209,6 +209,29 @@ func TestOpenAICleanRelay_CompactDoesNotInjectBodyClientMetadata(t *testing.T) {
 	require.Equal(t, state.Mapping.PromptCacheKey, gjson.GetBytes(rewritten, "prompt_cache_key").String())
 }
 
+func TestOpenAICleanRelay_RawRewriteReplacesInvalidClientMetadata(t *testing.T) {
+	ctx := context.Background()
+	cache := &stubGatewayCache{}
+	svc := &OpenAIGatewayService{
+		cache:          cache,
+		settingService: newCleanRelaySettingService(true),
+	}
+	defer func() {
+		svc.settingService = newCleanRelaySettingService(false)
+	}()
+
+	c := newCleanRelayGinContext(101, 202)
+	body := []byte(`{"model":"gpt-5.1","prompt_cache_key":"client-cache","client_metadata":"bad","input":[{"type":"input_text","text":"hello"}]}`)
+
+	rewritten, state, changed, err := svc.applyOpenAICleanRelayToRawBody(ctx, c, newCleanRelayOAuthAccount(303), body, body)
+
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.NotNil(t, state)
+	require.Equal(t, state.Mapping.InstallationID, gjson.GetBytes(rewritten, "client_metadata.x-codex-installation-id").String())
+	require.Equal(t, state.Mapping.PromptCacheKey, gjson.GetBytes(rewritten, "prompt_cache_key").String())
+}
+
 func TestOpenAICleanRelay_PreselectsCachedAccountBeforeScheduler(t *testing.T) {
 	ctx := context.Background()
 	groupID := int64(202)

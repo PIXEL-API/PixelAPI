@@ -1311,7 +1311,19 @@
 
       <div v-if="canManageProxy">
         <label class="input-label">{{ t('admin.accounts.proxy') }}</label>
-        <ProxySelector v-model="form.proxy_id" :proxies="proxies" :hide-endpoint="hideProxyEndpoint" />
+        <ProxySelector
+          v-model="form.proxy_id"
+          :proxies="proxies"
+          :allow-empty="!userAccountProxyRequired"
+          :can-test="!isUserScope"
+          :hide-endpoint="hideProxyEndpoint"
+          disable-full
+        />
+        <p v-if="isUserScope" class="input-hint">
+          {{ userAccountProxyRequired
+            ? t('userAccounts.proxyRequiredReplaceOnly')
+            : t('userAccounts.proxyOptionalEditHint') }}
+        </p>
       </div>
 
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -1398,6 +1410,26 @@
             />
           </button>
         </div>
+      </div>
+
+      <!-- OpenAI OAuth subscription tier manual override -->
+      <div
+        v-if="!isUserScope && account?.platform === 'openai' && account?.type === 'oauth'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <label class="input-label" for="openai-plan-type-override">
+          {{ t('admin.accounts.openai.planType') }}
+        </label>
+        <input
+          id="openai-plan-type-override"
+          v-model.trim="editPlanType"
+          data-testid="openai-plan-type-override"
+          type="text"
+          class="input w-full"
+          :placeholder="t('admin.accounts.openai.planTypePlaceholder')"
+          autocomplete="off"
+        />
+        <p class="input-hint">{{ t('admin.accounts.openai.planTypeDesc') }}</p>
       </div>
 
       <!-- OpenAI WS Mode 三态（off/ctx_pool/passthrough） -->
@@ -2230,6 +2262,7 @@
 import { ref, reactive, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
+import { useAdminSettingsStore } from '@/stores/adminSettings'
 import { useAuthStore } from '@/stores/auth'
 import { adminAPI } from '@/api/admin'
 import { accountsAPI } from '@/api/accounts'
@@ -2244,7 +2277,11 @@ import ProxySelector from '@/components/common/ProxySelector.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
-import { applyInterceptWarmup } from '@/components/account/credentialsBuilder'
+import {
+  applyInterceptWarmup,
+  applyPlanType,
+  readPlanType
+} from '@/components/account/credentialsBuilder'
 import {
   PERSONAL_ACCOUNT_DEFAULT_AUTO_PAUSE_ON_EXPIRED,
   PERSONAL_ACCOUNT_MAX_CONCURRENCY,
@@ -2262,6 +2299,7 @@ import {
 import { formatDateTime, formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
 import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
+import { openAIAccountLevelLabel, openAIAccountLevelOptions, selectableOpenAIAccountLevels } from '@/utils/openaiAccountLevels'
 import {
   OPENAI_WS_MODE_CTX_POOL,
   OPENAI_WS_MODE_OFF,
@@ -2298,6 +2336,7 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const appStore = useAppStore()
 const authStore = useAuthStore()
+const adminSettingsStore = useAdminSettingsStore()
 const accountScope = computed(() => props.accountScope ?? 'admin')
 const isUserScope = computed(() => accountScope.value === 'user')
 const isAccountShareModeOnly = computed(() => {
@@ -2307,7 +2346,20 @@ const isAccountShareModeOnly = computed(() => {
     account.extra?.account_share_mode === true ||
     account.extra?.account_share_mode === 'true'
 })
-const canManageProxy = computed(() => !isUserScope.value && props.allowProxy !== false)
+const userAccountProxyRequired = computed(() => {
+  if (!isUserScope.value || !props.account) return false
+  if (props.account.platform === 'openai') {
+    return selectableOpenAIAccountLevels(appStore.cachedPublicSettings?.openai_account_levels)
+      .some(level => level.key === props.account?.account_level && level.requires_proxy_login)
+  }
+  return props.account.platform === 'anthropic' ||
+    props.account.platform === 'gemini' ||
+    props.account.platform === 'antigravity' ||
+    props.account.platform === 'grok'
+})
+const canManageProxy = computed(() =>
+  props.allowProxy !== false && (!isUserScope.value || !isAccountShareModeOnly.value)
+)
 const canManageBillingRate = computed(() => !isUserScope.value && props.allowBillingRate !== false)
 const hideProxyEndpoint = computed(() => props.hideProxyEndpoint === true)
 
@@ -2413,6 +2465,8 @@ const customBaseUrl = ref('')
 
 // OpenAI 自动透传开关（OAuth/API Key）
 const openaiPassthroughEnabled = ref(false)
+// credentials.plan_type manual override; empty means remove override and resume auto-detection.
+const editPlanType = ref('')
 const openAICompactMode = ref<OpenAICompactMode>('auto')
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
@@ -2558,17 +2612,21 @@ const form = reactive({
 })
 
 const accountLevelLabel = computed(() => {
-  const level = form.account_level || 'unknown'
-  return t(`admin.accounts.accountLevel.${level}`)
+  return openAIAccountLevelLabel(form.account_level || 'unknown', openAIAccountLevelConfigs.value)
 })
 
-const accountLevelOptions = computed(() => [
-  { value: 'unknown', label: t('admin.accounts.accountLevel.unknown') },
-  { value: 'free', label: t('admin.accounts.accountLevel.free') },
-  { value: 'plus', label: t('admin.accounts.accountLevel.plus') },
-  { value: 'pro', label: t('admin.accounts.accountLevel.pro') },
-  { value: 'team', label: t('admin.accounts.accountLevel.team') }
-])
+const openAIAccountLevelConfigs = computed(() =>
+  isUserScope.value
+    ? appStore.cachedPublicSettings?.openai_account_levels
+    : adminSettingsStore.openAIAccountLevels
+)
+
+const accountLevelOptions = computed(() =>
+  openAIAccountLevelOptions(openAIAccountLevelConfigs.value, {
+    includeUnknown: true,
+    unknownLabel: t('admin.accounts.accountLevel.unknown')
+  })
+)
 
 const userLoadFactorCreditsBalance = computed(() => Math.max(0, Number(authStore.user?.load_factor_credits_balance || 0)))
 const userLoadFactorPaidCeiling = computed(() => {
@@ -2728,6 +2786,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 
   // Load OpenAI passthrough toggle (OpenAI OAuth/API Key)
   openaiPassthroughEnabled.value = false
+  editPlanType.value = ''
   openAICompactMode.value = 'auto'
   openAICompactModelMappings.value = []
   openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
@@ -2738,6 +2797,9 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   anthropicPassthroughEnabled.value = false
   webSearchEmulationMode.value = 'default'
   if (newAccount.platform === 'openai' && (newAccount.type === 'oauth' || newAccount.type === 'apikey')) {
+    if (!isUserScope.value && newAccount.type === 'oauth') {
+      editPlanType.value = readPlanType(credentials)
+    }
     if (isUserScope.value) {
       openaiPassthroughEnabled.value = false
       openAICompactMode.value = PERSONAL_ACCOUNT_DEFAULT_OPENAI_COMPACT_MODE
@@ -3465,7 +3527,6 @@ const sanitizeUpdatePayload = (payload: Record<string, unknown>) => {
   if (isUserScope.value) {
     delete next.group_ids
     delete next.status
-    delete next.proxy_id
     next.concurrency = normalizePersonalAccountConcurrency(next.concurrency)
     next.load_factor = normalizePersonalAccountLoadFactor(next.load_factor)
     if (isAccountShareModeOnly.value) {
@@ -3525,6 +3586,10 @@ const handleSubmit = async () => {
   }
   if (isUserScope.value && userLoadFactorCreditsInsufficient.value) {
     appStore.showError(t('userAccounts.loadFactorCreditsInsufficient'))
+    return
+  }
+  if (isUserScope.value && userAccountProxyRequired.value && (!form.proxy_id || form.proxy_id <= 0)) {
+    appStore.showError(t('userAccounts.proxyRequiredReplaceOnly'))
     return
   }
 
@@ -3764,6 +3829,7 @@ const handleSubmit = async () => {
       } else {
         delete newCredentials.compact_model_mapping
       }
+      applyPlanType(newCredentials, editPlanType.value)
 
       updatePayload.credentials = newCredentials
     }

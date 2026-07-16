@@ -39,6 +39,12 @@ type openAIWSClientConn interface {
 	Close() error
 }
 
+// openAIWSIdlePingCapable is separate because some WebSocket clients consume
+// pong control frames only while a reader is active.
+type openAIWSIdlePingCapable interface {
+	SupportsIdlePingWithoutReader() bool
+}
+
 // openAIWSClientDialer 抽象 WS 建连器。
 type openAIWSClientDialer interface {
 	Dial(ctx context.Context, wsURL string, headers http.Header, proxyURL string) (openAIWSClientConn, int, http.Header, error)
@@ -59,6 +65,27 @@ type coderOpenAIWSClientDialer struct {
 	proxyClients map[string]*openAIWSProxyClientEntry
 	proxyHits    atomic.Int64
 	proxyMisses  atomic.Int64
+}
+
+// openAIWSHandshakeError 保留有上限且不会进入 Error() 文本的握手响应体，
+// 供认证恢复逻辑区分明确的 task 失效与普通 401。
+type openAIWSHandshakeError struct {
+	Body []byte
+	Err  error
+}
+
+func (e *openAIWSHandshakeError) Error() string {
+	if e == nil || e.Err == nil {
+		return "openai ws handshake failed"
+	}
+	return e.Err.Error()
+}
+
+func (e *openAIWSHandshakeError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
 }
 
 type openAIWSProxyClientEntry struct {
@@ -97,7 +124,17 @@ func (d *coderOpenAIWSClientDialer) Dial(
 			status = resp.StatusCode
 			respHeaders = cloneHeader(resp.Header)
 		}
-		return nil, status, respHeaders, err
+		var body []byte
+		var bodyErr error
+		var closeErr error
+		if resp != nil && resp.Body != nil {
+			body, bodyErr = readUpstreamResponseBodyLimited(resp.Body, 8<<10)
+			closeErr = resp.Body.Close()
+		}
+		return nil, status, respHeaders, &openAIWSHandshakeError{
+			Body: body,
+			Err:  errors.Join(err, bodyErr, closeErr),
+		}
 	}
 	// coder/websocket 默认单消息读取上限为 32KB，Codex WS 事件（如 rate_limits/大 delta）
 	// 可能超过该阈值，需显式提高上限，避免本地 read_fail(message too big)。
@@ -299,6 +336,10 @@ func (c *coderOpenAIWSClientConn) Ping(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	return c.conn.Ping(ctx)
+}
+
+func (*coderOpenAIWSClientConn) SupportsIdlePingWithoutReader() bool {
+	return false
 }
 
 func (c *coderOpenAIWSClientConn) Close() error {

@@ -156,6 +156,10 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	}
 	logger.L().Debug("openai chat_completions: model mapping applied", logFields...)
 
+	if account.Platform == PlatformGrok {
+		return s.forwardGrokChatCompletions(ctx, c, account, responsesBody, originalModel, billingModel, upstreamModel, clientStream, includeUsage, startTime)
+	}
+
 	if account.Type == AccountTypeOAuth {
 		var reqBody map[string]any
 		if err := json.Unmarshal(responsesBody, &reqBody); err != nil {
@@ -195,10 +199,13 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	}
 
 	// 6. Build upstream request
-	upstreamReq, err := s.buildUpstreamRequest(ctx, c, account, responsesBody, token, true, promptCacheKey, false)
+	upstreamCtx, releaseUpstreamCtx := s.detachOpenAIUpstreamContext(ctx)
+	upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, true, promptCacheKey, false)
+	releaseUpstreamCtx()
 	if err != nil {
 		return nil, fmt.Errorf("build upstream request: %w", err)
 	}
+	expectedAgentIdentityTaskID := strings.TrimSpace(account.GetCredential("task_id"))
 
 	if promptCacheKey != "" {
 		upstreamReq.Header.Set("session_id", generateSessionUUID(promptCacheKey))
@@ -209,6 +216,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
+	upstreamReq = upstreamReq.WithContext(WithHTTPUpstreamProfile(upstreamReq.Context(), HTTPUpstreamProfileOpenAI))
 	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 	if err != nil {
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
@@ -230,6 +238,15 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 		_ = resp.Body.Close()
+		if account.IsOpenAIAgentIdentity() && !agentIdentityTaskRecoveryWasTried(ctx) &&
+			isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
+			if err := s.recoverAgentIdentityTask(ctx, account, expectedAgentIdentityTaskID); err != nil {
+				return nil, fmt.Errorf("recover Agent Identity task: %w", err)
+			}
+			retryCtx := withAgentIdentitySensitiveValues(markAgentIdentityTaskRecoveryTried(ctx), expectedAgentIdentityTaskID)
+			return s.ForwardAsChatCompletions(retryCtx, c, account, body, promptCacheKey, defaultMappedModel)
+		}
+		respBody = s.redactAgentIdentitySensitiveBody(ctx, account, respBody)
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
 
 		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
@@ -269,9 +286,9 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	var result *OpenAIForwardResult
 	var handleErr error
 	if clientStream {
-		result, handleErr = s.handleChatStreamingResponse(resp, c, originalModel, billingModel, upstreamModel, includeUsage, startTime)
+		result, handleErr = s.handleChatStreamingResponse(ctx, resp, c, account, originalModel, billingModel, upstreamModel, includeUsage, startTime)
 	} else {
-		result, handleErr = s.handleChatBufferedStreamingResponse(resp, c, originalModel, billingModel, upstreamModel, startTime)
+		result, handleErr = s.handleChatBufferedStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime)
 	}
 
 	// Propagate ServiceTier and ReasoningEffort to result for billing
@@ -353,6 +370,7 @@ func (s *OpenAIGatewayService) handleChatCompletionsErrorResponse(
 func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 	resp *http.Response,
 	c *gin.Context,
+	account *Account,
 	originalModel string,
 	billingModel string,
 	upstreamModel string,
@@ -395,13 +413,7 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 			event.Response != nil {
 			finalResponse = event.Response
 			if event.Response.Usage != nil {
-				usage = OpenAIUsage{
-					InputTokens:  event.Response.Usage.InputTokens,
-					OutputTokens: event.Response.Usage.OutputTokens,
-				}
-				if event.Response.Usage.InputTokensDetails != nil {
-					usage.CacheReadInputTokens = event.Response.Usage.InputTokensDetails.CachedTokens
-				}
+				usage = copyOpenAIUsageFromResponsesUsage(event.Response.Usage)
 			}
 		}
 	}
@@ -432,6 +444,27 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 		return resultForOpenAICompatFailure(requestID, usage, originalModel, billingModel, upstreamModel, finalResponse.ServiceTier, false, startTime),
 			fmt.Errorf("openai cyber_policy: %s", clientMsg)
 	}
+	if strings.EqualFold(strings.TrimSpace(finalResponse.Status), "failed") {
+		payload, _ := json.Marshal(gin.H{"type": "response.failed", "response": finalResponse})
+		message := ""
+		if finalResponse.Error != nil {
+			message = strings.TrimSpace(finalResponse.Error.Message)
+		}
+		if openAIStreamFailedEventShouldFailover(payload, message) {
+			return nil, s.newOpenAIStreamFailoverError(c, account, false, requestID, payload, message)
+		}
+		message = s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "http_error", payload, message)
+		if status, errType, errMsg, matched := applyOpenAIStreamFailedErrorPassthroughRule(c, account.Platform, payload, message); matched {
+			if errMsg == "" {
+				errMsg = message
+			}
+			MarkResponseCommitted(c)
+			writeChatCompletionsError(c, status, errType, errMsg)
+			return nil, fmt.Errorf("upstream response failed (passthrough): %s", errMsg)
+		}
+		writeChatCompletionsError(c, http.StatusBadGateway, "upstream_error", message)
+		return nil, fmt.Errorf("upstream response failed: %s", message)
+	}
 
 	// When the terminal event has an empty output array, reconstruct from
 	// accumulated delta events so the client receives the full content.
@@ -459,8 +492,10 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 // handleChatStreamingResponse reads Responses SSE events from upstream,
 // converts each to Chat Completions SSE chunks, and writes them to the client.
 func (s *OpenAIGatewayService) handleChatStreamingResponse(
+	ctx context.Context,
 	resp *http.Response,
 	c *gin.Context,
+	account *Account,
 	originalModel string,
 	billingModel string,
 	upstreamModel string,
@@ -476,17 +511,29 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	c.Writer.Header().Set("Cache-Control", "no-cache")
 	c.Writer.Header().Set("Connection", "keep-alive")
 	c.Writer.Header().Set("X-Accel-Buffering", "no")
-	c.Writer.WriteHeader(http.StatusOK)
 
 	state := apicompat.NewResponsesEventToChatState()
 	state.Model = originalModel
 	state.IncludeUsage = includeUsage
 
 	var usage OpenAIUsage
+	usageComplete := false
 	var firstTokenMs *int
 	var responseServiceTier string
 	firstChunk := true
 	var terminalErr error
+	clientDisconnected := false
+	var cancelDisconnectedDrain context.CancelFunc
+	defer func() {
+		if cancelDisconnectedDrain != nil {
+			cancelDisconnectedDrain()
+		}
+	}()
+	startDisconnectedDrain := func() {
+		if cancelDisconnectedDrain == nil {
+			cancelDisconnectedDrain = s.startDisconnectedStreamDrainDeadline(ctx, resp.Body, requestID)
+		}
+	}
 
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
@@ -531,15 +578,11 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			if event.Response.ServiceTier != "" {
 				responseServiceTier = event.Response.ServiceTier
 			}
-			usage = OpenAIUsage{
-				InputTokens:  event.Response.Usage.InputTokens,
-				OutputTokens: event.Response.Usage.OutputTokens,
-			}
-			if event.Response.Usage.InputTokensDetails != nil {
-				usage.CacheReadInputTokens = event.Response.Usage.InputTokensDetails.CachedTokens
-			}
+			usageComplete = true
+			usage = copyOpenAIUsageFromResponsesUsage(event.Response.Usage)
 		}
 		if event.Type == "response.failed" {
+			payloadBytes := []byte(payload)
 			if hit, _, msg := detectOpenAICyberPolicy([]byte(payload)); hit {
 				clientMsg := openAICyberPolicyClientMessage(msg)
 				MarkOpsCyberPolicy(c, CyberPolicyMark{
@@ -550,37 +593,77 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 					UpstreamOutTok: usage.OutputTokens,
 				})
 				terminalErr = fmt.Errorf("openai cyber_policy: %s", clientMsg)
-				if writeChatCompletionsStreamError(c, "invalid_request_error", clientMsg) {
-					return true
+				if !clientDisconnected {
+					if !c.Writer.Written() {
+						writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", clientMsg)
+						clientDisconnected = true
+					} else if writeChatCompletionsStreamError(c, "invalid_request_error", clientMsg) {
+						clientDisconnected = true
+						startDisconnectedDrain()
+					}
 				}
 				return true
 			}
+			message := extractOpenAISSEErrorMessage(payloadBytes)
+			if !c.Writer.Written() && openAIStreamFailedEventShouldFailover(payloadBytes, message) {
+				terminalErr = s.newOpenAIStreamFailoverError(c, account, false, requestID, payloadBytes, message)
+				return true
+			}
+			message = s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "http_error", payloadBytes, message)
+			errStatus, errType, errMsg := http.StatusBadGateway, "upstream_error", message
+			if status, mappedType, mappedMsg, matched := applyOpenAIStreamFailedErrorPassthroughRule(c, account.Platform, payloadBytes, message); matched {
+				if mappedMsg == "" {
+					mappedMsg = errMsg
+				}
+				errStatus, errType, errMsg = status, mappedType, mappedMsg
+				MarkResponseCommitted(c)
+			}
+			if !clientDisconnected {
+				if c.Writer.Written() {
+					_ = writeChatCompletionsStreamError(c, errType, errMsg)
+				} else {
+					writeChatCompletionsError(c, errStatus, errType, errMsg)
+				}
+			}
+			terminalErr = fmt.Errorf("upstream response failed: %s", errMsg)
+			return true
 		}
 
 		chunks := apicompat.ResponsesEventToChatChunks(&event, state)
-		for _, chunk := range chunks {
-			sse, err := apicompat.ChatChunkToSSE(chunk)
-			if err != nil {
-				logger.L().Warn("openai chat_completions stream: failed to marshal chunk",
-					zap.Error(err),
-					zap.String("request_id", requestID),
-				)
-				continue
-			}
-			if _, err := fmt.Fprint(c.Writer, sse); err != nil {
-				logger.L().Info("openai chat_completions stream: client disconnected",
-					zap.String("request_id", requestID),
-				)
-				return true
+		if !clientDisconnected {
+			for _, chunk := range chunks {
+				sse, err := apicompat.ChatChunkToSSE(chunk)
+				if err != nil {
+					logger.L().Warn("openai chat_completions stream: failed to marshal chunk",
+						zap.Error(err),
+						zap.String("request_id", requestID),
+					)
+					continue
+				}
+				if _, err := fmt.Fprint(c.Writer, sse); err != nil {
+					clientDisconnected = true
+					startDisconnectedDrain()
+					s.logClientDisconnectDrainDecision(ctx, "openai chat_completions stream", requestID, "write_chunk")
+					break
+				}
 			}
 		}
-		if len(chunks) > 0 {
+		if !clientDisconnected && len(chunks) > 0 {
 			c.Writer.Flush()
 		}
 		return false
 	}
 
 	finalizeStream := func() (*OpenAIForwardResult, error) {
+		if clientDisconnected {
+			if err := s.clientDisconnectIncompleteUsageError(ctx); err != nil {
+				return resultWithUsage(), err
+			}
+			if !usageComplete {
+				return resultWithUsage(), errors.New("stream usage incomplete after disconnect: missing terminal usage")
+			}
+			return resultWithUsage(), nil
+		}
 		if finalChunks := apicompat.FinalizeResponsesChatStream(state); len(finalChunks) > 0 {
 			for _, chunk := range finalChunks {
 				sse, err := apicompat.ChatChunkToSSE(chunk)
@@ -680,15 +763,18 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			}
 
 		case <-keepaliveTicker.C:
+			if clientDisconnected {
+				continue
+			}
 			if time.Since(lastDataAt) < keepaliveInterval {
 				continue
 			}
 			// Send SSE comment as keepalive
 			if _, err := fmt.Fprint(c.Writer, ":\n\n"); err != nil {
-				logger.L().Info("openai chat_completions stream: client disconnected during keepalive",
-					zap.String("request_id", requestID),
-				)
-				return resultWithUsage(), nil
+				clientDisconnected = true
+				startDisconnectedDrain()
+				s.logClientDisconnectDrainDecision(ctx, "openai chat_completions stream", requestID, "keepalive")
+				continue
 			}
 			c.Writer.Flush()
 		}

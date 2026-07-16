@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -72,11 +73,85 @@ func (r *userSubscriptionRepository) GetByID(ctx context.Context, id int64) (*se
 	return userSubscriptionEntityToService(m), nil
 }
 
+func (r *userSubscriptionRepository) GetByIDForUpdate(ctx context.Context, id int64) (*service.UserSubscription, error) {
+	if dbent.TxFromContext(ctx) == nil {
+		return nil, errors.New("get subscription for update requires a transaction")
+	}
+
+	client := clientFromContext(ctx, r.client)
+	result, err := client.ExecContext(ctx, `
+		UPDATE user_subscriptions
+		SET updated_at = updated_at
+		WHERE id = $1 AND deleted_at IS NULL
+	`, id)
+	if err != nil {
+		return nil, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if affected == 0 {
+		return nil, service.ErrSubscriptionNotFound
+	}
+
+	m, err := client.UserSubscription.Query().Where(usersubscription.IDEQ(id)).Only(ctx)
+	if err != nil {
+		return nil, translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	}
+	return userSubscriptionEntityToService(m), nil
+}
+
 func (r *userSubscriptionRepository) GetByUserIDAndGroupID(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
 	client := clientFromContext(ctx, r.client)
 	m, err := client.UserSubscription.Query().
 		Where(usersubscription.UserIDEQ(userID), usersubscription.GroupIDEQ(groupID)).
 		WithGroup().
+		Only(ctx)
+	if err != nil {
+		return nil, translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	}
+	return userSubscriptionEntityToService(m), nil
+}
+
+func (r *userSubscriptionRepository) GetByUserIDAndGroupIDForUpdate(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
+	if dbent.TxFromContext(ctx) == nil {
+		return nil, errors.New("get user subscription for update requires a transaction")
+	}
+
+	client := clientFromContext(ctx, r.client)
+	// Lock the parent user first. Unlike a subscription-row lock, this also
+	// serializes concurrent creates when no user_subscriptions row exists yet.
+	// A conditional no-op UPDATE obtains a transaction-scoped write lock on
+	// both PostgreSQL and SQLite without changing updated_at.
+	userResult, err := client.ExecContext(ctx, `
+		UPDATE users
+		SET updated_at = updated_at
+		WHERE id = $1 AND deleted_at IS NULL
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	userAffected, err := userResult.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if userAffected == 0 {
+		return nil, service.ErrUserNotFound
+	}
+
+	// If the subscription already exists, lock it as well so ID-based admin
+	// adjustments and user/group-based redemptions cannot overwrite each other.
+	if _, err := client.ExecContext(ctx, `
+		UPDATE user_subscriptions
+		SET updated_at = updated_at
+		WHERE user_id = $1 AND group_id = $2 AND deleted_at IS NULL
+	`, userID, groupID); err != nil {
+		return nil, err
+	}
+
+	m, err := client.UserSubscription.Query().
+		Where(usersubscription.UserIDEQ(userID), usersubscription.GroupIDEQ(groupID)).
 		Only(ctx)
 	if err != nil {
 		return nil, translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
@@ -301,39 +376,118 @@ func (r *userSubscriptionRepository) UpdateNotes(ctx context.Context, subscripti
 
 func (r *userSubscriptionRepository) ActivateWindows(ctx context.Context, id int64, start time.Time) error {
 	client := clientFromContext(ctx, r.client)
-	_, err := client.UserSubscription.UpdateOneID(id).
-		SetDailyWindowStart(start).
-		SetWeeklyWindowStart(start).
-		SetMonthlyWindowStart(start).
-		Save(ctx)
+	const updateSQL = `
+		UPDATE user_subscriptions
+		SET
+			daily_window_start = COALESCE(daily_window_start, $1),
+			weekly_window_start = COALESCE(weekly_window_start, $1),
+			monthly_window_start = COALESCE(monthly_window_start, $1),
+			updated_at = NOW()
+		WHERE id = $2
+			AND deleted_at IS NULL
+			AND (
+				daily_window_start IS NULL
+				OR weekly_window_start IS NULL
+				OR monthly_window_start IS NULL
+			)
+	`
+	result, err := client.ExecContext(ctx, updateSQL, start, id)
+	if err != nil {
+		return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected > 0 {
+		return nil
+	}
+
+	exists, err := client.UserSubscription.Query().Where(usersubscription.IDEQ(id)).Exist(ctx)
+	if err != nil {
+		return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	}
+	if !exists {
+		return service.ErrSubscriptionNotFound
+	}
+	// Another request may already have initialized all missing windows.
+	return nil
+}
+
+func (r *userSubscriptionRepository) ResetUsageWindows(ctx context.Context, id int64, resetDaily, resetWeekly, resetMonthly bool, newWindowStart time.Time) error {
+	client := clientFromContext(ctx, r.client)
+	update := client.UserSubscription.UpdateOneID(id)
+	if resetDaily {
+		update.SetDailyUsageUsd(0).SetDailyWindowStart(newWindowStart)
+	}
+	if resetWeekly {
+		update.SetWeeklyUsageUsd(0).SetWeeklyWindowStart(newWindowStart)
+	}
+	if resetMonthly {
+		update.SetMonthlyUsageUsd(0).SetMonthlyWindowStart(newWindowStart)
+	}
+	_, err := update.Save(ctx)
 	return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
 }
 
-func (r *userSubscriptionRepository) ResetDailyUsage(ctx context.Context, id int64, newWindowStart time.Time) error {
+func (r *userSubscriptionRepository) ResetDailyUsage(ctx context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time) error {
 	client := clientFromContext(ctx, r.client)
-	_, err := client.UserSubscription.UpdateOneID(id).
-		SetDailyUsageUsd(0).
+	query := client.UserSubscription.Update().Where(usersubscription.IDEQ(id))
+	if expectedWindowStart == nil {
+		query = query.Where(usersubscription.DailyWindowStartIsNil())
+	} else {
+		query = query.Where(usersubscription.DailyWindowStartEQ(*expectedWindowStart))
+	}
+	n, err := query.SetDailyUsageUsd(0).
 		SetDailyWindowStart(newWindowStart).
 		Save(ctx)
-	return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	return r.translateConditionalWindowReset(ctx, client, id, n, err)
 }
 
-func (r *userSubscriptionRepository) ResetWeeklyUsage(ctx context.Context, id int64, newWindowStart time.Time) error {
+func (r *userSubscriptionRepository) ResetWeeklyUsage(ctx context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time) error {
 	client := clientFromContext(ctx, r.client)
-	_, err := client.UserSubscription.UpdateOneID(id).
-		SetWeeklyUsageUsd(0).
+	query := client.UserSubscription.Update().Where(usersubscription.IDEQ(id))
+	if expectedWindowStart == nil {
+		query = query.Where(usersubscription.WeeklyWindowStartIsNil())
+	} else {
+		query = query.Where(usersubscription.WeeklyWindowStartEQ(*expectedWindowStart))
+	}
+	n, err := query.SetWeeklyUsageUsd(0).
 		SetWeeklyWindowStart(newWindowStart).
 		Save(ctx)
-	return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	return r.translateConditionalWindowReset(ctx, client, id, n, err)
 }
 
-func (r *userSubscriptionRepository) ResetMonthlyUsage(ctx context.Context, id int64, newWindowStart time.Time) error {
+func (r *userSubscriptionRepository) ResetMonthlyUsage(ctx context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time) error {
 	client := clientFromContext(ctx, r.client)
-	_, err := client.UserSubscription.UpdateOneID(id).
-		SetMonthlyUsageUsd(0).
+	query := client.UserSubscription.Update().Where(usersubscription.IDEQ(id))
+	if expectedWindowStart == nil {
+		query = query.Where(usersubscription.MonthlyWindowStartIsNil())
+	} else {
+		query = query.Where(usersubscription.MonthlyWindowStartEQ(*expectedWindowStart))
+	}
+	n, err := query.SetMonthlyUsageUsd(0).
 		SetMonthlyWindowStart(newWindowStart).
 		Save(ctx)
-	return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	return r.translateConditionalWindowReset(ctx, client, id, n, err)
+}
+
+func (r *userSubscriptionRepository) translateConditionalWindowReset(ctx context.Context, client *dbent.Client, id int64, affected int, err error) error {
+	if err != nil {
+		return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	}
+	if affected > 0 {
+		return nil
+	}
+
+	exists, err := client.UserSubscription.Query().Where(usersubscription.IDEQ(id)).Exist(ctx)
+	if err != nil {
+		return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	}
+	if !exists {
+		return service.ErrSubscriptionNotFound
+	}
+	return nil
 }
 
 // IncrementUsage 原子性地累加订阅用量。

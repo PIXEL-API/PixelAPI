@@ -31,6 +31,7 @@ type apiKeyRepoStub struct {
 	updateLastUsed func(ctx context.Context, id int64, usedAt time.Time) error
 	touchedIDs     []int64
 	touchedUsedAts []time.Time
+	updatedKeys    []*APIKey
 }
 
 // 以下方法在本测试中不应被调用，使用 panic 确保测试失败时能快速定位问题
@@ -69,7 +70,9 @@ func (s *apiKeyRepoStub) GetByKeyForAuth(ctx context.Context, key string) (*APIK
 }
 
 func (s *apiKeyRepoStub) Update(ctx context.Context, key *APIKey) error {
-	panic("unexpected Update call")
+	clone := *key
+	s.updatedKeys = append(s.updatedKeys, &clone)
+	return nil
 }
 
 // Delete 记录被删除的 API Key ID 并返回预设的错误。
@@ -276,6 +279,95 @@ func TestApiKeyService_Delete_AccountShareBindingCheckFails(t *testing.T) {
 	require.Empty(t, repo.deletedIDs)
 	require.Empty(t, cache.invalidated)
 	require.Empty(t, cache.deleteAuthKeys)
+}
+
+func TestAPIKeyServiceUpdateBlocksAccountShareBindingBreakingChanges(t *testing.T) {
+	groupID := int64(10)
+	otherGroupID := int64(11)
+	tests := []struct {
+		name string
+		req  UpdateAPIKeyRequest
+	}{
+		{name: "group", req: UpdateAPIKeyRequest{GroupID: &otherGroupID}},
+		{name: "routes", req: UpdateAPIKeyRequest{GroupRoutes: &[]APIKeyGroupRoute{{GroupID: otherGroupID, Priority: 100, Weight: 1, Enabled: true, CooldownSeconds: 30}}}},
+		{name: "status", req: UpdateAPIKeyRequest{Status: stringPtr(StatusAPIKeyDisabled)}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &apiKeyRepoStub{apiKey: &APIKey{
+				ID: 42, UserID: 7, Key: "k", GroupID: &groupID, Status: StatusAPIKeyActive,
+				GroupRoutes: defaultAPIKeyGroupRoute(&groupID),
+			}}
+			checker := &accountShareAPIKeyBindingCheckerStub{exists: true}
+			svc := &APIKeyService{
+				apiKeyRepo:                 repo,
+				userRepo:                   &apiKeyUpdateUserRepoStub{user: &User{ID: 7}},
+				groupRepo:                  &apiKeyUpdateGroupRepoStub{group: &Group{ID: otherGroupID, Status: StatusActive, Scope: GroupScopePublic}},
+				accountShareBindingChecker: checker,
+			}
+			_, err := svc.Update(context.Background(), 42, 7, tt.req)
+			require.ErrorIs(t, err, ErrAPIKeyAccountShareBindingExists)
+			require.Empty(t, repo.updatedKeys)
+		})
+	}
+}
+
+func TestAPIKeyServiceUpdateAllowsUnrelatedChangeWithAccountShareBinding(t *testing.T) {
+	groupID := int64(10)
+	name := "renamed"
+	repo := &apiKeyRepoStub{apiKey: &APIKey{
+		ID: 42, UserID: 7, Key: "k", GroupID: &groupID, Status: StatusAPIKeyActive,
+		GroupRoutes: defaultAPIKeyGroupRoute(&groupID),
+	}}
+	checker := &accountShareAPIKeyBindingCheckerStub{exists: true}
+	svc := &APIKeyService{apiKeyRepo: repo, accountShareBindingChecker: checker}
+	updated, err := svc.Update(context.Background(), 42, 7, UpdateAPIKeyRequest{Name: &name})
+	require.NoError(t, err)
+	require.Equal(t, name, updated.Name)
+	require.Empty(t, checker.apiKeyIDs)
+	require.Len(t, repo.updatedKeys, 1)
+}
+
+func TestAPIKeyServiceUpdateDetectsInPlaceGroupRouteChanges(t *testing.T) {
+	groupID := int64(10)
+	routes := []APIKeyGroupRoute{{GroupID: groupID, Priority: 100, Weight: 2, Enabled: true, CooldownSeconds: 30}}
+	repo := &apiKeyRepoStub{apiKey: &APIKey{
+		ID: 42, UserID: 7, Key: "k", GroupID: &groupID, Status: StatusAPIKeyActive,
+		GroupRoutes: []APIKeyGroupRoute{{GroupID: groupID, Priority: 100, Weight: 1, Enabled: true, CooldownSeconds: 30}},
+	}}
+	checker := &accountShareAPIKeyBindingCheckerStub{exists: true}
+	svc := &APIKeyService{
+		apiKeyRepo:                 repo,
+		userRepo:                   &apiKeyUpdateUserRepoStub{user: &User{ID: 7}},
+		groupRepo:                  &apiKeyUpdateGroupRepoStub{group: &Group{ID: groupID, Status: StatusActive, Scope: GroupScopePublic}},
+		accountShareBindingChecker: checker,
+	}
+
+	_, err := svc.Update(context.Background(), 42, 7, UpdateAPIKeyRequest{GroupRoutes: &routes})
+	require.ErrorIs(t, err, ErrAPIKeyAccountShareBindingExists)
+	require.Empty(t, repo.updatedKeys)
+}
+
+type apiKeyUpdateUserRepoStub struct {
+	UserRepository
+	user *User
+}
+
+func (s *apiKeyUpdateUserRepoStub) GetByID(context.Context, int64) (*User, error) {
+	return s.user, nil
+}
+
+type apiKeyUpdateGroupRepoStub struct {
+	GroupRepository
+	group *Group
+}
+
+func (s *apiKeyUpdateGroupRepoStub) GetByID(context.Context, int64) (*Group, error) {
+	return s.group, nil
+}
+
+func stringPtr(value string) *string {
+	return &value
 }
 
 // TestApiKeyService_Delete_Success 测试所有者成功删除 API Key 的场景。

@@ -24,6 +24,7 @@ type usageRepoStub struct {
 	rangeCalls int32
 	rangeStart time.Time
 	rangeEnd   time.Time
+	rangeOpts  DashboardStatsRangeOptions
 	onCall     chan struct{}
 }
 
@@ -41,10 +42,11 @@ func (s *usageRepoStub) GetDashboardStats(ctx context.Context) (*usagestats.Dash
 	return s.stats, nil
 }
 
-func (s *usageRepoStub) GetDashboardStatsWithRange(ctx context.Context, start, end time.Time) (*usagestats.DashboardStats, error) {
+func (s *usageRepoStub) GetDashboardStatsWithRange(ctx context.Context, start, end time.Time, options DashboardStatsRangeOptions) (*usagestats.DashboardStats, error) {
 	atomic.AddInt32(&s.rangeCalls, 1)
 	s.rangeStart = start
 	s.rangeEnd = end
+	s.rangeOpts = options
 	if s.rangeErr != nil {
 		return nil, s.rangeErr
 	}
@@ -391,6 +393,8 @@ func TestDashboardService_AggDisabled_UsesUsageLogsFallback(t *testing.T) {
 	require.Equal(t, int32(0), atomic.LoadInt32(&repo.calls))
 	require.Equal(t, int32(1), atomic.LoadInt32(&repo.rangeCalls))
 	require.False(t, repo.rangeEnd.IsZero())
+	require.False(t, repo.rangeOpts.UseHourlyAggregates)
+	require.Zero(t, repo.rangeOpts.HourlyMaxAge)
 	require.Equal(t, truncateToDayUTC(repo.rangeEnd.AddDate(0, 0, -7)), repo.rangeStart)
 }
 
@@ -428,6 +432,8 @@ func TestDashboardService_GetDashboardStatsWithRange_UsesRangeFetcher(t *testing
 	require.Equal(t, int32(0), atomic.LoadInt32(&cache.getCalls))
 	require.Equal(t, start, repo.rangeStart)
 	require.Equal(t, end, repo.rangeEnd)
+	require.True(t, repo.rangeOpts.UseHourlyAggregates)
+	require.Equal(t, 90*24*time.Hour-time.Hour, repo.rangeOpts.HourlyMaxAge)
 	require.Equal(t, aggNow.Format(time.RFC3339), got.StatsUpdatedAt)
 	require.False(t, got.StatsStale)
 }

@@ -16,12 +16,16 @@ func TestBuildOAuthRefreshCandidatesQueryFiltersHealthyAccountsInSQL(t *testing.
 	required := []string{
 		"WITH candidates AS",
 		"NULLIF(btrim(credentials->>'expires_at'), '') AS expires_at_raw",
+		"type IN ('oauth', 'setup-token')",
+		"platform IN ('anthropic', 'openai', 'gemini', 'antigravity', 'grok')",
 		"WHEN expires_at_raw ~ '^[0-9]+$' THEN to_timestamp(expires_at_raw::double precision)",
 		"needs_go_time_parse",
 		"platform = 'openai'",
 		"rate_limit_reset_at > NOW()",
 		"platform IN ('anthropic', 'gemini')",
 		"INTERVAL '15 minutes'",
+		"platform = 'grok'",
+		"GREATEST($1::bigint, 3600) * INTERVAL '1 second'",
 		"credential_expires_at <= NOW() + ($1::bigint * INTERVAL '1 second')",
 	}
 	for _, fragment := range required {

@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
@@ -15,6 +16,8 @@ import (
 
 type accountRepoStubForBulkUpdate struct {
 	accountRepoStub
+	createdAccount   *Account
+	createErr        error
 	bulkUpdateErr    error
 	bulkUpdateIDs    []int64
 	bulkUpdateUpdate AccountBulkUpdate
@@ -46,6 +49,30 @@ type accountRepoStubForBulkUpdate struct {
 		proxyID     int64
 		privacyMode string
 	}
+}
+
+func TestAdminServiceCreateAccountRejectsUnsupportedPlatform(t *testing.T) {
+	svc := &adminServiceImpl{}
+
+	_, err := svc.CreateAccount(context.Background(), &CreateAccountInput{Platform: "unsupported"})
+
+	require.ErrorIs(t, err, ErrAccountPlatformUnsupported)
+}
+
+func (s *accountRepoStubForBulkUpdate) Create(_ context.Context, account *Account) error {
+	if s.createErr != nil {
+		return s.createErr
+	}
+	if account.ID == 0 {
+		account.ID = 1
+	}
+	clone := cloneAccountForNotice(account)
+	s.createdAccount = clone
+	if s.getByIDAccounts == nil {
+		s.getByIDAccounts = map[int64]*Account{}
+	}
+	s.getByIDAccounts[account.ID] = cloneAccountForNotice(account)
+	return nil
 }
 
 func (s *accountRepoStubForBulkUpdate) BulkUpdate(_ context.Context, ids []int64, update AccountBulkUpdate) (int64, error) {
@@ -304,6 +331,175 @@ func TestAdminService_UpdateAccount_KeepsExplicitOpenAILevelForGroupBinding(t *t
 	require.NotNil(t, repo.updatedAccount)
 	require.Equal(t, AccountLevelPro, repo.updatedAccount.AccountLevel)
 	require.Equal(t, []int64{20}, repo.boundGroupIDs[1])
+}
+
+func TestAdminService_CreateAccount_RejectsOpenAILevelMismatchBeforeCreate(t *testing.T) {
+	repo := &accountRepoStubForBulkUpdate{}
+	svc := &adminServiceImpl{
+		accountRepo: repo,
+		groupRepo: &groupRepoStubForAdmin{
+			getByID: &Group{
+				ID:                   20,
+				Name:                 "PLUS共享号池",
+				Platform:             PlatformOpenAI,
+				RequiredAccountLevel: AccountLevelPlus,
+			},
+		},
+	}
+
+	account, err := svc.CreateAccount(context.Background(), &CreateAccountInput{
+		Name:                  "free-account",
+		Platform:              PlatformOpenAI,
+		AccountLevel:          AccountLevelFree,
+		Type:                  AccountTypeOAuth,
+		Concurrency:           OpenAIPlusDefaultConcurrency,
+		GroupIDs:              []int64{20},
+		SkipMixedChannelCheck: true,
+	})
+
+	require.Nil(t, account)
+	require.Error(t, err)
+	require.True(t, infraerrors.IsBadRequest(err))
+	require.Equal(t, "ACCOUNT_GROUP_BINDING_INVALID", infraerrors.Reason(err))
+	require.Contains(t, infraerrors.Message(err), "account_level mismatch")
+	require.Empty(t, repo.boundGroupIDs)
+}
+
+func TestAdminService_CreateAccount_AllowsK12LevelToK12Group(t *testing.T) {
+	repo := &accountRepoStubForBulkUpdate{}
+	svc := &adminServiceImpl{
+		accountRepo: repo,
+		groupRepo: &groupRepoStubForAdmin{
+			getByID: &Group{
+				ID:                   21,
+				Name:                 "K12共享号池",
+				Platform:             PlatformOpenAI,
+				RequiredAccountLevel: AccountLevelK12,
+			},
+		},
+	}
+
+	account, err := svc.CreateAccount(context.Background(), &CreateAccountInput{
+		Name:                  "k12-account",
+		Platform:              PlatformOpenAI,
+		AccountLevel:          AccountLevelK12,
+		Type:                  AccountTypeOAuth,
+		Concurrency:           OpenAIPlusDefaultConcurrency,
+		GroupIDs:              []int64{21},
+		SkipMixedChannelCheck: true,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, account)
+	require.Equal(t, AccountLevelK12, account.AccountLevel)
+	require.Equal(t, []int64{21}, repo.boundGroupIDs[account.ID])
+}
+
+func TestAdminService_CustomOpenAILevelGroupLifecycleAllowsAccountBinding(t *testing.T) {
+	levelConfigs := []OpenAIAccountLevelConfig{
+		{
+			Key:                "student",
+			Label:              "Student",
+			Aliases:            []string{"student-plan"},
+			Enabled:            true,
+			RequiresProxyLogin: false,
+			SortOrder:          10,
+		},
+	}
+	rawLevels, err := json.Marshal(levelConfigs)
+	require.NoError(t, err)
+
+	groupRepo := &groupRepoStubForAdmin{}
+	accountRepo := &accountRepoStubForBulkUpdate{}
+	svc := &adminServiceImpl{
+		accountRepo: accountRepo,
+		groupRepo:   groupRepo,
+		settingService: &SettingService{
+			settingRepo: &settingValueRepoStub{
+				values: map[string]string{SettingKeyOpenAIAccountLevels: string(rawLevels)},
+			},
+		},
+	}
+
+	createdGroup, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+		Name:                 "Student Pool",
+		Platform:             PlatformOpenAI,
+		RateMultiplier:       1,
+		RequiredAccountLevel: "student",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, createdGroup)
+	require.NotNil(t, groupRepo.created)
+	require.Equal(t, "student", groupRepo.created.RequiredAccountLevel)
+
+	groupRepo.getByID = &Group{
+		ID:                   42,
+		Name:                 "Student Pool",
+		Platform:             PlatformOpenAI,
+		RateMultiplier:       1,
+		Status:               StatusActive,
+		RequiredAccountLevel: "student",
+	}
+	updatedGroup, err := svc.UpdateGroup(context.Background(), 42, &UpdateGroupInput{
+		RequiredAccountLevel: ptrString("student"),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, updatedGroup)
+	require.NotNil(t, groupRepo.updated)
+	require.Equal(t, "student", groupRepo.updated.RequiredAccountLevel)
+
+	account, err := svc.CreateAccount(context.Background(), &CreateAccountInput{
+		Name:                  "student-account",
+		Platform:              PlatformOpenAI,
+		AccountLevel:          "student",
+		Type:                  AccountTypeOAuth,
+		Concurrency:           OpenAIPlusDefaultConcurrency,
+		GroupIDs:              []int64{42},
+		SkipMixedChannelCheck: true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, account)
+	require.Equal(t, "student", account.AccountLevel)
+	require.Equal(t, []int64{42}, accountRepo.boundGroupIDs[account.ID])
+}
+
+func TestAdminService_UpdateAccount_RejectsOpenAILevelMismatchBeforeUpdate(t *testing.T) {
+	repo := &accountRepoStubForBulkUpdate{
+		getByIDAccounts: map[int64]*Account{
+			1: {
+				ID:           1,
+				Name:         "free-account",
+				Platform:     PlatformOpenAI,
+				AccountLevel: AccountLevelFree,
+				Concurrency:  OpenAIPlusDefaultConcurrency,
+			},
+		},
+	}
+	svc := &adminServiceImpl{
+		accountRepo: repo,
+		groupRepo: &groupRepoStubForAdmin{
+			getByID: &Group{
+				ID:                   20,
+				Name:                 "PLUS共享号池",
+				Platform:             PlatformOpenAI,
+				RequiredAccountLevel: AccountLevelPlus,
+			},
+		},
+	}
+
+	groupIDs := []int64{20}
+	account, err := svc.UpdateAccount(context.Background(), 1, &UpdateAccountInput{
+		GroupIDs:              &groupIDs,
+		SkipMixedChannelCheck: true,
+	})
+
+	require.Nil(t, account)
+	require.Error(t, err)
+	require.True(t, infraerrors.IsBadRequest(err))
+	require.Equal(t, "ACCOUNT_GROUP_BINDING_INVALID", infraerrors.Reason(err))
+	require.Contains(t, infraerrors.Message(err), "account_level mismatch")
+	require.Nil(t, repo.updatedAccount)
+	require.Empty(t, repo.boundGroupIDs)
 }
 
 func TestAdminService_UpdateOwnedPrivateAccountRejectsPublicGroupBinding(t *testing.T) {

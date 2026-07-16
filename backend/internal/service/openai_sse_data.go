@@ -37,7 +37,14 @@ func forEachOpenAISSEDataPayload(body string, fn func([]byte)) {
 		return
 	}
 	var acc openAISSEDataAccumulator
-	for _, line := range strings.Split(body, "\n") {
+	for len(body) > 0 {
+		idx := strings.IndexByte(body, '\n')
+		if idx < 0 {
+			acc.AddLine(body, fn)
+			break
+		}
+		line := body[:idx]
+		body = body[idx+1:]
 		acc.AddLine(line, fn)
 	}
 	acc.Flush(fn)

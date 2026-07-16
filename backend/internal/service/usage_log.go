@@ -11,6 +11,14 @@ const (
 	BillingTypeSubscription int8 = 1 // 订阅套餐
 )
 
+const (
+	RateMultiplierSourceSystemDefault = "system_default"
+	RateMultiplierSourceGroupDefault  = "group_default"
+	RateMultiplierSourceUserGroup     = "user_group"
+	RateMultiplierSourceNewUserGroup  = "new_user_group"
+	RateMultiplierSourceAccountShare  = "account_share"
+)
+
 type RequestType int16
 
 const (
@@ -137,16 +145,17 @@ type UsageLog struct {
 	ImageOutputTokens int
 	ImageOutputCost   float64
 
-	InputCost         float64
-	OutputCost        float64
-	CacheCreationCost float64
-	CacheReadCost     float64
-	TotalCost         float64
-	ActualCost        float64
-	RateMultiplier    float64
-	PointsDeducted    float64
-	BalanceDeducted   float64
-	BillingWalletType string
+	InputCost            float64
+	OutputCost           float64
+	CacheCreationCost    float64
+	CacheReadCost        float64
+	TotalCost            float64
+	ActualCost           float64
+	RateMultiplier       float64
+	RateMultiplierSource string
+	PointsDeducted       float64
+	BalanceDeducted      float64
+	BillingWalletType    string
 	// AccountRateMultiplier 账号计费倍率快照（nil 表示历史数据，按 1.0 处理）
 	AccountRateMultiplier *float64
 	// AccountStatsCost 账号统计定价预计算费用（nil = 使用默认公式 total_cost × account_rate_multiplier）
@@ -168,6 +177,11 @@ type UsageLog struct {
 	ImageCount int
 	ImageSize  *string
 	MediaType  *string
+
+	// 视频生成字段。Grok 视频按输出秒数计费，video_count > 0 的行不要求 image_size。
+	VideoCount           int
+	VideoResolution      *string
+	VideoDurationSeconds *int
 
 	CreatedAt time.Time
 

@@ -1,11 +1,11 @@
 <template>
-  <div class="card p-6">
+  <div :class="flat ? 'p-4 sm:p-6' : 'card p-6'">
     <!-- Toolbar: left filters (multi-line) + right actions -->
     <div class="flex flex-wrap items-end justify-between gap-4">
       <!-- Left: filters (allowed to wrap to multiple rows) -->
       <div class="flex flex-1 flex-wrap items-end gap-4">
         <!-- User Search -->
-        <div ref="userSearchRef" class="usage-filter-dropdown relative w-full sm:w-auto sm:min-w-[240px]">
+        <div v-if="mode !== 'errors'" ref="userSearchRef" class="usage-filter-dropdown relative w-full sm:w-auto sm:min-w-[240px]">
           <label class="input-label">{{ t('admin.usage.userFilter') }}</label>
           <input
             v-model="userKeyword"
@@ -42,7 +42,7 @@
         </div>
 
         <!-- API Key Search -->
-        <div ref="apiKeySearchRef" class="usage-filter-dropdown relative w-full sm:w-auto sm:min-w-[240px]">
+        <div v-if="mode !== 'errors'" ref="apiKeySearchRef" class="usage-filter-dropdown relative w-full sm:w-auto sm:min-w-[240px]">
           <label class="input-label">{{ t('usage.apiKeyFilter') }}</label>
           <input
             v-model="apiKeyKeyword"
@@ -79,7 +79,7 @@
         </div>
 
         <!-- Model Filter -->
-        <div class="w-full sm:w-auto sm:min-w-[220px]">
+        <div v-if="mode !== 'errors'" class="w-full sm:w-auto sm:min-w-[220px]">
           <label class="input-label">{{ t('usage.model') }}</label>
           <Select v-model="filters.model" :options="modelOptions" searchable @change="emitChange" />
         </div>
@@ -122,21 +122,31 @@
         </div>
 
         <!-- Request Type Filter -->
-        <div class="w-full sm:w-auto sm:min-w-[180px]">
+        <div v-if="mode !== 'errors'" class="w-full sm:w-auto sm:min-w-[180px]">
           <label class="input-label">{{ t('usage.type') }}</label>
           <Select v-model="filters.request_type" :options="requestTypeOptions" @change="emitChange" />
         </div>
 
         <!-- Billing Type Filter -->
-        <div class="w-full sm:w-auto sm:min-w-[200px]">
+        <div v-if="mode !== 'errors'" class="w-full sm:w-auto sm:min-w-[200px]">
           <label class="input-label">{{ t('admin.usage.billingType') }}</label>
           <Select v-model="filters.billing_type" :options="billingTypeOptions" @change="emitChange" />
         </div>
 
         <!-- Billing Mode Filter -->
-        <div class="w-full sm:w-auto sm:min-w-[200px]">
+        <div v-if="mode === 'usage'" class="w-full sm:w-auto sm:min-w-[200px]">
           <label class="input-label">{{ t('admin.usage.billingMode') }}</label>
           <Select v-model="filters.billing_mode" :options="billingModeOptions" @change="emitChange" />
+        </div>
+
+        <div v-if="mode === 'errors'" class="w-full sm:w-auto sm:min-w-[180px]">
+          <label class="input-label">{{ t('usage.errors.phase') }}</label>
+          <Select v-model="filters.error_phase" :options="errorPhaseOptions" @change="emitChange" />
+        </div>
+
+        <div v-if="mode === 'errors'" class="w-full sm:w-auto sm:min-w-[180px]">
+          <label class="input-label">{{ t('usage.errors.statusCode') }}</label>
+          <Select v-model="filters.status_code" :options="statusCodeOptions" @change="emitChange" />
         </div>
 
         <!-- Group Filter -->
@@ -156,12 +166,14 @@
           {{ t('common.reset') }}
         </button>
         <slot name="after-reset" />
-        <button type="button" @click="$emit('cleanup')" class="btn btn-danger">
-          {{ t('admin.usage.cleanup.button') }}
-        </button>
-        <button type="button" @click="$emit('export')" :disabled="exporting" class="btn btn-primary">
-          {{ t('usage.exportExcel') }}
-        </button>
+        <template v-if="mode === 'usage'">
+          <button type="button" @click="$emit('cleanup')" class="btn btn-danger">
+            {{ t('admin.usage.cleanup.button') }}
+          </button>
+          <button type="button" @click="$emit('export')" :disabled="exporting" class="btn btn-primary">
+            {{ t('usage.exportExcel') }}
+          </button>
+        </template>
       </div>
     </div>
   </div>
@@ -182,10 +194,14 @@ interface Props {
   startDate: string
   endDate: string
   showActions?: boolean
+  mode?: 'usage' | 'errors' | 'ranking'
+  flat?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  showActions: true
+  showActions: true,
+  mode: 'usage',
+  flat: false
 })
 const emit = defineEmits([
   'update:modelValue',
@@ -243,6 +259,18 @@ const billingModeOptions = ref<SelectOption[]>([
   { value: 'token', label: t('admin.usage.billingModeToken') },
   { value: 'per_request', label: t('admin.usage.billingModePerRequest') },
   { value: 'image', label: t('admin.usage.billingModeImage') }
+])
+
+const errorPhaseCodes = ['request', 'auth', 'routing', 'network', 'internal']
+const commonErrorStatusCodes = [400, 401, 403, 404, 409, 422, 429, 500, 502, 503, 504, 529]
+
+const errorPhaseOptions = ref<SelectOption[]>([
+  { value: null, label: t('usage.errors.allPhases') },
+  ...errorPhaseCodes.map((code) => ({ value: code, label: t(`usage.errors.phases.${code}`) }))
+])
+const statusCodeOptions = ref<SelectOption[]>([
+  { value: null, label: t('usage.errors.allStatuses') },
+  ...commonErrorStatusCodes.map((code) => ({ value: code, label: String(code) }))
 ])
 
 const emitChange = () => emit('change')
@@ -448,4 +476,12 @@ onMounted(async () => {
 onUnmounted(() => {
   document.removeEventListener('click', onDocumentClick)
 })
+
+const setUserKeyword = (email: string) => {
+  userKeyword.value = email
+  userResults.value = []
+  showUserDropdown.value = false
+}
+
+defineExpose({ setUserKeyword })
 </script>

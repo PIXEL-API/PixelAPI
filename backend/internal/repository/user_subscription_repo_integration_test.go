@@ -382,7 +382,7 @@ func (s *UserSubscriptionRepoSuite) TestResetDailyUsage() {
 	})
 
 	resetAt := time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC)
-	err := s.repo.ResetDailyUsage(s.ctx, sub.ID, resetAt)
+	err := s.repo.ResetDailyUsage(s.ctx, sub.ID, sub.DailyWindowStart, resetAt)
 	s.Require().NoError(err, "ResetDailyUsage")
 
 	got, err := s.repo.GetByID(s.ctx, sub.ID)
@@ -402,7 +402,7 @@ func (s *UserSubscriptionRepoSuite) TestResetWeeklyUsage() {
 	})
 
 	resetAt := time.Date(2025, 1, 6, 0, 0, 0, 0, time.UTC)
-	err := s.repo.ResetWeeklyUsage(s.ctx, sub.ID, resetAt)
+	err := s.repo.ResetWeeklyUsage(s.ctx, sub.ID, sub.WeeklyWindowStart, resetAt)
 	s.Require().NoError(err, "ResetWeeklyUsage")
 
 	got, err := s.repo.GetByID(s.ctx, sub.ID)
@@ -421,7 +421,7 @@ func (s *UserSubscriptionRepoSuite) TestResetMonthlyUsage() {
 	})
 
 	resetAt := time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC)
-	err := s.repo.ResetMonthlyUsage(s.ctx, sub.ID, resetAt)
+	err := s.repo.ResetMonthlyUsage(s.ctx, sub.ID, sub.MonthlyWindowStart, resetAt)
 	s.Require().NoError(err, "ResetMonthlyUsage")
 
 	got, err := s.repo.GetByID(s.ctx, sub.ID)
@@ -617,7 +617,7 @@ func (s *UserSubscriptionRepoSuite) TestActiveExpiredBoundaries_UsageAndReset_Ba
 	s.Require().NotNil(after.MonthlyWindowStart, "expected MonthlyWindowStart activated")
 
 	resetAt := time.Now().Truncate(time.Microsecond) // truncate to microsecond for DB precision
-	s.Require().NoError(s.repo.ResetDailyUsage(s.ctx, active.ID, resetAt), "ResetDailyUsage")
+	s.Require().NoError(s.repo.ResetDailyUsage(s.ctx, active.ID, after.DailyWindowStart, resetAt), "ResetDailyUsage")
 	afterReset, err := s.repo.GetByID(s.ctx, active.ID)
 	s.Require().NoError(err, "GetByID after reset")
 	s.Require().InDelta(0.0, afterReset.DailyUsageUSD, 1e-6)

@@ -18,11 +18,31 @@ func TestSettingServiceFunctionalSwitchDefaults(t *testing.T) {
 	require.True(t, svc.IsWithdrawalManagementEnabled(ctx))
 }
 
+func TestSettingServiceWithdrawalRateLimitDefaults(t *testing.T) {
+	svc := newModuleSwitchSettingService(map[string]string{})
+
+	config, err := svc.GetWithdrawalRateLimitConfig(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, WithdrawalRateLimitConfig{WindowDays: 1, MaxRequests: 0}, config)
+}
+
+func TestSettingServiceWithdrawalRateLimitRejectsInvalidStoredValue(t *testing.T) {
+	svc := newModuleSwitchSettingService(map[string]string{
+		SettingKeyWithdrawalRateLimitWindowDays: "0",
+		SettingKeyWithdrawalRateLimitMax:        "1",
+	})
+
+	_, err := svc.GetWithdrawalRateLimitConfig(context.Background())
+
+	require.Equal(t, "WITHDRAWAL_RATE_LIMIT_CONFIG_INVALID", infraerrors.Reason(err))
+}
+
 func TestWithdrawalServiceListMineRejectsWhenDisabled(t *testing.T) {
 	settingSvc := newModuleSwitchSettingService(map[string]string{
 		SettingKeyWithdrawalManagementEnabled: "false",
 	})
-	svc := NewWithdrawalService(moduleSwitchWithdrawalRepo{}, nil, nil, nil, nil, settingSvc)
+	svc := NewWithdrawalService(&moduleSwitchWithdrawalRepo{}, nil, nil, nil, nil, settingSvc)
 
 	items, total, err := svc.ListMine(context.Background(), 1, 1, 20)
 
@@ -30,6 +50,63 @@ func TestWithdrawalServiceListMineRejectsWhenDisabled(t *testing.T) {
 	require.Zero(t, total)
 	require.Error(t, err)
 	require.Equal(t, "WITHDRAWAL_MANAGEMENT_DISABLED", infraerrors.Reason(err))
+}
+
+func TestWithdrawalServiceSubmitPassesConfiguredRateLimit(t *testing.T) {
+	repo := &moduleSwitchWithdrawalRepo{
+		submitResult: &WithdrawalRequest{UserID: 1},
+	}
+	settingSvc := newModuleSwitchSettingService(map[string]string{
+		SettingKeyWithdrawalManagementEnabled:   "true",
+		SettingKeyWithdrawalRateLimitWindowDays: "7",
+		SettingKeyWithdrawalRateLimitMax:        "3",
+	})
+	svc := NewWithdrawalService(repo, nil, nil, nil, nil, settingSvc)
+
+	_, err := svc.Submit(context.Background(), WithdrawalSubmitInput{
+		UserID:        1,
+		Amount:        10,
+		PaymentMethod: "alipay",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, repo.submitInput)
+	require.Equal(t, WithdrawalRateLimitConfig{WindowDays: 7, MaxRequests: 3}, repo.submitInput.RateLimit)
+}
+
+func TestWithdrawalServiceListMineExposesOnlyUserSafeRejectionReason(t *testing.T) {
+	reason := "收款码无法识别"
+	operatorID := int64(99)
+	repo := &moduleSwitchWithdrawalRepo{
+		listItems: []WithdrawalRequest{{
+			ID:                1,
+			Status:            WithdrawalStatusRejected,
+			AdminNote:         &reason,
+			ProcessedByUserID: &operatorID,
+		}},
+	}
+	svc := NewWithdrawalService(repo, nil, nil, nil, nil, newModuleSwitchSettingService(map[string]string{}))
+
+	items, total, err := svc.ListMine(context.Background(), 1, 1, 20)
+
+	require.NoError(t, err)
+	require.EqualValues(t, 1, total)
+	require.Len(t, items, 1)
+	require.Nil(t, items[0].AdminNote)
+	require.Nil(t, items[0].ProcessedByUserID)
+	require.NotNil(t, items[0].RejectionReason)
+	require.Equal(t, reason, *items[0].RejectionReason)
+}
+
+func TestWithdrawalServiceAdminRejectRequiresUserVisibleReason(t *testing.T) {
+	repo := &moduleSwitchWithdrawalRepo{}
+	svc := NewWithdrawalService(repo, nil, nil, nil, nil, newModuleSwitchSettingService(map[string]string{}))
+
+	result, err := svc.AdminReject(context.Background(), 1, 2, "  ")
+
+	require.Nil(t, result)
+	require.Equal(t, "WITHDRAWAL_REJECTION_REASON_REQUIRED", infraerrors.Reason(err))
+	require.False(t, repo.rejectCalled)
 }
 
 func TestInvoiceServiceCreateRequestRejectsWhenDisabled(t *testing.T) {
@@ -164,30 +241,43 @@ func (r *moduleSwitchSettingRepo) Delete(_ context.Context, key string) error {
 
 var errUnexpectedModuleSwitchRepoCall = errors.New("unexpected module switch repository call")
 
-type moduleSwitchWithdrawalRepo struct{}
+type moduleSwitchWithdrawalRepo struct {
+	submitInput  *WithdrawalSubmitInput
+	submitResult *WithdrawalRequest
+	listItems    []WithdrawalRequest
+	rejectCalled bool
+}
 
-func (moduleSwitchWithdrawalRepo) Submit(context.Context, WithdrawalSubmitInput) (*WithdrawalRequest, error) {
+func (r *moduleSwitchWithdrawalRepo) Submit(_ context.Context, input WithdrawalSubmitInput) (*WithdrawalRequest, error) {
+	r.submitInput = &input
+	if r.submitResult != nil {
+		return r.submitResult, nil
+	}
 	return nil, errUnexpectedModuleSwitchRepoCall
 }
-func (moduleSwitchWithdrawalRepo) Cancel(context.Context, int64, int64, string) (*WithdrawalRequest, error) {
+func (*moduleSwitchWithdrawalRepo) Cancel(context.Context, int64, int64, string) (*WithdrawalRequest, error) {
 	return nil, errUnexpectedModuleSwitchRepoCall
 }
-func (moduleSwitchWithdrawalRepo) GetByID(context.Context, int64) (*WithdrawalRequest, error) {
+func (*moduleSwitchWithdrawalRepo) GetByID(context.Context, int64) (*WithdrawalRequest, error) {
 	return nil, errUnexpectedModuleSwitchRepoCall
 }
-func (moduleSwitchWithdrawalRepo) ListByUser(context.Context, int64, int, int) ([]WithdrawalRequest, int64, error) {
+func (r *moduleSwitchWithdrawalRepo) ListByUser(context.Context, int64, int, int) ([]WithdrawalRequest, int64, error) {
+	if r.listItems != nil {
+		return r.listItems, int64(len(r.listItems)), nil
+	}
 	return nil, 0, errUnexpectedModuleSwitchRepoCall
 }
-func (moduleSwitchWithdrawalRepo) ListAdmin(context.Context, WithdrawalListParams) ([]WithdrawalRequest, int64, error) {
+func (*moduleSwitchWithdrawalRepo) ListAdmin(context.Context, WithdrawalListParams) ([]WithdrawalRequest, int64, error) {
 	return nil, 0, errUnexpectedModuleSwitchRepoCall
 }
-func (moduleSwitchWithdrawalRepo) Settle(context.Context, int64, int64, string) (*WithdrawalRequest, error) {
+func (*moduleSwitchWithdrawalRepo) Settle(context.Context, int64, int64, string) (*WithdrawalRequest, error) {
 	return nil, errUnexpectedModuleSwitchRepoCall
 }
-func (moduleSwitchWithdrawalRepo) Reject(context.Context, int64, int64, string) (*WithdrawalRequest, error) {
+func (r *moduleSwitchWithdrawalRepo) Reject(context.Context, int64, int64, string) (*WithdrawalRequest, error) {
+	r.rejectCalled = true
 	return nil, errUnexpectedModuleSwitchRepoCall
 }
-func (moduleSwitchWithdrawalRepo) ReceiptCodeInUse(context.Context, string) (bool, error) {
+func (*moduleSwitchWithdrawalRepo) ReceiptCodeInUse(context.Context, string) (bool, error) {
 	return false, errUnexpectedModuleSwitchRepoCall
 }
 

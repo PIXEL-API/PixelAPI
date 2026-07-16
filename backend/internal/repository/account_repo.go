@@ -100,6 +100,72 @@ func (r *accountRepository) Create(ctx context.Context, account *service.Account
 	return r.createAccount(ctx, r.client, r.sql, account)
 }
 
+// CreateWithAccountGroups atomically persists a duplicated account, its exact
+// per-group priorities, and the scheduler outbox event for the new route.
+func (r *accountRepository) CreateWithAccountGroups(ctx context.Context, account *service.Account, groups []service.AccountGroup) error {
+	if account == nil {
+		return service.ErrAccountNilInput
+	}
+	tx, err := r.client.Tx(ctx)
+	if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
+		return err
+	}
+
+	txCtx := ctx
+	txClient := r.client
+	if tx != nil {
+		defer func() { _ = tx.Rollback() }()
+		txCtx = dbent.NewTxContext(ctx, tx)
+		txClient = tx.Client()
+	}
+	exec := sqlExecutorFromEntClient(txClient)
+	if exec == nil {
+		return fmt.Errorf("transaction sql executor is unavailable")
+	}
+
+	groupIDs := make([]int64, 0, len(groups))
+	seenGroupIDs := make(map[int64]struct{}, len(groups))
+	for _, group := range groups {
+		if group.GroupID <= 0 {
+			return fmt.Errorf("duplicate account group id must be positive")
+		}
+		if _, exists := seenGroupIDs[group.GroupID]; exists {
+			return fmt.Errorf("duplicate account group id %d", group.GroupID)
+		}
+		seenGroupIDs[group.GroupID] = struct{}{}
+		groupIDs = append(groupIDs, group.GroupID)
+	}
+	account.GroupIDs = append([]int64(nil), groupIDs...)
+	if err := r.createAccountRecord(txCtx, txClient, account); err != nil {
+		return err
+	}
+
+	if len(groups) > 0 {
+		builders := make([]*dbent.AccountGroupCreate, 0, len(groups))
+		for i := range groups {
+			groups[i].AccountID = account.ID
+			builders = append(builders, txClient.AccountGroup.Create().
+				SetAccountID(account.ID).
+				SetGroupID(groups[i].GroupID).
+				SetPriority(groups[i].Priority),
+			)
+		}
+		if _, err := txClient.AccountGroup.CreateBulk(builders...).Save(txCtx); err != nil {
+			return fmt.Errorf("create duplicate account groups: %w", err)
+		}
+	}
+	if err := enqueueSchedulerOutbox(txCtx, exec, service.SchedulerOutboxEventAccountChanged, &account.ID, nil, buildSchedulerGroupPayload(groupIDs)); err != nil {
+		return fmt.Errorf("enqueue duplicate account scheduler event: %w", err)
+	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+	account.AccountGroups = append([]service.AccountGroup(nil), groups...)
+	return nil
+}
+
 func (r *accountRepository) CreateOwnedWithProxyCapacity(ctx context.Context, ownerUserID int64, account *service.Account) error {
 	if account == nil {
 		return service.ErrAccountNilInput
@@ -132,6 +198,16 @@ func (r *accountRepository) CreateOwnedWithProxyCapacity(ctx context.Context, ow
 }
 
 func (r *accountRepository) createAccount(ctx context.Context, client *dbent.Client, exec sqlExecutor, account *service.Account) error {
+	if err := r.createAccountRecord(ctx, client, account); err != nil {
+		return err
+	}
+	if err := enqueueSchedulerOutbox(ctx, exec, service.SchedulerOutboxEventAccountChanged, &account.ID, nil, buildSchedulerGroupPayload(account.GroupIDs)); err != nil {
+		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue account create failed: account=%d err=%v", account.ID, err)
+	}
+	return nil
+}
+
+func (r *accountRepository) createAccountRecord(ctx context.Context, client *dbent.Client, account *service.Account) error {
 	if account == nil {
 		return service.ErrAccountNilInput
 	}
@@ -210,9 +286,6 @@ func (r *accountRepository) createAccount(ctx context.Context, client *dbent.Cli
 		if err := r.syncAccountErrorSince(ctx, account.ID, account.Status); err != nil {
 			return err
 		}
-	}
-	if err := enqueueSchedulerOutbox(ctx, exec, service.SchedulerOutboxEventAccountChanged, &account.ID, nil, buildSchedulerGroupPayload(account.GroupIDs)); err != nil {
-		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue account create failed: account=%d err=%v", account.ID, err)
 	}
 	return nil
 }
@@ -362,6 +435,38 @@ func (r *accountRepository) GetByIDs(ctx context.Context, ids []int64) ([]*servi
 	return out, nil
 }
 
+// ListOwnedAccountIDs 仅返回指定用户拥有的账号 ID，用于批量授权边界检查。
+// 该路径不加载凭据、Extra、代理或分组关联。
+func (r *accountRepository) ListOwnedAccountIDs(ctx context.Context, ownerUserID int64, accountIDs []int64) ([]int64, error) {
+	if ownerUserID <= 0 {
+		return nil, service.ErrUserNotFound
+	}
+	uniqueIDs := uniquePositiveInt64s(accountIDs)
+	if len(uniqueIDs) == 0 {
+		return []int64{}, nil
+	}
+
+	ownedIDs := make([]int64, 0, len(uniqueIDs))
+	for start := 0; start < len(uniqueIDs); start += postgresParameterBatchSize {
+		end := start + postgresParameterBatchSize
+		if end > len(uniqueIDs) {
+			end = len(uniqueIDs)
+		}
+		ids, err := r.client.Account.
+			Query().
+			Where(
+				dbaccount.IDIn(uniqueIDs[start:end]...),
+				dbaccount.OwnerUserIDEQ(ownerUserID),
+			).
+			IDs(ctx)
+		if err != nil {
+			return nil, err
+		}
+		ownedIDs = append(ownedIDs, ids...)
+	}
+	return ownedIDs, nil
+}
+
 // ExistsByID 检查指定 ID 的账号是否存在。
 // 相比 GetByID，此方法性能更优，因为：
 //   - 使用 Exist() 方法生成 SELECT EXISTS 查询，只返回布尔值
@@ -373,6 +478,25 @@ func (r *accountRepository) ExistsByID(ctx context.Context, id int64) (bool, err
 		return false, err
 	}
 	return exists, nil
+}
+
+// ExistsByCredentialField checks one exact credentials JSONB field without
+// loading account rows. Callers keep this behind a narrow capability interface
+// so the large AccountRepository contract and its test doubles stay stable.
+func (r *accountRepository) ExistsByCredentialField(ctx context.Context, key, value string) (bool, error) {
+	key = strings.TrimSpace(key)
+	value = strings.TrimSpace(value)
+	if key == "" || value == "" {
+		return false, errors.New("credential field key and value are required")
+	}
+	return r.client.Account.Query().
+		Where(
+			dbaccount.DeletedAtIsNil(),
+			func(selector *entsql.Selector) {
+				selector.Where(sqljson.ValueEQ(dbaccount.FieldCredentials, value, sqljson.Path(key)))
+			},
+		).
+		Exist(ctx)
 }
 
 func (r *accountRepository) IsAccountShareModeListingAccount(ctx context.Context, id int64) (bool, error) {
@@ -1109,6 +1233,10 @@ func (r *accountRepository) loadQuotaPoolAccountGroupRows(ctx context.Context, o
 			g.name,
 			g.platform,
 			g.rate_multiplier,
+			g.new_user_rate_enabled,
+			g.new_user_rate_multiplier,
+			g.new_user_rate_window_seconds,
+			g.new_user_rate_quota_usd,
 			g.is_exclusive,
 			g.status,
 			g.owner_user_id,
@@ -1141,6 +1269,10 @@ func (r *accountRepository) loadQuotaPoolAccountGroupRows(ctx context.Context, o
 			&group.Name,
 			&group.Platform,
 			&group.RateMultiplier,
+			&group.NewUserRateEnabled,
+			&group.NewUserRateMultiplier,
+			&group.NewUserRateWindowSeconds,
+			&group.NewUserRateQuotaUSD,
 			&group.IsExclusive,
 			&group.Status,
 			&groupOwnerUserID,
@@ -1512,8 +1644,8 @@ func buildOAuthRefreshCandidatesQuery(refreshWindow time.Duration) (string, []an
 			FROM accounts
 			WHERE deleted_at IS NULL
 				AND status = 'active'
-				AND type = 'oauth'
-				AND platform IN ('anthropic', 'openai', 'gemini', 'antigravity')
+				AND type IN ('oauth', 'setup-token')
+				AND platform IN ('anthropic', 'openai', 'gemini', 'antigravity', 'grok')
 				AND credentials ? 'refresh_token'
 				AND btrim(credentials->>'refresh_token') <> ''
 				AND (
@@ -1555,6 +1687,13 @@ func buildOAuthRefreshCandidatesQuery(refreshWindow time.Duration) (string, []an
 				platform = 'antigravity'
 				AND credential_expires_at IS NOT NULL
 				AND credential_expires_at <= NOW() + INTERVAL '15 minutes'
+			)
+			OR (
+				platform = 'grok'
+				AND (
+					credential_expires_at IS NULL
+					OR credential_expires_at <= NOW() + (GREATEST($1::bigint, 3600) * INTERVAL '1 second')
+				)
 			)
 		ORDER BY priority ASC, id ASC
 	`, []any{refreshWindowSeconds}
@@ -1649,6 +1788,84 @@ func (r *accountRepository) SetError(ctx context.Context, id int64, errorMsg str
 	return nil
 }
 
+func (r *accountRepository) SetGrokCredentialErrorIfMatch(
+	ctx context.Context,
+	id int64,
+	snapshot service.GrokCredentialMutationSnapshot,
+	errorMsg string,
+) (bool, error) {
+	result, err := r.sql.ExecContext(ctx, `
+		WITH updated AS (
+			UPDATE accounts AS a
+			SET status = $1, error_message = $2, schedulable = FALSE, updated_at = NOW()
+			WHERE a.id = $3
+				AND a.deleted_at IS NULL
+				AND a.status = $4
+				AND a.platform = $5
+				AND a.type = $6
+				AND a.schedulable IS TRUE
+				AND a.credentials = $7::jsonb
+				AND a.proxy_id IS NOT DISTINCT FROM $8
+			RETURNING a.id
+		)
+		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
+		SELECT $9, updated.id, NULL, NULL FROM updated
+	`, service.StatusError, errorMsg, id, service.StatusActive, service.PlatformGrok,
+		service.AccountTypeOAuth, snapshot.CredentialsJSON, snapshot.ProxyID,
+		service.SchedulerOutboxEventAccountChanged)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil || affected == 0 {
+		return false, err
+	}
+	r.syncSchedulerAccountSnapshotDetached(ctx, id)
+	return true, nil
+}
+
+func (r *accountRepository) UpdateGrokOAuthCredentialsIfUnchanged(
+	ctx context.Context,
+	id int64,
+	expectedCredentials map[string]any,
+	expectedProxyID *int64,
+	credentials map[string]any,
+) (bool, error) {
+	expectedJSON, err := json.Marshal(expectedCredentials)
+	if err != nil {
+		return false, err
+	}
+	credentialsJSON, err := json.Marshal(credentials)
+	if err != nil {
+		return false, err
+	}
+	result, err := r.sql.ExecContext(ctx, `
+		WITH updated AS (
+			UPDATE accounts AS a
+			SET credentials = $1::jsonb, updated_at = NOW()
+			WHERE a.id = $2
+				AND a.deleted_at IS NULL
+				AND a.platform = $3
+				AND a.type = $4
+				AND a.credentials = $5::jsonb
+				AND a.proxy_id IS NOT DISTINCT FROM $6
+			RETURNING a.id
+		)
+		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
+		SELECT $7, updated.id, NULL, NULL FROM updated
+	`, string(credentialsJSON), id, service.PlatformGrok, service.AccountTypeOAuth,
+		string(expectedJSON), expectedProxyID, service.SchedulerOutboxEventAccountChanged)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil || affected == 0 {
+		return false, err
+	}
+	r.syncSchedulerAccountSnapshotDetached(ctx, id)
+	return true, nil
+}
+
 // syncSchedulerAccountSnapshot 在账号状态变更时主动同步快照到调度器缓存。
 // 当账号被设置为错误、禁用、不可调度或临时不可调度时调用，
 // 确保调度器和粘性会话逻辑能及时感知账号的最新状态，避免继续使用不可用账号。
@@ -1669,6 +1886,16 @@ func (r *accountRepository) syncSchedulerAccountSnapshot(ctx context.Context, ac
 	if err := r.schedulerCache.SetAccount(ctx, account); err != nil {
 		logger.LegacyPrintf("repository.account", "[Scheduler] sync account snapshot write failed: id=%d err=%v", accountID, err)
 	}
+}
+
+func (r *accountRepository) syncSchedulerAccountSnapshotDetached(ctx context.Context, accountID int64) {
+	base := context.Background()
+	if ctx != nil {
+		base = context.WithoutCancel(ctx)
+	}
+	propagationCtx, cancel := context.WithTimeout(base, 2*time.Second)
+	defer cancel()
+	r.syncSchedulerAccountSnapshot(propagationCtx, accountID)
 }
 
 func (r *accountRepository) deleteSchedulerAccountSnapshot(ctx context.Context, accountID int64) {
@@ -1870,8 +2097,42 @@ func (r *accountRepository) BindGroups(ctx context.Context, accountID int64, gro
 }
 
 func (r *accountRepository) ListSchedulable(ctx context.Context) ([]service.Account, error) {
-	now := time.Now()
-	accounts, err := r.client.Account.Query().
+	accounts, err := r.schedulableAccountsQuery(time.Now()).All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return r.accountsToService(ctx, accounts)
+}
+
+func (r *accountRepository) ListSchedulableAccountLoads(ctx context.Context) ([]service.AccountWithConcurrency, error) {
+	accounts, err := r.schedulableAccountsQuery(time.Now()).
+		Select(
+			dbaccount.FieldID,
+			dbaccount.FieldConcurrency,
+			dbaccount.FieldLoadFactor,
+		).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	loads := make([]service.AccountWithConcurrency, 0, len(accounts))
+	for _, account := range accounts {
+		projection := service.Account{
+			ID:          account.ID,
+			Concurrency: account.Concurrency,
+			LoadFactor:  account.LoadFactor,
+		}
+		loads = append(loads, service.AccountWithConcurrency{
+			ID:             account.ID,
+			MaxConcurrency: projection.EffectiveLoadFactor(),
+		})
+	}
+	return loads, nil
+}
+
+func (r *accountRepository) schedulableAccountsQuery(now time.Time) *dbent.AccountQuery {
+	return r.client.Account.Query().
 		Where(
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
@@ -1880,12 +2141,7 @@ func (r *accountRepository) ListSchedulable(ctx context.Context) ([]service.Acco
 			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
 			dbaccount.Or(dbaccount.RateLimitResetAtIsNil(), dbaccount.RateLimitResetAtLTE(now)),
 		).
-		Order(dbent.Asc(dbaccount.FieldPriority)).
-		All(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return r.accountsToService(ctx, accounts)
+		Order(dbent.Asc(dbaccount.FieldPriority))
 }
 
 func (r *accountRepository) ListSchedulableByGroupID(ctx context.Context, groupID int64) ([]service.Account, error) {
@@ -2023,6 +2279,67 @@ func (r *accountRepository) SetRateLimited(ctx context.Context, id int64, resetA
 	return nil
 }
 
+// SetRateLimitedIfLater atomically extends an account-level rate limit. Grok
+// requests may finish concurrently, so an older response must not overwrite a
+// later reset boundary observed by another request or instance.
+func (r *accountRepository) SetRateLimitedIfLater(ctx context.Context, id int64, resetAt time.Time) error {
+	now := time.Now()
+	updated, err := r.client.Account.Update().
+		Where(
+			dbaccount.IDEQ(id),
+			dbaccount.Or(
+				dbaccount.RateLimitResetAtIsNil(),
+				dbaccount.RateLimitResetAtLT(resetAt),
+			),
+		).
+		SetRateLimitedAt(now).
+		SetRateLimitResetAt(resetAt).
+		Save(ctx)
+	if err != nil {
+		return err
+	}
+	if updated == 0 {
+		// This instance may not have observed the later value written elsewhere.
+		// Refresh its local scheduler snapshot even though no outbox event is needed.
+		r.syncSchedulerAccountSnapshot(ctx, id)
+		return nil
+	}
+	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
+		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue extended rate limit failed: account=%d err=%v", id, err)
+	}
+	r.syncSchedulerAccountSnapshot(ctx, id)
+	return nil
+}
+
+// ClearRateLimitIfObserved clears exactly the Grok rate-limit generation seen
+// by a successful request. Matching both timestamps prevents a stale success
+// from erasing a later clear/re-arm generation with an equal or shorter reset.
+func (r *accountRepository) ClearRateLimitIfObserved(ctx context.Context, id int64, observedLimitedAt, observedResetAt time.Time) (bool, error) {
+	updated, err := r.client.Account.Update().
+		Where(
+			dbaccount.IDEQ(id),
+			dbaccount.PlatformEQ(service.PlatformGrok),
+			dbaccount.TypeEQ(service.AccountTypeOAuth),
+			dbaccount.RateLimitedAtEQ(observedLimitedAt),
+			dbaccount.RateLimitResetAtEQ(observedResetAt),
+		).
+		ClearRateLimitedAt().
+		ClearRateLimitResetAt().
+		Save(ctx)
+	if err != nil {
+		return false, err
+	}
+	if updated == 0 {
+		r.syncSchedulerAccountSnapshot(ctx, id)
+		return false, nil
+	}
+	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
+		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue observed rate-limit clear failed: account=%d err=%v", id, err)
+	}
+	r.syncSchedulerAccountSnapshot(ctx, id)
+	return true, nil
+}
+
 func (r *accountRepository) SetModelRateLimit(ctx context.Context, id int64, scope string, resetAt time.Time) error {
 	if scope == "" {
 		return nil
@@ -2110,6 +2427,48 @@ func (r *accountRepository) SetTempUnschedulable(ctx context.Context, id int64, 
 	}
 	r.syncSchedulerAccountSnapshot(ctx, id)
 	return nil
+}
+
+func (r *accountRepository) SetGrokCredentialTempUnschedulableIfMatch(
+	ctx context.Context,
+	id int64,
+	snapshot service.GrokCredentialMutationSnapshot,
+	until time.Time,
+	reason string,
+) (bool, error) {
+	result, err := r.sql.ExecContext(ctx, `
+		WITH updated AS (
+			UPDATE accounts AS a
+			SET temp_unschedulable_until = CASE
+					WHEN a.temp_unschedulable_until IS NULL OR a.temp_unschedulable_until < $1 THEN $1
+					ELSE a.temp_unschedulable_until
+				END,
+				temp_unschedulable_reason = $2,
+				updated_at = NOW()
+			WHERE a.id = $3
+				AND a.deleted_at IS NULL
+				AND a.status = $4
+				AND a.platform = $5
+				AND a.type = $6
+				AND a.schedulable IS TRUE
+				AND a.credentials = $7::jsonb
+				AND a.proxy_id IS NOT DISTINCT FROM $8
+			RETURNING a.id
+		)
+		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
+		SELECT $9, updated.id, NULL, NULL FROM updated
+	`, until, reason, id, service.StatusActive, service.PlatformGrok,
+		service.AccountTypeOAuth, snapshot.CredentialsJSON, snapshot.ProxyID,
+		service.SchedulerOutboxEventAccountChanged)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil || affected == 0 {
+		return false, err
+	}
+	r.syncSchedulerAccountSnapshotDetached(ctx, id)
+	return true, nil
 }
 
 func (r *accountRepository) ClearTempUnschedulable(ctx context.Context, id int64) error {
@@ -2236,7 +2595,7 @@ func (r *accountRepository) SetSchedulable(ctx context.Context, id int64, schedu
 }
 
 func (r *accountRepository) AutoPauseExpiredAccounts(ctx context.Context, now time.Time) (int64, error) {
-	result, err := r.sql.ExecContext(ctx, `
+	rows, err := r.sql.QueryContext(ctx, `
 		UPDATE accounts
 		SET schedulable = FALSE,
 			updated_at = NOW()
@@ -2245,20 +2604,31 @@ func (r *accountRepository) AutoPauseExpiredAccounts(ctx context.Context, now ti
 			AND auto_pause_on_expired = TRUE
 			AND expires_at IS NOT NULL
 			AND expires_at <= $1
+		RETURNING id
 	`, now)
 	if err != nil {
 		return 0, err
 	}
-	rows, err := result.RowsAffected()
-	if err != nil {
+	defer func() { _ = rows.Close() }()
+
+	accountIDs := make([]int64, 0)
+	for rows.Next() {
+		var accountID int64
+		if err := rows.Scan(&accountID); err != nil {
+			return 0, err
+		}
+		accountIDs = append(accountIDs, accountID)
+	}
+	if err := rows.Err(); err != nil {
 		return 0, err
 	}
-	if rows > 0 {
-		if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventFullRebuild, nil, nil, nil); err != nil {
-			logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue auto pause rebuild failed: err=%v", err)
+	if len(accountIDs) > 0 {
+		payload := map[string]any{"account_ids": accountIDs}
+		if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountBulkChanged, nil, nil, payload); err != nil {
+			logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue auto pause account changes failed: err=%v", err)
 		}
 	}
-	return rows, nil
+	return int64(len(accountIDs)), nil
 }
 
 func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates map[string]any) error {

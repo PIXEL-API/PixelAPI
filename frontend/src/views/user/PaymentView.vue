@@ -41,6 +41,7 @@
             :payment-type="paymentState.paymentType"
             :pay-url="paymentState.payUrl"
             :order-type="paymentState.orderType"
+            :payment-mode="paymentState.paymentMode"
             @done="onPaymentDone"
             @success="onPaymentSuccess"
             @settled="onPaymentSettled"
@@ -386,6 +387,14 @@ interface WeixinJSBridgeLike {
   ): void
 }
 
+interface AlipayJSBridgeLike {
+  call(
+    action: string,
+    payload: Record<string, unknown>,
+    callback: (result: Record<string, unknown>) => void,
+  ): void
+}
+
 function emptyPaymentState(): PaymentRecoverySnapshot {
   return {
     orderId: 0,
@@ -440,6 +449,39 @@ async function invokeWechatJsapiPayment(payload: Record<string, unknown>): Promi
   }
   return new Promise((resolve) => {
     bridge.invoke('getBrandWCPayRequest', payload, (result) => resolve(result || {}))
+  })
+}
+
+function getAlipayJSBridge(): AlipayJSBridgeLike | undefined {
+  return (window as Window & { AlipayJSBridge?: AlipayJSBridgeLike }).AlipayJSBridge
+}
+
+function waitForAlipayJSBridge(timeoutMs = 4000): Promise<AlipayJSBridgeLike | null> {
+  const existing = getAlipayJSBridge()
+  if (existing) return Promise.resolve(existing)
+
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = (bridge: AlipayJSBridgeLike | null) => {
+      if (settled) return
+      settled = true
+      document.removeEventListener('AlipayJSBridgeReady', handleReady)
+      window.clearTimeout(timer)
+      resolve(bridge)
+    }
+    const handleReady = () => finish(getAlipayJSBridge() ?? null)
+    const timer = window.setTimeout(() => finish(getAlipayJSBridge() ?? null), timeoutMs)
+    document.addEventListener('AlipayJSBridgeReady', handleReady, false)
+  })
+}
+
+async function invokeAlipayJsapiPayment(tradeNO: string): Promise<Record<string, unknown>> {
+  const bridge = await waitForAlipayJSBridge()
+  if (!bridge) {
+    throw new Error('ALIPAY_JSAPI_UNAVAILABLE')
+  }
+  return new Promise((resolve) => {
+    bridge.call('tradePay', { tradeNO }, (result) => resolve(result || {}))
   })
 }
 
@@ -854,6 +896,7 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
       orderType,
       isMobile: isMobileDevice(),
       isWechatBrowser: typeof window !== 'undefined' && /MicroMessenger/i.test(window.navigator.userAgent),
+      currentOrigin: typeof window !== 'undefined' ? window.location.origin : undefined,
       stripePopupUrl: stripeRouteUrl,
       stripeRouteUrl,
       airwallexRouteUrl,
@@ -883,6 +926,36 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
     }
     if (decision.kind === 'airwallex_route') {
       window.location.href = decision.paymentState.payUrl
+      return
+    }
+    if (decision.kind === 'alipay_app_redirect' && decision.paymentState.payUrl) {
+      window.location.href = decision.paymentState.payUrl
+      return
+    }
+    if (decision.kind === 'alipay_jsapi' && decision.alipayJSAPI?.tradeNO) {
+      try {
+        const jsapiResult = await invokeAlipayJsapiPayment(decision.alipayJSAPI.tradeNO)
+        const resultCode = String(jsapiResult.resultCode || jsapiResult.result_code || '').toLowerCase()
+        const memo = String(jsapiResult.memo || jsapiResult.err_msg || '')
+        if (resultCode === '6001' || memo.toLowerCase().includes('cancel')) {
+          appStore.showInfo(t('payment.qr.cancelled'))
+          resetPayment()
+        } else if (resultCode && resultCode !== '9000' && resultCode !== '8000') {
+          resetPayment()
+          applyScenarioError({ reason: 'ALIPAY_JSAPI_FAILED', message: memo || resultCode }, visibleMethod)
+        } else if (!resultCode) {
+          const resultState = { ...decision.paymentState }
+          resetPayment()
+          await redirectToPaymentResult(resultState)
+        } else {
+          const resultState = { ...decision.paymentState }
+          resetPayment()
+          await redirectToPaymentResult(resultState)
+        }
+      } catch (err: unknown) {
+        resetPayment()
+        throw err
+      }
       return
     }
     if (decision.kind === 'wechat_jsapi' && decision.jsapi) {
@@ -1045,6 +1118,7 @@ async function attemptMobileQrFallback(err: unknown, context: MobileQrFallbackCo
       orderType: context.orderType,
       isMobile: false,
       isWechatBrowser: false,
+      currentOrigin: typeof window !== 'undefined' ? window.location.origin : undefined,
       stripePopupUrl: stripeRouteUrl,
       stripeRouteUrl,
     })

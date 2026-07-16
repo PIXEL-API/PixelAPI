@@ -113,13 +113,19 @@ func TestUserAvailableChannel_FieldWhitelist(t *testing.T) {
 	}
 
 	// pricing interval 白名单：不应暴露 id / sort_order。
+	pricingEnabled := true
+	longContextThreshold := 128000
 	pricing := toUserPricing(&service.ChannelModelPricing{
-		BillingMode: service.BillingModeToken,
+		BillingMode:                    service.BillingModeToken,
+		LongContextPricingEnabled:      &pricingEnabled,
+		LongContextInputTokenThreshold: &longContextThreshold,
 		Intervals: []service.PricingInterval{
 			{ID: 7, MinTokens: 0, MaxTokens: nil, SortOrder: 3},
 		},
 	})
 	require.NotNil(t, pricing)
+	require.Equal(t, &pricingEnabled, pricing.LongContextPricingEnabled)
+	require.Equal(t, &longContextThreshold, pricing.LongContextInputTokenThreshold)
 	require.Len(t, pricing.Intervals, 1)
 	rawIv, err := json.Marshal(pricing.Intervals[0])
 	require.NoError(t, err)

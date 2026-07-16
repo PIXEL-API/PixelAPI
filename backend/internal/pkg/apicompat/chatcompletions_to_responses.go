@@ -27,14 +27,17 @@ func ChatCompletionsToResponses(req *ChatCompletionsRequest) (*ResponsesRequest,
 	}
 
 	out := &ResponsesRequest{
-		Model:        req.Model,
-		Instructions: req.Instructions,
-		Input:        inputJSON,
-		Temperature:  req.Temperature,
-		TopP:         req.TopP,
-		Stream:       true, // upstream always streams
-		Include:      []string{"reasoning.encrypted_content"},
-		ServiceTier:  req.ServiceTier,
+		Model:              req.Model,
+		Instructions:       req.Instructions,
+		Input:              inputJSON,
+		Temperature:        req.Temperature,
+		TopP:               req.TopP,
+		Stream:             true, // upstream always streams
+		Include:            []string{"reasoning.encrypted_content"},
+		ServiceTier:        req.ServiceTier,
+		ParallelToolCalls:  req.ParallelToolCalls,
+		PromptCacheKey:     req.PromptCacheKey,
+		PromptCacheOptions: req.PromptCacheOptions,
 	}
 
 	storeFalse := false
@@ -343,15 +346,17 @@ func convertChatContentPartsToResponses(parts []ChatContentPart) []ResponsesCont
 		case "text":
 			if p.Text != "" {
 				responseParts = append(responseParts, ResponsesContentPart{
-					Type: "input_text",
-					Text: p.Text,
+					Type:                  "input_text",
+					Text:                  p.Text,
+					PromptCacheBreakpoint: p.PromptCacheBreakpoint,
 				})
 			}
 		case "image_url":
 			if p.ImageURL != nil && p.ImageURL.URL != "" && !isEmptyBase64DataURI(p.ImageURL.URL) {
 				responseParts = append(responseParts, ResponsesContentPart{
-					Type:     "input_image",
-					ImageURL: p.ImageURL.URL,
+					Type:                  "input_image",
+					ImageURL:              p.ImageURL.URL,
+					PromptCacheBreakpoint: p.PromptCacheBreakpoint,
 				})
 			}
 		}

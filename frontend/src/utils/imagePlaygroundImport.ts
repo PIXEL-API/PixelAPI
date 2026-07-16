@@ -11,7 +11,7 @@ export interface ImagePlaygroundImportPayload {
   keyId: number
   keyName: string
   provider: 'pixel'
-  model: 'gpt-image-2'
+  model: string
   issuedAt: number
 }
 
@@ -20,6 +20,7 @@ export interface BuildImagePlaygroundImportUrlInput {
   apiKey: string
   keyId: number
   keyName: string
+  model: string
   sourceName?: string
 }
 
@@ -46,6 +47,11 @@ export function buildImagePlaygroundImportUrl(input: BuildImagePlaygroundImportU
     throw new Error('API key is required')
   }
 
+  const model = input.model.trim()
+  if (!model) {
+    throw new Error('Image model is required')
+  }
+
   const payload: ImagePlaygroundImportPayload = {
     version: 1,
     source: 'pixel-api',
@@ -55,7 +61,7 @@ export function buildImagePlaygroundImportUrl(input: BuildImagePlaygroundImportU
     keyId: input.keyId,
     keyName: input.keyName.trim() || `API Key ${input.keyId}`,
     provider: 'pixel',
-    model: 'gpt-image-2',
+    model,
     issuedAt: Date.now()
   }
 

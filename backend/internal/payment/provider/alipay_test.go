@@ -275,6 +275,78 @@ func TestCreateTradeUsesPrecreateForDesktopWhenAvailable(t *testing.T) {
 	}
 }
 
+func TestCreateJSAPITradeUsesTradeCreate(t *testing.T) {
+	origTradeCreate := alipayTradeCreate
+	t.Cleanup(func() {
+		alipayTradeCreate = origTradeCreate
+	})
+
+	tradeCreateCalls := 0
+	alipayTradeCreate = func(ctx context.Context, client *alipay.Client, param alipay.TradeCreate) (*alipay.TradeCreateRsp, error) {
+		tradeCreateCalls++
+		if param.ProductCode != alipayProductCodeJSAPI {
+			t.Fatalf("product_code = %q, want %q", param.ProductCode, alipayProductCodeJSAPI)
+		}
+		if param.OutTradeNo != "sub2_jsapi" {
+			t.Fatalf("out_trade_no = %q", param.OutTradeNo)
+		}
+		if param.BuyerOpenId != "buyer-openid" {
+			t.Fatalf("buyer_open_id = %q", param.BuyerOpenId)
+		}
+		if param.OpAppId != "202100opappid" || param.OpBuyerOpenId != "buyer-openid" {
+			t.Fatalf("op app fields mismatch: op_app_id=%q op_buyer_open_id=%q", param.OpAppId, param.OpBuyerOpenId)
+		}
+		if param.NotifyURL != "https://merchant.example.com/api/v1/payment/webhook/alipay" {
+			t.Fatalf("notify_url = %q", param.NotifyURL)
+		}
+		return &alipay.TradeCreateRsp{
+			Error:      alipay.Error{Code: alipay.CodeSuccess},
+			TradeNo:    "2026070122001400000000000001",
+			OutTradeNo: "sub2_jsapi",
+		}, nil
+	}
+
+	provider := &Alipay{config: map[string]string{"appId": "202100merchantappid", "opAppId": "202100opappid"}}
+	resp, err := provider.createJSAPITrade(context.Background(), &alipay.Client{}, payment.CreatePaymentRequest{
+		OrderID:     "sub2_jsapi",
+		Amount:      "18.00",
+		Subject:     "Balance recharge",
+		BuyerOpenID: "buyer-openid",
+	}, "https://merchant.example.com/api/v1/payment/webhook/alipay")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tradeCreateCalls != 1 {
+		t.Fatalf("trade create calls = %d, want 1", tradeCreateCalls)
+	}
+	if resp.ResultType != payment.CreatePaymentResultJSAPIReady {
+		t.Fatalf("result type = %q", resp.ResultType)
+	}
+	if resp.AlipayJSAPI == nil || resp.AlipayJSAPI.TradeNO != "2026070122001400000000000001" {
+		t.Fatalf("unexpected alipay jsapi payload: %+v", resp.AlipayJSAPI)
+	}
+	if resp.AlipayJSAPI.AppID != "202100merchantappid" {
+		t.Fatalf("alipay jsapi appId = %q, want %q", resp.AlipayJSAPI.AppID, "202100merchantappid")
+	}
+}
+
+func TestCreateJSAPITradeRequiresBuyerIdentity(t *testing.T) {
+	t.Parallel()
+
+	provider := &Alipay{}
+	_, err := provider.createJSAPITrade(context.Background(), &alipay.Client{}, payment.CreatePaymentRequest{
+		OrderID: "sub2_jsapi",
+		Amount:  "18.00",
+		Subject: "Balance recharge",
+	}, "https://merchant.example.com/api/v1/payment/webhook/alipay")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "buyerId or buyerOpenId") {
+		t.Fatalf("error = %q", err.Error())
+	}
+}
+
 func TestAlipayMerchantIdentityMetadata(t *testing.T) {
 	t.Parallel()
 

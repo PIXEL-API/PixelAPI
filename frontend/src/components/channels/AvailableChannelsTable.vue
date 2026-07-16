@@ -1,190 +1,237 @@
 <template>
-  <div class="table-wrapper">
-    <table class="w-full table-fixed border-collapse text-sm">
-      <thead>
-        <tr class="border-b border-gray-100 bg-gray-50/50 text-xs font-medium uppercase tracking-wide text-gray-500 dark:border-dark-700 dark:bg-dark-800/50 dark:text-gray-400">
-          <th class="w-[180px] px-4 py-3 text-center">{{ columns.name }}</th>
-          <th class="w-[200px] px-4 py-3 text-left">{{ columns.description }}</th>
-          <th class="w-[140px] px-4 py-3 text-left">{{ columns.platform }}</th>
-          <th class="px-4 py-3 text-left">{{ columns.groups }}</th>
-          <th class="px-4 py-3 text-left">{{ columns.supportedModels }}</th>
-        </tr>
-      </thead>
-      <tbody v-if="loading">
-        <tr>
-          <td colspan="5" class="py-10 text-center">
-            <Icon name="refresh" size="lg" class="inline-block animate-spin text-gray-400" />
-          </td>
-        </tr>
-      </tbody>
-      <tbody v-else-if="rows.length === 0">
-        <tr>
-          <td colspan="5" class="py-12 text-center">
-            <Icon name="inbox" size="xl" class="mx-auto mb-3 h-12 w-12 text-gray-400" />
-            <p class="text-sm text-gray-500 dark:text-gray-400">{{ emptyLabel }}</p>
-          </td>
-        </tr>
-      </tbody>
-      <!-- 每个渠道一个 tbody：首行 td rowspan 渠道名，后续行只渲染其余三列。
-           tbody 之间强分隔线表达"渠道边界"，tbody 内部用淡分隔线区分平台。 -->
-      <tbody
-        v-else
-        v-for="(channel, chIdx) in rows"
-        :key="`${channel.name}-${chIdx}`"
-        class="border-b-2 border-gray-200 last:border-b-0 dark:border-dark-600"
+  <div class="channel-catalog">
+    <div v-if="loading" class="space-y-4">
+      <div
+        v-for="index in 3"
+        :key="index"
+        class="h-48 animate-pulse rounded-xl border border-gray-200 bg-gray-50 dark:border-dark-700 dark:bg-dark-800/60"
+      />
+    </div>
+
+    <div
+      v-else-if="rows.length === 0"
+      class="flex min-h-72 flex-col items-center justify-center rounded-xl border border-gray-200 bg-white px-6 py-12 text-center shadow-sm dark:border-dark-700 dark:bg-dark-900/40"
+    >
+      <span class="mb-4 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-gray-100 text-gray-400 dark:bg-dark-800 dark:text-gray-500">
+        <Icon name="inbox" size="xl" class="h-7 w-7" />
+      </span>
+      <p class="text-sm font-medium text-gray-700 dark:text-gray-200">{{ emptyLabel }}</p>
+      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('availableChannels.emptyHint') }}</p>
+    </div>
+
+    <div v-else class="space-y-4">
+      <article
+        v-for="(channel, channelIndex) in rows"
+        :key="`${channel.name}-${channelIndex}`"
+        class="min-w-0 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm transition-shadow duration-200 hover:shadow-md dark:border-dark-700 dark:bg-dark-900/40"
       >
-        <tr
-          v-for="(section, secIdx) in channel.platforms"
-          :key="`${channel.name}-${section.platform}`"
-          class="transition-colors hover:bg-gray-50/40 dark:hover:bg-dark-800/40"
-          :class="{ 'border-t border-gray-100/70 dark:border-dark-700/50': secIdx > 0 }"
-        >
-          <!-- 渠道名：只在第一行渲染并用 rowspan 纵向合并 -->
-          <td
-            v-if="secIdx === 0"
-            :rowspan="channel.platforms.length"
-            class="px-4 py-3 text-center align-middle font-medium text-gray-900 dark:text-white"
-          >
-            {{ channel.name }}
-          </td>
-
-          <!-- 描述：独立一列，同样用 rowspan 纵向合并 -->
-          <td
-            v-if="secIdx === 0"
-            :rowspan="channel.platforms.length"
-            class="px-4 py-3 align-middle text-xs text-gray-500 dark:text-gray-400"
-          >
-            <template v-if="channel.description">{{ channel.description }}</template>
-            <span v-else class="text-gray-400">-</span>
-          </td>
-
-          <!-- 平台徽章 -->
-          <td class="px-4 py-3 align-middle">
-            <span
-              :class="[
-                'inline-flex min-h-7 items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium uppercase',
-                platformBadgeClass(section.platform),
-              ]"
-            >
-              <PlatformIcon :platform="section.platform as GroupPlatform" size="xs" />
-              {{ section.platform }}
-            </span>
-          </td>
-
-          <!-- 分组：专属分组在前（紫色 shield 行），公开分组在后（灰色 globe 行）。 -->
-          <td class="px-4 py-3 align-middle">
-            <div class="flex min-h-10 flex-col justify-center gap-1.5">
-              <div
-                v-if="exclusiveGroups(section).length > 0"
-                class="flex flex-wrap items-center gap-1.5"
-              >
-                <span
-                  class="inline-flex items-center gap-0.5 text-[10px] font-medium uppercase text-purple-600 dark:text-purple-400"
-                  :title="t('availableChannels.exclusiveTooltip')"
-                >
-                  <Icon name="shield" size="xs" class="h-3 w-3" />
-                  {{ t('availableChannels.exclusive') }}
-                </span>
-                <GroupBadge
-                  v-for="g in exclusiveGroups(section)"
-                  :key="`ex-${g.id}`"
-                  :name="g.name"
-                  :platform="g.platform as GroupPlatform"
-                  :subscription-type="(g.subscription_type || 'standard') as SubscriptionType"
-                  :rate-multiplier="g.rate_multiplier"
-                  :user-rate-multiplier="userGroupRates[g.id] ?? null"
-                  always-show-rate
-                />
-              </div>
-              <div
-                v-if="publicGroups(section).length > 0"
-                class="flex flex-wrap items-center gap-1.5"
-              >
-                <span
-                  class="inline-flex items-center gap-0.5 text-[10px] font-medium uppercase text-gray-500 dark:text-gray-400"
-                  :title="t('availableChannels.publicTooltip')"
-                >
-                  <Icon name="globe" size="xs" class="h-3 w-3" />
-                  {{ t('availableChannels.public') }}
-                </span>
-                <GroupBadge
-                  v-for="g in publicGroups(section)"
-                  :key="`pub-${g.id}`"
-                  :name="g.name"
-                  :platform="g.platform as GroupPlatform"
-                  :subscription-type="(g.subscription_type || 'standard') as SubscriptionType"
-                  :rate-multiplier="g.rate_multiplier"
-                  :user-rate-multiplier="userGroupRates[g.id] ?? null"
-                  always-show-rate
-                />
-              </div>
-              <span v-if="section.groups.length === 0" class="text-xs text-gray-400">-</span>
+        <header class="relative border-b border-gray-100 px-4 py-4 dark:border-dark-700 sm:px-5">
+          <div
+            v-if="channel.platforms.length"
+            :class="['absolute inset-x-0 top-0 h-0.5', platformAccentBarClass(channel.platforms[0].platform)]"
+          />
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div class="min-w-0">
+              <h2 class="truncate text-base font-semibold tracking-tight text-gray-950 dark:text-white">{{ channel.name }}</h2>
+              <p v-if="channel.description" class="mt-1 max-w-2xl text-sm leading-5 text-gray-500 dark:text-gray-400">
+                {{ channel.description }}
+              </p>
             </div>
-          </td>
-
-          <!-- 支持模型 -->
-          <td class="align-top px-4 py-3">
-            <div class="grid gap-2">
-              <AvailableModelDisclosure
-                v-for="m in section.supported_models"
-                :key="`${section.platform}-${m.name}`"
-                :model="m"
-                :groups="section.groups"
-                :user-group-rates="userGroupRates"
-                :pricing-key-prefix="pricingKeyPrefix"
-                :no-pricing-label="noPricingLabel"
-                :platform-hint="section.platform"
-              />
-              <span v-if="section.supported_models.length === 0" class="text-xs text-gray-400">
-                {{ noModelsLabel }}
+            <div class="flex flex-wrap gap-1.5 text-xs text-gray-600 dark:text-gray-300">
+              <span class="rounded-md bg-gray-100 px-2 py-1 dark:bg-dark-800">
+                {{ t('availableChannels.counts.platforms', { count: channel.platforms.length }) }}
+              </span>
+              <span class="rounded-md bg-gray-100 px-2 py-1 dark:bg-dark-800">
+                {{ t('availableChannels.counts.groups', { count: channelGroupCount(channel) }) }}
+              </span>
+              <span class="rounded-md bg-gray-100 px-2 py-1 dark:bg-dark-800">
+                {{ t('availableChannels.counts.models', { count: channelModelCount(channel) }) }}
               </span>
             </div>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+          </div>
+        </header>
+
+        <div class="divide-y divide-gray-100 dark:divide-dark-700">
+          <section
+            v-for="section in channel.platforms"
+            :key="`${channel.name}-${section.platform}`"
+            class="grid min-w-0 gap-5 p-4 sm:p-5 xl:grid-cols-[minmax(13rem,17rem)_minmax(0,1fr)]"
+          >
+            <aside
+              :class="['min-w-0 rounded-xl border bg-gray-50/70 p-4 dark:bg-dark-800/45 xl:sticky xl:top-20 xl:self-start', platformBorderClass(section.platform)]"
+            >
+              <div class="flex items-center justify-between gap-3">
+                <span
+                  :class="['inline-flex min-h-7 min-w-0 items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-semibold uppercase tracking-wide', platformBadgeClass(section.platform)]"
+                >
+                  <PlatformIcon :platform="section.platform as GroupPlatform" size="sm" />
+                  <span class="truncate">{{ section.platform }}</span>
+                </span>
+                <span class="shrink-0 text-xs tabular-nums text-gray-500 dark:text-gray-400">
+                  {{ t('availableChannels.counts.models', { count: section.supported_models.length }) }}
+                </span>
+              </div>
+
+              <div class="mt-4 space-y-3">
+                <div v-for="bucket in groupBuckets(section)" :key="bucket.key" v-show="bucket.groups.length">
+                  <div
+                    :class="['mb-1.5 flex items-center gap-1 text-[11px] font-medium', bucket.labelClass]"
+                    :title="t(bucket.tooltipKey)"
+                  >
+                    <Icon :name="bucket.icon" size="xs" class="h-3 w-3" />
+                    {{ t(bucket.labelKey) }}
+                  </div>
+                  <div class="flex flex-wrap gap-1.5">
+                    <GroupBadge
+                      v-for="group in bucket.groups"
+                      :key="group.id"
+                      :name="group.name"
+                      :platform="group.platform as GroupPlatform"
+                      :subscription-type="(group.subscription_type || 'standard') as SubscriptionType"
+                      :rate-multiplier="group.rate_multiplier"
+                      :user-rate-multiplier="userGroupRates[group.id] ?? null"
+                      always-show-rate
+                    />
+                  </div>
+                </div>
+                <p v-if="section.groups.length === 0" class="text-xs text-gray-400">{{ t('availableChannels.noGroups') }}</p>
+              </div>
+            </aside>
+
+            <div class="min-w-0">
+              <div class="mb-3 flex items-center justify-between gap-3">
+                <h3 class="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                  {{ t('availableChannels.columns.supportedModels') }}
+                </h3>
+                <span class="text-xs tabular-nums text-gray-400">{{ section.supported_models.length }}</span>
+              </div>
+              <div class="grid min-w-0 gap-2 md:grid-cols-2 2xl:grid-cols-3">
+                <AvailableModelCard
+                  v-for="model in section.supported_models"
+                  :key="`${section.platform}-${model.name}`"
+                  :model="model"
+                  :pricing-key-prefix="pricingKeyPrefix"
+                  :no-pricing-label="noPricingLabel"
+                  @select="selectModel(model, section)"
+                />
+                <div
+                  v-if="!section.supported_models.length"
+                  class="flex min-h-24 items-center justify-center rounded-xl border border-dashed border-gray-200 text-xs text-gray-400 dark:border-dark-700"
+                >
+                  {{ noModelsLabel }}
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </article>
+    </div>
+
+    <AvailableModelDetailsDrawer
+      :show="selectedModel !== null"
+      :model="selectedModel?.model ?? null"
+      :platform="selectedModel?.platform ?? ''"
+      :groups="selectedModel?.groups ?? []"
+      :user-group-rates="userGroupRates"
+      :pricing-key-prefix="pricingKeyPrefix"
+      :no-pricing-label="noPricingLabel"
+      @close="selectedModel = null"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import GroupBadge from '@/components/common/GroupBadge.vue'
-import AvailableModelDisclosure from './AvailableModelDisclosure.vue'
-import type { UserAvailableChannel, UserAvailableGroup, UserChannelPlatformSection } from '@/api/channels'
+import AvailableModelCard from './AvailableModelCard.vue'
+import AvailableModelDetailsDrawer from './AvailableModelDetailsDrawer.vue'
+import type {
+  UserAvailableChannel,
+  UserAvailableGroup,
+  UserChannelPlatformSection,
+  UserSupportedModel,
+} from '@/api/channels'
 import type { GroupPlatform, SubscriptionType } from '@/types'
-import { platformBadgeClass } from '@/utils/platformColors'
+import { platformAccentBarClass, platformBadgeClass, platformBorderClass } from '@/utils/platformColors'
 
-const props = defineProps<{
-  columns: {
-    name: string
-    description: string
-    platform: string
-    groups: string
-    supportedModels: string
-  }
+defineProps<{
   rows: UserAvailableChannel[]
   loading: boolean
   pricingKeyPrefix: string
   noPricingLabel: string
   noModelsLabel: string
   emptyLabel: string
-  /** 用户专属倍率（group_id → multiplier）；无专属时由 GroupBadge 仅显示默认倍率。 */
   userGroupRates: Record<number, number>
 }>()
 
-// Suppress unused warning — props is accessed via template automatically but
-// the explicit reference here keeps the linter from flagging userGroupRates.
-void props.userGroupRates
-
 const { t } = useI18n()
 
-function exclusiveGroups(section: UserChannelPlatformSection): UserAvailableGroup[] {
-  return section.groups.filter((g) => g.is_exclusive)
+const selectedModel = ref<{
+  model: UserSupportedModel
+  platform: string
+  groups: UserAvailableGroup[]
+} | null>(null)
+
+type GroupBucket = {
+  key: string
+  groups: UserAvailableGroup[]
+  icon: 'shield' | 'globe'
+  labelKey: string
+  tooltipKey: string
+  labelClass: string
 }
 
-function publicGroups(section: UserChannelPlatformSection): UserAvailableGroup[] {
-  return section.groups.filter((g) => !g.is_exclusive)
+function groupBuckets(section: UserChannelPlatformSection): GroupBucket[] {
+  return [
+    {
+      key: 'exclusive',
+      groups: section.groups.filter((group) => group.is_exclusive),
+      icon: 'shield',
+      labelKey: 'availableChannels.exclusive',
+      tooltipKey: 'availableChannels.exclusiveTooltip',
+      labelClass: 'text-purple-600 dark:text-purple-400',
+    },
+    {
+      key: 'public',
+      groups: section.groups.filter((group) => !group.is_exclusive),
+      icon: 'globe',
+      labelKey: 'availableChannels.public',
+      tooltipKey: 'availableChannels.publicTooltip',
+      labelClass: 'text-gray-500 dark:text-gray-400',
+    },
+  ]
+}
+
+function channelGroupCount(channel: UserAvailableChannel): number {
+  return new Set(channel.platforms.flatMap((section) => section.groups.map((group) => group.id))).size
+}
+
+function channelModelCount(channel: UserAvailableChannel): number {
+  return channel.platforms.reduce((count, section) => count + section.supported_models.length, 0)
+}
+
+function selectModel(model: UserSupportedModel, section: UserChannelPlatformSection): void {
+  selectedModel.value = {
+    model,
+    platform: section.platform,
+    groups: section.groups,
+  }
 }
 </script>
+
+<style scoped>
+.channel-catalog {
+  min-width: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .channel-catalog :deep(*) {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+</style>

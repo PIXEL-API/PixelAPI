@@ -9,6 +9,30 @@ export type AccountShareListingSortKey = `${AccountShareListingSortBy}:${Account
 export type AccountShareListingFeatureTag = 'hourly_fee_waiver' | 'image_generation' | 'no_hourly_fee' | 'codex_cli_only' | 'non_codex_cli_only' | 'available'
 export type AccountShareMySpendRange = 'current_membership' | 'today' | '7d'
 
+export interface AccountShareModeGroup {
+  group_id: number
+  platform: 'openai' | 'anthropic' | string
+}
+
+export interface AccountShareWaiverProgress {
+  enabled: boolean
+  status: 'in_progress' | 'met' | string
+  window_start: string
+  window_end: string
+  now: string
+  elapsed_seconds: number
+  remaining_seconds: number
+  required_amount: number
+  usage_amount: number
+  remaining_amount: number
+  progress_percent: number
+  hourly_rate: number
+  waiver_minimum: number
+  estimated_hourly_fee_refund: number
+  request_count: number
+  last_request_at?: string
+}
+
 export interface AccountShareListing {
   id: number
   account_id: number
@@ -62,14 +86,17 @@ export interface AccountShareListing {
   anthropic_usage_updated_at?: string
   current_membership_id?: number
   current_api_key_id?: number
+  current_api_key_name?: string
   current_joined_at?: string
   current_paid_until?: string
   current_billed_until?: string
   current_idle_timeout_minutes?: number
   current_last_request_at?: string
   current_idle_expires_at?: string
+  current_waiver_progress?: AccountShareWaiverProgress | null
   queue_membership_id?: number
   queue_api_key_id?: number
+  queue_api_key_name?: string
   queue_rank?: number
   queue_status?: 'active' | 'queued' | string
   queue_idle_timeout_minutes?: number
@@ -166,11 +193,20 @@ export interface AccountShareRecommendationEstimate {
   owner_self_use: boolean
 }
 
+export interface AccountShareRecommendationScoreBreakdown {
+  cost_saving_score: number
+  stability_score: number
+  availability_score: number
+  risk_control_score: number
+  overall_score: number
+}
+
 export interface AccountShareRecommendationCandidate {
   rank: number
   listing: AccountShareListing
   estimate: AccountShareRecommendationEstimate
   score: number
+  score_breakdown: AccountShareRecommendationScoreBreakdown
   tags: string[]
   reasons: string[]
   warnings?: string[]
@@ -225,6 +261,7 @@ export interface AccountShareMySpendListing {
 export interface AccountShareMySpendMembership {
   id: number
   api_key_id: number
+  api_key_name?: string
   status: 'active' | 'queued' | 'ended' | string
   queue_rank: number
   joined_at: string
@@ -399,6 +436,10 @@ export interface CreateAccountShareProxyRequest {
   password?: string
 }
 
+export interface UpdateAccountShareProxyRequest extends Omit<CreateAccountShareProxyRequest, 'password'> {
+  password?: string
+}
+
 export interface JoinAccountShareListingRequest {
   api_key_id: number
   idle_timeout_minutes?: number
@@ -487,8 +528,22 @@ export async function createProxy(payload: CreateAccountShareProxyRequest): Prom
   return data
 }
 
+export async function updateProxy(id: number, payload: UpdateAccountShareProxyRequest): Promise<Proxy> {
+  const { data } = await apiClient.put<Proxy>(`/account-share/proxies/${id}`, payload)
+  return data
+}
+
+export async function deleteProxy(id: number): Promise<void> {
+  await apiClient.delete(`/account-share/proxies/${id}`)
+}
+
 export async function getListing(id: number): Promise<AccountShareListing> {
   const { data } = await apiClient.get<AccountShareListing>(`/account-share/listings/${id}`)
+  return data
+}
+
+export async function listModeGroups(): Promise<AccountShareModeGroup[]> {
+  const { data } = await apiClient.get<AccountShareModeGroup[]>('/account-share/mode-groups')
   return data
 }
 
@@ -535,8 +590,13 @@ export async function updateMembershipIdleTimeout(id: number, idleTimeoutMinutes
   return data
 }
 
-export async function listMembershipQueue(apiKeyID: number): Promise<AccountShareMembership[]> {
-  const { data } = await apiClient.get<AccountShareMembership[]>(`/account-share/queue/${apiKeyID}`)
+export async function listMembershipQueue(
+  apiKeyID: number,
+  options: { signal?: AbortSignal } = {}
+): Promise<AccountShareMembership[]> {
+  const { data } = await apiClient.get<AccountShareMembership[]>(`/account-share/queue/${apiKeyID}`, {
+    signal: options.signal
+  })
   return data
 }
 
@@ -589,12 +649,15 @@ export async function listOwnerReviews(
 }
 
 export const accountShareAPI = {
+  listModeGroups,
   generateOpenAIAuthURL,
   exchangeOpenAICode,
   generateAnthropicAuthURL,
   exchangeAnthropicCode,
   listProxies,
   createProxy,
+  updateProxy,
+  deleteProxy,
   listListings,
   recommendListings,
   getRecommendationUsageProfile,

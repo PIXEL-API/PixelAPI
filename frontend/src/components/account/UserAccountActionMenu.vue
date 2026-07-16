@@ -16,7 +16,7 @@
             <Icon name="chart" size="sm" class="text-indigo-500" />
             {{ t('admin.accounts.viewStats') }}
           </button>
-          <template v-if="account.type === 'oauth' || account.type === 'setup-token'">
+          <template v-if="supportsCredentialMaintenance">
             <button class="menu-item text-blue-600" @click="emitAction('reauth')">
               <Icon name="link" size="sm" />
               {{ t('admin.accounts.reAuthorize') }}
@@ -29,6 +29,10 @@
           <button v-if="supportsPrivacy" class="menu-item text-emerald-600" @click="emitAction('set-privacy')">
             <Icon name="shield" size="sm" />
             {{ t('admin.accounts.setPrivacy') }}
+          </button>
+          <button class="menu-item text-sky-600" @click="emitAction('moderation')">
+            <Icon name="shield" size="sm" />
+            {{ t('userAccounts.moderationSettings') }}
           </button>
           <template v-if="supportsOpenAILevelVerification">
             <button class="menu-item text-gray-700 dark:text-dark-100" @click="emitVerifyLevel('free')">
@@ -65,23 +69,40 @@ const emit = defineEmits<{
   (e: 'reauth', account: Account): void
   (e: 'refresh-token', account: Account): void
   (e: 'set-privacy', account: Account): void
+  (e: 'moderation', account: Account): void
   (e: 'verify-level', account: Account, targetLevel: 'free' | 'plus'): void
 }>()
 
 const { t } = useI18n()
 
+const isOpenAIAgentIdentity = computed(() => {
+  const authMode = props.account?.credentials?.auth_mode
+  return (
+    props.account?.platform === 'openai' &&
+    props.account.type === 'oauth' &&
+    typeof authMode === 'string' &&
+    authMode.trim().toLowerCase().replace(/[\s_-]+/g, '') === 'agentidentity'
+  )
+})
+
+const supportsCredentialMaintenance = computed(() => {
+  const account = props.account
+  return Boolean(account && (account.type === 'oauth' || account.type === 'setup-token') && !isOpenAIAgentIdentity.value)
+})
+
 const supportsPrivacy = computed(() => {
   return (
+    !isOpenAIAgentIdentity.value &&
     props.account?.type === 'oauth' &&
     (props.account.platform === 'openai' || props.account.platform === 'antigravity')
   )
 })
 
 const supportsOpenAILevelVerification = computed(() => {
-  return props.account?.platform === 'openai' && props.account.type === 'oauth'
+  return !isOpenAIAgentIdentity.value && props.account?.platform === 'openai' && props.account.type === 'oauth'
 })
 
-function emitAction(event: 'test' | 'stats' | 'reauth' | 'refresh-token' | 'set-privacy'): void {
+function emitAction(event: 'test' | 'stats' | 'reauth' | 'refresh-token' | 'set-privacy' | 'moderation'): void {
   if (!props.account) return
   switch (event) {
     case 'test':
@@ -98,6 +119,9 @@ function emitAction(event: 'test' | 'stats' | 'reauth' | 'refresh-token' | 'set-
       break
     case 'set-privacy':
       emit('set-privacy', props.account)
+      break
+    case 'moderation':
+      emit('moderation', props.account)
       break
   }
   emit('close')

@@ -1,0 +1,189 @@
+import type {
+  UserAvailableGroup,
+  UserPricingInterval,
+  UserSupportedModel,
+  UserSupportedModelPricing,
+} from '@/api/channels'
+import {
+  BILLING_MODE_IMAGE,
+  BILLING_MODE_PER_REQUEST,
+  BILLING_MODE_TOKEN,
+} from '@/constants/channel'
+import { formatScaled } from '@/utils/pricing'
+
+export const TOKEN_PRICE_SCALE = 1_000_000
+
+type Translate = (key: string) => string
+
+export interface AvailablePricingItem {
+  key: string
+  label: string
+  value: string
+}
+
+function pricingKey(prefix: string, key: string): string {
+  return `${prefix}.${key}`
+}
+
+export function availablePriceUnit(scale: number, translate: Translate, prefix: string): string {
+  return translate(pricingKey(prefix, scale === TOKEN_PRICE_SCALE ? 'unitPerMillion' : 'unitPerRequest'))
+}
+
+export function formatAvailablePrice(
+  value: number | null,
+  scale: number,
+  translate: Translate,
+  prefix: string,
+): string {
+  if (value == null) return '-'
+  return `${formatScaled(value, scale)} ${availablePriceUnit(scale, translate, prefix)}`
+}
+
+export function billingModeLabel(
+  pricing: UserSupportedModelPricing | null,
+  translate: Translate,
+  prefix: string,
+): string {
+  switch (pricing?.billing_mode) {
+    case BILLING_MODE_TOKEN:
+      return translate(pricingKey(prefix, 'billingModeToken'))
+    case BILLING_MODE_PER_REQUEST:
+      return translate(pricingKey(prefix, 'billingModePerRequest'))
+    case BILLING_MODE_IMAGE:
+      return translate(pricingKey(prefix, 'billingModeImage'))
+    default:
+      return '-'
+  }
+}
+
+export function availablePricingItems(
+  model: UserSupportedModel,
+  translate: Translate,
+  prefix: string,
+): AvailablePricingItem[] {
+  const pricing = model.pricing
+  if (!pricing) return []
+
+  const items: AvailablePricingItem[] = [
+    {
+      key: 'billingMode',
+      label: translate(pricingKey(prefix, 'billingMode')),
+      value: billingModeLabel(pricing, translate, prefix),
+    },
+  ]
+
+  const addPrice = (key: string, labelKey: string, value: number | null, scale: number) => {
+    if (value == null) return
+    items.push({
+      key,
+      label: translate(pricingKey(prefix, labelKey)),
+      value: formatAvailablePrice(value, scale, translate, prefix),
+    })
+  }
+
+  if (pricing.billing_mode === BILLING_MODE_TOKEN) {
+    addPrice('input', 'inputPrice', pricing.input_price, TOKEN_PRICE_SCALE)
+    addPrice('output', 'outputPrice', pricing.output_price, TOKEN_PRICE_SCALE)
+    addPrice('cacheWrite', 'cacheWritePrice', pricing.cache_write_price, TOKEN_PRICE_SCALE)
+    addPrice('cacheRead', 'cacheReadPrice', pricing.cache_read_price, TOKEN_PRICE_SCALE)
+    addPrice('imageInput', 'imageInputPrice', pricing.image_input_price, TOKEN_PRICE_SCALE)
+    addPrice('imageCacheRead', 'imageCacheReadPrice', pricing.image_cache_read_price, TOKEN_PRICE_SCALE)
+    addPrice('imageOutput', 'imageOutputPrice', pricing.image_output_price, TOKEN_PRICE_SCALE)
+  } else if (pricing.billing_mode === BILLING_MODE_PER_REQUEST) {
+    addPrice('perRequest', 'perRequestPrice', pricing.per_request_price, 1)
+  } else if (pricing.billing_mode === BILLING_MODE_IMAGE) {
+    addPrice('imageOutput', 'imageOutputPrice', pricing.image_output_price, 1)
+  }
+
+  return items
+}
+
+export function availableModelPriceSummary(
+  model: UserSupportedModel,
+  translate: Translate,
+  prefix: string,
+  noPricingLabel: string,
+): string {
+  const pricing = model.pricing
+  if (!pricing) return noPricingLabel
+
+  if (pricing.billing_mode === BILLING_MODE_TOKEN) {
+    return `${translate(pricingKey(prefix, 'inputPrice'))} ${formatScaled(pricing.input_price, TOKEN_PRICE_SCALE)} · ${translate(pricingKey(prefix, 'outputPrice'))} ${formatScaled(pricing.output_price, TOKEN_PRICE_SCALE)}`
+  }
+  if (pricing.billing_mode === BILLING_MODE_PER_REQUEST) {
+    return `${translate(pricingKey(prefix, 'perRequestPrice'))} ${formatScaled(pricing.per_request_price, 1)}`
+  }
+  if (pricing.billing_mode === BILLING_MODE_IMAGE) {
+    return `${translate(pricingKey(prefix, 'imageOutputPrice'))} ${formatScaled(pricing.image_output_price, 1)}`
+  }
+  return billingModeLabel(pricing, translate, prefix)
+}
+
+export function availableIntervalLabel(interval: UserPricingInterval): string {
+  const maximum = interval.max_tokens == null ? '∞' : String(interval.max_tokens)
+  return interval.tier_label || `(${interval.min_tokens}, ${maximum}]`
+}
+
+export function intervalHasPrice(interval: UserPricingInterval): boolean {
+  return (
+    interval.input_price != null ||
+    interval.output_price != null ||
+    interval.cache_write_price != null ||
+    interval.cache_read_price != null ||
+    interval.per_request_price != null
+  )
+}
+
+export function effectiveGroupRate(
+  group: UserAvailableGroup,
+  userGroupRates: Record<number, number>,
+): number {
+  return userGroupRates[group.id] ?? group.rate_multiplier
+}
+
+export function effectiveGroupPriceSummary(
+  model: UserSupportedModel,
+  group: UserAvailableGroup,
+  userGroupRates: Record<number, number>,
+  translate: Translate,
+  prefix: string,
+  noPricingLabel: string,
+): string {
+  const pricing = model.pricing
+  if (!pricing) return noPricingLabel
+  if (pricing.intervals?.some(intervalHasPrice)) {
+    return translate('availableChannels.groupRates.intervalMultiplierHint')
+  }
+
+  const rate = effectiveGroupRate(group, userGroupRates)
+  const effectivePrice = (value: number | null, scale: number) =>
+    formatAvailablePrice(value == null ? null : value * rate, scale, translate, prefix)
+
+  if (pricing.billing_mode === BILLING_MODE_TOKEN) {
+    const entries = [
+      ['inputPrice', pricing.input_price],
+      ['outputPrice', pricing.output_price],
+      ['cacheWritePrice', pricing.cache_write_price],
+      ['cacheReadPrice', pricing.cache_read_price],
+      ['imageInputPrice', pricing.image_input_price],
+      ['imageCacheReadPrice', pricing.image_cache_read_price],
+      ['imageOutputPrice', pricing.image_output_price],
+    ] as const
+
+    const summary = entries
+      .filter(([, value]) => value != null)
+      .map(
+        ([labelKey, value]) =>
+          `${translate(pricingKey(prefix, labelKey))} ${effectivePrice(value, TOKEN_PRICE_SCALE)}`,
+      )
+      .join(' · ')
+    return summary || '-'
+  }
+  if (pricing.billing_mode === BILLING_MODE_PER_REQUEST) {
+    return `${translate(pricingKey(prefix, 'perRequestPrice'))} ${effectivePrice(pricing.per_request_price, 1)}`
+  }
+  if (pricing.billing_mode === BILLING_MODE_IMAGE) {
+    return `${translate(pricingKey(prefix, 'imageOutputPrice'))} ${effectivePrice(pricing.image_output_price, 1)}`
+  }
+  return '-'
+}

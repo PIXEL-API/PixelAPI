@@ -127,7 +127,7 @@ func expectedNotificationProviderKeyForOrder(registry *payment.Registry, order *
 }
 
 func validateProviderSnapshotMetadata(order *dbent.PaymentOrder, providerKey string, metadata map[string]string) error {
-	if order == nil || len(metadata) == 0 {
+	if order == nil {
 		return nil
 	}
 

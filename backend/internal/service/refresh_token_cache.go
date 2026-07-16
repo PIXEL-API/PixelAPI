@@ -10,6 +10,9 @@ import (
 // This is used to abstract away the underlying cache implementation (e.g., redis.Nil).
 var ErrRefreshTokenNotFound = errors.New("refresh token not found")
 
+// ErrRefreshTokenAlreadyConsumed 表示刷新令牌已被另一个并发请求原子消费。
+var ErrRefreshTokenAlreadyConsumed = errors.New("refresh token already consumed")
+
 // RefreshTokenData 存储在Redis中的Refresh Token数据
 type RefreshTokenData struct {
 	UserID       int64     `json:"user_id"`
@@ -38,6 +41,10 @@ type RefreshTokenCache interface {
 	// 返回 (nil, ErrRefreshTokenNotFound) 如果Token不存在
 	// 返回 (nil, err) 如果发生其他错误
 	GetRefreshToken(ctx context.Context, tokenHash string) (*RefreshTokenData, error)
+
+	// RotateRefreshToken 原子消费旧令牌并写入同一家族的新令牌。
+	// 同一个旧令牌的并发轮换只允许一个调用成功。
+	RotateRefreshToken(ctx context.Context, oldTokenHash, newTokenHash string, data *RefreshTokenData, ttl time.Duration) error
 
 	// DeleteRefreshToken 删除单个Refresh Token
 	// 用于Token轮转时使旧Token失效

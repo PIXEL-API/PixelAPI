@@ -7,13 +7,20 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"strings"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/lib/pq"
 	"github.com/shopspring/decimal"
+)
+
+const (
+	usageBillingMaxAttempts    = 3
+	usageBillingRetryBaseDelay = 25 * time.Millisecond
 )
 
 type usageBillingRepository struct {
@@ -36,16 +43,60 @@ func (r *usageBillingRepository) Apply(ctx context.Context, cmd *service.UsageBi
 	if cmd.RequestID == "" {
 		return nil, service.ErrUsageBillingRequestIDRequired
 	}
+	if cmd.UsageLog != nil && cmd.UsageLog.CreatedAt.IsZero() {
+		cmd.UsageLog.CreatedAt = time.Now()
+	}
+	if cmd.UsageOccurredAt.IsZero() {
+		cmd.UsageOccurredAt = resolveUsageOccurredAt(cmd)
+	}
 
+	// PostgreSQL 会中止发生死锁的整个事务，因此每次重试都必须从新事务开始。
+	for attempt := 1; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		result, err := r.applyOnce(ctx, cmd)
+		if err == nil {
+			return result, nil
+		}
+		if !isUsageBillingDeadlock(err) {
+			return nil, err
+		}
+		if attempt == usageBillingMaxAttempts {
+			logger.LegacyPrintf(
+				"repository.usage_billing",
+				"[ERROR] deadlock_retry_exhausted request_id=%s api_key_id=%d sqlstate=40P01 attempts=%d",
+				cmd.RequestID,
+				cmd.APIKeyID,
+				usageBillingMaxAttempts,
+			)
+			return nil, err
+		}
+
+		baseDelay := time.Duration(attempt) * usageBillingRetryBaseDelay
+		delay := baseDelay + time.Duration(rand.Int64N(int64(baseDelay)+1))
+		logger.LegacyPrintf(
+			"repository.usage_billing",
+			"[WARN] deadlock_retry request_id=%s api_key_id=%d sqlstate=40P01 attempt=%d max_attempts=%d delay_ms=%d",
+			cmd.RequestID,
+			cmd.APIKeyID,
+			attempt,
+			usageBillingMaxAttempts,
+			delay.Milliseconds(),
+		)
+		if err := waitUsageBillingRetry(ctx, delay); err != nil {
+			return nil, err
+		}
+	}
+}
+
+func (r *usageBillingRepository) applyOnce(ctx context.Context, cmd *service.UsageBillingCommand) (*service.UsageBillingApplyResult, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if tx != nil {
-			_ = tx.Rollback()
-		}
-	}()
+	defer func() { _ = tx.Rollback() }()
 
 	applied, err := r.claimUsageBillingKey(ctx, tx, cmd)
 	if err != nil {
@@ -63,8 +114,26 @@ func (r *usageBillingRepository) Apply(ctx context.Context, cmd *service.UsageBi
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	tx = nil
 	return result, nil
+}
+
+func isUsageBillingDeadlock(err error) bool {
+	if err == nil {
+		return false
+	}
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) && pqErr != nil && pqErr.Code == "40P01"
+}
+
+func waitUsageBillingRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (r *usageBillingRepository) claimUsageBillingKey(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand) (bool, error) {
@@ -292,11 +361,13 @@ func deductUsageBillingWallet(ctx context.Context, tx *sql.Tx, userID int64, amo
 
 	var currentBalance float64
 	var currentPoints float64
+	// usage_logs 外键校验可能已持有 KEY SHARE；NO KEY UPDATE 既避免锁升级死锁，
+	// 又继续串行保护余额读取与后续更新。
 	err = tx.QueryRowContext(ctx, `
 		SELECT balance, points_balance
 		FROM users
 		WHERE id = $1 AND deleted_at IS NULL
-		FOR UPDATE
+		FOR NO KEY UPDATE
 	`, userID).Scan(&currentBalance, &currentPoints)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, 0, 0, 0, service.ErrUserNotFound
@@ -350,7 +421,23 @@ func ensureUsageBillingLog(ctx context.Context, tx *sql.Tx, cmd *service.UsageBi
 		log.AccountID = cmd.AccountID
 	}
 	prepared := prepareUsageLogInsert(log)
-	query := `
+	query := usageBillingUsageLogInsertQuery()
+	if err := scanSingleRow(ctx, tx, query, prepared.args, &log.ID, &log.CreatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) && prepared.requestID != "" {
+			if err := scanSingleRow(ctx, tx, "SELECT id, created_at FROM usage_logs WHERE request_id = $1 AND api_key_id = $2", []any{prepared.requestID, log.APIKeyID}, &log.ID, &log.CreatedAt); err != nil {
+				return 0, err
+			}
+			log.RateMultiplier = prepared.rateMultiplier
+			return log.ID, nil
+		}
+		return 0, err
+	}
+	log.RateMultiplier = prepared.rateMultiplier
+	return log.ID, nil
+}
+
+func usageBillingUsageLogInsertQuery() string {
+	return `
 		INSERT INTO usage_logs (
 			user_id,
 			api_key_id,
@@ -376,6 +463,7 @@ func ensureUsageBillingLog(ctx context.Context, tx *sql.Tx, cmd *service.UsageBi
 			total_cost,
 			actual_cost,
 			rate_multiplier,
+			rate_multiplier_source,
 			account_rate_multiplier,
 			billing_type,
 			request_type,
@@ -387,6 +475,9 @@ func ensureUsageBillingLog(ctx context.Context, tx *sql.Tx, cmd *service.UsageBi
 			ip_address,
 			image_count,
 			image_size,
+			video_count,
+			video_resolution,
+			video_duration_seconds,
 			service_tier,
 			reasoning_effort,
 			inbound_endpoint,
@@ -404,23 +495,11 @@ func ensureUsageBillingLog(ctx context.Context, tx *sql.Tx, cmd *service.UsageBi
 			$10, $11, $12, $13,
 			$14, $15, $16, $17,
 			$18, $19, $20, $21, $22, $23,
-			$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46
+			$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50
 		)
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
 		RETURNING id, created_at
 	`
-	if err := scanSingleRow(ctx, tx, query, prepared.args, &log.ID, &log.CreatedAt); err != nil {
-		if errors.Is(err, sql.ErrNoRows) && prepared.requestID != "" {
-			if err := scanSingleRow(ctx, tx, "SELECT id, created_at FROM usage_logs WHERE request_id = $1 AND api_key_id = $2", []any{prepared.requestID, log.APIKeyID}, &log.ID, &log.CreatedAt); err != nil {
-				return 0, err
-			}
-			log.RateMultiplier = prepared.rateMultiplier
-			return log.ID, nil
-		}
-		return 0, err
-	}
-	log.RateMultiplier = prepared.rateMultiplier
-	return log.ID, nil
 }
 
 type userBalanceLedgerInput struct {
@@ -679,8 +758,12 @@ func applyAccountShareModeSettlement(ctx context.Context, tx *sql.Tx, cmd *servi
 	ownerRatio, platformRatio := accountShareModeSettlementRatios(snapshot.OwnerShareRatio, snapshot.PlatformShareRatio)
 	ownerCredit := totalCharge.Mul(ownerRatio).Round(10)
 	platformCredit := totalCharge.Mul(platformRatio).Round(10)
-	inserted, err := insertAccountShareModeSettlement(ctx, tx, cmd, usageLogID, ownerCredit, platformCredit)
+	periodStartedAt, periodEndedAt := accountShareModeUsageRequestPeriod(cmd, snapshot)
+	inserted, err := insertAccountShareModeSettlement(ctx, tx, cmd, usageLogID, ownerCredit, platformCredit, periodStartedAt, periodEndedAt)
 	if err != nil || !inserted {
+		return err
+	}
+	if err := updateAccountShareWaiverProgressCache(ctx, tx, snapshot, totalCharge, periodStartedAt, periodEndedAt); err != nil {
 		return err
 	}
 	if ownerCredit.IsZero() {
@@ -716,7 +799,7 @@ func applyAccountShareModeSettlement(ctx context.Context, tx *sql.Tx, cmd *servi
 	return nil
 }
 
-func insertAccountShareModeSettlement(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand, usageLogID int64, ownerCredit, platformCredit decimal.Decimal) (bool, error) {
+func insertAccountShareModeSettlement(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand, usageLogID int64, ownerCredit, platformCredit decimal.Decimal, periodStartedAt, periodEndedAt time.Time) (bool, error) {
 	var snapshot *service.AccountShareModeBillingSnapshot
 	if cmd != nil {
 		snapshot = cmd.AccountShareModeSettlement
@@ -724,7 +807,6 @@ func insertAccountShareModeSettlement(ctx context.Context, tx *sql.Tx, cmd *serv
 	if snapshot == nil {
 		return false, nil
 	}
-	periodStartedAt, periodEndedAt := accountShareModeUsageRequestPeriod(cmd, snapshot)
 	var id int64
 	err := tx.QueryRowContext(ctx, `
 		INSERT INTO account_share_mode_settlement_entries (
@@ -787,10 +869,140 @@ func insertAccountShareModeSettlement(ctx context.Context, tx *sql.Tx, cmd *serv
 	return id > 0, nil
 }
 
+func updateAccountShareWaiverProgressCache(ctx context.Context, tx *sql.Tx, snapshot *service.AccountShareModeBillingSnapshot, totalCharge decimal.Decimal, periodStartedAt, periodEndedAt time.Time) error {
+	if tx == nil || snapshot == nil || snapshot.MembershipID <= 0 || totalCharge.LessThanOrEqual(decimal.Zero) {
+		return nil
+	}
+	periodStartedAt = periodStartedAt.UTC()
+	periodEndedAt = periodEndedAt.UTC()
+	if periodStartedAt.After(periodEndedAt) {
+		periodStartedAt = periodEndedAt
+	}
+
+	var joinedAt time.Time
+	err := tx.QueryRowContext(ctx, `
+		SELECT joined_at
+		FROM account_share_memberships
+		WHERE id = $1
+			AND status = $2
+			AND deleted_at IS NULL
+		FOR UPDATE
+	`, snapshot.MembershipID, service.AccountShareMembershipStatusActive).Scan(&joinedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	windowStart := accountShareModeWaiverWindowStartAt(joinedAt, periodEndedAt)
+	windowEnd := accountShareModeWaiverWindowEnd(windowStart)
+
+	overlapCharge := accountShareModeWindowOverlapCharge(totalCharge, periodStartedAt, periodEndedAt, windowStart, windowEnd)
+	if overlapCharge.LessThanOrEqual(decimal.Zero) {
+		return nil
+	}
+	periodOccurredAt := periodEndedAt
+	if periodOccurredAt.IsZero() {
+		periodOccurredAt = time.Now().UTC()
+	}
+	_, err = tx.ExecContext(ctx, `
+		UPDATE account_share_memberships
+		SET waiver_window_started_at = $2,
+			waiver_window_usage_amount = CASE
+				WHEN waiver_window_started_at IS DISTINCT FROM $2::timestamptz THEN $3::numeric
+				ELSE waiver_window_usage_amount + $3::numeric
+			END,
+			waiver_window_request_count = CASE
+				WHEN waiver_window_started_at IS DISTINCT FROM $2::timestamptz THEN 1
+				ELSE waiver_window_request_count + 1
+			END,
+			waiver_window_last_request_at = CASE
+				WHEN waiver_window_started_at IS DISTINCT FROM $2::timestamptz THEN $4::timestamptz
+				ELSE GREATEST(COALESCE(waiver_window_last_request_at, $4::timestamptz), $4::timestamptz)
+			END,
+			updated_at = NOW()
+		WHERE id = $1
+			AND status = $5
+			AND deleted_at IS NULL
+	`, snapshot.MembershipID, windowStart, overlapCharge.StringFixed(10), periodOccurredAt, service.AccountShareMembershipStatusActive)
+	return err
+}
+
+func accountShareModeWaiverWindowStartAt(joinedAt time.Time, at time.Time) time.Time {
+	joinedAt = joinedAt.UTC()
+	at = at.UTC()
+	windowMax := service.AccountShareModeSeatWaiverWindowMax
+	if windowMax <= 0 {
+		windowMax = time.Hour
+	}
+	if at.Before(joinedAt) || !at.After(joinedAt) {
+		return joinedAt
+	}
+	elapsed := at.Sub(joinedAt)
+	windows := elapsed / windowMax
+	return joinedAt.Add(windows * windowMax).UTC()
+}
+
+func accountShareModeWaiverWindowEnd(windowStart time.Time) time.Time {
+	windowMax := service.AccountShareModeSeatWaiverWindowMax
+	if windowMax <= 0 {
+		windowMax = time.Hour
+	}
+	return windowStart.UTC().Add(windowMax).UTC()
+}
+
+func accountShareModeWindowOverlapCharge(totalCharge decimal.Decimal, periodStartedAt, periodEndedAt, windowStart, windowEnd time.Time) decimal.Decimal {
+	if totalCharge.LessThanOrEqual(decimal.Zero) || !windowEnd.After(windowStart) {
+		return decimal.Zero
+	}
+	periodStartedAt = periodStartedAt.UTC()
+	periodEndedAt = periodEndedAt.UTC()
+	windowStart = windowStart.UTC()
+	windowEnd = windowEnd.UTC()
+	if periodStartedAt.After(periodEndedAt) {
+		periodStartedAt = periodEndedAt
+	}
+	if periodEndedAt.After(periodStartedAt) {
+		overlapStart := accountShareModeMaxTime(periodStartedAt, windowStart)
+		overlapEnd := accountShareModeMinTime(periodEndedAt, windowEnd)
+		if !overlapEnd.After(overlapStart) {
+			return decimal.Zero
+		}
+		totalNs := periodEndedAt.Sub(periodStartedAt).Nanoseconds()
+		overlapNs := overlapEnd.Sub(overlapStart).Nanoseconds()
+		if totalNs <= 0 || overlapNs <= 0 {
+			return decimal.Zero
+		}
+		return totalCharge.Mul(decimal.NewFromInt(overlapNs)).Div(decimal.NewFromInt(totalNs)).Round(10)
+	}
+	if !periodEndedAt.Before(windowStart) && periodEndedAt.Before(windowEnd) {
+		return totalCharge.Round(10)
+	}
+	return decimal.Zero
+}
+
+func accountShareModeMinTime(left, right time.Time) time.Time {
+	if left.Before(right) {
+		return left
+	}
+	return right
+}
+
+func accountShareModeMaxTime(left, right time.Time) time.Time {
+	if left.After(right) {
+		return left
+	}
+	return right
+}
+
 func accountShareModeUsageRequestPeriod(cmd *service.UsageBillingCommand, snapshot *service.AccountShareModeBillingSnapshot) (time.Time, time.Time) {
 	endedAt := time.Now().UTC()
-	if cmd != nil && cmd.UsageLog != nil && !cmd.UsageLog.CreatedAt.IsZero() {
-		endedAt = cmd.UsageLog.CreatedAt.UTC()
+	if cmd != nil {
+		if cmd.UsageLog != nil && !cmd.UsageLog.CreatedAt.IsZero() {
+			endedAt = cmd.UsageLog.CreatedAt.UTC()
+		} else if !cmd.UsageOccurredAt.IsZero() {
+			endedAt = cmd.UsageOccurredAt.UTC()
+		}
 	}
 	startedAt := endedAt
 	if snapshot != nil && snapshot.DurationMs > 0 {

@@ -77,9 +77,14 @@ func jwtAuth(authService *service.AuthService, userService jwtUserReader, activi
 			return
 		}
 
+		authTimeUnix := int64(0)
+		if claims.IssuedAt != nil {
+			authTimeUnix = claims.IssuedAt.Unix()
+		}
 		c.Set(string(ContextKeyUser), AuthSubject{
-			UserID:      user.ID,
-			Concurrency: user.Concurrency,
+			UserID:       user.ID,
+			Concurrency:  user.Concurrency,
+			AuthTimeUnix: authTimeUnix,
 		})
 		c.Set(string(ContextKeyUserRole), user.Role)
 		if activityToucher != nil {

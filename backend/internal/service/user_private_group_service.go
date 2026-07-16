@@ -132,12 +132,27 @@ func (s *userPrivateGroupService) findOrCreateUserPrivateGroup(ctx context.Conte
 	if err != nil {
 		return nil, err
 	}
+	group = buildUserPrivateGroup(userID, platform, template)
+	if err := s.groupRepo.Create(ctx, group); err != nil {
+		if errors.Is(err, ErrGroupExists) {
+			return s.findUserPrivateGroup(ctx, userID, platform)
+		}
+		return nil, fmt.Errorf("create private group: %w", err)
+	}
+	return group, nil
+}
+
+func buildUserPrivateGroup(userID int64, platform string, template *UserPrivateGroupTemplate) *Group {
+	if template == nil {
+		template = &UserPrivateGroupTemplate{}
+	}
 	ownerID := userID
-	group = &Group{
+	return &Group{
 		Name:                        PrivateGroupName(userID, platform),
 		Description:                 fmt.Sprintf("Private subscription group for user %d on %s.", userID, platform),
 		Platform:                    platform,
 		RateMultiplier:              template.RateMultiplier,
+		NewUserRateMultiplier:       1,
 		IsExclusive:                 true,
 		Status:                      StatusActive,
 		OwnerUserID:                 &ownerID,
@@ -152,13 +167,6 @@ func (s *userPrivateGroupService) findOrCreateUserPrivateGroup(ctx context.Conte
 		SupportedModelScopes:        []string{},
 		MessagesDispatchModelConfig: OpenAIMessagesDispatchModelConfig{},
 	}
-	if err := s.groupRepo.Create(ctx, group); err != nil {
-		if errors.Is(err, ErrGroupExists) {
-			return s.findUserPrivateGroup(ctx, userID, platform)
-		}
-		return nil, fmt.Errorf("create private group: %w", err)
-	}
-	return group, nil
 }
 
 func (s *userPrivateGroupService) findUserPrivateGroup(ctx context.Context, userID int64, platform string) (*Group, error) {

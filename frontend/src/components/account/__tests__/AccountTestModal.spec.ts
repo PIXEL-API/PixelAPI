@@ -178,11 +178,21 @@ describe('AccountTestModal', () => {
     })
   })
 
-  it('uses user-scoped endpoint and default models for user accounts', async () => {
+  it.each([
+    ['anthropic', 'claude-sonnet-4-5-20250929'],
+    ['openai', 'gpt-5.5'],
+    ['gemini', 'gemini-2.5-flash'],
+    ['antigravity', 'gemini-2.5-flash'],
+    ['grok', 'grok-4.5']
+  ])('uses the correct %s model for user-scoped account tests', async (platform, expectedModel) => {
     const wrapper = mount(AccountTestModal, {
       props: {
-        show: true,
-        account: buildAccount(),
+        show: false,
+        account: {
+          ...buildAccount(),
+          name: `${platform} OAuth`,
+          platform
+        },
         accountScope: 'user'
       },
       global: {
@@ -195,17 +205,23 @@ describe('AccountTestModal', () => {
       }
     })
 
-    await flushPromises()
-    ;(wrapper.vm as any).selectedModelId = 'gpt-5.5'
-    await (wrapper.vm as any).startTest()
+    await wrapper.setProps({ show: true })
     await flushPromises()
 
     expect(getAvailableModelsMock).not.toHaveBeenCalled()
+    expect((wrapper.vm as any).availableModels).toEqual([
+      expect.objectContaining({ id: expectedModel })
+    ])
+    expect((wrapper.vm as any).selectedModelId).toBe(expectedModel)
+
+    await (wrapper.vm as any).startTest()
+    await flushPromises()
+
     expect(global.fetch).toHaveBeenCalledTimes(1)
     const [url, options] = (global.fetch as any).mock.calls[0]
     expect(url).toBe('/api/v1/accounts/1/test')
     expect(JSON.parse(options.body)).toMatchObject({
-      model_id: 'gpt-5.5',
+      model_id: expectedModel,
       mode: 'default'
     })
   })

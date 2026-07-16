@@ -8,12 +8,14 @@ const {
   listWithEtag,
   getBatchTodayStats,
   getAllProxies,
+  listProxies,
   getAllGroups
 } = vi.hoisted(() => ({
   listAccounts: vi.fn(),
   listWithEtag: vi.fn(),
   getBatchTodayStats: vi.fn(),
   getAllProxies: vi.fn(),
+  listProxies: vi.fn(),
   getAllGroups: vi.fn()
 }))
 
@@ -29,7 +31,8 @@ vi.mock('@/api/admin', () => ({
       toggleSchedulable: vi.fn()
     },
     proxies: {
-      getAll: getAllProxies
+      getAllWithCount: getAllProxies,
+      list: listProxies
     },
     groups: {
       getAll: getAllGroups
@@ -48,6 +51,13 @@ vi.mock('@/stores/app', () => ({
 vi.mock('@/stores/auth', () => ({
   useAuthStore: () => ({
     token: 'test-token'
+  })
+}))
+
+vi.mock('@/stores/adminSettings', () => ({
+  useAdminSettingsStore: () => ({
+    openAIAccountLevels: [],
+    fetch: vi.fn().mockResolvedValue(undefined)
   })
 }))
 
@@ -85,6 +95,7 @@ describe('admin AccountsView bulk edit scope', () => {
     listWithEtag.mockReset()
     getBatchTodayStats.mockReset()
     getAllProxies.mockReset()
+    listProxies.mockReset()
     getAllGroups.mockReset()
 
     listAccounts.mockResolvedValue({
@@ -101,6 +112,7 @@ describe('admin AccountsView bulk edit scope', () => {
     })
     getBatchTodayStats.mockResolvedValue({ stats: {} })
     getAllProxies.mockResolvedValue([])
+    listProxies.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 1000, pages: 0 })
     getAllGroups.mockResolvedValue([])
   })
 

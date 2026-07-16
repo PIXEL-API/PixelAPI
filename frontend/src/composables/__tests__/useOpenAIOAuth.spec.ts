@@ -11,6 +11,8 @@ vi.mock('vue-i18n', () => ({
     t: (key: string) => {
       const messages: Record<string, string> = {
         'admin.accounts.oauth.openai.failedToExchangeCode': 'OpenAI 授权码兑换失败',
+        'admin.accounts.oauth.openai.errors.OPENAI_OAUTH_SESSION_NOT_FOUND':
+          '授权会话不存在或已过期，请重新生成授权链接，使用最新链接完成授权后再提交。',
         'admin.accounts.oauth.openai.errors.OPENAI_OAUTH_PROXY_REQUIRED':
           '未设置代理，当前服务器无法直连 OpenAI，导致 OpenAI OAuth 请求失败。请先选择可访问 OpenAI 的代理后重试；如果授权码已失效，请重新生成授权链接。'
       }
@@ -54,11 +56,15 @@ describe('useOpenAIOAuth.generateAuthUrl', () => {
 
     const oauth = useOpenAIOAuth('user')
 
-    const ok = await oauth.generateAuthUrl(7, 'http://localhost:3000/auth/callback')
+    const ok = await oauth.generateAuthUrl(7, {
+      redirectUri: 'http://localhost:3000/auth/callback',
+      accountLevel: 'pro'
+    })
 
     expect(ok).toBe(true)
     expect(accountsAPI.generateOpenAIOAuthUrl).toHaveBeenCalledWith({
       proxy_id: 7,
+      account_level: 'pro',
       redirect_uri: 'http://localhost:3000/auth/callback'
     })
     expect(adminAPI.accounts.generateAuthUrl).not.toHaveBeenCalled()
@@ -129,6 +135,22 @@ describe('useOpenAIOAuth.exchangeAuthCode', () => {
     expect(tokenInfo).toBeNull()
     expect(oauth.error.value).toBe(
       '未设置代理，当前服务器无法直连 OpenAI，导致 OpenAI OAuth 请求失败。请先选择可访问 OpenAI 的代理后重试；如果授权码已失效，请重新生成授权链接。'
+    )
+  })
+
+  it('shows a Chinese recovery hint when the OAuth session is missing', async () => {
+    vi.mocked(adminAPI.accounts.exchangeCode).mockRejectedValueOnce({
+      status: 400,
+      reason: 'OPENAI_OAUTH_SESSION_NOT_FOUND',
+      message: 'session not found or expired'
+    })
+    const oauth = useOpenAIOAuth()
+
+    const tokenInfo = await oauth.exchangeAuthCode('code', 'session-id', 'state')
+
+    expect(tokenInfo).toBeNull()
+    expect(oauth.error.value).toBe(
+      '授权会话不存在或已过期，请重新生成授权链接，使用最新链接完成授权后再提交。'
     )
   })
 })

@@ -1,0 +1,15 @@
+{
+  "title": "钱包与商城",
+  "description": "充值订阅、发卡商城、兑换码、订单发票、余额与积分，一站管理你的资金与资产。",
+  "icon": "Wallet",
+  "root": true,
+  "defaultOpen": true,
+  "pages": [
+    "index",
+    "purchase",
+    "store",
+    "redeem",
+    "orders",
+    "balance"
+  ]
+}

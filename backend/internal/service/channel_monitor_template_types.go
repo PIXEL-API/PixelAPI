@@ -51,7 +51,7 @@ var (
 		"CHANNEL_MONITOR_TEMPLATE_NOT_FOUND", "channel monitor request template not found",
 	)
 	ErrChannelMonitorTemplateInvalidProvider = infraerrors.BadRequest(
-		"CHANNEL_MONITOR_TEMPLATE_INVALID_PROVIDER", "template provider must be one of openai/anthropic/gemini",
+		"CHANNEL_MONITOR_TEMPLATE_INVALID_PROVIDER", "template provider must be one of openai/anthropic/gemini/grok",
 	)
 	ErrChannelMonitorTemplateMissingName = infraerrors.BadRequest(
 		"CHANNEL_MONITOR_TEMPLATE_MISSING_NAME", "template name is required",

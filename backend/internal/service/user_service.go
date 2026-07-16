@@ -33,6 +33,10 @@ var (
 	ErrPasswordIncorrect        = infraerrors.BadRequest("PASSWORD_INCORRECT", "current password is incorrect")
 	ErrInsufficientPerms        = infraerrors.Forbidden("INSUFFICIENT_PERMISSIONS", "insufficient permissions")
 	ErrUserConcurrencyRange     = infraerrors.BadRequest("USER_CONCURRENCY_INVALID", fmt.Sprintf("user concurrency must be at least %d", UserMinConcurrency))
+	ErrAdminConcurrencyRange    = infraerrors.BadRequest("ADMIN_CONCURRENCY_INVALID", "admin concurrency must be at least 0")
+	ErrUserRoleInvalid          = infraerrors.BadRequest("USER_ROLE_INVALID", "user role must be user or admin")
+	ErrLastAdminDemotion        = infraerrors.BadRequest("LAST_ADMIN_DEMOTION_FORBIDDEN", "cannot demote the last active administrator")
+	ErrAdminDisableForbidden    = infraerrors.BadRequest("ADMIN_DISABLE_FORBIDDEN", "cannot disable admin user")
 	ErrNotifyCodeUserRateLimit  = infraerrors.TooManyRequests("NOTIFY_CODE_USER_RATE_LIMIT", "too many verification codes requested, please try again later")
 	ErrAvatarInvalid            = infraerrors.BadRequest("AVATAR_INVALID", "avatar must be a valid image data URL or http(s) URL")
 	ErrAvatarTooLarge           = infraerrors.BadRequest("AVATAR_TOO_LARGE", "avatar image must be 100KB or smaller")
@@ -89,6 +93,8 @@ type UserListFilters struct {
 	// For large datasets this can be expensive; admin list pages should enable it on demand.
 	// nil means not specified (default: load subscriptions for backward compatibility).
 	IncludeSubscriptions *bool
+	// IncludeDeleted 为 true 时绕过用户软删除过滤，返回含已删除用户的结果。
+	IncludeDeleted bool
 }
 
 type UserRepository interface {
@@ -124,6 +130,43 @@ type UserRepository interface {
 	UpdateTotpSecret(ctx context.Context, userID int64, encryptedSecret *string) error
 	EnableTotp(ctx context.Context, userID int64) error
 	DisableTotp(ctx context.Context, userID int64) error
+}
+
+// AdminUserGovernanceUpdate identifies the permission-sensitive fields that
+// were explicitly requested by an administrator. Unrequested fields must be
+// preserved from the row reloaded while holding the governance lock.
+type AdminUserGovernanceUpdate struct {
+	UpdateRole   bool
+	UpdateStatus bool
+}
+
+// AdminUserGovernanceUpdateResult records the role and status state observed
+// while holding the repository's serialized administrator-governance lock.
+type AdminUserGovernanceUpdateResult struct {
+	OldRole   string
+	NewRole   string
+	OldStatus string
+	NewStatus string
+}
+
+// AdminUserGovernanceRepository is the narrow capability required by the
+// admin service. Implementations must serialize role/status-sensitive admin
+// edits, re-read the target row, validate the active-admin invariant, and
+// perform the final update in the same transaction.
+type AdminUserGovernanceRepository interface {
+	UpdateWithAdminGovernanceGuard(ctx context.Context, user *User, fields AdminUserGovernanceUpdate) (*AdminUserGovernanceUpdateResult, error)
+}
+
+// AdminDeletedUserReader is the narrow capability used by administrator audit
+// views that must resolve a soft-deleted user by ID.
+type AdminDeletedUserReader interface {
+	GetByIDIncludeDeleted(ctx context.Context, id int64) (*User, error)
+}
+
+// RedeemUserConcurrencyAdjustmentRepository is the narrow capability used by
+// redeem flows that must clamp concurrent negative adjustments atomically.
+type RedeemUserConcurrencyAdjustmentRepository interface {
+	ApplyRedeemConcurrencyAdjustment(ctx context.Context, userID int64, delta int) error
 }
 
 type UserAuthIdentityRecord struct {

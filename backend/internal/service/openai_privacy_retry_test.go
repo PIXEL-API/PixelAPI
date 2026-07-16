@@ -48,6 +48,31 @@ func TestAdminService_EnsureOpenAIPrivacy_RetriesNonSuccessModes(t *testing.T) {
 	}
 }
 
+func TestAdminService_EnsureOpenAIPrivacy_SkipsAgentIdentity(t *testing.T) {
+	t.Parallel()
+
+	privacyCalls := 0
+	svc := &adminServiceImpl{
+		privacyClientFactory: func(proxyURL string) (*req.Client, error) {
+			privacyCalls++
+			return nil, errors.New("must not be called")
+		},
+	}
+	account := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"auth_mode":    OpenAIAuthModeAgentIdentity,
+			"access_token": "unexpected-token",
+		},
+	}
+
+	if got := svc.EnsureOpenAIPrivacy(context.Background(), account); got != "" {
+		t.Fatalf("privacy mode = %q, want empty", got)
+	}
+	require.Zero(t, privacyCalls)
+}
+
 func TestTokenRefreshService_ensureOpenAIPrivacy_RetriesNonSuccessModes(t *testing.T) {
 	t.Parallel()
 

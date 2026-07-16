@@ -2,8 +2,11 @@ package repository
 
 import (
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"strconv"
 	"sync"
@@ -21,6 +24,8 @@ const (
 	schedulerActivePrefix       = "sched:active:"
 	schedulerReadyPrefix        = "sched:ready:"
 	schedulerVersionPrefix      = "sched:ver:"
+	schedulerEpochPrefix        = "sched:epoch:"
+	schedulerRetiredPrefix      = "sched:retired:"
 	schedulerSnapshotPrefix     = "sched:"
 	schedulerLockPrefix         = "sched:lock:"
 	// Legacy candidate-index keys are kept only for expiring indexes written by
@@ -40,9 +45,111 @@ const (
 	// snapshotGraceTTLSeconds 旧快照过期的宽限期（秒）。
 	// 替代立即 DEL，让正在读取旧版本的 reader 有足够时间完成 ZRANGE。
 	snapshotGraceTTLSeconds = 60
+
+	schedulerGroupLifecycleLockPrefix      = "sched:group:lifecycle-lock:"
+	schedulerGroupLifecycleOwnerTokenBytes = 16
 )
 
 var (
+	captureBucketWriteTokenScript = redis.NewScript(`
+if redis.call('EXISTS', KEYS[2]) == 1 then
+    return -1
+end
+
+local currentEpoch = redis.call('GET', KEYS[1])
+if currentEpoch == false then
+    redis.call('SET', KEYS[1], '1')
+    return 1
+end
+
+local parsedEpoch = tonumber(currentEpoch)
+if parsedEpoch == nil or parsedEpoch < 1 then
+    return -2
+end
+return parsedEpoch
+`)
+
+	allocateSnapshotVersionScript = redis.NewScript(`
+if redis.call('EXISTS', KEYS[2]) == 1 then
+    return -1
+end
+
+local currentEpoch = tonumber(redis.call('GET', KEYS[1]))
+local expectedEpoch = tonumber(ARGV[1])
+if currentEpoch == nil or expectedEpoch == nil or currentEpoch ~= expectedEpoch then
+    return -2
+end
+
+return redis.call('INCR', KEYS[3])
+`)
+
+	retireBucketScript = redis.NewScript(`
+local retired = redis.call('GET', KEYS[2])
+local currentEpoch = tonumber(redis.call('GET', KEYS[1])) or 0
+
+if retired == false then
+    currentEpoch = currentEpoch + 1
+    if currentEpoch < 1 then
+        currentEpoch = 1
+    end
+    redis.call('SET', KEYS[1], tostring(currentEpoch))
+    redis.call('SET', KEYS[2], tostring(currentEpoch))
+elseif currentEpoch < 1 then
+    currentEpoch = tonumber(retired) or 1
+    redis.call('SET', KEYS[1], tostring(currentEpoch))
+end
+
+redis.call('SREM', KEYS[3], ARGV[1])
+local currentActive = redis.call('GET', KEYS[5])
+if currentActive ~= false then
+    redis.call('EXPIRE', ARGV[2] .. currentActive, tonumber(ARGV[3]))
+end
+redis.call('DEL', KEYS[4], KEYS[5])
+return currentEpoch
+`)
+
+	reopenBucketScript = redis.NewScript(`
+local currentEpochRaw = redis.call('GET', KEYS[1])
+local currentEpoch = tonumber(currentEpochRaw)
+local retiredEpochRaw = redis.call('GET', KEYS[2])
+
+if retiredEpochRaw == false then
+    if currentEpochRaw == false then
+        redis.call('SET', KEYS[1], '1')
+        return 1
+    end
+    if currentEpoch == nil or currentEpoch < 1 then
+        return -2
+    end
+    return currentEpoch
+end
+
+local retiredEpoch = tonumber(retiredEpochRaw)
+if retiredEpoch == nil or retiredEpoch < 1 then
+    return -2
+end
+if currentEpoch == nil or currentEpoch < retiredEpoch then
+    currentEpoch = retiredEpoch
+end
+
+redis.call('SET', KEYS[1], tostring(currentEpoch))
+redis.call('DEL', KEYS[2])
+redis.call('SREM', KEYS[3], ARGV[1])
+local currentActive = redis.call('GET', KEYS[5])
+if currentActive ~= false then
+    redis.call('EXPIRE', ARGV[2] .. currentActive, tonumber(ARGV[3]))
+end
+redis.call('DEL', KEYS[4], KEYS[5])
+return currentEpoch
+`)
+
+	releaseGroupLifecycleLeaseScript = redis.NewScript(`
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('DEL', KEYS[1])
+end
+return 0
+`)
+
 	// activateSnapshotScript 原子 CAS 切换快照版本。
 	// 仅当新版本号 >= 当前激活版本时才切换，防止并发写入导致版本回滚。
 	// 旧快照使用 EXPIRE 设置宽限期而非立即 DEL，避免与 reader 竞态。
@@ -51,13 +158,28 @@ var (
 	// KEYS[2] = readyKey      (sched:ready:{bucket})
 	// KEYS[3] = bucketSetKey  (sched:buckets)
 	// KEYS[4] = snapshotKey   (新写入的快照 key)
+	// KEYS[5] = epochKey
+	// KEYS[6] = retiredKey
 	// ARGV[1] = 新版本号字符串
 	// ARGV[2] = bucket 字符串 (用于 SADD)
 	// ARGV[3] = 快照 key 前缀 (用于构造旧快照 key)
 	// ARGV[4] = 宽限期 TTL 秒数
+	// ARGV[5] = writer epoch
 	//
 	// 返回 1 = 已激活, 0 = 版本过旧未激活
 	activateSnapshotScript = redis.NewScript(`
+if redis.call('EXISTS', KEYS[6]) == 1 then
+	redis.call('DEL', KEYS[4])
+	return -1
+end
+
+local currentEpoch = tonumber(redis.call('GET', KEYS[5]))
+local expectedEpoch = tonumber(ARGV[5])
+if currentEpoch == nil or expectedEpoch == nil or currentEpoch ~= expectedEpoch then
+	redis.call('DEL', KEYS[4])
+	return -2
+end
+
 local currentActive = redis.call('GET', KEYS[1])
 local newVersion = tonumber(ARGV[1])
 
@@ -76,24 +198,6 @@ redis.call('SADD', KEYS[3], ARGV[2])
 if currentActive ~= false and currentActive ~= ARGV[1] then
 	redis.call('EXPIRE', ARGV[3] .. currentActive, tonumber(ARGV[4]))
 end
-
-return 1
-`)
-	clearEmptySnapshotScript = redis.NewScript(`
-local currentActive = redis.call('GET', KEYS[1])
-local newVersion = tonumber(ARGV[1])
-
-if currentActive ~= false then
-	local curVersion = tonumber(currentActive)
-	if curVersion and newVersion < curVersion then
-		return 0
-	end
-	redis.call('EXPIRE', ARGV[3] .. currentActive, tonumber(ARGV[4]))
-end
-
-redis.call('DEL', KEYS[1])
-redis.call('DEL', KEYS[2])
-redis.call('SREM', KEYS[3], ARGV[2])
 
 return 1
 `)
@@ -211,89 +315,191 @@ func (c *schedulerCache) GetSnapshot(ctx context.Context, bucket service.Schedul
 	return accounts, true, nil
 }
 
-func (c *schedulerCache) SetSnapshot(ctx context.Context, bucket service.SchedulerBucket, accounts []service.Account) error {
-	// Phase 1: 分配新版本号并写入快照数据。
-	// INCR 保证每个调用方获得唯一递增版本号。
-	// 写入的 snapshotKey 是新的版本化 key，reader 尚不知晓，因此无竞态。
-	versionKey := schedulerBucketKey(schedulerVersionPrefix, bucket)
-	version, err := c.rdb.Incr(ctx, versionKey).Result()
+func (c *schedulerCache) CaptureBucketWriteToken(ctx context.Context, bucket service.SchedulerBucket) (service.SchedulerBucketWriteToken, error) {
+	result, err := captureBucketWriteTokenScript.Run(ctx, c.rdb, []string{
+		schedulerBucketKey(schedulerEpochPrefix, bucket),
+		schedulerBucketKey(schedulerRetiredPrefix, bucket),
+	}).Int64()
 	if err != nil {
-		return err
+		return service.SchedulerBucketWriteToken{}, err
 	}
+	if err := schedulerBucketWriteResultError(result, bucket); err != nil {
+		return service.SchedulerBucketWriteToken{}, err
+	}
+	return service.SchedulerBucketWriteToken{Bucket: bucket, Epoch: result}, nil
+}
 
-	versionStr := strconv.FormatInt(version, 10)
-	snapshotKey := schedulerSnapshotKey(bucket, versionStr)
-
-	if err := c.writeAccounts(ctx, accounts); err != nil {
-		return err
-	}
-
-	if len(accounts) == 0 {
-		return c.clearEmptySnapshot(ctx, bucket, versionStr)
-	}
-
-	// 使用序号作为 score，保持数据库返回的排序语义。
-	members := make([]redis.Z, 0, len(accounts))
-	for idx, account := range accounts {
-		members = append(members, redis.Z{
-			Score:  float64(idx),
-			Member: strconv.FormatInt(account.ID, 10),
-		})
-	}
-	pipe := c.rdb.Pipeline()
-	for start := 0; start < len(members); start += c.writeChunkSize {
-		end := start + c.writeChunkSize
-		if end > len(members) {
-			end = len(members)
-		}
-		pipe.ZAdd(ctx, snapshotKey, members[start:end]...)
-	}
-	if _, err := pipe.Exec(ctx); err != nil {
-		return err
-	}
-
-	// Phase 2: 原子 CAS 激活版本。
-	// Lua 脚本保证：仅当新版本 >= 当前激活版本时才切换 active 指针，
-	// 防止并发写入导致版本回滚。
-	// 旧快照使用 EXPIRE 宽限期而非立即 DEL，避免 reader 竞态。
-	activeKey := schedulerBucketKey(schedulerActivePrefix, bucket)
-	readyKey := schedulerBucketKey(schedulerReadyPrefix, bucket)
+func (c *schedulerCache) RetireBucket(ctx context.Context, bucket service.SchedulerBucket) error {
 	snapshotKeyPrefix := fmt.Sprintf("%s%d:%s:%s:v", schedulerSnapshotPrefix, bucket.GroupID, bucket.Platform, bucket.Mode)
-
-	keys := []string{activeKey, readyKey, schedulerBucketSetKey, snapshotKey}
-	args := []any{versionStr, bucket.String(), snapshotKeyPrefix, snapshotGraceTTLSeconds}
-
-	activated, err := activateSnapshotScript.Run(ctx, c.rdb, keys, args...).Int()
+	result, err := retireBucketScript.Run(ctx, c.rdb, []string{
+		schedulerBucketKey(schedulerEpochPrefix, bucket),
+		schedulerBucketKey(schedulerRetiredPrefix, bucket),
+		schedulerBucketSetKey,
+		schedulerBucketKey(schedulerReadyPrefix, bucket),
+		schedulerBucketKey(schedulerActivePrefix, bucket),
+	}, bucket.String(), snapshotKeyPrefix, snapshotGraceTTLSeconds).Int64()
 	if err != nil {
 		return err
 	}
-	if activated == 0 {
-		return nil
+	if result < 1 {
+		return fmt.Errorf("retire scheduler bucket %s returned invalid epoch %d", bucket.String(), result)
 	}
-
-	_ = c.expireLegacyCandidateIndex(ctx, bucket)
 	c.invalidateLocalSnapshot(bucket.String())
 	return nil
 }
 
-func (c *schedulerCache) clearEmptySnapshot(ctx context.Context, bucket service.SchedulerBucket, versionStr string) error {
-	activeKey := schedulerBucketKey(schedulerActivePrefix, bucket)
-	readyKey := schedulerBucketKey(schedulerReadyPrefix, bucket)
+func (c *schedulerCache) ReopenBucket(ctx context.Context, bucket service.SchedulerBucket) (service.SchedulerBucketWriteToken, error) {
 	snapshotKeyPrefix := fmt.Sprintf("%s%d:%s:%s:v", schedulerSnapshotPrefix, bucket.GroupID, bucket.Platform, bucket.Mode)
-
-	keys := []string{activeKey, readyKey, schedulerBucketSetKey}
-	args := []any{versionStr, bucket.String(), snapshotKeyPrefix, snapshotGraceTTLSeconds}
-
-	activated, err := clearEmptySnapshotScript.Run(ctx, c.rdb, keys, args...).Int()
-	if err == nil && activated == 1 {
-		_ = c.expireLegacyCandidateIndex(ctx, bucket)
-		c.invalidateLocalSnapshot(bucket.String())
+	result, err := reopenBucketScript.Run(ctx, c.rdb, []string{
+		schedulerBucketKey(schedulerEpochPrefix, bucket),
+		schedulerBucketKey(schedulerRetiredPrefix, bucket),
+		schedulerBucketSetKey,
+		schedulerBucketKey(schedulerReadyPrefix, bucket),
+		schedulerBucketKey(schedulerActivePrefix, bucket),
+	}, bucket.String(), snapshotKeyPrefix, snapshotGraceTTLSeconds).Int64()
+	if err != nil {
+		return service.SchedulerBucketWriteToken{}, err
 	}
+	if err := schedulerBucketWriteResultError(result, bucket); err != nil {
+		return service.SchedulerBucketWriteToken{}, err
+	}
+	c.invalidateLocalSnapshot(bucket.String())
+	return service.SchedulerBucketWriteToken{Bucket: bucket, Epoch: result}, nil
+}
+
+func (c *schedulerCache) TryAcquireGroupLifecycleLease(ctx context.Context, groupID int64, ttl time.Duration) (service.SchedulerGroupLifecycleLease, bool, error) {
+	if groupID <= 0 || ttl <= 0 {
+		return service.SchedulerGroupLifecycleLease{}, false, service.ErrSchedulerGroupLifecycleLeaseInvalid
+	}
+	ownerToken, err := newSchedulerGroupLifecycleOwnerToken()
+	if err != nil {
+		return service.SchedulerGroupLifecycleLease{}, false, err
+	}
+	acquired, err := c.rdb.SetNX(ctx, schedulerGroupLifecycleLockKey(groupID), ownerToken, ttl).Result()
+	if err != nil || !acquired {
+		return service.SchedulerGroupLifecycleLease{}, acquired, err
+	}
+	return service.SchedulerGroupLifecycleLease{GroupID: groupID, OwnerToken: ownerToken}, true, nil
+}
+
+func (c *schedulerCache) ReleaseGroupLifecycleLease(ctx context.Context, lease service.SchedulerGroupLifecycleLease) error {
+	if !lease.ValidFor(lease.GroupID) {
+		return service.ErrSchedulerGroupLifecycleLeaseInvalid
+	}
+	result, err := releaseGroupLifecycleLeaseScript.Run(ctx, c.rdb, []string{schedulerGroupLifecycleLockKey(lease.GroupID)}, lease.OwnerToken).Int64()
+	if err != nil {
+		return err
+	}
+	if result != 1 {
+		return fmt.Errorf("%w: group=%d", service.ErrSchedulerGroupLifecycleLeaseLost, lease.GroupID)
+	}
+	return nil
+}
+
+func newSchedulerGroupLifecycleOwnerToken() (string, error) {
+	raw := make([]byte, schedulerGroupLifecycleOwnerTokenBytes)
+	if _, err := cryptorand.Read(raw); err != nil {
+		return "", fmt.Errorf("generate scheduler lifecycle owner token: %w", err)
+	}
+	return hex.EncodeToString(raw), nil
+}
+
+// SetSnapshot preserves the legacy interface while still using fenced writes.
+func (c *schedulerCache) SetSnapshot(ctx context.Context, bucket service.SchedulerBucket, accounts []service.Account) error {
+	token, err := c.CaptureBucketWriteToken(ctx, bucket)
+	if err != nil {
+		return err
+	}
+	return c.SetSnapshotFenced(ctx, bucket, token, accounts)
+}
+
+func (c *schedulerCache) SetSnapshotFenced(ctx context.Context, bucket service.SchedulerBucket, token service.SchedulerBucketWriteToken, accounts []service.Account) error {
+	if !token.ValidFor(bucket) {
+		return fmt.Errorf("%w: bucket=%s", service.ErrSchedulerBucketWriteFenced, bucket.String())
+	}
+	version, err := c.allocateSnapshotVersion(ctx, bucket, token)
+	if err != nil {
+		return err
+	}
+	if err := c.writeSnapshotVersion(ctx, bucket, version, accounts); err != nil {
+		return err
+	}
+	return c.activateSnapshotVersion(ctx, bucket, token, version)
+}
+
+func (c *schedulerCache) allocateSnapshotVersion(ctx context.Context, bucket service.SchedulerBucket, token service.SchedulerBucketWriteToken) (string, error) {
+	result, err := allocateSnapshotVersionScript.Run(ctx, c.rdb, []string{
+		schedulerBucketKey(schedulerEpochPrefix, bucket),
+		schedulerBucketKey(schedulerRetiredPrefix, bucket),
+		schedulerBucketKey(schedulerVersionPrefix, bucket),
+	}, token.Epoch).Int64()
+	if err != nil {
+		return "", err
+	}
+	if err := schedulerBucketWriteResultError(result, bucket); err != nil {
+		return "", err
+	}
+	return strconv.FormatInt(result, 10), nil
+}
+
+func (c *schedulerCache) writeSnapshotVersion(ctx context.Context, bucket service.SchedulerBucket, version string, accounts []service.Account) error {
+	cacheableAccounts, err := c.writeAccounts(ctx, accounts)
+	if err != nil {
+		return err
+	}
+	if len(cacheableAccounts) == 0 {
+		return nil
+	}
+	members := make([]redis.Z, 0, len(cacheableAccounts))
+	for idx, account := range cacheableAccounts {
+		members = append(members, redis.Z{Score: float64(idx), Member: strconv.FormatInt(account.ID, 10)})
+	}
+	pipe := c.rdb.Pipeline()
+	for start := 0; start < len(members); start += c.writeChunkSize {
+		end := min(start+c.writeChunkSize, len(members))
+		pipe.ZAdd(ctx, schedulerSnapshotKey(bucket, version), members[start:end]...)
+	}
+	_, err = pipe.Exec(ctx)
 	return err
 }
 
-func (c *schedulerCache) GetCandidateSnapshot(ctx context.Context, bucket service.SchedulerBucket, limit int) ([]*service.Account, bool, error) {
-	if c == nil || !c.isCandidateIndexEnabled(bucket) {
+func (c *schedulerCache) activateSnapshotVersion(ctx context.Context, bucket service.SchedulerBucket, token service.SchedulerBucketWriteToken, version string) error {
+	snapshotKey := schedulerSnapshotKey(bucket, version)
+	snapshotKeyPrefix := fmt.Sprintf("%s%d:%s:%s:v", schedulerSnapshotPrefix, bucket.GroupID, bucket.Platform, bucket.Mode)
+	result, err := activateSnapshotScript.Run(ctx, c.rdb, []string{
+		schedulerBucketKey(schedulerActivePrefix, bucket),
+		schedulerBucketKey(schedulerReadyPrefix, bucket),
+		schedulerBucketSetKey,
+		snapshotKey,
+		schedulerBucketKey(schedulerEpochPrefix, bucket),
+		schedulerBucketKey(schedulerRetiredPrefix, bucket),
+	}, version, bucket.String(), snapshotKeyPrefix, snapshotGraceTTLSeconds, token.Epoch).Int64()
+	if err != nil {
+		return err
+	}
+	if err := schedulerBucketWriteResultError(result, bucket); err != nil {
+		return err
+	}
+	if result == 1 {
+		_ = c.expireLegacyCandidateIndex(ctx, bucket)
+		c.invalidateLocalSnapshot(bucket.String())
+	}
+	return nil
+}
+
+func schedulerBucketWriteResultError(result int64, bucket service.SchedulerBucket) error {
+	switch result {
+	case -1:
+		return fmt.Errorf("%w: bucket=%s", service.ErrSchedulerBucketRetired, bucket.String())
+	case -2:
+		return fmt.Errorf("%w: bucket=%s", service.ErrSchedulerBucketWriteFenced, bucket.String())
+	default:
+		return nil
+	}
+}
+
+func (c *schedulerCache) GetCandidateSnapshot(ctx context.Context, bucket service.SchedulerBucket, limit, threshold int, globalEnabled bool) ([]*service.Account, bool, error) {
+	if c == nil || (!globalEnabled && !c.isCandidateIndexEnabled(bucket)) {
 		return nil, false, nil
 	}
 	if limit <= 0 {
@@ -301,6 +507,10 @@ func (c *schedulerCache) GetCandidateSnapshot(ctx context.Context, bucket servic
 	}
 	if limit > maxSchedulerCandidateLimit {
 		limit = maxSchedulerCandidateLimit
+	}
+	minSize := int64(threshold)
+	if minSize <= 0 {
+		minSize = minSchedulerCandidateShardSize
 	}
 
 	readyVal, err := c.rdb.Get(ctx, schedulerBucketKey(schedulerReadyPrefix, bucket)).Result()
@@ -327,7 +537,7 @@ func (c *schedulerCache) GetCandidateSnapshot(ctx context.Context, bucket servic
 	if err != nil {
 		return nil, false, err
 	}
-	if size <= minSchedulerCandidateShardSize {
+	if size <= minSize {
 		return nil, false, nil
 	}
 
@@ -381,8 +591,12 @@ func (c *schedulerCache) SetAccount(ctx context.Context, account *service.Accoun
 	if account == nil || account.ID <= 0 {
 		return nil
 	}
-	if err := c.writeAccounts(ctx, []service.Account{*account}); err != nil {
+	cacheable, err := c.writeAccounts(ctx, []service.Account{*account})
+	if err != nil {
 		return err
+	}
+	if len(cacheable) == 0 {
+		return c.DeleteAccount(ctx, account.ID)
 	}
 	c.invalidateLocalSnapshotsForAccountChange(account)
 	return nil
@@ -418,6 +632,7 @@ func (c *schedulerCache) UpdateLastUsed(ctx context.Context, updates map[int64]t
 	}
 
 	pipe := c.rdb.Pipeline()
+	invalidAccountIDs := make([]int64, 0)
 	for i, val := range values {
 		if val == nil {
 			continue
@@ -427,13 +642,15 @@ func (c *schedulerCache) UpdateLastUsed(ctx context.Context, updates map[int64]t
 			return err
 		}
 		account.LastUsedAt = ptrTime(updates[ids[i]])
-		updated, err := json.Marshal(account)
+		updated, metaPayload, err := marshalSchedulerCacheAccount(*account)
 		if err != nil {
-			return err
-		}
-		metaPayload, err := json.Marshal(buildSchedulerMetadataAccount(*account))
-		if err != nil {
-			return err
+			slog.Warn("scheduler cache removes account with unencodable payload",
+				"account_id", ids[i],
+				"error", err,
+			)
+			pipe.Del(ctx, keys[i], schedulerAccountMetaKey(strconv.FormatInt(ids[i], 10)))
+			invalidAccountIDs = append(invalidAccountIDs, ids[i])
+			continue
 		}
 		pipe.Set(ctx, keys[i], updated, 0)
 		pipe.Set(ctx, schedulerAccountMetaKey(strconv.FormatInt(ids[i], 10)), metaPayload, 0)
@@ -441,6 +658,9 @@ func (c *schedulerCache) UpdateLastUsed(ctx context.Context, updates map[int64]t
 	_, err = pipe.Exec(ctx)
 	if err == nil {
 		c.updateLocalSnapshotLastUsed(updates)
+		for _, accountID := range invalidAccountIDs {
+			c.invalidateLocalSnapshotsForAccount(accountID)
+		}
 	}
 	return err
 }
@@ -771,6 +991,10 @@ func schedulerBucketKey(prefix string, bucket service.SchedulerBucket) string {
 	return fmt.Sprintf("%s%d:%s:%s", prefix, bucket.GroupID, bucket.Platform, bucket.Mode)
 }
 
+func schedulerGroupLifecycleLockKey(groupID int64) string {
+	return schedulerGroupLifecycleLockPrefix + strconv.FormatInt(groupID, 10)
+}
+
 func schedulerSnapshotKey(bucket service.SchedulerBucket, version string) string {
 	return fmt.Sprintf("%s%d:%s:%s:v%s", schedulerSnapshotPrefix, bucket.GroupID, bucket.Platform, bucket.Mode, version)
 }
@@ -804,12 +1028,13 @@ func decodeCachedAccount(val any) (*service.Account, error) {
 	return &account, nil
 }
 
-func (c *schedulerCache) writeAccounts(ctx context.Context, accounts []service.Account) error {
+func (c *schedulerCache) writeAccounts(ctx context.Context, accounts []service.Account) ([]service.Account, error) {
 	if len(accounts) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	pipe := c.rdb.Pipeline()
+	cacheableAccounts := make([]service.Account, 0, len(accounts))
 	pending := 0
 	flush := func() error {
 		if pending == 0 {
@@ -824,27 +1049,43 @@ func (c *schedulerCache) writeAccounts(ctx context.Context, accounts []service.A
 	}
 
 	for _, account := range accounts {
-		fullPayload, err := json.Marshal(account)
+		fullPayload, metaPayload, err := marshalSchedulerCacheAccount(account)
 		if err != nil {
-			return err
-		}
-		metaPayload, err := json.Marshal(buildSchedulerMetadataAccount(account))
-		if err != nil {
-			return err
+			slog.Warn("scheduler cache skips account with unencodable payload",
+				"account_id", account.ID,
+				"error", err,
+			)
+			continue
 		}
 
 		id := strconv.FormatInt(account.ID, 10)
 		pipe.Set(ctx, schedulerAccountKey(id), fullPayload, 0)
 		pipe.Set(ctx, schedulerAccountMetaKey(id), metaPayload, 0)
+		cacheableAccounts = append(cacheableAccounts, account)
 		pending++
 		if pending >= c.writeChunkSize {
 			if err := flush(); err != nil {
-				return err
+				return nil, err
 			}
 		}
 	}
 
-	return flush()
+	if err := flush(); err != nil {
+		return nil, err
+	}
+	return cacheableAccounts, nil
+}
+
+func marshalSchedulerCacheAccount(account service.Account) ([]byte, []byte, error) {
+	fullPayload, err := json.Marshal(account)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal account: %w", err)
+	}
+	metaPayload, err := json.Marshal(buildSchedulerMetadataAccount(account))
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal account metadata: %w", err)
+	}
+	return fullPayload, metaPayload, nil
 }
 
 func (c *schedulerCache) mgetChunked(ctx context.Context, keys []string) ([]any, error) {

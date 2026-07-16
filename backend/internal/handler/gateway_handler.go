@@ -50,6 +50,7 @@ type GatewayHandler struct {
 	usageRecordWorkerPool     *service.UsageRecordWorkerPool
 	errorPassthroughService   *service.ErrorPassthroughService
 	contentModerationService  *service.ContentModerationService
+	userModerationService     *service.UserContentModerationService
 	concurrencyHelper         *ConcurrencyHelper
 	userMsgQueueHelper        *UserMsgQueueHelper
 	maxAccountSwitches        int
@@ -71,6 +72,7 @@ func NewGatewayHandler(
 	usageRecordWorkerPool *service.UsageRecordWorkerPool,
 	errorPassthroughService *service.ErrorPassthroughService,
 	contentModerationService *service.ContentModerationService,
+	userModerationService *service.UserContentModerationService,
 	userMsgQueueService *service.UserMessageQueueService,
 	cfg *config.Config,
 	settingService *service.SettingService,
@@ -105,6 +107,7 @@ func NewGatewayHandler(
 		usageRecordWorkerPool:     usageRecordWorkerPool,
 		errorPassthroughService:   errorPassthroughService,
 		contentModerationService:  contentModerationService,
+		userModerationService:     userModerationService,
 		concurrencyHelper:         NewConcurrencyHelper(concurrencyService, SSEPingFormatClaude, pingInterval),
 		userMsgQueueHelper:        umqHelper,
 		maxAccountSwitches:        maxAccountSwitches,
@@ -187,7 +190,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	// 在请求上下文中记录 thinking 状态，供 Antigravity 最终模型 key 推导/模型维度限流使用
 	c.Request = c.Request.WithContext(service.WithThinkingEnabled(c.Request.Context(), parsedReq.ThinkingEnabled, h.metadataBridgeEnabled()))
 
-	setOpsRequestContext(c, reqModel, reqStream, body)
+	setOpsRequestContext(c, reqModel, reqStream, nil)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(reqStream, false)))
 
 	// 验证 model 必填
@@ -311,13 +314,19 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					return
 				}
 				if len(fs.FailedAccountIDs) == 0 {
+					cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, reqModel, reqModel, service.PlatformGemini)
 					reqLog.Warn("gateway.select_account_no_available",
 						zap.String("model", reqModel),
 						zap.Int64p("group_id", apiKey.GroupID),
 						zap.String("platform", platform),
+						zap.Bool("model_not_found", cls.ModelNotFound),
 						zap.Error(err),
 					)
-					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available accounts: "+err.Error(), streamStarted)
+					message := cls.Message
+					if !cls.ModelNotFound {
+						message = "No available accounts: " + err.Error()
+					}
+					h.handleStreamingAwareError(c, cls.Status, cls.ErrType, message, streamStarted)
 					return
 				}
 				action := fs.HandleSelectionExhausted(c.Request.Context())
@@ -327,6 +336,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					c.Request = c.Request.WithContext(ctx)
 					continue
 				case FailoverCanceled:
+					failoverClientGone(c)
 					return
 				default: // FailoverExhausted
 					if fs.LastFailoverErr != nil {
@@ -339,6 +349,13 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}
 			account := selection.Account
 			setOpsSelectedAccount(c, account.ID, account.Platform)
+			if decision := h.checkUserContentModeration(c, reqLog, apiKey, subject, account, service.ContentModerationProtocolAnthropicMessages, reqModel, body); decision != nil && decision.Blocked {
+				if selection.Acquired && selection.ReleaseFunc != nil {
+					selection.ReleaseFunc()
+				}
+				h.handleStreamingAwareError(c, contentModerationStatus(decision), contentModerationErrorCode(decision), decision.Message, streamStarted)
+				return
+			}
 
 			// 检查请求拦截（预热请求、SUGGESTION MODE等）
 			if account.IsInterceptWarmupEnabled() {
@@ -438,7 +455,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						h.handleFailoverExhausted(c, failoverErr, service.PlatformGemini, true)
 						return
 					}
-					action := fs.HandleFailoverError(c.Request.Context(), h.gatewayService, account.ID, account.Platform, failoverErr)
+					action := fs.HandleFailoverErrorWithRetryLimit(c.Request.Context(), h.gatewayService, account.ID, account.Platform, account.GetPoolModeRetryCount(), failoverErr)
 					switch action {
 					case FailoverContinue:
 						continue
@@ -446,6 +463,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						h.handleFailoverExhausted(c, fs.LastFailoverErr, service.PlatformGemini, streamStarted)
 						return
 					case FailoverCanceled:
+						failoverClientGone(c)
 						return
 					}
 				}
@@ -650,17 +668,23 @@ routeLoop:
 					return
 				}
 				if len(fs.FailedAccountIDs) == 0 {
+					if routeBackedRequest && routeCursor.switchToNext(apiKey.ID, "account_select_failed", reqLog, zap.Error(err)) {
+						continue routeLoop
+					}
+					cls := classifyNoAccountErrorFromGin(c, h.gatewayService, currentAPIKey, reqModel, reqModel, platform)
 					reqLog.Warn("gateway.select_account_no_available",
 						zap.String("model", reqModel),
 						zap.Int64p("group_id", currentAPIKey.GroupID),
 						zap.String("platform", platform),
 						zap.Bool("fallback_used", fallbackUsed),
+						zap.Bool("model_not_found", cls.ModelNotFound),
 						zap.Error(err),
 					)
-					if routeBackedRequest && routeCursor.switchToNext(apiKey.ID, "account_select_failed", reqLog, zap.Error(err)) {
-						continue routeLoop
+					message := cls.Message
+					if !cls.ModelNotFound {
+						message = "No available accounts: " + err.Error()
 					}
-					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available accounts: "+err.Error(), streamStarted)
+					h.handleStreamingAwareError(c, cls.Status, cls.ErrType, message, streamStarted)
 					return
 				}
 				action := fs.HandleSelectionExhausted(c.Request.Context())
@@ -670,6 +694,7 @@ routeLoop:
 					c.Request = c.Request.WithContext(ctx)
 					continue
 				case FailoverCanceled:
+					failoverClientGone(c)
 					return
 				default: // FailoverExhausted
 					if fs.LastFailoverErr != nil {
@@ -686,6 +711,13 @@ routeLoop:
 			}
 			account := selection.Account
 			setOpsSelectedAccount(c, account.ID, account.Platform)
+			if decision := h.checkUserContentModeration(c, reqLog, currentAPIKey, subject, account, service.ContentModerationProtocolAnthropicMessages, reqModel, routeBody); decision != nil && decision.Blocked {
+				if selection.Acquired && selection.ReleaseFunc != nil {
+					selection.ReleaseFunc()
+				}
+				h.handleStreamingAwareError(c, contentModerationStatus(decision), contentModerationErrorCode(decision), decision.Message, streamStarted)
+				return
+			}
 
 			// [DEBUG-STICKY] 打印账号选择结果
 			reqLog.Info("sticky.account_selected",
@@ -911,13 +943,19 @@ routeLoop:
 				})
 			}
 			if err != nil {
-				if service.IsBillableStreamUsageError(err) && result != nil {
+				billableStreamUsageError := service.IsBillableStreamUsageError(err)
+				if result != nil && (billableStreamUsageError || service.ForwardResultHasBillableUsage(result)) {
 					recordUsageResult(result)
-					reqLog.Warn("gateway.billable_stream_usage_recorded_after_error",
+					usageRecordedEvent := "gateway.forward_usage_recorded_after_error"
+					if billableStreamUsageError {
+						usageRecordedEvent = "gateway.billable_stream_usage_recorded_after_error"
+					}
+					reqLog.Warn(usageRecordedEvent,
 						zap.Int64("account_id", account.ID),
 						zap.String("account_name", account.Name),
 						zap.String("account_platform", account.Platform),
 						zap.String("model", reqModel),
+						zap.Bool("billable_stream_usage_error", billableStreamUsageError),
 						zap.Int("input_tokens", result.Usage.InputTokens),
 						zap.Int("output_tokens", result.Usage.OutputTokens),
 						zap.Int("cache_creation_tokens", result.Usage.CacheCreationInputTokens),
@@ -985,7 +1023,7 @@ routeLoop:
 						h.handleFailoverExhausted(c, failoverErr, account.Platform, true)
 						return
 					}
-					action := fs.HandleFailoverError(c.Request.Context(), h.gatewayService, account.ID, account.Platform, failoverErr)
+					action := fs.HandleFailoverErrorWithRetryLimit(c.Request.Context(), h.gatewayService, account.ID, account.Platform, account.GetPoolModeRetryCount(), failoverErr)
 					switch action {
 					case FailoverContinue:
 						continue
@@ -997,6 +1035,7 @@ routeLoop:
 						h.handleFailoverExhausted(c, fs.LastFailoverErr, account.Platform, streamStarted)
 						return
 					case FailoverCanceled:
+						failoverClientGone(c)
 						return
 					}
 				}
@@ -1289,8 +1328,14 @@ func canSwitchAPIKeyGroupRouteAfterForward(c *gin.Context, cursor *apiKeyGroupRo
 	if cursor == nil || !cursor.hasNext() || !shouldSwitchAPIKeyGroupRoute(failoverErr) || streamStarted {
 		return false
 	}
-	if c != nil && c.Writer != nil && c.Writer.Size() != writerSizeBeforeForward {
-		return false
+	if c != nil && c.Writer != nil {
+		writtenSize := c.Writer.Size()
+		if service.OpenAIImagesJSONKeepalivePresent(c) {
+			writtenSize = service.OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c)
+		}
+		if writtenSize != writerSizeBeforeForward {
+			return false
+		}
 	}
 	return true
 }
@@ -1911,7 +1956,7 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 		return
 	}
 
-	setOpsRequestContext(c, parsedReq.Model, parsedReq.Stream, body)
+	setOpsRequestContext(c, parsedReq.Model, parsedReq.Stream, nil)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(parsedReq.Stream, false)))
 
 	// 获取订阅信息（可能为nil）
@@ -1940,7 +1985,8 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 	account, err := h.gatewayService.SelectAccountForModel(c.Request.Context(), apiKey.GroupID, sessionHash, parsedReq.Model)
 	if err != nil {
 		reqLog.Warn("gateway.count_tokens_select_account_failed", zap.Error(err))
-		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Service temporarily unavailable")
+		cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, parsedReq.Model, parsedReq.Model, service.PlatformAnthropic)
+		h.errorResponse(c, cls.Status, cls.ErrType, cls.Message)
 		return
 	}
 	setOpsSelectedAccount(c, account.ID, account.Platform)

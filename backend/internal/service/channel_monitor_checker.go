@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
 	"github.com/tidwall/gjson"
 )
 
@@ -34,7 +35,7 @@ func newSSRFSafeHTTPClient(timeout time.Duration) *http.Client {
 		TLSHandshakeTimeout:   monitorTLSHandshakeTimeout,
 		ResponseHeaderTimeout: monitorResponseHeaderTimeout,
 	}
-	return &http.Client{Timeout: timeout, Transport: tr}
+	return &http.Client{Timeout: timeout, Transport: servertiming.WrapRoundTripper(tr)}
 }
 
 // CheckOptions 承载一次检测的自定义入参。
@@ -165,6 +166,21 @@ type providerAdapter struct {
 //nolint:gochecknoglobals // 适配器表是只读静态数据，初始化后不变更。
 var providerAdapters = map[string]providerAdapter{
 	MonitorProviderOpenAI: {
+		buildPath: func(string) string { return providerOpenAIPath },
+		buildBody: func(model, prompt string) ([]byte, error) {
+			return json.Marshal(map[string]any{
+				"model":      model,
+				"messages":   []map[string]string{{"role": "user", "content": prompt}},
+				"max_tokens": monitorChallengeMaxTokens,
+				"stream":     false,
+			})
+		},
+		buildHeaders: func(apiKey string) map[string]string {
+			return map[string]string{"Authorization": "Bearer " + apiKey}
+		},
+		textPath: "choices.0.message.content",
+	},
+	MonitorProviderGrok: {
 		buildPath: func(string) string { return providerOpenAIPath },
 		buildBody: func(model, prompt string) ([]byte, error) {
 			return json.Marshal(map[string]any{
@@ -322,6 +338,7 @@ func buildRequestBody(adapter providerAdapter, provider, model, prompt string, o
 //nolint:gochecknoglobals // 静态查表，初始化后不变。
 var bodyMergeKeyDenyList = map[string]map[string]bool{
 	MonitorProviderOpenAI:    {"model": true, "messages": true, "stream": true},
+	MonitorProviderGrok:      {"model": true, "messages": true, "stream": true},
 	MonitorProviderAnthropic: {"model": true, "messages": true},
 	MonitorProviderGemini:    {"contents": true},
 }

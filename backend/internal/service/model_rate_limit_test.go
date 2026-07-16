@@ -152,6 +152,36 @@ func TestIsModelRateLimited(t *testing.T) {
 			expected:       true,
 		},
 		{
+			name: "anthropic fable variant hit family rate limit key",
+			account: &Account{
+				Platform: PlatformAnthropic,
+				Extra: map[string]any{
+					modelRateLimitsKey: map[string]any{
+						anthropicFableRateLimitKey: map[string]any{
+							"rate_limit_reset_at": future,
+						},
+					},
+				},
+			},
+			requestedModel: "claude-fable-5[1m]",
+			expected:       true,
+		},
+		{
+			name: "anthropic non-fable model ignores fable family rate limit key",
+			account: &Account{
+				Platform: PlatformAnthropic,
+				Extra: map[string]any{
+					modelRateLimitsKey: map[string]any{
+						anthropicFableRateLimitKey: map[string]any{
+							"rate_limit_reset_at": future,
+						},
+					},
+				},
+			},
+			requestedModel: "claude-sonnet-4-5",
+			expected:       false,
+		},
+		{
 			name: "no scope fallback - claude_sonnet should not match",
 			account: &Account{
 				Extra: map[string]any{
@@ -252,6 +282,22 @@ func TestGetModelRateLimitRemainingTime(t *testing.T) {
 			requestedModel: "claude-3-5-sonnet",
 			minExpected:    4 * time.Minute,
 			maxExpected:    6 * time.Minute,
+		},
+		{
+			name: "anthropic fable variant uses family key remaining time",
+			account: &Account{
+				Platform: PlatformAnthropic,
+				Extra: map[string]any{
+					modelRateLimitsKey: map[string]any{
+						anthropicFableRateLimitKey: map[string]any{
+							"rate_limit_reset_at": future10m,
+						},
+					},
+				},
+			},
+			requestedModel: "claude-fable-5[1m]",
+			minExpected:    9 * time.Minute,
+			maxExpected:    11 * time.Minute,
 		},
 		{
 			name: "expired rate limit",

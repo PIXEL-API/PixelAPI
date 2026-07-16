@@ -134,9 +134,10 @@ func (s *Stripe) QueryOrder(ctx context.Context, tradeNo string) (*payment.Query
 	}
 
 	return &payment.QueryOrderResponse{
-		TradeNo: pi.ID,
-		Status:  status,
-		Amount:  payment.FenToYuan(pi.Amount),
+		TradeNo:  pi.ID,
+		Status:   status,
+		Amount:   payment.FenToYuan(pi.Amount),
+		Metadata: stripePaymentIntentMetadata(pi),
 	}, nil
 }
 
@@ -175,12 +176,21 @@ func parseStripePaymentIntent(event *stripe.Event, status string, rawBody string
 		return nil, fmt.Errorf("stripe parse payment_intent: %w", err)
 	}
 	return &payment.PaymentNotification{
-		TradeNo: pi.ID,
-		OrderID: pi.Metadata["orderId"],
-		Amount:  payment.FenToYuan(pi.Amount),
-		Status:  status,
-		RawData: rawBody,
+		TradeNo:  pi.ID,
+		OrderID:  pi.Metadata["orderId"],
+		Amount:   payment.FenToYuan(pi.Amount),
+		Status:   status,
+		RawData:  rawBody,
+		Metadata: stripePaymentIntentMetadata(&pi),
 	}, nil
+}
+
+func stripePaymentIntentMetadata(pi *stripe.PaymentIntent) map[string]string {
+	metadata := map[string]string{}
+	if pi != nil && strings.TrimSpace(string(pi.Currency)) != "" {
+		metadata["currency"] = strings.ToUpper(strings.TrimSpace(string(pi.Currency)))
+	}
+	return metadata
 }
 
 // Refund creates a Stripe refund.

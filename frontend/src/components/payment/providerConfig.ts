@@ -40,6 +40,7 @@ export const PROVIDER_SUPPORTED_TYPES: Record<string, string[]> = {
 
 /** Available payment modes for EasyPay providers. */
 export const EASYPAY_PAYMENT_MODES = ['qrcode', 'popup'] as const
+export const ALIPAY_PAYMENT_MODES = ['qrcode', 'popup', 'jsapi'] as const
 
 /** Fixed display order for user-facing payment methods */
 export const METHOD_ORDER = ['alipay', 'alipay_direct', 'wxpay', 'wxpay_direct', 'stripe', 'airwallex'] as const
@@ -47,6 +48,7 @@ export const METHOD_ORDER = ['alipay', 'alipay_direct', 'wxpay', 'wxpay_direct',
 /** Payment mode constants */
 export const PAYMENT_MODE_QRCODE = 'qrcode'
 export const PAYMENT_MODE_POPUP = 'popup'
+export const PAYMENT_MODE_JSAPI = 'jsapi'
 
 export const PAYMENT_CURRENCY_OPTIONS: TypeOption[] = [
   { value: 'CNY', label: 'CNY' },
@@ -113,6 +115,7 @@ export const PROVIDER_CONFIG_FIELDS: Record<string, ConfigFieldDef[]> = {
     { key: 'appId', label: 'App ID', sensitive: false },
     { key: 'privateKey', label: '', sensitive: true },
     { key: 'publicKey', label: '', sensitive: true },
+    { key: 'opAppId', label: 'Op App ID', sensitive: false, optional: true, clearable: true },
   ],
   wxpay: [
     { key: 'appId', label: 'App ID', sensitive: false },

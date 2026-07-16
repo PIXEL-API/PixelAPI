@@ -26,6 +26,8 @@ export interface ChannelModelPricing {
   platform: string
   models: string[]
   billing_mode: BillingMode
+  long_context_pricing_enabled: boolean | null
+  long_context_input_token_threshold: number | null
   input_price: number | null
   output_price: number | null
   cache_write_price: number | null

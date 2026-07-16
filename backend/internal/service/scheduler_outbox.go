@@ -17,6 +17,9 @@ type SchedulerOutboxEvent struct {
 // SchedulerOutboxRepository 提供调度 outbox 的读取接口。
 type SchedulerOutboxRepository interface {
 	ListAfterAndReleaseDedup(ctx context.Context, afterID int64, limit int) ([]SchedulerOutboxEvent, error)
+	// FirstCreatedAtAfter returns the first unconsumed event after the watermark
+	// without claiming it or mutating its deduplication key.
+	FirstCreatedAtAfter(ctx context.Context, afterID int64) (time.Time, bool, error)
 	MaxID(ctx context.Context) (int64, error)
 	DeleteConsumedUpTo(ctx context.Context, watermark int64, limit int) (int64, error)
 	TryAcquireCleanupLock(ctx context.Context) (SchedulerOutboxCleanupLease, bool, error)

@@ -2,7 +2,16 @@ package service
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -18,6 +27,47 @@ type OpenAIOAuthService struct {
 	proxyRepo            ProxyRepository
 	oauthClient          OpenAIOAuthClient
 	privacyClientFactory PrivacyClientFactory // 用于调用 chatgpt.com/backend-api（ImpersonateChrome）
+	sessionTokenKey      []byte
+}
+
+const (
+	openAIOAuthSessionTokenPrefix = "oai_oauth_v1."
+	openAIOAuthSessionTokenAAD    = "sub2api/openai-oauth-session/v1"
+	openAIOAuthSessionTokenSkew   = 5 * time.Minute
+)
+
+var (
+	errOpenAIOAuthSessionTokenDisabled = errors.New("openai oauth session token is disabled")
+	errOpenAIOAuthSessionTokenFormat   = errors.New("invalid openai oauth session token format")
+	errOpenAIOAuthSessionTokenExpired  = errors.New("openai oauth session token expired")
+
+	ErrOpenAIOAuthSessionNotFound = infraerrors.BadRequest(
+		"OPENAI_OAUTH_SESSION_NOT_FOUND",
+		"授权会话不存在或已过期，请重新生成授权链接后再完成授权",
+	)
+	ErrOpenAIOAuthStateRequired = infraerrors.BadRequest(
+		"OPENAI_OAUTH_STATE_REQUIRED",
+		"授权回调缺少 state 参数，请粘贴完整回调链接或重新生成授权链接",
+	)
+	ErrOpenAIOAuthInvalidState = infraerrors.BadRequest(
+		"OPENAI_OAUTH_INVALID_STATE",
+		"授权回调 state 不匹配，请使用当前弹窗生成的最新授权链接重新授权",
+	)
+	ErrOpenAIOAuthInvalidRequest = infraerrors.BadRequest(
+		"OPENAI_OAUTH_REQUEST_INVALID",
+		"授权请求无效，请重新生成授权链接后重试",
+	)
+)
+
+type openAIOAuthSessionTokenPayload struct {
+	Version      int    `json:"v"`
+	SessionID    string `json:"sid"`
+	State        string `json:"state"`
+	CodeVerifier string `json:"code_verifier"`
+	ClientID     string `json:"client_id,omitempty"`
+	ProxyURL     string `json:"proxy_url,omitempty"`
+	RedirectURI  string `json:"redirect_uri"`
+	CreatedAt    int64  `json:"created_at"`
 }
 
 // NewOpenAIOAuthService creates a new OpenAI OAuth service
@@ -27,6 +77,19 @@ func NewOpenAIOAuthService(proxyRepo ProxyRepository, oauthClient OpenAIOAuthCli
 		proxyRepo:    proxyRepo,
 		oauthClient:  oauthClient,
 	}
+}
+
+func (s *OpenAIOAuthService) SetSessionTokenSecret(secret string) {
+	if s == nil {
+		return
+	}
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		s.sessionTokenKey = nil
+		return
+	}
+	sum := sha256.Sum256([]byte(secret))
+	s.sessionTokenKey = sum[:]
 }
 
 // SetPrivacyClientFactory 注入 ImpersonateChrome 客户端工厂，
@@ -133,6 +196,12 @@ func (s *OpenAIOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64
 		ProxyURL:     proxyURL,
 		CreatedAt:    time.Now(),
 	}
+	if len(s.sessionTokenKey) > 0 {
+		sessionID, err = s.encodeSessionToken(sessionID, session)
+		if err != nil {
+			return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_OAUTH_SESSION_TOKEN_FAILED", "failed to protect oauth session: %v", err)
+		}
+	}
 	s.sessionStore.Set(sessionID, session)
 
 	// Build authorization URL
@@ -172,16 +241,29 @@ type OpenAITokenInfo struct {
 
 // ExchangeCode exchanges authorization code for tokens
 func (s *OpenAIOAuthService) ExchangeCode(ctx context.Context, input *OpenAIExchangeCodeInput) (*OpenAITokenInfo, error) {
+	if input == nil || strings.TrimSpace(input.SessionID) == "" || strings.TrimSpace(input.Code) == "" {
+		return nil, ErrOpenAIOAuthInvalidRequest
+	}
+
 	// Get session
 	session, ok := s.sessionStore.Get(input.SessionID)
 	if !ok {
-		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_SESSION_NOT_FOUND", "session not found or expired")
+		recovered, err := s.decodeSessionToken(input.SessionID)
+		if err != nil {
+			slog.Warn(
+				"openai_oauth_session_not_found",
+				"session_id_kind", classifyOpenAIOAuthSessionID(input.SessionID),
+				"recover_error", err.Error(),
+			)
+			return nil, ErrOpenAIOAuthSessionNotFound
+		}
+		session = recovered
 	}
 	if input.State == "" {
-		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_STATE_REQUIRED", "oauth state is required")
+		return nil, ErrOpenAIOAuthStateRequired
 	}
 	if subtle.ConstantTimeCompare([]byte(input.State), []byte(session.State)) != 1 {
-		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_INVALID_STATE", "invalid oauth state")
+		return nil, ErrOpenAIOAuthInvalidState
 	}
 
 	// Get proxy URL: prefer input.ProxyID, fallback to session.ProxyURL
@@ -246,6 +328,122 @@ func (s *OpenAIOAuthService) ExchangeCode(ctx context.Context, input *OpenAIExch
 	s.enrichTokenInfo(ctx, tokenInfo, proxyURL)
 
 	return tokenInfo, nil
+}
+
+func (s *OpenAIOAuthService) encodeSessionToken(sessionID string, session *openai.OAuthSession) (string, error) {
+	if s == nil || len(s.sessionTokenKey) == 0 {
+		return sessionID, nil
+	}
+	if session == nil {
+		return "", fmt.Errorf("session is nil")
+	}
+
+	payload := openAIOAuthSessionTokenPayload{
+		Version:      1,
+		SessionID:    sessionID,
+		State:        session.State,
+		CodeVerifier: session.CodeVerifier,
+		ClientID:     session.ClientID,
+		ProxyURL:     session.ProxyURL,
+		RedirectURI:  session.RedirectURI,
+		CreatedAt:    session.CreatedAt.UTC().Unix(),
+	}
+	plaintext, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal oauth session token: %w", err)
+	}
+
+	gcm, err := s.sessionTokenGCM()
+	if err != nil {
+		return "", err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", fmt.Errorf("generate oauth session token nonce: %w", err)
+	}
+	ciphertext := gcm.Seal(nil, nonce, plaintext, []byte(openAIOAuthSessionTokenAAD))
+	raw := append(nonce, ciphertext...)
+	return openAIOAuthSessionTokenPrefix + base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+func (s *OpenAIOAuthService) decodeSessionToken(sessionID string) (*openai.OAuthSession, error) {
+	if s == nil || len(s.sessionTokenKey) == 0 {
+		return nil, errOpenAIOAuthSessionTokenDisabled
+	}
+	if !strings.HasPrefix(sessionID, openAIOAuthSessionTokenPrefix) {
+		return nil, errOpenAIOAuthSessionTokenFormat
+	}
+	encoded := strings.TrimPrefix(sessionID, openAIOAuthSessionTokenPrefix)
+	raw, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errOpenAIOAuthSessionTokenFormat, err)
+	}
+
+	gcm, err := s.sessionTokenGCM()
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) <= gcm.NonceSize() {
+		return nil, errOpenAIOAuthSessionTokenFormat
+	}
+	nonce := raw[:gcm.NonceSize()]
+	ciphertext := raw[gcm.NonceSize():]
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, []byte(openAIOAuthSessionTokenAAD))
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errOpenAIOAuthSessionTokenFormat, err)
+	}
+
+	var payload openAIOAuthSessionTokenPayload
+	if err := json.Unmarshal(plaintext, &payload); err != nil {
+		return nil, fmt.Errorf("%w: %v", errOpenAIOAuthSessionTokenFormat, err)
+	}
+	if payload.Version != 1 ||
+		strings.TrimSpace(payload.State) == "" ||
+		strings.TrimSpace(payload.CodeVerifier) == "" ||
+		strings.TrimSpace(payload.RedirectURI) == "" ||
+		payload.CreatedAt <= 0 {
+		return nil, errOpenAIOAuthSessionTokenFormat
+	}
+
+	createdAt := time.Unix(payload.CreatedAt, 0).UTC()
+	now := time.Now().UTC()
+	if now.Sub(createdAt) > openai.SessionTTL || createdAt.Sub(now) > openAIOAuthSessionTokenSkew {
+		return nil, errOpenAIOAuthSessionTokenExpired
+	}
+
+	return &openai.OAuthSession{
+		State:        payload.State,
+		CodeVerifier: payload.CodeVerifier,
+		ClientID:     payload.ClientID,
+		ProxyURL:     payload.ProxyURL,
+		RedirectURI:  payload.RedirectURI,
+		CreatedAt:    createdAt,
+	}, nil
+}
+
+func (s *OpenAIOAuthService) sessionTokenGCM() (cipher.AEAD, error) {
+	if s == nil || len(s.sessionTokenKey) == 0 {
+		return nil, errOpenAIOAuthSessionTokenDisabled
+	}
+	block, err := aes.NewCipher(s.sessionTokenKey)
+	if err != nil {
+		return nil, fmt.Errorf("create oauth session token cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("create oauth session token gcm: %w", err)
+	}
+	return gcm, nil
+}
+
+func classifyOpenAIOAuthSessionID(sessionID string) string {
+	if strings.HasPrefix(sessionID, openAIOAuthSessionTokenPrefix) {
+		return "stateless_token"
+	}
+	if sessionID == "" {
+		return "empty"
+	}
+	return "legacy_memory_id"
 }
 
 // RefreshToken refreshes an OpenAI OAuth token

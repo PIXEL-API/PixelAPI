@@ -47,7 +47,7 @@ func (s *UserSubscription) DaysRemaining() int {
 }
 
 func (s *UserSubscription) IsWindowActivated() bool {
-	return s.DailyWindowStart != nil || s.WeeklyWindowStart != nil || s.MonthlyWindowStart != nil
+	return s.DailyWindowStart != nil && s.WeeklyWindowStart != nil && s.MonthlyWindowStart != nil
 }
 
 func (s *UserSubscription) NeedsDailyReset() bool {

@@ -1,0 +1,14 @@
+{
+  "title": "API 参考",
+  "description": "面向开发者和用户调用模型的 OpenAI、Claude、Gemini、Images、Models 与 Antigravity 接口。",
+  "icon": "Code",
+  "root": true,
+  "defaultOpen": true,
+  "pages": [
+    "index",
+    "(chat)",
+    "(images)",
+    "(models)",
+    "(antigravity)"
+  ]
+}

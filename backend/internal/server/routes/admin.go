@@ -45,6 +45,7 @@ func RegisterAdminRoutes(
 
 		// Antigravity OAuth
 		registerAntigravityOAuthRoutes(admin, h)
+		registerGrokOAuthRoutes(admin, h)
 
 		// 代理管理
 		registerProxyRoutes(admin, h)
@@ -381,6 +382,7 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		accounts.GET("/quota-dashboard", h.Admin.Account.GetQuotaDashboard)
 		accounts.GET("/:id", h.Admin.Account.GetByID)
 		accounts.POST("", h.Admin.Account.Create)
+		accounts.POST("/:id/duplicate", h.Admin.Account.Duplicate)
 		accounts.POST("/check-mixed-channel", h.Admin.Account.CheckMixedChannel)
 		accounts.POST("/sync/crs", h.Admin.Account.SyncFromCRS)
 		accounts.POST("/sync/crs/preview", h.Admin.Account.PreviewFromCRS)
@@ -401,7 +403,9 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		accounts.GET("/:id/temp-unschedulable", h.Admin.Account.GetTempUnschedulable)
 		accounts.DELETE("/:id/temp-unschedulable", h.Admin.Account.ClearTempUnschedulable)
 		accounts.POST("/:id/schedulable", h.Admin.Account.SetSchedulable)
+		accounts.POST("/models/sync-upstream-preview", h.Admin.Account.SyncUpstreamModelsPreview)
 		accounts.GET("/:id/models", h.Admin.Account.GetAvailableModels)
+		accounts.POST("/:id/models/sync-upstream", h.Admin.Account.SyncUpstreamModels)
 		accounts.POST("/batch", h.Admin.Account.BatchCreate)
 		accounts.GET("/data", h.Admin.Account.ExportData)
 		accounts.POST("/data", h.Admin.Account.ImportData)
@@ -501,6 +505,21 @@ func registerAntigravityOAuthRoutes(admin *gin.RouterGroup, h *handler.Handlers)
 		antigravity.POST("/oauth/auth-url", h.Admin.AntigravityOAuth.GenerateAuthURL)
 		antigravity.POST("/oauth/exchange-code", h.Admin.AntigravityOAuth.ExchangeCode)
 		antigravity.POST("/oauth/refresh-token", h.Admin.AntigravityOAuth.RefreshToken)
+	}
+}
+
+func registerGrokOAuthRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	grok := admin.Group("/grok")
+	{
+		grok.POST("/oauth/auth-url", h.Admin.GrokOAuth.GenerateAuthURL)
+		grok.POST("/oauth/exchange-code", h.Admin.GrokOAuth.ExchangeCode)
+		grok.POST("/oauth/refresh-token", h.Admin.GrokOAuth.RefreshToken)
+		grok.POST("/accounts/:id/refresh", h.Admin.GrokOAuth.RefreshAccountToken)
+		grok.POST("/create-from-oauth", h.Admin.GrokOAuth.CreateAccountFromOAuth)
+		grok.POST("/sso-to-oauth", h.Admin.GrokOAuth.CreateAccountsFromSSO)
+		grok.GET("/accounts/:id/quota", h.Admin.GrokOAuth.QueryQuota)
+		grok.POST("/accounts/:id/reset-quota", h.Admin.GrokOAuth.ResetQuota)
+		grok.GET("/runtime-sanity", h.Admin.GrokOAuth.RuntimeSanity)
 	}
 }
 
@@ -681,7 +700,6 @@ func registerRevenueRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	revenue := admin.Group("/revenue")
 	{
 		revenue.GET("/summary", h.Admin.Revenue.GetSummary)
-		revenue.GET("/breakdowns", h.Admin.Revenue.GetBreakdowns)
 		revenue.GET("/share-settlements", h.Admin.Revenue.ListShareSettlements)
 		revenue.POST("/share-settlements/exports", h.Admin.Revenue.CreateShareSettlementExport)
 		revenue.GET("/share-settlements/exports/:id", h.Admin.Revenue.GetShareSettlementExport)

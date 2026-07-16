@@ -3,7 +3,7 @@ import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
 
 export type AddMethod = 'oauth' | 'setup-token'
-export type AuthInputMethod = 'manual' | 'cookie' | 'refresh_token' | 'mobile_refresh_token' | 'session_token' | 'access_token'
+export type AuthInputMethod = 'manual' | 'cookie' | 'refresh_token' | 'mobile_refresh_token' | 'session_token' | 'access_token' | 'sso_cookie'
 export type AccountApiScope = 'admin' | 'user'
 
 export interface OAuthState {

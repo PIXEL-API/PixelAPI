@@ -31,6 +31,11 @@ vi.mock('@/api/admin/system', () => ({
 
 vi.mock('@/api/auth', () => ({
   getPublicSettings: vi.fn().mockResolvedValue({}),
+  assertCompleteAuthResponse: (response: any) => {
+    if (!response?.access_token || !response?.refresh_token || !response?.expires_in || !response?.user) {
+      throw new Error('Authentication response is missing a complete token pair')
+    }
+  },
 }))
 
 /**
@@ -94,6 +99,8 @@ describe('LoginForm 核心逻辑', () => {
   it('成功登录后跳转到 dashboard', async () => {
     mockLogin.mockResolvedValue({
       access_token: 'token',
+      refresh_token: 'refresh-token',
+      expires_in: 3600,
       token_type: 'Bearer',
       user: { id: 1, username: 'test', email: 'test@example.com', role: 'user', balance: 0, concurrency: 5, status: 'active', allowed_groups: null, created_at: '', updated_at: '' },
     })
@@ -168,6 +175,8 @@ describe('LoginForm 核心逻辑', () => {
 
     resolveLogin!({
       access_token: 'token',
+      refresh_token: 'refresh-token',
+      expires_in: 3600,
       token_type: 'Bearer',
       user: { id: 1, username: 'test', email: 'test@example.com', role: 'user', balance: 0, concurrency: 5, status: 'active', allowed_groups: null, created_at: '', updated_at: '' },
     })

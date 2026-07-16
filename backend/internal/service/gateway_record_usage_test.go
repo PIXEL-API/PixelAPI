@@ -333,7 +333,7 @@ func TestGatewayServiceRecordUsage_UsesFallbackRequestIDForUsageLog(t *testing.T
 	require.Equal(t, "local:gateway-local-fallback", usageRepo.lastLog.RequestID)
 }
 
-func TestGatewayServiceRecordUsage_PrefersClientRequestIDOverUpstreamRequestID(t *testing.T) {
+func TestGatewayServiceRecordUsage_PrefersUpstreamRequestIDOverClientRequestID(t *testing.T) {
 	usageRepo := &openAIRecordUsageLogRepoStub{}
 	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
 	svc := newGatewayRecordUsageServiceWithBillingRepoForTest(usageRepo, billingRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{})
@@ -357,9 +357,9 @@ func TestGatewayServiceRecordUsage_PrefersClientRequestIDOverUpstreamRequestID(t
 
 	require.NoError(t, err)
 	require.NotNil(t, billingRepo.lastCmd)
-	require.Equal(t, "client:client-stable-123", billingRepo.lastCmd.RequestID)
+	require.Equal(t, "upstream-volatile-456", billingRepo.lastCmd.RequestID)
 	require.NotNil(t, usageRepo.lastLog)
-	require.Equal(t, "client:client-stable-123", usageRepo.lastLog.RequestID)
+	require.Equal(t, "upstream-volatile-456", usageRepo.lastLog.RequestID)
 }
 
 func TestGatewayServiceRecordUsage_GeneratesRequestIDWhenAllSourcesMissing(t *testing.T) {
@@ -492,4 +492,106 @@ func TestGatewayServiceRecordUsage_ReasoningEffortNil(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, usageRepo.lastLog)
 	require.Nil(t, usageRepo.lastLog.ReasoningEffort)
+}
+
+func TestGatewayServiceRecordUsage_NewUserQuotaCurrentOrderUsesNewRateThenFallsBackNextTime(t *testing.T) {
+	groupID := int64(202)
+	userID := int64(601)
+	now := time.Now()
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true, sumRateSourceCost: 9.99}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	svc := newGatewayRecordUsageServiceForTest(usageRepo, userRepo, &openAIRecordUsageSubRepoStub{})
+	apiKey := &APIKey{
+		ID:      501,
+		GroupID: i64p(groupID),
+		Group: &Group{
+			ID:                       groupID,
+			RateMultiplier:           1.2,
+			NewUserRateEnabled:       true,
+			NewUserRateMultiplier:    0.75,
+			NewUserRateWindowSeconds: int((3 * time.Hour).Seconds()),
+			NewUserRateQuotaUSD:      10,
+		},
+	}
+	user := &User{ID: userID, CreatedAt: now.Add(-time.Hour)}
+
+	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
+		Result: &ForwardResult{
+			RequestID: "gateway_new_user_quota_current_order",
+			Usage:     ClaudeUsage{InputTokens: 10, OutputTokens: 5},
+			Model:     "claude-sonnet-4",
+			Duration:  time.Second,
+		},
+		APIKey:  apiKey,
+		User:    user,
+		Account: &Account{ID: 701},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.Equal(t, 0.75, usageRepo.lastLog.RateMultiplier)
+	require.Equal(t, RateMultiplierSourceNewUserGroup, usageRepo.lastLog.RateMultiplierSource)
+	require.Equal(t, 1, userRepo.deductCalls)
+
+	usageRepo.sumRateSourceCost = 10.50
+	err = svc.RecordUsage(context.Background(), &RecordUsageInput{
+		Result: &ForwardResult{
+			RequestID: "gateway_new_user_quota_next_order",
+			Usage:     ClaudeUsage{InputTokens: 10, OutputTokens: 5},
+			Model:     "claude-sonnet-4",
+			Duration:  time.Second,
+		},
+		APIKey:  apiKey,
+		User:    user,
+		Account: &Account{ID: 701},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.Equal(t, 1.2, usageRepo.lastLog.RateMultiplier)
+	require.Equal(t, RateMultiplierSourceGroupDefault, usageRepo.lastLog.RateMultiplierSource)
+	require.Equal(t, 2, userRepo.deductCalls)
+	require.Equal(t, 2, usageRepo.sumRateSourceCostCall)
+}
+
+func TestGatewayServiceRecordUsage_NewUserQuotaQueryErrorStopsBillingAndUsageLog(t *testing.T) {
+	groupID := int64(203)
+	usageRepo := &openAIRecordUsageLogRepoStub{
+		inserted:             true,
+		sumRateSourceCostErr: errors.New("usage sum unavailable"),
+	}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	billingRepo := &openAIRecordUsageBillingRepoStub{}
+	svc := newGatewayRecordUsageServiceWithBillingRepoForTest(usageRepo, billingRepo, userRepo, &openAIRecordUsageSubRepoStub{})
+
+	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
+		Result: &ForwardResult{
+			RequestID: "gateway_new_user_quota_sum_error",
+			Usage:     ClaudeUsage{InputTokens: 10, OutputTokens: 5},
+			Model:     "claude-sonnet-4",
+			Duration:  time.Second,
+		},
+		APIKey: &APIKey{
+			ID:      502,
+			GroupID: i64p(groupID),
+			Group: &Group{
+				ID:                       groupID,
+				RateMultiplier:           1.2,
+				NewUserRateEnabled:       true,
+				NewUserRateMultiplier:    0.75,
+				NewUserRateWindowSeconds: int((3 * time.Hour).Seconds()),
+				NewUserRateQuotaUSD:      10,
+			},
+		},
+		User:    &User{ID: 602, CreatedAt: time.Now().Add(-time.Hour)},
+		Account: &Account{ID: 702},
+	})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "get new user group rate quota usage")
+	require.Equal(t, 1, usageRepo.sumRateSourceCostCall)
+	require.Equal(t, 0, billingRepo.calls)
+	require.Equal(t, 0, userRepo.deductCalls)
+	require.Equal(t, 0, usageRepo.calls)
+	require.Nil(t, usageRepo.lastLog)
 }

@@ -16,6 +16,7 @@ import (
 
 func float64Ptr(v float64) *float64 { return &v }
 func intPtr(v int) *int             { return &v }
+func boolPtr(v bool) *bool          { return &v }
 
 // ---------------------------------------------------------------------------
 // 1. channelToResponse
@@ -39,15 +40,17 @@ func TestChannelToResponse_FullChannel(t *testing.T) {
 		GroupIDs:           []int64{1, 2, 3},
 		ModelPricing: []service.ChannelModelPricing{
 			{
-				ID:              10,
-				Platform:        "openai",
-				Models:          []string{"gpt-4"},
-				BillingMode:     service.BillingModeToken,
-				InputPrice:      float64Ptr(0.01),
-				OutputPrice:     float64Ptr(0.03),
-				CacheWritePrice: float64Ptr(0.005),
-				CacheReadPrice:  float64Ptr(0.002),
-				PerRequestPrice: float64Ptr(0.5),
+				ID:                             10,
+				Platform:                       "openai",
+				Models:                         []string{"gpt-4"},
+				BillingMode:                    service.BillingModeToken,
+				InputPrice:                     float64Ptr(0.01),
+				OutputPrice:                    float64Ptr(0.03),
+				CacheWritePrice:                float64Ptr(0.005),
+				CacheReadPrice:                 float64Ptr(0.002),
+				PerRequestPrice:                float64Ptr(0.5),
+				LongContextPricingEnabled:      boolPtr(true),
+				LongContextInputTokenThreshold: intPtr(128000),
 			},
 		},
 		ModelMapping: map[string]map[string]string{
@@ -83,6 +86,8 @@ func TestChannelToResponse_FullChannel(t *testing.T) {
 	require.Equal(t, float64Ptr(0.005), p.CacheWritePrice)
 	require.Equal(t, float64Ptr(0.002), p.CacheReadPrice)
 	require.Equal(t, float64Ptr(0.5), p.PerRequestPrice)
+	require.Equal(t, boolPtr(true), p.LongContextPricingEnabled)
+	require.Equal(t, intPtr(128000), p.LongContextInputTokenThreshold)
 	require.Empty(t, p.Intervals)
 }
 
@@ -389,6 +394,20 @@ func TestPricingRequestToService_WithIntervals(t *testing.T) {
 	require.Nil(t, iv1.MaxTokens)
 	require.Equal(t, "large", iv1.TierLabel)
 	require.Equal(t, 2, iv1.SortOrder)
+}
+
+func TestPricingRequestToService_WithLongContextPolicy(t *testing.T) {
+	result := pricingRequestToService([]channelModelPricingRequest{{
+		Platform:                       "openai",
+		Models:                         []string{"gpt-5.6-sol"},
+		BillingMode:                    "token",
+		LongContextPricingEnabled:      boolPtr(true),
+		LongContextInputTokenThreshold: intPtr(128000),
+	}})
+
+	require.Len(t, result, 1)
+	require.Equal(t, boolPtr(true), result[0].LongContextPricingEnabled)
+	require.Equal(t, intPtr(128000), result[0].LongContextInputTokenThreshold)
 }
 
 func TestPricingRequestToService_EmptySlice(t *testing.T) {

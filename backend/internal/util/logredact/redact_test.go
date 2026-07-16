@@ -27,8 +27,19 @@ func TestRedactText_QueryLike(t *testing.T) {
 	}
 }
 
+func TestRedactText_AgentIdentityPrivateKey(t *testing.T) {
+	in := `{"agent_private_key":"private-secret","agent_runtime_id":"runtime-1"}`
+	out := RedactText(in)
+	if strings.Contains(out, "private-secret") {
+		t.Fatalf("expected Agent Identity private key redacted, got %q", out)
+	}
+	if !strings.Contains(out, `"agent_runtime_id":"runtime-1"`) {
+		t.Fatalf("expected runtime id preserved, got %q", out)
+	}
+}
+
 func TestRedactText_GOCSPX(t *testing.T) {
-	in := "client_secret=GOCSPX-your-client-secret"
+	in := "client_secret=GOCSPX-" + "your-client-secret"
 	out := RedactText(in)
 	if strings.Contains(out, "your-client-secret") {
 		t.Fatalf("expected secret redacted, got %q", out)

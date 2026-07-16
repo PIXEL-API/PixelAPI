@@ -55,6 +55,36 @@
           <div
             class="flex w-full flex-shrink-0 flex-wrap items-center justify-end gap-3 lg:w-auto"
           >
+            <div ref="columnDropdownRef" class="relative">
+              <button
+                type="button"
+                class="btn btn-secondary px-2 md:px-3"
+                :title="t('admin.groups.columnSettings')"
+                @click="showColumnDropdown = !showColumnDropdown"
+              >
+                <svg class="h-4 w-4 md:mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 4.5v15m6-15v15m-10.875 0h15.75c.621 0 1.125-.504 1.125-1.125V5.625c0-.621-.504-1.125-1.125-1.125H4.125C3.504 4.5 3 5.004 3 5.625v12.75c0 .621.504 1.125 1.125 1.125z" />
+                </svg>
+                <span class="hidden md:inline">{{ t("admin.groups.columnSettings") }}</span>
+              </button>
+              <div
+                v-if="showColumnDropdown"
+                class="absolute right-0 z-50 mt-2 w-48 origin-top-right rounded-lg border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-gray-800"
+              >
+                <div class="max-h-80 overflow-y-auto p-2">
+                  <button
+                    v-for="column in toggleableColumns"
+                    :key="column.key"
+                    type="button"
+                    class="flex w-full items-center justify-between rounded-md px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700"
+                    @click="toggleColumn(column.key)"
+                  >
+                    <span>{{ column.label }}</span>
+                    <Icon v-if="isColumnVisible(column.key)" name="check" size="sm" class="text-primary-500" />
+                  </button>
+                </div>
+              </div>
+            </div>
             <button
               @click="loadGroups"
               :disabled="loading"
@@ -111,6 +141,10 @@
             </div>
           </template>
 
+          <template #cell-id="{ value }">
+            <span class="font-mono text-xs text-gray-500 dark:text-gray-400">#{{ value }}</span>
+          </template>
+
           <template #cell-platform="{ value, row }">
             <div class="flex flex-wrap items-center gap-1.5">
               <span
@@ -122,6 +156,8 @@
                       ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
                       : value === 'antigravity'
                         ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
+                        : value === 'grok'
+                          ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400'
                         : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
                 ]"
               >
@@ -202,10 +238,20 @@
             </div>
           </template>
 
-          <template #cell-rate_multiplier="{ value }">
-            <span class="text-sm text-gray-700 dark:text-gray-300"
-              >{{ value }}x</span
-            >
+          <template #cell-rate_multiplier="{ row, value }">
+            <div class="flex flex-col items-start gap-1">
+              <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                {{ value }}x
+              </span>
+              <span
+                v-if="row.new_user_rate_enabled"
+                class="inline-flex max-w-full items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300"
+                :title="formatNewUserRateTooltip(row)"
+              >
+                <span>{{ t("admin.groups.newUserRateShort") }}</span>
+                <span>{{ row.new_user_rate_multiplier }}x</span>
+              </span>
+            </div>
           </template>
 
           <template #cell-is_exclusive="{ value }">
@@ -329,6 +375,17 @@
                 <Icon name="dollar" size="sm" />
                 <span class="text-xs">{{
                   t("admin.groups.rateMultipliers")
+                }}</span>
+              </button>
+              <button
+                @click="handleNewUserRate(row)"
+                class="flex min-h-11 min-w-11 flex-col items-center justify-center gap-0.5 rounded-lg px-2 py-1.5 text-gray-500 transition-colors hover:bg-emerald-50 hover:text-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-1 dark:hover:bg-emerald-900/20 dark:hover:text-emerald-400 dark:focus:ring-offset-dark-800"
+                :title="t('admin.groups.newUserRateTitle')"
+                :aria-label="t('admin.groups.newUserRateTitle')"
+              >
+                <Icon name="gift" size="sm" />
+                <span class="text-xs">{{
+                  t("admin.groups.newUserRateAction")
                 }}</span>
               </button>
               <button
@@ -694,7 +751,8 @@
           v-if="
             createForm.platform === 'antigravity' ||
             createForm.platform === 'gemini' ||
-            createForm.platform === 'openai'
+            createForm.platform === 'openai' ||
+            createForm.platform === 'grok'
           "
           class="border-t pt-4"
         >
@@ -740,6 +798,41 @@
                 placeholder="0.268"
               />
             </div>
+          </div>
+        </div>
+
+        <!-- Grok 视频生成按秒计费配置 -->
+        <div v-if="createForm.platform === 'grok'" class="border-t pt-4">
+          <label class="mb-2 block font-medium text-gray-700 dark:text-gray-300">
+            {{ t("admin.groups.videoPricing.title") }}
+          </label>
+          <p class="mb-3 text-xs text-gray-500 dark:text-gray-400">
+            {{ t("admin.groups.videoPricing.description") }}
+          </p>
+          <label class="mb-4 flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+            <input v-model="createForm.video_rate_independent" type="checkbox" class="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
+            {{ t("admin.groups.videoPricing.independentMultiplier") }}
+          </label>
+          <div v-if="createForm.video_rate_independent" class="mb-4">
+            <label class="input-label">{{ t("admin.groups.videoPricing.videoMultiplier") }}</label>
+            <input
+              v-model.number="createForm.video_rate_multiplier"
+              type="number"
+              step="0.0001"
+              min="0.0001"
+              required
+              class="input"
+              placeholder="1"
+            />
+          </div>
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div><label class="input-label">480p ($/s)</label><input v-model.number="createForm.video_price_480p" type="number" step="0.001" min="0" class="input" :placeholder="t('admin.groups.videoPricing.defaultPricePlaceholder')" /></div>
+            <div><label class="input-label">720p ($/s)</label><input v-model.number="createForm.video_price_720p" type="number" step="0.001" min="0" class="input" :placeholder="t('admin.groups.videoPricing.defaultPricePlaceholder')" /></div>
+            <div><label class="input-label">1080p ($/s)</label><input v-model.number="createForm.video_price_1080p" type="number" step="0.001" min="0" class="input" :placeholder="t('admin.groups.videoPricing.defaultPricePlaceholder')" /></div>
+          </div>
+          <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">{{ t("admin.groups.videoPricing.modeHint") }}</p>
+          <div class="mt-2 rounded-lg bg-gray-50 p-3 text-xs text-gray-700 dark:bg-gray-800 dark:text-gray-300">
+            {{ t("admin.groups.videoPricing.finalPricePreview", { price: videoFinalPricePreview(createForm) }) }}
           </div>
         </div>
 
@@ -947,6 +1040,19 @@
             <p class="input-hint">
               {{ t("admin.groups.claudeCode.fallbackHint") }}
             </p>
+          </div>
+        </div>
+
+        <!-- Codex 网页搜索按次计费（仅 openai 平台） -->
+        <div v-if="createForm.platform === 'openai'" class="border-t border-gray-200 pt-4 mt-4 dark:border-dark-400">
+          <h4 class="mb-3 text-sm font-medium text-gray-700 dark:text-gray-300">
+            {{ t("admin.groups.webSearchPricing.title") }}
+          </h4>
+          <label class="input-label">{{ t("admin.groups.webSearchPricing.pricePerCall") }}</label>
+          <input v-model.number="createForm.web_search_price_per_call" type="number" step="0.001" min="0" placeholder="0.01" class="input" />
+          <p class="input-hint">{{ t("admin.groups.webSearchPricing.pricePerCallHint") }}</p>
+          <div class="mt-2 rounded-lg bg-gray-50 p-3 text-xs text-gray-600 dark:bg-dark-700 dark:text-gray-300">
+            {{ t("admin.groups.webSearchPricing.finalPricePreview", { price: webSearchFinalPrice(createForm) }) }}
           </div>
         </div>
 
@@ -1177,10 +1283,10 @@
           </div>
         </div>
 
-        <!-- 账号过滤控制 (OpenAI/Antigravity/Anthropic/Gemini) -->
+        <!-- 账号过滤控制 (OpenAI/Antigravity/Anthropic/Gemini/Grok) -->
         <div
           v-if="
-            ['openai', 'antigravity', 'anthropic', 'gemini'].includes(
+            ['openai', 'antigravity', 'anthropic', 'gemini', 'grok'].includes(
               createForm.platform,
             )
           "
@@ -1837,7 +1943,8 @@
           v-if="
             editForm.platform === 'antigravity' ||
             editForm.platform === 'gemini' ||
-            editForm.platform === 'openai'
+            editForm.platform === 'openai' ||
+            editForm.platform === 'grok'
           "
           class="border-t pt-4"
         >
@@ -1883,6 +1990,41 @@
                 placeholder="0.268"
               />
             </div>
+          </div>
+        </div>
+
+        <!-- Grok 视频生成按秒计费配置 -->
+        <div v-if="editForm.platform === 'grok'" class="border-t pt-4">
+          <label class="mb-2 block font-medium text-gray-700 dark:text-gray-300">
+            {{ t("admin.groups.videoPricing.title") }}
+          </label>
+          <p class="mb-3 text-xs text-gray-500 dark:text-gray-400">
+            {{ t("admin.groups.videoPricing.description") }}
+          </p>
+          <label class="mb-4 flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+            <input v-model="editForm.video_rate_independent" type="checkbox" class="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
+            {{ t("admin.groups.videoPricing.independentMultiplier") }}
+          </label>
+          <div v-if="editForm.video_rate_independent" class="mb-4">
+            <label class="input-label">{{ t("admin.groups.videoPricing.videoMultiplier") }}</label>
+            <input
+              v-model.number="editForm.video_rate_multiplier"
+              type="number"
+              step="0.0001"
+              min="0.0001"
+              required
+              class="input"
+              placeholder="1"
+            />
+          </div>
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div><label class="input-label">480p ($/s)</label><input v-model.number="editForm.video_price_480p" type="number" step="0.001" min="0" class="input" :placeholder="t('admin.groups.videoPricing.defaultPricePlaceholder')" /></div>
+            <div><label class="input-label">720p ($/s)</label><input v-model.number="editForm.video_price_720p" type="number" step="0.001" min="0" class="input" :placeholder="t('admin.groups.videoPricing.defaultPricePlaceholder')" /></div>
+            <div><label class="input-label">1080p ($/s)</label><input v-model.number="editForm.video_price_1080p" type="number" step="0.001" min="0" class="input" :placeholder="t('admin.groups.videoPricing.defaultPricePlaceholder')" /></div>
+          </div>
+          <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">{{ t("admin.groups.videoPricing.modeHint") }}</p>
+          <div class="mt-2 rounded-lg bg-gray-50 p-3 text-xs text-gray-700 dark:bg-gray-800 dark:text-gray-300">
+            {{ t("admin.groups.videoPricing.finalPricePreview", { price: videoFinalPricePreview(editForm) }) }}
           </div>
         </div>
 
@@ -2086,6 +2228,19 @@
             <p class="input-hint">
               {{ t("admin.groups.claudeCode.fallbackHint") }}
             </p>
+          </div>
+        </div>
+
+        <!-- Codex 网页搜索按次计费（仅 openai 平台） -->
+        <div v-if="editForm.platform === 'openai'" class="border-t border-gray-200 pt-4 mt-4 dark:border-dark-400">
+          <h4 class="mb-3 text-sm font-medium text-gray-700 dark:text-gray-300">
+            {{ t("admin.groups.webSearchPricing.title") }}
+          </h4>
+          <label class="input-label">{{ t("admin.groups.webSearchPricing.pricePerCall") }}</label>
+          <input v-model.number="editForm.web_search_price_per_call" type="number" step="0.001" min="0" placeholder="0.01" class="input" />
+          <p class="input-hint">{{ t("admin.groups.webSearchPricing.pricePerCallHint") }}</p>
+          <div class="mt-2 rounded-lg bg-gray-50 p-3 text-xs text-gray-600 dark:bg-dark-700 dark:text-gray-300">
+            {{ t("admin.groups.webSearchPricing.finalPricePreview", { price: webSearchFinalPrice(editForm) }) }}
           </div>
         </div>
 
@@ -2316,10 +2471,10 @@
           </div>
         </div>
 
-        <!-- 账号过滤控制 (OpenAI/Antigravity/Anthropic/Gemini) -->
+        <!-- 账号过滤控制 (OpenAI/Antigravity/Anthropic/Gemini/Grok) -->
         <div
           v-if="
-            ['openai', 'antigravity', 'anthropic', 'gemini'].includes(
+            ['openai', 'antigravity', 'anthropic', 'gemini', 'grok'].includes(
               editForm.platform,
             )
           "
@@ -2786,6 +2941,165 @@
       @close="showRPMOverridesModal = false"
       @success="loadGroups"
     />
+
+    <BaseDialog
+      :show="showNewUserRateModal"
+      :title="t('admin.groups.newUserRateTitle')"
+      width="normal"
+      @close="closeNewUserRateModal"
+    >
+      <form
+        id="new-user-rate-form"
+        class="space-y-5"
+        @submit.prevent="saveNewUserRate"
+      >
+        <div
+          v-if="newUserRateGroup"
+          class="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 dark:border-dark-700 dark:bg-dark-900/40"
+        >
+          <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div class="min-w-0">
+              <div class="truncate text-sm font-semibold text-gray-900 dark:text-white">
+                {{ newUserRateGroup.name }}
+              </div>
+              <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.groups.newUserRateDefaultRate', { rate: newUserRateGroup.rate_multiplier }) }}
+              </div>
+            </div>
+            <span
+              :class="[
+                'inline-flex w-fit items-center rounded-full px-2.5 py-1 text-xs font-medium',
+                newUserRateForm.enabled
+                  ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                  : 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300',
+              ]"
+            >
+              {{ newUserRateForm.enabled ? t('admin.groups.enabled') : t('admin.groups.disabled') }}
+            </span>
+          </div>
+        </div>
+
+        <label class="flex cursor-pointer items-start justify-between gap-4 rounded-lg border border-gray-200 p-4 transition-colors hover:border-emerald-200 hover:bg-emerald-50/40 dark:border-dark-700 dark:hover:border-emerald-800/70 dark:hover:bg-emerald-900/10">
+          <span class="min-w-0">
+            <span class="block text-sm font-medium text-gray-800 dark:text-gray-200">
+              {{ t('admin.groups.newUserRateEnableLabel') }}
+            </span>
+            <span class="mt-1 block text-xs leading-5 text-gray-500 dark:text-gray-400">
+              {{ t('admin.groups.form.newUserRateHint') }}
+            </span>
+          </span>
+          <input
+            v-model="newUserRateForm.enabled"
+            type="checkbox"
+            class="mt-0.5 h-4 w-4 shrink-0 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </label>
+
+        <div
+          class="grid grid-cols-1 gap-4 sm:grid-cols-2"
+          :class="{ 'opacity-55': !newUserRateForm.enabled }"
+        >
+          <div>
+            <label class="input-label">{{ t("admin.groups.form.newUserRateMultiplier") }}</label>
+            <input
+              v-model.number="newUserRateForm.multiplier"
+              type="number"
+              step="0.001"
+              min="0.001"
+              class="input"
+              :disabled="!newUserRateForm.enabled"
+            />
+          </div>
+          <div>
+            <label class="input-label">{{ t("admin.groups.form.newUserRateQuotaUSD") }}</label>
+            <input
+              v-model.number="newUserRateForm.quota_usd"
+              type="number"
+              min="0"
+              step="0.000001"
+              class="input"
+              :placeholder="t('admin.groups.form.newUserRateQuotaPlaceholder')"
+              :disabled="!newUserRateForm.enabled"
+            />
+          </div>
+          <div>
+            <label class="input-label">{{ t("admin.groups.form.newUserRateDays") }}</label>
+            <input
+              v-model.number="newUserRateForm.days"
+              type="number"
+              min="0"
+              step="1"
+              class="input"
+              :disabled="!newUserRateForm.enabled"
+            />
+          </div>
+          <div>
+            <label class="input-label">{{ t("admin.groups.form.newUserRateHours") }}</label>
+            <input
+              v-model.number="newUserRateForm.hours"
+              type="number"
+              min="0"
+              max="23"
+              step="1"
+              class="input"
+              :disabled="!newUserRateForm.enabled"
+            />
+          </div>
+        </div>
+
+        <div class="space-y-2 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-xs leading-5 text-blue-700 dark:border-blue-900/40 dark:bg-blue-900/20 dark:text-blue-300">
+          <div class="flex items-center gap-2 font-medium">
+            <Icon name="infoCircle" size="sm" />
+            <span>{{ t('admin.groups.newUserRateRulesTitle') }}</span>
+          </div>
+          <ul class="space-y-1 pl-6">
+            <li class="list-disc">{{ t('admin.groups.newUserRateRuleWindow') }}</li>
+            <li class="list-disc">{{ t('admin.groups.newUserRateRuleQuota') }}</li>
+            <li class="list-disc">{{ t('admin.groups.newUserRateRuleWholeOrder') }}</li>
+          </ul>
+        </div>
+      </form>
+
+      <template #footer>
+        <div class="flex justify-end gap-3 pt-4">
+          <button
+            type="button"
+            class="btn btn-secondary"
+            @click="closeNewUserRateModal"
+          >
+            {{ t("common.cancel") }}
+          </button>
+          <button
+            type="submit"
+            form="new-user-rate-form"
+            :disabled="newUserRateSubmitting"
+            class="btn btn-primary"
+          >
+            <svg
+              v-if="newUserRateSubmitting"
+              class="-ml-1 mr-2 h-4 w-4 animate-spin"
+              fill="none"
+              viewBox="0 0 24 24"
+            >
+              <circle
+                class="opacity-25"
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                stroke-width="4"
+              ></circle>
+              <path
+                class="opacity-75"
+                fill="currentColor"
+                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+              ></path>
+            </svg>
+            {{ newUserRateSubmitting ? t("admin.groups.saving") : t("common.save") }}
+          </button>
+        </div>
+      </template>
+    </BaseDialog>
   </AppLayout>
 </template>
 
@@ -2793,6 +3107,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "@/stores/app";
+import { useAdminSettingsStore } from "@/stores/adminSettings";
 import { useOnboardingStore } from "@/stores/onboarding";
 import { adminAPI } from "@/api/admin";
 import type { AccountLevel, AdminGroup, GroupPlatform, SubscriptionType } from "@/types";
@@ -2813,8 +3128,13 @@ import GroupRPMOverridesModal from "@/components/admin/group/GroupRPMOverridesMo
 import GroupCapacityBadge from "@/components/common/GroupCapacityBadge.vue";
 import { VueDraggable } from "vue-draggable-plus";
 import { createStableObjectKeyResolver } from "@/utils/stableObjectKey";
+import { extractApiErrorMessage } from "@/utils/apiError";
 import { useKeyedDebouncedSearch } from "@/composables/useKeyedDebouncedSearch";
 import { getPersistedPageSize } from "@/composables/usePersistedPageSize";
+import {
+  openAIAccountLevelLabel,
+  openAIAccountLevelOptions,
+} from "@/utils/openaiAccountLevels";
 import {
   createDefaultMessagesDispatchFormState,
   messagesDispatchConfigToFormState,
@@ -2822,13 +3142,21 @@ import {
   resetMessagesDispatchFormState,
   type MessagesDispatchMappingRow,
 } from "./groupsMessagesDispatch";
+import {
+  formatVideoPricePreview,
+  normalizeGroupPricingPayload,
+  resetInactivePlatformPricing,
+  type GroupPricingValidationError,
+} from "./groupPricingForm";
 
 const { t } = useI18n();
 const appStore = useAppStore();
+const adminSettingsStore = useAdminSettingsStore();
 const onboardingStore = useOnboardingStore();
 
-const columns = computed<Column[]>(() => [
+const allColumns = computed<Column[]>(() => [
   { key: "name", label: t("admin.groups.columns.name"), sortable: true },
+  { key: "id", label: t("admin.groups.columns.id"), sortable: true },
   {
     key: "platform",
     label: t("admin.groups.columns.platform"),
@@ -2864,6 +3192,101 @@ const columns = computed<Column[]>(() => [
   { key: "actions", label: t("admin.groups.columns.actions"), sortable: false },
 ]);
 
+const ALWAYS_VISIBLE_COLUMNS = new Set(["name", "actions"]);
+const DEFAULT_HIDDEN_COLUMNS = ["id"];
+const HIDDEN_COLUMNS_KEY = "group-hidden-columns";
+const COLUMN_SETTINGS_VERSION_KEY = "group-column-settings-version";
+const COLUMN_SETTINGS_VERSION = 2;
+const VERSION_NEW_HIDDEN_COLUMNS: Record<number, string[]> = {
+  2: ["id"],
+};
+
+const hiddenColumns = reactive<Set<string>>(new Set());
+const showColumnDropdown = ref(false);
+const columnDropdownRef = ref<HTMLElement | null>(null);
+
+const toggleableColumns = computed(() =>
+  allColumns.value.filter((column) => !ALWAYS_VISIBLE_COLUMNS.has(column.key)),
+);
+
+const columns = computed(() =>
+  allColumns.value.filter(
+    (column) =>
+      ALWAYS_VISIBLE_COLUMNS.has(column.key) || !hiddenColumns.has(column.key),
+  ),
+);
+
+const getValidHiddenColumnKeys = () =>
+  new Set(toggleableColumns.value.map((column) => column.key));
+
+const saveColumnsToStorage = () => {
+  try {
+    const validKeys = getValidHiddenColumnKeys();
+    const keys = [...hiddenColumns].filter((key) => validKeys.has(key));
+    localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify(keys));
+    localStorage.setItem(
+      COLUMN_SETTINGS_VERSION_KEY,
+      String(COLUMN_SETTINGS_VERSION),
+    );
+  } catch (error) {
+    console.error("Failed to save group column settings:", error);
+  }
+};
+
+const loadSavedColumns = () => {
+  hiddenColumns.clear();
+  try {
+    const validKeys = getValidHiddenColumnKeys();
+    const saved = localStorage.getItem(HIDDEN_COLUMNS_KEY);
+    if (!saved) {
+      DEFAULT_HIDDEN_COLUMNS.forEach((key) => {
+        if (validKeys.has(key)) hiddenColumns.add(key);
+      });
+      saveColumnsToStorage();
+      return;
+    }
+
+    const parsed = JSON.parse(saved);
+    if (Array.isArray(parsed)) {
+      parsed
+        .filter(
+          (key): key is string =>
+            typeof key === "string" && validKeys.has(key),
+        )
+        .forEach((key) => hiddenColumns.add(key));
+    }
+
+    const rawVersion = Number(
+      localStorage.getItem(COLUMN_SETTINGS_VERSION_KEY) ?? "1",
+    );
+    const storedVersion =
+      Number.isInteger(rawVersion) && rawVersion >= 1 ? rawVersion : 1;
+    if (storedVersion < COLUMN_SETTINGS_VERSION) {
+      for (
+        let version = storedVersion + 1;
+        version <= COLUMN_SETTINGS_VERSION;
+        version += 1
+      ) {
+        for (const key of VERSION_NEW_HIDDEN_COLUMNS[version] ?? []) {
+          if (validKeys.has(key)) hiddenColumns.add(key);
+        }
+      }
+      saveColumnsToStorage();
+    }
+  } catch (error) {
+    console.error("Failed to load group column settings:", error);
+    DEFAULT_HIDDEN_COLUMNS.forEach((key) => hiddenColumns.add(key));
+  }
+};
+
+const toggleColumn = (key: string) => {
+  if (hiddenColumns.has(key)) hiddenColumns.delete(key);
+  else hiddenColumns.add(key);
+  saveColumnsToStorage();
+};
+
+const isColumnVisible = (key: string) => !hiddenColumns.has(key);
+
 // Filter options
 const statusOptions = computed(() => [
   { value: "", label: t("admin.groups.allStatus") },
@@ -2888,6 +3311,7 @@ const platformOptions = computed(() => [
   { value: "openai", label: "OpenAI" },
   { value: "gemini", label: "Gemini" },
   { value: "antigravity", label: "Antigravity" },
+  { value: "grok", label: "Grok" },
 ]);
 
 const platformFilterOptions = computed(() => [
@@ -2896,6 +3320,7 @@ const platformFilterOptions = computed(() => [
   { value: "openai", label: "OpenAI" },
   { value: "gemini", label: "Gemini" },
   { value: "antigravity", label: "Antigravity" },
+  { value: "grok", label: "Grok" },
 ]);
 
 const editStatusOptions = computed(() => [
@@ -2908,17 +3333,16 @@ const subscriptionTypeOptions = computed(() => [
   { value: "subscription", label: t("admin.groups.subscription.subscription") },
 ]);
 
-const requiredAccountLevelOptions = computed(() => [
-  { value: "", label: t("admin.groups.form.requiredAccountLevelAny") },
-  { value: "free", label: t("admin.accounts.accountLevel.free") },
-  { value: "plus", label: t("admin.accounts.accountLevel.plus") },
-  { value: "pro", label: t("admin.accounts.accountLevel.pro") },
-  { value: "team", label: t("admin.accounts.accountLevel.team") },
-]);
+const requiredAccountLevelOptions = computed(() =>
+  openAIAccountLevelOptions(adminSettingsStore.openAIAccountLevels, {
+    includeEmpty: true,
+    emptyLabel: t("admin.groups.form.requiredAccountLevelAny"),
+  }),
+);
 
 const requiredAccountLevelLabel = (level?: Exclude<AccountLevel, "unknown"> | "") => {
   if (!level) return "";
-  return t(`admin.accounts.accountLevel.${level}`);
+  return openAIAccountLevelLabel(level, adminSettingsStore.openAIAccountLevels);
 };
 
 // 降级分组选项（创建时）- 仅包含 anthropic 平台且未启用 claude_code_only 的分组
@@ -3074,6 +3498,9 @@ const showRateSchedulesModal = ref(false);
 const rateSchedulesGroup = ref<AdminGroup | null>(null);
 const showRPMOverridesModal = ref(false);
 const rpmOverridesGroup = ref<AdminGroup | null>(null);
+const showNewUserRateModal = ref(false);
+const newUserRateGroup = ref<AdminGroup | null>(null);
+const newUserRateSubmitting = ref(false);
 const sortableGroups = ref<AdminGroup[]>([]);
 const createMessagesDispatchDefaults = createDefaultMessagesDispatchFormState();
 const editMessagesDispatchDefaults = createDefaultMessagesDispatchFormState();
@@ -3084,6 +3511,11 @@ const createForm = reactive({
   platform: "anthropic" as GroupPlatform,
   required_account_level: "" as Exclude<AccountLevel, "unknown"> | "",
   rate_multiplier: 1.0,
+  new_user_rate_enabled: false,
+  new_user_rate_multiplier: 1.0,
+  new_user_rate_days: 0,
+  new_user_rate_hours: 0,
+  new_user_rate_quota_usd: 0,
   is_exclusive: false,
   subscription_type: "standard" as SubscriptionType,
   daily_limit_usd: null as number | null,
@@ -3093,6 +3525,12 @@ const createForm = reactive({
   image_price_1k: null as number | null,
   image_price_2k: null as number | null,
   image_price_4k: null as number | null,
+  video_rate_independent: false,
+  video_rate_multiplier: 1,
+  video_price_480p: null as number | null,
+  video_price_720p: null as number | null,
+  video_price_1080p: null as number | null,
+  web_search_price_per_call: null as number | null,
   // Claude Code 客户端限制（仅 anthropic 平台使用）
   claude_code_only: false,
   fallback_group_id: null as number | null,
@@ -3366,6 +3804,11 @@ const editForm = reactive({
   platform: "anthropic" as GroupPlatform,
   required_account_level: "" as Exclude<AccountLevel, "unknown"> | "",
   rate_multiplier: 1.0,
+  new_user_rate_enabled: false,
+  new_user_rate_multiplier: 1.0,
+  new_user_rate_days: 0,
+  new_user_rate_hours: 0,
+  new_user_rate_quota_usd: 0,
   is_exclusive: false,
   status: "active" as "active" | "inactive",
   subscription_type: "standard" as SubscriptionType,
@@ -3376,6 +3819,12 @@ const editForm = reactive({
   image_price_1k: null as number | null,
   image_price_2k: null as number | null,
   image_price_4k: null as number | null,
+  video_rate_independent: false,
+  video_rate_multiplier: 1,
+  video_price_480p: null as number | null,
+  video_price_720p: null as number | null,
+  video_price_1080p: null as number | null,
+  web_search_price_per_call: null as number | null,
   // Claude Code 客户端限制（仅 anthropic 平台使用）
   claude_code_only: false,
   fallback_group_id: null as number | null,
@@ -3400,6 +3849,14 @@ const editForm = reactive({
   copy_accounts_from_group_ids: [] as number[],
   // 分组级 RPM 限制（每用户每分钟最大请求数；0 = 不限制）
   rpm_limit: 0 as number,
+});
+
+const newUserRateForm = reactive({
+  enabled: false,
+  multiplier: 1.0,
+  days: 0,
+  hours: 0,
+  quota_usd: 0,
 });
 
 // 根据分组类型返回不同的删除确认消息
@@ -3557,6 +4014,11 @@ const closeCreateModal = () => {
   createForm.platform = "anthropic";
   createForm.required_account_level = "";
   createForm.rate_multiplier = 1.0;
+  createForm.new_user_rate_enabled = false;
+  createForm.new_user_rate_multiplier = 1.0;
+  createForm.new_user_rate_days = 0;
+  createForm.new_user_rate_hours = 0;
+  createForm.new_user_rate_quota_usd = 0;
   createForm.is_exclusive = false;
   createForm.subscription_type = "standard";
   createForm.daily_limit_usd = null;
@@ -3565,6 +4027,12 @@ const closeCreateModal = () => {
   createForm.image_price_1k = null;
   createForm.image_price_2k = null;
   createForm.image_price_4k = null;
+  createForm.video_rate_independent = false;
+  createForm.video_rate_multiplier = 1;
+  createForm.video_price_480p = null;
+  createForm.video_price_720p = null;
+  createForm.video_price_1080p = null;
+  createForm.web_search_price_per_call = null;
   createForm.claude_code_only = false;
   createForm.fallback_group_id = null;
   createForm.fallback_group_id_on_invalid_request = null;
@@ -3574,6 +4042,7 @@ const closeCreateModal = () => {
   createForm.supported_model_scopes = ["claude", "gemini_text", "gemini_image"];
   createForm.mcp_xml_inject = true;
   createForm.copy_accounts_from_group_ids = [];
+  createForm.rpm_limit = 0;
   createModelRoutingRules.value = [];
 };
 
@@ -3596,9 +4065,152 @@ const normalizeOptionalLimit = (
   return Number.isFinite(value) && value > 0 ? value : null;
 };
 
+const DEFAULT_WEB_SEARCH_PRICE = 0.01;
+
+const previewNumber = (value: number | string | null | undefined, fallback: number) => {
+  if (value === null || value === undefined || (typeof value === "string" && value.trim() === "")) {
+    return fallback;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const previewPrice = (value: number | string | null | undefined, fallback: number) => {
+  if (value === null || value === undefined || (typeof value === "string" && value.trim() === "")) {
+    return fallback;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+};
+
+const formatPreviewPrice = (value: number) => `$${value.toFixed(4).replace(/0+$/, "").replace(/\.$/, "")}`;
+
+const videoFinalPricePreview = (form: Parameters<typeof formatVideoPricePreview>[0]) =>
+  formatVideoPricePreview(
+    form,
+    t("admin.groups.videoPricing.serverModelDefault"),
+  );
+
+const webSearchFinalPrice = (form: { rate_multiplier: number | string; web_search_price_per_call: number | string | null }) =>
+  formatPreviewPrice(previewPrice(form.web_search_price_per_call, DEFAULT_WEB_SEARCH_PRICE) * previewNumber(form.rate_multiplier, 1));
+
+const groupPricingValidationMessage = (
+  error: GroupPricingValidationError,
+): string => {
+  switch (error) {
+    case "invalid_video_multiplier":
+      return t("admin.groups.videoPricing.invalidMultiplier");
+    case "invalid_video_price":
+      return t("admin.groups.videoPricing.invalidPrice");
+    case "invalid_web_search_price":
+      return t("admin.groups.webSearchPricing.invalidPrice");
+  }
+};
+
+const SECONDS_PER_HOUR = 60 * 60;
+const SECONDS_PER_DAY = 24 * SECONDS_PER_HOUR;
+
+const normalizeNonNegativeInteger = (value: number | string | null | undefined): number => {
+  const parsed = Number(value ?? 0);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  return Math.floor(parsed);
+};
+
+const normalizeNonNegativeNumber = (value: number | string | null | undefined): number => {
+  const parsed = Number(value ?? 0);
+  if (!Number.isFinite(parsed) || parsed < 0) return Number.NaN;
+  return parsed;
+};
+
+const buildNewUserRateWindowSeconds = (
+  enabled: boolean,
+  days: number | string,
+  hours: number | string,
+): number => {
+  if (!enabled) return 0;
+  return normalizeNonNegativeInteger(days) * SECONDS_PER_DAY +
+    Math.min(normalizeNonNegativeInteger(hours), 23) * SECONDS_PER_HOUR;
+};
+
+const splitNewUserRateWindow = (seconds?: number | null) => {
+  const totalSeconds = normalizeNonNegativeInteger(seconds);
+  const days = Math.floor(totalSeconds / SECONDS_PER_DAY);
+  const hours = Math.floor((totalSeconds % SECONDS_PER_DAY) / SECONDS_PER_HOUR);
+  return { days, hours };
+};
+
+const formatNewUserRateWindow = (seconds: number): string => {
+  const { days, hours } = splitNewUserRateWindow(seconds);
+  if (days > 0 && hours > 0) {
+    return t("admin.groups.newUserRateDurationDaysHours", { days, hours });
+  }
+  if (days > 0) {
+    return t("admin.groups.newUserRateDurationDays", { days });
+  }
+  return t("admin.groups.newUserRateDurationHours", { hours });
+};
+
+const formatNewUserRateQuota = (quotaUSD?: number | null): string => {
+  const quota = Number(quotaUSD ?? 0);
+  if (!Number.isFinite(quota) || quota <= 0) {
+    return t("admin.groups.newUserRateQuotaUnlimited");
+  }
+  return `$${formatCost(quota)}`;
+};
+
+const formatNewUserRateTooltip = (group: AdminGroup): string => {
+  return t("admin.groups.newUserRateSummary", {
+    rate: group.new_user_rate_multiplier,
+    duration: formatNewUserRateWindow(group.new_user_rate_window_seconds || 0),
+    quota: formatNewUserRateQuota(group.new_user_rate_quota_usd || 0),
+  });
+};
+
+const validateNewUserRateForm = (
+  enabled: boolean,
+  multiplier: number | string,
+  days: number | string,
+  hours: number | string,
+  quotaUSD: number | string,
+) => {
+  const windowSeconds = buildNewUserRateWindowSeconds(enabled, days, hours);
+  const quota = normalizeNonNegativeNumber(quotaUSD);
+  if (enabled) {
+    const rate = Number(multiplier);
+    if (!Number.isFinite(rate) || rate <= 0) {
+      appStore.showError(t("admin.groups.invalidNewUserRate"));
+      return null;
+    }
+    if (windowSeconds <= 0) {
+      appStore.showError(t("admin.groups.invalidNewUserRateWindow"));
+      return null;
+    }
+    if (!Number.isFinite(quota)) {
+      appStore.showError(t("admin.groups.invalidNewUserRateQuota"));
+      return null;
+    }
+  }
+  return {
+    new_user_rate_enabled: enabled,
+    new_user_rate_multiplier: enabled ? Number(multiplier) : 1.0,
+    new_user_rate_window_seconds: windowSeconds,
+    new_user_rate_quota_usd: Number.isFinite(quota) ? quota : 0,
+  };
+};
+
 const handleCreateGroup = async () => {
   if (!createForm.name.trim()) {
     appStore.showError(t("admin.groups.nameRequired"));
+    return;
+  }
+  const newUserRatePayload = validateNewUserRateForm(
+    createForm.new_user_rate_enabled,
+    createForm.new_user_rate_multiplier,
+    createForm.new_user_rate_days,
+    createForm.new_user_rate_hours,
+    createForm.new_user_rate_quota_usd,
+  );
+  if (!newUserRatePayload) {
     return;
   }
   submitting.value = true;
@@ -3606,6 +4218,7 @@ const handleCreateGroup = async () => {
     // 构建请求数据，包含模型路由配置
     const requestData = {
       ...createForm,
+      ...newUserRatePayload,
       daily_limit_usd: normalizeOptionalLimit(
         createForm.daily_limit_usd as number | string | null,
       ),
@@ -3629,12 +4242,19 @@ const handleCreateGroup = async () => {
             })
           : undefined,
     };
+    delete (requestData as any).new_user_rate_days;
+    delete (requestData as any).new_user_rate_hours;
     // v-model.number 清空输入框时产生 ""，转为 null 让后端设为无限制
     const emptyToNull = (v: any) => (v === "" ? null : v);
     requestData.daily_limit_usd = emptyToNull(requestData.daily_limit_usd);
     requestData.weekly_limit_usd = emptyToNull(requestData.weekly_limit_usd);
     requestData.monthly_limit_usd = emptyToNull(requestData.monthly_limit_usd);
-    await adminAPI.groups.create(requestData);
+    const pricingResult = normalizeGroupPricingPayload(requestData, "create");
+    if (!pricingResult.ok) {
+      appStore.showError(groupPricingValidationMessage(pricingResult.error));
+      return;
+    }
+    await adminAPI.groups.create(pricingResult.payload);
     appStore.showSuccess(t("admin.groups.groupCreated"));
     closeCreateModal();
     loadGroups();
@@ -3643,9 +4263,7 @@ const handleCreateGroup = async () => {
       onboardingStore.nextStep(500);
     }
   } catch (error: any) {
-    appStore.showError(
-      error.response?.data?.detail || t("admin.groups.failedToCreate"),
-    );
+    appStore.showError(extractApiErrorMessage(error, t("admin.groups.failedToCreate")));
     console.error("Error creating group:", error);
     // Don't advance tour on error
   } finally {
@@ -3663,6 +4281,14 @@ const handleEdit = async (group: AdminGroup) => {
       ? group.required_account_level || ""
       : "";
   editForm.rate_multiplier = group.rate_multiplier;
+  editForm.new_user_rate_enabled = Boolean(group.new_user_rate_enabled);
+  editForm.new_user_rate_multiplier = group.new_user_rate_multiplier || 1.0;
+  editForm.new_user_rate_quota_usd = group.new_user_rate_quota_usd || 0;
+  const newUserRateWindow = splitNewUserRateWindow(
+    group.new_user_rate_window_seconds || 0,
+  );
+  editForm.new_user_rate_days = newUserRateWindow.days;
+  editForm.new_user_rate_hours = newUserRateWindow.hours;
   editForm.is_exclusive = group.is_exclusive;
   editForm.status = group.status;
   editForm.subscription_type = group.subscription_type || "standard";
@@ -3672,6 +4298,12 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.image_price_1k = group.image_price_1k;
   editForm.image_price_2k = group.image_price_2k;
   editForm.image_price_4k = group.image_price_4k;
+  editForm.video_rate_independent = group.video_rate_independent ?? false;
+  editForm.video_rate_multiplier = group.video_rate_multiplier ?? 1;
+  editForm.video_price_480p = group.video_price_480p ?? null;
+  editForm.video_price_720p = group.video_price_720p ?? null;
+  editForm.video_price_1080p = group.video_price_1080p ?? null;
+  editForm.web_search_price_per_call = group.web_search_price_per_call ?? null;
   editForm.claude_code_only = group.claude_code_only || false;
   editForm.fallback_group_id = group.fallback_group_id;
   editForm.fallback_group_id_on_invalid_request =
@@ -3714,6 +4346,17 @@ const closeEditModal = () => {
   editingGroup.value = null;
   editModelRoutingRules.value = [];
   editForm.copy_accounts_from_group_ids = [];
+  editForm.new_user_rate_enabled = false;
+  editForm.new_user_rate_multiplier = 1.0;
+  editForm.new_user_rate_days = 0;
+  editForm.new_user_rate_hours = 0;
+  editForm.new_user_rate_quota_usd = 0;
+  editForm.video_rate_independent = false;
+  editForm.video_rate_multiplier = 1;
+  editForm.video_price_480p = null;
+  editForm.video_price_720p = null;
+  editForm.video_price_1080p = null;
+  editForm.web_search_price_per_call = null;
   resetMessagesDispatchFormState(editForm);
 };
 
@@ -3723,12 +4366,23 @@ const handleUpdateGroup = async () => {
     appStore.showError(t("admin.groups.nameRequired"));
     return;
   }
+  const newUserRatePayload = validateNewUserRateForm(
+    editForm.new_user_rate_enabled,
+    editForm.new_user_rate_multiplier,
+    editForm.new_user_rate_days,
+    editForm.new_user_rate_hours,
+    editForm.new_user_rate_quota_usd,
+  );
+  if (!newUserRatePayload) {
+    return;
+  }
 
   submitting.value = true;
   try {
     // 转换 fallback_group_id: null -> 0 (后端使用 0 表示清除)
     const payload = {
       ...editForm,
+      ...newUserRatePayload,
       daily_limit_usd: normalizeOptionalLimit(
         editForm.daily_limit_usd as number | string | null,
       ),
@@ -3758,19 +4412,24 @@ const handleUpdateGroup = async () => {
             })
           : undefined,
     };
+    delete (payload as any).new_user_rate_days;
+    delete (payload as any).new_user_rate_hours;
     // v-model.number 清空输入框时产生 ""，转为 null 让后端设为无限制
     const emptyToNull = (v: any) => (v === "" ? null : v);
     payload.daily_limit_usd = emptyToNull(payload.daily_limit_usd);
     payload.weekly_limit_usd = emptyToNull(payload.weekly_limit_usd);
     payload.monthly_limit_usd = emptyToNull(payload.monthly_limit_usd);
-    await adminAPI.groups.update(editingGroup.value.id, payload);
+    const pricingResult = normalizeGroupPricingPayload(payload, "update");
+    if (!pricingResult.ok) {
+      appStore.showError(groupPricingValidationMessage(pricingResult.error));
+      return;
+    }
+    await adminAPI.groups.update(editingGroup.value.id, pricingResult.payload);
     appStore.showSuccess(t("admin.groups.groupUpdated"));
     closeEditModal();
     loadGroups();
   } catch (error: any) {
-    appStore.showError(
-      error.response?.data?.detail || t("admin.groups.failedToUpdate"),
-    );
+    appStore.showError(extractApiErrorMessage(error, t("admin.groups.failedToUpdate")));
     console.error("Error updating group:", error);
   } finally {
     submitting.value = false;
@@ -3816,6 +4475,52 @@ const handleRPMOverrides = (group: AdminGroup) => {
   showRPMOverridesModal.value = true;
 };
 
+const handleNewUserRate = (group: AdminGroup) => {
+  newUserRateGroup.value = group;
+  newUserRateForm.enabled = Boolean(group.new_user_rate_enabled);
+  newUserRateForm.multiplier = group.new_user_rate_multiplier || 1.0;
+  newUserRateForm.quota_usd = group.new_user_rate_quota_usd || 0;
+  const windowValue = splitNewUserRateWindow(group.new_user_rate_window_seconds || 0);
+  newUserRateForm.days = windowValue.days;
+  newUserRateForm.hours = windowValue.hours;
+  showNewUserRateModal.value = true;
+};
+
+const closeNewUserRateModal = () => {
+  showNewUserRateModal.value = false;
+  newUserRateGroup.value = null;
+  newUserRateForm.enabled = false;
+  newUserRateForm.multiplier = 1.0;
+  newUserRateForm.days = 0;
+  newUserRateForm.hours = 0;
+  newUserRateForm.quota_usd = 0;
+};
+
+const saveNewUserRate = async () => {
+  if (!newUserRateGroup.value) return;
+  const payload = validateNewUserRateForm(
+    newUserRateForm.enabled,
+    newUserRateForm.multiplier,
+    newUserRateForm.days,
+    newUserRateForm.hours,
+    newUserRateForm.quota_usd,
+  );
+  if (!payload) return;
+
+  newUserRateSubmitting.value = true;
+  try {
+    await adminAPI.groups.update(newUserRateGroup.value.id, payload);
+    appStore.showSuccess(t("admin.groups.newUserRateSaved"));
+    closeNewUserRateModal();
+    loadGroups();
+  } catch (error: any) {
+    appStore.showError(extractApiErrorMessage(error, t("admin.groups.failedToSaveNewUserRate")));
+    console.error("Error saving new user rate:", error);
+  } finally {
+    newUserRateSubmitting.value = false;
+  }
+};
+
 const handleDelete = (group: AdminGroup) => {
   deletingGroup.value = group;
   showDeleteDialog.value = true;
@@ -3831,9 +4536,7 @@ const confirmDelete = async () => {
     deletingGroup.value = null;
     loadGroups();
   } catch (error: any) {
-    appStore.showError(
-      error.response?.data?.detail || t("admin.groups.failedToDelete"),
-    );
+    appStore.showError(extractApiErrorMessage(error, t("admin.groups.failedToDelete")));
     console.error("Error deleting group:", error);
   }
 };
@@ -3852,6 +4555,7 @@ watch(
 watch(
   () => createForm.platform,
   (newVal) => {
+    resetInactivePlatformPricing(createForm, newVal);
     if (!["anthropic", "antigravity"].includes(newVal)) {
       createForm.fallback_group_id_on_invalid_request = null;
     }
@@ -3859,7 +4563,7 @@ watch(
       createForm.required_account_level = "";
       resetMessagesDispatchFormState(createForm);
     }
-    if (!["openai", "antigravity", "anthropic", "gemini"].includes(newVal)) {
+    if (!["openai", "antigravity", "anthropic", "gemini", "grok"].includes(newVal)) {
       createForm.require_oauth_only = false;
       createForm.require_privacy_set = false;
     }
@@ -3869,14 +4573,16 @@ watch(
 watch(
   () => editForm.platform,
   (newVal) => {
+    resetInactivePlatformPricing(editForm, newVal);
     if (!["anthropic", "antigravity"].includes(newVal)) {
       editForm.fallback_group_id_on_invalid_request = null;
     }
     if (newVal !== "openai") {
       editForm.required_account_level = "";
       resetMessagesDispatchFormState(editForm);
+      editForm.default_mapped_model = "";
     }
-    if (!["openai", "antigravity", "anthropic", "gemini"].includes(newVal)) {
+    if (!["openai", "antigravity", "anthropic", "gemini", "grok"].includes(newVal)) {
       editForm.require_oauth_only = false;
       editForm.require_privacy_set = false;
     }
@@ -3884,18 +4590,18 @@ watch(
 );
 
 watch(
-  () => editForm.platform,
-  (newVal) => {
-    if (!['anthropic', 'antigravity'].includes(newVal)) {
-      editForm.fallback_group_id_on_invalid_request = null
-    }
-    if (newVal !== 'openai') {
-      editForm.required_account_level = ''
-      editForm.allow_messages_dispatch = false
-      editForm.default_mapped_model = ''
-    }
-  }
-)
+  () => createForm.video_rate_independent,
+  (enabled) => {
+    if (!enabled) createForm.video_rate_multiplier = 1;
+  },
+);
+
+watch(
+  () => editForm.video_rate_independent,
+  (enabled) => {
+    if (!enabled) editForm.video_rate_multiplier = 1;
+  },
+);
 
 // 点击外部关闭账号搜索下拉框
 const handleClickOutside = (event: MouseEvent) => {
@@ -3905,6 +4611,9 @@ const handleClickOutside = (event: MouseEvent) => {
     Object.keys(showAccountDropdown.value).forEach((key) => {
       showAccountDropdown.value[key] = false;
     });
+  }
+  if (columnDropdownRef.value && !columnDropdownRef.value.contains(target)) {
+    showColumnDropdown.value = false;
   }
 };
 
@@ -3953,6 +4662,8 @@ const saveSortOrder = async () => {
 };
 
 onMounted(() => {
+  loadSavedColumns();
+  adminSettingsStore.fetch();
   loadGroups();
   document.addEventListener("click", handleClickOutside);
 });

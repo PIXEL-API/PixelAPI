@@ -1,0 +1,17 @@
+{
+  "title": "普通用户教程",
+  "defaultOpen": true,
+  "pages": [
+    "normal-first-message",
+    "normal-prerequisites",
+    "normal-login-wallet",
+    "normal-groups-models",
+    "normal-create-api-key",
+    "normal-base-url",
+    "normal-send-test-message",
+    "normal-check-usage",
+    "normal-client-setup",
+    "normal-account-mode",
+    "normal-troubleshooting"
+  ]
+}

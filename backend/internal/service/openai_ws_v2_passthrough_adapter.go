@@ -201,8 +201,15 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if account == nil {
 		return errors.New("account is nil")
 	}
-	if strings.TrimSpace(token) == "" {
-		return errors.New("token is empty")
+	if err := validateOpenAIWSBearerToken(account, token); err != nil {
+		return err
+	}
+	if account.IsOpenAIOAuth() && isOpenAIResponsesLiteWebSocketPayload(firstClientMessage) {
+		liteFirstMessage, _, liteErr := normalizeOpenAIResponsesLiteToolsPayload(firstClientMessage)
+		if liteErr != nil {
+			return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, liteErr.Error(), liteErr)
+		}
+		firstClientMessage = liteFirstMessage
 	}
 	requestModel := strings.TrimSpace(gjson.GetBytes(firstClientMessage, "model").String())
 	requestPreviousResponseID := strings.TrimSpace(gjson.GetBytes(firstClientMessage, "previous_response_id").String())
@@ -312,11 +319,43 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if dialer == nil {
 		return errors.New("openai ws passthrough dialer is nil")
 	}
-
-	dialCtx, cancelDial := context.WithTimeout(ctx, s.openAIWSDialTimeout())
-	defer cancelDial()
-	upstreamConn, statusCode, handshakeHeaders, err := dialer.Dial(dialCtx, wsURL, headers, proxyURL)
-	if err != nil {
+	wsHeadersFactory, agentIdentityHeaderState := s.agentIdentityWSHeadersFactory(account)
+	var (
+		upstreamConn     openAIWSClientConn
+		statusCode       int
+		handshakeHeaders http.Header
+	)
+	agentIdentityTaskRecoveryTried := false
+	for {
+		dialCtx, cancelDial := context.WithTimeout(ctx, s.openAIWSDialTimeout())
+		dialHeaders := cloneHeader(headers)
+		if wsHeadersFactory != nil {
+			var headerErr error
+			dialHeaders, headerErr = wsHeadersFactory(dialCtx, dialHeaders)
+			if headerErr != nil {
+				cancelDial()
+				return fmt.Errorf("build Agent Identity websocket headers: %w", headerErr)
+			}
+		}
+		var err error
+		upstreamConn, statusCode, handshakeHeaders, err = dialer.Dial(dialCtx, wsURL, dialHeaders, proxyURL)
+		cancelDial()
+		if err == nil {
+			break
+		}
+		var handshakeErr *openAIWSHandshakeError
+		var responseBody []byte
+		if errors.As(err, &handshakeErr) && handshakeErr != nil {
+			responseBody = append([]byte(nil), handshakeErr.Body...)
+		}
+		dialErr := &openAIWSDialError{StatusCode: statusCode, ResponseHeaders: cloneHeader(handshakeHeaders), ResponseBody: responseBody, Err: err}
+		if account.IsOpenAIAgentIdentity() && !agentIdentityTaskRecoveryTried && isAgentIdentityTaskInvalidWSDialError(dialErr) {
+			if recoveryErr := s.recoverAgentIdentityTask(ctx, account, agentIdentityHeaderState.expectedTaskID()); recoveryErr != nil {
+				return fmt.Errorf("recover Agent Identity task: %w", recoveryErr)
+			}
+			agentIdentityTaskRecoveryTried = true
+			continue
+		}
 		logOpenAIWSV2Passthrough(
 			"relay_dial_failed account_id=%d status_code=%d err=%s",
 			account.ID,
@@ -350,6 +389,14 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		filter: func(msgType coderws.MessageType, payload []byte) ([]byte, *OpenAIFastBlockedError, error) {
 			if msgType != coderws.MessageText {
 				return payload, nil, nil
+			}
+			if strings.TrimSpace(gjson.GetBytes(payload, "type").String()) == "response.create" &&
+				account.IsOpenAIOAuth() && isOpenAIResponsesLiteWebSocketPayload(payload) {
+				litePayload, _, liteErr := normalizeOpenAIResponsesLiteToolsPayload(payload)
+				if liteErr != nil {
+					return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, liteErr.Error(), liteErr)
+				}
+				payload = litePayload
 			}
 			// 在评估策略前先刷新 capturedSessionModel：客户端可能通过
 			// session.update 修改 session-level model（Realtime /

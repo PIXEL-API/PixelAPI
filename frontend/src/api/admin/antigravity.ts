@@ -5,6 +5,8 @@
 
 import { apiClient } from '../client'
 
+const GOOGLE_OAUTH_EXCHANGE_TIMEOUT_MS = 120000
+
 export interface AntigravityAuthUrlResponse {
   auth_url: string
   session_id: string
@@ -48,7 +50,8 @@ export async function exchangeCode(
 ): Promise<AntigravityTokenInfo> {
   const { data } = await apiClient.post<AntigravityTokenInfo>(
     '/admin/antigravity/oauth/exchange-code',
-    payload
+    payload,
+    { timeout: GOOGLE_OAUTH_EXCHANGE_TIMEOUT_MS }
   )
   return data
 }
@@ -62,7 +65,8 @@ export async function refreshAntigravityToken(
   
   const { data } = await apiClient.post<AntigravityTokenInfo>(
     '/admin/antigravity/oauth/refresh-token',
-    payload
+    payload,
+    { timeout: GOOGLE_OAUTH_EXCHANGE_TIMEOUT_MS }
   )
   return data
 }

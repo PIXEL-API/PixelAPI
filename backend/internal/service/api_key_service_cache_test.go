@@ -234,6 +234,8 @@ func TestAPIKeyService_SnapshotRoundTrip_PreservesMessagesDispatchModelConfig(t 
 	svc := NewAPIKeyService(nil, nil, nil, nil, nil, nil, &config.Config{})
 	groupID := int64(9)
 	ownerUserID := int64(2)
+	freeWebSearchPrice := 0.0
+	videoPrice720P := 0.07
 	apiKey := &APIKey{
 		ID:      1,
 		UserID:  2,
@@ -256,6 +258,10 @@ func TestAPIKeyService_SnapshotRoundTrip_PreservesMessagesDispatchModelConfig(t 
 			Scope:                 GroupScopeUserPrivate,
 			SubscriptionType:      SubscriptionTypeStandard,
 			RateMultiplier:        1,
+			VideoRateIndependent:  true,
+			VideoRateMultiplier:   1.5,
+			VideoPrice720P:        &videoPrice720P,
+			WebSearchPricePerCall: &freeWebSearchPrice,
 			AllowMessagesDispatch: true,
 			DefaultMappedModel:    "gpt-5.4",
 			MessagesDispatchModelConfig: OpenAIMessagesDispatchModelConfig{
@@ -275,6 +281,12 @@ func TestAPIKeyService_SnapshotRoundTrip_PreservesMessagesDispatchModelConfig(t 
 	require.NotNil(t, roundTrip)
 	require.NotNil(t, roundTrip.Group)
 	require.Equal(t, apiKey.Group.MessagesDispatchModelConfig, roundTrip.Group.MessagesDispatchModelConfig)
+	require.True(t, roundTrip.Group.VideoRateIndependent)
+	require.InDelta(t, 1.5, roundTrip.Group.VideoRateMultiplier, 1e-12)
+	require.NotNil(t, roundTrip.Group.VideoPrice720P)
+	require.InDelta(t, videoPrice720P, *roundTrip.Group.VideoPrice720P, 1e-12)
+	require.NotNil(t, roundTrip.Group.WebSearchPricePerCall)
+	require.Zero(t, *roundTrip.Group.WebSearchPricePerCall)
 	require.Equal(t, apiKey.Group.Scope, roundTrip.Group.Scope)
 	require.NotNil(t, roundTrip.Group.OwnerUserID)
 	require.Equal(t, *apiKey.Group.OwnerUserID, *roundTrip.Group.OwnerUserID)

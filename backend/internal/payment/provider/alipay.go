@@ -18,6 +18,7 @@ const (
 	alipayProductCodePreCreate = "FACE_TO_FACE_PAYMENT"
 	alipayProductCodeWapPay    = "QUICK_WAP_WAY"
 	alipayProductCodePagePay   = "FAST_INSTANT_TRADE_PAY"
+	alipayProductCodeJSAPI     = "JSAPI_PAY"
 )
 
 // Alipay response constants.
@@ -36,6 +37,9 @@ var (
 	}
 	alipayTradePagePay = func(client *alipay.Client, param alipay.TradePagePay) (*url.URL, error) {
 		return client.TradePagePay(param)
+	}
+	alipayTradeCreate = func(ctx context.Context, client *alipay.Client, param alipay.TradeCreate) (*alipay.TradeCreateRsp, error) {
+		return client.TradeCreate(ctx, param)
 	}
 )
 
@@ -86,6 +90,12 @@ func (a *Alipay) getClient() (*alipay.Client, error) {
 	return a.client, nil
 }
 
+// Client returns the initialized Alipay SDK client for provider-local auxiliary
+// calls such as JSAPI OAuth token exchange.
+func (a *Alipay) Client() (*alipay.Client, error) {
+	return a.getClient()
+}
+
 func (a *Alipay) Name() string        { return "Alipay" }
 func (a *Alipay) ProviderKey() string { return payment.TypeAlipay }
 func (a *Alipay) SupportedTypes() []payment.PaymentType {
@@ -124,10 +134,56 @@ func (a *Alipay) CreatePayment(ctx context.Context, req payment.CreatePaymentReq
 		returnURL = req.ReturnURL
 	}
 
+	if strings.EqualFold(strings.TrimSpace(a.config["paymentMode"]), "jsapi") {
+		return a.createJSAPITrade(ctx, client, req, notifyURL)
+	}
 	if req.IsMobile {
 		return a.createWapTrade(client, req, notifyURL, returnURL)
 	}
 	return a.createDesktopTrade(ctx, client, req, notifyURL, returnURL)
+}
+
+func (a *Alipay) createJSAPITrade(ctx context.Context, client *alipay.Client, req payment.CreatePaymentRequest, notifyURL string) (*payment.CreatePaymentResponse, error) {
+	param := alipay.TradeCreate{}
+	param.OutTradeNo = req.OrderID
+	param.TotalAmount = req.Amount
+	param.Subject = req.Subject
+	param.ProductCode = alipayProductCodeJSAPI
+	param.NotifyURL = notifyURL
+	param.BuyerId = strings.TrimSpace(req.BuyerID)
+	param.BuyerOpenId = strings.TrimSpace(req.BuyerOpenID)
+	param.OpAppId = strings.TrimSpace(a.config["opAppId"])
+	if param.OpAppId != "" {
+		param.OpBuyerOpenId = strings.TrimSpace(req.BuyerOpenID)
+	}
+
+	if param.BuyerId == "" && param.BuyerOpenId == "" {
+		return nil, fmt.Errorf("alipay jsapi requires buyerId or buyerOpenId")
+	}
+
+	rsp, err := alipayTradeCreate(ctx, client, param)
+	if err != nil {
+		return nil, fmt.Errorf("alipay TradeCreate: %w", err)
+	}
+	if rsp == nil {
+		return nil, fmt.Errorf("alipay TradeCreate: empty response")
+	}
+	if rsp.IsFailure() {
+		return nil, fmt.Errorf("alipay TradeCreate failed: %s", rsp.Error.Error())
+	}
+	tradeNO := strings.TrimSpace(rsp.TradeNo)
+	if tradeNO == "" {
+		return nil, fmt.Errorf("alipay TradeCreate: empty trade_no")
+	}
+
+	return &payment.CreatePaymentResponse{
+		TradeNo:    tradeNO,
+		ResultType: payment.CreatePaymentResultJSAPIReady,
+		AlipayJSAPI: &payment.AlipayJSAPIPayload{
+			TradeNO: tradeNO,
+			AppID:   strings.TrimSpace(a.config["appId"]),
+		},
+	}, nil
 }
 
 func (a *Alipay) createWapTrade(client *alipay.Client, req payment.CreatePaymentRequest, notifyURL, returnURL string) (*payment.CreatePaymentResponse, error) {

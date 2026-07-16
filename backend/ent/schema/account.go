@@ -56,9 +56,9 @@ func (Account) Fields() []ent.Field {
 			NotEmpty(),
 
 		field.String("account_level").
-			MaxLen(20).
+			MaxLen(64).
 			Default(domain.AccountLevelUnknown).
-			Comment("Account capability level: unknown/free/plus/pro/team."),
+			Comment("Account capability level key configured by OpenAI account levels."),
 		// notes: 管理员备注（可为空）
 		field.String("notes").
 			Optional().

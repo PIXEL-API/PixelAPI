@@ -14,7 +14,10 @@ const (
 	BillingModeToken      BillingMode = "token"       // 按 token 区间计费
 	BillingModePerRequest BillingMode = "per_request" // 按次计费（支持上下文窗口分层）
 	BillingModeImage      BillingMode = "image"       // 图片计费（当前按次，预留 token 计费）
+	BillingModeVideo      BillingMode = "video"       // 视频生成计费（按生成秒数）
 )
+
+const maxLongContextInputTokenThreshold = 1<<31 - 1
 
 // IsValid 检查 BillingMode 是否为合法值
 func (m BillingMode) IsValid() bool {
@@ -75,20 +78,24 @@ type AccountStatsPricingRule struct {
 type ChannelModelPricing struct {
 	ID                  int64
 	ChannelID           int64
-	Platform            string            // 所属平台（anthropic/openai/gemini/...）
-	Models              []string          // 绑定的模型列表
-	BillingMode         BillingMode       // 计费模式
-	InputPrice          *float64          // 每 token 输入价格（USD）— 向后兼容 flat 定价
-	OutputPrice         *float64          // 每 token 输出价格（USD）
-	CacheWritePrice     *float64          // 缓存写入价格
-	CacheReadPrice      *float64          // 缓存读取价格
-	ImageInputPrice     *float64          // 图片输入 token 价格
-	ImageCacheReadPrice *float64          // 图片缓存读取 token 价格
-	ImageOutputPrice    *float64          // 图片输出价格（向后兼容）
-	PerRequestPrice     *float64          // 默认按次计费价格（USD）
-	Intervals           []PricingInterval // 区间定价列表
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	Platform            string      // 所属平台（anthropic/openai/gemini/...）
+	Models              []string    // 绑定的模型列表
+	BillingMode         BillingMode // 计费模式
+	InputPrice          *float64    // 每 token 输入价格（USD）— 向后兼容 flat 定价
+	OutputPrice         *float64    // 每 token 输出价格（USD）
+	CacheWritePrice     *float64    // 缓存写入价格
+	CacheReadPrice      *float64    // 缓存读取价格
+	ImageInputPrice     *float64    // 图片输入 token 价格
+	ImageCacheReadPrice *float64    // 图片缓存读取 token 价格
+	ImageOutputPrice    *float64    // 图片输出价格（向后兼容）
+	PerRequestPrice     *float64    // 默认按次计费价格（USD）
+	// LongContextPricingEnabled 控制是否应用模型价卡中的长上下文倍率；nil 与 false 均表示关闭。
+	LongContextPricingEnabled *bool
+	// LongContextInputTokenThreshold 在显式启用长上下文倍率时覆盖模型价卡阈值。
+	LongContextInputTokenThreshold *int
+	Intervals                      []PricingInterval // 区间定价列表
+	CreatedAt                      time.Time
+	UpdatedAt                      time.Time
 }
 
 // PricingInterval 定价区间（token 区间 / 按次分层 / 图片分辨率分层）

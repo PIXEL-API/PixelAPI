@@ -38,6 +38,35 @@ export interface SwipeSelectVirtualContext {
   getRowId: (row: any, index: number) => number
 }
 
+/** Locate a fully rendered table row by viewport Y when virtualization is disabled. */
+export function findRowIndexByDomPosition(scrollEl: Element, clientY: number): number {
+  const rows = Array.from(scrollEl.querySelectorAll('tbody tr[data-index]')) as HTMLElement[]
+  const length = rows.length
+  if (length === 0) return -1
+
+  const rowIndex = (row: HTMLElement) => Number(row.getAttribute('data-index'))
+  if (clientY < rows[0].getBoundingClientRect().top) return rowIndex(rows[0])
+  if (clientY > rows[length - 1].getBoundingClientRect().bottom) return rowIndex(rows[length - 1])
+
+  let low = 0
+  let high = length - 1
+  while (low <= high) {
+    const middle = (low + high) >>> 1
+    const rect = rows[middle].getBoundingClientRect()
+    if (clientY < rect.top) high = middle - 1
+    else if (clientY > rect.bottom) low = middle + 1
+    else return rowIndex(rows[middle])
+  }
+
+  if (high < 0) return rowIndex(rows[0])
+  if (low >= length) return rowIndex(rows[length - 1])
+  const previousRect = rows[high].getBoundingClientRect()
+  const nextRect = rows[low].getBoundingClientRect()
+  return clientY - previousRect.bottom < nextRect.top - clientY
+    ? rowIndex(rows[high])
+    : rowIndex(rows[low])
+}
+
 export function useSwipeSelect(
   containerRef: Ref<HTMLElement | null>,
   adapter: SwipeSelectAdapter,
@@ -123,6 +152,13 @@ export function useSwipeSelect(
     const items = virt.getVirtualItems()
     for (const item of items) {
       if (contentY >= item.start && contentY < item.end) return item.index
+    }
+
+    // Small lists are fully rendered and intentionally leave the virtual window empty.
+    // Use their real row geometry so variable heights cannot skew drag selection.
+    if (items.length === 0) {
+      const domIndex = findRowIndexByDomPosition(scrollEl, clientY)
+      if (domIndex >= 0) return domIndex
     }
 
     // Outside visible range: estimate

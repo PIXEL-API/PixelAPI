@@ -20,9 +20,12 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/payment/provider"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
 )
 
 // --- Order Creation ---
+
+const alipayJSAPIAppOpenAppID = "20000067"
 
 type paymentProviderOrderPossiblyCreatedError struct {
 	err error
@@ -495,14 +498,21 @@ func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.Paymen
 	if err != nil {
 		return nil, err
 	}
+	if shouldDeferAlipayJSAPIProviderCreate(req, sel) {
+		return s.buildDeferredAlipayJSAPIResponse(ctx, order, req, payAmount, sel, resumeToken, canonicalReturnURL)
+	}
 	providerReq := buildProviderCreatePaymentRequest(CreateOrderRequest{
 		PaymentType: req.PaymentType,
 		OpenID:      req.OpenID,
+		BuyerID:     req.BuyerID,
+		BuyerOpenID: req.BuyerOpenID,
 		ClientIP:    req.ClientIP,
 		IsMobile:    req.IsMobile,
 		ReturnURL:   providerReturnURL,
 	}, sel, outTradeNo, payAmountStr, subject)
+	finishProviderCall := servertiming.ObserveDependency(ctx, "payment")
 	pr, err := prov.CreatePayment(ctx, providerReq)
+	finishProviderCall()
 	if err != nil {
 		slog.Error("[PaymentService] CreatePayment failed", "provider", sel.ProviderKey, "instance", sel.InstanceID, "error", err)
 		if appErr := new(infraerrors.ApplicationError); errors.As(err, &appErr) {
@@ -545,10 +555,60 @@ func buildProviderCreatePaymentRequest(req CreateOrderRequest, sel *payment.Inst
 		Subject:            subject,
 		ReturnURL:          req.ReturnURL,
 		OpenID:             strings.TrimSpace(req.OpenID),
+		BuyerID:            strings.TrimSpace(req.BuyerID),
+		BuyerOpenID:        strings.TrimSpace(req.BuyerOpenID),
 		ClientIP:           req.ClientIP,
 		IsMobile:           req.IsMobile,
 		InstanceSubMethods: selectedInstanceSupportedTypes(sel),
 	}
+}
+
+func shouldDeferAlipayJSAPIProviderCreate(req CreateOrderRequest, sel *payment.InstanceSelection) bool {
+	if sel == nil || !strings.EqualFold(strings.TrimSpace(sel.ProviderKey), payment.TypeAlipay) {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(sel.PaymentMode), "jsapi") {
+		return false
+	}
+	if payment.GetBasePaymentType(req.PaymentType) != payment.TypeAlipay {
+		return false
+	}
+	return strings.TrimSpace(req.BuyerID) == "" && strings.TrimSpace(req.BuyerOpenID) == ""
+}
+
+func (s *PaymentService) buildDeferredAlipayJSAPIResponse(ctx context.Context, order *dbent.PaymentOrder, req CreateOrderRequest, payAmount float64, sel *payment.InstanceSelection, resumeToken, canonicalReturnURL string) (*CreateOrderResponse, error) {
+	if strings.TrimSpace(resumeToken) == "" {
+		return nil, infraerrors.ServiceUnavailable("PAYMENT_RESUME_NOT_CONFIGURED", "alipay jsapi requires payment resume token")
+	}
+	payURL, err := buildAlipayJSAPIAppOpenURL(canonicalReturnURL, resumeToken, order.OutTradeNo, alipayJSAPIAppIDForOrder(order, sel))
+	if err != nil {
+		return nil, err
+	}
+	pr := &payment.CreatePaymentResponse{
+		TradeNo:    order.OutTradeNo,
+		PayURL:     payURL,
+		ResultType: payment.CreatePaymentResultOrderCreated,
+	}
+	_, err = s.entClient.PaymentOrder.UpdateOneID(order.ID).
+		SetNillablePayURL(psNilIfEmpty(pr.PayURL)).
+		SetNillableProviderInstanceID(psNilIfEmpty(sel.InstanceID)).
+		SetNillableProviderKey(psNilIfEmpty(sel.ProviderKey)).
+		Save(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("update deferred alipay jsapi order: %w", err)
+	}
+	s.writeAuditLog(ctx, order.ID, "ORDER_CREATED", fmt.Sprintf("user:%d", req.UserID), map[string]any{
+		"paymentAmount":  req.Amount,
+		"creditedAmount": order.Amount,
+		"payAmount":      order.PayAmount,
+		"paymentType":    req.PaymentType,
+		"orderType":      req.OrderType,
+		"paymentSource":  NormalizePaymentSource(req.PaymentSource),
+		"paymentMode":    "jsapi",
+	})
+	resp := buildCreateOrderResponse(order, req, payAmount, sel, pr, payment.CreatePaymentResultOrderCreated)
+	resp.ResumeToken = resumeToken
+	return resp, nil
 }
 
 func selectedInstanceSupportedTypes(sel *payment.InstanceSelection) string {
@@ -755,9 +815,55 @@ func buildCreateOrderResponse(order *dbent.PaymentOrder, req CreateOrderRequest,
 		OAuth:        pr.OAuth,
 		JSAPI:        pr.JSAPI,
 		JSAPIPayload: pr.JSAPI,
+		AlipayJSAPI:  pr.AlipayJSAPI,
 		ExpiresAt:    order.ExpiresAt,
 		PaymentMode:  sel.PaymentMode,
 	}
+}
+
+func buildAlipayJSAPIAppOpenURL(canonicalReturnURL, resumeToken, outTradeNo, merchantAppID string) (string, error) {
+	canonicalReturnURL = strings.TrimSpace(canonicalReturnURL)
+	if canonicalReturnURL == "" {
+		return "", infraerrors.BadRequest("INVALID_RETURN_URL", "return_url is required for alipay jsapi")
+	}
+	parsed, err := url.Parse(canonicalReturnURL)
+	if err != nil || !parsed.IsAbs() || parsed.Host == "" {
+		return "", infraerrors.BadRequest("INVALID_RETURN_URL", "return_url must be a valid absolute URL")
+	}
+	parsed.Path = "/payment/alipay-jsapi"
+	parsed.Fragment = ""
+	q := parsed.Query()
+	q.Del("status")
+	q.Del("order_id")
+	q.Set("resume_token", strings.TrimSpace(resumeToken))
+	if outTradeNo = strings.TrimSpace(outTradeNo); outTradeNo != "" {
+		q.Set("out_trade_no", outTradeNo)
+	}
+	if merchantAppID = strings.TrimSpace(merchantAppID); merchantAppID != "" {
+		q.Set("app_id", merchantAppID)
+	}
+	parsed.RawQuery = q.Encode()
+
+	openURL := url.URL{
+		Scheme: "alipays",
+		Host:   "platformapi",
+		Path:   "/startapp",
+	}
+	oq := openURL.Query()
+	oq.Set("appId", alipayJSAPIAppOpenAppID)
+	oq.Set("url", parsed.String())
+	openURL.RawQuery = oq.Encode()
+	return openURL.String(), nil
+}
+
+func alipayJSAPIAppIDForOrder(order *dbent.PaymentOrder, sel *payment.InstanceSelection) string {
+	if snapshot := psOrderProviderSnapshot(order); snapshot != nil && snapshot.MerchantAppID != "" {
+		return snapshot.MerchantAppID
+	}
+	if sel != nil {
+		return strings.TrimSpace(sel.Config["appId"])
+	}
+	return ""
 }
 
 func buildWeChatPaymentOAuthStartURL(contextToken string) (string, error) {
@@ -894,32 +1000,16 @@ func (s *PaymentService) AdminListOrders(ctx context.Context, userID int64, p Or
 	if shouldIncludeDirectShopOrders(p) {
 		return s.listOrdersWithDirectShopOrders(ctx, userID, p)
 	}
-	q := s.entClient.PaymentOrder.Query()
-	if userID > 0 {
-		q = q.Where(paymentorder.UserIDEQ(userID))
-	}
-	if p.Status != "" {
-		q = q.Where(paymentorder.StatusEQ(p.Status))
-	}
-	if p.OrderType != "" {
-		q = q.Where(paymentorder.OrderTypeEQ(p.OrderType))
-	}
-	if p.PaymentType != "" {
-		q = q.Where(paymentorder.PaymentTypeEQ(p.PaymentType))
-	}
-	if keyword := strings.TrimSpace(p.Keyword); keyword != "" {
-		q = q.Where(paymentorder.Or(
-			paymentorder.OutTradeNoContainsFold(keyword),
-			paymentorder.UserEmailContainsFold(keyword),
-			paymentorder.UserNameContainsFold(keyword),
-		))
-	}
+	q := s.adminPaymentOrderQuery(userID, p)
 	total, err := q.Clone().Count(ctx)
 	if err != nil {
 		return nil, 0, fmt.Errorf("count admin orders: %w", err)
 	}
 	ps, pg := applyPagination(p.PageSize, p.Page)
-	orders, err := q.Order(dbent.Desc(paymentorder.FieldCreatedAt)).Limit(ps).Offset((pg - 1) * ps).All(ctx)
+	orders, err := q.Order(
+		dbent.Desc(paymentorder.FieldCreatedAt),
+		dbent.Desc(paymentorder.FieldID),
+	).Limit(ps).Offset((pg - 1) * ps).All(ctx)
 	if err != nil {
 		return nil, 0, fmt.Errorf("query admin orders: %w", err)
 	}
@@ -945,13 +1035,7 @@ func (s *PaymentService) listOrdersWithDirectShopOrders(ctx context.Context, use
 	items = append(items, paymentOrders...)
 	items = append(items, shopOrders...)
 	sort.SliceStable(items, func(i, j int) bool {
-		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
-			if items[i].Source == items[j].Source {
-				return items[i].ID > items[j].ID
-			}
-			return items[i].Source < items[j].Source
-		}
-		return items[i].CreatedAt.After(items[j].CreatedAt)
+		return paymentOrderListItemBefore(items[i], items[j])
 	})
 	offset := (pg - 1) * ps
 	if offset >= len(items) {
@@ -965,6 +1049,26 @@ func (s *PaymentService) listOrdersWithDirectShopOrders(ctx context.Context, use
 }
 
 func (s *PaymentService) listPaymentOrderItems(ctx context.Context, userID int64, p OrderListParams, limit int) ([]PaymentOrderListItem, int, error) {
+	q := s.adminPaymentOrderQuery(userID, p)
+	total, err := q.Clone().Count(ctx)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count payment orders: %w", err)
+	}
+	orders, err := q.Order(
+		dbent.Desc(paymentorder.FieldCreatedAt),
+		dbent.Desc(paymentorder.FieldID),
+	).Limit(limit).All(ctx)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query payment orders: %w", err)
+	}
+	out := make([]PaymentOrderListItem, 0, len(orders))
+	for _, order := range orders {
+		out = append(out, mapPaymentOrderListItem(order))
+	}
+	return out, total, nil
+}
+
+func (s *PaymentService) adminPaymentOrderQuery(userID int64, p OrderListParams) *dbent.PaymentOrderQuery {
 	q := s.entClient.PaymentOrder.Query()
 	if userID > 0 {
 		q = q.Where(paymentorder.UserIDEQ(userID))
@@ -985,19 +1089,17 @@ func (s *PaymentService) listPaymentOrderItems(ctx context.Context, userID int64
 			paymentorder.UserNameContainsFold(keyword),
 		))
 	}
-	total, err := q.Clone().Count(ctx)
-	if err != nil {
-		return nil, 0, fmt.Errorf("count payment orders: %w", err)
+	return q
+}
+
+func paymentOrderListItemBefore(left, right PaymentOrderListItem) bool {
+	if left.CreatedAt.Equal(right.CreatedAt) {
+		if left.Source == right.Source {
+			return left.ID > right.ID
+		}
+		return left.Source < right.Source
 	}
-	orders, err := q.Order(dbent.Desc(paymentorder.FieldCreatedAt)).Limit(limit).All(ctx)
-	if err != nil {
-		return nil, 0, fmt.Errorf("query payment orders: %w", err)
-	}
-	out := make([]PaymentOrderListItem, 0, len(orders))
-	for _, order := range orders {
-		out = append(out, mapPaymentOrderListItem(order))
-	}
-	return out, total, nil
+	return left.CreatedAt.After(right.CreatedAt)
 }
 
 func (s *PaymentService) listDirectShopOrderItems(ctx context.Context, userID int64, p OrderListParams, limit int) ([]PaymentOrderListItem, int, error) {
@@ -1006,7 +1108,10 @@ func (s *PaymentService) listDirectShopOrderItems(ctx context.Context, userID in
 	if err != nil {
 		return nil, 0, fmt.Errorf("count direct shop orders: %w", err)
 	}
-	orders, err := q.Order(dbent.Desc(shoporder.FieldCreatedAt)).Limit(limit).All(ctx)
+	orders, err := q.Order(
+		dbent.Desc(shoporder.FieldCreatedAt),
+		dbent.Desc(shoporder.FieldID),
+	).Limit(limit).All(ctx)
 	if err != nil {
 		return nil, 0, fmt.Errorf("query direct shop orders: %w", err)
 	}

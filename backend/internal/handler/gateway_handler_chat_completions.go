@@ -78,7 +78,7 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 	reqStream := gjson.GetBytes(body, "stream").Bool()
 	reqLog = reqLog.With(zap.String("model", reqModel), zap.Bool("stream", reqStream))
 
-	setOpsRequestContext(c, reqModel, reqStream, body)
+	setOpsRequestContext(c, reqModel, reqStream, nil)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(reqStream, false)))
 
 	// 解析渠道级模型映射
@@ -173,7 +173,12 @@ routeLoop:
 					if routeCursor.switchToNext(apiKey.ID, "account_select_failed", reqLog, zap.Error(err)) {
 						continue routeLoop
 					}
-					h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "api_error", "No available accounts: "+err.Error())
+					cls := classifyNoAccountErrorFromGin(c, h.gatewayService, currentAPIKey, reqModel, reqModel, service.PlatformAnthropic)
+					message := cls.Message
+					if !cls.ModelNotFound {
+						message = "No available accounts: " + err.Error()
+					}
+					h.chatCompletionsErrorResponse(c, cls.Status, cls.ErrType, message)
 					return
 				}
 				action := fs.HandleSelectionExhausted(c.Request.Context())
@@ -181,6 +186,7 @@ routeLoop:
 				case FailoverContinue:
 					continue
 				case FailoverCanceled:
+					failoverClientGone(c)
 					return
 				default:
 					if fs.LastFailoverErr != nil {
@@ -197,6 +203,13 @@ routeLoop:
 			}
 			account := selection.Account
 			setOpsSelectedAccount(c, account.ID, account.Platform)
+			if decision := h.checkUserContentModeration(c, reqLog, currentAPIKey, subject, account, service.ContentModerationProtocolOpenAIChat, reqModel, body); decision != nil && decision.Blocked {
+				if selection.Acquired && selection.ReleaseFunc != nil {
+					selection.ReleaseFunc()
+				}
+				h.chatCompletionsErrorResponse(c, contentModerationStatus(decision), contentModerationErrorCode(decision), decision.Message)
+				return
+			}
 
 			// 4. Acquire account concurrency slot
 			accountReleaseFunc := selection.ReleaseFunc
@@ -241,7 +254,7 @@ routeLoop:
 						h.handleCCFailoverExhausted(c, failoverErr, true)
 						return
 					}
-					action := fs.HandleFailoverError(c.Request.Context(), h.gatewayService, account.ID, account.Platform, failoverErr)
+					action := fs.HandleFailoverErrorWithRetryLimit(c.Request.Context(), h.gatewayService, account.ID, account.Platform, account.GetPoolModeRetryCount(), failoverErr)
 					switch action {
 					case FailoverContinue:
 						continue
@@ -253,6 +266,7 @@ routeLoop:
 						h.handleCCFailoverExhausted(c, fs.LastFailoverErr, streamStarted)
 						return
 					case FailoverCanceled:
+						failoverClientGone(c)
 						return
 					}
 				}

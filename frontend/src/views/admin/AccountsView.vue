@@ -204,7 +204,17 @@
           </template>
           <template #cell-platform_type="{ row }">
             <div class="flex flex-wrap items-center gap-1">
-              <PlatformTypeBadge :platform="row.platform" :type="row.type" :plan-type="row.credentials?.plan_type" :privacy-mode="row.extra?.privacy_mode" :subscription-expires-at="row.credentials?.subscription_expires_at" />
+              <PlatformTypeBadge
+                :platform="row.platform"
+                :type="row.type"
+                :auth-mode="getOpenAIAuthMode(row)"
+                :plan-type="row.platform === 'grok'
+                  ? (row.credentials?.subscription_tier || row.extra?.subscription_tier || row.credentials?.plan_type)
+                  : row.credentials?.plan_type"
+                :privacy-mode="row.extra?.privacy_mode"
+                :subscription-expires-at="row.credentials?.subscription_expires_at"
+                :account-level-configs="adminSettingsStore.openAIAccountLevels"
+              />
               <span
                 v-if="getOpenAICompactLabel(row)"
                 :class="['inline-block rounded px-1.5 py-0.5 text-[10px] font-medium', getOpenAICompactClass(row)]"
@@ -341,7 +351,7 @@
     <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" @test-success="handleTestSuccess" />
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
     <ScheduledTestsPanel :show="showSchedulePanel" :account-id="scheduleAcc?.id ?? null" :model-options="scheduleModelOptions" @close="closeSchedulePanel" />
-    <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" />
+    <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" />
     <SyncFromCrsModal :show="showSync" @close="showSync = false" @synced="reload" />
     <CredentialImportModal
       :show="showCredentialImport"
@@ -384,6 +394,7 @@ import { useIntervalFn } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
+import { useAdminSettingsStore } from '@/stores/adminSettings'
 import { adminAPI } from '@/api/admin'
 import type { AccountBatchTask } from '@/api/admin/accounts'
 import { useTableLoader } from '@/composables/useTableLoader'
@@ -423,6 +434,13 @@ import type { ImportCredentialContentsResponse } from '@/api/accounts'
 const { t } = useI18n()
 const appStore = useAppStore()
 const authStore = useAuthStore()
+const adminSettingsStore = useAdminSettingsStore()
+
+function getOpenAIAuthMode(account: Account): string | undefined {
+  if (account.platform !== 'openai' || account.type !== 'oauth') return undefined
+  const authMode = account.credentials?.auth_mode
+  return typeof authMode === 'string' && authMode.trim() ? authMode : undefined
+}
 
 const proxies = ref<AccountProxy[]>([])
 const filterProxies = ref<AccountProxy[]>([])
@@ -607,7 +625,7 @@ const refreshTodayStatsBatch = async () => {
     todayStatsByAccountId.value = nextStats
   } catch (error) {
     if (reqSeq !== todayStatsReqSeq.value) return
-    todayStatsError.value = 'Failed'
+    todayStatsError.value = t('common.error')
     console.error('Failed to load account today stats:', error)
   } finally {
     if (reqSeq === todayStatsReqSeq.value) {
@@ -799,11 +817,19 @@ const resetAutoRefreshCache = () => {
 
 const isFirstLoad = ref(true)
 
+const resetTodayStatsForListLoad = () => {
+  todayStatsReqSeq.value += 1
+  todayStatsByAccountId.value = {}
+  todayStatsLoading.value = false
+  todayStatsError.value = null
+}
+
 const load = async () => {
   const requestParams = params as any
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = false
+  resetTodayStatsForListLoad()
   if (isFirstLoad.value) {
     requestParams.lite = '1'
   }
@@ -812,20 +838,22 @@ const load = async () => {
     isFirstLoad.value = false
     delete requestParams.lite
   }
-  await refreshTodayStatsBatch()
+  void refreshTodayStatsBatch()
 }
 
 const reload = async () => {
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = false
+  resetTodayStatsForListLoad()
   await baseReload()
-  await refreshTodayStatsBatch()
+  void refreshTodayStatsBatch()
 }
 
 const debouncedReload = () => {
   hasPendingListSync.value = false
   resetAutoRefreshCache()
+  resetTodayStatsForListLoad()
   pendingTodayStatsRefresh.value = true
   baseDebouncedReload()
 }
@@ -833,6 +861,7 @@ const debouncedReload = () => {
 const handlePageChange = (page: number) => {
   hasPendingListSync.value = false
   resetAutoRefreshCache()
+  resetTodayStatsForListLoad()
   pendingTodayStatsRefresh.value = true
   baseHandlePageChange(page)
 }
@@ -840,6 +869,7 @@ const handlePageChange = (page: number) => {
 const handlePageSizeChange = (size: number) => {
   hasPendingListSync.value = false
   resetAutoRefreshCache()
+  resetTodayStatsForListLoad()
   pendingTodayStatsRefresh.value = true
   baseHandlePageSizeChange(size)
 }
@@ -1688,6 +1718,21 @@ const handleSchedule = async (a: Account) => {
 }
 const closeSchedulePanel = () => { showSchedulePanel.value = false; scheduleAcc.value = null; scheduleModelOptions.value = [] }
 const handleReAuth = (a: Account) => { reAuthAcc.value = a; showReAuth.value = true }
+const duplicatingAccountIDs = new Set<number>()
+const handleDuplicateAccount = async (a: Account) => {
+  if (duplicatingAccountIDs.has(a.id)) return
+  duplicatingAccountIDs.add(a.id)
+  try {
+    const duplicated = await adminAPI.accounts.duplicate(a.id)
+    appStore.showSuccess(t('admin.accounts.duplicateSuccess', { name: duplicated.name }))
+    reload()
+  } catch (error: any) {
+    console.error('Failed to duplicate account:', error)
+    appStore.showError(error?.response?.data?.message || error?.message || t('admin.accounts.duplicateFailed'))
+  } finally {
+    duplicatingAccountIDs.delete(a.id)
+  }
+}
 const handleRefresh = async (a: Account) => {
   try {
     const updated = await adminAPI.accounts.refreshCredentials(a.id)
@@ -1790,6 +1835,7 @@ const handleClickOutside = (event: MouseEvent) => {
 }
 
 onMounted(async () => {
+  adminSettingsStore.fetch()
   load()
   try {
     const [p, fp, g] = await Promise.all([
@@ -1816,6 +1862,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   isUnmounted = true
+  todayStatsReqSeq.value += 1
   window.removeEventListener('scroll', handleScroll, true)
   document.removeEventListener('click', handleClickOutside)
 })

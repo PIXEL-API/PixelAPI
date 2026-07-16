@@ -54,10 +54,14 @@ func (r *gatewayRouteSettingRepo) GetAll(context.Context) (map[string]string, er
 
 func (r *gatewayRouteSettingRepo) Delete(context.Context, string) error { return nil }
 
-func newGatewayRoutesTestRouter() *gin.Engine {
+func newGatewayRoutesTestRouter(platform ...string) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	settingSvc := service.NewSettingService(&gatewayRouteSettingRepo{values: map[string]string{}}, &config.Config{})
+	groupPlatform := service.PlatformOpenAI
+	if len(platform) > 0 && platform[0] != "" {
+		groupPlatform = platform[0]
+	}
 
 	RegisterGatewayRoutes(
 		router,
@@ -69,7 +73,7 @@ func newGatewayRoutesTestRouter() *gin.Engine {
 			groupID := int64(1)
 			c.Set(string(servermiddleware.ContextKeyAPIKey), &service.APIKey{
 				GroupID: &groupID,
-				Group:   &service.Group{Platform: service.PlatformOpenAI},
+				Group:   &service.Group{Platform: groupPlatform},
 			})
 			c.Next()
 		}),
@@ -81,6 +85,53 @@ func newGatewayRoutesTestRouter() *gin.Engine {
 	)
 
 	return router
+}
+
+func TestGatewayRoutesOpenAIAlphaSearchPathsAreRegistered(t *testing.T) {
+	router := newGatewayRoutesTestRouter()
+	registered := make(map[string]bool)
+	for _, route := range router.Routes() {
+		if route.Method == http.MethodPost {
+			registered[route.Path] = true
+		}
+	}
+	for _, path := range []string{
+		"/v1/alpha/search",
+		"/alpha/search",
+		"/backend-api/codex/alpha/search",
+	} {
+		require.True(t, registered[path], "POST %s should be registered", path)
+	}
+}
+
+func TestGatewayRoutesGrokVideoMutationPathsAreRegistered(t *testing.T) {
+	router := newGatewayRoutesTestRouter(service.PlatformGrok)
+	registered := make(map[string]bool)
+	for _, route := range router.Routes() {
+		if route.Method == http.MethodPost {
+			registered[route.Path] = true
+		}
+	}
+	for _, path := range []string{
+		"/v1/videos/edits",
+		"/videos/edits",
+		"/v1/videos/extensions",
+		"/videos/extensions",
+	} {
+		require.True(t, registered[path], "POST %s should be registered", path)
+	}
+}
+
+func TestGatewayRoutesAlphaSearchRejectsNonOpenAIGroup(t *testing.T) {
+	router := newGatewayRoutesTestRouter(service.PlatformGrok)
+	req := httptest.NewRequest(http.MethodPost, "/v1/alpha/search", strings.NewReader(`{"model":"gpt-5.6-sol"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusNotFound, w.Code)
+	require.Contains(t, w.Body.String(), "only available for OpenAI groups")
 }
 
 func TestGatewayRoutesOpenAIResponsesCompactPathIsRegistered(t *testing.T) {

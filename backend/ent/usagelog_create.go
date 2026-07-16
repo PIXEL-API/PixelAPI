@@ -351,6 +351,20 @@ func (_c *UsageLogCreate) SetNillableRateMultiplier(v *float64) *UsageLogCreate 
 	return _c
 }
 
+// SetRateMultiplierSource sets the "rate_multiplier_source" field.
+func (_c *UsageLogCreate) SetRateMultiplierSource(v string) *UsageLogCreate {
+	_c.mutation.SetRateMultiplierSource(v)
+	return _c
+}
+
+// SetNillableRateMultiplierSource sets the "rate_multiplier_source" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableRateMultiplierSource(v *string) *UsageLogCreate {
+	if v != nil {
+		_c.SetRateMultiplierSource(*v)
+	}
+	return _c
+}
+
 // SetAccountRateMultiplier sets the "account_rate_multiplier" field.
 func (_c *UsageLogCreate) SetAccountRateMultiplier(v float64) *UsageLogCreate {
 	_c.mutation.SetAccountRateMultiplier(v)
@@ -473,6 +487,48 @@ func (_c *UsageLogCreate) SetImageSize(v string) *UsageLogCreate {
 func (_c *UsageLogCreate) SetNillableImageSize(v *string) *UsageLogCreate {
 	if v != nil {
 		_c.SetImageSize(*v)
+	}
+	return _c
+}
+
+// SetVideoCount sets the "video_count" field.
+func (_c *UsageLogCreate) SetVideoCount(v int) *UsageLogCreate {
+	_c.mutation.SetVideoCount(v)
+	return _c
+}
+
+// SetNillableVideoCount sets the "video_count" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableVideoCount(v *int) *UsageLogCreate {
+	if v != nil {
+		_c.SetVideoCount(*v)
+	}
+	return _c
+}
+
+// SetVideoResolution sets the "video_resolution" field.
+func (_c *UsageLogCreate) SetVideoResolution(v string) *UsageLogCreate {
+	_c.mutation.SetVideoResolution(v)
+	return _c
+}
+
+// SetNillableVideoResolution sets the "video_resolution" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableVideoResolution(v *string) *UsageLogCreate {
+	if v != nil {
+		_c.SetVideoResolution(*v)
+	}
+	return _c
+}
+
+// SetVideoDurationSeconds sets the "video_duration_seconds" field.
+func (_c *UsageLogCreate) SetVideoDurationSeconds(v int) *UsageLogCreate {
+	_c.mutation.SetVideoDurationSeconds(v)
+	return _c
+}
+
+// SetNillableVideoDurationSeconds sets the "video_duration_seconds" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableVideoDurationSeconds(v *int) *UsageLogCreate {
+	if v != nil {
+		_c.SetVideoDurationSeconds(*v)
 	}
 	return _c
 }
@@ -617,6 +673,10 @@ func (_c *UsageLogCreate) defaults() {
 		v := usagelog.DefaultRateMultiplier
 		_c.mutation.SetRateMultiplier(v)
 	}
+	if _, ok := _c.mutation.RateMultiplierSource(); !ok {
+		v := usagelog.DefaultRateMultiplierSource
+		_c.mutation.SetRateMultiplierSource(v)
+	}
 	if _, ok := _c.mutation.BillingType(); !ok {
 		v := usagelog.DefaultBillingType
 		_c.mutation.SetBillingType(v)
@@ -628,6 +688,10 @@ func (_c *UsageLogCreate) defaults() {
 	if _, ok := _c.mutation.ImageCount(); !ok {
 		v := usagelog.DefaultImageCount
 		_c.mutation.SetImageCount(v)
+	}
+	if _, ok := _c.mutation.VideoCount(); !ok {
+		v := usagelog.DefaultVideoCount
+		_c.mutation.SetVideoCount(v)
 	}
 	if _, ok := _c.mutation.CacheTTLOverridden(); !ok {
 		v := usagelog.DefaultCacheTTLOverridden
@@ -730,6 +794,14 @@ func (_c *UsageLogCreate) check() error {
 	if _, ok := _c.mutation.RateMultiplier(); !ok {
 		return &ValidationError{Name: "rate_multiplier", err: errors.New(`ent: missing required field "UsageLog.rate_multiplier"`)}
 	}
+	if _, ok := _c.mutation.RateMultiplierSource(); !ok {
+		return &ValidationError{Name: "rate_multiplier_source", err: errors.New(`ent: missing required field "UsageLog.rate_multiplier_source"`)}
+	}
+	if v, ok := _c.mutation.RateMultiplierSource(); ok {
+		if err := usagelog.RateMultiplierSourceValidator(v); err != nil {
+			return &ValidationError{Name: "rate_multiplier_source", err: fmt.Errorf(`ent: validator failed for field "UsageLog.rate_multiplier_source": %w`, err)}
+		}
+	}
 	if _, ok := _c.mutation.BillingType(); !ok {
 		return &ValidationError{Name: "billing_type", err: errors.New(`ent: missing required field "UsageLog.billing_type"`)}
 	}
@@ -752,6 +824,24 @@ func (_c *UsageLogCreate) check() error {
 	if v, ok := _c.mutation.ImageSize(); ok {
 		if err := usagelog.ImageSizeValidator(v); err != nil {
 			return &ValidationError{Name: "image_size", err: fmt.Errorf(`ent: validator failed for field "UsageLog.image_size": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.VideoCount(); !ok {
+		return &ValidationError{Name: "video_count", err: errors.New(`ent: missing required field "UsageLog.video_count"`)}
+	}
+	if v, ok := _c.mutation.VideoCount(); ok {
+		if err := usagelog.VideoCountValidator(v); err != nil {
+			return &ValidationError{Name: "video_count", err: fmt.Errorf(`ent: validator failed for field "UsageLog.video_count": %w`, err)}
+		}
+	}
+	if v, ok := _c.mutation.VideoResolution(); ok {
+		if err := usagelog.VideoResolutionValidator(v); err != nil {
+			return &ValidationError{Name: "video_resolution", err: fmt.Errorf(`ent: validator failed for field "UsageLog.video_resolution": %w`, err)}
+		}
+	}
+	if v, ok := _c.mutation.VideoDurationSeconds(); ok {
+		if err := usagelog.VideoDurationSecondsValidator(v); err != nil {
+			return &ValidationError{Name: "video_duration_seconds", err: fmt.Errorf(`ent: validator failed for field "UsageLog.video_duration_seconds": %w`, err)}
 		}
 	}
 	if _, ok := _c.mutation.CacheTTLOverridden(); !ok {
@@ -880,6 +970,10 @@ func (_c *UsageLogCreate) createSpec() (*UsageLog, *sqlgraph.CreateSpec) {
 		_spec.SetField(usagelog.FieldRateMultiplier, field.TypeFloat64, value)
 		_node.RateMultiplier = value
 	}
+	if value, ok := _c.mutation.RateMultiplierSource(); ok {
+		_spec.SetField(usagelog.FieldRateMultiplierSource, field.TypeString, value)
+		_node.RateMultiplierSource = value
+	}
 	if value, ok := _c.mutation.AccountRateMultiplier(); ok {
 		_spec.SetField(usagelog.FieldAccountRateMultiplier, field.TypeFloat64, value)
 		_node.AccountRateMultiplier = &value
@@ -915,6 +1009,18 @@ func (_c *UsageLogCreate) createSpec() (*UsageLog, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.ImageSize(); ok {
 		_spec.SetField(usagelog.FieldImageSize, field.TypeString, value)
 		_node.ImageSize = &value
+	}
+	if value, ok := _c.mutation.VideoCount(); ok {
+		_spec.SetField(usagelog.FieldVideoCount, field.TypeInt, value)
+		_node.VideoCount = value
+	}
+	if value, ok := _c.mutation.VideoResolution(); ok {
+		_spec.SetField(usagelog.FieldVideoResolution, field.TypeString, value)
+		_node.VideoResolution = &value
+	}
+	if value, ok := _c.mutation.VideoDurationSeconds(); ok {
+		_spec.SetField(usagelog.FieldVideoDurationSeconds, field.TypeInt, value)
+		_node.VideoDurationSeconds = &value
 	}
 	if value, ok := _c.mutation.CacheTTLOverridden(); ok {
 		_spec.SetField(usagelog.FieldCacheTTLOverridden, field.TypeBool, value)
@@ -1505,6 +1611,18 @@ func (u *UsageLogUpsert) AddRateMultiplier(v float64) *UsageLogUpsert {
 	return u
 }
 
+// SetRateMultiplierSource sets the "rate_multiplier_source" field.
+func (u *UsageLogUpsert) SetRateMultiplierSource(v string) *UsageLogUpsert {
+	u.Set(usagelog.FieldRateMultiplierSource, v)
+	return u
+}
+
+// UpdateRateMultiplierSource sets the "rate_multiplier_source" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateRateMultiplierSource() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldRateMultiplierSource)
+	return u
+}
+
 // SetAccountRateMultiplier sets the "account_rate_multiplier" field.
 func (u *UsageLogUpsert) SetAccountRateMultiplier(v float64) *UsageLogUpsert {
 	u.Set(usagelog.FieldAccountRateMultiplier, v)
@@ -1676,6 +1794,66 @@ func (u *UsageLogUpsert) UpdateImageSize() *UsageLogUpsert {
 // ClearImageSize clears the value of the "image_size" field.
 func (u *UsageLogUpsert) ClearImageSize() *UsageLogUpsert {
 	u.SetNull(usagelog.FieldImageSize)
+	return u
+}
+
+// SetVideoCount sets the "video_count" field.
+func (u *UsageLogUpsert) SetVideoCount(v int) *UsageLogUpsert {
+	u.Set(usagelog.FieldVideoCount, v)
+	return u
+}
+
+// UpdateVideoCount sets the "video_count" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateVideoCount() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldVideoCount)
+	return u
+}
+
+// AddVideoCount adds v to the "video_count" field.
+func (u *UsageLogUpsert) AddVideoCount(v int) *UsageLogUpsert {
+	u.Add(usagelog.FieldVideoCount, v)
+	return u
+}
+
+// SetVideoResolution sets the "video_resolution" field.
+func (u *UsageLogUpsert) SetVideoResolution(v string) *UsageLogUpsert {
+	u.Set(usagelog.FieldVideoResolution, v)
+	return u
+}
+
+// UpdateVideoResolution sets the "video_resolution" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateVideoResolution() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldVideoResolution)
+	return u
+}
+
+// ClearVideoResolution clears the value of the "video_resolution" field.
+func (u *UsageLogUpsert) ClearVideoResolution() *UsageLogUpsert {
+	u.SetNull(usagelog.FieldVideoResolution)
+	return u
+}
+
+// SetVideoDurationSeconds sets the "video_duration_seconds" field.
+func (u *UsageLogUpsert) SetVideoDurationSeconds(v int) *UsageLogUpsert {
+	u.Set(usagelog.FieldVideoDurationSeconds, v)
+	return u
+}
+
+// UpdateVideoDurationSeconds sets the "video_duration_seconds" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateVideoDurationSeconds() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldVideoDurationSeconds)
+	return u
+}
+
+// AddVideoDurationSeconds adds v to the "video_duration_seconds" field.
+func (u *UsageLogUpsert) AddVideoDurationSeconds(v int) *UsageLogUpsert {
+	u.Add(usagelog.FieldVideoDurationSeconds, v)
+	return u
+}
+
+// ClearVideoDurationSeconds clears the value of the "video_duration_seconds" field.
+func (u *UsageLogUpsert) ClearVideoDurationSeconds() *UsageLogUpsert {
+	u.SetNull(usagelog.FieldVideoDurationSeconds)
 	return u
 }
 
@@ -2254,6 +2432,20 @@ func (u *UsageLogUpsertOne) UpdateRateMultiplier() *UsageLogUpsertOne {
 	})
 }
 
+// SetRateMultiplierSource sets the "rate_multiplier_source" field.
+func (u *UsageLogUpsertOne) SetRateMultiplierSource(v string) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetRateMultiplierSource(v)
+	})
+}
+
+// UpdateRateMultiplierSource sets the "rate_multiplier_source" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateRateMultiplierSource() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateRateMultiplierSource()
+	})
+}
+
 // SetAccountRateMultiplier sets the "account_rate_multiplier" field.
 func (u *UsageLogUpsertOne) SetAccountRateMultiplier(v float64) *UsageLogUpsertOne {
 	return u.Update(func(s *UsageLogUpsert) {
@@ -2454,6 +2646,76 @@ func (u *UsageLogUpsertOne) UpdateImageSize() *UsageLogUpsertOne {
 func (u *UsageLogUpsertOne) ClearImageSize() *UsageLogUpsertOne {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.ClearImageSize()
+	})
+}
+
+// SetVideoCount sets the "video_count" field.
+func (u *UsageLogUpsertOne) SetVideoCount(v int) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetVideoCount(v)
+	})
+}
+
+// AddVideoCount adds v to the "video_count" field.
+func (u *UsageLogUpsertOne) AddVideoCount(v int) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.AddVideoCount(v)
+	})
+}
+
+// UpdateVideoCount sets the "video_count" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateVideoCount() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateVideoCount()
+	})
+}
+
+// SetVideoResolution sets the "video_resolution" field.
+func (u *UsageLogUpsertOne) SetVideoResolution(v string) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetVideoResolution(v)
+	})
+}
+
+// UpdateVideoResolution sets the "video_resolution" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateVideoResolution() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateVideoResolution()
+	})
+}
+
+// ClearVideoResolution clears the value of the "video_resolution" field.
+func (u *UsageLogUpsertOne) ClearVideoResolution() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearVideoResolution()
+	})
+}
+
+// SetVideoDurationSeconds sets the "video_duration_seconds" field.
+func (u *UsageLogUpsertOne) SetVideoDurationSeconds(v int) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetVideoDurationSeconds(v)
+	})
+}
+
+// AddVideoDurationSeconds adds v to the "video_duration_seconds" field.
+func (u *UsageLogUpsertOne) AddVideoDurationSeconds(v int) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.AddVideoDurationSeconds(v)
+	})
+}
+
+// UpdateVideoDurationSeconds sets the "video_duration_seconds" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateVideoDurationSeconds() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateVideoDurationSeconds()
+	})
+}
+
+// ClearVideoDurationSeconds clears the value of the "video_duration_seconds" field.
+func (u *UsageLogUpsertOne) ClearVideoDurationSeconds() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearVideoDurationSeconds()
 	})
 }
 
@@ -3200,6 +3462,20 @@ func (u *UsageLogUpsertBulk) UpdateRateMultiplier() *UsageLogUpsertBulk {
 	})
 }
 
+// SetRateMultiplierSource sets the "rate_multiplier_source" field.
+func (u *UsageLogUpsertBulk) SetRateMultiplierSource(v string) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetRateMultiplierSource(v)
+	})
+}
+
+// UpdateRateMultiplierSource sets the "rate_multiplier_source" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateRateMultiplierSource() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateRateMultiplierSource()
+	})
+}
+
 // SetAccountRateMultiplier sets the "account_rate_multiplier" field.
 func (u *UsageLogUpsertBulk) SetAccountRateMultiplier(v float64) *UsageLogUpsertBulk {
 	return u.Update(func(s *UsageLogUpsert) {
@@ -3400,6 +3676,76 @@ func (u *UsageLogUpsertBulk) UpdateImageSize() *UsageLogUpsertBulk {
 func (u *UsageLogUpsertBulk) ClearImageSize() *UsageLogUpsertBulk {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.ClearImageSize()
+	})
+}
+
+// SetVideoCount sets the "video_count" field.
+func (u *UsageLogUpsertBulk) SetVideoCount(v int) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetVideoCount(v)
+	})
+}
+
+// AddVideoCount adds v to the "video_count" field.
+func (u *UsageLogUpsertBulk) AddVideoCount(v int) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.AddVideoCount(v)
+	})
+}
+
+// UpdateVideoCount sets the "video_count" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateVideoCount() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateVideoCount()
+	})
+}
+
+// SetVideoResolution sets the "video_resolution" field.
+func (u *UsageLogUpsertBulk) SetVideoResolution(v string) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetVideoResolution(v)
+	})
+}
+
+// UpdateVideoResolution sets the "video_resolution" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateVideoResolution() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateVideoResolution()
+	})
+}
+
+// ClearVideoResolution clears the value of the "video_resolution" field.
+func (u *UsageLogUpsertBulk) ClearVideoResolution() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearVideoResolution()
+	})
+}
+
+// SetVideoDurationSeconds sets the "video_duration_seconds" field.
+func (u *UsageLogUpsertBulk) SetVideoDurationSeconds(v int) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetVideoDurationSeconds(v)
+	})
+}
+
+// AddVideoDurationSeconds adds v to the "video_duration_seconds" field.
+func (u *UsageLogUpsertBulk) AddVideoDurationSeconds(v int) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.AddVideoDurationSeconds(v)
+	})
+}
+
+// UpdateVideoDurationSeconds sets the "video_duration_seconds" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateVideoDurationSeconds() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateVideoDurationSeconds()
+	})
+}
+
+// ClearVideoDurationSeconds clears the value of the "video_duration_seconds" field.
+func (u *UsageLogUpsertBulk) ClearVideoDurationSeconds() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearVideoDurationSeconds()
 	})
 }
 

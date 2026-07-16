@@ -282,7 +282,7 @@ func (s *openAISnapshotCacheStub) GetAccount(ctx context.Context, accountID int6
 	return &cloned, nil
 }
 
-func (s *openAICandidateSnapshotCacheStub) GetCandidateSnapshot(ctx context.Context, bucket SchedulerBucket, limit int) ([]*Account, bool, error) {
+func (s *openAICandidateSnapshotCacheStub) GetCandidateSnapshot(ctx context.Context, bucket SchedulerBucket, limit, threshold int, globalEnabled bool) ([]*Account, bool, error) {
 	s.candidateHits++
 	if len(s.candidateAccounts) == 0 {
 		return nil, false, nil
@@ -1716,6 +1716,33 @@ func TestDefaultOpenAIAccountScheduler_ReportSwitchAndSnapshot(t *testing.T) {
 	require.Greater(t, snapshot.LoadSkewAvg, 0.0)
 }
 
+func TestDefaultOpenAIAccountScheduler_FilterAllowsGrokCompatibleAccount(t *testing.T) {
+	schedulerAny := newDefaultOpenAIAccountScheduler(&OpenAIGatewayService{}, nil)
+	scheduler, ok := schedulerAny.(*defaultOpenAIAccountScheduler)
+	require.True(t, ok)
+
+	accounts := []Account{
+		{
+			ID:          9101,
+			Platform:    PlatformGrok,
+			Type:        AccountTypeOAuth,
+			Status:      StatusActive,
+			Schedulable: true,
+			Concurrency: 2,
+		},
+	}
+
+	filtered, loadReq := scheduler.filterOpenAIAccountsForLoadBalance(context.Background(), accounts, OpenAIAccountScheduleRequest{
+		RequestedModel:    "grok-4.3",
+		RequiredTransport: OpenAIUpstreamTransportHTTPSSE,
+	}, nil)
+
+	require.Len(t, filtered, 1)
+	require.Equal(t, PlatformGrok, filtered[0].Platform)
+	require.Len(t, loadReq, 1)
+	require.Equal(t, int64(9101), loadReq[0].ID)
+}
+
 func TestOpenAIGatewayService_SchedulerWrappersAndDefaults(t *testing.T) {
 	resetOpenAIAdvancedSchedulerSettingCacheForTest()
 
@@ -1734,6 +1761,7 @@ func TestOpenAIGatewayService_SchedulerWrappersAndDefaults(t *testing.T) {
 	require.Equal(t, 0.7, defaultWeights.Queue)
 	require.Equal(t, 0.8, defaultWeights.ErrorRate)
 	require.Equal(t, 0.5, defaultWeights.TTFT)
+	require.Equal(t, 0.0, defaultWeights.QuotaHeadroom)
 
 	cfg := &config.Config{}
 	cfg.Gateway.OpenAIWS.LBTopK = 9
@@ -1743,6 +1771,7 @@ func TestOpenAIGatewayService_SchedulerWrappersAndDefaults(t *testing.T) {
 	cfg.Gateway.OpenAIWS.SchedulerScoreWeights.Queue = 0.4
 	cfg.Gateway.OpenAIWS.SchedulerScoreWeights.ErrorRate = 0.5
 	cfg.Gateway.OpenAIWS.SchedulerScoreWeights.TTFT = 0.6
+	cfg.Gateway.OpenAIWS.SchedulerScoreWeights.QuotaHeadroom = 0.7
 	svcWithCfg := &OpenAIGatewayService{cfg: cfg}
 
 	require.Equal(t, 9, svcWithCfg.openAIWSLBTopK())
@@ -1753,6 +1782,107 @@ func TestOpenAIGatewayService_SchedulerWrappersAndDefaults(t *testing.T) {
 	require.Equal(t, 0.4, customWeights.Queue)
 	require.Equal(t, 0.5, customWeights.ErrorRate)
 	require.Equal(t, 0.6, customWeights.TTFT)
+	require.Equal(t, 0.7, customWeights.QuotaHeadroom)
+}
+
+func TestOpenAIQuotaHeadroomFactor_PrimaryUsedPercent(t *testing.T) {
+	now := time.Date(2026, 3, 11, 10, 0, 0, 0, time.UTC)
+	account := &Account{
+		Extra: map[string]any{
+			"codex_primary_used_percent": 20.0,
+			"codex_primary_reset_at":     now.Add(24 * time.Hour).Format(time.RFC3339),
+			"codex_usage_updated_at":     now.Add(-time.Minute).Format(time.RFC3339),
+		},
+	}
+
+	require.InDelta(t, 0.8, openAIQuotaHeadroomFactor(account, now), 0.0001)
+}
+
+func TestOpenAIQuotaHeadroomFactor_PrimaryMissingIsNeutral(t *testing.T) {
+	now := time.Date(2026, 3, 11, 10, 0, 0, 0, time.UTC)
+	account := &Account{
+		Extra: map[string]any{
+			"codex_usage_updated_at": now.Add(-time.Minute).Format(time.RFC3339),
+		},
+	}
+
+	require.Equal(t, openAIQuotaHeadroomNeutralFactor, openAIQuotaHeadroomFactor(account, now))
+}
+
+func TestOpenAIQuotaHeadroomFactor_StaleSnapshotIsNeutral(t *testing.T) {
+	now := time.Date(2026, 3, 11, 10, 0, 0, 0, time.UTC)
+	account := &Account{
+		Extra: map[string]any{
+			"codex_primary_used_percent": 20.0,
+			"codex_primary_reset_at":     now.Add(24 * time.Hour).Format(time.RFC3339),
+			"codex_usage_updated_at":     now.Add(-9 * time.Hour).Format(time.RFC3339),
+		},
+	}
+
+	require.Equal(t, openAIQuotaHeadroomNeutralFactor, openAIQuotaHeadroomFactor(account, now))
+}
+
+func TestOpenAIQuotaHeadroomFactor_PrimaryResetExpiredIsNeutral(t *testing.T) {
+	now := time.Date(2026, 3, 11, 10, 0, 0, 0, time.UTC)
+	account := &Account{
+		Extra: map[string]any{
+			"codex_primary_used_percent": 20.0,
+			"codex_primary_reset_at":     now.Add(-time.Minute).Format(time.RFC3339),
+			"codex_usage_updated_at":     now.Add(-time.Minute).Format(time.RFC3339),
+		},
+	}
+
+	require.Equal(t, openAIQuotaHeadroomNeutralFactor, openAIQuotaHeadroomFactor(account, now))
+}
+
+func TestOpenAIQuotaHeadroomFactor_SecondaryLowHeadroomDiscountsPrimary(t *testing.T) {
+	now := time.Date(2026, 3, 11, 10, 0, 0, 0, time.UTC)
+	account := &Account{
+		Extra: map[string]any{
+			"codex_primary_used_percent":   20.0,
+			"codex_primary_reset_at":       now.Add(24 * time.Hour).Format(time.RFC3339),
+			"codex_secondary_used_percent": 95.0,
+			"codex_secondary_reset_at":     now.Add(time.Hour).Format(time.RFC3339),
+			"codex_usage_updated_at":       now.Add(-time.Minute).Format(time.RFC3339),
+		},
+	}
+
+	require.InDelta(t, 0.4, openAIQuotaHeadroomFactor(account, now), 0.0001)
+}
+
+func TestOpenAIQuotaHeadroomFactor_FallbackNormalizedWindows(t *testing.T) {
+	now := time.Date(2026, 3, 11, 10, 0, 0, 0, time.UTC)
+	account := &Account{
+		Extra: map[string]any{
+			"codex_7d_used_percent":  30.0,
+			"codex_7d_reset_at":      now.Add(24 * time.Hour).Format(time.RFC3339),
+			"codex_usage_updated_at": now.Add(-time.Minute).Format(time.RFC3339),
+		},
+	}
+
+	require.InDelta(t, 0.7, openAIQuotaHeadroomFactor(account, now), 0.0001)
+}
+
+func TestOpenAIQuotaHeadroomFactor_ResetAfterSeconds(t *testing.T) {
+	now := time.Date(2026, 3, 11, 10, 0, 0, 0, time.UTC)
+	account := &Account{
+		Extra: map[string]any{
+			"codex_primary_used_percent":        20.0,
+			"codex_primary_reset_after_seconds": 120,
+			"codex_usage_updated_at":            now.Add(-3 * time.Minute).Format(time.RFC3339),
+		},
+	}
+
+	require.Equal(t, openAIQuotaHeadroomNeutralFactor, openAIQuotaHeadroomFactor(account, now))
+}
+
+func TestOpenAIQuotaHeadroomExtraNumber_InvalidValueMissing(t *testing.T) {
+	value, ok := openAIQuotaHeadroomExtraNumber(map[string]any{
+		"codex_primary_used_percent": "not-a-number",
+	}, "codex_primary_used_percent")
+
+	require.False(t, ok)
+	require.Zero(t, value)
 }
 
 func TestDefaultOpenAIAccountScheduler_IsAccountTransportCompatible_Branches(t *testing.T) {

@@ -22,6 +22,7 @@ const (
 	PlatformOpenAI      = "openai"
 	PlatformGemini      = "gemini"
 	PlatformAntigravity = "antigravity"
+	PlatformGrok        = "grok"
 )
 
 // Account type constants
@@ -41,6 +42,7 @@ const (
 	AccountLevelPlus    = "plus"
 	AccountLevelPro     = "pro"
 	AccountLevelTeam    = "team"
+	AccountLevelK12     = "k12"
 )
 
 // Redeem type constants

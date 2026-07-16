@@ -13,6 +13,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -231,6 +232,8 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		RiskControlEnabled:                        settings.RiskControlEnabled,
 		InvoiceManagementEnabled:                  settings.InvoiceManagementEnabled,
 		WithdrawalManagementEnabled:               settings.WithdrawalManagementEnabled,
+		WithdrawalRateLimitWindowDays:             settings.WithdrawalRateLimitWindowDays,
+		WithdrawalRateLimitMax:                    settings.WithdrawalRateLimitMax,
 		CyberSessionBlockEnabled:                  settings.CyberSessionBlockEnabled,
 		CyberSessionBlockTTLSeconds:               settings.CyberSessionBlockTTLSeconds,
 		AccountShareCommentReviewEnabled:          settings.AccountShareCommentReviewEnabled,
@@ -271,6 +274,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		ClaudeOAuthSystemPrompt:                   settings.ClaudeOAuthSystemPrompt,
 		ClaudeOAuthSystemPromptBlocks:             settings.ClaudeOAuthSystemPromptBlocks,
 		OpenAICleanRelayEnabled:                   settings.OpenAICleanRelayEnabled,
+		DetachedUsageDrainEnabled:                 settings.DetachedUsageDrainEnabled,
 		EnableAnthropicCacheTTL1hInjection:        settings.EnableAnthropicCacheTTL1hInjection,
 		WebSearchEmulationEnabled:                 settings.WebSearchEmulationEnabled,
 		PaymentVisibleMethodAlipaySource:          settings.PaymentVisibleMethodAlipaySource,
@@ -278,6 +282,10 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		PaymentVisibleMethodAlipayEnabled:         settings.PaymentVisibleMethodAlipayEnabled,
 		PaymentVisibleMethodWxpayEnabled:          settings.PaymentVisibleMethodWxpayEnabled,
 		OpenAIAdvancedSchedulerEnabled:            settings.OpenAIAdvancedSchedulerEnabled,
+		SchedulerCandidateSamplingEnabled:         settings.SchedulerCandidateSamplingEnabled,
+		SchedulerCandidateSamplingLimit:           settings.SchedulerCandidateSamplingLimit,
+		SchedulerCandidateSamplingThreshold:       settings.SchedulerCandidateSamplingThreshold,
+		OpenAIAccountLevels:                       openAIAccountLevelsToDTO(settings.OpenAIAccountLevels),
 		OpenAIFreeAccountRepairEnabled:            settings.OpenAIFreeAccountRepairEnabled,
 		OpenAIFreeAccountRepairWeeklyThresholdUSD: settings.OpenAIFreeAccountRepairWeeklyThresholdUSD,
 		BalanceLowNotifyEnabled:                   settings.BalanceLowNotifyEnabled,
@@ -374,6 +382,37 @@ func openaiFastPolicySettingsFromDTO(s *dto.OpenAIFastPolicySettings) *service.O
 		rules[i].ServiceTier = tier
 	}
 	return &service.OpenAIFastPolicySettings{Rules: rules}
+}
+
+func openAIAccountLevelsToDTO(levels []service.OpenAIAccountLevelConfig) []dto.OpenAIAccountLevelConfig {
+	normalized := service.NormalizeOpenAIAccountLevelConfigs(levels)
+	out := make([]dto.OpenAIAccountLevelConfig, 0, len(normalized))
+	for _, level := range normalized {
+		out = append(out, dto.OpenAIAccountLevelConfig{
+			Key:                level.Key,
+			Label:              level.Label,
+			Aliases:            append([]string(nil), level.Aliases...),
+			SortOrder:          level.SortOrder,
+			Enabled:            level.Enabled,
+			RequiresProxyLogin: level.RequiresProxyLogin,
+		})
+	}
+	return out
+}
+
+func openAIAccountLevelsFromDTO(levels []dto.OpenAIAccountLevelConfig) []service.OpenAIAccountLevelConfig {
+	out := make([]service.OpenAIAccountLevelConfig, 0, len(levels))
+	for _, level := range levels {
+		out = append(out, service.OpenAIAccountLevelConfig{
+			Key:                level.Key,
+			Label:              level.Label,
+			Aliases:            append([]string(nil), level.Aliases...),
+			SortOrder:          level.SortOrder,
+			Enabled:            level.Enabled,
+			RequiresProxyLogin: level.RequiresProxyLogin,
+		})
+	}
+	return out
 }
 
 func loginAgreementDocumentsToDTO(docs []service.LoginAgreementDocument) []dto.LoginAgreementDocument {
@@ -595,6 +634,7 @@ type UpdateSettingsRequest struct {
 	ClaudeOAuthSystemPrompt                *string `json:"claude_oauth_system_prompt"`
 	ClaudeOAuthSystemPromptBlocks          *string `json:"claude_oauth_system_prompt_blocks"`
 	OpenAICleanRelayEnabled                *bool   `json:"openai_clean_relay_enabled"`
+	DetachedUsageDrainEnabled              *bool   `json:"detached_usage_drain_enabled"`
 	EnableAnthropicCacheTTL1hInjection     *bool   `json:"enable_anthropic_cache_ttl_1h_injection"`
 
 	// Payment visible method routing
@@ -604,9 +644,15 @@ type UpdateSettingsRequest struct {
 	PaymentVisibleMethodWxpayEnabled  *bool   `json:"payment_visible_method_wxpay_enabled"`
 
 	// OpenAI account scheduling
-	OpenAIAdvancedSchedulerEnabled            *bool    `json:"openai_advanced_scheduler_enabled"`
-	OpenAIFreeAccountRepairEnabled            *bool    `json:"openai_free_account_repair_enabled"`
-	OpenAIFreeAccountRepairWeeklyThresholdUSD *float64 `json:"openai_free_account_repair_weekly_threshold_usd"`
+	OpenAIAdvancedSchedulerEnabled            *bool                          `json:"openai_advanced_scheduler_enabled"`
+	OpenAIAccountLevels                       []dto.OpenAIAccountLevelConfig `json:"openai_account_levels"`
+	OpenAIFreeAccountRepairEnabled            *bool                          `json:"openai_free_account_repair_enabled"`
+	OpenAIFreeAccountRepairWeeklyThresholdUSD *float64                       `json:"openai_free_account_repair_weekly_threshold_usd"`
+
+	// Scheduler candidate sampling (dynamic global toggle)
+	SchedulerCandidateSamplingEnabled   *bool `json:"scheduler_candidate_sampling_enabled"`
+	SchedulerCandidateSamplingLimit     *int  `json:"scheduler_candidate_sampling_limit"`
+	SchedulerCandidateSamplingThreshold *int  `json:"scheduler_candidate_sampling_threshold"`
 
 	// Balance low notification
 	BalanceLowNotifyEnabled     *bool                   `json:"balance_low_notify_enabled"`
@@ -664,8 +710,10 @@ type UpdateSettingsRequest struct {
 	AvailableChannelsEnabled *bool `json:"available_channels_enabled"`
 
 	// Functional module switches
-	InvoiceManagementEnabled    *bool `json:"invoice_management_enabled"`
-	WithdrawalManagementEnabled *bool `json:"withdrawal_management_enabled"`
+	InvoiceManagementEnabled      *bool `json:"invoice_management_enabled"`
+	WithdrawalManagementEnabled   *bool `json:"withdrawal_management_enabled"`
+	WithdrawalRateLimitWindowDays *int  `json:"withdrawal_rate_limit_window_days"`
+	WithdrawalRateLimitMax        *int  `json:"withdrawal_rate_limit_max"`
 
 	// User-owned account import limit
 	UserAccountImportLimit *int `json:"user_account_import_limit"`
@@ -713,6 +761,10 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	if fieldProvided(providedFields, "openai_account_levels") && len(req.OpenAIAccountLevels) == 0 {
+		response.ErrorFrom(c, infraerrors.BadRequest("OPENAI_ACCOUNT_LEVELS_INVALID", "openai_account_levels cannot be empty"))
+		return
+	}
 	if req.DefaultConcurrency < 1 {
 		req.DefaultConcurrency = 1
 	}
@@ -722,6 +774,26 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	if req.CyberSessionBlockTTLSeconds != nil && *req.CyberSessionBlockTTLSeconds <= 0 {
 		response.Error(c, http.StatusBadRequest, "cyber_session_block_ttl_seconds must be greater than 0")
 		return
+	}
+	if req.WithdrawalRateLimitWindowDays != nil {
+		windowDays := *req.WithdrawalRateLimitWindowDays
+		if windowDays < service.WithdrawalRateLimitWindowDaysMin || windowDays > service.WithdrawalRateLimitWindowDaysMax {
+			response.ErrorFrom(c, infraerrors.BadRequest(
+				"WITHDRAWAL_RATE_LIMIT_CONFIG_INVALID",
+				"withdrawal_rate_limit_window_days must be between 1 and 365",
+			))
+			return
+		}
+	}
+	if req.WithdrawalRateLimitMax != nil {
+		maxRequests := *req.WithdrawalRateLimitMax
+		if maxRequests < service.WithdrawalRateLimitMaxDefault || maxRequests > service.WithdrawalRateLimitMaxAllowed {
+			response.ErrorFrom(c, infraerrors.BadRequest(
+				"WITHDRAWAL_RATE_LIMIT_CONFIG_INVALID",
+				"withdrawal_rate_limit_max must be between 0 and 1000",
+			))
+			return
+		}
 	}
 	if req.UserAccountImportLimit != nil {
 		value := service.NormalizeUserAccountCredentialImportLimit(*req.UserAccountImportLimit)
@@ -1523,6 +1595,18 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.WithdrawalManagementEnabled
 		}(),
+		WithdrawalRateLimitWindowDays: func() int {
+			if req.WithdrawalRateLimitWindowDays != nil {
+				return *req.WithdrawalRateLimitWindowDays
+			}
+			return previousSettings.WithdrawalRateLimitWindowDays
+		}(),
+		WithdrawalRateLimitMax: func() int {
+			if req.WithdrawalRateLimitMax != nil {
+				return *req.WithdrawalRateLimitMax
+			}
+			return previousSettings.WithdrawalRateLimitMax
+		}(),
 		CyberSessionBlockEnabled: func() bool {
 			if req.CyberSessionBlockEnabled != nil {
 				return *req.CyberSessionBlockEnabled
@@ -1648,6 +1732,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.OpenAICleanRelayEnabled
 		}(),
+		DetachedUsageDrainEnabled: func() bool {
+			if req.DetachedUsageDrainEnabled != nil {
+				return *req.DetachedUsageDrainEnabled
+			}
+			return previousSettings.DetachedUsageDrainEnabled
+		}(),
 		EnableAnthropicCacheTTL1hInjection: func() bool {
 			if req.EnableAnthropicCacheTTL1hInjection != nil {
 				return *req.EnableAnthropicCacheTTL1hInjection
@@ -1683,6 +1773,30 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 				return *req.OpenAIAdvancedSchedulerEnabled
 			}
 			return previousSettings.OpenAIAdvancedSchedulerEnabled
+		}(),
+		SchedulerCandidateSamplingEnabled: func() bool {
+			if req.SchedulerCandidateSamplingEnabled != nil {
+				return *req.SchedulerCandidateSamplingEnabled
+			}
+			return previousSettings.SchedulerCandidateSamplingEnabled
+		}(),
+		SchedulerCandidateSamplingLimit: func() int {
+			if req.SchedulerCandidateSamplingLimit != nil {
+				return *req.SchedulerCandidateSamplingLimit
+			}
+			return previousSettings.SchedulerCandidateSamplingLimit
+		}(),
+		SchedulerCandidateSamplingThreshold: func() int {
+			if req.SchedulerCandidateSamplingThreshold != nil {
+				return *req.SchedulerCandidateSamplingThreshold
+			}
+			return previousSettings.SchedulerCandidateSamplingThreshold
+		}(),
+		OpenAIAccountLevels: func() []service.OpenAIAccountLevelConfig {
+			if fieldProvided(providedFields, "openai_account_levels") {
+				return openAIAccountLevelsFromDTO(req.OpenAIAccountLevels)
+			}
+			return previousSettings.OpenAIAccountLevels
 		}(),
 		OpenAIFreeAccountRepairEnabled: func() bool {
 			if req.OpenAIFreeAccountRepairEnabled != nil {
@@ -1993,6 +2107,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		RiskControlEnabled:                        updatedSettings.RiskControlEnabled,
 		InvoiceManagementEnabled:                  updatedSettings.InvoiceManagementEnabled,
 		WithdrawalManagementEnabled:               updatedSettings.WithdrawalManagementEnabled,
+		WithdrawalRateLimitWindowDays:             updatedSettings.WithdrawalRateLimitWindowDays,
+		WithdrawalRateLimitMax:                    updatedSettings.WithdrawalRateLimitMax,
 		CyberSessionBlockEnabled:                  updatedSettings.CyberSessionBlockEnabled,
 		CyberSessionBlockTTLSeconds:               updatedSettings.CyberSessionBlockTTLSeconds,
 		AccountShareCommentReviewEnabled:          updatedSettings.AccountShareCommentReviewEnabled,
@@ -2033,12 +2149,17 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		ClaudeOAuthSystemPrompt:                   updatedSettings.ClaudeOAuthSystemPrompt,
 		ClaudeOAuthSystemPromptBlocks:             updatedSettings.ClaudeOAuthSystemPromptBlocks,
 		OpenAICleanRelayEnabled:                   updatedSettings.OpenAICleanRelayEnabled,
+		DetachedUsageDrainEnabled:                 updatedSettings.DetachedUsageDrainEnabled,
 		EnableAnthropicCacheTTL1hInjection:        updatedSettings.EnableAnthropicCacheTTL1hInjection,
 		PaymentVisibleMethodAlipaySource:          updatedSettings.PaymentVisibleMethodAlipaySource,
 		PaymentVisibleMethodWxpaySource:           updatedSettings.PaymentVisibleMethodWxpaySource,
 		PaymentVisibleMethodAlipayEnabled:         updatedSettings.PaymentVisibleMethodAlipayEnabled,
 		PaymentVisibleMethodWxpayEnabled:          updatedSettings.PaymentVisibleMethodWxpayEnabled,
 		OpenAIAdvancedSchedulerEnabled:            updatedSettings.OpenAIAdvancedSchedulerEnabled,
+		SchedulerCandidateSamplingEnabled:         updatedSettings.SchedulerCandidateSamplingEnabled,
+		SchedulerCandidateSamplingLimit:           updatedSettings.SchedulerCandidateSamplingLimit,
+		SchedulerCandidateSamplingThreshold:       updatedSettings.SchedulerCandidateSamplingThreshold,
+		OpenAIAccountLevels:                       openAIAccountLevelsToDTO(updatedSettings.OpenAIAccountLevels),
 		OpenAIFreeAccountRepairEnabled:            updatedSettings.OpenAIFreeAccountRepairEnabled,
 		OpenAIFreeAccountRepairWeeklyThresholdUSD: updatedSettings.OpenAIFreeAccountRepairWeeklyThresholdUSD,
 		BalanceLowNotifyEnabled:                   updatedSettings.BalanceLowNotifyEnabled,
@@ -2401,6 +2522,12 @@ func preserveOmittedUpdateSettingsFields(req *UpdateSettingsRequest, previous *s
 	if !fieldProvided(fields, "withdrawal_management_enabled") {
 		req.WithdrawalManagementEnabled = &previous.WithdrawalManagementEnabled
 	}
+	if !fieldProvided(fields, "withdrawal_rate_limit_window_days") {
+		req.WithdrawalRateLimitWindowDays = &previous.WithdrawalRateLimitWindowDays
+	}
+	if !fieldProvided(fields, "withdrawal_rate_limit_max") {
+		req.WithdrawalRateLimitMax = &previous.WithdrawalRateLimitMax
+	}
 	if !fieldProvided(fields, "cyber_session_block_enabled") {
 		req.CyberSessionBlockEnabled = &previous.CyberSessionBlockEnabled
 	}
@@ -2418,6 +2545,9 @@ func preserveOmittedUpdateSettingsFields(req *UpdateSettingsRequest, previous *s
 	}
 	if !fieldProvided(fields, "user_account_import_limit") {
 		req.UserAccountImportLimit = &previous.UserAccountImportLimit
+	}
+	if !fieldProvided(fields, "openai_account_levels") {
+		req.OpenAIAccountLevels = openAIAccountLevelsToDTO(previous.OpenAIAccountLevels)
 	}
 	if !fieldProvided(fields, "default_user_rpm_limit") {
 		req.DefaultUserRPMLimit = previous.DefaultUserRPMLimit
@@ -2854,6 +2984,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.OpenAICleanRelayEnabled != after.OpenAICleanRelayEnabled {
 		changed = append(changed, "openai_clean_relay_enabled")
 	}
+	if before.DetachedUsageDrainEnabled != after.DetachedUsageDrainEnabled {
+		changed = append(changed, "detached_usage_drain_enabled")
+	}
 	if before.EnableAnthropicCacheTTL1hInjection != after.EnableAnthropicCacheTTL1hInjection {
 		changed = append(changed, "enable_anthropic_cache_ttl_1h_injection")
 	}
@@ -2871,6 +3004,15 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.OpenAIAdvancedSchedulerEnabled != after.OpenAIAdvancedSchedulerEnabled {
 		changed = append(changed, "openai_advanced_scheduler_enabled")
+	}
+	if before.SchedulerCandidateSamplingEnabled != after.SchedulerCandidateSamplingEnabled {
+		changed = append(changed, "scheduler_candidate_sampling_enabled")
+	}
+	if before.SchedulerCandidateSamplingLimit != after.SchedulerCandidateSamplingLimit {
+		changed = append(changed, "scheduler_candidate_sampling_limit")
+	}
+	if before.SchedulerCandidateSamplingThreshold != after.SchedulerCandidateSamplingThreshold {
+		changed = append(changed, "scheduler_candidate_sampling_threshold")
 	}
 	if before.OpenAIFreeAccountRepairEnabled != after.OpenAIFreeAccountRepairEnabled {
 		changed = append(changed, "openai_free_account_repair_enabled")
@@ -2908,6 +3050,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.WithdrawalManagementEnabled != after.WithdrawalManagementEnabled {
 		changed = append(changed, "withdrawal_management_enabled")
+	}
+	if before.WithdrawalRateLimitWindowDays != after.WithdrawalRateLimitWindowDays {
+		changed = append(changed, "withdrawal_rate_limit_window_days")
+	}
+	if before.WithdrawalRateLimitMax != after.WithdrawalRateLimitMax {
+		changed = append(changed, "withdrawal_rate_limit_max")
 	}
 	if before.UserAccountImportLimit != after.UserAccountImportLimit {
 		changed = append(changed, "user_account_import_limit")

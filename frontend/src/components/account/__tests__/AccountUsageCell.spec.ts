@@ -206,7 +206,11 @@ describe('AccountUsageCell', () => {
 
     await flushPromises()
 
-    expect(getUsage).toHaveBeenCalledWith(2000)
+    expect(getUsage).toHaveBeenCalledWith(
+      2000,
+      'local',
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
     expect(wrapper.text()).toContain('5h|15|300')
     expect(wrapper.text()).toContain('7d|77|300')
   })
@@ -267,7 +271,11 @@ describe('AccountUsageCell', () => {
 
     await flushPromises()
 
-    expect(getUsage).toHaveBeenCalledWith(2001)
+    expect(getUsage).toHaveBeenCalledWith(
+      2001,
+      'local',
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
     // 单一数据源：始终使用 /usage API 返回值，忽略 codex 快照
     expect(wrapper.text()).toContain('5h|18|900')
     expect(wrapper.text()).toContain('7d|36|900')
@@ -338,7 +346,11 @@ describe('AccountUsageCell', () => {
 
     // 手动刷新再拉一次
     expect(getUsage).toHaveBeenCalledTimes(2)
-    expect(getUsage).toHaveBeenCalledWith(2010)
+    expect(getUsage).toHaveBeenCalledWith(
+      2010,
+      'local',
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
     // 单一数据源：始终使用 /usage API 值
     expect(wrapper.text()).toContain('5h|18|900')
   })
@@ -393,7 +405,11 @@ describe('AccountUsageCell', () => {
 
 	await flushPromises()
 
-	expect(getUsage).toHaveBeenCalledWith(2002)
+	expect(getUsage).toHaveBeenCalledWith(
+	  2002,
+	  'local',
+	  expect.objectContaining({ signal: expect.any(AbortSignal) })
+	)
 	expect(wrapper.text()).toContain('5h|0|27700')
 	expect(wrapper.text()).toContain('7d|0|27700')
   })
@@ -525,9 +541,116 @@ describe('AccountUsageCell', () => {
 
 	await flushPromises()
 
-  expect(getUsage).toHaveBeenCalledWith(2004)
+  expect(getUsage).toHaveBeenCalledWith(
+    2004,
+    'local',
+    expect.objectContaining({ signal: expect.any(AbortSignal) })
+  )
   expect(wrapper.text()).toContain('5h|100|106540000')
   expect(wrapper.text()).toContain('7d|100|106540000')
+  })
+
+  it('OpenAI OAuth 本地额度查询失败时显示错误状态', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    getUsage.mockRejectedValue(new Error('local usage failed'))
+
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({
+          id: 2005,
+          platform: 'openai',
+          type: 'oauth',
+          extra: {}
+        })
+      },
+      global: {
+        stubs: {
+          UsageProgressBar: true,
+          AccountQuotaInfo: true,
+          OpenAIQuotaResetCell: true
+        }
+      }
+    })
+
+    await flushPromises()
+
+    expect(wrapper.get('[role="alert"]').text()).toBe('common.error')
+    wrapper.unmount()
+    consoleError.mockRestore()
+  })
+
+  it('虚拟行同步卸载时不会启动额度 loader', async () => {
+    getUsage.mockResolvedValue({ source: 'local', updated_at: null })
+
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({
+          id: 4999,
+          platform: 'antigravity',
+          type: 'oauth',
+          extra: {}
+        })
+      },
+      global: {
+        stubs: {
+          UsageProgressBar: true,
+          AccountQuotaInfo: true
+        }
+      }
+    })
+
+    wrapper.unmount()
+    await flushPromises()
+
+    expect(getUsage).not.toHaveBeenCalled()
+  })
+
+  it('虚拟行卸载时会取消尚未开始的额度请求', async () => {
+    const resolvers: Array<() => void> = []
+    getUsage.mockImplementation(
+      (_id: number, _source: string, options?: { signal?: AbortSignal }) =>
+        new Promise((resolve, reject) => {
+          const handleAbort = () => {
+            const error = new Error('aborted')
+            error.name = 'AbortError'
+            reject(error)
+          }
+          options?.signal?.addEventListener('abort', handleAbort, { once: true })
+          resolvers.push(() => {
+            options?.signal?.removeEventListener('abort', handleAbort)
+            resolve({ source: 'local', updated_at: null })
+          })
+        })
+    )
+
+    const wrappers = Array.from({ length: 6 }, (_, index) =>
+      mount(AccountUsageCell, {
+        props: {
+          account: makeAccount({
+            id: 5000 + index,
+            platform: 'antigravity',
+            type: 'oauth',
+            extra: {}
+          })
+        },
+        global: {
+          stubs: {
+            UsageProgressBar: true,
+            AccountQuotaInfo: true
+          }
+        }
+      })
+    )
+
+    await flushPromises()
+    expect(getUsage).toHaveBeenCalledTimes(5)
+
+    wrappers[5].unmount()
+    resolvers.forEach((resolve) => resolve())
+    await flushPromises()
+
+    expect(getUsage).toHaveBeenCalledTimes(5)
+    wrappers.slice(0, 5).forEach((wrapper) => wrapper.unmount())
   })
 
   it('Key 账号会展示 today stats 徽章并带 A/U 提示', async () => {

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -55,6 +56,134 @@ const paymentOrdersOutTradeNoUniqueMigration = "120_enforce_payment_orders_out_t
 const paymentOrdersOutTradeNoUniqueIndex = "paymentorder_out_trade_no_unique"
 const ownedAccountIdentityUniqueMigration = "140_owned_account_identity_unique_notx.sql"
 const openAIOwnedAccountOrgIdentityUniqueMigration = "168_openai_owned_account_org_identity_unique_notx.sql"
+const accountShareSeatCostQueryIndexesMigration = "208_account_share_seat_cost_query_indexes_notx.sql"
+const latestAPIKeyIPIndexMigration = "212_add_usage_logs_api_key_latest_ip_index_notx.sql"
+const latestAPIKeyIPIndex = "idx_usage_logs_api_key_latest_ip"
+const accountShareSeatCostAutoIndexMaxRows int64 = 5_000_000
+const accountShareSeatCostAutoIndexMaxTableBytes int64 = 8 << 30
+
+type migrationCatalogName struct {
+	schema string
+	name   string
+}
+
+type migrationIndexKeyRequirement struct {
+	column              string
+	expressionCanonical string
+	resultType          migrationCatalogName
+	operatorClass       migrationCatalogName
+}
+
+type migrationIndexRequirement struct {
+	index              migrationCatalogName
+	table              migrationCatalogName
+	accessMethod       string
+	keys               []migrationIndexKeyRequirement
+	includeColumns     []string
+	predicateCanonical string
+}
+
+type migrationIndexCatalogKey struct {
+	Position        int    `json:"position"`
+	IsExpression    bool   `json:"is_expression"`
+	Definition      string `json:"definition"`
+	TypeSchema      string `json:"type_schema"`
+	TypeName        string `json:"type_name"`
+	OpClassSchema   string `json:"opclass_schema"`
+	OpClassName     string `json:"opclass_name"`
+	CollationSchema string `json:"collation_schema"`
+	CollationName   string `json:"collation_name"`
+	OptionBits      int16  `json:"option_bits"`
+}
+
+type migrationIndexCatalogState struct {
+	exists         bool
+	table          migrationCatalogName
+	accessMethod   string
+	relationKind   string
+	unique         bool
+	primary        bool
+	exclusion      bool
+	ready          bool
+	valid          bool
+	live           bool
+	keyCount       int
+	attributeCount int
+	keys           []migrationIndexCatalogKey
+	includeColumns []string
+	predicate      sql.NullString
+}
+
+var migrationInt8Key = migrationIndexKeyRequirement{
+	resultType:    migrationCatalogName{schema: "pg_catalog", name: "int8"},
+	operatorClass: migrationCatalogName{schema: "pg_catalog", name: "int8_ops"},
+}
+
+var migrationTimestamptzKey = migrationIndexKeyRequirement{
+	resultType:    migrationCatalogName{schema: "pg_catalog", name: "timestamptz"},
+	operatorClass: migrationCatalogName{schema: "pg_catalog", name: "timestamptz_ops"},
+}
+
+const accountShareSeatReasonPredicateCanonical = "reasonIN['account_share_mode_seat_prepay','account_share_mode_seat_refund','account_share_mode_seat_waiver_refund']"
+const accountShareSeatMembershipExpressionCanonical = "NULLIFmetadata->>'membership_id',''"
+
+var accountShareSeatCostIndexRequirements = []migrationIndexRequirement{
+	{
+		index:        migrationCatalogName{schema: "public", name: "idx_user_balance_ledger_seat_membership_created_at"},
+		table:        migrationCatalogName{schema: "public", name: "user_balance_ledger"},
+		accessMethod: "btree",
+		keys: []migrationIndexKeyRequirement{
+			{
+				expressionCanonical: accountShareSeatMembershipExpressionCanonical,
+				resultType:          migrationInt8Key.resultType,
+				operatorClass:       migrationInt8Key.operatorClass,
+			},
+			{
+				column:        "created_at",
+				resultType:    migrationTimestamptzKey.resultType,
+				operatorClass: migrationTimestamptzKey.operatorClass,
+			},
+		},
+		includeColumns:     []string{"direction", "amount"},
+		predicateCanonical: accountShareSeatReasonPredicateCanonical + "AND" + accountShareSeatMembershipExpressionCanonical + "ISNOTNULL",
+	},
+	{
+		index:        migrationCatalogName{schema: "public", name: "idx_user_balance_ledger_seat_user_created_at"},
+		table:        migrationCatalogName{schema: "public", name: "user_balance_ledger"},
+		accessMethod: "btree",
+		keys: []migrationIndexKeyRequirement{
+			{
+				column:        "user_id",
+				resultType:    migrationInt8Key.resultType,
+				operatorClass: migrationInt8Key.operatorClass,
+			},
+			{
+				column:        "created_at",
+				resultType:    migrationTimestamptzKey.resultType,
+				operatorClass: migrationTimestamptzKey.operatorClass,
+			},
+		},
+		includeColumns:     []string{"direction", "amount"},
+		predicateCanonical: accountShareSeatReasonPredicateCanonical,
+	},
+	{
+		index:        migrationCatalogName{schema: "public", name: "idx_account_share_memberships_api_key_id"},
+		table:        migrationCatalogName{schema: "public", name: "account_share_memberships"},
+		accessMethod: "btree",
+		keys: []migrationIndexKeyRequirement{
+			{
+				column:        "api_key_id",
+				resultType:    migrationInt8Key.resultType,
+				operatorClass: migrationInt8Key.operatorClass,
+			},
+			{
+				column:        "id",
+				resultType:    migrationInt8Key.resultType,
+				operatorClass: migrationInt8Key.operatorClass,
+			},
+		},
+	},
+}
 
 var ownedAccountIdentityUniqueIndexes = []string{
 	"idx_accounts_owned_openai_chatgpt_account_id_uniq",
@@ -252,6 +381,9 @@ func applyMigrationsFS(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 					return fmt.Errorf("apply migration %s (non-tx statement %d): %w", name, i+1, err)
 				}
 			}
+			if err := verifyNonTransactionalMigrationResult(ctx, db, name); err != nil {
+				return fmt.Errorf("verify migration %s (non-tx): %w", name, err)
+			}
 			if _, err := db.ExecContext(ctx, "INSERT INTO schema_migrations (filename, checksum) VALUES ($1, $2)", name, checksum); err != nil {
 				return fmt.Errorf("record migration %s (non-tx): %w", name, err)
 			}
@@ -294,9 +426,88 @@ func prepareNonTransactionalMigration(ctx context.Context, db *sql.DB, name stri
 		return prepareOwnedAccountIdentityUniqueMigration(ctx, db)
 	case openAIOwnedAccountOrgIdentityUniqueMigration:
 		return prepareOpenAIOwnedAccountOrgIdentityUniqueMigration(ctx, db)
+	case accountShareSeatCostQueryIndexesMigration:
+		return prepareAccountShareSeatCostQueryIndexesMigration(ctx, db)
+	case latestAPIKeyIPIndexMigration:
+		return prepareLatestAPIKeyIPIndexMigration(ctx, db)
 	default:
 		return nil
 	}
+}
+
+func prepareLatestAPIKeyIPIndexMigration(ctx context.Context, db *sql.DB) error {
+	invalid, err := indexIsInvalid(ctx, db, latestAPIKeyIPIndex)
+	if err != nil {
+		return fmt.Errorf("check invalid index %s: %w", latestAPIKeyIPIndex, err)
+	}
+	if !invalid {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, "DROP INDEX CONCURRENTLY IF EXISTS "+latestAPIKeyIPIndex); err != nil {
+		return fmt.Errorf("drop invalid index %s: %w", latestAPIKeyIPIndex, err)
+	}
+	return nil
+}
+
+func verifyNonTransactionalMigrationResult(ctx context.Context, db *sql.DB, name string) error {
+	if name != accountShareSeatCostQueryIndexesMigration {
+		return nil
+	}
+	ready, err := indexesMatchRequirements(ctx, db, accountShareSeatCostIndexRequirements)
+	if err != nil {
+		return fmt.Errorf("check account-share seat-cost index definitions: %w", err)
+	}
+	if !ready {
+		return errors.New("one or more account-share seat-cost indexes are missing, invalid, or do not match migration 208")
+	}
+	return nil
+}
+
+func prepareAccountShareSeatCostQueryIndexesMigration(ctx context.Context, db *sql.DB) error {
+	ready, err := indexesMatchRequirements(ctx, db, accountShareSeatCostIndexRequirements[:2])
+	if err != nil {
+		return fmt.Errorf("check account-share seat-cost ledger indexes: %w", err)
+	}
+	if !ready {
+		estimatedRows, tableBytes, err := tableRowAndSizeEstimates(ctx, db, "user_balance_ledger")
+		if err != nil {
+			return fmt.Errorf("estimate user_balance_ledger before %s: %w", accountShareSeatCostQueryIndexesMigration, err)
+		}
+		if estimatedRows > accountShareSeatCostAutoIndexMaxRows || tableBytes > accountShareSeatCostAutoIndexMaxTableBytes {
+			return fmt.Errorf(
+				"%s requires manual low-traffic CREATE INDEX CONCURRENTLY before application startup (estimated_rows=%d table_bytes=%d); if a target index is invalid or has the wrong definition, DROP INDEX CONCURRENTLY and rebuild it from the migration; verify every target index matches the migration and is indisready=true and indisvalid=true, then retry",
+				accountShareSeatCostQueryIndexesMigration,
+				estimatedRows,
+				tableBytes,
+			)
+		}
+	}
+	return prepareIndexesForRetry(ctx, db, accountShareSeatCostIndexRequirements)
+}
+
+func prepareIndexesForRetry(ctx context.Context, db *sql.DB, requirements []migrationIndexRequirement) error {
+	for _, requirement := range requirements {
+		indexName := requirement.index.name
+		invalid, err := indexIsInvalid(ctx, db, indexName)
+		if err != nil {
+			return fmt.Errorf("check invalid index %s: %w", indexName, err)
+		}
+		if !invalid {
+			continue
+		}
+		qualifiedIndexName := quoteMigrationCatalogName(requirement.index)
+		if _, err := db.ExecContext(ctx, fmt.Sprintf("DROP INDEX CONCURRENTLY IF EXISTS %s", qualifiedIndexName)); err != nil {
+			return fmt.Errorf("drop invalid index %s: %w", indexName, err)
+		}
+	}
+	return nil
+}
+
+func quoteMigrationCatalogName(name migrationCatalogName) string {
+	quoteIdentifier := func(identifier string) string {
+		return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
+	}
+	return quoteIdentifier(name.schema) + "." + quoteIdentifier(name.name)
 }
 
 func preparePaymentOrdersOutTradeNoUniqueMigration(ctx context.Context, db *sql.DB) error {
@@ -653,6 +864,241 @@ func indexIsInvalid(ctx context.Context, db *sql.DB, indexName string) (bool, er
 		)
 	`, indexName).Scan(&invalid)
 	return invalid, err
+}
+
+func indexesMatchRequirements(ctx context.Context, db *sql.DB, requirements []migrationIndexRequirement) (bool, error) {
+	for _, requirement := range requirements {
+		state, err := loadMigrationIndexCatalogState(ctx, db, requirement.index)
+		if err != nil {
+			return false, err
+		}
+		if !state.exists || !migrationIndexMatchesRequirement(state, requirement) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func loadMigrationIndexCatalogState(ctx context.Context, db *sql.DB, index migrationCatalogName) (migrationIndexCatalogState, error) {
+	var state migrationIndexCatalogState
+	var keysJSON string
+	var includeColumnsJSON string
+	err := db.QueryRowContext(ctx, `
+			SELECT
+				tbl_ns.nspname,
+				tbl.relname,
+				am.amname,
+				idx.relkind,
+				i.indisunique,
+				i.indisprimary,
+				i.indisexclusion,
+				i.indisready,
+				i.indisvalid,
+				i.indislive,
+				i.indnkeyatts,
+				i.indnatts,
+				COALESCE((
+					SELECT json_agg(json_build_object(
+						'position', position,
+						'is_expression', indexed_column.attnum = 0,
+						'definition', CASE
+							WHEN indexed_column.attnum = 0 THEN pg_get_indexdef(i.indexrelid, position, false)
+							ELSE table_attribute.attname::text
+						END,
+						'type_schema', type_ns.nspname,
+						'type_name', indexed_type.typname,
+						'opclass_schema', opclass_ns.nspname,
+						'opclass_name', opclass.opcname,
+						'collation_schema', COALESCE(collation_ns.nspname, ''),
+						'collation_name', COALESCE(indexed_collation_entry.collname, ''),
+						'option_bits', indexed_option.option_bits
+					) ORDER BY position)
+					FROM generate_series(1, i.indnkeyatts) AS position
+					JOIN LATERAL (
+						SELECT attnum
+						FROM unnest(i.indkey::smallint[]) WITH ORDINALITY AS columns(attnum, ordinality)
+						WHERE ordinality = position
+					) indexed_column ON true
+					JOIN pg_attribute index_attribute
+						ON index_attribute.attrelid = i.indexrelid
+						AND index_attribute.attnum = position
+					JOIN pg_type indexed_type ON indexed_type.oid = index_attribute.atttypid
+					JOIN pg_namespace type_ns ON type_ns.oid = indexed_type.typnamespace
+					JOIN LATERAL (
+						SELECT opclass_oid
+						FROM unnest(i.indclass::oid[]) WITH ORDINALITY AS opclasses(opclass_oid, ordinality)
+						WHERE ordinality = position
+					) indexed_opclass ON true
+					JOIN pg_opclass opclass ON opclass.oid = indexed_opclass.opclass_oid
+					JOIN pg_namespace opclass_ns ON opclass_ns.oid = opclass.opcnamespace
+					JOIN LATERAL (
+						SELECT collation_oid
+						FROM unnest(i.indcollation::oid[]) WITH ORDINALITY AS collations(collation_oid, ordinality)
+						WHERE ordinality = position
+					) indexed_collation ON true
+					LEFT JOIN pg_collation indexed_collation_entry
+						ON indexed_collation_entry.oid = indexed_collation.collation_oid
+					LEFT JOIN pg_namespace collation_ns
+						ON collation_ns.oid = indexed_collation_entry.collnamespace
+					JOIN LATERAL (
+						SELECT option_bits
+						FROM unnest(i.indoption::smallint[]) WITH ORDINALITY AS options(option_bits, ordinality)
+						WHERE ordinality = position
+					) indexed_option ON true
+					LEFT JOIN pg_attribute table_attribute
+						ON table_attribute.attrelid = i.indrelid
+						AND table_attribute.attnum = indexed_column.attnum
+				), '[]'::json)::text,
+				COALESCE((
+					SELECT json_agg(a.attname ORDER BY position)
+					FROM unnest(i.indkey::smallint[]) WITH ORDINALITY AS keys(attnum, position)
+					JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = keys.attnum
+					WHERE position > i.indnkeyatts
+				), '[]'::json)::text,
+				pg_get_expr(i.indpred, i.indrelid, false)
+			FROM pg_class idx
+			JOIN pg_namespace idx_ns ON idx_ns.oid = idx.relnamespace
+			JOIN pg_index i ON i.indexrelid = idx.oid
+			JOIN pg_class tbl ON tbl.oid = i.indrelid
+			JOIN pg_namespace tbl_ns ON tbl_ns.oid = tbl.relnamespace
+			JOIN pg_am am ON am.oid = idx.relam
+			WHERE idx_ns.nspname = $1
+			  AND idx.relname = $2
+		`, index.schema, index.name).Scan(
+		&state.table.schema,
+		&state.table.name,
+		&state.accessMethod,
+		&state.relationKind,
+		&state.unique,
+		&state.primary,
+		&state.exclusion,
+		&state.ready,
+		&state.valid,
+		&state.live,
+		&state.keyCount,
+		&state.attributeCount,
+		&keysJSON,
+		&includeColumnsJSON,
+		&state.predicate,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return state, nil
+	}
+	if err != nil {
+		return state, err
+	}
+	if err := json.Unmarshal([]byte(keysJSON), &state.keys); err != nil {
+		return state, fmt.Errorf("decode index %s.%s keys: %w", index.schema, index.name, err)
+	}
+	if err := json.Unmarshal([]byte(includeColumnsJSON), &state.includeColumns); err != nil {
+		return state, fmt.Errorf("decode index %s.%s include columns: %w", index.schema, index.name, err)
+	}
+	state.exists = true
+	return state, nil
+}
+
+func migrationIndexMatchesRequirement(state migrationIndexCatalogState, requirement migrationIndexRequirement) bool {
+	if state.table != requirement.table ||
+		state.accessMethod != requirement.accessMethod ||
+		state.relationKind != "i" ||
+		state.unique || state.primary || state.exclusion ||
+		!state.ready || !state.valid || !state.live ||
+		state.keyCount != len(requirement.keys) ||
+		state.attributeCount != len(requirement.keys)+len(requirement.includeColumns) ||
+		len(state.keys) != len(requirement.keys) ||
+		len(state.includeColumns) != len(requirement.includeColumns) {
+		return false
+	}
+	for i, expected := range requirement.keys {
+		actual := state.keys[i]
+		if actual.Position != i+1 ||
+			actual.TypeSchema != expected.resultType.schema ||
+			actual.TypeName != expected.resultType.name ||
+			actual.OpClassSchema != expected.operatorClass.schema ||
+			actual.OpClassName != expected.operatorClass.name ||
+			actual.CollationSchema != "" || actual.CollationName != "" ||
+			actual.OptionBits != 0 {
+			return false
+		}
+		if expected.expressionCanonical != "" {
+			if !actual.IsExpression || canonicalizeMigrationIndexExpression(actual.Definition) != expected.expressionCanonical {
+				return false
+			}
+			continue
+		}
+		if actual.IsExpression || actual.Definition != expected.column {
+			return false
+		}
+	}
+	for i, expected := range requirement.includeColumns {
+		if state.includeColumns[i] != expected {
+			return false
+		}
+	}
+	if requirement.predicateCanonical == "" {
+		return !state.predicate.Valid
+	}
+	return state.predicate.Valid && canonicalizeMigrationIndexExpression(state.predicate.String) == requirement.predicateCanonical
+}
+
+func canonicalizeMigrationIndexExpression(expression string) string {
+	canonical := strings.Join(strings.Fields(expression), "")
+	for _, cast := range []string{
+		"::charactervarying[]",
+		"::varchar[]",
+		"::text[]",
+		"::charactervarying",
+		"::varchar",
+		"::text",
+		"::bigint",
+	} {
+		canonical = stripUnqualifiedMigrationIndexCast(canonical, cast)
+	}
+	canonical = strings.NewReplacer(
+		"(", "",
+		")", "",
+	).Replace(canonical)
+	return strings.ReplaceAll(canonical, "=ANYARRAY[", "IN[")
+}
+
+func stripUnqualifiedMigrationIndexCast(expression, cast string) string {
+	searchFrom := 0
+	for searchFrom < len(expression) {
+		relativeIndex := strings.Index(expression[searchFrom:], cast)
+		if relativeIndex < 0 {
+			break
+		}
+		castStart := searchFrom + relativeIndex
+		castEnd := castStart + len(cast)
+		if castEnd < len(expression) && isMigrationIndexCastContinuation(expression[castEnd]) {
+			searchFrom = castEnd
+			continue
+		}
+		expression = expression[:castStart] + expression[castEnd:]
+		searchFrom = castStart
+	}
+	return expression
+}
+
+func isMigrationIndexCastContinuation(next byte) bool {
+	return next == '(' || next == '[' || next == '_' ||
+		(next >= '0' && next <= '9') ||
+		(next >= 'A' && next <= 'Z') ||
+		(next >= 'a' && next <= 'z')
+}
+
+func tableRowAndSizeEstimates(ctx context.Context, db *sql.DB, tableName string) (int64, int64, error) {
+	var estimatedRows int64
+	var tableBytes int64
+	err := db.QueryRowContext(ctx, `
+		SELECT GREATEST(c.reltuples, 0)::bigint, pg_total_relation_size(c.oid)::bigint
+		FROM pg_class c
+		JOIN pg_namespace ns ON ns.oid = c.relnamespace
+		WHERE ns.nspname = 'public'
+		  AND c.relname = $1
+		  AND c.relkind IN ('r', 'p')
+	`, tableName).Scan(&estimatedRows, &tableBytes)
+	return estimatedRows, tableBytes, err
 }
 
 func ensureAtlasBaselineAligned(ctx context.Context, db *sql.DB, fsys fs.FS) error {

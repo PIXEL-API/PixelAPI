@@ -156,3 +156,16 @@ func TestMigration186AllowsAllAccountShareMembershipEndReasons(t *testing.T) {
 	require.Contains(t, sql, "'prepay_insufficient'")
 	require.Contains(t, sql, "'account_unavailable'")
 }
+
+func TestMigration204AllowsCustomOpenAIAccountLevelKeys(t *testing.T) {
+	content, err := FS.ReadFile("204_openai_account_level_custom_keys.sql")
+	require.NoError(t, err)
+
+	sql := string(content)
+	require.Contains(t, sql, "DROP CONSTRAINT IF EXISTS accounts_account_level_check")
+	require.Contains(t, sql, "DROP CONSTRAINT IF EXISTS groups_required_account_level_check")
+	require.Contains(t, sql, "ALTER COLUMN account_level TYPE VARCHAR(64)")
+	require.Contains(t, sql, "ALTER COLUMN required_account_level TYPE VARCHAR(64)")
+	require.NotContains(t, sql, "CHECK (account_level IN")
+	require.NotContains(t, sql, "CHECK (required_account_level IN")
+}

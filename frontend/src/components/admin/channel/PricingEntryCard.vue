@@ -87,7 +87,7 @@
             </label>
             <Select
               :modelValue="entry.billing_mode"
-              @update:modelValue="emit('update', { ...entry, billing_mode: $event as BillingMode, intervals: [] })"
+              @update:modelValue="onBillingModeUpdate($event as BillingMode)"
               :options="billingModeOptions"
               class="mt-1"
             />
@@ -96,6 +96,66 @@
 
         <!-- Token mode -->
         <div v-if="entry.billing_mode === 'token'">
+          <div
+            v-if="showLongContextControls"
+            data-testid="long-context-pricing"
+            class="mt-3 rounded-lg border border-emerald-200 bg-white p-3 dark:border-emerald-900/60 dark:bg-dark-700"
+          >
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div class="min-w-0">
+                <div class="text-sm font-medium text-gray-700 dark:text-gray-200">
+                  {{ t('admin.channels.form.longContextPricingTitle', 'OpenAI API 长上下文倍率') }}
+                </div>
+                <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                  {{ t('admin.channels.form.longContextPricingDescription', '总输入超过阈值后按模型价卡倍率对整次请求计费') }}
+                </p>
+                <p class="mt-1 text-xs" :class="longContextStatusClass">
+                  {{ longContextStatusLabel }}
+                </p>
+              </div>
+
+              <div class="flex min-h-11 shrink-0 items-center justify-between gap-3 sm:justify-end">
+                <span class="text-sm text-gray-600 dark:text-gray-300">
+                  {{ longContextToggleValue
+                    ? t('admin.channels.form.longContextPricingOn', '开启')
+                    : t('admin.channels.form.longContextPricingOff', '关闭')
+                  }}
+                </span>
+                <Toggle
+                  :model-value="longContextToggleValue"
+                  :disabled="longContextToggleDisabled"
+                  :aria-disabled="longContextToggleDisabled"
+                  :aria-label="t('admin.channels.form.longContextPricingTitle', 'OpenAI API 长上下文倍率')"
+                  data-testid="long-context-toggle"
+                  class="disabled:cursor-not-allowed disabled:opacity-50"
+                  @update:model-value="onLongContextToggle"
+                />
+              </div>
+            </div>
+
+            <div class="mt-3 grid grid-cols-1 gap-1 sm:max-w-sm">
+              <label class="text-xs font-medium text-gray-600 dark:text-gray-300">
+                {{ t('admin.channels.form.longContextThreshold', '输入 Token 阈值') }}
+              </label>
+              <input
+                :value="entry.long_context_input_token_threshold"
+                type="number"
+                inputmode="numeric"
+                step="1"
+                min="1"
+                :max="MAX_LONG_CONTEXT_INPUT_TOKEN_THRESHOLD"
+                :disabled="hasTokenIntervals"
+                data-testid="long-context-threshold"
+                class="input min-h-11 w-full text-sm disabled:cursor-not-allowed disabled:opacity-50"
+                :placeholder="t('admin.channels.form.longContextThresholdPlaceholder', '请输入阈值')"
+                @input="onLongContextThresholdInput(($event.target as HTMLInputElement).value)"
+              />
+              <p class="text-xs leading-5 text-gray-400">
+                {{ t('admin.channels.form.longContextThresholdHint', '请输入正整数；修改阈值会将策略设为显式开启。') }}
+              </p>
+            </div>
+          </div>
+
           <!-- Default prices (fallback when no interval matches) -->
           <label class="mt-3 block text-xs font-medium text-gray-500 dark:text-gray-400">
             {{ t('admin.channels.form.defaultPrices', '默认价格（未命中区间时使用）') }}
@@ -146,10 +206,19 @@
                 {{ t('admin.channels.form.intervals', '上下文区间定价（可选）') }}
                 <span class="ml-1 font-normal text-gray-400">(min, max]</span>
               </label>
-              <button type="button" @click="addInterval" class="text-xs text-primary-600 hover:text-primary-700">
+              <button
+                type="button"
+                :disabled="longContextIntervalsBlocked"
+                data-testid="add-token-interval"
+                class="min-h-11 rounded px-2 text-xs text-primary-600 hover:text-primary-700 disabled:cursor-not-allowed disabled:text-gray-400"
+                @click="addInterval"
+              >
                 + {{ t('admin.channels.form.addInterval', '添加区间') }}
               </button>
             </div>
+            <p v-if="longContextIntervalsBlocked" class="mt-1 text-xs leading-5 text-amber-600 dark:text-amber-400">
+              {{ t('admin.channels.form.longContextAddIntervalBlocked', '已显式开启 OpenAI API 长上下文倍率，关闭后才能添加自定义区间。') }}
+            </p>
             <div v-if="entry.intervals && entry.intervals.length > 0" class="mt-2 space-y-2">
               <IntervalRow
                 v-for="(iv, idx) in entry.intervals"
@@ -240,11 +309,16 @@
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Select from '@/components/common/Select.vue'
+import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
 import IntervalRow from './IntervalRow.vue'
 import ModelTagInput from './ModelTagInput.vue'
 import type { PricingFormEntry, IntervalFormEntry } from './types'
-import { perTokenToMTok, getPlatformTagClass } from './types'
+import {
+  MAX_LONG_CONTEXT_INPUT_TOKEN_THRESHOLD,
+  getPlatformTagClass,
+  perTokenToMTok,
+} from './types'
 import type { BillingMode } from '@/api/admin/channels'
 import channelsAPI from '@/api/admin/channels'
 
@@ -253,6 +327,7 @@ const { t } = useI18n()
 const props = defineProps<{
   entry: PricingFormEntry
   platform?: string
+  showLongContextPricing?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -274,11 +349,89 @@ const billingModeLabel = computed(() => {
   return opt ? opt.label : props.entry.billing_mode
 })
 
+const showLongContextControls = computed(() => (
+  props.showLongContextPricing === true &&
+  props.platform === 'openai' &&
+  props.entry.billing_mode === 'token'
+))
+
+const hasTokenIntervals = computed(() => (props.entry.intervals?.length || 0) > 0)
+
+const longContextToggleValue = computed(() => {
+  return props.entry.long_context_pricing_enabled === true
+})
+
+const longContextIntervalsBlocked = computed(() => (
+  showLongContextControls.value && props.entry.long_context_pricing_enabled === true
+))
+
+const longContextToggleDisabled = computed(() => (
+  hasTokenIntervals.value && props.entry.long_context_pricing_enabled !== true
+))
+
+const longContextStatusLabel = computed(() => {
+  if (hasTokenIntervals.value) {
+    return props.entry.long_context_pricing_enabled === true
+      ? t('admin.channels.form.longContextConflictStatus', '配置冲突：请关闭倍率或删除自定义区间')
+      : t('admin.channels.form.longContextCustomIntervals', '自定义上下文区间已接管')
+  }
+  if (props.entry.long_context_pricing_enabled === null) {
+    return t('admin.channels.form.longContextInherited', '默认关闭（未显式开启）')
+  }
+  return props.entry.long_context_pricing_enabled
+    ? t('admin.channels.form.longContextExplicitlyEnabled', '已显式开启')
+    : t('admin.channels.form.longContextExplicitlyDisabled', '已显式关闭')
+})
+
+const longContextStatusClass = computed(() => {
+  if (hasTokenIntervals.value && props.entry.long_context_pricing_enabled === true) {
+    return 'text-red-600 dark:text-red-400'
+  }
+  if (hasTokenIntervals.value) return 'text-amber-600 dark:text-amber-400'
+  if (props.entry.long_context_pricing_enabled === true) return 'text-emerald-600 dark:text-emerald-400'
+  return 'text-gray-500 dark:text-gray-400'
+})
+
 function emitField(field: keyof PricingFormEntry, value: string) {
   emit('update', { ...props.entry, [field]: value === '' ? null : value })
 }
 
+function onBillingModeUpdate(billingMode: BillingMode) {
+  const resetLongContextPricing = billingMode !== 'token'
+  emit('update', {
+    ...props.entry,
+    billing_mode: billingMode,
+    intervals: [],
+    long_context_pricing_enabled: resetLongContextPricing
+      ? null
+      : props.entry.long_context_pricing_enabled,
+    long_context_input_token_threshold: resetLongContextPricing
+      ? null
+      : props.entry.long_context_input_token_threshold,
+  })
+}
+
+function onLongContextToggle(enabled: boolean) {
+  if (enabled && hasTokenIntervals.value) return
+  emit('update', {
+    ...props.entry,
+    long_context_pricing_enabled: enabled,
+    long_context_input_token_threshold: enabled
+      ? props.entry.long_context_input_token_threshold
+      : null,
+  })
+}
+
+function onLongContextThresholdInput(value: string) {
+  emit('update', {
+    ...props.entry,
+    long_context_pricing_enabled: true,
+    long_context_input_token_threshold: value === '' ? null : value,
+  })
+}
+
 function addInterval() {
+  if (longContextIntervalsBlocked.value) return
   const intervals = [...(props.entry.intervals || [])]
   intervals.push({
     min_tokens: 0, max_tokens: null, tier_label: '',

@@ -33,6 +33,36 @@
 
       <template #actions>
         <div class="flex justify-end gap-3">
+        <div ref="columnDropdownRef" class="relative">
+          <button
+            type="button"
+            class="btn btn-secondary px-2 md:px-3"
+            :title="t('keys.columnSettings')"
+            @click="showColumnDropdown = !showColumnDropdown"
+          >
+            <svg class="h-4 w-4 md:mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 4.5v15m6-15v15m-10.875 0h15.75c.621 0 1.125-.504 1.125-1.125V5.625c0-.621-.504-1.125-1.125-1.125H4.125C3.504 4.5 3 5.004 3 5.625v12.75c0 .621.504 1.125 1.125 1.125z" />
+            </svg>
+            <span class="hidden md:inline">{{ t('keys.columnSettings') }}</span>
+          </button>
+          <div
+            v-if="showColumnDropdown"
+            class="absolute right-0 z-50 mt-2 w-48 origin-top-right rounded-lg border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-gray-800"
+          >
+            <div class="max-h-80 overflow-y-auto p-2">
+              <button
+                v-for="column in toggleableColumns"
+                :key="column.key"
+                type="button"
+                class="flex w-full items-center justify-between rounded-md px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700"
+                @click="toggleColumn(column.key)"
+              >
+                <span>{{ column.label }}</span>
+                <Icon v-if="isColumnVisible(column.key)" name="check" size="sm" class="text-primary-500" />
+              </button>
+            </div>
+          </div>
+        </div>
         <button
           @click="refreshKeyPageData"
           :disabled="loading"
@@ -58,6 +88,10 @@
           default-sort-order="desc"
           @sort="handleSort"
         >
+          <template #cell-id="{ value }">
+            <span class="font-mono text-xs text-gray-500 dark:text-gray-400">#{{ value }}</span>
+          </template>
+
           <template #cell-key="{ value, row }">
             <div class="flex items-center gap-2">
               <code class="code text-xs">
@@ -112,6 +146,8 @@
                   :subscription-type="row.group.subscription_type"
                   :rate-multiplier="row.group.rate_multiplier"
                   :user-rate-multiplier="userGroupRates[row.group.id]"
+                  :effective-rate-multiplier="effectiveRateForGroup(row.group)"
+                  :rate-multiplier-source="effectiveRateSourceForGroup(row.group)"
                 />
                 <span v-else class="text-sm text-gray-400 dark:text-dark-500">{{
                   t('keys.noGroup')
@@ -138,15 +174,21 @@
             <div class="text-sm">
               <div class="flex items-center gap-1.5">
                 <span class="text-gray-500 dark:text-gray-400">{{ t('keys.today') }}:</span>
-                <span class="font-medium text-gray-900 dark:text-white">
-                  ${{ (usageStats[row.id]?.today_actual_cost ?? 0).toFixed(4) }}
+                <span v-if="usageStatsLoading" class="inline-block h-3 w-14 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></span>
+                <span v-else-if="usageStatsError" class="text-red-500">{{ t('common.error') }}</span>
+                <span v-else-if="usageStats[row.id]" class="font-medium text-gray-900 dark:text-white">
+                  ${{ usageStats[row.id].today_actual_cost.toFixed(4) }}
                 </span>
+                <span v-else class="text-gray-400 dark:text-gray-500">-</span>
               </div>
               <div class="mt-0.5 flex items-center gap-1.5">
                 <span class="text-gray-500 dark:text-gray-400">{{ t('keys.total') }}:</span>
-                <span class="font-medium text-gray-900 dark:text-white">
-                  ${{ (usageStats[row.id]?.total_actual_cost ?? 0).toFixed(4) }}
+                <span v-if="usageStatsLoading" class="inline-block h-3 w-14 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></span>
+                <span v-else-if="usageStatsError" class="text-red-500">{{ t('common.error') }}</span>
+                <span v-else-if="usageStats[row.id]" class="font-medium text-gray-900 dark:text-white">
+                  ${{ usageStats[row.id].total_actual_cost.toFixed(4) }}
                 </span>
+                <span v-else class="text-gray-400 dark:text-gray-500">-</span>
               </div>
               <!-- Quota progress (if quota is set) -->
               <div v-if="row.quota > 0" class="mt-1.5">
@@ -276,6 +318,19 @@
             <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
           </template>
 
+          <template #cell-current_concurrency="{ row }">
+            <span
+              :class="[
+                'inline-flex min-w-8 items-center justify-center rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums',
+                (row.current_concurrency ?? 0) > 0
+                  ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                  : 'bg-gray-100 text-gray-500 dark:bg-dark-700 dark:text-dark-300'
+              ]"
+            >
+              {{ row.current_concurrency ?? 0 }}
+            </span>
+          </template>
+
           <template #cell-expires_at="{ value }">
             <span v-if="value" :class="[
               'text-sm',
@@ -298,12 +353,19 @@
             </span>
           </template>
 
-          <template #cell-last_used_at="{ value }">
-            <span v-if="value" class="text-sm text-gray-500 dark:text-dark-400">
-              {{ formatDateTime(value) }}
-            </span>
-            <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
-          </template>
+		  <template #cell-last_used_at="{ value }">
+			<span v-if="value" class="text-sm text-gray-500 dark:text-dark-400">
+			  {{ formatDateTime(value) }}
+			</span>
+			<span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
+		  </template>
+
+		  <template #cell-last_used_ip="{ value }">
+			<span v-if="value" class="text-sm text-gray-500 dark:text-dark-400">
+			  {{ value }}
+			</span>
+			<span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
+		  </template>
 
           <template #cell-created_at="{ value }">
             <span class="text-sm text-gray-500 dark:text-dark-400">{{ formatDateTime(value) }}</span>
@@ -431,6 +493,8 @@
                 :subscription-type="(option as unknown as GroupOption).subscriptionType"
                 :rate-multiplier="(option as unknown as GroupOption).rate"
                 :user-rate-multiplier="(option as unknown as GroupOption).userRate"
+                :effective-rate-multiplier="(option as unknown as GroupOption).effectiveRate"
+                :rate-multiplier-source="(option as unknown as GroupOption).rateSource"
               />
               <span v-else class="text-gray-400">{{ t('keys.selectGroup') }}</span>
             </template>
@@ -442,6 +506,8 @@
                 :subscription-type="(option as unknown as GroupOption).subscriptionType"
                 :rate-multiplier="(option as unknown as GroupOption).rate"
                 :user-rate-multiplier="(option as unknown as GroupOption).userRate"
+                :effective-rate-multiplier="(option as unknown as GroupOption).effectiveRate"
+                :rate-multiplier-source="(option as unknown as GroupOption).rateSource"
                 :description="(option as unknown as GroupOption).description"
                 :selected="selected"
               />
@@ -525,6 +591,8 @@
                         :subscription-type="(option as unknown as GroupOption).subscriptionType"
                         :rate-multiplier="(option as unknown as GroupOption).rate"
                         :user-rate-multiplier="(option as unknown as GroupOption).userRate"
+                        :effective-rate-multiplier="(option as unknown as GroupOption).effectiveRate"
+                        :rate-multiplier-source="(option as unknown as GroupOption).rateSource"
                       />
                       <span v-else class="text-gray-400">{{ t('keys.selectGroup') }}</span>
                     </template>
@@ -536,6 +604,8 @@
                         :subscription-type="(option as unknown as GroupOption).subscriptionType"
                         :rate-multiplier="(option as unknown as GroupOption).rate"
                         :user-rate-multiplier="(option as unknown as GroupOption).userRate"
+                        :effective-rate-multiplier="(option as unknown as GroupOption).effectiveRate"
+                        :rate-multiplier-source="(option as unknown as GroupOption).rateSource"
                         :description="(option as unknown as GroupOption).description"
                         :selected="selected"
                       />
@@ -1038,6 +1108,17 @@
       @cancel="showDeleteDialog = false"
     />
 
+    <ApiKeyAccountShareConflictDialog
+      :show="accountShareConflict.show"
+      :action="accountShareConflict.action"
+      :key-name="accountShareConflict.key?.name || ''"
+      :active-count="accountShareConflict.activeCount"
+      :queued-count="accountShareConflict.queuedCount"
+      :navigating="accountShareConflictNavigating"
+      @close="closeAccountShareConflict"
+      @resolve="navigateToAccountShareResolution"
+    />
+
     <!-- Reset Quota Confirmation Dialog -->
     <ConfirmDialog
       :show="showResetQuotaDialog"
@@ -1071,6 +1152,56 @@
       :allow-messages-dispatch="selectedKey?.group?.allow_messages_dispatch || false"
       @close="closeUseKeyModal"
     />
+
+    <BaseDialog
+      :show="showImagePlaygroundModelDialog"
+      :title="t('keys.imagePlaygroundModelDialog.title')"
+      width="narrow"
+      @close="closeImagePlaygroundModelDialog"
+    >
+      <form
+        id="image-playground-model-form"
+        class="space-y-4"
+        @submit.prevent="confirmOpenImagePlayground"
+      >
+        <p class="text-sm leading-6 text-gray-600 dark:text-gray-400">
+          {{ t('keys.imagePlaygroundModelDialog.description') }}
+        </p>
+        <div>
+          <label for="image-playground-model" class="input-label">
+            {{ t('keys.imagePlaygroundModelDialog.modelLabel') }}
+          </label>
+          <input
+            id="image-playground-model"
+            v-model="imagePlaygroundModel"
+            type="text"
+            required
+            autocomplete="off"
+            class="input min-h-11 w-full"
+            :placeholder="t('keys.imagePlaygroundModelDialog.modelPlaceholder')"
+          />
+        </div>
+      </form>
+      <template #footer>
+        <div class="flex w-full flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <button
+            type="button"
+            class="btn btn-secondary min-h-11 w-full sm:w-auto"
+            @click="closeImagePlaygroundModelDialog"
+          >
+            {{ t('common.cancel') }}
+          </button>
+          <button
+            type="submit"
+            form="image-playground-model-form"
+            class="btn btn-primary min-h-11 w-full sm:w-auto"
+            :disabled="!canOpenImagePlayground"
+          >
+            {{ t('keys.imagePlaygroundModelDialog.open') }}
+          </button>
+        </div>
+      </template>
+    </BaseDialog>
 
     <!-- CCS Client Selection Dialog for Antigravity -->
     <BaseDialog
@@ -1170,6 +1301,8 @@
               :subscription-type="option.subscriptionType"
               :rate-multiplier="option.rate"
               :user-rate-multiplier="option.userRate"
+              :effective-rate-multiplier="option.effectiveRate"
+              :rate-multiplier-source="option.rateSource"
               :description="option.description"
               :selected="
                 selectedKeyForGroup?.group_id === option.value ||
@@ -1188,15 +1321,17 @@
 </template>
 
 <script setup lang="ts">
-	import { ref, computed, onMounted, onUnmounted, type ComponentPublicInstance } from 'vue'
+	import { ref, reactive, computed, onMounted, onUnmounted, type ComponentPublicInstance } from 'vue'
 	import { useI18n } from 'vue-i18n'
+	import { useRouter } from 'vue-router'
 	import { useAppStore } from '@/stores/app'
 	import { useOnboardingStore } from '@/stores/onboarding'
 	import { useClipboard } from '@/composables/useClipboard'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 
 const { t } = useI18n()
-import { keysAPI, authAPI, usageAPI, userGroupsAPI } from '@/api'
+const router = useRouter()
+import { keysAPI, authAPI, usageAPI, userGroupsAPI, accountShareAPI } from '@/api'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 	import DataTable from '@/components/common/DataTable.vue'
@@ -1204,24 +1339,32 @@ import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 	import BaseDialog from '@/components/common/BaseDialog.vue'
 	import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 	import EmptyState from '@/components/common/EmptyState.vue'
-	import Select from '@/components/common/Select.vue'
+	import Select, { type SelectOption } from '@/components/common/Select.vue'
 	import SearchInput from '@/components/common/SearchInput.vue'
 	import Icon from '@/components/icons/Icon.vue'
 	import UseKeyModal from '@/components/keys/UseKeyModal.vue'
+	import ApiKeyAccountShareConflictDialog from '@/components/keys/ApiKeyAccountShareConflictDialog.vue'
 	import EndpointPopover from '@/components/keys/EndpointPopover.vue'
 	import GroupBadge from '@/components/common/GroupBadge.vue'
 	import GroupOptionItem from '@/components/common/GroupOptionItem.vue'
 	import type { ApiKey, ApiKeyGroupRoute, Group, PublicSettings, SubscriptionType, GroupPlatform, GroupScope } from '@/types'
 import type { Column } from '@/components/common/types'
 import type { BatchApiKeyUsageStats } from '@/api/usage'
+import type { AccountShareMembership } from '@/api/accountShare'
 import { formatDateTime } from '@/utils/format'
 import { maskApiKey } from '@/utils/maskApiKey'
 import { buildCcSwitchImportDeeplink } from '@/utils/ccswitchImport'
 import { buildImagePlaygroundImportUrl } from '@/utils/imagePlaygroundImport'
-import { extractApiErrorMessage } from '@/utils/apiError'
+import { extractApiErrorCode, extractApiErrorMessage } from '@/utils/apiError'
 
-const apiKeyDeleteErrorMessages: Record<string, string> = {
-  API_KEY_ACCOUNT_SHARE_BINDING_EXISTS: '该 API Key 仍绑定账号广场的使用或预约记录，请先在账号广场结束使用或取消预约后再删除'
+type AccountShareBlockedAction = 'delete' | 'change_group'
+
+interface AccountShareConflictState {
+  show: boolean
+  action: AccountShareBlockedAction
+  key: ApiKey | null
+  activeCount: number | null
+  queuedCount: number | null
 }
 
 // Helper to format date for datetime-local input
@@ -1231,12 +1374,14 @@ const formatDateTimeLocal = (isoDate: string): string => {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
-interface GroupOption {
+interface GroupOption extends SelectOption {
   value: number
   label: string
   description: string | null
   rate: number
   userRate: number | null
+  effectiveRate: number | null
+  rateSource: string | null
   subscriptionType: SubscriptionType
   platform: GroupPlatform
   scope?: GroupScope
@@ -1262,18 +1407,103 @@ const appStore = useAppStore()
 const onboardingStore = useOnboardingStore()
 const { copyToClipboard: clipboardCopy } = useClipboard()
 
-const columns = computed<Column[]>(() => [
+const allColumns = computed<Column[]>(() => [
   { key: 'name', label: t('common.name'), sortable: true },
+  { key: 'id', label: t('keys.id'), sortable: true },
   { key: 'key', label: t('keys.apiKey'), sortable: false },
   { key: 'group', label: t('keys.group'), sortable: false },
   { key: 'usage', label: t('keys.usage'), sortable: false },
   { key: 'rate_limit', label: t('keys.rateLimitColumn'), sortable: false },
+  { key: 'current_concurrency', label: t('keys.currentConcurrency'), sortable: false },
   { key: 'expires_at', label: t('keys.expiresAt'), sortable: true },
   { key: 'status', label: t('common.status'), sortable: true },
   { key: 'last_used_at', label: t('keys.lastUsedAt'), sortable: true },
+  { key: 'last_used_ip', label: t('keys.lastUsedIP'), sortable: false },
   { key: 'created_at', label: t('keys.created'), sortable: true },
   { key: 'actions', label: t('common.actions'), sortable: false }
 ])
+
+const ALWAYS_VISIBLE_COLUMNS = new Set(['name', 'actions'])
+const DEFAULT_HIDDEN_COLUMNS = ['id', 'last_used_ip']
+const HIDDEN_COLUMNS_KEY = 'api-key-hidden-columns'
+const COLUMN_SETTINGS_VERSION_KEY = 'api-key-column-settings-version'
+const COLUMN_SETTINGS_VERSION = 4
+const VERSION_NEW_HIDDEN_COLUMNS: Record<number, string[]> = {
+  3: ['id'],
+  4: ['last_used_ip']
+}
+
+const hiddenColumns = reactive<Set<string>>(new Set())
+const showColumnDropdown = ref(false)
+const columnDropdownRef = ref<HTMLElement | null>(null)
+
+const toggleableColumns = computed(() =>
+  allColumns.value.filter((column) => !ALWAYS_VISIBLE_COLUMNS.has(column.key))
+)
+
+const columns = computed(() =>
+  allColumns.value.filter((column) =>
+    ALWAYS_VISIBLE_COLUMNS.has(column.key) || !hiddenColumns.has(column.key)
+  )
+)
+
+const getValidHiddenColumnKeys = () =>
+  new Set(toggleableColumns.value.map((column) => column.key))
+
+const saveColumnsToStorage = () => {
+  try {
+    const validKeys = getValidHiddenColumnKeys()
+    const keys = [...hiddenColumns].filter((key) => validKeys.has(key))
+    localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify(keys))
+    localStorage.setItem(COLUMN_SETTINGS_VERSION_KEY, String(COLUMN_SETTINGS_VERSION))
+  } catch (error) {
+    console.error('Failed to save API key column settings:', error)
+  }
+}
+
+const loadSavedColumns = () => {
+  hiddenColumns.clear()
+  try {
+    const validKeys = getValidHiddenColumnKeys()
+    const saved = localStorage.getItem(HIDDEN_COLUMNS_KEY)
+    if (!saved) {
+      DEFAULT_HIDDEN_COLUMNS.forEach((key) => {
+        if (validKeys.has(key)) hiddenColumns.add(key)
+      })
+      saveColumnsToStorage()
+      return
+    }
+
+    const parsed = JSON.parse(saved)
+    if (Array.isArray(parsed)) {
+      parsed
+        .filter((key): key is string => typeof key === 'string' && validKeys.has(key))
+        .forEach((key) => hiddenColumns.add(key))
+    }
+
+    const rawVersion = Number(localStorage.getItem(COLUMN_SETTINGS_VERSION_KEY) ?? '1')
+    const storedVersion = Number.isInteger(rawVersion) && rawVersion >= 1 ? rawVersion : 1
+    if (storedVersion < COLUMN_SETTINGS_VERSION) {
+      for (let version = storedVersion + 1; version <= COLUMN_SETTINGS_VERSION; version += 1) {
+        for (const key of VERSION_NEW_HIDDEN_COLUMNS[version] ?? []) {
+          if (validKeys.has(key)) hiddenColumns.add(key)
+        }
+      }
+      saveColumnsToStorage()
+    }
+  } catch (error) {
+    console.error('Failed to load API key column settings:', error)
+    DEFAULT_HIDDEN_COLUMNS.forEach((key) => hiddenColumns.add(key))
+  }
+}
+
+const toggleColumn = (key: string) => {
+  if (hiddenColumns.has(key)) hiddenColumns.delete(key)
+  else hiddenColumns.add(key)
+  saveColumnsToStorage()
+}
+
+const isColumnVisible = (key: string) => !hiddenColumns.has(key)
 
 const apiKeys = ref<ApiKey[]>([])
 const groups = ref<Group[]>([])
@@ -1282,6 +1512,9 @@ const submitting = ref(false)
 const now = ref(new Date())
 let resetTimer: ReturnType<typeof setInterval> | null = null
 const usageStats = ref<Record<string, BatchApiKeyUsageStats>>({})
+const usageStatsLoading = ref(false)
+const usageStatsError = ref(false)
+let usageStatsRequestSequence = 0
 const userGroupRates = ref<Record<number, number>>({})
 
 const pagination = ref({
@@ -1308,6 +1541,10 @@ const showResetRateLimitDialog = ref(false)
 const showUseKeyModal = ref(false)
 const showCcsClientSelect = ref(false)
 const pendingCcsRow = ref<ApiKey | null>(null)
+const showImagePlaygroundModelDialog = ref(false)
+const pendingImagePlaygroundRow = ref<ApiKey | null>(null)
+const imagePlaygroundModel = ref('')
+const canOpenImagePlayground = computed(() => imagePlaygroundModel.value.trim().length > 0)
 const selectedKey = ref<ApiKey | null>(null)
 const copiedKeyId = ref<number | null>(null)
 const groupSelectorKeyId = ref<number | null>(null)
@@ -1315,7 +1552,44 @@ const publicSettings = ref<PublicSettings | null>(null)
 const dropdownRef = ref<HTMLElement | null>(null)
 const dropdownPosition = ref<{ top?: number; bottom?: number; left: number } | null>(null)
 const groupButtonRefs = ref<Map<number, HTMLElement>>(new Map())
+const accountShareBindingChecks = new Map<number, Promise<AccountShareMembership[]>>()
+const accountShareConflictNavigating = ref(false)
+const accountShareConflict = ref<AccountShareConflictState>({
+  show: false,
+  action: 'change_group',
+  key: null,
+  activeCount: null,
+  queuedCount: null
+})
 let abortController: AbortController | null = null
+
+const isAbortError = (error: unknown) => {
+  if (!error || typeof error !== 'object') return false
+  const { name, code } = error as { name?: string; code?: string }
+  return name === 'AbortError' || code === 'ERR_CANCELED'
+}
+
+const loadApiKeyUsageStats = async (keyIds: number[], signal: AbortSignal) => {
+  const requestSequence = ++usageStatsRequestSequence
+  usageStatsLoading.value = keyIds.length > 0
+  usageStatsError.value = false
+  usageStats.value = {}
+  if (keyIds.length === 0) return
+
+  try {
+    const response = await usageAPI.getDashboardApiKeysUsage(keyIds, { signal })
+    if (signal.aborted || requestSequence !== usageStatsRequestSequence) return
+    usageStats.value = response.stats
+  } catch (error) {
+    if (signal.aborted || requestSequence !== usageStatsRequestSequence || isAbortError(error)) return
+    usageStatsError.value = true
+    console.error('Failed to load usage stats:', error)
+  } finally {
+    if (requestSequence === usageStatsRequestSequence) {
+      usageStatsLoading.value = false
+    }
+  }
+}
 
 // Get the currently selected key for group change
 const selectedKeyForGroup = computed(() => {
@@ -1383,6 +1657,31 @@ const groupFilterOptions = computed(() => [
   ...groups.value.map((g) => ({ value: g.id, label: g.name }))
 ])
 
+const effectiveRateByGroupId = computed(() => {
+  const result: Record<number, { multiplier: number | null; source: string | null }> = {}
+  groups.value.forEach((group) => {
+    const fallbackUserRate = userGroupRates.value[group.id] ?? null
+    result[group.id] = {
+      multiplier: group.effective_rate_multiplier ?? fallbackUserRate,
+      source: group.effective_rate_multiplier_source ?? (fallbackUserRate != null ? 'user_group' : null)
+    }
+  })
+  return result
+})
+
+const effectiveRateForGroup = (group: Group): number | null => {
+  return group.effective_rate_multiplier ??
+    effectiveRateByGroupId.value[group.id]?.multiplier ??
+    userGroupRates.value[group.id] ??
+    null
+}
+
+const effectiveRateSourceForGroup = (group: Group): string | null => {
+  return group.effective_rate_multiplier_source ??
+    effectiveRateByGroupId.value[group.id]?.source ??
+    (userGroupRates.value[group.id] != null ? 'user_group' : null)
+}
+
 const statusFilterOptions = computed(() => [
   { value: '', label: t('keys.allStatus') },
   { value: 'active', label: t('keys.status.active') },
@@ -1407,17 +1706,22 @@ const onStatusFilterChange = (value: string | number | boolean | null) => {
 }
 
 // Convert groups to Select options format with rate multiplier and subscription type
-const groupOptions = computed(() =>
-  groups.value.map((group) => ({
-    value: group.id,
-    label: group.name,
-    description: group.description,
-    rate: group.rate_multiplier,
-    userRate: userGroupRates.value[group.id] ?? null,
-    subscriptionType: group.subscription_type,
-    platform: group.platform,
-    scope: group.scope
-  }))
+const groupOptions = computed<GroupOption[]>(() =>
+  groups.value.map((group) => {
+    const fallbackUserRate = userGroupRates.value[group.id] ?? null
+    return {
+      value: group.id,
+      label: group.name,
+      description: group.description,
+      rate: group.rate_multiplier,
+      userRate: fallbackUserRate,
+      effectiveRate: group.effective_rate_multiplier ?? fallbackUserRate,
+      rateSource: group.effective_rate_multiplier_source ?? (fallbackUserRate != null ? 'user_group' : 'group_default'),
+      subscriptionType: group.subscription_type,
+      platform: group.platform,
+      scope: group.scope
+    }
+  })
 )
 
 const createRoutesFromKey = (key: ApiKey): ApiKeyGroupRouteForm[] => {
@@ -1530,14 +1834,12 @@ const copyToClipboard = async (text: string, keyId: number) => {
   }
 }
 
-const isAbortError = (error: unknown) => {
-  if (!error || typeof error !== 'object') return false
-  const { name, code } = error as { name?: string; code?: string }
-  return name === 'AbortError' || code === 'ERR_CANCELED'
-}
-
 const loadApiKeys = async () => {
   abortController?.abort()
+  usageStatsRequestSequence += 1
+  usageStats.value = {}
+  usageStatsLoading.value = false
+  usageStatsError.value = false
   const controller = new AbortController()
   abortController = controller
   const { signal } = controller
@@ -1565,19 +1867,7 @@ const loadApiKeys = async () => {
     pagination.value.total = response.total
     pagination.value.pages = response.pages
 
-    // Load usage stats for all API keys in the list
-    if (response.items.length > 0) {
-      const keyIds = response.items.map((k) => k.id)
-      try {
-        const usageResponse = await usageAPI.getDashboardApiKeysUsage(keyIds, { signal })
-        if (signal.aborted) return
-        usageStats.value = usageResponse.stats
-      } catch (e) {
-        if (!isAbortError(e)) {
-          console.error('Failed to load usage stats:', e)
-        }
-      }
-    }
+    void loadApiKeyUsageStats(response.items.map((key) => key.id), signal)
   } catch (error) {
     if (isAbortError(error)) {
       return
@@ -1719,10 +2009,108 @@ const openGroupSelector = (key: ApiKey) => {
   }
 }
 
+const blockingAccountShareMemberships = (memberships: AccountShareMembership[]) => (
+  memberships.filter((membership) => membership.status === 'active' || membership.status === 'queued')
+)
+
+const loadAccountShareMemberships = (keyId: number): Promise<AccountShareMembership[]> => {
+  const activeRequest = accountShareBindingChecks.get(keyId)
+  if (activeRequest) return activeRequest
+
+  const request = accountShareAPI.listMembershipQueue(keyId)
+  accountShareBindingChecks.set(keyId, request)
+  void request.then(
+    () => accountShareBindingChecks.delete(keyId),
+    () => accountShareBindingChecks.delete(keyId)
+  )
+  return request
+}
+
+const showAccountShareConflict = (
+  key: ApiKey,
+  action: AccountShareBlockedAction,
+  memberships: AccountShareMembership[] | null
+) => {
+  const blockingMemberships = memberships ? blockingAccountShareMemberships(memberships) : null
+  accountShareConflict.value = {
+    show: true,
+    action,
+    key,
+    activeCount: blockingMemberships
+      ? blockingMemberships.filter((membership) => membership.status === 'active').length
+      : null,
+    queuedCount: blockingMemberships
+      ? blockingMemberships.filter((membership) => membership.status === 'queued').length
+      : null
+  }
+}
+
+const checkAccountShareBindings = async (
+  key: ApiKey,
+  action: AccountShareBlockedAction
+): Promise<boolean> => {
+  try {
+    const memberships = await loadAccountShareMemberships(key.id)
+    if (blockingAccountShareMemberships(memberships).length === 0) return true
+    showAccountShareConflict(key, action, memberships)
+    return false
+  } catch (error: unknown) {
+    appStore.showError(extractApiErrorMessage(error, t('keys.accountShareConflict.checkFailed')))
+    return false
+  }
+}
+
+const showAccountShareConflictFromGuard = async (
+  key: ApiKey,
+  action: AccountShareBlockedAction
+) => {
+  try {
+    const memberships = await loadAccountShareMemberships(key.id)
+    showAccountShareConflict(key, action, memberships)
+  } catch {
+    showAccountShareConflict(key, action, null)
+  }
+}
+
+const isAccountShareBindingConflict = (error: unknown) => (
+  extractApiErrorCode(error) === 'API_KEY_ACCOUNT_SHARE_BINDING_EXISTS'
+)
+
+const closeAccountShareConflict = () => {
+  if (accountShareConflictNavigating.value) return
+  accountShareConflict.value.show = false
+}
+
+const navigateToAccountShareResolution = async () => {
+  const { key, action } = accountShareConflict.value
+  if (!key || accountShareConflictNavigating.value) return
+
+  accountShareConflictNavigating.value = true
+  try {
+    await router.push({
+      name: 'AccountShare',
+      query: {
+        mode: 'resolve-key-binding',
+        api_key_id: String(key.id),
+        api_key_name: key.name,
+        blocked_action: action,
+        return_to: '/keys'
+      }
+    })
+    accountShareConflict.value.show = false
+  } catch (error: unknown) {
+    appStore.showError(extractApiErrorMessage(error, t('keys.accountShareConflict.navigationFailed')))
+  } finally {
+    accountShareConflictNavigating.value = false
+  }
+}
+
 const changeGroup = async (key: ApiKey, newGroupId: number | null) => {
   groupSelectorKeyId.value = null
   dropdownPosition.value = null
   if (key.group_id === newGroupId) return
+
+  if (!(await checkAccountShareBindings(key, 'change_group'))) return
 
   try {
     await keysAPI.update(key.id, {
@@ -1737,8 +2125,12 @@ const changeGroup = async (key: ApiKey, newGroupId: number | null) => {
     })
     appStore.showSuccess(t('keys.groupChangedSuccess'))
     loadApiKeys()
-  } catch (error) {
-    appStore.showError(t('keys.failedToChangeGroup'))
+  } catch (error: unknown) {
+    if (isAccountShareBindingConflict(error)) {
+      await showAccountShareConflictFromGuard(key, 'change_group')
+      return
+    }
+    appStore.showError(extractApiErrorMessage(error, t('keys.failedToChangeGroup')))
   }
 }
 
@@ -1751,7 +2143,8 @@ const closeGroupSelector = (event: MouseEvent) => {
   }
 }
 
-const confirmDelete = (key: ApiKey) => {
+const confirmDelete = async (key: ApiKey) => {
+  if (!(await checkAccountShareBindings(key, 'delete'))) return
   selectedKey.value = key
   showDeleteDialog.value = true
 }
@@ -1876,8 +2269,13 @@ const handleDelete = async () => {
     appStore.showSuccess(t('keys.keyDeletedSuccess'))
     showDeleteDialog.value = false
     loadApiKeys()
-  } catch (error: any) {
-    const errorMsg = extractApiErrorMessage(error, t('keys.failedToDelete'), apiKeyDeleteErrorMessages)
+  } catch (error: unknown) {
+    if (isAccountShareBindingConflict(error)) {
+      showDeleteDialog.value = false
+      await showAccountShareConflictFromGuard(selectedKey.value, 'delete')
+      return
+    }
+    const errorMsg = extractApiErrorMessage(error, t('keys.failedToDelete'))
     appStore.showError(errorMsg)
   }
 }
@@ -2031,6 +2429,22 @@ const executeCcsImport = (row: ApiKey, clientType: 'claude' | 'gemini') => {
 }
 
 const openImagePlayground = (row: ApiKey) => {
+  pendingImagePlaygroundRow.value = row
+  imagePlaygroundModel.value = ''
+  showImagePlaygroundModelDialog.value = true
+}
+
+const closeImagePlaygroundModelDialog = () => {
+  showImagePlaygroundModelDialog.value = false
+  pendingImagePlaygroundRow.value = null
+  imagePlaygroundModel.value = ''
+}
+
+const confirmOpenImagePlayground = () => {
+  const row = pendingImagePlaygroundRow.value
+  const model = imagePlaygroundModel.value.trim()
+  if (!row || !model) return
+
   try {
     const baseUrl = publicSettings.value?.api_base_url || window.location.origin
     const siteName = (publicSettings.value?.site_name || 'Pixel API').trim() || 'Pixel API'
@@ -2039,10 +2453,12 @@ const openImagePlayground = (row: ApiKey) => {
       apiKey: row.key,
       keyId: row.id,
       keyName: row.name,
+      model,
       sourceName: siteName
     })
 
     window.open(url, '_blank', 'noopener,noreferrer')
+    closeImagePlaygroundModelDialog()
   } catch {
     appStore.showError(t('keys.openImagePlaygroundFailed'))
   }
@@ -2073,17 +2489,29 @@ function formatResetTime(resetAt: string | null): string {
   return `${mins}m`
 }
 
+const handleColumnSettingsClickOutside = (event: MouseEvent) => {
+  const target = event.target as HTMLElement
+  if (columnDropdownRef.value && !columnDropdownRef.value.contains(target)) {
+    showColumnDropdown.value = false
+  }
+}
+
 onMounted(() => {
+  loadSavedColumns()
   loadApiKeys()
   loadGroups()
   loadUserGroupRates()
   loadPublicSettings()
   document.addEventListener('click', closeGroupSelector)
+  document.addEventListener('click', handleColumnSettingsClickOutside)
   resetTimer = setInterval(() => { now.value = new Date() }, 60000)
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', closeGroupSelector)
+  document.removeEventListener('click', handleColumnSettingsClickOutside)
   if (resetTimer) clearInterval(resetTimer)
+  usageStatsRequestSequence += 1
+  abortController?.abort()
 })
 </script>

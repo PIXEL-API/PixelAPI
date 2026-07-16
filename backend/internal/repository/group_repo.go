@@ -39,12 +39,27 @@ func newGroupRepositoryWithSQL(client *dbent.Client, sqlq sqlExecutor) *groupRep
 	return &groupRepository{client: client, sql: sqlq}
 }
 
+func normalizeGroupWriteDefaults(groupIn *service.Group) {
+	if groupIn == nil {
+		return
+	}
+	if groupIn.NewUserRateMultiplier == 0 {
+		groupIn.NewUserRateMultiplier = 1
+	}
+}
+
 func (r *groupRepository) Create(ctx context.Context, groupIn *service.Group) error {
-	builder := r.client.Group.Create().
+	normalizeGroupWriteDefaults(groupIn)
+	client := clientFromContext(ctx, r.client)
+	builder := client.Group.Create().
 		SetName(groupIn.Name).
 		SetDescription(groupIn.Description).
 		SetPlatform(groupIn.Platform).
 		SetRateMultiplier(groupIn.RateMultiplier).
+		SetNewUserRateEnabled(groupIn.NewUserRateEnabled).
+		SetNewUserRateMultiplier(groupIn.NewUserRateMultiplier).
+		SetNewUserRateWindowSeconds(groupIn.NewUserRateWindowSeconds).
+		SetNewUserRateQuotaUsd(groupIn.NewUserRateQuotaUSD).
 		SetSortOrder(groupIn.SortOrder).
 		SetIsExclusive(groupIn.IsExclusive).
 		SetStatus(groupIn.Status).
@@ -61,6 +76,12 @@ func (r *groupRepository) Create(ctx context.Context, groupIn *service.Group) er
 		SetNillableImagePrice1k(groupIn.ImagePrice1K).
 		SetNillableImagePrice2k(groupIn.ImagePrice2K).
 		SetNillableImagePrice4k(groupIn.ImagePrice4K).
+		SetVideoRateIndependent(groupIn.VideoRateIndependent).
+		SetVideoRateMultiplier(groupIn.VideoRateMultiplier).
+		SetNillableVideoPrice480p(groupIn.VideoPrice480P).
+		SetNillableVideoPrice720p(groupIn.VideoPrice720P).
+		SetNillableVideoPrice1080p(groupIn.VideoPrice1080P).
+		SetNillableWebSearchPricePerCall(groupIn.WebSearchPricePerCall).
 		SetDefaultValidityDays(groupIn.DefaultValidityDays).
 		SetClaudeCodeOnly(groupIn.ClaudeCodeOnly).
 		SetNillableFallbackGroupID(groupIn.FallbackGroupID).
@@ -87,7 +108,7 @@ func (r *groupRepository) Create(ctx context.Context, groupIn *service.Group) er
 		groupIn.ID = created.ID
 		groupIn.CreatedAt = created.CreatedAt
 		groupIn.UpdatedAt = created.UpdatedAt
-		if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventGroupChanged, nil, &groupIn.ID, nil); err != nil {
+		if err := enqueueSchedulerOutbox(ctx, txAwareSQLExecutor(ctx, r.sql, r.client), service.SchedulerOutboxEventGroupChanged, nil, &groupIn.ID, nil); err != nil {
 			logger.LegacyPrintf("repository.group", "[SchedulerOutbox] enqueue group create failed: group=%d err=%v", groupIn.ID, err)
 		}
 	}
@@ -107,7 +128,8 @@ func (r *groupRepository) GetByID(ctx context.Context, id int64) (*service.Group
 
 func (r *groupRepository) GetByIDLite(ctx context.Context, id int64) (*service.Group, error) {
 	// AccountCount is intentionally not loaded here; use GetByID when needed.
-	m, err := r.client.Group.Query().
+	client := clientFromContext(ctx, r.client)
+	m, err := client.Group.Query().
 		Where(group.IDEQ(id)).
 		Only(ctx)
 	if err != nil {
@@ -117,7 +139,8 @@ func (r *groupRepository) GetByIDLite(ctx context.Context, id int64) (*service.G
 }
 
 func (r *groupRepository) FindUserPrivateByOwnerAndPlatform(ctx context.Context, userID int64, platform string) (*service.Group, error) {
-	m, err := r.client.Group.Query().
+	client := clientFromContext(ctx, r.client)
+	m, err := client.Group.Query().
 		Where(
 			group.OwnerUserIDEQ(userID),
 			group.PlatformEQ(strings.ToLower(strings.TrimSpace(platform))),
@@ -131,11 +154,16 @@ func (r *groupRepository) FindUserPrivateByOwnerAndPlatform(ctx context.Context,
 }
 
 func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) error {
+	normalizeGroupWriteDefaults(groupIn)
 	builder := r.client.Group.UpdateOneID(groupIn.ID).
 		SetName(groupIn.Name).
 		SetDescription(groupIn.Description).
 		SetPlatform(groupIn.Platform).
 		SetRateMultiplier(groupIn.RateMultiplier).
+		SetNewUserRateEnabled(groupIn.NewUserRateEnabled).
+		SetNewUserRateMultiplier(groupIn.NewUserRateMultiplier).
+		SetNewUserRateWindowSeconds(groupIn.NewUserRateWindowSeconds).
+		SetNewUserRateQuotaUsd(groupIn.NewUserRateQuotaUSD).
 		SetIsExclusive(groupIn.IsExclusive).
 		SetStatus(groupIn.Status).
 		SetScope(service.NormalizeGroupScope(groupIn.Scope)).
@@ -150,6 +178,12 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		SetNillableImagePrice1k(groupIn.ImagePrice1K).
 		SetNillableImagePrice2k(groupIn.ImagePrice2K).
 		SetNillableImagePrice4k(groupIn.ImagePrice4K).
+		SetVideoRateIndependent(groupIn.VideoRateIndependent).
+		SetVideoRateMultiplier(groupIn.VideoRateMultiplier).
+		SetNillableVideoPrice480p(groupIn.VideoPrice480P).
+		SetNillableVideoPrice720p(groupIn.VideoPrice720P).
+		SetNillableVideoPrice1080p(groupIn.VideoPrice1080P).
+		SetNillableWebSearchPricePerCall(groupIn.WebSearchPricePerCall).
 		SetDefaultValidityDays(groupIn.DefaultValidityDays).
 		SetClaudeCodeOnly(groupIn.ClaudeCodeOnly).
 		SetModelRoutingEnabled(groupIn.ModelRoutingEnabled).
@@ -196,6 +230,26 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		builder = builder.SetImagePrice4k(*groupIn.ImagePrice4K)
 	} else {
 		builder = builder.ClearImagePrice4k()
+	}
+	if groupIn.VideoPrice480P != nil {
+		builder = builder.SetVideoPrice480p(*groupIn.VideoPrice480P)
+	} else {
+		builder = builder.ClearVideoPrice480p()
+	}
+	if groupIn.VideoPrice720P != nil {
+		builder = builder.SetVideoPrice720p(*groupIn.VideoPrice720P)
+	} else {
+		builder = builder.ClearVideoPrice720p()
+	}
+	if groupIn.VideoPrice1080P != nil {
+		builder = builder.SetVideoPrice1080p(*groupIn.VideoPrice1080P)
+	} else {
+		builder = builder.ClearVideoPrice1080p()
+	}
+	if groupIn.WebSearchPricePerCall != nil {
+		builder = builder.SetWebSearchPricePerCall(*groupIn.WebSearchPricePerCall)
+	} else {
+		builder = builder.ClearWebSearchPricePerCall()
 	}
 
 	// 处理 FallbackGroupID：nil 时清除，否则设置
@@ -436,7 +490,8 @@ func (r *groupRepository) ListActive(ctx context.Context) ([]service.Group, erro
 }
 
 func (r *groupRepository) ListActiveByPlatform(ctx context.Context, platform string) ([]service.Group, error) {
-	groups, err := r.client.Group.Query().
+	client := clientFromContext(ctx, r.client)
+	groups, err := client.Group.Query().
 		Where(group.StatusEQ(service.StatusActive), group.PlatformEQ(platform)).
 		Order(dbent.Asc(group.FieldSortOrder), dbent.Asc(group.FieldID)).
 		All(ctx)

@@ -120,7 +120,11 @@
         <InfoItem label="申请后余额" :value="'$' + detailTarget.balance_after.toFixed(2)" />
         <InfoItem label="申请时间" :value="formatDate(detailTarget.created_at)" />
         <InfoItem label="处理时间" :value="detailTarget.processed_at ? formatDate(detailTarget.processed_at) : '-'" />
-        <InfoItem class="sm:col-span-2" label="备注" :value="detailTarget.admin_note || detailTarget.user_cancel_reason || '-'" />
+        <InfoItem
+          class="sm:col-span-2"
+          :label="detailTarget.status === 'REJECTED' ? '驳回原因' : '备注'"
+          :value="detailTarget.admin_note || detailTarget.user_cancel_reason || '-'"
+        />
       </div>
     </BaseDialog>
 
@@ -129,10 +133,28 @@
         <p class="text-sm text-gray-600 dark:text-gray-300">
           {{ processAction === 'settle' ? '确认已向用户收款码完成打款。' : '拒绝后会自动退回本次扣除金额。' }}
         </p>
-        <textarea v-model="processNote" rows="3" class="input" placeholder="备注"></textarea>
+        <div>
+          <label class="input-label">
+            {{ processAction === 'reject' ? '驳回原因（用户可见）' : '结算备注（仅管理员可见）' }}
+          </label>
+          <textarea
+            v-model="processNote"
+            rows="3"
+            class="input mt-1.5"
+            :placeholder="processAction === 'reject' ? '请填写具体驳回原因' : '可选，仅管理员可见'"
+          ></textarea>
+          <p v-if="processAction === 'reject'" class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+            此原因会直接显示在用户的提现记录中。
+          </p>
+        </div>
         <div class="flex justify-end gap-2">
           <button class="btn btn-secondary" @click="processTarget = null">取消</button>
-          <button class="btn" :class="processAction === 'settle' ? 'btn-primary' : 'btn-danger'" :disabled="processing" @click="submitProcess">
+          <button
+            class="btn"
+            :class="processAction === 'settle' ? 'btn-primary' : 'btn-danger'"
+            :disabled="processing || (processAction === 'reject' && !processNote.trim())"
+            @click="submitProcess"
+          >
             {{ processing ? '处理中' : '确认' }}
           </button>
         </div>
@@ -289,6 +311,10 @@ function openProcess(row: WithdrawalRequest, action: 'settle' | 'reject') {
 
 async function submitProcess() {
   if (!processTarget.value) return
+  if (processAction.value === 'reject' && !processNote.value.trim()) {
+    appStore.showError('请填写驳回原因')
+    return
+  }
   processing.value = true
   try {
     if (processAction.value === 'settle') {

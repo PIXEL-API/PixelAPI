@@ -16334,6 +16334,13 @@ type GroupMutation struct {
 	description                             *string
 	rate_multiplier                         *float64
 	addrate_multiplier                      *float64
+	new_user_rate_enabled                   *bool
+	new_user_rate_multiplier                *float64
+	addnew_user_rate_multiplier             *float64
+	new_user_rate_window_seconds            *int
+	addnew_user_rate_window_seconds         *int
+	new_user_rate_quota_usd                 *float64
+	addnew_user_rate_quota_usd              *float64
 	is_exclusive                            *bool
 	status                                  *string
 	owner_user_id                           *int64
@@ -16360,6 +16367,17 @@ type GroupMutation struct {
 	addimage_price_2k                       *float64
 	image_price_4k                          *float64
 	addimage_price_4k                       *float64
+	video_rate_independent                  *bool
+	video_rate_multiplier                   *float64
+	addvideo_rate_multiplier                *float64
+	video_price_480p                        *float64
+	addvideo_price_480p                     *float64
+	video_price_720p                        *float64
+	addvideo_price_720p                     *float64
+	video_price_1080p                       *float64
+	addvideo_price_1080p                    *float64
+	web_search_price_per_call               *float64
+	addweb_search_price_per_call            *float64
 	claude_code_only                        *bool
 	fallback_group_id                       *int64
 	addfallback_group_id                    *int64
@@ -16764,6 +16782,210 @@ func (m *GroupMutation) AddedRateMultiplier() (r float64, exists bool) {
 func (m *GroupMutation) ResetRateMultiplier() {
 	m.rate_multiplier = nil
 	m.addrate_multiplier = nil
+}
+
+// SetNewUserRateEnabled sets the "new_user_rate_enabled" field.
+func (m *GroupMutation) SetNewUserRateEnabled(b bool) {
+	m.new_user_rate_enabled = &b
+}
+
+// NewUserRateEnabled returns the value of the "new_user_rate_enabled" field in the mutation.
+func (m *GroupMutation) NewUserRateEnabled() (r bool, exists bool) {
+	v := m.new_user_rate_enabled
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldNewUserRateEnabled returns the old "new_user_rate_enabled" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldNewUserRateEnabled(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldNewUserRateEnabled is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldNewUserRateEnabled requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldNewUserRateEnabled: %w", err)
+	}
+	return oldValue.NewUserRateEnabled, nil
+}
+
+// ResetNewUserRateEnabled resets all changes to the "new_user_rate_enabled" field.
+func (m *GroupMutation) ResetNewUserRateEnabled() {
+	m.new_user_rate_enabled = nil
+}
+
+// SetNewUserRateMultiplier sets the "new_user_rate_multiplier" field.
+func (m *GroupMutation) SetNewUserRateMultiplier(f float64) {
+	m.new_user_rate_multiplier = &f
+	m.addnew_user_rate_multiplier = nil
+}
+
+// NewUserRateMultiplier returns the value of the "new_user_rate_multiplier" field in the mutation.
+func (m *GroupMutation) NewUserRateMultiplier() (r float64, exists bool) {
+	v := m.new_user_rate_multiplier
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldNewUserRateMultiplier returns the old "new_user_rate_multiplier" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldNewUserRateMultiplier(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldNewUserRateMultiplier is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldNewUserRateMultiplier requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldNewUserRateMultiplier: %w", err)
+	}
+	return oldValue.NewUserRateMultiplier, nil
+}
+
+// AddNewUserRateMultiplier adds f to the "new_user_rate_multiplier" field.
+func (m *GroupMutation) AddNewUserRateMultiplier(f float64) {
+	if m.addnew_user_rate_multiplier != nil {
+		*m.addnew_user_rate_multiplier += f
+	} else {
+		m.addnew_user_rate_multiplier = &f
+	}
+}
+
+// AddedNewUserRateMultiplier returns the value that was added to the "new_user_rate_multiplier" field in this mutation.
+func (m *GroupMutation) AddedNewUserRateMultiplier() (r float64, exists bool) {
+	v := m.addnew_user_rate_multiplier
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetNewUserRateMultiplier resets all changes to the "new_user_rate_multiplier" field.
+func (m *GroupMutation) ResetNewUserRateMultiplier() {
+	m.new_user_rate_multiplier = nil
+	m.addnew_user_rate_multiplier = nil
+}
+
+// SetNewUserRateWindowSeconds sets the "new_user_rate_window_seconds" field.
+func (m *GroupMutation) SetNewUserRateWindowSeconds(i int) {
+	m.new_user_rate_window_seconds = &i
+	m.addnew_user_rate_window_seconds = nil
+}
+
+// NewUserRateWindowSeconds returns the value of the "new_user_rate_window_seconds" field in the mutation.
+func (m *GroupMutation) NewUserRateWindowSeconds() (r int, exists bool) {
+	v := m.new_user_rate_window_seconds
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldNewUserRateWindowSeconds returns the old "new_user_rate_window_seconds" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldNewUserRateWindowSeconds(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldNewUserRateWindowSeconds is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldNewUserRateWindowSeconds requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldNewUserRateWindowSeconds: %w", err)
+	}
+	return oldValue.NewUserRateWindowSeconds, nil
+}
+
+// AddNewUserRateWindowSeconds adds i to the "new_user_rate_window_seconds" field.
+func (m *GroupMutation) AddNewUserRateWindowSeconds(i int) {
+	if m.addnew_user_rate_window_seconds != nil {
+		*m.addnew_user_rate_window_seconds += i
+	} else {
+		m.addnew_user_rate_window_seconds = &i
+	}
+}
+
+// AddedNewUserRateWindowSeconds returns the value that was added to the "new_user_rate_window_seconds" field in this mutation.
+func (m *GroupMutation) AddedNewUserRateWindowSeconds() (r int, exists bool) {
+	v := m.addnew_user_rate_window_seconds
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetNewUserRateWindowSeconds resets all changes to the "new_user_rate_window_seconds" field.
+func (m *GroupMutation) ResetNewUserRateWindowSeconds() {
+	m.new_user_rate_window_seconds = nil
+	m.addnew_user_rate_window_seconds = nil
+}
+
+// SetNewUserRateQuotaUsd sets the "new_user_rate_quota_usd" field.
+func (m *GroupMutation) SetNewUserRateQuotaUsd(f float64) {
+	m.new_user_rate_quota_usd = &f
+	m.addnew_user_rate_quota_usd = nil
+}
+
+// NewUserRateQuotaUsd returns the value of the "new_user_rate_quota_usd" field in the mutation.
+func (m *GroupMutation) NewUserRateQuotaUsd() (r float64, exists bool) {
+	v := m.new_user_rate_quota_usd
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldNewUserRateQuotaUsd returns the old "new_user_rate_quota_usd" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldNewUserRateQuotaUsd(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldNewUserRateQuotaUsd is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldNewUserRateQuotaUsd requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldNewUserRateQuotaUsd: %w", err)
+	}
+	return oldValue.NewUserRateQuotaUsd, nil
+}
+
+// AddNewUserRateQuotaUsd adds f to the "new_user_rate_quota_usd" field.
+func (m *GroupMutation) AddNewUserRateQuotaUsd(f float64) {
+	if m.addnew_user_rate_quota_usd != nil {
+		*m.addnew_user_rate_quota_usd += f
+	} else {
+		m.addnew_user_rate_quota_usd = &f
+	}
+}
+
+// AddedNewUserRateQuotaUsd returns the value that was added to the "new_user_rate_quota_usd" field in this mutation.
+func (m *GroupMutation) AddedNewUserRateQuotaUsd() (r float64, exists bool) {
+	v := m.addnew_user_rate_quota_usd
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetNewUserRateQuotaUsd resets all changes to the "new_user_rate_quota_usd" field.
+func (m *GroupMutation) ResetNewUserRateQuotaUsd() {
+	m.new_user_rate_quota_usd = nil
+	m.addnew_user_rate_quota_usd = nil
 }
 
 // SetIsExclusive sets the "is_exclusive" field.
@@ -17654,6 +17876,378 @@ func (m *GroupMutation) ResetImagePrice4k() {
 	m.image_price_4k = nil
 	m.addimage_price_4k = nil
 	delete(m.clearedFields, group.FieldImagePrice4k)
+}
+
+// SetVideoRateIndependent sets the "video_rate_independent" field.
+func (m *GroupMutation) SetVideoRateIndependent(b bool) {
+	m.video_rate_independent = &b
+}
+
+// VideoRateIndependent returns the value of the "video_rate_independent" field in the mutation.
+func (m *GroupMutation) VideoRateIndependent() (r bool, exists bool) {
+	v := m.video_rate_independent
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldVideoRateIndependent returns the old "video_rate_independent" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldVideoRateIndependent(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldVideoRateIndependent is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldVideoRateIndependent requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldVideoRateIndependent: %w", err)
+	}
+	return oldValue.VideoRateIndependent, nil
+}
+
+// ResetVideoRateIndependent resets all changes to the "video_rate_independent" field.
+func (m *GroupMutation) ResetVideoRateIndependent() {
+	m.video_rate_independent = nil
+}
+
+// SetVideoRateMultiplier sets the "video_rate_multiplier" field.
+func (m *GroupMutation) SetVideoRateMultiplier(f float64) {
+	m.video_rate_multiplier = &f
+	m.addvideo_rate_multiplier = nil
+}
+
+// VideoRateMultiplier returns the value of the "video_rate_multiplier" field in the mutation.
+func (m *GroupMutation) VideoRateMultiplier() (r float64, exists bool) {
+	v := m.video_rate_multiplier
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldVideoRateMultiplier returns the old "video_rate_multiplier" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldVideoRateMultiplier(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldVideoRateMultiplier is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldVideoRateMultiplier requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldVideoRateMultiplier: %w", err)
+	}
+	return oldValue.VideoRateMultiplier, nil
+}
+
+// AddVideoRateMultiplier adds f to the "video_rate_multiplier" field.
+func (m *GroupMutation) AddVideoRateMultiplier(f float64) {
+	if m.addvideo_rate_multiplier != nil {
+		*m.addvideo_rate_multiplier += f
+	} else {
+		m.addvideo_rate_multiplier = &f
+	}
+}
+
+// AddedVideoRateMultiplier returns the value that was added to the "video_rate_multiplier" field in this mutation.
+func (m *GroupMutation) AddedVideoRateMultiplier() (r float64, exists bool) {
+	v := m.addvideo_rate_multiplier
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetVideoRateMultiplier resets all changes to the "video_rate_multiplier" field.
+func (m *GroupMutation) ResetVideoRateMultiplier() {
+	m.video_rate_multiplier = nil
+	m.addvideo_rate_multiplier = nil
+}
+
+// SetVideoPrice480p sets the "video_price_480p" field.
+func (m *GroupMutation) SetVideoPrice480p(f float64) {
+	m.video_price_480p = &f
+	m.addvideo_price_480p = nil
+}
+
+// VideoPrice480p returns the value of the "video_price_480p" field in the mutation.
+func (m *GroupMutation) VideoPrice480p() (r float64, exists bool) {
+	v := m.video_price_480p
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldVideoPrice480p returns the old "video_price_480p" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldVideoPrice480p(ctx context.Context) (v *float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldVideoPrice480p is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldVideoPrice480p requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldVideoPrice480p: %w", err)
+	}
+	return oldValue.VideoPrice480p, nil
+}
+
+// AddVideoPrice480p adds f to the "video_price_480p" field.
+func (m *GroupMutation) AddVideoPrice480p(f float64) {
+	if m.addvideo_price_480p != nil {
+		*m.addvideo_price_480p += f
+	} else {
+		m.addvideo_price_480p = &f
+	}
+}
+
+// AddedVideoPrice480p returns the value that was added to the "video_price_480p" field in this mutation.
+func (m *GroupMutation) AddedVideoPrice480p() (r float64, exists bool) {
+	v := m.addvideo_price_480p
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearVideoPrice480p clears the value of the "video_price_480p" field.
+func (m *GroupMutation) ClearVideoPrice480p() {
+	m.video_price_480p = nil
+	m.addvideo_price_480p = nil
+	m.clearedFields[group.FieldVideoPrice480p] = struct{}{}
+}
+
+// VideoPrice480pCleared returns if the "video_price_480p" field was cleared in this mutation.
+func (m *GroupMutation) VideoPrice480pCleared() bool {
+	_, ok := m.clearedFields[group.FieldVideoPrice480p]
+	return ok
+}
+
+// ResetVideoPrice480p resets all changes to the "video_price_480p" field.
+func (m *GroupMutation) ResetVideoPrice480p() {
+	m.video_price_480p = nil
+	m.addvideo_price_480p = nil
+	delete(m.clearedFields, group.FieldVideoPrice480p)
+}
+
+// SetVideoPrice720p sets the "video_price_720p" field.
+func (m *GroupMutation) SetVideoPrice720p(f float64) {
+	m.video_price_720p = &f
+	m.addvideo_price_720p = nil
+}
+
+// VideoPrice720p returns the value of the "video_price_720p" field in the mutation.
+func (m *GroupMutation) VideoPrice720p() (r float64, exists bool) {
+	v := m.video_price_720p
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldVideoPrice720p returns the old "video_price_720p" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldVideoPrice720p(ctx context.Context) (v *float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldVideoPrice720p is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldVideoPrice720p requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldVideoPrice720p: %w", err)
+	}
+	return oldValue.VideoPrice720p, nil
+}
+
+// AddVideoPrice720p adds f to the "video_price_720p" field.
+func (m *GroupMutation) AddVideoPrice720p(f float64) {
+	if m.addvideo_price_720p != nil {
+		*m.addvideo_price_720p += f
+	} else {
+		m.addvideo_price_720p = &f
+	}
+}
+
+// AddedVideoPrice720p returns the value that was added to the "video_price_720p" field in this mutation.
+func (m *GroupMutation) AddedVideoPrice720p() (r float64, exists bool) {
+	v := m.addvideo_price_720p
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearVideoPrice720p clears the value of the "video_price_720p" field.
+func (m *GroupMutation) ClearVideoPrice720p() {
+	m.video_price_720p = nil
+	m.addvideo_price_720p = nil
+	m.clearedFields[group.FieldVideoPrice720p] = struct{}{}
+}
+
+// VideoPrice720pCleared returns if the "video_price_720p" field was cleared in this mutation.
+func (m *GroupMutation) VideoPrice720pCleared() bool {
+	_, ok := m.clearedFields[group.FieldVideoPrice720p]
+	return ok
+}
+
+// ResetVideoPrice720p resets all changes to the "video_price_720p" field.
+func (m *GroupMutation) ResetVideoPrice720p() {
+	m.video_price_720p = nil
+	m.addvideo_price_720p = nil
+	delete(m.clearedFields, group.FieldVideoPrice720p)
+}
+
+// SetVideoPrice1080p sets the "video_price_1080p" field.
+func (m *GroupMutation) SetVideoPrice1080p(f float64) {
+	m.video_price_1080p = &f
+	m.addvideo_price_1080p = nil
+}
+
+// VideoPrice1080p returns the value of the "video_price_1080p" field in the mutation.
+func (m *GroupMutation) VideoPrice1080p() (r float64, exists bool) {
+	v := m.video_price_1080p
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldVideoPrice1080p returns the old "video_price_1080p" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldVideoPrice1080p(ctx context.Context) (v *float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldVideoPrice1080p is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldVideoPrice1080p requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldVideoPrice1080p: %w", err)
+	}
+	return oldValue.VideoPrice1080p, nil
+}
+
+// AddVideoPrice1080p adds f to the "video_price_1080p" field.
+func (m *GroupMutation) AddVideoPrice1080p(f float64) {
+	if m.addvideo_price_1080p != nil {
+		*m.addvideo_price_1080p += f
+	} else {
+		m.addvideo_price_1080p = &f
+	}
+}
+
+// AddedVideoPrice1080p returns the value that was added to the "video_price_1080p" field in this mutation.
+func (m *GroupMutation) AddedVideoPrice1080p() (r float64, exists bool) {
+	v := m.addvideo_price_1080p
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearVideoPrice1080p clears the value of the "video_price_1080p" field.
+func (m *GroupMutation) ClearVideoPrice1080p() {
+	m.video_price_1080p = nil
+	m.addvideo_price_1080p = nil
+	m.clearedFields[group.FieldVideoPrice1080p] = struct{}{}
+}
+
+// VideoPrice1080pCleared returns if the "video_price_1080p" field was cleared in this mutation.
+func (m *GroupMutation) VideoPrice1080pCleared() bool {
+	_, ok := m.clearedFields[group.FieldVideoPrice1080p]
+	return ok
+}
+
+// ResetVideoPrice1080p resets all changes to the "video_price_1080p" field.
+func (m *GroupMutation) ResetVideoPrice1080p() {
+	m.video_price_1080p = nil
+	m.addvideo_price_1080p = nil
+	delete(m.clearedFields, group.FieldVideoPrice1080p)
+}
+
+// SetWebSearchPricePerCall sets the "web_search_price_per_call" field.
+func (m *GroupMutation) SetWebSearchPricePerCall(f float64) {
+	m.web_search_price_per_call = &f
+	m.addweb_search_price_per_call = nil
+}
+
+// WebSearchPricePerCall returns the value of the "web_search_price_per_call" field in the mutation.
+func (m *GroupMutation) WebSearchPricePerCall() (r float64, exists bool) {
+	v := m.web_search_price_per_call
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldWebSearchPricePerCall returns the old "web_search_price_per_call" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldWebSearchPricePerCall(ctx context.Context) (v *float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldWebSearchPricePerCall is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldWebSearchPricePerCall requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldWebSearchPricePerCall: %w", err)
+	}
+	return oldValue.WebSearchPricePerCall, nil
+}
+
+// AddWebSearchPricePerCall adds f to the "web_search_price_per_call" field.
+func (m *GroupMutation) AddWebSearchPricePerCall(f float64) {
+	if m.addweb_search_price_per_call != nil {
+		*m.addweb_search_price_per_call += f
+	} else {
+		m.addweb_search_price_per_call = &f
+	}
+}
+
+// AddedWebSearchPricePerCall returns the value that was added to the "web_search_price_per_call" field in this mutation.
+func (m *GroupMutation) AddedWebSearchPricePerCall() (r float64, exists bool) {
+	v := m.addweb_search_price_per_call
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearWebSearchPricePerCall clears the value of the "web_search_price_per_call" field.
+func (m *GroupMutation) ClearWebSearchPricePerCall() {
+	m.web_search_price_per_call = nil
+	m.addweb_search_price_per_call = nil
+	m.clearedFields[group.FieldWebSearchPricePerCall] = struct{}{}
+}
+
+// WebSearchPricePerCallCleared returns if the "web_search_price_per_call" field was cleared in this mutation.
+func (m *GroupMutation) WebSearchPricePerCallCleared() bool {
+	_, ok := m.clearedFields[group.FieldWebSearchPricePerCall]
+	return ok
+}
+
+// ResetWebSearchPricePerCall resets all changes to the "web_search_price_per_call" field.
+func (m *GroupMutation) ResetWebSearchPricePerCall() {
+	m.web_search_price_per_call = nil
+	m.addweb_search_price_per_call = nil
+	delete(m.clearedFields, group.FieldWebSearchPricePerCall)
 }
 
 // SetClaudeCodeOnly sets the "claude_code_only" field.
@@ -18708,7 +19302,7 @@ func (m *GroupMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *GroupMutation) Fields() []string {
-	fields := make([]string, 0, 37)
+	fields := make([]string, 0, 47)
 	if m.created_at != nil {
 		fields = append(fields, group.FieldCreatedAt)
 	}
@@ -18726,6 +19320,18 @@ func (m *GroupMutation) Fields() []string {
 	}
 	if m.rate_multiplier != nil {
 		fields = append(fields, group.FieldRateMultiplier)
+	}
+	if m.new_user_rate_enabled != nil {
+		fields = append(fields, group.FieldNewUserRateEnabled)
+	}
+	if m.new_user_rate_multiplier != nil {
+		fields = append(fields, group.FieldNewUserRateMultiplier)
+	}
+	if m.new_user_rate_window_seconds != nil {
+		fields = append(fields, group.FieldNewUserRateWindowSeconds)
+	}
+	if m.new_user_rate_quota_usd != nil {
+		fields = append(fields, group.FieldNewUserRateQuotaUsd)
 	}
 	if m.is_exclusive != nil {
 		fields = append(fields, group.FieldIsExclusive)
@@ -18777,6 +19383,24 @@ func (m *GroupMutation) Fields() []string {
 	}
 	if m.image_price_4k != nil {
 		fields = append(fields, group.FieldImagePrice4k)
+	}
+	if m.video_rate_independent != nil {
+		fields = append(fields, group.FieldVideoRateIndependent)
+	}
+	if m.video_rate_multiplier != nil {
+		fields = append(fields, group.FieldVideoRateMultiplier)
+	}
+	if m.video_price_480p != nil {
+		fields = append(fields, group.FieldVideoPrice480p)
+	}
+	if m.video_price_720p != nil {
+		fields = append(fields, group.FieldVideoPrice720p)
+	}
+	if m.video_price_1080p != nil {
+		fields = append(fields, group.FieldVideoPrice1080p)
+	}
+	if m.web_search_price_per_call != nil {
+		fields = append(fields, group.FieldWebSearchPricePerCall)
 	}
 	if m.claude_code_only != nil {
 		fields = append(fields, group.FieldClaudeCodeOnly)
@@ -18840,6 +19464,14 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.Description()
 	case group.FieldRateMultiplier:
 		return m.RateMultiplier()
+	case group.FieldNewUserRateEnabled:
+		return m.NewUserRateEnabled()
+	case group.FieldNewUserRateMultiplier:
+		return m.NewUserRateMultiplier()
+	case group.FieldNewUserRateWindowSeconds:
+		return m.NewUserRateWindowSeconds()
+	case group.FieldNewUserRateQuotaUsd:
+		return m.NewUserRateQuotaUsd()
 	case group.FieldIsExclusive:
 		return m.IsExclusive()
 	case group.FieldStatus:
@@ -18874,6 +19506,18 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.ImagePrice2k()
 	case group.FieldImagePrice4k:
 		return m.ImagePrice4k()
+	case group.FieldVideoRateIndependent:
+		return m.VideoRateIndependent()
+	case group.FieldVideoRateMultiplier:
+		return m.VideoRateMultiplier()
+	case group.FieldVideoPrice480p:
+		return m.VideoPrice480p()
+	case group.FieldVideoPrice720p:
+		return m.VideoPrice720p()
+	case group.FieldVideoPrice1080p:
+		return m.VideoPrice1080p()
+	case group.FieldWebSearchPricePerCall:
+		return m.WebSearchPricePerCall()
 	case group.FieldClaudeCodeOnly:
 		return m.ClaudeCodeOnly()
 	case group.FieldFallbackGroupID:
@@ -18923,6 +19567,14 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldDescription(ctx)
 	case group.FieldRateMultiplier:
 		return m.OldRateMultiplier(ctx)
+	case group.FieldNewUserRateEnabled:
+		return m.OldNewUserRateEnabled(ctx)
+	case group.FieldNewUserRateMultiplier:
+		return m.OldNewUserRateMultiplier(ctx)
+	case group.FieldNewUserRateWindowSeconds:
+		return m.OldNewUserRateWindowSeconds(ctx)
+	case group.FieldNewUserRateQuotaUsd:
+		return m.OldNewUserRateQuotaUsd(ctx)
 	case group.FieldIsExclusive:
 		return m.OldIsExclusive(ctx)
 	case group.FieldStatus:
@@ -18957,6 +19609,18 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldImagePrice2k(ctx)
 	case group.FieldImagePrice4k:
 		return m.OldImagePrice4k(ctx)
+	case group.FieldVideoRateIndependent:
+		return m.OldVideoRateIndependent(ctx)
+	case group.FieldVideoRateMultiplier:
+		return m.OldVideoRateMultiplier(ctx)
+	case group.FieldVideoPrice480p:
+		return m.OldVideoPrice480p(ctx)
+	case group.FieldVideoPrice720p:
+		return m.OldVideoPrice720p(ctx)
+	case group.FieldVideoPrice1080p:
+		return m.OldVideoPrice1080p(ctx)
+	case group.FieldWebSearchPricePerCall:
+		return m.OldWebSearchPricePerCall(ctx)
 	case group.FieldClaudeCodeOnly:
 		return m.OldClaudeCodeOnly(ctx)
 	case group.FieldFallbackGroupID:
@@ -19035,6 +19699,34 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetRateMultiplier(v)
+		return nil
+	case group.FieldNewUserRateEnabled:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetNewUserRateEnabled(v)
+		return nil
+	case group.FieldNewUserRateMultiplier:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetNewUserRateMultiplier(v)
+		return nil
+	case group.FieldNewUserRateWindowSeconds:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetNewUserRateWindowSeconds(v)
+		return nil
+	case group.FieldNewUserRateQuotaUsd:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetNewUserRateQuotaUsd(v)
 		return nil
 	case group.FieldIsExclusive:
 		v, ok := value.(bool)
@@ -19155,6 +19847,48 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetImagePrice4k(v)
 		return nil
+	case group.FieldVideoRateIndependent:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetVideoRateIndependent(v)
+		return nil
+	case group.FieldVideoRateMultiplier:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetVideoRateMultiplier(v)
+		return nil
+	case group.FieldVideoPrice480p:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetVideoPrice480p(v)
+		return nil
+	case group.FieldVideoPrice720p:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetVideoPrice720p(v)
+		return nil
+	case group.FieldVideoPrice1080p:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetVideoPrice1080p(v)
+		return nil
+	case group.FieldWebSearchPricePerCall:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetWebSearchPricePerCall(v)
+		return nil
 	case group.FieldClaudeCodeOnly:
 		v, ok := value.(bool)
 		if !ok {
@@ -19264,6 +19998,15 @@ func (m *GroupMutation) AddedFields() []string {
 	if m.addrate_multiplier != nil {
 		fields = append(fields, group.FieldRateMultiplier)
 	}
+	if m.addnew_user_rate_multiplier != nil {
+		fields = append(fields, group.FieldNewUserRateMultiplier)
+	}
+	if m.addnew_user_rate_window_seconds != nil {
+		fields = append(fields, group.FieldNewUserRateWindowSeconds)
+	}
+	if m.addnew_user_rate_quota_usd != nil {
+		fields = append(fields, group.FieldNewUserRateQuotaUsd)
+	}
 	if m.addowner_user_id != nil {
 		fields = append(fields, group.FieldOwnerUserID)
 	}
@@ -19291,6 +20034,21 @@ func (m *GroupMutation) AddedFields() []string {
 	if m.addimage_price_4k != nil {
 		fields = append(fields, group.FieldImagePrice4k)
 	}
+	if m.addvideo_rate_multiplier != nil {
+		fields = append(fields, group.FieldVideoRateMultiplier)
+	}
+	if m.addvideo_price_480p != nil {
+		fields = append(fields, group.FieldVideoPrice480p)
+	}
+	if m.addvideo_price_720p != nil {
+		fields = append(fields, group.FieldVideoPrice720p)
+	}
+	if m.addvideo_price_1080p != nil {
+		fields = append(fields, group.FieldVideoPrice1080p)
+	}
+	if m.addweb_search_price_per_call != nil {
+		fields = append(fields, group.FieldWebSearchPricePerCall)
+	}
 	if m.addfallback_group_id != nil {
 		fields = append(fields, group.FieldFallbackGroupID)
 	}
@@ -19313,6 +20071,12 @@ func (m *GroupMutation) AddedField(name string) (ent.Value, bool) {
 	switch name {
 	case group.FieldRateMultiplier:
 		return m.AddedRateMultiplier()
+	case group.FieldNewUserRateMultiplier:
+		return m.AddedNewUserRateMultiplier()
+	case group.FieldNewUserRateWindowSeconds:
+		return m.AddedNewUserRateWindowSeconds()
+	case group.FieldNewUserRateQuotaUsd:
+		return m.AddedNewUserRateQuotaUsd()
 	case group.FieldOwnerUserID:
 		return m.AddedOwnerUserID()
 	case group.FieldDailyLimitUsd:
@@ -19331,6 +20095,16 @@ func (m *GroupMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedImagePrice2k()
 	case group.FieldImagePrice4k:
 		return m.AddedImagePrice4k()
+	case group.FieldVideoRateMultiplier:
+		return m.AddedVideoRateMultiplier()
+	case group.FieldVideoPrice480p:
+		return m.AddedVideoPrice480p()
+	case group.FieldVideoPrice720p:
+		return m.AddedVideoPrice720p()
+	case group.FieldVideoPrice1080p:
+		return m.AddedVideoPrice1080p()
+	case group.FieldWebSearchPricePerCall:
+		return m.AddedWebSearchPricePerCall()
 	case group.FieldFallbackGroupID:
 		return m.AddedFallbackGroupID()
 	case group.FieldFallbackGroupIDOnInvalidRequest:
@@ -19354,6 +20128,27 @@ func (m *GroupMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddRateMultiplier(v)
+		return nil
+	case group.FieldNewUserRateMultiplier:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddNewUserRateMultiplier(v)
+		return nil
+	case group.FieldNewUserRateWindowSeconds:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddNewUserRateWindowSeconds(v)
+		return nil
+	case group.FieldNewUserRateQuotaUsd:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddNewUserRateQuotaUsd(v)
 		return nil
 	case group.FieldOwnerUserID:
 		v, ok := value.(int64)
@@ -19418,6 +20213,41 @@ func (m *GroupMutation) AddField(name string, value ent.Value) error {
 		}
 		m.AddImagePrice4k(v)
 		return nil
+	case group.FieldVideoRateMultiplier:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddVideoRateMultiplier(v)
+		return nil
+	case group.FieldVideoPrice480p:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddVideoPrice480p(v)
+		return nil
+	case group.FieldVideoPrice720p:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddVideoPrice720p(v)
+		return nil
+	case group.FieldVideoPrice1080p:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddVideoPrice1080p(v)
+		return nil
+	case group.FieldWebSearchPricePerCall:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddWebSearchPricePerCall(v)
+		return nil
 	case group.FieldFallbackGroupID:
 		v, ok := value.(int64)
 		if !ok {
@@ -19481,6 +20311,18 @@ func (m *GroupMutation) ClearedFields() []string {
 	if m.FieldCleared(group.FieldImagePrice4k) {
 		fields = append(fields, group.FieldImagePrice4k)
 	}
+	if m.FieldCleared(group.FieldVideoPrice480p) {
+		fields = append(fields, group.FieldVideoPrice480p)
+	}
+	if m.FieldCleared(group.FieldVideoPrice720p) {
+		fields = append(fields, group.FieldVideoPrice720p)
+	}
+	if m.FieldCleared(group.FieldVideoPrice1080p) {
+		fields = append(fields, group.FieldVideoPrice1080p)
+	}
+	if m.FieldCleared(group.FieldWebSearchPricePerCall) {
+		fields = append(fields, group.FieldWebSearchPricePerCall)
+	}
 	if m.FieldCleared(group.FieldFallbackGroupID) {
 		fields = append(fields, group.FieldFallbackGroupID)
 	}
@@ -19531,6 +20373,18 @@ func (m *GroupMutation) ClearField(name string) error {
 	case group.FieldImagePrice4k:
 		m.ClearImagePrice4k()
 		return nil
+	case group.FieldVideoPrice480p:
+		m.ClearVideoPrice480p()
+		return nil
+	case group.FieldVideoPrice720p:
+		m.ClearVideoPrice720p()
+		return nil
+	case group.FieldVideoPrice1080p:
+		m.ClearVideoPrice1080p()
+		return nil
+	case group.FieldWebSearchPricePerCall:
+		m.ClearWebSearchPricePerCall()
+		return nil
 	case group.FieldFallbackGroupID:
 		m.ClearFallbackGroupID()
 		return nil
@@ -19565,6 +20419,18 @@ func (m *GroupMutation) ResetField(name string) error {
 		return nil
 	case group.FieldRateMultiplier:
 		m.ResetRateMultiplier()
+		return nil
+	case group.FieldNewUserRateEnabled:
+		m.ResetNewUserRateEnabled()
+		return nil
+	case group.FieldNewUserRateMultiplier:
+		m.ResetNewUserRateMultiplier()
+		return nil
+	case group.FieldNewUserRateWindowSeconds:
+		m.ResetNewUserRateWindowSeconds()
+		return nil
+	case group.FieldNewUserRateQuotaUsd:
+		m.ResetNewUserRateQuotaUsd()
 		return nil
 	case group.FieldIsExclusive:
 		m.ResetIsExclusive()
@@ -19616,6 +20482,24 @@ func (m *GroupMutation) ResetField(name string) error {
 		return nil
 	case group.FieldImagePrice4k:
 		m.ResetImagePrice4k()
+		return nil
+	case group.FieldVideoRateIndependent:
+		m.ResetVideoRateIndependent()
+		return nil
+	case group.FieldVideoRateMultiplier:
+		m.ResetVideoRateMultiplier()
+		return nil
+	case group.FieldVideoPrice480p:
+		m.ResetVideoPrice480p()
+		return nil
+	case group.FieldVideoPrice720p:
+		m.ResetVideoPrice720p()
+		return nil
+	case group.FieldVideoPrice1080p:
+		m.ResetVideoPrice1080p()
+		return nil
+	case group.FieldWebSearchPricePerCall:
+		m.ResetWebSearchPricePerCall()
 		return nil
 	case group.FieldClaudeCodeOnly:
 		m.ResetClaudeCodeOnly()
@@ -48123,6 +49007,7 @@ type UsageLogMutation struct {
 	addactual_cost              *float64
 	rate_multiplier             *float64
 	addrate_multiplier          *float64
+	rate_multiplier_source      *string
 	account_rate_multiplier     *float64
 	addaccount_rate_multiplier  *float64
 	billing_type                *int8
@@ -48137,6 +49022,11 @@ type UsageLogMutation struct {
 	image_count                 *int
 	addimage_count              *int
 	image_size                  *string
+	video_count                 *int
+	addvideo_count              *int
+	video_resolution            *string
+	video_duration_seconds      *int
+	addvideo_duration_seconds   *int
 	cache_ttl_overridden        *bool
 	created_at                  *time.Time
 	clearedFields               map[string]struct{}
@@ -49574,6 +50464,42 @@ func (m *UsageLogMutation) ResetRateMultiplier() {
 	m.addrate_multiplier = nil
 }
 
+// SetRateMultiplierSource sets the "rate_multiplier_source" field.
+func (m *UsageLogMutation) SetRateMultiplierSource(s string) {
+	m.rate_multiplier_source = &s
+}
+
+// RateMultiplierSource returns the value of the "rate_multiplier_source" field in the mutation.
+func (m *UsageLogMutation) RateMultiplierSource() (r string, exists bool) {
+	v := m.rate_multiplier_source
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRateMultiplierSource returns the old "rate_multiplier_source" field's value of the UsageLog entity.
+// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageLogMutation) OldRateMultiplierSource(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRateMultiplierSource is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRateMultiplierSource requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRateMultiplierSource: %w", err)
+	}
+	return oldValue.RateMultiplierSource, nil
+}
+
+// ResetRateMultiplierSource resets all changes to the "rate_multiplier_source" field.
+func (m *UsageLogMutation) ResetRateMultiplierSource() {
+	m.rate_multiplier_source = nil
+}
+
 // SetAccountRateMultiplier sets the "account_rate_multiplier" field.
 func (m *UsageLogMutation) SetAccountRateMultiplier(f float64) {
 	m.account_rate_multiplier = &f
@@ -50079,6 +51005,181 @@ func (m *UsageLogMutation) ResetImageSize() {
 	delete(m.clearedFields, usagelog.FieldImageSize)
 }
 
+// SetVideoCount sets the "video_count" field.
+func (m *UsageLogMutation) SetVideoCount(i int) {
+	m.video_count = &i
+	m.addvideo_count = nil
+}
+
+// VideoCount returns the value of the "video_count" field in the mutation.
+func (m *UsageLogMutation) VideoCount() (r int, exists bool) {
+	v := m.video_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldVideoCount returns the old "video_count" field's value of the UsageLog entity.
+// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageLogMutation) OldVideoCount(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldVideoCount is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldVideoCount requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldVideoCount: %w", err)
+	}
+	return oldValue.VideoCount, nil
+}
+
+// AddVideoCount adds i to the "video_count" field.
+func (m *UsageLogMutation) AddVideoCount(i int) {
+	if m.addvideo_count != nil {
+		*m.addvideo_count += i
+	} else {
+		m.addvideo_count = &i
+	}
+}
+
+// AddedVideoCount returns the value that was added to the "video_count" field in this mutation.
+func (m *UsageLogMutation) AddedVideoCount() (r int, exists bool) {
+	v := m.addvideo_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetVideoCount resets all changes to the "video_count" field.
+func (m *UsageLogMutation) ResetVideoCount() {
+	m.video_count = nil
+	m.addvideo_count = nil
+}
+
+// SetVideoResolution sets the "video_resolution" field.
+func (m *UsageLogMutation) SetVideoResolution(s string) {
+	m.video_resolution = &s
+}
+
+// VideoResolution returns the value of the "video_resolution" field in the mutation.
+func (m *UsageLogMutation) VideoResolution() (r string, exists bool) {
+	v := m.video_resolution
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldVideoResolution returns the old "video_resolution" field's value of the UsageLog entity.
+// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageLogMutation) OldVideoResolution(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldVideoResolution is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldVideoResolution requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldVideoResolution: %w", err)
+	}
+	return oldValue.VideoResolution, nil
+}
+
+// ClearVideoResolution clears the value of the "video_resolution" field.
+func (m *UsageLogMutation) ClearVideoResolution() {
+	m.video_resolution = nil
+	m.clearedFields[usagelog.FieldVideoResolution] = struct{}{}
+}
+
+// VideoResolutionCleared returns if the "video_resolution" field was cleared in this mutation.
+func (m *UsageLogMutation) VideoResolutionCleared() bool {
+	_, ok := m.clearedFields[usagelog.FieldVideoResolution]
+	return ok
+}
+
+// ResetVideoResolution resets all changes to the "video_resolution" field.
+func (m *UsageLogMutation) ResetVideoResolution() {
+	m.video_resolution = nil
+	delete(m.clearedFields, usagelog.FieldVideoResolution)
+}
+
+// SetVideoDurationSeconds sets the "video_duration_seconds" field.
+func (m *UsageLogMutation) SetVideoDurationSeconds(i int) {
+	m.video_duration_seconds = &i
+	m.addvideo_duration_seconds = nil
+}
+
+// VideoDurationSeconds returns the value of the "video_duration_seconds" field in the mutation.
+func (m *UsageLogMutation) VideoDurationSeconds() (r int, exists bool) {
+	v := m.video_duration_seconds
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldVideoDurationSeconds returns the old "video_duration_seconds" field's value of the UsageLog entity.
+// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageLogMutation) OldVideoDurationSeconds(ctx context.Context) (v *int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldVideoDurationSeconds is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldVideoDurationSeconds requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldVideoDurationSeconds: %w", err)
+	}
+	return oldValue.VideoDurationSeconds, nil
+}
+
+// AddVideoDurationSeconds adds i to the "video_duration_seconds" field.
+func (m *UsageLogMutation) AddVideoDurationSeconds(i int) {
+	if m.addvideo_duration_seconds != nil {
+		*m.addvideo_duration_seconds += i
+	} else {
+		m.addvideo_duration_seconds = &i
+	}
+}
+
+// AddedVideoDurationSeconds returns the value that was added to the "video_duration_seconds" field in this mutation.
+func (m *UsageLogMutation) AddedVideoDurationSeconds() (r int, exists bool) {
+	v := m.addvideo_duration_seconds
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearVideoDurationSeconds clears the value of the "video_duration_seconds" field.
+func (m *UsageLogMutation) ClearVideoDurationSeconds() {
+	m.video_duration_seconds = nil
+	m.addvideo_duration_seconds = nil
+	m.clearedFields[usagelog.FieldVideoDurationSeconds] = struct{}{}
+}
+
+// VideoDurationSecondsCleared returns if the "video_duration_seconds" field was cleared in this mutation.
+func (m *UsageLogMutation) VideoDurationSecondsCleared() bool {
+	_, ok := m.clearedFields[usagelog.FieldVideoDurationSeconds]
+	return ok
+}
+
+// ResetVideoDurationSeconds resets all changes to the "video_duration_seconds" field.
+func (m *UsageLogMutation) ResetVideoDurationSeconds() {
+	m.video_duration_seconds = nil
+	m.addvideo_duration_seconds = nil
+	delete(m.clearedFields, usagelog.FieldVideoDurationSeconds)
+}
+
 // SetCacheTTLOverridden sets the "cache_ttl_overridden" field.
 func (m *UsageLogMutation) SetCacheTTLOverridden(b bool) {
 	m.cache_ttl_overridden = &b
@@ -50320,7 +51421,7 @@ func (m *UsageLogMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UsageLogMutation) Fields() []string {
-	fields := make([]string, 0, 37)
+	fields := make([]string, 0, 41)
 	if m.user != nil {
 		fields = append(fields, usagelog.FieldUserID)
 	}
@@ -50399,6 +51500,9 @@ func (m *UsageLogMutation) Fields() []string {
 	if m.rate_multiplier != nil {
 		fields = append(fields, usagelog.FieldRateMultiplier)
 	}
+	if m.rate_multiplier_source != nil {
+		fields = append(fields, usagelog.FieldRateMultiplierSource)
+	}
 	if m.account_rate_multiplier != nil {
 		fields = append(fields, usagelog.FieldAccountRateMultiplier)
 	}
@@ -50425,6 +51529,15 @@ func (m *UsageLogMutation) Fields() []string {
 	}
 	if m.image_size != nil {
 		fields = append(fields, usagelog.FieldImageSize)
+	}
+	if m.video_count != nil {
+		fields = append(fields, usagelog.FieldVideoCount)
+	}
+	if m.video_resolution != nil {
+		fields = append(fields, usagelog.FieldVideoResolution)
+	}
+	if m.video_duration_seconds != nil {
+		fields = append(fields, usagelog.FieldVideoDurationSeconds)
 	}
 	if m.cache_ttl_overridden != nil {
 		fields = append(fields, usagelog.FieldCacheTTLOverridden)
@@ -50492,6 +51605,8 @@ func (m *UsageLogMutation) Field(name string) (ent.Value, bool) {
 		return m.ActualCost()
 	case usagelog.FieldRateMultiplier:
 		return m.RateMultiplier()
+	case usagelog.FieldRateMultiplierSource:
+		return m.RateMultiplierSource()
 	case usagelog.FieldAccountRateMultiplier:
 		return m.AccountRateMultiplier()
 	case usagelog.FieldBillingType:
@@ -50510,6 +51625,12 @@ func (m *UsageLogMutation) Field(name string) (ent.Value, bool) {
 		return m.ImageCount()
 	case usagelog.FieldImageSize:
 		return m.ImageSize()
+	case usagelog.FieldVideoCount:
+		return m.VideoCount()
+	case usagelog.FieldVideoResolution:
+		return m.VideoResolution()
+	case usagelog.FieldVideoDurationSeconds:
+		return m.VideoDurationSeconds()
 	case usagelog.FieldCacheTTLOverridden:
 		return m.CacheTTLOverridden()
 	case usagelog.FieldCreatedAt:
@@ -50575,6 +51696,8 @@ func (m *UsageLogMutation) OldField(ctx context.Context, name string) (ent.Value
 		return m.OldActualCost(ctx)
 	case usagelog.FieldRateMultiplier:
 		return m.OldRateMultiplier(ctx)
+	case usagelog.FieldRateMultiplierSource:
+		return m.OldRateMultiplierSource(ctx)
 	case usagelog.FieldAccountRateMultiplier:
 		return m.OldAccountRateMultiplier(ctx)
 	case usagelog.FieldBillingType:
@@ -50593,6 +51716,12 @@ func (m *UsageLogMutation) OldField(ctx context.Context, name string) (ent.Value
 		return m.OldImageCount(ctx)
 	case usagelog.FieldImageSize:
 		return m.OldImageSize(ctx)
+	case usagelog.FieldVideoCount:
+		return m.OldVideoCount(ctx)
+	case usagelog.FieldVideoResolution:
+		return m.OldVideoResolution(ctx)
+	case usagelog.FieldVideoDurationSeconds:
+		return m.OldVideoDurationSeconds(ctx)
 	case usagelog.FieldCacheTTLOverridden:
 		return m.OldCacheTTLOverridden(ctx)
 	case usagelog.FieldCreatedAt:
@@ -50788,6 +51917,13 @@ func (m *UsageLogMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetRateMultiplier(v)
 		return nil
+	case usagelog.FieldRateMultiplierSource:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRateMultiplierSource(v)
+		return nil
 	case usagelog.FieldAccountRateMultiplier:
 		v, ok := value.(float64)
 		if !ok {
@@ -50850,6 +51986,27 @@ func (m *UsageLogMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetImageSize(v)
+		return nil
+	case usagelog.FieldVideoCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetVideoCount(v)
+		return nil
+	case usagelog.FieldVideoResolution:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetVideoResolution(v)
+		return nil
+	case usagelog.FieldVideoDurationSeconds:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetVideoDurationSeconds(v)
 		return nil
 	case usagelog.FieldCacheTTLOverridden:
 		v, ok := value.(bool)
@@ -50930,6 +52087,12 @@ func (m *UsageLogMutation) AddedFields() []string {
 	if m.addimage_count != nil {
 		fields = append(fields, usagelog.FieldImageCount)
 	}
+	if m.addvideo_count != nil {
+		fields = append(fields, usagelog.FieldVideoCount)
+	}
+	if m.addvideo_duration_seconds != nil {
+		fields = append(fields, usagelog.FieldVideoDurationSeconds)
+	}
 	return fields
 }
 
@@ -50976,6 +52139,10 @@ func (m *UsageLogMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedFirstTokenMs()
 	case usagelog.FieldImageCount:
 		return m.AddedImageCount()
+	case usagelog.FieldVideoCount:
+		return m.AddedVideoCount()
+	case usagelog.FieldVideoDurationSeconds:
+		return m.AddedVideoDurationSeconds()
 	}
 	return nil, false
 }
@@ -51118,6 +52285,20 @@ func (m *UsageLogMutation) AddField(name string, value ent.Value) error {
 		}
 		m.AddImageCount(v)
 		return nil
+	case usagelog.FieldVideoCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddVideoCount(v)
+		return nil
+	case usagelog.FieldVideoDurationSeconds:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddVideoDurationSeconds(v)
+		return nil
 	}
 	return fmt.Errorf("unknown UsageLog numeric field %s", name)
 }
@@ -51167,6 +52348,12 @@ func (m *UsageLogMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(usagelog.FieldImageSize) {
 		fields = append(fields, usagelog.FieldImageSize)
+	}
+	if m.FieldCleared(usagelog.FieldVideoResolution) {
+		fields = append(fields, usagelog.FieldVideoResolution)
+	}
+	if m.FieldCleared(usagelog.FieldVideoDurationSeconds) {
+		fields = append(fields, usagelog.FieldVideoDurationSeconds)
 	}
 	return fields
 }
@@ -51223,6 +52410,12 @@ func (m *UsageLogMutation) ClearField(name string) error {
 		return nil
 	case usagelog.FieldImageSize:
 		m.ClearImageSize()
+		return nil
+	case usagelog.FieldVideoResolution:
+		m.ClearVideoResolution()
+		return nil
+	case usagelog.FieldVideoDurationSeconds:
+		m.ClearVideoDurationSeconds()
 		return nil
 	}
 	return fmt.Errorf("unknown UsageLog nullable field %s", name)
@@ -51310,6 +52503,9 @@ func (m *UsageLogMutation) ResetField(name string) error {
 	case usagelog.FieldRateMultiplier:
 		m.ResetRateMultiplier()
 		return nil
+	case usagelog.FieldRateMultiplierSource:
+		m.ResetRateMultiplierSource()
+		return nil
 	case usagelog.FieldAccountRateMultiplier:
 		m.ResetAccountRateMultiplier()
 		return nil
@@ -51336,6 +52532,15 @@ func (m *UsageLogMutation) ResetField(name string) error {
 		return nil
 	case usagelog.FieldImageSize:
 		m.ResetImageSize()
+		return nil
+	case usagelog.FieldVideoCount:
+		m.ResetVideoCount()
+		return nil
+	case usagelog.FieldVideoResolution:
+		m.ResetVideoResolution()
+		return nil
+	case usagelog.FieldVideoDurationSeconds:
+		m.ResetVideoDurationSeconds()
 		return nil
 	case usagelog.FieldCacheTTLOverridden:
 		m.ResetCacheTTLOverridden()

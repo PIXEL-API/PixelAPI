@@ -37,6 +37,7 @@
           :payment-type="paymentState.paymentType"
           :pay-url="paymentState.payUrl"
           :order-type="paymentState.orderType"
+          :payment-mode="paymentState.paymentMode"
           @done="resetPayment"
           @success="handlePaymentSuccess"
           @settled="handlePaymentSettled"
@@ -689,6 +690,7 @@ function launchPayment(storeOrder: StoreOrder) {
     orderType: 'shop',
     isMobile: isMobileDevice(),
     isWechatBrowser: /MicroMessenger/i.test(window.navigator.userAgent),
+    currentOrigin: window.location.origin,
     stripePopupUrl: stripeRouteUrl,
     stripeRouteUrl,
   })
@@ -703,6 +705,10 @@ function launchPayment(storeOrder: StoreOrder) {
   paymentPhase.value = 'paying'
   checkoutProduct.value = null
   checkoutIdempotencyKey.value = ''
+  if (decision.kind === 'alipay_app_redirect' && decision.paymentState.payUrl) {
+    window.location.href = decision.paymentState.payUrl
+    return
+  }
   if (decision.kind === 'stripe_popup' || decision.kind === 'redirect_waiting') {
     const url = decision.paymentState.payUrl
     if (url) {

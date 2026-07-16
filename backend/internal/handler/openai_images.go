@@ -84,7 +84,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 	if parsed.Multipart {
 		setOpsRequestContext(c, parsed.Model, parsed.Stream, nil)
 	} else {
-		setOpsRequestContext(c, parsed.Model, parsed.Stream, body)
+		setOpsRequestContext(c, parsed.Model, parsed.Stream, nil)
 	}
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(parsed.Stream, false)))
 
@@ -109,6 +109,9 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 
 	maxAccountSwitches := h.maxAccountSwitches
 	routeCursor := newAPIKeyGroupRouteCursor(apiKey)
+	stopJSONKeepalive := func() {}
+	jsonKeepaliveStarted := false
+	defer func() { stopJSONKeepalive() }()
 	if _, ok := routeCursor.current(); !ok {
 		h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available API key group routes", streamStarted)
 		return
@@ -116,6 +119,9 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 
 routeLoop:
 	for {
+		if failoverClientGone(c) {
+			return
+		}
 		routeCandidate, ok := routeCursor.current()
 		if !ok {
 			h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available API key group routes", streamStarted)
@@ -150,6 +156,9 @@ routeLoop:
 		var lastFailoverErr *service.UpstreamFailoverError
 
 		for {
+			if failoverClientGone(c) {
+				return
+			}
 			reqLog.Debug("openai.images.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
 			selectionCtx := openAIAccountShareModeRequestContext(c, currentAPIKey)
 			if decision := h.checkCyberPreflightWithContext(selectionCtx, c, reqLog, currentAPIKey, subject, service.ContentModerationProtocolOpenAIImages, parsed.Model, body); decision != nil && decision.Blocked {
@@ -169,6 +178,9 @@ routeLoop:
 				parsed.RequiredCapability,
 			)
 			if err != nil {
+				if failoverClientGone(c) {
+					return
+				}
 				reqLog.Warn("openai.images.account_select_failed",
 					zap.Error(err),
 					zap.Int("excluded_account_count", len(failedAccountIDs)),
@@ -180,7 +192,8 @@ routeLoop:
 					if routeCursor.switchToNext(apiKey.ID, "account_select_failed", reqLog, zap.Error(err)) {
 						continue routeLoop
 					}
-					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available compatible accounts", streamStarted)
+					cls := classifyNoAccountErrorFromGin(c, h.gatewayService, currentAPIKey, parsed.Model, parsed.Model, service.PlatformOpenAI)
+					h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
 					return
 				}
 				if lastFailoverErr != nil {
@@ -195,7 +208,8 @@ routeLoop:
 				return
 			}
 			if selection == nil || selection.Account == nil {
-				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available compatible accounts", streamStarted)
+				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, currentAPIKey, parsed.Model, parsed.Model, service.PlatformOpenAI)
+				h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
 				return
 			}
 
@@ -212,6 +226,13 @@ routeLoop:
 			sessionHash = ensureOpenAIPoolModeSessionHash(sessionHash, account)
 			reqLog.Debug("openai.images.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
 			setOpsSelectedAccount(c, account.ID, account.Platform)
+			if decision := h.checkUserContentModerationWithContent(selectionCtx, c, reqLog, currentAPIKey, subject, account, service.ContentModerationProtocolOpenAIImages, parsed.Model, body, nil); decision != nil && decision.Blocked {
+				if selection.Acquired && selection.ReleaseFunc != nil {
+					selection.ReleaseFunc()
+				}
+				h.handleStreamingAwareError(c, contentModerationStatus(decision), contentModerationErrorCode(decision), decision.Message, streamStarted)
+				return
+			}
 
 			accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, currentAPIKey.GroupID, sessionHash, selection, parsed.Stream, &streamStarted, reqLog)
 			if !acquired {
@@ -219,8 +240,12 @@ routeLoop:
 			}
 
 			service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
+			if !parsed.Stream && !jsonKeepaliveStarted {
+				stopJSONKeepalive = service.StartOpenAIImagesJSONKeepalive(c, h.openAIImagesJSONKeepaliveInterval())
+				jsonKeepaliveStarted = true
+			}
 			forwardStart := time.Now()
-			writerSizeBeforeForward := c.Writer.Size()
+			writerSizeBeforeForward := service.OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c)
 			result, err := h.gatewayService.ForwardImages(c.Request.Context(), c, account, body, parsed, channelMapping.MappedModel)
 			forwardDurationMs := time.Since(forwardStart).Milliseconds()
 			if accountReleaseFunc != nil {
@@ -236,15 +261,25 @@ routeLoop:
 				service.SetOpsLatencyMs(c, service.OpsTimeToFirstTokenMsKey, int64(*result.FirstTokenMs))
 			}
 			if err != nil {
+				err = h.gatewayService.NormalizeGrokCredentialFailure(c.Request.Context(), c, account, err)
 				var failoverErr *service.UpstreamFailoverError
 				if errors.As(err, &failoverErr) {
-					h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, false, nil)
-					if c.Writer.Size() != writerSizeBeforeForward {
+					if failoverClientGone(c) {
+						return
+					}
+					if failoverErr.ShouldReportAccountScheduleFailure() {
+						h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, false, nil)
+					}
+					if service.OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c) != writerSizeBeforeForward {
 						reqLog.Warn("openai.images.upstream_failover_skipped_after_flush",
 							zap.Int64("account_id", account.ID),
 							zap.Int("upstream_status", failoverErr.StatusCode),
 						)
 						h.handleFailoverExhausted(c, failoverErr, true)
+						return
+					}
+					if !failoverErr.ShouldRetryNextAccount() {
+						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
 					if failoverErr.RetryableOnSameAccount {
@@ -351,6 +386,13 @@ routeLoop:
 			return
 		}
 	}
+}
+
+func (h *OpenAIGatewayHandler) openAIImagesJSONKeepaliveInterval() time.Duration {
+	if h == nil || h.cfg == nil || h.cfg.Gateway.ImageNonstreamKeepaliveInterval <= 0 {
+		return 0
+	}
+	return time.Duration(h.cfg.Gateway.ImageNonstreamKeepaliveInterval) * time.Second
 }
 
 func isMultipartImagesContentType(contentType string) bool {

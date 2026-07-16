@@ -1,0 +1,9 @@
+{
+  "title": "聊天（Chat）",
+  "pages": [
+    "chat-completions",
+    "responses",
+    "claude-messages",
+    "gemini-generate-content"
+  ]
+}

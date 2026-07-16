@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/paymentproviderinstance"
@@ -32,6 +33,7 @@ func (s *PaymentConfigService) GetAvailableMethodLimits(ctx context.Context) (*M
 		}
 		ml := pcAggregateMethodLimits(pt, insts)
 		ml.Currency = currency
+		ml.PaymentMode = pcAggregateMethodPaymentMode(insts)
 		resp.Methods[ml.PaymentType] = ml
 	}
 	resp.GlobalMin, resp.GlobalMax = pcComputeGlobalRange(resp.Methods)
@@ -94,6 +96,7 @@ func (s *PaymentConfigService) GetMethodLimits(ctx context.Context, types []stri
 		}
 		ml := pcAggregateMethodLimits(pt, matching)
 		ml.Currency = currency
+		ml.PaymentMode = pcAggregateMethodPaymentMode(matching)
 		result = append(result, ml)
 	}
 	return result, nil
@@ -264,6 +267,27 @@ func pcAggregateMethodLimits(pt string, instances []*dbent.PaymentProviderInstan
 		ml.DailyLimit = 0
 	}
 	return ml
+}
+
+func pcAggregateMethodPaymentMode(instances []*dbent.PaymentProviderInstance) string {
+	mode := ""
+	for _, inst := range instances {
+		if inst == nil {
+			continue
+		}
+		next := strings.TrimSpace(inst.PaymentMode)
+		if next == "" {
+			continue
+		}
+		if mode == "" {
+			mode = next
+			continue
+		}
+		if !strings.EqualFold(mode, next) {
+			return ""
+		}
+	}
+	return mode
 }
 
 // pcComputeGlobalRange computes the widest [min, max] across all methods.

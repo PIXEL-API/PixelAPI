@@ -15,7 +15,7 @@ import (
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
-	_ "github.com/lib/pq" // PostgreSQL 驱动，通过副作用导入注册驱动
+	"github.com/lib/pq"
 )
 
 // InitEnt 初始化 Ent ORM 客户端并返回客户端实例和底层的 *sql.DB。
@@ -46,11 +46,20 @@ func InitEnt(cfg *config.Config) (*ent.Client, *sql.DB, error) {
 	// 时区信息会传递给 PostgreSQL，确保数据库层面的时间处理正确。
 	dsn := cfg.Database.DSNWithTimezone(cfg.Timezone)
 
-	// 使用 Ent 的 SQL 驱动打开 PostgreSQL 连接。
-	// dialect.Postgres 指定使用 PostgreSQL 方言进行 SQL 生成。
-	drv, err := entsql.Open(dialect.Postgres, dsn)
-	if err != nil {
-		return nil, nil, err
+	// 仅在显式开启 Server-Timing 时包装 driver，默认路径保持零额外驱动开销。
+	var drv *entsql.Driver
+	if cfg.Server.EnableServerTiming {
+		connector, err := pq.NewConnector(dsn)
+		if err != nil {
+			return nil, nil, fmt.Errorf("create PostgreSQL connector: %w", err)
+		}
+		drv = entsql.OpenDB(dialect.Postgres, sql.OpenDB(newServerTimingConnector(connector)))
+	} else {
+		var err error
+		drv, err = entsql.Open(dialect.Postgres, dsn)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	applyDBPoolSettings(drv.DB(), cfg)
 

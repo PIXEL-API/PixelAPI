@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -202,13 +203,16 @@ func (s *apiKeyAvailableGroupsSubRepoStub) UpdateNotes(context.Context, int64, s
 func (s *apiKeyAvailableGroupsSubRepoStub) ActivateWindows(context.Context, int64, time.Time) error {
 	panic("unexpected ActivateWindows call")
 }
-func (s *apiKeyAvailableGroupsSubRepoStub) ResetDailyUsage(context.Context, int64, time.Time) error {
+func (s *apiKeyAvailableGroupsSubRepoStub) ResetUsageWindows(context.Context, int64, bool, bool, bool, time.Time) error {
+	panic("unexpected ResetUsageWindows call")
+}
+func (s *apiKeyAvailableGroupsSubRepoStub) ResetDailyUsage(context.Context, int64, *time.Time, time.Time) error {
 	panic("unexpected ResetDailyUsage call")
 }
-func (s *apiKeyAvailableGroupsSubRepoStub) ResetWeeklyUsage(context.Context, int64, time.Time) error {
+func (s *apiKeyAvailableGroupsSubRepoStub) ResetWeeklyUsage(context.Context, int64, *time.Time, time.Time) error {
 	panic("unexpected ResetWeeklyUsage call")
 }
-func (s *apiKeyAvailableGroupsSubRepoStub) ResetMonthlyUsage(context.Context, int64, time.Time) error {
+func (s *apiKeyAvailableGroupsSubRepoStub) ResetMonthlyUsage(context.Context, int64, *time.Time, time.Time) error {
 	panic("unexpected ResetMonthlyUsage call")
 }
 func (s *apiKeyAvailableGroupsSubRepoStub) IncrementUsage(context.Context, int64, float64) error {
@@ -216,6 +220,37 @@ func (s *apiKeyAvailableGroupsSubRepoStub) IncrementUsage(context.Context, int64
 }
 func (s *apiKeyAvailableGroupsSubRepoStub) BatchUpdateExpiredStatus(context.Context) (int64, error) {
 	panic("unexpected BatchUpdateExpiredStatus call")
+}
+
+type apiKeyAvailableGroupsRateRepoStub struct {
+	UserGroupRateRepository
+
+	rates map[int64]float64
+}
+
+func (s *apiKeyAvailableGroupsRateRepoStub) GetByUserAndGroup(ctx context.Context, userID, groupID int64) (*float64, error) {
+	if s == nil || s.rates == nil {
+		return nil, nil
+	}
+	rate, ok := s.rates[groupID]
+	if !ok {
+		return nil, nil
+	}
+	return &rate, nil
+}
+
+type apiKeyAvailableGroupsUsageLogRepoStub struct {
+	UsageLogRepository
+
+	sum float64
+	err error
+}
+
+func (s *apiKeyAvailableGroupsUsageLogRepoStub) SumUserGroupRateSourceActualCost(ctx context.Context, userID, groupID int64, source string, startTime, endTime time.Time) (float64, error) {
+	if s.err != nil {
+		return 0, s.err
+	}
+	return s.sum, nil
 }
 
 func TestAPIKeyService_GetAvailableGroups_PublicBalanceGroupIsSelectable(t *testing.T) {
@@ -263,4 +298,114 @@ func TestAPIKeyService_GetAvailableGroups_OwnPrivateSubscriptionRequiresActiveSu
 	require.NoError(t, err)
 	require.Len(t, available, 1)
 	require.Equal(t, int64(20), available[0].ID)
+}
+
+func TestAPIKeyService_GetAvailableGroups_AttachesNewUserEffectiveRate(t *testing.T) {
+	userID := int64(7)
+	now := time.Now()
+	groups := []Group{
+		{
+			ID:                       30,
+			Name:                     "new user pool",
+			Status:                   StatusActive,
+			Scope:                    GroupScopePublic,
+			SubscriptionType:         SubscriptionTypeStandard,
+			RateMultiplier:           1.2,
+			NewUserRateEnabled:       true,
+			NewUserRateMultiplier:    0.5,
+			NewUserRateWindowSeconds: int((24 * time.Hour).Seconds()),
+			NewUserRateQuotaUSD:      10,
+		},
+	}
+	svc := NewAPIKeyService(
+		nil,
+		&apiKeyAvailableGroupsUserRepoStub{user: &User{ID: userID, CreatedAt: now.Add(-time.Hour)}},
+		&apiKeyAvailableGroupsGroupRepoStub{groups: groups},
+		&apiKeyAvailableGroupsSubRepoStub{},
+		nil,
+		nil,
+		nil,
+	)
+	svc.SetUsageLogRepository(&apiKeyAvailableGroupsUsageLogRepoStub{sum: 3})
+
+	available, err := svc.GetAvailableGroups(context.Background(), userID)
+
+	require.NoError(t, err)
+	require.Len(t, available, 1)
+	require.NotNil(t, available[0].EffectiveRateMultiplier)
+	require.Equal(t, 0.5, *available[0].EffectiveRateMultiplier)
+	require.Equal(t, RateMultiplierSourceNewUserGroup, available[0].EffectiveRateMultiplierSource)
+}
+
+func TestAPIKeyService_GetAvailableGroups_UserSpecificRateOverridesNewUserRate(t *testing.T) {
+	userID := int64(7)
+	now := time.Now()
+	groups := []Group{
+		{
+			ID:                       31,
+			Name:                     "new user pool",
+			Status:                   StatusActive,
+			Scope:                    GroupScopePublic,
+			SubscriptionType:         SubscriptionTypeStandard,
+			RateMultiplier:           1.2,
+			NewUserRateEnabled:       true,
+			NewUserRateMultiplier:    0.5,
+			NewUserRateWindowSeconds: int((24 * time.Hour).Seconds()),
+			NewUserRateQuotaUSD:      10,
+		},
+	}
+	svc := NewAPIKeyService(
+		nil,
+		&apiKeyAvailableGroupsUserRepoStub{user: &User{ID: userID, CreatedAt: now.Add(-time.Hour)}},
+		&apiKeyAvailableGroupsGroupRepoStub{groups: groups},
+		&apiKeyAvailableGroupsSubRepoStub{},
+		&apiKeyAvailableGroupsRateRepoStub{rates: map[int64]float64{31: 0.8}},
+		nil,
+		nil,
+	)
+	svc.SetUsageLogRepository(&apiKeyAvailableGroupsUsageLogRepoStub{sum: 3})
+
+	available, err := svc.GetAvailableGroups(context.Background(), userID)
+
+	require.NoError(t, err)
+	require.Len(t, available, 1)
+	require.NotNil(t, available[0].EffectiveRateMultiplier)
+	require.Equal(t, 0.8, *available[0].EffectiveRateMultiplier)
+	require.Equal(t, RateMultiplierSourceUserGroup, available[0].EffectiveRateMultiplierSource)
+}
+
+func TestAPIKeyService_GetAvailableGroups_ErrorsWhenNewUserQuotaQueryFails(t *testing.T) {
+	userID := int64(7)
+	now := time.Now()
+	groups := []Group{
+		{
+			ID:                       32,
+			Name:                     "new user pool",
+			Status:                   StatusActive,
+			Scope:                    GroupScopePublic,
+			SubscriptionType:         SubscriptionTypeStandard,
+			RateMultiplier:           1.2,
+			NewUserRateEnabled:       true,
+			NewUserRateMultiplier:    0.5,
+			NewUserRateWindowSeconds: int((24 * time.Hour).Seconds()),
+			NewUserRateQuotaUSD:      10,
+		},
+	}
+	svc := NewAPIKeyService(
+		nil,
+		&apiKeyAvailableGroupsUserRepoStub{user: &User{ID: userID, CreatedAt: now.Add(-time.Hour)}},
+		&apiKeyAvailableGroupsGroupRepoStub{groups: groups},
+		&apiKeyAvailableGroupsSubRepoStub{},
+		nil,
+		nil,
+		nil,
+	)
+	svc.SetUsageLogRepository(&apiKeyAvailableGroupsUsageLogRepoStub{err: errors.New("usage unavailable")})
+
+	available, err := svc.GetAvailableGroups(context.Background(), userID)
+
+	require.Error(t, err)
+	require.Nil(t, available)
+	require.Contains(t, err.Error(), "resolve effective group rate")
+	require.Contains(t, err.Error(), "usage unavailable")
 }

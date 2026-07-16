@@ -10,12 +10,18 @@ import (
 )
 
 var (
+	dashboardRangeStatsCache   = newSnapshotCache(30 * time.Second)
 	dashboardTrendCache        = newSnapshotCache(30 * time.Second)
 	dashboardModelStatsCache   = newSnapshotCache(30 * time.Second)
 	dashboardGroupStatsCache   = newSnapshotCache(30 * time.Second)
 	dashboardUsersTrendCache   = newSnapshotCache(30 * time.Second)
 	dashboardAPIKeysTrendCache = newSnapshotCache(30 * time.Second)
 )
+
+type dashboardRangeCacheKey struct {
+	StartTime string `json:"start_time"`
+	EndTime   string `json:"end_time"`
+}
 
 type dashboardTrendCacheKey struct {
 	StartTime   string `json:"start_time"`
@@ -73,6 +79,24 @@ func snapshotPayloadAs[T any](payload any) (T, error) {
 		return zero, fmt.Errorf("unexpected cache payload type %T", payload)
 	}
 	return typed, nil
+}
+
+func (h *DashboardHandler) getDashboardStatsWithRangeCached(
+	ctx context.Context,
+	startTime, endTime time.Time,
+) (*usagestats.DashboardStats, bool, error) {
+	key := mustMarshalDashboardCacheKey(dashboardRangeCacheKey{
+		StartTime: startTime.UTC().Format(time.RFC3339),
+		EndTime:   endTime.UTC().Format(time.RFC3339),
+	})
+	entry, hit, err := dashboardRangeStatsCache.GetOrLoad(key, func() (any, error) {
+		return h.dashboardService.GetDashboardStatsWithRange(ctx, startTime, endTime)
+	})
+	if err != nil {
+		return nil, hit, err
+	}
+	stats, err := snapshotPayloadAs[*usagestats.DashboardStats](entry.Payload)
+	return stats, hit, err
 }
 
 func (h *DashboardHandler) getUsageTrendCached(

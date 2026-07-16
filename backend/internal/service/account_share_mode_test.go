@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +19,9 @@ import (
 type accountShareModeRepoStub struct {
 	ensureNameErr        error
 	modeGroup            *bool
+	modeGroups           map[string]*Group
+	modeGroupGetCalls    []string
+	modeGroupEnsureCalls []string
 	isModeCalls          int
 	bindingCalls         int
 	activationCalls      int
@@ -47,8 +51,17 @@ type accountShareModeRepoStub struct {
 	submitReviewErr      error
 	requestBillingCalls  int
 	requestBillingErr    error
+	waiverCompCalls      int
+	waiverCompLimit      int
 	unavailableCalls     int
+	recoverableIDs       []int64
+	recoverableSuspend   *AccountShareMembership
+	recoverableCalls     int
 	dispatchFailureCalls int
+	touchCalls           int
+	touchTimes           []time.Time
+	touchSignal          chan time.Time
+	touchErr             error
 	createdAccount       *Account
 	createdListing       *AccountShareListing
 	createdModeGroupID   int64
@@ -62,6 +75,7 @@ type accountShareModeBindingResult struct {
 
 type accountShareModeProxyRepoStub struct {
 	proxy            *Proxy
+	createCalls      int
 	getVisibleUserID int64
 	getVisibleID     int64
 	getVisibleCalls  int
@@ -69,6 +83,11 @@ type accountShareModeProxyRepoStub struct {
 	accountCount     int64
 	countCalls       int
 	countErr         error
+	updateCalls      int
+	updateErr        error
+	deleteCalls      int
+	deletedID        int64
+	deleteErr        error
 }
 
 type accountShareModeTesterStub struct {
@@ -102,11 +121,37 @@ type accountShareReviewSettingRepoStub struct {
 	values map[string]string
 }
 
+type accountShareMembershipConcurrencyCacheStub struct {
+	ConcurrencyCache
+	acquireCalls int
+	releaseCalls int
+	current      int
+	currentErr   error
+}
+
+func (s *accountShareMembershipConcurrencyCacheStub) AcquireAccountShareMembershipSlot(context.Context, int64, int, string) (bool, error) {
+	s.acquireCalls++
+	return true, nil
+}
+
+func (s *accountShareMembershipConcurrencyCacheStub) ReleaseAccountShareMembershipSlot(context.Context, int64, string) error {
+	s.releaseCalls++
+	return nil
+}
+
+func (s *accountShareMembershipConcurrencyCacheStub) GetAccountShareMembershipConcurrency(context.Context, int64) (int, error) {
+	return s.current, s.currentErr
+}
+
 type accountShareRecommendationAPIKeyRepoStub struct {
 	APIKeyRepository
 	key   *APIKey
 	err   error
 	calls int
+}
+
+type accountShareJoinUserRepoStub struct {
+	UserRepository
 }
 
 func (s *accountShareRecommendationAPIKeyRepoStub) GetByID(context.Context, int64) (*APIKey, error) {
@@ -187,11 +232,27 @@ func (s *accountShareReviewSettingRepoStub) Delete(context.Context, string) erro
 }
 
 func (r *accountShareModeProxyRepoStub) Create(_ context.Context, proxy *Proxy) error {
+	r.createCalls++
 	if proxy.ID <= 0 {
 		proxy.ID = 7
 	}
 	r.proxy = proxy
 	return nil
+}
+
+func (r *accountShareModeProxyRepoStub) Update(_ context.Context, proxy *Proxy) error {
+	r.updateCalls++
+	if r.updateErr != nil {
+		return r.updateErr
+	}
+	r.proxy = proxy
+	return nil
+}
+
+func (r *accountShareModeProxyRepoStub) Delete(_ context.Context, id int64) error {
+	r.deleteCalls++
+	r.deletedID = id
+	return r.deleteErr
 }
 
 func (r *accountShareModeProxyRepoStub) GetVisibleByID(_ context.Context, userID, id int64) (*Proxy, error) {
@@ -233,10 +294,20 @@ func (r *accountShareModeProxyRepoStub) CountAccountsByProxyID(_ context.Context
 }
 
 func (r *accountShareModeRepoStub) EnsureModeGroup(_ context.Context, platform string) (*Group, error) {
+	r.modeGroupEnsureCalls = append(r.modeGroupEnsureCalls, platform)
 	return &Group{ID: 1, Platform: platform}, nil
 }
 
 func (r *accountShareModeRepoStub) GetModeGroup(_ context.Context, platform string) (*Group, error) {
+	r.modeGroupGetCalls = append(r.modeGroupGetCalls, platform)
+	if r.modeGroups != nil {
+		group := r.modeGroups[platform]
+		if group == nil {
+			return nil, ErrAccountShareModeGroupUnavailable
+		}
+		clone := *group
+		return &clone, nil
+	}
 	return &Group{ID: 1, Platform: platform}, nil
 }
 
@@ -420,7 +491,18 @@ func (r *accountShareModeRepoStub) ReorderMembershipQueue(context.Context, int64
 	return nil, ErrAccountShareQueueInvalid
 }
 
-func (r *accountShareModeRepoStub) TouchMembershipLastRequest(context.Context, int64, time.Time) error {
+func (r *accountShareModeRepoStub) TouchMembershipLastRequest(_ context.Context, _ int64, at time.Time) error {
+	r.touchCalls++
+	r.touchTimes = append(r.touchTimes, at)
+	if r.touchErr != nil {
+		return r.touchErr
+	}
+	if r.touchSignal != nil {
+		select {
+		case r.touchSignal <- at:
+		default:
+		}
+	}
 	return nil
 }
 
@@ -436,6 +518,15 @@ func (r *accountShareModeRepoStub) ProcessUnavailableMemberships(context.Context
 	return &AccountShareSeatBillingResult{}, nil
 }
 
+func (r *accountShareModeRepoStub) ListRecoverableUnavailableMembershipIDs(context.Context, time.Time, int) ([]int64, error) {
+	return append([]int64(nil), r.recoverableIDs...), nil
+}
+
+func (r *accountShareModeRepoStub) SuspendRecoverableUnavailableMembership(context.Context, int64, time.Time) (*AccountShareMembership, error) {
+	r.recoverableCalls++
+	return r.recoverableSuspend, nil
+}
+
 func (r *accountShareModeRepoStub) DisablePermanentlyUnavailableListings(context.Context, time.Time, int) (*AccountShareListingMaintenanceResult, error) {
 	return &AccountShareListingMaintenanceResult{}, nil
 }
@@ -446,6 +537,12 @@ func (r *accountShareModeRepoStub) EndUnavailableAccountMemberships(context.Cont
 }
 
 func (r *accountShareModeRepoStub) ProcessSeatBilling(context.Context, time.Time, int) (*AccountShareSeatBillingResult, error) {
+	return &AccountShareSeatBillingResult{}, nil
+}
+
+func (r *accountShareModeRepoStub) ProcessSeatWaiverCompensations(_ context.Context, _ time.Time, limit int) (*AccountShareSeatBillingResult, error) {
+	r.waiverCompCalls++
+	r.waiverCompLimit = limit
 	return &AccountShareSeatBillingResult{}, nil
 }
 
@@ -506,6 +603,116 @@ func (r *accountShareModeRepoStub) ResolvePolicy(context.Context, string) (*Acco
 
 func (r *accountShareModeRepoStub) UpsertPolicy(context.Context, UpdateAccountShareModePolicyInput) (*AccountShareModePolicy, error) {
 	return nil, nil
+}
+
+func TestAccountShareModeProcessSeatBillingDoesNotRunWaiverCompensation(t *testing.T) {
+	repo := &accountShareModeRepoStub{}
+	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
+
+	svc.processSeatBillingOnce()
+
+	if repo.waiverCompCalls != 0 {
+		t.Fatalf("expected no waiver compensation pass from seat billing, got %d", repo.waiverCompCalls)
+	}
+}
+
+func TestAccountShareModeRecoverableUnavailableSkipsMembershipWithActiveConcurrency(t *testing.T) {
+	repo := &accountShareModeRepoStub{
+		recoverableIDs:     []int64{11},
+		recoverableSuspend: &AccountShareMembership{ID: 11, OwnerUserID: 7, ConsumerUserID: 9},
+	}
+	cache := &accountShareMembershipConcurrencyCacheStub{current: 1}
+	svc := &AccountShareModeService{
+		repo:               repo,
+		concurrencyService: NewConcurrencyService(cache),
+	}
+
+	result, err := svc.processRecoverableUnavailableMemberships(context.Background(), time.Now().UTC(), 10)
+	if err != nil {
+		t.Fatalf("processRecoverableUnavailableMemberships failed: %v", err)
+	}
+	if result == nil || result.Processed != 1 {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	if repo.recoverableCalls != 0 {
+		t.Fatalf("active long-running request must prevent suspension, calls=%d", repo.recoverableCalls)
+	}
+}
+
+func TestAccountShareModeRecoverableUnavailableSuspendsAfterConcurrencyDrains(t *testing.T) {
+	repo := &accountShareModeRepoStub{
+		recoverableIDs:     []int64{11},
+		recoverableSuspend: &AccountShareMembership{ID: 11, OwnerUserID: 7, ConsumerUserID: 9},
+	}
+	cache := &accountShareMembershipConcurrencyCacheStub{current: 0}
+	svc := &AccountShareModeService{
+		repo:               repo,
+		concurrencyService: NewConcurrencyService(cache),
+	}
+
+	result, err := svc.processRecoverableUnavailableMemberships(context.Background(), time.Now().UTC(), 10)
+	if err != nil {
+		t.Fatalf("processRecoverableUnavailableMemberships failed: %v", err)
+	}
+	if repo.recoverableCalls != 1 {
+		t.Fatalf("expected one suspension after concurrency drained, calls=%d", repo.recoverableCalls)
+	}
+	if result == nil || len(result.DebitUserIDs) != 1 || result.DebitUserIDs[0] != 9 ||
+		len(result.CreditUserIDs) != 1 || result.CreditUserIDs[0] != 7 ||
+		len(result.EndedConsumerUserIDs) != 1 || result.EndedConsumerUserIDs[0] != 9 {
+		t.Fatalf("unexpected cache invalidation result: %#v", result)
+	}
+}
+
+func TestAccountShareModeProcessSeatWaiverCompensationsUsesDedicatedBatchSize(t *testing.T) {
+	repo := &accountShareModeRepoStub{}
+	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
+
+	svc.processSeatWaiverCompensationsOnce()
+
+	if repo.waiverCompCalls != 1 {
+		t.Fatalf("expected one waiver compensation pass, got %d", repo.waiverCompCalls)
+	}
+	if repo.waiverCompLimit != AccountShareModeSeatWaiverCompensationBatchSize {
+		t.Fatalf("waiver compensation limit = %d, want %d", repo.waiverCompLimit, AccountShareModeSeatWaiverCompensationBatchSize)
+	}
+}
+
+func TestAccountShareModeListModeGroupsUsesReadOnlyLookup(t *testing.T) {
+	repo := &accountShareModeRepoStub{modeGroups: map[string]*Group{
+		PlatformOpenAI:    {ID: 101, Platform: PlatformOpenAI},
+		PlatformAnthropic: {ID: 202, Platform: PlatformAnthropic},
+	}}
+	svc := &AccountShareModeService{repo: repo}
+
+	groups, err := svc.ListModeGroups(context.Background())
+	if err != nil {
+		t.Fatalf("list mode groups failed: %v", err)
+	}
+	if len(groups) != 2 || groups[0].GroupID != 101 || groups[0].Platform != PlatformOpenAI || groups[1].GroupID != 202 || groups[1].Platform != PlatformAnthropic {
+		t.Fatalf("unexpected mode groups: %#v", groups)
+	}
+	if len(repo.modeGroupGetCalls) != 2 || repo.modeGroupGetCalls[0] != PlatformOpenAI || repo.modeGroupGetCalls[1] != PlatformAnthropic {
+		t.Fatalf("unexpected read-only lookup calls: %#v", repo.modeGroupGetCalls)
+	}
+	if len(repo.modeGroupEnsureCalls) != 0 {
+		t.Fatalf("mode group listing must not ensure/write groups: %#v", repo.modeGroupEnsureCalls)
+	}
+}
+
+func TestAccountShareModeListModeGroupsFailsWhenMappingMissing(t *testing.T) {
+	repo := &accountShareModeRepoStub{modeGroups: map[string]*Group{
+		PlatformOpenAI: {ID: 101, Platform: PlatformOpenAI},
+	}}
+	svc := &AccountShareModeService{repo: repo}
+
+	groups, err := svc.ListModeGroups(context.Background())
+	if !errors.Is(err, ErrAccountShareModeGroupUnavailable) {
+		t.Fatalf("expected missing mode group error, got groups=%#v err=%v", groups, err)
+	}
+	if len(repo.modeGroupEnsureCalls) != 0 {
+		t.Fatalf("missing mapping must not trigger ensure/write: %#v", repo.modeGroupEnsureCalls)
+	}
 }
 
 func TestAccountShareModeExchangePreflightsDuplicateNameBeforeOAuth(t *testing.T) {
@@ -657,6 +864,186 @@ func TestAccountShareModeCreateUserProxyAssignsCurrentOwner(t *testing.T) {
 	}
 }
 
+func TestAccountShareModeCreateUserProxyDoesNotAdoptPlatformProxy(t *testing.T) {
+	ownerID := int64(42)
+	proxyRepo := &accountShareModeProxyRepoStub{proxy: &Proxy{
+		ID: 7, Name: "platform", Protocol: "http", Host: "proxy.example.com", Port: 8080,
+		Status: StatusActive,
+	}}
+	svc := &AccountShareModeService{proxyRepo: proxyRepo}
+
+	created, err := svc.CreateUserProxy(context.Background(), ownerID, CreateAccountShareProxyInput{
+		Name: "mine", Protocol: "http", Host: "proxy.example.com", Port: 8080,
+	})
+	if err != nil {
+		t.Fatalf("CreateUserProxy failed: %v", err)
+	}
+	if proxyRepo.createCalls != 1 {
+		t.Fatalf("expected a user-owned proxy to be created, got %d create calls", proxyRepo.createCalls)
+	}
+	if created.OwnerUserID == nil || *created.OwnerUserID != ownerID {
+		t.Fatalf("expected owner %d, got %#v", ownerID, created.OwnerUserID)
+	}
+}
+
+func TestAccountShareModeUpdateUserProxyUpdatesOwnedProxyAndPreservesProtectedFields(t *testing.T) {
+	ownerID := int64(42)
+	createdAt := time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC)
+	proxyRepo := &accountShareModeProxyRepoStub{proxy: &Proxy{
+		ID: 7, Name: "旧名称", Protocol: "http", Host: "old.example.com", Port: 8080,
+		Username: "old-user", Password: "old-pass", OwnerUserID: &ownerID,
+		Status: StatusActive, MaxAccounts: 3, CreatedAt: createdAt,
+	}}
+	svc := &AccountShareModeService{proxyRepo: proxyRepo}
+
+	password := " new-pass "
+	got, err := svc.UpdateUserProxy(context.Background(), ownerID, 7, UpdateAccountShareProxyInput{
+		Name: " 新名称 ", Protocol: " SOCKS5 ", Host: " proxy.example.com ", Port: 1080,
+		Username: " new-user ", Password: &password,
+	})
+	if err != nil {
+		t.Fatalf("UpdateUserProxy failed: %v", err)
+	}
+	if proxyRepo.updateCalls != 1 {
+		t.Fatalf("expected one update call, got %d", proxyRepo.updateCalls)
+	}
+	if got.Name != "新名称" || got.Protocol != "socks5" || got.Host != "proxy.example.com" || got.Port != 1080 || got.Username != "new-user" || got.Password != "new-pass" {
+		t.Fatalf("unexpected updated proxy: %#v", got)
+	}
+	if got.ID != 7 || got.OwnerUserID == nil || *got.OwnerUserID != ownerID || got.Status != StatusActive || got.MaxAccounts != 3 || !got.CreatedAt.Equal(createdAt) {
+		t.Fatalf("protected fields changed: %#v", got)
+	}
+}
+
+func TestAccountShareModeUpdateUserProxyKeepsPasswordWhenOmitted(t *testing.T) {
+	ownerID := int64(42)
+	proxyRepo := &accountShareModeProxyRepoStub{proxy: &Proxy{
+		ID: 7, Name: "proxy", Protocol: "http", Host: "old.example.com", Port: 8080,
+		Password: "secret", OwnerUserID: &ownerID, Status: StatusActive,
+	}}
+	svc := &AccountShareModeService{proxyRepo: proxyRepo}
+
+	got, err := svc.UpdateUserProxy(context.Background(), ownerID, 7, UpdateAccountShareProxyInput{
+		Name: "proxy", Protocol: "http", Host: "new.example.com", Port: 8081,
+	})
+	if err != nil {
+		t.Fatalf("UpdateUserProxy failed: %v", err)
+	}
+	if got.Password != "secret" {
+		t.Fatalf("expected password to be preserved, got %q", got.Password)
+	}
+}
+
+func TestAccountShareModeUpdateUserProxyClearsPasswordWhenExplicitlyEmpty(t *testing.T) {
+	ownerID := int64(42)
+	emptyPassword := ""
+	proxyRepo := &accountShareModeProxyRepoStub{proxy: &Proxy{
+		ID: 7, Name: "proxy", Protocol: "http", Host: "old.example.com", Port: 8080,
+		Password: "secret", OwnerUserID: &ownerID, Status: StatusActive,
+	}}
+	svc := &AccountShareModeService{proxyRepo: proxyRepo}
+
+	got, err := svc.UpdateUserProxy(context.Background(), ownerID, 7, UpdateAccountShareProxyInput{
+		Name: "proxy", Protocol: "http", Host: "new.example.com", Port: 8081, Password: &emptyPassword,
+	})
+	if err != nil {
+		t.Fatalf("UpdateUserProxy failed: %v", err)
+	}
+	if got.Password != "" {
+		t.Fatalf("expected password to be cleared, got %q", got.Password)
+	}
+}
+
+func TestAccountShareModeUpdateUserProxyRejectsUnownedProxy(t *testing.T) {
+	ownerID := int64(42)
+	otherOwnerID := int64(99)
+	tests := []struct {
+		name    string
+		ownerID *int64
+	}{
+		{name: "platform proxy", ownerID: nil},
+		{name: "other user proxy", ownerID: &otherOwnerID},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			proxyRepo := &accountShareModeProxyRepoStub{proxy: &Proxy{
+				ID: 7, Protocol: "http", Host: "proxy.example.com", Port: 8080,
+				OwnerUserID: tt.ownerID, Status: StatusActive,
+			}}
+			svc := &AccountShareModeService{proxyRepo: proxyRepo}
+			_, err := svc.UpdateUserProxy(context.Background(), ownerID, 7, UpdateAccountShareProxyInput{
+				Protocol: "http", Host: "new.example.com", Port: 8081,
+			})
+			if !errors.Is(err, ErrProxyNotFound) {
+				t.Fatalf("expected ErrProxyNotFound, got %v", err)
+			}
+			if proxyRepo.updateCalls != 0 {
+				t.Fatalf("unowned proxy must not be updated, got %d calls", proxyRepo.updateCalls)
+			}
+		})
+	}
+}
+
+func TestAccountShareModeDeleteUserProxyRejectsProxyInUse(t *testing.T) {
+	ownerID := int64(42)
+	proxyRepo := &accountShareModeProxyRepoStub{
+		proxy:        &Proxy{ID: 7, OwnerUserID: &ownerID, Status: StatusActive},
+		accountCount: 1,
+	}
+	svc := &AccountShareModeService{proxyRepo: proxyRepo}
+
+	err := svc.DeleteUserProxy(context.Background(), ownerID, 7)
+	if !errors.Is(err, ErrProxyInUse) {
+		t.Fatalf("expected ErrProxyInUse, got %v", err)
+	}
+	if proxyRepo.deleteCalls != 0 {
+		t.Fatalf("in-use proxy must not be deleted, got %d calls", proxyRepo.deleteCalls)
+	}
+}
+
+func TestAccountShareModeDeleteUserProxyRejectsUnownedProxy(t *testing.T) {
+	ownerID := int64(42)
+	otherOwnerID := int64(99)
+	tests := []struct {
+		name    string
+		ownerID *int64
+	}{
+		{name: "platform proxy", ownerID: nil},
+		{name: "other user proxy", ownerID: &otherOwnerID},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			proxyRepo := &accountShareModeProxyRepoStub{
+				proxy: &Proxy{ID: 7, OwnerUserID: tt.ownerID, Status: StatusActive},
+			}
+			svc := &AccountShareModeService{proxyRepo: proxyRepo}
+
+			err := svc.DeleteUserProxy(context.Background(), ownerID, 7)
+			if !errors.Is(err, ErrProxyNotFound) {
+				t.Fatalf("expected ErrProxyNotFound, got %v", err)
+			}
+			if proxyRepo.countCalls != 0 || proxyRepo.deleteCalls != 0 {
+				t.Fatalf("unowned proxy must not be counted or deleted, count_calls=%d delete_calls=%d", proxyRepo.countCalls, proxyRepo.deleteCalls)
+			}
+		})
+	}
+}
+
+func TestAccountShareModeDeleteUserProxyDeletesUnusedOwnedProxy(t *testing.T) {
+	ownerID := int64(42)
+	proxyRepo := &accountShareModeProxyRepoStub{
+		proxy: &Proxy{ID: 7, OwnerUserID: &ownerID, Status: StatusActive},
+	}
+	svc := &AccountShareModeService{proxyRepo: proxyRepo}
+
+	if err := svc.DeleteUserProxy(context.Background(), ownerID, 7); err != nil {
+		t.Fatalf("DeleteUserProxy failed: %v", err)
+	}
+	if proxyRepo.deleteCalls != 1 || proxyRepo.deletedID != 7 {
+		t.Fatalf("expected proxy 7 to be deleted once, calls=%d id=%d", proxyRepo.deleteCalls, proxyRepo.deletedID)
+	}
+}
+
 func TestAccountShareModeListListingsKeepsMineScopeAndAdminFlag(t *testing.T) {
 	repo := &accountShareModeRepoStub{}
 	svc := &AccountShareModeService{repo: repo}
@@ -676,6 +1063,26 @@ func TestAccountShareModeListListingsKeepsMineScopeAndAdminFlag(t *testing.T) {
 	}
 	if repo.listFilters.SeatLimit != 0 {
 		t.Fatalf("expected invalid seat limit to normalize to 0, got %d", repo.listFilters.SeatLimit)
+	}
+}
+
+func TestAccountShareModeListListingsNormalizesAccountLevelWithDynamicAliases(t *testing.T) {
+	listings := []AccountShareListing{
+		{
+			ID:              1,
+			AccountID:       10,
+			Platform:        PlatformOpenAI,
+			AccountLevel:    AccountLevelUnknown,
+			AccountPlanType: "chatgptstudent",
+		},
+	}
+
+	normalizeAccountShareListingsAccountLevelWithConfigs(listings, []OpenAIAccountLevelConfig{
+		{Key: "student", Label: "Student", Aliases: []string{"chatgptstudent"}, Enabled: true, SortOrder: 10},
+	})
+
+	if listings[0].AccountLevel != "student" {
+		t.Fatalf("expected dynamic account level student, got %q", listings[0].AccountLevel)
 	}
 }
 
@@ -854,6 +1261,200 @@ func TestAccountShareModeRecommendListingsScansAllPagesAndKeepsTopCandidates(t *
 	}
 	if len(repo.listParams) == 0 || repo.listParams[0].PageSize != AccountShareRecommendationPageSize {
 		t.Fatalf("expected recommendation page size %d, got %#v", AccountShareRecommendationPageSize, repo.listParams)
+	}
+}
+
+func TestAccountShareModeRecommendListingsRanksByEstimatedCostBeforeQuality(t *testing.T) {
+	repo := &accountShareModeRepoStub{
+		listingsByPage: map[int][]AccountShareListing{
+			1: {
+				{
+					ID:                 1,
+					AccountID:          101,
+					OwnerUserID:        100,
+					Status:             AccountShareListingStatusActive,
+					Platform:           PlatformOpenAI,
+					AllowedModels:      []string{"gpt-5.4"},
+					SeatLimit:          12,
+					ActiveSeats:        0,
+					RateMultiplier:     4,
+					HourlyRate:         0,
+					PerUserConcurrency: 20,
+					AccountConcurrency: 50,
+					RatingCount:        20,
+					RatingAvg:          10,
+				},
+				{
+					ID:                 2,
+					AccountID:          102,
+					OwnerUserID:        101,
+					Status:             AccountShareListingStatusActive,
+					Platform:           PlatformOpenAI,
+					AllowedModels:      []string{"gpt-5.4"},
+					SeatLimit:          2,
+					ActiveSeats:        1,
+					RateMultiplier:     1,
+					HourlyRate:         0,
+					PerUserConcurrency: 1,
+					AccountConcurrency: 2,
+					RatingCount:        0,
+					RatingAvg:          0,
+				},
+			},
+		},
+	}
+	apiKeyRepo := &accountShareRecommendationAPIKeyRepoStub{
+		key: &APIKey{ID: 7, UserID: 42, GroupID: accountShareModeInt64Ptr(1)},
+	}
+	svc := newAccountShareRecommendationTestService(repo, apiKeyRepo)
+
+	got, err := svc.RecommendListings(context.Background(), 42, false, AccountShareRecommendationInput{
+		Platform:               PlatformOpenAI,
+		Model:                  "gpt-5.4",
+		APIKeyID:               7,
+		RequestCount:           100,
+		ActiveHours:            2,
+		InputTokensPerRequest:  1000,
+		OutputTokensPerRequest: 500,
+		Limit:                  2,
+	})
+	if err != nil {
+		t.Fatalf("RecommendListings failed: %v", err)
+	}
+	if len(got.Items) != 2 {
+		t.Fatalf("expected two candidates, got %d", len(got.Items))
+	}
+	if got.Items[0].Listing.ID != 2 {
+		t.Fatalf("expected lower estimated cost listing to rank first, got listing %d", got.Items[0].Listing.ID)
+	}
+	if got.Items[0].Estimate.TotalCost >= got.Items[1].Estimate.TotalCost {
+		t.Fatalf("expected first candidate to be cheaper: first=%f second=%f", got.Items[0].Estimate.TotalCost, got.Items[1].Estimate.TotalCost)
+	}
+	if got.Items[0].ScoreBreakdown.CostSavingScore <= 0 {
+		t.Fatalf("expected score breakdown to include cost saving score, got %#v", got.Items[0].ScoreBreakdown)
+	}
+	if got.Items[0].ScoreBreakdown.OverallScore != got.Items[0].Score {
+		t.Fatalf("expected candidate score to mirror overall score, score=%f breakdown=%#v", got.Items[0].Score, got.Items[0].ScoreBreakdown)
+	}
+	if !accountShareTestContainsString(got.Items[0].Tags, "最省额度") {
+		t.Fatalf("expected cheapest candidate to receive cost-saving tag, got %#v", got.Items[0].Tags)
+	}
+	if got.Recommended == nil || got.Recommended.Listing.ID != 2 {
+		t.Fatalf("expected recommended listing 2, got %#v", got.Recommended)
+	}
+}
+
+func TestAccountShareModeRecommendListingsAddsSmartLabels(t *testing.T) {
+	repo := &accountShareModeRepoStub{
+		listingsByPage: map[int][]AccountShareListing{
+			1: {
+				{
+					ID:                 1,
+					AccountID:          101,
+					OwnerUserID:        100,
+					Status:             AccountShareListingStatusActive,
+					Platform:           PlatformOpenAI,
+					AllowedModels:      []string{"gpt-5.4"},
+					SeatLimit:          2,
+					ActiveSeats:        1,
+					RateMultiplier:     1,
+					HourlyRate:         0,
+					PerUserConcurrency: 1,
+					AccountConcurrency: 2,
+				},
+				{
+					ID:                 2,
+					AccountID:          102,
+					OwnerUserID:        101,
+					Status:             AccountShareListingStatusActive,
+					Platform:           PlatformOpenAI,
+					AllowedModels:      []string{"gpt-5.4"},
+					SeatLimit:          12,
+					ActiveSeats:        0,
+					RateMultiplier:     1,
+					HourlyRate:         0.01,
+					PerUserConcurrency: 12,
+					AccountConcurrency: 30,
+					RatingCount:        20,
+					RatingAvg:          9.8,
+				},
+			},
+		},
+	}
+	apiKeyRepo := &accountShareRecommendationAPIKeyRepoStub{
+		key: &APIKey{ID: 7, UserID: 42, GroupID: accountShareModeInt64Ptr(1)},
+	}
+	svc := newAccountShareRecommendationTestService(repo, apiKeyRepo)
+
+	got, err := svc.RecommendListings(context.Background(), 42, false, AccountShareRecommendationInput{
+		Platform:               PlatformOpenAI,
+		Model:                  "gpt-5.4",
+		APIKeyID:               7,
+		RequestCount:           100,
+		ActiveHours:            2,
+		InputTokensPerRequest:  1000,
+		OutputTokensPerRequest: 500,
+		Limit:                  2,
+	})
+	if err != nil {
+		t.Fatalf("RecommendListings failed: %v", err)
+	}
+	if len(got.Items) != 2 {
+		t.Fatalf("expected two candidates, got %d", len(got.Items))
+	}
+	if got.Items[0].Listing.ID != 1 {
+		t.Fatalf("expected cheapest listing to remain first, got listing %d", got.Items[0].Listing.ID)
+	}
+	if !accountShareTestContainsString(got.Items[0].Tags, "最省额度") {
+		t.Fatalf("expected cheapest listing to receive cost-saving tag, got %#v", got.Items[0].Tags)
+	}
+	var stableCandidate *AccountShareRecommendationCandidate
+	for i := range got.Items {
+		if got.Items[i].Listing.ID == 2 {
+			stableCandidate = &got.Items[i]
+			break
+		}
+	}
+	if stableCandidate == nil {
+		t.Fatal("expected stable candidate to be returned")
+	}
+	if !accountShareTestContainsString(stableCandidate.Tags, "最稳妥") {
+		t.Fatalf("expected stable candidate to receive stability tag, got %#v", stableCandidate.Tags)
+	}
+	if !accountShareTestContainsString(stableCandidate.Tags, "性价比最高") {
+		t.Fatalf("expected best overall candidate to receive value tag, got %#v", stableCandidate.Tags)
+	}
+	if stableCandidate.ScoreBreakdown.OverallScore <= got.Items[0].ScoreBreakdown.OverallScore {
+		t.Fatalf("expected stable candidate to have higher overall score: stable=%#v cheapest=%#v", stableCandidate.ScoreBreakdown, got.Items[0].ScoreBreakdown)
+	}
+}
+
+func TestAccountShareRecommendationSelectCandidatesKeepsQualityOutliersWithinLimit(t *testing.T) {
+	candidates := []AccountShareRecommendationCandidate{
+		accountShareRecommendationTestCandidate(1, 0.10, 56, 56, 72, 78),
+		accountShareRecommendationTestCandidate(2, 0.11, 55, 55, 70, 76),
+		accountShareRecommendationTestCandidate(3, 0.12, 54, 54, 68, 74),
+		accountShareRecommendationTestCandidate(4, 0.13, 53, 53, 66, 72),
+		accountShareRecommendationTestCandidate(5, 0.14, 52, 52, 64, 70),
+		accountShareRecommendationTestCandidate(6, 0.15, 51, 51, 62, 68),
+		accountShareRecommendationTestCandidate(7, 0.19, 96, 95, 98, 97),
+	}
+
+	selected := accountShareRecommendationSelectCandidates(candidates, 5)
+
+	if len(selected) != 5 {
+		t.Fatalf("expected selector to respect limit, got %d candidates", len(selected))
+	}
+	if !accountShareRecommendationTestContainsListing(selected, 7) {
+		t.Fatalf("expected higher quality outlier to remain selectable, got listing IDs %#v", accountShareRecommendationTestListingIDs(selected))
+	}
+	if accountShareRecommendationTestContainsListing(selected, 5) || accountShareRecommendationTestContainsListing(selected, 6) {
+		t.Fatalf("expected lower quality filler candidates to be displaced, got listing IDs %#v", accountShareRecommendationTestListingIDs(selected))
+	}
+	for i := 1; i < len(selected); i++ {
+		if selected[i-1].Estimate.TotalCost > selected[i].Estimate.TotalCost {
+			t.Fatalf("expected final candidates to stay sorted by estimated cost, got listing IDs %#v", accountShareRecommendationTestListingIDs(selected))
+		}
 	}
 }
 
@@ -1346,6 +1947,33 @@ func TestAccountShareModeJoinListingRejectsZeroIdleTimeout(t *testing.T) {
 	}
 }
 
+func TestAccountShareModeJoinListingRejectsUnavailableAPIKey(t *testing.T) {
+	groupID := int64(1)
+	tests := []struct {
+		name string
+		key  *APIKey
+		want error
+	}{
+		{name: "disabled", key: &APIKey{ID: 3, UserID: 1, GroupID: &groupID, Status: StatusAPIKeyDisabled}, want: ErrAPIKeyInactive},
+		{name: "expired status", key: &APIKey{ID: 3, UserID: 1, GroupID: &groupID, Status: StatusAPIKeyExpired}, want: ErrAPIKeyExpired},
+		{name: "quota status", key: &APIKey{ID: 3, UserID: 1, GroupID: &groupID, Status: StatusAPIKeyQuotaExhausted}, want: ErrAPIKeyQuotaExhausted},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &accountShareModeRepoStub{}
+			svc := &AccountShareModeService{
+				repo:       repo,
+				apiKeyRepo: &accountShareRecommendationAPIKeyRepoStub{key: tt.key},
+				userRepo:   &accountShareJoinUserRepoStub{},
+			}
+			_, err := svc.JoinListing(context.Background(), 1, 2, 3, 10)
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("expected %v, got %v", tt.want, err)
+			}
+		})
+	}
+}
+
 func TestAccountShareModeUpdateMembershipIdleTimeoutRejectsZeroIdleTimeout(t *testing.T) {
 	svc := &AccountShareModeService{}
 
@@ -1557,6 +2185,110 @@ func TestAccountShareModeResolveBindingRefreshesExpiredSeatBeforeActivatingQueue
 	}
 }
 
+func TestAccountShareModeResolveBindingRecoversConcurrentActivationWinner(t *testing.T) {
+	membership := &AccountShareMembership{ID: 11, AccountID: 99, ConsumerUserID: 20, APIKeyID: 30}
+	listing := &AccountShareListing{ID: 12, AccountID: 99, OwnerUserID: 40, Status: AccountShareListingStatusActive}
+	repo := &accountShareModeRepoStub{
+		bindingResults: []accountShareModeBindingResult{
+			{err: ErrAccountShareListingNotFound},
+			{err: ErrAccountShareListingNotFound},
+			{err: ErrAccountShareListingNotFound},
+			{err: ErrAccountShareAPIKeyAlreadyBound},
+			{membership: membership, listing: listing},
+		},
+	}
+	svc := &AccountShareModeService{repo: repo}
+	gotMembership, gotListing, err := svc.ResolveActiveBindingForRequest(WithAccountShareModeRequest(context.Background(), 20, 30), 20, 30, 50)
+	if err != nil {
+		t.Fatalf("resolve concurrent activation winner failed: %v", err)
+	}
+	if gotMembership == nil || gotMembership.ID != membership.ID || gotListing == nil || gotListing.ID != listing.ID {
+		t.Fatalf("unexpected recovered binding: membership=%#v listing=%#v", gotMembership, gotListing)
+	}
+}
+
+func TestAccountShareModeMembershipHeartbeatAndReleaseTouchCompletion(t *testing.T) {
+	repo := &accountShareModeRepoStub{touchSignal: make(chan time.Time, 4)}
+	svc := &AccountShareModeService{repo: repo}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go svc.runMembershipHeartbeat(context.Background().Done(), 11, time.Millisecond, stop, done)
+	select {
+	case <-repo.touchSignal:
+	case <-time.After(time.Second):
+		t.Fatal("membership heartbeat did not touch last_request_at")
+	}
+	close(stop)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("membership heartbeat did not stop")
+	}
+	if err := svc.forceTouchMembershipLastRequest(11, time.Now().UTC()); err != nil {
+		t.Fatalf("completion touch failed: %v", err)
+	}
+	if repo.touchCalls < 2 {
+		t.Fatalf("expected heartbeat and completion touches, got %d", repo.touchCalls)
+	}
+}
+
+func TestAccountShareModeAcquireMembershipSlotReleaseIsIdempotent(t *testing.T) {
+	repo := &accountShareModeRepoStub{}
+	cache := &accountShareMembershipConcurrencyCacheStub{}
+	svc := &AccountShareModeService{
+		repo:               repo,
+		concurrencyService: NewConcurrencyService(cache),
+	}
+
+	result, err := svc.AcquireMembershipSlot(context.Background(), 11, 2)
+	if err != nil {
+		t.Fatalf("acquire membership slot failed: %v", err)
+	}
+	if result == nil || !result.Acquired || result.ReleaseFunc == nil {
+		t.Fatalf("unexpected acquire result: %#v", result)
+	}
+
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			result.ReleaseFunc()
+		}()
+	}
+	wg.Wait()
+
+	if cache.acquireCalls != 1 {
+		t.Fatalf("acquire calls = %d, want 1", cache.acquireCalls)
+	}
+	if cache.releaseCalls != 1 {
+		t.Fatalf("underlying release calls = %d, want 1", cache.releaseCalls)
+	}
+	if repo.touchCalls != 2 {
+		t.Fatalf("initial and completion touch calls = %d, want 2", repo.touchCalls)
+	}
+}
+
+func TestAccountShareModeAcquireMembershipSlotReleasesWhenMembershipIsNoLongerActive(t *testing.T) {
+	repo := &accountShareModeRepoStub{touchErr: ErrAccountShareListingNotFound}
+	cache := &accountShareMembershipConcurrencyCacheStub{}
+	svc := &AccountShareModeService{
+		repo:               repo,
+		concurrencyService: NewConcurrencyService(cache),
+	}
+
+	result, err := svc.AcquireMembershipSlot(context.Background(), 11, 2)
+	if !errors.Is(err, ErrAccountShareListingNotFound) {
+		t.Fatalf("expected inactive membership error, got result=%#v err=%v", result, err)
+	}
+	if result != nil {
+		t.Fatalf("result = %#v, want nil", result)
+	}
+	if cache.acquireCalls != 1 || cache.releaseCalls != 1 {
+		t.Fatalf("slot acquire/release calls = %d/%d, want 1/1", cache.acquireCalls, cache.releaseCalls)
+	}
+}
+
 func TestAccountShareModeResolveBindingClearsUnavailableAccount(t *testing.T) {
 	resetAt := time.Now().UTC().Add(time.Hour)
 	repo := &accountShareModeRepoStub{
@@ -1589,7 +2321,7 @@ func TestAccountShareModeResolveBindingClearsUnavailableAccount(t *testing.T) {
 	if !errors.Is(err, ErrAccountShareModeGroupUnbound) {
 		t.Fatalf("expected cached unbound error, got %v", err)
 	}
-	if repo.bindingCalls != 4 {
+	if repo.bindingCalls != 5 {
 		t.Fatalf("expected unavailable resolve to query active binding before retry, got %d", repo.bindingCalls)
 	}
 	if repo.unavailableCalls != 1 {
@@ -1687,4 +2419,52 @@ func newAccountShareRecommendationTestService(repo *accountShareModeRepoStub, ap
 
 func accountShareModeBoolPtr(v bool) *bool {
 	return &v
+}
+
+func accountShareTestContainsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func accountShareRecommendationTestCandidate(id int64, totalCost, overallScore, stabilityScore, availabilityScore, riskControlScore float64) AccountShareRecommendationCandidate {
+	return AccountShareRecommendationCandidate{
+		Listing: AccountShareListing{
+			ID:        id,
+			AccountID: id,
+		},
+		Estimate: AccountShareRecommendationEstimate{
+			TotalCost:     totalCost,
+			RequestCost:   totalCost,
+			HourlyNetCost: 0,
+		},
+		Score: overallScore,
+		ScoreBreakdown: AccountShareRecommendationScoreBreakdown{
+			CostSavingScore:   100 - totalCost,
+			StabilityScore:    stabilityScore,
+			AvailabilityScore: availabilityScore,
+			RiskControlScore:  riskControlScore,
+			OverallScore:      overallScore,
+		},
+	}
+}
+
+func accountShareRecommendationTestContainsListing(candidates []AccountShareRecommendationCandidate, listingID int64) bool {
+	for _, candidate := range candidates {
+		if candidate.Listing.ID == listingID {
+			return true
+		}
+	}
+	return false
+}
+
+func accountShareRecommendationTestListingIDs(candidates []AccountShareRecommendationCandidate) []int64 {
+	ids := make([]int64, 0, len(candidates))
+	for _, candidate := range candidates {
+		ids = append(ids, candidate.Listing.ID)
+	}
+	return ids
 }

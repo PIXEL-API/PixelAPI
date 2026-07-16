@@ -10,6 +10,7 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/oauth"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
 
 var ErrAnthropicOAuthSessionNotFound = infraerrors.New(http.StatusBadRequest, "ANTHROPIC_OAUTH_SESSION_NOT_FOUND", "session not found or expired")
@@ -19,6 +20,19 @@ type OpenAIOAuthClient interface {
 	ExchangeCode(ctx context.Context, code, codeVerifier, redirectURI, proxyURL, clientID string) (*openai.TokenResponse, error)
 	RefreshToken(ctx context.Context, refreshToken, proxyURL string) (*openai.TokenResponse, error)
 	RefreshTokenWithClientID(ctx context.Context, refreshToken, proxyURL string, clientID string) (*openai.TokenResponse, error)
+}
+
+// GrokOAuthClient interface for xAI/Grok OAuth operations.
+type GrokOAuthClient interface {
+	ExchangeCode(ctx context.Context, code, codeVerifier, redirectURI, proxyURL, clientID string) (*xai.TokenResponse, error)
+	RefreshToken(ctx context.Context, refreshToken, proxyURL, clientID string) (*xai.TokenResponse, error)
+	ConvertSSOToBuild(ctx context.Context, ssoToken, proxyURL string) (*xai.TokenResponse, error)
+}
+
+// GrokOAuthTokenService is the narrow refresh port used by Grok token providers.
+type GrokOAuthTokenService interface {
+	RefreshAccountToken(ctx context.Context, account *Account) (*GrokTokenInfo, error)
+	BuildAccountCredentials(tokenInfo *GrokTokenInfo) map[string]any
 }
 
 // ClaudeOAuthClient handles HTTP requests for Claude OAuth flows

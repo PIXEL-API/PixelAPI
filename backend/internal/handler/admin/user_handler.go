@@ -38,6 +38,7 @@ type CreateUserRequest struct {
 	Password      string  `json:"password" binding:"required,min=6"`
 	Username      string  `json:"username"`
 	Notes         string  `json:"notes"`
+	Role          string  `json:"role" binding:"omitempty,oneof=user admin"`
 	Balance       float64 `json:"balance"`
 	Concurrency   int     `json:"concurrency"`
 	RPMLimit      int     `json:"rpm_limit"`
@@ -51,6 +52,7 @@ type UpdateUserRequest struct {
 	Password      string   `json:"password" binding:"omitempty,min=6"`
 	Username      *string  `json:"username"`
 	Notes         *string  `json:"notes"`
+	Role          string   `json:"role" binding:"omitempty,oneof=user admin"`
 	Balance       *float64 `json:"balance"`
 	Concurrency   *int     `json:"concurrency"`
 	RPMLimit      *int     `json:"rpm_limit"`
@@ -194,7 +196,12 @@ func (h *UserHandler) GetByID(c *gin.Context) {
 		return
 	}
 
-	user, err := h.adminService.GetUser(c.Request.Context(), userID)
+	var user *service.User
+	if c.Query("include_deleted") == "true" {
+		user, err = h.adminService.GetUserIncludeDeleted(c.Request.Context(), userID)
+	} else {
+		user, err = h.adminService.GetUser(c.Request.Context(), userID)
+	}
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -256,10 +263,12 @@ func (h *UserHandler) Create(c *gin.Context) {
 		Password:      req.Password,
 		Username:      req.Username,
 		Notes:         req.Notes,
+		Role:          req.Role,
 		Balance:       req.Balance,
 		Concurrency:   req.Concurrency,
 		RPMLimit:      req.RPMLimit,
 		AllowedGroups: req.AllowedGroups,
+		ActorAdminID:  getAdminIDFromContext(c),
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -290,12 +299,14 @@ func (h *UserHandler) Update(c *gin.Context) {
 		Password:      req.Password,
 		Username:      req.Username,
 		Notes:         req.Notes,
+		Role:          req.Role,
 		Balance:       req.Balance,
 		Concurrency:   req.Concurrency,
 		RPMLimit:      req.RPMLimit,
 		Status:        req.Status,
 		AllowedGroups: req.AllowedGroups,
 		GroupRates:    req.GroupRates,
+		ActorAdminID:  getAdminIDFromContext(c),
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)

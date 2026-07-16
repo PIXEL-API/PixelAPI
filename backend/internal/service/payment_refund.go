@@ -15,6 +15,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/paymentproviderinstance"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
 )
 
 // --- Refund Flow ---
@@ -375,12 +376,14 @@ func (s *PaymentService) gwRefund(ctx context.Context, p *RefundPlan) error {
 		})
 		return err
 	}
+	finishProviderCall := servertiming.ObserveDependency(ctx, "payment")
 	_, err = prov.Refund(ctx, payment.RefundRequest{
 		TradeNo: p.Order.PaymentTradeNo,
 		OrderID: p.Order.OutTradeNo,
 		Amount:  strconv.FormatFloat(p.GatewayAmount, 'f', 2, 64),
 		Reason:  p.Reason,
 	})
+	finishProviderCall()
 	return err
 }
 

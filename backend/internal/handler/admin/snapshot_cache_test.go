@@ -3,6 +3,7 @@
 package admin
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -68,9 +69,37 @@ func TestSnapshotCache_SetEmptyKey(t *testing.T) {
 func TestSnapshotCache_DefaultTTL(t *testing.T) {
 	c := newSnapshotCache(0)
 	require.Equal(t, 30*time.Second, c.ttl)
+	require.Equal(t, defaultSnapshotCacheMaxEntries, c.maxEntries)
 
 	c2 := newSnapshotCache(-1 * time.Second)
 	require.Equal(t, 30*time.Second, c2.ttl)
+}
+
+func TestSnapshotCache_RemovesExpiredEntriesOnSet(t *testing.T) {
+	c := newSnapshotCacheWithLimit(time.Millisecond, 4)
+	c.Set("expired", "old")
+	time.Sleep(5 * time.Millisecond)
+	c.Set("fresh", "new")
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	require.Len(t, c.items, 1)
+	require.Contains(t, c.items, "fresh")
+}
+
+func TestSnapshotCache_EnforcesEntryLimit(t *testing.T) {
+	c := newSnapshotCacheWithLimit(time.Minute, 2)
+	c.Set("first", 1)
+	c.Set("second", 2)
+	c.Set("third", 3)
+
+	c.mu.RLock()
+	itemCount := len(c.items)
+	_, thirdExists := c.items["third"]
+	c.mu.RUnlock()
+
+	require.Equal(t, 2, itemCount)
+	require.True(t, thirdExists, "new entry must be retained when the cache is full")
 }
 
 func TestSnapshotCache_ETagDeterministic(t *testing.T) {
@@ -117,6 +146,45 @@ func TestSnapshotCache_GetOrLoad_MissThenHit(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, hit)
 	require.Equal(t, entry.ETag, entry2.ETag)
+	require.Equal(t, int32(1), loads.Load())
+}
+
+func TestSnapshotCache_GetOrLoadContext_CancelledWaiterDoesNotCancelSharedLoad(t *testing.T) {
+	c := newSnapshotCache(time.Minute)
+	loadStarted := make(chan struct{})
+	releaseLoad := make(chan struct{})
+	var loads atomic.Int32
+
+	ctx, cancel := context.WithCancel(context.Background())
+	firstResult := make(chan error, 1)
+	go func() {
+		_, _, err := c.GetOrLoadContext(ctx, "shared-context", func() (any, error) {
+			loads.Add(1)
+			close(loadStarted)
+			<-releaseLoad
+			return "value", nil
+		})
+		firstResult <- err
+	}()
+
+	<-loadStarted
+	cancel()
+	require.ErrorIs(t, <-firstResult, context.Canceled)
+
+	followerResult := make(chan error, 1)
+	followerPayload := make(chan any, 1)
+	go func() {
+		entry, _, err := c.GetOrLoadContext(context.Background(), "shared-context", func() (any, error) {
+			loads.Add(1)
+			return "unexpected", nil
+		})
+		followerPayload <- entry.Payload
+		followerResult <- err
+	}()
+
+	close(releaseLoad)
+	require.NoError(t, <-followerResult)
+	require.Equal(t, "value", <-followerPayload)
 	require.Equal(t, int32(1), loads.Load())
 }
 

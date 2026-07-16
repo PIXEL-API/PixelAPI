@@ -71,14 +71,16 @@
         <!-- Passive sampling label + active query button -->
         <div class="flex items-center gap-1.5 mt-0.5">
           <span
-            v-if="usageInfo.source === 'passive'"
+            v-if="usageInfo.source === 'passive' || usageInfo.source === 'local'"
             class="text-[9px] text-gray-400 dark:text-gray-500 italic"
           >
-            {{ t('admin.accounts.usageWindow.passiveSampled') }}
+            {{ usageInfo.source === 'local'
+              ? t('admin.accounts.usageWindow.localSnapshot')
+              : t('admin.accounts.usageWindow.passiveSampled') }}
           </span>
           <button
             type="button"
-            class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/30 transition-colors"
+            class="inline-flex min-h-11 min-w-11 items-center justify-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-medium text-blue-600 transition-colors hover:bg-blue-50 md:min-h-0 md:min-w-0 dark:text-blue-400 dark:hover:bg-blue-900/30"
             :disabled="activeQueryLoading"
             @click="loadActiveUsage"
           >
@@ -107,6 +109,9 @@
 
     <!-- OpenAI OAuth accounts: single source from /usage API -->
     <template v-else-if="account.platform === 'openai' && account.type === 'oauth'">
+      <div v-if="error" role="alert" class="mb-1 text-xs text-red-500">
+        {{ error }}
+      </div>
       <div v-if="hasOpenAIUsageFallback" class="space-y-1">
         <UsageProgressBar
           v-if="usageInfo?.five_hour"
@@ -146,7 +151,7 @@
           <div class="h-3 w-[32px] animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
         </div>
       </div>
-      <div v-else>
+      <div v-else-if="!error">
         <div class="text-xs text-gray-400">-</div>
         <div class="mt-1">
           <OpenAIQuotaResetCell
@@ -156,6 +161,131 @@
           />
         </div>
       </div>
+    </template>
+
+    <!-- Grok OAuth accounts: passive xAI quota snapshot + local 24h usage -->
+    <template v-else-if="account.platform === 'grok' && account.type === 'oauth'">
+      <div v-if="loading" class="space-y-1.5">
+        <div class="flex items-center gap-1">
+          <div class="h-3 w-[32px] animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
+          <div class="h-1.5 w-8 animate-pulse rounded-full bg-gray-200 dark:bg-gray-700"></div>
+          <div class="h-3 w-[32px] animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
+        </div>
+      </div>
+
+      <div v-else-if="error" class="text-xs text-red-500">
+        {{ error }}
+      </div>
+
+      <div v-else-if="needsReauth" class="space-y-1">
+        <span class="inline-block rounded bg-orange-100 px-1.5 py-0.5 text-[10px] font-medium text-orange-700 dark:bg-orange-900/40 dark:text-orange-300">
+          {{ t('admin.accounts.needsReauth') }}
+        </span>
+      </div>
+
+      <div v-else-if="isForbidden" class="space-y-1">
+        <span class="inline-block rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300">
+          {{ grokEntitlementLabel || t('admin.accounts.forbidden') }}
+        </span>
+      </div>
+
+      <div v-else-if="usageInfo" class="space-y-1">
+        <div class="flex flex-wrap items-center gap-1">
+          <span
+            v-if="grokTierLabel"
+            class="inline-block rounded bg-cyan-100 px-1.5 py-0.5 text-[10px] font-medium text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300"
+          >
+            {{ grokTierLabel }}
+          </span>
+          <span
+            v-if="grokEntitlementLabel"
+            class="inline-block rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-600 dark:bg-gray-700 dark:text-gray-300"
+          >
+            {{ grokEntitlementLabel }}
+          </span>
+          <span
+            v-if="grokRetryAfterLabel"
+            class="inline-block rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
+          >
+            {{ t('admin.accounts.usageWindow.grokRetryAfter', { time: grokRetryAfterLabel }) }}
+          </span>
+        </div>
+
+        <UsageProgressBar
+          v-if="grokWeeklyBillingBar"
+          label="7d"
+          :utilization="grokWeeklyBillingBar.utilization"
+          :resets-at="grokWeeklyBillingBar.resetsAt"
+          :show-now-when-idle="true"
+          color="indigo"
+        />
+        <UsageProgressBar
+          v-if="!grokWeeklyBillingBar && !grokIsFree && grokRequestUsageBar"
+          :label="t('admin.accounts.usageWindow.grokRequestsShort')"
+          :utilization="grokRequestUsageBar.utilization"
+          :resets-at="grokRequestUsageBar.resetsAt"
+          :remaining-capacity="true"
+          color="indigo"
+        />
+        <UsageProgressBar
+          v-if="!grokWeeklyBillingBar && !grokIsFree && grokTokenUsageBar"
+          :label="t('admin.accounts.usageWindow.grokTokensShort')"
+          :utilization="grokTokenUsageBar.utilization"
+          :resets-at="grokTokenUsageBar.resetsAt"
+          :remaining-capacity="true"
+          color="emerald"
+        />
+        <UsageProgressBar
+          v-if="grokFreeTokenBar"
+          label="24h"
+          :title="t('admin.accounts.usageWindow.grokFreeQuota24hHint')"
+          :utilization="grokFreeTokenBar.utilization"
+          :show-now-when-idle="true"
+          color="emerald"
+        />
+
+        <div
+          v-if="grokLocalUsage"
+          class="flex items-center gap-1.5 text-[9px] text-gray-500 dark:text-gray-400"
+          :title="grokIsFree ? t('admin.accounts.usageWindow.grokFreeQuota24hHint') : undefined"
+        >
+          <span v-if="grokIsFree" class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800">
+            24h
+          </span>
+          <span class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800">
+            {{ formatGrokLocalRequests }} req
+          </span>
+          <span class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800">
+            {{ formatGrokLocalTokens }}
+          </span>
+          <span
+            class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800"
+            :title="t('usage.accountBilled')"
+          >
+            A ${{ formatGrokLocalCost }}
+          </span>
+          <span
+            v-if="grokLocalUsage.user_cost != null"
+            class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800"
+            :title="t('usage.userBilled')"
+          >
+            U ${{ formatGrokLocalUserCost }}
+          </span>
+        </div>
+
+        <div v-if="grokQuotaUnknown" class="text-[10px] text-gray-500 dark:text-gray-400">
+          {{ grokQuotaUnknownLabel }}
+        </div>
+        <div v-else-if="usageInfo.error" class="truncate text-[10px] text-amber-600 dark:text-amber-400" :title="usageInfo.error">
+          {{ grokUsageErrorLabel }}
+        </div>
+        <div v-if="grokQuotaStatusLine" class="text-[10px] text-gray-500 dark:text-gray-400">
+          {{ grokQuotaStatusLine }}
+        </div>
+        <GrokQuotaProbeCell :account="account" @probed="handleGrokProbed" />
+      </div>
+
+      <div v-else class="text-xs text-gray-400">-</div>
     </template>
 
     <!-- Antigravity OAuth accounts: fetch usage from API -->
@@ -232,13 +362,6 @@
         </span>
       </div>
 
-      <!-- Degraded error (non-403, non-401) -->
-      <div v-else-if="usageInfo?.error" class="space-y-1">
-        <span class="inline-block rounded px-1.5 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
-          {{ usageErrorLabel }}
-        </span>
-      </div>
-
       <!-- Loading state -->
       <div v-else-if="loading" class="space-y-1.5">
         <div class="flex items-center gap-1">
@@ -248,9 +371,19 @@
         </div>
       </div>
 
-      <!-- Error state -->
+      <!-- Current request error -->
       <div v-else-if="error" class="text-xs text-red-500">
         {{ error }}
+      </div>
+
+      <!-- Degraded error (non-403, non-401) -->
+      <div v-else-if="usageInfo?.error" class="space-y-1">
+        <span
+          class="inline-block rounded px-1.5 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
+          :title="usageInfo.error"
+        >
+          {{ usageErrorLabel }}
+        </span>
       </div>
 
       <!-- Usage data from API -->
@@ -299,6 +432,29 @@
         💳 {{ t('admin.accounts.aiCreditsBalance') }}: {{ aiCreditsDisplay }}
       </div>
       <div v-else class="text-xs text-gray-400">-</div>
+      <button
+        v-if="!isForbidden && !needsReauth"
+        type="button"
+        class="mt-1 inline-flex min-h-11 min-w-11 items-center justify-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-medium text-blue-600 transition-colors hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 md:min-h-0 md:min-w-0 dark:text-blue-400 dark:hover:bg-blue-900/30"
+        :disabled="activeQueryLoading"
+        @click="loadActiveUsage"
+      >
+        <svg
+          class="h-2.5 w-2.5"
+          :class="{ 'animate-spin': activeQueryLoading }"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+          />
+        </svg>
+        {{ t('admin.accounts.usageWindow.activeQuery') }}
+      </button>
     </template>
 
     <!-- Gemini platform: show quota + local usage window -->
@@ -489,19 +645,62 @@
 import { ref, computed, onMounted, onBeforeUnmount, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
-import type { Account, AccountUsageInfo, GeminiCredentials, OpenAIQuotaResetResult, OpenAIQuotaUsage, WindowStats } from '@/types'
+import type { GrokQuotaProbeResult } from '@/api/admin/grok'
+import type { Account, AccountUsageInfo, GeminiCredentials, GrokQuotaWindow, OpenAIQuotaResetResult, OpenAIQuotaUsage, WindowStats } from '@/types'
 import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
-import { enqueueUsageRequest } from '@/utils/usageLoadQueue'
-import { formatCompactNumber } from '@/utils/format'
+import { enqueueUsageRequest, type UsageRequestSource } from '@/utils/usageLoadQueue'
+import { formatCompactNumber, formatRelativeTime } from '@/utils/format'
 import UsageProgressBar from './UsageProgressBar.vue'
 import AccountQuotaInfo from './AccountQuotaInfo.vue'
 import OpenAIQuotaResetCell from './OpenAIQuotaResetCell.vue'
+import GrokQuotaProbeCell from './GrokQuotaProbeCell.vue'
 
-type UsageLoader = (id: number, source?: 'passive' | 'active') => Promise<AccountUsageInfo>
+type UsageLoader = (
+  id: number,
+  source: UsageRequestSource,
+  options?: { signal?: AbortSignal }
+) => Promise<AccountUsageInfo>
 
-// Module-level cache shared across all AccountUsageCell instances
-const _usageCache = new Map<string, { data: AccountUsageInfo; ts: number }>()
-const USAGE_CACHE_TTL = 5 * 60 * 1000 // 5 minutes
+interface CachedUsage {
+  data: AccountUsageInfo
+  ts: number
+}
+
+// Shared, bounded LRU cache for cells recreated by virtual scrolling.
+const _usageCache = new Map<string, CachedUsage>()
+const USAGE_CACHE_TTL = 5 * 60 * 1000
+const USAGE_CACHE_MAX_ENTRIES = 200
+const GROK_FREE_TOKEN_LIMIT = 2_000_000
+
+function getCachedUsage(key: string): AccountUsageInfo | null {
+  const cached = _usageCache.get(key)
+  if (!cached) return null
+  if (Date.now() - cached.ts >= USAGE_CACHE_TTL) {
+    _usageCache.delete(key)
+    return null
+  }
+
+  _usageCache.delete(key)
+  _usageCache.set(key, cached)
+  return cached.data
+}
+
+function cacheUsage(key: string, data: AccountUsageInfo): void {
+  const now = Date.now()
+  for (const [cachedKey, cached] of _usageCache) {
+    if (now - cached.ts >= USAGE_CACHE_TTL) {
+      _usageCache.delete(cachedKey)
+    }
+  }
+
+  _usageCache.delete(key)
+  _usageCache.set(key, { data, ts: now })
+  while (_usageCache.size > USAGE_CACHE_MAX_ENTRIES) {
+    const oldestKey = _usageCache.keys().next().value as string | undefined
+    if (oldestKey === undefined) break
+    _usageCache.delete(oldestKey)
+  }
+}
 
 const props = withDefaults(
   defineProps<{
@@ -523,10 +722,18 @@ const props = withDefaults(
 )
 
 const { t } = useI18n()
-const desktopViewportQuery = '(min-width: 768px)'
 
 const unmounted = ref(false)
-onBeforeUnmount(() => { unmounted.value = true })
+let usageRequestSequence = 0
+let loadingRequestSequence = 0
+let activeLoadingRequestSequence = 0
+let usageRequestAbortController: AbortController | null = null
+onBeforeUnmount(() => {
+  unmounted.value = true
+  usageRequestSequence += 1
+  usageRequestAbortController?.abort()
+  usageRequestAbortController = null
+})
 
 const loading = ref(false)
 const activeQueryLoading = ref(false)
@@ -534,15 +741,9 @@ const error = ref<string | null>(null)
 const usageInfo = ref<AccountUsageInfo | null>(null)
 const rootRef = ref<HTMLElement | null>(null)
 const usageCacheKey = computed(() => `${props.usageCacheScope}:${props.account.id}`)
-const isDesktopViewport = ref(
-  typeof window === 'undefined' ? true : window.matchMedia(desktopViewportQuery).matches
-)
 const hasEnteredViewport = ref(false)
-const pendingAutoLoad = ref(false)
-const pendingAutoLoadSource = ref<'passive' | 'active' | undefined>(undefined)
+const pendingAutoLoad = ref<{ source: UsageRequestSource; bypassCache?: boolean } | null>(null)
 
-let desktopViewportMediaQuery: MediaQueryList | null = null
-let desktopViewportListener: ((event: MediaQueryListEvent) => void) | null = null
 let visibilityObserver: IntersectionObserver | null = null
 
 // Show usage windows for OAuth and Setup Token accounts
@@ -563,6 +764,9 @@ const shouldFetchUsage = computed(() => {
     return props.account.type === 'oauth'
   }
   if (props.account.platform === 'openai') {
+    return props.account.type === 'oauth'
+  }
+  if (props.account.platform === 'grok') {
     return props.account.type === 'oauth'
   }
   return false
@@ -600,12 +804,159 @@ const openAICodex7dLimitPercent = computed(() => {
 
 const openAIUsageRefreshKey = computed(() => buildOpenAIUsageRefreshKey(props.account))
 
-const shouldAutoLoadUsageOnMount = computed(() => {
-  return shouldFetchUsage.value
+interface GrokUsageBar {
+  utilization: number
+  resetsAt: string | null
+}
+
+const grokQuotaToUsageBar = (window?: GrokQuotaWindow | null): GrokUsageBar | null => {
+  if (!window || window.limit == null || window.remaining == null) return null
+  const limit = Number(window.limit)
+  const remaining = Number(window.remaining)
+  if (!Number.isFinite(limit) || !Number.isFinite(remaining) || limit <= 0) return null
+  let resetsAt = window.reset_at || null
+  if (!resetsAt && window.reset_unix != null && Number.isFinite(Number(window.reset_unix))) {
+    const resetDate = new Date(Number(window.reset_unix) * 1000)
+    if (Number.isFinite(resetDate.getTime())) resetsAt = resetDate.toISOString()
+  }
+  return {
+    utilization: (Math.min(limit, Math.max(0, remaining)) / limit) * 100,
+    resetsAt
+  }
+}
+
+const grokRequestUsageBar = computed(() => grokQuotaToUsageBar(usageInfo.value?.grok_request_quota))
+const grokTokenUsageBar = computed(() => grokQuotaToUsageBar(usageInfo.value?.grok_token_quota))
+const grokBilling = computed(() => usageInfo.value?.grok_billing || null)
+const grokWeeklyBillingBar = computed((): GrokUsageBar | null => {
+  const billing = grokBilling.value
+  if (billing?.period_type?.toLowerCase() !== 'weekly' || billing.usage_percent == null) {
+    return null
+  }
+  return {
+    utilization: Math.min(100, Math.max(0, billing.usage_percent)),
+    resetsAt: billing.period_end || null
+  }
+})
+const grokPlanLabelIsFree = (value: string) => value.includes('free') || value.includes('basic')
+const grokPlanLabelIsPaid = (value: string) => {
+  return value !== '' && !grokPlanLabelIsFree(value) && !value.includes('unknown')
+}
+const grokIsFree = computed(() => {
+  if (props.account.platform !== 'grok' || props.account.type !== 'oauth') return false
+  const billing = grokBilling.value
+  if (
+    billing?.usage_percent != null ||
+    billing?.used_percent != null ||
+    (billing?.monthly_limit_cents != null && billing.monthly_limit_cents > 0)
+  ) return false
+
+  const plan = (billing?.plan || '').trim().toLowerCase()
+  const tier = (usageInfo.value?.subscription_tier || '').trim().toLowerCase()
+  const entitlement = (usageInfo.value?.grok_entitlement_status || '').toLowerCase()
+  if (grokPlanLabelIsPaid(plan) || grokPlanLabelIsPaid(tier)) return false
+  if (
+    grokPlanLabelIsFree(plan) ||
+    grokPlanLabelIsFree(tier) ||
+    grokPlanLabelIsFree(entitlement)
+  ) return true
+  return billing != null
+})
+const grokFreeQuotaUsage = computed(() => usageInfo.value?.grok_local_usage_24h || null)
+const grokLocalUsage = computed(() => {
+  if (grokIsFree.value) return grokFreeQuotaUsage.value
+  return props.todayStats ||
+    usageInfo.value?.grok_local_usage ||
+    usageInfo.value?.grok_local_usage_7d ||
+    usageInfo.value?.grok_local_usage_monthly ||
+    null
+})
+const grokFreeTokenBar = computed(() => {
+  if (!grokIsFree.value || !grokFreeQuotaUsage.value) return null
+  const used = Math.max(0, grokFreeQuotaUsage.value.tokens || 0)
+  return { utilization: Math.min(100, (used / GROK_FREE_TOKEN_LIMIT) * 100) }
 })
 
-const shouldLazyLoadOnMobile = computed(() => {
-  return shouldFetchUsage.value && !isDesktopViewport.value
+const grokTierLabel = computed(() => {
+  if (props.account.platform !== 'grok') return ''
+  return grokBilling.value?.plan || usageInfo.value?.subscription_tier_raw || usageInfo.value?.subscription_tier || ''
+})
+
+const grokEntitlementLabel = computed(() => {
+  if (props.account.platform !== 'grok') return ''
+  return usageInfo.value?.grok_entitlement_status || ''
+})
+
+const grokRetryAfterLabel = computed(() => {
+  const seconds = usageInfo.value?.grok_retry_after_seconds
+  if (seconds == null || seconds <= 0) return ''
+  if (seconds < 60) return `${seconds}s`
+  return `${Math.ceil(seconds / 60)}m`
+})
+
+const formatGrokLocalRequests = computed(() => {
+  const stats = grokLocalUsage.value
+  if (!stats) return '0'
+  return formatCompactNumber(stats.requests, { allowBillions: false })
+})
+
+const formatGrokLocalTokens = computed(() => {
+  const stats = grokLocalUsage.value
+  if (!stats) return '0'
+  return formatCompactNumber(stats.tokens)
+})
+
+const formatGrokLocalCost = computed(() => {
+  const stats = grokLocalUsage.value
+  return (stats?.cost ?? 0).toFixed(2)
+})
+
+const formatGrokLocalUserCost = computed(() => {
+  const stats = grokLocalUsage.value
+  return (stats?.user_cost ?? 0).toFixed(2)
+})
+
+const grokUsageErrorLabel = computed(() => {
+  if (usageInfo.value?.error_code === 'quota_unknown') {
+    return t('admin.accounts.usageWindow.grokNoHeaders')
+  }
+  return usageInfo.value?.error || t('admin.accounts.usageError')
+})
+
+const grokQuotaUnknown = computed(() => {
+  if (props.account.platform !== 'grok') return false
+  if (grokBilling.value || grokFreeTokenBar.value || grokRequestUsageBar.value || grokTokenUsageBar.value) return false
+  return usageInfo.value?.grok_quota_snapshot_state !== 'observed'
+})
+
+const grokQuotaUnknownLabel = computed(() => {
+  return usageInfo.value?.grok_quota_snapshot_state === 'no_headers'
+    ? t('admin.accounts.usageWindow.grokNoHeaders')
+    : t('admin.accounts.usageWindow.grokUnknown')
+})
+
+const grokQuotaStatusLine = computed(() => {
+  if (props.account.platform !== 'grok') return null
+  const parts: string[] = []
+  const status = usageInfo.value?.grok_last_status_code
+  if (status) {
+    parts.push(t('admin.accounts.usageWindow.grokLastStatus', { status }))
+  }
+  if (usageInfo.value?.grok_last_quota_probe_at) {
+    parts.push(t('admin.accounts.usageWindow.grokLastProbe', {
+      time: formatRelativeTime(usageInfo.value.grok_last_quota_probe_at)
+    }))
+  }
+  if (usageInfo.value?.grok_last_headers_seen_at) {
+    parts.push(t('admin.accounts.usageWindow.grokLastHeadersSeen', {
+      time: formatRelativeTime(usageInfo.value.grok_last_headers_seen_at)
+    }))
+  }
+  return parts.length > 0 ? parts.join(' | ') : null
+})
+
+const shouldAutoLoadUsageOnMount = computed(() => {
+  return shouldFetchUsage.value
 })
 
 // Antigravity quota types (用于 API 返回的数据)
@@ -982,7 +1333,10 @@ const needsReauth = computed(() => !!usageInfo.value?.needs_reauth)
 const usageErrorLabel = computed(() => {
   const code = usageInfo.value?.error_code
   if (code === 'rate_limited') return t('admin.accounts.rateLimited')
-  return t('admin.accounts.usageError')
+  if (code === 'snapshot_unavailable') {
+    return t('admin.accounts.usageWindow.snapshotUnavailable')
+  }
+  return usageInfo.value?.error || t('admin.accounts.usageError')
 })
 
 const forbiddenLabel = computed(() => {
@@ -1015,19 +1369,30 @@ const copyValidationURL = async () => {
   }
 }
 
-const isAnthropicOAuthOrSetupToken = computed(() => {
-  return props.account.platform === 'anthropic' && (props.account.type === 'oauth' || props.account.type === 'setup-token')
-})
-
-const loadUsage = async (options?: { source?: 'passive' | 'active'; bypassCache?: boolean }) => {
+const loadUsage = async (options: { source: UsageRequestSource; bypassCache?: boolean }) => {
   if (!shouldFetchUsage.value) return
 
-  // Check cache
+  const requestSequence = ++usageRequestSequence
+  loadingRequestSequence = requestSequence
+  usageRequestAbortController?.abort()
+  const requestController = new AbortController()
+  usageRequestAbortController = requestController
+  const account = props.account
+  const accountID = account.id
+  const cacheKey = usageCacheKey.value
+  const cacheScope = props.usageCacheScope
+
   if (!options?.bypassCache) {
-    const cached = _usageCache.get(usageCacheKey.value)
-    if (cached && Date.now() - cached.ts < USAGE_CACHE_TTL) {
-      usageInfo.value = cached.data
+    const cached = getCachedUsage(cacheKey)
+    if (cached) {
+      if (!unmounted.value && requestSequence === usageRequestSequence) {
+        usageInfo.value = cached
+        error.value = null
+      }
       loading.value = false
+      if (usageRequestAbortController === requestController) {
+        usageRequestAbortController = null
+      }
       return
     }
   }
@@ -1037,42 +1402,53 @@ const loadUsage = async (options?: { source?: 'passive' | 'active'; bypassCache?
 
   try {
     const loader = props.usageLoader ?? adminAPI.accounts.getUsage
-    const fetchFn = () => options?.source
-      ? loader(props.account.id, options.source)
-      : loader(props.account.id)
-    const result = await enqueueUsageRequest(props.account, fetchFn)
-    if (!unmounted.value) {
+    const fetchFn = (signal: AbortSignal) => loader(accountID, options.source, { signal })
+    const result = await enqueueUsageRequest(account, fetchFn, {
+      scope: cacheScope,
+      source: options.source,
+      signal: requestController.signal
+    })
+    if (
+      !unmounted.value &&
+      requestSequence === usageRequestSequence &&
+      cacheKey === usageCacheKey.value
+    ) {
       usageInfo.value = result
-      _usageCache.set(usageCacheKey.value, { data: result, ts: Date.now() })
+      cacheUsage(cacheKey, result)
     }
-  } catch (e: any) {
-    if (!unmounted.value) {
+  } catch (e: unknown) {
+    if (e instanceof Error && e.name === 'AbortError') return
+    if (!unmounted.value && requestSequence === usageRequestSequence) {
       error.value = t('common.error')
       console.error('Failed to load usage:', e)
     }
   } finally {
-    if (!unmounted.value) loading.value = false
+    if (usageRequestAbortController === requestController) {
+      usageRequestAbortController = null
+    }
+    if (!unmounted.value && loadingRequestSequence === requestSequence) {
+      loading.value = false
+    }
   }
 }
 
 const flushPendingAutoLoad = () => {
-  if (!pendingAutoLoad.value) return
-  const source = pendingAutoLoadSource.value
-  pendingAutoLoad.value = false
-  pendingAutoLoadSource.value = undefined
-  loadUsage({ source }).catch((e) => {
+  const pending = pendingAutoLoad.value
+  if (!pending) return
+  pendingAutoLoad.value = null
+  loadUsage(pending).catch((e) => {
     console.error('Failed to load deferred usage:', e)
   })
 }
 
-const requestAutoLoad = (source?: 'passive' | 'active') => {
+const requestAutoLoad = (options: { source: UsageRequestSource; bypassCache?: boolean }) => {
   if (!shouldFetchUsage.value) return
-  if (shouldLazyLoadOnMobile.value && !hasEnteredViewport.value) {
-    pendingAutoLoad.value = true
-    pendingAutoLoadSource.value = source
+  if (!hasEnteredViewport.value) {
+    pendingAutoLoad.value = options
+    attachVisibilityObserver()
     return
   }
-  loadUsage({ source }).catch((e) => {
+  loadUsage(options).catch((e) => {
     console.error('Failed to auto load usage:', e)
   })
 }
@@ -1084,7 +1460,7 @@ const detachVisibilityObserver = () => {
 
 const attachVisibilityObserver = () => {
   detachVisibilityObserver()
-  if (!shouldLazyLoadOnMobile.value || hasEnteredViewport.value) return
+  if (!shouldFetchUsage.value || hasEnteredViewport.value) return
   if (typeof window === 'undefined' || typeof IntersectionObserver === 'undefined') {
     hasEnteredViewport.value = true
     flushPendingAutoLoad()
@@ -1099,22 +1475,82 @@ const attachVisibilityObserver = () => {
     flushPendingAutoLoad()
   }, {
     root: null,
-    rootMargin: '200px 0px',
+    rootMargin: '0px',
     threshold: 0.01
   })
   visibilityObserver.observe(rootRef.value)
 }
 
 const loadActiveUsage = async () => {
+  const requestSequence = ++usageRequestSequence
+  activeLoadingRequestSequence = requestSequence
+  usageRequestAbortController?.abort()
+  const requestController = new AbortController()
+  usageRequestAbortController = requestController
+  const account = props.account
+  const accountID = account.id
+  const cacheKey = usageCacheKey.value
+  const cacheScope = props.usageCacheScope
   activeQueryLoading.value = true
+  error.value = null
   try {
     const loader = props.usageLoader ?? adminAPI.accounts.getUsage
-    usageInfo.value = await loader(props.account.id, 'active')
-  } catch (e: any) {
+    const result = await enqueueUsageRequest(
+      account,
+      (signal) => loader(accountID, 'active', { signal }),
+      { scope: cacheScope, source: 'active', signal: requestController.signal }
+    )
+    if (
+      !unmounted.value &&
+      requestSequence === usageRequestSequence &&
+      cacheKey === usageCacheKey.value
+    ) {
+      usageInfo.value = result
+      cacheUsage(cacheKey, result)
+    }
+  } catch (e: unknown) {
+    if (e instanceof Error && e.name === 'AbortError') return
+    if (!unmounted.value && requestSequence === usageRequestSequence) {
+      error.value = t('common.error')
+    }
     console.error('Failed to load active usage:', e)
   } finally {
-    activeQueryLoading.value = false
+    if (usageRequestAbortController === requestController) {
+      usageRequestAbortController = null
+    }
+    if (!unmounted.value && activeLoadingRequestSequence === requestSequence) {
+      activeQueryLoading.value = false
+    }
   }
+}
+
+const handleGrokProbed = (result: GrokQuotaProbeResult) => {
+  const current = usageInfo.value
+  if (!current) return
+  const snapshot = result.snapshot
+  const merged: AccountUsageInfo = {
+    ...current,
+    grok_billing: result.billing ?? current.grok_billing,
+    grok_local_usage_24h: result.local_usage_24h ?? current.grok_local_usage_24h,
+    grok_local_usage_7d: result.local_usage_7d ?? current.grok_local_usage_7d,
+    grok_local_usage_monthly: result.local_usage_monthly ?? current.grok_local_usage_monthly,
+    grok_request_quota: snapshot?.requests ?? current.grok_request_quota,
+    grok_token_quota: snapshot?.tokens ?? current.grok_token_quota,
+    grok_retry_after_seconds: snapshot?.retry_after_seconds ?? current.grok_retry_after_seconds,
+    grok_entitlement_status: snapshot?.entitlement_status || current.grok_entitlement_status,
+    grok_quota_snapshot_state: result.billing
+      ? 'billing_observed'
+      : snapshot?.headers_observed
+        ? 'observed'
+        : current.grok_quota_snapshot_state,
+    grok_last_quota_probe_at: result.billing?.fetched_at ?? snapshot?.last_probe_at ?? current.grok_last_quota_probe_at,
+    grok_last_headers_seen_at: snapshot?.last_headers_seen_at ?? current.grok_last_headers_seen_at,
+    grok_last_status_code: result.status_code ?? snapshot?.status_code ?? current.grok_last_status_code,
+    error: result.billing || snapshot ? undefined : current.error,
+    error_code: result.billing || snapshot ? undefined : current.error_code
+  }
+  usageInfo.value = merged
+  cacheUsage(usageCacheKey.value, merged)
 }
 
 // ===== API Key quota progress bars =====
@@ -1205,22 +1641,8 @@ const formatKeyUserCost = computed(() => {
 })
 
 onMounted(() => {
-  if (typeof window !== 'undefined') {
-    desktopViewportMediaQuery = window.matchMedia(desktopViewportQuery)
-    isDesktopViewport.value = desktopViewportMediaQuery.matches
-    desktopViewportListener = (event: MediaQueryListEvent) => {
-      isDesktopViewport.value = event.matches
-    }
-    if (typeof desktopViewportMediaQuery.addEventListener === 'function') {
-      desktopViewportMediaQuery.addEventListener('change', desktopViewportListener)
-    } else {
-      desktopViewportMediaQuery.addListener(desktopViewportListener)
-    }
-  }
-
   if (!shouldAutoLoadUsageOnMount.value) return
-  const source = isAnthropicOAuthOrSetupToken.value ? 'passive' : undefined
-  requestAutoLoad(source)
+  requestAutoLoad({ source: 'local' })
 })
 
 watch(openAIUsageRefreshKey, (nextKey, prevKey) => {
@@ -1228,9 +1650,7 @@ watch(openAIUsageRefreshKey, (nextKey, prevKey) => {
   if (props.account.platform !== 'openai' || props.account.type !== 'oauth') return
 
   _usageCache.delete(usageCacheKey.value)
-  loadUsage({ bypassCache: true }).catch((e) => {
-    console.error('Failed to refresh OpenAI usage after account update:', e)
-  })
+  requestAutoLoad({ source: 'local', bypassCache: true })
 })
 
 watch(
@@ -1239,18 +1659,15 @@ watch(
     if (nextToken === prevToken) return
     if (!shouldFetchUsage.value) return
 
-    const source = isAnthropicOAuthOrSetupToken.value ? 'passive' : undefined
     _usageCache.delete(usageCacheKey.value)
-    loadUsage({ source, bypassCache: true }).catch((e) => {
-      console.error('Failed to refresh usage after manual refresh:', e)
-    })
+    requestAutoLoad({ source: 'local', bypassCache: true })
   }
 )
 
 watch(
-  [rootRef, shouldLazyLoadOnMobile],
+  [rootRef, shouldFetchUsage],
   () => {
-    if (shouldLazyLoadOnMobile.value) {
+    if (shouldFetchUsage.value && !hasEnteredViewport.value) {
       attachVisibilityObserver()
       return
     }
@@ -1259,27 +1676,28 @@ watch(
   { immediate: true, flush: 'post' }
 )
 
-watch(isDesktopViewport, (isDesktop) => {
-  if (isDesktop) {
-    detachVisibilityObserver()
-    hasEnteredViewport.value = true
-    flushPendingAutoLoad()
-    return
-  }
+watch(usageCacheKey, () => {
+  usageRequestSequence += 1
+  usageRequestAbortController?.abort()
+  usageRequestAbortController = null
+  loading.value = false
+  activeQueryLoading.value = false
+  error.value = null
+  usageInfo.value = null
   hasEnteredViewport.value = false
-  attachVisibilityObserver()
+  pendingAutoLoad.value = null
+  if (!shouldAutoLoadUsageOnMount.value) return
+  requestAutoLoad({ source: 'local' })
+}, { flush: 'post' })
+
+watch(shouldFetchUsage, (shouldFetch, previouslyShouldFetch) => {
+  if (!shouldFetch || previouslyShouldFetch) return
+  hasEnteredViewport.value = false
+  requestAutoLoad({ source: 'local' })
 })
 
 onUnmounted(() => {
   detachVisibilityObserver()
-  if (desktopViewportMediaQuery && desktopViewportListener) {
-    if (typeof desktopViewportMediaQuery.removeEventListener === 'function') {
-      desktopViewportMediaQuery.removeEventListener('change', desktopViewportListener)
-    } else {
-      desktopViewportMediaQuery.removeListener(desktopViewportListener)
-    }
-  }
-  desktopViewportListener = null
-  desktopViewportMediaQuery = null
+  pendingAutoLoad.value = null
 })
 </script>

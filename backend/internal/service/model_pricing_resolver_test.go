@@ -176,10 +176,14 @@ func TestGetRequestTierPrice_NilPerRequestPrice(t *testing.T) {
 // ===========================================================================
 
 // helper: creates a resolver wired to a ChannelService that returns the given
-// channel (active, groupID=100, platform=anthropic) with the specified pricing.
+// channel (active, groupID=100) with the specified pricing.
 func newResolverWithChannel(t *testing.T, pricing []ChannelModelPricing) *ModelPricingResolver {
 	t.Helper()
 	const groupID = 100
+	groupPlatform := PlatformAnthropic
+	if len(pricing) > 0 && pricing[0].Platform != "" {
+		groupPlatform = pricing[0].Platform
+	}
 	repo := &mockChannelRepository{
 		listAllFn: func(_ context.Context) ([]Channel, error) {
 			return []Channel{{
@@ -191,7 +195,7 @@ func newResolverWithChannel(t *testing.T, pricing []ChannelModelPricing) *ModelP
 			}}, nil
 		},
 		getGroupPlatformsFn: func(_ context.Context, _ []int64) (map[int64]string, error) {
-			return map[int64]string{groupID: "anthropic"}, nil
+			return map[int64]string{groupID: groupPlatform}, nil
 		},
 	}
 	cs := NewChannelService(repo, nil, nil, nil)
@@ -228,6 +232,25 @@ func TestResolve_WithChannelOverride_TokenFlat(t *testing.T) {
 	require.Zero(t, resolved.BasePricing.InputPricePerTokenPriority)
 	require.InDelta(t, 50e-6, resolved.BasePricing.OutputPricePerToken, 1e-12)
 	require.Zero(t, resolved.BasePricing.OutputPricePerTokenPriority)
+}
+
+func TestResolve_WithChannelOverride_LongContextPolicy(t *testing.T) {
+	r := newResolverWithChannel(t, []ChannelModelPricing{{
+		Platform:                       PlatformOpenAI,
+		Models:                         []string{"gpt-5.6-sol"},
+		BillingMode:                    BillingModeToken,
+		LongContextPricingEnabled:      testPtrBool(true),
+		LongContextInputTokenThreshold: testPtrInt(128000),
+	}})
+
+	resolved := r.Resolve(context.Background(), PricingInput{
+		Model:   "gpt-5.6-sol",
+		GroupID: groupIDPtr(),
+	})
+
+	require.NotNil(t, resolved.LongContextPricingEnabled)
+	require.True(t, *resolved.LongContextPricingEnabled)
+	require.Equal(t, 128000, *resolved.LongContextInputTokenThreshold)
 }
 
 func TestResolve_WithChannelOverride_PriorityUsesTierMultiplierOnChannelPrice(t *testing.T) {

@@ -106,6 +106,20 @@ func TestOpenAICodexClientRestrictionDetector_Detect(t *testing.T) {
 		require.Equal(t, CodexClientRestrictionReasonNotMatchedUA, result.Reason)
 	})
 
+	t.Run("官方 UA token 仅出现在中间时拒绝", func(t *testing.T) {
+		detector := NewOpenAICodexClientRestrictionDetector(nil)
+		account := &Account{
+			Platform: PlatformOpenAI,
+			Type:     AccountTypeOAuth,
+			Extra:    map[string]any{"codex_cli_only": true},
+		}
+
+		result := detector.Detect(newCodexDetectorTestContext("curl/8.0 codex_cli_rs/0.99.0", ""), account)
+		require.True(t, result.Enabled)
+		require.False(t, result.Matched)
+		require.Equal(t, CodexClientRestrictionReasonNotMatchedUA, result.Reason)
+	})
+
 	t.Run("开启 ForceCodexCLI 时允许通过", func(t *testing.T) {
 		detector := NewOpenAICodexClientRestrictionDetector(&config.Config{
 			Gateway: config.GatewayConfig{ForceCodexCLI: true},

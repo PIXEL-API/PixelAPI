@@ -36,75 +36,83 @@ const (
 	AccountShareMembershipStatusQueued = "queued"
 	AccountShareMembershipStatusEnded  = "ended"
 
-	AccountShareModeDefaultMinBalance             = 1.0
-	AccountShareModeDefaultPlatformShareRatio     = 0.10
-	AccountShareModeDefaultOwnerShareRatio        = 0.90
-	AccountShareModeOwnerSelfUseMultiplier        = 0.005
-	AccountShareModeDefaultCodexLimitPercent      = CodexQuotaDefaultLimitPercent
-	AccountShareModeMinSeats                      = 2
-	AccountShareModeMaxSeats                      = 12
-	AccountShareModeDefaultPerUserConcurrency     = 5
-	AccountShareModeDefaultAccountConcurrency     = 20
-	AccountShareModeMaxAccountConcurrency         = 50
-	AccountShareModeSeatPrepayDuration            = time.Minute
-	AccountShareModeSeatWaiverWindowMax           = time.Hour
-	AccountShareModeSeatWaiverSettlementGrace     = 15 * time.Minute
-	AccountShareModeSeatBillingInterval           = 15 * time.Second
-	AccountShareModeSeatBillingBatchSize          = 100
-	AccountShareModeEndMembershipTokenTTL         = 2 * time.Minute
-	AccountShareModeMaxIdleTimeoutMinutes         = 10080
-	AccountShareModeLastRequestTouchInterval      = 30 * time.Second
-	AccountShareModeEditSessionTTL                = 10 * time.Minute
-	AccountShareModeQueueMaxItems                 = 5
-	AccountShareModeDispatchCooldown              = 5 * time.Minute
-	AccountShareRecommendationDefaultLimit        = 5
-	AccountShareRecommendationMaxLimit            = 10
-	AccountShareRecommendationMaxRequests         = 1000000
-	AccountShareRecommendationMaxActiveHours      = 720
-	AccountShareRecommendationMaxTokensPerUnit    = 2000000
-	AccountShareRecommendationPageSize            = 1000
-	AccountShareRecommendationUsageProfileDays    = 3
-	AccountShareRecommendationUsageProfileMaxDays = 7
-	AccountShareModeListingTabUsing               = "using"
-	AccountShareModeListingTabHistory             = "history"
-	AccountShareModeListingTabAll                 = "all"
-	AccountShareModeListingTabMine                = "mine"
-	AccountShareListingSortDefault                = "default"
-	AccountShareListingSortAccountConcurrency     = "account_concurrency"
-	AccountShareListingSortPerUserConcurrency     = "per_user_concurrency"
-	AccountShareListingSortMinBalanceRequired     = "min_balance_required"
-	AccountShareListingSortHourlyRate             = "hourly_rate"
-	AccountShareListingSortHourlyFeeWaiver        = "hourly_fee_waiver"
-	AccountShareListingSortRateMultiplier         = "rate_multiplier"
-	AccountShareListingSortRemainingSeats         = "remaining_seats"
-	AccountShareListingSortRating                 = "rating"
-	AccountShareListingSortUpdatedAt              = "updated_at"
-	AccountShareListingSortOrderAsc               = "asc"
-	AccountShareListingSortOrderDesc              = "desc"
-	AccountShareListingFeatureHourlyFeeWaiver     = "hourly_fee_waiver"
-	AccountShareListingFeatureImageGeneration     = "image_generation"
-	AccountShareListingFeatureNoHourlyFee         = "no_hourly_fee"
-	AccountShareListingFeatureCodexCLIOnly        = "codex_cli_only"
-	AccountShareListingFeatureNonCodexCLIOnly     = "non_codex_cli_only"
-	AccountShareListingFeatureAvailable           = "available"
-	AccountShareSpendRangeToday                   = "today"
-	AccountShareSpendRangeCurrentMembership       = "current_membership"
-	AccountShareSpendRangeSevenDays               = "7d"
-	AccountShareMembershipEndReasonManual         = "manual"
-	AccountShareMembershipEndReasonIdleTimeout    = "idle_timeout"
-	AccountShareMembershipEndReasonPrepay         = "prepay_insufficient"
-	AccountShareMembershipEndReasonUnavailable    = "account_unavailable"
-	AccountShareReviewCommentStatusNone           = "none"
-	AccountShareReviewCommentStatusPending        = "pending"
-	AccountShareReviewCommentStatusApproved       = "approved"
-	AccountShareReviewCommentStatusRejected       = "rejected"
-	AccountShareReviewCommentStatusFailed         = "failed"
-	AccountShareReviewMaxCommentRunes             = 1000
-	AccountShareReviewModerationInterval          = 15 * time.Second
-	AccountShareReviewModerationBatchSize         = 20
-	AccountShareReviewModerationMaxAttempts       = 5
-	accountShareModeContextBindingMissingError    = "该分组未绑定账号"
-	accountShareModeEndMembershipTokenAction      = "account_share_mode:end_membership:v1"
+	AccountShareModeDefaultMinBalance               = 1.0
+	AccountShareModeDefaultPlatformShareRatio       = 0.10
+	AccountShareModeDefaultOwnerShareRatio          = 0.90
+	AccountShareModeOwnerSelfUseMultiplier          = 0.005
+	AccountShareModeDefaultCodexLimitPercent        = CodexQuotaDefaultLimitPercent
+	AccountShareModeMinSeats                        = 2
+	AccountShareModeMaxSeats                        = 12
+	AccountShareModeDefaultPerUserConcurrency       = 5
+	AccountShareModeDefaultAccountConcurrency       = 20
+	AccountShareModeMaxAccountConcurrency           = 50
+	AccountShareModeSeatPrepayDuration              = time.Minute
+	AccountShareModeSeatWaiverWindowMax             = time.Hour
+	AccountShareModeSeatWaiverSettlementGrace       = 15 * time.Minute
+	AccountShareModeSeatWaiverCompensationDelay     = 10 * time.Minute
+	AccountShareModeSeatWaiverCompensationInterval  = 10 * time.Minute
+	AccountShareModeSeatWaiverCompensationTimeout   = 2 * time.Minute
+	AccountShareModeSeatWaiverCompensationBatchSize = 50
+	AccountShareModeSeatBillingInterval             = 15 * time.Second
+	AccountShareModeSeatBillingBatchSize            = 100
+	AccountShareModeEndMembershipTokenTTL           = 2 * time.Minute
+	AccountShareModeMaxIdleTimeoutMinutes           = 10080
+	AccountShareModeLastRequestTouchInterval        = 30 * time.Second
+	AccountShareModeRequestHeartbeatInterval        = 15 * time.Second
+	AccountShareModeMembershipTouchTimeout          = 5 * time.Second
+	AccountShareModeEditSessionTTL                  = 10 * time.Minute
+	AccountShareModeQueueMaxItems                   = 5
+	AccountShareModeDispatchCooldown                = 5 * time.Minute
+	AccountShareRecommendationDefaultLimit          = 5
+	AccountShareRecommendationMaxLimit              = 10
+	AccountShareRecommendationMaxRequests           = 1000000
+	AccountShareRecommendationMaxActiveHours        = 720
+	AccountShareRecommendationMaxTokensPerUnit      = 2000000
+	AccountShareRecommendationPageSize              = 1000
+	AccountShareRecommendationUsageProfileDays      = 3
+	AccountShareRecommendationUsageProfileMaxDays   = 7
+	AccountShareModeListingTabUsing                 = "using"
+	AccountShareModeListingTabHistory               = "history"
+	AccountShareModeListingTabAll                   = "all"
+	AccountShareModeListingTabMine                  = "mine"
+	AccountShareListingSortDefault                  = "default"
+	AccountShareListingSortAccountConcurrency       = "account_concurrency"
+	AccountShareListingSortPerUserConcurrency       = "per_user_concurrency"
+	AccountShareListingSortMinBalanceRequired       = "min_balance_required"
+	AccountShareListingSortHourlyRate               = "hourly_rate"
+	AccountShareListingSortHourlyFeeWaiver          = "hourly_fee_waiver"
+	AccountShareListingSortRateMultiplier           = "rate_multiplier"
+	AccountShareListingSortRemainingSeats           = "remaining_seats"
+	AccountShareListingSortRating                   = "rating"
+	AccountShareListingSortUpdatedAt                = "updated_at"
+	AccountShareListingSortOrderAsc                 = "asc"
+	AccountShareListingSortOrderDesc                = "desc"
+	AccountShareListingFeatureHourlyFeeWaiver       = "hourly_fee_waiver"
+	AccountShareListingFeatureImageGeneration       = "image_generation"
+	AccountShareListingFeatureNoHourlyFee           = "no_hourly_fee"
+	AccountShareListingFeatureCodexCLIOnly          = "codex_cli_only"
+	AccountShareListingFeatureNonCodexCLIOnly       = "non_codex_cli_only"
+	AccountShareListingFeatureAvailable             = "available"
+	AccountShareWaiverProgressStatusInProgress      = "in_progress"
+	AccountShareWaiverProgressStatusMet             = "met"
+	AccountShareSpendRangeToday                     = "today"
+	AccountShareSpendRangeCurrentMembership         = "current_membership"
+	AccountShareSpendRangeSevenDays                 = "7d"
+	AccountShareMembershipEndReasonManual           = "manual"
+	AccountShareMembershipEndReasonIdleTimeout      = "idle_timeout"
+	AccountShareMembershipEndReasonPrepay           = "prepay_insufficient"
+	AccountShareMembershipEndReasonUnavailable      = "account_unavailable"
+	AccountShareReviewCommentStatusNone             = "none"
+	AccountShareReviewCommentStatusPending          = "pending"
+	AccountShareReviewCommentStatusApproved         = "approved"
+	AccountShareReviewCommentStatusRejected         = "rejected"
+	AccountShareReviewCommentStatusFailed           = "failed"
+	AccountShareReviewMaxCommentRunes               = 1000
+	AccountShareReviewModerationInterval            = 15 * time.Second
+	AccountShareReviewModerationBatchSize           = 20
+	AccountShareReviewModerationMaxAttempts         = 5
+	accountShareModeContextBindingMissingError      = "该分组未绑定账号"
+	accountShareModeEndMembershipTokenAction        = "account_share_mode:end_membership:v1"
 )
 
 var accountShareModeDefaultAllowedModels = []string{
@@ -282,79 +290,101 @@ func (s *accountShareModeRequestState) clear() {
 }
 
 type AccountShareListing struct {
-	ID                              int64                     `json:"id"`
-	AccountID                       int64                     `json:"account_id"`
-	Platform                        string                    `json:"platform"`
-	OwnerUserID                     int64                     `json:"owner_user_id"`
-	OwnerUsername                   string                    `json:"owner_username,omitempty"`
-	AccountName                     string                    `json:"account_name,omitempty"`
-	ProxyID                         *int64                    `json:"proxy_id,omitempty"`
-	Proxy                           *AccountShareListingProxy `json:"proxy,omitempty"`
-	Status                          string                    `json:"status"`
-	SeatLimit                       int                       `json:"seat_limit"`
-	ActiveSeats                     int                       `json:"active_seats"`
-	AccountIdentityID               *int64                    `json:"account_identity_id,omitempty"`
-	RatingCount                     int                       `json:"rating_count"`
-	RatingScoreSum                  int                       `json:"rating_score_sum"`
-	RatingAvg                       float64                   `json:"rating_avg"`
-	RateMultiplier                  float64                   `json:"rate_multiplier"`
-	AllowedModels                   []string                  `json:"allowed_models"`
-	PerUserConcurrency              int                       `json:"per_user_concurrency"`
-	AccountConcurrency              int                       `json:"account_concurrency"`
-	HourlyRate                      float64                   `json:"hourly_rate"`
-	HourlyFeeWaiverMinimum          float64                   `json:"hourly_fee_waiver_minimum"`
-	MinBalanceRequired              float64                   `json:"min_balance_required"`
-	CodexCLIOnly                    bool                      `json:"codex_cli_only"`
-	Codex5hLimitPercent             float64                   `json:"codex_5h_limit_percent"`
-	Codex7dLimitPercent             float64                   `json:"codex_7d_limit_percent"`
-	Anthropic5hLimitPercent         float64                   `json:"anthropic_5h_limit_percent,omitempty"`
-	Anthropic7dLimitPercent         float64                   `json:"anthropic_7d_limit_percent,omitempty"`
-	AccountLevel                    string                    `json:"account_level,omitempty"`
-	AccountPlanType                 string                    `json:"account_plan_type,omitempty"`
-	AccountStatus                   string                    `json:"account_status,omitempty"`
-	AccountSchedulable              bool                      `json:"account_schedulable"`
-	CurrentConcurrency              int                       `json:"current_concurrency"`
-	AccountExpiresAt                *time.Time                `json:"account_expires_at,omitempty"`
-	SubscriptionExpiresAt           *time.Time                `json:"subscription_expires_at,omitempty"`
-	AccountLastUsedAt               *time.Time                `json:"account_last_used_at,omitempty"`
-	RateLimitedAt                   *time.Time                `json:"rate_limited_at,omitempty"`
-	RateLimitResetAt                *time.Time                `json:"rate_limit_reset_at,omitempty"`
-	OverloadUntil                   *time.Time                `json:"overload_until,omitempty"`
-	TempUnschedulableUntil          *time.Time                `json:"temp_unschedulable_until,omitempty"`
-	TempUnschedulableReason         string                    `json:"temp_unschedulable_reason,omitempty"`
-	CodexQuotaProtectionReason      *string                   `json:"codex_quota_protection_reason,omitempty"`
-	CodexQuotaProtectionResetAt     *time.Time                `json:"codex_quota_protection_reset_at,omitempty"`
-	Codex5hUsage                    *UsageProgress            `json:"codex_5h_usage,omitempty"`
-	Codex7dUsage                    *UsageProgress            `json:"codex_7d_usage,omitempty"`
-	CodexUsageUpdatedAt             *time.Time                `json:"codex_usage_updated_at,omitempty"`
-	AnthropicQuotaProtectionReason  *string                   `json:"anthropic_quota_protection_reason,omitempty"`
-	AnthropicQuotaProtectionResetAt *time.Time                `json:"anthropic_quota_protection_reset_at,omitempty"`
-	Anthropic5hUsage                *UsageProgress            `json:"anthropic_5h_usage,omitempty"`
-	Anthropic7dUsage                *UsageProgress            `json:"anthropic_7d_usage,omitempty"`
-	AnthropicUsageUpdatedAt         *time.Time                `json:"anthropic_usage_updated_at,omitempty"`
-	CurrentMembershipID             *int64                    `json:"current_membership_id,omitempty"`
-	CurrentAPIKeyID                 *int64                    `json:"current_api_key_id,omitempty"`
-	CurrentJoinedAt                 *time.Time                `json:"current_joined_at,omitempty"`
-	CurrentPaidUntil                *time.Time                `json:"current_paid_until,omitempty"`
-	CurrentBilledUntil              *time.Time                `json:"current_billed_until,omitempty"`
-	CurrentIdleTimeoutMinutes       *int                      `json:"current_idle_timeout_minutes,omitempty"`
-	CurrentLastRequestAt            *time.Time                `json:"current_last_request_at,omitempty"`
-	CurrentIdleExpiresAt            *time.Time                `json:"current_idle_expires_at,omitempty"`
-	QueueMembershipID               *int64                    `json:"queue_membership_id,omitempty"`
-	QueueAPIKeyID                   *int64                    `json:"queue_api_key_id,omitempty"`
-	QueueRank                       *int                      `json:"queue_rank,omitempty"`
-	QueueStatus                     string                    `json:"queue_status,omitempty"`
-	QueueIdleTimeoutMinutes         *int                      `json:"queue_idle_timeout_minutes,omitempty"`
-	QueueDispatchCooldownUntil      *time.Time                `json:"queue_dispatch_cooldown_until,omitempty"`
-	LastUsedMembershipID            *int64                    `json:"last_used_membership_id,omitempty"`
-	LastUsedAt                      *time.Time                `json:"last_used_at,omitempty"`
-	EditingByUserID                 *int64                    `json:"editing_by_user_id,omitempty"`
-	EditingByUsername               string                    `json:"editing_by_username,omitempty"`
-	EditingExpiresAt                *time.Time                `json:"editing_expires_at,omitempty"`
-	EditingMine                     bool                      `json:"editing_mine"`
-	EditSessionID                   string                    `json:"edit_session_id,omitempty"`
-	CreatedAt                       time.Time                 `json:"created_at"`
-	UpdatedAt                       time.Time                 `json:"updated_at"`
+	ID                              int64                       `json:"id"`
+	AccountID                       int64                       `json:"account_id"`
+	Platform                        string                      `json:"platform"`
+	OwnerUserID                     int64                       `json:"owner_user_id"`
+	OwnerUsername                   string                      `json:"owner_username,omitempty"`
+	AccountName                     string                      `json:"account_name,omitempty"`
+	ProxyID                         *int64                      `json:"proxy_id,omitempty"`
+	Proxy                           *AccountShareListingProxy   `json:"proxy,omitempty"`
+	Status                          string                      `json:"status"`
+	SeatLimit                       int                         `json:"seat_limit"`
+	ActiveSeats                     int                         `json:"active_seats"`
+	AccountIdentityID               *int64                      `json:"account_identity_id,omitempty"`
+	RatingCount                     int                         `json:"rating_count"`
+	RatingScoreSum                  int                         `json:"rating_score_sum"`
+	RatingAvg                       float64                     `json:"rating_avg"`
+	RateMultiplier                  float64                     `json:"rate_multiplier"`
+	AllowedModels                   []string                    `json:"allowed_models"`
+	PerUserConcurrency              int                         `json:"per_user_concurrency"`
+	AccountConcurrency              int                         `json:"account_concurrency"`
+	HourlyRate                      float64                     `json:"hourly_rate"`
+	HourlyFeeWaiverMinimum          float64                     `json:"hourly_fee_waiver_minimum"`
+	MinBalanceRequired              float64                     `json:"min_balance_required"`
+	CodexCLIOnly                    bool                        `json:"codex_cli_only"`
+	Codex5hLimitPercent             float64                     `json:"codex_5h_limit_percent"`
+	Codex7dLimitPercent             float64                     `json:"codex_7d_limit_percent"`
+	Anthropic5hLimitPercent         float64                     `json:"anthropic_5h_limit_percent,omitempty"`
+	Anthropic7dLimitPercent         float64                     `json:"anthropic_7d_limit_percent,omitempty"`
+	AccountLevel                    string                      `json:"account_level,omitempty"`
+	AccountPlanType                 string                      `json:"account_plan_type,omitempty"`
+	AccountStatus                   string                      `json:"account_status,omitempty"`
+	AccountSchedulable              bool                        `json:"account_schedulable"`
+	CurrentConcurrency              int                         `json:"current_concurrency"`
+	AccountExpiresAt                *time.Time                  `json:"account_expires_at,omitempty"`
+	SubscriptionExpiresAt           *time.Time                  `json:"subscription_expires_at,omitempty"`
+	AccountLastUsedAt               *time.Time                  `json:"account_last_used_at,omitempty"`
+	RateLimitedAt                   *time.Time                  `json:"rate_limited_at,omitempty"`
+	RateLimitResetAt                *time.Time                  `json:"rate_limit_reset_at,omitempty"`
+	OverloadUntil                   *time.Time                  `json:"overload_until,omitempty"`
+	TempUnschedulableUntil          *time.Time                  `json:"temp_unschedulable_until,omitempty"`
+	TempUnschedulableReason         string                      `json:"temp_unschedulable_reason,omitempty"`
+	CodexQuotaProtectionReason      *string                     `json:"codex_quota_protection_reason,omitempty"`
+	CodexQuotaProtectionResetAt     *time.Time                  `json:"codex_quota_protection_reset_at,omitempty"`
+	Codex5hUsage                    *UsageProgress              `json:"codex_5h_usage,omitempty"`
+	Codex7dUsage                    *UsageProgress              `json:"codex_7d_usage,omitempty"`
+	CodexUsageUpdatedAt             *time.Time                  `json:"codex_usage_updated_at,omitempty"`
+	AnthropicQuotaProtectionReason  *string                     `json:"anthropic_quota_protection_reason,omitempty"`
+	AnthropicQuotaProtectionResetAt *time.Time                  `json:"anthropic_quota_protection_reset_at,omitempty"`
+	Anthropic5hUsage                *UsageProgress              `json:"anthropic_5h_usage,omitempty"`
+	Anthropic7dUsage                *UsageProgress              `json:"anthropic_7d_usage,omitempty"`
+	AnthropicUsageUpdatedAt         *time.Time                  `json:"anthropic_usage_updated_at,omitempty"`
+	CurrentMembershipID             *int64                      `json:"current_membership_id,omitempty"`
+	CurrentAPIKeyID                 *int64                      `json:"current_api_key_id,omitempty"`
+	CurrentAPIKeyName               string                      `json:"current_api_key_name,omitempty"`
+	CurrentJoinedAt                 *time.Time                  `json:"current_joined_at,omitempty"`
+	CurrentPaidUntil                *time.Time                  `json:"current_paid_until,omitempty"`
+	CurrentBilledUntil              *time.Time                  `json:"current_billed_until,omitempty"`
+	CurrentIdleTimeoutMinutes       *int                        `json:"current_idle_timeout_minutes,omitempty"`
+	CurrentLastRequestAt            *time.Time                  `json:"current_last_request_at,omitempty"`
+	CurrentIdleExpiresAt            *time.Time                  `json:"current_idle_expires_at,omitempty"`
+	CurrentWaiverProgress           *AccountShareWaiverProgress `json:"current_waiver_progress,omitempty"`
+	QueueMembershipID               *int64                      `json:"queue_membership_id,omitempty"`
+	QueueAPIKeyID                   *int64                      `json:"queue_api_key_id,omitempty"`
+	QueueAPIKeyName                 string                      `json:"queue_api_key_name,omitempty"`
+	QueueRank                       *int                        `json:"queue_rank,omitempty"`
+	QueueStatus                     string                      `json:"queue_status,omitempty"`
+	QueueIdleTimeoutMinutes         *int                        `json:"queue_idle_timeout_minutes,omitempty"`
+	QueueDispatchCooldownUntil      *time.Time                  `json:"queue_dispatch_cooldown_until,omitempty"`
+	LastUsedMembershipID            *int64                      `json:"last_used_membership_id,omitempty"`
+	LastUsedAt                      *time.Time                  `json:"last_used_at,omitempty"`
+	EditingByUserID                 *int64                      `json:"editing_by_user_id,omitempty"`
+	EditingByUsername               string                      `json:"editing_by_username,omitempty"`
+	EditingExpiresAt                *time.Time                  `json:"editing_expires_at,omitempty"`
+	EditingMine                     bool                        `json:"editing_mine"`
+	EditSessionID                   string                      `json:"edit_session_id,omitempty"`
+	CreatedAt                       time.Time                   `json:"created_at"`
+	UpdatedAt                       time.Time                   `json:"updated_at"`
+}
+
+type AccountShareWaiverProgress struct {
+	Enabled                  bool       `json:"enabled"`
+	Status                   string     `json:"status"`
+	WindowStart              time.Time  `json:"window_start"`
+	WindowEnd                time.Time  `json:"window_end"`
+	Now                      time.Time  `json:"now"`
+	ElapsedSeconds           int64      `json:"elapsed_seconds"`
+	RemainingSeconds         int64      `json:"remaining_seconds"`
+	RequiredAmount           float64    `json:"required_amount"`
+	UsageAmount              float64    `json:"usage_amount"`
+	RemainingAmount          float64    `json:"remaining_amount"`
+	ProgressPercent          float64    `json:"progress_percent"`
+	HourlyRate               float64    `json:"hourly_rate"`
+	WaiverMinimum            float64    `json:"waiver_minimum"`
+	EstimatedHourlyFeeRefund float64    `json:"estimated_hourly_fee_refund"`
+	RequestCount             int64      `json:"request_count"`
+	LastRequestAt            *time.Time `json:"last_request_at,omitempty"`
 }
 
 type AccountShareRecommendationInput struct {
@@ -449,14 +479,23 @@ type AccountShareRecommendationEstimate struct {
 	OwnerSelfUse            bool    `json:"owner_self_use"`
 }
 
+type AccountShareRecommendationScoreBreakdown struct {
+	CostSavingScore   float64 `json:"cost_saving_score"`
+	StabilityScore    float64 `json:"stability_score"`
+	AvailabilityScore float64 `json:"availability_score"`
+	RiskControlScore  float64 `json:"risk_control_score"`
+	OverallScore      float64 `json:"overall_score"`
+}
+
 type AccountShareRecommendationCandidate struct {
-	Rank     int                                `json:"rank"`
-	Listing  AccountShareListing                `json:"listing"`
-	Estimate AccountShareRecommendationEstimate `json:"estimate"`
-	Score    float64                            `json:"score"`
-	Tags     []string                           `json:"tags"`
-	Reasons  []string                           `json:"reasons"`
-	Warnings []string                           `json:"warnings,omitempty"`
+	Rank           int                                      `json:"rank"`
+	Listing        AccountShareListing                      `json:"listing"`
+	Estimate       AccountShareRecommendationEstimate       `json:"estimate"`
+	Score          float64                                  `json:"score"`
+	ScoreBreakdown AccountShareRecommendationScoreBreakdown `json:"score_breakdown"`
+	Tags           []string                                 `json:"tags"`
+	Reasons        []string                                 `json:"reasons"`
+	Warnings       []string                                 `json:"warnings,omitempty"`
 }
 
 type AccountShareRecommendationResult struct {
@@ -498,6 +537,10 @@ type AccountShareMembership struct {
 	EndedReason                    string     `json:"ended_reason,omitempty"`
 	PaidUntil                      *time.Time `json:"paid_until,omitempty"`
 	BilledUntil                    *time.Time `json:"billed_until,omitempty"`
+	WaiverWindowStartedAt          *time.Time `json:"waiver_window_started_at,omitempty"`
+	WaiverWindowUsageAmount        float64    `json:"waiver_window_usage_amount"`
+	WaiverWindowRequestCount       int64      `json:"waiver_window_request_count"`
+	WaiverWindowLastRequestAt      *time.Time `json:"waiver_window_last_request_at,omitempty"`
 	DispatchFailedAt               *time.Time `json:"dispatch_failed_at,omitempty"`
 	DispatchCooldownUntil          *time.Time `json:"dispatch_cooldown_until,omitempty"`
 	CreatedAt                      time.Time  `json:"created_at"`
@@ -553,6 +596,7 @@ type AccountShareMySpendListing struct {
 type AccountShareMySpendMembership struct {
 	ID                 int64      `json:"id"`
 	APIKeyID           int64      `json:"api_key_id"`
+	APIKeyName         string     `json:"api_key_name,omitempty"`
 	Status             string     `json:"status"`
 	QueueRank          int        `json:"queue_rank"`
 	JoinedAt           time.Time  `json:"joined_at"`
@@ -656,6 +700,11 @@ type AccountShareModePolicy struct {
 	Version            int     `json:"version"`
 }
 
+type AccountShareModeGroup struct {
+	GroupID  int64  `json:"group_id"`
+	Platform string `json:"platform"`
+}
+
 type AccountShareModeBillingSnapshot struct {
 	MembershipID       int64
 	ListingID          int64
@@ -690,6 +739,7 @@ type AccountShareListingFilters struct {
 	Sorts         []AccountShareListingSortCriterion
 	ViewerIsAdmin bool
 	SkipTotal     bool
+	AccountLevels []OpenAIAccountLevelConfig
 }
 
 type AccountShareListingSortCriterion struct {
@@ -763,6 +813,15 @@ type CreateAccountShareProxyInput struct {
 	Password string
 }
 
+type UpdateAccountShareProxyInput struct {
+	Name     string
+	Protocol string
+	Host     string
+	Port     int
+	Username string
+	Password *string
+}
+
 type AccountShareModeRepository interface {
 	EnsureModeGroup(ctx context.Context, platform string) (*Group, error)
 	GetModeGroup(ctx context.Context, platform string) (*Group, error)
@@ -791,9 +850,12 @@ type AccountShareModeRepository interface {
 	ListIdleMembershipCandidates(ctx context.Context, now time.Time, filter AccountShareIdleMembershipFilter, limit int) ([]AccountShareIdleMembershipCandidate, error)
 	EndIdleMembership(ctx context.Context, membershipID int64, endedAt time.Time) (*AccountShareMembership, error)
 	ProcessUnavailableMemberships(ctx context.Context, now time.Time, limit int) (*AccountShareSeatBillingResult, error)
+	ListRecoverableUnavailableMembershipIDs(ctx context.Context, now time.Time, limit int) ([]int64, error)
+	SuspendRecoverableUnavailableMembership(ctx context.Context, membershipID int64, unavailableAt time.Time) (*AccountShareMembership, error)
 	EndUnavailableAccountMemberships(ctx context.Context, accountID int64, endedAt time.Time, limit int) (*AccountShareSeatBillingResult, error)
 	DisablePermanentlyUnavailableListings(ctx context.Context, now time.Time, limit int) (*AccountShareListingMaintenanceResult, error)
 	ProcessSeatBilling(ctx context.Context, now time.Time, limit int) (*AccountShareSeatBillingResult, error)
+	ProcessSeatWaiverCompensations(ctx context.Context, now time.Time, limit int) (*AccountShareSeatBillingResult, error)
 	ProcessSeatBillingForJoin(ctx context.Context, now time.Time, consumerUserID, apiKeyID, listingID int64) (*AccountShareSeatBillingResult, error)
 	ProcessSeatBillingForRequest(ctx context.Context, now time.Time, consumerUserID, apiKeyID int64) (*AccountShareSeatBillingResult, error)
 	GetActiveMembershipForAPIKey(ctx context.Context, apiKeyID int64) (*AccountShareMembership, *AccountShareListing, error)
@@ -806,6 +868,8 @@ type AccountShareModeRepository interface {
 
 type AccountShareModeProxyRepository interface {
 	Create(ctx context.Context, proxy *Proxy) error
+	Update(ctx context.Context, proxy *Proxy) error
+	Delete(ctx context.Context, id int64) error
 	GetVisibleByID(ctx context.Context, userID, id int64) (*Proxy, error)
 	ListActiveVisibleWithAccountCount(ctx context.Context, userID int64) ([]ProxyWithAccountCount, error)
 	FindVisibleActiveByEndpoint(ctx context.Context, userID int64, protocol, host string, port int, username, password string) (*Proxy, error)
@@ -832,6 +896,7 @@ type AccountShareModeService struct {
 	billingCacheService  *BillingCacheService
 	billingService       *BillingService
 	modelPricingResolver *ModelPricingResolver
+	settingService       *SettingService
 	reviewSettingRepo    SettingRepository
 	reviewHTTPClient     *http.Client
 	actionTokenSecret    []byte
@@ -897,6 +962,20 @@ func (s *AccountShareModeService) SetRecommendationPricingDependencies(billingSe
 	s.modelPricingResolver = resolver
 }
 
+func (s *AccountShareModeService) SetSettingService(settingService *SettingService) {
+	if s == nil {
+		return
+	}
+	s.settingService = settingService
+}
+
+func (s *AccountShareModeService) openAIAccountLevelConfigs(ctx context.Context) ([]OpenAIAccountLevelConfig, error) {
+	if s == nil || s.settingService == nil {
+		return DefaultOpenAIAccountLevelConfigs(), nil
+	}
+	return s.settingService.GetOpenAIAccountLevelConfigs(ctx)
+}
+
 func (s *AccountShareModeService) SetRecommendationUsageProfileRepository(repo accountShareRecommendationUsageProfileRepository) {
 	if s == nil {
 		return
@@ -916,8 +995,9 @@ func (s *AccountShareModeService) StartSeatBillingWorker() {
 		return
 	}
 	s.seatBillingStartOnce.Do(func() {
-		s.seatBillingWG.Add(1)
+		s.seatBillingWG.Add(2)
 		go s.runSeatBillingWorker()
+		go s.runSeatWaiverCompensationWorker()
 	})
 }
 
@@ -947,12 +1027,29 @@ func (s *AccountShareModeService) runSeatBillingWorker() {
 	}
 }
 
+func (s *AccountShareModeService) runSeatWaiverCompensationWorker() {
+	defer s.seatBillingWG.Done()
+	ticker := time.NewTicker(AccountShareModeSeatWaiverCompensationInterval)
+	defer ticker.Stop()
+
+	s.processSeatWaiverCompensationsOnce()
+	for {
+		select {
+		case <-ticker.C:
+			s.processSeatWaiverCompensationsOnce()
+		case <-s.seatBillingStopCh:
+			return
+		}
+	}
+}
+
 func (s *AccountShareModeService) processSeatBillingOnce() {
 	if s == nil || s.repo == nil {
 		return
 	}
 	s.processUnavailableMembershipsOnce()
 	s.processPermanentlyUnavailableListingsOnce()
+	s.processRecoverableUnavailableMembershipsOnce()
 	s.processIdleMembershipsOnce()
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -967,6 +1064,20 @@ func (s *AccountShareModeService) processSeatBillingOnce() {
 			return
 		}
 	}
+}
+
+func (s *AccountShareModeService) processSeatWaiverCompensationsOnce() {
+	if s == nil || s.repo == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), AccountShareModeSeatWaiverCompensationTimeout)
+	result, err := s.repo.ProcessSeatWaiverCompensations(ctx, time.Now().UTC(), AccountShareModeSeatWaiverCompensationBatchSize)
+	cancel()
+	if err != nil {
+		log.Printf("account_share_mode: process seat waiver compensations failed: %v", err)
+		return
+	}
+	s.invalidateSeatBillingCaches(result)
 }
 
 func (s *AccountShareModeService) processUnavailableMembershipsOnce() {
@@ -1004,6 +1115,61 @@ func (s *AccountShareModeService) processPermanentlyUnavailableListingsOnce() {
 			return
 		}
 	}
+}
+
+func (s *AccountShareModeService) processRecoverableUnavailableMembershipsOnce() {
+	if s == nil || s.repo == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	result, err := s.processRecoverableUnavailableMemberships(ctx, time.Now().UTC(), AccountShareModeSeatBillingBatchSize)
+	cancel()
+	if err != nil {
+		log.Printf("account_share_mode: suspend recoverable unavailable memberships failed: %v", err)
+		return
+	}
+	s.invalidateSeatBillingCaches(result)
+}
+
+func (s *AccountShareModeService) processRecoverableUnavailableMemberships(ctx context.Context, now time.Time, limit int) (*AccountShareSeatBillingResult, error) {
+	if s == nil || s.repo == nil {
+		return nil, ErrServiceUnavailable
+	}
+	if limit <= 0 {
+		limit = AccountShareModeSeatBillingBatchSize
+	}
+	now = now.UTC()
+	membershipIDs, err := s.repo.ListRecoverableUnavailableMembershipIDs(ctx, now, limit)
+	if err != nil {
+		return nil, err
+	}
+	result := &AccountShareSeatBillingResult{Processed: len(membershipIDs)}
+	for _, membershipID := range membershipIDs {
+		if membershipID <= 0 {
+			continue
+		}
+		active, err := s.membershipHasActiveConcurrency(ctx, membershipID)
+		if err != nil {
+			return result, err
+		}
+		if active {
+			continue
+		}
+		membership, err := s.repo.SuspendRecoverableUnavailableMembership(ctx, membershipID, now)
+		if err != nil {
+			if errors.Is(err, ErrAccountShareListingNotFound) {
+				continue
+			}
+			return result, err
+		}
+		if membership == nil {
+			continue
+		}
+		result.DebitUserIDs = append(result.DebitUserIDs, membership.ConsumerUserID)
+		result.CreditUserIDs = append(result.CreditUserIDs, membership.OwnerUserID)
+		result.EndedConsumerUserIDs = append(result.EndedConsumerUserIDs, membership.ConsumerUserID)
+	}
+	return result, nil
 }
 
 func (s *AccountShareModeService) processIdleMembershipsOnce() {
@@ -1090,6 +1256,25 @@ func (s *AccountShareModeService) EnsureModeGroup(ctx context.Context, platform 
 	return s.repo.EnsureModeGroup(ctx, platform)
 }
 
+func (s *AccountShareModeService) ListModeGroups(ctx context.Context) ([]AccountShareModeGroup, error) {
+	if s == nil || s.repo == nil {
+		return nil, ErrAccountShareModeGroupUnavailable
+	}
+	platforms := [...]string{PlatformOpenAI, PlatformAnthropic}
+	groups := make([]AccountShareModeGroup, 0, len(platforms))
+	for _, platform := range platforms {
+		group, err := s.repo.GetModeGroup(ctx, platform)
+		if err != nil {
+			return nil, err
+		}
+		if group == nil || group.ID <= 0 {
+			return nil, ErrAccountShareModeGroupUnavailable
+		}
+		groups = append(groups, AccountShareModeGroup{GroupID: group.ID, Platform: platform})
+	}
+	return groups, nil
+}
+
 func (s *AccountShareModeService) GetOpenAIModeGroup(ctx context.Context) (*Group, error) {
 	return s.EnsureModeGroup(ctx, PlatformOpenAI)
 }
@@ -1156,7 +1341,7 @@ func (s *AccountShareModeService) CreateUserProxy(ctx context.Context, ownerUser
 		return nil, err
 	}
 	existing, err := s.proxyRepo.FindVisibleActiveByEndpoint(ctx, ownerUserID, normalized.Protocol, normalized.Host, normalized.Port, normalized.Username, normalized.Password)
-	if err == nil && existing != nil {
+	if err == nil && isAccountShareProxyOwnedByUser(existing, ownerUserID) {
 		return existing, nil
 	}
 	if err != nil && !errors.Is(err, ErrProxyNotFound) {
@@ -1166,6 +1351,85 @@ func (s *AccountShareModeService) CreateUserProxy(ctx context.Context, ownerUser
 		return nil, err
 	}
 	return normalized, nil
+}
+
+func (s *AccountShareModeService) UpdateUserProxy(ctx context.Context, ownerUserID, proxyID int64, input UpdateAccountShareProxyInput) (*Proxy, error) {
+	if ownerUserID <= 0 {
+		return nil, ErrUserNotFound
+	}
+	if proxyID <= 0 {
+		return nil, ErrProxyNotFound
+	}
+	if s == nil || s.proxyRepo == nil {
+		return nil, ErrServiceUnavailable
+	}
+
+	proxy, err := s.proxyRepo.GetVisibleByID(ctx, ownerUserID, proxyID)
+	if err != nil {
+		return nil, err
+	}
+	if !isAccountShareProxyOwnedByUser(proxy, ownerUserID) {
+		return nil, ErrProxyNotFound
+	}
+
+	password := proxy.Password
+	if input.Password != nil {
+		password = strings.TrimSpace(*input.Password)
+	}
+	normalized, err := normalizeAccountShareProxyInput(ownerUserID, CreateAccountShareProxyInput{
+		Name:     input.Name,
+		Protocol: input.Protocol,
+		Host:     input.Host,
+		Port:     input.Port,
+		Username: input.Username,
+		Password: password,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	proxy.Name = normalized.Name
+	proxy.Protocol = normalized.Protocol
+	proxy.Host = normalized.Host
+	proxy.Port = normalized.Port
+	proxy.Username = normalized.Username
+	proxy.Password = normalized.Password
+	if err := s.proxyRepo.Update(ctx, proxy); err != nil {
+		return nil, err
+	}
+	return proxy, nil
+}
+
+func (s *AccountShareModeService) DeleteUserProxy(ctx context.Context, ownerUserID, proxyID int64) error {
+	if ownerUserID <= 0 {
+		return ErrUserNotFound
+	}
+	if proxyID <= 0 {
+		return ErrProxyNotFound
+	}
+	if s == nil || s.proxyRepo == nil {
+		return ErrServiceUnavailable
+	}
+
+	proxy, err := s.proxyRepo.GetVisibleByID(ctx, ownerUserID, proxyID)
+	if err != nil {
+		return err
+	}
+	if !isAccountShareProxyOwnedByUser(proxy, ownerUserID) {
+		return ErrProxyNotFound
+	}
+	accountCount, err := s.proxyRepo.CountAccountsByProxyID(ctx, proxyID)
+	if err != nil {
+		return err
+	}
+	if accountCount > 0 {
+		return ErrProxyInUse
+	}
+	return s.proxyRepo.Delete(ctx, proxyID)
+}
+
+func isAccountShareProxyOwnedByUser(proxy *Proxy, userID int64) bool {
+	return proxy != nil && proxy.OwnerUserID != nil && *proxy.OwnerUserID == userID
 }
 
 func (s *AccountShareModeService) ExchangeOpenAICodeAndCreateListing(ctx context.Context, ownerUserID int64, exchange *OpenAIExchangeCodeInput, input CreateAccountShareListingInput) (*AccountShareListing, error) {
@@ -1320,11 +1584,15 @@ func (s *AccountShareModeService) CreateOpenAIListingFromToken(ctx context.Conte
 	if concurrency <= 0 {
 		concurrency = AccountShareModeDefaultAccountConcurrency
 	}
+	levelConfigs, err := s.openAIAccountLevelConfigs(ctx)
+	if err != nil {
+		return nil, err
+	}
 	account := &Account{
 		Name:                  accountName,
 		Notes:                 normalizeAccountNotes(input.Notes),
 		Platform:              PlatformOpenAI,
-		AccountLevel:          NormalizeOpenAIAccountLevel(PlatformOpenAI, AccountLevelUnknown, credentials, extra),
+		AccountLevel:          NormalizeOpenAIAccountLevelWithConfigs(PlatformOpenAI, AccountLevelUnknown, credentials, extra, levelConfigs),
 		Type:                  AccountTypeOAuth,
 		Credentials:           credentials,
 		Extra:                 extra,
@@ -1367,6 +1635,7 @@ func (s *AccountShareModeService) CreateOpenAIListingFromToken(ctx context.Conte
 	if err != nil {
 		return nil, err
 	}
+	normalizeAccountShareListingAccountLevelWithConfigs(created, levelConfigs)
 	s.enrichListingRuntime(ctx, created)
 	s.schedulePostCreateConnectivityTest(created)
 	return created, nil
@@ -1482,11 +1751,17 @@ func (s *AccountShareModeService) ListListings(ctx context.Context, viewerUserID
 		return nil, nil, ErrServiceUnavailable
 	}
 	normalized := normalizeListingFilters(filters)
+	levelConfigs, err := s.openAIAccountLevelConfigs(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	normalized.AccountLevels = levelConfigs
 	normalized.ViewerIsAdmin = viewerIsAdmin
 	listings, result, err := s.repo.ListListings(ctx, viewerUserID, normalized, params)
 	if err != nil {
 		return nil, nil, err
 	}
+	normalizeAccountShareListingsAccountLevelWithConfigs(listings, levelConfigs)
 	s.enrichListingsRuntime(ctx, listings)
 	return listings, result, nil
 }
@@ -1616,13 +1891,15 @@ func (s *AccountShareModeService) RecommendListings(ctx context.Context, viewerU
 				return nil, err
 			}
 			tags, reasons, warnings := buildAccountShareRecommendationMessages(listing, estimate)
+			scoreBreakdown := buildAccountShareRecommendationScoreBreakdown(listing, estimate, warnings)
 			candidate := AccountShareRecommendationCandidate{
-				Listing:  listing,
-				Estimate: estimate,
-				Score:    accountShareRecommendationScore(listing, estimate, warnings),
-				Tags:     tags,
-				Reasons:  reasons,
-				Warnings: warnings,
+				Listing:        listing,
+				Estimate:       estimate,
+				Score:          scoreBreakdown.OverallScore,
+				ScoreBreakdown: scoreBreakdown,
+				Tags:           tags,
+				Reasons:        reasons,
+				Warnings:       warnings,
 			}
 			dedupeKey := accountShareRecommendationCandidateDedupeKey(listing)
 			if existing, ok := candidatesByAccount[dedupeKey]; ok && !accountShareRecommendationCandidateRanksBefore(candidate, existing) {
@@ -1647,14 +1924,13 @@ func (s *AccountShareModeService) RecommendListings(ctx context.Context, viewerU
 	sort.SliceStable(candidates, func(i, j int) bool {
 		return accountShareRecommendationCandidateRanksBefore(candidates[i], candidates[j])
 	})
-	if len(candidates) > normalized.Limit {
-		candidates = candidates[:normalized.Limit]
-	}
+	candidates = accountShareRecommendationSelectCandidates(candidates, normalized.Limit)
+	applyAccountShareRecommendationSmartLabels(candidates)
 	for i := range candidates {
 		candidates[i].Rank = i + 1
 		if i == 0 {
-			candidates[i].Tags = prependUniqueString(candidates[i].Tags, "推荐")
-			candidates[i].Reasons = prependUniqueString(candidates[i].Reasons, "综合费用、可用席位、评分与并发后最匹配当前测算")
+			candidates[i].Tags = prependUniqueString(candidates[i].Tags, "最省额度")
+			candidates[i].Reasons = prependUniqueString(candidates[i].Reasons, "按当前测算预计每小时额度最低")
 		}
 	}
 
@@ -1682,6 +1958,11 @@ func (s *AccountShareModeService) GetListing(ctx context.Context, viewerUserID, 
 	if err != nil {
 		return nil, err
 	}
+	levelConfigs, err := s.openAIAccountLevelConfigs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	normalizeAccountShareListingAccountLevelWithConfigs(listing, levelConfigs)
 	s.enrichListingRuntime(ctx, listing)
 	return listing, nil
 }
@@ -1824,6 +2105,11 @@ func (s *AccountShareModeService) BeginListingEdit(ctx context.Context, actorUse
 	if err != nil {
 		return nil, err
 	}
+	levelConfigs, err := s.openAIAccountLevelConfigs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	normalizeAccountShareListingAccountLevelWithConfigs(listing, levelConfigs)
 	s.enrichListingRuntime(ctx, listing)
 	if err := s.attachListingEditProxy(ctx, listing); err != nil {
 		if _, releaseErr := s.repo.ReleaseListingEdit(ctx, actorUserID, actorIsAdmin, listingID, sessionID); releaseErr != nil {
@@ -1852,6 +2138,11 @@ func (s *AccountShareModeService) ReleaseListingEdit(ctx context.Context, actorU
 	if err != nil {
 		return nil, err
 	}
+	levelConfigs, err := s.openAIAccountLevelConfigs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	normalizeAccountShareListingAccountLevelWithConfigs(listing, levelConfigs)
 	s.enrichListingRuntime(ctx, listing)
 	return listing, nil
 }
@@ -1936,6 +2227,11 @@ func (s *AccountShareModeService) UpdateListing(ctx context.Context, actorUserID
 	if err != nil {
 		return nil, err
 	}
+	levelConfigs, err := s.openAIAccountLevelConfigs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	normalizeAccountShareListingAccountLevelWithConfigs(listing, levelConfigs)
 	s.enrichListingRuntime(ctx, listing)
 	return listing, nil
 }
@@ -2093,6 +2389,34 @@ func (s *AccountShareModeService) enrichListingsRuntime(ctx context.Context, lis
 	}
 }
 
+func normalizeAccountShareListingAccountLevelWithConfigs(listing *AccountShareListing, configs []OpenAIAccountLevelConfig) {
+	if listing == nil {
+		return
+	}
+	listings := []AccountShareListing{*listing}
+	normalizeAccountShareListingsAccountLevelWithConfigs(listings, configs)
+	*listing = listings[0]
+}
+
+func normalizeAccountShareListingsAccountLevelWithConfigs(listings []AccountShareListing, configs []OpenAIAccountLevelConfig) {
+	if len(listings) == 0 {
+		return
+	}
+	normalizedConfigs := NormalizeOpenAIAccountLevelConfigs(configs)
+	for i := range listings {
+		if listings[i].Platform != PlatformOpenAI {
+			continue
+		}
+		level := NormalizeAccountLevel(listings[i].AccountLevel)
+		if OpenAIAccountLevelConfigByKeyIncludingDisabled(normalizedConfigs, level) == nil {
+			if inferred := NormalizeOpenAIPlanAccountLevelWithConfigs(listings[i].AccountPlanType, normalizedConfigs); inferred != AccountLevelUnknown {
+				level = inferred
+			}
+		}
+		listings[i].AccountLevel = level
+	}
+}
+
 func (s *AccountShareModeService) JoinListing(ctx context.Context, consumerUserID, listingID, apiKeyID int64, idleTimeoutMinutes int) (*AccountShareMembership, error) {
 	if consumerUserID <= 0 {
 		return nil, ErrUserNotFound
@@ -2112,6 +2436,9 @@ func (s *AccountShareModeService) JoinListing(ctx context.Context, consumerUserI
 	}
 	if apiKey.UserID != consumerUserID {
 		return nil, ErrInsufficientPerms
+	}
+	if err := validateAccountShareModeAPIKey(apiKey); err != nil {
+		return nil, err
 	}
 	if apiKey.GroupID == nil || *apiKey.GroupID <= 0 || !s.IsModeGroup(ctx, *apiKey.GroupID) {
 		return nil, ErrAccountShareAPIKeyMustUseModeGroup
@@ -2148,11 +2475,6 @@ func (s *AccountShareModeService) JoinListing(ctx context.Context, consumerUserI
 			accountShareLogStringPtr(listing.AnthropicQuotaProtectionReason),
 			accountShareLogTimePtr(listing.AnthropicQuotaProtectionResetAt),
 		)
-		result, err := s.repo.EndUnavailableAccountMemberships(ctx, listing.AccountID, now, AccountShareModeSeatBillingBatchSize)
-		if err != nil {
-			return nil, err
-		}
-		s.invalidateSeatBillingCaches(result)
 		return nil, ErrAccountShareAccountUnavailable
 	}
 	if !ownerSelfUse && user.Balance < listing.MinBalanceRequired {
@@ -2406,6 +2728,29 @@ func validateAccountShareIdleTimeoutMinutes(value int) error {
 	return nil
 }
 
+func validateAccountShareModeAPIKey(apiKey *APIKey) error {
+	if apiKey == nil {
+		return ErrAPIKeyNotFound
+	}
+	if apiKey.Status != StatusAPIKeyActive {
+		switch apiKey.Status {
+		case StatusAPIKeyExpired:
+			return ErrAPIKeyExpired
+		case StatusAPIKeyQuotaExhausted:
+			return ErrAPIKeyQuotaExhausted
+		default:
+			return ErrAPIKeyInactive
+		}
+	}
+	if apiKey.IsExpired() {
+		return ErrAPIKeyExpired
+	}
+	if apiKey.IsQuotaExhausted() {
+		return ErrAPIKeyQuotaExhausted
+	}
+	return nil
+}
+
 func (s *AccountShareModeService) ResolveActiveBindingForRequest(ctx context.Context, userID, apiKeyID, groupID int64) (*AccountShareMembership, *AccountShareListing, error) {
 	if s == nil || s.repo == nil || groupID <= 0 {
 		return nil, nil, nil
@@ -2515,7 +2860,18 @@ func (s *AccountShareModeService) resolveActiveOrActivateQueuedBinding(ctx conte
 	}
 	membership, listing, err = s.repo.ActivateNextQueuedMembershipForRequest(ctx, userID, apiKeyID, groupID, afterRank, now)
 	if err != nil {
-		return nil, nil, err
+		activationErr := err
+		if !errors.Is(activationErr, ErrAccountShareAPIKeyAlreadyBound) && !errors.Is(activationErr, ErrAccountShareListingNotFound) {
+			return nil, nil, activationErr
+		}
+		membership, listing, err = s.repo.GetActiveMembershipForRequest(ctx, userID, apiKeyID, groupID)
+		if err == nil && membership != nil && listing != nil {
+			return membership, listing, nil
+		}
+		if err != nil && !errors.Is(err, ErrAccountShareListingNotFound) {
+			return nil, nil, err
+		}
+		return nil, nil, activationErr
 	}
 	return membership, listing, nil
 }
@@ -2700,10 +3056,79 @@ func (s *AccountShareModeService) schedulePostCreateConnectivityTest(listing *Ac
 }
 
 func (s *AccountShareModeService) AcquireMembershipSlot(ctx context.Context, membershipID int64, maxConcurrency int) (*AcquireResult, error) {
-	if s == nil || s.concurrencyService == nil {
+	if s == nil {
 		return &AcquireResult{Acquired: true, ReleaseFunc: func() {}}, nil
 	}
-	return s.concurrencyService.AcquireAccountShareMembershipSlot(ctx, membershipID, maxConcurrency)
+	var result *AcquireResult
+	var err error
+	if s.concurrencyService == nil {
+		result = &AcquireResult{Acquired: true, ReleaseFunc: func() {}}
+	} else {
+		result, err = s.concurrencyService.AcquireAccountShareMembershipSlot(ctx, membershipID, maxConcurrency)
+	}
+	if err != nil || result == nil || !result.Acquired || membershipID <= 0 || s.repo == nil {
+		return result, err
+	}
+	underlyingRelease := result.ReleaseFunc
+	if err := s.forceTouchMembershipLastRequest(membershipID, time.Now().UTC()); err != nil {
+		if underlyingRelease != nil {
+			underlyingRelease()
+		}
+		return nil, err
+	}
+	stopHeartbeat := make(chan struct{})
+	heartbeatDone := make(chan struct{})
+	var releaseOnce sync.Once
+	go s.runMembershipHeartbeat(ctx.Done(), membershipID, AccountShareModeRequestHeartbeatInterval, stopHeartbeat, heartbeatDone)
+	result.ReleaseFunc = func() {
+		releaseOnce.Do(func() {
+			close(stopHeartbeat)
+			<-heartbeatDone
+			completedAt := time.Now().UTC()
+			if err := s.forceTouchMembershipLastRequest(membershipID, completedAt); err != nil {
+				log.Printf("account_share_mode: touch membership completion failed: membership_id=%d err=%v", membershipID, err)
+			}
+			if underlyingRelease != nil {
+				underlyingRelease()
+			}
+		})
+	}
+	return result, nil
+}
+
+func (s *AccountShareModeService) runMembershipHeartbeat(ctxDone <-chan struct{}, membershipID int64, interval time.Duration, stop <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
+	if interval <= 0 {
+		interval = AccountShareModeRequestHeartbeatInterval
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if err := s.forceTouchMembershipLastRequest(membershipID, time.Now().UTC()); err != nil {
+				log.Printf("account_share_mode: membership heartbeat failed: membership_id=%d err=%v", membershipID, err)
+			}
+		case <-stop:
+			return
+		case <-ctxDone:
+			return
+		}
+	}
+}
+
+func (s *AccountShareModeService) forceTouchMembershipLastRequest(membershipID int64, at time.Time) error {
+	if s == nil || s.repo == nil || membershipID <= 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), AccountShareModeMembershipTouchTimeout)
+	defer cancel()
+	now := at.UTC()
+	if err := s.repo.TouchMembershipLastRequest(ctx, membershipID, now); err != nil {
+		return err
+	}
+	s.lastRequestTouchL1.Store(membershipID, now.Add(AccountShareModeLastRequestTouchInterval))
+	return nil
 }
 
 func (s *AccountShareModeService) ResolvePolicy(ctx context.Context, platform string) (*AccountShareModePolicy, error) {
@@ -3119,6 +3544,7 @@ func normalizeListingFilters(filters AccountShareListingFilters) AccountShareLis
 		Sorts:         sorts,
 		ViewerIsAdmin: filters.ViewerIsAdmin,
 		SkipTotal:     filters.SkipTotal,
+		AccountLevels: filters.AccountLevels,
 	}
 }
 
@@ -3449,53 +3875,277 @@ func buildAccountShareRecommendationMessages(listing AccountShareListing, estima
 	return tags, reasons, warnings
 }
 
-func accountShareRecommendationScore(listing AccountShareListing, estimate AccountShareRecommendationEstimate, warnings []string) float64 {
+func buildAccountShareRecommendationScoreBreakdown(listing AccountShareListing, estimate AccountShareRecommendationEstimate, warnings []string) AccountShareRecommendationScoreBreakdown {
 	remainingSeats := listing.SeatLimit - listing.ActiveSeats
 	if remainingSeats < 0 {
 		remainingSeats = 0
 	}
-	totalCostPenalty := estimate.TotalCost * 100
-	if totalCostPenalty > 500 {
-		totalCostPenalty = 500
+	accountConcurrency := listing.AccountConcurrency
+	if accountConcurrency <= 0 {
+		accountConcurrency = AccountShareModeDefaultAccountConcurrency
 	}
-	score := 1000 - totalCostPenalty
-	score += float64(remainingSeats) * 18
-	score += math.Min(float64(listing.PerUserConcurrency), 20) * 4
-	score += math.Min(float64(listing.AccountConcurrency-listing.CurrentConcurrency), 50)
-	if listing.RatingCount > 0 {
-		score += math.Min(listing.RatingAvg, 10) * 8
-		score += math.Min(float64(listing.RatingCount), 20)
+	availableConcurrency := accountConcurrency - listing.CurrentConcurrency
+	if availableConcurrency < 0 {
+		availableConcurrency = 0
 	}
-	if estimate.WaiverEligible {
-		score += 20
+
+	costSavingScore := 100.0
+	if estimate.TotalCost > 0 {
+		costSavingScore -= math.Min(estimate.TotalCost*120, 72)
 	}
-	if estimate.EffectiveHourlyRate <= 0 {
-		score += 18
+	if estimate.RequestCost > 0 {
+		hourlyShare := estimate.HourlyNetCost / math.Max(estimate.RequestCost+estimate.HourlyNetCost, 0.0000001)
+		costSavingScore -= math.Min(hourlyShare*20, 20)
 	}
 	if estimate.EffectiveRateMultiplier <= 1 {
-		score += 16
+		costSavingScore += 8
+	}
+	if estimate.WaiverEligible {
+		costSavingScore += 7
 	}
 	if estimate.OwnerSelfUse {
-		score += 50
+		costSavingScore += 12
 	}
-	score -= float64(len(warnings)) * 25
-	if score < 0 {
-		return 0
+
+	stabilityScore := 55.0
+	stabilityScore += math.Min(float64(listing.PerUserConcurrency), 12) * 2.2
+	stabilityScore += math.Min(float64(availableConcurrency), 30) * 0.75
+	if listing.RatingCount > 0 {
+		stabilityScore += math.Min(listing.RatingAvg, 10) * 1.7
+		stabilityScore += math.Min(float64(listing.RatingCount), 30) * 0.35
 	}
-	return math.Round(score*100) / 100
+	if listing.RateLimitedAt != nil || listing.OverloadUntil != nil || listing.TempUnschedulableUntil != nil {
+		stabilityScore -= 18
+	}
+
+	seatRatio := 0.0
+	if listing.SeatLimit > 0 {
+		seatRatio = float64(remainingSeats) / float64(listing.SeatLimit)
+	}
+	concurrencyRatio := float64(availableConcurrency) / math.Max(float64(accountConcurrency), 1)
+	availabilityScore := 45.0 + seatRatio*35 + math.Min(concurrencyRatio, 1)*20
+	if remainingSeats <= 0 && !estimate.OwnerSelfUse {
+		availabilityScore -= 28
+	}
+	if listing.CurrentMembershipID != nil || listing.QueueMembershipID != nil {
+		availabilityScore += 6
+	}
+	if estimate.OwnerSelfUse {
+		availabilityScore += 10
+	}
+
+	riskControlScore := 100.0
+	riskControlScore -= math.Min(math.Max(estimate.EffectiveRateMultiplier-1, 0)*12, 36)
+	if estimate.EffectiveHourlyRate > 0 && estimate.HourlyNetCost > estimate.RequestCost {
+		riskControlScore -= 18
+	}
+	riskControlScore -= math.Min(float64(len(warnings))*10, 30)
+	riskControlScore -= accountShareRecommendationQuotaRiskPenalty(listing)
+	if listing.MinBalanceRequired > 0 {
+		riskControlScore -= math.Min(listing.MinBalanceRequired*2, 12)
+	}
+	if estimate.OwnerSelfUse {
+		riskControlScore += 8
+	}
+
+	costSavingScore = clampAccountShareRecommendationScore(costSavingScore)
+	stabilityScore = clampAccountShareRecommendationScore(stabilityScore)
+	availabilityScore = clampAccountShareRecommendationScore(availabilityScore)
+	riskControlScore = clampAccountShareRecommendationScore(riskControlScore)
+	overall := costSavingScore*0.4 + stabilityScore*0.24 + availabilityScore*0.2 + riskControlScore*0.16
+
+	return AccountShareRecommendationScoreBreakdown{
+		CostSavingScore:   roundAccountShareRecommendationScore(costSavingScore),
+		StabilityScore:    roundAccountShareRecommendationScore(stabilityScore),
+		AvailabilityScore: roundAccountShareRecommendationScore(availabilityScore),
+		RiskControlScore:  roundAccountShareRecommendationScore(riskControlScore),
+		OverallScore:      roundAccountShareRecommendationScore(overall),
+	}
+}
+
+func applyAccountShareRecommendationSmartLabels(candidates []AccountShareRecommendationCandidate) {
+	if len(candidates) == 0 {
+		return
+	}
+	bestStable := -1
+	bestValue := -1
+	for i := range candidates {
+		if bestStable < 0 || candidates[i].ScoreBreakdown.StabilityScore > candidates[bestStable].ScoreBreakdown.StabilityScore ||
+			(candidates[i].ScoreBreakdown.StabilityScore == candidates[bestStable].ScoreBreakdown.StabilityScore && accountShareRecommendationCandidateRanksBefore(candidates[i], candidates[bestStable])) {
+			bestStable = i
+		}
+		if bestValue < 0 || candidates[i].ScoreBreakdown.OverallScore > candidates[bestValue].ScoreBreakdown.OverallScore ||
+			(candidates[i].ScoreBreakdown.OverallScore == candidates[bestValue].ScoreBreakdown.OverallScore && accountShareRecommendationCandidateRanksBefore(candidates[i], candidates[bestValue])) {
+			bestValue = i
+		}
+	}
+	if bestStable >= 0 {
+		candidates[bestStable].Tags = prependUniqueString(candidates[bestStable].Tags, "最稳妥")
+		candidates[bestStable].Reasons = prependUniqueString(candidates[bestStable].Reasons, "并发、席位、评分和风险控制综合更稳")
+	}
+	if bestValue >= 0 {
+		candidates[bestValue].Tags = prependUniqueString(candidates[bestValue].Tags, "性价比最高")
+		candidates[bestValue].Reasons = prependUniqueString(candidates[bestValue].Reasons, "省钱、稳定、可用和风险控制综合分最高")
+	}
+}
+
+func accountShareRecommendationSelectCandidates(candidates []AccountShareRecommendationCandidate, limit int) []AccountShareRecommendationCandidate {
+	if limit <= 0 || len(candidates) <= limit {
+		return candidates
+	}
+	selected := make([]AccountShareRecommendationCandidate, 0, limit)
+	seen := make(map[string]struct{}, limit)
+	add := func(candidate AccountShareRecommendationCandidate) {
+		if len(selected) >= limit {
+			return
+		}
+		key := accountShareRecommendationSelectionKey(candidate)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		selected = append(selected, candidate)
+	}
+
+	costSlots := accountShareRecommendationCostSlotCount(limit)
+	for _, candidate := range candidates {
+		if len(selected) >= costSlots {
+			break
+		}
+		add(candidate)
+	}
+
+	accountShareRecommendationAddBestCandidate(&selected, seen, candidates, limit, func(left, right AccountShareRecommendationCandidate) bool {
+		if left.ScoreBreakdown.OverallScore != right.ScoreBreakdown.OverallScore {
+			return left.ScoreBreakdown.OverallScore > right.ScoreBreakdown.OverallScore
+		}
+		return accountShareRecommendationCandidateRanksBefore(left, right)
+	})
+	accountShareRecommendationAddBestCandidate(&selected, seen, candidates, limit, func(left, right AccountShareRecommendationCandidate) bool {
+		if left.ScoreBreakdown.StabilityScore != right.ScoreBreakdown.StabilityScore {
+			return left.ScoreBreakdown.StabilityScore > right.ScoreBreakdown.StabilityScore
+		}
+		return accountShareRecommendationCandidateRanksBefore(left, right)
+	})
+	accountShareRecommendationAddBestCandidate(&selected, seen, candidates, limit, func(left, right AccountShareRecommendationCandidate) bool {
+		if left.ScoreBreakdown.AvailabilityScore != right.ScoreBreakdown.AvailabilityScore {
+			return left.ScoreBreakdown.AvailabilityScore > right.ScoreBreakdown.AvailabilityScore
+		}
+		return accountShareRecommendationCandidateRanksBefore(left, right)
+	})
+	accountShareRecommendationAddBestCandidate(&selected, seen, candidates, limit, func(left, right AccountShareRecommendationCandidate) bool {
+		if left.ScoreBreakdown.RiskControlScore != right.ScoreBreakdown.RiskControlScore {
+			return left.ScoreBreakdown.RiskControlScore > right.ScoreBreakdown.RiskControlScore
+		}
+		return accountShareRecommendationCandidateRanksBefore(left, right)
+	})
+
+	for _, candidate := range candidates {
+		if len(selected) >= limit {
+			break
+		}
+		add(candidate)
+	}
+	sort.SliceStable(selected, func(i, j int) bool {
+		return accountShareRecommendationCandidateRanksBefore(selected[i], selected[j])
+	})
+	return selected
+}
+
+func accountShareRecommendationCostSlotCount(limit int) int {
+	switch {
+	case limit >= 8:
+		return limit - 4
+	case limit >= 5:
+		return limit - 3
+	case limit >= 3:
+		return limit - 1
+	default:
+		return 1
+	}
+}
+
+func accountShareRecommendationAddBestCandidate(selected *[]AccountShareRecommendationCandidate, seen map[string]struct{}, candidates []AccountShareRecommendationCandidate, limit int, better func(AccountShareRecommendationCandidate, AccountShareRecommendationCandidate) bool) {
+	if limit <= 0 || len(*selected) >= limit || len(candidates) == 0 {
+		return
+	}
+	bestIndex := -1
+	for i, candidate := range candidates {
+		key := accountShareRecommendationSelectionKey(candidate)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		if bestIndex < 0 || better(candidate, candidates[bestIndex]) {
+			bestIndex = i
+		}
+	}
+	if bestIndex < 0 {
+		return
+	}
+	key := accountShareRecommendationSelectionKey(candidates[bestIndex])
+	seen[key] = struct{}{}
+	*selected = append(*selected, candidates[bestIndex])
 }
 
 func accountShareRecommendationCandidateRanksBefore(left, right AccountShareRecommendationCandidate) bool {
-	if left.Score != right.Score {
-		return left.Score > right.Score
-	}
 	if left.Estimate.TotalCost != right.Estimate.TotalCost {
 		return left.Estimate.TotalCost < right.Estimate.TotalCost
+	}
+	if left.Estimate.RequestCost != right.Estimate.RequestCost {
+		return left.Estimate.RequestCost < right.Estimate.RequestCost
+	}
+	if left.Estimate.HourlyNetCost != right.Estimate.HourlyNetCost {
+		return left.Estimate.HourlyNetCost < right.Estimate.HourlyNetCost
+	}
+	if left.Score != right.Score {
+		return left.Score > right.Score
 	}
 	if left.Listing.RatingAvg != right.Listing.RatingAvg {
 		return left.Listing.RatingAvg > right.Listing.RatingAvg
 	}
 	return left.Listing.ID < right.Listing.ID
+}
+
+func accountShareRecommendationSelectionKey(candidate AccountShareRecommendationCandidate) string {
+	return accountShareRecommendationCandidateDedupeKey(candidate.Listing)
+}
+
+func accountShareRecommendationQuotaRiskPenalty(listing AccountShareListing) float64 {
+	progresses := []*UsageProgress{
+		listing.Codex5hUsage,
+		listing.Codex7dUsage,
+		listing.Anthropic5hUsage,
+		listing.Anthropic7dUsage,
+	}
+	penalty := 0.0
+	for _, progress := range progresses {
+		if progress == nil {
+			continue
+		}
+		utilization := progress.Utilization
+		if utilization <= 70 {
+			continue
+		}
+		penalty += math.Min((utilization-70)*0.45, 18)
+	}
+	return math.Min(penalty, 30)
+}
+
+func clampAccountShareRecommendationScore(value float64) float64 {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0
+	}
+	if value < 0 {
+		return 0
+	}
+	if value > 100 {
+		return 100
+	}
+	return value
+}
+
+func roundAccountShareRecommendationScore(value float64) float64 {
+	return math.Round(value*10) / 10
 }
 
 func accountShareRecommendationCandidateDedupeKey(listing AccountShareListing) string {
@@ -3650,12 +4300,11 @@ func normalizeAccountShareListingFilterLevel(level string) string {
 	if raw == "" || raw == "all" {
 		return ""
 	}
-	switch raw {
-	case AccountLevelUnknown, AccountLevelFree, AccountLevelPlus, AccountLevelPro, AccountLevelTeam:
-		return raw
-	default:
+	normalized := NormalizeAccountLevel(level)
+	if normalized == AccountLevelUnknown {
 		return ""
 	}
+	return normalized
 }
 
 func AccountShareHourlyCharge(hourlyRate float64, durationMs int) float64 {

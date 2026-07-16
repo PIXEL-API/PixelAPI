@@ -7,9 +7,7 @@ export interface RevenueSummaryParams {
   start_date?: string
   end_date?: string
   granularity?: RevenueGranularity
-  top_limit?: number
   user_id?: number
-  include_breakdowns?: boolean
 }
 
 export interface RevenueShareSettlementParams {
@@ -123,34 +121,6 @@ export interface RevenueTrendPoint {
   estimated_net_profit: number
 }
 
-export interface RevenueBreakdownItem {
-  id?: number
-  name: string
-  secondary?: string
-  requests: number
-  total_tokens: number
-  consumed_revenue: number
-  account_cost: number
-  share_owner_credit: number
-  gross_profit: number
-  gross_margin: number
-  net_profit: number
-  net_margin: number
-}
-
-export interface RevenueShareOwnerBreakdownItem {
-  id?: number
-  name: string
-  secondary?: string
-  requests: number
-  total_tokens: number
-  consumer_charge: number
-  account_cost: number
-  owner_credit: number
-  platform_fee: number
-  owner_share_ratio: number
-}
-
 export interface RevenueShareSettlementItem {
   id: number
   usage_log_id?: number
@@ -201,28 +171,14 @@ export interface RevenueSummary {
   profit: RevenueProfitStats
   platform_ledger: RevenuePlatformLedgerStats
   trend: RevenueTrendPoint[]
-  top_users: RevenueBreakdownItem[]
-  top_groups: RevenueBreakdownItem[]
-  top_accounts: RevenueBreakdownItem[]
-  top_models: RevenueBreakdownItem[]
-  top_share_owners: RevenueShareOwnerBreakdownItem[]
-}
-
-export interface RevenueBreakdowns {
-  top_users: RevenueBreakdownItem[]
-  top_groups: RevenueBreakdownItem[]
-  top_accounts: RevenueBreakdownItem[]
-  top_models: RevenueBreakdownItem[]
-  top_share_owners: RevenueShareOwnerBreakdownItem[]
 }
 
 export const revenueAPI = {
-  getSummary(params?: RevenueSummaryParams) {
-    return apiClient.get<RevenueSummary>('/admin/revenue/summary', { params })
-  },
-
-  getBreakdowns(params?: RevenueSummaryParams) {
-    return apiClient.get<RevenueBreakdowns>('/admin/revenue/breakdowns', { params })
+  getSummary(params?: RevenueSummaryParams, options: { signal?: AbortSignal } = {}) {
+    return apiClient.get<RevenueSummary>('/admin/revenue/summary', {
+      params,
+      signal: options.signal
+    })
   },
 
   async listShareSettlements(params?: RevenueShareSettlementParams): Promise<PaginatedResponse<RevenueShareSettlementItem>> {
