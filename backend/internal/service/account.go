@@ -2126,8 +2126,10 @@ func (a *Account) SupportsOpenAIImageCapability(capability OpenAIImagesCapabilit
 		return false
 	}
 	switch capability {
-	case OpenAIImagesCapabilityBasic, OpenAIImagesCapabilityNative:
+	case OpenAIImagesCapabilityBasic:
 		return a.Type == AccountTypeOAuth || a.Type == AccountTypeAPIKey
+	case OpenAIImagesCapabilityNative:
+		return a.Type == AccountTypeAPIKey
 	default:
 		return true
 	}

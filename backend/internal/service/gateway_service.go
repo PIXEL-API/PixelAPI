@@ -2323,8 +2323,15 @@ func (s *GatewayService) selectAccountShareModeBoundAccount(ctx context.Context,
 		}
 		if retryCurrentMembership {
 			now := time.Now().UTC()
-			if err := s.accountShareModeService.deferMembershipForDispatchRetry(ctx, reqCtx, membership, now); err != nil {
+			deferred, err := s.accountShareModeService.deferMembershipForDispatchRetry(ctx, reqCtx, membership, now)
+			if err != nil {
 				return nil, true, err
+			}
+			if !deferred {
+				if lastErr != nil {
+					return nil, true, lastErr
+				}
+				return nil, true, ErrNoAvailableAccounts
 			}
 			membership = nil
 			listing = nil

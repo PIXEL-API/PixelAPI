@@ -2508,8 +2508,49 @@ func (s *OpenAIGatewayService) ForwardWithAnalysis(ctx context.Context, c *gin.C
 
 	reqModel, reqStream, promptCacheKey := analysis.Model, analysis.Stream, analysis.PromptCacheKey
 	originalModel := reqModel
+	imageOnlyResponsesModel := strings.HasPrefix(strings.ToLower(strings.TrimSpace(reqModel)), "gpt-image-")
+	rejectImageOnlyResponsesRequest := func(param string, requestErr error) (*OpenAIForwardResult, error) {
+		setOpsUpstreamError(c, http.StatusBadRequest, requestErr.Error(), "")
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{
+				"type":    "invalid_request_error",
+				"message": requestErr.Error(),
+				"param":   param,
+			},
+		})
+		return nil, requestErr
+	}
+	if imageOnlyResponsesModel {
+		reqBody, parseErr := getOpenAIRequestBodyMap(c, body)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		background := strings.TrimSpace(firstNonEmptyString(reqBody["background"]))
+		if validationErr := validateOpenAIImagesOptionsForModel(&OpenAIImagesRequest{
+			Model:      reqModel,
+			Background: background,
+		}, reqModel); validationErr != nil {
+			return rejectImageOnlyResponsesRequest("background", validationErr)
+		}
+		if n, exists := reqBody["n"]; exists {
+			number, validNumber := n.(float64)
+			if !validNumber || number != 1 {
+				requestErr := fmt.Errorf("/v1/responses image_generation supports one image per request; n=%v is not supported; use /v1/images/generations for multiple images", n)
+				return rejectImageOnlyResponsesRequest("n", requestErr)
+			}
+			delete(reqBody, "n")
+			body, err = marshalOpenAIUpstreamJSON(reqBody)
+			if err != nil {
+				return nil, fmt.Errorf("remove unsupported /responses image n parameter: %w", err)
+			}
+		}
+	}
 	if account != nil && account.Platform == PlatformGrok {
 		return s.forwardGrokResponses(ctx, c, account, body, originalModel, reqStream, startTime)
+	}
+	if account.Type == AccountTypeAPIKey && imageOnlyResponsesModel {
+		requestErr := fmt.Errorf("/v1/responses does not accept image-only model %q as the top-level model for API Key accounts; use /v1/images/generations, or use a Responses-compatible text model with the image_generation tool", reqModel)
+		return rejectImageOnlyResponsesRequest("model", requestErr)
 	}
 	if account.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
 		return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body)
@@ -2519,6 +2560,10 @@ func (s *OpenAIGatewayService) ForwardWithAnalysis(ctx context.Context, c *gin.C
 	codexImageGenerationExplicitToolPolicy := codexImageGenerationExplicitToolPolicyAllow
 	if isCodexCLI {
 		codexImageGenerationExplicitToolPolicy = account.CodexImageGenerationExplicitToolPolicy()
+	}
+	if imageOnlyResponsesModel && isCodexCLI && codexImageGenerationExplicitToolPolicy == codexImageGenerationExplicitToolPolicyStrip {
+		requestErr := fmt.Errorf("/v1/responses image model %q is disabled by this account's Codex image generation policy; use /v1/images/generations or set codex_image_generation_explicit_tool_policy to allow", reqModel)
+		return rejectImageOnlyResponsesRequest("model", requestErr)
 	}
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
 	clientTransport := GetOpenAIClientTransport(c)
@@ -2560,6 +2605,24 @@ func (s *OpenAIGatewayService) ForwardWithAnalysis(ctx context.Context, c *gin.C
 				"type": "invalid_request_error", "message": err.Error(), "param": "tools",
 			}})
 			return nil, err
+		}
+	}
+	if passthroughEnabled && imageOnlyResponsesModel {
+		reqBody, parseErr := getOpenAIRequestBodyMap(c, body)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		if normalizeOpenAIResponsesImageOnlyModel(reqBody) {
+			body, err = marshalOpenAIUpstreamJSON(reqBody)
+			if err != nil {
+				return nil, fmt.Errorf("normalize passthrough image model request: %w", err)
+			}
+			logger.LegacyPrintf(
+				"service.openai_gateway",
+				"[OpenAI passthrough] Normalized /responses image-only model request inbound_model=%s upstream_model=%s",
+				reqModel,
+				openAIImagesResponsesMainModel,
+			)
 		}
 	}
 	originalBody := body

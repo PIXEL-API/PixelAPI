@@ -1338,6 +1338,11 @@ func (s *OpenAIGatewayService) selectAccountShareModeBoundAccount(
 	if !s.accountShareModeService.IsModeGroup(ctx, *groupID) {
 		return nil, decision, false, nil
 	}
+	boundImageCapability := requiredImageCapability
+	if boundImageCapability == OpenAIImagesCapabilityNative {
+		// 共享模式必须保留绑定账号；OAuth 桥接能力由 ForwardImages 做精确参数校验，不能在这里误挂起会员关系。
+		boundImageCapability = OpenAIImagesCapabilityBasic
+	}
 	reqCtx, ok := AccountShareModeRequestFromContext(ctx)
 	if !ok {
 		return nil, decision, true, ErrAccountShareModeGroupUnbound
@@ -1402,7 +1407,7 @@ func (s *OpenAIGatewayService) selectAccountShareModeBoundAccount(
 			lastErr = ErrNoAvailableAccounts
 			retryCurrentMembership = true
 		}
-		if !retryCurrentMembership && !accountSupportsRequestedOpenAIImageCapability(account, requiredImageCapability) {
+		if !retryCurrentMembership && !accountSupportsRequestedOpenAIImageCapability(account, boundImageCapability) {
 			lastErr = ErrNoAvailableAccounts
 			retryCurrentMembership = true
 		}
@@ -1416,8 +1421,15 @@ func (s *OpenAIGatewayService) selectAccountShareModeBoundAccount(
 		}
 		if retryCurrentMembership {
 			now := time.Now().UTC()
-			if err := s.accountShareModeService.deferMembershipForDispatchRetry(ctx, reqCtx, membership, now); err != nil {
+			deferred, err := s.accountShareModeService.deferMembershipForDispatchRetry(ctx, reqCtx, membership, now)
+			if err != nil {
 				return nil, decision, true, err
+			}
+			if !deferred {
+				if lastErr != nil {
+					return nil, decision, true, lastErr
+				}
+				return nil, decision, true, ErrNoAvailableAccounts
 			}
 			membership = nil
 			listing = nil

@@ -144,6 +144,16 @@ func TestLoadDefaultSchedulingConfig(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultOpenAIImageTimeoutConfig(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, 600, cfg.Gateway.OpenAIResponseHeaderTimeout)
+	require.Equal(t, 1800, cfg.Gateway.ImageNonstreamTotalTimeoutSeconds)
+	require.Equal(t, DefaultUpstreamResponseReadMaxBytes, cfg.Gateway.UpstreamResponseReadMaxBytes)
+}
+
 func TestLoadDefaultOpenAIWSConfig(t *testing.T) {
 	resetViperWithJWTSecret(t)
 
@@ -1542,6 +1552,16 @@ func TestValidateConfigErrors(t *testing.T) {
 			name:    "gateway stream keepalive range",
 			mutate:  func(c *Config) { c.Gateway.StreamKeepaliveInterval = 4 },
 			wantErr: "gateway.stream_keepalive_interval",
+		},
+		{
+			name:    "gateway image nonstream total timeout negative",
+			mutate:  func(c *Config) { c.Gateway.ImageNonstreamTotalTimeoutSeconds = -1 },
+			wantErr: "gateway.image_nonstream_total_timeout_seconds must be 0 or between 60-3600 seconds",
+		},
+		{
+			name:    "gateway image nonstream total timeout range",
+			mutate:  func(c *Config) { c.Gateway.ImageNonstreamTotalTimeoutSeconds = 59 },
+			wantErr: "gateway.image_nonstream_total_timeout_seconds must be 0 or between 60-3600 seconds",
 		},
 		{
 			name:    "gateway image nonstream keepalive negative",

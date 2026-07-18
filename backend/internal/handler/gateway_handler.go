@@ -1325,7 +1325,11 @@ func (c *apiKeyGroupRouteCursor) recordSuccess(apiKeyID int64) {
 }
 
 func canSwitchAPIKeyGroupRouteAfterForward(c *gin.Context, cursor *apiKeyGroupRouteCursor, failoverErr *service.UpstreamFailoverError, streamStarted bool, writerSizeBeforeForward int) bool {
-	if cursor == nil || !cursor.hasNext() || !shouldSwitchAPIKeyGroupRoute(failoverErr) || streamStarted {
+	if cursor == nil || !cursor.hasNext() || !shouldSwitchAPIKeyGroupRoute(failoverErr) {
+		return false
+	}
+	safeAfterWrite := failoverErr != nil && failoverErr.SafeToFailoverAfterWrite
+	if streamStarted && !safeAfterWrite {
 		return false
 	}
 	if c != nil && c.Writer != nil {
@@ -1333,7 +1337,7 @@ func canSwitchAPIKeyGroupRouteAfterForward(c *gin.Context, cursor *apiKeyGroupRo
 		if service.OpenAIImagesJSONKeepalivePresent(c) {
 			writtenSize = service.OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c)
 		}
-		if writtenSize != writerSizeBeforeForward {
+		if writtenSize != writerSizeBeforeForward && !safeAfterWrite {
 			return false
 		}
 	}
@@ -1414,6 +1418,8 @@ func shouldSwitchAPIKeyGroupRoute(failoverErr *service.UpstreamFailoverError) bo
 		return false
 	}
 	switch failoverErr.StatusCode {
+	case http.StatusBadRequest:
+		return failoverErr.Scope == service.GatewayFailureScopeAccount
 	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout, 529:
 		return true
 	default:

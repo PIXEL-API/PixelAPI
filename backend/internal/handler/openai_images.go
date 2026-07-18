@@ -138,6 +138,7 @@ routeLoop:
 			return
 		}
 		channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), currentAPIKey.GroupID, parsed.Model)
+		selectionModel := resolveOpenAIAccountSelectionModel(parsed.Model, channelMapping)
 		if err := h.billingCacheService.CheckBillingEligibility(c.Request.Context(), currentAPIKey.User, currentAPIKey, currentAPIKey.Group, currentSubscription); err != nil {
 			reqLog.Info("openai.images.billing_eligibility_check_failed",
 				zap.Error(err),
@@ -173,7 +174,7 @@ routeLoop:
 				selectionCtx,
 				currentAPIKey.GroupID,
 				sessionHash,
-				parsed.Model,
+				selectionModel,
 				failedAccountIDs,
 				parsed.RequiredCapability,
 			)
@@ -192,7 +193,7 @@ routeLoop:
 					if routeCursor.switchToNext(apiKey.ID, "account_select_failed", reqLog, zap.Error(err)) {
 						continue routeLoop
 					}
-					cls := classifyNoAccountErrorFromGin(c, h.gatewayService, currentAPIKey, parsed.Model, parsed.Model, service.PlatformOpenAI)
+					cls := classifyNoAccountErrorFromGin(c, h.gatewayService, currentAPIKey, selectionModel, parsed.Model, service.PlatformOpenAI)
 					h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
 					return
 				}
@@ -201,14 +202,14 @@ routeLoop:
 						routeCursor.switchToNext(apiKey.ID, "account_selection_exhausted", reqLog, zap.Int("upstream_status", lastFailoverErr.StatusCode)) {
 						continue routeLoop
 					}
-					h.handleFailoverExhausted(c, lastFailoverErr, streamStarted)
+					h.handleImagesFailoverExhausted(c, lastFailoverErr, streamStarted)
 				} else {
 					h.handleFailoverExhaustedSimple(c, 502, streamStarted)
 				}
 				return
 			}
 			if selection == nil || selection.Account == nil {
-				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, currentAPIKey, parsed.Model, parsed.Model, service.PlatformOpenAI)
+				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, currentAPIKey, selectionModel, parsed.Model, service.PlatformOpenAI)
 				h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
 				return
 			}
@@ -267,19 +268,22 @@ routeLoop:
 					if failoverClientGone(c) {
 						return
 					}
-					if failoverErr.ShouldReportAccountScheduleFailure() {
+					if shouldReportOpenAIImagesScheduleFailure(failoverErr) {
 						h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, false, nil)
 					}
-					if service.OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c) != writerSizeBeforeForward {
+					if !openAIImagesForwardMayFailover(c, writerSizeBeforeForward, failoverErr) {
 						reqLog.Warn("openai.images.upstream_failover_skipped_after_flush",
 							zap.Int64("account_id", account.ID),
 							zap.Int("upstream_status", failoverErr.StatusCode),
 						)
-						h.handleFailoverExhausted(c, failoverErr, true)
+						h.handleImagesFailoverExhausted(c, failoverErr, true)
 						return
 					}
+					if failoverErr.SafeToFailoverAfterWrite && c.Writer.Written() && !service.OpenAIImagesJSONKeepalivePresent(c) {
+						streamStarted = true
+					}
 					if !failoverErr.ShouldRetryNextAccount() {
-						h.handleFailoverExhausted(c, failoverErr, streamStarted)
+						h.handleImagesFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
 					if failoverErr.RetryableOnSameAccount {
@@ -308,7 +312,7 @@ routeLoop:
 							routeCursor.switchToNext(apiKey.ID, "upstream_failover_exhausted", reqLog, zap.Int("upstream_status", failoverErr.StatusCode)) {
 							continue routeLoop
 						}
-						h.handleFailoverExhausted(c, failoverErr, streamStarted)
+						h.handleImagesFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
 					switchCount++
@@ -347,6 +351,8 @@ routeLoop:
 
 			userAgent := c.GetHeader("User-Agent")
 			clientIP := ip.GetClientIP(c)
+			inboundEndpoint := GetInboundEndpoint(c)
+			upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
 			requestPayloadHash := service.HashUsageRequestPayload(body)
 			if parsed.Multipart {
 				requestPayloadHash = service.HashUsageRequestPayload([]byte(parsed.StickySessionSeed()))
@@ -360,8 +366,8 @@ routeLoop:
 					User:               currentAPIKey.User,
 					Account:            account,
 					Subscription:       currentSubscription,
-					InboundEndpoint:    GetInboundEndpoint(c),
-					UpstreamEndpoint:   GetUpstreamEndpoint(c, account.Platform),
+					InboundEndpoint:    inboundEndpoint,
+					UpstreamEndpoint:   upstreamEndpoint,
 					UserAgent:          userAgent,
 					IPAddress:          clientIP,
 					RequestPayloadHash: requestPayloadHash,
@@ -386,6 +392,42 @@ routeLoop:
 			return
 		}
 	}
+}
+
+func shouldReportOpenAIImagesScheduleFailure(failoverErr *service.UpstreamFailoverError) bool {
+	if failoverErr == nil {
+		return false
+	}
+	if failoverErr.Scope == service.GatewayFailureScopeRequest && failoverErr.NextAccountAction == service.NextAccountStop {
+		return false
+	}
+	return failoverErr.ShouldReportAccountScheduleFailure()
+}
+
+func openAIImagesForwardMayFailover(c *gin.Context, writerSizeBeforeForward int, failoverErr *service.UpstreamFailoverError) bool {
+	if c == nil || c.Writer == nil {
+		return false
+	}
+	if service.OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c) == writerSizeBeforeForward {
+		return true
+	}
+	return failoverErr != nil && failoverErr.SafeToFailoverAfterWrite
+}
+
+func (h *OpenAIGatewayHandler) handleImagesFailoverExhausted(c *gin.Context, failoverErr *service.UpstreamFailoverError, streamStarted bool) {
+	if failoverErr != nil &&
+		failoverErr.Scope == service.GatewayFailureScopeRequest &&
+		failoverErr.NextAccountAction == service.NextAccountStop &&
+		failoverErr.ClientStatusCode >= http.StatusBadRequest &&
+		failoverErr.ClientStatusCode < http.StatusInternalServerError {
+		message := strings.TrimSpace(failoverErr.ClientMessage)
+		if message == "" {
+			message = http.StatusText(failoverErr.ClientStatusCode)
+		}
+		h.handleStreamingAwareError(c, failoverErr.ClientStatusCode, "invalid_request_error", message, streamStarted)
+		return
+	}
+	h.handleFailoverExhausted(c, failoverErr, streamStarted)
 }
 
 func (h *OpenAIGatewayHandler) openAIImagesJSONKeepaliveInterval() time.Duration {

@@ -152,14 +152,16 @@ gateway:
   # Timeout for waiting upstream response headers (seconds)
   # 等待上游响应头超时时间（秒）
   response_header_timeout: 600
-  # OpenAI/Codex 上游响应头超时（秒，0=禁用；避免长排队被通用超时截断）
-  openai_response_header_timeout: 0
+  # OpenAI/Codex 上游响应头超时（秒，0=禁用）
+  openai_response_header_timeout: 600
+  # Images 非流式请求总超时（秒，0=禁用）；独立于普通流数据间隔超时
+  image_nonstream_total_timeout_seconds: 1800
   # Max request body size in bytes (default: 256MB)
   # 请求体最大字节数（默认 256MB）
   max_body_size: 268435456
-  # Max bytes to read for non-stream upstream responses (default: 8MB)
-  # 非流式上游响应体读取上限（默认 8MB）
-  upstream_response_read_max_bytes: 8388608
+  # Max bytes to read for non-stream upstream responses (default: 128MB)
+  # 非流式上游响应体读取上限（默认 128MB）
+  upstream_response_read_max_bytes: 134217728
   # Max bytes to read for proxy probe responses (default: 1MB)
   # 代理探测响应体读取上限（默认 1MB）
   proxy_probe_response_read_max_bytes: 1048576

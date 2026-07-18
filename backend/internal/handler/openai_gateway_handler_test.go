@@ -128,6 +128,68 @@ func TestOpenAIEnsureForwardErrorResponseDoesNotAppendSecondImageJSON(t *testing
 	require.Equal(t, originalBody, recorder.Body.String())
 }
 
+func TestOpenAIImagesForwardMayFailoverOnlyBeforeSemanticWriteOrWhenExplicitlySafe(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	writtenBefore := service.OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c)
+
+	require.True(t, openAIImagesForwardMayFailover(c, writtenBefore, nil))
+
+	_, err := c.Writer.Write([]byte("semantic-output"))
+	require.NoError(t, err)
+	require.False(t, openAIImagesForwardMayFailover(c, writtenBefore, nil))
+	require.False(t, openAIImagesForwardMayFailover(c, writtenBefore, &service.UpstreamFailoverError{}))
+	require.True(t, openAIImagesForwardMayFailover(c, writtenBefore, &service.UpstreamFailoverError{SafeToFailoverAfterWrite: true}))
+}
+
+func TestOpenAIImagesForwardMayFailoverAfterJSONKeepalivePadding(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+	stop := service.StartOpenAIImagesJSONKeepalive(c, time.Millisecond)
+	defer stop()
+	writtenBefore := service.OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c)
+
+	require.Eventually(t, c.Writer.Written, time.Second, time.Millisecond)
+	require.Equal(t, writtenBefore, service.OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c))
+	require.True(t, openAIImagesForwardMayFailover(c, writtenBefore, nil))
+}
+
+func TestOpenAIImagesRequestFailureIsNotReportedAsAccountFailure(t *testing.T) {
+	requestErr := &service.UpstreamFailoverError{
+		Scope:             service.GatewayFailureScopeRequest,
+		NextAccountAction: service.NextAccountStop,
+		ClientStatusCode:  http.StatusBadRequest,
+		ClientMessage:     "n is not supported for this account route",
+	}
+	require.False(t, shouldReportOpenAIImagesScheduleFailure(requestErr))
+
+	accountErr := &service.UpstreamFailoverError{
+		Scope:             service.GatewayFailureScopeAccount,
+		NextAccountAction: service.NextAccountRetry,
+	}
+	require.True(t, shouldReportOpenAIImagesScheduleFailure(accountErr))
+	require.False(t, shouldReportOpenAIImagesScheduleFailure(nil))
+}
+
+func TestOpenAIImagesRequestFailureReturnsAccurateClientStatus(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+	h := &OpenAIGatewayHandler{}
+
+	h.handleImagesFailoverExhausted(c, &service.UpstreamFailoverError{
+		Scope:             service.GatewayFailureScopeRequest,
+		NextAccountAction: service.NextAccountStop,
+		ClientStatusCode:  http.StatusUnprocessableEntity,
+		ClientMessage:     "unsupported image option",
+	}, false)
+
+	require.Equal(t, http.StatusUnprocessableEntity, recorder.Code)
+	require.Equal(t, "invalid_request_error", gjson.Get(recorder.Body.String(), "error.type").String())
+	require.Equal(t, "unsupported image option", gjson.Get(recorder.Body.String(), "error.message").String())
+}
+
 func TestAppendOpenAIProxyLogFields(t *testing.T) {
 	base := []zap.Field{zap.Int64("account_id", 7)}
 
@@ -442,6 +504,20 @@ func TestResolveOpenAIForwardDefaultMappedModel(t *testing.T) {
 			Group: &service.Group{},
 		}, ""))
 	})
+}
+
+func TestResolveOpenAIAccountSelectionModel(t *testing.T) {
+	require.Equal(t, "gpt-image-2", resolveOpenAIAccountSelectionModel(" gpt-image-1 ", service.ChannelMappingResult{
+		Mapped:      true,
+		MappedModel: " gpt-image-2 ",
+	}))
+	require.Equal(t, "gpt-image-1", resolveOpenAIAccountSelectionModel(" gpt-image-1 ", service.ChannelMappingResult{
+		Mapped:      true,
+		MappedModel: "   ",
+	}))
+	require.Equal(t, "gpt-image-1", resolveOpenAIAccountSelectionModel(" gpt-image-1 ", service.ChannelMappingResult{
+		MappedModel: "gpt-image-2",
+	}))
 }
 
 func TestResolveOpenAIMessagesDispatchMappedModel(t *testing.T) {
@@ -877,6 +953,75 @@ func TestOpenAIForwardMayFailoverOnlyBeforeSemanticWriteOrWhenExplicitlySafe(t *
 	require.False(t, openAIForwardMayFailover(c, writtenBefore, nil))
 	require.False(t, openAIForwardMayFailover(c, writtenBefore, &service.UpstreamFailoverError{}))
 	require.True(t, openAIForwardMayFailover(c, writtenBefore, &service.UpstreamFailoverError{SafeToFailoverAfterWrite: true}))
+}
+
+func TestCanSwitchAPIKeyGroupRouteAfterForwardAllowsOnlyExplicitlySafeWrites(t *testing.T) {
+	newCursor := func(hasNext bool) *apiKeyGroupRouteCursor {
+		candidateCount := 1
+		if hasNext {
+			candidateCount = 2
+		}
+		candidates := make([]apiKeyGroupRouteCandidate, candidateCount)
+		for i := range candidates {
+			candidates[i].APIKey = &service.APIKey{ID: int64(i + 1)}
+		}
+		return newAPIKeyGroupRouteCursorFromCandidates(candidates, true)
+	}
+	newContextWithComment := func() (*gin.Context, int) {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		writtenBefore := c.Writer.Size()
+		_, err := c.Writer.Write([]byte(":\n\n"))
+		require.NoError(t, err)
+		return c, writtenBefore
+	}
+
+	t.Run("safe comment permits route switch after stream started", func(t *testing.T) {
+		c, writtenBefore := newContextWithComment()
+		failoverErr := &service.UpstreamFailoverError{
+			StatusCode:               http.StatusBadGateway,
+			SafeToFailoverAfterWrite: true,
+		}
+		require.True(t, canSwitchAPIKeyGroupRouteAfterForward(c, newCursor(true), failoverErr, true, writtenBefore))
+	})
+
+	t.Run("non-safe write remains blocked", func(t *testing.T) {
+		c, writtenBefore := newContextWithComment()
+		failoverErr := &service.UpstreamFailoverError{StatusCode: http.StatusBadGateway}
+		require.False(t, canSwitchAPIKeyGroupRouteAfterForward(c, newCursor(true), failoverErr, true, writtenBefore))
+	})
+
+	t.Run("safe write still requires another route", func(t *testing.T) {
+		c, writtenBefore := newContextWithComment()
+		failoverErr := &service.UpstreamFailoverError{
+			StatusCode:               http.StatusBadGateway,
+			SafeToFailoverAfterWrite: true,
+		}
+		require.False(t, canSwitchAPIKeyGroupRouteAfterForward(c, newCursor(false), failoverErr, true, writtenBefore))
+	})
+
+	t.Run("safe write still requires a route-switchable status", func(t *testing.T) {
+		c, writtenBefore := newContextWithComment()
+		failoverErr := &service.UpstreamFailoverError{
+			StatusCode:               http.StatusBadRequest,
+			SafeToFailoverAfterWrite: true,
+		}
+		require.False(t, canSwitchAPIKeyGroupRouteAfterForward(c, newCursor(true), failoverErr, true, writtenBefore))
+	})
+}
+
+func TestShouldSwitchAPIKeyGroupRouteAllowsOnlyAccountScopedBadRequest(t *testing.T) {
+	require.True(t, shouldSwitchAPIKeyGroupRoute(&service.UpstreamFailoverError{
+		StatusCode: http.StatusBadRequest,
+		Scope:      service.GatewayFailureScopeAccount,
+	}))
+	require.False(t, shouldSwitchAPIKeyGroupRoute(&service.UpstreamFailoverError{
+		StatusCode: http.StatusBadRequest,
+		Scope:      service.GatewayFailureScopeRequest,
+	}))
+	require.False(t, shouldSwitchAPIKeyGroupRoute(&service.UpstreamFailoverError{
+		StatusCode: http.StatusBadRequest,
+	}))
 }
 
 func TestOpenAIFirstOutputFailoverExhaustedAllowsOnlyOneAccountSwitch(t *testing.T) {

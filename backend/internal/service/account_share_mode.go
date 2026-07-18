@@ -63,6 +63,8 @@ const (
 	AccountShareModeEditSessionTTL                  = 10 * time.Minute
 	AccountShareModeQueueMaxItems                   = 5
 	AccountShareModeDispatchCooldown                = 5 * time.Minute
+	AccountShareModeConnectivityTestTimeout         = 90 * time.Second
+	AccountShareModeImageConnectivityTestTimeout    = 10 * time.Minute
 	AccountShareRecommendationDefaultLimit          = 5
 	AccountShareRecommendationMaxLimit              = 10
 	AccountShareRecommendationMaxRequests           = 1000000
@@ -908,7 +910,6 @@ type AccountShareModeService struct {
 	reviewStopOnce       sync.Once
 	reviewStartOnce      sync.Once
 	reviewWG             sync.WaitGroup
-	lastRequestTouchL1   sync.Map
 }
 
 func NewAccountShareModeService(
@@ -2305,9 +2306,10 @@ func (s *AccountShareModeService) validateOwnerRelist(ctx context.Context, actor
 		return nil
 	}
 
-	testCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	modelID := firstAllowedModel(listing.AllowedModels)
+	testCtx, cancel := context.WithTimeout(ctx, accountShareConnectivityTestTimeout(modelID))
 	defer cancel()
-	result, err := s.accountTestService.RunTestBackground(testCtx, listing.AccountID, firstAllowedModel(listing.AllowedModels))
+	result, err := s.accountTestService.RunTestBackground(testCtx, listing.AccountID, modelID)
 	if err != nil {
 		return accountShareRelistTestError(err.Error())
 	}
@@ -2343,6 +2345,47 @@ func accountShareRelistTestError(reason string) error {
 		reason = "account test failed"
 	}
 	return infraerrors.Newf(http.StatusBadRequest, "ACCOUNT_SHARE_RELIST_TEST_FAILED", "重新上架前自动测试失败：%s", reason)
+}
+
+func accountShareConnectivityTestTimeout(modelID string) time.Duration {
+	if isOpenAIImageModel(strings.TrimSpace(modelID)) {
+		return AccountShareModeImageConnectivityTestTimeout
+	}
+	return AccountShareModeConnectivityTestTimeout
+}
+
+func isTransientAccountShareConnectivityFailure(message string) bool {
+	message = strings.ToLower(strings.TrimSpace(message))
+	if message == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"context deadline exceeded",
+		"context canceled",
+		"request failed",
+		"failed to read",
+		"timeout",
+		"timed out",
+		"temporary",
+		"temporarily",
+		"try again",
+		"connection reset",
+		"unexpected eof",
+		"rate limit",
+		"rate_limit",
+		"too many requests",
+		"overloaded",
+		"capacity",
+		"returned 408",
+		"returned 425",
+		"returned 429",
+		"returned 5",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *AccountShareModeService) enrichListingRuntime(ctx context.Context, listing *AccountShareListing) {
@@ -2793,9 +2836,13 @@ func (s *AccountShareModeService) ResolveActiveBindingForRequest(ctx context.Con
 		}
 		if accountShareListingAccountUnavailableAt(listing, now) {
 			afterRank = membership.QueueRank
-			result, err := s.suspendMembershipForDispatchFailure(ctx, membership, now)
+			result, suspended, err := s.suspendMembershipForDispatchFailure(ctx, membership, now)
 			if err != nil {
 				return nil, nil, err
+			}
+			if !suspended {
+				lastErr = ErrNoAvailableAccounts
+				break
 			}
 			s.invalidateSeatBillingCaches(result)
 			continue
@@ -2807,9 +2854,6 @@ func (s *AccountShareModeService) ResolveActiveBindingForRequest(ctx context.Con
 		if ended {
 			afterRank = membership.QueueRank
 			continue
-		}
-		if err := s.touchMembershipLastRequest(ctx, membership.ID, now); err != nil {
-			return nil, nil, err
 		}
 		if requestCtx, ok := AccountShareModeRequestFromContext(ctx); ok && requestCtx.state != nil {
 			requestCtx.state.set(userID, apiKeyID, groupID, membership, listing, nil)
@@ -2876,37 +2920,48 @@ func (s *AccountShareModeService) resolveActiveOrActivateQueuedBinding(ctx conte
 	return membership, listing, nil
 }
 
-func (s *AccountShareModeService) deferMembershipForDispatchRetry(ctx context.Context, requestCtx AccountShareModeRequestContext, membership *AccountShareMembership, now time.Time) error {
+func (s *AccountShareModeService) deferMembershipForDispatchRetry(ctx context.Context, requestCtx AccountShareModeRequestContext, membership *AccountShareMembership, now time.Time) (bool, error) {
 	if s == nil || membership == nil || membership.ID <= 0 {
-		return nil
+		return false, nil
 	}
-	result, err := s.suspendMembershipForDispatchFailure(ctx, membership, now)
+	result, suspended, err := s.suspendMembershipForDispatchFailure(ctx, membership, now)
 	if err != nil {
-		return err
+		return false, err
+	}
+	if !suspended {
+		return false, nil
 	}
 	s.invalidateSeatBillingCaches(result)
 	if requestCtx.state != nil {
 		requestCtx.state.clear()
 	}
-	return nil
+	return true, nil
 }
 
-func (s *AccountShareModeService) suspendMembershipForDispatchFailure(ctx context.Context, membership *AccountShareMembership, now time.Time) (*AccountShareSeatBillingResult, error) {
+func (s *AccountShareModeService) suspendMembershipForDispatchFailure(ctx context.Context, membership *AccountShareMembership, now time.Time) (*AccountShareSeatBillingResult, bool, error) {
 	if s == nil || s.repo == nil || membership == nil || membership.ID <= 0 {
-		return &AccountShareSeatBillingResult{}, nil
+		return &AccountShareSeatBillingResult{}, false, nil
+	}
+	active, err := s.membershipHasActiveConcurrency(ctx, membership.ID)
+	if err != nil {
+		return nil, false, err
+	}
+	if active {
+		log.Printf("account_share_mode: dispatch suspension skipped for active membership: membership_id=%d", membership.ID)
+		return &AccountShareSeatBillingResult{}, false, nil
 	}
 	suspended, err := s.repo.SuspendMembershipForDispatchFailure(ctx, membership.ID, now, now.Add(AccountShareModeDispatchCooldown))
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if suspended == nil {
-		return &AccountShareSeatBillingResult{}, nil
+		return &AccountShareSeatBillingResult{}, false, nil
 	}
 	return &AccountShareSeatBillingResult{
 		DebitUserIDs:         []int64{suspended.ConsumerUserID},
 		CreditUserIDs:        []int64{suspended.OwnerUserID},
 		EndedConsumerUserIDs: []int64{suspended.ConsumerUserID},
-	}, nil
+	}, true, nil
 }
 
 func (s *AccountShareModeService) endIdleMembershipForRequest(ctx context.Context, membership *AccountShareMembership, now time.Time) (bool, error) {
@@ -2939,23 +2994,6 @@ func (s *AccountShareModeService) endIdleMembershipForRequest(ctx context.Contex
 		})
 	}
 	return true, nil
-}
-
-func (s *AccountShareModeService) touchMembershipLastRequest(ctx context.Context, membershipID int64, at time.Time) error {
-	if s == nil || s.repo == nil || membershipID <= 0 {
-		return nil
-	}
-	now := at.UTC()
-	if v, ok := s.lastRequestTouchL1.Load(membershipID); ok {
-		if nextAllowedAt, ok := v.(time.Time); ok && now.Before(nextAllowedAt) {
-			return nil
-		}
-	}
-	if err := s.repo.TouchMembershipLastRequest(ctx, membershipID, now); err != nil {
-		return err
-	}
-	s.lastRequestTouchL1.Store(membershipID, now.Add(AccountShareModeLastRequestTouchInterval))
-	return nil
 }
 
 func (s *AccountShareModeService) membershipHasActiveConcurrency(ctx context.Context, membershipID int64) (bool, error) {
@@ -3029,7 +3067,7 @@ func (s *AccountShareModeService) schedulePostCreateConnectivityTest(listing *Ac
 	accountID := listing.AccountID
 	modelID := firstAllowedModel(listing.AllowedModels)
 	go func() {
-		testCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		testCtx, cancel := context.WithTimeout(context.Background(), accountShareConnectivityTestTimeout(modelID))
 		defer cancel()
 
 		result, err := s.accountTestService.RunTestBackground(testCtx, accountID, modelID)
@@ -3044,6 +3082,11 @@ func (s *AccountShareModeService) schedulePostCreateConnectivityTest(listing *Ac
 			}
 		}
 		if errorMessage == "" {
+			return
+		}
+		if testCtx.Err() != nil || isTransientAccountShareConnectivityFailure(errorMessage) {
+			safeMessage := truncateString(sanitizeUpstreamErrorMessage(errorMessage), 512)
+			log.Printf("account_share_mode: transient post-create connectivity test failure ignored: account_id=%d err=%s", accountID, safeMessage)
 			return
 		}
 
@@ -3127,7 +3170,6 @@ func (s *AccountShareModeService) forceTouchMembershipLastRequest(membershipID i
 	if err := s.repo.TouchMembershipLastRequest(ctx, membershipID, now); err != nil {
 		return err
 	}
-	s.lastRequestTouchL1.Store(membershipID, now.Add(AccountShareModeLastRequestTouchInterval))
 	return nil
 }
 

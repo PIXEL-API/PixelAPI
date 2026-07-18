@@ -4605,6 +4605,12 @@ func (r *accountShareModeRepository) SuspendMembershipForDispatchFailure(ctx con
 	if err != nil {
 		return nil, err
 	}
+	// Slot acquisition and its heartbeat update last_request_at only after the
+	// membership is actually in use. Keep this check inside the membership row
+	// lock so a concurrent dispatch failure cannot queue an active stream.
+	if accountShareMembershipRecentlyActive(membership, failedAt) {
+		return nil, nil
+	}
 	membership, err = r.suspendActiveMembershipInTx(ctx, tx, membership, failedAt, cooldownUntil)
 	if err != nil {
 		return nil, err

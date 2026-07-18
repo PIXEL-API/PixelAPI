@@ -772,8 +772,11 @@ type GatewayConfig struct {
 	// 注意：这不影响流式数据传输，只控制等待响应头的时间
 	ResponseHeaderTimeout int `mapstructure:"response_header_timeout"`
 	// OpenAIResponseHeaderTimeout: OpenAI/Codex 上游等待响应头的超时时间（秒），0表示无超时。
-	// OpenAI/Codex 请求可能在上游排队较久；默认不使用通用响应头超时截断。
+	// OpenAI/Codex 请求可能在上游排队较久，因此使用独立且更宽松的超时。
 	OpenAIResponseHeaderTimeout int `mapstructure:"openai_response_header_timeout"`
+	// ImageNonstreamTotalTimeoutSeconds: Images 非流式请求的总超时时间（秒），0表示禁用。
+	// 图片生成可能长时间没有响应体数据，不能复用普通流数据间隔超时。
+	ImageNonstreamTotalTimeoutSeconds int `mapstructure:"image_nonstream_total_timeout_seconds"`
 	// OpenAIFirstOutputTimeoutSeconds: OpenAI 原生 HTTP Responses 首个语义输出超时（秒），0 表示禁用。
 	OpenAIFirstOutputTimeoutSeconds int `mapstructure:"openai_first_output_timeout_seconds"`
 	// OpenAIHighEffortFirstOutputTimeoutSeconds: high/xhigh/max 推理的首个语义输出超时（秒）。
@@ -1987,7 +1990,8 @@ func setDefaults() {
 
 	// Gateway
 	viper.SetDefault("gateway.response_header_timeout", 600) // 600秒(10分钟)等待上游响应头，LLM高负载时可能排队较久
-	viper.SetDefault("gateway.openai_response_header_timeout", 0)
+	viper.SetDefault("gateway.openai_response_header_timeout", 600)
+	viper.SetDefault("gateway.image_nonstream_total_timeout_seconds", 1800)
 	viper.SetDefault("gateway.openai_first_output_timeout_seconds", 0)
 	viper.SetDefault("gateway.openai_high_effort_first_output_timeout_seconds", 0)
 	viper.SetDefault("gateway.log_upstream_error_body", true)
@@ -2712,6 +2716,10 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.OpenAIResponseHeaderTimeout < 0 {
 		return fmt.Errorf("gateway.openai_response_header_timeout must be non-negative")
+	}
+	if c.Gateway.ImageNonstreamTotalTimeoutSeconds < 0 || c.Gateway.ImageNonstreamTotalTimeoutSeconds > 3600 ||
+		(c.Gateway.ImageNonstreamTotalTimeoutSeconds > 0 && c.Gateway.ImageNonstreamTotalTimeoutSeconds < 60) {
+		return fmt.Errorf("gateway.image_nonstream_total_timeout_seconds must be 0 or between 60-3600 seconds")
 	}
 	if c.Gateway.OpenAIFirstOutputTimeoutSeconds < 0 || c.Gateway.OpenAIFirstOutputTimeoutSeconds > 600 ||
 		(c.Gateway.OpenAIFirstOutputTimeoutSeconds > 0 && c.Gateway.OpenAIFirstOutputTimeoutSeconds < 30) {
