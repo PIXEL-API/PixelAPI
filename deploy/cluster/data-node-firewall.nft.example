@@ -1,0 +1,12 @@
+table inet sub2api_cluster {
+	chain input {
+		type filter hook input priority filter; policy accept;
+
+		# Enable the 80/443 drop only after public DNS and Caddy have moved to
+		# the active App entry node. Enabling it earlier causes an outage.
+		iifname "lo" tcp dport { 5432, 6379 } accept
+		ip saddr { 10.77.0.21, 10.77.0.22, 10.77.0.23 } tcp dport { 5432, 6379 } accept
+		tcp dport { 80, 443 } drop
+		tcp dport { 5432, 6379 } drop
+	}
+}

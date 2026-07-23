@@ -250,6 +250,8 @@ func runMainServer() error {
 	buildInfo := handler.BuildInfo{
 		Version:   Version,
 		BuildType: BuildType,
+		Commit:    Commit,
+		Date:      Date,
 	}
 	listenSpec, err := cfg.Server.ListenSpec()
 	if err != nil {
@@ -266,13 +268,13 @@ func runMainServer() error {
 	restartContext, stopRestart := signal.NotifyContext(context.Background(), syscall.SIGHUP)
 	defer stopRestart()
 
-	serveResults := make(chan serverServeResult, 2)
+	serveResults := make(chan serverServeResult, 3)
 	pprofServer, pprofStartErr := startPprofServer(serveResults)
 
 	shutdownTargets := []shutdownTarget{{
 		name:    "main server",
 		server:  app.Server,
-		timeout: cfg.Server.ShutdownTimeout(),
+		timeout: cfg.Server.HTTPDrainTimeout(),
 	}}
 	if pprofServer != nil {
 		shutdownTargets = append(shutdownTargets, shutdownTarget{
@@ -294,13 +296,31 @@ func runMainServer() error {
 		log.Printf("Server started on %s", listenSpec.DisplayAddress())
 	}
 
-	err = runServerLifecycle(
+	if app.ClusterRuntime != nil && app.ClusterRuntime.Enabled() {
+		go func() {
+			select {
+			case runtimeErr := <-app.ClusterRuntime.Fatal():
+				if runtimeErr != nil {
+					serveResults <- serverServeResult{
+						name: "cluster runtime",
+						err:  runtimeErr,
+					}
+				}
+			case <-shutdownContext.Done():
+			case <-restartContext.Done():
+			}
+		}()
+	}
+
+	err = runServerLifecycleWithDrain(
 		shutdownContext.Done(),
 		restartContext.Done(),
 		serveResults,
 		shutdownTargets,
+		app.ClusterRuntime.BeginShutdown,
+		cfg.Server.DrainDelay(),
 		app.Cleanup,
-		cfg.Server.ShutdownTimeout(),
+		cfg.Server.CleanupTimeout(),
 	)
 	if err == nil {
 		log.Println("Server exited")

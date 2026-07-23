@@ -15,6 +15,8 @@ const (
 	defaultDashboardAggregationTimeout         = 2 * time.Minute
 	defaultDashboardAggregationBackfillTimeout = 30 * time.Minute
 	dashboardAggregationRetentionInterval      = 6 * time.Hour
+	dashboardAggregationTaskName               = "dashboard_aggregation"
+	dashboardStartupRecomputeTaskName          = "dashboard_startup_recompute"
 )
 
 var (
@@ -44,6 +46,7 @@ type DashboardAggregationService struct {
 	repo                 DashboardAggregationRepository
 	timingWheel          *TimingWheelService
 	cfg                  config.DashboardAggregationConfig
+	taskExecutor         *ClusterTaskExecutor
 	running              int32
 	lastRetentionCleanup atomic.Value // time.Time
 }
@@ -173,19 +176,31 @@ func (s *DashboardAggregationService) RecomputeRangeSync(ctx context.Context, st
 }
 
 func (s *DashboardAggregationService) recomputeRecentDays() {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultDashboardAggregationBackfillTimeout)
+	defer cancel()
+
+	run := func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+		return s.recomputeRecentDaysLeased(taskCtx, guard)
+	}
+	var err error
+	if s.taskExecutor == nil {
+		err = run(ctx, &ClusterLeaseGuard{})
+	} else {
+		_, err = s.taskExecutor.Run(ctx, dashboardStartupRecomputeTaskName, run)
+	}
+	if err != nil && !errors.Is(err, context.Canceled) {
+		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 启动重算失败: %v", err)
+	}
+}
+
+func (s *DashboardAggregationService) recomputeRecentDaysLeased(ctx context.Context, guard *ClusterLeaseGuard) error {
 	days := s.cfg.RecomputeDays
 	if days <= 0 {
-		return
+		return nil
 	}
 	now := time.Now().UTC()
 	start := now.AddDate(0, 0, -days)
-
-	ctx, cancel := context.WithTimeout(context.Background(), defaultDashboardAggregationBackfillTimeout)
-	defer cancel()
-	if err := s.backfillRange(ctx, start, now); err != nil {
-		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 启动重算失败: %v", err)
-		return
-	}
+	return s.backfillRangeLeased(ctx, start, now, guard)
 }
 
 func (s *DashboardAggregationService) recomputeRange(ctx context.Context, start, end time.Time) error {
@@ -207,14 +222,32 @@ func (s *DashboardAggregationService) recomputeRange(ctx context.Context, start,
 }
 
 func (s *DashboardAggregationService) runScheduledAggregation() {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultDashboardAggregationTimeout)
+	defer cancel()
+	run := func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+		return s.runScheduledAggregationLeased(taskCtx, guard)
+	}
+	var err error
+	if s.taskExecutor == nil {
+		err = run(ctx, &ClusterLeaseGuard{})
+	} else {
+		_, err = s.taskExecutor.Run(ctx, dashboardAggregationTaskName, run)
+	}
+	if err != nil {
+		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 聚合失败: %v", err)
+	}
+}
+
+func (s *DashboardAggregationService) runScheduledAggregationLeased(ctx context.Context, guard *ClusterLeaseGuard) error {
 	if !atomic.CompareAndSwapInt32(&s.running, 0, 1) {
-		return
+		return errDashboardAggregationRunning
 	}
 	defer atomic.StoreInt32(&s.running, 0)
 
 	jobStart := time.Now().UTC()
-	ctx, cancel := context.WithTimeout(context.Background(), defaultDashboardAggregationTimeout)
-	defer cancel()
+	if err := guard.Check(ctx); err != nil {
+		return err
+	}
 
 	now := time.Now().UTC()
 	last, err := s.repo.GetAggregationWatermark(ctx)
@@ -236,9 +269,11 @@ func (s *DashboardAggregationService) runScheduledAggregation() {
 		start = now.Add(-lookback)
 	}
 
-	if err := s.aggregateRange(ctx, start, now); err != nil {
-		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 聚合失败: %v", err)
-		return
+	if err := s.aggregateRangeLeased(ctx, start, now, guard); err != nil {
+		return err
+	}
+	if err := guard.Check(ctx); err != nil {
+		return err
 	}
 
 	updateErr := s.repo.UpdateAggregationWatermark(ctx, now)
@@ -252,10 +287,21 @@ func (s *DashboardAggregationService) runScheduledAggregation() {
 		"watermark_updated", updateErr == nil,
 	)
 
-	s.maybeCleanupRetention(ctx, now)
+	if err := s.maybeCleanupRetentionLeased(ctx, now, guard); err != nil {
+		return err
+	}
+	return updateErr
 }
 
 func (s *DashboardAggregationService) backfillRange(ctx context.Context, start, end time.Time) error {
+	return s.backfillRangeLeased(ctx, start, end, &ClusterLeaseGuard{})
+}
+
+func (s *DashboardAggregationService) backfillRangeLeased(
+	ctx context.Context,
+	start, end time.Time,
+	guard *ClusterLeaseGuard,
+) error {
 	if !atomic.CompareAndSwapInt32(&s.running, 0, 1) {
 		return errDashboardAggregationRunning
 	}
@@ -274,12 +320,18 @@ func (s *DashboardAggregationService) backfillRange(ctx context.Context, start, 
 		if windowEnd.After(endUTC) {
 			windowEnd = endUTC
 		}
-		if err := s.aggregateRange(ctx, cursor, windowEnd); err != nil {
+		if err := guard.Check(ctx); err != nil {
+			return err
+		}
+		if err := s.aggregateRangeLeased(ctx, cursor, windowEnd, guard); err != nil {
 			return err
 		}
 		cursor = windowEnd
 	}
 
+	if err := guard.Check(ctx); err != nil {
+		return err
+	}
 	updateErr := s.repo.UpdateAggregationWatermark(ctx, endUTC)
 	if updateErr != nil {
 		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 更新水位失败: %v", updateErr)
@@ -291,25 +343,49 @@ func (s *DashboardAggregationService) backfillRange(ctx context.Context, start, 
 		updateErr == nil,
 	)
 
-	s.maybeCleanupRetention(ctx, endUTC)
-	return nil
+	if err := guard.Check(ctx); err != nil {
+		return err
+	}
+	return s.maybeCleanupRetentionLeased(ctx, endUTC, guard)
 }
 
 func (s *DashboardAggregationService) aggregateRange(ctx context.Context, start, end time.Time) error {
+	return s.aggregateRangeLeased(ctx, start, end, &ClusterLeaseGuard{})
+}
+
+func (s *DashboardAggregationService) aggregateRangeLeased(
+	ctx context.Context,
+	start, end time.Time,
+	guard *ClusterLeaseGuard,
+) error {
 	if !end.After(start) {
 		return nil
 	}
+	if err := guard.Check(ctx); err != nil {
+		return err
+	}
 	if err := s.repo.EnsureUsageLogsPartitions(ctx, end); err != nil {
 		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 分区检查失败: %v", err)
+	}
+	if err := guard.Check(ctx); err != nil {
+		return err
 	}
 	return s.repo.AggregateRange(ctx, start, end)
 }
 
 func (s *DashboardAggregationService) maybeCleanupRetention(ctx context.Context, now time.Time) {
+	_ = s.maybeCleanupRetentionLeased(ctx, now, &ClusterLeaseGuard{})
+}
+
+func (s *DashboardAggregationService) maybeCleanupRetentionLeased(
+	ctx context.Context,
+	now time.Time,
+	guard *ClusterLeaseGuard,
+) error {
 	lastAny := s.lastRetentionCleanup.Load()
 	if lastAny != nil {
 		if last, ok := lastAny.(time.Time); ok && now.Sub(last) < dashboardAggregationRetentionInterval {
-			return
+			return nil
 		}
 	}
 
@@ -317,9 +393,15 @@ func (s *DashboardAggregationService) maybeCleanupRetention(ctx context.Context,
 	dailyCutoff := now.AddDate(0, 0, -s.cfg.Retention.DailyDays)
 	dedupCutoff := now.AddDate(0, 0, -s.cfg.Retention.UsageBillingDedupDays)
 
+	if err := guard.Check(ctx); err != nil {
+		return err
+	}
 	aggErr := s.repo.CleanupAggregates(ctx, hourlyCutoff, dailyCutoff)
 	if aggErr != nil {
 		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 聚合保留清理失败: %v", aggErr)
+	}
+	if err := guard.Check(ctx); err != nil {
+		return err
 	}
 	dedupErr := s.repo.CleanupUsageBillingDedup(ctx, dedupCutoff)
 	if dedupErr != nil {
@@ -328,6 +410,7 @@ func (s *DashboardAggregationService) maybeCleanupRetention(ctx context.Context,
 	if aggErr == nil && dedupErr == nil {
 		s.lastRetentionCleanup.Store(now)
 	}
+	return nil
 }
 
 func truncateToDayUTC(t time.Time) time.Time {

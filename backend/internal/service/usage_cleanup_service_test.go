@@ -592,6 +592,7 @@ func TestUsageCleanupServiceRunOnceSuccess(t *testing.T) {
 	}
 	cfg := &config.Config{UsageCleanup: config.UsageCleanupConfig{Enabled: true, BatchSize: 2, TaskTimeoutSeconds: 30}}
 	svc := NewUsageCleanupService(repo, nil, nil, cfg)
+	svc.taskExecutor = &ClusterTaskExecutor{}
 
 	svc.runOnce()
 
@@ -614,6 +615,7 @@ func TestUsageCleanupServiceRunOnceClaimError(t *testing.T) {
 	repo := &cleanupRepoStub{claimErr: errors.New("claim failed")}
 	cfg := &config.Config{UsageCleanup: config.UsageCleanupConfig{Enabled: true}}
 	svc := NewUsageCleanupService(repo, nil, nil, cfg)
+	svc.taskExecutor = &ClusterTaskExecutor{}
 	svc.runOnce()
 
 	repo.mu.Lock()
@@ -627,7 +629,30 @@ func TestUsageCleanupServiceRunOnceAlreadyRunning(t *testing.T) {
 	cfg := &config.Config{UsageCleanup: config.UsageCleanupConfig{Enabled: true}}
 	svc := NewUsageCleanupService(repo, nil, nil, cfg)
 	svc.running = 1
+	svc.taskExecutor = &ClusterTaskExecutor{}
 	svc.runOnce()
+}
+
+func TestUsageCleanupServiceRunOnceRequiresClusterLeaseBeforeClaim(t *testing.T) {
+	repo := &cleanupRepoStub{
+		claimQueue: []*UsageCleanupTask{{ID: 9}},
+	}
+	clusterRepo := &clusterAdminRepositoryStub{}
+	cfg := testClusterRuntimeConfig()
+	cfg.UsageCleanup = config.UsageCleanupConfig{
+		Enabled:            true,
+		TaskTimeoutSeconds: 30,
+	}
+	svc := NewUsageCleanupService(repo, nil, nil, cfg)
+	svc.taskExecutor = NewClusterTaskExecutor(cfg, clusterRepo, NewClusterNodeState(cfg))
+
+	svc.runOnce()
+
+	require.Equal(t, usageCleanupWorkerName, clusterRepo.acquiredTaskName)
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	require.Len(t, repo.claimQueue, 1)
+	require.Empty(t, repo.deleteCalls)
 }
 
 func TestUsageCleanupServiceExecuteTaskFailed(t *testing.T) {
@@ -647,7 +672,7 @@ func TestUsageCleanupServiceExecuteTaskFailed(t *testing.T) {
 		},
 	}
 
-	svc.executeTask(context.Background(), task)
+	_ = svc.executeTask(context.Background(), task, &ClusterLeaseGuard{})
 
 	repo.mu.Lock()
 	defer repo.mu.Unlock()
@@ -674,7 +699,7 @@ func TestUsageCleanupServiceExecuteTaskProgressError(t *testing.T) {
 		},
 	}
 
-	svc.executeTask(context.Background(), task)
+	_ = svc.executeTask(context.Background(), task, &ClusterLeaseGuard{})
 
 	repo.mu.Lock()
 	defer repo.mu.Unlock()
@@ -699,7 +724,7 @@ func TestUsageCleanupServiceExecuteTaskDeleteCanceled(t *testing.T) {
 		},
 	}
 
-	svc.executeTask(context.Background(), task)
+	_ = svc.executeTask(context.Background(), task, &ClusterLeaseGuard{})
 
 	repo.mu.Lock()
 	defer repo.mu.Unlock()
@@ -721,7 +746,7 @@ func TestUsageCleanupServiceExecuteTaskContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	svc.executeTask(ctx, task)
+	_ = svc.executeTask(ctx, task, &ClusterLeaseGuard{})
 
 	repo.mu.Lock()
 	defer repo.mu.Unlock()
@@ -747,7 +772,7 @@ func TestUsageCleanupServiceExecuteTaskMarkFailedUpdateError(t *testing.T) {
 		},
 	}
 
-	svc.executeTask(context.Background(), task)
+	_ = svc.executeTask(context.Background(), task, &ClusterLeaseGuard{})
 
 	repo.mu.Lock()
 	defer repo.mu.Unlock()
@@ -775,7 +800,7 @@ func TestUsageCleanupServiceExecuteTaskDashboardRecomputeError(t *testing.T) {
 		},
 	}
 
-	svc.executeTask(context.Background(), task)
+	_ = svc.executeTask(context.Background(), task, &ClusterLeaseGuard{})
 
 	repo.mu.Lock()
 	defer repo.mu.Unlock()
@@ -803,7 +828,7 @@ func TestUsageCleanupServiceExecuteTaskDashboardRecomputeSuccess(t *testing.T) {
 		},
 	}
 
-	svc.executeTask(context.Background(), task)
+	_ = svc.executeTask(context.Background(), task, &ClusterLeaseGuard{})
 
 	repo.mu.Lock()
 	defer repo.mu.Unlock()
@@ -827,7 +852,7 @@ func TestUsageCleanupServiceExecuteTaskCanceled(t *testing.T) {
 		},
 	}
 
-	svc.executeTask(context.Background(), task)
+	_ = svc.executeTask(context.Background(), task, &ClusterLeaseGuard{})
 
 	repo.mu.Lock()
 	defer repo.mu.Unlock()

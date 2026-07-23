@@ -31,6 +31,7 @@ const (
 	accountShareSeatPrepayReason               = "account_share_mode_seat_prepay"
 	accountShareSeatRefundReason               = "account_share_mode_seat_refund"
 	accountShareSeatWaiverRefundReason         = "account_share_mode_seat_waiver_refund"
+	accountShareSeatInviteWaiverRefundReason   = "account_share_mode_invite_waiver_refund"
 	accountShareSeatIncomeReason               = "account_share_mode_income"
 	accountShareModeSettlementRefType          = "account_share_mode_settlement"
 	accountShareSeatPrepayRefType              = "account_share_mode_seat_prepay_ref"
@@ -1773,10 +1774,10 @@ func (r *accountShareModeRepository) JoinListing(ctx context.Context, consumerUs
 	return membership, nil
 }
 
-func (r *accountShareModeRepository) EndMembership(ctx context.Context, consumerUserID int64, membershipID int64) (*service.AccountShareMembership, error) {
+func (r *accountShareModeRepository) EndMembership(ctx context.Context, consumerUserID int64, membershipID int64) (*service.AccountShareMembership, *service.AccountShareSeatBillingResult, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer func() {
 		if tx != nil {
@@ -1802,31 +1803,32 @@ func (r *accountShareModeRepository) EndMembership(ctx context.Context, consumer
 		consumerUserID,
 	))
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, service.ErrAccountShareListingNotFound
+		return nil, nil, service.ErrAccountShareListingNotFound
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if membership.Status == service.AccountShareMembershipStatusEnded {
 		if err := tx.Commit(); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		tx = nil
-		return membership, nil
+		return membership, accountShareMembershipBillingResult(membership, nil), nil
 	}
 	if membership.Status != service.AccountShareMembershipStatusActive && membership.Status != service.AccountShareMembershipStatusQueued {
-		return nil, service.ErrAccountShareListingNotFound
+		return nil, nil, service.ErrAccountShareListingNotFound
 	}
 
 	now := time.Now().UTC()
 	var settledUntil *time.Time
+	var creditUserIDs []int64
 	if membership.Status == service.AccountShareMembershipStatusActive {
-		settledUntil, _, _, err = r.settleSeatChargeInTx(ctx, tx, membership, now, true, now)
+		settledUntil, _, creditUserIDs, err = r.settleSeatChargeInTx(ctx, tx, membership, now, true, now)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if err := r.refundUnusedSeatPrepayInTx(ctx, tx, membership, now); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	if settledUntil == nil {
@@ -1859,7 +1861,7 @@ func (r *accountShareModeRepository) EndMembership(ctx context.Context, consumer
 		membership.ID,
 	).Scan(&membership.Status, &endedAt, &endedReason, &paidUntil, &billedUntil, &dispatchFailedAt, &dispatchCooldownUntil, &membership.UpdatedAt)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if endedAt.Valid {
 		membership.EndedAt = &endedAt.Time
@@ -1884,10 +1886,10 @@ func (r *accountShareModeRepository) EndMembership(ctx context.Context, consumer
 		membership.DispatchCooldownUntil = nil
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	tx = nil
-	return membership, nil
+	return membership, accountShareMembershipBillingResult(membership, creditUserIDs), nil
 }
 
 func (r *accountShareModeRepository) UpdateMembershipIdleTimeout(ctx context.Context, consumerUserID int64, membershipID int64, idleTimeoutMinutes int) (*service.AccountShareMembership, error) {
@@ -2453,10 +2455,10 @@ func (r *accountShareModeRepository) ListIdleMembershipCandidates(ctx context.Co
 	return candidates, nil
 }
 
-func (r *accountShareModeRepository) EndIdleMembership(ctx context.Context, membershipID int64, endedAt time.Time) (*service.AccountShareMembership, error) {
+func (r *accountShareModeRepository) EndIdleMembership(ctx context.Context, membershipID int64, endedAt time.Time) (*service.AccountShareMembership, *service.AccountShareSeatBillingResult, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer func() {
 		if tx != nil {
@@ -2466,21 +2468,21 @@ func (r *accountShareModeRepository) EndIdleMembership(ctx context.Context, memb
 
 	membership, err := r.lockSeatBillingMembershipInTx(ctx, tx, membershipID, 0)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, service.ErrAccountShareListingNotFound
+		return nil, nil, service.ErrAccountShareListingNotFound
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	deadline, ok := accountShareMembershipIdleDeadline(membership)
 	if !ok || deadline.After(endedAt.UTC()) {
-		return nil, service.ErrAccountShareListingNotFound
+		return nil, nil, service.ErrAccountShareListingNotFound
 	}
-	settledUntil, _, _, err := r.settleSeatChargeInTx(ctx, tx, membership, deadline, true, endedAt)
+	settledUntil, _, creditUserIDs, err := r.settleSeatChargeInTx(ctx, tx, membership, deadline, true, endedAt)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := r.refundUnusedSeatPrepayInTx(ctx, tx, membership, deadline); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if settledUntil == nil {
 		settledUntil = &deadline
@@ -2512,17 +2514,17 @@ func (r *accountShareModeRepository) EndIdleMembership(ctx context.Context, memb
 		service.AccountShareMembershipStatusActive,
 	).Scan(&membership.Status, &endedAtNull, &endedReasonNull, &paidUntilNull, &billedUntilNull, &membership.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, service.ErrAccountShareListingNotFound
+		return nil, nil, service.ErrAccountShareListingNotFound
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	applyAccountShareMembershipNullableFields(membership, sql.NullTime{}, endedAtNull, endedReasonNull, paidUntilNull, billedUntilNull)
 	if err := tx.Commit(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	tx = nil
-	return membership, nil
+	return membership, accountShareMembershipBillingResult(membership, creditUserIDs), nil
 }
 
 func (r *accountShareModeRepository) ProcessUnavailableMemberships(ctx context.Context, now time.Time, limit int) (*service.AccountShareSeatBillingResult, error) {
@@ -2615,10 +2617,10 @@ func (r *accountShareModeRepository) ListRecoverableUnavailableMembershipIDs(ctx
 	return membershipIDs, nil
 }
 
-func (r *accountShareModeRepository) SuspendRecoverableUnavailableMembership(ctx context.Context, membershipID int64, unavailableAt time.Time) (*service.AccountShareMembership, error) {
+func (r *accountShareModeRepository) SuspendRecoverableUnavailableMembership(ctx context.Context, membershipID int64, unavailableAt time.Time) (*service.AccountShareMembership, *service.AccountShareSeatBillingResult, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer func() {
 		if tx != nil {
@@ -2628,36 +2630,36 @@ func (r *accountShareModeRepository) SuspendRecoverableUnavailableMembership(ctx
 
 	unavailableAt = unavailableAt.UTC()
 	if err := r.lockRecoverableUnavailableMembershipResourcesInTx(ctx, tx, membershipID); errors.Is(err, sql.ErrNoRows) {
-		return nil, service.ErrAccountShareListingNotFound
+		return nil, nil, service.ErrAccountShareListingNotFound
 	} else if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	membership, err := r.lockSeatBillingMembershipInTx(ctx, tx, membershipID, 0)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, service.ErrAccountShareListingNotFound
+		return nil, nil, service.ErrAccountShareListingNotFound
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if accountShareMembershipRecentlyActive(membership, unavailableAt) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	recoverable, err := r.accountShareMembershipRecoverablyUnavailableInTx(ctx, tx, membership.ListingID, membership.AccountID, unavailableAt)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if !recoverable {
-		return nil, nil
+		return nil, nil, nil
 	}
-	membership, err = r.suspendActiveMembershipInTx(ctx, tx, membership, unavailableAt, unavailableAt)
+	membership, creditUserIDs, err := r.suspendActiveMembershipInTx(ctx, tx, membership, unavailableAt, unavailableAt)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	tx = nil
-	return membership, nil
+	return membership, accountShareMembershipBillingResult(membership, creditUserIDs), nil
 }
 
 // lockRecoverableUnavailableMembershipResourcesInTx serializes recoverable suspension
@@ -3338,6 +3340,9 @@ func (r *accountShareModeRepository) processSeatWaiverCompensation(ctx context.C
 	if err != nil {
 		return nil, err
 	}
+	if err := lockAccountShareBillingUserInTx(ctx, tx, membership.ConsumerUserID); err != nil {
+		return nil, err
+	}
 	chargeFloat, _ := charge.HourlyCharge.Float64()
 	waiver, err := r.resolveSeatChargeWaiverInTx(ctx, tx, membership, charge.PeriodStart, charge.PeriodEnd, chargeFloat)
 	if err != nil {
@@ -3348,7 +3353,7 @@ func (r *accountShareModeRepository) processSeatWaiverCompensation(ctx context.C
 	}
 	result := &service.AccountShareSeatBillingResult{}
 	if waiver.Eligible {
-		settlementID, err := r.refundSeatChargeWaiverAmountInTx(ctx, tx, membership, charge.PeriodStart, charge.PeriodEnd, charge.HourlyCharge, waiver, map[string]any{
+		settlementID, err := r.refundSeatChargeWaiverAmountInTx(ctx, tx, membership, charge.PeriodStart, charge.PeriodEnd, charge.HourlyCharge, charge.Split, charge.SettlementID, waiver, map[string]any{
 			"compensation":               true,
 			"compensated_seat_charge_id": charge.SettlementID,
 			"compensation_reason":        "late_usage_request_settlement",
@@ -3357,13 +3362,12 @@ func (r *accountShareModeRepository) processSeatWaiverCompensation(ctx context.C
 			return nil, err
 		}
 		if settlementID > 0 {
-			if err := r.reverseSeatChargeOwnerCreditInTx(ctx, tx, membership, charge, settlementID, waiver); err != nil {
+			debitUserIDs, err := r.reverseSeatChargeRevenueCreditsInTx(ctx, tx, membership, charge, settlementID, waiver)
+			if err != nil {
 				return nil, err
 			}
 			result.CreditUserIDs = append(result.CreditUserIDs, membership.ConsumerUserID)
-			if charge.OwnerCredit.GreaterThan(decimal.Zero) {
-				result.DebitUserIDs = append(result.DebitUserIDs, membership.OwnerUserID)
-			}
+			result.DebitUserIDs = append(result.DebitUserIDs, debitUserIDs...)
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -3378,13 +3382,16 @@ type accountShareSeatChargeCompensationWindow struct {
 	PeriodStart  time.Time
 	PeriodEnd    time.Time
 	HourlyCharge decimal.Decimal
-	OwnerCredit  decimal.Decimal
+	Split        accountShareModeRevenueSplit
 }
 
 func (r *accountShareModeRepository) lockSeatChargeCompensationWindowInTx(ctx context.Context, tx *sql.Tx, settlementID int64, readyBefore time.Time) (*service.AccountShareMembership, accountShareSeatChargeCompensationWindow, error) {
 	var charge accountShareSeatChargeCompensationWindow
 	membership := &service.AccountShareMembership{}
-	var waiverMinimumText, hourlyChargeText, hourlyRateText, ownerCreditText string
+	var policyID, inviterUserID sql.NullInt64
+	var waiverMinimumText, hourlyChargeText, hourlyRateText string
+	var ownerRatioText, inviteRatioText, platformRatioText string
+	var ownerCreditText, inviteCreditText, platformCreditText string
 	err := tx.QueryRowContext(ctx, `
 		SELECT
 			sc.id,
@@ -3396,7 +3403,17 @@ func (r *accountShareModeRepository) lockSeatChargeCompensationWindowInTx(ctx co
 			sc.api_key_id,
 			sc.hourly_charge::text,
 			sc.owner_credit::text,
+			sc.invite_credit::text,
+			sc.platform_credit::text,
 			sc.hourly_rate_snapshot::text,
+			sc.policy_id,
+			sc.policy_version,
+			sc.owner_share_ratio_snapshot::text,
+			sc.inviter_user_id,
+			sc.invite_bound_at_snapshot,
+			sc.invite_expires_at_snapshot,
+			sc.invite_share_ratio_snapshot::text,
+			sc.platform_share_ratio_snapshot::text,
 			COALESCE(NULLIF(sc.waiver_minimum_snapshot, 0), m.hourly_fee_waiver_minimum_snapshot)::text,
 			m.status,
 			m.queue_rank,
@@ -3435,7 +3452,17 @@ func (r *accountShareModeRepository) lockSeatChargeCompensationWindowInTx(ctx co
 		&membership.APIKeyID,
 		&hourlyChargeText,
 		&ownerCreditText,
+		&inviteCreditText,
+		&platformCreditText,
 		&hourlyRateText,
+		&policyID,
+		&charge.Split.PolicyVersion,
+		&ownerRatioText,
+		&inviterUserID,
+		&charge.Split.Invite.BoundAt,
+		&charge.Split.Invite.ExpiresAt,
+		&inviteRatioText,
+		&platformRatioText,
 		&waiverMinimumText,
 		&membership.Status,
 		&membership.QueueRank,
@@ -3453,9 +3480,35 @@ func (r *accountShareModeRepository) lockSeatChargeCompensationWindowInTx(ctx co
 	if err != nil {
 		return nil, charge, err
 	}
-	charge.OwnerCredit, err = decimal.NewFromString(strings.TrimSpace(ownerCreditText))
+	charge.Split.OwnerCredit, err = decimal.NewFromString(strings.TrimSpace(ownerCreditText))
 	if err != nil {
 		return nil, charge, err
+	}
+	charge.Split.InviteCredit, err = decimal.NewFromString(strings.TrimSpace(inviteCreditText))
+	if err != nil {
+		return nil, charge, err
+	}
+	charge.Split.PlatformCredit, err = decimal.NewFromString(strings.TrimSpace(platformCreditText))
+	if err != nil {
+		return nil, charge, err
+	}
+	charge.Split.OwnerRatio, err = decimal.NewFromString(strings.TrimSpace(ownerRatioText))
+	if err != nil {
+		return nil, charge, err
+	}
+	charge.Split.InviteRatio, err = decimal.NewFromString(strings.TrimSpace(inviteRatioText))
+	if err != nil {
+		return nil, charge, err
+	}
+	charge.Split.PlatformRatio, err = decimal.NewFromString(strings.TrimSpace(platformRatioText))
+	if err != nil {
+		return nil, charge, err
+	}
+	if policyID.Valid {
+		charge.Split.PolicyID = &policyID.Int64
+	}
+	if inviterUserID.Valid {
+		charge.Split.Invite.InviterUserID = inviterUserID.Int64
 	}
 	hourlyRate, err := decimal.NewFromString(strings.TrimSpace(hourlyRateText))
 	if err != nil {
@@ -3488,51 +3541,112 @@ func (r *accountShareModeRepository) updateSeatChargeWaiverEvaluationInTx(ctx co
 	return err
 }
 
-func (r *accountShareModeRepository) reverseSeatChargeOwnerCreditInTx(ctx context.Context, tx *sql.Tx, membership *service.AccountShareMembership, charge accountShareSeatChargeCompensationWindow, refundSettlementID int64, waiver accountShareSeatChargeWaiver) error {
-	if membership == nil || charge.OwnerCredit.LessThanOrEqual(decimal.Zero) {
-		return nil
+func (r *accountShareModeRepository) reverseSeatChargeRevenueCreditsInTx(ctx context.Context, tx *sql.Tx, membership *service.AccountShareMembership, charge accountShareSeatChargeCompensationWindow, refundSettlementID int64, waiver accountShareSeatChargeWaiver) ([]int64, error) {
+	if membership == nil {
+		return nil, nil
 	}
-	var newBalance float64
-	err := tx.QueryRowContext(ctx, `
+	debitUserIDs := make([]int64, 0, 2)
+	if charge.Split.OwnerCredit.GreaterThan(decimal.Zero) {
+		var newBalance float64
+		err := tx.QueryRowContext(ctx, `
 		UPDATE users
 		SET balance = balance - $1::numeric,
 			updated_at = NOW()
 		WHERE id = $2
 			AND deleted_at IS NULL
 		RETURNING balance
-	`, charge.OwnerCredit.StringFixed(10), membership.OwnerUserID).Scan(&newBalance)
-	if errors.Is(err, sql.ErrNoRows) {
-		return service.ErrUserNotFound
+		`, charge.Split.OwnerCredit.StringFixed(10), membership.OwnerUserID).Scan(&newBalance)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, service.ErrUserNotFound
+		}
+		if err != nil {
+			return nil, err
+		}
+		if err := insertUserBalanceLedger(ctx, tx, userBalanceLedgerInput{
+			UserID:          membership.OwnerUserID,
+			Direction:       "debit",
+			Amount:          charge.Split.OwnerCredit,
+			Reason:          accountShareSeatWaiverRefundReason,
+			RefType:         accountShareModeSettlementRefType,
+			RefID:           nullablePositiveInt64(refundSettlementID),
+			BalanceAfter:    decimalFromSignedFloat(newBalance),
+			RequireInserted: true,
+			Metadata:        accountShareSeatWaiverReversalMetadata(membership, charge, refundSettlementID, waiver),
+		}); err != nil {
+			return nil, err
+		}
+		debitUserIDs = append(debitUserIDs, membership.OwnerUserID)
 	}
-	if err != nil {
-		return err
+	if charge.Split.Invite.InviterUserID > 0 && charge.Split.InviteCredit.GreaterThan(decimal.Zero) {
+		inviterUserID := charge.Split.Invite.InviterUserID
+		var newBalance float64
+		err := tx.QueryRowContext(ctx, `
+			UPDATE users
+			SET balance = balance - $1::numeric,
+				updated_at = NOW()
+			WHERE id = $2
+				AND deleted_at IS NULL
+			RETURNING balance
+		`, charge.Split.InviteCredit.StringFixed(10), inviterUserID).Scan(&newBalance)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, service.ErrUserNotFound
+		}
+		if err != nil {
+			return nil, err
+		}
+		metadata := accountShareSeatWaiverReversalMetadata(membership, charge, refundSettlementID, waiver)
+		metadata["invite_credit_reversed"] = charge.Split.InviteCredit.StringFixed(10)
+		if err := insertUserBalanceLedger(ctx, tx, userBalanceLedgerInput{
+			UserID:          inviterUserID,
+			Direction:       "debit",
+			Amount:          charge.Split.InviteCredit,
+			Reason:          accountShareSeatInviteWaiverRefundReason,
+			RefType:         accountShareModeSettlementRefType,
+			RefID:           nullablePositiveInt64(refundSettlementID),
+			BalanceAfter:    decimalFromSignedFloat(newBalance),
+			RequireInserted: true,
+			Metadata:        metadata,
+		}); err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE user_affiliates
+			SET aff_history_quota = aff_history_quota - $1::numeric,
+				updated_at = NOW()
+			WHERE user_id = $2
+		`, charge.Split.InviteCredit.StringFixed(10), inviterUserID); err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO user_affiliate_ledger (user_id, action, amount, source_user_id, created_at, updated_at)
+			VALUES ($1, 'reverse', $2::numeric, $3, NOW(), NOW())
+		`, inviterUserID, charge.Split.InviteCredit.StringFixed(10), membership.ConsumerUserID); err != nil {
+			return nil, err
+		}
+		debitUserIDs = appendUniqueInt64(debitUserIDs, inviterUserID)
 	}
-	return insertUserBalanceLedger(ctx, tx, userBalanceLedgerInput{
-		UserID:          membership.OwnerUserID,
-		Direction:       "debit",
-		Amount:          charge.OwnerCredit,
-		Reason:          accountShareSeatWaiverRefundReason,
-		RefType:         accountShareModeSettlementRefType,
-		RefID:           nullablePositiveInt64(refundSettlementID),
-		BalanceAfter:    decimalFromSignedFloat(newBalance),
-		RequireInserted: true,
-		Metadata: map[string]any{
-			"listing_id":                 membership.ListingID,
-			"account_id":                 membership.AccountID,
-			"membership_id":              membership.ID,
-			"settlement_id":              refundSettlementID,
-			"compensated_seat_charge_id": charge.SettlementID,
-			"consumer_user_id":           membership.ConsumerUserID,
-			"owner_credit_reversed":      charge.OwnerCredit.StringFixed(10),
-			"waiver_minimum":             waiver.Minimum.StringFixed(8),
-			"waiver_required":            waiver.Required.StringFixed(10),
-			"waiver_usage":               waiver.Usage.StringFixed(10),
-			"settlement_type":            accountShareSeatSettlementTypeWaiverRefund,
-			"period_started":             charge.PeriodStart.Format(time.RFC3339),
-			"period_ended":               charge.PeriodEnd.Format(time.RFC3339),
-			"compensation":               true,
-		},
-	})
+	return debitUserIDs, nil
+}
+
+func accountShareSeatWaiverReversalMetadata(membership *service.AccountShareMembership, charge accountShareSeatChargeCompensationWindow, refundSettlementID int64, waiver accountShareSeatChargeWaiver) map[string]any {
+	return map[string]any{
+		"listing_id":                 membership.ListingID,
+		"account_id":                 membership.AccountID,
+		"membership_id":              membership.ID,
+		"settlement_id":              refundSettlementID,
+		"compensated_seat_charge_id": charge.SettlementID,
+		"consumer_user_id":           membership.ConsumerUserID,
+		"owner_credit_reversed":      charge.Split.OwnerCredit.StringFixed(10),
+		"invite_credit_reversed":     charge.Split.InviteCredit.StringFixed(10),
+		"platform_credit_reversed":   charge.Split.PlatformCredit.StringFixed(10),
+		"waiver_minimum":             waiver.Minimum.StringFixed(8),
+		"waiver_required":            waiver.Required.StringFixed(10),
+		"waiver_usage":               waiver.Usage.StringFixed(10),
+		"settlement_type":            accountShareSeatSettlementTypeWaiverRefund,
+		"period_started":             charge.PeriodStart.Format(time.RFC3339),
+		"period_ended":               charge.PeriodEnd.Format(time.RFC3339),
+		"compensation":               true,
+	}
 }
 
 func (r *accountShareModeRepository) endSeatBillingMembershipInTx(ctx context.Context, tx *sql.Tx, membership *service.AccountShareMembership, endedAt time.Time, reason string) (*service.AccountShareSeatBillingResult, error) {
@@ -3803,6 +3917,9 @@ func (r *accountShareModeRepository) settleSeatChargeInTx(ctx context.Context, t
 	if !targetEnd.After(start) {
 		return &start, 0, nil, nil
 	}
+	if err := lockAccountShareBillingUserInTx(ctx, tx, membership.ConsumerUserID); err != nil {
+		return nil, 0, nil, err
+	}
 
 	if membership.HourlyFeeWaiverMinimumSnapshot <= 0 {
 		settlementID, creditUserIDs, err := r.settleSeatChargeWindowInTx(ctx, tx, membership, start, targetEnd)
@@ -3850,6 +3967,24 @@ func (r *accountShareModeRepository) settleSeatChargeInTx(ctx context.Context, t
 	return settledUntil, lastSettlementID, creditUserIDs, nil
 }
 
+func lockAccountShareBillingUserInTx(ctx context.Context, tx *sql.Tx, userID int64) error {
+	if tx == nil || userID <= 0 {
+		return service.ErrUserNotFound
+	}
+	var lockedUserID int64
+	err := tx.QueryRowContext(ctx, `
+		SELECT id
+		FROM users
+		WHERE id = $1
+			AND deleted_at IS NULL
+		FOR UPDATE
+	`, userID).Scan(&lockedUserID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return service.ErrUserNotFound
+	}
+	return err
+}
+
 func (r *accountShareModeRepository) settleSeatChargeWindowInTx(ctx context.Context, tx *sql.Tx, membership *service.AccountShareMembership, start, end time.Time) (int64, []int64, error) {
 	if membership == nil || !end.After(start) {
 		return 0, nil, nil
@@ -3870,31 +4005,25 @@ func (r *accountShareModeRepository) settleSeatChargeWindowInTx(ctx context.Cont
 		}
 		return settlementID, []int64{membership.ConsumerUserID}, nil
 	}
-	policy, err := r.resolveAccountShareModePolicyInTx(ctx, tx, service.AccountShareModePolicyPlatformUnified)
-	if err != nil {
-		return 0, nil, err
-	}
-	ownerRatio, platformRatio := accountShareModeSettlementRatios(policy.OwnerShareRatio, policy.PlatformShareRatio)
 	totalCharge := decimalFromFloat(charge)
-	ownerCredit := totalCharge.Mul(ownerRatio).Round(10)
-	if ownerCredit.GreaterThan(totalCharge) {
-		ownerCredit = totalCharge
-	}
-	platformCredit := totalCharge.Mul(platformRatio).Round(10)
-	settlementID, err := r.insertSeatSettlementInTx(ctx, tx, membership, accountShareSeatSettlementTypeCharge, start, end, charge, 0, ownerCredit, platformCredit, &waiver)
+	split, err := resolveAccountShareModeRevenueSplitInTx(ctx, tx, membership.ConsumerUserID, totalCharge, end)
 	if err != nil {
 		return 0, nil, err
 	}
-	creditUserIDs := make([]int64, 0, 1)
-	if ownerCredit.GreaterThan(decimal.Zero) {
-		newBalance, err := creditUsageBillingBalance(ctx, tx, membership.OwnerUserID, ownerCredit)
+	settlementID, err := r.insertSeatSettlementInTx(ctx, tx, membership, accountShareSeatSettlementTypeCharge, start, end, charge, 0, split, &waiver)
+	if err != nil {
+		return 0, nil, err
+	}
+	creditUserIDs := make([]int64, 0, 2)
+	if split.OwnerCredit.GreaterThan(decimal.Zero) {
+		newBalance, err := creditUsageBillingBalance(ctx, tx, membership.OwnerUserID, split.OwnerCredit)
 		if err != nil {
 			return 0, nil, err
 		}
 		if err := insertUserBalanceLedger(ctx, tx, userBalanceLedgerInput{
 			UserID:          membership.OwnerUserID,
 			Direction:       "credit",
-			Amount:          ownerCredit,
+			Amount:          split.OwnerCredit,
 			Reason:          accountShareSeatIncomeReason,
 			RefType:         accountShareModeSettlementRefType,
 			RefID:           nullablePositiveInt64(settlementID),
@@ -3907,7 +4036,9 @@ func (r *accountShareModeRepository) settleSeatChargeWindowInTx(ctx context.Cont
 				"settlement_id":    settlementID,
 				"consumer_user_id": membership.ConsumerUserID,
 				"total_charge":     totalCharge.StringFixed(10),
-				"owner_ratio":      ownerRatio.StringFixed(8),
+				"owner_ratio":      split.OwnerRatio.StringFixed(8),
+				"invite_ratio":     split.InviteRatio.StringFixed(8),
+				"platform_ratio":   split.PlatformRatio.StringFixed(8),
 				"settlement_type":  accountShareSeatSettlementTypeCharge,
 				"period_started":   start.Format(time.RFC3339),
 				"period_ended":     end.Format(time.RFC3339),
@@ -3917,7 +4048,61 @@ func (r *accountShareModeRepository) settleSeatChargeWindowInTx(ctx context.Cont
 		}
 		creditUserIDs = append(creditUserIDs, membership.OwnerUserID)
 	}
+	if split.Invite.InviterUserID > 0 && split.InviteCredit.GreaterThan(decimal.Zero) {
+		if err := creditAccountShareModeInviteBalance(ctx, tx, membership, settlementID, split.Invite.InviterUserID, split.InviteCredit); err != nil {
+			return 0, nil, err
+		}
+		creditUserIDs = appendUniqueInt64(creditUserIDs, split.Invite.InviterUserID)
+	}
 	return settlementID, creditUserIDs, nil
+}
+
+func creditAccountShareModeInviteBalance(ctx context.Context, tx *sql.Tx, membership *service.AccountShareMembership, settlementID, inviterUserID int64, amount decimal.Decimal) error {
+	if membership == nil || settlementID <= 0 {
+		return nil
+	}
+	return creditInviteShareBalanceEntry(ctx, tx, inviteShareBalanceCreditInput{
+		InviterUserID:  inviterUserID,
+		ConsumerUserID: membership.ConsumerUserID,
+		Amount:         amount,
+		RefType:        accountShareModeSettlementRefType,
+		RefID:          nullablePositiveInt64(settlementID),
+		Metadata: map[string]any{
+			"api_key_id":       membership.APIKeyID,
+			"account_id":       membership.AccountID,
+			"listing_id":       membership.ListingID,
+			"membership_id":    membership.ID,
+			"settlement_id":    settlementID,
+			"consumer_user_id": membership.ConsumerUserID,
+			"settlement_type":  accountShareSeatSettlementTypeCharge,
+		},
+	})
+}
+
+func appendUniqueInt64(values []int64, value int64) []int64 {
+	if value <= 0 {
+		return values
+	}
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
+}
+
+func accountShareMembershipBillingResult(membership *service.AccountShareMembership, creditUserIDs []int64) *service.AccountShareSeatBillingResult {
+	result := &service.AccountShareSeatBillingResult{}
+	if membership == nil {
+		return result
+	}
+	result.DebitUserIDs = appendUniqueInt64(result.DebitUserIDs, membership.ConsumerUserID)
+	result.CreditUserIDs = appendUniqueInt64(result.CreditUserIDs, membership.OwnerUserID)
+	for _, userID := range creditUserIDs {
+		result.CreditUserIDs = appendUniqueInt64(result.CreditUserIDs, userID)
+	}
+	result.EndedConsumerUserIDs = appendUniqueInt64(result.EndedConsumerUserIDs, membership.ConsumerUserID)
+	return result
 }
 
 type accountShareSeatChargeWaiver struct {
@@ -3925,6 +4110,58 @@ type accountShareSeatChargeWaiver struct {
 	Minimum  decimal.Decimal
 	Required decimal.Decimal
 	Usage    decimal.Decimal
+}
+
+type accountShareModeRevenueSplit struct {
+	PolicyID       *int64
+	PolicyVersion  int
+	OwnerRatio     decimal.Decimal
+	Invite         accountInviteSnapshot
+	InviteRatio    decimal.Decimal
+	PlatformRatio  decimal.Decimal
+	OwnerCredit    decimal.Decimal
+	InviteCredit   decimal.Decimal
+	PlatformCredit decimal.Decimal
+}
+
+func resolveAccountShareModeRevenueSplitInTx(ctx context.Context, tx *sql.Tx, consumerUserID int64, totalCharge decimal.Decimal, occurredAt time.Time) (accountShareModeRevenueSplit, error) {
+	split := accountShareModeRevenueSplit{PlatformRatio: decimal.NewFromInt(1)}
+	if tx == nil || consumerUserID <= 0 || totalCharge.LessThanOrEqual(decimal.Zero) {
+		return split, nil
+	}
+	policy, err := resolveEnabledGlobalAccountSharePolicy(ctx, tx)
+	if err != nil {
+		return split, err
+	}
+	configuredInviteRatio := decimal.Zero
+	if policy != nil {
+		policyID := policy.ID
+		split.PolicyID = &policyID
+		split.PolicyVersion = policy.Version
+		split.OwnerRatio, configuredInviteRatio, _ = accountShareModeSettlementRatios(policy.OwnerShareRatio, policy.InviteShareRatio)
+	}
+	split.Invite, err = resolveEligibleAccountShareInvite(ctx, tx, consumerUserID, configuredInviteRatio, occurredAt)
+	if err != nil {
+		return accountShareModeRevenueSplit{}, err
+	}
+	if split.Invite.InviterUserID > 0 {
+		split.InviteRatio = configuredInviteRatio
+	}
+	split.PlatformRatio = decimal.NewFromInt(1).Sub(split.OwnerRatio).Sub(split.InviteRatio)
+	if split.PlatformRatio.IsNegative() {
+		return accountShareModeRevenueSplit{}, fmt.Errorf("account share mode settlement ratios exceed 1")
+	}
+	split.OwnerCredit = totalCharge.Mul(split.OwnerRatio).Round(10)
+	if split.OwnerCredit.GreaterThan(totalCharge) {
+		split.OwnerCredit = totalCharge
+	}
+	remaining := totalCharge.Sub(split.OwnerCredit)
+	split.InviteCredit = totalCharge.Mul(split.InviteRatio).Round(10)
+	if split.InviteCredit.GreaterThan(remaining) {
+		split.InviteCredit = remaining
+	}
+	split.PlatformCredit = remaining.Sub(split.InviteCredit)
+	return split, nil
 }
 
 func (r *accountShareModeRepository) resolveSeatChargeWaiverInTx(ctx context.Context, tx *sql.Tx, membership *service.AccountShareMembership, periodStart, periodEnd time.Time, charge float64) (accountShareSeatChargeWaiver, error) {
@@ -4021,17 +4258,17 @@ func (r *accountShareModeRepository) refundSeatChargeWaiverInTx(ctx context.Cont
 		return 0, nil
 	}
 	refund := decimalFromFloat(charge)
-	return r.refundSeatChargeWaiverAmountInTx(ctx, tx, membership, periodStart, periodEnd, refund, waiver, nil)
+	return r.refundSeatChargeWaiverAmountInTx(ctx, tx, membership, periodStart, periodEnd, refund, accountShareModeRevenueSplit{}, 0, waiver, nil)
 }
 
-func (r *accountShareModeRepository) refundSeatChargeWaiverAmountInTx(ctx context.Context, tx *sql.Tx, membership *service.AccountShareMembership, periodStart, periodEnd time.Time, refund decimal.Decimal, waiver accountShareSeatChargeWaiver, extraMetadata map[string]any) (int64, error) {
+func (r *accountShareModeRepository) refundSeatChargeWaiverAmountInTx(ctx context.Context, tx *sql.Tx, membership *service.AccountShareMembership, periodStart, periodEnd time.Time, refund decimal.Decimal, reversal accountShareModeRevenueSplit, reversalOfSettlementID int64, waiver accountShareSeatChargeWaiver, extraMetadata map[string]any) (int64, error) {
 	if membership == nil || !periodEnd.After(periodStart) {
 		return 0, nil
 	}
 	if refund.LessThanOrEqual(decimal.Zero) {
 		return 0, nil
 	}
-	settlementID, err := r.insertSeatWaiverSettlementInTx(ctx, tx, membership, periodStart, periodEnd, refund, waiver)
+	settlementID, err := r.insertSeatWaiverSettlementInTx(ctx, tx, membership, periodStart, periodEnd, refund, reversal, reversalOfSettlementID, waiver)
 	if err != nil {
 		return 0, err
 	}
@@ -4085,7 +4322,7 @@ func (r *accountShareModeRepository) refundUnusedSeatPrepayInTx(ctx context.Cont
 	if refund <= 0 {
 		return nil
 	}
-	settlementID, err := r.insertSeatSettlementInTx(ctx, tx, membership, accountShareSeatSettlementTypeRefund, endedAt, *membership.PaidUntil, 0, refund, decimal.Zero, decimal.Zero, nil)
+	settlementID, err := r.insertSeatSettlementInTx(ctx, tx, membership, accountShareSeatSettlementTypeRefund, endedAt, *membership.PaidUntil, 0, refund, accountShareModeRevenueSplit{}, nil)
 	if err != nil {
 		return err
 	}
@@ -4119,7 +4356,7 @@ func (r *accountShareModeRepository) refundUnusedSeatPrepayInTx(ctx context.Cont
 	return nil
 }
 
-func (r *accountShareModeRepository) insertSeatSettlementInTx(ctx context.Context, tx *sql.Tx, membership *service.AccountShareMembership, settlementType string, periodStart, periodEnd time.Time, charge float64, refund float64, ownerCredit, platformCredit decimal.Decimal, waiver *accountShareSeatChargeWaiver) (int64, error) {
+func (r *accountShareModeRepository) insertSeatSettlementInTx(ctx context.Context, tx *sql.Tx, membership *service.AccountShareMembership, settlementType string, periodStart, periodEnd time.Time, charge float64, refund float64, split accountShareModeRevenueSplit, waiver *accountShareSeatChargeWaiver) (int64, error) {
 	if membership == nil {
 		return 0, nil
 	}
@@ -4152,7 +4389,14 @@ func (r *accountShareModeRepository) insertSeatSettlementInTx(ctx context.Contex
 			platform_credit,
 			rate_multiplier_snapshot,
 			hourly_rate_snapshot,
+			policy_id,
+			policy_version,
 			owner_share_ratio_snapshot,
+			inviter_user_id,
+			invite_bound_at_snapshot,
+			invite_expires_at_snapshot,
+			invite_share_ratio_snapshot,
+			invite_credit,
 			platform_share_ratio_snapshot,
 			duration_ms,
 			settlement_type,
@@ -4168,9 +4412,10 @@ func (r *accountShareModeRepository) insertSeatSettlementInTx(ctx context.Contex
 		VALUES (
 			NULL, $1, $2, $3, $4, $5, $6,
 			0, $7::numeric, $7::numeric, $8::numeric, $9::numeric,
-			1, $10::numeric, $11::numeric, $12::numeric, $13,
-			$14::varchar, $15, $16, $17::numeric, $18::numeric, $19::numeric, $20::numeric,
-			CASE WHEN $14::varchar = 'seat_charge' THEN NOW() ELSE NULL END,
+			1, $10::numeric, $11, $12, $13::numeric,
+			$14, $15, $16, $17::numeric, $18::numeric, $19::numeric,
+			$20, $21::varchar, $22, $23, $24::numeric, $25::numeric, $26::numeric, $27::numeric,
+			CASE WHEN $21::varchar = 'seat_charge' THEN NOW() ELSE NULL END,
 			NOW()
 		)
 		RETURNING id
@@ -4182,11 +4427,18 @@ func (r *accountShareModeRepository) insertSeatSettlementInTx(ctx context.Contex
 		membership.ConsumerUserID,
 		membership.APIKeyID,
 		decimalFromFloat(charge).StringFixed(10),
-		ownerCredit.StringFixed(10),
-		platformCredit.StringFixed(10),
+		split.OwnerCredit.StringFixed(10),
+		split.PlatformCredit.StringFixed(10),
 		decimalFromFloat(membership.HourlyRateSnapshot).StringFixed(8),
-		ratioFromCredits(ownerCredit, decimalFromFloat(charge)).StringFixed(8),
-		ratioFromCredits(platformCredit, decimalFromFloat(charge)).StringFixed(8),
+		nullablePtrInt64(split.PolicyID),
+		split.PolicyVersion,
+		split.OwnerRatio.StringFixed(8),
+		nullablePositiveInt64(split.Invite.InviterUserID),
+		nullableTime(split.Invite.BoundAt),
+		nullableTime(split.Invite.ExpiresAt),
+		split.InviteRatio.StringFixed(8),
+		split.InviteCredit.StringFixed(10),
+		split.PlatformRatio.StringFixed(8),
 		durationMs,
 		settlementType,
 		periodStart,
@@ -4199,7 +4451,7 @@ func (r *accountShareModeRepository) insertSeatSettlementInTx(ctx context.Contex
 	return settlementID, err
 }
 
-func (r *accountShareModeRepository) insertSeatWaiverSettlementInTx(ctx context.Context, tx *sql.Tx, membership *service.AccountShareMembership, periodStart, periodEnd time.Time, refund decimal.Decimal, waiver accountShareSeatChargeWaiver) (int64, error) {
+func (r *accountShareModeRepository) insertSeatWaiverSettlementInTx(ctx context.Context, tx *sql.Tx, membership *service.AccountShareMembership, periodStart, periodEnd time.Time, refund decimal.Decimal, reversal accountShareModeRevenueSplit, reversalOfSettlementID int64, waiver accountShareSeatChargeWaiver) (int64, error) {
 	if membership == nil || refund.LessThanOrEqual(decimal.Zero) {
 		return 0, nil
 	}
@@ -4224,7 +4476,14 @@ func (r *accountShareModeRepository) insertSeatWaiverSettlementInTx(ctx context.
 			platform_credit,
 			rate_multiplier_snapshot,
 			hourly_rate_snapshot,
+			policy_id,
+			policy_version,
 			owner_share_ratio_snapshot,
+			inviter_user_id,
+			invite_bound_at_snapshot,
+			invite_expires_at_snapshot,
+			invite_share_ratio_snapshot,
+			invite_credit,
 			platform_share_ratio_snapshot,
 			duration_ms,
 			settlement_type,
@@ -4234,14 +4493,16 @@ func (r *accountShareModeRepository) insertSeatWaiverSettlementInTx(ctx context.
 			waiver_minimum_snapshot,
 			waiver_required_amount,
 			waiver_usage_amount,
+			reversal_of_settlement_id,
 			created_at
 		)
 		VALUES (
 			NULL, $1, $2, $3, $4, $5, $6,
-			0, 0, 0, 0, 0,
-			1, $7::numeric, 0, 0, $8,
-			$9, $10, $11, $12::numeric,
-			$13::numeric, $14::numeric, $15::numeric,
+			0, 0, 0, $7::numeric, $8::numeric,
+			1, $9::numeric, $10, $11, $12::numeric,
+			$13, $14, $15, $16::numeric, $17::numeric, $18::numeric,
+			$19, $20, $21, $22, $23::numeric,
+			$24::numeric, $25::numeric, $26::numeric, $27,
 			NOW()
 		)
 		ON CONFLICT (membership_id, period_started_at, period_ended_at)
@@ -4255,7 +4516,18 @@ func (r *accountShareModeRepository) insertSeatWaiverSettlementInTx(ctx context.
 		membership.OwnerUserID,
 		membership.ConsumerUserID,
 		membership.APIKeyID,
+		reversal.OwnerCredit.StringFixed(10),
+		reversal.PlatformCredit.StringFixed(10),
 		decimalFromFloat(membership.HourlyRateSnapshot).StringFixed(8),
+		nullablePtrInt64(reversal.PolicyID),
+		reversal.PolicyVersion,
+		reversal.OwnerRatio.StringFixed(8),
+		nullablePositiveInt64(reversal.Invite.InviterUserID),
+		nullableTime(reversal.Invite.BoundAt),
+		nullableTime(reversal.Invite.ExpiresAt),
+		reversal.InviteRatio.StringFixed(8),
+		reversal.InviteCredit.StringFixed(10),
+		reversal.PlatformRatio.StringFixed(8),
 		durationMs,
 		accountShareSeatSettlementTypeWaiverRefund,
 		periodStart,
@@ -4264,39 +4536,12 @@ func (r *accountShareModeRepository) insertSeatWaiverSettlementInTx(ctx context.
 		waiver.Minimum.StringFixed(8),
 		waiver.Required.StringFixed(10),
 		waiver.Usage.StringFixed(10),
+		nullablePositiveInt64(reversalOfSettlementID),
 	).Scan(&settlementID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}
 	return settlementID, err
-}
-
-func (r *accountShareModeRepository) resolveAccountShareModePolicyInTx(ctx context.Context, tx *sql.Tx, platform string) (*service.AccountShareModePolicy, error) {
-	policy := &service.AccountShareModePolicy{
-		Platform:           platform,
-		OwnerShareRatio:    service.AccountShareModeDefaultOwnerShareRatio,
-		PlatformShareRatio: service.AccountShareModeDefaultPlatformShareRatio,
-		Enabled:            true,
-		Version:            1,
-	}
-	var enabled bool
-	err := tx.QueryRowContext(ctx, `
-		SELECT owner_share_ratio, platform_share_ratio, enabled, version
-		FROM account_share_mode_policies
-		WHERE platform = $1
-	`, platform).Scan(&policy.OwnerShareRatio, &policy.PlatformShareRatio, &enabled, &policy.Version)
-	if errors.Is(err, sql.ErrNoRows) {
-		return policy, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	policy.Enabled = enabled
-	if !enabled {
-		policy.OwnerShareRatio = 0
-		policy.PlatformShareRatio = 1
-	}
-	return policy, nil
 }
 
 func accountShareSeatCharge(hourlyRate float64, duration time.Duration) float64 {
@@ -4312,13 +4557,6 @@ func accountShareSeatWaiverWindowReadyAt(settleAt time.Time, windowEnd time.Time
 		return true
 	}
 	return !settleAt.UTC().Before(windowEnd.UTC().Add(grace))
-}
-
-func ratioFromCredits(part, total decimal.Decimal) decimal.Decimal {
-	if total.LessThanOrEqual(decimal.Zero) || part.LessThanOrEqual(decimal.Zero) {
-		return decimal.Zero
-	}
-	return part.Div(total).Round(8)
 }
 
 func (r *accountShareModeRepository) GetActiveMembershipForAPIKey(ctx context.Context, apiKeyID int64) (*service.AccountShareMembership, *service.AccountShareListing, error) {
@@ -4586,10 +4824,10 @@ func (r *accountShareModeRepository) lockQueuedMembershipListingsForRequestInTx(
 	return listingIDs, nil
 }
 
-func (r *accountShareModeRepository) SuspendMembershipForDispatchFailure(ctx context.Context, membershipID int64, failedAt time.Time, cooldownUntil time.Time) (*service.AccountShareMembership, error) {
+func (r *accountShareModeRepository) SuspendMembershipForDispatchFailure(ctx context.Context, membershipID int64, failedAt time.Time, cooldownUntil time.Time) (*service.AccountShareMembership, *service.AccountShareSeatBillingResult, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer func() {
 		if tx != nil {
@@ -4600,38 +4838,38 @@ func (r *accountShareModeRepository) SuspendMembershipForDispatchFailure(ctx con
 	cooldownUntil = cooldownUntil.UTC()
 	membership, err := r.lockSeatBillingMembershipInTx(ctx, tx, membershipID, 0)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, service.ErrAccountShareListingNotFound
+		return nil, nil, service.ErrAccountShareListingNotFound
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// Slot acquisition and its heartbeat update last_request_at only after the
 	// membership is actually in use. Keep this check inside the membership row
 	// lock so a concurrent dispatch failure cannot queue an active stream.
 	if accountShareMembershipRecentlyActive(membership, failedAt) {
-		return nil, nil
+		return nil, nil, nil
 	}
-	membership, err = r.suspendActiveMembershipInTx(ctx, tx, membership, failedAt, cooldownUntil)
+	membership, creditUserIDs, err := r.suspendActiveMembershipInTx(ctx, tx, membership, failedAt, cooldownUntil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	tx = nil
-	return membership, nil
+	return membership, accountShareMembershipBillingResult(membership, creditUserIDs), nil
 }
 
-func (r *accountShareModeRepository) suspendActiveMembershipInTx(ctx context.Context, tx *sql.Tx, membership *service.AccountShareMembership, failedAt time.Time, cooldownUntil time.Time) (*service.AccountShareMembership, error) {
+func (r *accountShareModeRepository) suspendActiveMembershipInTx(ctx context.Context, tx *sql.Tx, membership *service.AccountShareMembership, failedAt time.Time, cooldownUntil time.Time) (*service.AccountShareMembership, []int64, error) {
 	if membership == nil || membership.ID <= 0 {
-		return nil, service.ErrAccountShareListingNotFound
+		return nil, nil, service.ErrAccountShareListingNotFound
 	}
-	settledUntil, _, _, err := r.settleSeatChargeInTx(ctx, tx, membership, failedAt, true, failedAt)
+	settledUntil, _, creditUserIDs, err := r.settleSeatChargeInTx(ctx, tx, membership, failedAt, true, failedAt)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := r.refundUnusedSeatPrepayInTx(ctx, tx, membership, failedAt); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if settledUntil == nil {
 		settledUntil = &failedAt
@@ -4661,12 +4899,12 @@ func (r *accountShareModeRepository) suspendActiveMembershipInTx(ctx context.Con
 			m.dispatch_failed_at, m.dispatch_cooldown_until, m.created_at, m.updated_at
 	`, service.AccountShareMembershipStatusQueued, *settledUntil, failedAt, cooldownUntil, membership.ID, service.AccountShareMembershipStatusActive))
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, service.ErrAccountShareListingNotFound
+		return nil, nil, service.ErrAccountShareListingNotFound
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return membership, nil
+	return membership, creditUserIDs, nil
 }
 
 func accountShareMembershipRecentlyActive(membership *service.AccountShareMembership, now time.Time) bool {
@@ -4680,95 +4918,11 @@ func accountShareMembershipRecentlyActive(membership *service.AccountShareMember
 	return !membership.LastRequestAt.UTC().Before(now.UTC().Add(-guardWindow))
 }
 
-func (r *accountShareModeRepository) ResolvePolicy(ctx context.Context, platform string) (*service.AccountShareModePolicy, error) {
-	platform = strings.ToLower(strings.TrimSpace(platform))
-	if platform == "" {
-		platform = service.AccountShareModePolicyPlatformUnified
+func (r *accountShareModeRepository) ResolvePolicy(ctx context.Context) (*service.AccountSharePolicy, error) {
+	if r == nil || r.db == nil {
+		return nil, service.ErrServiceUnavailable
 	}
-	if platform != service.AccountShareModePolicyPlatformUnified {
-		platform = service.AccountShareModePolicyPlatformUnified
-	}
-	policy := &service.AccountShareModePolicy{}
-	err := r.db.QueryRowContext(ctx, `
-		SELECT id, platform, platform_share_ratio, owner_share_ratio, enabled, version
-		FROM account_share_mode_policies
-		WHERE platform = $1
-			AND deleted_at IS NULL
-	`, platform).Scan(
-		&policy.ID,
-		&policy.Platform,
-		&policy.PlatformShareRatio,
-		&policy.OwnerShareRatio,
-		&policy.Enabled,
-		&policy.Version,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		return &service.AccountShareModePolicy{
-			Platform:           platform,
-			PlatformShareRatio: service.AccountShareModeDefaultPlatformShareRatio,
-			OwnerShareRatio:    service.AccountShareModeDefaultOwnerShareRatio,
-			Enabled:            true,
-			Version:            1,
-		}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return policy, nil
-}
-
-func (r *accountShareModeRepository) UpsertPolicy(ctx context.Context, input service.UpdateAccountShareModePolicyInput) (*service.AccountShareModePolicy, error) {
-	platform := strings.ToLower(strings.TrimSpace(input.Platform))
-	if platform == "" {
-		platform = service.AccountShareModePolicyPlatformUnified
-	}
-	if platform != service.AccountShareModePolicyPlatformUnified {
-		platform = service.AccountShareModePolicyPlatformUnified
-	}
-	platformRatio := service.AccountShareModeDefaultPlatformShareRatio
-	if input.PlatformShareRatio != nil {
-		platformRatio = *input.PlatformShareRatio
-	}
-	ownerRatio := service.AccountShareModeDefaultOwnerShareRatio
-	if input.OwnerShareRatio != nil {
-		ownerRatio = *input.OwnerShareRatio
-	}
-	enabled := true
-	if input.Enabled != nil {
-		enabled = *input.Enabled
-	}
-	policy := &service.AccountShareModePolicy{}
-	err := r.db.QueryRowContext(ctx, `
-		INSERT INTO account_share_mode_policies (
-			platform,
-			platform_share_ratio,
-			owner_share_ratio,
-			enabled,
-			version,
-			created_at,
-			updated_at
-		)
-		VALUES ($1, $2, $3, $4, 1, NOW(), NOW())
-		ON CONFLICT (platform) DO UPDATE
-		SET platform_share_ratio = EXCLUDED.platform_share_ratio,
-			owner_share_ratio = EXCLUDED.owner_share_ratio,
-			enabled = EXCLUDED.enabled,
-			version = account_share_mode_policies.version + 1,
-			deleted_at = NULL,
-			updated_at = NOW()
-		RETURNING id, platform, platform_share_ratio, owner_share_ratio, enabled, version
-	`, platform, platformRatio, ownerRatio, enabled).Scan(
-		&policy.ID,
-		&policy.Platform,
-		&policy.PlatformShareRatio,
-		&policy.OwnerShareRatio,
-		&policy.Enabled,
-		&policy.Version,
-	)
-	if err != nil {
-		return nil, err
-	}
-	return policy, nil
+	return resolveEnabledGlobalAccountSharePolicy(ctx, r.db)
 }
 
 func (r *accountShareModeRepository) queryOneListing(ctx context.Context, viewerUserID int64, predicate string, value any) (*service.AccountShareListing, error) {

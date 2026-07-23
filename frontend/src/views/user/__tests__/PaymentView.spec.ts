@@ -334,8 +334,6 @@ describe('PaymentView WeChat JSAPI flow', () => {
     })
     await flushPromises()
     await flushPromises()
-    await wrapper.get('button:nth-of-type(2)').trigger('click')
-    await flushPromises()
     await wrapper.get('.amount-stub').trigger('click')
     await flushPromises()
     await wrapper.get('button.btn').trigger('click')

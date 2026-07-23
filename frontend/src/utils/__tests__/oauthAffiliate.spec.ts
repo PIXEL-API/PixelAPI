@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  buildAffiliateInviteLink,
   clearAffiliateReferralCode,
   clearOAuthAffiliateCode,
   loadAffiliateReferralCode,
@@ -20,6 +21,13 @@ describe('oauthAffiliate', () => {
     expect(resolveAffiliateReferralCode(' 5579J7CFG9PF ')).toBe('5579J7CFG9PF')
     expect(loadAffiliateReferralCode()).toBe('5579J7CFG9PF')
     expect(resolveAffiliateReferralCode()).toBe('5579J7CFG9PF')
+  })
+
+  it('builds a normalized and encoded invite link', () => {
+    expect(buildAffiliateInviteLink(' 邀请 CODE ', 'https://pixel.example/')).toBe(
+      'https://pixel.example/register?aff=%E9%82%80%E8%AF%B7%20CODE'
+    )
+    expect(buildAffiliateInviteLink('', 'https://pixel.example')).toBe('')
   })
 
   it('expires stale affiliate referral code', () => {

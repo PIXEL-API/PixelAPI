@@ -1,0 +1,63 @@
+# Install this identical configuration on App-01, App-02, and App-03.
+# In manual-failover mode, only the node targeted by the public DNS record runs
+# Caddy. Standby nodes keep Caddy stopped until DNS is moved to that node.
+# Each node keeps its own Caddy state and TLS private keys; do not copy
+# /var/lib/caddy between nodes.
+
+(cluster_proxy_common) {
+	lb_policy least_conn
+
+	health_uri /health/ready
+	health_interval 5s
+	health_timeout 2s
+	health_status 200
+	health_fails 2
+	health_passes 2
+
+	# With no unhealthy_status configured, application 4xx/5xx responses do
+	# not count against passive health. Transport failures still do.
+	fail_duration 30s
+	max_fails 3
+
+	flush_interval -1
+	stream_close_delay 5m
+
+	header_up -CF-Connecting-IP
+	header_up X-Real-IP {remote_host}
+
+	transport http {
+		versions 1.1
+		keepalive 120s
+		keepalive_idle_conns 256
+		compression off
+	}
+}
+
+api.example.com {
+	# Caddy always retries a failed upstream connection when retries are
+	# enabled, even when lb_retry_match excludes the request. Keep model/write
+	# requests in a proxy handler with retries disabled to prevent duplicate
+	# submissions. The read-only handler may retry transport failures.
+	@retryable method GET HEAD OPTIONS
+	reverse_proxy @retryable 10.77.0.21:8080 10.77.0.22:8080 10.77.0.23:8080 {
+		import cluster_proxy_common
+		lb_try_duration 5s
+		lb_try_interval 250ms
+		lb_retry_match method GET HEAD OPTIONS
+	}
+
+	reverse_proxy 10.77.0.21:8080 10.77.0.22:8080 10.77.0.23:8080 {
+		import cluster_proxy_common
+	}
+
+	encode zstd gzip
+
+	log {
+		output file /var/log/caddy/sub2api-access.log {
+			roll_size 100MiB
+			roll_keep 10
+			roll_keep_for 720h
+		}
+		format json
+	}
+}

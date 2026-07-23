@@ -39,21 +39,31 @@ type QueueLockResult struct {
 // UserMessageQueueService 用户消息串行队列服务
 // 对真实用户消息实施账号级串行化 + RPM 自适应延迟
 type UserMessageQueueService struct {
-	cache    UserMsgQueueCache
-	rpmCache RPMCache
-	cfg      *config.UserMessageQueueConfig
-	stopCh   chan struct{} // graceful shutdown
-	stopOnce sync.Once     // 确保 Stop() 并发安全
+	cache        UserMsgQueueCache
+	rpmCache     RPMCache
+	cfg          *config.UserMessageQueueConfig
+	taskExecutor *ClusterTaskExecutor
+	stopCh       chan struct{} // graceful shutdown
+	stopOnce     sync.Once     // 确保 Stop() 并发安全
 }
 
 // NewUserMessageQueueService 创建用户消息串行队列服务
-func NewUserMessageQueueService(cache UserMsgQueueCache, rpmCache RPMCache, cfg *config.UserMessageQueueConfig) *UserMessageQueueService {
-	return &UserMessageQueueService{
+func NewUserMessageQueueService(
+	cache UserMsgQueueCache,
+	rpmCache RPMCache,
+	cfg *config.UserMessageQueueConfig,
+	taskExecutors ...*ClusterTaskExecutor,
+) *UserMessageQueueService {
+	service := &UserMessageQueueService{
 		cache:    cache,
 		rpmCache: rpmCache,
 		cfg:      cfg,
 		stopCh:   make(chan struct{}),
 	}
+	if len(taskExecutors) > 0 {
+		service.taskExecutor = taskExecutors[0]
+	}
+	return service
 }
 
 // IsRealUserMessage 检测是否为真实用户消息（非 tool_result）
@@ -251,25 +261,39 @@ func (s *UserMessageQueueService) StartCleanupWorker(interval time.Duration) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		accountIDs, err := s.cache.ScanLockKeys(ctx, 1000)
-		if err != nil {
-			logger.LegacyPrintf("service.umq", "Cleanup scan failed: %v", err)
-			return
-		}
-
-		cleaned := 0
-		for _, accountID := range accountIDs {
-			cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 2*time.Second)
-			if err := s.cache.ForceReleaseLock(cleanCtx, accountID); err != nil {
-				logger.LegacyPrintf("service.umq", "Cleanup force release failed for account %d: %v", accountID, err)
-			} else {
-				cleaned++
+		run := func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+			if err := guard.Check(taskCtx); err != nil {
+				return err
 			}
-			cleanCancel()
-		}
+			accountIDs, err := s.cache.ScanLockKeys(taskCtx, 1000)
+			if err != nil {
+				return err
+			}
 
-		if cleaned > 0 {
-			logger.LegacyPrintf("service.umq", "Cleanup completed: released %d orphaned locks", cleaned)
+			cleaned := 0
+			for _, accountID := range accountIDs {
+				if err := guard.Check(taskCtx); err != nil {
+					return err
+				}
+				if err := s.cache.ForceReleaseLock(taskCtx, accountID); err != nil {
+					logger.LegacyPrintf("service.umq", "Cleanup force release failed for account %d: %v", accountID, err)
+				} else {
+					cleaned++
+				}
+			}
+			if cleaned > 0 {
+				logger.LegacyPrintf("service.umq", "Cleanup completed: released %d orphaned locks", cleaned)
+			}
+			return nil
+		}
+		var err error
+		if s.taskExecutor == nil {
+			err = run(ctx, &ClusterLeaseGuard{})
+		} else {
+			_, err = s.taskExecutor.Run(ctx, "user_message_queue_orphan_lock_cleanup", run)
+		}
+		if err != nil {
+			logger.LegacyPrintf("service.umq", "Cleanup failed: %v", err)
 		}
 	}
 

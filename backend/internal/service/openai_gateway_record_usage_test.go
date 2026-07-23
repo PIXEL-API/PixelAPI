@@ -450,6 +450,7 @@ func TestOpenAIGatewayServiceRecordUsage_AccountShareOwnerSelfUseUsesServiceRate
 	apiKeyID := int64(1004)
 	accountID := int64(3004)
 	listingRate := 2.0
+	ownerSelfUseMultiplier := 0.005
 	usage := OpenAIUsage{InputTokens: 20, OutputTokens: 10}
 
 	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
@@ -457,10 +458,16 @@ func TestOpenAIGatewayServiceRecordUsage_AccountShareOwnerSelfUseUsesServiceRate
 	userRepo := &openAIRecordUsageUserRepoStub{}
 	subRepo := &openAIRecordUsageSubRepoStub{}
 	svc := newOpenAIRecordUsageServiceWithBillingRepoForTest(usageRepo, billingRepo, userRepo, subRepo, nil)
-	svc.accountShareModeService = &AccountShareModeService{repo: &accountShareModeRepoStub{
-		membership: &AccountShareMembership{ID: 44, AccountID: accountID, ConsumerUserID: userID, APIKeyID: apiKeyID},
-		listing:    &AccountShareListing{ID: 55, AccountID: accountID, OwnerUserID: userID, RateMultiplier: listingRate},
+	modeSettingRepo := &accountShareReviewSettingRepoStub{values: map[string]string{
+		SettingKeyUserPrivateGroupCommissionRate: "0.005",
 	}}
+	svc.accountShareModeService = &AccountShareModeService{
+		repo: &accountShareModeRepoStub{
+			membership: &AccountShareMembership{ID: 44, AccountID: accountID, ConsumerUserID: userID, APIKeyID: apiKeyID},
+			listing:    &AccountShareListing{ID: 55, AccountID: accountID, OwnerUserID: userID, RateMultiplier: listingRate},
+		},
+		settingService: NewSettingService(modeSettingRepo, &config.Config{}),
+	}
 
 	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
 		Result: &OpenAIForwardResult{
@@ -483,11 +490,11 @@ func TestOpenAIGatewayServiceRecordUsage_AccountShareOwnerSelfUseUsesServiceRate
 
 	require.NoError(t, err)
 	require.NotNil(t, usageRepo.lastLog)
-	require.Equal(t, AccountShareModeOwnerSelfUseMultiplier, usageRepo.lastLog.RateMultiplier)
+	require.Equal(t, ownerSelfUseMultiplier, usageRepo.lastLog.RateMultiplier)
 	require.NotNil(t, billingRepo.lastCmd)
 	require.Nil(t, billingRepo.lastCmd.AccountShareModeSettlement)
 
-	expected := expectedOpenAICost(t, svc, "gpt-5.1", usage, AccountShareModeOwnerSelfUseMultiplier)
+	expected := expectedOpenAICost(t, svc, "gpt-5.1", usage, ownerSelfUseMultiplier)
 	require.InDelta(t, expected.ActualCost, usageRepo.lastLog.ActualCost, 1e-12)
 	require.InDelta(t, expected.ActualCost, billingRepo.lastCmd.BalanceCost, 1e-12)
 }

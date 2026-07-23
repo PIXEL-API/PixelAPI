@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { opsAPI, type OpsRuntimeLogConfig, type OpsSystemLog, type OpsSystemLogSinkHealth } from '@/api/admin/ops'
 import Pagination from '@/components/common/Pagination.vue'
 import Select from '@/components/common/Select.vue'
 import { useAppStore } from '@/stores'
 
 const appStore = useAppStore()
+const route = useRoute()
 
 const props = withDefaults(defineProps<{
   platformFilter?: string
@@ -353,6 +355,10 @@ const applyFilters = () => {
 const hasData = computed(() => logs.value.length > 0)
 
 onMounted(async () => {
+  const routeHost = Array.isArray(route.query.host) ? route.query.host[0] : route.query.host
+  if (typeof routeHost === 'string' && routeHost.trim()) {
+    filters.host = routeHost.trim()
+  }
   if (props.platformFilter) {
     filters.platform = props.platformFilter
   }
@@ -361,7 +367,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <section class="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-dark-700 dark:bg-dark-900/60">
+  <section id="ops-system-logs" class="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-dark-700 dark:bg-dark-900/60">
     <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
       <div>
         <h3 class="text-sm font-bold text-gray-900 dark:text-white">系统日志</h3>

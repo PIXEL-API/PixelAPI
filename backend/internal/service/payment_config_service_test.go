@@ -368,6 +368,59 @@ func TestGetPaymentConfigKeepsStoredEnabledTypes(t *testing.T) {
 	}
 }
 
+func TestListPlansForSaleExcludesUserPrivateGroups(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+
+	publicGroup, err := client.Group.Create().
+		SetName("Public Group").
+		SetScope(GroupScopePublic).
+		Save(ctx)
+	if err != nil {
+		t.Fatalf("create public group: %v", err)
+	}
+	privateGroup, err := client.Group.Create().
+		SetName("Private Group").
+		SetScope(GroupScopeUserPrivate).
+		SetOwnerUserID(42).
+		Save(ctx)
+	if err != nil {
+		t.Fatalf("create private group: %v", err)
+	}
+
+	createPlan := func(name string, groupID int64, forSale bool, sortOrder int) {
+		t.Helper()
+		_, createErr := client.SubscriptionPlan.Create().
+			SetName(name).
+			SetGroupID(groupID).
+			SetPrice(10).
+			SetValidityDays(30).
+			SetValidityUnit("day").
+			SetForSale(forSale).
+			SetSortOrder(sortOrder).
+			Save(ctx)
+		if createErr != nil {
+			t.Fatalf("create plan %q: %v", name, createErr)
+		}
+	}
+	createPlan("Public Later", publicGroup.ID, true, 20)
+	createPlan("Private Plan", privateGroup.ID, true, 1)
+	createPlan("Public Hidden", publicGroup.ID, false, 2)
+	createPlan("Public First", publicGroup.ID, true, 10)
+
+	svc := &PaymentConfigService{entClient: client}
+	plans, err := svc.ListPlansForSale(ctx)
+	if err != nil {
+		t.Fatalf("ListPlansForSale returned error: %v", err)
+	}
+	if len(plans) != 2 {
+		t.Fatalf("ListPlansForSale len = %d, want 2", len(plans))
+	}
+	if plans[0].Name != "Public First" || plans[1].Name != "Public Later" {
+		t.Fatalf("ListPlansForSale = [%s, %s], want public plans ordered by sort_order", plans[0].Name, plans[1].Name)
+	}
+}
+
 func newPaymentConfigServiceTestClient(t *testing.T) *dbent.Client {
 	t.Helper()
 

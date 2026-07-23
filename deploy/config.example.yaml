@@ -30,6 +30,15 @@ server:
   # Per-phase timeout for graceful HTTP shutdown and application cleanup (seconds)
   # HTTP 服务优雅退出与应用清理各阶段的独立超时（秒）
   shutdown_timeout_seconds: 30
+  # Delay after readiness is disabled so the load balancer can stop new traffic
+  # readiness 失败后等待负载均衡器停止新流量的时间（秒）
+  drain_delay_seconds: 10
+  # Maximum time to drain HTTP/SSE/WebSocket connections
+  # HTTP/SSE/WebSocket 连接排空的最大时间（秒）
+  http_drain_timeout_seconds: 300
+  # Maximum time for application resource cleanup
+  # 应用资源清理的最大时间（秒）
+  cleanup_timeout_seconds: 30
   # Trusted proxies for X-Forwarded-For parsing (CIDR/IP). Empty disables trusted proxies.
   # 信任的代理地址（CIDR/IP 格式），用于解析 X-Forwarded-For 头。留空则禁用代理信任。
   trusted_proxies: []
@@ -59,6 +68,26 @@ server:
     # Max upload buffer per stream in bytes (default: 512KB)
     # 每个流的最大上传缓冲区（字节，默认 512KB）
     max_upload_buffer_per_stream: 524288
+
+# =============================================================================
+# Cluster Configuration
+# 集群配置
+# =============================================================================
+# Single-instance deployments should keep enabled=false. Each cluster node must
+# use the same deployment_id and a unique node_id.
+# 单实例部署保持 enabled=false。集群节点必须使用相同 deployment_id 和唯一 node_id。
+cluster:
+  enabled: false
+  deployment_id: ""
+  node_id: ""
+  expected_nodes: 3
+  heartbeat_interval_seconds: 10
+  node_ttl_seconds: 30
+  offline_after_seconds: 300
+  task_lease_seconds: 60
+  task_renew_interval_seconds: 20
+  operation_poll_interval_seconds: 2
+  cache_reconcile_interval_seconds: 60
 
 # =============================================================================
 # Run Mode Configuration
@@ -806,12 +835,15 @@ database:
   # SSL 模式：disable（禁用）, prefer（优先加密，默认）, require（要求）, verify-ca（验证CA）, verify-full（完全验证）
   # 默认值为 "prefer"，数据库支持 SSL 时自动使用加密连接，不支持时回退明文
   sslmode: "prefer"
-  # Max open connections (高并发场景建议 256+，需配合 PostgreSQL max_connections 调整)
+  # Migration mode: migrate for a single-instance migrator; validate for app nodes
+  # 迁移模式：单实例迁移器使用 migrate，普通集群应用节点使用 validate
+  migration_mode: "migrate"
+  # Max open connections. Three 50-connection nodes reserve capacity under max_connections=400.
   # 最大打开连接数
-  max_open_conns: 256
-  # Max idle connections (建议为 max_open_conns 的 50%，减少频繁建连开销)
+  max_open_conns: 50
+  # Max idle connections
   # 最大空闲连接数
-  max_idle_conns: 128
+  max_idle_conns: 15
   # Connection max lifetime (minutes)
   # 连接最大存活时间（分钟）
   conn_max_lifetime_minutes: 30
@@ -838,12 +870,17 @@ redis:
   # Database number (0-15)
   # 数据库编号（0-15）
   db: 0
+  # Connection timeout values in seconds
+  # 连接超时配置（秒）
+  dial_timeout_seconds: 5
+  read_timeout_seconds: 3
+  write_timeout_seconds: 3
   # Connection pool size (max concurrent connections)
   # 连接池大小（最大并发连接数）
-  pool_size: 1024
-  # Minimum number of idle connections (高并发场景建议 128+，保持足够热连接)
+  pool_size: 128
+  # Minimum number of idle connections
   # 最小空闲连接数
-  min_idle_conns: 128
+  min_idle_conns: 16
   # Enable TLS/SSL connection
   # 是否启用 TLS/SSL 连接（Unix Socket 模式不支持 TLS）
   enable_tls: false

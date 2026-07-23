@@ -8,6 +8,7 @@ import (
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/subscriptionplan"
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
@@ -117,7 +118,25 @@ func (s *PaymentConfigService) ListPlans(ctx context.Context) ([]*dbent.Subscrip
 }
 
 func (s *PaymentConfigService) ListPlansForSale(ctx context.Context) ([]*dbent.SubscriptionPlan, error) {
-	return s.entClient.SubscriptionPlan.Query().Where(subscriptionplan.ForSaleEQ(true)).Order(subscriptionplan.BySortOrder()).All(ctx)
+	publicGroupIDs, err := s.entClient.Group.Query().
+		Where(
+			group.ScopeEQ(domain.GroupScopePublic),
+			group.OwnerUserIDIsNil(),
+		).
+		IDs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list public subscription groups: %w", err)
+	}
+	if len(publicGroupIDs) == 0 {
+		return []*dbent.SubscriptionPlan{}, nil
+	}
+	return s.entClient.SubscriptionPlan.Query().
+		Where(
+			subscriptionplan.ForSaleEQ(true),
+			subscriptionplan.GroupIDIn(publicGroupIDs...),
+		).
+		Order(subscriptionplan.BySortOrder()).
+		All(ctx)
 }
 
 func (s *PaymentConfigService) CreatePlan(ctx context.Context, req CreatePlanRequest) (*dbent.SubscriptionPlan, error) {

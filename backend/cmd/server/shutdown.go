@@ -42,6 +42,28 @@ func runServerLifecycle(
 	cleanup func(context.Context) error,
 	cleanupTimeout time.Duration,
 ) error {
+	return runServerLifecycleWithDrain(
+		stop,
+		restart,
+		serveResults,
+		targets,
+		nil,
+		0,
+		cleanup,
+		cleanupTimeout,
+	)
+}
+
+func runServerLifecycleWithDrain(
+	stop <-chan struct{},
+	restart <-chan struct{},
+	serveResults <-chan serverServeResult,
+	targets []shutdownTarget,
+	beginDrain func(),
+	drainDelay time.Duration,
+	cleanup func(context.Context) error,
+	cleanupTimeout time.Duration,
+) error {
 	if stop == nil {
 		return errors.New("server lifecycle: nil stop channel")
 	}
@@ -66,6 +88,15 @@ func runServerLifecycle(
 		log.Println("Graceful service restart requested...")
 	default:
 		log.Printf("Server lifecycle error: %v", lifecycleErr)
+	}
+
+	if beginDrain != nil {
+		beginDrain()
+	}
+	if drainDelay > 0 {
+		log.Printf("Waiting %s for load balancer drain propagation...", drainDelay)
+		timer := time.NewTimer(drainDelay)
+		<-timer.C
 	}
 
 	if err := shutdownHTTPServers(targets...); err != nil {

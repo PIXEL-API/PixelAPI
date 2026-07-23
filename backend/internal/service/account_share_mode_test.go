@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	"github.com/stretchr/testify/require"
 )
 
 type accountShareModeRepoStub struct {
@@ -65,6 +66,8 @@ type accountShareModeRepoStub struct {
 	createdAccount       *Account
 	createdListing       *AccountShareListing
 	createdModeGroupID   int64
+	policy               *AccountSharePolicy
+	policyErr            error
 }
 
 type accountShareModeBindingResult struct {
@@ -224,7 +227,11 @@ func (s *accountShareReviewSettingRepoStub) SetMultiple(context.Context, map[str
 }
 
 func (s *accountShareReviewSettingRepoStub) GetAll(context.Context) (map[string]string, error) {
-	panic("unexpected GetAll call")
+	result := make(map[string]string, len(s.values))
+	for key, value := range s.values {
+		result[key] = value
+	}
+	return result, nil
 }
 
 func (s *accountShareReviewSettingRepoStub) Delete(context.Context, string) error {
@@ -439,12 +446,12 @@ func (r *accountShareModeRepoStub) JoinListing(context.Context, int64, int64, in
 	return nil, ErrAccountShareListingNotFound
 }
 
-func (r *accountShareModeRepoStub) EndMembership(context.Context, int64, int64) (*AccountShareMembership, error) {
+func (r *accountShareModeRepoStub) EndMembership(context.Context, int64, int64) (*AccountShareMembership, *AccountShareSeatBillingResult, error) {
 	r.endCalls++
 	if r.endMembership != nil {
-		return r.endMembership, nil
+		return r.endMembership, accountShareModeStubBillingResult(r.endMembership), nil
 	}
-	return nil, ErrAccountShareListingNotFound
+	return nil, nil, ErrAccountShareListingNotFound
 }
 
 func (r *accountShareModeRepoStub) UpdateMembershipIdleTimeout(context.Context, int64, int64, int) (*AccountShareMembership, error) {
@@ -510,8 +517,11 @@ func (r *accountShareModeRepoStub) ListIdleMembershipCandidates(context.Context,
 	return nil, nil
 }
 
-func (r *accountShareModeRepoStub) EndIdleMembership(context.Context, int64, time.Time) (*AccountShareMembership, error) {
-	return nil, ErrAccountShareListingNotFound
+func (r *accountShareModeRepoStub) EndIdleMembership(context.Context, int64, time.Time) (*AccountShareMembership, *AccountShareSeatBillingResult, error) {
+	if r.endMembership != nil {
+		return r.endMembership, accountShareModeStubBillingResult(r.endMembership), nil
+	}
+	return nil, nil, ErrAccountShareListingNotFound
 }
 
 func (r *accountShareModeRepoStub) ProcessUnavailableMemberships(context.Context, time.Time, int) (*AccountShareSeatBillingResult, error) {
@@ -522,9 +532,9 @@ func (r *accountShareModeRepoStub) ListRecoverableUnavailableMembershipIDs(conte
 	return append([]int64(nil), r.recoverableIDs...), nil
 }
 
-func (r *accountShareModeRepoStub) SuspendRecoverableUnavailableMembership(context.Context, int64, time.Time) (*AccountShareMembership, error) {
+func (r *accountShareModeRepoStub) SuspendRecoverableUnavailableMembership(context.Context, int64, time.Time) (*AccountShareMembership, *AccountShareSeatBillingResult, error) {
 	r.recoverableCalls++
-	return r.recoverableSuspend, nil
+	return r.recoverableSuspend, accountShareModeStubBillingResult(r.recoverableSuspend), nil
 }
 
 func (r *accountShareModeRepoStub) DisablePermanentlyUnavailableListings(context.Context, time.Time, int) (*AccountShareListingMaintenanceResult, error) {
@@ -585,7 +595,7 @@ func (r *accountShareModeRepoStub) ActivateNextQueuedMembershipForRequest(contex
 	return nil, nil, ErrAccountShareListingNotFound
 }
 
-func (r *accountShareModeRepoStub) SuspendMembershipForDispatchFailure(context.Context, int64, time.Time, time.Time) (*AccountShareMembership, error) {
+func (r *accountShareModeRepoStub) SuspendMembershipForDispatchFailure(context.Context, int64, time.Time, time.Time) (*AccountShareMembership, *AccountShareSeatBillingResult, error) {
 	r.dispatchFailureCalls++
 	r.unavailableCalls++
 	membership := r.membership
@@ -594,15 +604,33 @@ func (r *accountShareModeRepoStub) SuspendMembershipForDispatchFailure(context.C
 	}
 	r.membership = nil
 	r.listing = nil
-	return membership, nil
+	return membership, accountShareModeStubBillingResult(membership), nil
 }
 
-func (r *accountShareModeRepoStub) ResolvePolicy(context.Context, string) (*AccountShareModePolicy, error) {
-	return &AccountShareModePolicy{Platform: PlatformOpenAI, PlatformShareRatio: AccountShareModeDefaultPlatformShareRatio, OwnerShareRatio: AccountShareModeDefaultOwnerShareRatio, Enabled: true}, nil
+func accountShareModeStubBillingResult(membership *AccountShareMembership) *AccountShareSeatBillingResult {
+	result := &AccountShareSeatBillingResult{}
+	if membership == nil {
+		return result
+	}
+	if membership.ConsumerUserID > 0 {
+		result.DebitUserIDs = []int64{membership.ConsumerUserID}
+		result.EndedConsumerUserIDs = []int64{membership.ConsumerUserID}
+	}
+	if membership.OwnerUserID > 0 {
+		result.CreditUserIDs = []int64{membership.OwnerUserID}
+	}
+	return result
 }
 
-func (r *accountShareModeRepoStub) UpsertPolicy(context.Context, UpdateAccountShareModePolicyInput) (*AccountShareModePolicy, error) {
-	return nil, nil
+func (r *accountShareModeRepoStub) ResolvePolicy(context.Context) (*AccountSharePolicy, error) {
+	if r.policyErr != nil {
+		return nil, r.policyErr
+	}
+	if r.policy == nil {
+		return nil, nil
+	}
+	policy := *r.policy
+	return &policy, nil
 }
 
 func TestAccountShareModeProcessSeatBillingDoesNotRunWaiverCompensation(t *testing.T) {
@@ -667,6 +695,7 @@ func TestAccountShareModeRecoverableUnavailableSuspendsAfterConcurrencyDrains(t 
 func TestAccountShareModeProcessSeatWaiverCompensationsUsesDedicatedBatchSize(t *testing.T) {
 	repo := &accountShareModeRepoStub{}
 	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
+	svc.taskExecutor = &ClusterTaskExecutor{}
 
 	svc.processSeatWaiverCompensationsOnce()
 
@@ -676,6 +705,32 @@ func TestAccountShareModeProcessSeatWaiverCompensationsUsesDedicatedBatchSize(t 
 	if repo.waiverCompLimit != AccountShareModeSeatWaiverCompensationBatchSize {
 		t.Fatalf("waiver compensation limit = %d, want %d", repo.waiverCompLimit, AccountShareModeSeatWaiverCompensationBatchSize)
 	}
+}
+
+func TestAccountShareModeSeatWaiverCompensationRequiresClusterLease(t *testing.T) {
+	repo := &accountShareModeRepoStub{}
+	clusterRepo := &clusterAdminRepositoryStub{}
+	cfg := testClusterRuntimeConfig()
+	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
+	svc.taskExecutor = NewClusterTaskExecutor(cfg, clusterRepo, NewClusterNodeState(cfg))
+
+	svc.processSeatWaiverCompensationsOnce()
+
+	require.Equal(t, accountShareSeatWaiverCompensationTaskName, clusterRepo.acquiredTaskName)
+	require.Zero(t, repo.waiverCompCalls)
+}
+
+func TestAccountShareModeReviewModerationRequiresClusterLease(t *testing.T) {
+	repo := &accountShareModeRepoStub{}
+	clusterRepo := &clusterAdminRepositoryStub{}
+	cfg := testClusterRuntimeConfig()
+	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
+	svc.SetReviewModerationSettingRepository(&accountShareReviewSettingRepoStub{})
+	svc.taskExecutor = NewClusterTaskExecutor(cfg, clusterRepo, NewClusterNodeState(cfg))
+
+	svc.processReviewModerationOnce()
+
+	require.Equal(t, accountShareReviewModerationTaskName, clusterRepo.acquiredTaskName)
 }
 
 func TestAccountShareModeListModeGroupsUsesReadOnlyLookup(t *testing.T) {
@@ -2349,11 +2404,11 @@ func TestAccountShareModeResolveBindingCachesNonModeGroup(t *testing.T) {
 	}
 }
 
-func TestBuildAccountShareModeBillingSnapshotDisabledPolicyKeepsPlatformRevenue(t *testing.T) {
+func TestBuildAccountShareModeBillingSnapshotWithoutGlobalPolicyKeepsPlatformRevenue(t *testing.T) {
 	snapshot := BuildAccountShareModeBillingSnapshot(
 		&AccountShareMembership{ID: 1, AccountID: 10, ConsumerUserID: 20, APIKeyID: 30},
 		&AccountShareListing{ID: 2, AccountID: 10, OwnerUserID: 40, RateMultiplier: 1, HourlyRate: 0.2},
-		&AccountShareModePolicy{Enabled: false, OwnerShareRatio: 0.9, PlatformShareRatio: 0.1},
+		nil,
 		1.25,
 		0,
 		100,
@@ -2373,7 +2428,7 @@ func TestBuildAccountShareModeBillingSnapshotKeepsExplicitZeroRatio(t *testing.T
 	snapshot := BuildAccountShareModeBillingSnapshot(
 		&AccountShareMembership{ID: 1, AccountID: 10, ConsumerUserID: 20, APIKeyID: 30},
 		&AccountShareListing{ID: 2, AccountID: 10, OwnerUserID: 40, RateMultiplier: 1, HourlyRate: 0.2},
-		&AccountShareModePolicy{Enabled: true, OwnerShareRatio: 0, PlatformShareRatio: 0.25},
+		&AccountSharePolicy{ID: 9, Version: 2, OwnerShareRatio: 0, InviteShareRatio: 0.75},
 		1.25,
 		0,
 		100,
@@ -2387,19 +2442,40 @@ func TestBuildAccountShareModeBillingSnapshotKeepsExplicitZeroRatio(t *testing.T
 	if snapshot.PlatformShareRatio != 0.25 {
 		t.Fatalf("platform ratio = %v, want 0.25", snapshot.PlatformShareRatio)
 	}
+	if snapshot.InviteShareRatio != 0.75 {
+		t.Fatalf("invite ratio = %v, want 0.75", snapshot.InviteShareRatio)
+	}
 }
 
 func TestBuildAccountShareModeBillingSnapshotSkipsOwnerSelfUse(t *testing.T) {
 	snapshot := BuildAccountShareModeBillingSnapshot(
 		&AccountShareMembership{ID: 1, AccountID: 10, ConsumerUserID: 40, APIKeyID: 30},
 		&AccountShareListing{ID: 2, AccountID: 10, OwnerUserID: 40, RateMultiplier: 1, HourlyRate: 0.2},
-		&AccountShareModePolicy{Enabled: true, OwnerShareRatio: 0.9, PlatformShareRatio: 0.1},
+		&AccountSharePolicy{ID: 9, Version: 2, OwnerShareRatio: 0.9, InviteShareRatio: 0.1},
 		1.25,
 		0,
 		100,
 	)
 	if snapshot != nil {
 		t.Fatalf("expected owner self-use snapshot to be skipped, got %#v", snapshot)
+	}
+}
+
+func TestAccountShareModeResolveOwnerSelfUseMultiplierReadsGlobalSetting(t *testing.T) {
+	settingRepo := &accountShareReviewSettingRepoStub{values: map[string]string{
+		SettingKeyUserPrivateGroupCommissionRate: "0.0075",
+	}}
+	svc := &AccountShareModeService{
+		settingService: NewSettingService(settingRepo, &config.Config{}),
+	}
+
+	multiplier, err := svc.ResolveOwnerSelfUseMultiplier(context.Background())
+
+	if err != nil {
+		t.Fatalf("ResolveOwnerSelfUseMultiplier failed: %v", err)
+	}
+	if multiplier != 0.0075 {
+		t.Fatalf("multiplier = %v, want 0.0075", multiplier)
 	}
 }
 

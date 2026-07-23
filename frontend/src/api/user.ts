@@ -15,6 +15,7 @@ import type {
   NotifyEmailEntry,
   UserAuthProvider,
   UserAffiliateDetail,
+  UserAffiliateShareSummary,
   AffiliateTransferResponse,
   ReceiptCode,
   ReceiptCodePaymentMethod,
@@ -188,6 +189,11 @@ export async function getAffiliateDetail(params?: {
   return data
 }
 
+export async function getAffiliateShareSummary(): Promise<UserAffiliateShareSummary> {
+  const { data } = await apiClient.get<UserAffiliateShareSummary>('/user/aff/share')
+  return data
+}
+
 export async function transferAffiliateQuota(): Promise<AffiliateTransferResponse> {
   const { data } = await apiClient.post<AffiliateTransferResponse>('/user/aff/transfer')
   return data
@@ -255,6 +261,7 @@ export const userAPI = {
   buildOAuthBindingStartURL,
   startOAuthBinding,
   getAffiliateDetail,
+  getAffiliateShareSummary,
   transferAffiliateQuota,
   getReceiptCode,
   uploadReceiptCode,

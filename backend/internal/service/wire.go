@@ -17,6 +17,8 @@ import (
 type BuildInfo struct {
 	Version   string
 	BuildType string
+	Commit    string
+	Date      string
 }
 
 // ProvidePricingService creates and initializes PricingService
@@ -59,6 +61,7 @@ func ProvideTokenRefreshService(
 	privacyClientFactory PrivacyClientFactory,
 	proxyRepo ProxyRepository,
 	refreshAPI *OAuthRefreshAPI,
+	taskExecutor *ClusterTaskExecutor,
 ) *TokenRefreshService {
 	svc := NewTokenRefreshService(accountRepo, oauthService, openaiOAuthService, geminiOAuthService, antigravityOAuthService, cacheInvalidator, schedulerCache, cfg, tempUnschedCache, grokOAuthService)
 	// 注入 OpenAI privacy opt-out 依赖
@@ -67,6 +70,7 @@ func ProvideTokenRefreshService(
 	svc.SetRefreshAPI(refreshAPI)
 	// 调用侧显式注入后台刷新策略，避免策略漂移
 	svc.SetRefreshPolicy(DefaultBackgroundRefreshPolicy())
+	svc.SetClusterTaskExecutor(taskExecutor)
 	svc.Start()
 	return svc
 }
@@ -172,23 +176,42 @@ func ProvideAntigravityTokenProvider(
 }
 
 // ProvideDashboardAggregationService 创建并启动仪表盘聚合服务
-func ProvideDashboardAggregationService(repo DashboardAggregationRepository, timingWheel *TimingWheelService, cfg *config.Config) *DashboardAggregationService {
+func ProvideDashboardAggregationService(
+	repo DashboardAggregationRepository,
+	timingWheel *TimingWheelService,
+	cfg *config.Config,
+	taskExecutor *ClusterTaskExecutor,
+) *DashboardAggregationService {
 	svc := NewDashboardAggregationService(repo, timingWheel, cfg)
+	svc.taskExecutor = taskExecutor
 	svc.Start()
 	return svc
 }
 
 // ProvideUsageCleanupService 创建并启动使用记录清理任务服务
-func ProvideUsageCleanupService(repo UsageCleanupRepository, timingWheel *TimingWheelService, dashboardAgg *DashboardAggregationService, backup *BackupService, settingRepo SettingRepository, cfg *config.Config) *UsageCleanupService {
+func ProvideUsageCleanupService(
+	repo UsageCleanupRepository,
+	timingWheel *TimingWheelService,
+	dashboardAgg *DashboardAggregationService,
+	backup *BackupService,
+	settingRepo SettingRepository,
+	cfg *config.Config,
+	taskExecutor *ClusterTaskExecutor,
+) *UsageCleanupService {
 	svc := NewUsageCleanupServiceWithBackup(repo, timingWheel, dashboardAgg, backup, settingRepo, cfg)
+	svc.taskExecutor = taskExecutor
 	svc.Start()
 	return svc
 }
 
 // ProvideAccountBatchTaskService creates account batch task service.
 // The worker is started after handlers register all operation executors.
-func ProvideAccountBatchTaskService(repo AccountBatchTaskRepository, timingWheel *TimingWheelService) *AccountBatchTaskService {
-	return NewAccountBatchTaskService(repo, timingWheel)
+func ProvideAccountBatchTaskService(
+	repo AccountBatchTaskRepository,
+	timingWheel *TimingWheelService,
+	taskExecutor *ClusterTaskExecutor,
+) *AccountBatchTaskService {
+	return NewAccountBatchTaskService(repo, timingWheel, taskExecutor)
 }
 
 func ProvideAccountBatchTaskServices(svc *AccountBatchTaskService) []*AccountBatchTaskService {
@@ -199,26 +222,35 @@ func ProvideAccountBatchTaskServices(svc *AccountBatchTaskService) []*AccountBat
 }
 
 // ProvideAccountExpiryService creates and starts AccountExpiryService.
-func ProvideAccountExpiryService(accountRepo AccountRepository) *AccountExpiryService {
-	svc := NewAccountExpiryService(accountRepo, time.Minute)
+func ProvideAccountExpiryService(
+	accountRepo AccountRepository,
+	taskExecutor *ClusterTaskExecutor,
+) *AccountExpiryService {
+	svc := NewAccountExpiryService(accountRepo, time.Minute, taskExecutor)
 	svc.Start()
 	return svc
 }
 
 // ProvideAccountErrorCleanupService creates and starts AccountErrorCleanupService.
-func ProvideAccountErrorCleanupService(accountRepo AccountRepository) *AccountErrorCleanupService {
+func ProvideAccountErrorCleanupService(
+	accountRepo AccountRepository,
+	taskExecutor *ClusterTaskExecutor,
+) *AccountErrorCleanupService {
 	cleanupRepo, ok := accountRepo.(AccountErrorCleanupRepository)
 	if !ok {
 		return nil
 	}
-	svc := NewAccountErrorCleanupService(cleanupRepo, time.Minute)
+	svc := NewAccountErrorCleanupService(cleanupRepo, time.Minute, taskExecutor)
 	svc.Start()
 	return svc
 }
 
 // ProvideSubscriptionExpiryService creates and starts SubscriptionExpiryService.
-func ProvideSubscriptionExpiryService(userSubRepo UserSubscriptionRepository) *SubscriptionExpiryService {
-	svc := NewSubscriptionExpiryService(userSubRepo, time.Minute)
+func ProvideSubscriptionExpiryService(
+	userSubRepo UserSubscriptionRepository,
+	taskExecutor *ClusterTaskExecutor,
+) *SubscriptionExpiryService {
+	svc := NewSubscriptionExpiryService(userSubRepo, time.Minute, taskExecutor)
 	svc.Start()
 	return svc
 }
@@ -241,11 +273,13 @@ func ProvideDeferredService(accountRepo AccountRepository, timingWheel *TimingWh
 }
 
 // ProvideConcurrencyService creates ConcurrencyService and starts slot cleanup worker.
-func ProvideConcurrencyService(cache ConcurrencyCache, accountRepo AccountRepository, cfg *config.Config) *ConcurrencyService {
-	svc := NewConcurrencyService(cache)
-	if err := svc.CleanupStaleProcessSlots(context.Background()); err != nil {
-		logger.LegacyPrintf("service.concurrency", "Warning: startup cleanup stale process slots failed: %v", err)
-	}
+func ProvideConcurrencyService(
+	cache ConcurrencyCache,
+	accountRepo AccountRepository,
+	cfg *config.Config,
+	taskExecutor *ClusterTaskExecutor,
+) *ConcurrencyService {
+	svc := NewConcurrencyService(cache, taskExecutor)
 	if cfg != nil {
 		svc.StartSlotCleanupWorker(accountRepo, cfg.Gateway.Scheduling.SlotCleanupInterval)
 	}
@@ -253,8 +287,13 @@ func ProvideConcurrencyService(cache ConcurrencyCache, accountRepo AccountReposi
 }
 
 // ProvideUserMessageQueueService 创建用户消息串行队列服务并启动清理 worker
-func ProvideUserMessageQueueService(cache UserMsgQueueCache, rpmCache RPMCache, cfg *config.Config) *UserMessageQueueService {
-	svc := NewUserMessageQueueService(cache, rpmCache, &cfg.Gateway.UserMessageQueue)
+func ProvideUserMessageQueueService(
+	cache UserMsgQueueCache,
+	rpmCache RPMCache,
+	cfg *config.Config,
+	taskExecutor *ClusterTaskExecutor,
+) *UserMessageQueueService {
+	svc := NewUserMessageQueueService(cache, rpmCache, &cfg.Gateway.UserMessageQueue, taskExecutor)
 	if cfg.Gateway.UserMessageQueue.CleanupIntervalSeconds > 0 {
 		svc.StartCleanupWorker(time.Duration(cfg.Gateway.UserMessageQueue.CleanupIntervalSeconds) * time.Second)
 	}
@@ -305,8 +344,10 @@ func ProvideOpsMetricsCollector(
 	db *sql.DB,
 	redisClient *redis.Client,
 	cfg *config.Config,
+	taskExecutor *ClusterTaskExecutor,
 ) *OpsMetricsCollector {
 	collector := NewOpsMetricsCollector(opsRepo, settingRepo, accountRepo, concurrencyService, db, redisClient, cfg)
+	collector.taskExecutor = taskExecutor
 	collector.Start()
 	return collector
 }
@@ -318,8 +359,10 @@ func ProvideOpsAggregationService(
 	db *sql.DB,
 	redisClient *redis.Client,
 	cfg *config.Config,
+	taskExecutor *ClusterTaskExecutor,
 ) *OpsAggregationService {
 	svc := NewOpsAggregationService(opsRepo, settingRepo, db, redisClient, cfg)
+	svc.taskExecutor = taskExecutor
 	svc.Start()
 	return svc
 }
@@ -331,8 +374,10 @@ func ProvideOpsAlertEvaluatorService(
 	emailService *EmailService,
 	redisClient *redis.Client,
 	cfg *config.Config,
+	taskExecutor *ClusterTaskExecutor,
 ) *OpsAlertEvaluatorService {
 	svc := NewOpsAlertEvaluatorService(opsService, opsRepo, emailService, redisClient, cfg)
+	svc.taskExecutor = taskExecutor
 	svc.Start()
 	return svc
 }
@@ -349,8 +394,10 @@ func ProvideOpsCleanupService(
 	cfg *config.Config,
 	channelMonitorSvc *ChannelMonitorService,
 	backupSvc *BackupService,
+	taskExecutor *ClusterTaskExecutor,
 ) *OpsCleanupService {
 	svc := NewOpsCleanupService(opsRepo, settingRepo, db, redisClient, cfg, channelMonitorSvc, backupSvc)
+	svc.taskExecutor = taskExecutor
 	opsService.setCleanupSettingsApplier(svc)
 	svc.Start()
 	return svc
@@ -396,8 +443,12 @@ func ProvideSystemOperationLockService(repo IdempotencyRepository, cfg *config.C
 	return NewSystemOperationLockService(repo, buildIdempotencyConfig(cfg))
 }
 
-func ProvideIdempotencyCleanupService(repo IdempotencyRepository, cfg *config.Config) *IdempotencyCleanupService {
-	svc := NewIdempotencyCleanupService(repo, cfg)
+func ProvideIdempotencyCleanupService(
+	repo IdempotencyRepository,
+	cfg *config.Config,
+	taskExecutor *ClusterTaskExecutor,
+) *IdempotencyCleanupService {
+	svc := NewIdempotencyCleanupService(repo, cfg, taskExecutor)
 	svc.Start()
 	return svc
 }
@@ -417,8 +468,10 @@ func ProvideScheduledTestRunnerService(
 	accountTestSvc *AccountTestService,
 	rateLimitSvc *RateLimitService,
 	cfg *config.Config,
+	taskExecutor *ClusterTaskExecutor,
 ) *ScheduledTestRunnerService {
 	svc := NewScheduledTestRunnerService(planRepo, scheduledSvc, accountTestSvc, rateLimitSvc, cfg)
+	svc.taskExecutor = taskExecutor
 	svc.Start()
 	return svc
 }
@@ -430,8 +483,10 @@ func ProvideOpsScheduledReportService(
 	emailService *EmailService,
 	redisClient *redis.Client,
 	cfg *config.Config,
+	taskExecutor *ClusterTaskExecutor,
 ) *OpsScheduledReportService {
 	svc := NewOpsScheduledReportService(opsService, userService, emailService, redisClient, cfg)
+	svc.taskExecutor = taskExecutor
 	svc.Start()
 	return svc
 }
@@ -473,17 +528,38 @@ func ProvideBackupService(
 	encryptor SecretEncryptor,
 	storeFactory BackupObjectStoreFactory,
 	dumper DBDumper,
+	taskExecutor *ClusterTaskExecutor,
 ) *BackupService {
 	svc := NewBackupService(settingRepo, cfg, encryptor, storeFactory, dumper)
+	svc.taskExecutor = taskExecutor
 	svc.Start()
 	return svc
 }
 
 // ProvideSettingService wires SettingService with group reader and proxy repo.
-func ProvideSettingService(settingRepo SettingRepository, groupRepo GroupRepository, proxyRepo ProxyRepository, cfg *config.Config) *SettingService {
+func ProvideSettingService(
+	settingRepo SettingRepository,
+	groupRepo GroupRepository,
+	proxyRepo ProxyRepository,
+	cfg *config.Config,
+	clusterCache *ClusterCacheCoordinator,
+) *SettingService {
 	svc := NewSettingService(settingRepo, cfg)
 	svc.SetDefaultSubscriptionGroupReader(groupRepo)
 	svc.SetProxyRepository(proxyRepo)
+	svc.clusterCache = clusterCache
+	return svc
+}
+
+func ProvideChannelService(
+	repo ChannelRepository,
+	groupRepo GroupRepository,
+	authCacheInvalidator APIKeyAuthCacheInvalidator,
+	pricingService *PricingService,
+	clusterCache *ClusterCacheCoordinator,
+) *ChannelService {
+	svc := NewChannelService(repo, groupRepo, authCacheInvalidator, pricingService)
+	svc.SetClusterCacheCoordinator(clusterCache)
 	return svc
 }
 
@@ -509,15 +585,21 @@ func ProvideGroupRateScheduleService(
 	userSubRepo UserSubscriptionRepository,
 	userGroupRateRepo UserGroupRateRepository,
 	systemNoticeService *SystemNoticeService,
+	taskExecutor *ClusterTaskExecutor,
 ) *GroupRateScheduleService {
 	svc := NewGroupRateScheduleService(repo, groupRepo, authCacheInvalidator, defaultGroupRateScheduleInterval)
 	svc.SetNotificationDependencies(apiKeyRepo, userSubRepo, userGroupRateRepo, systemNoticeService)
+	svc.taskExecutor = taskExecutor
 	svc.Start()
 	return svc
 }
 
-func ProvideAffiliateCodeCycleService(affiliateService *AffiliateService) *AffiliateCodeCycleService {
+func ProvideAffiliateCodeCycleService(
+	affiliateService *AffiliateService,
+	taskExecutor *ClusterTaskExecutor,
+) *AffiliateCodeCycleService {
 	svc := NewAffiliateCodeCycleService(affiliateService)
+	svc.taskExecutor = taskExecutor
 	svc.Start()
 	return svc
 }
@@ -605,6 +687,7 @@ func ProvideAccountShareModeService(
 	modelPricingResolver *ModelPricingResolver,
 	settingRepo SettingRepository,
 	settingService *SettingService,
+	taskExecutor *ClusterTaskExecutor,
 ) *AccountShareModeService {
 	svc := NewAccountShareModeService(repo, accountRepo, apiKeyRepo, userRepo, proxyRepo, openaiOAuthService, oauthService)
 	if cfg != nil {
@@ -616,6 +699,7 @@ func ProvideAccountShareModeService(
 	svc.SetSettingService(settingService)
 	svc.SetRecommendationUsageProfileRepository(usageLogRepo)
 	svc.SetReviewModerationSettingRepository(settingRepo)
+	svc.taskExecutor = taskExecutor
 	svc.StartSeatBillingWorker()
 	svc.StartReviewModerationWorker()
 	return svc
@@ -973,7 +1057,13 @@ var ProviderSet = wire.NewSet(
 	ProvideScheduledTestService,
 	ProvideScheduledTestRunnerService,
 	NewGroupCapacityService,
-	NewChannelService,
+	ProvideChannelService,
+	NewClusterConnectionTracker,
+	NewClusterNodeState,
+	NewClusterCacheCoordinator,
+	NewClusterService,
+	NewClusterRuntime,
+	NewClusterTaskExecutor,
 	NewModelPricingResolver,
 	ProvideContentModerationService,
 	NewUserContentModerationService,
@@ -1030,11 +1120,14 @@ func ProvideContentModerationService(
 	authCacheInvalidator APIKeyAuthCacheInvalidator,
 	emailService *EmailService,
 	systemNoticeService *SystemNoticeService,
+	clusterCache *ClusterCacheCoordinator,
+	taskExecutor *ClusterTaskExecutor,
 ) *ContentModerationService {
-	svc := NewContentModerationService(settingRepo, repo, hashCache, groupRepo, userRepo, authCacheInvalidator, emailService)
+	svc := NewContentModerationService(settingRepo, repo, hashCache, groupRepo, userRepo, authCacheInvalidator, emailService, taskExecutor)
 	svc.SetAccountShareModeResolver(accountShareModeService)
 	svc.SetUserAPIKeyHashChecker(userContentModerationRepo)
 	svc.SetSystemNoticeService(systemNoticeService)
+	svc.SetClusterCacheCoordinator(clusterCache)
 	return svc
 }
 
@@ -1066,8 +1159,12 @@ func ProvideBalanceNotifyService(emailService *EmailService, settingRepo Setting
 }
 
 // ProvidePaymentOrderExpiryService creates and starts PaymentOrderExpiryService.
-func ProvidePaymentOrderExpiryService(paymentSvc *PaymentService) *PaymentOrderExpiryService {
+func ProvidePaymentOrderExpiryService(
+	paymentSvc *PaymentService,
+	taskExecutor *ClusterTaskExecutor,
+) *PaymentOrderExpiryService {
 	svc := NewPaymentOrderExpiryService(paymentSvc, 60*time.Second)
+	svc.taskExecutor = taskExecutor
 	svc.Start()
 	return svc
 }
@@ -1085,8 +1182,12 @@ func ProvideChannelMonitorService(
 // 通过 SetScheduler 注入回 service 后再 Start，确保启动时加载所有 enabled monitor，
 // 后续 CRUD 也能即时同步任务表。Runner.Stop 由 cleanup function 调用。
 // settingService 用于 runner 每次 fire 读取功能开关。
-func ProvideChannelMonitorRunner(svc *ChannelMonitorService, settingService *SettingService) *ChannelMonitorRunner {
-	r := NewChannelMonitorRunner(svc, settingService)
+func ProvideChannelMonitorRunner(
+	svc *ChannelMonitorService,
+	settingService *SettingService,
+	taskExecutor *ClusterTaskExecutor,
+) *ChannelMonitorRunner {
+	r := NewChannelMonitorRunner(svc, settingService, taskExecutor)
 	svc.SetScheduler(r)
 	r.Start()
 	return r

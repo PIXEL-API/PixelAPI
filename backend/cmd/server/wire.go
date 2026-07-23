@@ -21,8 +21,9 @@ import (
 )
 
 type Application struct {
-	Server  *http.Server
-	Cleanup func(context.Context) error
+	Server         *http.Server
+	Cleanup        func(context.Context) error
+	ClusterRuntime *service.ClusterRuntime
 }
 
 func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
@@ -50,7 +51,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 		provideCleanup,
 
 		// Application struct
-		wire.Struct(new(Application), "Server", "Cleanup"),
+		wire.Struct(new(Application), "Server", "Cleanup", "ClusterRuntime"),
 	)
 	return nil, nil
 }
@@ -63,6 +64,8 @@ func provideServiceBuildInfo(buildInfo handler.BuildInfo) service.BuildInfo {
 	return service.BuildInfo{
 		Version:   buildInfo.Version,
 		BuildType: buildInfo.BuildType,
+		Commit:    buildInfo.Commit,
+		Date:      buildInfo.Date,
 	}
 }
 
@@ -80,9 +83,12 @@ func provideCleanup(
 	affiliateCodeCycle *service.AffiliateCodeCycleService,
 	tokenRefresh *service.TokenRefreshService,
 	accountExpiry *service.AccountExpiryService,
+	accountErrorCleanup *service.AccountErrorCleanupService,
 	subscriptionExpiry *service.SubscriptionExpiryService,
 	usageCleanup *service.UsageCleanupService,
 	idempotencyCleanup *service.IdempotencyCleanupService,
+	concurrency *service.ConcurrencyService,
+	userMessageQueue *service.UserMessageQueueService,
 	pricing *service.PricingService,
 	emailQueue *service.EmailQueueService,
 	billingCache *service.BillingCacheService,
@@ -100,10 +106,18 @@ func provideCleanup(
 	activityAutoDraw *service.ActivityAutoDrawService,
 	paymentOrderExpiry *service.PaymentOrderExpiryService,
 	channelMonitorRunner *service.ChannelMonitorRunner,
+	contentModeration *service.ContentModerationService,
+	clusterRuntime *service.ClusterRuntime,
 ) func(context.Context) error {
 	return func(ctx context.Context) error {
 		// 应用层清理步骤可并行执行，基础设施资源（Redis/Ent）最后按顺序关闭。
 		parallelSteps := []cleanupStep{
+			{"ClusterRuntime", func() error {
+				if clusterRuntime != nil {
+					return clusterRuntime.Stop(ctx)
+				}
+				return nil
+			}},
 			{"OpsScheduledReportService", func() error {
 				if opsScheduledReport != nil {
 					opsScheduledReport.Stop()
@@ -178,8 +192,26 @@ func provideCleanup(
 				accountExpiry.Stop()
 				return nil
 			}},
+			{"AccountErrorCleanupService", func() error {
+				if accountErrorCleanup != nil {
+					accountErrorCleanup.Stop()
+				}
+				return nil
+			}},
 			{"SubscriptionExpiryService", func() error {
 				subscriptionExpiry.Stop()
+				return nil
+			}},
+			{"ConcurrencyService", func() error {
+				if concurrency != nil {
+					concurrency.Stop()
+				}
+				return nil
+			}},
+			{"UserMessageQueueService", func() error {
+				if userMessageQueue != nil {
+					userMessageQueue.Stop()
+				}
 				return nil
 			}},
 			{"SubscriptionService", func() error {
@@ -268,6 +300,12 @@ func provideCleanup(
 			{"ChannelMonitorRunner", func() error {
 				if channelMonitorRunner != nil {
 					channelMonitorRunner.Stop()
+				}
+				return nil
+			}},
+			{"ContentModerationCleanup", func() error {
+				if contentModeration != nil {
+					contentModeration.StopCleanupWorker()
 				}
 				return nil
 			}},

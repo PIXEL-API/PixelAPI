@@ -352,6 +352,7 @@ type PublicSettings struct {
 	OpenAIAccountLevels []OpenAIAccountLevelConfig `json:"openai_account_levels"`
 
 	AffiliateEnabled                bool    `json:"affiliate_enabled"`
+	UserPrivateGroupCommissionRate  float64 `json:"user_private_group_commission_rate"`
 	InvoiceManagementEnabled        bool    `json:"invoice_management_enabled"`
 	WithdrawalManagementEnabled     bool    `json:"withdrawal_management_enabled"`
 	WithdrawalRateLimitWindowDays   int     `json:"withdrawal_rate_limit_window_days"`

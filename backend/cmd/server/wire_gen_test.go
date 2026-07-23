@@ -15,10 +15,14 @@ func TestProvideServiceBuildInfo(t *testing.T) {
 	in := handler.BuildInfo{
 		Version:   "v-test",
 		BuildType: "release",
+		Commit:    "abcdef0",
+		Date:      "2026-07-23T00:00:00Z",
 	}
 	out := provideServiceBuildInfo(in)
 	require.Equal(t, in.Version, out.Version)
 	require.Equal(t, in.BuildType, out.BuildType)
+	require.Equal(t, in.Commit, out.Commit)
+	require.Equal(t, in.Date, out.Date)
 }
 
 func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
@@ -63,9 +67,12 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		nil, // affiliateCodeCycle
 		tokenRefreshSvc,
 		accountExpirySvc,
+		nil, // accountErrorCleanup
 		subscriptionExpirySvc,
 		&service.UsageCleanupService{},
 		idempotencyCleanupSvc,
+		nil, // concurrency
+		nil, // userMessageQueue
 		pricingSvc,
 		emailQueueSvc,
 		billingCacheSvc,
@@ -83,6 +90,8 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		nil, // activityAutoDraw
 		nil, // paymentOrderExpiry
 		nil, // channelMonitorRunner
+		nil, // contentModeration
+		nil, // clusterRuntime
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)

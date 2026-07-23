@@ -76,33 +76,35 @@ func (r *accountSharePolicyRepository) GetAccountSharePolicyByID(ctx context.Con
 }
 
 func (r *accountSharePolicyRepository) ResolveEnabledAccountSharePolicy(ctx context.Context, accountID int64, groupID *int64, platform string, explicitPolicyID *int64) (*service.AccountSharePolicy, error) {
-	policy, found, err := r.queryEnabledAccountSharePolicy(ctx, "scope_type = 'global'")
-	if err != nil || found {
-		return policy, err
-	}
-	return nil, nil
+	return resolveEnabledGlobalAccountSharePolicy(ctx, r.db)
 }
 
-func (r *accountSharePolicyRepository) queryEnabledAccountSharePolicy(ctx context.Context, predicate string, args ...any) (*service.AccountSharePolicy, bool, error) {
-	query := `
+type accountSharePolicyQueryer interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func resolveEnabledGlobalAccountSharePolicy(ctx context.Context, queryer accountSharePolicyQueryer) (*service.AccountSharePolicy, error) {
+	if queryer == nil {
+		return nil, service.ErrServiceUnavailable
+	}
+	policy, err := scanAccountSharePolicy(queryer.QueryRowContext(ctx, `
 		SELECT id, scope_type, scope_id, platform, owner_share_ratio::text, invite_share_ratio::text, version, enabled,
 			effective_at, created_by_admin_id, created_at, updated_at, deleted_at
 		FROM account_share_policies
 		WHERE deleted_at IS NULL
 			AND enabled = TRUE
 			AND effective_at <= NOW()
-			AND ` + predicate + `
+			AND scope_type = 'global'
 		ORDER BY effective_at DESC, version DESC, id DESC
 		LIMIT 1
-	`
-	policy, err := scanAccountSharePolicy(r.db.QueryRowContext(ctx, query, args...))
+	`))
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, false, nil
+		return nil, nil
 	}
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	return policy, true, nil
+	return policy, nil
 }
 
 func (r *accountSharePolicyRepository) CreateAccountSharePolicy(ctx context.Context, input service.CreateAccountSharePolicyInput) (*service.AccountSharePolicy, error) {

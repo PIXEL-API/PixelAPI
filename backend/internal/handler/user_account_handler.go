@@ -296,6 +296,19 @@ type userTestAccountRequest struct {
 
 const userPublicShareValidationTimeout = 30 * time.Second
 const userAccountLevelVerificationTimeout = 75 * time.Second
+const userAccountBatchConnectionTestTimeout = 90 * time.Second
+
+const userGeminiDefaultTestModel = "gemini-2.5-flash"
+
+func userAccountConnectionTestModel(account *service.Account) string {
+	if account == nil {
+		return ""
+	}
+	if account.Platform == service.PlatformGemini || account.Platform == service.PlatformAntigravity {
+		return userGeminiDefaultTestModel
+	}
+	return ""
+}
 
 type levelVerifyWindow struct {
 	start time.Time
@@ -736,6 +749,7 @@ func (h *UserAccountHandler) registerAccountBatchExecutors() {
 		return
 	}
 	h.accountBatchTaskService.RegisterExecutor(service.AccountBatchTaskOperationUserRefreshCredentials, h.executeUserRefreshCredentialsTaskItem)
+	h.accountBatchTaskService.RegisterExecutor(service.AccountBatchTaskOperationUserTestConnection, h.executeUserTestConnectionTaskItem)
 	h.accountBatchTaskService.RegisterExecutor(service.AccountBatchTaskOperationUserRevalidateShare, h.executeUserRevalidateShareTaskItem)
 	h.accountBatchTaskService.RegisterExecutor(service.AccountBatchTaskOperationUserSetPublicShare, h.executeUserSetPublicShareTaskItem)
 	h.accountBatchTaskService.RegisterExecutor(service.AccountBatchTaskOperationUserVerifyOpenAIPlus, h.executeUserVerifyOpenAIPlusTaskItem)
@@ -757,6 +771,53 @@ func (h *UserAccountHandler) executeUserRefreshCredentialsTaskItem(ctx context.C
 	result := map[string]any{"account_id": updated.ID}
 	if strings.TrimSpace(warning) != "" {
 		result["warning"] = warning
+	}
+	return result, nil
+}
+
+func (h *UserAccountHandler) executeUserTestConnectionTaskItem(ctx context.Context, task *service.AccountBatchTask, item service.AccountBatchTaskItem) (map[string]any, error) {
+	if task == nil || task.OwnerUserID == nil {
+		return nil, service.ErrAccountNotFound
+	}
+	if h.accountTestService == nil {
+		return nil, infraerrors.ServiceUnavailable("ACCOUNT_TEST_SERVICE_UNAVAILABLE", "account test service is unavailable")
+	}
+	account, err := h.accountService.GetOwnedByID(ctx, *task.OwnerUserID, item.AccountID)
+	if err != nil {
+		return nil, err
+	}
+
+	testCtx, cancel := context.WithTimeout(ctx, userAccountBatchConnectionTestTimeout)
+	defer cancel()
+	testResult, err := h.accountTestService.RunTestBackground(testCtx, item.AccountID, userAccountConnectionTestModel(account))
+	if err != nil {
+		return nil, err
+	}
+	if testResult == nil {
+		return nil, errors.New("account test did not return a result")
+	}
+	if strings.TrimSpace(testResult.Status) != "success" {
+		message := strings.TrimSpace(testResult.ErrorMessage)
+		if message == "" {
+			message = "account test failed"
+		}
+		return nil, errors.New(message)
+	}
+
+	result := map[string]any{
+		"account_id": item.AccountID,
+		"status":     testResult.Status,
+		"latency_ms": testResult.LatencyMs,
+	}
+	if h.rateLimitService != nil {
+		recovery, err := h.rateLimitService.RecoverAccountAfterSuccessfulTest(ctx, item.AccountID)
+		if err != nil {
+			return nil, fmt.Errorf("recover account after successful test: %w", err)
+		}
+		if recovery != nil {
+			result["cleared_error"] = recovery.ClearedError
+			result["cleared_rate_limit"] = recovery.ClearedRateLimit
+		}
 	}
 	return result, nil
 }
@@ -1662,6 +1723,51 @@ func (h *UserAccountHandler) CreateBatchRefreshTask(c *gin.Context) {
 	task, err := h.accountBatchTaskService.CreateTask(c.Request.Context(), service.CreateAccountBatchTaskInput{
 		Scope:       service.AccountBatchTaskScopeUser,
 		Operation:   service.AccountBatchTaskOperationUserRefreshCredentials,
+		AccountIDs:  accountIDs,
+		CreatedBy:   subject.UserID,
+		OwnerUserID: &ownerUserID,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, task)
+}
+
+func (h *UserAccountHandler) CreateBatchTestConnectionTask(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	if h.accountBatchTaskService == nil {
+		response.Error(c, 503, "Account batch task service is unavailable")
+		return
+	}
+	if h.accountTestService == nil {
+		response.Error(c, 503, "Account test service is unavailable")
+		return
+	}
+	var req userAccountBatchTaskRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	accountIDs := normalizeUserAccountIDList(req.AccountIDs)
+	if len(accountIDs) == 0 {
+		response.BadRequest(c, "account_ids is required")
+		return
+	}
+	for _, accountID := range accountIDs {
+		if _, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, accountID); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+	}
+	ownerUserID := subject.UserID
+	task, err := h.accountBatchTaskService.CreateTask(c.Request.Context(), service.CreateAccountBatchTaskInput{
+		Scope:       service.AccountBatchTaskScopeUser,
+		Operation:   service.AccountBatchTaskOperationUserTestConnection,
 		AccountIDs:  accountIDs,
 		CreatedBy:   subject.UserID,
 		OwnerUserID: &ownerUserID,

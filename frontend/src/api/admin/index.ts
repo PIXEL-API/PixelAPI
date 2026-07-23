@@ -21,6 +21,7 @@ import antigravityAPI from "./antigravity";
 import grokAPI from "./grok";
 import userAttributesAPI from "./userAttributes";
 import opsAPI from "./ops";
+import clusterAPI from "./cluster";
 import errorPassthroughAPI from "./errorPassthrough";
 import dataManagementAPI from "./dataManagement";
 import apiKeysAPI from "./apiKeys";
@@ -35,7 +36,6 @@ import revenueAPI from "./revenue";
 import adminInvoicesAPI from "./invoices";
 import affiliatesAPI from "./affiliates";
 import accountSharePoliciesAPI from "./accountSharePolicies";
-import accountShareModePolicyAPI from "./accountShareModePolicy";
 import riskControlAPI from "./riskControl";
 
 /**
@@ -60,6 +60,7 @@ export const adminAPI = {
   grok: grokAPI,
   userAttributes: userAttributesAPI,
   ops: opsAPI,
+  cluster: clusterAPI,
   errorPassthrough: errorPassthroughAPI,
   dataManagement: dataManagementAPI,
   apiKeys: apiKeysAPI,
@@ -74,7 +75,6 @@ export const adminAPI = {
   invoices: adminInvoicesAPI,
   affiliates: affiliatesAPI,
   accountSharePolicies: accountSharePoliciesAPI,
-  accountShareModePolicy: accountShareModePolicyAPI,
   riskControl: riskControlAPI,
 };
 
@@ -97,6 +97,7 @@ export {
   grokAPI,
   userAttributesAPI,
   opsAPI,
+  clusterAPI,
   errorPassthroughAPI,
   dataManagementAPI,
   apiKeysAPI,
@@ -111,7 +112,6 @@ export {
   adminInvoicesAPI,
   affiliatesAPI,
   accountSharePoliciesAPI,
-  accountShareModePolicyAPI,
   riskControlAPI,
 };
 
@@ -135,4 +135,10 @@ export type {
   RevenueSummaryParams,
 } from "./revenue";
 export type { AccountSharePolicy } from "./accountSharePolicies";
-export type { AccountShareModePolicy } from "./accountShareModePolicy";
+export type {
+  ClusterSummary,
+  ClusterInstance,
+  ClusterTaskLease,
+  ClusterOperation,
+  ClusterCacheScope,
+} from "./cluster";

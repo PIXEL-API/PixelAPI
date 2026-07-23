@@ -144,9 +144,11 @@ type ChannelService struct {
 	groupRepo            GroupRepository
 	authCacheInvalidator APIKeyAuthCacheInvalidator
 	pricingService       *PricingService // 用于「可用渠道」展示时回落到全局定价；可为 nil（测试场景）
+	clusterCache         *ClusterCacheCoordinator
 
-	cache   atomic.Value // *channelCache
-	cacheSF singleflight.Group
+	cache           atomic.Value // *channelCache
+	cacheSF         singleflight.Group
+	cacheGeneration atomic.Uint64
 }
 
 // NewChannelService 创建渠道服务实例。
@@ -160,6 +162,12 @@ func NewChannelService(repo ChannelRepository, groupRepo GroupRepository, authCa
 		pricingService:       pricingService,
 	}
 	return s
+}
+
+func (s *ChannelService) SetClusterCacheCoordinator(coordinator *ClusterCacheCoordinator) {
+	if s != nil {
+		s.clusterCache = coordinator
+	}
 }
 
 // loadCache 加载或返回缓存的渠道数据
@@ -256,7 +264,10 @@ func expandMappingToCache(cache *channelCache, ch *Channel, gid int64, platform 
 
 // storeErrorCache 存入短 TTL 空缓存，防止 DB 错误后紧密重试。
 // 通过回退 loadedAt 使剩余 TTL = channelErrorTTL。
-func (s *ChannelService) storeErrorCache() {
+func (s *ChannelService) storeErrorCache(generation uint64) {
+	if s.cacheGeneration.Load() != generation {
+		return
+	}
 	errorCache := newEmptyChannelCache()
 	errorCache.loadedAt = time.Now().Add(-(channelCacheTTL - channelErrorTTL))
 	s.cache.Store(errorCache)
@@ -265,25 +276,28 @@ func (s *ChannelService) storeErrorCache() {
 // buildCache 从数据库构建渠道缓存。
 // 使用独立 context 避免请求取消导致空值被长期缓存。
 func (s *ChannelService) buildCache(ctx context.Context) (*channelCache, error) {
+	generation := s.cacheGeneration.Load()
 	dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), channelCacheDBTimeout)
 	defer cancel()
 
-	channels, groupPlatforms, err := s.fetchChannelData(dbCtx)
+	channels, groupPlatforms, err := s.fetchChannelData(dbCtx, generation)
 	if err != nil {
 		return nil, err
 	}
 
 	cache := populateChannelCache(channels, groupPlatforms)
-	s.cache.Store(cache)
+	if s.cacheGeneration.Load() == generation {
+		s.cache.Store(cache)
+	}
 	return cache, nil
 }
 
 // fetchChannelData 从数据库加载渠道列表和分组平台映射。
-func (s *ChannelService) fetchChannelData(ctx context.Context) ([]Channel, map[int64]string, error) {
+func (s *ChannelService) fetchChannelData(ctx context.Context, generation uint64) ([]Channel, map[int64]string, error) {
 	channels, err := s.repo.ListAll(ctx)
 	if err != nil {
 		slog.Warn("failed to build channel cache", "error", err)
-		s.storeErrorCache()
+		s.storeErrorCache(generation)
 		return nil, nil, fmt.Errorf("list all channels: %w", err)
 	}
 
@@ -297,7 +311,7 @@ func (s *ChannelService) fetchChannelData(ctx context.Context) ([]Channel, map[i
 		groupPlatforms, err = s.repo.GetGroupPlatforms(ctx, allGroupIDs)
 		if err != nil {
 			slog.Warn("failed to load group platforms for channel cache", "error", err)
-			s.storeErrorCache()
+			s.storeErrorCache(generation)
 			return nil, nil, fmt.Errorf("get group platforms: %w", err)
 		}
 	}
@@ -343,13 +357,22 @@ func matchingPlatforms(groupPlatform string) []string {
 	return []string{groupPlatform}
 }
 func (s *ChannelService) invalidateCache() {
-	s.cache.Store((*channelCache)(nil))
-	s.cacheSF.Forget("channel_cache")
-
-	// 主动重建缓存，确保 CRUD 后立即生效
-	if _, err := s.buildCache(context.Background()); err != nil {
+	if err := s.ReloadCache(context.Background()); err != nil {
 		slog.Warn("failed to rebuild channel cache after invalidation", "error", err)
 	}
+}
+
+// ReloadCache synchronously replaces the channel routing snapshot. A
+// generation guard prevents an older in-flight build from overwriting it.
+func (s *ChannelService) ReloadCache(ctx context.Context) error {
+	if s == nil {
+		return fmt.Errorf("channel service is nil")
+	}
+	s.cacheGeneration.Add(1)
+	s.cache.Store((*channelCache)(nil))
+	s.cacheSF.Forget("channel_cache")
+	_, err := s.buildCache(ctx)
+	return err
 }
 
 // matchWildcard 在通配符定价中查找匹配项（最先匹配到优先）
@@ -782,6 +805,7 @@ func (s *ChannelService) Create(ctx context.Context, input *CreateChannelInput) 
 		return nil, fmt.Errorf("create channel: %w", err)
 	}
 
+	s.advanceClusterCache(ctx)
 	s.invalidateCache()
 	created, err := s.repo.GetByID(ctx, channel.ID)
 	if err != nil {
@@ -828,6 +852,7 @@ func (s *ChannelService) Update(ctx context.Context, id int64, input *UpdateChan
 		return nil, fmt.Errorf("update channel: %w", err)
 	}
 
+	s.advanceClusterCache(ctx)
 	s.invalidateCache()
 	s.invalidateAuthCacheForGroups(ctx, oldGroupIDs, channel.GroupIDs)
 
@@ -946,10 +971,20 @@ func (s *ChannelService) Delete(ctx context.Context, id int64) error {
 		return fmt.Errorf("delete channel: %w", err)
 	}
 
+	s.advanceClusterCache(ctx)
 	s.invalidateCache()
 	s.invalidateAuthCacheForGroups(ctx, groupIDs)
 
 	return nil
+}
+
+func (s *ChannelService) advanceClusterCache(ctx context.Context) {
+	if s == nil || s.clusterCache == nil {
+		return
+	}
+	if err := s.clusterCache.Advance(ctx, ClusterCacheKeyChannelRouting); err != nil {
+		slog.Error("failed to advance cluster channel cache version", "error", err)
+	}
 }
 
 // List 获取渠道列表

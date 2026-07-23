@@ -207,6 +207,261 @@ func TestLoadRequiresConfiguredTotpEncryptionKey(t *testing.T) {
 	}
 }
 
+func TestLoadClusterDefaultsPreserveSingleInstanceMode(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.False(t, cfg.Cluster.Enabled)
+	require.Equal(t, "migrate", cfg.Database.MigrationMode)
+	require.Equal(t, 50, cfg.Database.MaxOpenConns)
+	require.Equal(t, 15, cfg.Database.MaxIdleConns)
+	require.Equal(t, 128, cfg.Redis.PoolSize)
+	require.Equal(t, 16, cfg.Redis.MinIdleConns)
+	require.Equal(t, 10, cfg.Server.DrainDelaySeconds)
+	require.Equal(t, 300, cfg.Server.HTTPDrainTimeoutSeconds)
+	require.Equal(t, 30, cfg.Server.CleanupTimeoutSeconds)
+}
+
+func TestLoadClusterConfig(t *testing.T) {
+	resetViperWithConfig(t, `
+cluster:
+  enabled: true
+  deployment_id: " pixel-prod "
+  node_id: " pixel-app-01 "
+  expected_nodes: 3
+  heartbeat_interval_seconds: 10
+  node_ttl_seconds: 30
+  offline_after_seconds: 300
+  task_lease_seconds: 60
+  task_renew_interval_seconds: 20
+  operation_poll_interval_seconds: 2
+  cache_reconcile_interval_seconds: 60
+database:
+  migration_mode: VALIDATE
+server:
+  drain_delay_seconds: 10
+  http_drain_timeout_seconds: 300
+  cleanup_timeout_seconds: 30
+jwt:
+  secret: `+strings.Repeat("x", 32)+`
+totp:
+  encryption_key: `+strings.Repeat("a", 64)+`
+`)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.True(t, cfg.Cluster.Enabled)
+	require.Equal(t, "pixel-prod", cfg.Cluster.DeploymentID)
+	require.Equal(t, "pixel-app-01", cfg.Cluster.NodeID)
+	require.Equal(t, 3, cfg.Cluster.ExpectedNodes)
+	require.Equal(t, "validate", cfg.Database.MigrationMode)
+}
+
+func TestLoadClusterConfigFromEnvironment(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("CLUSTER_ENABLED", "true")
+	t.Setenv("CLUSTER_DEPLOYMENT_ID", "pixel-prod")
+	t.Setenv("CLUSTER_NODE_ID", "pixel-app-02")
+	t.Setenv("DATABASE_MIGRATION_MODE", "validate")
+	t.Setenv("SERVER_TRUSTED_PROXIES", "10.77.0.10/32,10.77.0.21/32,10.77.0.22/32,10.77.0.23/32")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.True(t, cfg.Cluster.Enabled)
+	require.Equal(t, "pixel-prod", cfg.Cluster.DeploymentID)
+	require.Equal(t, "pixel-app-02", cfg.Cluster.NodeID)
+	require.Equal(t, "validate", cfg.Database.MigrationMode)
+	require.Equal(
+		t,
+		[]string{"10.77.0.10/32", "10.77.0.21/32", "10.77.0.22/32", "10.77.0.23/32"},
+		cfg.Server.TrustedProxies,
+	)
+}
+
+func TestValidateClusterConfigRejectsUnsafeCombinations(t *testing.T) {
+	buildValid := func(t *testing.T) *Config {
+		t.Helper()
+		resetViperWithJWTSecret(t)
+		cfg, err := Load()
+		require.NoError(t, err)
+		cfg.Cluster.Enabled = true
+		cfg.Cluster.DeploymentID = "pixel-prod"
+		cfg.Cluster.NodeID = "pixel-app-01"
+		cfg.Database.MigrationMode = DatabaseMigrationModeValidate
+		return cfg
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr string
+	}{
+		{
+			name:    "deployment id required",
+			mutate:  func(c *Config) { c.Cluster.DeploymentID = "" },
+			wantErr: "cluster.deployment_id",
+		},
+		{
+			name:    "node id required",
+			mutate:  func(c *Config) { c.Cluster.NodeID = "" },
+			wantErr: "cluster.node_id",
+		},
+		{
+			name:    "expected nodes positive",
+			mutate:  func(c *Config) { c.Cluster.ExpectedNodes = 0 },
+			wantErr: "cluster.expected_nodes",
+		},
+		{
+			name:    "heartbeat below ttl",
+			mutate:  func(c *Config) { c.Cluster.HeartbeatIntervalSeconds = c.Cluster.NodeTTLSeconds },
+			wantErr: "cluster.heartbeat_interval_seconds must be less",
+		},
+		{
+			name:    "heartbeat positive",
+			mutate:  func(c *Config) { c.Cluster.HeartbeatIntervalSeconds = 0 },
+			wantErr: "cluster.heartbeat_interval_seconds must be positive",
+		},
+		{
+			name:    "node ttl positive",
+			mutate:  func(c *Config) { c.Cluster.NodeTTLSeconds = 0 },
+			wantErr: "cluster.node_ttl_seconds must be positive",
+		},
+		{
+			name:    "ttl no later than offline",
+			mutate:  func(c *Config) { c.Cluster.OfflineAfterSeconds = c.Cluster.NodeTTLSeconds - 1 },
+			wantErr: "cluster.offline_after_seconds",
+		},
+		{
+			name:    "task lease positive",
+			mutate:  func(c *Config) { c.Cluster.TaskLeaseSeconds = 0 },
+			wantErr: "cluster.task_lease_seconds must be positive",
+		},
+		{
+			name:    "task renew positive",
+			mutate:  func(c *Config) { c.Cluster.TaskRenewIntervalSeconds = 0 },
+			wantErr: "cluster.task_renew_interval_seconds must be positive",
+		},
+		{
+			name:    "task renew below lease",
+			mutate:  func(c *Config) { c.Cluster.TaskRenewIntervalSeconds = c.Cluster.TaskLeaseSeconds },
+			wantErr: "cluster.task_renew_interval_seconds must be less",
+		},
+		{
+			name:    "operation poll positive",
+			mutate:  func(c *Config) { c.Cluster.OperationPollIntervalSeconds = 0 },
+			wantErr: "cluster.operation_poll_interval_seconds",
+		},
+		{
+			name:    "cache reconcile positive",
+			mutate:  func(c *Config) { c.Cluster.CacheReconcileIntervalSeconds = 0 },
+			wantErr: "cluster.cache_reconcile_interval_seconds",
+		},
+		{
+			name:    "cluster application nodes cannot migrate",
+			mutate:  func(c *Config) { c.Database.MigrationMode = DatabaseMigrationModeMigrate },
+			wantErr: "database.migration_mode must be validate",
+		},
+		{
+			name:    "fixed totp key length",
+			mutate:  func(c *Config) { c.Totp.EncryptionKey = strings.Repeat("a", 63) },
+			wantErr: "fixed 64-character hex key",
+		},
+		{
+			name:    "fixed totp key hex",
+			mutate:  func(c *Config) { c.Totp.EncryptionKey = strings.Repeat("z", 64) },
+			wantErr: "fixed 64-character hex key",
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			cfg := buildValid(t)
+			testCase.mutate(cfg)
+			require.ErrorContains(t, cfg.Validate(), testCase.wantErr)
+		})
+	}
+}
+
+func TestValidateServerDrainTimeouts(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	tests := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr string
+	}{
+		{
+			name:    "drain delay",
+			mutate:  func(c *Config) { c.Server.DrainDelaySeconds = 0 },
+			wantErr: "server.drain_delay_seconds",
+		},
+		{
+			name:    "http drain timeout",
+			mutate:  func(c *Config) { c.Server.HTTPDrainTimeoutSeconds = 0 },
+			wantErr: "server.http_drain_timeout_seconds",
+		},
+		{
+			name:    "cleanup timeout",
+			mutate:  func(c *Config) { c.Server.CleanupTimeoutSeconds = 0 },
+			wantErr: "server.cleanup_timeout_seconds",
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			candidate := *cfg
+			testCase.mutate(&candidate)
+			require.ErrorContains(t, candidate.Validate(), testCase.wantErr)
+		})
+	}
+}
+
+func TestLoadForBootstrapClusterRequiresFixedTotpKey(t *testing.T) {
+	resetViperWithConfig(t, `
+cluster:
+  enabled: true
+  deployment_id: pixel-prod
+  node_id: pixel-app-01
+`)
+	t.Setenv("JWT_SECRET", strings.Repeat("j", 32))
+	t.Setenv("TOTP_ENCRYPTION_KEY", "")
+
+	_, err := LoadForBootstrap()
+	require.ErrorContains(t, err, "totp.encryption_key is required when cluster.enabled=true")
+}
+
+func TestLoadForBootstrapClusterRequiresFixedJWTSecret(t *testing.T) {
+	resetViperWithConfig(t, `
+cluster:
+  enabled: true
+  deployment_id: pixel-prod
+  node_id: pixel-app-01
+database:
+  migration_mode: validate
+`)
+	t.Setenv("JWT_SECRET", "")
+	t.Setenv("TOTP_ENCRYPTION_KEY", strings.Repeat("a", 64))
+
+	_, err := LoadForBootstrap()
+	require.ErrorContains(t, err, "jwt.secret is required when cluster.enabled=true")
+}
+
+func TestValidateDatabaseMigrationMode(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	for _, mode := range []string{"migrate", "validate"} {
+		cfg.Database.MigrationMode = mode
+		require.NoError(t, cfg.Validate())
+	}
+	cfg.Database.MigrationMode = "automatic"
+	require.ErrorContains(t, cfg.Validate(), "database.migration_mode")
+}
+
 func TestNormalizeRunMode(t *testing.T) {
 	tests := []struct {
 		input    string

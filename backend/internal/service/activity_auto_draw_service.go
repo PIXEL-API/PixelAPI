@@ -15,6 +15,7 @@ const (
 
 type ActivityAutoDrawService struct {
 	activityService *ActivityService
+	taskExecutor    *ClusterTaskExecutor
 	interval        time.Duration
 	stopCh          chan struct{}
 	startOnce       sync.Once
@@ -72,13 +73,27 @@ func (s *ActivityAutoDrawService) runOnce() {
 	ctx, cancel := context.WithTimeout(context.Background(), activityAutoDrawTimeout)
 	defer cancel()
 
-	result, err := s.activityService.RunDueDraws(ctx, time.Now(), activityAutoDrawBatchSize)
+	executed, err := s.taskExecutor.Run(ctx, "activity_auto_draw", func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+		if err := guard.Check(taskCtx); err != nil {
+			return err
+		}
+		return s.runOnceLeased(taskCtx)
+	})
 	if err != nil {
 		slog.Error("[ActivityAutoDraw] failed to run due draws", "error", err)
+	}
+	if !executed {
 		return
 	}
+}
+
+func (s *ActivityAutoDrawService) runOnceLeased(ctx context.Context) error {
+	result, err := s.activityService.RunDueDraws(ctx, time.Now(), activityAutoDrawBatchSize)
+	if err != nil {
+		return err
+	}
 	if result == nil || result.Processed == 0 {
-		return
+		return nil
 	}
 	for _, draw := range result.Draws {
 		slog.Info(
@@ -91,10 +106,15 @@ func (s *ActivityAutoDrawService) runOnce() {
 			"winners", draw.WinnerCount,
 		)
 	}
+	return nil
 }
 
-func ProvideActivityAutoDrawService(activityService *ActivityService) *ActivityAutoDrawService {
+func ProvideActivityAutoDrawService(
+	activityService *ActivityService,
+	taskExecutor *ClusterTaskExecutor,
+) *ActivityAutoDrawService {
 	svc := NewActivityAutoDrawService(activityService, activityAutoDrawInterval)
+	svc.taskExecutor = taskExecutor
 	svc.Start()
 	return svc
 }

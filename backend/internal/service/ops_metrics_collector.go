@@ -44,9 +44,10 @@ type opsSchedulableAccountLoadRepository interface {
 }
 
 type OpsMetricsCollector struct {
-	opsRepo     OpsRepository
-	settingRepo SettingRepository
-	cfg         *config.Config
+	opsRepo      OpsRepository
+	settingRepo  SettingRepository
+	cfg          *config.Config
+	taskExecutor *ClusterTaskExecutor
 
 	accountRepo        AccountRepository
 	concurrencyService *ConcurrencyService
@@ -180,6 +181,20 @@ func (c *OpsMetricsCollector) collectOnce() {
 		return
 	}
 
+	if c.cfg != nil && c.cfg.Cluster.Enabled {
+		if c.taskExecutor == nil {
+			log.Printf("[OpsMetricsCollector] cluster task executor is not configured")
+			return
+		}
+		_, err := c.taskExecutor.Run(ctx, opsMetricsCollectorJobName, func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+			return c.collectOnceOwned(taskCtx, guard)
+		})
+		if err != nil {
+			log.Printf("[OpsMetricsCollector] collect failed: %v", err)
+		}
+		return
+	}
+
 	release, ok := c.tryAcquireLeaderLock(ctx)
 	if !ok {
 		return
@@ -188,8 +203,14 @@ func (c *OpsMetricsCollector) collectOnce() {
 		defer release()
 	}
 
+	if err := c.collectOnceOwned(ctx, &ClusterLeaseGuard{}); err != nil {
+		log.Printf("[OpsMetricsCollector] collect failed: %v", err)
+	}
+}
+
+func (c *OpsMetricsCollector) collectOnceOwned(ctx context.Context, guard *ClusterLeaseGuard) error {
 	startedAt := time.Now().UTC()
-	err := c.collectAndPersist(ctx)
+	err := c.collectAndPersist(ctx, guard)
 	finishedAt := time.Now().UTC()
 
 	durationMs := finishedAt.Sub(startedAt).Milliseconds()
@@ -197,6 +218,9 @@ func (c *OpsMetricsCollector) collectOnce() {
 	runAt := startedAt
 
 	if err != nil {
+		if guardErr := guard.Check(ctx); guardErr != nil {
+			return guardErr
+		}
 		msg := truncateString(err.Error(), 2048)
 		errAt := finishedAt
 		hbCtx, hbCancel := context.WithTimeout(context.Background(), opsMetricsCollectorHeartbeatTimeout)
@@ -208,10 +232,12 @@ func (c *OpsMetricsCollector) collectOnce() {
 			LastError:      &msg,
 			LastDurationMs: &dur,
 		})
-		log.Printf("[OpsMetricsCollector] collect failed: %v", err)
-		return
+		return err
 	}
 
+	if err := guard.Check(ctx); err != nil {
+		return err
+	}
 	successAt := finishedAt
 	hbCtx, hbCancel := context.WithTimeout(context.Background(), opsMetricsCollectorHeartbeatTimeout)
 	defer hbCancel()
@@ -221,6 +247,7 @@ func (c *OpsMetricsCollector) collectOnce() {
 		LastSuccessAt:  &successAt,
 		LastDurationMs: &dur,
 	})
+	return nil
 }
 
 func (c *OpsMetricsCollector) isMonitoringEnabled(ctx context.Context) bool {
@@ -253,7 +280,7 @@ func (c *OpsMetricsCollector) isMonitoringEnabled(ctx context.Context) bool {
 	}
 }
 
-func (c *OpsMetricsCollector) collectAndPersist(ctx context.Context) error {
+func (c *OpsMetricsCollector) collectAndPersist(ctx context.Context, guard *ClusterLeaseGuard) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -262,6 +289,15 @@ func (c *OpsMetricsCollector) collectAndPersist(ctx context.Context) error {
 	now := time.Now().UTC()
 	windowEnd := now.Truncate(time.Minute)
 	windowStart := windowEnd.Add(-1 * time.Minute)
+	if c.cfg != nil && c.cfg.Cluster.Enabled {
+		exists, err := c.systemMetricsWindowExists(ctx, windowEnd)
+		if err != nil {
+			return fmt.Errorf("check existing metrics window: %w", err)
+		}
+		if exists {
+			return nil
+		}
+	}
 
 	sys, err := c.collectSystemStats(ctx)
 	if err != nil {
@@ -364,7 +400,30 @@ func (c *OpsMetricsCollector) collectAndPersist(ctx context.Context) error {
 		ConcurrencyQueueDepth: concurrencyQueueDepth,
 	}
 
+	if err := guard.Check(ctx); err != nil {
+		return err
+	}
 	return c.opsRepo.InsertSystemMetrics(ctx, input)
+}
+
+func (c *OpsMetricsCollector) systemMetricsWindowExists(ctx context.Context, windowEnd time.Time) (bool, error) {
+	if c == nil || c.db == nil {
+		return false, fmt.Errorf("metrics database is not configured")
+	}
+	var exists bool
+	err := c.db.QueryRowContext(ctx, `
+SELECT EXISTS (
+	SELECT 1
+	FROM ops_system_metrics
+	WHERE created_at = $1
+		AND window_minutes = 1
+		AND platform IS NULL
+		AND group_id IS NULL
+)`, windowEnd.UTC()).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
 }
 
 func (c *OpsMetricsCollector) collectConcurrencyQueueDepth(parentCtx context.Context) *int {

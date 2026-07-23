@@ -30,8 +30,8 @@
             </button>
           </div>
           <div class="hero-actions">
-            <button class="btn-secondary h-10" type="button" :disabled="loading || isAnyModeKeysLoading" @click="refreshPageData">
-              <Icon name="refresh" size="sm" class="mr-2" :class="{ 'animate-spin': loading || isAnyModeKeysLoading }" />
+            <button class="btn-secondary h-10" type="button" :disabled="loading || isAnyModeKeysLoading || selfUseSettingsLoading" @click="refreshPageData">
+              <Icon name="refresh" size="sm" class="mr-2" :class="{ 'animate-spin': loading || isAnyModeKeysLoading || selfUseSettingsLoading }" />
               刷新
             </button>
             <button class="btn-primary h-10" type="button" @click="toggleCreatePanel">
@@ -499,10 +499,19 @@
               <div v-if="candidate.warnings?.length" class="recommendation-warnings">
                 <span v-for="warning in candidate.warnings" :key="warning">{{ warning }}</span>
               </div>
+              <div v-if="candidate.estimate.owner_self_use && selfUseSettingsError" class="recommendation-warnings">
+                <span>{{ selfUseSettingsError }}</span>
+              </div>
 
               <div class="recommendation-card-actions">
                 <span>席位 {{ candidate.listing.active_seats }}/{{ candidate.listing.seat_limit }} · 并发 {{ recommendationConcurrencyLabel(candidate.listing) }}</span>
-                <button class="btn-primary h-10" type="button" :disabled="joiningId === candidate.listing.id" @click="useRecommendedListing(candidate)">
+                <button
+                  class="btn-primary h-10"
+                  type="button"
+                  :disabled="joiningId === candidate.listing.id || selfUseJoinUnavailable(candidate.listing)"
+                  :title="selfUseJoinUnavailable(candidate.listing) ? selfUseSettingsError : undefined"
+                  @click="useRecommendedListing(candidate)"
+                >
                   <Icon name="login" size="sm" class="mr-2" />
                   加入使用
                 </button>
@@ -1418,6 +1427,10 @@
                 <Icon name="exclamationCircle" size="sm" />
                 <span>账号配置正在编辑中，暂时不能加入使用，避免使用修改前的旧配置。</span>
               </div>
+              <div v-if="isOwnListing(listing) && selfUseSettingsError" class="edit-lock-strip">
+                <Icon name="exclamationCircle" size="sm" />
+                <span>{{ selfUseSettingsError }}</span>
+              </div>
               <div class="listing-action-row">
                 <div v-if="singleModeApiKeyForListing(listing)" class="mode-key-readonly">
                   <Icon name="key" size="sm" />
@@ -1447,8 +1460,14 @@
                     <span>{{ isOwnListing(listing) ? '默认 10 分钟。连续空闲到设定时间后会自动解除绑定，不能填 0。' : '默认 10 分钟。连续空闲到设定时间后会自动退出并停止占位，不能填 0。' }}</span>
                   </div>
                 </div>
-                <button class="btn-primary h-9" type="button" :disabled="listingEditLocked(listing) || modeKeysLoading || joiningId === listing.id" @click="joinUse(listing)">
-                  {{ joiningId === listing.id ? (isOwnListing(listing) ? '绑定中' : '加入中') : (modeKeysLoading ? '加载 Key 中' : (isOwnListing(listing) ? '使用自己的账号' : '加入使用')) }}
+                <button
+                  class="btn-primary h-9"
+                  type="button"
+                  :disabled="listingEditLocked(listing) || modeKeysLoading || joiningId === listing.id || selfUseJoinUnavailable(listing)"
+                  :title="selfUseJoinUnavailable(listing) ? selfUseSettingsError : undefined"
+                  @click="joinUse(listing)"
+                >
+                  {{ joiningId === listing.id ? (isOwnListing(listing) ? '绑定中' : '加入中') : (modeKeysLoading ? '加载 Key 中' : (isOwnListing(listing) ? (selfUseSettingsLoading ? '加载自用配置' : (selfUseSettingsError ? '自用配置不可用' : '使用自己的账号')) : '加入使用')) }}
                 </button>
               </div>
             </div>
@@ -1763,7 +1782,7 @@
           </span>
           <div class="min-w-0">
             <strong>{{ listingDisplayName(pendingJoinListing) }}</strong>
-            <span>{{ pendingJoinIsOwnerSelfUse ? '这是你自己上架的账号，绑定后只按 0.005x 计算请求费用，不收小时费，也不占用共享席位。' : '加入后该 API Key 会绑定到这个账号，请确认价格、并发和模型限制后再继续。' }}</span>
+            <span>{{ pendingJoinIsOwnerSelfUse ? `这是你自己上架的账号，绑定后按全局自用倍率 ${ownerSelfUseRateMultiplierLabel} 计算请求费用，不收小时费，也不占用共享席位。` : '加入后该 API Key 会绑定到这个账号，请确认价格、并发和模型限制后再继续。' }}</span>
           </div>
         </div>
 
@@ -1781,7 +1800,7 @@
           </div>
           <div class="join-confirmation-field" :class="{ 'join-price-danger': isRateMultiplierExpensive(pendingJoinListing) }">
             <span>倍率</span>
-            <strong>{{ pendingJoinIsOwnerSelfUse ? `${formatNumber(OWNER_SELF_USE_RATE_MULTIPLIER)}x` : `${formatNumber(pendingJoinListing.rate_multiplier)}x` }}</strong>
+            <strong>{{ pendingJoinIsOwnerSelfUse ? ownerSelfUseRateMultiplierLabel : `${formatNumber(pendingJoinListing.rate_multiplier)}x` }}</strong>
           </div>
           <div class="join-confirmation-field" :class="{ 'join-price-danger': isHourlyRateExpensive(pendingJoinListing) }">
             <span>小时费</span>
@@ -2795,7 +2814,6 @@ const DEFAULT_ACCOUNT_SHARE_IDLE_TIMEOUT_MINUTES = 10
 const PLUS_EXPENSIVE_RATE_MULTIPLIER = 0.15
 const PRO_EXPENSIVE_RATE_MULTIPLIER = 0.25
 const EXPENSIVE_HOURLY_RATE = 2
-const OWNER_SELF_USE_RATE_MULTIPLIER = 0.005
 const MAX_ACCOUNT_CONCURRENCY = 50
 const ACCOUNT_SHARE_MIN_SEATS = 2
 const ACCOUNT_SHARE_MAX_SEATS = 12
@@ -2868,6 +2886,18 @@ const authStore = useAuthStore()
 const route = useRoute()
 const router = useRouter()
 const { copyToClipboard } = useClipboard()
+const selfUseSettingsLoading = ref(false)
+const selfUseSettingsError = ref('')
+const ownerSelfUseRateMultiplier = computed<number | null>(() => {
+  const value = appStore.cachedPublicSettings?.user_private_group_commission_rate
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1
+    ? value
+    : null
+})
+const ownerSelfUseRateMultiplierLabel = computed(() => {
+  const value = ownerSelfUseRateMultiplier.value
+  return value === null ? '配置不可用' : `${formatNumber(value)}x`
+})
 const seatOptions = Array.from({ length: ACCOUNT_SHARE_MAX_SEATS - ACCOUNT_SHARE_MIN_SEATS + 1 }, (_, index) => index + ACCOUNT_SHARE_MIN_SEATS)
 const reviewScoreOptions = Array.from({ length: 11 }, (_, score) => score)
 const filters: FilterOption[] = [
@@ -4317,7 +4347,7 @@ function recommendationUpfrontCostText(candidate: AccountShareRecommendationCand
 
 function recommendationOwnerSelfUseSummary(candidate: AccountShareRecommendationCandidate): string {
   const listing = candidate.listing
-  return `这是你自己上架的账号，推荐测算按自用规则执行：${formatNumber(OWNER_SELF_USE_RATE_MULTIPLIER)}x、不收小时费、不校验最低余额；公开参数 ${formatNumber(listing.rate_multiplier)}x / 小时费 ${formatNumber(listing.hourly_rate)} / 低消 ${hourlyFeeWaiverLabel(listing.hourly_fee_waiver_minimum)} 仍用于其他用户。`
+  return `这是你自己上架的账号，推荐测算按自用规则执行：${formatNumber(candidate.estimate.effective_rate_multiplier)}x、不收小时费、不校验最低余额；公开参数 ${formatNumber(listing.rate_multiplier)}x / 小时费 ${formatNumber(listing.hourly_rate)} / 低消 ${hourlyFeeWaiverLabel(listing.hourly_fee_waiver_minimum)} 仍用于其他用户。`
 }
 
 function recommendationBillingModeLabel(mode: string): string {
@@ -4758,6 +4788,10 @@ function hasRecoverableListingState(listing: AccountShareListing): boolean {
 function isOwnListing(listing: AccountShareListing): boolean {
   const currentUserID = Number(authStore.user?.id || 0)
   return currentUserID > 0 && listing.owner_user_id === currentUserID
+}
+
+function selfUseJoinUnavailable(listing: AccountShareListing): boolean {
+  return isOwnListing(listing) && (selfUseSettingsLoading.value || ownerSelfUseRateMultiplier.value === null)
 }
 
 function canShowListingJoinSection(listing: AccountShareListing): boolean {
@@ -5609,8 +5643,27 @@ function setListingPlatform(platform: AccountSharePlatform): void {
   void loadListings()
 }
 
+async function loadSelfUseCommissionRate(force = false): Promise<void> {
+  if (!force && ownerSelfUseRateMultiplier.value !== null) {
+    selfUseSettingsError.value = ''
+    return
+  }
+  selfUseSettingsLoading.value = true
+  selfUseSettingsError.value = ''
+  try {
+    await appStore.fetchPublicSettings(force)
+    if (ownerSelfUseRateMultiplier.value === null) {
+      selfUseSettingsError.value = '全局自用抽成配置加载失败，暂时不能使用自己的房间账号，请刷新后重试。'
+    }
+  } catch (error: unknown) {
+    selfUseSettingsError.value = extractApiErrorMessage(error, '全局自用抽成配置加载失败，暂时不能使用自己的房间账号，请刷新后重试。')
+  } finally {
+    selfUseSettingsLoading.value = false
+  }
+}
+
 async function refreshPageData(): Promise<void> {
-  const tasks: Promise<unknown>[] = [loadListings(), loadModeKeys()]
+  const tasks: Promise<unknown>[] = [loadListings(), loadModeKeys(), loadSelfUseCommissionRate(true)]
   if (isKeyResolutionMode.value) tasks.push(loadKeyResolutionState())
   await Promise.all(tasks)
 }
@@ -6490,6 +6543,13 @@ async function submitOAuth(): Promise<void> {
 async function joinUse(listing: AccountShareListing): Promise<void> {
   if (joiningId.value === listing.id) return
   errorMessage.value = ''
+  if (isOwnListing(listing) && ownerSelfUseRateMultiplier.value === null) {
+    showActionError(
+      selfUseSettingsError.value || '全局自用抽成配置尚未加载，暂时不能使用自己的房间账号，请刷新后重试。',
+      '自用配置不可用'
+    )
+    return
+  }
   if (listingEditLocked(listing)) {
     showActionError('账号配置正在编辑中，暂时不能加入使用。', '无法加入使用')
     return
@@ -7148,7 +7208,13 @@ onMounted(async () => {
   }, 30_000)
   try {
     prepareKeyResolutionMode()
-    const initializationTasks: Promise<unknown>[] = [loadListings(), loadModeKeys(), loadProxies(), loadListingNameIndex()]
+    const initializationTasks: Promise<unknown>[] = [
+      loadListings(),
+      loadModeKeys(),
+      loadProxies(),
+      loadListingNameIndex(),
+      loadSelfUseCommissionRate()
+    ]
     if (isKeyResolutionMode.value) initializationTasks.push(loadKeyResolutionState())
     await Promise.all(initializationTasks)
   } catch (error: unknown) {

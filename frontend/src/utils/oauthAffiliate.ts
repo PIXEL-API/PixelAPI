@@ -12,6 +12,20 @@ export function normalizeOAuthAffiliateCode(value?: unknown): string {
   return typeof raw === 'string' ? raw.trim() : ''
 }
 
+export function buildAffiliateInviteLink(
+  value?: unknown,
+  origin = typeof window === 'undefined' ? '' : window.location.origin
+): string {
+  const code = normalizeOAuthAffiliateCode(value)
+  if (!code) {
+    return ''
+  }
+
+  const path = `/register?aff=${encodeURIComponent(code)}`
+  const normalizedOrigin = origin.trim().replace(/\/+$/, '')
+  return normalizedOrigin ? `${normalizedOrigin}${path}` : path
+}
+
 export function pickOAuthAffiliateCode(...values: unknown[]): string {
   for (const value of values) {
     const code = normalizeOAuthAffiliateCode(value)

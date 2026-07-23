@@ -24,6 +24,7 @@ const (
 
 	AccountBatchTaskOperationAdminRefreshCredentials = "admin_refresh_credentials"
 	AccountBatchTaskOperationUserRefreshCredentials  = "user_refresh_credentials"
+	AccountBatchTaskOperationUserTestConnection      = "user_test_connection"
 	AccountBatchTaskOperationUserRevalidateShare     = "user_revalidate_public_share"
 	AccountBatchTaskOperationUserSetPublicShare      = "user_set_public_share"
 	AccountBatchTaskOperationUserVerifyOpenAIPlus    = "user_verify_openai_plus"
@@ -94,8 +95,9 @@ type AccountBatchTaskRepository interface {
 type AccountBatchTaskExecutor func(ctx context.Context, task *AccountBatchTask, item AccountBatchTaskItem) (map[string]any, error)
 
 type AccountBatchTaskService struct {
-	repo        AccountBatchTaskRepository
-	timingWheel *TimingWheelService
+	repo                AccountBatchTaskRepository
+	timingWheel         *TimingWheelService
+	clusterTaskExecutor *ClusterTaskExecutor
 
 	executorsMu sync.RWMutex
 	executors   map[string]AccountBatchTaskExecutor
@@ -104,11 +106,20 @@ type AccountBatchTaskService struct {
 	running   int32
 }
 
-func NewAccountBatchTaskService(repo AccountBatchTaskRepository, timingWheel *TimingWheelService) *AccountBatchTaskService {
+func NewAccountBatchTaskService(
+	repo AccountBatchTaskRepository,
+	timingWheel *TimingWheelService,
+	clusterTaskExecutor ...*ClusterTaskExecutor,
+) *AccountBatchTaskService {
+	var leasedExecutor *ClusterTaskExecutor
+	if len(clusterTaskExecutor) > 0 {
+		leasedExecutor = clusterTaskExecutor[0]
+	}
 	return &AccountBatchTaskService{
-		repo:        repo,
-		timingWheel: timingWheel,
-		executors:   map[string]AccountBatchTaskExecutor{},
+		repo:                repo,
+		timingWheel:         timingWheel,
+		clusterTaskExecutor: leasedExecutor,
+		executors:           map[string]AccountBatchTaskExecutor{},
 	}
 }
 
@@ -186,35 +197,72 @@ func (s *AccountBatchTaskService) runOnce() {
 	ctx, cancel := context.WithTimeout(context.Background(), accountBatchTaskDefaultTimeout)
 	defer cancel()
 
-	task, err := s.repo.ClaimNextPendingTask(ctx, int64(accountBatchTaskDefaultTimeout.Seconds()))
+	processed := false
+	runTask := func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+		var err error
+		processed, err = s.processNextTask(taskCtx, guard)
+		return err
+	}
+	var err error
+	if s.clusterTaskExecutor == nil {
+		err = runTask(ctx, &ClusterLeaseGuard{})
+	} else {
+		_, err = s.clusterTaskExecutor.Run(ctx, accountBatchTaskWorkerName, runTask)
+	}
 	if err != nil {
-		logger.LegacyPrintf("service.account_batch_task", "claim pending task failed: %v", err)
+		logger.LegacyPrintf("service.account_batch_task", "run account batch task worker failed: %v", err)
 		return
 	}
-	if task == nil {
-		return
+	if processed {
+		go s.runOnce()
 	}
-	if err := s.executeTask(ctx, task); err != nil {
-		logger.LegacyPrintf("service.account_batch_task", "execute task failed: task=%d err=%v", task.ID, err)
-	}
-	go s.runOnce()
 }
 
-func (s *AccountBatchTaskService) executeTask(ctx context.Context, task *AccountBatchTask) error {
+func (s *AccountBatchTaskService) processNextTask(
+	ctx context.Context,
+	guard *ClusterLeaseGuard,
+) (bool, error) {
+	if err := guard.Check(ctx); err != nil {
+		return false, err
+	}
+	task, err := s.repo.ClaimNextPendingTask(ctx, int64(accountBatchTaskDefaultTimeout.Seconds()))
+	if err != nil {
+		return false, fmt.Errorf("claim pending account batch task: %w", err)
+	}
+	if task == nil {
+		return false, nil
+	}
+	if err := s.executeTask(ctx, task, guard); err != nil {
+		return true, fmt.Errorf("execute account batch task %d: %w", task.ID, err)
+	}
+	return true, nil
+}
+
+func (s *AccountBatchTaskService) executeTask(
+	ctx context.Context,
+	task *AccountBatchTask,
+	guard *ClusterLeaseGuard,
+) error {
 	executor := s.executorFor(task.Operation)
 	if executor == nil {
 		msg := "account batch task executor is not registered"
-		_ = s.repo.MarkTaskFailed(context.Background(), task.ID, msg)
+		if err := guard.Check(ctx); err != nil {
+			return err
+		}
+		_ = s.repo.MarkTaskFailed(context.WithoutCancel(ctx), task.ID, msg)
 		return fmt.Errorf("%s: %s", msg, task.Operation)
 	}
 
 	items, err := s.repo.ListPendingItems(ctx, task.ID)
 	if err != nil {
-		_ = s.repo.MarkTaskFailed(context.Background(), task.ID, err.Error())
+		if guardErr := guard.Check(ctx); guardErr != nil {
+			return guardErr
+		}
+		_ = s.repo.MarkTaskFailed(context.WithoutCancel(ctx), task.ID, err.Error())
 		return err
 	}
 	if len(items) == 0 {
-		return s.finishTaskByProgress(task.ID)
+		return s.finishTaskByProgress(ctx, task.ID, guard)
 	}
 
 	sem := make(chan struct{}, accountBatchTaskExecutorParallel)
@@ -229,35 +277,70 @@ func (s *AccountBatchTaskService) executeTask(ctx context.Context, task *Account
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			s.executeItem(ctx, task, item, executor)
+			s.executeItem(ctx, task, item, executor, guard)
 		}()
 	}
 	wg.Wait()
-	return s.finishTaskByProgress(task.ID)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.finishTaskByProgress(ctx, task.ID, guard)
 }
 
-func (s *AccountBatchTaskService) executeItem(ctx context.Context, task *AccountBatchTask, item AccountBatchTaskItem, executor AccountBatchTaskExecutor) {
+func (s *AccountBatchTaskService) executeItem(
+	ctx context.Context,
+	task *AccountBatchTask,
+	item AccountBatchTaskItem,
+	executor AccountBatchTaskExecutor,
+	guard *ClusterLeaseGuard,
+) {
+	if err := guard.Check(ctx); err != nil {
+		return
+	}
 	if err := s.repo.MarkItemRunning(ctx, item.ID); err != nil {
 		slog.Warn("account batch task mark item running failed", "task_id", task.ID, "item_id", item.ID, "error", err)
 		return
 	}
-	result, err := executor(ctx, task, item)
-	if err != nil {
-		_ = s.repo.MarkItemFailed(context.Background(), item.ID, trimAccountBatchError(err.Error()))
+	if err := guard.Check(ctx); err != nil {
 		return
 	}
-	_ = s.repo.MarkItemSucceeded(context.Background(), item.ID, result)
+	result, err := executor(ctx, task, item)
+	if err != nil {
+		if guardErr := guard.Check(context.WithoutCancel(ctx)); guardErr != nil {
+			return
+		}
+		_ = s.repo.MarkItemFailed(context.WithoutCancel(ctx), item.ID, trimAccountBatchError(err.Error()))
+		return
+	}
+	if err := guard.Check(context.WithoutCancel(ctx)); err != nil {
+		return
+	}
+	_ = s.repo.MarkItemSucceeded(context.WithoutCancel(ctx), item.ID, result)
 }
 
-func (s *AccountBatchTaskService) finishTaskByProgress(taskID int64) error {
-	task, err := s.repo.RefreshTaskProgress(context.Background(), taskID)
+func (s *AccountBatchTaskService) finishTaskByProgress(
+	ctx context.Context,
+	taskID int64,
+	guard *ClusterLeaseGuard,
+) error {
+	if err := guard.Check(context.WithoutCancel(ctx)); err != nil {
+		return err
+	}
+	task, err := s.repo.RefreshTaskProgress(context.WithoutCancel(ctx), taskID)
 	if err != nil {
 		return err
 	}
-	if task.Failed > 0 {
-		return s.repo.MarkTaskFailed(context.Background(), taskID, fmt.Sprintf("%d account operations failed", task.Failed))
+	if err := guard.Check(context.WithoutCancel(ctx)); err != nil {
+		return err
 	}
-	return s.repo.MarkTaskSucceeded(context.Background(), taskID)
+	if task.Failed > 0 {
+		return s.repo.MarkTaskFailed(
+			context.WithoutCancel(ctx),
+			taskID,
+			fmt.Sprintf("%d account operations failed", task.Failed),
+		)
+	}
+	return s.repo.MarkTaskSucceeded(context.WithoutCancel(ctx), taskID)
 }
 
 func (s *AccountBatchTaskService) executorFor(operation string) AccountBatchTaskExecutor {

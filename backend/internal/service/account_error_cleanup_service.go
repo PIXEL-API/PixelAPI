@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"log"
 	"sync"
 	"time"
@@ -10,6 +11,7 @@ import (
 const (
 	defaultAccountErrorRetention = 24 * time.Hour
 	defaultAccountErrorBatchSize = 100
+	accountErrorCleanupTaskName  = "account_error_cleanup"
 )
 
 type AccountErrorCleanupRepository interface {
@@ -18,23 +20,32 @@ type AccountErrorCleanupRepository interface {
 
 // AccountErrorCleanupService soft-deletes accounts that stay in error state too long.
 type AccountErrorCleanupService struct {
-	repo      AccountErrorCleanupRepository
-	retention time.Duration
-	interval  time.Duration
-	batchSize int
-	stopCh    chan struct{}
-	stopOnce  sync.Once
-	wg        sync.WaitGroup
+	repo         AccountErrorCleanupRepository
+	retention    time.Duration
+	interval     time.Duration
+	batchSize    int
+	taskExecutor *ClusterTaskExecutor
+	stopCh       chan struct{}
+	stopOnce     sync.Once
+	wg           sync.WaitGroup
 }
 
-func NewAccountErrorCleanupService(repo AccountErrorCleanupRepository, interval time.Duration) *AccountErrorCleanupService {
-	return &AccountErrorCleanupService{
+func NewAccountErrorCleanupService(
+	repo AccountErrorCleanupRepository,
+	interval time.Duration,
+	taskExecutors ...*ClusterTaskExecutor,
+) *AccountErrorCleanupService {
+	service := &AccountErrorCleanupService{
 		repo:      repo,
 		retention: defaultAccountErrorRetention,
 		interval:  interval,
 		batchSize: defaultAccountErrorBatchSize,
 		stopCh:    make(chan struct{}),
 	}
+	if len(taskExecutors) > 0 {
+		service.taskExecutor = taskExecutors[0]
+	}
+	return service
 }
 
 func (s *AccountErrorCleanupService) Start() {
@@ -73,13 +84,30 @@ func (s *AccountErrorCleanupService) runOnce() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cutoff := time.Now().Add(-s.retention)
-	deleted, err := s.repo.DeleteStaleErrorAccounts(ctx, cutoff, s.batchSize)
-	if err != nil {
-		log.Printf("[AccountErrorCleanup] Delete stale error accounts failed: %v", err)
-		return
+	run := func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+		if err := guard.Check(taskCtx); err != nil {
+			return err
+		}
+		cutoff := time.Now().Add(-s.retention)
+		deleted, err := s.repo.DeleteStaleErrorAccounts(taskCtx, cutoff, s.batchSize)
+		if err != nil {
+			return err
+		}
+		if deleted > 0 {
+			log.Printf("[AccountErrorCleanup] Soft-deleted %d stale error accounts", deleted)
+		}
+		return nil
 	}
-	if deleted > 0 {
-		log.Printf("[AccountErrorCleanup] Soft-deleted %d stale error accounts", deleted)
+	var err error
+	if s.taskExecutor == nil {
+		err = run(ctx, &ClusterLeaseGuard{})
+	} else {
+		_, err = s.taskExecutor.Run(ctx, accountErrorCleanupTaskName, run)
+	}
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
+		log.Printf("[AccountErrorCleanup] Delete stale error accounts failed: %v", err)
 	}
 }

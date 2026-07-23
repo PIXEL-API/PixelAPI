@@ -11,11 +11,12 @@ const expiryCheckTimeout = 30 * time.Second
 
 // PaymentOrderExpiryService periodically expires timed-out payment orders.
 type PaymentOrderExpiryService struct {
-	paymentSvc *PaymentService
-	interval   time.Duration
-	stopCh     chan struct{}
-	stopOnce   sync.Once
-	wg         sync.WaitGroup
+	paymentSvc   *PaymentService
+	taskExecutor *ClusterTaskExecutor
+	interval     time.Duration
+	stopCh       chan struct{}
+	stopOnce     sync.Once
+	wg           sync.WaitGroup
 }
 
 func NewPaymentOrderExpiryService(paymentSvc *PaymentService, interval time.Duration) *PaymentOrderExpiryService {
@@ -62,12 +63,24 @@ func (s *PaymentOrderExpiryService) runOnce() {
 	ctx, cancel := context.WithTimeout(context.Background(), expiryCheckTimeout)
 	defer cancel()
 
-	processed, err := s.paymentSvc.ExpireTimedOutOrders(ctx)
+	_, err := s.taskExecutor.Run(ctx, "payment_order_expiry", func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+		if err := guard.Check(taskCtx); err != nil {
+			return err
+		}
+		return s.runOnceLeased(taskCtx)
+	})
 	if err != nil {
 		slog.Error("[PaymentOrderExpiry] failed to expire orders", "error", err)
-		return
+	}
+}
+
+func (s *PaymentOrderExpiryService) runOnceLeased(ctx context.Context) error {
+	processed, err := s.paymentSvc.ExpireTimedOutOrders(ctx)
+	if err != nil {
+		return err
 	}
 	if processed > 0 {
 		slog.Info("[PaymentOrderExpiry] processed timed-out orders", "count", processed)
 	}
+	return nil
 }

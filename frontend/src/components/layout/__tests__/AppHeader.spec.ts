@@ -8,6 +8,11 @@ const componentPath = resolve(dirname(fileURLToPath(import.meta.url)), '../AppHe
 const componentSource = readFileSync(componentPath, 'utf8')
 
 describe('AppHeader responsive text constraints', () => {
+  it('renders the one-click invite link beside announcements', () => {
+    expect(componentSource).toContain('<AnnouncementBell v-if="user" />')
+    expect(componentSource).toContain('<HeaderInviteLink v-if="user" />')
+  })
+
   it('lets the page title shrink without wrapping into a vertical column', () => {
     expect(componentSource).toContain('flex min-w-0 flex-1 items-center')
     expect(componentSource).toContain('truncate text-base font-semibold')

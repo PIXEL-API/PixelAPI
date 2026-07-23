@@ -369,6 +369,7 @@ export const useAppStore = defineStore("app", () => {
         available_channels_enabled: false,
         user_account_import_limit: 100,
         affiliate_enabled: false,
+        user_private_group_commission_rate: 0.005,
         invoice_management_enabled: false,
         withdrawal_management_enabled: true,
         withdrawal_rate_limit_window_days: 1,

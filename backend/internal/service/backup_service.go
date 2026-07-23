@@ -148,6 +148,7 @@ type BackupService struct {
 	encryptionKeyConfigured bool
 	storeFactory            BackupObjectStoreFactory
 	dumper                  DBDumper
+	taskExecutor            *ClusterTaskExecutor
 
 	opMu      sync.Mutex // 保护 backingUp/restoring 标志
 	backingUp bool
@@ -603,13 +604,27 @@ func (s *BackupService) removeCronSchedule() {
 }
 
 func (s *BackupService) runScheduledBackup() {
+	ctx, cancel := context.WithTimeout(s.bgCtx, 30*time.Minute)
+	defer cancel()
+	_, err := s.taskExecutor.Run(ctx, "scheduled_database_backup", func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+		s.runScheduledBackupLeased(taskCtx, guard)
+		return nil
+	})
+	if err != nil {
+		logger.LegacyPrintf("service.backup", "[Backup] 定时备份租约执行失败: %v", err)
+	}
+}
+
+func (s *BackupService) runScheduledBackupLeased(ctx context.Context, guard *ClusterLeaseGuard) {
 	if !s.tryBeginRun() {
 		return
 	}
 	defer s.endRun()
 
-	ctx, cancel := context.WithTimeout(s.bgCtx, 30*time.Minute)
-	defer cancel()
+	if err := guard.Check(ctx); err != nil {
+		logger.LegacyPrintf("service.backup", "[Backup] 定时备份租约已失效: %v", err)
+		return
+	}
 
 	// 读取定时备份配置中的过期天数
 	schedule, _ := s.GetSchedule(ctx)
@@ -632,6 +647,10 @@ func (s *BackupService) runScheduledBackup() {
 
 	// 定时备份的份数/天数策略只适用于 PostgreSQL 全库备份。
 	if schedule == nil {
+		return
+	}
+	if err := guard.Check(ctx); err != nil {
+		logger.LegacyPrintf("service.backup", "[Backup] 清理前租约已失效: %v", err)
 		return
 	}
 	if err := s.cleanupOldBackups(ctx, schedule); err != nil {
@@ -659,13 +678,26 @@ func (s *BackupService) applyExpirationCleanupSchedule() error {
 }
 
 func (s *BackupService) runScheduledExpirationCleanup() {
+	ctx, cancel := context.WithTimeout(s.bgCtx, 30*time.Minute)
+	defer cancel()
+	_, err := s.taskExecutor.Run(ctx, "backup_expiration_cleanup", func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+		if err := guard.Check(taskCtx); err != nil {
+			return err
+		}
+		s.runScheduledExpirationCleanupLeased(taskCtx)
+		return nil
+	})
+	if err != nil {
+		logger.LegacyPrintf("service.backup", "[Backup] 归档过期清理租约执行失败: %v", err)
+	}
+}
+
+func (s *BackupService) runScheduledExpirationCleanupLeased(ctx context.Context) {
 	if !s.tryBeginRun() {
 		return
 	}
 	defer s.endRun()
 
-	ctx, cancel := context.WithTimeout(s.bgCtx, 30*time.Minute)
-	defer cancel()
 	if err := s.cleanupExpiredBackupsWithRetry(ctx, backupExpirationCleanupAttempts, backupExpirationCleanupRetryWait); err != nil {
 		switch {
 		case errors.Is(err, ErrBackupInProgress):

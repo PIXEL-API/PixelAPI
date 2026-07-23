@@ -586,6 +586,15 @@ const GlobeIcon = {
     ),
 };
 
+const AccountShareIcon = {
+  render: () =>
+    h("svg", { viewBox: "0 0 1024 1024", fill: "currentColor" }, [
+      h("path", {
+        d: "M512 75.207111a436.792889 436.792889 0 1 1 0 873.585778A436.792889 436.792889 0 0 1 512 75.207111z m152.689778 228.181333L442.595556 383.431111a98.304 98.304 0 0 0-59.164445 59.164445l-79.985778 222.151111a43.690667 43.690667 0 0 0 55.921778 55.921777l222.151111-79.985777a98.304 98.304 0 0 0 59.164445-59.164445l79.985777-222.151111a43.690667 43.690667 0 0 0-55.921777-55.921778zM512 566.613333a54.613333 54.613333 0 1 0 0-109.226666 54.613333 54.613333 0 0 0 0 109.226666z",
+      }),
+    ]),
+};
+
 const ServerIcon = {
   render: () =>
     h(
@@ -943,7 +952,7 @@ function buildSelfNavItems(withDashboard: boolean): NavItem[] {
     {
       path: "/account-share",
       label: t("nav.accountShare"),
-      icon: GlobeIcon,
+      icon: AccountShareIcon,
       hideInSimpleMode: true,
     },
     {
@@ -1072,6 +1081,19 @@ const adminNavItems = computed((): NavItem[] => {
       label: t("nav.ops"),
       icon: ChartIcon,
       featureFlag: flagOpsMonitoring,
+      expandOnly: true,
+      children: [
+        {
+          path: "/admin/ops",
+          label: t("nav.opsOverview"),
+          icon: ChartIcon,
+        },
+        {
+          path: "/admin/ops/cluster",
+          label: t("nav.clusterManagement"),
+          icon: ServerIcon,
+        },
+      ],
     },
     {
       path: "/admin/users",

@@ -109,6 +109,7 @@ type WithdrawalRequest struct {
 	RejectionReason            *string    `json:"rejection_reason,omitempty"`
 	ProcessedByUserID          *int64     `json:"processed_by_user_id,omitempty"`
 	ProcessedAt                *time.Time `json:"processed_at,omitempty"`
+	LastWithdrawalAt           *time.Time `json:"last_withdrawal_at,omitempty"`
 	CreatedAt                  time.Time  `json:"created_at"`
 	UpdatedAt                  time.Time  `json:"updated_at"`
 }

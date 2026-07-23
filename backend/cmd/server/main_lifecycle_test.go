@@ -62,6 +62,50 @@ func TestRunServerLifecycleStopRunsShutdownAndCleanup(t *testing.T) {
 	}
 }
 
+func TestRunServerLifecycleWithDrainPrecedesHTTPShutdown(t *testing.T) {
+	stop := make(chan struct{})
+	close(stop)
+	restart := make(chan struct{})
+	serveResults := make(chan serverServeResult)
+
+	var lifecycleStage atomic.Int32
+	server := &shutdownServerStub{
+		shutdownFn: func(context.Context) error {
+			if !lifecycleStage.CompareAndSwap(1, 2) {
+				lifecycleStage.Store(-1)
+			}
+			return nil
+		},
+	}
+	cleanup := func(context.Context) error {
+		if !lifecycleStage.CompareAndSwap(2, 3) {
+			lifecycleStage.Store(-1)
+		}
+		return nil
+	}
+
+	err := runServerLifecycleWithDrain(
+		stop,
+		restart,
+		serveResults,
+		[]shutdownTarget{{name: "main", server: server, timeout: time.Second}},
+		func() {
+			if !lifecycleStage.CompareAndSwap(0, 1) {
+				lifecycleStage.Store(-1)
+			}
+		},
+		time.Millisecond,
+		cleanup,
+		time.Second,
+	)
+	if err != nil {
+		t.Fatalf("runServerLifecycleWithDrain() error = %v", err)
+	}
+	if got := lifecycleStage.Load(); got != 3 {
+		t.Fatalf("lifecycle stage = %d, want 3 (drain, HTTP shutdown, cleanup)", got)
+	}
+}
+
 func TestRunServerLifecycleServeFailureShutsDownAndReturnsCause(t *testing.T) {
 	serveErr := errors.New("serve failed")
 	stop := make(chan struct{})

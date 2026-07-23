@@ -386,6 +386,74 @@ func ApplyMigrations(ctx context.Context, db *sql.DB) error {
 	return applyMigrationsFS(ctx, db, migrations.FS)
 }
 
+// ValidateMigrations verifies that every migration embedded in the running
+// binary has already been applied with an accepted checksum. It is deliberately
+// read-only: application replicas use this path so schema changes remain an
+// explicit deployment step performed by --migrate-only.
+//
+// Migrations present in the database but absent from the current binary are
+// ignored. Cluster migrations are additive and backward compatible, so this
+// permits a controlled binary rollback without mutating schema history.
+func ValidateMigrations(ctx context.Context, db *sql.DB) error {
+	if db == nil {
+		return errors.New("nil sql db")
+	}
+	return validateMigrationsFS(ctx, db, migrations.FS)
+}
+
+func validateMigrationsFS(ctx context.Context, db migrationDatabase, fsys fs.FS) error {
+	if db == nil {
+		return errors.New("nil migration database")
+	}
+
+	files, err := fs.Glob(fsys, "*.sql")
+	if err != nil {
+		return fmt.Errorf("list migrations: %w", err)
+	}
+	sort.Strings(files)
+
+	for _, name := range files {
+		contentBytes, err := fs.ReadFile(fsys, name)
+		if err != nil {
+			return fmt.Errorf("read migration %s: %w", name, err)
+		}
+		content := strings.TrimSpace(string(contentBytes))
+		if content == "" {
+			continue
+		}
+
+		sum := sha256.Sum256([]byte(content))
+		checksum := hex.EncodeToString(sum[:])
+
+		var existing string
+		rowErr := db.QueryRowContext(
+			ctx,
+			"SELECT checksum FROM schema_migrations WHERE filename = $1",
+			name,
+		).Scan(&existing)
+		if errors.Is(rowErr, sql.ErrNoRows) {
+			return fmt.Errorf(
+				"database schema is not ready: migration %s has not been applied; run the binary with --migrate-only before starting application replicas",
+				name,
+			)
+		}
+		if rowErr != nil {
+			return fmt.Errorf("validate migration %s: %w", name, rowErr)
+		}
+		if existing == checksum || isMigrationChecksumCompatible(name, existing, checksum) {
+			continue
+		}
+		return fmt.Errorf(
+			"migration %s checksum mismatch (db=%s file=%s); restore the immutable migration file or deploy a compatible binary",
+			name,
+			existing,
+			checksum,
+		)
+	}
+
+	return nil
+}
+
 // applyMigrationsFS 是迁移执行的核心实现。
 // 它从指定的文件系统读取 SQL 迁移文件并按顺序应用。
 //

@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -21,6 +25,7 @@ type userAccountBatchRepoStub struct {
 	accountShareModeListingIDs map[int64]int64
 	createdTask                service.CreateAccountBatchTaskInput
 	createTaskCalled           int
+	clearedErrorIDs            []int64
 }
 
 func (s *userAccountBatchRepoStub) Create(_ context.Context, account *service.Account) error {
@@ -111,8 +116,9 @@ func (s *userAccountBatchRepoStub) BatchUpdateLastUsed(context.Context, map[int6
 func (s *userAccountBatchRepoStub) SetError(context.Context, int64, string) error {
 	panic("unexpected SetError call")
 }
-func (s *userAccountBatchRepoStub) ClearError(context.Context, int64) error {
-	panic("unexpected ClearError call")
+func (s *userAccountBatchRepoStub) ClearError(_ context.Context, accountID int64) error {
+	s.clearedErrorIDs = append(s.clearedErrorIDs, accountID)
+	return nil
 }
 func (s *userAccountBatchRepoStub) SetSchedulable(context.Context, int64, bool) error {
 	panic("unexpected SetSchedulable call")
@@ -215,6 +221,28 @@ func (s *userAccountBatchRepoStub) MarkTaskFailed(context.Context, int64, string
 	panic("unexpected MarkTaskFailed call")
 }
 
+type userAccountBatchHTTPUpstreamStub struct{}
+
+func (s *userAccountBatchHTTPUpstreamStub) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
+	return s.DoWithTLS(req, proxyURL, accountID, accountConcurrency, nil)
+}
+
+func (s *userAccountBatchHTTPUpstreamStub) DoWithTLS(
+	_ *http.Request,
+	_ string,
+	_ int64,
+	_ int,
+	_ *tlsfingerprint.Profile,
+) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body: io.NopCloser(strings.NewReader(`data: {"type":"response.completed"}
+
+`)),
+	}, nil
+}
+
 func TestUserAccountHandlerBulkPublicShareOnlyCreatesAsyncTask(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ownerID := int64(101)
@@ -260,6 +288,103 @@ func TestUserAccountHandlerBulkPublicShareOnlyCreatesAsyncTask(t *testing.T) {
 	require.Equal(t, int64(77), envelope.Data.Task.ID)
 	require.Equal(t, service.AccountBatchTaskOperationUserSetPublicShare, envelope.Data.Task.Operation)
 	require.Equal(t, 2, envelope.Data.Task.Total)
+}
+
+func TestUserAccountHandlerCreateBatchTestConnectionTask(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ownerID := int64(101)
+	repo := &userAccountBatchRepoStub{
+		accounts: map[int64]*service.Account{
+			1: {ID: 1, OwnerUserID: &ownerID, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth},
+			2: {ID: 2, OwnerUserID: &ownerID, Platform: service.PlatformGemini, Type: service.AccountTypeOAuth},
+		},
+	}
+	accountSvc := service.NewAccountService(repo, nil, nil, nil, nil)
+	batchSvc := service.NewAccountBatchTaskService(repo, nil)
+	handler := NewUserAccountHandler(accountSvc, nil, new(service.AccountTestService), nil, nil, nil, nil, nil, nil, batchSvc)
+	router := gin.New()
+	router.POST("/accounts/batch-test/async", func(c *gin.Context) {
+		c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: ownerID})
+		handler.CreateBatchTestConnectionTask(c)
+	})
+
+	body := []byte(`{"account_ids":[1,2,2]}`)
+	req := httptest.NewRequest(http.MethodPost, "/accounts/batch-test/async", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, 1, repo.createTaskCalled)
+	require.Equal(t, service.AccountBatchTaskOperationUserTestConnection, repo.createdTask.Operation)
+	require.Equal(t, []int64{1, 2}, repo.createdTask.AccountIDs)
+	require.Equal(t, ownerID, repo.createdTask.CreatedBy)
+	require.NotNil(t, repo.createdTask.OwnerUserID)
+	require.Equal(t, ownerID, *repo.createdTask.OwnerUserID)
+
+	var envelope struct {
+		Code int `json:"code"`
+		Data struct {
+			ID        int64  `json:"id"`
+			Operation string `json:"operation"`
+			Total     int    `json:"total"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
+	require.Equal(t, 0, envelope.Code)
+	require.Equal(t, int64(77), envelope.Data.ID)
+	require.Equal(t, service.AccountBatchTaskOperationUserTestConnection, envelope.Data.Operation)
+	require.Equal(t, 2, envelope.Data.Total)
+}
+
+func TestUserAccountHandlerExecuteBatchTestConnectionRecoversSuccessfulAccount(t *testing.T) {
+	ownerID := int64(101)
+	repo := &userAccountBatchRepoStub{
+		accounts: map[int64]*service.Account{
+			1: {
+				ID:          1,
+				OwnerUserID: &ownerID,
+				Platform:    service.PlatformOpenAI,
+				Type:        service.AccountTypeOAuth,
+				Status:      service.StatusError,
+				Concurrency: 1,
+				Credentials: map[string]any{"access_token": "test-token"},
+			},
+		},
+	}
+	accountSvc := service.NewAccountService(repo, nil, nil, nil, nil)
+	accountTestSvc := service.NewAccountTestService(
+		repo,
+		nil,
+		nil,
+		nil,
+		&userAccountBatchHTTPUpstreamStub{},
+		&config.Config{},
+		nil,
+		nil,
+		nil,
+	)
+	rateLimitSvc := service.NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	handler := NewUserAccountHandler(accountSvc, nil, accountTestSvc, rateLimitSvc, nil, nil, nil, nil, nil, nil)
+
+	result, err := handler.executeUserTestConnectionTaskItem(
+		context.Background(),
+		&service.AccountBatchTask{OwnerUserID: &ownerID},
+		service.AccountBatchTaskItem{AccountID: 1},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, "success", result["status"])
+	require.Equal(t, true, result["cleared_error"])
+	require.Equal(t, false, result["cleared_rate_limit"])
+	require.Equal(t, []int64{1}, repo.clearedErrorIDs)
+}
+
+func TestUserAccountConnectionTestModelMatchesUserModalDefaults(t *testing.T) {
+	require.Equal(t, userGeminiDefaultTestModel, userAccountConnectionTestModel(&service.Account{Platform: service.PlatformGemini}))
+	require.Equal(t, userGeminiDefaultTestModel, userAccountConnectionTestModel(&service.Account{Platform: service.PlatformAntigravity}))
+	require.Empty(t, userAccountConnectionTestModel(&service.Account{Platform: service.PlatformOpenAI}))
+	require.Empty(t, userAccountConnectionTestModel(nil))
 }
 
 func TestUserAccountHandlerBulkPublicShareRejectsAccountShareModeAccount(t *testing.T) {

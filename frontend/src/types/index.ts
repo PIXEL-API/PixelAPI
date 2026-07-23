@@ -152,6 +152,7 @@ export interface WithdrawalRequest {
   rejection_reason?: string | null;
   processed_by_user_id?: number | null;
   processed_at?: string | null;
+  last_withdrawal_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -332,6 +333,12 @@ export interface UserAffiliateDetail {
   invitees: AffiliateInvitee[];
 }
 
+export interface UserAffiliateShareSummary {
+  enabled: boolean;
+  aff_code?: string;
+  effective_rebate_rate_percent: number;
+}
+
 export interface AffiliateTransferResponse {
   transferred_quota: number;
   balance: number;
@@ -434,6 +441,7 @@ export interface PublicSettings {
   user_account_import_limit?: number;
   openai_account_levels?: OpenAIAccountLevelConfig[];
   affiliate_enabled: boolean;
+  user_private_group_commission_rate: number;
 }
 
 export interface AuthResponse {

@@ -134,6 +134,7 @@ type SettingService struct {
 	onUpdate                func() // Callback when settings are updated (for cache invalidation)
 	version                 string // Application version
 	webSearchManagerBuilder WebSearchManagerBuilder
+	clusterCache            *ClusterCacheCoordinator
 }
 
 type ProviderDefaultGrantSettings struct {
@@ -567,6 +568,23 @@ func (s *SettingService) GetAllSettings(ctx context.Context) (*SystemSettings, e
 	return result, nil
 }
 
+// RefreshRuntimeSettingsCache 从数据库重新读取运行时设置并原子替换本地热缓存。
+// 集群版本对账必须显式看到读取或解析失败，从而阻止节点继续以旧配置接流量。
+func (s *SettingService) RefreshRuntimeSettingsCache(ctx context.Context) error {
+	if s == nil || s.settingRepo == nil {
+		return errors.New("runtime settings cache unavailable")
+	}
+	if ctx == nil {
+		return errors.New("runtime settings cache refresh requires a context")
+	}
+	settings, err := s.GetAllSettings(ctx)
+	if err != nil {
+		return err
+	}
+	s.refreshCachedSettings(settings)
+	return nil
+}
+
 // GetUpstreamURLAllowlistHosts returns config-defined upstream hosts plus DB-managed additions.
 // If the allowlist switch is disabled in config, callers should use format-only URL validation.
 func (s *SettingService) GetUpstreamURLAllowlistHosts(ctx context.Context) ([]string, error) {
@@ -717,6 +735,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyUserAccountImportLimit,
 		SettingKeyOpenAIAccountLevels,
 		SettingKeyAffiliateEnabled,
+		SettingKeyUserPrivateGroupCommissionRate,
 		SettingKeyRiskControlEnabled,
 		SettingKeyInvoiceManagementEnabled,
 		SettingKeyWithdrawalManagementEnabled,
@@ -839,6 +858,8 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 
 		AffiliateEnabled: settings[SettingKeyAffiliateEnabled] == "true",
 
+		UserPrivateGroupCommissionRate: parseUserPrivateGroupCommissionRate(settings[SettingKeyUserPrivateGroupCommissionRate]),
+
 		RiskControlEnabled: settings[SettingKeyRiskControlEnabled] == "true",
 
 		InvoiceManagementEnabled:        settings[SettingKeyInvoiceManagementEnabled] == "true",
@@ -887,6 +908,19 @@ func parseUserAccountImportLimit(raw string) int {
 		return DefaultUserAccountCredentialImportLimit
 	}
 	return NormalizeUserAccountCredentialImportLimit(v)
+}
+
+func parseUserPrivateGroupCommissionRate(raw string) float64 {
+	const defaultRate = 0.005
+
+	rate, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil || rate < 0 || math.IsNaN(rate) || math.IsInf(rate, 0) {
+		return defaultRate
+	}
+	if rate > 1 {
+		return 1
+	}
+	return rate
 }
 
 // ChannelMonitorRuntime is the lightweight view of the channel monitor feature
@@ -1021,6 +1055,7 @@ type PublicSettingsInjectionPayload struct {
 	UserAccountImportLimit               int                        `json:"user_account_import_limit"`
 	OpenAIAccountLevels                  []OpenAIAccountLevelConfig `json:"openai_account_levels"`
 	AffiliateEnabled                     bool                       `json:"affiliate_enabled"`
+	UserPrivateGroupCommissionRate       float64                    `json:"user_private_group_commission_rate"`
 	RiskControlEnabled                   bool                       `json:"risk_control_enabled"`
 	InvoiceManagementEnabled             bool                       `json:"invoice_management_enabled"`
 	WithdrawalManagementEnabled          bool                       `json:"withdrawal_management_enabled"`
@@ -1089,6 +1124,7 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		UserAccountImportLimit:               settings.UserAccountImportLimit,
 		OpenAIAccountLevels:                  settings.OpenAIAccountLevels,
 		AffiliateEnabled:                     settings.AffiliateEnabled,
+		UserPrivateGroupCommissionRate:       settings.UserPrivateGroupCommissionRate,
 		RiskControlEnabled:                   settings.RiskControlEnabled,
 		InvoiceManagementEnabled:             settings.InvoiceManagementEnabled,
 		WithdrawalManagementEnabled:          settings.WithdrawalManagementEnabled,
@@ -1504,6 +1540,7 @@ func (s *SettingService) UpdateSettings(ctx context.Context, settings *SystemSet
 
 	err = s.settingRepo.SetMultiple(ctx, updates)
 	if err == nil {
+		s.advanceClusterSettingCaches(ctx)
 		s.refreshCachedSettings(settings)
 	}
 	return err
@@ -1548,9 +1585,19 @@ func (s *SettingService) UpdateSettingsWithAuthSourceDefaults(ctx context.Contex
 
 	err = s.settingRepo.SetMultiple(ctx, updates)
 	if err == nil {
+		s.advanceClusterSettingCaches(ctx)
 		s.refreshCachedSettings(settings)
 	}
 	return err
+}
+
+func (s *SettingService) advanceClusterSettingCaches(ctx context.Context) {
+	if s == nil || s.clusterCache == nil {
+		return
+	}
+	if err := s.clusterCache.Advance(ctx, ClusterCacheKeyRuntimeSettings); err != nil {
+		slog.Error("failed to advance cluster settings cache version", "error", err)
+	}
 }
 
 func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, settings *SystemSettings) (map[string]string, error) {
@@ -2999,14 +3046,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	if rpm, err := strconv.Atoi(settings[SettingKeyUserPrivateGroupRPMLimit]); err == nil && rpm >= 0 {
 		result.UserPrivateGroupRPMLimit = rpm
 	}
-	if commissionRate, err := strconv.ParseFloat(settings[SettingKeyUserPrivateGroupCommissionRate], 64); err == nil && commissionRate >= 0 && !math.IsNaN(commissionRate) && !math.IsInf(commissionRate, 0) {
-		if commissionRate > 1 {
-			commissionRate = 1
-		}
-		result.UserPrivateGroupCommissionRate = commissionRate
-	} else {
-		result.UserPrivateGroupCommissionRate = 0.005
-	}
+	result.UserPrivateGroupCommissionRate = parseUserPrivateGroupCommissionRate(settings[SettingKeyUserPrivateGroupCommissionRate])
 
 	if balance, err := strconv.ParseFloat(settings[SettingKeyDefaultBalance], 64); err == nil {
 		result.DefaultBalance = balance

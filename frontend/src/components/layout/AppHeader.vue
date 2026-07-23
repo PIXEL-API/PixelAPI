@@ -21,10 +21,13 @@
         </div>
       </div>
 
-      <!-- Right: Announcements + Docs + Language + Subscriptions + Balance + User Dropdown -->
+      <!-- Right: Announcements + Invite + Docs + Language + Subscriptions + Balance + User Dropdown -->
       <div class="flex flex-shrink-0 items-center gap-1 sm:gap-2">
         <!-- Announcement Bell -->
         <AnnouncementBell v-if="user" />
+
+        <!-- One-click Invite Link -->
+        <HeaderInviteLink v-if="user" />
 
         <!-- Docs Link -->
         <a
@@ -221,6 +224,7 @@ import { useAdminSettingsStore } from '@/stores/adminSettings'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import SubscriptionProgressMini from '@/components/common/SubscriptionProgressMini.vue'
 import AnnouncementBell from '@/components/common/AnnouncementBell.vue'
+import HeaderInviteLink from '@/components/layout/HeaderInviteLink.vue'
 import Icon from '@/components/icons/Icon.vue'
 
 const router = useRouter()

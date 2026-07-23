@@ -6175,46 +6175,26 @@
                 <div
                   class="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-dark-600 dark:bg-dark-800/60"
                 >
-                  <div class="mb-3">
-                    <label class="font-medium text-gray-900 dark:text-white">
-                      {{ t("admin.settings.payment.tabVisibilityTitle") }}
-                    </label>
-                    <p class="text-sm text-gray-500 dark:text-gray-400">
-                      {{ t("admin.settings.payment.tabVisibilityHint") }}
-                    </p>
-                  </div>
-                  <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div class="max-w-2xl">
+                      <label class="font-medium text-gray-900 dark:text-white">
+                        {{ t("admin.settings.payment.moduleVisibilityTitle") }}
+                      </label>
+                      <p class="mt-1 text-sm leading-6 text-gray-500 dark:text-gray-400">
+                        {{ t("admin.settings.payment.moduleVisibilityHint") }}
+                      </p>
+                    </div>
                     <div
-                      class="flex items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white px-3 py-2 dark:border-dark-600 dark:bg-dark-900"
+                      class="flex min-h-12 shrink-0 items-center justify-between gap-4 rounded-lg border border-gray-200 bg-white px-3 py-2 dark:border-dark-600 dark:bg-dark-900"
                     >
                       <span
                         class="text-sm font-medium text-gray-700 dark:text-gray-300"
                       >
-                        {{ t("payment.tabRechargeCenter") }}
+                        {{ t("admin.settings.payment.externalModuleEnabled") }}
                       </span>
                       <Toggle
                         v-model="form.payment_recharge_center_tab_enabled"
                       />
-                    </div>
-                    <div
-                      class="flex items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white px-3 py-2 dark:border-dark-600 dark:bg-dark-900"
-                    >
-                      <span
-                        class="text-sm font-medium text-gray-700 dark:text-gray-300"
-                      >
-                        {{ t("payment.tabTopUp") }}
-                      </span>
-                      <Toggle v-model="form.payment_recharge_tab_enabled" />
-                    </div>
-                    <div
-                      class="flex items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white px-3 py-2 dark:border-dark-600 dark:bg-dark-900"
-                    >
-                      <span
-                        class="text-sm font-medium text-gray-700 dark:text-gray-300"
-                      >
-                        {{ t("payment.tabSubscribe") }}
-                      </span>
-                      <Toggle v-model="form.payment_subscription_tab_enabled" />
                     </div>
                   </div>
                 </div>
@@ -9382,8 +9362,6 @@ async function saveSettings() {
       payment_enabled: form.payment_enabled,
       payment_recharge_center_tab_enabled:
         form.payment_recharge_center_tab_enabled,
-      payment_recharge_tab_enabled: form.payment_recharge_tab_enabled,
-      payment_subscription_tab_enabled: form.payment_subscription_tab_enabled,
       risk_control_enabled: form.risk_control_enabled,
       cyber_session_block_enabled: form.cyber_session_block_enabled,
       cyber_session_block_ttl_seconds: Math.min(

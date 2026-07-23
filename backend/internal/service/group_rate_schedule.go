@@ -53,6 +53,7 @@ type GroupRateScheduleService struct {
 	userSubRepo          UserSubscriptionRepository
 	userGroupRateRepo    UserGroupRateRepository
 	systemNoticeService  *SystemNoticeService
+	taskExecutor         *ClusterTaskExecutor
 	interval             time.Duration
 	applyMu              sync.Mutex
 	startOnce            sync.Once
@@ -131,7 +132,13 @@ func (s *GroupRateScheduleService) run() {
 func (s *GroupRateScheduleService) applyWithTimeout() {
 	ctx, cancel := context.WithTimeout(context.Background(), groupRateScheduleApplyTimeout)
 	defer cancel()
-	if err := s.ApplyOnce(ctx); err != nil {
+	_, err := s.taskExecutor.Run(ctx, "group_rate_schedule", func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+		if err := guard.Check(taskCtx); err != nil {
+			return err
+		}
+		return s.ApplyOnce(taskCtx)
+	})
+	if err != nil {
 		logger.LegacyPrintf("service.group_rate_schedule", "apply schedules failed: %v", err)
 	}
 }

@@ -769,10 +769,12 @@ func TestAccountShareModeRepositorySeatBillingUsesSettlementRefForLedgers(t *tes
 	mock.ExpectQuery("SELECT EXISTS").
 		WithArgs(listingID, accountID, now).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
-	mock.ExpectQuery("SELECT owner_share_ratio, platform_share_ratio, enabled, version").
-		WithArgs(service.AccountShareModePolicyPlatformUnified).
-		WillReturnRows(sqlmock.NewRows([]string{"owner_share_ratio", "platform_share_ratio", "enabled", "version"}).
-			AddRow(0.9, 0.1, true, 1))
+	expectAccountShareBillingUserLock(mock, consumerUserID)
+	mock.ExpectQuery("SELECT id, scope_type, scope_id, platform, owner_share_ratio::text, invite_share_ratio::text, version, enabled").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "scope_type", "scope_id", "platform", "owner_share_ratio", "invite_share_ratio",
+			"version", "enabled", "effective_at", "created_by_admin_id", "created_at", "updated_at", "deleted_at",
+		}).AddRow(1, service.AccountSharePolicyScopeGlobal, nil, nil, "0.9", "0", 1, true, joinedAt, 1, joinedAt, joinedAt, nil))
 	mock.ExpectQuery("INSERT INTO account_share_mode_settlement_entries").
 		WithArgs(
 			membershipID,
@@ -785,8 +787,15 @@ func TestAccountShareModeRepositorySeatBillingUsesSettlementRefForLedgers(t *tes
 			"0.0030000000",
 			"0.0003333333",
 			"0.20000000",
-			"0.90000001",
-			"0.09999999",
+			int64(1),
+			1,
+			"0.90000000",
+			nil,
+			nil,
+			nil,
+			"0.00000000",
+			"0.0000000000",
+			"0.10000000",
 			60000,
 			accountShareSeatSettlementTypeCharge,
 			billedUntil,
@@ -894,6 +903,7 @@ func TestAccountShareModeRepositorySeatBillingUsesUniquePrepayRefBeforeWaiverWin
 	mock.ExpectQuery("SELECT EXISTS").
 		WithArgs(listingID, accountID, now).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	expectAccountShareBillingUserLock(mock, consumerUserID)
 	mock.ExpectQuery("SELECT balance").
 		WithArgs(consumerUserID).
 		WillReturnRows(sqlmock.NewRows([]string{"balance"}).AddRow(10.0))
@@ -985,6 +995,7 @@ func TestAccountShareModeRepositorySeatBillingRollsBackWhenPrepayLedgerIsSkipped
 	mock.ExpectQuery("SELECT EXISTS").
 		WithArgs(listingID, accountID, now).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	expectAccountShareBillingUserLock(mock, consumerUserID)
 	mock.ExpectQuery("SELECT balance").
 		WithArgs(consumerUserID).
 		WillReturnRows(sqlmock.NewRows([]string{"balance"}).AddRow(10.0))
@@ -1048,7 +1059,14 @@ func TestAccountShareModeRepositoryRefundUnusedSeatPrepayUsesSettlementRef(t *te
 			"0.0000000000",
 			"0.0000000000",
 			"0.20000000",
+			nil,
+			0,
 			"0.00000000",
+			nil,
+			nil,
+			nil,
+			"0.00000000",
+			"0.0000000000",
 			"0.00000000",
 			1800000,
 			accountShareSeatSettlementTypeRefund,
@@ -1252,7 +1270,14 @@ func TestAccountShareModeSettlementUpdatesWaiverProgressCacheAfterInsert(t *test
 			"0.0600000000",
 			"1.0000",
 			"0.20000000",
+			nil,
+			0,
 			"0.00000000",
+			nil,
+			nil,
+			nil,
+			"0.00000000",
+			"0.0000000000",
 			"1.00000000",
 			snapshot.DurationMs,
 			periodStartedAt,
@@ -1341,7 +1366,14 @@ func TestAccountShareModeSettlementAdvancesWaiverProgressCacheByFixedJoinedWindo
 			"0.0800000000",
 			"1.0000",
 			"0.20000000",
+			nil,
+			0,
 			"0.00000000",
+			nil,
+			nil,
+			nil,
+			"0.00000000",
+			"0.0000000000",
 			"1.00000000",
 			snapshot.DurationMs,
 			periodStartedAt,
@@ -1443,7 +1475,14 @@ func TestAccountShareModeSettlementSkipsWaiverProgressCacheOnConflict(t *testing
 			"0.0600000000",
 			"1.0000",
 			"0.20000000",
+			nil,
+			0,
 			"0.00000000",
+			nil,
+			nil,
+			nil,
+			"0.00000000",
+			"0.0000000000",
 			"1.00000000",
 			snapshot.DurationMs,
 			periodStartedAt,
@@ -1528,6 +1567,7 @@ func TestAccountShareModeRepositorySeatBillingDefersWaiverWindowDuringGrace(t *t
 	mock.ExpectQuery("SELECT EXISTS").
 		WithArgs(listingID, accountID, now).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	expectAccountShareBillingUserLock(mock, consumerUserID)
 	mock.ExpectQuery("SELECT balance").
 		WithArgs(consumerUserID).
 		WillReturnRows(sqlmock.NewRows([]string{"balance"}).AddRow(10.0))
@@ -1618,6 +1658,7 @@ func TestAccountShareModeRepositorySeatBillingRefundsSeatChargeWhenWaiverMinimum
 	mock.ExpectQuery("SELECT EXISTS").
 		WithArgs(listingID, accountID, now).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	expectAccountShareBillingUserLock(mock, consumerUserID)
 	mock.ExpectQuery("WITH usage_rows").
 		WithArgs(membershipID, billedUntil, paidUntil).
 		WillReturnRows(sqlmock.NewRows([]string{"usage"}).AddRow("0.1300000000"))
@@ -1629,7 +1670,18 @@ func TestAccountShareModeRepositorySeatBillingRefundsSeatChargeWhenWaiverMinimum
 			ownerUserID,
 			consumerUserID,
 			apiKeyID,
+			"0.0000000000",
+			"0.0000000000",
 			"0.20000000",
+			nil,
+			0,
+			"0.00000000",
+			nil,
+			nil,
+			nil,
+			"0.00000000",
+			"0.0000000000",
+			"0.00000000",
 			3600000,
 			accountShareSeatSettlementTypeWaiverRefund,
 			billedUntil,
@@ -1638,6 +1690,7 @@ func TestAccountShareModeRepositorySeatBillingRefundsSeatChargeWhenWaiverMinimum
 			"0.12000000",
 			"0.1200000000",
 			"0.1300000000",
+			nil,
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(settlementID))
 	mock.ExpectQuery("UPDATE users").
@@ -1710,6 +1763,7 @@ func TestAccountShareModeRepositorySeatBillingRefundsPartialFinalWaiverWindowFro
 	settlementID := int64(991234)
 
 	mock.ExpectBegin()
+	expectAccountShareBillingUserLock(mock, membership.ConsumerUserID)
 	mock.ExpectQuery("WITH usage_rows").
 		WithArgs(membership.ID, windowStart, endedAt).
 		WillReturnRows(sqlmock.NewRows([]string{"usage"}).AddRow("0.1936050504"))
@@ -1721,7 +1775,18 @@ func TestAccountShareModeRepositorySeatBillingRefundsPartialFinalWaiverWindowFro
 			membership.OwnerUserID,
 			membership.ConsumerUserID,
 			membership.APIKeyID,
+			"0.0000000000",
+			"0.0000000000",
 			"0.40000000",
+			nil,
+			0,
+			"0.00000000",
+			nil,
+			nil,
+			nil,
+			"0.00000000",
+			"0.0000000000",
+			"0.00000000",
 			600000,
 			accountShareSeatSettlementTypeWaiverRefund,
 			windowStart,
@@ -1730,6 +1795,7 @@ func TestAccountShareModeRepositorySeatBillingRefundsPartialFinalWaiverWindowFro
 			"0.40000000",
 			"0.0666666667",
 			"0.1936050504",
+			nil,
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(settlementID))
 	mock.ExpectQuery("UPDATE users").
@@ -1794,27 +1860,7 @@ func TestAccountShareModeRepositoryProcessSeatWaiverCompensationRefundsLateEligi
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT\\s+sc\\.id,").
 		WithArgs(settlementID, accountShareSeatSettlementTypeCharge, readyBefore.UTC(), accountShareSeatSettlementTypeWaiverRefund).
-		WillReturnRows(sqlmock.NewRows([]string{
-			"id",
-			"membership_id",
-			"listing_id",
-			"account_id",
-			"owner_user_id",
-			"consumer_user_id",
-			"api_key_id",
-			"hourly_charge",
-			"owner_credit",
-			"hourly_rate_snapshot",
-			"waiver_minimum",
-			"status",
-			"queue_rank",
-			"idle_timeout_minutes",
-			"joined_at",
-			"period_started_at",
-			"period_ended_at",
-			"created_at",
-			"updated_at",
-		}).AddRow(
+		WillReturnRows(accountShareSeatChargeCompensationRows(
 			settlementID,
 			membershipID,
 			listingID,
@@ -1822,19 +1868,14 @@ func TestAccountShareModeRepositoryProcessSeatWaiverCompensationRefundsLateEligi
 			ownerUserID,
 			consumerUserID,
 			apiKeyID,
-			charge.StringFixed(10),
-			ownerCredit.StringFixed(10),
-			"1.88000000",
-			"1.88000000",
-			service.AccountShareMembershipStatusEnded,
-			1,
-			0,
+			charge,
+			ownerCredit,
+			charge.Sub(ownerCredit),
 			joinedAt,
 			windowStart,
 			windowEnd,
-			windowEnd,
-			windowEnd,
 		))
+	expectAccountShareBillingUserLock(mock, consumerUserID)
 	mock.ExpectQuery("WITH usage_rows").
 		WithArgs(membershipID, windowStart, windowEnd).
 		WillReturnRows(sqlmock.NewRows([]string{"usage"}).AddRow("0.0834274000"))
@@ -1849,7 +1890,18 @@ func TestAccountShareModeRepositoryProcessSeatWaiverCompensationRefundsLateEligi
 			ownerUserID,
 			consumerUserID,
 			apiKeyID,
+			ownerCredit.StringFixed(10),
+			charge.Sub(ownerCredit).StringFixed(10),
 			"1.88000000",
+			nil,
+			0,
+			"0.90000000",
+			nil,
+			nil,
+			nil,
+			"0.00000000",
+			"0.0000000000",
+			"0.10000000",
 			int(windowEnd.Sub(windowStart).Milliseconds()),
 			accountShareSeatSettlementTypeWaiverRefund,
 			windowStart,
@@ -1858,6 +1910,7 @@ func TestAccountShareModeRepositoryProcessSeatWaiverCompensationRefundsLateEligi
 			"1.88000000",
 			"0.0700018000",
 			"0.0834274000",
+			settlementID,
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(refundSettlementID))
 	mock.ExpectQuery("UPDATE users").
@@ -1918,27 +1971,7 @@ func TestAccountShareModeRepositoryProcessSeatWaiverCompensationSkipsOwnerRevers
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT\\s+sc\\.id,").
 		WithArgs(settlementID, accountShareSeatSettlementTypeCharge, readyBefore.UTC(), accountShareSeatSettlementTypeWaiverRefund).
-		WillReturnRows(sqlmock.NewRows([]string{
-			"id",
-			"membership_id",
-			"listing_id",
-			"account_id",
-			"owner_user_id",
-			"consumer_user_id",
-			"api_key_id",
-			"hourly_charge",
-			"owner_credit",
-			"hourly_rate_snapshot",
-			"waiver_minimum",
-			"status",
-			"queue_rank",
-			"idle_timeout_minutes",
-			"joined_at",
-			"period_started_at",
-			"period_ended_at",
-			"created_at",
-			"updated_at",
-		}).AddRow(
+		WillReturnRows(accountShareSeatChargeCompensationRows(
 			settlementID,
 			membershipID,
 			listingID,
@@ -1946,19 +1979,14 @@ func TestAccountShareModeRepositoryProcessSeatWaiverCompensationSkipsOwnerRevers
 			ownerUserID,
 			consumerUserID,
 			apiKeyID,
-			charge.StringFixed(10),
-			ownerCredit.StringFixed(10),
-			"1.88000000",
-			"1.88000000",
-			service.AccountShareMembershipStatusEnded,
-			1,
-			0,
+			charge,
+			ownerCredit,
+			charge.Sub(ownerCredit),
 			windowStart,
 			windowStart,
-			windowEnd,
-			windowEnd,
 			windowEnd,
 		))
+	expectAccountShareBillingUserLock(mock, consumerUserID)
 	mock.ExpectQuery("WITH usage_rows").
 		WithArgs(membershipID, windowStart, windowEnd).
 		WillReturnRows(sqlmock.NewRows([]string{"usage"}).AddRow("0.0834274000"))
@@ -1973,7 +2001,18 @@ func TestAccountShareModeRepositoryProcessSeatWaiverCompensationSkipsOwnerRevers
 			ownerUserID,
 			consumerUserID,
 			apiKeyID,
+			ownerCredit.StringFixed(10),
+			charge.Sub(ownerCredit).StringFixed(10),
 			"1.88000000",
+			nil,
+			0,
+			"0.90000000",
+			nil,
+			nil,
+			nil,
+			"0.00000000",
+			"0.0000000000",
+			"0.10000000",
 			int(windowEnd.Sub(windowStart).Milliseconds()),
 			accountShareSeatSettlementTypeWaiverRefund,
 			windowStart,
@@ -1982,6 +2021,7 @@ func TestAccountShareModeRepositoryProcessSeatWaiverCompensationSkipsOwnerRevers
 			"1.88000000",
 			"0.0700018000",
 			"0.0834274000",
+			settlementID,
 		).
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectCommit()
@@ -2035,27 +2075,7 @@ func TestAccountShareModeRepositoryProcessSeatWaiverCompensationsAggregatesDebit
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT\\s+sc\\.id,").
 		WithArgs(settlementID, accountShareSeatSettlementTypeCharge, readyBefore.UTC(), accountShareSeatSettlementTypeWaiverRefund).
-		WillReturnRows(sqlmock.NewRows([]string{
-			"id",
-			"membership_id",
-			"listing_id",
-			"account_id",
-			"owner_user_id",
-			"consumer_user_id",
-			"api_key_id",
-			"hourly_charge",
-			"owner_credit",
-			"hourly_rate_snapshot",
-			"waiver_minimum",
-			"status",
-			"queue_rank",
-			"idle_timeout_minutes",
-			"joined_at",
-			"period_started_at",
-			"period_ended_at",
-			"created_at",
-			"updated_at",
-		}).AddRow(
+		WillReturnRows(accountShareSeatChargeCompensationRows(
 			settlementID,
 			membershipID,
 			listingID,
@@ -2063,19 +2083,14 @@ func TestAccountShareModeRepositoryProcessSeatWaiverCompensationsAggregatesDebit
 			ownerUserID,
 			consumerUserID,
 			apiKeyID,
-			charge.StringFixed(10),
-			ownerCredit.StringFixed(10),
-			"1.88000000",
-			"1.88000000",
-			service.AccountShareMembershipStatusEnded,
-			1,
-			0,
+			charge,
+			ownerCredit,
+			charge.Sub(ownerCredit),
 			windowStart,
 			windowStart,
-			windowEnd,
-			windowEnd,
 			windowEnd,
 		))
+	expectAccountShareBillingUserLock(mock, consumerUserID)
 	mock.ExpectQuery("WITH usage_rows").
 		WithArgs(membershipID, windowStart, windowEnd).
 		WillReturnRows(sqlmock.NewRows([]string{"usage"}).AddRow("0.0834274000"))
@@ -2090,7 +2105,18 @@ func TestAccountShareModeRepositoryProcessSeatWaiverCompensationsAggregatesDebit
 			ownerUserID,
 			consumerUserID,
 			apiKeyID,
+			ownerCredit.StringFixed(10),
+			charge.Sub(ownerCredit).StringFixed(10),
 			"1.88000000",
+			nil,
+			0,
+			"0.90000000",
+			nil,
+			nil,
+			nil,
+			"0.00000000",
+			"0.0000000000",
+			"0.10000000",
 			int(windowEnd.Sub(windowStart).Milliseconds()),
 			accountShareSeatSettlementTypeWaiverRefund,
 			windowStart,
@@ -2099,6 +2125,7 @@ func TestAccountShareModeRepositoryProcessSeatWaiverCompensationsAggregatesDebit
 			"1.88000000",
 			"0.0700018000",
 			"0.0834274000",
+			settlementID,
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(refundSettlementID))
 	mock.ExpectQuery("UPDATE users").
@@ -2415,7 +2442,7 @@ func TestAccountShareModeRepositoryEndMembershipReturnsAlreadyEndedMembership(t 
 		))
 	mock.ExpectCommit()
 
-	membership, err := repo.EndMembership(context.Background(), consumerUserID, membershipID)
+	membership, _, err := repo.EndMembership(context.Background(), consumerUserID, membershipID)
 	if err != nil {
 		t.Fatalf("EndMembership failed: %v", err)
 	}
@@ -2964,7 +2991,7 @@ func TestAccountShareModeRepositoryRecoverableSuspensionSkipsRecentlyActiveMembe
 		))
 	mock.ExpectRollback()
 
-	membership, err := repo.SuspendRecoverableUnavailableMembership(context.Background(), membershipID, now)
+	membership, _, err := repo.SuspendRecoverableUnavailableMembership(context.Background(), membershipID, now)
 	if err != nil {
 		t.Fatalf("SuspendRecoverableUnavailableMembership failed: %v", err)
 	}
@@ -3011,7 +3038,8 @@ func TestAccountShareModeRepositorySuspendsRecoverableUnavailableAndRefundsPrepa
 		WithArgs(
 			membershipID, listingID, accountID, ownerUserID, consumerUserID, apiKeyID,
 			"0.0000000000", "0.0000000000", "0.0000000000", "0.20000000",
-			"0.00000000", "0.00000000", 1800000, accountShareSeatSettlementTypeRefund,
+			nil, 0, "0.00000000", nil, nil, nil, "0.00000000", "0.0000000000", "0.00000000",
+			1800000, accountShareSeatSettlementTypeRefund,
 			now, paidUntil, "0.1000000000", "0.00000000", "0.0000000000", "0.0000000000",
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(settlementID))
@@ -3031,7 +3059,7 @@ func TestAccountShareModeRepositorySuspendsRecoverableUnavailableAndRefundsPrepa
 		))
 	mock.ExpectCommit()
 
-	membership, err := repo.SuspendRecoverableUnavailableMembership(context.Background(), membershipID, now)
+	membership, _, err := repo.SuspendRecoverableUnavailableMembership(context.Background(), membershipID, now)
 	if err != nil {
 		t.Fatalf("SuspendRecoverableUnavailableMembership failed: %v", err)
 	}
@@ -3081,7 +3109,7 @@ func TestAccountShareModeRepositoryRecoverableSuspensionRechecksAvailabilityAfte
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectRollback()
 
-	membership, err := repo.SuspendRecoverableUnavailableMembership(context.Background(), membershipID, now)
+	membership, _, err := repo.SuspendRecoverableUnavailableMembership(context.Background(), membershipID, now)
 	if err != nil {
 		t.Fatalf("SuspendRecoverableUnavailableMembership failed: %v", err)
 	}
@@ -3248,20 +3276,107 @@ func TestAccountShareModeRepositoryGetActiveMembershipForRequestUsesMembershipOn
 }
 
 func TestAccountShareModeRatioKeepsExplicitZero(t *testing.T) {
-	got := normalizeAccountShareModeRatio(0, service.AccountShareModeDefaultOwnerShareRatio)
+	got := normalizeAccountShareModeRatio(0)
 	if !got.Equal(decimal.Zero) {
 		t.Fatalf("expected explicit zero ratio to stay zero, got %s", got)
 	}
 }
 
 func TestAccountShareModeSettlementRatiosClampPlatformOverflow(t *testing.T) {
-	owner, platform := accountShareModeSettlementRatios(0.8, 0.5)
+	owner, invite, platform := accountShareModeSettlementRatios(0.8, 0.5)
 	if !owner.Equal(decimal.NewFromFloat(0.8)) {
 		t.Fatalf("owner ratio = %s, want 0.8", owner)
 	}
-	if !platform.Equal(decimal.NewFromFloat(0.2)) {
-		t.Fatalf("platform ratio = %s, want 0.2", platform)
+	if !invite.Equal(decimal.NewFromFloat(0.2)) {
+		t.Fatalf("invite ratio = %s, want 0.2", invite)
 	}
+	if !platform.Equal(decimal.Zero) {
+		t.Fatalf("platform ratio = %s, want 0", platform)
+	}
+}
+
+func expectAccountShareBillingUserLock(mock sqlmock.Sqlmock, userID int64) {
+	mock.ExpectQuery("SELECT\\s+id\\s+FROM users.*FOR UPDATE").
+		WithArgs(userID).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(userID))
+}
+
+func accountShareSeatChargeCompensationRows(
+	settlementID,
+	membershipID,
+	listingID,
+	accountID,
+	ownerUserID,
+	consumerUserID,
+	apiKeyID int64,
+	charge,
+	ownerCredit,
+	platformCredit decimal.Decimal,
+	joinedAt,
+	windowStart,
+	windowEnd time.Time,
+) *sqlmock.Rows {
+	return sqlmock.NewRows([]string{
+		"id",
+		"membership_id",
+		"listing_id",
+		"account_id",
+		"owner_user_id",
+		"consumer_user_id",
+		"api_key_id",
+		"hourly_charge",
+		"owner_credit",
+		"invite_credit",
+		"platform_credit",
+		"hourly_rate_snapshot",
+		"policy_id",
+		"policy_version",
+		"owner_share_ratio_snapshot",
+		"inviter_user_id",
+		"invite_bound_at_snapshot",
+		"invite_expires_at_snapshot",
+		"invite_share_ratio_snapshot",
+		"platform_share_ratio_snapshot",
+		"waiver_minimum",
+		"status",
+		"queue_rank",
+		"idle_timeout_minutes",
+		"joined_at",
+		"period_started_at",
+		"period_ended_at",
+		"created_at",
+		"updated_at",
+	}).AddRow(
+		settlementID,
+		membershipID,
+		listingID,
+		accountID,
+		ownerUserID,
+		consumerUserID,
+		apiKeyID,
+		charge.StringFixed(10),
+		ownerCredit.StringFixed(10),
+		"0.0000000000",
+		platformCredit.StringFixed(10),
+		"1.88000000",
+		nil,
+		0,
+		"0.90000000",
+		nil,
+		nil,
+		nil,
+		"0.00000000",
+		"0.10000000",
+		"1.88000000",
+		service.AccountShareMembershipStatusEnded,
+		1,
+		0,
+		joinedAt,
+		windowStart,
+		windowEnd,
+		windowEnd,
+		windowEnd,
+	)
 }
 
 type accountShareListingRowData struct {

@@ -26,6 +26,11 @@ const (
 	RunModeSimple   = "simple"
 )
 
+const (
+	DatabaseMigrationModeMigrate  = "migrate"
+	DatabaseMigrationModeValidate = "validate"
+)
+
 // 使用量记录队列溢出策略
 const (
 	UsageRecordOverflowPolicyDrop   = "drop"
@@ -68,6 +73,7 @@ const maxGatewaySchedulingIndexedCandidateLimit = 1024
 
 type Config struct {
 	Server                  ServerConfig                  `mapstructure:"server"`
+	Cluster                 ClusterConfig                 `mapstructure:"cluster"`
 	Log                     LogConfig                     `mapstructure:"log"`
 	CORS                    CORSConfig                    `mapstructure:"cors"`
 	Security                SecurityConfig                `mapstructure:"security"`
@@ -549,17 +555,35 @@ type PricingConfig struct {
 }
 
 type ServerConfig struct {
-	Host                   string    `mapstructure:"host"`
-	Port                   int       `mapstructure:"port"`
-	Mode                   string    `mapstructure:"mode"`                     // debug/release
-	EnableServerTiming     bool      `mapstructure:"enable_server_timing"`     // 已认证管理端/用户端 Web API 性能指标
-	FrontendURL            string    `mapstructure:"frontend_url"`             // 前端基础 URL，用于生成邮件中的外部链接
-	ReadHeaderTimeout      int       `mapstructure:"read_header_timeout"`      // 读取请求头超时（秒）
-	IdleTimeout            int       `mapstructure:"idle_timeout"`             // 空闲连接超时（秒）
-	ShutdownTimeoutSeconds int       `mapstructure:"shutdown_timeout_seconds"` // HTTP 服务与应用清理的单阶段退出预算（秒）
-	TrustedProxies         []string  `mapstructure:"trusted_proxies"`          // 可信代理列表（CIDR/IP）
-	MaxRequestBodySize     int64     `mapstructure:"max_request_body_size"`    // 全局最大请求体限制
-	H2C                    H2CConfig `mapstructure:"h2c"`                      // HTTP/2 Cleartext 配置
+	Host                    string    `mapstructure:"host"`
+	Port                    int       `mapstructure:"port"`
+	Mode                    string    `mapstructure:"mode"`                       // debug/release
+	EnableServerTiming      bool      `mapstructure:"enable_server_timing"`       // 已认证管理端/用户端 Web API 性能指标
+	FrontendURL             string    `mapstructure:"frontend_url"`               // 前端基础 URL，用于生成邮件中的外部链接
+	ReadHeaderTimeout       int       `mapstructure:"read_header_timeout"`        // 读取请求头超时（秒）
+	IdleTimeout             int       `mapstructure:"idle_timeout"`               // 空闲连接超时（秒）
+	ShutdownTimeoutSeconds  int       `mapstructure:"shutdown_timeout_seconds"`   // HTTP 服务与应用清理的单阶段退出预算（秒）
+	DrainDelaySeconds       int       `mapstructure:"drain_delay_seconds"`        // readiness 失败后等待负载均衡器摘流的时间（秒）
+	HTTPDrainTimeoutSeconds int       `mapstructure:"http_drain_timeout_seconds"` // HTTP/SSE/WebSocket 连接排空预算（秒）
+	CleanupTimeoutSeconds   int       `mapstructure:"cleanup_timeout_seconds"`    // 应用资源清理预算（秒）
+	TrustedProxies          []string  `mapstructure:"trusted_proxies"`            // 可信代理列表（CIDR/IP）
+	MaxRequestBodySize      int64     `mapstructure:"max_request_body_size"`      // 全局最大请求体限制
+	H2C                     H2CConfig `mapstructure:"h2c"`                        // HTTP/2 Cleartext 配置
+}
+
+// ClusterConfig 定义多实例协调参数。默认关闭，保持单实例部署兼容。
+type ClusterConfig struct {
+	Enabled                       bool   `mapstructure:"enabled"`
+	DeploymentID                  string `mapstructure:"deployment_id"`
+	NodeID                        string `mapstructure:"node_id"`
+	ExpectedNodes                 int    `mapstructure:"expected_nodes"`
+	HeartbeatIntervalSeconds      int    `mapstructure:"heartbeat_interval_seconds"`
+	NodeTTLSeconds                int    `mapstructure:"node_ttl_seconds"`
+	OfflineAfterSeconds           int    `mapstructure:"offline_after_seconds"`
+	TaskLeaseSeconds              int    `mapstructure:"task_lease_seconds"`
+	TaskRenewIntervalSeconds      int    `mapstructure:"task_renew_interval_seconds"`
+	OperationPollIntervalSeconds  int    `mapstructure:"operation_poll_interval_seconds"`
+	CacheReconcileIntervalSeconds int    `mapstructure:"cache_reconcile_interval_seconds"`
 }
 
 const (
@@ -574,6 +598,18 @@ func (c ServerConfig) ShutdownTimeout() time.Duration {
 		return defaultServerShutdownTimeoutSeconds * time.Second
 	}
 	return time.Duration(c.ShutdownTimeoutSeconds) * time.Second
+}
+
+func (c ServerConfig) DrainDelay() time.Duration {
+	return time.Duration(c.DrainDelaySeconds) * time.Second
+}
+
+func (c ServerConfig) HTTPDrainTimeout() time.Duration {
+	return time.Duration(c.HTTPDrainTimeoutSeconds) * time.Second
+}
+
+func (c ServerConfig) CleanupTimeout() time.Duration {
+	return time.Duration(c.CleanupTimeoutSeconds) * time.Second
 }
 
 type ServerListenNetwork string
@@ -1254,6 +1290,8 @@ type DatabaseConfig struct {
 	Password string `mapstructure:"password"`
 	DBName   string `mapstructure:"dbname"`
 	SSLMode  string `mapstructure:"sslmode"`
+	// MigrationMode: migrate 自动应用迁移（单实例兼容默认值）；validate 仅校验迁移状态。
+	MigrationMode string `mapstructure:"migration_mode"`
 	// 连接池配置（性能优化：可配置化连接池参数）
 	// MaxOpenConns: 最大打开连接数，控制数据库连接上限，防止资源耗尽
 	MaxOpenConns int `mapstructure:"max_open_conns"`
@@ -1691,6 +1729,9 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 		cfg.Server.Mode = "debug"
 	}
 	cfg.Server.FrontendURL = strings.TrimSpace(cfg.Server.FrontendURL)
+	cfg.Cluster.DeploymentID = strings.TrimSpace(cfg.Cluster.DeploymentID)
+	cfg.Cluster.NodeID = strings.TrimSpace(cfg.Cluster.NodeID)
+	cfg.Database.MigrationMode = strings.ToLower(strings.TrimSpace(cfg.Database.MigrationMode))
 	cfg.JWT.Secret = strings.TrimSpace(cfg.JWT.Secret)
 	cfg.LinuxDo.ClientID = strings.TrimSpace(cfg.LinuxDo.ClientID)
 	cfg.LinuxDo.ClientSecret = strings.TrimSpace(cfg.LinuxDo.ClientSecret)
@@ -1777,9 +1818,15 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	}
 
 	originalJWTSecret := cfg.JWT.Secret
+	if cfg.Cluster.Enabled && originalJWTSecret == "" {
+		return nil, fmt.Errorf("jwt.secret is required when cluster.enabled=true; set one fixed secret shared by every node")
+	}
 
 	cfg.Totp.EncryptionKey = strings.TrimSpace(cfg.Totp.EncryptionKey)
 	if cfg.Totp.EncryptionKey == "" {
+		if cfg.Cluster.Enabled {
+			return nil, fmt.Errorf("totp.encryption_key is required when cluster.enabled=true; set a fixed 64-character hex key shared by every node")
+		}
 		if !allowMissingJWTSecret || originalJWTSecret != "" {
 			return nil, fmt.Errorf("totp.encryption_key is required; run setup again or set TOTP_ENCRYPTION_KEY to a fixed 64-character hex key")
 		}
@@ -1839,6 +1886,9 @@ func setDefaults() {
 	viper.SetDefault("server.read_header_timeout", 30) // 30秒读取请求头
 	viper.SetDefault("server.idle_timeout", 120)       // 120秒空闲超时
 	viper.SetDefault("server.shutdown_timeout_seconds", defaultServerShutdownTimeoutSeconds)
+	viper.SetDefault("server.drain_delay_seconds", 10)
+	viper.SetDefault("server.http_drain_timeout_seconds", 300)
+	viper.SetDefault("server.cleanup_timeout_seconds", 30)
 	viper.SetDefault("server.trusted_proxies", []string{})
 	viper.SetDefault("server.max_request_body_size", int64(256*1024*1024))
 	// H2C 默认配置
@@ -1848,6 +1898,19 @@ func setDefaults() {
 	viper.SetDefault("server.h2c.max_read_frame_size", 1<<20)              // 1MB（够用）
 	viper.SetDefault("server.h2c.max_upload_buffer_per_connection", 2<<20) // 2MB
 	viper.SetDefault("server.h2c.max_upload_buffer_per_stream", 512<<10)   // 512KB
+
+	// Cluster（默认关闭，保持单实例兼容）
+	viper.SetDefault("cluster.enabled", false)
+	viper.SetDefault("cluster.deployment_id", "")
+	viper.SetDefault("cluster.node_id", "")
+	viper.SetDefault("cluster.expected_nodes", 3)
+	viper.SetDefault("cluster.heartbeat_interval_seconds", 10)
+	viper.SetDefault("cluster.node_ttl_seconds", 30)
+	viper.SetDefault("cluster.offline_after_seconds", 300)
+	viper.SetDefault("cluster.task_lease_seconds", 60)
+	viper.SetDefault("cluster.task_renew_interval_seconds", 20)
+	viper.SetDefault("cluster.operation_poll_interval_seconds", 2)
+	viper.SetDefault("cluster.cache_reconcile_interval_seconds", 60)
 
 	// Log
 	viper.SetDefault("log.level", "info")
@@ -1985,8 +2048,9 @@ func setDefaults() {
 	viper.SetDefault("database.password", "postgres")
 	viper.SetDefault("database.dbname", "sub2api")
 	viper.SetDefault("database.sslmode", "prefer")
-	viper.SetDefault("database.max_open_conns", 350)
-	viper.SetDefault("database.max_idle_conns", 100)
+	viper.SetDefault("database.migration_mode", DatabaseMigrationModeMigrate)
+	viper.SetDefault("database.max_open_conns", 50)
+	viper.SetDefault("database.max_idle_conns", 15)
 	viper.SetDefault("database.conn_max_lifetime_minutes", 30)
 	viper.SetDefault("database.conn_max_idle_time_minutes", 5)
 
@@ -1998,8 +2062,8 @@ func setDefaults() {
 	viper.SetDefault("redis.dial_timeout_seconds", 5)
 	viper.SetDefault("redis.read_timeout_seconds", 3)
 	viper.SetDefault("redis.write_timeout_seconds", 3)
-	viper.SetDefault("redis.pool_size", 1024)
-	viper.SetDefault("redis.min_idle_conns", 128)
+	viper.SetDefault("redis.pool_size", 128)
+	viper.SetDefault("redis.min_idle_conns", 16)
 	viper.SetDefault("redis.enable_tls", false)
 
 	// Ops (vNext)
@@ -2310,6 +2374,54 @@ func (c *Config) Validate() error {
 	if len([]byte(jwtSecret)) < 32 {
 		return fmt.Errorf("jwt.secret must be at least 32 bytes")
 	}
+	if c.Cluster.Enabled {
+		if strings.TrimSpace(c.Cluster.DeploymentID) == "" {
+			return fmt.Errorf("cluster.deployment_id is required when cluster.enabled=true")
+		}
+		if strings.TrimSpace(c.Cluster.NodeID) == "" {
+			return fmt.Errorf("cluster.node_id is required when cluster.enabled=true")
+		}
+		if c.Cluster.ExpectedNodes < 1 {
+			return fmt.Errorf("cluster.expected_nodes must be at least 1 when cluster.enabled=true")
+		}
+		if c.Cluster.HeartbeatIntervalSeconds <= 0 {
+			return fmt.Errorf("cluster.heartbeat_interval_seconds must be positive when cluster.enabled=true")
+		}
+		if c.Cluster.NodeTTLSeconds <= 0 {
+			return fmt.Errorf("cluster.node_ttl_seconds must be positive when cluster.enabled=true")
+		}
+		if c.Cluster.HeartbeatIntervalSeconds >= c.Cluster.NodeTTLSeconds {
+			return fmt.Errorf("cluster.heartbeat_interval_seconds must be less than cluster.node_ttl_seconds")
+		}
+		if c.Cluster.OfflineAfterSeconds < c.Cluster.NodeTTLSeconds {
+			return fmt.Errorf("cluster.offline_after_seconds must be greater than or equal to cluster.node_ttl_seconds")
+		}
+		if c.Cluster.TaskLeaseSeconds <= 0 {
+			return fmt.Errorf("cluster.task_lease_seconds must be positive when cluster.enabled=true")
+		}
+		if c.Cluster.TaskRenewIntervalSeconds <= 0 {
+			return fmt.Errorf("cluster.task_renew_interval_seconds must be positive when cluster.enabled=true")
+		}
+		if c.Cluster.TaskRenewIntervalSeconds >= c.Cluster.TaskLeaseSeconds {
+			return fmt.Errorf("cluster.task_renew_interval_seconds must be less than cluster.task_lease_seconds")
+		}
+		if c.Cluster.OperationPollIntervalSeconds <= 0 {
+			return fmt.Errorf("cluster.operation_poll_interval_seconds must be positive when cluster.enabled=true")
+		}
+		if c.Cluster.CacheReconcileIntervalSeconds <= 0 {
+			return fmt.Errorf("cluster.cache_reconcile_interval_seconds must be positive when cluster.enabled=true")
+		}
+		totpKey := strings.TrimSpace(c.Totp.EncryptionKey)
+		if len(totpKey) != 64 {
+			return fmt.Errorf("totp.encryption_key must be a fixed 64-character hex key when cluster.enabled=true")
+		}
+		if _, err := hex.DecodeString(totpKey); err != nil {
+			return fmt.Errorf("totp.encryption_key must be a fixed 64-character hex key when cluster.enabled=true")
+		}
+		if c.Database.MigrationMode != DatabaseMigrationModeValidate {
+			return fmt.Errorf("database.migration_mode must be validate when cluster.enabled=true; run migrations separately with --migrate-only")
+		}
+	}
 	switch c.Log.Level {
 	case "debug", "info", "warn", "error":
 	case "":
@@ -2430,6 +2542,15 @@ func (c *Config) Validate() error {
 	}
 	if c.Server.ShutdownTimeoutSeconds < 0 || c.Server.ShutdownTimeoutSeconds > maxServerShutdownTimeoutSeconds {
 		return fmt.Errorf("server.shutdown_timeout_seconds must be 0 or between 1-%d seconds", maxServerShutdownTimeoutSeconds)
+	}
+	if c.Server.DrainDelaySeconds <= 0 {
+		return fmt.Errorf("server.drain_delay_seconds must be positive")
+	}
+	if c.Server.HTTPDrainTimeoutSeconds <= 0 {
+		return fmt.Errorf("server.http_drain_timeout_seconds must be positive")
+	}
+	if c.Server.CleanupTimeoutSeconds <= 0 {
+		return fmt.Errorf("server.cleanup_timeout_seconds must be positive")
 	}
 	if c.JWT.ExpireHour <= 0 {
 		return fmt.Errorf("jwt.expire_hour must be positive")
@@ -2643,6 +2764,11 @@ func (c *Config) Validate() error {
 		if c.Billing.CircuitBreaker.HalfOpenRequests <= 0 {
 			return fmt.Errorf("billing.circuit_breaker.half_open_requests must be positive")
 		}
+	}
+	switch c.Database.MigrationMode {
+	case DatabaseMigrationModeMigrate, DatabaseMigrationModeValidate:
+	default:
+		return fmt.Errorf("database.migration_mode must be one of: migrate/validate")
 	}
 	if c.Database.MaxOpenConns <= 0 {
 		return fmt.Errorf("database.max_open_conns must be positive")

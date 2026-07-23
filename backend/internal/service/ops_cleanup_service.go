@@ -53,6 +53,7 @@ type OpsCleanupService struct {
 	cfg               *config.Config
 	channelMonitorSvc *ChannelMonitorService
 	archiveCreator    opsCleanupArchiveCreator
+	taskExecutor      *ClusterTaskExecutor
 
 	instanceID string
 
@@ -238,6 +239,20 @@ func (s *OpsCleanupService) runScheduled(triggerSchedule string) {
 	ctx, cancel := context.WithTimeout(parentCtx, time.Duration(cleanupCfg.RunTimeoutSeconds)*time.Second)
 	defer cancel()
 
+	if s.cfg.Cluster.Enabled {
+		if s.taskExecutor == nil {
+			logger.LegacyPrintf("service.ops_cleanup", "[OpsCleanup] cluster task executor is not configured")
+			return
+		}
+		_, taskErr := s.taskExecutor.Run(ctx, opsCleanupJobName, func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+			return s.runCleanupOwned(taskCtx, cleanupCfg, loc, guard)
+		})
+		if taskErr != nil {
+			logger.LegacyPrintf("service.ops_cleanup", "[OpsCleanup] cleanup failed: %v", taskErr)
+		}
+		return
+	}
+
 	release, ok := s.tryAcquireLeaderLock(ctx)
 	if !ok {
 		return
@@ -246,17 +261,34 @@ func (s *OpsCleanupService) runScheduled(triggerSchedule string) {
 		defer release()
 	}
 
+	if err := s.runCleanupOwned(ctx, cleanupCfg, loc, &ClusterLeaseGuard{}); err != nil {
+		logger.LegacyPrintf("service.ops_cleanup", "[OpsCleanup] cleanup failed: %v", err)
+	}
+}
+
+func (s *OpsCleanupService) runCleanupOwned(
+	ctx context.Context,
+	cleanupCfg config.OpsCleanupConfig,
+	loc *time.Location,
+	guard *ClusterLeaseGuard,
+) error {
 	startedAt := time.Now().UTC()
 	runAt := startedAt
 
-	counts, err := s.runCleanupOnceWithConfig(ctx, cleanupCfg, loc)
+	counts, err := s.runCleanupOnceWithConfigGuarded(ctx, cleanupCfg, loc, guard)
 	if err != nil {
+		if guardErr := guard.Check(ctx); guardErr != nil {
+			return guardErr
+		}
 		s.recordHeartbeatError(runAt, time.Since(startedAt), err)
-		logger.LegacyPrintf("service.ops_cleanup", "[OpsCleanup] cleanup failed: %v", err)
-		return
+		return err
+	}
+	if err := guard.Check(ctx); err != nil {
+		return err
 	}
 	s.recordHeartbeatSuccess(runAt, time.Since(startedAt), counts)
 	logger.LegacyPrintf("service.ops_cleanup", "[OpsCleanup] cleanup complete: %s", counts)
+	return nil
 }
 
 type opsCleanupDeletedCounts struct {
@@ -451,6 +483,15 @@ func (s *OpsCleanupService) runCleanupOnceWithConfig(
 	cleanupCfg config.OpsCleanupConfig,
 	loc *time.Location,
 ) (opsCleanupDeletedCounts, error) {
+	return s.runCleanupOnceWithConfigGuarded(ctx, cleanupCfg, loc, &ClusterLeaseGuard{})
+}
+
+func (s *OpsCleanupService) runCleanupOnceWithConfigGuarded(
+	ctx context.Context,
+	cleanupCfg config.OpsCleanupConfig,
+	loc *time.Location,
+	guard *ClusterLeaseGuard,
+) (opsCleanupDeletedCounts, error) {
 	out := opsCleanupDeletedCounts{}
 	if s == nil || s.db == nil || loc == nil {
 		return out, fmt.Errorf("ops cleanup service is not configured")
@@ -466,7 +507,7 @@ func (s *OpsCleanupService) runCleanupOnceWithConfig(
 	runDelete := func(cutoff time.Time, table, timeCol string, castDate bool) (int64, error) {
 		deleteCtx, cancel := context.WithTimeout(ctx, time.Duration(cleanupCfg.DeleteTimeoutSeconds)*time.Second)
 		defer cancel()
-		return deleteOldRowsByID(deleteCtx, s.db, table, timeCol, cutoff, cleanupCfg.DeleteBatchSize, castDate)
+		return deleteOldRowsByIDGuarded(deleteCtx, s.db, table, timeCol, cutoff, cleanupCfg.DeleteBatchSize, castDate, guard)
 	}
 	var cleanupErr error
 	recordError := func(scope string, err error) {
@@ -478,13 +519,13 @@ func (s *OpsCleanupService) runCleanupOnceWithConfig(
 	// Archive-backed log tables run first so auxiliary-table deletion cannot consume
 	// the run budget before both durable archives have advanced.
 	if cutoff, ok := opsCleanupPlan(now, cleanupCfg.ErrorLogRetentionDays); ok {
-		n, err := s.cleanupOpsLogWindowsWithConfig(ctx, cleanupCfg, loc, "ops_error_logs", "created_at", cutoff, s.exportOpsErrorLogWindow)
+		n, err := s.cleanupOpsLogWindowsWithConfigGuarded(ctx, cleanupCfg, loc, "ops_error_logs", "created_at", cutoff, s.exportOpsErrorLogWindow, guard)
 		if err == nil {
 			out.errorLogs = n
 		}
 		recordError("cleanup ops_error_logs", err)
 
-		n, err = s.cleanupOpsLogWindowsWithConfig(ctx, cleanupCfg, loc, "ops_system_logs", "created_at", cutoff, s.exportOpsSystemLogWindow)
+		n, err = s.cleanupOpsLogWindowsWithConfigGuarded(ctx, cleanupCfg, loc, "ops_system_logs", "created_at", cutoff, s.exportOpsSystemLogWindow, guard)
 		if err == nil {
 			out.systemLogs = n
 		}
@@ -537,6 +578,9 @@ func (s *OpsCleanupService) runCleanupOnceWithConfig(
 	// 失败只记日志，不影响 ops 清理的成功状态（与 ops 各步骤风格一致）；
 	// 维护本身已经把每步错误打到 slog，heartbeat result 不再分项记录。
 	if s.channelMonitorSvc != nil {
+		if err := guard.Check(ctx); err != nil {
+			return out, errors.Join(cleanupErr, err)
+		}
 		if err := s.channelMonitorSvc.RunDailyMaintenance(ctx); err != nil {
 			logger.LegacyPrintf("service.ops_cleanup", "[OpsCleanup] channel monitor maintenance failed: %v", err)
 		}
@@ -588,6 +632,19 @@ func (s *OpsCleanupService) cleanupOpsLogWindowsWithConfig(
 	cutoff time.Time,
 	exportWindow opsCleanupWindowExporter,
 ) (int64, error) {
+	return s.cleanupOpsLogWindowsWithConfigGuarded(ctx, cleanupCfg, loc, table, timeColumn, cutoff, exportWindow, &ClusterLeaseGuard{})
+}
+
+func (s *OpsCleanupService) cleanupOpsLogWindowsWithConfigGuarded(
+	ctx context.Context,
+	cleanupCfg config.OpsCleanupConfig,
+	loc *time.Location,
+	table string,
+	timeColumn string,
+	cutoff time.Time,
+	exportWindow opsCleanupWindowExporter,
+	guard *ClusterLeaseGuard,
+) (int64, error) {
 	if s == nil || s.db == nil || exportWindow == nil || loc == nil {
 		return 0, fmt.Errorf("ops cleanup window dependencies are not configured")
 	}
@@ -614,7 +671,12 @@ func (s *OpsCleanupService) cleanupOpsLogWindowsWithConfig(
 		archiveCtx, archiveCancel := context.WithTimeout(ctx, time.Duration(cleanupCfg.ArchiveTimeoutSeconds)*time.Second)
 		stream, err := exportWindow(archiveCtx, window)
 		if err == nil {
+			err = guard.Check(archiveCtx)
+		}
+		if err == nil {
 			err = s.createOpsCleanupArchive(archiveCtx, table, window, stream)
+		} else if stream != nil {
+			_ = stream.Close()
 		}
 		archiveCancel()
 		if err != nil {
@@ -622,7 +684,7 @@ func (s *OpsCleanupService) cleanupOpsLogWindowsWithConfig(
 		}
 
 		deleteCtx, deleteCancel := context.WithTimeout(ctx, time.Duration(cleanupCfg.DeleteTimeoutSeconds)*time.Second)
-		deleted, err := deleteRowsByIDWindow(deleteCtx, s.db, table, timeColumn, window, cleanupCfg.DeleteBatchSize)
+		deleted, err := deleteRowsByIDWindowGuarded(deleteCtx, s.db, table, timeColumn, window, cleanupCfg.DeleteBatchSize, guard)
 		deleteCancel()
 		deletedTotal += deleted
 		if err != nil {
@@ -712,6 +774,19 @@ func deleteOldRowsByID(
 	batchSize int,
 	castCutoffToDate bool,
 ) (int64, error) {
+	return deleteOldRowsByIDGuarded(ctx, db, table, timeColumn, cutoff, batchSize, castCutoffToDate, &ClusterLeaseGuard{})
+}
+
+func deleteOldRowsByIDGuarded(
+	ctx context.Context,
+	db *sql.DB,
+	table string,
+	timeColumn string,
+	cutoff time.Time,
+	batchSize int,
+	castCutoffToDate bool,
+	guard *ClusterLeaseGuard,
+) (int64, error) {
 	if db == nil {
 		return 0, fmt.Errorf("ops cleanup database is not configured")
 	}
@@ -737,6 +812,9 @@ WHERE id IN (SELECT id FROM batch)
 
 	var total int64
 	for {
+		if err := guard.Check(ctx); err != nil {
+			return total, err
+		}
 		res, err := db.ExecContext(ctx, q, cutoff, batchSize)
 		if err != nil {
 			return total, err
@@ -761,6 +839,18 @@ func deleteRowsByIDWindow(
 	window opsCleanupWindow,
 	batchSize int,
 ) (int64, error) {
+	return deleteRowsByIDWindowGuarded(ctx, db, table, timeColumn, window, batchSize, &ClusterLeaseGuard{})
+}
+
+func deleteRowsByIDWindowGuarded(
+	ctx context.Context,
+	db *sql.DB,
+	table string,
+	timeColumn string,
+	window opsCleanupWindow,
+	batchSize int,
+	guard *ClusterLeaseGuard,
+) (int64, error) {
 	if db == nil {
 		return 0, fmt.Errorf("ops cleanup database is not configured")
 	}
@@ -782,6 +872,9 @@ WHERE id IN (SELECT id FROM batch)
 `, table, timeColumn, timeColumn, table)
 	var total int64
 	for {
+		if err := guard.Check(ctx); err != nil {
+			return total, err
+		}
 		result, err := db.ExecContext(ctx, query, window.Start.UTC(), window.End.UTC(), batchSize)
 		if err != nil {
 			return total, err

@@ -18,6 +18,7 @@ type ScheduledTestRunnerService struct {
 	scheduledSvc   *ScheduledTestService
 	accountTestSvc *AccountTestService
 	rateLimitSvc   *RateLimitService
+	taskExecutor   *ClusterTaskExecutor
 	cfg            *config.Config
 
 	cron      *cron.Cron
@@ -91,14 +92,25 @@ func (s *ScheduledTestRunnerService) runScheduled() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
+	_, err := s.taskExecutor.Run(ctx, "scheduled_test_runner", func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+		return s.runScheduledLeased(taskCtx, guard)
+	})
+	if err != nil {
+		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] execution error: %v", err)
+	}
+}
+
+func (s *ScheduledTestRunnerService) runScheduledLeased(ctx context.Context, guard *ClusterLeaseGuard) error {
+	if err := guard.Check(ctx); err != nil {
+		return err
+	}
 	now := time.Now()
 	plans, err := s.planRepo.ListDue(ctx, now)
 	if err != nil {
-		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] ListDue error: %v", err)
-		return
+		return err
 	}
 	if len(plans) == 0 {
-		return
+		return nil
 	}
 
 	logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] found %d due plans", len(plans))
@@ -112,26 +124,39 @@ func (s *ScheduledTestRunnerService) runScheduled() {
 		go func(p *ScheduledTestPlan) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			s.runOnePlan(ctx, p)
+			s.runOnePlan(ctx, guard, p)
 		}(plan)
 	}
 
 	wg.Wait()
+	return nil
 }
 
-func (s *ScheduledTestRunnerService) runOnePlan(ctx context.Context, plan *ScheduledTestPlan) {
+func (s *ScheduledTestRunnerService) runOnePlan(ctx context.Context, guard *ClusterLeaseGuard, plan *ScheduledTestPlan) {
+	if err := guard.Check(ctx); err != nil {
+		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d lease lost: %v", plan.ID, err)
+		return
+	}
 	result, err := s.accountTestSvc.RunTestBackground(ctx, plan.AccountID, plan.ModelID)
 	if err != nil {
 		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d RunTestBackground error: %v", plan.ID, err)
 		return
 	}
 
+	if err := guard.Check(ctx); err != nil {
+		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d lease lost before saving: %v", plan.ID, err)
+		return
+	}
 	if err := s.scheduledSvc.SaveResult(ctx, plan.ID, plan.MaxResults, result); err != nil {
 		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d SaveResult error: %v", plan.ID, err)
 	}
 
 	// Auto-recover account if test succeeded and auto_recover is enabled.
 	if result.Status == "success" && plan.AutoRecover {
+		if err := guard.Check(ctx); err != nil {
+			logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d lease lost before recovery: %v", plan.ID, err)
+			return
+		}
 		s.tryRecoverAccount(ctx, plan.AccountID, plan.ID)
 	}
 
@@ -141,6 +166,10 @@ func (s *ScheduledTestRunnerService) runOnePlan(ctx context.Context, plan *Sched
 		return
 	}
 
+	if err := guard.Check(ctx); err != nil {
+		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d lease lost before finalizing: %v", plan.ID, err)
+		return
+	}
 	if err := s.planRepo.UpdateAfterRun(ctx, plan.ID, time.Now(), nextRun); err != nil {
 		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d UpdateAfterRun error: %v", plan.ID, err)
 	}

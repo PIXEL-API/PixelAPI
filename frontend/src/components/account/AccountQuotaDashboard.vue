@@ -110,8 +110,16 @@
             <div class="flex min-w-0 items-start gap-2">
               <PlatformIcon :platform="platformIconValue(summary.platform)" size="sm" />
               <div class="min-w-0">
-                <div class="truncate text-sm font-semibold text-gray-900 dark:text-white">
-                  {{ groupName(summary) }}
+                <div class="flex min-w-0 items-center gap-1.5">
+                  <span class="min-w-0 truncate text-sm font-semibold text-gray-900 dark:text-white">
+                    {{ groupName(summary) }}
+                  </span>
+                  <span
+                    v-if="groupRateLabel(summary)"
+                    class="inline-flex shrink-0 items-center rounded-md border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-sky-700 dark:border-sky-800/70 dark:bg-sky-900/30 dark:text-sky-300"
+                  >
+                    {{ groupRateLabel(summary) }}
+                  </span>
                 </div>
                 <div class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">
                   {{ platformLabel(summary.platform) }} · {{ t('admin.accounts.quotaDashboard.accountBaseMeta', {
@@ -315,6 +323,7 @@ import Icon from '@/components/icons/Icon.vue'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import { formatDateTime } from '@/utils/format'
+import { formatMultiplier } from '@/utils/formatters'
 import { platformLabel } from '@/utils/platformColors'
 import {
   accountQuotaGroupHealthRank,
@@ -337,6 +346,7 @@ const props = defineProps<{
   emptyMessage?: string
   loadFailedMessage?: string
   groupCapacityById?: Record<number, GroupConcurrencyCapacity>
+  groupRateById?: Record<number, number>
 }>()
 
 const emit = defineEmits<{
@@ -566,6 +576,15 @@ function accountStatusLegendSegments(summary: AccountQuotaGroupSummary): Account
 function groupConcurrencyCapacity(summary: AccountQuotaGroupSummary): GroupConcurrencyCapacity | null {
   if (!summary.group_id) return null
   return props.groupCapacityById?.[summary.group_id] ?? null
+}
+
+function groupRateLabel(summary: AccountQuotaGroupSummary): string {
+  if (!summary.group_id) return ''
+  const rate = props.groupRateById?.[summary.group_id]
+  if (typeof rate !== 'number' || !Number.isFinite(rate)) return ''
+  return t('admin.accounts.quotaDashboard.currentGroupRate', {
+    rate: formatMultiplier(rate)
+  })
 }
 
 function groupConcurrencyAvailable(capacity: GroupConcurrencyCapacity): number {

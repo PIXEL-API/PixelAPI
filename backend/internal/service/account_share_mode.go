@@ -26,7 +26,6 @@ import (
 const (
 	AccountShareModeGroupPlatformOpenAI    = PlatformOpenAI
 	AccountShareModeGroupPlatformAnthropic = PlatformAnthropic
-	AccountShareModePolicyPlatformUnified  = "account_share_mode"
 
 	AccountShareListingStatusActive   = "active"
 	AccountShareListingStatusPaused   = "paused"
@@ -37,9 +36,6 @@ const (
 	AccountShareMembershipStatusEnded  = "ended"
 
 	AccountShareModeDefaultMinBalance               = 1.0
-	AccountShareModeDefaultPlatformShareRatio       = 0.10
-	AccountShareModeDefaultOwnerShareRatio          = 0.90
-	AccountShareModeOwnerSelfUseMultiplier          = 0.005
 	AccountShareModeDefaultCodexLimitPercent        = CodexQuotaDefaultLimitPercent
 	AccountShareModeMinSeats                        = 2
 	AccountShareModeMaxSeats                        = 12
@@ -113,6 +109,9 @@ const (
 	AccountShareReviewModerationInterval            = 15 * time.Second
 	AccountShareReviewModerationBatchSize           = 20
 	AccountShareReviewModerationMaxAttempts         = 5
+	accountShareSeatBillingTaskName                 = "account_share_seat_billing"
+	accountShareSeatWaiverCompensationTaskName      = "account_share_seat_waiver_compensation"
+	accountShareReviewModerationTaskName            = "account_share_review_moderation"
 	accountShareModeContextBindingMissingError      = "该分组未绑定账号"
 	accountShareModeEndMembershipTokenAction        = "account_share_mode:end_membership:v1"
 )
@@ -693,15 +692,6 @@ type AccountShareIdleMembershipCandidate struct {
 	Deadline     time.Time
 }
 
-type AccountShareModePolicy struct {
-	ID                 int64   `json:"id,omitempty"`
-	Platform           string  `json:"platform"`
-	PlatformShareRatio float64 `json:"platform_share_ratio"`
-	OwnerShareRatio    float64 `json:"owner_share_ratio"`
-	Enabled            bool    `json:"enabled"`
-	Version            int     `json:"version"`
-}
-
 type AccountShareModeGroup struct {
 	GroupID  int64  `json:"group_id"`
 	Platform string `json:"platform"`
@@ -719,7 +709,10 @@ type AccountShareModeBillingSnapshot struct {
 	TotalCharge        float64
 	RateMultiplier     float64
 	HourlyRate         float64
+	PolicyID           *int64
+	PolicyVersion      int
 	OwnerShareRatio    float64
+	InviteShareRatio   float64
 	PlatformShareRatio float64
 	DurationMs         int
 }
@@ -799,13 +792,6 @@ type BeginAccountShareListingEditInput struct {
 	Expires   time.Time
 }
 
-type UpdateAccountShareModePolicyInput struct {
-	Platform           string
-	PlatformShareRatio *float64
-	OwnerShareRatio    *float64
-	Enabled            *bool
-}
-
 type CreateAccountShareProxyInput struct {
 	Name     string
 	Protocol string
@@ -838,7 +824,7 @@ type AccountShareModeRepository interface {
 	ReleaseListingEdit(ctx context.Context, actorUserID int64, actorIsAdmin bool, listingID int64, sessionID string) (*AccountShareListing, error)
 	UpdateListing(ctx context.Context, actorUserID int64, actorIsAdmin bool, listingID int64, input UpdateAccountShareListingInput) (*AccountShareListing, error)
 	JoinListing(ctx context.Context, consumerUserID int64, apiKeyID int64, listingID int64, idleTimeoutMinutes int) (*AccountShareMembership, error)
-	EndMembership(ctx context.Context, consumerUserID int64, membershipID int64) (*AccountShareMembership, error)
+	EndMembership(ctx context.Context, consumerUserID int64, membershipID int64) (*AccountShareMembership, *AccountShareSeatBillingResult, error)
 	UpdateMembershipIdleTimeout(ctx context.Context, consumerUserID int64, membershipID int64, idleTimeoutMinutes int) (*AccountShareMembership, error)
 	SubmitReview(ctx context.Context, consumerUserID int64, membershipID int64, input SubmitAccountShareReviewInput) (*AccountShareReview, error)
 	ListListingReviews(ctx context.Context, viewerUserID int64, listingID int64, params pagination.PaginationParams) ([]AccountShareReview, *pagination.PaginationResult, error)
@@ -850,10 +836,10 @@ type AccountShareModeRepository interface {
 	ReorderMembershipQueue(ctx context.Context, consumerUserID int64, apiKeyID int64, membershipIDs []int64) ([]AccountShareMembership, error)
 	TouchMembershipLastRequest(ctx context.Context, membershipID int64, at time.Time) error
 	ListIdleMembershipCandidates(ctx context.Context, now time.Time, filter AccountShareIdleMembershipFilter, limit int) ([]AccountShareIdleMembershipCandidate, error)
-	EndIdleMembership(ctx context.Context, membershipID int64, endedAt time.Time) (*AccountShareMembership, error)
+	EndIdleMembership(ctx context.Context, membershipID int64, endedAt time.Time) (*AccountShareMembership, *AccountShareSeatBillingResult, error)
 	ProcessUnavailableMemberships(ctx context.Context, now time.Time, limit int) (*AccountShareSeatBillingResult, error)
 	ListRecoverableUnavailableMembershipIDs(ctx context.Context, now time.Time, limit int) ([]int64, error)
-	SuspendRecoverableUnavailableMembership(ctx context.Context, membershipID int64, unavailableAt time.Time) (*AccountShareMembership, error)
+	SuspendRecoverableUnavailableMembership(ctx context.Context, membershipID int64, unavailableAt time.Time) (*AccountShareMembership, *AccountShareSeatBillingResult, error)
 	EndUnavailableAccountMemberships(ctx context.Context, accountID int64, endedAt time.Time, limit int) (*AccountShareSeatBillingResult, error)
 	DisablePermanentlyUnavailableListings(ctx context.Context, now time.Time, limit int) (*AccountShareListingMaintenanceResult, error)
 	ProcessSeatBilling(ctx context.Context, now time.Time, limit int) (*AccountShareSeatBillingResult, error)
@@ -863,9 +849,8 @@ type AccountShareModeRepository interface {
 	GetActiveMembershipForAPIKey(ctx context.Context, apiKeyID int64) (*AccountShareMembership, *AccountShareListing, error)
 	GetActiveMembershipForRequest(ctx context.Context, userID, apiKeyID, groupID int64) (*AccountShareMembership, *AccountShareListing, error)
 	ActivateNextQueuedMembershipForRequest(ctx context.Context, userID, apiKeyID, groupID int64, afterRank int, now time.Time) (*AccountShareMembership, *AccountShareListing, error)
-	SuspendMembershipForDispatchFailure(ctx context.Context, membershipID int64, failedAt time.Time, cooldownUntil time.Time) (*AccountShareMembership, error)
-	ResolvePolicy(ctx context.Context, platform string) (*AccountShareModePolicy, error)
-	UpsertPolicy(ctx context.Context, input UpdateAccountShareModePolicyInput) (*AccountShareModePolicy, error)
+	SuspendMembershipForDispatchFailure(ctx context.Context, membershipID int64, failedAt time.Time, cooldownUntil time.Time) (*AccountShareMembership, *AccountShareSeatBillingResult, error)
+	ResolvePolicy(ctx context.Context) (*AccountSharePolicy, error)
 }
 
 type AccountShareModeProxyRepository interface {
@@ -901,6 +886,7 @@ type AccountShareModeService struct {
 	settingService       *SettingService
 	reviewSettingRepo    SettingRepository
 	reviewHTTPClient     *http.Client
+	taskExecutor         *ClusterTaskExecutor
 	actionTokenSecret    []byte
 	seatBillingStopCh    chan struct{}
 	seatBillingStopOnce  sync.Once
@@ -968,6 +954,24 @@ func (s *AccountShareModeService) SetSettingService(settingService *SettingServi
 		return
 	}
 	s.settingService = settingService
+}
+
+func (s *AccountShareModeService) ResolveOwnerSelfUseMultiplier(ctx context.Context) (float64, error) {
+	if s == nil || s.settingService == nil {
+		return 0, ErrServiceUnavailable
+	}
+	settings, err := s.settingService.GetAllSettings(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if settings == nil {
+		return 0, ErrServiceUnavailable
+	}
+	ratio := settings.UserPrivateGroupCommissionRate
+	if invalidNonNegativeFloat(ratio) || ratio > 1 {
+		return 0, fmt.Errorf("invalid %s: %v", SettingKeyUserPrivateGroupCommissionRate, ratio)
+	}
+	return ratio, nil
 }
 
 func (s *AccountShareModeService) openAIAccountLevelConfigs(ctx context.Context) ([]OpenAIAccountLevelConfig, error) {
@@ -1048,21 +1052,46 @@ func (s *AccountShareModeService) processSeatBillingOnce() {
 	if s == nil || s.repo == nil {
 		return
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	_, err := s.taskExecutor.Run(ctx, accountShareSeatBillingTaskName, func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+		return s.processSeatBillingOnceLeased(taskCtx, guard)
+	})
+	if err != nil {
+		log.Printf("account_share_mode: seat billing lease failed: %v", err)
+	}
+}
+
+func (s *AccountShareModeService) processSeatBillingOnceLeased(ctx context.Context, guard *ClusterLeaseGuard) error {
+	if err := guard.Check(ctx); err != nil {
+		return err
+	}
 	s.processUnavailableMembershipsOnce()
+	if err := guard.Check(ctx); err != nil {
+		return err
+	}
 	s.processPermanentlyUnavailableListingsOnce()
+	if err := guard.Check(ctx); err != nil {
+		return err
+	}
 	s.processRecoverableUnavailableMembershipsOnce()
+	if err := guard.Check(ctx); err != nil {
+		return err
+	}
 	s.processIdleMembershipsOnce()
 	for {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		result, err := s.repo.ProcessSeatBilling(ctx, time.Now().UTC(), AccountShareModeSeatBillingBatchSize)
+		if err := guard.Check(ctx); err != nil {
+			return err
+		}
+		batchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		result, err := s.repo.ProcessSeatBilling(batchCtx, time.Now().UTC(), AccountShareModeSeatBillingBatchSize)
 		cancel()
 		if err != nil {
-			log.Printf("account_share_mode: process prepaid seat billing failed: %v", err)
-			return
+			return fmt.Errorf("process prepaid seat billing: %w", err)
 		}
 		s.invalidateSeatBillingCaches(result)
 		if result == nil || result.Processed < AccountShareModeSeatBillingBatchSize {
-			return
+			return nil
 		}
 	}
 }
@@ -1072,13 +1101,25 @@ func (s *AccountShareModeService) processSeatWaiverCompensationsOnce() {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), AccountShareModeSeatWaiverCompensationTimeout)
-	result, err := s.repo.ProcessSeatWaiverCompensations(ctx, time.Now().UTC(), AccountShareModeSeatWaiverCompensationBatchSize)
-	cancel()
+	defer cancel()
+	_, err := s.taskExecutor.Run(ctx, accountShareSeatWaiverCompensationTaskName, func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+		if err := guard.Check(taskCtx); err != nil {
+			return err
+		}
+		result, err := s.repo.ProcessSeatWaiverCompensations(
+			taskCtx,
+			time.Now().UTC(),
+			AccountShareModeSeatWaiverCompensationBatchSize,
+		)
+		if err != nil {
+			return fmt.Errorf("process seat waiver compensations: %w", err)
+		}
+		s.invalidateSeatBillingCaches(result)
+		return nil
+	})
 	if err != nil {
 		log.Printf("account_share_mode: process seat waiver compensations failed: %v", err)
-		return
 	}
-	s.invalidateSeatBillingCaches(result)
 }
 
 func (s *AccountShareModeService) processUnavailableMembershipsOnce() {
@@ -1156,7 +1197,7 @@ func (s *AccountShareModeService) processRecoverableUnavailableMemberships(ctx c
 		if active {
 			continue
 		}
-		membership, err := s.repo.SuspendRecoverableUnavailableMembership(ctx, membershipID, now)
+		membership, billing, err := s.repo.SuspendRecoverableUnavailableMembership(ctx, membershipID, now)
 		if err != nil {
 			if errors.Is(err, ErrAccountShareListingNotFound) {
 				continue
@@ -1166,9 +1207,7 @@ func (s *AccountShareModeService) processRecoverableUnavailableMemberships(ctx c
 		if membership == nil {
 			continue
 		}
-		result.DebitUserIDs = append(result.DebitUserIDs, membership.ConsumerUserID)
-		result.CreditUserIDs = append(result.CreditUserIDs, membership.OwnerUserID)
-		result.EndedConsumerUserIDs = append(result.EndedConsumerUserIDs, membership.ConsumerUserID)
+		appendAccountShareSeatBillingResult(result, billing)
 	}
 	return result, nil
 }
@@ -1214,7 +1253,7 @@ func (s *AccountShareModeService) processIdleMemberships(ctx context.Context, no
 		if active {
 			continue
 		}
-		membership, err := s.repo.EndIdleMembership(ctx, candidate.MembershipID, candidate.Deadline)
+		membership, billing, err := s.repo.EndIdleMembership(ctx, candidate.MembershipID, candidate.Deadline)
 		if err != nil {
 			if errors.Is(err, ErrAccountShareListingNotFound) {
 				continue
@@ -1224,9 +1263,7 @@ func (s *AccountShareModeService) processIdleMemberships(ctx context.Context, no
 		if membership == nil {
 			continue
 		}
-		result.DebitUserIDs = append(result.DebitUserIDs, membership.ConsumerUserID)
-		result.CreditUserIDs = append(result.CreditUserIDs, membership.OwnerUserID)
-		result.EndedConsumerUserIDs = append(result.EndedConsumerUserIDs, membership.ConsumerUserID)
+		appendAccountShareSeatBillingResult(result, billing)
 	}
 	s.invalidateSeatBillingCaches(result)
 	return result, nil
@@ -1248,6 +1285,15 @@ func (s *AccountShareModeService) invalidateSeatBillingCaches(result *AccountSha
 			s.authCacheInvalidator.InvalidateAuthCacheByUserID(context.Background(), userID)
 		}
 	}
+}
+
+func appendAccountShareSeatBillingResult(target, source *AccountShareSeatBillingResult) {
+	if target == nil || source == nil {
+		return
+	}
+	target.DebitUserIDs = append(target.DebitUserIDs, source.DebitUserIDs...)
+	target.CreditUserIDs = append(target.CreditUserIDs, source.CreditUserIDs...)
+	target.EndedConsumerUserIDs = append(target.EndedConsumerUserIDs, source.EndedConsumerUserIDs...)
 }
 
 func (s *AccountShareModeService) EnsureModeGroup(ctx context.Context, platform string) (*Group, error) {
@@ -2009,7 +2055,11 @@ func (s *AccountShareModeService) estimateAccountShareRecommendationCost(ctx con
 	minBalanceRequired := listing.MinBalanceRequired
 	ownerSelfUse := listing.OwnerUserID == viewerUserID
 	if ownerSelfUse {
-		rateMultiplier = AccountShareModeOwnerSelfUseMultiplier
+		var err error
+		rateMultiplier, err = s.ResolveOwnerSelfUseMultiplier(ctx)
+		if err != nil {
+			return AccountShareRecommendationEstimate{}, err
+		}
 		hourlyRate = 0
 		waiverMinimum = 0
 		minBalanceRequired = 0
@@ -2694,7 +2744,7 @@ func (s *AccountShareModeService) EndMembership(ctx context.Context, consumerUse
 	if err := s.validateEndMembershipToken(confirmationToken, consumerUserID, membershipID, time.Now().UTC()); err != nil {
 		return nil, err
 	}
-	membership, err := s.repo.EndMembership(ctx, consumerUserID, membershipID)
+	membership, billing, err := s.repo.EndMembership(ctx, consumerUserID, membershipID)
 	if err != nil {
 		return nil, err
 	}
@@ -2703,10 +2753,7 @@ func (s *AccountShareModeService) EndMembership(ctx context.Context, consumerUse
 			s.authCacheInvalidator.InvalidateAuthCacheByKey(ctx, key.Key)
 		}
 	}
-	s.invalidateSeatBillingCaches(&AccountShareSeatBillingResult{
-		DebitUserIDs:  []int64{membership.ConsumerUserID},
-		CreditUserIDs: []int64{membership.OwnerUserID},
-	})
+	s.invalidateSeatBillingCaches(billing)
 	return membership, nil
 }
 
@@ -2950,18 +2997,14 @@ func (s *AccountShareModeService) suspendMembershipForDispatchFailure(ctx contex
 		log.Printf("account_share_mode: dispatch suspension skipped for active membership: membership_id=%d", membership.ID)
 		return &AccountShareSeatBillingResult{}, false, nil
 	}
-	suspended, err := s.repo.SuspendMembershipForDispatchFailure(ctx, membership.ID, now, now.Add(AccountShareModeDispatchCooldown))
+	suspended, billing, err := s.repo.SuspendMembershipForDispatchFailure(ctx, membership.ID, now, now.Add(AccountShareModeDispatchCooldown))
 	if err != nil {
 		return nil, false, err
 	}
 	if suspended == nil {
 		return &AccountShareSeatBillingResult{}, false, nil
 	}
-	return &AccountShareSeatBillingResult{
-		DebitUserIDs:         []int64{suspended.ConsumerUserID},
-		CreditUserIDs:        []int64{suspended.OwnerUserID},
-		EndedConsumerUserIDs: []int64{suspended.ConsumerUserID},
-	}, true, nil
+	return billing, true, nil
 }
 
 func (s *AccountShareModeService) endIdleMembershipForRequest(ctx context.Context, membership *AccountShareMembership, now time.Time) (bool, error) {
@@ -2979,7 +3022,7 @@ func (s *AccountShareModeService) endIdleMembershipForRequest(ctx context.Contex
 	if active {
 		return false, nil
 	}
-	ended, err := s.repo.EndIdleMembership(ctx, membership.ID, *deadline)
+	ended, billing, err := s.repo.EndIdleMembership(ctx, membership.ID, *deadline)
 	if err != nil {
 		if errors.Is(err, ErrAccountShareListingNotFound) {
 			return true, nil
@@ -2987,11 +3030,7 @@ func (s *AccountShareModeService) endIdleMembershipForRequest(ctx context.Contex
 		return false, err
 	}
 	if ended != nil {
-		s.invalidateSeatBillingCaches(&AccountShareSeatBillingResult{
-			DebitUserIDs:         []int64{ended.ConsumerUserID},
-			CreditUserIDs:        []int64{ended.OwnerUserID},
-			EndedConsumerUserIDs: []int64{ended.ConsumerUserID},
-		})
+		s.invalidateSeatBillingCaches(billing)
 	}
 	return true, nil
 }
@@ -3173,59 +3212,11 @@ func (s *AccountShareModeService) forceTouchMembershipLastRequest(membershipID i
 	return nil
 }
 
-func (s *AccountShareModeService) ResolvePolicy(ctx context.Context, platform string) (*AccountShareModePolicy, error) {
-	platform = normalizeAccountShareModePolicyPlatform(platform)
-	if s == nil || s.repo == nil {
-		return &AccountShareModePolicy{
-			Platform:           platform,
-			PlatformShareRatio: AccountShareModeDefaultPlatformShareRatio,
-			OwnerShareRatio:    AccountShareModeDefaultOwnerShareRatio,
-			Enabled:            true,
-			Version:            1,
-		}, nil
-	}
-	return s.repo.ResolvePolicy(ctx, platform)
-}
-
-func (s *AccountShareModeService) GetPolicy(ctx context.Context, platform string) (*AccountShareModePolicy, error) {
-	return s.ResolvePolicy(ctx, normalizeAccountShareModePolicyPlatform(platform))
-}
-
-func (s *AccountShareModeService) UpdatePolicy(ctx context.Context, input UpdateAccountShareModePolicyInput) (*AccountShareModePolicy, error) {
+func (s *AccountShareModeService) ResolvePolicy(ctx context.Context) (*AccountSharePolicy, error) {
 	if s == nil || s.repo == nil {
 		return nil, ErrServiceUnavailable
 	}
-	platform := normalizeAccountShareModePolicyPlatform(input.Platform)
-	current, err := s.ResolvePolicy(ctx, platform)
-	if err != nil {
-		return nil, err
-	}
-	platformRatio := AccountShareModeDefaultPlatformShareRatio
-	ownerRatio := AccountShareModeDefaultOwnerShareRatio
-	enabled := true
-	if current != nil {
-		platformRatio = current.PlatformShareRatio
-		ownerRatio = current.OwnerShareRatio
-		enabled = current.Enabled
-	}
-	if input.PlatformShareRatio != nil {
-		platformRatio = *input.PlatformShareRatio
-	}
-	if input.OwnerShareRatio != nil {
-		ownerRatio = *input.OwnerShareRatio
-	}
-	if input.Enabled != nil {
-		enabled = *input.Enabled
-	}
-	if invalidPolicyRatio(platformRatio, ownerRatio) {
-		return nil, ErrAccountShareModeInvalidPolicyRatio
-	}
-	return s.repo.UpsertPolicy(ctx, UpdateAccountShareModePolicyInput{
-		Platform:           platform,
-		PlatformShareRatio: &platformRatio,
-		OwnerShareRatio:    &ownerRatio,
-		Enabled:            &enabled,
-	})
+	return s.repo.ResolvePolicy(ctx)
 }
 
 func validateAccountShareListingConfig(seatLimit int, rateMultiplier float64, allowedModels []string, perUserConcurrency, accountConcurrency int, hourlyRate, hourlyFeeWaiverMinimum, minBalance, codex5h, codex7d float64) error {
@@ -3490,18 +3481,6 @@ func minBalanceValue(value *float64) float64 {
 
 func invalidNonNegativeFloat(value float64) bool {
 	return value < 0 || math.IsNaN(value) || math.IsInf(value, 0)
-}
-
-func invalidPolicyRatio(platformRatio, ownerRatio float64) bool {
-	return invalidNonNegativeFloat(platformRatio) ||
-		invalidNonNegativeFloat(ownerRatio) ||
-		platformRatio > 1 ||
-		ownerRatio > 1 ||
-		platformRatio+ownerRatio > 1
-}
-
-func normalizeAccountShareModePolicyPlatform(platform string) string {
-	return AccountShareModePolicyPlatformUnified
 }
 
 func isValidCodexLimitPercent(value float64) bool {
@@ -4372,23 +4351,25 @@ func uniquePositiveInt64s(values []int64) []int64 {
 	return out
 }
 
-func BuildAccountShareModeBillingSnapshot(membership *AccountShareMembership, listing *AccountShareListing, policy *AccountShareModePolicy, baseCharge, hourlyCharge float64, durationMs int) *AccountShareModeBillingSnapshot {
+func BuildAccountShareModeBillingSnapshot(membership *AccountShareMembership, listing *AccountShareListing, policy *AccountSharePolicy, baseCharge, hourlyCharge float64, durationMs int) *AccountShareModeBillingSnapshot {
 	if membership == nil || listing == nil {
 		return nil
 	}
 	if IsAccountShareModeOwnerSelfUse(membership, listing) {
 		return nil
 	}
-	ownerRatio := AccountShareModeDefaultOwnerShareRatio
-	platformRatio := AccountShareModeDefaultPlatformShareRatio
+	ownerRatio := 0.0
+	inviteRatio := 0.0
+	platformRatio := 1.0
+	var policyID *int64
+	policyVersion := 0
 	if policy != nil {
-		if policy.Enabled {
-			ownerRatio = policy.OwnerShareRatio
-			platformRatio = policy.PlatformShareRatio
-		} else {
-			ownerRatio = 0
-			platformRatio = 1
-		}
+		id := policy.ID
+		policyID = &id
+		policyVersion = policy.Version
+		ownerRatio = policy.OwnerShareRatio
+		inviteRatio = policy.InviteShareRatio
+		platformRatio = math.Max(0, 1-ownerRatio-inviteRatio)
 	}
 	totalCharge := baseCharge + hourlyCharge
 	if totalCharge < 0 {
@@ -4406,7 +4387,10 @@ func BuildAccountShareModeBillingSnapshot(membership *AccountShareMembership, li
 		TotalCharge:        totalCharge,
 		RateMultiplier:     listing.RateMultiplier,
 		HourlyRate:         listing.HourlyRate,
+		PolicyID:           policyID,
+		PolicyVersion:      policyVersion,
 		OwnerShareRatio:    ownerRatio,
+		InviteShareRatio:   inviteRatio,
 		PlatformShareRatio: platformRatio,
 		DurationMs:         durationMs,
 	}

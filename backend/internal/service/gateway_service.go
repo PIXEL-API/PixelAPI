@@ -9701,7 +9701,11 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 			return ErrNoAvailableAccounts
 		}
 		if IsAccountShareModeOwnerSelfUse(accountShareMembership, accountShareListing) {
-			multiplier = AccountShareModeOwnerSelfUseMultiplier
+			ownerMultiplier, resolveErr := s.accountShareModeService.ResolveOwnerSelfUseMultiplier(ctx)
+			if resolveErr != nil {
+				return resolveErr
+			}
+			multiplier = ownerMultiplier
 			rateMultiplierSource = RateMultiplierSourceAccountShare
 		} else if accountShareListing != nil {
 			multiplier = accountShareListing.RateMultiplier
@@ -9728,7 +9732,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	cost := s.calculateRecordUsageCost(ctx, result, apiKey, billingModel, multiplier, opts)
 	var accountShareModeSettlement *AccountShareModeBillingSnapshot
 	if accountShareMembership != nil && accountShareListing != nil && cost != nil {
-		policy, err := s.accountShareModeService.ResolvePolicy(ctx, account.Platform)
+		policy, err := s.accountShareModeService.ResolvePolicy(ctx)
 		if err != nil {
 			return err
 		}

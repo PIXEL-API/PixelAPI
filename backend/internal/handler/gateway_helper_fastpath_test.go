@@ -89,7 +89,7 @@ func (m *concurrencyCacheMock) CleanupExpiredAccountSlots(ctx context.Context, a
 	return nil
 }
 
-func (m *concurrencyCacheMock) CleanupStaleProcessSlots(ctx context.Context, activeRequestPrefix string) error {
+func (m *concurrencyCacheMock) CleanupExpiredSlots(ctx context.Context) error {
 	return nil
 }
 

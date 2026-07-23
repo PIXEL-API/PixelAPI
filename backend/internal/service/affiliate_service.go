@@ -129,8 +129,15 @@ type AffiliateDetail struct {
 	Invitees                   []AffiliateInvitee `json:"invitees"`
 }
 
+type AffiliateShareSummary struct {
+	Enabled                    bool    `json:"enabled"`
+	AffCode                    string  `json:"aff_code,omitempty"`
+	EffectiveRebateRatePercent float64 `json:"effective_rebate_rate_percent"`
+}
+
 type AffiliateRepository interface {
 	EnsureUserAffiliate(ctx context.Context, userID int64) (*AffiliateSummary, error)
+	GetAffiliateByUserID(ctx context.Context, userID int64) (*AffiliateSummary, error)
 	GetAffiliateByCode(ctx context.Context, code string) (*AffiliateSummary, error)
 	ValidateAffiliateCode(ctx context.Context, code string, cycle AffiliateCodeCycle, enforceWeeklyLimit bool) (*AffiliateSummary, error)
 	ConsumeAffiliateCode(ctx context.Context, userID int64, code string, cycle AffiliateCodeCycle, enforceWeeklyLimit bool) (*AffiliateSummary, error)
@@ -276,6 +283,28 @@ func (s *AffiliateService) EnsureUserAffiliate(ctx context.Context, userID int64
 		return nil, err
 	}
 	return refreshed, nil
+}
+
+func (s *AffiliateService) GetAffiliateShareSummary(ctx context.Context, userID int64) (*AffiliateShareSummary, error) {
+	if userID <= 0 {
+		return nil, infraerrors.BadRequest("INVALID_USER", "invalid user")
+	}
+	if s == nil || s.repo == nil {
+		return nil, infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	if !s.IsEnabled(ctx) {
+		return &AffiliateShareSummary{Enabled: false}, nil
+	}
+
+	summary, err := s.repo.GetAffiliateByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	return &AffiliateShareSummary{
+		Enabled:                    true,
+		AffCode:                    summary.AffCode,
+		EffectiveRebateRatePercent: s.currentInviteSharePercent(ctx),
+	}, nil
 }
 
 func (s *AffiliateService) GetAffiliateDetail(ctx context.Context, userID int64, query AffiliateDetailQuery) (*AffiliateDetail, error) {

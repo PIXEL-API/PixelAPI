@@ -13,6 +13,7 @@ import (
 )
 
 const (
+	tokenRefreshCycleTaskName              = "token_refresh_cycle"
 	tokenRefreshTempUnschedDuration        = 10 * time.Minute
 	tokenRefreshRetryExhaustedReasonPrefix = "token refresh retry exhausted:"
 )
@@ -33,6 +34,7 @@ type TokenRefreshService struct {
 	schedulerCache   SchedulerCache   // 用于同步更新调度器缓存，解决 token 刷新后缓存不一致问题
 	tempUnschedCache TempUnschedCache // 用于清除 Redis 中的临时不可调度缓存
 	refreshAPI       *OAuthRefreshAPI // 统一刷新 API
+	taskExecutor     *ClusterTaskExecutor
 
 	// OpenAI privacy: 刷新成功后检查并设置 training opt-out
 	privacyClientFactory PrivacyClientFactory
@@ -115,6 +117,11 @@ func (s *TokenRefreshService) SetRefreshAPI(api *OAuthRefreshAPI) {
 	s.refreshAPI = api
 }
 
+// SetClusterTaskExecutor 注入统一集群任务租约执行器。
+func (s *TokenRefreshService) SetClusterTaskExecutor(executor *ClusterTaskExecutor) {
+	s.taskExecutor = executor
+}
+
 // SetRefreshPolicy 注入后台刷新调用侧策略（用于显式化平台/场景差异行为）。
 func (s *TokenRefreshService) SetRefreshPolicy(policy BackgroundRefreshPolicy) {
 	s.refreshPolicy = policy
@@ -181,17 +188,28 @@ func (s *TokenRefreshService) processRefresh(ctx context.Context) {
 		return
 	}
 
+	run := func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+		return s.processRefreshLeased(taskCtx, guard)
+	}
+	var err error
+	if s.taskExecutor == nil {
+		err = run(ctx, &ClusterLeaseGuard{})
+	} else {
+		_, err = s.taskExecutor.Run(ctx, tokenRefreshCycleTaskName, run)
+	}
+	if err != nil && ctx.Err() == nil && !errors.Is(err, context.Canceled) {
+		slog.Error("token_refresh.cycle_failed", "error", err)
+	}
+}
+
+func (s *TokenRefreshService) processRefreshLeased(ctx context.Context, guard *ClusterLeaseGuard) error {
 	// 计算刷新窗口
 	refreshWindow := time.Duration(s.cfg.RefreshBeforeExpiryHours * float64(time.Hour))
 
 	// 获取所有active状态的账号
 	accounts, err := s.listActiveAccounts(ctx, refreshWindow)
 	if err != nil {
-		if ctx.Err() != nil {
-			return
-		}
-		slog.Error("token_refresh.list_accounts_failed", "error", err)
-		return
+		return fmt.Errorf("list token refresh candidates: %w", err)
 	}
 
 	totalAccounts := len(accounts)
@@ -201,14 +219,14 @@ func (s *TokenRefreshService) processRefresh(ctx context.Context) {
 
 	for i := range accounts {
 		if ctx.Err() != nil {
-			return
+			return ctx.Err()
 		}
 		account := &accounts[i]
 
 		// 遍历所有刷新器，找到能处理此账号的
 		for idx, refresher := range s.refreshers {
 			if ctx.Err() != nil {
-				return
+				return ctx.Err()
 			}
 			if !refresher.CanRefresh(account) {
 				continue
@@ -230,9 +248,12 @@ func (s *TokenRefreshService) processRefresh(ctx context.Context) {
 			}
 
 			// 执行刷新
-			if err := s.refreshWithRetry(ctx, account, refresher, executor, refreshWindow); err != nil {
+			if err := s.refreshWithRetryLeased(ctx, account, refresher, executor, refreshWindow, guard); err != nil {
 				if ctx.Err() != nil {
-					return
+					return ctx.Err()
+				}
+				if errors.Is(err, ErrClusterTaskLeaseLost) {
+					return err
 				}
 				if errors.Is(err, errRefreshSkipped) {
 					skipped++
@@ -272,6 +293,7 @@ func (s *TokenRefreshService) processRefresh(ctx context.Context) {
 			"failed", failed,
 		)
 	}
+	return nil
 }
 
 // listActiveAccounts 获取后台 OAuth token 刷新候选账号。
@@ -282,8 +304,26 @@ func (s *TokenRefreshService) listActiveAccounts(ctx context.Context, refreshWin
 	return s.accountRepo.ListActive(ctx)
 }
 
+func checkTokenRefreshLease(ctx context.Context, guard *ClusterLeaseGuard) error {
+	if err := guard.Check(ctx); err != nil {
+		return errors.Join(ErrClusterTaskLeaseLost, err)
+	}
+	return nil
+}
+
 // refreshWithRetry 带重试的刷新
 func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Account, refresher TokenRefresher, executor OAuthRefreshExecutor, refreshWindow time.Duration) error {
+	return s.refreshWithRetryLeased(ctx, account, refresher, executor, refreshWindow, &ClusterLeaseGuard{})
+}
+
+func (s *TokenRefreshService) refreshWithRetryLeased(
+	ctx context.Context,
+	account *Account,
+	refresher TokenRefresher,
+	executor OAuthRefreshExecutor,
+	refreshWindow time.Duration,
+	guard *ClusterLeaseGuard,
+) error {
 	var lastErr error
 
 	for attempt := 1; attempt <= s.cfg.MaxRetries; attempt++ {
@@ -296,6 +336,9 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 
 		// 优先使用统一 API（带分布式锁 + DB 重读保护）
 		if s.refreshAPI != nil && executor != nil {
+			if guardErr := checkTokenRefreshLease(ctx, guard); guardErr != nil {
+				return guardErr
+			}
 			result, refreshErr := s.refreshAPI.RefreshIfNeeded(ctx, account, executor, refreshWindow)
 			if refreshErr != nil {
 				err = refreshErr
@@ -311,9 +354,15 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 			}
 		} else {
 			// 降级：直接调用 refresher（兼容旧路径）
+			if guardErr := checkTokenRefreshLease(ctx, guard); guardErr != nil {
+				return guardErr
+			}
 			newCredentials, err = refresher.Refresh(ctx, account)
 			if newCredentials != nil {
 				newCredentials["_token_version"] = time.Now().UnixMilli()
+				if guardErr := checkTokenRefreshLease(ctx, guard); guardErr != nil {
+					return guardErr
+				}
 				if saveErr := persistAccountCredentials(ctx, s.accountRepo, account, newCredentials); saveErr != nil {
 					return fmt.Errorf("failed to save credentials: %w", saveErr)
 				}
@@ -327,7 +376,9 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 		}
 
 		if err == nil {
-			s.postRefreshActions(ctx, account)
+			if postErr := s.postRefreshActionsLeased(ctx, account, guard); postErr != nil {
+				return postErr
+			}
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}
@@ -337,6 +388,9 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 		// 不可重试错误（invalid_grant/invalid_client 等）直接标记 error 状态并返回
 		if IsNonRetryableRefreshError(err) {
 			errorMsg := fmt.Sprintf("Token refresh failed (non-retryable): %v", err)
+			if guardErr := checkTokenRefreshLease(ctx, guard); guardErr != nil {
+				return guardErr
+			}
 			if setErr := s.accountRepo.SetError(ctx, account.ID, errorMsg); setErr != nil {
 				slog.Error("token_refresh.set_error_status_failed",
 					"account_id", account.ID,
@@ -387,6 +441,9 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 	// 设置临时不可调度 10 分钟（不标记 error，保持 status=active 让下个刷新周期能继续尝试）
 	until := time.Now().Add(TokenRefreshTempUnschedDuration)
 	reason := fmt.Sprintf("%s %v", tokenRefreshRetryExhaustedReasonPrefix, lastErr)
+	if guardErr := checkTokenRefreshLease(ctx, guard); guardErr != nil {
+		return guardErr
+	}
 	if setErr := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason); setErr != nil {
 		slog.Warn("token_refresh.set_temp_unschedulable_failed",
 			"account_id", account.ID,
@@ -402,15 +459,22 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 	return lastErr
 }
 
-// postRefreshActions 刷新成功后的后续动作（清除错误状态、缓存失效、调度器同步等）
-func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *Account) {
+// postRefreshActionsLeased 执行刷新成功后的后续动作（清除错误状态、缓存失效、调度器同步等）。
+func (s *TokenRefreshService) postRefreshActionsLeased(
+	ctx context.Context,
+	account *Account,
+	guard *ClusterLeaseGuard,
+) error {
 	if ctx.Err() != nil {
-		return
+		return ctx.Err()
 	}
 	// Antigravity 账户：如果之前是因为缺少 project_id 而标记为 error，现在成功获取到了，清除错误状态
 	if account.Platform == PlatformAntigravity &&
 		account.Status == StatusError &&
 		strings.Contains(account.ErrorMessage, "missing_project_id:") {
+		if err := checkTokenRefreshLease(ctx, guard); err != nil {
+			return err
+		}
 		if clearErr := s.accountRepo.ClearError(ctx, account.ID); clearErr != nil {
 			slog.Warn("token_refresh.clear_account_error_failed",
 				"account_id", account.ID,
@@ -421,10 +485,13 @@ func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *A
 		}
 	}
 	if ctx.Err() != nil {
-		return
+		return ctx.Err()
 	}
 	// 刷新成功后清除临时不可调度状态（处理 OAuth 401 恢复场景）
 	if account.TempUnschedulableUntil != nil && time.Now().Before(*account.TempUnschedulableUntil) {
+		if err := checkTokenRefreshLease(ctx, guard); err != nil {
+			return err
+		}
 		if clearErr := s.accountRepo.ClearTempUnschedulable(ctx, account.ID); clearErr != nil {
 			slog.Warn("token_refresh.clear_temp_unschedulable_failed",
 				"account_id", account.ID,
@@ -435,6 +502,9 @@ func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *A
 		}
 		// 同步清除 Redis 缓存，避免调度器读到过期的临时不可调度状态
 		if s.tempUnschedCache != nil {
+			if err := checkTokenRefreshLease(ctx, guard); err != nil {
+				return err
+			}
 			if clearErr := s.tempUnschedCache.DeleteTempUnsched(ctx, account.ID); clearErr != nil {
 				slog.Warn("token_refresh.clear_temp_unsched_cache_failed",
 					"account_id", account.ID,
@@ -444,10 +514,13 @@ func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *A
 		}
 	}
 	if ctx.Err() != nil {
-		return
+		return ctx.Err()
 	}
 	// 对所有 OAuth 账号调用缓存失效（InvalidateToken 内部根据平台判断是否需要处理）
 	if s.cacheInvalidator != nil && account.Type == AccountTypeOAuth {
+		if err := checkTokenRefreshLease(ctx, guard); err != nil {
+			return err
+		}
 		if err := s.cacheInvalidator.InvalidateToken(ctx, account); err != nil {
 			slog.Warn("token_refresh.invalidate_token_cache_failed",
 				"account_id", account.ID,
@@ -458,10 +531,13 @@ func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *A
 		}
 	}
 	if ctx.Err() != nil {
-		return
+		return ctx.Err()
 	}
 	// 同步更新调度器缓存，确保调度获取的 Account 对象包含最新的 credentials
 	if s.schedulerCache != nil {
+		if err := checkTokenRefreshLease(ctx, guard); err != nil {
+			return err
+		}
 		if err := s.schedulerCache.SetAccount(ctx, account); err != nil {
 			slog.Warn("token_refresh.sync_scheduler_cache_failed",
 				"account_id", account.ID,
@@ -472,15 +548,17 @@ func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *A
 		}
 	}
 	if ctx.Err() != nil {
-		return
+		return ctx.Err()
 	}
 	// OpenAI OAuth: 刷新成功后，检查是否已设置 privacy_mode，未设置则尝试关闭训练数据共享
-	s.ensureOpenAIPrivacy(ctx, account)
+	if err := s.ensureOpenAIPrivacyLeased(ctx, account, guard); err != nil {
+		return err
+	}
 	if ctx.Err() != nil {
-		return
+		return ctx.Err()
 	}
 	// Antigravity OAuth: 刷新成功后，检查是否已设置 privacy_mode，未设置则调用 setUserSettings
-	s.ensureAntigravityPrivacy(ctx, account)
+	return s.ensureAntigravityPrivacyLeased(ctx, account, guard)
 }
 
 // errRefreshSkipped 表示刷新被跳过（锁竞争或已被其他路径刷新），不计入 failed 或 refreshed
@@ -524,19 +602,27 @@ func IsNonRetryableRefreshError(err error) bool {
 // ensureOpenAIPrivacy 检查 OpenAI OAuth 账号是否已设置 privacy_mode，
 // 未设置则调用 disableOpenAITraining 并持久化结果到 Extra。
 func (s *TokenRefreshService) ensureOpenAIPrivacy(ctx context.Context, account *Account) {
+	_ = s.ensureOpenAIPrivacyLeased(ctx, account, &ClusterLeaseGuard{})
+}
+
+func (s *TokenRefreshService) ensureOpenAIPrivacyLeased(
+	ctx context.Context,
+	account *Account,
+	guard *ClusterLeaseGuard,
+) error {
 	if account.Platform != PlatformOpenAI || account.Type != AccountTypeOAuth {
-		return
+		return nil
 	}
 	if s.privacyClientFactory == nil {
-		return
+		return nil
 	}
 	if shouldSkipOpenAIPrivacyEnsure(account.Extra) {
-		return
+		return nil
 	}
 
 	token, _ := account.Credentials["access_token"].(string)
 	if token == "" {
-		return
+		return nil
 	}
 
 	var proxyURL string
@@ -546,11 +632,17 @@ func (s *TokenRefreshService) ensureOpenAIPrivacy(ctx context.Context, account *
 		}
 	}
 
+	if err := checkTokenRefreshLease(ctx, guard); err != nil {
+		return err
+	}
 	mode := disableOpenAITraining(ctx, s.privacyClientFactory, token, proxyURL)
 	if mode == "" {
-		return
+		return nil
 	}
 
+	if err := checkTokenRefreshLease(ctx, guard); err != nil {
+		return err
+	}
 	if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{"privacy_mode": mode}); err != nil {
 		slog.Warn("token_refresh.update_privacy_mode_failed",
 			"account_id", account.ID,
@@ -562,24 +654,29 @@ func (s *TokenRefreshService) ensureOpenAIPrivacy(ctx context.Context, account *
 			"privacy_mode", mode,
 		)
 	}
+	return nil
 }
 
-// ensureAntigravityPrivacy 后台刷新中检查 Antigravity OAuth 账号隐私状态。
+// ensureAntigravityPrivacyLeased 后台刷新中检查 Antigravity OAuth 账号隐私状态。
 // 仅当 privacy_mode 已成功设置（"privacy_set"）时跳过；
 // 未设置或之前失败（"privacy_set_failed"）均会重试。
-func (s *TokenRefreshService) ensureAntigravityPrivacy(ctx context.Context, account *Account) {
+func (s *TokenRefreshService) ensureAntigravityPrivacyLeased(
+	ctx context.Context,
+	account *Account,
+	guard *ClusterLeaseGuard,
+) error {
 	if account.Platform != PlatformAntigravity || account.Type != AccountTypeOAuth {
-		return
+		return nil
 	}
 	if account.Extra != nil {
 		if mode, ok := account.Extra["privacy_mode"].(string); ok && mode == AntigravityPrivacySet {
-			return
+			return nil
 		}
 	}
 
 	token, _ := account.Credentials["access_token"].(string)
 	if token == "" {
-		return
+		return nil
 	}
 
 	projectID, _ := account.Credentials["project_id"].(string)
@@ -591,11 +688,17 @@ func (s *TokenRefreshService) ensureAntigravityPrivacy(ctx context.Context, acco
 		}
 	}
 
+	if err := checkTokenRefreshLease(ctx, guard); err != nil {
+		return err
+	}
 	mode := setAntigravityPrivacy(ctx, token, projectID, proxyURL)
 	if mode == "" {
-		return
+		return nil
 	}
 
+	if err := checkTokenRefreshLease(ctx, guard); err != nil {
+		return err
+	}
 	if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{"privacy_mode": mode}); err != nil {
 		slog.Warn("token_refresh.update_antigravity_privacy_mode_failed",
 			"account_id", account.ID,
@@ -608,4 +711,5 @@ func (s *TokenRefreshService) ensureAntigravityPrivacy(ctx context.Context, acco
 			"privacy_mode", mode,
 		)
 	}
+	return nil
 }

@@ -39,6 +39,7 @@ type OpsScheduledReportService struct {
 	opsService   *OpsService
 	userService  *UserService
 	emailService *EmailService
+	taskExecutor *ClusterTaskExecutor
 	redisClient  *redis.Client
 	cfg          *config.Config
 
@@ -159,6 +160,20 @@ func (s *OpsScheduledReportService) runOnce() {
 		return
 	}
 
+	if s.cfg != nil && s.cfg.Cluster.Enabled {
+		if s.taskExecutor == nil {
+			log.Printf("[OpsScheduledReport] cluster task executor is not configured")
+			return
+		}
+		_, err := s.taskExecutor.Run(ctx, opsScheduledReportJobName, func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+			return s.runOnceOwned(taskCtx, startedAt, runAt, guard)
+		})
+		if err != nil {
+			log.Printf("[OpsScheduledReport] run failed: %v", err)
+		}
+		return
+	}
+
 	release, ok := s.tryAcquireLeaderLock(ctx)
 	if !ok {
 		return
@@ -167,6 +182,17 @@ func (s *OpsScheduledReportService) runOnce() {
 		defer release()
 	}
 
+	if err := s.runOnceOwned(ctx, startedAt, runAt, &ClusterLeaseGuard{}); err != nil {
+		log.Printf("[OpsScheduledReport] run failed: %v", err)
+	}
+}
+
+func (s *OpsScheduledReportService) runOnceOwned(
+	ctx context.Context,
+	startedAt time.Time,
+	runAt time.Time,
+	guard *ClusterLeaseGuard,
+) error {
 	now := time.Now()
 	if s.loc != nil {
 		now = now.In(s.loc)
@@ -174,7 +200,7 @@ func (s *OpsScheduledReportService) runOnce() {
 
 	reports := s.listScheduledReports(ctx, now)
 	if len(reports) == 0 {
-		return
+		return nil
 	}
 
 	reportsTotal := len(reports)
@@ -190,16 +216,23 @@ func (s *OpsScheduledReportService) runOnce() {
 		}
 		reportsDue++
 
-		attempts, err := s.runReport(ctx, report, now)
+		attempts, err := s.runReport(ctx, report, now, guard)
 		if err != nil {
+			if guardErr := guard.Check(ctx); guardErr != nil {
+				return guardErr
+			}
 			s.recordHeartbeatError(runAt, time.Since(startedAt), err)
-			return
+			return err
 		}
 		sentAttempts += attempts
 	}
 
+	if err := guard.Check(ctx); err != nil {
+		return err
+	}
 	result := truncateString(fmt.Sprintf("reports=%d due=%d send_attempts=%d", reportsTotal, reportsDue, sentAttempts), 2048)
 	s.recordHeartbeatSuccess(runAt, time.Since(startedAt), result)
+	return nil
 }
 
 type opsScheduledReport struct {
@@ -305,7 +338,12 @@ func (s *OpsScheduledReportService) listScheduledReports(ctx context.Context, no
 	return out
 }
 
-func (s *OpsScheduledReportService) runReport(ctx context.Context, report *opsScheduledReport, now time.Time) (int, error) {
+func (s *OpsScheduledReportService) runReport(
+	ctx context.Context,
+	report *opsScheduledReport,
+	now time.Time,
+	guard *ClusterLeaseGuard,
+) (int, error) {
 	if s == nil || s.opsService == nil || s.emailService == nil || report == nil {
 		return 0, nil
 	}
@@ -314,7 +352,12 @@ func (s *OpsScheduledReportService) runReport(ctx context.Context, report *opsSc
 	}
 
 	// Mark as "run" up-front so a broken SMTP config doesn't spam retries every minute.
-	s.setLastRunAt(ctx, report.ReportType, now)
+	if err := guard.Check(ctx); err != nil {
+		return 0, err
+	}
+	if err := s.setLastRunAt(ctx, report.ReportType, now); err != nil {
+		return 0, err
+	}
 
 	content, err := s.generateReportHTML(ctx, report, now)
 	if err != nil {
@@ -345,6 +388,9 @@ func (s *OpsScheduledReportService) runReport(ctx context.Context, report *opsSc
 			continue
 		}
 		attempts++
+		if err := guard.Check(ctx); err != nil {
+			return attempts - 1, err
+		}
 		if err := s.emailService.SendEmail(ctx, addr, subject, content); err != nil {
 			// Ignore per-recipient failures; continue best-effort.
 			continue
@@ -645,19 +691,31 @@ func (s *OpsScheduledReportService) getLastRunAt(ctx context.Context, reportType
 	return last.UTC()
 }
 
-func (s *OpsScheduledReportService) setLastRunAt(ctx context.Context, reportType string, t time.Time) {
+func (s *OpsScheduledReportService) setLastRunAt(ctx context.Context, reportType string, t time.Time) error {
 	if s == nil || s.redisClient == nil {
-		return
+		if s != nil && s.cfg != nil && s.cfg.Cluster.Enabled {
+			return fmt.Errorf("scheduled report last-run store is unavailable")
+		}
+		return nil
 	}
 	kind := strings.TrimSpace(reportType)
 	if kind == "" {
-		return
+		if s.cfg != nil && s.cfg.Cluster.Enabled {
+			return fmt.Errorf("scheduled report type is empty")
+		}
+		return nil
 	}
 	if t.IsZero() {
 		t = time.Now().UTC()
 	}
 	key := opsScheduledReportLastRunKeyPrefix + kind
-	_ = s.redisClient.Set(ctx, key, strconv.FormatInt(t.UTC().Unix(), 10), 14*24*time.Hour).Err()
+	if err := s.redisClient.Set(ctx, key, strconv.FormatInt(t.UTC().Unix(), 10), 14*24*time.Hour).Err(); err != nil {
+		if s.cfg != nil && s.cfg.Cluster.Enabled {
+			return fmt.Errorf("persist scheduled report last-run: %w", err)
+		}
+		return nil
+	}
+	return nil
 }
 
 func (s *OpsScheduledReportService) recordHeartbeatSuccess(runAt time.Time, duration time.Duration, result string) {

@@ -12,6 +12,7 @@ const affiliateCodeCycleRefreshBatchSize = 500
 
 type AffiliateCodeCycleService struct {
 	affiliateService *AffiliateService
+	taskExecutor     *ClusterTaskExecutor
 	stopCh           chan struct{}
 	doneCh           chan struct{}
 	startOnce        sync.Once
@@ -67,14 +68,25 @@ func (s *AffiliateCodeCycleService) run() {
 }
 
 func (s *AffiliateCodeCycleService) refresh(ctx context.Context) {
+	_, err := s.taskExecutor.Run(ctx, "affiliate_code_cycle", func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+		return s.refreshLeased(taskCtx, guard)
+	})
+	if err != nil {
+		logger.LegacyPrintf("service.affiliate", "[Affiliate] Failed to refresh affiliate invite code cycles: %v", err)
+	}
+}
+
+func (s *AffiliateCodeCycleService) refreshLeased(ctx context.Context, guard *ClusterLeaseGuard) error {
 	for {
+		if err := guard.Check(ctx); err != nil {
+			return err
+		}
 		affected, err := s.affiliateService.RefreshExpiredAffiliateCodeCycles(ctx, affiliateCodeCycleRefreshBatchSize)
 		if err != nil {
-			logger.LegacyPrintf("service.affiliate", "[Affiliate] Failed to refresh affiliate invite code cycles: %v", err)
-			return
+			return err
 		}
 		if affected < affiliateCodeCycleRefreshBatchSize {
-			return
+			return nil
 		}
 	}
 }

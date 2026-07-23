@@ -378,6 +378,8 @@ export default {
     proxies: "Proxies",
     redeemCodes: "Redeem Codes",
     ops: "Ops",
+    opsOverview: "Overview",
+    clusterManagement: "Cluster",
     promoCodes: "Promo Codes",
     activityManagement: "Activities",
     settings: "Settings",
@@ -389,7 +391,7 @@ export default {
     logout: "Logout",
     github: "GitHub",
     mySubscriptions: "My Subscriptions",
-    buySubscription: "Recharge / Subscription",
+    buySubscription: "Recharge Center",
     docs: "Docs",
     myOrders: "My Orders",
     store: "Store",
@@ -851,6 +853,12 @@ export default {
     shareValidationFailed: "Last validation failed: {reason}",
     shareValidationSuspended: "Public sharing is suspended: {reason}",
     revalidateShare: "Revalidate public sharing",
+    bulkTestConnection: "Test Connections",
+    bulkTestSubmitted:
+      "Batch connection test submitted for {count} account(s)",
+    bulkTestCompleted:
+      "Batch connection test completed: {success} succeeded, {failed} failed",
+    bulkTestSubmitFailed: "Failed to submit batch connection test",
     bulkRevalidateShare: "Revalidate sharing",
     noRevalidatableShareAccounts:
       "No selected public sharing accounts can be revalidated",
@@ -1190,9 +1198,9 @@ export default {
     openImagePlaygroundFailed: "Failed to open image playground",
     imagePlaygroundModelDialog: {
       title: "Choose an image model",
-      description: "The image playground no longer supplies a default model. Enter the image model for this request.",
+      description: "A default image model is provided. You can change it for this request if needed.",
       modelLabel: "Image model",
-      modelPlaceholder: "For example, gpt-image-1.5",
+      modelPlaceholder: "For example, gpt-image-2",
       open: "Open image playground",
     },
     enable: "Enable",
@@ -1659,6 +1667,9 @@ export default {
       empty: "No group capacity data is available yet.",
       loadFailed: "Failed to load group capacity",
     },
+    groupRate: {
+      loadFailed: "Failed to load current group rates",
+    },
     windowTab: {
       "7d": "7 days",
       "15d": "15 days",
@@ -1668,7 +1679,22 @@ export default {
       operational: "OPERATIONAL",
       degraded: "DEGRADED",
       constrained: "CONSTRAINED",
-      unavailable: "UNAVAILABLE",
+      unavailable: "ALL UNAVAILABLE",
+      unknown: "UNKNOWN",
+    },
+    summary: {
+      currentDispatchStatus: "Current dispatch status",
+      loadingStatus: "Loading capacity and monitor status",
+      noStatusData: "No live status data is available for evaluation",
+      unavailableGroups: "{count} group(s) unavailable",
+      abnormalMonitors: "{count} monitor(s) reporting errors",
+      constrainedGroups: "{count} group(s) constrained",
+      degradedSignals: "{count} status signal(s) degraded",
+      noDispatchIssues: "No dispatch issues detected",
+      refreshFailed: "Some status updates failed; showing the previous result",
+      minimumAvailability: "{window} minimum availability",
+      minimumAvailabilityHint: "Lowest value across primary channel models",
+      noAvailabilityData: "No data",
     },
     columns: {
       name: "Name",
@@ -1750,13 +1776,22 @@ export default {
   affiliate: {
     title: "Invite Income",
     description:
-      "Invite new users and earn real-time balance income when invitees consume the shared account pool",
+      "Invite new users and earn real-time balance income when invitees consume the public account pool or account-plaza rooms",
     yourCode: "Your Affiliate Code",
     inviteLink: "Invite Link",
     copyCode: "Copy Code",
     copyLink: "Copy Link",
     codeCopied: "Affiliate code copied",
     linkCopied: "Invite link copied",
+    header: {
+      cta: "Invite & earn {rate}%",
+      copied: "Copied",
+      copyAriaLabel: "Copy your invite link and earn {rate}% from referred users",
+      tooltipTitle: "Invite friends and earn",
+      tooltipBody:
+        "Earn {rate}% when invited users make eligible purchases. View details under Benefits → Invite Income.",
+      copyHint: "Click to copy your personal invite link",
+    },
     loadFailed: "Failed to load invite income data",
     transferFailed: "Failed to transfer affiliate quota",
     weeklyQuota: "Weekly Invite Uses",
@@ -1772,7 +1807,7 @@ export default {
     stats: {
       rebateRate: "My Invite Share",
       rebateRateHint:
-        "What you earn when invitees consume the shared account pool during the valid period",
+        "What you earn when invitees consume the public pool or account-plaza rooms during the valid period",
       invitedUsers: "Invited Users",
       availableQuota: "Legacy Available Rebate Quota",
       settlementMode: "Settlement Mode",
@@ -1835,7 +1870,7 @@ export default {
       title: "How It Works",
       line1: "Share your affiliate code or invite link with new users.",
       line2:
-        "When invitees consume the shared account pool during the valid period, you receive {rate} as invite income.",
+        "When invitees consume the public pool or account-plaza rooms during the valid period, you receive {rate} as invite income.",
       line3:
         "Invite income is settled per usage and credited directly to your balance.",
       line4: "Legacy recharge rebate freeze and transfer rules are disabled.",
@@ -1846,6 +1881,70 @@ export default {
     badge: "Welfare",
     title: "Welfare Activities",
     description: "Lottery chances, winning records, and invite rebates.",
+    editorial: {
+      issue: "PIXEL REWARDS · MEMBER EDITION",
+      headline: "Every use should bring something back",
+      lead:
+        "Qualify, enter the draw, and wait for the result. Active rewards, claim progress, and invite income now live in one clear member index.",
+      currentIssue: "Now showing",
+      activityUnit: "{count} activities",
+      overview: "Member benefit overview",
+      index: "Activity index",
+      indexHint: "Choose what you want to review",
+      progress: "Qualification progress",
+      route: "Activity entry flow",
+      ticketUnit: "tickets",
+      campaignPrefix: "ACTIVITY",
+      itemsCount: "{count} items",
+      publicBoard: "PUBLIC BOARD",
+      publicBoardHint: "Public winner information",
+      entry: "ENTRY",
+      archive: "ARCHIVE",
+      recorded: "Recorded",
+      claimLabel: "PRIZE CLAIM",
+      shareLabel: "INVITE & EARN",
+      shareHeadline: "Share a useful service with people who matter",
+      inviteeLedger: "INVITEE LEDGER",
+      periodFilter: "Income reporting period",
+      noDescription: "Activity details will continue to be updated here.",
+      emptyHint: "New activities will appear here as soon as they are published.",
+      winnerEmptyHint: "Your claim records will be kept here after results are announced.",
+      archiveEmptyHint: "Completed activities will be filed here for future reference.",
+      tabNotes: {
+        open: "Review tickets ready to enter",
+        joined: "Track tickets already entered",
+        winners: "Manage wins and claim status",
+        past: "Review activities and results",
+        affiliate: "Share links and view income",
+      },
+      sections: {
+        open: {
+          eyebrow: "NOW SHOWING / 01",
+          title: "Happening now",
+          description: "Enter qualified tickets into the draw with progress, prizes, and results kept transparent.",
+        },
+        joined: {
+          eyebrow: "MY ENTRIES / 02",
+          title: "Entry journal",
+          description: "Every entered ticket is recorded here, with an option to add newly earned tickets.",
+        },
+        winners: {
+          eyebrow: "WINNING NOTES / 03",
+          title: "My claim slips",
+          description: "A win is only the beginning. Submit claim details and follow delivery status here.",
+        },
+        past: {
+          eyebrow: "THE ARCHIVE / 04",
+          title: "Past editions",
+          description: "Review completed activities, your entries, and recently announced winners.",
+        },
+        affiliate: {
+          eyebrow: "SHARE & EARN / 05",
+          title: "Invite income",
+          description: "Share, review income, filter reporting periods, and track invitees in one place.",
+        },
+      },
+    },
     loadFailed: "Failed to load welfare activities",
     stats: {
       activeCampaigns: "Active activities",
@@ -2727,7 +2826,7 @@ export default {
         affiliateRebate: "Affiliate Rebate",
         affiliateTransfer: "Affiliate Transfer",
         affiliateRebateCount: "Affiliate Rebate Count",
-        privateGroupCommission: "Private Group Commission",
+        privateGroupCommission: "Self-use Commission",
         shareConsumerCharge: "Share Consumer Charge",
         shareAccountCost: "Share Account Cost",
         shareOwnerCredit: "Share Owner Credit",
@@ -2748,34 +2847,19 @@ export default {
       sharePolicy: {
         title: "Unified Share Policy",
         description:
-          "Configure owner and invite share ratios for public user-owned accounts. The platform automatically keeps the remainder, and changes apply only to later usage.",
+          "Configure the owner, inviter, and platform split shared by the public account pool and account-plaza rooms. Changes apply only to later usage.",
         currentPolicy: "Current Effective Policy",
         currentPolicyHint:
-          "Public accounts must pass this effective policy before joining the shared pool. Owner self-use does not produce owner income and is excluded from profit share statistics.",
+          "Accounts published to the public pool or an account-plaza room use this effective policy. Owner self-use produces neither owner nor inviter income and is excluded from profit-share statistics.",
         globalConfig: "Global Policy Config",
-        privateGroupCommissionTitle: "Private Group Commission",
-        privateGroupCommissionDescription:
-          "Configure the extra platform commission charged on private-group usage. Requests still consume subscription quota, while the commission is additionally deducted from the user wallet balance.",
-        privateGroupCommissionRate: "Commission Rate",
-        privateGroupCommissionHint:
-          "Allowed range: 0% - 100%. Default is 0.5%.",
-        privateGroupCommissionExample: "Current setting: {rate}",
+        selfUseCommissionTitle: "Global Self-use Commission",
+        selfUseCommissionDescription:
+          "Private mode and owner use of their own account-plaza rooms share this platform commission. Room self-use has no hourly fee, minimum balance, or minimum-spend check and produces no owner or inviter income.",
+        selfUseCommissionRate: "Self-use commission rate",
+        selfUseCommissionHint:
+          "Allowed range: 0% - 100%. Default is 0.5% (0.005).",
+        selfUseCommissionExample: "Current self-use commission: {rate}",
         saveCommission: "Save Commission",
-        modePolicyTitle: "Account Mode Share Policy",
-        modePolicyDescription:
-          "Configure the independent split for account-share mode. This applies only to account-plaza bindings and does not affect the shared-pool policy.",
-        modeCurrentPolicy: "Current Account Mode Policy",
-        modeGlobalConfig: "Account Mode Global Config",
-        modePolicyHint:
-          "Default platform retention is 10%, with 90% credited to the owner. Each usage stores the multiplier, duration fee, and split snapshot.",
-        modePlatformSharePercent: "Platform retention ratio",
-        modeOwnerSharePercent: "Owner income ratio",
-        modePlatformShareHint:
-          "Platform retention for account mode. Default is 10%, independent from the shared account pool.",
-        modeOwnerShareHint:
-          "Calculated automatically as 100% minus platform retention.",
-        modeSaveHint:
-          "Saving affects later account-mode settlements only. Historical snapshots are not rewritten.",
         enabled: "Enable policy",
         ownerShare: "Owner Share",
         inviteShare: "Invite Share",
@@ -2784,13 +2868,13 @@ export default {
         inviteSharePercent: "Invite share ratio",
         platformSharePercent: "Platform retention ratio",
         ownerShareHint:
-          "When another user consumes a public account, this ratio is applied to the consumer charge.",
+          "When another user consumes a public-pool account or account-plaza room, this ratio is applied to the consumer charge.",
         inviteShareHint:
-          "When an invited user consumes the shared account pool during the valid period, this ratio is credited to the inviter.",
+          "When an invited user consumes the public pool or an account-plaza room during the valid invite period, this ratio is credited to the inviter.",
         platformShareHint:
-          "Calculated automatically as 100% minus owner share and invite share.",
+          "With a valid inviter, this is 100% minus owner and invite shares. Without one, the unused invite share also goes to the platform.",
         saveHint:
-          "Saving applies the new global policy to later usage. Existing usage keeps its original settlement snapshot.",
+          "Saving applies the new global policy to later public-pool and account-plaza-room usage. Existing usage keeps its original settlement snapshot.",
         savePolicy: "Save Policy",
         effectiveAt: "Effective At",
         updatedAt: "Updated At",
@@ -2804,8 +2888,6 @@ export default {
         saveFailed: "Failed to save share policy",
         invalidRatio:
           "Owner share and invite share must be between 0 and 100, and their sum cannot exceed 100",
-        invalidModeRatio:
-          "Account mode platform retention must be between 0 and 100",
         errors: {
           INVALID_REQUEST: "Invalid request",
         },
@@ -4718,6 +4800,7 @@ export default {
         totalShort: "Total {count}",
         schedulableCount: "Schedulable {count}",
         concurrencyAvailable: "Concurrency available {available} / {total}",
+        currentGroupRate: "Rate {rate}x",
         rateLimitedCount: "Limited {count}",
         codexQuotaProtectedCount: "Quota protected {count}",
         errorCount: "Error {count}",
@@ -6633,6 +6716,174 @@ export default {
       },
     },
 
+    cluster: {
+      eyebrow: "Multi-instance control plane",
+      title: "Cluster Management",
+      description:
+        "Monitor node readiness, resource pressure, task leases, and cache versions, then perform audited drain and resume operations.",
+      enabled: "Cluster enabled",
+      disabled: "Cluster disabled",
+      lastUpdated: "Last refreshed",
+      refresh: "Refresh now",
+      loadFailed: "Failed to load cluster data",
+      disabledTitle: "Running in single-instance mode",
+      disabledDescription:
+        "Cluster mode is not enabled. You can still inspect runtime state, but node operations remain disabled.",
+      summary: {
+        title: "Cluster summary",
+        ready: "Ready nodes",
+        expected: "{count} expected",
+        draining: "Draining",
+        notReceivingTraffic: "No new traffic",
+        unhealthy: "Unhealthy",
+        requiresAttention: "Requires attention",
+        staleOffline: "Disconnected",
+        staleOfflineHint: "{stale} stale · {offline} offline",
+        connections: "Active connections",
+        connectionBreakdown: "HTTP {http} · SSE {sse} · WS {ws}",
+        pools: "Database pool",
+        redisPool: "Redis {current}/{max}",
+        resilience: "N-1 resilience",
+        resilienceHint: "Service remains available after one node exits",
+        nMinusOneReady: "Ready",
+        nMinusOneRisk: "At risk",
+        version: "Version consistency",
+        consistent: "Consistent",
+        inconsistent: "Mismatched",
+        cacheSync: "Cache sync",
+        cacheSyncHint: "Database versions are authoritative",
+        laggingNodes: "{count} lagging",
+      },
+      nodes: {
+        title: "Application nodes",
+        description: "Refreshes every 10 seconds and every 2 seconds while operations are active.",
+        empty: "No cluster nodes have reported yet.",
+        node: "Node",
+        status: "Status",
+        resources: "Resources",
+        connections: "Connections",
+        dependencies: "Dependencies",
+        lastSeen: "Last heartbeat",
+        actions: "Safe actions",
+        cpu: "CPU",
+        memory: "Process memory",
+      },
+      actions: {
+        drain: "Drain safely",
+        resume: "Resume traffic",
+        refreshCache: "Refresh safe caches",
+        drainUnavailable: "At least two ready nodes must remain after draining",
+        operationQueued: "Node operation queued",
+        cacheRefreshQueued: "Cache refresh queued",
+        operationFailed: "Failed to submit cluster operation",
+      },
+      tasks: {
+        title: "Background task leases",
+        description: "Current owner and fencing token for each global task.",
+        empty: "No task leases.",
+        unowned: "No current owner",
+        expires: "Lease expires",
+        lastSuccess: "Last success",
+        duration: "Last duration",
+      },
+      cache: {
+        title: "Cache synchronization",
+        description: "Safe cache versions applied by each node.",
+        lagging: "{count} nodes lagging",
+        empty: "No node cache information.",
+        noVersions: "The node has not reported cache versions.",
+      },
+      operations: {
+        title: "Operation history",
+        description: "The 50 most recent audited cluster operations.",
+        fastRefresh: "Operation active · refreshing every 2s",
+        empty: "No cluster operations yet.",
+        operation: "Operation",
+        target: "Target",
+        status: "Status",
+        reason: "Reason",
+        requestedBy: "Requested by",
+        requestedAt: "Requested at",
+        allNodes: "All nodes",
+      },
+      dialog: {
+        targetNode: "Target node",
+        reason: "Operation reason",
+        reasonPlaceholder: "Describe the change, incident, or ticket behind this operation",
+        reasonHint: "Required, 8–500 characters; currently {count}",
+        reasonTooShort: "The operation reason must be at least 8 characters",
+        reasonTooLong: "The operation reason cannot exceed 500 characters",
+        submitting: "Submitting…",
+        drainTitle: "Confirm safe drain",
+        drainDescription:
+          "The node immediately leaves readiness and Caddy stops new requests. Existing HTTP, SSE, and WebSocket connections are not terminated.",
+        resumeTitle: "Confirm traffic resume",
+        resumeDescription:
+          "The node rejoins the traffic pool only after its database, Redis, and readiness checks pass.",
+        confirmDrain: "Confirm drain",
+        confirmResume: "Confirm resume",
+      },
+      cacheDialog: {
+        title: "Refresh safe caches",
+        appliesToAll: "Applies to every cluster node",
+        appliesToAllHint:
+          "Every online node executes this refresh command. Targeting an individual node is not supported in this version.",
+        scope: "Cache scope",
+        reasonPlaceholder: "Describe the configuration change or investigation requiring a refresh",
+        confirm: "Queue refresh",
+      },
+      cacheScopes: {
+        allSafe: "All safe caches",
+        allSafeHint: "Refresh the three scopes below without touching sessions, balances, or rate limits",
+        channelRouting: "Channel routing",
+        channelRoutingHint: "Channel, model, and routing metadata",
+        runtimeSettings: "Runtime settings",
+        runtimeSettingsHint: "Dynamically loaded system runtime settings",
+        policyMetadata: "Policy metadata",
+        policyMetadataHint: "Metadata used by authorization and policy evaluation",
+      },
+      details: {
+        title: "Node details",
+        readiness: "Readiness",
+        version: "Version",
+        commit: "Commit",
+        startedAt: "Started at",
+        buildDate: "Build date",
+        goroutines: "Goroutines",
+        fileDescriptors: "File descriptors",
+        gatewayConnections: "Gateway connections",
+        active: "Active",
+        idle: "Idle",
+        waiting: "Waiting",
+        poolLimit: "Pool limit",
+        total: "Total",
+        cacheVersions: "Cache versions",
+        viewLogs: "View logs for this node",
+      },
+      status: {
+        starting: "Starting",
+        ready: "Ready",
+        draining: "Draining",
+        unhealthy: "Unhealthy",
+        stale: "Stale",
+        offline: "Offline",
+      },
+      operationStatus: {
+        pending: "Pending",
+        running: "Running",
+        succeeded: "Succeeded",
+        failed: "Failed",
+      },
+      operationKind: {
+        drain: "Safe drain",
+        resume: "Resume traffic",
+        cache_refresh: "Cache refresh",
+      },
+      errors: {
+        uuidUnavailable: "This browser cannot generate a secure idempotency key",
+      },
+    },
+
     // Ops Monitoring
     ops: {
       title: "Ops Monitoring",
@@ -7621,7 +7872,7 @@ export default {
         affiliate: {
           title: "Invite Income",
           description:
-            "Existing users invite new ones; the inviter earns real-time balance income when invitees consume the shared account pool during the valid period.",
+            "Existing users invite new ones; the inviter earns real-time balance income when invitees consume the public pool or account-plaza rooms during the valid period.",
           enabled: "Enable Invite Income",
           enabledHint:
             "When off, the invite page is hidden, the aff parameter is ignored at signup, and later usage generates no invite income.",
@@ -8093,9 +8344,10 @@ export default {
         configGuide: "Configuration Guide",
         enabled: "Enable Payment",
         enabledHint: "Enable or disable the payment system",
-        tabVisibilityTitle: "Recharge / Subscription Page",
-        tabVisibilityHint:
-          "When disabled, the corresponding tab and content are hidden from the user payment page.",
+        moduleVisibilityTitle: "Recharge Center Modules",
+        moduleVisibilityHint:
+          "Balance top-up is always the primary module. Subscriptions appear automatically when public groups have plans for sale; user-private groups do not count. External links can be controlled separately.",
+        externalModuleEnabled: "Show external recharge links",
         enabledPaymentTypes: "Enabled Providers",
         enabledPaymentTypesHint:
           "Disabling a provider will also disable its instances.",
@@ -8131,13 +8383,13 @@ export default {
         cancelRateLimitWindowModeFixed: "Fixed",
         announcementText: "Recharge Page Announcement",
         announcementPlaceholder:
-          "Enter the announcement shown when users open Recharge / Subscription...",
+          "Enter the announcement shown when users open the Recharge Center...",
         announcementHint:
-          "Shown at the top of the user Recharge / Subscription page. Leave empty to hide it.",
-        rechargeCenterTitle: "Recharge Center",
+          "Shown at the top of the user Recharge Center. Leave empty to hide it.",
+        rechargeCenterTitle: "External Recharge Links",
         rechargeCenterHint:
-          "Configure external entries on the user Recharge / Subscription page. Links open in a new window by default.",
-        rechargeCenterEmpty: "No recharge center entries configured",
+          "Configure optional external entries shown at the bottom of the Recharge Center. Links open in a new window.",
+        rechargeCenterEmpty: "No external recharge links configured",
         rechargeCenterAdd: "Add Entry",
         rechargeCenterRemove: "Remove",
         rechargeCenterName: "Name",
@@ -8940,9 +9192,9 @@ export default {
 
   // Recharge / Subscription Page
   purchase: {
-    title: "Recharge / Subscription",
+    title: "Recharge Center",
     description:
-      "Recharge balance or purchase subscription via the embedded page",
+      "Top up your balance with on-site payment, or purchase a platform subscription when available",
     openInNewTab: "Open in new tab",
     notEnabledTitle: "Feature not enabled",
     notEnabledDesc:
@@ -9280,7 +9532,40 @@ export default {
 
   // Payment System
   payment: {
-    title: "Recharge / Subscription",
+    title: "Recharge Center",
+    centerHero: {
+      eyebrow: "Account funds",
+      title: "Top up and keep your services running",
+      description:
+        "On-site payments credit your current balance directly. Public platform subscriptions, when available, can be purchased on the same page.",
+      instantCredit: "Automatic payment confirmation",
+      securePayment: "Secure payment channels",
+      startRecharge: "Top up now",
+      viewOptions: "View available options",
+    },
+    rechargeSection: {
+      eyebrow: "On-site top-up",
+      title: "Add funds to your balance",
+      description:
+        "Choose an amount and payment method. Your balance is credited automatically after payment.",
+      methodCount: "{count} payment methods available",
+      summary: "Top-up summary",
+      balanceOrder: "Balance top-up",
+      submitHint:
+        "You will continue with the selected payment provider. Complete payment before the order expires.",
+    },
+    subscriptionSection: {
+      eyebrow: "Platform subscriptions",
+      title: "Choose a subscription plan",
+      description:
+        "Only plans for public platform groups are shown. User-private groups are excluded.",
+      planCount: "{count} plans available",
+      backToPlans: "Back to plans",
+    },
+    externalSection: {
+      title: "Other recharge options",
+      description: "These platform-provided links open in a new window.",
+    },
     amountLabel: "Amount",
     paymentAmount: "Payment Amount",
     creditedBalance: "Credited Balance",
@@ -9391,7 +9676,8 @@ export default {
     noActiveSubscription: "No active subscription",
     tabTopUp: "Top Up",
     tabSubscribe: "Subscribe",
-    noVisibleTabs: "Recharge / subscription entries are currently unavailable",
+    noVisibleTabs: "Recharge is currently unavailable",
+    noVisibleContent: "No Recharge Center services are currently available",
     noPlans: "No subscription plans available",
     notAvailable: "Top-up is currently unavailable",
     confirmSubscription: "Confirm Subscription",

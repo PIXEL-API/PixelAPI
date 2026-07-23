@@ -36,6 +36,65 @@ func TestApplyMigrations_DelegatesToApplyMigrationsFS(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestValidateMigrationsFS_ReadOnlyValidation(t *testing.T) {
+	const migrationName = "001_cluster_test.sql"
+	const migrationContent = "CREATE TABLE cluster_test (id BIGINT PRIMARY KEY);"
+	sum := sha256.Sum256([]byte(migrationContent))
+	checksum := hex.EncodeToString(sum[:])
+	fsys := fstest.MapFS{
+		migrationName: &fstest.MapFile{Data: []byte(migrationContent)},
+	}
+
+	t.Run("accepts_applied_checksum", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer func() { _ = db.Close() }()
+
+		mock.ExpectQuery("SELECT checksum FROM schema_migrations").
+			WithArgs(migrationName).
+			WillReturnRows(sqlmock.NewRows([]string{"checksum"}).AddRow(checksum))
+
+		require.NoError(t, validateMigrationsFS(context.Background(), db, fsys))
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("rejects_missing_migration_without_writing", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer func() { _ = db.Close() }()
+
+		mock.ExpectQuery("SELECT checksum FROM schema_migrations").
+			WithArgs(migrationName).
+			WillReturnRows(sqlmock.NewRows([]string{"checksum"}))
+
+		err = validateMigrationsFS(context.Background(), db, fsys)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "--migrate-only")
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("rejects_checksum_mismatch", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer func() { _ = db.Close() }()
+
+		mock.ExpectQuery("SELECT checksum FROM schema_migrations").
+			WithArgs(migrationName).
+			WillReturnRows(sqlmock.NewRows([]string{"checksum"}).AddRow(strings.Repeat("0", 64)))
+
+		err = validateMigrationsFS(context.Background(), db, fsys)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "checksum mismatch")
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+func TestValidateMigrations_NilDB(t *testing.T) {
+	err := ValidateMigrations(context.Background(), nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "nil sql db")
+}
+
 func TestLatestMigrationBaseline(t *testing.T) {
 	t.Run("empty_fs_returns_baseline", func(t *testing.T) {
 		version, description, hash, err := latestMigrationBaseline(fstest.MapFS{})

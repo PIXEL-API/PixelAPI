@@ -1,383 +1,665 @@
 <template>
   <AppLayout>
-    <div class="activity-page">
-      <div v-if="loading" class="activity-loading">
-        <div class="h-8 w-8 animate-spin rounded-full border-2 border-primary-500 border-t-transparent"></div>
+    <div class="benefits-page" :aria-busy="loading">
+      <div v-if="loading && !hasLoaded" class="editorial-skeleton" aria-hidden="true">
+        <div class="skeleton-rule"></div>
+        <div class="skeleton-masthead">
+          <div>
+            <i></i>
+            <strong></strong>
+            <span></span>
+          </div>
+          <b></b>
+        </div>
+        <div class="skeleton-statline">
+          <span v-for="index in 4" :key="index"></span>
+        </div>
+        <div class="skeleton-layout">
+          <aside>
+            <i v-for="index in 5" :key="index"></i>
+          </aside>
+          <main>
+            <i></i>
+            <strong></strong>
+            <span></span>
+          </main>
+        </div>
       </div>
 
       <template v-else>
-        <section class="activity-summary">
-          <div class="metric-tile">
-            <span>{{ t('activities.stats.activeCampaigns') }}</span>
-            <strong>{{ openCampaigns.length }}</strong>
+        <header class="benefits-masthead">
+          <div class="masthead-topline">
+            <span>{{ t('activities.editorial.issue') }}</span>
+            <button
+              type="button"
+              class="refresh-link"
+              :disabled="loading"
+              :aria-label="t('common.refresh')"
+              @click="loadAll"
+            >
+              <Icon name="refresh" size="sm" :class="{ 'refresh-icon-spinning': loading }" />
+              <span>{{ t('common.refresh') }}</span>
+            </button>
           </div>
-          <div class="metric-tile">
-            <span>{{ t('activities.stats.availableTickets') }}</span>
-            <strong>{{ availableTicketCount }}</strong>
-          </div>
-          <div class="metric-tile">
-            <span>{{ t('activities.stats.joinedTickets') }}</span>
-            <strong>{{ joinedTicketCount }}</strong>
-          </div>
-          <div class="metric-tile">
-            <span>{{ t('activities.stats.pendingClaims') }}</span>
-            <strong>{{ pendingClaimWinners.length }}</strong>
-          </div>
-          <button type="button" class="btn btn-secondary activity-refresh" :disabled="loading" @click="loadAll">
-            <Icon name="refresh" size="sm" />
-            <span>{{ t('common.refresh') }}</span>
-          </button>
-        </section>
 
-        <section class="activity-tabs" role="tablist" :aria-label="t('activities.tabs.label')">
-          <button
-            v-for="tab in tabs"
-            :key="tab.key"
-            type="button"
-            role="tab"
-            class="activity-tab"
-            :class="{ 'activity-tab-active': activeTab === tab.key }"
-            :aria-selected="activeTab === tab.key"
-            @click="activeTab = tab.key"
-          >
-            <span>{{ tab.label }}</span>
-            <em>{{ tab.count }}</em>
-          </button>
-        </section>
+          <div class="masthead-composition">
+            <div class="masthead-title">
+              <span class="masthead-kicker">{{ t('activities.title') }}</span>
+              <h1>{{ t('activities.editorial.headline') }}</h1>
+            </div>
+            <p class="masthead-lead">{{ t('activities.editorial.lead') }}</p>
+            <div class="masthead-mark" aria-hidden="true">
+              <span>{{ t('activities.editorial.currentIssue') }}</span>
+              <strong>{{ formatSerial(openCampaigns.length) }}</strong>
+              <em>{{ t('activities.editorial.activityUnit', { count: openCampaigns.length }) }}</em>
+            </div>
+          </div>
 
-        <section v-if="activeTab === 'open'" class="activity-section">
-          <ActivityEmpty v-if="openCampaigns.length === 0" :text="t('activities.lottery.empty')" />
-          <article v-for="campaign in openCampaigns" :key="campaign.id" class="activity-card">
-            <div class="activity-card-main">
-              <div class="activity-card-head">
-                <div class="min-w-0">
-                  <div class="flex flex-wrap items-center gap-2">
-                    <h2>{{ campaign.name }}</h2>
-                    <span :class="['badge', participationBadgeClass(campaign)]">{{ participationStatusText(campaign) }}</span>
-                  </div>
-                  <div class="activity-meta-line">
-                    <span>{{ metricValueText(campaign.rule_config.metric, campaign.user_progress?.metric_value || 0) }}</span>
-                    <span>/</span>
-                    <span>{{ metricValueText(campaign.rule_config.metric, campaign.rule_config.threshold) }}</span>
-                    <span>{{ periodLabel(campaign) }}</span>
-                    <span>{{ formatShortDateTime(campaign.draw_at) }}</span>
-                    <span v-if="publicParticipantText(campaign)">{{ publicParticipantText(campaign) }}</span>
-                  </div>
+          <dl class="benefits-statline" :aria-label="t('activities.editorial.overview')">
+            <div>
+              <dt>{{ t('activities.stats.activeCampaigns') }}</dt>
+              <dd>{{ formatSerial(openCampaigns.length) }}</dd>
+            </div>
+            <div>
+              <dt>{{ t('activities.stats.availableTickets') }}</dt>
+              <dd>{{ formatSerial(availableTicketCount) }}</dd>
+            </div>
+            <div>
+              <dt>{{ t('activities.stats.joinedTickets') }}</dt>
+              <dd>{{ formatSerial(joinedTicketCount) }}</dd>
+            </div>
+            <div :class="{ 'statline-alert': pendingClaimWinners.length > 0 }">
+              <dt>{{ t('activities.stats.pendingClaims') }}</dt>
+              <dd>{{ formatSerial(pendingClaimWinners.length) }}</dd>
+            </div>
+          </dl>
+        </header>
+
+        <div class="benefits-workspace">
+          <aside class="benefits-index">
+            <div class="benefits-index-inner">
+              <div class="index-heading">
+                <span>{{ t('activities.editorial.index') }}</span>
+                <p>{{ t('activities.editorial.indexHint') }}</p>
+              </div>
+              <nav
+                ref="tablistRef"
+                class="index-tabs"
+                role="tablist"
+                :aria-label="t('activities.tabs.label')"
+              >
+                <button
+                  v-for="(tab, index) in tabs"
+                  :id="tabId(tab.key)"
+                  :key="tab.key"
+                  type="button"
+                  role="tab"
+                  class="index-tab"
+                  :class="{ 'index-tab-active': activeTab === tab.key }"
+                  :aria-selected="activeTab === tab.key"
+                  :aria-controls="panelId(tab.key)"
+                  :tabindex="activeTab === tab.key ? 0 : -1"
+                  @click="activeTab = tab.key"
+                  @keydown="handleTabKeydown($event, index)"
+                >
+                  <span class="index-tab-number">{{ formatSerial(index + 1) }}</span>
+                  <span class="index-tab-copy">
+                    <strong>{{ tab.label }}</strong>
+                    <small>{{ tab.note }}</small>
+                  </span>
+                  <em>{{ tab.count }}</em>
+                </button>
+              </nav>
+            </div>
+          </aside>
+
+          <main class="benefits-stage">
+            <header class="stage-heading">
+              <span>{{ activeSection.eyebrow }}</span>
+              <div>
+                <h2>{{ activeSection.title }}</h2>
+                <p>{{ activeSection.description }}</p>
+              </div>
+            </header>
+
+            <Transition name="section-shift" mode="out-in">
+              <section
+                v-if="activeTab === 'open'"
+                :id="panelId('open')"
+                key="open"
+                class="stage-panel campaign-editions"
+                role="tabpanel"
+                :aria-labelledby="tabId('open')"
+              >
+                <div v-if="openCampaigns.length === 0" class="editorial-empty">
+                  <span><Icon name="gift" size="lg" /></span>
+                  <strong>{{ t('activities.lottery.empty') }}</strong>
+                  <p>{{ t('activities.editorial.emptyHint') }}</p>
                 </div>
-                <div class="activity-head-actions">
-                  <div class="activity-ticket-box">
-                    <span>{{ t('activities.lottery.myTickets') }}</span>
-                    <strong>{{ campaign.user_progress?.ticket_count || 0 }}</strong>
+
+                <article
+                  v-for="(campaign, index) in openCampaigns"
+                  :key="campaign.id"
+                  class="campaign-edition"
+                  :class="campaignToneClass(index)"
+                >
+                  <div class="campaign-edition-bar">
+                    <span>{{ t('activities.editorial.campaignPrefix') }} / {{ formatSerial(index + 1) }}</span>
+                    <span class="campaign-state">
+                      <i></i>
+                      {{ participationStatusText(campaign) }}
+                    </span>
+                    <span>{{ t('activities.rule.drawAt') }} · {{ formatShortDateTime(campaign.draw_at) }}</span>
                   </div>
-                  <button type="button" class="btn btn-primary" :disabled="!canJoinCampaign(campaign)" @click="joinCampaign(campaign)">
-                    {{ joinButtonLabel(campaign) }}
+
+                  <div class="campaign-edition-main">
+                    <div class="campaign-story">
+                      <div class="campaign-context">
+                        <span>{{ periodLabel(campaign) }}</span>
+                        <span v-if="publicParticipantText(campaign)">{{ publicParticipantText(campaign) }}</span>
+                      </div>
+                      <h3>{{ campaign.name }}</h3>
+                      <p>{{ campaign.description || t('activities.editorial.noDescription') }}</p>
+
+                      <div class="campaign-progress">
+                        <div class="campaign-progress-copy">
+                          <span>{{ t('activities.editorial.progress') }}</span>
+                          <strong>
+                            {{ metricValueText(campaign.rule_config.metric, campaign.user_progress?.metric_value || 0) }}
+                            <small>/ {{ metricValueText(campaign.rule_config.metric, campaign.rule_config.threshold) }}</small>
+                          </strong>
+                        </div>
+                        <div
+                          class="campaign-progress-track"
+                          role="progressbar"
+                          :aria-label="metricLabel(campaign.rule_config.metric)"
+                          aria-valuemin="0"
+                          aria-valuemax="100"
+                          :aria-valuenow="progressPercent(campaign)"
+                        >
+                          <span :style="{ width: `${progressPercent(campaign)}%` }"></span>
+                        </div>
+                        <em>{{ progressPercent(campaign) }}%</em>
+                      </div>
+
+                      <ol class="campaign-route" :aria-label="t('activities.editorial.route')">
+                        <li :class="{ 'route-complete': (campaign.user_progress?.ticket_count || 0) > 0 }">
+                          <span>01</span>
+                          <p>{{ t('activities.steps.qualify') }}</p>
+                        </li>
+                        <li :class="{ 'route-complete': Boolean(campaign.user_progress?.joined) }">
+                          <span>02</span>
+                          <p>{{ t('activities.steps.join') }}</p>
+                        </li>
+                        <li>
+                          <span>03</span>
+                          <p>{{ t('activities.steps.waitDraw') }}</p>
+                        </li>
+                      </ol>
+                    </div>
+
+                    <aside class="campaign-entry">
+                      <div class="campaign-ticket-count">
+                        <span>{{ t('activities.lottery.myTickets') }}</span>
+                        <strong>{{ formatSerial(campaign.user_progress?.ticket_count || 0) }}</strong>
+                        <em>{{ t('activities.editorial.ticketUnit') }}</em>
+                      </div>
+                      <p>{{ campaignGuidance(campaign) }}</p>
+                      <button
+                        type="button"
+                        class="campaign-action"
+                        :disabled="!canJoinCampaign(campaign)"
+                        @click="joinCampaign(campaign)"
+                      >
+                        <span>{{ joinButtonLabel(campaign) }}</span>
+                        <Icon name="arrowRight" size="sm" />
+                      </button>
+                    </aside>
+                  </div>
+
+                  <div class="campaign-ledger">
+                    <section class="ledger-section prize-ledger">
+                      <header>
+                        <span>{{ t('activities.prizes.title') }}</span>
+                        <em>{{ t('activities.editorial.itemsCount', { count: campaign.prizes?.length || 0 }) }}</em>
+                      </header>
+                      <div v-if="campaign.prizes?.length" class="ledger-list">
+                        <div v-for="(prize, prizeIndex) in campaign.prizes" :key="prize.id || prize.name" class="ledger-row">
+                          <span>{{ formatSerial(prizeIndex + 1) }}</span>
+                          <div>
+                            <strong>{{ prize.name }}</strong>
+                            <small>{{ prizeTypeLabel(prize.prize_type) }} · {{ t('activities.prizes.quantity', { count: prize.quantity }) }}</small>
+                          </div>
+                          <em>{{ prizeAmountText(prize.prize_type, prize.amount) }}</em>
+                        </div>
+                      </div>
+                      <p v-else class="ledger-empty">{{ t('activities.prizes.empty') }}</p>
+                    </section>
+
+                    <section class="ledger-section winner-ledger">
+                      <header>
+                        <span>{{ t('activities.winners.yesterday') }}</span>
+                        <em>{{ t('activities.editorial.publicBoard') }}</em>
+                      </header>
+                      <div v-if="campaign.yesterday_winners?.length" class="winner-ticker">
+                        <div v-for="winner in campaign.yesterday_winners.slice(0, 8)" :key="winner.id">
+                          <span>{{ winner.masked_user }}</span>
+                          <strong>{{ winner.prize_name }}</strong>
+                        </div>
+                      </div>
+                      <p v-else class="ledger-empty">{{ t('activities.winners.emptyYesterday') }}</p>
+                    </section>
+                  </div>
+                </article>
+              </section>
+
+              <section
+                v-else-if="activeTab === 'joined'"
+                :id="panelId('joined')"
+                key="joined"
+                class="stage-panel entry-journal"
+                role="tabpanel"
+                :aria-labelledby="tabId('joined')"
+              >
+                <div v-if="joinedCampaigns.length === 0" class="editorial-empty">
+                  <span><Icon name="checkCircle" size="lg" /></span>
+                  <strong>{{ t('activities.joined.empty') }}</strong>
+                  <p>{{ t('activities.editorial.emptyHint') }}</p>
+                </div>
+
+                <article v-for="(campaign, index) in joinedCampaigns" :key="campaign.id" class="journal-entry">
+                  <div class="journal-number">
+                    <span>{{ t('activities.editorial.entry') }}</span>
+                    <strong>{{ formatSerial(index + 1) }}</strong>
+                  </div>
+                  <div class="journal-story">
+                    <span class="journal-status">{{ participationStatusText(campaign) }}</span>
+                    <h3>{{ campaign.name }}</h3>
+                    <p>
+                      {{ t('activities.joined.summary', {
+                        count: campaign.user_progress?.joined_tickets || 0,
+                        time: formatDateTime(campaign.user_progress?.joined_at) || '-',
+                      }) }}
+                    </p>
+                    <div class="journal-progress">
+                      <span :style="{ width: `${progressPercent(campaign)}%` }"></span>
+                    </div>
+                  </div>
+                  <dl class="journal-facts">
+                    <div>
+                      <dt>{{ t('activities.rule.drawAt') }}</dt>
+                      <dd>{{ formatShortDateTime(campaign.draw_at) }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t('activities.joined.currentTickets') }}</dt>
+                      <dd>{{ formatSerial(campaign.user_progress?.ticket_count || 0) }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t('activities.joined.joinedTickets') }}</dt>
+                      <dd>{{ formatSerial(campaign.user_progress?.joined_tickets || 0) }}</dd>
+                    </div>
+                  </dl>
+                  <div v-if="canUpdateJoinedTickets(campaign)" class="journal-action">
+                    <p>{{ t('activities.joined.updateHint') }}</p>
+                    <button
+                      type="button"
+                      class="text-action"
+                      :disabled="isJoining(campaign.id)"
+                      @click="joinCampaign(campaign)"
+                    >
+                      {{ t('activities.lottery.updateJoin') }}
+                      <Icon name="arrowRight" size="sm" />
+                    </button>
+                  </div>
+                </article>
+              </section>
+
+              <section
+                v-else-if="activeTab === 'winners'"
+                :id="panelId('winners')"
+                key="winners"
+                class="stage-panel winning-slips"
+                role="tabpanel"
+                :aria-labelledby="tabId('winners')"
+              >
+                <div v-if="winners.length === 0" class="editorial-empty">
+                  <span><Icon name="badge" size="lg" /></span>
+                  <strong>{{ t('activities.myWinners.empty') }}</strong>
+                  <p>{{ t('activities.editorial.winnerEmptyHint') }}</p>
+                </div>
+
+                <article v-for="(winner, index) in winners" :key="winner.id" class="winning-slip">
+                  <div class="winning-slip-index">
+                    <span>WIN</span>
+                    <strong>{{ formatSerial(index + 1) }}</strong>
+                  </div>
+                  <div class="winning-slip-main">
+                    <span>{{ winner.campaign_name || `#${winner.campaign_id}` }}</span>
+                    <h3>{{ winner.prize_name }}</h3>
+                    <p>{{ formatDateTime(winner.created_at) }}</p>
+                  </div>
+                  <div class="winning-slip-status">
+                    <span :class="winnerStatusClass(winner.status)">{{ winnerStatusLabel(winner.status) }}</span>
+                    <button
+                      v-if="winner.status === 'pending_claim'"
+                      type="button"
+                      class="claim-action"
+                      @click="openClaim(winner)"
+                    >
+                      {{ t('activities.myWinners.submitClaim') }}
+                      <Icon name="arrowRight" size="sm" />
+                    </button>
+                    <span v-else class="winning-slip-complete">
+                      <Icon name="check" size="sm" />
+                      {{ t('activities.editorial.recorded') }}
+                    </span>
+                  </div>
+                </article>
+              </section>
+
+              <section
+                v-else-if="activeTab === 'past'"
+                :id="panelId('past')"
+                key="past"
+                class="stage-panel archive-list"
+                role="tabpanel"
+                :aria-labelledby="tabId('past')"
+              >
+                <div v-if="pastCampaigns.length === 0" class="editorial-empty">
+                  <span><Icon name="inbox" size="lg" /></span>
+                  <strong>{{ t('activities.past.empty') }}</strong>
+                  <p>{{ t('activities.editorial.archiveEmptyHint') }}</p>
+                </div>
+
+                <article v-for="(campaign, index) in pastCampaigns" :key="campaign.id" class="archive-entry">
+                  <div class="archive-date">
+                    <span>{{ t('activities.editorial.archive') }}</span>
+                    <strong>{{ formatSerial(index + 1) }}</strong>
+                    <em>{{ formatShortDateTime(campaign.draw_at) }}</em>
+                  </div>
+                  <div class="archive-story">
+                    <div>
+                      <span class="archive-status">{{ t('activities.status.ended') }}</span>
+                      <span v-if="campaign.user_progress?.joined" class="archive-joined">{{ t('activities.past.joined') }}</span>
+                    </div>
+                    <h3>{{ campaign.name }}</h3>
+                    <p>{{ campaign.description || t('activities.editorial.noDescription') }}</p>
+                    <dl>
+                      <div>
+                        <dt>{{ t('activities.rule.period') }}</dt>
+                        <dd>{{ periodLabel(campaign) }}</dd>
+                      </div>
+                      <div>
+                        <dt>{{ t('activities.joined.joinedTickets') }}</dt>
+                        <dd>{{ campaign.user_progress?.joined_tickets || 0 }}</dd>
+                      </div>
+                    </dl>
+                  </div>
+                  <div class="archive-winners">
+                    <span>{{ t('activities.winners.recent') }}</span>
+                    <div v-if="campaign.recent_winners?.length">
+                      <p v-for="winner in campaign.recent_winners.slice(0, 6)" :key="winner.id">
+                        <span>{{ winner.masked_user }}</span>
+                        <strong>{{ winner.prize_name }}</strong>
+                      </p>
+                    </div>
+                    <p v-else class="ledger-empty">{{ t('activities.winners.emptyRecent') }}</p>
+                  </div>
+                </article>
+              </section>
+
+              <section
+                v-else
+                :id="panelId('affiliate')"
+                key="affiliate"
+                class="stage-panel affiliate-edition"
+                role="tabpanel"
+                :aria-labelledby="tabId('affiliate')"
+              >
+                <div v-if="affiliateLoading" class="affiliate-loading">
+                  <span></span>
+                  <p>{{ t('common.loading') }}</p>
+                </div>
+                <div v-else-if="affiliateError || !affiliateDetail" class="editorial-empty">
+                  <span><Icon name="users" size="lg" /></span>
+                  <strong>{{ affiliateError || t('affiliate.loadFailed') }}</strong>
+                  <button type="button" class="text-action" @click="loadAffiliateDetail()">
+                    {{ t('common.tryAgain') }}
+                    <Icon name="arrowRight" size="sm" />
                   </button>
                 </div>
-              </div>
 
-              <div class="activity-progress-row">
-                <div class="progress-track">
-                  <div class="progress-fill" :style="{ width: `${progressPercent(campaign)}%` }"></div>
-                </div>
-                <span>{{ progressPercent(campaign) }}%</span>
-              </div>
+                <template v-else>
+                  <div class="affiliate-feature">
+                    <div class="affiliate-feature-title">
+                      <span>{{ t('activities.editorial.shareLabel') }}</span>
+                      <h3>{{ t('activities.editorial.shareHeadline') }}</h3>
+                      <p>{{ t('activities.affiliate.description') }}</p>
+                    </div>
+                    <div class="affiliate-rate">
+                      <span>{{ t('affiliate.stats.rebateRate') }}</span>
+                      <strong>{{ formattedRebateRate }}<small>%</small></strong>
+                      <p>{{ t('affiliate.stats.rebateRateHint') }}</p>
+                    </div>
+                  </div>
 
-              <div class="activity-stepper">
-                <div :class="['activity-step', campaign.user_progress?.ticket_count ? 'activity-step-done' : '']">
-                  <span>1</span>
-                  <p>{{ t('activities.steps.qualify') }}</p>
-                </div>
-                <div :class="['activity-step', campaign.user_progress?.joined ? 'activity-step-done' : '']">
-                  <span>2</span>
-                  <p>{{ t('activities.steps.join') }}</p>
-                </div>
-                <div class="activity-step">
-                  <span>3</span>
-                  <p>{{ t('activities.steps.waitDraw') }}</p>
-                </div>
-              </div>
+                  <dl class="affiliate-statline">
+                    <div>
+                      <dt>{{ t('affiliate.stats.invitedUsers') }}</dt>
+                      <dd>{{ formatCount(affiliateDetail.aff_count) }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ periodIncomeTitle }}</dt>
+                      <dd>{{ formatCurrency(affiliateDetail.period_rebate) }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t('affiliate.stats.totalQuota') }}</dt>
+                      <dd>{{ formatCurrency(affiliateDetail.aff_history_quota) }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t('affiliate.stats.settlementMode') }}</dt>
+                      <dd>{{ t('affiliate.stats.realtimeBalance') }}</dd>
+                    </div>
+                  </dl>
 
-              <div class="info-grid">
-                <InfoCell :label="metricLabel(campaign.rule_config.metric)" :value="metricValueText(campaign.rule_config.metric, campaign.user_progress?.metric_value || 0)" />
-                <InfoCell :label="t('activities.rule.threshold')" :value="metricValueText(campaign.rule_config.metric, campaign.rule_config.threshold)" />
-                <InfoCell :label="t('activities.rule.period')" :value="periodLabel(campaign)" />
-                <InfoCell :label="t('activities.rule.drawAt')" :value="formatShortDateTime(campaign.draw_at)" />
-              </div>
-            </div>
+                  <div class="affiliate-toolbar">
+                    <div class="period-presets" :aria-label="t('activities.editorial.periodFilter')">
+                      <button
+                        v-for="preset in periodPresets"
+                        :key="preset"
+                        type="button"
+                        :class="{ 'period-preset-active': periodPreset === preset }"
+                        @click="setPeriodPreset(preset)"
+                      >
+                        {{ t(`affiliate.period.presets.${preset}`) }}
+                      </button>
+                    </div>
+                    <div class="period-dates">
+                      <label>
+                        <span>{{ t('affiliate.period.start') }}</span>
+                        <input v-model="periodStartDate" type="date" @change="setCustomPeriod" />
+                      </label>
+                      <i aria-hidden="true"></i>
+                      <label>
+                        <span>{{ t('affiliate.period.end') }}</span>
+                        <input v-model="periodEndDate" type="date" @change="setCustomPeriod" />
+                      </label>
+                    </div>
+                  </div>
 
-            <aside class="activity-card-aside">
-              <PrizeList :campaign="campaign" />
-              <WinnerList :title="t('activities.winners.yesterday')" :empty="t('activities.winners.emptyYesterday')" :winners="campaign.yesterday_winners || []" />
-            </aside>
-          </article>
-        </section>
+                  <div class="affiliate-share-sheet">
+                    <div class="share-row">
+                      <span>{{ t('affiliate.yourCode') }}</span>
+                      <code>{{ affiliateDetail.aff_code }}</code>
+                      <button type="button" @click="copyCode">
+                        <Icon name="copy" size="sm" />
+                        {{ t('affiliate.copyCode') }}
+                      </button>
+                    </div>
+                    <div class="share-row">
+                      <span>{{ t('affiliate.inviteLink') }}</span>
+                      <code>{{ inviteLink }}</code>
+                      <button type="button" @click="copyInviteLink">
+                        <Icon name="copy" size="sm" />
+                        {{ t('affiliate.copyLink') }}
+                      </button>
+                    </div>
+                  </div>
 
-        <section v-else-if="activeTab === 'joined'" class="activity-section">
-          <ActivityEmpty v-if="joinedCampaigns.length === 0" :text="t('activities.joined.empty')" />
-          <article v-for="campaign in joinedCampaigns" :key="campaign.id" class="activity-panel joined-row">
-            <div class="min-w-0">
-              <h2>{{ campaign.name }}</h2>
-              <p>{{ t('activities.joined.summary', { count: campaign.user_progress?.joined_tickets || 0, time: formatDateTime(campaign.user_progress?.joined_at) || '-' }) }}</p>
-            </div>
-            <div class="joined-cells">
-              <InfoCell :label="t('activities.rule.drawAt')" :value="formatDateTime(campaign.draw_at) || '-'" />
-              <InfoCell :label="t('activities.joined.currentTickets')" :value="String(campaign.user_progress?.ticket_count || 0)" />
-              <InfoCell :label="t('activities.joined.joinedTickets')" :value="String(campaign.user_progress?.joined_tickets || 0)" />
-            </div>
-            <div v-if="canUpdateJoinedTickets(campaign)" class="joined-update">
-              <button type="button" class="btn btn-primary btn-sm" :disabled="isJoining(campaign.id)" @click="joinCampaign(campaign)">
-                {{ t('activities.lottery.updateJoin') }}
-              </button>
-              <span>{{ t('activities.joined.updateHint') }}</span>
-            </div>
-          </article>
-        </section>
+                  <div class="affiliate-notes">
+                    <div>
+                      <span>01</span>
+                      <p>{{ t('affiliate.weeklyQuota') }}</p>
+                      <strong>{{ weeklyQuotaText }}</strong>
+                    </div>
+                    <div>
+                      <span>02</span>
+                      <p>{{ t('affiliate.codePolicy.title') }}</p>
+                      <strong>{{ codePolicyText }}</strong>
+                      <small>{{ codeExpiryText }}</small>
+                    </div>
+                    <div>
+                      <span>03</span>
+                      <p>{{ t('affiliate.tips.title') }}</p>
+                      <strong>{{ t('affiliate.tips.line3') }}</strong>
+                    </div>
+                  </div>
 
-        <section v-else-if="activeTab === 'winners'" class="activity-panel">
-          <div class="panel-title-row">
-            <h2>{{ t('activities.myWinners.title') }}</h2>
-          </div>
-          <ActivityEmpty v-if="winners.length === 0" :text="t('activities.myWinners.empty')" />
-          <div v-else class="table-wrap">
-            <table class="activity-table min-w-[760px]">
-              <thead>
-                <tr>
-                  <th>{{ t('activities.myWinners.columns.campaign') }}</th>
-                  <th>{{ t('activities.myWinners.columns.prize') }}</th>
-                  <th>{{ t('activities.myWinners.columns.status') }}</th>
-                  <th>{{ t('activities.myWinners.columns.createdAt') }}</th>
-                  <th class="text-right">{{ t('common.actions') }}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="winner in winners" :key="winner.id">
-                  <td class="font-medium text-gray-900 dark:text-white">{{ winner.campaign_name || `#${winner.campaign_id}` }}</td>
-                  <td>{{ winner.prize_name }}</td>
-                  <td><span :class="['badge', winnerStatusBadgeClass(winner.status)]">{{ winnerStatusLabel(winner.status) }}</span></td>
-                  <td>{{ formatDateTime(winner.created_at) }}</td>
-                  <td class="text-right">
-                    <button v-if="winner.status === 'pending_claim'" type="button" class="btn btn-primary btn-sm" @click="openClaim(winner)">{{ t('activities.myWinners.submitClaim') }}</button>
-                    <span v-else class="text-xs text-gray-400 dark:text-dark-500">-</span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
+                  <section class="invitee-ledger">
+                    <header>
+                      <div>
+                        <span>{{ t('activities.editorial.inviteeLedger') }}</span>
+                        <h3>{{ t('affiliate.invitees.title') }}</h3>
+                      </div>
+                      <p>{{ t('affiliate.description') }}</p>
+                    </header>
 
-        <section v-else-if="activeTab === 'past'" class="activity-section">
-          <ActivityEmpty v-if="pastCampaigns.length === 0" :text="t('activities.past.empty')" />
-          <article v-for="campaign in pastCampaigns" :key="campaign.id" class="activity-panel past-row">
-            <div class="min-w-0">
-              <div class="flex flex-wrap items-center gap-2">
-                <h2>{{ campaign.name }}</h2>
-                <span class="badge badge-gray">{{ t('activities.status.ended') }}</span>
-                <span v-if="campaign.user_progress?.joined" class="badge badge-primary">{{ t('activities.past.joined') }}</span>
-              </div>
-              <p v-if="campaign.description">{{ campaign.description }}</p>
-              <div class="mt-4 grid gap-3 md:grid-cols-3">
-                <InfoCell :label="t('activities.rule.drawAt')" :value="formatDateTime(campaign.draw_at) || '-'" />
-                <InfoCell :label="t('activities.joined.joinedTickets')" :value="String(campaign.user_progress?.joined_tickets || 0)" />
-                <InfoCell :label="t('activities.rule.period')" :value="periodLabel(campaign)" />
-              </div>
-            </div>
-            <WinnerList :title="t('activities.winners.recent')" :empty="t('activities.winners.emptyRecent')" :winners="campaign.recent_winners || []" />
-          </article>
-        </section>
-
-        <section v-else class="affiliate-grid">
-          <div class="activity-panel affiliate-overview">
-            <div class="panel-title-row">
-              <div>
-                <h2>{{ t('activities.affiliate.title') }}</h2>
-                <p>{{ t('activities.affiliate.description') }}</p>
-              </div>
-              <div class="period-control">
-                <button
-                  v-for="preset in periodPresets"
-                  :key="preset"
-                  type="button"
-                  class="period-button"
-                  :class="{ 'period-button-active': periodPreset === preset }"
-                  @click="setPeriodPreset(preset)"
-                >
-                  {{ t(`affiliate.period.presets.${preset}`) }}
-                </button>
-              </div>
-            </div>
-
-            <div v-if="affiliateLoading" class="activity-loading compact">
-              <div class="h-6 w-6 animate-spin rounded-full border-2 border-primary-500 border-t-transparent"></div>
-            </div>
-            <ActivityEmpty v-else-if="affiliateError" :text="affiliateError" />
-            <ActivityEmpty v-else-if="!affiliateDetail" :text="t('affiliate.loadFailed')" />
-            <template v-else>
-              <div class="affiliate-metrics">
-                <div class="affiliate-metric primary">
-                  <span>{{ t('affiliate.stats.rebateRate') }}</span>
-                  <strong>{{ formattedRebateRate }}%</strong>
-                  <p>{{ t('affiliate.stats.rebateRateHint') }}</p>
-                </div>
-                <div class="affiliate-metric">
-                  <span>{{ t('affiliate.stats.invitedUsers') }}</span>
-                  <strong>{{ formatCount(affiliateDetail.aff_count) }}</strong>
-                </div>
-                <div class="affiliate-metric">
-                  <span>{{ periodIncomeTitle }}</span>
-                  <strong>{{ formatCurrency(affiliateDetail.period_rebate) }}</strong>
-                </div>
-                <div class="affiliate-metric">
-                  <span>{{ t('affiliate.stats.totalQuota') }}</span>
-                  <strong>{{ formatCurrency(affiliateDetail.aff_history_quota) }}</strong>
-                </div>
-                <div class="affiliate-metric">
-                  <span>{{ t('affiliate.stats.settlementMode') }}</span>
-                  <strong>{{ t('affiliate.stats.realtimeBalance') }}</strong>
-                  <p>{{ t('affiliate.stats.realtimeBalanceHint') }}</p>
-                </div>
-              </div>
-
-              <div class="affiliate-period-row">
-                <input
-                  v-model="periodStartDate"
-                  type="date"
-                  class="input h-10 text-sm"
-                  :aria-label="t('affiliate.period.start')"
-                  @change="setCustomPeriod"
-                />
-                <input
-                  v-model="periodEndDate"
-                  type="date"
-                  class="input h-10 text-sm"
-                  :aria-label="t('affiliate.period.end')"
-                  @change="setCustomPeriod"
-                />
-              </div>
-            </template>
-          </div>
-
-          <template v-if="affiliateDetail && !affiliateLoading && !affiliateError">
-            <div class="activity-panel affiliate-share">
-              <div class="copy-section">
-                <CopyBox :label="t('affiliate.yourCode')" :value="affiliateDetail.aff_code" :button-text="t('affiliate.copyCode')" @copy="copyCode" />
-                <CopyBox :label="t('affiliate.inviteLink')" :value="inviteLink" :button-text="t('affiliate.copyLink')" @copy="copyInviteLink" />
-              </div>
-              <div class="affiliate-policy-grid">
-                <div>
-                  <span>{{ t('affiliate.weeklyQuota') }}</span>
-                  <strong>{{ weeklyQuotaText }}</strong>
-                </div>
-                <div>
-                  <span>{{ t('affiliate.codePolicy.title') }}</span>
-                  <strong>{{ codePolicyText }}</strong>
-                  <p>{{ codeExpiryText }}</p>
-                </div>
-              </div>
-            </div>
-
-            <div class="activity-panel affiliate-tips">
-              <p>{{ t('affiliate.tips.title') }}</p>
-              <ul>
-                <li>{{ t('affiliate.tips.line1') }}</li>
-                <li>{{ t('affiliate.tips.line2', { rate: `${formattedRebateRate}%` }) }}</li>
-                <li>{{ t('affiliate.tips.line3') }}</li>
-              </ul>
-            </div>
-
-            <div class="activity-panel affiliate-table-panel">
-              <div class="panel-title-row">
-                <div>
-                  <h2>{{ t('affiliate.invitees.title') }}</h2>
-                  <p>{{ t('affiliate.description') }}</p>
-                </div>
-              </div>
-              <ActivityEmpty v-if="affiliateDetail.invitees.length === 0" :text="t('affiliate.invitees.empty')" />
-              <div v-else class="table-wrap">
-                <table class="activity-table min-w-[920px]">
-                  <thead>
-                    <tr>
-                      <th>{{ t('affiliate.invitees.columns.user') }}</th>
-                      <th>{{ t('affiliate.invitees.columns.bindSource') }}</th>
-                      <th>
-                        <button type="button" class="table-sort" @click="toggleSort('bound_at')">
-                          {{ t('affiliate.invitees.columns.joinedAt') }}
-                          <span>{{ sortIndicator('bound_at') }}</span>
-                        </button>
-                      </th>
-                      <th>{{ t('affiliate.invitees.columns.status') }}</th>
-                      <th class="text-right">
-                        <button type="button" class="table-sort justify-end" @click="toggleSort('period_consumption')">
-                          {{ t('affiliate.invitees.columns.periodConsumption') }}
-                          <span>{{ sortIndicator('period_consumption') }}</span>
-                        </button>
-                      </th>
-                      <th class="text-right">
-                        <button type="button" class="table-sort justify-end" @click="toggleSort('period_rebate')">
-                          {{ t('affiliate.invitees.columns.periodRebate') }}
-                          <span>{{ sortIndicator('period_rebate') }}</span>
-                        </button>
-                      </th>
-                      <th class="text-right">
-                        <button type="button" class="table-sort justify-end" @click="toggleSort('history_consumption')">
-                          {{ t('affiliate.invitees.columns.historyConsumption') }}
-                          <span>{{ sortIndicator('history_consumption') }}</span>
-                        </button>
-                      </th>
-                      <th class="text-right">
-                        <button type="button" class="table-sort justify-end" @click="toggleSort('total_rebate')">
-                          {{ t('affiliate.invitees.columns.rebate') }}
-                          <span>{{ sortIndicator('total_rebate') }}</span>
-                        </button>
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr v-for="item in sortedInvitees" :key="item.user_id">
-                      <td>
-                        <div class="font-medium text-gray-900 dark:text-white">{{ item.email || '-' }}</div>
-                        <div class="mt-0.5 text-xs text-gray-500 dark:text-dark-400">{{ item.username || '-' }}</div>
-                      </td>
-                      <td>{{ formatBindSource(item.invite_bind_source) }}</td>
-                      <td>{{ formatDateTime(item.created_at) || '-' }}</td>
-                      <td>{{ formatInviteeStatus(item.status) }}</td>
-                      <td class="text-right">{{ formatCurrency(item.period_consumption) }}</td>
-                      <td class="text-right font-semibold text-emerald-600 dark:text-emerald-400">{{ formatCurrency(item.period_rebate) }}</td>
-                      <td class="text-right">{{ formatCurrency(item.history_consumption) }}</td>
-                      <td class="text-right font-semibold text-gray-900 dark:text-white">{{ formatCurrency(item.total_rebate) }}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </template>
-        </section>
+                    <div v-if="affiliateDetail.invitees.length === 0" class="ledger-empty-block">
+                      {{ t('affiliate.invitees.empty') }}
+                    </div>
+                    <div v-else class="invitee-table-wrap">
+                      <table class="invitee-table">
+                        <thead>
+                          <tr>
+                            <th>{{ t('affiliate.invitees.columns.user') }}</th>
+                            <th>{{ t('affiliate.invitees.columns.bindSource') }}</th>
+                            <th>
+                              <button type="button" class="sort-link" @click="toggleSort('bound_at')">
+                                {{ t('affiliate.invitees.columns.joinedAt') }}
+                                <span>{{ sortIndicator('bound_at') }}</span>
+                              </button>
+                            </th>
+                            <th>{{ t('affiliate.invitees.columns.status') }}</th>
+                            <th>
+                              <button type="button" class="sort-link" @click="toggleSort('period_consumption')">
+                                {{ t('affiliate.invitees.columns.periodConsumption') }}
+                                <span>{{ sortIndicator('period_consumption') }}</span>
+                              </button>
+                            </th>
+                            <th>
+                              <button type="button" class="sort-link" @click="toggleSort('period_rebate')">
+                                {{ t('affiliate.invitees.columns.periodRebate') }}
+                                <span>{{ sortIndicator('period_rebate') }}</span>
+                              </button>
+                            </th>
+                            <th>
+                              <button type="button" class="sort-link" @click="toggleSort('history_consumption')">
+                                {{ t('affiliate.invitees.columns.historyConsumption') }}
+                                <span>{{ sortIndicator('history_consumption') }}</span>
+                              </button>
+                            </th>
+                            <th>
+                              <button type="button" class="sort-link" @click="toggleSort('total_rebate')">
+                                {{ t('affiliate.invitees.columns.rebate') }}
+                                <span>{{ sortIndicator('total_rebate') }}</span>
+                              </button>
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr v-for="item in sortedInvitees" :key="item.user_id">
+                            <td :data-label="t('affiliate.invitees.columns.user')">
+                              <strong>{{ item.email || '-' }}</strong>
+                              <small>{{ item.username || '-' }}</small>
+                            </td>
+                            <td :data-label="t('affiliate.invitees.columns.bindSource')">{{ formatBindSource(item.invite_bind_source) }}</td>
+                            <td :data-label="t('affiliate.invitees.columns.joinedAt')">{{ formatDateTime(item.created_at) || '-' }}</td>
+                            <td :data-label="t('affiliate.invitees.columns.status')">{{ formatInviteeStatus(item.status) }}</td>
+                            <td :data-label="t('affiliate.invitees.columns.periodConsumption')">{{ formatCurrency(item.period_consumption) }}</td>
+                            <td :data-label="t('affiliate.invitees.columns.periodRebate')" class="positive-value">{{ formatCurrency(item.period_rebate) }}</td>
+                            <td :data-label="t('affiliate.invitees.columns.historyConsumption')">{{ formatCurrency(item.history_consumption) }}</td>
+                            <td :data-label="t('affiliate.invitees.columns.rebate')" class="total-value">{{ formatCurrency(item.total_rebate) }}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+                </template>
+              </section>
+            </Transition>
+          </main>
+        </div>
       </template>
     </div>
 
     <Teleport to="body">
-      <div v-if="claimDialogOpen && selectedWinner" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" @click.self="claimDialogOpen = false">
-        <form class="w-full max-w-lg rounded-lg bg-white p-5 shadow-xl dark:bg-dark-900" @submit.prevent="submitClaim">
-          <h2 class="text-lg font-semibold text-gray-900 dark:text-white">{{ t('activities.claim.title') }}</h2>
-          <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">{{ selectedWinner.prize_name }}</p>
-          <div class="mt-5 space-y-4">
-            <template v-if="selectedWinner.claim_fields?.length">
-              <div v-for="field in selectedWinner.claim_fields" :key="field.key">
-                <label class="input-label">
-                  {{ field.label }}
-                  <span v-if="field.required" class="text-red-500">*</span>
-                </label>
-                <textarea v-if="field.type === 'textarea'" v-model.trim="claimForm[field.key]" class="input min-h-24" :required="field.required"></textarea>
-                <input v-else v-model.trim="claimForm[field.key]" class="input" :type="field.type === 'phone' ? 'tel' : 'text'" :required="field.required" />
-              </div>
-            </template>
-            <div v-else class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
-              {{ t('activities.claim.noFields') }}
+      <div
+        v-if="claimDialogOpen && selectedWinner"
+        class="claim-sheet-backdrop"
+        @click.self="closeClaimDialog"
+        @keydown.esc="closeClaimDialog"
+      >
+        <form
+          ref="claimDialogRef"
+          class="claim-sheet"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="claim-dialog-title"
+          tabindex="-1"
+          @submit.prevent="submitClaim"
+        >
+          <div class="claim-sheet-accent"></div>
+          <header class="claim-sheet-header">
+            <div>
+              <span>{{ t('activities.editorial.claimLabel') }}</span>
+              <h2 id="claim-dialog-title">{{ t('activities.claim.title') }}</h2>
+              <p>{{ selectedWinner.prize_name }}</p>
             </div>
+            <button type="button" :aria-label="t('common.close')" @click="closeClaimDialog">
+              <Icon name="x" size="sm" />
+            </button>
+          </header>
+          <div class="claim-sheet-body">
+            <template v-if="selectedWinner.claim_fields?.length">
+              <label v-for="field in selectedWinner.claim_fields" :key="field.key" :for="`claim-${field.key}`">
+                <span>
+                  {{ field.label }}
+                  <em v-if="field.required">*</em>
+                </span>
+                <textarea
+                  v-if="field.type === 'textarea'"
+                  :id="`claim-${field.key}`"
+                  v-model.trim="claimForm[field.key]"
+                  :required="field.required"
+                ></textarea>
+                <input
+                  v-else
+                  :id="`claim-${field.key}`"
+                  v-model.trim="claimForm[field.key]"
+                  :type="field.type === 'phone' ? 'tel' : 'text'"
+                  :required="field.required"
+                />
+              </label>
+            </template>
+            <div v-else class="claim-sheet-notice">{{ t('activities.claim.noFields') }}</div>
           </div>
-          <div class="mt-5 flex justify-end gap-2">
-            <button type="button" class="btn btn-secondary" @click="claimDialogOpen = false">{{ t('common.cancel') }}</button>
-            <button type="submit" class="btn btn-primary" :disabled="claimSubmitting">{{ claimSubmitting ? t('common.saving') : t('activities.claim.submit') }}</button>
-          </div>
+          <footer class="claim-sheet-actions">
+            <button type="button" class="claim-cancel" @click="closeClaimDialog">{{ t('common.cancel') }}</button>
+            <button type="submit" class="claim-submit" :disabled="claimSubmitting">
+              {{ claimSubmitting ? t('common.saving') : t('activities.claim.submit') }}
+              <Icon name="arrowRight" size="sm" />
+            </button>
+          </footer>
         </form>
       </div>
     </Teleport>
@@ -385,7 +667,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineComponent, h, onMounted, reactive, ref, type PropType } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -393,10 +675,11 @@ import { useAppStore } from '@/stores/app'
 import userAPI from '@/api/user'
 import { activityAPI } from '@/api/activity'
 import type { AffiliateInvitee, UserAffiliateDetail } from '@/types'
-import type { ActivityCampaign, ActivityMetric, ActivityPrizeType, ActivityWinner, ActivityWinnerPublic, ActivityWinnerStatus } from '@/types/activity'
+import type { ActivityCampaign, ActivityMetric, ActivityPrizeType, ActivityWinner, ActivityWinnerStatus } from '@/types/activity'
 import { useClipboard } from '@/composables/useClipboard'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { formatCurrency, formatDateTime } from '@/utils/format'
+import { buildAffiliateInviteLink } from '@/utils/oauthAffiliate'
 
 type ActivityTab = 'open' | 'joined' | 'winners' | 'past' | 'affiliate'
 type SortKey = 'bound_at' | 'period_consumption' | 'period_rebate' | 'history_consumption' | 'total_rebate'
@@ -406,9 +689,12 @@ const appStore = useAppStore()
 const { copyToClipboard } = useClipboard()
 
 const loading = ref(true)
+const hasLoaded = ref(false)
 const affiliateLoading = ref(false)
 const claimSubmitting = ref(false)
 const claimDialogOpen = ref(false)
+const claimDialogRef = ref<HTMLElement | null>(null)
+const tablistRef = ref<HTMLElement | null>(null)
 const activeTab = ref<ActivityTab>('open')
 const campaigns = ref<ActivityCampaign[]>([])
 const winners = ref<ActivityWinner[]>([])
@@ -425,6 +711,7 @@ const periodStartDate = ref(toDateInputValue(startOfLocalDay(new Date())))
 const periodEndDate = ref(toDateInputValue(startOfLocalDay(new Date())))
 const sortKey = ref<SortKey>('bound_at')
 const sortDirection = ref<'asc' | 'desc'>('desc')
+let dialogReturnFocus: HTMLElement | null = null
 
 const openCampaigns = computed(() => campaigns.value.filter(campaign => !isCampaignEnded(campaign)))
 const joinedCampaigns = computed(() => openCampaigns.value.filter(campaign => campaign.user_progress?.joined))
@@ -433,21 +720,49 @@ const pendingClaimWinners = computed(() => winners.value.filter(item => item.sta
 const availableTicketCount = computed(() => openCampaigns.value.reduce((sum, item) => sum + (item.user_progress?.ticket_count || 0), 0))
 const joinedTicketCount = computed(() => campaigns.value.reduce((sum, item) => sum + (item.user_progress?.joined_tickets || 0), 0))
 const tabs = computed(() => [
-  { key: 'open' as const, label: t('activities.tabs.open'), count: openCampaigns.value.length },
-  { key: 'joined' as const, label: t('activities.tabs.joined'), count: joinedCampaigns.value.length },
-  { key: 'winners' as const, label: t('activities.tabs.winners'), count: winners.value.length },
-  { key: 'past' as const, label: t('activities.tabs.past'), count: pastCampaigns.value.length },
-  { key: 'affiliate' as const, label: t('activities.tabs.affiliate'), count: affiliateDetail.value?.aff_count ?? 0 },
+  {
+    key: 'open' as const,
+    label: t('activities.tabs.open'),
+    note: t('activities.editorial.tabNotes.open'),
+    count: openCampaigns.value.length,
+  },
+  {
+    key: 'joined' as const,
+    label: t('activities.tabs.joined'),
+    note: t('activities.editorial.tabNotes.joined'),
+    count: joinedCampaigns.value.length,
+  },
+  {
+    key: 'winners' as const,
+    label: t('activities.tabs.winners'),
+    note: t('activities.editorial.tabNotes.winners'),
+    count: winners.value.length,
+  },
+  {
+    key: 'past' as const,
+    label: t('activities.tabs.past'),
+    note: t('activities.editorial.tabNotes.past'),
+    count: pastCampaigns.value.length,
+  },
+  {
+    key: 'affiliate' as const,
+    label: t('activities.tabs.affiliate'),
+    note: t('activities.editorial.tabNotes.affiliate'),
+    count: affiliateDetail.value?.aff_count ?? 0,
+  },
 ])
+const activeSection = computed(() => ({
+  eyebrow: t(`activities.editorial.sections.${activeTab.value}.eyebrow`),
+  title: t(`activities.editorial.sections.${activeTab.value}.title`),
+  description: t(`activities.editorial.sections.${activeTab.value}.description`),
+}))
 const formattedRebateRate = computed(() => {
   const v = affiliateDetail.value?.effective_rebate_rate_percent ?? 0
   const rounded = Math.round(v * 100) / 100
   return Number.isInteger(rounded) ? String(rounded) : rounded.toString()
 })
 const inviteLink = computed(() => {
-  if (!affiliateDetail.value) return ''
-  if (typeof window === 'undefined') return `/register?aff=${encodeURIComponent(affiliateDetail.value.aff_code)}`
-  return `${window.location.origin}/register?aff=${encodeURIComponent(affiliateDetail.value.aff_code)}`
+  return buildAffiliateInviteLink(affiliateDetail.value?.aff_code)
 })
 const periodIncomeTitle = computed(() => {
   if (periodPreset.value === 'today') return t('affiliate.stats.todayQuota')
@@ -500,6 +815,7 @@ async function loadAll(): Promise<void> {
     appStore.showError(extractApiErrorMessage(error, t('activities.loadFailed')))
   } finally {
     loading.value = false
+    hasLoaded.value = true
   }
 }
 
@@ -558,13 +874,6 @@ function participationStatusText(campaign: ActivityCampaign): string {
   if (progress?.joined) return t('activities.participation.joined')
   if ((progress?.ticket_count || 0) > 0) return t('activities.participation.qualified')
   return t('activities.participation.unqualified')
-}
-
-function participationBadgeClass(campaign: ActivityCampaign): string {
-  const progress = campaign.user_progress
-  if (progress?.joined) return 'badge-success'
-  if ((progress?.ticket_count || 0) > 0) return 'badge-warning'
-  return 'badge-gray'
 }
 
 function publicParticipantText(campaign: ActivityCampaign): string {
@@ -652,20 +961,30 @@ function winnerStatusLabel(status: ActivityWinnerStatus): string {
   return t(`activities.winnerStatus.${status}`)
 }
 
-function winnerStatusBadgeClass(status: ActivityWinnerStatus): string {
-  if (status === 'delivered') return 'badge-success'
-  if (status === 'pending_claim' || status === 'pending_delivery') return 'badge-warning'
-  if (status === 'rejected' || status === 'expired') return 'badge-danger'
-  return 'badge-gray'
+function winnerStatusClass(status: ActivityWinnerStatus): string {
+  if (status === 'delivered') return 'winner-state winner-state-success'
+  if (status === 'pending_claim' || status === 'pending_delivery') return 'winner-state winner-state-pending'
+  if (status === 'rejected' || status === 'expired') return 'winner-state winner-state-danger'
+  return 'winner-state'
 }
 
 function openClaim(winner: ActivityWinner): void {
+  dialogReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
   selectedWinner.value = winner
   for (const key of Object.keys(claimForm)) delete claimForm[key]
   for (const field of winner.claim_fields || []) {
     claimForm[field.key] = String((winner.claim_info?.[field.key] as string | undefined) || '')
   }
   claimDialogOpen.value = true
+  void nextTick(() => claimDialogRef.value?.focus())
+}
+
+function closeClaimDialog(): void {
+  claimDialogOpen.value = false
+  void nextTick(() => {
+    dialogReturnFocus?.focus()
+    dialogReturnFocus = null
+  })
 }
 
 async function submitClaim(): Promise<void> {
@@ -679,7 +998,7 @@ async function submitClaim(): Promise<void> {
     const updated = await activityAPI.submitWinnerClaim(selectedWinner.value.id, payload)
     winners.value = winners.value.map(item => item.id === updated.id ? updated : item)
     appStore.showSuccess(t('activities.claim.success'))
-    claimDialogOpen.value = false
+    closeClaimDialog()
   } catch (error) {
     appStore.showError(extractApiErrorMessage(error, t('activities.claim.failed')))
   } finally {
@@ -747,6 +1066,35 @@ function sortIndicator(key: SortKey): string {
   return sortDirection.value === 'asc' ? '↑' : '↓'
 }
 
+function tabId(tab: ActivityTab): string {
+  return `activity-tab-${tab}`
+}
+
+function panelId(tab: ActivityTab): string {
+  return `activity-panel-${tab}`
+}
+
+function handleTabKeydown(event: KeyboardEvent, currentIndex: number): void {
+  const lastIndex = tabs.value.length - 1
+  let nextIndex = currentIndex
+
+  if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+    nextIndex = currentIndex === lastIndex ? 0 : currentIndex + 1
+  } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+    nextIndex = currentIndex === 0 ? lastIndex : currentIndex - 1
+  }
+  else if (event.key === 'Home') nextIndex = 0
+  else if (event.key === 'End') nextIndex = lastIndex
+  else return
+
+  event.preventDefault()
+  activeTab.value = tabs.value[nextIndex].key
+  void nextTick(() => {
+    const tabButtons = tablistRef.value?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
+    tabButtons?.[nextIndex]?.focus()
+  })
+}
+
 function sortableValue(item: AffiliateInvitee, key: SortKey): number {
   if (key === 'bound_at') {
     const time = item.created_at ? new Date(item.created_at).getTime() : 0
@@ -769,6 +1117,29 @@ function formatInviteeStatus(status: string): string {
 
 function formatCount(value: number): string {
   return value.toLocaleString()
+}
+
+function formatSerial(value: number): string {
+  return Math.max(0, Math.floor(value || 0)).toString().padStart(2, '0')
+}
+
+function campaignToneClass(index: number): string {
+  return `campaign-tone-${index % 3}`
+}
+
+function campaignGuidance(campaign: ActivityCampaign): string {
+  const progress = campaign.user_progress
+  if (!campaign.draw_at) return t('activities.lottery.noDrawTime')
+  if (isDrawClosed(campaign)) return t('activities.lottery.drawClosed')
+  if (!progress || progress.ticket_count <= 0) {
+    return t('activities.lottery.noTicketHint', {
+      value: metricValueText(campaign.rule_config.metric, campaign.rule_config.threshold),
+    })
+  }
+  if (progress.joined) {
+    return t('activities.lottery.joinedHint', { count: progress.joined_tickets })
+  }
+  return t('activities.lottery.joinHint', { count: progress.ticket_count })
 }
 
 function startOfLocalDay(date: Date): Date {
@@ -796,875 +1167,9 @@ function parseDateInputStart(value: string): Date | null {
   return Number.isNaN(date.getTime()) ? null : date
 }
 
-const ActivityEmpty = defineComponent({
-  props: { text: { type: String, required: true } },
-  setup(props) {
-    return () => h('div', { class: 'activity-empty' }, props.text)
-  },
-})
-
-const InfoCell = defineComponent({
-  props: {
-    label: { type: String, required: true },
-    value: { type: String, required: true },
-  },
-  setup(props) {
-    return () => h('div', { class: 'info-cell' }, [
-      h('span', props.label),
-      h('strong', props.value),
-    ])
-  },
-})
-
-const PrizeList = defineComponent({
-  props: {
-    campaign: { type: Object as PropType<ActivityCampaign>, required: true },
-  },
-  setup(props) {
-    return () => h('div', { class: 'side-box' }, [
-      h('h3', t('activities.prizes.title')),
-      ...(props.campaign.prizes?.length
-        ? props.campaign.prizes.map(prize => h('div', { class: 'side-row', key: prize.id || prize.name }, [
-          h('div', [h('p', prize.name), h('span', `${prizeTypeLabel(prize.prize_type)} · ${t('activities.prizes.quantity', { count: prize.quantity })}`)]),
-          h('strong', prizeAmountText(prize.prize_type, prize.amount)),
-        ]))
-        : [h('p', { class: 'side-empty' }, t('activities.prizes.empty'))]),
-    ])
-  },
-})
-
-const WinnerList = defineComponent({
-  props: {
-    title: { type: String, required: true },
-    empty: { type: String, required: true },
-    winners: { type: Array as PropType<ActivityWinnerPublic[]>, required: true },
-  },
-  setup(props) {
-    return () => h('div', { class: 'side-box' }, [
-      h('h3', props.title),
-      ...(props.winners.length
-        ? props.winners.slice(0, 8).map(winner => h('div', { class: 'winner-row', key: winner.id }, [
-          h('span', winner.masked_user),
-          h('strong', winner.prize_name),
-        ]))
-        : [h('p', { class: 'side-empty' }, props.empty)]),
-    ])
-  },
-})
-
-const CopyBox = defineComponent({
-  props: {
-    label: { type: String, required: true },
-    value: { type: String, required: true },
-    buttonText: { type: String, required: true },
-  },
-  emits: ['copy'],
-  setup(props, { emit }) {
-    return () => h('div', { class: 'copy-card' }, [
-      h('p', props.label),
-      h('div', { class: 'copy-box' }, [
-        h('code', props.value),
-        h('button', { class: 'btn btn-secondary btn-sm', type: 'button', onClick: () => emit('copy') }, props.buttonText),
-      ]),
-    ])
-  },
-})
-
 onMounted(() => {
   void loadAll()
 })
 </script>
 
-<style scoped>
-.activity-page {
-  width: 100%;
-  max-width: 1320px;
-  margin: 0 auto;
-  padding: 0.875rem clamp(1rem, 2vw, 1.5rem) 2rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.875rem;
-}
-
-.activity-card h2,
-.activity-panel h2 {
-  margin: 0;
-  color: rgb(15 23 42);
-  font-weight: 750;
-  letter-spacing: 0;
-}
-
-.activity-card-head p,
-.activity-panel > p,
-.past-row p,
-.panel-title-row p {
-  margin-top: 0.375rem;
-  color: rgb(71 85 105);
-  font-size: 0.875rem;
-  line-height: 1.55;
-}
-
-.activity-refresh {
-  min-height: 3.5rem;
-  align-self: stretch;
-  white-space: nowrap;
-}
-
-.activity-loading {
-  display: flex;
-  justify-content: center;
-  padding: 3rem 0;
-}
-
-.activity-loading.compact {
-  padding: 2rem 0;
-}
-
-.activity-summary {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
-  align-items: stretch;
-  gap: 0.5rem;
-  border: 1px solid rgb(226 232 240);
-  border-radius: 0.5rem;
-  background: rgba(255, 255, 255, 0.96);
-  padding: 0.5rem;
-  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.04);
-}
-
-.metric-tile,
-.activity-panel,
-.activity-tabs,
-.activity-card {
-  border: 1px solid rgb(226 232 240);
-  border-radius: 0.5rem;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.045);
-}
-
-.metric-tile {
-  position: relative;
-  min-height: 3.5rem;
-  overflow: hidden;
-  border: 0;
-  background: rgb(248 250 252);
-  box-shadow: none;
-  padding: 0.625rem 0.75rem;
-}
-
-.metric-tile svg {
-  position: absolute;
-  right: 1rem;
-  top: 1rem;
-  opacity: 0.36;
-}
-
-.metric-tile span,
-.info-cell span {
-  display: block;
-  font-size: 0.75rem;
-  color: rgb(100 116 139);
-}
-
-.metric-tile strong {
-  display: block;
-  margin-top: 0.125rem;
-  color: rgb(15 23 42);
-  font-size: 1.375rem;
-  line-height: 1.625rem;
-  font-weight: 760;
-}
-
-.activity-tabs {
-  display: flex;
-  gap: 0.375rem;
-  overflow-x: auto;
-  padding: 0.375rem;
-}
-
-.activity-tab {
-  display: inline-flex;
-  min-height: 2.75rem;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 0.5rem;
-  border-radius: 0.5rem;
-  padding: 0 0.925rem;
-  color: rgb(71 85 105);
-  font-size: 0.875rem;
-  font-weight: 650;
-  transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
-  cursor: pointer;
-}
-
-.activity-tab:hover {
-  background: rgb(248 250 252);
-  color: rgb(15 23 42);
-}
-
-.activity-tab em {
-  min-width: 1.45rem;
-  border-radius: 9999px;
-  background: rgb(241 245 249);
-  padding: 0.125rem 0.375rem;
-  color: rgb(100 116 139);
-  font-style: normal;
-  font-size: 0.75rem;
-  text-align: center;
-}
-
-.activity-tab-active {
-  background: rgb(37 99 235);
-  color: white;
-  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.22);
-}
-
-.activity-tab-active:hover {
-  background: rgb(37 99 235);
-  color: white;
-}
-
-.activity-tab-active em {
-  background: rgba(255, 255, 255, 0.22);
-  color: white;
-}
-
-.activity-section {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.activity-card {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px;
-  gap: 0.875rem;
-  padding: 0.875rem;
-}
-
-.activity-card-main {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.activity-card-aside {
-  display: grid;
-  gap: 0.875rem;
-  align-content: start;
-}
-
-.activity-card-head,
-.joined-row,
-.past-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
-.activity-card h2,
-.activity-panel h2 {
-  font-size: 1rem;
-  line-height: 1.5rem;
-}
-
-.activity-meta-line {
-  margin-top: 0.375rem;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.375rem 0.625rem;
-  color: rgb(100 116 139);
-  font-size: 0.8125rem;
-}
-
-.activity-meta-line span:first-child {
-  color: rgb(15 23 42);
-  font-weight: 750;
-}
-
-.activity-head-actions {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 0.625rem;
-}
-
-.activity-ticket-box {
-  min-width: 5.5rem;
-  border: 1px solid rgb(219 234 254);
-  border-radius: 0.5rem;
-  background: rgb(248 250 252);
-  padding: 0.5rem 0.625rem;
-  text-align: right;
-}
-
-.activity-ticket-box span {
-  display: block;
-  font-size: 0.75rem;
-  color: rgb(29 78 216);
-}
-
-.activity-ticket-box strong {
-  display: block;
-  color: rgb(30 64 175);
-  font-size: 1.25rem;
-  line-height: 1.5rem;
-  font-weight: 800;
-}
-
-.activity-progress-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 3rem;
-  align-items: center;
-  gap: 0.625rem;
-}
-
-.activity-progress-row span {
-  color: rgb(100 116 139);
-  font-size: 0.75rem;
-  text-align: right;
-}
-
-.activity-stepper {
-  display: grid;
-  gap: 0.5rem;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.activity-step {
-  display: flex;
-  min-height: 2.5rem;
-  align-items: center;
-  gap: 0.5rem;
-  border: 0;
-  border-radius: 0.5rem;
-  background: rgb(248 250 252);
-  padding: 0.5rem 0.625rem;
-  color: rgb(71 85 105);
-}
-
-.activity-step span {
-  display: inline-flex;
-  height: 1.5rem;
-  width: 1.5rem;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  border-radius: 9999px;
-  background: rgb(226 232 240);
-  font-size: 0.75rem;
-  font-weight: 800;
-}
-
-.activity-step p {
-  margin: 0;
-  font-size: 0.8125rem;
-  font-weight: 700;
-}
-
-.activity-step-done {
-  border-color: rgb(167 243 208);
-  background: rgb(236 253 245);
-  color: rgb(4 120 87);
-}
-
-.activity-step-done span {
-  background: rgb(16 185 129);
-  color: white;
-}
-
-.info-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.5rem;
-}
-
-.info-cell {
-  min-width: 0;
-  border: 1px solid rgb(226 232 240);
-  border-radius: 0.5rem;
-  background: white;
-  padding: 0.625rem;
-}
-
-.info-cell strong {
-  display: block;
-  min-height: 1.25rem;
-  margin-top: 0.25rem;
-  color: rgb(15 23 42);
-  font-size: 0.8125rem;
-  font-weight: 750;
-  overflow-wrap: anywhere;
-}
-
-.progress-track {
-  height: 0.375rem;
-  overflow: hidden;
-  border-radius: 9999px;
-  background: rgb(226 232 240);
-}
-
-.progress-fill {
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, rgb(37 99 235), rgb(16 185 129));
-  transition: width 0.22s ease;
-}
-
-.joined-update span {
-  color: rgb(100 116 139);
-  font-size: 0.75rem;
-}
-
-.activity-panel {
-  padding: 1.125rem;
-}
-
-.activity-empty {
-  border: 1px dashed rgb(203 213 225);
-  border-radius: 0.5rem;
-  padding: 2.5rem 1rem;
-  color: rgb(100 116 139);
-  text-align: center;
-  font-size: 0.875rem;
-}
-
-.joined-row {
-  flex-wrap: wrap;
-}
-
-.joined-cells {
-  display: grid;
-  width: min(100%, 620px);
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.75rem;
-}
-
-.joined-row p {
-  margin-top: 0.375rem;
-  color: rgb(100 116 139);
-  font-size: 0.875rem;
-}
-
-.joined-update {
-  width: 100%;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.625rem;
-}
-
-.past-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 0.36fr);
-}
-
-.side-box {
-  border: 1px solid rgb(226 232 240);
-  border-radius: 0.5rem;
-  background: white;
-  padding: 0.75rem;
-}
-
-.side-box h3 {
-  margin: 0;
-  color: rgb(15 23 42);
-  font-size: 0.875rem;
-  font-weight: 800;
-}
-
-.side-row,
-.winner-row {
-  margin-top: 0.5rem;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  border-top: 1px solid rgb(241 245 249);
-  border-radius: 0;
-  background: transparent;
-  padding: 0.5rem 0 0;
-}
-
-.side-row p,
-.side-row strong,
-.winner-row strong {
-  color: rgb(15 23 42);
-  font-size: 0.8125rem;
-  font-weight: 750;
-}
-
-.side-row span,
-.winner-row span,
-.side-empty {
-  color: rgb(100 116 139);
-  font-size: 0.75rem;
-}
-
-.panel-title-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 1rem;
-}
-
-.table-wrap {
-  width: 100%;
-  overflow-x: auto;
-}
-
-.activity-table {
-  width: 100%;
-  border-collapse: separate;
-  border-spacing: 0;
-  text-align: left;
-  font-size: 0.875rem;
-}
-
-.activity-table th {
-  border-bottom: 1px solid rgb(226 232 240);
-  padding: 0.75rem;
-  color: rgb(100 116 139);
-  font-weight: 700;
-}
-
-.activity-table td {
-  border-bottom: 1px solid rgb(241 245 249);
-  padding: 0.875rem 0.75rem;
-  color: rgb(51 65 85);
-}
-
-.activity-table tbody tr:last-child td {
-  border-bottom: 0;
-}
-
-.affiliate-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
-  gap: 1rem;
-}
-
-.affiliate-overview,
-.affiliate-table-panel {
-  grid-column: 1 / -1;
-}
-
-.affiliate-metrics {
-  display: grid;
-  gap: 0.75rem;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-}
-
-.affiliate-metric {
-  min-height: 6rem;
-  border: 1px solid rgb(226 232 240);
-  border-radius: 0.5rem;
-  background: rgb(248 250 252);
-  padding: 0.875rem;
-}
-
-.affiliate-metric.primary {
-  background: linear-gradient(135deg, rgb(239 246 255), rgb(236 253 245));
-}
-
-.affiliate-metric span,
-.affiliate-policy-grid span {
-  display: block;
-  color: rgb(100 116 139);
-  font-size: 0.75rem;
-}
-
-.affiliate-metric strong,
-.affiliate-policy-grid strong {
-  display: block;
-  margin-top: 0.45rem;
-  color: rgb(15 23 42);
-  font-size: 1rem;
-  font-weight: 800;
-  overflow-wrap: anywhere;
-}
-
-.affiliate-metric.primary strong {
-  color: rgb(37 99 235);
-  font-size: 1.75rem;
-  line-height: 2rem;
-}
-
-.affiliate-metric p,
-.affiliate-policy-grid p {
-  margin-top: 0.375rem;
-  color: rgb(100 116 139);
-  font-size: 0.75rem;
-  line-height: 1.45;
-}
-
-.period-control {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.375rem;
-}
-
-.period-button {
-  min-height: 2.25rem;
-  border-radius: 0.5rem;
-  padding: 0 0.75rem;
-  color: rgb(71 85 105);
-  font-size: 0.8125rem;
-  font-weight: 700;
-  transition: background 0.18s ease, color 0.18s ease;
-  cursor: pointer;
-}
-
-.period-button:hover {
-  background: rgb(248 250 252);
-}
-
-.period-button-active {
-  background: rgb(219 234 254);
-  color: rgb(29 78 216);
-}
-
-.affiliate-period-row {
-  margin-top: 1rem;
-  display: grid;
-  max-width: 460px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.75rem;
-}
-
-.affiliate-share,
-.affiliate-tips {
-  align-self: start;
-}
-
-.copy-section {
-  display: grid;
-  gap: 0.875rem;
-}
-
-.copy-card p {
-  margin-bottom: 0.375rem;
-  color: rgb(51 65 85);
-  font-size: 0.875rem;
-  font-weight: 700;
-}
-
-.copy-box {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  border: 1px solid rgb(226 232 240);
-  border-radius: 0.5rem;
-  background: rgb(248 250 252);
-  padding: 0.5rem 0.625rem;
-}
-
-.copy-box code {
-  min-width: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: rgb(15 23 42);
-  font-size: 0.875rem;
-}
-
-.affiliate-policy-grid {
-  margin-top: 0.875rem;
-  display: grid;
-  gap: 0.75rem;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.affiliate-policy-grid > div {
-  border: 1px solid rgb(226 232 240);
-  border-radius: 0.5rem;
-  background: rgb(248 250 252);
-  padding: 0.75rem;
-}
-
-.affiliate-tips {
-  border-color: rgb(187 247 208);
-  background: linear-gradient(135deg, rgb(240 253 244), rgb(255 255 255));
-}
-
-.affiliate-tips p {
-  color: rgb(22 101 52);
-  font-weight: 800;
-}
-
-.affiliate-tips ul {
-  margin-top: 0.625rem;
-  display: grid;
-  gap: 0.375rem;
-  color: rgb(21 128 61);
-  font-size: 0.875rem;
-  line-height: 1.55;
-}
-
-.table-sort {
-  display: inline-flex;
-  width: 100%;
-  align-items: center;
-  gap: 0.25rem;
-  color: inherit;
-  cursor: pointer;
-}
-
-.table-sort:hover {
-  color: rgb(15 23 42);
-}
-
-.dark .activity-summary,
-.dark .metric-tile,
-.dark .activity-panel,
-.dark .activity-tabs,
-.dark .activity-card {
-  border-color: rgb(51 65 85);
-  background: rgb(15 23 42);
-  box-shadow: none;
-}
-
-.dark .activity-card h2,
-.dark .activity-panel h2,
-.dark .activity-meta-line span:first-child,
-.dark .metric-tile strong,
-.dark .info-cell strong,
-.dark .side-box h3,
-.dark .side-row p,
-.dark .side-row strong,
-.dark .winner-row strong,
-.dark .affiliate-metric strong,
-.dark .affiliate-policy-grid strong,
-.dark .copy-box code {
-  color: white;
-}
-
-.dark .activity-card-head p,
-.dark .activity-meta-line,
-.dark .activity-panel > p,
-.dark .past-row p,
-.dark .panel-title-row p,
-.dark .metric-tile span,
-.dark .info-cell span,
-.dark .joined-update span,
-.dark .side-row span,
-.dark .winner-row span,
-.dark .side-empty,
-.dark .activity-empty,
-.dark .affiliate-metric span,
-.dark .affiliate-metric p,
-.dark .affiliate-policy-grid span,
-.dark .affiliate-policy-grid p {
-  color: rgb(148 163 184);
-}
-
-.dark .info-cell,
-.dark .side-box,
-.dark .activity-ticket-box,
-.dark .activity-step,
-.dark .affiliate-metric,
-.dark .affiliate-policy-grid > div,
-.dark .copy-box {
-  border-color: rgb(51 65 85);
-  background: rgb(30 41 59);
-}
-
-.dark .side-row,
-.dark .winner-row {
-  border-color: rgb(30 41 59);
-  background: transparent;
-}
-
-.dark .activity-tab {
-  color: rgb(203 213 225);
-}
-
-.dark .activity-tab:hover {
-  background: rgb(30 41 59);
-  color: white;
-}
-
-.dark .activity-tab-active,
-.dark .activity-tab-active:hover {
-  background: rgb(37 99 235);
-}
-
-.dark .activity-table th {
-  border-color: rgb(51 65 85);
-  color: rgb(148 163 184);
-}
-
-.dark .activity-table td {
-  border-color: rgb(30 41 59);
-  color: rgb(203 213 225);
-}
-
-.dark .affiliate-tips {
-  border-color: rgba(34, 197, 94, 0.35);
-  background: rgba(20, 83, 45, 0.22);
-}
-
-.dark .affiliate-tips p,
-.dark .affiliate-tips ul {
-  color: rgb(187 247 208);
-}
-
-@media (max-width: 1280px) {
-  .activity-summary,
-  .affiliate-metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .activity-refresh {
-    grid-column: 1 / -1;
-  }
-
-  .activity-card,
-  .past-row,
-  .affiliate-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .activity-card-aside {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 768px) {
-  .activity-page {
-    padding-inline: 0.75rem;
-  }
-
-  .activity-card-head,
-  .joined-row,
-  .panel-title-row {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .activity-summary,
-  .affiliate-metrics,
-  .info-grid,
-  .joined-cells,
-  .activity-stepper,
-  .activity-card-aside,
-  .affiliate-policy-grid,
-  .affiliate-period-row {
-    grid-template-columns: 1fr;
-  }
-
-  .activity-ticket-box {
-    text-align: left;
-  }
-
-  .activity-head-actions {
-    width: 100%;
-    justify-content: space-between;
-  }
-}
-</style>
+<style scoped src="./ActivitiesView.css"></style>

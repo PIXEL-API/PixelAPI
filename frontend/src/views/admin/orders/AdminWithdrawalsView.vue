@@ -44,7 +44,11 @@
           </span>
         </template>
         <template #cell-created_at="{ value }">
-          <span class="text-xs text-gray-500 dark:text-gray-400">{{ formatDate(value) }}</span>
+          <span class="text-xs text-gray-500 dark:text-gray-400">{{ formatDateTime(value) }}</span>
+        </template>
+        <template #cell-last_withdrawal_at="{ value }">
+          <span v-if="value" class="text-xs text-gray-500 dark:text-gray-400">{{ formatDateTime(value) }}</span>
+          <span v-else class="text-xs font-medium text-blue-600 dark:text-blue-400">首次提现</span>
         </template>
         <template #cell-actions="{ row }">
           <div class="flex flex-wrap items-center gap-1">
@@ -118,8 +122,9 @@
         <InfoItem label="手续费" :value="'$' + detailTarget.fee_amount.toFixed(2)" />
         <InfoItem label="申请前余额" :value="'$' + detailTarget.balance_before.toFixed(2)" />
         <InfoItem label="申请后余额" :value="'$' + detailTarget.balance_after.toFixed(2)" />
-        <InfoItem label="申请时间" :value="formatDate(detailTarget.created_at)" />
-        <InfoItem label="处理时间" :value="detailTarget.processed_at ? formatDate(detailTarget.processed_at) : '-'" />
+        <InfoItem label="上次提现时间" :value="detailTarget.last_withdrawal_at ? formatDateTime(detailTarget.last_withdrawal_at) : '首次提现'" />
+        <InfoItem label="申请时间" :value="formatDateTime(detailTarget.created_at)" />
+        <InfoItem label="处理时间" :value="detailTarget.processed_at ? formatDateTime(detailTarget.processed_at) : '-'" />
         <InfoItem
           class="sm:col-span-2"
           :label="detailTarget.status === 'REJECTED' ? '驳回原因' : '备注'"
@@ -169,6 +174,7 @@ import { useAppStore } from '@/stores/app'
 import { adminPaymentAPI } from '@/api/admin/payment'
 import type { ReceiptCodePaymentMethod, WithdrawalRequest, WithdrawalStatus } from '@/types'
 import { extractApiErrorMessage } from '@/utils/apiError'
+import { formatDateTime } from '@/utils/format'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import DataTable from '@/components/common/DataTable.vue'
@@ -211,6 +217,7 @@ const columns = computed<Column[]>(() => [
   { key: 'payment_method', label: '收款方式' },
   { key: 'receipt_code_url', label: '收款码' },
   { key: 'status', label: '状态' },
+  { key: 'last_withdrawal_at', label: '上次提现时间' },
   { key: 'created_at', label: '申请时间' },
   { key: 'actions', label: '操作' },
 ])
@@ -279,7 +286,7 @@ async function openReceipt(row: WithdrawalRequest) {
     receiptTarget.value = res.data
     const index = items.value.findIndex(item => item.id === res.data.id)
     if (index >= 0) {
-      items.value.splice(index, 1, res.data)
+      items.value.splice(index, 1, { ...items.value[index], ...res.data })
     }
   } catch (error: unknown) {
     if (requestSeq === receiptRequestSeq) {
@@ -355,10 +362,6 @@ function statusClass(status: WithdrawalStatus): string {
 
 function methodLabel(method: ReceiptCodePaymentMethod): string {
   return method === 'alipay' ? '支付宝' : '微信'
-}
-
-function formatDate(raw: string): string {
-  return new Date(raw).toLocaleString()
 }
 
 void load()

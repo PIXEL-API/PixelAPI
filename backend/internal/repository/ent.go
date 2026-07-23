@@ -23,7 +23,7 @@ import (
 // 该函数执行以下操作：
 //  1. 初始化全局时区设置，确保时间处理一致性
 //  2. 建立 PostgreSQL 数据库连接
-//  3. 自动执行数据库迁移，确保 schema 与代码同步
+//  3. 按 database.migration_mode 执行迁移或只读校验
 //  4. 创建并返回 Ent 客户端实例
 //
 // 重要提示：调用者必须负责关闭返回的 ent.Client（关闭时会自动关闭底层的 driver/db）。
@@ -42,29 +42,43 @@ func InitEnt(cfg *config.Config) (*ent.Client, *sql.DB, error) {
 	}
 	applyDBPoolSettings(drv.DB(), cfg)
 
-	// 确保数据库 schema 已准备就绪。
-	// SQL 迁移文件是 schema 的权威来源（source of truth）。
-	// 这种方式比 Ent 的自动迁移更可控，支持复杂的迁移场景。
+	// SQL 迁移文件是 schema 的权威来源。普通集群节点只能只读校验；
+	// 实际迁移由显式的 --migrate-only 进程完成。
 	migrationCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	if err := ApplyMigrations(migrationCtx, drv.DB()); err != nil {
+	var migrationErr error
+	switch cfg.Database.MigrationMode {
+	case config.DatabaseMigrationModeMigrate:
+		migrationErr = ApplyMigrations(migrationCtx, drv.DB())
+	case config.DatabaseMigrationModeValidate:
+		migrationErr = ValidateMigrations(migrationCtx, drv.DB())
+	default:
+		migrationErr = fmt.Errorf("unsupported database migration mode %q", cfg.Database.MigrationMode)
+	}
+	if migrationErr != nil {
 		_ = drv.Close() // 迁移失败时关闭驱动，避免资源泄露
-		return nil, nil, err
+		return nil, nil, migrationErr
 	}
 
 	// 创建 Ent 客户端，绑定到已配置的数据库驱动。
 	client := ent.NewClient(ent.Driver(drv))
 
-	// 启动阶段：从配置或数据库中确保系统密钥可用。
-	if err := ensureBootstrapSecrets(migrationCtx, client, cfg); err != nil {
-		_ = client.Close()
-		return nil, nil, err
-	}
-
-	// 在密钥补齐后执行完整配置校验，避免空 jwt.secret 导致服务运行时失败。
-	if err := cfg.Validate(); err != nil {
-		_ = client.Close()
-		return nil, nil, fmt.Errorf("validate config after secret bootstrap: %w", err)
+	if cfg.Cluster.Enabled {
+		// 集群节点禁止在启动时生成或回填共享密钥，所有节点必须使用同一份显式配置。
+		if err := cfg.Validate(); err != nil {
+			_ = client.Close()
+			return nil, nil, fmt.Errorf("validate cluster config: %w", err)
+		}
+	} else {
+		// 单实例兼容：首次启动仍可从数据库补齐系统密钥。
+		if err := ensureBootstrapSecrets(migrationCtx, client, cfg); err != nil {
+			_ = client.Close()
+			return nil, nil, err
+		}
+		if err := cfg.Validate(); err != nil {
+			_ = client.Close()
+			return nil, nil, fmt.Errorf("validate config after secret bootstrap: %w", err)
+		}
 	}
 
 	// SIMPLE 模式：启动时补齐各平台默认分组。

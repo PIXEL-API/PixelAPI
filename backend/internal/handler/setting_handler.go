@@ -86,6 +86,7 @@ func (h *SettingHandler) GetPublicSettings(c *gin.Context) {
 		OpenAIAccountLevels: openAIAccountLevelsToDTO(settings.OpenAIAccountLevels),
 
 		AffiliateEnabled:                settings.AffiliateEnabled,
+		UserPrivateGroupCommissionRate:  settings.UserPrivateGroupCommissionRate,
 		RiskControlEnabled:              settings.RiskControlEnabled,
 		InvoiceManagementEnabled:        settings.InvoiceManagementEnabled,
 		WithdrawalManagementEnabled:     settings.WithdrawalManagementEnabled,

@@ -38,6 +38,7 @@ func ProvideRouter(
 	subscriptionService *service.SubscriptionService,
 	opsService *service.OpsService,
 	settingService *service.SettingService,
+	clusterRuntime *service.ClusterRuntime,
 	redisClient *redis.Client,
 ) *gin.Engine {
 	if cfg.Server.Mode == "release" {
@@ -84,7 +85,7 @@ func ProvideRouter(
 		service.SetWebSearchManager(websearch.NewManager(configs, redisClient))
 	})
 
-	return SetupRouter(r, handlers, jwtAuth, adminAuth, apiKeyAuth, apiKeyService, subscriptionService, opsService, settingService, cfg, redisClient)
+	return SetupRouter(r, handlers, jwtAuth, adminAuth, apiKeyAuth, apiKeyService, subscriptionService, opsService, settingService, clusterRuntime, cfg, redisClient)
 }
 
 var standardForwardedClientIPHeaders = []string{
@@ -142,8 +143,13 @@ func mergeForwardedClientIPHeaders(groups ...[]string) []string {
 }
 
 // ProvideHTTPServer 提供 HTTP 服务器
-func ProvideHTTPServer(cfg *config.Config, router *gin.Engine) *http.Server {
+func ProvideHTTPServer(
+	cfg *config.Config,
+	router *gin.Engine,
+	connectionTracker *service.ClusterConnectionTracker,
+) *http.Server {
 	httpHandler := http.Handler(router)
+	httpHandler = newClusterConnectionTrackingHandler(httpHandler, connectionTracker)
 	server := &http.Server{
 		Addr:    cfg.Server.Address(),
 		Handler: httpHandler,

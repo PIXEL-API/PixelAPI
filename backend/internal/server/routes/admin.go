@@ -29,7 +29,6 @@ func RegisterAdminRoutes(
 		// 账号管理
 		registerAccountRoutes(admin, h)
 		registerAccountSharePolicyRoutes(admin, h)
-		registerAccountShareModePolicyRoutes(admin, h)
 
 		// 公告管理
 		registerAnnouncementRoutes(admin, h)
@@ -67,6 +66,7 @@ func RegisterAdminRoutes(
 
 		// 运维监控（Ops）
 		registerOpsRoutes(admin, h)
+		registerClusterRoutes(admin, h)
 
 		// 系统管理
 		registerSystemRoutes(admin, h)
@@ -108,6 +108,20 @@ func RegisterAdminRoutes(
 
 		// 邀请返利（专属用户管理）
 		registerAffiliateRoutes(admin, h)
+	}
+}
+
+func registerClusterRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	cluster := admin.Group("/ops/cluster")
+	{
+		cluster.GET("/summary", h.Admin.Cluster.GetSummary)
+		cluster.GET("/instances", h.Admin.Cluster.ListInstances)
+		cluster.GET("/instances/:node_id", h.Admin.Cluster.GetInstance)
+		cluster.GET("/tasks", h.Admin.Cluster.ListTasks)
+		cluster.GET("/operations", h.Admin.Cluster.ListOperations)
+		cluster.POST("/instances/:node_id/drain", h.Admin.Cluster.DrainInstance)
+		cluster.POST("/instances/:node_id/resume", h.Admin.Cluster.ResumeInstance)
+		cluster.POST("/cache-refresh", h.Admin.Cluster.RefreshCache)
 	}
 }
 
@@ -439,14 +453,6 @@ func registerAccountSharePolicyRoutes(admin *gin.RouterGroup, h *handler.Handler
 		policies.POST("", h.Admin.AccountSharePolicy.Create)
 		policies.PUT("/:id", h.Admin.AccountSharePolicy.Update)
 		policies.DELETE("/:id", h.Admin.AccountSharePolicy.Delete)
-	}
-}
-
-func registerAccountShareModePolicyRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
-	policy := admin.Group("/account-share-mode-policy")
-	{
-		policy.GET("", h.Admin.AccountShareModePolicy.Get)
-		policy.PUT("", h.Admin.AccountShareModePolicy.Update)
 	}
 }
 

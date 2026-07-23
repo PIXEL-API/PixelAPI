@@ -189,6 +189,23 @@ func (h *UserHandler) GetAffiliate(c *gin.Context) {
 	response.Success(c, detail)
 }
 
+// GetAffiliateShare returns the lightweight invite-link data used by the global header.
+// GET /api/v1/user/aff/share
+func (h *UserHandler) GetAffiliateShare(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+
+	summary, err := h.affiliateService.GetAffiliateShareSummary(c.Request.Context(), subject.UserID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, summary)
+}
+
 func parseAffiliateDetailQuery(c *gin.Context) (service.AffiliateDetailQuery, error) {
 	var query service.AffiliateDetailQuery
 	startRaw := strings.TrimSpace(c.Query("period_start_at"))

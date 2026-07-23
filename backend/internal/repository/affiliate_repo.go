@@ -22,6 +22,121 @@ const (
 
 var affiliateCodeCharset = []byte("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
 
+const affiliateInviteesSettlementSQL = `
+WITH selected_invitees AS MATERIALIZED (
+    SELECT ua.user_id,
+           COALESCE(ua.inviter_bound_at, ua.created_at) AS invited_at,
+           COALESCE(ua.invite_bind_source, '') AS invite_bind_source
+    FROM user_affiliates ua
+    WHERE ua.inviter_id = $1
+    ORDER BY COALESCE(ua.inviter_bound_at, ua.created_at) DESC
+    LIMIT $4
+),
+settlement_parts AS (
+    SELECT ase.consumer_user_id,
+           COALESCE(SUM(ase.consumer_charge), 0) AS history_consumption,
+           COALESCE(SUM(ase.invite_credit), 0) AS total_rebate,
+           COALESCE(SUM(ase.consumer_charge) FILTER (
+               WHERE ($2::timestamptz IS NULL OR ase.created_at >= $2::timestamptz)
+                 AND ($3::timestamptz IS NULL OR ase.created_at < $3::timestamptz)
+           ), 0) AS period_consumption,
+           COALESCE(SUM(ase.invite_credit) FILTER (
+               WHERE ($2::timestamptz IS NULL OR ase.created_at >= $2::timestamptz)
+                 AND ($3::timestamptz IS NULL OR ase.created_at < $3::timestamptz)
+           ), 0) AS period_rebate
+    FROM account_share_settlement_entries ase
+    JOIN selected_invitees si
+      ON si.user_id = ase.consumer_user_id
+     AND ase.created_at >= si.invited_at
+    WHERE ase.status = 'applied'
+      AND ase.inviter_user_id = $1
+    GROUP BY ase.consumer_user_id
+
+    UNION ALL
+
+    SELECT asmse.consumer_user_id,
+           COALESCE(SUM(CASE
+               WHEN asmse.settlement_type IN ('usage_request', 'seat_charge') THEN asmse.total_charge
+               WHEN asmse.settlement_type = 'seat_waiver_refund' THEN -asmse.refund_amount
+               ELSE 0
+           END), 0) AS history_consumption,
+           COALESCE(SUM(CASE
+               WHEN asmse.settlement_type IN ('usage_request', 'seat_charge') THEN asmse.invite_credit
+               WHEN asmse.settlement_type = 'seat_waiver_refund' THEN -asmse.invite_credit
+               ELSE 0
+           END), 0) AS total_rebate,
+           COALESCE(SUM(CASE
+               WHEN asmse.settlement_type IN ('usage_request', 'seat_charge') THEN asmse.total_charge
+               WHEN asmse.settlement_type = 'seat_waiver_refund' THEN -asmse.refund_amount
+               ELSE 0
+           END) FILTER (
+               WHERE ($2::timestamptz IS NULL OR asmse.created_at >= $2::timestamptz)
+                 AND ($3::timestamptz IS NULL OR asmse.created_at < $3::timestamptz)
+           ), 0) AS period_consumption,
+           COALESCE(SUM(CASE
+               WHEN asmse.settlement_type IN ('usage_request', 'seat_charge') THEN asmse.invite_credit
+               WHEN asmse.settlement_type = 'seat_waiver_refund' THEN -asmse.invite_credit
+               ELSE 0
+           END) FILTER (
+               WHERE ($2::timestamptz IS NULL OR asmse.created_at >= $2::timestamptz)
+                 AND ($3::timestamptz IS NULL OR asmse.created_at < $3::timestamptz)
+           ), 0) AS period_rebate
+    FROM account_share_mode_settlement_entries asmse
+    JOIN selected_invitees si
+      ON si.user_id = asmse.consumer_user_id
+     AND asmse.created_at >= si.invited_at
+    WHERE asmse.inviter_user_id = $1
+      AND asmse.settlement_type IN ('usage_request', 'seat_charge', 'seat_waiver_refund')
+    GROUP BY asmse.consumer_user_id
+),
+settlement_totals AS (
+    SELECT consumer_user_id,
+           SUM(history_consumption) AS history_consumption,
+           SUM(total_rebate) AS total_rebate,
+           SUM(period_consumption) AS period_consumption,
+           SUM(period_rebate) AS period_rebate
+    FROM settlement_parts
+    GROUP BY consumer_user_id
+)
+SELECT si.user_id,
+       COALESCE(u.email, ''),
+       COALESCE(u.username, ''),
+       si.invited_at,
+       si.invite_bind_source,
+       COALESCE(u.status, ''),
+       COALESCE(st.history_consumption, 0)::double precision,
+       COALESCE(st.total_rebate, 0)::double precision,
+       COALESCE(st.period_consumption, 0)::double precision,
+       COALESCE(st.period_rebate, 0)::double precision
+FROM selected_invitees si
+LEFT JOIN users u ON u.id = si.user_id
+LEFT JOIN settlement_totals st ON st.consumer_user_id = si.user_id
+ORDER BY si.invited_at DESC`
+
+const affiliatePeriodRebateSQL = `
+SELECT COALESCE(SUM(settlements.rebate_credit), 0)::double precision
+FROM (
+    SELECT ase.invite_credit AS rebate_credit
+    FROM account_share_settlement_entries ase
+    WHERE ase.status = 'applied'
+      AND ase.inviter_user_id = $1
+      AND ($2::timestamptz IS NULL OR ase.created_at >= $2::timestamptz)
+      AND ($3::timestamptz IS NULL OR ase.created_at < $3::timestamptz)
+
+    UNION ALL
+
+    SELECT CASE
+               WHEN asmse.settlement_type IN ('usage_request', 'seat_charge') THEN asmse.invite_credit
+               WHEN asmse.settlement_type = 'seat_waiver_refund' THEN -asmse.invite_credit
+               ELSE 0
+           END AS rebate_credit
+    FROM account_share_mode_settlement_entries asmse
+    WHERE asmse.inviter_user_id = $1
+      AND asmse.settlement_type IN ('usage_request', 'seat_charge', 'seat_waiver_refund')
+      AND ($2::timestamptz IS NULL OR asmse.created_at >= $2::timestamptz)
+      AND ($3::timestamptz IS NULL OR asmse.created_at < $3::timestamptz)
+) settlements`
+
 type affiliateQueryExecer interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
@@ -41,6 +156,14 @@ func (r *affiliateRepository) EnsureUserAffiliate(ctx context.Context, userID in
 	}
 	client := clientFromContext(ctx, r.client)
 	return ensureUserAffiliateWithClient(ctx, client, userID)
+}
+
+func (r *affiliateRepository) GetAffiliateByUserID(ctx context.Context, userID int64) (*service.AffiliateSummary, error) {
+	if userID <= 0 {
+		return nil, service.ErrUserNotFound
+	}
+	client := clientFromContext(ctx, r.client)
+	return queryAffiliateByUserID(ctx, client, userID)
 }
 
 func (r *affiliateRepository) GetAffiliateByCode(ctx context.Context, code string) (*service.AffiliateSummary, error) {
@@ -665,42 +788,14 @@ func (r *affiliateRepository) ListInvitees(ctx context.Context, inviterID int64,
 	if err != nil {
 		return nil, 0, err
 	}
-	rows, err := client.QueryContext(ctx, `
-SELECT ua.user_id,
-       COALESCE(u.email, ''),
-       COALESCE(u.username, ''),
-       COALESCE(ua.inviter_bound_at, ua.created_at),
-       COALESCE(ua.invite_bind_source, ''),
-       COALESCE(u.status, ''),
-       COALESCE(SUM(ase.consumer_charge) FILTER (
-           WHERE ase.status = 'applied'
-             AND ase.inviter_user_id = $1
-       ), 0)::double precision AS history_consumption,
-       COALESCE(SUM(ase.invite_credit) FILTER (
-           WHERE ase.status = 'applied'
-             AND ase.inviter_user_id = $1
-       ), 0)::double precision AS total_rebate,
-       COALESCE(SUM(ase.consumer_charge) FILTER (
-           WHERE ase.status = 'applied'
-             AND ase.inviter_user_id = $1
-             AND ($2::timestamptz IS NULL OR ase.created_at >= $2::timestamptz)
-             AND ($3::timestamptz IS NULL OR ase.created_at < $3::timestamptz)
-       ), 0)::double precision AS period_consumption,
-       COALESCE(SUM(ase.invite_credit) FILTER (
-           WHERE ase.status = 'applied'
-             AND ase.inviter_user_id = $1
-             AND ($2::timestamptz IS NULL OR ase.created_at >= $2::timestamptz)
-             AND ($3::timestamptz IS NULL OR ase.created_at < $3::timestamptz)
-       ), 0)::double precision AS period_rebate
-FROM user_affiliates ua
-LEFT JOIN users u ON u.id = ua.user_id
-LEFT JOIN account_share_settlement_entries ase
-       ON ase.consumer_user_id = ua.user_id
-      AND ase.created_at >= COALESCE(ua.inviter_bound_at, ua.created_at)
-WHERE ua.inviter_id = $1
-GROUP BY ua.user_id, u.email, u.username, u.status, ua.inviter_bound_at, ua.created_at, ua.invite_bind_source
-ORDER BY COALESCE(ua.inviter_bound_at, ua.created_at) DESC
-LIMIT $4`, inviterID, nullableTimeArg(query.PeriodStart), nullableTimeArg(query.PeriodEnd), limit)
+	rows, err := client.QueryContext(
+		ctx,
+		affiliateInviteesSettlementSQL,
+		inviterID,
+		nullableTimeArg(query.PeriodStart),
+		nullableTimeArg(query.PeriodEnd),
+		limit,
+	)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -734,13 +829,7 @@ LIMIT $4`, inviterID, nullableTimeArg(query.PeriodStart), nullableTimeArg(query.
 }
 
 func queryAffiliatePeriodRebate(ctx context.Context, client affiliateQueryExecer, inviterID int64, query service.AffiliateDetailQuery) (float64, error) {
-	rows, err := client.QueryContext(ctx, `
-SELECT COALESCE(SUM(invite_credit), 0)::double precision
-FROM account_share_settlement_entries
-WHERE status = 'applied'
-  AND inviter_user_id = $1
-  AND ($2::timestamptz IS NULL OR created_at >= $2::timestamptz)
-  AND ($3::timestamptz IS NULL OR created_at < $3::timestamptz)`,
+	rows, err := client.QueryContext(ctx, affiliatePeriodRebateSQL,
 		inviterID, nullableTimeArg(query.PeriodStart), nullableTimeArg(query.PeriodEnd))
 	if err != nil {
 		return 0, err

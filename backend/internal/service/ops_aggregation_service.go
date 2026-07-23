@@ -52,9 +52,10 @@ const (
 //
 // It is safe to run in multi-replica deployments when Redis is available (leader lock).
 type OpsAggregationService struct {
-	opsRepo     OpsRepository
-	settingRepo SettingRepository
-	cfg         *config.Config
+	opsRepo      OpsRepository
+	settingRepo  SettingRepository
+	cfg          *config.Config
+	taskExecutor *ClusterTaskExecutor
 
 	db          *sql.DB
 	redisClient *redis.Client
@@ -166,6 +167,20 @@ func (s *OpsAggregationService) aggregateHourly() {
 		return
 	}
 
+	if s.cfg != nil && s.cfg.Cluster.Enabled {
+		if s.taskExecutor == nil {
+			logger.LegacyPrintf("service.ops_aggregation", "[OpsAggregation][hourly] cluster task executor is not configured")
+			return
+		}
+		_, err := s.taskExecutor.Run(ctx, opsAggHourlyJobName, func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+			return s.aggregateHourlyOwned(taskCtx, guard)
+		})
+		if err != nil {
+			logger.LegacyPrintf("service.ops_aggregation", "[OpsAggregation][hourly] failed: %v", err)
+		}
+		return
+	}
+
 	release, ok := s.tryAcquireLeaderLock(ctx, opsAggHourlyLeaderLockKey, opsAggHourlyLeaderLockTTL, "[OpsAggregation][hourly]")
 	if !ok {
 		return
@@ -174,6 +189,12 @@ func (s *OpsAggregationService) aggregateHourly() {
 		defer release()
 	}
 
+	if err := s.aggregateHourlyOwned(ctx, &ClusterLeaseGuard{}); err != nil {
+		logger.LegacyPrintf("service.ops_aggregation", "[OpsAggregation][hourly] failed: %v", err)
+	}
+}
+
+func (s *OpsAggregationService) aggregateHourlyOwned(ctx context.Context, guard *ClusterLeaseGuard) error {
 	s.hourlyMu.Lock()
 	defer s.hourlyMu.Unlock()
 
@@ -201,12 +222,16 @@ func (s *OpsAggregationService) aggregateHourly() {
 
 	start = utcFloorToHour(start)
 	if !start.Before(end) {
-		return
+		return nil
 	}
 
 	var aggErr error
 	for cursor := start; cursor.Before(end); cursor = cursor.Add(opsAggHourlyChunk) {
 		chunkEnd := minTime(cursor.Add(opsAggHourlyChunk), end)
+		if err := guard.Check(ctx); err != nil {
+			aggErr = err
+			break
+		}
 		if err := s.opsRepo.UpsertHourlyMetrics(ctx, cursor, chunkEnd); err != nil {
 			aggErr = err
 			logger.LegacyPrintf("service.ops_aggregation", "[OpsAggregation][hourly] upsert failed (%s..%s): %v", cursor.Format(time.RFC3339), chunkEnd.Format(time.RFC3339), err)
@@ -219,6 +244,9 @@ func (s *OpsAggregationService) aggregateHourly() {
 	dur := durationMs
 
 	if aggErr != nil {
+		if guardErr := guard.Check(ctx); guardErr != nil {
+			return guardErr
+		}
 		msg := truncateString(aggErr.Error(), 2048)
 		errAt := finishedAt
 		hbCtx, hbCancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -230,9 +258,12 @@ func (s *OpsAggregationService) aggregateHourly() {
 			LastError:      &msg,
 			LastDurationMs: &dur,
 		})
-		return
+		return aggErr
 	}
 
+	if err := guard.Check(ctx); err != nil {
+		return err
+	}
 	successAt := finishedAt
 	hbCtx, hbCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer hbCancel()
@@ -244,6 +275,7 @@ func (s *OpsAggregationService) aggregateHourly() {
 		LastDurationMs: &dur,
 		LastResult:     &result,
 	})
+	return nil
 }
 
 func (s *OpsAggregationService) aggregateDaily() {
@@ -266,6 +298,20 @@ func (s *OpsAggregationService) aggregateDaily() {
 		return
 	}
 
+	if s.cfg != nil && s.cfg.Cluster.Enabled {
+		if s.taskExecutor == nil {
+			logger.LegacyPrintf("service.ops_aggregation", "[OpsAggregation][daily] cluster task executor is not configured")
+			return
+		}
+		_, err := s.taskExecutor.Run(ctx, opsAggDailyJobName, func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+			return s.aggregateDailyOwned(taskCtx, guard)
+		})
+		if err != nil {
+			logger.LegacyPrintf("service.ops_aggregation", "[OpsAggregation][daily] failed: %v", err)
+		}
+		return
+	}
+
 	release, ok := s.tryAcquireLeaderLock(ctx, opsAggDailyLeaderLockKey, opsAggDailyLeaderLockTTL, "[OpsAggregation][daily]")
 	if !ok {
 		return
@@ -274,6 +320,12 @@ func (s *OpsAggregationService) aggregateDaily() {
 		defer release()
 	}
 
+	if err := s.aggregateDailyOwned(ctx, &ClusterLeaseGuard{}); err != nil {
+		logger.LegacyPrintf("service.ops_aggregation", "[OpsAggregation][daily] failed: %v", err)
+	}
+}
+
+func (s *OpsAggregationService) aggregateDailyOwned(ctx context.Context, guard *ClusterLeaseGuard) error {
 	s.dailyMu.Lock()
 	defer s.dailyMu.Unlock()
 
@@ -299,12 +351,16 @@ func (s *OpsAggregationService) aggregateDaily() {
 
 	start = utcFloorToDay(start)
 	if !start.Before(end) {
-		return
+		return nil
 	}
 
 	var aggErr error
 	for cursor := start; cursor.Before(end); cursor = cursor.Add(opsAggDailyChunk) {
 		chunkEnd := minTime(cursor.Add(opsAggDailyChunk), end)
+		if err := guard.Check(ctx); err != nil {
+			aggErr = err
+			break
+		}
 		if err := s.opsRepo.UpsertDailyMetrics(ctx, cursor, chunkEnd); err != nil {
 			aggErr = err
 			logger.LegacyPrintf("service.ops_aggregation", "[OpsAggregation][daily] upsert failed (%s..%s): %v", cursor.Format("2006-01-02"), chunkEnd.Format("2006-01-02"), err)
@@ -317,6 +373,9 @@ func (s *OpsAggregationService) aggregateDaily() {
 	dur := durationMs
 
 	if aggErr != nil {
+		if guardErr := guard.Check(ctx); guardErr != nil {
+			return guardErr
+		}
 		msg := truncateString(aggErr.Error(), 2048)
 		errAt := finishedAt
 		hbCtx, hbCancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -328,9 +387,12 @@ func (s *OpsAggregationService) aggregateDaily() {
 			LastError:      &msg,
 			LastDurationMs: &dur,
 		})
-		return
+		return aggErr
 	}
 
+	if err := guard.Check(ctx); err != nil {
+		return err
+	}
 	successAt := finishedAt
 	hbCtx, hbCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer hbCancel()
@@ -342,6 +404,7 @@ func (s *OpsAggregationService) aggregateDaily() {
 		LastDurationMs: &dur,
 		LastResult:     &result,
 	})
+	return nil
 }
 
 func (s *OpsAggregationService) isMonitoringEnabled(ctx context.Context) bool {

@@ -15,23 +15,46 @@ type stubMonitorSvc struct {
 	enabled    []*ChannelMonitor
 	runCount   atomic.Int64
 	runCalled  chan int64 // 每次 RunCheck 触发时 push 一次（缓冲足够大避免阻塞）
+	runGuard   chan *ClusterLeaseGuard
+	runDone    chan struct{}
 	runErr     error
 	listErr    error
 	runHoldFor time.Duration // RunCheck 内额外阻塞的时长，用来测试 Stop 等待行为
+	mu         sync.RWMutex
 }
 
 func (s *stubMonitorSvc) ListEnabledMonitors(_ context.Context) ([]*ChannelMonitor, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if s.listErr != nil {
 		return nil, s.listErr
 	}
-	return s.enabled, nil
+	return append([]*ChannelMonitor(nil), s.enabled...), nil
 }
 
-func (s *stubMonitorSvc) RunCheck(ctx context.Context, id int64) ([]*CheckResult, error) {
+func (s *stubMonitorSvc) runScheduledCheck(
+	ctx context.Context,
+	id int64,
+	guard *ClusterLeaseGuard,
+) ([]*CheckResult, error) {
+	if s.runDone != nil {
+		defer func() {
+			select {
+			case s.runDone <- struct{}{}:
+			default:
+			}
+		}()
+	}
 	s.runCount.Add(1)
 	if s.runCalled != nil {
 		select {
 		case s.runCalled <- id:
+		default:
+		}
+	}
+	if s.runGuard != nil {
+		select {
+		case s.runGuard <- guard:
 		default:
 		}
 	}
@@ -42,6 +65,30 @@ func (s *stubMonitorSvc) RunCheck(ctx context.Context, id int64) ([]*CheckResult
 		}
 	}
 	return nil, s.runErr
+}
+
+func (s *stubMonitorSvc) setEnabled(enabled []*ChannelMonitor) {
+	s.mu.Lock()
+	s.enabled = enabled
+	s.mu.Unlock()
+}
+
+type stubClusterMonitorTaskExecutor struct {
+	ownsLease bool
+	guard     *ClusterLeaseGuard
+	runCalls  atomic.Int64
+}
+
+func (s *stubClusterMonitorTaskExecutor) Run(
+	ctx context.Context,
+	_ string,
+	task func(context.Context, *ClusterLeaseGuard) error,
+) (bool, error) {
+	s.runCalls.Add(1)
+	if !s.ownsLease {
+		return false, nil
+	}
+	return true, task(ctx, s.guard)
 }
 
 func newRunnerForTest(svc monitorRunnerSvc) *ChannelMonitorRunner {
@@ -215,10 +262,12 @@ func TestStop_DrainsAllGoroutines(t *testing.T) {
 	stoppedWithin(t, r, 3*time.Second)
 }
 
-// TestStop_WaitsForInFlightCheck 验证 Stop 会等待正在执行的 RunCheck 退出（pool.StopAndWait）。
+// TestStop_WaitsForInFlightCheck 验证 Stop 会取消正在执行的 RunCheck，
+// 并等待 worker 实际退出后才返回（pool.StopAndWait）。
 func TestStop_WaitsForInFlightCheck(t *testing.T) {
 	svc := &stubMonitorSvc{
 		runCalled:  make(chan int64, 1),
+		runDone:    make(chan struct{}, 1),
 		runHoldFor: 200 * time.Millisecond,
 	}
 	r := newRunnerForTest(svc)
@@ -231,12 +280,11 @@ func TestStop_WaitsForInFlightCheck(t *testing.T) {
 		t.Fatal("first fire never happened")
 	}
 
-	start := time.Now()
 	stoppedWithin(t, r, 3*time.Second)
-	elapsed := time.Since(start)
-	// Stop 必须等待 in-flight check 跑完（runHoldFor=200ms），耗时下界约 100ms。
-	if elapsed < 100*time.Millisecond {
-		t.Fatalf("Stop returned too fast (%v); did not wait for in-flight check", elapsed)
+	select {
+	case <-svc.runDone:
+	default:
+		t.Fatal("Stop returned before the in-flight worker exited")
 	}
 }
 
@@ -258,6 +306,107 @@ func TestInFlight_AcquireReleaseSymmetric(t *testing.T) {
 		t.Fatal("acquire after release should succeed")
 	}
 	r.releaseInFlight(42)
+}
+
+func TestClusterScheduler_FollowerDoesNotRunChecks(t *testing.T) {
+	svc := &stubMonitorSvc{
+		enabled:   []*ChannelMonitor{{ID: 1, Enabled: true, IntervalSeconds: 60}},
+		runCalled: make(chan int64, 1),
+	}
+	executor := &stubClusterMonitorTaskExecutor{ownsLease: false}
+	r := newChannelMonitorRunnerWithCluster(svc, nil, executor, true, nil)
+	r.clusterLeaseRetryInterval = 10 * time.Millisecond
+	r.Start()
+
+	waitFor(t, time.Second, "follower attempted scheduler lease", func() bool {
+		return executor.runCalls.Load() >= 2
+	})
+	r.Schedule(&ChannelMonitor{ID: 2, Enabled: true, IntervalSeconds: 60})
+	if got := runnerTaskCount(r); got != 0 {
+		t.Fatalf("follower must ignore startup and CRUD schedules, got %d tasks", got)
+	}
+	select {
+	case id := <-svc.runCalled:
+		t.Fatalf("follower unexpectedly ran monitor %d", id)
+	default:
+	}
+
+	stoppedWithin(t, r, 3*time.Second)
+}
+
+func TestClusterScheduler_LeaderReconcilesDatabaseChanges(t *testing.T) {
+	guard := &ClusterLeaseGuard{}
+	svc := &stubMonitorSvc{
+		enabled:   []*ChannelMonitor{{ID: 1, Enabled: true, IntervalSeconds: 60}},
+		runCalled: make(chan int64, 4),
+		runGuard:  make(chan *ClusterLeaseGuard, 4),
+	}
+	executor := &stubClusterMonitorTaskExecutor{ownsLease: true, guard: guard}
+	r := newChannelMonitorRunnerWithCluster(svc, nil, executor, true, nil)
+	r.clusterReconcileInterval = 20 * time.Millisecond
+	r.clusterDrainCheckInterval = 10 * time.Millisecond
+	r.Start()
+
+	select {
+	case id := <-svc.runCalled:
+		if id != 1 {
+			t.Fatalf("expected initial monitor 1, got %d", id)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("leader did not run initial monitor")
+	}
+	select {
+	case got := <-svc.runGuard:
+		if got != guard {
+			t.Fatal("scheduled check did not receive leader lease guard")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("scheduled check did not expose lease guard")
+	}
+	time.Sleep(3 * r.clusterReconcileInterval)
+	if got := svc.runCount.Load(); got != 1 {
+		t.Fatalf("unchanged reconciliation must not reset/fire monitor, got %d runs", got)
+	}
+
+	svc.setEnabled([]*ChannelMonitor{{ID: 2, Enabled: true, IntervalSeconds: 60}})
+	waitFor(t, time.Second, "leader reconciled monitor replacement", func() bool {
+		return runnerTaskCount(r) == 1 && runnerTaskPtr(r, 2) != nil
+	})
+	select {
+	case id := <-svc.runCalled:
+		if id != 2 {
+			t.Fatalf("expected reconciled monitor 2, got %d", id)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reconciled monitor did not fire")
+	}
+
+	stoppedWithin(t, r, 3*time.Second)
+}
+
+func TestClusterScheduler_DrainingRelinquishesLeader(t *testing.T) {
+	var draining atomic.Bool
+	svc := &stubMonitorSvc{
+		enabled:   []*ChannelMonitor{{ID: 1, Enabled: true, IntervalSeconds: 60}},
+		runCalled: make(chan int64, 2),
+	}
+	executor := &stubClusterMonitorTaskExecutor{ownsLease: true, guard: &ClusterLeaseGuard{}}
+	r := newChannelMonitorRunnerWithCluster(svc, nil, executor, true, draining.Load)
+	r.clusterLeaseRetryInterval = 10 * time.Millisecond
+	r.clusterDrainCheckInterval = 10 * time.Millisecond
+	r.Start()
+
+	select {
+	case <-svc.runCalled:
+	case <-time.After(time.Second):
+		t.Fatal("leader did not run initial monitor")
+	}
+	draining.Store(true)
+	waitFor(t, time.Second, "draining leader cleared scheduled tasks", func() bool {
+		return runnerTaskCount(r) == 0
+	})
+
+	stoppedWithin(t, r, 3*time.Second)
 }
 
 // stoppedWithin 在 timeout 内并行调用 Stop，超时则 Fatal。验证 Stop 不会阻塞。

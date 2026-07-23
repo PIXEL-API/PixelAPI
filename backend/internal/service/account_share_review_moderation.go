@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -99,38 +100,73 @@ func (s *AccountShareModeService) processReviewModerationOnce() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-
-	cfg, ready, err := s.loadAccountShareCommentReviewConfig(ctx)
+	_, err := s.taskExecutor.Run(ctx, accountShareReviewModerationTaskName, func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+		return s.processReviewModerationOnceLeased(taskCtx, guard)
+	})
 	if err != nil {
-		log.Printf("[AccountShareReview] load moderation config failed: %v", err)
-		return
-	}
-	if !ready {
-		return
-	}
-	reviews, err := s.repo.ClaimPendingReviewModerations(ctx, time.Now().UTC(), AccountShareReviewModerationBatchSize)
-	if err != nil {
-		log.Printf("[AccountShareReview] claim moderation jobs failed: %v", err)
-		return
-	}
-	for i := range reviews {
-		review := reviews[i]
-		if err := s.processSingleReviewModeration(ctx, cfg, &review); err != nil {
-			log.Printf("[AccountShareReview] moderate review failed: review_id=%d err=%v", review.ID, err)
-		}
+		log.Printf("[AccountShareReview] moderation lease failed: %v", err)
 	}
 }
 
-func (s *AccountShareModeService) processSingleReviewModeration(ctx context.Context, cfg accountShareCommentReviewConfig, review *AccountShareReview) error {
+func (s *AccountShareModeService) processReviewModerationOnceLeased(
+	ctx context.Context,
+	guard *ClusterLeaseGuard,
+) error {
+	cfg, ready, err := s.loadAccountShareCommentReviewConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("load moderation config: %w", err)
+	}
+	if !ready {
+		return nil
+	}
+	if err := guard.Check(ctx); err != nil {
+		return err
+	}
+	reviews, err := s.repo.ClaimPendingReviewModerations(ctx, time.Now().UTC(), AccountShareReviewModerationBatchSize)
+	if err != nil {
+		return fmt.Errorf("claim moderation jobs: %w", err)
+	}
+	for i := range reviews {
+		review := reviews[i]
+		if err := s.processSingleReviewModeration(ctx, guard, cfg, &review); err != nil {
+			if errors.Is(err, ErrClusterTaskLeaseLost) ||
+				errors.Is(err, context.Canceled) ||
+				errors.Is(err, context.DeadlineExceeded) {
+				return err
+			}
+			log.Printf("[AccountShareReview] moderate review failed: review_id=%d err=%v", review.ID, err)
+		}
+	}
+	return nil
+}
+
+func (s *AccountShareModeService) processSingleReviewModeration(
+	ctx context.Context,
+	guard *ClusterLeaseGuard,
+	cfg accountShareCommentReviewConfig,
+	review *AccountShareReview,
+) error {
 	if review == nil || review.ID <= 0 {
 		return nil
 	}
+	if err := guard.Check(ctx); err != nil {
+		return err
+	}
 	result, err := s.callAccountShareCommentReviewModel(ctx, cfg, review)
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if guardErr := guard.Check(ctx); guardErr != nil {
+			return guardErr
+		}
 		nextRetryAt := time.Now().UTC().Add(time.Minute)
 		if failErr := s.repo.FailReviewModeration(ctx, review.ID, err.Error(), nextRetryAt, AccountShareReviewModerationMaxAttempts); failErr != nil {
 			return fmt.Errorf("mark moderation failed: %w; original: %v", failErr, err)
 		}
+		return err
+	}
+	if err := guard.Check(ctx); err != nil {
 		return err
 	}
 	if err := s.repo.CompleteReviewModeration(ctx, review.ID, result); err != nil {

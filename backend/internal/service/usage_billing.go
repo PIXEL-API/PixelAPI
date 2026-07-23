@@ -101,7 +101,7 @@ func buildUsageBillingFingerprint(c *UsageBillingCommand) string {
 	)
 	if snapshot := c.AccountShareModeSettlement; snapshot != nil {
 		raw += fmt.Sprintf(
-			"|account_share_mode|%d|%d|%d|%d|%d|%0.10f|%0.10f|%0.10f|%0.10f|%0.10f|%0.10f|%d",
+			"|account_share_mode|%d|%d|%d|%d|%d|%0.10f|%0.10f|%0.10f|%0.10f|%d|%d|%0.10f|%0.10f|%0.10f|%d",
 			snapshot.MembershipID,
 			snapshot.ListingID,
 			snapshot.AccountID,
@@ -111,7 +111,10 @@ func buildUsageBillingFingerprint(c *UsageBillingCommand) string {
 			snapshot.HourlyCharge,
 			snapshot.TotalCharge,
 			snapshot.RateMultiplier,
+			valueOrZero(snapshot.PolicyID),
+			snapshot.PolicyVersion,
 			snapshot.OwnerShareRatio,
+			snapshot.InviteShareRatio,
 			snapshot.PlatformShareRatio,
 			snapshot.DurationMs,
 		)

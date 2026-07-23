@@ -120,7 +120,7 @@ func (s *helperConcurrencyCacheStub) CleanupExpiredAccountSlots(ctx context.Cont
 	return nil
 }
 
-func (s *helperConcurrencyCacheStub) CleanupStaleProcessSlots(ctx context.Context, activeRequestPrefix string) error {
+func (s *helperConcurrencyCacheStub) CleanupExpiredSlots(ctx context.Context) error {
 	return nil
 }
 

@@ -12,6 +12,8 @@ const {
   listModeGroups,
   listProxies,
   listKeys,
+  fetchPublicSettings,
+  publicSettings,
   showSuccess,
   showWarning,
 } = vi.hoisted(() => ({
@@ -20,6 +22,10 @@ const {
   listModeGroups: vi.fn(),
   listProxies: vi.fn(),
   listKeys: vi.fn(),
+  fetchPublicSettings: vi.fn(),
+  publicSettings: {
+    user_private_group_commission_rate: 0.0075,
+  },
   showSuccess: vi.fn(),
   showWarning: vi.fn(),
 }))
@@ -52,7 +58,8 @@ vi.mock('@/api', () => ({
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
-    cachedPublicSettings: undefined,
+    cachedPublicSettings: publicSettings,
+    fetchPublicSettings,
     showSuccess,
     showWarning,
   }),
@@ -77,6 +84,10 @@ vi.mock('@/composables/useClipboard', () => ({
 }))
 
 const AppLayoutStub = { template: '<main><slot /></main>' }
+const BaseDialogWithSlotsStub = {
+  props: ['show'],
+  template: '<section v-if="show"><slot /><slot name="footer" /></section>',
+}
 
 function listing(overrides: Partial<AccountShareListing> = {}): AccountShareListing {
   const now = '2026-07-11T01:00:00Z'
@@ -154,12 +165,12 @@ function paginated(items: unknown[], page = 1, pages = 1) {
   }
 }
 
-function mountView() {
+function mountView(options: { renderDialogs?: boolean } = {}) {
   return mount(AccountShareView, {
     global: {
       stubs: {
         AppLayout: AppLayoutStub,
-        BaseDialog: true,
+        BaseDialog: options.renderDialogs ? BaseDialogWithSlotsStub : true,
         ConfirmDialog: true,
         Icon: true,
         AccountStatsModal: true,
@@ -184,8 +195,10 @@ describe('AccountShareView async snapshots and mode keys', () => {
     listModeGroups.mockReset()
     listProxies.mockReset()
     listKeys.mockReset()
+    fetchPublicSettings.mockReset()
     showSuccess.mockReset()
     showWarning.mockReset()
+    publicSettings.user_private_group_commission_rate = 0.0075
 
     listListings.mockResolvedValue(paginated([]))
     listModeGroups.mockResolvedValue([
@@ -195,6 +208,7 @@ describe('AccountShareView async snapshots and mode keys', () => {
     listProxies.mockResolvedValue([])
     listMembershipQueue.mockResolvedValue([])
     listKeys.mockResolvedValue(paginated([]))
+    fetchPublicSettings.mockResolvedValue(publicSettings)
   })
 
   it('renders the main listing before queue snapshots finish and enables reordering only after the snapshot arrives', async () => {
@@ -256,6 +270,32 @@ describe('AccountShareView async snapshots and mode keys', () => {
     expect(listKeys).toHaveBeenCalledWith(2, 100, { group_id: 101, status: 'active' })
     const setupState = (wrapper.vm as any).$?.setupState
     expect(setupState.modeApiKeysByPlatform.openai.map((key: ApiKey) => key.id)).toEqual([1001, 1002])
+    wrapper.unmount()
+  })
+
+  it('uses the public self-use rate and the recommendation effective rate instead of a hardcoded multiplier', async () => {
+    const ownListing = listing({ owner_user_id: 9 })
+    const wrapper = mountView({ renderDialogs: true })
+    await flushPromises()
+
+    const setupState = (wrapper.vm as any).$?.setupState
+    setupState.pendingJoinConfirmation = {
+      listing: ownListing,
+      apiKeyID: 1001,
+      idleTimeoutMinutes: 10,
+    }
+    await nextTick()
+
+    expect(wrapper.text()).toContain('全局自用倍率 0.0075x')
+    expect(wrapper.text()).not.toContain('0.005x')
+
+    const summary = setupState.recommendationOwnerSelfUseSummary({
+      listing: ownListing,
+      estimate: {
+        effective_rate_multiplier: 0.0085,
+      },
+    })
+    expect(summary).toContain('0.0085x')
     wrapper.unmount()
   })
 })

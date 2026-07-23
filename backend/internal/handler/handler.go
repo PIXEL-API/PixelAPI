@@ -11,7 +11,6 @@ type AdminHandlers struct {
 	Group                  *admin.GroupHandler
 	Account                *admin.AccountHandler
 	AccountSharePolicy     *admin.AccountSharePolicyHandler
-	AccountShareModePolicy *admin.AccountShareModePolicyHandler
 	Announcement           *admin.AnnouncementHandler
 	Conversation           *admin.ConversationHandler
 	DataManagement         *admin.DataManagementHandler
@@ -26,6 +25,7 @@ type AdminHandlers struct {
 	Promo                  *admin.PromoHandler
 	Setting                *admin.SettingHandler
 	Ops                    *admin.OpsHandler
+	Cluster                *admin.ClusterHandler
 	System                 *admin.SystemHandler
 	Subscription           *admin.SubscriptionHandler
 	Usage                  *admin.UsageHandler
@@ -80,4 +80,6 @@ type Handlers struct {
 type BuildInfo struct {
 	Version   string
 	BuildType string // "source" for manual builds, "release" for CI builds
+	Commit    string
+	Date      string
 }

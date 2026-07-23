@@ -7389,7 +7389,11 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 			return ErrNoAvailableAccounts
 		}
 		if IsAccountShareModeOwnerSelfUse(accountShareMembership, accountShareListing) {
-			multiplier = AccountShareModeOwnerSelfUseMultiplier
+			ownerMultiplier, resolveErr := s.accountShareModeService.ResolveOwnerSelfUseMultiplier(ctx)
+			if resolveErr != nil {
+				return resolveErr
+			}
+			multiplier = ownerMultiplier
 			rateMultiplierSource = RateMultiplierSourceAccountShare
 		} else if accountShareListing != nil {
 			multiplier = accountShareListing.RateMultiplier
@@ -7439,7 +7443,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if accountShareMembership != nil && accountShareListing != nil && cost != nil {
 		baseCharge := cost.ActualCost
 		hourlyCharge := 0.0
-		policy, err := s.accountShareModeService.ResolvePolicy(ctx, account.Platform)
+		policy, err := s.accountShareModeService.ResolvePolicy(ctx)
 		if err != nil {
 			return err
 		}

@@ -3,14 +3,26 @@ package routes
 import (
 	"net/http"
 
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
 
 // RegisterCommonRoutes 注册通用路由（健康检查、状态等）
-func RegisterCommonRoutes(r *gin.Engine) {
+func RegisterCommonRoutes(r *gin.Engine, clusterRuntime *service.ClusterRuntime) {
 	// 健康检查
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+	r.GET("/health/live", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "live"})
+	})
+	r.GET("/health/ready", func(c *gin.Context) {
+		readiness := clusterRuntime.Readiness()
+		status := http.StatusOK
+		if !readiness.Ready {
+			status = http.StatusServiceUnavailable
+		}
+		c.JSON(status, readiness)
 	})
 
 	// Claude Code 遥测日志（忽略，直接返回200）

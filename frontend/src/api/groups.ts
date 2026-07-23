@@ -13,8 +13,12 @@ import type { Group } from '@/types'
  * - Subscription groups: user has active subscription
  * @returns List of available groups
  */
-export async function getAvailable(): Promise<Group[]> {
-  const { data } = await apiClient.get<Group[]>('/groups/available')
+export async function getAvailable(options?: {
+  signal?: AbortSignal
+}): Promise<Group[]> {
+  const { data } = await apiClient.get<Group[]>('/groups/available', {
+    signal: options?.signal
+  })
   return data
 }
 

@@ -312,6 +312,9 @@ type PublicSettings struct {
 	// Affiliate (邀请返利) feature toggle
 	AffiliateEnabled bool `json:"affiliate_enabled"`
 
+	// Global multiplier for owner self-use in private groups and account-share rooms.
+	UserPrivateGroupCommissionRate float64 `json:"user_private_group_commission_rate"`
+
 	// Functional module switches
 	InvoiceManagementEnabled        bool    `json:"invoice_management_enabled"`
 	WithdrawalManagementEnabled     bool    `json:"withdrawal_management_enabled"`

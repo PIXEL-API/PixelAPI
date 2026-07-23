@@ -30,12 +30,13 @@ type usageCleanupBackupCreator interface {
 
 // UsageCleanupService 负责创建与执行使用记录清理任务
 type UsageCleanupService struct {
-	repo        UsageCleanupRepository
-	timingWheel *TimingWheelService
-	dashboard   *DashboardAggregationService
-	backup      usageCleanupBackupCreator
-	settingRepo SettingRepository
-	cfg         *config.Config
+	repo         UsageCleanupRepository
+	timingWheel  *TimingWheelService
+	dashboard    *DashboardAggregationService
+	backup       usageCleanupBackupCreator
+	settingRepo  SettingRepository
+	cfg          *config.Config
+	taskExecutor *ClusterTaskExecutor
 
 	running     int32
 	autoRunning int32
@@ -195,6 +196,24 @@ func (s *UsageCleanupService) runAutoRetentionOnce() {
 	if !s.autoRetentionEnabled(autoCfg) {
 		return
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), s.autoRetentionTimeout())
+	defer cancel()
+	run := func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+		s.runAutoRetentionOnceLeased(taskCtx, guard, autoCfg)
+		return nil
+	}
+	var err error
+	if s.taskExecutor == nil {
+		err = run(ctx, &ClusterLeaseGuard{})
+	} else {
+		_, err = s.taskExecutor.Run(ctx, usageCleanupAutoRetentionName, run)
+	}
+	if err != nil {
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] auto retention lease failed: err=%v", err)
+	}
+}
+
+func (s *UsageCleanupService) runAutoRetentionOnceLeased(ctx context.Context, guard *ClusterLeaseGuard, autoCfg config.UsageCleanupAutoRetentionConfig) {
 	if !atomic.CompareAndSwapInt32(&s.autoRunning, 0, 1) {
 		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] auto retention skipped: already_running=true")
 		return
@@ -206,8 +225,10 @@ func (s *UsageCleanupService) runAutoRetentionOnce() {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), s.autoRetentionTimeout())
-	defer cancel()
+	if err := guard.Check(ctx); err != nil {
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] auto retention lease lost: err=%v", err)
+		return
+	}
 
 	now := time.Now().UTC()
 	cutoff := truncateToDayUTC(now.AddDate(0, 0, -autoCfg.RetainDays))
@@ -242,6 +263,10 @@ func (s *UsageCleanupService) runAutoRetentionOnce() {
 		return
 	}
 
+	if err := guard.Check(ctx); err != nil {
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] auto retention lease lost before archive: err=%v", err)
+		return
+	}
 	archiveStream, err := s.repo.ExportUsageLogs(ctx, filters)
 	if err != nil {
 		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] auto retention usage_logs archive export failed: err=%v", err)
@@ -262,6 +287,10 @@ func (s *UsageCleanupService) runAutoRetentionOnce() {
 		return
 	}
 
+	if err := guard.Check(ctx); err != nil {
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] auto retention lease lost before cleanup task: err=%v", err)
+		return
+	}
 	task, err := s.createSystemTask(ctx, filters)
 	if err != nil {
 		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] auto retention create cleanup task failed: err=%v", err)
@@ -306,24 +335,44 @@ func (s *UsageCleanupService) runOnce() {
 	}
 	ctx, cancel := context.WithTimeout(parent, svc.taskTimeout())
 	defer cancel()
+	run := func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+		return svc.runOnceLeased(taskCtx, guard)
+	}
+	var err error
+	if svc.taskExecutor == nil {
+		err = run(ctx, &ClusterLeaseGuard{})
+	} else {
+		_, err = svc.taskExecutor.Run(ctx, usageCleanupWorkerName, run)
+	}
+	if err != nil && !errors.Is(err, context.Canceled) {
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] worker lease failed: %v", err)
+	}
+}
 
-	task, err := svc.repo.ClaimNextPendingTask(ctx, int64(svc.taskTimeout().Seconds()))
+func (s *UsageCleanupService) runOnceLeased(ctx context.Context, guard *ClusterLeaseGuard) error {
+	if err := guard.Check(ctx); err != nil {
+		return err
+	}
+	task, err := s.repo.ClaimNextPendingTask(ctx, int64(s.taskTimeout().Seconds()))
 	if err != nil {
-		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] claim pending task failed: %v", err)
-		return
+		return fmt.Errorf("claim pending cleanup task: %w", err)
 	}
 	if task == nil {
 		slog.Debug("[UsageCleanup] run_once done: no_task=true")
-		return
+		return nil
 	}
 
 	logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] task claimed: task=%d status=%s created_by=%d deleted_rows=%d %s", task.ID, task.Status, task.CreatedBy, task.DeletedRows, describeUsageCleanupFilters(task.Filters))
-	svc.executeTask(ctx, task)
+	return s.executeTask(ctx, task, guard)
 }
 
-func (s *UsageCleanupService) executeTask(ctx context.Context, task *UsageCleanupTask) {
+func (s *UsageCleanupService) executeTask(
+	ctx context.Context,
+	task *UsageCleanupTask,
+	guard *ClusterLeaseGuard,
+) error {
 	if task == nil {
-		return
+		return nil
 	}
 
 	batchSize := s.batchSize()
@@ -335,16 +384,22 @@ func (s *UsageCleanupService) executeTask(ctx context.Context, task *UsageCleanu
 	for {
 		if ctx != nil && ctx.Err() != nil {
 			logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] task interrupted: task=%d err=%v", task.ID, ctx.Err())
-			return
+			return ctx.Err()
 		}
 		canceled, err := s.isTaskCanceled(ctx, task.ID)
 		if err != nil {
+			if guardErr := guard.Check(ctx); guardErr != nil {
+				return guardErr
+			}
 			s.markTaskFailed(task.ID, deletedTotal, err)
-			return
+			return err
 		}
 		if canceled {
 			logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] task canceled: task=%d deleted_rows=%d duration=%s", task.ID, deletedTotal, time.Since(start))
-			return
+			return nil
+		}
+		if err := guard.Check(ctx); err != nil {
+			return err
 		}
 
 		batchNum++
@@ -353,13 +408,19 @@ func (s *UsageCleanupService) executeTask(ctx context.Context, task *UsageCleanu
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				// 任务被中断（例如服务停止/超时），保持 running 状态，后续通过 stale reclaim 续跑。
 				logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] task interrupted: task=%d err=%v", task.ID, err)
-				return
+				return err
+			}
+			if guardErr := guard.Check(ctx); guardErr != nil {
+				return guardErr
 			}
 			s.markTaskFailed(task.ID, deletedTotal, err)
-			return
+			return err
 		}
 		deletedTotal += deleted
 		if deleted > 0 {
+			if err := guard.Check(ctx); err != nil {
+				return err
+			}
 			updateCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			if err := s.repo.UpdateTaskProgress(updateCtx, task.ID, deletedTotal); err != nil {
 				logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] task progress update failed: task=%d deleted_rows=%d err=%v", task.ID, deletedTotal, err)
@@ -374,21 +435,28 @@ func (s *UsageCleanupService) executeTask(ctx context.Context, task *UsageCleanu
 		}
 	}
 
+	if err := guard.Check(ctx); err != nil {
+		return err
+	}
 	updateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := s.repo.MarkTaskSucceeded(updateCtx, task.ID, deletedTotal); err != nil {
 		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] update task succeeded failed: task=%d err=%v", task.ID, err)
-	} else {
-		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] task succeeded: task=%d deleted_rows=%d duration=%s", task.ID, deletedTotal, time.Since(start))
+		return fmt.Errorf("mark cleanup task %d succeeded: %w", task.ID, err)
 	}
+	logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] task succeeded: task=%d deleted_rows=%d duration=%s", task.ID, deletedTotal, time.Since(start))
 
 	if s.dashboard != nil && task.CreatedSource != UsageCleanupCreatedSourceAutoRetention {
+		if err := guard.Check(ctx); err != nil {
+			return err
+		}
 		if err := s.dashboard.TriggerRecomputeRange(task.Filters.StartTime, task.Filters.EndTime); err != nil {
 			logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] trigger dashboard recompute failed: task=%d err=%v", task.ID, err)
 		} else {
 			logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] trigger dashboard recompute: task=%d start=%s end=%s", task.ID, task.Filters.StartTime.UTC().Format(time.RFC3339), task.Filters.EndTime.UTC().Format(time.RFC3339))
 		}
 	}
+	return nil
 }
 
 func (s *UsageCleanupService) markTaskFailed(taskID int64, deletedRows int64, err error) {

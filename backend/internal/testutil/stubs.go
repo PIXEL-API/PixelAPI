@@ -76,7 +76,7 @@ func (c StubConcurrencyCache) GetAccountConcurrencyBatch(_ context.Context, acco
 func (c StubConcurrencyCache) CleanupExpiredAccountSlots(_ context.Context, _ int64) error {
 	return nil
 }
-func (c StubConcurrencyCache) CleanupStaleProcessSlots(_ context.Context, _ string) error {
+func (c StubConcurrencyCache) CleanupExpiredSlots(_ context.Context) error {
 	return nil
 }
 

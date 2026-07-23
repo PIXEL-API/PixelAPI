@@ -7,6 +7,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -132,30 +133,74 @@ func (c *stubConcurrencyCacheForTest) CleanupExpiredAccountSlots(_ context.Conte
 	return c.cleanupErr
 }
 
-func (c *stubConcurrencyCacheForTest) CleanupStaleProcessSlots(_ context.Context, _ string) error {
+func (c *stubConcurrencyCacheForTest) CleanupExpiredSlots(_ context.Context) error {
 	return c.cleanupErr
 }
 
 type trackingConcurrencyCache struct {
 	stubConcurrencyCacheForTest
-	cleanupPrefix string
+	cleanupCalls int
 }
 
-func (c *trackingConcurrencyCache) CleanupStaleProcessSlots(_ context.Context, prefix string) error {
-	c.cleanupPrefix = prefix
+func (c *trackingConcurrencyCache) CleanupExpiredSlots(_ context.Context) error {
+	c.cleanupCalls++
 	return c.cleanupErr
 }
 
-func TestCleanupStaleProcessSlots_NilCache(t *testing.T) {
-	svc := &ConcurrencyService{cache: nil}
-	require.NoError(t, svc.CleanupStaleProcessSlots(context.Background()))
+type blockingConcurrencyCleanupCache struct {
+	stubConcurrencyCacheForTest
+	started chan struct{}
+	once    sync.Once
 }
 
-func TestCleanupStaleProcessSlots_DelegatesPrefix(t *testing.T) {
+func (c *blockingConcurrencyCleanupCache) CleanupExpiredSlots(ctx context.Context) error {
+	c.once.Do(func() { close(c.started) })
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+type concurrencyCleanupAccountRepo struct {
+	AccountRepository
+}
+
+func (r *concurrencyCleanupAccountRepo) ListSchedulable(context.Context) ([]Account, error) {
+	return nil, nil
+}
+
+func TestCleanupExpiredSlots_NilCache(t *testing.T) {
+	svc := &ConcurrencyService{cache: nil}
+	require.NoError(t, svc.CleanupExpiredSlots(context.Background()))
+}
+
+func TestCleanupExpiredSlots_Delegates(t *testing.T) {
 	cache := &trackingConcurrencyCache{}
 	svc := NewConcurrencyService(cache)
-	require.NoError(t, svc.CleanupStaleProcessSlots(context.Background()))
-	require.Equal(t, RequestIDPrefix(), cache.cleanupPrefix)
+	require.NoError(t, svc.CleanupExpiredSlots(context.Background()))
+	require.Equal(t, 1, cache.cleanupCalls)
+}
+
+func TestConcurrencyServiceStopCancelsCleanupWorker(t *testing.T) {
+	cache := &blockingConcurrencyCleanupCache{started: make(chan struct{})}
+	svc := NewConcurrencyService(cache)
+	svc.StartSlotCleanupWorker(&concurrencyCleanupAccountRepo{}, time.Hour)
+
+	select {
+	case <-cache.started:
+	case <-time.After(time.Second):
+		t.Fatal("cleanup worker did not start")
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		svc.Stop()
+		svc.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("cleanup worker did not stop after cancellation")
+	}
 }
 
 func TestAcquireAccountSlot_Success(t *testing.T) {

@@ -1,0 +1,10 @@
+table inet sub2api_cluster {
+	chain input {
+		type filter hook input priority filter; policy accept;
+
+		iifname "lo" tcp dport 8080 accept
+		tcp dport { 80, 443 } accept
+		ip saddr { 10.77.0.10, 10.77.0.21, 10.77.0.22, 10.77.0.23 } tcp dport 8080 accept
+		tcp dport 8080 drop
+	}
+}

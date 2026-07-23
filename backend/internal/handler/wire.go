@@ -15,7 +15,6 @@ func ProvideAdminHandlers(
 	groupHandler *admin.GroupHandler,
 	accountHandler *admin.AccountHandler,
 	accountSharePolicyHandler *admin.AccountSharePolicyHandler,
-	accountShareModePolicyHandler *admin.AccountShareModePolicyHandler,
 	announcementHandler *admin.AnnouncementHandler,
 	adminConversationHandler *admin.ConversationHandler,
 	dataManagementHandler *admin.DataManagementHandler,
@@ -30,6 +29,7 @@ func ProvideAdminHandlers(
 	promoHandler *admin.PromoHandler,
 	settingHandler *admin.SettingHandler,
 	opsHandler *admin.OpsHandler,
+	clusterHandler *admin.ClusterHandler,
 	systemHandler *admin.SystemHandler,
 	subscriptionHandler *admin.SubscriptionHandler,
 	usageHandler *admin.UsageHandler,
@@ -56,7 +56,6 @@ func ProvideAdminHandlers(
 		Group:                  groupHandler,
 		Account:                accountHandler,
 		AccountSharePolicy:     accountSharePolicyHandler,
-		AccountShareModePolicy: accountShareModePolicyHandler,
 		Announcement:           announcementHandler,
 		Conversation:           adminConversationHandler,
 		DataManagement:         dataManagementHandler,
@@ -71,6 +70,7 @@ func ProvideAdminHandlers(
 		Promo:                  promoHandler,
 		Setting:                settingHandler,
 		Ops:                    opsHandler,
+		Cluster:                clusterHandler,
 		System:                 systemHandler,
 		Subscription:           subscriptionHandler,
 		Usage:                  usageHandler,
@@ -237,7 +237,13 @@ func ProvideHandlers(
 	activityHandler *ActivityHandler,
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
+	accountBatchTaskServices []*service.AccountBatchTaskService,
 ) *Handlers {
+	for _, accountBatchTaskService := range accountBatchTaskServices {
+		if accountBatchTaskService != nil {
+			accountBatchTaskService.Start()
+		}
+	}
 	return &Handlers{
 		Auth:             authHandler,
 		OIDCProvider:     oidcProviderHandler,
@@ -301,7 +307,6 @@ var ProviderSet = wire.NewSet(
 	admin.NewGroupHandler,
 	ProvideAdminAccountHandler,
 	admin.NewAccountSharePolicyHandler,
-	admin.NewAccountShareModePolicyHandler,
 	admin.NewAnnouncementHandler,
 	admin.NewConversationHandler,
 	admin.NewDataManagementHandler,
@@ -316,6 +321,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewPromoHandler,
 	admin.NewSettingHandler,
 	admin.NewOpsHandler,
+	admin.NewClusterHandler,
 	ProvideSystemHandler,
 	admin.NewSubscriptionHandler,
 	admin.NewUsageHandler,

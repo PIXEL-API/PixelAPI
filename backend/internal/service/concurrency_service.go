@@ -47,8 +47,8 @@ type ConcurrencyCache interface {
 	// 清理过期槽位（后台任务）
 	CleanupExpiredAccountSlots(ctx context.Context, accountID int64) error
 
-	// 启动时清理旧进程遗留槽位与等待计数
-	CleanupStaleProcessSlots(ctx context.Context, activeRequestPrefix string) error
+	// 清理所有节点中已经超过租约 TTL 的槽位；不得删除仍有效的其他节点槽位。
+	CleanupExpiredSlots(ctx context.Context) error
 }
 
 type APIKeyConcurrencyCache interface {
@@ -196,20 +196,16 @@ func initRequestIDPrefix() string {
 	return "r" + strconv.FormatUint(fallback, 36)
 }
 
-func RequestIDPrefix() string {
-	return requestIDPrefix
-}
-
 func generateRequestID() string {
 	seq := requestIDCounter.Add(1)
 	return requestIDPrefix + "-" + strconv.FormatUint(seq, 36)
 }
 
-func (s *ConcurrencyService) CleanupStaleProcessSlots(ctx context.Context) error {
+func (s *ConcurrencyService) CleanupExpiredSlots(ctx context.Context) error {
 	if s == nil || s.cache == nil {
 		return nil
 	}
-	return s.cache.CleanupStaleProcessSlots(ctx, RequestIDPrefix())
+	return s.cache.CleanupExpiredSlots(ctx)
 }
 
 const (
@@ -222,7 +218,14 @@ const (
 
 // ConcurrencyService manages concurrent request limiting for accounts and users
 type ConcurrencyService struct {
-	cache ConcurrencyCache
+	cache        ConcurrencyCache
+	taskExecutor *ClusterTaskExecutor
+
+	cleanupStartOnce sync.Once
+	cleanupStopOnce  sync.Once
+	cleanupCtx       context.Context
+	cleanupCancel    context.CancelFunc
+	cleanupWG        sync.WaitGroup
 }
 
 type accountShareMembershipConcurrencyCache interface {
@@ -232,8 +235,20 @@ type accountShareMembershipConcurrencyCache interface {
 }
 
 // NewConcurrencyService creates a new ConcurrencyService
-func NewConcurrencyService(cache ConcurrencyCache) *ConcurrencyService {
-	return &ConcurrencyService{cache: cache}
+func NewConcurrencyService(
+	cache ConcurrencyCache,
+	taskExecutors ...*ClusterTaskExecutor,
+) *ConcurrencyService {
+	cleanupCtx, cleanupCancel := context.WithCancel(context.Background())
+	service := &ConcurrencyService{
+		cache:         cache,
+		cleanupCtx:    cleanupCtx,
+		cleanupCancel: cleanupCancel,
+	}
+	if len(taskExecutors) > 0 {
+		service.taskExecutor = taskExecutors[0]
+	}
+	return service
 }
 
 // AcquireOpenAIWSIngressLease atomically reserves one live ingress connection
@@ -625,33 +640,76 @@ func (s *ConcurrencyService) StartSlotCleanupWorker(accountRepo AccountRepositor
 		return
 	}
 
-	runCleanup := func() {
-		listCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		accounts, err := accountRepo.ListSchedulable(listCtx)
-		cancel()
-		if err != nil {
-			logger.LegacyPrintf("service.concurrency", "Warning: list schedulable accounts failed: %v", err)
-			return
+	s.cleanupStartOnce.Do(func() {
+		if s.cleanupCtx == nil || s.cleanupCancel == nil {
+			s.cleanupCtx, s.cleanupCancel = context.WithCancel(context.Background())
 		}
-		for _, account := range accounts {
-			accountCtx, accountCancel := context.WithTimeout(context.Background(), 2*time.Second)
-			err := s.cache.CleanupExpiredAccountSlots(accountCtx, account.ID)
-			accountCancel()
-			if err != nil {
-				logger.LegacyPrintf("service.concurrency", "Warning: cleanup expired slots failed for account %d: %v", account.ID, err)
+		runCleanup := func() {
+			ctx, cancel := context.WithTimeout(s.cleanupCtx, 30*time.Second)
+			defer cancel()
+			run := func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+				if err := guard.Check(taskCtx); err != nil {
+					return err
+				}
+				if err := s.cache.CleanupExpiredSlots(taskCtx); err != nil {
+					return err
+				}
+				accounts, err := accountRepo.ListSchedulable(taskCtx)
+				if err != nil {
+					return err
+				}
+				for _, account := range accounts {
+					if err := guard.Check(taskCtx); err != nil {
+						return err
+					}
+					if err := s.cache.CleanupExpiredAccountSlots(taskCtx, account.ID); err != nil {
+						logger.LegacyPrintf("service.concurrency", "Warning: cleanup expired slots failed for account %d: %v", account.ID, err)
+					}
+				}
+				return nil
+			}
+			var err error
+			if s.taskExecutor == nil {
+				err = run(ctx, &ClusterLeaseGuard{})
+			} else {
+				_, err = s.taskExecutor.Run(ctx, "concurrency_expired_slot_cleanup", run)
+			}
+			if err != nil && !errors.Is(err, context.Canceled) {
+				logger.LegacyPrintf("service.concurrency", "Warning: cleanup expired slots worker failed: %v", err)
 			}
 		}
-	}
 
-	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
+		s.cleanupWG.Add(1)
+		go func() {
+			defer s.cleanupWG.Done()
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
 
-		runCleanup()
-		for range ticker.C {
 			runCleanup()
+			for {
+				select {
+				case <-ticker.C:
+					runCleanup()
+				case <-s.cleanupCtx.Done():
+					return
+				}
+			}
+		}()
+	})
+}
+
+// Stop terminates the expired-slot cleanup worker and waits for an in-flight
+// lease callback to observe cancellation.
+func (s *ConcurrencyService) Stop() {
+	if s == nil {
+		return
+	}
+	s.cleanupStopOnce.Do(func() {
+		if s.cleanupCancel != nil {
+			s.cleanupCancel()
 		}
-	}()
+	})
+	s.cleanupWG.Wait()
 }
 
 // GetAccountConcurrencyBatch gets current concurrency counts for multiple accounts.

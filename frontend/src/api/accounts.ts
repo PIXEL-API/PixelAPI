@@ -309,6 +309,13 @@ export async function createBatchRefreshTask(accountIds: number[]): Promise<Acco
   return data
 }
 
+export async function createBatchTestConnectionTask(accountIds: number[]): Promise<AccountBatchTask> {
+  const { data } = await apiClient.post<AccountBatchTask>('/accounts/batch-test/async', {
+    account_ids: accountIds
+  })
+  return data
+}
+
 export async function createBatchRevalidatePublicShareTask(accountIds: number[]): Promise<AccountBatchTask> {
   const { data } = await apiClient.post<AccountBatchTask>('/accounts/batch-revalidate-public-share/async', {
     account_ids: accountIds
@@ -729,6 +736,7 @@ export const accountsAPI = {
   bulkUpdate,
   bulkDelete,
   createBatchRefreshTask,
+  createBatchTestConnectionTask,
   createBatchRevalidatePublicShareTask,
   createBatchVerifyLevelTask,
   getBatchTask,

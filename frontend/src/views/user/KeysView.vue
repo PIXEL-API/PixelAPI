@@ -1794,6 +1794,7 @@ const showCcsClientSelect = ref(false)
 const pendingCcsRow = ref<ApiKey | null>(null)
 const showImagePlaygroundModelDialog = ref(false)
 const pendingImagePlaygroundRow = ref<ApiKey | null>(null)
+const IMAGE_PLAYGROUND_DEFAULT_MODEL = 'gpt-image-2'
 const imagePlaygroundModel = ref('')
 const canOpenImagePlayground = computed(() => imagePlaygroundModel.value.trim().length > 0)
 const selectedKey = ref<ApiKey | null>(null)
@@ -2786,7 +2787,7 @@ const executeCcsImport = (row: ApiKey, clientType: 'claude' | 'gemini') => {
 
 const openImagePlayground = (row: ApiKey) => {
   pendingImagePlaygroundRow.value = row
-  imagePlaygroundModel.value = ''
+  imagePlaygroundModel.value = IMAGE_PLAYGROUND_DEFAULT_MODEL
   showImagePlaygroundModelDialog.value = true
 }
 

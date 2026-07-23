@@ -295,9 +295,23 @@ func (r *withdrawalRepository) list(ctx context.Context, params service.Withdraw
 	if err := r.db.QueryRowContext(ctx, countSQL, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
+	selectColumns := withdrawalColumns
+	scanRow := scanWithdrawal
+	if !forceUser {
+		selectColumns += `,
+	(
+		SELECT previous.created_at
+		FROM user_withdrawal_requests previous
+		WHERE previous.user_id = user_withdrawal_requests.user_id
+			AND (previous.created_at, previous.id) < (user_withdrawal_requests.created_at, user_withdrawal_requests.id)
+		ORDER BY previous.created_at DESC, previous.id DESC
+		LIMIT 1
+	) AS last_withdrawal_at`
+		scanRow = scanAdminWithdrawal
+	}
 	args = append(args, pageSize, (page-1)*pageSize)
 	rows, err := r.db.QueryContext(ctx, `
-SELECT `+withdrawalColumns+`
+SELECT `+selectColumns+`
 FROM user_withdrawal_requests`+where+`
 ORDER BY created_at DESC, id DESC
 LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $`+fmt.Sprint(len(args)),
@@ -310,7 +324,7 @@ LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $`+fmt.Sprint(len(args)),
 
 	items := make([]service.WithdrawalRequest, 0)
 	for rows.Next() {
-		item, err := scanWithdrawal(rows)
+		item, err := scanRow(rows)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -386,12 +400,21 @@ type withdrawalScanner interface {
 }
 
 func scanWithdrawal(row withdrawalScanner) (*service.WithdrawalRequest, error) {
+	return scanWithdrawalRow(row, false)
+}
+
+func scanAdminWithdrawal(row withdrawalScanner) (*service.WithdrawalRequest, error) {
+	return scanWithdrawalRow(row, true)
+}
+
+func scanWithdrawalRow(row withdrawalScanner, includeLastWithdrawal bool) (*service.WithdrawalRequest, error) {
 	var req service.WithdrawalRequest
 	var userCancelReason sql.NullString
 	var adminNote sql.NullString
 	var processedBy sql.NullInt64
 	var processedAt sql.NullTime
-	if err := row.Scan(
+	var lastWithdrawalAt sql.NullTime
+	destinations := []any{
 		&req.ID,
 		&req.UserID,
 		&req.UserEmail,
@@ -415,7 +438,11 @@ func scanWithdrawal(row withdrawalScanner) (*service.WithdrawalRequest, error) {
 		&processedAt,
 		&req.CreatedAt,
 		&req.UpdatedAt,
-	); err != nil {
+	}
+	if includeLastWithdrawal {
+		destinations = append(destinations, &lastWithdrawalAt)
+	}
+	if err := row.Scan(destinations...); err != nil {
 		return nil, err
 	}
 	if userCancelReason.Valid {
@@ -429,6 +456,9 @@ func scanWithdrawal(row withdrawalScanner) (*service.WithdrawalRequest, error) {
 	}
 	if processedAt.Valid {
 		req.ProcessedAt = &processedAt.Time
+	}
+	if lastWithdrawalAt.Valid {
+		req.LastWithdrawalAt = &lastWithdrawalAt.Time
 	}
 	return &req, nil
 }

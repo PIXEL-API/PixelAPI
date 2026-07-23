@@ -294,6 +294,11 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 		result.QuotaState = quotaState
 	}
 
+	if cmd.AccountShareModeSettlement != nil &&
+		service.NormalizeAccountShareMode(cmd.ShareModeSnapshot) == service.AccountShareModePublic &&
+		service.NormalizeAccountShareStatus(cmd.ShareStatusSnapshot) == service.AccountShareStatusApproved {
+		return fmt.Errorf("account %d cannot settle public sharing and account-share mode in the same request", cmd.AccountID)
+	}
 	if err := applyAccountShareSettlement(ctx, tx, cmd, usageLogID, result); err != nil {
 		return err
 	}
@@ -757,51 +762,101 @@ func applyAccountShareModeSettlement(ctx context.Context, tx *sql.Tx, cmd *servi
 	if totalCharge.IsZero() || totalCharge.IsNegative() {
 		return nil
 	}
-	ownerRatio, platformRatio := accountShareModeSettlementRatios(snapshot.OwnerShareRatio, snapshot.PlatformShareRatio)
+	ownerRatio, configuredInviteRatio, _ := accountShareModeSettlementRatios(snapshot.OwnerShareRatio, snapshot.InviteShareRatio)
+	invite, err := resolveEligibleAccountShareInvite(ctx, tx, snapshot.ConsumerUserID, configuredInviteRatio, resolveUsageOccurredAt(cmd))
+	if err != nil {
+		return err
+	}
+	actualInviteRatio := decimal.Zero
+	if invite.InviterUserID > 0 {
+		actualInviteRatio = configuredInviteRatio
+	}
+	platformRatio := decimal.NewFromInt(1).Sub(ownerRatio).Sub(actualInviteRatio)
+	if platformRatio.IsNegative() {
+		return fmt.Errorf("account share mode settlement ratios exceed 1")
+	}
 	ownerCredit := totalCharge.Mul(ownerRatio).Round(10)
-	platformCredit := totalCharge.Mul(platformRatio).Round(10)
+	inviteCredit := totalCharge.Mul(actualInviteRatio).Round(10)
+	platformCredit := totalCharge.Sub(ownerCredit).Sub(inviteCredit)
+	if platformCredit.IsNegative() {
+		return fmt.Errorf("account share mode settlement credits exceed total charge")
+	}
 	periodStartedAt, periodEndedAt := accountShareModeUsageRequestPeriod(cmd, snapshot)
-	inserted, err := insertAccountShareModeSettlement(ctx, tx, cmd, usageLogID, ownerCredit, platformCredit, periodStartedAt, periodEndedAt)
+	inserted, err := insertAccountShareModeSettlement(
+		ctx,
+		tx,
+		cmd,
+		usageLogID,
+		invite,
+		ownerRatio,
+		actualInviteRatio,
+		platformRatio,
+		ownerCredit,
+		inviteCredit,
+		platformCredit,
+		periodStartedAt,
+		periodEndedAt,
+	)
 	if err != nil || !inserted {
 		return err
 	}
 	if err := updateAccountShareWaiverProgressCache(ctx, tx, snapshot, totalCharge, periodStartedAt, periodEndedAt); err != nil {
 		return err
 	}
-	if ownerCredit.IsZero() {
-		return nil
+	if !ownerCredit.IsZero() {
+		newBalance, err := creditUsageBillingBalance(ctx, tx, snapshot.OwnerUserID, ownerCredit)
+		if err != nil {
+			return err
+		}
+		if err := insertUserBalanceLedger(ctx, tx, userBalanceLedgerInput{
+			UserID:       snapshot.OwnerUserID,
+			Direction:    "credit",
+			Amount:       ownerCredit,
+			Reason:       "account_share_mode_income",
+			RefType:      "usage_log",
+			RefID:        nullablePositiveInt64(usageLogID),
+			BalanceAfter: decimalFromFloat(newBalance),
+			Metadata: map[string]any{
+				"request_id":       cmd.RequestID,
+				"api_key_id":       snapshot.APIKeyID,
+				"account_id":       snapshot.AccountID,
+				"listing_id":       snapshot.ListingID,
+				"membership_id":    snapshot.MembershipID,
+				"consumer_user_id": snapshot.ConsumerUserID,
+				"total_charge":     totalCharge.String(),
+				"owner_ratio":      ownerRatio.String(),
+				"invite_ratio":     actualInviteRatio.String(),
+				"platform_ratio":   platformRatio.String(),
+			},
+		}); err != nil {
+			return err
+		}
+		appendUsageBillingCreditUser(result, snapshot.OwnerUserID)
 	}
-	newBalance, err := creditUsageBillingBalance(ctx, tx, snapshot.OwnerUserID, ownerCredit)
-	if err != nil {
-		return err
+	if invite.InviterUserID > 0 && !inviteCredit.IsZero() {
+		if err := creditInviteShareBalance(ctx, tx, cmd, usageLogID, invite.InviterUserID, inviteCredit); err != nil {
+			return err
+		}
+		appendUsageBillingCreditUser(result, invite.InviterUserID)
 	}
-	if err := insertUserBalanceLedger(ctx, tx, userBalanceLedgerInput{
-		UserID:       snapshot.OwnerUserID,
-		Direction:    "credit",
-		Amount:       ownerCredit,
-		Reason:       "account_share_mode_income",
-		RefType:      "usage_log",
-		RefID:        nullablePositiveInt64(usageLogID),
-		BalanceAfter: decimalFromFloat(newBalance),
-		Metadata: map[string]any{
-			"request_id":       cmd.RequestID,
-			"api_key_id":       snapshot.APIKeyID,
-			"account_id":       snapshot.AccountID,
-			"listing_id":       snapshot.ListingID,
-			"membership_id":    snapshot.MembershipID,
-			"consumer_user_id": snapshot.ConsumerUserID,
-			"total_charge":     totalCharge.String(),
-			"owner_ratio":      ownerRatio.String(),
-			"platform_ratio":   platformRatio.String(),
-		},
-	}); err != nil {
-		return err
-	}
-	appendUsageBillingCreditUser(result, snapshot.OwnerUserID)
 	return nil
 }
 
-func insertAccountShareModeSettlement(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand, usageLogID int64, ownerCredit, platformCredit decimal.Decimal, periodStartedAt, periodEndedAt time.Time) (bool, error) {
+func insertAccountShareModeSettlement(
+	ctx context.Context,
+	tx *sql.Tx,
+	cmd *service.UsageBillingCommand,
+	usageLogID int64,
+	invite accountInviteSnapshot,
+	ownerRatio decimal.Decimal,
+	inviteRatio decimal.Decimal,
+	platformRatio decimal.Decimal,
+	ownerCredit decimal.Decimal,
+	inviteCredit decimal.Decimal,
+	platformCredit decimal.Decimal,
+	periodStartedAt time.Time,
+	periodEndedAt time.Time,
+) (bool, error) {
 	var snapshot *service.AccountShareModeBillingSnapshot
 	if cmd != nil {
 		snapshot = cmd.AccountShareModeSettlement
@@ -826,7 +881,14 @@ func insertAccountShareModeSettlement(ctx context.Context, tx *sql.Tx, cmd *serv
 			platform_credit,
 			rate_multiplier_snapshot,
 			hourly_rate_snapshot,
+			policy_id,
+			policy_version,
 			owner_share_ratio_snapshot,
+			inviter_user_id,
+			invite_bound_at_snapshot,
+			invite_expires_at_snapshot,
+			invite_share_ratio_snapshot,
+			invite_credit,
 			platform_share_ratio_snapshot,
 			duration_ms,
 			period_started_at,
@@ -836,7 +898,9 @@ func insertAccountShareModeSettlement(ctx context.Context, tx *sql.Tx, cmd *serv
 		VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
 			$8, $9, $10, $11, $12,
-			$13, $14, $15, $16, $17, $18, $19,
+			$13, $14, $15, $16, $17,
+			$18, $19, $20, $21, $22, $23,
+			$24, $25, $26,
 			NOW()
 		)
 		ON CONFLICT (usage_log_id) DO NOTHING
@@ -856,8 +920,15 @@ func insertAccountShareModeSettlement(ctx context.Context, tx *sql.Tx, cmd *serv
 		platformCredit.StringFixed(10),
 		decimalFromFloat(snapshot.RateMultiplier).StringFixed(4),
 		decimalFromFloat(snapshot.HourlyRate).StringFixed(8),
-		accountShareModeOwnerRatioString(snapshot),
-		accountShareModePlatformRatioString(snapshot),
+		nullablePtrInt64(snapshot.PolicyID),
+		snapshot.PolicyVersion,
+		ownerRatio.StringFixed(8),
+		nullablePositiveInt64(invite.InviterUserID),
+		nullableTime(invite.BoundAt),
+		nullableTime(invite.ExpiresAt),
+		inviteRatio.StringFixed(8),
+		inviteCredit.StringFixed(10),
+		platformRatio.StringFixed(8),
 		snapshot.DurationMs,
 		periodStartedAt,
 		periodEndedAt,
@@ -1016,9 +1087,9 @@ func accountShareModeUsageRequestPeriod(cmd *service.UsageBillingCommand, snapsh
 	return startedAt, endedAt
 }
 
-func normalizeAccountShareModeRatio(value float64, fallback float64) decimal.Decimal {
+func normalizeAccountShareModeRatio(value float64) decimal.Decimal {
 	if math.IsNaN(value) || math.IsInf(value, 0) {
-		value = fallback
+		return decimal.Zero
 	}
 	ratio := decimalFromFloat(value)
 	if ratio.IsNegative() {
@@ -1030,32 +1101,17 @@ func normalizeAccountShareModeRatio(value float64, fallback float64) decimal.Dec
 	return ratio
 }
 
-func accountShareModeSettlementRatios(ownerRaw, platformRaw float64) (decimal.Decimal, decimal.Decimal) {
-	ownerRatio := normalizeAccountShareModeRatio(ownerRaw, service.AccountShareModeDefaultOwnerShareRatio)
-	platformRatio := normalizeAccountShareModeRatio(platformRaw, service.AccountShareModeDefaultPlatformShareRatio)
-	if ownerRatio.Add(platformRatio).GreaterThan(decimal.NewFromInt(1)) {
-		platformRatio = decimal.NewFromInt(1).Sub(ownerRatio)
-		if platformRatio.IsNegative() {
-			platformRatio = decimal.Zero
+func accountShareModeSettlementRatios(ownerRaw, inviteRaw float64) (decimal.Decimal, decimal.Decimal, decimal.Decimal) {
+	ownerRatio := normalizeAccountShareModeRatio(ownerRaw)
+	inviteRatio := normalizeAccountShareModeRatio(inviteRaw)
+	if ownerRatio.Add(inviteRatio).GreaterThan(decimal.NewFromInt(1)) {
+		inviteRatio = decimal.NewFromInt(1).Sub(ownerRatio)
+		if inviteRatio.IsNegative() {
+			inviteRatio = decimal.Zero
 		}
 	}
-	return ownerRatio, platformRatio
-}
-
-func accountShareModeOwnerRatioString(snapshot *service.AccountShareModeBillingSnapshot) string {
-	if snapshot == nil {
-		return decimal.Zero.StringFixed(8)
-	}
-	ownerRatio, _ := accountShareModeSettlementRatios(snapshot.OwnerShareRatio, snapshot.PlatformShareRatio)
-	return ownerRatio.StringFixed(8)
-}
-
-func accountShareModePlatformRatioString(snapshot *service.AccountShareModeBillingSnapshot) string {
-	if snapshot == nil {
-		return decimal.Zero.StringFixed(8)
-	}
-	_, platformRatio := accountShareModeSettlementRatios(snapshot.OwnerShareRatio, snapshot.PlatformShareRatio)
-	return platformRatio.StringFixed(8)
+	platformRatio := decimal.NewFromInt(1).Sub(ownerRatio).Sub(inviteRatio)
+	return ownerRatio, inviteRatio, platformRatio
 }
 
 func loadAccountShareSnapshot(ctx context.Context, tx *sql.Tx, accountID int64) (accountShareSnapshot, error) {
@@ -1261,6 +1317,13 @@ func resolveAccountShareInvite(ctx context.Context, tx *sql.Tx, cmd *service.Usa
 	if cmd == nil || cmd.BalanceCost <= 0 || policy.InviteShareRatio.IsZero() || policy.InviteShareRatio.IsNegative() {
 		return accountInviteSnapshot{}, nil
 	}
+	return resolveEligibleAccountShareInvite(ctx, tx, cmd.UserID, policy.InviteShareRatio, usageOccurredAt)
+}
+
+func resolveEligibleAccountShareInvite(ctx context.Context, tx *sql.Tx, consumerUserID int64, inviteRatio decimal.Decimal, occurredAt time.Time) (accountInviteSnapshot, error) {
+	if consumerUserID <= 0 || inviteRatio.IsZero() || inviteRatio.IsNegative() {
+		return accountInviteSnapshot{}, nil
+	}
 	if enabled, err := isUsageAffiliateEnabled(ctx, tx); err != nil || !enabled {
 		return accountInviteSnapshot{}, err
 	}
@@ -1281,7 +1344,7 @@ func resolveAccountShareInvite(ctx context.Context, tx *sql.Tx, cmd *service.Usa
 			AND COALESCE(ua.inviter_bound_at, ua.created_at) <= $3
 			AND (ua.invite_reward_expires_at IS NULL OR ua.invite_reward_expires_at > $3)
 		LIMIT 1
-	`, cmd.UserID, service.StatusActive, usageOccurredAt).Scan(&out.InviterUserID, &out.BoundAt, &out.ExpiresAt)
+	`, consumerUserID, service.StatusActive, occurredAt).Scan(&out.InviterUserID, &out.BoundAt, &out.ExpiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return accountInviteSnapshot{}, nil
 	}
@@ -1386,24 +1449,50 @@ func insertAccountShareSettlement(ctx context.Context, tx *sql.Tx, in accountSha
 }
 
 func creditInviteShareBalance(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand, usageLogID int64, inviterUserID int64, amount decimal.Decimal) error {
-	newBalance, err := creditUsageBillingBalance(ctx, tx, inviterUserID, amount)
-	if err != nil {
-		return err
+	if cmd == nil {
+		return nil
 	}
-	if err := insertUserBalanceLedger(ctx, tx, userBalanceLedgerInput{
-		UserID:       inviterUserID,
-		Direction:    "credit",
-		Amount:       amount,
-		Reason:       "invite_share_income",
-		RefType:      "usage_log",
-		RefID:        nullablePositiveInt64(usageLogID),
-		BalanceAfter: decimalFromFloat(newBalance),
+	return creditInviteShareBalanceEntry(ctx, tx, inviteShareBalanceCreditInput{
+		InviterUserID:  inviterUserID,
+		ConsumerUserID: cmd.UserID,
+		Amount:         amount,
+		RefType:        "usage_log",
+		RefID:          nullablePositiveInt64(usageLogID),
 		Metadata: map[string]any{
 			"request_id":       cmd.RequestID,
 			"api_key_id":       cmd.APIKeyID,
 			"account_id":       cmd.AccountID,
 			"consumer_user_id": cmd.UserID,
 		},
+	})
+}
+
+type inviteShareBalanceCreditInput struct {
+	InviterUserID  int64
+	ConsumerUserID int64
+	Amount         decimal.Decimal
+	RefType        string
+	RefID          any
+	Metadata       map[string]any
+}
+
+func creditInviteShareBalanceEntry(ctx context.Context, tx *sql.Tx, input inviteShareBalanceCreditInput) error {
+	if input.InviterUserID <= 0 || input.ConsumerUserID <= 0 || input.Amount.LessThanOrEqual(decimal.Zero) {
+		return nil
+	}
+	newBalance, err := creditUsageBillingBalance(ctx, tx, input.InviterUserID, input.Amount)
+	if err != nil {
+		return err
+	}
+	if err := insertUserBalanceLedger(ctx, tx, userBalanceLedgerInput{
+		UserID:       input.InviterUserID,
+		Direction:    "credit",
+		Amount:       input.Amount,
+		Reason:       "invite_share_income",
+		RefType:      input.RefType,
+		RefID:        input.RefID,
+		BalanceAfter: decimalFromFloat(newBalance),
+		Metadata:     input.Metadata,
 	}); err != nil {
 		return err
 	}
@@ -1412,13 +1501,13 @@ func creditInviteShareBalance(ctx context.Context, tx *sql.Tx, cmd *service.Usag
 		SET aff_history_quota = aff_history_quota + $1::numeric,
 			updated_at = NOW()
 		WHERE user_id = $2
-	`, amount.StringFixed(10), inviterUserID); err != nil {
+	`, input.Amount.StringFixed(10), input.InviterUserID); err != nil {
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO user_affiliate_ledger (user_id, action, amount, source_user_id, created_at, updated_at)
 		VALUES ($1, 'accrue', $2::numeric, $3, NOW(), NOW())
-	`, inviterUserID, amount.StringFixed(10), cmd.UserID)
+	`, input.InviterUserID, input.Amount.StringFixed(10), input.ConsumerUserID)
 	return err
 }
 

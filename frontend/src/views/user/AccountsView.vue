@@ -109,6 +109,20 @@
             <button type="button" class="btn btn-danger btn-sm" @click="openBulkDeleteDialog">
               {{ t('admin.accounts.bulkActions.delete') }}
             </button>
+            <button
+              type="button"
+              class="btn btn-secondary btn-sm"
+              :disabled="submittingBatchTest"
+              @click="bulkTestConnections"
+            >
+              <Icon
+                name="refresh"
+                size="sm"
+                class="mr-1.5"
+                :class="submittingBatchTest ? 'animate-spin' : ''"
+              />
+              {{ t('userAccounts.bulkTestConnection') }}
+            </button>
             <button type="button" class="btn btn-secondary btn-sm" @click="bulkRefreshTokens">
               {{ t('admin.accounts.bulkActions.refreshToken') }}
             </button>
@@ -621,6 +635,7 @@ const todayStatsLoading = ref(false)
 const todayStatsError = ref<string | null>(null)
 const todayStatsReqSeq = ref(0)
 const exportingData = ref(false)
+const submittingBatchTest = ref(false)
 let abortController: AbortController | null = null
 const actionMenu = reactive<{
   show: boolean
@@ -1516,6 +1531,37 @@ async function bulkRefreshTokens(): Promise<void> {
   } catch (error: any) {
     console.error('Failed to create user account refresh task:', error)
     appStore.showError(error?.response?.data?.message || error?.message || t('common.error'))
+  }
+}
+
+async function bulkTestConnections(): Promise<void> {
+  if (submittingBatchTest.value) return
+  const accountIds = [...selectedIds.value]
+  if (accountIds.length === 0) return
+
+  submittingBatchTest.value = true
+  try {
+    const task = await accountsAPI.createBatchTestConnectionTask(accountIds)
+    appStore.showSuccess(t('userAccounts.bulkTestSubmitted', { count: task.total }))
+    clearSelection()
+    void pollUserAccountBatchTask(task.id, (completed) => {
+      const message = t('userAccounts.bulkTestCompleted', {
+        success: completed.success,
+        failed: completed.failed
+      })
+      if (completed.failed > 0) {
+        appStore.showError(message)
+      } else {
+        appStore.showSuccess(message)
+      }
+    })
+  } catch (error: any) {
+    console.error('Failed to create user account connection test task:', error)
+    appStore.showError(
+      error?.response?.data?.message || error?.message || t('userAccounts.bulkTestSubmitFailed')
+    )
+  } finally {
+    submittingBatchTest.value = false
   }
 }
 

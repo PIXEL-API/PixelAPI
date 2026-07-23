@@ -480,6 +480,19 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: "/admin/ops/cluster",
+    name: "AdminOpsCluster",
+    component: () =>
+      import("@/views/admin/ops/ClusterManagementView.vue"),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: "Cluster Management",
+      titleKey: "admin.cluster.title",
+      descriptionKey: "admin.cluster.description",
+    },
+  },
+  {
     path: "/admin/users",
     name: "AdminUsers",
     component: () => import("@/views/admin/UsersView.vue"),
@@ -820,10 +833,13 @@ const routes: RouteRecordRaw[] = [
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes,
-  scrollBehavior(_to, _from, savedPosition) {
+  scrollBehavior(to, _from, savedPosition) {
     // Scroll to saved position when using browser back/forward
     if (savedPosition) {
       return savedPosition;
+    }
+    if (to.hash) {
+      return { el: to.hash, behavior: "smooth" };
     }
     // Scroll to top for new routes
     return { top: 0 };

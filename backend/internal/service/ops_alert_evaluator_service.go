@@ -35,6 +35,7 @@ type OpsAlertEvaluatorService struct {
 	opsService   *OpsService
 	opsRepo      OpsRepository
 	emailService *EmailService
+	taskExecutor *ClusterTaskExecutor
 
 	redisClient *redis.Client
 	cfg         *config.Config
@@ -172,6 +173,20 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 		}
 	}
 
+	if s.cfg != nil && s.cfg.Cluster.Enabled {
+		if s.taskExecutor == nil {
+			logger.LegacyPrintf("service.ops_alert_evaluator", "[OpsAlertEvaluator] cluster task executor is not configured")
+			return
+		}
+		_, err := s.taskExecutor.Run(ctx, opsAlertEvaluatorJobName, func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+			return s.evaluateOnceOwned(taskCtx, interval, runtimeCfg, guard)
+		})
+		if err != nil {
+			logger.LegacyPrintf("service.ops_alert_evaluator", "[OpsAlertEvaluator] evaluation failed: %v", err)
+		}
+		return
+	}
+
 	release, ok := s.tryAcquireLeaderLock(ctx, runtimeCfg.DistributedLock)
 	if !ok {
 		return
@@ -180,14 +195,27 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 		defer release()
 	}
 
+	if err := s.evaluateOnceOwned(ctx, interval, runtimeCfg, &ClusterLeaseGuard{}); err != nil {
+		logger.LegacyPrintf("service.ops_alert_evaluator", "[OpsAlertEvaluator] evaluation failed: %v", err)
+	}
+}
+
+func (s *OpsAlertEvaluatorService) evaluateOnceOwned(
+	ctx context.Context,
+	interval time.Duration,
+	runtimeCfg *OpsAlertRuntimeSettings,
+	guard *ClusterLeaseGuard,
+) error {
 	startedAt := time.Now().UTC()
 	runAt := startedAt
 
 	rules, err := s.opsRepo.ListAlertRules(ctx)
 	if err != nil {
+		if guardErr := guard.Check(ctx); guardErr != nil {
+			return guardErr
+		}
 		s.recordHeartbeatError(runAt, time.Since(startedAt), err)
-		logger.LegacyPrintf("service.ops_alert_evaluator", "[OpsAlertEvaluator] list rules failed: %v", err)
-		return
+		return fmt.Errorf("list alert rules: %w", err)
 	}
 
 	rulesTotal := len(rules)
@@ -281,6 +309,9 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 				CreatedAt:      now,
 			}
 
+			if err := guard.Check(ctx); err != nil {
+				return err
+			}
 			created, err := s.opsRepo.CreateAlertEvent(ctx, firedEvent)
 			if err != nil {
 				logger.LegacyPrintf("service.ops_alert_evaluator", "[OpsAlertEvaluator] create event failed (rule=%d): %v", rule.ID, err)
@@ -289,7 +320,11 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 
 			eventsCreated++
 			if created != nil && created.ID > 0 {
-				if s.maybeSendAlertEmail(ctx, runtimeCfg, rule, created) {
+				sent, sendErr := s.maybeSendAlertEmail(ctx, runtimeCfg, rule, created, guard)
+				if sendErr != nil {
+					return sendErr
+				}
+				if sent {
 					emailsSent++
 				}
 			}
@@ -299,6 +334,9 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 		// Not breached: resolve active event if present.
 		if activeEvent != nil {
 			resolvedAt := now
+			if err := guard.Check(ctx); err != nil {
+				return err
+			}
 			if err := s.opsRepo.UpdateAlertEventStatus(ctx, activeEvent.ID, OpsAlertStatusResolved, &resolvedAt); err != nil {
 				logger.LegacyPrintf("service.ops_alert_evaluator", "[OpsAlertEvaluator] resolve event failed (event=%d): %v", activeEvent.ID, err)
 			} else {
@@ -307,8 +345,12 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 		}
 	}
 
+	if err := guard.Check(ctx); err != nil {
+		return err
+	}
 	result := truncateString(fmt.Sprintf("rules=%d enabled=%d evaluated=%d created=%d resolved=%d emails_sent=%d", rulesTotal, rulesEnabled, rulesEvaluated, eventsCreated, eventsResolved, emailsSent), 2048)
 	s.recordHeartbeatSuccess(runAt, time.Since(startedAt), result)
+	return nil
 }
 
 func (s *OpsAlertEvaluatorService) pruneRuleStates(rules []*OpsAlertRule) {
@@ -642,32 +684,38 @@ func buildOpsAlertDescription(rule *OpsAlertRule, value float64, windowMinutes i
 	)
 }
 
-func (s *OpsAlertEvaluatorService) maybeSendAlertEmail(ctx context.Context, runtimeCfg *OpsAlertRuntimeSettings, rule *OpsAlertRule, event *OpsAlertEvent) bool {
+func (s *OpsAlertEvaluatorService) maybeSendAlertEmail(
+	ctx context.Context,
+	runtimeCfg *OpsAlertRuntimeSettings,
+	rule *OpsAlertRule,
+	event *OpsAlertEvent,
+	guard *ClusterLeaseGuard,
+) (bool, error) {
 	if s == nil || s.emailService == nil || s.opsService == nil || event == nil || rule == nil {
-		return false
+		return false, nil
 	}
 	if event.EmailSent {
-		return false
+		return false, nil
 	}
 	if !rule.NotifyEmail {
-		return false
+		return false, nil
 	}
 
 	emailCfg, err := s.opsService.GetEmailNotificationConfig(ctx)
 	if err != nil || emailCfg == nil || !emailCfg.Alert.Enabled {
-		return false
+		return false, nil
 	}
 
 	if len(emailCfg.Alert.Recipients) == 0 {
-		return false
+		return false, nil
 	}
 	if !shouldSendOpsAlertEmailByMinSeverity(strings.TrimSpace(emailCfg.Alert.MinSeverity), strings.TrimSpace(rule.Severity)) {
-		return false
+		return false, nil
 	}
 
 	if runtimeCfg != nil && runtimeCfg.Silencing.Enabled {
 		if isOpsAlertSilenced(time.Now().UTC(), rule, event, runtimeCfg.Silencing) {
-			return false
+			return false, nil
 		}
 	}
 
@@ -686,6 +734,9 @@ func (s *OpsAlertEvaluatorService) maybeSendAlertEmail(ctx context.Context, runt
 		if !s.emailLimiter.Allow(time.Now().UTC()) {
 			continue
 		}
+		if err := guard.Check(ctx); err != nil {
+			return anySent, err
+		}
 		if err := s.emailService.SendEmail(ctx, addr, subject, body); err != nil {
 			// Ignore per-recipient failures; continue best-effort.
 			continue
@@ -694,9 +745,12 @@ func (s *OpsAlertEvaluatorService) maybeSendAlertEmail(ctx context.Context, runt
 	}
 
 	if anySent {
-		_ = s.opsRepo.UpdateAlertEventEmailSent(context.Background(), event.ID, true)
+		if err := guard.Check(ctx); err != nil {
+			return true, err
+		}
+		_ = s.opsRepo.UpdateAlertEventEmailSent(ctx, event.ID, true)
 	}
-	return anySent
+	return anySent, nil
 }
 
 func buildOpsAlertEmailBody(rule *OpsAlertRule, event *OpsAlertEvent) string {

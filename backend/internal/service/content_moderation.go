@@ -87,6 +87,7 @@ const (
 	contentModerationCleanupInterval = 24 * time.Hour
 	contentModerationCleanupTimeout  = 30 * time.Minute
 	contentModerationCleanupDelay    = 5 * time.Minute
+	contentModerationCleanupTaskName = "content_moderation_cleanup"
 
 	contentModerationRuntimeCacheTTL       = time.Second
 	contentModerationRuntimeRefreshTimeout = 5 * time.Second
@@ -573,6 +574,11 @@ type ContentModerationService struct {
 	runtimeRefreshRetryAt     atomic.Int64
 	keyHealthMu               sync.Mutex
 	keyHealth                 map[string]*contentModerationKeyHealth
+	clusterCache              *ClusterCacheCoordinator
+	taskExecutor              *ClusterTaskExecutor
+	cancelCleanup             context.CancelFunc
+	cleanupStopOnce           sync.Once
+	cleanupWG                 sync.WaitGroup
 }
 
 type contentModerationRuntimeSnapshot struct {
@@ -612,7 +618,9 @@ func NewContentModerationService(
 	userRepo UserRepository,
 	authCacheInvalidator APIKeyAuthCacheInvalidator,
 	emailService *EmailService,
+	taskExecutors ...*ClusterTaskExecutor,
 ) *ContentModerationService {
+	cleanupCtx, cancelCleanup := context.WithCancel(context.Background())
 	svc := &ContentModerationService{
 		settingRepo:          settingRepo,
 		repo:                 repo,
@@ -625,12 +633,17 @@ func NewContentModerationService(
 		workerCount:          maxContentModerationWorkerCount,
 		asyncQueue:           make(chan contentModerationTask, maxContentModerationQueueSize),
 		keyHealth:            make(map[string]*contentModerationKeyHealth),
+		cancelCleanup:        cancelCleanup,
+	}
+	if len(taskExecutors) > 0 {
+		svc.taskExecutor = taskExecutors[0]
 	}
 	if settingRepo != nil && repo != nil {
 		for i := 0; i < svc.workerCount; i++ {
 			go svc.worker(i)
 		}
-		go svc.cleanupWorker()
+		svc.cleanupWG.Add(1)
+		go svc.cleanupWorker(cleanupCtx)
 	}
 	return svc
 }
@@ -640,6 +653,12 @@ func (s *ContentModerationService) SetSystemNoticeService(noticeService *SystemN
 		return
 	}
 	s.systemNoticeService = noticeService
+}
+
+func (s *ContentModerationService) SetClusterCacheCoordinator(coordinator *ClusterCacheCoordinator) {
+	if s != nil {
+		s.clusterCache = coordinator
+	}
 }
 
 func (s *ContentModerationService) SetAccountShareModeResolver(resolver ContentModerationAccountShareModeResolver) {
@@ -785,6 +804,11 @@ func (s *ContentModerationService) UpdateConfig(ctx context.Context, input Updat
 	}
 	if err := s.settingRepo.Set(ctx, SettingKeyContentModerationConfig, string(raw)); err != nil {
 		return nil, fmt.Errorf("save content moderation config: %w", err)
+	}
+	if s.clusterCache != nil {
+		if err := s.clusterCache.Advance(ctx, ClusterCacheKeyPolicyMetadata); err != nil {
+			slog.Error("failed to advance cluster policy metadata cache version", "error", err)
+		}
 	}
 	s.replaceRuntimeConfig(raw)
 	return s.configView(cfg), nil
@@ -1425,41 +1449,84 @@ func (s *ContentModerationService) GetStatus(ctx context.Context) (*ContentModer
 	}, nil
 }
 
-func (s *ContentModerationService) cleanupWorker() {
+func (s *ContentModerationService) cleanupWorker(ctx context.Context) {
+	defer s.cleanupWG.Done()
 	timer := time.NewTimer(contentModerationCleanupDelay)
 	defer timer.Stop()
 	for {
-		<-timer.C
-		s.runCleanupOnce()
-		timer.Reset(contentModerationCleanupInterval)
+		select {
+		case <-timer.C:
+			s.runCleanupOnceWithContext(ctx)
+			timer.Reset(contentModerationCleanupInterval)
+		case <-ctx.Done():
+			return
+		}
 	}
 }
 
 func (s *ContentModerationService) runCleanupOnce() {
+	s.runCleanupOnceWithContext(context.Background())
+}
+
+func (s *ContentModerationService) runCleanupOnceWithContext(parent context.Context) {
 	if s == nil || s.repo == nil || s.settingRepo == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), contentModerationCleanupTimeout)
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, contentModerationCleanupTimeout)
 	defer cancel()
-	cfg, err := s.loadConfig(ctx)
-	if err != nil {
-		slog.Warn("content_moderation.cleanup_load_config_failed", "error", err)
-		return
+
+	run := func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+		cfg, err := s.loadConfig(taskCtx)
+		if err != nil {
+			return fmt.Errorf("load content moderation cleanup config: %w", err)
+		}
+		now := time.Now()
+		hitBefore := now.AddDate(0, 0, -cfg.HitRetentionDays)
+		nonHitBefore := now.AddDate(0, 0, -cfg.NonHitRetentionDays)
+		if err := guard.Check(taskCtx); err != nil {
+			return err
+		}
+		result, err := s.repo.CleanupExpiredLogs(taskCtx, hitBefore, nonHitBefore)
+		if err != nil {
+			return err
+		}
+		if result == nil {
+			return nil
+		}
+		s.lastCleanupUnix.Store(result.FinishedAt.Unix())
+		s.lastCleanupDeletedHit.Store(result.DeletedHit)
+		s.lastCleanupDeletedNonHit.Store(result.DeletedNonHit)
+		return nil
 	}
-	now := time.Now()
-	hitBefore := now.AddDate(0, 0, -cfg.HitRetentionDays)
-	nonHitBefore := now.AddDate(0, 0, -cfg.NonHitRetentionDays)
-	result, err := s.repo.CleanupExpiredLogs(ctx, hitBefore, nonHitBefore)
+
+	var err error
+	if s.taskExecutor == nil {
+		err = run(ctx, &ClusterLeaseGuard{})
+	} else {
+		_, err = s.taskExecutor.Run(ctx, contentModerationCleanupTaskName, run)
+	}
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
 		slog.Warn("content_moderation.cleanup_failed", "error", err)
+	}
+}
+
+// StopCleanupWorker 停止日志保留清理循环；异步审核 worker 仍由请求队列生命周期管理。
+func (s *ContentModerationService) StopCleanupWorker() {
+	if s == nil {
 		return
 	}
-	if result == nil {
-		return
-	}
-	s.lastCleanupUnix.Store(result.FinishedAt.Unix())
-	s.lastCleanupDeletedHit.Store(result.DeletedHit)
-	s.lastCleanupDeletedNonHit.Store(result.DeletedNonHit)
+	s.cleanupStopOnce.Do(func() {
+		if s.cancelCleanup != nil {
+			s.cancelCleanup()
+		}
+	})
+	s.cleanupWG.Wait()
 }
 
 func (s *ContentModerationService) loadConfig(ctx context.Context) (*ContentModerationConfig, error) {
@@ -1571,6 +1638,22 @@ func (s *ContentModerationService) refreshRuntimeSnapshot(ctx context.Context) (
 	s.runtimeSnapshot.Store(snapshot)
 	s.runtimeRefreshRetryAt.Store(0)
 	return snapshot, nil
+}
+
+// RefreshPolicyMetadataCache 强制刷新本节点的风控策略元数据。
+// 该操作不会触碰哈希命中、用户信任、鉴权、余额、限流或并发槽等共享业务状态。
+func (s *ContentModerationService) RefreshPolicyMetadataCache(ctx context.Context) error {
+	if s == nil || s.settingRepo == nil {
+		return errors.New("policy metadata cache unavailable")
+	}
+	if ctx == nil {
+		return errors.New("policy metadata cache refresh requires a context")
+	}
+
+	s.runtimeRefreshMu.Lock()
+	defer s.runtimeRefreshMu.Unlock()
+	_, err := s.refreshRuntimeSnapshot(ctx)
+	return err
 }
 
 func (s *ContentModerationService) replaceRuntimeConfig(raw []byte) {
