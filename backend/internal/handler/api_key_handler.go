@@ -59,6 +59,7 @@ type CreateAPIKeyRequest struct {
 	IPBlacklist   []string                  `json:"ip_blacklist"`    // IP 黑名单
 	Quota         *float64                  `json:"quota"`           // 配额限制 (USD)
 	ExpiresInDays *int                      `json:"expires_in_days"` // 过期天数
+	ExpiresAt     *string                   `json:"expires_at"`      // 精确过期时间 (RFC3339)
 
 	// Rate limit fields (0 = unlimited)
 	RateLimit5h *float64 `json:"rate_limit_5h"`
@@ -72,8 +73,8 @@ type UpdateAPIKeyRequest struct {
 	GroupID     *int64                     `json:"group_id"`
 	GroupRoutes *[]APIKeyGroupRouteRequest `json:"group_routes"`
 	Status      string                     `json:"status" binding:"omitempty,oneof=active inactive"`
-	IPWhitelist []string                   `json:"ip_whitelist"` // IP 白名单
-	IPBlacklist []string                   `json:"ip_blacklist"` // IP 黑名单
+	IPWhitelist *[]string                  `json:"ip_whitelist"` // IP 白名单（nil 不修改，空数组清空）
+	IPBlacklist *[]string                  `json:"ip_blacklist"` // IP 黑名单（nil 不修改，空数组清空）
 	Quota       *float64                   `json:"quota"`        // 配额限制 (USD), 0=无限制
 	ExpiresAt   *string                    `json:"expires_at"`   // 过期时间 (ISO 8601)
 	ResetQuota  *bool                      `json:"reset_quota"`  // 重置已用配额
@@ -91,6 +92,23 @@ type APIKeyGroupRouteRequest struct {
 	Weight          int   `json:"weight"`
 	Enabled         *bool `json:"enabled"`
 	CooldownSeconds int   `json:"cooldown_seconds"`
+}
+
+func parseCreateAPIKeyExpiration(rawExpiresAt *string, expiresInDays *int, now time.Time) (*time.Time, error) {
+	if rawExpiresAt != nil && expiresInDays != nil {
+		return nil, service.ErrAPIKeyExpirationConflict
+	}
+	if rawExpiresAt == nil {
+		return nil, nil
+	}
+	expiresAt, err := time.Parse(time.RFC3339, *rawExpiresAt)
+	if err != nil {
+		return nil, service.ErrAPIKeyExpirationInvalid.WithCause(err)
+	}
+	if !expiresAt.After(now) {
+		return nil, service.ErrAPIKeyExpirationNotFuture
+	}
+	return &expiresAt, nil
 }
 
 // List handles listing user's API keys with pagination
@@ -183,6 +201,11 @@ func (h *APIKeyHandler) Create(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
+	expiresAt, err := parseCreateAPIKeyExpiration(req.ExpiresAt, req.ExpiresInDays, time.Now())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 
 	svcReq := service.CreateAPIKeyRequest{
 		Name:          req.Name,
@@ -192,6 +215,7 @@ func (h *APIKeyHandler) Create(c *gin.Context) {
 		IPWhitelist:   req.IPWhitelist,
 		IPBlacklist:   req.IPBlacklist,
 		ExpiresInDays: req.ExpiresInDays,
+		ExpiresAt:     expiresAt,
 	}
 	if req.Quota != nil {
 		svcReq.Quota = *req.Quota

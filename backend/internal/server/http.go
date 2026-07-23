@@ -6,6 +6,7 @@ import (
 	"log"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -45,18 +46,7 @@ func ProvideRouter(
 
 	r := gin.New()
 	r.Use(middleware2.Recovery())
-	if len(cfg.Server.TrustedProxies) > 0 {
-		if err := r.SetTrustedProxies(cfg.Server.TrustedProxies); err != nil {
-			log.Printf("Failed to set trusted proxies: %v", err)
-		}
-	} else {
-		if err := r.SetTrustedProxies(nil); err != nil {
-			log.Printf("Failed to disable trusted proxies: %v", err)
-		}
-		if cfg.Server.Mode == "release" {
-			log.Printf("Warning: server.trusted_proxies is empty in release mode; client IP trust chain is disabled")
-		}
-	}
+	configureClientIPResolution(r, cfg.Server, cfg.Security)
 
 	// Wire up websearch Manager builder so it initializes on startup and rebuilds on config save.
 	settingService.SetWebSearchManagerBuilder(context.Background(), func(cfg *service.WebSearchEmulationConfig, proxyURLs map[int64]string) {
@@ -95,6 +85,60 @@ func ProvideRouter(
 	})
 
 	return SetupRouter(r, handlers, jwtAuth, adminAuth, apiKeyAuth, apiKeyService, subscriptionService, opsService, settingService, cfg, redisClient)
+}
+
+var standardForwardedClientIPHeaders = []string{
+	"CF-Connecting-IP",
+	"X-Forwarded-For",
+	"X-Real-IP",
+}
+
+func configureClientIPResolution(r *gin.Engine, serverCfg config.ServerConfig, securityCfg config.SecurityConfig) {
+	customHeaders, err := config.NormalizeForwardedClientIPHeaders(securityCfg.ForwardedClientIPHeaders)
+	if err != nil {
+		// Config.Load 会提前拒绝非法配置；这里仍然关闭自定义头，避免直接构造 Config
+		// 的测试或嵌入调用意外扩大信任边界。
+		log.Printf("Ignoring invalid security.forwarded_client_ip_headers: %v", err)
+		customHeaders = nil
+	}
+	r.RemoteIPHeaders = mergeForwardedClientIPHeaders(customHeaders, standardForwardedClientIPHeaders)
+
+	if len(serverCfg.TrustedProxies) == 0 {
+		if err := r.SetTrustedProxies(nil); err != nil {
+			log.Printf("Failed to disable trusted proxies: %v", err)
+		}
+		if serverCfg.Mode == "release" {
+			log.Printf("Warning: server.trusted_proxies is empty in release mode; forwarded client IP headers are disabled")
+		}
+		return
+	}
+
+	if err := r.SetTrustedProxies(serverCfg.TrustedProxies); err != nil {
+		log.Printf("Failed to set trusted proxies, disabling forwarded client IP headers: %v", err)
+		if disableErr := r.SetTrustedProxies(nil); disableErr != nil {
+			log.Printf("Failed to disable trusted proxies after invalid configuration: %v", disableErr)
+		}
+	}
+}
+
+func mergeForwardedClientIPHeaders(groups ...[]string) []string {
+	count := 0
+	for _, group := range groups {
+		count += len(group)
+	}
+	merged := make([]string, 0, count)
+	seen := make(map[string]struct{}, count)
+	for _, group := range groups {
+		for _, header := range group {
+			key := strings.ToLower(header)
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			merged = append(merged, header)
+		}
+	}
+	return merged
 }
 
 // ProvideHTTPServer 提供 HTTP 服务器

@@ -2,12 +2,53 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestOpenAIFirstOutputStartPreservesEndToEndRequestStart(t *testing.T) {
+	start := time.Now().Add(-2 * time.Second)
+	ctx := WithOpenAIFirstOutputStart(context.Background(), start)
+	recovered := openAIFirstOutputStart(ctx)
+	require.Equal(t, start, recovered)
+
+	// Contexts without the marker retain the compatibility behavior and start
+	// timing at the service entry point.
+	compatStart := openAIFirstOutputStart(context.Background())
+	require.WithinDuration(t, time.Now(), compatStart, time.Second)
+}
+
+func TestEnsureOpenAIFirstOutputStartIsStableForDirectServiceCallers(t *testing.T) {
+	ctx, first := ensureOpenAIFirstOutputStart(context.Background())
+	recovered := openAIFirstOutputStart(ctx)
+	require.Equal(t, first, recovered)
+
+	ctx2, second := ensureOpenAIFirstOutputStart(ctx)
+	require.Same(t, ctx, ctx2)
+	require.Equal(t, first, second)
+}
+
+func TestOpenAIFirstOutputRoutingBudgetDoesNotPenalizeAccount(t *testing.T) {
+	err := (&OpenAIGatewayService{}).newOpenAIFirstOutputTimeoutError(
+		context.Background(),
+		nil,
+		&Account{ID: 1, Platform: PlatformOpenAI},
+		time.Now().Add(-time.Second),
+		"gpt-5",
+		"",
+		time.Second,
+		openAIFirstOutputPhaseRoutingBudget,
+		nil,
+	)
+	require.Equal(t, GatewayFailureReasonRoutingBudgetExhausted, err.Reason)
+	require.False(t, err.ShouldReportAccountScheduleFailure())
+	require.False(t, err.ShouldRetryNextAccount())
+}
 
 func TestOpenAIFirstOutputStageUnlinkFailureFailsFastAndRetriesCleanup(t *testing.T) {
 	stage := newDefaultOpenAIFirstOutputStage()

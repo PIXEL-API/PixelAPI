@@ -183,10 +183,14 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 
 		account := selection.Account
 		setOpsSelectedAccount(c, account.ID, account.Platform)
-		accountRelease, acquired := h.acquireResponsesAccountSlot(c, currentAPIKey.GroupID, sessionHash, selection, false, &streamStarted, reqLog)
+		freshAccount, accountRelease, acquired := h.acquireResponsesAccountSlot(c, selectionCtx, currentAPIKey.GroupID, sessionHash, service.OpenAIAccountDispatchRequirements{
+			RequestedModel:    selectionModel,
+			RequiredTransport: service.OpenAIUpstreamTransportHTTPSSE,
+		}, selection, false, &streamStarted, reqLog)
 		if !acquired {
 			return
 		}
+		account = freshAccount
 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
 		writerSizeBeforeForward := c.Writer.Size()
 		forwardBody := body
@@ -203,7 +207,7 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 		service.SetOpsLatencyMs(c, service.OpsResponseLatencyMsKey, time.Since(forwardStart).Milliseconds())
 
 		if forwardErr == nil {
-			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, nil)
+			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, nil, account.GetMappedModel(selectionModel))
 			routeCursor.recordSuccess(currentAPIKey.ID)
 			if result != nil {
 				userAgent := c.GetHeader("User-Agent")

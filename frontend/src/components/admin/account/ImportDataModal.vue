@@ -50,9 +50,10 @@
         <div class="text-sm text-gray-700 dark:text-dark-300">
           {{
             result.credential_import
-              ? t('userAccounts.importResultSummary', {
-                  created: result.account_created,
-                  skipped: result.account_skipped || 0,
+                ? t('userAccounts.importResultSummary', {
+                    created: result.account_created,
+                    updated: result.account_updated || 0,
+                    skipped: result.account_skipped || 0,
                   failed: result.account_failed
                 })
               : t('admin.accounts.dataImportResultSummary', result)
@@ -120,6 +121,7 @@ const file = ref<File | null>(null)
 type ImportResult = AdminDataImportResult & {
   credential_import?: boolean
   account_skipped?: number
+  account_updated?: number
 }
 
 const result = ref<ImportResult | null>(null)
@@ -211,6 +213,7 @@ const importAsCredentialContents = async (contents: string): Promise<ImportResul
     proxy_reused: 0,
     proxy_failed: 0,
     account_created: credentialResult.created,
+    account_updated: credentialResult.updated ?? 0,
     account_failed: credentialResult.failed,
     errors: (credentialResult.errors ?? []).map((item) => ({
       kind: 'account' as const,
@@ -243,6 +246,7 @@ const handleImport = async () => {
     if (res.credential_import) {
       const params = {
         created: res.account_created,
+        updated: res.account_updated || 0,
         skipped: res.account_skipped || 0,
         failed: res.account_failed
       }

@@ -245,6 +245,7 @@ const (
 	SettingKeyWithdrawalManagementEnabled      = "withdrawal_management_enabled"        // 是否启用提现管理（默认开启）
 	SettingKeyWithdrawalRateLimitWindowDays    = "withdrawal_rate_limit_window_days"    // 提现滚动频次限制窗口（天）
 	SettingKeyWithdrawalRateLimitMax           = "withdrawal_rate_limit_max"            // 窗口内最多提现申请次数，0 表示不限制
+	SettingKeyWithdrawalRateLimitExemptAmount  = "withdrawal_rate_limit_exempt_amount"  // 单笔提现严格超过该金额时免计频次，0 表示关闭豁免
 	SettingKeyContentModerationConfig          = "content_moderation_config"            // 内容审计配置（JSON）
 	SettingKeyAccountShareCommentReviewEnabled = "account_share_comment_review_enabled" // 账号广场评论审核开关
 	SettingKeyAccountShareCommentReviewURL     = "account_share_comment_review_url"     // 账号广场评论审核模型 URL

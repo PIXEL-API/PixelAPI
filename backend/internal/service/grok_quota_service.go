@@ -226,6 +226,23 @@ func (s *GrokQuotaService) ProbeBilling(ctx context.Context, accountID int64) (*
 	})
 }
 
+// ProbeMediaEligibility refreshes the billing observation used by media
+// scheduling and then evaluates the persisted account state. Transport errors
+// remain fail-closed; deterministic states such as forbidden or Free are
+// returned as normal ineligibility decisions.
+func (s *GrokQuotaService) ProbeMediaEligibility(ctx context.Context, accountID int64) (bool, string, error) {
+	_, probeErr := s.ProbeBilling(ctx, accountID)
+	account, err := s.loadGrokOAuthAccount(ctx, accountID)
+	if err != nil {
+		return false, "billing_probe_failed", err
+	}
+	eligible, reason := account.GrokMediaGenerationEligibility()
+	if reason == "billing_unobserved" && probeErr != nil {
+		return false, reason, probeErr
+	}
+	return eligible, reason, nil
+}
+
 func (s *GrokQuotaService) probeBilling(ctx context.Context, accountID int64) (*GrokQuotaProbeResult, error) {
 	account, token, proxyURL, err := s.prepareProbe(ctx, accountID)
 	if err != nil {
@@ -254,12 +271,25 @@ func (s *GrokQuotaService) probeBilling(ctx context.Context, accountID int64) (*
 
 	weeklyOK := weekly.summary != nil
 	monthlyOK := monthly.summary != nil
+	previous, _ := grokBillingSnapshotFromExtra(account.Extra)
 	if !weeklyOK && !monthlyOK {
-		return nil, mergeGrokBillingProbeErrors(weekly.status, monthly.status, weekly.err, monthly.err)
+		probeErr := mergeGrokBillingProbeErrors(weekly.status, monthly.status, weekly.err, monthly.err)
+		billing := xai.MergeBillingProbeResult(previous, nil, nil, false, false)
+		if billing == nil {
+			billing = &xai.BillingSummary{Partial: true, FailedWindows: []string{"weekly", "monthly"}}
+		}
+		billing.WeeklyStatusCode = weekly.status
+		billing.MonthlyStatusCode = monthly.status
+		billing = xai.StampBillingSummary(billing, preferBillingObservationStatus(weekly.status, monthly.status), "billing_probe")
+		if persistErr := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{grokBillingExtraKey: billing}); persistErr != nil {
+			slog.Warn("grok_billing_failure_persist_failed", "account_id", account.ID, "error", persistErr)
+		}
+		return nil, probeErr
 	}
 	statusCode := preferSuccessfulBillingStatus(weekly.status, monthly.status, weeklyOK, monthlyOK)
-	previous, _ := grokBillingSnapshotFromExtra(account.Extra)
 	billing := xai.MergeBillingProbeResult(previous, weekly.summary, monthly.summary, weeklyOK, monthlyOK)
+	billing.WeeklyStatusCode = weekly.status
+	billing.MonthlyStatusCode = monthly.status
 	billing = xai.StampBillingSummary(billing, statusCode, "billing_probe")
 	persistErr := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{
 		grokBillingExtraKey: billing,
@@ -279,6 +309,16 @@ func (s *GrokQuotaService) probeBilling(ctx context.Context, accountID int64) (*
 		FetchedAt:         now.Unix(),
 		Persisted:         persistErr == nil,
 	}, nil
+}
+
+func preferBillingObservationStatus(weeklyStatus, monthlyStatus int) int {
+	if weeklyStatus == http.StatusForbidden || monthlyStatus == http.StatusForbidden {
+		return http.StatusForbidden
+	}
+	if weeklyStatus != 0 {
+		return weeklyStatus
+	}
+	return monthlyStatus
 }
 
 func (s *GrokQuotaService) runProbeFlight(

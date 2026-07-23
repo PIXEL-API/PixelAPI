@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -29,6 +30,172 @@ func TestGrokVideoMutationEndpointsAreBillableGenerationRequests(t *testing.T) {
 	}
 	require.False(t, GrokMediaEndpointVideoStatus.IsGenerationRequest())
 	require.False(t, GrokMediaEndpointVideoStatus.IsVideoMutationRequest())
+	require.True(t, GrokMediaEndpointVideoStatus.IsVideoLookupRequest())
+	require.True(t, GrokMediaEndpointVideoContent.IsVideoLookupRequest())
+	require.False(t, GrokMediaEndpointVideoContent.RequiresRequestBody())
+}
+
+func TestGrokMediaVideoRequestSessionHashIsOwnerScoped(t *testing.T) {
+	t.Parallel()
+
+	base := GrokMediaVideoRequestSessionHash("request-1", 10, 20)
+	require.NotEmpty(t, base)
+	require.NotEqual(t, base, GrokMediaVideoRequestSessionHash("request-1", 11, 20))
+	require.NotEqual(t, base, GrokMediaVideoRequestSessionHash("request-1", 10, 21))
+	require.NotEqual(t, base, GrokMediaVideoRequestSessionHash("request-2", 10, 20))
+	require.Empty(t, GrokMediaVideoRequestSessionHash("", 10, 20))
+	require.Empty(t, GrokMediaVideoRequestSessionHash("request-1", 0, 20))
+	require.Empty(t, GrokMediaVideoRequestSessionHash("request-1", 10, 0))
+}
+
+type grokOwnerBindingCache struct {
+	GatewayCache
+	bindings map[string]int64
+	strings  map[string]string
+	ttl      time.Duration
+}
+
+func (c *grokOwnerBindingCache) key(groupID int64, sessionHash string) string {
+	return fmt.Sprintf("%d:%s", groupID, sessionHash)
+}
+
+func (c *grokOwnerBindingCache) GetSessionAccountID(_ context.Context, groupID int64, sessionHash string) (int64, error) {
+	if accountID, ok := c.bindings[c.key(groupID, sessionHash)]; ok {
+		return accountID, nil
+	}
+	return 0, ErrGatewaySessionStringNotFound
+}
+
+func (c *grokOwnerBindingCache) SetSessionAccountID(_ context.Context, groupID int64, sessionHash string, accountID int64, ttl time.Duration) error {
+	if c.bindings == nil {
+		c.bindings = make(map[string]int64)
+	}
+	c.bindings[c.key(groupID, sessionHash)] = accountID
+	c.ttl = ttl
+	return nil
+}
+
+func (c *grokOwnerBindingCache) DeleteSessionAccountID(_ context.Context, groupID int64, sessionHash string) error {
+	delete(c.bindings, c.key(groupID, sessionHash))
+	return nil
+}
+
+func (c *grokOwnerBindingCache) GetSessionString(_ context.Context, groupID int64, sessionHash string) (string, error) {
+	if value, ok := c.strings[c.key(groupID, sessionHash)]; ok {
+		return value, nil
+	}
+	return "", ErrGatewaySessionStringNotFound
+}
+
+func (c *grokOwnerBindingCache) SetSessionString(_ context.Context, groupID int64, sessionHash, value string, ttl time.Duration) error {
+	if c.strings == nil {
+		c.strings = make(map[string]string)
+	}
+	c.strings[c.key(groupID, sessionHash)] = value
+	c.ttl = ttl
+	return nil
+}
+
+func TestGrokMediaVideoRequestBindingRejectsOtherOwnersAndGroups(t *testing.T) {
+	t.Parallel()
+
+	cache := &grokOwnerBindingCache{}
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.StickySessionTTLSeconds = 90
+	svc := &OpenAIGatewayService{cache: cache, cfg: cfg}
+	groupID := int64(7)
+	require.NoError(t, svc.BindGrokMediaVideoRequestAccount(
+		context.Background(), &groupID, "request-1", 10, 20, 30,
+	))
+	require.Equal(t, 90*time.Second, cache.ttl)
+
+	accountID, err := svc.ResolveGrokMediaVideoRequestAccount(
+		context.Background(), &groupID, "request-1", 10, 20,
+	)
+	require.NoError(t, err)
+	require.Equal(t, int64(30), accountID)
+
+	otherGroupID := int64(8)
+	for _, lookup := range []struct {
+		groupID  *int64
+		userID   int64
+		apiKeyID int64
+	}{
+		{groupID: &groupID, userID: 11, apiKeyID: 20},
+		{groupID: &groupID, userID: 10, apiKeyID: 21},
+		{groupID: &otherGroupID, userID: 10, apiKeyID: 20},
+	} {
+		accountID, err = svc.ResolveGrokMediaVideoRequestAccount(
+			context.Background(), lookup.groupID, "request-1", lookup.userID, lookup.apiKeyID,
+		)
+		require.Error(t, err)
+		require.Zero(t, accountID)
+	}
+
+	_, err = (&OpenAIGatewayService{}).ResolveGrokMediaVideoRequestAccount(
+		context.Background(), &groupID, "request-1", 10, 20,
+	)
+	require.ErrorContains(t, err, "cache is unavailable")
+}
+
+func TestGrokMediaVideoOwnerBindingSurvivesRoutingEviction(t *testing.T) {
+	t.Parallel()
+
+	cache := &grokOwnerBindingCache{}
+	svc := &OpenAIGatewayService{cache: cache}
+	groupID := int64(7)
+	const (
+		requestID = "request-recover"
+		userID    = int64(10)
+		apiKeyID  = int64(20)
+		accountID = int64(30)
+	)
+	require.NoError(t, svc.BindGrokMediaVideoRequestAccount(
+		context.Background(), &groupID, requestID, userID, apiKeyID, accountID,
+	))
+
+	ownerKey := grokMediaVideoOwnerBindingKey(requestID, userID, apiKeyID)
+	routingKey := svc.openAISessionCacheKey(GrokMediaVideoRequestSessionHash(requestID, userID, apiKeyID))
+	require.NotEqual(t, ownerKey, routingKey)
+	require.Equal(t, "30", cache.strings[cache.key(groupID, ownerKey)])
+	require.Equal(t, accountID, cache.bindings[cache.key(groupID, routingKey)])
+
+	// Scheduler eviction removes only the routing/sticky record when the
+	// account is temporarily blocked. Ownership must remain authoritative.
+	require.NoError(t, cache.DeleteSessionAccountID(context.Background(), groupID, routingKey))
+	_, routingExists := cache.bindings[cache.key(groupID, routingKey)]
+	require.False(t, routingExists)
+
+	resolvedID, err := svc.ResolveGrokMediaVideoRequestAccount(
+		context.Background(), &groupID, requestID, userID, apiKeyID,
+	)
+	require.NoError(t, err)
+	require.Equal(t, accountID, resolvedID)
+	require.Equal(t, accountID, cache.bindings[cache.key(groupID, routingKey)], "lookup should restore scheduler routing after cooldown")
+}
+
+func TestGrokMediaVideoOwnerBindingMigratesLegacyRoutingRecord(t *testing.T) {
+	t.Parallel()
+
+	cache := &grokOwnerBindingCache{}
+	svc := &OpenAIGatewayService{cache: cache}
+	groupID := int64(7)
+	const (
+		requestID = "request-legacy"
+		userID    = int64(10)
+		apiKeyID  = int64(20)
+		accountID = int64(30)
+	)
+	routingKey := svc.openAISessionCacheKey(GrokMediaVideoRequestSessionHash(requestID, userID, apiKeyID))
+	require.NoError(t, cache.SetSessionAccountID(context.Background(), groupID, routingKey, accountID, time.Minute))
+
+	resolvedID, err := svc.ResolveGrokMediaVideoRequestAccount(
+		context.Background(), &groupID, requestID, userID, apiKeyID,
+	)
+	require.NoError(t, err)
+	require.Equal(t, accountID, resolvedID)
+	ownerKey := grokMediaVideoOwnerBindingKey(requestID, userID, apiKeyID)
+	require.Equal(t, "30", cache.strings[cache.key(groupID, ownerKey)])
 }
 
 func TestParseGrokMediaJSONVideoBillingMetadata(t *testing.T) {
@@ -132,6 +299,10 @@ func TestBuildGrokMediaURLSupportsVideoMutationsAndKeepsOAuthOnOfficialAPI(t *te
 	extensionURL, err := buildGrokMediaURL(context.Background(), account, nil, nil, GrokMediaEndpointVideosExtensions, "")
 	require.NoError(t, err)
 	require.Equal(t, "https://api.x.ai/v1/videos/extensions", extensionURL)
+
+	contentURL, err := buildGrokMediaURL(context.Background(), account, nil, nil, GrokMediaEndpointVideoContent, "task/one")
+	require.NoError(t, err)
+	require.Equal(t, "https://api.x.ai/v1/videos/task%2Fone/content", contentURL)
 }
 
 type grokURLSettingRepo struct {

@@ -1,9 +1,9 @@
 <template>
   <AppLayout>
-    <TablePageLayout>
+    <TablePageLayout class="data-page keys-page">
       <template #filters>
-        <div class="flex flex-col gap-3">
-          <div class="flex flex-wrap items-center gap-3">
+        <div class="data-filter-card flex flex-col gap-3">
+          <div class="data-filter-row">
             <SearchInput
               v-model="filterSearch"
               :placeholder="t('keys.searchPlaceholder')"
@@ -12,14 +12,16 @@
             />
             <Select
               :model-value="filterGroupId"
-              class="w-40"
+              class="w-full sm:w-40"
               :options="groupFilterOptions"
+              :aria-label="t('keys.groupFilterLabel')"
               @update:model-value="onGroupFilterChange"
             />
             <Select
               :model-value="filterStatus"
-              class="w-40"
+              class="w-full sm:w-40"
               :options="statusFilterOptions"
+              :aria-label="t('keys.statusFilterLabel')"
               @update:model-value="onStatusFilterChange"
             />
           </div>
@@ -32,50 +34,70 @@
       </template>
 
       <template #actions>
-        <div class="flex justify-end gap-3">
-        <div ref="columnDropdownRef" class="relative">
-          <button
-            type="button"
-            class="btn btn-secondary px-2 md:px-3"
-            :title="t('keys.columnSettings')"
-            @click="showColumnDropdown = !showColumnDropdown"
-          >
-            <svg class="h-4 w-4 md:mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M9 4.5v15m6-15v15m-10.875 0h15.75c.621 0 1.125-.504 1.125-1.125V5.625c0-.621-.504-1.125-1.125-1.125H4.125C3.504 4.5 3 5.004 3 5.625v12.75c0 .621.504 1.125 1.125 1.125z" />
-            </svg>
-            <span class="hidden md:inline">{{ t('keys.columnSettings') }}</span>
-          </button>
-          <div
-            v-if="showColumnDropdown"
-            class="absolute right-0 z-50 mt-2 w-48 origin-top-right rounded-lg border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-gray-800"
-          >
-            <div class="max-h-80 overflow-y-auto p-2">
-              <button
-                v-for="column in toggleableColumns"
-                :key="column.key"
-                type="button"
-                class="flex w-full items-center justify-between rounded-md px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700"
-                @click="toggleColumn(column.key)"
-              >
-                <span>{{ column.label }}</span>
-                <Icon v-if="isColumnVisible(column.key)" name="check" size="sm" class="text-primary-500" />
-              </button>
+        <div class="data-page-actions">
+          <div ref="columnDropdownRef" class="relative">
+            <button
+              id="api-key-column-settings-trigger"
+              ref="columnSettingsTriggerRef"
+              type="button"
+              class="btn btn-secondary min-w-11 px-2 md:px-3"
+              :title="t('keys.columnSettings')"
+              :aria-expanded="showColumnDropdown"
+              :aria-controls="showColumnDropdown ? COLUMN_SETTINGS_MENU_ID : undefined"
+              aria-haspopup="menu"
+              @click="toggleColumnSettings"
+            >
+              <svg class="h-4 w-4 md:mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 4.5v15m6-15v15m-10.875 0h15.75c.621 0 1.125-.504 1.125-1.125V5.625c0-.621-.504-1.125-1.125-1.125H4.125C3.504 4.5 3 5.004 3 5.625v12.75c0 .621.504 1.125 1.125 1.125z" />
+              </svg>
+              <span class="hidden md:inline">{{ t('keys.columnSettings') }}</span>
+            </button>
+            <div
+              v-if="showColumnDropdown"
+              :id="COLUMN_SETTINGS_MENU_ID"
+              class="data-popover-panel absolute left-0 right-auto z-50 mt-2 w-52 origin-top-left p-2 sm:left-auto sm:right-0 sm:origin-top-right"
+              role="menu"
+              :aria-label="t('keys.columnSettings')"
+              @keydown="handleColumnSettingsKeydown"
+              @focusout="handleColumnSettingsFocusout"
+            >
+              <div class="max-h-80 overflow-y-auto">
+                <button
+                  v-for="(column, index) in toggleableColumns"
+                  :key="column.key"
+                  type="button"
+                  class="data-popover-option"
+                  role="menuitemcheckbox"
+                  :aria-checked="isColumnVisible(column.key)"
+                  :tabindex="columnMenuFocusIndex === index ? 0 : -1"
+                  data-column-menu-item
+                  @focus="columnMenuFocusIndex = index"
+                  @click="toggleColumn(column.key)"
+                >
+                  <span>{{ column.label }}</span>
+                  <Icon v-if="isColumnVisible(column.key)" name="check" size="sm" class="text-brand" />
+                </button>
+              </div>
             </div>
           </div>
+          <button
+            @click="refreshKeyPageData"
+            :disabled="loading"
+            class="btn btn-secondary btn-icon"
+            :title="t('common.refresh')"
+            :aria-label="t('common.refresh')"
+          >
+            <Icon name="refresh" size="md" :class="loading ? 'animate-spin' : ''" />
+          </button>
+          <button
+            @click="showCreateModal = true"
+            class="btn btn-primary min-w-0 flex-1 sm:flex-none"
+            data-tour="keys-create-btn"
+          >
+            <Icon name="plus" size="md" />
+            {{ t('keys.createKey') }}
+          </button>
         </div>
-        <button
-          @click="refreshKeyPageData"
-          :disabled="loading"
-          class="btn btn-secondary"
-          :title="t('common.refresh')"
-        >
-          <Icon name="refresh" size="md" :class="loading ? 'animate-spin' : ''" />
-        </button>
-        <button @click="showCreateModal = true" class="btn btn-primary" data-tour="keys-create-btn">
-          <Icon name="plus" size="md" class="mr-2" />
-          {{ t('keys.createKey') }}
-        </button>
-      </div>
       </template>
 
       <template #table>
@@ -89,23 +111,25 @@
           @sort="handleSort"
         >
           <template #cell-id="{ value }">
-            <span class="font-mono text-xs text-gray-500 dark:text-gray-400">#{{ value }}</span>
+            <span class="font-mono text-xs text-content-subtle">#{{ value }}</span>
           </template>
 
           <template #cell-key="{ value, row }">
-            <div class="flex items-center gap-2">
+            <div class="flex min-w-0 items-center justify-end gap-1.5 md:justify-start">
               <code class="code text-xs">
                 {{ maskApiKey(value) }}
               </code>
               <button
+                type="button"
                 @click="copyToClipboard(value, row.id)"
-                class="rounded-lg p-1 transition-colors hover:bg-gray-100 dark:hover:bg-dark-700"
+                class="data-inline-icon-button"
                 :class="
                   copiedKeyId === row.id
-                    ? 'text-green-500'
-                    : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
+                    ? 'text-positive'
+                    : ''
                 "
                 :title="copiedKeyId === row.id ? t('keys.copied') : t('keys.copyToClipboard')"
+                :aria-label="copiedKeyId === row.id ? t('keys.copied') : t('keys.copyToClipboard')"
               >
                 <Icon
                   v-if="copiedKeyId === row.id"
@@ -119,13 +143,13 @@
           </template>
 
           <template #cell-name="{ value, row }">
-            <div class="flex items-center gap-1.5">
-              <span class="font-medium text-gray-900 dark:text-white">{{ value }}</span>
+            <div class="flex min-w-0 items-center justify-end gap-1.5 md:justify-start">
+              <span class="inline-block max-w-64 whitespace-normal break-words font-medium text-content">{{ value }}</span>
               <Icon
                 v-if="row.ip_whitelist?.length > 0 || row.ip_blacklist?.length > 0"
                 name="shield"
                 size="sm"
-                class="text-blue-500"
+                class="text-brand"
                 :title="t('keys.ipRestrictionEnabled')"
               />
             </div>
@@ -134,10 +158,14 @@
           <template #cell-group="{ row }">
             <div class="group/dropdown relative">
               <button
+                type="button"
                 :ref="(el) => setGroupButtonRef(row.id, el)"
                 @click="openGroupSelector(row)"
-                class="-mx-2 -my-1 flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1 transition-all duration-200 hover:bg-gray-100 dark:hover:bg-dark-700"
+                class="data-cell-trigger -mx-2 -my-1 max-w-full"
                 :title="t('keys.clickToChangeGroup')"
+                :aria-expanded="groupSelectorKeyId === row.id"
+                :aria-controls="groupSelectorKeyId === row.id ? getGroupSelectorPopoverId(row.id) : undefined"
+                aria-haspopup="dialog"
               >
                 <GroupBadge
                   v-if="row.group"
@@ -149,12 +177,12 @@
                   :effective-rate-multiplier="effectiveRateForGroup(row.group)"
                   :rate-multiplier-source="effectiveRateSourceForGroup(row.group)"
                 />
-                <span v-else class="text-sm text-gray-400 dark:text-dark-500">{{
+                <span v-else class="text-sm text-content-subtle">{{
                   t('keys.noGroup')
                 }}</span>
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('keys.selectGroup') }}</span>
+                <span class="hidden text-xs text-content-subtle xl:inline">{{ t('keys.selectGroup') }}</span>
                 <svg
-                  class="h-3.5 w-3.5 text-gray-400 opacity-60 transition-opacity group-hover/dropdown:opacity-100"
+                  class="h-3.5 w-3.5 flex-shrink-0 text-content-subtle opacity-60 transition-opacity group-hover/dropdown:opacity-100"
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
@@ -173,22 +201,22 @@
           <template #cell-usage="{ row }">
             <div class="text-sm">
               <div class="flex items-center gap-1.5">
-                <span class="text-gray-500 dark:text-gray-400">{{ t('keys.today') }}:</span>
-                <span v-if="usageStatsLoading" class="inline-block h-3 w-14 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></span>
-                <span v-else-if="usageStatsError" class="text-red-500">{{ t('common.error') }}</span>
-                <span v-else-if="usageStats[row.id]" class="font-medium text-gray-900 dark:text-white">
+                <span class="text-content-subtle">{{ t('keys.today') }}:</span>
+                <span v-if="usageStatsLoading" class="inline-block h-3 w-14 animate-pulse rounded bg-surface-hover"></span>
+                <span v-else-if="usageStatsError" class="text-danger">{{ t('common.error') }}</span>
+                <span v-else-if="usageStats[row.id]" class="font-medium text-content">
                   ${{ usageStats[row.id].today_actual_cost.toFixed(4) }}
                 </span>
-                <span v-else class="text-gray-400 dark:text-gray-500">-</span>
+                <span v-else class="text-content-subtle">-</span>
               </div>
               <div class="mt-0.5 flex items-center gap-1.5">
-                <span class="text-gray-500 dark:text-gray-400">{{ t('keys.total') }}:</span>
-                <span v-if="usageStatsLoading" class="inline-block h-3 w-14 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></span>
-                <span v-else-if="usageStatsError" class="text-red-500">{{ t('common.error') }}</span>
-                <span v-else-if="usageStats[row.id]" class="font-medium text-gray-900 dark:text-white">
+                <span class="text-content-subtle">{{ t('keys.total') }}:</span>
+                <span v-if="usageStatsLoading" class="inline-block h-3 w-14 animate-pulse rounded bg-surface-hover"></span>
+                <span v-else-if="usageStatsError" class="text-danger">{{ t('common.error') }}</span>
+                <span v-else-if="usageStats[row.id]" class="font-medium text-content">
                   ${{ usageStats[row.id].total_actual_cost.toFixed(4) }}
                 </span>
-                <span v-else class="text-gray-400 dark:text-gray-500">-</span>
+                <span v-else class="text-content-subtle">-</span>
               </div>
               <!-- Quota progress (if quota is set) -->
               <div v-if="row.quota > 0" class="mt-1.5">
@@ -307,8 +335,9 @@
               <!-- Reset button -->
               <button
                 v-if="row.usage_5h > 0 || row.usage_1d > 0 || row.usage_7d > 0"
+                type="button"
                 @click.stop="confirmResetRateLimitFromTable(row)"
-                class="mt-0.5 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-gray-500 transition-colors hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-dark-700 dark:hover:text-primary-400"
+                class="mt-0.5 inline-flex min-h-11 items-center gap-1 rounded-lg px-3 py-1 text-xs text-content-subtle transition-colors hover:bg-surface-hover hover:text-brand"
                 :title="t('keys.resetRateLimitUsage')"
               >
                 <Icon name="refresh" size="xs" />
@@ -372,11 +401,12 @@
           </template>
 
           <template #cell-actions="{ row }">
-            <div class="flex items-center gap-1">
+            <div class="data-table-actions">
               <!-- Use Key Button -->
               <button
+                type="button"
                 @click="openUseKeyModal(row)"
-                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-green-50 hover:text-green-600 dark:hover:bg-green-900/20 dark:hover:text-green-400"
+                class="data-table-action text-content-muted hover:bg-brand-soft hover:text-brand"
               >
                 <Icon name="terminal" size="sm" />
                 <span class="text-xs">{{ t('keys.useKey') }}</span>
@@ -384,28 +414,31 @@
               <!-- Import to CC Switch Button -->
               <button
                 v-if="!publicSettings?.hide_ccs_import_button"
+                type="button"
                 @click="importToCcswitch(row)"
-                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-blue-50 hover:text-blue-600 dark:hover:bg-blue-900/20 dark:hover:text-blue-400"
+                class="data-table-action text-content-muted hover:bg-brand-soft hover:text-brand"
               >
                 <Icon name="upload" size="sm" />
                 <span class="text-xs">{{ t('keys.importToCcSwitch') }}</span>
               </button>
               <!-- Open Image Playground Button -->
               <button
+                type="button"
                 @click="openImagePlayground(row)"
-                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-purple-50 hover:text-purple-600 dark:hover:bg-purple-900/20 dark:hover:text-purple-400"
+                class="data-table-action text-content-muted hover:bg-brand-soft hover:text-brand"
               >
                 <Icon name="sparkles" size="sm" />
                 <span class="text-xs">{{ t('keys.openImagePlayground') }}</span>
               </button>
               <!-- Toggle Status Button -->
               <button
+                type="button"
                 @click="toggleKeyStatus(row)"
                 :class="[
-                  'flex flex-col items-center gap-0.5 rounded-lg p-1.5 transition-colors',
+                  'data-table-action',
                   row.status === 'active'
-                    ? 'text-gray-500 hover:bg-yellow-50 hover:text-yellow-600 dark:hover:bg-yellow-900/20 dark:hover:text-yellow-400'
-                    : 'text-gray-500 hover:bg-green-50 hover:text-green-600 dark:hover:bg-green-900/20 dark:hover:text-green-400'
+                    ? 'text-content-muted hover:bg-amber-50 hover:text-warning dark:hover:bg-amber-950/30'
+                    : 'text-content-muted hover:bg-emerald-50 hover:text-positive dark:hover:bg-emerald-950/30'
                 ]"
               >
                 <Icon v-if="row.status === 'active'" name="ban" size="sm" />
@@ -414,16 +447,18 @@
               </button>
               <!-- Edit Button -->
               <button
+                type="button"
                 @click="editKey(row)"
-                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-dark-700 dark:hover:text-primary-400"
+                class="data-table-action text-content-muted hover:bg-surface-hover hover:text-brand"
               >
                 <Icon name="edit" size="sm" />
                 <span class="text-xs">{{ t('common.edit') }}</span>
               </button>
               <!-- Delete Button -->
               <button
+                type="button"
                 @click="confirmDelete(row)"
-                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                class="data-table-action text-content-muted hover:bg-red-50 hover:text-danger dark:hover:bg-red-950/30"
               >
                 <Icon name="trash" size="sm" />
                 <span class="text-xs">{{ t('common.delete') }}</span>
@@ -445,6 +480,7 @@
       <template #pagination>
         <Pagination
           v-if="pagination.total > 0"
+          class="data-pagination"
           :page="pagination.page"
           :total="pagination.total"
           :page-size="pagination.page_size"
@@ -463,8 +499,9 @@
     >
       <form id="key-form" @submit.prevent="handleSubmit" class="space-y-5">
         <div>
-          <label class="input-label">{{ t('keys.nameLabel') }}</label>
+          <label for="key-name" class="input-label">{{ t('keys.nameLabel') }}</label>
           <input
+            id="key-name"
             v-model="formData.name"
             type="text"
             required
@@ -475,13 +512,14 @@
         </div>
 
         <div>
-          <label class="input-label">{{ t('keys.groupLabel') }}</label>
+          <span id="key-group-label" class="input-label">{{ t('keys.groupLabel') }}</span>
           <Select
             v-model="formData.group_id"
             :options="groupOptions"
             :placeholder="t('keys.selectGroup')"
             :searchable="true"
             :search-placeholder="t('keys.searchGroup')"
+            aria-labelledby="key-group-label"
             data-tour="key-form-group"
           >
             <template #selected="{ option }">
@@ -518,29 +556,45 @@
         <div class="space-y-4 rounded-xl border border-gray-200 bg-gray-50/60 p-4 dark:border-dark-700 dark:bg-dark-900/20 sm:p-5">
           <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div class="min-w-0">
-              <label class="text-sm font-medium text-gray-700 dark:text-dark-200">多分组路由</label>
-              <p class="mt-1 max-w-2xl text-xs leading-5 text-gray-500 dark:text-dark-400">
-                开启后可按优先级和权重为同一个 Key 配置多个分组
+              <label for="key-group-routes-switch" class="text-sm font-medium text-gray-700 dark:text-dark-200">
+                {{ t('keys.groupRoutes.title') }}
+              </label>
+              <p id="key-group-routes-description" class="mt-1 max-w-2xl text-xs leading-5 text-gray-500 dark:text-dark-400">
+                {{ t('keys.groupRoutes.description') }}
               </p>
             </div>
             <button
+              id="key-group-routes-switch"
               type="button"
+              class="data-form-switch"
+              role="switch"
+              :aria-checked="formData.enable_group_routes"
+              aria-describedby="key-group-routes-description"
+              :title="t('keys.groupRoutes.title')"
               @click="toggleGroupRoutes"
-              :class="[
-                'relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors',
-                formData.enable_group_routes ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
-              ]"
             >
               <span
+                aria-hidden="true"
                 :class="[
-                  'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
-                  formData.enable_group_routes ? 'translate-x-6' : 'translate-x-1'
+                  'relative inline-flex h-6 w-11 items-center rounded-full transition-colors',
+                  formData.enable_group_routes ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
                 ]"
-              />
+              >
+                <span
+                  :class="[
+                    'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
+                    formData.enable_group_routes ? 'translate-x-6' : 'translate-x-1'
+                  ]"
+                />
+              </span>
             </button>
           </div>
 
-          <div v-if="formData.enable_group_routes" class="space-y-3">
+          <div
+            v-if="formData.enable_group_routes"
+            class="space-y-3"
+            :aria-label="t('keys.groupRoutes.title')"
+          >
             <div
               v-for="(route, index) in formData.group_routes"
               :key="index"
@@ -551,21 +605,29 @@
                   <span class="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-primary-50 px-2 text-xs font-medium text-primary-700 dark:bg-primary-900/30 dark:text-primary-300">
                     {{ index + 1 }}
                   </span>
-                  <span class="text-sm font-medium text-gray-700 dark:text-dark-200">路由配置</span>
+                  <span class="text-sm font-medium text-gray-700 dark:text-dark-200">
+                    {{ t('keys.groupRoutes.configuration') }}
+                  </span>
                 </div>
                 <div class="flex items-center gap-2">
-                  <label class="inline-flex h-10 items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 text-sm text-gray-600 dark:border-dark-600 dark:bg-dark-700/60 dark:text-dark-300">
+                  <label
+                    :for="`key-group-route-enabled-${index}`"
+                    class="inline-flex min-h-11 items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 text-sm text-gray-600 dark:border-dark-600 dark:bg-dark-700/60 dark:text-dark-300"
+                  >
                     <input
+                      :id="`key-group-route-enabled-${index}`"
                       v-model="route.enabled"
                       type="checkbox"
                       class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                     />
-                    启用
+                    {{ t('keys.groupRoutes.enabled') }}
                   </label>
                   <button
                     type="button"
-                    class="btn btn-secondary h-10 px-3"
+                    class="btn btn-secondary min-h-11 min-w-11 px-3"
                     :disabled="formData.group_routes.length <= 1"
+                    :title="t('keys.groupRoutes.removeRoute', { index: index + 1 })"
+                    :aria-label="t('keys.groupRoutes.removeRoute', { index: index + 1 })"
                     @click="removeGroupRoute(index)"
                   >
                     <Icon name="trash" size="sm" />
@@ -575,12 +637,18 @@
 
               <div class="grid gap-3 md:grid-cols-2 lg:grid-cols-[minmax(16rem,1fr)_8rem_8rem_9rem]">
                 <div class="md:col-span-2 lg:col-span-1">
-                  <label class="mb-1 block text-xs text-gray-500 dark:text-dark-400">分组</label>
+                  <span
+                    :id="`key-group-route-group-label-${index}`"
+                    class="mb-1 block text-xs text-gray-500 dark:text-dark-400"
+                  >
+                    {{ t('keys.groupRoutes.group') }}
+                  </span>
                   <Select
                     v-model="route.group_id"
                     :options="groupOptions"
                     :searchable="true"
                     :search-placeholder="t('keys.searchGroup')"
+                    :aria-labelledby="`key-group-route-group-label-${index}`"
                   >
                     <template #selected="{ option }">
                       <GroupBadge
@@ -613,8 +681,11 @@
                   </Select>
                 </div>
                 <div>
-                  <label class="mb-1 block text-xs text-gray-500 dark:text-dark-400">优先级</label>
+                  <label :for="`key-group-route-priority-${index}`" class="mb-1 block text-xs text-gray-500 dark:text-dark-400">
+                    {{ t('keys.groupRoutes.priority') }}
+                  </label>
                   <input
+                    :id="`key-group-route-priority-${index}`"
                     v-model.number="route.priority"
                     type="number"
                     min="0"
@@ -623,8 +694,11 @@
                   />
                 </div>
                 <div>
-                  <label class="mb-1 block text-xs text-gray-500 dark:text-dark-400">权重</label>
+                  <label :for="`key-group-route-weight-${index}`" class="mb-1 block text-xs text-gray-500 dark:text-dark-400">
+                    {{ t('keys.groupRoutes.weight') }}
+                  </label>
                   <input
+                    :id="`key-group-route-weight-${index}`"
                     v-model.number="route.weight"
                     type="number"
                     min="1"
@@ -633,8 +707,11 @@
                   />
                 </div>
                 <div>
-                  <label class="mb-1 block text-xs text-gray-500 dark:text-dark-400">冷却秒数</label>
+                  <label :for="`key-group-route-cooldown-${index}`" class="mb-1 block text-xs text-gray-500 dark:text-dark-400">
+                    {{ t('keys.groupRoutes.cooldownSeconds') }}
+                  </label>
                   <input
+                    :id="`key-group-route-cooldown-${index}`"
                     v-model.number="route.cooldown_seconds"
                     type="number"
                     min="0"
@@ -646,7 +723,7 @@
             </div>
             <button type="button" class="btn btn-secondary w-full sm:w-auto" @click="addGroupRoute">
               <Icon name="plus" size="sm" class="mr-2" />
-              添加路由
+              {{ t('keys.groupRoutes.addRoute') }}
             </button>
           </div>
         </div>
@@ -654,94 +731,131 @@
         <!-- Custom Key Section (only for create) -->
         <div v-if="!showEditModal" class="space-y-3">
           <div class="flex items-center justify-between">
-            <label class="input-label mb-0">{{ t('keys.customKeyLabel') }}</label>
+            <label id="key-custom-key-label" for="key-custom-key-switch" class="input-label mb-0">
+              {{ t('keys.customKeyLabel') }}
+            </label>
             <button
+              id="key-custom-key-switch"
               type="button"
-              @click="formData.use_custom_key = !formData.use_custom_key"
-              :class="[
-                'relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none',
-                formData.use_custom_key ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
-              ]"
+              class="data-form-switch"
+              role="switch"
+              :aria-checked="formData.use_custom_key"
+              :aria-label="t('keys.customKeyLabel')"
+              :title="t('keys.customKeyLabel')"
+              @click="toggleCustomKey"
             >
               <span
+                aria-hidden="true"
                 :class="[
-                  'pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
-                  formData.use_custom_key ? 'translate-x-4' : 'translate-x-0'
+                  'relative inline-flex h-5 w-9 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out',
+                  formData.use_custom_key ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
                 ]"
-              />
+              >
+                <span
+                  :class="[
+                    'pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                    formData.use_custom_key ? 'translate-x-4' : 'translate-x-0'
+                  ]"
+                />
+              </span>
             </button>
           </div>
           <div v-if="formData.use_custom_key">
             <input
+              id="key-custom-key-value"
+              ref="customKeyInputRef"
               v-model="formData.custom_key"
               type="text"
+              maxlength="128"
               class="input font-mono"
               :placeholder="t('keys.customKeyPlaceholder')"
               :class="{ 'border-red-500 dark:border-red-500': customKeyError }"
+              aria-labelledby="key-custom-key-label"
+              aria-required="true"
+              :aria-describedby="customKeyError ? 'key-custom-key-error' : 'key-custom-key-hint'"
+              :aria-invalid="Boolean(customKeyError)"
+              @blur="customKeyTouched = true"
             />
-            <p v-if="customKeyError" class="mt-1 text-sm text-red-500">{{ customKeyError }}</p>
-            <p v-else class="input-hint">{{ t('keys.customKeyHint') }}</p>
+            <p v-if="customKeyError" id="key-custom-key-error" class="mt-1 text-sm text-red-500" role="alert">
+              {{ customKeyError }}
+            </p>
+            <p v-else id="key-custom-key-hint" class="input-hint">{{ t('keys.customKeyHint') }}</p>
           </div>
         </div>
 
         <div v-if="showEditModal">
-          <label class="input-label">{{ t('keys.statusLabel') }}</label>
+          <span id="key-status-label" class="input-label">{{ t('keys.statusLabel') }}</span>
           <Select
             v-model="formData.status"
             :options="statusOptions"
             :placeholder="t('keys.selectStatus')"
+            aria-labelledby="key-status-label"
           />
         </div>
 
         <!-- IP Restriction Section -->
         <div class="space-y-3">
           <div class="flex items-center justify-between">
-            <label class="input-label mb-0">{{ t('keys.ipRestriction') }}</label>
+            <label for="key-ip-restriction-switch" class="input-label mb-0">{{ t('keys.ipRestriction') }}</label>
             <button
+              id="key-ip-restriction-switch"
               type="button"
+              class="data-form-switch"
+              role="switch"
+              :aria-checked="formData.enable_ip_restriction"
+              :aria-label="t('keys.ipRestriction')"
+              :title="t('keys.ipRestriction')"
               @click="formData.enable_ip_restriction = !formData.enable_ip_restriction"
-              :class="[
-                'relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none',
-                formData.enable_ip_restriction ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
-              ]"
             >
               <span
+                aria-hidden="true"
                 :class="[
-                  'pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
-                  formData.enable_ip_restriction ? 'translate-x-4' : 'translate-x-0'
+                  'relative inline-flex h-5 w-9 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out',
+                  formData.enable_ip_restriction ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
                 ]"
-              />
+              >
+                <span
+                  :class="[
+                    'pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                    formData.enable_ip_restriction ? 'translate-x-4' : 'translate-x-0'
+                  ]"
+                />
+              </span>
             </button>
           </div>
 
           <div v-if="formData.enable_ip_restriction" class="space-y-4 pt-2">
             <div>
-              <label class="input-label">{{ t('keys.ipWhitelist') }}</label>
+              <label for="key-ip-whitelist" class="input-label">{{ t('keys.ipWhitelist') }}</label>
               <textarea
+                id="key-ip-whitelist"
                 v-model="formData.ip_whitelist"
                 rows="3"
                 class="input font-mono text-sm"
                 :placeholder="t('keys.ipWhitelistPlaceholder')"
+                aria-describedby="key-ip-whitelist-hint"
               />
-              <p class="input-hint">{{ t('keys.ipWhitelistHint') }}</p>
+              <p id="key-ip-whitelist-hint" class="input-hint">{{ t('keys.ipWhitelistHint') }}</p>
             </div>
 
             <div>
-              <label class="input-label">{{ t('keys.ipBlacklist') }}</label>
+              <label for="key-ip-blacklist" class="input-label">{{ t('keys.ipBlacklist') }}</label>
               <textarea
+                id="key-ip-blacklist"
                 v-model="formData.ip_blacklist"
                 rows="3"
                 class="input font-mono text-sm"
                 :placeholder="t('keys.ipBlacklistPlaceholder')"
+                aria-describedby="key-ip-blacklist-hint"
               />
-              <p class="input-hint">{{ t('keys.ipBlacklistHint') }}</p>
+              <p id="key-ip-blacklist-hint" class="input-hint">{{ t('keys.ipBlacklistHint') }}</p>
             </div>
           </div>
         </div>
 
         <!-- Quota Limit Section -->
         <div class="space-y-3">
-          <label class="input-label">{{ t('keys.quotaLimit') }}</label>
+          <label for="key-quota-limit" class="input-label">{{ t('keys.quotaLimit') }}</label>
           <!-- Switch commented out - always show input, 0 = unlimited
           <div class="flex items-center justify-between">
             <label class="input-label mb-0">{{ t('keys.quotaLimit') }}</label>
@@ -768,15 +882,17 @@
               <div class="relative">
                 <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">$</span>
                 <input
+                  id="key-quota-limit"
                   v-model.number="formData.quota"
                   type="number"
                   step="0.01"
                   min="0"
                   class="input pl-7"
                   :placeholder="t('keys.quotaAmountPlaceholder')"
+                  aria-describedby="key-quota-limit-hint"
                 />
               </div>
-              <p class="input-hint">{{ t('keys.quotaAmountHint') }}</p>
+              <p id="key-quota-limit-hint" class="input-hint">{{ t('keys.quotaAmountHint') }}</p>
             </div>
 
             <!-- Quota used display (only in edit mode) -->
@@ -795,7 +911,7 @@
                 <button
                   type="button"
                   @click="confirmResetQuota"
-                  class="btn btn-secondary text-sm"
+                  class="btn btn-secondary min-h-11 text-sm"
                   :title="t('keys.resetQuotaUsed')"
                 >
                   {{ t('keys.reset') }}
@@ -808,38 +924,50 @@
         <!-- Rate Limit Section -->
         <div class="space-y-3">
           <div class="flex items-center justify-between">
-            <label class="input-label mb-0">{{ t('keys.rateLimitSection') }}</label>
+            <label for="key-rate-limit-switch" class="input-label mb-0">{{ t('keys.rateLimitSection') }}</label>
             <button
+              id="key-rate-limit-switch"
               type="button"
+              class="data-form-switch"
+              role="switch"
+              :aria-checked="formData.enable_rate_limit"
+              :aria-label="t('keys.rateLimitSection')"
+              :title="t('keys.rateLimitSection')"
               @click="formData.enable_rate_limit = !formData.enable_rate_limit"
-              :class="[
-                'relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none',
-                formData.enable_rate_limit ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
-              ]"
             >
               <span
+                aria-hidden="true"
                 :class="[
-                  'pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
-                  formData.enable_rate_limit ? 'translate-x-4' : 'translate-x-0'
+                  'relative inline-flex h-5 w-9 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out',
+                  formData.enable_rate_limit ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
                 ]"
-              />
+              >
+                <span
+                  :class="[
+                    'pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                    formData.enable_rate_limit ? 'translate-x-4' : 'translate-x-0'
+                  ]"
+                />
+              </span>
             </button>
           </div>
 
           <div v-if="formData.enable_rate_limit" class="space-y-4 pt-2">
-            <p class="input-hint -mt-2">{{ t('keys.rateLimitHint') }}</p>
+            <p id="key-rate-limit-hint" class="input-hint -mt-2">{{ t('keys.rateLimitHint') }}</p>
             <!-- 5-Hour Limit -->
             <div>
-              <label class="input-label">{{ t('keys.rateLimit5h') }}</label>
+              <label for="key-rate-limit-5h" class="input-label">{{ t('keys.rateLimit5h') }}</label>
               <div class="relative">
                 <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">$</span>
                 <input
+                  id="key-rate-limit-5h"
                   v-model.number="formData.rate_limit_5h"
                   type="number"
                   step="0.01"
                   min="0"
                   class="input pl-7"
                   :placeholder="'0'"
+                  aria-describedby="key-rate-limit-hint"
                 />
               </div>
               <!-- Usage info (edit mode only) -->
@@ -876,16 +1004,18 @@
 
             <!-- Daily Limit -->
             <div>
-              <label class="input-label">{{ t('keys.rateLimit1d') }}</label>
+              <label for="key-rate-limit-1d" class="input-label">{{ t('keys.rateLimit1d') }}</label>
               <div class="relative">
                 <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">$</span>
                 <input
+                  id="key-rate-limit-1d"
                   v-model.number="formData.rate_limit_1d"
                   type="number"
                   step="0.01"
                   min="0"
                   class="input pl-7"
                   :placeholder="'0'"
+                  aria-describedby="key-rate-limit-hint"
                 />
               </div>
               <!-- Usage info (edit mode only) -->
@@ -922,16 +1052,18 @@
 
             <!-- 7-Day Limit -->
             <div>
-              <label class="input-label">{{ t('keys.rateLimit7d') }}</label>
+              <label for="key-rate-limit-7d" class="input-label">{{ t('keys.rateLimit7d') }}</label>
               <div class="relative">
                 <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">$</span>
                 <input
+                  id="key-rate-limit-7d"
                   v-model.number="formData.rate_limit_7d"
                   type="number"
                   step="0.01"
                   min="0"
                   class="input pl-7"
                   :placeholder="'0'"
+                  aria-describedby="key-rate-limit-hint"
                 />
               </div>
               <!-- Usage info (edit mode only) -->
@@ -971,7 +1103,7 @@
               <button
                 type="button"
                 @click="confirmResetRateLimit"
-                class="btn btn-secondary text-sm"
+                class="btn btn-secondary min-h-11 text-sm"
               >
                 {{ t('keys.resetRateLimitUsage') }}
               </button>
@@ -982,34 +1114,45 @@
         <!-- Expiration Section -->
         <div class="space-y-3">
           <div class="flex items-center justify-between">
-            <label class="input-label mb-0">{{ t('keys.expiration') }}</label>
+            <label for="key-expiration-switch" class="input-label mb-0">{{ t('keys.expiration') }}</label>
             <button
+              id="key-expiration-switch"
               type="button"
-              @click="formData.enable_expiration = !formData.enable_expiration"
-              :class="[
-                'relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none',
-                formData.enable_expiration ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
-              ]"
+              class="data-form-switch"
+              role="switch"
+              :aria-checked="formData.enable_expiration"
+              :aria-label="t('keys.expiration')"
+              :title="t('keys.expiration')"
+              @click="toggleExpiration"
             >
               <span
+                aria-hidden="true"
                 :class="[
-                  'pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
-                  formData.enable_expiration ? 'translate-x-4' : 'translate-x-0'
+                  'relative inline-flex h-5 w-9 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out',
+                  formData.enable_expiration ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
                 ]"
-              />
+              >
+                <span
+                  :class="[
+                    'pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                    formData.enable_expiration ? 'translate-x-4' : 'translate-x-0'
+                  ]"
+                />
+              </span>
             </button>
           </div>
 
           <div v-if="formData.enable_expiration" class="space-y-4 pt-2">
             <!-- Quick select buttons (for both create and edit mode) -->
-            <div class="flex flex-wrap gap-2">
+            <div class="flex flex-wrap gap-2" role="group" :aria-label="t('keys.expiration')">
               <button
                 v-for="days in ['7', '30', '90']"
                 :key="days"
                 type="button"
+                :aria-pressed="formData.expiration_preset === days"
                 @click="setExpirationDays(parseInt(days))"
                 :class="[
-                  'rounded-lg px-3 py-1.5 text-sm transition-colors',
+                  'min-h-11 rounded-lg px-3 py-1.5 text-sm transition-colors',
                   formData.expiration_preset === days
                     ? 'bg-primary-100 text-primary-700 dark:bg-primary-900/30 dark:text-primary-400'
                     : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-700 dark:text-gray-400 dark:hover:bg-dark-600'
@@ -1019,9 +1162,10 @@
               </button>
               <button
                 type="button"
+                :aria-pressed="formData.expiration_preset === 'custom'"
                 @click="formData.expiration_preset = 'custom'"
                 :class="[
-                  'rounded-lg px-3 py-1.5 text-sm transition-colors',
+                  'min-h-11 rounded-lg px-3 py-1.5 text-sm transition-colors',
                   formData.expiration_preset === 'custom'
                     ? 'bg-primary-100 text-primary-700 dark:bg-primary-900/30 dark:text-primary-400'
                     : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-700 dark:text-gray-400 dark:hover:bg-dark-600'
@@ -1033,13 +1177,16 @@
 
             <!-- Date picker (always show for precise adjustment) -->
             <div>
-              <label class="input-label">{{ t('keys.expirationDate') }}</label>
+              <label for="key-expiration-date" class="input-label">{{ t('keys.expirationDate') }}</label>
               <input
+                id="key-expiration-date"
                 v-model="formData.expiration_date"
                 type="datetime-local"
                 class="input"
+                aria-describedby="key-expiration-date-hint"
+                @input="formData.expiration_preset = 'custom'"
               />
-              <p class="input-hint">{{ t('keys.expirationDateHint') }}</p>
+              <p id="key-expiration-date-hint" class="input-hint">{{ t('keys.expirationDateHint') }}</p>
             </div>
 
             <!-- Current expiration display (only in edit mode) -->
@@ -1254,43 +1401,62 @@
     <Teleport to="body">
       <div
         v-if="groupSelectorKeyId !== null && dropdownPosition"
+        :id="getGroupSelectorPopoverId(groupSelectorKeyId)"
         ref="dropdownRef"
-        class="animate-in fade-in slide-in-from-top-2 fixed z-[100000020] w-max min-w-[380px] overflow-hidden rounded-xl bg-white shadow-lg ring-1 ring-black/5 duration-200 dark:bg-dark-800 dark:ring-white/10"
+        :data-ui-skin="uiSkin"
+        class="data-teleport-panel animate-in fade-in slide-in-from-top-2 fixed z-[100000020] flex max-h-[calc(100dvh-2rem)] min-w-0 w-[calc(100vw-2rem)] max-w-[380px] flex-col duration-200"
         style="pointer-events: auto !important;"
+        role="dialog"
+        :aria-label="t('keys.groupSelectorLabel')"
         :style="{
-          top: dropdownPosition.top !== undefined ? dropdownPosition.top + 'px' : undefined,
-          bottom: dropdownPosition.bottom !== undefined ? dropdownPosition.bottom + 'px' : undefined,
+          top: dropdownPosition.top + 'px',
           left: dropdownPosition.left + 'px'
         }"
+        @click.stop
+        @keydown="handleGroupSelectorKeydown"
       >
         <!-- Search box -->
-        <div class="border-b border-gray-100 p-2 dark:border-dark-700">
+        <div class="flex-shrink-0 border-b border-line p-2">
           <div class="relative">
-            <svg class="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <svg class="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-content-subtle" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
             </svg>
             <input
+              :id="getGroupSelectorSearchId(groupSelectorKeyId)"
+              ref="groupSearchInputRef"
               v-model="groupSearchQuery"
               type="text"
-              class="w-full rounded-lg border border-gray-200 bg-gray-50 py-1.5 pl-8 pr-3 text-sm text-gray-900 placeholder-gray-400 outline-none focus:border-primary-300 focus:ring-1 focus:ring-primary-300 dark:border-dark-600 dark:bg-dark-700 dark:text-white dark:placeholder-gray-500 dark:focus:border-primary-600 dark:focus:ring-primary-600"
+              class="input min-h-11 py-1.5 pl-8 pr-3"
               :placeholder="t('keys.searchGroup')"
+              :aria-label="t('keys.searchGroup')"
+              :aria-controls="getGroupSelectorListId(groupSelectorKeyId)"
+              autocomplete="off"
               @click.stop
             />
           </div>
         </div>
         <!-- Group list -->
-        <div class="max-h-80 overflow-y-auto p-1.5">
+        <div
+          :id="getGroupSelectorListId(groupSelectorKeyId)"
+          class="min-h-0 flex-1 overflow-y-auto p-1.5"
+          role="group"
+          :aria-label="t('keys.groupLabel')"
+        >
           <button
             v-for="option in filteredGroupOptions"
             :key="option.value ?? 'null'"
-            @click="changeGroup(selectedKeyForGroup!, option.value)"
-            :class="[
-              'flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-sm transition-colors',
-              'border-b border-gray-100 last:border-0 dark:border-dark-700',
+            type="button"
+            :aria-pressed="
               selectedKeyForGroup?.group_id === option.value ||
               (!selectedKeyForGroup?.group_id && option.value === null)
-                ? 'bg-primary-50 dark:bg-primary-900/20'
-                : 'hover:bg-gray-100 dark:hover:bg-dark-700'
+            "
+            @click="changeGroup(selectedKeyForGroup!, option.value)"
+            :class="[
+              'data-teleport-option',
+              selectedKeyForGroup?.group_id === option.value ||
+              (!selectedKeyForGroup?.group_id && option.value === null)
+                ? 'bg-brand-soft'
+                : ''
             ]"
             :title="option.description || undefined"
           >
@@ -1311,7 +1477,7 @@
             />
           </button>
           <!-- Empty state when search has no results -->
-          <div v-if="filteredGroupOptions.length === 0" class="py-4 text-center text-sm text-gray-400 dark:text-gray-500">
+          <div v-if="filteredGroupOptions.length === 0" class="py-4 text-center text-sm text-content-subtle">
             {{ t('keys.noGroupFound') }}
           </div>
         </div>
@@ -1321,15 +1487,17 @@
 </template>
 
 <script setup lang="ts">
-	import { ref, reactive, computed, onMounted, onUnmounted, type ComponentPublicInstance } from 'vue'
+	import { ref, reactive, computed, nextTick, onMounted, onUnmounted, type ComponentPublicInstance } from 'vue'
 	import { useI18n } from 'vue-i18n'
 	import { useRouter } from 'vue-router'
 	import { useAppStore } from '@/stores/app'
 	import { useOnboardingStore } from '@/stores/onboarding'
 	import { useClipboard } from '@/composables/useClipboard'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
+import { useUiSkin } from '@/composables/useUiSkin'
 
 const { t } = useI18n()
+const uiSkin = useUiSkin()
 const router = useRouter()
 import { keysAPI, authAPI, usageAPI, userGroupsAPI, accountShareAPI } from '@/api'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -1356,6 +1524,10 @@ import { maskApiKey } from '@/utils/maskApiKey'
 import { buildCcSwitchImportDeeplink } from '@/utils/ccswitchImport'
 import { buildImagePlaygroundImportUrl } from '@/utils/imagePlaygroundImport'
 import { extractApiErrorCode, extractApiErrorMessage } from '@/utils/apiError'
+import {
+  calculateExpirationPresetDate,
+  resolveExpirationPresetBase
+} from '@/utils/apiKeyExpiration'
 
 type AccountShareBlockedAction = 'delete' | 'change_group'
 
@@ -1425,6 +1597,7 @@ const allColumns = computed<Column[]>(() => [
 
 const ALWAYS_VISIBLE_COLUMNS = new Set(['name', 'actions'])
 const DEFAULT_HIDDEN_COLUMNS = ['id', 'last_used_ip']
+const COLUMN_SETTINGS_MENU_ID = 'api-key-column-settings-menu'
 const HIDDEN_COLUMNS_KEY = 'api-key-hidden-columns'
 const COLUMN_SETTINGS_VERSION_KEY = 'api-key-column-settings-version'
 const COLUMN_SETTINGS_VERSION = 4
@@ -1436,6 +1609,8 @@ const VERSION_NEW_HIDDEN_COLUMNS: Record<number, string[]> = {
 const hiddenColumns = reactive<Set<string>>(new Set())
 const showColumnDropdown = ref(false)
 const columnDropdownRef = ref<HTMLElement | null>(null)
+const columnSettingsTriggerRef = ref<HTMLButtonElement | null>(null)
+const columnMenuFocusIndex = ref(0)
 
 const toggleableColumns = computed(() =>
   allColumns.value.filter((column) => !ALWAYS_VISIBLE_COLUMNS.has(column.key))
@@ -1505,6 +1680,78 @@ const toggleColumn = (key: string) => {
 
 const isColumnVisible = (key: string) => !hiddenColumns.has(key)
 
+const getColumnMenuItems = (): HTMLButtonElement[] => {
+  if (!columnDropdownRef.value) return []
+  return Array.from(
+    columnDropdownRef.value.querySelectorAll<HTMLButtonElement>('[data-column-menu-item]')
+  )
+}
+
+const focusColumnMenuItem = (index: number) => {
+  const items = getColumnMenuItems()
+  if (items.length === 0) return
+  const normalizedIndex = (index + items.length) % items.length
+  columnMenuFocusIndex.value = normalizedIndex
+  items[normalizedIndex].focus()
+}
+
+const closeColumnSettings = (restoreFocus: boolean) => {
+  if (!showColumnDropdown.value) return
+  showColumnDropdown.value = false
+  if (restoreFocus) {
+    void nextTick(() => columnSettingsTriggerRef.value?.focus())
+  }
+}
+
+const toggleColumnSettings = () => {
+  if (showColumnDropdown.value) {
+    closeColumnSettings(false)
+    return
+  }
+  closeGroupSelectorPopover(false)
+  showColumnDropdown.value = true
+  columnMenuFocusIndex.value = 0
+  void nextTick(() => focusColumnMenuItem(0))
+}
+
+const handleColumnSettingsKeydown = (event: KeyboardEvent) => {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    closeColumnSettings(true)
+    return
+  }
+
+  const items = getColumnMenuItems()
+  if (items.length === 0) return
+  const activeIndex = items.findIndex((item) => item === document.activeElement)
+  const currentIndex = activeIndex >= 0 ? activeIndex : columnMenuFocusIndex.value
+  let nextIndex: number | null = null
+
+  if (event.key === 'ArrowDown') nextIndex = currentIndex + 1
+  else if (event.key === 'ArrowUp') nextIndex = currentIndex - 1
+  else if (event.key === 'Home') nextIndex = 0
+  else if (event.key === 'End') nextIndex = items.length - 1
+
+  if (nextIndex !== null) {
+    event.preventDefault()
+    focusColumnMenuItem(nextIndex)
+  }
+}
+
+const handleColumnSettingsFocusout = () => {
+  void nextTick(() => {
+    const activeElement = document.activeElement
+    if (
+      showColumnDropdown.value &&
+      activeElement instanceof Node &&
+      !columnDropdownRef.value?.contains(activeElement)
+    ) {
+      closeColumnSettings(false)
+    }
+  })
+}
+
 const apiKeys = ref<ApiKey[]>([])
 const groups = ref<Group[]>([])
 const loading = ref(false)
@@ -1535,6 +1782,10 @@ const filterGroupId = ref<string | number>('')
 
 const showCreateModal = ref(false)
 const showEditModal = ref(false)
+const editExpirationPresetBase = ref<Date | null>(null)
+const customKeyInputRef = ref<HTMLInputElement | null>(null)
+const customKeyTouched = ref(false)
+const customKeySubmitAttempted = ref(false)
 const showDeleteDialog = ref(false)
 const showResetQuotaDialog = ref(false)
 const showResetRateLimitDialog = ref(false)
@@ -1550,7 +1801,8 @@ const copiedKeyId = ref<number | null>(null)
 const groupSelectorKeyId = ref<number | null>(null)
 const publicSettings = ref<PublicSettings | null>(null)
 const dropdownRef = ref<HTMLElement | null>(null)
-const dropdownPosition = ref<{ top?: number; bottom?: number; left: number } | null>(null)
+const groupSearchInputRef = ref<HTMLInputElement | null>(null)
+const dropdownPosition = ref<{ top: number; left: number } | null>(null)
 const groupButtonRefs = ref<Map<number, HTMLElement>>(new Map())
 const accountShareBindingChecks = new Map<number, Promise<AccountShareMembership[]>>()
 const accountShareConflictNavigating = ref(false)
@@ -1562,6 +1814,12 @@ const accountShareConflict = ref<AccountShareConflictState>({
   queuedCount: null
 })
 let abortController: AbortController | null = null
+let copiedKeyResetTimer: ReturnType<typeof setTimeout> | null = null
+const ccSwitchDetectionTimers = new Set<ReturnType<typeof setTimeout>>()
+
+const getGroupSelectorPopoverId = (keyId: number) => `api-key-group-selector-${keyId}`
+const getGroupSelectorSearchId = (keyId: number) => `api-key-group-selector-search-${keyId}`
+const getGroupSelectorListId = (keyId: number) => `api-key-group-selector-list-${keyId}`
 
 const isAbortError = (error: unknown) => {
   if (!error || typeof error !== 'object') return false
@@ -1631,12 +1889,20 @@ const formData = ref({
 
 // 自定义Key验证
 const customKeyError = computed(() => {
-  if (!formData.value.use_custom_key || !formData.value.custom_key) {
+  if (!formData.value.use_custom_key) {
     return ''
   }
   const key = formData.value.custom_key
+  if (!key.trim()) {
+    return customKeyTouched.value || customKeySubmitAttempted.value
+      ? t('keys.customKeyRequired')
+      : ''
+  }
   if (key.length < 16) {
     return t('keys.customKeyTooShort')
+  }
+  if (key.length > 128) {
+    return t('keys.customKeyTooLong')
   }
   // 检查字符：只允许字母、数字、下划线、连字符
   if (!/^[a-zA-Z0-9_-]+$/.test(key)) {
@@ -1772,23 +2038,23 @@ const normalizeGroupRoutes = (): ApiKeyGroupRoute[] | null => {
   const seenGroupIds = new Set<number>()
   for (const route of formData.value.group_routes) {
     if (route.group_id === null) {
-      appStore.showError('多分组路由中存在未选择的分组')
+      appStore.showError(t('keys.groupRoutes.validation.groupRequired'))
       return null
     }
     if (seenGroupIds.has(route.group_id)) {
-      appStore.showError('多分组路由不能包含重复分组')
+      appStore.showError(t('keys.groupRoutes.validation.duplicateGroup'))
       return null
     }
     if (!Number.isInteger(route.priority) || route.priority < 0) {
-      appStore.showError('多分组路由优先级必须是不小于 0 的整数')
+      appStore.showError(t('keys.groupRoutes.validation.priority'))
       return null
     }
     if (!Number.isInteger(route.weight) || route.weight < 1) {
-      appStore.showError('多分组路由权重必须是不小于 1 的整数')
+      appStore.showError(t('keys.groupRoutes.validation.weight'))
       return null
     }
     if (!Number.isInteger(route.cooldown_seconds) || route.cooldown_seconds < 0) {
-      appStore.showError('多分组路由冷却秒数必须是不小于 0 的整数')
+      appStore.showError(t('keys.groupRoutes.validation.cooldownSeconds'))
       return null
     }
     seenGroupIds.add(route.group_id)
@@ -1827,10 +2093,14 @@ const filteredGroupOptions = computed(() => {
 const copyToClipboard = async (text: string, keyId: number) => {
   const success = await clipboardCopy(text, t('keys.copied'))
   if (success) {
+    if (copiedKeyResetTimer !== null) clearTimeout(copiedKeyResetTimer)
     copiedKeyId.value = keyId
-    setTimeout(() => {
+    const timer = setTimeout(() => {
+      if (copiedKeyResetTimer !== timer) return
       copiedKeyId.value = null
+      copiedKeyResetTimer = null
     }, 800)
+    copiedKeyResetTimer = timer
   }
 }
 
@@ -1938,6 +2208,7 @@ const handleSort = (key: string, order: 'asc' | 'desc') => {
 
 const editKey = (key: ApiKey) => {
   selectedKey.value = key
+  editExpirationPresetBase.value = resolveExpirationPresetBase(key.expires_at, new Date())
   const hasIPRestriction = (key.ip_whitelist?.length > 0) || (key.ip_blacklist?.length > 0)
   const hasExpiration = !!key.expires_at
   const groupRoutes = createRoutesFromKey(key)
@@ -1978,35 +2249,97 @@ const toggleKeyStatus = async (key: ApiKey) => {
   }
 }
 
-const openGroupSelector = (key: ApiKey) => {
-  if (groupSelectorKeyId.value === key.id) {
-    groupSelectorKeyId.value = null
-    dropdownPosition.value = null
-  } else {
-    const buttonEl = groupButtonRefs.value.get(key.id)
-    if (buttonEl) {
-      const rect = buttonEl.getBoundingClientRect()
-      const dropdownEstHeight = 400 // estimated max dropdown height
-      const spaceBelow = window.innerHeight - rect.bottom
-      const spaceAbove = rect.top
-
-      if (spaceBelow < dropdownEstHeight && spaceAbove > spaceBelow) {
-        // Not enough space below, pop upward
-        dropdownPosition.value = {
-          bottom: window.innerHeight - rect.top + 4,
-          left: rect.left
-        }
-      } else {
-        // Default: pop downward
-        dropdownPosition.value = {
-          top: rect.bottom + 4,
-          left: rect.left
-        }
-      }
-    }
-    groupSelectorKeyId.value = key.id
-    groupSearchQuery.value = ''
+const closeGroupSelectorPopover = (restoreFocus: boolean) => {
+  const keyId = groupSelectorKeyId.value
+  if (keyId === null) return
+  groupSelectorKeyId.value = null
+  dropdownPosition.value = null
+  groupSearchQuery.value = ''
+  if (restoreFocus) {
+    void nextTick(() => groupButtonRefs.value.get(keyId)?.focus())
   }
+}
+
+const updateGroupSelectorPosition = (): boolean => {
+  const keyId = groupSelectorKeyId.value
+  if (keyId === null) return false
+  const buttonEl = groupButtonRefs.value.get(keyId)
+  if (!buttonEl?.isConnected) return false
+
+  const rect = buttonEl.getBoundingClientRect()
+  const viewportPadding = 16
+  const maxDropdownHeight = Math.max(0, window.innerHeight - viewportPadding * 2)
+  const dropdownHeight = Math.min(dropdownRef.value?.offsetHeight || 400, maxDropdownHeight)
+  const spaceBelow = window.innerHeight - rect.bottom - viewportPadding
+  const spaceAbove = rect.top - viewportPadding
+  const dropdownWidth = Math.min(380, Math.max(0, window.innerWidth - viewportPadding * 2))
+  const maxLeft = Math.max(viewportPadding, window.innerWidth - dropdownWidth - viewportPadding)
+  const clampedLeft = Math.min(Math.max(rect.left, viewportPadding), maxLeft)
+  const preferredTop = spaceBelow >= dropdownHeight || spaceBelow >= spaceAbove
+    ? rect.bottom + 4
+    : rect.top - dropdownHeight - 4
+  const maxTop = Math.max(viewportPadding, window.innerHeight - dropdownHeight - viewportPadding)
+  const clampedTop = Math.min(Math.max(preferredTop, viewportPadding), maxTop)
+
+  dropdownPosition.value = {
+    top: clampedTop,
+    left: clampedLeft
+  }
+  return true
+}
+
+const openGroupSelector = async (key: ApiKey) => {
+  if (groupSelectorKeyId.value === key.id) {
+    closeGroupSelectorPopover(false)
+    return
+  }
+  closeColumnSettings(false)
+  if (!groupButtonRefs.value.get(key.id)) {
+    throw new Error(`Group selector trigger is not mounted for API key ${key.id}`)
+  }
+
+  groupSelectorKeyId.value = key.id
+  groupSearchQuery.value = ''
+  if (!updateGroupSelectorPosition()) {
+    closeGroupSelectorPopover(false)
+    return
+  }
+
+  await nextTick()
+  if (groupSelectorKeyId.value !== key.id) return
+  if (!updateGroupSelectorPosition()) {
+    closeGroupSelectorPopover(false)
+    return
+  }
+  const searchInput = groupSearchInputRef.value
+  if (!searchInput) {
+    closeGroupSelectorPopover(false)
+    throw new Error(`Group selector search is not mounted for API key ${key.id}`)
+  }
+  searchInput.focus()
+}
+
+const handleGroupSelectorKeydown = (event: KeyboardEvent) => {
+  if (event.key !== 'Escape') return
+  event.preventDefault()
+  event.stopPropagation()
+  closeGroupSelectorPopover(true)
+}
+
+const handleGroupSelectorFocusIn = (event: FocusEvent) => {
+  const keyId = groupSelectorKeyId.value
+  const target = event.target
+  if (keyId === null || !(target instanceof Node)) return
+
+  const trigger = groupButtonRefs.value.get(keyId)
+  if (dropdownRef.value?.contains(target) || trigger?.contains(target)) return
+
+  closeGroupSelectorPopover(false)
+}
+
+const handleGroupSelectorViewportChange = () => {
+  if (groupSelectorKeyId.value === null) return
+  if (!updateGroupSelectorPosition()) closeGroupSelectorPopover(false)
 }
 
 const blockingAccountShareMemberships = (memberships: AccountShareMembership[]) => (
@@ -2106,8 +2439,7 @@ const navigateToAccountShareResolution = async () => {
 }
 
 const changeGroup = async (key: ApiKey, newGroupId: number | null) => {
-  groupSelectorKeyId.value = null
-  dropdownPosition.value = null
+  closeGroupSelectorPopover(true)
   if (key.group_id === newGroupId) return
 
   if (!(await checkAccountShareBindings(key, 'change_group'))) return
@@ -2135,11 +2467,14 @@ const changeGroup = async (key: ApiKey, newGroupId: number | null) => {
 }
 
 const closeGroupSelector = (event: MouseEvent) => {
-  const target = event.target as HTMLElement
+  const target = event.target
+  if (!(target instanceof Node)) return
   // Check if click is inside the dropdown or the trigger button
-  if (!target.closest('.group\\/dropdown') && !dropdownRef.value?.contains(target)) {
-    groupSelectorKeyId.value = null
-    dropdownPosition.value = null
+  if (
+    !(target instanceof Element && target.closest('.group\\/dropdown')) &&
+    !dropdownRef.value?.contains(target)
+  ) {
+    closeGroupSelectorPopover(false)
   }
 }
 
@@ -2150,6 +2485,18 @@ const confirmDelete = async (key: ApiKey) => {
 }
 
 const handleSubmit = async () => {
+  // Validate the optional custom key before the remaining form so submit feedback
+  // is always attached to and focused on the field that needs correction.
+  if (!showEditModal.value && formData.value.use_custom_key) {
+    customKeySubmitAttempted.value = true
+    if (customKeyError.value) {
+      appStore.showError(customKeyError.value)
+      await nextTick()
+      customKeyInputRef.value?.focus()
+      return
+    }
+  }
+
   const groupRoutes = normalizeGroupRoutes()
   if (groupRoutes === null) {
     return
@@ -2162,18 +2509,6 @@ const handleSubmit = async () => {
     return
   }
 
-  // Validate custom key if enabled
-  if (!showEditModal.value && formData.value.use_custom_key) {
-    if (!formData.value.custom_key) {
-      appStore.showError(t('keys.customKeyRequired'))
-      return
-    }
-    if (customKeyError.value) {
-      appStore.showError(customKeyError.value)
-      return
-    }
-  }
-
   // Parse IP lists only if IP restriction is enabled
   const parseIPList = (text: string): string[] =>
     text.split('\n').map(ip => ip.trim()).filter(ip => ip.length > 0)
@@ -2184,19 +2519,9 @@ const handleSubmit = async () => {
   const quota = formData.value.quota && formData.value.quota > 0 ? formData.value.quota : 0
 
   // Calculate expiration
-  let expiresInDays: number | undefined
   let expiresAt: string | null | undefined
   if (formData.value.enable_expiration && formData.value.expiration_date) {
-    if (!showEditModal.value) {
-      // Create mode: calculate days from date
-      const expDate = new Date(formData.value.expiration_date)
-      const now = new Date()
-      const diffDays = Math.ceil((expDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
-      expiresInDays = diffDays > 0 ? diffDays : 1
-    } else {
-      // Edit mode: use custom date directly
-      expiresAt = new Date(formData.value.expiration_date).toISOString()
-    }
+    expiresAt = new Date(formData.value.expiration_date).toISOString()
   } else if (showEditModal.value) {
     // Edit mode: if expiration disabled or date cleared, send empty string to clear
     expiresAt = ''
@@ -2235,9 +2560,10 @@ const handleSubmit = async () => {
         ipWhitelist,
         ipBlacklist,
         quota,
-        expiresInDays,
+        undefined,
         rateLimitData,
-        groupRoutes
+        groupRoutes,
+        expiresAt ?? undefined
       )
       appStore.showSuccess(t('keys.keyCreatedSuccess'))
       // Only advance tour if active, on submit step, and creation succeeded
@@ -2283,6 +2609,9 @@ const handleDelete = async () => {
 const closeModals = () => {
   showCreateModal.value = false
   showEditModal.value = false
+  editExpirationPresetBase.value = null
+  customKeyTouched.value = false
+  customKeySubmitAttempted.value = false
   selectedKey.value = null
   formData.value = {
     name: '',
@@ -2307,6 +2636,14 @@ const closeModals = () => {
   }
 }
 
+const toggleCustomKey = () => {
+  formData.value.use_custom_key = !formData.value.use_custom_key
+  if (!formData.value.use_custom_key) {
+    customKeyTouched.value = false
+    customKeySubmitAttempted.value = false
+  }
+}
+
 // Show reset quota confirmation dialog
 const confirmResetQuota = () => {
   showResetQuotaDialog.value = true
@@ -2314,10 +2651,27 @@ const confirmResetQuota = () => {
 
 // Set expiration date based on quick select days
 const setExpirationDays = (days: number) => {
+  let presetBase: Date
+  if (showEditModal.value) {
+    if (editExpirationPresetBase.value === null) {
+      throw new Error('Edit expiration preset base is not initialized')
+    }
+    presetBase = editExpirationPresetBase.value
+  } else {
+    presetBase = new Date()
+  }
+
+  const expDate = calculateExpirationPresetDate(presetBase, days)
   formData.value.expiration_preset = days.toString() as '7' | '30' | '90'
-  const expDate = new Date()
-  expDate.setDate(expDate.getDate() + days)
   formData.value.expiration_date = formatDateTimeLocal(expDate.toISOString())
+}
+
+const toggleExpiration = () => {
+  const enableExpiration = !formData.value.enable_expiration
+  formData.value.enable_expiration = enableExpiration
+  if (enableExpiration && !formData.value.expiration_date) {
+    setExpirationDays(30)
+  }
 }
 
 // Reset quota used for an API key
@@ -2417,12 +2771,14 @@ const executeCcsImport = (row: ApiKey, clientType: 'claude' | 'gemini') => {
     window.open(deeplink, '_self')
 
     // Check if the protocol handler worked by detecting if we're still focused
-    setTimeout(() => {
+    const detectionTimer = setTimeout(() => {
+      ccSwitchDetectionTimers.delete(detectionTimer)
       if (document.hasFocus()) {
         // Still focused means the protocol handler likely failed
         appStore.showError(t('keys.ccSwitchNotInstalled'))
       }
     }, 100)
+    ccSwitchDetectionTimers.add(detectionTimer)
   } catch (error) {
     appStore.showError(t('keys.ccSwitchNotInstalled'))
   }
@@ -2490,9 +2846,13 @@ function formatResetTime(resetAt: string | null): string {
 }
 
 const handleColumnSettingsClickOutside = (event: MouseEvent) => {
-  const target = event.target as HTMLElement
-  if (columnDropdownRef.value && !columnDropdownRef.value.contains(target)) {
-    showColumnDropdown.value = false
+  const target = event.target
+  if (
+    target instanceof Node &&
+    columnDropdownRef.value &&
+    !columnDropdownRef.value.contains(target)
+  ) {
+    closeColumnSettings(false)
   }
 }
 
@@ -2504,14 +2864,30 @@ onMounted(() => {
   loadPublicSettings()
   document.addEventListener('click', closeGroupSelector)
   document.addEventListener('click', handleColumnSettingsClickOutside)
+  document.addEventListener('focusin', handleGroupSelectorFocusIn)
+  window.addEventListener('resize', handleGroupSelectorViewportChange)
+  window.addEventListener('scroll', handleGroupSelectorViewportChange, true)
   resetTimer = setInterval(() => { now.value = new Date() }, 60000)
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', closeGroupSelector)
   document.removeEventListener('click', handleColumnSettingsClickOutside)
-  if (resetTimer) clearInterval(resetTimer)
+  document.removeEventListener('focusin', handleGroupSelectorFocusIn)
+  window.removeEventListener('resize', handleGroupSelectorViewportChange)
+  window.removeEventListener('scroll', handleGroupSelectorViewportChange, true)
+  if (resetTimer !== null) {
+    clearInterval(resetTimer)
+    resetTimer = null
+  }
+  if (copiedKeyResetTimer !== null) {
+    clearTimeout(copiedKeyResetTimer)
+    copiedKeyResetTimer = null
+  }
+  ccSwitchDetectionTimers.forEach((timer) => clearTimeout(timer))
+  ccSwitchDetectionTimers.clear()
   usageStatsRequestSequence += 1
   abortController?.abort()
+  abortController = null
 })
 </script>

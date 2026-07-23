@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -25,11 +26,15 @@ var (
 	ErrGroupNotAllowed                 = infraerrors.Forbidden("GROUP_NOT_ALLOWED", "user is not allowed to bind this group")
 	ErrAPIKeyExists                    = infraerrors.Conflict("API_KEY_EXISTS", "api key already exists")
 	ErrAPIKeyTooShort                  = infraerrors.BadRequest("API_KEY_TOO_SHORT", "api key must be at least 16 characters")
+	ErrAPIKeyTooLong                   = infraerrors.BadRequest("API_KEY_TOO_LONG", "api key must be at most 128 characters")
 	ErrAPIKeyInvalidChars              = infraerrors.BadRequest("API_KEY_INVALID_CHARS", "api key can only contain letters, numbers, underscores, and hyphens")
 	ErrAPIKeyRateLimited               = infraerrors.TooManyRequests("API_KEY_RATE_LIMITED", "too many failed attempts, please try again later")
 	ErrInvalidIPPattern                = infraerrors.BadRequest("INVALID_IP_PATTERN", "invalid IP or CIDR pattern")
 	ErrAPIKeyGroupRequired             = infraerrors.BadRequest("API_KEY_GROUP_REQUIRED", "api key group is required when ungrouped key scheduling is disabled")
 	ErrAPIKeyGroupRouteInvalid         = infraerrors.BadRequest("API_KEY_GROUP_ROUTE_INVALID", "invalid api key group route")
+	ErrAPIKeyExpirationConflict        = infraerrors.BadRequest("API_KEY_EXPIRATION_CONFLICT", "expires_at and expires_in_days cannot be provided together")
+	ErrAPIKeyExpirationInvalid         = infraerrors.BadRequest("API_KEY_EXPIRATION_INVALID", "expires_at must be a valid RFC3339 timestamp")
+	ErrAPIKeyExpirationNotFuture       = infraerrors.BadRequest("API_KEY_EXPIRATION_NOT_FUTURE", "expires_at must be later than the current time")
 	ErrAPIKeyAccountShareBindingExists = infraerrors.Conflict(
 		"API_KEY_ACCOUNT_SHARE_BINDING_EXISTS",
 		"api key is bound to active or queued account share mode usage",
@@ -47,8 +52,12 @@ var (
 )
 
 const (
-	apiKeyMaxErrorsPerHour = 20
-	apiKeyLastUsedMinTouch = 30 * time.Second
+	MaxAPIKeyCredentialCharacters = 128
+	// MaxAPIKeyCredentialBytes bounds request work before the character-level
+	// check while preserving credentials generated with a multi-byte prefix.
+	MaxAPIKeyCredentialBytes = MaxAPIKeyCredentialCharacters * utf8.UTFMax
+	apiKeyMaxErrorsPerHour   = 20
+	apiKeyLastUsedMinTouch   = 30 * time.Second
 	// DB 写失败后的短退避，避免请求路径持续同步重试造成写风暴与高延迟。
 	apiKeyLastUsedFailBackoff = 5 * time.Second
 )
@@ -173,8 +182,9 @@ type CreateAPIKeyRequest struct {
 	IPBlacklist []string           `json:"ip_blacklist"` // IP 黑名单
 
 	// Quota fields
-	Quota         float64 `json:"quota"`           // Quota limit in USD (0 = unlimited)
-	ExpiresInDays *int    `json:"expires_in_days"` // Days until expiry (nil = never expires)
+	Quota         float64    `json:"quota"`           // Quota limit in USD (0 = unlimited)
+	ExpiresInDays *int       `json:"expires_in_days"` // Days until expiry (nil = never expires)
+	ExpiresAt     *time.Time `json:"expires_at"`      // Exact expiration time (nil = never expires)
 
 	// Rate limit fields (0 = unlimited)
 	RateLimit5h float64 `json:"rate_limit_5h"`
@@ -188,8 +198,8 @@ type UpdateAPIKeyRequest struct {
 	GroupID     *int64              `json:"group_id"`
 	GroupRoutes *[]APIKeyGroupRoute `json:"group_routes"`
 	Status      *string             `json:"status"`
-	IPWhitelist []string            `json:"ip_whitelist"` // IP 白名单（空数组清空）
-	IPBlacklist []string            `json:"ip_blacklist"` // IP 黑名单（空数组清空）
+	IPWhitelist *[]string           `json:"ip_whitelist"` // IP 白名单（nil 不修改，空数组清空）
+	IPBlacklist *[]string           `json:"ip_blacklist"` // IP 黑名单（nil 不修改，空数组清空）
 
 	// Quota fields
 	Quota           *float64   `json:"quota"`       // Quota limit in USD (nil = no change, 0 = unlimited)
@@ -314,6 +324,9 @@ func (s *APIKeyService) GenerateKey() (string, error) {
 	}
 
 	key := prefix + hex.EncodeToString(bytes)
+	if !apiKeyCredentialWithinLimit(key) {
+		return "", fmt.Errorf("default.api_key_prefix must produce a valid UTF-8 api key of at most %d characters", MaxAPIKeyCredentialCharacters)
+	}
 	return key, nil
 }
 
@@ -322,6 +335,9 @@ func (s *APIKeyService) ValidateCustomKey(key string) error {
 	// 检查长度
 	if len(key) < 16 {
 		return ErrAPIKeyTooShort
+	}
+	if utf8.RuneCountInString(key) > MaxAPIKeyCredentialCharacters {
+		return ErrAPIKeyTooLong
 	}
 
 	// 检查字符：只允许字母、数字、下划线、连字符
@@ -466,8 +482,31 @@ func (s *APIKeyService) validateAPIKeyGroupRoutes(ctx context.Context, user *Use
 	return nil
 }
 
-// Create 鍒涘缓API Key
+func resolveCreateAPIKeyExpiration(req CreateAPIKeyRequest, now time.Time) (*time.Time, error) {
+	if req.ExpiresAt != nil && req.ExpiresInDays != nil {
+		return nil, ErrAPIKeyExpirationConflict
+	}
+	if req.ExpiresAt != nil {
+		if !req.ExpiresAt.After(now) {
+			return nil, ErrAPIKeyExpirationNotFuture
+		}
+		expiresAt := *req.ExpiresAt
+		return &expiresAt, nil
+	}
+	if req.ExpiresInDays != nil && *req.ExpiresInDays > 0 {
+		expiresAt := now.AddDate(0, 0, *req.ExpiresInDays)
+		return &expiresAt, nil
+	}
+	return nil, nil
+}
+
+// Create 创建 API Key。
 func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIKeyRequest) (*APIKey, error) {
+	expiresAt, err := resolveCreateAPIKeyExpiration(req, time.Now())
+	if err != nil {
+		return nil, err
+	}
+
 	// 验证用户存在
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
@@ -571,12 +610,7 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 		RateLimit5h: req.RateLimit5h,
 		RateLimit1d: req.RateLimit1d,
 		RateLimit7d: req.RateLimit7d,
-	}
-
-	// Set expiration time if specified
-	if req.ExpiresInDays != nil && *req.ExpiresInDays > 0 {
-		expiresAt := time.Now().AddDate(0, 0, *req.ExpiresInDays)
-		apiKey.ExpiresAt = &expiresAt
+		ExpiresAt:   expiresAt,
 	}
 
 	if err := s.apiKeyRepo.Create(ctx, apiKey); err != nil {
@@ -656,6 +690,9 @@ func (s *APIKeyService) GetByID(ctx context.Context, id int64) (*APIKey, error) 
 
 // GetByKey 根据Key字符串获取API Key（用于认证）
 func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, error) {
+	if !apiKeyCredentialWithinLimit(key) {
+		return nil, ErrAPIKeyNotFound
+	}
 	cacheKey := s.authCacheKey(key)
 
 	if entry, ok := s.getAuthCacheEntry(ctx, cacheKey); ok {
@@ -706,6 +743,12 @@ func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, erro
 	return apiKey, nil
 }
 
+func apiKeyCredentialWithinLimit(key string) bool {
+	return len(key) <= MaxAPIKeyCredentialBytes &&
+		utf8.ValidString(key) &&
+		utf8.RuneCountInString(key) <= MaxAPIKeyCredentialCharacters
+}
+
 // Update 更新API Key
 func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req UpdateAPIKeyRequest) (*APIKey, error) {
 	apiKey, err := s.apiKeyRepo.GetByID(ctx, id)
@@ -721,15 +764,15 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 	currentAPIKey.GroupRoutes = append([]APIKeyGroupRoute(nil), apiKey.GroupRoutes...)
 
 	// 验证 IP 白名单格式
-	if len(req.IPWhitelist) > 0 {
-		if invalid := ip.ValidateIPPatterns(req.IPWhitelist); len(invalid) > 0 {
+	if req.IPWhitelist != nil && len(*req.IPWhitelist) > 0 {
+		if invalid := ip.ValidateIPPatterns(*req.IPWhitelist); len(invalid) > 0 {
 			return nil, fmt.Errorf("%w: %v", ErrInvalidIPPattern, invalid)
 		}
 	}
 
 	// 验证 IP 黑名单格式
-	if len(req.IPBlacklist) > 0 {
-		if invalid := ip.ValidateIPPatterns(req.IPBlacklist); len(invalid) > 0 {
+	if req.IPBlacklist != nil && len(*req.IPBlacklist) > 0 {
+		if invalid := ip.ValidateIPPatterns(*req.IPBlacklist); len(invalid) > 0 {
 			return nil, fmt.Errorf("%w: %v", ErrInvalidIPPattern, invalid)
 		}
 	}
@@ -822,9 +865,13 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 		}
 	}
 
-	// 更新 IP 限制（空数组会清空设置）
-	apiKey.IPWhitelist = req.IPWhitelist
-	apiKey.IPBlacklist = req.IPBlacklist
+	// 更新 IP 限制（nil 不修改，空数组清空设置）
+	if req.IPWhitelist != nil {
+		apiKey.IPWhitelist = *req.IPWhitelist
+	}
+	if req.IPBlacklist != nil {
+		apiKey.IPBlacklist = *req.IPBlacklist
+	}
 
 	// Update rate limit configuration
 	if req.RateLimit5h != nil {

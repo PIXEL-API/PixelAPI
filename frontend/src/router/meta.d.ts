@@ -76,5 +76,10 @@ declare module "vue-router" {
      * i18n key for the page description
      */
     descriptionKey?: string;
+
+    /**
+     * Opts a route into a bounded UI skin. Unspecified routes keep the legacy UI.
+     */
+    uiSkin?: "v2";
   }
 }

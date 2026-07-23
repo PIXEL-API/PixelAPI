@@ -15,6 +15,10 @@ import (
 
 var ErrOpsDisabled = infraerrors.NotFound("OPS_DISABLED", "Ops monitoring is disabled")
 
+type opsDataRetentionSettingsApplier interface {
+	ReconcileDataRetentionSettings(ctx context.Context) error
+}
+
 const (
 	opsMaxStoredRequestBodyBytes = 256 * 1024
 	opsMaxStoredErrorBodyBytes   = 20 * 1024
@@ -54,6 +58,13 @@ type OpsService struct {
 	geminiCompatService       *GeminiMessagesCompatService
 	antigravityGatewayService *AntigravityGatewayService
 	systemLogSink             *OpsSystemLogSink
+	cleanupSettingsApplier    opsDataRetentionSettingsApplier
+}
+
+func (s *OpsService) setCleanupSettingsApplier(applier opsDataRetentionSettingsApplier) {
+	if s != nil {
+		s.cleanupSettingsApplier = applier
+	}
 }
 
 func NewOpsService(

@@ -24,6 +24,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/repository"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/setup"
 	"github.com/Wei-Shaw/sub2api/internal/web"
@@ -41,6 +42,66 @@ var (
 	Date      = "unknown"
 	BuildType = "source" // "source" for manual builds, "release" for CI builds (set by ldflags)
 )
+
+const defaultMigrationTimeout = 30 * time.Minute
+
+type commandOptions struct {
+	setupMode        bool
+	showVersion      bool
+	migrateOnly      bool
+	migrationTimeout time.Duration
+}
+
+func (o commandOptions) validate() error {
+	if o.migrateOnly && o.setupMode {
+		return errors.New("--migrate-only cannot be combined with --setup")
+	}
+	if o.migrateOnly && o.showVersion {
+		return errors.New("--migrate-only cannot be combined with --version")
+	}
+	if o.migrateOnly && o.migrationTimeout <= 0 {
+		return errors.New("--migration-timeout must be greater than zero")
+	}
+	return nil
+}
+
+type bootstrapConfigLoader func() (*config.Config, error)
+type configuredMigrationRunner func(context.Context, *config.Config) error
+
+func runMigrationsOnly(
+	parent context.Context,
+	timeout time.Duration,
+	loadConfig bootstrapConfigLoader,
+	runMigrations configuredMigrationRunner,
+) error {
+	if parent == nil {
+		return errors.New("nil parent context")
+	}
+	if timeout <= 0 {
+		return errors.New("migration timeout must be greater than zero")
+	}
+	if loadConfig == nil {
+		return errors.New("nil bootstrap config loader")
+	}
+	if runMigrations == nil {
+		return errors.New("nil configured migration runner")
+	}
+
+	cfg, err := loadConfig()
+	if err != nil {
+		return fmt.Errorf("load migration config: %w", err)
+	}
+	if cfg == nil {
+		return errors.New("load migration config: nil config")
+	}
+
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	if err := runMigrations(ctx, cfg); err != nil {
+		return fmt.Errorf("run database migrations: %w", err)
+	}
+	return nil
+}
 
 func init() {
 	// 如果 Version 已通过 ldflags 注入（例如 -X main.Version=...），则不要覆盖。
@@ -64,10 +125,37 @@ func main() {
 	// Parse command line flags
 	setupMode := flag.Bool("setup", false, "Run setup wizard in CLI mode")
 	showVersion := flag.Bool("version", false, "Show version information")
+	migrateOnly := flag.Bool("migrate-only", false, "Run embedded database migrations and exit")
+	migrationTimeout := flag.Duration("migration-timeout", defaultMigrationTimeout, "Maximum duration for --migrate-only")
 	flag.Parse()
+
+	options := commandOptions{
+		setupMode:        *setupMode,
+		showVersion:      *showVersion,
+		migrateOnly:      *migrateOnly,
+		migrationTimeout: *migrationTimeout,
+	}
+	if err := options.validate(); err != nil {
+		log.Fatalf("Invalid command options: %v", err)
+	}
 
 	if *showVersion {
 		log.Printf("Sub2API %s (commit: %s, built: %s)\n", Version, Commit, Date)
+		return
+	}
+
+	if *migrateOnly {
+		migrationParent, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if err := runMigrationsOnly(
+			migrationParent,
+			*migrationTimeout,
+			config.LoadForBootstrap,
+			repository.ApplyConfiguredMigrations,
+		); err != nil {
+			log.Fatalf("Database migration failed: %v", err)
+		}
+		log.Println("Database migrations completed successfully")
 		return
 	}
 
@@ -96,7 +184,15 @@ func main() {
 	}
 
 	// Normal server mode
-	runMainServer()
+	if err := runMainServer(); err != nil {
+		if errors.Is(err, errServerRestartRequested) {
+			log.Println("Graceful cleanup completed; exiting for process supervisor restart")
+		} else {
+			log.Printf("Server terminated: %v", err)
+		}
+		logger.Sync()
+		os.Exit(1)
+	}
 }
 
 func runSetupServer() {
@@ -139,13 +235,13 @@ func runSetupServer() {
 	}
 }
 
-func runMainServer() {
+func runMainServer() error {
 	cfg, err := config.LoadForBootstrap()
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		return fmt.Errorf("load config: %w", err)
 	}
 	if err := logger.Init(logger.OptionsFromConfig(cfg.Log)); err != nil {
-		log.Fatalf("Failed to initialize logger: %v", err)
+		return fmt.Errorf("initialize logger: %w", err)
 	}
 	if cfg.RunMode == config.RunModeSimple {
 		log.Println("⚠️  WARNING: Running in SIMPLE mode - billing and quota checks are DISABLED")
@@ -155,49 +251,61 @@ func runMainServer() {
 		Version:   Version,
 		BuildType: BuildType,
 	}
+	listenSpec, err := cfg.Server.ListenSpec()
+	if err != nil {
+		return fmt.Errorf("invalid server listen configuration: %w", err)
+	}
 
 	app, err := initializeApplication(buildInfo)
 	if err != nil {
-		log.Fatalf("Failed to initialize application: %v", err)
-	}
-	defer app.Cleanup()
-
-	pprofServer := startPprofServer()
-	listenSpec, err := cfg.Server.ListenSpec()
-	if err != nil {
-		log.Fatalf("Invalid server listen configuration: %v", err)
+		return fmt.Errorf("initialize application: %w", err)
 	}
 
-	// 启动服务器
-	go func() {
-		if err := serveServer(app.Server, listenSpec); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("Failed to start server: %v", err)
-		}
-	}()
+	shutdownContext, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	restartContext, stopRestart := signal.NotifyContext(context.Background(), syscall.SIGHUP)
+	defer stopRestart()
 
-	log.Printf("Server started on %s", listenSpec.DisplayAddress())
+	serveResults := make(chan serverServeResult, 2)
+	pprofServer, pprofStartErr := startPprofServer(serveResults)
 
-	// 等待中断信号
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-
-	log.Println("Shutting down server...")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := app.Server.Shutdown(ctx); err != nil {
-		log.Fatalf("Server forced to shutdown: %v", err)
-	}
-
+	shutdownTargets := []shutdownTarget{{
+		name:    "main server",
+		server:  app.Server,
+		timeout: cfg.Server.ShutdownTimeout(),
+	}}
 	if pprofServer != nil {
-		if err := pprofServer.Shutdown(ctx); err != nil {
-			log.Fatalf("pprof server forced to shutdown: %v", err)
-		}
+		shutdownTargets = append(shutdownTargets, shutdownTarget{
+			name:    "pprof server",
+			server:  pprofServer,
+			timeout: pprofShutdownTimeout,
+		})
 	}
 
-	log.Println("Server exited")
+	if pprofStartErr != nil {
+		serveResults <- serverServeResult{name: "pprof server", err: pprofStartErr}
+	} else {
+		go func() {
+			serveResults <- serverServeResult{
+				name: "main server",
+				err:  serveServer(app.Server, listenSpec),
+			}
+		}()
+		log.Printf("Server started on %s", listenSpec.DisplayAddress())
+	}
+
+	err = runServerLifecycle(
+		shutdownContext.Done(),
+		restartContext.Done(),
+		serveResults,
+		shutdownTargets,
+		app.Cleanup,
+		cfg.Server.ShutdownTimeout(),
+	)
+	if err == nil {
+		log.Println("Server exited")
+	}
+	return err
 }
 
 func serveServer(server *http.Server, spec config.ServerListenSpec) error {
@@ -229,18 +337,21 @@ func serveServer(server *http.Server, spec config.ServerListenSpec) error {
 	}
 }
 
-func startPprofServer() *http.Server {
+func startPprofServer(serveResults chan<- serverServeResult) (*http.Server, error) {
 	enabledValue := strings.TrimSpace(os.Getenv("PPROF_ENABLED"))
 	if enabledValue == "" {
-		return nil
+		return nil, nil
 	}
 
 	enabled, err := strconv.ParseBool(enabledValue)
 	if err != nil {
-		log.Fatalf("Invalid PPROF_ENABLED value %q: %v", enabledValue, err)
+		return nil, fmt.Errorf("invalid PPROF_ENABLED value %q: %w", enabledValue, err)
 	}
 	if !enabled {
-		return nil
+		return nil, nil
+	}
+	if serveResults == nil {
+		return nil, errors.New("start pprof server: nil serve result channel")
 	}
 
 	addr := strings.TrimSpace(os.Getenv("PPROF_ADDR"))
@@ -255,12 +366,17 @@ func startPprofServer() *http.Server {
 		IdleTimeout:       30 * time.Second,
 	}
 
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("listen for pprof on %s: %w", addr, err)
+	}
 	go func() {
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("Failed to start pprof server on %s: %v", addr, err)
+		serveResults <- serverServeResult{
+			name: "pprof server",
+			err:  server.Serve(listener),
 		}
 	}()
 
 	log.Printf("pprof server started on %s", addr)
-	return server
+	return server, nil
 }

@@ -1,117 +1,117 @@
 <template>
   <AppLayout>
-    <TablePageLayout>
+    <TablePageLayout class="data-page usage-page">
       <template #actions>
-        <div v-if="activeTab === 'requests'" class="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <div v-if="activeTab === 'requests'" class="data-stat-grid">
           <!-- Total Requests -->
-          <div class="card p-4">
-          <div class="flex items-center gap-3">
-            <div class="rounded-lg bg-blue-100 p-2 dark:bg-blue-900/30">
-              <Icon name="document" size="md" class="text-blue-600 dark:text-blue-400" />
-            </div>
-            <div>
-              <p class="text-xs font-medium text-gray-500 dark:text-gray-400">
-                {{ t('usage.totalRequests') }}
-              </p>
-              <p class="text-xl font-bold text-gray-900 dark:text-white">
-                {{ usageStats?.total_requests?.toLocaleString() || '0' }}
-              </p>
-              <p class="text-xs text-gray-500 dark:text-gray-400">
-                {{ t('usage.inSelectedRange') }}
-              </p>
+          <div class="data-stat-card">
+            <div class="data-stat-content">
+              <div class="data-stat-icon">
+                <Icon name="document" size="md" />
+              </div>
+              <div class="min-w-0 flex-1">
+                <p class="data-stat-label">
+                  {{ t('usage.totalRequests') }}
+                </p>
+                <p class="data-stat-value">
+                  {{ usageStats?.total_requests?.toLocaleString() || '0' }}
+                </p>
+                <p class="data-stat-meta">
+                  {{ t('usage.inSelectedRange') }}
+                </p>
+              </div>
             </div>
           </div>
-        </div>
 
-        <!-- Total Tokens -->
-        <div class="card p-4">
-          <div class="flex items-center gap-3">
-            <div class="rounded-lg bg-amber-100 p-2 dark:bg-amber-900/30">
-              <Icon name="cube" size="md" class="text-amber-600 dark:text-amber-400" />
-            </div>
-            <div>
-              <p class="text-xs font-medium text-gray-500 dark:text-gray-400">
-                {{ t('usage.totalTokens') }}
-              </p>
-              <p class="text-xl font-bold text-gray-900 dark:text-white">
-                {{ formatTokens(usageStats?.total_tokens || 0) }}
-              </p>
-              <p class="text-xs text-gray-500 dark:text-gray-400">
-                {{ t('usage.in') }}: {{ formatTokens(usageStats?.total_input_tokens || 0) }} /
-                {{ t('usage.out') }}: {{ formatTokens(usageStats?.total_output_tokens || 0) }}
-              </p>
-              <p class="text-xs text-gray-500 dark:text-gray-400">
-                {{ t('admin.usage.cacheReadTokens') }}: {{ formatTokens(usageStats?.total_cache_read_tokens || 0) }} /
-                {{ t('usage.cacheHitRate') }}: {{ formatCacheHitRate(usageStats?.total_input_tokens, usageStats?.total_cache_read_tokens) }}
-              </p>
+          <!-- Total Tokens -->
+          <div class="data-stat-card">
+            <div class="data-stat-content">
+              <div class="data-stat-icon">
+                <Icon name="cube" size="md" />
+              </div>
+              <div class="min-w-0 flex-1">
+                <p class="data-stat-label">
+                  {{ t('usage.totalTokens') }}
+                </p>
+                <p class="data-stat-value">
+                  {{ formatTokens(usageStats?.total_tokens || 0) }}
+                </p>
+                <p class="data-stat-meta">
+                  {{ t('usage.in') }}: {{ formatTokens(usageStats?.total_input_tokens || 0) }} /
+                  {{ t('usage.out') }}: {{ formatTokens(usageStats?.total_output_tokens || 0) }}
+                </p>
+                <p class="data-stat-meta mt-0">
+                  {{ t('admin.usage.cacheReadTokens') }}: {{ formatTokens(usageStats?.total_cache_read_tokens || 0) }} /
+                  {{ t('usage.cacheHitRate') }}: {{ formatCacheHitRate(usageStats?.total_input_tokens, usageStats?.total_cache_read_tokens) }}
+                </p>
+              </div>
             </div>
           </div>
-        </div>
 
-        <!-- Total Cost -->
-        <div class="card p-4">
-          <div class="flex items-center gap-3">
-            <div class="rounded-lg bg-green-100 p-2 dark:bg-green-900/30">
-              <Icon name="dollar" size="md" class="text-green-600 dark:text-green-400" />
-            </div>
-            <div class="min-w-0 flex-1">
-              <p class="text-xs font-medium text-gray-500 dark:text-gray-400">
-                {{ t('usage.totalCost') }}
-              </p>
-              <p class="text-xl font-bold text-green-600 dark:text-green-400">
-                ${{ (usageStats?.total_actual_cost || 0).toFixed(4) }}
-              </p>
-              <p class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5">
-                <span class="text-green-600 dark:text-green-400">
-                  {{ t('usage.requestBilled') }} ${{ (usageStats?.total_request_actual_cost || 0).toFixed(4) }}
-                </span>
-                <span class="text-sky-600 dark:text-sky-400">
-                  {{ t('usage.hourlyBilled') }} ${{ (usageStats?.total_hourly_cost || 0).toFixed(4) }}
-                </span>
-                <span class="text-gray-400 dark:text-gray-500">
-                  {{ t('usage.standardCost') }} ${{ (usageStats?.total_cost || 0).toFixed(4) }}
-                </span>
-              </p>
+          <!-- Total Cost -->
+          <div class="data-stat-card">
+            <div class="data-stat-content">
+              <div class="data-stat-icon">
+                <Icon name="dollar" size="md" />
+              </div>
+              <div class="min-w-0 flex-1">
+                <p class="data-stat-label">
+                  {{ t('usage.totalCost') }}
+                </p>
+                <p class="data-stat-value text-brand">
+                  ${{ (usageStats?.total_actual_cost || 0).toFixed(4) }}
+                </p>
+                <p class="data-stat-meta flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                  <span class="text-brand">
+                    {{ t('usage.requestBilled') }} ${{ (usageStats?.total_request_actual_cost || 0).toFixed(4) }}
+                  </span>
+                  <span>
+                    {{ t('usage.hourlyBilled') }} ${{ (usageStats?.total_hourly_cost || 0).toFixed(4) }}
+                  </span>
+                  <span>
+                    {{ t('usage.standardCost') }} ${{ (usageStats?.total_cost || 0).toFixed(4) }}
+                  </span>
+                </p>
+              </div>
             </div>
           </div>
-        </div>
 
-        <!-- Average Duration -->
-        <div class="card p-4">
-          <div class="flex items-center gap-3">
-            <div class="rounded-lg bg-purple-100 p-2 dark:bg-purple-900/30">
-              <Icon name="clock" size="md" class="text-purple-600 dark:text-purple-400" />
-            </div>
-            <div>
-              <p class="text-xs font-medium text-gray-500 dark:text-gray-400">
-                {{ t('usage.avgDuration') }}
-              </p>
-              <p class="text-xl font-bold text-gray-900 dark:text-white">
-                {{ formatDuration(usageStats?.average_duration_ms || 0) }}
-              </p>
-              <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.perRequest') }}</p>
+          <!-- Average Duration -->
+          <div class="data-stat-card">
+            <div class="data-stat-content">
+              <div class="data-stat-icon">
+                <Icon name="clock" size="md" />
+              </div>
+              <div class="min-w-0 flex-1">
+                <p class="data-stat-label">
+                  {{ t('usage.avgDuration') }}
+                </p>
+                <p class="data-stat-value">
+                  {{ formatDuration(usageStats?.average_duration_ms || 0) }}
+                </p>
+                <p class="data-stat-meta">{{ t('usage.perRequest') }}</p>
+              </div>
             </div>
           </div>
         </div>
-        </div>
-        <div v-else class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div v-else class="data-stat-grid">
           <div
             v-for="card in ledgerSummaryCards"
             :key="card.key"
-            class="card p-4"
+            class="data-stat-card"
           >
-            <div class="flex items-center gap-3">
-              <div :class="['flex h-10 w-10 shrink-0 items-center justify-center rounded-lg', card.iconClass]">
+            <div class="data-stat-content">
+              <div :class="['data-stat-icon', card.iconClass]">
                 <Icon :name="card.icon" size="md" :stroke-width="2" />
               </div>
-              <div class="min-w-0">
-                <p class="text-xs font-medium text-gray-500 dark:text-gray-400">
+              <div class="min-w-0 flex-1">
+                <p class="data-stat-label">
                   {{ card.label }}
                 </p>
-                <p :class="['mt-1 truncate text-xl font-bold', card.valueClass]">
+                <p :class="['data-stat-value', card.valueClass]">
                   {{ ledgerStatsLoading ? '...' : card.value }}
                 </p>
-                <p class="text-xs text-gray-500 dark:text-gray-400">
+                <p class="data-stat-meta">
                   {{ t('usage.inSelectedRange') }}
                 </p>
               </div>
@@ -121,10 +121,10 @@
       </template>
 
       <template #filters>
-        <div class="card">
-          <div class="border-b border-gray-200 p-2 dark:border-dark-700 sm:p-3">
+        <div class="card min-w-0">
+          <div class="border-b border-line p-2 sm:p-3">
             <div
-              class="grid grid-cols-2 gap-1 rounded-lg bg-gray-100 p-1 dark:bg-dark-800 sm:inline-grid sm:w-auto"
+              class="data-tabs-shell"
               role="tablist"
               :aria-label="t('usage.title')"
             >
@@ -135,10 +135,10 @@
                 :aria-selected="activeTab === 'requests'"
                 aria-controls="user-usage-panel"
                 :tabindex="activeTab === 'requests' ? 0 : -1"
-                class="min-h-11 rounded-md px-4 py-2 text-sm font-medium transition-colors"
+                class="data-tab"
                 :class="activeTab === 'requests'
-                  ? 'bg-white text-gray-900 shadow-sm dark:bg-dark-700 dark:text-white'
-                  : 'text-gray-600 hover:text-gray-900 dark:text-dark-300 dark:hover:text-white'"
+                  ? 'data-tab-active'
+                  : ''"
                 @click="switchUsageTab('requests')"
                 @keydown="handleUsageTabKeydown($event, 'requests')"
               >
@@ -151,10 +151,10 @@
                 :aria-selected="activeTab === 'balanceLedger'"
                 aria-controls="user-usage-panel"
                 :tabindex="activeTab === 'balanceLedger' ? 0 : -1"
-                class="min-h-11 rounded-md px-4 py-2 text-sm font-medium transition-colors"
+                class="data-tab"
                 :class="activeTab === 'balanceLedger'
-                  ? 'bg-white text-gray-900 shadow-sm dark:bg-dark-700 dark:text-white'
-                  : 'text-gray-600 hover:text-gray-900 dark:text-dark-300 dark:hover:text-white'"
+                  ? 'data-tab-active'
+                  : ''"
                 @click="switchUsageTab('balanceLedger')"
                 @keydown="handleUsageTabKeydown($event, 'balanceLedger')"
               >
@@ -162,159 +162,161 @@
               </button>
             </div>
           </div>
-          <div class="px-6 py-4">
-          <div v-if="activeTab === 'requests'" class="flex flex-wrap items-end gap-4">
-            <!-- API Key Filter -->
-            <div class="min-w-[180px]">
-              <label class="input-label">{{ t('usage.apiKeyFilter') }}</label>
-              <Select
-                v-model="filters.api_key_id"
-                :options="apiKeyOptions"
-                :placeholder="t('usage.allApiKeys')"
-                @change="applyFilters"
-              />
-            </div>
+          <div class="p-4 sm:p-5">
+            <div v-if="activeTab === 'requests'" class="data-filter-row">
+              <!-- API Key Filter -->
+              <div class="data-filter-control sm:min-w-[180px]">
+                <label class="input-label">{{ t('usage.apiKeyFilter') }}</label>
+                <Select
+                  v-model="filters.api_key_id"
+                  :options="apiKeyOptions"
+                  :placeholder="t('usage.allApiKeys')"
+                  @change="applyFilters"
+                />
+              </div>
 
-            <!-- Date Range Filter -->
-            <div>
-              <label class="input-label">{{ t('usage.timeRange') }}</label>
-              <DateRangePicker
-                v-model:start-date="startDate"
-                v-model:end-date="endDate"
-                @change="onDateRangeChange"
-              />
-            </div>
-            <div class="w-full sm:w-[220px]">
-              <label class="input-label">{{ t('usage.startTime') }}</label>
-              <input
-                v-model="startDateTime"
-                type="datetime-local"
-                step="1"
-                class="input"
-                @change="onExactTimeRangeChange"
-              />
-            </div>
-            <div class="w-full sm:w-[220px]">
-              <label class="input-label">{{ t('usage.endTime') }}</label>
-              <input
-                v-model="endDateTime"
-                type="datetime-local"
-                step="1"
-                class="input"
-                @change="onExactTimeRangeChange"
-              />
-            </div>
+              <!-- Date Range Filter -->
+              <div class="data-filter-control">
+                <label class="input-label">{{ t('usage.timeRange') }}</label>
+                <DateRangePicker
+                  class="w-full sm:w-auto"
+                  v-model:start-date="startDate"
+                  v-model:end-date="endDate"
+                  @change="onDateRangeChange"
+                />
+              </div>
+              <div class="data-filter-control sm:w-[220px]">
+                <label class="input-label">{{ t('usage.startTime') }}</label>
+                <input
+                  v-model="startDateTime"
+                  type="datetime-local"
+                  step="1"
+                  class="input"
+                  @change="onExactTimeRangeChange"
+                />
+              </div>
+              <div class="data-filter-control sm:w-[220px]">
+                <label class="input-label">{{ t('usage.endTime') }}</label>
+                <input
+                  v-model="endDateTime"
+                  type="datetime-local"
+                  step="1"
+                  class="input"
+                  @change="onExactTimeRangeChange"
+                />
+              </div>
 
-            <!-- Actions -->
-            <div class="ml-auto flex items-center gap-3">
-              <button @click="applyFilters" :disabled="loading" class="btn btn-secondary">
-                {{ t('common.refresh') }}
-              </button>
-              <button @click="resetFilters" class="btn btn-secondary">
-                {{ t('common.reset') }}
-              </button>
-              <button @click="exportToCSV" :disabled="exporting" class="btn btn-primary">
-                <svg
-                  v-if="exporting"
-                  class="-ml-1 mr-2 h-4 w-4 animate-spin"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                >
-                  <circle
-                    class="opacity-25"
-                    cx="12"
-                    cy="12"
-                    r="10"
-                    stroke="currentColor"
-                    stroke-width="4"
-                  ></circle>
-                  <path
-                    class="opacity-75"
-                    fill="currentColor"
-                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                  ></path>
-                </svg>
-                {{ exporting ? t('usage.exporting') : t('usage.exportCsv') }}
-              </button>
+              <!-- Actions -->
+              <div class="data-filter-actions">
+                <button @click="applyFilters" :disabled="loading" class="btn btn-secondary">
+                  {{ t('common.refresh') }}
+                </button>
+                <button @click="resetFilters" class="btn btn-secondary">
+                  {{ t('common.reset') }}
+                </button>
+                <button @click="exportToCSV" :disabled="exporting" class="btn btn-primary">
+                  <svg
+                    v-if="exporting"
+                    class="-ml-1 mr-2 h-4 w-4 animate-spin"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      class="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      stroke-width="4"
+                    ></circle>
+                    <path
+                      class="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    ></path>
+                  </svg>
+                  {{ exporting ? t('usage.exporting') : t('usage.exportCsv') }}
+                </button>
+              </div>
+            </div>
+            <div v-else class="data-filter-row">
+              <div class="data-filter-control">
+                <label class="input-label">{{ t('usage.timeRange') }}</label>
+                <DateRangePicker
+                  class="w-full sm:w-auto"
+                  v-model:start-date="startDate"
+                  v-model:end-date="endDate"
+                  @change="onDateRangeChange"
+                />
+              </div>
+              <div class="data-filter-control sm:w-[220px]">
+                <label class="input-label">{{ t('usage.startTime') }}</label>
+                <input
+                  v-model="startDateTime"
+                  type="datetime-local"
+                  step="1"
+                  class="input"
+                  @change="onExactTimeRangeChange"
+                />
+              </div>
+              <div class="data-filter-control sm:w-[220px]">
+                <label class="input-label">{{ t('usage.endTime') }}</label>
+                <input
+                  v-model="endDateTime"
+                  type="datetime-local"
+                  step="1"
+                  class="input"
+                  @change="onExactTimeRangeChange"
+                />
+              </div>
+              <div class="data-filter-control sm:min-w-[160px]">
+                <label class="input-label">{{ t('usage.balanceLedger.direction') }}</label>
+                <Select
+                  v-model="ledgerFilters.direction"
+                  :options="ledgerDirectionOptions"
+                  @change="applyFilters"
+                />
+              </div>
+              <div class="data-filter-control sm:min-w-[220px]">
+                <label class="input-label">{{ t('usage.balanceLedger.reason') }}</label>
+                <Select
+                  v-model="ledgerFilters.reason"
+                  :options="ledgerReasonOptions"
+                  @change="applyFilters"
+                />
+              </div>
+              <div class="data-filter-control sm:min-w-[180px]">
+                <label class="input-label">{{ t('usage.balanceLedger.labels.referenceType') }}</label>
+                <input
+                  v-model.trim="ledgerFilters.ref_type"
+                  type="text"
+                  class="input"
+                  placeholder="usage_log"
+                  @keyup.enter="applyFilters"
+                />
+              </div>
+              <div class="data-filter-control sm:min-w-[160px]">
+                <label class="input-label">{{ t('usage.balanceLedger.labels.reference') }}</label>
+                <input
+                  v-model.number="ledgerFilters.ref_id"
+                  type="number"
+                  min="1"
+                  step="1"
+                  class="input"
+                  placeholder="ID"
+                  @keyup.enter="applyFilters"
+                />
+              </div>
+              <div class="data-filter-actions">
+                <button @click="applyFilters" :disabled="ledgerLoading || ledgerStatsLoading" class="btn btn-secondary">
+                  {{ t('common.refresh') }}
+                </button>
+                <button @click="resetFilters" class="btn btn-secondary">
+                  {{ t('common.reset') }}
+                </button>
+              </div>
             </div>
           </div>
-          <div v-else class="flex flex-wrap items-end gap-4">
-            <div>
-              <label class="input-label">{{ t('usage.timeRange') }}</label>
-              <DateRangePicker
-                v-model:start-date="startDate"
-                v-model:end-date="endDate"
-                @change="onDateRangeChange"
-              />
-            </div>
-            <div class="w-full sm:w-[220px]">
-              <label class="input-label">{{ t('usage.startTime') }}</label>
-              <input
-                v-model="startDateTime"
-                type="datetime-local"
-                step="1"
-                class="input"
-                @change="onExactTimeRangeChange"
-              />
-            </div>
-            <div class="w-full sm:w-[220px]">
-              <label class="input-label">{{ t('usage.endTime') }}</label>
-              <input
-                v-model="endDateTime"
-                type="datetime-local"
-                step="1"
-                class="input"
-                @change="onExactTimeRangeChange"
-              />
-            </div>
-            <div class="min-w-[160px]">
-              <label class="input-label">{{ t('usage.balanceLedger.direction') }}</label>
-              <Select
-                v-model="ledgerFilters.direction"
-                :options="ledgerDirectionOptions"
-                @change="applyFilters"
-              />
-            </div>
-            <div class="min-w-[220px]">
-              <label class="input-label">{{ t('usage.balanceLedger.reason') }}</label>
-              <Select
-                v-model="ledgerFilters.reason"
-                :options="ledgerReasonOptions"
-                @change="applyFilters"
-              />
-            </div>
-            <div class="min-w-[180px]">
-              <label class="input-label">{{ t('usage.balanceLedger.labels.referenceType') }}</label>
-              <input
-                v-model.trim="ledgerFilters.ref_type"
-                type="text"
-                class="input"
-                placeholder="usage_log"
-                @keyup.enter="applyFilters"
-              />
-            </div>
-            <div class="min-w-[160px]">
-              <label class="input-label">{{ t('usage.balanceLedger.labels.reference') }}</label>
-              <input
-                v-model.number="ledgerFilters.ref_id"
-                type="number"
-                min="1"
-                step="1"
-                class="input"
-                placeholder="ID"
-                @keyup.enter="applyFilters"
-              />
-            </div>
-            <div class="ml-auto flex items-center gap-3">
-              <button @click="applyFilters" :disabled="ledgerLoading || ledgerStatsLoading" class="btn btn-secondary">
-                {{ t('common.refresh') }}
-              </button>
-              <button @click="resetFilters" class="btn btn-secondary">
-                {{ t('common.reset') }}
-              </button>
-            </div>
-          </div>
-        </div>
         </div>
       </template>
 
@@ -325,261 +327,262 @@
           class="flex min-h-0 flex-1 flex-col"
           :aria-labelledby="activeTab === 'requests' ? 'user-usage-tab-requests' : 'user-usage-tab-balance-ledger'"
         >
-        <DataTable
-          v-if="activeTab === 'requests'"
-          :columns="columns"
-          :data="usageLogs"
-          :loading="loading"
-          :server-side-sort="true"
-          default-sort-key="created_at"
-          default-sort-order="desc"
-          @sort="handleSort"
-        >
-          <template #cell-api_key="{ row }">
-            <span class="text-sm text-gray-900 dark:text-white">{{
-              row.api_key?.name || '-'
-            }}</span>
-          </template>
+          <DataTable
+            v-if="activeTab === 'requests'"
+            :columns="columns"
+            :data="usageLogs"
+            :loading="loading"
+            :server-side-sort="true"
+            default-sort-key="created_at"
+            default-sort-order="desc"
+            @sort="handleSort"
+          >
+            <template #cell-api_key="{ row }">
+              <span class="block max-w-full break-all text-sm text-content">{{
+                row.api_key?.name || '-'
+              }}</span>
+            </template>
 
-          <template #cell-model="{ value }">
-            <span class="font-medium text-gray-900 dark:text-white">{{ value }}</span>
-          </template>
+            <template #cell-model="{ value }">
+              <span class="block max-w-full break-all font-medium text-content">{{ value }}</span>
+            </template>
 
-          <template #cell-reasoning_effort="{ row }">
-            <span class="text-sm text-gray-900 dark:text-white">
-              {{ formatReasoningEffort(row.reasoning_effort) }}
-            </span>
-          </template>
+            <template #cell-reasoning_effort="{ row }">
+              <span class="text-sm text-content">
+                {{ formatReasoningEffort(row.reasoning_effort) }}
+              </span>
+            </template>
 
-          <template #cell-endpoint="{ row }">
-            <span class="text-sm text-gray-600 dark:text-gray-300 block max-w-[320px] whitespace-normal break-all">
-              {{ formatUsageEndpoints(row) }}
-            </span>
-          </template>
+            <template #cell-endpoint="{ row }">
+              <span class="block max-w-[320px] whitespace-normal break-all text-sm text-content-muted">
+                {{ formatUsageEndpoints(row) }}
+              </span>
+            </template>
 
-          <template #cell-stream="{ row }">
-            <span
-              class="inline-flex items-center rounded px-2 py-0.5 text-xs font-medium"
-              :class="getRequestTypeBadgeClass(row)"
-            >
-              {{ getRequestTypeLabel(row) }}
-            </span>
-          </template>
-
-          <template #cell-billing_mode="{ row }">
-            <span class="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium"
-                  :class="getBillingModeBadgeClass(row.billing_mode)">
-              {{ getBillingModeLabel(row.billing_mode, t) }}
-            </span>
-          </template>
-
-          <template #cell-payment_source="{ row }">
-            <div class="flex flex-col gap-1 text-xs">
-              <span :class="paymentSourceClass(row)">{{ paymentSourceLabel(row) }}</span>
-              <span v-if="walletDeductionText(row)" class="text-gray-500 dark:text-gray-400">{{ walletDeductionText(row) }}</span>
-            </div>
-          </template>
-
-          <template #cell-tokens="{ row }">
-            <!-- 图片生成请求（仅按次计费时显示图片格式） -->
-            <div v-if="row.image_count > 0 && row.billing_mode === 'image'" class="flex items-center gap-1.5">
-              <svg
-                class="h-4 w-4 text-indigo-500"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
+            <template #cell-stream="{ row }">
+              <span
+                class="inline-flex items-center rounded px-2 py-0.5 text-xs font-medium"
+                :class="getRequestTypeBadgeClass(row)"
               >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-                />
-              </svg>
-              <span class="font-medium text-gray-900 dark:text-white">{{ row.image_count }}{{ $t('usage.imageUnit') }}</span>
-              <span class="text-gray-400">({{ row.image_size || '2K' }})</span>
-            </div>
-            <!-- Token 请求 -->
-            <div v-else class="flex items-center gap-1.5">
-              <div class="space-y-1.5 text-sm">
-                <!-- Input / Output Tokens -->
-                <div class="flex items-center gap-2">
-                  <!-- Input -->
-                  <div class="inline-flex items-center gap-1">
-                    <Icon name="arrowDown" size="sm" class="text-emerald-500" />
-                    <span class="font-medium text-gray-900 dark:text-white">{{
-                      row.input_tokens.toLocaleString()
-                    }}</span>
+                {{ getRequestTypeLabel(row) }}
+              </span>
+            </template>
+
+            <template #cell-billing_mode="{ row }">
+              <span class="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium"
+                    :class="getBillingModeBadgeClass(row.billing_mode)">
+                {{ getBillingModeLabel(row.billing_mode, t) }}
+              </span>
+            </template>
+
+            <template #cell-payment_source="{ row }">
+              <div class="flex flex-col gap-1 text-xs">
+                <span :class="paymentSourceClass(row)">{{ paymentSourceLabel(row) }}</span>
+                <span v-if="walletDeductionText(row)" class="text-content-subtle">{{ walletDeductionText(row) }}</span>
+              </div>
+            </template>
+
+            <template #cell-tokens="{ row }">
+              <!-- 图片生成请求（仅按次计费时显示图片格式） -->
+              <div v-if="row.image_count > 0 && row.billing_mode === 'image'" class="flex items-center gap-1.5">
+                <svg
+                  class="h-4 w-4 text-indigo-500"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+                  />
+                </svg>
+                <span class="font-medium text-gray-900 dark:text-white">{{ row.image_count }}{{ $t('usage.imageUnit') }}</span>
+                <span class="text-gray-400">({{ row.image_size || '2K' }})</span>
+              </div>
+              <!-- Token 请求 -->
+              <div v-else class="flex items-center gap-1.5">
+                <div class="space-y-1.5 text-sm">
+                  <!-- Input / Output Tokens -->
+                  <div class="flex items-center gap-2">
+                    <!-- Input -->
+                    <div class="inline-flex items-center gap-1">
+                      <Icon name="arrowDown" size="sm" class="text-emerald-500" />
+                      <span class="font-medium text-gray-900 dark:text-white">{{
+                        row.input_tokens.toLocaleString()
+                      }}</span>
+                    </div>
+                    <!-- Output -->
+                    <div class="inline-flex items-center gap-1">
+                      <Icon name="arrowUp" size="sm" class="text-violet-500" />
+                      <span class="font-medium text-gray-900 dark:text-white">{{
+                        row.output_tokens.toLocaleString()
+                      }}</span>
+                    </div>
                   </div>
-                  <!-- Output -->
-                  <div class="inline-flex items-center gap-1">
-                    <Icon name="arrowUp" size="sm" class="text-violet-500" />
-                    <span class="font-medium text-gray-900 dark:text-white">{{
-                      row.output_tokens.toLocaleString()
-                    }}</span>
+                  <!-- Cache Tokens (Read + Write) -->
+                  <div
+                    v-if="row.cache_read_tokens > 0 || row.cache_creation_tokens > 0"
+                    class="flex items-center gap-2"
+                  >
+                    <!-- Cache Read -->
+                    <div v-if="row.cache_read_tokens > 0" class="inline-flex items-center gap-1">
+                      <Icon name="inbox" size="sm" class="text-sky-500" />
+                      <span class="font-medium text-sky-600 dark:text-sky-400">{{
+                        formatCacheTokens(row.cache_read_tokens)
+                      }}</span>
+                    </div>
+                    <!-- Cache Write -->
+                    <div v-if="row.cache_creation_tokens > 0" class="inline-flex items-center gap-1">
+                      <Icon name="edit" size="sm" class="text-amber-500" />
+                      <span class="font-medium text-amber-600 dark:text-amber-400">{{
+                        formatCacheTokens(row.cache_creation_tokens)
+                      }}</span>
+                      <span v-if="row.cache_creation_1h_tokens > 0" class="inline-flex items-center rounded px-1 py-px text-[10px] font-medium leading-tight bg-orange-100 text-orange-600 ring-1 ring-inset ring-orange-200 dark:bg-orange-500/20 dark:text-orange-400 dark:ring-orange-500/30">1h</span>
+                      <span v-if="row.cache_ttl_overridden" :title="t('usage.cacheTtlOverriddenHint')" class="inline-flex items-center rounded px-1 py-px text-[10px] font-medium leading-tight bg-rose-100 text-rose-600 ring-1 ring-inset ring-rose-200 dark:bg-rose-500/20 dark:text-rose-400 dark:ring-rose-500/30 cursor-help">R</span>
+                    </div>
                   </div>
                 </div>
-                <!-- Cache Tokens (Read + Write) -->
-                <div
-                  v-if="row.cache_read_tokens > 0 || row.cache_creation_tokens > 0"
-                  class="flex items-center gap-2"
+                <!-- Token Detail Tooltip -->
+                <button
+                  type="button"
+                  class="group relative inline-flex min-h-11 min-w-11 cursor-help items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-dark-900"
+                  :aria-label="t('usage.tokenDetails')"
+                  :aria-expanded="isTokenTooltipActive(row)"
+                  aria-controls="user-usage-token-tooltip"
+                  :aria-describedby="isTokenTooltipActive(row) ? 'user-usage-token-tooltip' : undefined"
+                  @mouseenter="showTokenTooltip($event, row)"
+                  @mouseleave="hideTokenTooltipOnPointerLeave"
+                  @focus="showTokenTooltip($event, row)"
+                  @blur="hideTokenTooltip"
+                  @click="toggleTokenTooltip($event, row)"
+                  @keydown.esc.prevent.stop="hideTokenTooltipOnEscape"
                 >
-                  <!-- Cache Read -->
-                  <div v-if="row.cache_read_tokens > 0" class="inline-flex items-center gap-1">
-                    <Icon name="inbox" size="sm" class="text-sky-500" />
-                    <span class="font-medium text-sky-600 dark:text-sky-400">{{
-                      formatCacheTokens(row.cache_read_tokens)
-                    }}</span>
-                  </div>
-                  <!-- Cache Write -->
-                  <div v-if="row.cache_creation_tokens > 0" class="inline-flex items-center gap-1">
-                    <Icon name="edit" size="sm" class="text-amber-500" />
-                    <span class="font-medium text-amber-600 dark:text-amber-400">{{
-                      formatCacheTokens(row.cache_creation_tokens)
-                    }}</span>
-                    <span v-if="row.cache_creation_1h_tokens > 0" class="inline-flex items-center rounded px-1 py-px text-[10px] font-medium leading-tight bg-orange-100 text-orange-600 ring-1 ring-inset ring-orange-200 dark:bg-orange-500/20 dark:text-orange-400 dark:ring-orange-500/30">1h</span>
-                    <span v-if="row.cache_ttl_overridden" :title="t('usage.cacheTtlOverriddenHint')" class="inline-flex items-center rounded px-1 py-px text-[10px] font-medium leading-tight bg-rose-100 text-rose-600 ring-1 ring-inset ring-rose-200 dark:bg-rose-500/20 dark:text-rose-400 dark:ring-rose-500/30 cursor-help">R</span>
-                  </div>
+                  <span
+                    class="flex h-5 w-5 items-center justify-center rounded-full bg-gray-100 transition-colors group-hover:bg-blue-100 group-focus-visible:bg-blue-100 dark:bg-gray-700 dark:group-hover:bg-blue-900/50 dark:group-focus-visible:bg-blue-900/50"
+                  >
+                    <Icon
+                      name="infoCircle"
+                      size="xs"
+                      class="text-gray-400 group-hover:text-blue-500 dark:text-gray-500 dark:group-hover:text-blue-400"
+                    />
+                  </span>
+                </button>
+              </div>
+            </template>
+
+            <template #cell-cost="{ row }">
+              <div class="flex items-start gap-1.5 text-sm">
+                <div class="flex flex-col">
+                  <span class="font-medium text-brand">
+                    ${{ row.actual_cost.toFixed(6) }}
+                  </span>
+                  <span v-if="walletDeductionText(row)" class="text-xs text-content-subtle">{{ walletDeductionText(row) }}</span>
                 </div>
-              </div>
-              <!-- Token Detail Tooltip -->
-              <button
-                type="button"
-                class="group relative inline-flex min-h-11 min-w-11 cursor-help items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-dark-900"
-                :aria-label="t('usage.tokenDetails')"
-                :aria-expanded="isTokenTooltipActive(row)"
-                aria-controls="user-usage-token-tooltip"
-                :aria-describedby="isTokenTooltipActive(row) ? 'user-usage-token-tooltip' : undefined"
-                @mouseenter="showTokenTooltip($event, row)"
-                @mouseleave="hideTokenTooltipOnPointerLeave"
-                @focus="showTokenTooltip($event, row)"
-                @blur="hideTokenTooltip"
-                @click="toggleTokenTooltip($event, row)"
-                @keydown.esc.prevent.stop="hideTokenTooltipOnEscape"
-              >
-                <span
-                  class="flex h-5 w-5 items-center justify-center rounded-full bg-gray-100 transition-colors group-hover:bg-blue-100 group-focus-visible:bg-blue-100 dark:bg-gray-700 dark:group-hover:bg-blue-900/50 dark:group-focus-visible:bg-blue-900/50"
+                <!-- Cost Detail Tooltip -->
+                <button
+                  type="button"
+                  class="group relative inline-flex min-h-11 min-w-11 cursor-help items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-dark-900"
+                  :aria-label="t('usage.costDetails')"
+                  :aria-expanded="isTooltipActive(row)"
+                  aria-controls="user-usage-cost-tooltip"
+                  :aria-describedby="isTooltipActive(row) ? 'user-usage-cost-tooltip' : undefined"
+                  @mouseenter="showTooltip($event, row)"
+                  @mouseleave="hideTooltipOnPointerLeave"
+                  @focus="showTooltip($event, row)"
+                  @blur="hideTooltip"
+                  @click="toggleTooltip($event, row)"
+                  @keydown.esc.prevent.stop="hideTooltipOnEscape"
                 >
-                  <Icon
-                    name="infoCircle"
-                    size="xs"
-                    class="text-gray-400 group-hover:text-blue-500 dark:text-gray-500 dark:group-hover:text-blue-400"
-                  />
-                </span>
-              </button>
-            </div>
-          </template>
-
-          <template #cell-cost="{ row }">
-            <div class="flex items-start gap-1.5 text-sm">
-              <div class="flex flex-col">
-                <span class="font-medium text-green-600 dark:text-green-400">
-                  ${{ row.actual_cost.toFixed(6) }}
-                </span>
-                <span v-if="walletDeductionText(row)" class="text-xs text-gray-500 dark:text-gray-400">{{ walletDeductionText(row) }}</span>
+                  <span
+                    class="flex h-5 w-5 items-center justify-center rounded-full bg-gray-100 transition-colors group-hover:bg-blue-100 group-focus-visible:bg-blue-100 dark:bg-gray-700 dark:group-hover:bg-blue-900/50 dark:group-focus-visible:bg-blue-900/50"
+                  >
+                    <Icon
+                      name="infoCircle"
+                      size="xs"
+                      class="text-gray-400 group-hover:text-blue-500 dark:text-gray-500 dark:group-hover:text-blue-400"
+                    />
+                  </span>
+                </button>
               </div>
-              <!-- Cost Detail Tooltip -->
-              <button
-                type="button"
-                class="group relative inline-flex min-h-11 min-w-11 cursor-help items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-dark-900"
-                :aria-label="t('usage.costDetails')"
-                :aria-expanded="isTooltipActive(row)"
-                aria-controls="user-usage-cost-tooltip"
-                :aria-describedby="isTooltipActive(row) ? 'user-usage-cost-tooltip' : undefined"
-                @mouseenter="showTooltip($event, row)"
-                @mouseleave="hideTooltipOnPointerLeave"
-                @focus="showTooltip($event, row)"
-                @blur="hideTooltip"
-                @click="toggleTooltip($event, row)"
-                @keydown.esc.prevent.stop="hideTooltipOnEscape"
-              >
-                <span
-                  class="flex h-5 w-5 items-center justify-center rounded-full bg-gray-100 transition-colors group-hover:bg-blue-100 group-focus-visible:bg-blue-100 dark:bg-gray-700 dark:group-hover:bg-blue-900/50 dark:group-focus-visible:bg-blue-900/50"
-                >
-                  <Icon
-                    name="infoCircle"
-                    size="xs"
-                    class="text-gray-400 group-hover:text-blue-500 dark:text-gray-500 dark:group-hover:text-blue-400"
-                  />
-                </span>
-              </button>
-            </div>
-          </template>
+            </template>
 
-          <template #cell-latency="{ row }">
-            <UsageLatencyCell
-              :first-token-ms="row.first_token_ms"
-              :duration-ms="row.duration_ms"
-            />
-          </template>
+            <template #cell-latency="{ row }">
+              <UsageLatencyCell
+                :first-token-ms="row.first_token_ms"
+                :duration-ms="row.duration_ms"
+              />
+            </template>
 
-          <template #cell-created_at="{ value }">
-            <span class="text-sm text-gray-600 dark:text-gray-400">{{
-              formatDateTime(value)
-            }}</span>
-          </template>
+            <template #cell-created_at="{ value }">
+              <span class="text-sm text-content-muted">{{
+                formatDateTime(value)
+              }}</span>
+            </template>
 
-          <template #cell-user_agent="{ row }">
-            <span v-if="row.user_agent" class="text-sm text-gray-600 dark:text-gray-400 block max-w-[320px] whitespace-normal break-all" :title="row.user_agent">{{ formatUserAgent(row.user_agent) }}</span>
-            <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
-          </template>
+            <template #cell-user_agent="{ row }">
+              <span v-if="row.user_agent" class="block max-w-[320px] whitespace-normal break-all text-sm text-content-muted" :title="row.user_agent">{{ formatUserAgent(row.user_agent) }}</span>
+              <span v-else class="text-sm text-content-subtle">-</span>
+            </template>
 
-          <template #empty>
-            <EmptyState :message="t('usage.noRecords')" />
-          </template>
-        </DataTable>
-        <DataTable
-          v-else
-          :columns="ledgerColumns"
-          :data="balanceLedgerRows"
-          :loading="ledgerLoading"
-          :server-side-sort="true"
-          default-sort-key="created_at"
-          default-sort-order="desc"
-          :estimate-row-height="76"
-          :overscan="8"
-          row-key="id"
-          @sort="handleLedgerSort"
-        >
-          <template #cell-reason="{ row }">
-            <div class="flex flex-col gap-1">
-              <span class="font-medium text-gray-900 dark:text-white">{{ row.reasonLabel }}</span>
-              <span class="text-xs text-gray-500 dark:text-gray-400">{{ row.reason }}</span>
-            </div>
-          </template>
+            <template #empty>
+              <EmptyState :message="t('usage.noRecords')" />
+            </template>
+          </DataTable>
+          <DataTable
+            v-else
+            :columns="ledgerColumns"
+            :data="balanceLedgerRows"
+            :loading="ledgerLoading"
+            :server-side-sort="true"
+            default-sort-key="created_at"
+            default-sort-order="desc"
+            :estimate-row-height="76"
+            :overscan="8"
+            row-key="id"
+            @sort="handleLedgerSort"
+          >
+            <template #cell-reason="{ row }">
+              <div class="flex min-w-0 max-w-full flex-col gap-1">
+                <span class="break-words font-medium text-content">{{ row.reasonLabel }}</span>
+                <span class="break-all text-xs text-content-subtle">{{ row.reason }}</span>
+              </div>
+            </template>
 
-          <template #cell-amount="{ row }">
-            <span class="font-semibold" :class="row.direction === 'credit' ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'">
-              {{ row.amountLabel }}
-            </span>
-          </template>
+            <template #cell-amount="{ row }">
+              <span class="font-semibold" :class="row.direction === 'credit' ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'">
+                {{ row.amountLabel }}
+              </span>
+            </template>
 
-          <template #cell-balance_after="{ row }">
-            <span class="font-mono text-sm text-gray-700 dark:text-gray-300">{{ row.balanceAfterLabel }}</span>
-          </template>
+            <template #cell-balance_after="{ row }">
+              <span class="font-mono text-sm text-content-muted">{{ row.balanceAfterLabel }}</span>
+            </template>
 
-          <template #cell-remark="{ row }">
-            <span class="block max-w-[520px] whitespace-normal text-sm text-gray-600 dark:text-gray-300">
-              {{ row.remarkText }}
-            </span>
-          </template>
+            <template #cell-remark="{ row }">
+              <span class="block max-w-[520px] whitespace-normal break-words text-sm text-content-muted">
+                {{ row.remarkText }}
+              </span>
+            </template>
 
-          <template #cell-created_at="{ value }">
-            <span class="text-sm text-gray-600 dark:text-gray-400">{{
-              formatDateTime(value)
-            }}</span>
-          </template>
+            <template #cell-created_at="{ value }">
+              <span class="text-sm text-content-muted">{{
+                formatDateTime(value)
+              }}</span>
+            </template>
 
-          <template #empty>
-            <EmptyState :message="t('usage.balanceLedger.noRecords')" />
-          </template>
-        </DataTable>
+            <template #empty>
+              <EmptyState :message="t('usage.balanceLedger.noRecords')" />
+            </template>
+          </DataTable>
         </div>
       </template>
 
       <template #pagination>
         <Pagination
           v-if="activeTab === 'requests' && pagination.total > 0"
+          class="data-pagination"
           :page="pagination.page"
           :total="pagination.total"
           :page-size="pagination.page_size"
@@ -588,6 +591,7 @@
         />
         <Pagination
           v-else-if="activeTab === 'balanceLedger' && ledgerPagination.total > 0"
+          class="data-pagination"
           :page="ledgerPagination.page"
           :total="ledgerPagination.total"
           :page-size="ledgerPagination.page_size"
@@ -738,7 +742,7 @@
           <div class="flex items-center justify-between gap-6">
             <span class="text-gray-400">{{ t('usage.rate') }}</span>
             <span class="font-semibold text-blue-400"
-              >{{ formatMultiplier(tooltipData?.rate_multiplier || 1) }}x</span
+            >{{ formatMultiplier(tooltipData?.rate_multiplier || 1) }}x</span
             >
           </div>
           <div class="flex items-center justify-between gap-6">
@@ -748,7 +752,7 @@
           <div class="flex items-center justify-between gap-6 border-t border-gray-700 pt-1.5">
             <span class="text-gray-400">{{ t('usage.billed') }}</span>
             <span class="font-semibold text-green-400"
-              >${{ tooltipData?.actual_cost.toFixed(6) }}</span
+            >${{ tooltipData?.actual_cost.toFixed(6) }}</span
             >
           </div>
         </div>
@@ -802,6 +806,8 @@ const appStore = useAppStore()
 
 let abortController: AbortController | null = null
 let ledgerAbortController: AbortController | null = null
+let statsAbortController: AbortController | null = null
+let exportAbortController: AbortController | null = null
 
 type UsageTab = 'requests' | 'balanceLedger'
 type BalanceLedgerTableRow = UserBalanceLedgerEntry & {
@@ -1200,14 +1206,32 @@ type UsageTableQueryParams = UsageQueryParams & {
   sort_order?: 'asc' | 'desc'
 }
 
-const buildUsageQueryParams = (page: number, pageSize: number): UsageTableQueryParams => ({
+type UsageQuerySnapshot = Omit<UsageTableQueryParams, 'page' | 'page_size'>
+
+const buildUsageQuerySnapshot = (): UsageQuerySnapshot => {
+  const { page: _page, page_size: _pageSize, ...filterParams } = filters.value
+  return {
+    ...filterParams,
+    ...buildExactTimeParams(),
+    sort_by: sortState.sort_by,
+    sort_order: sortState.sort_order
+  }
+}
+
+const buildUsageQueryParams = (
+  page: number,
+  pageSize: number,
+  snapshot: UsageQuerySnapshot = buildUsageQuerySnapshot()
+): UsageTableQueryParams => ({
+  ...snapshot,
   page,
-  page_size: pageSize,
-  ...filters.value,
-  ...buildExactTimeParams(),
-  sort_by: sortState.sort_by,
-  sort_order: sortState.sort_order
+  page_size: pageSize
 })
+
+const isAbortError = (error: unknown): boolean => {
+  const abortError = error as { name?: string; code?: string }
+  return abortError?.name === 'AbortError' || abortError?.code === 'ERR_CANCELED'
+}
 
 const buildBalanceLedgerQueryParams = (page: number, pageSize: number): UserBalanceLedgerQueryParams => {
   const refID = Number(ledgerFilters.value.ref_id)
@@ -1375,17 +1399,40 @@ const loadApiKeys = async () => {
 }
 
 const loadUsageStats = async () => {
+  if (statsAbortController) {
+    statsAbortController.abort()
+  }
+  const currentAbortController = new AbortController()
+  statsAbortController = currentAbortController
+  const { signal } = currentAbortController
+
   try {
     const apiKeyId = filters.value.api_key_id ? Number(filters.value.api_key_id) : undefined
     const stats = await usageAPI.getStatsByDateRange(
       filters.value.start_date || startDate.value,
       filters.value.end_date || endDate.value,
       apiKeyId,
-      buildExactTimeParams()
+      buildExactTimeParams(),
+      { signal }
     )
+    if (signal.aborted || statsAbortController !== currentAbortController) {
+      return
+    }
     usageStats.value = stats
   } catch (error) {
+    if (
+      signal.aborted ||
+      statsAbortController !== currentAbortController ||
+      isAbortError(error)
+    ) {
+      return
+    }
+    usageStats.value = null
     console.error('Failed to load usage stats:', error)
+  } finally {
+    if (statsAbortController === currentAbortController) {
+      statsAbortController = null
+    }
   }
 }
 
@@ -1726,27 +1773,58 @@ const escapeCSVValue = (value: unknown): string => {
 }
 
 const exportToCSV = async () => {
-  if (pagination.total === 0) {
-    appStore.showWarning(t('usage.noDataToExport'))
-    return
-  }
+  if (exporting.value) return
+
+  const querySnapshot = buildUsageQuerySnapshot()
+  const exportFilename = `usage_${querySnapshot.start_date}_to_${querySnapshot.end_date}.csv`
+  const currentAbortController = new AbortController()
+  exportAbortController = currentAbortController
+  const { signal } = currentAbortController
 
   exporting.value = true
   appStore.showInfo(t('usage.preparingExport'))
 
   try {
-    const allLogs: UsageLog[] = []
     const pageSize = 100 // Use a larger page size for export to reduce requests
-    const totalRequests = Math.ceil(pagination.total / pageSize)
+    const firstResponse = await usageAPI.query(
+      buildUsageQueryParams(1, pageSize, querySnapshot),
+      { signal }
+    )
+    if (signal.aborted || exportAbortController !== currentAbortController) {
+      return
+    }
 
-    for (let page = 1; page <= totalRequests; page++) {
-      const response = await usageAPI.query(buildUsageQueryParams(page, pageSize))
+    if (!Number.isSafeInteger(firstResponse.total) || firstResponse.total < 0) {
+      throw new Error(`Invalid usage export total: ${String(firstResponse.total)}`)
+    }
+
+    const frozenTotal = firstResponse.total
+    if (frozenTotal === 0) {
+      if (firstResponse.items.length > 0) {
+        throw new Error('Usage export response contains rows with a zero total')
+      }
+      appStore.showWarning(t('usage.noDataToExport'))
+      return
+    }
+
+    const allLogs: UsageLog[] = [...firstResponse.items]
+    const totalRequests = Math.ceil(frozenTotal / pageSize)
+
+    for (let page = 2; page <= totalRequests; page++) {
+      const response = await usageAPI.query(
+        buildUsageQueryParams(page, pageSize, querySnapshot),
+        { signal }
+      )
+      if (signal.aborted || exportAbortController !== currentAbortController) {
+        return
+      }
       allLogs.push(...response.items)
     }
 
-    if (allLogs.length === 0) {
-      appStore.showWarning(t('usage.noDataToExport'))
-      return
+    if (allLogs.length !== frozenTotal) {
+      throw new Error(
+        `Usage export changed while being prepared: expected ${frozenTotal} rows, received ${allLogs.length}`
+      )
     }
 
     const headers = [
@@ -1803,18 +1881,31 @@ const exportToCSV = async () => {
 
     const blob = new Blob(['\uFEFF', csvContent], { type: 'text/csv;charset=utf-8;' })
     const url = window.URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `usage_${filters.value.start_date}_to_${filters.value.end_date}.csv`
-    link.click()
-    window.URL.revokeObjectURL(url)
+    try {
+      const link = document.createElement('a')
+      link.href = url
+      link.download = exportFilename
+      link.click()
+    } finally {
+      window.URL.revokeObjectURL(url)
+    }
 
     appStore.showSuccess(t('usage.exportSuccess'))
   } catch (error) {
+    if (
+      signal.aborted ||
+      exportAbortController !== currentAbortController ||
+      isAbortError(error)
+    ) {
+      return
+    }
     appStore.showError(t('usage.exportFailed'))
     console.error('CSV Export failed:', error)
   } finally {
-    exporting.value = false
+    if (exportAbortController === currentAbortController) {
+      exportAbortController = null
+      exporting.value = false
+    }
   }
 }
 
@@ -1829,5 +1920,11 @@ onUnmounted(() => {
     abortController.abort()
   }
   abortBalanceLedgerRequest()
+  if (statsAbortController) {
+    statsAbortController.abort()
+  }
+  if (exportAbortController) {
+    exportAbortController.abort()
+  }
 })
 </script>

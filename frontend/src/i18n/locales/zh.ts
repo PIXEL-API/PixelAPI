@@ -921,13 +921,18 @@ export default {
 	neverUsed: "从未使用",
     selectedGroups: "已选 {count} 个分组",
     importTitle: "导入个人账号",
-    importHint: "粘贴账号凭证或导入文件，个人导入只会创建官方 OAuth 账号。",
+    importHint:
+      "粘贴账号凭证或导入文件。OpenAI 可选择 OAuth / Refresh Token 或 Codex Agent Identity，其他平台创建官方 OAuth 账号。",
+    importHintAgentIdentity:
+      "粘贴或选择 Codex Agent Identity JSON。账号导入时默认为当前用户可见的私有账号；导入后可主动切换为公共账号，公开共享前需通过服务端校验。",
     importWarning:
       "单次最多导入 {max} 个账号。支持 Sub2API OAuth JSON、Codex-Manager ChatGPT Token JSON、OpenAI Refresh Token、Claude Session Key；API Key、URL、Upstream、Cookie 会被拒绝。",
     importWarningChoosePlatform:
       "请先选择导入平台。单次最多导入 {max} 个账号；API Key、URL、Upstream、Cookie 会被拒绝。",
     importWarningOpenAI:
       "单次最多导入 {max} 个 OpenAI 账号。可导入等级由管理员后台配置；标记为需要代理登录的等级必须通过账号登录导入。",
+    importWarningAgentIdentity:
+      "单次最多导入 {max} 个 Codex Agent Identity。仅接受完整的 Agent Identity JSON；普通 OAuth JSON、Refresh Token、API Key、URL、Upstream 与 Cookie 会被拒绝。",
     importWarningClaude:
       "单次最多导入 {max} 个 Claude 账号。支持 Sub2API OAuth JSON 或 Claude Session Key。",
     importWarningGemini:
@@ -943,6 +948,16 @@ export default {
     importPlatformGemini: "Gemini 官方账号",
     importPlatformAntigravity: "Antigravity 官方账号",
     importPlatformGrok: "Grok / xAI 官方账号",
+    importAuthMode: "OpenAI 认证方式",
+    importAuthModeOAuth: "OAuth / Refresh Token",
+    importAuthModeOAuthDesc: "导入 OAuth JSON 或 Refresh Token，并按账号等级校验",
+    importAuthModeAgentIdentity: "Codex Agent Identity",
+    importAuthModeAgentIdentityDesc: "导入 Agent Identity JSON，按凭证中的 Team 自动隔离",
+    importAgentIdentityNoticeTitle: "Agent Identity 导入规则",
+    importAgentIdentityTeamIsolation: "Team 根据 Agent Identity 自动识别并隔离，无需手动选择。",
+    importAgentIdentityPrivate: "账号导入时默认为私有；导入后可主动切换为公共，公开共享前需通过服务端校验。",
+    importAgentIdentityNoOAuthExpiry: "Agent Identity 不使用 OAuth 过期时间；凭证有效性由服务端校验。",
+    importAgentIdentityJSONRequired: "Codex Agent Identity 仅接受完整的 JSON 对象或 JSON 数组。",
     importPlatformHintClaude:
       "Claude 导入不会使用 OpenAI 账号等级。请选择 Claude OAuth JSON 或 Claude Session Key。",
     importPlatformHintGemini:
@@ -1030,11 +1045,14 @@ export default {
     importTextLabel: "账号数据",
     importTextPlaceholder:
       "普通 Token 可每行一个；完整 JSON / JSON 数组可整段粘贴。",
+    importTextPlaceholderAgentIdentity: "粘贴完整的 Codex Agent Identity JSON 或 JSON 数组",
     importTextHint:
       "普通 Token 默认按 OpenAI Refresh Token 处理；Claude Session Key 会自动识别并兑换为 OAuth 凭证。",
     importTextHintChoosePlatform: "先选择平台后再粘贴对应平台的 OAuth 凭证。",
     importTextHintOpenAI:
       "OpenAI Free / Plus / Team 可粘贴 OAuth JSON 或 Refresh Token；Pro 请通过账号登录导入。",
+    importTextHintAgentIdentity:
+      "仅支持完整的 Codex Agent Identity JSON 或 JSON 数组；文件导入仅接受 .json。",
     importTextHintClaude:
       "Claude 可粘贴 Claude Session Key 或包含 Anthropic/Claude 平台信息的 OAuth JSON。",
     importTextHintGemini:
@@ -1061,7 +1079,7 @@ export default {
     exportSuccess: "账号导出成功",
     exportFailed: "账号导出失败",
     importResult: "导入结果",
-    importResultSummary: "创建 {created}，跳过 {skipped}，失败 {failed}",
+    importResultSummary: "创建 {created}，更新 {updated}，跳过 {skipped}，失败 {failed}",
     importErrors: "导入明细",
     importInvalidFile:
       "导入文件无效：需要账号数组或包含 accounts 的 Sub2API 导出文件。",
@@ -1076,9 +1094,9 @@ export default {
     importDisallowedCredential: "个人账号不允许导入该凭证字段：{field}",
     importParseFailed: "JSON 文件解析失败",
     importFailed: "账号导入失败",
-    importSuccess: "导入完成：创建 {created} 个账号",
+    importSuccess: "导入完成：创建 {created} 个账号，更新 {updated} 个账号",
     importCompletedWithIssues:
-      "导入完成：创建 {created}，跳过 {skipped}，失败 {failed}",
+      "导入完成：创建 {created}，更新 {updated}，跳过 {skipped}，失败 {failed}",
   },
 
   // API Keys
@@ -1104,6 +1122,7 @@ export default {
     id: "ID",
     apiKey: "API 密钥",
     group: "分组",
+    groupFilterLabel: "按分组筛选",
     noGroup: "无分组",
     searchGroup: "搜索分组...",
     noGroupFound: "未找到匹配的分组",
@@ -1127,6 +1146,7 @@ export default {
     groupLabel: "分组",
     selectGroup: "选择分组",
     statusLabel: "状态",
+    statusFilterLabel: "按状态筛选",
     selectStatus: "选择状态",
     saving: "保存中...",
     noKeysYet: "暂无 API 密钥",
@@ -1144,6 +1164,26 @@ export default {
     groupChangedSuccess: "分组更换成功",
     failedToChangeGroup: "更换分组失败",
     groupRequired: "请选择分组",
+    groupSelectorLabel: "选择 API 密钥分组",
+    groupRoutes: {
+      title: "多分组路由",
+      description: "开启后可按优先级和权重为同一个 API 密钥配置多个分组",
+      configuration: "路由配置",
+      enabled: "启用",
+      group: "分组",
+      priority: "优先级",
+      weight: "权重",
+      cooldownSeconds: "冷却秒数",
+      addRoute: "添加路由",
+      removeRoute: "删除第 {index} 条路由",
+      validation: {
+        groupRequired: "多分组路由中存在未选择的分组",
+        duplicateGroup: "多分组路由不能包含重复分组",
+        priority: "多分组路由优先级必须是不小于 0 的整数",
+        weight: "多分组路由权重必须是不小于 1 的整数",
+        cooldownSeconds: "多分组路由冷却秒数必须是不小于 0 的整数",
+      },
+    },
     accountShareConflict: {
       deleteTitle: "暂时无法删除 API 密钥",
       changeGroupTitle: "暂时无法更换分组",
@@ -1166,9 +1206,12 @@ export default {
     total: "近30天",
     quota: "额度",
     lastUsedAt: "上次使用时间",
+    lastUsedIP: "最近使用 IP",
     useKey: "使用密钥",
     useKeyModal: {
       title: "使用 API 密钥",
+      clientTabsLabel: "客户端配置",
+      shellTabsLabel: "操作系统与终端",
       description: "将以下环境变量添加到您的终端配置文件或直接在终端中运行。",
       copy: "复制",
       copied: "已复制",
@@ -1228,9 +1271,10 @@ export default {
       },
     },
     customKeyLabel: "自定义密钥",
-    customKeyPlaceholder: "输入自定义密钥（至少16个字符）",
-    customKeyHint: "仅允许字母、数字、下划线和连字符，最少16个字符。",
+    customKeyPlaceholder: "输入自定义密钥（16–128 个字符）",
+    customKeyHint: "仅允许字母、数字、下划线和连字符，长度为 16–128 个字符。",
     customKeyTooShort: "自定义密钥至少需要16个字符",
+    customKeyTooLong: "自定义密钥不能超过 128 个字符",
     customKeyInvalidChars: "自定义密钥只能包含字母、数字、下划线和连字符",
     customKeyRequired: "请输入自定义密钥",
     ipRestriction: "IP 限制",
@@ -1454,7 +1498,10 @@ export default {
     unknown: "未知",
     in: "输入",
     out: "输出",
+    imageInputTokens: "图片输入 Token",
     inputTokenPrice: "输入单价",
+    imageInputTokenPrice: "图片输入单价",
+    imageInputCost: "图片输入成本",
     outputTokenPrice: "输出单价",
     perMillionTokens: "/ 1M Token",
     unitPrice: "单次价格",
@@ -2125,6 +2172,11 @@ export default {
   table: {
     expandActions: "展开更多操作",
     collapseActions: "收起操作",
+    sortBy: "排序字段",
+    sortFieldPlaceholder: "选择字段",
+    sortDirection: "排序方向",
+    sortAscending: "升序",
+    sortDescending: "降序",
   },
 
   // Pagination
@@ -7190,12 +7242,12 @@ export default {
         dataRetention: "数据保留策略",
         enableCleanup: "启用数据清理",
         cleanupSchedule: "清理计划（Cron）",
-        cleanupScheduleHint: "例如：0 2 * * * 表示每天凌晨2点",
+        cleanupScheduleHint: "例如：0 4 * * * 表示每天按系统配置时区凌晨 4 点执行；保存后即时生效",
         errorLogRetentionDays: "错误日志保留天数",
         minuteMetricsRetentionDays: "分钟指标保留天数",
         hourlyMetricsRetentionDays: "小时指标保留天数",
         retentionDaysHint:
-          "建议保留 7-90 天，过长会占用存储空间；填 0 表示每次定时清理时清空所有历史",
+          "建议保留 7-90 天，过长会占用存储空间；填 0 表示禁用对应类型的清理",
         aggregation: "预聚合任务",
         enableAggregation: "启用预聚合任务",
         aggregationHint: "预聚合可提升长时间窗口查询性能",
@@ -7233,7 +7285,7 @@ export default {
         validation: {
           title: "请先修正以下问题",
           retentionDaysRange:
-            "保留天数必须在 0-365 天之间（0 = 每次清理时清空所有）",
+            "保留天数必须在 0-365 天之间（0 = 禁用对应类型的清理）",
           slaMinPercentRange: "SLA最低百分比必须在0-100之间",
           ttftP99MaxRange: "TTFT P99最大值必须大于等于0",
           requestErrorRateMaxRange: "请求错误率最大值必须在0-100之间",
@@ -7369,12 +7421,19 @@ export default {
           withdrawalRateLimitWindowDays: "统计周期（天）",
           withdrawalRateLimitMax: "周期内最多申请次数",
           withdrawalRateLimitMaxHint: "填写 0 表示不限制提现申请次数。",
+          withdrawalRateLimitExemptAmount: "大额免限门槛（元）",
+          withdrawalRateLimitExemptAmountHint:
+            "单笔金额严格超过该值时不受频次限制，也不占用普通提现次数；填写 0 表示关闭大额豁免。",
           withdrawalRateLimitSummary: "当前限制：每 {days} 天最多 {max} 次。",
+          withdrawalRateLimitExemptSummary:
+            "单笔超过 ¥{amount} 的提现不受次数限制。",
           withdrawalRateLimitUnlimited: "当前不限制提现申请次数。",
           withdrawalRateLimitWindowDaysError:
             "提现统计周期必须是 1 到 365 之间的整数。",
           withdrawalRateLimitMaxError:
             "提现申请次数必须是 0 到 1000 之间的整数。",
+          withdrawalRateLimitExemptAmountError:
+            "大额免限门槛必须是大于等于 0、且最多保留两位小数的金额。",
         },
         riskControl: {
           title: "内容风控",

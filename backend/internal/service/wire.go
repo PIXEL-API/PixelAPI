@@ -341,14 +341,17 @@ func ProvideOpsAlertEvaluatorService(
 // channelMonitorSvc 让维护任务（聚合 + 历史/聚合软删）跟随 ops 清理 cron 一起跑，
 // 共享 leader lock + heartbeat。
 func ProvideOpsCleanupService(
+	opsService *OpsService,
 	opsRepo OpsRepository,
+	settingRepo SettingRepository,
 	db *sql.DB,
 	redisClient *redis.Client,
 	cfg *config.Config,
 	channelMonitorSvc *ChannelMonitorService,
 	backupSvc *BackupService,
 ) *OpsCleanupService {
-	svc := NewOpsCleanupService(opsRepo, db, redisClient, cfg, channelMonitorSvc, backupSvc)
+	svc := NewOpsCleanupService(opsRepo, settingRepo, db, redisClient, cfg, channelMonitorSvc, backupSvc)
+	opsService.setCleanupSettingsApplier(svc)
 	svc.Start()
 	return svc
 }
@@ -563,6 +566,7 @@ func ProvideAccountService(
 	privateGroupProvisioner UserPrivateGroupProvisioner,
 	systemNoticeService *SystemNoticeService,
 	settingService *SettingService,
+	agentIdentityWSInvalidator *AgentIdentityWSInvalidatorProxy,
 ) *AccountService {
 	svc := NewAccountService(accountRepo, groupRepo, userRepo, userSubRepo, proxyRepo)
 	svc.SetAccountSharePolicyRepository(accountSharePolicyRepo)
@@ -570,6 +574,7 @@ func ProvideAccountService(
 	svc.SetUserPrivateGroupProvisioner(privateGroupProvisioner)
 	svc.SetSystemNoticeService(systemNoticeService)
 	svc.SetSettingService(settingService)
+	svc.SetAgentIdentityWSInvalidator(agentIdentityWSInvalidator)
 	return svc
 }
 
@@ -844,6 +849,7 @@ func ProvideAdminService(
 	privacyClientFactory PrivacyClientFactory,
 	privateGroupProvisioner UserPrivateGroupProvisioner,
 	systemNoticeService *SystemNoticeService,
+	agentIdentityWSInvalidator *AgentIdentityWSInvalidatorProxy,
 ) AdminService {
 	svc := NewAdminService(
 		userRepo,
@@ -866,7 +872,8 @@ func ProvideAdminService(
 		privacyClientFactory,
 	)
 	svc = SetAdminUserPrivateGroupProvisioner(svc, privateGroupProvisioner)
-	return SetAdminSystemNoticeService(svc, systemNoticeService)
+	svc = SetAdminSystemNoticeService(svc, systemNoticeService)
+	return SetAdminAgentIdentityWSInvalidator(svc, agentIdentityWSInvalidator)
 }
 
 // ProviderSet is the Wire provider set for all services

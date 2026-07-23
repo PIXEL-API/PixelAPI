@@ -1,8 +1,17 @@
 <template>
-  <div class="relative" ref="containerRef">
+  <div
+    ref="containerRef"
+    class="relative"
+    @keydown="handleKeydown"
+  >
     <button
+      :id="triggerId"
+      ref="triggerRef"
       type="button"
       @click="toggle"
+      :aria-expanded="isOpen"
+      aria-haspopup="dialog"
+      :aria-controls="dropdownId"
       :class="['date-picker-trigger', isOpen && 'date-picker-trigger-open']"
     >
       <span class="date-picker-icon">
@@ -21,13 +30,24 @@
     </button>
 
     <Transition name="date-picker-dropdown">
-      <div v-if="isOpen" class="date-picker-dropdown">
+      <div
+        v-if="isOpen"
+        :id="dropdownId"
+        ref="dropdownRef"
+        class="date-picker-dropdown"
+        role="dialog"
+        :aria-labelledby="triggerId"
+        :data-placement="dropdownPosition"
+        :style="dropdownStyle"
+      >
         <!-- Quick presets -->
         <div class="date-picker-presets">
           <button
             v-for="preset in presets"
             :key="preset.value"
+            type="button"
             @click="selectPreset(preset)"
+            :aria-pressed="isPresetActive(preset)"
             :class="['date-picker-preset', isPresetActive(preset) && 'date-picker-preset-active']"
           >
             {{ t(preset.labelKey) }}
@@ -39,8 +59,9 @@
         <!-- Custom date range inputs -->
         <div class="date-picker-custom">
           <div class="date-picker-field">
-            <label class="date-picker-label">{{ t('dates.startDate') }}</label>
+            <label :for="startInputId" class="date-picker-label">{{ t('dates.startDate') }}</label>
             <input
+              :id="startInputId"
               type="date"
               v-model="localStartDate"
               :max="localEndDate || tomorrow"
@@ -52,8 +73,9 @@
             <Icon name="arrowRight" size="sm" class="text-gray-400" />
           </div>
           <div class="date-picker-field">
-            <label class="date-picker-label">{{ t('dates.endDate') }}</label>
+            <label :for="endInputId" class="date-picker-label">{{ t('dates.endDate') }}</label>
             <input
+              :id="endInputId"
               type="date"
               v-model="localEndDate"
               :min="localStartDate"
@@ -66,7 +88,7 @@
 
         <!-- Apply button -->
         <div class="date-picker-actions">
-          <button @click="apply" class="date-picker-apply">
+          <button type="button" @click="apply" class="date-picker-apply">
             {{ t('dates.apply') }}
           </button>
         </div>
@@ -76,7 +98,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 
@@ -102,11 +124,49 @@ const emit = defineEmits<Emits>()
 
 const { t, locale } = useI18n()
 
+const instanceId = `date-range-${Math.random().toString(36).substring(2, 9)}`
+const triggerId = `${instanceId}-trigger`
+const dropdownId = `${instanceId}-dialog`
+const startInputId = `${instanceId}-start`
+const endInputId = `${instanceId}-end`
+const VIEWPORT_PADDING = 16
+const DROPDOWN_GAP = 4
+const DEFAULT_DROPDOWN_WIDTH = 320
+const DEFAULT_DROPDOWN_HEIGHT = 300
 const isOpen = ref(false)
 const containerRef = ref<HTMLElement | null>(null)
+const triggerRef = ref<HTMLButtonElement | null>(null)
+const dropdownRef = ref<HTMLElement | null>(null)
+const dropdownPosition = ref<'bottom' | 'top'>('bottom')
+const dropdownGeometry = ref({
+  left: 0,
+  maxHeight: DEFAULT_DROPDOWN_HEIGHT,
+  offset: 0
+})
 const localStartDate = ref(props.startDate)
 const localEndDate = ref(props.endDate)
-const activePreset = ref<string | null>('last24Hours')
+const activePreset = ref<string | null>(null)
+const committedSelection = ref<{
+  startDate: string
+  endDate: string
+  preset: string | null
+} | null>(null)
+
+const dropdownStyle = computed(() => {
+  const geometry = dropdownGeometry.value
+  const style: Record<string, string> = {
+    left: `${geometry.left}px`,
+    maxWidth: 'calc(100vw - 2rem)',
+    maxHeight: `${geometry.maxHeight}px`
+  }
+
+  if (dropdownPosition.value === 'top') {
+    style.bottom = `${geometry.offset}px`
+  } else {
+    style.top = `${geometry.offset}px`
+  }
+  return style
+})
 
 const today = computed(() => {
   // Use local timezone to avoid UTC timezone issues
@@ -255,6 +315,10 @@ const onDateChange = () => {
   // Check if current dates match any preset
   activePreset.value = null
   for (const preset of presets) {
+    // A rolling 24-hour window cannot be reconstructed from date-only fields.
+    // Only an explicit click may select this preset; otherwise yesterday→today
+    // must remain a calendar range.
+    if (preset.value === 'last24Hours') continue
     const range = preset.getRange()
     if (range.start === localStartDate.value && range.end === localEndDate.value) {
       activePreset.value = preset.value
@@ -263,11 +327,125 @@ const onDateChange = () => {
   }
 }
 
+const syncDraftFromProps = () => {
+  localStartDate.value = props.startDate
+  localEndDate.value = props.endDate
+
+  const committed = committedSelection.value
+  if (
+    committed &&
+    committed.startDate === props.startDate &&
+    committed.endDate === props.endDate
+  ) {
+    activePreset.value = committed.preset
+    return
+  }
+
+  onDateChange()
+  committedSelection.value = {
+    startDate: props.startDate,
+    endDate: props.endDate,
+    preset: activePreset.value
+  }
+}
+
+const clamp = (value: number, min: number, max: number): number => {
+  return Math.min(Math.max(value, min), Math.max(min, max))
+}
+
+const updateDropdownGeometry = (
+  rect: DOMRect,
+  measuredWidth: number,
+  measuredHeight: number
+) => {
+  const availableWidth = Math.max(0, window.innerWidth - VIEWPORT_PADDING * 2)
+  const dropdownWidth = Math.min(measuredWidth, availableWidth)
+  const viewportLeft = clamp(
+    rect.left,
+    VIEWPORT_PADDING,
+    window.innerWidth - VIEWPORT_PADDING - dropdownWidth
+  )
+  const spaceBelow = Math.max(
+    0,
+    window.innerHeight - rect.bottom - DROPDOWN_GAP - VIEWPORT_PADDING
+  )
+  const spaceAbove = Math.max(0, rect.top - DROPDOWN_GAP - VIEWPORT_PADDING)
+  const position = spaceBelow < measuredHeight && spaceAbove > spaceBelow ? 'top' : 'bottom'
+
+  dropdownPosition.value = position
+  dropdownGeometry.value = {
+    left: viewportLeft - rect.left,
+    maxHeight: position === 'top' ? spaceAbove : spaceBelow,
+    offset: rect.height + DROPDOWN_GAP
+  }
+}
+
+const calculateDropdownPosition = () => {
+  if (!containerRef.value || !isOpen.value) return
+  const rect = containerRef.value.getBoundingClientRect()
+  const fallbackWidth = Math.min(
+    DEFAULT_DROPDOWN_WIDTH,
+    Math.max(0, window.innerWidth - VIEWPORT_PADDING * 2)
+  )
+  const measuredWidth = dropdownRef.value?.offsetWidth || fallbackWidth
+  const measuredHeight = dropdownRef.value?.scrollHeight ||
+    dropdownRef.value?.offsetHeight ||
+    DEFAULT_DROPDOWN_HEIGHT
+  updateDropdownGeometry(rect, measuredWidth, measuredHeight)
+
+  nextTick(() => {
+    if (!dropdownRef.value || !containerRef.value || !isOpen.value) return
+    const currentRect = containerRef.value.getBoundingClientRect()
+    const dropdownWidth = dropdownRef.value.offsetWidth || measuredWidth
+    const dropdownHeight = dropdownRef.value.scrollHeight ||
+      dropdownRef.value.offsetHeight ||
+      measuredHeight
+    updateDropdownGeometry(currentRect, dropdownWidth, dropdownHeight)
+  })
+}
+
 const toggle = () => {
-  isOpen.value = !isOpen.value
+  if (isOpen.value) {
+    closePicker(false)
+    return
+  }
+
+  syncDraftFromProps()
+  isOpen.value = true
+}
+
+const closePicker = (restoreFocus = false, discardDraft = true) => {
+  if (!isOpen.value) return
+  isOpen.value = false
+  if (discardDraft) syncDraftFromProps()
+  if (restoreFocus) triggerRef.value?.focus()
+}
+
+const handleKeydown = (event: KeyboardEvent) => {
+  if (event.key !== 'Escape' || !isOpen.value) return
+  event.preventDefault()
+  event.stopPropagation()
+  closePicker(true)
+}
+
+const handleDocumentFocusIn = (event: FocusEvent) => {
+  const target = event.target
+  if (
+    isOpen.value &&
+    target instanceof Node &&
+    containerRef.value &&
+    !containerRef.value.contains(target)
+  ) {
+    closePicker(false)
+  }
 }
 
 const apply = () => {
+  committedSelection.value = {
+    startDate: localStartDate.value,
+    endDate: localEndDate.value,
+    preset: activePreset.value
+  }
   emit('update:startDate', localStartDate.value)
   emit('update:endDate', localEndDate.value)
   emit('change', {
@@ -275,54 +453,53 @@ const apply = () => {
     endDate: localEndDate.value,
     preset: activePreset.value
   })
-  isOpen.value = false
+  closePicker(true, false)
 }
 
 const handleClickOutside = (event: MouseEvent) => {
   if (containerRef.value && !containerRef.value.contains(event.target as Node)) {
-    isOpen.value = false
+    closePicker(false)
   }
 }
 
-const handleEscape = (event: KeyboardEvent) => {
-  if (event.key === 'Escape' && isOpen.value) {
-    isOpen.value = false
-  }
-}
-
-// Sync local state with props
+// Sync local state with externally committed values without erasing an explicitly
+// applied rolling preset when its date-only display values are echoed via v-model.
 watch(
-  () => props.startDate,
-  (val) => {
-    localStartDate.value = val
-    onDateChange()
-  }
+  [() => props.startDate, () => props.endDate],
+  syncDraftFromProps
 )
 
-watch(
-  () => props.endDate,
-  (val) => {
-    localEndDate.value = val
-    onDateChange()
+watch(isOpen, (open) => {
+  if (open) {
+    calculateDropdownPosition()
+    window.addEventListener('scroll', calculateDropdownPosition, {
+      capture: true,
+      passive: true
+    })
+    window.addEventListener('resize', calculateDropdownPosition)
+  } else {
+    window.removeEventListener('scroll', calculateDropdownPosition, { capture: true })
+    window.removeEventListener('resize', calculateDropdownPosition)
   }
-)
+})
 
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
-  document.addEventListener('keydown', handleEscape)
-  // Initialize active preset detection
-  onDateChange()
+  document.addEventListener('focusin', handleDocumentFocusIn)
+  syncDraftFromProps()
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
-  document.removeEventListener('keydown', handleEscape)
+  document.removeEventListener('focusin', handleDocumentFocusIn)
+  window.removeEventListener('scroll', calculateDropdownPosition, { capture: true })
+  window.removeEventListener('resize', calculateDropdownPosition)
 })
 </script>
 
 <style scoped>
 .date-picker-trigger {
-  @apply flex items-center gap-2;
+  @apply flex min-h-11 items-center gap-2;
   @apply rounded-lg px-3 py-2 text-sm;
   @apply bg-white dark:bg-dark-800;
   @apply border border-gray-200 dark:border-dark-600;
@@ -350,13 +527,14 @@ onUnmounted(() => {
 }
 
 .date-picker-dropdown {
-  @apply absolute left-0 z-[100] mt-2;
+  @apply absolute z-[100];
   @apply bg-white dark:bg-dark-800;
   @apply rounded-xl;
   @apply border border-gray-200 dark:border-dark-700;
   @apply shadow-lg shadow-black/10 dark:shadow-black/30;
-  @apply overflow-hidden;
-  @apply min-w-[320px];
+  @apply overflow-x-hidden overflow-y-auto;
+  width: 20rem;
+  max-width: calc(100vw - 2rem);
 }
 
 .date-picker-presets {
@@ -364,7 +542,7 @@ onUnmounted(() => {
 }
 
 .date-picker-preset {
-  @apply rounded-md px-3 py-1.5 text-xs font-medium;
+  @apply min-h-11 rounded-md px-3 py-1.5 text-xs font-medium;
   @apply text-gray-600 dark:text-gray-400;
   @apply hover:bg-gray-100 dark:hover:bg-dark-700;
   @apply transition-colors duration-150;
@@ -384,7 +562,7 @@ onUnmounted(() => {
 }
 
 .date-picker-field {
-  @apply flex-1;
+  @apply min-w-0 flex-1;
 }
 
 .date-picker-label {
@@ -392,7 +570,7 @@ onUnmounted(() => {
 }
 
 .date-picker-input {
-  @apply w-full rounded-md px-2 py-1.5 text-sm;
+  @apply min-h-11 min-w-0 w-full rounded-md px-2 py-1.5 text-sm;
   @apply bg-gray-50 dark:bg-dark-700;
   @apply border border-gray-200 dark:border-dark-600;
   @apply text-gray-900 dark:text-gray-100;
@@ -417,7 +595,7 @@ onUnmounted(() => {
 }
 
 .date-picker-apply {
-  @apply rounded-lg px-4 py-1.5 text-sm font-medium;
+  @apply min-h-11 rounded-lg px-4 py-1.5 text-sm font-medium;
   @apply bg-primary-600 text-white;
   @apply hover:bg-primary-700;
   @apply transition-colors duration-150;

@@ -235,10 +235,15 @@ routeLoop:
 				return
 			}
 
-			accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, currentAPIKey.GroupID, sessionHash, selection, parsed.Stream, &streamStarted, reqLog)
+			freshAccount, accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, selectionCtx, currentAPIKey.GroupID, sessionHash, service.OpenAIAccountDispatchRequirements{
+				RequestedModel:          selectionModel,
+				RequiredTransport:       service.OpenAIUpstreamTransportHTTPSSE,
+				RequiredImageCapability: parsed.RequiredCapability,
+			}, selection, parsed.Stream, &streamStarted, reqLog)
 			if !acquired {
 				return
 			}
+			account = freshAccount
 
 			service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
 			if !parsed.Stream && !jsonKeepaliveStarted {
@@ -343,9 +348,9 @@ routeLoop:
 				if account.Type == service.AccountTypeOAuth {
 					h.gatewayService.UpdateCodexUsageSnapshotFromHeaders(c.Request.Context(), account.ID, result.ResponseHeaders)
 				}
-				h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, result.FirstTokenMs)
+				h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, result.FirstTokenMs, account.GetMappedModel(selectionModel))
 			} else {
-				h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, nil)
+				h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, nil, account.GetMappedModel(selectionModel))
 			}
 			routeCursor.recordSuccess(apiKey.ID)
 

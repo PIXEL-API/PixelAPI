@@ -790,3 +790,143 @@ func TestAdminService_BulkUpdateAccounts_RejectsHigherOpenAILevelIntoLowerPool(t
 	require.Empty(t, repo.bulkUpdateIDs)
 	require.Empty(t, repo.boundGroupIDs)
 }
+
+func newAdminOwnedAgentIdentityTestAccount(t *testing.T, ownerUserID int64, shareMode, shareStatus, runtimeID string) *Account {
+	t.Helper()
+	return &Account{
+		ID:           1,
+		Name:         "owned-agent-identity",
+		Platform:     PlatformOpenAI,
+		Type:         AccountTypeOAuth,
+		AccountLevel: AccountLevelTeam,
+		Credentials: map[string]any{
+			"auth_mode":          OpenAIAuthModeAgentIdentity,
+			"agent_runtime_id":   runtimeID,
+			"agent_private_key":  testAgentIdentityPrivateKey(t),
+			"task_id":            "task-old",
+			"chatgpt_account_id": "team-a",
+			"chatgpt_user_id":    "member-a",
+		},
+		OwnerUserID: &ownerUserID,
+		ShareMode:   shareMode,
+		ShareStatus: shareStatus,
+		Concurrency: 3,
+		Status:      StatusActive,
+		Schedulable: true,
+	}
+}
+
+func TestAdminServiceUpdateOwnedPublicAgentIdentityAuthChangeForcesPendingAndInvalidatesWS(t *testing.T) {
+	account := newAdminOwnedAgentIdentityTestAccount(t, 101, AccountShareModePublic, AccountShareStatusApproved, "runtime-old")
+	repo := &accountRepoStubForBulkUpdate{getByIDAccounts: map[int64]*Account{account.ID: account}}
+	invalidator := &recordingAgentIdentityWSInvalidator{}
+	svc := &adminServiceImpl{accountRepo: repo, agentIdentityWSInvalidator: invalidator}
+	credentials := mergeAccountMap(account.Credentials, map[string]any{"agent_runtime_id": "runtime-new"})
+
+	updated, err := svc.UpdateAccount(context.Background(), account.ID, &UpdateAccountInput{Credentials: credentials})
+
+	require.NoError(t, err)
+	require.Equal(t, AccountShareStatusPending, updated.ShareStatus)
+	require.Equal(t, "runtime-new", updated.GetCredential("agent_runtime_id"))
+	require.Equal(t, []int64{account.ID}, invalidator.accountIDs)
+}
+
+func TestAdminServiceUpdateOwnedPublicAgentIdentityToPrivateInvalidatesWS(t *testing.T) {
+	account := newAdminOwnedAgentIdentityTestAccount(t, 101, AccountShareModePublic, AccountShareStatusApproved, "runtime-old")
+	repo := &accountRepoStubForBulkUpdate{getByIDAccounts: map[int64]*Account{account.ID: account}}
+	invalidator := &recordingAgentIdentityWSInvalidator{}
+	svc := &adminServiceImpl{accountRepo: repo, agentIdentityWSInvalidator: invalidator}
+
+	updated, err := svc.UpdateAccount(context.Background(), account.ID, &UpdateAccountInput{ShareMode: AccountShareModePrivate})
+
+	require.NoError(t, err)
+	require.Equal(t, AccountShareModePrivate, updated.ShareMode)
+	require.Equal(t, AccountShareStatusApproved, updated.ShareStatus)
+	require.Equal(t, []int64{account.ID}, invalidator.accountIDs)
+}
+
+func TestAdminServiceUpdateOwnedPublicAgentIdentitySuspensionIsPreserved(t *testing.T) {
+	account := newAdminOwnedAgentIdentityTestAccount(t, 101, AccountShareModePublic, AccountShareStatusApproved, "runtime-old")
+	repo := &accountRepoStubForBulkUpdate{getByIDAccounts: map[int64]*Account{account.ID: account}}
+	invalidator := &recordingAgentIdentityWSInvalidator{}
+	svc := &adminServiceImpl{accountRepo: repo, agentIdentityWSInvalidator: invalidator}
+
+	updated, err := svc.UpdateAccount(context.Background(), account.ID, &UpdateAccountInput{ShareStatus: AccountShareStatusSuspended})
+
+	require.NoError(t, err)
+	require.Equal(t, AccountShareStatusSuspended, updated.ShareStatus)
+	require.Equal(t, []int64{account.ID}, invalidator.accountIDs)
+}
+
+func TestAdminServiceUpdateOwnedPublicAgentIdentityExplicitApprovalForcesPending(t *testing.T) {
+	account := newAdminOwnedAgentIdentityTestAccount(t, 101, AccountShareModePublic, AccountShareStatusApproved, "runtime-old")
+	repo := &accountRepoStubForBulkUpdate{getByIDAccounts: map[int64]*Account{account.ID: account}}
+	invalidator := &recordingAgentIdentityWSInvalidator{}
+	svc := &adminServiceImpl{accountRepo: repo, agentIdentityWSInvalidator: invalidator}
+
+	updated, err := svc.UpdateAccount(context.Background(), account.ID, &UpdateAccountInput{ShareStatus: AccountShareStatusApproved})
+
+	require.NoError(t, err)
+	require.Equal(t, AccountShareStatusPending, updated.ShareStatus)
+	require.Equal(t, []int64{account.ID}, invalidator.accountIDs)
+}
+
+func TestAdminServiceUpdateOwnedPublicAgentIdentityOwnerChangeForcesPending(t *testing.T) {
+	account := newAdminOwnedAgentIdentityTestAccount(t, 101, AccountShareModePublic, AccountShareStatusApproved, "runtime-old")
+	repo := &accountRepoStubForBulkUpdate{getByIDAccounts: map[int64]*Account{account.ID: account}}
+	invalidator := &recordingAgentIdentityWSInvalidator{}
+	svc := &adminServiceImpl{accountRepo: repo, agentIdentityWSInvalidator: invalidator}
+	nextOwnerUserID := int64(202)
+
+	updated, err := svc.UpdateAccount(context.Background(), account.ID, &UpdateAccountInput{OwnerUserID: &nextOwnerUserID})
+
+	require.NoError(t, err)
+	require.NotNil(t, updated.OwnerUserID)
+	require.Equal(t, nextOwnerUserID, *updated.OwnerUserID)
+	require.Equal(t, AccountShareStatusPending, updated.ShareStatus)
+	require.Equal(t, []int64{account.ID}, invalidator.accountIDs)
+}
+
+func TestAdminServiceUpdateOwnedAgentIdentityFailsBeforeWriteWithoutWSInvalidator(t *testing.T) {
+	account := newAdminOwnedAgentIdentityTestAccount(t, 101, AccountShareModePublic, AccountShareStatusApproved, "runtime-old")
+	repo := &accountRepoStubForBulkUpdate{getByIDAccounts: map[int64]*Account{account.ID: account}}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	updated, err := svc.UpdateAccount(context.Background(), account.ID, &UpdateAccountInput{ShareMode: AccountShareModePrivate})
+
+	require.Nil(t, updated)
+	require.ErrorIs(t, err, ErrOwnedAgentIdentityWSInvalidatorUnavailable)
+	require.Nil(t, repo.updatedAccount)
+}
+
+func TestAdminServiceBulkUpdateOwnedAgentIdentityAuthChangeFailsBeforeWrite(t *testing.T) {
+	account := newAdminOwnedAgentIdentityTestAccount(t, 101, AccountShareModePrivate, AccountShareStatusApproved, "runtime-old")
+	repo := &accountRepoStubForBulkUpdate{getByIDsAccounts: []*Account{account}}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs:  []int64{account.ID},
+		Credentials: map[string]any{"agent_runtime_id": "runtime-new"},
+	})
+
+	require.Nil(t, result)
+	require.True(t, infraerrors.IsBadRequest(err))
+	require.Equal(t, "ACCOUNT_BULK_OWNED_AGENT_IDENTITY_AUTH_UPDATE_UNSUPPORTED", infraerrors.Reason(err))
+	require.Empty(t, repo.bulkUpdateIDs)
+}
+
+func TestAdminServiceBulkUpdateOwnedAgentIdentityNonAuthCredentialsDoesNotFalseReject(t *testing.T) {
+	account := newAdminOwnedAgentIdentityTestAccount(t, 101, AccountShareModePrivate, AccountShareStatusApproved, "runtime-old")
+	repo := &accountRepoStubForBulkUpdate{getByIDsAccounts: []*Account{account}}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs:  []int64{account.ID},
+		Credentials: map[string]any{"email": "updated@example.com"},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, []int64{account.ID}, repo.bulkUpdateIDs)
+	require.Equal(t, "updated@example.com", repo.bulkUpdateUpdate.Credentials["email"])
+}

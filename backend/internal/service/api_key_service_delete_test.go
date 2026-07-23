@@ -328,6 +328,55 @@ func TestAPIKeyServiceUpdateAllowsUnrelatedChangeWithAccountShareBinding(t *test
 	require.Len(t, repo.updatedKeys, 1)
 }
 
+func TestAPIKeyServiceUpdatePreservesIPRestrictionsWhenOmitted(t *testing.T) {
+	repo := &apiKeyRepoStub{apiKey: &APIKey{
+		ID:          42,
+		UserID:      7,
+		Key:         "k",
+		Status:      StatusAPIKeyActive,
+		IPWhitelist: []string{"192.0.2.10", "198.51.100.0/24"},
+		IPBlacklist: []string{"203.0.113.9"},
+	}}
+	svc := &APIKeyService{apiKeyRepo: repo}
+
+	updated, err := svc.Update(context.Background(), 42, 7, UpdateAPIKeyRequest{})
+	require.NoError(t, err)
+	require.Equal(t, []string{"192.0.2.10", "198.51.100.0/24"}, updated.IPWhitelist)
+	require.Equal(t, []string{"203.0.113.9"}, updated.IPBlacklist)
+	require.Len(t, repo.updatedKeys, 1)
+	require.Equal(t, updated.IPWhitelist, repo.updatedKeys[0].IPWhitelist)
+	require.Equal(t, updated.IPBlacklist, repo.updatedKeys[0].IPBlacklist)
+}
+
+func TestAPIKeyServiceUpdateClearsIPRestrictionsWhenExplicitlyEmpty(t *testing.T) {
+	repo := &apiKeyRepoStub{apiKey: &APIKey{
+		ID:          42,
+		UserID:      7,
+		Key:         "k",
+		Status:      StatusAPIKeyActive,
+		IPWhitelist: []string{"192.0.2.10"},
+		IPBlacklist: []string{"203.0.113.9"},
+	}}
+	svc := &APIKeyService{apiKeyRepo: repo}
+	emptyWhitelist := []string{}
+	emptyBlacklist := []string{}
+
+	updated, err := svc.Update(context.Background(), 42, 7, UpdateAPIKeyRequest{
+		IPWhitelist: &emptyWhitelist,
+		IPBlacklist: &emptyBlacklist,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, updated.IPWhitelist)
+	require.Empty(t, updated.IPWhitelist)
+	require.NotNil(t, updated.IPBlacklist)
+	require.Empty(t, updated.IPBlacklist)
+	require.Len(t, repo.updatedKeys, 1)
+	require.NotNil(t, repo.updatedKeys[0].IPWhitelist)
+	require.Empty(t, repo.updatedKeys[0].IPWhitelist)
+	require.NotNil(t, repo.updatedKeys[0].IPBlacklist)
+	require.Empty(t, repo.updatedKeys[0].IPBlacklist)
+}
+
 func TestAPIKeyServiceUpdateDetectsInPlaceGroupRouteChanges(t *testing.T) {
 	groupID := int64(10)
 	routes := []APIKeyGroupRoute{{GroupID: groupID, Priority: 100, Weight: 2, Enabled: true, CooldownSeconds: 30}}

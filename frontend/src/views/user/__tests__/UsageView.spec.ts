@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
@@ -96,10 +96,81 @@ vi.mock('vue-i18n', async () => {
 
 const AppLayoutStub = { template: '<div><slot /></div>' }
 const TablePageLayoutStub = {
-  template: '<div><slot name="actions" /><slot name="filters" /><slot /></div>',
+  template: `
+    <div>
+      <div data-testid="usage-actions-slot"><slot name="actions" /></div>
+      <div data-testid="usage-filters-slot"><slot name="filters" /></div>
+      <div data-testid="usage-table-slot"><slot name="table" /></div>
+      <div data-testid="usage-pagination-slot"><slot name="pagination" /></div>
+    </div>
+  `,
 }
 
-describe('user UsageView tooltip', () => {
+const mountUsageView = () =>
+  mount(UsageView, {
+    global: {
+      stubs: {
+        AppLayout: AppLayoutStub,
+        TablePageLayout: TablePageLayoutStub,
+        Pagination: true,
+        EmptyState: true,
+        Select: true,
+        DateRangePicker: true,
+        Icon: true,
+        Teleport: true,
+      },
+    },
+  })
+
+const createDeferred = <T,>() => {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
+const usageStats = (totalRequests: number) => ({
+  total_requests: totalRequests,
+  total_input_tokens: totalRequests,
+  total_output_tokens: 0,
+  total_cache_tokens: 0,
+  total_cache_creation_tokens: 0,
+  total_cache_read_tokens: 0,
+  total_tokens: totalRequests,
+  total_cost: totalRequests,
+  total_actual_cost: totalRequests,
+  average_duration_ms: totalRequests,
+})
+
+const usageLog = (index: number) => ({
+  request_id: `req-export-${index}`,
+  created_at: '2026-06-25T00:00:00Z',
+  api_key: { name: 'snapshot-key' },
+  model: 'gpt-5.4',
+  reasoning_effort: null,
+  inbound_endpoint: '/v1/responses',
+  request_type: 'sync',
+  billing_mode: 'standard',
+  points_deducted: 0,
+  balance_deducted: 0,
+  input_tokens: 1,
+  output_tokens: 1,
+  cache_read_tokens: 0,
+  cache_creation_tokens: 0,
+  rate_multiplier: 1,
+  actual_cost: 0.01,
+  total_cost: 0.01,
+  first_token_ms: 1,
+  duration_ms: 2,
+})
+
+let originalCreateObjectURL: typeof window.URL.createObjectURL | undefined
+let originalRevokeObjectURL: typeof window.URL.revokeObjectURL | undefined
+
+describe('user UsageView', () => {
   beforeEach(() => {
     query.mockReset()
     queryBalanceLedger.mockReset()
@@ -110,6 +181,8 @@ describe('user UsageView tooltip', () => {
     showWarning.mockReset()
     showSuccess.mockReset()
     showInfo.mockReset()
+    originalCreateObjectURL = window.URL.createObjectURL
+    originalRevokeObjectURL = window.URL.revokeObjectURL
 
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
       x: 0,
@@ -125,8 +198,229 @@ describe('user UsageView tooltip', () => {
 
     ;(globalThis as any).ResizeObserver = class {
       observe() {}
+      unobserve() {}
       disconnect() {}
     }
+
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: true,
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    })
+
+    window.localStorage.removeItem('table-page-size')
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    if (originalCreateObjectURL) {
+      window.URL.createObjectURL = originalCreateObjectURL
+    } else {
+      Reflect.deleteProperty(window.URL, 'createObjectURL')
+    }
+    if (originalRevokeObjectURL) {
+      window.URL.revokeObjectURL = originalRevokeObjectURL
+    } else {
+      Reflect.deleteProperty(window.URL, 'revokeObjectURL')
+    }
+  })
+
+  it('keeps the latest usage stats when an aborted older request resolves last', async () => {
+    query.mockResolvedValue({ items: [], total: 0, pages: 0 })
+    list.mockResolvedValue({ items: [] })
+    const olderRequest = createDeferred<ReturnType<typeof usageStats>>()
+    getStatsByDateRange
+      .mockImplementationOnce(() => olderRequest.promise)
+      .mockResolvedValueOnce(usageStats(2))
+
+    const wrapper = mountUsageView()
+    const setupState = (wrapper.vm as any).$?.setupState
+    setupState.filters.api_key_id = 42
+
+    await setupState.loadUsageStats()
+
+    expect(getStatsByDateRange).toHaveBeenCalledTimes(2)
+    expect(getStatsByDateRange.mock.calls[0]?.[4]).toEqual(
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
+    expect(getStatsByDateRange.mock.calls[0]?.[4].signal.aborted).toBe(true)
+    expect(getStatsByDateRange.mock.calls[1]?.[4].signal.aborted).toBe(false)
+
+    olderRequest.resolve(usageStats(1))
+    await flushPromises()
+
+    expect(setupState.usageStats.total_requests).toBe(2)
+    wrapper.unmount()
+  })
+
+  it('ignores an aborted older stats failure after the latest request succeeds', async () => {
+    query.mockResolvedValue({ items: [], total: 0, pages: 0 })
+    list.mockResolvedValue({ items: [] })
+    const olderRequest = createDeferred<ReturnType<typeof usageStats>>()
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    getStatsByDateRange
+      .mockImplementationOnce(() => olderRequest.promise)
+      .mockResolvedValueOnce(usageStats(2))
+
+    const wrapper = mountUsageView()
+    const setupState = (wrapper.vm as any).$?.setupState
+    await setupState.loadUsageStats()
+
+    olderRequest.reject(new Error('stale stats failure'))
+    await flushPromises()
+
+    expect(setupState.usageStats.total_requests).toBe(2)
+    expect(consoleError).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('exports with one frozen query snapshot and the total returned by the export request', async () => {
+    const firstExportPage = createDeferred<{
+      items: ReturnType<typeof usageLog>[]
+      total: number
+      pages: number
+    }>()
+    query
+      .mockResolvedValueOnce({ items: [], total: 500, pages: 25 })
+      .mockImplementation((params: Record<string, unknown>) => {
+        if (params.page === 1) return firstExportPage.promise
+        if (params.page === 2) {
+          return Promise.resolve({ items: [usageLog(101)], total: 101, pages: 2 })
+        }
+        return Promise.reject(new Error(`unexpected export page: ${String(params.page)}`))
+      })
+    getStatsByDateRange.mockResolvedValue(usageStats(0))
+    list.mockResolvedValue({ items: [] })
+
+    window.URL.createObjectURL = vi.fn(() => 'blob:usage-export')
+    window.URL.revokeObjectURL = vi.fn()
+    let downloadedFilename = ''
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function () {
+      downloadedFilename = this.download
+    })
+
+    const wrapper = mountUsageView()
+    await flushPromises()
+    const setupState = (wrapper.vm as any).$?.setupState
+    setupState.filters.api_key_id = 7
+    setupState.filters.start_date = '2026-06-01'
+    setupState.filters.end_date = '2026-06-25'
+    setupState.startDateTime = '2026-06-01T01:02:03'
+    setupState.endDateTime = '2026-06-25T04:05:06'
+    setupState.sortState.sort_by = 'model'
+    setupState.sortState.sort_order = 'asc'
+
+    const exportPromise = setupState.exportToCSV()
+    const firstExportParams = query.mock.calls.at(-1)?.[0] as Record<string, unknown>
+
+    setupState.filters.api_key_id = 99
+    setupState.filters.start_date = '2025-01-01'
+    setupState.filters.end_date = '2025-01-02'
+    setupState.startDateTime = '2025-01-01T00:00:00'
+    setupState.endDateTime = '2025-01-02T00:00:00'
+    setupState.sortState.sort_by = 'created_at'
+    setupState.sortState.sort_order = 'desc'
+
+    firstExportPage.resolve({
+      items: Array.from({ length: 100 }, (_, index) => usageLog(index + 1)),
+      total: 101,
+      pages: 2,
+    })
+    await exportPromise
+
+    const exportCalls = query.mock.calls.slice(1)
+    expect(exportCalls).toHaveLength(2)
+    expect(firstExportParams).toEqual(
+      expect.objectContaining({
+        page: 1,
+        page_size: 100,
+        api_key_id: 7,
+        start_date: '2026-06-01',
+        end_date: '2026-06-25',
+        sort_by: 'model',
+        sort_order: 'asc',
+      })
+    )
+    expect(exportCalls[1]?.[0]).toEqual({
+      ...firstExportParams,
+      page: 2,
+    })
+    expect(exportCalls[0]?.[1]).toEqual(
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
+    expect(exportCalls[1]?.[1]).toEqual(
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
+    expect(downloadedFilename).toBe('usage_2026-06-01_to_2026-06-25.csv')
+    expect(showSuccess).toHaveBeenCalledTimes(1)
+    expect(showError).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('starts an export with a fresh query while the table total is still loading', async () => {
+    const tableRequest = createDeferred<{ items: never[]; total: number; pages: number }>()
+    query
+      .mockImplementationOnce(() => tableRequest.promise)
+      .mockResolvedValueOnce({ items: [usageLog(1)], total: 1, pages: 1 })
+    getStatsByDateRange.mockResolvedValue(usageStats(0))
+    list.mockResolvedValue({ items: [] })
+    window.URL.createObjectURL = vi.fn(() => 'blob:usage-export')
+    window.URL.revokeObjectURL = vi.fn()
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+    const wrapper = mountUsageView()
+    const setupState = (wrapper.vm as any).$?.setupState
+    await setupState.exportToCSV()
+
+    expect(query).toHaveBeenCalledTimes(2)
+    expect(query.mock.calls[1]?.[0]).toEqual(expect.objectContaining({ page: 1, page_size: 100 }))
+    expect(showWarning).not.toHaveBeenCalledWith('usage.noDataToExport')
+    expect(showSuccess).toHaveBeenCalledTimes(1)
+
+    tableRequest.resolve({ items: [], total: 0, pages: 0 })
+    await flushPromises()
+    wrapper.unmount()
+  })
+
+  it('aborts in-flight stats and export requests when the view unmounts', async () => {
+    const statsRequest = createDeferred<ReturnType<typeof usageStats>>()
+    const exportRequest = createDeferred<{
+      items: ReturnType<typeof usageLog>[]
+      total: number
+      pages: number
+    }>()
+    query
+      .mockResolvedValueOnce({ items: [], total: 1, pages: 1 })
+      .mockImplementationOnce(() => exportRequest.promise)
+    getStatsByDateRange.mockImplementationOnce(() => statsRequest.promise)
+    list.mockResolvedValue({ items: [] })
+
+    const wrapper = mountUsageView()
+    const setupState = (wrapper.vm as any).$?.setupState
+    const exportPromise = setupState.exportToCSV()
+    const statsConfig = getStatsByDateRange.mock.calls[0]?.[4]
+    const exportConfig = query.mock.calls[1]?.[1]
+
+    wrapper.unmount()
+
+    expect(statsConfig?.signal.aborted).toBe(true)
+    expect(exportConfig?.signal.aborted).toBe(true)
+
+    statsRequest.reject(new DOMException('aborted', 'AbortError'))
+    exportRequest.reject(new DOMException('aborted', 'AbortError'))
+    await exportPromise
+    await flushPromises()
+
+    expect(showError).not.toHaveBeenCalled()
   })
 
   it('shows fast service tier and unit prices in user tooltip', async () => {
@@ -191,6 +485,11 @@ describe('user UsageView tooltip', () => {
 
     await flushPromises()
     await nextTick()
+
+    expect(wrapper.get('[data-testid="usage-actions-slot"] .data-stat-grid').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="usage-filters-slot"] .data-tabs-shell').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="usage-table-slot"] table').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="usage-pagination-slot"] pagination-stub').exists()).toBe(true)
 
     const setupState = (wrapper.vm as any).$?.setupState
     setupState.tooltipData = {
@@ -323,7 +622,7 @@ describe('user UsageView tooltip', () => {
         params?.page_size === 100 &&
         params?.sort_by === 'created_at' &&
         params?.sort_order === 'desc' &&
-        config === undefined
+        config?.signal instanceof AbortSignal
       )
     })
     expect(hasSortedExportQuery).toBe(true)

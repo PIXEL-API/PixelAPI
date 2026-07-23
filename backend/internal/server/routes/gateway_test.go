@@ -122,6 +122,22 @@ func TestGatewayRoutesGrokVideoMutationPathsAreRegistered(t *testing.T) {
 	}
 }
 
+func TestGatewayRoutesGrokVideoContentPathsAreRegistered(t *testing.T) {
+	router := newGatewayRoutesTestRouter(service.PlatformGrok)
+	registered := make(map[string]bool)
+	for _, route := range router.Routes() {
+		if route.Method == http.MethodGet {
+			registered[route.Path] = true
+		}
+	}
+	for _, path := range []string{
+		"/v1/videos/:request_id/content",
+		"/videos/:request_id/content",
+	} {
+		require.True(t, registered[path], "GET %s should be registered", path)
+	}
+}
+
 func TestGatewayRoutesAlphaSearchRejectsNonOpenAIGroup(t *testing.T) {
 	router := newGatewayRoutesTestRouter(service.PlatformGrok)
 	req := httptest.NewRequest(http.MethodPost, "/v1/alpha/search", strings.NewReader(`{"model":"gpt-5.6-sol"}`))

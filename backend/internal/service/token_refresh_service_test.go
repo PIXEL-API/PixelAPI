@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -139,6 +140,140 @@ func (r *tokenRefresherStub) Refresh(ctx context.Context, account *Account) (map
 
 func (r *tokenRefresherStub) CacheKey(account *Account) string {
 	return "test:stub:" + account.Platform
+}
+
+type blockingOAuthRefreshCandidateRepo struct {
+	tokenRefreshAccountRepo
+	listStarted chan struct{}
+	startOnce   sync.Once
+}
+
+func (r *blockingOAuthRefreshCandidateRepo) ListOAuthRefreshCandidates(ctx context.Context, _ time.Duration) ([]Account, error) {
+	r.startOnce.Do(func() { close(r.listStarted) })
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+type staticOAuthRefreshCandidateRepo struct {
+	tokenRefreshAccountRepo
+	candidates []Account
+}
+
+func (r *staticOAuthRefreshCandidateRepo) ListOAuthRefreshCandidates(context.Context, time.Duration) ([]Account, error) {
+	return r.candidates, nil
+}
+
+// observedDoneContext 让测试能精确知道刷新协程已进入退避 select，
+// 避免依赖 sleep 猜测协程调度时序。
+type observedDoneContext struct {
+	context.Context
+	done         chan struct{}
+	doneObserved chan struct{}
+	observeOnce  sync.Once
+	cancelOnce   sync.Once
+}
+
+func newObservedDoneContext() *observedDoneContext {
+	return &observedDoneContext{
+		Context:      context.Background(),
+		done:         make(chan struct{}),
+		doneObserved: make(chan struct{}),
+	}
+}
+
+func (c *observedDoneContext) Done() <-chan struct{} {
+	c.observeOnce.Do(func() { close(c.doneObserved) })
+	return c.done
+}
+
+func (c *observedDoneContext) Err() error {
+	select {
+	case <-c.done:
+		return context.Canceled
+	default:
+		return nil
+	}
+}
+
+func (c *observedDoneContext) cancel() {
+	c.cancelOnce.Do(func() { close(c.done) })
+}
+
+func requireTokenRefreshSignal(t *testing.T, signal <-chan struct{}, description string) {
+	t.Helper()
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	select {
+	case <-signal:
+	case <-timer.C:
+		t.Fatalf("timed out waiting for %s", description)
+	}
+}
+
+func requireTokenRefreshStop(t *testing.T, service *TokenRefreshService) {
+	t.Helper()
+	stopped := make(chan struct{})
+	go func() {
+		service.Stop()
+		close(stopped)
+	}()
+	requireTokenRefreshSignal(t, stopped, "TokenRefreshService.Stop")
+}
+
+func TestTokenRefreshService_StopCancelsBlockingCandidateList(t *testing.T) {
+	repo := &blockingOAuthRefreshCandidateRepo{listStarted: make(chan struct{})}
+	cfg := &config.Config{
+		TokenRefresh: config.TokenRefreshConfig{
+			Enabled:                  true,
+			CheckIntervalMinutes:     5,
+			MaxRetries:               3,
+			RetryBackoffSeconds:      2,
+			RefreshBeforeExpiryHours: 0.5,
+		},
+	}
+	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, nil, cfg, nil)
+	service.Start()
+	requireTokenRefreshSignal(t, repo.listStarted, "OAuth refresh candidate query to start")
+
+	requireTokenRefreshStop(t, service)
+	require.Zero(t, repo.setErrorCalls)
+	require.Zero(t, repo.setTempUnschedCalls)
+}
+
+func TestTokenRefreshService_StopInterruptsRetryBackoffWithoutAccountPenalty(t *testing.T) {
+	repo := &staticOAuthRefreshCandidateRepo{
+		candidates: []Account{{
+			ID:       1001,
+			Platform: PlatformGemini,
+			Type:     AccountTypeOAuth,
+		}},
+	}
+	cfg := &config.Config{
+		TokenRefresh: config.TokenRefreshConfig{
+			Enabled:                  true,
+			CheckIntervalMinutes:     5,
+			MaxRetries:               3,
+			RetryBackoffSeconds:      60,
+			RefreshBeforeExpiryHours: 0.5,
+		},
+	}
+	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, nil, cfg, nil)
+	refresher := &tokenRefresherStub{err: errors.New("transient token endpoint failure")}
+	service.refreshers = []TokenRefresher{refresher}
+	service.executors = []OAuthRefreshExecutor{refresher}
+
+	// 用可观测 context 替换构造器的 context，只用于确认已真正进入 60s 退避等待。
+	service.cancelRun()
+	runCtx := newObservedDoneContext()
+	service.runCtx = runCtx
+	service.cancelRun = runCtx.cancel
+
+	service.Start()
+	requireTokenRefreshSignal(t, runCtx.doneObserved, "retry backoff wait to start")
+	requireTokenRefreshStop(t, service)
+
+	require.Zero(t, repo.setErrorCalls, "shutdown cancellation must not mark the account as error")
+	require.Zero(t, repo.setTempUnschedCalls, "shutdown cancellation must not temporarily unschedule the account")
 }
 
 func TestTokenRefreshService_RefreshWithRetry_InvalidatesCache(t *testing.T) {

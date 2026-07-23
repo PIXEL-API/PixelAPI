@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS atlas_schema_revisions (
 // 任何稳定的 int64 值都可以，只要不与同一数据库中的其他锁冲突即可。
 const migrationsAdvisoryLockID int64 = 694208311321144027
 const migrationsLockRetryInterval = 500 * time.Millisecond
+const migrationsUnlockTimeout = 5 * time.Second
 const nonTransactionalMigrationSuffix = "_notx.sql"
 const paymentOrdersOutTradeNoUniqueMigration = "120_enforce_payment_orders_out_trade_no_unique_notx.sql"
 const paymentOrdersOutTradeNoUniqueIndex = "paymentorder_out_trade_no_unique"
@@ -59,6 +60,8 @@ const openAIOwnedAccountOrgIdentityUniqueMigration = "168_openai_owned_account_o
 const accountShareSeatCostQueryIndexesMigration = "208_account_share_seat_cost_query_indexes_notx.sql"
 const latestAPIKeyIPIndexMigration = "212_add_usage_logs_api_key_latest_ip_index_notx.sql"
 const latestAPIKeyIPIndex = "idx_usage_logs_api_key_latest_ip"
+const usageLogImageInputTokensMigration = "216_usage_log_image_input_tokens.sql"
+const openAIOwnedAgentIdentityUniqueMigration = "217_openai_owned_agent_identity_unique_notx.sql"
 const accountShareSeatCostAutoIndexMaxRows int64 = 5_000_000
 const accountShareSeatCostAutoIndexMaxTableBytes int64 = 8 << 30
 
@@ -67,17 +70,30 @@ type migrationCatalogName struct {
 	name   string
 }
 
+type migrationQueryExecutor interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+type migrationDatabase interface {
+	migrationQueryExecutor
+	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
+}
+
 type migrationIndexKeyRequirement struct {
 	column              string
 	expressionCanonical string
 	resultType          migrationCatalogName
 	operatorClass       migrationCatalogName
+	collation           migrationCatalogName
 }
 
 type migrationIndexRequirement struct {
 	index              migrationCatalogName
 	table              migrationCatalogName
 	accessMethod       string
+	unique             bool
 	keys               []migrationIndexKeyRequirement
 	includeColumns     []string
 	predicateCanonical string
@@ -122,6 +138,22 @@ var migrationInt8Key = migrationIndexKeyRequirement{
 var migrationTimestamptzKey = migrationIndexKeyRequirement{
 	resultType:    migrationCatalogName{schema: "pg_catalog", name: "timestamptz"},
 	operatorClass: migrationCatalogName{schema: "pg_catalog", name: "timestamptz_ops"},
+}
+
+var migrationTextKey = migrationIndexKeyRequirement{
+	resultType:    migrationCatalogName{schema: "pg_catalog", name: "text"},
+	operatorClass: migrationCatalogName{schema: "pg_catalog", name: "text_ops"},
+	collation:     migrationCatalogName{schema: "pg_catalog", name: "default"},
+}
+
+func migrationColumnKeyRequirement(column string, template migrationIndexKeyRequirement) migrationIndexKeyRequirement {
+	template.column = column
+	return template
+}
+
+func migrationExpressionKeyRequirement(expression string, template migrationIndexKeyRequirement) migrationIndexKeyRequirement {
+	template.expressionCanonical = canonicalizeMigrationIndexExpression(expression)
+	return template
 }
 
 const accountShareSeatReasonPredicateCanonical = "reasonIN['account_share_mode_seat_prepay','account_share_mode_seat_refund','account_share_mode_seat_waiver_refund']"
@@ -194,11 +226,20 @@ var ownedAccountIdentityUniqueIndexes = []string{
 }
 
 var ownedAccountIdentityUniqueIndexSet = map[string]struct{}{
-	"idx_accounts_owned_openai_chatgpt_account_id_uniq": {},
-	"idx_accounts_owned_openai_chatgpt_user_id_uniq":    {},
-	"idx_accounts_owned_anthropic_org_account_uniq":     {},
-	"idx_accounts_owned_gemini_project_uniq":            {},
-	"idx_accounts_owned_antigravity_project_uniq":       {},
+	"idx_accounts_owned_openai_chatgpt_account_id_uniq":  {},
+	"idx_accounts_owned_openai_chatgpt_user_id_uniq":     {},
+	"idx_accounts_owned_openai_org_user_uniq":            {},
+	"idx_accounts_owned_openai_org_account_uniq":         {},
+	"idx_accounts_owned_openai_legacy_user_uniq":         {},
+	"idx_accounts_owned_openai_legacy_account_uniq":      {},
+	"idx_accounts_owned_openai_org_user_v2_uniq":         {},
+	"idx_accounts_owned_openai_org_account_v2_uniq":      {},
+	"idx_accounts_owned_openai_legacy_user_v2_uniq":      {},
+	"idx_accounts_owned_openai_legacy_account_v2_uniq":   {},
+	"idx_accounts_owned_openai_agent_identity_team_uniq": {},
+	"idx_accounts_owned_anthropic_org_account_uniq":      {},
+	"idx_accounts_owned_gemini_project_uniq":             {},
+	"idx_accounts_owned_antigravity_project_uniq":        {},
 }
 
 var openAIOwnedAccountOrgIdentityUniqueIndexes = []string{
@@ -206,6 +247,93 @@ var openAIOwnedAccountOrgIdentityUniqueIndexes = []string{
 	"idx_accounts_owned_openai_org_account_uniq",
 	"idx_accounts_owned_openai_legacy_user_uniq",
 	"idx_accounts_owned_openai_legacy_account_uniq",
+}
+
+const (
+	openAIOwnedOrganizationExpression = `lower(NULLIF(btrim(credentials->>'organization_id'), ''))`
+	openAIOwnedUserExpression         = `NULLIF(btrim(credentials->>'chatgpt_user_id'), '')`
+	openAIOwnedAccountExpression      = `NULLIF(btrim(credentials->>'chatgpt_account_id'), '')`
+	openAIOwnedOAuthV2BasePredicate   = `deleted_at IS NULL
+		AND owner_user_id IS NOT NULL
+		AND platform = 'openai'
+		AND type = 'oauth'
+		AND COALESCE(lower(NULLIF(btrim(credentials->>'auth_mode'), '')), '') <> 'agentidentity'`
+	openAIOwnedAgentIdentityPredicate = `deleted_at IS NULL
+		AND owner_user_id IS NOT NULL
+		AND platform = 'openai'
+		AND type = 'oauth'
+		AND lower(NULLIF(btrim(credentials->>'auth_mode'), '')) = 'agentidentity'
+		AND NULLIF(btrim(credentials->>'chatgpt_account_id'), '') IS NOT NULL`
+)
+
+var openAIOwnedAgentIdentityUniqueIndexRequirements = []migrationIndexRequirement{
+	{
+		index:        migrationCatalogName{schema: "public", name: "idx_accounts_owned_openai_org_user_v2_uniq"},
+		table:        migrationCatalogName{schema: "public", name: "accounts"},
+		accessMethod: "btree",
+		unique:       true,
+		keys: []migrationIndexKeyRequirement{
+			migrationColumnKeyRequirement("owner_user_id", migrationInt8Key),
+			migrationExpressionKeyRequirement(openAIOwnedOrganizationExpression, migrationTextKey),
+			migrationExpressionKeyRequirement(openAIOwnedUserExpression, migrationTextKey),
+		},
+		predicateCanonical: canonicalizeMigrationIndexExpression(openAIOwnedOAuthV2BasePredicate + `
+			AND NULLIF(btrim(credentials->>'organization_id'), '') IS NOT NULL
+			AND NULLIF(btrim(credentials->>'chatgpt_user_id'), '') IS NOT NULL`),
+	},
+	{
+		index:        migrationCatalogName{schema: "public", name: "idx_accounts_owned_openai_org_account_v2_uniq"},
+		table:        migrationCatalogName{schema: "public", name: "accounts"},
+		accessMethod: "btree",
+		unique:       true,
+		keys: []migrationIndexKeyRequirement{
+			migrationColumnKeyRequirement("owner_user_id", migrationInt8Key),
+			migrationExpressionKeyRequirement(openAIOwnedOrganizationExpression, migrationTextKey),
+			migrationExpressionKeyRequirement(openAIOwnedAccountExpression, migrationTextKey),
+		},
+		predicateCanonical: canonicalizeMigrationIndexExpression(openAIOwnedOAuthV2BasePredicate + `
+			AND NULLIF(btrim(credentials->>'organization_id'), '') IS NOT NULL
+			AND NULLIF(btrim(credentials->>'chatgpt_user_id'), '') IS NULL
+			AND NULLIF(btrim(credentials->>'chatgpt_account_id'), '') IS NOT NULL`),
+	},
+	{
+		index:        migrationCatalogName{schema: "public", name: "idx_accounts_owned_openai_legacy_user_v2_uniq"},
+		table:        migrationCatalogName{schema: "public", name: "accounts"},
+		accessMethod: "btree",
+		unique:       true,
+		keys: []migrationIndexKeyRequirement{
+			migrationColumnKeyRequirement("owner_user_id", migrationInt8Key),
+			migrationExpressionKeyRequirement(openAIOwnedUserExpression, migrationTextKey),
+		},
+		predicateCanonical: canonicalizeMigrationIndexExpression(openAIOwnedOAuthV2BasePredicate + `
+			AND NULLIF(btrim(credentials->>'organization_id'), '') IS NULL
+			AND NULLIF(btrim(credentials->>'chatgpt_user_id'), '') IS NOT NULL`),
+	},
+	{
+		index:        migrationCatalogName{schema: "public", name: "idx_accounts_owned_openai_legacy_account_v2_uniq"},
+		table:        migrationCatalogName{schema: "public", name: "accounts"},
+		accessMethod: "btree",
+		unique:       true,
+		keys: []migrationIndexKeyRequirement{
+			migrationColumnKeyRequirement("owner_user_id", migrationInt8Key),
+			migrationExpressionKeyRequirement(openAIOwnedAccountExpression, migrationTextKey),
+		},
+		predicateCanonical: canonicalizeMigrationIndexExpression(openAIOwnedOAuthV2BasePredicate + `
+			AND NULLIF(btrim(credentials->>'organization_id'), '') IS NULL
+			AND NULLIF(btrim(credentials->>'chatgpt_user_id'), '') IS NULL
+			AND NULLIF(btrim(credentials->>'chatgpt_account_id'), '') IS NOT NULL`),
+	},
+	{
+		index:        migrationCatalogName{schema: "public", name: "idx_accounts_owned_openai_agent_identity_team_uniq"},
+		table:        migrationCatalogName{schema: "public", name: "accounts"},
+		accessMethod: "btree",
+		unique:       true,
+		keys: []migrationIndexKeyRequirement{
+			migrationColumnKeyRequirement("owner_user_id", migrationInt8Key),
+			migrationExpressionKeyRequirement(openAIOwnedAccountExpression, migrationTextKey),
+		},
+		predicateCanonical: canonicalizeMigrationIndexExpression(openAIOwnedAgentIdentityPredicate),
+	},
 }
 
 type migrationChecksumCompatibilityRule struct {
@@ -280,7 +408,17 @@ func applyMigrationsFS(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 	if db == nil {
 		return errors.New("nil sql db")
 	}
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("pin migration database connection: %w", err)
+	}
+	defer func() {
+		_ = conn.Close()
+	}()
+	return applyMigrationsOnConnectionFS(ctx, conn, fsys)
+}
 
+func applyMigrationsOnConnectionFS(ctx context.Context, db migrationDatabase, fsys fs.FS) error {
 	// 获取分布式锁，确保多实例部署时只有一个实例执行迁移。
 	// 这是 PostgreSQL 特有的 Advisory Lock 机制。
 	if err := pgAdvisoryLock(ctx, db); err != nil {
@@ -288,8 +426,11 @@ func applyMigrationsFS(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 	}
 	defer func() {
 		// 无论迁移是否成功，都要释放锁。
-		// 使用 context.Background() 确保即使原 ctx 已取消也能释放锁。
-		_ = pgAdvisoryUnlock(context.Background(), db)
+		// 原迁移上下文可能已取消，因此使用独立的短超时收尾；即使
+		// 显式解锁失败，随后关闭固定连接也会释放 session advisory lock。
+		unlockCtx, cancel := context.WithTimeout(context.Background(), migrationsUnlockTimeout)
+		defer cancel()
+		_ = pgAdvisoryUnlock(unlockCtx, db)
 	}()
 
 	// 创建迁移记录表（如果不存在）。
@@ -369,13 +510,23 @@ func applyMigrationsFS(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 			// *_notx.sql：用于 CREATE/DROP INDEX CONCURRENTLY 场景，必须非事务执行。
 			// 逐条语句执行，避免将多条 CONCURRENTLY 语句放入同一个隐式事务块。
 			statements := splitSQLStatements(content)
+			verifiedAgentIdentityIndexesBeforeDrop := false
 			for i, stmt := range statements {
 				trimmed := strings.TrimSpace(stmt)
 				if trimmed == "" {
 					continue
 				}
-				if stripSQLLineComment(trimmed) == "" {
+				statementWithoutComments := stripSQLLineComment(trimmed)
+				if statementWithoutComments == "" {
 					continue
+				}
+				if name == openAIOwnedAgentIdentityUniqueMigration &&
+					!verifiedAgentIdentityIndexesBeforeDrop &&
+					strings.HasPrefix(strings.ToUpper(statementWithoutComments), "DROP INDEX CONCURRENTLY") {
+					if err := verifyNonTransactionalMigrationResult(ctx, db, name); err != nil {
+						return fmt.Errorf("verify migration %s before dropping protected indexes: %w", name, err)
+					}
+					verifiedAgentIdentityIndexesBeforeDrop = true
 				}
 				if _, err := db.ExecContext(ctx, trimmed); err != nil {
 					return fmt.Errorf("apply migration %s (non-tx statement %d): %w", name, i+1, err)
@@ -395,11 +546,23 @@ func applyMigrationsFS(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 		if err != nil {
 			return fmt.Errorf("begin migration %s: %w", name, err)
 		}
+		if name == usageLogImageInputTokensMigration {
+			// Listing pg_temp explicitly after public prevents PostgreSQL from
+			// implicitly searching a temporary schema before public for relations.
+			if _, err := tx.ExecContext(ctx, "SET LOCAL search_path = pg_catalog, public, pg_temp"); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("pin migration %s search_path: %w", name, err)
+			}
+		}
 
 		// 执行迁移 SQL
 		if _, err := tx.ExecContext(ctx, content); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("apply migration %s: %w", name, err)
+		}
+		if err := verifyTransactionalMigrationResult(ctx, tx, name); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("verify migration %s: %w", name, err)
 		}
 
 		// 记录迁移已完成，保存文件名和校验和
@@ -418,7 +581,73 @@ func applyMigrationsFS(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 	return nil
 }
 
-func prepareNonTransactionalMigration(ctx context.Context, db *sql.DB, name string) error {
+func verifyTransactionalMigrationResult(ctx context.Context, db migrationQueryExecutor, name string) error {
+	if name != usageLogImageInputTokensMigration {
+		return nil
+	}
+
+	rows, err := db.QueryContext(ctx, `
+		SELECT
+			a.attname,
+			pg_catalog.format_type(a.atttypid, a.atttypmod),
+			a.attnotnull,
+			COALESCE(pg_catalog.pg_get_expr(d.adbin, d.adrelid), '')
+		FROM pg_catalog.pg_attribute AS a
+		JOIN pg_catalog.pg_class AS c ON c.oid = a.attrelid
+		JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+		LEFT JOIN pg_catalog.pg_attrdef AS d
+		  ON d.adrelid = a.attrelid
+		 AND d.adnum = a.attnum
+		WHERE n.nspname = 'public'
+		  AND c.relname = 'usage_logs'
+		  AND c.relkind IN ('r', 'p')
+		  AND a.attname IN ('image_input_tokens', 'image_input_cost')
+		  AND a.attnum > 0
+		  AND NOT a.attisdropped
+		ORDER BY a.attname
+	`)
+	if err != nil {
+		return fmt.Errorf("inspect public.usage_logs image input columns: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	expectedTypes := map[string]string{
+		"image_input_cost":   "numeric(20,10)",
+		"image_input_tokens": "integer",
+	}
+	seen := make(map[string]struct{}, len(expectedTypes))
+	for rows.Next() {
+		var columnName string
+		var dataType string
+		var notNull bool
+		var defaultExpression string
+		if err := rows.Scan(&columnName, &dataType, &notNull, &defaultExpression); err != nil {
+			return fmt.Errorf("scan public.usage_logs image input column: %w", err)
+		}
+		expectedType, ok := expectedTypes[columnName]
+		if !ok || dataType != expectedType || !notNull || strings.TrimSpace(defaultExpression) != "0" {
+			return fmt.Errorf(
+				"public.usage_logs.%s has unexpected definition (type=%s not_null=%t default=%q)",
+				columnName,
+				dataType,
+				notNull,
+				defaultExpression,
+			)
+		}
+		seen[columnName] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate public.usage_logs image input columns: %w", err)
+	}
+	for columnName := range expectedTypes {
+		if _, ok := seen[columnName]; !ok {
+			return fmt.Errorf("public.usage_logs.%s is missing", columnName)
+		}
+	}
+	return nil
+}
+
+func prepareNonTransactionalMigration(ctx context.Context, db migrationDatabase, name string) error {
 	switch name {
 	case paymentOrdersOutTradeNoUniqueMigration:
 		return preparePaymentOrdersOutTradeNoUniqueMigration(ctx, db)
@@ -426,6 +655,8 @@ func prepareNonTransactionalMigration(ctx context.Context, db *sql.DB, name stri
 		return prepareOwnedAccountIdentityUniqueMigration(ctx, db)
 	case openAIOwnedAccountOrgIdentityUniqueMigration:
 		return prepareOpenAIOwnedAccountOrgIdentityUniqueMigration(ctx, db)
+	case openAIOwnedAgentIdentityUniqueMigration:
+		return prepareOpenAIOwnedAgentIdentityUniqueMigration(ctx, db)
 	case accountShareSeatCostQueryIndexesMigration:
 		return prepareAccountShareSeatCostQueryIndexesMigration(ctx, db)
 	case latestAPIKeyIPIndexMigration:
@@ -435,7 +666,7 @@ func prepareNonTransactionalMigration(ctx context.Context, db *sql.DB, name stri
 	}
 }
 
-func prepareLatestAPIKeyIPIndexMigration(ctx context.Context, db *sql.DB) error {
+func prepareLatestAPIKeyIPIndexMigration(ctx context.Context, db migrationDatabase) error {
 	invalid, err := indexIsInvalid(ctx, db, latestAPIKeyIPIndex)
 	if err != nil {
 		return fmt.Errorf("check invalid index %s: %w", latestAPIKeyIPIndex, err)
@@ -449,7 +680,17 @@ func prepareLatestAPIKeyIPIndexMigration(ctx context.Context, db *sql.DB) error 
 	return nil
 }
 
-func verifyNonTransactionalMigrationResult(ctx context.Context, db *sql.DB, name string) error {
+func verifyNonTransactionalMigrationResult(ctx context.Context, db migrationDatabase, name string) error {
+	if name == openAIOwnedAgentIdentityUniqueMigration {
+		matches, err := indexesMatchRequirements(ctx, db, openAIOwnedAgentIdentityUniqueIndexRequirements)
+		if err != nil {
+			return fmt.Errorf("verify OpenAI owned Agent Identity unique index definitions: %w", err)
+		}
+		if !matches {
+			return errors.New("one or more OpenAI owned Agent Identity unique indexes are missing, invalid, or do not match migration 217")
+		}
+		return nil
+	}
 	if name != accountShareSeatCostQueryIndexesMigration {
 		return nil
 	}
@@ -463,7 +704,7 @@ func verifyNonTransactionalMigrationResult(ctx context.Context, db *sql.DB, name
 	return nil
 }
 
-func prepareAccountShareSeatCostQueryIndexesMigration(ctx context.Context, db *sql.DB) error {
+func prepareAccountShareSeatCostQueryIndexesMigration(ctx context.Context, db migrationDatabase) error {
 	ready, err := indexesMatchRequirements(ctx, db, accountShareSeatCostIndexRequirements[:2])
 	if err != nil {
 		return fmt.Errorf("check account-share seat-cost ledger indexes: %w", err)
@@ -485,7 +726,7 @@ func prepareAccountShareSeatCostQueryIndexesMigration(ctx context.Context, db *s
 	return prepareIndexesForRetry(ctx, db, accountShareSeatCostIndexRequirements)
 }
 
-func prepareIndexesForRetry(ctx context.Context, db *sql.DB, requirements []migrationIndexRequirement) error {
+func prepareIndexesForRetry(ctx context.Context, db migrationDatabase, requirements []migrationIndexRequirement) error {
 	for _, requirement := range requirements {
 		indexName := requirement.index.name
 		invalid, err := indexIsInvalid(ctx, db, indexName)
@@ -510,7 +751,7 @@ func quoteMigrationCatalogName(name migrationCatalogName) string {
 	return quoteIdentifier(name.schema) + "." + quoteIdentifier(name.name)
 }
 
-func preparePaymentOrdersOutTradeNoUniqueMigration(ctx context.Context, db *sql.DB) error {
+func preparePaymentOrdersOutTradeNoUniqueMigration(ctx context.Context, db migrationDatabase) error {
 	duplicates, err := findDuplicatePaymentOrderOutTradeNos(ctx, db)
 	if err != nil {
 		return fmt.Errorf("precheck duplicate out_trade_no: %w", err)
@@ -537,7 +778,7 @@ func preparePaymentOrdersOutTradeNoUniqueMigration(ctx context.Context, db *sql.
 	return nil
 }
 
-func prepareOwnedAccountIdentityUniqueMigration(ctx context.Context, db *sql.DB) error {
+func prepareOwnedAccountIdentityUniqueMigration(ctx context.Context, db migrationDatabase) error {
 	duplicates, err := findDuplicateOwnedAccountIdentities(ctx, db)
 	if err != nil {
 		return fmt.Errorf("precheck duplicate owned account identities: %w", err)
@@ -565,7 +806,7 @@ func prepareOwnedAccountIdentityUniqueMigration(ctx context.Context, db *sql.DB)
 	return nil
 }
 
-func prepareOpenAIOwnedAccountOrgIdentityUniqueMigration(ctx context.Context, db *sql.DB) error {
+func prepareOpenAIOwnedAccountOrgIdentityUniqueMigration(ctx context.Context, db migrationDatabase) error {
 	duplicates, err := findDuplicateOpenAIOwnedAccountOrgIdentities(ctx, db)
 	if err != nil {
 		return fmt.Errorf("precheck duplicate OpenAI owned account org identities: %w", err)
@@ -593,7 +834,55 @@ func prepareOpenAIOwnedAccountOrgIdentityUniqueMigration(ctx context.Context, db
 	return nil
 }
 
-func findDuplicateOwnedAccountIdentities(ctx context.Context, db *sql.DB) ([]string, error) {
+func prepareOpenAIOwnedAgentIdentityUniqueMigration(ctx context.Context, db migrationDatabase) error {
+	duplicates, err := findDuplicateOpenAIOwnedAgentIdentityMigrationIdentities(ctx, db)
+	if err != nil {
+		return fmt.Errorf("precheck duplicate OpenAI owned Agent Identity migration identities: %w", err)
+	}
+	if len(duplicates) > 0 {
+		return fmt.Errorf(
+			"duplicate OpenAI owned Agent Identity migration identities block %s; remediate duplicates before retrying: %s",
+			openAIOwnedAgentIdentityUniqueMigration,
+			strings.Join(duplicates, ", "),
+		)
+	}
+
+	for _, requirement := range openAIOwnedAgentIdentityUniqueIndexRequirements {
+		invalid, err := indexIsInvalid(ctx, db, requirement.index.name)
+		if err != nil {
+			return fmt.Errorf("check invalid index %s: %w", requirement.index.name, err)
+		}
+		if invalid {
+			qualifiedIndexName := quoteMigrationCatalogName(requirement.index)
+			if _, err := db.ExecContext(ctx, fmt.Sprintf("DROP INDEX CONCURRENTLY IF EXISTS %s", qualifiedIndexName)); err != nil {
+				return fmt.Errorf("drop invalid index %s: %w", requirement.index.name, err)
+			}
+			continue
+		}
+
+		state, err := loadMigrationIndexCatalogState(ctx, db, requirement.index)
+		if err != nil {
+			return fmt.Errorf("inspect existing index %s: %w", requirement.index.name, err)
+		}
+		if !state.exists || migrationIndexMatchesRequirement(state, requirement) {
+			continue
+		}
+		if state.ready && state.valid && state.live {
+			return fmt.Errorf(
+				"existing index %s has a valid but unexpected definition; refuse to continue %s until the conflicting index is reviewed",
+				requirement.index.name,
+				openAIOwnedAgentIdentityUniqueMigration,
+			)
+		}
+		qualifiedIndexName := quoteMigrationCatalogName(requirement.index)
+		if _, err := db.ExecContext(ctx, fmt.Sprintf("DROP INDEX CONCURRENTLY IF EXISTS %s", qualifiedIndexName)); err != nil {
+			return fmt.Errorf("drop invalid index %s: %w", requirement.index.name, err)
+		}
+	}
+	return nil
+}
+
+func findDuplicateOwnedAccountIdentities(ctx context.Context, db migrationDatabase) ([]string, error) {
 	rows, err := db.QueryContext(ctx, `
 		WITH identities AS (
 			SELECT
@@ -601,7 +890,7 @@ func findDuplicateOwnedAccountIdentities(ctx context.Context, db *sql.DB) ([]str
 				'openai.chatgpt_account_id' AS identity_name,
 				NULLIF(BTRIM(credentials->>'chatgpt_account_id'), '') AS identity_value,
 				id
-			FROM accounts
+			FROM public.accounts
 			WHERE deleted_at IS NULL
 			  AND owner_user_id IS NOT NULL
 			  AND platform = 'openai'
@@ -615,7 +904,7 @@ func findDuplicateOwnedAccountIdentities(ctx context.Context, db *sql.DB) ([]str
 				'openai.chatgpt_user_id' AS identity_name,
 				NULLIF(BTRIM(credentials->>'chatgpt_user_id'), '') AS identity_value,
 				id
-			FROM accounts
+			FROM public.accounts
 			WHERE deleted_at IS NULL
 			  AND owner_user_id IS NOT NULL
 			  AND platform = 'openai'
@@ -631,7 +920,7 @@ func findDuplicateOwnedAccountIdentities(ctx context.Context, db *sql.DB) ([]str
 					'|' ||
 					LOWER(COALESCE(NULLIF(BTRIM(extra->>'account_uuid'), ''), NULLIF(BTRIM(credentials->>'account_uuid'), ''))) AS identity_value,
 				id
-			FROM accounts
+			FROM public.accounts
 			WHERE deleted_at IS NULL
 			  AND owner_user_id IS NOT NULL
 			  AND platform = 'anthropic'
@@ -648,7 +937,7 @@ func findDuplicateOwnedAccountIdentities(ctx context.Context, db *sql.DB) ([]str
 					'|' ||
 					LOWER(NULLIF(BTRIM(credentials->>'project_id'), '')) AS identity_value,
 				id
-			FROM accounts
+			FROM public.accounts
 			WHERE deleted_at IS NULL
 			  AND owner_user_id IS NOT NULL
 			  AND platform = 'gemini'
@@ -662,7 +951,7 @@ func findDuplicateOwnedAccountIdentities(ctx context.Context, db *sql.DB) ([]str
 				'antigravity.project_id' AS identity_name,
 				LOWER(NULLIF(BTRIM(credentials->>'project_id'), '')) AS identity_value,
 				id
-			FROM accounts
+			FROM public.accounts
 			WHERE deleted_at IS NULL
 			  AND owner_user_id IS NOT NULL
 			  AND platform = 'antigravity'
@@ -710,7 +999,7 @@ func findDuplicateOwnedAccountIdentities(ctx context.Context, db *sql.DB) ([]str
 	return duplicates, nil
 }
 
-func findDuplicateOpenAIOwnedAccountOrgIdentities(ctx context.Context, db *sql.DB) ([]string, error) {
+func findDuplicateOpenAIOwnedAccountOrgIdentities(ctx context.Context, db migrationDatabase) ([]string, error) {
 	rows, err := db.QueryContext(ctx, `
 		WITH identities AS (
 			SELECT
@@ -818,7 +1107,135 @@ func findDuplicateOpenAIOwnedAccountOrgIdentities(ctx context.Context, db *sql.D
 	return duplicates, nil
 }
 
-func findDuplicatePaymentOrderOutTradeNos(ctx context.Context, db *sql.DB) ([]string, error) {
+func findDuplicateOpenAIOwnedAgentIdentityMigrationIdentities(ctx context.Context, db migrationDatabase) ([]string, error) {
+	rows, err := db.QueryContext(ctx, `
+		WITH identities AS (
+			SELECT
+				owner_user_id,
+				'openai.org_user_v2' AS identity_name,
+				LOWER(NULLIF(BTRIM(credentials->>'organization_id'), '')) AS identity_value_1,
+				NULLIF(BTRIM(credentials->>'chatgpt_user_id'), '') AS identity_value_2,
+				id
+			FROM public.accounts
+			WHERE deleted_at IS NULL
+			  AND owner_user_id IS NOT NULL
+			  AND platform = 'openai'
+			  AND type = 'oauth'
+			  AND COALESCE(LOWER(NULLIF(BTRIM(credentials->>'auth_mode'), '')), '') <> 'agentidentity'
+			  AND NULLIF(BTRIM(credentials->>'organization_id'), '') IS NOT NULL
+			  AND NULLIF(BTRIM(credentials->>'chatgpt_user_id'), '') IS NOT NULL
+
+			UNION ALL
+
+			SELECT
+				owner_user_id,
+				'openai.org_account_v2' AS identity_name,
+				LOWER(NULLIF(BTRIM(credentials->>'organization_id'), '')) AS identity_value_1,
+				NULLIF(BTRIM(credentials->>'chatgpt_account_id'), '') AS identity_value_2,
+				id
+			FROM public.accounts
+			WHERE deleted_at IS NULL
+			  AND owner_user_id IS NOT NULL
+			  AND platform = 'openai'
+			  AND type = 'oauth'
+			  AND COALESCE(LOWER(NULLIF(BTRIM(credentials->>'auth_mode'), '')), '') <> 'agentidentity'
+			  AND NULLIF(BTRIM(credentials->>'organization_id'), '') IS NOT NULL
+			  AND NULLIF(BTRIM(credentials->>'chatgpt_user_id'), '') IS NULL
+			  AND NULLIF(BTRIM(credentials->>'chatgpt_account_id'), '') IS NOT NULL
+
+			UNION ALL
+
+			SELECT
+				owner_user_id,
+				'openai.legacy_user_v2' AS identity_name,
+				NULLIF(BTRIM(credentials->>'chatgpt_user_id'), '') AS identity_value_1,
+				NULL::text AS identity_value_2,
+				id
+			FROM public.accounts
+			WHERE deleted_at IS NULL
+			  AND owner_user_id IS NOT NULL
+			  AND platform = 'openai'
+			  AND type = 'oauth'
+			  AND COALESCE(LOWER(NULLIF(BTRIM(credentials->>'auth_mode'), '')), '') <> 'agentidentity'
+			  AND NULLIF(BTRIM(credentials->>'organization_id'), '') IS NULL
+			  AND NULLIF(BTRIM(credentials->>'chatgpt_user_id'), '') IS NOT NULL
+
+			UNION ALL
+
+			SELECT
+				owner_user_id,
+				'openai.legacy_account_v2' AS identity_name,
+				NULLIF(BTRIM(credentials->>'chatgpt_account_id'), '') AS identity_value_1,
+				NULL::text AS identity_value_2,
+				id
+			FROM public.accounts
+			WHERE deleted_at IS NULL
+			  AND owner_user_id IS NOT NULL
+			  AND platform = 'openai'
+			  AND type = 'oauth'
+			  AND COALESCE(LOWER(NULLIF(BTRIM(credentials->>'auth_mode'), '')), '') <> 'agentidentity'
+			  AND NULLIF(BTRIM(credentials->>'organization_id'), '') IS NULL
+			  AND NULLIF(BTRIM(credentials->>'chatgpt_user_id'), '') IS NULL
+			  AND NULLIF(BTRIM(credentials->>'chatgpt_account_id'), '') IS NOT NULL
+
+			UNION ALL
+
+			SELECT
+				owner_user_id,
+				'openai.agent_identity_team' AS identity_name,
+				NULLIF(BTRIM(credentials->>'chatgpt_account_id'), '') AS identity_value_1,
+				NULL::text AS identity_value_2,
+				id
+			FROM public.accounts
+			WHERE deleted_at IS NULL
+			  AND owner_user_id IS NOT NULL
+			  AND platform = 'openai'
+			  AND type = 'oauth'
+			  AND LOWER(NULLIF(BTRIM(credentials->>'auth_mode'), '')) = 'agentidentity'
+			  AND NULLIF(BTRIM(credentials->>'chatgpt_account_id'), '') IS NOT NULL
+		)
+		SELECT
+			identity_name,
+			owner_user_id,
+			COUNT(*) AS duplicate_count,
+			ARRAY_TO_STRING((ARRAY_AGG(id ORDER BY id))[1:5], ',') AS sample_ids
+		FROM identities
+		GROUP BY identity_name, owner_user_id, identity_value_1, identity_value_2
+		HAVING COUNT(*) > 1
+		ORDER BY duplicate_count DESC, identity_name, owner_user_id
+		LIMIT 10
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	duplicates := make([]string, 0, 10)
+	for rows.Next() {
+		var identityName string
+		var ownerUserID int64
+		var duplicateCount int
+		var sampleIDs string
+		if err := rows.Scan(&identityName, &ownerUserID, &duplicateCount, &sampleIDs); err != nil {
+			return nil, err
+		}
+		duplicates = append(duplicates, fmt.Sprintf(
+			"%s owner_user_id=%d count=%d sample_account_ids=%s",
+			identityName,
+			ownerUserID,
+			duplicateCount,
+			sampleIDs,
+		))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return duplicates, nil
+}
+
+func findDuplicatePaymentOrderOutTradeNos(ctx context.Context, db migrationDatabase) ([]string, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT out_trade_no, COUNT(*) AS duplicate_count
 		FROM payment_orders
@@ -850,7 +1267,7 @@ func findDuplicatePaymentOrderOutTradeNos(ctx context.Context, db *sql.DB) ([]st
 	return duplicates, nil
 }
 
-func indexIsInvalid(ctx context.Context, db *sql.DB, indexName string) (bool, error) {
+func indexIsInvalid(ctx context.Context, db migrationDatabase, indexName string) (bool, error) {
 	var invalid bool
 	err := db.QueryRowContext(ctx, `
 		SELECT EXISTS (
@@ -866,7 +1283,7 @@ func indexIsInvalid(ctx context.Context, db *sql.DB, indexName string) (bool, er
 	return invalid, err
 }
 
-func indexesMatchRequirements(ctx context.Context, db *sql.DB, requirements []migrationIndexRequirement) (bool, error) {
+func indexesMatchRequirements(ctx context.Context, db migrationDatabase, requirements []migrationIndexRequirement) (bool, error) {
 	for _, requirement := range requirements {
 		state, err := loadMigrationIndexCatalogState(ctx, db, requirement.index)
 		if err != nil {
@@ -879,7 +1296,7 @@ func indexesMatchRequirements(ctx context.Context, db *sql.DB, requirements []mi
 	return true, nil
 }
 
-func loadMigrationIndexCatalogState(ctx context.Context, db *sql.DB, index migrationCatalogName) (migrationIndexCatalogState, error) {
+func loadMigrationIndexCatalogState(ctx context.Context, db migrationDatabase, index migrationCatalogName) (migrationIndexCatalogState, error) {
 	var state migrationIndexCatalogState
 	var keysJSON string
 	var includeColumnsJSON string
@@ -1001,7 +1418,7 @@ func migrationIndexMatchesRequirement(state migrationIndexCatalogState, requirem
 	if state.table != requirement.table ||
 		state.accessMethod != requirement.accessMethod ||
 		state.relationKind != "i" ||
-		state.unique || state.primary || state.exclusion ||
+		state.unique != requirement.unique || state.primary || state.exclusion ||
 		!state.ready || !state.valid || !state.live ||
 		state.keyCount != len(requirement.keys) ||
 		state.attributeCount != len(requirement.keys)+len(requirement.includeColumns) ||
@@ -1016,7 +1433,8 @@ func migrationIndexMatchesRequirement(state migrationIndexCatalogState, requirem
 			actual.TypeName != expected.resultType.name ||
 			actual.OpClassSchema != expected.operatorClass.schema ||
 			actual.OpClassName != expected.operatorClass.name ||
-			actual.CollationSchema != "" || actual.CollationName != "" ||
+			actual.CollationSchema != expected.collation.schema ||
+			actual.CollationName != expected.collation.name ||
 			actual.OptionBits != 0 {
 			return false
 		}
@@ -1087,7 +1505,7 @@ func isMigrationIndexCastContinuation(next byte) bool {
 		(next >= 'a' && next <= 'z')
 }
 
-func tableRowAndSizeEstimates(ctx context.Context, db *sql.DB, tableName string) (int64, int64, error) {
+func tableRowAndSizeEstimates(ctx context.Context, db migrationDatabase, tableName string) (int64, int64, error) {
 	var estimatedRows int64
 	var tableBytes int64
 	err := db.QueryRowContext(ctx, `
@@ -1101,7 +1519,7 @@ func tableRowAndSizeEstimates(ctx context.Context, db *sql.DB, tableName string)
 	return estimatedRows, tableBytes, err
 }
 
-func ensureAtlasBaselineAligned(ctx context.Context, db *sql.DB, fsys fs.FS) error {
+func ensureAtlasBaselineAligned(ctx context.Context, db migrationDatabase, fsys fs.FS) error {
 	hasLegacy, err := tableExists(ctx, db, "schema_migrations")
 	if err != nil {
 		return fmt.Errorf("check schema_migrations: %w", err)
@@ -1142,7 +1560,7 @@ func ensureAtlasBaselineAligned(ctx context.Context, db *sql.DB, fsys fs.FS) err
 	return nil
 }
 
-func tableExists(ctx context.Context, db *sql.DB, tableName string) (bool, error) {
+func tableExists(ctx context.Context, db migrationDatabase, tableName string) (bool, error) {
 	var exists bool
 	err := db.QueryRowContext(ctx, `
 		SELECT EXISTS (
@@ -1273,7 +1691,7 @@ func stripSQLLineComment(s string) string {
 // pgAdvisoryLock 获取 PostgreSQL Advisory Lock。
 // Advisory Lock 是一种轻量级的锁机制，不与任何特定的数据库对象关联。
 // 它非常适合用于应用层面的分布式锁场景，如迁移序列化。
-func pgAdvisoryLock(ctx context.Context, db *sql.DB) error {
+func pgAdvisoryLock(ctx context.Context, db migrationDatabase) error {
 	ticker := time.NewTicker(migrationsLockRetryInterval)
 	defer ticker.Stop()
 
@@ -1295,7 +1713,7 @@ func pgAdvisoryLock(ctx context.Context, db *sql.DB) error {
 
 // pgAdvisoryUnlock 释放 PostgreSQL Advisory Lock。
 // 必须在获取锁后确保释放，否则会阻塞其他实例的迁移操作。
-func pgAdvisoryUnlock(ctx context.Context, db *sql.DB) error {
+func pgAdvisoryUnlock(ctx context.Context, db migrationDatabase) error {
 	_, err := db.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", migrationsAdvisoryLockID)
 	if err != nil {
 		return fmt.Errorf("release migrations lock: %w", err)

@@ -45,6 +45,17 @@ func openAICompatibleRequestContext(ctx context.Context, apiKey *service.APIKey)
 	return context.WithValue(ctx, ctxkey.ForcePlatform, service.PlatformGrok)
 }
 
+// openAIResponsesDispatchContext removes the routing-only deadline before the
+// upstream attempt while retaining request cancellation and route-scoped values.
+func openAIResponsesDispatchContext(c *gin.Context, routingCtx context.Context, apiKey *service.APIKey) context.Context {
+	ctx := context.Background()
+	if c != nil && c.Request != nil {
+		ctx = c.Request.Context()
+	}
+	ctx = service.WithAccountShareModeRequestFromContext(ctx, routingCtx)
+	return openAICompatibleRequestContext(ctx, apiKey)
+}
+
 func (h *OpenAIGatewayHandler) handleAccountShareModeSelectionError(c *gin.Context, err error, streamStarted bool) bool {
 	switch {
 	case errors.Is(err, service.ErrAccountShareModeGroupUnbound):

@@ -1,12 +1,12 @@
 <template>
-  <div class="card relative overflow-hidden p-4">
-    <div v-if="loading" class="absolute inset-0 z-10 flex items-center justify-center bg-white/50 backdrop-blur-sm dark:bg-dark-800/50">
+  <div class="dashboard-section-card relative p-4 sm:p-5">
+    <div v-if="loading" class="dashboard-loading-overlay">
       <LoadingSpinner size="md" />
     </div>
 
     <div class="mb-4 flex flex-wrap items-start justify-between gap-3">
       <div>
-        <h3 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('dashboard.accountSharingTitle') }}</h3>
+        <h3 class="dashboard-card-title">{{ t('dashboard.accountSharingTitle') }}</h3>
         <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
           {{ stats?.start_date || '-' }} - {{ stats?.end_date || '-' }}
         </p>
@@ -22,7 +22,7 @@
     </div>
 
     <div v-else-if="summary" class="space-y-4">
-      <div class="grid grid-cols-2 gap-4 lg:grid-cols-5">
+      <div class="grid grid-cols-2 gap-3 xl:grid-cols-5">
         <div>
           <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('dashboard.ownedAccounts') }}</p>
           <p class="mt-1 text-xl font-bold text-gray-900 dark:text-white">{{ formatNumber(summary.owned_accounts) }}</p>
@@ -62,7 +62,7 @@
         </div>
       </div>
 
-      <div class="grid grid-cols-2 gap-3 text-xs text-gray-600 dark:text-gray-300 lg:grid-cols-4">
+      <div class="grid grid-cols-2 gap-3 text-xs text-gray-600 dark:text-gray-300 xl:grid-cols-4">
         <div class="flex items-center justify-between border-t border-gray-100 pt-3 dark:border-gray-700">
           <span>{{ t('dashboard.privateMode') }}</span>
           <span class="font-semibold text-gray-900 dark:text-white">{{ summary.private_accounts }}</span>
@@ -89,43 +89,55 @@
           <span class="text-xs text-gray-400 dark:text-gray-500">{{ t('dashboard.totalAccountCost') }} ${{ formatCost(summary.total_account_cost) }}</span>
         </div>
 
-        <div v-if="topAccounts.length" class="overflow-x-auto">
-          <table class="w-full text-xs">
-            <thead>
-              <tr class="border-b border-gray-100 text-gray-500 dark:border-gray-700 dark:text-gray-400">
-                <th class="pb-2 text-left">{{ t('dashboard.account') }}</th>
-                <th class="pb-2 text-left">{{ t('dashboard.shareStatus') }}</th>
-                <th class="pb-2 text-right">{{ t('dashboard.selfUsage') }}</th>
-                <th class="pb-2 text-right">{{ t('dashboard.externalUsage') }}</th>
-                <th class="pb-2 text-right">{{ t('dashboard.ownerCredit') }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="account in topAccounts" :key="account.account_id" class="border-b border-gray-50 dark:border-gray-800">
-                <td class="max-w-[180px] py-2">
-                  <div class="truncate font-medium text-gray-900 dark:text-white" :title="account.name">{{ account.name }}</div>
-                  <div class="text-gray-400 dark:text-gray-500">{{ account.platform }}</div>
-                </td>
-                <td class="py-2">
-                  <span class="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium" :class="statusClass(account)">
-                    {{ statusLabel(account) }}
-                  </span>
-                </td>
-                <td class="py-2 text-right text-gray-700 dark:text-gray-300">
-                  ${{ formatCost(account.self_account_cost) }}
-                  <div class="text-gray-400 dark:text-gray-500">{{ formatNumber(account.self_requests) }}</div>
-                </td>
-                <td class="py-2 text-right text-blue-600 dark:text-blue-400">
-                  ${{ formatCost(account.external_consumer_charge) }}
-                  <div class="text-gray-400 dark:text-gray-500">{{ formatNumber(account.external_requests) }}</div>
-                </td>
-                <td class="py-2 text-right font-semibold text-emerald-600 dark:text-emerald-400">
-                  ${{ formatCost(account.external_owner_credit) }}
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+        <template v-if="pagedAccounts.length">
+          <div class="overflow-x-auto">
+            <table class="w-full text-xs">
+              <thead>
+                <tr class="border-b border-gray-100 text-gray-500 dark:border-gray-700 dark:text-gray-400">
+                  <th class="pb-2 text-left">{{ t('dashboard.account') }}</th>
+                  <th class="pb-2 text-left">{{ t('dashboard.shareStatus') }}</th>
+                  <th class="pb-2 text-right">{{ t('dashboard.selfUsage') }}</th>
+                  <th class="pb-2 text-right">{{ t('dashboard.externalUsage') }}</th>
+                  <th class="pb-2 text-right">{{ t('dashboard.ownerCredit') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="account in pagedAccounts" :key="account.account_id" class="border-b border-gray-50 dark:border-gray-800">
+                  <td class="max-w-[180px] py-2">
+                    <div class="truncate font-medium text-gray-900 dark:text-white" :title="account.name">{{ account.name }}</div>
+                    <div class="text-gray-400 dark:text-gray-500">{{ account.platform }}</div>
+                  </td>
+                  <td class="py-2">
+                    <span class="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium" :class="statusClass(account)">
+                      {{ statusLabel(account) }}
+                    </span>
+                  </td>
+                  <td class="py-2 text-right text-gray-700 dark:text-gray-300">
+                    ${{ formatCost(account.self_account_cost) }}
+                    <div class="text-gray-400 dark:text-gray-500">{{ formatNumber(account.self_requests) }}</div>
+                  </td>
+                  <td class="py-2 text-right text-blue-600 dark:text-blue-400">
+                    ${{ formatCost(account.external_consumer_charge) }}
+                    <div class="text-gray-400 dark:text-gray-500">{{ formatNumber(account.external_requests) }}</div>
+                  </td>
+                  <td class="py-2 text-right font-semibold text-emerald-600 dark:text-emerald-400">
+                    ${{ formatCost(account.external_owner_credit) }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <Pagination
+            v-if="accounts.length > accountPageSize"
+            class="mt-2 rounded-lg"
+            :total="accounts.length"
+            :page="accountPage"
+            :page-size="accountPageSize"
+            :show-page-size-selector="false"
+            @update:page="accountPage = $event"
+          />
+        </template>
 
         <div v-else class="py-6 text-center text-sm text-gray-500 dark:text-gray-400">
           {{ t('dashboard.noOwnedAccountStats') }}
@@ -136,10 +148,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
+import Pagination from '@/components/common/Pagination.vue'
 import type { AccountSharingAccountStat, AccountSharingDashboardStats } from '@/api/usage'
 import { formatCostFixed as formatCost, formatNumberLocaleString as formatNumber } from '@/utils/format'
 
@@ -152,7 +165,20 @@ const props = defineProps<{
 const { t } = useI18n()
 
 const summary = computed(() => props.stats?.summary ?? null)
-const topAccounts = computed(() => props.stats?.accounts?.slice(0, 8) ?? [])
+const accountPageSize = 10
+const accountPage = ref(1)
+const accounts = computed(() => props.stats?.accounts ?? [])
+const pagedAccounts = computed(() => {
+  const start = (accountPage.value - 1) * accountPageSize
+  return accounts.value.slice(start, start + accountPageSize)
+})
+
+watch(
+  () => props.stats?.accounts,
+  () => {
+    accountPage.value = 1
+  }
+)
 
 function statusLabel(account: AccountSharingAccountStat): string {
   if (account.share_mode === 'private') {

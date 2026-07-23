@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Pixel artifact retention cleanup daily
+
+[Timer]
+OnCalendar=*-*-* 03:15:00 Asia/Shanghai
+RandomizedDelaySec=5m
+AccuracySec=1m
+Unit=pixel-retention-cleanup.service
+
+[Install]
+WantedBy=timers.target

@@ -97,6 +97,24 @@ func TestInjectSiteTitle(t *testing.T) {
 		assert.Contains(t, string(result), `<div id="app"></div>`)
 		assert.Contains(t, string(result), "<title>TestSite - AI API Gateway</title>")
 	})
+
+	t.Run("escapes_site_name", func(t *testing.T) {
+		html := []byte(`<html><head><title>Pixel</title></head></html>`)
+		result := injectSiteTitle(html, []byte(`{"site_name":"</title><script>alert(1)</script>"}`))
+
+		assert.NotContains(t, string(result), `<script>alert(1)</script>`)
+		assert.Contains(t, string(result), `&lt;/title&gt;&lt;script&gt;alert(1)&lt;/script&gt;`)
+	})
+}
+
+func TestInjectSiteFavicon(t *testing.T) {
+	html := []byte(`<html><head><link rel="icon" href="/favicon.svg" /></head></html>`)
+
+	result := injectSiteFavicon(html, []byte(`{"site_logo":"https://cdn.example.com/logo.png?a=1&b=2"}`))
+	require.Contains(t, string(result), `href="https://cdn.example.com/logo.png?a=1&amp;b=2"`)
+
+	unsafeResult := injectSiteFavicon(html, []byte(`{"site_logo":"javascript:alert(1)"}`))
+	require.Equal(t, string(html), string(unsafeResult))
 }
 
 func TestReplaceNoncePlaceholder(t *testing.T) {

@@ -1,7 +1,51 @@
 <template>
-  <div v-if="!isDesktopViewport" class="space-y-3">
+  <div
+    v-if="!isDesktopViewport"
+    class="data-table-mobile space-y-3"
+    :class="{ 'data-table-v2': uiSkin === 'v2' }"
+    :data-ui-skin="uiSkin"
+  >
+    <div
+      v-if="sortableColumns.length > 0"
+      data-testid="mobile-sort-controls"
+      class="data-table-mobile-sort data-table-mobile-card grid grid-cols-[minmax(0,1fr)_minmax(7rem,auto)] gap-2 rounded-lg border border-gray-200 bg-white p-3 dark:border-dark-700 dark:bg-dark-900"
+    >
+      <label class="min-w-0">
+        <span class="data-table-mobile-sort-label mb-1 block text-sm font-medium text-gray-600 dark:text-dark-300">
+          {{ t('table.sortBy') }}
+        </span>
+        <select
+          data-testid="mobile-sort-field"
+          class="data-table-mobile-sort-select min-h-11 w-full min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50 dark:border-dark-600 dark:bg-dark-800 dark:text-gray-100"
+          :value="sortKey"
+          @change="handleMobileSortFieldChange"
+        >
+          <option value="" disabled>{{ t('table.sortFieldPlaceholder') }}</option>
+          <option v-for="column in sortableColumns" :key="column.key" :value="column.key">
+            {{ column.label }}
+          </option>
+        </select>
+      </label>
+
+      <label class="min-w-0">
+        <span class="data-table-mobile-sort-label mb-1 block text-sm font-medium text-gray-600 dark:text-dark-300">
+          {{ t('table.sortDirection') }}
+        </span>
+        <select
+          data-testid="mobile-sort-order"
+          class="data-table-mobile-sort-select min-h-11 w-full min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-dark-600 dark:bg-dark-800 dark:text-gray-100"
+          :value="sortOrder"
+          :disabled="!sortKey"
+          @change="handleMobileSortOrderChange"
+        >
+          <option value="asc">{{ t('table.sortAscending') }}</option>
+          <option value="desc">{{ t('table.sortDescending') }}</option>
+        </select>
+      </label>
+    </div>
+
     <template v-if="loading">
-      <div v-for="i in 5" :key="i" class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-900">
+      <div v-for="i in 5" :key="i" class="data-table-mobile-card rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-900">
         <div class="space-y-3">
           <div v-for="column in dataColumns" :key="column.key" class="flex justify-between">
             <div class="h-4 w-20 animate-pulse rounded bg-gray-200 dark:bg-dark-700"></div>
@@ -15,7 +59,7 @@
     </template>
 
     <template v-else-if="!data || data.length === 0">
-      <div class="rounded-lg border border-gray-200 bg-white p-12 text-center dark:border-dark-700 dark:bg-dark-900">
+      <div class="data-table-mobile-card rounded-lg border border-gray-200 bg-white p-12 text-center dark:border-dark-700 dark:bg-dark-900">
         <slot name="empty">
           <div class="flex flex-col items-center">
             <Icon
@@ -35,7 +79,7 @@
       <div
         v-for="(row, index) in sortedData"
         :key="resolveRowKey(row, index)"
-        class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-900"
+        class="data-table-mobile-card rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-900"
       >
         <div class="space-y-3">
           <div
@@ -43,16 +87,16 @@
             :key="column.key"
             class="flex items-start justify-between gap-4"
           >
-            <span class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">
+            <span class="data-table-mobile-label text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">
               {{ column.label }}
             </span>
-            <div class="text-right text-sm text-gray-900 dark:text-gray-100">
+            <div class="data-table-mobile-value min-w-0 flex-1 text-right text-sm text-gray-900 dark:text-gray-100">
               <slot :name="`cell-${column.key}`" :row="row" :value="row[column.key]" :expanded="actionsExpanded">
                 {{ column.formatter ? column.formatter(row[column.key], row) : row[column.key] }}
               </slot>
             </div>
           </div>
-          <div v-if="hasActionsColumn" class="border-t border-gray-200 pt-3 dark:border-dark-700">
+          <div v-if="hasActionsColumn" class="data-table-mobile-actions border-t border-gray-200 pt-3 dark:border-dark-700">
             <slot name="cell-actions" :row="row" :value="row['actions']" :expanded="actionsExpanded"></slot>
           </div>
         </div>
@@ -63,58 +107,70 @@
   <div
     v-else
     ref="tableWrapperRef"
-    class="table-wrapper"
+    class="table-wrapper data-table-desktop"
+    :data-ui-skin="uiSkin"
     :class="{
       'actions-expanded': actionsExpanded,
-      'is-scrollable': isScrollable
+      'is-scrollable': isScrollable,
+      'data-table-v2': uiSkin === 'v2'
     }"
   >
-    <table class="w-full min-w-max divide-y divide-gray-200 dark:divide-dark-700">
+    <table class="data-table-grid w-full min-w-max divide-y divide-gray-200 dark:divide-dark-700">
       <thead class="table-header bg-gray-50 dark:bg-dark-800">
         <tr>
           <th
             v-for="(column, index) in columns"
             :key="column.key"
             scope="col"
+            :aria-sort="column.sortable ? getAriaSort(column.key) : undefined"
             :class="[
-              'sticky-header-cell py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400',
+              'sticky-header-cell text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400',
+              column.sortable ? 'py-0' : 'py-3',
               getAdaptivePaddingClass(),
-              { 'cursor-pointer hover:bg-gray-100 dark:hover:bg-dark-700': column.sortable },
               getStickyColumnClass(column, index),
               column.class
             ]"
-            @click="column.sortable && handleSort(column.key)"
           >
-            <slot
-              :name="`header-${column.key}`"
-              :column="column"
-              :sort-key="sortKey"
-              :sort-order="sortOrder"
+            <component
+              :is="column.sortable ? 'button' : 'div'"
+              :type="column.sortable ? 'button' : undefined"
+              :class="[
+                'flex items-center text-left',
+                column.sortable && 'data-table-sort-button min-h-11 w-full cursor-pointer rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50'
+              ]"
+              @click="column.sortable && handleSort(column.key)"
             >
-              <div class="flex items-center space-x-1">
-                <span>{{ column.label }}</span>
-                <span v-if="column.sortable" class="text-gray-400 dark:text-dark-500">
-                  <svg
-                    v-if="sortKey === column.key"
-                    class="h-4 w-4"
-                    :class="{ 'rotate-180 transform': sortOrder === 'desc' }"
-                    fill="currentColor"
-                    viewBox="0 0 20 20"
-                  >
-                    <path
-                      fill-rule="evenodd"
-                      d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z"
-                      clip-rule="evenodd"
-                    />
-                  </svg>
-                  <svg v-else class="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
-                    <path
-                      d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
-                    />
-                  </svg>
-                </span>
-              </div>
-            </slot>
+              <slot
+                :name="`header-${column.key}`"
+                :column="column"
+                :sort-key="sortKey"
+                :sort-order="sortOrder"
+              >
+                <div class="flex items-center space-x-1">
+                  <span>{{ column.label }}</span>
+                  <span v-if="column.sortable" class="text-gray-400 dark:text-dark-500">
+                    <svg
+                      v-if="sortKey === column.key"
+                      class="h-4 w-4"
+                      :class="{ 'rotate-180 transform': sortOrder === 'desc' }"
+                      fill="currentColor"
+                      viewBox="0 0 20 20"
+                    >
+                      <path
+                        fill-rule="evenodd"
+                        d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z"
+                        clip-rule="evenodd"
+                      />
+                    </svg>
+                    <svg v-else class="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                      <path
+                        d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
+                      />
+                    </svg>
+                  </span>
+                </div>
+              </slot>
+            </component>
           </th>
         </tr>
       </thead>
@@ -201,8 +257,10 @@ import { useVirtualizer } from '@tanstack/vue-virtual'
 import { useI18n } from 'vue-i18n'
 import type { Column } from './types'
 import Icon from '@/components/icons/Icon.vue'
+import { useUiSkin } from '@/composables/useUiSkin'
 
 const { t } = useI18n()
+const uiSkin = useUiSkin()
 
 const desktopViewportQuery = '(min-width: 768px)'
 const isDesktopViewport = ref(
@@ -507,6 +565,7 @@ const resolveStableRowKey = (row: any): string | number | undefined => {
 const resolveRowKey = (row: any, index: number) => resolveStableRowKey(row) ?? index
 
 const dataColumns = computed(() => props.columns.filter((column) => column.key !== 'actions'))
+const sortableColumns = computed(() => props.columns.filter((column) => column.sortable))
 const columnsSignature = computed(() =>
   props.columns.map((column) => `${column.key}:${column.sortable ? '1' : '0'}`).join('|')
 )
@@ -556,6 +615,34 @@ const handleSort = (key: string) => {
     sortKey.value = key
     sortOrder.value = newOrder
   }
+}
+
+const getChangedSelectValue = (event: Event): string => {
+  const select = event.currentTarget
+  if (!(select instanceof HTMLSelectElement)) {
+    throw new TypeError('DataTable mobile sort controls require a native select element')
+  }
+  return select.value
+}
+
+const handleMobileSortFieldChange = (event: Event) => {
+  const key = normalizeSortKey(getChangedSelectValue(event))
+  if (!key || key === sortKey.value) return
+  handleSort(key)
+}
+
+const handleMobileSortOrderChange = (event: Event) => {
+  const key = normalizeSortKey(sortKey.value)
+  if (!key) return
+
+  const order = normalizeSortOrder(getChangedSelectValue(event))
+  if (order === sortOrder.value) return
+  handleSort(key)
+}
+
+const getAriaSort = (key: string): 'ascending' | 'descending' | 'none' => {
+  if (sortKey.value !== key) return 'none'
+  return sortOrder.value === 'asc' ? 'ascending' : 'descending'
 }
 
 const sortedData = computed(() => {
@@ -914,6 +1001,67 @@ tbody tr:hover .sticky-col {
 
 .dark .is-scrollable .sticky-col-right::before {
   background: linear-gradient(to left, rgba(0, 0, 0, 0.2), transparent);
+}
+
+/* Route-scoped v2 table skin. Legacy routes keep the original utility palette above. */
+.data-table-v2.data-table-mobile .data-table-mobile-card {
+  border-color: rgb(var(--ui-border));
+  background-color: rgb(var(--ui-surface));
+  box-shadow: var(--ui-shadow-card);
+}
+
+.data-table-v2 .data-table-mobile-label {
+  color: rgb(var(--ui-text-subtle));
+}
+
+.data-table-v2 .data-table-mobile-value {
+  color: rgb(var(--ui-text));
+}
+
+.data-table-v2 .data-table-mobile-actions {
+  border-color: rgb(var(--ui-border));
+}
+
+.data-table-v2 .data-table-mobile-sort-label {
+  color: rgb(var(--ui-text-muted));
+}
+
+.data-table-v2 .data-table-mobile-sort-select {
+  border-color: rgb(var(--ui-border));
+  background-color: rgb(var(--ui-surface));
+  color: rgb(var(--ui-text));
+}
+
+.data-table-v2 .data-table-mobile-sort-select:disabled {
+  background-color: rgb(var(--ui-surface-subtle));
+  color: rgb(var(--ui-text-subtle));
+}
+
+.data-table-v2.table-wrapper .table-header,
+.data-table-v2 .sticky-header-cell {
+  background-color: rgb(var(--ui-surface-subtle));
+  color: rgb(var(--ui-text-subtle));
+}
+
+.data-table-v2 .data-table-sort-button:hover {
+  color: rgb(var(--ui-text));
+}
+
+.data-table-v2 .table-body {
+  background-color: rgb(var(--ui-surface));
+}
+
+.data-table-v2 .table-body td {
+  color: rgb(var(--ui-text));
+}
+
+.data-table-v2 tbody .sticky-col {
+  background-color: rgb(var(--ui-surface));
+}
+
+.data-table-v2 tbody tr:hover,
+.data-table-v2 tbody tr:hover .sticky-col {
+  background-color: rgb(var(--ui-surface-hover));
 }
 </style>
 

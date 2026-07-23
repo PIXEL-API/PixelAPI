@@ -1767,10 +1767,13 @@ func TestOpenAIGatewayServiceRecordUsage_ImageUsesChannelTokenPricingWithOfficia
 			RequestID: "resp_image_official_token_usage",
 			Model:     "gpt-image-2",
 			Usage: OpenAIUsage{
-				InputTokens:       22,
-				TextInputTokens:   22,
-				OutputTokens:      196,
-				ImageOutputTokens: 196,
+				InputTokens:               42,
+				TextInputTokens:           22,
+				ImageInputTokens:          20,
+				CacheReadInputTokens:      10,
+				ImageCacheReadInputTokens: 10,
+				OutputTokens:              196,
+				ImageOutputTokens:         196,
 			},
 			ImageCount: 1,
 			ImageSize:  "1K",
@@ -1793,11 +1796,15 @@ func TestOpenAIGatewayServiceRecordUsage_ImageUsesChannelTokenPricingWithOfficia
 	require.NotNil(t, usageRepo.lastLog.BillingMode)
 	require.Equal(t, string(BillingModeToken), *usageRepo.lastLog.BillingMode)
 	require.Equal(t, 1, usageRepo.lastLog.ImageCount)
+	require.Equal(t, 32, usageRepo.lastLog.InputTokens)
+	require.Equal(t, 10, usageRepo.lastLog.ImageInputTokens)
 	require.InDelta(t, 22*5e-6, usageRepo.lastLog.InputCost, 1e-12)
+	require.InDelta(t, 10*8e-6, usageRepo.lastLog.ImageInputCost, 1e-12)
+	require.InDelta(t, 10*2e-6, usageRepo.lastLog.CacheReadCost, 1e-12)
 	require.InDelta(t, 0.0, usageRepo.lastLog.OutputCost, 1e-12)
 	require.InDelta(t, 196*30e-6, usageRepo.lastLog.ImageOutputCost, 1e-12)
-	require.InDelta(t, 0.00599, usageRepo.lastLog.TotalCost, 1e-12)
-	require.InDelta(t, 0.04792, usageRepo.lastLog.ActualCost, 1e-12)
+	require.InDelta(t, 0.00609, usageRepo.lastLog.TotalCost, 1e-12)
+	require.InDelta(t, 0.04872, usageRepo.lastLog.ActualCost, 1e-12)
 }
 
 func TestOpenAIGatewayServiceRecordUsage_ResponseImageBillingModelNotOverriddenByRequestedModel(t *testing.T) {

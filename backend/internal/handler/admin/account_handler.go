@@ -948,6 +948,7 @@ func (h *AccountHandler) Update(c *gin.Context) {
 		return
 	}
 
+	h.enqueueOwnedPublicShareValidation(account)
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
 }
 

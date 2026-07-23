@@ -44,6 +44,40 @@ func newTestGitHubReleaseClient() *githubReleaseClient {
 	}
 }
 
+func TestGitHubReleaseClientAPIRequestAuthorization(t *testing.T) {
+	tests := []struct {
+		name     string
+		url      string
+		wantAuth string
+	}{
+		{name: "exact HTTPS authority", url: "https://api.github.com/repos/test/repo", wantAuth: "Bearer update-secret"},
+		{name: "HTTP", url: "http://api.github.com/repos/test/repo"},
+		{name: "subdomain", url: "https://sub.api.github.com/repos/test/repo"},
+		{name: "userinfo", url: "https://user@api.github.com/repos/test/repo"},
+		{name: "explicit port", url: "https://api.github.com:443/repos/test/repo"},
+		{name: "different host", url: "https://github.com/test/repo"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := newTestGitHubReleaseClient()
+			client.updateGitHubToken = "update-secret"
+			req, err := client.newAPIRequest(context.Background(), tt.url)
+			require.NoError(t, err)
+			require.Equal(t, tt.wantAuth, req.Header.Get("Authorization"))
+		})
+	}
+}
+
+func TestGitHubReleaseClientRedirectStripsAuthorizationAcrossHosts(t *testing.T) {
+	req, err := http.NewRequest(http.MethodGet, "https://objects.githubusercontent.com/asset", nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer update-secret")
+
+	require.NoError(t, githubAPICheckRedirect(nil)(req, nil))
+	require.Empty(t, req.Header.Get("Authorization"))
+}
+
 func (s *GitHubReleaseServiceSuite) SetupTest() {
 	s.tempDir = s.T().TempDir()
 }

@@ -14,10 +14,12 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -231,6 +233,228 @@ func TestSOCKS5ProxyDialerBasic(t *testing.T) {
 	}
 	if dialer.proxyURL != proxyURL {
 		t.Error("expected proxyURL to be set")
+	}
+}
+
+func TestDialerBoundsCustomTCPDialStage(t *testing.T) {
+	dialer := NewDialer(&Profile{}, func(ctx context.Context, _, _ string) (net.Conn, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	dialer.stageTimeout = 20 * time.Millisecond
+
+	started := time.Now()
+	_, err := dialer.DialTLSContext(context.Background(), "tcp", "example.com:443")
+	if err == nil {
+		t.Fatal("expected bounded TCP dial to fail")
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("TCP dial exceeded stage bound: %s", elapsed)
+	}
+}
+
+func TestTLSHandshakeBoundsBlockedPeer(t *testing.T) {
+	client, server := net.Pipe()
+	defer func() {
+		_ = client.Close()
+		_ = server.Close()
+	}()
+
+	started := time.Now()
+	_, err := performTLSHandshakeWithTimeout(context.Background(), client, &Profile{}, "example.com:443", 20*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected TLS handshake timeout")
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("TLS handshake exceeded stage bound: %s", elapsed)
+	}
+}
+
+func TestHTTPProxyConnectHonorsStageTimeout(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr == nil {
+			accepted <- conn
+		}
+	}()
+
+	proxyURL, err := url.Parse("http://" + listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialer := NewHTTPProxyDialer(&Profile{}, proxyURL)
+	dialer.stageTimeout = 20 * time.Millisecond
+
+	started := time.Now()
+	_, err = dialer.DialTLSContext(context.Background(), "tcp", "example.com:443")
+	if err == nil {
+		t.Fatal("expected CONNECT timeout")
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("CONNECT exchange exceeded stage bound: %s", elapsed)
+	}
+	select {
+	case conn := <-accepted:
+		_ = conn.Close()
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("proxy did not accept the connection")
+	}
+}
+
+func TestSOCKS5ConnectHonorsStageTimeout(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr == nil {
+			accepted <- conn
+		}
+	}()
+
+	proxyURL, err := url.Parse("socks5://" + listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialer := NewSOCKS5ProxyDialer(&Profile{}, proxyURL)
+	dialer.stageTimeout = 20 * time.Millisecond
+
+	started := time.Now()
+	_, err = dialer.DialTLSContext(context.Background(), "tcp", "example.com:443")
+	if err == nil {
+		t.Fatal("expected SOCKS5 negotiation timeout")
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("SOCKS5 negotiation exceeded stage bound: %s", elapsed)
+	}
+	select {
+	case conn := <-accepted:
+		_ = conn.Close()
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("SOCKS5 proxy did not accept the connection")
+	}
+}
+
+func TestContextCancellationClosesBlockedConnection(t *testing.T) {
+	client, server := net.Pipe()
+	defer func() {
+		_ = client.Close()
+		_ = server.Close()
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stop := closeConnOnContextDone(ctx, client)
+	defer stop()
+	readDone := make(chan error, 1)
+	go func() {
+		buf := make([]byte, 1)
+		_, readErr := server.Read(buf)
+		readDone <- readErr
+	}()
+
+	cancel()
+	select {
+	case readErr := <-readDone:
+		if readErr == nil {
+			t.Fatal("blocked connection unexpectedly returned without an error")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("context cancellation did not close the connection")
+	}
+}
+
+type trackingCloseConn struct {
+	net.Conn
+	closeCount atomic.Int32
+}
+
+func (c *trackingCloseConn) Close() error {
+	c.closeCount.Add(1)
+	return c.Conn.Close()
+}
+
+type blockingCloseConn struct {
+	net.Conn
+	closeStarted chan struct{}
+	releaseClose chan struct{}
+}
+
+func (c *blockingCloseConn) Close() error {
+	select {
+	case <-c.closeStarted:
+	default:
+		close(c.closeStarted)
+	}
+	<-c.releaseClose
+	return c.Conn.Close()
+}
+
+func TestContextCleanupWaitsForStartedCloseCallback(t *testing.T) {
+	client, server := net.Pipe()
+	defer func() {
+		_ = client.Close()
+		_ = server.Close()
+	}()
+	conn := &blockingCloseConn{
+		Conn:         client,
+		closeStarted: make(chan struct{}),
+		releaseClose: make(chan struct{}),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cleanup := closeConnOnContextDone(ctx, conn)
+	cancel()
+
+	select {
+	case <-conn.closeStarted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("context cancellation callback did not start")
+	}
+
+	cleanupDone := make(chan struct{})
+	go func() {
+		cleanup()
+		close(cleanupDone)
+	}()
+	select {
+	case <-cleanupDone:
+		t.Fatal("cleanup returned before the started close callback completed")
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(conn.releaseClose)
+	select {
+	case <-cleanupDone:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("cleanup did not wait for the close callback to finish")
+	}
+}
+
+func TestContextCleanupPreventsCloseAfterSuccessfulStage(t *testing.T) {
+	client, server := net.Pipe()
+	defer func() {
+		_ = client.Close()
+		_ = server.Close()
+	}()
+	conn := &trackingCloseConn{Conn: client}
+	ctx, cancel := context.WithCancel(context.Background())
+	cleanup := closeConnOnContextDone(ctx, conn)
+	cleanup()
+	cancel()
+	// stop=true guarantees the callback is disassociated; the short wait also
+	// lets a wrongly implemented asynchronous callback surface deterministically.
+	time.Sleep(20 * time.Millisecond)
+	if got := conn.closeCount.Load(); got != 0 {
+		t.Fatalf("successful-stage cleanup was followed by an unexpected close: %d", got)
 	}
 }
 

@@ -71,7 +71,8 @@ describe('ProfileView', () => {
       oidc_oauth_enabled: true,
       oidc_oauth_provider_name: 'OIDC',
       withdrawal_rate_limit_window_days: 7,
-      withdrawal_rate_limit_max: 3
+      withdrawal_rate_limit_max: 3,
+      withdrawal_rate_limit_exempt_amount: 500
     })
   })
 
@@ -88,8 +89,8 @@ describe('ProfileView', () => {
           ProfilePasswordForm: { template: '<div data-testid="profile-password-form" />' },
           ProfileTotpCard: { template: '<div data-testid="profile-totp-card" />' },
           ProfileWithdrawalCard: {
-            props: ['rateLimitWindowDays', 'rateLimitMax'],
-            template: '<div data-testid="profile-withdrawal-card" :data-window-days="rateLimitWindowDays" :data-max="rateLimitMax" />'
+            props: ['rateLimitWindowDays', 'rateLimitMax', 'rateLimitExemptAmount'],
+            template: '<div data-testid="profile-withdrawal-card" :data-window-days="rateLimitWindowDays" :data-max="rateLimitMax" :data-exempt-amount="rateLimitExemptAmount" />'
           },
           Icon: true
         }
@@ -104,6 +105,7 @@ describe('ProfileView', () => {
     expect(wrapper.get('[data-testid="profile-shell"]').html()).toContain('profile-withdrawal-card')
     expect(wrapper.get('[data-testid="profile-withdrawal-card"]').attributes('data-window-days')).toBe('7')
     expect(wrapper.get('[data-testid="profile-withdrawal-card"]').attributes('data-max')).toBe('3')
+    expect(wrapper.get('[data-testid="profile-withdrawal-card"]').attributes('data-exempt-amount')).toBe('500')
     expect(wrapper.get('[data-testid="profile-shell"]').html()).toContain('profile-password-form')
     expect(wrapper.get('[data-testid="profile-shell"]').html()).toContain('profile-totp-card')
   })

@@ -220,11 +220,13 @@ func TestCalculateCostUnified_ImageTokenPrices(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	expectedInput := 22*5e-6 + 10*8e-6
+	expectedTextInput := 22 * 5e-6
+	expectedImageInput := 10 * 8e-6
 	expectedCacheRead := 1*1.25e-6 + 3*2e-6
 	expectedImageOutput := 196 * 30e-6
-	expectedTotal := expectedInput + expectedCacheRead + expectedImageOutput
-	require.InDelta(t, expectedInput, cost.InputCost, 1e-12)
+	expectedTotal := expectedTextInput + expectedImageInput + expectedCacheRead + expectedImageOutput
+	require.InDelta(t, expectedTextInput, cost.InputCost, 1e-12)
+	require.InDelta(t, expectedImageInput, cost.ImageInputCost, 1e-12)
 	require.InDelta(t, 0.0, cost.OutputCost, 1e-12)
 	require.InDelta(t, expectedImageOutput, cost.ImageOutputCost, 1e-12)
 	require.InDelta(t, expectedCacheRead, cost.CacheReadCost, 1e-12)

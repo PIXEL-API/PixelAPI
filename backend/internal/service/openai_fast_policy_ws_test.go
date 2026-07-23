@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -308,6 +309,82 @@ func TestPolicyEnforcingFrameConn_WithoutCapturedFallbackPolicyMisses(t *testing
 	// Pre-fix: empty model misses ["gpt-5.5","gpt-5.5*"] whitelist → fallback=pass → service_tier kept.
 	require.Contains(t, string(payload), `"service_tier"`,
 		"sanity: without capturedSessionModel fallback the leak (D5) reproduces — confirms the fix is load-bearing")
+}
+
+func TestPolicyEnforcingFrameConn_RejectsMalformedJSONBeforeFilter(t *testing.T) {
+	t.Parallel()
+
+	inner := &fakePassthroughFrameConn{reads: [][]byte{[]byte(`{"type":"response.create"`)}}
+	filterCalled := false
+	wrapper := &openAIWSPolicyEnforcingFrameConn{
+		inner: inner,
+		filter: func(_ coderws.MessageType, payload []byte) ([]byte, *OpenAIFastBlockedError, error) {
+			filterCalled = true
+			return payload, nil, nil
+		},
+	}
+
+	_, payload, err := wrapper.ReadFrame(context.Background())
+	require.Error(t, err)
+	require.Nil(t, payload)
+	require.False(t, filterCalled, "malformed JSON must not enter policy or reach upstream")
+	var closeErr *OpenAIWSClientCloseError
+	require.ErrorAs(t, err, &closeErr)
+	require.Equal(t, coderws.StatusPolicyViolation, closeErr.StatusCode())
+}
+
+func TestOpenAIWSPassthroughTurnLifecycleSerializesAndPairsHooks(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu          sync.Mutex
+		beforeTurns []int
+		afterTurns  []int
+		afterErrors []error
+	)
+	lifecycle := newOpenAIWSPassthroughTurnLifecycle(&OpenAIWSIngressHooks{
+		BeforeTurn: func(turn int) error {
+			mu.Lock()
+			beforeTurns = append(beforeTurns, turn)
+			mu.Unlock()
+			return nil
+		},
+		AfterTurn: func(turn int, _ *OpenAIForwardResult, turnErr error) {
+			mu.Lock()
+			afterTurns = append(afterTurns, turn)
+			afterErrors = append(afterErrors, turnErr)
+			mu.Unlock()
+		},
+	})
+
+	turn, err := lifecycle.begin()
+	require.NoError(t, err)
+	require.Equal(t, 1, turn)
+	_, err = lifecycle.begin()
+	require.Error(t, err, "a second response.create before terminal must be rejected")
+	var closeErr *OpenAIWSClientCloseError
+	require.ErrorAs(t, err, &closeErr)
+	require.Equal(t, coderws.StatusPolicyViolation, closeErr.StatusCode())
+
+	finishedTurn, finished := lifecycle.finish(&OpenAIForwardResult{RequestID: "resp_1"}, nil)
+	require.True(t, finished)
+	require.Equal(t, 1, finishedTurn)
+	turn, err = lifecycle.begin()
+	require.NoError(t, err)
+	require.Equal(t, 2, turn)
+	turnErr := errors.New("relay failed")
+	finishedTurn, finished = lifecycle.finish(nil, turnErr)
+	require.True(t, finished)
+	require.Equal(t, 2, finishedTurn)
+	_, finished = lifecycle.finish(nil, errors.New("duplicate"))
+	require.False(t, finished, "each active turn must release exactly once")
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, []int{1, 2}, beforeTurns)
+	require.Equal(t, []int{1, 2}, afterTurns)
+	require.NoError(t, afterErrors[0])
+	require.ErrorIs(t, afterErrors[1], turnErr)
 }
 
 // --- Ingress end-to-end test (filter path) ---

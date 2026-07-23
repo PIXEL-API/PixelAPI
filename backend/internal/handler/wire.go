@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler/admin"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -100,6 +101,33 @@ func ProvideSystemHandler(updateService *service.UpdateService, lockService *ser
 // ProvideSettingHandler creates SettingHandler with version from BuildInfo
 func ProvideSettingHandler(settingService *service.SettingService, buildInfo BuildInfo) *SettingHandler {
 	return NewSettingHandler(settingService, buildInfo.Version)
+}
+
+func ProvideOpenAIGatewayHandler(
+	gatewayService *service.OpenAIGatewayService,
+	concurrencyService *service.ConcurrencyService,
+	billingCacheService *service.BillingCacheService,
+	apiKeyService *service.APIKeyService,
+	usageRecordWorkerPool *service.UsageRecordWorkerPool,
+	errorPassthroughService *service.ErrorPassthroughService,
+	contentModerationService *service.ContentModerationService,
+	userModerationService *service.UserContentModerationService,
+	grokQuotaService *service.GrokQuotaService,
+	cfg *config.Config,
+) *OpenAIGatewayHandler {
+	h := NewOpenAIGatewayHandler(
+		gatewayService,
+		concurrencyService,
+		billingCacheService,
+		apiKeyService,
+		usageRecordWorkerPool,
+		errorPassthroughService,
+		contentModerationService,
+		userModerationService,
+		cfg,
+	)
+	h.grokMediaEligibilityProber = grokQuotaService
+	return h
 }
 
 func ProvideAdminAccountHandler(
@@ -255,7 +283,7 @@ var ProviderSet = wire.NewSet(
 	NewConversationHandler,
 	NewChannelMonitorUserHandler,
 	NewGatewayHandler,
-	NewOpenAIGatewayHandler,
+	ProvideOpenAIGatewayHandler,
 	NewTotpHandler,
 	ProvideSettingHandler,
 	NewPaymentHandler,

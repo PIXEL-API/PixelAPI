@@ -317,8 +317,8 @@ func (s *UsageService) GetAPIKeyDashboardStats(ctx context.Context, apiKeyID int
 }
 
 // GetUserUsageTrendByUserID returns per-user usage trend.
-func (s *UsageService) GetUserUsageTrendByUserID(ctx context.Context, userID int64, startTime, endTime time.Time, granularity string) ([]usagestats.TrendDataPoint, error) {
-	trend, err := s.usageRepo.GetUserUsageTrendByUserID(ctx, userID, startTime, endTime, granularity)
+func (s *UsageService) GetUserUsageTrendByUserID(ctx context.Context, userID int64, startTime, endTime time.Time, granularity string, location *time.Location) ([]usagestats.TrendDataPoint, error) {
+	trend, err := s.usageRepo.GetUserUsageTrendByUserID(ctx, userID, startTime, endTime, granularity, location)
 	if err != nil {
 		return nil, fmt.Errorf("get user usage trend: %w", err)
 	}
@@ -335,8 +335,8 @@ func (s *UsageService) GetUserModelStats(ctx context.Context, userID int64, star
 }
 
 // GetUserAccountSharingDashboard returns owned-account consumption and public-sharing settlement stats.
-func (s *UsageService) GetUserAccountSharingDashboard(ctx context.Context, userID int64, startTime, endTime time.Time, granularity string) (*usagestats.AccountSharingDashboardStats, error) {
-	stats, err := s.usageRepo.GetUserAccountSharingDashboard(ctx, userID, startTime, endTime, granularity)
+func (s *UsageService) GetUserAccountSharingDashboard(ctx context.Context, userID int64, startTime, endTime time.Time, granularity string, location *time.Location) (*usagestats.AccountSharingDashboardStats, error) {
+	stats, err := s.usageRepo.GetUserAccountSharingDashboard(ctx, userID, startTime, endTime, granularity, location)
 	if err != nil {
 		return nil, fmt.Errorf("get user account sharing dashboard: %w", err)
 	}

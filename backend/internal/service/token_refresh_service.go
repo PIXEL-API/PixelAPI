@@ -38,9 +38,10 @@ type TokenRefreshService struct {
 	privacyClientFactory PrivacyClientFactory
 	proxyRepo            ProxyRepository
 
-	stopCh   chan struct{}
-	stopOnce sync.Once
-	wg       sync.WaitGroup
+	runCtx    context.Context
+	cancelRun context.CancelFunc
+	stopOnce  sync.Once
+	wg        sync.WaitGroup
 }
 
 // NewTokenRefreshService 创建token刷新服务
@@ -56,6 +57,7 @@ func NewTokenRefreshService(
 	tempUnschedCache TempUnschedCache,
 	grokOAuthServices ...*GrokOAuthService,
 ) *TokenRefreshService {
+	runCtx, cancelRun := context.WithCancel(context.Background())
 	s := &TokenRefreshService{
 		accountRepo:      accountRepo,
 		refreshPolicy:    DefaultBackgroundRefreshPolicy(),
@@ -63,7 +65,8 @@ func NewTokenRefreshService(
 		cacheInvalidator: cacheInvalidator,
 		schedulerCache:   schedulerCache,
 		tempUnschedCache: tempUnschedCache,
-		stopCh:           make(chan struct{}),
+		runCtx:           runCtx,
+		cancelRun:        cancelRun,
 	}
 
 	openAIRefresher := NewOpenAITokenRefresher(openaiOAuthService, accountRepo)
@@ -136,7 +139,7 @@ func (s *TokenRefreshService) Start() {
 // Stop 停止刷新服务（可安全多次调用）
 func (s *TokenRefreshService) Stop() {
 	s.stopOnce.Do(func() {
-		close(s.stopCh)
+		s.cancelRun()
 	})
 	s.wg.Wait()
 	slog.Info("token_refresh.service_stopped")
@@ -155,22 +158,28 @@ func (s *TokenRefreshService) refreshLoop() {
 	ticker := time.NewTicker(checkInterval)
 	defer ticker.Stop()
 
-	// 启动时立即执行一次检查
-	s.processRefresh()
+	// 启动时立即执行一次检查。Stop 可能在 goroutine 真正运行前已被调用，
+	// 因此必须先检查上下文，避免关停期间反而启动一轮刷新。
+	if s.runCtx.Err() != nil {
+		return
+	}
+	s.processRefresh(s.runCtx)
 
 	for {
 		select {
 		case <-ticker.C:
-			s.processRefresh()
-		case <-s.stopCh:
+			s.processRefresh(s.runCtx)
+		case <-s.runCtx.Done():
 			return
 		}
 	}
 }
 
 // processRefresh 执行一次刷新检查
-func (s *TokenRefreshService) processRefresh() {
-	ctx := context.Background()
+func (s *TokenRefreshService) processRefresh(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
 
 	// 计算刷新窗口
 	refreshWindow := time.Duration(s.cfg.RefreshBeforeExpiryHours * float64(time.Hour))
@@ -178,6 +187,9 @@ func (s *TokenRefreshService) processRefresh() {
 	// 获取所有active状态的账号
 	accounts, err := s.listActiveAccounts(ctx, refreshWindow)
 	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
 		slog.Error("token_refresh.list_accounts_failed", "error", err)
 		return
 	}
@@ -188,10 +200,16 @@ func (s *TokenRefreshService) processRefresh() {
 	refreshed, failed, skipped := 0, 0, 0
 
 	for i := range accounts {
+		if ctx.Err() != nil {
+			return
+		}
 		account := &accounts[i]
 
 		// 遍历所有刷新器，找到能处理此账号的
 		for idx, refresher := range s.refreshers {
+			if ctx.Err() != nil {
+				return
+			}
 			if !refresher.CanRefresh(account) {
 				continue
 			}
@@ -213,6 +231,9 @@ func (s *TokenRefreshService) processRefresh() {
 
 			// 执行刷新
 			if err := s.refreshWithRetry(ctx, account, refresher, executor, refreshWindow); err != nil {
+				if ctx.Err() != nil {
+					return
+				}
 				if errors.Is(err, errRefreshSkipped) {
 					skipped++
 				} else {
@@ -223,7 +244,7 @@ func (s *TokenRefreshService) processRefresh() {
 					)
 					failed++
 				}
-			} else {
+			} else if ctx.Err() == nil {
 				slog.Info("token_refresh.account_refreshed",
 					"account_id", account.ID,
 					"account_name", account.Name,
@@ -266,6 +287,10 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 	var lastErr error
 
 	for attempt := 1; attempt <= s.cfg.MaxRetries; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		var newCredentials map[string]any
 		var err error
 
@@ -295,8 +320,17 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 			}
 		}
 
+		// 关停取消是进程生命周期事件，不是账号刷新失败。
+		// 必须在错误分类和状态写入前返回，避免停机将账号误标为 error/临时不可调度。
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+
 		if err == nil {
 			s.postRefreshActions(ctx, account)
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			return nil
 		}
 
@@ -324,8 +358,22 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 		if attempt < s.cfg.MaxRetries {
 			// 指数退避：2^(attempt-1) * baseSeconds
 			backoff := time.Duration(s.cfg.RetryBackoffSeconds) * time.Second * time.Duration(1<<(attempt-1))
-			time.Sleep(backoff)
+			timer := time.NewTimer(backoff)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return ctx.Err()
+			}
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	// 可重试错误耗尽：临时标记账号不可调度，避免请求路径反复命中已知失败的账号
@@ -356,6 +404,9 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 
 // postRefreshActions 刷新成功后的后续动作（清除错误状态、缓存失效、调度器同步等）
 func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *Account) {
+	if ctx.Err() != nil {
+		return
+	}
 	// Antigravity 账户：如果之前是因为缺少 project_id 而标记为 error，现在成功获取到了，清除错误状态
 	if account.Platform == PlatformAntigravity &&
 		account.Status == StatusError &&
@@ -368,6 +419,9 @@ func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *A
 		} else {
 			slog.Info("token_refresh.cleared_missing_project_id_error", "account_id", account.ID)
 		}
+	}
+	if ctx.Err() != nil {
+		return
 	}
 	// 刷新成功后清除临时不可调度状态（处理 OAuth 401 恢复场景）
 	if account.TempUnschedulableUntil != nil && time.Now().Before(*account.TempUnschedulableUntil) {
@@ -389,6 +443,9 @@ func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *A
 			}
 		}
 	}
+	if ctx.Err() != nil {
+		return
+	}
 	// 对所有 OAuth 账号调用缓存失效（InvalidateToken 内部根据平台判断是否需要处理）
 	if s.cacheInvalidator != nil && account.Type == AccountTypeOAuth {
 		if err := s.cacheInvalidator.InvalidateToken(ctx, account); err != nil {
@@ -399,6 +456,9 @@ func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *A
 		} else {
 			slog.Debug("token_refresh.token_cache_invalidated", "account_id", account.ID)
 		}
+	}
+	if ctx.Err() != nil {
+		return
 	}
 	// 同步更新调度器缓存，确保调度获取的 Account 对象包含最新的 credentials
 	if s.schedulerCache != nil {
@@ -411,8 +471,14 @@ func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *A
 			slog.Debug("token_refresh.scheduler_cache_synced", "account_id", account.ID)
 		}
 	}
+	if ctx.Err() != nil {
+		return
+	}
 	// OpenAI OAuth: 刷新成功后，检查是否已设置 privacy_mode，未设置则尝试关闭训练数据共享
 	s.ensureOpenAIPrivacy(ctx, account)
+	if ctx.Err() != nil {
+		return
+	}
 	// Antigravity OAuth: 刷新成功后，检查是否已设置 privacy_mode，未设置则调用 setUserSettings
 	s.ensureAntigravityPrivacy(ctx, account)
 }

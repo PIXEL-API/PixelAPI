@@ -393,63 +393,149 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 	response.Success(c, stats)
 }
 
-// parseUserTimeRange parses start_date, end_date query parameters for user dashboard
-// Uses user's timezone if provided, otherwise falls back to server timezone
-func parseUserTimeRange(c *gin.Context) (time.Time, time.Time) {
-	userTZ := c.Query("timezone") // Get user's timezone from request
-	now := timezone.NowInUserLocation(userTZ)
+type userDashboardTimeRange struct {
+	startTime time.Time
+	endTime   time.Time
+	location  *time.Location
+}
+
+func loadUserDashboardLocation(c *gin.Context) (*time.Location, error) {
+	timezoneName := strings.TrimSpace(c.Query("timezone"))
+	if timezoneName == "" {
+		return timezone.Location(), nil
+	}
+
+	location, err := time.LoadLocation(timezoneName)
+	if err != nil {
+		return nil, fmt.Errorf("invalid timezone %q, use an IANA timezone name", timezoneName)
+	}
+	return location, nil
+}
+
+func parseUserDashboardTimestamp(raw string, location *time.Location, field string) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if timestamp, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return timestamp.In(location), nil
+	}
+	for _, layout := range []string{"2006-01-02T15:04:05", "2006-01-02T15:04"} {
+		if timestamp, err := time.ParseInLocation(layout, raw, location); err == nil {
+			return timestamp, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("Invalid %s format, use RFC3339 or YYYY-MM-DDTHH:mm:ss", field)
+}
+
+func parseUserDashboardExactTimeRange(c *gin.Context, location *time.Location) (*time.Time, *time.Time, bool, error) {
+	startRaw := strings.TrimSpace(c.Query("start_time"))
+	endRaw := strings.TrimSpace(c.Query("end_time"))
+	if startRaw == "" && endRaw == "" {
+		return nil, nil, false, nil
+	}
+	if startRaw == "" || endRaw == "" {
+		return nil, nil, true, fmt.Errorf("start_time and end_time must be provided together")
+	}
+
+	startTime, err := parseUserDashboardTimestamp(startRaw, location, "start_time")
+	if err != nil {
+		return nil, nil, true, err
+	}
+	endTime, err := parseUserDashboardTimestamp(endRaw, location, "end_time")
+	if err != nil {
+		return nil, nil, true, err
+	}
+	if !endTime.After(startTime) {
+		return nil, nil, true, fmt.Errorf("end_time must be after start_time")
+	}
+	if strings.TrimSpace(c.Query("start_date")) != "" || strings.TrimSpace(c.Query("end_date")) != "" {
+		return nil, nil, true, fmt.Errorf("start_time/end_time cannot be combined with start_date/end_date")
+	}
+	return &startTime, &endTime, true, nil
+}
+
+func startOfDayInLocation(value time.Time, location *time.Location) time.Time {
+	value = value.In(location)
+	return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, location)
+}
+
+// parseUserTimeRange parses exact timestamps or legacy date parameters for user dashboard.
+// Invalid legacy dates retain their historical fallback behavior for compatibility.
+func parseUserTimeRange(c *gin.Context) (userDashboardTimeRange, error) {
+	location, err := loadUserDashboardLocation(c)
+	if err != nil {
+		return userDashboardTimeRange{}, err
+	}
+	startExact, endExact, hasExactTime, err := parseUserDashboardExactTimeRange(c, location)
+	if err != nil {
+		return userDashboardTimeRange{}, err
+	}
+	if hasExactTime {
+		return userDashboardTimeRange{startTime: *startExact, endTime: *endExact, location: location}, nil
+	}
+
+	now := time.Now().In(location)
 	startDate := c.Query("start_date")
 	endDate := c.Query("end_date")
 
 	var startTime, endTime time.Time
 
 	if startDate != "" {
-		if t, err := timezone.ParseInUserLocation("2006-01-02", startDate, userTZ); err == nil {
+		if t, err := time.ParseInLocation("2006-01-02", startDate, location); err == nil {
 			startTime = t
 		} else {
-			startTime = timezone.StartOfDayInUserLocation(now.AddDate(0, 0, -7), userTZ)
+			startTime = startOfDayInLocation(now.AddDate(0, 0, -7), location)
 		}
 	} else {
-		startTime = timezone.StartOfDayInUserLocation(now.AddDate(0, 0, -7), userTZ)
+		startTime = startOfDayInLocation(now.AddDate(0, 0, -7), location)
 	}
 
 	if endDate != "" {
-		if t, err := timezone.ParseInUserLocation("2006-01-02", endDate, userTZ); err == nil {
-			endTime = t.Add(24 * time.Hour) // Include the end date
+		if t, err := time.ParseInLocation("2006-01-02", endDate, location); err == nil {
+			endTime = t.AddDate(0, 0, 1) // Include the end date using calendar-day semantics.
 		} else {
-			endTime = timezone.StartOfDayInUserLocation(now.AddDate(0, 0, 1), userTZ)
+			endTime = startOfDayInLocation(now.AddDate(0, 0, 1), location)
 		}
 	} else {
-		endTime = timezone.StartOfDayInUserLocation(now.AddDate(0, 0, 1), userTZ)
+		endTime = startOfDayInLocation(now.AddDate(0, 0, 1), location)
 	}
 
-	return startTime, endTime
+	return userDashboardTimeRange{startTime: startTime, endTime: endTime, location: location}, nil
 }
 
-func parseUserDashboardTimeRangeStrict(c *gin.Context) (time.Time, time.Time, error) {
-	userTZ := c.Query("timezone")
-	now := timezone.NowInUserLocation(userTZ)
-	startTime := timezone.StartOfDayInUserLocation(now.AddDate(0, 0, -7), userTZ)
-	endTime := timezone.StartOfDayInUserLocation(now.AddDate(0, 0, 1), userTZ)
+func parseUserDashboardTimeRangeStrict(c *gin.Context) (userDashboardTimeRange, error) {
+	location, err := loadUserDashboardLocation(c)
+	if err != nil {
+		return userDashboardTimeRange{}, err
+	}
+	startExact, endExact, hasExactTime, err := parseUserDashboardExactTimeRange(c, location)
+	if err != nil {
+		return userDashboardTimeRange{}, err
+	}
+	if hasExactTime {
+		return userDashboardTimeRange{startTime: *startExact, endTime: *endExact, location: location}, nil
+	}
+
+	now := time.Now().In(location)
+	startTime := startOfDayInLocation(now.AddDate(0, 0, -7), location)
+	endTime := startOfDayInLocation(now.AddDate(0, 0, 1), location)
 
 	if startDate := strings.TrimSpace(c.Query("start_date")); startDate != "" {
-		t, err := timezone.ParseInUserLocation("2006-01-02", startDate, userTZ)
+		t, err := time.ParseInLocation("2006-01-02", startDate, location)
 		if err != nil {
-			return time.Time{}, time.Time{}, fmt.Errorf("invalid start_date format, use YYYY-MM-DD")
+			return userDashboardTimeRange{}, fmt.Errorf("invalid start_date format, use YYYY-MM-DD")
 		}
 		startTime = t
 	}
 	if endDate := strings.TrimSpace(c.Query("end_date")); endDate != "" {
-		t, err := timezone.ParseInUserLocation("2006-01-02", endDate, userTZ)
+		t, err := time.ParseInLocation("2006-01-02", endDate, location)
 		if err != nil {
-			return time.Time{}, time.Time{}, fmt.Errorf("invalid end_date format, use YYYY-MM-DD")
+			return userDashboardTimeRange{}, fmt.Errorf("invalid end_date format, use YYYY-MM-DD")
 		}
 		endTime = t.AddDate(0, 0, 1)
 	}
 	if !endTime.After(startTime) {
-		return time.Time{}, time.Time{}, fmt.Errorf("end_date must be greater than or equal to start_date")
+		return userDashboardTimeRange{}, fmt.Errorf("end_date must be greater than or equal to start_date")
 	}
-	return startTime, endTime, nil
+	return userDashboardTimeRange{startTime: startTime, endTime: endTime, location: location}, nil
 }
 
 // DashboardStats handles getting user dashboard statistics
@@ -479,10 +565,21 @@ func (h *UsageHandler) DashboardTrend(c *gin.Context) {
 		return
 	}
 
-	startTime, endTime := parseUserTimeRange(c)
+	timeRange, err := parseUserTimeRange(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 	granularity := c.DefaultQuery("granularity", "day")
 
-	trend, err := h.usageService.GetUserUsageTrendByUserID(c.Request.Context(), subject.UserID, startTime, endTime, granularity)
+	trend, err := h.usageService.GetUserUsageTrendByUserID(
+		c.Request.Context(),
+		subject.UserID,
+		timeRange.startTime,
+		timeRange.endTime,
+		granularity,
+		timeRange.location,
+	)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -490,8 +587,8 @@ func (h *UsageHandler) DashboardTrend(c *gin.Context) {
 
 	response.Success(c, gin.H{
 		"trend":       trend,
-		"start_date":  startTime.Format("2006-01-02"),
-		"end_date":    endTime.Add(-24 * time.Hour).Format("2006-01-02"),
+		"start_date":  timeRange.startTime.In(timeRange.location).Format("2006-01-02"),
+		"end_date":    timeRange.endTime.In(timeRange.location).Add(-time.Nanosecond).Format("2006-01-02"),
 		"granularity": granularity,
 	})
 }
@@ -505,9 +602,13 @@ func (h *UsageHandler) DashboardModels(c *gin.Context) {
 		return
 	}
 
-	startTime, endTime := parseUserTimeRange(c)
+	timeRange, err := parseUserTimeRange(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 
-	stats, err := h.usageService.GetUserModelStats(c.Request.Context(), subject.UserID, startTime, endTime)
+	stats, err := h.usageService.GetUserModelStats(c.Request.Context(), subject.UserID, timeRange.startTime, timeRange.endTime)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -515,8 +616,8 @@ func (h *UsageHandler) DashboardModels(c *gin.Context) {
 
 	response.Success(c, gin.H{
 		"models":     stats,
-		"start_date": startTime.Format("2006-01-02"),
-		"end_date":   endTime.Add(-24 * time.Hour).Format("2006-01-02"),
+		"start_date": timeRange.startTime.In(timeRange.location).Format("2006-01-02"),
+		"end_date":   timeRange.endTime.In(timeRange.location).Add(-time.Nanosecond).Format("2006-01-02"),
 	})
 }
 
@@ -580,7 +681,7 @@ func (h *UsageHandler) DashboardAccountSharing(c *gin.Context) {
 		return
 	}
 
-	startTime, endTime, err := parseUserDashboardTimeRangeStrict(c)
+	timeRange, err := parseUserDashboardTimeRangeStrict(c)
 	if err != nil {
 		response.BadRequest(c, err.Error())
 		return
@@ -593,10 +694,21 @@ func (h *UsageHandler) DashboardAccountSharing(c *gin.Context) {
 		return
 	}
 
-	stats, err := h.usageService.GetUserAccountSharingDashboard(c.Request.Context(), subject.UserID, startTime, endTime, granularity)
+	stats, err := h.usageService.GetUserAccountSharingDashboard(
+		c.Request.Context(),
+		subject.UserID,
+		timeRange.startTime,
+		timeRange.endTime,
+		granularity,
+		timeRange.location,
+	)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
+	}
+	if stats != nil {
+		stats.StartDate = timeRange.startTime.In(timeRange.location).Format("2006-01-02")
+		stats.EndDate = timeRange.endTime.In(timeRange.location).Add(-time.Nanosecond).Format("2006-01-02")
 	}
 
 	response.Success(c, stats)

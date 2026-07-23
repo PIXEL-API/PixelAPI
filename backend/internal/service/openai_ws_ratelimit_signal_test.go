@@ -262,12 +262,34 @@ func TestOpenAIGatewayService_WSv2ErrorEventCapacityPersistsTempUnsched(t *testi
 	body := []byte(`{"type":"error","error":{"code":"server_error","type":"server_error","message":"Selected model is at capacity. Please try a different model."}}`)
 
 	start := time.Now()
-	svc.persistOpenAIWSRateLimitSignal(context.Background(), account, http.Header{}, body, "server_error", "server_error", "Selected model is at capacity. Please try a different model.")
+	svc.persistOpenAIWSRateLimitSignal(context.Background(), account, "gpt-5.1", http.Header{}, body, "server_error", "server_error", "Selected model is at capacity. Please try a different model.")
 
 	require.Empty(t, repo.rateLimitCalls)
 	require.Len(t, repo.tempCalls, 1)
 	require.WithinDuration(t, start.Add(openAIModelCapacityCooldown), repo.tempCalls[0], 5*time.Second)
 	require.Contains(t, repo.tempReasons[0], "openai_model_capacity")
+}
+
+func TestOpenAIGatewayService_WSModelCapacityIsIsolatedAndSuccessClearsStreak(t *testing.T) {
+	t.Parallel()
+
+	svc := &OpenAIGatewayService{}
+	account := &Account{
+		ID:       505,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+	}
+	body := []byte(`{"type":"response.failed","error":{"code":"model_capacity_exhausted","message":"Selected model is at capacity."}}`)
+	for range 2 {
+		require.True(t, svc.handleOpenAIWSModelCapacitySignal(
+			context.Background(), account, "gpt-5.1", http.StatusServiceUnavailable, nil, body, "Selected model is at capacity.",
+		))
+	}
+	require.True(t, svc.isOpenAIAccountModelRuntimeBlocked(account, "gpt-5.1"))
+	require.False(t, svc.isOpenAIAccountModelRuntimeBlocked(account, "gpt-5.2"), "capacity cooldown must not block other models on the same account")
+
+	svc.ReportOpenAIAccountScheduleResult(account.ID, true, nil, account.GetMappedModel("gpt-5.1"))
+	require.False(t, svc.isOpenAIAccountModelRuntimeBlocked(account, "gpt-5.1"), "successful WS turn must clear the same model streak")
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_ErrorEventUsageLimitPersistsRateLimit(t *testing.T) {

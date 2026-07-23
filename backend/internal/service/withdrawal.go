@@ -19,11 +19,12 @@ const (
 	WithdrawalMinimumAmount = 1.00
 	WithdrawalFirstFee      = 0.10
 
-	WithdrawalRateLimitWindowDaysDefault = 1
-	WithdrawalRateLimitWindowDaysMin     = 1
-	WithdrawalRateLimitWindowDaysMax     = 365
-	WithdrawalRateLimitMaxDefault        = 0
-	WithdrawalRateLimitMaxAllowed        = 1000
+	WithdrawalRateLimitWindowDaysDefault   = 1
+	WithdrawalRateLimitWindowDaysMin       = 1
+	WithdrawalRateLimitWindowDaysMax       = 365
+	WithdrawalRateLimitMaxDefault          = 0
+	WithdrawalRateLimitMaxAllowed          = 1000
+	WithdrawalRateLimitExemptAmountDefault = 500.00
 )
 
 var (
@@ -40,8 +41,9 @@ var (
 )
 
 type WithdrawalRateLimitConfig struct {
-	WindowDays  int
-	MaxRequests int
+	WindowDays   int
+	MaxRequests  int
+	ExemptAmount float64
 }
 
 func ValidateWithdrawalRateLimitConfig(config WithdrawalRateLimitConfig) error {
@@ -57,7 +59,21 @@ func ValidateWithdrawalRateLimitConfig(config WithdrawalRateLimitConfig) error {
 			"withdrawal rate limit max must be between 0 and 1000",
 		)
 	}
+	if _, ok := normalizeWithdrawalAmount(config.ExemptAmount); !ok || config.ExemptAmount < 0 {
+		return infraerrors.BadRequest(
+			"WITHDRAWAL_RATE_LIMIT_CONFIG_INVALID",
+			"withdrawal rate limit exempt amount must be non-negative and use at most two decimal places",
+		)
+	}
 	return nil
+}
+
+// ExemptsAmount reports whether a withdrawal is outside the frequency limit.
+// A zero threshold disables the exemption; an amount equal to the threshold is still limited.
+func (config WithdrawalRateLimitConfig) ExemptsAmount(amount float64) bool {
+	threshold, thresholdOK := normalizeWithdrawalAmount(config.ExemptAmount)
+	normalizedAmount, amountOK := normalizeWithdrawalAmount(amount)
+	return thresholdOK && amountOK && threshold > 0 && normalizedAmount > threshold
 }
 
 func NewWithdrawalRateLimitExceededError(config WithdrawalRateLimitConfig) error {
@@ -281,8 +297,9 @@ func (s *WithdrawalService) ensureEnabled(ctx context.Context) error {
 func (s *WithdrawalService) getRateLimitConfig(ctx context.Context) (WithdrawalRateLimitConfig, error) {
 	if s == nil || s.settingService == nil {
 		return WithdrawalRateLimitConfig{
-			WindowDays:  WithdrawalRateLimitWindowDaysDefault,
-			MaxRequests: WithdrawalRateLimitMaxDefault,
+			WindowDays:   WithdrawalRateLimitWindowDaysDefault,
+			MaxRequests:  WithdrawalRateLimitMaxDefault,
+			ExemptAmount: WithdrawalRateLimitExemptAmountDefault,
 		}, nil
 	}
 	return s.settingService.GetWithdrawalRateLimitConfig(ctx)

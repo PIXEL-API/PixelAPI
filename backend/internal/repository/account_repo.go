@@ -33,6 +33,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/lib/pq"
 
+	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqljson"
 )
@@ -64,6 +65,7 @@ var schedulerNeutralExtraKeyPrefixes = []string{
 
 var schedulerNeutralExtraKeys = map[string]struct{}{
 	"codex_usage_updated_at":     {},
+	"grok_billing_snapshot":      {},
 	"session_window_utilization": {},
 }
 
@@ -497,6 +499,65 @@ func (r *accountRepository) ExistsByCredentialField(ctx context.Context, key, va
 			},
 		).
 		Exist(ctx)
+}
+
+// GetOwnedOpenAIAgentIdentityByChatGPTAccountID returns the Agent Identity
+// account owned by one user for one ChatGPT Team. The owner and auth-mode
+// predicates are part of the database query so callers cannot observe or
+// update another user's account through a cross-tenant lookup. A missing Team
+// returns (nil, nil), which lets import callers distinguish absence from a
+// persistence failure without treating the preflight lookup as an error.
+func (r *accountRepository) GetOwnedOpenAIAgentIdentityByChatGPTAccountID(
+	ctx context.Context,
+	ownerUserID int64,
+	chatGPTAccountID string,
+) (*service.Account, error) {
+	chatGPTAccountID = strings.TrimSpace(chatGPTAccountID)
+	if ownerUserID <= 0 || chatGPTAccountID == "" {
+		return nil, nil
+	}
+	trimFunction := "BTRIM"
+	if r.client.Driver().Dialect() != dialect.Postgres {
+		trimFunction = "TRIM"
+	}
+
+	m, err := r.client.Account.Query().
+		Where(
+			dbaccount.DeletedAtIsNil(),
+			dbaccount.OwnerUserIDEQ(ownerUserID),
+			dbaccount.PlatformEQ(service.PlatformOpenAI),
+			dbaccount.TypeEQ(service.AccountTypeOAuth),
+			func(selector *entsql.Selector) {
+				credentialsColumn := selector.C(dbaccount.FieldCredentials)
+				selector.Where(entsql.P(func(builder *entsql.Builder) {
+					builder.WriteString("LOWER(NULLIF(").
+						WriteString(trimFunction).
+						WriteString("(").
+						Ident(credentialsColumn).
+						WriteString("->>'auth_mode'), '')) = ").
+						Arg(strings.ToLower(service.OpenAIAuthModeAgentIdentity)).
+						WriteString(" AND NULLIF(").
+						WriteString(trimFunction).
+						WriteString("(").
+						Ident(credentialsColumn).
+						WriteString("->>'chatgpt_account_id'), '') = ").
+						Arg(chatGPTAccountID)
+				}))
+			},
+		).
+		Only(ctx)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	account := accountEntityToService(m)
+	if account == nil {
+		return nil, nil
+	}
+	return account, nil
 }
 
 func (r *accountRepository) IsAccountShareModeListingAccount(ctx context.Context, id int64) (bool, error) {
@@ -2064,24 +2125,19 @@ func (r *accountRepository) BindGroups(ctx context.Context, accountID int64, gro
 		return err
 	}
 
-	if len(groupIDs) == 0 {
-		if tx != nil {
-			return tx.Commit()
+	if len(groupIDs) > 0 {
+		builders := make([]*dbent.AccountGroupCreate, 0, len(groupIDs))
+		for i, groupID := range groupIDs {
+			builders = append(builders, txClient.AccountGroup.Create().
+				SetAccountID(accountID).
+				SetGroupID(groupID).
+				SetPriority(i+1),
+			)
 		}
-		return nil
-	}
 
-	builders := make([]*dbent.AccountGroupCreate, 0, len(groupIDs))
-	for i, groupID := range groupIDs {
-		builders = append(builders, txClient.AccountGroup.Create().
-			SetAccountID(accountID).
-			SetGroupID(groupID).
-			SetPriority(i+1),
-		)
-	}
-
-	if _, err := txClient.AccountGroup.CreateBulk(builders...).Save(ctx); err != nil {
-		return err
+		if _, err := txClient.AccountGroup.CreateBulk(builders...).Save(ctx); err != nil {
+			return err
+		}
 	}
 
 	if tx != nil {
@@ -2889,6 +2945,12 @@ func (r *accountRepository) queryAccountsByGroup(ctx context.Context, groupID in
 			}
 			return nil, err
 		}
+		if service.NormalizeGroupScope(group.Scope) == service.GroupScopePublic {
+			// Public groups may contain stale bindings while a share transition is
+			// being repaired. System-owned accounts keep their historical behavior,
+			// but user-owned accounts are schedulable publicly only after approval.
+			preds = append(preds, publicGroupSchedulableAccountPredicate())
+		}
 		requiredLevel := service.NormalizeRequiredAccountLevel(group.RequiredAccountLevel)
 		if group.Platform == service.PlatformOpenAI && requiredLevel != "" {
 			allowedLevels := service.OpenAISharedPoolAllowedAccountLevels(requiredLevel)
@@ -2951,6 +3013,16 @@ func (r *accountRepository) queryAccountsByGroup(ctx context.Context, groupID in
 	}
 
 	return r.accountsToService(ctx, accounts)
+}
+
+func publicGroupSchedulableAccountPredicate() dbpredicate.Account {
+	return dbaccount.Or(
+		dbaccount.OwnerUserIDIsNil(),
+		dbaccount.And(
+			dbaccount.ShareModeEQ(service.AccountShareModePublic),
+			dbaccount.ShareStatusEQ(service.AccountShareStatusApproved),
+		),
+	)
 }
 
 func (r *accountRepository) accountsToService(ctx context.Context, accounts []*dbent.Account) ([]service.Account, error) {

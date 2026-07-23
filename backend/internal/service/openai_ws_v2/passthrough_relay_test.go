@@ -19,10 +19,11 @@ type passthroughTestFrame struct {
 }
 
 type passthroughTestFrameConn struct {
-	mu     sync.Mutex
-	writes []passthroughTestFrame
-	readCh chan passthroughTestFrame
-	once   sync.Once
+	mu         sync.Mutex
+	writes     []passthroughTestFrame
+	readCh     chan passthroughTestFrame
+	once       sync.Once
+	closeCalls atomic.Int32
 }
 
 type delayedReadFrameConn struct {
@@ -80,11 +81,16 @@ func (c *passthroughTestFrameConn) WriteFrame(ctx context.Context, msgType coder
 }
 
 func (c *passthroughTestFrameConn) Close() error {
+	c.closeCalls.Add(1)
 	c.once.Do(func() {
 		defer func() { _ = recover() }()
 		close(c.readCh)
 	})
 	return nil
+}
+
+func (c *passthroughTestFrameConn) CloseCalls() int32 {
+	return c.closeCalls.Load()
 }
 
 func (c *passthroughTestFrameConn) Writes() []passthroughTestFrame {
@@ -198,6 +204,31 @@ func TestRelay_BasicRelayAndUsage(t *testing.T) {
 	require.Len(t, clientWrites, 1)
 	require.Equal(t, coderws.MessageText, clientWrites[0].msgType)
 	require.JSONEq(t, `{"type":"response.completed","response":{"id":"resp_123","usage":{"input_tokens":7,"output_tokens":3,"input_tokens_details":{"cached_tokens":2,"cache_write_tokens":1}}}}`, string(clientWrites[0].payload))
+}
+
+func TestRelay_RejectsMalformedUpstreamJSONWithoutForwarding(t *testing.T) {
+	t.Parallel()
+
+	clientConn := newPassthroughTestFrameConn(nil, false)
+	upstreamConn := newPassthroughTestFrameConn([]passthroughTestFrame{{
+		msgType: coderws.MessageText,
+		payload: []byte(`{"type":"response.completed"`),
+	}}, true)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, relayExit := Relay(
+		ctx,
+		clientConn,
+		upstreamConn,
+		[]byte(`{"type":"response.create","model":"gpt-5.3-codex"}`),
+		RelayOptions{},
+	)
+	require.NotNil(t, relayExit)
+	require.Equal(t, "invalid_upstream_json", relayExit.Stage)
+	require.ErrorContains(t, relayExit.Err, "invalid JSON")
+	require.Empty(t, clientConn.Writes(), "invalid upstream JSON must never reach the client")
+	require.GreaterOrEqual(t, upstreamConn.CloseCalls(), int32(1), "bad upstream connection must be closed")
 }
 
 func TestRelay_CountsImageGenerationOutput(t *testing.T) {

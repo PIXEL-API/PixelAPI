@@ -420,7 +420,7 @@ async function saveAllSettings() {
                 v-model="advancedSettings.data_retention.cleanup_schedule"
                 type="text"
                 class="input"
-                placeholder="0 2 * * *"
+                placeholder="0 4 * * *"
               />
               <p class="mt-1 text-xs text-gray-500">{{ t('admin.ops.settings.cleanupScheduleHint') }}</p>
             </div>

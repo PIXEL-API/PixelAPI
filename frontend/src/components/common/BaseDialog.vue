@@ -4,6 +4,7 @@
       <div
         v-if="show"
         class="modal-overlay"
+        :data-ui-skin="uiSkin"
         :style="zIndexStyle"
         :aria-labelledby="dialogId"
         role="dialog"
@@ -11,7 +12,12 @@
         @click.self="handleClose"
       >
         <!-- Modal panel -->
-        <div ref="dialogRef" :class="['modal-content', widthClasses]" @click.stop>
+        <div
+          ref="dialogRef"
+          :class="['modal-content', widthClasses]"
+          tabindex="-1"
+          @click.stop
+        >
           <!-- Header -->
           <div class="modal-header">
             <div class="flex min-w-0 flex-1 items-center gap-3">
@@ -21,9 +27,10 @@
               <slot name="title-extra"></slot>
             </div>
             <button
+              type="button"
               @click="emit('close')"
-              class="-mr-2 ml-3 rounded-xl p-2 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:text-dark-500 dark:hover:bg-dark-700 dark:hover:text-dark-300"
-              aria-label="Close modal"
+              class="-mr-2 ml-3 inline-flex min-h-11 min-w-11 cursor-pointer items-center justify-center rounded-xl text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50 dark:text-dark-500 dark:hover:bg-dark-700 dark:hover:text-dark-300"
+              :aria-label="t('common.close')"
             >
               <Icon name="x" size="md" />
             </button>
@@ -46,20 +53,121 @@
 
 <script lang="ts">
 let bodyScrollLockCount = 0
+let dialogIdCounter = 0
+
+type DialogStackEntry = {
+  id: symbol
+  getPanel: () => HTMLElement | null
+  getZIndex: () => number
+  focusInitial: () => void
+  restoreTarget: HTMLElement | null
+  activationOrder: number
+}
+
+const activeDialogStack: DialogStackEntry[] = []
+let dialogActivationCounter = 0
+
+function registerActiveDialog(entry: DialogStackEntry): void {
+  const existingIndex = activeDialogStack.findIndex((item) => item.id === entry.id)
+  if (existingIndex >= 0) {
+    activeDialogStack.splice(existingIndex, 1)
+  }
+  entry.activationOrder = ++dialogActivationCounter
+  activeDialogStack.push(entry)
+}
+
+function unregisterActiveDialog(entry: DialogStackEntry): HTMLElement | null {
+  const index = activeDialogStack.findIndex((item) => item.id === entry.id)
+  if (index < 0) return entry.restoreTarget
+
+  const panel = entry.getPanel()
+  for (let childIndex = index + 1; childIndex < activeDialogStack.length; childIndex += 1) {
+    const childEntry = activeDialogStack[childIndex]
+    if (panel?.contains(childEntry.restoreTarget)) {
+      childEntry.restoreTarget = entry.restoreTarget
+    }
+  }
+
+  activeDialogStack.splice(index, 1)
+  return entry.restoreTarget
+}
+
+function getTopActiveDialog(): DialogStackEntry | undefined {
+  let topDialog: DialogStackEntry | undefined
+  for (const entry of activeDialogStack) {
+    if (
+      !topDialog ||
+      entry.getZIndex() > topDialog.getZIndex() ||
+      (entry.getZIndex() === topDialog.getZIndex() &&
+        entry.activationOrder > topDialog.activationOrder)
+    ) {
+      topDialog = entry
+    }
+  }
+  return topDialog
+}
 </script>
 
 <script setup lang="ts">
-import { computed, watch, onMounted, onUnmounted, ref, nextTick } from 'vue'
+import { computed, watch, onMounted, onBeforeUnmount, ref, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
+import { useUiSkin } from '@/composables/useUiSkin'
 
 // 生成唯一ID以避免多个对话框时ID冲突
-let dialogIdCounter = 0
 const dialogId = `modal-title-${++dialogIdCounter}`
+const { t } = useI18n()
+const uiSkin = useUiSkin()
 
 // 焦点管理
 const dialogRef = ref<HTMLElement | null>(null)
-let previousActiveElement: HTMLElement | null = null
 let hasBodyScrollLock = false
+let isDialogRegistered = false
+let focusRequestVersion = 0
+
+const focusableSelector = [
+  'a[href]',
+  'area[href]',
+  'button:not([disabled])',
+  'input:not([disabled]):not([type="hidden"])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  'iframe',
+  'object',
+  'embed',
+  '[contenteditable="true"]',
+  '[tabindex]:not([tabindex="-1"])'
+].join(',')
+
+const isAvailableFocusTarget = (element: HTMLElement | null): element is HTMLElement => {
+  if (!element || !element.isConnected) return false
+  if (element.tabIndex < 0) return false
+  if (element.matches(':disabled') || element.closest('[hidden], [inert], [aria-hidden="true"]')) {
+    return false
+  }
+  let current: HTMLElement | null = element
+  while (current) {
+    const style = window.getComputedStyle(current)
+    if (style.display === 'none' || style.visibility === 'hidden') return false
+    current = current.parentElement
+  }
+  return true
+}
+
+const getFocusableElements = (): HTMLElement[] => {
+  if (!dialogRef.value) return []
+  return Array.from(dialogRef.value.querySelectorAll<HTMLElement>(focusableSelector)).filter(
+    isAvailableFocusTarget
+  )
+}
+
+const focusInitialElement = () => {
+  const panel = dialogRef.value
+  if (!panel) return
+  const firstFocusable = getFocusableElements()[0]
+  const focusTarget = firstFocusable ?? panel
+  focusTarget.focus()
+}
 
 function lockBodyScroll(): void {
   if (hasBodyScrollLock) return
@@ -101,6 +209,17 @@ const props = withDefaults(defineProps<Props>(), {
 
 const emit = defineEmits<Emits>()
 
+const dialogEntry: DialogStackEntry = {
+  id: Symbol(dialogId),
+  getPanel: () => dialogRef.value,
+  getZIndex: () => props.zIndex,
+  focusInitial: focusInitialElement,
+  restoreTarget: null,
+  activationOrder: 0
+}
+
+const isTopDialog = () => getTopActiveDialog()?.id === dialogEntry.id
+
 // Custom z-index style (overrides the default z-50 from CSS)
 const zIndexStyle = computed(() => {
   return props.zIndex !== 50 ? { zIndex: props.zIndex } : undefined
@@ -126,47 +245,151 @@ const handleClose = () => {
   }
 }
 
-const handleEscape = (event: KeyboardEvent) => {
-  if (props.show && props.closeOnEscape && event.key === 'Escape') {
-    emit('close')
+const getOwnedFocusPortalTrigger = (
+  eventTarget: EventTarget | null,
+  panel: HTMLElement
+): HTMLElement | null => {
+  if (!(eventTarget instanceof Element)) return null
+
+  const portal = eventTarget.closest<HTMLElement>('[data-dialog-focus-owner-id]')
+  const ownerId = portal?.dataset.dialogFocusOwnerId
+  if (!ownerId) return null
+
+  const owner = document.getElementById(ownerId)
+  if (!(owner instanceof HTMLElement) || !panel.contains(owner)) return null
+  return isAvailableFocusTarget(owner) ? owner : null
+}
+
+const trapFocus = (event: KeyboardEvent) => {
+  const panel = dialogRef.value
+  if (!panel) return
+
+  const focusableElements = getFocusableElements()
+  if (focusableElements.length === 0) {
+    event.preventDefault()
+    panel.focus()
+    return
   }
+
+  const firstFocusable = focusableElements[0]
+  const lastFocusable = focusableElements[focusableElements.length - 1]
+  const portalOwner = getOwnedFocusPortalTrigger(event.target, panel)
+  if (portalOwner) {
+    const ownerIndex = focusableElements.indexOf(portalOwner)
+    if (ownerIndex >= 0) {
+      event.preventDefault()
+      const nextIndex = event.shiftKey
+        ? (ownerIndex - 1 + focusableElements.length) % focusableElements.length
+        : (ownerIndex + 1) % focusableElements.length
+      const focusTarget = focusableElements[nextIndex]
+      void nextTick(() => {
+        if (props.show && isTopDialog() && isAvailableFocusTarget(focusTarget)) {
+          focusTarget.focus()
+        }
+      })
+      return
+    }
+  }
+
+  const activeElement = document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : null
+  const activeIndex = activeElement ? focusableElements.indexOf(activeElement) : -1
+
+  if (!activeElement || !panel.contains(activeElement) || activeElement === panel || activeIndex < 0) {
+    event.preventDefault()
+    const focusTarget = event.shiftKey ? lastFocusable : firstFocusable
+    focusTarget.focus()
+    return
+  }
+
+  if (event.shiftKey && activeElement === firstFocusable) {
+    event.preventDefault()
+    lastFocusable.focus()
+  } else if (!event.shiftKey && activeElement === lastFocusable) {
+    event.preventDefault()
+    firstFocusable.focus()
+  }
+}
+
+const handleDocumentKeydown = (event: KeyboardEvent) => {
+  if (!props.show || !isTopDialog() || event.defaultPrevented) return
+
+  if (event.key === 'Escape' && props.closeOnEscape) {
+    event.preventDefault()
+    event.stopPropagation()
+    emit('close')
+    return
+  }
+
+  if (event.key === 'Tab') {
+    trapFocus(event)
+  }
+}
+
+const restoreFocusAfterClose = (target: HTMLElement | null) => {
+  void nextTick(() => {
+    const topDialog = getTopActiveDialog()
+    if (topDialog) {
+      const topPanel = topDialog.getPanel()
+      if (target && topPanel?.contains(target) && isAvailableFocusTarget(target)) {
+        target.focus()
+      } else if (!topPanel?.contains(document.activeElement)) {
+        topDialog.focusInitial()
+      }
+      return
+    }
+
+    if (isAvailableFocusTarget(target)) target.focus()
+  })
+}
+
+const activateDialog = async () => {
+  const requestVersion = ++focusRequestVersion
+  dialogEntry.restoreTarget = document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : null
+  registerActiveDialog(dialogEntry)
+  isDialogRegistered = true
+  lockBodyScroll()
+
+  await nextTick()
+  if (requestVersion === focusRequestVersion && props.show && isTopDialog()) {
+    focusInitialElement()
+  }
+}
+
+const deactivateDialog = (restoreFocus: boolean) => {
+  if (!isDialogRegistered && !hasBodyScrollLock && !dialogEntry.restoreTarget) return
+  focusRequestVersion += 1
+  const restoreTarget = isDialogRegistered
+    ? unregisterActiveDialog(dialogEntry)
+    : dialogEntry.restoreTarget
+  isDialogRegistered = false
+  dialogEntry.restoreTarget = null
+  unlockBodyScroll()
+  if (restoreFocus) restoreFocusAfterClose(restoreTarget)
 }
 
 // Prevent body scroll when modal is open and manage focus
 watch(
   () => props.show,
-  async (isOpen) => {
+  (isOpen) => {
     if (isOpen) {
-      // 保存当前焦点元素
-      previousActiveElement = document.activeElement as HTMLElement
-      lockBodyScroll()
-
-      // 等待DOM更新后设置焦点到对话框
-      await nextTick()
-      if (dialogRef.value) {
-        const firstFocusable = dialogRef.value.querySelector<HTMLElement>(
-          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-        )
-        firstFocusable?.focus()
-      }
+      void activateDialog()
     } else {
-      unlockBodyScroll()
-      // 恢复之前的焦点
-      if (previousActiveElement && typeof previousActiveElement.focus === 'function') {
-        previousActiveElement.focus()
-      }
-      previousActiveElement = null
+      deactivateDialog(true)
     }
   },
   { immediate: true }
 )
 
 onMounted(() => {
-  document.addEventListener('keydown', handleEscape)
+  document.addEventListener('keydown', handleDocumentKeydown)
 })
 
-onUnmounted(() => {
-  document.removeEventListener('keydown', handleEscape)
-  unlockBodyScroll()
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', handleDocumentKeydown)
+  deactivateDialog(true)
 })
 </script>

@@ -124,6 +124,7 @@ type createUserAccountRequest struct {
 type importUserAccountCredentialsRequest struct {
 	Contents           []string `json:"contents" binding:"required"`
 	Platform           string   `json:"platform" binding:"required,oneof=anthropic openai gemini antigravity grok"`
+	OpenAIAuthMode     string   `json:"openai_auth_mode" binding:"omitempty,oneof=oauth agent_identity"`
 	AccountLevel       string   `json:"account_level"`
 	ProxyID            *int64   `json:"proxy_id"`
 	ShareMode          string   `json:"share_mode" binding:"omitempty,oneof=private public"`
@@ -212,6 +213,11 @@ type userAccountLevelBatchTaskRequest struct {
 const userOwnedDefaultConcurrency = 3
 const userOwnedDefaultPriority = 1
 const userAccountLevelVerifyLimitPerMinute = 5
+
+const (
+	userOpenAIAuthModeOAuth         = "oauth"
+	userOpenAIAuthModeAgentIdentity = "agent_identity"
+)
 
 type userOAuthProxyRequest struct {
 	ProxyID *int64 `json:"proxy_id"`
@@ -460,6 +466,39 @@ func validateOpenAIImportTargetLevel(defaults importUserAccountCredentialsReques
 		return "", service.ErrOwnedOpenAIAccountProxyRequired
 	}
 	return targetLevel, nil
+}
+
+func resolveUserOpenAICredentialImportMode(
+	req importUserAccountCredentialsRequest,
+	sources []service.AccountCredentialImportSource,
+) (bool, error) {
+	declaredMode := strings.ToLower(strings.TrimSpace(req.OpenAIAuthMode))
+	agentIdentityCount := 0
+	for _, source := range sources {
+		if source.Kind == service.AccountCredentialImportKindOpenAIAgentIdentity {
+			agentIdentityCount++
+		}
+	}
+
+	if declaredMode == userOpenAIAuthModeAgentIdentity {
+		if req.Platform != service.PlatformOpenAI {
+			return false, infraerrors.BadRequest("OWNED_AGENT_IDENTITY_PLATFORM_INVALID", "Codex Agent Identity 仅支持 OpenAI 平台")
+		}
+		if agentIdentityCount != len(sources) {
+			return false, infraerrors.BadRequest("OWNED_AGENT_IDENTITY_CONTENT_INVALID", "Agent Identity 模式只接受 Agent Identity JSON 凭证")
+		}
+		return true, nil
+	}
+	if declaredMode == userOpenAIAuthModeOAuth && agentIdentityCount > 0 {
+		return false, infraerrors.BadRequest("OWNED_ACCOUNT_IMPORT_AUTH_MODE_MISMATCH", "导入凭证与所选 OpenAI 认证模式不一致")
+	}
+	if agentIdentityCount == 0 {
+		return false, nil
+	}
+	if req.Platform != service.PlatformOpenAI || agentIdentityCount != len(sources) {
+		return false, infraerrors.BadRequest("OWNED_ACCOUNT_IMPORT_AUTH_MODE_MIXED", "Agent Identity 凭证不能与其他认证凭证混合导入")
+	}
+	return true, nil
 }
 
 func userUnixSecondsToTime(value *int64) *time.Time {
@@ -1323,13 +1362,25 @@ func (h *UserAccountHandler) ImportCredentials(c *gin.Context) {
 		response.BadRequest(c, "No importable account credentials found")
 		return
 	}
+	isAgentIdentityImport, err := resolveUserOpenAICredentialImportMode(req, sources)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 	levelConfigs, err := h.openAIAccountLevelConfigs(c.Request.Context())
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
-	normalizeUserCredentialImportTargetLevel(&req, levelConfigs)
-	if service.RequiresUserAccountOAuthProxyWithConfigs(req.Platform, service.AccountLevelUnknown, levelConfigs) {
+	if isAgentIdentityImport {
+		req.AccountLevel = service.AccountLevelUnknown
+		req.ProxyID = nil
+		req.ShareMode = service.AccountShareModePrivate
+		req.ExpiresAt = nil
+	} else {
+		normalizeUserCredentialImportTargetLevel(&req, levelConfigs)
+	}
+	if !isAgentIdentityImport && service.RequiresUserAccountOAuthProxyWithConfigs(req.Platform, service.AccountLevelUnknown, levelConfigs) {
 		if !h.requireUserOAuthProxy(c, subject.UserID, req.ProxyID) {
 			return
 		}
@@ -1351,7 +1402,7 @@ func (h *UserAccountHandler) ImportCredentials(c *gin.Context) {
 	result.Errors = append(result.Errors, parseErrors...)
 
 	for idx, source := range sources {
-		account, err := h.createOwnedAccountFromCredentialImportSource(c.Request.Context(), subject.UserID, source, req, idx+1)
+		outcome, err := h.createOwnedAccountFromCredentialImportSource(c.Request.Context(), subject.UserID, source, req, idx+1)
 		if err != nil {
 			result.Failed++
 			result.Errors = append(result.Errors, service.AccountCredentialImportError{
@@ -1362,8 +1413,12 @@ func (h *UserAccountHandler) ImportCredentials(c *gin.Context) {
 			})
 			continue
 		}
-		if account != nil {
-			result.Created++
+		if outcome != nil && outcome.Account != nil {
+			if outcome.Updated {
+				result.Updated++
+			} else {
+				result.Created++
+			}
 		}
 	}
 	result.Failed += len(parseErrors)
@@ -1383,13 +1438,14 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 	source service.AccountCredentialImportSource,
 	defaults importUserAccountCredentialsRequest,
 	sequence int,
-) (*service.Account, error) {
+) (*service.OwnedAccountImportResult, error) {
 	if err := validateCredentialImportTargetPlatform(defaults, source); err != nil {
 		return nil, err
 	}
 
 	openAIAccountLevel := service.AccountLevelUnknown
-	if credentialImportSourceIsOpenAI(source) {
+	isAgentIdentity := source.Kind == service.AccountCredentialImportKindOpenAIAgentIdentity
+	if credentialImportSourceIsOpenAI(source) && !isAgentIdentity {
 		levelConfigs, err := h.openAIAccountLevelConfigs(ctx)
 		if err != nil {
 			return nil, err
@@ -1444,6 +1500,15 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 		if req.Name == "" {
 			req.Name = fmt.Sprintf("OpenAI OAuth Account #%d", sequence)
 		}
+	case service.AccountCredentialImportKindOpenAIAgentIdentity:
+		req.Platform = service.PlatformOpenAI
+		req.AccountLevel = service.AccountLevelUnknown
+		req.ShareMode = service.AccountShareModePrivate
+		req.ProxyID = nil
+		req.ExpiresAt = nil
+		if req.Name == "" {
+			req.Name = service.DeriveAccountCredentialImportName(req.Platform, req.Credentials, req.Extra, sequence)
+		}
 	case service.AccountCredentialImportKindClaudeSessionKey:
 		tokenInfo, err := h.oauthService.CookieAuth(ctx, &service.CookieAuthInput{
 			SessionKey: source.Token,
@@ -1475,11 +1540,16 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 	if strings.TrimSpace(req.Name) == "" {
 		return nil, fmt.Errorf("account name is required")
 	}
-	account, err := h.accountService.ImportOwned(ctx, ownerUserID, req)
+	outcome, err := h.accountService.ImportOwnedWithResult(ctx, ownerUserID, req)
 	if err != nil {
 		return nil, err
 	}
-	return h.activateOwnedPublicShareIfRequested(ctx, ownerUserID, account)
+	account, err := h.activateOwnedPublicShareIfRequested(ctx, ownerUserID, outcome.Account)
+	if err != nil {
+		return nil, err
+	}
+	outcome.Account = account
+	return outcome, nil
 }
 
 func (h *UserAccountHandler) Update(c *gin.Context) {
@@ -1521,7 +1591,10 @@ func (h *UserAccountHandler) Update(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	if req.ShareMode != nil && service.NormalizeAccountShareMode(*req.ShareMode) == service.AccountShareModePublic {
+	requestedPublicShare := req.ShareMode != nil && service.NormalizeAccountShareMode(*req.ShareMode) == service.AccountShareModePublic
+	changedPublicAgentIdentityCredentials := req.Credentials != nil && account.IsOpenAIAgentIdentity() &&
+		service.NormalizeAccountShareMode(account.ShareMode) == service.AccountShareModePublic
+	if requestedPublicShare || changedPublicAgentIdentityCredentials {
 		account, err = h.activateOwnedPublicShareIfRequested(c.Request.Context(), subject.UserID, account)
 		if err != nil {
 			response.ErrorFrom(c, err)
@@ -1842,14 +1915,18 @@ func (h *UserAccountHandler) BulkUpdate(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	if req.ShareMode != nil && service.NormalizeAccountShareMode(*req.ShareMode) == service.AccountShareModePublic {
+	requestedPublicShare := req.ShareMode != nil && service.NormalizeAccountShareMode(*req.ShareMode) == service.AccountShareModePublic
+	revalidatePublicAgentIdentity := len(req.Credentials) > 0
+	if requestedPublicShare || revalidatePublicAgentIdentity {
 		for i := range result.Results {
 			entry := &result.Results[i]
 			if !entry.Success {
 				continue
 			}
 			account, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, entry.AccountID)
-			if err == nil {
+			shouldActivate := account != nil && service.NormalizeAccountShareMode(account.ShareMode) == service.AccountShareModePublic &&
+				(requestedPublicShare || account.IsOpenAIAgentIdentity())
+			if err == nil && shouldActivate {
 				_, err = h.activateOwnedPublicShareIfRequested(c.Request.Context(), subject.UserID, account)
 			}
 			if err != nil {

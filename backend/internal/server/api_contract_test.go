@@ -572,6 +572,8 @@ func TestAPIContracts(t *testing.T) {
 							"cache_read_tokens": 2,
 							"cache_creation_5m_tokens": 0,
 							"cache_creation_1h_tokens": 0,
+							"image_input_tokens": 0,
+							"image_input_cost": 0,
 							"input_cost": 0,
 							"output_cost": 0,
 							"cache_creation_cost": 0,
@@ -927,7 +929,8 @@ func TestAPIContracts(t *testing.T) {
 					"wechat_connect_scopes": "snsapi_login",
 					"withdrawal_management_enabled": true,
 					"withdrawal_rate_limit_window_days": 1,
-					"withdrawal_rate_limit_max": 0
+					"withdrawal_rate_limit_max": 0,
+					"withdrawal_rate_limit_exempt_amount": 500
 				}
 			}`,
 		},
@@ -1220,7 +1223,8 @@ func TestAPIContracts(t *testing.T) {
 					"user_private_group_commission_rate": 0.005,
 					"withdrawal_management_enabled": true,
 					"withdrawal_rate_limit_window_days": 1,
-					"withdrawal_rate_limit_max": 0
+					"withdrawal_rate_limit_max": 0,
+					"withdrawal_rate_limit_exempt_amount": 500
 				}
 			}`,
 		},
@@ -2493,7 +2497,7 @@ func (r *stubUsageLogRepo) GetAPIKeyDashboardStats(ctx context.Context, apiKeyID
 	return nil, errors.New("not implemented")
 }
 
-func (r *stubUsageLogRepo) GetUserUsageTrendByUserID(ctx context.Context, userID int64, startTime, endTime time.Time, granularity string) ([]usagestats.TrendDataPoint, error) {
+func (r *stubUsageLogRepo) GetUserUsageTrendByUserID(ctx context.Context, userID int64, startTime, endTime time.Time, granularity string, location *time.Location) ([]usagestats.TrendDataPoint, error) {
 	return nil, errors.New("not implemented")
 }
 
@@ -2501,7 +2505,7 @@ func (r *stubUsageLogRepo) GetUserModelStats(ctx context.Context, userID int64, 
 	return nil, errors.New("not implemented")
 }
 
-func (r *stubUsageLogRepo) GetUserAccountSharingDashboard(ctx context.Context, userID int64, startTime, endTime time.Time, granularity string) (*usagestats.AccountSharingDashboardStats, error) {
+func (r *stubUsageLogRepo) GetUserAccountSharingDashboard(ctx context.Context, userID int64, startTime, endTime time.Time, granularity string, location *time.Location) (*usagestats.AccountSharingDashboardStats, error) {
 	return nil, errors.New("not implemented")
 }
 

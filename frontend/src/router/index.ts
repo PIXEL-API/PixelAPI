@@ -193,6 +193,7 @@ const routes: RouteRecordRaw[] = [
       title: "Dashboard",
       titleKey: "dashboard.title",
       descriptionKey: "dashboard.welcomeMessage",
+      uiSkin: "v2",
     },
   },
   {
@@ -205,6 +206,7 @@ const routes: RouteRecordRaw[] = [
       title: "API Keys",
       titleKey: "keys.title",
       descriptionKey: "keys.description",
+      uiSkin: "v2",
     },
   },
   {
@@ -241,6 +243,7 @@ const routes: RouteRecordRaw[] = [
       title: "Usage Records",
       titleKey: "usage.title",
       descriptionKey: "usage.description",
+      uiSkin: "v2",
     },
   },
   {

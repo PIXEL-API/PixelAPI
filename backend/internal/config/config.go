@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/textproto"
 	"net/url"
 	"os"
 	pathpkg "path"
@@ -16,6 +18,7 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
+	"golang.org/x/net/http/httpguts"
 )
 
 const (
@@ -546,16 +549,31 @@ type PricingConfig struct {
 }
 
 type ServerConfig struct {
-	Host               string    `mapstructure:"host"`
-	Port               int       `mapstructure:"port"`
-	Mode               string    `mapstructure:"mode"`                  // debug/release
-	EnableServerTiming bool      `mapstructure:"enable_server_timing"`  // 已认证管理端/用户端 Web API 性能指标
-	FrontendURL        string    `mapstructure:"frontend_url"`          // 前端基础 URL，用于生成邮件中的外部链接
-	ReadHeaderTimeout  int       `mapstructure:"read_header_timeout"`   // 读取请求头超时（秒）
-	IdleTimeout        int       `mapstructure:"idle_timeout"`          // 空闲连接超时（秒）
-	TrustedProxies     []string  `mapstructure:"trusted_proxies"`       // 可信代理列表（CIDR/IP）
-	MaxRequestBodySize int64     `mapstructure:"max_request_body_size"` // 全局最大请求体限制
-	H2C                H2CConfig `mapstructure:"h2c"`                   // HTTP/2 Cleartext 配置
+	Host                   string    `mapstructure:"host"`
+	Port                   int       `mapstructure:"port"`
+	Mode                   string    `mapstructure:"mode"`                     // debug/release
+	EnableServerTiming     bool      `mapstructure:"enable_server_timing"`     // 已认证管理端/用户端 Web API 性能指标
+	FrontendURL            string    `mapstructure:"frontend_url"`             // 前端基础 URL，用于生成邮件中的外部链接
+	ReadHeaderTimeout      int       `mapstructure:"read_header_timeout"`      // 读取请求头超时（秒）
+	IdleTimeout            int       `mapstructure:"idle_timeout"`             // 空闲连接超时（秒）
+	ShutdownTimeoutSeconds int       `mapstructure:"shutdown_timeout_seconds"` // HTTP 服务与应用清理的单阶段退出预算（秒）
+	TrustedProxies         []string  `mapstructure:"trusted_proxies"`          // 可信代理列表（CIDR/IP）
+	MaxRequestBodySize     int64     `mapstructure:"max_request_body_size"`    // 全局最大请求体限制
+	H2C                    H2CConfig `mapstructure:"h2c"`                      // HTTP/2 Cleartext 配置
+}
+
+const (
+	defaultServerShutdownTimeoutSeconds = 30
+	maxServerShutdownTimeoutSeconds     = 60 * 60
+)
+
+// ShutdownTimeout returns the budget used independently by each shutdown phase.
+// A zero value is safe for callers that construct ServerConfig directly.
+func (c ServerConfig) ShutdownTimeout() time.Duration {
+	if c.ShutdownTimeoutSeconds == 0 {
+		return defaultServerShutdownTimeoutSeconds * time.Second
+	}
+	return time.Duration(c.ShutdownTimeoutSeconds) * time.Second
 }
 
 type ServerListenNetwork string
@@ -707,11 +725,57 @@ type CORSConfig struct {
 }
 
 type SecurityConfig struct {
-	URLAllowlist    URLAllowlistConfig   `mapstructure:"url_allowlist"`
-	ResponseHeaders ResponseHeaderConfig `mapstructure:"response_headers"`
-	CSP             CSPConfig            `mapstructure:"csp"`
-	ProxyFallback   ProxyFallbackConfig  `mapstructure:"proxy_fallback"`
-	ProxyProbe      ProxyProbeConfig     `mapstructure:"proxy_probe"`
+	URLAllowlist             URLAllowlistConfig   `mapstructure:"url_allowlist"`
+	ResponseHeaders          ResponseHeaderConfig `mapstructure:"response_headers"`
+	CSP                      CSPConfig            `mapstructure:"csp"`
+	ProxyFallback            ProxyFallbackConfig  `mapstructure:"proxy_fallback"`
+	ProxyProbe               ProxyProbeConfig     `mapstructure:"proxy_probe"`
+	ForwardedClientIPHeaders []string             `mapstructure:"forwarded_client_ip_headers"`
+}
+
+const MaxForwardedClientIPHeaders = 16
+
+var forbiddenForwardedClientIPHeaders = map[string]struct{}{
+	"authorization":       {},
+	"connection":          {},
+	"content-length":      {},
+	"cookie":              {},
+	"host":                {},
+	"proxy-authenticate":  {},
+	"proxy-authorization": {},
+	"set-cookie":          {},
+	"te":                  {},
+	"trailer":             {},
+	"transfer-encoding":   {},
+	"upgrade":             {},
+}
+
+// NormalizeForwardedClientIPHeaders 校验并规范化自定义客户端 IP 请求头。
+// 这些请求头仅会在直连来源命中 server.trusted_proxies 时由 Gin 解析。
+func NormalizeForwardedClientIPHeaders(headers []string) ([]string, error) {
+	normalized := make([]string, 0, len(headers))
+	seen := make(map[string]struct{}, len(headers))
+	for _, header := range headers {
+		header = strings.TrimSpace(header)
+		if !httpguts.ValidHeaderFieldName(header) {
+			return nil, fmt.Errorf("invalid HTTP header field name %q", header)
+		}
+
+		canonical := textproto.CanonicalMIMEHeaderKey(header)
+		key := strings.ToLower(canonical)
+		if _, forbidden := forbiddenForwardedClientIPHeaders[key]; forbidden {
+			return nil, fmt.Errorf("HTTP header %q cannot be used as a client IP source", canonical)
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		if len(normalized) >= MaxForwardedClientIPHeaders {
+			return nil, fmt.Errorf("forwarded client IP headers must contain at most %d unique names", MaxForwardedClientIPHeaders)
+		}
+		seen[key] = struct{}{}
+		normalized = append(normalized, canonical)
+	}
+	return normalized, nil
 }
 
 type URLAllowlistConfig struct {
@@ -777,10 +841,11 @@ type GatewayConfig struct {
 	// ImageNonstreamTotalTimeoutSeconds: Images 非流式请求的总超时时间（秒），0表示禁用。
 	// 图片生成可能长时间没有响应体数据，不能复用普通流数据间隔超时。
 	ImageNonstreamTotalTimeoutSeconds int `mapstructure:"image_nonstream_total_timeout_seconds"`
-	// OpenAIFirstOutputTimeoutSeconds: OpenAI 原生 HTTP Responses 首个语义输出超时（秒），0 表示禁用。
+	// OpenAIFirstOutputTimeoutSeconds: OpenAI HTTP Responses（含 passthrough）首个语义输出超时（秒），0 表示禁用。
+	// 默认 60 秒，仅用于截断异常长尾，不限制已开始输出的正常长流。
 	OpenAIFirstOutputTimeoutSeconds int `mapstructure:"openai_first_output_timeout_seconds"`
 	// OpenAIHighEffortFirstOutputTimeoutSeconds: high/xhigh/max 推理的首个语义输出超时（秒）。
-	// 0 表示回退到 OpenAIFirstOutputTimeoutSeconds。
+	// 默认 180 秒；0 表示回退到 OpenAIFirstOutputTimeoutSeconds。
 	OpenAIHighEffortFirstOutputTimeoutSeconds int `mapstructure:"openai_high_effort_first_output_timeout_seconds"`
 	// 请求体最大字节数，用于网关请求体大小限制
 	MaxBodySize int64 `mapstructure:"max_body_size"`
@@ -1349,13 +1414,69 @@ type OpsCleanupConfig struct {
 	Schedule string `mapstructure:"schedule"`
 	// ArchiveExpireDays controls backup record/object expiry for ops log archives. 0 means never expire.
 	ArchiveExpireDays int `mapstructure:"archive_expire_days"`
+	// ArchiveWindowDays bounds each ops log archive/delete window to avoid repeatedly exporting the full backlog.
+	ArchiveWindowDays int `mapstructure:"archive_window_days"`
+	// MaxCatchupWindowsPerRun limits how many historical windows each ops log table may advance per scheduled run.
+	MaxCatchupWindowsPerRun int `mapstructure:"max_catchup_windows_per_run"`
+	// ArchiveTimeoutSeconds bounds one table/window export, compression, and object-storage upload.
+	ArchiveTimeoutSeconds int `mapstructure:"archive_timeout_seconds"`
+	// DeleteTimeoutSeconds bounds one table/window batched deletion phase.
+	DeleteTimeoutSeconds int `mapstructure:"delete_timeout_seconds"`
+	// RunTimeoutSeconds bounds the complete scheduled cleanup run.
+	RunTimeoutSeconds int `mapstructure:"run_timeout_seconds"`
+	// DeleteBatchSize limits rows deleted by each SQL statement.
+	DeleteBatchSize int `mapstructure:"delete_batch_size"`
 
-	// Retention days (0 disables that cleanup target).
+	// Retention days. 0 disables that cleanup target.
 	//
 	// vNext requirement: default 30 days across ops datasets.
 	ErrorLogRetentionDays      int `mapstructure:"error_log_retention_days"`
 	MinuteMetricsRetentionDays int `mapstructure:"minute_metrics_retention_days"`
 	HourlyMetricsRetentionDays int `mapstructure:"hourly_metrics_retention_days"`
+}
+
+func (c OpsCleanupConfig) Validate() error {
+	if c.ArchiveExpireDays < 0 {
+		return fmt.Errorf("ops.cleanup.archive_expire_days must be non-negative")
+	}
+	if c.ErrorLogRetentionDays < 0 {
+		return fmt.Errorf("ops.cleanup.error_log_retention_days must be non-negative")
+	}
+	if c.MinuteMetricsRetentionDays < 0 {
+		return fmt.Errorf("ops.cleanup.minute_metrics_retention_days must be non-negative")
+	}
+	if c.HourlyMetricsRetentionDays < 0 {
+		return fmt.Errorf("ops.cleanup.hourly_metrics_retention_days must be non-negative")
+	}
+	if !c.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(c.Schedule) == "" {
+		return fmt.Errorf("ops.cleanup.schedule is required when ops.cleanup.enabled=true")
+	}
+	if c.ArchiveWindowDays <= 0 {
+		return fmt.Errorf("ops.cleanup.archive_window_days must be positive")
+	}
+	if c.MaxCatchupWindowsPerRun <= 0 {
+		return fmt.Errorf("ops.cleanup.max_catchup_windows_per_run must be positive")
+	}
+	if c.ArchiveTimeoutSeconds <= 0 {
+		return fmt.Errorf("ops.cleanup.archive_timeout_seconds must be positive")
+	}
+	if c.DeleteTimeoutSeconds <= 0 {
+		return fmt.Errorf("ops.cleanup.delete_timeout_seconds must be positive")
+	}
+	if c.RunTimeoutSeconds <= 0 {
+		return fmt.Errorf("ops.cleanup.run_timeout_seconds must be positive")
+	}
+	if c.DeleteBatchSize <= 0 {
+		return fmt.Errorf("ops.cleanup.delete_batch_size must be positive")
+	}
+	minimumRunSeconds := int64(c.MaxCatchupWindowsPerRun) * 2 * int64(c.ArchiveTimeoutSeconds+c.DeleteTimeoutSeconds)
+	if int64(c.RunTimeoutSeconds) < minimumRunSeconds {
+		return fmt.Errorf("ops.cleanup.run_timeout_seconds must be at least %d for configured catch-up windows", minimumRunSeconds)
+	}
+	return nil
 }
 
 type OpsAggregationConfig struct {
@@ -1618,6 +1739,14 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	cfg.Security.ResponseHeaders.AdditionalAllowed = normalizeStringSlice(cfg.Security.ResponseHeaders.AdditionalAllowed)
 	cfg.Security.ResponseHeaders.ForceRemove = normalizeStringSlice(cfg.Security.ResponseHeaders.ForceRemove)
 	cfg.Security.CSP.Policy = strings.TrimSpace(cfg.Security.CSP.Policy)
+	if rawHeaders, configured := os.LookupEnv("SECURITY_FORWARDED_CLIENT_IP_HEADERS"); configured {
+		cfg.Security.ForwardedClientIPHeaders = normalizeStringSlice(strings.Split(rawHeaders, ","))
+	}
+	forwardedClientIPHeaders, err := NormalizeForwardedClientIPHeaders(cfg.Security.ForwardedClientIPHeaders)
+	if err != nil {
+		return nil, fmt.Errorf("security.forwarded_client_ip_headers: %w", err)
+	}
+	cfg.Security.ForwardedClientIPHeaders = forwardedClientIPHeaders
 	cfg.Log.Level = strings.ToLower(strings.TrimSpace(cfg.Log.Level))
 	cfg.Log.Format = strings.ToLower(strings.TrimSpace(cfg.Log.Format))
 	cfg.Log.ServiceName = strings.TrimSpace(cfg.Log.ServiceName)
@@ -1709,6 +1838,7 @@ func setDefaults() {
 	viper.SetDefault("server.frontend_url", "")
 	viper.SetDefault("server.read_header_timeout", 30) // 30秒读取请求头
 	viper.SetDefault("server.idle_timeout", 120)       // 120秒空闲超时
+	viper.SetDefault("server.shutdown_timeout_seconds", defaultServerShutdownTimeoutSeconds)
 	viper.SetDefault("server.trusted_proxies", []string{})
 	viper.SetDefault("server.max_request_body_size", int64(256*1024*1024))
 	// H2C 默认配置
@@ -1766,6 +1896,7 @@ func setDefaults() {
 	viper.SetDefault("security.csp.enabled", true)
 	viper.SetDefault("security.csp.policy", DefaultCSPPolicy)
 	viper.SetDefault("security.proxy_probe.insecure_skip_verify", false)
+	viper.SetDefault("security.forwarded_client_ip_headers", []string{})
 
 	// Security - disable direct fallback on proxy error
 	viper.SetDefault("security.proxy_fallback.allow_direct_on_error", false)
@@ -1875,8 +2006,14 @@ func setDefaults() {
 	viper.SetDefault("ops.enabled", true)
 	viper.SetDefault("ops.use_preaggregated_tables", true)
 	viper.SetDefault("ops.cleanup.enabled", true)
-	viper.SetDefault("ops.cleanup.schedule", "0 2 * * *")
-	viper.SetDefault("ops.cleanup.archive_expire_days", 14)
+	viper.SetDefault("ops.cleanup.schedule", "0 4 * * *")
+	viper.SetDefault("ops.cleanup.archive_expire_days", 30)
+	viper.SetDefault("ops.cleanup.archive_window_days", 1)
+	viper.SetDefault("ops.cleanup.max_catchup_windows_per_run", 2)
+	viper.SetDefault("ops.cleanup.archive_timeout_seconds", 1800)
+	viper.SetDefault("ops.cleanup.delete_timeout_seconds", 1800)
+	viper.SetDefault("ops.cleanup.run_timeout_seconds", 18000)
+	viper.SetDefault("ops.cleanup.delete_batch_size", 5000)
 	// Retention days: vNext defaults to 30 days across ops datasets.
 	viper.SetDefault("ops.cleanup.error_log_retention_days", 30)
 	viper.SetDefault("ops.cleanup.minute_metrics_retention_days", 30)
@@ -1992,8 +2129,10 @@ func setDefaults() {
 	viper.SetDefault("gateway.response_header_timeout", 600) // 600秒(10分钟)等待上游响应头，LLM高负载时可能排队较久
 	viper.SetDefault("gateway.openai_response_header_timeout", 600)
 	viper.SetDefault("gateway.image_nonstream_total_timeout_seconds", 1800)
-	viper.SetDefault("gateway.openai_first_output_timeout_seconds", 0)
-	viper.SetDefault("gateway.openai_high_effort_first_output_timeout_seconds", 0)
+	// 首输出保护针对 OpenAI HTTP Responses（含 passthrough）的语义事件；已开始输出后不再计时。
+	// 60/180 秒覆盖正常请求，同时把坏代理/无响应上游的极端长尾转为一次受控 failover。
+	viper.SetDefault("gateway.openai_first_output_timeout_seconds", 60)
+	viper.SetDefault("gateway.openai_high_effort_first_output_timeout_seconds", 180)
 	viper.SetDefault("gateway.log_upstream_error_body", true)
 	viper.SetDefault("gateway.log_upstream_error_body_max_bytes", 2048)
 	viper.SetDefault("gateway.inject_beta_for_apikey", false)
@@ -2147,6 +2286,21 @@ func setDefaults() {
 }
 
 func (c *Config) Validate() error {
+	c.Server.TrustedProxies = normalizeStringSlice(c.Server.TrustedProxies)
+	for _, trustedProxy := range c.Server.TrustedProxies {
+		if net.ParseIP(trustedProxy) != nil {
+			continue
+		}
+		if _, _, err := net.ParseCIDR(trustedProxy); err != nil {
+			return fmt.Errorf("server.trusted_proxies contains invalid IP or CIDR %q", trustedProxy)
+		}
+	}
+	forwardedClientIPHeaders, err := NormalizeForwardedClientIPHeaders(c.Security.ForwardedClientIPHeaders)
+	if err != nil {
+		return fmt.Errorf("security.forwarded_client_ip_headers: %w", err)
+	}
+	c.Security.ForwardedClientIPHeaders = forwardedClientIPHeaders
+
 	jwtSecret := strings.TrimSpace(c.JWT.Secret)
 	if jwtSecret == "" {
 		return fmt.Errorf("jwt.secret is required")
@@ -2273,6 +2427,9 @@ func (c *Config) Validate() error {
 	}
 	if _, err := c.Server.ListenSpec(); err != nil {
 		return fmt.Errorf("server listen config invalid: %w", err)
+	}
+	if c.Server.ShutdownTimeoutSeconds < 0 || c.Server.ShutdownTimeoutSeconds > maxServerShutdownTimeoutSeconds {
+		return fmt.Errorf("server.shutdown_timeout_seconds must be 0 or between 1-%d seconds", maxServerShutdownTimeoutSeconds)
 	}
 	if c.JWT.ExpireHour <= 0 {
 		return fmt.Errorf("jwt.expire_hour must be positive")
@@ -3050,20 +3207,8 @@ func (c *Config) Validate() error {
 	if c.Ops.MetricsCollectorCache.TTL < 0 {
 		return fmt.Errorf("ops.metrics_collector_cache.ttl must be non-negative")
 	}
-	if c.Ops.Cleanup.ArchiveExpireDays < 0 {
-		return fmt.Errorf("ops.cleanup.archive_expire_days must be non-negative")
-	}
-	if c.Ops.Cleanup.ErrorLogRetentionDays < 0 {
-		return fmt.Errorf("ops.cleanup.error_log_retention_days must be non-negative")
-	}
-	if c.Ops.Cleanup.MinuteMetricsRetentionDays < 0 {
-		return fmt.Errorf("ops.cleanup.minute_metrics_retention_days must be non-negative")
-	}
-	if c.Ops.Cleanup.HourlyMetricsRetentionDays < 0 {
-		return fmt.Errorf("ops.cleanup.hourly_metrics_retention_days must be non-negative")
-	}
-	if c.Ops.Cleanup.Enabled && strings.TrimSpace(c.Ops.Cleanup.Schedule) == "" {
-		return fmt.Errorf("ops.cleanup.schedule is required when ops.cleanup.enabled=true")
+	if err := c.Ops.Cleanup.Validate(); err != nil {
+		return err
 	}
 	if c.Concurrency.PingInterval < 5 || c.Concurrency.PingInterval > 30 {
 		return fmt.Errorf("concurrency.ping_interval must be between 5-30 seconds")

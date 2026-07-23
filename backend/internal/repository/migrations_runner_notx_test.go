@@ -8,6 +8,8 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/Wei-Shaw/sub2api/migrations"
+
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/require"
 )
@@ -30,6 +32,8 @@ var migrationIndexCatalogColumns = []string{
 	"predicate",
 }
 
+const openAIAgentIdentityDuplicatePrecheckPattern = `(?s)WITH identities AS.*identity_value_1.*identity_value_2.*FROM public\.accounts.*GROUP BY identity_name, owner_user_id, identity_value_1, identity_value_2`
+
 func matchingMigrationIndexCatalogRows(
 	t *testing.T,
 	requirement migrationIndexRequirement,
@@ -41,6 +45,7 @@ func matchingMigrationIndexCatalogRows(
 		table:          requirement.table,
 		accessMethod:   requirement.accessMethod,
 		relationKind:   "i",
+		unique:         requirement.unique,
 		ready:          true,
 		valid:          true,
 		live:           true,
@@ -53,25 +58,24 @@ func matchingMigrationIndexCatalogRows(
 		definition := expected.column
 		isExpression := expected.expressionCanonical != ""
 		if isExpression {
-			definition = "(NULLIF((metadata ->> 'membership_id'::text), ''::text))::bigint"
+			definition = expected.expressionCanonical
 		}
 		state.keys[i] = migrationIndexCatalogKey{
-			Position:      i + 1,
-			IsExpression:  isExpression,
-			Definition:    definition,
-			TypeSchema:    expected.resultType.schema,
-			TypeName:      expected.resultType.name,
-			OpClassSchema: expected.operatorClass.schema,
-			OpClassName:   expected.operatorClass.name,
+			Position:        i + 1,
+			IsExpression:    isExpression,
+			Definition:      definition,
+			TypeSchema:      expected.resultType.schema,
+			TypeName:        expected.resultType.name,
+			OpClassSchema:   expected.operatorClass.schema,
+			OpClassName:     expected.operatorClass.name,
+			CollationSchema: expected.collation.schema,
+			CollationName:   expected.collation.name,
 		}
 	}
 	if requirement.predicateCanonical != "" {
 		state.predicate = sql.NullString{
-			String: "((reason)::text = ANY ((ARRAY['account_share_mode_seat_prepay'::character varying, 'account_share_mode_seat_refund'::character varying, 'account_share_mode_seat_waiver_refund'::character varying])::text[]))",
+			String: requirement.predicateCanonical,
 			Valid:  true,
-		}
-		if requirement.index.name == "idx_user_balance_ledger_seat_membership_created_at" {
-			state.predicate.String += " AND (NULLIF((metadata ->> 'membership_id'::text), ''::text) IS NOT NULL)"
 		}
 	}
 	if mutate != nil {
@@ -216,6 +220,22 @@ func TestCanonicalizeMigrationIndexExpressionNormalizesPostgreSQLVarcharCasts(t 
 	t.Run("保留带长度varchar语义", func(t *testing.T) {
 		require.NotEqual(t, canonicalizeMigrationIndexExpression("reason50"), canonicalizeMigrationIndexExpression("reason::varchar(50)"))
 		require.NotEqual(t, canonicalizeMigrationIndexExpression("reason50"), canonicalizeMigrationIndexExpression("reason::character varying(50)"))
+	})
+
+	t.Run("OpenAI身份索引表达式兼容PostgreSQL规范化输出", func(t *testing.T) {
+		actualOrganization := "lower(NULLIF(btrim((credentials ->> 'organization_id'::text)), ''::text))"
+		require.Equal(
+			t,
+			canonicalizeMigrationIndexExpression(openAIOwnedOrganizationExpression),
+			canonicalizeMigrationIndexExpression(actualOrganization),
+		)
+
+		actualAgentPredicate := "(deleted_at IS NULL) AND (owner_user_id IS NOT NULL) AND ((platform)::text = 'openai'::text) AND ((type)::text = 'oauth'::text) AND (lower(NULLIF(btrim((credentials ->> 'auth_mode'::text)), ''::text)) = 'agentidentity'::text) AND (NULLIF(btrim((credentials ->> 'chatgpt_account_id'::text)), ''::text) IS NOT NULL)"
+		require.Equal(
+			t,
+			canonicalizeMigrationIndexExpression(openAIOwnedAgentIdentityPredicate),
+			canonicalizeMigrationIndexExpression(actualAgentPredicate),
+		)
 	})
 }
 
@@ -627,6 +647,186 @@ DROP INDEX CONCURRENTLY IF EXISTS idx_accounts_owned_openai_chatgpt_account_id_u
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestPrepareOpenAIOwnedAgentIdentityUniqueMigrationFailsFastOnDuplicates(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery(openAIAgentIdentityDuplicatePrecheckPattern).
+		WillReturnRows(sqlmock.NewRows([]string{"identity_name", "owner_user_id", "duplicate_count", "sample_ids"}).
+			AddRow("openai.agent_identity_team", int64(101), 2, "41,42"))
+
+	err = prepareNonTransactionalMigration(context.Background(), db, openAIOwnedAgentIdentityUniqueMigration)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "duplicate OpenAI owned Agent Identity migration identities")
+	require.Contains(t, err.Error(), "openai.agent_identity_team")
+	require.Contains(t, err.Error(), "sample_account_ids=41,42")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPrepareOpenAIOwnedAgentIdentityUniqueMigrationDropsInvalidIndexesBeforeRetry(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery(openAIAgentIdentityDuplicatePrecheckPattern).
+		WillReturnRows(sqlmock.NewRows([]string{"identity_name", "owner_user_id", "duplicate_count", "sample_ids"}))
+	for i, requirement := range openAIOwnedAgentIdentityUniqueIndexRequirements {
+		invalid := i == 0
+		mock.ExpectQuery("SELECT EXISTS \\(").
+			WithArgs(requirement.index.name).
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(invalid))
+		if i == 0 {
+			mock.ExpectExec(regexp.QuoteMeta("DROP INDEX CONCURRENTLY IF EXISTS " + quoteMigrationCatalogName(requirement.index))).
+				WillReturnResult(sqlmock.NewResult(0, 0))
+			continue
+		}
+		mock.ExpectQuery("SELECT\\s+tbl_ns\\.nspname").
+			WithArgs(requirement.index.schema, requirement.index.name).
+			WillReturnError(sql.ErrNoRows)
+	}
+
+	err = prepareNonTransactionalMigration(context.Background(), db, openAIOwnedAgentIdentityUniqueMigration)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPrepareOpenAIOwnedAgentIdentityUniqueMigrationRejectsValidWrongDefinition(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery(openAIAgentIdentityDuplicatePrecheckPattern).
+		WillReturnRows(sqlmock.NewRows([]string{"identity_name", "owner_user_id", "duplicate_count", "sample_ids"}))
+	requirement := openAIOwnedAgentIdentityUniqueIndexRequirements[0]
+	mock.ExpectQuery("SELECT EXISTS \\(").
+		WithArgs(requirement.index.name).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	expectMigrationIndexCatalogQuery(mock, requirement, matchingMigrationIndexCatalogRows(t, requirement, func(state *migrationIndexCatalogState) {
+		state.keys[1].Definition = "lower(credentials->>'wrong_field')"
+	}))
+
+	err = prepareNonTransactionalMigration(context.Background(), db, openAIOwnedAgentIdentityUniqueMigration)
+	require.ErrorContains(t, err, "valid but unexpected definition")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestVerifyOpenAIOwnedAgentIdentityUniqueMigrationRequiresExactDefinitions(t *testing.T) {
+	t.Run("all indexes match", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer func() { _ = db.Close() }()
+
+		for _, requirement := range openAIOwnedAgentIdentityUniqueIndexRequirements {
+			expectMigrationIndexCatalogQuery(mock, requirement, matchingMigrationIndexCatalogRows(t, requirement, nil))
+		}
+
+		err = verifyNonTransactionalMigrationResult(context.Background(), db, openAIOwnedAgentIdentityUniqueMigration)
+		require.NoError(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("missing index fails verification", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer func() { _ = db.Close() }()
+
+		requirement := openAIOwnedAgentIdentityUniqueIndexRequirements[0]
+		mock.ExpectQuery("SELECT\\s+tbl_ns\\.nspname").
+			WithArgs(requirement.index.schema, requirement.index.name).
+			WillReturnError(sql.ErrNoRows)
+
+		err = verifyNonTransactionalMigrationResult(context.Background(), db, openAIOwnedAgentIdentityUniqueMigration)
+		require.ErrorContains(t, err, "missing, invalid, or do not match migration 217")
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("wrong expression fails verification", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer func() { _ = db.Close() }()
+
+		requirement := openAIOwnedAgentIdentityUniqueIndexRequirements[0]
+		expectMigrationIndexCatalogQuery(mock, requirement, matchingMigrationIndexCatalogRows(t, requirement, func(state *migrationIndexCatalogState) {
+			state.keys[1].Definition = "lower(credentials->>'wrong_field')"
+		}))
+
+		err = verifyNonTransactionalMigrationResult(context.Background(), db, openAIOwnedAgentIdentityUniqueMigration)
+		require.ErrorContains(t, err, "do not match migration 217")
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+func TestOpenAIOwnedAgentIdentityIndexMatcherRejectsCatalogDrift(t *testing.T) {
+	requirement := openAIOwnedAgentIdentityUniqueIndexRequirements[0]
+	tests := []struct {
+		name   string
+		mutate func(*migrationIndexCatalogState)
+	}{
+		{name: "not unique", mutate: func(state *migrationIndexCatalogState) { state.unique = false }},
+		{name: "not ready", mutate: func(state *migrationIndexCatalogState) { state.ready = false }},
+		{name: "not valid", mutate: func(state *migrationIndexCatalogState) { state.valid = false }},
+		{name: "wrong result type", mutate: func(state *migrationIndexCatalogState) { state.keys[1].TypeName = "varchar" }},
+		{name: "wrong operator class", mutate: func(state *migrationIndexCatalogState) { state.keys[1].OpClassName = "varchar_ops" }},
+		{name: "wrong collation", mutate: func(state *migrationIndexCatalogState) { state.keys[1].CollationName = "C" }},
+		{name: "wrong predicate", mutate: func(state *migrationIndexCatalogState) { state.predicate.String = "owner_user_id IS NULL" }},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer func() { _ = db.Close() }()
+
+			expectMigrationIndexCatalogQuery(mock, requirement, matchingMigrationIndexCatalogRows(t, requirement, test.mutate))
+			state, err := loadMigrationIndexCatalogState(context.Background(), db, requirement.index)
+			require.NoError(t, err)
+			require.False(t, migrationIndexMatchesRequirement(state, requirement))
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestApplyOpenAIOwnedAgentIdentityMigrationVerifiesNewIndexesBeforeProtectedDrops(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	prepareMigrationsBootstrapExpectations(mock)
+	mock.ExpectQuery("SELECT checksum FROM schema_migrations WHERE filename = \\$1").
+		WithArgs(openAIOwnedAgentIdentityUniqueMigration).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(openAIAgentIdentityDuplicatePrecheckPattern).
+		WillReturnRows(sqlmock.NewRows([]string{"identity_name", "owner_user_id", "duplicate_count", "sample_ids"}))
+	for _, requirement := range openAIOwnedAgentIdentityUniqueIndexRequirements {
+		mock.ExpectQuery("SELECT EXISTS \\(").
+			WithArgs(requirement.index.name).
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+		mock.ExpectQuery("SELECT\\s+tbl_ns\\.nspname").
+			WithArgs(requirement.index.schema, requirement.index.name).
+			WillReturnError(sql.ErrNoRows)
+	}
+	mock.ExpectExec("CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_test").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	firstRequirement := openAIOwnedAgentIdentityUniqueIndexRequirements[0]
+	mock.ExpectQuery("SELECT\\s+tbl_ns\\.nspname").
+		WithArgs(firstRequirement.index.schema, firstRequirement.index.name).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec("SELECT pg_advisory_unlock\\(\\$1\\)").
+		WithArgs(migrationsAdvisoryLockID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	fsys := fstest.MapFS{
+		openAIOwnedAgentIdentityUniqueMigration: &fstest.MapFile{
+			Data: []byte("CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_test ON accounts (owner_user_id);\nDROP INDEX CONCURRENTLY IF EXISTS idx_protected_old;\n"),
+		},
+	}
+	err = applyMigrationsFS(context.Background(), db, fsys)
+
+	require.ErrorContains(t, err, "before dropping protected indexes")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestApplyMigrationsFS_TransactionalMigration(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -655,6 +855,150 @@ func TestApplyMigrationsFS_TransactionalMigration(t *testing.T) {
 
 	err = applyMigrationsFS(context.Background(), db, fsys)
 	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestApplyMigrationsFSUsageLogImageInputTokensPinsPublicSchemaAndValidatesColumns(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	migrationSQL, err := migrations.FS.ReadFile(usageLogImageInputTokensMigration)
+	require.NoError(t, err)
+	require.Contains(t, string(migrationSQL), "ADD COLUMN IF NOT EXISTS image_input_tokens")
+	require.Contains(t, string(migrationSQL), "ADD COLUMN IF NOT EXISTS image_input_cost")
+
+	prepareMigrationsBootstrapExpectations(mock)
+	mock.ExpectQuery("SELECT checksum FROM schema_migrations WHERE filename = \\$1").
+		WithArgs(usageLogImageInputTokensMigration).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path = pg_catalog, public, pg_temp").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS image_input_tokens").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("SELECT\\s+a\\.attname").
+		WillReturnRows(sqlmock.NewRows([]string{"attname", "format_type", "attnotnull", "default"}).
+			AddRow("image_input_cost", "numeric(20,10)", true, "0").
+			AddRow("image_input_tokens", "integer", true, "0"))
+	mock.ExpectExec("INSERT INTO schema_migrations \\(filename, checksum\\) VALUES \\(\\$1, \\$2\\)").
+		WithArgs(usageLogImageInputTokensMigration, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+	mock.ExpectExec("SELECT pg_advisory_unlock\\(\\$1\\)").
+		WithArgs(migrationsAdvisoryLockID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	fsys := fstest.MapFS{
+		usageLogImageInputTokensMigration: &fstest.MapFile{
+			Data: migrationSQL,
+		},
+	}
+
+	err = applyMigrationsFS(context.Background(), db, fsys)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestVerifyTransactionalMigrationResultRejectsMalformedUsageLogImageInputColumns(t *testing.T) {
+	tests := []struct {
+		name           string
+		costType       string
+		costNotNull    bool
+		costDefault    string
+		includeCostCol bool
+		wantErr        string
+	}{
+		{
+			name:           "wrong default",
+			costType:       "numeric(20,10)",
+			costNotNull:    true,
+			costDefault:    "1",
+			includeCostCol: true,
+			wantErr:        "public.usage_logs.image_input_cost has unexpected definition",
+		},
+		{
+			name:           "wrong type",
+			costType:       "numeric(20,9)",
+			costNotNull:    true,
+			costDefault:    "0",
+			includeCostCol: true,
+			wantErr:        "public.usage_logs.image_input_cost has unexpected definition",
+		},
+		{
+			name:           "nullable",
+			costType:       "numeric(20,10)",
+			costNotNull:    false,
+			costDefault:    "0",
+			includeCostCol: true,
+			wantErr:        "public.usage_logs.image_input_cost has unexpected definition",
+		},
+		{
+			name:           "missing default",
+			costType:       "numeric(20,10)",
+			costNotNull:    true,
+			costDefault:    "",
+			includeCostCol: true,
+			wantErr:        "public.usage_logs.image_input_cost has unexpected definition",
+		},
+		{
+			name:           "missing column",
+			includeCostCol: false,
+			wantErr:        "public.usage_logs.image_input_cost is missing",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer func() { _ = db.Close() }()
+
+			rows := sqlmock.NewRows([]string{"attname", "format_type", "attnotnull", "default"}).
+				AddRow("image_input_tokens", "integer", true, "0")
+			if test.includeCostCol {
+				rows.AddRow("image_input_cost", test.costType, test.costNotNull, test.costDefault)
+			}
+			mock.ExpectQuery("SELECT\\s+a\\.attname").WillReturnRows(rows)
+
+			err = verifyTransactionalMigrationResult(context.Background(), db, usageLogImageInputTokensMigration)
+			require.ErrorContains(t, err, test.wantErr)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestApplyMigrationsFSUsageLogImageInputTokensRollsBackWhenValidationFails(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	migrationSQL, err := migrations.FS.ReadFile(usageLogImageInputTokensMigration)
+	require.NoError(t, err)
+
+	prepareMigrationsBootstrapExpectations(mock)
+	mock.ExpectQuery("SELECT checksum FROM schema_migrations WHERE filename = \\$1").
+		WithArgs(usageLogImageInputTokensMigration).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path = pg_catalog, public, pg_temp").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS image_input_tokens").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("SELECT\\s+a\\.attname").
+		WillReturnRows(sqlmock.NewRows([]string{"attname", "format_type", "attnotnull", "default"}).
+			AddRow("image_input_cost", "numeric(20,10)", false, "0").
+			AddRow("image_input_tokens", "integer", true, "0"))
+	mock.ExpectRollback()
+	mock.ExpectExec("SELECT pg_advisory_unlock\\(\\$1\\)").
+		WithArgs(migrationsAdvisoryLockID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	fsys := fstest.MapFS{
+		usageLogImageInputTokensMigration: &fstest.MapFile{Data: migrationSQL},
+	}
+	err = applyMigrationsFS(context.Background(), db, fsys)
+
+	require.ErrorContains(t, err, "verify migration "+usageLogImageInputTokensMigration)
+	require.ErrorContains(t, err, "public.usage_logs.image_input_cost has unexpected definition")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

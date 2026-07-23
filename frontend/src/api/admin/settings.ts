@@ -573,6 +573,7 @@ export interface SystemSettings {
   withdrawal_management_enabled: boolean;
   withdrawal_rate_limit_window_days: number;
   withdrawal_rate_limit_max: number;
+  withdrawal_rate_limit_exempt_amount: number;
 
   // Affiliate (邀请返利) feature switch
   affiliate_enabled: boolean;
@@ -815,6 +816,7 @@ export interface UpdateSettingsRequest {
   withdrawal_management_enabled?: boolean;
   withdrawal_rate_limit_window_days?: number;
   withdrawal_rate_limit_max?: number;
+  withdrawal_rate_limit_exempt_amount?: number;
 
   // Affiliate (邀请返利) feature switch
   affiliate_enabled?: boolean;

@@ -118,7 +118,8 @@ type UsageTokens struct {
 
 // CostBreakdown 费用明细
 type CostBreakdown struct {
-	InputCost         float64
+	InputCost         float64 // 文本输入费用，不含图片输入
+	ImageInputCost    float64 // 图片输入 token 费用
 	OutputCost        float64
 	ImageOutputCost   float64
 	CacheCreationCost float64
@@ -667,8 +668,8 @@ func (s *BillingService) computeTokenBreakdown(
 
 	bd := &CostBreakdown{}
 	textInputTokens := tokens.InputTokens + tokens.TextInputTokens
-	bd.InputCost = float64(textInputTokens)*inputPrice*inputTierMultiplier +
-		float64(tokens.ImageInputTokens)*imageInputPrice*imageInputTierMultiplier
+	bd.InputCost = float64(textInputTokens) * inputPrice * inputTierMultiplier
+	bd.ImageInputCost = float64(tokens.ImageInputTokens) * imageInputPrice * imageInputTierMultiplier
 
 	// 分离图片输出 token 与文本输出 token
 	textOutputTokens := tokens.OutputTokens - tokens.ImageOutputTokens
@@ -695,7 +696,7 @@ func (s *BillingService) computeTokenBreakdown(
 	bd.CacheReadCost = float64(textCacheReadTokens)*cacheReadPrice*cacheReadTierMultiplier +
 		float64(imageCacheReadTokens)*imageCacheReadPrice*imageCacheReadTierMultiplier
 
-	bd.TotalCost = bd.InputCost + bd.OutputCost + bd.ImageOutputCost +
+	bd.TotalCost = bd.InputCost + bd.ImageInputCost + bd.OutputCost + bd.ImageOutputCost +
 		bd.CacheCreationCost + bd.CacheReadCost
 	bd.ActualCost = bd.TotalCost * rateMultiplier
 
@@ -928,6 +929,7 @@ func (s *BillingService) CalculateCostWithLongContext(model string, tokens Usage
 	// 合并成本
 	return &CostBreakdown{
 		InputCost:         inRangeCost.InputCost + outRangeCost.InputCost,
+		ImageInputCost:    inRangeCost.ImageInputCost + outRangeCost.ImageInputCost,
 		OutputCost:        inRangeCost.OutputCost,
 		ImageOutputCost:   inRangeCost.ImageOutputCost,
 		CacheCreationCost: inRangeCost.CacheCreationCost,

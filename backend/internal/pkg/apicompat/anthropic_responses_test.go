@@ -181,6 +181,20 @@ func TestResponsesToAnthropic_TextOnly(t *testing.T) {
 	assert.Equal(t, 5, anth.Usage.OutputTokens)
 }
 
+func TestAnthropicResponseMarshalJSONUsesNullForEmptyStopReason(t *testing.T) {
+	payload, err := json.Marshal(AnthropicResponse{
+		ID:      "msg_start",
+		Type:    "message",
+		Role:    "assistant",
+		Content: []AnthropicContentBlock{},
+		Model:   "claude-test",
+	})
+
+	require.NoError(t, err)
+	require.Contains(t, string(payload), `"stop_reason":null`)
+	require.NotContains(t, string(payload), `"stop_reason":""`)
+}
+
 func TestResponsesToAnthropic_CachedTokensUseAnthropicInputSemantics(t *testing.T) {
 	resp := &ResponsesResponse{
 		ID:     "resp_cached",

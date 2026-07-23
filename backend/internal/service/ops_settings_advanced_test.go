@@ -20,8 +20,81 @@ func TestGetOpsAdvancedSettings_DefaultHidesOpenAITokenStats(t *testing.T) {
 	if !cfg.DisplayAlertEvents {
 		t.Fatalf("DisplayAlertEvents = false, want true by default")
 	}
+	if !cfg.DataRetention.CleanupEnabled || cfg.DataRetention.CleanupSchedule != "0 4 * * *" {
+		t.Fatalf("cleanup default = %v/%q, want enabled at 04:00", cfg.DataRetention.CleanupEnabled, cfg.DataRetention.CleanupSchedule)
+	}
 	if repo.setCalls != 1 {
 		t.Fatalf("expected defaults to be persisted once, got %d", repo.setCalls)
+	}
+}
+
+type opsDataRetentionApplierStub struct {
+	called bool
+	err    error
+}
+
+func (s *opsDataRetentionApplierStub) ReconcileDataRetentionSettings(context.Context) error {
+	s.called = true
+	return s.err
+}
+
+func TestUpdateOpsAdvancedSettingsAppliesCleanupScheduleImmediately(t *testing.T) {
+	repo := newRuntimeSettingRepoStub()
+	applier := &opsDataRetentionApplierStub{}
+	svc := &OpsService{settingRepo: repo, cleanupSettingsApplier: applier}
+	cfg := defaultOpsAdvancedSettings()
+	cfg.DataRetention.CleanupSchedule = "15 4 * * *"
+	cfg.DataRetention.ErrorLogRetentionDays = 0
+
+	if _, err := svc.UpdateOpsAdvancedSettings(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if !applier.called {
+		t.Fatal("cleanup settings were not reconciled")
+	}
+	if repo.setCalls != 1 {
+		t.Fatalf("settings persisted %d times, want 1", repo.setCalls)
+	}
+}
+
+func TestUpdateOpsAdvancedSettingsAllowsDisableWithHiddenInvalidCron(t *testing.T) {
+	repo := newRuntimeSettingRepoStub()
+	applier := &opsDataRetentionApplierStub{}
+	svc := &OpsService{settingRepo: repo, cleanupSettingsApplier: applier}
+	cfg := defaultOpsAdvancedSettings()
+	cfg.DataRetention.CleanupEnabled = false
+	cfg.DataRetention.CleanupSchedule = "invalid cron"
+
+	if _, err := svc.UpdateOpsAdvancedSettings(context.Background(), cfg); err != nil {
+		t.Fatalf("disabled cleanup must be saveable even with a hidden stale cron: %v", err)
+	}
+	if repo.setCalls != 1 || !applier.called {
+		t.Fatalf("disabled settings not persisted/reconciled: setCalls=%d called=%v", repo.setCalls, applier.called)
+	}
+}
+
+func TestGetOpsAdvancedSettingsRejectsCorruptedJSON(t *testing.T) {
+	repo := newRuntimeSettingRepoStub()
+	repo.values[SettingKeyOpsAdvancedSettings] = "{invalid"
+	svc := &OpsService{settingRepo: repo}
+
+	if _, err := svc.GetOpsAdvancedSettings(context.Background()); err == nil {
+		t.Fatal("corrupted advanced settings must not be presented as healthy defaults")
+	}
+}
+
+func TestUpdateOpsAdvancedSettingsRejectsInvalidCleanupCronBeforePersist(t *testing.T) {
+	repo := newRuntimeSettingRepoStub()
+	applier := &opsDataRetentionApplierStub{}
+	svc := &OpsService{settingRepo: repo, cleanupSettingsApplier: applier}
+	cfg := defaultOpsAdvancedSettings()
+	cfg.DataRetention.CleanupSchedule = "invalid cron"
+
+	if _, err := svc.UpdateOpsAdvancedSettings(context.Background(), cfg); err == nil {
+		t.Fatal("invalid cleanup cron must be rejected")
+	}
+	if repo.setCalls != 0 || applier.called {
+		t.Fatalf("invalid settings must not persist or apply: setCalls=%d called=%v", repo.setCalls, applier.called)
 	}
 }
 

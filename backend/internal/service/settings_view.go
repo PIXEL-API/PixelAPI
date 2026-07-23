@@ -139,6 +139,7 @@ type SystemSettings struct {
 	WithdrawalManagementEnabled               bool
 	WithdrawalRateLimitWindowDays             int
 	WithdrawalRateLimitMax                    int
+	WithdrawalRateLimitExemptAmount           float64
 	CyberSessionBlockEnabled                  bool
 	CyberSessionBlockTTLSeconds               int
 	AccountShareCommentReviewEnabled          bool
@@ -312,10 +313,11 @@ type PublicSettings struct {
 	AffiliateEnabled bool `json:"affiliate_enabled"`
 
 	// Functional module switches
-	InvoiceManagementEnabled      bool `json:"invoice_management_enabled"`
-	WithdrawalManagementEnabled   bool `json:"withdrawal_management_enabled"`
-	WithdrawalRateLimitWindowDays int  `json:"withdrawal_rate_limit_window_days"`
-	WithdrawalRateLimitMax        int  `json:"withdrawal_rate_limit_max"`
+	InvoiceManagementEnabled        bool    `json:"invoice_management_enabled"`
+	WithdrawalManagementEnabled     bool    `json:"withdrawal_management_enabled"`
+	WithdrawalRateLimitWindowDays   int     `json:"withdrawal_rate_limit_window_days"`
+	WithdrawalRateLimitMax          int     `json:"withdrawal_rate_limit_max"`
+	WithdrawalRateLimitExemptAmount float64 `json:"withdrawal_rate_limit_exempt_amount"`
 
 	// 风控中心功能开关
 	RiskControlEnabled bool `json:"risk_control_enabled"`

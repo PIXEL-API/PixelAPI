@@ -5,7 +5,7 @@ export default {
   theme: {
     extend: {
       colors: {
-        // 主色调 - 低饱和浅蓝体系
+        // 兼容既有页面的主色阶；新界面优先使用下方 semantic brand
         primary: {
           50: '#f4f8ff',
           100: '#eaf2ff',
@@ -19,7 +19,6 @@ export default {
           900: '#233a66',
           950: '#14213d'
         },
-        // 辅助色 - Sky/Cyan 清透蓝
         accent: {
           50: '#f5fbff',
           100: '#e7f6ff',
@@ -46,7 +45,32 @@ export default {
           800: '#1e293b',
           900: '#0f172a',
           950: '#020617'
-        }
+        },
+        canvas: 'rgb(var(--ui-canvas) / <alpha-value>)',
+        surface: {
+          DEFAULT: 'rgb(var(--ui-surface) / <alpha-value>)',
+          subtle: 'rgb(var(--ui-surface-subtle) / <alpha-value>)',
+          elevated: 'rgb(var(--ui-surface-elevated) / <alpha-value>)',
+          hover: 'rgb(var(--ui-surface-hover) / <alpha-value>)'
+        },
+        content: {
+          DEFAULT: 'rgb(var(--ui-text) / <alpha-value>)',
+          muted: 'rgb(var(--ui-text-muted) / <alpha-value>)',
+          subtle: 'rgb(var(--ui-text-subtle) / <alpha-value>)',
+          inverse: 'rgb(var(--ui-text-inverse) / <alpha-value>)'
+        },
+        line: {
+          DEFAULT: 'rgb(var(--ui-border) / <alpha-value>)',
+          strong: 'rgb(var(--ui-border-strong) / <alpha-value>)'
+        },
+        brand: {
+          DEFAULT: 'rgb(var(--ui-brand) / <alpha-value>)',
+          strong: 'rgb(var(--ui-brand-strong) / <alpha-value>)',
+          soft: 'rgb(var(--ui-brand-soft) / <alpha-value>)'
+        },
+        positive: 'rgb(var(--ui-positive) / <alpha-value>)',
+        warning: 'rgb(var(--ui-warning) / <alpha-value>)',
+        danger: 'rgb(var(--ui-danger) / <alpha-value>)'
       },
       fontFamily: {
         sans: [
@@ -71,6 +95,10 @@ export default {
         'glow-lg': '0 0 40px rgba(107, 155, 240, 0.28)',
         card: '0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.06)',
         'card-hover': '0 10px 40px rgba(0, 0, 0, 0.08)',
+        'ui-glass': '0 12px 32px rgba(15, 23, 42, 0.08)',
+        'ui-card-hover': 'var(--ui-shadow-elevated)',
+        panel: 'var(--ui-shadow-card)',
+        elevated: 'var(--ui-shadow-elevated)',
         'inner-glow': 'inset 0 1px 0 rgba(255, 255, 255, 0.1)'
       },
       backgroundImage: {
@@ -126,6 +154,8 @@ export default {
         xs: '2px'
       },
       borderRadius: {
+        control: '0.625rem',
+        panel: '0.875rem',
         '4xl': '2rem'
       }
     }

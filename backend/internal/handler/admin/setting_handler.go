@@ -234,6 +234,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		WithdrawalManagementEnabled:               settings.WithdrawalManagementEnabled,
 		WithdrawalRateLimitWindowDays:             settings.WithdrawalRateLimitWindowDays,
 		WithdrawalRateLimitMax:                    settings.WithdrawalRateLimitMax,
+		WithdrawalRateLimitExemptAmount:           settings.WithdrawalRateLimitExemptAmount,
 		CyberSessionBlockEnabled:                  settings.CyberSessionBlockEnabled,
 		CyberSessionBlockTTLSeconds:               settings.CyberSessionBlockTTLSeconds,
 		AccountShareCommentReviewEnabled:          settings.AccountShareCommentReviewEnabled,
@@ -710,10 +711,11 @@ type UpdateSettingsRequest struct {
 	AvailableChannelsEnabled *bool `json:"available_channels_enabled"`
 
 	// Functional module switches
-	InvoiceManagementEnabled      *bool `json:"invoice_management_enabled"`
-	WithdrawalManagementEnabled   *bool `json:"withdrawal_management_enabled"`
-	WithdrawalRateLimitWindowDays *int  `json:"withdrawal_rate_limit_window_days"`
-	WithdrawalRateLimitMax        *int  `json:"withdrawal_rate_limit_max"`
+	InvoiceManagementEnabled        *bool    `json:"invoice_management_enabled"`
+	WithdrawalManagementEnabled     *bool    `json:"withdrawal_management_enabled"`
+	WithdrawalRateLimitWindowDays   *int     `json:"withdrawal_rate_limit_window_days"`
+	WithdrawalRateLimitMax          *int     `json:"withdrawal_rate_limit_max"`
+	WithdrawalRateLimitExemptAmount *float64 `json:"withdrawal_rate_limit_exempt_amount"`
 
 	// User-owned account import limit
 	UserAccountImportLimit *int `json:"user_account_import_limit"`
@@ -792,6 +794,23 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 				"WITHDRAWAL_RATE_LIMIT_CONFIG_INVALID",
 				"withdrawal_rate_limit_max must be between 0 and 1000",
 			))
+			return
+		}
+	}
+	if req.WithdrawalRateLimitExemptAmount != nil {
+		config := service.WithdrawalRateLimitConfig{
+			WindowDays:   previousSettings.WithdrawalRateLimitWindowDays,
+			MaxRequests:  previousSettings.WithdrawalRateLimitMax,
+			ExemptAmount: *req.WithdrawalRateLimitExemptAmount,
+		}
+		if req.WithdrawalRateLimitWindowDays != nil {
+			config.WindowDays = *req.WithdrawalRateLimitWindowDays
+		}
+		if req.WithdrawalRateLimitMax != nil {
+			config.MaxRequests = *req.WithdrawalRateLimitMax
+		}
+		if err := service.ValidateWithdrawalRateLimitConfig(config); err != nil {
+			response.ErrorFrom(c, err)
 			return
 		}
 	}
@@ -1607,6 +1626,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.WithdrawalRateLimitMax
 		}(),
+		WithdrawalRateLimitExemptAmount: func() float64 {
+			if req.WithdrawalRateLimitExemptAmount != nil {
+				return *req.WithdrawalRateLimitExemptAmount
+			}
+			return previousSettings.WithdrawalRateLimitExemptAmount
+		}(),
 		CyberSessionBlockEnabled: func() bool {
 			if req.CyberSessionBlockEnabled != nil {
 				return *req.CyberSessionBlockEnabled
@@ -2109,6 +2134,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		WithdrawalManagementEnabled:               updatedSettings.WithdrawalManagementEnabled,
 		WithdrawalRateLimitWindowDays:             updatedSettings.WithdrawalRateLimitWindowDays,
 		WithdrawalRateLimitMax:                    updatedSettings.WithdrawalRateLimitMax,
+		WithdrawalRateLimitExemptAmount:           updatedSettings.WithdrawalRateLimitExemptAmount,
 		CyberSessionBlockEnabled:                  updatedSettings.CyberSessionBlockEnabled,
 		CyberSessionBlockTTLSeconds:               updatedSettings.CyberSessionBlockTTLSeconds,
 		AccountShareCommentReviewEnabled:          updatedSettings.AccountShareCommentReviewEnabled,
@@ -2527,6 +2553,9 @@ func preserveOmittedUpdateSettingsFields(req *UpdateSettingsRequest, previous *s
 	}
 	if !fieldProvided(fields, "withdrawal_rate_limit_max") {
 		req.WithdrawalRateLimitMax = &previous.WithdrawalRateLimitMax
+	}
+	if !fieldProvided(fields, "withdrawal_rate_limit_exempt_amount") {
+		req.WithdrawalRateLimitExemptAmount = &previous.WithdrawalRateLimitExemptAmount
 	}
 	if !fieldProvided(fields, "cyber_session_block_enabled") {
 		req.CyberSessionBlockEnabled = &previous.CyberSessionBlockEnabled
@@ -3056,6 +3085,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.WithdrawalRateLimitMax != after.WithdrawalRateLimitMax {
 		changed = append(changed, "withdrawal_rate_limit_max")
+	}
+	if before.WithdrawalRateLimitExemptAmount != after.WithdrawalRateLimitExemptAmount {
+		changed = append(changed, "withdrawal_rate_limit_exempt_amount")
 	}
 	if before.UserAccountImportLimit != after.UserAccountImportLimit {
 		changed = append(changed, "user_account_import_limit")

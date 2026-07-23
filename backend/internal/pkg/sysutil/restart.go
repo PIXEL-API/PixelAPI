@@ -2,16 +2,63 @@
 package sysutil
 
 import (
+	"errors"
+	"fmt"
 	"log"
 	"os"
 	"runtime"
+	"syscall"
 	"time"
 )
 
+const restartSignalDelay = 100 * time.Millisecond
+
+type processSignaler interface {
+	Signal(os.Signal) error
+}
+
+type processSignalScheduler func(time.Duration, func())
+
+// scheduleProcessSignal defers a process signal long enough for the current
+// HTTP response to be flushed. Signal failures are reported asynchronously
+// because the scheduling caller has already returned by then.
+func scheduleProcessSignal(
+	process processSignaler,
+	signal os.Signal,
+	delay time.Duration,
+	schedule processSignalScheduler,
+	onSignalError func(error),
+) error {
+	if process == nil {
+		return errors.New("schedule process signal: nil process")
+	}
+	if signal == nil {
+		return errors.New("schedule process signal: nil signal")
+	}
+	if delay <= 0 {
+		return errors.New("schedule process signal: delay must be greater than zero")
+	}
+	if schedule == nil {
+		return errors.New("schedule process signal: nil scheduler")
+	}
+	if onSignalError == nil {
+		return errors.New("schedule process signal: nil signal error handler")
+	}
+
+	schedule(delay, func() {
+		if err := process.Signal(signal); err != nil {
+			onSignalError(err)
+		}
+	})
+	return nil
+}
+
 // RestartService triggers a service restart by gracefully exiting.
 //
-// This relies on systemd's Restart=always configuration to automatically
-// restart the service after it exits. This is the industry-standard approach:
+// SIGHUP is handled by the main server lifecycle as a graceful restart request.
+// After HTTP and application cleanup completes, the process exits non-zero so
+// systemd Restart=on-failure (or Restart=always) starts the new process.
+// This approach:
 //   - Simple and reliable
 //   - No sudo permissions needed
 //   - No complex process management
@@ -19,23 +66,29 @@ import (
 //
 // Prerequisites:
 //   - Linux OS with systemd
-//   - Service configured with Restart=always in systemd unit file
+//   - Service configured with Restart=on-failure or Restart=always
 func RestartService() error {
 	if runtime.GOOS != "linux" {
-		log.Println("Service restart via exit only works on Linux with systemd")
-		return nil
+		return fmt.Errorf("service restart signal is only supported on Linux, current OS is %s", runtime.GOOS)
 	}
 
-	log.Println("Initiating service restart by graceful exit...")
-	log.Println("systemd will automatically restart the service (Restart=always)")
+	process, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		return fmt.Errorf("find current process: %w", err)
+	}
 
-	// Give a moment for logs to flush and response to be sent
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		os.Exit(0)
-	}()
-
-	return nil
+	log.Println("Scheduling graceful service restart...")
+	return scheduleProcessSignal(
+		process,
+		syscall.SIGHUP,
+		restartSignalDelay,
+		func(delay time.Duration, callback func()) {
+			time.AfterFunc(delay, callback)
+		},
+		func(err error) {
+			log.Printf("Failed to signal graceful service restart: %v", err)
+		},
+	)
 }
 
 // RestartServiceAsync is a fire-and-forget version of RestartService.
@@ -43,6 +96,6 @@ func RestartService() error {
 func RestartServiceAsync() {
 	if err := RestartService(); err != nil {
 		log.Printf("Service restart failed: %v", err)
-		log.Println("Please restart the service manually: sudo systemctl restart sub2api")
+		log.Println("Please restart the service manually through the configured process supervisor")
 	}
 }

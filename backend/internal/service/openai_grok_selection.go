@@ -35,6 +35,7 @@ func (s *OpenAIGatewayService) SelectAccountWithSchedulerForGrok(
 	sessionHash string,
 	requestedModel string,
 	excludedIDs map[int64]struct{},
+	requiredEndpointCapability OpenAIEndpointCapability,
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
 	ctx = withGrokPlatform(ctx)
 	selection, decision, err := s.selectAccountWithScheduler(
@@ -46,12 +47,19 @@ func (s *OpenAIGatewayService) SelectAccountWithSchedulerForGrok(
 		excludedIDs,
 		OpenAIUpstreamTransportHTTPSSE,
 		"",
+		requiredEndpointCapability,
 		false,
 	)
 	if err != nil || selection == nil || selection.Account == nil {
 		return selection, decision, err
 	}
 	if selection.Account.Platform == PlatformGrok {
+		selection.OpenAIDispatchRequirements = &OpenAIAccountDispatchRequirements{
+			RequestedModel:             requestedModel,
+			RequiredTransport:          OpenAIUpstreamTransportHTTPSSE,
+			RequiredEndpointCapability: requiredEndpointCapability,
+			RequiredPlatform:           PlatformGrok,
+		}
 		return selection, decision, nil
 	}
 	if selection.ReleaseFunc != nil {

@@ -40,6 +40,7 @@ export const useAppStore = defineStore("app", () => {
   const latestVersion = ref<string>("");
   const hasUpdate = ref<boolean>(false);
   const buildType = ref<string>("source");
+  const inPlaceUpdateAllowed = ref<boolean>(false);
   const releaseInfo = ref<ReleaseInfo | null>(null);
 
   // Auto-incrementing ID for toasts
@@ -253,6 +254,7 @@ export const useAppStore = defineStore("app", () => {
         latest_version: latestVersion.value,
         has_update: hasUpdate.value,
         build_type: buildType.value,
+        in_place_update_allowed: inPlaceUpdateAllowed.value,
         release_info: releaseInfo.value || undefined,
         cached: true,
       };
@@ -270,6 +272,7 @@ export const useAppStore = defineStore("app", () => {
       latestVersion.value = data.latest_version;
       hasUpdate.value = data.has_update;
       buildType.value = data.build_type || "source";
+      inPlaceUpdateAllowed.value = data.in_place_update_allowed === true;
       releaseInfo.value = data.release_info || null;
       versionLoaded.value = true;
       return data;
@@ -370,6 +373,7 @@ export const useAppStore = defineStore("app", () => {
         withdrawal_management_enabled: true,
         withdrawal_rate_limit_window_days: 1,
         withdrawal_rate_limit_max: 0,
+        withdrawal_rate_limit_exempt_amount: 500,
       };
     }
 
@@ -443,6 +447,7 @@ export const useAppStore = defineStore("app", () => {
     latestVersion,
     hasUpdate,
     buildType,
+    inPlaceUpdateAllowed,
     releaseInfo,
 
     // Computed

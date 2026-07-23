@@ -3,9 +3,13 @@
     v-if="!requiresOAuthLogin"
     :show="show"
     :title="t('userAccounts.importTitle')"
-    :hint="t('userAccounts.importHint')"
+    width="extra-wide"
+    :hint="importHintText"
     :warning="importWarningText"
     :text-hint="importTextHint"
+    :text-placeholder="importTextPlaceholder"
+    :file-accept="importFileAccept"
+    :allowed-extensions="importAllowedExtensions"
     form-id="user-import-accounts-form"
     :submit-disabled="!canSubmitCredentialImport"
     :importer="importPersonalCredentials"
@@ -17,11 +21,28 @@
         :selected-platform="selectedPlatform"
         @select="selectPlatform"
       />
-      <AccountLevelSelector
+      <OpenAIAuthModeSelector
         v-if="selectedPlatform === 'openai'"
+        :selected-mode="selectedOpenAIAuthMode"
+        @select="selectOpenAIAuthMode"
+      />
+      <AccountLevelSelector
+        v-if="selectedPlatform === 'openai' && selectedOpenAIAuthMode === 'oauth'"
         :selected-level="selectedAccountLevel"
         @select="selectAccountLevel"
       />
+      <div
+        v-if="selectedPlatform === 'openai' && selectedOpenAIAuthMode === 'agent_identity'"
+        class="rounded-lg border border-primary-200 bg-primary-50 p-3 text-sm text-primary-800 dark:border-primary-500/30 dark:bg-primary-500/10 dark:text-primary-200"
+        data-testid="agent-identity-import-notice"
+      >
+        <p class="font-medium">{{ t('userAccounts.importAgentIdentityNoticeTitle') }}</p>
+        <ul class="mt-2 list-disc space-y-1 pl-5">
+          <li>{{ t('userAccounts.importAgentIdentityTeamIsolation') }}</li>
+          <li>{{ t('userAccounts.importAgentIdentityPrivate') }}</li>
+          <li>{{ t('userAccounts.importAgentIdentityNoOAuthExpiry') }}</li>
+        </ul>
+      </div>
       <div
         v-else-if="selectedPlatform"
         class="rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs text-gray-600 dark:border-dark-700 dark:bg-dark-800 dark:text-dark-300"
@@ -94,8 +115,13 @@
         :selected-platform="selectedPlatform"
         @select="selectPlatform"
       />
-      <AccountLevelSelector
+      <OpenAIAuthModeSelector
         v-if="selectedPlatform === 'openai'"
+        :selected-mode="selectedOpenAIAuthMode"
+        @select="selectOpenAIAuthMode"
+      />
+      <AccountLevelSelector
+        v-if="selectedPlatform === 'openai' && selectedOpenAIAuthMode === 'oauth'"
         :selected-level="selectedAccountLevel"
         @select="selectAccountLevel"
       />
@@ -231,6 +257,7 @@ import type { AccountLevel, AccountPlatform, Proxy } from '@/types'
 
 type SelectableOpenAILevel = Exclude<AccountLevel, 'unknown'>
 type ImportPlatform = AccountPlatform
+type OpenAIImportAuthMode = 'oauth' | 'agent_identity'
 
 interface Props {
   show: boolean
@@ -251,6 +278,7 @@ const openaiOAuth = useOpenAIOAuth('user')
 const PROXY_PURCHASE_URL = 'https://www.seekproxy.com/user/reg?invite_id=105978'
 
 const selectedPlatform = ref<ImportPlatform | ''>('')
+const selectedOpenAIAuthMode = ref<OpenAIImportAuthMode>('oauth')
 const selectedAccountLevel = ref<SelectableOpenAILevel | ''>('')
 const selectedProxyId = ref<number | null>(null)
 const proxies = ref<Proxy[]>([])
@@ -269,9 +297,13 @@ const importLimit = computed(() => {
 })
 
 const openAIAccountLevelConfigs = computed(() => appStore.cachedPublicSettings?.openai_account_levels)
+const isAgentIdentityImport = computed(() =>
+  selectedPlatform.value === 'openai' && selectedOpenAIAuthMode.value === 'agent_identity'
+)
 
 const requiresOAuthLogin = computed(() =>
   selectedPlatform.value === 'openai' &&
+  selectedOpenAIAuthMode.value === 'oauth' &&
   selectableOpenAIAccountLevels(openAIAccountLevelConfigs.value)
     .some(level => level.key === selectedAccountLevel.value && level.requires_proxy_login)
 )
@@ -286,6 +318,7 @@ const requiresCredentialImportProxy = computed(() =>
 const canSubmitCredentialImport = computed(() => {
   if (!selectedPlatform.value) return false
   if (selectedPlatform.value === 'openai') {
+    if (isAgentIdentityImport.value) return true
     return Boolean(selectedAccountLevel.value && !requiresOAuthLogin.value)
   }
   if (requiresCredentialImportProxy.value) {
@@ -294,7 +327,16 @@ const canSubmitCredentialImport = computed(() => {
   return true
 })
 
+const importHintText = computed(() =>
+  isAgentIdentityImport.value
+    ? t('userAccounts.importHintAgentIdentity')
+    : t('userAccounts.importHint')
+)
+
 const importWarningText = computed(() => {
+  if (isAgentIdentityImport.value) {
+    return t('userAccounts.importWarningAgentIdentity', { max: importLimit.value })
+  }
   switch (selectedPlatform.value) {
     case 'openai':
       return t('userAccounts.importWarningOpenAI', { max: importLimit.value })
@@ -312,6 +354,9 @@ const importWarningText = computed(() => {
 })
 
 const importTextHint = computed(() => {
+  if (isAgentIdentityImport.value) {
+    return t('userAccounts.importTextHintAgentIdentity')
+  }
   switch (selectedPlatform.value) {
     case 'openai':
       return t('userAccounts.importTextHintOpenAI')
@@ -327,6 +372,22 @@ const importTextHint = computed(() => {
       return t('userAccounts.importTextHintChoosePlatform')
   }
 })
+
+const importTextPlaceholder = computed(() =>
+  isAgentIdentityImport.value
+    ? t('userAccounts.importTextPlaceholderAgentIdentity')
+    : t('userAccounts.importTextPlaceholder')
+)
+
+const importFileAccept = computed(() =>
+  isAgentIdentityImport.value
+    ? 'application/json,.json'
+    : 'application/json,text/plain,.json,.txt'
+)
+
+const importAllowedExtensions = computed(() =>
+  isAgentIdentityImport.value ? ['.json'] : ['.json', '.txt']
+)
 
 const selectedPlatformHint = computed(() => {
   switch (selectedPlatform.value) {
@@ -398,13 +459,14 @@ const PlatformSelector = defineComponent({
     ]
     return () => h('div', { class: 'space-y-2' }, [
       h('label', { class: 'input-label' }, t('userAccounts.importPlatform')),
-      h('div', { class: 'grid gap-2 sm:grid-cols-2 xl:grid-cols-5' }, options.map(option =>
+      h('div', { class: 'grid grid-cols-[repeat(auto-fit,minmax(7.5rem,1fr))] gap-2' }, options.map(option =>
         h(
           'button',
           {
             type: 'button',
+            'aria-pressed': props.selectedPlatform === option.value,
             class: [
-              'flex min-h-[76px] flex-col justify-center rounded-lg border px-3 py-2 text-left transition-colors',
+              'flex min-h-[76px] cursor-pointer flex-col justify-center rounded-lg border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-dark-800',
               props.selectedPlatform === option.value
                 ? 'border-primary-400 bg-primary-50 text-primary-700 dark:border-primary-500 dark:bg-primary-900/30 dark:text-primary-300'
                 : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-dark-700 dark:bg-dark-800 dark:text-dark-200 dark:hover:bg-dark-700'
@@ -417,6 +479,59 @@ const PlatformSelector = defineComponent({
           ]
         )
       ))
+    ])
+  }
+})
+
+const OpenAIAuthModeSelector = defineComponent({
+  name: 'UserImportOpenAIAuthModeSelector',
+  props: {
+    selectedMode: {
+      type: String,
+      default: 'oauth'
+    }
+  },
+  emits: ['select'],
+  setup(props, { emit }) {
+    const options: Array<{ value: OpenAIImportAuthMode; label: string; desc: string }> = [
+      {
+        value: 'oauth',
+        label: t('userAccounts.importAuthModeOAuth'),
+        desc: t('userAccounts.importAuthModeOAuthDesc')
+      },
+      {
+        value: 'agent_identity',
+        label: t('userAccounts.importAuthModeAgentIdentity'),
+        desc: t('userAccounts.importAuthModeAgentIdentityDesc')
+      }
+    ]
+    return () => h('fieldset', { class: 'space-y-2' }, [
+      h('legend', { class: 'input-label' }, t('userAccounts.importAuthMode')),
+      h('div', { class: 'grid grid-cols-1 gap-2 sm:grid-cols-2' }, options.map(option => {
+        const descriptionId = `openai-import-auth-mode-${option.value}-description`
+        return h('label', { class: 'block cursor-pointer' }, [
+          h('input', {
+            type: 'radio',
+            name: 'openai-import-auth-mode',
+            value: option.value,
+            checked: props.selectedMode === option.value,
+            class: 'peer sr-only',
+            'aria-describedby': descriptionId,
+            onChange: () => emit('select', option.value)
+          }),
+          h('span', {
+            class: [
+              'flex min-h-[76px] flex-col justify-center rounded-lg border px-3 py-2 text-left transition-colors peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-primary-500/50 peer-focus-visible:ring-offset-2 dark:peer-focus-visible:ring-offset-dark-800',
+              props.selectedMode === option.value
+                ? 'border-primary-400 bg-primary-50 text-primary-700 dark:border-primary-500 dark:bg-primary-900/30 dark:text-primary-300'
+                : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-dark-700 dark:bg-dark-800 dark:text-dark-200 dark:hover:bg-dark-700'
+            ]
+          }, [
+            h('span', { class: 'text-sm font-semibold' }, option.label),
+            h('span', { id: descriptionId, class: 'mt-1 text-sm text-gray-500 dark:text-dark-400' }, option.desc)
+          ])
+        ])
+      }))
     ])
   }
 })
@@ -461,8 +576,9 @@ const AccountLevelSelector = defineComponent({
           'button',
           {
             type: 'button',
+            'aria-pressed': props.selectedLevel === option.value,
             class: [
-              'flex min-h-[76px] flex-col justify-center rounded-lg border px-3 py-2 text-left transition-colors',
+              'flex min-h-[76px] cursor-pointer flex-col justify-center rounded-lg border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-dark-800',
               props.selectedLevel === option.value
                 ? 'border-primary-400 bg-primary-50 text-primary-700 dark:border-primary-500 dark:bg-primary-900/30 dark:text-primary-300'
                 : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-dark-700 dark:bg-dark-800 dark:text-dark-200 dark:hover:bg-dark-700'
@@ -483,6 +599,7 @@ const AccountLevelSelector = defineComponent({
 watch(
   () => selectedPlatform.value,
   (platform) => {
+    selectedOpenAIAuthMode.value = 'oauth'
     if (platform !== 'openai') {
       selectedAccountLevel.value = ''
     }
@@ -545,12 +662,26 @@ function selectPlatform(platform: ImportPlatform): void {
   selectedPlatform.value = platform
 }
 
+function selectOpenAIAuthMode(mode: OpenAIImportAuthMode): void {
+  if (selectedOpenAIAuthMode.value === mode) return
+  selectedOpenAIAuthMode.value = mode
+  selectedAccountLevel.value = ''
+  selectedProxyId.value = null
+  oauthAccountName.value = ''
+  proxyLoadMessage.value = ''
+  showProxyDialog.value = false
+  openaiOAuth.error.value = ''
+  openaiOAuth.resetState()
+  oauthFlowRef.value?.reset()
+}
+
 function selectAccountLevel(level: SelectableOpenAILevel | ''): void {
   selectedAccountLevel.value = level
 }
 
 function resetOAuthImportState(): void {
   selectedPlatform.value = ''
+  selectedOpenAIAuthMode.value = 'oauth'
   selectedAccountLevel.value = ''
   selectedProxyId.value = null
   oauthAccountName.value = ''
@@ -558,6 +689,15 @@ function resetOAuthImportState(): void {
   showProxyDialog.value = false
   openaiOAuth.resetState()
   oauthFlowRef.value?.reset()
+}
+
+function isValidJSONDocument(content: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(content)
+    return parsed !== null && typeof parsed === 'object'
+  } catch {
+    return false
+  }
 }
 
 watch(
@@ -574,6 +714,11 @@ function importPersonalCredentials(contents: string[]): Promise<ImportCredential
     appStore.showError(t('userAccounts.importPlatformRequired'))
     return Promise.reject(new Error(t('userAccounts.importPlatformRequired')))
   }
+  if (isAgentIdentityImport.value && !contents.every(isValidJSONDocument)) {
+    const message = t('userAccounts.importAgentIdentityJSONRequired')
+    appStore.showError(message)
+    return Promise.reject(new Error(message))
+  }
   const request: ImportCredentialContentsRequest = {
     contents,
     platform: selectedPlatform.value,
@@ -584,6 +729,10 @@ function importPersonalCredentials(contents: string[]): Promise<ImportCredential
     auto_pause_on_expired: PERSONAL_ACCOUNT_DEFAULT_AUTO_PAUSE_ON_EXPIRED
   }
   if (selectedPlatform.value === 'openai') {
+    if (isAgentIdentityImport.value) {
+      request.openai_auth_mode = 'agent_identity'
+      return accountsAPI.importCredentialContents(request)
+    }
     const accountLevel = selectedAccountLevel.value
     if (!accountLevel) {
       appStore.showError(t('userAccounts.importAccountLevelRequired'))

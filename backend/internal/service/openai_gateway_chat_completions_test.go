@@ -14,10 +14,32 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+type forceChatErrorUpstream struct {
+	statusCode int
+	headers    http.Header
+	body       string
+	calls      int
+}
+
+func (u *forceChatErrorUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+	u.calls++
+	return &http.Response{
+		StatusCode: u.statusCode,
+		Header:     u.headers.Clone(),
+		Body:       io.NopCloser(strings.NewReader(u.body)),
+		Request:    req,
+	}, nil
+}
+
+func (u *forceChatErrorUpstream) DoWithTLS(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	return u.Do(req, proxyURL, accountID, accountConcurrency)
+}
 
 func TestForceChatAnthropicDirectBridgeNonStreaming(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -106,6 +128,87 @@ func TestForceChatResponsesFallbackNonStreaming(t *testing.T) {
 	require.Equal(t, "ok", gjson.Get(recorder.Body.String(), "output.0.content.0.text").String())
 	require.Equal(t, 3, result.Usage.CacheReadInputTokens)
 	require.Equal(t, 2, result.Usage.CacheCreationInputTokens)
+}
+
+func TestForceChatResponsesRepeatedTransientErrorsBlockOnlyRequestedModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	upstream := &forceChatErrorUpstream{
+		statusCode: http.StatusServiceUnavailable,
+		headers:    http.Header{"Content-Type": []string{"application/json"}},
+		body:       `{"error":{"message":"temporarily unavailable"}}`,
+	}
+	svc := newForceChatBridgeTestService(upstream)
+	account := newForceChatBridgeTestAccount()
+	body := []byte(`{"model":"gpt-5.5","input":"hello","stream":false}`)
+
+	for range 2 {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+		_, err := svc.forwardResponsesViaRawChatCompletions(context.Background(), c, account, body)
+		var failoverErr *UpstreamFailoverError
+		require.ErrorAs(t, err, &failoverErr)
+	}
+
+	require.Equal(t, 2, upstream.calls)
+	require.True(t, svc.isOpenAIAccountModelRuntimeBlocked(account, "gpt-5.5"))
+	require.False(t, svc.isOpenAIAccountModelRuntimeBlocked(account, "gpt-5.6"))
+}
+
+func TestForwardAsChatCompletionsTransientFailureUsesEffectiveFallbackModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	upstream := &forceChatErrorUpstream{
+		statusCode: http.StatusServiceUnavailable,
+		headers:    http.Header{"Content-Type": []string{"application/json"}},
+		body:       `{"error":{"message":"temporarily unavailable"}}`,
+	}
+	svc := newForceChatBridgeTestService(upstream)
+	account := newForceChatBridgeTestAccount()
+	account.Extra[openai_compat.ExtraKeyResponsesSupported] = true
+	body := []byte(`{"model":"gpt-requested","stream":false,"messages":[{"role":"user","content":"hello"}]}`)
+
+	for range 2 {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+		_, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "gpt-fallback")
+		var failoverErr *UpstreamFailoverError
+		require.ErrorAs(t, err, &failoverErr)
+	}
+
+	require.True(t, svc.isOpenAIAccountModelRuntimeBlocked(account, "gpt-fallback"))
+	require.False(t, svc.isOpenAIAccountModelRuntimeBlocked(account, "gpt-requested"))
+}
+
+func TestForceChatResponsesRepeated413RemainAccountScopedAndSanitized(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	upstream := &forceChatErrorUpstream{
+		statusCode: http.StatusRequestEntityTooLarge,
+		headers:    http.Header{"X-Request-Id": []string{"req-body-limit"}},
+		body:       `{"error":{"message":"proxy internal.example rejected tenant-secret payload size"}}`,
+	}
+	svc := newForceChatBridgeTestService(upstream)
+	body := []byte(`{"model":"gpt-5.5","input":"hello","stream":false}`)
+
+	for attempt := range 2 {
+		account := newForceChatBridgeTestAccount()
+		account.ID += int64(attempt)
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+		_, err := svc.forwardResponsesViaRawChatCompletions(context.Background(), c, account, body)
+		var failoverErr *UpstreamFailoverError
+		require.ErrorAs(t, err, &failoverErr)
+		require.True(t, failoverErr.IsOpenAIRequestBodyTooLarge())
+		require.Equal(t, GatewayFailureScopeAccount, failoverErr.Scope)
+		require.Equal(t, NextAccountRetry, failoverErr.NextAccountAction)
+		require.False(t, failoverErr.RetryableOnSameAccount)
+		require.Equal(t, http.StatusRequestEntityTooLarge, failoverErr.ClientStatusCode)
+		require.Equal(t, OpenAIRequestBodyTooLargeClientMessage, failoverErr.ClientMessage)
+		require.NotContains(t, failoverErr.ClientMessage, "internal.example")
+		require.Equal(t, "req-body-limit", failoverErr.ResponseHeaders.Get("X-Request-Id"))
+	}
+	require.Equal(t, 2, upstream.calls)
 }
 
 func TestForceChatAnthropicMissingModelUsesAnthropicError(t *testing.T) {

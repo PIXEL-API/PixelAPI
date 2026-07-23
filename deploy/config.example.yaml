@@ -27,6 +27,9 @@ server:
   # 用于生成邮件中的外部链接（例如：重置密码链接）的前端基础地址
   # Example: "https://example.com"
   frontend_url: ""
+  # Per-phase timeout for graceful HTTP shutdown and application cleanup (seconds)
+  # HTTP 服务优雅退出与应用清理各阶段的独立超时（秒）
+  shutdown_timeout_seconds: 30
   # Trusted proxies for X-Forwarded-For parsing (CIDR/IP). Empty disables trusted proxies.
   # 信任的代理地址（CIDR/IP 格式），用于解析 X-Forwarded-For 头。留空则禁用代理信任。
   trusted_proxies: []
@@ -86,6 +89,13 @@ cors:
 # 安全配置
 # =============================================================================
 security:
+  # Additional headers that may carry a client IP. They are only read when the
+  # direct peer matches server.trusted_proxies; direct clients cannot spoof them.
+  # 可携带客户端 IP 的自定义请求头。仅当直连来源命中 server.trusted_proxies 时才会解析，
+  # 直连客户端无法通过伪造这些请求头覆盖自身 IP。
+  # 可信代理必须覆盖（而不是透传）同名客户端请求头，否则代理后的客户端仍可能伪造该值。
+  # Example / 示例: ["True-Client-IP", "X-CDN-Client-IP"]
+  forwarded_client_ip_headers: []
   url_allowlist:
     # Enable URL allowlist validation (disable to skip all URL checks)
     # 启用 URL 白名单验证（禁用则跳过所有 URL 检查）
@@ -239,12 +249,13 @@ gateway:
   # 默认 false：过滤超时头，降低上游提前断流风险。
   openai_passthrough_allow_timeout_headers: false
   # OpenAI 原生 HTTP Responses 首个语义输出超时（秒，0=禁用）。
-  # 超时从网关收到请求开始计算，包含等待响应头；不适用于 passthrough 或 WebSocket 链路。
+  # 默认 60 秒；从网关完成请求解析并进入调度阶段开始计算，包含选号/排队后的剩余预算和等待响应头；
+  # 只保护首个语义事件，已开始输出的长流不受此值截断。适用于原生及 passthrough HTTP Responses，不适用于 WebSocket 链路。
   # 首次输出前单次尝试最多暂存 8 MiB，超限时切换账号且不暴露不完整 SSE 数据。
   # 注意：超时请求可能已产生上游用量，切换账号重试可能导致上游重复计费。
-  openai_first_output_timeout_seconds: 0
-  # high/xhigh/max 推理可选覆盖值（秒，0=使用普通首输出超时）。
-  openai_high_effort_first_output_timeout_seconds: 0
+  openai_first_output_timeout_seconds: 60
+  # high/xhigh/max 推理可选覆盖值（秒，0=使用普通首输出超时）；默认 180 秒。
+  openai_high_effort_first_output_timeout_seconds: 180
   # OpenAI Responses WebSocket 配置（默认开启，可按需回滚到 HTTP）
   openai_ws:
     # 新版 WS mode 路由（默认关闭）。关闭时保持当前 legacy 实现行为。
@@ -846,13 +857,44 @@ ops:
   # 是否启用运维监控功能（后台任务和接口）
   # Set to false to hide ops menu in sidebar and disable all ops features
   # 设置为 false 可在左侧栏隐藏运维监控菜单并禁用所有运维监控功能
-  # Other detailed settings (cleanup, aggregation, etc.) are configured in ops settings dialog
-  # 其他详细设置（数据清理、预聚合等）在运维监控设置对话框中配置
+  # This file is the hard safety boundary. The ops dialog overrides cleanup enabled/schedule/retention at runtime;
+  # window, timeout, batch and archive-expiry controls below remain static and take effect after restart.
+  # 本文件是硬安全边界。运维设置对话框会动态覆盖清理开关、计划和保留天数；
+  # 窗口、超时、批次和归档过期参数仍由本文件控制，并在重启后生效。
   enabled: true
   cleanup:
+    # Hard switch for the ops cleanup worker. The runtime dialog cannot enable cleanup when this is false.
+    # 运维清理任务硬开关；此处为 false 时，运行时设置无法启用清理。
+    enabled: true
+    # Fallback schedule when no persisted advanced setting exists.
+    # 没有持久化高级设置时使用的回退计划。
+    schedule: "0 4 * * *"
     # Expiration days for archived ops_error_logs / ops_system_logs objects. 0 means never expire.
     # ops_error_logs / ops_system_logs 归档对象过期天数，0 表示永不过期。
-    archive_expire_days: 14
+    archive_expire_days: 30
+    # Calendar-day span of each archive/delete window.
+    # 每个归档并删除窗口覆盖的自然日数。
+    archive_window_days: 1
+    # Maximum windows advanced per log table in one scheduled run.
+    # 每次任务对每张日志表最多追赶的窗口数。
+    max_catchup_windows_per_run: 2
+    # Timeout for one table/window archive and upload.
+    # 单张表单个窗口归档上传超时（秒）。
+    archive_timeout_seconds: 1800
+    # Timeout for one table/window or one auxiliary-table deletion phase.
+    # 单张表单个窗口或辅助表删除阶段超时（秒）。
+    delete_timeout_seconds: 1800
+    # Total timeout for one scheduled cleanup run.
+    # 单次定时清理总超时（秒）。
+    run_timeout_seconds: 18000
+    # Rows deleted per SQL statement.
+    # 单条 SQL 删除批次大小。
+    delete_batch_size: 5000
+    # Fallback retention days when no persisted advanced setting exists. 0 disables that target.
+    # 没有持久化高级设置时使用的回退保留天数；0 表示禁用对应目标，不会清空表。
+    error_log_retention_days: 30
+    minute_metrics_retention_days: 30
+    hourly_metrics_retention_days: 30
 
 # =============================================================================
 # JWT Configuration

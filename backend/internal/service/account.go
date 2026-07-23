@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log/slog"
+	"net/http"
 	"reflect"
 	"sort"
 	"strconv"
@@ -88,6 +89,23 @@ type Account struct {
 	headerOverrideCacheRawLen         int
 	headerOverrideCacheRawSig         uint64
 }
+
+// OpenAIEndpointCapability identifies an endpoint-specific requirement that
+// must survive scheduler cache hydration and the final pre-dispatch recheck.
+type OpenAIEndpointCapability string
+
+const (
+	// OpenAIEndpointCapabilityGrokMediaGeneration keeps new image/video
+	// generation requests away from Grok OAuth accounts without positive paid
+	// entitlement evidence. Video status/content lookups intentionally do not
+	// require this capability so existing tasks remain queryable.
+	OpenAIEndpointCapabilityGrokMediaGeneration OpenAIEndpointCapability = "grok_media_generation"
+)
+
+// GrokMediaEligibleExtraKey is an optional operator override in accounts.extra.
+// A boolean true/false takes precedence over provider observations; absent,
+// null, or malformed values do not override observed billing state.
+const GrokMediaEligibleExtraKey = "grok_media_eligible"
 
 const (
 	AccountShareModePrivate = "private"
@@ -1653,13 +1671,25 @@ func (a *Account) IsOpenAIOAuth() bool {
 	return a.IsOpenAI() && a.Type == AccountTypeOAuth
 }
 
+// IsOpenAIAgentIdentityCredentials reports whether credentials select the
+// Codex Agent Identity authentication mode. Platform and account-type checks
+// remain the caller's responsibility so this helper can also be used while a
+// create/import request is still being validated.
+func IsOpenAIAgentIdentityCredentials(credentials map[string]any) bool {
+	if len(credentials) == 0 {
+		return false
+	}
+	authMode, ok := credentials["auth_mode"].(string)
+	return ok && strings.EqualFold(strings.TrimSpace(authMode), OpenAIAuthModeAgentIdentity)
+}
+
 // IsOpenAIAgentIdentity reports whether the account uses Codex Agent Identity
 // credentials instead of a refreshable OpenAI OAuth token.
 func (a *Account) IsOpenAIAgentIdentity() bool {
 	if a == nil || !a.IsOpenAIOAuth() {
 		return false
 	}
-	return strings.EqualFold(strings.TrimSpace(a.GetCredential("auth_mode")), OpenAIAuthModeAgentIdentity)
+	return IsOpenAIAgentIdentityCredentials(a.Credentials)
 }
 
 // ValidateOpenAIAgentIdentityPrivateKey validates the base64-encoded PKCS#8
@@ -2119,6 +2149,79 @@ func (a *Account) GetOpenAISessionID() string {
 		return ""
 	}
 	return strings.TrimSpace(a.GetExtraString("openai_session_id"))
+}
+
+// SupportsOpenAIEndpointCapability reports whether an account can remain a
+// scheduler candidate for an endpoint-specific request. Unobserved Grok OAuth
+// accounts remain candidates only so the request path can run the billing
+// probe; forwarding still fails closed unless that probe yields paid evidence.
+func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapability) bool {
+	if a == nil {
+		return false
+	}
+	if capability == "" {
+		return true
+	}
+	if !a.IsOpenAICompatible() {
+		return false
+	}
+	switch capability {
+	case OpenAIEndpointCapabilityGrokMediaGeneration:
+		if !a.IsGrok() {
+			return false
+		}
+		eligible, reason := a.GrokMediaGenerationEligibility()
+		return eligible || reason == "billing_unobserved"
+	default:
+		return false
+	}
+}
+
+// GrokMediaGenerationEligibility reports whether a Grok account may receive
+// a new image/video generation request. OAuth accounts fail closed unless
+// billing observations provide positive paid-entitlement evidence.
+func (a *Account) GrokMediaGenerationEligibility() (bool, string) {
+	if a == nil || !a.IsGrok() {
+		return false, "not_grok"
+	}
+	if override, ok := grokMediaEligibilityOverride(a.Extra); ok {
+		if override {
+			return true, "override_enabled"
+		}
+		return false, "override_disabled"
+	}
+	if a.Type != AccountTypeOAuth {
+		return true, "non_oauth"
+	}
+
+	billing, err := grokBillingSnapshotFromExtra(a.Extra)
+	if err != nil || billing == nil {
+		return false, "billing_unobserved"
+	}
+	if billing.StatusCode == http.StatusForbidden ||
+		billing.WeeklyStatusCode == http.StatusForbidden ||
+		billing.MonthlyStatusCode == http.StatusForbidden {
+		return false, "billing_forbidden"
+	}
+	if isKnownGrokFreeAccount(a) {
+		return false, "billing_free_tier"
+	}
+	if !grokBillingHasAuthoritativeQuota(billing) {
+		return false, "billing_inconclusive"
+	}
+	return true, "eligible"
+}
+
+func grokMediaEligibilityOverride(extra map[string]any) (bool, bool) {
+	if extra == nil {
+		return false, false
+	}
+	raw, exists := extra[GrokMediaEligibleExtraKey]
+	if !exists || raw == nil {
+		return false, false
+	}
+	value, ok := raw.(bool)
+	return value, ok
 }
 
 func (a *Account) SupportsOpenAIImageCapability(capability OpenAIImagesCapability) bool {

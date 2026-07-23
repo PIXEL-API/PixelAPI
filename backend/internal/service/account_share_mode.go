@@ -1614,7 +1614,7 @@ func (s *AccountShareModeService) CreateOpenAIListingFromToken(ctx context.Conte
 	if input.AutoPauseOnExpired != nil {
 		account.AutoPauseOnExpired = *input.AutoPauseOnExpired
 	}
-	if err := validateOwnedAccountSource(account.Type, account.Credentials, account.Extra); err != nil {
+	if err := validateOwnedAccountSourceForPlatform(account.Platform, account.Type, account.Credentials, account.Extra); err != nil {
 		return nil, err
 	}
 	listing := &AccountShareListing{
@@ -1716,7 +1716,7 @@ func (s *AccountShareModeService) CreateAnthropicListingFromToken(ctx context.Co
 	if input.AutoPauseOnExpired != nil {
 		account.AutoPauseOnExpired = *input.AutoPauseOnExpired
 	}
-	if err := validateOwnedAccountSource(account.Type, account.Credentials, account.Extra); err != nil {
+	if err := validateOwnedAccountSourceForPlatform(account.Platform, account.Type, account.Credentials, account.Extra); err != nil {
 		return nil, err
 	}
 	listing := &AccountShareListing{

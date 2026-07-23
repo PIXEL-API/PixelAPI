@@ -150,6 +150,27 @@ func TestUsageLogFromService_FallsBackToLegacyModelWhenRequestedModelMissing(t *
 	require.Equal(t, "claude-3", adminDTO.Model)
 }
 
+func TestUsageLogFromService_IncludesImageInputUsage(t *testing.T) {
+	t.Parallel()
+
+	log := &service.UsageLog{
+		RequestID:        "req_image_input",
+		Model:            "gpt-image-2",
+		InputTokens:      371,
+		ImageInputTokens: 352,
+		InputCost:        0.000095,
+		ImageInputCost:   0.002816,
+	}
+
+	userDTO := UsageLogFromService(log)
+	adminDTO := UsageLogFromServiceAdmin(log)
+
+	require.Equal(t, 352, userDTO.ImageInputTokens)
+	require.InDelta(t, 0.002816, userDTO.ImageInputCost, 1e-15)
+	require.Equal(t, 352, adminDTO.ImageInputTokens)
+	require.InDelta(t, 0.002816, adminDTO.ImageInputCost, 1e-15)
+}
+
 func f64Ptr(value float64) *float64 {
 	return &value
 }

@@ -85,12 +85,13 @@ func (h *SettingHandler) GetPublicSettings(c *gin.Context) {
 
 		OpenAIAccountLevels: openAIAccountLevelsToDTO(settings.OpenAIAccountLevels),
 
-		AffiliateEnabled:              settings.AffiliateEnabled,
-		RiskControlEnabled:            settings.RiskControlEnabled,
-		InvoiceManagementEnabled:      settings.InvoiceManagementEnabled,
-		WithdrawalManagementEnabled:   settings.WithdrawalManagementEnabled,
-		WithdrawalRateLimitWindowDays: settings.WithdrawalRateLimitWindowDays,
-		WithdrawalRateLimitMax:        settings.WithdrawalRateLimitMax,
+		AffiliateEnabled:                settings.AffiliateEnabled,
+		RiskControlEnabled:              settings.RiskControlEnabled,
+		InvoiceManagementEnabled:        settings.InvoiceManagementEnabled,
+		WithdrawalManagementEnabled:     settings.WithdrawalManagementEnabled,
+		WithdrawalRateLimitWindowDays:   settings.WithdrawalRateLimitWindowDays,
+		WithdrawalRateLimitMax:          settings.WithdrawalRateLimitMax,
+		WithdrawalRateLimitExemptAmount: settings.WithdrawalRateLimitExemptAmount,
 	})
 }
 

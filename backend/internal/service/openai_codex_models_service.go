@@ -1,8 +1,10 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -44,6 +46,7 @@ type codexModelsManifestUpstreamError struct {
 	err        error
 	retryable  bool
 	statusCode int
+	headers    http.Header
 	body       []byte
 }
 
@@ -306,6 +309,7 @@ func (s *OpenAIGatewayService) FetchCodexModelsManifest(ctx context.Context, acc
 
 	manifest, fetchErr := s.fetchCodexModelsManifestUpstream(ctx, request, ifNoneMatch)
 	if !account.IsOpenAIAgentIdentity() || !isAgentIdentityTaskInvalidCodexModelsError(fetchErr) {
+		s.handleCodexModelsManifestAccountAuthError(ctx, account, request, fetchErr)
 		return manifest, fetchErr
 	}
 	expectedTaskID := strings.TrimSpace(account.GetCredential("task_id"))
@@ -332,6 +336,21 @@ func isAgentIdentityTaskInvalidCodexModelsError(err error) bool {
 	var upstreamErr *codexModelsManifestUpstreamError
 	return errors.As(err, &upstreamErr) &&
 		isAgentIdentityTaskInvalidHTTPResponse(upstreamErr.statusCode, upstreamErr.body)
+}
+
+func (s *OpenAIGatewayService) handleCodexModelsManifestAccountAuthError(ctx context.Context, account *Account, request codexModelsManifestRequest, err error) {
+	if s == nil || account == nil || err == nil || request.useAPIKeyUpstream || !account.IsOpenAIOAuth() || account.IsOpenAIAgentIdentity() {
+		return
+	}
+	var upstreamErr *codexModelsManifestUpstreamError
+	if !errors.As(err, &upstreamErr) || upstreamErr.statusCode != http.StatusUnauthorized {
+		return
+	}
+	headers := upstreamErr.headers
+	if headers == nil {
+		headers = http.Header{}
+	}
+	s.handleOpenAIAccountUpstreamErrorForModel(ctx, account, "", upstreamErr.statusCode, headers, upstreamErr.body)
 }
 
 func (s *OpenAIGatewayService) fetchCachedAPIKeyCodexModelsManifest(ctx context.Context, request codexModelsManifestRequest, ifNoneMatch string) (*CodexModelsManifest, error) {
@@ -435,8 +454,10 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifestUpstream(ctx context.Cont
 		return nil, &codexModelsManifestUpstreamError{
 			err:        infraerrors.Newf(http.StatusBadGateway, "OPENAI_CODEX_MODELS_UPSTREAM_FAILED", "codex models manifest upstream error %d: %s", resp.StatusCode, message),
 			statusCode: resp.StatusCode,
+			headers:    resp.Header.Clone(),
 			body:       body,
-			retryable: resp.StatusCode == http.StatusTooManyRequests ||
+			retryable: (resp.StatusCode == http.StatusUnauthorized && !request.useAPIKeyUpstream) ||
+				resp.StatusCode == http.StatusTooManyRequests ||
 				(resp.StatusCode >= http.StatusInternalServerError && resp.StatusCode < 600),
 		}
 	}
@@ -448,7 +469,82 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifestUpstream(ctx context.Cont
 			retryable: !errors.Is(err, ErrUpstreamResponseBodyTooLarge) && isRetryableCodexModelsManifestTransportError(err),
 		}
 	}
+	if request.useAPIKeyUpstream {
+		body = convertOpenAIModelListToCodexManifest(body)
+	}
+	if err := validateCodexModelsManifestEnvelope(body); err != nil {
+		return nil, &codexModelsManifestUpstreamError{
+			err: infraerrors.Newf(
+				http.StatusBadGateway,
+				"OPENAI_CODEX_MODELS_UPSTREAM_INVALID_MANIFEST",
+				"codex models manifest upstream returned an invalid envelope: %v",
+				err,
+			),
+			retryable: true,
+		}
+	}
 	return &CodexModelsManifest{Body: body, ETag: resp.Header.Get("ETag")}, nil
+}
+
+func convertOpenAIModelListToCodexManifest(body []byte) []byte {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(body, &envelope); err != nil || envelope == nil {
+		return body
+	}
+	if _, ok := envelope["models"]; ok {
+		return body
+	}
+	data, ok := envelope["data"]
+	if !ok {
+		return body
+	}
+	var entries []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return body
+	}
+	type codexModelEntry struct {
+		Slug string `json:"slug"`
+	}
+	models := make([]codexModelEntry, 0, len(entries))
+	for _, entry := range entries {
+		id := strings.TrimSpace(entry.ID)
+		if id != "" {
+			models = append(models, codexModelEntry{Slug: id})
+		}
+	}
+	if len(models) == 0 {
+		return body
+	}
+	converted, err := json.Marshal(map[string][]codexModelEntry{"models": models})
+	if err != nil {
+		return body
+	}
+	return converted
+}
+
+func validateCodexModelsManifestEnvelope(body []byte) error {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return fmt.Errorf("decode JSON object: %w", err)
+	}
+	if envelope == nil {
+		return errors.New("expected a JSON object")
+	}
+	models, ok := envelope["models"]
+	if !ok {
+		return errors.New("missing top-level models array")
+	}
+	models = bytes.TrimSpace(models)
+	if len(models) == 0 || models[0] != '[' {
+		return errors.New("top-level models field is not an array")
+	}
+	var entries []json.RawMessage
+	if err := json.Unmarshal(models, &entries); err != nil {
+		return fmt.Errorf("decode top-level models array: %w", err)
+	}
+	return nil
 }
 
 func buildCodexModelsManifestCacheKey(request codexModelsManifestRequest) string {

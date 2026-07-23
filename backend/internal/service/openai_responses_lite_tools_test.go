@@ -79,6 +79,43 @@ func TestNormalizeOpenAIResponsesLiteToolsRejectsUnsupportedHostedTool(t *testin
 	require.False(t, changed)
 }
 
+func TestNormalizeOpenAIResponsesLiteToolsEnsuresAllTurnsReasoningContext(t *testing.T) {
+	tests := []struct {
+		name      string
+		reasoning any
+	}{
+		{name: "missing"},
+		{name: "missing context", reasoning: map[string]any{"effort": "high"}},
+		{name: "wrong context", reasoning: map[string]any{"effort": "medium", "context": "current_turn"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reqBody := map[string]any{"input": "hello"}
+			if tt.reasoning != nil {
+				reqBody["reasoning"] = tt.reasoning
+			}
+
+			changed, err := normalizeOpenAIResponsesLiteTools(reqBody)
+
+			require.NoError(t, err)
+			require.True(t, changed)
+			reasoning := reqBody["reasoning"].(map[string]any)
+			require.Equal(t, "all_turns", reasoning["context"])
+		})
+	}
+}
+
+func TestNormalizeOpenAIResponsesLiteToolsRejectsNonObjectReasoning(t *testing.T) {
+	reqBody := map[string]any{"reasoning": "high"}
+
+	changed, err := normalizeOpenAIResponsesLiteTools(reqBody)
+
+	require.ErrorContains(t, err, "reasoning to be an object")
+	require.False(t, changed)
+	require.Equal(t, "high", reqBody["reasoning"])
+}
+
 func TestCodexImageFunctionToolPreventsNativeImageToolInjection(t *testing.T) {
 	req := map[string]any{
 		"model": "gpt-5.4",

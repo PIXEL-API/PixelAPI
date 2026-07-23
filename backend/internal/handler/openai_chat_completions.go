@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
@@ -89,6 +90,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 
 	service.SetOpsLatencyMs(c, service.OpsAuthLatencyMsKey, time.Since(requestStart).Milliseconds())
 	routingStart := time.Now()
+	c.Request = c.Request.WithContext(service.WithOpenAIFirstOutputStart(c.Request.Context(), routingStart))
 
 	userReleaseFunc, acquired := h.acquireResponsesUserSlot(c, subject.UserID, subject.Concurrency, reqStream, &streamStarted, reqLog)
 	if !acquired {
@@ -155,6 +157,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			zap.Int64p("group_id", currentAPIKey.GroupID),
 		)
 		selectionModel := resolveOpenAIAccountSelectionModel(reqModel, channelMapping)
+		dispatchModel := selectionModel
 		selectionCtx := openAIAccountShareModeRequestContext(c, currentAPIKey)
 		selectionCtx = openAICompatibleRequestContext(selectionCtx, currentAPIKey)
 		if decision := h.checkCyberPreflightWithContext(selectionCtx, c, reqLog, currentAPIKey, subject, service.ContentModerationProtocolOpenAIChat, reqModel, body); decision != nil && decision.Blocked {
@@ -213,6 +216,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 					errorRoutingModel = defaultModel
 					if err == nil && selection != nil {
 						c.Set("openai_chat_completions_fallback_model", defaultModel)
+						dispatchModel = defaultModel
 					}
 				}
 				if err != nil {
@@ -269,10 +273,14 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			return
 		}
 
-		accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, currentAPIKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		freshAccount, accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, selectionCtx, currentAPIKey.GroupID, sessionHash, service.OpenAIAccountDispatchRequirements{
+			RequestedModel:    dispatchModel,
+			RequiredTransport: service.OpenAIUpstreamTransportAny,
+		}, selection, reqStream, &streamStarted, reqLog)
 		if !acquired {
 			return
 		}
+		account = freshAccount
 
 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
 		forwardStart := time.Now()
@@ -367,10 +375,14 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			)
 			return
 		}
+		scheduleModel := account.GetMappedModel(dispatchModel)
+		if result != nil && strings.TrimSpace(result.UpstreamModel) != "" {
+			scheduleModel = result.UpstreamModel
+		}
 		if result != nil {
-			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, result.FirstTokenMs)
+			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, result.FirstTokenMs, scheduleModel)
 		} else {
-			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, nil)
+			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, nil, scheduleModel)
 		}
 		routeCursor.recordSuccess(apiKey.ID)
 

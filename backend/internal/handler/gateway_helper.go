@@ -357,6 +357,11 @@ func (h *ConcurrencyHelper) waitForSlotWithPing(c *gin.Context, slotType string,
 
 // waitForSlotWithPingTimeout waits for a concurrency slot with a custom timeout.
 func (h *ConcurrencyHelper) waitForSlotWithPingTimeout(c *gin.Context, slotType string, id int64, maxConcurrency int, timeout time.Duration, isStream bool, streamStarted *bool, tryImmediate bool) (func(), error) {
+	remaining, budgetEnabled := service.OpenAIFirstOutputBudgetRemaining(c.Request.Context())
+	if budgetEnabled && remaining <= 0 {
+		return nil, fmt.Errorf("%w: slot_type=%s", service.ErrOpenAIFirstOutputRoutingBudgetExceeded, slotType)
+	}
+	timeout = service.CapOpenAIFirstOutputWait(c.Request.Context(), timeout)
 	ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
 	defer cancel()
 
@@ -404,6 +409,9 @@ func (h *ConcurrencyHelper) waitForSlotWithPingTimeout(c *gin.Context, slotType 
 	for {
 		select {
 		case <-ctx.Done():
+			if remaining, enabled := service.OpenAIFirstOutputBudgetRemaining(c.Request.Context()); enabled && remaining <= 0 {
+				return nil, fmt.Errorf("%w: slot_type=%s", service.ErrOpenAIFirstOutputRoutingBudgetExceeded, slotType)
+			}
 			return nil, &ConcurrencyError{
 				SlotType:  slotType,
 				IsTimeout: true,

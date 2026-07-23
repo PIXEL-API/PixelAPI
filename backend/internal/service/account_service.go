@@ -21,30 +21,33 @@ import (
 )
 
 var (
-	ErrAccountNotFound                           = infraerrors.NotFound("ACCOUNT_NOT_FOUND", "account not found")
-	ErrAccountNilInput                           = infraerrors.BadRequest("ACCOUNT_NIL_INPUT", "account input cannot be nil")
-	ErrAccountPlatformUnsupported                = infraerrors.BadRequest("ACCOUNT_PLATFORM_UNSUPPORTED", "account platform is not supported")
-	ErrCodexQuotaLimitPercentInvalid             = infraerrors.BadRequest("CODEX_QUOTA_LIMIT_PERCENT_INVALID", "Codex quota limit percent must be between 1 and 100")
-	ErrOwnedAccountAlreadyExists                 = infraerrors.Conflict("OWNED_ACCOUNT_ALREADY_EXISTS", "account already exists")
-	ErrOwnedAccountTypeNotAllowed                = infraerrors.BadRequest("OWNED_ACCOUNT_TYPE_NOT_ALLOWED", "user accounts only support official OAuth accounts")
-	ErrOwnedAccountCredentialsInvalid            = infraerrors.BadRequest("OWNED_ACCOUNT_CREDENTIALS_INVALID", "OAuth account credentials must include an access token")
-	ErrOwnedAccountCredentialsNotAllowed         = infraerrors.BadRequest("OWNED_ACCOUNT_CREDENTIALS_NOT_ALLOWED", "user accounts cannot include API keys, custom URLs, upstream endpoints, cookies or manual session credentials")
-	ErrOwnedAccountConcurrencyOutOfRange         = infraerrors.BadRequest("OWNED_ACCOUNT_CONCURRENCY_OUT_OF_RANGE", "personal account concurrency must be between 3 and 50")
-	ErrOwnedAccountLoadFactorOutOfRange          = infraerrors.BadRequest("OWNED_ACCOUNT_LOAD_FACTOR_OUT_OF_RANGE", fmt.Sprintf("personal account load factor must be between 1 and %d", AccountMaxLoadFactor))
-	ErrOwnedAccountLoadFactorCreditsUnavailable  = infraerrors.InternalServer("OWNED_ACCOUNT_LOAD_FACTOR_CREDITS_UNAVAILABLE", "load factor credit accounting is unavailable")
-	ErrOwnedAccountLoadFactorCreditsInsufficient = infraerrors.BadRequest("OWNED_ACCOUNT_LOAD_FACTOR_CREDITS_INSUFFICIENT", "load factor credits are insufficient")
-	ErrOwnedAccountLevelNotAllowed               = infraerrors.BadRequest("OWNED_ACCOUNT_LEVEL_NOT_ALLOWED", "user accounts cannot manually change account level")
-	ErrOwnedOpenAIAccountLevelRequired           = infraerrors.BadRequest("OWNED_OPENAI_ACCOUNT_LEVEL_REQUIRED", "OpenAI user accounts must select an account level before import")
-	ErrOwnedAccountProxyRequired                 = infraerrors.BadRequest("OWNED_ACCOUNT_PROXY_REQUIRED", "user OAuth accounts must use account login with a selected proxy IP")
-	ErrOwnedOpenAIAccountProxyRequired           = ErrOwnedAccountProxyRequired
-	ErrOwnedAccountGroupPlatformMismatch         = infraerrors.BadRequest("OWNED_ACCOUNT_GROUP_PLATFORM_MISMATCH", "account group platform does not match account platform")
-	ErrOwnedAccountGroupValidationUnavailable    = infraerrors.InternalServer("OWNED_ACCOUNT_GROUP_VALIDATION_UNAVAILABLE", "owned account group validation is unavailable")
-	ErrOwnedAccountPublicPoolUnavailable         = infraerrors.BadRequest("OWNED_ACCOUNT_PUBLIC_POOL_UNAVAILABLE", "public shared account pool group is not configured for this account platform")
-	ErrOwnedAccountPublicPolicyUnavailable       = infraerrors.BadRequest("OWNED_ACCOUNT_PUBLIC_POLICY_UNAVAILABLE", "account share policy is not configured for this public account pool")
-	ErrOwnedAccountPublicValidationFailed        = infraerrors.BadRequest("OWNED_ACCOUNT_PUBLIC_VALIDATION_FAILED", "public account validation failed")
-	ErrOwnedAccountShareModeOnly                 = infraerrors.BadRequest("OWNED_ACCOUNT_SHARE_MODE_ONLY", "account share mode accounts cannot be moved to the public shared account pool")
-	ErrOwnedAccountShareModeBoundaryUnavailable  = infraerrors.InternalServer("OWNED_ACCOUNT_SHARE_MODE_BOUNDARY_UNAVAILABLE", "account share mode boundary check is unavailable")
-	ErrOwnedAccountProxyValidationUnavailable    = infraerrors.InternalServer("OWNED_ACCOUNT_PROXY_VALIDATION_UNAVAILABLE", "owned account proxy validation is unavailable")
+	ErrAccountNotFound                            = infraerrors.NotFound("ACCOUNT_NOT_FOUND", "account not found")
+	ErrAccountNilInput                            = infraerrors.BadRequest("ACCOUNT_NIL_INPUT", "account input cannot be nil")
+	ErrAccountPlatformUnsupported                 = infraerrors.BadRequest("ACCOUNT_PLATFORM_UNSUPPORTED", "account platform is not supported")
+	ErrCodexQuotaLimitPercentInvalid              = infraerrors.BadRequest("CODEX_QUOTA_LIMIT_PERCENT_INVALID", "Codex quota limit percent must be between 1 and 100")
+	ErrOwnedAccountAlreadyExists                  = infraerrors.Conflict("OWNED_ACCOUNT_ALREADY_EXISTS", "account already exists")
+	ErrOwnedAccountTypeNotAllowed                 = infraerrors.BadRequest("OWNED_ACCOUNT_TYPE_NOT_ALLOWED", "user accounts only support official OAuth accounts")
+	ErrOwnedAccountCredentialsInvalid             = infraerrors.BadRequest("OWNED_ACCOUNT_CREDENTIALS_INVALID", "OAuth account credentials must include an access token")
+	ErrOwnedAccountCredentialsNotAllowed          = infraerrors.BadRequest("OWNED_ACCOUNT_CREDENTIALS_NOT_ALLOWED", "user accounts cannot include API keys, custom URLs, upstream endpoints, cookies or manual session credentials")
+	ErrOwnedAgentIdentityCredentialsInvalid       = infraerrors.BadRequest("OWNED_AGENT_IDENTITY_CREDENTIALS_INVALID", "Codex Agent Identity credentials are invalid")
+	ErrOwnedAccountConcurrencyOutOfRange          = infraerrors.BadRequest("OWNED_ACCOUNT_CONCURRENCY_OUT_OF_RANGE", "personal account concurrency must be between 3 and 50")
+	ErrOwnedAccountLoadFactorOutOfRange           = infraerrors.BadRequest("OWNED_ACCOUNT_LOAD_FACTOR_OUT_OF_RANGE", fmt.Sprintf("personal account load factor must be between 1 and %d", AccountMaxLoadFactor))
+	ErrOwnedAccountLoadFactorCreditsUnavailable   = infraerrors.InternalServer("OWNED_ACCOUNT_LOAD_FACTOR_CREDITS_UNAVAILABLE", "load factor credit accounting is unavailable")
+	ErrOwnedAccountLoadFactorCreditsInsufficient  = infraerrors.BadRequest("OWNED_ACCOUNT_LOAD_FACTOR_CREDITS_INSUFFICIENT", "load factor credits are insufficient")
+	ErrOwnedAccountLevelNotAllowed                = infraerrors.BadRequest("OWNED_ACCOUNT_LEVEL_NOT_ALLOWED", "user accounts cannot manually change account level")
+	ErrOwnedOpenAIAccountLevelRequired            = infraerrors.BadRequest("OWNED_OPENAI_ACCOUNT_LEVEL_REQUIRED", "OpenAI user accounts must select an account level before import")
+	ErrOwnedAccountProxyRequired                  = infraerrors.BadRequest("OWNED_ACCOUNT_PROXY_REQUIRED", "user OAuth accounts must use account login with a selected proxy IP")
+	ErrOwnedOpenAIAccountProxyRequired            = ErrOwnedAccountProxyRequired
+	ErrOwnedAccountGroupPlatformMismatch          = infraerrors.BadRequest("OWNED_ACCOUNT_GROUP_PLATFORM_MISMATCH", "account group platform does not match account platform")
+	ErrOwnedAccountGroupValidationUnavailable     = infraerrors.InternalServer("OWNED_ACCOUNT_GROUP_VALIDATION_UNAVAILABLE", "owned account group validation is unavailable")
+	ErrOwnedAccountPublicPoolUnavailable          = infraerrors.BadRequest("OWNED_ACCOUNT_PUBLIC_POOL_UNAVAILABLE", "public shared account pool group is not configured for this account platform")
+	ErrOwnedAccountPublicPolicyUnavailable        = infraerrors.BadRequest("OWNED_ACCOUNT_PUBLIC_POLICY_UNAVAILABLE", "account share policy is not configured for this public account pool")
+	ErrOwnedAccountPublicValidationFailed         = infraerrors.BadRequest("OWNED_ACCOUNT_PUBLIC_VALIDATION_FAILED", "public account validation failed")
+	ErrOwnedAccountShareModeOnly                  = infraerrors.BadRequest("OWNED_ACCOUNT_SHARE_MODE_ONLY", "account share mode accounts cannot be moved to the public shared account pool")
+	ErrOwnedAgentIdentityLookupUnavailable        = infraerrors.InternalServer("OWNED_AGENT_IDENTITY_LOOKUP_UNAVAILABLE", "Codex Agent Identity account lookup is unavailable")
+	ErrOwnedAgentIdentityWSInvalidatorUnavailable = infraerrors.InternalServer("OWNED_AGENT_IDENTITY_WS_INVALIDATOR_UNAVAILABLE", "Codex Agent Identity connection invalidation is unavailable")
+	ErrOwnedAccountShareModeBoundaryUnavailable   = infraerrors.InternalServer("OWNED_ACCOUNT_SHARE_MODE_BOUNDARY_UNAVAILABLE", "account share mode boundary check is unavailable")
+	ErrOwnedAccountProxyValidationUnavailable     = infraerrors.InternalServer("OWNED_ACCOUNT_PROXY_VALIDATION_UNAVAILABLE", "owned account proxy validation is unavailable")
 )
 
 const AccountListGroupUngrouped int64 = -1
@@ -192,19 +195,25 @@ type OwnedPublicShareApprovalOptions struct {
 	AllowRateLimited bool
 }
 
+type OwnedAccountImportResult struct {
+	Account *Account
+	Updated bool
+}
+
 // AccountService 账号管理服务
 type AccountService struct {
-	accountRepo             AccountRepository
-	groupRepo               GroupRepository
-	userRepo                accountUserRepository
-	userSubRepo             accountSubscriptionLookupRepository
-	accountSharePolicyRepo  AccountSharePolicyRepository
-	accountShareModeGroups  accountShareModeGroupClassifier
-	settingService          *SettingService
-	privateGroupProvisioner UserPrivateGroupProvisioner
-	systemNoticeService     *SystemNoticeService
-	proxyRepo               ownedAccountProxyRepository
-	quotaPoolDashboardCache accountQuotaPoolDashboardCache
+	accountRepo                AccountRepository
+	groupRepo                  GroupRepository
+	userRepo                   accountUserRepository
+	userSubRepo                accountSubscriptionLookupRepository
+	accountSharePolicyRepo     AccountSharePolicyRepository
+	accountShareModeGroups     accountShareModeGroupClassifier
+	settingService             *SettingService
+	privateGroupProvisioner    UserPrivateGroupProvisioner
+	systemNoticeService        *SystemNoticeService
+	proxyRepo                  ownedAccountProxyRepository
+	agentIdentityWSInvalidator agentIdentityWSConnectionInvalidator
+	quotaPoolDashboardCache    accountQuotaPoolDashboardCache
 }
 
 type accountQuotaPoolDashboardCache struct {
@@ -245,6 +254,10 @@ type ownedAccountFilterRepository interface {
 
 type ownedAccountIDBatchRepository interface {
 	ListOwnedAccountIDs(ctx context.Context, ownerUserID int64, accountIDs []int64) ([]int64, error)
+}
+
+type ownedOpenAIAgentIdentityRepository interface {
+	GetOwnedOpenAIAgentIdentityByChatGPTAccountID(ctx context.Context, ownerUserID int64, chatGPTAccountID string) (*Account, error)
 }
 
 type ownedLoadFactorCreditAccountRepository interface {
@@ -342,6 +355,13 @@ func (s *AccountService) SetSystemNoticeService(noticeService *SystemNoticeServi
 		return
 	}
 	s.systemNoticeService = noticeService
+}
+
+func (s *AccountService) SetAgentIdentityWSInvalidator(invalidator agentIdentityWSConnectionInvalidator) {
+	if s == nil {
+		return
+	}
+	s.agentIdentityWSInvalidator = invalidator
 }
 
 func (s *AccountService) openAIAccountLevelConfigs(ctx context.Context) ([]OpenAIAccountLevelConfig, error) {
@@ -523,11 +543,177 @@ func (s *AccountService) EnsureOwnedAccountCanEnterPublicShare(ctx context.Conte
 }
 
 func (s *AccountService) CreateOwned(ctx context.Context, ownerUserID int64, req CreateAccountRequest) (*Account, error) {
+	if err := rejectOwnedAccountGrokManagedExtra(req.Extra); err != nil {
+		return nil, err
+	}
 	return s.createOwned(ctx, ownerUserID, req)
 }
 
 func (s *AccountService) ImportOwned(ctx context.Context, ownerUserID int64, req CreateAccountRequest) (*Account, error) {
-	return s.createOwned(ctx, ownerUserID, req)
+	result, err := s.ImportOwnedWithResult(ctx, ownerUserID, req)
+	if err != nil {
+		return nil, err
+	}
+	return result.Account, nil
+}
+
+func (s *AccountService) ImportOwnedWithResult(ctx context.Context, ownerUserID int64, req CreateAccountRequest) (*OwnedAccountImportResult, error) {
+	if err := rejectOwnedAccountGrokManagedExtra(req.Extra); err != nil {
+		return nil, err
+	}
+	if !IsOpenAIAgentIdentityCredentials(req.Credentials) {
+		account, err := s.createOwned(ctx, ownerUserID, req)
+		if err != nil {
+			return nil, err
+		}
+		return &OwnedAccountImportResult{Account: account}, nil
+	}
+
+	req.Credentials = normalizeOwnedAgentIdentityCredentials(req.Credentials)
+	if err := validateOwnedAccountSourceForPlatform(req.Platform, req.Type, req.Credentials, req.Extra); err != nil {
+		return nil, err
+	}
+	chatGPTAccountID := importStringField(req.Credentials, "chatgpt_account_id")
+	repo, ok := s.accountRepo.(ownedOpenAIAgentIdentityRepository)
+	if !ok {
+		return nil, ErrOwnedAgentIdentityLookupUnavailable
+	}
+
+	existing, err := repo.GetOwnedOpenAIAgentIdentityByChatGPTAccountID(ctx, ownerUserID, chatGPTAccountID)
+	if err != nil {
+		return nil, fmt.Errorf("lookup owned Agent Identity account: %w", err)
+	}
+	if existing != nil {
+		account, err := s.updateOwnedAgentIdentityImport(ctx, ownerUserID, existing, req)
+		if err != nil {
+			return nil, err
+		}
+		return &OwnedAccountImportResult{Account: account, Updated: true}, nil
+	}
+
+	account, err := s.createOwned(ctx, ownerUserID, req)
+	if err == nil {
+		return &OwnedAccountImportResult{Account: account}, nil
+	}
+	if !errors.Is(err, ErrOwnedAccountAlreadyExists) {
+		return nil, err
+	}
+
+	// A concurrent import may have committed the same owner+Team identity after
+	// the lookup above. The database unique index is the authority; after that
+	// conflict becomes visible, converge on the committed row and update it.
+	existing, lookupErr := repo.GetOwnedOpenAIAgentIdentityByChatGPTAccountID(ctx, ownerUserID, chatGPTAccountID)
+	if lookupErr != nil {
+		return nil, fmt.Errorf("reload concurrently imported Agent Identity account: %w", lookupErr)
+	}
+	if existing == nil {
+		return nil, err
+	}
+	account, updateErr := s.updateOwnedAgentIdentityImport(ctx, ownerUserID, existing, req)
+	if updateErr != nil {
+		return nil, updateErr
+	}
+	return &OwnedAccountImportResult{Account: account, Updated: true}, nil
+}
+
+func (s *AccountService) updateOwnedAgentIdentityImport(
+	ctx context.Context,
+	ownerUserID int64,
+	account *Account,
+	req CreateAccountRequest,
+) (*Account, error) {
+	if account == nil {
+		return nil, ErrAccountNotFound
+	}
+	if account.OwnerUserID == nil || *account.OwnerUserID != ownerUserID || !account.IsOpenAIAgentIdentity() {
+		return nil, ErrAccountNotFound
+	}
+	if s.agentIdentityWSInvalidator == nil {
+		return nil, ErrOwnedAgentIdentityWSInvalidatorUnavailable
+	}
+	if err := validateOwnedAccountSourceForPlatform(req.Platform, req.Type, req.Credentials, req.Extra); err != nil {
+		return nil, err
+	}
+
+	before := cloneAccountForNotice(account)
+	// Rebuild from the Agent Identity allowlist instead of carrying the entire
+	// historical credential payload forward. Older records may predate the
+	// recursive credential guard and can contain stale OAuth tokens or other
+	// fields that Agent Identity must never retain.
+	nextCredentials := make(map[string]any)
+	previousRuntimeID := strings.TrimSpace(account.GetCredential("agent_runtime_id"))
+	nextRuntimeID := importStringField(req.Credentials, "agent_runtime_id")
+
+	allowedCredentialKeys := []string{
+		"auth_mode",
+		"agent_runtime_id",
+		"agent_private_key",
+		"task_id",
+		"chatgpt_account_id",
+		"chatgpt_user_id",
+		"email",
+		"plan_type",
+		"chatgpt_account_is_fedramp",
+	}
+	for _, key := range allowedCredentialKeys {
+		if value, exists := account.Credentials[key]; exists {
+			nextCredentials[key] = value
+		}
+	}
+	for _, key := range allowedCredentialKeys {
+		if key == "task_id" {
+			continue
+		}
+		if value, exists := req.Credentials[key]; exists {
+			nextCredentials[key] = value
+		}
+	}
+	if taskID := importStringField(req.Credentials, "task_id"); taskID != "" {
+		nextCredentials["task_id"] = taskID
+	} else if previousRuntimeID != nextRuntimeID {
+		delete(nextCredentials, "task_id")
+	}
+	if err := validateOwnedAccountSourceForPlatform(PlatformOpenAI, AccountTypeOAuth, nextCredentials, nil); err != nil {
+		return nil, err
+	}
+
+	levelConfigs, err := s.openAIAccountLevelConfigs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	accountLevel := InferOpenAIAccountLevelWithConfigs(nextCredentials, account.Extra, levelConfigs)
+	if OpenAIAccountLevelConfigByKey(levelConfigs, accountLevel) == nil {
+		accountLevel = AccountLevelFree
+	}
+
+	account.Credentials = nextCredentials
+	account.AccountLevel = accountLevel
+	var groupIDs []int64
+	if NormalizeAccountShareMode(before.ShareMode) == AccountShareModePublic {
+		// Re-import replaces authentication material. Keep the owner's explicit
+		// public-share intent, but remove the account from the public pool until
+		// the handler has completed a fresh connectivity check and approval.
+		groupIDs, err = s.prepareOwnedPublicShareRevalidation(ctx, ownerUserID, account)
+	} else {
+		account.ShareMode = AccountShareModePrivate
+		account.ShareStatus = AccountShareStatusApproved
+		account.ErrorMessage = ""
+		groupIDs, err = s.initialOwnedAccountGroupIDs(ctx, ownerUserID, PlatformOpenAI, AccountTypeOAuth, AccountShareModePrivate, nil)
+	}
+	if err != nil {
+		return nil, err
+	}
+	account.ExpiresAt = nil
+	account.GroupIDs = append([]int64(nil), groupIDs...)
+	if err := s.accountRepo.Update(ctx, account); err != nil {
+		return nil, fmt.Errorf("update owned Agent Identity account: %w", err)
+	}
+	s.agentIdentityWSInvalidator.InvalidateAgentIdentityWSConnections(account.ID)
+	if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
+		return nil, fmt.Errorf("bind private Agent Identity account group: %w", err)
+	}
+	s.notifyAccountChanged(ctx, before, account)
+	return account, nil
 }
 
 func (s *AccountService) EnsureOwnedProxyAvailableForNewAccount(ctx context.Context, ownerUserID, proxyID int64) error {
@@ -546,17 +732,34 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 	if !IsSupportedAccountPlatform(req.Platform) {
 		return nil, ErrAccountPlatformUnsupported
 	}
+	isAgentIdentity := IsOpenAIAgentIdentityCredentials(req.Credentials)
+	if isAgentIdentity {
+		req.Credentials = normalizeOwnedAgentIdentityCredentials(req.Credentials)
+	}
 	targetLevel := NormalizeAccountLevel(req.AccountLevel)
 	levelConfigs, err := s.openAIAccountLevelConfigs(ctx)
 	if err != nil {
 		return nil, err
 	}
-	preserveProxy := RequiresUserAccountOAuthProxyWithConfigs(req.Platform, targetLevel, levelConfigs)
+	preserveProxy := !isAgentIdentity && RequiresUserAccountOAuthProxyWithConfigs(req.Platform, targetLevel, levelConfigs)
 	proxyID := req.ProxyID
 	if err := applyOwnedPersonalAccountTemplateToCreate(&req); err != nil {
 		return nil, err
 	}
-	if req.Platform == PlatformOpenAI {
+	if err := validateOwnedAccountSourceForPlatform(req.Platform, req.Type, req.Credentials, req.Extra); err != nil {
+		return nil, err
+	}
+	if isAgentIdentity {
+		inferredLevel := InferOpenAIAccountLevelWithConfigs(req.Credentials, req.Extra, levelConfigs)
+		if OpenAIAccountLevelConfigByKey(levelConfigs, inferredLevel) == nil {
+			inferredLevel = AccountLevelFree
+		}
+		targetLevel = inferredLevel
+		req.AccountLevel = inferredLevel
+		req.ShareMode = AccountShareModePrivate
+		req.ProxyID = nil
+		req.ExpiresAt = nil
+	} else if req.Platform == PlatformOpenAI {
 		if !IsUserSelectableOpenAIAccountLevelWithConfigs(targetLevel, levelConfigs) {
 			return nil, ErrOwnedOpenAIAccountLevelRequired
 		}
@@ -575,9 +778,6 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 			req.ProxyID = proxyID
 		}
 		req.AccountLevel = AccountLevelUnknown
-	}
-	if err := validateOwnedAccountSource(req.Type, req.Credentials, req.Extra); err != nil {
-		return nil, err
 	}
 	extra, err := NormalizeCodexQuotaLimitExtra(req.Platform, req.Type, req.Extra)
 	if err != nil {
@@ -663,20 +863,101 @@ func isAllowedOwnedAccountType(accountType string) bool {
 	return normalized == AccountTypeOAuth
 }
 
+func normalizeOwnedAgentIdentityCredentials(credentials map[string]any) map[string]any {
+	normalized := mergeAccountMap(credentials, nil)
+	normalized["auth_mode"] = OpenAIAuthModeAgentIdentity
+	for _, key := range []string{
+		"agent_runtime_id",
+		"agent_private_key",
+		"task_id",
+		"chatgpt_account_id",
+		"chatgpt_user_id",
+		"email",
+		"plan_type",
+	} {
+		if value, ok := normalized[key].(string); ok {
+			normalized[key] = strings.TrimSpace(value)
+		}
+	}
+	return normalized
+}
+
 func validateOwnedAccountSource(accountType string, credentials, extra map[string]any) error {
+	return validateOwnedAccountSourceForPlatform("", accountType, credentials, extra)
+}
+
+func validateOwnedAccountSourceForPlatform(platform, accountType string, credentials, extra map[string]any) error {
 	if !isAllowedOwnedAccountType(accountType) {
 		return ErrOwnedAccountTypeNotAllowed
 	}
-	if !hasNonEmptyStringField(credentials, "access_token") {
-		return ErrOwnedAccountCredentialsInvalid
+	isAgentIdentity := IsOpenAIAgentIdentityCredentials(credentials)
+	if isAgentIdentity {
+		if platform != "" && platform != PlatformOpenAI {
+			return ErrOwnedAgentIdentityCredentialsInvalid.WithMetadata(map[string]string{"field": "platform"})
+		}
+		for _, key := range []string{"agent_runtime_id", "agent_private_key", "chatgpt_account_id"} {
+			if !hasNonEmptyStringField(credentials, key) {
+				return ErrOwnedAgentIdentityCredentialsInvalid.WithMetadata(map[string]string{"field": key})
+			}
+		}
+		for _, identifier := range []struct {
+			field    string
+			label    string
+			required bool
+		}{
+			{field: "agent_runtime_id", label: "runtime id", required: true},
+			{field: "chatgpt_account_id", label: "Team id", required: true},
+			{field: "task_id", label: "task id"},
+			{field: "chatgpt_user_id", label: "user id"},
+		} {
+			raw, exists := credentials[identifier.field]
+			if !exists {
+				continue
+			}
+			value, ok := raw.(string)
+			if !ok {
+				return ErrOwnedAgentIdentityCredentialsInvalid.WithMetadata(map[string]string{"field": identifier.field})
+			}
+			if strings.TrimSpace(value) == "" && !identifier.required {
+				credentials[identifier.field] = ""
+				continue
+			}
+			normalized, err := normalizeAgentIdentityIdentifier(identifier.label, value)
+			if err != nil {
+				return ErrOwnedAgentIdentityCredentialsInvalid.
+					WithMetadata(map[string]string{"field": identifier.field}).
+					WithCause(err)
+			}
+			credentials[identifier.field] = normalized
+		}
+		if err := ValidateOpenAIAgentIdentityPrivateKey(importStringField(credentials, "agent_private_key")); err != nil {
+			return ErrOwnedAgentIdentityCredentialsInvalid.WithMetadata(map[string]string{"field": "agent_private_key"}).WithCause(err)
+		}
+		safetyCredentials := mergeAccountMap(credentials, nil)
+		removeImportMapField(safetyCredentials, "auth_mode")
+		removeImportMapField(safetyCredentials, "authMode")
+		if field, ok := findDisallowedOwnedAgentIdentityField(safetyCredentials); ok {
+			return ErrOwnedAccountCredentialsNotAllowed.WithMetadata(map[string]string{
+				"section": "credentials",
+				"field":   field,
+			})
+		}
+	} else {
+		if !hasNonEmptyStringField(credentials, "access_token") {
+			return ErrOwnedAccountCredentialsInvalid
+		}
+		if field, ok := findDisallowedOwnedAccountField(credentials); ok {
+			return ErrOwnedAccountCredentialsNotAllowed.WithMetadata(map[string]string{
+				"section": "credentials",
+				"field":   field,
+			})
+		}
 	}
-	if field, ok := findDisallowedOwnedAccountField(credentials); ok {
-		return ErrOwnedAccountCredentialsNotAllowed.WithMetadata(map[string]string{
-			"section": "credentials",
-			"field":   field,
-		})
+	extraSafetyCheck := findDisallowedOwnedAccountField
+	if isAgentIdentity {
+		extraSafetyCheck = findDisallowedOwnedAgentIdentityField
 	}
-	if field, ok := findDisallowedOwnedAccountField(extra); ok {
+	if field, ok := extraSafetyCheck(extra); ok {
 		return ErrOwnedAccountCredentialsNotAllowed.WithMetadata(map[string]string{
 			"section": "extra",
 			"field":   field,
@@ -739,6 +1020,14 @@ func findDisallowedOwnedAccountField(values map[string]any) (string, bool) {
 	return findDisallowedCredentialContent(values, credentialSafetyOptions{
 		AllowOAuthTokenValues:  true,
 		AllowOAuthMetadataURLs: true,
+	})
+}
+
+func findDisallowedOwnedAgentIdentityField(values map[string]any) (string, bool) {
+	return findDisallowedCredentialContent(values, credentialSafetyOptions{
+		AllowOAuthTokenValues:    true,
+		AllowOAuthMetadataURLs:   true,
+		DisallowOAuthTokenFields: true,
 	})
 }
 
@@ -918,6 +1207,9 @@ func sanitizeOwnedPersonalAccountUpdate(account *Account, req *UpdateAccountRequ
 		if nextExtra == nil {
 			nextExtra = map[string]any{}
 		}
+		if err := preserveOwnedAccountGrokManagedExtra(account.Extra, nextExtra); err != nil {
+			return err
+		}
 		preserveOwnedPersonalExtraPolicy(account, nextExtra)
 		req.Extra = &nextExtra
 	}
@@ -926,6 +1218,9 @@ func sanitizeOwnedPersonalAccountUpdate(account *Account, req *UpdateAccountRequ
 
 func ownedPersonalAccountRequiresProxy(account *Account, levelConfigs []OpenAIAccountLevelConfig) bool {
 	if account == nil {
+		return false
+	}
+	if account.IsOpenAIAgentIdentity() {
 		return false
 	}
 	return RequiresUserAccountOAuthProxyWithConfigs(account.Platform, account.AccountLevel, levelConfigs)
@@ -1299,13 +1594,26 @@ func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID
 		groupIDs = managedGroupIDs
 		shouldBindGroups = true
 	}
-	if err := validateOwnedAccountSource(account.Type, account.Credentials, account.Extra); err != nil {
+	if err := validateOwnedAccountSourceForPlatform(account.Platform, account.Type, account.Credentials, account.Extra); err != nil {
 		return nil, err
 	}
 	if req.Credentials != nil || req.Extra != nil {
 		if err := s.ensureOwnedAccountNotDuplicate(ctx, ownerUserID, account, account.ID); err != nil {
 			return nil, err
 		}
+	}
+	agentIdentityAuthChanged := ownedAgentIdentityAuthMaterialChanged(before, account)
+	agentIdentityPublicAccessRevoked := ownedAgentIdentityPublicAccessRevoked(before, account)
+	shouldInvalidateAgentIdentityWS := agentIdentityAuthChanged || agentIdentityPublicAccessRevoked
+	if shouldInvalidateAgentIdentityWS && s.agentIdentityWSInvalidator == nil {
+		return nil, ErrOwnedAgentIdentityWSInvalidatorUnavailable
+	}
+	if agentIdentityAuthChanged && NormalizeAccountShareMode(account.ShareMode) == AccountShareModePublic {
+		groupIDs, err = s.prepareOwnedPublicShareRevalidation(ctx, ownerUserID, account)
+		if err != nil {
+			return nil, err
+		}
+		shouldBindGroups = true
 	}
 
 	if !shouldBindGroups && req.GroupIDs != nil {
@@ -1334,6 +1642,9 @@ func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID
 	} else if err := s.accountRepo.Update(ctx, account); err != nil {
 		return nil, fmt.Errorf("update account: %w", err)
 	}
+	if shouldInvalidateAgentIdentityWS {
+		s.agentIdentityWSInvalidator.InvalidateAgentIdentityWSConnections(account.ID)
+	}
 	if shouldBindGroups {
 		if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
 			return nil, fmt.Errorf("bind groups: %w", err)
@@ -1342,6 +1653,34 @@ func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID
 	}
 	s.notifyAccountChanged(ctx, before, account)
 	return account, nil
+}
+
+func ownedAgentIdentityAuthMaterialChanged(before, after *Account) bool {
+	beforeIsAgentIdentity := before != nil && before.IsOpenAIAgentIdentity()
+	afterIsAgentIdentity := after != nil && after.IsOpenAIAgentIdentity()
+	if !beforeIsAgentIdentity && !afterIsAgentIdentity {
+		return false
+	}
+	if beforeIsAgentIdentity != afterIsAgentIdentity {
+		return true
+	}
+	for _, key := range []string{
+		"auth_mode",
+		"agent_runtime_id",
+		"agent_private_key",
+		"task_id",
+		"chatgpt_account_id",
+		"chatgpt_user_id",
+	} {
+		if strings.TrimSpace(before.GetCredential(key)) != strings.TrimSpace(after.GetCredential(key)) {
+			return true
+		}
+	}
+	return false
+}
+
+func ownedAgentIdentityPublicAccessRevoked(before, after *Account) bool {
+	return before != nil && after != nil && before.IsOpenAIAgentIdentity() && before.IsPublicShareApproved() && !after.IsPublicShareApproved()
 }
 
 func (s *AccountService) SetOwnedOpenAIAccountLevel(ctx context.Context, ownerUserID, accountID int64, accountLevel, reason string) (*Account, error) {
@@ -1361,7 +1700,7 @@ func (s *AccountService) SetOwnedOpenAIAccountLevel(ctx context.Context, ownerUs
 	if !IsUserSelectableOpenAIAccountLevelWithConfigs(level, levelConfigs) {
 		return nil, infraerrors.BadRequest("OWNED_ACCOUNT_LEVEL_INVALID", "invalid OpenAI account level")
 	}
-	if err := validateOwnedAccountSource(account.Type, account.Credentials, account.Extra); err != nil {
+	if err := validateOwnedAccountSourceForPlatform(account.Platform, account.Type, account.Credentials, account.Extra); err != nil {
 		return nil, err
 	}
 
@@ -1403,9 +1742,16 @@ func (s *AccountService) SetOwnedOpenAIAccountLevel(ctx context.Context, ownerUs
 			return nil, err
 		}
 	}
+	shouldInvalidateAgentIdentityWS := ownedAgentIdentityPublicAccessRevoked(before, account)
+	if shouldInvalidateAgentIdentityWS && s.agentIdentityWSInvalidator == nil {
+		return nil, ErrOwnedAgentIdentityWSInvalidatorUnavailable
+	}
 
 	if err := s.accountRepo.Update(ctx, account); err != nil {
 		return nil, fmt.Errorf("update owned OpenAI account level: %w", err)
+	}
+	if shouldInvalidateAgentIdentityWS {
+		s.agentIdentityWSInvalidator.InvalidateAgentIdentityWSConnections(account.ID)
 	}
 	if shouldBindGroups {
 		if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
@@ -1533,6 +1879,10 @@ func accountDuplicateIdentityKeys(account *Account) []ownedAccountDuplicateKey {
 	case PlatformOpenAI:
 		if account.Type != AccountTypeOAuth {
 			return nil
+		}
+		if account.IsOpenAIAgentIdentity() {
+			add("openai.agent_identity_team", account.GetChatGPTAccountID())
+			return keys
 		}
 		orgID := strings.ToLower(strings.TrimSpace(account.GetOpenAIOrganizationID()))
 		chatGPTUserID := account.GetChatGPTUserID()
@@ -1678,6 +2028,9 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 	if input == nil {
 		return nil, ErrAccountNilInput
 	}
+	if err := rejectOwnedAccountGrokManagedExtra(input.Extra); err != nil {
+		return nil, err
+	}
 
 	accountIDs := normalizeOwnedBulkAccountIDs(input.AccountIDs)
 	result := &BulkUpdateAccountsResult{
@@ -1755,7 +2108,7 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 		nextAccount := *account
 		nextAccount.Credentials = nextCredentials
 		nextAccount.Extra = nextExtra
-		if err := validateOwnedAccountSource(account.Type, nextCredentials, nextExtra); err != nil {
+		if err := validateOwnedAccountSourceForPlatform(account.Platform, account.Type, nextCredentials, nextExtra); err != nil {
 			return nil, err
 		}
 		nextConcurrency := normalizeOwnedPersonalAccountConcurrency(account.Concurrency)
@@ -1975,6 +2328,20 @@ func (s *AccountService) managedOwnedAccountGroupIDsForShareMode(ctx context.Con
 	return s.initialOwnedAccountGroupIDs(ctx, ownerUserID, account.Platform, account.Type, nextMode, nil)
 }
 
+func (s *AccountService) prepareOwnedPublicShareRevalidation(ctx context.Context, ownerUserID int64, account *Account) ([]int64, error) {
+	if account == nil {
+		return nil, ErrAccountNotFound
+	}
+	groupIDs, err := s.initialOwnedAccountGroupIDs(ctx, ownerUserID, account.Platform, account.Type, AccountShareModePublic, nil)
+	if err != nil {
+		return nil, err
+	}
+	account.ShareMode = AccountShareModePublic
+	account.ShareStatus = AccountShareStatusPending
+	account.ErrorMessage = ""
+	return groupIDs, nil
+}
+
 func (s *AccountService) ensureAccountCanEnterPublicShare(ctx context.Context, account *Account) error {
 	if account == nil {
 		return ErrAccountNotFound
@@ -2006,7 +2373,7 @@ func (s *AccountService) ApproveOwnedPublicShareWithOptions(ctx context.Context,
 		return nil, err
 	}
 	before := cloneAccountForNotice(account)
-	if err := validateOwnedAccountSource(account.Type, account.Credentials, account.Extra); err != nil {
+	if err := validateOwnedAccountSourceForPlatform(account.Platform, account.Type, account.Credentials, account.Extra); err != nil {
 		return nil, err
 	}
 	if err := s.ensureAccountCanEnterPublicShare(ctx, account); err != nil {
@@ -2030,16 +2397,16 @@ func (s *AccountService) ApproveOwnedPublicShareWithOptions(ctx context.Context,
 		return nil, err
 	}
 
+	if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
+		return nil, fmt.Errorf("bind public account groups: %w", err)
+	}
+	account.GroupIDs = append([]int64(nil), groupIDs...)
 	account.ShareMode = AccountShareModePublic
 	account.ShareStatus = AccountShareStatusApproved
 	account.ErrorMessage = ""
 	if err := s.accountRepo.Update(ctx, account); err != nil {
 		return nil, fmt.Errorf("update account public share status: %w", err)
 	}
-	if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
-		return nil, fmt.Errorf("bind public account groups: %w", err)
-	}
-	account.GroupIDs = append([]int64(nil), groupIDs...)
 	s.notifyAccountChanged(ctx, before, account)
 	return account, nil
 }
@@ -2076,8 +2443,15 @@ func (s *AccountService) MarkOwnedPublicSharePending(ctx context.Context, ownerU
 	account.ShareMode = AccountShareModePublic
 	account.ShareStatus = AccountShareStatusPending
 	account.ErrorMessage = strings.TrimSpace(reason)
+	shouldInvalidateAgentIdentityWS := ownedAgentIdentityPublicAccessRevoked(before, account)
+	if shouldInvalidateAgentIdentityWS && s.agentIdentityWSInvalidator == nil {
+		return nil, ErrOwnedAgentIdentityWSInvalidatorUnavailable
+	}
 	if err := s.accountRepo.Update(ctx, account); err != nil {
 		return nil, fmt.Errorf("update account public share status: %w", err)
+	}
+	if shouldInvalidateAgentIdentityWS {
+		s.agentIdentityWSInvalidator.InvalidateAgentIdentityWSConnections(account.ID)
 	}
 	if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
 		return nil, fmt.Errorf("bind pending account groups: %w", err)
@@ -2117,8 +2491,15 @@ func (s *AccountService) AutoRepairSuspectedOpenAIFreeAccount(ctx context.Contex
 			return nil, false, err
 		}
 	}
+	shouldInvalidateAgentIdentityWS := ownedAgentIdentityPublicAccessRevoked(before, account)
+	if shouldInvalidateAgentIdentityWS && s.agentIdentityWSInvalidator == nil {
+		return nil, false, ErrOwnedAgentIdentityWSInvalidatorUnavailable
+	}
 	if err := s.accountRepo.Update(ctx, account); err != nil {
 		return nil, false, fmt.Errorf("update account suspected free repair: %w", err)
+	}
+	if shouldInvalidateAgentIdentityWS {
+		s.agentIdentityWSInvalidator.InvalidateAgentIdentityWSConnections(account.ID)
 	}
 	if account.OwnerUserID != nil {
 		if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {

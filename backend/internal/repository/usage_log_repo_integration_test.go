@@ -1283,7 +1283,7 @@ func (s *UsageLogRepoSuite) TestGetUserUsageTrendByUserID() {
 
 	startTime := base.Add(-1 * time.Hour)
 	endTime := base.Add(48 * time.Hour)
-	trend, err := s.repo.GetUserUsageTrendByUserID(s.ctx, user.ID, startTime, endTime, "day")
+	trend, err := s.repo.GetUserUsageTrendByUserID(s.ctx, user.ID, startTime, endTime, "day", time.UTC)
 	s.Require().NoError(err, "GetUserUsageTrendByUserID")
 	s.Require().Len(trend, 2) // 2 different days
 }
@@ -1300,7 +1300,7 @@ func (s *UsageLogRepoSuite) TestGetUserUsageTrendByUserID_HourlyGranularity() {
 
 	startTime := base.Add(-1 * time.Hour)
 	endTime := base.Add(3 * time.Hour)
-	trend, err := s.repo.GetUserUsageTrendByUserID(s.ctx, user.ID, startTime, endTime, "hour")
+	trend, err := s.repo.GetUserUsageTrendByUserID(s.ctx, user.ID, startTime, endTime, "hour", time.UTC)
 	s.Require().NoError(err, "GetUserUsageTrendByUserID hourly")
 	s.Require().Len(trend, 3) // 3 different hours
 }

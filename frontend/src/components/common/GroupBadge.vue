@@ -1,19 +1,19 @@
 <template>
   <span
     :class="[
-      'inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium transition-colors',
+      'inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium transition-colors',
       badgeClass
     ]"
   >
     <!-- Platform logo -->
-    <PlatformIcon v-if="platform" :platform="platform" size="sm" />
+    <PlatformIcon v-if="platform" :platform="platform" size="sm" class="flex-shrink-0" />
     <!-- Group name -->
-    <span class="truncate">{{ name }}</span>
-    <span v-if="isPrivateScope" :class="scopeLabelClass">
+    <span class="min-w-0 truncate">{{ name }}</span>
+    <span v-if="isPrivateScope" :class="['flex-shrink-0', scopeLabelClass]">
       {{ t('groups.private') }}
     </span>
     <!-- Right side label -->
-    <span v-if="showLabel" :class="labelClass">
+    <span v-if="showLabel" :class="['flex-shrink-0', labelClass]">
       <template v-if="hasCustomRate">
         <!-- 原倍率删除线 + 专属倍率高亮 -->
         <span class="line-through opacity-50 mr-0.5">{{ rateMultiplier }}x</span>

@@ -969,13 +969,17 @@ export default {
     selectedGroups: "{count} groups selected",
     importTitle: "Import Personal Accounts",
     importHint:
-      "Paste account credentials or import files. Personal import only creates official OAuth accounts.",
+      "Paste account credentials or import files. OpenAI supports OAuth / Refresh Token and Codex Agent Identity; other platforms create official OAuth accounts.",
+    importHintAgentIdentity:
+      "Paste or select Codex Agent Identity JSON. The account is private and visible only to you by default; after import, you can switch it to public, subject to server-side validation before public sharing.",
     importWarning:
       "You can import up to {max} accounts at a time. Supported: Sub2API OAuth JSON, Codex-Manager ChatGPT token JSON, OpenAI Refresh Token, and Claude Session Key. API keys, URLs, upstream endpoints and cookies are rejected.",
     importWarningChoosePlatform:
       "Select the import platform first. You can import up to {max} accounts at a time. API keys, URLs, upstream endpoints and cookies are rejected.",
     importWarningOpenAI:
       "You can import up to {max} OpenAI accounts. Available levels are configured by administrators; levels marked as requiring proxy login must use account login.",
+    importWarningAgentIdentity:
+      "You can import up to {max} Codex Agent Identities. Only complete Agent Identity JSON is accepted; regular OAuth JSON, refresh tokens, API keys, URLs, upstream endpoints, and cookies are rejected.",
     importWarningClaude:
       "You can import up to {max} Claude accounts. Supports Sub2API OAuth JSON or Claude Session Key.",
     importWarningGemini:
@@ -991,6 +995,16 @@ export default {
     importPlatformGemini: "Gemini official account",
     importPlatformAntigravity: "Antigravity official account",
     importPlatformGrok: "Grok / xAI official account",
+    importAuthMode: "OpenAI authentication method",
+    importAuthModeOAuth: "OAuth / Refresh Token",
+    importAuthModeOAuthDesc: "Import OAuth JSON or a refresh token and validate the selected account level",
+    importAuthModeAgentIdentity: "Codex Agent Identity",
+    importAuthModeAgentIdentityDesc: "Import Agent Identity JSON and isolate it by the Team in the credential",
+    importAgentIdentityNoticeTitle: "Agent Identity import rules",
+    importAgentIdentityTeamIsolation: "The Team is detected from Agent Identity and isolated automatically; no manual selection is needed.",
+    importAgentIdentityPrivate: "The account is private by default. After import, you can switch it to public; server-side validation is required before public sharing.",
+    importAgentIdentityNoOAuthExpiry: "Agent Identity does not use an OAuth expiration time; credential validity is verified by the server.",
+    importAgentIdentityJSONRequired: "Codex Agent Identity only accepts a complete JSON object or JSON array.",
     importPlatformHintClaude:
       "Claude imports do not use OpenAI account levels. Use Claude OAuth JSON or Claude Session Key.",
     importPlatformHintGemini:
@@ -1081,12 +1095,15 @@ export default {
     importTextLabel: "Account Data",
     importTextPlaceholder:
       "Paste one token per line, or paste a complete JSON object / JSON array.",
+    importTextPlaceholderAgentIdentity: "Paste complete Codex Agent Identity JSON or a JSON array",
     importTextHint:
       "Plain tokens are treated as OpenAI Refresh Tokens unless they are Claude Session Keys.",
     importTextHintChoosePlatform:
       "Select a platform first, then paste OAuth credentials for that platform.",
     importTextHintOpenAI:
       "OpenAI Free / Plus / Team can import OAuth JSON or Refresh Tokens; Pro must use account login.",
+    importTextHintAgentIdentity:
+      "Only complete Codex Agent Identity JSON objects or arrays are supported; file import accepts .json only.",
     importTextHintClaude:
       "Claude can import Claude Session Keys or OAuth JSON with Anthropic/Claude platform metadata.",
     importTextHintGemini:
@@ -1115,7 +1132,7 @@ export default {
     exportFailed: "Failed to export accounts",
     importResult: "Import Result",
     importResultSummary:
-      "Created {created}, skipped {skipped}, failed {failed}",
+      "Created {created}, updated {updated}, skipped {skipped}, failed {failed}",
     importErrors: "Import Details",
     importInvalidFile:
       "Invalid import file: expected an account array or a Sub2API export with accounts.",
@@ -1132,9 +1149,9 @@ export default {
       "Personal accounts cannot import this credential field: {field}",
     importParseFailed: "Failed to parse JSON file",
     importFailed: "Failed to import accounts",
-    importSuccess: "Import complete: created {created} account(s)",
+    importSuccess: "Import complete: created {created} account(s), updated {updated}",
     importCompletedWithIssues:
-      "Import complete: created {created}, skipped {skipped}, failed {failed}",
+      "Import complete: created {created}, updated {updated}, skipped {skipped}, failed {failed}",
   },
 
   // API Keys
@@ -1161,6 +1178,7 @@ export default {
     id: "ID",
     apiKey: "API Key",
     group: "Group",
+    groupFilterLabel: "Filter by group",
     noGroup: "No group",
     searchGroup: "Search groups...",
     noGroupFound: "No groups found",
@@ -1184,6 +1202,7 @@ export default {
     groupLabel: "Group",
     selectGroup: "Select a group",
     statusLabel: "Status",
+    statusFilterLabel: "Filter by status",
     selectStatus: "Select status",
     saving: "Saving...",
     noKeysYet: "No API keys yet",
@@ -1201,6 +1220,26 @@ export default {
     groupChangedSuccess: "Group changed successfully",
     failedToChangeGroup: "Failed to change group",
     groupRequired: "Please select a group",
+    groupSelectorLabel: "Select an API key group",
+    groupRoutes: {
+      title: "Multi-group routing",
+      description: "Configure multiple groups for one API key by priority and weight",
+      configuration: "Route configuration",
+      enabled: "Enabled",
+      group: "Group",
+      priority: "Priority",
+      weight: "Weight",
+      cooldownSeconds: "Cooldown (seconds)",
+      addRoute: "Add route",
+      removeRoute: "Remove route {index}",
+      validation: {
+        groupRequired: "Select a group for every multi-group route",
+        duplicateGroup: "Multi-group routes cannot contain duplicate groups",
+        priority: "Each multi-group route priority must be an integer greater than or equal to 0",
+        weight: "Each multi-group route weight must be an integer greater than or equal to 1",
+        cooldownSeconds: "Each multi-group route cooldown must be an integer greater than or equal to 0",
+      },
+    },
     accountShareConflict: {
       deleteTitle: "This API key cannot be deleted yet",
       changeGroupTitle: "This API key cannot change groups yet",
@@ -1223,9 +1262,12 @@ export default {
     total: "Last 30d",
     quota: "Quota",
     lastUsedAt: "Last Used",
+    lastUsedIP: "Last Used IP",
     useKey: "Use Key",
     useKeyModal: {
       title: "Use API Key",
+      clientTabsLabel: "Client setup",
+      shellTabsLabel: "Operating system and shell",
       description:
         "Add the following environment variables to your terminal profile or run directly in terminal to configure API access.",
       copy: "Copy",
@@ -1289,10 +1331,11 @@ export default {
       },
     },
     customKeyLabel: "Custom Key",
-    customKeyPlaceholder: "Enter your custom key (min 16 chars)",
+    customKeyPlaceholder: "Enter your custom key (16–128 chars)",
     customKeyHint:
-      "Only letters, numbers, underscores and hyphens allowed. Minimum 16 characters.",
+      "Only letters, numbers, underscores and hyphens allowed. Use 16 to 128 characters.",
     customKeyTooShort: "Custom key must be at least 16 characters",
+    customKeyTooLong: "Custom key cannot exceed 128 characters",
     customKeyInvalidChars:
       "Custom key can only contain letters, numbers, underscores, and hyphens",
     customKeyRequired: "Please enter a custom key",
@@ -1522,7 +1565,10 @@ export default {
     unknown: "Unknown",
     in: "In",
     out: "Out",
+    imageInputTokens: "Image input tokens",
     inputTokenPrice: "Input price",
+    imageInputTokenPrice: "Image input price",
+    imageInputCost: "Image input cost",
     outputTokenPrice: "Output price",
     perMillionTokens: "/ 1M tokens",
     unitPrice: "Per-request price",
@@ -2219,6 +2265,11 @@ export default {
   table: {
     expandActions: "Expand More Actions",
     collapseActions: "Collapse Actions",
+    sortBy: "Sort by",
+    sortFieldPlaceholder: "Select field",
+    sortDirection: "Sort direction",
+    sortAscending: "Ascending",
+    sortDescending: "Descending",
   },
 
   // Pagination
@@ -7338,12 +7389,12 @@ export default {
         dataRetention: "Data Retention Policy",
         enableCleanup: "Enable Data Cleanup",
         cleanupSchedule: "Cleanup Schedule (Cron)",
-        cleanupScheduleHint: "Example: 0 2 * * * means 2 AM daily",
+        cleanupScheduleHint: "Example: 0 4 * * * means 4 AM daily in the configured timezone; changes apply immediately",
         errorLogRetentionDays: "Error Log Retention Days",
         minuteMetricsRetentionDays: "Minute Metrics Retention Days",
         hourlyMetricsRetentionDays: "Hourly Metrics Retention Days",
         retentionDaysHint:
-          "Recommended 7-90 days; longer periods consume more storage. Set to 0 to wipe all history on every scheduled cleanup",
+          "Recommended 7-90 days; longer periods consume more storage. Set to 0 to disable cleanup for that data type",
         aggregation: "Pre-aggregation Tasks",
         enableAggregation: "Enable Pre-aggregation",
         aggregationHint:
@@ -7383,7 +7434,7 @@ export default {
         validation: {
           title: "Please fix the following issues",
           retentionDaysRange:
-            "Retention days must be between 0 and 365 (0 = wipe all on every cleanup)",
+            "Retention days must be between 0 and 365 (0 = disable cleanup for that data type)",
           slaMinPercentRange:
             "SLA minimum percentage must be between 0 and 100",
           ttftP99MaxRange: "TTFT P99 maximum must be a number ≥ 0",
@@ -7536,14 +7587,21 @@ export default {
           withdrawalRateLimitWindowDays: "Window (days)",
           withdrawalRateLimitMax: "Maximum requests per window",
           withdrawalRateLimitMaxHint: "Enter 0 for unlimited withdrawal requests.",
+          withdrawalRateLimitExemptAmount: "Large withdrawal exemption (CNY)",
+          withdrawalRateLimitExemptAmountHint:
+            "A request strictly above this amount bypasses the frequency limit and does not consume the normal quota. Enter 0 to disable the exemption.",
           withdrawalRateLimitSummary:
             "Current limit: up to {max} requests every {days} days.",
+          withdrawalRateLimitExemptSummary:
+            "Withdrawals above CNY {amount} are exempt from the request limit.",
           withdrawalRateLimitUnlimited:
             "Withdrawal request frequency is currently unlimited.",
           withdrawalRateLimitWindowDaysError:
             "The withdrawal window must be an integer between 1 and 365.",
           withdrawalRateLimitMaxError:
             "The withdrawal request limit must be an integer between 0 and 1000.",
+          withdrawalRateLimitExemptAmountError:
+            "The large withdrawal exemption must be a non-negative amount with at most two decimal places.",
         },
         riskControl: {
           title: "Content Risk Control",

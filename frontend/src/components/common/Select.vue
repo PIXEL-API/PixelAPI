@@ -1,21 +1,25 @@
 <template>
-  <div class="relative" ref="containerRef">
+  <div ref="containerRef" class="relative" :data-ui-skin="uiSkin">
     <button
+      :id="triggerId"
       ref="triggerRef"
       type="button"
       @click="toggle"
       :disabled="disabled"
+      :role="searchable ? undefined : 'combobox'"
       :aria-expanded="isOpen"
-      :aria-haspopup="true"
-      aria-label="Select option"
+      aria-haspopup="listbox"
+      :aria-controls="listboxId"
+      :aria-activedescendant="!searchable ? activeDescendantId : undefined"
+      :aria-label="triggerAriaLabel"
+      :aria-labelledby="ariaLabelledby"
       :class="[
         'select-trigger',
         isOpen && 'select-trigger-open',
         error && 'select-trigger-error',
         disabled && 'select-trigger-disabled'
       ]"
-      @keydown.down.prevent="onTriggerKeyDown"
-      @keydown.up.prevent="onTriggerKeyDown"
+      @keydown="onTriggerKeyDown"
     >
       <span class="select-value">
         <slot name="selected" :option="selectedOption">
@@ -38,9 +42,10 @@
           v-if="isOpen"
           ref="dropdownRef"
           class="select-dropdown-portal"
+          :data-ui-skin="uiSkin"
+          :data-dialog-focus-owner-id="triggerId"
           :class="[instanceId]"
           :style="dropdownStyle"
-          role="listbox"
           @click.stop
           @mousedown.stop
           @keydown="onDropdownKeyDown"
@@ -52,6 +57,14 @@
               ref="searchInputRef"
               v-model="searchQuery"
               type="text"
+              role="combobox"
+              autocomplete="off"
+              aria-autocomplete="list"
+              :aria-expanded="true"
+              :aria-controls="listboxId"
+              :aria-activedescendant="activeDescendantId"
+              :aria-label="searchAriaLabel"
+              :aria-labelledby="ariaLabelledby"
               :placeholder="searchPlaceholderText"
               class="select-search-input"
               @click.stop
@@ -59,14 +72,21 @@
           </div>
 
           <!-- Options list -->
-          <div class="select-options" ref="optionsListRef">
+          <div
+            :id="listboxId"
+            ref="optionsListRef"
+            class="select-options"
+            role="listbox"
+            :aria-labelledby="triggerId"
+          >
             <div
               v-for="(option, index) in filteredOptions"
               :key="`${typeof getOptionValue(option)}:${String(getOptionValue(option) ?? '')}`"
-              role="option"
-              :aria-selected="isSelected(option)"
-              :aria-disabled="isOptionDisabled(option)"
-              @click.stop="!isOptionDisabled(option) && selectOption(option)"
+              :id="getOptionId(index)"
+              :role="isGroupHeaderOption(option) ? 'presentation' : 'option'"
+              :aria-selected="isGroupHeaderOption(option) ? undefined : isSelected(option)"
+              :aria-disabled="!isGroupHeaderOption(option) && isOptionDisabled(option) ? true : undefined"
+              @click.stop="isOptionFocusable(option) && selectOption(option)"
               @mouseenter="handleOptionMouseEnter(option, index)"
               :class="[
                 'select-option',
@@ -109,11 +129,19 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
+import { useUiSkin } from '@/composables/useUiSkin'
 
 const { t } = useI18n()
+const uiSkin = useUiSkin()
 
 // Instance ID for unique click-outside detection
 const instanceId = `select-${Math.random().toString(36).substring(2, 9)}`
+const triggerId = `${instanceId}-trigger`
+const listboxId = `${instanceId}-listbox`
+const VIEWPORT_PADDING = 16
+const DROPDOWN_GAP = 4
+const MIN_DROPDOWN_WIDTH = 200
+const DEFAULT_DROPDOWN_HEIGHT = 240
 
 export interface SelectOption {
   value: string | number | boolean | null
@@ -130,6 +158,8 @@ interface Props {
   error?: boolean
   searchable?: boolean
   searchPlaceholder?: string
+  ariaLabel?: string
+  ariaLabelledby?: string
   emptyText?: string
   valueKey?: string
   labelKey?: string
@@ -164,28 +194,42 @@ const dropdownRef = ref<HTMLElement | null>(null)
 const optionsListRef = ref<HTMLElement | null>(null)
 const dropdownPosition = ref<'bottom' | 'top'>('bottom')
 const triggerRect = ref<DOMRect | null>(null)
+const dropdownGeometry = ref({
+  left: VIEWPORT_PADDING,
+  minWidth: MIN_DROPDOWN_WIDTH,
+  maxHeight: DEFAULT_DROPDOWN_HEIGHT,
+  offset: 0
+})
 
 // i18n placeholders
 const placeholderText = computed(() => props.placeholder ?? t('common.selectOption'))
 const searchPlaceholderText = computed(() => props.searchPlaceholder ?? t('common.searchPlaceholder'))
+const triggerAriaLabel = computed(() =>
+  props.ariaLabelledby ? undefined : (props.ariaLabel ?? placeholderText.value)
+)
+const searchAriaLabel = computed(() =>
+  props.ariaLabelledby ? undefined : (props.ariaLabel ?? searchPlaceholderText.value)
+)
 const emptyTextDisplay = computed(() => props.emptyText ?? t('common.noOptionsFound'))
 
 // Computed style for teleported dropdown
 const dropdownStyle = computed(() => {
   if (!triggerRect.value) return {}
 
-  const rect = triggerRect.value
+  const geometry = dropdownGeometry.value
   const style: Record<string, string> = {
     position: 'fixed',
-    left: `${rect.left}px`,
-    minWidth: `${rect.width}px`,
+    left: `${geometry.left}px`,
+    minWidth: `${geometry.minWidth}px`,
+    maxWidth: 'calc(100vw - 2rem)',
+    maxHeight: `${geometry.maxHeight}px`,
     zIndex: '100000020'
   }
 
   if (dropdownPosition.value === 'top') {
-    style.bottom = `${window.innerHeight - rect.top + 4}px`
+    style.bottom = `${geometry.offset}px`
   } else {
-    style.top = `${rect.bottom + 4}px`
+    style.top = `${geometry.offset}px`
   }
 
   return style
@@ -217,6 +261,10 @@ const isGroupHeaderOption = (option: any): boolean => {
     return option.kind === 'group'
   }
   return false
+}
+
+const isOptionFocusable = (option: any): boolean => {
+  return !isOptionDisabled(option) && !isGroupHeaderOption(option)
 }
 
 const selectedOption = computed(() => {
@@ -259,12 +307,20 @@ const isSelected = (option: any): boolean => {
   return getOptionValue(option) === props.modelValue
 }
 
+const getOptionId = (index: number): string => `${instanceId}-option-${index}`
+
+const activeDescendantId = computed(() => {
+  if (!isOpen.value || focusedIndex.value < 0) return undefined
+  const option = filteredOptions.value[focusedIndex.value]
+  return option && isOptionFocusable(option) ? getOptionId(focusedIndex.value) : undefined
+})
+
 const findNextEnabledIndex = (startIndex: number): number => {
   const opts = filteredOptions.value
   if (opts.length === 0) return -1
   for (let offset = 0; offset < opts.length; offset++) {
     const idx = (startIndex + offset) % opts.length
-    if (!isOptionDisabled(opts[idx])) return idx
+    if (isOptionFocusable(opts[idx])) return idx
   }
   return -1
 }
@@ -274,38 +330,75 @@ const findPrevEnabledIndex = (startIndex: number): number => {
   if (opts.length === 0) return -1
   for (let offset = 0; offset < opts.length; offset++) {
     const idx = (startIndex - offset + opts.length) % opts.length
-    if (!isOptionDisabled(opts[idx])) return idx
+    if (isOptionFocusable(opts[idx])) return idx
   }
   return -1
 }
 
 const handleOptionMouseEnter = (option: any, index: number) => {
-  if (isOptionDisabled(option) || isGroupHeaderOption(option)) return
+  if (!isOptionFocusable(option)) return
   focusedIndex.value = index
 }
 
-// Update trigger rect periodically while open to follow scroll/resize
-const updateTriggerRect = () => {
-  if (containerRef.value) {
-    triggerRect.value = containerRef.value.getBoundingClientRect()
+const resetFocusedIndex = () => {
+  if (filteredOptions.value.length === 0) {
+    focusedIndex.value = -1
+    return
   }
+
+  const selectedIndex = filteredOptions.value.findIndex(
+    (option) => isSelected(option) && isOptionFocusable(option)
+  )
+  focusedIndex.value = selectedIndex >= 0 ? selectedIndex : findNextEnabledIndex(0)
+}
+
+const clamp = (value: number, min: number, max: number): number => {
+  return Math.min(Math.max(value, min), Math.max(min, max))
+}
+
+const updateDropdownGeometry = (
+  rect: DOMRect,
+  measuredWidth: number,
+  measuredHeight: number
+) => {
+  const availableWidth = Math.max(0, window.innerWidth - VIEWPORT_PADDING * 2)
+  const minWidth = Math.min(Math.max(rect.width, MIN_DROPDOWN_WIDTH), availableWidth)
+  const dropdownWidth = Math.min(Math.max(measuredWidth, minWidth), availableWidth)
+  const maxLeft = window.innerWidth - VIEWPORT_PADDING - dropdownWidth
+  const left = clamp(rect.left, VIEWPORT_PADDING, maxLeft)
+  const spaceBelow = Math.max(
+    0,
+    window.innerHeight - rect.bottom - DROPDOWN_GAP - VIEWPORT_PADDING
+  )
+  const spaceAbove = Math.max(0, rect.top - DROPDOWN_GAP - VIEWPORT_PADDING)
+  const position = spaceBelow < measuredHeight && spaceAbove > spaceBelow ? 'top' : 'bottom'
+  const maxHeight = position === 'top' ? spaceAbove : spaceBelow
+  const offset = position === 'top'
+    ? window.innerHeight - rect.top + DROPDOWN_GAP
+    : rect.bottom + DROPDOWN_GAP
+
+  dropdownPosition.value = position
+  dropdownGeometry.value = { left, minWidth, maxHeight, offset }
 }
 
 const calculateDropdownPosition = () => {
   if (!containerRef.value) return
-  updateTriggerRect()
+  const rect = containerRef.value.getBoundingClientRect()
+  triggerRect.value = rect
+  const fallbackWidth = Math.max(rect.width, MIN_DROPDOWN_WIDTH)
+  const measuredWidth = dropdownRef.value?.offsetWidth || fallbackWidth
+  const measuredHeight = dropdownRef.value?.scrollHeight ||
+    dropdownRef.value?.offsetHeight ||
+    DEFAULT_DROPDOWN_HEIGHT
+  updateDropdownGeometry(rect, measuredWidth, measuredHeight)
 
   nextTick(() => {
     if (!dropdownRef.value || !triggerRect.value) return
-    const dropdownHeight = dropdownRef.value.offsetHeight || 240
-    const spaceBelow = window.innerHeight - triggerRect.value.bottom
-    const spaceAbove = triggerRect.value.top
-
-    if (spaceBelow < dropdownHeight && spaceAbove > dropdownHeight) {
-      dropdownPosition.value = 'top'
-    } else {
-      dropdownPosition.value = 'bottom'
-    }
+    const dropdownWidth = dropdownRef.value.offsetWidth || measuredWidth
+    const dropdownHeight = dropdownRef.value.scrollHeight ||
+      dropdownRef.value.offsetHeight ||
+      measuredHeight
+    updateDropdownGeometry(triggerRect.value, dropdownWidth, dropdownHeight)
   })
 }
 
@@ -317,47 +410,90 @@ const toggle = () => {
 watch(isOpen, (open) => {
   if (open) {
     calculateDropdownPosition()
-    // Reset focused index to current selection or first item
-    if (filteredOptions.value.length === 0) {
-      focusedIndex.value = -1
-    } else {
-      const selectedIdx = filteredOptions.value.findIndex(isSelected)
-      const initialIdx = selectedIdx >= 0 ? selectedIdx : 0
-      focusedIndex.value = isOptionDisabled(filteredOptions.value[initialIdx])
-        ? findNextEnabledIndex(initialIdx + 1)
-        : initialIdx
-    }
+    resetFocusedIndex()
 
     if (props.searchable) {
       nextTick(() => searchInputRef.value?.focus())
     }
-    // Add scroll listener to update position
-    window.addEventListener('scroll', updateTriggerRect, { capture: true, passive: true })
+    window.addEventListener('scroll', calculateDropdownPosition, { capture: true, passive: true })
     window.addEventListener('resize', calculateDropdownPosition)
   } else {
     searchQuery.value = ''
     focusedIndex.value = -1
-    window.removeEventListener('scroll', updateTriggerRect, { capture: true })
+    window.removeEventListener('scroll', calculateDropdownPosition, { capture: true })
     window.removeEventListener('resize', calculateDropdownPosition)
   }
 })
 
+watch(filteredOptions, () => {
+  if (isOpen.value) resetFocusedIndex()
+})
+
+const closeDropdown = (restoreFocus = false) => {
+  isOpen.value = false
+  if (restoreFocus) {
+    nextTick(() => triggerRef.value?.focus())
+  }
+}
+
 const selectOption = (option: any) => {
+  if (!isOptionFocusable(option)) return
   const value = getOptionValue(option) ?? null
   emit('update:modelValue', value)
   emit('change', value, option)
-  isOpen.value = false
-  triggerRef.value?.focus()
+  closeDropdown(true)
 }
 
 // Keyboards
-const onTriggerKeyDown = () => {
-  if (!isOpen.value) {
-    isOpen.value = true
+const onTriggerKeyDown = (event: KeyboardEvent) => {
+  switch (event.key) {
+    case 'ArrowDown':
+    case 'ArrowUp':
+      event.preventDefault()
+      if (!isOpen.value) {
+        isOpen.value = true
+        return
+      }
+      focusedIndex.value = event.key === 'ArrowDown'
+        ? findNextEnabledIndex(focusedIndex.value + 1)
+        : findPrevEnabledIndex(focusedIndex.value - 1)
+      if (focusedIndex.value >= 0) scrollToFocused()
+      break
+    case 'Home':
+    case 'End':
+      if (!isOpen.value) return
+      event.preventDefault()
+      focusedIndex.value = event.key === 'Home'
+        ? findNextEnabledIndex(0)
+        : findPrevEnabledIndex(filteredOptions.value.length - 1)
+      if (focusedIndex.value >= 0) scrollToFocused()
+      break
+    case 'Enter':
+    case ' ':
+      event.preventDefault()
+      if (!isOpen.value) {
+        isOpen.value = true
+        return
+      }
+      if (!props.searchable && focusedIndex.value >= 0) {
+        selectOption(filteredOptions.value[focusedIndex.value])
+      }
+      break
+    case 'Escape':
+      if (!isOpen.value) return
+      event.preventDefault()
+      event.stopPropagation()
+      closeDropdown(true)
+      break
+    case 'Tab':
+      if (isOpen.value) closeDropdown(false)
+      break
   }
 }
 
 const onDropdownKeyDown = (e: KeyboardEvent) => {
+  const preserveSearchInputEditing = props.searchable && e.target === searchInputRef.value
+
   switch (e.key) {
     case 'ArrowDown':
       e.preventDefault()
@@ -369,22 +505,91 @@ const onDropdownKeyDown = (e: KeyboardEvent) => {
       focusedIndex.value = findPrevEnabledIndex(focusedIndex.value - 1)
       if (focusedIndex.value >= 0) scrollToFocused()
       break
+    case 'Home':
+      if (preserveSearchInputEditing) return
+      e.preventDefault()
+      focusedIndex.value = findNextEnabledIndex(0)
+      if (focusedIndex.value >= 0) scrollToFocused()
+      break
+    case 'End':
+      if (preserveSearchInputEditing) return
+      e.preventDefault()
+      focusedIndex.value = findPrevEnabledIndex(filteredOptions.value.length - 1)
+      if (focusedIndex.value >= 0) scrollToFocused()
+      break
     case 'Enter':
       e.preventDefault()
       if (focusedIndex.value >= 0 && focusedIndex.value < filteredOptions.value.length) {
         const opt = filteredOptions.value[focusedIndex.value]
-        if (!isOptionDisabled(opt)) selectOption(opt)
+        if (isOptionFocusable(opt)) selectOption(opt)
       }
       break
     case 'Escape':
       e.preventDefault()
-      isOpen.value = false
-      triggerRef.value?.focus()
+      e.stopPropagation()
+      closeDropdown(true)
       break
-    case 'Tab':
-      isOpen.value = false
+    case 'Tab': {
+      if (triggerRef.value?.closest('[role="dialog"][aria-modal="true"]')) {
+        closeDropdown(false)
+        break
+      }
+
+      const focusTarget = getAdjacentTriggerFocusTarget(e.shiftKey)
+      if (focusTarget) {
+        e.preventDefault()
+        closeDropdown(false)
+        nextTick(() => {
+          if (focusTarget.isConnected && focusTarget.tabIndex >= 0) focusTarget.focus()
+        })
+      } else {
+        closeDropdown(false)
+      }
       break
+    }
   }
+}
+
+const focusableSelector = [
+  'a[href]',
+  'area[href]',
+  'button:not([disabled])',
+  'input:not([disabled]):not([type="hidden"])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  'iframe',
+  'object',
+  'embed',
+  '[contenteditable="true"]',
+  '[tabindex]:not([tabindex="-1"])'
+].join(',')
+
+const isAvailableFocusTarget = (element: HTMLElement): boolean => {
+  if (!element.isConnected || element.tabIndex < 0 || dropdownRef.value?.contains(element)) {
+    return false
+  }
+  if (element.matches(':disabled') || element.closest('[hidden], [inert], [aria-hidden="true"]')) {
+    return false
+  }
+
+  let current: HTMLElement | null = element
+  while (current) {
+    const style = window.getComputedStyle(current)
+    if (style.display === 'none' || style.visibility === 'hidden') return false
+    current = current.parentElement
+  }
+  return true
+}
+
+const getAdjacentTriggerFocusTarget = (backward: boolean): HTMLElement | null => {
+  const trigger = triggerRef.value
+  if (!trigger) return null
+  const focusableElements = Array.from(
+    document.querySelectorAll<HTMLElement>(focusableSelector)
+  ).filter(isAvailableFocusTarget)
+  const triggerIndex = focusableElements.indexOf(trigger)
+  if (triggerIndex < 0) return null
+  return focusableElements[triggerIndex + (backward ? -1 : 1)] ?? null
 }
 
 const scrollToFocused = () => {
@@ -403,13 +608,14 @@ const scrollToFocused = () => {
 }
 
 const handleClickOutside = (event: MouseEvent) => {
-  const target = event.target as HTMLElement
+  const target = event.target
+  if (!(target instanceof Element)) return
   // Check if click is inside THIS specific instance's dropdown or trigger
   const isInDropdown = !!target.closest(`.${instanceId}`)
   const isInTrigger = containerRef.value?.contains(target)
 
   if (!isInDropdown && !isInTrigger && isOpen.value) {
-    isOpen.value = false
+    closeDropdown(false)
   }
 }
 
@@ -419,7 +625,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
-  window.removeEventListener('scroll', updateTriggerRect, { capture: true })
+  window.removeEventListener('scroll', calculateDropdownPosition, { capture: true })
   window.removeEventListener('resize', calculateDropdownPosition)
 })
 </script>
@@ -460,7 +666,7 @@ onUnmounted(() => {
 
 <style>
 .select-dropdown-portal {
-  @apply w-max min-w-[200px];
+  @apply flex w-max flex-col;
   @apply bg-white dark:bg-dark-800;
   @apply rounded-xl;
   @apply border border-gray-200 dark:border-dark-700;
@@ -470,19 +676,19 @@ onUnmounted(() => {
 }
 
 .select-dropdown-portal .select-search {
-  @apply flex items-center gap-2 px-3 py-2;
+  @apply flex flex-shrink-0 items-center gap-2 px-3 py-2;
   @apply border-b border-gray-100 dark:border-dark-700;
 }
 
 .select-dropdown-portal .select-search-input {
-  @apply flex-1 bg-transparent text-sm;
+  @apply min-w-0 flex-1 bg-transparent text-sm;
   @apply text-gray-900 dark:text-gray-100;
   @apply placeholder:text-gray-400 dark:placeholder:text-dark-400;
   @apply focus:outline-none;
 }
 
 .select-dropdown-portal .select-options {
-  @apply max-h-60 overflow-y-auto py-1 outline-none;
+  @apply min-h-0 max-h-60 overflow-y-auto py-1 outline-none;
 }
 
 .select-dropdown-portal .select-option {
@@ -525,6 +731,64 @@ onUnmounted(() => {
 .select-dropdown-portal .select-empty {
   @apply px-4 py-8 text-center text-sm;
   @apply text-gray-500 dark:text-dark-400;
+}
+
+/* The portal is outside the page skin boundary, so its v2 appearance must travel with it. */
+.select-dropdown-portal[data-ui-skin='v2'] {
+  border-color: rgb(var(--ui-border));
+  border-radius: 0.875rem;
+  background-color: rgb(var(--ui-surface-elevated));
+  color: rgb(var(--ui-text));
+  box-shadow: var(--ui-shadow-elevated);
+}
+
+.select-dropdown-portal[data-ui-skin='v2'] .select-search {
+  border-color: rgb(var(--ui-border));
+}
+
+.select-dropdown-portal[data-ui-skin='v2'] .select-search-input {
+  color: rgb(var(--ui-text));
+}
+
+.select-dropdown-portal[data-ui-skin='v2'] .select-option {
+  min-height: 2.5rem;
+  color: rgb(var(--ui-text-muted));
+}
+
+.select-dropdown-portal[data-ui-skin='v2'] .select-option:hover,
+.select-dropdown-portal[data-ui-skin='v2'] .select-option-focused {
+  background-color: rgb(var(--ui-surface-hover));
+  color: rgb(var(--ui-text));
+}
+
+.select-dropdown-portal[data-ui-skin='v2'] .select-option-selected {
+  background-color: rgb(var(--ui-brand-soft));
+  color: rgb(var(--ui-brand));
+}
+
+.select-dropdown-portal[data-ui-skin='v2'] .select-option-group,
+.select-dropdown-portal[data-ui-skin='v2'] .select-option-group:hover {
+  background-color: rgb(var(--ui-surface-subtle));
+  color: rgb(var(--ui-text-subtle));
+}
+
+.select-dropdown-portal[data-ui-skin='v2'] .select-empty {
+  color: rgb(var(--ui-text-subtle));
+}
+
+@media (pointer: coarse), (any-pointer: coarse) {
+  .select-dropdown-portal .select-search {
+    min-height: 44px;
+    padding-block: 0;
+  }
+
+  .select-dropdown-portal .select-search-input {
+    min-height: 44px;
+  }
+
+  .select-dropdown-portal .select-option:not(.select-option-group) {
+    min-height: 44px;
+  }
 }
 
 .select-dropdown-enter-active,

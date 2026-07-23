@@ -25,3 +25,13 @@ func TestHTTPUpstreamProfileRejectsUnknownValue(t *testing.T) {
 		t.Fatalf("profile = %q, want default", profile)
 	}
 }
+
+func TestWithHTTPUpstreamRedirectsDisabled(t *testing.T) {
+	ctx := WithHTTPUpstreamRedirectsDisabled(nil)
+	if !HTTPUpstreamRedirectsDisabled(ctx) {
+		t.Fatal("redirects should be disabled")
+	}
+	if HTTPUpstreamRedirectsDisabled(context.Background()) {
+		t.Fatal("redirects should remain enabled by default")
+	}
+}

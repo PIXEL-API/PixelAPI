@@ -217,6 +217,13 @@ func (e *OpenAIWSClientCloseError) Reason() string {
 	return strings.TrimSpace(e.reason)
 }
 
+func openAIWSImageGenerationPermissionError(imageGenerationAllowed bool, requestedModel string, payload []byte) error {
+	if imageGenerationAllowed || !IsExplicitImageGenerationIntent(openAIResponsesEndpoint, requestedModel, payload) {
+		return nil
+	}
+	return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, ImageGenerationPermissionMessage(), nil)
+}
+
 // OpenAIWSIngressHooks 定义入站 WS 每个 turn 的生命周期回调。
 type OpenAIWSIngressHooks struct {
 	BeforeTurn func(turn int) error
@@ -2105,7 +2112,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			return nil, &agentIdentityTaskRecoveredError{}
 		}
 		if errors.As(err, &dialErr) && dialErr != nil && dialErr.StatusCode == http.StatusTooManyRequests {
-			s.persistOpenAIWSRateLimitSignal(ctx, account, dialErr.ResponseHeaders, nil, "rate_limit_exceeded", "rate_limit_error", strings.TrimSpace(err.Error()))
+			s.persistOpenAIWSRateLimitSignal(ctx, account, originalModel, dialErr.ResponseHeaders, nil, "rate_limit_exceeded", "rate_limit_error", strings.TrimSpace(err.Error()))
 		}
 		return nil, wrapOpenAIWSFallback(classifyOpenAIWSAcquireError(err), err)
 	}
@@ -2183,6 +2190,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		lease,
 		decision,
 		payload,
+		originalModel,
 		previousResponseID,
 		needsToolContinuation,
 		account,
@@ -2336,6 +2344,25 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				}
 			}
 		}
+		if readErr == nil && !json.Valid(message) {
+			eventType, _, _ := parseOpenAIWSEventEnvelope(message)
+			if eventType == "" {
+				eventType = "unknown"
+			}
+			lease.MarkBroken()
+			logOpenAIWSModeInfo(
+				"invalid_event_json account_id=%d conn_id=%s event_type=%s bytes=%d wrote_downstream=%v",
+				account.ID,
+				truncateOpenAIWSLogValue(connID, openAIWSIDValueMaxLen),
+				truncateOpenAIWSLogValue(eventType, openAIWSLogValueMaxLen),
+				len(message),
+				wroteDownstream,
+			)
+			if !wroteDownstream {
+				return nil, wrapOpenAIWSFallback("invalid_event_json", errors.New("upstream websocket returned malformed Responses event JSON"))
+			}
+			return nil, errors.New("upstream websocket returned malformed Responses event JSON after downstream output")
+		}
 		if readErr != nil {
 			lease.MarkBroken()
 			closeStatus, closeReason := summarizeOpenAIWSReadCloseError(readErr)
@@ -2363,6 +2390,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			}
 			setOpsUpstreamError(c, 0, sanitizeUpstreamErrorMessage(readErr.Error()), "")
 			return nil, fmt.Errorf("openai ws read event: %w", readErr)
+		}
+		if normalized, changed := normalizeCompletedImageGenerationStatus(message); changed {
+			message = normalized
 		}
 
 		eventType, eventResponseID, responseField := parseOpenAIWSEventEnvelope(message)
@@ -2422,7 +2452,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 
 		if eventType == "error" {
 			errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(message)
-			s.persistOpenAIWSRateLimitSignal(ctx, account, lease.HandshakeHeaders(), message, errCodeRaw, errTypeRaw, errMsgRaw)
+			s.persistOpenAIWSRateLimitSignal(ctx, account, originalModel, lease.HandshakeHeaders(), message, errCodeRaw, errTypeRaw, errMsgRaw)
 			errMsg := strings.TrimSpace(errMsgRaw)
 			if errMsg == "" {
 				errMsg = "Upstream websocket error"
@@ -2493,7 +2523,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			if failedMsg == "" {
 				failedMsg = "OpenAI model capacity temporarily unavailable"
 			}
-			if s.handleOpenAIModelCapacitySignal(ctx, account, http.StatusServiceUnavailable, lease.HandshakeHeaders(), message, failedMsg) {
+			if s.handleOpenAIWSModelCapacitySignal(ctx, account, originalModel, http.StatusServiceUnavailable, lease.HandshakeHeaders(), message, failedMsg) {
 				lease.MarkBroken()
 				if !wroteDownstream {
 					return nil, wrapOpenAIWSFallback("upstream_capacity", errors.New(failedMsg))
@@ -2892,9 +2922,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				logOpenAIWSModeInfo("ingress_ws_codex_spark_image_tool_stripped account_id=%d", account.ID)
 			}
 		}
-		imageIntent := IsImageGenerationIntent(openAIResponsesEndpoint, originalModel, normalized)
-		if imageIntent && !imageGenerationAllowed {
-			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, ImageGenerationPermissionMessage(), nil)
+		// Passive Codex image_gen declarations are capability catalogs, not a
+		// request to generate an image. Only explicit intent may hit the group
+		// permission gate.
+		if permissionErr := openAIWSImageGenerationPermissionError(imageGenerationAllowed, originalModel, normalized); permissionErr != nil {
+			return openAIWSClientPayload{}, permissionErr
 		}
 
 		// Apply OpenAI Fast Policy on the response.create frame using the same
@@ -3129,7 +3161,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			)
 			var dialErr *openAIWSDialError
 			if errors.As(acquireErr, &dialErr) && dialErr != nil && dialErr.StatusCode == http.StatusTooManyRequests {
-				s.persistOpenAIWSRateLimitSignal(ctx, account, dialErr.ResponseHeaders, nil, "rate_limit_exceeded", "rate_limit_error", strings.TrimSpace(acquireErr.Error()))
+				s.persistOpenAIWSRateLimitSignal(ctx, account, "", dialErr.ResponseHeaders, nil, "rate_limit_exceeded", "rate_limit_error", strings.TrimSpace(acquireErr.Error()))
 			}
 			if errors.Is(acquireErr, errOpenAIWSPreferredConnUnavailable) {
 				return nil, NewOpenAIWSClientCloseError(
@@ -3264,6 +3296,17 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					wroteDownstream,
 				)
 			}
+			if !json.Valid(upstreamMessage) {
+				lease.MarkBroken()
+				return nil, wrapOpenAIWSIngressTurnError(
+					"invalid_event_json",
+					errors.New("upstream websocket returned invalid JSON"),
+					wroteDownstream,
+				)
+			}
+			if normalized, changed := normalizeCompletedImageGenerationStatus(upstreamMessage); changed {
+				upstreamMessage = normalized
+			}
 
 			eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(upstreamMessage)
 			if responseID == "" && eventResponseID != "" {
@@ -3279,7 +3322,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			if eventType == "error" {
 				errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(upstreamMessage)
-				s.persistOpenAIWSRateLimitSignal(ctx, account, lease.HandshakeHeaders(), upstreamMessage, errCodeRaw, errTypeRaw, errMsgRaw)
+				s.persistOpenAIWSRateLimitSignal(ctx, account, originalModel, lease.HandshakeHeaders(), upstreamMessage, errCodeRaw, errTypeRaw, errMsgRaw)
 				fallbackReason, _ := classifyOpenAIWSErrorEventFromRaw(errCodeRaw, errTypeRaw, errMsgRaw)
 				errCode, errType, errMessage := summarizeOpenAIWSErrorEventFieldsFromRaw(errCodeRaw, errTypeRaw, errMsgRaw)
 				recoverablePrevNotFound := fallbackReason == openAIWSIngressStagePreviousResponseNotFound &&
@@ -3343,7 +3386,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				if failedMsg == "" {
 					failedMsg = "OpenAI model capacity temporarily unavailable"
 				}
-				if s.handleOpenAIModelCapacitySignal(ctx, account, http.StatusServiceUnavailable, lease.HandshakeHeaders(), upstreamMessage, failedMsg) {
+				if s.handleOpenAIWSModelCapacitySignal(ctx, account, originalModel, http.StatusServiceUnavailable, lease.HandshakeHeaders(), upstreamMessage, failedMsg) {
 					lease.MarkBroken()
 					if !wroteDownstream {
 						return nil, NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, failedMsg, errors.New(failedMsg))
@@ -4076,6 +4119,7 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 	lease *openAIWSConnLease,
 	decision OpenAIWSProtocolDecision,
 	payload map[string]any,
+	requestedModel string,
 	previousResponseID string,
 	needsToolContinuation bool,
 	account *Account,
@@ -4182,7 +4226,7 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 
 		if eventType == "error" {
 			errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(message)
-			s.persistOpenAIWSRateLimitSignal(ctx, account, lease.HandshakeHeaders(), message, errCodeRaw, errTypeRaw, errMsgRaw)
+			s.persistOpenAIWSRateLimitSignal(ctx, account, requestedModel, lease.HandshakeHeaders(), message, errCodeRaw, errTypeRaw, errMsgRaw)
 			errMsg := strings.TrimSpace(errMsgRaw)
 			if errMsg == "" {
 				errMsg = "OpenAI websocket prewarm error"
@@ -4212,7 +4256,7 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 			if failedMsg == "" {
 				failedMsg = "OpenAI websocket prewarm failed"
 			}
-			if s.handleOpenAIModelCapacitySignal(ctx, account, http.StatusServiceUnavailable, lease.HandshakeHeaders(), message, failedMsg) {
+			if s.handleOpenAIWSModelCapacitySignal(ctx, account, requestedModel, http.StatusServiceUnavailable, lease.HandshakeHeaders(), message, failedMsg) {
 				lease.MarkBroken()
 				logOpenAIWSModeInfo(
 					"prewarm_capacity_event account_id=%d conn_id=%s idx=%d message=%s",
@@ -4492,15 +4536,40 @@ func isOpenAIWSRateLimitError(codeRaw, errTypeRaw, msgRaw string) bool {
 	return false
 }
 
-func (s *OpenAIGatewayService) persistOpenAIWSRateLimitSignal(ctx context.Context, account *Account, headers http.Header, responseBody []byte, codeRaw, errTypeRaw, msgRaw string) {
-	if s == nil || s.rateLimitService == nil || account == nil || account.Platform != PlatformOpenAI {
+func (s *OpenAIGatewayService) handleOpenAIWSModelCapacitySignal(ctx context.Context, account *Account, requestedModel string, statusCode int, headers http.Header, responseBody []byte, message string) bool {
+	if s == nil || account == nil || account.Platform != PlatformOpenAI {
+		return false
+	}
+	if statusCode <= 0 {
+		statusCode = http.StatusServiceUnavailable
+	}
+	if !isOpenAITransientCapacityError(statusCode, message, responseBody) {
+		return false
+	}
+	cooldownBody := responseBody
+	if len(cooldownBody) == 0 {
+		cooldownBody = []byte(message)
+	}
+	s.handleOpenAIAccountUpstreamErrorForModel(ctx, account, requestedModel, statusCode, headers, cooldownBody)
+	return true
+}
+
+func (s *OpenAIGatewayService) persistOpenAIWSRateLimitSignal(ctx context.Context, account *Account, requestedModel string, headers http.Header, responseBody []byte, codeRaw, errTypeRaw, msgRaw string) {
+	if s == nil || account == nil || account.Platform != PlatformOpenAI {
 		return
 	}
-	if isOpenAITransientCapacityError(http.StatusServiceUnavailable, strings.TrimSpace(msgRaw+" "+codeRaw+" "+errTypeRaw), responseBody) {
-		s.rateLimitService.HandleUpstreamError(ctx, account, http.StatusServiceUnavailable, headers, responseBody)
+	if s.handleOpenAIWSModelCapacitySignal(
+		ctx,
+		account,
+		requestedModel,
+		http.StatusServiceUnavailable,
+		headers,
+		responseBody,
+		strings.TrimSpace(msgRaw+" "+codeRaw+" "+errTypeRaw),
+	) {
 		return
 	}
-	if !isOpenAIWSRateLimitError(codeRaw, errTypeRaw, msgRaw) {
+	if s.rateLimitService == nil || !isOpenAIWSRateLimitError(codeRaw, errTypeRaw, msgRaw) {
 		return
 	}
 	s.rateLimitService.HandleUpstreamError(ctx, account, http.StatusTooManyRequests, headers, responseBody)

@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"sync/atomic"
@@ -48,6 +49,9 @@ func (s *HTTPUpstreamSuite) TestDefaultResponseHeaderTimeout() {
 	transport, ok := entry.client.Transport.(*http.Transport)
 	require.True(s.T(), ok, "expected *http.Transport")
 	require.Zero(s.T(), transport.ResponseHeaderTimeout, "ResponseHeaderTimeout mismatch")
+	require.NotNil(s.T(), transport.DialContext, "cold TCP dial must be bounded")
+	require.Equal(s.T(), defaultUpstreamTLSHandshakeTimeout, transport.TLSHandshakeTimeout, "TLS handshake timeout mismatch")
+	require.Equal(s.T(), defaultUpstreamExpectContinueTimeout, transport.ExpectContinueTimeout, "Expect-Continue timeout mismatch")
 }
 
 func (s *HTTPUpstreamSuite) TestNilConfigResponseHeaderTimeoutFallback() {
@@ -177,6 +181,37 @@ func (s *HTTPUpstreamSuite) TestDo_EmptyProxy_UsesDirect() {
 	require.Equal(s.T(), "direct-empty", string(b))
 }
 
+func (s *HTTPUpstreamSuite) TestDo_EOFWithoutCloseReleasesCapacityForEviction() {
+	upstream := newLocalTestServer(s.T(), http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	}))
+	s.T().Cleanup(upstream.Close)
+
+	s.cfg.Gateway = config.GatewayConfig{
+		ConnectionPoolIsolation: config.ConnectionPoolIsolationAccount,
+		MaxUpstreamClients:      1,
+	}
+	svc := s.newService()
+
+	firstReq, err := http.NewRequest(http.MethodGet, upstream.URL, nil)
+	require.NoError(s.T(), err)
+	firstResp, err := svc.Do(firstReq, "", 1, 1)
+	require.NoError(s.T(), err)
+	_, err = io.ReadAll(firstResp.Body)
+	require.NoError(s.T(), err)
+	require.Len(s.T(), svc.clients, 1)
+	for _, entry := range svc.clients {
+		require.Zero(s.T(), atomic.LoadInt64(&entry.inFlight), "读取到 EOF 后应释放客户端占用")
+	}
+
+	secondReq, err := http.NewRequest(http.MethodGet, upstream.URL, nil)
+	require.NoError(s.T(), err)
+	secondResp, err := svc.Do(secondReq, "", 2, 1)
+	require.NoError(s.T(), err, "已完成的首个请求不应阻止缓存淘汰")
+	require.NoError(s.T(), secondResp.Body.Close())
+	require.Len(s.T(), svc.clients, 1, "缓存应保持在配置上限内")
+}
+
 // TestAccountIsolation_DifferentAccounts 测试账户隔离模式
 // 验证不同账户使用独立的连接池
 func (s *HTTPUpstreamSuite) TestAccountIsolation_DifferentAccounts() {
@@ -284,6 +319,63 @@ func (s *HTTPUpstreamSuite) TestIdleTTLDoesNotEvictActive() {
 	_, _ = svc.getOrCreateClient("", 2, 1)
 
 	require.True(s.T(), hasEntry(svc, entry1), "有活跃请求时不应回收")
+}
+
+func (s *HTTPUpstreamSuite) TestTrackedBodyReleasesOnEOFWithoutClose() {
+	var released atomic.Int64
+	body := wrapTrackedBody(io.NopCloser(&singleReadEOFReader{data: []byte("ok")}), func() {
+		released.Add(1)
+	})
+
+	data, err := io.ReadAll(body)
+	require.NoError(s.T(), err)
+	require.Equal(s.T(), "ok", string(data))
+	require.EqualValues(s.T(), 1, released.Load(), "EOF 应立即释放 inFlight")
+
+	require.NoError(s.T(), body.Close())
+	require.EqualValues(s.T(), 1, released.Load(), "Close 不应重复释放 inFlight")
+}
+
+func (s *HTTPUpstreamSuite) TestTrackedBodyReleasesOnTerminalReadError() {
+	var released atomic.Int64
+	body := wrapTrackedBody(io.NopCloser(errorReader{}), func() {
+		released.Add(1)
+	})
+
+	_, err := body.Read(make([]byte, 1))
+	require.ErrorIs(s.T(), err, errTrackedBodyTest)
+	require.EqualValues(s.T(), 1, released.Load(), "终态读取错误应释放 inFlight")
+}
+
+func (s *HTTPUpstreamSuite) TestWrapTrackedNilBodyReleasesImmediately() {
+	var released atomic.Int64
+	body := wrapTrackedBody(nil, func() {
+		released.Add(1)
+	})
+
+	require.Nil(s.T(), body)
+	require.EqualValues(s.T(), 1, released.Load(), "空响应体不应泄漏 inFlight")
+}
+
+type singleReadEOFReader struct {
+	data []byte
+}
+
+func (r *singleReadEOFReader) Read(p []byte) (int, error) {
+	if len(r.data) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, r.data)
+	r.data = r.data[n:]
+	return n, io.EOF
+}
+
+var errTrackedBodyTest = errors.New("tracked body test error")
+
+type errorReader struct{}
+
+func (errorReader) Read([]byte) (int, error) {
+	return 0, errTrackedBodyTest
 }
 
 // TestHTTPUpstreamSuite 运行测试套件

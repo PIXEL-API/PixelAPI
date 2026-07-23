@@ -236,9 +236,11 @@ import { extractApiErrorMessage, extractI18nErrorMessage } from '@/utils/apiErro
 const props = withDefaults(defineProps<{
   rateLimitWindowDays?: number
   rateLimitMax?: number
+  rateLimitExemptAmount?: number
 }>(), {
   rateLimitWindowDays: 1,
   rateLimitMax: 0,
+  rateLimitExemptAmount: 500,
 })
 
 const { t } = useI18n()
@@ -260,7 +262,9 @@ const actionLoading = ref(false)
 const balance = computed(() => Number(authStore.user?.balance || 0))
 const rateLimitDescription = computed(() => {
   if (props.rateLimitMax <= 0) return ''
-  return `每 ${props.rateLimitWindowDays} 天最多提交 ${props.rateLimitMax} 次提现申请。`
+  const base = `每 ${props.rateLimitWindowDays} 天最多提交 ${props.rateLimitMax} 次提现申请。`
+  if (props.rateLimitExemptAmount <= 0) return base
+  return `${base} 单笔超过 ¥${props.rateLimitExemptAmount.toFixed(2)} 时不受次数限制。`
 })
 const currentReceiptCode = computed(() => receiptCodes.value[selectedMethod.value] ?? null)
 const previewUrl = computed(() => draftPreviewUrl.value || currentReceiptCode.value?.url?.trim() || '')

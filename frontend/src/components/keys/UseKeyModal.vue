@@ -24,22 +24,34 @@
       <!-- Platform-specific content -->
       <template v-else>
         <!-- Description -->
-        <p class="text-sm text-gray-600 dark:text-gray-400">
+        <p class="text-sm text-content-muted">
           {{ platformDescription }}
         </p>
 
         <!-- Client Tabs -->
-        <div v-if="clientTabs.length" class="border-b border-gray-200 dark:border-dark-700">
-          <nav class="-mb-px flex space-x-6" aria-label="Client">
+        <div v-if="clientTabs.length" class="scrollbar-hide overflow-x-auto border-b border-line">
+          <nav
+            class="-mb-px flex min-w-max gap-2"
+            role="tablist"
+            :aria-label="t('keys.useKeyModal.clientTabsLabel')"
+            aria-orientation="horizontal"
+          >
             <button
-              v-for="tab in clientTabs"
+              v-for="(tab, index) in clientTabs"
               :key="tab.id"
+              type="button"
+              role="tab"
+              :id="clientTabId(tab.id)"
+              :aria-controls="clientTabPanelId"
+              :aria-selected="activeClientTab === tab.id"
+              :tabindex="activeClientTab === tab.id ? 0 : -1"
               @click="activeClientTab = tab.id"
+              @keydown="handleClientTabKeydown($event, index)"
               :class="[
-                'whitespace-nowrap py-2.5 px-1 border-b-2 font-medium text-sm transition-colors',
+                'min-h-11 whitespace-nowrap border-b-2 px-3 py-2.5 text-sm font-semibold transition-colors',
                 activeClientTab === tab.id
-                  ? 'border-primary-500 text-primary-600 dark:text-primary-400'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
+                  ? 'border-brand text-brand'
+                  : 'border-transparent text-content-subtle hover:border-line-strong hover:text-content'
               ]"
             >
               <span class="flex items-center gap-2">
@@ -50,123 +62,157 @@
           </nav>
         </div>
 
-        <!-- Codex Authentication Mode -->
         <div
-          v-if="showCodexAuthMode"
-          class="rounded-lg border border-gray-200 p-3 dark:border-dark-700"
+          :id="clientTabPanelId"
+          role="tabpanel"
+          :aria-labelledby="clientTabId(activeClientTab)"
+          class="space-y-4"
         >
-          <div class="mb-2">
-            <p class="text-sm font-medium text-gray-900 dark:text-white">
-              {{ t('keys.useKeyModal.openai.authModeTitle') }}
-            </p>
-            <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-              {{ t('keys.useKeyModal.openai.authModeDescription') }}
-            </p>
-          </div>
+          <!-- Codex Authentication Mode -->
           <div
-            class="grid grid-cols-2 gap-1 rounded-lg bg-gray-100 p-1 dark:bg-dark-700"
-            role="radiogroup"
-            :aria-label="t('keys.useKeyModal.openai.authModeTitle')"
+            v-if="showCodexAuthMode"
+            class="rounded-control border border-line bg-surface-subtle p-3"
           >
-            <button
-              type="button"
-              role="radio"
-              data-testid="codex-auth-mode-legacy"
-              :aria-checked="codexAuthMode === 'legacy'"
-              :class="[
-                'rounded-md px-3 py-2 text-sm font-medium transition-colors',
-                codexAuthMode === 'legacy'
-                  ? 'bg-white text-primary-700 shadow-sm dark:bg-dark-800 dark:text-primary-300'
-                  : 'text-gray-600 hover:text-gray-900 dark:text-dark-300 dark:hover:text-white'
-              ]"
-              @click="codexAuthMode = 'legacy'"
+            <div class="mb-2">
+              <p class="text-sm font-medium text-content">
+                {{ t('keys.useKeyModal.openai.authModeTitle') }}
+              </p>
+              <p :id="codexAuthModeDescriptionId" class="mt-0.5 text-xs text-content-subtle">
+                {{ t('keys.useKeyModal.openai.authModeDescription') }}
+              </p>
+            </div>
+            <div
+              class="grid grid-cols-1 gap-1 rounded-control bg-surface-hover p-1 sm:grid-cols-2"
+              role="radiogroup"
+              :aria-label="t('keys.useKeyModal.openai.authModeTitle')"
+              :aria-describedby="codexAuthModeDescriptionId"
             >
-              {{ t('keys.useKeyModal.openai.authModeLegacy') }}
-            </button>
-            <button
-              type="button"
-              role="radio"
-              data-testid="codex-auth-mode-api-key"
-              :aria-checked="codexAuthMode === 'api-key'"
-              :class="[
-                'rounded-md px-3 py-2 text-sm font-medium transition-colors',
-                codexAuthMode === 'api-key'
-                  ? 'bg-white text-primary-700 shadow-sm dark:bg-dark-800 dark:text-primary-300'
-                  : 'text-gray-600 hover:text-gray-900 dark:text-dark-300 dark:hover:text-white'
-              ]"
-              @click="codexAuthMode = 'api-key'"
-            >
-              {{ t('keys.useKeyModal.openai.authModeApiKey') }}
-            </button>
-          </div>
-        </div>
-
-        <!-- OS/Shell Tabs -->
-        <div v-if="showShellTabs" class="border-b border-gray-200 dark:border-dark-700">
-          <nav class="-mb-px flex space-x-4" aria-label="Tabs">
-            <button
-              v-for="tab in currentTabs"
-              :key="tab.id"
-              @click="activeTab = tab.id"
-              :class="[
-                'whitespace-nowrap py-2.5 px-1 border-b-2 font-medium text-sm transition-colors',
-                activeTab === tab.id
-                  ? 'border-primary-500 text-primary-600 dark:text-primary-400'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
-              ]"
-            >
-              <span class="flex items-center gap-2">
-                <component :is="tab.icon" class="w-4 h-4" />
-                {{ tab.label }}
-              </span>
-            </button>
-          </nav>
-        </div>
-
-        <!-- Code Blocks (Stacked for multi-file platforms) -->
-        <div class="space-y-4">
-          <div
-            v-for="(file, index) in currentFiles"
-            :key="index"
-            class="relative"
-          >
-            <!-- File Hint (if exists) -->
-            <p v-if="file.hint" class="text-xs text-amber-600 dark:text-amber-400 mb-1.5 flex items-center gap-1">
-              <Icon name="exclamationCircle" size="sm" class="flex-shrink-0" />
-              {{ file.hint }}
-            </p>
-            <div class="bg-gray-900 dark:bg-dark-900 rounded-xl overflow-hidden">
-              <!-- Code Header -->
-              <div class="flex items-center justify-between px-4 py-2 bg-gray-800 dark:bg-dark-800 border-b border-gray-700 dark:border-dark-700">
-                <span class="text-xs text-gray-400 font-mono">{{ file.path }}</span>
-                <button
-                  @click="copyContent(file.content, index)"
-                  class="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-lg transition-colors"
-                  :class="copiedIndex === index
-                    ? 'bg-green-500/20 text-green-400'
-                    : 'bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white'"
-                >
-                  <svg v-if="copiedIndex === index" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
-                  </svg>
-                  <svg v-else class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184" />
-                  </svg>
-                  {{ copiedIndex === index ? t('keys.useKeyModal.copied') : t('keys.useKeyModal.copy') }}
-                </button>
-              </div>
-              <!-- Code Content -->
-              <pre class="p-4 text-sm font-mono text-gray-100 overflow-x-auto"><code v-if="file.highlighted" v-html="file.highlighted"></code><code v-else v-text="file.content"></code></pre>
+              <button
+                type="button"
+                role="radio"
+                data-testid="codex-auth-mode-legacy"
+                :aria-checked="codexAuthMode === 'legacy'"
+                :tabindex="codexAuthMode === 'legacy' ? 0 : -1"
+                :class="[
+                  'min-h-11 rounded-lg px-3 py-2 text-sm font-semibold transition-colors',
+                  codexAuthMode === 'legacy'
+                    ? 'bg-surface text-brand shadow-sm ring-1 ring-line'
+                    : 'text-content-muted hover:text-content'
+                ]"
+                @click="codexAuthMode = 'legacy'"
+                @keydown="handleCodexAuthModeKeydown($event, 0)"
+              >
+                {{ t('keys.useKeyModal.openai.authModeLegacy') }}
+              </button>
+              <button
+                type="button"
+                role="radio"
+                data-testid="codex-auth-mode-api-key"
+                :aria-checked="codexAuthMode === 'api-key'"
+                :tabindex="codexAuthMode === 'api-key' ? 0 : -1"
+                :class="[
+                  'min-h-11 rounded-lg px-3 py-2 text-sm font-semibold transition-colors',
+                  codexAuthMode === 'api-key'
+                    ? 'bg-surface text-brand shadow-sm ring-1 ring-line'
+                    : 'text-content-muted hover:text-content'
+                ]"
+                @click="codexAuthMode = 'api-key'"
+                @keydown="handleCodexAuthModeKeydown($event, 1)"
+              >
+                {{ t('keys.useKeyModal.openai.authModeApiKey') }}
+              </button>
             </div>
           </div>
-        </div>
 
-        <!-- Usage Note -->
-        <div v-if="showPlatformNote" class="flex items-start gap-3 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800">
-          <Icon name="infoCircle" size="md" class="text-blue-500 flex-shrink-0 mt-0.5" />
-          <p class="text-sm text-blue-700 dark:text-blue-300">
-            {{ platformNote }}
-          </p>
+          <!-- OS/Shell Tabs -->
+          <div v-if="showShellTabs" class="scrollbar-hide overflow-x-auto border-b border-line">
+            <nav
+              class="-mb-px flex min-w-max gap-2"
+              role="tablist"
+              :aria-label="t('keys.useKeyModal.shellTabsLabel')"
+              aria-orientation="horizontal"
+            >
+              <button
+                v-for="(tab, index) in currentTabs"
+                :key="tab.id"
+                type="button"
+                role="tab"
+                :id="shellTabId(tab.id)"
+                :aria-controls="shellTabPanelId"
+                :aria-selected="activeTab === tab.id"
+                :tabindex="activeTab === tab.id ? 0 : -1"
+                @click="activeTab = tab.id"
+                @keydown="handleShellTabKeydown($event, index)"
+                :class="[
+                  'min-h-11 whitespace-nowrap border-b-2 px-3 py-2.5 text-sm font-semibold transition-colors',
+                  activeTab === tab.id
+                    ? 'border-brand text-brand'
+                    : 'border-transparent text-content-subtle hover:border-line-strong hover:text-content'
+                ]"
+              >
+                <span class="flex items-center gap-2">
+                  <component :is="tab.icon" class="w-4 h-4" />
+                  {{ tab.label }}
+                </span>
+              </button>
+            </nav>
+          </div>
+
+          <div
+            :id="showShellTabs ? shellTabPanelId : undefined"
+            :role="showShellTabs ? 'tabpanel' : undefined"
+            :aria-labelledby="showShellTabs ? shellTabId(activeTab) : undefined"
+            class="space-y-4"
+          >
+
+            <!-- Code Blocks (Stacked for multi-file platforms) -->
+            <div class="space-y-4">
+              <div
+                v-for="(file, index) in currentFiles"
+                :key="index"
+                class="relative"
+              >
+                <!-- File Hint (if exists) -->
+                <p v-if="file.hint" class="text-xs text-amber-600 dark:text-amber-400 mb-1.5 flex items-center gap-1">
+                  <Icon name="exclamationCircle" size="sm" class="flex-shrink-0" />
+                  {{ file.hint }}
+                </p>
+                <div class="bg-gray-900 dark:bg-dark-900 rounded-xl overflow-hidden">
+                  <!-- Code Header -->
+                  <div class="flex items-center justify-between px-4 py-2 bg-gray-800 dark:bg-dark-800 border-b border-gray-700 dark:border-dark-700">
+                    <span class="text-xs text-gray-400 font-mono">{{ file.path }}</span>
+                    <button
+                      type="button"
+                      data-testid="copy-code-block"
+                      @click="copyContent(file.content, index)"
+                      class="flex min-h-11 items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors"
+                      :class="copiedIndex === index
+                        ? 'bg-green-500/20 text-green-400'
+                        : 'bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white'"
+                    >
+                      <svg v-if="copiedIndex === index" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                      <svg v-else class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184" />
+                      </svg>
+                      {{ copiedIndex === index ? t('keys.useKeyModal.copied') : t('keys.useKeyModal.copy') }}
+                    </button>
+                  </div>
+                  <!-- Code Content -->
+                  <pre class="p-4 text-sm font-mono text-gray-100 overflow-x-auto"><code v-if="file.highlighted" v-html="file.highlighted"></code><code v-else v-text="file.content"></code></pre>
+                </div>
+              </div>
+            </div>
+
+            <!-- Usage Note -->
+            <div v-if="showPlatformNote" class="flex items-start gap-3 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800">
+              <Icon name="infoCircle" size="md" class="text-blue-500 flex-shrink-0 mt-0.5" />
+              <p class="text-sm text-blue-700 dark:text-blue-300">
+                {{ platformNote }}
+              </p>
+            </div>
+          </div>
         </div>
       </template>
     </div>
@@ -174,6 +220,7 @@
     <template #footer>
       <div class="flex justify-end">
         <button
+          type="button"
           @click="emit('close')"
           class="btn btn-secondary"
         >
@@ -184,8 +231,12 @@
   </BaseDialog>
 </template>
 
+<script lang="ts">
+let useKeyModalInstanceCounter = 0
+</script>
+
 <script setup lang="ts">
-import { ref, computed, h, watch, type Component } from 'vue'
+import { ref, computed, h, nextTick, onBeforeUnmount, watch, type Component } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -228,6 +279,86 @@ const activeTab = ref<string>('unix')
 const activeClientTab = ref<string>('claude')
 type CodexAuthMode = 'legacy' | 'api-key'
 const codexAuthMode = ref<CodexAuthMode>('legacy')
+const codexAuthModes = ['legacy', 'api-key'] as const satisfies readonly CodexAuthMode[]
+
+const componentId = `use-key-modal-${++useKeyModalInstanceCounter}`
+const clientTabPanelId = `${componentId}-client-panel`
+const shellTabPanelId = `${componentId}-shell-panel`
+const codexAuthModeDescriptionId = `${componentId}-auth-mode-description`
+const clientTabId = (tabId: string) => `${componentId}-client-tab-${tabId}`
+const shellTabId = (tabId: string) => `${componentId}-shell-tab-${tabId}`
+
+let copiedResetTimer: number | undefined
+let copyRequestSequence = 0
+
+function clearCopiedResetTimer(): void {
+  if (copiedResetTimer === undefined) return
+  window.clearTimeout(copiedResetTimer)
+  copiedResetTimer = undefined
+}
+
+function resetCopiedFeedback(): void {
+  copyRequestSequence += 1
+  clearCopiedResetTimer()
+  copiedIndex.value = null
+}
+
+function resolveRovingIndex(
+  event: KeyboardEvent,
+  currentIndex: number,
+  itemCount: number,
+  includeVerticalArrows = false
+): number | null {
+  if (itemCount === 0) return null
+
+  if (event.key === 'Home') return 0
+  if (event.key === 'End') return itemCount - 1
+  if (event.key === 'ArrowRight' || (includeVerticalArrows && event.key === 'ArrowDown')) {
+    return (currentIndex + 1) % itemCount
+  }
+  if (event.key === 'ArrowLeft' || (includeVerticalArrows && event.key === 'ArrowUp')) {
+    return (currentIndex - 1 + itemCount) % itemCount
+  }
+  return null
+}
+
+function focusRovingItem(
+  event: KeyboardEvent,
+  nextIndex: number,
+  selector: '[role="tab"]' | '[role="radio"]'
+): void {
+  const group = (event.currentTarget as HTMLElement | null)?.parentElement
+  void nextTick(() => {
+    group?.querySelectorAll<HTMLElement>(selector)[nextIndex]?.focus()
+  })
+}
+
+function handleClientTabKeydown(event: KeyboardEvent, currentIndex: number): void {
+  const nextIndex = resolveRovingIndex(event, currentIndex, clientTabs.value.length)
+  if (nextIndex === null) return
+
+  event.preventDefault()
+  activeClientTab.value = clientTabs.value[nextIndex].id
+  focusRovingItem(event, nextIndex, '[role="tab"]')
+}
+
+function handleShellTabKeydown(event: KeyboardEvent, currentIndex: number): void {
+  const nextIndex = resolveRovingIndex(event, currentIndex, currentTabs.value.length)
+  if (nextIndex === null) return
+
+  event.preventDefault()
+  activeTab.value = currentTabs.value[nextIndex].id
+  focusRovingItem(event, nextIndex, '[role="tab"]')
+}
+
+function handleCodexAuthModeKeydown(event: KeyboardEvent, currentIndex: number): void {
+  const nextIndex = resolveRovingIndex(event, currentIndex, codexAuthModes.length, true)
+  if (nextIndex === null) return
+
+  event.preventDefault()
+  codexAuthMode.value = codexAuthModes[nextIndex]
+  focusRovingItem(event, nextIndex, '[role="radio"]')
+}
 
 // Reset tabs when platform changes
 const defaultClientTab = computed(() => {
@@ -251,9 +382,17 @@ watch(() => props.platform, () => {
   codexAuthMode.value = 'legacy'
 }, { immediate: true })
 
+watch(() => props.allowMessagesDispatch, (allowMessagesDispatch) => {
+  if (!allowMessagesDispatch && activeClientTab.value === 'claude') {
+    activeClientTab.value = defaultClientTab.value
+  }
+})
+
 watch(() => props.show, (show) => {
   if (show) {
     codexAuthMode.value = 'legacy'
+  } else {
+    resetCopiedFeedback()
   }
 })
 
@@ -261,6 +400,8 @@ watch(() => props.show, (show) => {
 watch(activeClientTab, () => {
   activeTab.value = 'unix'
 })
+
+onBeforeUnmount(resetCopiedFeedback)
 
 // Icon components
 const AppleIcon = {
@@ -514,6 +655,10 @@ const currentFiles = computed((): FileConfig[] => {
       return generateAnthropicFiles(baseUrl, apiKey)
   }
 })
+
+// Copy feedback belongs to the exact generated content, not to a reused list index.
+// Invalidating on the computed file list also covers auth mode, endpoint and key changes.
+watch(currentFiles, resetCopiedFeedback)
 
 function generateAnthropicFiles(baseUrl: string, apiKey: string): FileConfig[] {
   let path: string
@@ -1143,12 +1288,20 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
 }
 
 const copyContent = async (content: string, index: number) => {
+  const requestSequence = ++copyRequestSequence
   const success = await clipboardCopy(content, t('keys.copied'))
-  if (success) {
-    copiedIndex.value = index
-    setTimeout(() => {
+  if (!success || requestSequence !== copyRequestSequence) return
+
+  clearCopiedResetTimer()
+  copiedIndex.value = index
+  const timer = window.setTimeout(() => {
+    if (copiedResetTimer === timer) {
+      copiedResetTimer = undefined
+    }
+    if (copiedIndex.value === index) {
       copiedIndex.value = null
-    }, 2000)
-  }
+    }
+  }, 2000)
+  copiedResetTimer = timer
 }
 </script>

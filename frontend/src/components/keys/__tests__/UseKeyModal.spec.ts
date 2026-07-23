@@ -1,6 +1,8 @@
-import { describe, expect, it, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
+
+const clipboardCopy = vi.hoisted(() => vi.fn())
 
 vi.mock('vue-i18n', () => ({
   useI18n: () => ({
@@ -10,19 +12,30 @@ vi.mock('vue-i18n', () => ({
 
 vi.mock('@/composables/useClipboard', () => ({
   useClipboard: () => ({
-    copyToClipboard: vi.fn().mockResolvedValue(true)
+    copyToClipboard: clipboardCopy
   })
 }))
 
 import UseKeyModal from '../UseKeyModal.vue'
 
-function mountUseKeyModal() {
+function mountUseKeyModal(
+  attachTo?: HTMLElement,
+  props: Partial<{
+    show: boolean
+    apiKey: string
+    baseUrl: string
+    platform: 'openai' | 'grok'
+    allowMessagesDispatch: boolean
+  }> = {}
+) {
   return mount(UseKeyModal, {
+    ...(attachTo ? { attachTo } : {}),
     props: {
       show: true,
       apiKey: 'sk-test',
       baseUrl: 'https://example.com/v1',
-      platform: 'openai'
+      platform: 'openai',
+      ...props
     },
     global: {
       stubs: {
@@ -38,6 +51,183 @@ function mountUseKeyModal() {
 }
 
 describe('UseKeyModal', () => {
+  beforeEach(() => {
+    clipboardCopy.mockReset()
+    clipboardCopy.mockResolvedValue(true)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    document.body.replaceChildren()
+  })
+
+  it('provides automatic roving focus and complete ARIA relationships for both tablists', async () => {
+    const wrapper = mountUseKeyModal(document.body)
+    const tablists = wrapper.findAll('[role="tablist"]')
+    expect(tablists).toHaveLength(2)
+    expect(tablists[0].attributes('aria-label')).toBe('keys.useKeyModal.clientTabsLabel')
+    expect(tablists[1].attributes('aria-label')).toBe('keys.useKeyModal.shellTabsLabel')
+
+    const clientTabs = tablists[0].findAll('[role="tab"]')
+    expect(clientTabs[0].attributes('aria-selected')).toBe('true')
+    expect(clientTabs[0].attributes('tabindex')).toBe('0')
+    expect(clientTabs[1].attributes('tabindex')).toBe('-1')
+
+    const clientPanel = wrapper.get(`#${clientTabs[0].attributes('aria-controls')}`)
+    expect(clientPanel.attributes('role')).toBe('tabpanel')
+    expect(clientPanel.attributes('aria-labelledby')).toBe(clientTabs[0].attributes('id'))
+
+    clientTabs[0].element.focus()
+    await clientTabs[0].trigger('keydown', { key: 'ArrowRight' })
+    await nextTick()
+
+    expect(clientTabs[1].attributes('aria-selected')).toBe('true')
+    expect(clientTabs[1].attributes('tabindex')).toBe('0')
+    expect(clientTabs[0].attributes('tabindex')).toBe('-1')
+    expect(document.activeElement).toBe(clientTabs[1].element)
+
+    await clientTabs[1].trigger('keydown', { key: 'End' })
+    await nextTick()
+    const lastClientTab = clientTabs[clientTabs.length - 1]
+    expect(lastClientTab.attributes('aria-selected')).toBe('true')
+
+    await lastClientTab.trigger('keydown', { key: 'Home' })
+    await nextTick()
+    expect(clientTabs[0].attributes('aria-selected')).toBe('true')
+
+    const shellTablist = wrapper.findAll('[role="tablist"]')[1]
+    const shellTabs = shellTablist.findAll('[role="tab"]')
+    const shellPanel = wrapper.get(`#${shellTabs[0].attributes('aria-controls')}`)
+    expect(shellPanel.attributes('role')).toBe('tabpanel')
+    expect(shellPanel.attributes('aria-labelledby')).toBe(shellTabs[0].attributes('id'))
+
+    shellTabs[0].element.focus()
+    await shellTabs[0].trigger('keydown', { key: 'ArrowLeft' })
+    await nextTick()
+    const lastShellTab = shellTabs[shellTabs.length - 1]
+    expect(lastShellTab.attributes('aria-selected')).toBe('true')
+    expect(document.activeElement).toBe(lastShellTab.element)
+
+    wrapper.unmount()
+  })
+
+  it('uses roving tabindex and arrow, Home, and End keys for Codex authentication mode', async () => {
+    const wrapper = mountUseKeyModal(document.body)
+    const radios = wrapper.findAll('[role="radio"]')
+    expect(radios).toHaveLength(2)
+    expect(radios[0].attributes('aria-checked')).toBe('true')
+    expect(radios[0].attributes('tabindex')).toBe('0')
+    expect(radios[1].attributes('tabindex')).toBe('-1')
+
+    const radiogroup = wrapper.get('[role="radiogroup"]')
+    expect(radiogroup.attributes('aria-describedby')).toBeTruthy()
+    expect(wrapper.get(`#${radiogroup.attributes('aria-describedby')}`).exists()).toBe(true)
+
+    radios[0].element.focus()
+    await radios[0].trigger('keydown', { key: 'ArrowRight' })
+    await nextTick()
+    expect(radios[1].attributes('aria-checked')).toBe('true')
+    expect(radios[1].attributes('tabindex')).toBe('0')
+    expect(document.activeElement).toBe(radios[1].element)
+
+    await radios[1].trigger('keydown', { key: 'Home' })
+    await nextTick()
+    expect(radios[0].attributes('aria-checked')).toBe('true')
+
+    await radios[0].trigger('keydown', { key: 'End' })
+    await nextTick()
+    expect(radios[1].attributes('aria-checked')).toBe('true')
+
+    wrapper.unmount()
+  })
+
+  it('does not let an older copy timer clear feedback for a newer code block', async () => {
+    vi.useFakeTimers()
+    const wrapper = mountUseKeyModal()
+    const copyButtons = wrapper.findAll('[data-testid="copy-code-block"]')
+    expect(copyButtons.length).toBeGreaterThanOrEqual(2)
+
+    await copyButtons[0].trigger('click')
+    await flushPromises()
+    expect(copyButtons[0].text()).toContain('keys.useKeyModal.copied')
+
+    vi.advanceTimersByTime(1000)
+    await copyButtons[1].trigger('click')
+    await flushPromises()
+    expect(copyButtons[1].text()).toContain('keys.useKeyModal.copied')
+
+    vi.advanceTimersByTime(1000)
+    await nextTick()
+    expect(copyButtons[1].text()).toContain('keys.useKeyModal.copied')
+
+    vi.advanceTimersByTime(1000)
+    await nextTick()
+    expect(copyButtons[1].text()).toContain('keys.useKeyModal.copy')
+    expect(copyButtons[1].text()).not.toContain('keys.useKeyModal.copied')
+
+    wrapper.unmount()
+  })
+
+  it('clears copied feedback and its timer when generated content changes', async () => {
+    vi.useFakeTimers()
+    const wrapper = mountUseKeyModal()
+    const copyButton = wrapper.get('[data-testid="copy-code-block"]')
+
+    await copyButton.trigger('click')
+    await flushPromises()
+    expect(copyButton.text()).toContain('keys.useKeyModal.copied')
+    expect(vi.getTimerCount()).toBe(1)
+
+    await wrapper.get('[data-testid="codex-auth-mode-api-key"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('pre code').text()).toContain('requires_openai_auth = false')
+    expect(copyButton.text()).toContain('keys.useKeyModal.copy')
+    expect(copyButton.text()).not.toContain('keys.useKeyModal.copied')
+    expect(vi.getTimerCount()).toBe(0)
+
+    wrapper.unmount()
+  })
+
+  it('ignores a deferred copy result after generated content changes', async () => {
+    vi.useFakeTimers()
+    let resolveCopy: (success: boolean) => void = () => undefined
+    clipboardCopy.mockImplementationOnce(() => new Promise<boolean>((resolve) => {
+      resolveCopy = resolve
+    }))
+
+    const wrapper = mountUseKeyModal()
+    const copyButton = wrapper.get('[data-testid="copy-code-block"]')
+    const legacyContent = wrapper.find('pre code').text()
+
+    await copyButton.trigger('click')
+    expect(clipboardCopy).toHaveBeenCalledWith(legacyContent, 'keys.copied')
+
+    await wrapper.get('[data-testid="codex-auth-mode-api-key"]').trigger('click')
+    await nextTick()
+    resolveCopy(true)
+    await flushPromises()
+
+    expect(wrapper.find('pre code').text()).toContain('requires_openai_auth = false')
+    expect(copyButton.text()).toContain('keys.useKeyModal.copy')
+    expect(copyButton.text()).not.toContain('keys.useKeyModal.copied')
+    expect(vi.getTimerCount()).toBe(0)
+
+    wrapper.unmount()
+  })
+
+  it('clears pending copy feedback timers when unmounted', async () => {
+    vi.useFakeTimers()
+    const wrapper = mountUseKeyModal()
+
+    await wrapper.get('[data-testid="copy-code-block"]').trigger('click')
+    await flushPromises()
+    expect(vi.getTimerCount()).toBe(1)
+
+    wrapper.unmount()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('keeps legacy Codex authentication as the default', () => {
     const wrapper = mountUseKeyModal()
 
@@ -115,6 +305,27 @@ describe('UseKeyModal', () => {
 
     expect(wrapper.get('[data-testid="codex-auth-mode-legacy"]').attributes('aria-checked')).toBe('true')
     expect(wrapper.find('pre code').text()).toContain('requires_openai_auth = true')
+  })
+
+  it('falls back to the default client tab when Claude dispatch permission is revoked', async () => {
+    const wrapper = mountUseKeyModal(undefined, { allowMessagesDispatch: true })
+    const clientTablist = wrapper.get('[role="tablist"]')
+    const claudeTab = clientTablist.findAll('[role="tab"]')
+      .find((tab) => tab.text().includes('keys.useKeyModal.cliTabs.claudeCode'))
+
+    expect(claudeTab).toBeDefined()
+    await claudeTab!.trigger('click')
+    await wrapper.setProps({ allowMessagesDispatch: false })
+    await nextTick()
+
+    const clientTabs = clientTablist.findAll('[role="tab"]')
+    const selectedTab = clientTabs.find((tab) => tab.attributes('aria-selected') === 'true')
+    const clientPanel = wrapper.get(`#${clientTabs[0].attributes('aria-controls')}`)
+
+    expect(clientTabs.some((tab) => tab.attributes('id') === claudeTab!.attributes('id'))).toBe(false)
+    expect(selectedTab?.attributes('id')).toBe(clientTabs[0].attributes('id'))
+    expect(clientPanel.attributes('aria-labelledby')).toBe(selectedTab?.attributes('id'))
+    expect(clientPanel.attributes('aria-labelledby')).not.toBe(claudeTab!.attributes('id'))
   })
 
   it('renders Grok Build and OpenCode setup for Grok groups', async () => {

@@ -145,6 +145,7 @@ export async function importAccount(accountData: CreateAccountRequest): Promise<
 export interface ImportCredentialContentsRequest {
   contents: string[]
   platform?: Account['platform']
+  openai_auth_mode?: 'agent_identity'
   account_level?: Account['account_level']
   proxy_id?: number
   share_mode?: 'private' | 'public'
@@ -166,6 +167,7 @@ export interface ImportCredentialError {
 export interface ImportCredentialContentsResponse {
   total: number
   created: number
+  updated?: number
   failed: number
   errors: ImportCredentialError[]
 }

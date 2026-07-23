@@ -7,9 +7,11 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	htmlpkg "html"
 	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -208,10 +210,60 @@ func (s *FrontendServer) injectSettings(settingsJSON []byte) []byte {
 	headClose := []byte("</head>")
 	result := bytes.Replace(s.baseHTML, headClose, append(script, headClose...), 1)
 
-	// Replace <title> with custom site name so the browser tab shows it immediately
+	// 在浏览器首次绘制前应用品牌名称和图标，避免静态默认品牌闪烁。
 	result = injectSiteTitle(result, settingsJSON)
+	result = injectSiteFavicon(result, settingsJSON)
 
 	return result
+}
+
+func injectSiteFavicon(html, settingsJSON []byte) []byte {
+	var cfg struct {
+		SiteLogo string `json:"site_logo"`
+	}
+	if err := json.Unmarshal(settingsJSON, &cfg); err != nil {
+		return html
+	}
+
+	logoURL := safeBrandImageURL(cfg.SiteLogo)
+	if logoURL == "" {
+		return html
+	}
+	linkStart := bytes.Index(html, []byte(`<link rel="icon"`))
+	if linkStart == -1 {
+		return html
+	}
+	linkEndOffset := bytes.IndexByte(html[linkStart:], '>')
+	if linkEndOffset == -1 {
+		return html
+	}
+	linkEnd := linkStart + linkEndOffset + 1
+	replacement := []byte(`<link rel="icon" href="` + htmlpkg.EscapeString(logoURL) + `" />`)
+
+	var buf bytes.Buffer
+	buf.Write(html[:linkStart])
+	buf.Write(replacement)
+	buf.Write(html[linkEnd:])
+	return buf.Bytes()
+}
+
+func safeBrandImageURL(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	if strings.HasPrefix(trimmed, "/") && !strings.HasPrefix(trimmed, "//") {
+		return trimmed
+	}
+	if strings.HasPrefix(strings.ToLower(trimmed), "data:image/") {
+		return trimmed
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.User != nil || parsed.Host == "" ||
+		(parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return ""
+	}
+	return trimmed
 }
 
 // injectSiteTitle replaces the static <title> in HTML with the configured site name.
@@ -231,7 +283,7 @@ func injectSiteTitle(html, settingsJSON []byte) []byte {
 		return html
 	}
 
-	newTitle := []byte("<title>" + cfg.SiteName + " - AI API Gateway</title>")
+	newTitle := []byte("<title>" + htmlpkg.EscapeString(cfg.SiteName) + " - AI API Gateway</title>")
 	var buf bytes.Buffer
 	buf.Write(html[:titleStart])
 	buf.Write(newTitle)

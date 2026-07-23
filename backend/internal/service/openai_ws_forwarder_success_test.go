@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -72,6 +73,12 @@ func TestOpenAIGatewayService_Forward_WSv2_SuccessAndBindSticky(t *testing.T) {
 			"response": map[string]any{
 				"id":    "resp_new_1",
 				"model": "gpt-5.1",
+				"output": []map[string]any{{
+					"id":     "ig_ws_1",
+					"type":   "image_generation_call",
+					"status": "generating",
+					"result": "final-image",
+				}},
 				"usage": map[string]any{
 					"input_tokens":  12,
 					"output_tokens": 7,
@@ -171,6 +178,7 @@ func TestOpenAIGatewayService_Forward_WSv2_SuccessAndBindSticky(t *testing.T) {
 
 	responseBody := rec.Body.Bytes()
 	require.Equal(t, "resp_new_1", gjson.GetBytes(responseBody, "id").String())
+	require.Equal(t, "completed", gjson.GetBytes(responseBody, "output.0.status").String())
 }
 
 func requestToJSONString(payload map[string]any) string {
@@ -864,7 +872,7 @@ func TestOpenAIGatewayService_Forward_WSv2_GeneratePrewarm(t *testing.T) {
 	require.False(t, gjson.Get(secondWrite, "generate").Exists())
 }
 
-func TestOpenAIGatewayService_GeneratePrewarmResponseFailedCapacityTempUnscheds(t *testing.T) {
+func TestOpenAIGatewayService_GeneratePrewarmResponseFailedCapacityUsesModelScopedCooldown(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Gateway.OpenAIWS.PrewarmGenerateEnabled = true
 	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 3
@@ -885,39 +893,45 @@ func TestOpenAIGatewayService_GeneratePrewarmResponseFailedCapacityTempUnscheds(
 		Schedulable: true,
 		Extra:       map[string]any{"pool_mode": true},
 	}
-	conn := newOpenAIWSConn("prewarm_capacity_conn", account.ID, &openAIWSCaptureConn{
-		events: [][]byte{
-			[]byte(`{"type":"response.failed","error":{"code":"model_capacity_exhausted","message":"Selected model is at capacity. Please try a different model."}}`),
-		},
-	}, nil)
-	lease := &openAIWSConnLease{
-		accountID: account.ID,
-		conn:      conn,
+	newLease := func(connID string) *openAIWSConnLease {
+		conn := newOpenAIWSConn(connID, account.ID, &openAIWSCaptureConn{
+			events: [][]byte{
+				[]byte(`{"type":"response.failed","error":{"code":"model_capacity_exhausted","message":"Selected model is at capacity. Please try a different model."}}`),
+			},
+		}, nil)
+		return &openAIWSConnLease{
+			accountID: account.ID,
+			conn:      conn,
+		}
 	}
 	payload := map[string]any{
 		"type":  "response.create",
 		"model": "gpt-5.1",
 	}
 
-	start := time.Now()
-	err := svc.performOpenAIWSGeneratePrewarm(
-		context.Background(),
-		lease,
-		OpenAIWSProtocolDecision{Transport: OpenAIUpstreamTransportResponsesWebsocketV2},
-		payload,
-		"",
-		false,
-		account,
-		nil,
-		0,
-	)
+	for i := range 2 {
+		lease := newLease(fmt.Sprintf("prewarm_capacity_conn_%d", i))
+		err := svc.performOpenAIWSGeneratePrewarm(
+			context.Background(),
+			lease,
+			OpenAIWSProtocolDecision{Transport: OpenAIUpstreamTransportResponsesWebsocketV2},
+			payload,
+			"gpt-5.1",
+			"",
+			false,
+			account,
+			nil,
+			0,
+		)
 
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "prewarm_upstream_capacity")
-	require.False(t, lease.IsPrewarmed())
-	require.Len(t, repo.tempCalls, 1)
-	require.WithinDuration(t, start.Add(openAIModelCapacityCooldown), repo.tempCalls[0], 5*time.Second)
-	require.Contains(t, repo.tempReasons[0], "openai_model_capacity")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "prewarm_upstream_capacity")
+		require.False(t, lease.IsPrewarmed())
+	}
+
+	require.Empty(t, repo.tempCalls, "API Key 瞬态容量错误不得冷却整个账号")
+	require.True(t, svc.isOpenAIAccountModelRuntimeBlocked(account, "gpt-5.1"))
+	require.False(t, svc.isOpenAIAccountModelRuntimeBlocked(account, "gpt-5.2"))
 }
 
 func TestOpenAIGatewayService_PrewarmReadHonorsParentContext(t *testing.T) {
@@ -958,6 +972,7 @@ func TestOpenAIGatewayService_PrewarmReadHonorsParentContext(t *testing.T) {
 		lease,
 		OpenAIWSProtocolDecision{Transport: OpenAIUpstreamTransportResponsesWebsocketV2},
 		payload,
+		"gpt-5.1",
 		"",
 		false,
 		account,

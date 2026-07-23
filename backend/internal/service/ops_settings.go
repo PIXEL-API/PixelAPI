@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -359,8 +360,8 @@ func (s *OpsService) UpdateOpsAlertRuntimeSettings(ctx context.Context, cfg *Ops
 func defaultOpsAdvancedSettings() *OpsAdvancedSettings {
 	return &OpsAdvancedSettings{
 		DataRetention: OpsDataRetentionSettings{
-			CleanupEnabled:             false,
-			CleanupSchedule:            "0 2 * * *",
+			CleanupEnabled:             true,
+			CleanupSchedule:            "0 4 * * *",
 			ErrorLogRetentionDays:      30,
 			MinuteMetricsRetentionDays: 30,
 			HourlyMetricsRetentionDays: 30,
@@ -385,9 +386,9 @@ func normalizeOpsAdvancedSettings(cfg *OpsAdvancedSettings) {
 	}
 	cfg.DataRetention.CleanupSchedule = strings.TrimSpace(cfg.DataRetention.CleanupSchedule)
 	if cfg.DataRetention.CleanupSchedule == "" {
-		cfg.DataRetention.CleanupSchedule = "0 2 * * *"
+		cfg.DataRetention.CleanupSchedule = "0 4 * * *"
 	}
-	// 保留天数：0 表示每次定时清理全部（清空所有），> 0 表示按天数保留；
+	// 保留天数：0 表示禁用对应目标，> 0 表示按自然日保留；
 	// 仅在拿到非法的负数时回填默认值，避免覆盖用户主动设的 0。
 	if cfg.DataRetention.ErrorLogRetentionDays < 0 {
 		cfg.DataRetention.ErrorLogRetentionDays = 30
@@ -408,18 +409,35 @@ func validateOpsAdvancedSettings(cfg *OpsAdvancedSettings) error {
 	if cfg == nil {
 		return errors.New("invalid config")
 	}
-	// 保留天数：0 表示每次清理全部，1-365 表示按天数保留。
-	if cfg.DataRetention.ErrorLogRetentionDays < 0 || cfg.DataRetention.ErrorLogRetentionDays > 365 {
-		return errors.New("error_log_retention_days must be between 0 and 365")
-	}
-	if cfg.DataRetention.MinuteMetricsRetentionDays < 0 || cfg.DataRetention.MinuteMetricsRetentionDays > 365 {
-		return errors.New("minute_metrics_retention_days must be between 0 and 365")
-	}
-	if cfg.DataRetention.HourlyMetricsRetentionDays < 0 || cfg.DataRetention.HourlyMetricsRetentionDays > 365 {
-		return errors.New("hourly_metrics_retention_days must be between 0 and 365")
+	if err := validateOpsDataRetentionSettings(cfg.DataRetention); err != nil {
+		return err
 	}
 	if cfg.AutoRefreshIntervalSec < 15 || cfg.AutoRefreshIntervalSec > 300 {
 		return errors.New("auto_refresh_interval_seconds must be between 15 and 300")
+	}
+	return nil
+}
+
+func validateOpsDataRetentionSettings(cfg OpsDataRetentionSettings) error {
+	// 保留天数：0 表示禁用对应目标，1-365 表示按自然日保留。
+	if cfg.ErrorLogRetentionDays < 0 || cfg.ErrorLogRetentionDays > 365 {
+		return errors.New("error_log_retention_days must be between 0 and 365")
+	}
+	if cfg.MinuteMetricsRetentionDays < 0 || cfg.MinuteMetricsRetentionDays > 365 {
+		return errors.New("minute_metrics_retention_days must be between 0 and 365")
+	}
+	if cfg.HourlyMetricsRetentionDays < 0 || cfg.HourlyMetricsRetentionDays > 365 {
+		return errors.New("hourly_metrics_retention_days must be between 0 and 365")
+	}
+	if !cfg.CleanupEnabled {
+		return nil
+	}
+	schedule := strings.TrimSpace(cfg.CleanupSchedule)
+	if schedule == "" {
+		return errors.New("cleanup_schedule is required when cleanup is enabled")
+	}
+	if _, err := opsCleanupCronParser.Parse(schedule); err != nil {
+		return fmt.Errorf("invalid cleanup_schedule: %w", err)
 	}
 	return nil
 }
@@ -446,7 +464,7 @@ func (s *OpsService) GetOpsAdvancedSettings(ctx context.Context) (*OpsAdvancedSe
 
 	cfg := defaultOpsAdvancedSettings()
 	if err := json.Unmarshal([]byte(raw), cfg); err != nil {
-		return defaultCfg, nil
+		return nil, fmt.Errorf("decode ops advanced settings: %w", err)
 	}
 
 	normalizeOpsAdvancedSettings(cfg)
@@ -475,6 +493,14 @@ func (s *OpsService) UpdateOpsAdvancedSettings(ctx context.Context, cfg *OpsAdva
 	}
 	if err := s.settingRepo.Set(ctx, SettingKeyOpsAdvancedSettings, string(raw)); err != nil {
 		return nil, err
+	}
+	if s.cleanupSettingsApplier != nil {
+		reconcileCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := s.cleanupSettingsApplier.ReconcileDataRetentionSettings(reconcileCtx)
+		cancel()
+		if err != nil {
+			return nil, fmt.Errorf("apply ops cleanup settings: %w", err)
+		}
 	}
 
 	updated := &OpsAdvancedSettings{}

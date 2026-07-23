@@ -45,7 +45,7 @@ SELECT EXISTS (
 	if pendingExists {
 		return nil, service.ErrWithdrawalPendingExists
 	}
-	if input.RateLimit.MaxRequests > 0 {
+	if input.RateLimit.MaxRequests > 0 && !input.RateLimit.ExemptsAmount(input.Amount) {
 		if err := service.ValidateWithdrawalRateLimitConfig(input.RateLimit); err != nil {
 			return nil, err
 		}
@@ -54,9 +54,11 @@ SELECT EXISTS (
 SELECT COUNT(*)
 FROM user_withdrawal_requests
 WHERE user_id = $1
-	AND created_at >= NOW() - ($2::integer * INTERVAL '1 day')`,
+	AND created_at >= NOW() - ($2::integer * INTERVAL '1 day')
+	AND ($3::numeric = 0 OR amount <= $3::numeric)`,
 			input.UserID,
 			input.RateLimit.WindowDays,
+			input.RateLimit.ExemptAmount,
 		).Scan(&recentRequestCount); err != nil {
 			return nil, err
 		}

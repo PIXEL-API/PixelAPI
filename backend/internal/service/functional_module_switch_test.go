@@ -24,7 +24,7 @@ func TestSettingServiceWithdrawalRateLimitDefaults(t *testing.T) {
 	config, err := svc.GetWithdrawalRateLimitConfig(context.Background())
 
 	require.NoError(t, err)
-	require.Equal(t, WithdrawalRateLimitConfig{WindowDays: 1, MaxRequests: 0}, config)
+	require.Equal(t, WithdrawalRateLimitConfig{WindowDays: 1, MaxRequests: 0, ExemptAmount: 500}, config)
 }
 
 func TestSettingServiceWithdrawalRateLimitRejectsInvalidStoredValue(t *testing.T) {
@@ -57,9 +57,10 @@ func TestWithdrawalServiceSubmitPassesConfiguredRateLimit(t *testing.T) {
 		submitResult: &WithdrawalRequest{UserID: 1},
 	}
 	settingSvc := newModuleSwitchSettingService(map[string]string{
-		SettingKeyWithdrawalManagementEnabled:   "true",
-		SettingKeyWithdrawalRateLimitWindowDays: "7",
-		SettingKeyWithdrawalRateLimitMax:        "3",
+		SettingKeyWithdrawalManagementEnabled:     "true",
+		SettingKeyWithdrawalRateLimitWindowDays:   "7",
+		SettingKeyWithdrawalRateLimitMax:          "3",
+		SettingKeyWithdrawalRateLimitExemptAmount: "500.00",
 	})
 	svc := NewWithdrawalService(repo, nil, nil, nil, nil, settingSvc)
 
@@ -71,7 +72,30 @@ func TestWithdrawalServiceSubmitPassesConfiguredRateLimit(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, repo.submitInput)
-	require.Equal(t, WithdrawalRateLimitConfig{WindowDays: 7, MaxRequests: 3}, repo.submitInput.RateLimit)
+	require.Equal(t, WithdrawalRateLimitConfig{WindowDays: 7, MaxRequests: 3, ExemptAmount: 500}, repo.submitInput.RateLimit)
+}
+
+func TestWithdrawalRateLimitExemptsOnlyAmountsStrictlyAboveThreshold(t *testing.T) {
+	config := WithdrawalRateLimitConfig{WindowDays: 7, MaxRequests: 3, ExemptAmount: 500}
+
+	require.False(t, config.ExemptsAmount(499.99))
+	require.False(t, config.ExemptsAmount(500))
+	require.True(t, config.ExemptsAmount(500.01))
+
+	config.ExemptAmount = 0
+	require.False(t, config.ExemptsAmount(1000))
+}
+
+func TestSettingServiceWithdrawalRateLimitRejectsInvalidExemptAmount(t *testing.T) {
+	svc := newModuleSwitchSettingService(map[string]string{
+		SettingKeyWithdrawalRateLimitWindowDays:   "7",
+		SettingKeyWithdrawalRateLimitMax:          "3",
+		SettingKeyWithdrawalRateLimitExemptAmount: "500.001",
+	})
+
+	_, err := svc.GetWithdrawalRateLimitConfig(context.Background())
+
+	require.Equal(t, "WITHDRAWAL_RATE_LIMIT_CONFIG_INVALID", infraerrors.Reason(err))
 }
 
 func TestWithdrawalServiceListMineExposesOnlyUserSafeRejectionReason(t *testing.T) {

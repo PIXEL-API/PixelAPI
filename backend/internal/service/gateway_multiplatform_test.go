@@ -2465,8 +2465,8 @@ func TestGatewayService_SelectAccountWithLoadAwareness(t *testing.T) {
 
 		repo := &mockAccountRepoForPlatform{
 			accounts: []Account{
-				{ID: 1, Platform: PlatformAnthropic, Priority: 1, Status: StatusActive, Schedulable: true, Concurrency: 5},
-				{ID: 2, Platform: PlatformAnthropic, Priority: 2, Status: StatusActive, Schedulable: true, Concurrency: 5},
+				{ID: 1, Platform: PlatformAnthropic, Type: AccountTypeAPIKey, Priority: 1, Status: StatusActive, Schedulable: true, Concurrency: 5, GroupIDs: []int64{groupID}, Credentials: map[string]any{"api_key": "full-secret"}},
+				{ID: 2, Platform: PlatformAnthropic, Type: AccountTypeAPIKey, Priority: 2, Status: StatusActive, Schedulable: true, Concurrency: 5, GroupIDs: []int64{groupID}, Credentials: map[string]any{"api_key": "backup-secret"}},
 			},
 			accountsByID: map[int64]*Account{},
 		}
@@ -2501,6 +2501,13 @@ func TestGatewayService_SelectAccountWithLoadAwareness(t *testing.T) {
 			acquireResults: map[int64]bool{1: false},
 			waitCounts:     map[int64]int{1: 0},
 		}
+		snapshotCache := &snapshotHydrationCache{
+			snapshot: []*Account{
+				{ID: 1, Platform: PlatformAnthropic, Type: AccountTypeAPIKey, Priority: 1, Status: StatusActive, Schedulable: true, Concurrency: 5, GroupIDs: []int64{groupID}},
+				{ID: 2, Platform: PlatformAnthropic, Type: AccountTypeAPIKey, Priority: 2, Status: StatusActive, Schedulable: true, Concurrency: 5, GroupIDs: []int64{groupID}},
+			},
+			accounts: repo.accountsByID,
+		}
 
 		svc := &GatewayService{
 			accountRepo:        repo,
@@ -2508,6 +2515,7 @@ func TestGatewayService_SelectAccountWithLoadAwareness(t *testing.T) {
 			cache:              cache,
 			cfg:                cfg,
 			concurrencyService: NewConcurrencyService(concurrencyCache),
+			schedulerSnapshot:  NewSchedulerSnapshotService(snapshotCache, nil, repo, groupRepo, nil),
 		}
 
 		result, err := svc.SelectAccountWithLoadAwareness(ctx, &groupID, sessionHash, "claude-3-5-sonnet-20241022", nil, "", int64(0))
@@ -2515,6 +2523,7 @@ func TestGatewayService_SelectAccountWithLoadAwareness(t *testing.T) {
 		require.NotNil(t, result)
 		require.NotNil(t, result.WaitPlan)
 		require.Equal(t, int64(1), result.Account.ID)
+		require.Equal(t, "full-secret", result.Account.GetCredential("api_key"))
 	})
 
 	t.Run("模型路由-粘性账号命中", func(t *testing.T) {

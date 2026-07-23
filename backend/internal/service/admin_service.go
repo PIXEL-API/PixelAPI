@@ -569,7 +569,13 @@ const (
 	proxyQualityClientUserAgent       = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
 )
 
-var ErrRPMStatusUnavailable = infraerrors.New(http.StatusNotImplemented, "RPM_STATUS_UNAVAILABLE", "RPM cache not available")
+var (
+	ErrRPMStatusUnavailable                             = infraerrors.New(http.StatusNotImplemented, "RPM_STATUS_UNAVAILABLE", "RPM cache not available")
+	errAdminBulkOwnedAgentIdentityAuthUpdateUnsupported = infraerrors.BadRequest(
+		"ACCOUNT_BULK_OWNED_AGENT_IDENTITY_AUTH_UPDATE_UNSUPPORTED",
+		"Codex Agent Identity authentication material must be updated one account at a time",
+	)
+)
 
 // adminServiceImpl implements AdminService
 type adminServiceImpl struct {
@@ -594,6 +600,7 @@ type adminServiceImpl struct {
 	privacyClientFactory       PrivacyClientFactory
 	privateGroupProvisioner    UserPrivateGroupProvisioner
 	systemNoticeService        *SystemNoticeService
+	agentIdentityWSInvalidator agentIdentityWSConnectionInvalidator
 }
 
 type userGroupRateBatchReader interface {
@@ -655,6 +662,13 @@ func SetAdminUserPrivateGroupProvisioner(svc AdminService, provisioner UserPriva
 func SetAdminSystemNoticeService(svc AdminService, noticeService *SystemNoticeService) AdminService {
 	if impl, ok := svc.(*adminServiceImpl); ok {
 		impl.systemNoticeService = noticeService
+	}
+	return svc
+}
+
+func SetAdminAgentIdentityWSInvalidator(svc AdminService, invalidator agentIdentityWSConnectionInvalidator) AdminService {
+	if impl, ok := svc.(*adminServiceImpl); ok {
+		impl.agentIdentityWSInvalidator = invalidator
 	}
 	return svc
 }
@@ -3230,6 +3244,9 @@ func (s *adminServiceImpl) prepareAccountCreate(ctx context.Context, input *Crea
 	if !IsSupportedAccountPlatform(input.Platform) {
 		return nil, nil, ErrAccountPlatformUnsupported
 	}
+	if _, err := validateAdminGrokManagedExtra(input.Extra); err != nil {
+		return nil, nil, err
+	}
 	extra, err := NormalizeCodexQuotaLimitExtra(input.Platform, input.Type, input.Extra)
 	if err != nil {
 		return nil, nil, err
@@ -3392,6 +3409,49 @@ func shouldEnsureOAuthPrivacyAfterCreate(account *Account) bool {
 	return account != nil && account.Type == AccountTypeOAuth && !account.IsOpenAIAgentIdentity()
 }
 
+func isOwnedOpenAIAgentIdentity(account *Account) bool {
+	return account != nil &&
+		account.OwnerUserID != nil &&
+		*account.OwnerUserID > 0 &&
+		account.IsOpenAIAgentIdentity()
+}
+
+func agentIdentityOwnerUserIDChanged(before, after *Account) bool {
+	if (before == nil || !before.IsOpenAIAgentIdentity()) && (after == nil || !after.IsOpenAIAgentIdentity()) {
+		return false
+	}
+	beforeOwnerID := int64(0)
+	if before != nil && before.OwnerUserID != nil {
+		beforeOwnerID = *before.OwnerUserID
+	}
+	afterOwnerID := int64(0)
+	if after != nil && after.OwnerUserID != nil {
+		afterOwnerID = *after.OwnerUserID
+	}
+	return beforeOwnerID != afterOwnerID
+}
+
+func shouldForceAdminOwnedAgentIdentityPending(
+	before *Account,
+	after *Account,
+	input *UpdateAccountInput,
+	authMaterialChanged bool,
+	ownerUserIDChanged bool,
+) bool {
+	if after == nil || (!isOwnedOpenAIAgentIdentity(before) && !isOwnedOpenAIAgentIdentity(after)) {
+		return false
+	}
+	if NormalizeAccountShareMode(after.ShareMode) != AccountShareModePublic ||
+		NormalizeAccountShareStatus(after.ShareStatus) == AccountShareStatusSuspended {
+		return false
+	}
+	enteredPublic := before == nil || NormalizeAccountShareMode(before.ShareMode) != AccountShareModePublic
+	explicitlyApproved := input != nil &&
+		strings.TrimSpace(input.ShareStatus) != "" &&
+		NormalizeAccountShareStatus(input.ShareStatus) == AccountShareStatusApproved
+	return enteredPublic || authMaterialChanged || ownerUserIDChanged || explicitlyApproved
+}
+
 func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *UpdateAccountInput) (*Account, error) {
 	account, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
@@ -3421,6 +3481,14 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	// Extra 使用 map：需要区分“未提供(nil)”与“显式清空({})”。
 	// 关闭配额限制时前端会删除 quota_* 键并提交 extra:{}，此时也必须落库。
 	if input.Extra != nil {
+		mediaOverrideProvided, err := validateAdminGrokManagedExtra(input.Extra)
+		if err != nil {
+			return nil, err
+		}
+		if !mediaOverrideProvided {
+			preserveMapKey(account.Extra, input.Extra, GrokMediaEligibleExtraKey)
+		}
+		preserveMapKey(account.Extra, input.Extra, grokBillingExtraKey)
 		// 保留配额用量字段，防止编辑账号时意外重置
 		for _, key := range []string{"quota_used", "quota_daily_used", "quota_daily_start", "quota_weekly_used", "quota_weekly_start"} {
 			if v, ok := account.Extra[key]; ok {
@@ -3577,8 +3645,24 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 	}
 
+	agentIdentityAuthChanged := ownedAgentIdentityAuthMaterialChanged(before, account)
+	agentIdentityOwnerChanged := agentIdentityOwnerUserIDChanged(before, account)
+	if shouldForceAdminOwnedAgentIdentityPending(before, account, input, agentIdentityAuthChanged, agentIdentityOwnerChanged) {
+		account.ShareStatus = AccountShareStatusPending
+		account.ErrorMessage = ""
+	}
+	shouldInvalidateAgentIdentityWS := agentIdentityAuthChanged ||
+		agentIdentityOwnerChanged ||
+		ownedAgentIdentityPublicAccessRevoked(before, account)
+	if shouldInvalidateAgentIdentityWS && s.agentIdentityWSInvalidator == nil {
+		return nil, ErrOwnedAgentIdentityWSInvalidatorUnavailable
+	}
+
 	if err := s.accountRepo.Update(ctx, account); err != nil {
 		return nil, err
+	}
+	if shouldInvalidateAgentIdentityWS {
+		s.agentIdentityWSInvalidator.InvalidateAgentIdentityWSConnections(account.ID)
 	}
 
 	// 绑定分组
@@ -3602,6 +3686,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUpdateAccountsInput) (*BulkUpdateAccountsResult, error) {
 	if input == nil {
 		return nil, infraerrors.BadRequest("ACCOUNT_BULK_UPDATE_INVALID", "bulk update input is required")
+	}
+	if _, err := validateAdminGrokManagedExtra(input.Extra); err != nil {
+		return nil, err
 	}
 
 	if len(input.AccountIDs) == 0 && input.Filters != nil {
@@ -3642,6 +3729,31 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		}
 		preflightAccounts = accounts
 		return preflightAccounts, nil
+	}
+
+	var agentIdentityWSInvalidationIDs []int64
+	if len(input.Credentials) > 0 {
+		accounts, err := loadPreflightAccounts()
+		if err != nil {
+			return nil, err
+		}
+		for _, account := range accounts {
+			if account == nil {
+				continue
+			}
+			after := cloneAccountForNotice(account)
+			after.Credentials = mergeAccountMapPreservingSensitiveCreds(account.Credentials, input.Credentials)
+			if !ownedAgentIdentityAuthMaterialChanged(account, after) {
+				continue
+			}
+			if isOwnedOpenAIAgentIdentity(account) || isOwnedOpenAIAgentIdentity(after) {
+				return nil, errAdminBulkOwnedAgentIdentityAuthUpdateUnsupported
+			}
+			agentIdentityWSInvalidationIDs = append(agentIdentityWSInvalidationIDs, account.ID)
+		}
+		if len(agentIdentityWSInvalidationIDs) > 0 && s.agentIdentityWSInvalidator == nil {
+			return nil, ErrOwnedAgentIdentityWSInvalidatorUnavailable
+		}
 	}
 
 	if input.GroupIDs != nil || input.AccountLevel != nil || len(input.Credentials) > 0 || len(input.Extra) > 0 {
@@ -3843,6 +3955,9 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	// Run bulk update for column/jsonb fields first.
 	if _, err := s.accountRepo.BulkUpdate(ctx, input.AccountIDs, repoUpdates); err != nil {
 		return nil, err
+	}
+	for _, accountID := range agentIdentityWSInvalidationIDs {
+		s.agentIdentityWSInvalidator.InvalidateAgentIdentityWSConnections(accountID)
 	}
 
 	// Handle group bindings per account (requires individual operations).

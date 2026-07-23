@@ -139,7 +139,7 @@ func openAIStreamEventIsTerminal(data string) bool {
 		return true
 	}
 	switch gjson.Get(trimmed, "type").String() {
-	case "response.completed", "response.done", "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
+	case "response.completed", "response.done", "response.failed", "response.incomplete", "response.cancelled", "response.canceled", "error", "response.error":
 		return true
 	default:
 		return false
@@ -489,11 +489,24 @@ type AccountWaitPlan struct {
 	MaxWaiting     int
 }
 
+// OpenAIAccountDispatchRequirements captures the immutable constraints used to
+// select an OpenAI-compatible account. Dispatch revalidation must use the same
+// effective constraints (including any scheduler fallback) before forwarding.
+type OpenAIAccountDispatchRequirements struct {
+	RequestedModel             string
+	RequiredTransport          OpenAIUpstreamTransport
+	RequiredImageCapability    OpenAIImagesCapability
+	RequiredEndpointCapability OpenAIEndpointCapability
+	RequiredPlatform           string
+	RequireCompact             bool
+}
+
 type AccountSelectionResult struct {
-	Account     *Account
-	Acquired    bool
-	ReleaseFunc func()
-	WaitPlan    *AccountWaitPlan // nil means no wait allowed
+	Account                    *Account
+	Acquired                   bool
+	ReleaseFunc                func()
+	WaitPlan                   *AccountWaitPlan // nil means no wait allowed
+	OpenAIDispatchRequirements *OpenAIAccountDispatchRequirements
 }
 
 // ClaudeUsage 表示Claude API返回的usage信息
@@ -601,6 +614,16 @@ const (
 
 type GatewayFailureReason string
 
+const (
+	// GatewayFailureReasonOpenAIFirstOutputTimeout identifies a native OpenAI
+	// first-output deadline exceeded after an upstream attempt was started.
+	GatewayFailureReasonOpenAIFirstOutputTimeout GatewayFailureReason = "openai_first_output_timeout"
+	// GatewayFailureReasonRoutingBudgetExhausted identifies a local routing
+	// budget that expired before another upstream attempt could be started.
+	// It must not poison account health because no account response was observed.
+	GatewayFailureReasonRoutingBudgetExhausted GatewayFailureReason = "routing_budget_exhausted"
+)
+
 // UpstreamFailoverError indicates an upstream or credential error that may
 // trigger account failover.
 type UpstreamFailoverError struct {
@@ -635,6 +658,9 @@ func (e *UpstreamFailoverError) IsCredentialFailure() bool {
 
 func (e *UpstreamFailoverError) ShouldReportAccountScheduleFailure() bool {
 	if e == nil {
+		return false
+	}
+	if e.Reason == GatewayFailureReasonRoutingBudgetExhausted {
 		return false
 	}
 	return !e.IsCredentialFailure() || e.Scope == GatewayFailureScopeAccount
@@ -1371,7 +1397,7 @@ func (s *GatewayService) buildOAuthMetadataUserID(parsed *ParsedRequest, account
 //   - account：必须是 OAuth 账号，且调用方已判断不是 Claude Code 客户端。
 //   - body：已经 marshal 成 Anthropic /v1/messages 格式的请求体。
 //   - systemRaw：body 中原始 system 字段（用于判断是否需要 rewrite）。
-//   - model：最终会发给上游的模型 ID（用于 haiku 旁路 + metadata 版本选择）。
+//   - model：最终会发给上游的模型 ID（用于模型规范化 + metadata 版本选择）。
 //
 // 返回：改写后的 body。即使中间任何一步失败，也会退化成原 body（不会 panic）。
 func (s *GatewayService) applyClaudeCodeOAuthMimicryToBody(
@@ -1388,7 +1414,7 @@ func (s *GatewayService) applyClaudeCodeOAuthMimicryToBody(
 
 	systemPromptInjectionEnabled, systemPrompt, systemPromptBlocks := s.claudeOAuthSystemPromptInjectionSettings(ctx)
 	systemRewritten := false
-	if systemPromptInjectionEnabled && !strings.Contains(strings.ToLower(model), "haiku") {
+	if systemPromptInjectionEnabled {
 		body = rewriteSystemForNonClaudeCodeWithPromptBlocks(body, systemRaw, systemPrompt, systemPromptBlocks)
 		systemRewritten = true
 	}
@@ -1861,15 +1887,12 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 										stickyCacheMissReason = "session_limit"
 										// 会话限制已满，继续到负载感知选择
 									} else {
-										return &AccountSelectionResult{
-											Account: stickyAccount,
-											WaitPlan: &AccountWaitPlan{
-												AccountID:      stickyAccountID,
-												MaxConcurrency: stickyAccount.Concurrency,
-												Timeout:        waitTimeoutForStickyDecision(cfg.StickySessionWaitTimeout, stickyRuntime),
-												MaxWaiting:     maxWaiting,
-											},
-										}, nil
+										return s.newSelectionResult(ctx, stickyAccount, false, nil, &AccountWaitPlan{
+											AccountID:      stickyAccountID,
+											MaxConcurrency: stickyAccount.Concurrency,
+											Timeout:        waitTimeoutForStickyDecision(cfg.StickySessionWaitTimeout, stickyRuntime),
+											MaxWaiting:     maxWaiting,
+										})
 									}
 								} else {
 									stickyCacheMissReason = "wait_queue_full"
@@ -3066,6 +3089,9 @@ func (s *GatewayService) hydrateSelectedAccount(ctx context.Context, account *Ac
 func (s *GatewayService) newSelectionResult(ctx context.Context, account *Account, acquired bool, release func(), waitPlan *AccountWaitPlan) (*AccountSelectionResult, error) {
 	hydrated, err := s.hydrateSelectedAccount(ctx, account)
 	if err != nil {
+		if acquired && release != nil {
+			release()
+		}
 		return nil, err
 	}
 	return &AccountSelectionResult{
@@ -5162,13 +5188,13 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		// 检测到"有 CC prompt 但无 billing block"的不一致而判为 third-party。
 		// Parrot 的 transform_request 从不检查客户端 system 内容，直接覆盖。
 		systemRewritten := false
-		if systemPromptInjectionEnabled && !strings.Contains(strings.ToLower(reqModel), "haiku") {
+		if systemPromptInjectionEnabled {
 			body = rewriteSystemForNonClaudeCodeWithPromptBlocks(body, parsed.System, systemPrompt, systemPromptBlocks)
 			systemRewritten = true
 		}
 
 		// system 被重写时保留 CC prompt 的 cache_control: ephemeral（匹配真实 Claude Code 行为）；
-		// 未重写时（haiku / 已含 CC 前缀）剥离客户端 cache_control，与原有行为一致。
+		// 未重写时（注入开关关闭）剥离客户端 cache_control，与原有行为一致。
 		// 两种情况下 enforceCacheControlLimit 都会兜底处理上限。
 		normalizeOpts := claudeOAuthNormalizeOptions{stripSystemCacheControl: !systemRewritten}
 		if s.identityService != nil {
@@ -7005,15 +7031,9 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 			applyClaudeCodeMimicHeaders(req, reqStream)
 
 			incomingBeta := getHeaderRaw(req.Header, "anthropic-beta")
-			// Claude Code OAuth credentials are scoped to Claude Code.
-			// Non-haiku models MUST include claude-code beta for Anthropic to recognize
-			// this as a legitimate Claude Code request; without it, the request is
-			// rejected as third-party ("out of extra usage").
-			// Haiku models are exempt from third-party detection and don't need it.
-			requiredBetas := []string{claude.BetaOAuth, claude.BetaInterleavedThinking}
-			if !strings.Contains(strings.ToLower(modelID), "haiku") {
-				requiredBetas = claude.FullClaudeCodeMimicryBetas()
-			}
+			// OAuth mimic 对所有模型（包括 Haiku）使用完整 Claude Code beta，
+			// 否则 Haiku 请求仍可能被识别为第三方客户端。
+			requiredBetas := claude.FullClaudeCodeMimicryBetas()
 			setHeaderRaw(req.Header, "anthropic-beta", mergeAnthropicBetaDropping(requiredBetas, incomingBeta, effectiveDropSet))
 		} else {
 			// Claude Code 客户端：尽量透传原始 header，仅补齐 oauth beta

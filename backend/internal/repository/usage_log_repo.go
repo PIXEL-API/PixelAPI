@@ -30,7 +30,7 @@ import (
 	gocache "github.com/patrickmn/go-cache"
 )
 
-const usageLogSelectColumns = "id, user_id, api_key_id, account_id, request_id, model, requested_model, upstream_model, group_id, subscription_id, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cache_creation_5m_tokens, cache_creation_1h_tokens, image_output_tokens, image_output_cost, input_cost, output_cost, cache_creation_cost, cache_read_cost, total_cost, actual_cost, rate_multiplier, rate_multiplier_source, account_rate_multiplier, billing_type, request_type, stream, openai_ws_mode, duration_ms, first_token_ms, user_agent, ip_address, image_count, image_size, video_count, video_resolution, video_duration_seconds, service_tier, reasoning_effort, inbound_endpoint, upstream_endpoint, cache_ttl_overridden, channel_id, model_mapping_chain, billing_tier, billing_mode, account_stats_cost, created_at"
+const usageLogSelectColumns = "id, user_id, api_key_id, account_id, request_id, model, requested_model, upstream_model, group_id, subscription_id, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cache_creation_5m_tokens, cache_creation_1h_tokens, image_output_tokens, image_output_cost, image_input_tokens, image_input_cost, input_cost, output_cost, cache_creation_cost, cache_read_cost, total_cost, actual_cost, rate_multiplier, rate_multiplier_source, account_rate_multiplier, billing_type, request_type, stream, openai_ws_mode, duration_ms, first_token_ms, user_agent, ip_address, image_count, image_size, video_count, video_resolution, video_duration_seconds, service_tier, reasoning_effort, inbound_endpoint, upstream_endpoint, cache_ttl_overridden, channel_id, model_mapping_chain, billing_tier, billing_mode, account_stats_cost, created_at"
 
 // usageLogInsertArgTypes must stay in the same order as:
 //  1. prepareUsageLogInsert().args
@@ -57,6 +57,8 @@ var usageLogInsertArgTypes = [...]string{
 	"integer",     // cache_creation_1h_tokens
 	"integer",     // image_output_tokens
 	"numeric",     // image_output_cost
+	"integer",     // image_input_tokens
+	"numeric",     // image_input_cost
 	"numeric",     // input_cost
 	"numeric",     // output_cost
 	"numeric",     // cache_creation_cost
@@ -114,6 +116,35 @@ func safeDateFormat(granularity string) string {
 		return f
 	}
 	return "YYYY-MM-DD"
+}
+
+// dashboardBucketKeyExpression returns a trusted SQL expression for dashboard trend grouping.
+// timestampColumn must be a static column expression owned by this package, never request input.
+func dashboardBucketKeyExpression(granularity, timestampColumn string) string {
+	if granularity == "hour" {
+		// Keep repeated wall-clock hours distinct during a DST rollback by grouping on
+		// the absolute UTC hour. The client timezone is applied only to the label.
+		return fmt.Sprintf("DATE_TRUNC('hour', %s AT TIME ZONE 'UTC')", timestampColumn)
+	}
+
+	unit := "day"
+	switch granularity {
+	case "week":
+		unit = "week"
+	case "month":
+		unit = "month"
+	}
+	return fmt.Sprintf("DATE_TRUNC('%s', %s AT TIME ZONE $4)", unit, timestampColumn)
+}
+
+func dashboardBucketLabelExpression(granularity, bucketColumn string) string {
+	if granularity == "hour" {
+		return fmt.Sprintf(
+			"TO_CHAR((%s AT TIME ZONE 'UTC') AT TIME ZONE $4, 'YYYY-MM-DD HH24:MI')",
+			bucketColumn,
+		)
+	}
+	return fmt.Sprintf("TO_CHAR(%s, '%s')", bucketColumn, safeDateFormat(granularity))
 }
 
 // appendRawUsageLogModelWhereCondition keeps direct model filters on the raw model column for backward
@@ -342,6 +373,8 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 			cache_creation_1h_tokens,
 			image_output_tokens,
 			image_output_cost,
+			image_input_tokens,
+			image_input_cost,
 			input_cost,
 			output_cost,
 			cache_creation_cost,
@@ -381,7 +414,7 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 			$10, $11, $12, $13,
 			$14, $15, $16, $17,
 			$18, $19, $20, $21, $22, $23,
-			$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50
+			$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52
 		)
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
 		RETURNING id, created_at
@@ -784,6 +817,8 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 			cache_creation_1h_tokens,
 			image_output_tokens,
 			image_output_cost,
+			image_input_tokens,
+			image_input_cost,
 			input_cost,
 			output_cost,
 			cache_creation_cost,
@@ -819,7 +854,7 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 			created_at
 		) AS (VALUES `)
 
-	args := make([]any, 0, len(keys)*47)
+	args := make([]any, 0, len(keys)*53)
 	argPos := 1
 	for idx, key := range keys {
 		if idx > 0 {
@@ -865,6 +900,8 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				cache_creation_1h_tokens,
 				image_output_tokens,
 				image_output_cost,
+				image_input_tokens,
+				image_input_cost,
 				input_cost,
 				output_cost,
 				cache_creation_cost,
@@ -917,6 +954,8 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				cache_creation_1h_tokens,
 				image_output_tokens,
 				image_output_cost,
+				image_input_tokens,
+				image_input_cost,
 				input_cost,
 				output_cost,
 				cache_creation_cost,
@@ -1009,6 +1048,8 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			cache_creation_1h_tokens,
 			image_output_tokens,
 			image_output_cost,
+			image_input_tokens,
+			image_input_cost,
 			input_cost,
 			output_cost,
 			cache_creation_cost,
@@ -1044,7 +1085,7 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			created_at
 		) AS (VALUES `)
 
-	args := make([]any, 0, len(preparedList)*47)
+	args := make([]any, 0, len(preparedList)*52)
 	argPos := 1
 	for idx, prepared := range preparedList {
 		if idx > 0 {
@@ -1087,6 +1128,8 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			cache_creation_1h_tokens,
 			image_output_tokens,
 			image_output_cost,
+			image_input_tokens,
+			image_input_cost,
 			input_cost,
 			output_cost,
 			cache_creation_cost,
@@ -1139,6 +1182,8 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			cache_creation_1h_tokens,
 			image_output_tokens,
 			image_output_cost,
+			image_input_tokens,
+			image_input_cost,
 			input_cost,
 			output_cost,
 			cache_creation_cost,
@@ -1199,6 +1244,8 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 			cache_creation_1h_tokens,
 			image_output_tokens,
 			image_output_cost,
+			image_input_tokens,
+			image_input_cost,
 			input_cost,
 			output_cost,
 			cache_creation_cost,
@@ -1238,7 +1285,7 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 			$10, $11, $12, $13,
 			$14, $15, $16, $17,
 			$18, $19, $20, $21, $22, $23,
-			$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50
+			$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52
 		)
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
 	`, prepared.args...)
@@ -1310,6 +1357,8 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 			log.CacheCreation1hTokens,
 			log.ImageOutputTokens,
 			log.ImageOutputCost,
+			log.ImageInputTokens,
+			log.ImageInputCost,
 			log.InputCost,
 			log.OutputCost,
 			log.CacheCreationCost,
@@ -3020,27 +3069,44 @@ func (r *usageLogRepository) GetAPIKeyDashboardStats(ctx context.Context, apiKey
 }
 
 // GetUserUsageTrendByUserID 获取指定用户的使用趋势
-func (r *usageLogRepository) GetUserUsageTrendByUserID(ctx context.Context, userID int64, startTime, endTime time.Time, granularity string) (results []TrendDataPoint, err error) {
-	dateFormat := safeDateFormat(granularity)
+func (r *usageLogRepository) GetUserUsageTrendByUserID(ctx context.Context, userID int64, startTime, endTime time.Time, granularity string, location *time.Location) (results []TrendDataPoint, err error) {
+	if location == nil {
+		return nil, fmt.Errorf("dashboard timezone location is required")
+	}
+	bucketKeyExpression := dashboardBucketKeyExpression(granularity, "created_at")
+	bucketLabelExpression := dashboardBucketLabelExpression(granularity, "bucket_key")
 
 	query := fmt.Sprintf(`
+		WITH bucketed AS (
+			SELECT
+				%s AS bucket_key,
+				COUNT(*) AS requests,
+				COALESCE(SUM(input_tokens), 0) AS input_tokens,
+				COALESCE(SUM(output_tokens), 0) AS output_tokens,
+				COALESCE(SUM(cache_creation_tokens), 0) AS cache_creation_tokens,
+				COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+				COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) AS total_tokens,
+				COALESCE(SUM(total_cost), 0) AS cost,
+				COALESCE(SUM(actual_cost), 0) AS actual_cost
+			FROM usage_logs
+			WHERE user_id = $1 AND created_at >= $2 AND created_at < $3
+			GROUP BY bucket_key
+		)
 		SELECT
-			TO_CHAR(created_at, '%s') as date,
-			COUNT(*) as requests,
-			COALESCE(SUM(input_tokens), 0) as input_tokens,
-			COALESCE(SUM(output_tokens), 0) as output_tokens,
-			COALESCE(SUM(cache_creation_tokens), 0) as cache_creation_tokens,
-			COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens,
-			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as total_tokens,
-			COALESCE(SUM(total_cost), 0) as cost,
-			COALESCE(SUM(actual_cost), 0) as actual_cost
-		FROM usage_logs
-		WHERE user_id = $1 AND created_at >= $2 AND created_at < $3
-		GROUP BY date
-		ORDER BY date ASC
-	`, dateFormat)
+			%s AS date,
+			requests,
+			input_tokens,
+			output_tokens,
+			cache_creation_tokens,
+			cache_read_tokens,
+			total_tokens,
+			cost,
+			actual_cost
+		FROM bucketed
+		ORDER BY bucket_key ASC
+	`, bucketKeyExpression, bucketLabelExpression)
 
-	rows, err := r.sql.QueryContext(ctx, query, userID, startTime, endTime)
+	rows, err := r.sql.QueryContext(ctx, query, userID, startTime, endTime, location.String())
 	if err != nil {
 		return nil, err
 	}
@@ -3101,9 +3167,12 @@ func (r *usageLogRepository) GetUserModelStats(ctx context.Context, userID int64
 }
 
 // GetUserAccountSharingDashboard returns owned-account self usage and external public-share settlement stats.
-func (r *usageLogRepository) GetUserAccountSharingDashboard(ctx context.Context, userID int64, startTime, endTime time.Time, granularity string) (*usagestats.AccountSharingDashboardStats, error) {
+func (r *usageLogRepository) GetUserAccountSharingDashboard(ctx context.Context, userID int64, startTime, endTime time.Time, granularity string, location *time.Location) (*usagestats.AccountSharingDashboardStats, error) {
 	if userID <= 0 {
 		return nil, fmt.Errorf("user id must be positive")
+	}
+	if location == nil {
+		return nil, fmt.Errorf("dashboard timezone location is required")
 	}
 	if startTime.IsZero() {
 		startTime = time.Now().AddDate(0, 0, -7)
@@ -3116,7 +3185,7 @@ func (r *usageLogRepository) GetUserAccountSharingDashboard(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	trend, err := r.getUserAccountSharingTrend(ctx, userID, startTime, endTime, granularity)
+	trend, err := r.getUserAccountSharingTrend(ctx, userID, startTime, endTime, granularity, location)
 	if err != nil {
 		return nil, err
 	}
@@ -3129,8 +3198,8 @@ func (r *usageLogRepository) GetUserAccountSharingDashboard(ctx context.Context,
 		Summary:     summary,
 		Accounts:    accounts,
 		Trend:       trend,
-		StartDate:   startTime.Format("2006-01-02"),
-		EndDate:     endDisplay.Format("2006-01-02"),
+		StartDate:   startTime.In(location).Format("2006-01-02"),
+		EndDate:     endDisplay.In(location).Format("2006-01-02"),
 		Granularity: granularity,
 	}, nil
 }
@@ -3252,12 +3321,14 @@ func (r *usageLogRepository) getUserAccountSharingAccountStats(ctx context.Conte
 	return accounts, summary, nil
 }
 
-func (r *usageLogRepository) getUserAccountSharingTrend(ctx context.Context, userID int64, startTime, endTime time.Time, granularity string) (results []usagestats.AccountSharingTrendPoint, err error) {
-	dateFormat := safeDateFormat(granularity)
+func (r *usageLogRepository) getUserAccountSharingTrend(ctx context.Context, userID int64, startTime, endTime time.Time, granularity string, location *time.Location) (results []usagestats.AccountSharingTrendPoint, err error) {
+	bucketKeySelf := dashboardBucketKeyExpression(granularity, "ul.created_at")
+	bucketKeyExternal := dashboardBucketKeyExpression(granularity, "created_at")
+	bucketLabel := dashboardBucketLabelExpression(granularity, "COALESCE(s.bucket_key, e.bucket_key)")
 	query := fmt.Sprintf(`
 		WITH self_usage AS (
 			SELECT
-				TO_CHAR(ul.created_at, '%s') AS date,
+				%s AS bucket_key,
 				COUNT(*) AS self_requests,
 				COALESCE(SUM(ul.input_tokens + ul.output_tokens + ul.cache_creation_tokens + ul.cache_read_tokens), 0) AS self_tokens,
 				COALESCE(SUM(ul.actual_cost), 0) AS self_actual_cost,
@@ -3268,11 +3339,11 @@ func (r *usageLogRepository) getUserAccountSharingTrend(ctx context.Context, use
 			  AND ul.user_id = $1
 			  AND ul.created_at >= $2
 			  AND ul.created_at < $3
-			GROUP BY date
+			GROUP BY bucket_key
 		),
 		external_usage AS (
 			SELECT
-				TO_CHAR(created_at, '%s') AS date,
+				%s AS bucket_key,
 				COUNT(*) AS external_requests,
 				COALESCE(SUM(consumer_charge), 0) AS external_consumer_charge,
 				COALESCE(SUM(account_cost), 0) AS external_account_cost,
@@ -3284,10 +3355,10 @@ func (r *usageLogRepository) getUserAccountSharingTrend(ctx context.Context, use
 			  AND status = 'applied'
 			  AND created_at >= $2
 			  AND created_at < $3
-			GROUP BY date
+			GROUP BY bucket_key
 		)
 		SELECT
-			COALESCE(s.date, e.date) AS date,
+			%s AS date,
 			COALESCE(s.self_requests, 0),
 			COALESCE(s.self_tokens, 0),
 			COALESCE(s.self_actual_cost, 0),
@@ -3298,11 +3369,11 @@ func (r *usageLogRepository) getUserAccountSharingTrend(ctx context.Context, use
 			COALESCE(e.external_owner_credit, 0),
 			COALESCE(e.external_platform_fee, 0)
 		FROM self_usage s
-		FULL OUTER JOIN external_usage e ON e.date = s.date
-		ORDER BY date ASC
-	`, dateFormat, dateFormat)
+		FULL OUTER JOIN external_usage e ON e.bucket_key = s.bucket_key
+		ORDER BY COALESCE(s.bucket_key, e.bucket_key) ASC
+	`, bucketKeySelf, bucketKeyExternal, bucketLabel)
 
-	rows, err := r.sql.QueryContext(ctx, query, userID, startTime, endTime)
+	rows, err := r.sql.QueryContext(ctx, query, userID, startTime, endTime, location.String())
 	if err != nil {
 		return nil, err
 	}
@@ -5833,6 +5904,8 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 		cacheCreation1h       int
 		imageOutputTokens     int
 		imageOutputCost       float64
+		imageInputTokens      int
+		imageInputCost        float64
 		inputCost             float64
 		outputCost            float64
 		cacheCreationCost     float64
@@ -5887,6 +5960,8 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 		&cacheCreation1h,
 		&imageOutputTokens,
 		&imageOutputCost,
+		&imageInputTokens,
+		&imageInputCost,
 		&inputCost,
 		&outputCost,
 		&cacheCreationCost,
@@ -5939,6 +6014,8 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 		CacheCreation1hTokens: cacheCreation1h,
 		ImageOutputTokens:     imageOutputTokens,
 		ImageOutputCost:       imageOutputCost,
+		ImageInputTokens:      imageInputTokens,
+		ImageInputCost:        imageInputCost,
 		InputCost:             inputCost,
 		OutputCost:            outputCost,
 		CacheCreationCost:     cacheCreationCost,

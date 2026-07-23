@@ -13,6 +13,9 @@ backend/migrations/*.sql text eol=lf
 
 # Shell 脚本
 *.sh text eol=lf
+*.service text eol=lf
+*.timer text eol=lf
+*.logrotate text eol=lf
 
 # YAML/YML 配置文件
 *.yaml text eol=lf

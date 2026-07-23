@@ -1,6 +1,7 @@
 <template>
   <aside
     class="sidebar"
+    data-ui-skin="v2"
     :class="[
       sidebarCollapsed ? 'w-[72px]' : 'w-64',
       { '-translate-x-full lg:translate-x-0': !mobileOpen },
@@ -13,7 +14,7 @@
     >
       <!-- Custom Logo or Default Logo -->
       <div
-        class="sidebar-logo flex h-9 w-9 items-center justify-center overflow-hidden rounded-xl shadow-glow"
+        class="sidebar-logo flex h-9 w-9 items-center justify-center overflow-hidden rounded-lg bg-surface-subtle shadow-sm ring-1 ring-line"
       >
         <img
           v-if="settingsLoaded"
@@ -280,7 +281,7 @@
   <transition name="fade">
     <div
       v-if="mobileOpen"
-      class="fixed inset-0 z-30 bg-black/50 lg:hidden"
+      class="fixed inset-0 z-30 bg-slate-950/45 backdrop-blur-[1px] lg:hidden"
       @click="closeMobile"
     ></div>
   </transition>

@@ -4,13 +4,18 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	"github.com/stretchr/testify/require"
 )
 
 type snapshotHydrationCache struct {
-	snapshot []*Account
-	accounts map[int64]*Account
+	snapshot   []*Account
+	accounts   map[int64]*Account
+	accountErr error
 }
 
 func (c *snapshotHydrationCache) GetSnapshot(ctx context.Context, bucket SchedulerBucket) ([]*Account, bool, error) {
@@ -22,6 +27,9 @@ func (c *snapshotHydrationCache) SetSnapshot(ctx context.Context, bucket Schedul
 }
 
 func (c *snapshotHydrationCache) GetAccount(ctx context.Context, accountID int64) (*Account, error) {
+	if c.accountErr != nil {
+		return nil, c.accountErr
+	}
 	if c.accounts == nil {
 		return nil, nil
 	}
@@ -161,5 +169,82 @@ func TestGatewaySelectAccountWithLoadAwareness_HydratesSelectedAccountFromSchedu
 	}
 	if got := result.Account.GetCredential("api_key"); got != "anthropic-live-key" {
 		t.Fatalf("expected hydrated api key, got %q", got)
+	}
+}
+
+func TestSelectionResultHydrationOwnsAcquiredSlotLifecycle(t *testing.T) {
+	ownerUserID := int64(501)
+	requestCtx := context.WithValue(context.Background(), ctxkey.AuthenticatedUserID, ownerUserID+1)
+
+	tests := []struct {
+		name       string
+		account    *Account
+		accountErr error
+		wantErr    bool
+	}{
+		{
+			name:    "missing hydrated account",
+			wantErr: true,
+		},
+		{
+			name:       "hydration read error",
+			accountErr: errors.New("snapshot read failed"),
+			wantErr:    true,
+		},
+		{
+			name: "owned pending account is invisible to another user",
+			account: &Account{
+				ID:          9,
+				OwnerUserID: &ownerUserID,
+				ShareMode:   AccountShareModePublic,
+				ShareStatus: AccountShareStatusPending,
+			},
+			wantErr: true,
+		},
+		{
+			name:    "visible account transfers release ownership",
+			account: &Account{ID: 9},
+		},
+	}
+
+	for _, serviceName := range []string{"gateway", "openai"} {
+		serviceName := serviceName
+		for _, tt := range tests {
+			tt := tt
+			t.Run(serviceName+"/"+tt.name, func(t *testing.T) {
+				cache := &snapshotHydrationCache{
+					accounts:   map[int64]*Account{9: tt.account},
+					accountErr: tt.accountErr,
+				}
+				snapshot := NewSchedulerSnapshotService(cache, nil, nil, nil, nil)
+				releaseCount := 0
+				release := func() { releaseCount++ }
+				metadata := &Account{ID: 9}
+
+				var (
+					result *AccountSelectionResult
+					err    error
+				)
+				if serviceName == "gateway" {
+					result, err = (&GatewayService{schedulerSnapshot: snapshot}).newSelectionResult(requestCtx, metadata, true, release, nil)
+				} else {
+					result, err = (&OpenAIGatewayService{schedulerSnapshot: snapshot}).newSelectionResult(requestCtx, metadata, true, release, nil)
+				}
+
+				if tt.wantErr {
+					require.Error(t, err)
+					require.Nil(t, result)
+					require.Equal(t, 1, releaseCount, "hydration failure must release the acquired slot exactly once")
+					return
+				}
+
+				require.NoError(t, err)
+				require.NotNil(t, result)
+				require.Zero(t, releaseCount, "a successful result transfers release ownership to the caller")
+				require.NotNil(t, result.ReleaseFunc)
+				result.ReleaseFunc()
+				require.Equal(t, 1, releaseCount)
+			})
+		}
 	}
 }

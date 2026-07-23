@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -523,6 +524,23 @@ func runUpstreamToClient(
 		observedEvent := observedUpstreamEvent{}
 		switch msgType {
 		case coderws.MessageText:
+			if !json.Valid(payload) {
+				invalidErr := errors.New("upstream websocket returned invalid JSON")
+				emitRelayTrace(onTrace, RelayTraceEvent{
+					Stage:           "invalid_upstream_json",
+					Direction:       "upstream_to_client",
+					MessageType:     relayMessageTypeString(msgType),
+					PayloadBytes:    len(payload),
+					WroteDownstream: wroteDownstream,
+					Error:           invalidErr.Error(),
+				})
+				exitCh <- relayExitSignal{
+					stage:           "invalid_upstream_json",
+					err:             invalidErr,
+					wroteDownstream: wroteDownstream,
+				}
+				return
+			}
 			observedEvent = observeUpstreamMessage(state, payload, startAt, nowFn, onUsageParseFailure)
 		case coderws.MessageBinary:
 			// binary frame 直接透传，不进入 JSON 观测路径（避免无效解析开销）。

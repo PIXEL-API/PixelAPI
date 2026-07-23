@@ -76,6 +76,24 @@ func TestParseGatewayRequest_InvalidStreamType(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestParseGatewayRequest_NormalizesClaudeCodeLongContextSuffix(t *testing.T) {
+	parsed, err := ParseGatewayRequest(
+		[]byte(`{"model":"claude-sonnet-4-5[1m][1M]","messages":[]}`),
+		domain.PlatformAnthropic,
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, "claude-sonnet-4-5", parsed.Model)
+	require.JSONEq(t, `{"model":"claude-sonnet-4-5","messages":[]}`, string(parsed.Body))
+}
+
+func TestParseGatewayRequest_DoesNotNormalizeLongContextSuffixForOtherProtocols(t *testing.T) {
+	parsed, err := ParseGatewayRequest([]byte(`{"model":"custom[1m]"}`), domain.PlatformOpenAI)
+
+	require.NoError(t, err)
+	require.Equal(t, "custom[1m]", parsed.Model)
+}
+
 // ============ Gemini 原生格式解析测试 ============
 
 func TestParseGatewayRequest_GeminiContents(t *testing.T) {

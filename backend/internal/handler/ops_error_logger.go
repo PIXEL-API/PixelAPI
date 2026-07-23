@@ -26,10 +26,11 @@ import (
 )
 
 const (
-	opsModelKey       = "ops_model"
-	opsStreamKey      = "ops_stream"
-	opsRequestBodyKey = "ops_request_body"
-	opsAccountIDKey   = "ops_account_id"
+	opsModelKey                  = "ops_model"
+	opsStreamKey                 = "ops_stream"
+	opsRequestBodyKey            = "ops_request_body"
+	opsAccountIDKey              = "ops_account_id"
+	opsRoutingCapacityLimitedKey = "ops_routing_capacity_limited"
 
 	opsUpstreamModelKey = "ops_upstream_model"
 	opsRequestTypeKey   = "ops_request_type"
@@ -429,6 +430,25 @@ func setOpsSelectedAccount(c *gin.Context, accountID int64, platform ...string) 
 		}
 		c.Request = c.Request.WithContext(ctx)
 	}
+}
+
+func markOpsRoutingCapacityLimited(c *gin.Context) {
+	if c == nil {
+		return
+	}
+	c.Set(opsRoutingCapacityLimitedKey, true)
+}
+
+func isOpsRoutingCapacityLimited(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	value, exists := c.Get(opsRoutingCapacityLimitedKey)
+	if !exists {
+		return false
+	}
+	marked, _ := value.(bool)
+	return marked
 }
 
 type opsCaptureWriter struct {
@@ -893,6 +913,10 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 
 		phase := classifyOpsPhase(normalizedType, parsed.Message, parsed.Code)
 		isBusinessLimited := classifyOpsIsBusinessLimited(normalizedType, phase, parsed.Code, status, parsed.Message)
+		if isOpsRoutingCapacityLimited(c) {
+			phase = "routing"
+			isBusinessLimited = false
+		}
 
 		errorOwner := classifyOpsErrorOwner(phase, parsed.Message)
 		errorSource := classifyOpsErrorSource(phase, parsed.Message)

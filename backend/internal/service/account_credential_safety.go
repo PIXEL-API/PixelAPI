@@ -6,6 +6,8 @@ type credentialSafetyOptions struct {
 	AllowClaudeSessionKeyFields bool
 	AllowOAuthTokenValues       bool
 	AllowOAuthMetadataURLs      bool
+	DisallowOAuthTokenFields    bool
+	OnlyOAuthTokenFields        bool
 }
 
 func findDisallowedCredentialContent(value any, opts credentialSafetyOptions) (string, bool) {
@@ -47,6 +49,12 @@ func findDisallowedCredentialContentAt(value any, parentKey string, opts credent
 }
 
 func isDisallowedCredentialSafetyFieldKey(normalizedKey string, opts credentialSafetyOptions) bool {
+	if isOAuthTokenCredentialSafetyFieldKey(normalizedKey) {
+		return opts.DisallowOAuthTokenFields || opts.OnlyOAuthTokenFields
+	}
+	if opts.OnlyOAuthTokenFields {
+		return false
+	}
 	switch normalizedKey {
 	case "api_key",
 		"apikey",
@@ -99,7 +107,19 @@ func isDisallowedCredentialSafetyFieldKey(normalizedKey string, opts credentialS
 	return false
 }
 
+func isOAuthTokenCredentialSafetyFieldKey(normalizedKey string) bool {
+	switch normalizedKey {
+	case "access_token", "accesstoken", "refresh_token", "refreshtoken", "id_token", "idtoken":
+		return true
+	default:
+		return false
+	}
+}
+
 func disallowedCredentialStringReason(key, value string, opts credentialSafetyOptions) (string, bool) {
+	if opts.OnlyOAuthTokenFields {
+		return "", false
+	}
 	text := strings.TrimSpace(value)
 	if text == "" {
 		return "", false
@@ -122,6 +142,10 @@ func disallowedCredentialStringReason(key, value string, opts credentialSafetyOp
 		return "API key-like credential is not allowed", true
 	}
 	return "", false
+}
+
+func findOAuthTokenCredentialContent(value any) (string, bool) {
+	return findDisallowedCredentialContent(value, credentialSafetyOptions{OnlyOAuthTokenFields: true})
 }
 
 func isAllowedOAuthMetadataURLField(key string) bool {

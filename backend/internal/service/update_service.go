@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
 const (
@@ -30,6 +32,11 @@ const (
 
 	// Security: max download size (500MB)
 	maxDownloadSize = 500 * 1024 * 1024
+)
+
+var ErrInPlaceUpdateDisabled = infraerrors.Forbidden(
+	"IN_PLACE_UPDATE_DISABLED",
+	"in-place update is disabled for this customized deployment; use the Pixel release and symlink deployment workflow",
 )
 
 // UpdateCache defines cache operations for update service
@@ -51,6 +58,7 @@ type UpdateService struct {
 	githubClient   GitHubReleaseClient
 	currentVersion string
 	buildType      string // "source" for manual builds, "release" for CI builds
+	inPlaceAllowed bool
 }
 
 // NewUpdateService creates a new UpdateService
@@ -60,6 +68,7 @@ func NewUpdateService(cache UpdateCache, githubClient GitHubReleaseClient, versi
 		githubClient:   githubClient,
 		currentVersion: version,
 		buildType:      buildType,
+		inPlaceAllowed: envBool("PIXEL_ALLOW_UPSTREAM_IN_PLACE_UPDATE"),
 	}
 }
 
@@ -72,6 +81,7 @@ type UpdateInfo struct {
 	Cached         bool         `json:"cached"`
 	Warning        string       `json:"warning,omitempty"`
 	BuildType      string       `json:"build_type"` // "source" or "release"
+	InPlaceAllowed bool         `json:"in_place_update_allowed"`
 }
 
 // ReleaseInfo contains GitHub release details
@@ -129,6 +139,7 @@ func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (*UpdateInf
 			HasUpdate:      false,
 			Warning:        err.Error(),
 			BuildType:      s.buildType,
+			InPlaceAllowed: s.inPlaceAllowed,
 		}, nil
 	}
 
@@ -140,6 +151,9 @@ func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (*UpdateInf
 // PerformUpdate downloads and applies the update
 // Uses atomic file replacement pattern for safe in-place updates
 func (s *UpdateService) PerformUpdate(ctx context.Context) error {
+	if !s.inPlaceAllowed {
+		return ErrInPlaceUpdateDisabled
+	}
 	info, err := s.CheckUpdate(ctx, true)
 	if err != nil {
 		return err
@@ -251,6 +265,9 @@ func (s *UpdateService) PerformUpdate(ctx context.Context) error {
 
 // Rollback restores the previous version
 func (s *UpdateService) Rollback() error {
+	if !s.inPlaceAllowed {
+		return ErrInPlaceUpdateDisabled
+	}
 	exePath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("failed to get executable path: %w", err)
@@ -301,8 +318,9 @@ func (s *UpdateService) fetchLatestRelease(ctx context.Context) (*UpdateInfo, er
 			HTMLURL:     release.HTMLURL,
 			Assets:      assets,
 		},
-		Cached:    false,
-		BuildType: s.buildType,
+		Cached:         false,
+		BuildType:      s.buildType,
+		InPlaceAllowed: s.inPlaceAllowed,
 	}, nil
 }
 
@@ -493,7 +511,13 @@ func (s *UpdateService) getFromCache(ctx context.Context) (*UpdateInfo, error) {
 		ReleaseInfo:    cached.ReleaseInfo,
 		Cached:         true,
 		BuildType:      s.buildType,
+		InPlaceAllowed: s.inPlaceAllowed,
 	}, nil
+}
+
+func envBool(key string) bool {
+	value, err := strconv.ParseBool(strings.TrimSpace(os.Getenv(key)))
+	return err == nil && value
 }
 
 func (s *UpdateService) saveToCache(ctx context.Context, info *UpdateInfo) {

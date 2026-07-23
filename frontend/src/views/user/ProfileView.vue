@@ -15,6 +15,7 @@
             v-if="withdrawalManagementEnabled"
             :rate-limit-window-days="withdrawalRateLimitWindowDays"
             :rate-limit-max="withdrawalRateLimitMax"
+            :rate-limit-exempt-amount="withdrawalRateLimitExemptAmount"
           />
 
           <ProfileBalanceNotifyCard
@@ -84,6 +85,7 @@ const balanceLowNotifyEnabled = ref(false);
 const withdrawalManagementEnabled = ref(true);
 const withdrawalRateLimitWindowDays = ref(1);
 const withdrawalRateLimitMax = ref(0);
+const withdrawalRateLimitExemptAmount = ref(500);
 const systemDefaultThreshold = ref(0);
 const linuxdoOAuthEnabled = ref(false);
 const wechatOAuthEnabled = ref(false);
@@ -111,6 +113,8 @@ onMounted(async () => {
       withdrawalRateLimitWindowDays.value =
         settings.withdrawal_rate_limit_window_days ?? 1;
       withdrawalRateLimitMax.value = settings.withdrawal_rate_limit_max ?? 0;
+      withdrawalRateLimitExemptAmount.value =
+        settings.withdrawal_rate_limit_exempt_amount ?? 500;
       systemDefaultThreshold.value = settings.balance_low_notify_threshold ?? 0;
       linuxdoOAuthEnabled.value = settings.linuxdo_oauth_enabled ?? false;
       wechatOAuthEnabled.value = isWeChatWebOAuthEnabled(settings);

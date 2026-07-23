@@ -558,6 +558,7 @@ func (s *SettingService) GetAllSettings(ctx context.Context) (*SystemSettings, e
 	result := s.parseSettings(settings)
 	result.WithdrawalRateLimitWindowDays = withdrawalRateLimit.WindowDays
 	result.WithdrawalRateLimitMax = withdrawalRateLimit.MaxRequests
+	result.WithdrawalRateLimitExemptAmount = withdrawalRateLimit.ExemptAmount
 	accountLevels, err := parseOpenAIAccountLevelConfigsSetting(settings[SettingKeyOpenAIAccountLevels])
 	if err != nil {
 		return nil, fmt.Errorf("parse openai account levels: %w", err)
@@ -721,6 +722,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyWithdrawalManagementEnabled,
 		SettingKeyWithdrawalRateLimitWindowDays,
 		SettingKeyWithdrawalRateLimitMax,
+		SettingKeyWithdrawalRateLimitExemptAmount,
 	}
 
 	settings, err := s.settingRepo.GetMultiple(ctx, keys)
@@ -839,10 +841,11 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 
 		RiskControlEnabled: settings[SettingKeyRiskControlEnabled] == "true",
 
-		InvoiceManagementEnabled:      settings[SettingKeyInvoiceManagementEnabled] == "true",
-		WithdrawalManagementEnabled:   !isFalseSettingValue(settings[SettingKeyWithdrawalManagementEnabled]),
-		WithdrawalRateLimitWindowDays: withdrawalRateLimit.WindowDays,
-		WithdrawalRateLimitMax:        withdrawalRateLimit.MaxRequests,
+		InvoiceManagementEnabled:        settings[SettingKeyInvoiceManagementEnabled] == "true",
+		WithdrawalManagementEnabled:     !isFalseSettingValue(settings[SettingKeyWithdrawalManagementEnabled]),
+		WithdrawalRateLimitWindowDays:   withdrawalRateLimit.WindowDays,
+		WithdrawalRateLimitMax:          withdrawalRateLimit.MaxRequests,
+		WithdrawalRateLimitExemptAmount: withdrawalRateLimit.ExemptAmount,
 	}, nil
 }
 
@@ -1023,6 +1026,7 @@ type PublicSettingsInjectionPayload struct {
 	WithdrawalManagementEnabled          bool                       `json:"withdrawal_management_enabled"`
 	WithdrawalRateLimitWindowDays        int                        `json:"withdrawal_rate_limit_window_days"`
 	WithdrawalRateLimitMax               int                        `json:"withdrawal_rate_limit_max"`
+	WithdrawalRateLimitExemptAmount      float64                    `json:"withdrawal_rate_limit_exempt_amount"`
 }
 
 // GetPublicSettingsForInjection returns public settings in a format suitable for HTML injection.
@@ -1090,6 +1094,7 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		WithdrawalManagementEnabled:          settings.WithdrawalManagementEnabled,
 		WithdrawalRateLimitWindowDays:        settings.WithdrawalRateLimitWindowDays,
 		WithdrawalRateLimitMax:               settings.WithdrawalRateLimitMax,
+		WithdrawalRateLimitExemptAmount:      settings.WithdrawalRateLimitExemptAmount,
 	}, nil
 }
 
@@ -1847,18 +1852,24 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyInvoiceManagementEnabled] = strconv.FormatBool(settings.InvoiceManagementEnabled)
 	updates[SettingKeyWithdrawalManagementEnabled] = strconv.FormatBool(settings.WithdrawalManagementEnabled)
 	withdrawalRateLimit := WithdrawalRateLimitConfig{
-		WindowDays:  settings.WithdrawalRateLimitWindowDays,
-		MaxRequests: settings.WithdrawalRateLimitMax,
+		WindowDays:   settings.WithdrawalRateLimitWindowDays,
+		MaxRequests:  settings.WithdrawalRateLimitMax,
+		ExemptAmount: settings.WithdrawalRateLimitExemptAmount,
 	}
-	if withdrawalRateLimit.WindowDays == 0 && withdrawalRateLimit.MaxRequests == 0 {
+	if withdrawalRateLimit.WindowDays == 0 && withdrawalRateLimit.MaxRequests == 0 && withdrawalRateLimit.ExemptAmount == 0 {
 		withdrawalRateLimit.WindowDays = WithdrawalRateLimitWindowDaysDefault
+		withdrawalRateLimit.ExemptAmount = WithdrawalRateLimitExemptAmountDefault
 		settings.WithdrawalRateLimitWindowDays = withdrawalRateLimit.WindowDays
+		settings.WithdrawalRateLimitExemptAmount = withdrawalRateLimit.ExemptAmount
 	}
 	if err := ValidateWithdrawalRateLimitConfig(withdrawalRateLimit); err != nil {
 		return nil, err
 	}
+	withdrawalRateLimit.ExemptAmount, _ = normalizeWithdrawalAmount(withdrawalRateLimit.ExemptAmount)
+	settings.WithdrawalRateLimitExemptAmount = withdrawalRateLimit.ExemptAmount
 	updates[SettingKeyWithdrawalRateLimitWindowDays] = strconv.Itoa(withdrawalRateLimit.WindowDays)
 	updates[SettingKeyWithdrawalRateLimitMax] = strconv.Itoa(withdrawalRateLimit.MaxRequests)
+	updates[SettingKeyWithdrawalRateLimitExemptAmount] = strconv.FormatFloat(withdrawalRateLimit.ExemptAmount, 'f', 2, 64)
 
 	// Claude Code version check
 	updates[SettingKeyMinClaudeCodeVersion] = settings.MinClaudeCodeVersion
@@ -2367,6 +2378,7 @@ func (s *SettingService) GetWithdrawalRateLimitConfig(ctx context.Context) (With
 	settings, err := s.settingRepo.GetMultiple(ctx, []string{
 		SettingKeyWithdrawalRateLimitWindowDays,
 		SettingKeyWithdrawalRateLimitMax,
+		SettingKeyWithdrawalRateLimitExemptAmount,
 	})
 	if err != nil {
 		return WithdrawalRateLimitConfig{}, fmt.Errorf("get withdrawal rate limit settings: %w", err)
@@ -2376,8 +2388,9 @@ func (s *SettingService) GetWithdrawalRateLimitConfig(ctx context.Context) (With
 
 func parseWithdrawalRateLimitConfig(settings map[string]string) (WithdrawalRateLimitConfig, error) {
 	config := WithdrawalRateLimitConfig{
-		WindowDays:  WithdrawalRateLimitWindowDaysDefault,
-		MaxRequests: WithdrawalRateLimitMaxDefault,
+		WindowDays:   WithdrawalRateLimitWindowDaysDefault,
+		MaxRequests:  WithdrawalRateLimitMaxDefault,
+		ExemptAmount: WithdrawalRateLimitExemptAmountDefault,
 	}
 	if raw := strings.TrimSpace(settings[SettingKeyWithdrawalRateLimitWindowDays]); raw != "" {
 		value, err := strconv.Atoi(raw)
@@ -2399,9 +2412,20 @@ func parseWithdrawalRateLimitConfig(settings map[string]string) (WithdrawalRateL
 		}
 		config.MaxRequests = value
 	}
+	if raw := strings.TrimSpace(settings[SettingKeyWithdrawalRateLimitExemptAmount]); raw != "" {
+		value, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			return WithdrawalRateLimitConfig{}, infraerrors.BadRequest(
+				"WITHDRAWAL_RATE_LIMIT_CONFIG_INVALID",
+				"withdrawal rate limit exempt amount must be a number",
+			)
+		}
+		config.ExemptAmount = value
+	}
 	if err := ValidateWithdrawalRateLimitConfig(config); err != nil {
 		return WithdrawalRateLimitConfig{}, err
 	}
+	config.ExemptAmount, _ = normalizeWithdrawalAmount(config.ExemptAmount)
 	return config, nil
 }
 
@@ -2851,10 +2875,11 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyAffiliateEnabled: "false",
 
 		// Functional modules
-		SettingKeyInvoiceManagementEnabled:      "false",
-		SettingKeyWithdrawalManagementEnabled:   "true",
-		SettingKeyWithdrawalRateLimitWindowDays: strconv.Itoa(WithdrawalRateLimitWindowDaysDefault),
-		SettingKeyWithdrawalRateLimitMax:        strconv.Itoa(WithdrawalRateLimitMaxDefault),
+		SettingKeyInvoiceManagementEnabled:        "false",
+		SettingKeyWithdrawalManagementEnabled:     "true",
+		SettingKeyWithdrawalRateLimitWindowDays:   strconv.Itoa(WithdrawalRateLimitWindowDaysDefault),
+		SettingKeyWithdrawalRateLimitMax:          strconv.Itoa(WithdrawalRateLimitMaxDefault),
+		SettingKeyWithdrawalRateLimitExemptAmount: strconv.FormatFloat(WithdrawalRateLimitExemptAmountDefault, 'f', 2, 64),
 
 		// Claude Code version check (default: empty = disabled)
 		SettingKeyMinClaudeCodeVersion: "",
@@ -3275,6 +3300,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	withdrawalRateLimit, _ := parseWithdrawalRateLimitConfig(settings)
 	result.WithdrawalRateLimitWindowDays = withdrawalRateLimit.WindowDays
 	result.WithdrawalRateLimitMax = withdrawalRateLimit.MaxRequests
+	result.WithdrawalRateLimitExemptAmount = withdrawalRateLimit.ExemptAmount
 	result.RiskControlEnabled = settings[SettingKeyRiskControlEnabled] == "true"
 	result.CyberSessionBlockEnabled = settings[SettingKeyCyberSessionBlockEnabled] == "true"
 	if v, err := strconv.Atoi(strings.TrimSpace(settings[SettingKeyCyberSessionBlockTTLSeconds])); err == nil && v > 0 {

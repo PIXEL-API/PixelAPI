@@ -5,13 +5,13 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
-	"github.com/Wei-Shaw/sub2api/migrations"
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
@@ -36,30 +36,9 @@ import (
 //   - *sql.DB: 底层的 SQL 数据库连接，可用于直接执行原生 SQL
 //   - error: 初始化过程中的错误
 func InitEnt(cfg *config.Config) (*ent.Client, *sql.DB, error) {
-	// 优先初始化时区设置，确保所有时间操作使用统一的时区。
-	// 这对于跨时区部署和日志时间戳的一致性至关重要。
-	if err := timezone.Init(cfg.Timezone); err != nil {
+	drv, err := openConfiguredPostgresDriver(cfg)
+	if err != nil {
 		return nil, nil, err
-	}
-
-	// 构建包含时区信息的数据库连接字符串 (DSN)。
-	// 时区信息会传递给 PostgreSQL，确保数据库层面的时间处理正确。
-	dsn := cfg.Database.DSNWithTimezone(cfg.Timezone)
-
-	// 仅在显式开启 Server-Timing 时包装 driver，默认路径保持零额外驱动开销。
-	var drv *entsql.Driver
-	if cfg.Server.EnableServerTiming {
-		connector, err := pq.NewConnector(dsn)
-		if err != nil {
-			return nil, nil, fmt.Errorf("create PostgreSQL connector: %w", err)
-		}
-		drv = entsql.OpenDB(dialect.Postgres, sql.OpenDB(newServerTimingConnector(connector)))
-	} else {
-		var err error
-		drv, err = entsql.Open(dialect.Postgres, dsn)
-		if err != nil {
-			return nil, nil, err
-		}
 	}
 	applyDBPoolSettings(drv.DB(), cfg)
 
@@ -68,7 +47,7 @@ func InitEnt(cfg *config.Config) (*ent.Client, *sql.DB, error) {
 	// 这种方式比 Ent 的自动迁移更可控，支持复杂的迁移场景。
 	migrationCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	if err := applyMigrationsFS(migrationCtx, drv.DB(), migrations.FS); err != nil {
+	if err := ApplyMigrations(migrationCtx, drv.DB()); err != nil {
 		_ = drv.Close() // 迁移失败时关闭驱动，避免资源泄露
 		return nil, nil, err
 	}
@@ -105,4 +84,66 @@ func InitEnt(cfg *config.Config) (*ent.Client, *sql.DB, error) {
 	}
 
 	return client, drv.DB(), nil
+}
+
+// ApplyConfiguredMigrations 使用应用配置连接 PostgreSQL，仅执行内嵌数据库迁移并关闭连接。
+// 该入口不会初始化 Ent 客户端、Redis、HTTP 服务或后台任务。
+func ApplyConfiguredMigrations(ctx context.Context, cfg *config.Config) (err error) {
+	if ctx == nil {
+		return errors.New("nil migration context")
+	}
+
+	drv, err := openConfiguredPostgresDriver(cfg)
+	if err != nil {
+		return err
+	}
+	// migrate-only 使用独占单连接池，确保会话级 advisory lock 与全部迁移语句
+	// 落在同一 PostgreSQL session，并避免迁移过程中连接按生命周期被轮换。
+	drv.DB().SetMaxOpenConns(1)
+	drv.DB().SetMaxIdleConns(1)
+	drv.DB().SetConnMaxLifetime(0)
+	drv.DB().SetConnMaxIdleTime(0)
+	defer func() {
+		if closeErr := drv.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close PostgreSQL migration connection: %w", closeErr)
+		}
+	}()
+
+	if err := ApplyMigrations(ctx, drv.DB()); err != nil {
+		return fmt.Errorf("apply configured migrations: %w", err)
+	}
+	return nil
+}
+
+func openConfiguredPostgresDriver(cfg *config.Config) (*entsql.Driver, error) {
+	if cfg == nil {
+		return nil, errors.New("nil config")
+	}
+
+	// 优先初始化时区设置，确保所有时间操作使用统一的时区。
+	// 这对于跨时区部署和日志时间戳的一致性至关重要。
+	if err := timezone.Init(cfg.Timezone); err != nil {
+		return nil, err
+	}
+
+	// 构建包含时区信息的数据库连接字符串 (DSN)。
+	// 时区信息会传递给 PostgreSQL，确保数据库层面的时间处理正确。
+	dsn := cfg.Database.DSNWithTimezone(cfg.Timezone)
+
+	// 仅在显式开启 Server-Timing 时包装 driver，默认路径保持零额外驱动开销。
+	var drv *entsql.Driver
+	if cfg.Server.EnableServerTiming {
+		connector, err := pq.NewConnector(dsn)
+		if err != nil {
+			return nil, fmt.Errorf("create PostgreSQL connector: %w", err)
+		}
+		drv = entsql.OpenDB(dialect.Postgres, sql.OpenDB(newServerTimingConnector(connector)))
+	} else {
+		var err error
+		drv, err = entsql.Open(dialect.Postgres, dsn)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return drv, nil
 }

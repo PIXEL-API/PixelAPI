@@ -108,6 +108,24 @@ type AnthropicResponse struct {
 	Usage        AnthropicUsage          `json:"usage"`
 }
 
+// MarshalJSON keeps the internal string representation while matching the
+// Anthropic streaming contract: message_start must carry stop_reason:null,
+// not an empty string. Final responses continue to emit their concrete reason.
+func (r AnthropicResponse) MarshalJSON() ([]byte, error) {
+	type responseAlias AnthropicResponse
+	var stopReason *string
+	if r.StopReason != "" {
+		stopReason = &r.StopReason
+	}
+	return json.Marshal(struct {
+		responseAlias
+		StopReason *string `json:"stop_reason"`
+	}{
+		responseAlias: responseAlias(r),
+		StopReason:    stopReason,
+	})
+}
+
 // AnthropicUsage holds token counts in Anthropic format.
 type AnthropicUsage struct {
 	InputTokens              int `json:"input_tokens"`

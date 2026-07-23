@@ -52,6 +52,10 @@ const (
 	// defaultResponseHeaderTimeout: 默认等待响应头超时时间（5分钟）
 	// LLM 请求可能排队较久，需要较长超时
 	defaultResponseHeaderTimeout = 300 * time.Second
+	// 冷连接阶段必须有界；正常热连接不会触发这些超时。
+	defaultUpstreamDialTimeout           = 10 * time.Second
+	defaultUpstreamTLSHandshakeTimeout   = 10 * time.Second
+	defaultUpstreamExpectContinueTimeout = 1 * time.Second
 	// defaultMaxUpstreamClients: 默认最大客户端缓存数量
 	// 超出后会淘汰最久未使用的客户端
 	defaultMaxUpstreamClients = 5000
@@ -170,7 +174,7 @@ func NewHTTPUpstream(cfg *config.Config) service.HTTPUpstream {
 //   - error: 请求错误
 //
 // 注意:
-//   - 调用方必须关闭 resp.Body，否则会导致 inFlight 计数泄漏
+//   - 调用方仍应关闭 resp.Body；完整读取到终态时也会自动释放 inFlight
 //   - inFlight > 0 的客户端不会被淘汰，确保活跃请求不被中断
 func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
 	applyGrokCLIProxyHeaders(req)
@@ -188,8 +192,9 @@ func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID i
 		return nil, err
 	}
 
-	// 执行请求
-	resp, err := servertiming.Do(entry.client, req)
+	// 执行请求。对携带凭证且禁止跳转的请求，仅浅拷贝 client，避免修改共享连接池。
+	client := httpClientForUpstreamRequest(entry.client, req)
+	resp, err := servertiming.Do(client, req)
 	if err != nil {
 		s.recordOpenAIHTTP2Failure(profile, entry.protocolMode, entry.proxyKey, err)
 		// 请求失败，立即减少计数
@@ -202,7 +207,7 @@ func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID i
 	// 如果上游返回了压缩内容，解压后再交给业务层
 	decompressResponseBody(resp)
 
-	// 包装响应体，在关闭时自动减少计数并更新时间戳
+	// 包装响应体，在读取结束或关闭时自动减少计数并更新时间戳
 	// 这确保了流式响应（如 SSE）在完全读取前不会被淘汰
 	resp.Body = wrapTrackedBody(resp.Body, func() {
 		atomic.AddInt64(&entry.inFlight, -1)
@@ -246,7 +251,8 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 		return nil, err
 	}
 
-	resp, err := servertiming.Do(entry.client, req)
+	client := httpClientForUpstreamRequest(entry.client, req)
+	resp, err := servertiming.Do(client, req)
 	if err != nil {
 		atomic.AddInt64(&entry.inFlight, -1)
 		atomic.StoreInt64(&entry.lastUsed, time.Now().UnixNano())
@@ -262,6 +268,17 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 	})
 
 	return resp, nil
+}
+
+func httpClientForUpstreamRequest(client *http.Client, req *http.Request) *http.Client {
+	if client == nil || req == nil || !service.HTTPUpstreamRedirectsDisabled(req.Context()) {
+		return client
+	}
+	clone := *client
+	clone.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return &clone
 }
 
 // applyGrokCLIProxyHeaders applies the official Grok Build client identity at
@@ -1051,6 +1068,9 @@ func defaultPoolSettings(cfg *config.Config) poolSettings {
 //   - ResponseHeaderTimeout: 等待响应头超时（不影响流式传输）
 func buildUpstreamTransport(settings poolSettings, proxyURL *url.URL, protocolMode string) (*http.Transport, error) {
 	transport := &http.Transport{
+		DialContext:           (&net.Dialer{Timeout: defaultUpstreamDialTimeout, KeepAlive: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout:   defaultUpstreamTLSHandshakeTimeout,
+		ExpectContinueTimeout: defaultUpstreamExpectContinueTimeout,
 		MaxIdleConns:          settings.maxIdleConns,
 		MaxIdleConnsPerHost:   settings.maxIdleConnsPerHost,
 		MaxConnsPerHost:       settings.maxConnsPerHost,
@@ -1105,6 +1125,12 @@ func enableOpenAIHTTP2KeepAlive(transport *http.Transport) (*http2.Transport, er
 //   - socks5: SOCKS5 代理，使用 SOCKS5ProxyDialer（SOCKS5 隧道 + utls 握手）
 func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *url.URL, profile *tlsfingerprint.Profile) (*http.Transport, error) {
 	transport := &http.Transport{
+		// DialTLSContext below enforces the same bounds for the custom-fingerprint
+		// path; keep these fields populated for transport-level diagnostics and
+		// for any future fallback to the standard dialer.
+		DialContext:           (&net.Dialer{Timeout: defaultUpstreamDialTimeout, KeepAlive: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout:   defaultUpstreamTLSHandshakeTimeout,
+		ExpectContinueTimeout: defaultUpstreamExpectContinueTimeout,
 		MaxIdleConns:          settings.maxIdleConns,
 		MaxIdleConnsPerHost:   settings.maxIdleConnsPerHost,
 		MaxConnsPerHost:       settings.maxConnsPerHost,
@@ -1145,38 +1171,55 @@ func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *u
 	return transport, nil
 }
 
-// trackedBody 带跟踪功能的响应体包装器
-// 在 Close 时执行回调，用于更新请求计数
+// trackedBody 带跟踪功能的响应体包装器。
+// 响应读取结束或关闭时执行回调，用于更新请求计数。
 type trackedBody struct {
 	io.ReadCloser // 原始响应体
 	once          sync.Once
-	onClose       func() // 关闭时的回调函数
+	onDone        func()
 }
 
-// Close 关闭响应体并执行回调
-// 使用 sync.Once 确保回调只执行一次
+// Read 在响应体到达终态后立即释放占用。
+// 这避免调用方完整读取响应体、但遗漏 Close 时永久泄漏 inFlight。
+func (b *trackedBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err != nil {
+		b.done()
+	}
+	return n, err
+}
+
+// Close 关闭响应体并执行回调。
+// 使用 sync.Once 确保 Read 终态和 Close 最多释放一次。
 func (b *trackedBody) Close() error {
 	err := b.ReadCloser.Close()
-	if b.onClose != nil {
-		b.once.Do(b.onClose)
-	}
+	b.done()
 	return err
 }
 
-// wrapTrackedBody 包装响应体以跟踪关闭事件
-// 用于在响应体关闭时更新 inFlight 计数
+func (b *trackedBody) done() {
+	if b.onDone != nil {
+		b.once.Do(b.onDone)
+	}
+}
+
+// wrapTrackedBody 包装响应体以跟踪完成事件。
+// 用于在响应体读取结束或关闭时更新 inFlight 计数。
 //
 // 参数:
 //   - body: 原始响应体
-//   - onClose: 关闭时的回调函数
+//   - onDone: 读取结束或关闭时的回调函数
 //
 // 返回:
 //   - io.ReadCloser: 包装后的响应体
-func wrapTrackedBody(body io.ReadCloser, onClose func()) io.ReadCloser {
+func wrapTrackedBody(body io.ReadCloser, onDone func()) io.ReadCloser {
 	if body == nil {
+		if onDone != nil {
+			onDone()
+		}
 		return body
 	}
-	return &trackedBody{ReadCloser: body, onClose: onClose}
+	return &trackedBody{ReadCloser: body, onDone: onDone}
 }
 
 // decompressResponseBody 根据 Content-Encoding 解压响应体。

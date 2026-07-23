@@ -227,13 +227,36 @@ func TestHandleFailoverError_BasicSwitch(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandleFailoverError_CacheBilling(t *testing.T) {
-	t.Run("hasBoundSession为true时设置ForceCacheBilling", func(t *testing.T) {
+	t.Run("hasBoundSession为true且实际切换时设置ForceCacheBilling", func(t *testing.T) {
 		mock := &mockTempUnscheduler{}
 		fs := NewFailoverState(3, true) // hasBoundSession=true
 		err := newTestFailoverErr(500, false, false)
 
 		fs.HandleFailoverError(context.Background(), mock, 100, "openai", err)
 		require.True(t, fs.ForceCacheBilling)
+	})
+
+	t.Run("同账号重试时仅凭hasBoundSession不设置ForceCacheBilling", func(t *testing.T) {
+		mock := &mockTempUnscheduler{}
+		fs := NewFailoverState(3, true)
+		err := newTestFailoverErr(400, true, false)
+
+		action := fs.HandleFailoverErrorWithRetryLimit(context.Background(), mock, 100, "openai", 1, err)
+
+		require.Equal(t, FailoverContinue, action)
+		require.False(t, fs.ForceCacheBilling)
+		require.Zero(t, fs.SwitchCount)
+	})
+
+	t.Run("同账号重试耗尽并实际切换时设置ForceCacheBilling", func(t *testing.T) {
+		mock := &mockTempUnscheduler{}
+		fs := NewFailoverState(3, true)
+		err := newTestFailoverErr(400, true, false)
+
+		fs.HandleFailoverErrorWithRetryLimit(context.Background(), mock, 100, "openai", 0, err)
+
+		require.True(t, fs.ForceCacheBilling)
+		require.Equal(t, 1, fs.SwitchCount)
 	})
 
 	t.Run("failoverErr.ForceCacheBilling为true时设置", func(t *testing.T) {
@@ -549,13 +572,14 @@ func TestHandleFailoverError_IntegrationScenario(t *testing.T) {
 			action := fs.HandleFailoverError(context.Background(), mock, 100, "openai", retryErr)
 			require.Equal(t, FailoverContinue, action)
 		}
-		require.True(t, fs.ForceCacheBilling, "hasBoundSession=true 应设置 ForceCacheBilling")
+		require.False(t, fs.ForceCacheBilling, "同账号重试期间不应重复计入缓存费用")
 
 		// 2. 账号 100 超过重试上限 → TempUnschedule + 切换
 		action := fs.HandleFailoverError(context.Background(), mock, 100, "openai", retryErr)
 		require.Equal(t, FailoverContinue, action)
 		require.Equal(t, 1, fs.SwitchCount)
 		require.Len(t, mock.calls, 1)
+		require.True(t, fs.ForceCacheBilling, "同账号重试耗尽并实际换号时应设置 ForceCacheBilling")
 
 		// 3. 账号 200 遇到不可重试错误 → 直接切换
 		switchErr := newTestFailoverErr(500, false, false)

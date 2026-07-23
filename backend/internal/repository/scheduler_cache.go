@@ -1118,6 +1118,9 @@ func buildSchedulerMetadataAccount(account service.Account) service.Account {
 		Name:                    account.Name,
 		Platform:                account.Platform,
 		Type:                    account.Type,
+		OwnerUserID:             account.OwnerUserID,
+		ShareMode:               account.ShareMode,
+		ShareStatus:             account.ShareStatus,
 		Concurrency:             account.Concurrency,
 		LoadFactor:              account.LoadFactor,
 		Priority:                account.Priority,
@@ -1242,6 +1245,8 @@ func filterSchedulerExtra(extra map[string]any) map[string]any {
 		"codex_7d_reset_at",
 		"codex_7d_reset_after_seconds",
 		"codex_7d_limit_percent",
+		service.GrokMediaEligibleExtraKey,
+		"grok_billing_snapshot",
 	}
 	filtered := make(map[string]any)
 	for _, key := range keys {

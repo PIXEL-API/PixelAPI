@@ -4,6 +4,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -77,6 +78,30 @@ func TestBuildSchedulerMetadataAccount_KeepsSlimGroupMembership(t *testing.T) {
 	require.Nil(t, got.AccountGroups[0].Group)
 	require.Equal(t, int64(11), got.AccountGroups[1].GroupID)
 	require.Nil(t, got.Groups)
+}
+
+func TestBuildSchedulerMetadataAccount_KeepsOwnedShareVisibilityFields(t *testing.T) {
+	ownerUserID := int64(73)
+	account := service.Account{
+		ID:          42,
+		Platform:    service.PlatformOpenAI,
+		Type:        service.AccountTypeOAuth,
+		OwnerUserID: &ownerUserID,
+		ShareMode:   service.AccountShareModePublic,
+		ShareStatus: service.AccountShareStatusPending,
+	}
+
+	metadata := buildSchedulerMetadataAccount(account)
+	payload, err := json.Marshal(metadata)
+	require.NoError(t, err)
+
+	var decoded service.Account
+	require.NoError(t, json.Unmarshal(payload, &decoded))
+	require.NotNil(t, decoded.OwnerUserID)
+	require.Equal(t, ownerUserID, *decoded.OwnerUserID)
+	require.Equal(t, service.AccountShareModePublic, decoded.ShareMode)
+	require.Equal(t, service.AccountShareStatusPending, decoded.ShareStatus)
+	require.False(t, decoded.IsVisibleToConsumer(ownerUserID+1))
 }
 
 func TestSchedulerCacheWriteAccountsSkipsUnencodableTime(t *testing.T) {

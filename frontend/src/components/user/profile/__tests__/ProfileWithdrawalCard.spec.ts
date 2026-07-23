@@ -101,7 +101,8 @@ describe('ProfileWithdrawalCard', () => {
     const wrapper = mount(ProfileWithdrawalCard, {
       props: {
         rateLimitWindowDays: 7,
-        rateLimitMax: 3
+        rateLimitMax: 3,
+        rateLimitExemptAmount: 500
       },
       global: {
         stubs: {
@@ -112,6 +113,7 @@ describe('ProfileWithdrawalCard', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('每 7 天最多提交 3 次提现申请')
+    expect(wrapper.text()).toContain('单笔超过 ¥500.00 时不受次数限制')
     expect(wrapper.text()).toContain('驳回原因')
     expect(wrapper.text()).toContain('收款码无法识别，请重新上传')
   })

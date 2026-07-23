@@ -184,6 +184,7 @@
               <PlatformTypeBadge
                 :platform="row.platform"
                 :type="row.type"
+                :auth-mode="getOpenAIAuthMode(row)"
                 :plan-type="row.credentials?.plan_type"
                 :privacy-mode="row.extra?.privacy_mode"
                 :subscription-expires-at="row.credentials?.subscription_expires_at"
@@ -580,6 +581,12 @@ type UserAccountStatus = 'active' | 'disabled'
 const { t } = useI18n()
 const appStore = useAppStore()
 const authStore = useAuthStore()
+
+function getOpenAIAuthMode(account: Account): string | undefined {
+  if (account.platform !== 'openai' || account.type !== 'oauth') return undefined
+  const authMode = account.credentials?.auth_mode
+  return typeof authMode === 'string' && authMode.trim() ? authMode : undefined
+}
 
 const accounts = ref<Account[]>([])
 const groups = ref<Group[]>([])

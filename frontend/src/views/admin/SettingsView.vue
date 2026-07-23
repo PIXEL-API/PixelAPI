@@ -1,6 +1,6 @@
 <template>
   <AppLayout>
-    <div class="mx-auto max-w-4xl space-y-6">
+    <div class="mx-auto w-full max-w-[96rem] space-y-6">
       <!-- Loading State -->
       <div v-if="loading" class="flex items-center justify-center py-12">
         <div
@@ -5366,7 +5366,7 @@
                       }}
                     </p>
                   </div>
-                  <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                     <div>
                       <label class="input-label">
                         {{
@@ -5410,21 +5410,65 @@
                         }}
                       </p>
                     </div>
+                    <div>
+                      <label class="input-label">
+                        {{
+                          t(
+                            "admin.settings.features.businessModules.withdrawalRateLimitExemptAmount",
+                          )
+                        }}
+                      </label>
+                      <input
+                        v-model.number="form.withdrawal_rate_limit_exempt_amount"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        class="input min-h-11"
+                        :disabled="!form.withdrawal_management_enabled"
+                      />
+                      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        {{
+                          t(
+                            "admin.settings.features.businessModules.withdrawalRateLimitExemptAmountHint",
+                          )
+                        }}
+                      </p>
+                    </div>
                   </div>
                   <p class="mt-3 text-xs font-medium text-primary-600 dark:text-primary-300">
-                    {{
-                      form.withdrawal_rate_limit_max > 0
-                        ? t(
-                            "admin.settings.features.businessModules.withdrawalRateLimitSummary",
-                            {
-                              days: form.withdrawal_rate_limit_window_days,
-                              max: form.withdrawal_rate_limit_max,
-                            },
-                          )
-                        : t(
-                            "admin.settings.features.businessModules.withdrawalRateLimitUnlimited",
-                          )
-                    }}
+                    <span>
+                      {{
+                        form.withdrawal_rate_limit_max > 0
+                          ? t(
+                              "admin.settings.features.businessModules.withdrawalRateLimitSummary",
+                              {
+                                days: form.withdrawal_rate_limit_window_days,
+                                max: form.withdrawal_rate_limit_max,
+                              },
+                            )
+                          : t(
+                              "admin.settings.features.businessModules.withdrawalRateLimitUnlimited",
+                            )
+                      }}
+                    </span>
+                    <span
+                      v-if="
+                        form.withdrawal_rate_limit_max > 0 &&
+                        form.withdrawal_rate_limit_exempt_amount > 0
+                      "
+                      class="mt-1 block"
+                    >
+                      {{
+                        t(
+                          "admin.settings.features.businessModules.withdrawalRateLimitExemptSummary",
+                          {
+                            amount: Number(
+                              form.withdrawal_rate_limit_exempt_amount,
+                            ).toFixed(2),
+                          },
+                        )
+                      }}
+                    </span>
                   </p>
                 </div>
               </div>
@@ -7880,6 +7924,7 @@ const form = reactive<SettingsForm>({
   withdrawal_management_enabled: true,
   withdrawal_rate_limit_window_days: 1,
   withdrawal_rate_limit_max: 0,
+  withdrawal_rate_limit_exempt_amount: 500,
   // Affiliate (邀请返利) feature switch
   affiliate_enabled: false,
   // Risk control feature switch
@@ -8957,6 +9002,9 @@ async function saveSettings() {
       form.withdrawal_rate_limit_window_days,
     );
     const withdrawalRateLimitMax = Number(form.withdrawal_rate_limit_max);
+    const withdrawalRateLimitExemptAmount = Number(
+      form.withdrawal_rate_limit_exempt_amount,
+    );
     if (
       !Number.isInteger(withdrawalRateLimitWindowDays) ||
       withdrawalRateLimitWindowDays < 1 ||
@@ -8981,8 +9029,27 @@ async function saveSettings() {
       );
       return;
     }
+    const normalizedWithdrawalRateLimitExemptAmount =
+      Math.round(withdrawalRateLimitExemptAmount * 100) / 100;
+    if (
+      !Number.isFinite(withdrawalRateLimitExemptAmount) ||
+      withdrawalRateLimitExemptAmount < 0 ||
+      Math.abs(
+        withdrawalRateLimitExemptAmount -
+          normalizedWithdrawalRateLimitExemptAmount,
+      ) > 1e-9
+    ) {
+      appStore.showError(
+        t(
+          "admin.settings.features.businessModules.withdrawalRateLimitExemptAmountError",
+        ),
+      );
+      return;
+    }
     form.withdrawal_rate_limit_window_days = withdrawalRateLimitWindowDays;
     form.withdrawal_rate_limit_max = withdrawalRateLimitMax;
+    form.withdrawal_rate_limit_exempt_amount =
+      normalizedWithdrawalRateLimitExemptAmount;
 
     const normalizedTableDefaultPageSize = Math.floor(
       Number(form.table_default_page_size),
@@ -9408,6 +9475,8 @@ async function saveSettings() {
       withdrawal_rate_limit_window_days:
         form.withdrawal_rate_limit_window_days,
       withdrawal_rate_limit_max: form.withdrawal_rate_limit_max,
+      withdrawal_rate_limit_exempt_amount:
+        form.withdrawal_rate_limit_exempt_amount,
       account_share_comment_review_enabled:
         form.account_share_comment_review_enabled,
       account_share_comment_review_url: commentReviewURL,

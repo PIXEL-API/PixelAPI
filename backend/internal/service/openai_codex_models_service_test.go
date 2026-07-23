@@ -278,7 +278,7 @@ func TestFetchCodexModelsManifestAPIKeyServesStaleWhileRefreshing(t *testing.T) 
 		header := make(http.Header)
 		if call == 1 {
 			header.Set("ETag", `"first"`)
-			return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader(`{"version":1}`))}, nil
+			return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader(`{"models":[],"version":1}`))}, nil
 		}
 		require.Equal(t, `"first"`, req.Header.Get("If-None-Match"))
 		if call == 2 {
@@ -286,14 +286,14 @@ func TestFetchCodexModelsManifestAPIKeyServesStaleWhileRefreshing(t *testing.T) 
 			<-releaseRefresh
 		}
 		header.Set("ETag", `"second"`)
-		return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader(`{"version":2}`))}, nil
+		return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader(`{"models":[],"version":2}`))}, nil
 	}}
 	s := newCodexModelsAPIKeyTestService(upstream)
 	account := newCodexModelsAPIKeyTestAccount("https://upstream.example/v1")
 
 	first, err := s.FetchCodexModelsManifest(context.Background(), account, "0.144.0", "")
 	require.NoError(t, err)
-	require.JSONEq(t, `{"version":1}`, string(first.Body))
+	require.JSONEq(t, `{"models":[],"version":1}`, string(first.Body))
 
 	s.codexModelsManifestCache.mu.Lock()
 	for key, entry := range s.codexModelsManifestCache.entries {
@@ -305,13 +305,13 @@ func TestFetchCodexModelsManifestAPIKeyServesStaleWhileRefreshing(t *testing.T) 
 
 	stale, err := s.FetchCodexModelsManifest(context.Background(), account, "0.144.0", "")
 	require.NoError(t, err)
-	require.JSONEq(t, `{"version":1}`, string(stale.Body))
+	require.JSONEq(t, `{"models":[],"version":1}`, string(stale.Body))
 	<-refreshStarted
 	close(releaseRefresh)
 
 	require.Eventually(t, func() bool {
 		refreshed, fetchErr := s.FetchCodexModelsManifest(context.Background(), account, "0.144.0", "")
-		return fetchErr == nil && string(refreshed.Body) == `{"version":2}`
+		return fetchErr == nil && string(refreshed.Body) == `{"models":[],"version":2}`
 	}, 2*time.Second, 10*time.Millisecond)
 	require.Equal(t, int32(2), calls.Load())
 }
@@ -320,7 +320,7 @@ func TestFetchCodexModelsManifestCacheIsolationAndBodyLimits(t *testing.T) {
 	var calls atomic.Int32
 	upstream := &codexModelsHTTPUpstreamStub{do: func(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
 		call := calls.Add(1)
-		body := `{"call":` + strconv.Itoa(int(call)) + `}`
+		body := `{"models":[],"call":` + strconv.Itoa(int(call)) + `}`
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
 	}}
 	s := newCodexModelsAPIKeyTestService(upstream)
@@ -431,7 +431,7 @@ func TestFetchCodexModelsManifestCacheKeyIsolatesRequestIdentity(t *testing.T) {
 
 func TestFetchCodexModelsManifestDoesNotCacheBodiesOverOneMiB(t *testing.T) {
 	var calls atomic.Int32
-	body := strings.Repeat("x", codexModelsManifestCacheBodyLimit+1)
+	body := `{"models":[],"padding":"` + strings.Repeat("x", codexModelsManifestCacheBodyLimit+1) + `"}`
 	upstream := &codexModelsHTTPUpstreamStub{do: func(_ *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
 		calls.Add(1)
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
@@ -444,6 +444,96 @@ func TestFetchCodexModelsManifestDoesNotCacheBodiesOverOneMiB(t *testing.T) {
 		require.Len(t, manifest.Body, len(body))
 	}
 	require.Equal(t, int32(2), calls.Load())
+}
+
+func TestFetchCodexModelsManifestRejectsInvalidEnvelopeWithoutCaching(t *testing.T) {
+	var calls atomic.Int32
+	upstream := &codexModelsHTTPUpstreamStub{do: func(_ *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+		calls.Add(1)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"object":"unexpected"}`)),
+		}, nil
+	}}
+	s := newCodexModelsAPIKeyTestService(upstream)
+	account := newCodexModelsAPIKeyTestAccount("https://upstream.example/v1")
+
+	for range 2 {
+		_, err := s.FetchCodexModelsManifest(context.Background(), account, "0.144.0", "")
+		require.Error(t, err)
+		require.True(t, IsRetryableCodexModelsManifestError(err))
+		require.ErrorContains(t, err, "OPENAI_CODEX_MODELS_UPSTREAM_INVALID_MANIFEST")
+	}
+	require.Equal(t, int32(2), calls.Load(), "invalid manifests must not enter the cache")
+}
+
+func TestConvertOpenAIModelListToCodexManifest(t *testing.T) {
+	converted := convertOpenAIModelListToCodexManifest([]byte(`{"object":"list","data":[{"id":"gpt-5.6"},{"id":" "},{"id":"gpt-image-2"}]}`))
+	require.JSONEq(t, `{"models":[{"slug":"gpt-5.6"},{"slug":"gpt-image-2"}]}`, string(converted))
+	require.NoError(t, validateCodexModelsManifestEnvelope(converted))
+}
+
+func TestFetchCodexModelsManifestOAuth401IsRetryable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"code":"token_revoked","message":"revoked"}}`))
+	}))
+	defer server.Close()
+	original := chatgptCodexModelsURL
+	chatgptCodexModelsURL = server.URL
+	t.Cleanup(func() { chatgptCodexModelsURL = original })
+
+	_, err := (&OpenAIGatewayService{}).FetchCodexModelsManifest(context.Background(), newCodexModelsOAuthTestAccount(), "0.144.0", "")
+	require.Error(t, err)
+	require.True(t, IsRetryableCodexModelsManifestError(err))
+}
+
+type codexModelsCanceledStateRepo struct {
+	AccountRepository
+	updateCredentialsCalls  int
+	tempUnschedulableCalls  int
+	updateCredentialsCtxErr error
+	tempUnschedulableCtxErr error
+}
+
+func (r *codexModelsCanceledStateRepo) UpdateCredentials(ctx context.Context, _ int64, _ map[string]any) error {
+	r.updateCredentialsCalls++
+	r.updateCredentialsCtxErr = ctx.Err()
+	return nil
+}
+
+func (r *codexModelsCanceledStateRepo) SetTempUnschedulable(ctx context.Context, _ int64, _ time.Time, _ string) error {
+	r.tempUnschedulableCalls++
+	r.tempUnschedulableCtxErr = ctx.Err()
+	return nil
+}
+
+func TestCodexModelsOAuth401PersistsStateAfterCallerCancellation(t *testing.T) {
+	repo := &codexModelsCanceledStateRepo{}
+	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	svc := &OpenAIGatewayService{rateLimitService: rateLimitService}
+	account := newCodexModelsOAuthTestAccount()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	svc.handleCodexModelsManifestAccountAuthError(
+		ctx,
+		account,
+		codexModelsManifestRequest{},
+		&codexModelsManifestUpstreamError{
+			err:        errors.New("models unauthorized"),
+			statusCode: http.StatusUnauthorized,
+			headers:    http.Header{},
+			body:       []byte(`{"error":{"message":"expired access token"}}`),
+		},
+	)
+
+	require.Equal(t, 1, repo.updateCredentialsCalls)
+	require.NoError(t, repo.updateCredentialsCtxErr)
+	require.Equal(t, 1, repo.tempUnschedulableCalls)
+	require.NoError(t, repo.tempUnschedulableCtxErr)
+	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
 }
 
 func TestFetchCodexModelsManifestSharedRefreshSurvivesCallerCancellation(t *testing.T) {

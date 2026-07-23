@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -47,6 +48,14 @@ func (c *openAIWSPolicyEnforcingFrameConn) ReadFrame(ctx context.Context) (coder
 	if err != nil {
 		return msgType, payload, err
 	}
+	if msgType == coderws.MessageText && !json.Valid(payload) {
+		invalidErr := errors.New("invalid websocket request JSON")
+		return msgType, nil, NewOpenAIWSClientCloseError(
+			coderws.StatusPolicyViolation,
+			"invalid websocket request payload",
+			invalidErr,
+		)
+	}
 	if c.filter == nil {
 		return msgType, payload, nil
 	}
@@ -61,6 +70,74 @@ func (c *openAIWSPolicyEnforcingFrameConn) ReadFrame(ctx context.Context) (coder
 		return msgType, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, blocked.Message, blocked)
 	}
 	return msgType, updated, nil
+}
+
+// openAIWSPassthroughTurnLifecycle serializes response.create turns on a
+// passthrough connection. The ingress hooks own concurrency slots, so a new
+// turn must not acquire its slots until the preceding terminal/error callback
+// has released them.
+type openAIWSPassthroughTurnLifecycle struct {
+	mu         sync.Mutex
+	hooks      *OpenAIWSIngressHooks
+	nextTurn   int
+	activeTurn int
+}
+
+func newOpenAIWSPassthroughTurnLifecycle(hooks *OpenAIWSIngressHooks) *openAIWSPassthroughTurnLifecycle {
+	return &openAIWSPassthroughTurnLifecycle{hooks: hooks, nextTurn: 1}
+}
+
+func (l *openAIWSPassthroughTurnLifecycle) begin() (int, error) {
+	if l == nil {
+		return 0, errors.New("passthrough turn lifecycle is unavailable")
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.activeTurn > 0 {
+		return 0, NewOpenAIWSClientCloseError(
+			coderws.StatusPolicyViolation,
+			"parallel response.create turns are not supported",
+			nil,
+		)
+	}
+	turn := l.nextTurn
+	if turn <= 0 {
+		turn = 1
+	}
+	if l.hooks != nil && l.hooks.BeforeTurn != nil {
+		if err := l.hooks.BeforeTurn(turn); err != nil {
+			return 0, err
+		}
+	}
+	l.activeTurn = turn
+	l.nextTurn = turn + 1
+	return turn, nil
+}
+
+func (l *openAIWSPassthroughTurnLifecycle) finish(result *OpenAIForwardResult, turnErr error) (int, bool) {
+	if l == nil {
+		return 0, false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	turn := l.activeTurn
+	if turn <= 0 {
+		return 0, false
+	}
+	l.activeTurn = 0
+	if l.hooks != nil && l.hooks.AfterTurn != nil {
+		l.hooks.AfterTurn(turn, result, turnErr)
+	}
+	return turn, true
+}
+
+func (l *openAIWSPassthroughTurnLifecycle) hasActive() bool {
+	if l == nil {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.activeTurn > 0
 }
 
 func (c *openAIWSPolicyEnforcingFrameConn) WriteFrame(ctx context.Context, msgType coderws.MessageType, payload []byte) error {
@@ -170,6 +247,11 @@ func (c *openAIWSClientFrameConn) WriteFrame(ctx context.Context, msgType coderw
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if msgType == coderws.MessageText {
+		if normalized, changed := normalizeCompletedImageGenerationStatus(payload); changed {
+			payload = normalized
+		}
+	}
 	return c.conn.Write(ctx, msgType, payload)
 }
 
@@ -236,6 +318,10 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	// silently passed through, defeating the policy on every frame after
 	// the first.
 	capturedSessionModel := openAIWSPassthroughPolicyModelForFrame(account, firstClientMessage)
+	imageGenerationAllowed := GroupAllowsImageGeneration(apiKeyGroup(getAPIKeyFromContext(c)))
+	if permissionErr := openAIWSImageGenerationPermissionError(imageGenerationAllowed, capturedSessionModel, firstClientMessage); permissionErr != nil {
+		return permissionErr
+	}
 	updatedFirst, blocked, policyErr := s.applyOpenAIFastPolicyToWSResponseCreate(ctx, account, capturedSessionModel, firstClientMessage)
 	if policyErr != nil {
 		return fmt.Errorf("apply openai fast policy on first ws frame: %w", policyErr)
@@ -380,6 +466,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	}
 
 	completedTurns := atomic.Int32{}
+	turnLifecycle := newOpenAIWSPassthroughTurnLifecycle(hooks)
 	policyClientConn := &openAIWSPolicyEnforcingFrameConn{
 		inner: &openAIWSClientFrameConn{conn: clientConn},
 		// 注意线程安全：filter 仅在 runClientToUpstream 这一条
@@ -417,6 +504,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			if model == "" {
 				model = capturedSessionModel
 			}
+			if permissionErr := openAIWSImageGenerationPermissionError(imageGenerationAllowed, model, payload); permissionErr != nil {
+				return payload, nil, permissionErr
+			}
 			out, blocked, policyErr := s.applyOpenAIFastPolicyToWSResponseCreate(ctx, account, model, payload)
 			if policyErr == nil && blocked == nil &&
 				strings.TrimSpace(gjson.GetBytes(out, "type").String()) == "response.create" {
@@ -425,29 +515,6 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					return out, nil, cleanRelayErr
 				}
 				out = cleanedOut
-			}
-			// 多轮 passthrough billing：仅在成功（non-block / non-err）
-			// 的 response.create 帧上更新 requestServiceTierPtr，使用
-			// filter 处理后的 payload，与首帧 policy-after-extract 语义
-			// 保持一致（参见上方 extractOpenAIServiceTierFromBody 注释）。
-			//   - 非 response.create 帧（response.cancel /
-			//     conversation.item.create / session.update 等）不携带
-			//     per-response service_tier，不应覆盖前一轮值。
-			//   - blocked != nil：该帧不会发送上游，billing tier 应保持
-			//     上一轮值。
-			//   - policyErr != nil：异常路径，保持上一轮值。
-			//   - 不带 service_tier 的 response.create 会让
-			//     extractOpenAIServiceTierFromBody 返回 nil；这里有意
-			//     覆盖（Store(nil)），因为 OpenAI 上游对该帧实际不传
-			//     service_tier 时按 default 处理，billing 应如实反映。
-			if policyErr == nil && blocked == nil &&
-				strings.TrimSpace(gjson.GetBytes(out, "type").String()) == "response.create" {
-				requestServiceTierPtr.Store(extractOpenAIServiceTierFromBody(out))
-				frameModel := strings.TrimSpace(gjson.GetBytes(out, "model").String())
-				if frameModel == "" {
-					frameModel = requestModel
-				}
-				imageBillingConfigStore.Store(resolveOpenAIResponseImageBillingConfigFromBody(openAIResponsesEndpoint, frameModel, out))
 			}
 			return out, blocked, policyErr
 		},
@@ -480,8 +547,25 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					truncateOpenAIWSLogValue(usageRaw, openAIWSLogValueMaxLen),
 				)
 			},
+			BeforeClientFrame: func(msgType coderws.MessageType, payload []byte) error {
+				if msgType != coderws.MessageText || strings.TrimSpace(gjson.GetBytes(payload, "type").String()) != "response.create" {
+					return nil
+				}
+				if _, beginErr := turnLifecycle.begin(); beginErr != nil {
+					return beginErr
+				}
+				// Update per-turn accounting only after lifecycle acquisition. A
+				// rejected pipelined response.create must not overwrite the active
+				// turn's service tier or image billing configuration.
+				requestServiceTierPtr.Store(extractOpenAIServiceTierFromBody(payload))
+				frameModel := strings.TrimSpace(gjson.GetBytes(payload, "model").String())
+				if frameModel == "" {
+					frameModel = requestModel
+				}
+				imageBillingConfigStore.Store(resolveOpenAIResponseImageBillingConfigFromBody(openAIResponsesEndpoint, frameModel, payload))
+				return nil
+			},
 			OnTurnComplete: func(turn openaiwsv2.RelayTurnResult) {
-				turnNo := int(completedTurns.Add(1))
 				turnResult := &OpenAIForwardResult{
 					RequestID: turn.RequestID,
 					Usage: OpenAIUsage{
@@ -498,6 +582,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 						ImageCount:                turn.Usage.ImageCount,
 					},
 					Model:           turn.RequestModel,
+					UpstreamModel:   turn.RequestModel,
 					ServiceTier:     requestServiceTierPtr.Load(),
 					Stream:          true,
 					OpenAIWSMode:    true,
@@ -506,6 +591,17 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					FirstTokenMs:    turn.FirstTokenMs,
 				}
 				applyOpenAIResponseImageAccounting(turnResult, imageBillingConfigStore.Load())
+				turnNo, finished := turnLifecycle.finish(turnResult, nil)
+				if !finished {
+					logOpenAIWSV2Passthrough(
+						"relay_terminal_without_active_turn account_id=%d request_id=%s terminal_event=%s",
+						account.ID,
+						truncateOpenAIWSLogValue(turnResult.RequestID, openAIWSIDValueMaxLen),
+						truncateOpenAIWSLogValue(turn.TerminalEventType, openAIWSLogValueMaxLen),
+					)
+					return
+				}
+				completedTurns.Add(1)
 				logOpenAIWSV2Passthrough(
 					"relay_turn_completed account_id=%d turn=%d request_id=%s terminal_event=%s duration_ms=%d first_token_ms=%d input_tokens=%d output_tokens=%d cache_read_tokens=%d",
 					account.ID,
@@ -518,9 +614,6 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					turnResult.Usage.OutputTokens,
 					turnResult.Usage.CacheReadInputTokens,
 				)
-				if hooks != nil && hooks.AfterTurn != nil {
-					hooks.AfterTurn(turnNo, turnResult, nil)
-				}
 			},
 			OnTrace: func(event openaiwsv2.RelayTraceEvent) {
 				logOpenAIWSV2Passthrough(
@@ -554,6 +647,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			ImageCount:                relayResult.Usage.ImageCount,
 		},
 		Model:           relayResult.RequestModel,
+		UpstreamModel:   relayResult.RequestModel,
 		ServiceTier:     requestServiceTierPtr.Load(),
 		Stream:          true,
 		OpenAIWSMode:    true,
@@ -565,6 +659,15 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 
 	turnCount := int(completedTurns.Load())
 	if relayExit == nil {
+		if turnLifecycle.hasActive() {
+			turnErr := wrapOpenAIWSIngressTurnError(
+				"incomplete_turn",
+				errors.New("upstream websocket closed before a terminal response event"),
+				relayResult.UpstreamToClientFrames > 0,
+			)
+			turnLifecycle.finish(nil, turnErr)
+			return turnErr
+		}
 		logOpenAIWSV2Passthrough(
 			"relay_completed account_id=%d request_id=%s terminal_event=%s duration_ms=%d c2u_frames=%d u2c_frames=%d dropped_frames=%d turns=%d",
 			account.ID,
@@ -576,10 +679,6 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			relayResult.DroppedDownstreamFrames,
 			turnCount,
 		)
-		// 正常路径按 terminal 事件逐 turn 已回调；仅在零 turn 场景兜底回调一次。
-		if turnCount == 0 && hooks != nil && hooks.AfterTurn != nil {
-			hooks.AfterTurn(1, result, nil)
-		}
 		return nil
 	}
 	logOpenAIWSV2Passthrough(
@@ -608,9 +707,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		relayErr,
 		relayExit.WroteDownstream,
 	)
-	if hooks != nil && hooks.AfterTurn != nil {
-		hooks.AfterTurn(turnCount+1, nil, turnErr)
-	}
+	turnLifecycle.finish(nil, turnErr)
 	return turnErr
 }
 

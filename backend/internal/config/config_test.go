@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"net"
 	"os"
 	pathpkg "path"
@@ -13,6 +14,66 @@ import (
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
 )
+
+func TestNormalizeForwardedClientIPHeaders(t *testing.T) {
+	headers, err := NormalizeForwardedClientIPHeaders([]string{
+		" x-cdn-client-ip ",
+		"X-CDN-CLIENT-IP",
+		"true-client-ip",
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"X-Cdn-Client-Ip", "True-Client-Ip"}, headers)
+
+	_, err = NormalizeForwardedClientIPHeaders([]string{"X Invalid"})
+	require.ErrorContains(t, err, "invalid HTTP header field name")
+
+	_, err = NormalizeForwardedClientIPHeaders([]string{"Authorization"})
+	require.ErrorContains(t, err, "cannot be used as a client IP source")
+}
+
+func TestNormalizeForwardedClientIPHeadersLimit(t *testing.T) {
+	headers := make([]string, 0, MaxForwardedClientIPHeaders+1)
+	for i := 0; i <= MaxForwardedClientIPHeaders; i++ {
+		headers = append(headers, fmt.Sprintf("X-CDN-IP-%d", i))
+	}
+
+	_, err := NormalizeForwardedClientIPHeaders(headers)
+	require.ErrorContains(t, err, "at most 16 unique names")
+}
+
+func TestLoadForwardedClientIPHeaders(t *testing.T) {
+	t.Run("yaml normalizes and deduplicates", func(t *testing.T) {
+		resetViperWithConfig(t, "security:\n  forwarded_client_ip_headers: [x-cdn-ip, X-CDN-IP, true-client-ip]\njwt:\n  secret: "+strings.Repeat("x", 32)+"\ntotp:\n  encryption_key: "+strings.Repeat("a", 64)+"\n")
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Equal(t, []string{"X-Cdn-Ip", "True-Client-Ip"}, cfg.Security.ForwardedClientIPHeaders)
+	})
+
+	t.Run("environment overrides yaml", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		t.Setenv("SECURITY_FORWARDED_CLIENT_IP_HEADERS", " x-env-ip , X-ENV-IP, true-client-ip ")
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Equal(t, []string{"X-Env-Ip", "True-Client-Ip"}, cfg.Security.ForwardedClientIPHeaders)
+	})
+
+	t.Run("invalid header fails fast", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		t.Setenv("SECURITY_FORWARDED_CLIENT_IP_HEADERS", "X-Valid-IP, X Invalid")
+
+		_, err := Load()
+		require.ErrorContains(t, err, "security.forwarded_client_ip_headers")
+	})
+}
+
+func TestConfigValidateRejectsInvalidTrustedProxy(t *testing.T) {
+	resetViperWithConfig(t, "server:\n  trusted_proxies: [not-a-cidr]\njwt:\n  secret: "+strings.Repeat("x", 32)+"\ntotp:\n  encryption_key: "+strings.Repeat("a", 64)+"\n")
+
+	_, err := Load()
+	require.ErrorContains(t, err, "server.trusted_proxies contains invalid IP or CIDR")
+}
 
 func resetViperWithJWTSecret(t *testing.T) {
 	t.Helper()
@@ -58,6 +119,56 @@ func TestLoadServerTimingConfig(t *testing.T) {
 		_, err := Load()
 		require.Error(t, err)
 	})
+}
+
+func TestLoadServerShutdownTimeout(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Equal(t, 30, cfg.Server.ShutdownTimeoutSeconds)
+		require.Equal(t, 30*time.Second, cfg.Server.ShutdownTimeout())
+	})
+
+	t.Run("environment override", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		t.Setenv("SERVER_SHUTDOWN_TIMEOUT_SECONDS", "45")
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Equal(t, 45, cfg.Server.ShutdownTimeoutSeconds)
+		require.Equal(t, 45*time.Second, cfg.Server.ShutdownTimeout())
+	})
+
+	t.Run("explicit zero uses safe fallback", func(t *testing.T) {
+		resetViperWithConfig(t, "server:\n  shutdown_timeout_seconds: 0\njwt:\n  secret: "+strings.Repeat("x", 32)+"\ntotp:\n  encryption_key: "+strings.Repeat("a", 64)+"\n")
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Zero(t, cfg.Server.ShutdownTimeoutSeconds)
+		require.Equal(t, 30*time.Second, cfg.Server.ShutdownTimeout())
+	})
+
+	for _, testCase := range []struct {
+		name  string
+		value string
+	}{
+		{name: "negative", value: "-1"},
+		{name: "over maximum", value: "3601"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			resetViperWithJWTSecret(t)
+			t.Setenv("SERVER_SHUTDOWN_TIMEOUT_SECONDS", testCase.value)
+
+			_, err := Load()
+			require.ErrorContains(t, err, "server.shutdown_timeout_seconds")
+		})
+	}
+}
+
+func TestServerConfigShutdownTimeoutZeroValue(t *testing.T) {
+	require.Equal(t, 30*time.Second, (ServerConfig{}).ShutdownTimeout())
 }
 
 func resetViperWithConfig(t *testing.T, content string) string {
@@ -150,6 +261,8 @@ func TestLoadDefaultOpenAIImageTimeoutConfig(t *testing.T) {
 	cfg, err := Load()
 	require.NoError(t, err)
 	require.Equal(t, 600, cfg.Gateway.OpenAIResponseHeaderTimeout)
+	require.Equal(t, 60, cfg.Gateway.OpenAIFirstOutputTimeoutSeconds)
+	require.Equal(t, 180, cfg.Gateway.OpenAIHighEffortFirstOutputTimeoutSeconds)
 	require.Equal(t, 1800, cfg.Gateway.ImageNonstreamTotalTimeoutSeconds)
 	require.Equal(t, DefaultUpstreamResponseReadMaxBytes, cfg.Gateway.UpstreamResponseReadMaxBytes)
 }
@@ -1161,6 +1274,27 @@ func TestValidateOpsCleanupScheduleRequired(t *testing.T) {
 	}
 }
 
+func TestOpsCleanupDefaults(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	cleanup := cfg.Ops.Cleanup
+	if cleanup.Schedule != "0 4 * * *" {
+		t.Fatalf("schedule = %q, want 0 4 * * *", cleanup.Schedule)
+	}
+	if cleanup.ArchiveExpireDays != 30 {
+		t.Fatalf("archive_expire_days = %d, want 30", cleanup.ArchiveExpireDays)
+	}
+	if cleanup.ArchiveWindowDays != 1 || cleanup.MaxCatchupWindowsPerRun != 2 {
+		t.Fatalf("window defaults = %d/%d, want 1/2", cleanup.ArchiveWindowDays, cleanup.MaxCatchupWindowsPerRun)
+	}
+	if cleanup.ArchiveTimeoutSeconds <= 0 || cleanup.DeleteTimeoutSeconds <= 0 || cleanup.RunTimeoutSeconds <= 0 || cleanup.DeleteBatchSize <= 0 {
+		t.Fatalf("cleanup execution controls must be positive: %+v", cleanup)
+	}
+}
+
 func TestValidateConcurrencyPingInterval(t *testing.T) {
 	resetViperWithJWTSecret(t)
 
@@ -1749,6 +1883,26 @@ func TestValidateConfigErrors(t *testing.T) {
 			name:    "ops cleanup minute retention",
 			mutate:  func(c *Config) { c.Ops.Cleanup.MinuteMetricsRetentionDays = -1 },
 			wantErr: "ops.cleanup.minute_metrics_retention_days",
+		},
+		{
+			name:    "ops cleanup archive window",
+			mutate:  func(c *Config) { c.Ops.Cleanup.ArchiveWindowDays = 0 },
+			wantErr: "ops.cleanup.archive_window_days",
+		},
+		{
+			name:    "ops cleanup archive timeout",
+			mutate:  func(c *Config) { c.Ops.Cleanup.ArchiveTimeoutSeconds = 0 },
+			wantErr: "ops.cleanup.archive_timeout_seconds",
+		},
+		{
+			name:    "ops cleanup delete timeout",
+			mutate:  func(c *Config) { c.Ops.Cleanup.DeleteTimeoutSeconds = 0 },
+			wantErr: "ops.cleanup.delete_timeout_seconds",
+		},
+		{
+			name:    "ops cleanup run timeout budget",
+			mutate:  func(c *Config) { c.Ops.Cleanup.RunTimeoutSeconds = 1 },
+			wantErr: "ops.cleanup.run_timeout_seconds",
 		},
 	}
 

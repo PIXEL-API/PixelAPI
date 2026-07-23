@@ -367,6 +367,103 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_DefaultDisabledUsesLega
 	require.False(t, decision.StickyPreviousHit)
 }
 
+func TestOpenAIGatewayService_SelectAccountWithSchedulerForImages_FallbackPersistsBasicDispatchRequirement(t *testing.T) {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+
+	ctx := context.Background()
+	groupID := int64(10107)
+	account := Account{
+		ID:          36003,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		GroupIDs:    []int64{groupID},
+	}
+	cfg := &config.Config{}
+	cfg.Gateway.Scheduling.LoadBatchEnabled = false
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: []Account{account}},
+		cache:              &schedulerTestGatewayCache{},
+		cfg:                cfg,
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+	}
+
+	selection, _, err := svc.SelectAccountWithSchedulerForImages(
+		ctx,
+		&groupID,
+		"",
+		"gpt-image-2",
+		nil,
+		OpenAIImagesCapabilityNative,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, account.ID, selection.Account.ID)
+	if selection.ReleaseFunc != nil {
+		defer selection.ReleaseFunc()
+	}
+
+	require.NotNil(t, selection.OpenAIDispatchRequirements)
+	require.Equal(t, "gpt-image-2", selection.OpenAIDispatchRequirements.RequestedModel)
+	require.Equal(t, OpenAIUpstreamTransportHTTPSSE, selection.OpenAIDispatchRequirements.RequiredTransport)
+	require.Equal(t, OpenAIImagesCapabilityBasic, selection.OpenAIDispatchRequirements.RequiredImageCapability)
+
+	latest, err := svc.RevalidateSelectedOpenAIAccountForDispatch(ctx, &groupID, selection.Account, *selection.OpenAIDispatchRequirements)
+	require.NoError(t, err)
+	require.NotNil(t, latest)
+	require.Equal(t, account.ID, latest.ID)
+}
+
+func TestOpenAIGatewayService_SelectAccountWithSchedulerForImages_AccountShareModeOAuthPersistsBasicDispatchRequirement(t *testing.T) {
+	modeGroupID := int64(10110)
+	consumerUserID := int64(5581)
+	apiKeyID := int64(20104)
+	account := Account{
+		ID:          36004,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+	}
+	shareRepo := &accountShareModeRepoStub{
+		membership: &AccountShareMembership{ID: 2, AccountID: account.ID, ConsumerUserID: consumerUserID, APIKeyID: apiKeyID},
+		listing:    &AccountShareListing{ID: 2, AccountID: account.ID, OwnerUserID: 1, Status: AccountShareListingStatusActive},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:             stubOpenAIAccountRepo{accounts: []Account{account}},
+		accountShareModeService: &AccountShareModeService{repo: shareRepo},
+	}
+	ctx := WithAccountShareModeRequest(context.Background(), consumerUserID, apiKeyID)
+
+	selection, decision, err := svc.SelectAccountWithSchedulerForImages(
+		ctx,
+		&modeGroupID,
+		"",
+		"gpt-image-2",
+		nil,
+		OpenAIImagesCapabilityNative,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, openAIAccountScheduleLayerAccountShareMode, decision.Layer)
+	if selection.ReleaseFunc != nil {
+		defer selection.ReleaseFunc()
+	}
+
+	require.NotNil(t, selection.OpenAIDispatchRequirements)
+	require.Equal(t, OpenAIImagesCapabilityBasic, selection.OpenAIDispatchRequirements.RequiredImageCapability)
+
+	latest, err := svc.RevalidateSelectedOpenAIAccountForDispatch(ctx, &modeGroupID, selection.Account, *selection.OpenAIDispatchRequirements)
+	require.NoError(t, err)
+	require.NotNil(t, latest)
+	require.Equal(t, account.ID, latest.ID)
+}
+
 func TestOpenAIGatewayService_SelectAccountWithScheduler_DefaultDisabled_RequiredWSV2_SkipsHTTPOnlyAccount(t *testing.T) {
 	resetOpenAIAdvancedSchedulerSettingCacheForTest()
 
@@ -834,7 +931,7 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionSticky(t *testin
 	}
 }
 
-func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionStickyBusyEscapesWhenQueueFull(t *testing.T) {
+func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionStickyBusyEscapesForReplaySafeRequest(t *testing.T) {
 	ctx := context.Background()
 	groupID := int64(10100)
 	accounts := []Account{
@@ -876,7 +973,7 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionStickyBusyEscape
 			21002: true,
 		},
 		waitCounts: map[int64]int{
-			21001: 999,
+			21001: 0, // 普通请求不应因粘性账号繁忙而进入长等待
 		},
 		loadMap: map[int64]*AccountLoadInfo{
 			21001: {AccountID: 21001, LoadRate: 90, WaitingCount: 9},

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -188,6 +189,27 @@ func TestOpenAIImagesRequestFailureReturnsAccurateClientStatus(t *testing.T) {
 	require.Equal(t, http.StatusUnprocessableEntity, recorder.Code)
 	require.Equal(t, "invalid_request_error", gjson.Get(recorder.Body.String(), "error.type").String())
 	require.Equal(t, "unsupported image option", gjson.Get(recorder.Body.String(), "error.message").String())
+}
+
+func TestOpenAIRequestBodyTooLargeFailoverExhaustedReturnsSanitized413(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	h := &OpenAIGatewayHandler{}
+
+	h.handleFailoverExhausted(c, &service.UpstreamFailoverError{
+		StatusCode:       http.StatusRequestEntityTooLarge,
+		ResponseBody:     []byte(`{"error":{"message":"proxy internal.example leaked tenant-secret"}}`),
+		Reason:           service.GatewayFailureReason("openai_request_body_too_large"),
+		ClientStatusCode: http.StatusRequestEntityTooLarge,
+		ClientMessage:    service.OpenAIRequestBodyTooLargeClientMessage,
+	}, false)
+
+	require.Equal(t, http.StatusRequestEntityTooLarge, recorder.Code)
+	require.Equal(t, "invalid_request_error", gjson.Get(recorder.Body.String(), "error.type").String())
+	require.Equal(t, service.OpenAIRequestBodyTooLargeClientMessage, gjson.Get(recorder.Body.String(), "error.message").String())
+	require.NotContains(t, recorder.Body.String(), "internal.example")
+	require.NotContains(t, recorder.Body.String(), "tenant-secret")
 }
 
 func TestAppendOpenAIProxyLogFields(t *testing.T) {
@@ -667,6 +689,30 @@ func TestOpenAIResponses_RejectsHTTPContinuationPreviousResponseID(t *testing.T)
 	require.Contains(t, w.Body.String(), "previous_response_id")
 }
 
+func TestOpenAIResponses_RejectsExplicitImageIntentWhenGroupDisallowsImages(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(
+		`{"model":"gpt-5.4","input":"generate an image of a lighthouse","tools":[{"type":"image_generation"}]}`,
+	))
+	c.Request.Header.Set("Content-Type", "application/json")
+	groupID := int64(2)
+	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
+		ID:      101,
+		GroupID: &groupID,
+		Group:   &service.Group{ID: groupID, AllowImageGeneration: false},
+		User:    &service.User{ID: 1},
+	})
+	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 1, Concurrency: 1})
+
+	newOpenAIHandlerForPreviousResponseIDValidation(t, nil).Responses(c)
+
+	require.Equal(t, http.StatusForbidden, w.Code)
+	require.Contains(t, w.Body.String(), service.ImageGenerationPermissionMessage())
+}
+
 func TestOpenAIResponses_FunctionCallOutputHTTPGuidanceDoesNotSuggestPreviousResponseReuse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -1035,4 +1081,39 @@ func TestOpenAIFirstOutputFailoverExhaustedAllowsOnlyOneAccountSwitch(t *testing
 
 	require.False(t, openAIFirstOutputFailoverExhausted(&service.UpstreamFailoverError{}, &switchCount))
 	require.False(t, openAIFirstOutputFailoverExhausted(nil, &switchCount))
+}
+
+func TestOpenAIResponsesDispatchContextDetachesRoutingCancellation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	t.Cleanup(cancelRequest)
+	requestCtx = service.WithOpenAIFirstOutputStart(requestCtx, time.Now())
+	requestCtx = service.WithOpenAIFirstOutputBudget(requestCtx, time.Minute)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(requestCtx)
+	apiKey := &service.APIKey{
+		ID:     22,
+		UserID: 11,
+		Group:  &service.Group{Platform: service.PlatformGrok},
+	}
+	routingCtx := openAIAccountShareModeRequestContext(c, apiKey)
+	routingCtx = openAICompatibleRequestContext(routingCtx, apiKey)
+	routingCtx, cancelRouting := service.WithOpenAIFirstOutputRoutingDeadline(routingCtx)
+	dispatchCtx := openAIResponsesDispatchContext(c, routingCtx, apiKey)
+
+	cancelRouting()
+	require.ErrorIs(t, routingCtx.Err(), context.Canceled)
+	require.NoError(t, dispatchCtx.Err())
+	shareMode, ok := service.AccountShareModeRequestFromContext(dispatchCtx)
+	require.True(t, ok)
+	require.Equal(t, int64(11), shareMode.UserID)
+	require.Equal(t, int64(22), shareMode.APIKeyID)
+	require.Equal(t, service.PlatformGrok, dispatchCtx.Value(ctxkey.ForcePlatform))
+	_, budgetEnabled := service.OpenAIFirstOutputBudgetRemaining(dispatchCtx)
+	require.True(t, budgetEnabled)
+
+	cancelRequest()
+	require.ErrorIs(t, dispatchCtx.Err(), context.Canceled)
 }

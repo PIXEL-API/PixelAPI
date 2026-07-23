@@ -409,6 +409,7 @@ export interface PublicSettings {
   withdrawal_management_enabled?: boolean;
   withdrawal_rate_limit_window_days?: number;
   withdrawal_rate_limit_max?: number;
+  withdrawal_rate_limit_exempt_amount?: number;
   table_default_page_size: number;
   table_page_size_options: number[];
   custom_menu_items: CustomMenuItem[];
@@ -927,6 +928,7 @@ export interface CreateApiKeyRequest {
   ip_blacklist?: string[];
   quota?: number; // Quota limit in USD (0 = unlimited)
   expires_in_days?: number; // Days until expiry (null = never expires)
+  expires_at?: string; // Exact expiration time in RFC3339 format
   rate_limit_5h?: number;
   rate_limit_1d?: number;
   rate_limit_7d?: number;
@@ -1703,8 +1705,10 @@ export interface UsageLog {
   cache_read_tokens: number;
   cache_creation_5m_tokens: number;
   cache_creation_1h_tokens: number;
+  image_input_tokens: number;
 
   input_cost: number;
+  image_input_cost: number;
   output_cost: number;
   cache_creation_cost: number;
   cache_read_cost: number;

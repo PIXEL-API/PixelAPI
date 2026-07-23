@@ -273,10 +273,11 @@ type SystemSettings struct {
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
 
 	// Functional module switches
-	InvoiceManagementEnabled      bool `json:"invoice_management_enabled"`
-	WithdrawalManagementEnabled   bool `json:"withdrawal_management_enabled"`
-	WithdrawalRateLimitWindowDays int  `json:"withdrawal_rate_limit_window_days"`
-	WithdrawalRateLimitMax        int  `json:"withdrawal_rate_limit_max"`
+	InvoiceManagementEnabled        bool    `json:"invoice_management_enabled"`
+	WithdrawalManagementEnabled     bool    `json:"withdrawal_management_enabled"`
+	WithdrawalRateLimitWindowDays   int     `json:"withdrawal_rate_limit_window_days"`
+	WithdrawalRateLimitMax          int     `json:"withdrawal_rate_limit_max"`
+	WithdrawalRateLimitExemptAmount float64 `json:"withdrawal_rate_limit_exempt_amount"`
 
 	// User-owned account import limit
 	UserAccountImportLimit int `json:"user_account_import_limit"`
@@ -350,12 +351,13 @@ type PublicSettings struct {
 
 	OpenAIAccountLevels []OpenAIAccountLevelConfig `json:"openai_account_levels"`
 
-	AffiliateEnabled              bool `json:"affiliate_enabled"`
-	InvoiceManagementEnabled      bool `json:"invoice_management_enabled"`
-	WithdrawalManagementEnabled   bool `json:"withdrawal_management_enabled"`
-	WithdrawalRateLimitWindowDays int  `json:"withdrawal_rate_limit_window_days"`
-	WithdrawalRateLimitMax        int  `json:"withdrawal_rate_limit_max"`
-	RiskControlEnabled            bool `json:"risk_control_enabled"`
+	AffiliateEnabled                bool    `json:"affiliate_enabled"`
+	InvoiceManagementEnabled        bool    `json:"invoice_management_enabled"`
+	WithdrawalManagementEnabled     bool    `json:"withdrawal_management_enabled"`
+	WithdrawalRateLimitWindowDays   int     `json:"withdrawal_rate_limit_window_days"`
+	WithdrawalRateLimitMax          int     `json:"withdrawal_rate_limit_max"`
+	WithdrawalRateLimitExemptAmount float64 `json:"withdrawal_rate_limit_exempt_amount"`
+	RiskControlEnabled              bool    `json:"risk_control_enabled"`
 }
 
 type LoginAgreementDocument struct {

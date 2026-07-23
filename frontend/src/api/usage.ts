@@ -51,9 +51,15 @@ export interface PublicTodayUsageStats {
   timezone: string
 }
 
-export interface TrendParams {
+export interface DashboardTimeRangeParams {
   start_date?: string
   end_date?: string
+  start_time?: string
+  end_time?: string
+  timezone?: string
+}
+
+export interface TrendParams extends DashboardTimeRangeParams {
   granularity?: 'day' | 'hour' | 'week' | 'month'
 }
 
@@ -235,7 +241,8 @@ export async function getStatsByDateRange(
   startDate: string,
   endDate: string,
   apiKeyId?: number,
-  options: Pick<UsageQueryParams, 'start_time' | 'end_time' | 'timezone'> = {}
+  options: Pick<UsageQueryParams, 'start_time' | 'end_time' | 'timezone'> = {},
+  config: { signal?: AbortSignal } = {}
 ): Promise<UsageStatsResponse> {
   const params: Record<string, unknown> = {
     start_date: startDate,
@@ -248,6 +255,7 @@ export async function getStatsByDateRange(
   }
 
   const { data } = await apiClient.get<UsageStatsResponse>('/usage/stats', {
+    ...config,
     params
   })
   return data
@@ -326,10 +334,7 @@ export async function getDashboardTrend(params?: TrendParams): Promise<TrendResp
  * @param params - Query parameters for filtering
  * @returns Model usage statistics for current user
  */
-export async function getDashboardModels(params?: {
-  start_date?: string
-  end_date?: string
-}): Promise<ModelStatsResponse> {
+export async function getDashboardModels(params?: DashboardTimeRangeParams): Promise<ModelStatsResponse> {
   const { data } = await apiClient.get<ModelStatsResponse>('/usage/dashboard/models', { params })
   return data
 }
