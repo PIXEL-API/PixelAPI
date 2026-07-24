@@ -10,6 +10,11 @@ DECLARE
     high_water BIGINT;
     batch_count INTEGER;
     insufficient_user_id BIGINT;
+    listing_record RECORD;
+    base_room_name TEXT;
+    candidate_room_name TEXT;
+    room_name_suffix TEXT;
+    room_name_attempt INTEGER;
 BEGIN
     PERFORM set_config('search_path', 'pg_catalog, public, pg_temp', FALSE);
     CREATE TEMP TABLE IF NOT EXISTS account_share_online_ledger_batch (
@@ -184,14 +189,78 @@ BEGIN
             EXIT;
         END IF;
 
-        UPDATE account_share_listings listing
-        SET room_name = COALESCE(NULLIF(BTRIM(listing.room_name), ''), account.name),
-            platform = COALESCE(NULLIF(BTRIM(listing.platform), ''), account.platform),
-            account_level = COALESCE(NULLIF(BTRIM(listing.account_level), ''), account.account_level),
-            updated_at = GREATEST(listing.updated_at, account.updated_at)
-        FROM accounts account, account_share_online_id_batch batch
-        WHERE listing.id = batch.id
-          AND account.id = listing.account_id;
+        FOR listing_record IN
+            SELECT
+                listing.id,
+                listing.room_name,
+                listing.platform,
+                listing.account_level,
+                listing.updated_at,
+                account.name AS account_name,
+                account.platform AS account_platform,
+                account.account_level AS account_account_level,
+                account.updated_at AS account_updated_at
+            FROM account_share_listings listing
+            JOIN account_share_online_id_batch batch ON batch.id = listing.id
+            JOIN accounts account ON account.id = listing.account_id
+            ORDER BY listing.id
+        LOOP
+            base_room_name := COALESCE(
+                NULLIF(BTRIM(listing_record.room_name), ''),
+                NULLIF(BTRIM(listing_record.account_name), ''),
+                '房间'
+            );
+            candidate_room_name := base_room_name;
+            room_name_attempt := 0;
+
+            LOOP
+                BEGIN
+                    UPDATE account_share_listings
+                    SET room_name = candidate_room_name,
+                        platform = COALESCE(
+                            NULLIF(BTRIM(listing_record.platform), ''),
+                            listing_record.account_platform
+                        ),
+                        account_level = COALESCE(
+                            NULLIF(BTRIM(listing_record.account_level), ''),
+                            listing_record.account_account_level
+                        ),
+                        updated_at = GREATEST(
+                            listing_record.updated_at,
+                            listing_record.account_updated_at
+                        )
+                    WHERE id = listing_record.id;
+                    EXIT;
+                EXCEPTION
+                    WHEN unique_violation THEN
+                        room_name_attempt := room_name_attempt + 1;
+                        IF room_name_attempt > 100 THEN
+                            RAISE EXCEPTION
+                                'cannot allocate a unique room name for listing_id %',
+                                listing_record.id
+                                USING ERRCODE = '23505';
+                        END IF;
+                        room_name_suffix := CASE
+                            WHEN room_name_attempt = 1
+                                THEN FORMAT(' ·%s', listing_record.id)
+                            ELSE FORMAT(
+                                ' ·%s-%s',
+                                listing_record.id,
+                                room_name_attempt
+                            )
+                        END;
+                        candidate_room_name :=
+                            LEFT(
+                                base_room_name,
+                                GREATEST(
+                                    1,
+                                    100 - CHAR_LENGTH(room_name_suffix)
+                                )
+                            )
+                            || room_name_suffix;
+                END;
+            END LOOP;
+        END LOOP;
 
         UPDATE account_share_online_migration_progress
         SET last_id = (SELECT MAX(id) FROM account_share_online_id_batch),
