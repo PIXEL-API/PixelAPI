@@ -26,6 +26,8 @@ DROP TRIGGER IF EXISTS trg_account_share_online_compat_public_group
     ON account_groups;
 DROP TRIGGER IF EXISTS trg_account_share_online_guard_pending_public_private
     ON accounts;
+DROP TRIGGER IF EXISTS trg_account_share_online_guard_orphan_approved_public
+    ON accounts;
 
 DROP FUNCTION IF EXISTS account_share_online_compat_affiliate_ledger();
 DROP FUNCTION IF EXISTS account_share_online_compat_settlement_cost();
@@ -33,6 +35,7 @@ DROP FUNCTION IF EXISTS account_share_online_compat_listing_identity();
 DROP FUNCTION IF EXISTS account_share_online_compat_listing_placement();
 DROP FUNCTION IF EXISTS account_share_online_compat_public_account_trigger();
 DROP FUNCTION IF EXISTS account_share_online_compat_public_group_trigger();
+DROP FUNCTION IF EXISTS account_share_online_guard_orphan_approved_public();
 DROP FUNCTION IF EXISTS account_share_online_compat_public_placement(BIGINT);
 DROP FUNCTION IF EXISTS account_share_online_guard_pending_public_private();
 
