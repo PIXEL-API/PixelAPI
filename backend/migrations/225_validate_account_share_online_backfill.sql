@@ -2,7 +2,7 @@
 -- Every assertion is fail-fast so the old release can continue serving while
 -- the operator fixes data and safely retries this migration.
 SET LOCAL lock_timeout = '2s';
-SET LOCAL statement_timeout = '10min';
+SET LOCAL statement_timeout = '30min';
 
 DO $$
 DECLARE
