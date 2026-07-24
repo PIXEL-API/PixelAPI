@@ -407,6 +407,21 @@ func TestAccountShareGlobalInvitePolicyFollowupMigrationsAreFailFastAndRetryable
 	require.NotContains(t, pending, "SET credentials =")
 	require.NotContains(t, pending, "SET balance =")
 
+	guardSQL, err := migrations.FS.ReadFile("224_account_share_pending_public_to_private_guard.sql")
+	require.NoError(t, err)
+	guard := string(guardSQL)
+	online, err = validateMigrationExecutionMode("224_account_share_pending_public_to_private_guard.sql", guard)
+	require.NoError(t, err)
+	require.False(t, online)
+	require.Contains(t, guard, "trg_account_share_online_guard_pending_public_private")
+	require.Contains(t, guard, "BEFORE INSERT OR UPDATE")
+	require.Contains(t, guard, "NEW.share_mode := 'private'")
+	require.Contains(t, guard, "NEW.share_status := 'approved'")
+	require.Contains(t, guard, "scheduler_outbox")
+	require.NotContains(t, guard, "SET status =")
+	require.NotContains(t, guard, "SET credentials =")
+	require.NotContains(t, guard, "SET balance =")
+
 	validateSQL, err := migrations.FS.ReadFile("225_validate_account_share_online_backfill.sql")
 	require.NoError(t, err)
 	validate := string(validateSQL)
@@ -427,6 +442,8 @@ func TestAccountShareGlobalInvitePolicyFollowupMigrationsAreFailFastAndRetryable
 	require.Contains(t, contract, "DROP TABLE IF EXISTS account_share_mode_policies")
 	require.Contains(t, contract, "DROP TABLE IF EXISTS account_share_online_migration_progress")
 	require.Contains(t, contract, "DROP TRIGGER IF EXISTS trg_account_share_online_compat_affiliate_ledger")
+	require.Contains(t, contract, "DROP TRIGGER IF EXISTS trg_account_share_online_guard_pending_public_private")
+	require.Contains(t, contract, "DROP FUNCTION IF EXISTS account_share_online_guard_pending_public_private()")
 }
 
 func TestAccountShareRoomMigrationKeepsExternalPlacementIdentityConsistent(t *testing.T) {
