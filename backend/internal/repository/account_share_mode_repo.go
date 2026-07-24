@@ -5301,30 +5301,37 @@ func accountShareRoomRepresentativeJoinSQLWithType(joinType, nowExpr string) str
 	return fmt.Sprintf(`
 		%s (
 			SELECT a.*
-			FROM accounts a
-			LEFT JOIN account_external_placements room_placement
-				ON room_placement.account_id = a.id
-				AND room_placement.listing_id = l.id
-				AND room_placement.placement_type = 'room'
-				AND room_placement.state = 'active'
-			WHERE a.deleted_at IS NULL
-				AND (
-					room_placement.account_id IS NOT NULL
-					OR (
-						a.id = l.account_id
-						AND NOT EXISTS (
-							SELECT 1
-							FROM account_external_placements active_room_placement
-							WHERE active_room_placement.listing_id = l.id
-								AND active_room_placement.placement_type = 'room'
-								AND active_room_placement.state = 'active'
-						)
+			FROM (
+				SELECT
+					room_placement.account_id,
+					room_placement.priority,
+					FALSE AS legacy_fallback
+				FROM account_external_placements room_placement
+				WHERE room_placement.listing_id = l.id
+					AND room_placement.placement_type = 'room'
+					AND room_placement.state = 'active'
+
+				UNION ALL
+
+				SELECT
+					l.account_id,
+					NULL::INTEGER AS priority,
+					TRUE AS legacy_fallback
+				WHERE l.account_id IS NOT NULL
+					AND NOT EXISTS (
+						SELECT 1
+						FROM account_external_placements active_room_placement
+						WHERE active_room_placement.listing_id = l.id
+							AND active_room_placement.placement_type = 'room'
+							AND active_room_placement.state = 'active'
 					)
-				)
+			) room_candidate
+			JOIN accounts a ON a.id = room_candidate.account_id
+			WHERE a.deleted_at IS NULL
 			ORDER BY
-				CASE WHEN room_placement.account_id IS NULL THEN 1 ELSE 0 END,
+				CASE WHEN room_candidate.legacy_fallback THEN 1 ELSE 0 END,
 				CASE WHEN %s THEN 1 ELSE 0 END,
-				room_placement.priority ASC NULLS LAST,
+				room_candidate.priority ASC NULLS LAST,
 				a.last_used_at ASC NULLS FIRST,
 				a.id ASC
 			LIMIT 1
