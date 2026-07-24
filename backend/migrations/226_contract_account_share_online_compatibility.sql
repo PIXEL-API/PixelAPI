@@ -28,6 +28,8 @@ DROP TRIGGER IF EXISTS trg_account_share_online_guard_pending_public_private
     ON accounts;
 DROP TRIGGER IF EXISTS trg_account_share_online_guard_orphan_approved_public
     ON accounts;
+DROP TRIGGER IF EXISTS trg_account_share_online_guard_room_private_topology
+    ON account_external_placements;
 
 DROP FUNCTION IF EXISTS account_share_online_compat_affiliate_ledger();
 DROP FUNCTION IF EXISTS account_share_online_compat_settlement_cost();
@@ -38,6 +40,12 @@ DROP FUNCTION IF EXISTS account_share_online_compat_public_group_trigger();
 DROP FUNCTION IF EXISTS account_share_online_guard_orphan_approved_public();
 DROP FUNCTION IF EXISTS account_share_online_compat_public_placement(BIGINT);
 DROP FUNCTION IF EXISTS account_share_online_guard_pending_public_private();
+DROP FUNCTION IF EXISTS account_share_online_guard_room_private_topology();
+DROP FUNCTION IF EXISTS account_share_online_ensure_room_private_topology(
+    BIGINT,
+    TEXT,
+    BIGINT
+);
 
 DROP TABLE IF EXISTS account_share_online_migration_progress;
 DROP TABLE IF EXISTS account_share_mode_policies;
