@@ -222,17 +222,10 @@
 
           <template #cell-share="{ row }">
             <div class="flex flex-col gap-1">
-              <span
-                v-if="isAccountShareModeOnly(row)"
-                :class="accountShareModeOnlyBadgeClass()"
-                :title="t('userAccounts.accountShareModeOnlyHint')"
-              >
-                {{ t('userAccounts.accountShareModeOnly') }}
+              <span :class="externalPlacementBadgeClass(row)" :title="externalPlacementTitle(row)">
+                {{ externalPlacementLabel(row) }}
               </span>
-              <span v-else :class="shareModeBadgeClass(row.share_mode)">
-                {{ shareModeLabel(row.share_mode) }}
-              </span>
-              <div v-if="!isAccountShareModeOnly(row) && row.share_mode === 'public'" class="flex items-center gap-1">
+              <div v-if="externalPlacementTarget(row) === 'public_pool'" class="flex items-center gap-1">
                 <span :class="shareStatusBadgeClass(row.share_status)" :title="shareStatusTitle(row)">
                   {{ shareStatusLabel(row.share_status) }}
                 </span>
@@ -453,7 +446,6 @@
       :allow-proxy="false"
       :allow-billing-rate="false"
       :allow-base-url="false"
-      :has-account-share-mode-only="selectedHasAccountShareModeOnly"
       @close="showBulkEditModal = false"
       @updated="handleBulkAccountsUpdated"
     />
@@ -539,7 +531,16 @@
       @refresh-token="handleRefreshToken"
       @set-privacy="handleSetPrivacy"
       @moderation="openModerationModal"
+      @external-placement="openExternalPlacementDialog"
       @verify-level="handleVerifyLevel"
+    />
+
+    <ExternalPlacementDialog
+      :show="showExternalPlacementDialog"
+      :account="externalPlacementAccount"
+      :owner-user-id="Number(authStore.user?.id || 0)"
+      @close="closeExternalPlacementDialog"
+      @converted="handleExternalPlacementConverted"
     />
 
     <UserContentModerationModal
@@ -581,11 +582,13 @@ import AccountStatsModal from '@/components/account/AccountStatsModal.vue'
 import ReAuthAccountModal from '@/components/account/ReAuthAccountModal.vue'
 import AccountTestModal from '@/components/account/AccountTestModal.vue'
 import UserAccountActionMenu from '@/components/account/UserAccountActionMenu.vue'
+import ExternalPlacementDialog from '@/components/account-share/ExternalPlacementDialog.vue'
 import UserContentModerationModal from '@/components/account/UserContentModerationModal.vue'
 import ImportAccountsModal from '@/components/user/ImportAccountsModal.vue'
 import UserProxyManagerModal from '@/components/user/UserProxyManagerModal.vue'
 import { ACCOUNT_STATUS_FILTER_OPTIONS } from '@/constants/account'
 import type { Account, AccountPlatform, AccountType, AdminGroup, Group, Proxy, WindowStats } from '@/types'
+import type { ConvertAccountExternalPlacementResponse } from '@/api/accountShare'
 import type { Column } from '@/components/common/types'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
 import { extractApiErrorMessage } from '@/utils/apiError'
@@ -618,6 +621,7 @@ const showTestModal = ref(false)
 const showStatsModal = ref(false)
 const showReAuthModal = ref(false)
 const showModerationModal = ref(false)
+const showExternalPlacementDialog = ref(false)
 const showProxyManager = ref(false)
 const editingAccount = ref<Account | null>(null)
 const accountToDelete = ref<Account | null>(null)
@@ -625,6 +629,7 @@ const testingAccount = ref<Account | null>(null)
 const statsAccount = ref<Account | null>(null)
 const reAuthAccount = ref<Account | null>(null)
 const moderationAccount = ref<Account | null>(null)
+const externalPlacementAccount = ref<Account | null>(null)
 const togglingStatusId = ref<number | null>(null)
 const togglingSchedulableId = ref<number | null>(null)
 const revalidatingShareId = ref<number | null>(null)
@@ -691,8 +696,6 @@ const selectedPlatforms = computed<AccountPlatform[]>(() => [
 const selectedTypes = computed<AccountType[]>(() => [
   ...new Set(selectedAccounts.value.map((account) => account.type))
 ])
-const selectedHasAccountShareModeOnly = computed(() => selectedAccounts.value.some(isAccountShareModeOnly))
-
 const columns = computed<Column[]>(() => [
   { key: 'select', label: '', sortable: false, class: 'w-10' },
   { key: 'name', label: t('admin.accounts.columns.name'), sortable: true },
@@ -968,14 +971,53 @@ function getOpenAICompactTitle(row: Account): string {
   return `${getOpenAICompactLabel(row)} | ${t('admin.accounts.openai.compactLastChecked')}: ${formatDateTime(new Date(checkedAt))}`
 }
 
-function shareModeLabel(mode?: string): string {
-  return mode === 'public' ? t('userAccounts.publicMode') : t('userAccounts.privateMode')
-}
-
 function isAccountShareModeOnly(account: Account): boolean {
   return Number(account.account_share_mode_listing_id || 0) > 0 ||
     account.extra?.account_share_mode === true ||
     account.extra?.account_share_mode === 'true'
+}
+
+function externalPlacementTarget(account: Account): 'private' | 'public_pool' | 'room' {
+  const target = account.external_placement?.target
+  if (target === 'public_pool' || target === 'room') return target
+  if (isAccountShareModeOnly(account)) return 'room'
+  return account.share_mode === 'public' ? 'public_pool' : 'private'
+}
+
+function externalPlacementLabel(account: Account): string {
+  switch (externalPlacementTarget(account)) {
+    case 'public_pool':
+      return t('userAccounts.externalPlacement.publicPool')
+    case 'room':
+      return account.external_placement?.room_name
+        ? t('userAccounts.externalPlacement.roomNamed', { name: account.external_placement.room_name })
+        : t('userAccounts.externalPlacement.room')
+    default:
+      return t('userAccounts.externalPlacement.private')
+  }
+}
+
+function externalPlacementTitle(account: Account): string {
+  const target = externalPlacementTarget(account)
+  if (target === 'room') {
+    return t('userAccounts.externalPlacement.roomHint')
+  }
+  if (target === 'public_pool') {
+    return t('userAccounts.externalPlacement.publicPoolHint')
+  }
+  return t('userAccounts.externalPlacement.privateHint')
+}
+
+function externalPlacementBadgeClass(account: Account): string {
+  const base = 'inline-flex w-fit max-w-[12rem] truncate rounded-md px-2 py-0.5 text-xs font-medium'
+  switch (externalPlacementTarget(account)) {
+    case 'public_pool':
+      return `${base} bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300`
+    case 'room':
+      return `${base} bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300`
+    default:
+      return `${base} bg-gray-100 text-gray-700 dark:bg-dark-700 dark:text-dark-200`
+  }
 }
 
 function shareStatusLabel(status?: string): string {
@@ -1013,18 +1055,7 @@ function shareStatusTitle(row: Account): string {
 }
 
 function canRevalidatePublicShare(row: Account): boolean {
-  return !isAccountShareModeOnly(row) && row.share_mode === 'public' && row.share_status !== 'approved'
-}
-
-function shareModeBadgeClass(mode?: string): string {
-  const base = 'inline-flex w-fit rounded-md px-2 py-0.5 text-xs font-medium'
-  return mode === 'public'
-    ? `${base} bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300`
-    : `${base} bg-gray-100 text-gray-700 dark:bg-dark-700 dark:text-dark-200`
-}
-
-function accountShareModeOnlyBadgeClass(): string {
-  return 'inline-flex w-fit rounded-md bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+  return externalPlacementTarget(row) === 'public_pool' && row.share_status !== 'approved'
 }
 
 function shareStatusBadgeClass(status?: string): string {
@@ -1174,6 +1205,40 @@ function openEditModal(account: Account): void {
   editingAccount.value = account
   showEditModal.value = true
   void loadUserProxies()
+}
+
+function openExternalPlacementDialog(account: Account): void {
+  if (!authStore.user?.id) {
+    appStore.showError(t('common.error'))
+    return
+  }
+  externalPlacementAccount.value = account
+  showExternalPlacementDialog.value = true
+}
+
+function closeExternalPlacementDialog(): void {
+  showExternalPlacementDialog.value = false
+  externalPlacementAccount.value = null
+}
+
+async function handleExternalPlacementConverted(
+  result: ConvertAccountExternalPlacementResponse
+): Promise<void> {
+  const account = accounts.value.find((item) => item.id === result.account_id)
+  if (account) {
+    account.external_placement = result.current
+    account.share_mode = result.current?.target === 'public_pool' ? 'public' : 'private'
+    account.account_share_mode_listing_id = result.current?.target === 'room'
+      ? result.current.room_id ?? null
+      : null
+  }
+  appStore.showSuccess(
+    result.unchanged
+      ? t('userAccounts.externalPlacement.unchanged')
+      : t('userAccounts.externalPlacement.converted')
+  )
+  usageManualRefreshToken.value += 1
+  await Promise.all([loadGroups(), loadAccounts()])
 }
 
 function openProxyManager(): void {

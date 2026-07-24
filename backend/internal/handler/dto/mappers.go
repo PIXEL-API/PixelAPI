@@ -277,6 +277,7 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		ShareStatus:               service.NormalizeAccountShareStatus(a.ShareStatus),
 		SharePolicyID:             a.SharePolicyID,
 		AccountShareModeListingID: a.AccountShareModeListingID,
+		ExternalPlacement:         accountExternalPlacementFromService(a.ExternalPlacement),
 		ProxyID:                   a.ProxyID,
 		Concurrency:               a.Concurrency,
 		LoadFactor:                a.LoadFactor,
@@ -442,6 +443,20 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 	}
 
 	return out
+}
+
+func accountExternalPlacementFromService(placement *service.AccountExternalPlacement) *AccountExternalPlacement {
+	if placement == nil {
+		return nil
+	}
+	return &AccountExternalPlacement{
+		Target:        placement.Target,
+		RoomID:        placement.RoomID,
+		RoomName:      placement.RoomName,
+		PublicGroupID: placement.PublicGroupID,
+		State:         placement.State,
+		Version:       placement.Version,
+	}
 }
 
 func AccountFromService(a *service.Account) *Account {

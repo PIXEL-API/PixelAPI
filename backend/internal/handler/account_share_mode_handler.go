@@ -149,6 +149,24 @@ type accountShareQueueReorderRequest struct {
 	MembershipIDs []int64 `json:"membership_ids" binding:"required"`
 }
 
+type accountShareRoomCreateRequest struct {
+	AccountID               int64    `json:"account_id" binding:"required"`
+	IdempotencyKey          string   `json:"idempotency_key" binding:"required,max=128"`
+	RoomName                string   `json:"room_name" binding:"required"`
+	SeatLimit               int      `json:"seat_limit"`
+	RateMultiplier          float64  `json:"rate_multiplier"`
+	AllowedModels           []string `json:"allowed_models"`
+	PerUserConcurrency      int      `json:"per_user_concurrency"`
+	HourlyRate              float64  `json:"hourly_rate"`
+	HourlyFeeWaiverMinimum  float64  `json:"hourly_fee_waiver_minimum"`
+	MinBalanceRequired      *float64 `json:"min_balance_required"`
+	CodexCLIOnly            bool     `json:"codex_cli_only"`
+	Codex5hLimitPercent     float64  `json:"codex_5h_limit_percent"`
+	Codex7dLimitPercent     float64  `json:"codex_7d_limit_percent"`
+	Anthropic5hLimitPercent float64  `json:"anthropic_5h_limit_percent"`
+	Anthropic7dLimitPercent float64  `json:"anthropic_7d_limit_percent"`
+}
+
 func (h *AccountShareModeHandler) ListModeGroups(c *gin.Context) {
 	groups, err := h.service.ListModeGroups(c.Request.Context())
 	if err != nil {
@@ -514,6 +532,60 @@ func (h *AccountShareModeHandler) GetListing(c *gin.Context) {
 		return
 	}
 	response.Success(c, listing)
+}
+
+func (h *AccountShareModeHandler) CreateRoom(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	var req accountShareRoomCreateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	listing, err := h.service.CreateRoomFromOwnedAccount(c.Request.Context(), subject.UserID, service.CreateAccountShareRoomInput{
+		AccountID:               req.AccountID,
+		IdempotencyKey:          req.IdempotencyKey,
+		RoomName:                req.RoomName,
+		SeatLimit:               req.SeatLimit,
+		RateMultiplier:          req.RateMultiplier,
+		AllowedModels:           req.AllowedModels,
+		PerUserConcurrency:      req.PerUserConcurrency,
+		HourlyRate:              req.HourlyRate,
+		HourlyFeeWaiverMinimum:  req.HourlyFeeWaiverMinimum,
+		MinBalanceRequired:      req.MinBalanceRequired,
+		CodexCLIOnly:            req.CodexCLIOnly,
+		Codex5hLimitPercent:     req.Codex5hLimitPercent,
+		Codex7dLimitPercent:     req.Codex7dLimitPercent,
+		Anthropic5hLimitPercent: req.Anthropic5hLimitPercent,
+		Anthropic7dLimitPercent: req.Anthropic7dLimitPercent,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, listing)
+}
+
+func (h *AccountShareModeHandler) ListRoomAccounts(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	listingID, err := parseInt64Param(c, "id")
+	if err != nil {
+		response.BadRequest(c, "Invalid listing ID")
+		return
+	}
+	accounts, err := h.service.ListRoomAccounts(c.Request.Context(), subject.UserID, listingID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, accounts)
 }
 
 func (h *AccountShareModeHandler) GetMySpendSummary(c *gin.Context) {

@@ -170,9 +170,10 @@ type bulkUpdateUserAccountsRequest struct {
 	Extra          map[string]any `json:"extra"`
 }
 
-type bulkUpdateUserAccountsAsyncResponse struct {
-	Async bool                      `json:"async"`
-	Task  *service.AccountBatchTask `json:"task"`
+type convertUserAccountExternalPlacementRequest struct {
+	Target         string `json:"target" binding:"required,oneof=private public_pool room"`
+	RoomID         *int64 `json:"room_id"`
+	IdempotencyKey string `json:"idempotency_key" binding:"required"`
 }
 
 type bulkDeleteUserAccountsRequest struct {
@@ -568,19 +569,6 @@ func normalizeUserAccountStatus(status *string) *string {
 	return &normalized
 }
 
-func isUserBulkPublicShareOnlyUpdate(req bulkUpdateUserAccountsRequest, normalizedStatus string) bool {
-	return req.Concurrency == nil &&
-		req.LoadFactor == nil &&
-		req.Priority == nil &&
-		normalizedStatus == "" &&
-		req.Schedulable == nil &&
-		req.AccountLevel == nil &&
-		req.ShareMode != nil &&
-		req.GroupIDs == nil &&
-		len(req.Credentials) == 0 &&
-		len(req.Extra) == 0
-}
-
 func publicShareValidationErrorMessage(err error) string {
 	if err == nil {
 		return ""
@@ -847,10 +835,7 @@ func (h *UserAccountHandler) executeUserSetPublicShareTaskItem(ctx context.Conte
 	if task == nil || task.OwnerUserID == nil {
 		return nil, service.ErrAccountNotFound
 	}
-	shareMode := service.AccountShareModePublic
-	account, err := h.accountService.UpdateOwned(ctx, *task.OwnerUserID, item.AccountID, service.UpdateAccountRequest{
-		ShareMode: &shareMode,
-	})
+	account, err := h.accountService.MarkOwnedPublicSharePending(ctx, *task.OwnerUserID, item.AccountID, "")
 	if err != nil {
 		return nil, err
 	}
@@ -1629,6 +1614,10 @@ func (h *UserAccountHandler) Update(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
+	if req.ShareMode != nil {
+		response.ErrorFrom(c, service.ErrOwnedAccountPlacementConversionRequired)
+		return
+	}
 	status := normalizeUserAccountStatus(req.Status)
 	account, err := h.accountService.UpdateOwned(c.Request.Context(), subject.UserID, accountID, service.UpdateAccountRequest{
 		Name:               req.Name,
@@ -1636,7 +1625,6 @@ func (h *UserAccountHandler) Update(c *gin.Context) {
 		AccountLevel:       req.AccountLevel,
 		Credentials:        req.Credentials,
 		Extra:              req.Extra,
-		ShareMode:          req.ShareMode,
 		ProxyID:            req.ProxyID,
 		Concurrency:        req.Concurrency,
 		LoadFactor:         req.LoadFactor,
@@ -1652,10 +1640,9 @@ func (h *UserAccountHandler) Update(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	requestedPublicShare := req.ShareMode != nil && service.NormalizeAccountShareMode(*req.ShareMode) == service.AccountShareModePublic
 	changedPublicAgentIdentityCredentials := req.Credentials != nil && account.IsOpenAIAgentIdentity() &&
 		service.NormalizeAccountShareMode(account.ShareMode) == service.AccountShareModePublic
-	if requestedPublicShare || changedPublicAgentIdentityCredentials {
+	if changedPublicAgentIdentityCredentials {
 		account, err = h.activateOwnedPublicShareIfRequested(c.Request.Context(), subject.UserID, account)
 		if err != nil {
 			response.ErrorFrom(c, err)
@@ -1663,6 +1650,34 @@ func (h *UserAccountHandler) Update(c *gin.Context) {
 		}
 	}
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
+}
+
+func (h *UserAccountHandler) ConvertExternalPlacement(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || accountID <= 0 {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	var req convertUserAccountExternalPlacementRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	result, err := h.accountService.ConvertOwnedExternalPlacement(c.Request.Context(), subject.UserID, accountID, service.ConvertAccountExternalPlacementInput{
+		Target:         req.Target,
+		RoomID:         req.RoomID,
+		IdempotencyKey: req.IdempotencyKey,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
 }
 
 func (h *UserAccountHandler) RevalidatePublicShare(c *gin.Context) {
@@ -1882,25 +1897,6 @@ func (h *UserAccountHandler) CreateBatchVerifyLevelTask(c *gin.Context) {
 	response.Success(c, task)
 }
 
-func (h *UserAccountHandler) createSetPublicShareTask(ctx context.Context, ownerUserID int64, accountIDs []int64) (*service.AccountBatchTask, error) {
-	if h.accountBatchTaskService == nil {
-		return nil, infraerrors.ServiceUnavailable("ACCOUNT_BATCH_TASK_UNAVAILABLE", "Account batch task service is unavailable")
-	}
-	for _, accountID := range accountIDs {
-		if err := h.accountService.EnsureOwnedAccountCanEnterPublicShare(ctx, ownerUserID, accountID); err != nil {
-			return nil, err
-		}
-	}
-	ownerID := ownerUserID
-	return h.accountBatchTaskService.CreateTask(ctx, service.CreateAccountBatchTaskInput{
-		Scope:       service.AccountBatchTaskScopeUser,
-		Operation:   service.AccountBatchTaskOperationUserSetPublicShare,
-		AccountIDs:  accountIDs,
-		CreatedBy:   ownerUserID,
-		OwnerUserID: &ownerID,
-	})
-}
-
 func (h *UserAccountHandler) GetBatchTask(c *gin.Context) {
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
@@ -1940,6 +1936,10 @@ func (h *UserAccountHandler) BulkUpdate(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
+	if req.ShareMode != nil {
+		response.ErrorFrom(c, service.ErrOwnedAccountPlacementConversionRequired)
+		return
+	}
 	accountIDs := normalizeUserAccountIDList(req.AccountIDs)
 	if len(accountIDs) == 0 {
 		response.BadRequest(c, "account_ids is required")
@@ -1976,31 +1976,11 @@ func (h *UserAccountHandler) BulkUpdate(c *gin.Context) {
 		status != "" ||
 		req.Schedulable != nil ||
 		req.AccountLevel != nil ||
-		req.ShareMode != nil ||
 		req.GroupIDs != nil ||
 		len(req.Credentials) > 0 ||
 		len(req.Extra) > 0
 	if !hasUpdates {
 		response.BadRequest(c, "No updates provided")
-		return
-	}
-
-	if req.ShareMode != nil && service.NormalizeAccountShareMode(*req.ShareMode) == service.AccountShareModePublic && isUserBulkPublicShareOnlyUpdate(req, status) {
-		for _, accountID := range accountIDs {
-			if _, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, accountID); err != nil {
-				response.ErrorFrom(c, err)
-				return
-			}
-		}
-		task, err := h.createSetPublicShareTask(c.Request.Context(), subject.UserID, accountIDs)
-		if err != nil {
-			response.ErrorFrom(c, err)
-			return
-		}
-		response.Success(c, bulkUpdateUserAccountsAsyncResponse{
-			Async: true,
-			Task:  task,
-		})
 		return
 	}
 
@@ -2012,7 +1992,6 @@ func (h *UserAccountHandler) BulkUpdate(c *gin.Context) {
 		Status:       status,
 		Schedulable:  req.Schedulable,
 		AccountLevel: req.AccountLevel,
-		ShareMode:    req.ShareMode,
 		GroupIDs:     req.GroupIDs,
 		Credentials:  req.Credentials,
 		Extra:        req.Extra,
@@ -2021,9 +2000,8 @@ func (h *UserAccountHandler) BulkUpdate(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	requestedPublicShare := req.ShareMode != nil && service.NormalizeAccountShareMode(*req.ShareMode) == service.AccountShareModePublic
 	revalidatePublicAgentIdentity := len(req.Credentials) > 0
-	if requestedPublicShare || revalidatePublicAgentIdentity {
+	if revalidatePublicAgentIdentity {
 		for i := range result.Results {
 			entry := &result.Results[i]
 			if !entry.Success {
@@ -2031,7 +2009,7 @@ func (h *UserAccountHandler) BulkUpdate(c *gin.Context) {
 			}
 			account, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, entry.AccountID)
 			shouldActivate := account != nil && service.NormalizeAccountShareMode(account.ShareMode) == service.AccountShareModePublic &&
-				(requestedPublicShare || account.IsOpenAIAgentIdentity())
+				account.IsOpenAIAgentIdentity()
 			if err == nil && shouldActivate {
 				_, err = h.activateOwnedPublicShareIfRequested(c.Request.Context(), subject.UserID, account)
 			}

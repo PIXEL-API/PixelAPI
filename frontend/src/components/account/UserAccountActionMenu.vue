@@ -16,6 +16,10 @@
             <Icon name="chart" size="sm" class="text-indigo-500" />
             {{ t('admin.accounts.viewStats') }}
           </button>
+          <button class="menu-item text-cyan-700 dark:text-cyan-300" @click="emitAction('external-placement')">
+            <Icon name="swap" size="sm" />
+            {{ t('userAccounts.externalPlacement.action') }}
+          </button>
           <template v-if="supportsCredentialMaintenance">
             <button class="menu-item text-blue-600" @click="emitAction('reauth')">
               <Icon name="link" size="sm" />
@@ -70,6 +74,7 @@ const emit = defineEmits<{
   (e: 'refresh-token', account: Account): void
   (e: 'set-privacy', account: Account): void
   (e: 'moderation', account: Account): void
+  (e: 'external-placement', account: Account): void
   (e: 'verify-level', account: Account, targetLevel: 'free' | 'plus'): void
 }>()
 
@@ -102,7 +107,7 @@ const supportsOpenAILevelVerification = computed(() => {
   return !isOpenAIAgentIdentity.value && props.account?.platform === 'openai' && props.account.type === 'oauth'
 })
 
-function emitAction(event: 'test' | 'stats' | 'reauth' | 'refresh-token' | 'set-privacy' | 'moderation'): void {
+function emitAction(event: 'test' | 'stats' | 'reauth' | 'refresh-token' | 'set-privacy' | 'moderation' | 'external-placement'): void {
   if (!props.account) return
   switch (event) {
     case 'test':
@@ -122,6 +127,9 @@ function emitAction(event: 'test' | 'stats' | 'reauth' | 'refresh-token' | 'set-
       break
     case 'moderation':
       emit('moderation', props.account)
+      break
+    case 'external-placement':
+      emit('external-placement', props.account)
       break
   }
   emit('close')

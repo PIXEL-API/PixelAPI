@@ -50,6 +50,10 @@ func cloneUserAgentIdentityShareAccount(account *service.Account) *service.Accou
 		ownerUserID := *account.OwnerUserID
 		clone.OwnerUserID = &ownerUserID
 	}
+	if account.ExternalPlacement != nil {
+		placement := *account.ExternalPlacement
+		clone.ExternalPlacement = &placement
+	}
 	return &clone
 }
 
@@ -124,6 +128,59 @@ func (r *userAgentIdentityShareRepo) ListOwnedWithFilters(
 }
 
 type userAgentIdentityPrivateGroupProvisioner struct{}
+
+type userAgentIdentityPlacementRepo struct {
+	service.AccountShareModeRepository
+	service.AccountShareRoomRepository
+	accountRepo *userAgentIdentityShareRepo
+}
+
+func (r *userAgentIdentityPlacementRepo) IsModeGroup(context.Context, int64) (bool, error) {
+	return false, nil
+}
+
+func (r *userAgentIdentityPlacementRepo) BeginExternalPlacementDrain(context.Context, int64, int64) (bool, error) {
+	return false, nil
+}
+
+func (r *userAgentIdentityPlacementRepo) RestoreExternalPlacementAfterDrain(context.Context, int64, int64) error {
+	return nil
+}
+
+func (r *userAgentIdentityPlacementRepo) ConvertExternalPlacement(_ context.Context, input service.ConvertAccountExternalPlacementInput) (*service.ConvertAccountExternalPlacementResult, error) {
+	account, err := r.accountRepo.GetByID(context.Background(), input.AccountID)
+	if err != nil {
+		return nil, err
+	}
+	previous := account.ExternalPlacement
+	if previous == nil {
+		previous = &service.AccountExternalPlacement{Target: service.AccountExternalPlacementPrivate, State: "active"}
+	}
+	if err := r.accountRepo.BindGroups(context.Background(), account.ID, input.GroupIDs); err != nil {
+		return nil, err
+	}
+	account.GroupIDs = append([]int64(nil), input.GroupIDs...)
+	account.ShareMode = service.AccountShareModePrivate
+	account.ShareStatus = service.AccountShareStatusApproved
+	account.ExternalPlacement = &service.AccountExternalPlacement{
+		Target:  service.AccountExternalPlacementPrivate,
+		State:   "active",
+		Version: previous.Version + 1,
+	}
+	if input.Target == service.AccountExternalPlacementPublicPool {
+		account.ShareMode = service.AccountShareModePublic
+		account.ExternalPlacement.Target = service.AccountExternalPlacementPublicPool
+		account.ExternalPlacement.PublicGroupID = input.PublicGroupID
+	}
+	if err := r.accountRepo.Update(context.Background(), account); err != nil {
+		return nil, err
+	}
+	return &service.ConvertAccountExternalPlacementResult{
+		AccountID: account.ID,
+		Previous:  previous,
+		Current:   account.ExternalPlacement,
+	}, nil
+}
 
 func (userAgentIdentityPrivateGroupProvisioner) ProvisionUserPrivateGroups(context.Context, int64) error {
 	return nil
@@ -232,7 +289,7 @@ func newUserAgentIdentityShareAccount(t *testing.T, ownerUserID int64, shareMode
 	if shareMode == service.AccountShareModePublic && shareStatus == service.AccountShareStatusApproved {
 		groupIDs = append(groupIDs, userAgentIdentityPublicGroupID)
 	}
-	return &service.Account{
+	account := &service.Account{
 		ID:           1,
 		Name:         "Agent Identity",
 		OwnerUserID:  &ownerUserID,
@@ -249,6 +306,16 @@ func newUserAgentIdentityShareAccount(t *testing.T, ownerUserID int64, shareMode
 		Schedulable:  true,
 		GroupIDs:     groupIDs,
 	}
+	if shareMode == service.AccountShareModePublic && shareStatus == service.AccountShareStatusApproved {
+		publicGroupID := userAgentIdentityPublicGroupID
+		account.ExternalPlacement = &service.AccountExternalPlacement{
+			Target:        service.AccountExternalPlacementPublicPool,
+			PublicGroupID: &publicGroupID,
+			State:         "active",
+			Version:       1,
+		}
+	}
+	return account
 }
 
 func newUserAgentIdentityShareHandler(
@@ -267,6 +334,7 @@ func newUserAgentIdentityShareHandler(
 	accountService := service.NewAccountService(repo, userAgentIdentityPublicGroupRepo{}, nil, nil, nil)
 	accountService.SetUserPrivateGroupProvisioner(userAgentIdentityPrivateGroupProvisioner{})
 	accountService.SetAccountSharePolicyRepository(userAgentIdentitySharePolicyRepo{})
+	accountService.SetAccountShareModeRepository(&userAgentIdentityPlacementRepo{accountRepo: repo})
 	accountService.SetAgentIdentityWSInvalidator(invalidatorProxy)
 	upstream := &userAgentIdentityValidationUpstream{statusCode: upstreamStatus, body: upstreamBody}
 	accountTestService := service.NewAccountTestService(repo, nil, nil, nil, upstream, nil, nil, nil, invalidatorProxy)
@@ -298,40 +366,21 @@ func TestIsOpenAIUsageLimitReachedValidationError(t *testing.T) {
 	require.False(t, isOpenAIUsageLimitReachedValidationError(`Request failed: dial tcp timeout`))
 }
 
-func TestUserAccountHandlerUpdateAgentIdentityPrivateToPublicRevalidates(t *testing.T) {
+func TestUserAccountHandlerUpdateAgentIdentityPrivateToPublicRequiresPlacementConversion(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ownerUserID := int64(101)
 
-	t.Run("approves after successful connection test", func(t *testing.T) {
-		account := newUserAgentIdentityShareAccount(t, ownerUserID, service.AccountShareModePrivate, service.AccountShareStatusApproved)
-		handler, repo, upstream, _ := newUserAgentIdentityShareHandler(t, account, http.StatusOK, "")
+	account := newUserAgentIdentityShareAccount(t, ownerUserID, service.AccountShareModePrivate, service.AccountShareStatusApproved)
+	handler, repo, upstream, _ := newUserAgentIdentityShareHandler(t, account, http.StatusOK, "")
 
-		recorder := runUserAgentIdentityUpdateRequest(t, handler, ownerUserID, map[string]any{"share_mode": service.AccountShareModePublic})
+	recorder := runUserAgentIdentityUpdateRequest(t, handler, ownerUserID, map[string]any{"share_mode": service.AccountShareModePublic})
 
-		require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-		require.Equal(t, 1, upstream.calls)
-		require.NotEmpty(t, upstream.lastAuthorization)
-		stored := repo.accounts[account.ID]
-		require.Equal(t, service.AccountShareModePublic, stored.ShareMode)
-		require.Equal(t, service.AccountShareStatusApproved, stored.ShareStatus)
-		require.Empty(t, stored.ErrorMessage)
-		require.Equal(t, []int64{userAgentIdentityPrivateGroupID, userAgentIdentityPublicGroupID}, stored.GroupIDs)
-	})
-
-	t.Run("keeps account pending after failed connection test", func(t *testing.T) {
-		account := newUserAgentIdentityShareAccount(t, ownerUserID, service.AccountShareModePrivate, service.AccountShareStatusApproved)
-		handler, repo, upstream, _ := newUserAgentIdentityShareHandler(t, account, http.StatusServiceUnavailable, `{"error":"upstream unavailable"}`)
-
-		recorder := runUserAgentIdentityUpdateRequest(t, handler, ownerUserID, map[string]any{"share_mode": service.AccountShareModePublic})
-
-		require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-		require.Equal(t, 1, upstream.calls)
-		stored := repo.accounts[account.ID]
-		require.Equal(t, service.AccountShareModePublic, stored.ShareMode)
-		require.Equal(t, service.AccountShareStatusPending, stored.ShareStatus)
-		require.Contains(t, stored.ErrorMessage, "API returned 503")
-		require.Equal(t, []int64{userAgentIdentityPrivateGroupID}, stored.GroupIDs)
-	})
+	require.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
+	require.Contains(t, recorder.Body.String(), "OWNED_ACCOUNT_PLACEMENT_CONVERSION_REQUIRED")
+	require.Zero(t, upstream.calls)
+	stored := repo.accounts[account.ID]
+	require.Equal(t, service.AccountShareModePrivate, stored.ShareMode)
+	require.Equal(t, service.AccountShareStatusApproved, stored.ShareStatus)
 }
 
 func TestUserAccountHandlerUpdateApprovedPublicAgentIdentityCredentialsRevalidates(t *testing.T) {

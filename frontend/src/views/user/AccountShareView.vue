@@ -36,7 +36,7 @@
             </button>
             <button class="btn-primary h-10" type="button" @click="toggleCreatePanel">
               <Icon :name="showCreate ? 'chevronUp' : 'plus'" size="sm" class="mr-2" />
-              {{ showCreate ? '收起新增' : '新增账号' }}
+              {{ showCreate ? '收起创建' : '创建房间' }}
             </button>
             <button class="btn-secondary h-10" type="button" @click="openRecommendationDialog">
               <Icon name="sparkles" size="sm" class="mr-2" />
@@ -525,8 +525,8 @@
       <section v-if="showCreate" class="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm dark:border-dark-700 dark:bg-dark-900">
         <div class="flex flex-col gap-3 border-b border-gray-100 p-4 dark:border-dark-800 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <h2 class="text-base font-semibold text-gray-950 dark:text-white">新增共享账号</h2>
-            <p class="mt-1 text-sm text-gray-500 dark:text-dark-300">选择平台和代理后走 OAuth 授权，提交后自动创建账号并发布到账号广场。</p>
+            <h2 class="text-base font-semibold text-gray-950 dark:text-white">创建账号房间</h2>
+            <p class="mt-1 text-sm text-gray-500 dark:text-dark-300">优先选择已经登录的自有账号创建房间，无需删除账号或重新 OAuth。</p>
           </div>
           <button class="btn-secondary h-9 w-fit" type="button" @click="resetCreateForm">
             <Icon name="refresh" size="sm" class="mr-2" />
@@ -534,12 +534,77 @@
           </button>
         </div>
 
+        <div class="border-b border-gray-100 p-4 dark:border-dark-800 xl:p-5">
+          <div class="grid gap-3 sm:grid-cols-2">
+            <button
+              type="button"
+              class="create-source-option"
+              :class="createSourceMode === 'existing' && 'create-source-option-active'"
+              :disabled="creating"
+              @click="selectCreateSourceMode('existing')"
+            >
+              <span class="create-source-icon"><Icon name="database" size="sm" /></span>
+              <span>
+                <strong>选择已有账号</strong>
+                <small>推荐：保留账号 ID、凭证和代理，直接创建房间。</small>
+              </span>
+            </button>
+            <button
+              type="button"
+              class="create-source-option"
+              :class="createSourceMode === 'oauth' && 'create-source-option-active'"
+              :disabled="creating"
+              @click="selectCreateSourceMode('oauth')"
+            >
+              <span class="create-source-icon"><Icon name="login" size="sm" /></span>
+              <span>
+                <strong>登录新账号</strong>
+                <small>仅在账号尚未登录时，使用 OAuth 创建新账号和房间。</small>
+              </span>
+            </button>
+          </div>
+
+          <div v-if="createSourceMode === 'existing'" class="mt-4 rounded-xl border border-primary-200 bg-primary-50/60 p-4 dark:border-primary-900/60 dark:bg-primary-950/20">
+            <div class="flex flex-col gap-3 md:flex-row md:items-end">
+              <label class="field min-w-0 flex-1">
+                <span>已有自有账号</span>
+                <select
+                  v-model.number="selectedOwnedAccountID"
+                  class="input"
+                  :disabled="ownedAccountsLoading || creating"
+                >
+                  <option :value="0">
+                    {{ ownedAccountsLoading ? '正在加载账号...' : '请选择未外投的健康账号' }}
+                  </option>
+                  <option
+                    v-for="account in eligibleOwnedAccounts"
+                    :key="account.id"
+                    :value="account.id"
+                  >
+                    {{ account.name }} · {{ account.account_level }} · #{{ account.id }}
+                  </option>
+                </select>
+                <small>{{ ownedAccountSelectionHint }}</small>
+              </label>
+              <button
+                type="button"
+                class="btn-secondary h-10 shrink-0"
+                :disabled="ownedAccountsLoading || creating"
+                @click="loadOwnedAccounts(true)"
+              >
+                <Icon name="refresh" size="sm" class="mr-2" :class="{ 'animate-spin': ownedAccountsLoading }" />
+                刷新账号
+              </button>
+            </div>
+          </div>
+        </div>
+
         <div class="grid xl:grid-cols-[minmax(0,1fr)_minmax(420px,520px)]">
           <div class="space-y-5 p-4 xl:p-5">
             <div class="form-section">
               <div class="section-heading">
                 <span>基础配置</span>
-                <small>账号广场需要代理和席位配置，授权前请先确认。</small>
+                <small>{{ createSourceMode === 'existing' ? '房间会沿用所选账号的凭证、代理和并发配置。' : '新账号需要代理和席位配置，授权前请先确认。' }}</small>
               </div>
               <div class="grid gap-3 md:grid-cols-2 2xl:grid-cols-4">
                 <div class="field">
@@ -565,14 +630,14 @@
                 </div>
 
                 <label class="field">
-                  <span>账号名称</span>
+                  <span>房间名称</span>
                   <input v-model="createForm.name" class="input" :placeholder="ACCOUNT_NAME_BASE_BY_PLATFORM[createPlatform]" />
                   <small :class="accountNameValidationMessage ? 'text-red-600 dark:text-red-300' : ''">
-                    {{ accountNameValidationMessage || '名称必须唯一，且不能包含空格、换行或制表符。' }}
+                    {{ accountNameValidationMessage || '同一号主下房间名称必须唯一，且不能包含空格、换行或制表符。' }}
                   </small>
                 </label>
 
-                <div class="field md:col-span-2 2xl:col-span-2">
+                <div v-if="createSourceMode === 'oauth'" class="field md:col-span-2 2xl:col-span-2">
                   <span>代理 IP</span>
                   <ProxySelector
                     v-model="selectedProxyId"
@@ -626,13 +691,20 @@
                   </select>
                 </label>
 
-                <label class="field">
+                <label v-if="createSourceMode === 'oauth'" class="field">
                   <span>账号并发上限</span>
                   <input v-model.number="createForm.concurrency" class="input" type="number" min="1" :max="MAX_ACCOUNT_CONCURRENCY" step="1" />
                   <small :class="concurrencyValidationMessage ? 'text-red-600 dark:text-red-300' : ''">
                     {{ concurrencyValidationMessage || `1-${MAX_ACCOUNT_CONCURRENCY}，推荐默认 20。` }}
                   </small>
                 </label>
+                <div v-else class="field">
+                  <span>账号并发上限</span>
+                  <div class="input flex items-center bg-gray-50 text-gray-700 dark:bg-dark-800 dark:text-dark-200">
+                    {{ selectedOwnedAccount?.concurrency ?? '—' }}
+                  </div>
+                  <small>沿用已有账号并发配置，不在创建房间时修改。</small>
+                </div>
 
                 <label class="field">
                   <span>单用户最高并发</span>
@@ -728,8 +800,8 @@
                 </div>
                 <div class="mt-3 grid grid-cols-2 gap-2">
                   <div class="compact-metric">
-                    <span>代理</span>
-                    <strong>{{ currentProxyLabel }}</strong>
+                    <span>{{ createSourceMode === 'existing' ? '主账号' : '代理' }}</span>
+                    <strong>{{ createSourceMode === 'existing' ? (selectedOwnedAccount?.name || '未选择') : currentProxyLabel }}</strong>
                   </div>
                   <div class="compact-metric">
                     <span>模型</span>
@@ -759,6 +831,7 @@
               </div>
 
               <OAuthAuthorizationFlow
+                v-if="createSourceMode === 'oauth'"
                 ref="oauthFlowRef"
                 add-method="oauth"
                 :auth-url="authURL"
@@ -778,13 +851,29 @@
                 @generate-url="startOAuth"
               />
 
-              <button class="btn-primary h-11 w-full" type="button" :disabled="creating || !canSubmitOAuth" @click="submitOAuth">
+              <button
+                v-if="createSourceMode === 'oauth'"
+                class="btn-primary h-11 w-full"
+                type="button"
+                :disabled="creating || !canSubmitOAuth"
+                @click="submitOAuth"
+              >
                 <svg v-if="creating" class="-ml-1 mr-2 h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
                   <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                   <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                 </svg>
                 <Icon v-else name="checkCircle" size="sm" class="mr-2" />
                 {{ creating ? '创建中...' : `完成 ${platformLabel(createPlatform)} OAuth 并上架` }}
+              </button>
+              <button
+                v-else
+                class="btn-primary h-11 w-full"
+                type="button"
+                :disabled="creating || !canCreateRoomFromOwnedAccount"
+                @click="createRoomFromOwnedAccount"
+              >
+                <Icon name="plus" size="sm" class="mr-2" :class="{ 'animate-pulse': creating }" />
+                {{ creating ? '创建房间中...' : '使用已有账号创建房间' }}
               </button>
             </div>
           </aside>
@@ -1197,7 +1286,19 @@
                 </span>
               </div>
               <div class="listing-title-row">
-                <h2 class="listing-title">{{ listing.account_name || `共享账号 #${listing.id}` }}</h2>
+                <h2 class="listing-title">{{ listing.room_name || listing.account_name || `账号房间 #${listing.id}` }}</h2>
+                <button
+                  v-if="isOwnListing(listing)"
+                  type="button"
+                  class="room-account-count-button"
+                  @click="openRoomAccountsDialog(listing)"
+                >
+                  <Icon name="database" size="xs" />
+                  健康账号 {{ listing.healthy_account_count ?? 0 }}/{{ listing.account_count ?? 0 }}
+                </button>
+                <span v-else class="room-account-count-pill">
+                  健康账号 {{ listing.healthy_account_count ?? 0 }}/{{ listing.account_count ?? 0 }}
+                </span>
                 <span class="listing-owner">
                   号主：{{ listing.owner_username || `用户 ${listing.owner_user_id}` }}
                   <button
@@ -1477,10 +1578,19 @@
           <template v-if="isManagementView">
             <div class="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm dark:border-dark-700 dark:bg-dark-800/60">
               <div class="flex flex-col gap-1 text-gray-600 dark:text-dark-200">
-                <span>账号 ID：#{{ listing.account_id }}</span>
+                <span>房间 ID：#{{ listing.id }}</span>
+                <span>房间账号：健康 {{ listing.healthy_account_count ?? 0 }} / 共 {{ listing.account_count ?? 0 }}</span>
                 <span>更新：{{ formatDate(listing.updated_at) }}</span>
               </div>
               <div class="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  class="btn-secondary h-9"
+                  @click="openRoomAccountsDialog(listing)"
+                >
+                  <Icon name="database" size="xs" class="mr-2" />
+                  查看房间账号
+                </button>
                 <button
                   type="button"
                   class="btn-secondary h-9"
@@ -1499,52 +1609,6 @@
                 >
                   <Icon name="edit" size="xs" class="mr-2" />
                   编辑模型
-                </button>
-                <button
-                  type="button"
-                  class="btn-secondary h-9"
-                  :disabled="managedActionId === listing.id"
-                  @click="openManagedAccountModal(listing, 'test')"
-                >
-                  <Icon name="play" size="xs" class="mr-2" />
-                  测试连接
-                </button>
-                <button
-                  type="button"
-                  class="btn-secondary h-9"
-                  :disabled="managedActionId === listing.id"
-                  @click="openManagedAccountModal(listing, 'stats')"
-                >
-                  <Icon name="chart" size="xs" class="mr-2" />
-                  统计
-                </button>
-                <button
-                  type="button"
-                  class="btn-secondary h-9"
-                  :disabled="managedActionId === listing.id"
-                  @click="openManagedAccountModal(listing, 'reauth')"
-                >
-                  <Icon name="link" size="xs" class="mr-2" />
-                  重新授权
-                </button>
-                <button
-                  type="button"
-                  class="btn-secondary h-9"
-                  :disabled="managedActionId === listing.id"
-                  @click="refreshManagedAccountToken(listing)"
-                >
-                  <Icon name="refresh" size="xs" class="mr-2" :class="{ 'animate-spin': managedActionId === listing.id }" />
-                  刷新 Token
-                </button>
-                <button
-                  v-if="hasRecoverableListingState(listing)"
-                  type="button"
-                  class="btn-secondary h-9 text-emerald-700 dark:text-emerald-200"
-                  :disabled="managedActionId === listing.id"
-                  @click="recoverManagedAccountState(listing)"
-                >
-                  <Icon name="sync" size="xs" class="mr-2" />
-                  恢复状态
                 </button>
                 <button
                   v-if="canOwnerRelistListing(listing)"
@@ -2122,42 +2186,23 @@
       </template>
     </BaseDialog>
 
-    <AccountTestModal
-      :show="showTestModal"
-      :account="testingAccount"
-      :account-scope="managedAccountScope"
-      :test-endpoint-base="accountTestEndpointBase"
-      @close="closeTestModal"
-      @test-success="handleManagedTestSuccess"
-    />
-
-    <AccountStatsModal
-      :show="showStatsModal"
-      :account="statsAccount"
-      :stats-loader="managedStatsLoader"
-      @close="closeStatsModal"
-    />
-
-    <ReAuthAccountModal
-      :show="showReAuthModal"
-      :account="reAuthAccount"
-      :proxies="proxies"
-      :account-scope="managedAccountScope"
-      @close="closeReAuthModal"
-      @reauthorized="handleManagedAccountReauthorized"
+    <RoomAccountsDialog
+      :show="roomAccountsListing !== null"
+      :listing="roomAccountsListing"
+      @close="closeRoomAccountsDialog"
     />
 
     <BaseDialog
       :show="showConfigEditDialog"
-      title="编辑共享账号配置"
+      title="编辑房间配置"
       width="extra-wide"
       @close="closeConfigEditDialog"
     >
       <div class="space-y-5">
         <div v-if="editingConfigListing" class="edit-context-panel">
           <div class="min-w-0">
-            <span class="edit-context-eyebrow">账号 #{{ editingConfigListing.account_id }}</span>
-            <strong>{{ editingConfigListing.account_name || `共享账号 #${editingConfigListing.account_id}` }}</strong>
+            <span class="edit-context-eyebrow">房间 #{{ editingConfigListing.id }}</span>
+            <strong>{{ listingDisplayName(editingConfigListing) }}</strong>
             <small>
               使用中席位 {{ editingConfigListing.active_seats }} / {{ editingConfigListing.seat_limit }}
               <template v-if="editingConfigListing.editing_expires_at">
@@ -2178,77 +2223,22 @@
             <div class="form-section">
               <div class="section-heading">
                 <span>基础配置</span>
-                <small>这些字段会同步到账号模式调度配置；保存前会保持编辑锁，防止新用户加入旧配置。</small>
+                <small>这里只修改房间级策略；成员账号的代理和账号并发请在“我的账号”中单独管理。</small>
               </div>
               <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <label class="field">
-                  <span>账号名称</span>
+                  <span>房间名称</span>
                   <input v-model="editForm.name" class="input" :placeholder="ACCOUNT_NAME_BASE_BY_PLATFORM[listingPlatform(editingConfigListing)]" />
                   <small :class="editAccountNameValidationMessage ? 'text-red-600 dark:text-red-300' : ''">
                     {{ editAccountNameValidationMessage || '名称必须唯一，且不能包含空格、换行或制表符。' }}
                   </small>
                 </label>
 
-                <div class="field md:col-span-2">
-                  <span>代理 IP</span>
-                  <ProxySelector
-                    v-model="selectedEditProxyId"
-                    :proxies="proxies"
-                    :disabled="savingConfigEdit || releasingConfigEdit"
-                    :allow-empty="false"
-                    :can-test="authStore.isAdmin"
-                    disable-full
-                    hide-endpoint
-                  >
-                    <template #actions="{ close }">
-                      <div class="grid gap-2 sm:grid-cols-2">
-                        <button
-                          type="button"
-                          class="proxy-action-option"
-                          @click.stop="openProxyPurchase(close)"
-                        >
-                          <span class="proxy-action-icon bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-300">
-                            <Icon name="externalLink" size="sm" />
-                          </span>
-                          <span>
-                            <strong>购买 seekproxy</strong>
-                            <small>打开 seekproxy 新窗口</small>
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          class="proxy-action-option"
-                          @click.stop="openAddProxyDialog(close, 'edit')"
-                        >
-                          <span class="proxy-action-icon bg-primary-50 text-primary-600 dark:bg-primary-500/10 dark:text-primary-300">
-                            <Icon name="plus" size="sm" />
-                          </span>
-                          <span>
-                            <strong>添加代理 IP</strong>
-                            <small>使用自己的动态或静态代理</small>
-                          </span>
-                        </button>
-                      </div>
-                    </template>
-                  </ProxySelector>
-                  <small :class="editProxyCapacityValidationMessage ? 'text-red-600 dark:text-red-300' : ''">
-                    {{ editProxyHelperText }}
-                  </small>
-                </div>
-
                 <label class="field">
                   <span>可使用人数</span>
                   <select v-model.number="editForm.seat_limit" class="input">
                     <option v-for="seat in seatOptions" :key="seat" :value="seat">{{ seat }} 人</option>
                   </select>
-                </label>
-
-                <label class="field">
-                  <span>账号并发上限</span>
-                  <input v-model.number="editForm.concurrency" class="input" type="number" min="1" :max="MAX_ACCOUNT_CONCURRENCY" step="1" />
-                  <small :class="editConcurrencyValidationMessage ? 'text-red-600 dark:text-red-300' : ''">
-                    {{ editConcurrencyValidationMessage || `1-${MAX_ACCOUNT_CONCURRENCY}。` }}
-                  </small>
                 </label>
 
                 <label class="field">
@@ -2335,16 +2325,12 @@
             <span class="text-xs font-semibold text-gray-500 dark:text-dark-300">保存摘要</span>
             <div class="mt-3 grid gap-2">
               <div class="compact-metric">
-                <span>代理</span>
-                <strong>{{ currentEditProxyLabel }}</strong>
-              </div>
-              <div class="compact-metric">
                 <span>模型</span>
                 <strong>{{ editAllowedModels.length }}</strong>
               </div>
               <div class="compact-metric">
-                <span>账号并发</span>
-                <strong>{{ editForm.concurrency }}</strong>
+                <span>房间账号</span>
+                <strong>{{ editingConfigListing?.healthy_account_count ?? 0 }}/{{ editingConfigListing?.account_count ?? 0 }}</strong>
               </div>
               <div class="compact-metric">
                 <span>共享人数</span>
@@ -2376,7 +2362,7 @@
         <button
           type="button"
           class="btn-primary"
-          :disabled="savingConfigEdit || releasingConfigEdit || editAllowedModels.length === 0 || Boolean(editConcurrencyValidationMessage) || Boolean(editPerUserConcurrencyValidationMessage)"
+          :disabled="savingConfigEdit || releasingConfigEdit || editAllowedModels.length === 0 || Boolean(editPerUserConcurrencyValidationMessage)"
           @click="saveConfigEdit"
         >
           <Icon v-if="!savingConfigEdit" name="checkCircle" size="sm" class="mr-2" />
@@ -2577,7 +2563,7 @@
 
     <ConfirmDialog
       :show="pendingForceEditListing !== null"
-      title="强制编辑使用中账号"
+      title="强制编辑使用中房间"
       :message="forceEditConfirmMessage"
       confirm-text="继续编辑"
       cancel-text="取消"
@@ -2591,9 +2577,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { accountShareAPI, type AccountShareListing, type AccountShareListingFeatureTag, type AccountShareListingFilters, type AccountShareListingSortBy, type AccountShareListingSortKey, type AccountShareListingSortOrder, type AccountShareListingStatus, type AccountShareListingTab, type AccountShareMembership, type AccountShareMySpendRange, type AccountShareMySpendSummary, type AccountShareRecommendationCandidate, type AccountShareRecommendationResult, type AccountShareRecommendationScoreBreakdown, type AccountShareRecommendationUsageProfile, type AccountShareReview, type UpdateAccountShareListingRequest } from '@/api/accountShare'
-import { accountsAPI, adminAPI, keysAPI } from '@/api'
-import type { Account, AccountLevel, AccountUsageStatsResponse, ApiKey, Proxy, ProxyProtocol, UsageProgress } from '@/types'
+import { accountShareAPI, type AccountShareListing, type AccountShareListingFeatureTag, type AccountShareListingFilters, type AccountShareListingSortBy, type AccountShareListingSortKey, type AccountShareListingSortOrder, type AccountShareListingStatus, type AccountShareListingTab, type AccountShareMembership, type AccountShareMySpendRange, type AccountShareMySpendSummary, type AccountShareRecommendationCandidate, type AccountShareRecommendationResult, type AccountShareRecommendationScoreBreakdown, type AccountShareRecommendationUsageProfile, type AccountShareReview, type CreateAccountShareRoomRequest, type UpdateAccountShareListingRequest } from '@/api/accountShare'
+import { accountsAPI, keysAPI } from '@/api'
+import type { Account, AccountLevel, ApiKey, Proxy, ProxyProtocol, UsageProgress } from '@/types'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { useClipboard } from '@/composables/useClipboard'
@@ -2609,14 +2595,12 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
-import AccountStatsModal from '@/components/account/AccountStatsModal.vue'
-import AccountTestModal from '@/components/account/AccountTestModal.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import OAuthAuthorizationFlow from '@/components/account/OAuthAuthorizationFlow.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
-import ReAuthAccountModal from '@/components/account/ReAuthAccountModal.vue'
 import UsageProgressBar from '@/components/account/UsageProgressBar.vue'
 import Pagination from '@/components/common/Pagination.vue'
+import RoomAccountsDialog from '@/components/account-share/RoomAccountsDialog.vue'
 
 interface FilterOption {
   key: string
@@ -2719,8 +2703,6 @@ interface UserProxyFormState {
   password: string
 }
 
-type ManagedAccountModalAction = 'test' | 'stats' | 'reauth'
-type ProxyTargetForm = 'create' | 'edit'
 type AccountShareActionErrorAction = 'create-mode-key' | null
 type AccountSharePlatform = 'openai' | 'anthropic'
 type RecommendationPresetKey = 'light' | 'balanced' | 'heavy' | 'history'
@@ -2823,8 +2805,8 @@ const ACCOUNT_SHARE_PLATFORM_OPTIONS: Array<{ value: AccountSharePlatform; label
   { value: 'anthropic', label: 'Anthropic' }
 ]
 const ACCOUNT_NAME_BASE_BY_PLATFORM: Record<AccountSharePlatform, string> = {
-  openai: 'OpenAI共享账号',
-  anthropic: 'Anthropic共享账号'
+  openai: 'OpenAI账号房间',
+  anthropic: 'Anthropic账号房间'
 }
 const ACCOUNT_MODE_GROUP_NAME_BY_PLATFORM: Record<AccountSharePlatform, string> = {
   openai: 'OpenAI账号模式',
@@ -3225,6 +3207,15 @@ const actionErrorDialog = reactive<{
 const createErrorMessage = ref('')
 const showCreate = ref(false)
 const createPlatform = ref<AccountSharePlatform>('openai')
+const createSourceMode = ref<'existing' | 'oauth'>('existing')
+const ownedAccounts = ref<Account[]>([])
+const ownedAccountsLoading = ref(false)
+const ownedAccountsError = ref('')
+const selectedOwnedAccountID = ref(0)
+let ownedAccountsRequestVersion = 0
+let ownedAccountsLoadedPlatform: AccountSharePlatform | null = null
+let pendingCreateRoomIntentSignature = ''
+let pendingCreateRoomIdempotencyKey = ''
 const authURL = ref('')
 const authSessionID = ref('')
 const creating = ref(false)
@@ -3234,6 +3225,7 @@ const pendingJoinConfirmation = ref<PendingJoinConfirmation | null>(null)
 const endingId = ref<number | null>(null)
 const pendingEndUse = ref<PendingEndUseState | null>(null)
 const pendingReview = ref<ReviewDialogState | null>(null)
+const roomAccountsListing = ref<AccountShareListing | null>(null)
 const ownerDialog = reactive({
   show: false,
   ownerUserID: 0,
@@ -3261,14 +3253,8 @@ const reorderingQueueId = ref<number | null>(null)
 const pendingForceEditListing = ref<AccountShareListing | null>(null)
 const managingId = ref<number | null>(null)
 const managedActionId = ref<number | null>(null)
-const showTestModal = ref(false)
-const showStatsModal = ref(false)
-const showReAuthModal = ref(false)
 const showConfigEditDialog = ref(false)
 const showModelEditDialog = ref(false)
-const testingAccount = ref<Account | null>(null)
-const statsAccount = ref<Account | null>(null)
-const reAuthAccount = ref<Account | null>(null)
 const editingConfigListing = ref<AccountShareListing | null>(null)
 const editingModelListing = ref<AccountShareListing | null>(null)
 const editingAllowedModels = ref<string[]>([])
@@ -3318,7 +3304,6 @@ const savingProxy = ref(false)
 const proxyDialogError = ref('')
 const proxySmartInput = ref('')
 const nowMs = ref(Date.now())
-const proxyTargetForm = ref<ProxyTargetForm>('create')
 let clockTimer: number | null = null
 let searchDebounceTimer: number | null = null
 let editSessionRenewTimer: number | null = null
@@ -3545,20 +3530,8 @@ const selectedProxyId = computed<number | null>({
   }
 })
 
-const selectedEditProxyId = computed<number | null>({
-  get: () => editForm.proxy_id && editForm.proxy_id > 0 ? editForm.proxy_id : null,
-  set: value => {
-    editForm.proxy_id = value
-  }
-})
-
 const currentProxyID = computed(() => {
   const proxyID = Number(createForm.proxy_id || 0)
-  return Number.isFinite(proxyID) && proxyID > 0 ? proxyID : 0
-})
-
-const currentEditProxyID = computed(() => {
-  const proxyID = Number(editForm.proxy_id || 0)
   return Number.isFinite(proxyID) && proxyID > 0 ? proxyID : 0
 })
 
@@ -3569,29 +3542,46 @@ const currentProxyLabel = computed(() => {
   return proxy ? `${proxy.name} #${proxy.id}` : `#${proxyID}`
 })
 
-const currentEditProxyLabel = computed(() => {
-  const proxyID = currentEditProxyID.value
-  if (proxyID <= 0) return '未选择'
-  const proxy = proxies.value.find(item => item.id === proxyID)
-  return proxy ? `${proxy.name} #${proxy.id}` : `#${proxyID}`
+const eligibleOwnedAccounts = computed(() => (
+  ownedAccounts.value
+    .filter((account) => {
+      if (account.platform.trim().toLowerCase() !== createPlatform.value) return false
+      if (account.status !== 'active' || !account.schedulable) return false
+      if (!account.account_level || account.account_level.trim().toLowerCase() === 'unknown') return false
+      const placementTarget = account.external_placement?.target
+      if (placementTarget === 'room') return false
+      if (!placementTarget && Number(account.account_share_mode_listing_id || 0) > 0) {
+        return false
+      }
+      return true
+    })
+    .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN') || left.id - right.id)
+))
+
+const selectedOwnedAccount = computed(() => (
+  eligibleOwnedAccounts.value.find((account) => account.id === selectedOwnedAccountID.value) || null
+))
+
+const ownedAccountSelectionHint = computed(() => {
+  if (ownedAccountsLoading.value) return '正在读取我的账号...'
+  if (ownedAccountsError.value) return ownedAccountsError.value
+  if (selectedOwnedAccount.value) {
+    return selectedOwnedAccount.value.external_placement?.target === 'public_pool'
+      || (!selectedOwnedAccount.value.external_placement && selectedOwnedAccount.value.share_mode === 'public')
+      ? `账号 #${selectedOwnedAccount.value.id} 当前在公共号池；创建时会原子切换到新房间，并保留凭证、代理和私有自用能力。`
+      : `将保留账号 #${selectedOwnedAccount.value.id} 的凭证、代理和私有自用能力。`
+  }
+  if (eligibleOwnedAccounts.value.length === 0) {
+    return '没有可创建房间的账号；账号需健康、等级已确认且尚未加入其他房间。'
+  }
+  return `可选 ${eligibleOwnedAccounts.value.length} 个账号。`
 })
 
 const selectedCreateProxy = computed(() => findProxyByID(currentProxyID.value))
-const selectedEditProxy = computed(() => findProxyByID(currentEditProxyID.value))
-const originalEditProxyID = computed(() => {
-  const listing = editingConfigListing.value
-  return listing ? normalizeEditableProxyID(listing) : null
-})
 
 const createProxyCapacityValidationMessage = computed(() =>
   proxyCapacityValidationMessage(selectedCreateProxy.value)
 )
-const editProxyCapacityValidationMessage = computed(() => {
-  if (currentEditProxyID.value > 0 && currentEditProxyID.value === originalEditProxyID.value) {
-    return ''
-  }
-  return proxyCapacityValidationMessage(selectedEditProxy.value)
-})
 
 const parsedAllowedModelCount = computed(() => allowedModels.value.length)
 const availableSeatCount = computed(() => listings.value.reduce((total, listing) => total + Math.max(0, listing.seat_limit - listing.active_seats), 0))
@@ -3610,17 +3600,10 @@ const activeAdvancedFilterCount = computed(() => {
 const hasAdvancedFilters = computed(() => activeAdvancedFilterCount.value > 0)
 const activeResultFilterCount = computed(() => activeAdvancedFilterCount.value + (searchQuery.value.trim() !== '' ? 1 : 0))
 const hasResultFilters = computed(() => hasAdvancedFilters.value || searchQuery.value.trim() !== '')
-const managedAccountScope = computed<'admin' | 'user'>(() => authStore.isAdmin ? 'admin' : 'user')
-const accountTestEndpointBase = computed(() =>
-  managedAccountScope.value === 'admin' ? '/api/v1/admin/accounts' : '/api/v1/accounts'
-)
-const managedStatsLoader = computed<(id: number, days?: number) => Promise<AccountUsageStatsResponse>>(() =>
-  managedAccountScope.value === 'admin' ? adminAPI.accounts.getStats : accountsAPI.getStats
-)
 const maxPerUserConcurrency = computed(() => calculateMaxPerUserConcurrency(createForm.concurrency, createForm.seat_limit))
 const editMaxPerUserConcurrency = computed(() => calculateMaxPerUserConcurrency(editForm.concurrency, editForm.seat_limit))
 const accountNameValidationMessage = computed(() => validateAccountName(createForm.name))
-const editAccountNameValidationMessage = computed(() => validateAccountName(editForm.name, editingConfigListing.value?.account_id))
+const editAccountNameValidationMessage = computed(() => validateAccountName(editForm.name, editingConfigListing.value?.id))
 const concurrencyValidationMessage = computed(() => {
   const concurrency = Number(createForm.concurrency)
   if (!Number.isFinite(concurrency) || concurrency < 1) return '账号并发上限必须大于 0'
@@ -3663,6 +3646,13 @@ const canSubmitOAuth = computed(() =>
   !concurrencyValidationMessage.value &&
   !perUserConcurrencyValidationMessage.value
 )
+const canCreateRoomFromOwnedAccount = computed(() =>
+  selectedOwnedAccount.value !== null
+  && parsedAllowedModelCount.value > 0
+  && !accountNameValidationMessage.value
+  && !concurrencyValidationMessage.value
+  && !perUserConcurrencyValidationMessage.value
+)
 
 const proxyHelperText = computed(() => {
   if (proxyLoading.value) return '正在加载代理列表...'
@@ -3675,7 +3665,6 @@ const proxyHelperText = computed(() => {
   return '暂无可选代理，可在下拉菜单中购买独立 IP 或添加自己的代理 IP。'
 })
 const createProxyHelperText = computed(() => createProxyCapacityValidationMessage.value || proxyHelperText.value)
-const editProxyHelperText = computed(() => editProxyCapacityValidationMessage.value || proxyHelperText.value)
 const forceEditConfirmMessage = computed(() => {
   const listing = pendingForceEditListing.value
   if (!listing) return ''
@@ -3899,8 +3888,8 @@ function hasKnownAccountName(name: string, excludeAccountID?: number): boolean {
   const normalizedName = normalizeAccountName(name)
   if (!normalizedName) return false
   return [...knownListings.value, ...listings.value].some(listing => {
-    if (excludeAccountID && listing.account_id === excludeAccountID) return false
-    return normalizeAccountName(listing.account_name || '') === normalizedName
+    if (excludeAccountID && listing.id === excludeAccountID) return false
+    return normalizeAccountName(listing.room_name || listing.account_name || '') === normalizedName
   })
 }
 
@@ -3915,9 +3904,9 @@ function suggestedAccountName(platform: AccountSharePlatform = createPlatform.va
 
 function validateAccountName(name: string, excludeAccountID?: number): string {
   const value = name.trim()
-  if (!value) return '请填写账号名称'
-  if (/\s/.test(name)) return '账号名称不能包含空格、换行或制表符'
-  if (hasKnownAccountName(value, excludeAccountID)) return '账号名称已存在，请换一个名称'
+  if (!value) return '请填写房间名称'
+  if (/\s/.test(name)) return '房间名称不能包含空格、换行或制表符'
+  if (hasKnownAccountName(value, excludeAccountID)) return '房间名称已存在，请换一个名称'
   return ''
 }
 
@@ -4629,7 +4618,7 @@ function accountLevelBadgeClass(listing: AccountShareListing): string {
 }
 
 function listingDisplayName(listing: AccountShareListing): string {
-  return listing.account_name || `共享账号 #${listing.id}`
+  return listing.room_name || listing.account_name || `账号房间 #${listing.id}`
 }
 
 function isRateMultiplierExpensive(listing: AccountShareListing): boolean {
@@ -4774,15 +4763,6 @@ function runtimeInsight(listing: AccountShareListing): { label: string; detail: 
     badge: '正常',
     tone: 'normal'
   }
-}
-
-function hasRecoverableListingState(listing: AccountShareListing): boolean {
-  return (
-    listing.account_status === 'error' ||
-    isFuture(listing.rate_limit_reset_at) ||
-    isFuture(listing.overload_until) ||
-    isFuture(listing.temp_unschedulable_until)
-  )
 }
 
 function isOwnListing(listing: AccountShareListing): boolean {
@@ -5737,8 +5717,13 @@ function closeRecommendationDialog(): void {
 function toggleCreatePanel(): void {
   showCreate.value = !showCreate.value
   if (showCreate.value) {
-    selectCreatePlatform(activeListingPlatform.value)
-    void loadProxies()
+    if (createPlatform.value !== activeListingPlatform.value) {
+      selectCreatePlatform(activeListingPlatform.value)
+    } else if (createSourceMode.value === 'existing') {
+      void loadOwnedAccounts()
+    } else {
+      void loadProxies()
+    }
     void loadListingNameIndex()
   }
 }
@@ -5753,7 +5738,9 @@ function resetCreateForm(): void {
   Object.assign(createForm, buildDefaultCreateForm())
   allowedModels.value = defaultAllowedModelsForPlatform(createPlatform.value)
   createErrorMessage.value = ''
+  clearPendingCreateRoomIdempotencyKey()
   resetOAuthState()
+  selectedOwnedAccountID.value = eligibleOwnedAccounts.value[0]?.id || 0
 }
 
 function selectCreatePlatform(platform: AccountSharePlatform): void {
@@ -5763,7 +5750,30 @@ function selectCreatePlatform(platform: AccountSharePlatform): void {
   Object.assign(createForm, buildDefaultCreateForm(), { proxy_id: proxyID })
   allowedModels.value = defaultAllowedModelsForPlatform(platform)
   createErrorMessage.value = ''
+  selectedOwnedAccountID.value = 0
+  ownedAccounts.value = []
+  ownedAccountsError.value = ''
+  ownedAccountsLoadedPlatform = null
+  clearPendingCreateRoomIdempotencyKey()
   resetOAuthState()
+  if (createSourceMode.value === 'existing') {
+    void loadOwnedAccounts(true)
+  } else {
+    void loadProxies()
+  }
+}
+
+function selectCreateSourceMode(mode: 'existing' | 'oauth'): void {
+  if (creating.value || generatingOAuthURL.value || createSourceMode.value === mode) return
+  createSourceMode.value = mode
+  createErrorMessage.value = ''
+  clearPendingCreateRoomIdempotencyKey()
+  if (mode === 'existing') {
+    resetOAuthState()
+    void loadOwnedAccounts()
+  } else {
+    void loadProxies()
+  }
 }
 
 function resetProxyForm(): void {
@@ -5785,9 +5795,8 @@ function openProxyPurchase(close?: () => void): void {
   window.open(PROXY_PURCHASE_URL, '_blank', 'noopener,noreferrer')
 }
 
-function openAddProxyDialog(close?: () => void, target: ProxyTargetForm = 'create'): void {
+function openAddProxyDialog(close?: () => void): void {
   close?.()
-  proxyTargetForm.value = target
   resetProxyForm()
   showProxyDialog.value = true
 }
@@ -5898,14 +5907,6 @@ function upsertProxy(proxy: Proxy): void {
   proxies.value = [proxy, ...proxies.value]
 }
 
-function mergeListingProxyOption(listing: AccountShareListing): void {
-  if (!listing.proxy) return
-  upsertProxy({
-    ...listing.proxy,
-    username: listing.proxy.username ?? null
-  })
-}
-
 async function saveUserProxy(): Promise<void> {
   applySmartProxyInput(false)
   proxyDialogError.value = validateUserProxyForm()
@@ -5922,11 +5923,7 @@ async function saveUserProxy(): Promise<void> {
       password: proxyForm.password.trim() || undefined
     })
     upsertProxy(created)
-    if (proxyTargetForm.value === 'edit') {
-      editForm.proxy_id = created.id
-    } else {
-      createForm.proxy_id = created.id
-    }
+    createForm.proxy_id = created.id
     proxyLoadMessage.value = ''
     showProxyDialog.value = false
   } catch (error: unknown) {
@@ -5953,8 +5950,12 @@ function proxyCapacityValidationMessage(proxy: Proxy | null | undefined): string
 function validateCreateConfig(): string {
   const accountNameError = validateAccountName(createForm.name)
   if (accountNameError) return accountNameError
-  if (currentProxyID.value <= 0) return '请选择代理 IP，或先添加自己的代理 IP'
-  if (createProxyCapacityValidationMessage.value) return createProxyCapacityValidationMessage.value
+  if (createSourceMode.value === 'existing') {
+    if (!selectedOwnedAccount.value) return '请选择一个可创建房间的自有账号'
+  } else {
+    if (currentProxyID.value <= 0) return '请选择代理 IP，或先添加自己的代理 IP'
+    if (createProxyCapacityValidationMessage.value) return createProxyCapacityValidationMessage.value
+  }
   if (!seatOptions.includes(Number(createForm.seat_limit))) return `可使用人数必须在 ${ACCOUNT_SHARE_MIN_SEATS}-${ACCOUNT_SHARE_MAX_SEATS} 人之间`
   if (concurrencyValidationMessage.value) return concurrencyValidationMessage.value
   if (perUserConcurrencyValidationMessage.value) return perUserConcurrencyValidationMessage.value
@@ -5978,12 +5979,9 @@ function parseEditAllowedModels(): string[] {
 }
 
 function validateEditConfig(): string {
-  const accountNameError = validateAccountName(editForm.name, editingConfigListing.value?.account_id)
+  const accountNameError = validateAccountName(editForm.name, editingConfigListing.value?.id)
   if (accountNameError) return accountNameError
-  if (currentEditProxyID.value <= 0) return '请选择代理 IP，或先添加自己的代理 IP'
-  if (editProxyCapacityValidationMessage.value) return editProxyCapacityValidationMessage.value
   if (!seatOptions.includes(Number(editForm.seat_limit))) return `可使用人数必须在 ${ACCOUNT_SHARE_MIN_SEATS}-${ACCOUNT_SHARE_MAX_SEATS} 人之间`
-  if (editConcurrencyValidationMessage.value) return editConcurrencyValidationMessage.value
   if (editPerUserConcurrencyValidationMessage.value) return editPerUserConcurrencyValidationMessage.value
   if (!Number.isFinite(Number(editForm.rate_multiplier)) || Number(editForm.rate_multiplier) < 0) return '账号倍率不能小于 0'
   if (!Number.isFinite(Number(editForm.hourly_rate)) || Number(editForm.hourly_rate) < 0) return '每小时扣费额度不能小于 0'
@@ -6459,6 +6457,137 @@ async function loadProxies(): Promise<void> {
   }
 }
 
+async function loadOwnedAccounts(force = false): Promise<void> {
+  const platform = createPlatform.value
+  if (!force && (ownedAccountsLoading.value || ownedAccountsLoadedPlatform === platform)) return
+
+  const requestVersion = ++ownedAccountsRequestVersion
+  ownedAccountsLoading.value = true
+  ownedAccountsError.value = ''
+  try {
+    const firstPage = await accountsAPI.list(1, 100, { platform, status: 'active' })
+    const remainingPages = Array.from(
+      { length: Math.max(0, firstPage.pages - 1) },
+      (_, index) => index + 2
+    )
+    const remainingResults = await Promise.all(
+      remainingPages.map(page => accountsAPI.list(page, 100, { platform, status: 'active' }))
+    )
+    if (requestVersion !== ownedAccountsRequestVersion || platform !== createPlatform.value) return
+
+    const accountByID = new Map<number, Account>()
+    for (const account of firstPage.items || []) accountByID.set(account.id, account)
+    for (const result of remainingResults) {
+      for (const account of result.items || []) accountByID.set(account.id, account)
+    }
+    ownedAccounts.value = Array.from(accountByID.values())
+    ownedAccountsLoadedPlatform = platform
+    if (!eligibleOwnedAccounts.value.some(account => account.id === selectedOwnedAccountID.value)) {
+      selectedOwnedAccountID.value = eligibleOwnedAccounts.value[0]?.id || 0
+    }
+  } catch (error: unknown) {
+    if (requestVersion !== ownedAccountsRequestVersion) return
+    ownedAccounts.value = []
+    ownedAccountsLoadedPlatform = null
+    selectedOwnedAccountID.value = 0
+    ownedAccountsError.value = extractApiErrorMessage(error, '加载自有账号失败，请重试')
+  } finally {
+    if (requestVersion === ownedAccountsRequestVersion) {
+      ownedAccountsLoading.value = false
+    }
+  }
+}
+
+function buildCreateRoomPayload(accountID: number): Omit<CreateAccountShareRoomRequest, 'idempotency_key'> {
+  return {
+    account_id: accountID,
+    room_name: createForm.name.trim(),
+    seat_limit: Number(createForm.seat_limit),
+    rate_multiplier: Number(createForm.rate_multiplier),
+    allowed_models: parseAllowedModels(),
+    per_user_concurrency: Number(createForm.per_user_concurrency),
+    hourly_rate: Number(createForm.hourly_rate),
+    hourly_fee_waiver_minimum: Number(createForm.hourly_fee_waiver_minimum),
+    min_balance_required: Number(createForm.min_balance_required),
+    codex_cli_only: createForm.codex_cli_only,
+    codex_5h_limit_percent: Number(createForm.codex_5h_limit_percent),
+    codex_7d_limit_percent: Number(createForm.codex_7d_limit_percent),
+    anthropic_5h_limit_percent: Number(createForm.anthropic_5h_limit_percent),
+    anthropic_7d_limit_percent: Number(createForm.anthropic_7d_limit_percent)
+  }
+}
+
+function clearPendingCreateRoomIdempotencyKey(): void {
+  pendingCreateRoomIntentSignature = ''
+  pendingCreateRoomIdempotencyKey = ''
+}
+
+function getCreateRoomIdempotencyKey(
+  payload: Omit<CreateAccountShareRoomRequest, 'idempotency_key'>
+): string {
+  const intentSignature = JSON.stringify(payload)
+  if (
+    pendingCreateRoomIdempotencyKey
+    && pendingCreateRoomIntentSignature === intentSignature
+  ) {
+    return pendingCreateRoomIdempotencyKey
+  }
+  const requestID = globalThis.crypto?.randomUUID?.()
+  if (!requestID) {
+    throw new Error('当前浏览器无法生成安全的幂等键，请升级浏览器后重试。')
+  }
+  pendingCreateRoomIntentSignature = intentSignature
+  pendingCreateRoomIdempotencyKey = `account-share-room-${payload.account_id}-${requestID}`
+  return pendingCreateRoomIdempotencyKey
+}
+
+async function createRoomFromOwnedAccount(): Promise<void> {
+  if (creating.value) return
+  createErrorMessage.value = ''
+  const validationError = validateCreateConfig()
+  if (validationError) {
+    createErrorMessage.value = validationError
+    return
+  }
+  const account = selectedOwnedAccount.value
+  if (!account) {
+    createErrorMessage.value = '所选账号状态已变化，请刷新账号列表后重试'
+    return
+  }
+
+  creating.value = true
+  try {
+    const intentPayload = buildCreateRoomPayload(account.id)
+    const created = await accountShareAPI.createRoom({
+      ...intentPayload,
+      idempotency_key: getCreateRoomIdempotencyKey(intentPayload)
+    })
+    clearPendingCreateRoomIdempotencyKey()
+    mergeKnownListings([created])
+    appStore.showSuccess(
+      account.external_placement?.target === 'public_pool'
+        || (!account.external_placement && account.share_mode === 'public')
+        ? '房间已创建，账号已从公共号池切换到新房间'
+        : '账号房间已创建'
+    )
+    resetCreateForm()
+    showCreate.value = false
+    await Promise.all([loadOwnedAccounts(true), loadListings()])
+  } catch (error: unknown) {
+    createErrorMessage.value = extractApiErrorMessage(error, '创建账号房间失败')
+  } finally {
+    creating.value = false
+  }
+}
+
+function openRoomAccountsDialog(listing: AccountShareListing): void {
+  roomAccountsListing.value = listing
+}
+
+function closeRoomAccountsDialog(): void {
+  roomAccountsListing.value = null
+}
+
 async function startOAuth(): Promise<void> {
   createErrorMessage.value = ''
   const validationError = validateCreateConfig()
@@ -6774,21 +6903,6 @@ async function updateManagedListingStatus(listing: AccountShareListing, status: 
   }
 }
 
-function closeTestModal(): void {
-  showTestModal.value = false
-  testingAccount.value = null
-}
-
-function closeStatsModal(): void {
-  showStatsModal.value = false
-  statsAccount.value = null
-}
-
-function closeReAuthModal(): void {
-  showReAuthModal.value = false
-  reAuthAccount.value = null
-}
-
 function closeModelEditDialog(): void {
   if (savingModelsId.value !== null) return
   showModelEditDialog.value = false
@@ -6812,16 +6926,10 @@ function normalizeEditableNumber(value: number | null | undefined, fallback: num
   return Number.isFinite(numeric) ? numeric : fallback
 }
 
-function normalizeEditableProxyID(listing: AccountShareListing): number | null {
-  const proxyID = Number(listing.proxy_id ?? listing.proxy?.id ?? 0)
-  return Number.isFinite(proxyID) && proxyID > 0 ? proxyID : null
-}
-
 function populateEditForm(listing: AccountShareListing): void {
-  mergeListingProxyOption(listing)
   Object.assign(editForm, {
-    name: listing.account_name?.trim() ? listing.account_name : `${ACCOUNT_NAME_BASE_BY_PLATFORM[listingPlatform(listing)]}${listing.account_id}`,
-    proxy_id: normalizeEditableProxyID(listing),
+    name: listing.room_name?.trim() ? listing.room_name : `${ACCOUNT_NAME_BASE_BY_PLATFORM[listingPlatform(listing)]}${listing.id}`,
+    proxy_id: null,
     concurrency: normalizeEditableNumber(listing.account_concurrency, DEFAULT_ACCOUNT_CONCURRENCY),
     seat_limit: normalizeEditableNumber(listing.seat_limit, 2),
     rate_multiplier: normalizeEditableNumber(listing.rate_multiplier, 1),
@@ -6914,7 +7022,7 @@ async function openConfigEditDialog(listing: AccountShareListing, force: boolean
   editErrorMessage.value = ''
   managedActionId.value = listing.id
   try {
-    await Promise.all([loadProxies(), loadListingNameIndex(false)])
+    await loadListingNameIndex(false)
     const updated = await accountShareAPI.beginListingEdit(listing.id, {
       session_id: listing.editing_mine ? listing.edit_session_id : undefined,
       force
@@ -6978,8 +7086,6 @@ async function saveConfigEdit(): Promise<void> {
   try {
     const payload: UpdateAccountShareListingRequest = {
       name: editForm.name.trim(),
-      proxy_id: currentEditProxyID.value,
-      concurrency: Number(editForm.concurrency),
       seat_limit: Number(editForm.seat_limit),
       rate_multiplier: Number(editForm.rate_multiplier),
       allowed_models: parseEditAllowedModels(),
@@ -7002,10 +7108,10 @@ async function saveConfigEdit(): Promise<void> {
     stopEditSessionRenewal()
     mergeListingUpdate(updated)
     await loadListings()
-    appStore.showSuccess('账号配置已更新')
+    appStore.showSuccess('房间配置已更新')
     resetConfigEditState()
   } catch (error: unknown) {
-    editErrorMessage.value = extractApiErrorMessage(error, '保存账号配置失败')
+    editErrorMessage.value = extractApiErrorMessage(error, '保存房间配置失败')
   } finally {
     savingConfigEdit.value = false
   }
@@ -7048,105 +7154,33 @@ function copyModelName(model: string): void {
   void copyToClipboard(model, `已复制 ${model}`)
 }
 
-async function fetchManagedAccount(listing: AccountShareListing): Promise<Account> {
-  return managedAccountScope.value === 'admin'
-    ? adminAPI.accounts.getById(listing.account_id)
-    : accountsAPI.getById(listing.account_id)
-}
-
-function syncOpenManagedAccount(account: Account): void {
-  if (testingAccount.value?.id === account.id) testingAccount.value = account
-  if (statsAccount.value?.id === account.id) statsAccount.value = account
-  if (reAuthAccount.value?.id === account.id) reAuthAccount.value = account
-}
-
-async function openManagedAccountModal(listing: AccountShareListing, action: ManagedAccountModalAction): Promise<void> {
-  errorMessage.value = ''
-  managedActionId.value = listing.id
-  try {
-    const account = await fetchManagedAccount(listing)
-    if (action === 'test') {
-      testingAccount.value = account
-      showTestModal.value = true
-    } else if (action === 'stats') {
-      statsAccount.value = account
-      showStatsModal.value = true
-    } else if (action === 'reauth') {
-      if (managedAccountScope.value === 'user') {
-        await loadProxies()
-      }
-      reAuthAccount.value = account
-      showReAuthModal.value = true
+watch(
+  () => [selectedOwnedAccount.value, createForm.seat_limit] as const,
+  ([account]) => {
+    if (!account) return
+    createForm.concurrency = account.concurrency
+    const maximum = calculateMaxPerUserConcurrency(account.concurrency, createForm.seat_limit)
+    if (maximum > 0) {
+      createForm.per_user_concurrency = Math.min(
+        Math.max(1, Number(createForm.per_user_concurrency) || 1),
+        maximum
+      )
     }
-  } catch (error: unknown) {
-    showActionError(extractApiErrorMessage(error, '加载账号详情失败'), '加载账号详情失败')
-  } finally {
-    managedActionId.value = null
-  }
-}
+  },
+  { immediate: true }
+)
 
-async function refreshManagedAccountToken(listing: AccountShareListing): Promise<void> {
-  errorMessage.value = ''
-  managedActionId.value = listing.id
-  try {
-    let updated: Account
-    let warning = ''
-    let message = ''
-    if (managedAccountScope.value === 'admin') {
-      updated = await adminAPI.accounts.refreshCredentials(listing.account_id)
-    } else {
-      const result = await accountsAPI.refreshCredentials(listing.account_id)
-      updated = result.account
-      warning = result.warning || ''
-      message = result.message || ''
-    }
-    syncOpenManagedAccount(updated)
-    await loadListings()
-    if (warning === 'missing_project_id_temporary') {
-      appStore.showWarning(message || 'Token 已刷新，但项目 ID 暂时无法获取，系统会自动重试')
-    } else {
-      appStore.showSuccess('Token 已刷新')
-    }
-  } catch (error: unknown) {
-    showActionError(extractApiErrorMessage(error, '刷新 Token 失败'), '刷新 Token 失败')
-  } finally {
-    managedActionId.value = null
-  }
-}
-
-async function recoverManagedAccountState(listing: AccountShareListing): Promise<void> {
-  errorMessage.value = ''
-  managedActionId.value = listing.id
-  try {
-    const updated = managedAccountScope.value === 'admin'
-      ? await adminAPI.accounts.recoverState(listing.account_id)
-      : await accountsAPI.recoverState(listing.account_id)
-    syncOpenManagedAccount(updated)
-    await loadListings()
-    appStore.showSuccess('账号状态已恢复')
-  } catch (error: unknown) {
-    showActionError(extractApiErrorMessage(error, '恢复账号状态失败'), '恢复账号状态失败')
-  } finally {
-    managedActionId.value = null
-  }
-}
-
-async function handleManagedTestSuccess(accountID: number): Promise<void> {
-  await loadListings()
-  const listing = listings.value.find(item => item.account_id === accountID)
-  if (!listing) return
-  try {
-    syncOpenManagedAccount(await fetchManagedAccount(listing))
-  } catch (error: unknown) {
-    showActionError(extractApiErrorMessage(error, '测试成功，但刷新账号详情失败'), '刷新账号详情失败')
-  }
-}
-
-async function handleManagedAccountReauthorized(): Promise<void> {
-  showReAuthModal.value = false
-  reAuthAccount.value = null
-  await loadListings()
-}
+watch(
+  [
+    selectedOwnedAccountID,
+    () => ({ ...createForm }),
+    allowedModels
+  ],
+  () => {
+    if (!creating.value) clearPendingCreateRoomIdempotencyKey()
+  },
+  { deep: true }
+)
 
 watch(searchQuery, () => {
   if (suppressNextSearchRefresh) {
@@ -10007,6 +10041,98 @@ onBeforeUnmount(() => {
   color: rgb(191 219 254);
 }
 
+.create-source-option {
+  display: flex;
+  min-height: 4.75rem;
+  min-width: 0;
+  align-items: center;
+  gap: 0.75rem;
+  border-radius: 0.75rem;
+  border: 1px solid rgb(226 232 240);
+  background: rgb(255 255 255);
+  padding: 0.75rem;
+  text-align: left;
+  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.create-source-option:hover {
+  border-color: rgb(147 197 253);
+  background: rgb(248 250 252);
+}
+
+.create-source-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.create-source-option strong,
+.create-source-option small {
+  display: block;
+}
+
+.create-source-option strong {
+  color: rgb(15 23 42);
+  font-size: 0.875rem;
+}
+
+.create-source-option small {
+  margin-top: 0.1875rem;
+  color: rgb(100 116 139);
+  font-size: 0.75rem;
+  line-height: 1.125rem;
+}
+
+.create-source-option-active {
+  border-color: rgb(37 99 235);
+  background: rgb(239 246 255);
+  box-shadow: inset 0 0 0 1px rgb(37 99 235 / 0.12);
+}
+
+.create-source-icon {
+  display: inline-flex;
+  height: 2.5rem;
+  width: 2.5rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.625rem;
+  background: rgb(241 245 249);
+  color: rgb(51 65 85);
+}
+
+.create-source-option-active .create-source-icon {
+  background: rgb(37 99 235);
+  color: white;
+}
+
+.dark .create-source-option {
+  border-color: rgb(63 63 70);
+  background: rgb(39 39 42);
+}
+
+.dark .create-source-option:hover {
+  border-color: rgb(59 130 246);
+  background: rgb(39 39 42 / 0.76);
+}
+
+.dark .create-source-option-active {
+  border-color: rgb(96 165 250);
+  background: rgb(30 64 175 / 0.2);
+}
+
+.dark .create-source-option strong {
+  color: white;
+}
+
+.dark .create-source-option small {
+  color: rgb(161 161 170);
+}
+
+.dark .create-source-icon {
+  background: rgb(63 63 70);
+  color: rgb(212 212 216);
+}
+
 .proxy-action-option {
   display: flex;
   min-height: 3.75rem;
@@ -10343,6 +10469,47 @@ onBeforeUnmount(() => {
   font-weight: 800;
   line-height: 1.3125rem;
   overflow-wrap: anywhere;
+}
+
+.room-account-count-button,
+.room-account-count-pill {
+  display: inline-flex;
+  min-height: 2rem;
+  width: fit-content;
+  align-items: center;
+  gap: 0.3rem;
+  border-radius: 9999px;
+  border: 1px solid rgb(167 243 208);
+  background: rgb(236 253 245);
+  padding: 0.25rem 0.625rem;
+  color: rgb(4 120 87);
+  font-size: 0.71875rem;
+  font-weight: 800;
+  line-height: 1rem;
+}
+
+.room-account-count-button {
+  min-height: 2.75rem;
+  transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+}
+
+.room-account-count-button:hover {
+  border-color: rgb(5 150 105);
+  background: rgb(5 150 105);
+  color: white;
+}
+
+.dark .room-account-count-button,
+.dark .room-account-count-pill {
+  border-color: rgb(6 95 70);
+  background: rgb(6 78 59 / 0.3);
+  color: rgb(110 231 183);
+}
+
+.dark .room-account-count-button:hover {
+  border-color: rgb(16 185 129);
+  background: rgb(5 150 105);
+  color: white;
 }
 
 .listing-owner {

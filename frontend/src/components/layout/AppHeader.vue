@@ -2,10 +2,10 @@
   <header class="app-header" data-ui-skin="v2">
     <div class="app-header-inner">
       <!-- Left: Mobile Menu Toggle + Page Title -->
-      <div class="flex min-w-0 flex-1 items-center gap-2 sm:gap-4">
+      <div class="flex flex-none items-center gap-2 lg:min-w-0 lg:flex-1 lg:gap-4">
         <button
           @click="toggleMobileSidebar"
-          class="btn-ghost btn-icon header-icon-button lg:hidden"
+          class="btn-ghost btn-icon header-icon-button flex-none lg:hidden"
           aria-label="Toggle Menu"
         >
           <Icon name="menu" size="md" />
@@ -22,7 +22,7 @@
       </div>
 
       <!-- Right: Announcements + Invite + Docs + Language + Subscriptions + Balance + User Dropdown -->
-      <div class="flex flex-shrink-0 items-center gap-1 sm:gap-2">
+      <div class="flex min-w-0 flex-1 flex-nowrap items-center justify-end gap-1 sm:flex-none sm:gap-2">
         <!-- Announcement Bell -->
         <AnnouncementBell v-if="user" />
 
@@ -35,7 +35,7 @@
           :href="docUrl"
           target="_blank"
           rel="noopener noreferrer"
-          class="header-action"
+          class="header-action hidden sm:inline-flex"
         >
           <Icon name="book" size="sm" />
           <span class="hidden sm:inline">{{ t('nav.docs') }}</span>
@@ -45,7 +45,9 @@
         <LocaleSwitcher />
 
         <!-- Subscription Progress (for users with active subscriptions) -->
-        <SubscriptionProgressMini v-if="user" />
+        <div v-if="user" class="hidden flex-none sm:block">
+          <SubscriptionProgressMini />
+        </div>
 
         <!-- Balance Display -->
         <div
@@ -71,7 +73,7 @@
         </div>
 
         <!-- User Dropdown -->
-        <div v-if="user" class="relative min-w-0" ref="dropdownRef">
+        <div v-if="user" class="relative min-w-0 flex-none" ref="dropdownRef">
           <button
             @click="toggleDropdown"
             class="header-user-button min-w-0"
@@ -86,7 +88,7 @@
               >
               <span v-else>{{ userInitials }}</span>
             </div>
-            <div class="hidden min-w-0 max-w-32 text-left md:block xl:max-w-48">
+            <div class="hidden min-w-0 max-w-48 text-left xl:block">
               <div class="truncate text-sm font-medium text-content">
                 {{ displayName }}
               </div>
@@ -94,7 +96,7 @@
                 {{ user.role }}
               </div>
             </div>
-            <Icon name="chevronDown" size="sm" class="hidden flex-shrink-0 text-gray-400 md:block" />
+            <Icon name="chevronDown" size="sm" class="hidden flex-shrink-0 text-gray-400 xl:block" />
           </button>
 
           <!-- Dropdown Menu -->
@@ -119,6 +121,18 @@
               </div>
 
               <div class="py-1">
+                <a
+                  v-if="docUrl"
+                  :href="docUrl"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  @click="closeDropdown"
+                  class="dropdown-item sm:hidden"
+                >
+                  <Icon name="book" size="sm" />
+                  {{ t('nav.docs') }}
+                </a>
+
                 <router-link to="/profile" @click="closeDropdown" class="dropdown-item">
                   <Icon name="user" size="sm" />
                   {{ t('nav.profile') }}

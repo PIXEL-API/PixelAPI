@@ -11,14 +11,14 @@ describe('bounded UI skin routing', () => {
     expect(resolveUiSkin('v2')).toBe('v2')
   })
 
-  it('opts in only the three migrated user routes', () => {
+  it('opts in only the migrated user routes', () => {
     const v2Paths = router
       .getRoutes()
       .filter((route) => route.meta.uiSkin === 'v2')
       .map((route) => route.path)
       .sort()
 
-    expect(v2Paths).toEqual(['/dashboard', '/keys', '/usage'])
+    expect(v2Paths).toEqual(['/activities', '/dashboard', '/keys', '/usage'])
     expect(router.resolve('/profile').meta.uiSkin).toBeUndefined()
     expect(router.resolve('/admin/usage').meta.uiSkin).toBeUndefined()
     expect(router.resolve('/key-usage').meta.uiSkin).toBeUndefined()

@@ -38,6 +38,7 @@ type Account struct {
 	// AccountShareModeListingID is a runtime marker for accounts that back an
 	// account-share-mode listing. It is not stored on accounts.
 	AccountShareModeListingID *int64
+	ExternalPlacement         *AccountExternalPlacement
 	ProxyID                   *int64
 	Concurrency               int
 	Priority                  int

@@ -26,50 +26,6 @@
         <p class="input-hint">{{ t('admin.accounts.notesHint') }}</p>
       </div>
 
-      <div v-if="isUserScope">
-        <label class="input-label">{{ t('userAccounts.shareMode') }}</label>
-        <div
-          v-if="isAccountShareModeOnly"
-          class="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-800/70 dark:bg-emerald-900/20 dark:text-emerald-200"
-        >
-          <div class="flex items-center gap-2 font-medium">
-            <Icon name="lock" size="sm" />
-            <span>{{ t('userAccounts.accountShareModeOnly') }}</span>
-          </div>
-          <p class="mt-1 text-xs text-emerald-700 dark:text-emerald-300">
-            {{ t('userAccounts.accountShareModeOnlyHint') }}
-          </p>
-        </div>
-        <div v-else class="grid grid-cols-2 gap-2">
-          <button
-            type="button"
-            :class="[
-              'inline-flex min-h-[44px] items-center justify-center rounded-lg border px-3 py-2 text-sm font-medium transition-colors',
-              form.share_mode === 'private'
-                ? 'border-primary-400 bg-primary-50 text-primary-700 dark:border-primary-500 dark:bg-primary-900/30 dark:text-primary-300'
-                : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-dark-700 dark:bg-dark-800 dark:text-dark-200 dark:hover:bg-dark-700'
-            ]"
-            @click="form.share_mode = 'private'"
-          >
-            <Icon name="lock" size="sm" class="mr-2" />
-            {{ t('userAccounts.privateMode') }}
-          </button>
-          <button
-            type="button"
-            :class="[
-              'inline-flex min-h-[44px] items-center justify-center rounded-lg border px-3 py-2 text-sm font-medium transition-colors',
-              form.share_mode === 'public'
-                ? 'border-primary-400 bg-primary-50 text-primary-700 dark:border-primary-500 dark:bg-primary-900/30 dark:text-primary-300'
-                : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-dark-700 dark:bg-dark-800 dark:text-dark-200 dark:hover:bg-dark-700'
-            ]"
-            @click="form.share_mode = 'public'"
-          >
-            <Icon name="globe" size="sm" class="mr-2" />
-            {{ t('userAccounts.publicMode') }}
-          </button>
-        </div>
-      </div>
-
       <div v-if="account.platform === 'openai'">
         <label class="input-label">{{ t('admin.accounts.accountLevel.label') }}</label>
         <Select
@@ -2267,7 +2223,7 @@ import { useAuthStore } from '@/stores/auth'
 import { adminAPI } from '@/api/admin'
 import { accountsAPI } from '@/api/accounts'
 import { useQuotaNotifyState } from '@/composables/useQuotaNotifyState'
-import type { Account, Proxy, AdminGroup, CheckMixedChannelResponse, OpenAICompactMode, AccountLevel, AccountShareMode, UpdateAccountRequest } from '@/types'
+import type { Account, Proxy, AdminGroup, CheckMixedChannelResponse, OpenAICompactMode, AccountLevel, UpdateAccountRequest } from '@/types'
 import type { AccountApiScope } from '@/composables/useAccountOAuth'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -2599,7 +2555,6 @@ const mixedChannelWarningMessageText = computed(() => {
 const form = reactive({
   name: '',
   notes: '',
-  share_mode: 'private' as AccountShareMode,
   account_level: 'unknown' as AccountLevel,
   proxy_id: null as number | null,
   concurrency: 1,
@@ -2748,7 +2703,6 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   mixedChannelWarningAction.value = null
   form.name = newAccount.name
   form.notes = newAccount.notes || ''
-  form.share_mode = newAccount.share_mode === 'public' ? 'public' : 'private'
   form.account_level = newAccount.platform === 'openai' ? (newAccount.account_level || 'unknown') : 'unknown'
   form.proxy_id = newAccount.proxy_id
   form.concurrency = isUserScope.value
@@ -3525,13 +3479,11 @@ const sanitizeUpdatePayload = (payload: Record<string, unknown>) => {
     delete next.rate_multiplier
   }
   if (isUserScope.value) {
+    delete next.share_mode
     delete next.group_ids
     delete next.status
     next.concurrency = normalizePersonalAccountConcurrency(next.concurrency)
     next.load_factor = normalizePersonalAccountLoadFactor(next.load_factor)
-    if (isAccountShareModeOnly.value) {
-      delete next.share_mode
-    }
     delete next.priority
     delete next.rate_multiplier
     delete next.auto_pause_on_expired

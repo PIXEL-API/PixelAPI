@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -54,6 +55,10 @@ func cloneOwnedAgentIdentityTestAccount(account *Account) *Account {
 	if account.ExpiresAt != nil {
 		expiresAt := *account.ExpiresAt
 		clone.ExpiresAt = &expiresAt
+	}
+	if account.ExternalPlacement != nil {
+		placement := *account.ExternalPlacement
+		clone.ExternalPlacement = &placement
 	}
 	return &clone
 }
@@ -170,12 +175,68 @@ type recordingAgentIdentityWSInvalidator struct {
 	accountIDs []int64
 }
 
+type ownedAgentIdentityPlacementRepoStub struct {
+	AccountShareModeRepository
+	AccountShareRoomRepository
+	accountRepo *ownedAgentIdentityRepoStub
+}
+
+func (s *ownedAgentIdentityPlacementRepoStub) BeginExternalPlacementDrain(context.Context, int64, int64) (bool, error) {
+	return false, nil
+}
+
+func (s *ownedAgentIdentityPlacementRepoStub) RestoreExternalPlacementAfterDrain(context.Context, int64, int64) error {
+	return nil
+}
+
+func (s *ownedAgentIdentityPlacementRepoStub) ConvertExternalPlacement(_ context.Context, input ConvertAccountExternalPlacementInput) (*ConvertAccountExternalPlacementResult, error) {
+	account, err := s.accountRepo.GetByID(context.Background(), input.AccountID)
+	if err != nil {
+		return nil, err
+	}
+	previous := cloneOwnedAgentIdentityTestAccount(account).ExternalPlacement
+	if previous == nil {
+		previous = &AccountExternalPlacement{Target: AccountExternalPlacementPrivate, State: "active"}
+	}
+	if err := s.accountRepo.BindGroups(context.Background(), input.AccountID, input.GroupIDs); err != nil {
+		if input.Target == AccountExternalPlacementPublicPool {
+			return nil, fmt.Errorf("bind public account groups: %w", err)
+		}
+		return nil, fmt.Errorf("bind groups: %w", err)
+	}
+	account.GroupIDs = append([]int64(nil), input.GroupIDs...)
+	account.ShareMode = AccountShareModePrivate
+	account.ShareStatus = AccountShareStatusApproved
+	account.ErrorMessage = ""
+	account.ExternalPlacement = &AccountExternalPlacement{
+		Target:  AccountExternalPlacementPrivate,
+		State:   "active",
+		Version: 1,
+	}
+	if input.Target == AccountExternalPlacementPublicPool {
+		account.ShareMode = AccountShareModePublic
+		account.ExternalPlacement.Target = AccountExternalPlacementPublicPool
+	}
+	if err := s.accountRepo.Update(context.Background(), account); err != nil {
+		if input.Target == AccountExternalPlacementPublicPool {
+			return nil, fmt.Errorf("update account public share status: %w", err)
+		}
+		return nil, fmt.Errorf("update account placement status: %w", err)
+	}
+	return &ConvertAccountExternalPlacementResult{
+		AccountID: input.AccountID,
+		Previous:  previous,
+		Current:   account.ExternalPlacement,
+	}, nil
+}
+
 func (r *recordingAgentIdentityWSInvalidator) InvalidateAgentIdentityWSConnections(accountID int64) {
 	r.accountIDs = append(r.accountIDs, accountID)
 }
 
 func newOwnedAgentIdentityService(repo *ownedAgentIdentityRepoStub) (*AccountService, *recordingAgentIdentityWSInvalidator) {
 	invalidator := &recordingAgentIdentityWSInvalidator{}
+	placementRepo := &ownedAgentIdentityPlacementRepoStub{accountRepo: repo}
 	return &AccountService{
 		accountRepo: repo,
 		groupRepo: &ownedPublicShareGroupRepoStub{
@@ -190,6 +251,8 @@ func newOwnedAgentIdentityService(repo *ownedAgentIdentityRepoStub) (*AccountSer
 		privateGroupProvisioner: &ownedPrivateGroupProvisionerStub{
 			group: &Group{ID: ownedAgentIdentityPrivateGroupID, Name: "OpenAI private", Platform: PlatformOpenAI, Status: StatusActive},
 		},
+		accountShareModeRepo:       placementRepo,
+		accountShareRoomRepo:       placementRepo,
 		agentIdentityWSInvalidator: invalidator,
 	}, invalidator
 }
@@ -527,14 +590,14 @@ func TestAccountServiceUpdateOwnedPublicAgentIdentityFailsClosedWhenPrivateGroup
 
 	require.ErrorContains(t, err, "bind groups")
 	require.Nil(t, updated)
-	require.Equal(t, 1, repo.updateCount)
-	require.Equal(t, []int64{created.Account.ID}, invalidator.accountIDs)
+	require.Equal(t, 0, repo.updateCount)
+	require.Empty(t, invalidator.accountIDs)
 	stored := repo.accounts[created.Account.ID]
-	require.Equal(t, "runtime-new", stored.GetCredential("agent_runtime_id"))
+	require.Equal(t, "runtime-old", stored.GetCredential("agent_runtime_id"))
 	require.Equal(t, AccountShareModePublic, stored.ShareMode)
-	require.Equal(t, AccountShareStatusPending, stored.ShareStatus)
+	require.Equal(t, AccountShareStatusApproved, stored.ShareStatus)
 	require.Equal(t, []int64{ownedAgentIdentityPrivateGroupID, ownedAgentIdentityTeamPublicGroupID}, stored.GroupIDs)
-	require.False(t, stored.IsVisibleToConsumer(202), "a stale public-group binding must remain fail-closed after the row enters pending")
+	require.True(t, stored.IsVisibleToConsumer(202), "the failed conversion must leave the previously approved placement unchanged")
 }
 
 func TestAccountServiceUpdateOwnedPublicAgentIdentityRevocationFailsClosedWhenGroupBindingFails(t *testing.T) {

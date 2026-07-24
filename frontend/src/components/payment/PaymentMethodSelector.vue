@@ -3,7 +3,12 @@
     <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
       {{ t('payment.paymentMethod') }}
     </label>
-    <div class="grid grid-cols-2 gap-3 sm:flex">
+    <div
+      :class="[
+        'grid gap-3 sm:flex',
+        sortedMethods.length === 1 ? 'grid-cols-1' : 'grid-cols-2',
+      ]"
+    >
       <button
         v-for="method in sortedMethods"
         :key="method.type"

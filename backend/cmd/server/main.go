@@ -50,6 +50,7 @@ type commandOptions struct {
 	showVersion      bool
 	migrateOnly      bool
 	migrationTimeout time.Duration
+	migrationThrough string
 }
 
 func (o commandOptions) validate() error {
@@ -62,6 +63,13 @@ func (o commandOptions) validate() error {
 	if o.migrateOnly && o.migrationTimeout <= 0 {
 		return errors.New("--migration-timeout must be greater than zero")
 	}
+	if o.migrationThrough != "" && !o.migrateOnly {
+		return errors.New("--migrate-through requires --migrate-only")
+	}
+	if strings.ContainsAny(o.migrationThrough, `/\`) ||
+		(o.migrationThrough != "" && !strings.HasSuffix(o.migrationThrough, ".sql")) {
+		return errors.New("--migrate-through must be an embedded migration filename ending in .sql")
+	}
 	return nil
 }
 
@@ -71,6 +79,7 @@ type configuredMigrationRunner func(context.Context, *config.Config) error
 func runMigrationsOnly(
 	parent context.Context,
 	timeout time.Duration,
+	through string,
 	loadConfig bootstrapConfigLoader,
 	runMigrations configuredMigrationRunner,
 ) error {
@@ -93,6 +102,9 @@ func runMigrationsOnly(
 	}
 	if cfg == nil {
 		return errors.New("load migration config: nil config")
+	}
+	if strings.TrimSpace(through) != "" {
+		cfg.Database.MigrationThrough = strings.TrimSpace(through)
 	}
 
 	ctx, cancel := context.WithTimeout(parent, timeout)
@@ -127,6 +139,7 @@ func main() {
 	showVersion := flag.Bool("version", false, "Show version information")
 	migrateOnly := flag.Bool("migrate-only", false, "Run embedded database migrations and exit")
 	migrationTimeout := flag.Duration("migration-timeout", defaultMigrationTimeout, "Maximum duration for --migrate-only")
+	migrationThrough := flag.String("migrate-through", "", "Apply migrations through the named embedded .sql file")
 	flag.Parse()
 
 	options := commandOptions{
@@ -134,6 +147,7 @@ func main() {
 		showVersion:      *showVersion,
 		migrateOnly:      *migrateOnly,
 		migrationTimeout: *migrationTimeout,
+		migrationThrough: strings.TrimSpace(*migrationThrough),
 	}
 	if err := options.validate(); err != nil {
 		log.Fatalf("Invalid command options: %v", err)
@@ -150,6 +164,7 @@ func main() {
 		if err := runMigrationsOnly(
 			migrationParent,
 			*migrationTimeout,
+			*migrationThrough,
 			config.LoadForBootstrap,
 			repository.ApplyConfiguredMigrations,
 		); err != nil {

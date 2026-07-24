@@ -49,9 +49,9 @@ func InitEnt(cfg *config.Config) (*ent.Client, *sql.DB, error) {
 	var migrationErr error
 	switch cfg.Database.MigrationMode {
 	case config.DatabaseMigrationModeMigrate:
-		migrationErr = ApplyMigrations(migrationCtx, drv.DB())
+		migrationErr = ApplyMigrationsThrough(migrationCtx, drv.DB(), cfg.Database.MigrationThrough)
 	case config.DatabaseMigrationModeValidate:
-		migrationErr = ValidateMigrations(migrationCtx, drv.DB())
+		migrationErr = ValidateMigrationsThrough(migrationCtx, drv.DB(), cfg.Database.MigrationThrough)
 	default:
 		migrationErr = fmt.Errorf("unsupported database migration mode %q", cfg.Database.MigrationMode)
 	}
@@ -123,7 +123,7 @@ func ApplyConfiguredMigrations(ctx context.Context, cfg *config.Config) (err err
 		}
 	}()
 
-	if err := ApplyMigrations(ctx, drv.DB()); err != nil {
+	if err := ApplyMigrationsThrough(ctx, drv.DB(), cfg.Database.MigrationThrough); err != nil {
 		return fmt.Errorf("apply configured migrations: %w", err)
 	}
 	return nil

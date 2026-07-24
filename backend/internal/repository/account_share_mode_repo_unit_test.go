@@ -55,9 +55,9 @@ func TestAccountShareModeRepositoryUpdateListingRequiresOwnerForUser(t *testing.
 	repo := &accountShareModeRepository{db: db}
 
 	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT l\\.account_id, l\\.owner_user_id, l\\.seat_limit, l\\.per_user_concurrency, a\\.concurrency").
+	mock.ExpectQuery("SELECT l\\.owner_user_id, l\\.seat_limit, l\\.per_user_concurrency").
 		WithArgs(int64(7), int64(42)).
-		WillReturnRows(sqlmock.NewRows([]string{"account_id", "owner_user_id", "seat_limit", "per_user_concurrency", "concurrency", "proxy_id", "edit_session_id", "editing_by_user_id", "editing_expires_at"}))
+		WillReturnRows(sqlmock.NewRows([]string{"owner_user_id", "seat_limit", "per_user_concurrency", "account_count", "total_concurrency", "edit_session_id", "editing_by_user_id", "editing_expires_at"}))
 	mock.ExpectRollback()
 
 	status := service.AccountShareListingStatusPaused
@@ -82,10 +82,10 @@ func TestAccountShareModeRepositoryUpdateListingAllowsAdminWithoutOwnerFilter(t 
 	updateErr := errors.New("stop after update")
 
 	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT l\\.account_id, l\\.owner_user_id, l\\.seat_limit, l\\.per_user_concurrency, a\\.concurrency").
+	mock.ExpectQuery("SELECT l\\.owner_user_id, l\\.seat_limit, l\\.per_user_concurrency").
 		WithArgs(int64(7)).
-		WillReturnRows(sqlmock.NewRows([]string{"account_id", "owner_user_id", "seat_limit", "per_user_concurrency", "concurrency", "proxy_id", "edit_session_id", "editing_by_user_id", "editing_expires_at"}).
-			AddRow(int64(99), int64(50), 2, 5, 20, nil, nil, nil, nil))
+		WillReturnRows(sqlmock.NewRows([]string{"owner_user_id", "seat_limit", "per_user_concurrency", "account_count", "total_concurrency", "edit_session_id", "editing_by_user_id", "editing_expires_at"}).
+			AddRow(int64(50), 2, 5, 1, 20, nil, nil, nil))
 	mock.ExpectExec("UPDATE account_share_listings").
 		WithArgs(service.AccountShareListingStatusPaused, int64(7)).
 		WillReturnError(updateErr)
@@ -101,7 +101,7 @@ func TestAccountShareModeRepositoryUpdateListingAllowsAdminWithoutOwnerFilter(t 
 	}
 }
 
-func TestAccountShareModeRepositoryUpdateListingSyncsAllowedModelsToAccount(t *testing.T) {
+func TestAccountShareModeRepositoryUpdateListingSyncsAllowedModelsToAllRoomAccounts(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
@@ -114,15 +114,18 @@ func TestAccountShareModeRepositoryUpdateListingSyncsAllowedModelsToAccount(t *t
 	models := []string{"gpt-5.5", "gpt-5.4"}
 
 	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT l\\.account_id, l\\.owner_user_id, l\\.seat_limit, l\\.per_user_concurrency, a\\.concurrency").
+	mock.ExpectQuery("SELECT l\\.owner_user_id, l\\.seat_limit, l\\.per_user_concurrency").
 		WithArgs(int64(7), int64(42)).
-		WillReturnRows(sqlmock.NewRows([]string{"account_id", "owner_user_id", "seat_limit", "per_user_concurrency", "concurrency", "proxy_id", "edit_session_id", "editing_by_user_id", "editing_expires_at"}).
-			AddRow(int64(99), int64(42), 2, 5, 20, nil, nil, nil, nil))
+		WillReturnRows(sqlmock.NewRows([]string{"owner_user_id", "seat_limit", "per_user_concurrency", "account_count", "total_concurrency", "edit_session_id", "editing_by_user_id", "editing_expires_at"}).
+			AddRow(int64(42), 2, 5, 2, 40, nil, nil, nil))
 	mock.ExpectExec("UPDATE account_share_listings").
 		WithArgs(`["gpt-5.5","gpt-5.4"]`, int64(7), int64(42)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("UPDATE accounts").
-		WithArgs(`{"gpt-5.4":"gpt-5.4","gpt-5.5":"gpt-5.5"}`, int64(99), int64(42)).
+	mock.ExpectQuery("UPDATE accounts AS a").
+		WithArgs(`{"gpt-5.4":"gpt-5.4","gpt-5.5":"gpt-5.5"}`, int64(7), int64(42)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(99)).AddRow(int64(100)))
+	mock.ExpectExec("INSERT INTO scheduler_outbox").
+		WithArgs(service.SchedulerOutboxEventAccountChanged, sqlmock.AnyArg(), nil, nil, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO scheduler_outbox").
 		WithArgs(service.SchedulerOutboxEventAccountChanged, sqlmock.AnyArg(), nil, nil, sqlmock.AnyArg()).
@@ -228,7 +231,7 @@ func TestAccountShareModeRepositoryJoinListingRejectsActiveEditSession(t *testin
 	repo := &accountShareModeRepository{db: db}
 
 	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT l\\.account_id, l\\.owner_user_id, l\\.status, l\\.seat_limit").
+	mock.ExpectQuery("SELECT a\\.id, l\\.owner_user_id, l\\.status, l\\.seat_limit").
 		WithArgs(int64(7)).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"account_id",
@@ -272,7 +275,7 @@ func TestAccountShareModeRepositoryJoinListingOwnerSelfUseHasNoSeatPrepay(t *tes
 	now := time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC)
 
 	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT l\\.account_id, l\\.owner_user_id, l\\.status, l\\.seat_limit").
+	mock.ExpectQuery("SELECT a\\.id, l\\.owner_user_id, l\\.status, l\\.seat_limit").
 		WithArgs(listingID).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"account_id",
@@ -421,7 +424,7 @@ func TestAccountShareModeRepositoryJoinListingQueuesBehindExistingReservation(t 
 	now := time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC)
 
 	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT l\\.account_id, l\\.owner_user_id, l\\.status, l\\.seat_limit").
+	mock.ExpectQuery("SELECT a\\.id, l\\.owner_user_id, l\\.status, l\\.seat_limit").
 		WithArgs(listingID).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"account_id",
@@ -564,7 +567,7 @@ func TestAccountShareModeRepositoryJoinListingActivatesAfterStaleQueuedCleanup(t
 	now := time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC)
 
 	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT l\\.account_id, l\\.owner_user_id, l\\.status, l\\.seat_limit").
+	mock.ExpectQuery("SELECT a\\.id, l\\.owner_user_id, l\\.status, l\\.seat_limit").
 		WithArgs(listingID).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"account_id",
@@ -763,8 +766,8 @@ func TestAccountShareModeRepositorySeatBillingUsesSettlementRefForLedgers(t *tes
 			joinedAt,
 			joinedAt,
 		))
-	mock.ExpectQuery("SELECT EXISTS").
-		WithArgs(accountID, now).
+	mock.ExpectQuery("SELECT NOT EXISTS").
+		WithArgs(listingID, accountID, now).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectQuery("SELECT EXISTS").
 		WithArgs(listingID, accountID, now).
@@ -897,8 +900,8 @@ func TestAccountShareModeRepositorySeatBillingUsesUniquePrepayRefBeforeWaiverWin
 			joinedAt,
 			joinedAt,
 		))
-	mock.ExpectQuery("SELECT EXISTS").
-		WithArgs(accountID, now).
+	mock.ExpectQuery("SELECT NOT EXISTS").
+		WithArgs(listingID, accountID, now).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectQuery("SELECT EXISTS").
 		WithArgs(listingID, accountID, now).
@@ -989,8 +992,8 @@ func TestAccountShareModeRepositorySeatBillingRollsBackWhenPrepayLedgerIsSkipped
 			joinedAt,
 			joinedAt,
 		))
-	mock.ExpectQuery("SELECT EXISTS").
-		WithArgs(accountID, now).
+	mock.ExpectQuery("SELECT NOT EXISTS").
+		WithArgs(listingID, accountID, now).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectQuery("SELECT EXISTS").
 		WithArgs(listingID, accountID, now).
@@ -1267,6 +1270,7 @@ func TestAccountShareModeSettlementUpdatesWaiverProgressCacheAfterInsert(t *test
 			"0.0400000000",
 			"0.0600000000",
 			"0.0000000000",
+			"0.0000000000",
 			"0.0600000000",
 			"1.0000",
 			"0.20000000",
@@ -1362,6 +1366,7 @@ func TestAccountShareModeSettlementAdvancesWaiverProgressCacheByFixedJoinedWindo
 			"0.0800000000",
 			"0.0000000000",
 			"0.0800000000",
+			"0.0000000000",
 			"0.0000000000",
 			"0.0800000000",
 			"1.0000",
@@ -1472,6 +1477,7 @@ func TestAccountShareModeSettlementSkipsWaiverProgressCacheOnConflict(t *testing
 			"0.0400000000",
 			"0.0600000000",
 			"0.0000000000",
+			"0.0000000000",
 			"0.0600000000",
 			"1.0000",
 			"0.20000000",
@@ -1561,8 +1567,8 @@ func TestAccountShareModeRepositorySeatBillingDefersWaiverWindowDuringGrace(t *t
 			joinedAt,
 			joinedAt,
 		))
-	mock.ExpectQuery("SELECT EXISTS").
-		WithArgs(accountID, now).
+	mock.ExpectQuery("SELECT NOT EXISTS").
+		WithArgs(listingID, accountID, now).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectQuery("SELECT EXISTS").
 		WithArgs(listingID, accountID, now).
@@ -1652,8 +1658,8 @@ func TestAccountShareModeRepositorySeatBillingRefundsSeatChargeWhenWaiverMinimum
 			joinedAt,
 			joinedAt,
 		))
-	mock.ExpectQuery("SELECT EXISTS").
-		WithArgs(accountID, now).
+	mock.ExpectQuery("SELECT NOT EXISTS").
+		WithArgs(listingID, accountID, now).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectQuery("SELECT EXISTS").
 		WithArgs(listingID, accountID, now).
@@ -2250,8 +2256,8 @@ func TestAccountShareModeRepositorySeatBillingEndsUnavailableAccount(t *testing.
 			joinedAt,
 			joinedAt,
 		))
-	mock.ExpectQuery("SELECT EXISTS").
-		WithArgs(accountID, now).
+	mock.ExpectQuery("SELECT NOT EXISTS").
+		WithArgs(listingID, accountID, now).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	mock.ExpectQuery("SELECT\\s+a\\.status,").
 		WithArgs(accountID, now).
@@ -2942,8 +2948,8 @@ func TestAccountShareModeRepositoryRecoverableUnavailableDoesNotRenewSeat(t *tes
 			joinedAt, nil, nil, nil, now, billedUntil, billedUntil, 0, int64(0), nil,
 			nil, nil, joinedAt, joinedAt,
 		))
-	mock.ExpectQuery("SELECT EXISTS").
-		WithArgs(accountID, now).
+	mock.ExpectQuery("SELECT NOT EXISTS").
+		WithArgs(listingID, accountID, now).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectQuery("SELECT EXISTS").
 		WithArgs(listingID, accountID, now).
@@ -3422,6 +3428,9 @@ func accountShareListingRows(listingID, accountID, ownerUserID int64, editSessio
 	columns := []string{
 		"id",
 		"account_id",
+		"room_name",
+		"account_count",
+		"healthy_account_count",
 		"owner_user_id",
 		"owner_username",
 		"account_name",
@@ -3494,6 +3503,9 @@ func accountShareListingRows(listingID, accountID, ownerUserID int64, editSessio
 	values := []driver.Value{
 		row.ListingID,
 		row.AccountID,
+		"shared-room",
+		1,
+		1,
 		row.OwnerUserID,
 		"owner",
 		"shared-account",

@@ -899,6 +899,43 @@ func TestAdminServiceUpdateOwnedAgentIdentityFailsBeforeWriteWithoutWSInvalidato
 	require.Nil(t, repo.updatedAccount)
 }
 
+func TestAdminServiceUpdateExternalPlacementIdentityRequiresConversion(t *testing.T) {
+	account := newAdminOwnedAgentIdentityTestAccount(t, 101, AccountShareModePrivate, AccountShareStatusApproved, "runtime-old")
+	account.ExternalPlacement = &AccountExternalPlacement{
+		Target: AccountExternalPlacementRoom,
+		State:  "active",
+	}
+	repo := &accountRepoStubForBulkUpdate{getByIDAccounts: map[int64]*Account{account.ID: account}}
+	svc := &adminServiceImpl{accountRepo: repo}
+	level := AccountLevelPlus
+
+	updated, err := svc.UpdateAccount(context.Background(), account.ID, &UpdateAccountInput{AccountLevel: &level})
+
+	require.Nil(t, updated)
+	require.ErrorIs(t, err, ErrOwnedAccountPlacementConversionRequired)
+	require.Nil(t, repo.updatedAccount)
+}
+
+func TestAdminServiceBulkUpdateExternalPlacementIdentityRequiresConversion(t *testing.T) {
+	account := newAdminOwnedAgentIdentityTestAccount(t, 101, AccountShareModePublic, AccountShareStatusApproved, "runtime-old")
+	account.ExternalPlacement = &AccountExternalPlacement{
+		Target: AccountExternalPlacementPublicPool,
+		State:  "active",
+	}
+	repo := &accountRepoStubForBulkUpdate{getByIDsAccounts: []*Account{account}}
+	svc := &adminServiceImpl{accountRepo: repo}
+	level := AccountLevelPlus
+
+	result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs:   []int64{account.ID},
+		AccountLevel: &level,
+	})
+
+	require.Nil(t, result)
+	require.ErrorIs(t, err, ErrOwnedAccountPlacementConversionRequired)
+	require.Empty(t, repo.bulkUpdateIDs)
+}
+
 func TestAdminServiceBulkUpdateOwnedAgentIdentityAuthChangeFailsBeforeWrite(t *testing.T) {
 	account := newAdminOwnedAgentIdentityTestAccount(t, 101, AccountShareModePrivate, AccountShareStatusApproved, "runtime-old")
 	repo := &accountRepoStubForBulkUpdate{getByIDsAccounts: []*Account{account}}

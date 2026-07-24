@@ -75,6 +75,91 @@ const revenueShareSettlementSelectColumns = `
 	ase.created_at
 `
 
+const revenueShareSettlementSourceCTE = `
+	WITH revenue_share_settlements AS (
+		SELECT
+			ase.id,
+			ase.usage_log_id,
+			ase.request_id,
+			ase.api_key_id,
+			ase.consumer_user_id,
+			ase.owner_user_id,
+			ase.inviter_user_id,
+			ase.account_id,
+			ase.group_id,
+			ase.policy_id,
+			ase.policy_version,
+			ase.share_mode_snapshot,
+			ase.share_status_snapshot,
+			ase.consumer_charge,
+			ase.account_cost,
+			ase.owner_share_ratio,
+			ase.owner_credit,
+			ase.invite_bound_at_snapshot,
+			ase.invite_expires_at_snapshot,
+			ase.invite_share_ratio,
+			ase.invite_credit,
+			ase.platform_share_ratio,
+			ase.platform_fee,
+			ase.status,
+			ase.created_at
+		FROM account_share_settlement_entries ase
+
+		UNION ALL
+
+		SELECT
+			-sm.id AS id,
+			sm.usage_log_id,
+			COALESCE(NULLIF(ul.request_id, ''), CONCAT('account-share-mode:', sm.id::text)) AS request_id,
+			sm.api_key_id,
+			sm.consumer_user_id,
+			sm.owner_user_id,
+			sm.inviter_user_id,
+			sm.account_id,
+			mg.group_id,
+			sm.policy_id,
+			sm.policy_version,
+			'room'::varchar AS share_mode_snapshot,
+			'applied'::varchar AS share_status_snapshot,
+			CASE
+				WHEN sm.settlement_type = 'seat_waiver_refund' THEN -sm.refund_amount
+				ELSE sm.total_charge
+			END AS consumer_charge,
+			sm.account_cost,
+			sm.owner_share_ratio_snapshot AS owner_share_ratio,
+			CASE
+				WHEN sm.settlement_type = 'seat_waiver_refund' THEN -sm.owner_credit
+				ELSE sm.owner_credit
+			END AS owner_credit,
+			sm.invite_bound_at_snapshot,
+			sm.invite_expires_at_snapshot,
+			sm.invite_share_ratio_snapshot AS invite_share_ratio,
+			CASE
+				WHEN sm.settlement_type = 'seat_waiver_refund' THEN -sm.invite_credit
+				ELSE sm.invite_credit
+			END AS invite_credit,
+			sm.platform_share_ratio_snapshot AS platform_share_ratio,
+			CASE
+				WHEN sm.settlement_type = 'seat_waiver_refund' THEN -sm.platform_credit
+				ELSE sm.platform_credit
+			END AS platform_fee,
+			'applied'::varchar AS status,
+			sm.created_at
+		FROM account_share_mode_settlement_entries sm
+		LEFT JOIN usage_logs ul ON ul.id = sm.usage_log_id
+		LEFT JOIN accounts room_account ON room_account.id = sm.account_id
+		LEFT JOIN account_share_mode_groups mg ON mg.platform = room_account.platform
+		WHERE sm.consumer_user_id <> sm.owner_user_id
+			AND (
+				sm.settlement_type IN ('usage_request', 'seat_charge')
+				OR (
+					sm.settlement_type = 'seat_waiver_refund'
+					AND sm.reversal_of_settlement_id IS NOT NULL
+				)
+			)
+	)
+`
+
 var (
 	revenueShareSettlementExportRunner int32
 	errRevenueShareSettlementCanceled  = errors.New("revenue share settlement export canceled")
@@ -332,9 +417,9 @@ func revenueShareSettlementCountQuery(search string, where string) string {
 		LEFT JOIN api_keys ak ON ak.id = ase.api_key_id
 		`
 	}
-	return `
+	return revenueShareSettlementSourceCTE + `
 		SELECT COUNT(*)
-		FROM account_share_settlement_entries ase
+		FROM revenue_share_settlements ase
 		` + countJoins + `
 		WHERE ` + where
 }
@@ -815,9 +900,9 @@ func (s *RevenueService) queryShareSettlementExportBatch(ctx context.Context, pa
 	}
 	args = append(args, limit)
 	limitArg := len(args)
-	query := fmt.Sprintf(`
+	query := fmt.Sprintf(revenueShareSettlementSourceCTE+`
 		SELECT %s
-		FROM account_share_settlement_entries ase
+		FROM revenue_share_settlements ase
 		LEFT JOIN users cu ON cu.id = ase.consumer_user_id
 		LEFT JOIN users ou ON ou.id = ase.owner_user_id
 		LEFT JOIN users iu ON iu.id = ase.inviter_user_id

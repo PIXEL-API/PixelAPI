@@ -12,6 +12,7 @@ import (
 	"time"
 
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
+	"github.com/Wei-Shaw/sub2api/migrations"
 	"github.com/stretchr/testify/require"
 )
 
@@ -93,6 +94,74 @@ func TestValidateMigrations_NilDB(t *testing.T) {
 	err := ValidateMigrations(context.Background(), nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "nil sql db")
+}
+
+func TestMigrationFilesThroughRequiresExactEmbeddedTarget(t *testing.T) {
+	fsys := fstest.MapFS{
+		"001_expand.sql":   &fstest.MapFile{Data: []byte("SELECT 1;")},
+		"002_validate.sql": &fstest.MapFile{Data: []byte("SELECT 2;")},
+		"003_contract.sql": &fstest.MapFile{Data: []byte("SELECT 3;")},
+	}
+
+	files, err := migrationFilesThrough(fsys, "002_validate.sql")
+	require.NoError(t, err)
+	require.Equal(t, []string{"001_expand.sql", "002_validate.sql"}, files)
+
+	_, err = migrationFilesThrough(fsys, "002")
+	require.ErrorContains(t, err, "not embedded")
+}
+
+func TestPublishedAccountShareMigrationsRemainImmutable(t *testing.T) {
+	expected := map[string]string{
+		"219_account_share_mode_global_invite_policy.sql":              "d7e806d32d4492ddbd81cdcea9cda25250694901f3f377f2645aab183fe85de5",
+		"220_account_share_mode_global_invite_policy_indexes_notx.sql": "ed435d011f2debf05f7f8d7a74a609307fb06f575d85461effb70c85cb786d0b",
+	}
+	for name, want := range expected {
+		content, err := migrations.FS.ReadFile(name)
+		require.NoError(t, err)
+		sum := sha256.Sum256([]byte(strings.TrimSpace(string(content))))
+		require.Equal(t, want, hex.EncodeToString(sum[:]), name)
+	}
+}
+
+func TestValidateMigrationsThroughStopsAtTarget(t *testing.T) {
+	fsys := fstest.MapFS{
+		"001_expand.sql":   &fstest.MapFile{Data: []byte("SELECT 1;")},
+		"002_validate.sql": &fstest.MapFile{Data: []byte("SELECT 2;")},
+		"003_contract.sql": &fstest.MapFile{Data: []byte("SELECT 3;")},
+	}
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	for _, item := range []struct {
+		name    string
+		content string
+	}{
+		{name: "001_expand.sql", content: "SELECT 1;"},
+		{name: "002_validate.sql", content: "SELECT 2;"},
+	} {
+		sum := sha256.Sum256([]byte(item.content))
+		mock.ExpectQuery("SELECT checksum FROM schema_migrations").
+			WithArgs(item.name).
+			WillReturnRows(sqlmock.NewRows([]string{"checksum"}).AddRow(hex.EncodeToString(sum[:])))
+	}
+
+	require.NoError(t, validateMigrationsThroughFS(context.Background(), db, fsys, "002_validate.sql"))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestApplyMigrationsThroughRejectsUnknownTargetBeforeDatabaseAccess(t *testing.T) {
+	fsys := fstest.MapFS{
+		"001_expand.sql": &fstest.MapFile{Data: []byte("SELECT 1;")},
+	}
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	err = applyMigrationsThroughFS(context.Background(), db, fsys, "999_missing.sql")
+	require.ErrorContains(t, err, "not embedded")
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestLatestMigrationBaseline(t *testing.T) {

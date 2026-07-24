@@ -3,7 +3,7 @@ import { nextTick } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { AccountShareListing } from '@/api/accountShare'
-import type { ApiKey } from '@/types'
+import type { Account, ApiKey } from '@/types'
 import AccountShareView from '../AccountShareView.vue'
 
 const {
@@ -11,6 +11,8 @@ const {
   listMembershipQueue,
   listModeGroups,
   listProxies,
+  createRoom,
+  listAccounts,
   listKeys,
   fetchPublicSettings,
   publicSettings,
@@ -21,6 +23,8 @@ const {
   listMembershipQueue: vi.fn(),
   listModeGroups: vi.fn(),
   listProxies: vi.fn(),
+  createRoom: vi.fn(),
+  listAccounts: vi.fn(),
   listKeys: vi.fn(),
   fetchPublicSettings: vi.fn(),
   publicSettings: {
@@ -36,11 +40,13 @@ vi.mock('@/api/accountShare', () => ({
     listMembershipQueue,
     listModeGroups,
     listProxies,
+    createRoom,
   },
 }))
 
 vi.mock('@/api', () => ({
   accountsAPI: {
+    list: listAccounts,
     getById: vi.fn(),
     getStats: vi.fn(),
     recoverState: vi.fn(),
@@ -155,6 +161,38 @@ function apiKey(id: number, groupID: number, name: string): ApiKey {
   }
 }
 
+function account(overrides: Partial<Account> = {}): Account {
+  const now = '2026-07-11T01:00:00Z'
+  return {
+    id: 801,
+    name: '自有账号',
+    platform: 'openai',
+    account_level: 'plus',
+    type: 'oauth',
+    proxy_id: 11,
+    concurrency: 10,
+    priority: 50,
+    status: 'active',
+    error_message: null,
+    error_since: null,
+    last_used_at: null,
+    expires_at: null,
+    auto_pause_on_expired: false,
+    created_at: now,
+    updated_at: now,
+    schedulable: true,
+    rate_limited_at: null,
+    rate_limit_reset_at: null,
+    overload_until: null,
+    temp_unschedulable_until: null,
+    temp_unschedulable_reason: null,
+    session_window_start: null,
+    session_window_end: null,
+    session_window_status: null,
+    ...overrides,
+  }
+}
+
 function paginated(items: unknown[], page = 1, pages = 1) {
   return {
     items,
@@ -179,6 +217,10 @@ function mountView(options: { renderDialogs?: boolean } = {}) {
         OAuthAuthorizationFlow: true,
         ProxySelector: true,
         ReAuthAccountModal: true,
+        RoomAccountsDialog: {
+          props: ['show', 'listing'],
+          template: '<div v-if="show" data-testid="room-accounts-dialog">{{ listing?.room_name }}</div>',
+        },
         UsageProgressBar: true,
         Pagination: true,
         Teleport: true,
@@ -194,6 +236,8 @@ describe('AccountShareView async snapshots and mode keys', () => {
     listMembershipQueue.mockReset()
     listModeGroups.mockReset()
     listProxies.mockReset()
+    createRoom.mockReset()
+    listAccounts.mockReset()
     listKeys.mockReset()
     fetchPublicSettings.mockReset()
     showSuccess.mockReset()
@@ -206,6 +250,8 @@ describe('AccountShareView async snapshots and mode keys', () => {
       { group_id: 202, platform: 'anthropic' },
     ])
     listProxies.mockResolvedValue([])
+    listAccounts.mockResolvedValue(paginated([]))
+    createRoom.mockResolvedValue(listing({ owner_user_id: 9, room_name: '新房间' }))
     listMembershipQueue.mockResolvedValue([])
     listKeys.mockResolvedValue(paginated([]))
     fetchPublicSettings.mockResolvedValue(publicSettings)
@@ -296,6 +342,107 @@ describe('AccountShareView async snapshots and mode keys', () => {
       },
     })
     expect(summary).toContain('0.0085x')
+    wrapper.unmount()
+  })
+
+  it('defaults to existing accounts and filters out incompatible room members', async () => {
+    listAccounts.mockResolvedValue(paginated([
+      account({ id: 1, name: '可用私有账号', external_placement: { target: 'private', state: 'active', version: 1 } }),
+      account({ id: 2, name: '公共号池账号', external_placement: { target: 'public_pool', state: 'active', version: 2 } }),
+      account({ id: 3, name: '其他房间账号', external_placement: { target: 'room', room_id: 99, state: 'active', version: 3 } }),
+      account({ id: 4, name: '未知等级账号', account_level: 'unknown' }),
+      account({ id: 5, name: '不可调度账号', schedulable: false }),
+      account({ id: 6, name: '其他平台账号', platform: 'anthropic' }),
+    ]))
+
+    const wrapper = mountView()
+    await flushPromises()
+    const createButton = wrapper.findAll('button').find(button => button.text().includes('创建房间'))
+    await createButton?.trigger('click')
+    await flushPromises()
+
+    const setupState = (wrapper.vm as any).$?.setupState
+    expect(setupState.createSourceMode).toBe('existing')
+    expect(setupState.eligibleOwnedAccounts.map((item: Account) => item.id)).toEqual([2, 1])
+    expect(wrapper.text()).toContain('公共号池账号')
+    expect(wrapper.text()).toContain('可用私有账号')
+    expect(wrapper.text()).not.toContain('其他房间账号')
+    expect(wrapper.text()).not.toContain('未知等级账号')
+    wrapper.unmount()
+  })
+
+  it('creates a room from a public-pool account without OAuth fields and reuses the idempotency key after failure', async () => {
+    const publicAccount = account({
+      id: 22,
+      name: '公共号池主账号',
+      external_placement: { target: 'public_pool', state: 'active', version: 4 },
+    })
+    listAccounts.mockResolvedValue(paginated([publicAccount]))
+    createRoom
+      .mockRejectedValueOnce(new Error('temporary failure'))
+      .mockResolvedValueOnce(listing({
+        id: 700,
+        account_id: 22,
+        owner_user_id: 9,
+        room_name: 'OpenAI账号房间',
+        account_count: 1,
+        healthy_account_count: 1,
+      }))
+
+    const wrapper = mountView()
+    await flushPromises()
+    const createPanelButton = wrapper.findAll('button').find(button => button.text().includes('创建房间'))
+    await createPanelButton?.trigger('click')
+    await flushPromises()
+
+    const submitButton = () => wrapper.findAll('button').find(button =>
+      button.text().includes('使用已有账号创建房间')
+    )
+    await submitButton()?.trigger('click')
+    await flushPromises()
+    await submitButton()?.trigger('click')
+    await flushPromises()
+
+    expect(createRoom).toHaveBeenCalledTimes(2)
+    const firstPayload = createRoom.mock.calls[0]?.[0]
+    const secondPayload = createRoom.mock.calls[1]?.[0]
+    expect(firstPayload).toMatchObject({
+      account_id: 22,
+      room_name: 'OpenAI账号房间',
+      seat_limit: 2,
+      per_user_concurrency: 5,
+    })
+    expect(firstPayload.idempotency_key).toMatch(/^account-share-room-22-/)
+    expect(secondPayload.idempotency_key).toBe(firstPayload.idempotency_key)
+    expect(firstPayload).not.toHaveProperty('proxy_id')
+    expect(firstPayload).not.toHaveProperty('session_id')
+    expect(firstPayload).not.toHaveProperty('code')
+    expect(firstPayload).not.toHaveProperty('credentials')
+    wrapper.unmount()
+  })
+
+  it('renders room metadata and opens the room member dialog for the owner', async () => {
+    const ownRoom = listing({
+      id: 900,
+      owner_user_id: 9,
+      room_name: '我的多账号房间',
+      account_count: 3,
+      healthy_account_count: 2,
+    })
+    listListings.mockImplementation((_page: number, pageSize: number) =>
+      Promise.resolve(pageSize === 10 ? paginated([ownRoom]) : paginated([ownRoom]))
+    )
+
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.text()).toContain('我的多账号房间')
+    expect(wrapper.text()).toContain('健康账号 2/3')
+
+    const roomCountButton = wrapper.findAll('button').find(button => button.text().includes('健康账号 2/3'))
+    await roomCountButton?.trigger('click')
+    await nextTick()
+
+    expect(wrapper.get('[data-testid="room-accounts-dialog"]').text()).toContain('我的多账号房间')
     wrapper.unmount()
   })
 })

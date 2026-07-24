@@ -1,5 +1,13 @@
 import { apiClient } from './client'
-import type { AccountLevel, AccountStatus, PaginatedResponse, Proxy, UsageProgress } from '@/types'
+import type {
+  AccountExternalPlacement,
+  AccountExternalPlacementTarget,
+  AccountLevel,
+  AccountStatus,
+  PaginatedResponse,
+  Proxy,
+  UsageProgress
+} from '@/types'
 
 export type AccountShareListingStatus = 'active' | 'paused' | 'disabled'
 export type AccountShareListingTab = 'using' | 'history' | 'all' | 'mine'
@@ -36,6 +44,10 @@ export interface AccountShareWaiverProgress {
 export interface AccountShareListing {
   id: number
   account_id: number
+  room_name?: string
+  account_count?: number
+  healthy_account_count?: number
+  accounts?: AccountShareRoomAccount[]
   platform: 'openai' | 'anthropic' | string
   owner_user_id: number
   owner_username?: string
@@ -110,6 +122,50 @@ export interface AccountShareListing {
   edit_session_id?: string
   created_at: string
   updated_at: string
+}
+
+export interface AccountShareRoomAccount {
+  account_id: number
+  account_name: string
+  platform: string
+  account_level: AccountLevel
+  status: AccountStatus | string
+  schedulable: boolean
+  current_concurrency: number
+  priority: number
+  placement_state: string
+  last_used_at?: string
+}
+
+export interface ConvertAccountExternalPlacementRequest {
+  target: AccountExternalPlacementTarget
+  room_id?: number
+  idempotency_key: string
+}
+
+export interface ConvertAccountExternalPlacementResponse {
+  account_id: number
+  previous: AccountExternalPlacement | null
+  current: AccountExternalPlacement | null
+  unchanged: boolean
+}
+
+export interface CreateAccountShareRoomRequest {
+  account_id: number
+  room_name: string
+  idempotency_key: string
+  seat_limit: number
+  rate_multiplier: number
+  allowed_models: string[]
+  per_user_concurrency: number
+  hourly_rate: number
+  hourly_fee_waiver_minimum: number
+  min_balance_required: number
+  codex_cli_only: boolean
+  codex_5h_limit_percent: number
+  codex_7d_limit_percent: number
+  anthropic_5h_limit_percent: number
+  anthropic_7d_limit_percent: number
 }
 
 export interface AccountShareRecommendationRequest {
@@ -648,6 +704,31 @@ export async function listOwnerReviews(
   return data
 }
 
+export async function convertAccountExternalPlacement(
+  accountID: number,
+  payload: ConvertAccountExternalPlacementRequest
+): Promise<ConvertAccountExternalPlacementResponse> {
+  const { data } = await apiClient.post<ConvertAccountExternalPlacementResponse>(
+    `/accounts/${accountID}/external-placement:convert`,
+    payload
+  )
+  return data
+}
+
+export async function createRoom(
+  payload: CreateAccountShareRoomRequest
+): Promise<AccountShareListing> {
+  const { data } = await apiClient.post<AccountShareListing>('/account-share/rooms', payload)
+  return data
+}
+
+export async function listRoomAccounts(listingID: number): Promise<AccountShareRoomAccount[]> {
+  const { data } = await apiClient.get<AccountShareRoomAccount[]>(
+    `/account-share/listings/${listingID}/accounts`
+  )
+  return data
+}
+
 export const accountShareAPI = {
   listModeGroups,
   generateOpenAIAuthURL,
@@ -674,7 +755,10 @@ export const accountShareAPI = {
   endMembership,
   submitReview,
   listListingReviews,
-  listOwnerReviews
+  listOwnerReviews,
+  convertAccountExternalPlacement,
+  createRoom,
+  listRoomAccounts
 }
 
 export default accountShareAPI

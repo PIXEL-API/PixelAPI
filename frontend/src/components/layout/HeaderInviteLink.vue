@@ -102,12 +102,13 @@ onBeforeUnmount(() => {
 .header-invite {
   position: relative;
   display: inline-flex;
+  flex: 0 0 auto;
 }
 
 .header-invite-button {
   display: inline-flex;
-  min-width: 2.5rem;
-  min-height: 2.5rem;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
   align-items: center;
   justify-content: center;
   gap: 0.375rem;

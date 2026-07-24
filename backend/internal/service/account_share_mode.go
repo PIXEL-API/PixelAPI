@@ -73,6 +73,9 @@ const (
 	AccountShareModeListingTabHistory               = "history"
 	AccountShareModeListingTabAll                   = "all"
 	AccountShareModeListingTabMine                  = "mine"
+	AccountExternalPlacementPrivate                 = "private"
+	AccountExternalPlacementPublicPool              = "public_pool"
+	AccountExternalPlacementRoom                    = "room"
 	AccountShareListingSortDefault                  = "default"
 	AccountShareListingSortAccountConcurrency       = "account_concurrency"
 	AccountShareListingSortPerUserConcurrency       = "per_user_concurrency"
@@ -133,54 +136,66 @@ var accountShareModeAnthropicDefaultAllowedModels = []string{
 }
 
 var (
-	ErrAccountShareModeGroupUnbound            = infraerrors.New(http.StatusBadRequest, "ACCOUNT_SHARE_MODE_GROUP_UNBOUND", accountShareModeContextBindingMissingError)
-	ErrAccountShareModeGroupUnavailable        = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_GROUP_UNAVAILABLE", "account share mode group is not configured")
-	ErrAccountShareListingNotFound             = infraerrors.NotFound("ACCOUNT_SHARE_LISTING_NOT_FOUND", "account share listing not found")
-	ErrAccountShareListingNotActive            = infraerrors.BadRequest("ACCOUNT_SHARE_LISTING_NOT_ACTIVE", "account share listing is not active")
-	ErrAccountShareListingFull                 = infraerrors.BadRequest("ACCOUNT_SHARE_LISTING_FULL", "account share listing is full")
-	ErrAccountShareOwnerCannotJoin             = infraerrors.BadRequest("ACCOUNT_SHARE_OWNER_CANNOT_JOIN", "owner cannot join own shared account")
-	ErrAccountShareAlreadyUsing                = infraerrors.Conflict("ACCOUNT_SHARE_ALREADY_USING", "user is already using an account share listing")
-	ErrAccountShareAPIKeyAlreadyBound          = infraerrors.Conflict("ACCOUNT_SHARE_API_KEY_ALREADY_BOUND", "api key is already bound to an account share listing")
-	ErrAccountShareQueueFull                   = infraerrors.Conflict("ACCOUNT_SHARE_QUEUE_FULL", "account share reservation queue is full")
-	ErrAccountShareQueueInvalid                = infraerrors.BadRequest("ACCOUNT_SHARE_QUEUE_INVALID", "account share reservation queue is invalid")
-	ErrAccountShareAPIKeyMustUseModeGroup      = infraerrors.BadRequest("ACCOUNT_SHARE_API_KEY_MUST_USE_MODE_GROUP", "api key must use account mode group")
-	ErrAccountShareBalanceBelowMinimum         = infraerrors.Forbidden("ACCOUNT_SHARE_BALANCE_BELOW_MINIMUM", "user balance is below account share minimum")
-	ErrAccountSharePerUserConcurrencyExceeded  = infraerrors.TooManyRequests("ACCOUNT_SHARE_PER_USER_CONCURRENCY_EXCEEDED", "account share per-user concurrency exceeded")
-	ErrAccountShareModeUnsupportedModel        = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_UNSUPPORTED_MODEL", "account share account does not support requested model")
-	ErrAccountShareModeOpenAIOnly              = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_OPENAI_ONLY", "account share mode only supports OpenAI OAuth accounts")
-	ErrAccountShareModeProxyRequired           = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_PROXY_REQUIRED", "proxy is required before account share OAuth login")
-	ErrAccountShareModeAllowedModelsRequired   = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_MODELS_REQUIRED", "at least one allowed model is required")
-	ErrAccountShareModeInvalidSeats            = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_SEATS", "seat_limit must be between 2 and 12")
-	ErrAccountShareModeInvalidRateMultiplier   = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_RATE_MULTIPLIER", "rate_multiplier must be non-negative")
-	ErrAccountShareModeInvalidConcurrency      = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_CONCURRENCY", "concurrency must be positive and no greater than 50")
-	ErrAccountShareModeInsufficientConcurrency = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INSUFFICIENT_CONCURRENCY", "concurrency must be at least per_user_concurrency multiplied by seat_limit")
-	ErrAccountShareModeInvalidHourlyRate       = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_HOURLY_RATE", "hourly_rate must be non-negative")
-	ErrAccountShareModeInvalidMinBalance       = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_MIN_BALANCE", "min_balance_required must be non-negative")
-	ErrAccountShareModeInvalidWaiverMinimum    = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_WAIVER_MINIMUM", "hourly_fee_waiver_minimum must be non-negative")
-	ErrAccountShareModePrepayInsufficient      = infraerrors.Forbidden("ACCOUNT_SHARE_MODE_PREPAY_INSUFFICIENT", "balance is insufficient for account share seat prepayment")
-	ErrAccountShareAccountUnavailable          = infraerrors.Forbidden("ACCOUNT_SHARE_ACCOUNT_UNAVAILABLE", "account share account is unavailable")
-	ErrAccountShareModeInvalidName             = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_NAME", "account share account name must not contain whitespace")
-	ErrAccountShareModeDuplicateName           = infraerrors.Conflict("ACCOUNT_SHARE_MODE_DUPLICATE_NAME", "account share account name already exists")
-	ErrAccountShareModeInvalidPolicyRatio      = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_POLICY_RATIO", "account share mode policy ratios must be between 0 and 1 and sum to at most 1")
-	ErrAccountShareModeInvalidProxy            = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_PROXY", "invalid proxy configuration")
-	ErrAccountShareModePublicPoolAccount       = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_PUBLIC_POOL_ACCOUNT", "public shared pool accounts cannot be used for account share mode")
-	ErrAccountShareEndTokenRequired            = infraerrors.BadRequest("ACCOUNT_SHARE_END_TOKEN_REQUIRED", "account share end confirmation token is required")
-	ErrAccountShareEndTokenInvalid             = infraerrors.Forbidden("ACCOUNT_SHARE_END_TOKEN_INVALID", "account share end confirmation token is invalid or expired")
-	ErrAccountShareModeInvalidIdleTimeout      = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_IDLE_TIMEOUT", "idle_timeout_minutes must be between 1 and 10080")
-	ErrAccountShareListingInUse                = infraerrors.Conflict("ACCOUNT_SHARE_LISTING_IN_USE", "account share listing has active seats")
-	ErrAccountShareListingEditing              = infraerrors.Conflict("ACCOUNT_SHARE_LISTING_EDITING", "account share listing is being edited")
-	ErrAccountShareEditSessionRequired         = infraerrors.BadRequest("ACCOUNT_SHARE_EDIT_SESSION_REQUIRED", "account share edit session is required")
-	ErrAccountShareEditSessionInvalid          = infraerrors.Conflict("ACCOUNT_SHARE_EDIT_SESSION_INVALID", "account share edit session is invalid or expired")
-	ErrAccountShareRelistAccountUnavailable    = infraerrors.BadRequest("ACCOUNT_SHARE_RELIST_ACCOUNT_UNAVAILABLE", "账号测试通过，但账号状态仍不可调度，请先启用账号或恢复调度后重试")
-	ErrAccountShareReviewInvalidScore          = infraerrors.BadRequest("ACCOUNT_SHARE_REVIEW_INVALID_SCORE", "评分必须在 0-10 之间")
-	ErrAccountShareReviewCommentTooLong        = infraerrors.BadRequest("ACCOUNT_SHARE_REVIEW_COMMENT_TOO_LONG", "评论最多 1000 个字符")
-	ErrAccountShareReviewAlreadyExists         = infraerrors.Conflict("ACCOUNT_SHARE_REVIEW_ALREADY_EXISTS", "该次使用已评分")
-	ErrAccountShareReviewNoUsage               = infraerrors.BadRequest("ACCOUNT_SHARE_REVIEW_NO_USAGE", "该次使用没有实际请求记录，不能评分")
-	ErrAccountShareReviewSelfUse               = infraerrors.BadRequest("ACCOUNT_SHARE_REVIEW_SELF_USE", "不能评价自己上架的账号")
-	ErrAccountShareReviewIdentityMissing       = infraerrors.BadRequest("ACCOUNT_SHARE_REVIEW_IDENTITY_MISSING", "该账号缺少邮箱身份，不能评分")
-	ErrAccountShareCommentReviewUnavailable    = infraerrors.BadRequest("ACCOUNT_SHARE_COMMENT_REVIEW_UNAVAILABLE", "评论审核未启用或配置不完整，暂时不能提交评论")
-	ErrAccountShareRecommendationInvalid       = infraerrors.BadRequest("ACCOUNT_SHARE_RECOMMENDATION_INVALID", "账号推荐测算参数无效")
-	ErrAccountShareSpendInvalidRange           = infraerrors.BadRequest("ACCOUNT_SHARE_SPEND_INVALID_RANGE", "invalid account share spend range")
+	ErrAccountShareModeGroupUnbound             = infraerrors.New(http.StatusBadRequest, "ACCOUNT_SHARE_MODE_GROUP_UNBOUND", accountShareModeContextBindingMissingError)
+	ErrAccountShareModeGroupUnavailable         = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_GROUP_UNAVAILABLE", "account share mode group is not configured")
+	ErrAccountSharePrivateGroupUnavailable      = infraerrors.BadRequest("ACCOUNT_SHARE_PRIVATE_GROUP_UNAVAILABLE", "account owner private group is not configured")
+	ErrAccountShareListingNotFound              = infraerrors.NotFound("ACCOUNT_SHARE_LISTING_NOT_FOUND", "account share listing not found")
+	ErrAccountShareMembershipNotFound           = infraerrors.NotFound("ACCOUNT_SHARE_MEMBERSHIP_NOT_FOUND", "account share membership not found")
+	ErrAccountShareBillingSnapshotMismatch      = infraerrors.InternalServer("ACCOUNT_SHARE_BILLING_SNAPSHOT_MISMATCH", "account share billing snapshot does not match the locked membership")
+	ErrAccountShareRoomOwnerMismatch            = infraerrors.Forbidden("ACCOUNT_SHARE_ROOM_OWNER_MISMATCH", "account and room must belong to the same owner")
+	ErrAccountShareRoomPlatformMismatch         = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_PLATFORM_MISMATCH", "account and room platforms do not match")
+	ErrAccountShareRoomLevelMismatch            = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_LEVEL_MISMATCH", "all accounts in a room must have the same account level")
+	ErrAccountShareRoomUnknownLevel             = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_UNKNOWN_LEVEL", "accounts with an unknown level cannot be added to a room")
+	ErrAccountShareRoomAccountConfigUnsupported = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_ACCOUNT_CONFIG_UNSUPPORTED", "proxy and account concurrency must be edited on individual accounts")
+	ErrAccountExternalPlacementInvalid          = infraerrors.BadRequest("ACCOUNT_EXTERNAL_PLACEMENT_INVALID", "invalid external placement target")
+	ErrAccountExternalPlacementBusy             = infraerrors.Conflict("ACCOUNT_EXTERNAL_PLACEMENT_BUSY", "account has an in-flight room request; retry after it drains")
+	ErrAccountExternalPlacementConflict         = infraerrors.Conflict("ACCOUNT_EXTERNAL_PLACEMENT_CONFLICT", "account already has a different external placement")
+	ErrAccountExternalPlacementIdempotency      = infraerrors.Conflict("ACCOUNT_EXTERNAL_PLACEMENT_IDEMPOTENCY_CONFLICT", "idempotency key was already used for a different conversion")
+	ErrAccountShareListingNotActive             = infraerrors.BadRequest("ACCOUNT_SHARE_LISTING_NOT_ACTIVE", "account share listing is not active")
+	ErrAccountShareListingFull                  = infraerrors.BadRequest("ACCOUNT_SHARE_LISTING_FULL", "account share listing is full")
+	ErrAccountShareOwnerCannotJoin              = infraerrors.BadRequest("ACCOUNT_SHARE_OWNER_CANNOT_JOIN", "owner cannot join own shared account")
+	ErrAccountShareAlreadyUsing                 = infraerrors.Conflict("ACCOUNT_SHARE_ALREADY_USING", "user is already using an account share listing")
+	ErrAccountShareAPIKeyAlreadyBound           = infraerrors.Conflict("ACCOUNT_SHARE_API_KEY_ALREADY_BOUND", "api key is already bound to an account share listing")
+	ErrAccountShareQueueFull                    = infraerrors.Conflict("ACCOUNT_SHARE_QUEUE_FULL", "account share reservation queue is full")
+	ErrAccountShareQueueInvalid                 = infraerrors.BadRequest("ACCOUNT_SHARE_QUEUE_INVALID", "account share reservation queue is invalid")
+	ErrAccountShareAPIKeyMustUseModeGroup       = infraerrors.BadRequest("ACCOUNT_SHARE_API_KEY_MUST_USE_MODE_GROUP", "api key must use account mode group")
+	ErrAccountShareBalanceBelowMinimum          = infraerrors.Forbidden("ACCOUNT_SHARE_BALANCE_BELOW_MINIMUM", "user balance is below account share minimum")
+	ErrAccountSharePerUserConcurrencyExceeded   = infraerrors.TooManyRequests("ACCOUNT_SHARE_PER_USER_CONCURRENCY_EXCEEDED", "account share per-user concurrency exceeded")
+	ErrAccountShareModeUnsupportedModel         = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_UNSUPPORTED_MODEL", "account share account does not support requested model")
+	ErrAccountShareModeOpenAIOnly               = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_OPENAI_ONLY", "account share mode only supports OpenAI OAuth accounts")
+	ErrAccountShareModeProxyRequired            = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_PROXY_REQUIRED", "proxy is required before account share OAuth login")
+	ErrAccountShareModeAllowedModelsRequired    = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_MODELS_REQUIRED", "at least one allowed model is required")
+	ErrAccountShareModeInvalidSeats             = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_SEATS", "seat_limit must be between 2 and 12")
+	ErrAccountShareModeInvalidRateMultiplier    = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_RATE_MULTIPLIER", "rate_multiplier must be non-negative")
+	ErrAccountShareModeInvalidConcurrency       = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_CONCURRENCY", "concurrency must be positive and no greater than 50")
+	ErrAccountShareModeInsufficientConcurrency  = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INSUFFICIENT_CONCURRENCY", "concurrency must be at least per_user_concurrency multiplied by seat_limit")
+	ErrAccountShareModeInvalidHourlyRate        = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_HOURLY_RATE", "hourly_rate must be non-negative")
+	ErrAccountShareModeInvalidMinBalance        = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_MIN_BALANCE", "min_balance_required must be non-negative")
+	ErrAccountShareModeInvalidWaiverMinimum     = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_WAIVER_MINIMUM", "hourly_fee_waiver_minimum must be non-negative")
+	ErrAccountShareModePrepayInsufficient       = infraerrors.Forbidden("ACCOUNT_SHARE_MODE_PREPAY_INSUFFICIENT", "balance is insufficient for account share seat prepayment")
+	ErrAccountShareAccountUnavailable           = infraerrors.Forbidden("ACCOUNT_SHARE_ACCOUNT_UNAVAILABLE", "account share account is unavailable")
+	ErrAccountShareModeInvalidName              = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_NAME", "account share account name must not contain whitespace")
+	ErrAccountShareModeDuplicateName            = infraerrors.Conflict("ACCOUNT_SHARE_MODE_DUPLICATE_NAME", "account share account name already exists")
+	ErrAccountShareModeInvalidPolicyRatio       = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_POLICY_RATIO", "account share mode policy ratios must be between 0 and 1 and sum to at most 1")
+	ErrAccountShareModeInvalidProxy             = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_PROXY", "invalid proxy configuration")
+	ErrAccountShareModePublicPoolAccount        = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_PUBLIC_POOL_ACCOUNT", "public shared pool accounts cannot be used for account share mode")
+	ErrAccountShareEndTokenRequired             = infraerrors.BadRequest("ACCOUNT_SHARE_END_TOKEN_REQUIRED", "account share end confirmation token is required")
+	ErrAccountShareEndTokenInvalid              = infraerrors.Forbidden("ACCOUNT_SHARE_END_TOKEN_INVALID", "account share end confirmation token is invalid or expired")
+	ErrAccountShareModeInvalidIdleTimeout       = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_IDLE_TIMEOUT", "idle_timeout_minutes must be between 1 and 10080")
+	ErrAccountShareListingInUse                 = infraerrors.Conflict("ACCOUNT_SHARE_LISTING_IN_USE", "account share listing has active seats")
+	ErrAccountShareListingEditing               = infraerrors.Conflict("ACCOUNT_SHARE_LISTING_EDITING", "account share listing is being edited")
+	ErrAccountShareEditSessionRequired          = infraerrors.BadRequest("ACCOUNT_SHARE_EDIT_SESSION_REQUIRED", "account share edit session is required")
+	ErrAccountShareEditSessionInvalid           = infraerrors.Conflict("ACCOUNT_SHARE_EDIT_SESSION_INVALID", "account share edit session is invalid or expired")
+	ErrAccountShareRelistAccountUnavailable     = infraerrors.BadRequest("ACCOUNT_SHARE_RELIST_ACCOUNT_UNAVAILABLE", "账号测试通过，但账号状态仍不可调度，请先启用账号或恢复调度后重试")
+	ErrAccountShareReviewInvalidScore           = infraerrors.BadRequest("ACCOUNT_SHARE_REVIEW_INVALID_SCORE", "评分必须在 0-10 之间")
+	ErrAccountShareReviewCommentTooLong         = infraerrors.BadRequest("ACCOUNT_SHARE_REVIEW_COMMENT_TOO_LONG", "评论最多 1000 个字符")
+	ErrAccountShareReviewAlreadyExists          = infraerrors.Conflict("ACCOUNT_SHARE_REVIEW_ALREADY_EXISTS", "该次使用已评分")
+	ErrAccountShareReviewNoUsage                = infraerrors.BadRequest("ACCOUNT_SHARE_REVIEW_NO_USAGE", "该次使用没有实际请求记录，不能评分")
+	ErrAccountShareReviewSelfUse                = infraerrors.BadRequest("ACCOUNT_SHARE_REVIEW_SELF_USE", "不能评价自己上架的账号")
+	ErrAccountShareReviewIdentityMissing        = infraerrors.BadRequest("ACCOUNT_SHARE_REVIEW_IDENTITY_MISSING", "该账号缺少邮箱身份，不能评分")
+	ErrAccountShareCommentReviewUnavailable     = infraerrors.BadRequest("ACCOUNT_SHARE_COMMENT_REVIEW_UNAVAILABLE", "评论审核未启用或配置不完整，暂时不能提交评论")
+	ErrAccountShareRecommendationInvalid        = infraerrors.BadRequest("ACCOUNT_SHARE_RECOMMENDATION_INVALID", "账号推荐测算参数无效")
+	ErrAccountShareSpendInvalidRange            = infraerrors.BadRequest("ACCOUNT_SHARE_SPEND_INVALID_RANGE", "invalid account share spend range")
 )
 
 func accountShareModeUnsupportedModelError(requestedModel string) error {
@@ -293,6 +308,10 @@ func (s *accountShareModeRequestState) clear() {
 type AccountShareListing struct {
 	ID                              int64                       `json:"id"`
 	AccountID                       int64                       `json:"account_id"`
+	RoomName                        string                      `json:"room_name"`
+	AccountCount                    int                         `json:"account_count"`
+	HealthyAccountCount             int                         `json:"healthy_account_count"`
+	Accounts                        []AccountShareRoomAccount   `json:"accounts,omitempty"`
 	Platform                        string                      `json:"platform"`
 	OwnerUserID                     int64                       `json:"owner_user_id"`
 	OwnerUsername                   string                      `json:"owner_username,omitempty"`
@@ -367,6 +386,64 @@ type AccountShareListing struct {
 	EditSessionID                   string                      `json:"edit_session_id,omitempty"`
 	CreatedAt                       time.Time                   `json:"created_at"`
 	UpdatedAt                       time.Time                   `json:"updated_at"`
+}
+
+type AccountShareRoomAccount struct {
+	AccountID          int64      `json:"account_id"`
+	AccountName        string     `json:"account_name"`
+	Platform           string     `json:"platform"`
+	AccountLevel       string     `json:"account_level"`
+	Status             string     `json:"status"`
+	Schedulable        bool       `json:"schedulable"`
+	CurrentConcurrency int        `json:"current_concurrency"`
+	Priority           int        `json:"priority"`
+	PlacementState     string     `json:"placement_state"`
+	LastUsedAt         *time.Time `json:"last_used_at,omitempty"`
+}
+
+type AccountExternalPlacement struct {
+	Target        string `json:"target"`
+	RoomID        *int64 `json:"room_id,omitempty"`
+	RoomName      string `json:"room_name,omitempty"`
+	PublicGroupID *int64 `json:"public_group_id,omitempty"`
+	State         string `json:"state"`
+	Version       int64  `json:"version"`
+}
+
+type ConvertAccountExternalPlacementInput struct {
+	AccountID      int64
+	OwnerUserID    int64
+	Target         string
+	RoomID         *int64
+	IdempotencyKey string
+	GroupIDs       []int64
+	PublicGroupID  *int64
+}
+
+type ConvertAccountExternalPlacementResult struct {
+	AccountID         int64                          `json:"account_id"`
+	Previous          *AccountExternalPlacement      `json:"previous"`
+	Current           *AccountExternalPlacement      `json:"current"`
+	Unchanged         bool                           `json:"unchanged"`
+	SeatBillingResult *AccountShareSeatBillingResult `json:"-"`
+}
+
+type CreateAccountShareRoomInput struct {
+	AccountID               int64
+	IdempotencyKey          string
+	RoomName                string
+	SeatLimit               int
+	RateMultiplier          float64
+	AllowedModels           []string
+	PerUserConcurrency      int
+	HourlyRate              float64
+	HourlyFeeWaiverMinimum  float64
+	MinBalanceRequired      *float64
+	CodexCLIOnly            bool
+	Codex5hLimitPercent     float64
+	Codex7dLimitPercent     float64
+	Anthropic5hLimitPercent float64
+	Anthropic7dLimitPercent float64
 }
 
 type AccountShareWaiverProgress struct {
@@ -851,6 +928,16 @@ type AccountShareModeRepository interface {
 	ActivateNextQueuedMembershipForRequest(ctx context.Context, userID, apiKeyID, groupID int64, afterRank int, now time.Time) (*AccountShareMembership, *AccountShareListing, error)
 	SuspendMembershipForDispatchFailure(ctx context.Context, membershipID int64, failedAt time.Time, cooldownUntil time.Time) (*AccountShareMembership, *AccountShareSeatBillingResult, error)
 	ResolvePolicy(ctx context.Context) (*AccountSharePolicy, error)
+}
+
+type AccountShareRoomRepository interface {
+	CreateRoomFromOwnedAccount(ctx context.Context, ownerUserID, accountID, modeGroupID int64, idempotencyKey string, listing *AccountShareListing) (*AccountShareListing, error)
+	ListRoomAccounts(ctx context.Context, listingID, viewerUserID int64) ([]AccountShareRoomAccount, error)
+	GetExternalPlacement(ctx context.Context, ownerUserID, accountID int64) (*AccountExternalPlacement, error)
+	BeginExternalPlacementDrain(ctx context.Context, ownerUserID, accountID int64) (bool, error)
+	RestoreExternalPlacementAfterDrain(ctx context.Context, ownerUserID, accountID int64) error
+	ConvertExternalPlacement(ctx context.Context, input ConvertAccountExternalPlacementInput) (*ConvertAccountExternalPlacementResult, error)
+	RebindMembershipToHealthyRoomAccount(ctx context.Context, membershipID, currentAccountID int64, now time.Time) (bool, error)
 }
 
 type AccountShareModeProxyRepository interface {
@@ -1790,6 +1877,160 @@ func (s *AccountShareModeService) CreateAnthropicListingFromToken(ctx context.Co
 	return created, nil
 }
 
+func (s *AccountShareModeService) CreateRoomFromOwnedAccount(ctx context.Context, ownerUserID int64, input CreateAccountShareRoomInput) (*AccountShareListing, error) {
+	if ownerUserID <= 0 {
+		return nil, ErrUserNotFound
+	}
+	if input.AccountID <= 0 {
+		return nil, ErrAccountNotFound
+	}
+	roomName := strings.TrimSpace(input.RoomName)
+	if err := validateAccountShareAccountName(roomName); err != nil {
+		return nil, err
+	}
+	idempotencyKey := strings.TrimSpace(input.IdempotencyKey)
+	if idempotencyKey == "" || len(idempotencyKey) > 128 {
+		return nil, ErrAccountExternalPlacementInvalid.WithMetadata(map[string]string{"field": "idempotency_key"})
+	}
+	if s == nil || s.repo == nil || s.accountRepo == nil {
+		return nil, ErrServiceUnavailable
+	}
+	roomRepo, ok := s.repo.(AccountShareRoomRepository)
+	if !ok {
+		return nil, ErrServiceUnavailable
+	}
+	account, err := s.accountRepo.GetByID(ctx, input.AccountID)
+	if err != nil {
+		return nil, err
+	}
+	if account == nil || account.OwnerUserID == nil || *account.OwnerUserID != ownerUserID {
+		return nil, ErrAccountShareRoomOwnerMismatch
+	}
+	if account.Status != StatusActive || !account.Schedulable {
+		return nil, ErrAccountShareAccountUnavailable
+	}
+	if s.concurrencyService != nil {
+		loadByAccountID, err := s.concurrencyService.GetAccountsLoadBatch(ctx, []AccountWithConcurrency{{
+			ID:             account.ID,
+			MaxConcurrency: account.Concurrency,
+		}})
+		if err != nil {
+			return nil, err
+		}
+		if load := loadByAccountID[account.ID]; load != nil && (load.CurrentConcurrency > 0 || load.WaitingCount > 0) {
+			return nil, ErrAccountExternalPlacementBusy
+		}
+	}
+	accountLevel := NormalizeAccountLevel(account.AccountLevel)
+	var levelConfigs []OpenAIAccountLevelConfig
+	if account.Platform == PlatformOpenAI {
+		levelConfigs, err = s.openAIAccountLevelConfigs(ctx)
+		if err != nil {
+			return nil, err
+		}
+		accountLevel = NormalizeOpenAIAccountLevelWithConfigs(account.Platform, account.AccountLevel, account.Credentials, account.Extra, levelConfigs)
+	}
+	if accountLevel == AccountLevelUnknown {
+		return nil, ErrAccountShareRoomUnknownLevel
+	}
+	allowedModels := normalizeAllowedModelsOrDefaultForPlatform(account.Platform, input.AllowedModels)
+	perUserConcurrency := normalizePositiveInt(input.PerUserConcurrency, AccountShareModeDefaultPerUserConcurrency)
+	if err := validateAccountShareListingConfig(
+		input.SeatLimit,
+		input.RateMultiplier,
+		allowedModels,
+		perUserConcurrency,
+		account.Concurrency,
+		input.HourlyRate,
+		input.HourlyFeeWaiverMinimum,
+		minBalanceValue(input.MinBalanceRequired),
+		input.Codex5hLimitPercent,
+		input.Codex7dLimitPercent,
+	); err != nil {
+		return nil, err
+	}
+	modeGroup, err := s.repo.EnsureModeGroup(ctx, account.Platform)
+	if err != nil {
+		return nil, err
+	}
+	if modeGroup == nil || modeGroup.ID <= 0 {
+		return nil, ErrAccountShareModeGroupUnavailable
+	}
+	codex5hLimitPercent := normalizeCodexLimitPercent(input.Codex5hLimitPercent)
+	codex7dLimitPercent := normalizeCodexLimitPercent(input.Codex7dLimitPercent)
+	if account.Platform == PlatformAnthropic {
+		codex5hLimitPercent = normalizeAnthropicLimitPercent(input.Anthropic5hLimitPercent)
+		codex7dLimitPercent = normalizeAnthropicLimitPercent(input.Anthropic7dLimitPercent)
+	}
+	drained := false
+	if account.ExternalPlacement != nil && account.ExternalPlacement.Target == AccountExternalPlacementPublicPool {
+		drained, err = roomRepo.BeginExternalPlacementDrain(ctx, ownerUserID, account.ID)
+		if err != nil {
+			return nil, err
+		}
+		if drained {
+			defer func() {
+				if !drained {
+					return
+				}
+				if restoreErr := roomRepo.RestoreExternalPlacementAfterDrain(context.WithoutCancel(ctx), ownerUserID, account.ID); restoreErr != nil {
+					log.Printf("account_share_mode: restore placement after room creation failed: account=%d err=%v", account.ID, restoreErr)
+				}
+			}()
+			if err := ensureAccountExternalPlacementIdle(ctx, s.concurrencyService, account); err != nil {
+				return nil, err
+			}
+		}
+	}
+	listing := &AccountShareListing{
+		AccountID:               account.ID,
+		AccountName:             account.Name,
+		RoomName:                roomName,
+		Platform:                strings.ToLower(strings.TrimSpace(account.Platform)),
+		AccountLevel:            accountLevel,
+		OwnerUserID:             ownerUserID,
+		Status:                  AccountShareListingStatusActive,
+		SeatLimit:               input.SeatLimit,
+		RateMultiplier:          input.RateMultiplier,
+		AllowedModels:           allowedModels,
+		PerUserConcurrency:      perUserConcurrency,
+		AccountConcurrency:      account.Concurrency,
+		HourlyRate:              input.HourlyRate,
+		HourlyFeeWaiverMinimum:  input.HourlyFeeWaiverMinimum,
+		MinBalanceRequired:      minBalanceValue(input.MinBalanceRequired),
+		CodexCLIOnly:            input.CodexCLIOnly,
+		Codex5hLimitPercent:     codex5hLimitPercent,
+		Codex7dLimitPercent:     codex7dLimitPercent,
+		Anthropic5hLimitPercent: normalizeAnthropicLimitPercent(input.Anthropic5hLimitPercent),
+		Anthropic7dLimitPercent: normalizeAnthropicLimitPercent(input.Anthropic7dLimitPercent),
+	}
+	created, err := roomRepo.CreateRoomFromOwnedAccount(ctx, ownerUserID, account.ID, modeGroup.ID, idempotencyKey, listing)
+	if err != nil {
+		return nil, err
+	}
+	drained = false
+	normalizeAccountShareListingAccountLevelWithConfigs(created, levelConfigs)
+	s.enrichListingRuntime(ctx, created)
+	return created, nil
+}
+
+func (s *AccountShareModeService) ListRoomAccounts(ctx context.Context, viewerUserID, listingID int64) ([]AccountShareRoomAccount, error) {
+	if viewerUserID <= 0 {
+		return nil, ErrUserNotFound
+	}
+	if listingID <= 0 {
+		return nil, ErrAccountShareListingNotFound
+	}
+	if s == nil || s.repo == nil {
+		return nil, ErrServiceUnavailable
+	}
+	roomRepo, ok := s.repo.(AccountShareRoomRepository)
+	if !ok {
+		return nil, ErrServiceUnavailable
+	}
+	return roomRepo.ListRoomAccounts(ctx, listingID, viewerUserID)
+}
+
 func (s *AccountShareModeService) ListListings(ctx context.Context, viewerUserID int64, viewerIsAdmin bool, filters AccountShareListingFilters, params pagination.PaginationParams) ([]AccountShareListing, *pagination.PaginationResult, error) {
 	if viewerUserID <= 0 {
 		return nil, nil, ErrUserNotFound
@@ -2202,6 +2443,9 @@ func (s *AccountShareModeService) UpdateListing(ctx context.Context, actorUserID
 	if actorUserID <= 0 {
 		return nil, ErrUserNotFound
 	}
+	if input.ProxyID != nil || input.Concurrency != nil {
+		return nil, ErrAccountShareRoomAccountConfigUnsupported
+	}
 	if input.Name != nil {
 		name := compactAccountShareAccountName(*input.Name)
 		if name == "" {
@@ -2230,9 +2474,6 @@ func (s *AccountShareModeService) UpdateListing(ctx context.Context, actorUserID
 		return nil, ErrAccountShareEditSessionRequired
 	}
 	input.EditSessionID = strings.TrimSpace(input.EditSessionID)
-	if input.ProxyID != nil && *input.ProxyID <= 0 {
-		return nil, ErrAccountShareModeProxyRequired
-	}
 	if input.SeatLimit != nil && (*input.SeatLimit < AccountShareModeMinSeats || *input.SeatLimit > AccountShareModeMaxSeats) {
 		return nil, ErrAccountShareModeInvalidSeats
 	}
@@ -2240,9 +2481,6 @@ func (s *AccountShareModeService) UpdateListing(ctx context.Context, actorUserID
 		return nil, ErrAccountShareModeInvalidRateMultiplier
 	}
 	if input.PerUserConcurrency != nil && *input.PerUserConcurrency <= 0 {
-		return nil, ErrAccountShareModeInvalidConcurrency
-	}
-	if input.Concurrency != nil && (*input.Concurrency <= 0 || *input.Concurrency > AccountShareModeMaxAccountConcurrency) {
 		return nil, ErrAccountShareModeInvalidConcurrency
 	}
 	if input.HourlyRate != nil && invalidNonNegativeFloat(*input.HourlyRate) {
@@ -2882,6 +3120,13 @@ func (s *AccountShareModeService) ResolveActiveBindingForRequest(ctx context.Con
 			break
 		}
 		if accountShareListingAccountUnavailableAt(listing, now) {
+			rebound, err := s.rebindMembershipToHealthyRoomAccount(ctx, membership, now)
+			if err != nil {
+				return nil, nil, err
+			}
+			if rebound {
+				continue
+			}
 			afterRank = membership.QueueRank
 			result, suspended, err := s.suspendMembershipForDispatchFailure(ctx, membership, now)
 			if err != nil {
@@ -2914,6 +3159,24 @@ func (s *AccountShareModeService) ResolveActiveBindingForRequest(ctx context.Con
 		requestCtx.state.set(userID, apiKeyID, groupID, nil, nil, lastErr)
 	}
 	return nil, nil, lastErr
+}
+
+func (s *AccountShareModeService) rebindMembershipToHealthyRoomAccount(ctx context.Context, membership *AccountShareMembership, now time.Time) (bool, error) {
+	if s == nil || membership == nil || membership.ID <= 0 || membership.AccountID <= 0 {
+		return false, nil
+	}
+	roomRepo, ok := s.repo.(AccountShareRoomRepository)
+	if !ok {
+		return false, nil
+	}
+	active, err := s.membershipHasActiveConcurrency(ctx, membership.ID)
+	if err != nil {
+		return false, err
+	}
+	if active {
+		return false, nil
+	}
+	return roomRepo.RebindMembershipToHealthyRoomAccount(ctx, membership.ID, membership.AccountID, now)
 }
 
 func (s *AccountShareModeService) resolveActiveOrActivateQueuedBinding(ctx context.Context, userID, apiKeyID, groupID int64, afterRank int, now time.Time) (*AccountShareMembership, *AccountShareListing, error) {
@@ -4378,7 +4641,7 @@ func BuildAccountShareModeBillingSnapshot(membership *AccountShareMembership, li
 	return &AccountShareModeBillingSnapshot{
 		MembershipID:       membership.ID,
 		ListingID:          listing.ID,
-		AccountID:          listing.AccountID,
+		AccountID:          membership.AccountID,
 		OwnerUserID:        listing.OwnerUserID,
 		ConsumerUserID:     membership.ConsumerUserID,
 		APIKeyID:           membership.APIKeyID,

@@ -646,17 +646,21 @@ func ProvideAccountService(
 	accountSharePolicyRepo AccountSharePolicyRepository,
 	accountShareModeRepo AccountShareModeRepository,
 	privateGroupProvisioner UserPrivateGroupProvisioner,
+	concurrencyService *ConcurrencyService,
 	systemNoticeService *SystemNoticeService,
 	settingService *SettingService,
 	agentIdentityWSInvalidator *AgentIdentityWSInvalidatorProxy,
+	accountShareModeService *AccountShareModeService,
 ) *AccountService {
 	svc := NewAccountService(accountRepo, groupRepo, userRepo, userSubRepo, proxyRepo)
 	svc.SetAccountSharePolicyRepository(accountSharePolicyRepo)
 	svc.SetAccountShareModeRepository(accountShareModeRepo)
 	svc.SetUserPrivateGroupProvisioner(privateGroupProvisioner)
+	svc.SetConcurrencyService(concurrencyService)
 	svc.SetSystemNoticeService(systemNoticeService)
 	svc.SetSettingService(settingService)
 	svc.SetAgentIdentityWSInvalidator(agentIdentityWSInvalidator)
+	svc.SetAccountShareBillingCacheInvalidator(accountShareModeService)
 	return svc
 }
 

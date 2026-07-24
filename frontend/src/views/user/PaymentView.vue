@@ -1,6 +1,6 @@
 <template>
   <AppLayout>
-    <div class="mx-auto w-full max-w-6xl space-y-5 sm:space-y-6">
+    <div class="recharge-center-shell mx-auto w-full space-y-5 sm:space-y-6">
       <div v-if="loading" class="flex items-center justify-center py-20">
         <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary-500 border-t-transparent"></div>
       </div>
@@ -43,7 +43,7 @@
         <template v-else>
           <section class="relative overflow-hidden rounded-[1.75rem] border border-primary-100 bg-gradient-to-br from-primary-50 via-white to-accent-50 px-5 py-6 shadow-card dark:border-primary-900/50 dark:from-primary-950/70 dark:via-dark-900 dark:to-accent-950/30 sm:px-7 sm:py-8">
             <div class="pointer-events-none absolute -right-16 -top-20 h-56 w-56 rounded-full bg-primary-200/40 blur-3xl dark:bg-primary-700/10"></div>
-            <div class="relative grid gap-6 lg:grid-cols-[minmax(0,1.4fr)_minmax(18rem,0.6fr)] lg:items-center">
+            <div class="recharge-center-hero-grid relative items-center">
               <div>
                 <div class="mb-3 inline-flex items-center gap-2 rounded-full border border-primary-200/80 bg-white/80 px-3 py-1 text-xs font-semibold tracking-wide text-primary-700 shadow-sm backdrop-blur dark:border-primary-800 dark:bg-dark-900/70 dark:text-primary-300">
                   <Icon name="sparkles" size="sm" />
@@ -97,7 +97,7 @@
             </div>
           </section>
 
-          <div class="flex flex-col gap-6">
+          <div class="flex flex-col gap-6 2xl:gap-8">
           <div v-if="!hasVisibleContent" class="card order-1 py-16 text-center">
             <Icon name="creditCard" size="xl" class="mx-auto mb-3 text-gray-300 dark:text-dark-600" />
             <p class="text-gray-500 dark:text-gray-400">{{ t('payment.noVisibleContent') }}</p>
@@ -115,7 +115,7 @@
                   </div>
                 </div>
               </div>
-              <div class="grid gap-3 p-4 sm:grid-cols-2 sm:p-5">
+              <div class="external-link-grid p-4 sm:p-5">
                 <a
                   v-for="item in rechargeCenterItems"
                   :key="`${item.name}-${item.url}`"
@@ -155,27 +155,33 @@
               <p class="text-gray-500 dark:text-gray-400">{{ t('payment.notAvailable') }}</p>
             </div>
             <template v-else>
-              <div class="grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(20rem,0.65fr)] lg:items-start">
+              <div class="recharge-workspace-grid items-start">
                 <div class="card p-5 sm:p-6">
-                  <AmountInput
-                    v-model="amount"
-                    :amounts="RECHARGE_QUICK_AMOUNTS"
-                    :min="rechargeMinAmount"
-                    :max="rechargeMaxAmount"
-                  />
-                  <p v-if="rechargeAmountHint" class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-                    {{ rechargeAmountHint }}
-                  </p>
-                  <p v-if="amountError" class="mt-2 text-xs font-medium text-amber-600 dark:text-amber-300">{{ amountError }}</p>
-                  <div class="my-5 h-px bg-gray-100 dark:bg-dark-700"></div>
-                  <PaymentMethodSelector
-                    :methods="methodOptions"
-                    :selected="selectedMethod"
-                    @select="selectedMethod = $event"
-                  />
+                  <div class="recharge-form-grid">
+                    <div class="min-w-0">
+                      <AmountInput
+                        v-model="amount"
+                        :amounts="RECHARGE_QUICK_AMOUNTS"
+                        :min="rechargeMinAmount"
+                        :max="rechargeMaxAmount"
+                        quick-amount-grid-class="grid-cols-3 2xl:grid-cols-6"
+                      />
+                      <p v-if="rechargeAmountHint" class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                        {{ rechargeAmountHint }}
+                      </p>
+                      <p v-if="amountError" class="mt-2 text-xs font-medium text-amber-600 dark:text-amber-300">{{ amountError }}</p>
+                    </div>
+                    <div class="recharge-method-panel min-w-0 border-t border-gray-100 pt-5 dark:border-dark-700">
+                      <PaymentMethodSelector
+                        :methods="methodOptions"
+                        :selected="selectedMethod"
+                        @select="selectedMethod = $event"
+                      />
+                    </div>
+                  </div>
                 </div>
 
-                <aside class="card p-5 lg:sticky lg:top-24 sm:p-6">
+                <aside class="card p-5 sm:p-6 lg:sticky lg:top-24">
                   <div class="flex items-center justify-between gap-3">
                     <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('payment.rechargeSection.summary') }}</h3>
                     <span class="rounded-full bg-primary-50 px-2.5 py-1 text-xs font-semibold text-primary-600 dark:bg-primary-900/40 dark:text-primary-300">
@@ -721,7 +727,8 @@ const creditedAmount = computed(() => Math.round((validAmount.value * balanceRec
 const planGridClass = computed(() => {
   const n = publicPlans.value.length
   if (n <= 2) return 'grid grid-cols-1 gap-5 sm:grid-cols-2'
-  return 'grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3'
+  if (n === 3) return 'grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3'
+  return 'grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4'
 })
 
 function scrollToSection(id: string) {
@@ -1349,3 +1356,67 @@ onMounted(async () => {
   subscriptionStore.fetchActiveSubscriptions().catch(() => {})
 })
 </script>
+
+<style scoped>
+.recharge-center-shell {
+  max-width: 120rem;
+  container-type: inline-size;
+}
+
+.recharge-center-hero-grid,
+.recharge-workspace-grid,
+.recharge-form-grid,
+.external-link-grid {
+  display: grid;
+}
+
+.recharge-center-hero-grid {
+  gap: 1.5rem;
+}
+
+.recharge-workspace-grid {
+  gap: 1rem;
+}
+
+.recharge-form-grid {
+  gap: 1.25rem;
+}
+
+.external-link-grid {
+  grid-template-columns: repeat(
+    auto-fit,
+    minmax(min(100%, 20rem), 28rem)
+  );
+  gap: 0.75rem;
+}
+
+@container (min-width: 64rem) {
+  .recharge-center-hero-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(19rem, 24rem);
+    gap: 2rem;
+  }
+
+  .recharge-workspace-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(20rem, 26rem);
+    gap: 1.5rem;
+  }
+}
+
+@container (min-width: 92rem) {
+  .recharge-center-hero-grid {
+    gap: 3rem;
+  }
+
+  .recharge-form-grid {
+    grid-template-columns: minmax(0, 1.45fr) minmax(22rem, 0.55fr);
+    gap: 1.5rem;
+  }
+
+  .recharge-method-panel {
+    border-top-width: 0;
+    border-left-width: 1px;
+    padding-top: 0;
+    padding-left: 1.5rem;
+  }
+}
+</style>

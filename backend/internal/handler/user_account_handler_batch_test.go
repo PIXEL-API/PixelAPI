@@ -243,7 +243,7 @@ func (s *userAccountBatchHTTPUpstreamStub) DoWithTLS(
 	}, nil
 }
 
-func TestUserAccountHandlerBulkPublicShareOnlyCreatesAsyncTask(t *testing.T) {
+func TestUserAccountHandlerBulkShareModeRequiresPlacementConversion(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ownerID := int64(101)
 	repo := &userAccountBatchRepoStub{
@@ -267,27 +267,15 @@ func TestUserAccountHandlerBulkPublicShareOnlyCreatesAsyncTask(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusOK, rec.Code)
-	require.Equal(t, 1, repo.createTaskCalled)
-	require.Equal(t, service.AccountBatchTaskOperationUserSetPublicShare, repo.createdTask.Operation)
-	require.Equal(t, []int64{1, 2}, repo.createdTask.AccountIDs)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Equal(t, 0, repo.createTaskCalled)
 	var envelope struct {
-		Code int `json:"code"`
-		Data struct {
-			Async bool `json:"async"`
-			Task  struct {
-				ID        int64  `json:"id"`
-				Operation string `json:"operation"`
-				Total     int    `json:"total"`
-			} `json:"task"`
-		} `json:"data"`
+		Code   int    `json:"code"`
+		Reason string `json:"reason"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
-	require.Equal(t, 0, envelope.Code)
-	require.True(t, envelope.Data.Async)
-	require.Equal(t, int64(77), envelope.Data.Task.ID)
-	require.Equal(t, service.AccountBatchTaskOperationUserSetPublicShare, envelope.Data.Task.Operation)
-	require.Equal(t, 2, envelope.Data.Task.Total)
+	require.Equal(t, http.StatusBadRequest, envelope.Code)
+	require.Equal(t, "OWNED_ACCOUNT_PLACEMENT_CONVERSION_REQUIRED", envelope.Reason)
 }
 
 func TestUserAccountHandlerCreateBatchTestConnectionTask(t *testing.T) {
@@ -434,7 +422,7 @@ func TestUserAccountHandlerBulkPublicShareRejectsAccountShareModeAccount(t *test
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
 	require.Equal(t, http.StatusBadRequest, envelope.Code)
-	require.Equal(t, "OWNED_ACCOUNT_SHARE_MODE_ONLY", envelope.Reason)
+	require.Equal(t, "OWNED_ACCOUNT_PLACEMENT_CONVERSION_REQUIRED", envelope.Reason)
 }
 
 func TestUserAccountHandlerVerifyPlusAlreadyPlusDoesNotRequireTestService(t *testing.T) {

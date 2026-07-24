@@ -53,6 +53,7 @@ const migrationsAdvisoryLockID int64 = 694208311321144027
 const migrationsLockRetryInterval = 500 * time.Millisecond
 const migrationsUnlockTimeout = 5 * time.Second
 const nonTransactionalMigrationSuffix = "_notx.sql"
+const onlineMigrationSuffix = "_online.sql"
 const paymentOrdersOutTradeNoUniqueMigration = "120_enforce_payment_orders_out_trade_no_unique_notx.sql"
 const paymentOrdersOutTradeNoUniqueIndex = "paymentorder_out_trade_no_unique"
 const ownedAccountIdentityUniqueMigration = "140_owned_account_identity_unique_notx.sql"
@@ -62,8 +63,10 @@ const latestAPIKeyIPIndexMigration = "212_add_usage_logs_api_key_latest_ip_index
 const latestAPIKeyIPIndex = "idx_usage_logs_api_key_latest_ip"
 const usageLogImageInputTokensMigration = "216_usage_log_image_input_tokens.sql"
 const openAIOwnedAgentIdentityUniqueMigration = "217_openai_owned_agent_identity_unique_notx.sql"
+const accountShareModeGlobalInvitePolicyIndexesMigration = "220_account_share_mode_global_invite_policy_indexes_notx.sql"
 const accountShareSeatCostAutoIndexMaxRows int64 = 5_000_000
 const accountShareSeatCostAutoIndexMaxTableBytes int64 = 8 << 30
+const migrationIndexOptionDescNullsFirst int16 = 3
 
 type migrationCatalogName struct {
 	schema string
@@ -87,6 +90,7 @@ type migrationIndexKeyRequirement struct {
 	resultType          migrationCatalogName
 	operatorClass       migrationCatalogName
 	collation           migrationCatalogName
+	optionBits          int16
 }
 
 type migrationIndexRequirement struct {
@@ -214,6 +218,34 @@ var accountShareSeatCostIndexRequirements = []migrationIndexRequirement{
 				operatorClass: migrationInt8Key.operatorClass,
 			},
 		},
+	},
+}
+
+var accountShareModeGlobalInvitePolicyIndexRequirements = []migrationIndexRequirement{
+	{
+		index:        migrationCatalogName{schema: "public", name: "idx_account_share_mode_settlement_inviter"},
+		table:        migrationCatalogName{schema: "public", name: "account_share_mode_settlement_entries"},
+		accessMethod: "btree",
+		keys: []migrationIndexKeyRequirement{
+			migrationColumnKeyRequirement("inviter_user_id", migrationInt8Key),
+			{
+				column:        "created_at",
+				resultType:    migrationTimestamptzKey.resultType,
+				operatorClass: migrationTimestamptzKey.operatorClass,
+				optionBits:    migrationIndexOptionDescNullsFirst,
+			},
+		},
+		predicateCanonical: canonicalizeMigrationIndexExpression("inviter_user_id IS NOT NULL"),
+	},
+	{
+		index:        migrationCatalogName{schema: "public", name: "uq_account_share_mode_settlement_reversal"},
+		table:        migrationCatalogName{schema: "public", name: "account_share_mode_settlement_entries"},
+		accessMethod: "btree",
+		unique:       true,
+		keys: []migrationIndexKeyRequirement{
+			migrationColumnKeyRequirement("reversal_of_settlement_id", migrationInt8Key),
+		},
+		predicateCanonical: canonicalizeMigrationIndexExpression("reversal_of_settlement_id IS NOT NULL"),
 	},
 }
 
@@ -380,10 +412,16 @@ var migrationChecksumCompatibilityRules = map[string]migrationChecksumCompatibil
 // 返回：
 //   - error: 迁移过程中的任何错误
 func ApplyMigrations(ctx context.Context, db *sql.DB) error {
+	return ApplyMigrationsThrough(ctx, db, "")
+}
+
+// ApplyMigrationsThrough applies embedded migrations up to and including
+// target. An empty target applies the complete embedded migration set.
+func ApplyMigrationsThrough(ctx context.Context, db *sql.DB, target string) error {
 	if db == nil {
 		return errors.New("nil sql db")
 	}
-	return applyMigrationsFS(ctx, db, migrations.FS)
+	return applyMigrationsThroughFS(ctx, db, migrations.FS, target)
 }
 
 // ValidateMigrations verifies that every migration embedded in the running
@@ -395,22 +433,32 @@ func ApplyMigrations(ctx context.Context, db *sql.DB) error {
 // ignored. Cluster migrations are additive and backward compatible, so this
 // permits a controlled binary rollback without mutating schema history.
 func ValidateMigrations(ctx context.Context, db *sql.DB) error {
+	return ValidateMigrationsThrough(ctx, db, "")
+}
+
+// ValidateMigrationsThrough validates embedded migrations up to and including
+// target. It remains read-only and is used by green instances during an online
+// expand/contract deployment.
+func ValidateMigrationsThrough(ctx context.Context, db *sql.DB, target string) error {
 	if db == nil {
 		return errors.New("nil sql db")
 	}
-	return validateMigrationsFS(ctx, db, migrations.FS)
+	return validateMigrationsThroughFS(ctx, db, migrations.FS, target)
 }
 
 func validateMigrationsFS(ctx context.Context, db migrationDatabase, fsys fs.FS) error {
+	return validateMigrationsThroughFS(ctx, db, fsys, "")
+}
+
+func validateMigrationsThroughFS(ctx context.Context, db migrationDatabase, fsys fs.FS, target string) error {
 	if db == nil {
 		return errors.New("nil migration database")
 	}
 
-	files, err := fs.Glob(fsys, "*.sql")
+	files, err := migrationFilesThrough(fsys, target)
 	if err != nil {
-		return fmt.Errorf("list migrations: %w", err)
+		return err
 	}
-	sort.Strings(files)
 
 	for _, name := range files {
 		contentBytes, err := fs.ReadFile(fsys, name)
@@ -473,8 +521,17 @@ func validateMigrationsFS(ctx context.Context, db migrationDatabase, fsys fs.FS)
 //   - db: 数据库连接
 //   - fsys: 包含迁移文件的文件系统（通常是 embed.FS）
 func applyMigrationsFS(ctx context.Context, db *sql.DB, fsys fs.FS) error {
+	return applyMigrationsThroughFS(ctx, db, fsys, "")
+}
+
+func applyMigrationsThroughFS(ctx context.Context, db *sql.DB, fsys fs.FS, target string) error {
 	if db == nil {
 		return errors.New("nil sql db")
+	}
+	// Resolve the target before acquiring a connection or taking the advisory
+	// lock so a typo cannot cause any database write.
+	if _, err := migrationFilesThrough(fsys, target); err != nil {
+		return err
 	}
 	conn, err := db.Conn(ctx)
 	if err != nil {
@@ -483,10 +540,14 @@ func applyMigrationsFS(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 	defer func() {
 		_ = conn.Close()
 	}()
-	return applyMigrationsOnConnectionFS(ctx, conn, fsys)
+	return applyMigrationsOnConnectionThroughFS(ctx, conn, fsys, target)
 }
 
 func applyMigrationsOnConnectionFS(ctx context.Context, db migrationDatabase, fsys fs.FS) error {
+	return applyMigrationsOnConnectionThroughFS(ctx, db, fsys, "")
+}
+
+func applyMigrationsOnConnectionThroughFS(ctx context.Context, db migrationDatabase, fsys fs.FS, target string) error {
 	// 获取分布式锁，确保多实例部署时只有一个实例执行迁移。
 	// 这是 PostgreSQL 特有的 Advisory Lock 机制。
 	if err := pgAdvisoryLock(ctx, db); err != nil {
@@ -514,11 +575,10 @@ func applyMigrationsOnConnectionFS(ctx context.Context, db migrationDatabase, fs
 
 	// 获取所有 .sql 迁移文件并按文件名排序。
 	// 命名规范：使用零填充数字前缀（如 001_init.sql, 002_add_users.sql）。
-	files, err := fs.Glob(fsys, "*.sql")
+	files, err := migrationFilesThrough(fsys, target)
 	if err != nil {
-		return fmt.Errorf("list migrations: %w", err)
+		return err
 	}
-	sort.Strings(files) // 确保按文件名顺序执行迁移
 
 	for _, name := range files {
 		// 读取迁移文件内容
@@ -571,6 +631,22 @@ func applyMigrationsOnConnectionFS(ctx context.Context, db migrationDatabase, fs
 		}
 
 		if nonTx {
+			if strings.HasSuffix(strings.ToLower(name), onlineMigrationSuffix) {
+				statements := splitSQLStatements(content)
+				for i, stmt := range statements {
+					trimmed := strings.TrimSpace(stmt)
+					if stripSQLLineComment(trimmed) == "" {
+						continue
+					}
+					if _, err := db.ExecContext(ctx, trimmed); err != nil {
+						return fmt.Errorf("apply migration %s (online statement %d): %w", name, i+1, err)
+					}
+				}
+				if _, err := db.ExecContext(ctx, "INSERT INTO schema_migrations (filename, checksum) VALUES ($1, $2)", name, checksum); err != nil {
+					return fmt.Errorf("record migration %s (online): %w", name, err)
+				}
+				continue
+			}
 			if err := prepareNonTransactionalMigration(ctx, db, name); err != nil {
 				return fmt.Errorf("prepare migration %s: %w", name, err)
 			}
@@ -647,6 +723,24 @@ func applyMigrationsOnConnectionFS(ctx context.Context, db migrationDatabase, fs
 	}
 
 	return nil
+}
+
+func migrationFilesThrough(fsys fs.FS, target string) ([]string, error) {
+	files, err := fs.Glob(fsys, "*.sql")
+	if err != nil {
+		return nil, fmt.Errorf("list migrations: %w", err)
+	}
+	sort.Strings(files)
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return files, nil
+	}
+	for i, name := range files {
+		if name == target {
+			return files[:i+1], nil
+		}
+	}
+	return nil, fmt.Errorf("migration target %q is not embedded in this binary", target)
 }
 
 func verifyTransactionalMigrationResult(ctx context.Context, db migrationQueryExecutor, name string) error {
@@ -729,6 +823,8 @@ func prepareNonTransactionalMigration(ctx context.Context, db migrationDatabase,
 		return prepareAccountShareSeatCostQueryIndexesMigration(ctx, db)
 	case latestAPIKeyIPIndexMigration:
 		return prepareLatestAPIKeyIPIndexMigration(ctx, db)
+	case accountShareModeGlobalInvitePolicyIndexesMigration:
+		return prepareIndexesForRetry(ctx, db, accountShareModeGlobalInvitePolicyIndexRequirements)
 	default:
 		return nil
 	}
@@ -756,6 +852,16 @@ func verifyNonTransactionalMigrationResult(ctx context.Context, db migrationData
 		}
 		if !matches {
 			return errors.New("one or more OpenAI owned Agent Identity unique indexes are missing, invalid, or do not match migration 217")
+		}
+		return nil
+	}
+	if name == accountShareModeGlobalInvitePolicyIndexesMigration {
+		matches, err := indexesMatchRequirements(ctx, db, accountShareModeGlobalInvitePolicyIndexRequirements)
+		if err != nil {
+			return fmt.Errorf("verify account-share global invite policy index definitions: %w", err)
+		}
+		if !matches {
+			return errors.New("one or more account-share global invite policy indexes are missing, invalid, or do not match migration 220")
 		}
 		return nil
 	}
@@ -1503,7 +1609,7 @@ func migrationIndexMatchesRequirement(state migrationIndexCatalogState, requirem
 			actual.OpClassName != expected.operatorClass.name ||
 			actual.CollationSchema != expected.collation.schema ||
 			actual.CollationName != expected.collation.name ||
-			actual.OptionBits != 0 {
+			actual.OptionBits != expected.optionBits {
 			return false
 		}
 		if expected.expressionCanonical != "" {
@@ -1694,12 +1800,32 @@ func validateMigrationExecutionMode(name, content string) (bool, error) {
 	normalizedName := strings.ToLower(strings.TrimSpace(name))
 	upperContent := strings.ToUpper(content)
 	nonTx := strings.HasSuffix(normalizedName, nonTransactionalMigrationSuffix)
+	online := strings.HasSuffix(normalizedName, onlineMigrationSuffix)
 
-	if !nonTx {
+	if !nonTx && !online {
 		if strings.Contains(upperContent, "CONCURRENTLY") {
 			return false, errors.New("CONCURRENTLY statements must be placed in *_notx.sql migrations")
 		}
 		return false, nil
+	}
+
+	if online {
+		statements := splitSQLStatements(content)
+		if len(statements) != 3 {
+			return false, errors.New("*_online.sql must contain exactly CREATE PROCEDURE, CALL, and DROP PROCEDURE statements")
+		}
+		expectedPrefixes := []string{
+			"CREATE OR REPLACE PROCEDURE ",
+			"CALL ",
+			"DROP PROCEDURE IF EXISTS ",
+		}
+		for i, stmt := range statements {
+			normalizedStmt := strings.ToUpper(stripSQLLineComment(strings.TrimSpace(stmt)))
+			if !strings.HasPrefix(normalizedStmt, expectedPrefixes[i]) {
+				return false, fmt.Errorf("*_online.sql statement %d must start with %s", i+1, strings.TrimSpace(expectedPrefixes[i]))
+			}
+		}
+		return true, nil
 	}
 
 	if strings.Contains(upperContent, "BEGIN") || strings.Contains(upperContent, "COMMIT") || strings.Contains(upperContent, "ROLLBACK") {
@@ -1735,15 +1861,107 @@ func validateMigrationExecutionMode(name, content string) (bool, error) {
 }
 
 func splitSQLStatements(content string) []string {
-	parts := strings.Split(content, ";")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if strings.TrimSpace(part) == "" {
+	out := make([]string, 0, strings.Count(content, ";")+1)
+	start := 0
+	inSingleQuote := false
+	inDoubleQuote := false
+	inLineComment := false
+	blockCommentDepth := 0
+	dollarTag := ""
+
+	for i := 0; i < len(content); i++ {
+		if inLineComment {
+			if content[i] == '\n' {
+				inLineComment = false
+			}
 			continue
 		}
-		out = append(out, part)
+		if blockCommentDepth > 0 {
+			if i+1 < len(content) && content[i] == '/' && content[i+1] == '*' {
+				blockCommentDepth++
+				i++
+			} else if i+1 < len(content) && content[i] == '*' && content[i+1] == '/' {
+				blockCommentDepth--
+				i++
+			}
+			continue
+		}
+		if dollarTag != "" {
+			if strings.HasPrefix(content[i:], dollarTag) {
+				i += len(dollarTag) - 1
+				dollarTag = ""
+			}
+			continue
+		}
+		if inSingleQuote {
+			if content[i] == '\'' {
+				if i+1 < len(content) && content[i+1] == '\'' {
+					i++
+				} else {
+					inSingleQuote = false
+				}
+			}
+			continue
+		}
+		if inDoubleQuote {
+			if content[i] == '"' {
+				if i+1 < len(content) && content[i+1] == '"' {
+					i++
+				} else {
+					inDoubleQuote = false
+				}
+			}
+			continue
+		}
+
+		if i+1 < len(content) && content[i] == '-' && content[i+1] == '-' {
+			inLineComment = true
+			i++
+			continue
+		}
+		if i+1 < len(content) && content[i] == '/' && content[i+1] == '*' {
+			blockCommentDepth = 1
+			i++
+			continue
+		}
+		switch content[i] {
+		case '\'':
+			inSingleQuote = true
+		case '"':
+			inDoubleQuote = true
+		case '$':
+			if tag := migrationDollarQuoteTag(content[i:]); tag != "" {
+				dollarTag = tag
+				i += len(tag) - 1
+			}
+		case ';':
+			if stmt := strings.TrimSpace(content[start:i]); stmt != "" {
+				out = append(out, stmt)
+			}
+			start = i + 1
+		}
+	}
+	if stmt := strings.TrimSpace(content[start:]); stmt != "" {
+		out = append(out, stmt)
 	}
 	return out
+}
+
+func migrationDollarQuoteTag(s string) string {
+	if len(s) < 2 || s[0] != '$' {
+		return ""
+	}
+	for i := 1; i < len(s); i++ {
+		switch {
+		case s[i] == '$':
+			return s[:i+1]
+		case s[i] == '_' || s[i] >= '0' && s[i] <= '9' || s[i] >= 'A' && s[i] <= 'Z' || s[i] >= 'a' && s[i] <= 'z':
+			continue
+		default:
+			return ""
+		}
+	}
+	return ""
 }
 
 func stripSQLLineComment(s string) string {

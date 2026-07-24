@@ -667,45 +667,6 @@
         </div>
       </div>
 
-      <!-- Share mode (user accounts only) -->
-      <div v-if="isUserScope" class="border-t border-gray-200 pt-4 dark:border-dark-600">
-        <div class="mb-3 flex items-center justify-between">
-          <label
-            id="bulk-edit-share-mode-label"
-            class="input-label mb-0"
-            for="bulk-edit-share-mode-enabled"
-          >
-            {{ t('userAccounts.shareMode') }}
-          </label>
-          <input
-            v-model="enableShareMode"
-            id="bulk-edit-share-mode-enabled"
-            type="checkbox"
-            :disabled="!canBulkEditShareMode"
-            aria-controls="bulk-edit-share-mode"
-            :class="[
-              'rounded border-gray-300 text-primary-600 focus:ring-primary-500',
-              !canBulkEditShareMode && 'cursor-not-allowed opacity-50'
-            ]"
-          />
-        </div>
-        <div
-          id="bulk-edit-share-mode"
-          :class="(!enableShareMode || !canBulkEditShareMode) && 'pointer-events-none opacity-50'"
-        >
-          <Select
-            v-model="shareMode"
-            :options="shareModeOptions"
-            :disabled="!enableShareMode || !canBulkEditShareMode"
-            aria-labelledby="bulk-edit-share-mode-label"
-          />
-          <p v-if="hasAccountShareModeOnly" class="input-hint text-emerald-700 dark:text-emerald-300">
-            {{ t('userAccounts.accountShareModeOnlyBulkHint') }}
-          </p>
-          <p v-else class="input-hint">{{ t('userAccounts.shareModeHint') }}</p>
-        </div>
-      </div>
-
       <!-- Status -->
       <div v-if="!isUserScope" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
@@ -1167,15 +1128,13 @@ interface Props {
   allowProxy?: boolean
   allowBillingRate?: boolean
   allowBaseUrl?: boolean
-  hasAccountShareModeOnly?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
   accountScope: 'admin',
   allowProxy: true,
   allowBillingRate: true,
-  allowBaseUrl: true,
-  hasAccountShareModeOnly: false
+  allowBaseUrl: true
 })
 const emit = defineEmits<{
   close: []
@@ -1188,8 +1147,6 @@ const authStore = useAuthStore()
 const adminSettingsStore = useAdminSettingsStore()
 const accountScope = computed(() => props.accountScope ?? 'admin')
 const isUserScope = computed(() => accountScope.value === 'user')
-const hasAccountShareModeOnly = computed(() => props.hasAccountShareModeOnly === true)
-const canBulkEditShareMode = computed(() => isUserScope.value && !hasAccountShareModeOnly.value)
 const canManageProxy = computed(() => !isUserScope.value && props.allowProxy !== false)
 const canManageBillingRate = computed(() => !isUserScope.value && props.allowBillingRate !== false)
 const canManageBaseUrl = computed(() => !isUserScope.value && props.allowBaseUrl !== false)
@@ -1312,7 +1269,6 @@ const enableLoadFactor = ref(false)
 const enablePriority = ref(false)
 const enableAccountLevel = ref(false)
 const enableRateMultiplier = ref(false)
-const enableShareMode = ref(false)
 const enableStatus = ref(false)
 const enableGroups = ref(false)
 const enableOpenAIPassthrough = ref(false)
@@ -1340,7 +1296,6 @@ const loadFactor = ref<number | null>(null)
 const priority = ref(1)
 const accountLevel = ref<AccountLevel>('unknown')
 const rateMultiplier = ref(1)
-const shareMode = ref<'private' | 'public'>('private')
 const status = ref<'active' | 'inactive' | 'disabled'>('active')
 const groupIds = ref<number[]>([])
 const openaiPassthroughEnabled = ref(false)
@@ -1398,10 +1353,6 @@ const accountLevelOptions = computed(() =>
     unknownLabel: t('admin.accounts.accountLevel.unknown')
   })
 )
-const shareModeOptions = computed(() => [
-  { value: 'private', label: t('userAccounts.privateMode') },
-  { value: 'public', label: t('userAccounts.publicMode') }
-])
 const isOpenAIModelRestrictionDisabled = computed(
   () =>
     allOpenAIPassthroughCapable.value &&
@@ -1549,10 +1500,6 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
 
   if (canManageBillingRate.value && enableRateMultiplier.value) {
     updates.rate_multiplier = rateMultiplier.value
-  }
-
-  if (canBulkEditShareMode.value && enableShareMode.value) {
-    updates.share_mode = shareMode.value
   }
 
   if (enableStatus.value) {
@@ -1774,12 +1721,6 @@ const handleSubmit = async () => {
     appStore.showError(t('admin.accounts.bulkEdit.noSelection'))
     return
   }
-  if (isUserScope.value && enableShareMode.value && !canBulkEditShareMode.value) {
-    appStore.showError(t('userAccounts.accountShareModeOnlyBulkHint'))
-    enableShareMode.value = false
-    return
-  }
-
   const hasAnyFieldEnabled =
     (canManageBaseUrl.value && enableBaseUrl.value) ||
     enableOpenAIPassthrough.value ||
@@ -1792,7 +1733,6 @@ const handleSubmit = async () => {
     enablePriority.value ||
     (canManageAccountLevel.value && enableAccountLevel.value) ||
     (canManageBillingRate.value && enableRateMultiplier.value) ||
-    (canBulkEditShareMode.value && enableShareMode.value) ||
     enableStatus.value ||
     (canManageGroups.value && enableGroups.value) ||
     enableOpenAIWSMode.value ||
@@ -1908,7 +1848,6 @@ watch(
       enablePriority.value = false
       enableAccountLevel.value = false
       enableRateMultiplier.value = false
-      enableShareMode.value = false
       enableStatus.value = false
       enableGroups.value = false
       enableOpenAIPassthrough.value = false
@@ -1933,7 +1872,6 @@ watch(
       priority.value = PERSONAL_ACCOUNT_DEFAULT_PRIORITY
       accountLevel.value = 'unknown'
       rateMultiplier.value = 1
-      shareMode.value = 'private'
       status.value = 'active'
       groupIds.value = []
       openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
@@ -1955,12 +1893,6 @@ watch(
     }
   }
 )
-
-watch(hasAccountShareModeOnly, (blocked) => {
-  if (blocked) {
-    enableShareMode.value = false
-  }
-})
 
 watch(
   [bulkEditableGroups, canManageGroups],

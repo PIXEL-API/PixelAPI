@@ -1044,6 +1044,16 @@ export type AccountShareStatus = "pending" | "approved" | "suspended";
 export type AccountStatus = "active" | "inactive" | "disabled" | "error";
 export type OAuthAddMethod = "oauth" | "setup-token";
 export type ProxyProtocol = "http" | "https" | "socks5" | "socks5h";
+export type AccountExternalPlacementTarget = "private" | "public_pool" | "room";
+
+export interface AccountExternalPlacement {
+  target: AccountExternalPlacementTarget;
+  room_id?: number | null;
+  room_name?: string;
+  public_group_id?: number | null;
+  state: string;
+  version: number;
+}
 
 // Claude Model type (returned by /v1/models and account models API)
 export interface ClaudeModel {
@@ -1192,6 +1202,7 @@ export interface Account {
   share_status?: AccountShareStatus | string;
   share_policy_id?: number | null;
   account_share_mode_listing_id?: number | null;
+  external_placement?: AccountExternalPlacement | null;
   concurrency: number;
   load_factor?: number | null;
   load_factor_paid_ceiling?: number;

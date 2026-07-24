@@ -1292,6 +1292,9 @@ type DatabaseConfig struct {
 	SSLMode  string `mapstructure:"sslmode"`
 	// MigrationMode: migrate 自动应用迁移（单实例兼容默认值）；validate 仅校验迁移状态。
 	MigrationMode string `mapstructure:"migration_mode"`
+	// MigrationThrough limits apply/validate to the named migration during an
+	// online expand/contract rollout. Empty means the complete embedded set.
+	MigrationThrough string `mapstructure:"migration_through"`
 	// 连接池配置（性能优化：可配置化连接池参数）
 	// MaxOpenConns: 最大打开连接数，控制数据库连接上限，防止资源耗尽
 	MaxOpenConns int `mapstructure:"max_open_conns"`
@@ -1732,6 +1735,7 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	cfg.Cluster.DeploymentID = strings.TrimSpace(cfg.Cluster.DeploymentID)
 	cfg.Cluster.NodeID = strings.TrimSpace(cfg.Cluster.NodeID)
 	cfg.Database.MigrationMode = strings.ToLower(strings.TrimSpace(cfg.Database.MigrationMode))
+	cfg.Database.MigrationThrough = strings.TrimSpace(cfg.Database.MigrationThrough)
 	cfg.JWT.Secret = strings.TrimSpace(cfg.JWT.Secret)
 	cfg.LinuxDo.ClientID = strings.TrimSpace(cfg.LinuxDo.ClientID)
 	cfg.LinuxDo.ClientSecret = strings.TrimSpace(cfg.LinuxDo.ClientSecret)
@@ -2049,6 +2053,7 @@ func setDefaults() {
 	viper.SetDefault("database.dbname", "sub2api")
 	viper.SetDefault("database.sslmode", "prefer")
 	viper.SetDefault("database.migration_mode", DatabaseMigrationModeMigrate)
+	viper.SetDefault("database.migration_through", "")
 	viper.SetDefault("database.max_open_conns", 50)
 	viper.SetDefault("database.max_idle_conns", 15)
 	viper.SetDefault("database.conn_max_lifetime_minutes", 30)
@@ -2769,6 +2774,10 @@ func (c *Config) Validate() error {
 	case DatabaseMigrationModeMigrate, DatabaseMigrationModeValidate:
 	default:
 		return fmt.Errorf("database.migration_mode must be one of: migrate/validate")
+	}
+	if strings.ContainsAny(c.Database.MigrationThrough, `/\`) ||
+		(c.Database.MigrationThrough != "" && !strings.HasSuffix(c.Database.MigrationThrough, ".sql")) {
+		return fmt.Errorf("database.migration_through must be an embedded migration filename ending in .sql")
 	}
 	if c.Database.MaxOpenConns <= 0 {
 		return fmt.Errorf("database.max_open_conns must be positive")

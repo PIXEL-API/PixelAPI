@@ -3221,20 +3221,47 @@ func (r *usageLogRepository) getUserAccountSharingAccountStats(ctx context.Conte
 			  AND ul.created_at < $3
 			GROUP BY ul.account_id
 		),
-		external_usage AS (
+		external_settlements AS (
 			SELECT
 				account_id,
-				COUNT(*) AS external_requests,
-				COALESCE(SUM(consumer_charge), 0) AS external_consumer_charge,
-				COALESCE(SUM(account_cost), 0) AS external_account_cost,
-				COALESCE(SUM(owner_credit), 0) AS external_owner_credit,
-				COALESCE(SUM(platform_fee), 0) AS external_platform_fee
+				1::bigint AS external_requests,
+				consumer_charge,
+				account_cost,
+				owner_credit,
+				platform_fee
 			FROM account_share_settlement_entries
 			WHERE owner_user_id = $1
 			  AND consumer_user_id <> owner_user_id
 			  AND status = 'applied'
 			  AND created_at >= $2
 			  AND created_at < $3
+			UNION ALL
+			SELECT
+				sm.account_id,
+				CASE WHEN sm.settlement_type = 'usage_request' THEN 1 ELSE 0 END AS external_requests,
+				CASE WHEN sm.settlement_type = 'seat_waiver_refund' THEN -sm.refund_amount ELSE sm.total_charge END AS consumer_charge,
+				sm.account_cost,
+				CASE WHEN sm.settlement_type = 'seat_waiver_refund' THEN -sm.owner_credit ELSE sm.owner_credit END AS owner_credit,
+				CASE WHEN sm.settlement_type = 'seat_waiver_refund' THEN -sm.platform_credit ELSE sm.platform_credit END AS platform_fee
+			FROM account_share_mode_settlement_entries sm
+			WHERE sm.owner_user_id = $1
+			  AND sm.consumer_user_id <> sm.owner_user_id
+			  AND sm.created_at >= $2
+			  AND sm.created_at < $3
+			  AND (
+				  settlement_type IN ('usage_request', 'seat_charge')
+				  OR (settlement_type = 'seat_waiver_refund' AND reversal_of_settlement_id IS NOT NULL)
+			  )
+		),
+		external_usage AS (
+			SELECT
+				account_id,
+				COALESCE(SUM(external_requests), 0) AS external_requests,
+				COALESCE(SUM(consumer_charge), 0) AS external_consumer_charge,
+				COALESCE(SUM(account_cost), 0) AS external_account_cost,
+				COALESCE(SUM(owner_credit), 0) AS external_owner_credit,
+				COALESCE(SUM(platform_fee), 0) AS external_platform_fee
+			FROM external_settlements
 			GROUP BY account_id
 		)
 		SELECT
@@ -3341,20 +3368,47 @@ func (r *usageLogRepository) getUserAccountSharingTrend(ctx context.Context, use
 			  AND ul.created_at < $3
 			GROUP BY bucket_key
 		),
-		external_usage AS (
+		external_settlements AS (
 			SELECT
-				%s AS bucket_key,
-				COUNT(*) AS external_requests,
-				COALESCE(SUM(consumer_charge), 0) AS external_consumer_charge,
-				COALESCE(SUM(account_cost), 0) AS external_account_cost,
-				COALESCE(SUM(owner_credit), 0) AS external_owner_credit,
-				COALESCE(SUM(platform_fee), 0) AS external_platform_fee
+				created_at,
+				1::bigint AS external_requests,
+				consumer_charge,
+				account_cost,
+				owner_credit,
+				platform_fee
 			FROM account_share_settlement_entries
 			WHERE owner_user_id = $1
 			  AND consumer_user_id <> owner_user_id
 			  AND status = 'applied'
 			  AND created_at >= $2
 			  AND created_at < $3
+			UNION ALL
+			SELECT
+				sm.created_at,
+				CASE WHEN sm.settlement_type = 'usage_request' THEN 1 ELSE 0 END AS external_requests,
+				CASE WHEN sm.settlement_type = 'seat_waiver_refund' THEN -sm.refund_amount ELSE sm.total_charge END AS consumer_charge,
+				sm.account_cost,
+				CASE WHEN sm.settlement_type = 'seat_waiver_refund' THEN -sm.owner_credit ELSE sm.owner_credit END AS owner_credit,
+				CASE WHEN sm.settlement_type = 'seat_waiver_refund' THEN -sm.platform_credit ELSE sm.platform_credit END AS platform_fee
+			FROM account_share_mode_settlement_entries sm
+			WHERE sm.owner_user_id = $1
+			  AND sm.consumer_user_id <> sm.owner_user_id
+			  AND sm.created_at >= $2
+			  AND sm.created_at < $3
+			  AND (
+				  settlement_type IN ('usage_request', 'seat_charge')
+				  OR (settlement_type = 'seat_waiver_refund' AND reversal_of_settlement_id IS NOT NULL)
+			  )
+		),
+		external_usage AS (
+			SELECT
+				%s AS bucket_key,
+				COALESCE(SUM(external_requests), 0) AS external_requests,
+				COALESCE(SUM(consumer_charge), 0) AS external_consumer_charge,
+				COALESCE(SUM(account_cost), 0) AS external_account_cost,
+				COALESCE(SUM(owner_credit), 0) AS external_owner_credit,
+				COALESCE(SUM(platform_fee), 0) AS external_platform_fee
+			FROM external_settlements
 			GROUP BY bucket_key
 		)
 		SELECT

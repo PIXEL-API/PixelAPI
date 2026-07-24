@@ -381,7 +381,7 @@ describe('BulkEditAccountModal', () => {
     })
   })
 
-  it('用户作用域批量编辑分组只展示当前账号平台兼容分组', async () => {
+  it('用户作用域不再展示旧共享模式和分组入口', async () => {
     const wrapper = mountModal({
       accountScope: 'user',
       selectedPlatforms: ['openai'],
@@ -403,12 +403,12 @@ describe('BulkEditAccountModal', () => {
       }
     })
 
-    expect(wrapper.find('#bulk-edit-share-mode-enabled').exists()).toBe(true)
+    expect(wrapper.find('#bulk-edit-share-mode-enabled').exists()).toBe(false)
     expect(wrapper.find('#bulk-edit-groups-enabled').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('private-u9-openai')
   })
 
-  it('用户作用域提交分组更新时调用用户接口', async () => {
+  it('用户作用域提交普通字段时调用用户接口且不包含 share_mode', async () => {
     const wrapper = mountModal({
       accountScope: 'user',
       selectedPlatforms: ['openai'],
@@ -437,24 +437,25 @@ describe('BulkEditAccountModal', () => {
       }
     })
 
-    await wrapper.get('#bulk-edit-share-mode-enabled').setValue(true)
-    await wrapper.get('select[aria-labelledby="bulk-edit-share-mode-label"]').setValue('public')
+    await wrapper.get('#bulk-edit-concurrency-enabled').setValue(true)
+    await wrapper.get('#bulk-edit-concurrency').setValue(8)
     await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
     await flushPromises()
 
     expect(accountsAPI.bulkUpdate).toHaveBeenCalledWith([1, 2], {
-      share_mode: 'public'
+      concurrency: 8
     })
+    expect(vi.mocked(accountsAPI.bulkUpdate).mock.calls[0]?.[1]).not.toHaveProperty('share_mode')
     expect(adminAPI.accounts.bulkUpdate).not.toHaveBeenCalled()
   })
 
-  it('用户作用域批量改为公共共享时支持后台任务响应', async () => {
+  it('用户作用域普通批量更新支持后台任务响应', async () => {
     vi.mocked(accountsAPI.bulkUpdate).mockResolvedValueOnce({
       async: true,
       task: {
         id: 77,
         scope: 'user',
-        operation: 'user_set_public_share',
+        operation: 'user_bulk_update',
         status: 'pending',
         total: 2,
         processed: 0,
@@ -472,18 +473,19 @@ describe('BulkEditAccountModal', () => {
       selectedTypes: ['oauth']
     })
 
-    await wrapper.get('#bulk-edit-share-mode-enabled').setValue(true)
-    await wrapper.get('select[aria-labelledby="bulk-edit-share-mode-label"]').setValue('public')
+    await wrapper.get('#bulk-edit-concurrency-enabled').setValue(true)
+    await wrapper.get('#bulk-edit-concurrency').setValue(8)
     await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
     await flushPromises()
 
     expect(accountsAPI.bulkUpdate).toHaveBeenCalledWith([1, 2], {
-      share_mode: 'public'
+      concurrency: 8
     })
+    expect(vi.mocked(accountsAPI.bulkUpdate).mock.calls[0]?.[1]).not.toHaveProperty('share_mode')
     expect(wrapper.emitted('updated')?.[0]).toEqual([
       expect.objectContaining({
         async: true,
-        task: expect.objectContaining({ id: 77, operation: 'user_set_public_share' })
+        task: expect.objectContaining({ id: 77, operation: 'user_bulk_update' })
       })
     ])
   })

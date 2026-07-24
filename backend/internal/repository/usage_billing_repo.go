@@ -19,8 +19,10 @@ import (
 )
 
 const (
-	usageBillingMaxAttempts    = 3
-	usageBillingRetryBaseDelay = 25 * time.Millisecond
+	usageBillingMaxAttempts           = 3
+	usageBillingRetryBaseDelay        = 25 * time.Millisecond
+	affiliateLedgerActionShareAccrue  = "share_accrue"
+	affiliateLedgerActionShareReverse = "share_reverse"
 )
 
 type usageBillingRepository struct {
@@ -186,6 +188,9 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 	}
 	if usageLogID > 0 {
 		result.UsageLogID = &usageLogID
+	}
+	if err := lockAccountShareModeMembershipBeforeWallet(ctx, tx, cmd); err != nil {
+		return err
 	}
 
 	if cmd.SubscriptionCost > 0 && cmd.SubscriptionID != nil {
@@ -775,12 +780,7 @@ func applyAccountShareModeSettlement(ctx context.Context, tx *sql.Tx, cmd *servi
 	if platformRatio.IsNegative() {
 		return fmt.Errorf("account share mode settlement ratios exceed 1")
 	}
-	ownerCredit := totalCharge.Mul(ownerRatio).Round(10)
-	inviteCredit := totalCharge.Mul(actualInviteRatio).Round(10)
-	platformCredit := totalCharge.Sub(ownerCredit).Sub(inviteCredit)
-	if platformCredit.IsNegative() {
-		return fmt.Errorf("account share mode settlement credits exceed total charge")
-	}
+	ownerCredit, inviteCredit, platformCredit := splitAccountShareCredits(totalCharge, ownerRatio, actualInviteRatio)
 	periodStartedAt, periodEndedAt := accountShareModeUsageRequestPeriod(cmd, snapshot)
 	inserted, err := insertAccountShareModeSettlement(
 		ctx,
@@ -877,6 +877,7 @@ func insertAccountShareModeSettlement(
 			base_charge,
 			hourly_charge,
 			total_charge,
+			account_cost,
 			owner_credit,
 			platform_credit,
 			rate_multiplier_snapshot,
@@ -897,10 +898,10 @@ func insertAccountShareModeSettlement(
 		)
 		VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
-			$8, $9, $10, $11, $12,
-			$13, $14, $15, $16, $17,
-			$18, $19, $20, $21, $22, $23,
-			$24, $25, $26,
+			$8, $9, $10, $11, $12, $13,
+			$14, $15, $16, $17, $18,
+			$19, $20, $21, $22, $23, $24,
+			$25, $26, $27,
 			NOW()
 		)
 		ON CONFLICT (usage_log_id) DO NOTHING
@@ -916,6 +917,7 @@ func insertAccountShareModeSettlement(
 		decimalFromFloat(snapshot.BaseCharge).StringFixed(10),
 		decimalFromFloat(snapshot.HourlyCharge).StringFixed(10),
 		decimalFromFloat(snapshot.TotalCharge).StringFixed(10),
+		accountCostForSettlement(cmd).StringFixed(10),
 		ownerCredit.StringFixed(10),
 		platformCredit.StringFixed(10),
 		decimalFromFloat(snapshot.RateMultiplier).StringFixed(4),
@@ -955,7 +957,7 @@ func updateAccountShareWaiverProgressCache(ctx context.Context, tx *sql.Tx, snap
 	var joinedAt time.Time
 	err := tx.QueryRowContext(ctx, `
 		SELECT joined_at
-		FROM account_share_memberships
+		FROM account_share_memberships m
 		WHERE id = $1
 			AND status = $2
 			AND deleted_at IS NULL
@@ -999,6 +1001,43 @@ func updateAccountShareWaiverProgressCache(ctx context.Context, tx *sql.Tx, snap
 			AND deleted_at IS NULL
 	`, snapshot.MembershipID, windowStart, overlapCharge.StringFixed(10), periodOccurredAt, service.AccountShareMembershipStatusActive)
 	return err
+}
+
+func lockAccountShareModeMembershipBeforeWallet(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand) error {
+	if tx == nil || cmd == nil || cmd.AccountShareModeSettlement == nil || cmd.AccountShareModeSettlement.MembershipID <= 0 {
+		return nil
+	}
+	var membershipID, listingID, accountID, ownerUserID, consumerUserID, apiKeyID int64
+	err := tx.QueryRowContext(ctx, `
+		SELECT m.id, m.listing_id, m.account_id, l.owner_user_id, m.consumer_user_id, m.api_key_id
+		FROM account_share_memberships m
+		JOIN account_share_listings l ON l.id = m.listing_id
+		WHERE m.id = $1
+		FOR UPDATE OF m
+	`, cmd.AccountShareModeSettlement.MembershipID).Scan(
+		&membershipID,
+		&listingID,
+		&accountID,
+		&ownerUserID,
+		&consumerUserID,
+		&apiKeyID,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return service.ErrAccountShareMembershipNotFound
+	}
+	if err != nil {
+		return err
+	}
+	snapshot := cmd.AccountShareModeSettlement
+	if membershipID != snapshot.MembershipID ||
+		listingID != snapshot.ListingID ||
+		accountID != snapshot.AccountID ||
+		ownerUserID != snapshot.OwnerUserID ||
+		consumerUserID != snapshot.ConsumerUserID ||
+		apiKeyID != snapshot.APIKeyID {
+		return service.ErrAccountShareBillingSnapshotMismatch
+	}
+	return nil
 }
 
 func accountShareModeWaiverWindowStartAt(joinedAt time.Time, at time.Time) time.Time {
@@ -1496,18 +1535,10 @@ func creditInviteShareBalanceEntry(ctx context.Context, tx *sql.Tx, input invite
 	}); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE user_affiliates
-		SET aff_history_quota = aff_history_quota + $1::numeric,
-			updated_at = NOW()
-		WHERE user_id = $2
-	`, input.Amount.StringFixed(10), input.InviterUserID); err != nil {
-		return err
-	}
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO user_affiliate_ledger (user_id, action, amount, source_user_id, created_at, updated_at)
-		VALUES ($1, 'accrue', $2::numeric, $3, NOW(), NOW())
-	`, input.InviterUserID, input.Amount.StringFixed(10), input.ConsumerUserID)
+		VALUES ($1, $2, $3::numeric, $4, NOW(), NOW())
+	`, input.InviterUserID, affiliateLedgerActionShareAccrue, input.Amount.StringFixed(10), input.ConsumerUserID)
 	return err
 }
 
@@ -1529,7 +1560,7 @@ func creditUsageBillingBalance(ctx context.Context, tx *sql.Tx, userID int64, am
 		UPDATE users
 		SET balance = balance + $1::numeric,
 			updated_at = NOW()
-		WHERE id = $2 AND deleted_at IS NULL
+		WHERE id = $2
 		RETURNING balance
 	`, amount.StringFixed(10), userID).Scan(&newBalance)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1568,6 +1599,28 @@ func decimalFromFloat(v float64) decimal.Decimal {
 
 func decimalFromSignedFloat(v float64) decimal.Decimal {
 	return decimal.NewFromFloat(v).Round(10)
+}
+
+func splitAccountShareCredits(totalCharge, ownerRatio, inviteRatio decimal.Decimal) (decimal.Decimal, decimal.Decimal, decimal.Decimal) {
+	if totalCharge.LessThanOrEqual(decimal.Zero) {
+		return decimal.Zero, decimal.Zero, decimal.Zero
+	}
+	ownerCredit := totalCharge.Mul(ownerRatio).Round(10)
+	if ownerCredit.IsNegative() {
+		ownerCredit = decimal.Zero
+	}
+	if ownerCredit.GreaterThan(totalCharge) {
+		ownerCredit = totalCharge
+	}
+	remaining := totalCharge.Sub(ownerCredit)
+	inviteCredit := totalCharge.Mul(inviteRatio).Round(10)
+	if inviteCredit.IsNegative() {
+		inviteCredit = decimal.Zero
+	}
+	if inviteCredit.GreaterThan(remaining) {
+		inviteCredit = remaining
+	}
+	return ownerCredit, inviteCredit, remaining.Sub(inviteCredit)
 }
 
 func nullablePositiveInt64(v int64) any {

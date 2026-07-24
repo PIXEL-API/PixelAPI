@@ -268,6 +268,7 @@ const routes: RouteRecordRaw[] = [
       title: "Welfare Activities",
       titleKey: "activities.title",
       descriptionKey: "activities.description",
+      uiSkin: "v2",
     },
   },
   {

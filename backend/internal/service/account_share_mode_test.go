@@ -1641,14 +1641,14 @@ func TestAccountShareModeUpdateListingPassesAdminFlag(t *testing.T) {
 	}
 }
 
-func TestAccountShareModeUpdateListingRejectsAccountConcurrencyAboveLimit(t *testing.T) {
+func TestAccountShareModeUpdateListingRejectsRoomLevelAccountConcurrencyEdit(t *testing.T) {
 	repo := &accountShareModeRepoStub{}
 	svc := &AccountShareModeService{repo: repo}
 	concurrency := AccountShareModeMaxAccountConcurrency + 1
 
 	_, err := svc.UpdateListing(context.Background(), 42, true, 7, UpdateAccountShareListingInput{Concurrency: &concurrency, EditSessionID: "edit-session"})
-	if !errors.Is(err, ErrAccountShareModeInvalidConcurrency) {
-		t.Fatalf("expected invalid concurrency error, got %v", err)
+	if !errors.Is(err, ErrAccountShareRoomAccountConfigUnsupported) {
+		t.Fatalf("expected room-level account config rejection, got %v", err)
 	}
 	if repo.updateCalls != 0 {
 		t.Fatalf("expected repository not to be called, got %d calls", repo.updateCalls)

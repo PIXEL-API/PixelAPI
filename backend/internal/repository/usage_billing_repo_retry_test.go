@@ -11,8 +11,21 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/lib/pq"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSplitAccountShareCreditsCapsRoundedInviteAtRemainingBalance(t *testing.T) {
+	total := decimal.RequireFromString("0.0000000001")
+	ratio := decimal.RequireFromString("0.5")
+
+	owner, invite, platform := splitAccountShareCredits(total, ratio, ratio)
+
+	require.True(t, owner.Equal(total))
+	require.True(t, invite.IsZero())
+	require.True(t, platform.IsZero())
+	require.True(t, owner.Add(invite).Add(platform).Equal(total))
+}
 
 func TestUsageBillingRepositoryApplyRetriesDeadlockWithFreshTransaction(t *testing.T) {
 	db, mock := newSQLMock(t)
@@ -138,6 +151,47 @@ func TestAccountShareModeUsageRequestPeriodFallsBackToUsageOccurredAt(t *testing
 	startedAt, endedAt := accountShareModeUsageRequestPeriod(cmd, snapshot)
 	require.Equal(t, occurredAt.UTC(), endedAt)
 	require.Equal(t, occurredAt.UTC().Add(-1500*time.Millisecond), startedAt)
+}
+
+func TestLockAccountShareModeMembershipBeforeWalletUsesDeclaredMembershipAlias(t *testing.T) {
+	db, mock := newSQLMock(t)
+	mock.ExpectBegin()
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	snapshot := &service.AccountShareModeBillingSnapshot{
+		MembershipID:   11,
+		ListingID:      12,
+		AccountID:      13,
+		OwnerUserID:    14,
+		ConsumerUserID: 15,
+		APIKeyID:       16,
+	}
+	mock.ExpectQuery(`FROM account_share_memberships m\s+JOIN account_share_listings l ON l\.id = m\.listing_id`).
+		WithArgs(snapshot.MembershipID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id",
+			"listing_id",
+			"account_id",
+			"owner_user_id",
+			"consumer_user_id",
+			"api_key_id",
+		}).AddRow(
+			snapshot.MembershipID,
+			snapshot.ListingID,
+			snapshot.AccountID,
+			snapshot.OwnerUserID,
+			snapshot.ConsumerUserID,
+			snapshot.APIKeyID,
+		))
+	mock.ExpectRollback()
+
+	err = lockAccountShareModeMembershipBeforeWallet(context.Background(), tx, &service.UsageBillingCommand{
+		AccountShareModeSettlement: snapshot,
+	})
+	require.NoError(t, err)
+	require.NoError(t, tx.Rollback())
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestDeductUsageBillingWalletUsesNoKeyUpdateLock(t *testing.T) {

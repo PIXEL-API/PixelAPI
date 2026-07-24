@@ -90,6 +90,7 @@ type RevenueAdjustmentStats struct {
 	ShareConsumerCharge    float64 `json:"share_consumer_charge"`
 	ShareAccountCost       float64 `json:"share_account_cost"`
 	ShareOwnerCredit       float64 `json:"share_owner_credit"`
+	ShareInviteCredit      float64 `json:"share_invite_credit"`
 	SharePlatformFee       float64 `json:"share_platform_fee"`
 	ShareNetProfit         float64 `json:"share_net_profit"`
 	ShareSettlementCount   int64   `json:"share_settlement_count"`
@@ -130,6 +131,7 @@ type RevenueTrendPoint struct {
 	AffiliateRebate        float64 `json:"affiliate_rebate"`
 	PrivateGroupCommission float64 `json:"private_group_commission"`
 	ShareOwnerCredit       float64 `json:"share_owner_credit"`
+	ShareInviteCredit      float64 `json:"share_invite_credit"`
 	SharePlatformFee       float64 `json:"share_platform_fee"`
 	EstimatedNetProfit     float64 `json:"estimated_net_profit"`
 }
@@ -281,9 +283,9 @@ func (s *RevenueService) ListShareSettlements(ctx context.Context, params Revenu
 
 	limitArg := len(args) + 1
 	offsetArg := len(args) + 2
-	query := fmt.Sprintf(`
+	query := fmt.Sprintf(revenueShareSettlementSourceCTE+`
 		SELECT %s
-		FROM account_share_settlement_entries ase
+		FROM revenue_share_settlements ase
 		LEFT JOIN users cu ON cu.id = ase.consumer_user_id
 		LEFT JOIN users ou ON ou.id = ase.owner_user_id
 		LEFT JOIN users iu ON iu.id = ase.inviter_user_id
@@ -698,8 +700,8 @@ func (s *RevenueService) fillRevenueUsageStatsFromSnapshots(ctx context.Context,
 	startDate, endDate := revenueSnapshotDateRange(params)
 	statsSnapshotUserFilter := revenueSnapshotUserFilter("s.user_id", params.UserID, 5)
 	statsLiveUserFilter := revenueSnapshotUserFilter("ul.user_id", params.UserID, 5)
-	query := fmt.Sprintf(`
-		WITH snapshot_days AS (
+	query := fmt.Sprintf(revenueShareSettlementSourceCTE+`,
+		snapshot_days AS (
 			SELECT DISTINCT bucket_date
 			FROM revenue_daily_dimension_snapshots s
 			WHERE bucket_date >= $1::date AND bucket_date < $2::date
@@ -1003,19 +1005,16 @@ func (s *RevenueService) fillRevenueAffiliateStats(ctx context.Context, params R
 }
 
 func (s *RevenueService) fillRevenueShareStats(ctx context.Context, params RevenueQueryParams, out *RevenueSummary, pointIndex map[string]int) error {
-	if shouldUseRevenueDailySnapshots(params) {
-		return s.fillRevenueShareStatsFromSnapshots(ctx, params, out, pointIndex)
-	}
-
 	userFilter, userArgs := revenueUserFilter("consumer_user_id", params.UserID, 4)
-	query := `
+	query := revenueShareSettlementSourceCTE + `
 		SELECT
 			COALESCE(SUM(consumer_charge), 0)::double precision AS consumer_charge,
 			COALESCE(SUM(account_cost), 0)::double precision AS account_cost,
 			COALESCE(SUM(owner_credit), 0)::double precision AS owner_credit,
+			COALESCE(SUM(invite_credit), 0)::double precision AS invite_credit,
 			COALESCE(SUM(platform_fee), 0)::double precision AS platform_fee,
 			COUNT(*) AS settlement_count
-		FROM account_share_settlement_entries
+		FROM revenue_share_settlements
 		WHERE created_at >= $1 AND created_at < $2 AND status = $3
 			AND consumer_user_id <> owner_user_id
 	`
@@ -1026,6 +1025,7 @@ func (s *RevenueService) fillRevenueShareStats(ctx context.Context, params Reven
 		&out.Adjustments.ShareConsumerCharge,
 		&out.Adjustments.ShareAccountCost,
 		&out.Adjustments.ShareOwnerCredit,
+		&out.Adjustments.ShareInviteCredit,
 		&out.Adjustments.SharePlatformFee,
 		&out.Adjustments.ShareSettlementCount,
 	); err != nil {
@@ -1034,12 +1034,13 @@ func (s *RevenueService) fillRevenueShareStats(ctx context.Context, params Reven
 
 	bucketExpr := revenueBucketExpression("created_at", params.Granularity)
 	trendUserFilter, trendUserArgs := revenueUserFilter("consumer_user_id", params.UserID, 5)
-	trendQuery := fmt.Sprintf(`
+	trendQuery := fmt.Sprintf(revenueShareSettlementSourceCTE+`
 		SELECT
 			%s AS bucket,
 			COALESCE(SUM(owner_credit), 0)::double precision AS owner_credit,
+			COALESCE(SUM(invite_credit), 0)::double precision AS invite_credit,
 			COALESCE(SUM(platform_fee), 0)::double precision AS platform_fee
-		FROM account_share_settlement_entries
+		FROM revenue_share_settlements
 		WHERE created_at >= $1 AND created_at < $2 AND status = $4
 			AND consumer_user_id <> owner_user_id
 			%s
@@ -1055,153 +1056,18 @@ func (s *RevenueService) fillRevenueShareStats(ctx context.Context, params Reven
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var bucket string
-		var ownerCredit, platformFee float64
-		if err := rows.Scan(&bucket, &ownerCredit, &platformFee); err != nil {
+		var ownerCredit, inviteCredit, platformFee float64
+		if err := rows.Scan(&bucket, &ownerCredit, &inviteCredit, &platformFee); err != nil {
 			return fmt.Errorf("scan revenue share trend: %w", err)
 		}
 		if idx, ok := pointIndex[bucket]; ok {
 			out.Trend[idx].ShareOwnerCredit = ownerCredit
+			out.Trend[idx].ShareInviteCredit = inviteCredit
 			out.Trend[idx].SharePlatformFee = platformFee
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterate revenue share trend: %w", err)
-	}
-	return nil
-}
-
-func (s *RevenueService) fillRevenueShareStatsFromSnapshots(ctx context.Context, params RevenueQueryParams, out *RevenueSummary, pointIndex map[string]int) error {
-	startDate, endDate := revenueSnapshotDateRange(params)
-	statsSnapshotUserFilter := revenueSnapshotUserFilter("s.user_id", params.UserID, 5)
-	statsLiveUserFilter := revenueSnapshotUserFilter("ase.consumer_user_id", params.UserID, 5)
-	statsStatusPlaceholder := nextRevenuePlaceholder(params.UserID, 5)
-	query := fmt.Sprintf(`
-		WITH snapshot_days AS (
-			SELECT DISTINCT bucket_date
-			FROM revenue_daily_dimension_snapshots s
-			WHERE bucket_date >= $1::date AND bucket_date < $2::date
-				%s
-		),
-		combined AS (
-			SELECT
-				s.bucket_date,
-				SUM(s.share_consumer_charge)::double precision AS consumer_charge,
-				SUM(s.share_account_cost)::double precision AS account_cost,
-				SUM(s.share_owner_credit)::double precision AS owner_credit,
-				SUM(s.share_platform_fee)::double precision AS platform_fee,
-				SUM(CASE WHEN s.share_owner_credit > 0 OR s.share_platform_fee > 0 THEN s.total_requests ELSE 0 END)::bigint AS settlement_count
-			FROM revenue_daily_dimension_snapshots s
-			WHERE s.bucket_date >= $1::date AND s.bucket_date < $2::date
-				%s
-			GROUP BY s.bucket_date
-			UNION ALL
-			SELECT
-				(ase.created_at AT TIME ZONE 'Asia/Shanghai')::date AS bucket_date,
-				COALESCE(SUM(ase.consumer_charge), 0)::double precision AS consumer_charge,
-				COALESCE(SUM(ase.account_cost), 0)::double precision AS account_cost,
-				COALESCE(SUM(ase.owner_credit), 0)::double precision AS owner_credit,
-				COALESCE(SUM(ase.platform_fee), 0)::double precision AS platform_fee,
-				COUNT(*)::bigint AS settlement_count
-			FROM account_share_settlement_entries ase
-			WHERE ase.created_at >= $3 AND ase.created_at < $4 AND ase.status = $%d
-				AND ase.consumer_user_id <> ase.owner_user_id
-				AND NOT EXISTS (
-					SELECT 1
-					FROM snapshot_days sd
-					WHERE sd.bucket_date = (ase.created_at AT TIME ZONE 'Asia/Shanghai')::date
-				)
-				%s
-			GROUP BY 1
-		)
-		SELECT
-			COALESCE(SUM(consumer_charge), 0)::double precision,
-			COALESCE(SUM(account_cost), 0)::double precision,
-			COALESCE(SUM(owner_credit), 0)::double precision,
-			COALESCE(SUM(platform_fee), 0)::double precision,
-			COALESCE(SUM(settlement_count), 0)::bigint
-		FROM combined
-	`, statsSnapshotUserFilter, statsSnapshotUserFilter, statsStatusPlaceholder, statsLiveUserFilter)
-	args := []any{startDate, endDate, params.StartTime, params.EndTime}
-	if params.UserID != nil {
-		args = append(args, *params.UserID)
-	}
-	args = append(args, revenueShareStatusApplied)
-	if err := s.querySingle(ctx, query, args,
-		&out.Adjustments.ShareConsumerCharge,
-		&out.Adjustments.ShareAccountCost,
-		&out.Adjustments.ShareOwnerCredit,
-		&out.Adjustments.SharePlatformFee,
-		&out.Adjustments.ShareSettlementCount,
-	); err != nil {
-		return fmt.Errorf("query revenue share snapshot stats: %w", err)
-	}
-
-	trendSnapshotUserFilter := revenueSnapshotUserFilter("s.user_id", params.UserID, 6)
-	trendLiveUserFilter := revenueSnapshotUserFilter("ase.consumer_user_id", params.UserID, 6)
-	trendStatusPlaceholder := nextRevenuePlaceholder(params.UserID, 6)
-	trendQuery := fmt.Sprintf(`
-		WITH snapshot_days AS (
-			SELECT DISTINCT bucket_date
-			FROM revenue_daily_dimension_snapshots s
-			WHERE bucket_date >= $1::date AND bucket_date < $2::date
-				%s
-		),
-		combined AS (
-			SELECT
-				TO_CHAR(s.bucket_date::timestamp, 'YYYY-MM-DD') AS bucket,
-				SUM(s.share_owner_credit)::double precision AS owner_credit,
-				SUM(s.share_platform_fee)::double precision AS platform_fee
-			FROM revenue_daily_dimension_snapshots s
-			WHERE s.bucket_date >= $1::date AND s.bucket_date < $2::date
-				%s
-			GROUP BY 1
-			UNION ALL
-			SELECT
-				TO_CHAR(ase.created_at AT TIME ZONE $5, 'YYYY-MM-DD') AS bucket,
-				COALESCE(SUM(ase.owner_credit), 0)::double precision AS owner_credit,
-				COALESCE(SUM(ase.platform_fee), 0)::double precision AS platform_fee
-			FROM account_share_settlement_entries ase
-			WHERE ase.created_at >= $3 AND ase.created_at < $4 AND ase.status = $%d
-				AND ase.consumer_user_id <> ase.owner_user_id
-				AND NOT EXISTS (
-					SELECT 1
-					FROM snapshot_days sd
-					WHERE sd.bucket_date = (ase.created_at AT TIME ZONE 'Asia/Shanghai')::date
-				)
-				%s
-			GROUP BY 1
-		)
-		SELECT
-			bucket,
-			COALESCE(SUM(owner_credit), 0)::double precision,
-			COALESCE(SUM(platform_fee), 0)::double precision
-		FROM combined
-		GROUP BY bucket
-		ORDER BY bucket
-	`, trendSnapshotUserFilter, trendSnapshotUserFilter, trendStatusPlaceholder, trendLiveUserFilter)
-	trendArgs := []any{startDate, endDate, params.StartTime, params.EndTime, params.Timezone}
-	if params.UserID != nil {
-		trendArgs = append(trendArgs, *params.UserID)
-	}
-	trendArgs = append(trendArgs, revenueShareStatusApplied)
-	rows, err := s.entClient.QueryContext(ctx, trendQuery, trendArgs...)
-	if err != nil {
-		return fmt.Errorf("query revenue share snapshot trend: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var bucket string
-		var ownerCredit, platformFee float64
-		if err := rows.Scan(&bucket, &ownerCredit, &platformFee); err != nil {
-			return fmt.Errorf("scan revenue share snapshot trend: %w", err)
-		}
-		if idx, ok := pointIndex[bucket]; ok {
-			out.Trend[idx].ShareOwnerCredit = ownerCredit
-			out.Trend[idx].SharePlatformFee = platformFee
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate revenue share snapshot trend: %w", err)
 	}
 	return nil
 }
@@ -1276,12 +1142,13 @@ func finalizeRevenueSummary(out *RevenueSummary) {
 	out.Adjustments.ShareConsumerCharge = roundRevenue(out.Adjustments.ShareConsumerCharge)
 	out.Adjustments.ShareAccountCost = roundRevenue(out.Adjustments.ShareAccountCost)
 	out.Adjustments.ShareOwnerCredit = roundRevenue(out.Adjustments.ShareOwnerCredit)
+	out.Adjustments.ShareInviteCredit = roundRevenue(out.Adjustments.ShareInviteCredit)
 	out.Adjustments.SharePlatformFee = roundRevenue(out.Adjustments.SharePlatformFee)
 	out.Adjustments.ShareNetProfit = roundRevenue(out.Adjustments.SharePlatformFee - out.Adjustments.ShareAccountCost)
 
 	out.Profit.UsageGrossProfit = roundRevenue(out.Usage.ConsumedRevenue - out.Usage.AccountCost)
 	out.Profit.UsageGrossMargin = marginRatio(out.Profit.UsageGrossProfit, out.Usage.ConsumedRevenue)
-	out.Profit.EstimatedNetProfit = roundRevenue(out.Usage.ConsumedRevenue - out.Usage.AccountCost - out.Adjustments.AffiliateRebate - out.Adjustments.ShareOwnerCredit + out.Adjustments.PrivateGroupCommission)
+	out.Profit.EstimatedNetProfit = roundRevenue(out.Usage.ConsumedRevenue - out.Usage.AccountCost - out.Adjustments.AffiliateRebate - out.Adjustments.ShareOwnerCredit - out.Adjustments.ShareInviteCredit + out.Adjustments.PrivateGroupCommission)
 	out.Profit.EstimatedNetMargin = marginRatio(out.Profit.EstimatedNetProfit, out.Usage.ConsumedRevenue)
 
 	out.PlatformLedger.TotalUserBalance = roundRevenue(out.PlatformLedger.TotalUserBalance)
@@ -1306,8 +1173,9 @@ func finalizeRevenueSummary(out *RevenueSummary) {
 		p.AffiliateRebate = roundRevenue(p.AffiliateRebate)
 		p.PrivateGroupCommission = roundRevenue(p.PrivateGroupCommission)
 		p.ShareOwnerCredit = roundRevenue(p.ShareOwnerCredit)
+		p.ShareInviteCredit = roundRevenue(p.ShareInviteCredit)
 		p.SharePlatformFee = roundRevenue(p.SharePlatformFee)
-		p.EstimatedNetProfit = roundRevenue(p.ConsumedRevenue - p.AccountCost - p.AffiliateRebate - p.ShareOwnerCredit + p.PrivateGroupCommission)
+		p.EstimatedNetProfit = roundRevenue(p.ConsumedRevenue - p.AccountCost - p.AffiliateRebate - p.ShareOwnerCredit - p.ShareInviteCredit + p.PrivateGroupCommission)
 	}
 }
 

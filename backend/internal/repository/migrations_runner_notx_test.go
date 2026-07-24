@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"regexp"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -70,6 +71,7 @@ func matchingMigrationIndexCatalogRows(
 			OpClassName:     expected.operatorClass.name,
 			CollationSchema: expected.collation.schema,
 			CollationName:   expected.collation.name,
+			OptionBits:      expected.optionBits,
 		}
 	}
 	if requirement.predicateCanonical != "" {
@@ -156,6 +158,35 @@ DROP INDEX CONCURRENTLY IF EXISTS idx_b;
 `)
 		require.True(t, nonTx)
 		require.NoError(t, err)
+	})
+
+	t.Run("online迁移允许受控过程分批提交", func(t *testing.T) {
+		nonTx, err := validateMigrationExecutionMode("001_backfill_online.sql", `
+CREATE OR REPLACE PROCEDURE backfill_rows()
+LANGUAGE plpgsql
+AS $procedure$
+BEGIN
+    UPDATE target SET migrated = TRUE WHERE id IN (
+        SELECT id FROM target WHERE NOT migrated ORDER BY id LIMIT 100
+    );
+    COMMIT;
+END
+$procedure$;
+CALL backfill_rows();
+DROP PROCEDURE IF EXISTS backfill_rows();
+`)
+		require.True(t, nonTx)
+		require.NoError(t, err)
+	})
+
+	t.Run("online迁移拒绝过程调用之外的顶层语句", func(t *testing.T) {
+		nonTx, err := validateMigrationExecutionMode("001_backfill_online.sql", `
+CREATE OR REPLACE PROCEDURE backfill_rows() LANGUAGE plpgsql AS $$ BEGIN COMMIT; END $$;
+UPDATE target SET migrated = TRUE;
+DROP PROCEDURE IF EXISTS backfill_rows();
+`)
+		require.False(t, nonTx)
+		require.Error(t, err)
 	})
 }
 
@@ -269,6 +300,140 @@ func TestPrepareAccountShareSeatCostIndexesMigrationDropsInvalidIndexBeforeRetry
 	err = prepareNonTransactionalMigration(context.Background(), db, accountShareSeatCostQueryIndexesMigration)
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPrepareAccountShareModeGlobalInvitePolicyIndexesDropsInvalidIndexBeforeRetry(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	for i, requirement := range accountShareModeGlobalInvitePolicyIndexRequirements {
+		invalid := i == 0
+		mock.ExpectQuery("SELECT EXISTS \\(").
+			WithArgs(requirement.index.name).
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(invalid))
+		if invalid {
+			mock.ExpectExec(regexp.QuoteMeta(
+				"DROP INDEX CONCURRENTLY IF EXISTS " + quoteMigrationCatalogName(requirement.index),
+			)).WillReturnResult(sqlmock.NewResult(0, 0))
+		}
+	}
+
+	err = prepareNonTransactionalMigration(context.Background(), db, accountShareModeGlobalInvitePolicyIndexesMigration)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestVerifyAccountShareModeGlobalInvitePolicyIndexesRequiresExactDefinitions(t *testing.T) {
+	t.Run("全部索引定义匹配", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer func() { _ = db.Close() }()
+
+		for _, requirement := range accountShareModeGlobalInvitePolicyIndexRequirements {
+			expectMigrationIndexCatalogQuery(mock, requirement, matchingMigrationIndexCatalogRows(t, requirement, nil))
+		}
+
+		err = verifyNonTransactionalMigrationResult(context.Background(), db, accountShareModeGlobalInvitePolicyIndexesMigration)
+		require.NoError(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("created_at降序选项不匹配", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer func() { _ = db.Close() }()
+
+		requirement := accountShareModeGlobalInvitePolicyIndexRequirements[0]
+		expectMigrationIndexCatalogQuery(mock, requirement, matchingMigrationIndexCatalogRows(t, requirement, func(state *migrationIndexCatalogState) {
+			state.keys[1].OptionBits = 0
+		}))
+
+		err = verifyNonTransactionalMigrationResult(context.Background(), db, accountShareModeGlobalInvitePolicyIndexesMigration)
+		require.ErrorContains(t, err, "do not match migration 220")
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("索引未ready", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer func() { _ = db.Close() }()
+
+		requirement := accountShareModeGlobalInvitePolicyIndexRequirements[0]
+		expectMigrationIndexCatalogQuery(mock, requirement, matchingMigrationIndexCatalogRows(t, requirement, func(state *migrationIndexCatalogState) {
+			state.ready = false
+		}))
+
+		err = verifyNonTransactionalMigrationResult(context.Background(), db, accountShareModeGlobalInvitePolicyIndexesMigration)
+		require.ErrorContains(t, err, "do not match migration 220")
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+func TestAccountShareGlobalInvitePolicyFollowupMigrationsAreFailFastAndRetryable(t *testing.T) {
+	ledgerSQL, err := migrations.FS.ReadFile("224_account_share_online_backfill_online.sql")
+	require.NoError(t, err)
+	ledger := string(ledgerSQL)
+	online, err := validateMigrationExecutionMode("224_account_share_online_backfill_online.sql", ledger)
+	require.NoError(t, err)
+	require.True(t, online)
+	require.Len(t, splitSQLStatements(ledger), 3)
+	require.Contains(t, ledger, "adjustment.amount > affiliate.aff_history_quota")
+	require.Contains(t, ledger, "RAISE EXCEPTION")
+	require.Contains(t, ledger, "SET aff_history_quota = affiliate.aff_history_quota - adjustment.amount")
+	require.NotContains(t, ledger, "GREATEST(0, ua.aff_history_quota - adjustment.amount)")
+	require.Less(t,
+		strings.Index(ledger, "adjustment.amount > affiliate.aff_history_quota"),
+		strings.Index(ledger, "SET aff_history_quota = affiliate.aff_history_quota - adjustment.amount"),
+	)
+	require.Contains(t, ledger, "account_share_online_migration_progress")
+	require.Contains(t, ledger, "ORDER BY ledger.id")
+	require.NotContains(t, strings.ToUpper(stripSQLLineComment(ledger)), " OFFSET ")
+	require.GreaterOrEqual(t, strings.Count(ledger, "COMMIT;"), 5)
+
+	validateSQL, err := migrations.FS.ReadFile("225_validate_account_share_online_backfill.sql")
+	require.NoError(t, err)
+	validate := string(validateSQL)
+	for _, constraint := range []string{
+		"account_share_mode_settlement_policy_fk",
+		"account_share_mode_settlement_inviter_fk",
+		"account_share_mode_settlement_reversal_fk",
+		"account_share_mode_settlement_invite_amounts_chk",
+	} {
+		require.Contains(t, validate, "VALIDATE CONSTRAINT "+constraint)
+	}
+	require.Contains(t, validate, "account_share_mode_settlement_account_cost_present_chk")
+	require.Contains(t, validate, "account-share settlement account cost remains unknown")
+
+	contractSQL, err := migrations.FS.ReadFile("226_contract_account_share_online_compatibility.sql")
+	require.NoError(t, err)
+	contract := string(contractSQL)
+	require.Contains(t, contract, "DROP TABLE IF EXISTS account_share_mode_policies")
+	require.Contains(t, contract, "DROP TABLE IF EXISTS account_share_online_migration_progress")
+	require.Contains(t, contract, "DROP TRIGGER IF EXISTS trg_account_share_online_compat_affiliate_ledger")
+}
+
+func TestAccountShareRoomMigrationKeepsExternalPlacementIdentityConsistent(t *testing.T) {
+	migrationSQL, err := migrations.FS.ReadFile("223_account_share_rooms_and_external_placements.sql")
+	require.NoError(t, err)
+	sqlText := string(migrationSQL)
+
+	require.Contains(t, sqlText, "FOREIGN KEY (account_id)\n        REFERENCES accounts(id)")
+	require.NotContains(t, sqlText, "FOREIGN KEY (account_id, owner_user_id, platform, account_level)\n        REFERENCES accounts")
+	require.Contains(t, sqlText, "trg_account_share_online_compat_listing_identity")
+	require.Contains(t, sqlText, "trg_account_share_online_compat_listing_placement")
+	require.Contains(t, sqlText, "placement_type = 'room'")
+
+	validateSQL, err := migrations.FS.ReadFile("225_validate_account_share_online_backfill.sql")
+	require.NoError(t, err)
+	validate := string(validateSQL)
+	require.Contains(t, validate, "trg_validate_account_external_placement_account_identity")
+	require.Contains(t, validate, "account_external_placements_account_identity_chk")
+	require.Contains(t, validate, "trg_reconcile_account_external_placement_account_identity")
+	require.Contains(t, validate, "account_external_placement_identity_change_chk")
+	require.Contains(t, validate, "account_external_placement_level_change_chk")
+	require.Contains(t, validate, "account_external_placement_room_level_change_chk")
+	require.NotContains(t, validate, "SET account_level = NEW.account_level")
 }
 
 func TestPrepareAccountShareSeatCostIndexesMigrationRequiresManualBuildForLargeLedger(t *testing.T) {

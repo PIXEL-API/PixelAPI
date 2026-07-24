@@ -5,7 +5,7 @@
       <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
         {{ t('payment.quickAmounts') }}
       </label>
-      <div class="grid grid-cols-3 gap-2">
+      <div :class="['grid gap-2', props.quickAmountGridClass]">
         <button
           v-for="amt in filteredAmounts"
           :key="amt"
@@ -54,10 +54,12 @@ const props = withDefaults(defineProps<{
   modelValue: number | null
   min?: number
   max?: number
+  quickAmountGridClass?: string
 }>(), {
   amounts: () => [5, 10, 20, 30, 50, 100],
   min: 0,
   max: 0,
+  quickAmountGridClass: 'grid-cols-3',
 })
 
 const emit = defineEmits<{

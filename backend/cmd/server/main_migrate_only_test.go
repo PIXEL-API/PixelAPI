@@ -21,6 +21,7 @@ func TestCommandOptionsValidateMigrateOnly(t *testing.T) {
 			options: commandOptions{
 				migrateOnly:      true,
 				migrationTimeout: defaultMigrationTimeout,
+				migrationThrough: "225_validate.sql",
 			},
 		},
 		{
@@ -60,6 +61,22 @@ func TestCommandOptionsValidateMigrateOnly(t *testing.T) {
 			name:    "timeout ignored without migrate mode",
 			options: commandOptions{},
 		},
+		{
+			name: "migration target requires migrate mode",
+			options: commandOptions{
+				migrationThrough: "225_validate.sql",
+			},
+			wantErr: "requires --migrate-only",
+		},
+		{
+			name: "migration target rejects paths",
+			options: commandOptions{
+				migrateOnly:      true,
+				migrationTimeout: defaultMigrationTimeout,
+				migrationThrough: "../225_validate.sql",
+			},
+			wantErr: "embedded migration filename",
+		},
 	}
 
 	for _, tt := range tests {
@@ -86,6 +103,7 @@ func TestRunMigrationsOnlyUsesLoadedConfigAndDeadline(t *testing.T) {
 	err := runMigrationsOnly(
 		context.Background(),
 		time.Minute,
+		"225_validate.sql",
 		func() (*config.Config, error) {
 			return wantConfig, nil
 		},
@@ -103,6 +121,9 @@ func TestRunMigrationsOnlyUsesLoadedConfigAndDeadline(t *testing.T) {
 	}
 	if !gotDeadline {
 		t.Fatal("migration context has no deadline")
+	}
+	if gotConfig.Database.MigrationThrough != "225_validate.sql" {
+		t.Fatalf("migration target = %q, want 225_validate.sql", gotConfig.Database.MigrationThrough)
 	}
 }
 
@@ -127,7 +148,7 @@ func TestRunMigrationsOnlyRejectsInvalidDependencies(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := runMigrationsOnly(tt.ctx, tt.timeout, tt.loadConfig, tt.runner)
+			err := runMigrationsOnly(tt.ctx, tt.timeout, "", tt.loadConfig, tt.runner)
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("runMigrationsOnly() error = %v, want containing %q", err, tt.wantErr)
 			}
@@ -142,6 +163,7 @@ func TestRunMigrationsOnlyStopsOnConfigError(t *testing.T) {
 	err := runMigrationsOnly(
 		context.Background(),
 		time.Minute,
+		"",
 		func() (*config.Config, error) { return nil, wantErr },
 		func(context.Context, *config.Config) error {
 			runnerCalled = true
@@ -161,6 +183,7 @@ func TestRunMigrationsOnlyPropagatesMigrationError(t *testing.T) {
 	err := runMigrationsOnly(
 		context.Background(),
 		time.Minute,
+		"",
 		func() (*config.Config, error) { return &config.Config{}, nil },
 		func(context.Context, *config.Config) error { return wantErr },
 	)

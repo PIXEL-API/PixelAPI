@@ -3457,6 +3457,16 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if err != nil {
 		return nil, err
 	}
+	if accountHasExternalPlacement(account) &&
+		(input.OwnerUserID != nil ||
+			input.ShareMode != "" ||
+			input.ShareStatus != "" ||
+			input.AccountLevel != nil ||
+			len(input.Credentials) > 0 ||
+			input.Extra != nil ||
+			input.GroupIDs != nil) {
+		return nil, ErrOwnedAccountPlacementConversionRequired
+	}
 	before := cloneAccountForNotice(account)
 	wasOveragesEnabled := account.IsOveragesEnabled()
 
@@ -3729,6 +3739,18 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		}
 		preflightAccounts = accounts
 		return preflightAccounts, nil
+	}
+
+	if input.GroupIDs != nil || input.AccountLevel != nil || len(input.Credentials) > 0 || input.Extra != nil {
+		accounts, err := loadPreflightAccounts()
+		if err != nil {
+			return nil, err
+		}
+		for _, account := range accounts {
+			if accountHasExternalPlacement(account) {
+				return nil, ErrOwnedAccountPlacementConversionRequired
+			}
+		}
 	}
 
 	var agentIdentityWSInvalidationIDs []int64

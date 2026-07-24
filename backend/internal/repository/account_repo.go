@@ -92,6 +92,17 @@ func translateAccountPersistenceError(err error, notFound *infraerrors.Applicati
 	if err == nil {
 		return nil
 	}
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		switch pqErr.Constraint {
+		case "account_external_placement_identity_change_chk",
+			"account_external_placement_level_change_chk",
+			"account_external_placement_room_level_change_chk":
+			return service.ErrOwnedAccountPlacementConversionRequired.WithCause(err)
+		case "account_external_placements_account_identity_chk":
+			return service.ErrAccountExternalPlacementConflict.WithCause(err)
+		}
+	}
 	if isUniqueViolationOnIndex(err, ownedAccountIdentityUniqueIndexSet) {
 		return service.ErrOwnedAccountAlreadyExists.WithCause(err)
 	}
@@ -390,7 +401,7 @@ func (r *accountRepository) GetByIDs(ctx context.Context, ids []int64) ([]*servi
 	if err != nil {
 		return nil, err
 	}
-	listingIDsByAccount, err := r.loadAccountShareModeListingIDs(ctx, accountIDs)
+	externalPlacementsByAccount, err := r.loadAccountExternalPlacements(ctx, accountIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -416,9 +427,13 @@ func (r *accountRepository) GetByIDs(ctx context.Context, ids []int64) ([]*servi
 		if ags, ok := accountGroupsByAccount[entAcc.ID]; ok {
 			out.AccountGroups = ags
 		}
-		if listingID, ok := listingIDsByAccount[entAcc.ID]; ok {
-			id := listingID
-			out.AccountShareModeListingID = &id
+		if placement, ok := externalPlacementsByAccount[entAcc.ID]; ok {
+			placementCopy := placement
+			out.ExternalPlacement = &placementCopy
+			if placement.Target == service.AccountExternalPlacementRoom && placement.RoomID != nil {
+				id := *placement.RoomID
+				out.AccountShareModeListingID = &id
+			}
 		}
 		outByID[entAcc.ID] = out
 	}
@@ -565,10 +580,13 @@ func (r *accountRepository) IsAccountShareModeListingAccount(ctx context.Context
 		return false, nil
 	}
 	rows, err := r.sql.QueryContext(ctx, `
-		SELECT id
-		FROM account_share_listings
-		WHERE account_id = $1
-			AND deleted_at IS NULL
+		SELECT placement.listing_id
+		FROM account_external_placements placement
+		JOIN account_share_listings listing
+			ON listing.id = placement.listing_id
+			AND listing.deleted_at IS NULL
+		WHERE placement.account_id = $1
+			AND placement.placement_type = 'room'
 		LIMIT 1
 	`, id)
 	if err != nil {
@@ -2192,6 +2210,7 @@ func (r *accountRepository) schedulableAccountsQuery(now time.Time) *dbent.Accou
 		Where(
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
+			notDrainingExternalPlacementPredicate(),
 			tempUnschedulablePredicate(),
 			notExpiredPredicate(now),
 			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
@@ -2214,6 +2233,7 @@ func (r *accountRepository) ListSchedulableByPlatform(ctx context.Context, platf
 			dbaccount.PlatformEQ(platform),
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
+			notDrainingExternalPlacementPredicate(),
 			tempUnschedulablePredicate(),
 			notExpiredPredicate(now),
 			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
@@ -2248,6 +2268,7 @@ func (r *accountRepository) ListSchedulableByPlatforms(ctx context.Context, plat
 			dbaccount.PlatformIn(platforms...),
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
+			notDrainingExternalPlacementPredicate(),
 			tempUnschedulablePredicate(),
 			notExpiredPredicate(now),
 			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
@@ -2268,6 +2289,7 @@ func (r *accountRepository) ListSchedulableUngroupedByPlatform(ctx context.Conte
 			dbaccount.PlatformEQ(platform),
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
+			notDrainingExternalPlacementPredicate(),
 			dbaccount.Not(dbaccount.HasAccountGroups()),
 			tempUnschedulablePredicate(),
 			notExpiredPredicate(now),
@@ -2292,6 +2314,7 @@ func (r *accountRepository) ListSchedulableUngroupedByPlatforms(ctx context.Cont
 			dbaccount.PlatformIn(platforms...),
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
+			notDrainingExternalPlacementPredicate(),
 			dbaccount.Not(dbaccount.HasAccountGroups()),
 			tempUnschedulablePredicate(),
 			notExpiredPredicate(now),
@@ -2970,6 +2993,7 @@ func (r *accountRepository) queryAccountsByGroup(ctx context.Context, groupID in
 		now := time.Now()
 		preds = append(preds,
 			dbaccount.SchedulableEQ(true),
+			notDrainingExternalPlacementPredicate(),
 			tempUnschedulablePredicate(),
 			notExpiredPredicate(now),
 			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
@@ -3051,7 +3075,7 @@ func (r *accountRepository) accountsToService(ctx context.Context, accounts []*d
 	if err != nil {
 		return nil, err
 	}
-	listingIDsByAccount, err := r.loadAccountShareModeListingIDs(ctx, accountIDs)
+	externalPlacementsByAccount, err := r.loadAccountExternalPlacements(ctx, accountIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -3079,9 +3103,13 @@ func (r *accountRepository) accountsToService(ctx context.Context, accounts []*d
 		if ags, ok := accountGroupsByAccount[acc.ID]; ok {
 			out.AccountGroups = ags
 		}
-		if listingID, ok := listingIDsByAccount[acc.ID]; ok {
-			id := listingID
-			out.AccountShareModeListingID = &id
+		if placement, ok := externalPlacementsByAccount[acc.ID]; ok {
+			placementCopy := placement
+			out.ExternalPlacement = &placementCopy
+			if placement.Target == service.AccountExternalPlacementRoom && placement.RoomID != nil {
+				id := *placement.RoomID
+				out.AccountShareModeListingID = &id
+			}
 		}
 		outAccounts = append(outAccounts, *out)
 	}
@@ -3089,17 +3117,26 @@ func (r *accountRepository) accountsToService(ctx context.Context, accounts []*d
 	return outAccounts, nil
 }
 
-func (r *accountRepository) loadAccountShareModeListingIDs(ctx context.Context, accountIDs []int64) (map[int64]int64, error) {
-	out := make(map[int64]int64)
+func (r *accountRepository) loadAccountExternalPlacements(ctx context.Context, accountIDs []int64) (map[int64]service.AccountExternalPlacement, error) {
+	out := make(map[int64]service.AccountExternalPlacement)
 	if len(accountIDs) == 0 {
 		return out, nil
 	}
 
 	rows, err := r.sql.QueryContext(ctx, `
-		SELECT account_id, id
-		FROM account_share_listings
-		WHERE account_id = ANY($1)
-			AND deleted_at IS NULL
+		SELECT
+			placement.account_id,
+			placement.placement_type,
+			placement.listing_id,
+			COALESCE(listing.room_name, ''),
+			placement.public_group_id,
+			placement.state,
+			placement.version
+		FROM account_external_placements placement
+		LEFT JOIN account_share_listings listing
+			ON listing.id = placement.listing_id
+			AND listing.deleted_at IS NULL
+		WHERE placement.account_id = ANY($1)
 	`, pq.Array(accountIDs))
 	if err != nil {
 		return nil, err
@@ -3108,11 +3145,22 @@ func (r *accountRepository) loadAccountShareModeListingIDs(ctx context.Context, 
 
 	for rows.Next() {
 		var accountID int64
-		var listingID int64
-		if err := rows.Scan(&accountID, &listingID); err != nil {
+		var placement service.AccountExternalPlacement
+		var roomID, publicGroupID sql.NullInt64
+		if err := rows.Scan(
+			&accountID,
+			&placement.Target,
+			&roomID,
+			&placement.RoomName,
+			&publicGroupID,
+			&placement.State,
+			&placement.Version,
+		); err != nil {
 			return nil, err
 		}
-		out[accountID] = listingID
+		placement.RoomID = sqlNullInt64Ptr(roomID)
+		placement.PublicGroupID = sqlNullInt64Ptr(publicGroupID)
+		out[accountID] = placement
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -3159,6 +3207,19 @@ func tempUnschedulablePredicate() dbpredicate.Account {
 			entsql.IsNull(col),
 			entsql.LTE(col, entsql.Expr("NOW()")),
 		))
+	})
+}
+
+func notDrainingExternalPlacementPredicate() dbpredicate.Account {
+	return dbpredicate.Account(func(s *entsql.Selector) {
+		placement := entsql.Table("account_external_placements")
+		subquery := entsql.Select(placement.C("account_id")).
+			From(placement).
+			Where(entsql.And(
+				entsql.ColumnsEQ(placement.C("account_id"), s.C(dbaccount.FieldID)),
+				entsql.EQ(placement.C("state"), "draining"),
+			))
+		s.Where(entsql.Not(entsql.Exists(subquery)))
 	})
 }
 
