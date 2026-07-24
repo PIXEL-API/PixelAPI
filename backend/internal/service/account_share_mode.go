@@ -932,7 +932,7 @@ type AccountShareModeRepository interface {
 
 type AccountShareRoomRepository interface {
 	CreateRoomFromOwnedAccount(ctx context.Context, ownerUserID, accountID, modeGroupID int64, idempotencyKey string, listing *AccountShareListing) (*AccountShareListing, error)
-	ListRoomAccounts(ctx context.Context, listingID, viewerUserID int64) ([]AccountShareRoomAccount, error)
+	ListRoomAccounts(ctx context.Context, listingID, viewerUserID int64, viewerIsAdmin bool) ([]AccountShareRoomAccount, error)
 	GetExternalPlacement(ctx context.Context, ownerUserID, accountID int64) (*AccountExternalPlacement, error)
 	BeginExternalPlacementDrain(ctx context.Context, ownerUserID, accountID int64) (bool, error)
 	RestoreExternalPlacementAfterDrain(ctx context.Context, ownerUserID, accountID int64) error
@@ -2014,7 +2014,7 @@ func (s *AccountShareModeService) CreateRoomFromOwnedAccount(ctx context.Context
 	return created, nil
 }
 
-func (s *AccountShareModeService) ListRoomAccounts(ctx context.Context, viewerUserID, listingID int64) ([]AccountShareRoomAccount, error) {
+func (s *AccountShareModeService) ListRoomAccounts(ctx context.Context, viewerUserID int64, viewerIsAdmin bool, listingID int64) ([]AccountShareRoomAccount, error) {
 	if viewerUserID <= 0 {
 		return nil, ErrUserNotFound
 	}
@@ -2028,7 +2028,7 @@ func (s *AccountShareModeService) ListRoomAccounts(ctx context.Context, viewerUs
 	if !ok {
 		return nil, ErrServiceUnavailable
 	}
-	return roomRepo.ListRoomAccounts(ctx, listingID, viewerUserID)
+	return roomRepo.ListRoomAccounts(ctx, listingID, viewerUserID, viewerIsAdmin)
 }
 
 func (s *AccountShareModeService) ListListings(ctx context.Context, viewerUserID int64, viewerIsAdmin bool, filters AccountShareListingFilters, params pagination.PaginationParams) ([]AccountShareListing, *pagination.PaginationResult, error) {

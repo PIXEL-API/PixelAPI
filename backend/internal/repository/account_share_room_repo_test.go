@@ -53,6 +53,77 @@ func TestTranslateAccountPersistenceErrorForExternalPlacementIdentity(t *testing
 	}
 }
 
+func TestListRoomAccountsRejectsNonOwnerUser(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	repo := &accountShareModeRepository{db: db}
+
+	mock.ExpectQuery("SELECT owner_user_id").
+		WithArgs(int64(700)).
+		WillReturnRows(sqlmock.NewRows([]string{"owner_user_id"}).AddRow(int64(42)))
+
+	_, err = repo.ListRoomAccounts(context.Background(), 700, 99, false)
+
+	if !errors.Is(err, service.ErrInsufficientPerms) {
+		t.Fatalf("error = %v, want %v", err, service.ErrInsufficientPerms)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestListRoomAccountsAllowsAdministrator(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	repo := &accountShareModeRepository{db: db}
+	lastUsedAt := time.Date(2026, 7, 24, 15, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery("SELECT owner_user_id").
+		WithArgs(int64(700)).
+		WillReturnRows(sqlmock.NewRows([]string{"owner_user_id"}).AddRow(int64(42)))
+	mock.ExpectQuery("SELECT\\s+a\\.id").
+		WithArgs(int64(700), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "name", "platform", "account_level", "status", "schedulable",
+			"concurrency", "priority", "state", "last_used_at",
+		}).AddRow(
+			int64(10),
+			"room-account",
+			service.PlatformOpenAI,
+			service.AccountLevelPlus,
+			service.StatusActive,
+			true,
+			20,
+			1,
+			"active",
+			lastUsedAt,
+		))
+
+	accounts, err := repo.ListRoomAccounts(context.Background(), 700, 99, true)
+
+	if err != nil {
+		t.Fatalf("ListRoomAccounts: %v", err)
+	}
+	if len(accounts) != 1 {
+		t.Fatalf("accounts length = %d, want 1", len(accounts))
+	}
+	if accounts[0].AccountID != 10 || accounts[0].AccountName != "room-account" {
+		t.Fatalf("unexpected account: %#v", accounts[0])
+	}
+	if accounts[0].LastUsedAt == nil || !accounts[0].LastUsedAt.Equal(lastUsedAt) {
+		t.Fatalf("last_used_at = %v, want %v", accounts[0].LastUsedAt, lastUsedAt)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func TestConvertExternalPlacementRejectsIncompatibleRoom(t *testing.T) {
 	tests := []struct {
 		name         string

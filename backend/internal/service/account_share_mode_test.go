@@ -70,6 +70,23 @@ type accountShareModeRepoStub struct {
 	policyErr            error
 }
 
+type accountShareRoomRepoStub struct {
+	*accountShareModeRepoStub
+	AccountShareRoomRepository
+	roomAccountsViewerUserID  int64
+	roomAccountsViewerIsAdmin bool
+	roomAccountsListingID     int64
+	roomAccounts              []AccountShareRoomAccount
+	roomAccountsErr           error
+}
+
+func (r *accountShareRoomRepoStub) ListRoomAccounts(_ context.Context, listingID, viewerUserID int64, viewerIsAdmin bool) ([]AccountShareRoomAccount, error) {
+	r.roomAccountsListingID = listingID
+	r.roomAccountsViewerUserID = viewerUserID
+	r.roomAccountsViewerIsAdmin = viewerIsAdmin
+	return append([]AccountShareRoomAccount(nil), r.roomAccounts...), r.roomAccountsErr
+}
+
 type accountShareModeBindingResult struct {
 	membership *AccountShareMembership
 	listing    *AccountShareListing
@@ -414,6 +431,24 @@ func (r *accountShareModeRepoStub) GetMySpendSummary(_ context.Context, query Ac
 		Listing:        AccountShareMySpendListing{ID: query.ListingID},
 		ModelBreakdown: []AccountShareMySpendModelBreakdown{},
 	}, nil
+}
+
+func TestListRoomAccountsForwardsAdministratorPermission(t *testing.T) {
+	repo := &accountShareRoomRepoStub{
+		accountShareModeRepoStub: &accountShareModeRepoStub{},
+		roomAccounts: []AccountShareRoomAccount{
+			{AccountID: 10, AccountName: "room-account"},
+		},
+	}
+	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
+
+	accounts, err := svc.ListRoomAccounts(context.Background(), 99, true, 700)
+
+	require.NoError(t, err)
+	require.Equal(t, int64(700), repo.roomAccountsListingID)
+	require.Equal(t, int64(99), repo.roomAccountsViewerUserID)
+	require.True(t, repo.roomAccountsViewerIsAdmin)
+	require.Equal(t, repo.roomAccounts, accounts)
 }
 
 func (r *accountShareModeRepoStub) BeginListingEdit(_ context.Context, _ int64, actorIsAdmin bool, _ int64, input BeginAccountShareListingEditInput) (*AccountShareListing, error) {

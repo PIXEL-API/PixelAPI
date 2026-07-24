@@ -284,7 +284,7 @@ func (r *accountShareModeRepository) CreateRoomFromOwnedAccount(ctx context.Cont
 	return r.GetListingByID(ctx, listingID, ownerUserID)
 }
 
-func (r *accountShareModeRepository) ListRoomAccounts(ctx context.Context, listingID, viewerUserID int64) ([]service.AccountShareRoomAccount, error) {
+func (r *accountShareModeRepository) ListRoomAccounts(ctx context.Context, listingID, viewerUserID int64, viewerIsAdmin bool) ([]service.AccountShareRoomAccount, error) {
 	if listingID <= 0 || viewerUserID <= 0 {
 		return nil, service.ErrAccountShareListingNotFound
 	}
@@ -299,7 +299,7 @@ func (r *accountShareModeRepository) ListRoomAccounts(ctx context.Context, listi
 	} else if err != nil {
 		return nil, err
 	}
-	if ownerUserID != viewerUserID {
+	if ownerUserID != viewerUserID && !viewerIsAdmin {
 		return nil, service.ErrInsufficientPerms
 	}
 	rows, err := r.db.QueryContext(ctx, fmt.Sprintf(`

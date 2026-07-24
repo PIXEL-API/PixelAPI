@@ -580,7 +580,8 @@ func (h *AccountShareModeHandler) ListRoomAccounts(c *gin.Context) {
 		response.BadRequest(c, "Invalid listing ID")
 		return
 	}
-	accounts, err := h.service.ListRoomAccounts(c.Request.Context(), subject.UserID, listingID)
+	role, _ := middleware2.GetUserRoleFromContext(c)
+	accounts, err := h.service.ListRoomAccounts(c.Request.Context(), subject.UserID, role == service.RoleAdmin, listingID)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
