@@ -26,6 +26,37 @@
         <p class="input-hint">{{ t('admin.accounts.notesHint') }}</p>
       </div>
 
+      <section
+        v-if="isUserScope"
+        class="border-t border-gray-200 pt-5 dark:border-dark-600"
+        data-testid="edit-external-placement-section"
+      >
+        <div class="mb-4">
+          <h3 class="text-base font-semibold text-gray-900 dark:text-white">
+            {{ t('userAccounts.externalPlacement.editTitle') }}
+          </h3>
+          <p class="mt-1 text-sm leading-6 text-gray-500 dark:text-dark-300">
+            {{ t('userAccounts.externalPlacement.editHint') }}
+          </p>
+        </div>
+        <ExternalPlacementSelector
+          v-model="selectedExternalPlacementTarget"
+          :platform="account.platform"
+          :disabled="submitting"
+          input-name="edit-account-external-placement"
+          :legend="t('userAccounts.externalPlacement.editLegend')"
+          :platform-mode-disabled-reason="placementPlatformModeDisabledReason"
+        />
+        <div
+          v-if="placementSaveError"
+          class="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm leading-6 text-red-700 dark:border-red-900/70 dark:bg-red-950/25 dark:text-red-300"
+          role="alert"
+          data-testid="edit-placement-save-error"
+        >
+          {{ placementSaveError }}
+        </div>
+      </section>
+
       <div v-if="account.platform === 'openai'">
         <label class="input-label">{{ t('admin.accounts.accountLevel.label') }}</label>
         <Select
@@ -2222,11 +2253,23 @@ import { useAdminSettingsStore } from '@/stores/adminSettings'
 import { useAuthStore } from '@/stores/auth'
 import { adminAPI } from '@/api/admin'
 import { accountsAPI } from '@/api/accounts'
+import { accountShareAPI } from '@/api/accountShare'
 import { useQuotaNotifyState } from '@/composables/useQuotaNotifyState'
-import type { Account, Proxy, AdminGroup, CheckMixedChannelResponse, OpenAICompactMode, AccountLevel, UpdateAccountRequest } from '@/types'
+import type {
+  Account,
+  AccountExternalPlacementTarget,
+  Proxy,
+  AdminGroup,
+  CheckMixedChannelResponse,
+  OpenAICompactMode,
+  AccountLevel,
+  UpdateAccountRequest
+} from '@/types'
 import type { AccountApiScope } from '@/composables/useAccountOAuth'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import ExternalPlacementSelector from '@/components/account-share/ExternalPlacementSelector.vue'
+import { resolveAccountExternalPlacementTarget } from '@/components/account-share/externalPlacement'
 import Select from '@/components/common/Select.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
@@ -2253,6 +2296,7 @@ import {
   normalizePersonalAccountLoadFactor
 } from '@/components/account/personalAccountTemplate'
 import { formatDateTime, formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
+import { extractApiErrorMessage } from '@/utils/apiError'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
 import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
 import { openAIAccountLevelLabel, openAIAccountLevelOptions, selectableOpenAIAccountLevels } from '@/utils/openaiAccountLevels'
@@ -2281,6 +2325,7 @@ interface Props {
   allowProxy?: boolean
   allowBillingRate?: boolean
   hideProxyEndpoint?: boolean
+  ownerUserId?: number
 }
 
 const props = defineProps<Props>()
@@ -2318,6 +2363,13 @@ const canManageProxy = computed(() =>
 )
 const canManageBillingRate = computed(() => !isUserScope.value && props.allowBillingRate !== false)
 const hideProxyEndpoint = computed(() => props.hideProxyEndpoint === true)
+const placementPlatformModeDisabledReason = computed(() => {
+  if (!props.account) return ''
+  if (props.account.platform !== 'openai' && props.account.platform !== 'anthropic') {
+    return t('userAccounts.externalPlacement.unsupportedPlatform')
+  }
+  return ''
+})
 
 // Platform-specific hint for Base URL
 const baseUrlHint = computed(() => {
@@ -2344,6 +2396,10 @@ interface TempUnschedRuleForm {
 
 // State
 const submitting = ref(false)
+const selectedExternalPlacementTarget = ref<AccountExternalPlacementTarget>('private')
+const placementSaveError = ref('')
+let pendingPlacementIntentSignature = ''
+let pendingPlacementIdempotencyKey = ''
 const editBaseUrl = ref('https://api.anthropic.com')
 const editApiKey = ref('')
 // Bedrock credentials
@@ -2410,6 +2466,21 @@ const umqModeOptions = computed(() => [
   { value: 'throttle', label: t('admin.accounts.quotaControl.rpmLimit.umqModeThrottle') },
   { value: 'serialize', label: t('admin.accounts.quotaControl.rpmLimit.umqModeSerialize') },
 ])
+const placementIntentSignature = computed(() => selectedExternalPlacementTarget.value)
+const placementChanged = computed(() => {
+  if (!props.account || !isUserScope.value) return false
+  return selectedExternalPlacementTarget.value
+    !== resolveAccountExternalPlacementTarget(props.account)
+})
+
+watch(
+  selectedExternalPlacementTarget,
+  () => {
+    placementSaveError.value = ''
+    pendingPlacementIntentSignature = ''
+    pendingPlacementIdempotencyKey = ''
+  }
+)
 const tlsFingerprintEnabled = ref(false)
 const tlsFingerprintProfileId = ref<number | null>(null)
 const tlsFingerprintProfiles = ref<{ id: number; name: string }[]>([])
@@ -2696,6 +2767,10 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   if (!newAccount) {
     return
   }
+  selectedExternalPlacementTarget.value = resolveAccountExternalPlacementTarget(newAccount)
+  placementSaveError.value = ''
+  pendingPlacementIntentSignature = ''
+  pendingPlacementIdempotencyKey = ''
   antigravityMixedChannelConfirmed.value = false
   showMixedChannelWarning.value = false
   mixedChannelWarningDetails.value = null
@@ -3467,6 +3542,23 @@ const handleClose = () => {
   emit('close')
 }
 
+const getPendingPlacementIdempotencyKey = (accountID: number): string => {
+  const signature = placementIntentSignature.value
+  if (
+    pendingPlacementIdempotencyKey
+    && pendingPlacementIntentSignature === signature
+  ) {
+    return pendingPlacementIdempotencyKey
+  }
+  const requestID = globalThis.crypto?.randomUUID?.()
+  if (!requestID) {
+    throw new Error(t('userAccounts.externalPlacement.uuidUnavailable'))
+  }
+  pendingPlacementIntentSignature = signature
+  pendingPlacementIdempotencyKey = `account-placement-${accountID}-${requestID}`
+  return pendingPlacementIdempotencyKey
+}
+
 const sanitizeUpdatePayload = (payload: Record<string, unknown>) => {
   const next = { ...payload }
   if (isUserScope.value && next.status === 'inactive') {
@@ -3492,12 +3584,55 @@ const sanitizeUpdatePayload = (payload: Record<string, unknown>) => {
 }
 
 const submitUpdateAccount = async (accountID: number, updatePayload: Record<string, unknown>) => {
+  let placementIdempotencyKey = ''
+  if (isUserScope.value && placementChanged.value) {
+    try {
+      placementIdempotencyKey = getPendingPlacementIdempotencyKey(accountID)
+    } catch (error) {
+      appStore.showError(extractApiErrorMessage(
+        error,
+        t('userAccounts.externalPlacement.convertFailed')
+      ))
+      return
+    }
+  }
+
   submitting.value = true
   try {
     const payload = sanitizeUpdatePayload(withAntigravityConfirmFlag(updatePayload))
-    const updatedAccount = isUserScope.value
+    let updatedAccount = isUserScope.value
       ? await accountsAPI.update(accountID, payload as UpdateAccountRequest)
       : await adminAPI.accounts.update(accountID, payload)
+    if (isUserScope.value && placementChanged.value) {
+      try {
+        const placementResult = await accountShareAPI.convertAccountExternalPlacement(accountID, {
+          target: selectedExternalPlacementTarget.value,
+          idempotency_key: placementIdempotencyKey
+        })
+        pendingPlacementIntentSignature = ''
+        pendingPlacementIdempotencyKey = ''
+        updatedAccount = await accountsAPI.getById(accountID).catch(() => ({
+          ...updatedAccount,
+          external_placement: placementResult.current,
+          share_mode: placementResult.current?.target === 'public_pool' ? 'public' : 'private',
+          account_share_mode_listing_id: placementResult.current?.target === 'room'
+            ? placementResult.current.room_id ?? null
+            : null
+        }))
+      } catch (error) {
+        const detail = extractApiErrorMessage(
+          error,
+          t('userAccounts.externalPlacement.convertFailed')
+        )
+        placementSaveError.value = t(
+          'userAccounts.externalPlacement.baseSavedPlacementFailed',
+          { error: detail }
+        )
+        appStore.showError(placementSaveError.value)
+        emit('updated', updatedAccount)
+        return
+      }
+    }
     if (isUserScope.value) {
       await authStore.refreshUser().catch((error) => {
         console.error('Failed to refresh user after load factor update:', error)
@@ -3544,7 +3679,6 @@ const handleSubmit = async () => {
     appStore.showError(t('userAccounts.proxyRequiredReplaceOnly'))
     return
   }
-
   const updatePayload: Record<string, unknown> = { ...form }
   if (isUserScope.value || props.account.platform !== 'openai') {
     delete updatePayload.account_level

@@ -86,6 +86,11 @@ type accountWindowStatsBatchReader interface {
 	GetAccountWindowStatsBatch(ctx context.Context, accountIDs []int64, startTime time.Time) (map[int64]*usagestats.AccountStats, error)
 }
 
+type accountDisplayWindowStatsReader interface {
+	GetAccountDisplayWindowStats(ctx context.Context, accountID int64, startTime, endTime time.Time) (*usagestats.AccountStats, error)
+	GetUsageLogCoverageStart(ctx context.Context) (*time.Time, error)
+}
+
 // apiUsageCache 缓存从 Anthropic API 获取的使用率数据（utilization, resets_at）
 // 同时支持缓存错误响应（负缓存），防止 429 等错误导致的重试风暴
 type apiUsageCache struct {
@@ -147,12 +152,15 @@ type WindowStats struct {
 
 // UsageProgress 使用量进度
 type UsageProgress struct {
-	Utilization      float64      `json:"utilization"`            // 使用率百分比 (0-100+，100表示100%)
-	ResetsAt         *time.Time   `json:"resets_at"`              // 重置时间
-	RemainingSeconds int          `json:"remaining_seconds"`      // 距重置剩余秒数
-	WindowStats      *WindowStats `json:"window_stats,omitempty"` // 窗口期统计（从窗口开始到当前的使用量）
-	UsedRequests     int64        `json:"used_requests,omitempty"`
-	LimitRequests    int64        `json:"limit_requests,omitempty"`
+	Utilization        float64      `json:"utilization"`            // 使用率百分比 (0-100+，100表示100%)
+	ResetsAt           *time.Time   `json:"resets_at"`              // 重置时间
+	WindowStart        *time.Time   `json:"window_start,omitempty"` // 上游额度窗口的实际开始时间
+	StatsAvailableFrom *time.Time   `json:"stats_available_from,omitempty"`
+	StatsComplete      bool         `json:"stats_complete"`
+	RemainingSeconds   int          `json:"remaining_seconds"`      // 距重置剩余秒数
+	WindowStats        *WindowStats `json:"window_stats,omitempty"` // 窗口期统计（从窗口开始到当前的使用量）
+	UsedRequests       int64        `json:"used_requests,omitempty"`
+	LimitRequests      int64        `json:"limit_requests,omitempty"`
 }
 
 // AntigravityModelQuota Antigravity 单个模型的配额信息
@@ -676,25 +684,46 @@ func (s *AccountUsageService) getOpenAIUsageWithProbe(ctx context.Context, accou
 		return usage, nil
 	}
 
-	stats, err := s.usageLogRepo.GetAccountWindowStats(ctx, account.ID, now.Add(-5*time.Hour))
+	rangeReader, ok := s.usageLogRepo.(accountDisplayWindowStatsReader)
+	if !ok {
+		return nil, fmt.Errorf("account display window statistics are unavailable")
+	}
+	coverageStart, err := rangeReader.GetUsageLogCoverageStart(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("get OpenAI five-hour usage stats: %w", err)
+		return nil, fmt.Errorf("get usage log coverage: %w", err)
 	}
-	if usage.FiveHour == nil {
-		usage.FiveHour = &UsageProgress{Utilization: 0}
-	}
-	usage.FiveHour.WindowStats = windowStatsFromAccountStats(stats)
 
-	stats, err = s.usageLogRepo.GetAccountWindowStats(ctx, account.ID, now.Add(-7*24*time.Hour))
-	if err != nil {
-		return nil, fmt.Errorf("get OpenAI seven-day usage stats: %w", err)
+	if usage.FiveHour != nil && usage.FiveHour.WindowStart != nil && usage.FiveHour.ResetsAt != nil {
+		stats, statsErr := rangeReader.GetAccountDisplayWindowStats(ctx, account.ID, *usage.FiveHour.WindowStart, now)
+		if statsErr != nil {
+			return nil, fmt.Errorf("get OpenAI five-hour usage stats: %w", statsErr)
+		}
+		usage.FiveHour.WindowStats = windowStatsFromAccountStats(stats)
+		applyWindowStatsCoverage(usage.FiveHour, coverageStart)
 	}
-	if usage.SevenDay == nil {
-		usage.SevenDay = &UsageProgress{Utilization: 0}
+
+	if usage.SevenDay != nil && usage.SevenDay.WindowStart != nil && usage.SevenDay.ResetsAt != nil {
+		stats, statsErr := rangeReader.GetAccountDisplayWindowStats(ctx, account.ID, *usage.SevenDay.WindowStart, now)
+		if statsErr != nil {
+			return nil, fmt.Errorf("get OpenAI seven-day usage stats: %w", statsErr)
+		}
+		usage.SevenDay.WindowStats = windowStatsFromAccountStats(stats)
+		applyWindowStatsCoverage(usage.SevenDay, coverageStart)
 	}
-	usage.SevenDay.WindowStats = windowStatsFromAccountStats(stats)
 
 	return usage, nil
+}
+
+func applyWindowStatsCoverage(progress *UsageProgress, coverageStart *time.Time) {
+	if progress == nil || progress.WindowStart == nil || coverageStart == nil {
+		return
+	}
+	availableFrom := *progress.WindowStart
+	if coverageStart.After(availableFrom) {
+		availableFrom = *coverageStart
+	}
+	progress.StatsAvailableFrom = &availableFrom
+	progress.StatsComplete = !coverageStart.After(*progress.WindowStart)
 }
 
 func (s *AccountUsageService) getGrokUsage(ctx context.Context, account *Account, refreshBilling bool) (*UsageInfo, error) {
@@ -1397,9 +1426,10 @@ func buildCodexUsageProgressFromExtra(extra map[string]any, window string, now t
 	}
 
 	var (
-		usedPercentKey string
-		resetAfterKey  string
-		resetAtKey     string
+		usedPercentKey   string
+		resetAfterKey    string
+		resetAtKey       string
+		windowMinutesKey string
 	)
 
 	switch window {
@@ -1407,10 +1437,12 @@ func buildCodexUsageProgressFromExtra(extra map[string]any, window string, now t
 		usedPercentKey = "codex_5h_used_percent"
 		resetAfterKey = "codex_5h_reset_after_seconds"
 		resetAtKey = "codex_5h_reset_at"
+		windowMinutesKey = "codex_5h_window_minutes"
 	case "7d":
 		usedPercentKey = "codex_7d_used_percent"
 		resetAfterKey = "codex_7d_reset_after_seconds"
 		resetAtKey = "codex_7d_reset_at"
+		windowMinutesKey = "codex_7d_window_minutes"
 	default:
 		return nil
 	}
@@ -1450,6 +1482,13 @@ func buildCodexUsageProgressFromExtra(extra map[string]any, window string, now t
 	// 窗口已过期（resetAt 在 now 之前）→ 额度已重置，归零
 	if progress.ResetsAt != nil && !now.Before(*progress.ResetsAt) {
 		progress.Utilization = 0
+		progress.WindowStart = nil
+	} else if progress.ResetsAt != nil {
+		windowMinutes := parseExtraInt(extra[windowMinutesKey])
+		if windowMinutes > 0 {
+			windowStart := progress.ResetsAt.Add(-time.Duration(windowMinutes) * time.Minute)
+			progress.WindowStart = &windowStart
+		}
 	}
 
 	return progress

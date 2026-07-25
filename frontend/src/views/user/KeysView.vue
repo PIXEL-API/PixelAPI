@@ -523,17 +523,26 @@
             data-tour="key-form-group"
           >
             <template #selected="{ option }">
-              <GroupBadge
-                v-if="option"
-                :name="(option as unknown as GroupOption).label"
-                :platform="(option as unknown as GroupOption).platform"
-                :scope="(option as unknown as GroupOption).scope"
-                :subscription-type="(option as unknown as GroupOption).subscriptionType"
-                :rate-multiplier="(option as unknown as GroupOption).rate"
-                :user-rate-multiplier="(option as unknown as GroupOption).userRate"
-                :effective-rate-multiplier="(option as unknown as GroupOption).effectiveRate"
-                :rate-multiplier-source="(option as unknown as GroupOption).rateSource"
-              />
+              <div v-if="option" class="flex min-w-0 flex-wrap items-center gap-1.5">
+                <span
+                  :class="[
+                    'shrink-0 rounded-md px-1.5 text-[11px] font-semibold leading-5',
+                    groupStatusClass(option as unknown as GroupOption)
+                  ]"
+                >
+                  {{ groupStatusLabel(option as unknown as GroupOption) }}
+                </span>
+                <GroupBadge
+                  :name="(option as unknown as GroupOption).label"
+                  :platform="(option as unknown as GroupOption).platform"
+                  :scope="(option as unknown as GroupOption).scope"
+                  :subscription-type="(option as unknown as GroupOption).subscriptionType"
+                  :rate-multiplier="(option as unknown as GroupOption).rate"
+                  :user-rate-multiplier="(option as unknown as GroupOption).userRate"
+                  :effective-rate-multiplier="(option as unknown as GroupOption).effectiveRate"
+                  :rate-multiplier-source="(option as unknown as GroupOption).rateSource"
+                />
+              </div>
               <span v-else class="text-gray-400">{{ t('keys.selectGroup') }}</span>
             </template>
             <template #option="{ option, selected }">
@@ -547,6 +556,8 @@
                 :effective-rate-multiplier="(option as unknown as GroupOption).effectiveRate"
                 :rate-multiplier-source="(option as unknown as GroupOption).rateSource"
                 :description="(option as unknown as GroupOption).description"
+                :status-label="groupStatusLabel(option as unknown as GroupOption)"
+                :status-tone="groupStatusTone(option as unknown as GroupOption)"
                 :selected="selected"
               />
             </template>
@@ -651,17 +662,26 @@
                     :aria-labelledby="`key-group-route-group-label-${index}`"
                   >
                     <template #selected="{ option }">
-                      <GroupBadge
-                        v-if="option"
-                        :name="(option as unknown as GroupOption).label"
-                        :platform="(option as unknown as GroupOption).platform"
-                        :scope="(option as unknown as GroupOption).scope"
-                        :subscription-type="(option as unknown as GroupOption).subscriptionType"
-                        :rate-multiplier="(option as unknown as GroupOption).rate"
-                        :user-rate-multiplier="(option as unknown as GroupOption).userRate"
-                        :effective-rate-multiplier="(option as unknown as GroupOption).effectiveRate"
-                        :rate-multiplier-source="(option as unknown as GroupOption).rateSource"
-                      />
+                      <div v-if="option" class="flex min-w-0 flex-wrap items-center gap-1.5">
+                        <span
+                          :class="[
+                            'shrink-0 rounded-md px-1.5 text-[11px] font-semibold leading-5',
+                            groupStatusClass(option as unknown as GroupOption)
+                          ]"
+                        >
+                          {{ groupStatusLabel(option as unknown as GroupOption) }}
+                        </span>
+                        <GroupBadge
+                          :name="(option as unknown as GroupOption).label"
+                          :platform="(option as unknown as GroupOption).platform"
+                          :scope="(option as unknown as GroupOption).scope"
+                          :subscription-type="(option as unknown as GroupOption).subscriptionType"
+                          :rate-multiplier="(option as unknown as GroupOption).rate"
+                          :user-rate-multiplier="(option as unknown as GroupOption).userRate"
+                          :effective-rate-multiplier="(option as unknown as GroupOption).effectiveRate"
+                          :rate-multiplier-source="(option as unknown as GroupOption).rateSource"
+                        />
+                      </div>
                       <span v-else class="text-gray-400">{{ t('keys.selectGroup') }}</span>
                     </template>
                     <template #option="{ option, selected }">
@@ -675,6 +695,8 @@
                         :effective-rate-multiplier="(option as unknown as GroupOption).effectiveRate"
                         :rate-multiplier-source="(option as unknown as GroupOption).rateSource"
                         :description="(option as unknown as GroupOption).description"
+                        :status-label="groupStatusLabel(option as unknown as GroupOption)"
+                        :status-tone="groupStatusTone(option as unknown as GroupOption)"
                         :selected="selected"
                       />
                     </template>
@@ -1470,6 +1492,8 @@
               :effective-rate-multiplier="option.effectiveRate"
               :rate-multiplier-source="option.rateSource"
               :description="option.description"
+              :status-label="groupStatusLabel(option)"
+              :status-tone="groupStatusTone(option)"
               :selected="
                 selectedKeyForGroup?.group_id === option.value ||
                 (!selectedKeyForGroup?.group_id && option.value === null)
@@ -1557,6 +1581,7 @@ interface GroupOption extends SelectOption {
   subscriptionType: SubscriptionType
   platform: GroupPlatform
   scope?: GroupScope
+  poolScarce: boolean
 }
 
 interface ApiKeyGroupRouteForm {
@@ -1974,22 +1999,36 @@ const onStatusFilterChange = (value: string | number | boolean | null) => {
 
 // Convert groups to Select options format with rate multiplier and subscription type
 const groupOptions = computed<GroupOption[]>(() =>
-  groups.value.map((group) => {
-    const fallbackUserRate = userGroupRates.value[group.id] ?? null
-    return {
-      value: group.id,
-      label: group.name,
-      description: group.description,
-      rate: group.rate_multiplier,
-      userRate: fallbackUserRate,
-      effectiveRate: group.effective_rate_multiplier ?? fallbackUserRate,
-      rateSource: group.effective_rate_multiplier_source ?? (fallbackUserRate != null ? 'user_group' : 'group_default'),
-      subscriptionType: group.subscription_type,
-      platform: group.platform,
-      scope: group.scope
-    }
-  })
+  [...groups.value]
+    .sort((a, b) => Number(a.pool_scarce) - Number(b.pool_scarce))
+    .map((group) => {
+      const fallbackUserRate = userGroupRates.value[group.id] ?? null
+      return {
+        value: group.id,
+        label: group.name,
+        description: group.description,
+        rate: group.rate_multiplier,
+        userRate: fallbackUserRate,
+        effectiveRate: group.effective_rate_multiplier ?? fallbackUserRate,
+        rateSource: group.effective_rate_multiplier_source ?? (fallbackUserRate != null ? 'user_group' : 'group_default'),
+        subscriptionType: group.subscription_type,
+        platform: group.platform,
+        scope: group.scope,
+        poolScarce: group.pool_scarce
+      }
+    })
 )
+
+const groupStatusLabel = (option: GroupOption): string =>
+  option.poolScarce ? t('keys.poolScarceWarning') : t('keys.groupRecommended')
+
+const groupStatusTone = (option: GroupOption): 'recommended' | 'warning' =>
+  option.poolScarce ? 'warning' : 'recommended'
+
+const groupStatusClass = (option: GroupOption): string =>
+  option.poolScarce
+    ? 'bg-red-50 text-red-600 dark:bg-red-950/40 dark:text-red-400'
+    : 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-400'
 
 const createRoutesFromKey = (key: ApiKey): ApiKeyGroupRouteForm[] => {
   if (key.group_routes && key.group_routes.length > 0) {

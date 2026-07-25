@@ -10,6 +10,7 @@ type RedeemCode struct {
 	ID        int64
 	Code      string
 	Type      string
+	Category  string
 	Value     float64
 	Status    string
 	UsedBy    *int64

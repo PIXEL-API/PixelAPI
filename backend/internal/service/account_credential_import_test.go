@@ -5,8 +5,11 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func testAgentIdentityPrivateKey(t *testing.T) string {
@@ -20,6 +23,76 @@ func testAgentIdentityPrivateKey(t *testing.T) string {
 		t.Fatalf("marshal PKCS#8 key: %v", err)
 	}
 	return base64.StdEncoding.EncodeToString(der)
+}
+
+func testOpenAIImportIDToken(t *testing.T, chatGPTUserID string) string {
+	t.Helper()
+	payload, err := json.Marshal(map[string]any{
+		"email": chatGPTUserID + "@school.example",
+		"https://api.openai.com/auth": map[string]any{
+			"chatgpt_account_id": "school-workspace",
+			"chatgpt_user_id":    chatGPTUserID,
+			"chatgpt_plan_type":  "chatgpt-k12",
+			"organizations": []map[string]any{
+				{"id": "school-org", "is_default": true},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal OpenAI ID token payload: %v", err)
+	}
+	return "e30." + base64.RawURLEncoding.EncodeToString(payload) + ".signature"
+}
+
+func TestEnrichOpenAIOAuthCredentialsFromIDTokenSeparatesK12WorkspaceMembers(t *testing.T) {
+	firstCredentials := map[string]any{
+		"access_token": "access-a",
+		"id_token":     testOpenAIImportIDToken(t, "teacher-a"),
+	}
+	secondCredentials := map[string]any{
+		"access_token": "access-b",
+		"id_token":     testOpenAIImportIDToken(t, "teacher-b"),
+	}
+
+	require.NoError(t, EnrichOpenAIOAuthCredentialsFromIDToken(firstCredentials))
+	require.NoError(t, EnrichOpenAIOAuthCredentialsFromIDToken(secondCredentials))
+	require.Equal(t, "school-workspace", firstCredentials["chatgpt_account_id"])
+	require.Equal(t, "school-org", firstCredentials["organization_id"])
+	require.Equal(t, "teacher-a", firstCredentials["chatgpt_user_id"])
+	require.Equal(t, "teacher-b", secondCredentials["chatgpt_user_id"])
+
+	err := ensureOwnedAccountBatchNotDuplicate([]*Account{
+		{
+			ID:          1,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeOAuth,
+			Credentials: firstCredentials,
+		},
+		{
+			ID:          2,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeOAuth,
+			Credentials: secondCredentials,
+		},
+	})
+	require.NoError(t, err)
+}
+
+func TestEnrichOpenAIOAuthCredentialsFromIDTokenPreservesExplicitFields(t *testing.T) {
+	credentials := map[string]any{
+		"id_token":           testOpenAIImportIDToken(t, "token-teacher"),
+		"email":              "explicit@school.example",
+		"chatgpt_user_id":    "explicit-teacher",
+		"organization_id":    123,
+		"chatgpt_account_id": "",
+	}
+
+	require.NoError(t, EnrichOpenAIOAuthCredentialsFromIDToken(credentials))
+	require.Equal(t, "explicit@school.example", credentials["email"])
+	require.Equal(t, "explicit-teacher", credentials["chatgpt_user_id"])
+	require.Equal(t, 123, credentials["organization_id"])
+	require.Equal(t, "school-workspace", credentials["chatgpt_account_id"])
+	require.Equal(t, "chatgpt-k12", credentials["plan_type"])
 }
 
 func TestAccountCredentialImportSupportsAgentIdentitySchemas(t *testing.T) {

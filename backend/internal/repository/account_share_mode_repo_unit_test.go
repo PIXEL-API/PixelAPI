@@ -23,20 +23,19 @@ func TestAccountShareRoomRepresentativeJoinUsesIndexedPlacementCandidates(t *tes
 	normalized := strings.ToLower(strings.Join(strings.Fields(query), " "))
 
 	required := []string{
-		"from account_external_placements room_placement",
-		"where room_placement.listing_id = l.id",
-		"and room_placement.placement_type = 'room'",
-		"and room_placement.state = 'active'",
-		"join accounts a on a.id = room_candidate.account_id",
-		"not exists ( select 1 from account_external_placements active_room_placement",
+		"from account_share_room_accounts room_account",
+		"join accounts a on a.id = room_account.account_id",
+		"where room_account.listing_id = l.id",
+		"and room_account.state = 'active'",
+		"room_account.priority asc",
 	}
 	for _, fragment := range required {
 		if !strings.Contains(normalized, fragment) {
 			t.Fatalf("representative account query must contain %q:\n%s", fragment, query)
 		}
 	}
-	if strings.Contains(normalized, "from accounts a left join account_external_placements") {
-		t.Fatalf("representative account query must not scan accounts before filtering room placements:\n%s", query)
+	if strings.Contains(normalized, "account_external_placements") {
+		t.Fatalf("representative account query must not read platform-mode placements:\n%s", query)
 	}
 }
 
@@ -123,7 +122,7 @@ func TestAccountShareModeRepositoryUpdateListingAllowsAdminWithoutOwnerFilter(t 
 	}
 }
 
-func TestAccountShareModeRepositoryUpdateListingSyncsAllowedModelsToAllRoomAccounts(t *testing.T) {
+func TestAccountShareModeRepositoryUpdateListingDoesNotSyncAllowedModelsToRoomAccounts(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
@@ -132,7 +131,7 @@ func TestAccountShareModeRepositoryUpdateListingSyncsAllowedModelsToAllRoomAccou
 		_ = db.Close()
 	}()
 	repo := &accountShareModeRepository{db: db}
-	commitErr := errors.New("stop after account sync")
+	commitErr := errors.New("stop after listing update")
 	models := []string{"gpt-5.5", "gpt-5.4"}
 
 	mock.ExpectBegin()
@@ -142,15 +141,6 @@ func TestAccountShareModeRepositoryUpdateListingSyncsAllowedModelsToAllRoomAccou
 			AddRow(int64(42), 2, 5, 2, 40, nil, nil, nil))
 	mock.ExpectExec("UPDATE account_share_listings").
 		WithArgs(`["gpt-5.5","gpt-5.4"]`, int64(7), int64(42)).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery("UPDATE accounts AS a").
-		WithArgs(`{"gpt-5.4":"gpt-5.4","gpt-5.5":"gpt-5.5"}`, int64(7), int64(42)).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(99)).AddRow(int64(100)))
-	mock.ExpectExec("INSERT INTO scheduler_outbox").
-		WithArgs(service.SchedulerOutboxEventAccountChanged, sqlmock.AnyArg(), nil, nil, sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("INSERT INTO scheduler_outbox").
-		WithArgs(service.SchedulerOutboxEventAccountChanged, sqlmock.AnyArg(), nil, nil, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit().WillReturnError(commitErr)
 

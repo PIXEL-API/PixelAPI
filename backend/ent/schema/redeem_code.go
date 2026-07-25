@@ -48,6 +48,9 @@ func (RedeemCode) Fields() []ent.Field {
 		field.String("status").
 			MaxLen(20).
 			Default(domain.StatusUnused),
+		field.String("category").
+			MaxLen(64).
+			Default(""),
 		field.Int64("used_by").
 			Optional().
 			Nillable(),
@@ -88,6 +91,7 @@ func (RedeemCode) Indexes() []ent.Index {
 	return []ent.Index{
 		// code 字段已在 Fields() 中声明 Unique()，无需重复索引
 		index.Fields("status"),
+		index.Fields("category"),
 		index.Fields("used_by"),
 		index.Fields("group_id"),
 	}

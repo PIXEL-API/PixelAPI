@@ -18,9 +18,10 @@ describe('bounded UI skin routing', () => {
       .map((route) => route.path)
       .sort()
 
-    expect(v2Paths).toEqual(['/activities', '/dashboard', '/keys', '/usage'])
+    expect(v2Paths).toEqual(['/activities', '/admin/activities', '/dashboard', '/keys', '/usage'])
     expect(router.resolve('/profile').meta.uiSkin).toBeUndefined()
     expect(router.resolve('/admin/usage').meta.uiSkin).toBeUndefined()
+    expect(router.resolve('/admin/activities').meta.uiSkin).toBe('v2')
     expect(router.resolve('/key-usage').meta.uiSkin).toBeUndefined()
     expect(router.resolve('/login').meta.uiSkin).toBeUndefined()
   })

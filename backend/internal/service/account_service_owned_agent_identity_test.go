@@ -178,18 +178,40 @@ type recordingAgentIdentityWSInvalidator struct {
 type ownedAgentIdentityPlacementRepoStub struct {
 	AccountShareModeRepository
 	AccountShareRoomRepository
-	accountRepo *ownedAgentIdentityRepoStub
+	accountRepo       *ownedAgentIdentityRepoStub
+	beginDrain        bool
+	restoreDrainCalls int
+	conversionResult  *ConvertAccountExternalPlacementResult
 }
 
-func (s *ownedAgentIdentityPlacementRepoStub) BeginExternalPlacementDrain(context.Context, int64, int64) (bool, error) {
+func (s *ownedAgentIdentityPlacementRepoStub) HasRoomAccount(context.Context, int64, int64) (bool, error) {
 	return false, nil
 }
 
-func (s *ownedAgentIdentityPlacementRepoStub) RestoreExternalPlacementAfterDrain(context.Context, int64, int64) error {
+func (s *ownedAgentIdentityPlacementRepoStub) BeginExternalPlacementDrain(_ context.Context, _ int64, accountID int64) (bool, error) {
+	if !s.beginDrain {
+		return false, nil
+	}
+	account := s.accountRepo.accounts[accountID]
+	if account != nil && account.ExternalPlacement != nil {
+		account.ExternalPlacement.State = "draining"
+	}
+	return true, nil
+}
+
+func (s *ownedAgentIdentityPlacementRepoStub) RestoreExternalPlacementAfterDrain(_ context.Context, _ int64, accountID int64) error {
+	s.restoreDrainCalls++
+	account := s.accountRepo.accounts[accountID]
+	if account != nil && account.ExternalPlacement != nil && account.ExternalPlacement.State == "draining" {
+		account.ExternalPlacement.State = "active"
+	}
 	return nil
 }
 
 func (s *ownedAgentIdentityPlacementRepoStub) ConvertExternalPlacement(_ context.Context, input ConvertAccountExternalPlacementInput) (*ConvertAccountExternalPlacementResult, error) {
+	if s.conversionResult != nil {
+		return s.conversionResult, nil
+	}
 	account, err := s.accountRepo.GetByID(context.Background(), input.AccountID)
 	if err != nil {
 		return nil, err
@@ -255,6 +277,68 @@ func newOwnedAgentIdentityService(repo *ownedAgentIdentityRepoStub) (*AccountSer
 		accountShareRoomRepo:       placementRepo,
 		agentIdentityWSInvalidator: invalidator,
 	}, invalidator
+}
+
+func TestConvertOwnedExternalPlacementRestoresDrainAfterHistoricalIdempotencyReplay(t *testing.T) {
+	ownerUserID := int64(101)
+	publicGroupID := ownedAgentIdentityPlusPublicGroupID
+	repo := newOwnedAgentIdentityRepoStub()
+	repo.accounts[1] = &Account{
+		ID:           1,
+		Name:         "Replay placement",
+		OwnerUserID:  &ownerUserID,
+		Platform:     PlatformOpenAI,
+		Type:         AccountTypeOAuth,
+		AccountLevel: AccountLevelPlus,
+		Credentials:  map[string]any{"access_token": "test-token"},
+		Extra:        map[string]any{},
+		ShareMode:    AccountShareModePublic,
+		ShareStatus:  AccountShareStatusApproved,
+		Concurrency:  3,
+		Priority:     1,
+		Status:       StatusActive,
+		Schedulable:  true,
+		GroupIDs:     []int64{ownedAgentIdentityPrivateGroupID, publicGroupID},
+		ExternalPlacement: &AccountExternalPlacement{
+			Target:        AccountExternalPlacementPublicPool,
+			PublicGroupID: &publicGroupID,
+			State:         "active",
+			Version:       2,
+		},
+	}
+	service, _ := newOwnedAgentIdentityService(repo)
+	service.concurrencyService = &ConcurrencyService{}
+	placementRepo := service.accountShareRoomRepo.(*ownedAgentIdentityPlacementRepoStub)
+	placementRepo.beginDrain = true
+	placementRepo.conversionResult = &ConvertAccountExternalPlacementResult{
+		AccountID: 1,
+		Previous: &AccountExternalPlacement{
+			Target:  AccountExternalPlacementPublicPool,
+			State:   "active",
+			Version: 1,
+		},
+		Current: &AccountExternalPlacement{
+			Target:  AccountExternalPlacementPrivate,
+			State:   "active",
+			Version: 1,
+		},
+	}
+
+	result, err := service.ConvertOwnedExternalPlacement(
+		context.Background(),
+		ownerUserID,
+		1,
+		ConvertAccountExternalPlacementInput{
+			Target:         AccountExternalPlacementPrivate,
+			IdempotencyKey: "historical-private-request",
+		},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, AccountExternalPlacementPrivate, result.Current.Target)
+	require.Equal(t, 1, placementRepo.restoreDrainCalls)
+	require.Equal(t, AccountExternalPlacementPublicPool, repo.accounts[1].ExternalPlacement.Target)
+	require.Equal(t, "active", repo.accounts[1].ExternalPlacement.State)
 }
 
 func ownedAgentIdentityImportRequest(t *testing.T, teamID, userID, runtimeID, planType string) CreateAccountRequest {
@@ -653,26 +737,6 @@ func TestAccountServiceUpdateOwnedPublicAgentIdentityToPrivateInvalidatesWS(t *t
 	require.NoError(t, err)
 	require.Equal(t, AccountShareModePrivate, updated.ShareMode)
 	require.Equal(t, []int64{ownedAgentIdentityPrivateGroupID}, updated.GroupIDs)
-	require.Equal(t, []int64{created.Account.ID}, invalidator.accountIDs)
-}
-
-func TestAccountServiceSetOwnedAgentIdentityLevelSuspensionInvalidatesWS(t *testing.T) {
-	repo := newOwnedAgentIdentityRepoStub()
-	svc, invalidator := newOwnedAgentIdentityService(repo)
-	created, err := svc.ImportOwnedWithResult(context.Background(), 101, ownedAgentIdentityImportRequest(t, "team-a", "member-a", "runtime-old", "team"))
-	require.NoError(t, err)
-
-	publicMode := AccountShareModePublic
-	_, err = svc.UpdateOwned(context.Background(), 101, created.Account.ID, UpdateAccountRequest{ShareMode: &publicMode})
-	require.NoError(t, err)
-	_, err = svc.ApproveOwnedPublicShare(context.Background(), 101, created.Account.ID)
-	require.NoError(t, err)
-	invalidator.accountIDs = nil
-
-	updated, err := svc.SetOwnedOpenAIAccountLevel(context.Background(), 101, created.Account.ID, AccountLevelFree, "free tier detected")
-
-	require.NoError(t, err)
-	require.Equal(t, AccountShareStatusSuspended, updated.ShareStatus)
 	require.Equal(t, []int64{created.Account.ID}, invalidator.accountIDs)
 }
 

@@ -22,6 +22,8 @@ const (
 	FieldValue = "value"
 	// FieldStatus holds the string denoting the status field in the database.
 	FieldStatus = "status"
+	// FieldCategory holds the string denoting the category field in the database.
+	FieldCategory = "category"
 	// FieldUsedBy holds the string denoting the used_by field in the database.
 	FieldUsedBy = "used_by"
 	// FieldUsedAt holds the string denoting the used_at field in the database.
@@ -63,6 +65,7 @@ var Columns = []string{
 	FieldType,
 	FieldValue,
 	FieldStatus,
+	FieldCategory,
 	FieldUsedBy,
 	FieldUsedAt,
 	FieldNotes,
@@ -94,6 +97,10 @@ var (
 	DefaultStatus string
 	// StatusValidator is a validator for the "status" field. It is called by the builders before save.
 	StatusValidator func(string) error
+	// DefaultCategory holds the default value on creation for the "category" field.
+	DefaultCategory string
+	// CategoryValidator is a validator for the "category" field. It is called by the builders before save.
+	CategoryValidator func(string) error
 	// DefaultCreatedAt holds the default value on creation for the "created_at" field.
 	DefaultCreatedAt func() time.Time
 	// DefaultValidityDays holds the default value on creation for the "validity_days" field.
@@ -126,6 +133,11 @@ func ByValue(opts ...sql.OrderTermOption) OrderOption {
 // ByStatus orders the results by the status field.
 func ByStatus(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldStatus, opts...).ToFunc()
+}
+
+// ByCategory orders the results by the category field.
+func ByCategory(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldCategory, opts...).ToFunc()
 }
 
 // ByUsedBy orders the results by the used_by field.

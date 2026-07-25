@@ -167,6 +167,11 @@ type accountShareRoomCreateRequest struct {
 	Anthropic7dLimitPercent float64  `json:"anthropic_7d_limit_percent"`
 }
 
+type accountShareRoomAccountsBatchRequest struct {
+	AccountIDs     []int64 `json:"account_ids" binding:"required"`
+	IdempotencyKey string  `json:"idempotency_key" binding:"required,max=128"`
+}
+
 func (h *AccountShareModeHandler) ListModeGroups(c *gin.Context) {
 	groups, err := h.service.ListModeGroups(c.Request.Context())
 	if err != nil {
@@ -587,6 +592,49 @@ func (h *AccountShareModeHandler) ListRoomAccounts(c *gin.Context) {
 		return
 	}
 	response.Success(c, accounts)
+}
+
+func (h *AccountShareModeHandler) AttachRoomAccounts(c *gin.Context) {
+	h.mutateRoomAccounts(c, true)
+}
+
+func (h *AccountShareModeHandler) DetachRoomAccounts(c *gin.Context) {
+	h.mutateRoomAccounts(c, false)
+}
+
+func (h *AccountShareModeHandler) mutateRoomAccounts(c *gin.Context, attach bool) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	listingID, err := parseInt64Param(c, "id")
+	if err != nil || listingID <= 0 {
+		response.BadRequest(c, "Invalid listing ID")
+		return
+	}
+	var req accountShareRoomAccountsBatchRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	input := service.BatchAccountShareRoomAccountsInput{
+		ListingID:      listingID,
+		AccountIDs:     req.AccountIDs,
+		OwnerUserID:    subject.UserID,
+		IdempotencyKey: req.IdempotencyKey,
+	}
+	var result *service.BulkUpdateAccountsResult
+	if attach {
+		result, err = h.service.AttachRoomAccounts(c.Request.Context(), input)
+	} else {
+		result, err = h.service.DetachRoomAccounts(c.Request.Context(), input)
+	}
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
 }
 
 func (h *AccountShareModeHandler) GetMySpendSummary(c *gin.Context) {

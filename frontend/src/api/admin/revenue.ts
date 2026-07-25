@@ -77,6 +77,7 @@ export interface RevenueAdjustmentStats {
   share_consumer_charge: number
   share_account_cost: number
   share_owner_credit: number
+  share_invite_credit: number
   share_platform_fee: number
   share_net_profit: number
   share_settlement_count: number

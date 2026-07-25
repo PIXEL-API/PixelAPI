@@ -1516,7 +1516,11 @@ func (s *UsageLogRepoSuite) TestGetAccountUsageStats_MergesOwnedOpenAIIdentityHi
 		Platform:    service.PlatformOpenAI,
 		Type:        service.AccountTypeOAuth,
 		OwnerUserID: &ownerID,
-		Credentials: map[string]any{"email": "same-openai-account@example.com"},
+		Credentials: map[string]any{
+			"organization_id": "org_same",
+			"chatgpt_user_id": "user_same",
+			"email":           "same-openai-account@example.com",
+		},
 	})
 	newAccount := mustCreateAccount(s.T(), s.client, &service.Account{
 		Name:        "acc-accstats-openai-new",
@@ -1526,6 +1530,17 @@ func (s *UsageLogRepoSuite) TestGetAccountUsageStats_MergesOwnedOpenAIIdentityHi
 		Credentials: map[string]any{
 			"organization_id": "org_same",
 			"chatgpt_user_id": "user_same",
+			"email":           "same-openai-account@example.com",
+		},
+	})
+	sameEmailDifferentIdentity := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:        "acc-accstats-openai-same-email-different-id",
+		Platform:    service.PlatformOpenAI,
+		Type:        service.AccountTypeOAuth,
+		OwnerUserID: &ownerID,
+		Credentials: map[string]any{
+			"organization_id": "org_different",
+			"chatgpt_user_id": "user_different",
 			"email":           "same-openai-account@example.com",
 		},
 	})
@@ -1544,6 +1559,7 @@ func (s *UsageLogRepoSuite) TestGetAccountUsageStats_MergesOwnedOpenAIIdentityHi
 	base := time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC)
 	s.createUsageLog(owner, apiKey, oldAccount, 100, 50, 1.25, base.Add(12*time.Hour))
 	s.createUsageLog(owner, apiKey, newAccount, 10, 5, 0.25, base.Add(36*time.Hour))
+	s.createUsageLog(owner, apiKey, sameEmailDifferentIdentity, 500, 250, 50, base.Add(36*time.Hour))
 	s.createUsageLog(otherOwner, otherAPIKey, otherAccount, 1000, 500, 99, base.Add(36*time.Hour))
 
 	s.Require().NoError(s.client.Account.DeleteOneID(oldAccount.ID).Exec(s.ctx))
@@ -1555,6 +1571,10 @@ func (s *UsageLogRepoSuite) TestGetAccountUsageStats_MergesOwnedOpenAIIdentityHi
 	s.Require().Equal(int64(2), resp.Summary.TotalRequests)
 	s.Require().Equal(int64(165), resp.Summary.TotalTokens)
 	s.Require().InDelta(1.50, resp.Summary.TotalCost, 0.000001)
+	s.Require().Equal(2, resp.Lifetime.SourceAccountCount)
+	s.Require().Equal(int64(2), resp.Lifetime.TotalRequests)
+	s.Require().Equal(int64(165), resp.Lifetime.TotalTokens)
+	s.Require().InDelta(1.50, resp.Lifetime.TotalCost, 0.000001)
 	s.Require().Len(resp.Models, 1)
 	s.Require().Equal(int64(2), resp.Models[0].Requests)
 }
@@ -1571,6 +1591,7 @@ func (s *UsageLogRepoSuite) TestGetAccountUsageStats_EmptyRange() {
 
 	s.Require().Len(resp.History, 0)
 	s.Require().Equal(int64(0), resp.Summary.TotalRequests)
+	s.Require().Equal(0, resp.Summary.ActualDaysUsed)
 }
 
 // --- GetUserUsageTrend ---

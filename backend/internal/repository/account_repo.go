@@ -405,6 +405,10 @@ func (r *accountRepository) GetByIDs(ctx context.Context, ids []int64) ([]*servi
 	if err != nil {
 		return nil, err
 	}
+	roomListingIDsByAccount, err := r.loadAccountShareRoomListingIDs(ctx, accountIDs)
+	if err != nil {
+		return nil, err
+	}
 
 	outByID := make(map[int64]*service.Account, len(entAccounts))
 	for _, entAcc := range entAccounts {
@@ -430,10 +434,10 @@ func (r *accountRepository) GetByIDs(ctx context.Context, ids []int64) ([]*servi
 		if placement, ok := externalPlacementsByAccount[entAcc.ID]; ok {
 			placementCopy := placement
 			out.ExternalPlacement = &placementCopy
-			if placement.Target == service.AccountExternalPlacementRoom && placement.RoomID != nil {
-				id := *placement.RoomID
-				out.AccountShareModeListingID = &id
-			}
+		}
+		if listingID, ok := roomListingIDsByAccount[entAcc.ID]; ok {
+			id := listingID
+			out.AccountShareModeListingID = &id
 		}
 		outByID[entAcc.ID] = out
 	}
@@ -580,13 +584,13 @@ func (r *accountRepository) IsAccountShareModeListingAccount(ctx context.Context
 		return false, nil
 	}
 	rows, err := r.sql.QueryContext(ctx, `
-		SELECT placement.listing_id
-		FROM account_external_placements placement
+		SELECT room_account.listing_id
+		FROM account_share_room_accounts room_account
 		JOIN account_share_listings listing
-			ON listing.id = placement.listing_id
+			ON listing.id = room_account.listing_id
 			AND listing.deleted_at IS NULL
-		WHERE placement.account_id = $1
-			AND placement.placement_type = 'room'
+		WHERE room_account.account_id = $1
+			AND room_account.state IN ('active', 'draining')
 		LIMIT 1
 	`, id)
 	if err != nil {
@@ -3079,6 +3083,10 @@ func (r *accountRepository) accountsToService(ctx context.Context, accounts []*d
 	if err != nil {
 		return nil, err
 	}
+	roomListingIDsByAccount, err := r.loadAccountShareRoomListingIDs(ctx, accountIDs)
+	if err != nil {
+		return nil, err
+	}
 
 	outAccounts := make([]service.Account, 0, len(accounts))
 	for _, acc := range accounts {
@@ -3106,10 +3114,10 @@ func (r *accountRepository) accountsToService(ctx context.Context, accounts []*d
 		if placement, ok := externalPlacementsByAccount[acc.ID]; ok {
 			placementCopy := placement
 			out.ExternalPlacement = &placementCopy
-			if placement.Target == service.AccountExternalPlacementRoom && placement.RoomID != nil {
-				id := *placement.RoomID
-				out.AccountShareModeListingID = &id
-			}
+		}
+		if listingID, ok := roomListingIDsByAccount[acc.ID]; ok {
+			id := listingID
+			out.AccountShareModeListingID = &id
 		}
 		outAccounts = append(outAccounts, *out)
 	}
@@ -3127,15 +3135,10 @@ func (r *accountRepository) loadAccountExternalPlacements(ctx context.Context, a
 		SELECT
 			placement.account_id,
 			placement.placement_type,
-			placement.listing_id,
-			COALESCE(listing.room_name, ''),
 			placement.public_group_id,
 			placement.state,
 			placement.version
 		FROM account_external_placements placement
-		LEFT JOIN account_share_listings listing
-			ON listing.id = placement.listing_id
-			AND listing.deleted_at IS NULL
 		WHERE placement.account_id = ANY($1)
 	`, pq.Array(accountIDs))
 	if err != nil {
@@ -3146,21 +3149,49 @@ func (r *accountRepository) loadAccountExternalPlacements(ctx context.Context, a
 	for rows.Next() {
 		var accountID int64
 		var placement service.AccountExternalPlacement
-		var roomID, publicGroupID sql.NullInt64
+		var publicGroupID sql.NullInt64
 		if err := rows.Scan(
 			&accountID,
 			&placement.Target,
-			&roomID,
-			&placement.RoomName,
 			&publicGroupID,
 			&placement.State,
 			&placement.Version,
 		); err != nil {
 			return nil, err
 		}
-		placement.RoomID = sqlNullInt64Ptr(roomID)
 		placement.PublicGroupID = sqlNullInt64Ptr(publicGroupID)
 		out[accountID] = placement
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (r *accountRepository) loadAccountShareRoomListingIDs(ctx context.Context, accountIDs []int64) (map[int64]int64, error) {
+	out := make(map[int64]int64)
+	if len(accountIDs) == 0 {
+		return out, nil
+	}
+	rows, err := r.sql.QueryContext(ctx, `
+		SELECT room_account.account_id, room_account.listing_id
+		FROM account_share_room_accounts room_account
+		JOIN account_share_listings listing
+			ON listing.id = room_account.listing_id
+			AND listing.deleted_at IS NULL
+		WHERE room_account.account_id = ANY($1)
+			AND room_account.state IN ('active', 'draining')
+	`, pq.Array(accountIDs))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var accountID, listingID int64
+		if err := rows.Scan(&accountID, &listingID); err != nil {
+			return nil, err
+		}
+		out[accountID] = listingID
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

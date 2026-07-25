@@ -92,7 +92,7 @@
             <button
               type="button"
               class="text-xs font-medium text-primary-700 hover:text-primary-800 dark:text-primary-300 dark:hover:text-primary-200"
-              @click="selectVisible"
+              @click="selectVisibleAccounts"
             >
               {{ t('admin.accounts.bulkActions.selectCurrentPage') }}
             </button>
@@ -128,14 +128,6 @@
             </button>
             <button type="button" class="btn btn-secondary btn-sm" @click="bulkRevalidatePublicShare">
               {{ t('userAccounts.bulkRevalidateShare') }}
-            </button>
-            <button type="button" class="btn btn-secondary btn-sm" @click="bulkVerifyLevel('plus')">
-              <Icon name="badge" size="sm" class="mr-1.5" />
-              {{ t('userAccounts.bulkVerifyPlus') }}
-            </button>
-            <button type="button" class="btn btn-secondary btn-sm" @click="bulkVerifyLevel('free')">
-              <Icon name="check" size="sm" class="mr-1.5" />
-              {{ t('userAccounts.bulkMarkFree') }}
             </button>
             <button type="button" class="btn btn-success btn-sm" @click="bulkToggleSchedulable(true)">
               {{ t('admin.accounts.bulkActions.enableScheduling') }}
@@ -177,7 +169,7 @@
               type="checkbox"
               class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
               :checked="isSelected(row.id)"
-              @change="toggleSelection(row.id)"
+              @change="toggleAccountSelection(row)"
             />
           </template>
           <template #cell-name="{ row, value }">
@@ -428,6 +420,7 @@
       :account="editingAccount"
       :proxies="userProxies"
       :groups="modalGroups"
+      :owner-user-id="Number(authStore.user?.id || 0)"
       account-scope="user"
       :allow-proxy="true"
       :allow-billing-rate="false"
@@ -440,8 +433,10 @@
       :account-ids="selectedIds"
       :selected-platforms="selectedPlatforms"
       :selected-types="selectedTypes"
+      :selected-account-levels="selectedAccountLevels"
       :proxies="[]"
       :groups="modalGroups"
+      :owner-user-id="Number(authStore.user?.id || 0)"
       account-scope="user"
       :allow-proxy="false"
       :allow-billing-rate="false"
@@ -508,6 +503,7 @@
       :show="showStatsModal"
       :account="statsAccount"
       :stats-loader="accountsAPI.getStats"
+      :usage-loader="accountsAPI.getUsage"
       @close="closeStatsModal"
     />
 
@@ -531,16 +527,6 @@
       @refresh-token="handleRefreshToken"
       @set-privacy="handleSetPrivacy"
       @moderation="openModerationModal"
-      @external-placement="openExternalPlacementDialog"
-      @verify-level="handleVerifyLevel"
-    />
-
-    <ExternalPlacementDialog
-      :show="showExternalPlacementDialog"
-      :account="externalPlacementAccount"
-      :owner-user-id="Number(authStore.user?.id || 0)"
-      @close="closeExternalPlacementDialog"
-      @converted="handleExternalPlacementConverted"
     />
 
     <UserContentModerationModal
@@ -555,7 +541,7 @@
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { accountsAPI, accountShareAPI, userGroupsAPI } from '@/api'
-import type { AccountBatchTask, UserAccountVerifyLevelTarget } from '@/api/accounts'
+import type { AccountBatchTask } from '@/api/accounts'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
@@ -582,13 +568,11 @@ import AccountStatsModal from '@/components/account/AccountStatsModal.vue'
 import ReAuthAccountModal from '@/components/account/ReAuthAccountModal.vue'
 import AccountTestModal from '@/components/account/AccountTestModal.vue'
 import UserAccountActionMenu from '@/components/account/UserAccountActionMenu.vue'
-import ExternalPlacementDialog from '@/components/account-share/ExternalPlacementDialog.vue'
 import UserContentModerationModal from '@/components/account/UserContentModerationModal.vue'
 import ImportAccountsModal from '@/components/user/ImportAccountsModal.vue'
 import UserProxyManagerModal from '@/components/user/UserProxyManagerModal.vue'
 import { ACCOUNT_STATUS_FILTER_OPTIONS } from '@/constants/account'
-import type { Account, AccountPlatform, AccountType, AdminGroup, Group, Proxy, WindowStats } from '@/types'
-import type { ConvertAccountExternalPlacementResponse } from '@/api/accountShare'
+import type { Account, AccountLevel, AccountPlatform, AccountType, AdminGroup, Group, Proxy, WindowStats } from '@/types'
 import type { Column } from '@/components/common/types'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
 import { extractApiErrorMessage } from '@/utils/apiError'
@@ -621,7 +605,6 @@ const showTestModal = ref(false)
 const showStatsModal = ref(false)
 const showReAuthModal = ref(false)
 const showModerationModal = ref(false)
-const showExternalPlacementDialog = ref(false)
 const showProxyManager = ref(false)
 const editingAccount = ref<Account | null>(null)
 const accountToDelete = ref<Account | null>(null)
@@ -629,11 +612,9 @@ const testingAccount = ref<Account | null>(null)
 const statsAccount = ref<Account | null>(null)
 const reAuthAccount = ref<Account | null>(null)
 const moderationAccount = ref<Account | null>(null)
-const externalPlacementAccount = ref<Account | null>(null)
 const togglingStatusId = ref<number | null>(null)
 const togglingSchedulableId = ref<number | null>(null)
 const revalidatingShareId = ref<number | null>(null)
-const verifyingLevelId = ref<number | null>(null)
 const usageManualRefreshToken = ref(0)
 const todayStatsByAccountId = ref<Record<string, WindowStats>>({})
 const todayStatsLoading = ref(false)
@@ -680,21 +661,32 @@ const {
   selectedCount,
   allVisibleSelected,
   isSelected,
-  toggle: toggleSelection,
-  clear: clearSelection,
-  selectVisible,
+  toggle: toggleTableSelection,
+  clear: clearTableSelection,
+  selectVisible: selectVisibleRows,
   toggleVisible
 } = useTableSelection<Account>({
   rows: accounts,
   getId: (account) => account.id
 })
 
-const selectedAccounts = computed(() => accounts.value.filter((account) => isSelected(account.id)))
+const selectedAccountMetadata = ref<Map<number, Account>>(new Map())
+const selectedAccounts = computed(() => (
+  selectedIds.value
+    .map((accountID) => selectedAccountMetadata.value.get(accountID))
+    .filter((account): account is Account => account !== undefined)
+))
 const selectedPlatforms = computed<AccountPlatform[]>(() => [
   ...new Set(selectedAccounts.value.map((account) => account.platform))
 ])
 const selectedTypes = computed<AccountType[]>(() => [
   ...new Set(selectedAccounts.value.map((account) => account.type))
+])
+const selectedAccountLevels = computed<AccountLevel[]>(() => [
+  ...new Set(selectedAccounts.value.map((account) => {
+    const level = String(account.account_level || 'unknown').trim().toLowerCase()
+    return (level || 'unknown') as AccountLevel
+  }))
 ])
 const columns = computed<Column[]>(() => [
   { key: 'select', label: '', sortable: false, class: 'w-10' },
@@ -834,10 +826,6 @@ function isAccountActive(account: Account): boolean {
 
 function isRefreshableAccount(account: Account): boolean {
   return account.type === 'oauth' || account.type === 'setup-token'
-}
-
-function supportsOpenAILevelVerification(account: Account): boolean {
-  return account.platform === 'openai' && account.type === 'oauth'
 }
 
 function buildDefaultTodayStats(): WindowStats {
@@ -989,9 +977,9 @@ function externalPlacementLabel(account: Account): string {
     case 'public_pool':
       return t('userAccounts.externalPlacement.publicPool')
     case 'room':
-      return account.external_placement?.room_name
-        ? t('userAccounts.externalPlacement.roomNamed', { name: account.external_placement.room_name })
-        : t('userAccounts.externalPlacement.room')
+      return t('userAccounts.externalPlacement.platformModeTitle', {
+        platform: platformDisplayName(account.platform)
+      })
     default:
       return t('userAccounts.externalPlacement.private')
   }
@@ -1000,12 +988,20 @@ function externalPlacementLabel(account: Account): string {
 function externalPlacementTitle(account: Account): string {
   const target = externalPlacementTarget(account)
   if (target === 'room') {
-    return t('userAccounts.externalPlacement.roomHint')
+    return t('userAccounts.externalPlacement.platformModeHint', {
+      platform: platformDisplayName(account.platform)
+    })
   }
   if (target === 'public_pool') {
     return t('userAccounts.externalPlacement.publicPoolHint')
   }
   return t('userAccounts.externalPlacement.privateHint')
+}
+
+function platformDisplayName(platform: Account['platform']): string {
+  if (platform === 'openai') return 'OpenAI'
+  if (platform === 'anthropic') return 'Anthropic'
+  return String(platform)
 }
 
 function externalPlacementBadgeClass(account: Account): string {
@@ -1096,6 +1092,7 @@ async function loadAccounts(): Promise<void> {
     )
     if (signal.aborted) return
     accounts.value = response.items
+    updateSelectedAccountMetadata(response.items)
     pagination.value.total = response.total
     pagination.value.pages = response.pages
     void refreshTodayStatsBatch()
@@ -1179,8 +1176,41 @@ function onGroupFilterChange(value: string | number | boolean | null): void {
   onFilterChange()
 }
 
+function updateSelectedAccountMetadata(
+  rows: Account[],
+  mode: 'add' | 'remove' = 'add'
+): void {
+  const next = new Map(selectedAccountMetadata.value)
+  for (const account of rows) {
+    if (mode === 'remove') {
+      next.delete(account.id)
+    } else if (isSelected(account.id)) {
+      next.set(account.id, account)
+    }
+  }
+  selectedAccountMetadata.value = next
+}
+
+function toggleAccountSelection(account: Account): void {
+  const selecting = !isSelected(account.id)
+  toggleTableSelection(account.id)
+  updateSelectedAccountMetadata([account], selecting ? 'add' : 'remove')
+}
+
+function selectVisibleAccounts(): void {
+  selectVisibleRows()
+  updateSelectedAccountMetadata(accounts.value)
+}
+
+function clearSelection(): void {
+  clearTableSelection()
+  selectedAccountMetadata.value = new Map()
+}
+
 function toggleSelectAllVisible(event: Event): void {
-  toggleVisible((event.target as HTMLInputElement).checked)
+  const checked = (event.target as HTMLInputElement).checked
+  toggleVisible(checked)
+  updateSelectedAccountMetadata(accounts.value, checked ? 'add' : 'remove')
 }
 
 function handleSort(key: string, order: 'asc' | 'desc'): void {
@@ -1205,40 +1235,6 @@ function openEditModal(account: Account): void {
   editingAccount.value = account
   showEditModal.value = true
   void loadUserProxies()
-}
-
-function openExternalPlacementDialog(account: Account): void {
-  if (!authStore.user?.id) {
-    appStore.showError(t('common.error'))
-    return
-  }
-  externalPlacementAccount.value = account
-  showExternalPlacementDialog.value = true
-}
-
-function closeExternalPlacementDialog(): void {
-  showExternalPlacementDialog.value = false
-  externalPlacementAccount.value = null
-}
-
-async function handleExternalPlacementConverted(
-  result: ConvertAccountExternalPlacementResponse
-): Promise<void> {
-  const account = accounts.value.find((item) => item.id === result.account_id)
-  if (account) {
-    account.external_placement = result.current
-    account.share_mode = result.current?.target === 'public_pool' ? 'public' : 'private'
-    account.account_share_mode_listing_id = result.current?.target === 'room'
-      ? result.current.room_id ?? null
-      : null
-  }
-  appStore.showSuccess(
-    result.unchanged
-      ? t('userAccounts.externalPlacement.unchanged')
-      : t('userAccounts.externalPlacement.converted')
-  )
-  usageManualRefreshToken.value += 1
-  await Promise.all([loadGroups(), loadAccounts()])
 }
 
 function openProxyManager(): void {
@@ -1431,76 +1427,6 @@ async function handleSetPrivacy(account: Account): Promise<void> {
   } catch (error: any) {
     console.error('Failed to set user account privacy:', error)
     appStore.showError(error?.response?.data?.message || t('admin.accounts.privacyFailed'))
-  }
-}
-
-async function handleVerifyLevel(account: Account, targetLevel: UserAccountVerifyLevelTarget): Promise<void> {
-  if (verifyingLevelId.value !== null) {
-    appStore.showWarning(t('userAccounts.levelVerifyInProgress'))
-    return
-  }
-  verifyingLevelId.value = account.id
-  try {
-    appStore.showInfo(
-      targetLevel === 'plus'
-        ? t('userAccounts.levelVerifyingPlus')
-        : t('userAccounts.levelUpdatingFree')
-    )
-    const result = await accountsAPI.verifyLevel(account.id, targetLevel)
-    patchAccountInList(result.account)
-    usageManualRefreshToken.value += 1
-    await refreshTodayStatsBatch()
-    if (targetLevel === 'free') {
-      appStore.showSuccess(t('userAccounts.levelFreeUpdated'))
-      return
-    }
-    if (result.verified) {
-      appStore.showSuccess(t('userAccounts.levelPlusVerified'))
-      return
-    }
-    const message = result.error_message
-      ? t('userAccounts.levelPlusRejectedWithReason', { reason: result.error_message })
-      : t('userAccounts.levelPlusRejected')
-    appStore.showWarning(message)
-  } catch (error: any) {
-    console.error('Failed to verify user account level:', error)
-    appStore.showError(error?.response?.data?.message || error?.message || t('userAccounts.levelVerifyFailed'))
-  } finally {
-    verifyingLevelId.value = null
-  }
-}
-
-async function bulkVerifyLevel(targetLevel: UserAccountVerifyLevelTarget): Promise<void> {
-  const selected = selectedAccounts.value.filter(supportsOpenAILevelVerification)
-  if (selected.length === 0) {
-    appStore.showError(t('userAccounts.noLevelVerifiableAccounts'))
-    return
-  }
-  try {
-    const task = await accountsAPI.createBatchVerifyLevelTask(
-      selected.map(account => account.id),
-      targetLevel
-    )
-    appStore.showSuccess(
-      targetLevel === 'plus'
-        ? t('userAccounts.bulkVerifyPlusSubmitted', { count: task.total })
-        : t('userAccounts.bulkMarkFreeSubmitted', { count: task.total })
-    )
-    clearSelection()
-    void pollUserAccountBatchTask(task.id, (completed) => {
-      if (completed.failed > 0) {
-        appStore.showError(t('admin.accounts.bulkActions.partialSuccess', { success: completed.success, failed: completed.failed }))
-        return
-      }
-      appStore.showSuccess(
-        targetLevel === 'plus'
-          ? t('userAccounts.bulkVerifyPlusCompleted', { count: completed.success })
-          : t('userAccounts.bulkMarkFreeCompleted', { count: completed.success })
-      )
-    })
-  } catch (error: any) {
-    console.error('Failed to create user account level verification task:', error)
-    appStore.showError(error?.response?.data?.message || error?.message || t('userAccounts.levelVerifyFailed'))
   }
 }
 

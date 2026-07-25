@@ -11,6 +11,16 @@ import type {
   PaginatedResponse
 } from '@/types'
 
+export interface RedeemCodeQueryFilters {
+  type?: RedeemCodeType
+  status?: 'used' | 'expired' | 'unused'
+  category?: string
+  uncategorized?: boolean
+  search?: string
+  sort_by?: string
+  sort_order?: 'asc' | 'desc'
+}
+
 /**
  * List all redeem codes with pagination
  * @param page - Page number (default: 1)
@@ -21,13 +31,7 @@ import type {
 export async function list(
   page: number = 1,
   pageSize: number = 20,
-  filters?: {
-    type?: RedeemCodeType
-    status?: 'active' | 'used' | 'expired' | 'unused'
-    search?: string
-    sort_by?: string
-    sort_order?: 'asc' | 'desc'
-  },
+  filters?: RedeemCodeQueryFilters,
   options?: {
     signal?: AbortSignal
   }
@@ -55,36 +59,22 @@ export async function getById(id: number): Promise<RedeemCode> {
 
 /**
  * Generate new redeem codes
- * @param count - Number of codes to generate
- * @param type - Type of redeem code
- * @param value - Value of the code
- * @param groupId - Group ID (required for subscription type)
- * @param validityDays - Validity days (for subscription type)
+ * @param payload - Generation settings, including count, type, category, and value
  * @returns Array of generated redeem codes
  */
-export async function generate(
-  count: number,
-  type: RedeemCodeType,
-  value: number,
-  groupId?: number | null,
-  validityDays?: number
-): Promise<RedeemCode[]> {
-  const payload: GenerateRedeemCodesRequest = {
-    count,
-    type,
-    value
-  }
-
-  // 订阅类型专用字段
-  if (type === 'subscription') {
-    payload.group_id = groupId
-    if (validityDays && validityDays > 0) {
-      payload.validity_days = validityDays
-    }
-  }
-
+export async function generate(payload: GenerateRedeemCodesRequest): Promise<RedeemCode[]> {
   const { data } = await apiClient.post<RedeemCode[]>('/admin/redeem-codes/generate', payload)
   return data
+}
+
+/**
+ * List distinct non-empty categories used by redeem codes.
+ */
+export async function listCategories(): Promise<string[]> {
+  const { data } = await apiClient.get<{ categories: string[] }>(
+    '/admin/redeem-codes/categories'
+  )
+  return data.categories
 }
 
 /**
@@ -151,13 +141,7 @@ export async function getStats(): Promise<{
  * @param filters - Optional filters
  * @returns CSV data as blob
  */
-export async function exportCodes(filters?: {
-  type?: RedeemCodeType
-  status?: 'used' | 'expired' | 'unused'
-  search?: string
-  sort_by?: string
-  sort_order?: 'asc' | 'desc'
-}): Promise<Blob> {
+export async function exportCodes(filters?: RedeemCodeQueryFilters): Promise<Blob> {
   const response = await apiClient.get('/admin/redeem-codes/export', {
     params: filters,
     responseType: 'blob'
@@ -169,6 +153,7 @@ export const redeemAPI = {
   list,
   getById,
   generate,
+  listCategories,
   delete: deleteCode,
   batchDelete,
   expire,

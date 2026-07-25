@@ -12,6 +12,8 @@ import type {
 } from '@/api/admin/grok'
 import type {
   Account,
+  AccountExternalPlacementTarget,
+  AccountStatsRange,
   AccountUsageInfo,
   AccountUsageStatsResponse,
   AdminDataPayload,
@@ -25,10 +27,8 @@ import type {
 } from '@/types'
 
 const USER_ACCOUNT_BULK_OPERATION_TIMEOUT_MS = 120000
-const USER_ACCOUNT_LEVEL_VERIFY_TIMEOUT_MS = 90000
 const GOOGLE_OAUTH_EXCHANGE_TIMEOUT_MS = 120000
 
-export type UserAccountVerifyLevelTarget = 'free' | 'plus'
 export type UserContentModerationMode = 'observe' | 'pre_block'
 export type UserContentModerationProvider = 'openai' | 'zhipu'
 
@@ -78,15 +78,6 @@ export interface UserContentModerationLog {
 export interface UserContentModerationTestResult {
   flagged: boolean
   highest_category: string
-}
-
-export interface VerifyAccountLevelResponse {
-  account: Account
-  verified: boolean
-  target_level: UserAccountVerifyLevelTarget
-  applied_level: Account['account_level']
-  reason?: string
-  error_message?: string
 }
 
 export interface UserAccountListFilters {
@@ -217,18 +208,6 @@ export async function revalidatePublicShare(id: number): Promise<Account> {
   return data
 }
 
-export async function verifyLevel(
-  id: number,
-  targetLevel: UserAccountVerifyLevelTarget
-): Promise<VerifyAccountLevelResponse> {
-  const { data } = await apiClient.post<VerifyAccountLevelResponse>(
-    `/accounts/${id}/verify-level`,
-    { target_level: targetLevel },
-    { timeout: USER_ACCOUNT_LEVEL_VERIFY_TIMEOUT_MS }
-  )
-  return data
-}
-
 export async function deleteAccount(id: number): Promise<{ message: string }> {
   const { data } = await apiClient.delete<{ message: string }>(`/accounts/${id}`)
   return data
@@ -248,6 +227,13 @@ export interface UserBulkAccountOperationResponse {
   success_ids?: number[]
   failed_ids?: number[]
   results: UserBulkAccountResult[]
+}
+
+export interface ConvertBatchExternalPlacementRequest {
+  account_ids: number[]
+  target: AccountExternalPlacementTarget
+  room_id?: number
+  idempotency_key: string
 }
 
 export type AccountBatchTaskStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'canceled'
@@ -302,6 +288,17 @@ export async function bulkDelete(accountIds: number[]): Promise<UserBulkAccountO
   return data
 }
 
+export async function convertExternalPlacementBatch(
+  request: ConvertBatchExternalPlacementRequest
+): Promise<UserBulkAccountOperationResponse> {
+  const { data } = await apiClient.post<UserBulkAccountOperationResponse>(
+    '/accounts/external-placement:convert-batch',
+    request,
+    { timeout: USER_ACCOUNT_BULK_OPERATION_TIMEOUT_MS }
+  )
+  return data
+}
+
 export async function createBatchRefreshTask(accountIds: number[]): Promise<AccountBatchTask> {
   const { data } = await apiClient.post<AccountBatchTask>('/accounts/batch-refresh/async', {
     account_ids: accountIds
@@ -319,17 +316,6 @@ export async function createBatchTestConnectionTask(accountIds: number[]): Promi
 export async function createBatchRevalidatePublicShareTask(accountIds: number[]): Promise<AccountBatchTask> {
   const { data } = await apiClient.post<AccountBatchTask>('/accounts/batch-revalidate-public-share/async', {
     account_ids: accountIds
-  })
-  return data
-}
-
-export async function createBatchVerifyLevelTask(
-  accountIds: number[],
-  targetLevel: UserAccountVerifyLevelTarget
-): Promise<AccountBatchTask> {
-  const { data } = await apiClient.post<AccountBatchTask>('/accounts/batch-verify-level/async', {
-    account_ids: accountIds,
-    target_level: targetLevel
   })
   return data
 }
@@ -361,9 +347,15 @@ export async function resetOpenAIQuota(id: number): Promise<OpenAIQuotaResetResu
   return data
 }
 
-export async function getStats(id: number, days: number = 30): Promise<AccountUsageStatsResponse> {
+export async function getStats(
+  id: number,
+  range: AccountStatsRange
+): Promise<AccountUsageStatsResponse> {
   const { data } = await apiClient.get<AccountUsageStatsResponse>(`/accounts/${id}/stats`, {
-    params: { days }
+    params: {
+      start_date: range.startDate,
+      end_date: range.endDate
+    }
   })
   return data
 }
@@ -730,15 +722,14 @@ export const accountsAPI = {
   exportData,
   update,
   revalidatePublicShare,
-  verifyLevel,
   delete: deleteAccount,
   toggleStatus,
   bulkUpdate,
   bulkDelete,
+  convertExternalPlacementBatch,
   createBatchRefreshTask,
   createBatchTestConnectionTask,
   createBatchRevalidatePublicShareTask,
-  createBatchVerifyLevelTask,
   getBatchTask,
   getUsage,
   queryOpenAIQuota,

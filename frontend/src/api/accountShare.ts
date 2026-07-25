@@ -133,8 +133,27 @@ export interface AccountShareRoomAccount {
   schedulable: boolean
   current_concurrency: number
   priority: number
-  placement_state: string
+  placement_state?: string
   last_used_at?: string
+}
+
+export interface AccountShareRoomAccountsBatchRequest {
+  account_ids: number[]
+  idempotency_key: string
+}
+
+export interface AccountShareRoomAccountsBatchResult {
+  account_id: number
+  success: boolean
+  error?: string
+}
+
+export interface AccountShareRoomAccountsBatchResponse {
+  success: number
+  failed: number
+  success_ids?: number[]
+  failed_ids?: number[]
+  results: AccountShareRoomAccountsBatchResult[]
 }
 
 export interface ConvertAccountExternalPlacementRequest {
@@ -729,6 +748,28 @@ export async function listRoomAccounts(listingID: number): Promise<AccountShareR
   return data
 }
 
+export async function attachRoomAccounts(
+  listingID: number,
+  payload: AccountShareRoomAccountsBatchRequest
+): Promise<AccountShareRoomAccountsBatchResponse> {
+  const { data } = await apiClient.post<AccountShareRoomAccountsBatchResponse>(
+    `/account-share/listings/${listingID}/accounts:attach-batch`,
+    payload
+  )
+  return data
+}
+
+export async function detachRoomAccounts(
+  listingID: number,
+  payload: AccountShareRoomAccountsBatchRequest
+): Promise<AccountShareRoomAccountsBatchResponse> {
+  const { data } = await apiClient.post<AccountShareRoomAccountsBatchResponse>(
+    `/account-share/listings/${listingID}/accounts:detach-batch`,
+    payload
+  )
+  return data
+}
+
 export const accountShareAPI = {
   listModeGroups,
   generateOpenAIAuthURL,
@@ -758,7 +799,9 @@ export const accountShareAPI = {
   listOwnerReviews,
   convertAccountExternalPlacement,
   createRoom,
-  listRoomAccounts
+  listRoomAccounts,
+  attachRoomAccounts,
+  detachRoomAccounts
 }
 
 export default accountShareAPI

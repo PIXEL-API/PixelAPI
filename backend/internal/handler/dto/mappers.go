@@ -252,6 +252,7 @@ func groupFromServiceBase(g *service.Group) Group {
 		RequireOAuthOnly:                g.RequireOAuthOnly,
 		RequirePrivacySet:               g.RequirePrivacySet,
 		RPMLimit:                        g.RPMLimit,
+		PoolScarce:                      g.PoolScarce,
 		CreatedAt:                       g.CreatedAt,
 		UpdatedAt:                       g.UpdatedAt,
 	}
@@ -619,6 +620,7 @@ func RedeemCodeFromServiceAdmin(rc *service.RedeemCode) *AdminRedeemCode {
 	}
 	return &AdminRedeemCode{
 		RedeemCode: redeemCodeFromServiceBase(rc),
+		Category:   rc.Category,
 		Notes:      rc.Notes,
 	}
 }

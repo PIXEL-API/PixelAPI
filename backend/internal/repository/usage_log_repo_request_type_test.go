@@ -522,19 +522,20 @@ func TestUsageLogRepositoryGetAccountUsageStatsUsesIdentityScope(t *testing.T) {
 	mock.ExpectQuery(`WITH current_account AS`).
 		WithArgs(int64(11)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(10)).AddRow(int64(11)))
-	mock.ExpectQuery(`SELECT\s+TO_CHAR\(created_at`).
+	mock.ExpectQuery(`SELECT\s+MIN\(available_from\)`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"available_from", "available_to", "requests", "tokens", "cost"}).
+			AddRow(start, end, int64(2), int64(165), 1.50))
+	mock.ExpectQuery(`WITH daily_usage AS`).
 		WithArgs(sqlmock.AnyArg(), start, end).
-		WillReturnRows(sqlmock.NewRows([]string{"date", "requests", "tokens", "cost", "actual_cost", "user_cost"}).
-			AddRow("2025-01-15", int64(1), int64(150), 1.25, 1.25, 1.25).
-			AddRow("2025-01-16", int64(1), int64(15), 0.25, 0.25, 0.25))
+		WillReturnRows(sqlmock.NewRows([]string{"date", "requests", "tokens", "cost", "actual_cost", "user_cost", "total_duration_ms"}).
+			AddRow("2025-01-15", int64(1), int64(150), 1.25, 1.25, 1.25, int64(120)).
+			AddRow("2025-01-16", int64(1), int64(15), 0.25, 0.25, 0.25, int64(120)))
 	mock.ExpectQuery(`FROM user_balance_ledger`).
 		WithArgs(sqlmock.AnyArg(), accountShareSeatPrepayReason, accountShareSeatRefundReason, accountShareSeatWaiverRefundReason, start, end).
 		WillReturnRows(sqlmock.NewRows([]string{"date", "hourly_cost"}).
 			AddRow("2025-01-16", 0.75).
 			AddRow("2025-01-17", -0.25))
-	mock.ExpectQuery(`SELECT COALESCE\(AVG\(duration_ms\)`).
-		WithArgs(sqlmock.AnyArg(), start, end).
-		WillReturnRows(sqlmock.NewRows([]string{"avg_duration_ms"}).AddRow(120.0))
 	mock.ExpectQuery(`SELECT\s+COALESCE\(NULLIF\(TRIM\(requested_model\)`).
 		WithArgs(sqlmock.AnyArg(), start, end).
 		WillReturnRows(sqlmock.NewRows([]string{"model", "requests", "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens", "total_tokens", "cost", "actual_cost", "account_cost"}).
@@ -557,6 +558,8 @@ func TestUsageLogRepositoryGetAccountUsageStatsUsesIdentityScope(t *testing.T) {
 	require.InDelta(t, 2.00, resp.Summary.TotalUserCost, 0.000001)
 	require.InDelta(t, 1.00, resp.History[1].UserCost, 0.000001)
 	require.InDelta(t, -0.25, resp.History[2].HourlyCost, 0.000001)
+	require.Equal(t, 2, resp.Lifetime.SourceAccountCount)
+	require.InDelta(t, 1.50, resp.Lifetime.TotalCost, 0.000001)
 	require.Len(t, resp.Models, 1)
 	require.Equal(t, int64(2), resp.Models[0].Requests)
 	require.NoError(t, mock.ExpectationsWereMet())

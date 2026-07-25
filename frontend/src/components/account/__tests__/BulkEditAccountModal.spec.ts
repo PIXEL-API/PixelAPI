@@ -31,7 +31,8 @@ vi.mock('@/api/admin', () => ({
 
 vi.mock('@/api/accounts', () => ({
   accountsAPI: {
-    bulkUpdate: vi.fn()
+    bulkUpdate: vi.fn(),
+    convertExternalPlacementBatch: vi.fn()
   }
 }))
 
@@ -133,6 +134,7 @@ describe('BulkEditAccountModal', () => {
     vi.mocked(adminAPI.accounts.bulkUpdate).mockReset()
     vi.mocked(adminAPI.accounts.checkMixedChannelRisk).mockReset()
     vi.mocked(accountsAPI.bulkUpdate).mockReset()
+    vi.mocked(accountsAPI.convertExternalPlacementBatch).mockReset()
 
     vi.mocked(adminAPI.accounts.bulkUpdate).mockResolvedValue({
       success: 2,
@@ -146,6 +148,16 @@ describe('BulkEditAccountModal', () => {
       success: 2,
       failed: 0,
       results: []
+    } as any)
+    vi.mocked(accountsAPI.convertExternalPlacementBatch).mockResolvedValue({
+      success: 2,
+      failed: 0,
+      success_ids: [1, 2],
+      failed_ids: [],
+      results: [
+        { account_id: 1, success: true },
+        { account_id: 2, success: true }
+      ]
     } as any)
   })
 
@@ -406,6 +418,96 @@ describe('BulkEditAccountModal', () => {
     expect(wrapper.find('#bulk-edit-share-mode-enabled').exists()).toBe(false)
     expect(wrapper.find('#bulk-edit-groups-enabled').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('private-u9-openai')
+  })
+
+  it('用户作用域可仅批量设置三个模式之一而不提交普通字段更新', async () => {
+    vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(
+      '22222222-2222-4222-8222-222222222222'
+    )
+    const wrapper = mountModal({
+      accountScope: 'user',
+      ownerUserId: 9,
+      selectedPlatforms: ['openai'],
+      selectedTypes: ['oauth'],
+      selectedAccountLevels: ['plus']
+    })
+
+    expect(wrapper.find('[data-testid="placement-target-private"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="placement-target-public_pool"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="placement-target-room"]').exists()).toBe(true)
+
+    await wrapper.get('#bulk-edit-external-placement-enabled').setValue(true)
+    await wrapper.get('[data-testid="placement-target-room"]').setValue()
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(accountsAPI.bulkUpdate).not.toHaveBeenCalled()
+    expect(accountsAPI.convertExternalPlacementBatch).toHaveBeenCalledWith({
+      account_ids: [1, 2],
+      target: 'room',
+      idempotency_key: 'batch-placement-22222222-2222-4222-8222-222222222222'
+    })
+    expect(wrapper.emitted('updated')).toHaveLength(1)
+  })
+
+  it('同平台账号等级不一致时仍可设置平台账号模式且不选择房间', async () => {
+    const wrapper = mountModal({
+      accountScope: 'user',
+      ownerUserId: 9,
+      selectedPlatforms: ['openai'],
+      selectedTypes: ['oauth'],
+      selectedAccountLevels: ['plus', 'team']
+    })
+
+    await wrapper.get('#bulk-edit-external-placement-enabled').setValue(true)
+
+    expect(
+      (wrapper.get('[data-testid="placement-target-room"]').element as HTMLInputElement).disabled
+    ).toBe(false)
+    expect(wrapper.find('[data-testid="refresh-compatible-rooms"]').exists()).toBe(false)
+  })
+
+  it('普通字段已保存但模式全部失败时仍通知父级刷新列表', async () => {
+    vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(
+      '33333333-3333-4333-8333-333333333333'
+    )
+    vi.mocked(accountsAPI.bulkUpdate).mockResolvedValueOnce({
+      success: 2,
+      failed: 0,
+      success_ids: [1, 2],
+      failed_ids: [],
+      results: [
+        { account_id: 1, success: true },
+        { account_id: 2, success: true }
+      ]
+    } as any)
+    vi.mocked(accountsAPI.convertExternalPlacementBatch).mockResolvedValueOnce({
+      success: 0,
+      failed: 2,
+      success_ids: [],
+      failed_ids: [1, 2],
+      results: [
+        { account_id: 1, success: false, error: 'busy' },
+        { account_id: 2, success: false, error: 'busy' }
+      ]
+    } as any)
+    const wrapper = mountModal({
+      accountScope: 'user',
+      ownerUserId: 9,
+      selectedPlatforms: ['openai'],
+      selectedTypes: ['oauth'],
+      selectedAccountLevels: ['plus']
+    })
+
+    await wrapper.get('#bulk-edit-concurrency-enabled').setValue(true)
+    await wrapper.get('#bulk-edit-external-placement-enabled').setValue(true)
+    await wrapper.get('[data-testid="placement-target-public_pool"]').setValue()
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(accountsAPI.bulkUpdate).toHaveBeenCalledTimes(1)
+    expect(accountsAPI.convertExternalPlacementBatch).toHaveBeenCalledTimes(1)
+    expect(wrapper.emitted('updated')).toHaveLength(1)
   })
 
   it('用户作用域提交普通字段时调用用户接口且不包含 share_mode', async () => {

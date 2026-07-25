@@ -43,7 +43,7 @@ function makeAgentIdentityAccount(): Account {
 }
 
 describe('UserAccountActionMenu Agent Identity', () => {
-  it('hides credential actions but keeps the external placement conversion entry', async () => {
+  it('only shows actions supported by Agent Identity accounts', () => {
     const wrapper = mount(UserAccountActionMenu, {
       props: {
         show: true,
@@ -57,17 +57,9 @@ describe('UserAccountActionMenu Agent Identity', () => {
     expect(text).not.toContain('admin.accounts.reAuthorize')
     expect(text).not.toContain('admin.accounts.refreshToken')
     expect(text).not.toContain('admin.accounts.setPrivacy')
-    expect(text).not.toContain('userAccounts.verifyPlus')
-    expect(text).toContain('userAccounts.externalPlacement.action')
-
-    const placementButton = Array.from(document.body.querySelectorAll('button')).find(button =>
-      button.textContent?.includes('userAccounts.externalPlacement.action')
-    )
-    expect(placementButton).toBeDefined()
-    placementButton?.click()
-    expect(wrapper.emitted('external-placement')?.[0]).toEqual([
-      expect.objectContaining({ id: 1 })
-    ])
+    expect(text).toContain('admin.accounts.testConnection')
+    expect(text).toContain('admin.accounts.viewStats')
+    expect(document.body.querySelectorAll('.menu-item')).toHaveLength(3)
     wrapper.unmount()
   })
 })

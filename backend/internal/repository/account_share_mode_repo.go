@@ -421,20 +421,19 @@ func (r *accountShareModeRepository) CreatePlatformListing(ctx context.Context, 
 	var listingID int64
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO account_share_listings (
-			account_id, owner_user_id, room_name, platform, account_level,
+			owner_user_id, room_name, platform, account_level,
 			status, seat_limit, rate_multiplier, allowed_models,
 			per_user_concurrency, hourly_rate, hourly_fee_waiver_minimum, min_balance_required, codex_cli_only,
 			codex_5h_limit_percent, codex_7d_limit_percent, account_identity_id, created_at, updated_at
 		)
 		VALUES (
-			$1, $2, $3, $4, $5,
-			$6, $7, $8, $9::jsonb,
-			$10, $11, $12, $13, $14,
-			$15, $16, $17, NOW(), NOW()
+			$1, $2, $3, $4,
+			$5, $6, $7, $8::jsonb,
+			$9, $10, $11, $12, $13,
+			$14, $15, $16, NOW(), NOW()
 		)
 		RETURNING id
 	`,
-		listing.AccountID,
 		listing.OwnerUserID,
 		listing.RoomName,
 		listing.Platform,
@@ -463,10 +462,19 @@ func (r *accountShareModeRepository) CreatePlatformListing(ctx context.Context, 
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO account_external_placements (
 			account_id, owner_user_id, platform, account_level,
-			placement_type, listing_id, state, priority, version, created_at, updated_at
+			placement_type, state, priority, version, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, 'room', $5, 'active', $6, 1, NOW(), NOW())
-	`, account.ID, ownerUserID, listing.Platform, listing.AccountLevel, listingID, account.Priority); err != nil {
+		VALUES ($1, $2, $3, $4, 'room', 'active', $5, 1, NOW(), NOW())
+	`, account.ID, ownerUserID, listing.Platform, listing.AccountLevel, account.Priority); err != nil {
+		return nil, translateAccountShareRoomPersistenceError(err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO account_share_room_accounts (
+			listing_id, account_id, owner_user_id, platform, account_level,
+			state, priority, version, created_at, updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, 'active', $6, 1, NOW(), NOW())
+	`, listingID, account.ID, ownerUserID, listing.Platform, listing.AccountLevel, account.Priority); err != nil {
 		return nil, translateAccountShareRoomPersistenceError(err)
 	}
 
@@ -491,10 +499,10 @@ func (r *accountShareModeRepository) GetListingByID(ctx context.Context, listing
 func (r *accountShareModeRepository) GetListingByAccountID(ctx context.Context, accountID int64) (*service.AccountShareListing, error) {
 	return r.queryOneListing(ctx, 0, `EXISTS (
 		SELECT 1
-		FROM account_external_placements placement
-		WHERE placement.listing_id = l.id
-			AND placement.account_id = $2
-			AND placement.placement_type = 'room'
+		FROM account_share_room_accounts room_account
+		WHERE room_account.listing_id = l.id
+			AND room_account.account_id = $2
+			AND room_account.state IN ('active', 'draining')
 	)`, accountID)
 }
 
@@ -1147,11 +1155,10 @@ func (r *accountShareModeRepository) UpdateListing(ctx context.Context, actorUse
 			SELECT
 				COUNT(*)::int AS account_count,
 				COALESCE(SUM(a.concurrency), 0)::int AS total_concurrency
-			FROM account_external_placements placement
-			JOIN accounts a ON a.id = placement.account_id
-			WHERE placement.listing_id = l.id
-				AND placement.placement_type = 'room'
-				AND placement.state = 'active'
+			FROM account_share_room_accounts room_account
+			JOIN accounts a ON a.id = room_account.account_id
+			WHERE room_account.listing_id = l.id
+				AND room_account.state = 'active'
 				AND a.deleted_at IS NULL
 		) room_stats ON TRUE
 		WHERE l.id = $1
@@ -1291,107 +1298,6 @@ func (r *accountShareModeRepository) UpdateListing(ctx context.Context, actorUse
 	`, strings.Join(setParts, ", "), listingArg, ownerUpdatePredicate)
 	if _, err := tx.ExecContext(ctx, query, updateArgs...); err != nil {
 		return nil, err
-	}
-
-	accountSetParts := []string{"updated_at = NOW()"}
-	accountArgs := []any{}
-	addAccountArg := func(value any) string {
-		accountArgs = append(accountArgs, value)
-		return fmt.Sprintf("$%d", len(accountArgs))
-	}
-	accountChanged := false
-	if input.AllowedModels != nil {
-		modelMappingJSON, err := json.Marshal(service.AccountShareModeAllowedModelsMapping(*input.AllowedModels))
-		if err != nil {
-			return nil, err
-		}
-		accountSetParts = append(accountSetParts, "credentials = jsonb_set(COALESCE(credentials, '{}'::jsonb), '{model_mapping}', "+addAccountArg(string(modelMappingJSON))+"::jsonb, true)")
-		accountChanged = true
-	}
-
-	extraExpr := "COALESCE(extra, '{}'::jsonb)"
-	extraChanged := false
-	addExtraSet := func(key string, value any) error {
-		raw, err := json.Marshal(value)
-		if err != nil {
-			return err
-		}
-		extraExpr = fmt.Sprintf("jsonb_set(%s, '{%s}', %s::jsonb, true)", extraExpr, key, addAccountArg(string(raw)))
-		extraChanged = true
-		return nil
-	}
-	if input.CodexCLIOnly != nil {
-		if err := addExtraSet("codex_cli_only", *input.CodexCLIOnly); err != nil {
-			return nil, err
-		}
-	}
-	if input.Codex5hLimitPercent != nil {
-		if err := addExtraSet("codex_5h_limit_percent", *input.Codex5hLimitPercent); err != nil {
-			return nil, err
-		}
-	}
-	if input.Codex7dLimitPercent != nil {
-		if err := addExtraSet("codex_7d_limit_percent", *input.Codex7dLimitPercent); err != nil {
-			return nil, err
-		}
-	}
-	if input.Anthropic5hLimitPercent != nil {
-		if err := addExtraSet("anthropic_5h_limit_percent", *input.Anthropic5hLimitPercent); err != nil {
-			return nil, err
-		}
-	}
-	if input.Anthropic7dLimitPercent != nil {
-		if err := addExtraSet("anthropic_7d_limit_percent", *input.Anthropic7dLimitPercent); err != nil {
-			return nil, err
-		}
-	}
-	if extraChanged {
-		accountSetParts = append(accountSetParts, "extra = "+extraExpr)
-		accountChanged = true
-	}
-
-	if accountChanged {
-		accountArgs = append(accountArgs, listingID, ownerUserID)
-		listingIDArg := fmt.Sprintf("$%d", len(accountArgs)-1)
-		ownerIDArg := fmt.Sprintf("$%d", len(accountArgs))
-		accountQuery := fmt.Sprintf(`
-			UPDATE accounts AS a
-			SET %s
-			FROM account_external_placements AS placement
-			WHERE placement.account_id = a.id
-				AND placement.listing_id = %s
-				AND placement.placement_type = 'room'
-				AND placement.state = 'active'
-				AND a.owner_user_id = %s
-				AND a.deleted_at IS NULL
-			RETURNING a.id
-		`, strings.Join(accountSetParts, ", "), listingIDArg, ownerIDArg)
-		rows, err := tx.QueryContext(ctx, accountQuery, accountArgs...)
-		if err != nil {
-			return nil, err
-		}
-		updatedAccountIDs := make([]int64, 0, currentRoomAccountCount)
-		for rows.Next() {
-			var updatedAccountID int64
-			if err := rows.Scan(&updatedAccountID); err != nil {
-				_ = rows.Close()
-				return nil, err
-			}
-			updatedAccountIDs = append(updatedAccountIDs, updatedAccountID)
-		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		if err := rows.Close(); err != nil {
-			return nil, err
-		}
-		for _, updatedAccountID := range updatedAccountIDs {
-			accountID := updatedAccountID
-			if err := enqueueSchedulerOutbox(ctx, tx, service.SchedulerOutboxEventAccountChanged, &accountID, nil, nil); err != nil {
-				logger.LegacyPrintf("repository.account_share_mode", "[SchedulerOutbox] enqueue account share room update failed: account=%d err=%v", accountID, err)
-			}
-		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -2865,11 +2771,10 @@ func (r *accountShareModeRepository) DisablePermanentlyUnavailableListings(ctx c
 				AND l.deleted_at IS NULL
 				AND NOT EXISTS (
 					SELECT 1
-					FROM account_external_placements placement
-					JOIN accounts a ON a.id = placement.account_id
-					WHERE placement.listing_id = l.id
-						AND placement.placement_type = 'room'
-						AND placement.state = 'active'
+					FROM account_share_room_accounts room_account
+					JOIN accounts a ON a.id = room_account.account_id
+					WHERE room_account.listing_id = l.id
+						AND room_account.state = 'active'
 						AND NOT %s
 				)
 			ORDER BY l.updated_at ASC, l.id ASC
@@ -3819,12 +3724,11 @@ func (r *accountShareModeRepository) accountShareMembershipPermanentlyUnavailabl
 		SELECT NOT EXISTS (
 			SELECT 1
 			FROM account_share_listings l
-			JOIN account_external_placements placement
-				ON placement.listing_id = l.id
-				AND placement.account_id = $2
-				AND placement.placement_type = 'room'
-				AND placement.state IN ('active', 'draining')
-			JOIN accounts a ON a.id = placement.account_id
+			JOIN account_share_room_accounts room_account
+				ON room_account.listing_id = l.id
+				AND room_account.account_id = $2
+				AND room_account.state IN ('active', 'draining')
+			JOIN accounts a ON a.id = room_account.account_id
 			WHERE l.id = $1
 				AND l.deleted_at IS NULL
 				AND NOT %s
@@ -3848,12 +3752,11 @@ func (r *accountShareModeRepository) accountShareMembershipRecoverablyUnavailabl
 		SELECT EXISTS (
 			SELECT 1
 			FROM account_share_listings l
-			JOIN account_external_placements placement
-				ON placement.listing_id = l.id
-				AND placement.account_id = $2
-				AND placement.placement_type = 'room'
-				AND placement.state IN ('active', 'draining')
-			JOIN accounts a ON a.id = placement.account_id
+			JOIN account_share_room_accounts room_account
+				ON room_account.listing_id = l.id
+				AND room_account.account_id = $2
+				AND room_account.state IN ('active', 'draining')
+			JOIN accounts a ON a.id = room_account.account_id
 			WHERE l.id = $1
 				AND %s
 		)
@@ -5301,37 +5204,14 @@ func accountShareRoomRepresentativeJoinSQLWithType(joinType, nowExpr string) str
 	return fmt.Sprintf(`
 		%s (
 			SELECT a.*
-			FROM (
-				SELECT
-					room_placement.account_id,
-					room_placement.priority,
-					FALSE AS legacy_fallback
-				FROM account_external_placements room_placement
-				WHERE room_placement.listing_id = l.id
-					AND room_placement.placement_type = 'room'
-					AND room_placement.state = 'active'
-
-				UNION ALL
-
-				SELECT
-					l.account_id,
-					NULL::INTEGER AS priority,
-					TRUE AS legacy_fallback
-				WHERE l.account_id IS NOT NULL
-					AND NOT EXISTS (
-						SELECT 1
-						FROM account_external_placements active_room_placement
-						WHERE active_room_placement.listing_id = l.id
-							AND active_room_placement.placement_type = 'room'
-							AND active_room_placement.state = 'active'
-					)
-			) room_candidate
-			JOIN accounts a ON a.id = room_candidate.account_id
-			WHERE a.deleted_at IS NULL
+			FROM account_share_room_accounts room_account
+			JOIN accounts a ON a.id = room_account.account_id
+			WHERE room_account.listing_id = l.id
+				AND room_account.state = 'active'
+				AND a.deleted_at IS NULL
 			ORDER BY
-				CASE WHEN room_candidate.legacy_fallback THEN 1 ELSE 0 END,
 				CASE WHEN %s THEN 1 ELSE 0 END,
-				room_candidate.priority ASC NULLS LAST,
+				room_account.priority ASC,
 				a.last_used_at ASC NULLS FIRST,
 				a.id ASC
 			LIMIT 1
@@ -5577,11 +5457,10 @@ func accountShareListingSelectSQLWithAccountJoin(accountJoinSQL string) string {
 				COUNT(*)::int AS account_count,
 				COUNT(*) FILTER (WHERE NOT %s)::int AS healthy_account_count,
 				COALESCE(SUM(a.concurrency), 0)::int AS total_concurrency
-			FROM account_external_placements room_placement
-			JOIN accounts a ON a.id = room_placement.account_id
-			WHERE room_placement.listing_id = l.id
-				AND room_placement.placement_type = 'room'
-				AND room_placement.state = 'active'
+			FROM account_share_room_accounts room_account
+			JOIN accounts a ON a.id = room_account.account_id
+			WHERE room_account.listing_id = l.id
+				AND room_account.state = 'active'
 				AND a.deleted_at IS NULL
 		) room_stats ON TRUE
 		LEFT JOIN LATERAL (
@@ -5676,8 +5555,7 @@ func accountShareReviewSelectSQL() string {
 			r.updated_at
 		FROM account_share_reviews r
 		JOIN account_share_account_identities i ON i.id = r.account_identity_id
-		LEFT JOIN account_share_listings l ON l.id = r.listing_id
-		LEFT JOIN accounts a ON a.id = COALESCE(r.account_id, l.account_id)
+		LEFT JOIN accounts a ON a.id = r.account_id
 		LEFT JOIN users ou ON ou.id = r.owner_user_id
 		LEFT JOIN users cu ON cu.id = r.consumer_user_id
 	`
@@ -6226,12 +6104,19 @@ func ensureAccountShareListingNameAvailableForUpdate(ctx context.Context, tx *sq
 
 	var duplicateID int64
 	err := tx.QueryRowContext(ctx, `
-		SELECT a.id
+		SELECT l.id
 		FROM account_share_listings l
-		JOIN accounts a ON a.id = l.account_id AND a.deleted_at IS NULL
 		WHERE l.owner_user_id = $1
-			AND LOWER(a.name) = LOWER($2)
-			AND ($3::bigint <= 0 OR a.id <> $3::bigint)
+			AND LOWER(BTRIM(l.room_name)) = LOWER(BTRIM($2))
+			AND (
+				$3::bigint <= 0
+				OR NOT EXISTS (
+					SELECT 1
+					FROM account_share_room_accounts room_account
+					WHERE room_account.listing_id = l.id
+						AND room_account.account_id = $3
+				)
+			)
 			AND l.deleted_at IS NULL
 		LIMIT 1
 	`, ownerUserID, accountName, excludeAccountID).Scan(&duplicateID)

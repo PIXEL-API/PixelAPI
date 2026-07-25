@@ -650,6 +650,7 @@ const routes: RouteRecordRaw[] = [
       title: "Activity Management",
       titleKey: "admin.activities.title",
       descriptionKey: "admin.activities.description",
+      uiSkin: "v2",
     },
   },
   {

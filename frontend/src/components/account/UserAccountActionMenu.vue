@@ -16,10 +16,6 @@
             <Icon name="chart" size="sm" class="text-indigo-500" />
             {{ t('admin.accounts.viewStats') }}
           </button>
-          <button class="menu-item text-cyan-700 dark:text-cyan-300" @click="emitAction('external-placement')">
-            <Icon name="swap" size="sm" />
-            {{ t('userAccounts.externalPlacement.action') }}
-          </button>
           <template v-if="supportsCredentialMaintenance">
             <button class="menu-item text-blue-600" @click="emitAction('reauth')">
               <Icon name="link" size="sm" />
@@ -38,16 +34,6 @@
             <Icon name="shield" size="sm" />
             {{ t('userAccounts.moderationSettings') }}
           </button>
-          <template v-if="supportsOpenAILevelVerification">
-            <button class="menu-item text-gray-700 dark:text-dark-100" @click="emitVerifyLevel('free')">
-              <Icon name="check" size="sm" class="text-gray-500" :stroke-width="2" />
-              {{ t('userAccounts.setFreeLevel') }}
-            </button>
-            <button class="menu-item text-amber-600" @click="emitVerifyLevel('plus')">
-              <Icon name="badge" size="sm" />
-              {{ t('userAccounts.verifyPlus') }}
-            </button>
-          </template>
         </div>
       </div>
     </div>
@@ -74,8 +60,6 @@ const emit = defineEmits<{
   (e: 'refresh-token', account: Account): void
   (e: 'set-privacy', account: Account): void
   (e: 'moderation', account: Account): void
-  (e: 'external-placement', account: Account): void
-  (e: 'verify-level', account: Account, targetLevel: 'free' | 'plus'): void
 }>()
 
 const { t } = useI18n()
@@ -103,11 +87,7 @@ const supportsPrivacy = computed(() => {
   )
 })
 
-const supportsOpenAILevelVerification = computed(() => {
-  return !isOpenAIAgentIdentity.value && props.account?.platform === 'openai' && props.account.type === 'oauth'
-})
-
-function emitAction(event: 'test' | 'stats' | 'reauth' | 'refresh-token' | 'set-privacy' | 'moderation' | 'external-placement'): void {
+function emitAction(event: 'test' | 'stats' | 'reauth' | 'refresh-token' | 'set-privacy' | 'moderation'): void {
   if (!props.account) return
   switch (event) {
     case 'test':
@@ -128,16 +108,7 @@ function emitAction(event: 'test' | 'stats' | 'reauth' | 'refresh-token' | 'set-
     case 'moderation':
       emit('moderation', props.account)
       break
-    case 'external-placement':
-      emit('external-placement', props.account)
-      break
   }
-  emit('close')
-}
-
-function emitVerifyLevel(targetLevel: 'free' | 'plus'): void {
-  if (!props.account) return
-  emit('verify-level', props.account, targetLevel)
   emit('close')
 }
 

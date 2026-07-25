@@ -3,11 +3,10 @@
     <TablePageLayout>
       <template #filters>
         <div class="flex flex-wrap items-center gap-3">
-          <!-- Left: Search + Filters -->
-          <div class="flex-1 sm:max-w-64">
+          <div class="w-full sm:w-64">
             <input
               v-model="searchQuery"
-              type="text"
+              type="search"
               :placeholder="t('admin.redeem.searchCodes')"
               class="input"
               @input="handleSearch"
@@ -16,28 +15,55 @@
           <Select
             v-model="filters.type"
             :options="filterTypeOptions"
-            class="w-36"
-            @change="loadCodes"
+            class="w-full sm:w-36"
+            @change="applyFilters"
           />
           <Select
             v-model="filters.status"
             :options="filterStatusOptions"
-            class="w-36"
-            @change="loadCodes"
+            class="w-full sm:w-36"
+            @change="applyFilters"
+          />
+          <Select
+            v-model="filters.category"
+            :options="filterCategoryOptions"
+            class="w-full sm:w-44"
+            searchable
+            :search-placeholder="t('admin.redeem.searchCategories')"
+            @change="applyFilters"
           />
 
-          <!-- Right: Action buttons -->
           <div class="flex flex-1 flex-wrap items-center justify-end gap-2">
+            <template v-if="selectedCount > 0">
+              <span class="text-sm font-medium text-gray-600 dark:text-gray-300">
+                {{ t('admin.redeem.selectedCodes', { count: selectedCount }) }}
+              </span>
+              <button
+                type="button"
+                class="btn btn-danger btn-sm"
+                :disabled="deletingBatch"
+                @click="showBatchDeleteDialog = true"
+              >
+                {{ t('admin.redeem.batchDelete') }}
+              </button>
+              <button type="button" class="btn btn-secondary btn-sm" @click="clearSelection">
+                {{ t('common.clear') }}
+              </button>
+            </template>
             <button
-              @click="loadCodes"
+              @click="refreshRedeemData"
               :disabled="loading"
               class="btn btn-secondary"
               :title="t('common.refresh')"
             >
               <Icon name="refresh" size="md" :class="loading ? 'animate-spin' : ''" />
             </button>
-            <button @click="handleExportCodes" class="btn btn-secondary">
-              {{ t('admin.redeem.exportCsv') }}
+            <button
+              @click="handleExportCodes"
+              :disabled="exporting"
+              class="btn btn-secondary"
+            >
+              {{ exporting ? t('common.processing') : t('admin.redeem.exportCsv') }}
             </button>
             <button @click="showGenerateDialog = true" class="btn btn-primary">
               {{ t('admin.redeem.generateCodes') }}
@@ -54,8 +80,35 @@
           :server-side-sort="true"
           default-sort-key="id"
           default-sort-order="desc"
+          row-key="id"
           @sort="handleSort"
         >
+          <template #header-select>
+            <input
+              type="checkbox"
+              class="h-4 w-4 cursor-pointer rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              :checked="allVisibleSelected"
+              :indeterminate="someVisibleSelected"
+              :disabled="selectableCodes.length === 0"
+              :aria-label="t('admin.redeem.selectPage')"
+              @click.stop
+              @change="toggleSelectAllVisible"
+            />
+          </template>
+
+          <template #cell-select="{ row }">
+            <input
+              v-if="row.status === 'unused'"
+              type="checkbox"
+              class="h-4 w-4 cursor-pointer rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              :checked="isSelected(row.id)"
+              :aria-label="t('admin.redeem.selectCode', { code: row.code })"
+              @click.stop
+              @change="toggle(row.id)"
+            />
+            <span v-else class="text-gray-300 dark:text-dark-600">-</span>
+          </template>
+
           <template #cell-code="{ value }">
             <div class="flex items-center space-x-2">
               <code class="font-mono text-sm text-gray-900 dark:text-gray-100">{{ value }}</code>
@@ -80,6 +133,13 @@
                 </svg>
               </button>
             </div>
+          </template>
+
+          <template #cell-category="{ value }">
+            <span v-if="value" class="badge badge-primary">{{ value }}</span>
+            <span v-else class="text-sm text-gray-400 dark:text-dark-500">
+              {{ t('common.uncategorized') }}
+            </span>
           </template>
 
           <template #cell-type="{ value }">
@@ -138,12 +198,20 @@
             }}</span>
           </template>
 
+          <template #cell-created_at="{ value }">
+            <span class="text-sm text-gray-500 dark:text-dark-400">
+              {{ formatDateTime(value) }}
+            </span>
+          </template>
+
           <template #cell-actions="{ row }">
             <div class="flex items-center space-x-2">
               <button
                 v-if="row.status === 'unused'"
                 @click="handleDelete(row)"
-                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                :disabled="deleting"
+                class="flex min-h-11 min-w-11 flex-col items-center justify-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-red-50 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/50 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                :aria-label="t('admin.redeem.deleteCodeLabel', { code: row.code })"
               >
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path
@@ -170,13 +238,6 @@
           @update:page="handlePageChange"
           @update:pageSize="handlePageSizeChange"
         />
-
-        <!-- Batch Actions -->
-        <div v-if="filters.status === 'unused'" class="flex justify-end">
-          <button @click="showDeleteUnusedDialog = true" class="btn btn-danger">
-            {{ t('admin.redeem.deleteAllUnused') }}
-          </button>
-        </div>
       </template>
     </TablePageLayout>
 
@@ -192,32 +253,48 @@
       @cancel="showDeleteDialog = false"
     />
 
-    <!-- Delete Unused Codes Dialog -->
+    <!-- Batch Delete Confirmation Dialog -->
     <ConfirmDialog
-      :show="showDeleteUnusedDialog"
-      :title="t('admin.redeem.deleteAllUnused')"
-      :message="t('admin.redeem.deleteAllUnusedConfirm')"
-      :confirm-text="t('admin.redeem.deleteAll')"
+      :show="showBatchDeleteDialog"
+      :title="t('admin.redeem.batchDelete')"
+      :message="t('admin.redeem.batchDeleteConfirm', { count: selectedCount })"
+      :confirm-text="t('admin.redeem.batchDelete')"
       :cancel-text="t('common.cancel')"
       danger
-      @confirm="confirmDeleteUnused"
-      @cancel="showDeleteUnusedDialog = false"
+      @confirm="confirmBatchDelete"
+      @cancel="showBatchDeleteDialog = false"
     />
 
     <!-- Generate Codes Dialog -->
-    <Teleport to="body">
-      <div v-if="showGenerateDialog" class="fixed inset-0 z-50 flex items-center justify-center">
-        <div class="fixed inset-0 bg-black/50" @click="showGenerateDialog = false"></div>
-        <div
-          class="relative z-10 w-full max-w-md rounded-xl bg-white p-6 shadow-xl dark:bg-dark-800"
-        >
-          <h2 class="mb-4 text-lg font-semibold text-gray-900 dark:text-white">
-            {{ t('admin.redeem.generateCodesTitle') }}
-          </h2>
-          <form @submit.prevent="handleGenerateCodes" class="space-y-4">
+    <BaseDialog
+      :show="showGenerateDialog"
+      :title="t('admin.redeem.generateCodesTitle')"
+      width="narrow"
+      @close="showGenerateDialog = false"
+    >
+          <form
+            id="generate-redeem-codes-form"
+            class="space-y-4"
+            @submit.prevent="handleGenerateCodes"
+          >
             <div>
               <label class="input-label">{{ t('admin.redeem.codeType') }}</label>
               <Select v-model="generateForm.type" :options="typeOptions" />
+            </div>
+            <div>
+              <label class="input-label">{{ t('admin.redeem.category') }}</label>
+              <Select
+                v-model="generateForm.category"
+                :options="generationCategoryOptions"
+                :placeholder="t('admin.redeem.categoryPlaceholder')"
+                searchable
+                creatable
+                :search-placeholder="t('admin.redeem.searchCategories')"
+                :creatable-prefix="t('admin.redeem.createCategory')"
+              />
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.redeem.categoryHint') }}
+              </p>
             </div>
             <!-- 余额/并发类型：显示数值输入 -->
             <div v-if="generateForm.type !== 'subscription' && generateForm.type !== 'invitation'">
@@ -296,108 +373,102 @@
                 v-model.number="generateForm.count"
                 type="number"
                 min="1"
-                max="100"
+                :max="MAX_GENERATE_COUNT"
+                step="1"
                 required
                 class="input"
               />
-            </div>
-            <div class="flex justify-end gap-3 pt-2">
-              <button type="button" @click="showGenerateDialog = false" class="btn btn-secondary">
-                {{ t('common.cancel') }}
-              </button>
-              <button type="submit" :disabled="generating" class="btn btn-primary">
-                {{ generating ? t('admin.redeem.generating') : t('admin.redeem.generate') }}
-              </button>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.redeem.countHint', { max: MAX_GENERATE_COUNT }) }}
+              </p>
             </div>
           </form>
+      <template #footer>
+        <div class="flex w-full flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <button
+            type="button"
+            @click="showGenerateDialog = false"
+            class="btn btn-secondary min-h-11"
+          >
+            {{ t('common.cancel') }}
+          </button>
+          <button
+            type="submit"
+            form="generate-redeem-codes-form"
+            :disabled="generating"
+            class="btn btn-primary min-h-11"
+          >
+            {{ generating ? t('admin.redeem.generating') : t('admin.redeem.generate') }}
+          </button>
         </div>
-      </div>
-    </Teleport>
+      </template>
+    </BaseDialog>
 
     <!-- Generated Codes Result Dialog -->
-    <Teleport to="body">
-      <div v-if="showResultDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div class="fixed inset-0 bg-black/50" @click="closeResultDialog"></div>
-        <div class="relative z-10 w-full max-w-lg rounded-xl bg-white shadow-xl dark:bg-dark-800">
-          <!-- Header -->
-          <div
-            class="flex items-center justify-between border-b border-gray-200 px-5 py-4 dark:border-dark-600"
+    <BaseDialog
+      :show="showResultDialog"
+      :title="t('admin.redeem.generatedSuccessfully')"
+      width="normal"
+      @close="closeResultDialog"
+    >
+      <div class="mb-4 flex items-center gap-3">
+        <div
+          class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30"
+        >
+          <svg
+            class="h-5 w-5 text-green-600 dark:text-green-400"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
           >
-            <div class="flex items-center gap-3">
-              <div
-                class="flex h-10 w-10 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30"
-              >
-                <svg
-                  class="h-5 w-5 text-green-600 dark:text-green-400"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M5 13l4 4L19 7"
-                  />
-                </svg>
-              </div>
-              <div>
-                <h2 class="text-base font-semibold text-gray-900 dark:text-white">
-                  {{ t('admin.redeem.generatedSuccessfully') }}
-                </h2>
-                <p class="text-sm text-gray-500 dark:text-gray-400">
-                  {{ t('admin.redeem.codesCreated', { count: generatedCodes.length }) }}
-                </p>
-              </div>
-            </div>
-            <button
-              @click="closeResultDialog"
-              class="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-dark-700 dark:hover:text-gray-300"
-            >
-              <Icon name="x" size="md" :stroke-width="2" />
-            </button>
-          </div>
-          <!-- Content -->
-          <div class="p-5">
-            <div class="relative">
-              <textarea
-                readonly
-                :value="generatedCodesText"
-                :style="{ height: textareaHeight }"
-                class="w-full resize-none rounded-lg border border-gray-200 bg-gray-50 p-3 font-mono text-sm text-gray-800 focus:outline-none dark:border-dark-600 dark:bg-dark-700 dark:text-gray-200"
-              ></textarea>
-            </div>
-          </div>
-          <!-- Footer -->
-          <div
-            class="flex justify-end gap-2 rounded-b-xl border-t border-gray-200 bg-gray-50 px-5 py-4 dark:border-dark-600 dark:bg-dark-700/50"
-          >
-            <button
-              @click="copyGeneratedCodes"
-              :class="[
-                'btn flex items-center gap-2 transition-all',
-                copiedAll ? 'btn-success' : 'btn-secondary'
-              ]"
-            >
-              <Icon v-if="!copiedAll" name="copy" size="sm" :stroke-width="2" />
-              <svg v-else class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M5 13l4 4L19 7"
-                />
-              </svg>
-              {{ copiedAll ? t('admin.redeem.copied') : t('admin.redeem.copyAll') }}
-            </button>
-            <button @click="downloadGeneratedCodes" class="btn btn-primary flex items-center gap-2">
-              <Icon name="download" size="sm" :stroke-width="2" />
-              {{ t('admin.redeem.download') }}
-            </button>
-          </div>
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M5 13l4 4L19 7"
+            />
+          </svg>
         </div>
+        <p class="text-sm text-gray-500 dark:text-gray-400">
+          {{ t('admin.redeem.codesCreated', { count: generatedCodes.length }) }}
+        </p>
       </div>
-    </Teleport>
+      <textarea
+        readonly
+        :value="generatedCodesText"
+        :style="{ height: textareaHeight }"
+        class="w-full resize-none rounded-lg border border-gray-200 bg-gray-50 p-3 font-mono text-sm text-gray-800 focus:outline-none dark:border-dark-600 dark:bg-dark-700 dark:text-gray-200"
+      ></textarea>
+      <template #footer>
+        <div class="flex w-full flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <button
+            @click="copyGeneratedCodes"
+            :class="[
+              'btn min-h-11 flex items-center justify-center gap-2 transition-all',
+              copiedAll ? 'btn-success' : 'btn-secondary'
+            ]"
+          >
+            <Icon v-if="!copiedAll" name="copy" size="sm" :stroke-width="2" />
+            <svg v-else class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M5 13l4 4L19 7"
+              />
+            </svg>
+            {{ copiedAll ? t('admin.redeem.copied') : t('admin.redeem.copyAll') }}
+          </button>
+          <button
+            @click="downloadGeneratedCodes"
+            class="btn btn-primary min-h-11 flex items-center justify-center gap-2"
+          >
+            <Icon name="download" size="sm" :stroke-width="2" />
+            {{ t('admin.redeem.download') }}
+          </button>
+        </div>
+      </template>
+    </BaseDialog>
   </AppLayout>
 </template>
 
@@ -407,8 +478,10 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useClipboard } from '@/composables/useClipboard'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
+import { useTableSelection } from '@/composables/useTableSelection'
 import { adminAPI } from '@/api/admin'
 import { formatDateTime } from '@/utils/format'
+import { extractApiErrorMessage } from '@/utils/apiError'
 import type { RedeemCode, RedeemCodeType, Group, GroupPlatform, SubscriptionType } from '@/types'
 import type { Column } from '@/components/common/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -416,6 +489,7 @@ import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 import DataTable from '@/components/common/DataTable.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import BaseDialog from '@/components/common/BaseDialog.vue'
 import Select from '@/components/common/Select.vue'
 import GroupBadge from '@/components/common/GroupBadge.vue'
 import GroupOptionItem from '@/components/common/GroupOptionItem.vue'
@@ -424,6 +498,8 @@ import Icon from '@/components/icons/Icon.vue'
 const { t } = useI18n()
 const appStore = useAppStore()
 const { copyToClipboard: clipboardCopy } = useClipboard()
+const MAX_GENERATE_COUNT = 500
+const MAX_CATEGORY_LENGTH = 64
 
 interface GroupOption {
   value: number
@@ -438,6 +514,7 @@ const showGenerateDialog = ref(false)
 const showResultDialog = ref(false)
 const generatedCodes = ref<RedeemCode[]>([])
 const subscriptionGroups = ref<Group[]>([])
+const categories = ref<string[]>([])
 
 // 订阅类型分组选项
 const subscriptionGroupOptions = computed(() => {
@@ -479,14 +556,12 @@ const closeResultDialog = () => {
 }
 
 const copyGeneratedCodes = async () => {
-  try {
-    await navigator.clipboard.writeText(generatedCodesText.value)
+  const success = await clipboardCopy(generatedCodesText.value, t('admin.redeem.copied'))
+  if (success) {
     copiedAll.value = true
     setTimeout(() => {
       copiedAll.value = false
     }, 2000)
-  } catch (error) {
-    appStore.showError(t('admin.redeem.failedToCopy'))
   }
 }
 
@@ -503,12 +578,15 @@ const downloadGeneratedCodes = () => {
 }
 
 const columns = computed<Column[]>(() => [
+  { key: 'select', label: '', class: 'w-12' },
   { key: 'code', label: t('admin.redeem.columns.code') },
+  { key: 'category', label: t('admin.redeem.columns.category'), sortable: true },
   { key: 'type', label: t('admin.redeem.columns.type'), sortable: true },
   { key: 'value', label: t('admin.redeem.columns.value'), sortable: true },
   { key: 'status', label: t('admin.redeem.columns.status'), sortable: true },
   { key: 'used_by', label: t('admin.redeem.columns.usedBy') },
   { key: 'used_at', label: t('admin.redeem.columns.usedAt'), sortable: true },
+  { key: 'created_at', label: t('admin.redeem.columns.createdAt'), sortable: true },
   { key: 'actions', label: t('admin.redeem.columns.actions') }
 ])
 
@@ -536,13 +614,27 @@ const filterStatusOptions = computed(() => [
   { value: 'expired', label: t('admin.redeem.status.expired') }
 ])
 
+const generationCategoryOptions = computed(() =>
+  categories.value.map((category) => ({ value: category, label: category }))
+)
+
+const filterCategoryOptions = computed(() => [
+  { value: '', label: t('admin.redeem.allCategories') },
+  { value: true, label: t('common.uncategorized') },
+  ...generationCategoryOptions.value
+])
+
 const codes = ref<RedeemCode[]>([])
 const loading = ref(false)
 const generating = ref(false)
+const exporting = ref(false)
+const deleting = ref(false)
+const deletingBatch = ref(false)
 const searchQuery = ref('')
 const filters = reactive({
   type: '',
-  status: ''
+  status: '',
+  category: '' as string | boolean
 })
 const pagination = reactive({
   page: 1,
@@ -558,17 +650,39 @@ const sortState = reactive({
 let abortController: AbortController | null = null
 
 const showDeleteDialog = ref(false)
-const showDeleteUnusedDialog = ref(false)
+const showBatchDeleteDialog = ref(false)
 const deletingCode = ref<RedeemCode | null>(null)
 const copiedCode = ref<string | null>(null)
 
 const generateForm = reactive({
   type: 'balance' as RedeemCodeType,
+  category: '',
   value: 10,
   count: 1,
   group_id: null as number | null,
   validity_days: 30
 })
+
+const selectableCodes = computed(() => codes.value.filter((code) => code.status === 'unused'))
+const {
+  selectedIds,
+  selectedCount,
+  allVisibleSelected,
+  isSelected,
+  toggle,
+  clear: clearSelection,
+  setSelectedIds,
+  toggleVisible
+} = useTableSelection<RedeemCode>({
+  rows: selectableCodes,
+  getId: (code) => code.id
+})
+const selectedVisibleCount = computed(
+  () => selectableCodes.value.filter((code) => isSelected(code.id)).length
+)
+const someVisibleSelected = computed(
+  () => selectedVisibleCount.value > 0 && !allVisibleSelected.value
+)
 
 // 监听类型变化，邀请码类型时自动设置 value 为 0
 watch(
@@ -585,12 +699,15 @@ watch(
 const buildRedeemQueryFilters = () => ({
   type: (filters.type || undefined) as RedeemCodeType | undefined,
   status: (filters.status || undefined) as 'used' | 'expired' | 'unused' | undefined,
+  category:
+    typeof filters.category === 'string' && filters.category ? filters.category : undefined,
+  uncategorized: filters.category === true ? true : undefined,
   search: searchQuery.value || undefined,
   sort_by: sortState.sort_by,
   sort_order: sortState.sort_order
 })
 
-const loadCodes = async () => {
+const loadCodes = async (): Promise<void> => {
   if (abortController) {
     abortController.abort()
   }
@@ -609,18 +726,32 @@ const loadCodes = async () => {
     if (currentController.signal.aborted) {
       return
     }
+    const lastPage = Math.max(1, response.pages)
+    if (pagination.page > lastPage) {
+      pagination.page = lastPage
+      clearSelection()
+      await loadCodes()
+      return
+    }
     codes.value = response.items
     pagination.total = response.total
     pagination.pages = response.pages
-  } catch (error: any) {
+    const selectableIds = new Set(
+      response.items.filter((code) => code.status === 'unused').map((code) => code.id)
+    )
+    setSelectedIds(selectedIds.value.filter((id) => selectableIds.has(id)))
+  } catch (error: unknown) {
     if (
       currentController.signal.aborted ||
-      error?.name === 'AbortError' ||
-      error?.code === 'ERR_CANCELED'
+      (error instanceof DOMException && error.name === 'AbortError') ||
+      (typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        error.code === 'ERR_CANCELED')
     ) {
       return
     }
-    appStore.showError(t('admin.redeem.failedToLoad'))
+    appStore.showError(extractApiErrorMessage(error, t('admin.redeem.failedToLoad')))
     console.error('Error loading redeem codes:', error)
   } finally {
     if (abortController === currentController && !currentController.signal.aborted) {
@@ -635,18 +766,27 @@ const handleSearch = () => {
   clearTimeout(searchTimeout)
   searchTimeout = setTimeout(() => {
     pagination.page = 1
-    loadCodes()
+    clearSelection()
+    void loadCodes()
   }, 300)
+}
+
+const applyFilters = () => {
+  pagination.page = 1
+  clearSelection()
+  loadCodes()
 }
 
 const handlePageChange = (page: number) => {
   pagination.page = page
+  clearSelection()
   loadCodes()
 }
 
 const handlePageSizeChange = (pageSize: number) => {
   pagination.page_size = pageSize
   pagination.page = 1
+  clearSelection()
   loadCodes()
 }
 
@@ -654,7 +794,12 @@ const handleSort = (key: string, order: 'asc' | 'desc') => {
   sortState.sort_by = key
   sortState.sort_order = order
   pagination.page = 1
+  clearSelection()
   loadCodes()
+}
+
+const toggleSelectAllVisible = (event: Event) => {
+  toggleVisible((event.target as HTMLInputElement).checked)
 }
 
 const handleGenerateCodes = async () => {
@@ -663,25 +808,45 @@ const handleGenerateCodes = async () => {
     appStore.showError(t('admin.redeem.groupRequired'))
     return
   }
+  if (
+    !Number.isInteger(generateForm.count) ||
+    generateForm.count < 1 ||
+    generateForm.count > MAX_GENERATE_COUNT
+  ) {
+    appStore.showError(t('admin.redeem.invalidCount', { max: MAX_GENERATE_COUNT }))
+    return
+  }
+  const category = generateForm.category.trim()
+  if ([...category].length > MAX_CATEGORY_LENGTH) {
+    appStore.showError(t('admin.redeem.categoryTooLong', { max: MAX_CATEGORY_LENGTH }))
+    return
+  }
 
   generating.value = true
   try {
-    const result = await adminAPI.redeem.generate(
-      generateForm.count,
-      generateForm.type,
-      generateForm.value,
-      generateForm.type === 'subscription' ? generateForm.group_id : undefined,
-      generateForm.type === 'subscription' ? generateForm.validity_days : undefined
-    )
+    const result = await adminAPI.redeem.generate({
+      count: generateForm.count,
+      type: generateForm.type,
+      category: category || undefined,
+      value: generateForm.value,
+      group_id: generateForm.type === 'subscription' ? generateForm.group_id : undefined,
+      validity_days:
+        generateForm.type === 'subscription' ? generateForm.validity_days : undefined
+    })
     showGenerateDialog.value = false
     generatedCodes.value = result
     showResultDialog.value = true
+    if (category && !categories.value.includes(category)) {
+      categories.value = [...categories.value, category].sort((a, b) => a.localeCompare(b))
+    }
     // 重置表单
     generateForm.group_id = null
     generateForm.validity_days = 30
+    pagination.page = 1
+    clearSelection()
     loadCodes()
-  } catch (error: any) {
-    appStore.showError(error.response?.data?.detail || t('admin.redeem.failedToGenerate'))
+  } catch (error: unknown) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.redeem.failedToGenerate')))
     console.error('Error generating codes:', error)
   } finally {
     generating.value = false
@@ -699,6 +864,8 @@ const copyToClipboard = async (text: string) => {
 }
 
 const handleExportCodes = async () => {
+  if (exporting.value) return
+  exporting.value = true
   try {
     const blob = await adminAPI.redeem.exportCodes(buildRedeemQueryFilters())
 
@@ -713,9 +880,11 @@ const handleExportCodes = async () => {
     window.URL.revokeObjectURL(url)
 
     appStore.showSuccess(t('admin.redeem.codesExported'))
-  } catch (error: any) {
-    appStore.showError(error.response?.data?.detail || t('admin.redeem.failedToExport'))
+  } catch (error: unknown) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.redeem.failedToExport')))
     console.error('Error exporting codes:', error)
+  } finally {
+    exporting.value = false
   }
 }
 
@@ -725,40 +894,67 @@ const handleDelete = (code: RedeemCode) => {
 }
 
 const confirmDelete = async () => {
-  if (!deletingCode.value) return
+  if (!deletingCode.value || deleting.value) return
 
+  deleting.value = true
   try {
     await adminAPI.redeem.delete(deletingCode.value.id)
+    const deletedID = deletingCode.value.id
     appStore.showSuccess(t('admin.redeem.codeDeleted'))
     showDeleteDialog.value = false
     deletingCode.value = null
-    loadCodes()
-  } catch (error: any) {
-    appStore.showError(error.response?.data?.detail || t('admin.redeem.failedToDelete'))
+    setSelectedIds(selectedIds.value.filter((id) => id !== deletedID))
+    void Promise.all([loadCodes(), loadCategories()])
+  } catch (error: unknown) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.redeem.failedToDelete')))
     console.error('Error deleting code:', error)
+  } finally {
+    deleting.value = false
   }
 }
 
-const confirmDeleteUnused = async () => {
+const confirmBatchDelete = async () => {
+  if (selectedIds.value.length === 0 || deletingBatch.value) return
+
+  const requestedCount = selectedIds.value.length
+  deletingBatch.value = true
   try {
-    // Get all unused codes and delete them
-    const unusedCodesResponse = await adminAPI.redeem.list(1, 1000, { status: 'unused' })
-    const unusedCodeIds = unusedCodesResponse.items.map((code) => code.id)
-
-    if (unusedCodeIds.length === 0) {
-      appStore.showInfo(t('admin.redeem.noUnusedCodes'))
-      showDeleteUnusedDialog.value = false
-      return
+    const result = await adminAPI.redeem.batchDelete(selectedIds.value)
+    if (result.deleted < requestedCount) {
+      appStore.showWarning(
+        t('admin.redeem.batchDeletePartial', {
+          deleted: result.deleted,
+          skipped: requestedCount - result.deleted
+        })
+      )
+    } else {
+      appStore.showSuccess(t('admin.redeem.batchDeleted', { count: result.deleted }))
     }
-
-    const result = await adminAPI.redeem.batchDelete(unusedCodeIds)
-    appStore.showSuccess(t('admin.redeem.codesDeleted', { count: result.deleted }))
-    showDeleteUnusedDialog.value = false
-    loadCodes()
-  } catch (error: any) {
-    appStore.showError(error.response?.data?.detail || t('admin.redeem.failedToDeleteUnused'))
-    console.error('Error deleting unused codes:', error)
+    showBatchDeleteDialog.value = false
+    clearSelection()
+    void Promise.all([loadCodes(), loadCategories()])
+  } catch (error: unknown) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.redeem.failedToBatchDelete')))
+    console.error('Error batch deleting redeem codes:', error)
+  } finally {
+    deletingBatch.value = false
   }
+}
+
+const loadCategories = async () => {
+  try {
+    categories.value = await adminAPI.redeem.listCategories()
+  } catch (error: unknown) {
+    appStore.showError(
+      extractApiErrorMessage(error, t('admin.redeem.failedToLoadCategories'))
+    )
+    console.error('Error loading redeem code categories:', error)
+  }
+}
+
+const refreshRedeemData = async () => {
+  clearSelection()
+  await Promise.all([loadCodes(), loadCategories()])
 }
 
 // 加载订阅类型分组
@@ -772,8 +968,8 @@ const loadSubscriptionGroups = async () => {
 }
 
 onMounted(() => {
-  loadCodes()
-  loadSubscriptionGroups()
+  void refreshRedeemData()
+  void loadSubscriptionGroups()
 })
 
 onUnmounted(() => {

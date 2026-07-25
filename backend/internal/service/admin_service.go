@@ -114,7 +114,8 @@ type AdminService interface {
 	CheckProxyQuality(ctx context.Context, id int64) (*ProxyQualityCheckResult, error)
 
 	// Redeem code management
-	ListRedeemCodes(ctx context.Context, page, pageSize int, codeType, status, search string, sortBy, sortOrder string) ([]RedeemCode, int64, error)
+	ListRedeemCodes(ctx context.Context, page, pageSize int, codeType, status, category, search string, sortBy, sortOrder string) ([]RedeemCode, int64, error)
+	ListRedeemCodeCategories(ctx context.Context) ([]string, error)
 	GetRedeemCode(ctx context.Context, id int64) (*RedeemCode, error)
 	GenerateRedeemCodes(ctx context.Context, input *GenerateRedeemCodesInput) ([]RedeemCode, error)
 	DeleteRedeemCode(ctx context.Context, id int64) error
@@ -454,6 +455,7 @@ type UpdateProxyInput struct {
 type GenerateRedeemCodesInput struct {
 	Count        int
 	Type         string
+	Category     string
 	Value        float64
 	GroupID      *int64 // 订阅类型专用：关联的分组ID
 	ValidityDays int    // 订阅类型专用：有效天数
@@ -4551,13 +4553,17 @@ func (s *adminServiceImpl) CheckProxyExists(ctx context.Context, host string, po
 }
 
 // Redeem code management implementations
-func (s *adminServiceImpl) ListRedeemCodes(ctx context.Context, page, pageSize int, codeType, status, search string, sortBy, sortOrder string) ([]RedeemCode, int64, error) {
+func (s *adminServiceImpl) ListRedeemCodes(ctx context.Context, page, pageSize int, codeType, status, category, search string, sortBy, sortOrder string) ([]RedeemCode, int64, error) {
 	params := pagination.PaginationParams{Page: page, PageSize: pageSize, SortBy: sortBy, SortOrder: sortOrder}
-	codes, result, err := s.redeemCodeRepo.ListWithFilters(ctx, params, codeType, status, search)
+	codes, result, err := s.redeemCodeRepo.ListWithFilters(ctx, params, codeType, status, category, search)
 	if err != nil {
 		return nil, 0, err
 	}
 	return codes, result.Total, nil
+}
+
+func (s *adminServiceImpl) ListRedeemCodeCategories(ctx context.Context) ([]string, error) {
+	return s.redeemCodeRepo.ListCategories(ctx)
 }
 
 func (s *adminServiceImpl) GetRedeemCode(ctx context.Context, id int64) (*RedeemCode, error) {
@@ -4565,6 +4571,20 @@ func (s *adminServiceImpl) GetRedeemCode(ctx context.Context, id int64) (*Redeem
 }
 
 func (s *adminServiceImpl) GenerateRedeemCodes(ctx context.Context, input *GenerateRedeemCodesInput) ([]RedeemCode, error) {
+	if input == nil {
+		return nil, errors.New("generate redeem codes input is required")
+	}
+	if input.Count <= 0 {
+		return nil, errors.New("count must be greater than 0")
+	}
+	if input.Count > MaxRedeemCodesPerGeneration {
+		return nil, fmt.Errorf("cannot generate more than %d codes at once", MaxRedeemCodesPerGeneration)
+	}
+	category, err := normalizeRedeemCodeCategory(input.Category)
+	if err != nil {
+		return nil, err
+	}
+
 	// 如果是订阅类型，验证必须有 GroupID
 	if input.Type == RedeemTypeSubscription {
 		if input.GroupID == nil {
@@ -4590,10 +4610,11 @@ func (s *adminServiceImpl) GenerateRedeemCodes(ctx context.Context, input *Gener
 			return nil, err
 		}
 		code := RedeemCode{
-			Code:   codeValue,
-			Type:   input.Type,
-			Value:  input.Value,
-			Status: StatusUnused,
+			Code:     codeValue,
+			Type:     input.Type,
+			Category: category,
+			Value:    input.Value,
+			Status:   StatusUnused,
 		}
 		// 订阅类型专用字段
 		if input.Type == RedeemTypeSubscription {
@@ -4603,10 +4624,10 @@ func (s *adminServiceImpl) GenerateRedeemCodes(ctx context.Context, input *Gener
 				code.ValidityDays = 30 // 默认30天
 			}
 		}
-		if err := s.redeemCodeRepo.Create(ctx, &code); err != nil {
-			return nil, err
-		}
 		codes = append(codes, code)
+	}
+	if err := s.redeemCodeRepo.CreateBatch(ctx, codes); err != nil {
+		return nil, err
 	}
 	return codes, nil
 }
@@ -4616,13 +4637,26 @@ func (s *adminServiceImpl) DeleteRedeemCode(ctx context.Context, id int64) error
 }
 
 func (s *adminServiceImpl) BatchDeleteRedeemCodes(ctx context.Context, ids []int64) (int64, error) {
-	var deleted int64
-	for _, id := range ids {
-		if err := s.redeemCodeRepo.Delete(ctx, id); err == nil {
-			deleted++
-		}
+	if len(ids) == 0 {
+		return 0, errors.New("at least one redeem code ID is required")
 	}
-	return deleted, nil
+	if len(ids) > MaxRedeemCodeBatchDelete {
+		return 0, fmt.Errorf("cannot delete more than %d redeem codes at once", MaxRedeemCodeBatchDelete)
+	}
+
+	uniqueIDs := make([]int64, 0, len(ids))
+	seen := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			return 0, errors.New("redeem code IDs must be positive")
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		uniqueIDs = append(uniqueIDs, id)
+	}
+	return s.redeemCodeRepo.DeleteBatch(ctx, uniqueIDs)
 }
 
 func (s *adminServiceImpl) ExpireRedeemCode(ctx context.Context, id int64) (*RedeemCode, error) {

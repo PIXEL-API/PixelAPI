@@ -5,15 +5,49 @@
       class="flex min-w-0 flex-1 flex-col items-start"
       :title="description || undefined"
     >
-      <!-- Row 1: platform badge (name bold) -->
-      <GroupBadge
-        :name="name"
-        :platform="platform"
-        :scope="scope"
-        :subscription-type="subscriptionType"
-        :show-rate="false"
-        class="groupOptionItemBadge"
-      />
+      <!-- Row 1: availability warning + platform badge -->
+      <div class="flex min-w-0 flex-wrap items-center gap-1.5">
+        <span
+          v-if="statusLabel"
+          :class="[
+            'inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 text-[11px] font-semibold leading-5',
+            statusTone === 'warning'
+              ? 'bg-red-50 text-red-600 dark:bg-red-950/40 dark:text-red-400'
+              : 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-400'
+          ]"
+        >
+          <svg
+            aria-hidden="true"
+            class="h-3.5 w-3.5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+            stroke-width="2"
+          >
+            <path
+              v-if="statusTone === 'warning'"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"
+            />
+            <path
+              v-else
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="m5 12 4 4L19 6"
+            />
+          </svg>
+          {{ statusLabel }}
+        </span>
+        <GroupBadge
+          :name="name"
+          :platform="platform"
+          :scope="scope"
+          :subscription-type="subscriptionType"
+          :show-rate="false"
+          class="groupOptionItemBadge"
+        />
+      </div>
       <!-- Row 2: description with top spacing -->
       <span
         v-if="description"
@@ -67,6 +101,8 @@ interface Props {
   effectiveRateMultiplier?: number | null
   rateMultiplierSource?: string | null
   description?: string | null
+  statusLabel?: string | null
+  statusTone?: 'recommended' | 'warning'
   selected?: boolean
   showCheckmark?: boolean
 }
@@ -75,6 +111,8 @@ const props = withDefaults(defineProps<Props>(), {
   subscriptionType: 'standard',
   selected: false,
   showCheckmark: true,
+  statusLabel: null,
+  statusTone: 'recommended',
   userRateMultiplier: null,
   effectiveRateMultiplier: null,
   rateMultiplierSource: null

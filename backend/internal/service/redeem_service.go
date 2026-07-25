@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"entgo.io/ent/dialect"
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -33,6 +34,14 @@ const (
 	redeemMaxErrorsPerHour  = 20
 	redeemRateLimitDuration = time.Hour
 	redeemLockDuration      = 10 * time.Second // 锁超时时间，防止死锁
+
+	MaxRedeemCodesPerGeneration = 500
+	MaxRedeemCodeBatchDelete    = 500
+	MaxRedeemCodeCategoryLength = 64
+
+	// RedeemCodeUncategorizedFilter is an internal category-filter sentinel.
+	// PostgreSQL text values cannot contain NUL, so it cannot collide with a stored category.
+	RedeemCodeUncategorizedFilter = "\x00"
 )
 
 // RedeemCache defines cache operations for redeem service
@@ -51,10 +60,12 @@ type RedeemCodeRepository interface {
 	GetByCode(ctx context.Context, code string) (*RedeemCode, error)
 	Update(ctx context.Context, code *RedeemCode) error
 	Delete(ctx context.Context, id int64) error
+	DeleteBatch(ctx context.Context, ids []int64) (int64, error)
 	Use(ctx context.Context, id, userID int64) error
 
 	List(ctx context.Context, params pagination.PaginationParams) ([]RedeemCode, *pagination.PaginationResult, error)
-	ListWithFilters(ctx context.Context, params pagination.PaginationParams, codeType, status, search string) ([]RedeemCode, *pagination.PaginationResult, error)
+	ListWithFilters(ctx context.Context, params pagination.PaginationParams, codeType, status, category, search string) ([]RedeemCode, *pagination.PaginationResult, error)
+	ListCategories(ctx context.Context) ([]string, error)
 	ListByUser(ctx context.Context, userID int64, limit int) ([]RedeemCode, error)
 	// ListByUserPaginated returns paginated balance/concurrency history for a specific user.
 	// codeType filter is optional - pass empty string to return all types.
@@ -65,9 +76,10 @@ type RedeemCodeRepository interface {
 
 // GenerateCodesRequest 生成兑换码请求
 type GenerateCodesRequest struct {
-	Count int     `json:"count"`
-	Value float64 `json:"value"`
-	Type  string  `json:"type"`
+	Count    int     `json:"count"`
+	Value    float64 `json:"value"`
+	Type     string  `json:"type"`
+	Category string  `json:"category"`
 }
 
 // RedeemCodeResponse 兑换码响应
@@ -114,6 +126,14 @@ func validateConcurrencyRedeemValue(value float64) error {
 		return errors.New("concurrency value is outside the supported integer range")
 	}
 	return nil
+}
+
+func normalizeRedeemCodeCategory(category string) (string, error) {
+	category = strings.TrimSpace(category)
+	if utf8.RuneCountInString(category) > MaxRedeemCodeCategoryLength {
+		return "", fmt.Errorf("category must not exceed %d characters", MaxRedeemCodeCategoryLength)
+	}
+	return category, nil
 }
 
 // RedeemService 兑换码服务
@@ -181,11 +201,15 @@ func (s *RedeemService) GenerateCodes(ctx context.Context, req GenerateCodesRequ
 		codeType = RedeemTypeBalance
 	}
 
-	if req.Count > 1000 {
-		return nil, errors.New("cannot generate more than 1000 codes at once")
+	if req.Count > MaxRedeemCodesPerGeneration {
+		return nil, fmt.Errorf("cannot generate more than %d codes at once", MaxRedeemCodesPerGeneration)
 	}
 
 	if err := validateRedeemCodeValue(codeType, req.Value); err != nil {
+		return nil, err
+	}
+	category, err := normalizeRedeemCodeCategory(req.Category)
+	if err != nil {
 		return nil, err
 	}
 
@@ -203,10 +227,11 @@ func (s *RedeemService) GenerateCodes(ctx context.Context, req GenerateCodesRequ
 		}
 
 		codes = append(codes, RedeemCode{
-			Code:   code,
-			Type:   codeType,
-			Value:  value,
-			Status: StatusUnused,
+			Code:     code,
+			Type:     codeType,
+			Category: category,
+			Value:    value,
+			Status:   StatusUnused,
 		})
 	}
 
@@ -232,6 +257,11 @@ func (s *RedeemService) CreateCode(ctx context.Context, code *RedeemCode) error 
 	if code.Type == "" {
 		code.Type = RedeemTypeBalance
 	}
+	category, err := normalizeRedeemCodeCategory(code.Category)
+	if err != nil {
+		return err
+	}
+	code.Category = category
 	if err := validateRedeemCodeValue(code.Type, code.Value); err != nil {
 		return err
 	}

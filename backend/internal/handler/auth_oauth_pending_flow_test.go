@@ -2464,6 +2464,10 @@ func (r *oauthPendingFlowRedeemCodeRepo) Delete(context.Context, int64) error {
 	panic("unexpected Delete call")
 }
 
+func (r *oauthPendingFlowRedeemCodeRepo) DeleteBatch(context.Context, []int64) (int64, error) {
+	panic("unexpected DeleteBatch call")
+}
+
 func (r *oauthPendingFlowRedeemCodeRepo) Use(ctx context.Context, id, userID int64) error {
 	affected, err := r.client.RedeemCode.Update().
 		Where(redeemcode.IDEQ(id), redeemcode.StatusEQ(service.StatusUnused)).
@@ -2484,8 +2488,12 @@ func (r *oauthPendingFlowRedeemCodeRepo) List(context.Context, pagination.Pagina
 	panic("unexpected List call")
 }
 
-func (r *oauthPendingFlowRedeemCodeRepo) ListWithFilters(context.Context, pagination.PaginationParams, string, string, string) ([]service.RedeemCode, *pagination.PaginationResult, error) {
+func (r *oauthPendingFlowRedeemCodeRepo) ListWithFilters(context.Context, pagination.PaginationParams, string, string, string, string) ([]service.RedeemCode, *pagination.PaginationResult, error) {
 	panic("unexpected ListWithFilters call")
+}
+
+func (r *oauthPendingFlowRedeemCodeRepo) ListCategories(context.Context) ([]string, error) {
+	panic("unexpected ListCategories call")
 }
 
 func (r *oauthPendingFlowRedeemCodeRepo) ListByUser(context.Context, int64, int) ([]service.RedeemCode, error) {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -31,10 +32,34 @@ func NewRedeemHandler(adminService service.AdminService, redeemService *service.
 	}
 }
 
+func parseRedeemCodeCategoryFilter(c *gin.Context) (string, error) {
+	category := strings.TrimSpace(c.Query("category"))
+	if utf8.RuneCountInString(category) > service.MaxRedeemCodeCategoryLength {
+		return "", fmt.Errorf("category must not exceed %d characters", service.MaxRedeemCodeCategoryLength)
+	}
+
+	uncategorizedRaw := strings.TrimSpace(c.Query("uncategorized"))
+	if uncategorizedRaw == "" {
+		return category, nil
+	}
+	uncategorized, err := strconv.ParseBool(uncategorizedRaw)
+	if err != nil {
+		return "", errors.New("uncategorized must be a boolean")
+	}
+	if !uncategorized {
+		return category, nil
+	}
+	if category != "" {
+		return "", errors.New("category and uncategorized=true cannot be used together")
+	}
+	return service.RedeemCodeUncategorizedFilter, nil
+}
+
 // GenerateRedeemCodesRequest represents generate redeem codes request
 type GenerateRedeemCodesRequest struct {
-	Count        int     `json:"count" binding:"required,min=1,max=100"`
+	Count        int     `json:"count" binding:"required,min=1,max=500"`
 	Type         string  `json:"type" binding:"required,oneof=balance points concurrency subscription invitation"`
+	Category     string  `json:"category" binding:"omitempty,max=64"`
 	Value        float64 `json:"value"`
 	GroupID      *int64  `json:"group_id"`      // 订阅类型必填
 	ValidityDays int     `json:"validity_days"` // 订阅类型使用，正数增加/负数退款扣减
@@ -58,6 +83,11 @@ func (h *RedeemHandler) List(c *gin.Context) {
 	page, pageSize := response.ParsePagination(c)
 	codeType := c.Query("type")
 	status := c.Query("status")
+	category, err := parseRedeemCodeCategoryFilter(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 	search := c.Query("search")
 	sortBy := c.DefaultQuery("sort_by", "id")
 	sortOrder := c.DefaultQuery("sort_order", "desc")
@@ -66,8 +96,7 @@ func (h *RedeemHandler) List(c *gin.Context) {
 	if len(search) > 100 {
 		search = search[:100]
 	}
-
-	codes, total, err := h.adminService.ListRedeemCodes(c.Request.Context(), page, pageSize, codeType, status, search, sortBy, sortOrder)
+	codes, total, err := h.adminService.ListRedeemCodes(c.Request.Context(), page, pageSize, codeType, status, category, search, sortBy, sortOrder)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -78,6 +107,17 @@ func (h *RedeemHandler) List(c *gin.Context) {
 		out = append(out, *dto.RedeemCodeFromServiceAdmin(&codes[i]))
 	}
 	response.Paginated(c, out, total, page, pageSize)
+}
+
+// ListCategories handles listing distinct non-empty redeem code categories.
+// GET /api/v1/admin/redeem-codes/categories
+func (h *RedeemHandler) ListCategories(c *gin.Context) {
+	categories, err := h.adminService.ListRedeemCodeCategories(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"categories": categories})
 }
 
 // GetByID handles getting a redeem code by ID
@@ -111,6 +151,7 @@ func (h *RedeemHandler) Generate(c *gin.Context) {
 		codes, execErr := h.adminService.GenerateRedeemCodes(ctx, &service.GenerateRedeemCodesInput{
 			Count:        req.Count,
 			Type:         req.Type,
+			Category:     req.Category,
 			Value:        req.Value,
 			GroupID:      req.GroupID,
 			ValidityDays: req.ValidityDays,
@@ -246,7 +287,7 @@ func (h *RedeemHandler) Delete(c *gin.Context) {
 // POST /api/v1/admin/redeem-codes/batch-delete
 func (h *RedeemHandler) BatchDelete(c *gin.Context) {
 	var req struct {
-		IDs []int64 `json:"ids" binding:"required,min=1"`
+		IDs []int64 `json:"ids" binding:"required,min=1,max=500,dive,gt=0"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
@@ -307,18 +348,39 @@ func (h *RedeemHandler) GetStats(c *gin.Context) {
 func (h *RedeemHandler) Export(c *gin.Context) {
 	codeType := c.Query("type")
 	status := c.Query("status")
+	category, err := parseRedeemCodeCategoryFilter(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 	search := strings.TrimSpace(c.Query("search"))
 	sortBy := c.DefaultQuery("sort_by", "id")
 	sortOrder := c.DefaultQuery("sort_order", "desc")
 	if len(search) > 100 {
 		search = search[:100]
 	}
-
-	// Get all codes without pagination (use large page size)
-	codes, _, err := h.adminService.ListRedeemCodes(c.Request.Context(), 1, 10000, codeType, status, search, sortBy, sortOrder)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
+	const exportPageSize = 10000
+	codes := make([]service.RedeemCode, 0, exportPageSize)
+	for page := 1; ; page++ {
+		batch, total, err := h.adminService.ListRedeemCodes(
+			c.Request.Context(),
+			page,
+			exportPageSize,
+			codeType,
+			status,
+			category,
+			search,
+			sortBy,
+			sortOrder,
+		)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		codes = append(codes, batch...)
+		if len(batch) == 0 || int64(len(codes)) >= total {
+			break
+		}
 	}
 
 	// Create CSV buffer
@@ -326,7 +388,7 @@ func (h *RedeemHandler) Export(c *gin.Context) {
 	writer := csv.NewWriter(&buf)
 
 	// Write header
-	if err := writer.Write([]string{"id", "code", "type", "value", "status", "used_by", "used_by_email", "used_at", "created_at"}); err != nil {
+	if err := writer.Write([]string{"id", "code", "category", "type", "value", "status", "used_by", "used_by_email", "used_at", "created_at"}); err != nil {
 		response.InternalError(c, "Failed to export redeem codes: "+err.Error())
 		return
 	}
@@ -348,6 +410,7 @@ func (h *RedeemHandler) Export(c *gin.Context) {
 		if err := writer.Write([]string{
 			fmt.Sprintf("%d", code.ID),
 			code.Code,
+			code.Category,
 			code.Type,
 			fmt.Sprintf("%.2f", code.Value),
 			code.Status,

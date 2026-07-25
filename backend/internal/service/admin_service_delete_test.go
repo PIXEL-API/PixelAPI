@@ -317,8 +317,9 @@ func (s *proxyRepoStub) ListAccountSummariesByProxyID(ctx context.Context, proxy
 }
 
 type redeemRepoStub struct {
-	deleteErrByID map[int64]error
-	deletedIDs    []int64
+	deleteErrByID  map[int64]error
+	batchDeleteErr error
+	deletedIDs     []int64
 }
 
 func (s *redeemRepoStub) Create(ctx context.Context, code *RedeemCode) error {
@@ -351,6 +352,14 @@ func (s *redeemRepoStub) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
+func (s *redeemRepoStub) DeleteBatch(ctx context.Context, ids []int64) (int64, error) {
+	s.deletedIDs = append(s.deletedIDs, ids...)
+	if s.batchDeleteErr != nil {
+		return 0, s.batchDeleteErr
+	}
+	return int64(len(ids)), nil
+}
+
 func (s *redeemRepoStub) Use(ctx context.Context, id, userID int64) error {
 	panic("unexpected Use call")
 }
@@ -359,8 +368,12 @@ func (s *redeemRepoStub) List(ctx context.Context, params pagination.PaginationP
 	panic("unexpected List call")
 }
 
-func (s *redeemRepoStub) ListWithFilters(ctx context.Context, params pagination.PaginationParams, codeType, status, search string) ([]RedeemCode, *pagination.PaginationResult, error) {
+func (s *redeemRepoStub) ListWithFilters(ctx context.Context, params pagination.PaginationParams, codeType, status, category, search string) ([]RedeemCode, *pagination.PaginationResult, error) {
 	panic("unexpected ListWithFilters call")
+}
+
+func (s *redeemRepoStub) ListCategories(ctx context.Context) ([]string, error) {
+	panic("unexpected ListCategories call")
 }
 
 func (s *redeemRepoStub) ListByUser(ctx context.Context, userID int64, limit int) ([]RedeemCode, error) {
@@ -600,16 +613,15 @@ func TestAdminService_BatchDeleteRedeemCodes_Success(t *testing.T) {
 	require.Equal(t, []int64{1, 2, 3}, repo.deletedIDs)
 }
 
-func TestAdminService_BatchDeleteRedeemCodes_PartialFailures(t *testing.T) {
+func TestAdminService_BatchDeleteRedeemCodes_Error(t *testing.T) {
+	deleteErr := errors.New("db error")
 	repo := &redeemRepoStub{
-		deleteErrByID: map[int64]error{
-			2: errors.New("db error"),
-		},
+		batchDeleteErr: deleteErr,
 	}
 	svc := &adminServiceImpl{redeemCodeRepo: repo}
 
 	deleted, err := svc.BatchDeleteRedeemCodes(context.Background(), []int64{1, 2, 3})
-	require.NoError(t, err)
-	require.Equal(t, int64(2), deleted)
+	require.ErrorIs(t, err, deleteErr)
+	require.Zero(t, deleted)
 	require.Equal(t, []int64{1, 2, 3}, repo.deletedIDs)
 }

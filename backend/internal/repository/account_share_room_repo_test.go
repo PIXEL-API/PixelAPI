@@ -124,104 +124,40 @@ func TestListRoomAccountsAllowsAdministrator(t *testing.T) {
 	}
 }
 
-func TestConvertExternalPlacementRejectsIncompatibleRoom(t *testing.T) {
-	tests := []struct {
-		name         string
-		accountLevel string
-		roomOwner    int64
-		roomPlatform string
-		roomLevel    string
-		wantErr      error
-	}{
-		{
-			name:         "unknown account level",
-			accountLevel: service.AccountLevelUnknown,
-			roomOwner:    42,
-			roomPlatform: service.PlatformOpenAI,
-			roomLevel:    service.AccountLevelPlus,
-			wantErr:      service.ErrAccountShareRoomUnknownLevel,
-		},
-		{
-			name:         "different owner",
-			accountLevel: service.AccountLevelPlus,
-			roomOwner:    99,
-			roomPlatform: service.PlatformOpenAI,
-			roomLevel:    service.AccountLevelPlus,
-			wantErr:      service.ErrAccountShareRoomOwnerMismatch,
-		},
-		{
-			name:         "different platform",
-			accountLevel: service.AccountLevelPlus,
-			roomOwner:    42,
-			roomPlatform: service.PlatformAnthropic,
-			roomLevel:    service.AccountLevelPlus,
-			wantErr:      service.ErrAccountShareRoomPlatformMismatch,
-		},
-		{
-			name:         "different account level",
-			accountLevel: service.AccountLevelPlus,
-			roomOwner:    42,
-			roomPlatform: service.PlatformOpenAI,
-			roomLevel:    service.AccountLevelTeam,
-			wantErr:      service.ErrAccountShareRoomLevelMismatch,
-		},
+func TestConvertExternalPlacementRejectsSpecificRoomTarget(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
 	}
+	defer func() { _ = db.Close() }()
+	repo := &accountShareModeRepository{db: db}
+	roomID := int64(700)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			db, mock, err := sqlmock.New()
-			if err != nil {
-				t.Fatalf("sqlmock.New: %v", err)
-			}
-			defer func() { _ = db.Close() }()
-			repo := &accountShareModeRepository{db: db}
-			roomID := int64(700)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT platform, account_level, priority").
+		WithArgs(int64(10), int64(42)).
+		WillReturnRows(sqlmock.NewRows([]string{"platform", "account_level", "priority"}).
+			AddRow(service.PlatformOpenAI, service.AccountLevelPlus, 1))
+	mock.ExpectQuery("SELECT placement\\.placement_type").
+		WithArgs(int64(10), int64(42)).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT account_id, target_type, target_listing_id").
+		WithArgs(int64(42), "convert-room").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectRollback()
 
-			mock.ExpectBegin()
-			mock.ExpectQuery("SELECT platform, account_level, priority").
-				WithArgs(int64(10), int64(42)).
-				WillReturnRows(sqlmock.NewRows([]string{"platform", "account_level", "priority"}).
-					AddRow(service.PlatformOpenAI, tt.accountLevel, 1))
-			if tt.accountLevel != service.AccountLevelUnknown {
-				mock.ExpectQuery("SELECT placement\\.placement_type").
-					WithArgs(int64(10), int64(42)).
-					WillReturnError(sql.ErrNoRows)
-				mock.ExpectQuery("SELECT account_id, target_type, target_listing_id").
-					WithArgs(int64(42), "convert-room").
-					WillReturnError(sql.ErrNoRows)
-				mock.ExpectQuery("SELECT id, owner_user_id, platform, account_level, status").
-					WithArgs(sqlmock.AnyArg()).
-					WillReturnRows(sqlmock.NewRows([]string{
-						"id", "owner_user_id", "platform", "account_level", "status",
-						"allowed_models", "codex_cli_only", "codex_5h_limit_percent", "codex_7d_limit_percent",
-					}).AddRow(
-						roomID,
-						tt.roomOwner,
-						tt.roomPlatform,
-						tt.roomLevel,
-						service.AccountShareListingStatusActive,
-						[]byte(`["gpt-5.4"]`),
-						false,
-						100,
-						100,
-					))
-			}
-			mock.ExpectRollback()
-
-			_, err = repo.ConvertExternalPlacement(context.Background(), service.ConvertAccountExternalPlacementInput{
-				AccountID:      10,
-				OwnerUserID:    42,
-				Target:         service.AccountExternalPlacementRoom,
-				RoomID:         &roomID,
-				IdempotencyKey: "convert-room",
-			})
-			if !errors.Is(err, tt.wantErr) {
-				t.Fatalf("error = %v, want %v", err, tt.wantErr)
-			}
-			if err := mock.ExpectationsWereMet(); err != nil {
-				t.Fatalf("unmet expectations: %v", err)
-			}
-		})
+	_, err = repo.ConvertExternalPlacement(context.Background(), service.ConvertAccountExternalPlacementInput{
+		AccountID:      10,
+		OwnerUserID:    42,
+		Target:         service.AccountExternalPlacementRoom,
+		RoomID:         &roomID,
+		IdempotencyKey: "convert-room",
+	})
+	if !errors.Is(err, service.ErrAccountExternalPlacementInvalid) {
+		t.Fatalf("error = %v, want %v", err, service.ErrAccountExternalPlacementInvalid)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
 	}
 }
 
@@ -232,7 +168,6 @@ func TestConvertExternalPlacementCompatibleRoomReachesGroupBinding(t *testing.T)
 	}
 	defer func() { _ = db.Close() }()
 	repo := &accountShareModeRepository{db: db}
-	roomID := int64(700)
 	stopErr := errors.New("stop after room compatibility validation")
 
 	mock.ExpectBegin()
@@ -246,22 +181,6 @@ func TestConvertExternalPlacementCompatibleRoomReachesGroupBinding(t *testing.T)
 	mock.ExpectQuery("SELECT account_id, target_type, target_listing_id").
 		WithArgs(int64(42), "compatible-room").
 		WillReturnError(sql.ErrNoRows)
-	mock.ExpectQuery("SELECT id, owner_user_id, platform, account_level, status").
-		WithArgs(sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "owner_user_id", "platform", "account_level", "status",
-			"allowed_models", "codex_cli_only", "codex_5h_limit_percent", "codex_7d_limit_percent",
-		}).AddRow(
-			roomID,
-			int64(42),
-			service.PlatformOpenAI,
-			service.AccountLevelPlus,
-			service.AccountShareListingStatusActive,
-			[]byte(`["gpt-5.4"]`),
-			false,
-			100,
-			100,
-		))
 	mock.ExpectQuery("SELECT id\\s+FROM groups").
 		WithArgs(int64(42), service.PlatformOpenAI, service.GroupScopeUserPrivate).
 		WillReturnError(stopErr)
@@ -271,7 +190,6 @@ func TestConvertExternalPlacementCompatibleRoomReachesGroupBinding(t *testing.T)
 		AccountID:      10,
 		OwnerUserID:    42,
 		Target:         service.AccountExternalPlacementRoom,
-		RoomID:         &roomID,
 		IdempotencyKey: "compatible-room",
 	})
 	if !errors.Is(err, stopErr) {
@@ -390,7 +308,7 @@ func TestRebindMembershipToHealthyRoomAccountStaysInsideListing(t *testing.T) {
 	mock.ExpectQuery("SELECT listing_id\\s+FROM account_share_memberships").
 		WithArgs(int64(500), int64(10), service.AccountShareMembershipStatusActive, service.AccountShareMembershipStatusQueued).
 		WillReturnRows(sqlmock.NewRows([]string{"listing_id"}).AddRow(int64(700)))
-	mock.ExpectQuery("SELECT a\\.id\\s+FROM account_external_placements").
+	mock.ExpectQuery("SELECT a\\.id\\s+FROM account_share_room_accounts").
 		WithArgs(int64(700), int64(10), now).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(11)))
 	mock.ExpectExec("UPDATE account_share_memberships").
@@ -423,7 +341,7 @@ func TestRebindRoomMembershipsPausesRoomWhenLastAccountLeaves(t *testing.T) {
 		t.Fatalf("BeginTx: %v", err)
 	}
 
-	mock.ExpectQuery("SELECT a\\.id\\s+FROM account_external_placements").
+	mock.ExpectQuery("SELECT a\\.id\\s+FROM account_share_room_accounts").
 		WithArgs(int64(700), int64(10), sqlmock.AnyArg()).
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec("UPDATE account_share_listings").

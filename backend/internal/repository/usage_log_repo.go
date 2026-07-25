@@ -2519,6 +2519,62 @@ func (r *usageLogRepository) GetAccountWindowStats(ctx context.Context, accountI
 	return stats, nil
 }
 
+// GetAccountDisplayWindowStats returns display-only statistics for an exact
+// upstream quota window. It intentionally expands the current row to retained
+// rows that represent the same external account identity.
+func (r *usageLogRepository) GetAccountDisplayWindowStats(ctx context.Context, accountID int64, startTime, endTime time.Time) (*usagestats.AccountStats, error) {
+	if !endTime.After(startTime) {
+		return &usagestats.AccountStats{}, nil
+	}
+	accountIDs, err := r.resolveAccountUsageStatsScopeIDs(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	query := `
+		SELECT
+			COUNT(*) as requests,
+			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as tokens,
+			COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as cost,
+			COALESCE(SUM(total_cost), 0) as standard_cost,
+			COALESCE(SUM(actual_cost), 0) as user_cost
+		FROM usage_logs
+		WHERE account_id = ANY($1) AND created_at >= $2 AND created_at < $3
+	`
+	stats := &usagestats.AccountStats{}
+	if err := scanSingleRow(
+		ctx,
+		r.sql,
+		query,
+		[]any{pq.Array(accountIDs), startTime, endTime},
+		&stats.Requests,
+		&stats.Tokens,
+		&stats.Cost,
+		&stats.StandardCost,
+		&stats.UserCost,
+	); err != nil {
+		return nil, err
+	}
+	return stats, nil
+}
+
+func (r *usageLogRepository) GetUsageLogCoverageStart(ctx context.Context) (*time.Time, error) {
+	var coverageStart sql.NullTime
+	if err := scanSingleRow(
+		ctx,
+		r.sql,
+		`SELECT (SELECT created_at FROM usage_logs ORDER BY created_at ASC LIMIT 1)`,
+		nil,
+		&coverageStart,
+	); err != nil {
+		return nil, err
+	}
+	if !coverageStart.Valid {
+		return nil, nil
+	}
+	value := coverageStart.Time
+	return &value, nil
+}
+
 func (r *usageLogRepository) SumUserGroupRateSourceActualCost(ctx context.Context, userID, groupID int64, source string, startTime, endTime time.Time) (float64, error) {
 	if userID <= 0 || groupID <= 0 || strings.TrimSpace(source) == "" || endTime.IsZero() || !endTime.After(startTime) {
 		return 0, nil
@@ -4382,10 +4438,6 @@ func (r *usageLogRepository) resolveAccountUsageStatsScopeIDs(ctx context.Contex
 						AND NULLIF(BTRIM(a.credentials->>'chatgpt_user_id'), '') IS NULL
 						AND NULLIF(BTRIM(a.credentials->>'chatgpt_account_id'), '') = NULLIF(BTRIM(c.credentials->>'chatgpt_account_id'), '')
 					)
-					OR (
-						NULLIF(BTRIM(c.credentials->>'email'), '') IS NOT NULL
-						AND LOWER(NULLIF(BTRIM(a.credentials->>'email'), '')) = LOWER(NULLIF(BTRIM(c.credentials->>'email'), ''))
-					)
 				)
 			   )
 			   OR (
@@ -4414,10 +4466,6 @@ func (r *usageLogRepository) resolveAccountUsageStatsScopeIDs(ctx context.Contex
 						AND LOWER(COALESCE(NULLIF(BTRIM(a.extra->>'org_uuid'), ''), NULLIF(BTRIM(a.credentials->>'org_uuid'), ''))) =
 							LOWER(COALESCE(NULLIF(BTRIM(c.extra->>'org_uuid'), ''), NULLIF(BTRIM(c.credentials->>'org_uuid'), '')))
 					)
-					OR (
-						NULLIF(BTRIM(c.credentials->>'email_address'), '') IS NOT NULL
-						AND LOWER(NULLIF(BTRIM(a.credentials->>'email_address'), '')) = LOWER(NULLIF(BTRIM(c.credentials->>'email_address'), ''))
-					)
 				)
 			   )
 			   OR (
@@ -4431,16 +4479,8 @@ func (r *usageLogRepository) resolveAccountUsageStatsScopeIDs(ctx context.Contex
 			   OR (
 				c.platform = 'antigravity'
 				AND c.type = 'oauth'
-				AND (
-					(
-						NULLIF(BTRIM(c.credentials->>'project_id'), '') IS NOT NULL
-						AND LOWER(NULLIF(BTRIM(a.credentials->>'project_id'), '')) = LOWER(NULLIF(BTRIM(c.credentials->>'project_id'), ''))
-					)
-					OR (
-						NULLIF(BTRIM(c.credentials->>'email'), '') IS NOT NULL
-						AND LOWER(NULLIF(BTRIM(a.credentials->>'email'), '')) = LOWER(NULLIF(BTRIM(c.credentials->>'email'), ''))
-					)
-				)
+				AND NULLIF(BTRIM(c.credentials->>'project_id'), '') IS NOT NULL
+				AND LOWER(NULLIF(BTRIM(a.credentials->>'project_id'), '')) = LOWER(NULLIF(BTRIM(c.credentials->>'project_id'), ''))
 			   )
 		)
 		SELECT id FROM account_scope ORDER BY id
@@ -5351,17 +5391,57 @@ func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID
 	if err != nil {
 		return nil, err
 	}
+	lifetime, err := r.getAccountLifetimeUsageSummary(ctx, accountIDs)
+	if err != nil {
+		return nil, err
+	}
 
 	query := `
+		WITH daily_usage AS (
+			SELECT
+				TO_CHAR(s.bucket_date::timestamp, 'YYYY-MM-DD') as date,
+				COALESCE(SUM(s.total_requests), 0) as requests,
+				COALESCE(SUM(s.input_tokens + s.output_tokens + s.cache_creation_tokens + s.cache_read_tokens), 0) as tokens,
+				COALESCE(SUM(s.total_cost), 0) as cost,
+				COALESCE(SUM(s.account_cost), 0) as actual_cost,
+				COALESCE(SUM(s.actual_cost), 0) as user_cost,
+				COALESCE(SUM(s.total_duration_ms), 0) as total_duration_ms
+			FROM usage_daily_dimension_snapshots s
+			WHERE s.account_id = ANY($1)
+			  AND s.bucket_date >= ($2::timestamptz AT TIME ZONE 'Asia/Shanghai')::date
+			  AND s.bucket_date < ($3::timestamptz AT TIME ZONE 'Asia/Shanghai')::date
+			GROUP BY s.bucket_date
+
+			UNION ALL
+
+			SELECT
+				TO_CHAR(ul.created_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD') as date,
+				COUNT(*) as requests,
+				COALESCE(SUM(ul.input_tokens + ul.output_tokens + ul.cache_creation_tokens + ul.cache_read_tokens), 0) as tokens,
+				COALESCE(SUM(ul.total_cost), 0) as cost,
+				COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0) as actual_cost,
+				COALESCE(SUM(ul.actual_cost), 0) as user_cost,
+				COALESCE(SUM(COALESCE(ul.duration_ms, 0)), 0) as total_duration_ms
+			FROM usage_logs ul
+			WHERE ul.account_id = ANY($1)
+			  AND ul.created_at >= $2
+			  AND ul.created_at < $3
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM usage_daily_dimension_snapshots coverage
+				WHERE coverage.bucket_date = (ul.created_at AT TIME ZONE 'Asia/Shanghai')::date
+			  )
+			GROUP BY date
+		)
 		SELECT
-			TO_CHAR(created_at, 'YYYY-MM-DD') as date,
-			COUNT(*) as requests,
-			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as tokens,
-			COALESCE(SUM(total_cost), 0) as cost,
-			COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as actual_cost,
-			COALESCE(SUM(actual_cost), 0) as user_cost
-		FROM usage_logs
-		WHERE account_id = ANY($1) AND created_at >= $2 AND created_at < $3
+			date,
+			COALESCE(SUM(requests), 0) as requests,
+			COALESCE(SUM(tokens), 0) as tokens,
+			COALESCE(SUM(cost), 0) as cost,
+			COALESCE(SUM(actual_cost), 0) as actual_cost,
+			COALESCE(SUM(user_cost), 0) as user_cost,
+			COALESCE(SUM(total_duration_ms), 0) as total_duration_ms
+		FROM daily_usage
 		GROUP BY date
 		ORDER BY date ASC
 	`
@@ -5380,6 +5460,7 @@ func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID
 	}()
 
 	historyByDate := make(map[string]*AccountUsageHistory)
+	var totalDurationMs int64
 	for rows.Next() {
 		var date string
 		var requests int64
@@ -5387,9 +5468,11 @@ func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID
 		var cost float64
 		var actualCost float64
 		var requestUserCost float64
-		if err = rows.Scan(&date, &requests, &tokens, &cost, &actualCost, &requestUserCost); err != nil {
+		var durationMs int64
+		if err = rows.Scan(&date, &requests, &tokens, &cost, &actualCost, &requestUserCost, &durationMs); err != nil {
 			return nil, err
 		}
+		totalDurationMs += durationMs
 		historyByDate[date] = &AccountUsageHistory{
 			Date:            date,
 			Label:           accountUsageStatsDateLabel(date),
@@ -5453,14 +5536,14 @@ func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID
 	}
 
 	actualDaysUsed := len(history)
-	if actualDaysUsed == 0 {
-		actualDaysUsed = 1
+	averageDivisor := actualDaysUsed
+	if averageDivisor == 0 {
+		averageDivisor = 1
 	}
 
-	avgQuery := "SELECT COALESCE(AVG(duration_ms), 0) as avg_duration_ms FROM usage_logs WHERE account_id = ANY($1) AND created_at >= $2 AND created_at < $3"
 	var avgDuration float64
-	if err := scanSingleRow(ctx, r.sql, avgQuery, []any{pq.Array(accountIDs), startTime, endTime}, &avgDuration); err != nil {
-		return nil, err
+	if totalRequests > 0 {
+		avgDuration = float64(totalDurationMs) / float64(totalRequests)
 	}
 
 	summary := AccountUsageSummary{
@@ -5473,12 +5556,12 @@ func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID
 		TotalStandardCost:       totalStandardCost,
 		TotalRequests:           totalRequests,
 		TotalTokens:             totalTokens,
-		AvgDailyCost:            totalAccountCost / float64(actualDaysUsed),
-		AvgDailyUserCost:        totalUserCost / float64(actualDaysUsed),
-		AvgDailyRequestUserCost: totalRequestUserCost / float64(actualDaysUsed),
-		AvgDailyHourlyCost:      totalHourlyCost / float64(actualDaysUsed),
-		AvgDailyRequests:        float64(totalRequests) / float64(actualDaysUsed),
-		AvgDailyTokens:          float64(totalTokens) / float64(actualDaysUsed),
+		AvgDailyCost:            totalAccountCost / float64(averageDivisor),
+		AvgDailyUserCost:        totalUserCost / float64(averageDivisor),
+		AvgDailyRequestUserCost: totalRequestUserCost / float64(averageDivisor),
+		AvgDailyHourlyCost:      totalHourlyCost / float64(averageDivisor),
+		AvgDailyRequests:        float64(totalRequests) / float64(averageDivisor),
+		AvgDailyTokens:          float64(totalTokens) / float64(averageDivisor),
 		AvgDurationMs:           avgDuration,
 	}
 
@@ -5564,11 +5647,81 @@ func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID
 	resp = &AccountUsageStatsResponse{
 		History:           history,
 		Summary:           summary,
+		Lifetime:          lifetime,
 		Models:            models,
 		Endpoints:         endpoints,
 		UpstreamEndpoints: upstreamEndpoints,
 	}
 	return resp, nil
+}
+
+func (r *usageLogRepository) getAccountLifetimeUsageSummary(ctx context.Context, accountIDs []int64) (usagestats.AccountUsageLifetimeSummary, error) {
+	summary := usagestats.AccountUsageLifetimeSummary{
+		SourceAccountCount: len(accountIDs),
+	}
+	if len(accountIDs) == 0 {
+		return summary, nil
+	}
+
+	query := `
+		SELECT
+			MIN(available_from),
+			MAX(available_to),
+			COALESCE(SUM(requests), 0) as requests,
+			COALESCE(SUM(tokens), 0) as tokens,
+			COALESCE(SUM(cost), 0) as cost
+		FROM (
+			SELECT
+				(s.bucket_date::timestamp AT TIME ZONE 'Asia/Shanghai') as available_from,
+				((s.bucket_date + 1)::timestamp AT TIME ZONE 'Asia/Shanghai') as available_to,
+				COALESCE(SUM(s.total_requests), 0) as requests,
+				COALESCE(SUM(s.input_tokens + s.output_tokens + s.cache_creation_tokens + s.cache_read_tokens), 0) as tokens,
+				COALESCE(SUM(s.account_cost), 0) as cost
+			FROM usage_daily_dimension_snapshots s
+			WHERE s.account_id = ANY($1)
+			GROUP BY s.bucket_date
+
+			UNION ALL
+
+			SELECT
+				MIN(ul.created_at) as available_from,
+				MAX(ul.created_at) as available_to,
+				COUNT(*) as requests,
+				COALESCE(SUM(ul.input_tokens + ul.output_tokens + ul.cache_creation_tokens + ul.cache_read_tokens), 0) as tokens,
+				COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0) as cost
+			FROM usage_logs ul
+			WHERE ul.account_id = ANY($1)
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM usage_daily_dimension_snapshots coverage
+				WHERE coverage.bucket_date = (ul.created_at AT TIME ZONE 'Asia/Shanghai')::date
+			  )
+		) retained_usage
+	`
+	var availableFrom sql.NullTime
+	var availableTo sql.NullTime
+	if err := scanSingleRow(
+		ctx,
+		r.sql,
+		query,
+		[]any{pq.Array(accountIDs)},
+		&availableFrom,
+		&availableTo,
+		&summary.TotalRequests,
+		&summary.TotalTokens,
+		&summary.TotalCost,
+	); err != nil {
+		return usagestats.AccountUsageLifetimeSummary{}, err
+	}
+	if availableFrom.Valid {
+		value := availableFrom.Time
+		summary.AvailableFrom = &value
+	}
+	if availableTo.Valid {
+		value := availableTo.Time
+		summary.AvailableTo = &value
+	}
+	return summary, nil
 }
 
 func (r *usageLogRepository) listUsageLogsWithPagination(ctx context.Context, whereClause string, args []any, params pagination.PaginationParams) ([]service.UsageLog, *pagination.PaginationResult, error) {

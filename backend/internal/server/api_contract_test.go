@@ -1946,6 +1946,10 @@ func (stubRedeemCodeRepo) Delete(ctx context.Context, id int64) error {
 	return errors.New("not implemented")
 }
 
+func (stubRedeemCodeRepo) DeleteBatch(ctx context.Context, ids []int64) (int64, error) {
+	return 0, errors.New("not implemented")
+}
+
 func (stubRedeemCodeRepo) Use(ctx context.Context, id, userID int64) error {
 	return errors.New("not implemented")
 }
@@ -1954,8 +1958,12 @@ func (stubRedeemCodeRepo) List(ctx context.Context, params pagination.Pagination
 	return nil, nil, errors.New("not implemented")
 }
 
-func (stubRedeemCodeRepo) ListWithFilters(ctx context.Context, params pagination.PaginationParams, codeType, status, search string) ([]service.RedeemCode, *pagination.PaginationResult, error) {
+func (stubRedeemCodeRepo) ListWithFilters(ctx context.Context, params pagination.PaginationParams, codeType, status, category, search string) ([]service.RedeemCode, *pagination.PaginationResult, error) {
 	return nil, nil, errors.New("not implemented")
+}
+
+func (stubRedeemCodeRepo) ListCategories(ctx context.Context) ([]string, error) {
+	return nil, errors.New("not implemented")
 }
 
 func (r *stubRedeemCodeRepo) ListByUser(ctx context.Context, userID int64, limit int) ([]service.RedeemCode, error) {

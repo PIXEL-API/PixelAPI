@@ -31689,6 +31689,7 @@ type RedeemCodeMutation struct {
 	value            *float64
 	addvalue         *float64
 	status           *string
+	category         *string
 	used_at          *time.Time
 	notes            *string
 	created_at       *time.Time
@@ -31964,6 +31965,42 @@ func (m *RedeemCodeMutation) OldStatus(ctx context.Context) (v string, err error
 // ResetStatus resets all changes to the "status" field.
 func (m *RedeemCodeMutation) ResetStatus() {
 	m.status = nil
+}
+
+// SetCategory sets the "category" field.
+func (m *RedeemCodeMutation) SetCategory(s string) {
+	m.category = &s
+}
+
+// Category returns the value of the "category" field in the mutation.
+func (m *RedeemCodeMutation) Category() (r string, exists bool) {
+	v := m.category
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCategory returns the old "category" field's value of the RedeemCode entity.
+// If the RedeemCode object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *RedeemCodeMutation) OldCategory(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCategory is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCategory requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCategory: %w", err)
+	}
+	return oldValue.Category, nil
+}
+
+// ResetCategory resets all changes to the "category" field.
+func (m *RedeemCodeMutation) ResetCategory() {
+	m.category = nil
 }
 
 // SetUsedBy sets the "used_by" field.
@@ -32355,7 +32392,7 @@ func (m *RedeemCodeMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *RedeemCodeMutation) Fields() []string {
-	fields := make([]string, 0, 10)
+	fields := make([]string, 0, 11)
 	if m.code != nil {
 		fields = append(fields, redeemcode.FieldCode)
 	}
@@ -32367,6 +32404,9 @@ func (m *RedeemCodeMutation) Fields() []string {
 	}
 	if m.status != nil {
 		fields = append(fields, redeemcode.FieldStatus)
+	}
+	if m.category != nil {
+		fields = append(fields, redeemcode.FieldCategory)
 	}
 	if m.user != nil {
 		fields = append(fields, redeemcode.FieldUsedBy)
@@ -32402,6 +32442,8 @@ func (m *RedeemCodeMutation) Field(name string) (ent.Value, bool) {
 		return m.Value()
 	case redeemcode.FieldStatus:
 		return m.Status()
+	case redeemcode.FieldCategory:
+		return m.Category()
 	case redeemcode.FieldUsedBy:
 		return m.UsedBy()
 	case redeemcode.FieldUsedAt:
@@ -32431,6 +32473,8 @@ func (m *RedeemCodeMutation) OldField(ctx context.Context, name string) (ent.Val
 		return m.OldValue(ctx)
 	case redeemcode.FieldStatus:
 		return m.OldStatus(ctx)
+	case redeemcode.FieldCategory:
+		return m.OldCategory(ctx)
 	case redeemcode.FieldUsedBy:
 		return m.OldUsedBy(ctx)
 	case redeemcode.FieldUsedAt:
@@ -32479,6 +32523,13 @@ func (m *RedeemCodeMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetStatus(v)
+		return nil
+	case redeemcode.FieldCategory:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCategory(v)
 		return nil
 	case redeemcode.FieldUsedBy:
 		v, ok := value.(int64)
@@ -32636,6 +32687,9 @@ func (m *RedeemCodeMutation) ResetField(name string) error {
 		return nil
 	case redeemcode.FieldStatus:
 		m.ResetStatus()
+		return nil
+	case redeemcode.FieldCategory:
+		m.ResetCategory()
 		return nil
 	case redeemcode.FieldUsedBy:
 		m.ResetUsedBy()

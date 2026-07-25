@@ -27,8 +27,6 @@ const (
 	AccountBatchTaskOperationUserTestConnection      = "user_test_connection"
 	AccountBatchTaskOperationUserRevalidateShare     = "user_revalidate_public_share"
 	AccountBatchTaskOperationUserSetPublicShare      = "user_set_public_share"
-	AccountBatchTaskOperationUserVerifyOpenAIPlus    = "user_verify_openai_plus"
-	AccountBatchTaskOperationUserMarkOpenAIFree      = "user_mark_openai_free"
 )
 
 const (

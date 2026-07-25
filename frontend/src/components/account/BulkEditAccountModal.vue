@@ -31,6 +31,64 @@
         </p>
       </div>
 
+      <section
+        v-if="isUserScope"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+        data-testid="bulk-external-placement-section"
+      >
+        <div class="mb-4 flex items-start justify-between gap-4">
+          <div>
+            <label
+              class="input-label mb-0"
+              for="bulk-edit-external-placement-enabled"
+            >
+              {{ t('userAccounts.externalPlacement.bulkTitle') }}
+            </label>
+            <p class="mt-1 text-sm leading-6 text-gray-500 dark:text-dark-300">
+              {{
+                t(
+                  'userAccounts.externalPlacement.bulkHint',
+                  { count: targetPreviewCount }
+                )
+              }}
+            </p>
+          </div>
+          <label
+            for="bulk-edit-external-placement-enabled"
+            class="inline-flex min-h-11 min-w-11 shrink-0 cursor-pointer items-center justify-center rounded-xl transition-colors hover:bg-gray-100 dark:hover:bg-dark-700"
+          >
+            <input
+              v-model="enableExternalPlacement"
+              id="bulk-edit-external-placement-enabled"
+              type="checkbox"
+              aria-controls="bulk-edit-external-placement"
+              class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+            />
+          </label>
+        </div>
+        <div
+          id="bulk-edit-external-placement"
+          :class="!enableExternalPlacement && 'pointer-events-none opacity-50'"
+        >
+          <ExternalPlacementSelector
+            v-model="selectedExternalPlacementTarget"
+            :platform="bulkPlacementPlatform"
+            :disabled="submitting || !enableExternalPlacement"
+            input-name="bulk-edit-external-placement-target"
+            :legend="t('userAccounts.externalPlacement.bulkLegend')"
+            :platform-mode-disabled-reason="bulkPlacementPlatformModeDisabledReason"
+          />
+        </div>
+        <div
+          v-if="placementSubmitError"
+          class="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm leading-6 text-red-700 dark:border-red-900/70 dark:bg-red-950/25 dark:text-red-300"
+          role="alert"
+          data-testid="bulk-placement-submit-error"
+        >
+          {{ placementSubmitError }}
+        </div>
+      </section>
+
       <!-- OpenAI passthrough -->
       <div
         v-if="!isUserScope && allOpenAIPassthroughCapable"
@@ -1077,10 +1135,19 @@ import { useAuthStore } from '@/stores/auth'
 import { adminAPI } from '@/api/admin'
 import { accountsAPI } from '@/api/accounts'
 import type { AccountBatchTask } from '@/api/accounts'
-import type { Proxy as ProxyConfig, AdminGroup, AccountPlatform, AccountType, AccountLevel, GroupPlatform } from '@/types'
+import type {
+  Proxy as ProxyConfig,
+  AdminGroup,
+  AccountExternalPlacementTarget,
+  AccountPlatform,
+  AccountType,
+  AccountLevel,
+  GroupPlatform
+} from '@/types'
 import type { AccountApiScope } from '@/composables/useAccountOAuth'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import ExternalPlacementSelector from '@/components/account-share/ExternalPlacementSelector.vue'
 import Select from '@/components/common/Select.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
@@ -1109,12 +1176,14 @@ import {
   resolveOpenAIWSModeConcurrencyHintKey
 } from '@/utils/openaiWsMode'
 import { openAIAccountLevelOptions } from '@/utils/openaiAccountLevels'
+import { extractApiErrorMessage } from '@/utils/apiError'
 import type { OpenAIWSMode } from '@/utils/openaiWsMode'
 interface Props {
   show: boolean
   accountIds: number[]
   selectedPlatforms: AccountPlatform[]
   selectedTypes: AccountType[]
+  selectedAccountLevels?: AccountLevel[]
   target?: {
     mode: 'selected' | 'filtered'
     filters?: Record<string, unknown>
@@ -1128,13 +1197,16 @@ interface Props {
   allowProxy?: boolean
   allowBillingRate?: boolean
   allowBaseUrl?: boolean
+  ownerUserId?: number
 }
 
 const props = withDefaults(defineProps<Props>(), {
   accountScope: 'admin',
   allowProxy: true,
   allowBillingRate: true,
-  allowBaseUrl: true
+  allowBaseUrl: true,
+  selectedAccountLevels: () => [],
+  ownerUserId: 0
 })
 const emit = defineEmits<{
   close: []
@@ -1157,6 +1229,21 @@ const targetPreviewCount = computed(() => props.target?.previewCount ?? props.ac
 const targetSelectedPlatforms = computed(() => props.target?.selectedPlatforms ?? props.selectedPlatforms)
 const targetSelectedTypes = computed(() => props.target?.selectedTypes ?? props.selectedTypes)
 const isMixedPlatform = computed(() => targetSelectedPlatforms.value.length > 1)
+const bulkPlacementPlatform = computed<AccountPlatform | ''>(() => (
+  targetSelectedPlatforms.value.length === 1 ? targetSelectedPlatforms.value[0] : ''
+))
+const bulkPlacementPlatformModeDisabledReason = computed(() => {
+  if (targetSelectedPlatforms.value.length !== 1) {
+    return t('userAccounts.externalPlacement.bulkRoomSamePlatform')
+  }
+  if (
+    bulkPlacementPlatform.value !== 'openai'
+    && bulkPlacementPlatform.value !== 'anthropic'
+  ) {
+    return t('userAccounts.externalPlacement.unsupportedPlatform')
+  }
+  return ''
+})
 const targetFilterPlatform = computed(() => {
   const platform = props.target?.filters?.platform
   return typeof platform === 'string' ? platform : ''
@@ -1277,9 +1364,14 @@ const enableOpenAIAPIKeyWSMode = ref(false)
 const enableCodexCLIOnly = ref(false)
 const enableCodexQuotaLimit = ref(false)
 const enableRpmLimit = ref(false)
+const enableExternalPlacement = ref(false)
 
 // State - field values
 const submitting = ref(false)
+const selectedExternalPlacementTarget = ref<AccountExternalPlacementTarget>('private')
+const placementSubmitError = ref('')
+let pendingPlacementIntentSignature = ''
+let pendingPlacementIdempotencyKey = ''
 const showMixedChannelWarning = ref(false)
 const mixedChannelWarningMessage = ref('')
 const pendingUpdatesForConfirm = ref<Record<string, unknown> | null>(null)
@@ -1315,6 +1407,33 @@ const umqModeOptions = computed(() => [
   { value: 'throttle', label: t('admin.accounts.quotaControl.rpmLimit.umqModeThrottle') },
   { value: 'serialize', label: t('admin.accounts.quotaControl.rpmLimit.umqModeSerialize') },
 ])
+const placementIntentSignature = computed(() => selectedExternalPlacementTarget.value)
+
+watch(
+  selectedExternalPlacementTarget,
+  () => {
+    placementSubmitError.value = ''
+    pendingPlacementIntentSignature = ''
+    pendingPlacementIdempotencyKey = ''
+  }
+)
+
+const getPendingPlacementIdempotencyKey = (): string => {
+  const signature = placementIntentSignature.value
+  if (
+    pendingPlacementIdempotencyKey
+    && pendingPlacementIntentSignature === signature
+  ) {
+    return pendingPlacementIdempotencyKey
+  }
+  const requestID = globalThis.crypto?.randomUUID?.()
+  if (!requestID) {
+    throw new Error(t('userAccounts.externalPlacement.uuidUnavailable'))
+  }
+  pendingPlacementIntentSignature = signature
+  pendingPlacementIdempotencyKey = `batch-placement-${requestID}`
+  return pendingPlacementIdempotencyKey
+}
 
 const normalizeConcurrencyInput = () => {
   if (isUserScope.value) {
@@ -1740,7 +1859,8 @@ const handleSubmit = async () => {
     enableCodexCLIOnly.value ||
     enableCodexQuotaLimit.value ||
     enableRpmLimit.value ||
-    userMsgQueueMode.value !== null
+    userMsgQueueMode.value !== null ||
+    (isUserScope.value && enableExternalPlacement.value)
 
   if (!hasAnyFieldEnabled) {
     appStore.showError(t('admin.accounts.bulkEdit.noFieldsSelected'))
@@ -1748,45 +1868,127 @@ const handleSubmit = async () => {
   }
 
   const built = buildUpdatePayload()
-  if (!built) {
+  if (!built && !enableExternalPlacement.value) {
     appStore.showError(t('admin.accounts.bulkEdit.noFieldsSelected'))
     return
   }
-
-  const canContinue = await preCheckMixedChannelRisk(built)
-  if (!canContinue) return
+  if (built) {
+    const canContinue = await preCheckMixedChannelRisk(built)
+    if (!canContinue) return
+  }
 
   await submitBulkUpdate(built)
 }
 
-const submitBulkUpdate = async (baseUpdates: Record<string, unknown>) => {
-  // 无论是预检查确认还是 409 兜底确认，只要 mixedChannelConfirmed 为 true 就带上 flag
-  const updates = mixedChannelConfirmed.value
-    ? { ...baseUpdates, confirm_mixed_channel_risk: true }
-    : baseUpdates
-
+const submitBulkUpdate = async (baseUpdates: Record<string, unknown> | null) => {
+  let placementIdempotencyKey = ''
+  if (isUserScope.value && enableExternalPlacement.value) {
+    try {
+      placementIdempotencyKey = getPendingPlacementIdempotencyKey()
+    } catch (error) {
+      appStore.showError(extractApiErrorMessage(
+        error,
+        t('userAccounts.externalPlacement.convertFailed')
+      ))
+      return
+    }
+  }
   submitting.value = true
 
   try {
-    const payload = sanitizeBulkUpdatePayload(updates)
-    const res = isUserScope.value
-      ? await accountsAPI.bulkUpdate(props.accountIds, payload)
-      : targetMode.value === 'filtered' && props.target?.filters
-      ? await adminAPI.accounts.bulkUpdate({
-        filters: props.target.filters,
-        ...payload
-      })
-      : await adminAPI.accounts.bulkUpdate(props.accountIds, payload)
-    if (isUserScope.value && res.async && res.task) {
-      appStore.showSuccess(t('admin.accounts.bulkActions.asyncSubmitted', { count: res.task.total }))
-      emit('updated', { async: true, task: res.task })
-      handleClose()
-      return
-    }
-    const success = res.success || 0
-    const failed = res.failed || 0
+    let success = 0
+    let failed = 0
+    let baseSuccess = 0
+    let placementSuccess = 0
+    let placementFailed = 0
+    let placementAccountIDs = [...props.accountIds]
 
-    if (success > 0 && failed === 0) {
+    if (baseUpdates) {
+      // 无论是预检查确认还是 409 兜底确认，只要 mixedChannelConfirmed 为 true 就带上 flag
+      const updates = mixedChannelConfirmed.value
+        ? { ...baseUpdates, confirm_mixed_channel_risk: true }
+        : baseUpdates
+      const payload = sanitizeBulkUpdatePayload(updates)
+      const res = isUserScope.value
+        ? await accountsAPI.bulkUpdate(props.accountIds, payload)
+        : targetMode.value === 'filtered' && props.target?.filters
+        ? await adminAPI.accounts.bulkUpdate({
+          filters: props.target.filters,
+          ...payload
+        })
+        : await adminAPI.accounts.bulkUpdate(props.accountIds, payload)
+      if (isUserScope.value && res.async && res.task) {
+        if (enableExternalPlacement.value) {
+          placementSubmitError.value = t(
+            'userAccounts.externalPlacement.asyncBaseUpdatePending'
+          )
+          appStore.showError(placementSubmitError.value)
+          return
+        }
+        appStore.showSuccess(t('admin.accounts.bulkActions.asyncSubmitted', { count: res.task.total }))
+        emit('updated', { async: true, task: res.task })
+        handleClose()
+        return
+      }
+
+      success = res.success || 0
+      failed = res.failed || 0
+      baseSuccess = success
+      placementAccountIDs = res.success_ids?.length
+        ? [...res.success_ids]
+        : res.results.filter((item) => item.success).map((item) => item.account_id)
+      if (enableExternalPlacement.value && placementAccountIDs.length === 0) {
+        appStore.showError(t('admin.accounts.bulkEdit.failed'))
+        return
+      }
+    }
+
+    if (isUserScope.value && enableExternalPlacement.value) {
+      try {
+        const placementResult = await accountsAPI.convertExternalPlacementBatch({
+          account_ids: placementAccountIDs,
+          target: selectedExternalPlacementTarget.value,
+          idempotency_key: placementIdempotencyKey
+        })
+        placementSuccess = placementResult.success || 0
+        placementFailed = placementResult.failed || 0
+        success = placementSuccess
+        failed += placementFailed
+        if (placementResult.failed === 0) {
+          pendingPlacementIntentSignature = ''
+          pendingPlacementIdempotencyKey = ''
+        }
+      } catch (error) {
+        const detail = extractApiErrorMessage(
+          error,
+          t('userAccounts.externalPlacement.convertFailed')
+        )
+        placementSubmitError.value = baseUpdates
+          ? t('userAccounts.externalPlacement.baseSavedPlacementFailed', { error: detail })
+          : detail
+        appStore.showError(placementSubmitError.value)
+        if (baseUpdates && baseSuccess > 0) {
+          await authStore.refreshUser().catch((refreshError) => {
+            console.error('Failed to refresh user after partial bulk account update:', refreshError)
+          })
+          emit('updated')
+          handleClose()
+        }
+        return
+      }
+    }
+
+    if (baseUpdates && enableExternalPlacement.value && placementFailed > 0) {
+      placementSubmitError.value = t(
+        'userAccounts.externalPlacement.bulkBaseSavedPlacementPartial',
+        {
+          saved: baseSuccess,
+          success: placementSuccess,
+          failed: placementFailed
+        }
+      )
+      appStore.showError(placementSubmitError.value)
+    } else if (success > 0 && failed === 0) {
       appStore.showSuccess(t('admin.accounts.bulkEdit.success', { count: success }))
     } else if (success > 0) {
       appStore.showError(t('admin.accounts.bulkEdit.partialSuccess', { success, failed }))
@@ -1794,7 +1996,7 @@ const submitBulkUpdate = async (baseUpdates: Record<string, unknown>) => {
       appStore.showError(t('admin.accounts.bulkEdit.failed'))
     }
 
-    if (success > 0) {
+    if (success > 0 || baseSuccess > 0) {
       if (isUserScope.value) {
         await authStore.refreshUser().catch((error) => {
           console.error('Failed to refresh user after bulk account update:', error)
@@ -1856,6 +2058,7 @@ watch(
       enableCodexCLIOnly.value = false
       enableCodexQuotaLimit.value = false
       enableRpmLimit.value = false
+      enableExternalPlacement.value = false
 
       // Reset all values
       baseUrl.value = ''
@@ -1884,6 +2087,10 @@ watch(
       bulkRpmStrategy.value = 'tiered'
       bulkRpmStickyBuffer.value = null
       userMsgQueueMode.value = null
+      selectedExternalPlacementTarget.value = 'private'
+      placementSubmitError.value = ''
+      pendingPlacementIntentSignature = ''
+      pendingPlacementIdempotencyKey = ''
 
       // Reset mixed channel warning state
       showMixedChannelWarning.value = false

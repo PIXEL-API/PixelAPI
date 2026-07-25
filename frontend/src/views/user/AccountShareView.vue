@@ -525,7 +525,7 @@
       <section v-if="showCreate" class="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm dark:border-dark-700 dark:bg-dark-900">
         <div class="flex flex-col gap-3 border-b border-gray-100 p-4 dark:border-dark-800 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <h2 class="text-base font-semibold text-gray-950 dark:text-white">创建账号房间</h2>
+            <h2 class="text-base font-semibold text-gray-950 dark:text-white">创建房间</h2>
             <p class="mt-1 text-sm text-gray-500 dark:text-dark-300">优先选择已经登录的自有账号创建房间，无需删除账号或重新 OAuth。</p>
           </div>
           <button class="btn-secondary h-9 w-fit" type="button" @click="resetCreateForm">
@@ -1286,7 +1286,7 @@
                 </span>
               </div>
               <div class="listing-title-row">
-                <h2 class="listing-title">{{ listing.room_name || listing.account_name || `账号房间 #${listing.id}` }}</h2>
+                <h2 class="listing-title">{{ listing.room_name || listing.account_name || `房间 #${listing.id}` }}</h2>
                 <button
                   v-if="isOwnListing(listing)"
                   type="button"
@@ -2190,6 +2190,7 @@
       :show="roomAccountsListing !== null"
       :listing="roomAccountsListing"
       @close="closeRoomAccountsDialog"
+      @changed="handleRoomAccountsChanged"
     />
 
     <BaseDialog
@@ -2805,8 +2806,8 @@ const ACCOUNT_SHARE_PLATFORM_OPTIONS: Array<{ value: AccountSharePlatform; label
   { value: 'anthropic', label: 'Anthropic' }
 ]
 const ACCOUNT_NAME_BASE_BY_PLATFORM: Record<AccountSharePlatform, string> = {
-  openai: 'OpenAI账号房间',
-  anthropic: 'Anthropic账号房间'
+  openai: 'OpenAI房间',
+  anthropic: 'Anthropic房间'
 }
 const ACCOUNT_MODE_GROUP_NAME_BY_PLATFORM: Record<AccountSharePlatform, string> = {
   openai: 'OpenAI账号模式',
@@ -4618,7 +4619,7 @@ function accountLevelBadgeClass(listing: AccountShareListing): string {
 }
 
 function listingDisplayName(listing: AccountShareListing): string {
-  return listing.room_name || listing.account_name || `账号房间 #${listing.id}`
+  return listing.room_name || listing.account_name || `房间 #${listing.id}`
 }
 
 function isRateMultiplierExpensive(listing: AccountShareListing): boolean {
@@ -6568,13 +6569,13 @@ async function createRoomFromOwnedAccount(): Promise<void> {
       account.external_placement?.target === 'public_pool'
         || (!account.external_placement && account.share_mode === 'public')
         ? '房间已创建，账号已从公共号池切换到新房间'
-        : '账号房间已创建'
+        : '房间已创建'
     )
     resetCreateForm()
     showCreate.value = false
     await Promise.all([loadOwnedAccounts(true), loadListings()])
   } catch (error: unknown) {
-    createErrorMessage.value = extractApiErrorMessage(error, '创建账号房间失败')
+    createErrorMessage.value = extractApiErrorMessage(error, '创建房间失败')
   } finally {
     creating.value = false
   }
@@ -6586,6 +6587,41 @@ function openRoomAccountsDialog(listing: AccountShareListing): void {
 
 function closeRoomAccountsDialog(): void {
   roomAccountsListing.value = null
+}
+
+async function handleRoomAccountsChanged(payload: {
+  operation: 'add' | 'remove'
+  success: number
+  failed: number
+}): Promise<void> {
+  const listingID = roomAccountsListing.value?.id
+  if (!listingID) return
+
+  const actionLabel = payload.operation === 'add' ? '加入房间' : '退出房间'
+  if (payload.failed > 0) {
+    appStore.showWarning(
+      `${actionLabel}部分完成：成功 ${payload.success} 个，失败 ${payload.failed} 个；失败原因已显示在房间账号窗口中。`
+    )
+  } else {
+    appStore.showSuccess(
+      payload.operation === 'add'
+        ? `已有 ${payload.success} 个账号成功加入房间`
+        : `已有 ${payload.success} 个账号成功退出房间，账号仍保持原平台账号模式`
+    )
+  }
+
+  const refreshed = await loadListings()
+  if (!refreshed) {
+    appStore.showWarning('账号变更已生效，但账号广场计数刷新失败；请稍后点击页面顶部“刷新”确认。')
+    return
+  }
+
+  const refreshedListing = listings.value.find((listing) => listing.id === listingID)
+  if (refreshedListing) {
+    roomAccountsListing.value = refreshedListing
+  } else {
+    roomAccountsListing.value = null
+  }
 }
 
 async function startOAuth(): Promise<void> {

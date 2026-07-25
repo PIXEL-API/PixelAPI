@@ -1,650 +1,887 @@
 <template>
   <BaseDialog
     :show="show"
-    :title="t('admin.accounts.usageStatistics')"
-    width="extra-wide"
+    :title="t('admin.accounts.stats.accountLedger')"
+    width="full"
     @close="handleClose"
   >
-    <div class="space-y-6">
-      <!-- Account Info Header -->
-      <div
+    <div class="space-y-5">
+      <section
         v-if="account"
-        class="flex items-center justify-between rounded-xl border border-primary-200 bg-gradient-to-r from-primary-50 to-primary-100 p-3 dark:border-primary-700/50 dark:from-primary-900/20 dark:to-primary-800/20"
+        class="relative overflow-hidden rounded-2xl border border-slate-200 bg-slate-950 px-4 py-4 text-white shadow-sm dark:border-slate-700 sm:px-5"
       >
-        <div class="flex items-center gap-3">
-          <div
-            class="flex h-10 w-10 items-center justify-center rounded-lg bg-gradient-to-br from-primary-500 to-primary-600"
-          >
-            <Icon name="chartBar" size="md" class="text-white" :stroke-width="2" />
-          </div>
-          <div>
-            <div class="font-semibold text-gray-900 dark:text-gray-100">{{ account.name }}</div>
-            <div class="text-xs text-gray-500 dark:text-gray-400">
-              {{ t('admin.accounts.last30DaysUsage') }}
+        <div
+          class="pointer-events-none absolute -right-16 -top-24 h-56 w-56 rounded-full bg-blue-500/20 blur-3xl"
+          aria-hidden="true"
+        ></div>
+        <div class="relative flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div class="min-w-0">
+            <div class="flex flex-wrap items-center gap-2">
+              <h2 class="truncate text-lg font-semibold tracking-tight sm:text-xl">
+                {{ account.name }}
+              </h2>
+              <span
+                class="rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide"
+                :class="
+                  account.status === 'active'
+                    ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300'
+                    : 'border-slate-500/40 bg-slate-500/10 text-slate-300'
+                "
+              >
+                {{ account.status }}
+              </span>
             </div>
+            <div class="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-300">
+              <span class="font-mono uppercase">{{ account.platform }}</span>
+              <span class="text-slate-600">/</span>
+              <span>{{ account.type }}</span>
+              <span class="text-slate-600">/</span>
+              <span>#{{ account.id }}</span>
+            </div>
+            <p class="mt-2 max-w-2xl text-xs leading-5 text-slate-400">
+              {{ t('admin.accounts.stats.accountLedgerSubtitle') }}
+            </p>
+          </div>
+
+          <div class="flex w-full flex-col gap-2 lg:w-auto lg:items-end">
+            <form
+              class="rounded-xl border border-white/10 bg-white/5 p-2"
+              :aria-label="t('admin.accounts.stats.customRange')"
+              @submit.prevent="applyDateRange"
+            >
+              <div class="grid gap-2 sm:grid-cols-[minmax(9rem,1fr)_minmax(9rem,1fr)_auto] sm:items-end">
+                <label class="block min-w-0">
+                  <span class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                    {{ t('admin.accounts.stats.startDate') }}
+                  </span>
+                  <input
+                    v-model="draftRange.startDate"
+                    type="date"
+                    :max="draftRange.endDate || maxSelectableDate"
+                    class="min-h-11 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-white outline-none transition-colors [color-scheme:dark] focus:border-blue-400 focus:ring-2 focus:ring-blue-400/30"
+                  />
+                </label>
+                <label class="block min-w-0">
+                  <span class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                    {{ t('admin.accounts.stats.endDate') }}
+                  </span>
+                  <input
+                    v-model="draftRange.endDate"
+                    type="date"
+                    :min="draftRange.startDate"
+                    :max="draftEndMax"
+                    class="min-h-11 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-white outline-none transition-colors [color-scheme:dark] focus:border-blue-400 focus:ring-2 focus:ring-blue-400/30"
+                  />
+                </label>
+                <button
+                  type="submit"
+                  class="min-h-11 rounded-lg bg-white px-4 text-xs font-semibold text-slate-950 transition-colors hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-not-allowed disabled:opacity-45"
+                  :disabled="Boolean(dateRangeError) || !hasPendingRangeChanges || statsLoading"
+                >
+                  {{ t('admin.accounts.stats.applyRange') }}
+                </button>
+              </div>
+              <p
+                class="mt-1.5 text-[11px] leading-4"
+                :class="dateRangeError ? 'text-rose-300' : 'text-slate-400'"
+                aria-live="polite"
+              >
+                {{ dateRangeError || t('admin.accounts.stats.rangeLimitHint') }}
+              </p>
+            </form>
+            <button
+              type="button"
+              class="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 text-xs font-semibold text-white transition-colors hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+              :disabled="statsLoading || usageLoading"
+              @click="reloadAll"
+            >
+              <svg
+                class="h-4 w-4"
+                :class="{ 'animate-spin': statsLoading || usageLoading }"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                aria-hidden="true"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5m-5 4a8.1 8.1 0 0 0 15.5 2m.5 5v-5h-5"
+                />
+              </svg>
+              {{ t('admin.accounts.stats.refresh') }}
+            </button>
           </div>
         </div>
-        <span
-          :class="[
-            'rounded-full px-2.5 py-1 text-xs font-semibold',
-            account.status === 'active'
-              ? 'bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-400'
-              : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400'
-          ]"
+      </section>
+
+      <section v-if="usageLoader" aria-labelledby="quota-window-title">
+        <div class="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h3
+              id="quota-window-title"
+              class="text-sm font-semibold text-slate-950 dark:text-white"
+            >
+              {{ t('admin.accounts.stats.currentQuotaWindows') }}
+            </h3>
+            <p class="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+              {{ t('admin.accounts.stats.currentQuotaWindowsHint') }}
+            </p>
+          </div>
+          <span v-if="usage?.updated_at" class="text-[11px] text-slate-400">
+            {{ t('admin.accounts.stats.snapshotAt', { time: formatDateTime(usage.updated_at) }) }}
+          </span>
+        </div>
+
+        <div
+          v-if="usageError"
+          class="mb-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-300"
+          role="alert"
         >
-          {{ account.status }}
-        </span>
+          {{ usageError }}
+        </div>
+
+        <div
+          v-if="usageLoading && !usage"
+          class="grid min-h-48 place-items-center rounded-2xl border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/40"
+        >
+          <LoadingSpinner />
+        </div>
+        <div v-else class="grid gap-3 lg:grid-cols-2">
+          <AccountUsageWindowCard
+            label="5H"
+            :title="t('admin.accounts.stats.fiveHourWindow')"
+            :progress="usage?.five_hour"
+          />
+          <AccountUsageWindowCard
+            label="7D"
+            :title="t('admin.accounts.stats.sevenDayWindow')"
+            :progress="usage?.seven_day"
+          />
+        </div>
+        <p
+          class="mt-3 rounded-xl border border-amber-200/70 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-300"
+        >
+          {{ t('admin.accounts.stats.previousWindowUnavailable') }}
+        </p>
+      </section>
+
+      <div
+        v-if="statsError"
+        class="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-300"
+        role="alert"
+      >
+        <div class="font-semibold">{{ t('admin.accounts.stats.statsLoadFailed') }}</div>
+        <div class="mt-1 text-xs opacity-90">{{ statsError }}</div>
       </div>
 
-      <!-- Loading State -->
-      <div v-if="loading" class="flex items-center justify-center py-12">
+      <div
+        v-if="statsLoading && !stats"
+        class="grid min-h-72 place-items-center rounded-2xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900/50"
+      >
         <LoadingSpinner />
       </div>
 
       <template v-else-if="stats">
-        <!-- Row 1: Main Stats Cards -->
-        <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          <!-- 30-Day Total Cost -->
-          <div
-            class="card border-emerald-200 bg-gradient-to-br from-emerald-50 to-white p-4 dark:border-emerald-800/30 dark:from-emerald-900/10 dark:to-dark-700"
-          >
-            <div class="mb-2 flex items-center justify-between">
-              <span class="text-xs font-medium text-gray-500 dark:text-gray-400">{{
-                t('admin.accounts.stats.totalCost')
-              }}</span>
-              <div class="rounded-lg bg-emerald-100 p-1.5 dark:bg-emerald-900/30">
-                <svg
-                  class="h-4 w-4 text-emerald-600 dark:text-emerald-400"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                  />
-                </svg>
-              </div>
+        <section aria-labelledby="range-summary-title">
+          <div class="mb-3 flex items-end justify-between gap-3">
+            <div>
+              <h3
+                id="range-summary-title"
+                class="text-sm font-semibold text-slate-950 dark:text-white"
+              >
+                {{ t('admin.accounts.stats.rangeSummary', { range: formattedAppliedRange }) }}
+              </h3>
+              <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                {{ t('admin.accounts.stats.pixelBillingOnly') }}
+              </p>
             </div>
-            <p class="text-2xl font-bold text-gray-900 dark:text-white">
-              ${{ formatCost(stats.summary.total_cost) }}
-            </p>
-            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              {{ t('admin.accounts.stats.accumulatedCost') }}
-              <span class="text-gray-400 dark:text-gray-500">
-                ({{ t('usage.userBilledTotal') }}: ${{ formatCost(stats.summary.total_user_cost) }} /
-                {{ t('usage.requestBilled') }}: ${{ formatCost(stats.summary.total_request_user_cost) }} /
-                {{ t('usage.hourlyBilled') }}: ${{ formatCost(stats.summary.total_hourly_cost) }} /
-                {{ t('admin.accounts.stats.standardCost') }}: ${{
-                  formatCost(stats.summary.total_standard_cost)
-                }})
-              </span>
-            </p>
-          </div>
-
-          <!-- 30-Day Total Requests -->
-          <div
-            class="card border-blue-200 bg-gradient-to-br from-blue-50 to-white p-4 dark:border-blue-800/30 dark:from-blue-900/10 dark:to-dark-700"
-          >
-            <div class="mb-2 flex items-center justify-between">
-              <span class="text-xs font-medium text-gray-500 dark:text-gray-400">{{
-                t('admin.accounts.stats.totalRequests')
-              }}</span>
-              <div class="rounded-lg bg-blue-100 p-1.5 dark:bg-blue-900/30">
-                <Icon name="bolt" size="sm" class="text-blue-600 dark:text-blue-400" :stroke-width="2" />
-              </div>
-            </div>
-            <p class="text-2xl font-bold text-gray-900 dark:text-white">
-              {{ formatNumber(stats.summary.total_requests) }}
-            </p>
-            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              {{ t('admin.accounts.stats.totalCalls') }}
-            </p>
-          </div>
-
-          <!-- Daily Average Cost -->
-          <div
-            class="card border-amber-200 bg-gradient-to-br from-amber-50 to-white p-4 dark:border-amber-800/30 dark:from-amber-900/10 dark:to-dark-700"
-          >
-            <div class="mb-2 flex items-center justify-between">
-              <span class="text-xs font-medium text-gray-500 dark:text-gray-400">{{
-                t('admin.accounts.stats.avgDailyCost')
-              }}</span>
-              <div class="rounded-lg bg-amber-100 p-1.5 dark:bg-amber-900/30">
-                <Icon
-                  name="calculator"
-                  size="sm"
-                  class="text-amber-600 dark:text-amber-400"
-                  :stroke-width="2"
-                />
-              </div>
-            </div>
-            <p class="text-2xl font-bold text-gray-900 dark:text-white">
-              ${{ formatCost(stats.summary.avg_daily_cost) }}
-            </p>
-             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              {{
-                t('admin.accounts.stats.basedOnActualDays', {
-                  days: stats.summary.actual_days_used
-                })
-              }}
-              <span class="text-gray-400 dark:text-gray-500">
-                ({{ t('usage.userBilledTotal') }}: ${{ formatCost(stats.summary.avg_daily_user_cost) }} /
-                {{ t('usage.requestBilled') }}: ${{ formatCost(stats.summary.avg_daily_request_user_cost) }} /
-                {{ t('usage.hourlyBilled') }}: ${{ formatCost(stats.summary.avg_daily_hourly_cost) }})
-              </span>
-            </p>
-          </div>
-
-          <!-- Daily Average Requests -->
-          <div
-            class="card border-purple-200 bg-gradient-to-br from-purple-50 to-white p-4 dark:border-purple-800/30 dark:from-purple-900/10 dark:to-dark-700"
-          >
-            <div class="mb-2 flex items-center justify-between">
-              <span class="text-xs font-medium text-gray-500 dark:text-gray-400">{{
-                t('admin.accounts.stats.avgDailyRequests')
-              }}</span>
-              <div class="rounded-lg bg-purple-100 p-1.5 dark:bg-purple-900/30">
-                <svg
-                  class="h-4 w-4 text-purple-600 dark:text-purple-400"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"
-                  />
-                </svg>
-              </div>
-            </div>
-            <p class="text-2xl font-bold text-gray-900 dark:text-white">
-              {{ formatNumber(Math.round(stats.summary.avg_daily_requests)) }}
-            </p>
-            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              {{ t('admin.accounts.stats.avgDailyUsage') }}
-            </p>
-          </div>
-        </div>
-
-        <!-- Row 2: Today, Highest Cost, Highest Requests -->
-        <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
-          <!-- Today Overview -->
-          <div class="card p-4">
-            <div class="mb-3 flex items-center gap-2">
-              <div class="rounded-lg bg-cyan-100 p-1.5 dark:bg-cyan-900/30">
-                <svg
-                  class="h-4 w-4 text-cyan-600 dark:text-cyan-400"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                  />
-                </svg>
-              </div>
-              <span class="text-sm font-semibold text-gray-900 dark:text-white">{{
-                t('admin.accounts.stats.todayOverview')
-              }}</span>
-            </div>
-            <div class="space-y-2">
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.accountBilled') }}</span>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white"
-                  >${{ formatCost(stats.summary.today?.cost || 0) }}</span
-                >
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.userBilledTotal') }}</span>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white"
-                  >${{ formatCost(stats.summary.today?.user_cost || 0) }}</span
-                >
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.requestBilled') }}</span>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white"
-                  >${{ formatCost(stats.summary.today?.request_user_cost || 0) }}</span
-                >
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.hourlyBilled') }}</span>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white"
-                  >${{ formatCost(stats.summary.today?.hourly_cost || 0) }}</span
-                >
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{
-                  t('admin.accounts.stats.requests')
-                }}</span>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white">{{
-                  formatNumber(stats.summary.today?.requests || 0)
-                }}</span>
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{
-                  t('admin.accounts.stats.tokens')
-                }}</span>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white">{{
-                  formatTokens(stats.summary.today?.tokens || 0)
-                }}</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Highest Cost Day -->
-          <div class="card p-4">
-            <div class="mb-3 flex items-center gap-2">
-              <div class="rounded-lg bg-orange-100 p-1.5 dark:bg-orange-900/30">
-                <Icon
-                  name="fire"
-                  size="sm"
-                  class="text-orange-600 dark:text-orange-400"
-                  :stroke-width="2"
-                />
-              </div>
-              <span class="text-sm font-semibold text-gray-900 dark:text-white">{{
-                t('admin.accounts.stats.highestCostDay')
-              }}</span>
-            </div>
-            <div class="space-y-2">
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{
-                  t('admin.accounts.stats.date')
-                }}</span>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white">{{
-                  stats.summary.highest_cost_day?.label || '-'
-                }}</span>
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.accountBilled') }}</span>
-                <span class="text-sm font-semibold text-orange-600 dark:text-orange-400"
-                  >${{ formatCost(stats.summary.highest_cost_day?.cost || 0) }}</span
-                >
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.userBilledTotal') }}</span>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white"
-                  >${{ formatCost(stats.summary.highest_cost_day?.user_cost || 0) }}</span
-                >
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.requestBilled') }}</span>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white"
-                  >${{ formatCost(stats.summary.highest_cost_day?.request_user_cost || 0) }}</span
-                >
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.hourlyBilled') }}</span>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white"
-                  >${{ formatCost(stats.summary.highest_cost_day?.hourly_cost || 0) }}</span
-                >
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{
-                  t('admin.accounts.stats.requests')
-                }}</span>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white">{{
-                  formatNumber(stats.summary.highest_cost_day?.requests || 0)
-                }}</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Highest Request Day -->
-          <div class="card p-4">
-            <div class="mb-3 flex items-center gap-2">
-              <div class="rounded-lg bg-indigo-100 p-1.5 dark:bg-indigo-900/30">
-                <Icon
-                  name="trendingUp"
-                  size="sm"
-                  class="text-indigo-600 dark:text-indigo-400"
-                  :stroke-width="2"
-                />
-              </div>
-              <span class="text-sm font-semibold text-gray-900 dark:text-white">{{
-                t('admin.accounts.stats.highestRequestDay')
-              }}</span>
-            </div>
-            <div class="space-y-2">
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{
-                  t('admin.accounts.stats.date')
-                }}</span>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white">{{
-                  stats.summary.highest_request_day?.label || '-'
-                }}</span>
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{
-                  t('admin.accounts.stats.requests')
-                }}</span>
-                <span class="text-sm font-semibold text-indigo-600 dark:text-indigo-400">{{
-                  formatNumber(stats.summary.highest_request_day?.requests || 0)
-                }}</span>
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.accountBilled') }}</span>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white"
-                  >${{ formatCost(stats.summary.highest_request_day?.cost || 0) }}</span
-                >
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.userBilledTotal') }}</span>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white"
-                  >${{ formatCost(stats.summary.highest_request_day?.user_cost || 0) }}</span
-                >
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.requestBilled') }}</span>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white"
-                  >${{ formatCost(stats.summary.highest_request_day?.request_user_cost || 0) }}</span
-                >
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.hourlyBilled') }}</span>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white"
-                  >${{ formatCost(stats.summary.highest_request_day?.hourly_cost || 0) }}</span
-                >
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Row 3: Token Stats -->
-        <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
-          <!-- Accumulated Tokens -->
-          <div class="card p-4">
-            <div class="mb-3 flex items-center gap-2">
-              <div class="rounded-lg bg-teal-100 p-1.5 dark:bg-teal-900/30">
-                <Icon name="cube" size="sm" class="text-teal-600 dark:text-teal-400" :stroke-width="2" />
-              </div>
-              <span class="text-sm font-semibold text-gray-900 dark:text-white">{{
-                t('admin.accounts.stats.accumulatedTokens')
-              }}</span>
-            </div>
-            <div class="space-y-2">
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{
-                  t('admin.accounts.stats.totalTokens')
-                }}</span>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white">{{
-                  formatTokens(stats.summary.total_tokens)
-                }}</span>
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{
-                  t('admin.accounts.stats.dailyAvgTokens')
-                }}</span>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white">{{
-                  formatTokens(Math.round(stats.summary.avg_daily_tokens))
-                }}</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Performance -->
-          <div class="card p-4">
-            <div class="mb-3 flex items-center gap-2">
-              <div class="rounded-lg bg-rose-100 p-1.5 dark:bg-rose-900/30">
-                <Icon name="bolt" size="sm" class="text-rose-600 dark:text-rose-400" :stroke-width="2" />
-              </div>
-              <span class="text-sm font-semibold text-gray-900 dark:text-white">{{
-                t('admin.accounts.stats.performance')
-              }}</span>
-            </div>
-            <div class="space-y-2">
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{
-                  t('admin.accounts.stats.avgResponseTime')
-                }}</span>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white">{{
-                  formatDuration(stats.summary.avg_duration_ms)
-                }}</span>
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{
-                  t('admin.accounts.stats.daysActive')
-                }}</span>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white"
-                  >{{ stats.summary.actual_days_used }} / {{ stats.summary.days }}</span
-                >
-              </div>
-            </div>
-          </div>
-
-          <!-- Recent Activity -->
-          <div class="card p-4">
-            <div class="mb-3 flex items-center gap-2">
-              <div class="rounded-lg bg-lime-100 p-1.5 dark:bg-lime-900/30">
-                <Icon
-                  name="clipboard"
-                  size="sm"
-                  class="text-lime-600 dark:text-lime-400"
-                  :stroke-width="2"
-                />
-              </div>
-              <span class="text-sm font-semibold text-gray-900 dark:text-white">{{
-                t('admin.accounts.stats.recentActivity')
-              }}</span>
-            </div>
-            <div class="space-y-2">
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{
-                  t('admin.accounts.stats.todayRequests')
-                }}</span>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white">{{
-                  formatNumber(stats.summary.today?.requests || 0)
-                }}</span>
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{
-                  t('admin.accounts.stats.todayTokens')
-                }}</span>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white">{{
-                  formatTokens(stats.summary.today?.tokens || 0)
-                }}</span>
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.accountBilled') }}</span>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white"
-                  >${{ formatCost(stats.summary.today?.cost || 0) }}</span
-                >
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.userBilledTotal') }}</span>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white"
-                  >${{ formatCost(stats.summary.today?.user_cost || 0) }}</span
-                >
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.requestBilled') }}</span>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white"
-                  >${{ formatCost(stats.summary.today?.request_user_cost || 0) }}</span
-                >
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.hourlyBilled') }}</span>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white"
-                  >${{ formatCost(stats.summary.today?.hourly_cost || 0) }}</span
-                >
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Usage Trend Chart -->
-        <div class="card p-4">
-          <h3 class="mb-4 text-sm font-semibold text-gray-900 dark:text-white">
-            {{ t('admin.accounts.stats.usageTrend') }}
-          </h3>
-          <div class="h-64">
-            <Line v-if="trendChartData" :data="trendChartData" :options="lineChartOptions" />
-            <div
-              v-else
-              class="flex h-full items-center justify-center text-sm text-gray-500 dark:text-gray-400"
+            <span
+              v-if="statsLoading"
+              class="inline-flex items-center gap-2 text-xs text-blue-600 dark:text-blue-400"
             >
-              {{ t('admin.dashboard.noDataAvailable') }}
+              <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-current"></span>
+              {{ t('common.loading') }}
+            </span>
+          </div>
+
+          <div class="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-slate-200 bg-slate-200 dark:border-slate-700 dark:bg-slate-700 lg:grid-cols-4">
+            <div
+              v-for="item in summaryCards"
+              :key="item.label"
+              class="min-w-0 bg-white px-4 py-4 dark:bg-slate-900/80 sm:px-5"
+            >
+              <div class="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                {{ item.label }}
+              </div>
+              <div
+                class="mt-2 truncate font-mono text-xl font-semibold tabular-nums text-slate-950 dark:text-white sm:text-2xl"
+                :title="item.value"
+              >
+                {{ item.value }}
+              </div>
+              <div class="mt-1 truncate text-[11px] text-slate-400">
+                {{ item.note }}
+              </div>
             </div>
           </div>
-        </div>
+        </section>
 
-        <!-- Model Distribution -->
-        <ModelDistributionChart :model-stats="stats.models" :loading="false" />
+        <section class="grid gap-4 xl:grid-cols-3">
+          <div
+            class="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900/70 xl:col-span-2"
+          >
+            <div class="mb-4 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <h3 class="text-sm font-semibold text-slate-950 dark:text-white">
+                  {{ t('admin.accounts.stats.dailyTrend') }}
+                </h3>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  {{ t('admin.accounts.stats.dailyTrendHint') }}
+                </p>
+              </div>
+              <div class="flex items-center gap-3 text-[11px] text-slate-500 dark:text-slate-400">
+                <span class="inline-flex items-center gap-1.5">
+                  <span class="h-0.5 w-4 rounded-full bg-blue-600"></span>
+                  {{ t('admin.accounts.stats.pixelCost') }}
+                </span>
+                <span class="inline-flex items-center gap-1.5">
+                  <span class="h-0.5 w-4 rounded-full bg-amber-500"></span>
+                  {{ t('admin.accounts.stats.requests') }}
+                </span>
+              </div>
+            </div>
+            <div class="h-64 sm:h-72">
+              <Line
+                v-if="trendChartData"
+                :data="trendChartData"
+                :options="lineChartOptions"
+              />
+              <div
+                v-else
+                class="grid h-full place-items-center rounded-xl border border-dashed border-slate-200 text-sm text-slate-400 dark:border-slate-700"
+              >
+                {{ t('admin.accounts.stats.noData') }}
+              </div>
+            </div>
+          </div>
 
-        <EndpointDistributionChart
-          :endpoint-stats="stats.endpoints || []"
-          :loading="false"
-          :title="t('usage.inboundEndpoint')"
-        />
+          <aside
+            class="flex flex-col rounded-2xl border border-slate-200 bg-slate-950 p-4 text-white dark:border-slate-700 sm:p-5"
+          >
+            <div>
+              <div class="text-[11px] font-semibold uppercase tracking-[0.16em] text-blue-300">
+                {{ t('admin.accounts.stats.lifetimeSummary') }}
+              </div>
+              <div class="mt-2 font-mono text-3xl font-semibold tabular-nums">
+                ${{ formatCost(stats.lifetime?.total_cost || 0) }}
+              </div>
+              <p class="mt-1 text-xs leading-5 text-slate-400">
+                {{ t('admin.accounts.stats.lifetimeCostHint') }}
+              </p>
+            </div>
 
-        <EndpointDistributionChart
-          :endpoint-stats="stats.upstream_endpoints || []"
-          :loading="false"
-          :title="t('usage.upstreamEndpoint')"
-        />
+            <dl class="mt-5 divide-y divide-white/10 border-y border-white/10">
+              <div class="flex items-center justify-between gap-3 py-3">
+                <dt class="text-xs text-slate-400">{{ t('admin.accounts.stats.requests') }}</dt>
+                <dd class="font-mono text-sm font-semibold tabular-nums">
+                  {{ formatCompact(stats.lifetime?.total_requests || 0) }}
+                </dd>
+              </div>
+              <div class="flex items-center justify-between gap-3 py-3">
+                <dt class="text-xs text-slate-400">{{ t('admin.accounts.stats.tokens') }}</dt>
+                <dd class="font-mono text-sm font-semibold tabular-nums">
+                  {{ formatCompact(stats.lifetime?.total_tokens || 0) }}
+                </dd>
+              </div>
+              <div class="flex items-center justify-between gap-3 py-3">
+                <dt class="text-xs text-slate-400">
+                  {{ t('admin.accounts.stats.mergedAccountRecords') }}
+                </dt>
+                <dd class="font-mono text-sm font-semibold tabular-nums">
+                  {{ stats.lifetime?.source_account_count || 1 }}
+                </dd>
+              </div>
+            </dl>
+
+            <div class="mt-auto pt-4">
+              <div class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                {{ t('admin.accounts.stats.availableCoverage') }}
+              </div>
+              <div class="mt-1 text-xs leading-5 text-slate-300">
+                {{ lifetimeCoverage }}
+              </div>
+              <p class="mt-2 text-[11px] leading-4 text-slate-500">
+                {{ t('admin.accounts.stats.lifetimeMergeHint') }}
+              </p>
+            </div>
+          </aside>
+        </section>
+
+        <section
+          class="grid gap-px overflow-hidden rounded-2xl border border-slate-200 bg-slate-200 dark:border-slate-700 dark:bg-slate-700 sm:grid-cols-3"
+        >
+          <div
+            v-for="item in activityHighlights"
+            :key="item.label"
+            class="flex items-center justify-between gap-4 bg-slate-50 px-4 py-3 dark:bg-slate-900/50"
+          >
+            <div class="min-w-0">
+              <div class="text-xs font-medium text-slate-500 dark:text-slate-400">
+                {{ item.label }}
+              </div>
+              <div class="mt-0.5 truncate text-xs text-slate-400">{{ item.detail }}</div>
+            </div>
+            <div class="shrink-0 font-mono text-sm font-semibold tabular-nums text-slate-950 dark:text-white">
+              {{ item.value }}
+            </div>
+          </div>
+        </section>
+
+        <section
+          class="overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900/70"
+          aria-labelledby="daily-details-title"
+        >
+          <div class="border-b border-slate-200 px-4 py-3 dark:border-slate-700 sm:px-5">
+            <h3 id="daily-details-title" class="text-sm font-semibold text-slate-950 dark:text-white">
+              {{ t('admin.accounts.stats.dailyDetails') }}
+            </h3>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              {{ t('admin.accounts.stats.dailyDetailsHint', { range: formattedAppliedRange }) }}
+            </p>
+          </div>
+          <div class="max-h-80 overflow-auto">
+            <table class="w-full min-w-[560px] text-left text-xs">
+              <thead class="sticky top-0 z-10 bg-slate-50 text-slate-500 dark:bg-slate-900 dark:text-slate-400">
+                <tr>
+                  <th class="px-4 py-3 font-semibold sm:px-5">{{ t('admin.accounts.stats.date') }}</th>
+                  <th class="px-4 py-3 text-right font-semibold">{{ t('admin.accounts.stats.pixelCost') }}</th>
+                  <th class="px-4 py-3 text-right font-semibold">{{ t('admin.accounts.stats.requests') }}</th>
+                  <th class="px-4 py-3 text-right font-semibold sm:pr-5">{{ t('admin.accounts.stats.tokens') }}</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+                <tr
+                  v-for="item in reversedHistory"
+                  :key="item.date"
+                  class="text-slate-600 hover:bg-slate-50/80 dark:text-slate-300 dark:hover:bg-slate-800/40"
+                >
+                  <td class="whitespace-nowrap px-4 py-3 font-medium text-slate-900 dark:text-white sm:px-5">
+                    {{ item.label || item.date }}
+                  </td>
+                  <td class="px-4 py-3 text-right font-mono tabular-nums">
+                    ${{ formatCost(item.actual_cost) }}
+                  </td>
+                  <td class="px-4 py-3 text-right font-mono tabular-nums">
+                    {{ formatNumber(item.requests) }}
+                  </td>
+                  <td class="px-4 py-3 text-right font-mono tabular-nums sm:pr-5">
+                    {{ formatCompact(item.tokens) }}
+                  </td>
+                </tr>
+                <tr v-if="reversedHistory.length === 0">
+                  <td colspan="4" class="px-4 py-10 text-center text-slate-400">
+                    {{ t('admin.accounts.stats.noData') }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section
+          class="overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900/70"
+          aria-labelledby="breakdowns-title"
+        >
+          <div class="flex flex-col gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-700 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+            <div>
+              <h3 id="breakdowns-title" class="text-sm font-semibold text-slate-950 dark:text-white">
+                {{ t('admin.accounts.stats.breakdowns') }}
+              </h3>
+              <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                {{ t('admin.accounts.stats.breakdownCoverageHint') }}
+              </p>
+            </div>
+            <div class="grid min-h-11 grid-cols-3 rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
+              <button
+                v-for="option in breakdownOptions"
+                :key="option.key"
+                type="button"
+                class="min-h-11 rounded-lg px-3 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                :class="
+                  activeBreakdown === option.key
+                    ? 'bg-white text-slate-950 shadow-sm dark:bg-slate-700 dark:text-white'
+                    : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'
+                "
+                :aria-pressed="activeBreakdown === option.key"
+                @click="activeBreakdown = option.key"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+          </div>
+          <div class="max-h-80 overflow-auto">
+            <table class="w-full min-w-[620px] text-left text-xs">
+              <thead class="sticky top-0 z-10 bg-slate-50 text-slate-500 dark:bg-slate-900 dark:text-slate-400">
+                <tr>
+                  <th class="px-4 py-3 font-semibold sm:px-5">{{ breakdownNameLabel }}</th>
+                  <th class="px-4 py-3 text-right font-semibold">{{ t('admin.accounts.stats.pixelCost') }}</th>
+                  <th class="px-4 py-3 text-right font-semibold">{{ t('admin.accounts.stats.requests') }}</th>
+                  <th class="px-4 py-3 text-right font-semibold sm:pr-5">{{ t('admin.accounts.stats.tokens') }}</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+                <tr
+                  v-for="row in breakdownRows"
+                  :key="row.name"
+                  class="text-slate-600 hover:bg-slate-50/80 dark:text-slate-300 dark:hover:bg-slate-800/40"
+                >
+                  <td
+                    class="max-w-[320px] truncate px-4 py-3 font-medium text-slate-900 dark:text-white sm:px-5"
+                    :title="row.name"
+                  >
+                    {{ row.name }}
+                  </td>
+                  <td class="px-4 py-3 text-right font-mono tabular-nums">
+                    ${{ formatCost(row.cost) }}
+                  </td>
+                  <td class="px-4 py-3 text-right font-mono tabular-nums">
+                    {{ formatNumber(row.requests) }}
+                  </td>
+                  <td class="px-4 py-3 text-right font-mono tabular-nums sm:pr-5">
+                    {{ formatCompact(row.tokens) }}
+                  </td>
+                </tr>
+                <tr v-if="breakdownRows.length === 0">
+                  <td colspan="4" class="px-4 py-10 text-center text-slate-400">
+                    {{ t('admin.accounts.stats.noData') }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
       </template>
 
-      <!-- No Data State -->
       <div
-        v-else-if="!loading"
-        class="flex flex-col items-center justify-center py-12 text-gray-500 dark:text-gray-400"
+        v-else-if="!statsLoading && !statsError"
+        class="grid min-h-64 place-items-center rounded-2xl border border-dashed border-slate-200 text-center dark:border-slate-700"
       >
-        <Icon name="chartBar" size="xl" class="mb-4 h-12 w-12" :stroke-width="1.5" />
-        <p class="text-sm">{{ t('admin.accounts.stats.noData') }}</p>
+        <div>
+          <div class="text-sm font-semibold text-slate-700 dark:text-slate-200">
+            {{ t('admin.accounts.stats.noData') }}
+          </div>
+          <div class="mt-1 text-xs text-slate-400">
+            {{ t('admin.accounts.stats.noDataHint') }}
+          </div>
+        </div>
       </div>
     </div>
 
     <template #footer>
-      <div class="flex justify-end">
-        <button
-          @click="handleClose"
-          class="rounded-lg bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-200 dark:bg-dark-600 dark:text-gray-300 dark:hover:bg-dark-500"
-        >
-          {{ t('common.close') }}
-        </button>
-      </div>
+      <button
+        type="button"
+        class="min-h-11 rounded-xl bg-slate-950 px-5 text-sm font-semibold text-white transition-colors hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200"
+        @click="handleClose"
+      >
+        {{ t('common.close') }}
+      </button>
     </template>
   </BaseDialog>
 </template>
 
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
-  Chart as ChartJS,
   CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
+  Chart as ChartJS,
+  Filler,
   Legend,
-  Filler
+  LinearScale,
+  LineElement,
+  PointElement,
+  Tooltip
 } from 'chart.js'
 import { Line } from 'vue-chartjs'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
-import ModelDistributionChart from '@/components/charts/ModelDistributionChart.vue'
-import EndpointDistributionChart from '@/components/charts/EndpointDistributionChart.vue'
-import Icon from '@/components/icons/Icon.vue'
-import { adminAPI } from '@/api/admin'
-import type { Account, AccountUsageStatsResponse } from '@/types'
+import AccountUsageWindowCard from '@/components/account/AccountUsageWindowCard.vue'
+import type {
+  Account,
+  AccountStatsRange,
+  AccountUsageInfo,
+  AccountUsageStatsResponse,
+  EndpointStat,
+  ModelStat
+} from '@/types'
+import { formatCompactNumber } from '@/utils/format'
 
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend,
-  Filler
-)
+ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend, Filler)
 
-const { t } = useI18n()
+type UsageSource = 'local' | 'passive' | 'active'
+type BreakdownKey = 'models' | 'inbound' | 'upstream'
+type StatsLoader = (id: number, range: AccountStatsRange) => Promise<AccountUsageStatsResponse>
+type UsageLoader = (
+  id: number,
+  source: UsageSource,
+  options?: { signal?: AbortSignal }
+) => Promise<AccountUsageInfo>
 
 const props = defineProps<{
   show: boolean
   account: Account | null
-  statsLoader?: (id: number, days?: number) => Promise<AccountUsageStatsResponse>
+  statsLoader: StatsLoader
+  usageLoader?: UsageLoader
 }>()
 
 const emit = defineEmits<{
   (e: 'close'): void
 }>()
 
-const loading = ref(false)
-const stats = ref<AccountUsageStatsResponse | null>(null)
+const { t, locale } = useI18n()
+const MAX_RANGE_DAYS = 31
+const DEFAULT_RANGE_DAYS = 7
+const BUSINESS_TIME_ZONE = 'Asia/Shanghai'
+const MILLISECONDS_PER_DAY = 86_400_000
 
-// Dark mode detection
-const isDarkMode = computed(() => {
-  return document.documentElement.classList.contains('dark')
+const toDateString = (date: Date, timeZone = 'UTC'): string => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(date)
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]))
+  return `${values.year}-${values.month}-${values.day}`
+}
+
+const shiftCalendarDate = (value: string, days: number): string => {
+  const [year, month, day] = value.split('-').map(Number)
+  return toDateString(new Date(Date.UTC(year, month - 1, day + days)))
+}
+
+const createDefaultRange = (): AccountStatsRange => {
+  const endDate = toDateString(new Date(), BUSINESS_TIME_ZONE)
+  return {
+    startDate: shiftCalendarDate(endDate, -DEFAULT_RANGE_DAYS + 1),
+    endDate
+  }
+}
+
+const initialRange = createDefaultRange()
+const maxSelectableDate = ref(initialRange.endDate)
+const draftRange = ref<AccountStatsRange>({ ...initialRange })
+const appliedRange = ref<AccountStatsRange>({ ...initialRange })
+const stats = ref<AccountUsageStatsResponse | null>(null)
+const usage = ref<AccountUsageInfo | null>(null)
+const statsLoading = ref(false)
+const usageLoading = ref(false)
+const statsError = ref('')
+const usageError = ref('')
+const activeBreakdown = ref<BreakdownKey>('models')
+let requestVersion = 0
+let usageController: AbortController | null = null
+
+const formatCost = (value: number): string => {
+  const amount = Number(value)
+  if (!Number.isFinite(amount)) return '0.0000'
+  if (amount >= 1000) return `${(amount / 1000).toFixed(2)}K`
+  if (amount >= 1) return amount.toFixed(2)
+  if (amount >= 0.01) return amount.toFixed(3)
+  return amount.toFixed(4)
+}
+
+const formatNumber = (value: number): string =>
+  Number.isFinite(Number(value)) ? Number(value).toLocaleString(locale.value) : '0'
+
+const formatCompact = (value: number): string => formatCompactNumber(Number(value) || 0)
+
+const formatDuration = (milliseconds: number): string => {
+  if (!Number.isFinite(milliseconds) || milliseconds <= 0) return '0 ms'
+  if (milliseconds >= 1000) return `${(milliseconds / 1000).toFixed(2)} s`
+  return `${Math.round(milliseconds)} ms`
+}
+
+const formatDateTime = (value?: string | null): string => {
+  if (!value) return t('admin.accounts.stats.unknown')
+  const date = new Date(value)
+  if (!Number.isFinite(date.getTime())) return t('admin.accounts.stats.unknown')
+  return new Intl.DateTimeFormat(locale.value, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(date)
+}
+
+const formatCoverageDate = (value?: string | null): string => {
+  if (!value) return ''
+  const date = new Date(value)
+  if (!Number.isFinite(date.getTime())) return ''
+  return new Intl.DateTimeFormat(locale.value, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(date)
+}
+
+const formatCalendarDate = (value: string): string => {
+  const [year, month, day] = value.split('-').map(Number)
+  if (!year || !month || !day) return value
+  return new Intl.DateTimeFormat(locale.value, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    timeZone: 'UTC'
+  }).format(new Date(Date.UTC(year, month - 1, day)))
+}
+
+const isValidCalendarDate = (value: string): boolean =>
+  /^\d{4}-\d{2}-\d{2}$/.test(value) && shiftCalendarDate(value, 0) === value
+
+const getInclusiveDayCount = (range: AccountStatsRange): number => {
+  if (!isValidCalendarDate(range.startDate) || !isValidCalendarDate(range.endDate)) return 0
+  const [startYear, startMonth, startDay] = range.startDate.split('-').map(Number)
+  const [endYear, endMonth, endDay] = range.endDate.split('-').map(Number)
+  const difference =
+    Date.UTC(endYear, endMonth - 1, endDay) - Date.UTC(startYear, startMonth - 1, startDay)
+  return Math.floor(difference / MILLISECONDS_PER_DAY) + 1
+}
+
+const draftEndMax = computed(() => {
+  if (!isValidCalendarDate(draftRange.value.startDate)) return maxSelectableDate.value
+  const rangeMaximum = shiftCalendarDate(draftRange.value.startDate, MAX_RANGE_DAYS - 1)
+  return rangeMaximum < maxSelectableDate.value ? rangeMaximum : maxSelectableDate.value
 })
 
-// Chart colors
-const chartColors = computed(() => ({
-  text: isDarkMode.value ? '#e5e7eb' : '#374151',
-  grid: isDarkMode.value ? '#374151' : '#e5e7eb'
-}))
+const dateRangeError = computed(() => {
+  const { startDate, endDate } = draftRange.value
+  if (!startDate || !endDate) return t('admin.accounts.stats.rangeRequired')
+  if (!isValidCalendarDate(startDate) || !isValidCalendarDate(endDate)) {
+    return t('admin.accounts.stats.invalidDateRange')
+  }
+  if (endDate < startDate) return t('admin.accounts.stats.endBeforeStart')
+  if (endDate > maxSelectableDate.value) return t('admin.accounts.stats.futureDateNotAllowed')
+  if (getInclusiveDayCount(draftRange.value) > MAX_RANGE_DAYS) {
+    return t('admin.accounts.stats.rangeTooLong', { days: MAX_RANGE_DAYS })
+  }
+  return ''
+})
 
-// Line chart data
+const hasPendingRangeChanges = computed(
+  () =>
+    draftRange.value.startDate !== appliedRange.value.startDate ||
+    draftRange.value.endDate !== appliedRange.value.endDate
+)
+
+const selectedDayCount = computed(() => getInclusiveDayCount(appliedRange.value))
+
+const formattedAppliedRange = computed(
+  () =>
+    `${formatCalendarDate(appliedRange.value.startDate)} — ${formatCalendarDate(appliedRange.value.endDate)}`
+)
+
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error && error.message.trim()) return error.message
+  return t('admin.accounts.stats.unknownError')
+}
+
+const loadStats = async (): Promise<void> => {
+  const account = props.account
+  if (!props.show || !account) return
+  const currentVersion = ++requestVersion
+  statsLoading.value = true
+  statsError.value = ''
+  try {
+    const response = await props.statsLoader(account.id, { ...appliedRange.value })
+    if (currentVersion !== requestVersion || !props.show || props.account?.id !== account.id) return
+    stats.value = response
+  } catch (error) {
+    if (currentVersion !== requestVersion) return
+    statsError.value = getErrorMessage(error)
+  } finally {
+    if (currentVersion === requestVersion) statsLoading.value = false
+  }
+}
+
+const loadUsage = async (): Promise<void> => {
+  const account = props.account
+  if (!props.show || !account || !props.usageLoader) return
+  usageController?.abort()
+  const controller = new AbortController()
+  usageController = controller
+  usageLoading.value = true
+  usageError.value = ''
+  try {
+    const response = await props.usageLoader(account.id, 'local', { signal: controller.signal })
+    if (!controller.signal.aborted && props.show && props.account?.id === account.id) {
+      usage.value = response
+    }
+  } catch (error) {
+    if (!controller.signal.aborted) {
+      usageError.value = `${t('admin.accounts.stats.usageLoadFailed')}: ${getErrorMessage(error)}`
+    }
+  } finally {
+    if (usageController === controller) {
+      usageController = null
+      usageLoading.value = false
+    }
+  }
+}
+
+const reloadAll = (): void => {
+  void Promise.all([loadStats(), loadUsage()])
+}
+
+const applyDateRange = (): void => {
+  if (dateRangeError.value || !hasPendingRangeChanges.value) return
+  appliedRange.value = { ...draftRange.value }
+  stats.value = null
+  void loadStats()
+}
+
+watch(
+  () => [props.show, props.account?.id] as const,
+  ([isOpen, accountID], previous) => {
+    const wasOpen = previous?.[0]
+    const previousID = previous?.[1]
+    if (!isOpen || !accountID) {
+      requestVersion += 1
+      usageController?.abort()
+      usageController = null
+      stats.value = null
+      usage.value = null
+      statsError.value = ''
+      usageError.value = ''
+      statsLoading.value = false
+      usageLoading.value = false
+      return
+    }
+    if (!wasOpen || accountID !== previousID) {
+      const defaultRange = createDefaultRange()
+      maxSelectableDate.value = defaultRange.endDate
+      draftRange.value = { ...defaultRange }
+      appliedRange.value = { ...defaultRange }
+      activeBreakdown.value = 'models'
+      stats.value = null
+      usage.value = null
+    }
+    reloadAll()
+  },
+  { immediate: true }
+)
+
+const summaryCards = computed(() => {
+  const summary = stats.value?.summary
+  return [
+    {
+      label: t('admin.accounts.stats.periodCost'),
+      value: `$${formatCost(summary?.total_cost || 0)}`,
+      note: t('admin.accounts.stats.pixelCostNote')
+    },
+    {
+      label: t('admin.accounts.stats.periodRequests'),
+      value: formatCompact(summary?.total_requests || 0),
+      note: t('admin.accounts.stats.requestCountNote')
+    },
+    {
+      label: t('admin.accounts.stats.periodTokens'),
+      value: formatCompact(summary?.total_tokens || 0),
+      note: t('admin.accounts.stats.tokenCountNote')
+    },
+    {
+      label: t('admin.accounts.stats.activeDays'),
+      value: `${pixelHistory.value.length} / ${selectedDayCount.value}`,
+      note: t('admin.accounts.stats.activeDaysNote')
+    }
+  ]
+})
+
+const pixelHistory = computed(() =>
+  (stats.value?.history || []).filter(
+    (item) => item.requests > 0 || item.tokens > 0 || Math.abs(item.actual_cost) > 0.0000001
+  )
+)
+
+const reversedHistory = computed(() => [...pixelHistory.value].reverse())
+
+const highestPixelCostDay = computed(() =>
+  pixelHistory.value.reduce<(typeof pixelHistory.value)[number] | null>(
+    (highest, item) => (!highest || item.actual_cost > highest.actual_cost ? item : highest),
+    null
+  )
+)
+
+const lifetimeCoverage = computed(() => {
+  const lifetime = stats.value?.lifetime
+  const start = formatCoverageDate(lifetime?.available_from)
+  const end = formatCoverageDate(lifetime?.available_to)
+  if (!start || !end) return t('admin.accounts.stats.noCoverage')
+  return t('admin.accounts.stats.coverageRange', { start, end })
+})
+
+const activityHighlights = computed(() => {
+  const summary = stats.value?.summary
+  const highest = highestPixelCostDay.value
+  return [
+    {
+      label: t('admin.accounts.stats.todayOverview'),
+      value: `$${formatCost(summary?.today?.cost || 0)}`,
+      detail: t('admin.accounts.stats.requestsWithCount', {
+        count: formatNumber(summary?.today?.requests || 0)
+      })
+    },
+    {
+      label: t('admin.accounts.stats.highestCostDay'),
+      value: `$${formatCost(highest?.actual_cost || 0)}`,
+      detail: highest?.label || highest?.date || t('admin.accounts.stats.noData')
+    },
+    {
+      label: t('admin.accounts.stats.avgResponseTime'),
+      value: formatDuration(summary?.avg_duration_ms || 0),
+      detail: t('admin.accounts.stats.selectedRangeAverage')
+    }
+  ]
+})
+
 const trendChartData = computed(() => {
-  if (!stats.value?.history?.length) return null
-
+  if (!pixelHistory.value.length) return null
   return {
-    labels: stats.value.history.map((h) => h.label),
+    labels: pixelHistory.value.map((item) => item.label || item.date),
     datasets: [
       {
-        label: t('usage.accountBilled') + ' (USD)',
-        data: stats.value.history.map((h) => h.actual_cost),
-        borderColor: '#3b82f6',
-        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+        label: t('admin.accounts.stats.pixelCost'),
+        data: pixelHistory.value.map((item) => item.actual_cost),
+        borderColor: '#2563eb',
+        backgroundColor: 'rgba(37, 99, 235, 0.12)',
+        pointBackgroundColor: '#2563eb',
+        pointRadius: selectedDayCount.value > 30 ? 0 : 2,
+        pointHoverRadius: 4,
+        borderWidth: 2,
         fill: true,
-        tension: 0.3,
-        yAxisID: 'y'
-      },
-      {
-        label: t('usage.requestBilled') + ' (USD)',
-        data: stats.value.history.map((h) => h.request_user_cost),
-        borderColor: '#10b981',
-        backgroundColor: 'rgba(16, 185, 129, 0.08)',
-        fill: false,
-        tension: 0.3,
-        borderDash: [5, 5],
-        yAxisID: 'y'
-      },
-      {
-        label: t('usage.hourlyBilled') + ' (USD)',
-        data: stats.value.history.map((h) => h.hourly_cost),
-        borderColor: '#a855f7',
-        backgroundColor: 'rgba(168, 85, 247, 0.08)',
-        fill: false,
-        tension: 0.3,
-        borderDash: [2, 4],
-        yAxisID: 'y'
+        tension: 0.32,
+        yAxisID: 'cost'
       },
       {
         label: t('admin.accounts.stats.requests'),
-        data: stats.value.history.map((h) => h.requests),
-        borderColor: '#f97316',
-        backgroundColor: 'rgba(249, 115, 22, 0.1)',
+        data: pixelHistory.value.map((item) => item.requests),
+        borderColor: '#f59e0b',
+        backgroundColor: 'rgba(245, 158, 11, 0.08)',
+        pointBackgroundColor: '#f59e0b',
+        pointRadius: selectedDayCount.value > 30 ? 0 : 2,
+        pointHoverRadius: 4,
+        borderWidth: 1.5,
         fill: false,
-        tension: 0.3,
-        yAxisID: 'y1'
+        tension: 0.25,
+        yAxisID: 'requests'
       }
     ]
   }
 })
 
-// Line chart options with dual Y-axis
 const lineChartOptions = computed(() => ({
   responsive: true,
   maintainAspectRatio: false,
@@ -653,161 +890,88 @@ const lineChartOptions = computed(() => ({
     mode: 'index' as const
   },
   plugins: {
-    legend: {
-      position: 'top' as const,
-      labels: {
-        color: chartColors.value.text,
-        usePointStyle: true,
-        pointStyle: 'circle',
-        padding: 15,
-        font: {
-          size: 11
-        }
-      }
-    },
+    legend: { display: false },
     tooltip: {
       callbacks: {
-        label: (context: any) => {
-          const label = context.dataset.label || ''
-          const value = context.raw
-          if (label.includes('USD')) {
-            return `${label}: $${formatCost(value)}`
-          }
-          return `${label}: ${formatNumber(value)}`
+        label: (context: { dataset: { yAxisID?: string; label?: string }; raw: unknown }) => {
+          const value = Number(context.raw) || 0
+          return context.dataset.yAxisID === 'cost'
+            ? `${context.dataset.label}: $${formatCost(value)}`
+            : `${context.dataset.label}: ${formatNumber(value)}`
         }
       }
     }
   },
   scales: {
     x: {
-      grid: {
-        color: chartColors.value.grid
-      },
+      grid: { display: false },
       ticks: {
-        color: chartColors.value.text,
-        font: {
-          size: 10
-        },
-        maxRotation: 45,
-        minRotation: 0
+        color: '#94a3b8',
+        maxTicksLimit: selectedDayCount.value > 30 ? 8 : 12,
+        maxRotation: 0,
+        autoSkip: true
       }
     },
-    y: {
+    cost: {
       type: 'linear' as const,
-      display: true,
       position: 'left' as const,
-      grid: {
-        color: chartColors.value.grid
-      },
+      beginAtZero: true,
+      grid: { color: 'rgba(148, 163, 184, 0.15)' },
       ticks: {
-        color: '#3b82f6',
-        font: {
-          size: 10
-        },
-        callback: (value: string | number) => '$' + formatCost(Number(value))
-      },
-      title: {
-        display: true,
-        text: t('usage.accountBilled') + ' (USD)',
-        color: '#3b82f6',
-        font: {
-          size: 11
-        }
+        color: '#64748b',
+        callback: (value: string | number) => `$${formatCost(Number(value))}`
       }
     },
-    y1: {
+    requests: {
       type: 'linear' as const,
-      display: true,
       position: 'right' as const,
-      grid: {
-        drawOnChartArea: false
-      },
+      beginAtZero: true,
+      grid: { drawOnChartArea: false },
       ticks: {
-        color: '#f97316',
-        font: {
-          size: 10
-        },
-        callback: (value: string | number) => formatNumber(Number(value))
-      },
-      title: {
-        display: true,
-        text: t('admin.accounts.stats.requests'),
-        color: '#f97316',
-        font: {
-          size: 11
-        }
+        color: '#d97706',
+        callback: (value: string | number) => formatCompact(Number(value))
       }
     }
   }
 }))
 
-// Load stats when modal opens
-watch(
-  () => props.show,
-  async (newVal) => {
-    if (newVal && props.account) {
-      await loadStats()
-    } else {
-      stats.value = null
-    }
-  }
+const breakdownOptions = computed<Array<{ key: BreakdownKey; label: string }>>(() => [
+  { key: 'models', label: t('admin.accounts.stats.models') },
+  { key: 'inbound', label: t('admin.accounts.stats.inbound') },
+  { key: 'upstream', label: t('admin.accounts.stats.upstream') }
+])
+
+const breakdownNameLabel = computed(() =>
+  activeBreakdown.value === 'models'
+    ? t('admin.accounts.stats.model')
+    : t('admin.accounts.stats.endpoint')
 )
 
-const loadStats = async () => {
-  if (!props.account) return
+const mapModelRow = (item: ModelStat) => ({
+  name: item.model || t('admin.accounts.stats.unknown'),
+  requests: item.requests,
+  tokens: item.total_tokens,
+  cost: item.account_cost
+})
 
-  loading.value = true
-  try {
-    const loader = props.statsLoader ?? adminAPI.accounts.getStats
-    stats.value = await loader(props.account.id, 30)
-  } catch (error) {
-    console.error('Failed to load account stats:', error)
-    stats.value = null
-  } finally {
-    loading.value = false
+const mapEndpointRow = (item: EndpointStat) => ({
+  name: item.endpoint || t('admin.accounts.stats.unknown'),
+  requests: item.requests,
+  tokens: item.total_tokens,
+  cost: item.actual_cost
+})
+
+const breakdownRows = computed(() => {
+  if (!stats.value) return []
+  if (activeBreakdown.value === 'models') {
+    return stats.value.models.map(mapModelRow).sort((a, b) => b.cost - a.cost)
   }
-}
+  const source =
+    activeBreakdown.value === 'inbound' ? stats.value.endpoints : stats.value.upstream_endpoints
+  return source.map(mapEndpointRow).sort((a, b) => b.cost - a.cost)
+})
 
-const handleClose = () => {
+const handleClose = (): void => {
   emit('close')
-}
-
-// Format helpers
-const formatCost = (value: number): string => {
-  if (value >= 1000) {
-    return (value / 1000).toFixed(2) + 'K'
-  } else if (value >= 1) {
-    return value.toFixed(2)
-  } else if (value >= 0.01) {
-    return value.toFixed(3)
-  }
-  return value.toFixed(4)
-}
-
-const formatNumber = (value: number): string => {
-  if (value >= 1_000_000) {
-    return (value / 1_000_000).toFixed(2) + 'M'
-  } else if (value >= 1_000) {
-    return (value / 1_000).toFixed(2) + 'K'
-  }
-  return value.toLocaleString()
-}
-
-const formatTokens = (value: number): string => {
-  if (value >= 1_000_000_000) {
-    return `${(value / 1_000_000_000).toFixed(2)}B`
-  } else if (value >= 1_000_000) {
-    return `${(value / 1_000_000).toFixed(2)}M`
-  } else if (value >= 1_000) {
-    return `${(value / 1_000).toFixed(2)}K`
-  }
-  return value.toLocaleString()
-}
-
-const formatDuration = (ms: number): string => {
-  if (ms >= 1000) {
-    return `${(ms / 1000).toFixed(2)}s`
-  }
-  return `${Math.round(ms)}ms`
 }
 </script>

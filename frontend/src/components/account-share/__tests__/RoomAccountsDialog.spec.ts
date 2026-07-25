@@ -1,16 +1,28 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { AccountShareListing, AccountShareRoomAccount } from '@/api/accountShare'
+import type { Account } from '@/types'
 import RoomAccountsDialog from '../RoomAccountsDialog.vue'
 
-const { listRoomAccounts } = vi.hoisted(() => ({
+const { attachRoomAccounts, detachRoomAccounts, listAccounts, listRoomAccounts } = vi.hoisted(() => ({
+  attachRoomAccounts: vi.fn(),
+  detachRoomAccounts: vi.fn(),
+  listAccounts: vi.fn(),
   listRoomAccounts: vi.fn(),
 }))
 
 vi.mock('@/api/accountShare', () => ({
   accountShareAPI: {
     listRoomAccounts,
+    attachRoomAccounts,
+    detachRoomAccounts,
+  },
+}))
+
+vi.mock('@/api/accounts', () => ({
+  accountsAPI: {
+    list: listAccounts,
   },
 }))
 
@@ -82,6 +94,55 @@ function roomAccount(
   }
 }
 
+function account(
+  accountID: number,
+  name: string,
+  overrides: Partial<Account> = {}
+): Account {
+  return {
+    id: accountID,
+    name,
+    platform: 'openai',
+    account_level: 'plus',
+    type: 'oauth',
+    proxy_id: null,
+    owner_user_id: 9,
+    share_mode: 'private',
+    external_placement: { target: 'room', state: 'active', version: 1 },
+    concurrency: 10,
+    current_concurrency: 0,
+    priority: 50,
+    status: 'active',
+    schedulable: true,
+    error_message: null,
+    error_since: null,
+    last_used_at: null,
+    expires_at: null,
+    auto_pause_on_expired: false,
+    created_at: '2026-07-24T00:00:00Z',
+    updated_at: '2026-07-24T00:00:00Z',
+    rate_limited_at: null,
+    rate_limit_reset_at: null,
+    overload_until: null,
+    temp_unschedulable_until: null,
+    temp_unschedulable_reason: null,
+    session_window_start: null,
+    session_window_end: null,
+    session_window_status: null,
+    ...overrides,
+  }
+}
+
+function paginatedAccounts(items: Account[], page = 1, pages = 1) {
+  return {
+    items,
+    total: items.length,
+    page,
+    page_size: 100,
+    pages,
+  }
+}
+
 function mountDialog(room = listing(1, '测试房间')) {
   return mount(RoomAccountsDialog, {
     props: {
@@ -99,7 +160,15 @@ function mountDialog(room = listing(1, '测试房间')) {
 
 describe('RoomAccountsDialog', () => {
   beforeEach(() => {
+    attachRoomAccounts.mockReset()
+    detachRoomAccounts.mockReset()
+    listAccounts.mockReset()
     listRoomAccounts.mockReset()
+    listAccounts.mockResolvedValue(paginatedAccounts([]))
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
   })
 
   it('loads room members and distinguishes healthy accounts', async () => {
@@ -153,5 +222,176 @@ describe('RoomAccountsDialog', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('新房间账号')
     expect(wrapper.text()).not.toContain('旧房间账号')
+  })
+
+  it('loads every candidate page and only enables matching platform-mode accounts', async () => {
+    listRoomAccounts.mockResolvedValueOnce([roomAccount(11, '房间内账号')])
+    listAccounts
+      .mockResolvedValueOnce(paginatedAccounts([
+        account(11, '房间内账号', {
+          external_placement: { target: 'room', state: 'active', version: 2 },
+        }),
+        account(12, '兼容平台模式账号'),
+        account(13, '等级不符', { account_level: 'team' }),
+      ], 1, 2))
+      .mockResolvedValueOnce(paginatedAccounts([
+        account(14, '未知等级', { account_level: 'unknown' }),
+        account(15, '仅本人账号', {
+          external_placement: { target: 'private', state: 'active', version: 3 },
+        }),
+        account(16, '号主信息缺失', { owner_user_id: null }),
+      ], 2, 2))
+
+    const wrapper = mountDialog()
+    await flushPromises()
+    await wrapper.get('[data-testid="room-accounts-add-tab"]').trigger('click')
+
+    expect(listAccounts).toHaveBeenNthCalledWith(1, 1, 100, { platform: 'openai' })
+    expect(listAccounts).toHaveBeenNthCalledWith(2, 2, 100, { platform: 'openai' })
+    expect(wrapper.text()).toContain('兼容平台模式账号')
+    expect(wrapper.text()).toContain('等级不符')
+    expect(wrapper.text()).toContain('未知等级')
+    expect(wrapper.text()).toContain('仅本人账号')
+    expect(wrapper.text()).toContain('号主信息缺失')
+    expect(wrapper.text()).not.toContain('房间内账号')
+
+    const candidateCheckboxes = wrapper.findAll('input[type="checkbox"]')
+    expect(candidateCheckboxes).toHaveLength(5)
+    expect(candidateCheckboxes.filter(
+      (checkbox) => !(checkbox.element as HTMLInputElement).disabled
+    )).toHaveLength(1)
+  })
+
+  it('adds selected compatible accounts with a secure batch idempotency key', async () => {
+    listRoomAccounts
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([roomAccount(12, '待加入账号')])
+    listAccounts.mockResolvedValue(paginatedAccounts([account(12, '待加入账号')]))
+    attachRoomAccounts.mockResolvedValueOnce({
+      success: 1,
+      failed: 0,
+      success_ids: [12],
+      failed_ids: [],
+      results: [{ account_id: 12, success: true }],
+    })
+    vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(
+      '11111111-1111-4111-8111-111111111111'
+    )
+
+    const wrapper = mountDialog()
+    await flushPromises()
+    await wrapper.get('[data-testid="room-accounts-add-tab"]').trigger('click')
+    await wrapper.get('input[type="checkbox"]').setValue(true)
+    await wrapper.get('[data-testid="add-selected-room-accounts"]').trigger('click')
+    await flushPromises()
+
+    expect(attachRoomAccounts).toHaveBeenCalledWith(1, {
+      account_ids: [12],
+      idempotency_key: 'room-add-1-11111111-1111-4111-8111-111111111111',
+    })
+    expect(wrapper.emitted('changed')).toEqual([[
+      { operation: 'add', success: 1, failed: 0 },
+    ]])
+    expect(wrapper.get('[data-testid="room-accounts-operation-summary"]').text())
+      .toContain('accountShare.roomAccounts.addSuccess')
+  })
+
+  it('reuses the same idempotency key when retrying an uncertain network failure', async () => {
+    listRoomAccounts
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([roomAccount(18, '重试账号')])
+    listAccounts.mockResolvedValue(paginatedAccounts([account(18, '重试账号')]))
+    attachRoomAccounts
+      .mockRejectedValueOnce(new Error('网络中断'))
+      .mockResolvedValueOnce({
+        success: 1,
+        failed: 0,
+        success_ids: [18],
+        failed_ids: [],
+        results: [{ account_id: 18, success: true }],
+      })
+    const randomUUID = vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(
+      '44444444-4444-4444-8444-444444444444'
+    )
+
+    const wrapper = mountDialog()
+    await flushPromises()
+    await wrapper.get('[data-testid="room-accounts-add-tab"]').trigger('click')
+    await wrapper.get('input[type="checkbox"]').setValue(true)
+    await wrapper.get('[data-testid="add-selected-room-accounts"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="add-selected-room-accounts"]').trigger('click')
+    await flushPromises()
+
+    expect(randomUUID).toHaveBeenCalledTimes(1)
+    expect(attachRoomAccounts).toHaveBeenCalledTimes(2)
+    expect(attachRoomAccounts.mock.calls[0][1].idempotency_key)
+      .toBe(attachRoomAccounts.mock.calls[1][1].idempotency_key)
+  })
+
+  it('detaches selected members without changing their account mode', async () => {
+    listRoomAccounts
+      .mockResolvedValueOnce([roomAccount(21, '待退出账号')])
+      .mockResolvedValueOnce([])
+    listAccounts.mockResolvedValue(paginatedAccounts([account(21, '待退出账号')]))
+    detachRoomAccounts.mockResolvedValueOnce({
+      success: 1,
+      failed: 0,
+      success_ids: [21],
+      failed_ids: [],
+      results: [{ account_id: 21, success: true }],
+    })
+    vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(
+      '22222222-2222-4222-8222-222222222222'
+    )
+
+    const wrapper = mountDialog()
+    await flushPromises()
+    await wrapper.get('input[type="checkbox"]').setValue(true)
+    await wrapper.get('[data-testid="remove-selected-room-accounts"]').trigger('click')
+    await flushPromises()
+
+    expect(detachRoomAccounts).toHaveBeenCalledWith(1, {
+      account_ids: [21],
+      idempotency_key: 'room-remove-1-22222222-2222-4222-8222-222222222222',
+    })
+    expect(wrapper.emitted('changed')).toEqual([[
+      { operation: 'remove', success: 1, failed: 0 },
+    ]])
+    expect(wrapper.text()).toContain('accountShare.roomAccounts.removeHint')
+  })
+
+  it('reports item-level failures after a partial removal and refreshes real state', async () => {
+    listRoomAccounts
+      .mockResolvedValueOnce([
+        roomAccount(31, '成功账号'),
+        roomAccount(32, '忙碌账号'),
+      ])
+      .mockResolvedValueOnce([roomAccount(32, '忙碌账号')])
+    detachRoomAccounts.mockResolvedValueOnce({
+      success: 1,
+      failed: 1,
+      success_ids: [31],
+      failed_ids: [32],
+      results: [
+        { account_id: 31, success: true },
+        { account_id: 32, success: false, error: '账号仍有运行中请求' },
+      ],
+    })
+    vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(
+      '33333333-3333-4333-8333-333333333333'
+    )
+
+    const wrapper = mountDialog()
+    await flushPromises()
+    await wrapper.get('[data-testid="select-all-room-members"]').trigger('click')
+    await wrapper.get('[data-testid="remove-selected-room-accounts"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="room-accounts-operation-summary"]').text())
+      .toContain('accountShare.roomAccounts.removePartial')
+    expect(wrapper.text()).toContain('忙碌账号')
+    expect(wrapper.text()).toContain('账号仍有运行中请求')
+    expect(listRoomAccounts).toHaveBeenCalledTimes(2)
   })
 })

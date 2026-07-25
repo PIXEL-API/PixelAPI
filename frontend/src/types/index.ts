@@ -856,6 +856,8 @@ export interface Group {
   messages_dispatch_model_config?: OpenAIMessagesDispatchModelConfig;
   require_oauth_only: boolean;
   require_privacy_set: boolean;
+  // 脱敏的号池状态；true 表示当前没有可调度账号，不包含具体账号数量。
+  pool_scarce: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -1375,6 +1377,9 @@ export interface WindowStats {
 export interface UsageProgress {
   utilization: number; // Percentage (0-100+, 100 = 100%)
   resets_at: string | null;
+  window_start?: string | null;
+  stats_available_from?: string | null;
+  stats_complete?: boolean;
   remaining_seconds: number;
   window_stats?: WindowStats | null; // 窗口期统计（从窗口开始到当前的使用量）
   used_requests?: number;
@@ -1856,6 +1861,7 @@ export interface RedeemCode {
   id: number;
   code: string;
   type: RedeemCodeType;
+  category?: string;
   value: number;
   status: "active" | "used" | "expired" | "unused";
   used_by: number | null;
@@ -1871,6 +1877,7 @@ export interface RedeemCode {
 export interface GenerateRedeemCodesRequest {
   count: number;
   type: RedeemCodeType;
+  category?: string;
   value: number;
   group_id?: number | null; // 订阅类型专用
   validity_days?: number; // 订阅类型专用
@@ -2170,6 +2177,11 @@ export interface UserBalanceLedgerQueryParams {
 
 // ==================== Account Usage Statistics ====================
 
+export interface AccountStatsRange {
+  startDate: string;
+  endDate: string;
+}
+
 export interface AccountUsageHistory {
   date: string;
   label: string;
@@ -2228,9 +2240,19 @@ export interface AccountUsageSummary {
   } | null;
 }
 
+export interface AccountUsageLifetimeSummary {
+  available_from?: string | null;
+  available_to?: string | null;
+  source_account_count: number;
+  total_cost: number;
+  total_requests: number;
+  total_tokens: number;
+}
+
 export interface AccountUsageStatsResponse {
   history: AccountUsageHistory[];
   summary: AccountUsageSummary;
+  lifetime: AccountUsageLifetimeSummary;
   models: ModelStat[];
   endpoints: EndpointStat[];
   upstream_endpoints: EndpointStat[];

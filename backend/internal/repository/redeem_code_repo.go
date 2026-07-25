@@ -27,6 +27,7 @@ func (r *redeemCodeRepository) Create(ctx context.Context, code *service.RedeemC
 	created, err := client.RedeemCode.Create().
 		SetCode(code.Code).
 		SetType(code.Type).
+		SetCategory(code.Category).
 		SetValue(code.Value).
 		SetStatus(code.Status).
 		SetNotes(code.Notes).
@@ -47,12 +48,14 @@ func (r *redeemCodeRepository) CreateBatch(ctx context.Context, codes []service.
 		return nil
 	}
 
+	client := clientFromContext(ctx, r.client)
 	builders := make([]*dbent.RedeemCodeCreate, 0, len(codes))
 	for i := range codes {
 		c := &codes[i]
-		b := r.client.RedeemCode.Create().
+		b := client.RedeemCode.Create().
 			SetCode(c.Code).
 			SetType(c.Type).
+			SetCategory(c.Category).
 			SetValue(c.Value).
 			SetStatus(c.Status).
 			SetNotes(c.Notes).
@@ -63,7 +66,15 @@ func (r *redeemCodeRepository) CreateBatch(ctx context.Context, codes []service.
 		builders = append(builders, b)
 	}
 
-	return r.client.RedeemCode.CreateBulk(builders...).Exec(ctx)
+	created, err := client.RedeemCode.CreateBulk(builders...).Save(ctx)
+	if err != nil {
+		return err
+	}
+	for i := range created {
+		codes[i].ID = created[i].ID
+		codes[i].CreatedAt = created[i].CreatedAt
+	}
+	return nil
 }
 
 func (r *redeemCodeRepository) GetByID(ctx context.Context, id int64) (*service.RedeemCode, error) {
@@ -97,11 +108,25 @@ func (r *redeemCodeRepository) Delete(ctx context.Context, id int64) error {
 	return err
 }
 
-func (r *redeemCodeRepository) List(ctx context.Context, params pagination.PaginationParams) ([]service.RedeemCode, *pagination.PaginationResult, error) {
-	return r.ListWithFilters(ctx, params, "", "", "")
+func (r *redeemCodeRepository) DeleteBatch(ctx context.Context, ids []int64) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	client := clientFromContext(ctx, r.client)
+	deleted, err := client.RedeemCode.Delete().
+		Where(
+			redeemcode.IDIn(ids...),
+			redeemcode.StatusEQ(service.StatusUnused),
+		).
+		Exec(ctx)
+	return int64(deleted), err
 }
 
-func (r *redeemCodeRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, codeType, status, search string) ([]service.RedeemCode, *pagination.PaginationResult, error) {
+func (r *redeemCodeRepository) List(ctx context.Context, params pagination.PaginationParams) ([]service.RedeemCode, *pagination.PaginationResult, error) {
+	return r.ListWithFilters(ctx, params, "", "", "", "")
+}
+
+func (r *redeemCodeRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, codeType, status, category, search string) ([]service.RedeemCode, *pagination.PaginationResult, error) {
 	q := r.client.RedeemCode.Query()
 
 	if codeType != "" {
@@ -109,6 +134,11 @@ func (r *redeemCodeRepository) ListWithFilters(ctx context.Context, params pagin
 	}
 	if status != "" {
 		q = q.Where(redeemcode.StatusEQ(status))
+	}
+	if category == service.RedeemCodeUncategorizedFilter {
+		q = q.Where(redeemcode.CategoryEQ(""))
+	} else if category != "" {
+		q = q.Where(redeemcode.CategoryEQ(category))
 	}
 	if search != "" {
 		q = q.Where(
@@ -143,6 +173,26 @@ func (r *redeemCodeRepository) ListWithFilters(ctx context.Context, params pagin
 	return outCodes, paginationResultFromTotal(int64(total), params), nil
 }
 
+func (r *redeemCodeRepository) ListCategories(ctx context.Context) ([]string, error) {
+	var rows []struct {
+		Category string `json:"category"`
+	}
+	if err := r.client.RedeemCode.Query().
+		Where(redeemcode.CategoryNEQ("")).
+		Order(dbent.Asc(redeemcode.FieldCategory)).
+		Unique(true).
+		Select(redeemcode.FieldCategory).
+		Scan(ctx, &rows); err != nil {
+		return nil, err
+	}
+
+	categories := make([]string, 0, len(rows))
+	for i := range rows {
+		categories = append(categories, rows[i].Category)
+	}
+	return categories, nil
+}
+
 func redeemCodeListOrder(params pagination.PaginationParams) []func(*entsql.Selector) {
 	sortBy := strings.ToLower(strings.TrimSpace(params.SortBy))
 	sortOrder := params.NormalizedSortOrder(pagination.SortOrderDesc)
@@ -151,6 +201,8 @@ func redeemCodeListOrder(params pagination.PaginationParams) []func(*entsql.Sele
 	switch sortBy {
 	case "type":
 		field = redeemcode.FieldType
+	case "category":
+		field = redeemcode.FieldCategory
 	case "value":
 		field = redeemcode.FieldValue
 	case "status":
@@ -176,6 +228,7 @@ func (r *redeemCodeRepository) Update(ctx context.Context, code *service.RedeemC
 	up := client.RedeemCode.UpdateOneID(code.ID).
 		SetCode(code.Code).
 		SetType(code.Type).
+		SetCategory(code.Category).
 		SetValue(code.Value).
 		SetStatus(code.Status).
 		SetNotes(code.Notes).
@@ -303,6 +356,7 @@ func redeemCodeEntityToService(m *dbent.RedeemCode) *service.RedeemCode {
 		ID:           m.ID,
 		Code:         m.Code,
 		Type:         m.Type,
+		Category:     m.Category,
 		Value:        m.Value,
 		Status:       m.Status,
 		UsedBy:       m.UsedBy,

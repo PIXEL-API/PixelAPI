@@ -24,7 +24,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -1326,18 +1326,16 @@ func (h *AccountHandler) GetStats(c *gin.Context) {
 		return
 	}
 
-	// Parse days parameter (default 30)
-	days := 30
-	if daysStr := c.Query("days"); daysStr != "" {
-		if d, err := strconv.Atoi(daysStr); err == nil && d > 0 && d <= 90 {
-			days = d
-		}
+	startTime, endTime, err := usagestats.ResolveAccountStatsDateRange(
+		c.Query("start_date"),
+		c.Query("end_date"),
+		c.Query("days"),
+		time.Now(),
+	)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
 	}
-
-	// Calculate time range
-	now := timezone.Now()
-	endTime := timezone.StartOfDay(now.AddDate(0, 0, 1))
-	startTime := timezone.StartOfDay(now.AddDate(0, 0, -days+1))
 
 	stats, err := h.accountUsageService.GetAccountUsageStats(c.Request.Context(), accountID, startTime, endTime)
 	if err != nil {

@@ -4,6 +4,7 @@ import { nextTick } from 'vue'
 
 import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
+import GroupOptionItem from '@/components/common/GroupOptionItem.vue'
 import KeysView from '../KeysView.vue'
 
 const {
@@ -81,6 +82,7 @@ const group = {
   rate_multiplier: 1,
   effective_rate_multiplier: 1,
   effective_rate_multiplier_source: 'group_default',
+  pool_scarce: false,
 }
 
 const apiKey = {
@@ -322,6 +324,27 @@ describe('user KeysView accessibility interactions', () => {
     expect(wrapper.get('select-stub[arialabelledby="key-status-label"]').exists()).toBe(true)
   })
 
+  it('sorts recommended groups before scarce groups while keeping scarce options selectable', async () => {
+    getAvailableGroups.mockResolvedValue([
+      { ...group, id: 10, name: 'Scarce pool', pool_scarce: true },
+      { ...group, id: 11, name: 'Healthy pool', pool_scarce: false },
+    ])
+    const wrapper = mountKeysView()
+    await flushPromises()
+    await wrapper.get('[data-tour="keys-create-btn"]').trigger('click')
+    await nextTick()
+
+    const options = wrapper.getComponent('[data-tour="key-form-group"]').props('options') as Array<{
+      label: string
+      poolScarce: boolean
+      disabled?: boolean
+    }>
+
+    expect(options.map((option) => option.label)).toEqual(['Healthy pool', 'Scarce pool'])
+    expect(options[1].poolScarce).toBe(true)
+    expect(options[1].disabled).toBeUndefined()
+  })
+
   it('constrains long API key names without forcing the table wider', async () => {
     const wrapper = mountKeysView()
     await flushPromises()
@@ -452,11 +475,46 @@ describe('KeysView group-route translations', () => {
       expect(locale.keys.customKeyTooLong).toBeTruthy()
       expect(locale.keys.groupFilterLabel).toBeTruthy()
       expect(locale.keys.statusFilterLabel).toBeTruthy()
+      expect(locale.keys.groupRecommended).toBeTruthy()
+      expect(locale.keys.poolScarceWarning).toBeTruthy()
       for (const key of expectedKeys) {
         expect(locale.keys.groupRoutes[key]).toBeTruthy()
       }
       expect(Object.values(locale.keys.groupRoutes.validation)).toHaveLength(5)
       expect(Object.values(locale.keys.groupRoutes.validation).every(Boolean)).toBe(true)
     }
+  })
+})
+
+describe('GroupOptionItem pool status', () => {
+  it('renders a scarce pool warning as red status text before the group badge', () => {
+    const wrapper = mount(GroupOptionItem, {
+      props: {
+        name: 'Scarce pool',
+        platform: 'openai',
+        statusLabel: '号池紧缺，可能无法使用',
+        statusTone: 'warning',
+      },
+    })
+
+    const warning = wrapper.get('span.text-red-600')
+    expect(warning.text()).toBe('号池紧缺，可能无法使用')
+    expect(warning.element.compareDocumentPosition(wrapper.getComponent({ name: 'GroupBadge' }).element))
+      .toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+  })
+
+  it('renders usable pools with a green recommended status', () => {
+    const wrapper = mount(GroupOptionItem, {
+      props: {
+        name: 'Healthy pool',
+        platform: 'openai',
+        statusLabel: '推荐使用',
+        statusTone: 'recommended',
+      },
+    })
+
+    const recommendation = wrapper.get('span.text-emerald-600')
+    expect(recommendation.text()).toBe('推荐使用')
+    expect(recommendation.classes()).toContain('bg-emerald-50')
   })
 })

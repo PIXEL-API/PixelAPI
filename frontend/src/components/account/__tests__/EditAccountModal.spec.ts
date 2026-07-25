@@ -1,11 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 
-const { updateAccountMock, updateUserAccountMock, checkMixedChannelRiskMock } = vi.hoisted(() => ({
+const {
+  updateAccountMock,
+  updateUserAccountMock,
+  getUserAccountMock,
+  convertPlacementMock,
+  checkMixedChannelRiskMock
+} = vi.hoisted(() => ({
   updateAccountMock: vi.fn(),
   updateUserAccountMock: vi.fn(),
+  getUserAccountMock: vi.fn(),
+  convertPlacementMock: vi.fn(),
   checkMixedChannelRiskMock: vi.fn()
 }))
 
@@ -49,7 +57,14 @@ vi.mock('@/api/admin/accounts', () => ({
 
 vi.mock('@/api/accounts', () => ({
   accountsAPI: {
-    update: updateUserAccountMock
+    update: updateUserAccountMock,
+    getById: getUserAccountMock
+  }
+}))
+
+vi.mock('@/api/accountShare', () => ({
+  accountShareAPI: {
+    convertAccountExternalPlacement: convertPlacementMock
   }
 }))
 
@@ -203,6 +218,79 @@ function mountModal(account = buildAccount(), extraProps: Record<string, unknown
 describe('EditAccountModal', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    convertPlacementMock.mockReset()
+    getUserAccountMock.mockReset()
+  })
+
+  it('用户可选择平台账号模式且无需选择具体房间', async () => {
+    const account = buildAccount()
+    account.type = 'oauth'
+    account.credentials = { access_token: 'oauth-token' }
+    account.share_mode = 'private'
+    updateUserAccountMock.mockReset()
+    updateUserAccountMock.mockResolvedValue(account)
+    convertPlacementMock.mockResolvedValue({
+      account_id: account.id,
+      previous: { target: 'private', state: 'active', version: 1 },
+      current: { target: 'room', state: 'active', version: 2 },
+      unchanged: false
+    })
+    getUserAccountMock.mockResolvedValue({
+      ...account,
+      share_mode: 'private',
+      external_placement: { target: 'room', state: 'active', version: 2 }
+    })
+    vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(
+      '11111111-1111-4111-8111-111111111111'
+    )
+
+    const wrapper = mountModal(account, {
+      accountScope: 'user',
+      ownerUserId: 9
+    })
+
+    expect(wrapper.find('[data-testid="placement-target-private"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="placement-target-public_pool"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="placement-target-room"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="refresh-compatible-rooms"]').exists()).toBe(false)
+
+    await wrapper.get('[data-testid="placement-target-room"]').setValue()
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(updateUserAccountMock).toHaveBeenCalledTimes(1)
+    expect(convertPlacementMock).toHaveBeenCalledWith(account.id, {
+      target: 'room',
+      idempotency_key: 'account-placement-1-11111111-1111-4111-8111-111111111111'
+    })
+    expect(getUserAccountMock).toHaveBeenCalledWith(account.id)
+    expect(wrapper.emitted('updated')).toHaveLength(1)
+  })
+
+  it('普通设置已保存但模式切换失败时通知父级刷新账号', async () => {
+    const account = buildAccount()
+    account.type = 'oauth'
+    account.credentials = { access_token: 'oauth-token' }
+    account.share_mode = 'private'
+    updateUserAccountMock.mockReset()
+    updateUserAccountMock.mockResolvedValue(account)
+    convertPlacementMock.mockRejectedValue({ message: '账号正在使用中' })
+    vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(
+      '44444444-4444-4444-8444-444444444444'
+    )
+    const wrapper = mountModal(account, {
+      accountScope: 'user',
+      ownerUserId: 9
+    })
+
+    await wrapper.get('[data-testid="placement-target-public_pool"]').setValue()
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(updateUserAccountMock).toHaveBeenCalledTimes(1)
+    expect(convertPlacementMock).toHaveBeenCalledTimes(1)
+    expect(wrapper.emitted('updated')).toHaveLength(1)
+    expect(wrapper.find('[data-testid="edit-placement-save-error"]').exists()).toBe(true)
   })
 
   it('reopening the same account rehydrates the OpenAI whitelist from props', async () => {

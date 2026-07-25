@@ -75,6 +75,22 @@ func (r *userAgentIdentityShareRepo) GetByIDs(_ context.Context, accountIDs []in
 	return accounts, nil
 }
 
+func (r *userAgentIdentityShareRepo) ListOwnedAccountIDs(
+	_ context.Context,
+	ownerUserID int64,
+	accountIDs []int64,
+) ([]int64, error) {
+	ownedIDs := make([]int64, 0, len(accountIDs))
+	for _, accountID := range accountIDs {
+		account := r.accounts[accountID]
+		if account == nil || account.OwnerUserID == nil || *account.OwnerUserID != ownerUserID {
+			continue
+		}
+		ownedIDs = append(ownedIDs, accountID)
+	}
+	return ownedIDs, nil
+}
+
 func (r *userAgentIdentityShareRepo) Update(_ context.Context, account *service.Account) error {
 	r.accounts[account.ID] = cloneUserAgentIdentityShareAccount(account)
 	return nil
@@ -133,6 +149,10 @@ type userAgentIdentityPlacementRepo struct {
 	service.AccountShareModeRepository
 	service.AccountShareRoomRepository
 	accountRepo *userAgentIdentityShareRepo
+}
+
+func (r *userAgentIdentityPlacementRepo) HasRoomAccount(context.Context, int64, int64) (bool, error) {
+	return false, nil
 }
 
 func (r *userAgentIdentityPlacementRepo) IsModeGroup(context.Context, int64) (bool, error) {
@@ -420,4 +440,123 @@ func TestUserAccountHandlerSetPublicShareExecutorValidatesAgentIdentityBeforeApp
 	stored := repo.accounts[account.ID]
 	require.Equal(t, service.AccountShareStatusApproved, stored.ShareStatus)
 	require.Equal(t, []int64{userAgentIdentityPrivateGroupID, userAgentIdentityPublicGroupID}, stored.GroupIDs)
+}
+
+func TestUserAccountHandlerConvertExternalPlacementBatch(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ownerUserID := int64(101)
+	first := newUserAgentIdentityShareAccount(
+		t,
+		ownerUserID,
+		service.AccountShareModePrivate,
+		service.AccountShareStatusApproved,
+	)
+	second := newUserAgentIdentityShareAccount(
+		t,
+		ownerUserID,
+		service.AccountShareModePrivate,
+		service.AccountShareStatusApproved,
+	)
+	second.ID = 2
+	second.Name = "Agent Identity 2"
+
+	handler, repo, _, _ := newUserAgentIdentityShareHandler(t, first, http.StatusOK, "")
+	repo.accounts[second.ID] = cloneUserAgentIdentityShareAccount(second)
+
+	router := gin.New()
+	router.POST("/accounts/external-placement:convert-batch", func(c *gin.Context) {
+		c.Set(
+			string(middleware2.ContextKeyUser),
+			middleware2.AuthSubject{UserID: ownerUserID},
+		)
+		handler.ConvertExternalPlacementBatch(c)
+	})
+	body := []byte(`{
+		"account_ids":[2,1,2],
+		"target":"public_pool",
+		"idempotency_key":"batch-placement-test"
+	}`)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/accounts/external-placement:convert-batch",
+		bytes.NewReader(body),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	var envelope struct {
+		Code int `json:"code"`
+		Data struct {
+			Success    int     `json:"success"`
+			Failed     int     `json:"failed"`
+			SuccessIDs []int64 `json:"success_ids"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &envelope))
+	require.Zero(t, envelope.Code)
+	require.Equal(t, 2, envelope.Data.Success)
+	require.Zero(t, envelope.Data.Failed)
+	require.Equal(t, []int64{1, 2}, envelope.Data.SuccessIDs)
+	for _, accountID := range []int64{1, 2} {
+		stored := repo.accounts[accountID]
+		require.Equal(t, service.AccountShareModePublic, stored.ShareMode)
+		require.NotNil(t, stored.ExternalPlacement)
+		require.Equal(
+			t,
+			service.AccountExternalPlacementPublicPool,
+			stored.ExternalPlacement.Target,
+		)
+	}
+}
+
+func TestUserAccountHandlerConvertExternalPlacementBatchRejectsForeignAccountBeforeChanges(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ownerUserID := int64(101)
+	foreignOwnerUserID := int64(202)
+	owned := newUserAgentIdentityShareAccount(
+		t,
+		ownerUserID,
+		service.AccountShareModePrivate,
+		service.AccountShareStatusApproved,
+	)
+	foreign := newUserAgentIdentityShareAccount(
+		t,
+		foreignOwnerUserID,
+		service.AccountShareModePrivate,
+		service.AccountShareStatusApproved,
+	)
+	foreign.ID = 2
+
+	handler, repo, _, _ := newUserAgentIdentityShareHandler(t, owned, http.StatusOK, "")
+	repo.accounts[foreign.ID] = cloneUserAgentIdentityShareAccount(foreign)
+
+	router := gin.New()
+	router.POST("/accounts/external-placement:convert-batch", func(c *gin.Context) {
+		c.Set(
+			string(middleware2.ContextKeyUser),
+			middleware2.AuthSubject{UserID: ownerUserID},
+		)
+		handler.ConvertExternalPlacementBatch(c)
+	})
+	body := []byte(`{
+		"account_ids":[1,2],
+		"target":"public_pool",
+		"idempotency_key":"batch-placement-foreign-test"
+	}`)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/accounts/external-placement:convert-batch",
+		bytes.NewReader(body),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusNotFound, recorder.Code, recorder.Body.String())
+	require.Equal(t, service.AccountShareModePrivate, repo.accounts[owned.ID].ShareMode)
+	require.Nil(t, repo.accounts[owned.ID].ExternalPlacement)
+	require.Equal(t, service.AccountShareModePrivate, repo.accounts[foreign.ID].ShareMode)
+	require.Nil(t, repo.accounts[foreign.ID].ExternalPlacement)
 }

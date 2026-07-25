@@ -17,9 +17,10 @@ import (
 )
 
 const (
-	grokUpstreamUserAgent     = "sub2api-grok/1.0"
-	grokCLIVersion            = "0.2.93"
-	grokDefaultResponsesModel = "grok-4.5"
+	grokUpstreamUserAgent        = "sub2api-grok/1.0"
+	grokCLIVersion               = "0.2.93"
+	grokDefaultResponsesModel    = "grok-4.5"
+	grok45DefaultReasoningEffort = "high"
 )
 
 func (s *OpenAIGatewayService) forwardGrokResponses(
@@ -42,11 +43,14 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	if isGrokImageGenerationModel(upstreamModel) {
 		return nil, fmt.Errorf("model %s is an image model and is not available on the Responses endpoint; use /v1/images/generations instead", upstreamModel)
 	}
-	cacheIdentity := resolveGrokCacheIdentity(c, body, "", upstreamModel)
 	patchedBody, err := patchGrokResponsesBody(body, upstreamModel)
 	if err != nil {
 		return nil, err
 	}
+	// Resolve against the body xAI will receive so promoted Codex Lite tools
+	// participate in the stable cache prefix.
+	cacheIdentity := resolveGrokCacheIdentity(c, patchedBody, "", upstreamModel)
+	mixedCacheIntentBody := append([]byte(nil), patchedBody...)
 	patchedBody, err = s.restoreGrokReasoningItems(ctx, account, patchedBody)
 	if err != nil {
 		writeGrokReasoningCompatibilityError(c, err)
@@ -59,6 +63,16 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	patchedBody, err = applyGrokResponsesCacheIdentity(patchedBody, body, cacheIdentity, account.IsGrokOAuth())
 	if err != nil {
 		return nil, fmt.Errorf("apply grok prompt cache identity: %w", err)
+	}
+	patchedBody, err = applyGrokFreeRequestToolCacheRoute(
+		c,
+		patchedBody,
+		mixedCacheIntentBody,
+		account,
+		cacheIdentity,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("apply grok Free function-tool cache route: %w", err)
 	}
 	setOpsUpstreamRequestBody(c, patchedBody)
 
@@ -176,14 +190,25 @@ func (s *OpenAIGatewayService) forwardGrokChatCompletions(
 		upstreamModel = grokDefaultResponsesModel
 	}
 
-	cacheIdentity := resolveGrokCacheIdentity(c, body, "", upstreamModel)
 	patchedBody, err := patchGrokResponsesBody(body, upstreamModel)
 	if err != nil {
 		return nil, err
 	}
+	cacheIdentity := resolveGrokCacheIdentity(c, patchedBody, "", upstreamModel)
+	mixedCacheIntentBody := append([]byte(nil), patchedBody...)
 	patchedBody, err = applyGrokResponsesCacheIdentity(patchedBody, body, cacheIdentity, account.IsGrokOAuth())
 	if err != nil {
 		return nil, fmt.Errorf("apply grok prompt cache identity: %w", err)
+	}
+	patchedBody, err = applyGrokFreeRequestToolCacheRoute(
+		c,
+		patchedBody,
+		mixedCacheIntentBody,
+		account,
+		cacheIdentity,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("apply grok Free function-tool cache route: %w", err)
 	}
 	setOpsUpstreamRequestBody(c, patchedBody)
 
@@ -302,6 +327,10 @@ func patchGrokResponsesBody(body []byte, upstreamModel string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	out, err = sanitizeGrokResponsesInput(out)
+	if err != nil {
+		return nil, err
+	}
 	out, err = sanitizeGrokReasoningNullContent(out)
 	if err != nil {
 		return nil, err
@@ -315,6 +344,9 @@ func patchGrokResponsesBody(body []byte, upstreamModel string) ([]byte, error) {
 
 func sanitizeGrokResponsesModelCapabilities(body []byte, upstreamModel string) ([]byte, error) {
 	if !grokModelRejectsReasoningEffort(upstreamModel) {
+		if isGrok45Model(upstreamModel) {
+			return applyGrok45ReasoningEffortPolicy(body)
+		}
 		return body, nil
 	}
 
@@ -332,17 +364,76 @@ func sanitizeGrokResponsesModelCapabilities(body []byte, upstreamModel string) (
 	return out, nil
 }
 
-func grokModelRejectsReasoningEffort(model string) bool {
-	model = strings.TrimSpace(strings.ToLower(model))
-	if slash := strings.LastIndex(model, "/"); slash >= 0 {
-		model = strings.TrimSpace(model[slash+1:])
+func applyGrok45ReasoningEffortPolicy(body []byte) ([]byte, error) {
+	reasoning := gjson.GetBytes(body, "reasoning")
+	if reasoning.Exists() && !reasoning.IsObject() {
+		// Preserve malformed explicit input so xAI can return its schema error;
+		// do not silently replace the client's value with a valid object.
+		return body, nil
 	}
-	switch model {
+
+	for _, path := range []string{"reasoning.effort", "reasoning_effort", "reasoningEffort"} {
+		effort := gjson.GetBytes(body, path)
+		if !effort.Exists() {
+			continue
+		}
+		if effort.Type != gjson.String {
+			return body, nil
+		}
+		normalized := normalizeGrok45ReasoningEffort(effort.String())
+		if normalized == "" {
+			return body, nil
+		}
+		if path == "reasoningEffort" {
+			// Preserve the compatibility field while also adding the official
+			// Responses shape used by xAI and the usage recorder.
+			return sjson.SetBytes(body, "reasoning.effort", normalized)
+		}
+		return sjson.SetBytes(body, path, normalized)
+	}
+
+	return sjson.SetBytes(body, "reasoning.effort", grok45DefaultReasoningEffort)
+}
+
+func normalizeGrok45ReasoningEffort(raw string) string {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	value = strings.NewReplacer("-", "", "_", "", " ", "").Replace(value)
+	switch value {
+	case "low", "medium", "high":
+		return value
+	case "xhigh", "extrahigh", "max":
+		// Grok 4.5 exposes high as its maximum supported effort. Codex clients
+		// commonly send xhigh/max, so cap those explicit maxima deterministically.
+		return "high"
+	default:
+		return ""
+	}
+}
+
+func isGrok45Model(model string) bool {
+	switch normalizeGrokModelID(model) {
+	case "grok", "grok-latest", "grok-4.5", "grok-4.5-latest":
+		return true
+	default:
+		return false
+	}
+}
+
+func grokModelRejectsReasoningEffort(model string) bool {
+	switch normalizeGrokModelID(model) {
 	case "grok-composer", "grok-composer-2.5-fast", "composer-2.5":
 		return true
 	default:
 		return false
 	}
+}
+
+func normalizeGrokModelID(model string) string {
+	model = strings.TrimSpace(strings.ToLower(model))
+	if slash := strings.LastIndex(model, "/"); slash >= 0 {
+		model = strings.TrimSpace(model[slash+1:])
+	}
+	return model
 }
 
 // sanitizeGrokReasoningNullContent removes content:null from reasoning input
@@ -418,6 +509,87 @@ func deleteJSONFields(value any, fields map[string]struct{}) bool {
 	default:
 		return false
 	}
+}
+
+// additional_tools is a Codex/Responses Lite private input carrier. xAI
+// rejects the carrier itself but accepts supported tools at the top level.
+func sanitizeGrokResponsesInput(body []byte) ([]byte, error) {
+	if !bytes.Contains(body, []byte(`"additional_tools"`)) {
+		return body, nil
+	}
+	input := gjson.GetBytes(body, "input")
+	if !input.Exists() || !input.IsArray() {
+		return body, nil
+	}
+
+	rawItems := input.Array()
+	filtered := make([]json.RawMessage, 0, len(rawItems))
+	topLevelTools := gjson.GetBytes(body, "tools")
+	mergedTools := make([]json.RawMessage, 0)
+	seenTools := make(map[string]struct{})
+	appendTool := func(tool gjson.Result) bool {
+		key := grokResponsesToolDedupKey(tool)
+		if _, exists := seenTools[key]; exists {
+			return false
+		}
+		seenTools[key] = struct{}{}
+		mergedTools = append(mergedTools, json.RawMessage(tool.Raw))
+		return true
+	}
+	if topLevelTools.IsArray() {
+		for _, tool := range topLevelTools.Array() {
+			seenTools[grokResponsesToolDedupKey(tool)] = struct{}{}
+			mergedTools = append(mergedTools, json.RawMessage(tool.Raw))
+		}
+	}
+
+	promoted := false
+	for _, item := range rawItems {
+		if strings.TrimSpace(item.Get("type").String()) == "additional_tools" {
+			tools := item.Get("tools")
+			if tools.IsArray() {
+				for _, tool := range tools.Array() {
+					if appendTool(tool) {
+						promoted = true
+					}
+				}
+			}
+			continue
+		}
+		filtered = append(filtered, json.RawMessage(item.Raw))
+	}
+	if len(filtered) == len(rawItems) {
+		return body, nil
+	}
+
+	encodedInput, err := json.Marshal(filtered)
+	if err != nil {
+		return nil, err
+	}
+	body, err = sjson.SetRawBytes(body, "input", encodedInput)
+	if err != nil || !promoted {
+		return body, err
+	}
+	encodedTools, err := json.Marshal(mergedTools)
+	if err != nil {
+		return nil, err
+	}
+	return sjson.SetRawBytes(body, "tools", encodedTools)
+}
+
+func grokResponsesToolDedupKey(tool gjson.Result) string {
+	toolType := strings.TrimSpace(tool.Get("type").String())
+	if toolType != "" {
+		if name := strings.TrimSpace(tool.Get("name").String()); name != "" {
+			return "type:" + toolType + "\x00name:" + name
+		}
+		if toolType == "mcp" {
+			if label := strings.TrimSpace(tool.Get("server_label").String()); label != "" {
+				return "type:mcp\x00server_label:" + label
+			}
+		}
+	}
+	return "json:" + normalizeCompatSeedJSON(json.RawMessage(tool.Raw))
 }
 
 var grokResponsesSupportedToolTypes = map[string]struct{}{

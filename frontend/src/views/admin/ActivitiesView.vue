@@ -1,450 +1,1027 @@
 <template>
   <AppLayout>
-    <div class="mx-auto w-full max-w-7xl space-y-5">
-      <section class="rounded-lg border border-gray-200 bg-white p-5 dark:border-dark-700 dark:bg-dark-900">
-        <div class="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-          <div>
-            <h1 class="text-xl font-semibold text-gray-900 dark:text-white">{{ t('admin.activities.title') }}</h1>
-            <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">{{ t('admin.activities.description') }}</p>
+    <div class="admin-activity-page data-page" :aria-busy="activePanelLoading">
+      <header class="admin-mobile-heading">
+        <div>
+          <h1>{{ t('admin.activities.title') }}</h1>
+          <p>{{ t('admin.activities.description') }}</p>
+        </div>
+        <button type="button" class="btn btn-primary admin-mobile-create" @click="openCreate">
+          <Icon name="plus" size="sm" />
+          <span>{{ t('admin.activities.create') }}</span>
+        </button>
+      </header>
+
+      <div class="activity-workspace-bar">
+        <nav class="activity-workspace-tabs" role="tablist" :aria-label="t('admin.activities.workspace.tabsLabel')">
+          <button
+            v-for="(tab, index) in workspaceTabs"
+            :id="workspaceTabId(tab.key)"
+            :key="tab.key"
+            type="button"
+            role="tab"
+            class="activity-workspace-tab"
+            :class="{ 'activity-workspace-tab-active': activeWorkspace === tab.key }"
+            :aria-controls="workspacePanelId(tab.key)"
+            :aria-selected="activeWorkspace === tab.key"
+            :tabindex="activeWorkspace === tab.key ? 0 : -1"
+            @click="selectWorkspace(tab.key)"
+            @keydown="handleWorkspaceKeydown($event, index)"
+          >
+            <Icon :name="tab.icon" size="sm" />
+            <span>{{ tab.label }}</span>
+            <em v-if="tab.count !== null">{{ formatCount(tab.count) }}</em>
+          </button>
+        </nav>
+
+        <div class="activity-workspace-actions">
+          <button
+            type="button"
+            class="btn btn-secondary btn-icon workspace-refresh"
+            :disabled="activePanelLoading || (activeWorkspace === 'progress' && !selectedStatsCampaignId)"
+            :title="t('common.refresh')"
+            :aria-label="t('common.refresh')"
+            @click="refreshActiveWorkspace"
+          >
+            <Icon name="refresh" size="sm" :class="{ 'activity-spin': activePanelLoading }" />
+          </button>
+          <button type="button" class="btn btn-primary workspace-create" @click="openCreate">
+            <Icon name="plus" size="sm" />
+            <span>{{ t('admin.activities.create') }}</span>
+          </button>
+        </div>
+      </div>
+
+      <section
+        v-if="activeWorkspace === 'campaigns'"
+        :id="workspacePanelId('campaigns')"
+        role="tabpanel"
+        :aria-labelledby="workspaceTabId('campaigns')"
+        class="activity-workspace-panel"
+      >
+        <div class="activity-list-toolbar">
+          <div class="activity-toolbar-copy">
+            <h2>{{ t('admin.activities.workspace.campaignsTitle') }}</h2>
+            <p>{{ t('admin.activities.workspace.campaignsDescription') }}</p>
           </div>
-          <div class="flex flex-wrap items-center gap-2">
-            <input v-model.trim="keyword" class="input min-w-56" :placeholder="t('admin.activities.searchPlaceholder')" @input="handleSearch" />
-            <select v-model="statusFilter" class="input w-36" @change="reloadCampaigns">
-              <option value="">{{ t('admin.activities.allStatus') }}</option>
-              <option v-for="option in statusOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-            </select>
-            <button type="button" class="btn btn-secondary" :disabled="loading" @click="reloadCampaigns">{{ t('common.refresh') }}</button>
-            <button type="button" class="btn btn-primary" @click="openCreate">{{ t('admin.activities.create') }}</button>
+          <div class="activity-filter-row">
+            <label class="activity-search-field">
+              <span class="sr-only">{{ t('admin.activities.searchPlaceholder') }}</span>
+              <Icon name="search" size="sm" />
+              <input
+                v-model.trim="keyword"
+                type="search"
+                :placeholder="t('admin.activities.searchPlaceholder')"
+                @input="handleSearch"
+              />
+            </label>
+            <label class="activity-filter-field">
+              <span class="sr-only">{{ t('common.status') }}</span>
+              <select v-model="statusFilter" @change="reloadCampaigns">
+                <option value="">{{ t('admin.activities.allStatus') }}</option>
+                <option v-for="option in statusOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+              </select>
+              <Icon name="chevronDown" size="xs" />
+            </label>
           </div>
+        </div>
+
+        <div class="activity-table-shell">
+          <div class="activity-desktop-table">
+            <div class="activity-table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>{{ t('admin.activities.columns.name') }}</th>
+                    <th>{{ t('common.status') }}</th>
+                    <th>{{ t('admin.activities.columns.rule') }}</th>
+                    <th>{{ t('admin.activities.columns.prizes') }}</th>
+                    <th>{{ t('admin.activities.columns.drawAt') }}</th>
+                    <th>{{ t('admin.activities.columns.public') }}</th>
+                    <th class="activity-actions-heading">{{ t('common.actions') }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-if="loading">
+                    <td colspan="7">
+                      <div class="activity-table-state">
+                        <Icon name="refresh" size="md" class="activity-spin" />
+                        <span>{{ t('common.loading') }}</span>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr v-else-if="campaigns.length === 0">
+                    <td colspan="7">
+                      <div class="activity-table-state">
+                        <span class="activity-state-icon"><Icon name="gift" size="lg" /></span>
+                        <strong>{{ t('admin.activities.empty') }}</strong>
+                        <p>{{ t('admin.activities.workspace.emptyCampaignsHint') }}</p>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr v-for="campaign in campaigns" v-else :key="campaign.id">
+                    <td>
+                      <div class="activity-name-cell">
+                        <strong>{{ campaign.name }}</strong>
+                        <span>{{ campaign.description || t('admin.activities.workspace.noDescription') }}</span>
+                      </div>
+                    </td>
+                    <td>
+                      <span :class="['admin-status-badge', campaignStatusClass(campaign.status)]">
+                        <i></i>
+                        {{ statusLabel(campaign.status) }}
+                      </span>
+                    </td>
+                    <td>
+                      <div class="activity-rule-cell">
+                        <strong>{{ metricLabel(campaign.rule_config.metric) }} ≥ {{ metricValueText(campaign.rule_config.metric, campaign.rule_config.threshold) }}</strong>
+                        <span>{{ periodLabel(campaign) }} · {{ ticketModeLabel(campaign.rule_config.ticket_mode) }}</span>
+                      </div>
+                    </td>
+                    <td><span class="activity-prize-summary">{{ prizeSummary(campaign) }}</span></td>
+                    <td><span class="activity-date-cell">{{ formatDateTime(campaign.draw_at) || '-' }}</span></td>
+                    <td>
+                      <span :class="['activity-visibility', { 'activity-visibility-off': !campaign.public_enabled }]">
+                        <Icon :name="campaign.public_enabled ? 'eye' : 'eyeOff'" size="xs" />
+                        {{ campaign.public_enabled ? t('common.enabled') : t('common.disabled') }}
+                      </span>
+                    </td>
+                    <td>
+                      <div class="activity-row-actions">
+                        <button
+                          type="button"
+                          class="activity-icon-action"
+                          :title="t('admin.activities.progress.view')"
+                          :aria-label="t('admin.activities.progress.view')"
+                          @click="openProgress(campaign)"
+                        >
+                          <Icon name="chartBar" size="sm" />
+                        </button>
+                        <button
+                          type="button"
+                          class="activity-icon-action"
+                          :title="t('common.edit')"
+                          :aria-label="t('common.edit')"
+                          @click="openEdit(campaign)"
+                        >
+                          <Icon name="edit" size="sm" />
+                        </button>
+                        <button
+                          type="button"
+                          class="activity-icon-action activity-icon-action-primary"
+                          :disabled="campaign.status !== 'active'"
+                          :title="t('admin.activities.drawNow')"
+                          :aria-label="t('admin.activities.drawNow')"
+                          @click="openCampaignAction(campaign, 'draw')"
+                        >
+                          <Icon name="play" size="sm" />
+                        </button>
+                        <button
+                          type="button"
+                          class="activity-icon-action activity-icon-action-danger"
+                          :disabled="campaign.status === 'ended'"
+                          :title="t('admin.activities.end')"
+                          :aria-label="t('admin.activities.end')"
+                          @click="openCampaignAction(campaign, 'end')"
+                        >
+                          <Icon name="xCircle" size="sm" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="activity-mobile-list">
+            <div v-if="loading" class="activity-card-state">
+              <Icon name="refresh" size="md" class="activity-spin" />
+              <span>{{ t('common.loading') }}</span>
+            </div>
+            <div v-else-if="campaigns.length === 0" class="activity-card-state">
+              <span class="activity-state-icon"><Icon name="gift" size="lg" /></span>
+              <strong>{{ t('admin.activities.empty') }}</strong>
+              <p>{{ t('admin.activities.workspace.emptyCampaignsHint') }}</p>
+            </div>
+            <article v-for="campaign in campaigns" v-else :key="campaign.id" class="activity-mobile-card">
+              <header>
+                <div>
+                  <strong>{{ campaign.name }}</strong>
+                  <p>{{ campaign.description || t('admin.activities.workspace.noDescription') }}</p>
+                </div>
+                <span :class="['admin-status-badge', campaignStatusClass(campaign.status)]">
+                  <i></i>
+                  {{ statusLabel(campaign.status) }}
+                </span>
+              </header>
+              <dl>
+                <div>
+                  <dt>{{ t('admin.activities.columns.rule') }}</dt>
+                  <dd>{{ metricLabel(campaign.rule_config.metric) }} ≥ {{ metricValueText(campaign.rule_config.metric, campaign.rule_config.threshold) }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t('admin.activities.columns.drawAt') }}</dt>
+                  <dd>{{ formatDateTime(campaign.draw_at) || '-' }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t('admin.activities.columns.prizes') }}</dt>
+                  <dd>{{ prizeSummary(campaign) }}</dd>
+                </div>
+              </dl>
+              <footer>
+                <button type="button" class="btn btn-secondary btn-sm" @click="openProgress(campaign)">
+                  <Icon name="chartBar" size="sm" />
+                  {{ t('admin.activities.progress.view') }}
+                </button>
+                <button type="button" class="btn btn-secondary btn-sm" @click="openEdit(campaign)">
+                  <Icon name="edit" size="sm" />
+                  {{ t('common.edit') }}
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-secondary btn-sm activity-mobile-draw"
+                  :disabled="campaign.status !== 'active'"
+                  @click="openCampaignAction(campaign, 'draw')"
+                >
+                  <Icon name="play" size="sm" />
+                  {{ t('admin.activities.drawNow') }}
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-secondary btn-sm activity-mobile-end"
+                  :disabled="campaign.status === 'ended'"
+                  @click="openCampaignAction(campaign, 'end')"
+                >
+                  <Icon name="xCircle" size="sm" />
+                  {{ t('admin.activities.end') }}
+                </button>
+              </footer>
+            </article>
+          </div>
+
+          <footer v-if="campaignPagination.total > 0" class="activity-table-footer">
+            <Pagination
+              :page="campaignPagination.page"
+              :page-size="campaignPagination.page_size"
+              :total="campaignPagination.total"
+              @update:page="setCampaignPage"
+              @update:pageSize="setCampaignPageSize"
+            />
+          </footer>
         </div>
       </section>
 
-      <section class="card overflow-hidden">
-        <div class="flex flex-col gap-3 border-b border-gray-100 p-5 dark:border-dark-800 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <h2 class="text-lg font-semibold text-gray-900 dark:text-white">{{ t('admin.activities.progress.title') }}</h2>
-            <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">{{ t('admin.activities.progress.description') }}</p>
+      <section
+        v-else-if="activeWorkspace === 'progress'"
+        :id="workspacePanelId('progress')"
+        role="tabpanel"
+        :aria-labelledby="workspaceTabId('progress')"
+        class="activity-workspace-panel"
+      >
+        <div class="activity-progress-toolbar">
+          <div class="activity-toolbar-copy">
+            <h2>{{ t('admin.activities.progress.title') }}</h2>
+            <p>{{ t('admin.activities.progress.description') }}</p>
           </div>
-          <div class="flex flex-wrap items-center gap-2">
-            <select v-model.number="selectedStatsCampaignId" class="input w-64" @change="loadCampaignStats">
-              <option :value="0">{{ t('admin.activities.progress.selectCampaign') }}</option>
-              <option v-for="campaign in campaigns" :key="campaign.id" :value="campaign.id">{{ campaign.name }}</option>
-            </select>
-            <button type="button" class="btn btn-secondary" :disabled="statsLoading || !selectedStatsCampaignId" @click="loadCampaignStats">{{ t('common.refresh') }}</button>
-          </div>
+          <label class="activity-campaign-select">
+            <span>{{ t('admin.activities.workspace.selectedCampaign') }}</span>
+            <span class="activity-select-control">
+              <select v-model.number="selectedStatsCampaignId" @change="loadCampaignStats">
+                <option :value="0">{{ t('admin.activities.progress.selectCampaign') }}</option>
+                <option v-for="campaign in campaigns" :key="campaign.id" :value="campaign.id">{{ campaign.name }}</option>
+              </select>
+              <Icon name="chevronDown" size="xs" />
+            </span>
+          </label>
         </div>
 
-        <div v-if="statsLoading" class="px-5 py-10 text-center text-sm text-gray-500 dark:text-dark-400">{{ t('common.loading') }}</div>
-        <div v-else-if="!campaignStats" class="px-5 py-10 text-center text-sm text-gray-500 dark:text-dark-400">{{ t('admin.activities.progress.empty') }}</div>
-        <div v-else class="space-y-4 p-5">
-          <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <div class="flex flex-wrap items-center gap-2">
-                <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ campaignStats.campaign_name }}</h3>
-                <span :class="['badge', statusBadgeClass(campaignStats.status)]">{{ statusLabel(campaignStats.status) }}</span>
-                <span :class="['badge', campaignStats.can_run_draw ? 'badge-success' : 'badge-gray']">{{ drawReadinessLabel(campaignStats) }}</span>
+        <div v-if="statsLoading" class="activity-progress-empty">
+          <Icon name="refresh" size="lg" class="activity-spin" />
+          <strong>{{ t('common.loading') }}</strong>
+        </div>
+        <div v-else-if="!campaignStats" class="activity-progress-empty">
+          <span class="activity-state-icon"><Icon name="chartBar" size="lg" /></span>
+          <strong>{{ t('admin.activities.progress.empty') }}</strong>
+          <p>{{ t('admin.activities.workspace.progressEmptyHint') }}</p>
+        </div>
+        <div v-else class="activity-progress-dashboard">
+          <header class="activity-progress-header">
+            <div class="activity-progress-title">
+              <div class="activity-progress-badges">
+                <span :class="['admin-status-badge', campaignStatusClass(campaignStats.status)]">
+                  <i></i>
+                  {{ statusLabel(campaignStats.status) }}
+                </span>
+                <span :class="['admin-readiness-badge', { 'admin-readiness-ready': campaignStats.can_run_draw }]">
+                  <Icon :name="campaignStats.can_run_draw ? 'checkCircle' : 'clock'" size="xs" />
+                  {{ drawReadinessLabel(campaignStats) }}
+                </span>
               </div>
-              <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">
-                {{ t('admin.activities.progress.periodRange', { start: formatDateTime(campaignStats.period_start_at), end: formatDateTime(campaignStats.period_end_at) }) }}
+              <h3>{{ campaignStats.campaign_name }}</h3>
+              <p>
+                {{ t('admin.activities.progress.periodRange', {
+                  start: formatDateTime(campaignStats.period_start_at),
+                  end: formatDateTime(campaignStats.period_end_at)
+                }) }}
               </p>
             </div>
-            <div class="grid gap-2 text-sm text-gray-600 dark:text-dark-300 sm:grid-cols-2">
-              <span>{{ t('admin.activities.progress.drawAt') }}: {{ formatDateTime(campaignStats.draw_at) || '-' }}</span>
-              <span>{{ t('admin.activities.progress.lastJoinedAt') }}: {{ formatDateTime(campaignStats.last_joined_at) || '-' }}</span>
+            <div class="activity-progress-actions">
+              <button
+                type="button"
+                class="btn btn-primary"
+                :disabled="!campaignStats.can_run_draw || selectedStatsCampaign?.status !== 'active'"
+                @click="selectedStatsCampaign && openCampaignAction(selectedStatsCampaign, 'draw')"
+              >
+                <Icon name="play" size="sm" />
+                {{ t('admin.activities.drawNow') }}
+              </button>
+            </div>
+          </header>
+
+          <div class="activity-progress-timebar">
+            <div>
+              <Icon name="calendar" size="sm" />
+              <span>
+                <small>{{ t('admin.activities.progress.drawAt') }}</small>
+                <strong>{{ formatDateTime(campaignStats.draw_at) || '-' }}</strong>
+              </span>
+            </div>
+            <div>
+              <Icon name="users" size="sm" />
+              <span>
+                <small>{{ t('admin.activities.progress.lastJoinedAt') }}</small>
+                <strong>{{ formatDateTime(campaignStats.last_joined_at) || '-' }}</strong>
+              </span>
             </div>
           </div>
 
-          <p v-if="campaignStats.no_participant_warning" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
-            {{ t('admin.activities.progress.noParticipantWarning') }}
-          </p>
+          <div v-if="campaignStats.no_participant_warning" class="activity-progress-warning" role="status">
+            <Icon name="exclamationTriangle" size="sm" />
+            <span>{{ t('admin.activities.progress.noParticipantWarning') }}</span>
+          </div>
 
-          <div class="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-            <div class="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-dark-700 dark:bg-dark-800">
-              <p class="text-xs text-gray-500 dark:text-dark-400">{{ t('admin.activities.progress.metrics.participants') }}</p>
-              <p class="mt-1 text-xl font-semibold text-gray-900 dark:text-white">{{ formatCount(campaignStats.joined_user_count) }}</p>
-            </div>
-            <div class="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-dark-700 dark:bg-dark-800">
-              <p class="text-xs text-gray-500 dark:text-dark-400">{{ t('admin.activities.progress.metrics.tickets') }}</p>
-              <p class="mt-1 text-xl font-semibold text-gray-900 dark:text-white">{{ formatCount(campaignStats.joined_ticket_count) }}</p>
-            </div>
-            <div class="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-dark-700 dark:bg-dark-800">
-              <p class="text-xs text-gray-500 dark:text-dark-400">{{ statsMetricLabel }}</p>
-              <p class="mt-1 text-xl font-semibold text-gray-900 dark:text-white">{{ statsMetricValueText(campaignStats.joined_metric_total) }}</p>
-            </div>
-            <div class="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-dark-700 dark:bg-dark-800">
-              <p class="text-xs text-gray-500 dark:text-dark-400">{{ t('admin.activities.progress.metrics.averageTickets') }}</p>
-              <p class="mt-1 text-xl font-semibold text-gray-900 dark:text-white">{{ formatDecimal(campaignStats.average_tickets_per_user) }}</p>
-            </div>
-            <div class="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-dark-700 dark:bg-dark-800">
-              <p class="text-xs text-gray-500 dark:text-dark-400">{{ t('admin.activities.progress.metrics.maxTickets') }}</p>
-              <p class="mt-1 text-xl font-semibold text-gray-900 dark:text-white">{{ formatCount(campaignStats.max_ticket_count) }}</p>
-            </div>
-            <div class="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-dark-700 dark:bg-dark-800">
-              <p class="text-xs text-gray-500 dark:text-dark-400">{{ t('admin.activities.progress.metrics.prizeQuantity') }}</p>
-              <p class="mt-1 text-xl font-semibold text-gray-900 dark:text-white">{{ formatCount(campaignStats.prize_total_quantity) }}</p>
+          <div class="activity-metric-grid">
+            <article>
+              <span><Icon name="users" size="sm" /></span>
+              <small>{{ t('admin.activities.progress.metrics.participants') }}</small>
+              <strong>{{ formatCount(campaignStats.joined_user_count) }}</strong>
+            </article>
+            <article>
+              <span><Icon name="badge" size="sm" /></span>
+              <small>{{ t('admin.activities.progress.metrics.tickets') }}</small>
+              <strong>{{ formatCount(campaignStats.joined_ticket_count) }}</strong>
+            </article>
+            <article>
+              <span><Icon name="chartBar" size="sm" /></span>
+              <small>{{ statsMetricLabel }}</small>
+              <strong>{{ statsMetricValueText(campaignStats.joined_metric_total) }}</strong>
+            </article>
+            <article>
+              <span><Icon name="chart" size="sm" /></span>
+              <small>{{ t('admin.activities.progress.metrics.averageTickets') }}</small>
+              <strong>{{ formatDecimal(campaignStats.average_tickets_per_user) }}</strong>
+            </article>
+            <article>
+              <span><Icon name="trendingUp" size="sm" /></span>
+              <small>{{ t('admin.activities.progress.metrics.maxTickets') }}</small>
+              <strong>{{ formatCount(campaignStats.max_ticket_count) }}</strong>
+            </article>
+            <article>
+              <span><Icon name="gift" size="sm" /></span>
+              <small>{{ t('admin.activities.progress.metrics.prizeQuantity') }}</small>
+              <strong>{{ formatCount(campaignStats.prize_total_quantity) }}</strong>
+            </article>
+          </div>
+
+          <div class="activity-progress-detail-grid">
+            <article class="activity-delivery-panel">
+              <header>
+                <div>
+                  <h4>{{ t('admin.activities.progress.deliveryTitle') }}</h4>
+                  <p>{{ t('admin.activities.workspace.deliveryDescription') }}</p>
+                </div>
+                <strong>{{ deliveryProgressPercent }}%</strong>
+              </header>
+              <div class="activity-delivery-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="deliveryProgressPercent">
+                <span :style="{ width: `${deliveryProgressPercent}%` }"></span>
+              </div>
+              <dl>
+                <div>
+                  <dt>{{ t('admin.activities.progress.metrics.pendingClaim') }}</dt>
+                  <dd>{{ formatCount(campaignStats.pending_claim_count) }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t('admin.activities.progress.metrics.pendingDelivery') }}</dt>
+                  <dd>{{ formatCount(campaignStats.pending_delivery_count) }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t('admin.activities.progress.metrics.delivered') }}</dt>
+                  <dd>{{ formatCount(campaignStats.delivered_count) }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t('admin.activities.progress.metrics.rejected') }}</dt>
+                  <dd>{{ formatCount(campaignStats.rejected_count) }}</dd>
+                </div>
+                <div class="activity-delivery-pending">
+                  <dt>{{ t('admin.activities.progress.metrics.pendingAction') }}</dt>
+                  <dd>{{ formatCount(campaignStats.pending_action_count) }}</dd>
+                </div>
+              </dl>
+            </article>
+
+            <article class="activity-latest-draw">
+              <span class="activity-latest-draw-icon"><Icon name="sparkles" size="md" /></span>
+              <div>
+                <small>{{ t('admin.activities.progress.latestDrawTitle') }}</small>
+                <template v-if="campaignStats.latest_draw">
+                  <strong>{{ formatDateTime(campaignStats.latest_draw.executed_at) }}</strong>
+                  <p>
+                    {{ t('admin.activities.progress.latestDrawSummary', {
+                      users: formatCount(campaignStats.latest_draw.total_users),
+                      tickets: formatCount(campaignStats.latest_draw.total_tickets),
+                      winners: formatCount(campaignStats.latest_draw.winner_count)
+                    }) }}
+                  </p>
+                </template>
+                <strong v-else>{{ t('admin.activities.progress.noDrawYet') }}</strong>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section
+        v-else
+        :id="workspacePanelId('winners')"
+        role="tabpanel"
+        :aria-labelledby="workspaceTabId('winners')"
+        class="activity-workspace-panel"
+      >
+        <div class="activity-progress-toolbar">
+          <div class="activity-toolbar-copy">
+            <h2>{{ t('admin.activities.winners.title') }}</h2>
+            <p>{{ t('admin.activities.winners.description') }}</p>
+          </div>
+          <label class="activity-campaign-select">
+            <span>{{ t('admin.activities.workspace.filterCampaign') }}</span>
+            <span class="activity-select-control">
+              <select v-model.number="winnerCampaignId" @change="reloadWinners">
+                <option :value="0">{{ t('admin.activities.winners.allCampaigns') }}</option>
+                <option v-for="campaign in campaigns" :key="campaign.id" :value="campaign.id">{{ campaign.name }}</option>
+              </select>
+              <Icon name="chevronDown" size="xs" />
+            </span>
+          </label>
+        </div>
+
+        <div class="activity-table-shell winner-table-shell">
+          <div class="activity-desktop-table">
+            <div class="activity-table-scroll">
+              <table class="winner-table">
+                <thead>
+                  <tr>
+                    <th>{{ t('admin.activities.winners.columns.user') }}</th>
+                    <th>{{ t('admin.activities.winners.columns.campaign') }}</th>
+                    <th>{{ t('admin.activities.winners.columns.prize') }}</th>
+                    <th>{{ t('admin.activities.winners.columns.claim') }}</th>
+                    <th>{{ t('common.status') }}</th>
+                    <th>{{ t('admin.activities.winners.columns.createdAt') }}</th>
+                    <th class="activity-actions-heading">{{ t('common.actions') }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-if="winnersLoading">
+                    <td colspan="7">
+                      <div class="activity-table-state">
+                        <Icon name="refresh" size="md" class="activity-spin" />
+                        <span>{{ t('common.loading') }}</span>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr v-else-if="winners.length === 0">
+                    <td colspan="7">
+                      <div class="activity-table-state">
+                        <span class="activity-state-icon"><Icon name="badge" size="lg" /></span>
+                        <strong>{{ t('admin.activities.winners.empty') }}</strong>
+                        <p>{{ t('admin.activities.workspace.emptyWinnersHint') }}</p>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr v-for="winner in winners" v-else :key="winner.id">
+                    <td>
+                      <div class="activity-name-cell">
+                        <strong>{{ winner.user_email || winner.user_username || winner.masked_user }}</strong>
+                        <span>#{{ winner.user_id }}</span>
+                      </div>
+                    </td>
+                    <td><span class="winner-campaign-name">{{ winner.campaign_name || `#${winner.campaign_id}` }}</span></td>
+                    <td>
+                      <div class="activity-rule-cell">
+                        <strong>{{ winner.prize_name }}</strong>
+                        <span>{{ prizeAmountText(winner.prize_type, winner.prize_amount) }}</span>
+                      </div>
+                    </td>
+                    <td>
+                      <button v-if="winner.claim_info" type="button" class="activity-text-action" @click="showClaimInfo(winner)">
+                        {{ t('admin.activities.winners.viewClaim') }}
+                      </button>
+                      <span v-else class="activity-muted-text">{{ claimStatusLabel(winner.claim_status) }}</span>
+                    </td>
+                    <td>
+                      <span :class="['admin-status-badge', winnerStatusClass(winner.status)]">
+                        <i></i>
+                        {{ winnerStatusLabel(winner.status) }}
+                      </span>
+                    </td>
+                    <td><span class="activity-date-cell">{{ formatDateTime(winner.created_at) }}</span></td>
+                    <td>
+                      <div class="winner-row-actions">
+                        <button
+                          type="button"
+                          class="btn btn-secondary btn-sm"
+                          :disabled="!canDeliverWinner(winner)"
+                          @click="openWinnerAction(winner, 'deliver')"
+                        >
+                          <Icon name="checkCircle" size="sm" />
+                          {{ t('admin.activities.winners.deliver') }}
+                        </button>
+                        <button
+                          type="button"
+                          class="activity-icon-action activity-icon-action-danger"
+                          :disabled="winner.status === 'delivered' || winner.status === 'rejected'"
+                          :title="t('admin.activities.winners.reject')"
+                          :aria-label="t('admin.activities.winners.reject')"
+                          @click="openWinnerAction(winner, 'reject')"
+                        >
+                          <Icon name="xCircle" size="sm" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </div>
 
-          <div class="grid gap-3 lg:grid-cols-[1.2fr_0.8fr]">
-            <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-700">
-              <h4 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.activities.progress.deliveryTitle') }}</h4>
-              <div class="mt-3 grid gap-2 sm:grid-cols-5">
-                <div class="text-sm">
-                  <p class="text-xs text-gray-500 dark:text-dark-400">{{ t('admin.activities.progress.metrics.pendingClaim') }}</p>
-                  <p class="mt-1 font-semibold text-gray-900 dark:text-white">{{ formatCount(campaignStats.pending_claim_count) }}</p>
+          <div class="activity-mobile-list">
+            <div v-if="winnersLoading" class="activity-card-state">
+              <Icon name="refresh" size="md" class="activity-spin" />
+              <span>{{ t('common.loading') }}</span>
+            </div>
+            <div v-else-if="winners.length === 0" class="activity-card-state">
+              <span class="activity-state-icon"><Icon name="badge" size="lg" /></span>
+              <strong>{{ t('admin.activities.winners.empty') }}</strong>
+              <p>{{ t('admin.activities.workspace.emptyWinnersHint') }}</p>
+            </div>
+            <article v-for="winner in winners" v-else :key="winner.id" class="winner-mobile-card">
+              <header>
+                <div>
+                  <strong>{{ winner.user_email || winner.user_username || winner.masked_user }}</strong>
+                  <span>#{{ winner.user_id }}</span>
                 </div>
-                <div class="text-sm">
-                  <p class="text-xs text-gray-500 dark:text-dark-400">{{ t('admin.activities.progress.metrics.pendingDelivery') }}</p>
-                  <p class="mt-1 font-semibold text-gray-900 dark:text-white">{{ formatCount(campaignStats.pending_delivery_count) }}</p>
-                </div>
-                <div class="text-sm">
-                  <p class="text-xs text-gray-500 dark:text-dark-400">{{ t('admin.activities.progress.metrics.delivered') }}</p>
-                  <p class="mt-1 font-semibold text-gray-900 dark:text-white">{{ formatCount(campaignStats.delivered_count) }}</p>
-                </div>
-                <div class="text-sm">
-                  <p class="text-xs text-gray-500 dark:text-dark-400">{{ t('admin.activities.progress.metrics.rejected') }}</p>
-                  <p class="mt-1 font-semibold text-gray-900 dark:text-white">{{ formatCount(campaignStats.rejected_count) }}</p>
-                </div>
-                <div class="text-sm">
-                  <p class="text-xs text-gray-500 dark:text-dark-400">{{ t('admin.activities.progress.metrics.pendingAction') }}</p>
-                  <p class="mt-1 font-semibold text-gray-900 dark:text-white">{{ formatCount(campaignStats.pending_action_count) }}</p>
+                <span :class="['admin-status-badge', winnerStatusClass(winner.status)]">
+                  <i></i>
+                  {{ winnerStatusLabel(winner.status) }}
+                </span>
+              </header>
+              <div class="winner-mobile-prize">
+                <span class="winner-prize-icon"><Icon name="gift" size="sm" /></span>
+                <div>
+                  <small>{{ winner.campaign_name || `#${winner.campaign_id}` }}</small>
+                  <strong>{{ winner.prize_name }}</strong>
+                  <span>{{ prizeAmountText(winner.prize_type, winner.prize_amount) }}</span>
                 </div>
               </div>
-            </div>
-            <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-700">
-              <h4 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.activities.progress.latestDrawTitle') }}</h4>
-              <template v-if="campaignStats.latest_draw">
-                <p class="mt-2 text-sm text-gray-600 dark:text-dark-300">{{ formatDateTime(campaignStats.latest_draw.executed_at) }}</p>
-                <p class="mt-1 text-xs text-gray-500 dark:text-dark-400">
-                  {{ t('admin.activities.progress.latestDrawSummary', { users: formatCount(campaignStats.latest_draw.total_users), tickets: formatCount(campaignStats.latest_draw.total_tickets), winners: formatCount(campaignStats.latest_draw.winner_count) }) }}
-                </p>
-              </template>
-              <p v-else class="mt-2 text-sm text-gray-500 dark:text-dark-400">{{ t('admin.activities.progress.noDrawYet') }}</p>
-            </div>
+              <div class="winner-mobile-meta">
+                <span>{{ t('admin.activities.winners.columns.createdAt') }}</span>
+                <strong>{{ formatDateTime(winner.created_at) }}</strong>
+              </div>
+              <footer>
+                <button v-if="winner.claim_info" type="button" class="btn btn-secondary btn-sm" @click="showClaimInfo(winner)">
+                  <Icon name="eye" size="sm" />
+                  {{ t('admin.activities.winners.viewClaim') }}
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-primary btn-sm"
+                  :disabled="!canDeliverWinner(winner)"
+                  @click="openWinnerAction(winner, 'deliver')"
+                >
+                  <Icon name="checkCircle" size="sm" />
+                  {{ t('admin.activities.winners.deliver') }}
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-secondary btn-sm activity-mobile-end"
+                  :disabled="winner.status === 'delivered' || winner.status === 'rejected'"
+                  @click="openWinnerAction(winner, 'reject')"
+                >
+                  <Icon name="xCircle" size="sm" />
+                  {{ t('admin.activities.winners.reject') }}
+                </button>
+              </footer>
+            </article>
           </div>
-        </div>
-      </section>
 
-      <section class="card overflow-hidden">
-        <div class="overflow-x-auto">
-          <table class="w-full min-w-[980px] text-left text-sm">
-            <thead class="bg-gray-50 text-xs uppercase text-gray-500 dark:bg-dark-800 dark:text-dark-400">
-              <tr>
-                <th class="px-4 py-3 font-medium">{{ t('admin.activities.columns.name') }}</th>
-                <th class="px-4 py-3 font-medium">{{ t('common.status') }}</th>
-                <th class="px-4 py-3 font-medium">{{ t('admin.activities.columns.rule') }}</th>
-                <th class="px-4 py-3 font-medium">{{ t('admin.activities.columns.prizes') }}</th>
-                <th class="px-4 py-3 font-medium">{{ t('admin.activities.columns.drawAt') }}</th>
-                <th class="px-4 py-3 font-medium">{{ t('admin.activities.columns.public') }}</th>
-                <th class="px-4 py-3 text-right font-medium">{{ t('common.actions') }}</th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-gray-100 dark:divide-dark-800">
-              <tr v-if="loading">
-                <td colspan="7" class="px-4 py-12 text-center text-gray-500 dark:text-dark-400">{{ t('common.loading') }}</td>
-              </tr>
-              <tr v-else-if="campaigns.length === 0">
-                <td colspan="7" class="px-4 py-12 text-center text-gray-500 dark:text-dark-400">{{ t('admin.activities.empty') }}</td>
-              </tr>
-              <tr v-for="campaign in campaigns" v-else :key="campaign.id" class="hover:bg-gray-50 dark:hover:bg-dark-800">
-                <td class="px-4 py-4">
-                  <div class="font-medium text-gray-900 dark:text-white">{{ campaign.name }}</div>
-                  <div class="mt-0.5 max-w-72 truncate text-xs text-gray-500 dark:text-dark-400">{{ campaign.description || '-' }}</div>
-                </td>
-                <td class="px-4 py-4">
-                  <span :class="['badge', statusBadgeClass(campaign.status)]">{{ statusLabel(campaign.status) }}</span>
-                </td>
-                <td class="px-4 py-4 text-gray-700 dark:text-gray-300">
-                  <div>{{ metricLabel(campaign.rule_config.metric) }} ≥ {{ metricValueText(campaign.rule_config.metric, campaign.rule_config.threshold) }}</div>
-                  <div class="mt-0.5 text-xs text-gray-500 dark:text-dark-400">{{ ticketModeLabel(campaign.rule_config.ticket_mode) }} · {{ periodLabel(campaign) }}</div>
-                </td>
-                <td class="px-4 py-4 text-gray-700 dark:text-gray-300">{{ prizeSummary(campaign) }}</td>
-                <td class="px-4 py-4 text-gray-700 dark:text-gray-300">{{ formatDateTime(campaign.draw_at) || '-' }}</td>
-                <td class="px-4 py-4 text-gray-700 dark:text-gray-300">{{ campaign.public_enabled ? t('common.enabled') : t('common.disabled') }}</td>
-                <td class="px-4 py-4">
-                  <div class="flex justify-end gap-2">
-                    <button type="button" class="btn btn-secondary btn-sm" @click="openProgress(campaign)">{{ t('admin.activities.progress.view') }}</button>
-                    <button type="button" class="btn btn-secondary btn-sm" @click="openEdit(campaign)">{{ t('common.edit') }}</button>
-                    <button type="button" class="btn btn-primary btn-sm" :disabled="campaign.status !== 'active'" @click="runDraw(campaign)">{{ t('admin.activities.drawNow') }}</button>
-                    <button type="button" class="btn btn-danger btn-sm" :disabled="campaign.status === 'ended'" @click="endCampaign(campaign)">{{ t('admin.activities.end') }}</button>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="border-t border-gray-100 p-4 dark:border-dark-800">
-          <Pagination v-if="campaignPagination.total > 0" :page="campaignPagination.page" :page-size="campaignPagination.page_size" :total="campaignPagination.total" @update:page="setCampaignPage" @update:pageSize="setCampaignPageSize" />
-        </div>
-      </section>
-
-      <section class="card overflow-hidden">
-        <div class="flex flex-col gap-3 border-b border-gray-100 p-5 dark:border-dark-800 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <h2 class="text-lg font-semibold text-gray-900 dark:text-white">{{ t('admin.activities.winners.title') }}</h2>
-            <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">{{ t('admin.activities.winners.description') }}</p>
-          </div>
-          <div class="flex flex-wrap items-center gap-2">
-            <select v-model.number="winnerCampaignId" class="input w-56" @change="reloadWinners">
-              <option :value="0">{{ t('admin.activities.winners.allCampaigns') }}</option>
-              <option v-for="campaign in campaigns" :key="campaign.id" :value="campaign.id">{{ campaign.name }}</option>
-            </select>
-            <button type="button" class="btn btn-secondary" :disabled="winnersLoading" @click="reloadWinners">{{ t('common.refresh') }}</button>
-          </div>
-        </div>
-        <div class="overflow-x-auto">
-          <table class="w-full min-w-[1040px] text-left text-sm">
-            <thead class="bg-gray-50 text-xs uppercase text-gray-500 dark:bg-dark-800 dark:text-dark-400">
-              <tr>
-                <th class="px-4 py-3 font-medium">{{ t('admin.activities.winners.columns.user') }}</th>
-                <th class="px-4 py-3 font-medium">{{ t('admin.activities.winners.columns.campaign') }}</th>
-                <th class="px-4 py-3 font-medium">{{ t('admin.activities.winners.columns.prize') }}</th>
-                <th class="px-4 py-3 font-medium">{{ t('admin.activities.winners.columns.claim') }}</th>
-                <th class="px-4 py-3 font-medium">{{ t('common.status') }}</th>
-                <th class="px-4 py-3 font-medium">{{ t('admin.activities.winners.columns.createdAt') }}</th>
-                <th class="px-4 py-3 text-right font-medium">{{ t('common.actions') }}</th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-gray-100 dark:divide-dark-800">
-              <tr v-if="winnersLoading">
-                <td colspan="7" class="px-4 py-12 text-center text-gray-500 dark:text-dark-400">{{ t('common.loading') }}</td>
-              </tr>
-              <tr v-else-if="winners.length === 0">
-                <td colspan="7" class="px-4 py-12 text-center text-gray-500 dark:text-dark-400">{{ t('admin.activities.winners.empty') }}</td>
-              </tr>
-              <tr v-for="winner in winners" v-else :key="winner.id" class="hover:bg-gray-50 dark:hover:bg-dark-800">
-                <td class="px-4 py-4">
-                  <div class="font-medium text-gray-900 dark:text-white">{{ winner.user_email || winner.user_username || winner.masked_user }}</div>
-                  <div class="mt-0.5 text-xs text-gray-500 dark:text-dark-400">#{{ winner.user_id }}</div>
-                </td>
-                <td class="px-4 py-4 text-gray-700 dark:text-gray-300">{{ winner.campaign_name || `#${winner.campaign_id}` }}</td>
-                <td class="px-4 py-4 text-gray-700 dark:text-gray-300">{{ winner.prize_name }} · {{ prizeAmountText(winner.prize_type, winner.prize_amount) }}</td>
-                <td class="px-4 py-4">
-                  <button v-if="winner.claim_info" type="button" class="btn btn-secondary btn-sm" @click="showClaimInfo(winner)">{{ t('admin.activities.winners.viewClaim') }}</button>
-                  <span v-else class="text-xs text-gray-400 dark:text-dark-500">{{ claimStatusLabel(winner.claim_status) }}</span>
-                </td>
-                <td class="px-4 py-4"><span :class="['badge', winnerStatusBadgeClass(winner.status)]">{{ winnerStatusLabel(winner.status) }}</span></td>
-                <td class="px-4 py-4 text-gray-700 dark:text-gray-300">{{ formatDateTime(winner.created_at) }}</td>
-                <td class="px-4 py-4">
-                  <div class="flex justify-end gap-2">
-                    <button type="button" class="btn btn-primary btn-sm" :disabled="winner.status === 'delivered' || winner.status === 'rejected'" @click="markDelivered(winner)">{{ t('admin.activities.winners.deliver') }}</button>
-                    <button type="button" class="btn btn-danger btn-sm" :disabled="winner.status === 'delivered' || winner.status === 'rejected'" @click="rejectWinner(winner)">{{ t('admin.activities.winners.reject') }}</button>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="border-t border-gray-100 p-4 dark:border-dark-800">
-          <Pagination v-if="winnerPagination.total > 0" :page="winnerPagination.page" :page-size="winnerPagination.page_size" :total="winnerPagination.total" @update:page="setWinnerPage" @update:pageSize="setWinnerPageSize" />
+          <footer v-if="winnerPagination.total > 0" class="activity-table-footer">
+            <Pagination
+              :page="winnerPagination.page"
+              :page-size="winnerPagination.page_size"
+              :total="winnerPagination.total"
+              @update:page="setWinnerPage"
+              @update:pageSize="setWinnerPageSize"
+            />
+          </footer>
         </div>
       </section>
     </div>
 
     <Teleport to="body">
-      <div v-if="dialogOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" @click.self="dialogOpen = false">
-        <form class="max-h-[92vh] w-full max-w-5xl overflow-y-auto rounded-lg bg-white p-5 shadow-xl dark:bg-dark-900" @submit.prevent="submitForm">
-          <div class="flex items-start justify-between gap-4">
+      <div v-if="dialogOpen" class="activity-drawer-backdrop" role="presentation" @click.self="closeEditor">
+        <form
+          class="activity-editor-drawer"
+          role="dialog"
+          aria-modal="true"
+          :aria-label="editingCampaign ? t('admin.activities.edit') : t('admin.activities.create')"
+          @submit.prevent="submitForm"
+        >
+          <header class="activity-editor-header">
             <div>
-              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">{{ editingCampaign ? t('admin.activities.edit') : t('admin.activities.create') }}</h2>
-              <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">{{ t('admin.activities.formDescription') }}</p>
+              <span class="activity-editor-eyebrow">{{ t('admin.activities.workspace.configuration') }}</span>
+              <h2>{{ editingCampaign ? t('admin.activities.edit') : t('admin.activities.create') }}</h2>
+              <p>{{ t('admin.activities.formDescription') }}</p>
             </div>
-            <button type="button" class="btn btn-secondary btn-sm" @click="dialogOpen = false">{{ t('common.cancel') }}</button>
-          </div>
+            <button
+              type="button"
+              class="activity-dialog-close"
+              :disabled="saving"
+              :aria-label="t('common.close')"
+              @click="closeEditor"
+            >
+              <Icon name="x" size="sm" />
+            </button>
+          </header>
 
-          <div class="mt-5 grid gap-4 md:grid-cols-2">
-            <div>
-              <label class="input-label">{{ t('admin.activities.fields.name') }}</label>
-              <input v-model.trim="form.name" class="input" required />
-            </div>
-            <div>
-              <label class="input-label">{{ t('common.status') }}</label>
-              <select v-model="form.status" class="input">
-                <option v-for="option in statusOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-              </select>
-            </div>
-            <div>
-              <label class="input-label">{{ t('admin.activities.fields.startsAt') }}</label>
-              <input v-model="form.starts_at_str" type="datetime-local" class="input" required />
-            </div>
-            <div>
-              <label class="input-label">{{ t('admin.activities.fields.endsAt') }}</label>
-              <input v-model="form.ends_at_str" type="datetime-local" class="input" required />
-            </div>
-            <div>
-              <label class="input-label">{{ t('admin.activities.fields.drawAt') }}</label>
-              <input v-model="form.draw_at_str" type="datetime-local" class="input" />
-            </div>
-            <div>
-              <label class="input-label">{{ t('admin.activities.fields.sortOrder') }}</label>
-              <input v-model.number="form.sort_order" type="number" class="input" />
-            </div>
-            <div>
-              <label class="input-label">{{ t('admin.activities.fields.timezone') }}</label>
-              <input v-model.trim="form.timezone" class="input" required />
-            </div>
-            <label class="flex min-h-11 items-center gap-2 rounded-lg border border-gray-200 px-3 dark:border-dark-700">
-              <input v-model="form.public_enabled" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
-              <span class="text-sm text-gray-700 dark:text-gray-300">{{ t('admin.activities.fields.publicEnabled') }}</span>
-            </label>
-            <div>
-              <label class="input-label">{{ t('admin.activities.fields.publicParticipantCount') }}</label>
-              <select v-model="form.public_participant_count" class="input">
-                <option v-for="option in publicParticipantCountOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-              </select>
-            </div>
-            <div class="md:col-span-2">
-              <label class="input-label">{{ t('admin.activities.fields.description') }}</label>
-              <textarea v-model.trim="form.description" class="input min-h-24"></textarea>
-            </div>
-          </div>
-
-          <div class="mt-6 rounded-lg border border-gray-200 p-4 dark:border-dark-700">
-            <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.activities.rule.title') }}</h3>
-            <div class="mt-4 grid gap-4 md:grid-cols-3">
-              <div>
-                <label class="input-label">{{ t('admin.activities.rule.metric') }}</label>
-                <select v-model="form.rule_config.metric" class="input">
-                  <option v-for="option in metricOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-                </select>
-              </div>
-              <div>
-                <label class="input-label">{{ t('admin.activities.rule.periodType') }}</label>
-                <select v-model="form.rule_config.period_type" class="input">
-                  <option v-for="option in periodOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-                </select>
-              </div>
-              <div v-if="form.rule_config.period_type === 'rolling_days'">
-                <label class="input-label">{{ t('admin.activities.rule.rollingDays') }}</label>
-                <input v-model.number="form.rule_config.rolling_days" type="number" min="1" class="input" />
-              </div>
-              <div v-if="form.rule_config.period_type === 'fixed_range'">
-                <label class="input-label">{{ t('admin.activities.rule.periodStart') }}</label>
-                <input v-model="form.rule_period_start_str" type="datetime-local" class="input" />
-              </div>
-              <div v-if="form.rule_config.period_type === 'fixed_range'">
-                <label class="input-label">{{ t('admin.activities.rule.periodEnd') }}</label>
-                <input v-model="form.rule_period_end_str" type="datetime-local" class="input" />
-              </div>
-              <div>
-                <label class="input-label">{{ t('admin.activities.rule.threshold') }}</label>
-                <input v-model.number="form.rule_config.threshold" type="number" min="0" step="0.0001" class="input" />
-              </div>
-              <div>
-                <label class="input-label">{{ t('admin.activities.rule.ticketMode') }}</label>
-                <select v-model="form.rule_config.ticket_mode" class="input">
-                  <option v-for="option in ticketModeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-                </select>
-              </div>
-              <div v-if="form.rule_config.ticket_mode === 'fixed'">
-                <label class="input-label">{{ t('admin.activities.rule.fixedTickets') }}</label>
-                <input v-model.number="form.rule_config.fixed_tickets" type="number" min="1" class="input" />
-              </div>
-              <template v-if="form.rule_config.ticket_mode === 'proportional'">
+          <div class="activity-editor-body">
+            <section class="activity-form-section">
+              <header>
+                <span><Icon name="document" size="sm" /></span>
                 <div>
-                  <label class="input-label">{{ t('admin.activities.rule.unitAmount') }}</label>
-                  <input v-model.number="form.rule_config.unit_amount" type="number" min="0.0001" step="0.0001" class="input" />
+                  <h3>{{ t('admin.activities.workspace.basicSection') }}</h3>
+                  <p>{{ t('admin.activities.workspace.basicSectionHint') }}</p>
                 </div>
-                <div>
-                  <label class="input-label">{{ t('admin.activities.rule.ticketsPerUnit') }}</label>
-                  <input v-model.number="form.rule_config.tickets_per_unit" type="number" min="1" class="input" />
-                </div>
-                <div>
-                  <label class="input-label">{{ t('admin.activities.rule.maxTicketsPerUser') }}</label>
-                  <input v-model.number="form.rule_config.max_tickets_per_user" type="number" min="0" class="input" />
-                </div>
-              </template>
-              <div v-if="form.rule_config.ticket_mode === 'tiered'">
-                <label class="input-label">{{ t('admin.activities.rule.tierMode') }}</label>
-                <select v-model="form.rule_config.tier_mode" class="input">
-                  <option v-for="option in tierModeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-                </select>
+              </header>
+              <div class="activity-form-grid">
+                <label class="activity-form-field activity-form-field-wide">
+                  <span>{{ t('admin.activities.fields.name') }}</span>
+                  <input v-model.trim="form.name" class="input" required />
+                </label>
+                <label class="activity-form-field">
+                  <span>{{ t('common.status') }}</span>
+                  <select v-model="form.status" class="input">
+                    <option v-for="option in statusOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+                  </select>
+                </label>
+                <label class="activity-form-field">
+                  <span>{{ t('admin.activities.fields.sortOrder') }}</span>
+                  <input v-model.number="form.sort_order" type="number" class="input" />
+                </label>
+                <label class="activity-form-field">
+                  <span>{{ t('admin.activities.fields.startsAt') }}</span>
+                  <input v-model="form.starts_at_str" type="datetime-local" class="input" required />
+                </label>
+                <label class="activity-form-field">
+                  <span>{{ t('admin.activities.fields.endsAt') }}</span>
+                  <input v-model="form.ends_at_str" type="datetime-local" class="input" required />
+                </label>
+                <label class="activity-form-field">
+                  <span>{{ t('admin.activities.fields.drawAt') }}</span>
+                  <input v-model="form.draw_at_str" type="datetime-local" class="input" />
+                </label>
+                <label class="activity-form-field">
+                  <span>{{ t('admin.activities.fields.timezone') }}</span>
+                  <input v-model.trim="form.timezone" class="input" required />
+                </label>
+                <label class="activity-form-field activity-form-field-wide">
+                  <span>{{ t('admin.activities.fields.coverUrl') }}</span>
+                  <input v-model.trim="form.cover_url" class="input" type="url" placeholder="https://" />
+                </label>
+                <label class="activity-form-field activity-form-field-wide">
+                  <span>{{ t('admin.activities.fields.description') }}</span>
+                  <textarea v-model.trim="form.description" class="input activity-description-input"></textarea>
+                </label>
               </div>
-            </div>
-
-            <div v-if="form.rule_config.ticket_mode === 'tiered'" class="mt-4 space-y-2">
-              <div v-for="(tier, index) in form.rule_config.tiers" :key="index" class="grid gap-2 md:grid-cols-[1fr_1fr_auto]">
-                <input v-model.number="tier.threshold" type="number" min="0" step="0.0001" class="input" :placeholder="t('admin.activities.rule.tierThreshold')" />
-                <input v-model.number="tier.tickets" type="number" min="1" class="input" :placeholder="t('admin.activities.rule.tierTickets')" />
-                <button type="button" class="btn btn-danger" @click="removeTier(index)">{{ t('common.delete') }}</button>
+              <div class="activity-switch-grid">
+                <label class="activity-switch-row">
+                  <input v-model="form.public_enabled" type="checkbox" />
+                  <span class="activity-switch-track"><i></i></span>
+                  <span>
+                    <strong>{{ t('admin.activities.fields.publicEnabled') }}</strong>
+                    <small>{{ t('admin.activities.workspace.publicEnabledHint') }}</small>
+                  </span>
+                </label>
+                <label class="activity-form-field activity-public-count-field">
+                  <span>{{ t('admin.activities.fields.publicParticipantCount') }}</span>
+                  <select v-model="form.public_participant_count" class="input">
+                    <option v-for="option in publicParticipantCountOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+                  </select>
+                </label>
               </div>
-              <button type="button" class="btn btn-secondary btn-sm" @click="addTier">{{ t('admin.activities.rule.addTier') }}</button>
-            </div>
-          </div>
+            </section>
 
-          <div class="mt-6 rounded-lg border border-gray-200 p-4 dark:border-dark-700">
-            <div class="flex items-center justify-between gap-3">
-              <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.activities.prizes.title') }}</h3>
-              <button type="button" class="btn btn-secondary btn-sm" @click="addPrize">{{ t('admin.activities.prizes.add') }}</button>
-            </div>
-            <div class="mt-4 space-y-4">
-              <div v-for="(prize, prizeIndex) in form.prizes" :key="prizeIndex" class="rounded-lg border border-gray-200 p-4 dark:border-dark-700">
-                <div class="grid gap-3 md:grid-cols-4">
-                  <div class="md:col-span-2">
-                    <label class="input-label">{{ t('admin.activities.prizes.name') }}</label>
-                    <input v-model.trim="prize.name" class="input" required />
-                  </div>
-                  <div>
-                    <label class="input-label">{{ t('admin.activities.prizes.type') }}</label>
-                    <select v-model="prize.prize_type" class="input" @change="syncPrizeClaimFields(prize)">
-                      <option v-for="option in prizeTypeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label class="input-label">{{ t('admin.activities.prizes.amount') }}</label>
-                    <input v-model.number="prize.amount" type="number" min="0" step="0.0001" class="input" />
-                  </div>
-                  <div>
-                    <label class="input-label">{{ t('admin.activities.prizes.quantity') }}</label>
-                    <input v-model.number="prize.quantity" type="number" min="1" class="input" />
-                  </div>
-                  <div>
-                    <label class="input-label">{{ t('admin.activities.fields.sortOrder') }}</label>
-                    <input v-model.number="prize.sort_order" type="number" class="input" />
-                  </div>
-                  <label class="flex min-h-11 items-center gap-2 rounded-lg border border-gray-200 px-3 dark:border-dark-700">
-                    <input v-model="prize.enabled" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
-                    <span class="text-sm text-gray-700 dark:text-gray-300">{{ t('common.enabled') }}</span>
+            <section class="activity-form-section">
+              <header>
+                <span><Icon name="chartBar" size="sm" /></span>
+                <div>
+                  <h3>{{ t('admin.activities.rule.title') }}</h3>
+                  <p>{{ t('admin.activities.workspace.ruleSectionHint') }}</p>
+                </div>
+              </header>
+              <div class="activity-form-grid activity-rule-grid">
+                <label class="activity-form-field">
+                  <span>{{ t('admin.activities.rule.metric') }}</span>
+                  <select v-model="form.rule_config.metric" class="input">
+                    <option v-for="option in metricOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+                  </select>
+                </label>
+                <label class="activity-form-field">
+                  <span>{{ t('admin.activities.rule.threshold') }}</span>
+                  <input v-model.number="form.rule_config.threshold" type="number" min="0" step="0.0001" class="input" />
+                </label>
+                <label class="activity-form-field">
+                  <span>{{ t('admin.activities.rule.periodType') }}</span>
+                  <select v-model="form.rule_config.period_type" class="input">
+                    <option v-for="option in periodOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+                  </select>
+                </label>
+                <label v-if="form.rule_config.period_type === 'rolling_days'" class="activity-form-field">
+                  <span>{{ t('admin.activities.rule.rollingDays') }}</span>
+                  <input v-model.number="form.rule_config.rolling_days" type="number" min="1" class="input" />
+                </label>
+                <label v-if="form.rule_config.period_type === 'fixed_range'" class="activity-form-field">
+                  <span>{{ t('admin.activities.rule.periodStart') }}</span>
+                  <input v-model="form.rule_period_start_str" type="datetime-local" class="input" />
+                </label>
+                <label v-if="form.rule_config.period_type === 'fixed_range'" class="activity-form-field">
+                  <span>{{ t('admin.activities.rule.periodEnd') }}</span>
+                  <input v-model="form.rule_period_end_str" type="datetime-local" class="input" />
+                </label>
+                <label class="activity-form-field">
+                  <span>{{ t('admin.activities.rule.ticketMode') }}</span>
+                  <select v-model="form.rule_config.ticket_mode" class="input">
+                    <option v-for="option in ticketModeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+                  </select>
+                </label>
+                <label v-if="form.rule_config.ticket_mode === 'fixed'" class="activity-form-field">
+                  <span>{{ t('admin.activities.rule.fixedTickets') }}</span>
+                  <input v-model.number="form.rule_config.fixed_tickets" type="number" min="1" class="input" />
+                </label>
+                <template v-if="form.rule_config.ticket_mode === 'proportional'">
+                  <label class="activity-form-field">
+                    <span>{{ t('admin.activities.rule.unitAmount') }}</span>
+                    <input v-model.number="form.rule_config.unit_amount" type="number" min="0.0001" step="0.0001" class="input" />
                   </label>
-                  <label class="flex min-h-11 items-center gap-2 rounded-lg border border-gray-200 px-3 dark:border-dark-700">
-                    <input v-model="prize.requires_claim_info" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" @change="syncPrizeClaimFields(prize)" />
-                    <span class="text-sm text-gray-700 dark:text-gray-300">{{ t('admin.activities.prizes.requiresClaim') }}</span>
+                  <label class="activity-form-field">
+                    <span>{{ t('admin.activities.rule.ticketsPerUnit') }}</span>
+                    <input v-model.number="form.rule_config.tickets_per_unit" type="number" min="1" class="input" />
                   </label>
-                  <div class="flex items-end justify-end">
-                    <button type="button" class="btn btn-danger btn-sm" :disabled="form.prizes.length <= 1" @click="removePrize(prizeIndex)">{{ t('common.delete') }}</button>
-                  </div>
+                  <label class="activity-form-field">
+                    <span>{{ t('admin.activities.rule.maxTicketsPerUser') }}</span>
+                    <input v-model.number="form.rule_config.max_tickets_per_user" type="number" min="0" class="input" />
+                  </label>
+                </template>
+                <label v-if="form.rule_config.ticket_mode === 'tiered'" class="activity-form-field">
+                  <span>{{ t('admin.activities.rule.tierMode') }}</span>
+                  <select v-model="form.rule_config.tier_mode" class="input">
+                    <option v-for="option in tierModeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+                  </select>
+                </label>
+              </div>
+              <div v-if="form.rule_config.ticket_mode === 'tiered'" class="activity-tier-list">
+                <div v-for="(tier, index) in form.rule_config.tiers" :key="index">
+                  <label class="activity-form-field">
+                    <span>{{ t('admin.activities.rule.tierThreshold') }}</span>
+                    <input v-model.number="tier.threshold" type="number" min="0" step="0.0001" class="input" />
+                  </label>
+                  <label class="activity-form-field">
+                    <span>{{ t('admin.activities.rule.tierTickets') }}</span>
+                    <input v-model.number="tier.tickets" type="number" min="1" class="input" />
+                  </label>
+                  <button
+                    type="button"
+                    class="activity-icon-action activity-icon-action-danger"
+                    :aria-label="t('common.delete')"
+                    @click="removeTier(index)"
+                  >
+                    <Icon name="trash" size="sm" />
+                  </button>
                 </div>
+                <button type="button" class="activity-add-inline" @click="addTier">
+                  <Icon name="plus" size="sm" />
+                  {{ t('admin.activities.rule.addTier') }}
+                </button>
+              </div>
+            </section>
 
-                <div v-if="prize.requires_claim_info" class="mt-4 space-y-2">
-                  <div class="flex items-center justify-between gap-3">
-                    <p class="text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.activities.prizes.claimFields') }}</p>
-                    <button type="button" class="btn btn-secondary btn-sm" @click="addClaimField(prize)">{{ t('admin.activities.prizes.addClaimField') }}</button>
-                  </div>
-                  <div v-for="(field, fieldIndex) in prize.claim_fields" :key="fieldIndex" class="grid gap-2 md:grid-cols-[1fr_1fr_140px_90px_auto]">
-                    <input v-model.trim="field.key" class="input" :placeholder="t('admin.activities.prizes.claimFieldKey')" />
-                    <input v-model.trim="field.label" class="input" :placeholder="t('admin.activities.prizes.claimFieldLabel')" />
-                    <select v-model="field.type" class="input">
-                      <option value="text">text</option>
-                      <option value="phone">phone</option>
-                      <option value="email">email</option>
-                      <option value="textarea">textarea</option>
-                    </select>
-                    <label class="flex items-center gap-2 rounded-lg border border-gray-200 px-3 dark:border-dark-700">
-                      <input v-model="field.required" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
-                      <span class="text-sm text-gray-700 dark:text-gray-300">{{ t('admin.activities.prizes.required') }}</span>
+            <section class="activity-form-section">
+              <header class="activity-prize-section-header">
+                <span><Icon name="gift" size="sm" /></span>
+                <div>
+                  <h3>{{ t('admin.activities.prizes.title') }}</h3>
+                  <p>{{ t('admin.activities.workspace.prizeSectionHint') }}</p>
+                </div>
+                <button type="button" class="btn btn-secondary btn-sm" @click="addPrize">
+                  <Icon name="plus" size="sm" />
+                  {{ t('admin.activities.prizes.add') }}
+                </button>
+              </header>
+              <div class="activity-prize-list">
+                <article v-for="(prize, prizeIndex) in form.prizes" :key="prizeIndex" class="activity-prize-editor">
+                  <header>
+                    <div>
+                      <span>{{ t('admin.activities.workspace.prizeNumber', { number: prizeIndex + 1 }) }}</span>
+                      <strong>{{ prize.name || t('admin.activities.prizes.defaultName') }}</strong>
+                    </div>
+                    <button
+                      type="button"
+                      class="activity-icon-action activity-icon-action-danger"
+                      :disabled="form.prizes.length <= 1"
+                      :aria-label="t('common.delete')"
+                      @click="removePrize(prizeIndex)"
+                    >
+                      <Icon name="trash" size="sm" />
+                    </button>
+                  </header>
+                  <div class="activity-form-grid">
+                    <label class="activity-form-field activity-form-field-wide">
+                      <span>{{ t('admin.activities.prizes.name') }}</span>
+                      <input v-model.trim="prize.name" class="input" required />
                     </label>
-                    <button type="button" class="btn btn-danger" @click="removeClaimField(prize, fieldIndex)">{{ t('common.delete') }}</button>
+                    <label class="activity-form-field">
+                      <span>{{ t('admin.activities.prizes.type') }}</span>
+                      <select v-model="prize.prize_type" class="input" @change="syncPrizeClaimFields(prize)">
+                        <option v-for="option in prizeTypeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+                      </select>
+                    </label>
+                    <label class="activity-form-field">
+                      <span>{{ t('admin.activities.prizes.amount') }}</span>
+                      <input v-model.number="prize.amount" type="number" min="0" step="0.0001" class="input" />
+                    </label>
+                    <label class="activity-form-field">
+                      <span>{{ t('admin.activities.prizes.quantity') }}</span>
+                      <input v-model.number="prize.quantity" type="number" min="1" class="input" />
+                    </label>
+                    <label class="activity-form-field">
+                      <span>{{ t('admin.activities.fields.sortOrder') }}</span>
+                      <input v-model.number="prize.sort_order" type="number" class="input" />
+                    </label>
                   </div>
-                </div>
+                  <div class="activity-prize-switches">
+                    <label class="activity-switch-row">
+                      <input v-model="prize.enabled" type="checkbox" />
+                      <span class="activity-switch-track"><i></i></span>
+                      <span><strong>{{ t('common.enabled') }}</strong></span>
+                    </label>
+                    <label class="activity-switch-row">
+                      <input v-model="prize.requires_claim_info" type="checkbox" @change="syncPrizeClaimFields(prize)" />
+                      <span class="activity-switch-track"><i></i></span>
+                      <span><strong>{{ t('admin.activities.prizes.requiresClaim') }}</strong></span>
+                    </label>
+                  </div>
+                  <div v-if="prize.requires_claim_info" class="activity-claim-field-list">
+                    <header>
+                      <div>
+                        <strong>{{ t('admin.activities.prizes.claimFields') }}</strong>
+                        <span>{{ t('admin.activities.workspace.claimFieldsHint') }}</span>
+                      </div>
+                      <button type="button" class="activity-add-inline" @click="addClaimField(prize)">
+                        <Icon name="plus" size="sm" />
+                        {{ t('admin.activities.prizes.addClaimField') }}
+                      </button>
+                    </header>
+                    <div v-for="(field, fieldIndex) in prize.claim_fields" :key="fieldIndex" class="activity-claim-field-row">
+                      <input v-model.trim="field.key" class="input" :placeholder="t('admin.activities.prizes.claimFieldKey')" />
+                      <input v-model.trim="field.label" class="input" :placeholder="t('admin.activities.prizes.claimFieldLabel')" />
+                      <select v-model="field.type" class="input">
+                        <option value="text">text</option>
+                        <option value="phone">phone</option>
+                        <option value="email">email</option>
+                        <option value="textarea">textarea</option>
+                      </select>
+                      <label class="activity-required-field">
+                        <input v-model="field.required" type="checkbox" />
+                        <span>{{ t('admin.activities.prizes.required') }}</span>
+                      </label>
+                      <button
+                        type="button"
+                        class="activity-icon-action activity-icon-action-danger"
+                        :aria-label="t('common.delete')"
+                        @click="removeClaimField(prize, fieldIndex)"
+                      >
+                        <Icon name="trash" size="sm" />
+                      </button>
+                    </div>
+                  </div>
+                </article>
               </div>
-            </div>
+            </section>
           </div>
 
-          <div class="mt-5 flex justify-end gap-2">
-            <button type="button" class="btn btn-secondary" @click="dialogOpen = false">{{ t('common.cancel') }}</button>
-            <button type="submit" class="btn btn-primary" :disabled="saving">{{ saving ? t('common.saving') : t('common.save') }}</button>
-          </div>
+          <footer class="activity-editor-footer">
+            <span>{{ t('admin.activities.workspace.requiredHint') }}</span>
+            <div>
+              <button type="button" class="btn btn-secondary" :disabled="saving" @click="closeEditor">{{ t('common.cancel') }}</button>
+              <button type="submit" class="btn btn-primary" :disabled="saving">
+                <Icon v-if="saving" name="refresh" size="sm" class="activity-spin" />
+                {{ saving ? t('common.saving') : t('common.save') }}
+              </button>
+            </div>
+          </footer>
         </form>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="campaignActionDialog.open" class="activity-dialog-backdrop" @click.self="closeCampaignAction">
+        <section class="activity-confirm-dialog" role="alertdialog" aria-modal="true" :aria-labelledby="'campaign-action-title'">
+          <span :class="['activity-confirm-icon', { 'activity-confirm-icon-danger': campaignActionDialog.type === 'end' }]">
+            <Icon :name="campaignActionDialog.type === 'draw' ? 'sparkles' : 'exclamationTriangle'" size="md" />
+          </span>
+          <div>
+            <h2 id="campaign-action-title">{{ campaignActionTitle }}</h2>
+            <p>{{ campaignActionMessage }}</p>
+          </div>
+          <footer>
+            <button type="button" class="btn btn-secondary" :disabled="campaignActionDialog.busy" @click="closeCampaignAction">{{ t('common.cancel') }}</button>
+            <button
+              type="button"
+              :class="['btn', campaignActionDialog.type === 'draw' ? 'btn-primary' : 'btn-danger']"
+              :disabled="campaignActionDialog.busy"
+              @click="confirmCampaignAction"
+            >
+              <Icon v-if="campaignActionDialog.busy" name="refresh" size="sm" class="activity-spin" />
+              {{ campaignActionDialog.type === 'draw' ? t('admin.activities.drawNow') : t('admin.activities.end') }}
+            </button>
+          </footer>
+        </section>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="winnerActionDialog.open" class="activity-dialog-backdrop" @click.self="closeWinnerAction">
+        <form class="winner-action-dialog" role="dialog" aria-modal="true" @submit.prevent="confirmWinnerAction">
+          <header>
+            <span :class="{ 'winner-action-danger': winnerActionDialog.type === 'reject' }">
+              <Icon :name="winnerActionDialog.type === 'deliver' ? 'checkCircle' : 'xCircle'" size="md" />
+            </span>
+            <div>
+              <h2>{{ winnerActionDialog.type === 'deliver' ? t('admin.activities.winners.deliver') : t('admin.activities.winners.reject') }}</h2>
+              <p>{{ winnerActionDialog.winner?.prize_name }} · {{ winnerActionDialog.winner?.campaign_name }}</p>
+            </div>
+          </header>
+          <label class="activity-form-field">
+            <span>{{ winnerActionDialog.type === 'deliver' ? t('admin.activities.winners.deliverNotePrompt') : t('admin.activities.winners.rejectNotePrompt') }}</span>
+            <textarea v-model="winnerActionDialog.note" class="input winner-action-note" autofocus></textarea>
+          </label>
+          <footer>
+            <button type="button" class="btn btn-secondary" :disabled="winnerActionDialog.busy" @click="closeWinnerAction">{{ t('common.cancel') }}</button>
+            <button
+              type="submit"
+              :class="['btn', winnerActionDialog.type === 'deliver' ? 'btn-primary' : 'btn-danger']"
+              :disabled="winnerActionDialog.busy"
+            >
+              <Icon v-if="winnerActionDialog.busy" name="refresh" size="sm" class="activity-spin" />
+              {{ t('common.confirm') }}
+            </button>
+          </footer>
+        </form>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="claimInfoWinner" class="activity-dialog-backdrop" @click.self="closeClaimInfo">
+        <section class="claim-info-dialog" role="dialog" aria-modal="true" :aria-labelledby="'claim-info-title'">
+          <header>
+            <div>
+              <span>{{ t('admin.activities.winners.claimInfoEyebrow') }}</span>
+              <h2 id="claim-info-title">{{ t('admin.activities.winners.claimInfoTitle') }}</h2>
+              <p>{{ claimInfoWinner.user_email || claimInfoWinner.user_username || claimInfoWinner.masked_user }}</p>
+            </div>
+            <button type="button" class="activity-dialog-close" :aria-label="t('common.close')" @click="closeClaimInfo">
+              <Icon name="x" size="sm" />
+            </button>
+          </header>
+          <dl>
+            <div v-for="entry in claimInfoEntries" :key="entry.key">
+              <dt>{{ entry.key }}</dt>
+              <dd>{{ entry.value }}</dd>
+            </div>
+          </dl>
+          <footer>
+            <button type="button" class="btn btn-primary" @click="closeClaimInfo">{{ t('common.close') }}</button>
+          </footer>
+        </section>
       </div>
     </Teleport>
   </AppLayout>
@@ -455,6 +1032,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Pagination from '@/components/common/Pagination.vue'
+import Icon from '@/components/icons/Icon.vue'
 import { useAppStore } from '@/stores/app'
 import { adminActivityAPI } from '@/api/admin/activity'
 import { extractApiErrorMessage } from '@/utils/apiError'
@@ -477,6 +1055,9 @@ import type {
 } from '@/types/activity'
 
 type FormPrize = Omit<ActivityPrize, 'created_at' | 'updated_at'>
+type ActivityWorkspace = 'campaigns' | 'progress' | 'winners'
+type CampaignActionType = 'draw' | 'end'
+type WinnerActionType = 'deliver' | 'reject'
 
 interface ActivityFormState {
   name: string
@@ -507,13 +1088,39 @@ const winnersLoading = ref(false)
 const statsLoading = ref(false)
 const saving = ref(false)
 const dialogOpen = ref(false)
+const activeWorkspace = ref<ActivityWorkspace>('campaigns')
 const keyword = ref('')
 const statusFilter = ref('')
 const winnerCampaignId = ref(0)
 const selectedStatsCampaignId = ref(0)
 const editingCampaign = ref<ActivityCampaign | null>(null)
+const claimInfoWinner = ref<ActivityWinner | null>(null)
 const campaignPagination = reactive({ page: 1, page_size: 20, total: 0 })
 const winnerPagination = reactive({ page: 1, page_size: 20, total: 0 })
+const campaignActionDialog = reactive<{
+  open: boolean
+  type: CampaignActionType
+  campaign: ActivityCampaign | null
+  busy: boolean
+}>({
+  open: false,
+  type: 'draw',
+  campaign: null,
+  busy: false,
+})
+const winnerActionDialog = reactive<{
+  open: boolean
+  type: WinnerActionType
+  winner: ActivityWinner | null
+  note: string
+  busy: boolean
+}>({
+  open: false,
+  type: 'deliver',
+  winner: null,
+  note: '',
+  busy: false,
+})
 
 let searchTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -558,6 +1165,52 @@ const publicParticipantCountOptions = computed<Array<{ value: ActivityPublicPart
 const selectedStatsCampaign = computed(() => campaigns.value.find(campaign => campaign.id === selectedStatsCampaignId.value) || null)
 const statsMetric = computed<ActivityMetric>(() => selectedStatsCampaign.value?.rule_config.metric || 'api_cost_amount')
 const statsMetricLabel = computed(() => metricLabel(statsMetric.value))
+const activePanelLoading = computed(() => {
+  if (activeWorkspace.value === 'progress') return statsLoading.value
+  if (activeWorkspace.value === 'winners') return winnersLoading.value
+  return loading.value
+})
+const workspaceTabs = computed(() => [
+  {
+    key: 'campaigns' as const,
+    label: t('admin.activities.workspace.tabs.campaigns'),
+    icon: 'gift' as const,
+    count: campaignPagination.total,
+  },
+  {
+    key: 'progress' as const,
+    label: t('admin.activities.workspace.tabs.progress'),
+    icon: 'chartBar' as const,
+    count: null,
+  },
+  {
+    key: 'winners' as const,
+    label: t('admin.activities.workspace.tabs.winners'),
+    icon: 'badge' as const,
+    count: winnerPagination.total,
+  },
+])
+const deliveryProgressPercent = computed(() => {
+  const stats = campaignStats.value
+  if (!stats || stats.winner_count <= 0) return 0
+  return Math.min(100, Math.round((stats.delivered_count / stats.winner_count) * 100))
+})
+const campaignActionTitle = computed(() => (
+  campaignActionDialog.type === 'draw'
+    ? t('admin.activities.dialogs.drawTitle')
+    : t('admin.activities.dialogs.endTitle')
+))
+const campaignActionMessage = computed(() => {
+  const campaign = campaignActionDialog.campaign
+  if (!campaign) return ''
+  return campaignActionDialog.type === 'draw'
+    ? t('admin.activities.confirmDraw', { name: campaign.name })
+    : t('admin.activities.confirmEnd', { name: campaign.name })
+})
+const claimInfoEntries = computed(() => Object.entries(claimInfoWinner.value?.claim_info || {}).map(([key, value]) => ({
+  key,
+  value: formatClaimInfoValue(value),
+})))
 
 function createDefaultForm(): ActivityFormState {
   const now = new Date()
@@ -684,8 +1337,52 @@ function syncSelectedStatsCampaign(): void {
 }
 
 function openProgress(campaign: ActivityCampaign): void {
+  activeWorkspace.value = 'progress'
   selectedStatsCampaignId.value = campaign.id
   void loadCampaignStats()
+}
+
+function selectWorkspace(workspace: ActivityWorkspace): void {
+  activeWorkspace.value = workspace
+  if (workspace === 'progress' && selectedStatsCampaignId.value && !campaignStats.value) {
+    void loadCampaignStats()
+  }
+}
+
+function handleWorkspaceKeydown(event: KeyboardEvent, index: number): void {
+  const keys = workspaceTabs.value.map(tab => tab.key)
+  let nextIndex = index
+  if (event.key === 'ArrowRight') nextIndex = (index + 1) % keys.length
+  else if (event.key === 'ArrowLeft') nextIndex = (index - 1 + keys.length) % keys.length
+  else if (event.key === 'Home') nextIndex = 0
+  else if (event.key === 'End') nextIndex = keys.length - 1
+  else return
+
+  event.preventDefault()
+  const nextKey = keys[nextIndex]
+  if (!nextKey) return
+  selectWorkspace(nextKey)
+  requestAnimationFrame(() => document.getElementById(workspaceTabId(nextKey))?.focus())
+}
+
+function workspaceTabId(workspace: ActivityWorkspace): string {
+  return `admin-activity-tab-${workspace}`
+}
+
+function workspacePanelId(workspace: ActivityWorkspace): string {
+  return `admin-activity-panel-${workspace}`
+}
+
+function refreshActiveWorkspace(): void {
+  if (activeWorkspace.value === 'progress') {
+    void loadCampaignStats()
+    return
+  }
+  if (activeWorkspace.value === 'winners') {
+    void reloadWinners()
+    return
+  }
+  void reloadCampaigns()
 }
 
 function resetForm(): void {
@@ -696,6 +1393,11 @@ function openCreate(): void {
   editingCampaign.value = null
   resetForm()
   dialogOpen.value = true
+}
+
+function closeEditor(): void {
+  if (saving.value) return
+  dialogOpen.value = false
 }
 
 async function openEdit(campaign: ActivityCampaign): Promise<void> {
@@ -877,59 +1579,114 @@ function normalizeRuleForSubmit(): ActivityRuleConfig | null {
   return rule
 }
 
-async function runDraw(campaign: ActivityCampaign): Promise<void> {
-  if (!window.confirm(t('admin.activities.confirmDraw', { name: campaign.name }))) return
+async function runDraw(campaign: ActivityCampaign): Promise<boolean> {
   try {
     selectedStatsCampaignId.value = campaign.id
     const result = await adminActivityAPI.runDraw(campaign.id)
     appStore.showSuccess(t('admin.activities.drawSuccess', { count: result.winner_count }))
     await Promise.all([reloadCampaigns(), reloadWinners()])
+    return true
   } catch (error) {
     appStore.showError(extractApiErrorMessage(error, t('admin.activities.drawFailed')))
+    return false
   }
 }
 
-async function endCampaign(campaign: ActivityCampaign): Promise<void> {
-  if (!window.confirm(t('admin.activities.confirmEnd', { name: campaign.name }))) return
+async function endCampaign(campaign: ActivityCampaign): Promise<boolean> {
   try {
     selectedStatsCampaignId.value = campaign.id
     await adminActivityAPI.endCampaign(campaign.id)
     appStore.showSuccess(t('admin.activities.endSuccess'))
     await reloadCampaigns()
+    return true
   } catch (error) {
     appStore.showError(extractApiErrorMessage(error, t('common.error')))
+    return false
   }
 }
 
-async function markDelivered(winner: ActivityWinner): Promise<void> {
-  const note = window.prompt(t('admin.activities.winners.deliverNotePrompt'), winner.admin_note || '')
-  if (note === null) return
+function openCampaignAction(campaign: ActivityCampaign, type: CampaignActionType): void {
+  campaignActionDialog.campaign = campaign
+  campaignActionDialog.type = type
+  campaignActionDialog.open = true
+}
+
+function closeCampaignAction(): void {
+  if (campaignActionDialog.busy) return
+  campaignActionDialog.open = false
+  campaignActionDialog.campaign = null
+}
+
+async function confirmCampaignAction(): Promise<void> {
+  const campaign = campaignActionDialog.campaign
+  if (!campaign || campaignActionDialog.busy) return
+  campaignActionDialog.busy = true
   try {
-    const updated = await adminActivityAPI.markWinnerDelivered(winner.id, note)
-    winners.value = winners.value.map(item => item.id === updated.id ? updated : item)
-    appStore.showSuccess(t('admin.activities.winners.deliverSuccess'))
-    if (selectedStatsCampaignId.value === updated.campaign_id) await loadCampaignStats()
-  } catch (error) {
-    appStore.showError(extractApiErrorMessage(error, t('common.error')))
+    const completed = campaignActionDialog.type === 'draw'
+      ? await runDraw(campaign)
+      : await endCampaign(campaign)
+    if (!completed) return
+    campaignActionDialog.open = false
+    campaignActionDialog.campaign = null
+  } finally {
+    campaignActionDialog.busy = false
   }
 }
 
-async function rejectWinner(winner: ActivityWinner): Promise<void> {
-  const note = window.prompt(t('admin.activities.winners.rejectNotePrompt'), winner.admin_note || '')
-  if (note === null) return
+function openWinnerAction(winner: ActivityWinner, type: WinnerActionType): void {
+  if (type === 'deliver' && !canDeliverWinner(winner)) return
+  if (winner.status === 'delivered' || winner.status === 'rejected') return
+  winnerActionDialog.winner = winner
+  winnerActionDialog.type = type
+  winnerActionDialog.note = winner.admin_note || ''
+  winnerActionDialog.open = true
+}
+
+function closeWinnerAction(): void {
+  if (winnerActionDialog.busy) return
+  winnerActionDialog.open = false
+  winnerActionDialog.winner = null
+  winnerActionDialog.note = ''
+}
+
+async function confirmWinnerAction(): Promise<void> {
+  const winner = winnerActionDialog.winner
+  if (!winner || winnerActionDialog.busy) return
+  winnerActionDialog.busy = true
   try {
-    const updated = await adminActivityAPI.rejectWinner(winner.id, note)
+    const updated = winnerActionDialog.type === 'deliver'
+      ? await adminActivityAPI.markWinnerDelivered(winner.id, winnerActionDialog.note)
+      : await adminActivityAPI.rejectWinner(winner.id, winnerActionDialog.note)
     winners.value = winners.value.map(item => item.id === updated.id ? updated : item)
-    appStore.showSuccess(t('admin.activities.winners.rejectSuccess'))
+    appStore.showSuccess(t(
+      winnerActionDialog.type === 'deliver'
+        ? 'admin.activities.winners.deliverSuccess'
+        : 'admin.activities.winners.rejectSuccess',
+    ))
     if (selectedStatsCampaignId.value === updated.campaign_id) await loadCampaignStats()
+    winnerActionDialog.open = false
+    winnerActionDialog.winner = null
+    winnerActionDialog.note = ''
   } catch (error) {
     appStore.showError(extractApiErrorMessage(error, t('common.error')))
+  } finally {
+    winnerActionDialog.busy = false
   }
 }
 
 function showClaimInfo(winner: ActivityWinner): void {
-  const text = JSON.stringify(winner.claim_info || {}, null, 2)
-  window.alert(text)
+  claimInfoWinner.value = winner
+}
+
+function closeClaimInfo(): void {
+  claimInfoWinner.value = null
+}
+
+function formatClaimInfoValue(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '-'
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  return JSON.stringify(value)
 }
 
 function addPrize(): void {
@@ -1028,11 +1785,11 @@ function statusLabel(status: ActivityStatus): string {
   return t(`activities.status.${status}`)
 }
 
-function statusBadgeClass(status: ActivityStatus): string {
-  if (status === 'active') return 'badge-success'
-  if (status === 'paused') return 'badge-warning'
-  if (status === 'ended') return 'badge-gray'
-  return 'badge-primary'
+function campaignStatusClass(status: ActivityStatus): string {
+  if (status === 'active') return 'admin-status-positive'
+  if (status === 'paused') return 'admin-status-warning'
+  if (status === 'ended') return 'admin-status-neutral'
+  return 'admin-status-primary'
 }
 
 function metricLabel(metric: ActivityMetric): string {
@@ -1073,11 +1830,15 @@ function winnerStatusLabel(status: ActivityWinnerStatus): string {
   return t(`activities.winnerStatus.${status}`)
 }
 
-function winnerStatusBadgeClass(status: ActivityWinnerStatus): string {
-  if (status === 'delivered') return 'badge-success'
-  if (status === 'pending_claim' || status === 'pending_delivery') return 'badge-warning'
-  if (status === 'rejected' || status === 'expired') return 'badge-danger'
-  return 'badge-gray'
+function winnerStatusClass(status: ActivityWinnerStatus): string {
+  if (status === 'delivered') return 'admin-status-positive'
+  if (status === 'pending_claim' || status === 'pending_delivery') return 'admin-status-warning'
+  if (status === 'rejected' || status === 'expired') return 'admin-status-danger'
+  return 'admin-status-neutral'
+}
+
+function canDeliverWinner(winner: ActivityWinner): boolean {
+  return winner.status === 'pending_delivery'
 }
 
 function claimStatusLabel(status: ActivityClaimStatus): string {
@@ -1105,3 +1866,5 @@ onMounted(async () => {
   await reloadWinners()
 })
 </script>
+
+<style scoped src="./ActivitiesView.css"></style>

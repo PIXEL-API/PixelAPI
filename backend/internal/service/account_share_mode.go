@@ -112,6 +112,7 @@ const (
 	AccountShareReviewModerationInterval            = 15 * time.Second
 	AccountShareReviewModerationBatchSize           = 20
 	AccountShareReviewModerationMaxAttempts         = 5
+	AccountShareRoomBatchMaxAccounts                = 1000
 	accountShareSeatBillingTaskName                 = "account_share_seat_billing"
 	accountShareSeatWaiverCompensationTaskName      = "account_share_seat_waiver_compensation"
 	accountShareReviewModerationTaskName            = "account_share_review_moderation"
@@ -147,6 +148,9 @@ var (
 	ErrAccountShareRoomLevelMismatch            = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_LEVEL_MISMATCH", "all accounts in a room must have the same account level")
 	ErrAccountShareRoomUnknownLevel             = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_UNKNOWN_LEVEL", "accounts with an unknown level cannot be added to a room")
 	ErrAccountShareRoomAccountConfigUnsupported = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_ACCOUNT_CONFIG_UNSUPPORTED", "proxy and account concurrency must be edited on individual accounts")
+	ErrAccountShareRoomModeRequired             = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_MODE_REQUIRED", "account must use the platform account mode before it can join a room")
+	ErrAccountShareRoomAccountConflict          = infraerrors.Conflict("ACCOUNT_SHARE_ROOM_ACCOUNT_CONFLICT", "account already belongs to another room")
+	ErrAccountShareRoomAccountAttached          = infraerrors.Conflict("ACCOUNT_SHARE_ROOM_ACCOUNT_ATTACHED", "account must leave its room before changing account mode")
 	ErrAccountExternalPlacementInvalid          = infraerrors.BadRequest("ACCOUNT_EXTERNAL_PLACEMENT_INVALID", "invalid external placement target")
 	ErrAccountExternalPlacementBusy             = infraerrors.Conflict("ACCOUNT_EXTERNAL_PLACEMENT_BUSY", "account has an in-flight room request; retry after it drains")
 	ErrAccountExternalPlacementConflict         = infraerrors.Conflict("ACCOUNT_EXTERNAL_PLACEMENT_CONFLICT", "account already has a different external placement")
@@ -399,6 +403,19 @@ type AccountShareRoomAccount struct {
 	Priority           int        `json:"priority"`
 	PlacementState     string     `json:"placement_state"`
 	LastUsedAt         *time.Time `json:"last_used_at,omitempty"`
+}
+
+type AccountShareRoomAccountMutationInput struct {
+	ListingID   int64
+	AccountID   int64
+	OwnerUserID int64
+}
+
+type BatchAccountShareRoomAccountsInput struct {
+	ListingID      int64
+	AccountIDs     []int64
+	OwnerUserID    int64
+	IdempotencyKey string
 }
 
 type AccountExternalPlacement struct {
@@ -933,6 +950,9 @@ type AccountShareModeRepository interface {
 type AccountShareRoomRepository interface {
 	CreateRoomFromOwnedAccount(ctx context.Context, ownerUserID, accountID, modeGroupID int64, idempotencyKey string, listing *AccountShareListing) (*AccountShareListing, error)
 	ListRoomAccounts(ctx context.Context, listingID, viewerUserID int64, viewerIsAdmin bool) ([]AccountShareRoomAccount, error)
+	AttachRoomAccount(ctx context.Context, input AccountShareRoomAccountMutationInput) error
+	DetachRoomAccount(ctx context.Context, input AccountShareRoomAccountMutationInput) (*AccountShareSeatBillingResult, error)
+	HasRoomAccount(ctx context.Context, ownerUserID, accountID int64) (bool, error)
 	GetExternalPlacement(ctx context.Context, ownerUserID, accountID int64) (*AccountExternalPlacement, error)
 	BeginExternalPlacementDrain(ctx context.Context, ownerUserID, accountID int64) (bool, error)
 	RestoreExternalPlacementAfterDrain(ctx context.Context, ownerUserID, accountID int64) error
@@ -2029,6 +2049,78 @@ func (s *AccountShareModeService) ListRoomAccounts(ctx context.Context, viewerUs
 		return nil, ErrServiceUnavailable
 	}
 	return roomRepo.ListRoomAccounts(ctx, listingID, viewerUserID, viewerIsAdmin)
+}
+
+func (s *AccountShareModeService) AttachRoomAccounts(ctx context.Context, input BatchAccountShareRoomAccountsInput) (*BulkUpdateAccountsResult, error) {
+	return s.mutateRoomAccounts(ctx, input, true)
+}
+
+func (s *AccountShareModeService) DetachRoomAccounts(ctx context.Context, input BatchAccountShareRoomAccountsInput) (*BulkUpdateAccountsResult, error) {
+	return s.mutateRoomAccounts(ctx, input, false)
+}
+
+func (s *AccountShareModeService) mutateRoomAccounts(ctx context.Context, input BatchAccountShareRoomAccountsInput, attach bool) (*BulkUpdateAccountsResult, error) {
+	if input.OwnerUserID <= 0 {
+		return nil, ErrUserNotFound
+	}
+	if input.ListingID <= 0 {
+		return nil, ErrAccountShareListingNotFound
+	}
+	accountIDs := uniquePositiveInt64s(input.AccountIDs)
+	if len(accountIDs) == 0 || len(accountIDs) > AccountShareRoomBatchMaxAccounts {
+		return nil, ErrAccountExternalPlacementInvalid.WithMetadata(map[string]string{"field": "account_ids"})
+	}
+	if _, err := NormalizeIdempotencyKey(input.IdempotencyKey); err != nil {
+		return nil, err
+	}
+	if s == nil || s.repo == nil {
+		return nil, ErrServiceUnavailable
+	}
+	roomRepo, ok := s.repo.(AccountShareRoomRepository)
+	if !ok {
+		return nil, ErrServiceUnavailable
+	}
+	listing, err := s.repo.GetListingByID(ctx, input.ListingID, input.OwnerUserID)
+	if err != nil {
+		return nil, err
+	}
+	if listing == nil || listing.OwnerUserID != input.OwnerUserID {
+		return nil, ErrAccountShareRoomOwnerMismatch
+	}
+
+	result := &BulkUpdateAccountsResult{
+		SuccessIDs: make([]int64, 0, len(accountIDs)),
+		FailedIDs:  make([]int64, 0),
+		Results:    make([]BulkUpdateAccountResult, 0, len(accountIDs)),
+	}
+	for _, accountID := range accountIDs {
+		item := BulkUpdateAccountResult{AccountID: accountID}
+		mutation := AccountShareRoomAccountMutationInput{
+			ListingID:   input.ListingID,
+			AccountID:   accountID,
+			OwnerUserID: input.OwnerUserID,
+		}
+		if attach {
+			err = roomRepo.AttachRoomAccount(ctx, mutation)
+		} else {
+			var billing *AccountShareSeatBillingResult
+			billing, err = roomRepo.DetachRoomAccount(ctx, mutation)
+			if err == nil {
+				s.invalidateSeatBillingCaches(billing)
+			}
+		}
+		if err != nil {
+			item.Error = err.Error()
+			result.Failed++
+			result.FailedIDs = append(result.FailedIDs, accountID)
+		} else {
+			item.Success = true
+			result.Success++
+			result.SuccessIDs = append(result.SuccessIDs, accountID)
+		}
+		result.Results = append(result.Results, item)
+	}
+	return result, nil
 }
 
 func (s *AccountShareModeService) ListListings(ctx context.Context, viewerUserID int64, viewerIsAdmin bool, filters AccountShareListingFilters, params pagination.PaginationParams) ([]AccountShareListing, *pagination.PaginationResult, error) {

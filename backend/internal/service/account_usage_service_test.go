@@ -291,13 +291,17 @@ func TestBuildCodexUsageProgressFromExtra_ZerosExpiredWindow(t *testing.T) {
 		if progress.RemainingSeconds != 0 {
 			t.Fatalf("expected RemainingSeconds=0, got %v", progress.RemainingSeconds)
 		}
+		if progress.WindowStart != nil {
+			t.Fatalf("expected WindowStart=nil for expired window, got %v", progress.WindowStart)
+		}
 	})
 
-	t.Run("active 5h window keeps utilization", func(t *testing.T) {
-		resetAt := now.Add(2 * time.Hour).Format(time.RFC3339)
+	t.Run("active 5h window keeps utilization and derives exact start", func(t *testing.T) {
+		resetTime := now.Add(2 * time.Hour)
 		extra := map[string]any{
-			"codex_5h_used_percent": 42.0,
-			"codex_5h_reset_at":     resetAt,
+			"codex_5h_used_percent":   42.0,
+			"codex_5h_reset_at":       resetTime.Format(time.RFC3339),
+			"codex_5h_window_minutes": 300,
 		}
 		progress := buildCodexUsageProgressFromExtra(extra, "5h", now)
 		if progress == nil {
@@ -305,6 +309,10 @@ func TestBuildCodexUsageProgressFromExtra_ZerosExpiredWindow(t *testing.T) {
 		}
 		if progress.Utilization != 42.0 {
 			t.Fatalf("expected Utilization=42, got %v", progress.Utilization)
+		}
+		expectedStart := resetTime.Add(-5 * time.Hour)
+		if progress.WindowStart == nil || !progress.WindowStart.Equal(expectedStart) {
+			t.Fatalf("expected WindowStart=%v, got %v", expectedStart, progress.WindowStart)
 		}
 	})
 

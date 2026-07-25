@@ -219,7 +219,18 @@ function mountView(options: { renderDialogs?: boolean } = {}) {
         ReAuthAccountModal: true,
         RoomAccountsDialog: {
           props: ['show', 'listing'],
-          template: '<div v-if="show" data-testid="room-accounts-dialog">{{ listing?.room_name }}</div>',
+          emits: ['changed'],
+          template: `
+            <div v-if="show" data-testid="room-accounts-dialog">
+              {{ listing?.room_name }}
+              <button
+                data-testid="room-accounts-changed"
+                @click="$emit('changed', { operation: 'add', success: 1, failed: 0 })"
+              >
+                changed
+              </button>
+            </div>
+          `,
         },
         UsageProgressBar: true,
         Pagination: true,
@@ -384,7 +395,7 @@ describe('AccountShareView async snapshots and mode keys', () => {
         id: 700,
         account_id: 22,
         owner_user_id: 9,
-        room_name: 'OpenAI账号房间',
+        room_name: 'OpenAI房间',
         account_count: 1,
         healthy_account_count: 1,
       }))
@@ -408,7 +419,7 @@ describe('AccountShareView async snapshots and mode keys', () => {
     const secondPayload = createRoom.mock.calls[1]?.[0]
     expect(firstPayload).toMatchObject({
       account_id: 22,
-      room_name: 'OpenAI账号房间',
+      room_name: 'OpenAI房间',
       seat_limit: 2,
       per_user_concurrency: 5,
     })
@@ -425,7 +436,7 @@ describe('AccountShareView async snapshots and mode keys', () => {
     const ownRoom = listing({
       id: 900,
       owner_user_id: 9,
-      room_name: '我的多账号房间',
+      room_name: '我的共享房间',
       account_count: 3,
       healthy_account_count: 2,
     })
@@ -435,14 +446,52 @@ describe('AccountShareView async snapshots and mode keys', () => {
 
     const wrapper = mountView()
     await flushPromises()
-    expect(wrapper.text()).toContain('我的多账号房间')
+    expect(wrapper.text()).toContain('我的共享房间')
     expect(wrapper.text()).toContain('健康账号 2/3')
 
     const roomCountButton = wrapper.findAll('button').find(button => button.text().includes('健康账号 2/3'))
     await roomCountButton?.trigger('click')
     await nextTick()
 
-    expect(wrapper.get('[data-testid="room-accounts-dialog"]').text()).toContain('我的多账号房间')
+    expect(wrapper.get('[data-testid="room-accounts-dialog"]').text()).toContain('我的共享房间')
+    wrapper.unmount()
+  })
+
+  it('refreshes room counts and rebinds the open dialog after room accounts change', async () => {
+    const ownRoom = listing({
+      id: 901,
+      owner_user_id: 9,
+      room_name: '待更新房间',
+      account_count: 1,
+      healthy_account_count: 1,
+    })
+    const refreshedRoom = {
+      ...ownRoom,
+      account_count: 2,
+      healthy_account_count: 2,
+      updated_at: '2026-07-11T02:00:00Z',
+    }
+    let mainListRequestCount = 0
+    listListings.mockImplementation((_page: number, pageSize: number) => {
+      if (pageSize !== 10) return Promise.resolve(paginated([refreshedRoom]))
+      mainListRequestCount += 1
+      return Promise.resolve(paginated([
+        mainListRequestCount === 1 ? ownRoom : refreshedRoom,
+      ]))
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+    const roomCountButton = wrapper.findAll('button').find(button =>
+      button.text().includes('健康账号 1/1')
+    )
+    await roomCountButton?.trigger('click')
+    await wrapper.get('[data-testid="room-accounts-changed"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('健康账号 2/2')
+    expect(wrapper.get('[data-testid="room-accounts-dialog"]').text()).toContain('待更新房间')
+    expect(showSuccess).toHaveBeenCalledWith('已有 1 个账号成功加入房间')
     wrapper.unmount()
   })
 })

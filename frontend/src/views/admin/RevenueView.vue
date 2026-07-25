@@ -524,6 +524,7 @@ const adjustmentRows = computed(() => {
     { key: 'share-consumer', label: t('admin.revenue.fields.shareConsumerCharge'), value: formatAmount(data.share_consumer_charge) },
     { key: 'share-account', label: t('admin.revenue.fields.shareAccountCost'), value: formatAmount(data.share_account_cost) },
     { key: 'share-owner', label: t('admin.revenue.fields.shareOwnerCredit'), value: formatAmount(data.share_owner_credit) },
+    { key: 'share-invite', label: t('admin.revenue.fields.shareInviteCredit'), value: formatAmount(data.share_invite_credit) },
     { key: 'share-platform', label: t('admin.revenue.fields.sharePlatformFee'), value: formatAmount(data.share_platform_fee) },
     { key: 'share-net', label: t('admin.revenue.fields.shareNetProfit'), value: formatAmount(data.share_net_profit) },
     { key: 'share-count', label: t('admin.revenue.fields.shareSettlementCount'), value: formatInteger(data.share_settlement_count) }

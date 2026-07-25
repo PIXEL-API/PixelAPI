@@ -395,11 +395,23 @@ type AccountUsageSummary struct {
 	} `json:"highest_request_day"`
 }
 
+// AccountUsageLifetimeSummary represents all usage logs that can be associated
+// with the same external account identity, including retained historical rows.
+type AccountUsageLifetimeSummary struct {
+	AvailableFrom      *time.Time `json:"available_from,omitempty"`
+	AvailableTo        *time.Time `json:"available_to,omitempty"`
+	SourceAccountCount int        `json:"source_account_count"`
+	TotalCost          float64    `json:"total_cost"`
+	TotalRequests      int64      `json:"total_requests"`
+	TotalTokens        int64      `json:"total_tokens"`
+}
+
 // AccountUsageStatsResponse represents the full usage statistics response for an account
 type AccountUsageStatsResponse struct {
-	History           []AccountUsageHistory `json:"history"`
-	Summary           AccountUsageSummary   `json:"summary"`
-	Models            []ModelStat           `json:"models"`
-	Endpoints         []EndpointStat        `json:"endpoints"`
-	UpstreamEndpoints []EndpointStat        `json:"upstream_endpoints"`
+	History           []AccountUsageHistory       `json:"history"`
+	Summary           AccountUsageSummary         `json:"summary"`
+	Lifetime          AccountUsageLifetimeSummary `json:"lifetime"`
+	Models            []ModelStat                 `json:"models"`
+	Endpoints         []EndpointStat              `json:"endpoints"`
+	UpstreamEndpoints []EndpointStat              `json:"upstream_endpoints"`
 }

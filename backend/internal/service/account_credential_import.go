@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 )
 
 const (
@@ -97,6 +99,49 @@ func ParseAccountCredentialImportContents(contents []string) ([]AccountCredentia
 		}
 	}
 	return sources, errs
+}
+
+// EnrichOpenAIOAuthCredentialsFromIDToken fills missing OpenAI identity fields
+// from an imported ID token. Imported fields always take precedence over token
+// claims, and token expiry is intentionally ignored because this data is used
+// only to preserve account identity during credential import.
+func EnrichOpenAIOAuthCredentialsFromIDToken(credentials map[string]any) error {
+	if credentials == nil {
+		return nil
+	}
+	idToken := importStringField(credentials, "id_token", "idToken")
+	if idToken == "" {
+		return nil
+	}
+
+	claims, err := openai.DecodeIDToken(idToken)
+	if err != nil {
+		return err
+	}
+	userInfo := claims.GetUserInfo()
+	if userInfo == nil {
+		return nil
+	}
+
+	setIfMissing := func(key, value string) {
+		if value == "" {
+			return
+		}
+		if existing, exists := credentials[key]; exists {
+			existingString, isString := existing.(string)
+			if !isString || existingString != "" {
+				return
+			}
+		}
+		credentials[key] = value
+	}
+
+	setIfMissing("email", userInfo.Email)
+	setIfMissing("plan_type", userInfo.PlanType)
+	setIfMissing("chatgpt_account_id", userInfo.ChatGPTAccountID)
+	setIfMissing("chatgpt_user_id", userInfo.ChatGPTUserID)
+	setIfMissing("organization_id", userInfo.OrganizationID)
+	return nil
 }
 
 func BuildOpenAIAccountCredentialImportExtra(tokenInfo *OpenAITokenInfo) map[string]any {

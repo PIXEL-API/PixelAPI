@@ -799,38 +799,9 @@ func enrichCredentialsFromIDToken(item *DataAccount) {
 		return
 	}
 
-	idToken, _ := item.Credentials["id_token"].(string)
-	if strings.TrimSpace(idToken) == "" {
-		return
-	}
-
-	// DecodeIDToken skips expiry validation — safe for imported data
-	claims, err := openai.DecodeIDToken(idToken)
-	if err != nil {
+	if err := service.EnrichOpenAIOAuthCredentialsFromIDToken(item.Credentials); err != nil {
 		slog.Debug("import_enrich_id_token_decode_failed", "account", item.Name, "error", err)
-		return
 	}
-
-	userInfo := claims.GetUserInfo()
-	if userInfo == nil {
-		return
-	}
-
-	// Fill missing fields only (never overwrite existing values)
-	setIfMissing := func(key, value string) {
-		if value == "" {
-			return
-		}
-		if existing, _ := item.Credentials[key].(string); existing == "" {
-			item.Credentials[key] = value
-		}
-	}
-
-	setIfMissing("email", userInfo.Email)
-	setIfMissing("plan_type", userInfo.PlanType)
-	setIfMissing("chatgpt_account_id", userInfo.ChatGPTAccountID)
-	setIfMissing("chatgpt_user_id", userInfo.ChatGPTUserID)
-	setIfMissing("organization_id", userInfo.OrganizationID)
 }
 
 func normalizeProxyStatus(status string) string {

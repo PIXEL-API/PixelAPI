@@ -1722,105 +1722,6 @@ func ownedAgentIdentityPublicAccessRevoked(before, after *Account) bool {
 	return before != nil && after != nil && before.IsOpenAIAgentIdentity() && before.IsPublicShareApproved() && !after.IsPublicShareApproved()
 }
 
-func (s *AccountService) SetOwnedOpenAIAccountLevel(ctx context.Context, ownerUserID, accountID int64, accountLevel, reason string) (*Account, error) {
-	account, err := s.GetOwnedByID(ctx, ownerUserID, accountID)
-	if err != nil {
-		return nil, err
-	}
-	if account.Platform != PlatformOpenAI || account.Type != AccountTypeOAuth {
-		return nil, infraerrors.BadRequest("OWNED_ACCOUNT_LEVEL_UNSUPPORTED", "account level verification only supports OpenAI OAuth accounts")
-	}
-
-	levelConfigs, err := s.openAIAccountLevelConfigs(ctx)
-	if err != nil {
-		return nil, err
-	}
-	level := NormalizeAccountLevel(accountLevel)
-	if !IsUserSelectableOpenAIAccountLevelWithConfigs(level, levelConfigs) {
-		return nil, infraerrors.BadRequest("OWNED_ACCOUNT_LEVEL_INVALID", "invalid OpenAI account level")
-	}
-	if err := validateOwnedAccountSourceForPlatform(account.Platform, account.Type, account.Credentials, account.Extra); err != nil {
-		return nil, err
-	}
-
-	before := cloneAccountForNotice(account)
-	account.AccountLevel = level
-	if level == AccountLevelPlus {
-		concurrency, err := NormalizeOpenAIPlusConcurrency(account.Platform, account.AccountLevel, account.Concurrency)
-		if err != nil {
-			return nil, err
-		}
-		account.Concurrency = concurrency
-	}
-	if err := ValidateOpenAIPlusConcurrency(account.Platform, account.AccountLevel, account.Concurrency); err != nil {
-		return nil, err
-	}
-
-	shouldBindGroups := false
-	var groupIDs []int64
-	if NormalizeAccountLevel(before.AccountLevel) != NormalizeAccountLevel(account.AccountLevel) &&
-		accountHasExternalPlacement(before) {
-		if NormalizeAccountShareMode(before.ShareMode) == AccountShareModePublic {
-			groupIDs, err = s.prepareOwnedPublicShareRevalidation(ctx, ownerUserID, account)
-			if err != nil {
-				return nil, err
-			}
-			shouldBindGroups = true
-			if level == AccountLevelFree {
-				account.ShareStatus = AccountShareStatusSuspended
-				account.ErrorMessage = strings.TrimSpace(reason)
-				if account.ErrorMessage == "" {
-					account.ErrorMessage = "OpenAI account level was changed to free"
-				}
-			}
-		} else if err := s.convertOwnedExternalPlacementToPrivateForIdentityChange(ctx, ownerUserID, account); err != nil {
-			return nil, err
-		}
-	}
-	if account.IsPublicShareApproved() {
-		publicGroup, err := s.resolveOwnedPublicShareGroup(ctx, account)
-		if err == nil {
-			groupIDs, err = s.publicOwnedAccountGroupIDs(ctx, ownerUserID, account, publicGroup)
-			if err != nil {
-				return nil, err
-			}
-			shouldBindGroups = true
-		} else if level == AccountLevelFree {
-			groupIDs, err = s.initialOwnedAccountGroupIDs(ctx, ownerUserID, account.Platform, account.Type, account.ShareMode, nil)
-			if err != nil {
-				return nil, err
-			}
-			account.ShareStatus = AccountShareStatusSuspended
-			account.ErrorMessage = strings.TrimSpace(reason)
-			if account.ErrorMessage == "" {
-				account.ErrorMessage = "OpenAI account level was changed to free and no compatible public sharing pool is available"
-			}
-			shouldBindGroups = true
-		} else {
-			return nil, err
-		}
-	}
-	shouldInvalidateAgentIdentityWS := ownedAgentIdentityPublicAccessRevoked(before, account)
-	if shouldInvalidateAgentIdentityWS && s.agentIdentityWSInvalidator == nil {
-		return nil, ErrOwnedAgentIdentityWSInvalidatorUnavailable
-	}
-
-	if err := s.accountRepo.Update(ctx, account); err != nil {
-		return nil, fmt.Errorf("update owned OpenAI account level: %w", err)
-	}
-	if shouldInvalidateAgentIdentityWS {
-		s.agentIdentityWSInvalidator.InvalidateAgentIdentityWSConnections(account.ID)
-	}
-	if shouldBindGroups {
-		if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
-			return nil, fmt.Errorf("bind account groups after level update: %w", err)
-		}
-		account.GroupIDs = append([]int64(nil), groupIDs...)
-	}
-	s.notifyAccountChanged(ctx, before, account)
-	return account, nil
-}
-
 func (s *AccountService) DeleteOwned(ctx context.Context, ownerUserID, accountID int64) error {
 	account, err := s.GetOwnedByID(ctx, ownerUserID, accountID)
 	if err != nil {
@@ -2406,16 +2307,22 @@ func (s *AccountService) ConvertOwnedExternalPlacement(ctx context.Context, owne
 	if idempotencyKey == "" || len(idempotencyKey) > 128 {
 		return nil, ErrAccountExternalPlacementInvalid.WithMetadata(map[string]string{"field": "idempotency_key"})
 	}
-	if target == AccountExternalPlacementRoom && (input.RoomID == nil || *input.RoomID <= 0) {
-		return nil, ErrAccountExternalPlacementInvalid.WithMetadata(map[string]string{"field": "room_id"})
-	}
-	if target != AccountExternalPlacementRoom && input.RoomID != nil {
+	if input.RoomID != nil {
 		return nil, ErrAccountExternalPlacementInvalid.WithMetadata(map[string]string{"field": "room_id"})
 	}
 
 	account, err := s.GetOwnedByID(ctx, ownerUserID, accountID)
 	if err != nil {
 		return nil, err
+	}
+	if target != AccountExternalPlacementRoom {
+		attached, err := s.accountShareRoomRepo.HasRoomAccount(ctx, ownerUserID, accountID)
+		if err != nil {
+			return nil, err
+		}
+		if attached {
+			return nil, ErrAccountShareRoomAccountAttached
+		}
 	}
 	previousAccount := cloneAccountForNotice(account)
 	placementChanged := !accountExternalPlacementMatchesTarget(account.ExternalPlacement, target, input.RoomID)
@@ -2470,26 +2377,12 @@ func (s *AccountService) ConvertOwnedExternalPlacement(ctx context.Context, owne
 		}
 		publicGroupID = &publicGroup.ID
 	case AccountExternalPlacementRoom:
-		room, err := s.accountShareModeRepo.GetListingByID(ctx, *input.RoomID, ownerUserID)
-		if err != nil {
-			return nil, err
-		}
-		if room.OwnerUserID != ownerUserID {
-			return nil, ErrAccountShareRoomOwnerMismatch
-		}
-		if !strings.EqualFold(strings.TrimSpace(room.Platform), strings.TrimSpace(account.Platform)) {
-			return nil, ErrAccountShareRoomPlatformMismatch
-		}
 		accountLevel, err := s.canonicalOwnedAccountRoomLevel(ctx, account)
 		if err != nil {
 			return nil, err
 		}
-		roomLevel := NormalizeAccountLevel(room.AccountLevel)
-		if accountLevel == AccountLevelUnknown || roomLevel == AccountLevelUnknown {
+		if accountLevel == AccountLevelUnknown {
 			return nil, ErrAccountShareRoomUnknownLevel
-		}
-		if accountLevel != roomLevel {
-			return nil, ErrAccountShareRoomLevelMismatch
 		}
 		modeGroup, err := s.accountShareModeRepo.GetModeGroup(ctx, account.Platform)
 		if err != nil {
@@ -2513,7 +2406,16 @@ func (s *AccountService) ConvertOwnedExternalPlacement(ctx context.Context, owne
 	if err != nil {
 		return nil, err
 	}
-	drained = false
+	if drained {
+		if err := s.accountShareRoomRepo.RestoreExternalPlacementAfterDrain(
+			context.WithoutCancel(ctx),
+			ownerUserID,
+			accountID,
+		); err != nil {
+			return nil, err
+		}
+		drained = false
+	}
 	if s.accountShareBillingCache != nil {
 		s.accountShareBillingCache.invalidateSeatBillingCaches(result.SeatBillingResult)
 	}
