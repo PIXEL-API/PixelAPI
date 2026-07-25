@@ -753,7 +753,7 @@ export async function attachRoomAccounts(
   payload: AccountShareRoomAccountsBatchRequest
 ): Promise<AccountShareRoomAccountsBatchResponse> {
   const { data } = await apiClient.post<AccountShareRoomAccountsBatchResponse>(
-    `/account-share/listings/${listingID}/accounts:attach-batch`,
+    `/account-share/listings/${listingID}/accounts/attach-batch`,
     payload
   )
   return data
@@ -764,7 +764,7 @@ export async function detachRoomAccounts(
   payload: AccountShareRoomAccountsBatchRequest
 ): Promise<AccountShareRoomAccountsBatchResponse> {
   const { data } = await apiClient.post<AccountShareRoomAccountsBatchResponse>(
-    `/account-share/listings/${listingID}/accounts:detach-batch`,
+    `/account-share/listings/${listingID}/accounts/detach-batch`,
     payload
   )
   return data
