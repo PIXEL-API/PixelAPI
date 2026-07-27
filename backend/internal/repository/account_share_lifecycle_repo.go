@@ -335,14 +335,14 @@ func (r *accountShareModeRepository) TransitionRoomLifecycle(
 
 	result, err := tx.ExecContext(ctx, `
 		UPDATE account_share_listings
-		SET status = $1,
+		SET status = $1::varchar(20),
 			row_version = row_version + 1,
 			status_reason_code = $2,
 			status_reason = $3,
-			validated_at = CASE WHEN $1 = 'active' THEN NOW() ELSE validated_at END,
-			draining_at = CASE WHEN $1 = 'draining' THEN NOW() ELSE draining_at END,
-			paused_at = CASE WHEN $1 = 'paused' THEN NOW() ELSE paused_at END,
-			suspended_at = CASE WHEN $1 = 'suspended' THEN NOW() ELSE suspended_at END,
+			validated_at = CASE WHEN $1::varchar(20) = 'active'::varchar(20) THEN NOW() ELSE validated_at END,
+			draining_at = CASE WHEN $1::varchar(20) = 'draining'::varchar(20) THEN NOW() ELSE draining_at END,
+			paused_at = CASE WHEN $1::varchar(20) = 'paused'::varchar(20) THEN NOW() ELSE paused_at END,
+			suspended_at = CASE WHEN $1::varchar(20) = 'suspended'::varchar(20) THEN NOW() ELSE suspended_at END,
 			pending_operation_id = $4::uuid,
 			updated_at = NOW()
 		WHERE id = $5

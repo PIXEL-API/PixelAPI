@@ -189,7 +189,7 @@ func TestAccountShareModeRepositoryRoomLifecycleOwnerDrainCommitsRevision(t *tes
 			newVersion,
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("UPDATE account_share_listings\\s+SET status = \\$1").
+	mock.ExpectExec("(?s)UPDATE account_share_listings\\s+SET status = \\$1::varchar\\(20\\).*CASE WHEN \\$1::varchar\\(20\\) = 'draining'::varchar\\(20\\)").
 		WithArgs(
 			service.AccountShareListingStatusDraining,
 			"owner_draining",
@@ -336,7 +336,7 @@ func TestAccountShareModeRepositoryRoomLifecycleRollsBackAfterRevisionFailure(t 
 			newVersion,
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("UPDATE account_share_listings\\s+SET status = \\$1").
+	mock.ExpectExec("(?s)UPDATE account_share_listings\\s+SET status = \\$1::varchar\\(20\\).*CASE WHEN \\$1::varchar\\(20\\) = 'draining'::varchar\\(20\\)").
 		WithArgs(
 			service.AccountShareListingStatusDraining,
 			"owner_draining",

@@ -4396,8 +4396,12 @@ func insertAccountShareEndOperationInTx(
 		VALUES (
 			$1::uuid, $2, $3, 'end_membership',
 			$4, 'consumer', 'consumer_request', $1,
-			$5, $5, CASE WHEN $6 = 'succeeded' THEN $5 ELSE NULL END,
-			$6, '{}'::jsonb, $7::jsonb, $8, $9, $9
+			$5::bigint, $5::bigint,
+			CASE
+				WHEN $6::varchar(20) = 'succeeded'::varchar(20) THEN $5::bigint
+				ELSE NULL::bigint
+			END,
+			$6::varchar(20), '{}'::jsonb, $7::jsonb, $8::timestamptz, $9::timestamptz, $9::timestamptz
 		)
 	`, operationID, listingID, membershipID, consumerUserID, listingVersion, status, string(resultPayload), completedAt, now.UTC())
 	if err != nil {
@@ -5271,7 +5275,7 @@ func (r *accountShareModeRepository) ProcessUnavailableMemberships(ctx context.C
 			AND %s
 		ORDER BY m.joined_at ASC, m.id ASC
 		LIMIT $3
-	`, accountShareMembershipPermanentlyUnavailableConditionSQL("$2"))
+	`, accountShareMembershipPermanentlyUnavailableConditionSQL("$2::timestamptz"))
 	rows, err := r.db.QueryContext(ctx, query, service.AccountShareMembershipStatusActive, now, limit)
 	if err != nil {
 		return nil, err
@@ -5324,7 +5328,7 @@ func (r *accountShareModeRepository) ListRecoverableUnavailableMembershipIDs(ctx
 			AND %s
 		ORDER BY COALESCE(m.last_request_at, m.joined_at) ASC, m.id ASC
 		LIMIT $3
-	`, accountShareMembershipRecoverablyUnavailableConditionSQL("$2")), service.AccountShareMembershipStatusActive, now, limit)
+	`, accountShareMembershipRecoverablyUnavailableConditionSQL("$2::timestamptz")), service.AccountShareMembershipStatusActive, now, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -5437,7 +5441,7 @@ func (r *accountShareModeRepository) EndUnavailableAccountMemberships(ctx contex
 			AND %s
 		ORDER BY m.joined_at ASC, m.id ASC
 		LIMIT $4
-	`, accountShareAccountPermanentlyUnavailableConditionSQL("$3"))
+	`, accountShareAccountPermanentlyUnavailableConditionSQL("$3::timestamptz"))
 	rows, err := r.db.QueryContext(ctx, query, service.AccountShareMembershipStatusActive, accountID, endedAt, limit)
 	if err != nil {
 		return nil, err
@@ -5569,7 +5573,7 @@ func (r *accountShareModeRepository) DisablePermanentlyUnavailableListings(ctx c
 		FROM candidates c
 		WHERE l.id = c.id
 		RETURNING l.id
-	`, accountShareAccountPermanentlyUnavailableConditionSQL("$4"))
+	`, accountShareAccountPermanentlyUnavailableConditionSQL("$4::timestamptz"))
 	rows, err := r.db.QueryContext(
 		ctx,
 		query,
@@ -5675,7 +5679,7 @@ func (r *accountShareModeRepository) ProcessSeatBilling(ctx context.Context, now
 			AND NOT %s
 		ORDER BY m.paid_until ASC, m.id ASC
 		LIMIT $3
-	`, accountShareMembershipRecoverablyUnavailableConditionSQL("$2")), service.AccountShareMembershipStatusActive, now, limit)
+	`, accountShareMembershipRecoverablyUnavailableConditionSQL("$2::timestamptz")), service.AccountShareMembershipStatusActive, now, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -6465,7 +6469,7 @@ func (r *accountShareModeRepository) accountShareAccountUnavailableInTx(ctx cont
 			FROM accounts a
 			WHERE a.id = $1
 		)
-	`, accountShareAccountUnavailableConditionSQL("$2"))
+	`, accountShareAccountUnavailableConditionSQL("$2::timestamptz"))
 	var unavailable bool
 	if err := tx.QueryRowContext(ctx, query, accountID, now.UTC()).Scan(&unavailable); err != nil {
 		return false, err
@@ -6491,7 +6495,7 @@ func (r *accountShareModeRepository) accountShareAccountPermanentlyUnavailableIn
 			FROM accounts a
 			WHERE a.id = $1
 		)
-	`, accountShareAccountPermanentlyUnavailableConditionSQL("$2"))
+	`, accountShareAccountPermanentlyUnavailableConditionSQL("$2::timestamptz"))
 	var unavailable bool
 	if err := tx.QueryRowContext(ctx, query, accountID, now.UTC()).Scan(&unavailable); err != nil {
 		return false, err
@@ -6519,7 +6523,7 @@ func (r *accountShareModeRepository) accountShareMembershipPermanentlyUnavailabl
 				AND l.deleted_at IS NULL
 				AND NOT %s
 		)
-	`, accountShareMembershipPermanentlyUnavailableConditionSQL("$3"))
+	`, accountShareMembershipPermanentlyUnavailableConditionSQL("$3::timestamptz"))
 	var unavailable bool
 	if err := tx.QueryRowContext(ctx, query, listingID, accountID, now.UTC()).Scan(&unavailable); err != nil {
 		return false, err
@@ -6546,7 +6550,7 @@ func (r *accountShareModeRepository) accountShareMembershipRecoverablyUnavailabl
 			WHERE l.id = $1
 				AND %s
 		)
-	`, accountShareMembershipRecoverablyUnavailableConditionSQL("$3"))
+	`, accountShareMembershipRecoverablyUnavailableConditionSQL("$3::timestamptz"))
 	var unavailable bool
 	if err := tx.QueryRowContext(ctx, query, listingID, accountID, now.UTC()).Scan(&unavailable); err != nil {
 		return false, err
@@ -6562,10 +6566,10 @@ func (r *accountShareModeRepository) accountShareAccountUnavailableDetailsInTx(c
 		SELECT
 			a.status,
 			a.schedulable,
-			(a.auto_pause_on_expired = TRUE AND a.expires_at IS NOT NULL AND a.expires_at <= $2) AS expired,
-			(a.overload_until IS NOT NULL AND a.overload_until > $2) AS overload,
-			(a.rate_limit_reset_at IS NOT NULL AND a.rate_limit_reset_at > $2) AS rate_limited,
-			(a.temp_unschedulable_until IS NOT NULL AND a.temp_unschedulable_until > $2) AS temp_unschedulable,
+			(a.auto_pause_on_expired = TRUE AND a.expires_at IS NOT NULL AND a.expires_at <= $2::timestamptz) AS expired,
+			(a.overload_until IS NOT NULL AND a.overload_until > $2::timestamptz) AS overload,
+			(a.rate_limit_reset_at IS NOT NULL AND a.rate_limit_reset_at > $2::timestamptz) AS rate_limited,
+			(a.temp_unschedulable_until IS NOT NULL AND a.temp_unschedulable_until > $2::timestamptz) AS temp_unschedulable,
 			%s AS codex_5h_protected,
 			%s AS codex_7d_protected,
 			COALESCE(a.extra->>'codex_5h_used_percent', '') AS codex_5h_used_percent,
@@ -6576,8 +6580,8 @@ func (r *accountShareModeRepository) accountShareAccountUnavailableDetailsInTx(c
 			COALESCE(a.extra->>'codex_7d_reset_at', '') AS codex_7d_reset_at
 		FROM accounts a
 		WHERE a.id = $1
-	`, accountShareCodexQuotaProtectedSQL("codex_5h_used_percent", "codex_5h_reset_at", "codex_5h_limit_percent", "$2"),
-		accountShareCodexQuotaProtectedSQL("codex_7d_used_percent", "codex_7d_reset_at", "codex_7d_limit_percent", "$2"))
+	`, accountShareCodexQuotaProtectedSQL("codex_5h_used_percent", "codex_5h_reset_at", "codex_5h_limit_percent", "$2::timestamptz"),
+		accountShareCodexQuotaProtectedSQL("codex_7d_used_percent", "codex_7d_reset_at", "codex_7d_limit_percent", "$2::timestamptz"))
 	var status, used5h, used7d, limit5h, limit7d, reset5h, reset7d string
 	var schedulable, expired, overload, rateLimited, tempUnschedulable, codex5hProtected, codex7dProtected bool
 	if err := tx.QueryRowContext(ctx, query, accountID, now.UTC()).Scan(

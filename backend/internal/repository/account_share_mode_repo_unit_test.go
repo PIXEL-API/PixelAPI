@@ -2996,7 +2996,7 @@ func TestAccountShareModeRepositorySeatBillingUsesSettlementRefForLedgers(t *tes
 	mock.ExpectQuery("SELECT NOT EXISTS").
 		WithArgs(listingID, accountID, now).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
-	mock.ExpectQuery("SELECT EXISTS").
+	mock.ExpectQuery("SELECT EXISTS.*\\$3::timestamptz").
 		WithArgs(listingID, accountID, now).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	expectAccountShareBillingUserLock(mock, consumerUserID)
@@ -4664,7 +4664,7 @@ func TestAccountShareModeRepositoryBeginMembershipEndQueuedEndsAtomically(t *tes
 	mock.ExpectQuery("SELECT id, status\\s+FROM account_share_request_billing_intents").
 		WithArgs(membershipID).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "status"}))
-	mock.ExpectExec("INSERT INTO account_share_room_operations").
+	mock.ExpectExec("(?s)INSERT INTO account_share_room_operations.*\\$5::bigint.*\\$6::varchar\\(20\\).*\\$8::timestamptz").
 		WithArgs(
 			operationID,
 			listingID,
