@@ -222,7 +222,7 @@ var (
 	ErrAccountShareUpdateReasonRequired         = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_UPDATE_REASON_REQUIRED", "update reason is required")
 	ErrAccountShareForceReasonRequired          = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_FORCE_REASON_REQUIRED", "force update reason is required")
 	ErrAccountShareForceConfirmationRequired    = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_FORCE_CONFIRMATION_REQUIRED", "force update confirmation is required")
-	ErrAccountShareUpdateRequiresPaused         = infraerrors.Conflict("ACCOUNT_SHARE_ROOM_UPDATE_REQUIRES_PAUSED", "contract updates require a paused room with no active, queued, or ending memberships")
+	ErrAccountShareUpdateRequiresPaused         = infraerrors.Conflict("ACCOUNT_SHARE_ROOM_UPDATE_REQUIRES_PAUSED", "contract updates require an empty active or paused room with no active, queued, or ending memberships")
 	ErrAccountShareRelistAccountUnavailable     = infraerrors.BadRequest("ACCOUNT_SHARE_RELIST_ACCOUNT_UNAVAILABLE", "账号测试通过，但账号状态仍不可调度，请先启用账号或恢复调度后重试")
 	ErrAccountShareReviewInvalidScore           = infraerrors.BadRequest("ACCOUNT_SHARE_REVIEW_INVALID_SCORE", "评分必须在 0-10 之间")
 	ErrAccountShareReviewCommentTooLong         = infraerrors.BadRequest("ACCOUNT_SHARE_REVIEW_COMMENT_TOO_LONG", "评论最多 1000 个字符")

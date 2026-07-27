@@ -1115,7 +1115,7 @@ func TestAccountShareModeRepositoryUpdateListingRejectsModelUnsupportedByCurrent
 	}
 }
 
-func TestAccountShareModeRepositoryUpdateListingDoesNotDependOnRoomAccountConcurrency(t *testing.T) {
+func TestAccountShareModeRepositoryUpdateActiveEmptyListingDoesNotDependOnRoomAccountConcurrency(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
@@ -1136,7 +1136,7 @@ func TestAccountShareModeRepositoryUpdateListingDoesNotDependOnRoomAccountConcur
 		WithArgs(int64(7), int64(42)).
 		WillReturnRows(accountShareUpdateListingLockRows(func(row *accountShareUpdateListingLockRowData) {
 			row.OwnerUserID = 42
-			row.Status = service.AccountShareListingStatusPaused
+			row.Status = service.AccountShareListingStatusActive
 			row.RowVersion = expectedVersion
 			row.EditSessionID = editSessionID
 			row.EditingByUserID = int64(42)
@@ -1199,7 +1199,7 @@ func TestAccountShareModeRepositoryUpdateListingRejectsFinancialBlockers(t *test
 				WithArgs(int64(7), int64(42)).
 				WillReturnRows(accountShareUpdateListingLockRows(func(row *accountShareUpdateListingLockRowData) {
 					row.OwnerUserID = 42
-					row.Status = service.AccountShareListingStatusPaused
+					row.Status = service.AccountShareListingStatusActive
 					row.RowVersion = expectedVersion
 					row.EditSessionID = "edit-session"
 					row.EditingByUserID = int64(42)
@@ -1327,7 +1327,7 @@ func TestAccountShareModeRepositoryBeginListingEditRejectsActiveSeatsForOwner(t 
 	mock.ExpectQuery("SELECT l\\.owner_user_id, l\\.status, l\\.edit_session_id, l\\.editing_by_user_id, l\\.editing_expires_at").
 		WithArgs(int64(7), int64(42)).
 		WillReturnRows(sqlmock.NewRows([]string{"owner_user_id", "status", "edit_session_id", "editing_by_user_id", "editing_expires_at", "pending_operation_id"}).
-			AddRow(int64(42), service.AccountShareListingStatusPaused, nil, nil, nil, nil))
+			AddRow(int64(42), service.AccountShareListingStatusActive, nil, nil, nil, nil))
 	expectAccountShareEditDatabaseBlockers(mock, int64(7), 1, 0, 0, 0, 0)
 	mock.ExpectRollback()
 
@@ -1363,7 +1363,7 @@ func TestAccountShareModeRepositoryBeginListingEditRejectsPendingBillingIntent(t
 			"pending_operation_id",
 		}).AddRow(
 			int64(42),
-			service.AccountShareListingStatusPaused,
+			service.AccountShareListingStatusActive,
 			nil,
 			nil,
 			nil,
@@ -1466,7 +1466,7 @@ func TestAccountShareModeRepositoryBeginListingEditRejectsAdminForceDuringDraini
 	}
 }
 
-func TestAccountShareModeRepositoryBeginListingEditAllowsOwnerWithoutActiveSeats(t *testing.T) {
+func TestAccountShareModeRepositoryBeginListingEditAllowsOwnerForActiveEmptyRoom(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
@@ -1483,7 +1483,7 @@ func TestAccountShareModeRepositoryBeginListingEditAllowsOwnerWithoutActiveSeats
 	mock.ExpectQuery("SELECT l\\.owner_user_id, l\\.status, l\\.edit_session_id, l\\.editing_by_user_id, l\\.editing_expires_at").
 		WithArgs(int64(7), int64(42)).
 		WillReturnRows(sqlmock.NewRows([]string{"owner_user_id", "status", "edit_session_id", "editing_by_user_id", "editing_expires_at", "pending_operation_id"}).
-			AddRow(int64(42), service.AccountShareListingStatusPaused, nil, nil, nil, nil))
+			AddRow(int64(42), service.AccountShareListingStatusActive, nil, nil, nil, nil))
 	expectAccountShareEditDatabaseBlockers(mock, int64(7), 0, 0, 0, 0, 0)
 	mock.ExpectExec("SET edit_session_id = \\$1::varchar").
 		WithArgs("edit-session", int64(42), expires, int64(7)).
@@ -1492,7 +1492,7 @@ func TestAccountShareModeRepositoryBeginListingEditAllowsOwnerWithoutActiveSeats
 	mock.ExpectQuery("SELECT\\s+l\\.id").
 		WithArgs(int64(42), int64(7)).
 		WillReturnRows(accountShareListingRows(7, 99, 42, "edit-session", expires, func(row *accountShareListingRowData) {
-			row.Status = service.AccountShareListingStatusPaused
+			row.Status = service.AccountShareListingStatusActive
 		}))
 
 	listing, err := repo.BeginListingEdit(context.Background(), 42, false, 7, service.BeginAccountShareListingEditInput{
@@ -1510,6 +1510,31 @@ func TestAccountShareModeRepositoryBeginListingEditAllowsOwnerWithoutActiveSeats
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestAccountShareOwnerEditableStatusAllowsOnlyActiveOrPaused(t *testing.T) {
+	tests := []struct {
+		name   string
+		status string
+		want   bool
+	}{
+		{name: "active", status: service.AccountShareListingStatusActive, want: true},
+		{name: "paused", status: service.AccountShareListingStatusPaused, want: true},
+		{name: "normalized active", status: " ACTIVE ", want: true},
+		{name: "validating", status: service.AccountShareListingStatusValidating, want: false},
+		{name: "draining", status: service.AccountShareListingStatusDraining, want: false},
+		{name: "disabled", status: service.AccountShareListingStatusDisabled, want: false},
+		{name: "suspended", status: service.AccountShareListingStatusSuspended, want: false},
+		{name: "empty", status: "", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := accountShareOwnerEditableStatus(tt.status); got != tt.want {
+				t.Fatalf("accountShareOwnerEditableStatus(%q) = %v, want %v", tt.status, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -2137,7 +2162,7 @@ func TestAccountShareModeRepositoryJoinListingOwnerSelfUseHasNoSeatPrepay(t *tes
 	}
 }
 
-func TestAccountShareModeRepositoryJoinListingQueuesBehindExistingReservation(t *testing.T) {
+func TestAccountShareModeRepositoryJoinListingQueuesBehindExistingActiveMembership(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
@@ -2202,7 +2227,7 @@ func TestAccountShareModeRepositoryJoinListingQueuesBehindExistingReservation(t 
 			service.AccountShareMembershipStatusEnded,
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
-	expectAccountShareJoinQueueState(mock, consumerUserID, apiKeyID, listingID, 1, 1, false, 1, 0)
+	expectAccountShareJoinQueueState(mock, consumerUserID, apiKeyID, listingID, 0, 1, true, 0, 0)
 	mock.ExpectQuery("INSERT INTO account_share_memberships").
 		WithArgs(
 			listingID,
@@ -7952,7 +7977,7 @@ func expectAccountShareJoinQueueState(
 	consumerQueueCount int,
 	roomQueueCount int,
 ) {
-	mock.ExpectQuery("SELECT\\s+\\(\\s*SELECT COUNT\\(\\*\\)::int").
+	mock.ExpectQuery("(?s)SELECT\\s+\\(\\s*SELECT COUNT\\(\\*\\)::int.*?SELECT MAX\\(queue_rank\\)\\s+FROM account_share_memberships\\s+WHERE api_key_id = \\$2\\s+AND status IN \\(\\$3, \\$4\\)\\s+AND deleted_at IS NULL\\s+\\), 0").
 		WithArgs(
 			consumerUserID,
 			apiKeyID,

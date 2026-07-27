@@ -1130,39 +1130,39 @@ describe('AccountShareView async snapshots and mode keys', () => {
     wrapper.unmount()
   })
 
-  it('submits an owner edit with optimistic versioning, a required reason, and no administrator override fields', async () => {
-    const pausedRoom = listing({
+  it('submits an active empty room owner edit with optimistic versioning and no administrator override fields', async () => {
+    const activeRoom = listing({
       id: 902,
       owner_user_id: 9,
       room_name: '房主可编辑房间',
-      status: 'paused',
+      status: 'active',
       active_seats: 0,
       row_version: 12,
       current_revision_id: 20,
     })
-    listListings.mockResolvedValue(paginated([pausedRoom]))
+    listListings.mockResolvedValue(paginated([activeRoom]))
     getRoomManagementState.mockResolvedValue(roomManagementState({
-      listing_id: pausedRoom.id,
-      room_name: pausedRoom.room_name,
-      row_version: pausedRoom.row_version,
-      lifecycle_status: 'paused',
+      listing_id: activeRoom.id,
+      room_name: activeRoom.room_name,
+      row_version: activeRoom.row_version,
+      lifecycle_status: 'active',
       active_seats: 0,
-      allowed_actions: ['activate', 'delete'],
+      allowed_actions: ['drain', 'delete'],
     }))
     beginListingEdit.mockResolvedValue({
-      ...pausedRoom,
+      ...activeRoom,
       editing_mine: true,
       edit_session_id: 'owner-edit-session',
     })
     updateListing.mockResolvedValue({
-      ...pausedRoom,
+      ...activeRoom,
       row_version: 13,
     })
 
     const wrapper = mountView({ renderDialogs: true })
     await flushPromises()
     const setupState = (wrapper.vm as any).$?.setupState
-    setupState.requestOpenConfigEdit(pausedRoom)
+    setupState.requestOpenConfigEdit(activeRoom)
     await flushPromises()
     expect(beginListingEdit).toHaveBeenCalledWith(902, {
       session_id: undefined,
@@ -1182,6 +1182,37 @@ describe('AccountShareView async snapshots and mode keys', () => {
     }))
     expect(payload).not.toHaveProperty('force_active_edit')
     expect(payload).not.toHaveProperty('confirmed')
+    wrapper.unmount()
+  })
+
+  it('keeps an active room read-only for its owner while a membership blocker exists', async () => {
+    const activeRoom = listing({
+      id: 906,
+      owner_user_id: 9,
+      room_name: '仍有成员的房间',
+      status: 'active',
+      active_seats: 1,
+      row_version: 14,
+    })
+    listListings.mockResolvedValue(paginated([activeRoom]))
+    getRoomManagementState.mockResolvedValue(roomManagementState({
+      listing_id: activeRoom.id,
+      room_name: activeRoom.room_name,
+      row_version: activeRoom.row_version,
+      lifecycle_status: 'active',
+      active_seats: 1,
+      blockers: roomBlockers({ active_membership_count: 1 }),
+    }))
+
+    const wrapper = mountView({ renderDialogs: true })
+    await flushPromises()
+    const setupState = (wrapper.vm as any).$?.setupState
+    await setupState.requestOpenConfigEdit(activeRoom)
+    await flushPromises()
+
+    expect(beginListingEdit).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('当前阻塞项：使用中 1')
+    expect(wrapper.text()).toContain('请先处理阻塞项后重试')
     wrapper.unmount()
   })
 

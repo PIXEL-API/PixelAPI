@@ -4818,7 +4818,7 @@ function roomRequiresForceEdit(
   state: AccountShareRoomManagementState
 ): boolean {
   const blockers = state.blockers
-  return state.lifecycle_status !== 'paused'
+  return !['active', 'paused'].includes(state.lifecycle_status)
     || blockers.active_membership_count > 0
     || blockers.queued_membership_count > 0
     || blockers.ending_membership_count > 0
@@ -9759,7 +9759,7 @@ function prepareForceEdit(
 function ownerEditBlockedMessage(state: AccountShareRoomManagementState | null): string {
   const blockers = state ? roomEditBlockerLabels(state) : []
   const detail = blockers.length > 0 ? ` 当前阻塞项：${blockers.join('、')}。` : ''
-  return `房主只能编辑已暂停且没有正在使用、排队、结束中、请求中、结算中或其他编辑会话的房间。${detail}请先在“房间管理”执行排空并等待完成。`
+  return `房主只能编辑没有正在使用、排队、结束中、请求中、结算中或其他编辑会话的上架或已暂停房间。${detail}请先处理阻塞项后重试。`
 }
 
 async function openConfigEditDialog(
@@ -9817,7 +9817,7 @@ async function openConfigEditDialog(
       if (authStore.isAdmin) {
         prepareForceEdit(listing)
       } else {
-        showActionError(ownerEditBlockedMessage(null), '请先排空并暂停房间')
+        showActionError(ownerEditBlockedMessage(null), '房间暂时不能编辑')
       }
       return
     }
@@ -9870,7 +9870,7 @@ async function requestOpenConfigEdit(listing: AccountShareListing): Promise<void
       if (authStore.isAdmin) {
         prepareForceEdit(currentListing, state)
       } else {
-        showActionError(ownerEditBlockedMessage(state), '请先排空并暂停房间')
+        showActionError(ownerEditBlockedMessage(state), '房间暂时不能编辑')
       }
       return
     }

@@ -2281,7 +2281,7 @@ func (r *accountShareModeRepository) UpdateListing(ctx context.Context, actorUse
 				})
 			}
 		} else {
-			if currentStatus != service.AccountShareListingStatusPaused {
+			if !accountShareOwnerEditableStatus(currentStatus) {
 				return nil, service.ErrAccountShareUpdateRequiresPaused
 			}
 			blockers, err := accountShareLifecycleDatabaseBlockersInTx(ctx, tx, listingID)
@@ -2625,7 +2625,7 @@ func (r *accountShareModeRepository) BeginListingEdit(ctx context.Context, actor
 			})
 		}
 	} else {
-		if listingStatus != service.AccountShareListingStatusPaused {
+		if !accountShareOwnerEditableStatus(listingStatus) {
 			return nil, service.ErrAccountShareUpdateRequiresPaused
 		}
 		blockers, err := accountShareLifecycleDatabaseBlockersInTx(ctx, tx, listingID)
@@ -2666,6 +2666,16 @@ func accountShareAdminForceEditableStatus(status string) bool {
 		service.AccountShareListingStatusPaused,
 		service.AccountShareListingStatusDisabled,
 		service.AccountShareListingStatusSuspended:
+		return true
+	default:
+		return false
+	}
+}
+
+func accountShareOwnerEditableStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case service.AccountShareListingStatusActive,
+		service.AccountShareListingStatusPaused:
 		return true
 	default:
 		return false
@@ -3501,11 +3511,9 @@ func (r *accountShareModeRepository) JoinListing(ctx context.Context, input serv
 			COALESCE((
 				SELECT MAX(queue_rank)
 				FROM account_share_memberships
-				WHERE consumer_user_id = $1
-					AND api_key_id = $2
-					AND status = $3
+				WHERE api_key_id = $2
+					AND status IN ($3, $4)
 					AND deleted_at IS NULL
-					AND (queue_expires_at IS NULL OR queue_expires_at > $6)
 			), 0)::int,
 			EXISTS (
 				SELECT 1
