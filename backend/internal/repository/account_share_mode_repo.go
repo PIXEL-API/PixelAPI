@@ -7710,22 +7710,22 @@ func (r *accountShareModeRepository) suspendActiveMembershipInTx(ctx context.Con
 	}
 	membership, err = scanAccountShareMembership(tx.QueryRowContext(ctx, `
 		UPDATE account_share_memberships m
-		SET status = $1,
+		SET status = $1::varchar(20),
 			account_id = CASE WHEN $7::boolean THEN NULL ELSE m.account_id END,
 			paid_until = NULL,
-			billed_until = $2,
-			waiver_window_started_at = $2,
+			billed_until = $2::timestamptz,
+			waiver_window_started_at = $2::timestamptz,
 			waiver_window_usage_amount = 0,
 			waiver_window_request_count = 0,
 			waiver_window_last_request_at = NULL,
-			dispatch_failed_at = $3,
-			dispatch_cooldown_until = $4,
-			queue_expires_at = $3 + INTERVAL '2 hours',
+			dispatch_failed_at = $3::timestamptz,
+			dispatch_cooldown_until = $4::timestamptz,
+			queue_expires_at = $3::timestamptz + INTERVAL '2 hours',
 			updated_at = NOW()
 		FROM account_share_listings l
-		WHERE m.id = $5
+		WHERE m.id = $5::bigint
 			AND l.id = m.listing_id
-			AND m.status = $6
+			AND m.status = $6::varchar(20)
 			AND m.deleted_at IS NULL
 		RETURNING
 			m.id, m.listing_id, m.account_id, l.owner_user_id, m.consumer_user_id, m.api_key_id,

@@ -7333,7 +7333,7 @@ func TestAccountShareModeRepositorySuspendsRecoverableUnavailableAndRefundsPrepa
 	mock.ExpectExec("UPDATE account_share_membership_account_bindings").
 		WithArgs(now, nil, "system", "membership_requeued", membershipID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery("UPDATE account_share_memberships m").
+	mock.ExpectQuery("(?s)UPDATE account_share_memberships m.*dispatch_failed_at = \\$3::timestamptz.*queue_expires_at = \\$3::timestamptz \\+ INTERVAL '2 hours'").
 		WithArgs(service.AccountShareMembershipStatusQueued, now, now, now, membershipID, service.AccountShareMembershipStatusActive, true).
 		WillReturnRows(sqlmock.NewRows(accountShareMembershipColumns()).AddRow(
 			membershipID, listingID, nil, ownerUserID, consumerUserID, apiKeyID,
