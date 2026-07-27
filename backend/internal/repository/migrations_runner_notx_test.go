@@ -483,6 +483,16 @@ func TestCanonicalizeMigrationIndexExpressionNormalizesPostgreSQLVarcharCasts(t 
 		require.Equal(t, canonicalizeMigrationIndexExpression(withoutCasts), canonicalizeMigrationIndexExpression(withCasts))
 	})
 
+	t.Run("PostgreSQL18将IN谓词规范化为ANY数组", func(t *testing.T) {
+		expected := "status IN ('active', 'queued', 'ending') AND deleted_at IS NULL"
+		actual := "(((status)::text = ANY ((ARRAY['active'::character varying, 'queued'::character varying, 'ending'::character varying])::text[])) AND (deleted_at IS NULL))"
+		require.Equal(
+			t,
+			canonicalizeMigrationIndexExpression(expected),
+			canonicalizeMigrationIndexExpression(actual),
+		)
+	})
+
 	t.Run("保留带长度varchar语义", func(t *testing.T) {
 		require.NotEqual(t, canonicalizeMigrationIndexExpression("reason50"), canonicalizeMigrationIndexExpression("reason::varchar(50)"))
 		require.NotEqual(t, canonicalizeMigrationIndexExpression("reason50"), canonicalizeMigrationIndexExpression("reason::character varying(50)"))

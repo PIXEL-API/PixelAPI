@@ -1957,11 +1957,65 @@ func canonicalizeMigrationIndexExpression(expression string) string {
 	} {
 		canonical = stripUnqualifiedMigrationIndexCast(canonical, cast)
 	}
+	canonical = normalizeMigrationIndexInLists(canonical)
 	canonical = strings.NewReplacer(
 		"(", "",
 		")", "",
 	).Replace(canonical)
 	return strings.ReplaceAll(canonical, "=ANYARRAY[", "IN[")
+}
+
+func normalizeMigrationIndexInLists(expression string) string {
+	var normalized strings.Builder
+	searchFrom := 0
+	for searchFrom < len(expression) {
+		relativeStart := strings.Index(expression[searchFrom:], "IN(")
+		if relativeStart < 0 {
+			normalized.WriteString(expression[searchFrom:])
+			break
+		}
+
+		listStart := searchFrom + relativeStart
+		normalized.WriteString(expression[searchFrom:listStart])
+		normalized.WriteString("IN[")
+
+		depth := 1
+		inString := false
+		listEnd := -1
+		for i := listStart + len("IN("); i < len(expression); i++ {
+			switch expression[i] {
+			case '\'':
+				if inString && i+1 < len(expression) && expression[i+1] == '\'' {
+					i++
+					continue
+				}
+				inString = !inString
+			case '(':
+				if !inString {
+					depth++
+				}
+			case ')':
+				if !inString {
+					depth--
+					if depth == 0 {
+						listEnd = i
+					}
+				}
+			}
+			if listEnd >= 0 {
+				break
+			}
+		}
+		if listEnd < 0 {
+			normalized.WriteString(expression[listStart+len("IN("):])
+			return normalized.String()
+		}
+
+		normalized.WriteString(expression[listStart+len("IN(") : listEnd])
+		normalized.WriteByte(']')
+		searchFrom = listEnd + 1
+	}
+	return normalized.String()
 }
 
 func stripUnqualifiedMigrationIndexCast(expression, cast string) string {
