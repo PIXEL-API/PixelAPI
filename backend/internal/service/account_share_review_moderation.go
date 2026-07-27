@@ -204,7 +204,13 @@ func (s *AccountShareModeService) SubmitReview(ctx context.Context, consumerUser
 	return s.repo.SubmitReview(ctx, consumerUserID, membershipID, input)
 }
 
-func (s *AccountShareModeService) ListListingReviews(ctx context.Context, viewerUserID, listingID int64, params pagination.PaginationParams) ([]AccountShareReview, *pagination.PaginationResult, error) {
+func (s *AccountShareModeService) ListListingReviews(
+	ctx context.Context,
+	viewerUserID int64,
+	viewerIsAdmin bool,
+	listingID int64,
+	params pagination.PaginationParams,
+) ([]AccountShareReview, *pagination.PaginationResult, error) {
 	if viewerUserID <= 0 {
 		return nil, nil, ErrUserNotFound
 	}
@@ -214,7 +220,7 @@ func (s *AccountShareModeService) ListListingReviews(ctx context.Context, viewer
 	if s == nil || s.repo == nil {
 		return nil, nil, ErrServiceUnavailable
 	}
-	return s.repo.ListListingReviews(ctx, viewerUserID, listingID, params)
+	return s.repo.ListListingReviews(ctx, viewerUserID, viewerIsAdmin, listingID, params)
 }
 
 func (s *AccountShareModeService) ListOwnerReviews(ctx context.Context, viewerUserID, ownerUserID int64, params pagination.PaginationParams) ([]AccountShareReview, *pagination.PaginationResult, error) {

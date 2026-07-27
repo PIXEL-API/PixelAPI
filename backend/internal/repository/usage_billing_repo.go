@@ -105,7 +105,15 @@ func (r *usageBillingRepository) applyOnce(ctx context.Context, cmd *service.Usa
 		return nil, err
 	}
 	if !applied {
-		return &service.UsageBillingApplyResult{Applied: false}, nil
+		result := &service.UsageBillingApplyResult{Applied: false}
+		if cmd.UsageLog != nil {
+			usageLogID, err := findExistingUsageBillingLogID(ctx, tx, cmd.RequestID, cmd.APIKeyID)
+			if err != nil {
+				return nil, err
+			}
+			result.UsageLogID = usageLogID
+		}
+		return result, nil
 	}
 
 	result := &service.UsageBillingApplyResult{Applied: true}
@@ -117,6 +125,26 @@ func (r *usageBillingRepository) applyOnce(ctx context.Context, cmd *service.Usa
 		return nil, err
 	}
 	return result, nil
+}
+
+func findExistingUsageBillingLogID(ctx context.Context, tx *sql.Tx, requestID string, apiKeyID int64) (*int64, error) {
+	var usageLogID int64
+	err := tx.QueryRowContext(ctx, `
+		SELECT id
+		FROM usage_logs
+		WHERE request_id = $1
+			AND api_key_id = $2
+	`, strings.TrimSpace(requestID), apiKeyID).Scan(&usageLogID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if usageLogID <= 0 {
+		return nil, fmt.Errorf("usage billing replay returned invalid usage log id %d", usageLogID)
+	}
+	return &usageLogID, nil
 }
 
 func isUsageBillingDeadlock(err error) bool {

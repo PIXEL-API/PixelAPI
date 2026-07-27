@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -163,6 +164,123 @@ func TestAdminService_ListGroups_PassesSortParams(t *testing.T) {
 		SortBy:    "account_count",
 		SortOrder: "ASC",
 	}, repo.listWithFiltersParams)
+}
+
+func TestAdminService_CreateGroup_NormalizesCustomAPIKeyBadge(t *testing.T) {
+	repo := &groupRepoStubForAdmin{}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+		Name:            "custom-badge",
+		Platform:        PlatformAnthropic,
+		RateMultiplier:  1,
+		APIKeyBadgeType: GroupAPIKeyBadgeTypeCustom,
+		APIKeyBadgeText: "  自定义标签  ",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, GroupAPIKeyBadgeTypeCustom, group.APIKeyBadgeType)
+	require.Equal(t, "自定义标签", group.APIKeyBadgeText)
+	require.Same(t, group, repo.created)
+}
+
+func TestAdminService_CreateGroup_RejectsInvalidAPIKeyBadge(t *testing.T) {
+	tests := []struct {
+		name      string
+		badgeType string
+		badgeText string
+		errorText string
+	}{
+		{
+			name:      "invalid type",
+			badgeType: "automatic",
+			errorText: "api_key_badge_type",
+		},
+		{
+			name:      "custom text is blank",
+			badgeType: GroupAPIKeyBadgeTypeCustom,
+			badgeText: "   ",
+			errorText: "api_key_badge_text is required",
+		},
+		{
+			name:      "custom text exceeds rune limit",
+			badgeType: GroupAPIKeyBadgeTypeCustom,
+			badgeText: strings.Repeat("标", maxGroupAPIKeyBadgeTextRunes+1),
+			errorText: "must not exceed 20 characters",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &groupRepoStubForAdmin{}
+			svc := &adminServiceImpl{groupRepo: repo}
+
+			group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+				Name:            "invalid-badge",
+				Platform:        PlatformAnthropic,
+				RateMultiplier:  1,
+				APIKeyBadgeType: tt.badgeType,
+				APIKeyBadgeText: tt.badgeText,
+			})
+
+			require.ErrorContains(t, err, tt.errorText)
+			require.Nil(t, group)
+			require.Nil(t, repo.created)
+		})
+	}
+}
+
+func TestAdminService_UpdateGroup_ClearsCustomTextForFixedBadge(t *testing.T) {
+	repo := &groupRepoStubForAdmin{getByID: &Group{
+		ID:               41,
+		Name:             "badge-update",
+		Platform:         PlatformAnthropic,
+		RateMultiplier:   1,
+		Status:           StatusActive,
+		Scope:            GroupScopePublic,
+		SubscriptionType: SubscriptionTypeStandard,
+		APIKeyBadgeType:  GroupAPIKeyBadgeTypeCustom,
+		APIKeyBadgeText:  "旧标签",
+	}}
+	svc := &adminServiceImpl{groupRepo: repo}
+	badgeType := GroupAPIKeyBadgeTypeUnavailable
+	ignoredText := "不会保留"
+
+	group, err := svc.UpdateGroup(context.Background(), 41, &UpdateGroupInput{
+		APIKeyBadgeType: &badgeType,
+		APIKeyBadgeText: &ignoredText,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, GroupAPIKeyBadgeTypeUnavailable, group.APIKeyBadgeType)
+	require.Empty(t, group.APIKeyBadgeText)
+	require.Same(t, group, repo.updated)
+	require.Equal(t, StatusActive, group.Status, "unavailable badge is display-only")
+}
+
+func TestAdminService_UpdateGroup_RejectsBadgeForUserPrivateGroup(t *testing.T) {
+	ownerUserID := int64(7)
+	repo := &groupRepoStubForAdmin{getByID: &Group{
+		ID:               42,
+		Name:             "private-badge",
+		Platform:         PlatformOpenAI,
+		RateMultiplier:   1,
+		Status:           StatusActive,
+		OwnerUserID:      &ownerUserID,
+		Scope:            GroupScopeUserPrivate,
+		SubscriptionType: SubscriptionTypeSubscription,
+		APIKeyBadgeType:  GroupAPIKeyBadgeTypeHidden,
+	}}
+	svc := &adminServiceImpl{groupRepo: repo}
+	badgeType := GroupAPIKeyBadgeTypeRecommended
+
+	group, err := svc.UpdateGroup(context.Background(), 42, &UpdateGroupInput{
+		APIKeyBadgeType: &badgeType,
+	})
+
+	require.ErrorContains(t, err, "user-private groups cannot display API key badges")
+	require.Nil(t, group)
+	require.Nil(t, repo.updated)
 }
 
 // TestAdminService_CreateGroup_WithImagePricing 测试创建分组时 ImagePrice 字段正确传递

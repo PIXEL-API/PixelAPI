@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -148,6 +149,9 @@ func (s *GrokOAuthService) ExchangeCode(ctx context.Context, input *GrokExchange
 	if err != nil {
 		return nil, err
 	}
+	if err := validateGrokOAuthTokenResponse(tokenResp); err != nil {
+		return nil, err
+	}
 	return s.tokenInfoFromResponse(tokenResp, session.ClientID, nil), nil
 }
 
@@ -158,6 +162,9 @@ func (s *GrokOAuthService) RefreshToken(ctx context.Context, refreshToken, proxy
 	}
 	tokenResp, err := s.oauthClient.RefreshToken(ctx, refreshToken, proxyURL, clientID)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateGrokOAuthTokenResponse(tokenResp); err != nil {
 		return nil, err
 	}
 	tokenInfo := s.tokenInfoFromResponse(tokenResp, clientID, nil)
@@ -182,6 +189,9 @@ func (s *GrokOAuthService) ConvertFromSSO(ctx context.Context, ssoToken string, 
 	}
 	tokenResp, err := s.oauthClient.ConvertSSOToBuild(ctx, ssoToken, proxyURL)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateGrokOAuthTokenResponse(tokenResp); err != nil {
 		return nil, err
 	}
 	return s.tokenInfoFromResponse(tokenResp, xai.DefaultClientID, nil), nil
@@ -288,6 +298,13 @@ func (s *GrokOAuthService) tokenInfoFromResponse(tokenResp *xai.TokenResponse, c
 	return info
 }
 
+func validateGrokOAuthTokenResponse(tokenResp *xai.TokenResponse) error {
+	if tokenResp == nil || strings.TrimSpace(tokenResp.AccessToken) == "" {
+		return infraerrors.New(http.StatusBadGateway, "GROK_OAUTH_TOKEN_RESPONSE_INVALID", "xAI OAuth token response did not include access_token")
+	}
+	return nil
+}
+
 func (s *GrokOAuthService) proxyURL(ctx context.Context, proxyID *int64) (string, error) {
 	if proxyID == nil {
 		return "", nil
@@ -297,10 +314,13 @@ func (s *GrokOAuthService) proxyURL(ctx context.Context, proxyID *int64) (string
 	}
 	proxy, err := s.proxyRepo.GetByID(ctx, *proxyID)
 	if err != nil {
-		return "", infraerrors.Newf(http.StatusBadRequest, "GROK_OAUTH_PROXY_NOT_FOUND", "proxy not found: %v", err)
+		if errors.Is(err, ErrProxyNotFound) {
+			return "", infraerrors.New(http.StatusBadRequest, "GROK_OAUTH_PROXY_NOT_FOUND", "configured proxy was not found")
+		}
+		return "", infraerrors.New(http.StatusServiceUnavailable, "GROK_OAUTH_PROXY_LOOKUP_FAILED", "proxy lookup is temporarily unavailable")
 	}
 	if proxy == nil {
-		return "", nil
+		return "", infraerrors.New(http.StatusBadRequest, "GROK_OAUTH_PROXY_NOT_FOUND", "configured proxy was not found")
 	}
 	return proxy.URL(), nil
 }

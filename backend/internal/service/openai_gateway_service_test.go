@@ -203,6 +203,39 @@ func (c stubConcurrencyCache) ReleaseAccountSlot(ctx context.Context, accountID 
 	return nil
 }
 
+func (c stubConcurrencyCache) AcquireAccountShareMembershipSlot(context.Context, int64, int, string) (bool, error) {
+	return true, nil
+}
+
+func (c stubConcurrencyCache) ReleaseAccountShareMembershipSlot(context.Context, int64, string) error {
+	return nil
+}
+
+func (c stubConcurrencyCache) GetAccountShareMembershipConcurrency(context.Context, int64) (int, error) {
+	return 0, nil
+}
+
+func (c stubConcurrencyCache) RefreshAccountSlot(context.Context, int64, string) (bool, error) {
+	return true, nil
+}
+
+func (c stubConcurrencyCache) RefreshAccountShareMembershipSlot(context.Context, int64, string) (bool, error) {
+	return true, nil
+}
+
+func (c stubConcurrencyCache) SlotLeaseTTL() time.Duration {
+	return time.Hour
+}
+
+func newAccountShareRuntimeLeaseTestServices(repo AccountShareModeRepository) (*ConcurrencyService, *AccountShareModeService) {
+	concurrencyService := NewConcurrencyService(stubConcurrencyCache{})
+	accountShareService := &AccountShareModeService{
+		repo:               repo,
+		concurrencyService: concurrencyService,
+	}
+	return concurrencyService, accountShareService
+}
+
 func (c stubConcurrencyCache) GetAccountsLoadBatch(ctx context.Context, accounts []AccountWithConcurrency) (map[int64]*AccountLoadInfo, error) {
 	if c.loadBatchErr != nil {
 		return nil, c.loadBatchErr
@@ -544,11 +577,13 @@ func TestOpenAISelectAccountWithLoadAwareness_AccountShareModeUsesMembershipAcco
 	}
 	shareRepo := &accountShareModeRepoStub{
 		membership: &AccountShareMembership{ID: 1, AccountID: boundAccount.ID, ConsumerUserID: 5580, APIKeyID: 20103},
-		listing:    &AccountShareListing{ID: 1, OwnerUserID: 1, Status: AccountShareListingStatusActive},
+		listing:    &AccountShareListing{ID: 1, OwnerUserID: 1, Status: AccountShareListingStatusActive, PerUserConcurrency: 1},
 	}
+	concurrencyService, accountShareService := newAccountShareRuntimeLeaseTestServices(shareRepo)
 	svc := &OpenAIGatewayService{
 		accountRepo:             stubOpenAIAccountRepo{accounts: []Account{boundAccount}},
-		accountShareModeService: &AccountShareModeService{repo: shareRepo},
+		accountShareModeService: accountShareService,
+		concurrencyService:      concurrencyService,
 	}
 	baseCtx := context.WithValue(context.Background(), ctxkey.AuthenticatedUserID, int64(5580))
 	ctx := WithAccountShareModeRequest(baseCtx, 5580, 20103)
@@ -630,11 +665,13 @@ func TestGatewayServiceAccountShareModeUsesPrivateOwnerAccount(t *testing.T) {
 	}
 	shareRepo := &accountShareModeRepoStub{
 		membership: &AccountShareMembership{ID: 1, AccountID: boundAccount.ID, ConsumerUserID: consumerUserID, APIKeyID: apiKeyID},
-		listing:    &AccountShareListing{ID: 1, AccountID: boundAccount.ID, OwnerUserID: ownerUserID, Status: AccountShareListingStatusActive},
+		listing:    &AccountShareListing{ID: 1, AccountID: boundAccount.ID, OwnerUserID: ownerUserID, Status: AccountShareListingStatusActive, PerUserConcurrency: 1},
 	}
+	concurrencyService, accountShareService := newAccountShareRuntimeLeaseTestServices(shareRepo)
 	svc := &GatewayService{
 		accountRepo:             stubOpenAIAccountRepo{accounts: []Account{boundAccount}},
-		accountShareModeService: &AccountShareModeService{repo: shareRepo},
+		accountShareModeService: accountShareService,
+		concurrencyService:      concurrencyService,
 	}
 	baseCtx := context.WithValue(context.Background(), ctxkey.AuthenticatedUserID, consumerUserID)
 	ctx := WithAccountShareModeRequest(baseCtx, consumerUserID, apiKeyID)

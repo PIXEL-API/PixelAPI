@@ -38,3 +38,33 @@ func TestAPIKeyFromService_MapsNilLastUsedAt(t *testing.T) {
 	require.NotNil(t, out)
 	require.Nil(t, out.LastUsedAt)
 }
+
+func TestGroupFromService_MapsPublicAPIKeyBadge(t *testing.T) {
+	src := &service.Group{
+		ID:              10,
+		Scope:           service.GroupScopePublic,
+		APIKeyBadgeType: service.GroupAPIKeyBadgeTypeCustom,
+		APIKeyBadgeText: "自定义标签",
+	}
+
+	out := GroupFromService(src)
+
+	require.NotNil(t, out)
+	require.Equal(t, service.GroupAPIKeyBadgeTypeCustom, out.APIKeyBadgeType)
+	require.Equal(t, "自定义标签", out.APIKeyBadgeText)
+}
+
+func TestGroupFromService_HidesAPIKeyBadgeForUserPrivateGroup(t *testing.T) {
+	src := &service.Group{
+		ID:              11,
+		Scope:           service.GroupScopeUserPrivate,
+		APIKeyBadgeType: service.GroupAPIKeyBadgeTypeCustom,
+		APIKeyBadgeText: "不应显示",
+	}
+
+	out := GroupFromService(src)
+
+	require.NotNil(t, out)
+	require.Equal(t, service.GroupAPIKeyBadgeTypeHidden, out.APIKeyBadgeType)
+	require.Empty(t, out.APIKeyBadgeText)
+}

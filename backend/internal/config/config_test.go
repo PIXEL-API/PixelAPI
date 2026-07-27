@@ -221,6 +221,9 @@ func TestLoadClusterDefaultsPreserveSingleInstanceMode(t *testing.T) {
 	require.Equal(t, 10, cfg.Server.DrainDelaySeconds)
 	require.Equal(t, 300, cfg.Server.HTTPDrainTimeoutSeconds)
 	require.Equal(t, 30, cfg.Server.CleanupTimeoutSeconds)
+	require.False(t, cfg.AccountShareRollout.LifecycleContractEnabled)
+	require.False(t, cfg.AccountShareRollout.DeferredQueueBindingEnabled)
+	require.Equal(t, AccountShareQuotaModeShadow, cfg.AccountShareRollout.QuotaMode)
 }
 
 func TestLoadClusterConfig(t *testing.T) {
@@ -460,6 +463,19 @@ func TestValidateDatabaseMigrationMode(t *testing.T) {
 	}
 	cfg.Database.MigrationMode = "automatic"
 	require.ErrorContains(t, cfg.Validate(), "database.migration_mode")
+}
+
+func TestValidateAccountShareRolloutQuotaMode(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	for _, mode := range []string{AccountShareQuotaModeShadow, AccountShareQuotaModeEnforce} {
+		cfg.AccountShareRollout.QuotaMode = mode
+		require.NoError(t, cfg.Validate())
+	}
+	cfg.AccountShareRollout.QuotaMode = "disabled"
+	require.ErrorContains(t, cfg.Validate(), "account_share_rollout.quota_mode")
 }
 
 func TestNormalizeRunMode(t *testing.T) {

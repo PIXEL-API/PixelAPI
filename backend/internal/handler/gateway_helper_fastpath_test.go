@@ -17,6 +17,15 @@ type concurrencyCacheMock struct {
 	releaseAccountCalled int32
 }
 
+type nilAccountShareBillingDispatcher struct{}
+
+func (nilAccountShareBillingDispatcher) BeginAccountShareBillingDispatch(
+	context.Context,
+	service.AccountShareBillingDispatchInput,
+) (*service.AccountShareBillingDispatch, error) {
+	return nil, nil
+}
+
 func (m *concurrencyCacheMock) AcquireAccountSlot(ctx context.Context, accountID int64, maxConcurrency int, requestID string) (bool, error) {
 	if m.acquireAccountSlotFn != nil {
 		return m.acquireAccountSlotFn(ctx, accountID, maxConcurrency, requestID)
@@ -123,4 +132,44 @@ func TestConcurrencyHelper_TryAcquireAccountSlot_NotAcquired(t *testing.T) {
 	require.False(t, acquired)
 	require.Nil(t, release)
 	require.Equal(t, int32(0), atomic.LoadInt32(&cache.releaseAccountCalled))
+}
+
+func TestWrapAccountSelectionReleaseOnDone_IgnoresClientCancellationForRuntimeLease(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var releaseCalls atomic.Int32
+	release := wrapAccountSelectionReleaseOnDone(
+		ctx,
+		&service.AccountSelectionResult{RuntimeLease: &service.AccountShareRuntimeLease{}},
+		func() { releaseCalls.Add(1) },
+	)
+	require.NotNil(t, release)
+
+	cancel()
+	require.Never(t, func() bool { return releaseCalls.Load() != 0 }, 20*time.Millisecond, time.Millisecond)
+
+	release()
+	release()
+	require.Equal(t, int32(1), releaseCalls.Load())
+}
+
+func TestBeginAccountShareBillingDispatch_FailsClosedWhenDispatcherReturnsNil(t *testing.T) {
+	attemptNo := 0
+	selection := &service.AccountSelectionResult{
+		AccountShareMode: true,
+		Account:          &service.Account{ID: 7},
+		RuntimeLease:     &service.AccountShareRuntimeLease{},
+	}
+
+	ctx, err := beginAccountShareBillingDispatch(
+		context.Background(),
+		nilAccountShareBillingDispatcher{},
+		selection,
+		&attemptNo,
+		service.AccountShareBillingDispatchInput{},
+	)
+
+	require.ErrorIs(t, err, service.ErrServiceUnavailable)
+	require.Equal(t, 1, attemptNo)
+	_, ok := service.AccountShareBillingDispatchFromContext(ctx)
+	require.False(t, ok)
 }

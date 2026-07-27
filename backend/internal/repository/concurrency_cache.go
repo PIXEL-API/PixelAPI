@@ -143,6 +143,27 @@ var (
 		return 1
 	`)
 
+	// refreshSlotScript only refreshes an existing request slot. A worker that
+	// has lost ownership must never recreate the member and exceed the cap.
+	// KEYS[1] = account or account-share membership ZSET
+	// ARGV[1] = TTL seconds
+	// ARGV[2] = requestID
+	// ARGV[3] = current Redis Unix timestamp
+	refreshSlotScript = redis.NewScript(`
+		local key = KEYS[1]
+		local ttl = tonumber(ARGV[1])
+		local requestID = ARGV[2]
+		local now = tonumber(ARGV[3])
+		local expireBefore = now - ttl
+		redis.call('ZREMRANGEBYSCORE', key, '-inf', expireBefore)
+		if redis.call('ZSCORE', key, requestID) == false then
+			return 0
+		end
+		redis.call('ZADD', key, now, requestID)
+		redis.call('EXPIRE', key, ttl)
+		return 1
+	`)
+
 	// incrementWaitScript - refreshes TTL on each increment to keep queue depth accurate
 	// KEYS[1] = wait queue key
 	// ARGV[1] = maxWait
@@ -297,6 +318,10 @@ func (c *concurrencyCache) ReleaseAccountSlot(ctx context.Context, accountID int
 	return c.rdb.ZRem(ctx, key, requestID).Err()
 }
 
+func (c *concurrencyCache) RefreshAccountSlot(ctx context.Context, accountID int64, requestID string) (bool, error) {
+	return c.refreshSlot(ctx, accountSlotKey(accountID), requestID)
+}
+
 func (c *concurrencyCache) GetAccountConcurrency(ctx context.Context, accountID int64) (int, error) {
 	key := accountSlotKey(accountID)
 	now, err := c.redisUnixTime(ctx)
@@ -396,6 +421,32 @@ func (c *concurrencyCache) AcquireAccountShareMembershipSlot(ctx context.Context
 func (c *concurrencyCache) ReleaseAccountShareMembershipSlot(ctx context.Context, membershipID int64, requestID string) error {
 	key := accountShareMembershipSlotKey(membershipID)
 	return c.rdb.ZRem(ctx, key, requestID).Err()
+}
+
+func (c *concurrencyCache) RefreshAccountShareMembershipSlot(ctx context.Context, membershipID int64, requestID string) (bool, error) {
+	return c.refreshSlot(ctx, accountShareMembershipSlotKey(membershipID), requestID)
+}
+
+func (c *concurrencyCache) SlotLeaseTTL() time.Duration {
+	if c == nil || c.slotTTLSeconds <= 0 {
+		return 0
+	}
+	return time.Duration(c.slotTTLSeconds) * time.Second
+}
+
+func (c *concurrencyCache) refreshSlot(ctx context.Context, key, requestID string) (bool, error) {
+	if c == nil || c.rdb == nil || key == "" || requestID == "" || c.slotTTLSeconds <= 0 {
+		return false, nil
+	}
+	now, err := c.redisUnixTime(ctx)
+	if err != nil {
+		return false, err
+	}
+	result, err := refreshSlotScript.Run(ctx, c.rdb, []string{key}, c.slotTTLSeconds, requestID, now).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
 }
 
 func (c *concurrencyCache) GetAccountShareMembershipConcurrency(ctx context.Context, membershipID int64) (int, error) {

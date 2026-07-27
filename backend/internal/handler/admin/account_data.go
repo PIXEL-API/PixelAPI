@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"log/slog"
 
@@ -34,6 +35,7 @@ type DataImportRequest struct {
 
 type CredentialImportRequest struct {
 	Contents                []string `json:"contents" binding:"required"`
+	AccountLevel            string   `json:"account_level"`
 	OwnerUserID             *int64   `json:"owner_user_id"`
 	ShareMode               string   `json:"share_mode" binding:"omitempty,oneof=private public"`
 	ShareStatus             string   `json:"share_status" binding:"omitempty,oneof=pending approved suspended"`
@@ -199,6 +201,7 @@ func (h *AccountHandler) createAccountFromCredentialImportSource(
 		Name:                  strings.TrimSpace(source.Name),
 		Notes:                 source.Notes,
 		Platform:              source.Platform,
+		AccountLevel:          defaults.AccountLevel,
 		Type:                  service.AccountTypeOAuth,
 		Credentials:           source.Credentials,
 		Extra:                 source.Extra,
@@ -306,6 +309,28 @@ func (h *AccountHandler) createAccountFromCredentialImportSource(
 
 	if strings.TrimSpace(input.Name) == "" {
 		return nil, fmt.Errorf("account name is required")
+	}
+	if input.Platform == service.PlatformOpenAI {
+		var configuredExpiresAt *time.Time
+		if input.ExpiresAt != nil {
+			value := time.Unix(*input.ExpiresAt, 0).UTC()
+			configuredExpiresAt = &value
+		}
+		resolvedExpiresAt, forceAutoPause, err := service.ResolveOpenAIAccessTokenOnlyLifecycle(
+			input.Credentials,
+			configuredExpiresAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if resolvedExpiresAt != nil {
+			value := resolvedExpiresAt.Unix()
+			input.ExpiresAt = &value
+		}
+		if forceAutoPause {
+			enabled := true
+			input.AutoPauseOnExpired = &enabled
+		}
 	}
 	sanitizeExtraBaseRPM(input.Extra)
 	account, err := h.adminService.CreateAccount(ctx, &input)

@@ -142,6 +142,22 @@ func TestResolveOpenAIForwardModel_PreventsClaudeModelFromFallingBackToGpt54(t *
 	}
 }
 
+func TestResolveOpenAIWebSocketForwardModelIncludesFinalNormalization(t *testing.T) {
+	account := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"channel-target": "gemini-3-flash-preview",
+			},
+		},
+	}
+
+	if got := ResolveOpenAIWebSocketForwardModel(account, "channel-target"); got != "gpt-5.4" {
+		t.Fatalf("ResolveOpenAIWebSocketForwardModel(...) = %q, want %q", got, "gpt-5.4")
+	}
+}
+
 func TestResolveOpenAICompactForwardModel(t *testing.T) {
 	tests := []struct {
 		name          string

@@ -3,6 +3,7 @@
 package group
 
 import (
+	"fmt"
 	"time"
 
 	"entgo.io/ent"
@@ -44,6 +45,10 @@ const (
 	FieldOwnerUserID = "owner_user_id"
 	// FieldScope holds the string denoting the scope field in the database.
 	FieldScope = "scope"
+	// FieldAPIKeyBadgeType holds the string denoting the api_key_badge_type field in the database.
+	FieldAPIKeyBadgeType = "api_key_badge_type"
+	// FieldAPIKeyBadgeText holds the string denoting the api_key_badge_text field in the database.
+	FieldAPIKeyBadgeText = "api_key_badge_text"
 	// FieldPlatform holds the string denoting the platform field in the database.
 	FieldPlatform = "platform"
 	// FieldRequiredAccountLevel holds the string denoting the required_account_level field in the database.
@@ -208,6 +213,8 @@ var Columns = []string{
 	FieldStatus,
 	FieldOwnerUserID,
 	FieldScope,
+	FieldAPIKeyBadgeType,
+	FieldAPIKeyBadgeText,
 	FieldPlatform,
 	FieldRequiredAccountLevel,
 	FieldSubscriptionType,
@@ -298,6 +305,10 @@ var (
 	DefaultScope string
 	// ScopeValidator is a validator for the "scope" field. It is called by the builders before save.
 	ScopeValidator func(string) error
+	// DefaultAPIKeyBadgeText holds the default value on creation for the "api_key_badge_text" field.
+	DefaultAPIKeyBadgeText string
+	// APIKeyBadgeTextValidator is a validator for the "api_key_badge_text" field. It is called by the builders before save.
+	APIKeyBadgeTextValidator func(string) error
 	// DefaultPlatform holds the default value on creation for the "platform" field.
 	DefaultPlatform string
 	// PlatformValidator is a validator for the "platform" field. It is called by the builders before save.
@@ -347,6 +358,35 @@ var (
 	// DefaultRpmLimit holds the default value on creation for the "rpm_limit" field.
 	DefaultRpmLimit int
 )
+
+// APIKeyBadgeType defines the type for the "api_key_badge_type" enum field.
+type APIKeyBadgeType string
+
+// APIKeyBadgeTypeHidden is the default value of the APIKeyBadgeType enum.
+const DefaultAPIKeyBadgeType = APIKeyBadgeTypeHidden
+
+// APIKeyBadgeType values.
+const (
+	APIKeyBadgeTypeHidden      APIKeyBadgeType = "hidden"
+	APIKeyBadgeTypeRecommended APIKeyBadgeType = "recommended"
+	APIKeyBadgeTypeConstrained APIKeyBadgeType = "constrained"
+	APIKeyBadgeTypeUnavailable APIKeyBadgeType = "unavailable"
+	APIKeyBadgeTypeCustom      APIKeyBadgeType = "custom"
+)
+
+func (akbt APIKeyBadgeType) String() string {
+	return string(akbt)
+}
+
+// APIKeyBadgeTypeValidator is a validator for the "api_key_badge_type" field enum values. It is called by the builders before save.
+func APIKeyBadgeTypeValidator(akbt APIKeyBadgeType) error {
+	switch akbt {
+	case APIKeyBadgeTypeHidden, APIKeyBadgeTypeRecommended, APIKeyBadgeTypeConstrained, APIKeyBadgeTypeUnavailable, APIKeyBadgeTypeCustom:
+		return nil
+	default:
+		return fmt.Errorf("group: invalid enum value for api_key_badge_type field: %q", akbt)
+	}
+}
 
 // OrderOption defines the ordering options for the Group queries.
 type OrderOption func(*sql.Selector)
@@ -424,6 +464,16 @@ func ByOwnerUserID(opts ...sql.OrderTermOption) OrderOption {
 // ByScope orders the results by the scope field.
 func ByScope(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldScope, opts...).ToFunc()
+}
+
+// ByAPIKeyBadgeType orders the results by the api_key_badge_type field.
+func ByAPIKeyBadgeType(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAPIKeyBadgeType, opts...).ToFunc()
+}
+
+// ByAPIKeyBadgeText orders the results by the api_key_badge_text field.
+func ByAPIKeyBadgeText(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAPIKeyBadgeText, opts...).ToFunc()
 }
 
 // ByPlatform orders the results by the platform field.

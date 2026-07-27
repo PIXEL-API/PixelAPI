@@ -264,6 +264,34 @@ func (_u *GroupUpdate) SetNillableScope(v *string) *GroupUpdate {
 	return _u
 }
 
+// SetAPIKeyBadgeType sets the "api_key_badge_type" field.
+func (_u *GroupUpdate) SetAPIKeyBadgeType(v group.APIKeyBadgeType) *GroupUpdate {
+	_u.mutation.SetAPIKeyBadgeType(v)
+	return _u
+}
+
+// SetNillableAPIKeyBadgeType sets the "api_key_badge_type" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableAPIKeyBadgeType(v *group.APIKeyBadgeType) *GroupUpdate {
+	if v != nil {
+		_u.SetAPIKeyBadgeType(*v)
+	}
+	return _u
+}
+
+// SetAPIKeyBadgeText sets the "api_key_badge_text" field.
+func (_u *GroupUpdate) SetAPIKeyBadgeText(v string) *GroupUpdate {
+	_u.mutation.SetAPIKeyBadgeText(v)
+	return _u
+}
+
+// SetNillableAPIKeyBadgeText sets the "api_key_badge_text" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableAPIKeyBadgeText(v *string) *GroupUpdate {
+	if v != nil {
+		_u.SetAPIKeyBadgeText(*v)
+	}
+	return _u
+}
+
 // SetPlatform sets the "platform" field.
 func (_u *GroupUpdate) SetPlatform(v string) *GroupUpdate {
 	_u.mutation.SetPlatform(v)
@@ -1229,6 +1257,16 @@ func (_u *GroupUpdate) check() error {
 			return &ValidationError{Name: "scope", err: fmt.Errorf(`ent: validator failed for field "Group.scope": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.APIKeyBadgeType(); ok {
+		if err := group.APIKeyBadgeTypeValidator(v); err != nil {
+			return &ValidationError{Name: "api_key_badge_type", err: fmt.Errorf(`ent: validator failed for field "Group.api_key_badge_type": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.APIKeyBadgeText(); ok {
+		if err := group.APIKeyBadgeTextValidator(v); err != nil {
+			return &ValidationError{Name: "api_key_badge_text", err: fmt.Errorf(`ent: validator failed for field "Group.api_key_badge_text": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.Platform(); ok {
 		if err := group.PlatformValidator(v); err != nil {
 			return &ValidationError{Name: "platform", err: fmt.Errorf(`ent: validator failed for field "Group.platform": %w`, err)}
@@ -1326,6 +1364,12 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.Scope(); ok {
 		_spec.SetField(group.FieldScope, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.APIKeyBadgeType(); ok {
+		_spec.SetField(group.FieldAPIKeyBadgeType, field.TypeEnum, value)
+	}
+	if value, ok := _u.mutation.APIKeyBadgeText(); ok {
+		_spec.SetField(group.FieldAPIKeyBadgeText, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.Platform(); ok {
 		_spec.SetField(group.FieldPlatform, field.TypeString, value)
@@ -2103,6 +2147,34 @@ func (_u *GroupUpdateOne) SetScope(v string) *GroupUpdateOne {
 func (_u *GroupUpdateOne) SetNillableScope(v *string) *GroupUpdateOne {
 	if v != nil {
 		_u.SetScope(*v)
+	}
+	return _u
+}
+
+// SetAPIKeyBadgeType sets the "api_key_badge_type" field.
+func (_u *GroupUpdateOne) SetAPIKeyBadgeType(v group.APIKeyBadgeType) *GroupUpdateOne {
+	_u.mutation.SetAPIKeyBadgeType(v)
+	return _u
+}
+
+// SetNillableAPIKeyBadgeType sets the "api_key_badge_type" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableAPIKeyBadgeType(v *group.APIKeyBadgeType) *GroupUpdateOne {
+	if v != nil {
+		_u.SetAPIKeyBadgeType(*v)
+	}
+	return _u
+}
+
+// SetAPIKeyBadgeText sets the "api_key_badge_text" field.
+func (_u *GroupUpdateOne) SetAPIKeyBadgeText(v string) *GroupUpdateOne {
+	_u.mutation.SetAPIKeyBadgeText(v)
+	return _u
+}
+
+// SetNillableAPIKeyBadgeText sets the "api_key_badge_text" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableAPIKeyBadgeText(v *string) *GroupUpdateOne {
+	if v != nil {
+		_u.SetAPIKeyBadgeText(*v)
 	}
 	return _u
 }
@@ -3085,6 +3157,16 @@ func (_u *GroupUpdateOne) check() error {
 			return &ValidationError{Name: "scope", err: fmt.Errorf(`ent: validator failed for field "Group.scope": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.APIKeyBadgeType(); ok {
+		if err := group.APIKeyBadgeTypeValidator(v); err != nil {
+			return &ValidationError{Name: "api_key_badge_type", err: fmt.Errorf(`ent: validator failed for field "Group.api_key_badge_type": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.APIKeyBadgeText(); ok {
+		if err := group.APIKeyBadgeTextValidator(v); err != nil {
+			return &ValidationError{Name: "api_key_badge_text", err: fmt.Errorf(`ent: validator failed for field "Group.api_key_badge_text": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.Platform(); ok {
 		if err := group.PlatformValidator(v); err != nil {
 			return &ValidationError{Name: "platform", err: fmt.Errorf(`ent: validator failed for field "Group.platform": %w`, err)}
@@ -3199,6 +3281,12 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if value, ok := _u.mutation.Scope(); ok {
 		_spec.SetField(group.FieldScope, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.APIKeyBadgeType(); ok {
+		_spec.SetField(group.FieldAPIKeyBadgeType, field.TypeEnum, value)
+	}
+	if value, ok := _u.mutation.APIKeyBadgeText(); ok {
+		_spec.SetField(group.FieldAPIKeyBadgeText, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.Platform(); ok {
 		_spec.SetField(group.FieldPlatform, field.TypeString, value)

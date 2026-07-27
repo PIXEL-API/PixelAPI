@@ -47,6 +47,10 @@ type Group struct {
 	OwnerUserID *int64 `json:"owner_user_id,omitempty"`
 	// Group visibility scope: public or user_private
 	Scope string `json:"scope,omitempty"`
+	// API 密钥分组选择器标签类型
+	APIKeyBadgeType group.APIKeyBadgeType `json:"api_key_badge_type,omitempty"`
+	// API 密钥分组选择器自定义标签文本，仅 custom 类型使用
+	APIKeyBadgeText string `json:"api_key_badge_text,omitempty"`
 	// Platform holds the value of the "platform" field.
 	Platform string `json:"platform,omitempty"`
 	// Required OpenAI account capability level key for this group; empty allows any level.
@@ -238,7 +242,7 @@ func (*Group) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullFloat64)
 		case group.FieldID, group.FieldNewUserRateWindowSeconds, group.FieldOwnerUserID, group.FieldDefaultValidityDays, group.FieldFallbackGroupID, group.FieldFallbackGroupIDOnInvalidRequest, group.FieldSortOrder, group.FieldRpmLimit:
 			values[i] = new(sql.NullInt64)
-		case group.FieldName, group.FieldDescription, group.FieldStatus, group.FieldScope, group.FieldPlatform, group.FieldRequiredAccountLevel, group.FieldSubscriptionType, group.FieldDefaultMappedModel:
+		case group.FieldName, group.FieldDescription, group.FieldStatus, group.FieldScope, group.FieldAPIKeyBadgeType, group.FieldAPIKeyBadgeText, group.FieldPlatform, group.FieldRequiredAccountLevel, group.FieldSubscriptionType, group.FieldDefaultMappedModel:
 			values[i] = new(sql.NullString)
 		case group.FieldCreatedAt, group.FieldUpdatedAt, group.FieldDeletedAt:
 			values[i] = new(sql.NullTime)
@@ -349,6 +353,18 @@ func (_m *Group) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field scope", values[i])
 			} else if value.Valid {
 				_m.Scope = value.String
+			}
+		case group.FieldAPIKeyBadgeType:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field api_key_badge_type", values[i])
+			} else if value.Valid {
+				_m.APIKeyBadgeType = group.APIKeyBadgeType(value.String)
+			}
+		case group.FieldAPIKeyBadgeText:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field api_key_badge_text", values[i])
+			} else if value.Valid {
+				_m.APIKeyBadgeText = value.String
 			}
 		case group.FieldPlatform:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -694,6 +710,12 @@ func (_m *Group) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("scope=")
 	builder.WriteString(_m.Scope)
+	builder.WriteString(", ")
+	builder.WriteString("api_key_badge_type=")
+	builder.WriteString(fmt.Sprintf("%v", _m.APIKeyBadgeType))
+	builder.WriteString(", ")
+	builder.WriteString("api_key_badge_text=")
+	builder.WriteString(_m.APIKeyBadgeText)
 	builder.WriteString(", ")
 	builder.WriteString("platform=")
 	builder.WriteString(_m.Platform)

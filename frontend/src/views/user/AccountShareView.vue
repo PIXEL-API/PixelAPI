@@ -20,6 +20,26 @@
             </div>
           </div>
           <div class="hero-utility-actions">
+            <button
+              v-if="authStore.isAdmin"
+              class="account-share-admin-quota-button"
+              type="button"
+              data-testid="open-account-share-quotas"
+              @click="openAdminQuotaDialog"
+            >
+              <Icon name="cog" size="sm" class="mr-2" />
+              房间配额
+            </button>
+            <button
+              v-if="authStore.isAdmin"
+              class="account-share-admin-billing-button"
+              type="button"
+              data-testid="open-billing-attention"
+              @click="openAdminBillingDialog"
+            >
+              <Icon name="shield" size="sm" class="mr-2" />
+              异常计费处置
+            </button>
             <button class="account-share-guide-button" type="button" @click="openUsageGuideDialog">
               <Icon name="book" size="sm" class="mr-2" />
               使用说明
@@ -30,22 +50,58 @@
             </button>
           </div>
           <div class="hero-actions">
-            <button class="btn-secondary h-10" type="button" :disabled="loading || isAnyModeKeysLoading || selfUseSettingsLoading" @click="refreshPageData">
-              <Icon name="refresh" size="sm" class="mr-2" :class="{ 'animate-spin': loading || isAnyModeKeysLoading || selfUseSettingsLoading }" />
+            <button class="btn-secondary min-h-11" type="button" :disabled="currentViewLoading || isAnyModeKeysLoading || selfUseSettingsLoading" @click="refreshPageData">
+              <Icon name="refresh" size="sm" class="mr-2" :class="{ 'animate-spin': currentViewLoading || isAnyModeKeysLoading || selfUseSettingsLoading }" />
               刷新
             </button>
-            <button class="btn-primary h-10" type="button" @click="toggleCreatePanel">
-              <Icon :name="showCreate ? 'chevronUp' : 'plus'" size="sm" class="mr-2" />
-              {{ showCreate ? '收起创建' : '创建房间' }}
+            <button
+              class="btn-primary min-h-11"
+              type="button"
+              :disabled="capabilitiesLoading || capabilities?.can_create_room === false"
+              :title="createRoomCapabilityHint"
+              @click="openCreateDialog"
+            >
+              <Icon name="plus" size="sm" class="mr-2" />
+              创建房间
             </button>
-            <button class="btn-secondary h-10" type="button" @click="openRecommendationDialog">
+            <button class="btn-secondary min-h-11" type="button" @click="openRecommendationDialog">
               <Icon name="sparkles" size="sm" class="mr-2" />
               选号助手
             </button>
           </div>
         </div>
 
-        <div class="account-share-platform-tabs" role="tablist" aria-label="账号模式平台">
+        <div
+          v-if="capabilities || capabilitiesError"
+          class="account-share-capability-strip"
+          :class="{ 'account-share-capability-strip-blocked': capabilities?.can_create_room === false }"
+          aria-live="polite"
+        >
+          <template v-if="capabilities">
+            <span>
+              <strong>{{ capabilities.live_rooms.used }}/{{ capabilities.live_rooms.limit }}</strong>
+              未删除房间
+            </span>
+            <span>
+              <strong>{{ capabilities.room_creates_24_hours.used }}/{{ capabilities.room_creates_24_hours.limit }}</strong>
+              24 小时创建
+            </span>
+            <span>
+              <strong>{{ capabilities.owner_room_accounts.used }}/{{ capabilities.owner_room_accounts.limit }}</strong>
+              房间账号
+            </span>
+            <small v-if="capabilities.capability_blockers.length > 0">
+              {{ capabilityBlockerMessage(capabilities.capability_blockers[0]) }}
+            </small>
+            <small v-else>
+              每个房间最多 {{ capabilities.max_accounts_per_room }} 个账号，成员上限可设为
+              {{ capabilities.seat_limit_minimum }}～{{ capabilities.seat_limit_maximum }} 人。
+            </small>
+          </template>
+          <small v-else>{{ capabilitiesError }}</small>
+        </div>
+
+        <div v-if="!isMembershipHistoryView" class="account-share-platform-tabs" role="tablist" aria-label="账号模式平台">
           <button
             v-for="option in ACCOUNT_SHARE_PLATFORM_OPTIONS"
             :key="option.value"
@@ -61,7 +117,7 @@
           </button>
         </div>
 
-        <div class="account-share-summary-grid">
+        <div v-if="!isMembershipHistoryView && !isArchiveView" class="account-share-summary-grid">
           <div class="summary-cell">
             <span class="summary-icon summary-icon-blue"><Icon name="grid" size="sm" /></span>
             <div>
@@ -150,7 +206,7 @@
         <section class="account-share-guide">
           <div class="account-share-guide-summary">
             <span>核心逻辑</span>
-            <strong>激活后按分钟预扣小时费，最长 1 小时窗口做最终核销。</strong>
+            <strong>选择房间 → 绑定 Key → 预约/激活 → 使用计费 → 退出结算 → 历史留档。</strong>
             <p>
               账号模式 Key 会固定调度当前激活账号；预约中的账号不收小时费。系统先按实际激活分钟预扣占位费用，窗口结束或达到 1 小时时再判断请求消费是否满足低消，达标后退回该窗口已预扣的小时费。
             </p>
@@ -169,8 +225,72 @@
             </div>
             <div class="account-share-guide-step">
               <span>3</span>
-              <strong>窗口核销</strong>
-              <p>按激活时长核算低消，单个核销窗口最长 1 小时；达标则退回该窗口小时费。</p>
+              <strong>使用计费</strong>
+              <p>请求费按实际用量结算，小时费按激活分钟预扣；单个低消核销窗口最长 1 小时。</p>
+            </div>
+            <div class="account-share-guide-step">
+              <span>4</span>
+              <strong>退出结算</strong>
+              <p>主动退出或达到空闲时限后释放席位并完成核销；窗口消费达标则退回对应小时费。</p>
+            </div>
+            <div class="account-share-guide-step">
+              <span>5</span>
+              <strong>历史留档</strong>
+              <p>每次加入/使用记录按 membership 独立留档，房间删除后仍可核对当时条款与消费。</p>
+            </div>
+          </div>
+
+          <div class="account-share-guide-section">
+            <h4>房间与席位规则</h4>
+            <div class="account-share-guide-rule-list">
+              <div>
+                <Icon name="users" size="sm" />
+                <p><strong>成员上限由房主设置</strong>，最低 1 人、最高 15 人；不按房间账号数量或账号并发推导。</p>
+              </div>
+              <div>
+                <Icon name="user" size="sm" />
+                <p><strong>房主自用不占消费者名额</strong>；成员上限只约束同时使用房间的消费者人数。</p>
+              </div>
+              <div>
+                <Icon name="database" size="sm" />
+                <p><strong>账号数量使用独立配额</strong>，账号请求并发只决定请求处理能力，与房间成员上限相互独立。</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="account-share-guide-section">
+            <h4>角色与权限边界</h4>
+            <dl class="account-share-guide-param-grid">
+              <div>
+                <dt>消费者</dt>
+                <dd>可加入、预约、退出，并查看自己的 membership 消费与结算历史。</dd>
+              </div>
+              <div>
+                <dt>房主</dt>
+                <dd>可管理自己的房间及普通参数；存在活跃使用、待结算或冲突操作时不能变更受保护配置。</dd>
+              </div>
+              <div>
+                <dt>管理员</dt>
+                <dd>保留最高参数修改和强制处理能力；管理员最高处理权限不向房主开放。</dd>
+              </div>
+            </dl>
+          </div>
+
+          <div class="account-share-guide-section">
+            <h4>删除房间与历史快照</h4>
+            <div class="account-share-guide-rule-list">
+              <div>
+                <Icon name="shield" size="sm" />
+                <p><strong>删除前必须完成清场。</strong>存在活跃、排队或退出中成员，以及进行中请求、待结算、有效编辑会话或其他冲突操作时，不能删除房间。</p>
+              </div>
+              <div>
+                <Icon name="database" size="sm" />
+                <p><strong>删除房间采用软删除。</strong>房间转为只读归档，历史订单、membership、账单与审计记录不会被物理清除。</p>
+              </div>
+              <div>
+                <Icon name="clock" size="sm" />
+                <p><strong>历史展示删除时保存的精确房间条款快照。</strong>旧数据缺少快照或快照损坏时会明确显示“不可恢复”，不会拿当前房间参数冒充历史。</p>
+              </div>
             </div>
           </div>
 
@@ -216,8 +336,16 @@
                 <dd>加入前需要满足的余额门槛，避免激活后余额不足。</dd>
               </div>
               <div>
-                <dt>账号并发</dt>
-                <dd>共享账号整体最多同时处理的请求数量。</dd>
+                <dt>配置并发/运行时请求能力</dt>
+                <dd>账号级请求处理能力的配置值，不代表实时空闲容量，也不决定成员上限。</dd>
+              </div>
+              <div>
+                <dt>房间成员上限</dt>
+                <dd>由房主在 1～15 人范围内设置，仅约束消费者席位，房主自用不占用。</dd>
+              </div>
+              <div>
+                <dt>房间账号数量</dt>
+                <dd>受独立账号配额约束，不随成员上限或账号请求并发自动变化。</dd>
               </div>
               <div>
                 <dt>单用户并发</dt>
@@ -504,16 +632,16 @@
               </div>
 
               <div class="recommendation-card-actions">
-                <span>席位 {{ candidate.listing.active_seats }}/{{ candidate.listing.seat_limit }} · 并发 {{ recommendationConcurrencyLabel(candidate.listing) }}</span>
+                <span>消费者名额 {{ candidate.listing.active_seats }}/{{ candidate.listing.seat_limit }} · 配置并发 {{ candidate.listing.account_concurrency }}</span>
                 <button
                   class="btn-primary h-10"
                   type="button"
-                  :disabled="joiningId === candidate.listing.id || selfUseJoinUnavailable(candidate.listing)"
+                  :disabled="preparingJoinId !== null || joiningId !== null || selfUseJoinUnavailable(candidate.listing)"
                   :title="selfUseJoinUnavailable(candidate.listing) ? selfUseSettingsError : undefined"
                   @click="useRecommendedListing(candidate)"
                 >
                   <Icon name="login" size="sm" class="mr-2" />
-                  加入使用
+                  {{ preparingJoinId === candidate.listing.id ? '准备确认中' : '加入使用' }}
                 </button>
               </div>
             </article>
@@ -522,20 +650,41 @@
         </section>
       </BaseDialog>
 
-      <section v-if="showCreate" class="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm dark:border-dark-700 dark:bg-dark-900">
-        <div class="flex flex-col gap-3 border-b border-gray-100 p-4 dark:border-dark-800 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <h2 class="text-base font-semibold text-gray-950 dark:text-white">创建房间</h2>
-            <p class="mt-1 text-sm text-gray-500 dark:text-dark-300">优先选择已经登录的自有账号创建房间，无需删除账号或重新 OAuth。</p>
-          </div>
-          <button class="btn-secondary h-9 w-fit" type="button" @click="resetCreateForm">
-            <Icon name="refresh" size="sm" class="mr-2" />
-            重置
-          </button>
+      <CreateRoomDialog
+        :show="showCreate"
+        :busy="creating || generatingOAuthURL"
+        :close-disabled="pendingDraftDiscardTarget === 'create'"
+        @close="closeCreateDialog"
+        @reset="resetCreateForm"
+      >
+        <div
+          v-if="capabilities"
+          class="create-capability-summary"
+          :class="{ 'create-capability-summary-blocked': !capabilities.can_create_room }"
+        >
+          <span>
+            房间 {{ capabilities.live_rooms.used }}/{{ capabilities.live_rooms.limit }}
+          </span>
+          <span>
+            24 小时创建 {{ capabilities.room_creates_24_hours.used }}/{{ capabilities.room_creates_24_hours.limit }}
+          </span>
+          <span>
+            房间账号 {{ capabilities.owner_room_accounts.used }}/{{ capabilities.owner_room_accounts.limit }}
+          </span>
+          <strong v-if="!capabilities.can_create_room">
+            {{ capabilities.capability_blockers[0]?.message || '当前暂不能创建房间' }}
+          </strong>
         </div>
 
-        <div class="border-b border-gray-100 p-4 dark:border-dark-800 xl:p-5">
-          <div class="grid gap-3 sm:grid-cols-2">
+        <div class="create-room-source-stage">
+          <div class="create-room-stage-heading">
+            <span class="create-room-stage-index">1</span>
+            <div>
+              <strong>选择账号来源</strong>
+              <small>已有账号可直接创建；只有尚未登录的账号才需要 OAuth。</small>
+            </div>
+          </div>
+          <div class="create-room-source-grid">
             <button
               type="button"
               class="create-source-option"
@@ -564,7 +713,7 @@
             </button>
           </div>
 
-          <div v-if="createSourceMode === 'existing'" class="mt-4 rounded-xl border border-primary-200 bg-primary-50/60 p-4 dark:border-primary-900/60 dark:bg-primary-950/20">
+          <div v-if="createSourceMode === 'existing'" class="create-room-account-picker">
             <div class="flex flex-col gap-3 md:flex-row md:items-end">
               <label class="field min-w-0 flex-1">
                 <span>已有自有账号</span>
@@ -599,14 +748,17 @@
           </div>
         </div>
 
-        <div class="grid xl:grid-cols-[minmax(0,1fr)_minmax(420px,520px)]">
-          <div class="space-y-5 p-4 xl:p-5">
-            <div class="form-section">
-              <div class="section-heading">
-                <span>基础配置</span>
-                <small>{{ createSourceMode === 'existing' ? '房间会沿用所选账号的凭证、代理和并发配置。' : '新账号需要代理和席位配置，授权前请先确认。' }}</small>
+        <div class="create-room-workspace">
+          <div class="create-room-form-flow">
+            <div class="form-section create-room-stage-card">
+              <div class="section-heading create-room-stage-heading">
+                <span class="create-room-stage-index">2</span>
+                <div>
+                  <span>房间规则与计费</span>
+                <small>{{ createSourceMode === 'existing' ? '房间会沿用所选账号的凭证、代理和配置并发。' : '新账号需要代理、成员上限和配置并发，授权前请先确认。' }}</small>
+                </div>
               </div>
-              <div class="grid gap-3 md:grid-cols-2 2xl:grid-cols-4">
+              <div class="create-room-field-grid">
                 <div class="field">
                   <span>账号平台</span>
                   <div class="grid grid-cols-2 gap-2">
@@ -685,25 +837,26 @@
                 </div>
 
                 <label class="field">
-                  <span>可使用人数</span>
+                  <span>成员上限（1～15）</span>
                   <select v-model.number="createForm.seat_limit" class="input">
                     <option v-for="seat in seatOptions" :key="seat" :value="seat">{{ seat }} 人</option>
                   </select>
+                  <small>{{ ACCOUNT_SHARE_MEMBER_LIMIT_HELP }}</small>
                 </label>
 
                 <label v-if="createSourceMode === 'oauth'" class="field">
-                  <span>账号并发上限</span>
+                  <span>配置并发/运行时请求能力</span>
                   <input v-model.number="createForm.concurrency" class="input" type="number" min="1" :max="MAX_ACCOUNT_CONCURRENCY" step="1" />
                   <small :class="concurrencyValidationMessage ? 'text-red-600 dark:text-red-300' : ''">
-                    {{ concurrencyValidationMessage || `1-${MAX_ACCOUNT_CONCURRENCY}，推荐默认 20。` }}
+                    {{ concurrencyValidationMessage || `账号级请求能力配置为 1-${MAX_ACCOUNT_CONCURRENCY}，不决定成员上限。` }}
                   </small>
                 </label>
                 <div v-else class="field">
-                  <span>账号并发上限</span>
+                  <span>配置并发/运行时请求能力</span>
                   <div class="input flex items-center bg-gray-50 text-gray-700 dark:bg-dark-800 dark:text-dark-200">
                     {{ selectedOwnedAccount?.concurrency ?? '—' }}
                   </div>
-                  <small>沿用已有账号并发配置，不在创建房间时修改。</small>
+                  <small>沿用已有账号的运行时请求能力配置，不在创建房间时修改，也不决定成员上限。</small>
                 </div>
 
                 <label class="field">
@@ -738,10 +891,13 @@
               </div>
             </div>
 
-            <div class="form-section">
-              <div class="section-heading">
-                <span>模型与保护</span>
+            <div class="form-section create-room-stage-card">
+              <div class="section-heading create-room-stage-heading">
+                <span class="create-room-stage-index">3</span>
+                <div>
+                  <span>模型与额度保护</span>
                 <small>{{ createPlatform === 'openai' ? '后端会强制账号模式、ctx_pool 和 Compact 配置，前端只提交可变策略。' : 'Anthropic 账号模式提交 OAuth 凭证、代理、模型白名单和 Claude 额度保护。' }}</small>
+                </div>
               </div>
               <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
                 <div class="field">
@@ -783,53 +939,21 @@
                 <input v-model="createForm.codex_cli_only" type="checkbox" />
                 <span>
                   <strong>仅允许 Codex 官方客户端</strong>
-                  <small>关闭后会允许更多客户端加入该共享账号。</small>
+                  <small>关闭后会允许更多客户端加入该账号房间。</small>
                 </span>
               </label>
             </div>
           </div>
 
-          <aside class="border-t border-gray-100 p-4 dark:border-dark-800 xl:border-l xl:border-t-0 xl:p-5">
-            <div class="sticky top-4 space-y-4">
-              <div class="rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm dark:border-dark-700 dark:bg-dark-800/60">
-                <div class="flex items-center justify-between gap-3">
-                  <span class="text-gray-500 dark:text-dark-300">发布摘要</span>
-                  <span class="rounded-full bg-white px-2 py-1 text-xs font-semibold text-gray-700 dark:bg-dark-700 dark:text-dark-100">
-                    {{ createForm.seat_limit }} 人共享
-                  </span>
-                </div>
-                <div class="mt-3 grid grid-cols-2 gap-2">
-                  <div class="compact-metric">
-                    <span>{{ createSourceMode === 'existing' ? '主账号' : '代理' }}</span>
-                    <strong>{{ createSourceMode === 'existing' ? (selectedOwnedAccount?.name || '未选择') : currentProxyLabel }}</strong>
-                  </div>
-                  <div class="compact-metric">
-                    <span>模型</span>
-                    <strong>{{ parsedAllowedModelCount }}</strong>
-                  </div>
-                  <div class="compact-metric">
-                    <span>账号并发</span>
-                    <strong>{{ createForm.concurrency }}</strong>
-                  </div>
-                  <div class="compact-metric">
-                    <span>单用户并发</span>
-                    <strong>{{ createForm.per_user_concurrency }}</strong>
-                  </div>
-                  <div class="compact-metric">
-                    <span>每人上限</span>
-                    <strong>{{ maxPerUserConcurrency }}</strong>
-                  </div>
-                  <div class="compact-metric">
-                    <span>小时费</span>
-                    <strong>{{ formatNumber(createForm.hourly_rate) }}</strong>
-                  </div>
-                  <div class="compact-metric">
-                    <span>免小时费低消</span>
-                    <strong>{{ hourlyFeeWaiverLabel(createForm.hourly_fee_waiver_minimum) }}</strong>
-                  </div>
+          <div class="create-room-submit-stage">
+            <div class="create-room-submit-content">
+              <div class="create-room-stage-heading">
+                <span class="create-room-stage-index">4</span>
+                <div>
+                  <strong>{{ createSourceMode === 'oauth' ? '授权并创建' : '确认创建' }}</strong>
+                  <small>{{ createSourceMode === 'oauth' ? '完成 OAuth 授权后，系统将创建账号并上架房间。' : '系统会保留所选账号的凭证、代理和账号 ID。' }}</small>
                 </div>
               </div>
-
               <OAuthAuthorizationFlow
                 v-if="createSourceMode === 'oauth'"
                 ref="oauthFlowRef"
@@ -853,7 +977,7 @@
 
               <button
                 v-if="createSourceMode === 'oauth'"
-                class="btn-primary h-11 w-full"
+                class="btn-primary create-room-submit-button"
                 type="button"
                 :disabled="creating || !canSubmitOAuth"
                 @click="submitOAuth"
@@ -867,7 +991,7 @@
               </button>
               <button
                 v-else
-                class="btn-primary h-11 w-full"
+                class="btn-primary create-room-submit-button"
                 type="button"
                 :disabled="creating || !canCreateRoomFromOwnedAccount"
                 @click="createRoomFromOwnedAccount"
@@ -876,9 +1000,9 @@
                 {{ creating ? '创建房间中...' : '使用已有账号创建房间' }}
               </button>
             </div>
-          </aside>
+          </div>
         </div>
-      </section>
+      </CreateRoomDialog>
 
       <BaseDialog
         :show="showProxyDialog"
@@ -985,15 +1109,22 @@
       <section ref="filterPanelRef" class="filter-panel" @keydown.esc="closeFilterPopover">
         <div class="filter-toolbar">
           <div class="filter-primary-row">
-            <label class="filter-search">
+            <label v-if="!isMembershipHistoryView" class="filter-search">
               <Icon name="search" size="sm" />
               <input v-model.trim="searchQuery" class="filter-search-input" placeholder="搜索账号、号主或模型" />
             </label>
+            <div
+              v-else
+              class="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3 text-sm leading-6 text-sky-800 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-200"
+            >
+              <Icon name="clock" size="sm" class="flex-none" />
+              <span>按每次加入独立展示，包含所有平台；搜索和实时状态筛选不适用于不可变历史。</span>
+            </div>
             <div class="filter-actions" aria-label="账号广场分类">
               <button
                 type="button"
                 class="owner-filter-button"
-                :class="isManagementView && 'owner-filter-button-active'"
+                :class="activeFilter.key === ownerFilter.key && 'owner-filter-button-active'"
                 @click="setFilter(ownerFilter)"
               >
                 <Icon name="userCircle" size="sm" />
@@ -1014,7 +1145,15 @@
             </div>
           </div>
 
-          <div class="filter-body">
+          <div
+            v-if="isArchiveView"
+            class="flex min-h-11 items-center gap-2 border-t border-slate-200 px-4 py-3 text-sm leading-6 text-slate-600 dark:border-dark-700 dark:text-dark-300"
+            data-testid="archive-readonly-notice"
+          >
+            <Icon name="document" size="sm" class="flex-none" />
+            <span>归档仅展示已删除房间的不可变快照；实时状态、运行时用量和管理操作不会在这里显示。</span>
+          </div>
+          <div v-else-if="!isMembershipHistoryView" class="filter-body">
             <div class="filter-body-head">
               <div class="filter-body-title">
                 <span class="filter-body-icon"><Icon name="filter" size="sm" /></span>
@@ -1249,6 +1388,20 @@
         </div>
       </section>
 
+      <MembershipHistoryPanel
+        v-if="isMembershipHistoryView"
+        :items="membershipHistoryEntries"
+        :loading="membershipHistoryLoading"
+        :error-message="membershipHistoryError"
+        :page="membershipHistoryPagination.page"
+        :page-size="membershipHistoryPagination.page_size"
+        :total="membershipHistoryPagination.total"
+        @reload="loadMembershipHistory"
+        @update:page="handleMembershipHistoryPageChange"
+        @review="openHistoryReviewDialog"
+      />
+
+      <template v-else>
       <div v-if="errorMessage" class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200">
         {{ errorMessage }}
       </div>
@@ -1268,6 +1421,142 @@
           class="listing-card"
           :class="{ 'key-resolution-listing-card': isKeyResolutionListing(listing) }"
         >
+          <template v-if="isArchiveView">
+            <div
+              class="space-y-4"
+              data-testid="archive-listing-card"
+              :data-snapshot-quality="listing.history_snapshot_quality || 'unmarked'"
+            >
+              <div
+                v-if="isUnknownHistorySnapshot(listing)"
+                class="space-y-4 rounded-xl border border-amber-200 bg-amber-50/70 p-5 dark:border-amber-800 dark:bg-amber-950/20"
+                data-testid="unknown-history-card"
+              >
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <h2 class="text-lg font-semibold text-gray-950 dark:text-white">房间 ID：#{{ listing.id }}</h2>
+                  <span class="rounded-full bg-gray-200 px-3 py-1 text-xs font-medium text-gray-700 dark:bg-dark-700 dark:text-dark-200">
+                    已删除
+                  </span>
+                </div>
+                <div class="space-y-2 text-sm text-gray-600 dark:text-dark-200">
+                  <p>最后使用：{{ listing.last_used_at ? formatDate(listing.last_used_at) : '时间不可恢复' }}</p>
+                  <p class="leading-6 text-amber-800 dark:text-amber-200">
+                    该记录生成于历史快照功能上线前，迁移前的房间详情与使用条款不可恢复。
+                  </p>
+                </div>
+              </div>
+
+              <template v-else>
+                <header class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div class="min-w-0">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <span class="feature-badge">{{ platformLabel(listingPlatform(listing)) }}</span>
+                      <span v-if="isOpenAIListing(listing)" :class="accountLevelBadgeClass(listing)">
+                        {{ accountLevelBadgeLabel(listing) }}
+                      </span>
+                      <span class="inline-flex min-h-7 items-center rounded-full bg-slate-200 px-3 text-xs font-semibold text-slate-700 dark:bg-dark-700 dark:text-dark-200">
+                        已删除
+                      </span>
+                    </div>
+                    <h2 class="mt-3 break-words text-lg font-semibold text-slate-950 dark:text-white">
+                      {{ listing.room_name || `房间 #${listing.id}` }}
+                    </h2>
+                    <p class="mt-1 break-words text-sm leading-6 text-slate-600 dark:text-dark-300">
+                      号主：{{ listing.owner_username || `用户 ${listing.owner_user_id}` }} · 房间 #{{ listing.id }}
+                    </p>
+                  </div>
+                  <span class="inline-flex min-h-11 flex-none items-center justify-center rounded-xl bg-slate-100 px-4 text-sm font-semibold text-slate-700 dark:bg-dark-800 dark:text-dark-200">
+                    只读历史快照
+                  </span>
+                </header>
+
+                <div
+                  v-if="isBackfilledHistorySnapshot(listing)"
+                  class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-200"
+                  data-testid="backfilled-history-notice"
+                >
+                  这条记录由当前或最终房间信息回填，不是删除当时保存的精确快照。
+                </div>
+
+                <div
+                  class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"
+                  data-testid="archive-terms-snapshot"
+                >
+                  <div class="rounded-xl bg-slate-50 p-3 dark:bg-dark-800">
+                    <span class="text-xs font-medium text-slate-500 dark:text-dark-400">历史成员上限</span>
+                    <strong class="mt-1 block text-sm text-slate-950 dark:text-white">{{ listing.seat_limit }} 人</strong>
+                  </div>
+                  <div class="rounded-xl bg-slate-50 p-3 dark:bg-dark-800">
+                    <span class="text-xs font-medium text-slate-500 dark:text-dark-400">历史单用户并发</span>
+                    <strong class="mt-1 block text-sm text-slate-950 dark:text-white">{{ listing.per_user_concurrency }}</strong>
+                  </div>
+                  <div class="rounded-xl bg-slate-50 p-3 dark:bg-dark-800">
+                    <span class="text-xs font-medium text-slate-500 dark:text-dark-400">历史费率倍率</span>
+                    <strong class="mt-1 block text-sm text-slate-950 dark:text-white">{{ formatNumber(listing.rate_multiplier) }}x</strong>
+                  </div>
+                  <div class="rounded-xl bg-slate-50 p-3 dark:bg-dark-800">
+                    <span class="text-xs font-medium text-slate-500 dark:text-dark-400">历史小时费</span>
+                    <strong class="mt-1 block text-sm text-slate-950 dark:text-white">{{ formatNumber(listing.hourly_rate) }}</strong>
+                  </div>
+                  <div class="rounded-xl bg-slate-50 p-3 dark:bg-dark-800">
+                    <span class="text-xs font-medium text-slate-500 dark:text-dark-400">历史免小时费低消</span>
+                    <strong class="mt-1 block text-sm text-slate-950 dark:text-white">{{ hourlyFeeWaiverLabel(listing.hourly_fee_waiver_minimum) }}</strong>
+                  </div>
+                  <div class="rounded-xl bg-slate-50 p-3 dark:bg-dark-800">
+                    <span class="text-xs font-medium text-slate-500 dark:text-dark-400">历史最低余额</span>
+                    <strong class="mt-1 block text-sm text-slate-950 dark:text-white">{{ formatNumber(listing.min_balance_required) }}</strong>
+                  </div>
+                </div>
+
+                <div class="rounded-xl border border-slate-200 bg-slate-50/70 p-3 dark:border-dark-700 dark:bg-dark-800/70">
+                  <span class="text-xs font-medium text-slate-500 dark:text-dark-400">历史允许模型</span>
+                  <div class="mt-2 flex flex-wrap gap-2">
+                    <span
+                      v-for="model in listing.allowed_models"
+                      :key="model"
+                      class="max-w-full break-all rounded-lg bg-white px-2.5 py-1 text-xs text-slate-700 ring-1 ring-slate-200 dark:bg-dark-900 dark:text-dark-200 dark:ring-dark-600"
+                    >
+                      {{ model }}
+                    </span>
+                    <span v-if="listing.allowed_models.length === 0" class="text-sm text-slate-500 dark:text-dark-400">
+                      未记录
+                    </span>
+                  </div>
+                </div>
+
+                <div class="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm leading-6 text-slate-600 dark:border-dark-700 dark:bg-dark-900 dark:text-dark-300">
+                  {{ deletedHistorySnapshotMessage(listing) }}
+                </div>
+              </template>
+            </div>
+          </template>
+          <template v-else-if="isUnknownHistorySnapshot(listing)">
+            <div
+              class="space-y-4 rounded-xl border border-amber-200 bg-amber-50/70 p-5 dark:border-amber-800 dark:bg-amber-950/20"
+              data-testid="unknown-history-card"
+            >
+              <div class="flex flex-wrap items-center justify-between gap-3">
+                <h2 class="text-lg font-semibold text-gray-950 dark:text-white">房间 ID：#{{ listing.id }}</h2>
+                <span class="rounded-full bg-gray-200 px-3 py-1 text-xs font-medium text-gray-700 dark:bg-dark-700 dark:text-dark-200">
+                  {{ listing.deleted ? '已删除' : '历史记录' }}
+                </span>
+              </div>
+              <div class="space-y-2 text-sm text-gray-600 dark:text-dark-200">
+                <p>最后使用：{{ listing.last_used_at ? formatDate(listing.last_used_at) : '时间不可恢复' }}</p>
+                <p class="leading-6 text-amber-800 dark:text-amber-200">
+                  该记录生成于历史快照功能上线前，迁移前的房间详情与使用条款不可恢复。
+                </p>
+              </div>
+            </div>
+          </template>
+          <template v-else>
+          <div
+            v-if="isBackfilledHistorySnapshot(listing)"
+            class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-200"
+            data-testid="backfilled-history-notice"
+          >
+            这条历史记录由当前或最终房间信息回填，不是本次使用当时保存的精确快照。
+          </div>
           <div class="listing-card-head">
             <div class="listing-card-identity">
               <div class="listing-badge-row">
@@ -1288,7 +1577,7 @@
               <div class="listing-title-row">
                 <h2 class="listing-title">{{ listing.room_name || listing.account_name || `房间 #${listing.id}` }}</h2>
                 <button
-                  v-if="isOwnListing(listing)"
+                  v-if="isOwnListing(listing) && !listing.deleted"
                   type="button"
                   class="room-account-count-button"
                   @click="openRoomAccountsDialog(listing)"
@@ -1319,12 +1608,15 @@
                 <span>评分</span>
                 <strong>{{ listingRatingLabel(listing) }}</strong>
               </span>
-              <span :class="statusBadgeClass(listing.status)">
-                {{ statusLabel(listing.status) }}
+              <span :class="listingStatusBadgeClass(listing)">
+                {{ listingStatusLabel(listing) }}
               </span>
-              <span class="listing-seat-pill">
-                {{ listing.active_seats }}/{{ listing.seat_limit }}
-              </span>
+              <div class="listing-member-limit">
+                <span class="listing-seat-pill">
+                  成员上限（1～15） · 消费者 {{ listing.active_seats }}/{{ listing.seat_limit }}
+                </span>
+                <small>{{ ACCOUNT_SHARE_MEMBER_LIMIT_HELP }}</small>
+              </div>
             </div>
           </div>
 
@@ -1347,16 +1639,10 @@
 
                 <div class="capacity-panel">
                   <div class="flex items-center justify-between gap-3">
-                    <span><Icon name="chart" size="sm" />实时容量</span>
-                    <strong>{{ currentConcurrencyLabel(listing) }}</strong>
+                    <span><Icon name="chart" size="sm" />运行时请求能力</span>
+                    <strong>配置并发 {{ listing.account_concurrency }}</strong>
                   </div>
-                  <div class="capacity-track" aria-hidden="true">
-                    <div
-                      class="capacity-fill"
-                      :class="capacityFillClass(listing)"
-                      :style="{ width: capacityWidth(listing) }"
-                    ></div>
-                  </div>
+                  <p>账号级请求能力配置，不代表实时空闲容量，也不决定成员上限。</p>
                 </div>
               </div>
 
@@ -1467,7 +1753,7 @@
               <strong>{{ formatNumber(listing.min_balance_required) }}</strong>
             </div>
             <div class="metric">
-              <span class="metric-label"><Icon name="users" size="xs" />账号并发</span>
+              <span class="metric-label"><Icon name="users" size="xs" />配置并发</span>
               <strong>{{ listing.account_concurrency }}</strong>
             </div>
             <div class="metric">
@@ -1528,6 +1814,10 @@
                 <Icon name="exclamationCircle" size="sm" />
                 <span>账号配置正在编辑中，暂时不能加入使用，避免使用修改前的旧配置。</span>
               </div>
+              <div v-if="isListingMembershipEnding(listing)" class="edit-lock-strip">
+                <Icon name="refresh" size="sm" class="animate-spin" />
+                <span>退出结算处理中，结算完成后才能重新加入或排队。</span>
+              </div>
               <div v-if="isOwnListing(listing) && selfUseSettingsError" class="edit-lock-strip">
                 <Icon name="exclamationCircle" size="sm" />
                 <span>{{ selfUseSettingsError }}</span>
@@ -1564,11 +1854,11 @@
                 <button
                   class="btn-primary h-9"
                   type="button"
-                  :disabled="listingEditLocked(listing) || modeKeysLoading || joiningId === listing.id || selfUseJoinUnavailable(listing)"
-                  :title="selfUseJoinUnavailable(listing) ? selfUseSettingsError : undefined"
+                  :disabled="isListingMembershipEnding(listing) || listingEditLocked(listing) || modeKeysLoading || preparingJoinId !== null || joiningId !== null || selfUseJoinUnavailable(listing)"
+                  :title="isListingMembershipEnding(listing) ? '退出结算处理中' : (selfUseJoinUnavailable(listing) ? selfUseSettingsError : undefined)"
                   @click="joinUse(listing)"
                 >
-                  {{ joiningId === listing.id ? (isOwnListing(listing) ? '绑定中' : '加入中') : (modeKeysLoading ? '加载 Key 中' : (isOwnListing(listing) ? (selfUseSettingsLoading ? '加载自用配置' : (selfUseSettingsError ? '自用配置不可用' : '使用自己的账号')) : '加入使用')) }}
+                  {{ isListingMembershipEnding(listing) ? '退出结算处理中' : (preparingJoinId === listing.id ? '准备确认中' : (joiningId === listing.id ? (isOwnListing(listing) ? '绑定中' : '加入中') : (modeKeysLoading ? '加载 Key 中' : (isOwnListing(listing) ? (selfUseSettingsLoading ? '加载自用配置' : (selfUseSettingsError ? '自用配置不可用' : '使用自己的账号')) : '加入使用')))) }}
                 </button>
               </div>
             </div>
@@ -1582,7 +1872,7 @@
                 <span>房间账号：健康 {{ listing.healthy_account_count ?? 0 }} / 共 {{ listing.account_count ?? 0 }}</span>
                 <span>更新：{{ formatDate(listing.updated_at) }}</span>
               </div>
-              <div class="mt-3 flex flex-wrap gap-2">
+              <div v-if="!listing.deleted" class="mt-3 flex flex-wrap gap-2">
                 <button
                   type="button"
                   class="btn-secondary h-9"
@@ -1602,55 +1892,21 @@
                   编辑配置
                 </button>
                 <button
+                  v-if="(isOwnListing(listing) || authStore.isAdmin) && capabilities?.lifecycle_enabled !== false"
                   type="button"
-                  class="btn-secondary h-9"
-                  :disabled="savingModelsId === listing.id"
-                  @click="openModelEditDialog(listing)"
+                  class="btn-secondary min-h-11"
+                  data-testid="room-lifecycle-entry"
+                  @click="openRoomLifecycleDialog(listing)"
                 >
-                  <Icon name="edit" size="xs" class="mr-2" />
-                  编辑模型
+                  <Icon name="cog" size="xs" class="mr-2" />
+                  房间管理
                 </button>
-                <button
-                  v-if="canOwnerRelistListing(listing)"
-                  type="button"
-                  class="btn-primary h-9"
-                  :disabled="managingId === listing.id"
-                  title="重新上架前会自动测试账号可用性"
-                  @click="updateManagedListingStatus(listing, 'active')"
-                >
-                  <Icon name="play" size="xs" class="mr-2" />
-                  {{ managingId === listing.id ? '测试中...' : '重新上架' }}
-                </button>
-                <button
-                  v-if="authStore.isAdmin && listing.status !== 'active'"
-                  type="button"
-                  class="btn-primary h-9"
-                  :disabled="managingId === listing.id"
-                  @click="updateManagedListingStatus(listing, 'active')"
-                >
-                  <Icon name="play" size="xs" class="mr-2" />
-                  重新上架
-                </button>
-                <button
-                  v-if="authStore.isAdmin && listing.status === 'active'"
-                  type="button"
-                  class="btn-secondary h-9"
-                  :disabled="managingId === listing.id"
-                  @click="updateManagedListingStatus(listing, 'paused')"
-                >
-                  <Icon name="ban" size="xs" class="mr-2" />
-                  暂停
-                </button>
-                <button
-                  v-if="authStore.isAdmin && listing.status !== 'disabled'"
-                  type="button"
-                  class="btn-danger-soft h-9"
-                  :disabled="managingId === listing.id"
-                  @click="updateManagedListingStatus(listing, 'disabled')"
-                >
-                  <Icon name="xCircle" size="xs" class="mr-2" />
-                  下架
-                </button>
+              </div>
+              <div
+                v-else
+                class="mt-3 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-500 dark:border-dark-700 dark:bg-dark-900 dark:text-dark-300"
+              >
+                {{ deletedHistorySnapshotMessage(listing) }}
               </div>
               <div v-if="listingEditLocked(listing)" class="edit-lock-strip mt-3">
                 <Icon name="exclamationCircle" size="sm" />
@@ -1658,14 +1914,18 @@
               </div>
             </div>
           </template>
-          <div v-if="listing.queue_membership_id" class="account-share-membership-panel">
+          <div
+            v-if="listing.queue_membership_id || listing.current_membership_id"
+            class="account-share-membership-panel"
+            :class="{ 'account-share-membership-panel-ending': isListingMembershipEnding(listing) }"
+          >
             <div class="membership-status-head">
               <div>
                 <div class="membership-title">
-                  {{ listing.current_membership_id ? '正在使用' : '预约队列' }}，绑定 {{ boundApiKeyDisplayName(listing) }}
+                  {{ membershipPanelTitle(listing) }}，绑定 {{ boundApiKeyDisplayName(listing) }}
                 </div>
                 <div class="membership-subtitle">
-                  {{ listing.current_membership_id ? idleTimeoutSummary(listing) : queueIdleTimeoutSummary(listing) }}
+                  {{ membershipPanelSubtitle(listing) }}
                   <span v-if="boundApiKeyID(listing)"> · ID #{{ boundApiKeyID(listing) }}</span>
                 </div>
               </div>
@@ -1682,7 +1942,7 @@
                     <span>激活时间</span>
                     <strong>{{ formatDate(listing.current_joined_at) }}</strong>
                   </div>
-                  <div v-if="waiverProgressVisible(listing)">
+                  <div v-if="!isListingMembershipEnding(listing) && waiverProgressVisible(listing)">
                     <span>窗口剩余</span>
                     <strong>{{ waiverProgressRemainingLabel(listing) }}</strong>
                   </div>
@@ -1694,7 +1954,7 @@
                     <span>最近请求</span>
                     <strong>{{ formatDate(listing.current_waiver_progress?.last_request_at || listing.current_last_request_at) }}</strong>
                   </div>
-                  <div v-if="listing.current_billed_until && !waiverProgressVisible(listing)">
+                  <div v-if="listing.current_billed_until && (isListingMembershipEnding(listing) || !waiverProgressVisible(listing))">
                     <span>已结算到</span>
                     <strong>{{ formatDate(listing.current_billed_until) }}</strong>
                   </div>
@@ -1705,7 +1965,7 @@
                 </div>
 
                 <div
-                  v-if="waiverProgressVisible(listing)"
+                  v-if="!isListingMembershipEnding(listing) && waiverProgressVisible(listing)"
                   class="waiver-progress-card"
                   :class="waiverProgressToneClass(listing)"
                 >
@@ -1727,13 +1987,31 @@
               </div>
 
               <div class="membership-controls">
+                <div
+                  v-if="isListingMembershipEnding(listing)"
+                  class="membership-ending-state"
+                  role="status"
+                  aria-live="polite"
+                  data-testid="membership-ending-state"
+                >
+                  <Icon
+                    :name="pendingMembershipEndForListing(listing)?.operationStatus === 'failed' ? 'exclamationCircle' : 'refresh'"
+                    size="sm"
+                    :class="{ 'animate-spin': pendingMembershipEndForListing(listing)?.operationStatus !== 'failed' && pendingMembershipEndForListing(listing)?.operationStatus !== 'cancelled' }"
+                  />
+                  <div>
+                    <strong>{{ queueStatusLabel(listing) }}</strong>
+                    <span>{{ membershipPanelSubtitle(listing) }}</span>
+                  </div>
+                </div>
+                <template v-else>
                 <div class="idle-timeout-control">
                   <label :for="`idle-timeout-current-${listing.id}`">空闲退出</label>
                   <div class="idle-timeout-row">
                     <input
                       :id="`idle-timeout-current-${listing.id}`"
                       v-model.number="idleTimeoutByListing[listing.id]"
-                      class="input h-9"
+                      class="input min-h-11"
                       type="number"
                       min="1"
                       :max="ACCOUNT_SHARE_IDLE_TIMEOUT_MAX_MINUTES"
@@ -1741,9 +2019,9 @@
                     />
                     <span>分钟</span>
                     <button
-                      class="btn-secondary h-9"
+                      class="btn-secondary min-h-11"
                       type="button"
-                      :disabled="savingIdleTimeoutId === listing.queue_membership_id"
+                      :disabled="savingIdleTimeoutId === Number(listing.queue_membership_id || listing.current_membership_id || 0)"
                       @click="saveIdleTimeout(listing)"
                     >
                       保存
@@ -1752,7 +2030,7 @@
                 </div>
                 <div class="membership-action-row">
                   <button
-                    class="btn-secondary h-9"
+                    class="btn-secondary min-h-11"
                     type="button"
                     :disabled="!canMoveQueueItem(listing, -1)"
                     @click="moveQueueItem(listing, -1)"
@@ -1761,7 +2039,7 @@
                     上移
                   </button>
                   <button
-                    class="btn-secondary h-9"
+                    class="btn-secondary min-h-11"
                     type="button"
                     :disabled="!canMoveQueueItem(listing, 1)"
                     @click="moveQueueItem(listing, 1)"
@@ -1772,7 +2050,7 @@
                   <button
                     class="membership-end-button"
                     type="button"
-                    :disabled="endingId !== null"
+                    :disabled="endingId !== null || isListingMembershipEnding(listing)"
                     @click="openEndUseConfirm(listing)"
                   >
                     {{ listing.current_membership_id ? '结束使用' : '移出预约' }}
@@ -1784,14 +2062,16 @@
                 >
                   {{ listing.current_membership_id ? (isOwnListing(listing) ? '空闲到时自动解除绑定' : '空闲到时自动退出并停止占位') : '预约激活后生效' }}
                 </div>
+                </template>
               </div>
             </div>
           </div>
+          </template>
         </article>
       </section>
 
       <div v-else class="rounded-lg border border-dashed border-gray-300 bg-white p-8 text-center text-sm text-gray-500 dark:border-dark-700 dark:bg-dark-900 dark:text-dark-300">
-        {{ isKeyResolutionMode ? (keyResolutionError ? '关联账号详情暂时无法加载，请在上方刷新状态后重试。' : '当前 API Key 没有需要处理的关联账号。') : (pagination.total === 0 ? (hasResultFilters ? '没有匹配的共享账号。' : (isManagementView ? '暂无可管理账号。' : '当前分类暂无账号。')) : '当前页暂无账号。') }}
+        {{ isKeyResolutionMode ? (keyResolutionError ? '关联房间详情暂时无法加载，请在上方刷新状态后重试。' : '当前 API Key 没有需要处理的关联房间。') : (pagination.total === 0 ? (hasResultFilters ? '没有匹配的账号房间。' : (isArchiveView ? '暂无已删除房间。' : (isManagementView ? '暂无可管理房间。' : '当前分类暂无房间。'))) : '当前页暂无房间。') }}
       </div>
 
       <Pagination
@@ -1804,49 +2084,26 @@
         @update:page="handlePageChange"
         @update:pageSize="handlePageSizeChange"
       />
+      </template>
     </div>
 
     <BaseDialog
-      :show="showModelEditDialog"
-      title="编辑模型白名单"
-      width="wide"
-      @close="closeModelEditDialog"
-    >
-      <ModelWhitelistSelector v-model="editingAllowedModels" :platform="listingPlatform(editingModelListing)" />
-
-      <template #footer>
-        <button type="button" class="btn-secondary" :disabled="savingModelsId !== null" @click="closeModelEditDialog">取消</button>
-        <button
-          type="button"
-          class="btn-primary"
-          :disabled="savingModelsId !== null || editingAllowedModels.length === 0"
-          @click="saveModelEdit"
-        >
-          <Icon v-if="savingModelsId === null" name="checkCircle" size="sm" class="mr-2" />
-          <svg v-else class="-ml-1 mr-2 h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-          </svg>
-          保存
-        </button>
-      </template>
-    </BaseDialog>
-
-    <BaseDialog
       :show="pendingJoinConfirmation !== null"
-      :title="pendingJoinIsOwnerSelfUse ? '确认使用自己的账号' : '确认加入共享账号'"
+      :title="pendingJoinIsOwnerSelfUse ? '确认使用自己的账号' : '确认加入账号房间'"
       width="wide"
       :z-index="60"
+      :close-disabled="joinDialogBusy"
+      :close-on-escape="!joinDialogBusy"
       @close="closeJoinConfirmation"
     >
-      <div v-if="pendingJoinListing" class="join-confirmation">
+      <div v-if="pendingJoinIntent && pendingJoinTerms" class="join-confirmation" data-testid="join-confirmation">
         <div class="join-confirmation-head" :class="{ 'join-confirmation-head-danger': pendingJoinPriceWarnings.length > 0 }">
           <span class="join-confirmation-icon">
             <Icon :name="pendingJoinPriceWarnings.length > 0 ? 'exclamationCircle' : 'infoCircle'" size="md" />
           </span>
           <div class="min-w-0">
-            <strong>{{ listingDisplayName(pendingJoinListing) }}</strong>
-            <span>{{ pendingJoinIsOwnerSelfUse ? `这是你自己上架的账号，绑定后按全局自用倍率 ${ownerSelfUseRateMultiplierLabel} 计算请求费用，不收小时费，也不占用共享席位。` : '加入后该 API Key 会绑定到这个账号，请确认价格、并发和模型限制后再继续。' }}</span>
+            <strong>{{ pendingJoinTerms.room_name || `房间 #${pendingJoinIntent.listing_id}` }}</strong>
+            <span>{{ pendingJoinIsOwnerSelfUse ? `这是你自己的房间。绑定后按全局自用倍率 ${ownerSelfUseRateMultiplierLabel} 计算请求费用，不收小时费，也不占用消费者名额。` : '以下内容来自服务端刚刚签发的条款快照；确认后，该 API Key 会按这份快照加入房间。' }}</span>
           </div>
         </div>
 
@@ -1858,33 +2115,41 @@
         </div>
 
         <div class="join-confirmation-grid">
-          <div v-if="isOpenAIListing(pendingJoinListing)" class="join-confirmation-field">
-            <span>账号等级</span>
-            <strong>{{ accountLevelBadgeLabel(pendingJoinListing) }}</strong>
+          <div class="join-confirmation-field">
+            <span>条款版本</span>
+            <strong>v{{ pendingJoinTerms.row_version }} · rev {{ pendingJoinTerms.listing_revision_id || 0 }}</strong>
           </div>
-          <div class="join-confirmation-field" :class="{ 'join-price-danger': isRateMultiplierExpensive(pendingJoinListing) }">
-            <span>倍率</span>
-            <strong>{{ pendingJoinIsOwnerSelfUse ? ownerSelfUseRateMultiplierLabel : `${formatNumber(pendingJoinListing.rate_multiplier)}x` }}</strong>
+          <div class="join-confirmation-field">
+            <span>房间状态</span>
+            <strong>{{ pendingJoinTerms.status === 'active' ? '可加入' : pendingJoinTerms.status }}</strong>
           </div>
-          <div class="join-confirmation-field" :class="{ 'join-price-danger': isHourlyRateExpensive(pendingJoinListing) }">
+          <div class="join-confirmation-field">
+            <span>消费者名额</span>
+            <strong>{{ pendingJoinTerms.seat_limit }}</strong>
+          </div>
+          <div class="join-confirmation-field" :class="{ 'join-price-danger': !pendingJoinIsOwnerSelfUse && pendingJoinTerms.rate_multiplier > 1 }">
+            <span>{{ pendingJoinIsOwnerSelfUse ? '自用请求倍率' : '倍率' }}</span>
+            <strong>{{ pendingJoinIsOwnerSelfUse ? ownerSelfUseRateMultiplierLabel : `${formatNumber(pendingJoinTerms.rate_multiplier)}x` }}</strong>
+          </div>
+          <div v-if="pendingJoinIsOwnerSelfUse" class="join-confirmation-field">
+            <span>公开条款倍率</span>
+            <strong>{{ formatNumber(pendingJoinTerms.rate_multiplier) }}x</strong>
+          </div>
+          <div class="join-confirmation-field" :class="{ 'join-price-danger': !pendingJoinIsOwnerSelfUse && pendingJoinTerms.hourly_rate > EXPENSIVE_HOURLY_RATE }">
             <span>小时费</span>
-            <strong>{{ pendingJoinIsOwnerSelfUse ? '不收取' : formatNumber(pendingJoinListing.hourly_rate) }}</strong>
+            <strong>{{ pendingJoinIsOwnerSelfUse ? '不收取' : formatNumber(pendingJoinTerms.hourly_rate) }}</strong>
           </div>
           <div class="join-confirmation-field">
             <span>免小时费低消</span>
-            <strong>{{ pendingJoinIsOwnerSelfUse ? '不适用' : hourlyFeeWaiverLabel(pendingJoinListing.hourly_fee_waiver_minimum) }}</strong>
+            <strong>{{ pendingJoinIsOwnerSelfUse ? '不适用' : hourlyFeeWaiverLabel(pendingJoinTerms.hourly_fee_waiver_minimum) }}</strong>
           </div>
           <div class="join-confirmation-field">
             <span>最低余额</span>
-            <strong>{{ pendingJoinIsOwnerSelfUse ? '不校验' : formatNumber(pendingJoinListing.min_balance_required) }}</strong>
-          </div>
-          <div class="join-confirmation-field">
-            <span>账号并发</span>
-            <strong>{{ pendingJoinListing.account_concurrency }}</strong>
+            <strong>{{ pendingJoinIsOwnerSelfUse ? '不校验' : formatNumber(pendingJoinTerms.min_balance_required) }}</strong>
           </div>
           <div class="join-confirmation-field">
             <span>单用户并发</span>
-            <strong>{{ pendingJoinListing.per_user_concurrency }}</strong>
+            <strong>{{ pendingJoinTerms.per_user_concurrency }}</strong>
           </div>
           <div class="join-confirmation-field">
             <span>绑定 Key</span>
@@ -1894,26 +2159,53 @@
             <span>空闲退出</span>
             <strong>{{ pendingJoinIdleTimeoutLabel }}</strong>
           </div>
-          <div v-if="isOpenAIListing(pendingJoinListing)" class="join-confirmation-field">
+          <div v-if="pendingJoinHasOpenAIProtection" class="join-confirmation-field">
             <span>Codex保护</span>
-            <strong>{{ pendingJoinListing.codex_5h_limit_percent }}% / {{ pendingJoinListing.codex_7d_limit_percent }}%</strong>
+            <strong>{{ pendingJoinTerms.codex_5h_limit_percent }}% / {{ pendingJoinTerms.codex_7d_limit_percent }}%</strong>
           </div>
-          <div v-else-if="showAnthropicUsageWindows(pendingJoinListing)" class="join-confirmation-field">
+          <div v-if="pendingJoinHasAnthropicProtection" class="join-confirmation-field">
             <span>Claude保护</span>
-            <strong>{{ anthropic5hLimitPercent(pendingJoinListing) }}% / {{ anthropic7dLimitPercent(pendingJoinListing) }}%</strong>
+            <strong>{{ pendingJoinTerms.anthropic_5h_limit_percent || 0 }}% / {{ pendingJoinTerms.anthropic_7d_limit_percent || 0 }}%</strong>
           </div>
+        </div>
+
+        <label
+          class="join-queue-consent"
+          :class="{ 'join-queue-consent-required': pendingJoinIntent.queue_may_be_required && !pendingJoinIntent.accept_queue }"
+        >
+          <input
+            type="checkbox"
+            :checked="pendingJoinIntent.accept_queue"
+            :disabled="joinDialogBusy"
+            data-testid="join-accept-queue"
+            @change="updatePendingJoinQueueAcceptance"
+          />
+          <span>
+            <strong>席位不足时，我同意进入预约队列</strong>
+            <small v-if="pendingJoinIntent.queue_may_be_required">当前状态可能需要预约；必须明确勾选后才能继续，预约会在该 Key 下按顺序等待。</small>
+            <small v-else>当前预计可直接加入；若提交瞬间席位已满，未勾选时系统不会擅自把你加入预约队列。</small>
+          </span>
+        </label>
+
+        <div v-if="refreshingJoinIntent" class="join-intent-state" data-testid="join-intent-refreshing">
+          <Icon name="refresh" size="sm" class="animate-spin" />
+          <span>正在按你的排队选择重新签发确认条款...</span>
+        </div>
+        <div v-else-if="joinIntentError" class="join-intent-state join-intent-state-error" data-testid="join-intent-error">
+          <Icon name="exclamationCircle" size="sm" />
+          <span>{{ joinIntentError }}</span>
         </div>
 
         <div class="join-usage-reminder">
           <Icon name="infoCircle" size="sm" />
-          <span>{{ pendingJoinIsOwnerSelfUse ? `确认使用后，连续空闲达到 ${pendingJoinIdleTimeoutLabel} 会自动解除绑定；自用期间不产生小时费和号主收益。` : `若进入预约，下一次使用该 Key 发出 API 请求时才会按顺序尝试激活。激活后小时费按分钟预扣，连续空闲达到 ${pendingJoinIdleTimeoutLabel} 会自动退出并停止占位。` }}</span>
+          <span>{{ pendingJoinIsOwnerSelfUse ? `确认使用后，连续空闲达到 ${pendingJoinIdleTimeoutLabel} 会自动解除绑定；自用期间不产生小时费和号主收益。` : `确认令牌有效至 ${formatDate(pendingJoinIntent.expires_at)}。若进入预约，下一次使用该 Key 发出 API 请求时会按顺序尝试激活；连续空闲达到 ${pendingJoinIdleTimeoutLabel} 会自动退出并停止占位。` }}</span>
         </div>
 
         <div class="join-model-confirmation">
           <span>可用模型</span>
           <div>
             <button
-              v-for="model in visibleModels(pendingJoinListing)"
+              v-for="model in pendingJoinVisibleModels"
               :key="model"
               type="button"
               class="model-copy-chip"
@@ -1922,20 +2214,26 @@
             >
               {{ model }}
             </button>
-            <span v-if="hiddenModels(pendingJoinListing).length > 0" class="join-model-more">+{{ hiddenModels(pendingJoinListing).length }}</span>
+            <span v-if="pendingJoinHiddenModelCount > 0" class="join-model-more">+{{ pendingJoinHiddenModelCount }}</span>
           </div>
         </div>
       </div>
 
       <template #footer>
-        <button type="button" class="btn-secondary" :disabled="joiningId !== null" @click="closeJoinConfirmation">取消</button>
-        <button type="button" class="btn-primary" :disabled="joiningId !== null" @click="confirmJoinUse">
-          <Icon v-if="joiningId === null" name="checkCircle" size="sm" class="mr-2" />
+        <button type="button" class="btn-secondary min-h-11" :disabled="joinDialogBusy" @click="closeJoinConfirmation">取消</button>
+        <button
+          type="button"
+          class="btn-primary min-h-11"
+          :disabled="!pendingJoinCanSubmit"
+          data-testid="join-confirm-submit"
+          @click="confirmJoinUse"
+        >
+          <Icon v-if="!joinDialogBusy" name="checkCircle" size="sm" class="mr-2" />
           <svg v-else class="-ml-1 mr-2 h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
           </svg>
-          {{ pendingJoinIsOwnerSelfUse ? '确认使用' : '确认加入' }}
+          {{ refreshingJoinIntent ? '更新条款中' : (joiningId !== null ? '提交中' : (pendingJoinIsOwnerSelfUse ? '确认使用' : '确认加入')) }}
         </button>
       </template>
     </BaseDialog>
@@ -1985,7 +2283,7 @@
               <strong>{{ mySpendAccountPickerTitle }}</strong>
               <small>包含正在使用、预约中和历史使用记录；选择账号后下方统计会按该账号刷新。</small>
             </div>
-            <button type="button" class="btn-secondary h-9" :disabled="mySpendAccountsLoading" @click="loadMySpendAccountOptions()">
+            <button type="button" class="btn-secondary min-h-11" :disabled="mySpendAccountsLoading" @click="loadMySpendAccountOptions()">
               <Icon name="refresh" size="xs" class="mr-2" :class="{ 'animate-spin': mySpendAccountsLoading }" />
               刷新账号
             </button>
@@ -1996,48 +2294,86 @@
             <span>{{ mySpendAccountsError }}</span>
           </div>
 
+          <div class="my-spend-range-tabs my-spend-source-tabs" role="tablist" aria-label="消费账号记录类型">
+            <button
+              type="button"
+              role="tab"
+              :class="{ active: mySpendPickerSource === 'using' }"
+              :aria-selected="mySpendPickerSource === 'using'"
+              :disabled="mySpendAccountsLoading"
+              @click="setMySpendPickerSource('using')"
+            >
+              使用/预约 {{ mySpendUsingPagination.total }}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              :class="{ active: mySpendPickerSource === 'history' }"
+              :aria-selected="mySpendPickerSource === 'history'"
+              :disabled="mySpendAccountsLoading"
+              @click="setMySpendPickerSource('history')"
+            >
+              消费历史 {{ mySpendHistoryPagination.total }}
+            </button>
+          </div>
+
           <div v-if="mySpendAccountsLoading && mySpendAccountOptions.length === 0" class="my-spend-loading">
             正在加载使用过的账号...
           </div>
           <div v-else-if="!mySpendAccountsLoading && mySpendAccountOptions.length === 0" class="my-spend-empty">
-            暂无可统计的账号。加入或使用账号后，这里会展示账号选择和消费统计。
+            {{ mySpendPickerSource === 'using'
+              ? '暂无正在使用或预约中的记录。'
+              : '暂无已结束的消费历史。每次使用都会在结束后单独保留。' }}
           </div>
-          <div v-else class="my-spend-account-grid">
-            <button
-              v-for="option in mySpendAccountOptions"
-              :key="option.key"
-              type="button"
-              class="my-spend-account-option"
-              :class="{ active: mySpendSelectedOptionKey === option.key }"
-              :title="mySpendAccountOptionTitle(option)"
-              @click="selectMySpendAccount(option)"
-            >
-              <span class="my-spend-account-option-top">
-                <span class="feature-badge">{{ platformLabel(listingPlatform(option.listing)) }}</span>
-                <span>{{ mySpendAccountSourceLabel(option.source) }}</span>
-              </span>
-              <strong>{{ listingDisplayName(option.listing) }}</strong>
-              <small>{{ mySpendAccountUsagePeriod(option.listing) }}</small>
-              <span class="my-spend-account-option-foot">
-                <span>记录 #{{ option.membershipID }}</span>
-                <span>{{ mySpendAccountStatusLabel(option.listing) }}</span>
-              </span>
-            </button>
-          </div>
+          <template v-else>
+            <div class="my-spend-account-grid">
+              <button
+                v-for="option in mySpendAccountOptions"
+                :key="option.key"
+                type="button"
+                class="my-spend-account-option"
+                :class="{ active: mySpendSelectedOptionKey === option.key }"
+                :title="mySpendAccountOptionTitle(option)"
+                :disabled="mySpendAccountsLoading"
+                @click="selectMySpendAccount(option)"
+              >
+                <span class="my-spend-account-option-top">
+                  <span class="feature-badge">{{ platformLabel(option.platform) }}</span>
+                  <span>{{ mySpendAccountSourceLabel(option.source) }}</span>
+                </span>
+                <strong>{{ mySpendAccountDisplayName(option) }}</strong>
+                <small>{{ mySpendAccountUsagePeriod(option) }}</small>
+                <span class="my-spend-account-option-foot">
+                  <span>记录 #{{ option.membershipID }}</span>
+                  <span>{{ mySpendAccountStatusLabel(option) }}</span>
+                </span>
+              </button>
+            </div>
+            <Pagination
+              v-if="mySpendActivePickerPagination.total > mySpendActivePickerPagination.pageSize"
+              class="overflow-hidden rounded-xl border border-slate-200 shadow-sm dark:border-dark-700"
+              :page="mySpendActivePickerPagination.page"
+              :total="mySpendActivePickerPagination.total"
+              :page-size="mySpendActivePickerPagination.pageSize"
+              :show-page-size-selector="false"
+              @update:page="handleMySpendAccountPageChange"
+            />
+          </template>
         </div>
 
-        <div v-if="mySpendListing" class="my-spend-context">
+        <div v-if="mySpendSelectedOption" class="my-spend-context">
           <span class="my-spend-context-icon">
             <Icon name="dollar" size="md" />
           </span>
           <div class="min-w-0">
-            <span class="my-spend-eyebrow">{{ platformLabel(listingPlatform(mySpendListing)) }} · 共享账号 #{{ mySpendListing.id }}</span>
-            <strong>{{ mySpendListing.account_name || `共享账号 #${mySpendListing.id}` }}</strong>
+            <span class="my-spend-eyebrow">
+              {{ platformLabel(mySpendSelectedOption.platform) }} · 房间 #{{ mySpendSelectedOption.listingID }}
+              <template v-if="mySpendSelectedOption.roomDeleted"> · 已删除</template>
+            </span>
+            <strong>{{ mySpendAccountDisplayName(mySpendSelectedOption) }}</strong>
             <small>
-              号主：{{ mySpendListing.owner_username || `用户 ${mySpendListing.owner_user_id}` }}
-              <template v-if="mySpendMembershipID(mySpendListing) > 0">
-                · 使用记录 #{{ mySpendMembershipID(mySpendListing) }}
-              </template>
+              号主：{{ mySpendSelectedOption.ownerUsername || `用户 ${mySpendSelectedOption.ownerUserID}` }}
+              · 使用记录 #{{ mySpendSelectedOption.membershipID }}
             </small>
           </div>
         </div>
@@ -2050,19 +2386,32 @@
               type="button"
               :class="{ active: mySpendRange === option.value }"
               :aria-selected="mySpendRange === option.value"
+              :disabled="mySpendHistorySelection && option.value !== 'current_membership'"
+              :title="mySpendHistorySelection && option.value !== 'current_membership' ? '历史记录仅按选中的这一次使用精确统计' : undefined"
               role="tab"
               @click="setMySpendRange(option.value)"
             >
               {{ option.label }}
             </button>
           </div>
-          <button type="button" class="btn-secondary h-9" :disabled="mySpendLoading || !mySpendListing" @click="loadMySpendSummary">
+          <button type="button" class="btn-secondary min-h-11" :disabled="mySpendLoading || !mySpendSelectedOption" @click="loadMySpendSummary">
             <Icon name="refresh" size="xs" class="mr-2" />
             刷新
           </button>
         </div>
 
-        <div v-if="!mySpendLoading && !mySpendListing && mySpendAccountOptions.length > 0" class="my-spend-empty">
+        <div
+          v-if="mySpendHistorySelection"
+          class="notice-row border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-200"
+        >
+          <Icon name="infoCircle" size="sm" class="mt-0.5 flex-shrink-0" />
+          <span>历史记录按选中的 membership 精确统计，不会合并同一房间的其他使用记录。</span>
+        </div>
+
+        <div
+          v-if="!mySpendLoading && !mySpendSelectedOption && (mySpendUsingPagination.total + mySpendHistoryPagination.total) > 0"
+          class="my-spend-empty"
+        >
           请选择一个账号查看使用时间段、费用明细和统计面板。
         </div>
 
@@ -2189,6 +2538,7 @@
     <RoomAccountsDialog
       :show="roomAccountsListing !== null"
       :listing="roomAccountsListing"
+      :proxies="proxies"
       @close="closeRoomAccountsDialog"
       @changed="handleRoomAccountsChanged"
     />
@@ -2197,6 +2547,7 @@
       :show="showConfigEditDialog"
       title="编辑房间配置"
       width="extra-wide"
+      :close-disabled="savingConfigEdit || releasingConfigEdit || pendingDraftDiscardTarget === 'config'"
       @close="closeConfigEditDialog"
     >
       <div class="space-y-5">
@@ -2205,7 +2556,7 @@
             <span class="edit-context-eyebrow">房间 #{{ editingConfigListing.id }}</span>
             <strong>{{ listingDisplayName(editingConfigListing) }}</strong>
             <small>
-              使用中席位 {{ editingConfigListing.active_seats }} / {{ editingConfigListing.seat_limit }}
+              消费者名额 {{ editingConfigListing.active_seats }} / {{ editingConfigListing.seat_limit }}
               <template v-if="editingConfigListing.editing_expires_at">
                 · 编辑锁 {{ formatCountdownUntil(editingConfigListing.editing_expires_at) }}到期
               </template>
@@ -2214,9 +2565,28 @@
           <span v-if="editForceActive" class="edit-force-badge">管理员强制编辑</span>
         </div>
 
+        <div
+          v-if="editForceActive"
+          class="notice-row border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/60 dark:bg-amber-900/20 dark:text-amber-200"
+        >
+          <Icon name="exclamationTriangle" size="sm" class="mt-0.5 flex-shrink-0" />
+          <span>管理员强制编辑已确认；保存时将使用下方“本次修改原因”写入审计记录。</span>
+        </div>
+
         <div v-if="editErrorMessage" class="notice-row border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-300">
           <Icon name="exclamationCircle" size="sm" class="mt-0.5 flex-shrink-0" />
-          <span>{{ editErrorMessage }}</span>
+          <div class="min-w-0 flex-1">
+            <span>{{ editErrorMessage }}</span>
+            <button
+              v-if="editVersionConflict"
+              type="button"
+              class="mt-2 min-h-11 rounded-lg border border-red-300 bg-white px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 dark:border-red-800 dark:bg-dark-900 dark:text-red-200"
+              data-testid="reload-conflicted-room-config"
+              @click="reloadConfigEditAfterConflict"
+            >
+              刷新房间并重新编辑
+            </button>
+          </div>
         </div>
 
         <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
@@ -2224,7 +2594,7 @@
             <div class="form-section">
               <div class="section-heading">
                 <span>基础配置</span>
-                <small>这里只修改房间级策略；成员账号的代理和账号并发请在“我的账号”中单独管理。</small>
+                <small>这里只修改房间级策略；成员账号的代理和配置并发请在“我的账号”中单独管理。</small>
               </div>
               <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <label class="field">
@@ -2236,10 +2606,11 @@
                 </label>
 
                 <label class="field">
-                  <span>可使用人数</span>
+                  <span>成员上限（1～15）</span>
                   <select v-model.number="editForm.seat_limit" class="input">
                     <option v-for="seat in seatOptions" :key="seat" :value="seat">{{ seat }} 人</option>
                   </select>
+                  <small>{{ ACCOUNT_SHARE_MEMBER_LIMIT_HELP }}</small>
                 </label>
 
                 <label class="field">
@@ -2275,7 +2646,7 @@
             <div class="form-section">
               <div class="section-heading">
                 <span>模型与保护</span>
-                <small>模型编辑仍可单独保存；这里保存时会与其他账号模式参数一起提交。</small>
+                <small>模型白名单与其他房间条款统一提交，共用同一个版本校验和审计记录。</small>
               </div>
               <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
                 <div class="field">
@@ -2316,8 +2687,28 @@
                 <input v-model="editForm.codex_cli_only" type="checkbox" />
                 <span>
                   <strong>仅允许 Codex 官方客户端</strong>
-                  <small>关闭后会允许更多客户端加入该共享账号。</small>
+                  <small>关闭后会允许更多客户端加入该账号房间。</small>
                 </span>
+              </label>
+            </div>
+
+            <div class="form-section">
+              <div class="section-heading">
+                <span>修改原因</span>
+                <small>每次房间配置变更都会生成审计记录，请写明本次调整目的。</small>
+              </div>
+              <label class="field">
+                <span>本次修改原因</span>
+                <textarea
+                  v-model="editReason"
+                  class="input min-h-24"
+                  maxlength="1000"
+                  placeholder="例如：根据近期使用情况调整单用户并发和小时费"
+                  data-testid="room-config-update-reason"
+                ></textarea>
+                <small :class="!editReason.trim() ? 'text-amber-700 dark:text-amber-300' : ''">
+                  {{ editReason.trim().length }}/1000 · 必填，保存后不可从审计记录中移除。
+                </small>
               </label>
             </div>
           </div>
@@ -2334,7 +2725,7 @@
                 <strong>{{ editingConfigListing?.healthy_account_count ?? 0 }}/{{ editingConfigListing?.account_count ?? 0 }}</strong>
               </div>
               <div class="compact-metric">
-                <span>共享人数</span>
+                <span>成员上限（1～15）</span>
                 <strong>{{ editForm.seat_limit }}</strong>
               </div>
               <div class="compact-metric">
@@ -2359,11 +2750,11 @@
       </div>
 
       <template #footer>
-        <button type="button" class="btn-secondary" :disabled="savingConfigEdit || releasingConfigEdit" @click="closeConfigEditDialog">取消</button>
+        <button type="button" class="btn-secondary" :disabled="savingConfigEdit || releasingConfigEdit" @click="() => closeConfigEditDialog()">取消</button>
         <button
           type="button"
           class="btn-primary"
-          :disabled="savingConfigEdit || releasingConfigEdit || editAllowedModels.length === 0 || Boolean(editPerUserConcurrencyValidationMessage)"
+          :disabled="savingConfigEdit || releasingConfigEdit || editVersionConflict || !editReason.trim() || editAllowedModels.length === 0 || Boolean(editPerUserConcurrencyValidationMessage)"
           @click="saveConfigEdit"
         >
           <Icon v-if="!savingConfigEdit" name="checkCircle" size="sm" class="mr-2" />
@@ -2411,9 +2802,9 @@
       <div v-if="pendingReview" class="space-y-5">
         <div class="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-dark-700 dark:bg-dark-800/60">
           <div class="flex flex-col gap-1">
-            <span class="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-dark-300">{{ platformLabel(listingPlatform(pendingReview.listing)) }}</span>
-            <strong class="text-base text-gray-900 dark:text-dark-50">{{ listingDisplayName(pendingReview.listing) }}</strong>
-            <span class="text-sm text-gray-500 dark:text-dark-300">号主：{{ ownerDisplayName(pendingReview.listing) }}</span>
+            <span class="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-dark-300">{{ pendingReview.platformLabel }}</span>
+            <strong class="text-base text-gray-900 dark:text-dark-50">{{ pendingReview.roomName }}</strong>
+            <span class="text-sm text-gray-500 dark:text-dark-300">号主：{{ pendingReview.ownerName }}</span>
           </div>
         </div>
 
@@ -2515,10 +2906,10 @@
                   <strong class="block truncate text-sm text-gray-900 dark:text-dark-50">{{ listingDisplayName(item) }}</strong>
                   <span class="mt-1 block text-xs text-gray-500 dark:text-dark-300">{{ platformLabel(listingPlatform(item)) }} · {{ listingRatingLabel(item) }}</span>
                 </div>
-                <span :class="statusBadgeClass(item.status)">{{ statusLabel(item.status) }}</span>
+                <span :class="listingStatusBadgeClass(item)">{{ listingStatusLabel(item) }}</span>
               </div>
               <div class="mt-3 grid grid-cols-3 gap-2 text-xs text-gray-600 dark:text-dark-300">
-                <span>席位 {{ item.active_seats }}/{{ item.seat_limit }}</span>
+                <span>消费者名额 {{ item.active_seats }}/{{ item.seat_limit }}</span>
                 <span>倍率 {{ formatNumber(item.rate_multiplier) }}x</span>
                 <span>小时费 {{ formatNumber(item.hourly_rate) }}</span>
               </div>
@@ -2545,7 +2936,7 @@
               </div>
               <p class="mt-2 whitespace-pre-wrap text-sm leading-6 text-gray-700 dark:text-dark-100">{{ review.comment }}</p>
               <div class="mt-3 flex flex-wrap gap-2 text-xs text-gray-500 dark:text-dark-300">
-                <span>{{ review.account_name || '共享账号' }}</span>
+                <span>{{ review.account_name || '账号房间' }}</span>
                 <span v-if="review.consumer_username">来自 {{ review.consumer_username }}</span>
               </div>
             </article>
@@ -2562,23 +2953,467 @@
       </template>
     </BaseDialog>
 
-    <ConfirmDialog
+    <BaseDialog
+      :show="roomLifecycleListing !== null"
+      :title="roomLifecycleListing ? `${listingDisplayName(roomLifecycleListing)} · 房间管理` : '房间管理'"
+      width="normal"
+      :close-disabled="roomLifecycleCommandBusy"
+      @close="closeRoomLifecycleDialog"
+    >
+      <div class="room-lifecycle-dialog" data-testid="room-lifecycle-dialog">
+        <div
+          v-if="roomLifecycleLoading"
+          class="room-lifecycle-state-message"
+          data-testid="room-lifecycle-loading"
+        >
+          <Icon name="refresh" size="sm" class="animate-spin" />
+          <span>正在读取房间的最新状态...</span>
+        </div>
+
+        <div
+          v-if="roomLifecycleError"
+          class="room-lifecycle-alert room-lifecycle-alert-danger"
+          role="alert"
+          data-testid="room-lifecycle-error"
+        >
+          <Icon name="exclamationCircle" size="sm" class="mt-0.5 flex-shrink-0" />
+          <div class="min-w-0">
+            <strong>操作没有完成</strong>
+            <p>{{ roomLifecycleError }}</p>
+            <code v-if="roomLifecycleErrorCode">{{ roomLifecycleErrorCode }}</code>
+          </div>
+        </div>
+
+        <div
+          v-if="roomLifecycleDeleted"
+          class="room-lifecycle-alert room-lifecycle-alert-success"
+          data-testid="room-lifecycle-deleted"
+        >
+          <Icon name="checkCircle" size="sm" class="mt-0.5 flex-shrink-0" />
+          <div>
+            <strong>房间已软删除</strong>
+            <p>房间不会再出现在可用列表中，历史消费、结算和评价记录仍会保留。</p>
+          </div>
+        </div>
+
+        <template v-else-if="roomLifecycleState">
+          <section class="room-lifecycle-overview">
+            <div class="room-lifecycle-overview-head">
+              <div>
+                <span class="room-lifecycle-eyebrow">当前状态</span>
+                <div class="mt-1 flex flex-wrap items-center gap-2">
+                  <strong class="text-base text-gray-950 dark:text-white">
+                    {{ roomLifecycleStatusLabel(roomLifecycleState.lifecycle_status) }}
+                  </strong>
+                  <span :class="roomLifecycleStatusBadgeClass(roomLifecycleState.lifecycle_status)">
+                    {{ roomLifecycleHealthLabel(roomLifecycleState.health_state) }}
+                  </span>
+                </div>
+              </div>
+              <span class="room-lifecycle-version">版本 {{ roomLifecycleState.row_version }}</span>
+            </div>
+            <p v-if="roomLifecycleState.status_reason" class="room-lifecycle-status-reason">
+              {{ roomLifecycleState.status_reason }}
+            </p>
+            <div class="room-lifecycle-metrics">
+              <div>
+                <span>消费者席位</span>
+                <strong>{{ roomLifecycleState.active_seats }}/{{ roomLifecycleState.seat_limit }}</strong>
+              </div>
+              <div>
+                <span>排队成员</span>
+                <strong>{{ roomLifecycleState.queued_membership_count }}</strong>
+              </div>
+              <div>
+                <span>房间账号</span>
+                <strong>{{ roomLifecycleState.room_account_count }}</strong>
+              </div>
+              <div>
+                <span>进行中请求</span>
+                <strong>{{ roomLifecycleState.in_flight_concurrency }}</strong>
+              </div>
+            </div>
+          </section>
+
+          <section
+            v-if="roomLifecycleOperation"
+            class="room-lifecycle-operation"
+            data-testid="room-lifecycle-operation"
+          >
+            <div class="flex min-w-0 items-start gap-3">
+              <Icon
+                :name="roomLifecycleOperationTerminal ? (roomLifecycleOperation.status === 'succeeded' ? 'checkCircle' : 'exclamationCircle') : 'refresh'"
+                size="sm"
+                class="mt-0.5 flex-shrink-0"
+                :class="{ 'animate-spin': roomLifecyclePolling }"
+              />
+              <div class="min-w-0">
+                <strong>{{ roomLifecycleOperationLabel(roomLifecycleOperation) }}</strong>
+                <p>{{ roomLifecycleOperationStatusDescription(roomLifecycleOperation) }}</p>
+                <code>{{ roomLifecycleOperation.id }}</code>
+              </div>
+            </div>
+          </section>
+
+          <template v-if="!roomLifecycleHasPendingOperation">
+            <section v-if="roomLifecycleAction === null" class="space-y-3">
+              <div>
+                <span class="room-lifecycle-eyebrow">可用操作</span>
+                <p class="mt-1 text-sm leading-6 text-gray-500 dark:text-dark-300">
+                  这里仅展示服务端允许的生命周期变更。排空会停止新成员进入，并等待现有请求与结算安全结束后暂停房间。
+                </p>
+              </div>
+              <div class="room-lifecycle-action-grid">
+                <button
+                  v-if="roomLifecycleActionAllowed('drain')"
+                  type="button"
+                  class="room-lifecycle-action-card"
+                  data-testid="room-lifecycle-action-drain"
+                  @click="selectRoomLifecycleAction('drain')"
+                >
+                  <Icon name="clock" size="sm" />
+                  <span>
+                    <strong>排空并暂停</strong>
+                    <small>停止准入，等待使用与结算收口</small>
+                  </span>
+                </button>
+                <button
+                  v-if="roomLifecycleActionAllowed('activate')"
+                  type="button"
+                  class="room-lifecycle-action-card"
+                  data-testid="room-lifecycle-action-activate"
+                  @click="selectRoomLifecycleAction('activate')"
+                >
+                  <Icon name="play" size="sm" />
+                  <span>
+                    <strong>恢复房间</strong>
+                    <small>完成账号连通性校验后重新开放</small>
+                  </span>
+                </button>
+                <button
+                  v-if="roomLifecycleActionAllowed('suspend')"
+                  type="button"
+                  class="room-lifecycle-action-card"
+                  data-testid="room-lifecycle-action-suspend"
+                  @click="selectRoomLifecycleAction('suspend')"
+                >
+                  <Icon name="ban" size="sm" />
+                  <span>
+                    <strong>暂停房间</strong>
+                    <small>立即停止房间准入</small>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  class="room-lifecycle-action-card room-lifecycle-action-card-danger"
+                  data-testid="room-lifecycle-action-delete"
+                  @click="selectRoomLifecycleAction('delete')"
+                >
+                  <Icon name="trash" size="sm" />
+                  <span>
+                    <strong>删除房间</strong>
+                    <small>先检查使用、结算与运行时阻塞项</small>
+                  </span>
+                </button>
+              </div>
+              <p
+                v-if="!roomLifecycleHasStateChangeAction"
+                class="room-lifecycle-muted-note"
+              >
+                当前没有可执行的状态变更；你仍可检查删除条件，或刷新状态。
+              </p>
+            </section>
+
+            <section
+              v-else-if="roomLifecycleAction !== 'delete'"
+              class="room-lifecycle-confirm-panel"
+              data-testid="room-lifecycle-confirm"
+            >
+              <span class="room-lifecycle-eyebrow">确认操作</span>
+              <h4>{{ roomLifecycleActionTitle(roomLifecycleAction) }}</h4>
+              <p>{{ roomLifecycleActionDescription(roomLifecycleAction) }}</p>
+              <div class="room-lifecycle-alert room-lifecycle-alert-warning">
+                <Icon name="infoCircle" size="sm" class="mt-0.5 flex-shrink-0" />
+                <p>{{ roomLifecycleActionImpact(roomLifecycleAction) }}</p>
+              </div>
+              <label v-if="authStore.isAdmin" class="field">
+                <span>管理员操作原因</span>
+                <textarea
+                  v-model="roomLifecycleReason"
+                  class="input min-h-24"
+                  maxlength="500"
+                  placeholder="请说明本次生命周期变更原因"
+                  data-testid="room-lifecycle-reason"
+                ></textarea>
+                <small>原因会写入房间事件与审计记录。</small>
+              </label>
+            </section>
+
+            <section
+              v-else
+              class="room-lifecycle-confirm-panel"
+              data-testid="room-delete-confirm"
+            >
+              <span class="room-lifecycle-eyebrow">删除校验</span>
+              <h4>软删除房间</h4>
+              <p>系统会先检查使用中成员、请求、结算、编辑会话和其他房间操作，全部清零后才签发两分钟有效的确认令牌。</p>
+
+              <label v-if="authStore.isAdmin" class="field">
+                <span>管理员删除原因</span>
+                <textarea
+                  v-model="roomLifecycleReason"
+                  class="input min-h-24"
+                  maxlength="500"
+                  placeholder="请说明为什么需要删除此房间"
+                  data-testid="room-delete-reason"
+                ></textarea>
+                <small>必须填写原因后才能检查删除条件，原因会写入审计记录。</small>
+              </label>
+
+              <button
+                v-if="authStore.isAdmin && !roomDeleteIntent"
+                type="button"
+                class="btn-secondary min-h-11"
+                :disabled="roomDeleteIntentLoading || !roomLifecycleReason.trim()"
+                data-testid="room-delete-intent-submit"
+                @click="loadRoomDeleteIntent"
+              >
+                <Icon name="search" size="sm" class="mr-2" />
+                检查删除条件
+              </button>
+
+              <div
+                v-if="roomDeleteIntentLoading"
+                class="room-lifecycle-state-message"
+                data-testid="room-delete-intent-loading"
+              >
+                <Icon name="refresh" size="sm" class="animate-spin" />
+                <span>正在检查删除条件...</span>
+              </div>
+
+              <template v-else-if="roomDeleteIntent">
+                <div
+                  :class="[
+                    'room-lifecycle-alert',
+                    roomDeleteIntent.can_delete
+                      ? 'room-lifecycle-alert-warning'
+                      : 'room-lifecycle-alert-danger'
+                  ]"
+                  data-testid="room-delete-intent-result"
+                >
+                  <Icon
+                    :name="roomDeleteIntent.can_delete ? 'exclamationTriangle' : 'exclamationCircle'"
+                    size="sm"
+                    class="mt-0.5 flex-shrink-0"
+                  />
+                  <div>
+                    <strong>{{ roomDeleteIntent.can_delete ? '删除条件已满足' : '暂时不能删除' }}</strong>
+                    <p>{{ roomDeleteIntent.history_notice }}</p>
+                  </div>
+                </div>
+
+                <ul
+                  v-if="roomLifecycleBlockerItems.length > 0"
+                  class="room-lifecycle-blocker-list"
+                  data-testid="room-delete-blockers"
+                >
+                  <li v-for="item in roomLifecycleBlockerItems" :key="item.key">
+                    <span>{{ item.label }}</span>
+                    <strong>{{ item.value }}</strong>
+                  </li>
+                </ul>
+
+                <label v-if="roomDeleteIntent.can_delete" class="field">
+                  <span>输入房间名确认</span>
+                  <input
+                    v-model="roomDeleteNameConfirmation"
+                    class="input min-h-11"
+                    type="text"
+                    autocomplete="off"
+                    :placeholder="roomDeleteIntent.room_name"
+                    data-testid="room-delete-name-input"
+                  />
+                  <small>请完整输入“{{ roomDeleteIntent.room_name }}”。确认令牌将在 {{ formatRoomDeleteIntentExpiry(roomDeleteIntent.expires_at) }} 失效。</small>
+                </label>
+              </template>
+            </section>
+          </template>
+        </template>
+      </div>
+
+      <template #footer>
+        <div class="room-lifecycle-footer">
+          <button
+            v-if="roomLifecycleAction !== null && !roomLifecycleHasPendingOperation && !roomLifecycleDeleted"
+            type="button"
+            class="btn-secondary min-h-11"
+            :disabled="roomLifecycleCommandBusy"
+            @click="resetRoomLifecycleAction"
+          >
+            返回
+          </button>
+          <button
+            v-else
+            type="button"
+            class="btn-secondary min-h-11"
+            :disabled="roomLifecycleCommandBusy"
+            @click="closeRoomLifecycleDialog"
+          >
+            关闭
+          </button>
+          <button
+            v-if="roomLifecycleHasPendingOperation && !roomLifecycleDeleted"
+            type="button"
+            class="btn-secondary min-h-11"
+            :disabled="roomLifecyclePolling"
+            data-testid="room-operation-refresh"
+            @click="pollRoomLifecycleOperationNow"
+          >
+            <Icon name="refresh" size="sm" class="mr-2" :class="{ 'animate-spin': roomLifecyclePolling }" />
+            {{ roomLifecyclePolling ? '自动查询中' : '继续查询' }}
+          </button>
+          <button
+            v-else-if="roomLifecycleAction === null && !roomLifecycleDeleted"
+            type="button"
+            class="btn-secondary min-h-11"
+            :disabled="roomLifecycleLoading"
+            @click="refreshRoomLifecycleState"
+          >
+            <Icon name="refresh" size="sm" class="mr-2" :class="{ 'animate-spin': roomLifecycleLoading }" />
+            刷新状态
+          </button>
+          <button
+            v-else-if="roomLifecycleAction === 'delete' && roomDeleteIntent && (!roomDeleteIntent.can_delete || roomDeleteIntentExpired)"
+            type="button"
+            class="btn-secondary min-h-11"
+            :disabled="roomLifecycleCommandBusy"
+            @click="loadRoomDeleteIntent"
+          >
+            {{ roomDeleteIntentExpired ? '重新获取确认' : '重新检查' }}
+          </button>
+          <button
+            v-else-if="roomLifecycleAction !== null && !roomLifecycleDeleted"
+            type="button"
+            :class="roomLifecycleAction === 'delete' ? 'btn-danger min-h-11' : 'btn-primary min-h-11'"
+            :disabled="!canSubmitRoomLifecycleAction"
+            data-testid="room-lifecycle-submit"
+            @click="submitRoomLifecycleAction"
+          >
+            <Icon
+              :name="roomLifecycleAction === 'delete' ? 'trash' : 'checkCircle'"
+              size="sm"
+              class="mr-2"
+              :class="{ 'animate-pulse': roomLifecycleSubmitting }"
+            />
+            {{ roomLifecycleSubmitting ? '提交中...' : roomLifecycleSubmitLabel }}
+          </button>
+        </div>
+      </template>
+    </BaseDialog>
+
+    <BaseDialog
       :show="pendingForceEditListing !== null"
-      title="强制编辑使用中房间"
-      :message="forceEditConfirmMessage"
-      confirm-text="继续编辑"
-      cancel-text="取消"
+      title="管理员强制编辑房间"
+      width="narrow"
+      @close="cancelForceEdit"
+    >
+      <div class="space-y-4">
+        <div class="notice-row border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/60 dark:bg-amber-900/20 dark:text-amber-200">
+          <Icon name="exclamationTriangle" size="sm" class="mt-0.5 flex-shrink-0" />
+          <span>{{ forceEditConfirmMessage }}</span>
+        </div>
+        <label class="field">
+          <span>强制修改原因</span>
+          <textarea
+            v-model="forceEditReason"
+            class="input min-h-24"
+            maxlength="500"
+            placeholder="请说明为什么不能先暂停并排空房间"
+            data-testid="force-edit-reason"
+          ></textarea>
+          <small>原因会随新 revision 写入审计记录，不能为空。</small>
+        </label>
+        <label class="toggle-row">
+          <input v-model="forceEditConfirmed" type="checkbox" data-testid="force-edit-confirmed" />
+          <span>
+            <strong>我确认需要绕过房主的暂停编辑限制</strong>
+            <small>已有 active、queued 或 ending membership 继续使用旧 revision；只有修改后新加入的 membership 使用新 revision。</small>
+          </span>
+        </label>
+      </div>
+
+      <template #footer>
+        <button type="button" class="btn-secondary min-h-11" @click="cancelForceEdit">取消</button>
+        <button
+          type="button"
+          class="btn-danger min-h-11"
+          :disabled="!forceEditReason.trim() || !forceEditConfirmed"
+          data-testid="confirm-force-edit"
+          @click="confirmForceEdit"
+        >
+          继续强制编辑
+        </button>
+      </template>
+    </BaseDialog>
+
+    <ConfirmDialog
+      :show="pendingDraftDiscardTarget !== null"
+      title="放弃未保存的修改？"
+      :message="draftDiscardMessage"
+      confirm-text="放弃修改"
+      cancel-text="继续编辑"
       danger
-      @confirm="confirmForceEdit"
-      @cancel="cancelForceEdit"
+      @confirm="confirmDiscardDraft"
+      @cancel="cancelDiscardDraft"
+    />
+
+    <AdminBillingAttentionDialog
+      :show="showAdminBillingDialog"
+      @close="closeAdminBillingDialog"
+    />
+    <AccountShareQuotaAdminDialog
+      :show="showAdminQuotaDialog"
+      @close="closeAdminQuotaDialog"
+      @updated="loadCapabilities"
     />
   </AppLayout>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { accountShareAPI, type AccountShareListing, type AccountShareListingFeatureTag, type AccountShareListingFilters, type AccountShareListingSortBy, type AccountShareListingSortKey, type AccountShareListingSortOrder, type AccountShareListingStatus, type AccountShareListingTab, type AccountShareMembership, type AccountShareMySpendRange, type AccountShareMySpendSummary, type AccountShareRecommendationCandidate, type AccountShareRecommendationResult, type AccountShareRecommendationScoreBreakdown, type AccountShareRecommendationUsageProfile, type AccountShareReview, type CreateAccountShareRoomRequest, type UpdateAccountShareListingRequest } from '@/api/accountShare'
+import {
+  accountShareAPI,
+  type AccountShareCapabilities,
+  type AccountShareJoinIntent,
+  type AccountShareListing,
+  type AccountShareListingFeatureTag,
+  type AccountShareListingFilterStatus,
+  type AccountShareListingFilters,
+  type AccountShareListingSortBy,
+  type AccountShareListingSortKey,
+  type AccountShareListingSortOrder,
+  type AccountShareListingStatus,
+  type AccountShareListingTab,
+  type AccountShareMembership,
+  type AccountShareMembershipHistoryEntry,
+  type AccountShareMySpendRange,
+  type AccountShareMySpendSummary,
+  type AccountShareRecommendationCandidate,
+  type AccountShareRecommendationResult,
+  type AccountShareRecommendationScoreBreakdown,
+  type AccountShareRecommendationUsageProfile,
+  type AccountShareReview,
+  type AccountShareRoomBlockers,
+  type AccountShareRoomDeleteIntent,
+  type AccountShareRoomHealthState,
+  type AccountShareRoomLifecycleAction,
+  type AccountShareRoomLifecycleStatus,
+  type AccountShareRoomManagementState,
+  type AccountShareRoomOperation,
+  type CreateAccountShareRoomRequest,
+  type UpdateAccountShareListingRequest
+} from '@/api/accountShare'
 import { accountsAPI, keysAPI } from '@/api'
 import type { Account, AccountLevel, ApiKey, Proxy, ProxyProtocol, UsageProgress } from '@/types'
 import { useAppStore } from '@/stores/app'
@@ -2601,7 +3436,11 @@ import OAuthAuthorizationFlow from '@/components/account/OAuthAuthorizationFlow.
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import UsageProgressBar from '@/components/account/UsageProgressBar.vue'
 import Pagination from '@/components/common/Pagination.vue'
+import CreateRoomDialog from '@/components/account-share/CreateRoomDialog.vue'
 import RoomAccountsDialog from '@/components/account-share/RoomAccountsDialog.vue'
+import AdminBillingAttentionDialog from '@/components/account-share/AdminBillingAttentionDialog.vue'
+import AccountShareQuotaAdminDialog from '@/components/account-share/AccountShareQuotaAdminDialog.vue'
+import MembershipHistoryPanel from '@/components/account-share/MembershipHistoryPanel.vue'
 
 interface FilterOption {
   key: string
@@ -2609,7 +3448,7 @@ interface FilterOption {
   tab: AccountShareListingTab
 }
 
-type ListingStatusFilterValue = AccountShareListingStatus | 'available' | 'all' | ''
+type ListingStatusFilterValue = AccountShareListingFilterStatus | 'available'
 type AccountLevelFilterValue = AccountLevel | 'all' | ''
 type ListingSortKey = AccountShareListingSortKey
 type AccountShareListingWithClientMeta = AccountShareListing & {
@@ -2688,6 +3527,26 @@ interface CreateFormState {
   anthropic_7d_limit_percent: number
 }
 
+type DraftDiscardTarget = 'create' | 'config'
+
+interface CreateDraftSnapshot {
+  sourceMode: 'existing' | 'oauth'
+  platform: AccountSharePlatform
+  selectedOwnedAccountID: number
+  form: CreateFormState
+  allowedModels: string[]
+  authURL: string
+  authSessionID: string
+  authCode: string
+  oauthState: string
+}
+
+interface ConfigDraftSnapshot {
+  form: CreateFormState
+  allowedModels: string[]
+  reason: string
+}
+
 interface OAuthFlowInstance {
   authCode?: string
   oauthState?: string
@@ -2740,9 +3599,13 @@ interface RecommendationScoreItem {
 }
 
 interface PendingJoinConfirmation {
-  listing: AccountShareListing
+  listingID: number
+  ownerSelfUse: boolean
+  platform: AccountSharePlatform
   apiKeyID: number
+  apiKeyLabel: string
   idleTimeoutMinutes: number
+  intent: AccountShareJoinIntent
 }
 
 interface PendingEndUseState {
@@ -2753,6 +3616,18 @@ interface PendingEndUseState {
   listing: AccountShareListing
 }
 
+interface PendingMembershipEnd {
+  listingID: number
+  membershipID: number
+  operationID: string
+  operationStatus: string
+  operationError: string
+  apiKeyID?: number
+  apiKeyName?: string
+  membership: AccountShareMembership
+  listingSnapshot: AccountShareListing
+}
+
 interface QueueSnapshotLoadResult {
   snapshots: Record<number, AccountShareMembership[]>
   failedApiKeyIDs: number[]
@@ -2760,11 +3635,18 @@ interface QueueSnapshotLoadResult {
 
 interface ReviewDialogState {
   membershipID: number
-  listing: AccountShareListing
+  platformLabel: string
+  roomName: string
+  ownerName: string
   score: number | null
   comment: string
   submitting: boolean
   error: string
+}
+
+interface StableIdempotencyIntent {
+  signature: string
+  key: string
 }
 
 interface MySpendRangeOption {
@@ -2783,23 +3665,78 @@ interface MySpendMetric {
 
 interface MySpendAccountOption {
   key: string
-  listing: AccountShareListing
   source: MySpendAccountOptionSource
+  listingID: number
   membershipID: number
+  platform: string
+  roomName: string
+  accountName?: string
+  ownerUserID: number
+  ownerUsername?: string
+  status: string
+  queueRank?: number
+  joinedAt?: string
+  lastRequestAt?: string
+  endedAt?: string
+  roomDeleted?: boolean
+  listing?: AccountShareListing
+}
+
+interface MySpendAccountOptionPage {
+  options: MySpendAccountOption[]
+  page: number
+  pageSize: number
+  total: number
+  pages: number
+}
+
+interface MySpendAccountOptionPagination {
+  page: number
+  pageSize: number
+  total: number
+  pages: number
 }
 
 type OwnerDialogTab = 'listings' | 'reviews'
+
+interface RoomLifecycleBlockerItem {
+  key: keyof AccountShareRoomBlockers
+  label: string
+  value: string
+}
 
 const DEFAULT_ACCOUNT_CONCURRENCY = 20
 const DEFAULT_PER_USER_CONCURRENCY = 5
 const DEFAULT_HOURLY_RATE = 0.2
 const DEFAULT_ACCOUNT_SHARE_IDLE_TIMEOUT_MINUTES = 10
+const MY_SPEND_ACCOUNT_PAGE_SIZE = 12
 const PLUS_EXPENSIVE_RATE_MULTIPLIER = 0.15
 const PRO_EXPENSIVE_RATE_MULTIPLIER = 0.25
 const EXPENSIVE_HOURLY_RATE = 2
 const MAX_ACCOUNT_CONCURRENCY = 50
-const ACCOUNT_SHARE_MIN_SEATS = 2
-const ACCOUNT_SHARE_MAX_SEATS = 12
+const MAX_PER_USER_CONCURRENCY = 50
+const ACCOUNT_SHARE_MIN_SEATS = 1
+const ACCOUNT_SHARE_MAX_SEATS = 15
+const ACCOUNT_SHARE_MEMBER_LIMIT_HELP = '由房主设置，与账号数量/账号并发无推导关系；房主自用不占消费者名额'
+const ROOM_LIFECYCLE_OPERATION_POLL_INTERVAL_MS = 1500
+const ACCOUNT_SHARE_TRANSIENT_STATUS_REFRESH_INTERVAL_MS = 8_000
+const ROOM_LIFECYCLE_TERMINAL_OPERATION_STATUSES = new Set([
+  'succeeded',
+  'failed',
+  'cancelled'
+])
+const ROOM_LIFECYCLE_ERROR_MESSAGES: Record<string, string> = {
+  ACCOUNT_SHARE_ROOM_VERSION_CONFLICT: '房间状态刚刚发生变化，请刷新后重新确认本次操作。',
+  ACCOUNT_SHARE_ROOM_OPERATION_CONFLICT: '房间已有一个生命周期操作正在执行，请等待它结束后再试。',
+  ACCOUNT_SHARE_ROOM_INVALID_TRANSITION: '当前房间状态不允许执行该操作，请刷新后查看最新状态。',
+  ACCOUNT_SHARE_ROOM_DELETE_BLOCKED: '房间仍有使用、请求或结算阻塞项，暂时不能删除。',
+  ACCOUNT_SHARE_ROOM_REVIEW_IDENTITY_MISSING: '房间存在可评价的历史记录，但账号邮箱身份尚未固化。请先刷新或重新授权房间账号后再删除。',
+  ACCOUNT_SHARE_ROOM_DELETION_TOKEN_INVALID: '删除确认已失效或房间状态已变化，请重新检查删除条件。',
+  ACCOUNT_SHARE_ROOM_DELETED: '房间已经删除，无需重复操作。',
+  ACCOUNT_SHARE_LISTING_EDITING: '房间配置仍在编辑中，请先关闭编辑窗口或等待编辑会话失效。',
+  ACCOUNT_SHARE_ROOM_VALIDATION_FAILED: '房间恢复校验未通过，请检查房间账号状态后重试。',
+  ACCOUNT_SHARE_RUNTIME_DEPENDENCY_UNAVAILABLE: '运行时状态暂时不可用，为保护历史与结算安全，当前操作已停止。'
+}
 const PROXY_PURCHASE_URL = 'https://www.seekproxy.com/user/reg?invite_id=105978'
 const ACCOUNT_SHARE_PLATFORM_OPTIONS: Array<{ value: AccountSharePlatform; label: string }> = [
   { value: 'openai', label: 'OpenAI' },
@@ -2815,7 +3752,7 @@ const ACCOUNT_MODE_GROUP_NAME_BY_PLATFORM: Record<AccountSharePlatform, string> 
 }
 const DEFAULT_ACCOUNT_SHARE_ALLOWED_MODELS_BY_PLATFORM: Record<AccountSharePlatform, string[]> = {
   openai: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'codex-auto-review'],
-  anthropic: ['claude-sonnet-4-6', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-fable-5', 'claude-opus-4-6', 'claude-haiku-4-5']
+  anthropic: ['claude-sonnet-4-6', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-fable-5', 'claude-opus-4-6', 'claude-haiku-4-5']
 }
 const ACCOUNT_SHARE_RECOMMENDATION_LIMIT = 10
 const ACCOUNT_SHARE_RECOMMENDATION_PAGE_SIZE = 5
@@ -2885,12 +3822,13 @@ const seatOptions = Array.from({ length: ACCOUNT_SHARE_MAX_SEATS - ACCOUNT_SHARE
 const reviewScoreOptions = Array.from({ length: 11 }, (_, score) => score)
 const filters: FilterOption[] = [
   { key: 'using', label: '使用/预约', tab: 'using' },
-  { key: 'history', label: '历史使用', tab: 'history' },
+  { key: 'history', label: '消费记录', tab: 'history' },
+  { key: 'archive', label: '已删除房间', tab: 'archive' },
   { key: 'all', label: '全部', tab: 'all' }
 ]
 const ownerFilter: FilterOption = { key: 'mine', label: '我的账号', tab: 'mine' }
 const listingSortFieldOptions: ListingSortFieldOption[] = [
-  { sortBy: 'account_concurrency', label: '账号并发', ascLabel: '从小到大', descLabel: '从大到小' },
+  { sortBy: 'account_concurrency', label: '配置并发', ascLabel: '从小到大', descLabel: '从大到小' },
   { sortBy: 'per_user_concurrency', label: '单人并发', ascLabel: '从小到大', descLabel: '从大到小' },
   { sortBy: 'min_balance_required', label: '最低余额', ascLabel: '从小到大', descLabel: '从大到小' },
   { sortBy: 'hourly_rate', label: '小时费', ascLabel: '从小到大', descLabel: '从大到小' },
@@ -2930,7 +3868,7 @@ const listingStatusFilterOptions: Array<{ value: ListingStatusFilterValue; label
   { value: 'available', label: '可用账号' },
   { value: 'active', label: '已上架' },
   { value: 'paused', label: '已暂停' },
-  { value: 'disabled', label: '已下架' },
+  { value: 'suspended', label: '管理员暂停' },
   { value: 'all', label: '全部状态' }
 ]
 const openAIAccountLevelConfigs = computed(() =>
@@ -2948,27 +3886,55 @@ const accountLevelFilterOptions = computed<Array<{ value: AccountLevelFilterValu
   }))
 )
 const accountShareJoinErrorMessages: Record<string, string> = {
-  ACCOUNT_SHARE_ACCOUNT_UNAVAILABLE: '该共享账号当前不可加入，请换一个账号或稍后再试',
-  ACCOUNT_SHARE_ALREADY_USING: '你当前已有正在使用的共享账号，请先结束后再加入新的账号',
-  ACCOUNT_SHARE_API_KEY_ALREADY_BOUND: '当前账号模式 Key 已绑定其他共享账号，请先结束原使用记录',
+  ACCOUNT_SHARE_ACCOUNT_UNAVAILABLE: '该账号房间当前不可加入，请换一个房间或稍后再试',
+  ACCOUNT_SHARE_ALREADY_USING: '你当前已有正在使用的账号房间，请先结束后再加入新的房间',
+  ACCOUNT_SHARE_API_KEY_ALREADY_BOUND: '当前账号模式 Key 已绑定其他账号房间，请先结束原使用记录',
   ACCOUNT_SHARE_QUEUE_FULL: '当前账号模式 Key 的预约列表已满，最多只能保留 5 个账号',
   ACCOUNT_SHARE_QUEUE_INVALID: '预约列表顺序无效，请刷新后重试',
   ACCOUNT_SHARE_API_KEY_MUST_USE_MODE_GROUP: '请选择绑定对应平台账号模式分组的 API Key',
-  ACCOUNT_SHARE_LISTING_NOT_FOUND: '该共享账号不存在或已下架，请刷新账号广场后再试',
-  ACCOUNT_SHARE_LISTING_NOT_ACTIVE: '该共享账号当前未上架，暂时不能加入',
-  ACCOUNT_SHARE_LISTING_FULL: '该共享账号席位已满，请换一个账号',
+  ACCOUNT_SHARE_LISTING_NOT_FOUND: '该账号房间不存在或已下架，请刷新账号广场后再试',
+  ACCOUNT_SHARE_LISTING_NOT_ACTIVE: '该账号房间当前未上架，暂时不能加入',
+  ACCOUNT_SHARE_LISTING_FULL: '该账号房间成员已满，请换一个房间',
   ACCOUNT_SHARE_BALANCE_BELOW_MINIMUM: '余额低于该账号最低要求，暂时不能加入',
   ACCOUNT_SHARE_MODE_GROUP_UNAVAILABLE: '账号模式分组尚未配置，请联系管理员处理',
-  ACCOUNT_SHARE_MODE_GROUP_UNBOUND: '当前账号模式分组未绑定共享账号，请先在账号广场加入一个账号',
+  ACCOUNT_SHARE_MODE_GROUP_UNBOUND: '当前账号模式分组未绑定账号房间，请先在账号广场加入一个房间',
   ACCOUNT_SHARE_MODE_INVALID_IDLE_TIMEOUT: '空闲自动退出时间必须在 1-10080 分钟之间',
   ACCOUNT_SHARE_MODE_PREPAY_INSUFFICIENT: '余额不足以预付本次使用，请充值后再试',
-  ACCOUNT_SHARE_PER_USER_CONCURRENCY_EXCEEDED: '该共享账号当前单用户并发已达到上限，请稍后再试',
-  ACCOUNT_SHARE_OWNER_CANNOT_JOIN: '不能加入自己上架的共享账号',
+  ACCOUNT_SHARE_PER_USER_CONCURRENCY_EXCEEDED: '该账号房间当前单用户并发已达到上限，请稍后再试',
+  ACCOUNT_SHARE_OWNER_CANNOT_JOIN: '不能以消费者身份加入自己管理的账号房间',
   ACCOUNT_SHARE_LISTING_EDITING: '账号配置正在编辑中，暂时不能加入使用',
+  ACCOUNT_SHARE_JOIN_INTENT_REQUIRED: '请先获取并确认最新加入条款',
+  ACCOUNT_SHARE_JOIN_INTENT_INVALID: '加入确认已失效，请重新确认最新条款',
+  ACCOUNT_SHARE_JOIN_INTENT_CONSUMED: '这份加入确认已经使用过，请重新确认',
+  ACCOUNT_SHARE_JOIN_TERMS_CHANGED: '房间条款已变化，请重新确认最新条款',
+  ACCOUNT_SHARE_QUEUE_CONFIRMATION_REQUIRED: '当前需要进入预约队列，请明确同意排队后重试',
+  ACCOUNT_SHARE_MEMBERSHIP_ENDING: '退出结算处理中，结算完成后才能重新加入或排队',
   API_KEY_NOT_FOUND: '该 API Key 不存在或已被删除，请重新选择',
   INSUFFICIENT_PERMISSIONS: '你没有权限使用这个 API Key，请重新选择自己的账号模式 Key',
   SERVICE_UNAVAILABLE: '账号广场服务暂时不可用，请稍后再试',
   USER_NOT_FOUND: '当前用户状态异常，请重新登录后再试'
+}
+const accountShareRoomCreateErrorMessages: Record<string, string> = {
+  ACCOUNT_SHARE_ROOM_LIMIT_EXCEEDED: '未删除房间数量已达到当前配额上限，请删除不再使用的空房间或联系管理员调整配额',
+  ACCOUNT_SHARE_ROOM_CREATE_RATE_EXCEEDED: '最近 24 小时创建房间次数已达到上限，请在配额窗口恢复后再试',
+  ACCOUNT_SHARE_ROOM_ACCOUNT_LIMIT_EXCEEDED: '该房间的账号数量已达到上限，请先移出不再使用的账号',
+  ACCOUNT_SHARE_OWNER_ROOM_ACCOUNT_LIMIT_EXCEEDED: '你管理的房间账号总数已达到上限，请先整理现有房间账号',
+  ACCOUNT_SHARE_ROOM_OWNER_MISMATCH: '所选账号不属于当前房主，请刷新账号列表后重新选择',
+  ACCOUNT_SHARE_ROOM_PLATFORM_MISMATCH: '所选账号与房间平台不一致，请选择同平台账号',
+  ACCOUNT_SHARE_ROOM_LEVEL_MISMATCH: '所选账号等级与房间要求不一致，请选择相同等级账号',
+  ACCOUNT_SHARE_ROOM_UNKNOWN_LEVEL: '所选账号等级尚未识别，请先完成账号检测后再创建房间',
+  ACCOUNT_SHARE_ROOM_MODE_REQUIRED: '所选账号尚未处于可创建房间的账号模式，请先完成账号配置',
+  ACCOUNT_SHARE_ROOM_ACCOUNT_CONFLICT: '所选账号已加入其他房间或正在切换归属，请刷新后重新选择',
+  ACCOUNT_SHARE_QUOTA_HISTORICAL_GROWTH_BLOCKED: '当前用量超过新配额，历史保留状态下只能收缩，不能继续创建或增加房间账号',
+  ACCOUNT_SHARE_QUOTA_GRANDFATHER_GROWTH_BLOCKED: '当前处于历史保留配额，只能减少现有用量；请先整理房间或联系管理员调整配额'
+}
+const accountShareCapabilityBlockerMessages: Record<string, string> = {
+  ACCOUNT_SHARE_ROOM_LIMIT_EXCEEDED: '未删除房间数量已达到配额上限',
+  ACCOUNT_SHARE_ROOM_CREATE_RATE_EXCEEDED: '最近 24 小时创建房间次数已达到配额上限',
+  ACCOUNT_SHARE_ROOM_ACCOUNT_LIMIT_EXCEEDED: '单个房间账号数量已达到配额上限',
+  ACCOUNT_SHARE_OWNER_ROOM_ACCOUNT_LIMIT_EXCEEDED: '房主管理的房间账号总数已达到配额上限',
+  ACCOUNT_SHARE_QUOTA_HISTORICAL_GROWTH_BLOCKED: '当前用量超过新配额，历史保留状态下只能收缩',
+  ACCOUNT_SHARE_QUOTA_GRANDFATHER_GROWTH_BLOCKED: '当前处于历史保留配额，只能减少现有用量'
 }
 const accountShareRecommendationErrorMessages: Record<string, string> = {
   ACCOUNT_SHARE_RECOMMENDATION_INVALID: '测算参数无效，请检查模型、请求次数、使用时长和 token 输入',
@@ -3005,7 +3971,9 @@ function defaultListingPreferences(): ListingPreferenceState {
 }
 
 function filterForListingTab(tab: AccountShareListingTab): FilterOption {
-  return [ownerFilter, ...filters].find(option => option.tab === tab) || filters[2]
+  return [ownerFilter, ...filters].find(option => option.tab === tab)
+    || filters.find(option => option.tab === 'all')
+    || filters[0]
 }
 
 function normalizeListingPlatform(value: unknown): AccountSharePlatform {
@@ -3170,6 +4138,8 @@ const initialListingPreferences = readListingPreferences()
 const activeFilter = ref<FilterOption>(filterForListingTab(initialListingPreferences.tab))
 const activeListingPlatform = ref<AccountSharePlatform>(initialListingPreferences.platform)
 const listings = ref<AccountShareListing[]>([])
+const membershipHistoryEntries = ref<AccountShareMembershipHistoryEntry[]>([])
+const visibleValidatingListingIDs = ref(new Set<number>())
 const selectedRecommendationPreset = ref<RecommendationPresetKey>('balanced')
 const recommendationForm = reactive<RecommendationFormState>(buildDefaultRecommendationForm())
 const recommendationLoading = ref(false)
@@ -3179,6 +4149,8 @@ const recommendationError = ref('')
 const recommendationResult = ref<AccountShareRecommendationResult | null>(null)
 const recommendationPage = ref(1)
 const showUsageGuideDialog = ref(false)
+const showAdminBillingDialog = ref(false)
+const showAdminQuotaDialog = ref(false)
 const showRecommendationDialog = ref(false)
 const queueMembershipsByApiKey = ref<Record<number, AccountShareMembership[]>>({})
 const keyResolutionMemberships = ref<AccountShareMembership[]>([])
@@ -3192,8 +4164,19 @@ const pagination = reactive({
   total: 0,
   pages: 1
 })
+const membershipHistoryPagination = reactive({
+  page: 1,
+  page_size: initialListingPreferences.pageSize,
+  total: 0,
+  pages: 1
+})
 const loading = ref(false)
 const errorMessage = ref('')
+const membershipHistoryLoading = ref(false)
+const membershipHistoryError = ref('')
+const capabilities = ref<AccountShareCapabilities | null>(null)
+const capabilitiesLoading = ref(false)
+const capabilitiesError = ref('')
 const actionErrorDialog = reactive<{
   show: boolean
   title: string
@@ -3217,16 +4200,39 @@ let ownedAccountsRequestVersion = 0
 let ownedAccountsLoadedPlatform: AccountSharePlatform | null = null
 let pendingCreateRoomIntentSignature = ''
 let pendingCreateRoomIdempotencyKey = ''
+const oauthExchangeIntent: StableIdempotencyIntent = { signature: '', key: '' }
+const reviewSubmitIntent: StableIdempotencyIntent = { signature: '', key: '' }
+const beginEditIntent: StableIdempotencyIntent = { signature: '', key: '' }
+const releaseEditIntent: StableIdempotencyIntent = { signature: '', key: '' }
+const updateListingIntent: StableIdempotencyIntent = { signature: '', key: '' }
 const authURL = ref('')
 const authSessionID = ref('')
 const creating = ref(false)
 const generatingOAuthURL = ref(false)
+const preparingJoinId = ref<number | null>(null)
 const joiningId = ref<number | null>(null)
+const refreshingJoinIntent = ref(false)
+const joinIntentError = ref('')
 const pendingJoinConfirmation = ref<PendingJoinConfirmation | null>(null)
 const endingId = ref<number | null>(null)
 const pendingEndUse = ref<PendingEndUseState | null>(null)
+const pendingMembershipEnds = ref<Record<number, PendingMembershipEnd>>({})
 const pendingReview = ref<ReviewDialogState | null>(null)
 const roomAccountsListing = ref<AccountShareListing | null>(null)
+const roomLifecycleListing = ref<AccountShareListing | null>(null)
+const roomLifecycleState = ref<AccountShareRoomManagementState | null>(null)
+const roomLifecycleAction = ref<AccountShareRoomLifecycleAction | null>(null)
+const roomLifecycleOperation = ref<AccountShareRoomOperation | null>(null)
+const roomDeleteIntent = ref<AccountShareRoomDeleteIntent | null>(null)
+const roomDeleteNameConfirmation = ref('')
+const roomLifecycleReason = ref('')
+const roomLifecycleLoading = ref(false)
+const roomDeleteIntentLoading = ref(false)
+const roomLifecycleSubmitting = ref(false)
+const roomLifecyclePolling = ref(false)
+const roomLifecycleDeleted = ref(false)
+const roomLifecycleError = ref('')
+const roomLifecycleErrorCode = ref('')
 const ownerDialog = reactive({
   show: false,
   ownerUserID: 0,
@@ -3240,10 +4246,23 @@ const ownerDialog = reactive({
   error: ''
 })
 const showMySpendDialog = ref(false)
-const mySpendListing = ref<AccountShareListing | null>(null)
-const mySpendSelectedMembershipID = ref(0)
 const mySpendSelectedOptionKey = ref('')
-const mySpendAccountOptions = ref<MySpendAccountOption[]>([])
+const mySpendSelectedOption = ref<MySpendAccountOption | null>(null)
+const mySpendPickerSource = ref<MySpendAccountOptionSource>('using')
+const mySpendUsingAccountOptions = ref<MySpendAccountOption[]>([])
+const mySpendHistoryAccountOptions = ref<MySpendAccountOption[]>([])
+const mySpendUsingPagination = reactive<MySpendAccountOptionPagination>({
+  page: 1,
+  pageSize: MY_SPEND_ACCOUNT_PAGE_SIZE,
+  total: 0,
+  pages: 1,
+})
+const mySpendHistoryPagination = reactive<MySpendAccountOptionPagination>({
+  page: 1,
+  pageSize: MY_SPEND_ACCOUNT_PAGE_SIZE,
+  total: 0,
+  pages: 1,
+})
 const mySpendAccountsLoading = ref(false)
 const mySpendAccountsError = ref('')
 const mySpendRange = ref<AccountShareMySpendRange>('current_membership')
@@ -3252,20 +4271,24 @@ const mySpendLoading = ref(false)
 const mySpendError = ref('')
 const reorderingQueueId = ref<number | null>(null)
 const pendingForceEditListing = ref<AccountShareListing | null>(null)
-const managingId = ref<number | null>(null)
+const pendingForceEditManagementState = ref<AccountShareRoomManagementState | null>(null)
+const forceEditReason = ref('')
+const forceEditConfirmed = ref(false)
+const pendingDraftDiscardTarget = ref<DraftDiscardTarget | null>(null)
+const createDraftBaseline = ref<CreateDraftSnapshot | null>(null)
+const configDraftBaseline = ref<ConfigDraftSnapshot | null>(null)
 const managedActionId = ref<number | null>(null)
 const showConfigEditDialog = ref(false)
-const showModelEditDialog = ref(false)
 const editingConfigListing = ref<AccountShareListing | null>(null)
-const editingModelListing = ref<AccountShareListing | null>(null)
-const editingAllowedModels = ref<string[]>([])
 const editAllowedModels = ref<string[]>([])
 const editSessionID = ref('')
 const editForceActive = ref(false)
+const editReason = ref('')
 const editErrorMessage = ref('')
+const editVersionConflict = ref(false)
 const savingConfigEdit = ref(false)
 const releasingConfigEdit = ref(false)
-const savingModelsId = ref<number | null>(null)
+let editSessionGeneration = 0
 const selectedKeyByListing = reactive<Record<number, number>>({})
 const idleTimeoutByListing = reactive<Record<number, number>>({})
 const savingIdleTimeoutId = ref<number | null>(null)
@@ -3311,12 +4334,23 @@ let editSessionRenewTimer: number | null = null
 let suppressNextSearchRefresh = false
 let listingsRequestController: AbortController | null = null
 let listingsRequestSeq = 0
+let membershipHistoryRequestController: AbortController | null = null
+let membershipHistoryRequestSeq = 0
+let roomLifecycleStateController: AbortController | null = null
+let roomLifecycleOperationController: AbortController | null = null
+let roomLifecycleStateRequestSeq = 0
+let roomLifecycleOperationPollSeq = 0
+let roomLifecycleOperationPollTimer: number | null = null
+let roomLifecycleIdempotencySignature = ''
+let roomLifecycleIdempotencyKey = ''
 let mySpendAccountsRequestController: AbortController | null = null
 let mySpendAccountsRequestSeq = 0
 let mySpendRequestController: AbortController | null = null
 let mySpendRequestSeq = 0
 let modeKeysRequestSeq = 0
 let keyResolutionRequestSeq = 0
+let membershipEndOperationRequestSeq = 0
+const membershipEndOperationControllers = new Map<number, AbortController>()
 let lastMembershipStatusRefreshAt = 0
 let lastQueueSnapshotWarningAt = 0
 let membershipStatusRefreshTimer: number | null = null
@@ -3362,6 +4396,54 @@ function buildDefaultCreateForm(): CreateFormState {
 const createForm = reactive<CreateFormState>(buildDefaultCreateForm())
 const editForm = reactive<CreateFormState>(buildDefaultCreateForm())
 const allowedModels = ref<string[]>(defaultAllowedModelsForPlatform(createPlatform.value))
+
+function createDraftSnapshot(): CreateDraftSnapshot {
+  return {
+    sourceMode: createSourceMode.value,
+    platform: createPlatform.value,
+    selectedOwnedAccountID: selectedOwnedAccountID.value,
+    form: { ...createForm },
+    allowedModels: [...allowedModels.value],
+    authURL: authURL.value,
+    authSessionID: authSessionID.value,
+    authCode: (oauthFlowRef.value?.authCode || '').trim(),
+    oauthState: (oauthFlowRef.value?.oauthState || '').trim()
+  }
+}
+
+function configDraftSnapshot(): ConfigDraftSnapshot {
+  return {
+    form: { ...editForm },
+    allowedModels: [...editAllowedModels.value],
+    reason: editReason.value
+  }
+}
+
+function snapshotsMatch(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function captureCreateDraftBaseline(): void {
+  createDraftBaseline.value = createDraftSnapshot()
+}
+
+function captureConfigDraftBaseline(): void {
+  configDraftBaseline.value = configDraftSnapshot()
+}
+
+function createDraftHasChanges(): boolean {
+  return Boolean(
+    createDraftBaseline.value
+    && !snapshotsMatch(createDraftBaseline.value, createDraftSnapshot())
+  )
+}
+
+function configDraftHasChanges(): boolean {
+  return Boolean(
+    configDraftBaseline.value
+    && !snapshotsMatch(configDraftBaseline.value, configDraftSnapshot())
+  )
+}
 
 const isOpenAIListingPlatform = computed(() => activeListingPlatform.value === 'openai')
 const visibleListingFeatureTagOptions = computed(() =>
@@ -3419,7 +4501,7 @@ function listingHealthFootVisible(listing: AccountShareListing): boolean {
   )
 }
 
-function platformLabel(platform: AccountSharePlatform): string {
+function platformLabel(platform: string): string {
   return ACCOUNT_SHARE_PLATFORM_OPTIONS.find(item => item.value === platform)?.label || platform
 }
 
@@ -3489,30 +4571,55 @@ function modeApiKeyPlaceholderForListing(listing: AccountShareListing): string {
   if (!modeKeysLoadedForPlatform(platform)) return '账号模式 API Key 未加载'
   return `选择${accountModeGroupName(listingPlatform(listing))} Key`
 }
-const pendingJoinListing = computed(() => pendingJoinConfirmation.value?.listing ?? null)
-const pendingJoinIsOwnerSelfUse = computed(() => {
-  const listing = pendingJoinListing.value
-  return listing ? isOwnListing(listing) : false
-})
-const pendingJoinApiKeyLabel = computed(() => {
-  const apiKeyID = pendingJoinConfirmation.value?.apiKeyID
-  if (!apiKeyID) return '-'
-  const listing = pendingJoinConfirmation.value?.listing
-  const key = listing ? modeApiKeysForListing(listing).find(item => item.id === apiKeyID) : undefined
-  return key ? modeKeyLabel(key) : `Key #${apiKeyID}`
-})
+const pendingJoinIntent = computed(() => pendingJoinConfirmation.value?.intent ?? null)
+const pendingJoinTerms = computed(() => pendingJoinIntent.value?.terms ?? null)
+const pendingJoinIsOwnerSelfUse = computed(() => pendingJoinConfirmation.value?.ownerSelfUse === true)
+const pendingJoinPlatform = computed(() => pendingJoinConfirmation.value?.platform ?? 'openai')
+const pendingJoinApiKeyLabel = computed(() => pendingJoinConfirmation.value?.apiKeyLabel || '-')
 const pendingJoinIdleTimeoutLabel = computed(() => formatIdleTimeoutSetting(pendingJoinConfirmation.value?.idleTimeoutMinutes ?? 0))
+const joinDialogBusy = computed(() => refreshingJoinIntent.value || joiningId.value !== null)
+const pendingJoinExpired = computed(() => {
+  const expiresAt = pendingJoinIntent.value?.expires_at
+  if (!expiresAt) return true
+  const expiresAtMs = Date.parse(expiresAt)
+  return !Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()
+})
+const pendingJoinCanSubmit = computed(() => {
+  const intent = pendingJoinIntent.value
+  if (!intent || joinDialogBusy.value || pendingJoinExpired.value) return false
+  return !intent.queue_may_be_required || intent.accept_queue
+})
+const pendingJoinVisibleModels = computed(() =>
+  (pendingJoinTerms.value?.allowed_models || []).slice(0, MODEL_PREVIEW_LIMIT)
+)
+const pendingJoinHiddenModelCount = computed(() =>
+  Math.max(0, (pendingJoinTerms.value?.allowed_models || []).length - MODEL_PREVIEW_LIMIT)
+)
+const pendingJoinHasOpenAIProtection = computed(() => {
+  const terms = pendingJoinTerms.value
+  return pendingJoinPlatform.value === 'openai' && Boolean(
+    terms?.codex_cli_only ||
+    Number(terms?.codex_5h_limit_percent || 0) > 0 ||
+    Number(terms?.codex_7d_limit_percent || 0) > 0
+  )
+})
+const pendingJoinHasAnthropicProtection = computed(() => {
+  const terms = pendingJoinTerms.value
+  return pendingJoinPlatform.value === 'anthropic' && Boolean(
+    Number(terms?.anthropic_5h_limit_percent || 0) > 0 ||
+    Number(terms?.anthropic_7d_limit_percent || 0) > 0
+  )
+})
 const pendingJoinPriceWarnings = computed(() => {
-  const listing = pendingJoinListing.value
-  if (!listing) return []
+  const terms = pendingJoinTerms.value
+  if (!terms) return []
   if (pendingJoinIsOwnerSelfUse.value) return []
   const warnings: string[] = []
-  if (isRateMultiplierExpensive(listing)) {
-    const accountLabel = isOpenAIListing(listing) ? accountLevelBadgeLabel(listing) : platformLabel(listingPlatform(listing))
-    warnings.push(`${accountLabel} 账号倍率 ${formatNumber(listing.rate_multiplier)}x 偏高，后续请求消耗会明显增加。`)
+  if (Number(terms.rate_multiplier || 0) > 1) {
+    warnings.push(`本次确认条款中的倍率为 ${formatNumber(terms.rate_multiplier)}x，后续请求消耗会按此倍率计算。`)
   }
-  if (isHourlyRateExpensive(listing)) {
-    warnings.push(`小时费 ${formatNumber(listing.hourly_rate)} 偏高，空闲或长时间使用时费用压力较大。`)
+  if (Number(terms.hourly_rate || 0) > EXPENSIVE_HOURLY_RATE) {
+    warnings.push(`本次确认条款中的小时费为 ${formatNumber(terms.hourly_rate)}，空闲或长时间使用时请留意费用。`)
   }
   return warnings
 })
@@ -3536,13 +4643,6 @@ const currentProxyID = computed(() => {
   return Number.isFinite(proxyID) && proxyID > 0 ? proxyID : 0
 })
 
-const currentProxyLabel = computed(() => {
-  const proxyID = currentProxyID.value
-  if (proxyID <= 0) return '未选择'
-  const proxy = proxies.value.find(item => item.id === proxyID)
-  return proxy ? `${proxy.name} #${proxy.id}` : `#${proxyID}`
-})
-
 const eligibleOwnedAccounts = computed(() => (
   ownedAccounts.value
     .filter((account) => {
@@ -3550,7 +4650,14 @@ const eligibleOwnedAccounts = computed(() => (
       if (account.status !== 'active' || !account.schedulable) return false
       if (!account.account_level || account.account_level.trim().toLowerCase() === 'unknown') return false
       const placementTarget = account.external_placement?.target
-      if (placementTarget === 'room') return false
+      if (placementTarget === 'room') {
+        const boundRoomID = Number(
+          account.account_share_mode_listing_id
+          || account.external_placement?.room_id
+          || 0
+        )
+        if (boundRoomID > 0 || account.external_placement?.state !== 'active') return false
+      }
       if (!placementTarget && Number(account.account_share_mode_listing_id || 0) > 0) {
         return false
       }
@@ -3585,9 +4692,24 @@ const createProxyCapacityValidationMessage = computed(() =>
 )
 
 const parsedAllowedModelCount = computed(() => allowedModels.value.length)
-const availableSeatCount = computed(() => listings.value.reduce((total, listing) => total + Math.max(0, listing.seat_limit - listing.active_seats), 0))
+const availableSeatCount = computed(() => listings.value.reduce((total, listing) => {
+  if (listing.deleted || listing.status !== 'active') return total
+  return total + Math.max(0, listing.seat_limit - listing.active_seats)
+}, 0))
 const activeSeatCount = computed(() => listings.value.reduce((total, listing) => total + Math.max(0, Number(listing.active_seats || 0)), 0))
-const isManagementView = computed(() => activeFilter.value.key === ownerFilter.key)
+const createRoomCapabilityHint = computed(() => {
+  if (capabilitiesLoading.value) return '正在读取房间配额'
+  const blocker = capabilities.value?.capability_blockers[0]
+  if (blocker) return capabilityBlockerMessage(blocker)
+  if (capabilitiesError.value) return capabilitiesError.value
+  return '创建一个由你管理的账号共享房间'
+})
+const isManagementView = computed(() => activeFilter.value.tab === 'mine' || activeFilter.value.tab === 'archive')
+const isMembershipHistoryView = computed(() => activeFilter.value.tab === 'history')
+const isArchiveView = computed(() => activeFilter.value.tab === 'archive')
+const currentViewLoading = computed(() =>
+  isMembershipHistoryView.value ? membershipHistoryLoading.value : loading.value
+)
 const activeAdvancedFilterCount = computed(() => {
   let count = 0
   if (listingFilters.status !== '') count += 1
@@ -3599,37 +4721,42 @@ const activeAdvancedFilterCount = computed(() => {
   return count
 })
 const hasAdvancedFilters = computed(() => activeAdvancedFilterCount.value > 0)
-const activeResultFilterCount = computed(() => activeAdvancedFilterCount.value + (searchQuery.value.trim() !== '' ? 1 : 0))
-const hasResultFilters = computed(() => hasAdvancedFilters.value || searchQuery.value.trim() !== '')
-const maxPerUserConcurrency = computed(() => calculateMaxPerUserConcurrency(createForm.concurrency, createForm.seat_limit))
-const editMaxPerUserConcurrency = computed(() => calculateMaxPerUserConcurrency(editForm.concurrency, editForm.seat_limit))
+const activeResultFilterCount = computed(() => {
+  const searchCount = searchQuery.value.trim() !== '' ? 1 : 0
+  return isArchiveView.value ? searchCount : activeAdvancedFilterCount.value + searchCount
+})
+const hasResultFilters = computed(() =>
+  searchQuery.value.trim() !== '' || (!isArchiveView.value && hasAdvancedFilters.value)
+)
+const maxPerUserConcurrency = computed(() => MAX_PER_USER_CONCURRENCY)
+const editMaxPerUserConcurrency = computed(() => MAX_PER_USER_CONCURRENCY)
 const accountNameValidationMessage = computed(() => validateAccountName(createForm.name))
 const editAccountNameValidationMessage = computed(() => validateAccountName(editForm.name, editingConfigListing.value?.id))
 const concurrencyValidationMessage = computed(() => {
   const concurrency = Number(createForm.concurrency)
-  if (!Number.isFinite(concurrency) || concurrency < 1) return '账号并发上限必须大于 0'
-  if (!Number.isInteger(concurrency)) return '账号并发上限必须是整数'
-  if (concurrency > MAX_ACCOUNT_CONCURRENCY) return `账号并发上限不能超过 ${MAX_ACCOUNT_CONCURRENCY}`
+  if (!Number.isFinite(concurrency) || concurrency < 1) return '配置并发必须大于 0'
+  if (!Number.isInteger(concurrency)) return '配置并发必须是整数'
+  if (concurrency > MAX_ACCOUNT_CONCURRENCY) return `配置并发不能超过 ${MAX_ACCOUNT_CONCURRENCY}`
   return ''
 })
 const editConcurrencyValidationMessage = computed(() => {
   const concurrency = Number(editForm.concurrency)
-  if (!Number.isFinite(concurrency) || concurrency < 1) return '账号并发上限必须大于 0'
-  if (!Number.isInteger(concurrency)) return '账号并发上限必须是整数'
-  if (concurrency > MAX_ACCOUNT_CONCURRENCY) return `账号并发上限不能超过 ${MAX_ACCOUNT_CONCURRENCY}`
+  if (!Number.isFinite(concurrency) || concurrency < 1) return '配置并发必须大于 0'
+  if (!Number.isInteger(concurrency)) return '配置并发必须是整数'
+  if (concurrency > MAX_ACCOUNT_CONCURRENCY) return `配置并发不能超过 ${MAX_ACCOUNT_CONCURRENCY}`
   return ''
 })
 const perUserConcurrencyValidationMessage = computed(() =>
-  validatePerUserConcurrencyValue(createForm.per_user_concurrency, createForm.concurrency, createForm.seat_limit, maxPerUserConcurrency.value)
+  validatePerUserConcurrencyValue(createForm.per_user_concurrency)
 )
 const editPerUserConcurrencyValidationMessage = computed(() =>
-  validatePerUserConcurrencyValue(editForm.per_user_concurrency, editForm.concurrency, editForm.seat_limit, editMaxPerUserConcurrency.value)
+  validatePerUserConcurrencyValue(editForm.per_user_concurrency)
 )
 const perUserConcurrencyLimitTip = computed(() =>
-  buildPerUserConcurrencyLimitTip(createForm.concurrency, createForm.seat_limit, maxPerUserConcurrency.value)
+  buildPerUserConcurrencyLimitTip(maxPerUserConcurrency.value)
 )
 const editPerUserConcurrencyLimitTip = computed(() =>
-  buildPerUserConcurrencyLimitTip(editForm.concurrency, editForm.seat_limit, editMaxPerUserConcurrency.value)
+  buildPerUserConcurrencyLimitTip(editMaxPerUserConcurrency.value)
 )
 const concurrencyNotice = computed(() => {
   if (concurrencyValidationMessage.value || perUserConcurrencyValidationMessage.value) return ''
@@ -3666,10 +4793,148 @@ const proxyHelperText = computed(() => {
   return '暂无可选代理，可在下拉菜单中购买独立 IP 或添加自己的代理 IP。'
 })
 const createProxyHelperText = computed(() => createProxyCapacityValidationMessage.value || proxyHelperText.value)
+const draftDiscardMessage = computed(() => (
+  pendingDraftDiscardTarget.value === 'config'
+    ? '当前房间配置尚未保存。确认放弃后会释放编辑锁，本次修改不会提交。'
+    : '当前创建信息或 OAuth 进度尚未提交。确认放弃后会恢复为打开窗口时的状态。'
+))
+
+function roomEditBlockerLabels(state: AccountShareRoomManagementState): string[] {
+  const blockers = state.blockers
+  const labels: string[] = []
+  if (blockers.active_membership_count > 0) labels.push(`使用中 ${blockers.active_membership_count}`)
+  if (blockers.queued_membership_count > 0) labels.push(`排队 ${blockers.queued_membership_count}`)
+  if (blockers.ending_membership_count > 0) labels.push(`结束中 ${blockers.ending_membership_count}`)
+  if (blockers.in_flight_request_count > 0) labels.push(`进行中请求 ${blockers.in_flight_request_count}`)
+  if (blockers.pending_billing_intent_count > 0) labels.push(`待处理计费 ${blockers.pending_billing_intent_count}`)
+  if (blockers.synchronous_billing_pending_count > 0) labels.push(`同步结算中 ${blockers.synchronous_billing_pending_count}`)
+  if (blockers.valid_edit_session) labels.push('存在有效编辑锁')
+  if (blockers.conflicting_operation || state.pending_operation_id) labels.push('存在生命周期操作')
+  return labels
+}
+
+function roomRequiresForceEdit(
+  listing: AccountShareListing,
+  state: AccountShareRoomManagementState
+): boolean {
+  const blockers = state.blockers
+  return state.lifecycle_status !== 'paused'
+    || blockers.active_membership_count > 0
+    || blockers.queued_membership_count > 0
+    || blockers.ending_membership_count > 0
+    || blockers.in_flight_request_count > 0
+    || blockers.pending_billing_intent_count > 0
+    || blockers.synchronous_billing_pending_count > 0
+    || blockers.conflicting_operation
+    || Boolean(state.pending_operation_id)
+    || (blockers.valid_edit_session && !listing.editing_mine)
+}
+
 const forceEditConfirmMessage = computed(() => {
   const listing = pendingForceEditListing.value
   if (!listing) return ''
-  return `当前账号已有 ${listing.active_seats}/${listing.seat_limit} 个席位正在使用。强制编辑可能导致正在使用的用户短时间内看到旧配置，请确认已理解风险后再继续。`
+  const state = pendingForceEditManagementState.value
+  const status = state?.lifecycle_status || listing.status
+  const activeSeats = state?.active_seats ?? listing.active_seats
+  const seatLimit = state?.seat_limit ?? listing.seat_limit
+  const blockers = state ? roomEditBlockerLabels(state) : []
+  const blockerText = blockers.length > 0 ? ` 当前阻塞项：${blockers.join('、')}。` : ''
+  return `房间当前状态为“${statusLabel(status)}”，消费者席位 ${activeSeats}/${seatLimit}。${blockerText}强制编辑会生成新的条款 revision；已有 membership 继续按其历史快照结算。`
+})
+const roomLifecycleCommandBusy = computed(() =>
+  roomLifecycleSubmitting.value || roomDeleteIntentLoading.value
+)
+const roomLifecycleOperationTerminal = computed(() => {
+  const status = roomLifecycleOperation.value?.status
+  return Boolean(status && ROOM_LIFECYCLE_TERMINAL_OPERATION_STATUSES.has(status))
+})
+const roomLifecycleHasPendingOperation = computed(() => {
+  if (roomLifecycleOperation.value) return !roomLifecycleOperationTerminal.value
+  return Boolean(roomLifecycleState.value?.pending_operation_id)
+})
+const roomLifecycleHasStateChangeAction = computed(() => {
+  const allowedActions = roomLifecycleState.value?.allowed_actions ?? []
+  return allowedActions.some(action => action === 'drain' || action === 'activate' || action === 'suspend')
+})
+const roomDeleteIntentExpired = computed(() => {
+  const expiresAt = normalizeDateInput(roomDeleteIntent.value?.expires_at)
+  return Boolean(expiresAt && expiresAt.getTime() <= nowMs.value)
+})
+const roomLifecycleBlockerItems = computed<RoomLifecycleBlockerItem[]>(() => {
+  const blockers = roomDeleteIntent.value?.blockers
+  if (!blockers) return []
+
+  const items: RoomLifecycleBlockerItem[] = []
+  const appendCount = (
+    key: keyof AccountShareRoomBlockers,
+    label: string,
+    value: number
+  ) => {
+    if (value > 0) items.push({ key, label, value: String(value) })
+  }
+  appendCount('active_membership_count', '正在使用的成员', blockers.active_membership_count)
+  appendCount('queued_membership_count', '排队中的成员', blockers.queued_membership_count)
+  appendCount('ending_membership_count', '正在退出或结算的成员', blockers.ending_membership_count)
+  appendCount('in_flight_request_count', '进行中的请求', blockers.in_flight_request_count)
+  appendCount('pending_billing_intent_count', '待处理计费意图', blockers.pending_billing_intent_count)
+  appendCount(
+    'synchronous_billing_pending_count',
+    '同步结算任务',
+    blockers.synchronous_billing_pending_count
+  )
+  if (blockers.valid_edit_session) {
+    items.push({ key: 'valid_edit_session', label: '房间编辑会话', value: '仍在占用' })
+  }
+  if (blockers.conflicting_operation) {
+    items.push({
+      key: 'conflicting_operation',
+      label: '其他生命周期操作',
+      value: blockers.conflicting_operation_id || '正在执行'
+    })
+  }
+  if (blockers.runtime_dependency_unavailable) {
+    items.push({
+      key: 'runtime_dependency_unavailable',
+      label: '运行时状态',
+      value: '暂时无法确认'
+    })
+  }
+  return items
+})
+const canSubmitRoomLifecycleAction = computed(() => {
+  const action = roomLifecycleAction.value
+  const state = roomLifecycleState.value
+  if (
+    !action ||
+    !state ||
+    roomLifecycleCommandBusy.value ||
+    roomLifecycleHasPendingOperation.value
+  ) {
+    return false
+  }
+  if (authStore.isAdmin && !roomLifecycleReason.value.trim()) return false
+  if (action !== 'delete') return state.allowed_actions.includes(action)
+  const intent = roomDeleteIntent.value
+  return Boolean(
+    intent?.can_delete &&
+    intent.token &&
+    !roomDeleteIntentExpired.value &&
+    roomDeleteNameConfirmation.value === intent.room_name
+  )
+})
+const roomLifecycleSubmitLabel = computed(() => {
+  switch (roomLifecycleAction.value) {
+    case 'drain':
+      return '确认排空并暂停'
+    case 'activate':
+      return '确认恢复'
+    case 'suspend':
+      return '确认暂停'
+    case 'delete':
+      return roomDeleteIntentExpired.value ? '确认已过期' : '确认软删除'
+    default:
+      return '确认操作'
+  }
 })
 
 const isKeyResolutionMode = computed(() => routeQueryString(route.query.mode) === 'resolve-key-binding')
@@ -3698,12 +4963,21 @@ const keyResolutionStatusMessage = computed(() => {
   return '请在下方关联账号中结束使用或移出预约。全部处理完成后，状态会自动重新核对。'
 })
 const displayedListings = computed(() => isKeyResolutionMode.value ? keyResolutionListings.value : listings.value)
+const mySpendAccountOptions = computed(() =>
+  mySpendPickerSource.value === 'using'
+    ? mySpendUsingAccountOptions.value
+    : mySpendHistoryAccountOptions.value
+)
+const mySpendActivePickerPagination = computed(() =>
+  mySpendPickerSource.value === 'using' ? mySpendUsingPagination : mySpendHistoryPagination
+)
+const mySpendHistorySelection = computed(() => mySpendSelectedOption.value?.source === 'history')
 const mySpendAccountPickerTitle = computed(() => {
-  if (mySpendAccountsLoading.value && mySpendAccountOptions.value.length === 0) return '加载中'
-  const usingCount = mySpendAccountOptions.value.filter(option => option.source === 'using').length
-  const historyCount = mySpendAccountOptions.value.filter(option => option.source === 'history').length
-  if (mySpendAccountOptions.value.length === 0) return '暂无记录'
-  return `使用/预约 ${usingCount} 个 · 历史 ${historyCount} 个`
+  if (mySpendAccountsLoading.value && mySpendUsingPagination.total === 0 && mySpendHistoryPagination.total === 0) {
+    return '加载中'
+  }
+  if (mySpendUsingPagination.total === 0 && mySpendHistoryPagination.total === 0) return '暂无记录'
+  return `使用/预约 ${mySpendUsingPagination.total} 条 · 历史 ${mySpendHistoryPagination.total} 条`
 })
 const mySpendMetrics = computed<MySpendMetric[]>(() => {
   const summary = mySpendSummary.value
@@ -3911,32 +5185,17 @@ function validateAccountName(name: string, excludeAccountID?: number): string {
   return ''
 }
 
-function calculateMaxPerUserConcurrency(accountConcurrency: unknown, seatLimit: unknown): number {
-  const concurrency = Number(accountConcurrency)
-  const seats = Number(seatLimit)
-  if (!Number.isFinite(concurrency) || !Number.isFinite(seats) || concurrency <= 0 || seats <= 0) return 0
-  return Math.max(0, Math.floor(concurrency / seats))
+function buildPerUserConcurrencyLimitTip(maxPerUser: number): string {
+  return `每个用户最多可设置 ${maxPerUser} 个并发请求；账号忙时仍受运行时请求能力限制，不影响成员上限。`
 }
 
-function buildPerUserConcurrencyLimitTip(accountConcurrency: unknown, seatLimit: unknown, maxPerUser: number): string {
-  const concurrency = Number(accountConcurrency)
-  const seats = Number(seatLimit)
-  const concurrencyLabel = Number.isFinite(concurrency) ? Math.floor(concurrency) : 0
-  const seatLabel = Number.isFinite(seats) ? Math.floor(seats) : 0
-  return `当前账号并发 ${concurrencyLabel}、席位 ${seatLabel}，每人最高可设 ${maxPerUser} 并发。`
-}
-
-function validatePerUserConcurrencyValue(value: unknown, accountConcurrency: unknown, seatLimit: unknown, maxPerUser: number): string {
+function validatePerUserConcurrencyValue(value: unknown): string {
   const perUserConcurrency = Number(value)
   if (!Number.isFinite(perUserConcurrency) || perUserConcurrency < 1) return '单用户最高并发必须大于 0'
   if (!Number.isInteger(perUserConcurrency)) return '单用户最高并发必须是整数'
-
-  const concurrency = Number(accountConcurrency)
-  const seats = Number(seatLimit)
-  if (!Number.isFinite(concurrency) || concurrency < 1 || !Number.isFinite(seats) || seats < ACCOUNT_SHARE_MIN_SEATS) return ''
-  if (maxPerUser < 1) return `当前账号并发 ${Math.floor(concurrency)}、席位 ${Math.floor(seats)}，无法分配每人至少 1 并发`
-  if (perUserConcurrency > maxPerUser) return `当前账号并发 ${Math.floor(concurrency)}、席位 ${Math.floor(seats)}，单用户最高并发不能超过 ${maxPerUser}`
-  if (perUserConcurrency * seats > concurrency) return `单用户最高并发 × 席位人数不能超过账号并发上限`
+  if (perUserConcurrency > MAX_PER_USER_CONCURRENCY) {
+    return `单用户最高并发不能超过 ${MAX_PER_USER_CONCURRENCY}`
+  }
   return ''
 }
 
@@ -4131,6 +5390,7 @@ function buildListingFilters(): AccountShareListingFilters {
   }
   const search = searchQuery.value.trim()
   if (search) result.search = search
+  if (isArchiveView.value) return result
   if (listingFilters.status === 'available') {
     result.status = 'active'
     result.available_only = true
@@ -4167,6 +5427,12 @@ function abortActiveListingsRequest(): void {
     listingsRequestController.abort()
     listingsRequestController = null
   }
+}
+
+function abortMembershipHistoryRequest(): void {
+  membershipHistoryRequestSeq += 1
+  membershipHistoryRequestController?.abort()
+  membershipHistoryRequestController = null
 }
 
 function isCanceledRequest(error: unknown): boolean {
@@ -4217,6 +5483,11 @@ function handlePageChange(page: number): void {
   clearSearchDebounceTimer()
   pagination.page = page
   void loadListings()
+}
+
+function handleMembershipHistoryPageChange(page: number): void {
+  membershipHistoryPagination.page = page
+  void loadMembershipHistory()
 }
 
 function handlePageSizeChange(pageSize: number): void {
@@ -4315,11 +5586,6 @@ function compareRecommendationCandidates(left: AccountShareRecommendationCandida
 
 function setRecommendationPage(page: number): void {
   recommendationPage.value = Math.min(Math.max(Math.trunc(Number(page) || 1), 1), recommendationPageCount.value)
-}
-
-function recommendationConcurrencyLabel(listing: AccountShareListing): string {
-  const current = listing.current_concurrency ?? 0
-  return `${current}/${listing.account_concurrency}`
 }
 
 function recommendationRequestCostLabel(candidate: AccountShareRecommendationCandidate): string {
@@ -4655,29 +5921,6 @@ function usageAvailableLabel(progress?: UsageProgress | null): string {
   return `${formatNumber(available)}%可用`
 }
 
-function currentConcurrencyLabel(listing: AccountShareListing): string {
-  const current = Math.max(0, Number(listing.current_concurrency || 0))
-  const max = Number(listing.account_concurrency || 0)
-  return max > 0 ? `${current} / ${max}` : `${current} / 不限`
-}
-
-function capacityPercent(listing: AccountShareListing): number {
-  const max = Number(listing.account_concurrency || 0)
-  if (max <= 0) return 0
-  return Math.max(0, Math.min(100, (Number(listing.current_concurrency || 0) / max) * 100))
-}
-
-function capacityWidth(listing: AccountShareListing): string {
-  return `${capacityPercent(listing)}%`
-}
-
-function capacityFillClass(listing: AccountShareListing): string {
-  const percent = capacityPercent(listing)
-  if (percent >= 90) return 'capacity-fill-danger'
-  if (percent >= 70) return 'capacity-fill-warning'
-  return 'capacity-fill-normal'
-}
-
 function validityInfo(listing: AccountShareListing): { label: string; expiresAtLabel: string } | null {
   const expiresAt = normalizeDateInput(listing.subscription_expires_at || listing.account_expires_at)
   if (!expiresAt) return null
@@ -4691,7 +5934,46 @@ function validityInfo(listing: AccountShareListing): { label: string; expiresAtL
 
 type RuntimeTone = 'normal' | 'warning' | 'danger' | 'muted'
 
+function isUnknownHistorySnapshot(listing: AccountShareListing): boolean {
+  if (!isArchiveView.value && !isMembershipHistoryView.value && !listing.deleted) return false
+  return listing.history_snapshot_quality !== 'exact'
+    && listing.history_snapshot_quality !== 'backfilled_current'
+}
+
+function isBackfilledHistorySnapshot(listing: AccountShareListing): boolean {
+  return listing.history_snapshot_quality === 'backfilled_current'
+}
+
+function historySnapshotDescription(listing: AccountShareListing, context: 'membership' | 'archive' = 'membership'): string {
+  switch (listing.history_snapshot_quality) {
+    case 'exact':
+      return context === 'archive'
+        ? '当前展示的是删除时保存的精确房间条款快照'
+        : '当前展示的是本次历史使用时保存的精确条款快照'
+    case 'backfilled_current':
+      return context === 'archive'
+        ? '当前展示的是由删除前最终房间信息回填的历史内容，不是删除时保存的精确快照'
+        : '当前展示的是由当前或最终房间信息回填的历史内容，不是使用当时的精确快照'
+    case 'unknown':
+      return '该记录生成于历史快照功能上线前，迁移前信息不可恢复'
+    default:
+      return '当前展示历史记录，但服务端未标注快照精度'
+  }
+}
+
+function deletedHistorySnapshotMessage(listing: AccountShareListing): string {
+  return `该房间已删除；${historySnapshotDescription(listing, 'archive')}。不能再加入、编辑或管理账号。`
+}
+
 function runtimeInsight(listing: AccountShareListing): { label: string; detail: string; badge: string; tone: RuntimeTone } {
+  if (listing.deleted) {
+    return {
+      label: '房间已删除',
+      detail: historySnapshotDescription(listing, 'archive'),
+      badge: '历史',
+      tone: 'muted'
+    }
+  }
   if (showOpenAIUsageWindows(listing) && listing.codex_quota_protection_reason) {
     const windowLabel = listing.codex_quota_protection_reason === '7d' ? '7天' : '5小时'
     return {
@@ -4752,7 +6034,7 @@ function runtimeInsight(listing: AccountShareListing): { label: string; detail: 
   }
   if (listing.status !== 'active') {
     return {
-      label: statusLabel(listing.status),
+      label: listingStatusLabel(listing),
       detail: '',
       badge: '未上架',
       tone: 'muted'
@@ -4776,13 +6058,10 @@ function selfUseJoinUnavailable(listing: AccountShareListing): boolean {
 }
 
 function canShowListingJoinSection(listing: AccountShareListing): boolean {
-  return !listing.queue_membership_id && !listing.current_membership_id && (!isManagementView.value || isOwnListing(listing))
-}
-
-function canOwnerRelistListing(listing: AccountShareListing): boolean {
-  return !authStore.isAdmin &&
-    listing.status !== 'active' &&
-    isOwnListing(listing)
+  return !listing.deleted
+    && !listing.queue_membership_id
+    && !listing.current_membership_id
+    && (!isManagementView.value || isOwnListing(listing))
 }
 
 function isFuture(value?: string | null): boolean {
@@ -4839,11 +6118,21 @@ function statusLabel(status: AccountShareListingStatus): string {
       return '已上架'
     case 'paused':
       return '已暂停'
+    case 'validating':
+      return '恢复校验中'
+    case 'draining':
+      return '安全排空中'
+    case 'suspended':
+      return '管理员暂停'
     case 'disabled':
       return '已下架'
     default:
       return status
   }
+}
+
+function listingStatusLabel(listing: AccountShareListing): string {
+  return listing.deleted ? '已删除' : statusLabel(listing.status)
 }
 
 function statusBadgeClass(status: AccountShareListingStatus): string {
@@ -4853,11 +6142,22 @@ function statusBadgeClass(status: AccountShareListingStatus): string {
       return `${base} bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-200`
     case 'paused':
       return `${base} bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-200`
+    case 'validating':
+    case 'draining':
+      return `${base} bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-200`
+    case 'suspended':
     case 'disabled':
       return `${base} bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-dark-200`
     default:
       return `${base} bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-dark-200`
   }
+}
+
+function listingStatusBadgeClass(listing: AccountShareListing): string {
+  if (listing.deleted) {
+    return 'rounded-full bg-gray-200 px-2.5 py-1 text-xs font-semibold text-gray-700 dark:bg-dark-700 dark:text-dark-100'
+  }
+  return statusBadgeClass(listing.status)
 }
 
 function modeKeyLabel(key: ApiKey): string {
@@ -5000,13 +6300,66 @@ function queueIdleTimeoutSummary(listing: AccountShareListing): string {
   return `激活后 ${formatIdleTimeoutSetting(minutes)} 无请求会自动退出`
 }
 
+function pendingMembershipEndForListing(
+  listing: AccountShareListing
+): PendingMembershipEnd | null {
+  return pendingMembershipEnds.value[listing.id] || null
+}
+
+function isListingMembershipEnding(listing: AccountShareListing): boolean {
+  return listing.queue_status === 'ending'
+    || pendingMembershipEndForListing(listing) !== null
+}
+
+function membershipPanelTitle(listing: AccountShareListing): string {
+  if (isListingMembershipEnding(listing)) return '正在退出并结算'
+  return listing.current_membership_id ? '正在使用' : '预约队列'
+}
+
+function membershipPanelSubtitle(listing: AccountShareListing): string {
+  if (!isListingMembershipEnding(listing)) {
+    return listing.current_membership_id
+      ? idleTimeoutSummary(listing)
+      : queueIdleTimeoutSummary(listing)
+  }
+  const pending = pendingMembershipEndForListing(listing)
+  if (pending?.operationStatus === 'needs_attention') {
+    return '后台仍在核对未完成计费；结算完成前不会开放评价'
+  }
+  if (
+    pending?.operationStatus === 'failed'
+    || pending?.operationStatus === 'cancelled'
+  ) {
+    return pending.operationError || '退出处理未完成，请联系管理员核对计费状态'
+  }
+  if (!pending?.operationID) {
+    return '退出已受理，但缺少进度标识；请刷新状态并联系管理员'
+  }
+  return '退出请求已受理，正在等待请求释放并完成最终结算'
+}
+
 function queueStatusLabel(listing: AccountShareListing): string {
+  if (isListingMembershipEnding(listing)) {
+    const pending = pendingMembershipEndForListing(listing)
+    if (pending?.operationStatus === 'needs_attention') return '结算待处理'
+    if (pending?.operationStatus === 'failed' || pending?.operationStatus === 'cancelled') {
+      return '退出处理失败'
+    }
+    return '退出/结算中'
+  }
   if (listing.queue_status === 'active' || listing.current_membership_id) return '当前使用'
   if (isFuture(listing.queue_dispatch_cooldown_until)) return `冷却中，${formatRelativeUntil(listing.queue_dispatch_cooldown_until)} 后重试`
   return `预约第 ${listing.queue_rank || '-'} 位`
 }
 
 function queueStatusPillClass(listing: AccountShareListing): string {
+  if (isListingMembershipEnding(listing)) {
+    const pending = pendingMembershipEndForListing(listing)
+    if (pending?.operationStatus === 'failed' || pending?.operationStatus === 'cancelled') {
+      return 'membership-status-pill membership-status-pill-error'
+    }
+    return 'membership-status-pill membership-status-pill-ending'
+  }
   if (listing.queue_status === 'active' || listing.current_membership_id) return 'membership-status-pill'
   if (isFuture(listing.queue_dispatch_cooldown_until)) return 'membership-status-pill membership-status-pill-waiting'
   return 'membership-status-pill membership-status-pill-queued'
@@ -5049,7 +6402,7 @@ function mySpendWindowLabel(summary: AccountShareMySpendSummary): string {
 }
 
 function mySpendAccountName(summary: AccountShareMySpendSummary): string {
-  return summary.listing.account_name || `共享账号 #${summary.listing.id}`
+  return summary.listing.account_name || `账号房间 #${summary.listing.id}`
 }
 
 function mySpendLastActivityLabel(summary: AccountShareMySpendSummary): string {
@@ -5085,85 +6438,151 @@ function abortMySpendRequest(): void {
   }
 }
 
-function mySpendAccountOptionKey(listing: AccountShareListing, source: MySpendAccountOptionSource, membershipID: number): string {
-  return `${source}:${listing.id}:${membershipID}`
+function mySpendAccountOptionKey(listingID: number, source: MySpendAccountOptionSource, membershipID: number): string {
+  return `${source}:${listingID}:${membershipID}`
 }
 
 function mySpendAccountSourceLabel(source: MySpendAccountOptionSource): string {
-  return source === 'using' ? '使用/预约' : '历史使用'
+  return source === 'using' ? '使用/预约' : '消费历史'
 }
 
-function mySpendAccountStatusLabel(listing: AccountShareListing): string {
-  if (listing.current_membership_id) return '正在使用'
-  if (listing.queue_membership_id) return listing.queue_status === 'queued' ? `预约第 ${listing.queue_rank || '-'} 位` : '预约中'
-  if (listing.last_used_membership_id) return '已使用'
-  return '可统计'
+function mySpendAccountStatusLabel(option: MySpendAccountOption): string {
+  if (option.status === 'active') return '正在使用'
+  if (option.status === 'queued') return option.queueRank ? `预约第 ${option.queueRank} 位` : '预约中'
+  if (option.status === 'ending') return '结算中'
+  if (option.status === 'ended') return '已结束'
+  return option.status || '可统计'
 }
 
-function mySpendAccountUsagePeriod(listing: AccountShareListing): string {
-  if (listing.current_joined_at) {
-    const lastRequest = listing.current_last_request_at ? ` · 最近请求 ${formatDate(listing.current_last_request_at)}` : ''
-    return `加入 ${formatDate(listing.current_joined_at)}${lastRequest}`
+function mySpendAccountDisplayName(option: MySpendAccountOption): string {
+  return option.roomName || option.accountName || `房间 #${option.listingID}`
+}
+
+function mySpendAccountUsagePeriod(option: MySpendAccountOption): string {
+  if (option.source === 'history') {
+    const joinedAt = option.joinedAt ? formatDate(option.joinedAt) : '时间未记录'
+    const endedAt = option.endedAt ? formatDate(option.endedAt) : '尚未记录结束时间'
+    return `${joinedAt} 至 ${endedAt}`
   }
-  if (listing.last_used_at) return `最近使用 ${formatDate(listing.last_used_at)}`
-  if (listing.queue_membership_id) return `预约记录 #${listing.queue_membership_id}`
-  return `使用记录 #${mySpendMembershipID(listing)}`
+  if (option.joinedAt) {
+    const lastRequest = option.lastRequestAt ? ` · 最近请求 ${formatDate(option.lastRequestAt)}` : ''
+    return `加入 ${formatDate(option.joinedAt)}${lastRequest}`
+  }
+  if (option.queueRank) return `预约第 ${option.queueRank} 位`
+  return `使用记录 #${option.membershipID}`
 }
 
 function mySpendAccountOptionTitle(option: MySpendAccountOption): string {
-  return `${listingDisplayName(option.listing)} · ${mySpendAccountSourceLabel(option.source)} · 记录 #${option.membershipID}`
-}
-
-function buildMySpendAccountOption(listing: AccountShareListing, source: MySpendAccountOptionSource): MySpendAccountOption | null {
-  const normalized = normalizeListingForMerge(listing)
-  const membershipID = mySpendMembershipID(normalized)
-  if (membershipID <= 0) return null
-  return {
-    key: mySpendAccountOptionKey(normalized, source, membershipID),
-    listing: normalized,
-    source,
-    membershipID
-  }
+  return `${mySpendAccountDisplayName(option)} · ${mySpendAccountSourceLabel(option.source)} · 记录 #${option.membershipID}`
 }
 
 function mySpendAccountOptionSourceForListing(listing: AccountShareListing): MySpendAccountOptionSource {
   return listing.current_membership_id || listing.queue_membership_id ? 'using' : 'history'
 }
 
-async function fetchMySpendAccountOptionsByTab(source: MySpendAccountOptionSource, signal: AbortSignal): Promise<MySpendAccountOption[]> {
-  const options: MySpendAccountOption[] = []
-  let page = 1
-  let pages = 1
-  do {
-    const result = await accountShareAPI.listListings(page, 100, { tab: source }, { signal })
-    const items = result.items || []
-    for (const listing of items) {
-      const option = buildMySpendAccountOption(listing, source)
-      if (option) options.push(option)
-    }
-    pages = Math.max(1, Number(result.pages || 1))
-    page += 1
-  } while (page <= pages && !signal.aborted)
-  return options
+function buildMySpendListingOption(
+  listing: AccountShareListing,
+  source: MySpendAccountOptionSource = mySpendAccountOptionSourceForListing(listing)
+): MySpendAccountOption | null {
+  const normalized = normalizeListingForMerge(listing)
+  const membershipID = mySpendMembershipID(normalized)
+  if (membershipID <= 0) return null
+  const status = normalized.current_membership_id
+    ? 'active'
+    : (normalized.queue_membership_id ? (normalized.queue_status || 'queued') : 'ended')
+  return {
+    key: mySpendAccountOptionKey(normalized.id, source, membershipID),
+    source,
+    listingID: normalized.id,
+    membershipID,
+    platform: normalized.platform,
+    roomName: normalized.room_name || '',
+    accountName: normalized.account_name,
+    ownerUserID: normalized.owner_user_id,
+    ownerUsername: normalized.owner_username,
+    status,
+    queueRank: normalized.queue_rank,
+    joinedAt: normalized.current_joined_at,
+    lastRequestAt: normalized.current_last_request_at,
+    endedAt: normalized.last_used_at,
+    roomDeleted: Boolean(normalized.deleted),
+    listing: normalized,
+  }
 }
 
-function mergeMySpendAccountOptions(optionGroups: MySpendAccountOption[][]): MySpendAccountOption[] {
+function buildMySpendHistoryOption(entry: AccountShareMembershipHistoryEntry): MySpendAccountOption | null {
+  const listingID = Number(entry.listing_id || 0)
+  const membershipID = Number(entry.membership_id || 0)
+  if (listingID <= 0 || membershipID <= 0) return null
+  return {
+    key: mySpendAccountOptionKey(listingID, 'history', membershipID),
+    source: 'history',
+    listingID,
+    membershipID,
+    platform: entry.platform,
+    roomName: entry.room_name || '',
+    accountName: entry.account_name,
+    ownerUserID: entry.owner_user_id,
+    ownerUsername: entry.owner_username,
+    status: entry.status,
+    joinedAt: entry.joined_at,
+    lastRequestAt: entry.last_request_at,
+    endedAt: entry.ended_at,
+    roomDeleted: entry.room_deleted,
+  }
+}
+
+async function fetchMySpendAccountOptionsByTab(
+  source: MySpendAccountOptionSource,
+  page: number,
+  pageSize: number,
+  signal: AbortSignal
+): Promise<MySpendAccountOptionPage> {
   const options: MySpendAccountOption[] = []
-  const seenMemberships = new Set<number>()
-  for (const group of optionGroups) {
-    for (const option of group) {
-      if (seenMemberships.has(option.membershipID)) continue
-      seenMemberships.add(option.membershipID)
-      options.push(option)
+  const result = source === 'history'
+    ? await accountShareAPI.listMembershipHistory(page, pageSize, { signal })
+    : await accountShareAPI.listListings(page, pageSize, { tab: 'using' }, { signal })
+  if (source === 'history') {
+    for (const entry of result.items as AccountShareMembershipHistoryEntry[] || []) {
+      const option = buildMySpendHistoryOption(entry)
+      if (option) options.push(option)
+    }
+  } else {
+    for (const listing of result.items as AccountShareListing[] || []) {
+      const option = buildMySpendListingOption(listing)
+      if (option) options.push(option)
     }
   }
-  return options
+  const normalizedPageSize = Math.max(1, Number(result.page_size || pageSize))
+  const total = Math.max(0, Number(result.total || 0))
+  return {
+    options,
+    page: Math.max(1, Number(result.page || page)),
+    pageSize: normalizedPageSize,
+    total,
+    pages: Math.max(1, Number(result.pages || Math.ceil(total / normalizedPageSize) || 1)),
+  }
+}
+
+function applyMySpendAccountOptionPage(source: MySpendAccountOptionSource, result: MySpendAccountOptionPage): void {
+  const pagination = source === 'using' ? mySpendUsingPagination : mySpendHistoryPagination
+  pagination.page = result.page
+  pagination.pageSize = result.pageSize
+  pagination.total = result.total
+  pagination.pages = result.pages
+  if (source === 'using') {
+    mySpendUsingAccountOptions.value = result.options
+    mergeKnownListings(result.options.flatMap(option => option.listing ? [option.listing] : []))
+    return
+  }
+  mySpendHistoryAccountOptions.value = result.options
 }
 
 function setSelectedMySpendAccount(option: MySpendAccountOption): void {
-  mySpendListing.value = option.listing
-  mySpendSelectedMembershipID.value = option.membershipID
+  mySpendSelectedOption.value = option
   mySpendSelectedOptionKey.value = option.key
+  mySpendPickerSource.value = option.source
+  if (option.source === 'history') mySpendRange.value = 'current_membership'
   mySpendSummary.value = null
   mySpendError.value = ''
 }
@@ -5176,50 +6595,54 @@ function selectMySpendAccount(option: MySpendAccountOption): void {
 
 async function loadMySpendAccountOptions(preferredListing?: AccountShareListing): Promise<void> {
   abortMySpendAccountsRequest()
+  abortMySpendRequest()
+  mySpendLoading.value = false
+  mySpendSummary.value = null
+  mySpendError.value = ''
   const controller = new AbortController()
   const requestSeq = ++mySpendAccountsRequestSeq
   mySpendAccountsRequestController = controller
   mySpendAccountsLoading.value = true
   mySpendAccountsError.value = ''
   try {
-    const [usingOptions, historyOptions] = await Promise.all([
-      fetchMySpendAccountOptionsByTab('using', controller.signal),
-      fetchMySpendAccountOptionsByTab('history', controller.signal)
+    const [usingPage, historyPage] = await Promise.all([
+      fetchMySpendAccountOptionsByTab(
+        'using',
+        mySpendUsingPagination.page,
+        mySpendUsingPagination.pageSize,
+        controller.signal
+      ),
+      fetchMySpendAccountOptionsByTab(
+        'history',
+        mySpendHistoryPagination.page,
+        mySpendHistoryPagination.pageSize,
+        controller.signal
+      )
     ])
     if (controller.signal.aborted || requestSeq !== mySpendAccountsRequestSeq) return
-    const mergedOptions = mergeMySpendAccountOptions([usingOptions, historyOptions])
+    applyMySpendAccountOptionPage('using', usingPage)
+    applyMySpendAccountOptionPage('history', historyPage)
+    const visibleOptions = [...usingPage.options, ...historyPage.options]
+    let preferredOption: MySpendAccountOption | null = null
     if (preferredListing && canOpenMySpend(preferredListing)) {
       const preferredMembershipID = mySpendMembershipID(preferredListing)
-      const hasPreferred = mergedOptions.some(option => option.membershipID === preferredMembershipID)
-      if (!hasPreferred) {
-        const preferredOption = buildMySpendAccountOption(preferredListing, mySpendAccountOptionSourceForListing(preferredListing))
-        if (preferredOption) mergedOptions.unshift(preferredOption)
-      }
+      preferredOption = visibleOptions.find(option => option.membershipID === preferredMembershipID)
+        || buildMySpendListingOption(preferredListing)
     }
-    mySpendAccountOptions.value = mergedOptions
-    mergeKnownListings(mergedOptions.map(option => option.listing))
-
-    const preferredMembershipID = preferredListing ? mySpendMembershipID(preferredListing) : 0
-    const selectedOption = mergedOptions.find(option => option.membershipID === preferredMembershipID)
-      || mergedOptions.find(option => option.key === mySpendSelectedOptionKey.value)
-      || mergedOptions[0]
+    const selectedOption = preferredOption
+      || visibleOptions.find(option => option.key === mySpendSelectedOptionKey.value)
+      || visibleOptions[0]
     if (selectedOption) {
       setSelectedMySpendAccount(selectedOption)
       void loadMySpendSummary()
     } else {
-      mySpendListing.value = null
-      mySpendSelectedMembershipID.value = 0
+      mySpendSelectedOption.value = null
       mySpendSelectedOptionKey.value = ''
       mySpendSummary.value = null
       mySpendError.value = ''
     }
   } catch (error: unknown) {
     if (controller.signal.aborted || requestSeq !== mySpendAccountsRequestSeq || isCanceledRequest(error)) return
-    mySpendAccountOptions.value = []
-    mySpendListing.value = null
-    mySpendSelectedMembershipID.value = 0
-    mySpendSelectedOptionKey.value = ''
-    mySpendSummary.value = null
     mySpendAccountsError.value = extractApiErrorMessage(error, '加载使用过的账号失败', {
       USER_NOT_FOUND: '当前用户状态异常，请重新登录后再试'
     })
@@ -5231,12 +6654,67 @@ async function loadMySpendAccountOptions(preferredListing?: AccountShareListing)
   }
 }
 
+function setMySpendPickerSource(source: MySpendAccountOptionSource): void {
+  mySpendPickerSource.value = source
+}
+
+async function handleMySpendAccountPageChange(page: number): Promise<void> {
+  const source = mySpendPickerSource.value
+  const pagination = source === 'using' ? mySpendUsingPagination : mySpendHistoryPagination
+  const normalizedPage = Math.min(Math.max(1, Number(page || 1)), Math.max(1, pagination.pages))
+  if (normalizedPage === pagination.page || mySpendAccountsLoading.value) return
+  abortMySpendAccountsRequest()
+  const controller = new AbortController()
+  const requestSeq = ++mySpendAccountsRequestSeq
+  mySpendAccountsRequestController = controller
+  mySpendAccountsLoading.value = true
+  mySpendAccountsError.value = ''
+  try {
+    const result = await fetchMySpendAccountOptionsByTab(
+      source,
+      normalizedPage,
+      pagination.pageSize,
+      controller.signal
+    )
+    if (controller.signal.aborted || requestSeq !== mySpendAccountsRequestSeq) return
+    applyMySpendAccountOptionPage(source, result)
+  } catch (error: unknown) {
+    if (controller.signal.aborted || requestSeq !== mySpendAccountsRequestSeq || isCanceledRequest(error)) return
+    mySpendAccountsError.value = extractApiErrorMessage(error, '加载账号记录分页失败', {
+      USER_NOT_FOUND: '当前用户状态异常，请重新登录后再试'
+    })
+  } finally {
+    if (requestSeq === mySpendAccountsRequestSeq) {
+      mySpendAccountsLoading.value = false
+      if (mySpendAccountsRequestController === controller) mySpendAccountsRequestController = null
+    }
+  }
+}
+
+function resetMySpendAccountPagination(): void {
+  Object.assign(mySpendUsingPagination, {
+    page: 1,
+    pageSize: MY_SPEND_ACCOUNT_PAGE_SIZE,
+    total: 0,
+    pages: 1,
+  })
+  Object.assign(mySpendHistoryPagination, {
+    page: 1,
+    pageSize: MY_SPEND_ACCOUNT_PAGE_SIZE,
+    total: 0,
+    pages: 1,
+  })
+}
+
 function openMySpendDialog(listing?: AccountShareListing): void {
   if (listing && !canOpenMySpend(listing)) return
   abortMySpendRequest()
-  mySpendListing.value = null
-  mySpendSelectedMembershipID.value = 0
+  mySpendSelectedOption.value = null
   mySpendSelectedOptionKey.value = ''
+  mySpendPickerSource.value = 'using'
+  mySpendUsingAccountOptions.value = []
+  mySpendHistoryAccountOptions.value = []
+  resetMySpendAccountPagination()
   mySpendRange.value = 'current_membership'
   mySpendSummary.value = null
   mySpendError.value = ''
@@ -5249,10 +6727,12 @@ function closeMySpendDialog(): void {
   abortMySpendAccountsRequest()
   abortMySpendRequest()
   showMySpendDialog.value = false
-  mySpendListing.value = null
-  mySpendSelectedMembershipID.value = 0
+  mySpendSelectedOption.value = null
   mySpendSelectedOptionKey.value = ''
-  mySpendAccountOptions.value = []
+  mySpendPickerSource.value = 'using'
+  mySpendUsingAccountOptions.value = []
+  mySpendHistoryAccountOptions.value = []
+  resetMySpendAccountPagination()
   mySpendAccountsError.value = ''
   mySpendAccountsLoading.value = false
   mySpendSummary.value = null
@@ -5261,14 +6741,15 @@ function closeMySpendDialog(): void {
 }
 
 function setMySpendRange(range: AccountShareMySpendRange): void {
+  if (mySpendHistorySelection.value && range !== 'current_membership') return
   if (mySpendRange.value === range || mySpendLoading.value) return
   mySpendRange.value = range
   void loadMySpendSummary()
 }
 
 async function loadMySpendSummary(): Promise<void> {
-  const listing = mySpendListing.value
-  if (!listing) return
+  const option = mySpendSelectedOption.value
+  if (!option) return
   abortMySpendRequest()
   const controller = new AbortController()
   const requestSeq = ++mySpendRequestSeq
@@ -5276,8 +6757,8 @@ async function loadMySpendSummary(): Promise<void> {
   mySpendLoading.value = true
   mySpendError.value = ''
   try {
-    const membershipID = mySpendRange.value === 'current_membership' ? mySpendSelectedMembershipID.value : 0
-    const summary = await accountShareAPI.getMySpendSummary(listing.id, {
+    const membershipID = mySpendRange.value === 'current_membership' ? option.membershipID : 0
+    const summary = await accountShareAPI.getMySpendSummary(option.listingID, {
       range: mySpendRange.value,
       membership_id: membershipID > 0 ? membershipID : undefined,
       timezone: mySpendBrowserTimeZone()
@@ -5597,9 +7078,16 @@ function setFilter(filter: FilterOption): void {
   clearSearchDebounceTimer()
   closeFilterPopover()
   activeFilter.value = filter
-  pagination.page = 1
+  if (filter.tab === 'history') {
+    abortActiveListingsRequest()
+    clearMembershipStatusRefreshTimer()
+    membershipHistoryPagination.page = 1
+  } else {
+    abortMembershipHistoryRequest()
+    pagination.page = 1
+  }
   persistListingPreferences()
-  void loadListings()
+  void loadCurrentView()
 }
 
 function sanitizeListingFiltersForPlatform(platform: AccountSharePlatform): void {
@@ -5643,20 +7131,94 @@ async function loadSelfUseCommissionRate(force = false): Promise<void> {
   }
 }
 
+async function loadCapabilities(): Promise<void> {
+  if (capabilitiesLoading.value) return
+  capabilitiesLoading.value = true
+  capabilitiesError.value = ''
+  try {
+    capabilities.value = await accountShareAPI.getCapabilities()
+  } catch (error: unknown) {
+    capabilitiesError.value = extractApiErrorMessage(error, '房间配额暂时无法读取，请稍后刷新')
+  } finally {
+    capabilitiesLoading.value = false
+  }
+}
+
 async function refreshPageData(): Promise<void> {
-  const tasks: Promise<unknown>[] = [loadListings(), loadModeKeys(), loadSelfUseCommissionRate(true)]
+  const tasks: Promise<unknown>[] = [
+    loadCurrentView(),
+    loadModeKeys(),
+    loadSelfUseCommissionRate(true),
+    loadCapabilities()
+  ]
   if (isKeyResolutionMode.value) tasks.push(loadKeyResolutionState())
   await Promise.all(tasks)
 }
 
 function hasVisibleMembershipState(): boolean {
-  return listings.value.some(listing => Boolean(listing.current_membership_id || listing.queue_membership_id))
+  if (isMembershipHistoryView.value || isArchiveView.value) return false
+  return listings.value.some(listing => Boolean(
+    listing.current_membership_id
+    || listing.queue_membership_id
+    || listing.status === 'validating'
+  )) || hasPollablePendingMembershipEnd()
+}
+
+function pendingMembershipEndIsPollable(pending: PendingMembershipEnd): boolean {
+  return Boolean(
+    pending.operationID
+    && !ROOM_LIFECYCLE_TERMINAL_OPERATION_STATUSES.has(pending.operationStatus)
+  )
+}
+
+function hasPollablePendingMembershipEnd(): boolean {
+  return Object.values(pendingMembershipEnds.value).some(pendingMembershipEndIsPollable)
+}
+
+function hasVisibleTransientStatus(): boolean {
+  if (isMembershipHistoryView.value || isArchiveView.value) return false
+  return visibleValidatingListingIDs.value.size > 0 || hasPollablePendingMembershipEnd()
 }
 
 function clearMembershipStatusRefreshTimer(): void {
   if (membershipStatusRefreshTimer == null) return
   window.clearTimeout(membershipStatusRefreshTimer)
   membershipStatusRefreshTimer = null
+}
+
+function scheduleTransientStatusRefresh(): void {
+  clearMembershipStatusRefreshTimer()
+  if (
+    document.visibilityState !== 'visible'
+    || !hasVisibleTransientStatus()
+  ) {
+    return
+  }
+  membershipStatusRefreshTimer = window.setTimeout(() => {
+    membershipStatusRefreshTimer = null
+    void refreshTransientStatuses()
+  }, ACCOUNT_SHARE_TRANSIENT_STATUS_REFRESH_INTERVAL_MS)
+}
+
+async function refreshTransientStatuses(): Promise<void> {
+  if (
+    document.visibilityState !== 'visible'
+    || !hasVisibleTransientStatus()
+  ) {
+    clearMembershipStatusRefreshTimer()
+    return
+  }
+  if (loading.value) {
+    scheduleTransientStatusRefresh()
+    return
+  }
+
+  const completedEnds = await pollPendingMembershipEndOperations()
+  const refreshed = await loadListings()
+  if (!refreshed || completedEnds.length === 0 || pendingReview.value) return
+  const completed = completedEnds.find(item => Boolean(item.membership.last_request_at))
+  if (!completed) return
+  openReviewDialog(completed.listingSnapshot, completed.membership)
 }
 
 function refreshMembershipStatusIfDue(): void {
@@ -5679,7 +7241,11 @@ function refreshMembershipStatusIfDue(): void {
     return
   }
 
-  void loadListings()
+  if (hasVisibleTransientStatus()) {
+    void refreshTransientStatuses()
+  } else {
+    void loadListings()
+  }
 }
 
 function handleWindowFocus(): void {
@@ -5696,6 +7262,30 @@ function openUsageGuideDialog(): void {
 
 function closeUsageGuideDialog(): void {
   showUsageGuideDialog.value = false
+}
+
+function openAdminBillingDialog(): void {
+  if (!authStore.isAdmin) return
+  showAdminBillingDialog.value = true
+}
+
+function closeAdminBillingDialog(): void {
+  showAdminBillingDialog.value = false
+}
+
+function openAdminQuotaDialog(): void {
+  if (!authStore.isAdmin) return
+  showAdminQuotaDialog.value = true
+}
+
+function closeAdminQuotaDialog(): void {
+  showAdminQuotaDialog.value = false
+}
+
+function capabilityBlockerMessage(blocker: { code: string; message?: string }): string {
+  return accountShareCapabilityBlockerMessages[blocker.code]
+    || blocker.message?.trim()
+    || '当前房间配额不足，请稍后重试或联系管理员'
 }
 
 function openRecommendationFromUsageGuide(): void {
@@ -5715,23 +7305,45 @@ function closeRecommendationDialog(): void {
   showRecommendationDialog.value = false
 }
 
-function toggleCreatePanel(): void {
-  showCreate.value = !showCreate.value
-  if (showCreate.value) {
-    if (createPlatform.value !== activeListingPlatform.value) {
-      selectCreatePlatform(activeListingPlatform.value)
-    } else if (createSourceMode.value === 'existing') {
-      void loadOwnedAccounts()
-    } else {
-      void loadProxies()
-    }
-    void loadListingNameIndex()
+function openCreateDialog(): void {
+  if (showCreate.value || pendingDraftDiscardTarget.value !== null) return
+  const blocker = capabilities.value?.capability_blockers[0]
+  if (blocker) {
+    actionErrorDialog.title = '暂时不能创建房间'
+    actionErrorDialog.message = capabilityBlockerMessage(blocker)
+    actionErrorDialog.action = null
+    actionErrorDialog.show = true
+    return
   }
+  showCreate.value = true
+  if (createPlatform.value !== activeListingPlatform.value) {
+    selectCreatePlatform(activeListingPlatform.value)
+  } else if (createSourceMode.value === 'existing') {
+    void loadOwnedAccounts()
+  } else {
+    void loadProxies()
+  }
+  void loadListingNameIndex()
+  captureCreateDraftBaseline()
+  void nextTick(() => {
+    if (showCreate.value && !createDraftHasChanges()) captureCreateDraftBaseline()
+  })
+}
+
+function closeCreateDialog(): void {
+  if (creating.value || generatingOAuthURL.value) return
+  if (createDraftHasChanges()) {
+    pendingDraftDiscardTarget.value = 'create'
+    return
+  }
+  showCreate.value = false
+  createDraftBaseline.value = null
 }
 
 function resetOAuthState(): void {
   authURL.value = ''
   authSessionID.value = ''
+  clearStableIdempotencyIntent(oauthExchangeIntent)
   oauthFlowRef.value?.reset()
 }
 
@@ -5742,6 +7354,43 @@ function resetCreateForm(): void {
   clearPendingCreateRoomIdempotencyKey()
   resetOAuthState()
   selectedOwnedAccountID.value = eligibleOwnedAccounts.value[0]?.id || 0
+  void nextTick(() => {
+    if (showCreate.value) captureCreateDraftBaseline()
+  })
+}
+
+function restoreCreateDraftBaseline(): void {
+  const snapshot = createDraftBaseline.value
+  if (!snapshot) {
+    resetCreateForm()
+    return
+  }
+  createSourceMode.value = snapshot.sourceMode
+  createPlatform.value = snapshot.platform
+  selectedOwnedAccountID.value = snapshot.selectedOwnedAccountID
+  Object.assign(createForm, snapshot.form)
+  allowedModels.value = [...snapshot.allowedModels]
+  oauthFlowRef.value?.reset()
+  authURL.value = snapshot.authURL
+  authSessionID.value = snapshot.authSessionID
+}
+
+function cancelDiscardDraft(): void {
+  pendingDraftDiscardTarget.value = null
+}
+
+function confirmDiscardDraft(): void {
+  const target = pendingDraftDiscardTarget.value
+  pendingDraftDiscardTarget.value = null
+  if (target === 'create') {
+    restoreCreateDraftBaseline()
+    showCreate.value = false
+    createDraftBaseline.value = null
+    return
+  }
+  if (target === 'config') {
+    void closeConfigEditDialog(true)
+  }
 }
 
 function selectCreatePlatform(platform: AccountSharePlatform): void {
@@ -5957,7 +7606,7 @@ function validateCreateConfig(): string {
     if (currentProxyID.value <= 0) return '请选择代理 IP，或先添加自己的代理 IP'
     if (createProxyCapacityValidationMessage.value) return createProxyCapacityValidationMessage.value
   }
-  if (!seatOptions.includes(Number(createForm.seat_limit))) return `可使用人数必须在 ${ACCOUNT_SHARE_MIN_SEATS}-${ACCOUNT_SHARE_MAX_SEATS} 人之间`
+  if (!seatOptions.includes(Number(createForm.seat_limit))) return `成员上限必须在 ${ACCOUNT_SHARE_MIN_SEATS}-${ACCOUNT_SHARE_MAX_SEATS} 人之间`
   if (concurrencyValidationMessage.value) return concurrencyValidationMessage.value
   if (perUserConcurrencyValidationMessage.value) return perUserConcurrencyValidationMessage.value
   if (!Number.isFinite(Number(createForm.rate_multiplier)) || Number(createForm.rate_multiplier) < 0) return '账号倍率不能小于 0'
@@ -5982,7 +7631,7 @@ function parseEditAllowedModels(): string[] {
 function validateEditConfig(): string {
   const accountNameError = validateAccountName(editForm.name, editingConfigListing.value?.id)
   if (accountNameError) return accountNameError
-  if (!seatOptions.includes(Number(editForm.seat_limit))) return `可使用人数必须在 ${ACCOUNT_SHARE_MIN_SEATS}-${ACCOUNT_SHARE_MAX_SEATS} 人之间`
+  if (!seatOptions.includes(Number(editForm.seat_limit))) return `成员上限必须在 ${ACCOUNT_SHARE_MIN_SEATS}-${ACCOUNT_SHARE_MAX_SEATS} 人之间`
   if (editPerUserConcurrencyValidationMessage.value) return editPerUserConcurrencyValidationMessage.value
   if (!Number.isFinite(Number(editForm.rate_multiplier)) || Number(editForm.rate_multiplier) < 0) return '账号倍率不能小于 0'
   if (!Number.isFinite(Number(editForm.hourly_rate)) || Number(editForm.hourly_rate) < 0) return '每小时扣费额度不能小于 0'
@@ -5997,13 +7646,149 @@ function validateEditConfig(): string {
   }
   if (parseEditAllowedModels().length === 0) return '至少填写一个模型白名单'
   if (!editSessionID.value) return '编辑会话已失效，请关闭后重新编辑'
+  if (
+    !Number.isSafeInteger(Number(editingConfigListing.value?.row_version))
+    || Number(editingConfigListing.value?.row_version) <= 0
+  ) {
+    return '房间版本无效，请关闭后刷新房间再编辑'
+  }
+  if (!editReason.value.trim()) return '请填写本次房间配置修改原因'
+  if (editForceActive.value && !authStore.isAdmin) return '管理员身份已失效，请关闭窗口后重新进入'
   return ''
+}
+
+function listingWithPendingMembershipEnd(
+  listing: AccountShareListing
+): AccountShareListing {
+  const pending = pendingMembershipEnds.value[listing.id]
+  if (!pending) return listing
+  const snapshot = pending.listingSnapshot
+  const membership = pending.membership
+  return {
+    ...listing,
+    current_membership_id: pending.membershipID,
+    current_api_key_id: pending.apiKeyID || membership.api_key_id,
+    current_api_key_name: pending.apiKeyName || snapshot.current_api_key_name,
+    current_joined_at: membership.joined_at || snapshot.current_joined_at,
+    current_paid_until: membership.paid_until || snapshot.current_paid_until,
+    current_billed_until: membership.billed_until || snapshot.current_billed_until,
+    current_idle_timeout_minutes: membership.idle_timeout_minutes || snapshot.current_idle_timeout_minutes,
+    current_last_request_at: membership.last_request_at || snapshot.current_last_request_at,
+    current_idle_expires_at: snapshot.current_idle_expires_at,
+    current_waiver_progress: snapshot.current_waiver_progress,
+    queue_membership_id: undefined,
+    queue_api_key_id: undefined,
+    queue_api_key_name: undefined,
+    queue_rank: undefined,
+    queue_status: 'ending',
+    queue_idle_timeout_minutes: undefined,
+    queue_dispatch_cooldown_until: undefined
+  }
+}
+
+function setPendingMembershipEnd(
+  pending: PendingEndUseState,
+  membership: AccountShareMembership
+): void {
+  const operationID = (membership.ending_operation_id || '').trim()
+  pendingMembershipEnds.value = {
+    ...pendingMembershipEnds.value,
+    [pending.listing.id]: {
+      listingID: pending.listing.id,
+      membershipID: membership.id,
+      operationID,
+      operationStatus: 'pending',
+      operationError: operationID
+        ? ''
+        : '退出已受理，但服务端没有返回进度标识。请刷新状态并联系管理员。',
+      apiKeyID: pending.apiKeyID || membership.api_key_id,
+      apiKeyName: pending.apiKeyName,
+      membership,
+      listingSnapshot: pending.listing
+    }
+  }
+}
+
+function updatePendingMembershipEndOperation(
+  listingID: number,
+  operation: AccountShareRoomOperation
+): void {
+  const pending = pendingMembershipEnds.value[listingID]
+  if (!pending || pending.operationID !== operation.id) return
+  pendingMembershipEnds.value = {
+    ...pendingMembershipEnds.value,
+    [listingID]: {
+      ...pending,
+      operationStatus: operation.status,
+      operationError: operation.error_message || ''
+    }
+  }
+}
+
+function removePendingMembershipEnd(listingID: number): PendingMembershipEnd | null {
+  const pending = pendingMembershipEnds.value[listingID]
+  if (!pending) return null
+  const next = { ...pendingMembershipEnds.value }
+  delete next[listingID]
+  pendingMembershipEnds.value = next
+  const controller = membershipEndOperationControllers.get(listingID)
+  controller?.abort()
+  membershipEndOperationControllers.delete(listingID)
+  return pending
+}
+
+function loadCurrentView(): Promise<boolean> {
+  return isMembershipHistoryView.value ? loadMembershipHistory() : loadListings()
+}
+
+async function loadMembershipHistory(): Promise<boolean> {
+  abortMembershipHistoryRequest()
+  const requestSeq = ++membershipHistoryRequestSeq
+  const controller = new AbortController()
+  membershipHistoryRequestController = controller
+  membershipHistoryLoading.value = true
+  membershipHistoryError.value = ''
+  try {
+    const result = await accountShareAPI.listMembershipHistory(
+      membershipHistoryPagination.page,
+      membershipHistoryPagination.page_size,
+      { signal: controller.signal }
+    )
+    if (controller.signal.aborted || requestSeq !== membershipHistoryRequestSeq) return false
+    membershipHistoryEntries.value = result.items || []
+    membershipHistoryPagination.total = result.total || 0
+    membershipHistoryPagination.page = result.page || membershipHistoryPagination.page
+    membershipHistoryPagination.page_size = result.page_size || ACCOUNT_SHARE_PAGE_SIZE
+    membershipHistoryPagination.pages = result.pages || 1
+    return true
+  } catch (error: unknown) {
+    if (
+      controller.signal.aborted
+      || requestSeq !== membershipHistoryRequestSeq
+      || isCanceledRequest(error)
+    ) {
+      return false
+    }
+    membershipHistoryEntries.value = []
+    membershipHistoryPagination.total = 0
+    membershipHistoryPagination.pages = 1
+    membershipHistoryError.value = formatAccountShareLoadError(error, '加载完整消费记录失败')
+    return false
+  } finally {
+    if (requestSeq === membershipHistoryRequestSeq) {
+      membershipHistoryLoading.value = false
+      if (membershipHistoryRequestController === controller) {
+        membershipHistoryRequestController = null
+      }
+    }
+  }
 }
 
 async function loadListings(): Promise<boolean> {
   abortActiveListingsRequest()
   const requestSeq = ++listingsRequestSeq
   const controller = new AbortController()
+  const requestTab = activeFilter.value.tab
   listingsRequestController = controller
   let queueSnapshotRefreshStarted = false
   loading.value = true
@@ -6013,18 +7798,32 @@ async function loadListings(): Promise<boolean> {
       signal: controller.signal
     })
     if (controller.signal.aborted || requestSeq !== listingsRequestSeq) return false
-    const realListings = (result.items || []).map(normalizeListingForMerge)
+    const realListings = (result.items || [])
+      .map(normalizeListingForMerge)
+      .map(listingWithPendingMembershipEnd)
     pagination.total = result.total || 0
     pagination.page = result.page || pagination.page
     pagination.page_size = result.page_size || ACCOUNT_SHARE_PAGE_SIZE
     pagination.pages = result.pages || 1
     listings.value = realListings
+    if (requestTab === 'archive') {
+      visibleValidatingListingIDs.value = new Set()
+      unavailableQueueSnapshotApiKeyIDs.value = new Set()
+      visibleQueueSnapshotWarning.value = ''
+      clearMembershipStatusRefreshTimer()
+      return true
+    }
+    visibleValidatingListingIDs.value = new Set(
+      realListings
+        .filter(listing => listing.status === 'validating')
+        .map(listing => listing.id)
+    )
     syncIdleTimeoutControls(realListings)
     mergeKnownListings(realListings)
     unavailableQueueSnapshotApiKeyIDs.value = new Set(queueApiKeyIDsForListings(realListings))
     visibleQueueSnapshotWarning.value = ''
     lastMembershipStatusRefreshAt = Date.now()
-    clearMembershipStatusRefreshTimer()
+    scheduleTransientStatusRefresh()
     queueSnapshotRefreshStarted = true
     void refreshQueueSnapshotsForListings(realListings, controller, requestSeq)
     return true
@@ -6035,6 +7834,7 @@ async function loadListings(): Promise<boolean> {
     pagination.pages = 1
     visibleQueueSnapshotWarning.value = ''
     errorMessage.value = formatAccountShareLoadError(error, '加载账号广场失败')
+    scheduleTransientStatusRefresh()
     return false
   } finally {
     if (requestSeq === listingsRequestSeq) {
@@ -6483,15 +8283,25 @@ async function loadOwnedAccounts(force = false): Promise<void> {
     }
     ownedAccounts.value = Array.from(accountByID.values())
     ownedAccountsLoadedPlatform = platform
+    const shouldAdvanceDraftBaseline = showCreate.value && !createDraftHasChanges()
     if (!eligibleOwnedAccounts.value.some(account => account.id === selectedOwnedAccountID.value)) {
       selectedOwnedAccountID.value = eligibleOwnedAccounts.value[0]?.id || 0
     }
+    if (shouldAdvanceDraftBaseline) {
+      await nextTick()
+      if (showCreate.value) captureCreateDraftBaseline()
+    }
   } catch (error: unknown) {
     if (requestVersion !== ownedAccountsRequestVersion) return
+    const shouldAdvanceDraftBaseline = showCreate.value && !createDraftHasChanges()
     ownedAccounts.value = []
     ownedAccountsLoadedPlatform = null
     selectedOwnedAccountID.value = 0
     ownedAccountsError.value = extractApiErrorMessage(error, '加载自有账号失败，请重试')
+    if (shouldAdvanceDraftBaseline) {
+      await nextTick()
+      if (showCreate.value) captureCreateDraftBaseline()
+    }
   } finally {
     if (requestVersion === ownedAccountsRequestVersion) {
       ownedAccountsLoading.value = false
@@ -6523,6 +8333,31 @@ function clearPendingCreateRoomIdempotencyKey(): void {
   pendingCreateRoomIdempotencyKey = ''
 }
 
+function createSecureRequestID(): string {
+  const requestID = globalThis.crypto?.randomUUID?.()
+  if (!requestID) {
+    throw new Error('当前浏览器无法生成安全的幂等键，请升级浏览器后重试。')
+  }
+  return requestID
+}
+
+function clearStableIdempotencyIntent(intent: StableIdempotencyIntent): void {
+  intent.signature = ''
+  intent.key = ''
+}
+
+function getStableIdempotencyKey(
+  intent: StableIdempotencyIntent,
+  prefix: string,
+  payload: unknown
+): string {
+  const signature = JSON.stringify(payload)
+  if (intent.key && intent.signature === signature) return intent.key
+  intent.signature = signature
+  intent.key = `${prefix}-${createSecureRequestID()}`
+  return intent.key
+}
+
 function getCreateRoomIdempotencyKey(
   payload: Omit<CreateAccountShareRoomRequest, 'idempotency_key'>
 ): string {
@@ -6533,10 +8368,7 @@ function getCreateRoomIdempotencyKey(
   ) {
     return pendingCreateRoomIdempotencyKey
   }
-  const requestID = globalThis.crypto?.randomUUID?.()
-  if (!requestID) {
-    throw new Error('当前浏览器无法生成安全的幂等键，请升级浏览器后重试。')
-  }
+  const requestID = createSecureRequestID()
   pendingCreateRoomIntentSignature = intentSignature
   pendingCreateRoomIdempotencyKey = `account-share-room-${payload.account_id}-${requestID}`
   return pendingCreateRoomIdempotencyKey
@@ -6573,15 +8405,24 @@ async function createRoomFromOwnedAccount(): Promise<void> {
     )
     resetCreateForm()
     showCreate.value = false
-    await Promise.all([loadOwnedAccounts(true), loadListings()])
+    createDraftBaseline.value = null
+    await Promise.all([loadOwnedAccounts(true), loadListings(), loadCapabilities()])
   } catch (error: unknown) {
-    createErrorMessage.value = extractApiErrorMessage(error, '创建房间失败')
+    createErrorMessage.value = extractApiErrorMessage(
+      error,
+      '创建房间失败',
+      accountShareRoomCreateErrorMessages
+    )
   } finally {
     creating.value = false
   }
 }
 
 function openRoomAccountsDialog(listing: AccountShareListing): void {
+  if (listing.deleted) {
+    showActionError('已删除房间不再提供账号管理，历史条款快照仍可查看。', '房间已删除')
+    return
+  }
   roomAccountsListing.value = listing
 }
 
@@ -6610,7 +8451,7 @@ async function handleRoomAccountsChanged(payload: {
     )
   }
 
-  const refreshed = await loadListings()
+  const [refreshed] = await Promise.all([loadListings(), loadCapabilities()])
   if (!refreshed) {
     appStore.showWarning('账号变更已生效，但账号广场计数刷新失败；请稍后点击页面顶部“刷新”确认。')
     return
@@ -6622,6 +8463,527 @@ async function handleRoomAccountsChanged(payload: {
   } else {
     roomAccountsListing.value = null
   }
+}
+
+function roomLifecycleStatusLabel(status: AccountShareRoomLifecycleStatus): string {
+  switch (status) {
+    case 'active':
+      return '开放使用'
+    case 'paused':
+      return '已暂停'
+    case 'validating':
+      return '恢复校验中'
+    case 'draining':
+      return '安全排空中'
+    case 'suspended':
+      return '管理员暂停'
+  }
+}
+
+function roomLifecycleStatusBadgeClass(status: AccountShareRoomLifecycleStatus): string {
+  const base = 'rounded-full px-2.5 py-1 text-xs font-semibold'
+  switch (status) {
+    case 'active':
+      return `${base} bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-200`
+    case 'validating':
+    case 'draining':
+      return `${base} bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-200`
+    case 'paused':
+      return `${base} bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-200`
+    case 'suspended':
+      return `${base} bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-dark-200`
+  }
+}
+
+function roomLifecycleHealthLabel(healthState: AccountShareRoomHealthState): string {
+  switch (healthState) {
+    case 'healthy':
+      return '健康'
+    case 'degraded':
+      return '部分可用'
+    case 'unavailable':
+      return '不可用'
+  }
+}
+
+function roomLifecycleActionAllowed(action: AccountShareRoomLifecycleAction): boolean {
+  return roomLifecycleState.value?.allowed_actions.includes(action) === true
+}
+
+function roomLifecycleActionTitle(action: Exclude<AccountShareRoomLifecycleAction, 'delete'>): string {
+  switch (action) {
+    case 'drain':
+      return '排空并暂停房间'
+    case 'activate':
+      return '恢复房间'
+    case 'suspend':
+      return '暂停房间'
+  }
+}
+
+function roomLifecycleActionDescription(action: Exclude<AccountShareRoomLifecycleAction, 'delete'>): string {
+  switch (action) {
+    case 'drain':
+      return '房间将立即停止接收新成员，排队项会结束，已有成员进入安全退出与结算流程。'
+    case 'activate':
+      return '系统会校验房间主账号的连通性和可用状态；只有校验通过才会重新开放。'
+    case 'suspend':
+      return '房间将停止准入，恢复前不会再分配给消费用户。'
+  }
+}
+
+function roomLifecycleActionImpact(action: Exclude<AccountShareRoomLifecycleAction, 'delete'>): string {
+  switch (action) {
+    case 'drain':
+      return '排空可能异步完成。你可以关闭窗口，稍后重新打开查看进度；历史消费与结算不会丢失。'
+    case 'activate':
+      return '恢复校验失败时房间仍保持暂停，并展示失败原因，不会带病开放。'
+    case 'suspend':
+      return '暂停不会删除房间或历史记录。'
+  }
+}
+
+function roomLifecycleOperationLabel(operation: AccountShareRoomOperation): string {
+  const actionLabel = operation.action === 'delete_room' ? '软删除房间' : '排空房间'
+  switch (operation.status) {
+    case 'succeeded':
+      return `${actionLabel}已完成`
+    case 'failed':
+      return `${actionLabel}失败`
+    case 'cancelled':
+      return `${actionLabel}已取消`
+    case 'needs_attention':
+      return `${actionLabel}需要处理阻塞项`
+    case 'running':
+      return `${actionLabel}执行中`
+    case 'pending':
+      return `${actionLabel}等待执行`
+  }
+}
+
+function roomLifecycleOperationStatusDescription(operation: AccountShareRoomOperation): string {
+  if (operation.error_message) return operation.error_message
+  switch (operation.status) {
+    case 'succeeded':
+      return '服务端已完成全部状态与历史快照写入。'
+    case 'failed':
+      return '操作未完成，请根据错误信息处理后重新打开房间状态。'
+    case 'cancelled':
+      return '操作已经取消，房间未按本次请求继续变更。'
+    case 'needs_attention':
+      return '仍有运行时或结算阻塞项，系统会继续等待。'
+    case 'running':
+      return '正在等待请求、成员与结算安全收口。'
+    case 'pending':
+      return '操作已受理，正在等待后台处理。'
+  }
+}
+
+function formatRoomDeleteIntentExpiry(value?: string): string {
+  const expiresAt = normalizeDateInput(value)
+  if (!expiresAt) return '令牌过期时'
+  return expiresAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+
+function clearRoomLifecycleError(): void {
+  roomLifecycleError.value = ''
+  roomLifecycleErrorCode.value = ''
+}
+
+function setRoomLifecycleError(error: unknown, fallback: string): void {
+  roomLifecycleErrorCode.value = extractApiErrorCode(error) || ''
+  roomLifecycleError.value = extractApiErrorMessage(
+    error,
+    fallback,
+    ROOM_LIFECYCLE_ERROR_MESSAGES
+  )
+}
+
+function clearRoomLifecycleIdempotencyKey(): void {
+  roomLifecycleIdempotencySignature = ''
+  roomLifecycleIdempotencyKey = ''
+}
+
+function getRoomLifecycleIdempotencyKey(
+  listingID: number,
+  action: AccountShareRoomLifecycleAction,
+  expectedVersion: number,
+  token = ''
+): string {
+  const signature = JSON.stringify({ listingID, action, expectedVersion, token })
+  if (
+    roomLifecycleIdempotencyKey &&
+    roomLifecycleIdempotencySignature === signature
+  ) {
+    return roomLifecycleIdempotencyKey
+  }
+  roomLifecycleIdempotencySignature = signature
+  roomLifecycleIdempotencyKey = `account-share-room-${listingID}-${action}-${createSecureRequestID()}`
+  return roomLifecycleIdempotencyKey
+}
+
+function stopRoomLifecycleOperationPolling(): void {
+  roomLifecycleOperationPollSeq += 1
+  if (roomLifecycleOperationPollTimer !== null) {
+    window.clearTimeout(roomLifecycleOperationPollTimer)
+    roomLifecycleOperationPollTimer = null
+  }
+  roomLifecycleOperationController?.abort()
+  roomLifecycleOperationController = null
+  roomLifecyclePolling.value = false
+}
+
+function resetRoomLifecycleAction(): void {
+  if (roomLifecycleCommandBusy.value || roomLifecycleHasPendingOperation.value) return
+  roomLifecycleAction.value = null
+  roomDeleteIntent.value = null
+  roomDeleteNameConfirmation.value = ''
+  roomLifecycleReason.value = ''
+  clearRoomLifecycleIdempotencyKey()
+  clearRoomLifecycleError()
+}
+
+function openRoomLifecycleDialog(listing: AccountShareListing): void {
+  if (listing.deleted || (!authStore.isAdmin && !isOwnListing(listing))) return
+  stopRoomLifecycleOperationPolling()
+  roomLifecycleStateController?.abort()
+  roomLifecycleStateController = null
+  roomLifecycleListing.value = listing
+  roomLifecycleState.value = null
+  roomLifecycleOperation.value = null
+  roomLifecycleAction.value = null
+  roomDeleteIntent.value = null
+  roomDeleteNameConfirmation.value = ''
+  roomLifecycleReason.value = ''
+  roomLifecycleDeleted.value = false
+  roomLifecycleLoading.value = false
+  roomDeleteIntentLoading.value = false
+  roomLifecycleSubmitting.value = false
+  clearRoomLifecycleIdempotencyKey()
+  clearRoomLifecycleError()
+  void refreshRoomLifecycleState()
+}
+
+function closeRoomLifecycleDialog(): void {
+  if (roomLifecycleCommandBusy.value) return
+  roomLifecycleStateRequestSeq += 1
+  roomLifecycleStateController?.abort()
+  roomLifecycleStateController = null
+  stopRoomLifecycleOperationPolling()
+  roomLifecycleListing.value = null
+  roomLifecycleState.value = null
+  roomLifecycleOperation.value = null
+  roomLifecycleAction.value = null
+  roomDeleteIntent.value = null
+  roomDeleteNameConfirmation.value = ''
+  roomLifecycleReason.value = ''
+  roomLifecycleDeleted.value = false
+  roomLifecycleLoading.value = false
+  clearRoomLifecycleIdempotencyKey()
+  clearRoomLifecycleError()
+}
+
+async function refreshRoomLifecycleState(): Promise<void> {
+  const listing = roomLifecycleListing.value
+  if (!listing) return
+
+  stopRoomLifecycleOperationPolling()
+  roomLifecycleStateController?.abort()
+  const controller = new AbortController()
+  roomLifecycleStateController = controller
+  const requestSeq = ++roomLifecycleStateRequestSeq
+  roomLifecycleLoading.value = true
+  roomLifecycleAction.value = null
+  roomLifecycleOperation.value = null
+  roomDeleteIntent.value = null
+  roomDeleteNameConfirmation.value = ''
+  roomLifecycleReason.value = ''
+  clearRoomLifecycleIdempotencyKey()
+  clearRoomLifecycleError()
+  try {
+    const state = await accountShareAPI.getRoomManagementState(listing.id, {
+      signal: controller.signal
+    })
+    if (
+      requestSeq !== roomLifecycleStateRequestSeq ||
+      roomLifecycleListing.value?.id !== listing.id
+    ) {
+      return
+    }
+    roomLifecycleState.value = state
+    if (state.pending_operation_id) {
+      startRoomLifecycleOperationPolling(state.pending_operation_id)
+    }
+  } catch (error: unknown) {
+    if (
+      requestSeq !== roomLifecycleStateRequestSeq ||
+      isCanceledRequest(error)
+    ) {
+      return
+    }
+    setRoomLifecycleError(error, '读取房间生命周期状态失败，请稍后重试。')
+  } finally {
+    if (requestSeq === roomLifecycleStateRequestSeq) {
+      roomLifecycleLoading.value = false
+      if (roomLifecycleStateController === controller) {
+        roomLifecycleStateController = null
+      }
+    }
+  }
+}
+
+function selectRoomLifecycleAction(action: AccountShareRoomLifecycleAction): void {
+  if (
+    roomLifecycleCommandBusy.value ||
+    roomLifecycleHasPendingOperation.value ||
+    (action !== 'delete' && !roomLifecycleActionAllowed(action))
+  ) {
+    return
+  }
+  roomLifecycleAction.value = action
+  roomDeleteIntent.value = null
+  roomDeleteNameConfirmation.value = ''
+  roomLifecycleReason.value = ''
+  clearRoomLifecycleIdempotencyKey()
+  clearRoomLifecycleError()
+  if (action === 'delete' && !authStore.isAdmin) {
+    void loadRoomDeleteIntent()
+  }
+}
+
+async function loadRoomDeleteIntent(): Promise<void> {
+  const listing = roomLifecycleListing.value
+  const state = roomLifecycleState.value
+  if (!listing || !state || roomLifecycleAction.value !== 'delete') return
+  if (roomDeleteIntentLoading.value || roomLifecycleSubmitting.value) return
+  const reason = roomLifecycleReason.value.trim()
+  if (authStore.isAdmin && !reason) {
+    roomLifecycleErrorCode.value = 'ACCOUNT_SHARE_ROOM_REASON_REQUIRED'
+    roomLifecycleError.value = '管理员必须填写删除原因后再检查删除条件。'
+    return
+  }
+
+  roomDeleteIntentLoading.value = true
+  roomDeleteIntent.value = null
+  roomDeleteNameConfirmation.value = ''
+  clearRoomLifecycleIdempotencyKey()
+  clearRoomLifecycleError()
+  try {
+    const intent = await accountShareAPI.createRoomDeleteIntent(listing.id, {
+      expected_version: state.row_version,
+      ...(authStore.isAdmin ? { reason } : {})
+    })
+    if (
+      roomLifecycleListing.value?.id !== listing.id ||
+      roomLifecycleAction.value !== 'delete' ||
+      roomLifecycleState.value?.row_version !== state.row_version
+    ) {
+      return
+    }
+    roomDeleteIntent.value = intent
+  } catch (error: unknown) {
+    if (!roomLifecycleListing.value) return
+    setRoomLifecycleError(error, '检查房间删除条件失败，请稍后重试。')
+  } finally {
+    roomDeleteIntentLoading.value = false
+  }
+}
+
+async function submitRoomLifecycleAction(): Promise<void> {
+  const listing = roomLifecycleListing.value
+  const state = roomLifecycleState.value
+  const action = roomLifecycleAction.value
+  if (
+    !listing ||
+    !state ||
+    !action ||
+    roomLifecycleSubmitting.value
+  ) {
+    return
+  }
+  if (action === 'delete') {
+    const expiresAt = normalizeDateInput(roomDeleteIntent.value?.expires_at)
+    if (expiresAt && expiresAt.getTime() <= Date.now()) {
+      nowMs.value = Date.now()
+      roomLifecycleErrorCode.value = 'ACCOUNT_SHARE_ROOM_DELETION_TOKEN_INVALID'
+      roomLifecycleError.value = '删除确认已经过期，请重新获取确认后再提交。'
+      return
+    }
+  }
+  if (!canSubmitRoomLifecycleAction.value) return
+
+  roomLifecycleSubmitting.value = true
+  clearRoomLifecycleError()
+  try {
+    if (action === 'delete') {
+      const intent = roomDeleteIntent.value
+      if (!intent?.token) return
+      const operation = await accountShareAPI.deleteRoom(
+        listing.id,
+        {
+          expected_version: intent.row_version,
+          room_name: roomDeleteNameConfirmation.value,
+          token: intent.token,
+          confirmed: true,
+          ...(authStore.isAdmin ? { reason: roomLifecycleReason.value.trim() } : {})
+        },
+        getRoomLifecycleIdempotencyKey(
+          listing.id,
+          action,
+          intent.row_version,
+          intent.token
+        )
+      )
+      if (roomLifecycleListing.value?.id !== listing.id) return
+      roomLifecycleOperation.value = operation
+      clearRoomLifecycleIdempotencyKey()
+      if (ROOM_LIFECYCLE_TERMINAL_OPERATION_STATUSES.has(operation.status)) {
+        await handleRoomLifecycleTerminalOperation(operation)
+      } else {
+        startRoomLifecycleOperationPolling(operation.id)
+        appStore.showSuccess('软删除请求已受理，正在安全收口房间数据')
+      }
+      return
+    }
+
+    const payload = {
+      expected_version: state.row_version,
+      confirmed: true,
+      ...(authStore.isAdmin ? { reason: roomLifecycleReason.value.trim() } : {})
+    }
+    const idempotencyKey = getRoomLifecycleIdempotencyKey(
+      listing.id,
+      action,
+      state.row_version
+    )
+    const updatedState = action === 'drain'
+      ? await accountShareAPI.drainRoom(listing.id, payload, idempotencyKey)
+      : action === 'activate'
+        ? await accountShareAPI.activateRoom(listing.id, payload, idempotencyKey)
+        : await accountShareAPI.suspendRoom(listing.id, payload, idempotencyKey)
+
+    if (roomLifecycleListing.value?.id !== listing.id) return
+    roomLifecycleState.value = updatedState
+    roomLifecycleAction.value = null
+    clearRoomLifecycleIdempotencyKey()
+    await loadListings()
+    const refreshedListing = listings.value.find(item => item.id === listing.id)
+    if (refreshedListing) roomLifecycleListing.value = refreshedListing
+    if (updatedState.pending_operation_id) {
+      startRoomLifecycleOperationPolling(updatedState.pending_operation_id)
+      appStore.showSuccess('房间已进入安全排空流程')
+    } else {
+      appStore.showSuccess(action === 'activate' ? '房间已恢复开放' : '房间已暂停')
+    }
+  } catch (error: unknown) {
+    if (!roomLifecycleListing.value) return
+    setRoomLifecycleError(error, '房间生命周期操作失败，请稍后重试。')
+  } finally {
+    roomLifecycleSubmitting.value = false
+  }
+}
+
+function startRoomLifecycleOperationPolling(operationID: string): void {
+  const normalizedOperationID = operationID.trim()
+  if (!normalizedOperationID || !roomLifecycleListing.value) return
+  stopRoomLifecycleOperationPolling()
+  const pollSeq = roomLifecycleOperationPollSeq
+  roomLifecyclePolling.value = true
+  void pollRoomLifecycleOperation(normalizedOperationID, pollSeq)
+}
+
+function pollRoomLifecycleOperationNow(): void {
+  if (roomLifecyclePolling.value) return
+  const operationID = roomLifecycleOperation.value?.id ||
+    roomLifecycleState.value?.pending_operation_id ||
+    ''
+  if (!operationID) {
+    void refreshRoomLifecycleState()
+    return
+  }
+  clearRoomLifecycleError()
+  startRoomLifecycleOperationPolling(operationID)
+}
+
+async function pollRoomLifecycleOperation(
+  operationID: string,
+  pollSeq: number
+): Promise<void> {
+  if (
+    pollSeq !== roomLifecycleOperationPollSeq ||
+    !roomLifecycleListing.value
+  ) {
+    return
+  }
+
+  roomLifecycleOperationController?.abort()
+  const controller = new AbortController()
+  roomLifecycleOperationController = controller
+  try {
+    const operation = await accountShareAPI.getRoomOperation(operationID, {
+      signal: controller.signal
+    })
+    if (
+      pollSeq !== roomLifecycleOperationPollSeq ||
+      !roomLifecycleListing.value
+    ) {
+      return
+    }
+    roomLifecycleOperation.value = operation
+    if (ROOM_LIFECYCLE_TERMINAL_OPERATION_STATUSES.has(operation.status)) {
+      roomLifecyclePolling.value = false
+      roomLifecycleOperationController = null
+      await handleRoomLifecycleTerminalOperation(operation)
+      return
+    }
+    roomLifecycleOperationPollTimer = window.setTimeout(() => {
+      roomLifecycleOperationPollTimer = null
+      void pollRoomLifecycleOperation(operationID, pollSeq)
+    }, ROOM_LIFECYCLE_OPERATION_POLL_INTERVAL_MS)
+  } catch (error: unknown) {
+    if (
+      pollSeq !== roomLifecycleOperationPollSeq ||
+      isCanceledRequest(error)
+    ) {
+      return
+    }
+    roomLifecyclePolling.value = false
+    setRoomLifecycleError(error, '查询房间操作进度失败；你可以点击“继续查询”重试。')
+  } finally {
+    if (roomLifecycleOperationController === controller) {
+      roomLifecycleOperationController = null
+    }
+  }
+}
+
+async function handleRoomLifecycleTerminalOperation(
+  operation: AccountShareRoomOperation
+): Promise<void> {
+  if (operation.status !== 'succeeded') {
+    roomLifecycleErrorCode.value = operation.error_code || operation.status
+    roomLifecycleError.value = operation.error_message ||
+      (operation.status === 'cancelled'
+        ? '房间操作已取消，当前房间没有按本次请求继续变更。'
+        : '房间操作执行失败，请处理错误后重新打开房间状态。')
+    return
+  }
+
+  clearRoomLifecycleError()
+  if (operation.action === 'delete_room') {
+    roomLifecycleDeleted.value = true
+    roomLifecycleAction.value = null
+    roomDeleteIntent.value = null
+    roomDeleteNameConfirmation.value = ''
+    roomLifecycleReason.value = ''
+    await Promise.all([loadListings(), loadCapabilities()])
+    appStore.showSuccess('房间已软删除，历史消费、结算和评价记录继续保留')
+    return
+  }
+
+  appStore.showSuccess('房间已完成排空并暂停')
+  await Promise.all([loadListings(), refreshRoomLifecycleState()])
+  const refreshedListing = listings.value.find(item => item.id === operation.listing_id)
+  if (refreshedListing) roomLifecycleListing.value = refreshedListing
 }
 
 async function startOAuth(): Promise<void> {
@@ -6681,33 +9043,61 @@ async function submitOAuth(): Promise<void> {
       min_balance_required: Number(createForm.min_balance_required)
     }
     if (createPlatform.value === 'anthropic') {
-      await accountShareAPI.exchangeAnthropicCode({
+      const exchangePayload = {
         ...payload,
         anthropic_5h_limit_percent: Number(createForm.anthropic_5h_limit_percent),
         anthropic_7d_limit_percent: Number(createForm.anthropic_7d_limit_percent)
-      })
+      }
+      const idempotencyKey = getStableIdempotencyKey(
+        oauthExchangeIntent,
+        'account-share-oauth-anthropic',
+        { platform: 'anthropic', payload: exchangePayload }
+      )
+      await accountShareAPI.exchangeAnthropicCode(exchangePayload, idempotencyKey)
     } else {
-      await accountShareAPI.exchangeOpenAICode({
+      const exchangePayload = {
         ...payload,
         state: oauthState,
         codex_cli_only: createForm.codex_cli_only,
         codex_5h_limit_percent: Number(createForm.codex_5h_limit_percent),
         codex_7d_limit_percent: Number(createForm.codex_7d_limit_percent)
-      })
+      }
+      const idempotencyKey = getStableIdempotencyKey(
+        oauthExchangeIntent,
+        'account-share-oauth-openai',
+        { platform: 'openai', payload: exchangePayload }
+      )
+      await accountShareAPI.exchangeOpenAICode(exchangePayload, idempotencyKey)
     }
+    clearStableIdempotencyIntent(oauthExchangeIntent)
     resetCreateForm()
     showCreate.value = false
+    createDraftBaseline.value = null
     await loadListings()
   } catch (error: unknown) {
-    createErrorMessage.value = extractApiErrorMessage(error, '创建共享账号失败')
+    createErrorMessage.value = extractApiErrorMessage(
+      error,
+      '创建账号房间失败',
+      accountShareRoomCreateErrorMessages
+    )
   } finally {
     creating.value = false
   }
 }
 
 async function joinUse(listing: AccountShareListing): Promise<void> {
-  if (joiningId.value === listing.id) return
+  if (
+    preparingJoinId.value !== null ||
+    joiningId.value !== null ||
+    pendingJoinConfirmation.value !== null
+  ) {
+    return
+  }
   errorMessage.value = ''
+  if (isListingMembershipEnding(listing)) {
+    showActionError('退出结算处理中，结算完成后才能重新加入或排队。', '暂时无法加入')
+    return
+  }
   if (isOwnListing(listing) && ownerSelfUseRateMultiplier.value === null) {
     showActionError(
       selfUseSettingsError.value || '全局自用抽成配置尚未加载，暂时不能使用自己的房间账号，请刷新后重试。',
@@ -6735,41 +9125,168 @@ async function joinUse(listing: AccountShareListing): Promise<void> {
     showActionError(idleTimeoutError, '空闲退出设置有误')
     return
   }
-  pendingJoinConfirmation.value = {
-    listing,
-    apiKeyID,
-    idleTimeoutMinutes: normalizeIdleTimeoutMinutes(idleTimeoutValue)
+
+  const idleTimeoutMinutes = normalizeIdleTimeoutMinutes(idleTimeoutValue)
+  const key = modeApiKeysForListing(listing).find(item => item.id === apiKeyID)
+  preparingJoinId.value = listing.id
+  joinIntentError.value = ''
+  try {
+    const intent = await requestJoinIntent(
+      listing.id,
+      apiKeyID,
+      idleTimeoutMinutes,
+      false
+    )
+    pendingJoinConfirmation.value = {
+      listingID: listing.id,
+      ownerSelfUse: isOwnListing(listing),
+      platform,
+      apiKeyID,
+      apiKeyLabel: key ? modeKeyLabel(key) : `Key #${apiKeyID}`,
+      idleTimeoutMinutes,
+      intent
+    }
+  } catch (error: unknown) {
+    showActionError(
+      extractApiErrorMessage(error, '获取最新加入条款失败，请稍后重试', accountShareJoinErrorMessages),
+      '暂时无法确认加入'
+    )
+  } finally {
+    if (preparingJoinId.value === listing.id) preparingJoinId.value = null
+  }
+}
+
+async function requestJoinIntent(
+  listingID: number,
+  apiKeyID: number,
+  idleTimeoutMinutes: number,
+  acceptQueue: boolean
+): Promise<AccountShareJoinIntent> {
+  const intent = await accountShareAPI.createJoinIntent(listingID, {
+    api_key_id: apiKeyID,
+    idle_timeout_minutes: idleTimeoutMinutes,
+    accept_queue: acceptQueue
+  })
+  const terms = intent?.terms
+  const expectedVersion = Number(intent?.expected_version || 0)
+  const expectedRevisionID = Number(intent?.expected_revision_id || 0)
+  const termsVersion = Number(terms?.row_version || 0)
+  const termsRevisionID = Number(terms?.listing_revision_id || 0)
+  const expiresAtMs = Date.parse(intent?.expires_at || '')
+  if (
+    Number(intent?.listing_id || 0) !== listingID ||
+    Number(intent?.api_key_id || 0) !== apiKeyID ||
+    intent?.accept_queue !== acceptQueue ||
+    typeof intent?.token !== 'string' ||
+    !intent.token.trim() ||
+    expectedVersion <= 0 ||
+    !Number.isSafeInteger(expectedVersion) ||
+    !Number.isSafeInteger(expectedRevisionID) ||
+    expectedRevisionID < 0 ||
+    !terms ||
+    termsVersion !== expectedVersion ||
+    termsRevisionID !== expectedRevisionID ||
+    !Array.isArray(terms.allowed_models) ||
+    !Number.isFinite(expiresAtMs) ||
+    expiresAtMs <= Date.now()
+  ) {
+    throw new Error('服务端返回的加入确认条款不完整或已经失效，请刷新后重试')
+  }
+  return {
+    ...intent,
+    token: intent.token.trim(),
+    expected_version: expectedVersion,
+    expected_revision_id: expectedRevisionID,
+    terms: {
+      ...terms,
+      row_version: termsVersion,
+      listing_revision_id: termsRevisionID,
+      allowed_models: [...terms.allowed_models]
+    }
   }
 }
 
 function closeJoinConfirmation(): void {
-  const listingID = pendingJoinConfirmation.value?.listing.id
-  if (listingID && joiningId.value === listingID) return
+  if (joinDialogBusy.value) return
   pendingJoinConfirmation.value = null
+  joinIntentError.value = ''
+}
+
+async function updatePendingJoinQueueAcceptance(event: Event): Promise<void> {
+  const checkbox = event.target as HTMLInputElement | null
+  const pendingJoin = pendingJoinConfirmation.value
+  if (!checkbox || !pendingJoin || joinDialogBusy.value) {
+    if (checkbox && pendingJoin) checkbox.checked = pendingJoin.intent.accept_queue
+    return
+  }
+
+  const acceptQueue = checkbox.checked
+  if (acceptQueue === pendingJoin.intent.accept_queue) return
+  refreshingJoinIntent.value = true
+  joinIntentError.value = ''
+  try {
+    const intent = await requestJoinIntent(
+      pendingJoin.listingID,
+      pendingJoin.apiKeyID,
+      pendingJoin.idleTimeoutMinutes,
+      acceptQueue
+    )
+    if (pendingJoinConfirmation.value !== pendingJoin) return
+    pendingJoinConfirmation.value = {
+      ...pendingJoin,
+      intent
+    }
+  } catch (error: unknown) {
+    checkbox.checked = pendingJoin.intent.accept_queue
+    joinIntentError.value = extractApiErrorMessage(
+      error,
+      '更新排队选择失败，原确认条款未改变，请重试'
+    )
+  } finally {
+    refreshingJoinIntent.value = false
+  }
 }
 
 async function confirmJoinUse(): Promise<void> {
   const pendingJoin = pendingJoinConfirmation.value
-  if (!pendingJoin || joiningId.value === pendingJoin.listing.id) return
-  if (listingEditLocked(pendingJoin.listing)) {
-    pendingJoinConfirmation.value = null
-    showActionError('账号配置正在编辑中，暂时不能加入使用。', '无法加入使用')
+  if (!pendingJoin || joinDialogBusy.value) return
+  if (Date.parse(pendingJoin.intent.expires_at) <= Date.now()) {
+    await invalidateJoinConfirmation('加入确认已过期，房间状态已刷新，请重新点击加入并确认最新条款。')
+    return
+  }
+  if (pendingJoin.intent.queue_may_be_required && !pendingJoin.intent.accept_queue) {
+    joinIntentError.value = '当前状态可能需要预约，请先明确勾选“同意进入预约队列”。'
     return
   }
   await submitJoinUse(pendingJoin)
 }
 
+async function invalidateJoinConfirmation(message: string): Promise<void> {
+  pendingJoinConfirmation.value = null
+  joinIntentError.value = ''
+  const refreshed = await loadListings()
+  showActionError(
+    refreshed ? message : `${message} 列表刷新失败，请先点击页面顶部“刷新”。`,
+    '请重新确认加入'
+  )
+}
+
 async function submitJoinUse(pendingJoin: PendingJoinConfirmation): Promise<void> {
-  const { listing, apiKeyID, idleTimeoutMinutes } = pendingJoin
-  joiningId.value = listing.id
+  const { listingID, apiKeyID, idleTimeoutMinutes, intent } = pendingJoin
+  joiningId.value = listingID
   let joinSucceeded = false
   try {
-    const membership = await accountShareAPI.joinListing(listing.id, {
+    const membership = await accountShareAPI.joinListing(listingID, {
       api_key_id: apiKeyID,
-      idle_timeout_minutes: idleTimeoutMinutes
+      idle_timeout_minutes: idleTimeoutMinutes,
+      intent_token: intent.token,
+      expected_version: intent.expected_version,
+      expected_revision_id: intent.expected_revision_id,
+      accept_queue: intent.accept_queue
     })
     joinSucceeded = true
     pendingJoinConfirmation.value = null
+    joinIntentError.value = ''
     const successMessage = membership.status === 'queued'
       ? '预约已成功；下一次使用该 Key 发出 API 请求时会按顺序尝试激活'
       : '加入已成功'
@@ -6781,11 +9298,26 @@ async function submitJoinUse(pendingJoin: PendingJoinConfirmation): Promise<void
       appStore.showWarning(`${actionLabel}已成功，但状态刷新失败；记录已经创建，请稍后点击页面顶部“刷新”确认状态。`)
     }
   } catch (error: unknown) {
-    pendingJoinConfirmation.value = null
     if (joinSucceeded) {
+      pendingJoinConfirmation.value = null
       appStore.showWarning('预约或加入已成功，但状态刷新时发生异常；记录已经创建，请稍后点击页面顶部“刷新”确认状态。')
     } else {
-      showActionError(extractApiErrorMessage(error, '加入使用失败', accountShareJoinErrorMessages), '加入使用失败')
+      const errorCode = extractApiErrorCode(error)
+      if (
+        errorCode === 'ACCOUNT_SHARE_JOIN_INTENT_INVALID' ||
+        errorCode === 'ACCOUNT_SHARE_JOIN_INTENT_CONSUMED' ||
+        errorCode === 'ACCOUNT_SHARE_JOIN_TERMS_CHANGED' ||
+        errorCode === 'ACCOUNT_SHARE_QUEUE_CONFIRMATION_REQUIRED'
+      ) {
+        const message = errorCode === 'ACCOUNT_SHARE_QUEUE_CONFIRMATION_REQUIRED'
+          ? '房间席位刚刚发生变化，现在需要进入预约队列。请重新点击加入，并明确勾选同意排队。'
+          : '房间条款或确认令牌已经变化，旧确认已关闭。请重新点击加入并确认最新条款。'
+        await invalidateJoinConfirmation(message)
+      } else {
+        pendingJoinConfirmation.value = null
+        joinIntentError.value = ''
+        showActionError(extractApiErrorMessage(error, '加入使用失败', accountShareJoinErrorMessages), '加入使用失败')
+      }
     }
   } finally {
     joiningId.value = null
@@ -6794,7 +9326,13 @@ async function submitJoinUse(pendingJoin: PendingJoinConfirmation): Promise<void
 
 function openEndUseConfirm(listing: AccountShareListing): void {
   const membershipID = Number(listing.queue_membership_id || listing.current_membership_id || 0)
-  if (membershipID <= 0 || endingId.value !== null) return
+  if (
+    membershipID <= 0
+    || endingId.value !== null
+    || isListingMembershipEnding(listing)
+  ) {
+    return
+  }
   pendingEndUse.value = {
     membershipID,
     apiKeyID: listing.queue_api_key_id || listing.current_api_key_id,
@@ -6802,6 +9340,105 @@ function openEndUseConfirm(listing: AccountShareListing): void {
     status: listing.queue_status || (listing.current_membership_id ? 'active' : ''),
     listing
   }
+}
+
+async function pollPendingMembershipEndOperations(): Promise<PendingMembershipEnd[]> {
+  const requestSeq = membershipEndOperationRequestSeq
+  const entries = Object.values(pendingMembershipEnds.value)
+    .filter(pendingMembershipEndIsPollable)
+  if (entries.length === 0) return []
+
+  const results = await Promise.all(entries.map(async (entry): Promise<PendingMembershipEnd | null> => {
+    const previousController = membershipEndOperationControllers.get(entry.listingID)
+    previousController?.abort()
+    const controller = new AbortController()
+    membershipEndOperationControllers.set(entry.listingID, controller)
+    try {
+      const operation = await accountShareAPI.getRoomOperation(entry.operationID, {
+        signal: controller.signal
+      })
+      const current = pendingMembershipEnds.value[entry.listingID]
+      if (
+        controller.signal.aborted
+        || requestSeq !== membershipEndOperationRequestSeq
+        || !current
+        || current.operationID !== entry.operationID
+      ) {
+        return null
+      }
+      updatePendingMembershipEndOperation(entry.listingID, operation)
+      if (operation.status !== 'succeeded') return null
+
+      const resultStatus = String(operation.result?.status || '')
+      if (resultStatus !== 'ended') {
+        pendingMembershipEnds.value = {
+          ...pendingMembershipEnds.value,
+          [entry.listingID]: {
+            ...current,
+            operationStatus: 'failed',
+            operationError: '退出操作返回了不完整的完成状态，请联系管理员核对。'
+          }
+        }
+        return null
+      }
+
+      const removed = removePendingMembershipEnd(entry.listingID)
+      if (!removed) return null
+      return {
+        ...removed,
+        membership: {
+          ...removed.membership,
+          status: 'ended' as const,
+          ended_at: typeof operation.result?.ended_at === 'string'
+            ? operation.result.ended_at
+            : operation.completed_at,
+          settlement_status: typeof operation.result?.settlement_status === 'string'
+            ? operation.result.settlement_status
+            : 'settled',
+          updated_at: operation.updated_at
+        }
+      }
+    } catch (error: unknown) {
+      if (
+        controller.signal.aborted
+        || requestSeq !== membershipEndOperationRequestSeq
+        || isCanceledRequest(error)
+      ) {
+        return null
+      }
+      const current = pendingMembershipEnds.value[entry.listingID]
+      if (current?.operationID === entry.operationID) {
+        pendingMembershipEnds.value = {
+          ...pendingMembershipEnds.value,
+          [entry.listingID]: {
+            ...current,
+            operationError: extractApiErrorMessage(
+              error,
+              '查询退出结算进度失败，系统会继续重试。',
+              ROOM_LIFECYCLE_ERROR_MESSAGES
+            )
+          }
+        }
+      }
+      return null
+    } finally {
+      if (membershipEndOperationControllers.get(entry.listingID) === controller) {
+        membershipEndOperationControllers.delete(entry.listingID)
+      }
+    }
+  }))
+
+  const completed = results.filter(
+    (item): item is PendingMembershipEnd => item !== null
+  )
+  if (completed.length > 0) {
+    appStore.showSuccess(
+      completed.length === 1
+        ? '退出与结算已完成'
+        : `${completed.length} 个退出与结算任务已完成`
+    )
+  }
+  return completed
 }
 
 function cancelEndUse(): void {
@@ -6815,7 +9452,12 @@ async function confirmEndUse(): Promise<void> {
   if (!pending || !membershipID || endingId.value !== null) return
   const membership = await endUse(pending)
   if (pendingEndUse.value === pending) pendingEndUse.value = null
-  if (pending && membership && pending.status !== 'queued' && membership.last_request_at) {
+  if (
+    pending
+    && membership?.status === 'ended'
+    && pending.status !== 'queued'
+    && membership.last_request_at
+  ) {
     openReviewDialog(pending.listing, membership)
   }
 }
@@ -6829,12 +9471,25 @@ async function endUse(pending: PendingEndUseState): Promise<AccountShareMembersh
     const intent = await accountShareAPI.createEndMembershipIntent(membershipID)
     const membership = await accountShareAPI.endMembership(membershipID, intent.token)
     endSucceeded = true
+    if (membership.status === 'ending') {
+      setPendingMembershipEnd(pending, membership)
+    } else if (membership.status === 'ended') {
+      removePendingMembershipEnd(pending.listing.id)
+    }
     if (pendingEndUse.value === pending) pendingEndUse.value = null
-    const successMessage = pending.status === 'queued' ? '已移出预约' : '已结束使用'
+    const successMessage = pending.status === 'queued'
+      ? '已移出预约'
+      : membership.status === 'ending'
+        ? '退出请求已受理，正在释放请求并完成结算'
+        : '已结束使用'
     const refreshed = await loadListings()
     const resolutionRefreshed = !isKeyResolutionMode.value || await loadKeyResolutionState()
     if (refreshed && resolutionRefreshed) {
-      appStore.showSuccess(successMessage)
+      if (membership.status === 'ending' && !membership.ending_operation_id) {
+        appStore.showWarning(`${successMessage}，但进度标识缺失；请刷新状态并联系管理员。`)
+      } else {
+        appStore.showSuccess(successMessage)
+      }
     } else {
       appStore.showWarning(`${successMessage}，但状态刷新失败；请稍后点击页面顶部“刷新”确认状态。`)
     }
@@ -6852,9 +9507,30 @@ async function endUse(pending: PendingEndUseState): Promise<AccountShareMembersh
 }
 
 function openReviewDialog(listing: AccountShareListing, membership: AccountShareMembership): void {
+  clearStableIdempotencyIntent(reviewSubmitIntent)
   pendingReview.value = {
     membershipID: membership.id,
-    listing,
+    platformLabel: platformLabel(listingPlatform(listing)),
+    roomName: listingDisplayName(listing),
+    ownerName: ownerDisplayName(listing),
+    score: null,
+    comment: '',
+    submitting: false,
+    error: ''
+  }
+}
+
+function openHistoryReviewDialog(entry: AccountShareMembershipHistoryEntry): void {
+  if (entry.review || entry.usage_request_count <= 0) return
+  clearStableIdempotencyIntent(reviewSubmitIntent)
+  const normalizedPlatform = entry.platform.trim().toLowerCase()
+  pendingReview.value = {
+    membershipID: entry.membership_id,
+    platformLabel: normalizedPlatform === 'openai' || normalizedPlatform === 'anthropic'
+      ? platformLabel(normalizedPlatform)
+      : (entry.platform.trim() || '未知平台'),
+    roomName: entry.room_name.trim() || `房间 #${entry.listing_id}`,
+    ownerName: entry.owner_username?.trim() || (entry.owner_user_id > 0 ? `用户 #${entry.owner_user_id}` : '历史号主'),
     score: null,
     comment: '',
     submitting: false,
@@ -6864,6 +9540,7 @@ function openReviewDialog(listing: AccountShareListing, membership: AccountShare
 
 function closeReviewDialog(): void {
   if (pendingReview.value?.submitting) return
+  clearStableIdempotencyIntent(reviewSubmitIntent)
   pendingReview.value = null
 }
 
@@ -6877,12 +9554,19 @@ async function submitReview(): Promise<void> {
   state.submitting = true
   state.error = ''
   try {
-    await accountShareAPI.submitReview(state.membershipID, {
+    const payload = {
       score: state.score,
       comment: state.comment.trim() || undefined
-    })
+    }
+    const idempotencyKey = getStableIdempotencyKey(
+      reviewSubmitIntent,
+      `account-share-review-${state.membershipID}`,
+      { membershipID: state.membershipID, payload }
+    )
+    await accountShareAPI.submitReview(state.membershipID, payload, idempotencyKey)
+    clearStableIdempotencyIntent(reviewSubmitIntent)
     pendingReview.value = null
-    await loadListings()
+    await loadCurrentView()
     appStore.showSuccess(state.comment.trim() ? '评分已提交，评论审核通过后展示' : '评分已提交')
   } catch (error: unknown) {
     state.error = extractApiErrorMessage(error, '提交评分失败', {
@@ -6917,33 +9601,6 @@ async function saveIdleTimeout(listing: AccountShareListing): Promise<void> {
   } finally {
     savingIdleTimeoutId.value = null
   }
-}
-
-async function updateManagedListingStatus(listing: AccountShareListing, status: AccountShareListingStatus): Promise<void> {
-  if (listing.status === status) return
-  const ownerRelist = canOwnerRelistListing(listing) && status === 'active'
-  errorMessage.value = ''
-  managingId.value = listing.id
-  try {
-    const updated = await accountShareAPI.updateListing(listing.id, { status })
-    mergeKnownListings([updated])
-    await loadListings()
-    appStore.showSuccess(ownerRelist ? '自动测试通过，账号已重新上架' : '账号状态已更新')
-  } catch (error: unknown) {
-    showActionError(
-      extractApiErrorMessage(error, ownerRelist ? '自动测试失败，账号未重新上架' : '更新账号状态失败'),
-      ownerRelist ? '重新上架失败' : '更新账号状态失败'
-    )
-  } finally {
-    managingId.value = null
-  }
-}
-
-function closeModelEditDialog(): void {
-  if (savingModelsId.value !== null) return
-  showModelEditDialog.value = false
-  editingModelListing.value = null
-  editingAllowedModels.value = []
 }
 
 function mergeListingUpdate(updated: AccountShareListing): void {
@@ -7000,11 +9657,24 @@ async function renewConfigEditSession(): Promise<void> {
   const listing = editingConfigListing.value
   const sessionID = editSessionID.value
   if (!listing || !sessionID) return
+  const generation = editSessionGeneration
   try {
-    const updated = await accountShareAPI.beginListingEdit(listing.id, {
+    const payload = {
       session_id: sessionID,
-      force: editForceActive.value
-    })
+      ...(editForceActive.value && authStore.isAdmin ? { force: true } : {})
+    }
+    const updated = await accountShareAPI.beginListingEdit(
+      listing.id,
+      payload,
+      `account-share-edit-renew-${listing.id}-${createSecureRequestID()}`
+    )
+    if (
+      generation !== editSessionGeneration
+      || editingConfigListing.value?.id !== listing.id
+      || editSessionID.value !== sessionID
+    ) {
+      return
+    }
     mergeListingUpdate(updated)
     editSessionID.value = updated.edit_session_id || sessionID
   } catch (error: unknown) {
@@ -7018,7 +9688,13 @@ async function releaseConfigEditSession(showError = false): Promise<boolean> {
   const sessionID = editSessionID.value
   if (!listing || !sessionID) return true
   try {
-    const updated = await accountShareAPI.releaseListingEdit(listing.id, sessionID)
+    const idempotencyKey = getStableIdempotencyKey(
+      releaseEditIntent,
+      `account-share-edit-release-${listing.id}`,
+      { listingID: listing.id, sessionID }
+    )
+    const updated = await accountShareAPI.releaseListingEdit(listing.id, sessionID, idempotencyKey)
+    clearStableIdempotencyIntent(releaseEditIntent)
     mergeListingUpdate(updated)
     return true
   } catch (error: unknown) {
@@ -7030,18 +9706,29 @@ async function releaseConfigEditSession(showError = false): Promise<boolean> {
 }
 
 function resetConfigEditState(): void {
+  editSessionGeneration += 1
+  clearStableIdempotencyIntent(beginEditIntent)
+  clearStableIdempotencyIntent(releaseEditIntent)
+  clearStableIdempotencyIntent(updateListingIntent)
   showConfigEditDialog.value = false
   editingConfigListing.value = null
   editAllowedModels.value = []
   editSessionID.value = ''
   editForceActive.value = false
+  editReason.value = ''
   editErrorMessage.value = ''
+  editVersionConflict.value = false
   releasingConfigEdit.value = false
+  configDraftBaseline.value = null
   Object.assign(editForm, buildDefaultCreateForm())
 }
 
-async function closeConfigEditDialog(): Promise<void> {
+async function closeConfigEditDialog(discardConfirmed = false): Promise<void> {
   if (savingConfigEdit.value || releasingConfigEdit.value) return
+  if (!discardConfirmed && configDraftHasChanges()) {
+    pendingDraftDiscardTarget.value = 'config'
+    return
+  }
   stopEditSessionRenewal()
   releasingConfigEdit.value = true
   const released = await releaseConfigEditSession(true)
@@ -7053,59 +9740,165 @@ async function closeConfigEditDialog(): Promise<void> {
   resetConfigEditState()
 }
 
-async function openConfigEditDialog(listing: AccountShareListing, force: boolean): Promise<void> {
+function isForceEditRequiredError(error: unknown): boolean {
+  const code = extractApiErrorCode(error)
+  return code === 'ACCOUNT_SHARE_ROOM_UPDATE_REQUIRES_PAUSED'
+    || code === 'ACCOUNT_SHARE_LISTING_IN_USE'
+}
+
+function prepareForceEdit(
+  listing: AccountShareListing,
+  state: AccountShareRoomManagementState | null = null
+): void {
+  pendingForceEditListing.value = listing
+  pendingForceEditManagementState.value = state
+  forceEditReason.value = ''
+  forceEditConfirmed.value = false
+}
+
+function ownerEditBlockedMessage(state: AccountShareRoomManagementState | null): string {
+  const blockers = state ? roomEditBlockerLabels(state) : []
+  const detail = blockers.length > 0 ? ` 当前阻塞项：${blockers.join('、')}。` : ''
+  return `房主只能编辑已暂停且没有正在使用、排队、结束中、请求中、结算中或其他编辑会话的房间。${detail}请先在“房间管理”执行排空并等待完成。`
+}
+
+async function openConfigEditDialog(
+  listing: AccountShareListing,
+  force: boolean,
+  forceReason = ''
+): Promise<void> {
+  if (force && !authStore.isAdmin) {
+    showActionError('只有管理员可以强制编辑房间配置。', '无权强制编辑')
+    return
+  }
+  if (listing.deleted) {
+    showActionError('已删除房间只能查看历史快照，不能再编辑配置。', '房间已删除')
+    return
+  }
   errorMessage.value = ''
   editErrorMessage.value = ''
+  editVersionConflict.value = false
   managedActionId.value = listing.id
   try {
     await loadListingNameIndex(false)
-    const updated = await accountShareAPI.beginListingEdit(listing.id, {
+    const editSessionPayload = {
       session_id: listing.editing_mine ? listing.edit_session_id : undefined,
-      force
-    })
+      ...(force ? { force: true } : {})
+    }
+    const idempotencyKey = getStableIdempotencyKey(
+      beginEditIntent,
+      `account-share-edit-begin-${listing.id}`,
+      { listingID: listing.id, payload: editSessionPayload }
+    )
+    const updated = await accountShareAPI.beginListingEdit(
+      listing.id,
+      editSessionPayload,
+      idempotencyKey
+    )
+    clearStableIdempotencyIntent(beginEditIntent)
     if (!updated.edit_session_id) {
       throw new Error('服务端未返回编辑会话，请刷新后重试')
+    }
+    if (!Number.isSafeInteger(Number(updated.row_version)) || Number(updated.row_version) <= 0) {
+      throw new Error('服务端未返回有效的房间版本，请刷新后重试')
     }
     mergeListingUpdate(updated)
     editingConfigListing.value = updated
     editSessionID.value = updated.edit_session_id
     editForceActive.value = force
+    editReason.value = force ? forceReason.trim() : ''
     populateEditForm(updated)
+    editSessionGeneration += 1
+    captureConfigDraftBaseline()
     showConfigEditDialog.value = true
     startEditSessionRenewal()
   } catch (error: unknown) {
+    if (!force && isForceEditRequiredError(error)) {
+      if (authStore.isAdmin) {
+        prepareForceEdit(listing)
+      } else {
+        showActionError(ownerEditBlockedMessage(null), '请先排空并暂停房间')
+      }
+      return
+    }
     showActionError(extractApiErrorMessage(error, '打开编辑配置失败'), '打开编辑配置失败')
   } finally {
     managedActionId.value = null
   }
 }
 
-function requestOpenConfigEdit(listing: AccountShareListing): void {
-  if (managedActionId.value === listing.id) return
+async function requestOpenConfigEdit(listing: AccountShareListing): Promise<void> {
+  if (
+    managedActionId.value !== null
+    || showConfigEditDialog.value
+    || pendingForceEditListing.value !== null
+    || pendingDraftDiscardTarget.value !== null
+  ) {
+    return
+  }
+  if (listing.deleted) {
+    showActionError('已删除房间只能查看历史快照，不能再编辑配置。', '房间已删除')
+    return
+  }
   if (listingEditLockedByOther(listing)) {
     showActionError(listingEditLockLabel(listing), '暂时不能编辑')
     return
   }
-  if (Number(listing.active_seats || 0) > 0) {
-    if (authStore.isAdmin) {
-      pendingForceEditListing.value = listing
+
+  managedActionId.value = listing.id
+  try {
+    const state = await accountShareAPI.getRoomManagementState(listing.id)
+    if (state.listing_id !== listing.id) {
+      throw new Error('服务端返回了不匹配的房间管理状态，请刷新后重试')
+    }
+    if (state.blockers.runtime_dependency_unavailable) {
+      showActionError(
+        '当前无法确认房间内是否仍有运行中请求，请等待运行时状态恢复后再编辑。',
+        '暂时不能安全编辑'
+      )
       return
     }
-    showActionError(`当前有 ${listing.active_seats}/${listing.seat_limit} 个席位正在使用，全部结束后才能编辑账号配置。`, '暂时不能编辑')
-    return
+    const currentListing: AccountShareListing = {
+      ...listing,
+      row_version: state.row_version,
+      status: state.lifecycle_status,
+      seat_limit: state.seat_limit,
+      active_seats: state.active_seats
+    }
+    mergeListingUpdate(currentListing)
+    if (roomRequiresForceEdit(currentListing, state)) {
+      if (authStore.isAdmin) {
+        prepareForceEdit(currentListing, state)
+      } else {
+        showActionError(ownerEditBlockedMessage(state), '请先排空并暂停房间')
+      }
+      return
+    }
+    await openConfigEditDialog(currentListing, false)
+  } catch (error: unknown) {
+    showActionError(extractApiErrorMessage(error, '读取房间实时状态失败，请稍后重试'), '打开编辑配置失败')
+  } finally {
+    if (managedActionId.value === listing.id) managedActionId.value = null
   }
-  void openConfigEditDialog(listing, false)
 }
 
 function cancelForceEdit(): void {
+  clearStableIdempotencyIntent(beginEditIntent)
   pendingForceEditListing.value = null
+  pendingForceEditManagementState.value = null
+  forceEditReason.value = ''
+  forceEditConfirmed.value = false
 }
 
 function confirmForceEdit(): void {
   const listing = pendingForceEditListing.value
+  const reason = forceEditReason.value.trim()
+  if (!listing || !reason || !forceEditConfirmed.value || !authStore.isAdmin) return
   pendingForceEditListing.value = null
-  if (!listing) return
-  void openConfigEditDialog(listing, true)
+  pendingForceEditManagementState.value = null
+  forceEditReason.value = ''
+  forceEditConfirmed.value = false
+  void openConfigEditDialog(listing, true, reason)
 }
 
 async function saveConfigEdit(): Promise<void> {
@@ -7121,6 +9914,7 @@ async function saveConfigEdit(): Promise<void> {
   savingConfigEdit.value = true
   try {
     const payload: UpdateAccountShareListingRequest = {
+      expected_version: Number(listing.row_version),
       name: editForm.name.trim(),
       seat_limit: Number(editForm.seat_limit),
       rate_multiplier: Number(editForm.rate_multiplier),
@@ -7130,7 +9924,11 @@ async function saveConfigEdit(): Promise<void> {
       hourly_fee_waiver_minimum: Number(editForm.hourly_fee_waiver_minimum),
       min_balance_required: Number(editForm.min_balance_required),
       edit_session_id: editSessionID.value,
-      force_active_edit: editForceActive.value
+      reason: editReason.value.trim()
+    }
+    if (editForceActive.value && authStore.isAdmin) {
+      payload.force_active_edit = true
+      payload.confirmed = true
     }
     if (listingPlatform(listing) === 'openai') {
       payload.codex_cli_only = editForm.codex_cli_only
@@ -7140,50 +9938,55 @@ async function saveConfigEdit(): Promise<void> {
       payload.anthropic_5h_limit_percent = Number(editForm.anthropic_5h_limit_percent)
       payload.anthropic_7d_limit_percent = Number(editForm.anthropic_7d_limit_percent)
     }
-    const updated = await accountShareAPI.updateListing(listing.id, payload)
+    const idempotencyKey = getStableIdempotencyKey(
+      updateListingIntent,
+      `account-share-listing-update-${listing.id}`,
+      { listingID: listing.id, payload }
+    )
+    const updated = await accountShareAPI.updateListing(listing.id, payload, idempotencyKey)
+    clearStableIdempotencyIntent(updateListingIntent)
     stopEditSessionRenewal()
     mergeListingUpdate(updated)
     await loadListings()
     appStore.showSuccess('房间配置已更新')
     resetConfigEditState()
   } catch (error: unknown) {
-    editErrorMessage.value = extractApiErrorMessage(error, '保存房间配置失败')
+    if (extractApiErrorCode(error) === 'ACCOUNT_SHARE_ROOM_VERSION_CONFLICT') {
+      editVersionConflict.value = true
+      editErrorMessage.value = '房间配置已被更新，请刷新后重新编辑'
+      stopEditSessionRenewal()
+    } else {
+      editErrorMessage.value = extractApiErrorMessage(error, '保存房间配置失败', {
+        ACCOUNT_SHARE_ROOM_UPDATE_REASON_REQUIRED: '请填写本次房间配置修改原因',
+        ACCOUNT_SHARE_ROOM_FORCE_REASON_REQUIRED: '管理员强制修改原因不能为空',
+        ACCOUNT_SHARE_ROOM_FORCE_CONFIRMATION_REQUIRED: '管理员强制修改必须完成明确确认'
+      })
+    }
   } finally {
     savingConfigEdit.value = false
   }
 }
 
-function openModelEditDialog(listing: AccountShareListing): void {
-  errorMessage.value = ''
-  editingModelListing.value = listing
-  editingAllowedModels.value = [...listing.allowed_models]
-  showModelEditDialog.value = true
-}
-
-async function saveModelEdit(): Promise<void> {
-  const listing = editingModelListing.value
-  if (!listing) return
-  const nextModels = normalizeAllowedModelList(editingAllowedModels.value)
-  if (nextModels.length === 0) {
-    showActionError('至少保留一个可用模型。', '模型白名单有误')
+async function reloadConfigEditAfterConflict(): Promise<void> {
+  const listingID = editingConfigListing.value?.id
+  if (!listingID || savingConfigEdit.value || releasingConfigEdit.value) return
+  stopEditSessionRenewal()
+  releasingConfigEdit.value = true
+  const released = await releaseConfigEditSession(false)
+  releasingConfigEdit.value = false
+  if (!released) {
+    editErrorMessage.value = '释放旧编辑会话失败，请稍后重试'
     return
   }
-
-  errorMessage.value = ''
-  savingModelsId.value = listing.id
-  try {
-    const updated = await accountShareAPI.updateListing(listing.id, { allowed_models: nextModels })
-    mergeKnownListings([updated])
-    await loadListings()
-    appStore.showSuccess('模型已更新')
-    showModelEditDialog.value = false
-    editingModelListing.value = null
-    editingAllowedModels.value = []
-  } catch (error: unknown) {
-    showActionError(extractApiErrorMessage(error, '更新模型失败'), '更新模型失败')
-  } finally {
-    savingModelsId.value = null
+  resetConfigEditState()
+  await loadListings()
+  const refreshed = listings.value.find((item) => item.id === listingID)
+    || knownListings.value.find((item) => item.id === listingID)
+  if (!refreshed) {
+    showActionError('房间已不存在或当前列表无法访问，请刷新页面后重试。', '无法重新编辑')
+    return
   }
+  requestOpenConfigEdit(refreshed)
 }
 
 function copyModelName(model: string): void {
@@ -7191,17 +9994,14 @@ function copyModelName(model: string): void {
 }
 
 watch(
-  () => [selectedOwnedAccount.value, createForm.seat_limit] as const,
-  ([account]) => {
+  () => selectedOwnedAccount.value,
+  (account) => {
     if (!account) return
     createForm.concurrency = account.concurrency
-    const maximum = calculateMaxPerUserConcurrency(account.concurrency, createForm.seat_limit)
-    if (maximum > 0) {
-      createForm.per_user_concurrency = Math.min(
-        Math.max(1, Number(createForm.per_user_concurrency) || 1),
-        maximum
-      )
-    }
+    createForm.per_user_concurrency = Math.min(
+      Math.max(1, Number(createForm.per_user_concurrency) || 1),
+      MAX_PER_USER_CONCURRENCY
+    )
   },
   { immediate: true }
 )
@@ -7225,6 +10025,7 @@ watch(searchQuery, () => {
   }
   clearSearchDebounceTimer()
   searchDebounceTimer = window.setTimeout(() => {
+    if (isMembershipHistoryView.value) return
     pagination.page = 1
     persistListingPreferences()
     void loadListings()
@@ -7279,11 +10080,12 @@ onMounted(async () => {
   try {
     prepareKeyResolutionMode()
     const initializationTasks: Promise<unknown>[] = [
-      loadListings(),
+      loadCurrentView(),
       loadModeKeys(),
       loadProxies(),
       loadListingNameIndex(),
-      loadSelfUseCommissionRate()
+      loadSelfUseCommissionRate(),
+      loadCapabilities()
     ]
     if (isKeyResolutionMode.value) initializationTasks.push(loadKeyResolutionState())
     await Promise.all(initializationTasks)
@@ -7303,16 +10105,374 @@ onBeforeUnmount(() => {
   clearSearchDebounceTimer()
   clearMembershipStatusRefreshTimer()
   abortActiveListingsRequest()
+  abortMembershipHistoryRequest()
   abortMySpendAccountsRequest()
   abortMySpendRequest()
+  roomLifecycleStateRequestSeq += 1
+  roomLifecycleStateController?.abort()
+  roomLifecycleStateController = null
+  stopRoomLifecycleOperationPolling()
+  roomLifecycleListing.value = null
+  roomLifecycleState.value = null
+  roomLifecycleOperation.value = null
   modeKeysRequestSeq += 1
   keyResolutionRequestSeq += 1
+  membershipEndOperationRequestSeq += 1
+  for (const controller of membershipEndOperationControllers.values()) {
+    controller.abort()
+  }
+  membershipEndOperationControllers.clear()
   stopEditSessionRenewal()
   void releaseConfigEditSession()
 })
 </script>
 
 <style scoped>
+.room-lifecycle-dialog {
+  display: grid;
+  min-width: 0;
+  gap: 1rem;
+}
+
+.room-lifecycle-state-message,
+.room-lifecycle-alert,
+.room-lifecycle-operation {
+  display: flex;
+  min-width: 0;
+  gap: 0.75rem;
+  border: 1px solid rgb(226 232 240);
+  border-radius: 0.75rem;
+  padding: 0.875rem;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.room-lifecycle-state-message {
+  align-items: center;
+  color: rgb(71 85 105);
+  background: rgb(248 250 252);
+}
+
+.room-lifecycle-alert strong,
+.room-lifecycle-operation strong {
+  display: block;
+  color: rgb(15 23 42);
+}
+
+.room-lifecycle-alert p,
+.room-lifecycle-operation p {
+  margin-top: 0.25rem;
+}
+
+.room-lifecycle-alert code,
+.room-lifecycle-operation code {
+  display: block;
+  margin-top: 0.375rem;
+  overflow-wrap: anywhere;
+  color: currentColor;
+  font-size: 0.75rem;
+}
+
+.room-lifecycle-alert-danger {
+  border-color: rgb(254 202 202);
+  color: rgb(185 28 28);
+  background: rgb(254 242 242);
+}
+
+.room-lifecycle-alert-warning {
+  border-color: rgb(253 230 138);
+  color: rgb(146 64 14);
+  background: rgb(255 251 235);
+}
+
+.room-lifecycle-alert-success {
+  border-color: rgb(167 243 208);
+  color: rgb(4 120 87);
+  background: rgb(236 253 245);
+}
+
+.room-lifecycle-overview,
+.room-lifecycle-confirm-panel {
+  min-width: 0;
+  border: 1px solid rgb(226 232 240);
+  border-radius: 0.875rem;
+  padding: 1rem;
+  background: rgb(255 255 255);
+}
+
+.room-lifecycle-overview-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.room-lifecycle-eyebrow {
+  display: block;
+  color: rgb(100 116 139);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.room-lifecycle-version {
+  flex-shrink: 0;
+  border-radius: 9999px;
+  padding: 0.3rem 0.625rem;
+  color: rgb(71 85 105);
+  background: rgb(241 245 249);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.room-lifecycle-status-reason {
+  margin-top: 0.75rem;
+  color: rgb(71 85 105);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.room-lifecycle-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.625rem;
+  margin-top: 1rem;
+}
+
+.room-lifecycle-metrics > div {
+  min-width: 0;
+  border-radius: 0.625rem;
+  padding: 0.75rem;
+  background: rgb(248 250 252);
+}
+
+.room-lifecycle-metrics span,
+.room-lifecycle-metrics strong {
+  display: block;
+}
+
+.room-lifecycle-metrics span {
+  color: rgb(100 116 139);
+  font-size: 0.75rem;
+}
+
+.room-lifecycle-metrics strong {
+  margin-top: 0.25rem;
+  color: rgb(15 23 42);
+  font-size: 1rem;
+}
+
+.room-lifecycle-operation {
+  color: rgb(30 64 175);
+  background: rgb(239 246 255);
+  border-color: rgb(191 219 254);
+}
+
+.room-lifecycle-action-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.625rem;
+}
+
+.room-lifecycle-action-card {
+  display: flex;
+  min-height: 3.25rem;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 0.75rem;
+  border: 1px solid rgb(226 232 240);
+  border-radius: 0.75rem;
+  padding: 0.875rem;
+  color: rgb(51 65 85);
+  background: rgb(255 255 255);
+  text-align: left;
+  transition: border-color 160ms ease, background-color 160ms ease, transform 160ms ease;
+}
+
+.room-lifecycle-action-card:hover {
+  border-color: rgb(129 140 248);
+  background: rgb(248 250 252);
+  transform: translateY(-1px);
+}
+
+.room-lifecycle-action-card:focus-visible {
+  outline: 2px solid rgb(99 102 241 / 0.55);
+  outline-offset: 2px;
+}
+
+.room-lifecycle-action-card > span {
+  min-width: 0;
+}
+
+.room-lifecycle-action-card strong,
+.room-lifecycle-action-card small {
+  display: block;
+}
+
+.room-lifecycle-action-card strong {
+  color: rgb(15 23 42);
+  font-size: 0.875rem;
+}
+
+.room-lifecycle-action-card small {
+  margin-top: 0.2rem;
+  color: rgb(100 116 139);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.room-lifecycle-action-card-danger {
+  border-color: rgb(254 202 202);
+  color: rgb(220 38 38);
+}
+
+.room-lifecycle-action-card-danger:hover {
+  border-color: rgb(248 113 113);
+  background: rgb(254 242 242);
+}
+
+.room-lifecycle-confirm-panel h4 {
+  margin-top: 0.375rem;
+  color: rgb(15 23 42);
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.room-lifecycle-confirm-panel > p {
+  margin-top: 0.5rem;
+  color: rgb(71 85 105);
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.room-lifecycle-confirm-panel > .room-lifecycle-alert,
+.room-lifecycle-confirm-panel > .field,
+.room-lifecycle-confirm-panel > .room-lifecycle-state-message {
+  margin-top: 1rem;
+}
+
+.room-lifecycle-blocker-list {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.875rem;
+}
+
+.room-lifecycle-blocker-list li {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border-radius: 0.625rem;
+  padding: 0.625rem 0.75rem;
+  color: rgb(71 85 105);
+  background: rgb(248 250 252);
+  font-size: 0.875rem;
+}
+
+.room-lifecycle-blocker-list strong {
+  overflow-wrap: anywhere;
+  color: rgb(185 28 28);
+  text-align: right;
+}
+
+.room-lifecycle-muted-note {
+  color: rgb(100 116 139);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.room-lifecycle-footer {
+  display: grid;
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.625rem;
+}
+
+.dark .room-lifecycle-state-message,
+.dark .room-lifecycle-overview,
+.dark .room-lifecycle-confirm-panel,
+.dark .room-lifecycle-action-card {
+  border-color: rgb(51 65 85);
+  background: rgb(15 23 42);
+}
+
+.dark .room-lifecycle-state-message,
+.dark .room-lifecycle-status-reason,
+.dark .room-lifecycle-confirm-panel > p,
+.dark .room-lifecycle-action-card,
+.dark .room-lifecycle-action-card small,
+.dark .room-lifecycle-muted-note {
+  color: rgb(148 163 184);
+}
+
+.dark .room-lifecycle-alert strong,
+.dark .room-lifecycle-operation strong,
+.dark .room-lifecycle-metrics strong,
+.dark .room-lifecycle-action-card strong,
+.dark .room-lifecycle-confirm-panel h4 {
+  color: rgb(248 250 252);
+}
+
+.dark .room-lifecycle-version,
+.dark .room-lifecycle-metrics > div,
+.dark .room-lifecycle-blocker-list li {
+  color: rgb(148 163 184);
+  background: rgb(30 41 59);
+}
+
+.dark .room-lifecycle-alert-danger {
+  border-color: rgb(127 29 29);
+  color: rgb(254 202 202);
+  background: rgb(127 29 29 / 0.25);
+}
+
+.dark .room-lifecycle-alert-warning {
+  border-color: rgb(120 53 15);
+  color: rgb(253 230 138);
+  background: rgb(120 53 15 / 0.24);
+}
+
+.dark .room-lifecycle-alert-success {
+  border-color: rgb(6 78 59);
+  color: rgb(167 243 208);
+  background: rgb(6 78 59 / 0.28);
+}
+
+.dark .room-lifecycle-operation {
+  border-color: rgb(30 64 175);
+  color: rgb(191 219 254);
+  background: rgb(30 58 138 / 0.25);
+}
+
+.dark .room-lifecycle-action-card:hover {
+  border-color: rgb(99 102 241);
+  background: rgb(30 41 59);
+}
+
+.dark .room-lifecycle-action-card-danger {
+  border-color: rgb(127 29 29);
+  color: rgb(248 113 113);
+}
+
+.dark .room-lifecycle-action-card-danger:hover {
+  border-color: rgb(239 68 68);
+  background: rgb(127 29 29 / 0.22);
+}
+
+@media (min-width: 640px) {
+  .room-lifecycle-metrics,
+  .room-lifecycle-action-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .room-lifecycle-footer {
+    display: flex;
+    justify-content: flex-end;
+  }
+}
+
 .account-share-hero {
   position: relative;
   overflow: hidden;
@@ -7337,6 +10497,68 @@ onBeforeUnmount(() => {
   gap: 1rem;
   border-bottom: 1px solid rgb(226 232 240);
   padding: 1.125rem;
+}
+
+.account-share-capability-strip {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  border-bottom: 1px solid rgb(226 232 240);
+  background: rgb(248 250 252 / 0.88);
+  padding: 0.75rem 1.125rem;
+  color: rgb(71 85 105);
+  font-size: 0.75rem;
+}
+
+.account-share-capability-strip > span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.25rem;
+  white-space: nowrap;
+}
+
+.account-share-capability-strip strong {
+  color: rgb(15 23 42);
+  font-size: 0.875rem;
+}
+
+.account-share-capability-strip small {
+  flex: 1 1 18rem;
+  min-width: 0;
+  color: rgb(100 116 139);
+}
+
+.account-share-capability-strip-blocked {
+  border-bottom-color: rgb(254 202 202);
+  background: rgb(254 242 242 / 0.92);
+}
+
+.account-share-capability-strip-blocked small {
+  color: rgb(185 28 28);
+  font-weight: 700;
+}
+
+.create-capability-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  border-bottom: 1px solid rgb(186 230 253);
+  background: rgb(240 249 255);
+  padding: 0.75rem 1rem;
+  color: rgb(3 105 161);
+  font-size: 0.75rem;
+}
+
+.create-capability-summary strong {
+  flex-basis: 100%;
+  color: rgb(185 28 28);
+}
+
+.create-capability-summary-blocked {
+  border-bottom-color: rgb(254 202 202);
+  background: rgb(254 242 242);
 }
 
 .hero-icon {
@@ -7370,6 +10592,8 @@ onBeforeUnmount(() => {
   min-height: 2.75rem;
 }
 
+.account-share-admin-quota-button,
+.account-share-admin-billing-button,
 .account-share-guide-button,
 .account-share-spend-button {
   display: inline-flex;
@@ -7388,11 +10612,39 @@ onBeforeUnmount(() => {
   transition: border-color 0.16s ease, background-color 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
 }
 
+.account-share-admin-quota-button:hover,
+.account-share-admin-billing-button:hover,
 .account-share-guide-button:hover,
 .account-share-spend-button:hover {
   border-color: rgb(96 165 250);
   background: rgb(219 234 254);
   box-shadow: 0 8px 18px rgb(37 99 235 / 0.1);
+}
+
+.account-share-admin-billing-button {
+  border-color: rgb(253 230 138);
+  background: rgb(255 251 235);
+  color: rgb(180 83 9);
+}
+
+.account-share-admin-billing-button:hover {
+  border-color: rgb(251 191 36);
+  background: rgb(254 243 199);
+  color: rgb(146 64 14);
+  box-shadow: 0 8px 18px rgb(245 158 11 / 0.12);
+}
+
+.account-share-admin-quota-button {
+  border-color: rgb(196 181 253);
+  background: rgb(245 243 255);
+  color: rgb(109 40 217);
+}
+
+.account-share-admin-quota-button:hover {
+  border-color: rgb(139 92 246);
+  background: rgb(237 233 254);
+  color: rgb(91 33 182);
+  box-shadow: 0 8px 18px rgb(124 58 237 / 0.12);
 }
 
 .account-share-spend-button {
@@ -8296,6 +11548,36 @@ onBeforeUnmount(() => {
   box-shadow: 0 16px 40px rgb(0 0 0 / 0.28);
 }
 
+.dark .account-share-capability-strip {
+  border-bottom-color: rgb(51 65 85);
+  background: rgb(15 23 42 / 0.72);
+  color: rgb(148 163 184);
+}
+
+.dark .account-share-capability-strip strong {
+  color: rgb(241 245 249);
+}
+
+.dark .account-share-capability-strip-blocked {
+  border-bottom-color: rgb(127 29 29);
+  background: rgb(69 10 10 / 0.3);
+}
+
+.dark .account-share-capability-strip-blocked small {
+  color: rgb(252 165 165);
+}
+
+.dark .create-capability-summary {
+  border-bottom-color: rgb(12 74 110);
+  background: rgb(8 47 73 / 0.45);
+  color: rgb(125 211 252);
+}
+
+.dark .create-capability-summary-blocked {
+  border-bottom-color: rgb(127 29 29);
+  background: rgb(69 10 10 / 0.32);
+}
+
 .dark .account-share-hero-head {
   border-color: rgb(63 63 70);
 }
@@ -8340,6 +11622,8 @@ onBeforeUnmount(() => {
   color: rgb(147 197 253);
 }
 
+.dark .account-share-admin-quota-button,
+.dark .account-share-admin-billing-button,
 .dark .account-share-guide-button,
 .dark .account-share-spend-button {
   border-color: rgb(59 130 246 / 0.38);
@@ -8347,11 +11631,35 @@ onBeforeUnmount(() => {
   color: rgb(191 219 254);
 }
 
+.dark .account-share-admin-quota-button:hover,
+.dark .account-share-admin-billing-button:hover,
 .dark .account-share-guide-button:hover,
 .dark .account-share-spend-button:hover {
   border-color: rgb(96 165 250 / 0.7);
   background: rgb(30 64 175 / 0.34);
   box-shadow: 0 8px 18px rgb(0 0 0 / 0.2);
+}
+
+.dark .account-share-admin-billing-button {
+  border-color: rgb(245 158 11 / 0.38);
+  background: rgb(120 53 15 / 0.22);
+  color: rgb(253 230 138);
+}
+
+.dark .account-share-admin-billing-button:hover {
+  border-color: rgb(251 191 36 / 0.68);
+  background: rgb(120 53 15 / 0.34);
+}
+
+.dark .account-share-admin-quota-button {
+  border-color: rgb(139 92 246 / 0.42);
+  background: rgb(76 29 149 / 0.22);
+  color: rgb(221 214 254);
+}
+
+.dark .account-share-admin-quota-button:hover {
+  border-color: rgb(167 139 250 / 0.7);
+  background: rgb(76 29 149 / 0.36);
 }
 
 .dark .account-share-spend-button {
@@ -8744,6 +12052,8 @@ onBeforeUnmount(() => {
     align-items: center;
   }
 
+  .account-share-admin-quota-button,
+  .account-share-admin-billing-button,
   .account-share-guide-button,
   .account-share-spend-button {
     align-self: center;
@@ -9011,6 +12321,11 @@ onBeforeUnmount(() => {
 }
 
 .model-copy-chip {
+  display: inline-flex;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  align-items: center;
+  justify-content: center;
   border-radius: 0.375rem;
   background: rgb(239 246 255);
   padding: 0.15625rem 0.40625rem;
@@ -9229,7 +12544,7 @@ onBeforeUnmount(() => {
 
 .filter-search {
   display: flex;
-  min-height: 2.5rem;
+  min-height: 2.75rem;
   min-width: 0;
   align-items: center;
   gap: 0.5rem;
@@ -9286,7 +12601,7 @@ onBeforeUnmount(() => {
 .filter-chip,
 .owner-filter-button {
   display: inline-flex;
-  min-height: 2.25rem;
+  min-height: 2.75rem;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
@@ -9974,14 +13289,16 @@ onBeforeUnmount(() => {
     justify-content: flex-end;
   }
 
-  .advanced-filter-grid {
-    grid-template-columns: repeat(5, minmax(9.5rem, 1fr));
-  }
-
   .filter-body-head {
     flex-direction: row;
     align-items: center;
     justify-content: space-between;
+  }
+}
+
+@media (min-width: 1280px) {
+  .advanced-filter-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 }
 
@@ -10077,16 +13394,188 @@ onBeforeUnmount(() => {
   color: rgb(191 219 254);
 }
 
+.create-room-source-stage,
+.create-room-form-flow,
+.create-room-submit-stage {
+  padding: 1rem;
+}
+
+.create-room-source-stage {
+  border-bottom: 1px solid rgb(226 232 240);
+  background: rgb(255 255 255);
+}
+
+.create-room-stage-heading {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.create-room-stage-heading > div {
+  min-width: 0;
+}
+
+.create-room-stage-heading strong,
+.create-room-stage-heading > div > span,
+.create-room-stage-heading small {
+  display: block;
+}
+
+.create-room-stage-heading strong,
+.create-room-stage-heading > div > span {
+  color: rgb(15 23 42);
+  font-size: 0.9375rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.create-room-stage-heading small {
+  margin-top: 0.1875rem;
+  color: rgb(100 116 139);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+.create-room-stage-index {
+  display: inline-flex;
+  width: 1.75rem;
+  height: 1.75rem;
+  flex: 0 0 1.75rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  background: rgb(239 246 255);
+  color: rgb(37 99 235);
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.create-room-source-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.625rem;
+  margin-top: 1rem;
+}
+
+.create-room-account-picker {
+  margin-top: 0.75rem;
+  border: 1px solid rgb(191 219 254);
+  border-radius: 0.75rem;
+  background: rgb(239 246 255 / 0.65);
+  padding: 0.875rem;
+}
+
+.create-room-workspace {
+  width: 100%;
+}
+
+.create-room-form-flow {
+  display: grid;
+  gap: 0.875rem;
+}
+
+.create-room-stage-card.form-section {
+  margin: 0;
+  border-radius: 0.875rem;
+  background: rgb(255 255 255);
+  padding: 1rem;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.03);
+}
+
+.create-room-stage-card .section-heading {
+  margin-bottom: 1rem;
+}
+
+.create-room-field-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+}
+
+.create-room-submit-stage {
+  border-top: 1px solid rgb(226 232 240);
+  background: rgb(255 255 255);
+}
+
+.create-room-submit-content {
+  display: grid;
+  gap: 1rem;
+}
+
+.create-room-submit-button {
+  min-height: 3rem;
+  width: 100%;
+}
+
+.dark .create-room-source-stage,
+.dark .create-room-submit-stage,
+.dark .create-room-stage-card.form-section {
+  border-color: rgb(63 63 70);
+  background: rgb(24 24 27);
+}
+
+.dark .create-room-account-picker {
+  border-color: rgb(30 64 175);
+  background: rgb(30 64 175 / 0.14);
+}
+
+.dark .create-room-stage-heading strong,
+.dark .create-room-stage-heading > div > span {
+  color: rgb(244 244 245);
+}
+
+.dark .create-room-stage-heading small {
+  color: rgb(161 161 170);
+}
+
+.dark .create-room-stage-index {
+  background: rgb(30 64 175 / 0.3);
+  color: rgb(147 197 253);
+}
+
+@media (min-width: 640px) {
+  .create-room-source-stage,
+  .create-room-form-flow,
+  .create-room-submit-stage {
+    padding: 1.25rem 1.5rem;
+  }
+
+  .create-room-source-grid,
+  .create-room-field-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .create-room-stage-card.form-section {
+    padding: 1.25rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .create-room-field-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .create-room-submit-content {
+    grid-template-columns: minmax(0, 1fr) minmax(18rem, 24rem);
+    align-items: center;
+  }
+
+  .create-room-submit-content > :not(.create-room-stage-heading):not(.create-room-submit-button) {
+    grid-column: 1 / -1;
+  }
+}
+
 .create-source-option {
   display: flex;
-  min-height: 4.75rem;
+  min-height: 5rem;
   min-width: 0;
   align-items: center;
   gap: 0.75rem;
   border-radius: 0.75rem;
   border: 1px solid rgb(226 232 240);
   background: rgb(255 255 255);
-  padding: 0.75rem;
+  padding: 0.875rem;
   text-align: left;
   transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
 }
@@ -10099,6 +13588,11 @@ onBeforeUnmount(() => {
 .create-source-option:disabled {
   cursor: not-allowed;
   opacity: 0.6;
+}
+
+.create-source-option:focus-visible {
+  outline: 3px solid rgb(147 197 253 / 0.75);
+  outline-offset: 2px;
 }
 
 .create-source-option strong,
@@ -10559,8 +14053,10 @@ onBeforeUnmount(() => {
 .owner-inline-button {
   margin-left: 0.375rem;
   display: inline-flex;
-  min-height: 1.5rem;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
   align-items: center;
+  justify-content: center;
   gap: 0.25rem;
   border-radius: 0.375rem;
   border: 1px solid rgb(191 219 254);
@@ -10631,6 +14127,22 @@ onBeforeUnmount(() => {
   font-weight: 800;
 }
 
+.listing-member-limit {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 100%;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+}
+
+.listing-member-limit small {
+  max-width: 44rem;
+  color: rgb(107 114 128);
+  font-size: 0.6875rem;
+  line-height: 1rem;
+}
+
 @media (min-width: 768px) {
   .listing-card {
     padding: 0.75rem 0.8125rem 0.8125rem;
@@ -10651,6 +14163,12 @@ onBeforeUnmount(() => {
 
   .listing-card-state {
     justify-content: flex-end;
+  }
+
+  .listing-member-limit {
+    flex: 0 1 34rem;
+    align-items: flex-end;
+    text-align: right;
   }
 }
 
@@ -10704,6 +14222,10 @@ onBeforeUnmount(() => {
 .dark .listing-seat-pill {
   background: rgb(59 130 246 / 0.12);
   color: rgb(191 219 254);
+}
+
+.dark .listing-member-limit small {
+  color: rgb(161 161 170);
 }
 
 .account-level-badge {
@@ -10956,29 +14478,11 @@ onBeforeUnmount(() => {
   overflow-wrap: anywhere;
 }
 
-.capacity-track {
-  height: 0.25rem;
-  overflow: hidden;
-  border-radius: 999px;
-  background: rgb(229 231 235);
-}
-
-.capacity-fill {
-  height: 100%;
-  border-radius: inherit;
-  transition: width 180ms ease;
-}
-
-.capacity-fill-normal {
-  background: rgb(34 197 94);
-}
-
-.capacity-fill-warning {
-  background: rgb(245 158 11);
-}
-
-.capacity-fill-danger {
-  background: rgb(239 68 68);
+.capacity-panel p {
+  margin: 0;
+  color: rgb(107 114 128);
+  font-size: 0.6875rem;
+  line-height: 1rem;
 }
 
 .validity-strip {
@@ -11087,6 +14591,10 @@ onBeforeUnmount(() => {
   color: rgb(161 161 170);
 }
 
+.dark .capacity-panel p {
+  color: rgb(161 161 170);
+}
+
 .dark .listing-runtime-value-row strong,
 .dark .usage-window-title strong,
 .dark .capacity-panel strong {
@@ -11106,10 +14614,6 @@ onBeforeUnmount(() => {
 .dark .runtime-badge-danger {
   background: rgb(127 29 29 / 0.25);
   color: rgb(254 202 202);
-}
-
-.dark .capacity-track {
-  background: rgb(63 63 70);
 }
 
 .dark .validity-strip {
@@ -11177,6 +14681,16 @@ onBeforeUnmount(() => {
 .membership-status-pill-waiting {
   background: rgb(245 158 11);
   color: rgb(120 53 15);
+}
+
+.membership-status-pill-ending {
+  background: rgb(245 158 11);
+  color: rgb(120 53 15);
+}
+
+.membership-status-pill-error {
+  background: rgb(220 38 38);
+  color: white;
 }
 
 .membership-compact-body {
@@ -11342,6 +14856,49 @@ onBeforeUnmount(() => {
   display: grid;
   min-width: 0;
   gap: 0.4375rem;
+}
+
+.membership-ending-state {
+  display: flex;
+  min-width: 0;
+  min-height: 4.5rem;
+  align-items: flex-start;
+  gap: 0.75rem;
+  border: 1px solid rgb(253 230 138);
+  border-radius: 0.875rem;
+  background: rgb(255 251 235);
+  padding: 0.875rem;
+  color: rgb(146 64 14);
+}
+
+.membership-ending-state > svg {
+  margin-top: 0.125rem;
+  flex-shrink: 0;
+}
+
+.membership-ending-state strong,
+.membership-ending-state span {
+  display: block;
+}
+
+.membership-ending-state strong {
+  font-size: 0.8125rem;
+}
+
+.membership-ending-state span {
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  line-height: 1.25rem;
+}
+
+.account-share-membership-panel-ending {
+  border-color: rgb(253 230 138);
+  background: linear-gradient(180deg, rgb(255 251 235), rgb(255 247 237));
+}
+
+.account-share-membership-panel-ending .membership-title,
+.account-share-membership-panel-ending .membership-subtitle {
+  color: rgb(146 64 14);
 }
 
 .idle-timeout-control {
@@ -11611,6 +15168,33 @@ onBeforeUnmount(() => {
   color: rgb(253 230 138);
 }
 
+.dark .membership-status-pill-ending {
+  background: rgb(146 64 14);
+  color: rgb(253 230 138);
+}
+
+.dark .membership-status-pill-error {
+  background: rgb(153 27 27);
+  color: rgb(254 202 202);
+}
+
+.dark .account-share-membership-panel-ending {
+  border-color: rgb(180 83 9 / 0.5);
+  background: linear-gradient(180deg, rgb(120 53 15 / 0.22), rgb(69 26 3 / 0.18));
+  color: rgb(253 230 138);
+}
+
+.dark .account-share-membership-panel-ending .membership-title,
+.dark .account-share-membership-panel-ending .membership-subtitle {
+  color: rgb(253 230 138);
+}
+
+.dark .membership-ending-state {
+  border-color: rgb(120 53 15);
+  background: rgb(69 26 3 / 0.28);
+  color: rgb(253 186 116);
+}
+
 .dark .membership-title {
   color: rgb(209 250 229);
 }
@@ -11789,6 +15373,17 @@ onBeforeUnmount(() => {
   box-shadow: 0 8px 18px rgb(15 23 42 / 0.08);
 }
 
+.my-spend-account-option:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
+.my-spend-account-option:disabled:hover {
+  border-color: rgb(226 232 240);
+  background: white;
+  box-shadow: none;
+}
+
 .my-spend-account-option.active {
   border-color: rgb(37 99 235);
   background: linear-gradient(180deg, rgb(239 246 255), rgb(240 253 250));
@@ -11891,6 +15486,7 @@ onBeforeUnmount(() => {
 
 .my-spend-range-tabs button {
   min-width: 0;
+  min-height: 2.75rem;
   border-radius: 0.375rem;
   padding: 0.5rem 0.625rem;
   color: rgb(71 85 105);
@@ -11899,9 +15495,18 @@ onBeforeUnmount(() => {
   transition: background-color 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
 }
 
+.my-spend-source-tabs {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .my-spend-range-tabs button:hover {
   background: white;
   color: rgb(37 99 235);
+}
+
+.my-spend-range-tabs button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .my-spend-range-tabs button.active {
@@ -12129,6 +15734,12 @@ onBeforeUnmount(() => {
   box-shadow: 0 8px 18px rgb(0 0 0 / 0.24);
 }
 
+.dark .my-spend-account-option:disabled:hover {
+  border-color: rgb(63 63 70);
+  background: rgb(39 39 42 / 0.72);
+  box-shadow: none;
+}
+
 .dark .my-spend-account-option.active {
   border-color: rgb(96 165 250 / 0.72);
   background: linear-gradient(180deg, rgb(30 64 175 / 0.24), rgb(20 83 45 / 0.2));
@@ -12323,6 +15934,75 @@ onBeforeUnmount(() => {
   line-height: 1.25rem;
 }
 
+.join-queue-consent {
+  display: grid;
+  min-height: 3.5rem;
+  cursor: pointer;
+  grid-template-columns: 1.25rem minmax(0, 1fr);
+  align-items: flex-start;
+  gap: 0.75rem;
+  border: 1px solid rgb(191 219 254);
+  border-radius: 0.625rem;
+  background: rgb(239 246 255);
+  padding: 0.875rem;
+  color: rgb(30 64 175);
+}
+
+.join-queue-consent input {
+  width: 1.125rem;
+  height: 1.125rem;
+  margin-top: 0.125rem;
+  accent-color: rgb(37 99 235);
+}
+
+.join-queue-consent span,
+.join-queue-consent strong,
+.join-queue-consent small {
+  display: block;
+}
+
+.join-queue-consent strong {
+  font-size: 0.875rem;
+  font-weight: 850;
+  line-height: 1.25rem;
+}
+
+.join-queue-consent small {
+  margin-top: 0.25rem;
+  color: rgb(71 85 105);
+  font-size: 0.75rem;
+  font-weight: 650;
+  line-height: 1.25rem;
+}
+
+.join-queue-consent-required {
+  border-color: rgb(251 191 36);
+  background: rgb(255 251 235);
+  color: rgb(146 64 14);
+  box-shadow: inset 3px 0 0 rgb(245 158 11);
+}
+
+.join-intent-state {
+  display: flex;
+  min-height: 2.75rem;
+  align-items: center;
+  gap: 0.625rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(191 219 254);
+  background: rgb(239 246 255);
+  padding: 0.625rem 0.75rem;
+  color: rgb(30 64 175);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  line-height: 1.25rem;
+}
+
+.join-intent-state-error {
+  border-color: rgb(248 113 113 / 0.5);
+  background: rgb(254 242 242);
+  color: rgb(185 28 28);
+}
+
 .join-confirmation-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -12423,6 +16103,34 @@ onBeforeUnmount(() => {
 .dark .join-warning-item {
   border-color: rgb(248 113 113 / 0.45);
   background: rgb(127 29 29 / 0.42);
+  color: rgb(254 202 202);
+}
+
+.dark .join-queue-consent {
+  border-color: rgb(59 130 246 / 0.42);
+  background: rgb(30 58 138 / 0.22);
+  color: rgb(191 219 254);
+}
+
+.dark .join-queue-consent small {
+  color: rgb(203 213 225);
+}
+
+.dark .join-queue-consent-required {
+  border-color: rgb(245 158 11 / 0.58);
+  background: rgb(120 53 15 / 0.3);
+  color: rgb(253 230 138);
+}
+
+.dark .join-intent-state {
+  border-color: rgb(59 130 246 / 0.42);
+  background: rgb(30 58 138 / 0.22);
+  color: rgb(191 219 254);
+}
+
+.dark .join-intent-state-error {
+  border-color: rgb(248 113 113 / 0.45);
+  background: rgb(127 29 29 / 0.36);
   color: rgb(254 202 202);
 }
 

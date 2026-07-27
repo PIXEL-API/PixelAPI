@@ -46,6 +46,10 @@ func normalizeGroupWriteDefaults(groupIn *service.Group) {
 	if groupIn.NewUserRateMultiplier == 0 {
 		groupIn.NewUserRateMultiplier = 1
 	}
+	if groupIn.APIKeyBadgeType == "" {
+		groupIn.APIKeyBadgeType = service.GroupAPIKeyBadgeTypeHidden
+		groupIn.APIKeyBadgeText = ""
+	}
 }
 
 func (r *groupRepository) Create(ctx context.Context, groupIn *service.Group) error {
@@ -65,6 +69,8 @@ func (r *groupRepository) Create(ctx context.Context, groupIn *service.Group) er
 		SetStatus(groupIn.Status).
 		SetNillableOwnerUserID(groupIn.OwnerUserID).
 		SetScope(service.NormalizeGroupScope(groupIn.Scope)).
+		SetAPIKeyBadgeType(group.APIKeyBadgeType(groupIn.APIKeyBadgeType)).
+		SetAPIKeyBadgeText(groupIn.APIKeyBadgeText).
 		SetSubscriptionType(groupIn.SubscriptionType).
 		SetRequiredAccountLevel(service.NormalizeRequiredAccountLevel(groupIn.RequiredAccountLevel)).
 		SetNillableDailyLimitUsd(groupIn.DailyLimitUSD).
@@ -167,6 +173,8 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		SetIsExclusive(groupIn.IsExclusive).
 		SetStatus(groupIn.Status).
 		SetScope(service.NormalizeGroupScope(groupIn.Scope)).
+		SetAPIKeyBadgeType(group.APIKeyBadgeType(groupIn.APIKeyBadgeType)).
+		SetAPIKeyBadgeText(groupIn.APIKeyBadgeText).
 		SetSubscriptionType(groupIn.SubscriptionType).
 		SetRequiredAccountLevel(service.NormalizeRequiredAccountLevel(groupIn.RequiredAccountLevel)).
 		SetNillableDailyLimitUsd(groupIn.DailyLimitUSD).
@@ -542,18 +550,10 @@ func (r *groupRepository) ListActiveVisibleToUser(ctx context.Context, userID in
 	}
 
 	outGroups := make([]service.Group, 0, len(groups))
-	groupIDs := make([]int64, 0, len(groups))
 	for i := range groups {
 		g := groupEntityToService(groups[i])
 		outGroups = append(outGroups, *g)
-		groupIDs = append(groupIDs, g.ID)
 	}
-
-	counts, err := r.loadAccountCounts(ctx, groupIDs)
-	if err != nil {
-		return nil, fmt.Errorf("load visible group availability: %w", err)
-	}
-	applyVisibleGroupAvailability(outGroups, counts)
 
 	return outGroups, nil
 }
@@ -774,7 +774,6 @@ type groupAccountCounts struct {
 	Total       int64
 	Active      int64
 	RateLimited int64
-	Available   int64
 }
 
 func (r *groupRepository) loadAccountCounts(ctx context.Context, groupIDs []int64) (counts map[int64]groupAccountCounts, err error) {
@@ -792,22 +791,7 @@ func (r *groupRepository) loadAccountCounts(ctx context.Context, groupIDs []int6
 				a.rate_limit_reset_at > NOW() OR
 				a.overload_until > NOW() OR
 				a.temp_unschedulable_until > NOW()
-			)) AS rate_limited,
-			COUNT(*) FILTER (WHERE
-				a.deleted_at IS NULL AND
-				a.status = 'active' AND
-				a.schedulable = true AND
-				(a.rate_limit_reset_at IS NULL OR a.rate_limit_reset_at <= NOW()) AND
-				(a.overload_until IS NULL OR a.overload_until <= NOW()) AND
-				(a.temp_unschedulable_until IS NULL OR a.temp_unschedulable_until <= NOW()) AND
-				(a.auto_pause_on_expired = false OR a.expires_at IS NULL OR a.expires_at > NOW()) AND
-				NOT EXISTS (
-					SELECT 1
-					FROM account_external_placements placement
-					WHERE placement.account_id = a.id
-						AND placement.state = 'draining'
-				)
-			) AS available
+			)) AS rate_limited
 		FROM account_groups ag
 		JOIN accounts a ON a.id = ag.account_id
 		WHERE ag.group_id = ANY($1)
@@ -827,7 +811,7 @@ func (r *groupRepository) loadAccountCounts(ctx context.Context, groupIDs []int6
 	for rows.Next() {
 		var groupID int64
 		var c groupAccountCounts
-		if err = rows.Scan(&groupID, &c.Total, &c.Active, &c.RateLimited, &c.Available); err != nil {
+		if err = rows.Scan(&groupID, &c.Total, &c.Active, &c.RateLimited); err != nil {
 			return nil, err
 		}
 		counts[groupID] = c
@@ -837,20 +821,6 @@ func (r *groupRepository) loadAccountCounts(ctx context.Context, groupIDs []int6
 	}
 
 	return counts, nil
-}
-
-func applyVisibleGroupAvailability(groups []service.Group, counts map[int64]groupAccountCounts) {
-	for i := range groups {
-		available := counts[groups[i].ID].Available
-		groups[i].AvailableAccountCount = available
-		groups[i].PoolScarce = available == 0
-	}
-
-	// 上游查询已经按 sort_order、id 排序；稳定排序仅按当前可用账号数重排，
-	// 数量相同时保留管理员配置的原始顺序。
-	sort.SliceStable(groups, func(i, j int) bool {
-		return groups[i].AvailableAccountCount > groups[j].AvailableAccountCount
-	})
 }
 
 // GetAccountIDsByGroupIDs 获取多个分组的所有账号 ID（去重）

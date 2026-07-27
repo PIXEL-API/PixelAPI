@@ -72,6 +72,20 @@ func (Group) Fields() []ent.Field {
 			MaxLen(20).
 			Default(domain.GroupScopePublic).
 			Comment("Group visibility scope: public or user_private"),
+		field.Enum("api_key_badge_type").
+			Values(
+				domain.GroupAPIKeyBadgeTypeHidden,
+				domain.GroupAPIKeyBadgeTypeRecommended,
+				domain.GroupAPIKeyBadgeTypeConstrained,
+				domain.GroupAPIKeyBadgeTypeUnavailable,
+				domain.GroupAPIKeyBadgeTypeCustom,
+			).
+			Default(domain.GroupAPIKeyBadgeTypeHidden).
+			Comment("API 密钥分组选择器标签类型"),
+		field.String("api_key_badge_text").
+			MaxLen(20).
+			Default("").
+			Comment("API 密钥分组选择器自定义标签文本，仅 custom 类型使用"),
 
 		// Subscription-related fields (added by migration 003)
 		field.String("platform").

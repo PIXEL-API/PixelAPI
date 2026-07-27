@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"log/slog"
 	"net/http"
@@ -54,6 +55,7 @@ type AccountHandler struct {
 	geminiOAuthService        *service.GeminiOAuthService
 	antigravityOAuthService   *service.AntigravityOAuthService
 	grokOAuthService          *service.GrokOAuthService
+	grokTokenProvider         *service.GrokTokenProvider
 	rateLimitService          *service.RateLimitService
 	accountUsageService       *service.AccountUsageService
 	accountTestService        *service.AccountTestService
@@ -123,6 +125,10 @@ func (h *AccountHandler) SetGrokOAuthService(grokOAuthService *service.GrokOAuth
 	h.grokOAuthService = grokOAuthService
 }
 
+func (h *AccountHandler) SetGrokTokenProvider(grokTokenProvider *service.GrokTokenProvider) {
+	h.grokTokenProvider = grokTokenProvider
+}
+
 func (h *AccountHandler) registerAccountBatchExecutors() {
 	if h == nil || h.accountBatchTaskService == nil {
 		return
@@ -137,7 +143,6 @@ func (h *AccountHandler) executeAdminRefreshCredentialsTaskItem(ctx context.Cont
 	}
 	updated, warning, err := h.refreshSingleAccount(ctx, account)
 	if err != nil {
-		h.persistManualRefreshFailureState(ctx, account, err)
 		return nil, err
 	}
 	result := map[string]any{"account_id": updated.ID}
@@ -174,26 +179,31 @@ type CreateAccountRequest struct {
 // UpdateAccountRequest represents update account request
 // 使用指针类型来区分"未提供"和"设置为0"
 type UpdateAccountRequest struct {
-	Name                    string         `json:"name"`
-	Notes                   *string        `json:"notes"`
-	Type                    string         `json:"type" binding:"omitempty,oneof=oauth setup-token apikey upstream bedrock service_account"`
-	AccountLevel            *string        `json:"account_level"`
-	Credentials             map[string]any `json:"credentials"`
-	Extra                   map[string]any `json:"extra"`
-	OwnerUserID             *int64         `json:"owner_user_id"`
-	ShareMode               string         `json:"share_mode" binding:"omitempty,oneof=private public"`
-	ShareStatus             string         `json:"share_status" binding:"omitempty,oneof=pending approved suspended"`
-	SharePolicyID           *int64         `json:"share_policy_id"`
-	ProxyID                 *int64         `json:"proxy_id"`
-	Concurrency             *int           `json:"concurrency"`
-	Priority                *int           `json:"priority"`
-	RateMultiplier          *float64       `json:"rate_multiplier"`
-	LoadFactor              *int           `json:"load_factor"`
-	Status                  string         `json:"status" binding:"omitempty,oneof=active inactive error"`
-	GroupIDs                *[]int64       `json:"group_ids"`
-	ExpiresAt               *int64         `json:"expires_at"`
-	AutoPauseOnExpired      *bool          `json:"auto_pause_on_expired"`
-	ConfirmMixedChannelRisk *bool          `json:"confirm_mixed_channel_risk"` // 用户确认混合渠道风险
+	Name                    string          `json:"name"`
+	Notes                   *string         `json:"notes"`
+	Type                    string          `json:"type" binding:"omitempty,oneof=oauth setup-token apikey upstream bedrock service_account"`
+	AccountLevel            *string         `json:"account_level"`
+	Credentials             map[string]any  `json:"credentials"`
+	Extra                   map[string]any  `json:"extra"`
+	OwnerUserID             *int64          `json:"owner_user_id"`
+	ShareMode               string          `json:"share_mode" binding:"omitempty,oneof=private public"`
+	ShareStatus             string          `json:"share_status" binding:"omitempty,oneof=pending approved suspended"`
+	SharePolicyID           *int64          `json:"share_policy_id"`
+	ProxyID                 *int64          `json:"proxy_id"`
+	Concurrency             *int            `json:"concurrency"`
+	Priority                *int            `json:"priority"`
+	RateMultiplier          *float64        `json:"rate_multiplier"`
+	LoadFactor              *int            `json:"load_factor"`
+	Status                  string          `json:"status" binding:"omitempty,oneof=active inactive error"`
+	GroupIDs                *[]int64        `json:"group_ids"`
+	ExpiresAt               *int64          `json:"expires_at"`
+	AutoPauseOnExpired      *bool           `json:"auto_pause_on_expired"`
+	ConfirmMixedChannelRisk *bool           `json:"confirm_mixed_channel_risk"` // 用户确认混合渠道风险
+	ForceActiveEdit         bool            `json:"force_active_edit"`
+	Confirmed               bool            `json:"confirmed"`
+	Reason                  string          `json:"reason"`
+	ExpectedVersion         *int64          `json:"expected_version"`
+	ExpectedVersions        map[int64]int64 `json:"expected_versions"`
 }
 
 // BulkUpdateAccountsRequest represents the payload for bulk editing accounts
@@ -213,6 +223,11 @@ type BulkUpdateAccountsRequest struct {
 	Credentials             map[string]any            `json:"credentials"`
 	Extra                   map[string]any            `json:"extra"`
 	ConfirmMixedChannelRisk *bool                     `json:"confirm_mixed_channel_risk"` // 用户确认混合渠道风险
+	ForceActiveEdit         bool                      `json:"force_active_edit"`
+	Confirmed               bool                      `json:"confirmed"`
+	Reason                  string                    `json:"reason"`
+	ExpectedVersion         *int64                    `json:"expected_version"`
+	ExpectedVersions        map[int64]int64           `json:"expected_versions"`
 }
 
 type BulkUpdateAccountFilters struct {
@@ -909,6 +924,7 @@ func (h *AccountHandler) Update(c *gin.Context) {
 
 	// 确定是否跳过混合渠道检查
 	skipCheck := req.ConfirmMixedChannelRisk != nil && *req.ConfirmMixedChannelRisk
+	actorAdminID, _ := currentAdminUserID(c)
 
 	account, err := h.adminService.UpdateAccount(c.Request.Context(), accountID, &service.UpdateAccountInput{
 		Name:                  req.Name,
@@ -931,6 +947,14 @@ func (h *AccountHandler) Update(c *gin.Context) {
 		ExpiresAt:             req.ExpiresAt,
 		AutoPauseOnExpired:    req.AutoPauseOnExpired,
 		SkipMixedChannelCheck: skipCheck,
+		ActorAdminID:          actorAdminID,
+		MutationIntent:        service.AccountMutationIntentAdmin,
+		ForceActiveEdit:       req.ForceActiveEdit,
+		Confirmed:             req.Confirmed,
+		Reason:                req.Reason,
+		ExpectedVersion:       req.ExpectedVersion,
+		ExpectedVersions:      req.ExpectedVersions,
+		OperationID:           accountMutationOperationID(c),
 	})
 	if err != nil {
 		// 检查是否为混合渠道错误
@@ -983,6 +1007,33 @@ type SyncFromCRSRequest struct {
 	Password           string   `json:"password" binding:"required"`
 	SyncProxies        *bool    `json:"sync_proxies"`
 	SelectedAccountIDs []string `json:"selected_account_ids"`
+	PreviewToken       string   `json:"preview_token"`
+	AdminAccountMutationConfirmation
+}
+
+const adminCRSSyncIdempotencyScope = "admin.accounts.sync_crs"
+
+func (r SyncFromCRSRequest) toServiceInput(actorAdminID int64, operationID string) service.SyncFromCRSInput {
+	syncProxies := true
+	if r.SyncProxies != nil {
+		syncProxies = *r.SyncProxies
+	}
+	return service.SyncFromCRSInput{
+		BaseURL:                  r.BaseURL,
+		Username:                 r.Username,
+		Password:                 r.Password,
+		SyncProxies:              syncProxies,
+		SelectedAccountIDs:       r.SelectedAccountIDs,
+		ActorAdminID:             actorAdminID,
+		ForceActiveEdit:          r.ForceActiveEdit,
+		Confirmed:                r.Confirmed,
+		Reason:                   r.Reason,
+		ExpectedVersion:          r.ExpectedVersion,
+		ExpectedVersions:         r.ExpectedVersions,
+		OperationID:              operationID,
+		PreviewToken:             r.PreviewToken,
+		ValidateResponseCapacity: service.ValidateIdempotencyResponseCapacity,
+	}
 }
 
 type PreviewFromCRSRequest struct {
@@ -1056,26 +1107,24 @@ func (h *AccountHandler) SyncFromCRS(c *gin.Context) {
 		return
 	}
 
-	// Default to syncing proxies (can be disabled by explicitly setting false)
-	syncProxies := true
-	if req.SyncProxies != nil {
-		syncProxies = *req.SyncProxies
-	}
-
-	result, err := h.crsSyncService.SyncFromCRS(c.Request.Context(), service.SyncFromCRSInput{
-		BaseURL:            req.BaseURL,
-		Username:           req.Username,
-		Password:           req.Password,
-		SyncProxies:        syncProxies,
-		SelectedAccountIDs: req.SelectedAccountIDs,
-	})
-	if err != nil {
-		// Provide detailed error message for CRS sync failures
-		response.InternalError(c, "CRS sync failed: "+err.Error())
+	actorAdminID, ok := currentAdminUserID(c)
+	if !ok {
+		response.Error(c, http.StatusUnauthorized, "Invalid admin identity")
 		return
 	}
 
-	response.Success(c, result)
+	executeAdminStrictIdempotentJSON(
+		c,
+		adminCRSSyncIdempotencyScope,
+		req,
+		service.DefaultWriteIdempotencyTTL(),
+		func(ctx context.Context) (any, error) {
+			return h.crsSyncService.SyncFromCRS(
+				ctx,
+				req.toServiceInput(actorAdminID, accountMutationOperationID(c)),
+			)
+		},
+	)
 }
 
 // PreviewFromCRS handles previewing accounts from CRS before sync
@@ -1087,13 +1136,20 @@ func (h *AccountHandler) PreviewFromCRS(c *gin.Context) {
 		return
 	}
 
+	actorAdminID, ok := currentAdminUserID(c)
+	if !ok {
+		response.Error(c, http.StatusUnauthorized, "Invalid admin identity")
+		return
+	}
+
 	result, err := h.crsSyncService.PreviewFromCRS(c.Request.Context(), service.SyncFromCRSInput{
-		BaseURL:  req.BaseURL,
-		Username: req.Username,
-		Password: req.Password,
+		BaseURL:      req.BaseURL,
+		Username:     req.Username,
+		Password:     req.Password,
+		ActorAdminID: actorAdminID,
 	})
 	if err != nil {
-		response.InternalError(c, "CRS preview failed: "+err.Error())
+		response.ErrorFrom(c, err)
 		return
 	}
 
@@ -1108,6 +1164,7 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 	}
 
 	var newCredentials map[string]any
+	var refreshedAccount *service.Account
 
 	if account.IsOpenAI() {
 		tokenInfo, err := h.openaiOAuthService.RefreshAccountToken(ctx, account)
@@ -1159,7 +1216,8 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 		// 如果 project_id 获取失败，更新凭证但不标记为 error
 		if tokenInfo.ProjectIDMissing {
 			updatedAccount, updateErr := h.adminService.UpdateAccount(ctx, account.ID, &service.UpdateAccountInput{
-				Credentials: newCredentials,
+				Credentials:    newCredentials,
+				MutationIntent: service.AccountMutationIntentSystemTokenRefresh,
 			})
 			if updateErr != nil {
 				return nil, "", fmt.Errorf("failed to update credentials: %w", updateErr)
@@ -1175,18 +1233,13 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 			}
 		}
 	} else if account.Platform == service.PlatformGrok {
-		if h.grokOAuthService == nil {
-			return nil, "", infraerrors.New(http.StatusServiceUnavailable, "GROK_OAUTH_SERVICE_UNAVAILABLE", "grok oauth service unavailable")
+		if h.grokTokenProvider == nil {
+			return nil, "", infraerrors.New(http.StatusServiceUnavailable, "GROK_TOKEN_PROVIDER_UNAVAILABLE", "grok token provider unavailable")
 		}
-		tokenInfo, err := h.grokOAuthService.RefreshAccountToken(ctx, account)
+		var err error
+		refreshedAccount, err = h.grokTokenProvider.RefreshNow(ctx, account)
 		if err != nil {
 			return nil, "", err
-		}
-
-		newCredentials = h.grokOAuthService.BuildAccountCredentials(tokenInfo)
-		newCredentials = service.MergeCredentials(account.Credentials, newCredentials)
-		if baseURL := strings.TrimSpace(account.GetCredential("base_url")); baseURL != "" {
-			newCredentials["base_url"] = baseURL
 		}
 	} else {
 		// Use Anthropic/Claude OAuth service to refresh token
@@ -1214,11 +1267,16 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 		}
 	}
 
-	updatedAccount, err := h.adminService.UpdateAccount(ctx, account.ID, &service.UpdateAccountInput{
-		Credentials: newCredentials,
-	})
-	if err != nil {
-		return nil, "", err
+	updatedAccount := refreshedAccount
+	if updatedAccount == nil {
+		var err error
+		updatedAccount, err = h.adminService.UpdateAccount(ctx, account.ID, &service.UpdateAccountInput{
+			Credentials:    newCredentials,
+			MutationIntent: service.AccountMutationIntentSystemTokenRefresh,
+		})
+		if err != nil {
+			return nil, "", err
+		}
 	}
 
 	// 刷新成功后，清除 token 缓存，确保下次请求使用新 token
@@ -1499,9 +1557,6 @@ func (h *AccountHandler) BatchRefresh(c *gin.Context) {
 		}
 		g.Go(func() error {
 			_, warning, err := h.refreshSingleAccount(gctx, acc)
-			if err != nil {
-				h.persistManualRefreshFailureState(gctx, acc, err)
-			}
 
 			mu.Lock()
 			if err != nil {
@@ -1621,6 +1676,18 @@ func currentAdminUserID(c *gin.Context) (int64, bool) {
 		return subject.UserID, true
 	}
 	return 0, false
+}
+
+func accountMutationOperationID(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	for _, header := range []string{"Idempotency-Key", "X-Idempotency-Key", "X-Request-ID"} {
+		if value := strings.TrimSpace(c.GetHeader(header)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // BatchCreate handles batch creating accounts
@@ -1749,9 +1816,14 @@ func (h *AccountHandler) BatchCreate(c *gin.Context) {
 
 // BatchUpdateCredentialsRequest represents batch credentials update request
 type BatchUpdateCredentialsRequest struct {
-	AccountIDs []int64 `json:"account_ids" binding:"required,min=1"`
-	Field      string  `json:"field" binding:"required,oneof=account_uuid org_uuid intercept_warmup_requests"`
-	Value      any     `json:"value"`
+	AccountIDs       []int64         `json:"account_ids" binding:"required,min=1"`
+	Field            string          `json:"field" binding:"required,oneof=account_uuid org_uuid intercept_warmup_requests"`
+	Value            any             `json:"value"`
+	ForceActiveEdit  bool            `json:"force_active_edit"`
+	Confirmed        bool            `json:"confirmed"`
+	Reason           string          `json:"reason"`
+	ExpectedVersion  *int64          `json:"expected_version"`
+	ExpectedVersions map[int64]int64 `json:"expected_versions"`
 }
 
 // BatchUpdateCredentials handles batch updating credentials fields
@@ -1780,60 +1852,25 @@ func (h *AccountHandler) BatchUpdateCredentials(c *gin.Context) {
 		}
 	}
 
-	ctx := c.Request.Context()
-
-	// 阶段一：预验证所有账号存在，收集 credentials
-	type accountUpdate struct {
-		ID          int64
-		Credentials map[string]any
-	}
-	updates := make([]accountUpdate, 0, len(req.AccountIDs))
-	for _, accountID := range req.AccountIDs {
-		account, err := h.adminService.GetAccount(ctx, accountID)
-		if err != nil {
-			response.Error(c, 404, fmt.Sprintf("Account %d not found", accountID))
-			return
-		}
-		if account.Credentials == nil {
-			account.Credentials = make(map[string]any)
-		}
-		account.Credentials[req.Field] = req.Value
-		updates = append(updates, accountUpdate{ID: accountID, Credentials: account.Credentials})
-	}
-
-	// 阶段二：依次更新，返回每个账号的成功/失败明细，便于调用方重试
-	success := 0
-	failed := 0
-	successIDs := make([]int64, 0, len(updates))
-	failedIDs := make([]int64, 0, len(updates))
-	results := make([]gin.H, 0, len(updates))
-	for _, u := range updates {
-		updateInput := &service.UpdateAccountInput{Credentials: u.Credentials}
-		if _, err := h.adminService.UpdateAccount(ctx, u.ID, updateInput); err != nil {
-			failed++
-			failedIDs = append(failedIDs, u.ID)
-			results = append(results, gin.H{
-				"account_id": u.ID,
-				"success":    false,
-				"error":      err.Error(),
-			})
-			continue
-		}
-		success++
-		successIDs = append(successIDs, u.ID)
-		results = append(results, gin.H{
-			"account_id": u.ID,
-			"success":    true,
-		})
-	}
-
-	response.Success(c, gin.H{
-		"success":     success,
-		"failed":      failed,
-		"success_ids": successIDs,
-		"failed_ids":  failedIDs,
-		"results":     results,
+	actorAdminID, _ := currentAdminUserID(c)
+	result, err := h.adminService.BulkUpdateAccounts(c.Request.Context(), &service.BulkUpdateAccountsInput{
+		AccountIDs:            req.AccountIDs,
+		Credentials:           map[string]any{req.Field: req.Value},
+		ActorAdminID:          actorAdminID,
+		MutationIntent:        service.AccountMutationIntentAdmin,
+		ForceActiveEdit:       req.ForceActiveEdit,
+		Confirmed:             req.Confirmed,
+		Reason:                req.Reason,
+		ExpectedVersion:       req.ExpectedVersion,
+		ExpectedVersions:      req.ExpectedVersions,
+		OperationID:           accountMutationOperationID(c),
+		SkipMixedChannelCheck: false,
 	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
 }
 
 // BulkUpdate handles bulk updating accounts with selected fields/credentials.
@@ -1875,6 +1912,7 @@ func (h *AccountHandler) BulkUpdate(c *gin.Context) {
 		response.BadRequest(c, "No updates provided")
 		return
 	}
+	actorAdminID, _ := currentAdminUserID(c)
 
 	result, err := h.adminService.BulkUpdateAccounts(c.Request.Context(), &service.BulkUpdateAccountsInput{
 		AccountIDs:            req.AccountIDs,
@@ -1892,6 +1930,14 @@ func (h *AccountHandler) BulkUpdate(c *gin.Context) {
 		Credentials:           req.Credentials,
 		Extra:                 req.Extra,
 		SkipMixedChannelCheck: skipCheck,
+		ActorAdminID:          actorAdminID,
+		MutationIntent:        service.AccountMutationIntentAdmin,
+		ForceActiveEdit:       req.ForceActiveEdit,
+		Confirmed:             req.Confirmed,
+		Reason:                req.Reason,
+		ExpectedVersion:       req.ExpectedVersion,
+		ExpectedVersions:      req.ExpectedVersions,
+		OperationID:           accountMutationOperationID(c),
 	})
 	if err != nil {
 		var mixedErr *service.MixedChannelError
@@ -2264,7 +2310,12 @@ func (h *AccountHandler) GetBatchTodayStats(c *gin.Context) {
 
 // SetSchedulableRequest represents the request body for setting schedulable status
 type SetSchedulableRequest struct {
-	Schedulable bool `json:"schedulable"`
+	Schedulable      bool            `json:"schedulable"`
+	ForceActiveEdit  bool            `json:"force_active_edit"`
+	Confirmed        bool            `json:"confirmed"`
+	Reason           string          `json:"reason"`
+	ExpectedVersion  *int64          `json:"expected_version"`
+	ExpectedVersions map[int64]int64 `json:"expected_versions"`
 }
 
 // SetSchedulable handles toggling account schedulable status
@@ -2282,7 +2333,17 @@ func (h *AccountHandler) SetSchedulable(c *gin.Context) {
 		return
 	}
 
-	account, err := h.adminService.SetAccountSchedulable(c.Request.Context(), accountID, req.Schedulable)
+	actorAdminID, _ := currentAdminUserID(c)
+	account, err := h.adminService.SetAccountSchedulable(c.Request.Context(), accountID, service.SetAccountSchedulableInput{
+		Schedulable:      req.Schedulable,
+		ActorAdminID:     actorAdminID,
+		ForceActiveEdit:  req.ForceActiveEdit,
+		Confirmed:        req.Confirmed,
+		Reason:           req.Reason,
+		ExpectedVersion:  req.ExpectedVersion,
+		ExpectedVersions: req.ExpectedVersions,
+		OperationID:      accountMutationOperationID(c),
+	})
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -2607,12 +2668,53 @@ func (h *AccountHandler) SetPrivacy(c *gin.Context) {
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), updated))
 }
 
+// AdminAccountMutationConfirmation carries the explicit authorization required
+// when an admin changes sensitive fields on an account that is serving a room.
+type AdminAccountMutationConfirmation struct {
+	ForceActiveEdit  bool            `json:"force_active_edit"`
+	Confirmed        bool            `json:"confirmed"`
+	Reason           string          `json:"reason"`
+	ExpectedVersion  *int64          `json:"expected_version"`
+	ExpectedVersions map[int64]int64 `json:"expected_versions"`
+}
+
+func (r AdminAccountMutationConfirmation) apply(
+	input *service.UpdateAccountInput,
+	actorAdminID int64,
+	operationID string,
+) {
+	if input == nil {
+		return
+	}
+	input.ActorAdminID = actorAdminID
+	input.MutationIntent = service.AccountMutationIntentAdmin
+	input.ForceActiveEdit = r.ForceActiveEdit
+	input.Confirmed = r.Confirmed
+	input.Reason = r.Reason
+	input.ExpectedVersion = r.ExpectedVersion
+	input.ExpectedVersions = r.ExpectedVersions
+	input.OperationID = operationID
+}
+
+// RefreshTierRequest represents a Google One tier refresh request. The body is
+// optional for idle accounts; occupied accounts require the embedded admin
+// confirmation fields.
+type RefreshTierRequest struct {
+	AdminAccountMutationConfirmation
+}
+
 // RefreshTier handles refreshing Google One tier for a single account
 // POST /api/v1/admin/accounts/:id/refresh-tier
 func (h *AccountHandler) RefreshTier(c *gin.Context) {
 	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+
+	var req RefreshTierRequest
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
 
@@ -2640,10 +2742,13 @@ func (h *AccountHandler) RefreshTier(c *gin.Context) {
 		return
 	}
 
-	_, updateErr := h.adminService.UpdateAccount(ctx, accountID, &service.UpdateAccountInput{
+	updateInput := &service.UpdateAccountInput{
 		Credentials: creds,
 		Extra:       extra,
-	})
+	}
+	actorAdminID, _ := currentAdminUserID(c)
+	req.AdminAccountMutationConfirmation.apply(updateInput, actorAdminID, accountMutationOperationID(c))
+	_, updateErr := h.adminService.UpdateAccount(ctx, accountID, updateInput)
 	if updateErr != nil {
 		response.ErrorFrom(c, updateErr)
 		return
@@ -2661,14 +2766,16 @@ func (h *AccountHandler) RefreshTier(c *gin.Context) {
 // BatchRefreshTierRequest represents batch tier refresh request
 type BatchRefreshTierRequest struct {
 	AccountIDs []int64 `json:"account_ids"`
+	AdminAccountMutationConfirmation
 }
 
 // BatchRefreshTier handles batch refreshing Google One tier
 // POST /api/v1/admin/accounts/batch-refresh-tier
 func (h *AccountHandler) BatchRefreshTier(c *gin.Context) {
 	var req BatchRefreshTierRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		req = BatchRefreshTierRequest{}
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
 	}
 
 	ctx := c.Request.Context()
@@ -2716,6 +2823,8 @@ func (h *AccountHandler) BatchRefreshTier(c *gin.Context) {
 	var mu sync.Mutex
 	var successCount, failedCount int
 	var errors []gin.H
+	actorAdminID, _ := currentAdminUserID(c)
+	operationID := accountMutationOperationID(c)
 
 	for _, account := range accounts {
 		acc := account // 闭包捕获
@@ -2732,10 +2841,12 @@ func (h *AccountHandler) BatchRefreshTier(c *gin.Context) {
 				return nil
 			}
 
-			_, updateErr := h.adminService.UpdateAccount(gctx, acc.ID, &service.UpdateAccountInput{
+			updateInput := &service.UpdateAccountInput{
 				Credentials: creds,
 				Extra:       extra,
-			})
+			}
+			req.AdminAccountMutationConfirmation.apply(updateInput, actorAdminID, operationID)
+			_, updateErr := h.adminService.UpdateAccount(gctx, acc.ID, updateInput)
 
 			mu.Lock()
 			if updateErr != nil {

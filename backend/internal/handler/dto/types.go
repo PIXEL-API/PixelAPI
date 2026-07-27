@@ -124,6 +124,8 @@ type Group struct {
 	Status                        string   `json:"status"`
 	OwnerUserID                   *int64   `json:"owner_user_id,omitempty"`
 	Scope                         string   `json:"scope"`
+	APIKeyBadgeType               string   `json:"api_key_badge_type"`
+	APIKeyBadgeText               string   `json:"api_key_badge_text"`
 
 	SubscriptionType string   `json:"subscription_type"`
 	DailyLimitUSD    *float64 `json:"daily_limit_usd"`
@@ -159,9 +161,6 @@ type Group struct {
 
 	// RPMLimit 分组级每分钟请求数上限（0 = 不限制），设置后覆盖用户级 rpm_limit。
 	RPMLimit int `json:"rpm_limit"`
-
-	// PoolScarce 是脱敏的号池可用性提示，不暴露具体账号数量。
-	PoolScarce bool `json:"pool_scarce"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

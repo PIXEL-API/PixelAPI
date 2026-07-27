@@ -94,6 +94,7 @@ type relayState struct {
 	firstTokenMs      *int
 	turnTimingByID    map[string]*relayTurnTiming
 	imageCounter      *imageOutputCounter
+	settledImageCount int
 }
 
 type relayExitSignal struct {
@@ -746,12 +747,23 @@ func emitTurnComplete(
 		return
 	}
 	requestModel := ""
+	turnUsage := observed.usage
 	if state != nil {
 		requestModel = state.requestModel
+		cumulativeImageCount := 0
+		if state.imageCounter != nil {
+			cumulativeImageCount = state.imageCounter.Count()
+		}
+		if cumulativeImageCount > state.settledImageCount {
+			turnUsage.ImageCount = cumulativeImageCount - state.settledImageCount
+		} else {
+			turnUsage.ImageCount = 0
+		}
+		state.settledImageCount = cumulativeImageCount
 	}
 	onTurnComplete(RelayTurnResult{
 		RequestModel:      requestModel,
-		Usage:             observed.usage,
+		Usage:             turnUsage,
 		RequestID:         responseID,
 		TerminalEventType: observed.eventType,
 		Duration:          observed.duration,

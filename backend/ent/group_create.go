@@ -218,6 +218,34 @@ func (_c *GroupCreate) SetNillableScope(v *string) *GroupCreate {
 	return _c
 }
 
+// SetAPIKeyBadgeType sets the "api_key_badge_type" field.
+func (_c *GroupCreate) SetAPIKeyBadgeType(v group.APIKeyBadgeType) *GroupCreate {
+	_c.mutation.SetAPIKeyBadgeType(v)
+	return _c
+}
+
+// SetNillableAPIKeyBadgeType sets the "api_key_badge_type" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableAPIKeyBadgeType(v *group.APIKeyBadgeType) *GroupCreate {
+	if v != nil {
+		_c.SetAPIKeyBadgeType(*v)
+	}
+	return _c
+}
+
+// SetAPIKeyBadgeText sets the "api_key_badge_text" field.
+func (_c *GroupCreate) SetAPIKeyBadgeText(v string) *GroupCreate {
+	_c.mutation.SetAPIKeyBadgeText(v)
+	return _c
+}
+
+// SetNillableAPIKeyBadgeText sets the "api_key_badge_text" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableAPIKeyBadgeText(v *string) *GroupCreate {
+	if v != nil {
+		_c.SetAPIKeyBadgeText(*v)
+	}
+	return _c
+}
+
 // SetPlatform sets the "platform" field.
 func (_c *GroupCreate) SetPlatform(v string) *GroupCreate {
 	_c.mutation.SetPlatform(v)
@@ -852,6 +880,14 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultScope
 		_c.mutation.SetScope(v)
 	}
+	if _, ok := _c.mutation.APIKeyBadgeType(); !ok {
+		v := group.DefaultAPIKeyBadgeType
+		_c.mutation.SetAPIKeyBadgeType(v)
+	}
+	if _, ok := _c.mutation.APIKeyBadgeText(); !ok {
+		v := group.DefaultAPIKeyBadgeText
+		_c.mutation.SetAPIKeyBadgeText(v)
+	}
 	if _, ok := _c.mutation.Platform(); !ok {
 		v := group.DefaultPlatform
 		_c.mutation.SetPlatform(v)
@@ -983,6 +1019,22 @@ func (_c *GroupCreate) check() error {
 	if v, ok := _c.mutation.Scope(); ok {
 		if err := group.ScopeValidator(v); err != nil {
 			return &ValidationError{Name: "scope", err: fmt.Errorf(`ent: validator failed for field "Group.scope": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.APIKeyBadgeType(); !ok {
+		return &ValidationError{Name: "api_key_badge_type", err: errors.New(`ent: missing required field "Group.api_key_badge_type"`)}
+	}
+	if v, ok := _c.mutation.APIKeyBadgeType(); ok {
+		if err := group.APIKeyBadgeTypeValidator(v); err != nil {
+			return &ValidationError{Name: "api_key_badge_type", err: fmt.Errorf(`ent: validator failed for field "Group.api_key_badge_type": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.APIKeyBadgeText(); !ok {
+		return &ValidationError{Name: "api_key_badge_text", err: errors.New(`ent: missing required field "Group.api_key_badge_text"`)}
+	}
+	if v, ok := _c.mutation.APIKeyBadgeText(); ok {
+		if err := group.APIKeyBadgeTextValidator(v); err != nil {
+			return &ValidationError{Name: "api_key_badge_text", err: fmt.Errorf(`ent: validator failed for field "Group.api_key_badge_text": %w`, err)}
 		}
 	}
 	if _, ok := _c.mutation.Platform(); !ok {
@@ -1147,6 +1199,14 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Scope(); ok {
 		_spec.SetField(group.FieldScope, field.TypeString, value)
 		_node.Scope = value
+	}
+	if value, ok := _c.mutation.APIKeyBadgeType(); ok {
+		_spec.SetField(group.FieldAPIKeyBadgeType, field.TypeEnum, value)
+		_node.APIKeyBadgeType = value
+	}
+	if value, ok := _c.mutation.APIKeyBadgeText(); ok {
+		_spec.SetField(group.FieldAPIKeyBadgeText, field.TypeString, value)
+		_node.APIKeyBadgeText = value
 	}
 	if value, ok := _c.mutation.Platform(); ok {
 		_spec.SetField(group.FieldPlatform, field.TypeString, value)
@@ -1653,6 +1713,30 @@ func (u *GroupUpsert) SetScope(v string) *GroupUpsert {
 // UpdateScope sets the "scope" field to the value that was provided on create.
 func (u *GroupUpsert) UpdateScope() *GroupUpsert {
 	u.SetExcluded(group.FieldScope)
+	return u
+}
+
+// SetAPIKeyBadgeType sets the "api_key_badge_type" field.
+func (u *GroupUpsert) SetAPIKeyBadgeType(v group.APIKeyBadgeType) *GroupUpsert {
+	u.Set(group.FieldAPIKeyBadgeType, v)
+	return u
+}
+
+// UpdateAPIKeyBadgeType sets the "api_key_badge_type" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateAPIKeyBadgeType() *GroupUpsert {
+	u.SetExcluded(group.FieldAPIKeyBadgeType)
+	return u
+}
+
+// SetAPIKeyBadgeText sets the "api_key_badge_text" field.
+func (u *GroupUpsert) SetAPIKeyBadgeText(v string) *GroupUpsert {
+	u.Set(group.FieldAPIKeyBadgeText, v)
+	return u
+}
+
+// UpdateAPIKeyBadgeText sets the "api_key_badge_text" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateAPIKeyBadgeText() *GroupUpsert {
+	u.SetExcluded(group.FieldAPIKeyBadgeText)
 	return u
 }
 
@@ -2512,6 +2596,34 @@ func (u *GroupUpsertOne) SetScope(v string) *GroupUpsertOne {
 func (u *GroupUpsertOne) UpdateScope() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateScope()
+	})
+}
+
+// SetAPIKeyBadgeType sets the "api_key_badge_type" field.
+func (u *GroupUpsertOne) SetAPIKeyBadgeType(v group.APIKeyBadgeType) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetAPIKeyBadgeType(v)
+	})
+}
+
+// UpdateAPIKeyBadgeType sets the "api_key_badge_type" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateAPIKeyBadgeType() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateAPIKeyBadgeType()
+	})
+}
+
+// SetAPIKeyBadgeText sets the "api_key_badge_text" field.
+func (u *GroupUpsertOne) SetAPIKeyBadgeText(v string) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetAPIKeyBadgeText(v)
+	})
+}
+
+// UpdateAPIKeyBadgeText sets the "api_key_badge_text" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateAPIKeyBadgeText() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateAPIKeyBadgeText()
 	})
 }
 
@@ -3633,6 +3745,34 @@ func (u *GroupUpsertBulk) SetScope(v string) *GroupUpsertBulk {
 func (u *GroupUpsertBulk) UpdateScope() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateScope()
+	})
+}
+
+// SetAPIKeyBadgeType sets the "api_key_badge_type" field.
+func (u *GroupUpsertBulk) SetAPIKeyBadgeType(v group.APIKeyBadgeType) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetAPIKeyBadgeType(v)
+	})
+}
+
+// UpdateAPIKeyBadgeType sets the "api_key_badge_type" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateAPIKeyBadgeType() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateAPIKeyBadgeType()
+	})
+}
+
+// SetAPIKeyBadgeText sets the "api_key_badge_text" field.
+func (u *GroupUpsertBulk) SetAPIKeyBadgeText(v string) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetAPIKeyBadgeText(v)
+	})
+}
+
+// UpdateAPIKeyBadgeText sets the "api_key_badge_text" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateAPIKeyBadgeText() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateAPIKeyBadgeText()
 	})
 }
 

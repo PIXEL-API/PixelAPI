@@ -431,11 +431,13 @@ func TestOpenAIGatewayService_SelectAccountWithSchedulerForImages_AccountShareMo
 	}
 	shareRepo := &accountShareModeRepoStub{
 		membership: &AccountShareMembership{ID: 2, AccountID: account.ID, ConsumerUserID: consumerUserID, APIKeyID: apiKeyID},
-		listing:    &AccountShareListing{ID: 2, AccountID: account.ID, OwnerUserID: 1, Status: AccountShareListingStatusActive},
+		listing:    &AccountShareListing{ID: 2, AccountID: account.ID, OwnerUserID: 1, Status: AccountShareListingStatusActive, PerUserConcurrency: 1},
 	}
+	concurrencyService, accountShareService := newAccountShareRuntimeLeaseTestServices(shareRepo)
 	svc := &OpenAIGatewayService{
 		accountRepo:             stubOpenAIAccountRepo{accounts: []Account{account}},
-		accountShareModeService: &AccountShareModeService{repo: shareRepo},
+		accountShareModeService: accountShareService,
+		concurrencyService:      concurrencyService,
 	}
 	ctx := WithAccountShareModeRequest(context.Background(), consumerUserID, apiKeyID)
 

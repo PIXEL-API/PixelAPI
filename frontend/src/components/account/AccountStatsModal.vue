@@ -14,7 +14,7 @@
           class="pointer-events-none absolute -right-16 -top-24 h-56 w-56 rounded-full bg-blue-500/20 blur-3xl"
           aria-hidden="true"
         ></div>
-        <div class="relative flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div class="relative flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
           <div class="min-w-0">
             <div class="flex flex-wrap items-center gap-2">
               <h2 class="truncate text-lg font-semibold tracking-tight sm:text-xl">
@@ -43,7 +43,7 @@
             </p>
           </div>
 
-          <div class="flex w-full flex-col gap-2 lg:w-auto lg:items-end">
+          <div class="flex w-full flex-col gap-2 xl:w-auto xl:items-end">
             <form
               class="rounded-xl border border-white/10 bg-white/5 p-2"
               :aria-label="t('admin.accounts.stats.customRange')"
@@ -75,7 +75,7 @@
                 </label>
                 <button
                   type="submit"
-                  class="min-h-11 rounded-lg bg-white px-4 text-xs font-semibold text-slate-950 transition-colors hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-not-allowed disabled:opacity-45"
+                  class="min-h-11 whitespace-nowrap rounded-lg bg-white px-4 text-xs font-semibold text-slate-950 transition-colors hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-not-allowed disabled:opacity-45"
                   :disabled="Boolean(dateRangeError) || !hasPendingRangeChanges || statsLoading"
                 >
                   {{ t('admin.accounts.stats.applyRange') }}
@@ -206,7 +206,7 @@
             </span>
           </div>
 
-          <div class="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-slate-200 bg-slate-200 dark:border-slate-700 dark:bg-slate-700 lg:grid-cols-4">
+          <div class="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-slate-200 bg-slate-200 dark:border-slate-700 dark:bg-slate-700 lg:grid-cols-3 xl:grid-cols-6">
             <div
               v-for="item in summaryCards"
               :key="item.label"
@@ -221,7 +221,7 @@
               >
                 {{ item.value }}
               </div>
-              <div class="mt-1 truncate text-[11px] text-slate-400">
+              <div class="mt-1 min-h-8 text-[11px] leading-4 text-slate-400">
                 {{ item.note }}
               </div>
             </div>
@@ -241,10 +241,18 @@
                   {{ t('admin.accounts.stats.dailyTrendHint') }}
                 </p>
               </div>
-              <div class="flex items-center gap-3 text-[11px] text-slate-500 dark:text-slate-400">
+              <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px] text-slate-500 dark:text-slate-400">
                 <span class="inline-flex items-center gap-1.5">
                   <span class="h-0.5 w-4 rounded-full bg-blue-600"></span>
                   {{ t('admin.accounts.stats.pixelCost') }}
+                </span>
+                <span class="inline-flex items-center gap-1.5">
+                  <span class="h-0.5 w-4 rounded-full bg-emerald-500"></span>
+                  {{ t('admin.accounts.stats.pixelUserCost') }}
+                </span>
+                <span class="inline-flex items-center gap-1.5">
+                  <span class="h-0.5 w-4 rounded-full bg-violet-500"></span>
+                  {{ t('admin.accounts.stats.ownerIncome') }}
                 </span>
                 <span class="inline-flex items-center gap-1.5">
                   <span class="h-0.5 w-4 rounded-full bg-amber-500"></span>
@@ -352,11 +360,14 @@
             </p>
           </div>
           <div class="max-h-80 overflow-auto">
-            <table class="w-full min-w-[560px] text-left text-xs">
+            <table class="w-full min-w-[900px] text-left text-xs">
               <thead class="sticky top-0 z-10 bg-slate-50 text-slate-500 dark:bg-slate-900 dark:text-slate-400">
                 <tr>
                   <th class="px-4 py-3 font-semibold sm:px-5">{{ t('admin.accounts.stats.date') }}</th>
                   <th class="px-4 py-3 text-right font-semibold">{{ t('admin.accounts.stats.pixelCost') }}</th>
+                  <th class="px-4 py-3 text-right font-semibold">{{ t('admin.accounts.stats.pixelUserCost') }}</th>
+                  <th class="px-4 py-3 text-right font-semibold">{{ t('admin.accounts.stats.ownerIncome') }}</th>
+                  <th class="px-4 py-3 text-right font-semibold">{{ t('admin.accounts.stats.ownerNetIncome') }}</th>
                   <th class="px-4 py-3 text-right font-semibold">{{ t('admin.accounts.stats.requests') }}</th>
                   <th class="px-4 py-3 text-right font-semibold sm:pr-5">{{ t('admin.accounts.stats.tokens') }}</th>
                 </tr>
@@ -374,6 +385,22 @@
                     ${{ formatCost(item.actual_cost) }}
                   </td>
                   <td class="px-4 py-3 text-right font-mono tabular-nums">
+                    ${{ formatCost(item.user_cost) }}
+                  </td>
+                  <td class="px-4 py-3 text-right font-mono tabular-nums">
+                    ${{ formatCost(item.owner_income) }}
+                  </td>
+                  <td
+                    class="px-4 py-3 text-right font-mono font-semibold tabular-nums"
+                    :class="
+                      item.owner_net_income >= 0
+                        ? 'text-emerald-600 dark:text-emerald-400'
+                        : 'text-rose-600 dark:text-rose-400'
+                    "
+                  >
+                    ${{ formatCost(item.owner_net_income) }}
+                  </td>
+                  <td class="px-4 py-3 text-right font-mono tabular-nums">
                     {{ formatNumber(item.requests) }}
                   </td>
                   <td class="px-4 py-3 text-right font-mono tabular-nums sm:pr-5">
@@ -381,7 +408,7 @@
                   </td>
                 </tr>
                 <tr v-if="reversedHistory.length === 0">
-                  <td colspan="4" class="px-4 py-10 text-center text-slate-400">
+                  <td colspan="7" class="px-4 py-10 text-center text-slate-400">
                     {{ t('admin.accounts.stats.noData') }}
                   </td>
                 </tr>
@@ -422,11 +449,12 @@
             </div>
           </div>
           <div class="max-h-80 overflow-auto">
-            <table class="w-full min-w-[620px] text-left text-xs">
+            <table class="w-full min-w-[760px] text-left text-xs">
               <thead class="sticky top-0 z-10 bg-slate-50 text-slate-500 dark:bg-slate-900 dark:text-slate-400">
                 <tr>
                   <th class="px-4 py-3 font-semibold sm:px-5">{{ breakdownNameLabel }}</th>
                   <th class="px-4 py-3 text-right font-semibold">{{ t('admin.accounts.stats.pixelCost') }}</th>
+                  <th class="px-4 py-3 text-right font-semibold">{{ t('admin.accounts.stats.pixelUserCost') }}</th>
                   <th class="px-4 py-3 text-right font-semibold">{{ t('admin.accounts.stats.requests') }}</th>
                   <th class="px-4 py-3 text-right font-semibold sm:pr-5">{{ t('admin.accounts.stats.tokens') }}</th>
                 </tr>
@@ -447,6 +475,9 @@
                     ${{ formatCost(row.cost) }}
                   </td>
                   <td class="px-4 py-3 text-right font-mono tabular-nums">
+                    ${{ formatCost(row.userCost) }}
+                  </td>
+                  <td class="px-4 py-3 text-right font-mono tabular-nums">
                     {{ formatNumber(row.requests) }}
                   </td>
                   <td class="px-4 py-3 text-right font-mono tabular-nums sm:pr-5">
@@ -454,7 +485,7 @@
                   </td>
                 </tr>
                 <tr v-if="breakdownRows.length === 0">
-                  <td colspan="4" class="px-4 py-10 text-center text-slate-400">
+                  <td colspan="5" class="px-4 py-10 text-center text-slate-400">
                     {{ t('admin.accounts.stats.noData') }}
                   </td>
                 </tr>
@@ -587,9 +618,10 @@ let usageController: AbortController | null = null
 const formatCost = (value: number): string => {
   const amount = Number(value)
   if (!Number.isFinite(amount)) return '0.0000'
-  if (amount >= 1000) return `${(amount / 1000).toFixed(2)}K`
-  if (amount >= 1) return amount.toFixed(2)
-  if (amount >= 0.01) return amount.toFixed(3)
+  const absoluteAmount = Math.abs(amount)
+  if (absoluteAmount >= 1000) return `${(amount / 1000).toFixed(2)}K`
+  if (absoluteAmount >= 1) return amount.toFixed(2)
+  if (absoluteAmount >= 0.01) return amount.toFixed(3)
   return amount.toFixed(4)
 }
 
@@ -778,9 +810,26 @@ const summaryCards = computed(() => {
   const summary = stats.value?.summary
   return [
     {
-      label: t('admin.accounts.stats.periodCost'),
+      label: t('admin.accounts.stats.pixelCost'),
       value: `$${formatCost(summary?.total_cost || 0)}`,
       note: t('admin.accounts.stats.pixelCostNote')
+    },
+    {
+      label: t('admin.accounts.stats.pixelUserCost'),
+      value: `$${formatCost(summary?.total_user_cost || 0)}`,
+      note: t('admin.accounts.stats.pixelUserCostNote', {
+        amount: formatCost(summary?.total_share_consumer_cost || 0)
+      })
+    },
+    {
+      label: t('admin.accounts.stats.ownerIncome'),
+      value: `$${formatCost(summary?.total_owner_income || 0)}`,
+      note: t('admin.accounts.stats.ownerIncomeNote')
+    },
+    {
+      label: t('admin.accounts.stats.ownerNetIncome'),
+      value: `$${formatCost(summary?.total_owner_net_income || 0)}`,
+      note: t('admin.accounts.stats.ownerNetIncomeNote')
     },
     {
       label: t('admin.accounts.stats.periodRequests'),
@@ -791,18 +840,18 @@ const summaryCards = computed(() => {
       label: t('admin.accounts.stats.periodTokens'),
       value: formatCompact(summary?.total_tokens || 0),
       note: t('admin.accounts.stats.tokenCountNote')
-    },
-    {
-      label: t('admin.accounts.stats.activeDays'),
-      value: `${pixelHistory.value.length} / ${selectedDayCount.value}`,
-      note: t('admin.accounts.stats.activeDaysNote')
     }
   ]
 })
 
 const pixelHistory = computed(() =>
   (stats.value?.history || []).filter(
-    (item) => item.requests > 0 || item.tokens > 0 || Math.abs(item.actual_cost) > 0.0000001
+    (item) =>
+      item.requests > 0 ||
+      item.tokens > 0 ||
+      Math.abs(item.actual_cost) > 0.0000001 ||
+      Math.abs(item.user_cost) > 0.0000001 ||
+      Math.abs(item.owner_income) > 0.0000001
   )
 )
 
@@ -863,6 +912,33 @@ const trendChartData = computed(() => {
         borderWidth: 2,
         fill: true,
         tension: 0.32,
+        yAxisID: 'cost'
+      },
+      {
+        label: t('admin.accounts.stats.pixelUserCost'),
+        data: pixelHistory.value.map((item) => item.user_cost),
+        borderColor: '#10b981',
+        backgroundColor: 'rgba(16, 185, 129, 0.08)',
+        pointBackgroundColor: '#10b981',
+        pointRadius: selectedDayCount.value > 30 ? 0 : 2,
+        pointHoverRadius: 4,
+        borderWidth: 1.75,
+        fill: false,
+        tension: 0.28,
+        yAxisID: 'cost'
+      },
+      {
+        label: t('admin.accounts.stats.ownerIncome'),
+        data: pixelHistory.value.map((item) => item.owner_income),
+        borderColor: '#8b5cf6',
+        backgroundColor: 'rgba(139, 92, 246, 0.08)',
+        pointBackgroundColor: '#8b5cf6',
+        pointRadius: selectedDayCount.value > 30 ? 0 : 2,
+        pointHoverRadius: 4,
+        borderWidth: 1.75,
+        borderDash: [5, 3],
+        fill: false,
+        tension: 0.28,
         yAxisID: 'cost'
       },
       {
@@ -951,14 +1027,16 @@ const mapModelRow = (item: ModelStat) => ({
   name: item.model || t('admin.accounts.stats.unknown'),
   requests: item.requests,
   tokens: item.total_tokens,
-  cost: item.account_cost
+  cost: item.account_cost,
+  userCost: item.actual_cost
 })
 
 const mapEndpointRow = (item: EndpointStat) => ({
   name: item.endpoint || t('admin.accounts.stats.unknown'),
   requests: item.requests,
   tokens: item.total_tokens,
-  cost: item.actual_cost
+  cost: item.account_cost,
+  userCost: item.actual_cost
 })
 
 const breakdownRows = computed(() => {

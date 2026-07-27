@@ -188,6 +188,9 @@ func PrepareBedrockRequestBody(body []byte, modelID string, betaHeader string) (
 func PrepareBedrockRequestBodyWithTokens(body []byte, modelID string, betaTokens []string) ([]byte, error) {
 	var err error
 
+	betaTokens = filterBedrockBetaTokens(betaTokens)
+	body = sanitizeBedrockFieldsForBetaTokens(body, betaTokens)
+
 	// 注入 anthropic_version（Bedrock 要求）
 	body, err = sjson.SetBytes(body, "anthropic_version", "bedrock-2023-05-31")
 	if err != nil {
@@ -203,7 +206,13 @@ func PrepareBedrockRequestBodyWithTokens(body []byte, modelID string, betaTokens
 		if err != nil {
 			return nil, fmt.Errorf("inject anthropic_beta: %w", err)
 		}
+	} else {
+		body, _ = sjson.DeleteBytes(body, "anthropic_beta")
 	}
+
+	// 移除 Bedrock 不支持的 Anthropic 直连 API 专有顶层字段
+	body, _ = sjson.DeleteBytes(body, "provider")
+	body, _ = sjson.DeleteBytes(body, "metadata")
 
 	// 移除 model 字段（Bedrock 通过 URL 指定模型）
 	body, err = sjson.DeleteBytes(body, "model")
@@ -444,18 +453,20 @@ func parseAnthropicBetaHeader(header string) []string {
 }
 
 // bedrockSupportedBetaTokens 是 Bedrock Invoke 支持的 beta 头白名单
-// 参考: litellm/litellm/llms/bedrock/common_utils.py (anthropic_beta_headers_config.json)
+// 参考: AWS Bedrock 官方文档 + litellm anthropic_beta_headers_config.json
 // 更新策略: 当 AWS Bedrock 新增支持的 beta token 时需同步更新此白名单
 var bedrockSupportedBetaTokens = map[string]bool{
-	"computer-use-2025-01-24":         true,
-	"computer-use-2025-11-24":         true,
-	"context-1m-2025-08-07":           true,
-	"context-management-2025-06-27":   true,
-	"compact-2026-01-12":              true,
-	"interleaved-thinking-2025-05-14": true,
-	"tool-search-tool-2025-10-19":     true,
-	"tool-examples-2025-10-29":        true,
+	"computer-use-2025-01-24":                true,
+	"computer-use-2025-11-24":                true,
+	"context-1m-2025-08-07":                  true,
+	"context-management-2025-06-27":          true,
+	"compact-2026-01-12":                     true,
+	"fine-grained-tool-streaming-2025-05-14": true,
+	"tool-search-tool-2025-10-19":            true,
+	"tool-examples-2025-10-29":               true,
 }
+
+const bedrockContextManagementBetaToken = "context-management-2025-06-27"
 
 // bedrockBetaTokenTransforms 定义 Bedrock Invoke 特有的 beta 头转换规则
 // Anthropic 直接 API 使用通用头，Bedrock Invoke 需要特定的替代头
@@ -482,11 +493,7 @@ func autoInjectBedrockBetaTokens(tokens []string, body []byte, modelID string) [
 		}
 	}
 
-	// 检测 thinking / interleaved thinking
-	// 请求体中有 "thinking" 字段 → 需要 interleaved-thinking beta
-	if gjson.GetBytes(body, "thinking").Exists() {
-		inject("interleaved-thinking-2025-05-14")
-	}
+	// thinking 不自动注入 interleaved-thinking；AWS Bedrock 官方文档未确认支持该 beta token。
 
 	// 检测 computer_use 工具
 	// tools 中有 type="computer_20xxxxxx" 的工具 → 需要 computer-use beta
@@ -604,4 +611,21 @@ func filterBedrockBetaTokens(tokens []string) []string {
 	}
 
 	return result
+}
+
+// sanitizeBedrockFieldsForBetaTokens 保证 beta 专属字段与最终发送到 Bedrock 的 token 一致。
+func sanitizeBedrockFieldsForBetaTokens(body []byte, betaTokens []string) []byte {
+	if !containsBedrockBetaToken(betaTokens, bedrockContextManagementBetaToken) && gjson.GetBytes(body, "context_management").Exists() {
+		body, _ = sjson.DeleteBytes(body, "context_management")
+	}
+	return body
+}
+
+func containsBedrockBetaToken(tokens []string, target string) bool {
+	for _, token := range tokens {
+		if token == target {
+			return true
+		}
+	}
+	return false
 }

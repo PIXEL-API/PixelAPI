@@ -495,7 +495,9 @@ func DefaultOverloadCooldownSettings() *OverloadCooldownSettings {
 	}
 }
 
-// DefaultBetaPolicySettings 返回默认的 Beta 策略配置
+// DefaultBetaPolicySettings 返回默认的 Beta 策略配置。
+// Sonnet 5 的直连、Vertex 和 Bedrock 模型 ID 默认允许 1M context beta；
+// 其他模型继续过滤，避免把不受支持的 beta 透传到上游。
 func DefaultBetaPolicySettings() *BetaPolicySettings {
 	return &BetaPolicySettings{
 		Rules: []BetaPolicyRule{
@@ -506,8 +508,22 @@ func DefaultBetaPolicySettings() *BetaPolicySettings {
 			},
 			{
 				BetaToken: "context-1m-2025-08-07",
-				Action:    BetaPolicyActionFilter,
+				Action:    BetaPolicyActionPass,
 				Scope:     BetaPolicyScopeAll,
+				ModelWhitelist: []string{
+					"claude-sonnet-5",
+					"claude-sonnet-5-*",
+					"claude-sonnet-5@*",
+					"us.anthropic.claude-sonnet-5*",
+					"eu.anthropic.claude-sonnet-5*",
+					"apac.anthropic.claude-sonnet-5*",
+					"jp.anthropic.claude-sonnet-5*",
+					"au.anthropic.claude-sonnet-5*",
+					"us-gov.anthropic.claude-sonnet-5*",
+					"global.anthropic.claude-sonnet-5*",
+					"anthropic.claude-sonnet-5*",
+				},
+				FallbackAction: BetaPolicyActionFilter,
 			},
 		},
 	}

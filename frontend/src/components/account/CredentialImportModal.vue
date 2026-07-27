@@ -84,6 +84,43 @@
               :placeholder="textPlaceholder || t('userAccounts.importTextPlaceholder')"
             />
             <p class="input-hint leading-5">{{ textHint || t('userAccounts.importTextHint') }}</p>
+            <details
+              v-if="showOpenaiFormatExamples"
+              class="group rounded-xl border border-blue-200 bg-blue-50/70 dark:border-blue-800 dark:bg-blue-950/30"
+              data-testid="openai-import-format-examples"
+            >
+              <summary
+                class="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 py-2.5 text-sm font-semibold text-blue-800 marker:hidden dark:text-blue-200"
+              >
+                <span>{{ t('userAccounts.importOpenAIFormatExamples') }}</span>
+                <Icon
+                  name="chevronDown"
+                  size="sm"
+                  class="flex-none transition-transform group-open:rotate-180"
+                />
+              </summary>
+              <div class="space-y-4 border-t border-blue-200 px-4 py-4 dark:border-blue-800">
+                <div>
+                  <p class="mb-2 text-xs font-semibold text-blue-800 dark:text-blue-200">
+                    {{ t('userAccounts.importOpenAIAccessTokenJSON') }}
+                  </p>
+                  <pre
+                    class="max-w-full overflow-x-auto rounded-lg bg-gray-950 p-3 text-xs leading-5 text-gray-100"
+                  ><code>{{ openAIAccessTokenJSONExample }}</code></pre>
+                </div>
+                <div>
+                  <p class="mb-2 text-xs font-semibold text-blue-800 dark:text-blue-200">
+                    {{ t('userAccounts.importOpenAIOAuthJSON') }}
+                  </p>
+                  <pre
+                    class="max-w-full overflow-x-auto rounded-lg bg-gray-950 p-3 text-xs leading-5 text-gray-100"
+                  ><code>{{ openAIOAuthJSONExample }}</code></pre>
+                </div>
+                <p class="text-xs leading-5 text-blue-700 dark:text-blue-300">
+                  {{ t('userAccounts.importOpenAIFormatHint') }}
+                </p>
+              </div>
+            </details>
           </div>
 
           <div v-else class="space-y-3" role="tabpanel">
@@ -203,6 +240,7 @@ interface Props {
   submitDisabled?: boolean
   textHint?: string
   textPlaceholder?: string
+  showOpenaiFormatExamples?: boolean
   fileAccept?: string
   allowedExtensions?: string[]
   importer: (contents: string[]) => Promise<ImportCredentialContentsResponse>
@@ -231,6 +269,7 @@ const props = withDefaults(defineProps<Props>(), {
   width: 'wide',
   formId: 'credential-import-form',
   submitDisabled: false,
+  showOpenaiFormatExamples: false,
   fileAccept: 'application/json,text/plain,.json,.txt',
   allowedExtensions: () => ['.json', '.txt']
 })
@@ -238,6 +277,23 @@ const emit = defineEmits<Emits>()
 
 const { t } = useI18n()
 const appStore = useAppStore()
+
+const openAIAccessTokenJSONExample = `{
+  "platform": "openai",
+  "access_token": "eyJ..."
+}`
+
+const openAIOAuthJSONExample = `{
+  "name": "OpenAI Plus",
+  "platform": "openai",
+  "type": "oauth",
+  "credentials": {
+    "access_token": "eyJ...",
+    "refresh_token": "rt_...",
+    "id_token": "eyJ...",
+    "expires_at": 1893456000
+  }
+}`
 
 const importing = ref(false)
 const importMode = ref<'text' | 'file'>('text')

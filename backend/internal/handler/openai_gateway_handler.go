@@ -47,6 +47,25 @@ type grokMediaEligibilityProber interface {
 
 const maxOpenAIFirstOutputTimeoutSwitches = 1
 
+func newOpenAIWSTurnClientRequestID(turn int, payloadHash string) string {
+	return fmt.Sprintf(
+		"openai-ws-turn:%d:%s:%s",
+		turn,
+		strings.TrimSpace(payloadHash),
+		uuid.NewString(),
+	)
+}
+
+func openAIWSTurnBillingDisposition(
+	result *service.OpenAIForwardResult,
+	turnErr error,
+) (recordUsage bool, completeWithoutUsage bool, hasBillableUsage bool) {
+	hasBillableUsage = service.OpenAIForwardResultHasBillableUsage(result)
+	recordUsage = result != nil && (turnErr == nil || hasBillableUsage)
+	completeWithoutUsage = turnErr != nil && !hasBillableUsage
+	return recordUsage, completeWithoutUsage, hasBillableUsage
+}
+
 func resolveOpenAIForwardDefaultMappedModel(apiKey *service.APIKey, fallbackModel string) string {
 	if fallbackModel = strings.TrimSpace(fallbackModel); fallbackModel != "" {
 		return fallbackModel
@@ -112,6 +131,7 @@ func NewOpenAIGatewayHandler(
 func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// 局部兜底：确保该 handler 内部任何 panic 都不会击穿到进程级。
 	streamStarted := false
+	billingDispatchAttemptNo := 0
 	defer h.recoverResponsesPanic(c, &streamStarted)
 	compactStartedAt := time.Now()
 	defer h.logOpenAIRemoteCompactOutcome(c, compactStartedAt)
@@ -491,11 +511,94 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		if channelMapping.Mapped {
 			forwardAnalysis = analysis.WithBodyAndModel(forwardBody, channelMapping.MappedModel)
 		}
-		result, err := h.gatewayService.ForwardWithAnalysis(dispatchCtx, c, account, forwardBody, forwardAnalysis)
+		forwardCtx, cancelForward := bindAccountSelectionForwardContext(dispatchCtx, selection)
+		requestPayloadHash := service.HashUsageRequestPayload(body)
+		routedModel := service.ResolveOpenAIForwardModel(account, selectionModel, "")
+		if requireCompact {
+			routedModel = service.ResolveOpenAICompactForwardModel(account, routedModel)
+		}
+		forwardCtx, err = beginAccountShareBillingDispatch(
+			forwardCtx,
+			h.gatewayService,
+			selection,
+			&billingDispatchAttemptNo,
+			service.AccountShareBillingDispatchInput{
+				APIKey:             currentAPIKey,
+				User:               currentAPIKey.User,
+				Subscription:       currentSubscription,
+				RequestedModel:     reqModel,
+				RoutedModel:        routedModel,
+				InboundEndpoint:    GetInboundEndpoint(c),
+				UpstreamEndpoint:   GetUpstreamEndpoint(c, account.Platform),
+				RequestType:        accountShareBillingRequestType(reqStream),
+				RequestPayloadHash: requestPayloadHash,
+				ChannelUsageFields: channelMapping.ToUsageFields(reqModel, routedModel),
+			},
+		)
+		if err != nil {
+			cancelForward()
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			reqLog.Error("openai.billing_dispatch_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+			h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable; no upstream request was sent", streamStarted)
+			return
+		}
+		result, err := h.gatewayService.ForwardWithAnalysis(forwardCtx, c, account, forwardBody, forwardAnalysis)
+		cancelForward()
 		if service.GetOpsCyberPolicy(c) != nil {
 			h.gatewayService.MarkCyberSessionBlocked(dispatchCtx, service.CyberSessionBlockKey(currentAPIKey.ID, c, sessionHashBody))
 		}
 		forwardDurationMs := time.Since(forwardStart).Milliseconds()
+		userAgent := c.GetHeader("User-Agent")
+		clientIP := ip.GetClientIP(c)
+		inboundEndpoint := GetInboundEndpoint(c)
+		upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
+		recordUsageResult := func(result *service.OpenAIForwardResult) {
+			if result == nil {
+				return
+			}
+			h.submitUsageRecordTask(func(ctx context.Context) {
+				usageCtx := service.WithAccountShareModeRequestFromContext(ctx, forwardCtx)
+				if err := h.gatewayService.RecordUsage(usageCtx, &service.OpenAIRecordUsageInput{
+					Result:             result,
+					APIKey:             currentAPIKey,
+					User:               currentAPIKey.User,
+					Account:            account,
+					Subscription:       currentSubscription,
+					InboundEndpoint:    inboundEndpoint,
+					UpstreamEndpoint:   upstreamEndpoint,
+					UserAgent:          userAgent,
+					IPAddress:          clientIP,
+					RequestPayloadHash: requestPayloadHash,
+					APIKeyService:      h.apiKeyService,
+					ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
+				}); err != nil {
+					logger.L().With(
+						zap.String("component", "handler.openai_gateway.responses"),
+						zap.Int64("user_id", subject.UserID),
+						zap.Int64("api_key_id", currentAPIKey.ID),
+						zap.Any("group_id", currentAPIKey.GroupID),
+						zap.String("model", reqModel),
+						zap.Int64("account_id", account.ID),
+					).Error("openai.record_usage_failed", zap.Error(err))
+				}
+			})
+		}
+		hasBillableUsage := service.OpenAIForwardResultHasBillableUsage(result)
+		if err != nil && hasBillableUsage {
+			recordUsageResult(result)
+		}
+		if finalizeErr := completeAccountShareBillingDispatchWithoutUsage(forwardCtx, err, hasBillableUsage, reqStream); finalizeErr != nil {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			reqLog.Error("openai.billing_dispatch_finalize_failed", zap.Int64("account_id", account.ID), zap.Error(finalizeErr))
+			if service.OpenAICompactKeepaliveAdjustedWrittenSize(c) == writerSizeBeforeForward {
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable", streamStarted)
+			}
+			return
+		}
 		if accountReleaseFunc != nil {
 			accountReleaseFunc()
 		}
@@ -611,38 +714,8 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		}
 		routeCursor.recordSuccess(apiKey.ID)
 
-		// 捕获请求信息（用于异步记录，避免在 goroutine 中访问 gin.Context）
-		userAgent := c.GetHeader("User-Agent")
-		clientIP := ip.GetClientIP(c)
-		requestPayloadHash := service.HashUsageRequestPayload(body)
-
 		// 使用量记录通过有界 worker 池提交，避免请求热路径创建无界 goroutine。
-		h.submitUsageRecordTask(func(ctx context.Context) {
-			usageCtx := service.WithAccountShareModeRequestFromContext(ctx, dispatchCtx)
-			if err := h.gatewayService.RecordUsage(usageCtx, &service.OpenAIRecordUsageInput{
-				Result:             result,
-				APIKey:             currentAPIKey,
-				User:               currentAPIKey.User,
-				Account:            account,
-				Subscription:       currentSubscription,
-				InboundEndpoint:    GetInboundEndpoint(c),
-				UpstreamEndpoint:   GetUpstreamEndpoint(c, account.Platform),
-				UserAgent:          userAgent,
-				IPAddress:          clientIP,
-				RequestPayloadHash: requestPayloadHash,
-				APIKeyService:      h.apiKeyService,
-				ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
-			}); err != nil {
-				logger.L().With(
-					zap.String("component", "handler.openai_gateway.responses"),
-					zap.Int64("user_id", subject.UserID),
-					zap.Int64("api_key_id", currentAPIKey.ID),
-					zap.Any("group_id", currentAPIKey.GroupID),
-					zap.String("model", reqModel),
-					zap.Int64("account_id", account.ID),
-				).Error("openai.record_usage_failed", zap.Error(err))
-			}
-		})
+		recordUsageResult(result)
 		reqLog.Debug("openai.request_completed",
 			zap.Int64("account_id", account.ID),
 			zap.Int("switch_count", switchCount),
@@ -801,6 +874,7 @@ func (h *OpenAIGatewayHandler) logOpenAIRemoteCompactOutcome(c *gin.Context, sta
 // POST /v1/messages (when group platform is OpenAI)
 func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	streamStarted := false
+	billingDispatchAttemptNo := 0
 	defer h.recoverAnthropicMessagesPanic(c, &streamStarted)
 
 	requestStart := time.Now()
@@ -1076,12 +1150,92 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		if channelMappingMsg.Mapped {
 			forwardBody = h.gatewayService.ReplaceModelInBody(body, channelMappingMsg.MappedModel)
 		}
-		result, err := h.gatewayService.ForwardAsAnthropic(c.Request.Context(), c, account, forwardBody, promptCacheKey, defaultMappedModel)
+		forwardCtx, cancelForward := bindAccountSelectionForwardContext(selectionCtx, selection)
+		requestPayloadHash := service.HashUsageRequestPayload(body)
+		routedModel := service.ResolveOpenAIForwardModel(account, currentRoutingModel, defaultMappedModel)
+		forwardCtx, err = beginAccountShareBillingDispatch(
+			forwardCtx,
+			h.gatewayService,
+			selection,
+			&billingDispatchAttemptNo,
+			service.AccountShareBillingDispatchInput{
+				APIKey:             currentAPIKey,
+				User:               currentAPIKey.User,
+				Subscription:       currentSubscription,
+				RequestedModel:     reqModel,
+				RoutedModel:        routedModel,
+				InboundEndpoint:    GetInboundEndpoint(c),
+				UpstreamEndpoint:   GetUpstreamEndpoint(c, account.Platform),
+				RequestType:        accountShareBillingRequestType(reqStream),
+				RequestPayloadHash: requestPayloadHash,
+				ChannelUsageFields: channelMappingMsg.ToUsageFields(reqModel, routedModel),
+			},
+		)
+		if err != nil {
+			cancelForward()
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			reqLog.Error("openai_messages.billing_dispatch_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+			h.anthropicStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable; no upstream request was sent", streamStarted)
+			return
+		}
+		result, err := h.gatewayService.ForwardAsAnthropic(forwardCtx, c, account, forwardBody, promptCacheKey, defaultMappedModel)
+		cancelForward()
 		if service.GetOpsCyberPolicy(c) != nil {
 			h.gatewayService.MarkCyberSessionBlocked(c.Request.Context(), service.CyberSessionBlockKey(currentAPIKey.ID, c, body))
 		}
 
 		forwardDurationMs := time.Since(forwardStart).Milliseconds()
+		userAgent := c.GetHeader("User-Agent")
+		clientIP := ip.GetClientIP(c)
+		inboundEndpoint := GetInboundEndpoint(c)
+		upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
+		recordUsageResult := func(result *service.OpenAIForwardResult) {
+			if result == nil {
+				return
+			}
+			h.submitUsageRecordTask(func(ctx context.Context) {
+				usageCtx := service.WithAccountShareModeRequestFromContext(ctx, forwardCtx)
+				if err := h.gatewayService.RecordUsage(usageCtx, &service.OpenAIRecordUsageInput{
+					Result:             result,
+					APIKey:             currentAPIKey,
+					User:               currentAPIKey.User,
+					Account:            account,
+					Subscription:       currentSubscription,
+					InboundEndpoint:    inboundEndpoint,
+					UpstreamEndpoint:   upstreamEndpoint,
+					UserAgent:          userAgent,
+					IPAddress:          clientIP,
+					RequestPayloadHash: requestPayloadHash,
+					APIKeyService:      h.apiKeyService,
+					ChannelUsageFields: channelMappingMsg.ToUsageFields(reqModel, result.UpstreamModel),
+				}); err != nil {
+					logger.L().With(
+						zap.String("component", "handler.openai_gateway.messages"),
+						zap.Int64("user_id", subject.UserID),
+						zap.Int64("api_key_id", currentAPIKey.ID),
+						zap.Any("group_id", currentAPIKey.GroupID),
+						zap.String("model", reqModel),
+						zap.Int64("account_id", account.ID),
+					).Error("openai_messages.record_usage_failed", zap.Error(err))
+				}
+			})
+		}
+		hasBillableUsage := service.OpenAIForwardResultHasBillableUsage(result)
+		if err != nil && hasBillableUsage {
+			recordUsageResult(result)
+		}
+		if finalizeErr := completeAccountShareBillingDispatchWithoutUsage(forwardCtx, err, hasBillableUsage, reqStream); finalizeErr != nil {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			reqLog.Error("openai_messages.billing_dispatch_finalize_failed", zap.Int64("account_id", account.ID), zap.Error(finalizeErr))
+			if c.Writer.Size() == writerSizeBeforeForward {
+				h.anthropicStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable", streamStarted)
+			}
+			return
+		}
 		if accountReleaseFunc != nil {
 			accountReleaseFunc()
 		}
@@ -1173,36 +1327,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		}
 		routeCursor.recordSuccess(apiKey.ID)
 
-		userAgent := c.GetHeader("User-Agent")
-		clientIP := ip.GetClientIP(c)
-		requestPayloadHash := service.HashUsageRequestPayload(body)
-
-		h.submitUsageRecordTask(func(ctx context.Context) {
-			usageCtx := service.WithAccountShareModeRequestFromContext(ctx, selectionCtx)
-			if err := h.gatewayService.RecordUsage(usageCtx, &service.OpenAIRecordUsageInput{
-				Result:             result,
-				APIKey:             currentAPIKey,
-				User:               currentAPIKey.User,
-				Account:            account,
-				Subscription:       currentSubscription,
-				InboundEndpoint:    GetInboundEndpoint(c),
-				UpstreamEndpoint:   GetUpstreamEndpoint(c, account.Platform),
-				UserAgent:          userAgent,
-				IPAddress:          clientIP,
-				RequestPayloadHash: requestPayloadHash,
-				APIKeyService:      h.apiKeyService,
-				ChannelUsageFields: channelMappingMsg.ToUsageFields(reqModel, result.UpstreamModel),
-			}); err != nil {
-				logger.L().With(
-					zap.String("component", "handler.openai_gateway.messages"),
-					zap.Int64("user_id", subject.UserID),
-					zap.Int64("api_key_id", currentAPIKey.ID),
-					zap.Any("group_id", currentAPIKey.GroupID),
-					zap.String("model", reqModel),
-					zap.Int64("account_id", account.ID),
-				).Error("openai_messages.record_usage_failed", zap.Error(err))
-			}
-		})
+		recordUsageResult(result)
 		reqLog.Debug("openai_messages.request_completed",
 			zap.Int64("account_id", account.ID),
 			zap.Int("switch_count", switchCount),
@@ -1400,7 +1525,7 @@ func (h *OpenAIGatewayHandler) acquireResponsesAccountSlot(
 		if err := h.gatewayService.BindStickySession(ctx, groupID, sessionHash, latest.ID); err != nil {
 			reqLog.Warn("openai.bind_sticky_session_failed", zap.Int64("account_id", latest.ID), zap.Error(err))
 		}
-		return latest, wrapReleaseOnDone(ctx, release), true
+		return latest, wrapAccountSelectionReleaseOnDone(ctx, selection, release), true
 	}
 	if selection.Acquired {
 		return finishAcquired(selection.ReleaseFunc)
@@ -1744,6 +1869,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "共享账号单用户并发已达上限")
 			return
 		}
+		if errors.Is(selectErr, service.ErrAccountShareModeSelection) {
+			closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "共享账号暂时不可用，请稍后重试")
+			return
+		}
 		if !routeCursor.switchToNext(apiKey.ID, "account_select_failed", reqLog, zap.Error(selectErr)) {
 			closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "no available account")
 			return
@@ -1755,7 +1884,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	if selection.Acquired {
 		// The scheduler may acquire the account slot before user-level moderation.
 		// Transfer ownership to the common defer before any subsequent early return.
-		currentAccountRelease = wrapReleaseOnDone(ctx, accountReleaseFunc)
+		currentAccountRelease = wrapAccountSelectionReleaseOnDone(ctx, selection, accountReleaseFunc)
 	}
 	if decision := h.checkUserContentModerationWithContent(selectedAccountShareCtx, c, reqLog, currentAPIKey, subject, account, service.ContentModerationProtocolOpenAIResponses, reqModel, firstMessage, nil); decision != nil && decision.Blocked {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, decision.Message)
@@ -1807,6 +1936,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		return
 	}
 	account = latestAccount
+	selection.Account = latestAccount
 	accountMaxConcurrency = latestAccount.Concurrency
 	if err := h.gatewayService.BindStickySession(ctx, currentAPIKey.GroupID, sessionHash, account.ID); err != nil {
 		reqLog.Warn("openai.websocket_bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
@@ -1833,108 +1963,301 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	)
 
 	cyberBlockedThisConn := false
+	inboundEndpoint := GetInboundEndpoint(c)
+	upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
+	accountShareWS := selection.AccountShareMode
+	var activeTurnNo int
+	var activeTurnCtx context.Context
+	var activeTurnCancel context.CancelFunc
+	var activeTurnPayloadHash string
+	var activeTurnAccount *service.Account
+	var activeTurnSelection *service.AccountSelectionResult
+	clearActiveTurn := func() {
+		if activeTurnCancel != nil {
+			activeTurnCancel()
+		}
+		activeTurnNo = 0
+		activeTurnCtx = nil
+		activeTurnCancel = nil
+		activeTurnPayloadHash = ""
+		activeTurnAccount = nil
+		activeTurnSelection = nil
+		releaseTurnSlots()
+	}
+	defer clearActiveTurn()
+
+	fixedRequestedModel := ""
+	fixedRoutingModel := ""
+	if accountShareWS {
+		fixedRequestedModel = reqModel
+		fixedRoutingModel = service.ResolveOpenAIWebSocketForwardModel(account, selectedRoutingModel)
+	}
 	hooks := &service.OpenAIWSIngressHooks{
-		BeforeTurn: func(turn int) error {
+		FixedRequestedModel: fixedRequestedModel,
+		FixedRoutingModel:   fixedRoutingModel,
+		BeforeTurnPayload: func(turn int, payload []byte) (context.Context, error) {
 			if cyberBlockedThisConn {
-				return service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, cyberSessionBlockedClientMsg, nil)
+				return nil, service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, cyberSessionBlockedClientMsg, nil)
+			}
+			if activeTurnNo != 0 {
+				return nil, service.NewOpenAIWSClientCloseError(
+					coderws.StatusInternalError,
+					"websocket turn lifecycle is inconsistent; please reconnect",
+					fmt.Errorf("turn %d started while turn %d is still active", turn, activeTurnNo),
+				)
 			}
 			if turn != 1 {
 				// 防御式清理：避免异常路径下旧槽位覆盖导致泄漏。
 				releaseTurnSlots()
 			}
-			latest, revalidateErr := h.gatewayService.RevalidateSelectedOpenAIAccountForDispatch(
-				dispatchCtx,
-				currentAPIKey.GroupID,
-				account,
-				dispatchRequirements,
-			)
-			if revalidateErr != nil {
-				return service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "selected account is no longer available; please reconnect", revalidateErr)
-			}
-			account = latest
-			accountMaxConcurrency = latest.Concurrency
-			if turn == 1 {
-				return nil
-			}
-			// 非首轮 turn 需要重新抢占并发槽位，避免长连接空闲占槽。
-			userReleaseFunc, userAcquired, err := h.concurrencyHelper.TryAcquireUserSlotForAPIKey(ctx, subject.UserID, subject.Concurrency, currentAPIKey.ID)
-			if err != nil {
-				return service.NewOpenAIWSClientCloseError(coderws.StatusInternalError, "failed to acquire user concurrency slot", err)
-			}
-			if !userAcquired {
-				return service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "too many concurrent requests, please retry later", nil)
-			}
-			accountReleaseFunc, accountAcquired, err := h.concurrencyHelper.TryAcquireAccountSlot(ctx, account.ID, accountMaxConcurrency)
-			if err != nil {
-				if userReleaseFunc != nil {
-					userReleaseFunc()
+
+			turnSelection := selection
+			if turn != 1 {
+				// 每轮重新抢占用户槽位；长连接空闲期间不占用户并发。
+				userReleaseFunc, userAcquired, acquireErr := h.concurrencyHelper.TryAcquireUserSlotForAPIKey(
+					ctx,
+					subject.UserID,
+					subject.Concurrency,
+					currentAPIKey.ID,
+				)
+				if acquireErr != nil {
+					return nil, service.NewOpenAIWSClientCloseError(coderws.StatusInternalError, "failed to acquire user concurrency slot", acquireErr)
 				}
-				return service.NewOpenAIWSClientCloseError(coderws.StatusInternalError, "failed to acquire account concurrency slot", err)
-			}
-			if !accountAcquired {
-				if userReleaseFunc != nil {
-					userReleaseFunc()
+				if !userAcquired {
+					return nil, service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "too many concurrent requests, please retry later", nil)
 				}
-				return service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "account is busy, please retry later", nil)
+				currentUserRelease = wrapReleaseOnDone(ctx, userReleaseFunc)
+
+				if accountShareWS {
+					// 账号广场必须逐轮重新获取 membership + account 的 paired
+					// runtime lease。重新选择只用于校验并获取本轮租约，既有
+					// WebSocket 不允许静默切换到另一个上游账号。
+					previousResponseID := strings.TrimSpace(gjson.GetBytes(payload, "previous_response_id").String())
+					nextSelection, _, selectErr := h.gatewayService.SelectAccountWithCleanRelayScheduler(
+						dispatchCtx,
+						c,
+						currentAPIKey.GroupID,
+						previousResponseID,
+						sessionHash,
+						reqModel,
+						selectedRoutingModel,
+						nil,
+						service.OpenAIUpstreamTransportResponsesWebsocketV2,
+						false,
+						payload,
+					)
+					if selectErr != nil {
+						releaseTurnSlots()
+						return nil, service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "shared account is temporarily unavailable; please reconnect", selectErr)
+					}
+					if nextSelection == nil || nextSelection.Account == nil || !nextSelection.AccountShareMode ||
+						nextSelection.RuntimeLease == nil || !nextSelection.Acquired {
+						if nextSelection != nil && nextSelection.ReleaseFunc != nil {
+							nextSelection.ReleaseFunc()
+						}
+						releaseTurnSlots()
+						return nil, service.NewOpenAIWSClientCloseError(
+							coderws.StatusTryAgainLater,
+							"shared account runtime lease is unavailable; please reconnect",
+							service.ErrAccountShareRuntimeLeaseUnavailable,
+						)
+					}
+					if nextSelection.Account.ID != account.ID {
+						nextSelection.ReleaseFunc()
+						releaseTurnSlots()
+						return nil, service.NewOpenAIWSClientCloseError(
+							coderws.StatusTryAgainLater,
+							"shared account binding changed; please reconnect",
+							fmt.Errorf("websocket account changed from %d to %d", account.ID, nextSelection.Account.ID),
+						)
+					}
+					turnSelection = nextSelection
+					currentAccountRelease = wrapAccountSelectionReleaseOnDone(ctx, nextSelection, nextSelection.ReleaseFunc)
+				} else {
+					accountReleaseFunc, accountAcquired, acquireErr := h.concurrencyHelper.TryAcquireAccountSlot(ctx, account.ID, accountMaxConcurrency)
+					if acquireErr != nil {
+						releaseTurnSlots()
+						return nil, service.NewOpenAIWSClientCloseError(coderws.StatusInternalError, "failed to acquire account concurrency slot", acquireErr)
+					}
+					if !accountAcquired {
+						releaseTurnSlots()
+						return nil, service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "account is busy, please retry later", nil)
+					}
+					currentAccountRelease = wrapReleaseOnDone(ctx, accountReleaseFunc)
+				}
 			}
-			currentUserRelease = wrapReleaseOnDone(ctx, userReleaseFunc)
-			currentAccountRelease = wrapReleaseOnDone(ctx, accountReleaseFunc)
-			latest, revalidateErr = h.gatewayService.RevalidateSelectedOpenAIAccountForDispatch(
-				dispatchCtx,
-				currentAPIKey.GroupID,
-				account,
-				dispatchRequirements,
-			)
-			if revalidateErr != nil {
+
+			turnCtx, cancelTurn := bindAccountSelectionForwardContext(dispatchCtx, turnSelection)
+			if cause := context.Cause(turnCtx); cause != nil {
+				cancelTurn()
 				releaseTurnSlots()
-				return service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "selected account is no longer available; please reconnect", revalidateErr)
+				return nil, service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "account share runtime lease lost; please reconnect", cause)
 			}
-			account = latest
+			latest, revalidateErr := h.gatewayService.RevalidateSelectedOpenAIAccountForDispatch(
+				turnCtx,
+				currentAPIKey.GroupID,
+				account,
+				dispatchRequirements,
+			)
+			if revalidateErr != nil {
+				cancelTurn()
+				releaseTurnSlots()
+				return nil, service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "selected account is no longer available; please reconnect", revalidateErr)
+			}
+			if latest == nil || latest.ID != account.ID {
+				cancelTurn()
+				releaseTurnSlots()
+				return nil, service.NewOpenAIWSClientCloseError(
+					coderws.StatusTryAgainLater,
+					"selected account changed; please reconnect",
+					fmt.Errorf("revalidated websocket account does not match account %d", account.ID),
+				)
+			}
+			turnSelection.Account = latest
 			accountMaxConcurrency = latest.Concurrency
-			return nil
+
+			payloadHash := service.HashUsageRequestPayload(payload)
+			turnAttemptNo := 0
+			routedModel := service.ResolveOpenAIWebSocketForwardModel(latest, selectedRoutingModel)
+			if accountShareWS && routedModel != fixedRoutingModel {
+				cancelTurn()
+				releaseTurnSlots()
+				return nil, service.NewOpenAIWSClientCloseError(
+					coderws.StatusTryAgainLater,
+					"shared account model routing changed; please reconnect",
+					fmt.Errorf("websocket routed model changed from %q to %q", fixedRoutingModel, routedModel),
+				)
+			}
+			turnCtx, billingErr := beginAccountShareBillingDispatch(
+				turnCtx,
+				h.gatewayService,
+				turnSelection,
+				&turnAttemptNo,
+				service.AccountShareBillingDispatchInput{
+					ClientRequestID:    newOpenAIWSTurnClientRequestID(turn, payloadHash),
+					APIKey:             currentAPIKey,
+					User:               currentAPIKey.User,
+					Subscription:       currentSubscription,
+					RequestedModel:     reqModel,
+					RoutedModel:        routedModel,
+					InboundEndpoint:    inboundEndpoint,
+					UpstreamEndpoint:   upstreamEndpoint,
+					RequestType:        service.RequestTypeWSV2,
+					RequestPayloadHash: payloadHash,
+					ChannelUsageFields: channelMappingWS.ToUsageFields(reqModel, routedModel),
+				},
+			)
+			if billingErr != nil {
+				cancelTurn()
+				releaseTurnSlots()
+				return nil, service.NewOpenAIWSClientCloseError(
+					coderws.StatusTryAgainLater,
+					"billing state is temporarily unavailable; no upstream request was sent",
+					billingErr,
+				)
+			}
+
+			activeTurnNo = turn
+			activeTurnCtx = turnCtx
+			activeTurnCancel = cancelTurn
+			activeTurnPayloadHash = payloadHash
+			activeTurnAccount = latest
+			activeTurnSelection = turnSelection
+			return turnCtx, nil
 		},
-		AfterTurn: func(turn int, result *service.OpenAIForwardResult, turnErr error) {
-			releaseTurnSlots()
+		AfterTurnPayload: func(turn int, payload []byte, result *service.OpenAIForwardResult, turnErr error) error {
+			if activeTurnNo != turn || activeTurnCtx == nil || activeTurnAccount == nil || activeTurnSelection == nil {
+				activeNo := activeTurnNo
+				clearActiveTurn()
+				return fmt.Errorf("websocket turn lifecycle mismatch: completed=%d active=%d", turn, activeNo)
+			}
+			turnCtx := activeTurnCtx
+			turnPayloadHash := activeTurnPayloadHash
+			turnAccount := activeTurnAccount
+			turnSelection := activeTurnSelection
+			turnAPIKey := currentAPIKey
+			turnSubscription := currentSubscription
+			defer clearActiveTurn()
+
 			if service.GetOpsCyberPolicy(c) != nil {
 				cyberBlockedThisConn = true
 				h.gatewayService.MarkCyberSessionBlocked(ctx, cyberBlockKeyWS)
 			}
-			if turnErr != nil || result == nil {
-				return
+			if turnErr == nil && result == nil {
+				turnErr = errors.New("websocket turn result is nil")
 			}
-			if account.Type == service.AccountTypeOAuth {
-				h.gatewayService.UpdateCodexUsageSnapshotFromHeaders(ctx, account.ID, result.ResponseHeaders)
-			}
-			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, result.FirstTokenMs, result.UpstreamModel)
-			h.submitUsageRecordTask(func(taskCtx context.Context) {
-				usageCtx := service.WithAccountShareModeRequestFromContext(taskCtx, selectedAccountShareCtx)
-				if err := h.gatewayService.RecordUsage(usageCtx, &service.OpenAIRecordUsageInput{
-					Result:             result,
-					APIKey:             currentAPIKey,
-					User:               currentAPIKey.User,
-					Account:            account,
-					Subscription:       currentSubscription,
-					InboundEndpoint:    GetInboundEndpoint(c),
-					UpstreamEndpoint:   GetUpstreamEndpoint(c, account.Platform),
-					UserAgent:          userAgent,
-					IPAddress:          clientIP,
-					RequestPayloadHash: service.HashUsageRequestPayload(firstMessage),
-					APIKeyService:      h.apiKeyService,
-					ChannelUsageFields: channelMappingWS.ToUsageFields(reqModel, result.UpstreamModel),
-				}); err != nil {
-					reqLog.Error("openai.websocket_record_usage_failed",
-						zap.Int64("account_id", account.ID),
-						zap.String("request_id", result.RequestID),
-						zap.Error(err),
-					)
+			recordUsage, completeWithoutUsage, hasBillableUsage := openAIWSTurnBillingDisposition(result, turnErr)
+			if recordUsage {
+				recordTurnUsage := func(taskCtx context.Context) error {
+					usageCtx := service.WithAccountShareModeRequestFromContext(taskCtx, turnCtx)
+					return h.gatewayService.RecordUsage(usageCtx, &service.OpenAIRecordUsageInput{
+						Result:             result,
+						APIKey:             turnAPIKey,
+						User:               turnAPIKey.User,
+						Account:            turnAccount,
+						Subscription:       turnSubscription,
+						InboundEndpoint:    inboundEndpoint,
+						UpstreamEndpoint:   upstreamEndpoint,
+						UserAgent:          userAgent,
+						IPAddress:          clientIP,
+						RequestPayloadHash: turnPayloadHash,
+						APIKeyService:      h.apiKeyService,
+						ChannelUsageFields: channelMappingWS.ToUsageFields(reqModel, result.UpstreamModel),
+					})
 				}
-			})
+				logRecordUsageError := func(err error) {
+					if err != nil {
+						reqLog.Error("openai.websocket_record_usage_failed",
+							zap.Int64("account_id", turnAccount.ID),
+							zap.String("request_id", result.RequestID),
+							zap.Int("turn", turn),
+							zap.Error(err),
+						)
+					}
+				}
+				if turnSelection.AccountShareMode {
+					// A paired account-share lease cannot be reacquired for the
+					// next turn until this turn's durable intent reaches ready.
+					// Waiting here keeps the release barrier and the WebSocket
+					// turn boundary atomic from the client's perspective.
+					taskCtx, cancelTask := context.WithTimeout(context.Background(), 10*time.Second)
+					recordErr := recordTurnUsage(taskCtx)
+					cancelTask()
+					if recordErr != nil {
+						logRecordUsageError(recordErr)
+						return recordErr
+					}
+				} else {
+					h.submitUsageRecordTask(func(taskCtx context.Context) {
+						logRecordUsageError(recordTurnUsage(taskCtx))
+					})
+				}
+			}
+
+			if completeWithoutUsage {
+				if finalizeErr := completeAccountShareBillingDispatchWithoutUsage(turnCtx, turnErr, hasBillableUsage, true); finalizeErr != nil {
+					reqLog.Error("openai.websocket_billing_dispatch_finalize_failed",
+						zap.Int64("account_id", turnAccount.ID),
+						zap.Int("turn", turn),
+						zap.Error(finalizeErr),
+					)
+					return finalizeErr
+				}
+			}
+			if turnErr != nil || result == nil {
+				return nil
+			}
+			if turnAccount.Type == service.AccountTypeOAuth {
+				h.gatewayService.UpdateCodexUsageSnapshotFromHeaders(ctx, turnAccount.ID, result.ResponseHeaders)
+			}
+			h.gatewayService.ReportOpenAIAccountScheduleResult(turnAccount.ID, true, result.FirstTokenMs, result.UpstreamModel)
+			return nil
 		},
 	}
 
 	// 应用渠道模型映射到 WebSocket 首条消息
 	wsFirstMessage := firstMessage
-	if channelMappingWS.Mapped {
+	if channelMappingWS.Mapped && !accountShareWS {
 		wsFirstMessage = h.gatewayService.ReplaceModelInBody(firstMessage, channelMappingWS.MappedModel)
 	}
 
@@ -1942,6 +2265,11 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		if errors.Is(context.Cause(ctx), service.ErrOpenAIWSIngressLeaseLost) {
 			reqLog.Warn("openai.websocket_ingress_lease_lost", zap.Int64("account_id", account.ID), zap.Error(err))
 			closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "websocket ingress capacity lease lost; please reconnect")
+			return
+		}
+		if errors.Is(err, service.ErrAccountShareRuntimeLeaseLost) {
+			reqLog.Warn("openai.websocket_account_share_runtime_lease_lost", zap.Int64("account_id", account.ID), zap.Error(err))
+			closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "account share runtime lease lost; please reconnect")
 			return
 		}
 		var closeErr *service.OpenAIWSClientCloseError

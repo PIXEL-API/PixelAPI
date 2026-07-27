@@ -1,12 +1,16 @@
 package service
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +24,10 @@ const (
 	IdempotencyStatusProcessing      = "processing"
 	IdempotencyStatusSucceeded       = "succeeded"
 	IdempotencyStatusFailedRetryable = "failed_retryable"
+
+	idempotencyCompressedResponsePrefix = "gzip:"
+	idempotencyMaxDecodedResponseLen    = 16 * 1024 * 1024
+	idempotencyFinalizeTimeout          = 5 * time.Second
 )
 
 var (
@@ -30,6 +38,7 @@ var (
 	ErrIdempotencyRetryBackoff   = infraerrors.Conflict("IDEMPOTENCY_RETRY_BACKOFF", "idempotent request is in retry backoff window")
 	ErrIdempotencyStoreUnavail   = infraerrors.ServiceUnavailable("IDEMPOTENCY_STORE_UNAVAILABLE", "idempotency store unavailable")
 	ErrIdempotencyInvalidPayload = infraerrors.BadRequest("IDEMPOTENCY_PAYLOAD_INVALID", "failed to normalize request payload")
+	ErrIdempotencyResponseTooBig = infraerrors.InternalServer("IDEMPOTENCY_RESPONSE_TOO_LARGE", "idempotent response exceeds the safe replay capacity")
 )
 
 type IdempotencyRecord struct {
@@ -136,6 +145,18 @@ func NewIdempotencyCoordinator(repo IdempotencyRepository, cfg IdempotencyConfig
 		repo: repo,
 		cfg:  cfg,
 	}
+}
+
+// ValidateIdempotencyResponseCapacity verifies that data can be persisted and
+// replayed by the active coordinator. Callers that can determine their final
+// response before performing side effects should invoke this first.
+func ValidateIdempotencyResponseCapacity(data any) error {
+	coordinator := DefaultIdempotencyCoordinator()
+	if coordinator == nil {
+		return ErrIdempotencyStoreUnavail
+	}
+	_, err := coordinator.marshalStoredResponse(data)
+	return err
 }
 
 func NormalizeIdempotencyKey(raw string) (string, error) {
@@ -407,7 +428,9 @@ func (c *IdempotencyCoordinator) Execute(
 		logIdempotencyAudit(opts.Route, opts.Scope, keyHash, "processing->failed_retryable", false, map[string]string{
 			"reason": reason,
 		})
-		if markErr := c.repo.MarkFailedRetryable(ctx, record.ID, reason, backoffUntil, expiresAt); markErr != nil {
+		finalizeCtx, cancelFinalize := idempotencyFinalizeContext(ctx)
+		defer cancelFinalize()
+		if markErr := c.repo.MarkFailedRetryable(finalizeCtx, record.ID, reason, backoffUntil, expiresAt); markErr != nil {
 			RecordIdempotencyStoreUnavailable(opts.Route, opts.Scope, "mark_failed_retryable_error")
 			logIdempotencyAudit(opts.Route, opts.Scope, keyHash, "processing->store_unavailable", false, map[string]string{
 				"operation": "mark_failed_retryable",
@@ -418,13 +441,21 @@ func (c *IdempotencyCoordinator) Execute(
 
 	storedBody, marshalErr := c.marshalStoredResponse(data)
 	if marshalErr != nil {
+		if errors.Is(marshalErr, ErrIdempotencyResponseTooBig) {
+			logIdempotencyAudit(opts.Route, opts.Scope, keyHash, "processing->response_too_large", false, map[string]string{
+				"operation": "marshal_response",
+			})
+			return nil, marshalErr
+		}
 		RecordIdempotencyStoreUnavailable(opts.Route, opts.Scope, "marshal_response_error")
 		logIdempotencyAudit(opts.Route, opts.Scope, keyHash, "processing->store_unavailable", false, map[string]string{
 			"operation": "marshal_response",
 		})
 		return nil, ErrIdempotencyStoreUnavail.WithCause(marshalErr)
 	}
-	if markErr := c.repo.MarkSucceeded(ctx, record.ID, 200, storedBody, expiresAt); markErr != nil {
+	finalizeCtx, cancelFinalize := idempotencyFinalizeContext(ctx)
+	defer cancelFinalize()
+	if markErr := c.repo.MarkSucceeded(finalizeCtx, record.ID, 200, storedBody, expiresAt); markErr != nil {
 		RecordIdempotencyStoreUnavailable(opts.Route, opts.Scope, "mark_succeeded_error")
 		logIdempotencyAudit(opts.Route, opts.Scope, keyHash, "processing->store_unavailable", false, map[string]string{
 			"operation": "mark_succeeded",
@@ -452,20 +483,73 @@ func (c *IdempotencyCoordinator) marshalStoredResponse(data any) (string, error)
 	if err != nil {
 		return "", err
 	}
-	redacted := logredact.RedactText(string(raw))
-	if c.cfg.MaxStoredResponseLen > 0 && len(redacted) > c.cfg.MaxStoredResponseLen {
-		redacted = redacted[:c.cfg.MaxStoredResponseLen] + "...(truncated)"
+	redacted := []byte(logredact.RedactText(string(raw)))
+	if c.cfg.MaxStoredResponseLen <= 0 || len(redacted) <= c.cfg.MaxStoredResponseLen {
+		return string(redacted), nil
 	}
-	return redacted, nil
+	if len(redacted) > idempotencyMaxDecodedResponseLen {
+		return "", idempotencyResponseTooBigError(len(redacted), 0, c.cfg.MaxStoredResponseLen)
+	}
+
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	if _, err := writer.Write(redacted); err != nil {
+		_ = writer.Close()
+		return "", fmt.Errorf("compress stored response: %w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return "", fmt.Errorf("compress stored response: %w", err)
+	}
+
+	encoded := idempotencyCompressedResponsePrefix + base64.StdEncoding.EncodeToString(compressed.Bytes())
+	if len(encoded) > c.cfg.MaxStoredResponseLen {
+		return "", idempotencyResponseTooBigError(len(redacted), len(encoded), c.cfg.MaxStoredResponseLen)
+	}
+	return encoded, nil
 }
 
 func (c *IdempotencyCoordinator) decodeStoredResponse(stored *string) (any, error) {
 	if stored == nil || strings.TrimSpace(*stored) == "" {
 		return map[string]any{}, nil
 	}
+
+	raw := []byte(*stored)
+	if strings.HasPrefix(*stored, idempotencyCompressedResponsePrefix) {
+		encoded := strings.TrimPrefix(*stored, idempotencyCompressedResponsePrefix)
+		compressed, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			return nil, fmt.Errorf("decode compressed stored response: %w", err)
+		}
+		reader, err := gzip.NewReader(bytes.NewReader(compressed))
+		if err != nil {
+			return nil, fmt.Errorf("open compressed stored response: %w", err)
+		}
+		defer reader.Close()
+
+		raw, err = io.ReadAll(io.LimitReader(reader, idempotencyMaxDecodedResponseLen+1))
+		if err != nil {
+			return nil, fmt.Errorf("decompress stored response: %w", err)
+		}
+		if len(raw) > idempotencyMaxDecodedResponseLen {
+			return nil, fmt.Errorf("decompress stored response: decoded response exceeds %d bytes", idempotencyMaxDecodedResponseLen)
+		}
+	}
+
 	var out any
-	if err := json.Unmarshal([]byte(*stored), &out); err != nil {
+	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, fmt.Errorf("decode stored response: %w", err)
 	}
 	return out, nil
+}
+
+func idempotencyFinalizeContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), idempotencyFinalizeTimeout)
+}
+
+func idempotencyResponseTooBigError(rawLen, encodedLen, maxLen int) error {
+	return ErrIdempotencyResponseTooBig.WithMetadata(map[string]string{
+		"raw_response_len":    strconv.Itoa(rawLen),
+		"stored_response_len": strconv.Itoa(encodedLen),
+		"max_stored_response": strconv.Itoa(maxLen),
+	})
 }

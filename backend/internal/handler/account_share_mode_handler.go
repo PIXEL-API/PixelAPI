@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -119,6 +120,9 @@ type accountShareListingUpdateRequest struct {
 	Concurrency             *int      `json:"concurrency"`
 	EditSessionID           string    `json:"edit_session_id"`
 	ForceActiveEdit         bool      `json:"force_active_edit"`
+	ExpectedVersion         *int64    `json:"expected_version"`
+	Reason                  string    `json:"reason"`
+	Confirmed               bool      `json:"confirmed"`
 }
 
 type accountShareListingEditSessionRequest struct {
@@ -126,9 +130,19 @@ type accountShareListingEditSessionRequest struct {
 	Force     bool   `json:"force"`
 }
 
-type accountShareJoinRequest struct {
+type accountShareJoinIntentRequest struct {
 	APIKeyID           int64 `json:"api_key_id" binding:"required"`
 	IdleTimeoutMinutes int   `json:"idle_timeout_minutes"`
+	AcceptQueue        bool  `json:"accept_queue"`
+}
+
+type accountShareJoinRequest struct {
+	APIKeyID           int64  `json:"api_key_id" binding:"required"`
+	IdleTimeoutMinutes int    `json:"idle_timeout_minutes"`
+	IntentToken        string `json:"intent_token" binding:"required"`
+	ExpectedVersion    int64  `json:"expected_version" binding:"required,min=1"`
+	ExpectedRevisionID int64  `json:"expected_revision_id" binding:"required,min=1"`
+	AcceptQueue        bool   `json:"accept_queue"`
 }
 
 type accountShareEndRequest struct {
@@ -215,39 +229,41 @@ func (h *AccountShareModeHandler) ExchangeOpenAICode(c *gin.Context) {
 	if req.ProxyID != nil {
 		proxyID = *req.ProxyID
 	}
-	listing, err := h.service.ExchangeOpenAICodeAndCreateListing(
-		c.Request.Context(),
-		subject.UserID,
-		&service.OpenAIExchangeCodeInput{
-			SessionID:   req.SessionID,
-			Code:        req.Code,
-			State:       req.State,
-			RedirectURI: req.RedirectURI,
-			ProxyID:     req.ProxyID,
-		},
-		service.CreateAccountShareListingInput{
-			Name:                   strings.TrimSpace(req.Name),
-			Notes:                  req.Notes,
-			ProxyID:                proxyID,
-			Concurrency:            req.Concurrency,
-			SeatLimit:              req.SeatLimit,
-			RateMultiplier:         req.RateMultiplier,
-			AllowedModels:          req.AllowedModels,
-			PerUserConcurrency:     req.PerUserConcurrency,
-			HourlyRate:             req.HourlyRate,
-			HourlyFeeWaiverMinimum: req.HourlyFeeWaiverMinimum,
-			MinBalanceRequired:     req.MinBalanceRequired,
-			CodexCLIOnly:           req.CodexCLIOnly,
-			Codex5hLimitPercent:    req.Codex5hLimitPercent,
-			Codex7dLimitPercent:    req.Codex7dLimitPercent,
-			AutoPauseOnExpired:     req.AutoPauseOnExpired,
+	executeAccountShareOAuthExchange(
+		c,
+		"account_share_openai_exchange_create_room",
+		req,
+		func(ctx context.Context) (any, error) {
+			return h.service.ExchangeOpenAICodeAndCreateListing(
+				ctx,
+				subject.UserID,
+				&service.OpenAIExchangeCodeInput{
+					SessionID:   req.SessionID,
+					Code:        req.Code,
+					State:       req.State,
+					RedirectURI: req.RedirectURI,
+					ProxyID:     req.ProxyID,
+				},
+				service.CreateAccountShareListingInput{
+					Name:                   strings.TrimSpace(req.Name),
+					Notes:                  req.Notes,
+					ProxyID:                proxyID,
+					Concurrency:            req.Concurrency,
+					SeatLimit:              req.SeatLimit,
+					RateMultiplier:         req.RateMultiplier,
+					AllowedModels:          req.AllowedModels,
+					PerUserConcurrency:     req.PerUserConcurrency,
+					HourlyRate:             req.HourlyRate,
+					HourlyFeeWaiverMinimum: req.HourlyFeeWaiverMinimum,
+					MinBalanceRequired:     req.MinBalanceRequired,
+					CodexCLIOnly:           req.CodexCLIOnly,
+					Codex5hLimitPercent:    req.Codex5hLimitPercent,
+					Codex7dLimitPercent:    req.Codex7dLimitPercent,
+					AutoPauseOnExpired:     req.AutoPauseOnExpired,
+				},
+			)
 		},
 	)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Created(c, listing)
 }
 
 func (h *AccountShareModeHandler) GenerateAnthropicAuthURL(c *gin.Context) {
@@ -284,36 +300,58 @@ func (h *AccountShareModeHandler) ExchangeAnthropicCode(c *gin.Context) {
 	if req.ProxyID != nil {
 		proxyID = *req.ProxyID
 	}
-	listing, err := h.service.ExchangeAnthropicCodeAndCreateListing(
-		c.Request.Context(),
-		subject.UserID,
-		&service.ExchangeCodeInput{
-			SessionID: req.SessionID,
-			Code:      req.Code,
-			ProxyID:   req.ProxyID,
-		},
-		service.CreateAccountShareListingInput{
-			Name:                    strings.TrimSpace(req.Name),
-			Notes:                   req.Notes,
-			ProxyID:                 proxyID,
-			Concurrency:             req.Concurrency,
-			SeatLimit:               req.SeatLimit,
-			RateMultiplier:          req.RateMultiplier,
-			AllowedModels:           req.AllowedModels,
-			PerUserConcurrency:      req.PerUserConcurrency,
-			HourlyRate:              req.HourlyRate,
-			HourlyFeeWaiverMinimum:  req.HourlyFeeWaiverMinimum,
-			MinBalanceRequired:      req.MinBalanceRequired,
-			Anthropic5hLimitPercent: req.Anthropic5hLimitPercent,
-			Anthropic7dLimitPercent: req.Anthropic7dLimitPercent,
-			AutoPauseOnExpired:      req.AutoPauseOnExpired,
+	executeAccountShareOAuthExchange(
+		c,
+		"account_share_anthropic_exchange_create_room",
+		req,
+		func(ctx context.Context) (any, error) {
+			return h.service.ExchangeAnthropicCodeAndCreateListing(
+				ctx,
+				subject.UserID,
+				&service.ExchangeCodeInput{
+					SessionID: req.SessionID,
+					Code:      req.Code,
+					ProxyID:   req.ProxyID,
+				},
+				service.CreateAccountShareListingInput{
+					Name:                    strings.TrimSpace(req.Name),
+					Notes:                   req.Notes,
+					ProxyID:                 proxyID,
+					Concurrency:             req.Concurrency,
+					SeatLimit:               req.SeatLimit,
+					RateMultiplier:          req.RateMultiplier,
+					AllowedModels:           req.AllowedModels,
+					PerUserConcurrency:      req.PerUserConcurrency,
+					HourlyRate:              req.HourlyRate,
+					HourlyFeeWaiverMinimum:  req.HourlyFeeWaiverMinimum,
+					MinBalanceRequired:      req.MinBalanceRequired,
+					Anthropic5hLimitPercent: req.Anthropic5hLimitPercent,
+					Anthropic7dLimitPercent: req.Anthropic7dLimitPercent,
+					AutoPauseOnExpired:      req.AutoPauseOnExpired,
+				},
+			)
 		},
 	)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Created(c, listing)
+}
+
+func executeAccountShareOAuthExchange(
+	c *gin.Context,
+	scope string,
+	payload any,
+	exchange func(context.Context) (any, error),
+) {
+	executeUserRequiredIdempotentJSON(
+		c,
+		scope,
+		payload,
+		service.DefaultWriteIdempotencyTTL(),
+		func(ctx context.Context, _ string) (any, error) {
+			return exchange(ctx)
+		},
+		func(c *gin.Context, data any) {
+			response.Created(c, data)
+		},
+	)
 }
 
 func (h *AccountShareModeHandler) ListListings(c *gin.Context) {
@@ -378,6 +416,25 @@ func (h *AccountShareModeHandler) ListListings(c *gin.Context) {
 		return
 	}
 	response.Paginated(c, listings, result.Total, result.Page, result.PageSize)
+}
+
+func (h *AccountShareModeHandler) ListMembershipHistory(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	page, pageSize := response.ParsePagination(c)
+	entries, result, err := h.service.ListMembershipHistory(
+		c.Request.Context(),
+		subject.UserID,
+		pagination.PaginationParams{Page: page, PageSize: pageSize},
+	)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Paginated(c, entries, result.Total, result.Page, result.PageSize)
 }
 
 func (h *AccountShareModeHandler) RecommendListings(c *gin.Context) {
@@ -624,17 +681,27 @@ func (h *AccountShareModeHandler) mutateRoomAccounts(c *gin.Context, attach bool
 		OwnerUserID:    subject.UserID,
 		IdempotencyKey: req.IdempotencyKey,
 	}
-	var result *service.BulkUpdateAccountsResult
+	scope := "account_share_room_accounts_detach"
 	if attach {
-		result, err = h.service.AttachRoomAccounts(c.Request.Context(), input)
-	} else {
-		result, err = h.service.DetachRoomAccounts(c.Request.Context(), input)
+		scope = "account_share_room_accounts_attach"
 	}
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, result)
+	executeUserRequiredIdempotentJSONWithKey(
+		c,
+		req.IdempotencyKey,
+		scope,
+		map[string]any{
+			"listing_id":  listingID,
+			"account_ids": req.AccountIDs,
+		},
+		service.DefaultWriteIdempotencyTTL(),
+		func(ctx context.Context, _ string) (any, error) {
+			if attach {
+				return h.service.AttachRoomAccounts(ctx, input)
+			}
+			return h.service.DetachRoomAccounts(ctx, input)
+		},
+		nil,
+	)
 }
 
 func (h *AccountShareModeHandler) GetMySpendSummary(c *gin.Context) {
@@ -687,7 +754,7 @@ func (h *AccountShareModeHandler) UpdateListing(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	listing, err := h.service.UpdateListing(c.Request.Context(), subject.UserID, role == service.RoleAdmin, listingID, service.UpdateAccountShareListingInput{
+	input := service.UpdateAccountShareListingInput{
 		Name:                    req.Name,
 		ProxyID:                 req.ProxyID,
 		Status:                  req.Status,
@@ -706,12 +773,20 @@ func (h *AccountShareModeHandler) UpdateListing(c *gin.Context) {
 		Concurrency:             req.Concurrency,
 		EditSessionID:           req.EditSessionID,
 		ForceActiveEdit:         req.ForceActiveEdit,
-	})
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
+		ExpectedVersion:         req.ExpectedVersion,
+		Reason:                  req.Reason,
+		Confirmed:               req.Confirmed,
 	}
-	response.Success(c, listing)
+	executeUserRequiredIdempotentJSON(
+		c,
+		"account_share_listing_update",
+		map[string]any{"listing_id": listingID, "body": req},
+		service.DefaultWriteIdempotencyTTL(),
+		func(ctx context.Context, _ string) (any, error) {
+			return h.service.UpdateListing(ctx, subject.UserID, role == service.RoleAdmin, listingID, input)
+		},
+		nil,
+	)
 }
 
 func (h *AccountShareModeHandler) BeginListingEdit(c *gin.Context) {
@@ -731,12 +806,16 @@ func (h *AccountShareModeHandler) BeginListingEdit(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	listing, err := h.service.BeginListingEdit(c.Request.Context(), subject.UserID, role == service.RoleAdmin, listingID, req.SessionID, req.Force)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, listing)
+	executeUserRequiredIdempotentJSON(
+		c,
+		"account_share_listing_edit_begin",
+		map[string]any{"listing_id": listingID, "body": req},
+		service.DefaultWriteIdempotencyTTL(),
+		func(ctx context.Context, _ string) (any, error) {
+			return h.service.BeginListingEdit(ctx, subject.UserID, role == service.RoleAdmin, listingID, req.SessionID, req.Force)
+		},
+		nil,
+	)
 }
 
 func (h *AccountShareModeHandler) ReleaseListingEdit(c *gin.Context) {
@@ -756,12 +835,16 @@ func (h *AccountShareModeHandler) ReleaseListingEdit(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	listing, err := h.service.ReleaseListingEdit(c.Request.Context(), subject.UserID, role == service.RoleAdmin, listingID, req.SessionID)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, listing)
+	executeUserRequiredIdempotentJSON(
+		c,
+		"account_share_listing_edit_release",
+		map[string]any{"listing_id": listingID, "body": req},
+		service.DefaultWriteIdempotencyTTL(),
+		func(ctx context.Context, _ string) (any, error) {
+			return h.service.ReleaseListingEdit(ctx, subject.UserID, role == service.RoleAdmin, listingID, req.SessionID)
+		},
+		nil,
+	)
 }
 
 func (h *AccountShareModeHandler) JoinListing(c *gin.Context) {
@@ -780,7 +863,14 @@ func (h *AccountShareModeHandler) JoinListing(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	membership, err := h.service.JoinListing(c.Request.Context(), subject.UserID, listingID, req.APIKeyID, req.IdleTimeoutMinutes)
+	membership, err := h.service.CompleteJoinListing(c.Request.Context(), subject.UserID, listingID, service.CompleteAccountShareJoinInput{
+		APIKeyID:           req.APIKeyID,
+		IdleTimeoutMinutes: req.IdleTimeoutMinutes,
+		IntentToken:        req.IntentToken,
+		ExpectedVersion:    req.ExpectedVersion,
+		ExpectedRevisionID: req.ExpectedRevisionID,
+		AcceptQueue:        req.AcceptQueue,
+	})
 	if err != nil {
 		logger.FromContext(c.Request.Context()).Warn("account share join failed",
 			zap.String("component", "account_share.audit"),
@@ -795,6 +885,34 @@ func (h *AccountShareModeHandler) JoinListing(c *gin.Context) {
 		return
 	}
 	response.Success(c, membership)
+}
+
+func (h *AccountShareModeHandler) CreateJoinIntent(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	listingID, err := parseInt64Param(c, "id")
+	if err != nil {
+		response.BadRequest(c, "Invalid listing ID")
+		return
+	}
+	var req accountShareJoinIntentRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	intent, err := h.service.CreateJoinIntent(c.Request.Context(), subject.UserID, listingID, service.CreateAccountShareJoinIntentInput{
+		APIKeyID:           req.APIKeyID,
+		IdleTimeoutMinutes: req.IdleTimeoutMinutes,
+		AcceptQueue:        req.AcceptQueue,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, intent)
 }
 
 func (h *AccountShareModeHandler) UpdateMembershipIdleTimeout(c *gin.Context) {
@@ -918,15 +1036,21 @@ func (h *AccountShareModeHandler) EndMembership(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	logger.FromContext(c.Request.Context()).Info("account share membership ended",
+	logger.FromContext(c.Request.Context()).Info("account share membership end accepted",
 		zap.String("component", "account_share.audit"),
 		zap.Int64("user_id", subject.UserID),
 		zap.Int64("membership_id", membershipID),
 		zap.Int64("api_key_id", membership.APIKeyID),
+		zap.String("membership_status", membership.Status),
+		zap.String("operation_id", membership.EndingOperationID),
 		zap.String("client_ip", c.ClientIP()),
 		zap.String("user_agent", c.Request.UserAgent()),
 		zap.String("referer", c.Request.Referer()),
 	)
+	if membership.Status == service.AccountShareMembershipStatusEnding {
+		response.Accepted(c, membership)
+		return
+	}
 	response.Success(c, membership)
 }
 
@@ -950,15 +1074,22 @@ func (h *AccountShareModeHandler) SubmitReview(c *gin.Context) {
 		response.BadRequest(c, "score is required")
 		return
 	}
-	review, err := h.service.SubmitReview(c.Request.Context(), subject.UserID, membershipID, service.SubmitAccountShareReviewInput{
+	input := service.SubmitAccountShareReviewInput{
 		Score:   *req.Score,
 		Comment: strings.TrimSpace(req.Comment),
-	})
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
 	}
-	response.Created(c, review)
+	executeUserRequiredIdempotentJSON(
+		c,
+		"account_share_review_submit",
+		map[string]any{"membership_id": membershipID, "body": req},
+		service.DefaultWriteIdempotencyTTL(),
+		func(ctx context.Context, _ string) (any, error) {
+			return h.service.SubmitReview(ctx, subject.UserID, membershipID, input)
+		},
+		func(c *gin.Context, data any) {
+			response.Created(c, data)
+		},
+	)
 }
 
 func (h *AccountShareModeHandler) ListListingReviews(c *gin.Context) {
@@ -972,8 +1103,15 @@ func (h *AccountShareModeHandler) ListListingReviews(c *gin.Context) {
 		response.BadRequest(c, "Invalid listing ID")
 		return
 	}
+	role, _ := middleware2.GetUserRoleFromContext(c)
 	page, pageSize := response.ParsePagination(c)
-	reviews, result, err := h.service.ListListingReviews(c.Request.Context(), subject.UserID, listingID, pagination.PaginationParams{Page: page, PageSize: pageSize})
+	reviews, result, err := h.service.ListListingReviews(
+		c.Request.Context(),
+		subject.UserID,
+		role == service.RoleAdmin,
+		listingID,
+		pagination.PaginationParams{Page: page, PageSize: pageSize},
+	)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

@@ -4525,7 +4525,7 @@ func (r *usageLogRepository) getModelStatsForAccountIDs(ctx context.Context, sta
 			COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens,
 			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as total_tokens,
 			COALESCE(SUM(total_cost), 0) as cost,
-			COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as actual_cost,
+			COALESCE(SUM(actual_cost), 0) as actual_cost,
 			COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as account_cost
 		FROM usage_logs
 		WHERE account_id = ANY($1) AND created_at >= $2 AND created_at < $3
@@ -4567,7 +4567,8 @@ func (r *usageLogRepository) getEndpointStatsByColumnForAccountIDs(ctx context.C
 			COUNT(*) AS requests,
 			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) AS total_tokens,
 			COALESCE(SUM(total_cost), 0) as cost,
-			COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as actual_cost
+			COALESCE(SUM(actual_cost), 0) as actual_cost,
+			COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as account_cost
 		FROM usage_logs
 		WHERE account_id = ANY($1) AND created_at >= $2 AND created_at < $3
 		GROUP BY endpoint
@@ -4588,7 +4589,7 @@ func (r *usageLogRepository) getEndpointStatsByColumnForAccountIDs(ctx context.C
 	results = make([]EndpointStat, 0)
 	for rows.Next() {
 		var row EndpointStat
-		if err := rows.Scan(&row.Endpoint, &row.Requests, &row.TotalTokens, &row.Cost, &row.ActualCost); err != nil {
+		if err := rows.Scan(&row.Endpoint, &row.Requests, &row.TotalTokens, &row.Cost, &row.ActualCost, &row.AccountCost); err != nil {
 			return nil, err
 		}
 		results = append(results, row)
@@ -4889,33 +4890,98 @@ func (r *usageLogRepository) sumAccountShareSeatCostsByAPIKey(ctx context.Contex
 	return result, nil
 }
 
-func (r *usageLogRepository) getAccountHourlyCostsByDate(ctx context.Context, startTime, endTime time.Time, accountIDs []int64) (map[string]float64, error) {
-	result := make(map[string]float64)
+type accountFinancialDay struct {
+	HourlyCost        float64
+	ShareConsumerCost float64
+	OwnerIncome       float64
+}
+
+func (r *usageLogRepository) getAccountFinancialsByDate(ctx context.Context, accountID int64, startTime, endTime time.Time, accountIDs []int64) (map[string]accountFinancialDay, error) {
+	result := make(map[string]accountFinancialDay)
 	if len(accountIDs) == 0 {
 		return result, nil
 	}
 
 	query := `
+		WITH target_owner AS (
+			SELECT owner_user_id
+			FROM accounts
+			WHERE id = $1
+		),
+		financial_entries AS (
+			SELECT
+				created_at,
+				CASE WHEN direction = 'debit' THEN amount ELSE -amount END AS hourly_cost,
+				0::numeric AS share_consumer_cost,
+				0::numeric AS owner_income
+			FROM user_balance_ledger
+			WHERE metadata->>'account_id' = ANY($2)
+				AND reason IN ($3, $4, $5)
+				AND created_at >= $6
+				AND created_at < $7
+
+			UNION ALL
+
+			SELECT
+				created_at,
+				0::numeric AS hourly_cost,
+				consumer_charge AS share_consumer_cost,
+				owner_credit AS owner_income
+			FROM account_share_settlement_entries
+			WHERE owner_user_id = (SELECT owner_user_id FROM target_owner)
+				AND consumer_user_id <> owner_user_id
+				AND account_id = ANY($8)
+				AND status = 'applied'
+				AND created_at >= $6
+				AND created_at < $7
+
+			UNION ALL
+
+			SELECT
+				sm.created_at,
+				0::numeric AS hourly_cost,
+				CASE
+					WHEN sm.settlement_type = 'seat_waiver_refund' THEN -sm.refund_amount
+					ELSE sm.total_charge
+				END AS share_consumer_cost,
+				CASE
+					WHEN sm.settlement_type = 'seat_waiver_refund' THEN -sm.owner_credit
+					ELSE sm.owner_credit
+				END AS owner_income
+			FROM account_share_mode_settlement_entries sm
+			WHERE sm.owner_user_id = (SELECT owner_user_id FROM target_owner)
+				AND sm.consumer_user_id <> sm.owner_user_id
+				AND sm.account_id = ANY($8)
+				AND sm.created_at >= $6
+				AND sm.created_at < $7
+				AND (
+					sm.settlement_type IN ('usage_request', 'seat_charge')
+					OR (
+						sm.settlement_type = 'seat_waiver_refund'
+						AND sm.reversal_of_settlement_id IS NOT NULL
+					)
+				)
+		)
 		SELECT
-			TO_CHAR(created_at, 'YYYY-MM-DD') AS date,
-			COALESCE(SUM(CASE WHEN direction = 'debit' THEN amount ELSE -amount END), 0) AS hourly_cost
-		FROM user_balance_ledger
-		WHERE metadata->>'account_id' = ANY($1)
-			AND reason IN ($2, $3, $4)
-			AND created_at >= $5
-			AND created_at < $6
+			TO_CHAR(created_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD') AS date,
+			COALESCE(SUM(hourly_cost), 0) AS hourly_cost,
+			COALESCE(SUM(share_consumer_cost), 0) AS share_consumer_cost,
+			COALESCE(SUM(owner_income), 0) AS owner_income
+		FROM financial_entries
 		GROUP BY date
 		ORDER BY date ASC
 	`
 	rows, err := r.sql.QueryContext(
 		ctx,
 		query,
+		accountID,
 		pq.Array(accountUsageStatsAccountIDStrings(accountIDs)),
 		accountShareSeatPrepayReason,
 		accountShareSeatRefundReason,
 		accountShareSeatWaiverRefundReason,
 		startTime,
 		endTime,
+		pq.Array(accountIDs),
 	)
 	if err != nil {
 		return nil, err
@@ -4924,11 +4990,16 @@ func (r *usageLogRepository) getAccountHourlyCostsByDate(ctx context.Context, st
 
 	for rows.Next() {
 		var date string
-		var hourlyCost float64
-		if err := rows.Scan(&date, &hourlyCost); err != nil {
+		var financialDay accountFinancialDay
+		if err := rows.Scan(
+			&date,
+			&financialDay.HourlyCost,
+			&financialDay.ShareConsumerCost,
+			&financialDay.OwnerIncome,
+		); err != nil {
 			return nil, err
 		}
-		result[date] = hourlyCost
+		result[date] = financialDay
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -5488,11 +5559,11 @@ func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID
 		return nil, err
 	}
 
-	hourlyCostsByDate, err := r.getAccountHourlyCostsByDate(ctx, startTime, endTime, accountIDs)
+	financialsByDate, err := r.getAccountFinancialsByDate(ctx, accountID, startTime, endTime, accountIDs)
 	if err != nil {
 		return nil, err
 	}
-	for date, hourlyCost := range hourlyCostsByDate {
+	for date, financialDay := range financialsByDate {
 		historyItem := historyByDate[date]
 		if historyItem == nil {
 			historyItem = &AccountUsageHistory{
@@ -5501,19 +5572,23 @@ func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID
 			}
 			historyByDate[date] = historyItem
 		}
-		historyItem.HourlyCost = hourlyCost
-		historyItem.UserCost = historyItem.RequestUserCost + historyItem.HourlyCost
+		historyItem.HourlyCost = financialDay.HourlyCost
+		historyItem.ShareConsumerCost = financialDay.ShareConsumerCost
+		historyItem.OwnerIncome = financialDay.OwnerIncome
 	}
 
 	history := make([]AccountUsageHistory, 0, len(historyByDate))
 	for _, item := range historyByDate {
+		item.UserCost = item.RequestUserCost + item.HourlyCost
+		item.OwnerNetIncome = item.OwnerIncome - item.ActualCost
 		history = append(history, *item)
 	}
 	sort.Slice(history, func(i, j int) bool {
 		return history[i].Date < history[j].Date
 	})
 
-	var totalAccountCost, totalUserCost, totalRequestUserCost, totalHourlyCost, totalStandardCost float64
+	var totalAccountCost, totalUserCost, totalRequestUserCost, totalHourlyCost float64
+	var totalShareConsumerCost, totalOwnerIncome, totalOwnerNetIncome, totalStandardCost float64
 	var totalRequests, totalTokens int64
 	var highestCostDay, highestRequestDay *AccountUsageHistory
 
@@ -5523,6 +5598,9 @@ func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID
 		totalUserCost += h.UserCost
 		totalRequestUserCost += h.RequestUserCost
 		totalHourlyCost += h.HourlyCost
+		totalShareConsumerCost += h.ShareConsumerCost
+		totalOwnerIncome += h.OwnerIncome
+		totalOwnerNetIncome += h.OwnerNetIncome
 		totalStandardCost += h.Cost
 		totalRequests += h.Requests
 		totalTokens += h.Tokens
@@ -5553,6 +5631,9 @@ func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID
 		TotalUserCost:           totalUserCost,
 		TotalRequestUserCost:    totalRequestUserCost,
 		TotalHourlyCost:         totalHourlyCost,
+		TotalShareConsumerCost:  totalShareConsumerCost,
+		TotalOwnerIncome:        totalOwnerIncome,
+		TotalOwnerNetIncome:     totalOwnerNetIncome,
 		TotalStandardCost:       totalStandardCost,
 		TotalRequests:           totalRequests,
 		TotalTokens:             totalTokens,
@@ -5574,6 +5655,8 @@ func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID
 				RequestUserCost float64 `json:"request_user_cost"`
 				HourlyCost      float64 `json:"hourly_cost"`
 				UserCost        float64 `json:"user_cost"`
+				OwnerIncome     float64 `json:"owner_income"`
+				OwnerNetIncome  float64 `json:"owner_net_income"`
 				Requests        int64   `json:"requests"`
 				Tokens          int64   `json:"tokens"`
 			}{
@@ -5582,6 +5665,8 @@ func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID
 				RequestUserCost: history[i].RequestUserCost,
 				HourlyCost:      history[i].HourlyCost,
 				UserCost:        history[i].UserCost,
+				OwnerIncome:     history[i].OwnerIncome,
+				OwnerNetIncome:  history[i].OwnerNetIncome,
 				Requests:        history[i].Requests,
 				Tokens:          history[i].Tokens,
 			}

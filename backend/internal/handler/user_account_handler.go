@@ -38,6 +38,7 @@ type UserAccountHandler struct {
 	geminiOAuthService      *service.GeminiOAuthService
 	antigravityOAuthService *service.AntigravityOAuthService
 	grokOAuthService        *service.GrokOAuthService
+	grokTokenProvider       *service.GrokTokenProvider
 	sessionLimitCache       service.SessionLimitCache
 	rpmCache                service.RPMCache
 	accountBatchTaskService *service.AccountBatchTaskService
@@ -98,6 +99,10 @@ func (h *UserAccountHandler) SetUserContentModerationService(userModerationServi
 
 func (h *UserAccountHandler) SetGrokOAuthService(grokOAuthService *service.GrokOAuthService) {
 	h.grokOAuthService = grokOAuthService
+}
+
+func (h *UserAccountHandler) SetGrokTokenProvider(grokTokenProvider *service.GrokTokenProvider) {
+	h.grokTokenProvider = grokTokenProvider
 }
 
 type createUserAccountRequest struct {
@@ -1455,6 +1460,18 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 
 	if req.Platform == service.PlatformOpenAI {
 		req.AccountLevel = openAIAccountLevel
+		resolvedExpiresAt, forceAutoPause, err := service.ResolveOpenAIAccessTokenOnlyLifecycle(
+			req.Credentials,
+			req.ExpiresAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		req.ExpiresAt = resolvedExpiresAt
+		if forceAutoPause {
+			enabled := true
+			req.AutoPauseOnExpired = &enabled
+		}
 	}
 	if strings.TrimSpace(req.Name) == "" {
 		return nil, fmt.Errorf("account name is required")
@@ -2036,6 +2053,7 @@ func (h *UserAccountHandler) refreshOwnedAccount(ctx context.Context, ownerUserI
 	}
 
 	var newCredentials map[string]any
+	var refreshedAccount *service.Account
 	switch {
 	case account.IsOpenAI():
 		tokenInfo, err := h.openaiOAuthService.RefreshAccountToken(ctx, account)
@@ -2077,13 +2095,23 @@ func (h *UserAccountHandler) refreshOwnedAccount(ctx context.Context, ownerUserI
 		}
 		if tokenInfo.ProjectIDMissing {
 			updatedAccount, updateErr := h.accountService.UpdateOwned(ctx, ownerUserID, account.ID, service.UpdateAccountRequest{
-				Credentials: &newCredentials,
+				Credentials:    &newCredentials,
+				MutationIntent: service.AccountMutationIntentSystemTokenRefresh,
 			})
 			if updateErr != nil {
 				return nil, "", fmt.Errorf("failed to update credentials: %w", updateErr)
 			}
 			_, _ = h.setOwnedAccountPrivacy(ctx, ownerUserID, updatedAccount)
 			return updatedAccount, "missing_project_id_temporary", nil
+		}
+	case account.Platform == service.PlatformGrok:
+		if h.grokTokenProvider == nil {
+			return nil, "", infraerrors.ServiceUnavailable("GROK_TOKEN_PROVIDER_UNAVAILABLE", "grok token provider unavailable")
+		}
+		var err error
+		refreshedAccount, err = h.grokTokenProvider.RefreshNow(ctx, account)
+		if err != nil {
+			return nil, "", err
 		}
 	default:
 		tokenInfo, err := h.oauthService.RefreshAccountToken(ctx, account)
@@ -2106,11 +2134,34 @@ func (h *UserAccountHandler) refreshOwnedAccount(ctx context.Context, ownerUserI
 		}
 	}
 
-	updatedAccount, err := h.accountService.UpdateOwned(ctx, ownerUserID, account.ID, service.UpdateAccountRequest{
-		Credentials: &newCredentials,
-	})
-	if err != nil {
-		return nil, "", err
+	updatedAccount := refreshedAccount
+	if updatedAccount == nil {
+		var err error
+		updatedAccount, err = h.accountService.UpdateOwned(ctx, ownerUserID, account.ID, service.UpdateAccountRequest{
+			Credentials:    &newCredentials,
+			MutationIntent: service.AccountMutationIntentSystemTokenRefresh,
+		})
+		if err != nil {
+			return nil, "", err
+		}
+	} else {
+		var err error
+		updatedAccount, err = h.accountService.GetOwnedByID(ctx, ownerUserID, account.ID)
+		if err != nil {
+			return nil, "", err
+		}
+		if h.rateLimitService == nil {
+			return nil, "", infraerrors.ServiceUnavailable("RATE_LIMIT_SERVICE_UNAVAILABLE", "rate limit service unavailable")
+		}
+		if _, err = h.rateLimitService.RecoverAccountState(ctx, account.ID, service.AccountRecoveryOptions{
+			InvalidateToken: true,
+		}); err != nil {
+			return nil, "", fmt.Errorf("failed to recover account state after refreshing credentials: %w", err)
+		}
+		updatedAccount, err = h.accountService.GetOwnedByID(ctx, ownerUserID, account.ID)
+		if err != nil {
+			return nil, "", err
+		}
 	}
 
 	_, _ = h.setOwnedAccountPrivacy(ctx, ownerUserID, updatedAccount)

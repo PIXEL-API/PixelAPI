@@ -22,6 +22,9 @@ type refreshAPIAccountRepo struct {
 	updateErr              error
 	updateCalls            int
 	updateCredentialsCalls int
+	grokCASCalls           int
+	grokCASApplied         *bool
+	grokCASMissAccount     *Account
 }
 
 func (r *refreshAPIAccountRepo) GetByID(_ context.Context, _ int64) (*Account, error) {
@@ -47,6 +50,26 @@ func (r *refreshAPIAccountRepo) UpdateCredentials(_ context.Context, id int64, c
 	}
 	r.account.Credentials = cloneCredentials(credentials)
 	return nil
+}
+
+func (r *refreshAPIAccountRepo) UpdateGrokOAuthCredentialsIfUnchanged(
+	ctx context.Context,
+	id int64,
+	_ map[string]any,
+	_ *int64,
+	credentials map[string]any,
+) (bool, error) {
+	r.grokCASCalls++
+	if r.updateErr != nil {
+		return false, r.updateErr
+	}
+	if r.grokCASApplied != nil && !*r.grokCASApplied {
+		if r.grokCASMissAccount != nil {
+			r.account = r.grokCASMissAccount
+		}
+		return false, nil
+	}
+	return true, r.UpdateCredentials(ctx, id, credentials)
 }
 
 // refreshAPIExecutorStub implements OAuthRefreshExecutor for tests.
@@ -102,6 +125,203 @@ func (c *refreshAPICacheStub) ReleaseRefreshLock(context.Context, string) error 
 }
 
 // ========== RefreshIfNeeded tests ==========
+
+func TestRefreshNow_ForcesRefreshThroughCoordinator(t *testing.T) {
+	account := &Account{ID: 10, Platform: PlatformAnthropic, Type: AccountTypeOAuth}
+	repo := &refreshAPIAccountRepo{account: account}
+	cache := &refreshAPICacheStub{lockResult: true}
+	executor := &refreshAPIExecutorStub{
+		needsRefresh: false,
+		credentials:  map[string]any{"access_token": "forced-token"},
+	}
+
+	result, err := NewOAuthRefreshAPI(repo, cache).RefreshNow(context.Background(), account, executor)
+
+	require.NoError(t, err)
+	require.True(t, result.Refreshed)
+	require.Equal(t, "forced-token", result.Account.GetCredential("access_token"))
+	require.Equal(t, 1, executor.refreshCalls)
+	require.Equal(t, 1, repo.updateCredentialsCalls)
+	require.Equal(t, 1, cache.releaseCalls)
+}
+
+func TestRefreshNow_FailsWhenLockedAccountCanNoLongerRefresh(t *testing.T) {
+	account := &Account{ID: 11, Platform: PlatformGrok, Type: AccountTypeOAuth}
+	repo := &refreshAPIAccountRepo{account: account}
+	cache := &refreshAPICacheStub{lockResult: true}
+	executor := &dynamicRefreshExecutor{canRefresh: false}
+
+	result, err := NewOAuthRefreshAPI(repo, cache).RefreshNow(context.Background(), account, executor)
+
+	require.ErrorIs(t, err, errGrokOAuthRefreshTokenMissing)
+	require.NotNil(t, result)
+	require.Same(t, account, result.Account)
+	require.Equal(t, 0, repo.updateCredentialsCalls)
+	require.Equal(t, 1, cache.releaseCalls)
+}
+
+func TestRefreshNow_GrokCASMissRecoversWhenRefreshGenerationAdvanced(t *testing.T) {
+	tests := []struct {
+		name                string
+		currentRefreshToken string
+		currentTokenVersion int64
+	}{
+		{name: "refresh token changed", currentRefreshToken: "winner-refresh", currentTokenVersion: 100},
+		{name: "token version increased", currentRefreshToken: "old-refresh", currentTokenVersion: 101},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			casApplied := false
+			account := &Account{
+				ID:       12,
+				Platform: PlatformGrok,
+				Type:     AccountTypeOAuth,
+				Credentials: map[string]any{
+					"access_token":   "old-access",
+					"refresh_token":  "old-refresh",
+					"_token_version": int64(100),
+				},
+			}
+			newerAccount := &Account{
+				ID:       account.ID,
+				Platform: PlatformGrok,
+				Type:     AccountTypeOAuth,
+				Credentials: map[string]any{
+					"access_token":   "winner-access",
+					"refresh_token":  tt.currentRefreshToken,
+					"_token_version": tt.currentTokenVersion,
+				},
+			}
+			repo := &refreshAPIAccountRepo{
+				account:            account,
+				grokCASApplied:     &casApplied,
+				grokCASMissAccount: newerAccount,
+			}
+			cache := &refreshAPICacheStub{lockResult: true}
+			executor := &refreshAPIExecutorStub{
+				credentials: map[string]any{
+					"access_token":  "loser-access",
+					"refresh_token": "loser-refresh",
+				},
+			}
+
+			result, err := NewOAuthRefreshAPI(repo, cache).RefreshNow(context.Background(), account, executor)
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Same(t, newerAccount, result.Account)
+			require.Equal(t, "winner-access", result.Account.GetGrokAccessToken())
+			require.Equal(t, 1, repo.grokCASCalls)
+			require.Equal(t, 0, repo.updateCredentialsCalls)
+		})
+	}
+}
+
+func TestRefreshNow_GrokCASMissRejectsUnrelatedCredentialUpdate(t *testing.T) {
+	casApplied := false
+	account := &Account{
+		ID:       13,
+		Platform: PlatformGrok,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token":   "old-access",
+			"refresh_token":  "same-refresh",
+			"_token_version": int64(100),
+			"base_url":       "https://old.example",
+		},
+	}
+	unrelatedUpdate := &Account{
+		ID:       account.ID,
+		Platform: PlatformGrok,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token":   "old-access",
+			"refresh_token":  "same-refresh",
+			"_token_version": int64(100),
+			"base_url":       "https://new.example",
+		},
+	}
+	repo := &refreshAPIAccountRepo{
+		account:            account,
+		grokCASApplied:     &casApplied,
+		grokCASMissAccount: unrelatedUpdate,
+	}
+	cache := &refreshAPICacheStub{lockResult: true}
+	executor := &refreshAPIExecutorStub{
+		credentials: map[string]any{
+			"access_token":  "new-access",
+			"refresh_token": "same-refresh",
+		},
+	}
+
+	result, err := NewOAuthRefreshAPI(repo, cache).RefreshNow(context.Background(), account, executor)
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	var containmentErr *providerCycleContainmentRefreshError
+	require.ErrorAs(t, err, &containmentErr)
+	require.Contains(t, err.Error(), "non-refresh account update")
+	require.Equal(t, 1, repo.grokCASCalls)
+	require.Equal(t, 0, repo.updateCredentialsCalls)
+}
+
+func TestRefreshNow_GrokCASMissRejectsClearedCredentialGeneration(t *testing.T) {
+	tests := []struct {
+		name           string
+		currentAccess  string
+		currentRefresh string
+	}{
+		{name: "access token cleared", currentAccess: " ", currentRefresh: "winner-refresh"},
+		{name: "refresh token cleared", currentAccess: "winner-access", currentRefresh: " "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			casApplied := false
+			account := &Account{
+				ID:       14,
+				Platform: PlatformGrok,
+				Type:     AccountTypeOAuth,
+				Credentials: map[string]any{
+					"access_token":   "old-access",
+					"refresh_token":  "old-refresh",
+					"_token_version": int64(100),
+				},
+			}
+			clearedAccount := &Account{
+				ID:       account.ID,
+				Platform: PlatformGrok,
+				Type:     AccountTypeOAuth,
+				Credentials: map[string]any{
+					"access_token":   tt.currentAccess,
+					"refresh_token":  tt.currentRefresh,
+					"_token_version": int64(101),
+				},
+			}
+			repo := &refreshAPIAccountRepo{
+				account:            account,
+				grokCASApplied:     &casApplied,
+				grokCASMissAccount: clearedAccount,
+			}
+			cache := &refreshAPICacheStub{lockResult: true}
+			executor := &refreshAPIExecutorStub{
+				credentials: map[string]any{
+					"access_token":  "new-access",
+					"refresh_token": "new-refresh",
+				},
+			}
+
+			result, err := NewOAuthRefreshAPI(repo, cache).RefreshNow(context.Background(), account, executor)
+
+			require.Nil(t, result)
+			var containmentErr *providerCycleContainmentRefreshError
+			require.ErrorAs(t, err, &containmentErr)
+			require.Equal(t, 1, repo.grokCASCalls)
+			require.Equal(t, 0, repo.updateCredentialsCalls)
+		})
+	}
+}
 
 func TestRefreshIfNeeded_Success(t *testing.T) {
 	account := &Account{ID: 1, Platform: PlatformAnthropic, Type: AccountTypeOAuth}

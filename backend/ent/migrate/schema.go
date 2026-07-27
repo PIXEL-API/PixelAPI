@@ -710,6 +710,8 @@ var (
 		{Name: "status", Type: field.TypeString, Size: 20, Default: "active"},
 		{Name: "owner_user_id", Type: field.TypeInt64, Nullable: true},
 		{Name: "scope", Type: field.TypeString, Size: 20, Default: "public"},
+		{Name: "api_key_badge_type", Type: field.TypeEnum, Enums: []string{"hidden", "recommended", "constrained", "unavailable", "custom"}, Default: "hidden"},
+		{Name: "api_key_badge_text", Type: field.TypeString, Size: 20, Default: ""},
 		{Name: "platform", Type: field.TypeString, Size: 50, Default: "anthropic"},
 		{Name: "required_account_level", Type: field.TypeString, Size: 64, Default: ""},
 		{Name: "subscription_type", Type: field.TypeString, Size: 20, Default: "standard"},
@@ -758,12 +760,12 @@ var (
 			{
 				Name:    "group_platform",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[15]},
+				Columns: []*schema.Column{GroupsColumns[17]},
 			},
 			{
 				Name:    "group_subscription_type",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[17]},
+				Columns: []*schema.Column{GroupsColumns[19]},
 			},
 			{
 				Name:    "group_is_exclusive",
@@ -783,7 +785,7 @@ var (
 			{
 				Name:    "group_owner_user_id_platform_scope",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[13], GroupsColumns[15], GroupsColumns[14]},
+				Columns: []*schema.Column{GroupsColumns[13], GroupsColumns[17], GroupsColumns[14]},
 			},
 			{
 				Name:    "group_deleted_at",
@@ -793,7 +795,7 @@ var (
 			{
 				Name:    "group_sort_order",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[41]},
+				Columns: []*schema.Column{GroupsColumns[43]},
 			},
 		},
 	}

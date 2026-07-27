@@ -520,15 +520,25 @@ export async function getAvailableModels(id: number): Promise<ClaudeModel[]> {
 
 export interface CRSPreviewAccount {
   crs_account_id: string
+  local_account_id?: number
   kind: string
   name: string
   platform: string
   type: string
+  requires_force_active_edit: boolean
+  room_bindings: CRSPreviewRoomBinding[]
+}
+
+export interface CRSPreviewRoomBinding {
+  listing_id: number
+  row_version: number
 }
 
 export interface PreviewFromCRSResult {
   new_accounts: CRSPreviewAccount[]
   existing_accounts: CRSPreviewAccount[]
+  preview_token: string
+  expires_at: number
 }
 
 export async function previewFromCrs(params: {
@@ -540,13 +550,21 @@ export async function previewFromCrs(params: {
   return data
 }
 
-export async function syncFromCrs(params: {
-  base_url: string
-  username: string
-  password: string
-  sync_proxies?: boolean
-  selected_account_ids?: string[]
-}): Promise<{
+export async function syncFromCrs(
+  params: {
+    base_url: string
+    username: string
+    password: string
+    sync_proxies?: boolean
+    selected_account_ids?: string[]
+    force_active_edit?: boolean
+    confirmed?: boolean
+    reason?: string
+    expected_versions?: Record<number, number>
+    preview_token: string
+  },
+  idempotencyKey: string
+): Promise<{
   created: number
   updated: number
   skipped: number
@@ -571,7 +589,9 @@ export async function syncFromCrs(params: {
       action: string
       error?: string
     }>
-  }>('/admin/accounts/sync/crs', params)
+  }>('/admin/accounts/sync/crs', params, {
+    headers: { 'Idempotency-Key': idempotencyKey }
+  })
   return data
 }
 

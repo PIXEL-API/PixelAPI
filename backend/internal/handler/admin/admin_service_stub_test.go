@@ -406,8 +406,8 @@ func (s *stubAdminService) SetAccountError(ctx context.Context, id int64, errorM
 	return nil
 }
 
-func (s *stubAdminService) SetAccountSchedulable(ctx context.Context, id int64, schedulable bool) (*service.Account, error) {
-	account := service.Account{ID: id, Name: "account", Status: service.StatusActive, Schedulable: schedulable}
+func (s *stubAdminService) SetAccountSchedulable(ctx context.Context, id int64, input service.SetAccountSchedulableInput) (*service.Account, error) {
+	account := service.Account{ID: id, Name: "account", Status: service.StatusActive, Schedulable: input.Schedulable}
 	return &account, nil
 }
 

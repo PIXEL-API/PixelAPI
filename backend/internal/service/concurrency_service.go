@@ -234,6 +234,15 @@ type accountShareMembershipConcurrencyCache interface {
 	GetAccountShareMembershipConcurrency(ctx context.Context, membershipID int64) (int, error)
 }
 
+// accountShareRuntimeLeaseCache is optional so existing cache implementations
+// remain source-compatible. Account-share dispatch requires this capability and
+// fails closed when the backing cache cannot prove continued slot ownership.
+type accountShareRuntimeLeaseCache interface {
+	RefreshAccountSlot(ctx context.Context, accountID int64, requestID string) (bool, error)
+	RefreshAccountShareMembershipSlot(ctx context.Context, membershipID int64, requestID string) (bool, error)
+	SlotLeaseTTL() time.Duration
+}
+
 // NewConcurrencyService creates a new ConcurrencyService
 func NewConcurrencyService(
 	cache ConcurrencyCache,
@@ -296,6 +305,276 @@ func (s *ConcurrencyService) AcquireOpenAIWSIngressLease(ctx context.Context, ap
 type AcquireResult struct {
 	Acquired    bool
 	ReleaseFunc func() // Must be called when done (typically via defer)
+	RefreshFunc func(context.Context) (bool, error)
+	LeaseTTL    time.Duration
+}
+
+var (
+	ErrAccountShareRuntimeLeaseUnavailable = errors.New("account share runtime lease is unavailable")
+	ErrAccountShareRuntimeLeaseLost        = errors.New("account share runtime lease lost")
+)
+
+type accountShareRuntimeLeaseSlot struct {
+	name            string
+	refresh         func(context.Context) (bool, error)
+	release         func()
+	ttl             time.Duration
+	lastConfirmedAt time.Time
+}
+
+// AccountShareRuntimeLease owns both the account-wide and membership-scoped
+// concurrency slots for one account-share request. Its lifetime is detached
+// from the client request so usage draining cannot release capacity early.
+type AccountShareRuntimeLease struct {
+	ctx    context.Context
+	cancel context.CancelCauseFunc
+
+	accountSlot    accountShareRuntimeLeaseSlot
+	membershipSlot accountShareRuntimeLeaseSlot
+	refreshEvery   time.Duration
+
+	releaseOnce      sync.Once
+	billingBarrierMu sync.Mutex
+	billingBarrier   *accountShareBillingReleaseBarrier
+	stopCh           chan struct{}
+	doneCh           chan struct{}
+}
+
+func (l *AccountShareRuntimeLease) Context() context.Context {
+	if l == nil || l.ctx == nil {
+		return context.Background()
+	}
+	return l.ctx
+}
+
+// Release is idempotent and preserves the global-account then membership
+// release order used by the original paired release closure.
+func (l *AccountShareRuntimeLease) Release() {
+	if l == nil {
+		return
+	}
+	l.releaseOnce.Do(func() {
+		barrier := l.accountShareBillingBarrier()
+		if barrier != nil && !barrier.completed() {
+			go func() {
+				barrier.wait(l.Context())
+				l.releaseNow()
+			}()
+			return
+		}
+		l.releaseNow()
+	})
+}
+
+func (l *AccountShareRuntimeLease) releaseNow() {
+	if l == nil {
+		return
+	}
+	if l.stopCh != nil {
+		close(l.stopCh)
+	}
+	if l.cancel != nil {
+		l.cancel(nil)
+	}
+	if l.doneCh != nil {
+		<-l.doneCh
+	}
+	if l.accountSlot.release != nil {
+		l.accountSlot.release()
+	}
+	if l.membershipSlot.release != nil {
+		l.membershipSlot.release()
+	}
+}
+
+func (l *AccountShareRuntimeLease) setAccountShareBillingBarrier(barrier *accountShareBillingReleaseBarrier) error {
+	if l == nil || barrier == nil {
+		return ErrAccountShareRuntimeLeaseUnavailable
+	}
+	l.billingBarrierMu.Lock()
+	defer l.billingBarrierMu.Unlock()
+	if l.billingBarrier != nil && l.billingBarrier != barrier {
+		return ErrAccountShareRuntimeLeaseUnavailable
+	}
+	l.billingBarrier = barrier
+	return nil
+}
+
+func (l *AccountShareRuntimeLease) accountShareBillingBarrier() *accountShareBillingReleaseBarrier {
+	if l == nil {
+		return nil
+	}
+	l.billingBarrierMu.Lock()
+	defer l.billingBarrierMu.Unlock()
+	return l.billingBarrier
+}
+
+func (l *AccountShareRuntimeLease) refreshLoop() {
+	defer close(l.doneCh)
+	ticker := time.NewTicker(l.refreshEvery)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-l.ctx.Done():
+			return
+		case <-l.stopCh:
+			return
+		case now := <-ticker.C:
+			if l.refreshAt(now) {
+				l.cancel(ErrAccountShareRuntimeLeaseLost)
+				return
+			}
+		}
+	}
+}
+
+// refreshAt returns true once either distributed slot can no longer be
+// confirmed. A missing member is lost immediately; transient cache errors are
+// tolerated only until the affected slot's last confirmation reaches its TTL.
+func (l *AccountShareRuntimeLease) refreshAt(now time.Time) bool {
+	if l == nil {
+		return true
+	}
+	if l.refreshSlotAt(&l.accountSlot, now) {
+		return true
+	}
+	return l.refreshSlotAt(&l.membershipSlot, now)
+}
+
+func (l *AccountShareRuntimeLease) refreshSlotAt(slot *accountShareRuntimeLeaseSlot, now time.Time) bool {
+	if slot == nil || slot.refresh == nil || slot.ttl <= 0 {
+		return true
+	}
+	operationTimeout := 2 * time.Second
+	if slot.ttl < operationTimeout {
+		operationTimeout = slot.ttl
+	}
+	refreshCtx, cancel := context.WithTimeout(context.Background(), operationTimeout)
+	owned, err := slot.refresh(refreshCtx)
+	cancel()
+	if err == nil && owned {
+		slot.lastConfirmedAt = now
+		return false
+	}
+
+	unconfirmedFor := now.Sub(slot.lastConfirmedAt)
+	if unconfirmedFor < 0 {
+		unconfirmedFor = 0
+	}
+	if err == nil {
+		logger.L().Error("account_share_runtime_lease_slot_lost",
+			zap.String("slot", slot.name),
+			zap.Duration("unconfirmed_for", unconfirmedFor),
+		)
+		return true
+	}
+	logger.L().Warn("account_share_runtime_lease_refresh_failed",
+		zap.String("slot", slot.name),
+		zap.Duration("unconfirmed_for", unconfirmedFor),
+		zap.Error(err),
+	)
+	return unconfirmedFor >= slot.ttl
+}
+
+// NewAccountShareRuntimeLease starts a paired lease only when both acquired
+// slots support refresh. Callers retain ownership of the AcquireResults when
+// this constructor returns an error.
+func NewAccountShareRuntimeLease(ctx context.Context, accountSlot, membershipSlot *AcquireResult) (*AccountShareRuntimeLease, error) {
+	if accountSlot == nil || membershipSlot == nil ||
+		!accountSlot.Acquired || !membershipSlot.Acquired ||
+		accountSlot.ReleaseFunc == nil || membershipSlot.ReleaseFunc == nil ||
+		accountSlot.RefreshFunc == nil || membershipSlot.RefreshFunc == nil ||
+		accountSlot.LeaseTTL <= 0 || membershipSlot.LeaseTTL <= 0 {
+		return nil, ErrAccountShareRuntimeLeaseUnavailable
+	}
+
+	leaseTTL := accountSlot.LeaseTTL
+	if membershipSlot.LeaseTTL < leaseTTL {
+		leaseTTL = membershipSlot.LeaseTTL
+	}
+	refreshEvery := leaseTTL / 3
+	if refreshEvery <= 0 {
+		return nil, ErrAccountShareRuntimeLeaseUnavailable
+	}
+
+	baseCtx := context.Background()
+	if ctx != nil {
+		baseCtx = context.WithoutCancel(ctx)
+	}
+	leaseCtx, cancel := context.WithCancelCause(baseCtx)
+	now := time.Now()
+	lease := &AccountShareRuntimeLease{
+		ctx:    leaseCtx,
+		cancel: cancel,
+		accountSlot: accountShareRuntimeLeaseSlot{
+			name:            "account",
+			refresh:         accountSlot.RefreshFunc,
+			release:         accountSlot.ReleaseFunc,
+			ttl:             accountSlot.LeaseTTL,
+			lastConfirmedAt: now,
+		},
+		membershipSlot: accountShareRuntimeLeaseSlot{
+			name:            "membership",
+			refresh:         membershipSlot.RefreshFunc,
+			release:         membershipSlot.ReleaseFunc,
+			ttl:             membershipSlot.LeaseTTL,
+			lastConfirmedAt: now,
+		},
+		refreshEvery: refreshEvery,
+		stopCh:       make(chan struct{}),
+		doneCh:       make(chan struct{}),
+	}
+	go lease.refreshLoop()
+	return lease, nil
+}
+
+type accountShareRuntimeLeaseContextKey struct{}
+
+// BindAccountShareRuntimeLeaseContext returns a request context that is
+// canceled by either the normal caller context or distributed lease loss.
+func BindAccountShareRuntimeLeaseContext(ctx context.Context, lease *AccountShareRuntimeLease) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if lease == nil {
+		return ctx, func() {}
+	}
+	valueCtx := context.WithValue(ctx, accountShareRuntimeLeaseContextKey{}, lease)
+	boundCtx, cancel := context.WithCancelCause(valueCtx)
+	if cause := context.Cause(lease.Context()); cause != nil {
+		cancel(cause)
+		return boundCtx, func() { cancel(nil) }
+	}
+	stop := context.AfterFunc(lease.Context(), func() {
+		cause := context.Cause(lease.Context())
+		if cause == nil {
+			cause = ErrAccountShareRuntimeLeaseLost
+		}
+		cancel(cause)
+	})
+	return boundCtx, func() {
+		stop()
+		cancel(nil)
+	}
+}
+
+// DetachAccountShareRuntimeLeaseContext ignores client cancellation while
+// retaining lease-loss cancellation for upstream usage draining.
+func DetachAccountShareRuntimeLeaseContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		return context.Background(), func() {}
+	}
+	baseCtx := context.WithoutCancel(ctx)
+	lease, _ := ctx.Value(accountShareRuntimeLeaseContextKey{}).(*AccountShareRuntimeLease)
+	if lease == nil {
+		return baseCtx, func() {}
+	}
+	// Existing upstream builders invoke the returned cleanup immediately after
+	// constructing *http.Request, while the request still owns this context.
+	// Keep cleanup a no-op here; the short-lived watcher is reclaimed when the
+	// paired runtime lease ends after forwarding.
+	boundCtx, _ := BindAccountShareRuntimeLeaseContext(baseCtx, lease)
+	return boundCtx, func() {}
 }
 
 type AccountWithConcurrency struct {
@@ -333,6 +612,9 @@ func (s *ConcurrencyService) AcquireAccountSlot(ctx context.Context, accountID i
 			ReleaseFunc: func() {}, // no-op
 		}, nil
 	}
+	if s == nil || s.cache == nil {
+		return nil, errors.New("account concurrency cache is unavailable")
+	}
 
 	// Generate unique request ID for this slot
 	requestID := generateRequestID()
@@ -343,7 +625,7 @@ func (s *ConcurrencyService) AcquireAccountSlot(ctx context.Context, accountID i
 	}
 
 	if acquired {
-		return &AcquireResult{
+		result := &AcquireResult{
 			Acquired: true,
 			ReleaseFunc: func() {
 				bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -352,7 +634,14 @@ func (s *ConcurrencyService) AcquireAccountSlot(ctx context.Context, accountID i
 					logger.LegacyPrintf("service.concurrency", "Warning: failed to release account slot for %d (req=%s): %v", accountID, requestID, err)
 				}
 			},
-		}, nil
+		}
+		if leaseCache, ok := s.cache.(accountShareRuntimeLeaseCache); ok {
+			result.LeaseTTL = leaseCache.SlotLeaseTTL()
+			result.RefreshFunc = func(refreshCtx context.Context) (bool, error) {
+				return leaseCache.RefreshAccountSlot(refreshCtx, accountID, requestID)
+			}
+		}
+		return result, nil
 	}
 
 	return &AcquireResult{
@@ -402,24 +691,19 @@ func (s *ConcurrencyService) AcquireUserSlot(ctx context.Context, userID int64, 
 
 // AcquireAccountShareMembershipSlot attempts to acquire a per-consumer slot for an account-share membership.
 func (s *ConcurrencyService) AcquireAccountShareMembershipSlot(ctx context.Context, membershipID int64, maxConcurrency int) (*AcquireResult, error) {
-	if maxConcurrency <= 0 {
-		return &AcquireResult{
-			Acquired:    true,
-			ReleaseFunc: func() {},
-		}, nil
+	if membershipID <= 0 || maxConcurrency <= 0 {
+		return nil, ErrAccountShareRuntimeLeaseUnavailable
 	}
 	if s == nil || s.cache == nil {
-		return &AcquireResult{
-			Acquired:    true,
-			ReleaseFunc: func() {},
-		}, nil
+		return nil, ErrAccountShareRuntimeLeaseUnavailable
 	}
 	membershipCache, ok := s.cache.(accountShareMembershipConcurrencyCache)
 	if !ok {
-		return &AcquireResult{
-			Acquired:    true,
-			ReleaseFunc: func() {},
-		}, nil
+		return nil, ErrAccountShareRuntimeLeaseUnavailable
+	}
+	leaseCache, ok := s.cache.(accountShareRuntimeLeaseCache)
+	if !ok || leaseCache.SlotLeaseTTL() <= 0 {
+		return nil, ErrAccountShareRuntimeLeaseUnavailable
 	}
 
 	requestID := generateRequestID()
@@ -428,7 +712,7 @@ func (s *ConcurrencyService) AcquireAccountShareMembershipSlot(ctx context.Conte
 		return nil, err
 	}
 	if acquired {
-		return &AcquireResult{
+		result := &AcquireResult{
 			Acquired: true,
 			ReleaseFunc: func() {
 				bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -437,7 +721,12 @@ func (s *ConcurrencyService) AcquireAccountShareMembershipSlot(ctx context.Conte
 					logger.LegacyPrintf("service.concurrency", "Warning: failed to release account share membership slot for %d (req=%s): %v", membershipID, requestID, err)
 				}
 			},
-		}, nil
+			LeaseTTL: leaseCache.SlotLeaseTTL(),
+			RefreshFunc: func(refreshCtx context.Context) (bool, error) {
+				return leaseCache.RefreshAccountShareMembershipSlot(refreshCtx, membershipID, requestID)
+			},
+		}
+		return result, nil
 	}
 	return &AcquireResult{
 		Acquired:    false,

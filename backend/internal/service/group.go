@@ -29,6 +29,8 @@ type Group struct {
 	Hydrated                 bool // indicates the group was loaded from a trusted repository source
 	OwnerUserID              *int64
 	Scope                    string
+	APIKeyBadgeType          string
+	APIKeyBadgeText          string
 
 	SubscriptionType     string
 	RequiredAccountLevel string
@@ -91,10 +93,6 @@ type Group struct {
 	AccountCount            int64
 	ActiveAccountCount      int64
 	RateLimitedAccountCount int64
-	// AvailableAccountCount 仅供服务端对用户可见分组进行可用性排序，不通过普通用户 DTO 暴露。
-	AvailableAccountCount int64
-	// PoolScarce 是普通用户可见的脱敏状态；true 表示当前没有可调度账号。
-	PoolScarce bool
 }
 
 func (g *Group) IsActive() bool {

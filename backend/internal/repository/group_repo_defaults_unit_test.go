@@ -25,30 +25,23 @@ func TestNormalizeGroupWriteDefaultsKeepsExplicitNewUserRateMultiplier(t *testin
 	require.Equal(t, 0.5, group.NewUserRateMultiplier)
 }
 
-func TestApplyVisibleGroupAvailabilitySortsAndMarksScarceGroups(t *testing.T) {
-	groups := []service.Group{
-		{ID: 1, Name: "scarce-first"},
-		{ID: 2, Name: "healthy-two"},
-		{ID: 3, Name: "healthy-five"},
-		{ID: 4, Name: "scarce-last"},
-	}
-	counts := map[int64]groupAccountCounts{
-		1: {Available: 0},
-		2: {Available: 2},
-		3: {Available: 5},
-		4: {Available: 0},
+func TestNormalizeGroupWriteDefaultsSetsHiddenAPIKeyBadge(t *testing.T) {
+	group := &service.Group{APIKeyBadgeText: "stale"}
+
+	normalizeGroupWriteDefaults(group)
+
+	require.Equal(t, service.GroupAPIKeyBadgeTypeHidden, group.APIKeyBadgeType)
+	require.Empty(t, group.APIKeyBadgeText)
+}
+
+func TestNormalizeGroupWriteDefaultsKeepsExplicitAPIKeyBadge(t *testing.T) {
+	group := &service.Group{
+		APIKeyBadgeType: service.GroupAPIKeyBadgeTypeCustom,
+		APIKeyBadgeText: "自定义",
 	}
 
-	applyVisibleGroupAvailability(groups, counts)
+	normalizeGroupWriteDefaults(group)
 
-	require.Equal(t, []int64{3, 2, 1, 4}, []int64{
-		groups[0].ID,
-		groups[1].ID,
-		groups[2].ID,
-		groups[3].ID,
-	})
-	require.False(t, groups[0].PoolScarce)
-	require.False(t, groups[1].PoolScarce)
-	require.True(t, groups[2].PoolScarce)
-	require.True(t, groups[3].PoolScarce)
+	require.Equal(t, service.GroupAPIKeyBadgeTypeCustom, group.APIKeyBadgeType)
+	require.Equal(t, "自定义", group.APIKeyBadgeText)
 }

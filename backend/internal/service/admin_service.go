@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/authidentity"
@@ -92,7 +93,7 @@ type AdminService interface {
 	ForceOpenAIPrivacy(ctx context.Context, account *Account) string
 	// ForceAntigravityPrivacy 强制重新设置 Antigravity OAuth 账号隐私，无论当前状态。
 	ForceAntigravityPrivacy(ctx context.Context, account *Account) string
-	SetAccountSchedulable(ctx context.Context, id int64, schedulable bool) (*Account, error)
+	SetAccountSchedulable(ctx context.Context, id int64, input SetAccountSchedulableInput) (*Account, error)
 	BulkUpdateAccounts(ctx context.Context, input *BulkUpdateAccountsInput) (*BulkUpdateAccountsResult, error)
 	CheckMixedChannelRisk(ctx context.Context, currentAccountID int64, currentAccountPlatform string, groupIDs []int64) error
 	GetAccountQuotaDashboard(ctx context.Context) (*AccountQuotaDashboard, error)
@@ -203,6 +204,8 @@ type CreateGroupInput struct {
 	NewUserRateWindowSeconds int
 	NewUserRateQuotaUSD      float64
 	IsExclusive              bool
+	APIKeyBadgeType          string
+	APIKeyBadgeText          string
 	SubscriptionType         string // standard/subscription
 	RequiredAccountLevel     string
 	DailyLimitUSD            *float64 // 日限额 (USD)
@@ -253,6 +256,8 @@ type UpdateGroupInput struct {
 	NewUserRateWindowSeconds *int
 	NewUserRateQuotaUSD      *float64
 	IsExclusive              *bool
+	APIKeyBadgeType          *string
+	APIKeyBadgeText          *string
 	Status                   string
 	SubscriptionType         string // standard/subscription
 	RequiredAccountLevel     *string
@@ -352,6 +357,14 @@ type UpdateAccountInput struct {
 	ExpiresAt             *int64
 	AutoPauseOnExpired    *bool
 	SkipMixedChannelCheck bool // 跳过混合渠道检查（用户已确认风险）
+	ActorAdminID          int64
+	MutationIntent        string
+	ForceActiveEdit       bool
+	Confirmed             bool
+	Reason                string
+	ExpectedVersion       *int64
+	ExpectedVersions      map[int64]int64
+	OperationID           string
 }
 
 // BulkUpdateAccountsInput describes the payload for bulk updating accounts.
@@ -373,6 +386,25 @@ type BulkUpdateAccountsInput struct {
 	// SkipMixedChannelCheck skips the mixed channel risk check when binding groups.
 	// This should only be set when the caller has explicitly confirmed the risk.
 	SkipMixedChannelCheck bool
+	ActorAdminID          int64
+	MutationIntent        string
+	ForceActiveEdit       bool
+	Confirmed             bool
+	Reason                string
+	ExpectedVersion       *int64
+	ExpectedVersions      map[int64]int64
+	OperationID           string
+}
+
+type SetAccountSchedulableInput struct {
+	Schedulable      bool
+	ActorAdminID     int64
+	ForceActiveEdit  bool
+	Confirmed        bool
+	Reason           string
+	ExpectedVersion  *int64
+	ExpectedVersions map[int64]int64
+	OperationID      string
 }
 
 type BulkUpdateAccountFilters struct {
@@ -684,6 +716,38 @@ func (s *adminServiceImpl) openAIAccountLevelConfigs(ctx context.Context) ([]Ope
 
 func invalidGroupInput(message string) error {
 	return infraerrors.BadRequest("GROUP_INVALID_INPUT", message)
+}
+
+const maxGroupAPIKeyBadgeTextRunes = 20
+
+func normalizeGroupAPIKeyBadge(scope, badgeType, badgeText string) (string, string, error) {
+	badgeType = strings.ToLower(strings.TrimSpace(badgeType))
+	badgeText = strings.TrimSpace(badgeText)
+	if badgeType == "" {
+		badgeType = GroupAPIKeyBadgeTypeHidden
+	}
+
+	switch badgeType {
+	case GroupAPIKeyBadgeTypeCustom:
+		if badgeText == "" {
+			return "", "", invalidGroupInput("api_key_badge_text is required when api_key_badge_type is custom")
+		}
+		if utf8.RuneCountInString(badgeText) > maxGroupAPIKeyBadgeTextRunes {
+			return "", "", invalidGroupInput("api_key_badge_text must not exceed 20 characters")
+		}
+	case GroupAPIKeyBadgeTypeHidden,
+		GroupAPIKeyBadgeTypeRecommended,
+		GroupAPIKeyBadgeTypeConstrained,
+		GroupAPIKeyBadgeTypeUnavailable:
+		badgeText = ""
+	default:
+		return "", "", invalidGroupInput("api_key_badge_type must be hidden, recommended, constrained, unavailable, or custom")
+	}
+
+	if NormalizeGroupScope(scope) == GroupScopeUserPrivate && badgeType != GroupAPIKeyBadgeTypeHidden {
+		return "", "", invalidGroupInput("user-private groups cannot display API key badges")
+	}
+	return badgeType, badgeText, nil
 }
 
 func invalidAccountInput(message string) error {
@@ -2034,6 +2098,14 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	if subscriptionType == "" {
 		subscriptionType = SubscriptionTypeStandard
 	}
+	apiKeyBadgeType, apiKeyBadgeText, err := normalizeGroupAPIKeyBadge(
+		GroupScopePublic,
+		input.APIKeyBadgeType,
+		input.APIKeyBadgeText,
+	)
+	if err != nil {
+		return nil, err
+	}
 	newUserRateEnabled, newUserRateMultiplier, newUserRateWindowSeconds, newUserRateQuotaUSD, err := normalizeNewUserRateConfig(
 		input.NewUserRateEnabled,
 		input.NewUserRateMultiplier,
@@ -2129,6 +2201,8 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		NewUserRateQuotaUSD:             newUserRateQuotaUSD,
 		IsExclusive:                     input.IsExclusive,
 		Status:                          StatusActive,
+		APIKeyBadgeType:                 apiKeyBadgeType,
+		APIKeyBadgeText:                 apiKeyBadgeText,
 		SubscriptionType:                subscriptionType,
 		RequiredAccountLevel:            requiredAccountLevel,
 		DailyLimitUSD:                   dailyLimit,
@@ -2388,6 +2462,20 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	if input.SubscriptionType != "" {
 		group.SubscriptionType = input.SubscriptionType
 	}
+	apiKeyBadgeType := group.APIKeyBadgeType
+	apiKeyBadgeText := group.APIKeyBadgeText
+	if input.APIKeyBadgeType != nil {
+		apiKeyBadgeType = *input.APIKeyBadgeType
+	}
+	if input.APIKeyBadgeText != nil {
+		apiKeyBadgeText = *input.APIKeyBadgeText
+	}
+	apiKeyBadgeType, apiKeyBadgeText, err = normalizeGroupAPIKeyBadge(group.Scope, apiKeyBadgeType, apiKeyBadgeText)
+	if err != nil {
+		return nil, err
+	}
+	group.APIKeyBadgeType = apiKeyBadgeType
+	group.APIKeyBadgeText = apiKeyBadgeText
 	if input.RequiredAccountLevel != nil {
 		requiredAccountLevel, err := s.validateRequiredOpenAIAccountLevel(ctx, group.Platform, *input.RequiredAccountLevel)
 		if err != nil {
@@ -3459,7 +3547,8 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if err != nil {
 		return nil, err
 	}
-	if accountHasExternalPlacement(account) &&
+	systemTokenRefresh := strings.TrimSpace(input.MutationIntent) == AccountMutationIntentSystemTokenRefresh
+	if accountHasExternalPlacement(account) && !input.ForceActiveEdit && !systemTokenRefresh &&
 		(input.OwnerUserID != nil ||
 			input.ShareMode != "" ||
 			input.ShareStatus != "" ||
@@ -3551,6 +3640,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			return nil, invalidAccountInput(err.Error())
 		}
 		account.AccountLevel = NormalizeOpenAIAccountLevelWithConfigs(account.Platform, account.AccountLevel, account.Credentials, account.Extra, levelConfigs)
+	}
+	if systemTokenRefresh && input.AccountLevel == nil {
+		account.AccountLevel = before.AccountLevel
 	}
 	if input.ProxyID != nil {
 		if err := s.ensureAccountProxyCapacityForUpdate(ctx, account, input.ProxyID); err != nil {
@@ -3670,18 +3762,46 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		return nil, ErrOwnedAgentIdentityWSInvalidatorUnavailable
 	}
 
-	if err := s.accountRepo.Update(ctx, account); err != nil {
+	targetGroupIDs := append([]int64(nil), before.GroupIDs...)
+	if input.GroupIDs != nil {
+		targetGroupIDs = append([]int64(nil), (*input.GroupIDs)...)
+	}
+	intent := strings.TrimSpace(input.MutationIntent)
+	if intent == "" {
+		intent = AccountMutationIntentAdmin
+	}
+	guardRequest := AccountMutationGuardRequest{
+		Targets: []AccountMutationGuardTarget{{
+			AccountID:         account.ID,
+			ExpectedUpdatedAt: before.UpdatedAt,
+			After:             account,
+			GroupIDs:          targetGroupIDs,
+		}},
+		ActorUserID:             input.ActorAdminID,
+		ActorIsAdmin:            intent == AccountMutationIntentAdmin,
+		Intent:                  intent,
+		ForceActiveEdit:         input.ForceActiveEdit,
+		Confirmed:               input.Confirmed,
+		Reason:                  input.Reason,
+		ExpectedListingVersion:  input.ExpectedVersion,
+		ExpectedListingVersions: input.ExpectedVersions,
+		OperationID:             input.OperationID,
+	}
+	if err := s.withAdminAccountMutationGuard(ctx, guardRequest, func(txCtx context.Context) error {
+		if updateErr := s.accountRepo.Update(txCtx, account); updateErr != nil {
+			return updateErr
+		}
+		if input.GroupIDs != nil {
+			if bindErr := s.accountRepo.BindGroups(txCtx, account.ID, *input.GroupIDs); bindErr != nil {
+				return bindErr
+			}
+		}
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 	if shouldInvalidateAgentIdentityWS {
 		s.agentIdentityWSInvalidator.InvalidateAgentIdentityWSConnections(account.ID)
-	}
-
-	// 绑定分组
-	if input.GroupIDs != nil {
-		if err := s.accountRepo.BindGroups(ctx, account.ID, *input.GroupIDs); err != nil {
-			return nil, err
-		}
 	}
 
 	// 重新查询以确保返回完整数据（包括正确的 Proxy 关联对象）
@@ -3691,6 +3811,29 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	}
 	s.notifyAccountChanged(ctx, before, updated)
 	return updated, nil
+}
+
+func (s *adminServiceImpl) withAdminAccountMutationGuard(
+	ctx context.Context,
+	request AccountMutationGuardRequest,
+	mutate func(context.Context) error,
+) error {
+	repo, ok := s.accountRepo.(AccountMutationGuardRepository)
+	if ok && repo != nil {
+		return repo.WithAccountMutationGuard(ctx, request, mutate)
+	}
+	for _, target := range request.Targets {
+		if target.After == nil {
+			continue
+		}
+		if target.After.AccountShareModeListingID != nil ||
+			(target.After.ExternalPlacement != nil && target.After.ExternalPlacement.Target == AccountExternalPlacementRoom) {
+			return ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{
+				"account_id": strconv.FormatInt(target.AccountID, 10),
+			})
+		}
+	}
+	return mutate(ctx)
 }
 
 // BulkUpdateAccounts updates multiple accounts in one request.
@@ -3710,6 +3853,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		}
 		input.AccountIDs = accountIDs
 	}
+	input.AccountIDs = normalizeOwnedBulkAccountIDs(input.AccountIDs)
 
 	result := &BulkUpdateAccountsResult{
 		SuccessIDs: make([]int64, 0, len(input.AccountIDs)),
@@ -3749,7 +3893,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			return nil, err
 		}
 		for _, account := range accounts {
-			if accountHasExternalPlacement(account) {
+			if accountHasExternalPlacement(account) && !input.ForceActiveEdit {
 				return nil, ErrOwnedAccountPlacementConversionRequired
 			}
 		}
@@ -3965,41 +4109,73 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		repoUpdates.AccountLevel = &level
 	}
 
+	accounts, err := loadPreflightAccounts()
+	if err != nil {
+		return nil, err
+	}
+	if len(accounts) != len(input.AccountIDs) {
+		return nil, ErrAccountNotFound
+	}
 	beforeByID := make(map[int64]*Account, len(input.AccountIDs))
-	if accounts, err := loadPreflightAccounts(); err == nil {
-		for _, account := range accounts {
-			if account != nil {
-				beforeByID[account.ID] = cloneAccountForNotice(account)
+	targets := make([]AccountMutationGuardTarget, 0, len(input.AccountIDs))
+	for _, account := range accounts {
+		if account == nil {
+			return nil, ErrAccountNotFound
+		}
+		before := cloneAccountForNotice(account)
+		beforeByID[account.ID] = before
+		after := previewAdminBulkAccountUpdate(account, repoUpdates)
+		targetGroupIDs := append([]int64(nil), account.GroupIDs...)
+		if input.GroupIDs != nil {
+			targetGroupIDs = append([]int64(nil), (*input.GroupIDs)...)
+		}
+		targets = append(targets, AccountMutationGuardTarget{
+			AccountID:         account.ID,
+			ExpectedUpdatedAt: account.UpdatedAt,
+			After:             after,
+			GroupIDs:          targetGroupIDs,
+		})
+	}
+	intent := strings.TrimSpace(input.MutationIntent)
+	if intent == "" {
+		intent = AccountMutationIntentAdmin
+	}
+	guardRequest := AccountMutationGuardRequest{
+		Targets:                 targets,
+		ActorUserID:             input.ActorAdminID,
+		ActorIsAdmin:            intent == AccountMutationIntentAdmin,
+		Intent:                  intent,
+		ForceActiveEdit:         input.ForceActiveEdit,
+		Confirmed:               input.Confirmed,
+		Reason:                  input.Reason,
+		ExpectedListingVersion:  input.ExpectedVersion,
+		ExpectedListingVersions: input.ExpectedVersions,
+		OperationID:             input.OperationID,
+	}
+	if err := s.withAdminAccountMutationGuard(ctx, guardRequest, func(txCtx context.Context) error {
+		updated, updateErr := s.accountRepo.BulkUpdate(txCtx, input.AccountIDs, repoUpdates)
+		if updateErr != nil {
+			return updateErr
+		}
+		if updated != int64(len(input.AccountIDs)) {
+			return ErrAccountNotFound
+		}
+		if input.GroupIDs != nil {
+			for _, accountID := range input.AccountIDs {
+				if bindErr := s.accountRepo.BindGroups(txCtx, accountID, *input.GroupIDs); bindErr != nil {
+					return bindErr
+				}
 			}
 		}
-	} else {
-		slog.Warn("admin.account.system_notice_preload_failed", "error", err)
-	}
-
-	// Run bulk update for column/jsonb fields first.
-	if _, err := s.accountRepo.BulkUpdate(ctx, input.AccountIDs, repoUpdates); err != nil {
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 	for _, accountID := range agentIdentityWSInvalidationIDs {
 		s.agentIdentityWSInvalidator.InvalidateAgentIdentityWSConnections(accountID)
 	}
-
-	// Handle group bindings per account (requires individual operations).
 	for _, accountID := range input.AccountIDs {
-		entry := BulkUpdateAccountResult{AccountID: accountID}
-
-		if input.GroupIDs != nil {
-			if err := s.accountRepo.BindGroups(ctx, accountID, *input.GroupIDs); err != nil {
-				entry.Success = false
-				entry.Error = err.Error()
-				result.Failed++
-				result.FailedIDs = append(result.FailedIDs, accountID)
-				result.Results = append(result.Results, entry)
-				continue
-			}
-		}
-
-		entry.Success = true
+		entry := BulkUpdateAccountResult{AccountID: accountID, Success: true}
 		result.Success++
 		result.SuccessIDs = append(result.SuccessIDs, accountID)
 		result.Results = append(result.Results, entry)
@@ -4007,6 +4183,58 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 
 	s.notifyBulkAccountsChanged(ctx, beforeByID, result.SuccessIDs)
 	return result, nil
+}
+
+func previewAdminBulkAccountUpdate(account *Account, updates AccountBulkUpdate) *Account {
+	after := cloneAccountForNotice(account)
+	if after == nil {
+		return nil
+	}
+	if updates.Name != nil {
+		after.Name = *updates.Name
+	}
+	if updates.ProxyID != nil {
+		if *updates.ProxyID <= 0 {
+			after.ProxyID = nil
+		} else {
+			value := *updates.ProxyID
+			after.ProxyID = &value
+		}
+	}
+	if updates.Concurrency != nil {
+		after.Concurrency = *updates.Concurrency
+	}
+	if updates.Priority != nil {
+		after.Priority = *updates.Priority
+	}
+	if updates.RateMultiplier != nil {
+		value := *updates.RateMultiplier
+		after.RateMultiplier = &value
+	}
+	if updates.LoadFactor != nil {
+		if *updates.LoadFactor <= 0 {
+			after.LoadFactor = nil
+		} else {
+			value := *updates.LoadFactor
+			after.LoadFactor = &value
+		}
+	}
+	if updates.Status != nil {
+		after.Status = *updates.Status
+	}
+	if updates.Schedulable != nil {
+		after.Schedulable = *updates.Schedulable
+	}
+	if updates.AccountLevel != nil {
+		after.AccountLevel = NormalizeAccountLevel(*updates.AccountLevel)
+	}
+	if len(updates.Credentials) > 0 {
+		after.Credentials = mergeAccountMapPreservingSensitiveCreds(account.Credentials, updates.Credentials)
+	}
+	if len(updates.Extra) > 0 {
+		after.Extra = mergeAccountMap(account.Extra, updates.Extra)
+	}
+	return after
 }
 
 func (s *adminServiceImpl) resolveBulkUpdateTargetIDs(ctx context.Context, filters *BulkUpdateAccountFilters) ([]int64, error) {
@@ -4317,8 +4545,32 @@ func (s *adminServiceImpl) SetAccountError(ctx context.Context, id int64, errorM
 	return s.accountRepo.SetError(ctx, id, errorMsg)
 }
 
-func (s *adminServiceImpl) SetAccountSchedulable(ctx context.Context, id int64, schedulable bool) (*Account, error) {
-	if err := s.accountRepo.SetSchedulable(ctx, id, schedulable); err != nil {
+func (s *adminServiceImpl) SetAccountSchedulable(ctx context.Context, id int64, input SetAccountSchedulableInput) (*Account, error) {
+	before, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	after := cloneAccountForNotice(before)
+	after.Schedulable = input.Schedulable
+	if err := s.withAdminAccountMutationGuard(ctx, AccountMutationGuardRequest{
+		Targets: []AccountMutationGuardTarget{{
+			AccountID:         id,
+			ExpectedUpdatedAt: before.UpdatedAt,
+			After:             after,
+			GroupIDs:          append([]int64(nil), before.GroupIDs...),
+		}},
+		ActorUserID:             input.ActorAdminID,
+		ActorIsAdmin:            true,
+		Intent:                  AccountMutationIntentAdmin,
+		ForceActiveEdit:         input.ForceActiveEdit,
+		Confirmed:               input.Confirmed,
+		Reason:                  input.Reason,
+		ExpectedListingVersion:  input.ExpectedVersion,
+		ExpectedListingVersions: input.ExpectedVersions,
+		OperationID:             input.OperationID,
+	}, func(txCtx context.Context) error {
+		return s.accountRepo.SetSchedulable(txCtx, id, input.Schedulable)
+	}); err != nil {
 		return nil, err
 	}
 	updated, err := s.accountRepo.GetByID(ctx, id)

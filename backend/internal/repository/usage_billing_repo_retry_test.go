@@ -113,6 +113,34 @@ func TestUsageBillingRepositoryApplyDoesNotRetryOtherErrors(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestUsageBillingRepositoryReplayReturnsExistingUsageLogID(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageBillingRepository{db: db}
+	cmd := newUsageBillingRetryTestCommand()
+	cmd.UsageLog = &service.UsageLog{}
+	cmd.Normalize()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`INSERT INTO usage_billing_dedup`).
+		WithArgs(cmd.RequestID, cmd.APIKeyID, cmd.RequestFingerprint).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	mock.ExpectQuery(`SELECT request_fingerprint\s+FROM usage_billing_dedup`).
+		WithArgs(cmd.RequestID, cmd.APIKeyID).
+		WillReturnRows(sqlmock.NewRows([]string{"request_fingerprint"}).AddRow(cmd.RequestFingerprint))
+	mock.ExpectQuery(`SELECT id\s+FROM usage_logs`).
+		WithArgs(cmd.RequestID, cmd.APIKeyID).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(91)))
+	mock.ExpectRollback()
+
+	result, err := repo.Apply(context.Background(), cmd)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.Applied)
+	require.NotNil(t, result.UsageLogID)
+	require.Equal(t, int64(91), *result.UsageLogID)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestIsUsageBillingDeadlock(t *testing.T) {
 	var typedNil *pq.Error
 	tests := []struct {

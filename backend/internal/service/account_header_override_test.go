@@ -49,6 +49,35 @@ func TestApplyHeaderOverridesNoOpForOAuth(t *testing.T) {
 	require.Equal(t, "original", headers.Get("User-Agent"))
 }
 
+func TestGrokHeaderOverrideEligibility(t *testing.T) {
+	tests := []struct {
+		name        string
+		accountType string
+	}{
+		{name: "API key", accountType: AccountTypeAPIKey},
+		{name: "OAuth", accountType: AccountTypeOAuth},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			account := &Account{
+				Platform: PlatformGrok,
+				Type:     tt.accountType,
+				Credentials: map[string]any{
+					"header_override_enabled": true,
+					"header_overrides": map[string]any{
+						"user-agent": "CustomGrokUA/1.0",
+					},
+				},
+			}
+
+			require.True(t, account.IsHeaderOverrideEligible())
+			require.True(t, account.IsHeaderOverrideEnabled())
+			require.Equal(t, map[string]string{"user-agent": "CustomGrokUA/1.0"}, account.GetHeaderOverrides())
+		})
+	}
+}
+
 func TestNormalizeHeaderOverrideCredentialsRejectsSensitiveHeaders(t *testing.T) {
 	err := NormalizeHeaderOverrideCredentials(map[string]any{
 		"header_override_enabled": true,
@@ -58,6 +87,19 @@ func TestNormalizeHeaderOverrideCredentialsRejectsSensitiveHeaders(t *testing.T)
 	})
 
 	require.Error(t, err)
+	require.Contains(t, err.Error(), "not allowed")
+}
+
+func TestNormalizeHeaderOverrideCredentialsRejectsGrokConversationID(t *testing.T) {
+	err := NormalizeHeaderOverrideCredentials(map[string]any{
+		"header_override_enabled": true,
+		"header_overrides": map[string]any{
+			"X-Grok-Conv-ID": "attacker-controlled-conversation",
+		},
+	})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "x-grok-conv-id")
 	require.Contains(t, err.Error(), "not allowed")
 }
 

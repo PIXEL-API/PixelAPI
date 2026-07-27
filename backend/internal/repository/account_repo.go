@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -31,6 +32,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/google/uuid"
 	"github.com/lib/pq"
 
 	"entgo.io/ent/dialect"
@@ -54,6 +56,10 @@ type accountRepository struct {
 	// ensuring sticky sessions can promptly detect unavailable accounts.
 	schedulerCache service.SchedulerCache
 }
+
+var _ service.AccountDeletionGuardRepository = (*accountRepository)(nil)
+var _ service.AccountMutationGuardRepository = (*accountRepository)(nil)
+var _ service.CRSPreviewSnapshotRepository = (*accountRepository)(nil)
 
 var schedulerNeutralExtraKeyPrefixes = []string{
 	"codex_primary_",
@@ -663,12 +669,813 @@ func (r *accountRepository) ListCRSAccountIDs(ctx context.Context) (map[string]i
 	return result, nil
 }
 
+func (r *accountRepository) ListCRSAccountPreviewSnapshots(
+	ctx context.Context,
+) ([]service.CRSAccountPreviewSnapshot, error) {
+	if r == nil || r.sql == nil {
+		return nil, service.ErrCRSPreviewSnapshotUnavailable.WithMetadata(map[string]string{
+			"stage": "repository_executor",
+		})
+	}
+	rows, err := r.sql.QueryContext(ctx, `
+		SELECT
+			account_row.id,
+			account_row.extra->>'crs_account_id',
+			listing.id,
+			listing.row_version
+		FROM accounts account_row
+		LEFT JOIN account_share_room_accounts room_account
+			ON room_account.account_id = account_row.id
+		LEFT JOIN account_share_listings listing
+			ON listing.id = room_account.listing_id
+			AND listing.deleted_at IS NULL
+		WHERE account_row.deleted_at IS NULL
+			AND account_row.extra->>'crs_account_id' IS NOT NULL
+			AND BTRIM(account_row.extra->>'crs_account_id') <> ''
+		ORDER BY account_row.id, listing.id NULLS LAST
+	`)
+	if err != nil {
+		return nil, service.ErrCRSPreviewSnapshotUnavailable.WithMetadata(map[string]string{
+			"stage": "repository_query",
+		}).WithCause(err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	snapshots := make([]service.CRSAccountPreviewSnapshot, 0)
+	currentIndex := -1
+	var currentAccountID int64
+	hasCurrentAccount := false
+	var lastListingID int64
+	for rows.Next() {
+		var (
+			accountID  int64
+			crsID      string
+			listingID  sql.NullInt64
+			rowVersion sql.NullInt64
+		)
+		if err := rows.Scan(&accountID, &crsID, &listingID, &rowVersion); err != nil {
+			return nil, service.ErrCRSPreviewSnapshotUnavailable.WithMetadata(map[string]string{
+				"stage": "repository_scan",
+			}).WithCause(err)
+		}
+		if accountID <= 0 || strings.TrimSpace(crsID) == "" {
+			return nil, service.ErrCRSPreviewSnapshotUnavailable.WithMetadata(map[string]string{
+				"stage": "repository_invalid_account_snapshot",
+			})
+		}
+		if !hasCurrentAccount || accountID != currentAccountID {
+			snapshots = append(snapshots, service.CRSAccountPreviewSnapshot{
+				CRSAccountID:   crsID,
+				LocalAccountID: accountID,
+				RoomBindings:   make([]service.CRSAccountRoomBindingSnapshot, 0),
+			})
+			currentIndex = len(snapshots) - 1
+			currentAccountID = accountID
+			hasCurrentAccount = true
+			lastListingID = 0
+		} else if snapshots[currentIndex].CRSAccountID != crsID {
+			return nil, service.ErrCRSPreviewSnapshotUnavailable.WithMetadata(map[string]string{
+				"account_id": strconv.FormatInt(accountID, 10),
+				"stage":      "repository_inconsistent_crs_account_id",
+			})
+		}
+		if listingID.Valid != rowVersion.Valid {
+			return nil, service.ErrCRSPreviewSnapshotUnavailable.WithMetadata(map[string]string{
+				"account_id": strconv.FormatInt(accountID, 10),
+				"stage":      "repository_incomplete_room_snapshot",
+			})
+		}
+		if !listingID.Valid {
+			continue
+		}
+		if listingID.Int64 <= 0 || rowVersion.Int64 <= 0 {
+			return nil, service.ErrCRSPreviewSnapshotUnavailable.WithMetadata(map[string]string{
+				"account_id": strconv.FormatInt(accountID, 10),
+				"stage":      "repository_invalid_room_snapshot",
+			})
+		}
+		if listingID.Int64 == lastListingID {
+			continue
+		}
+		snapshots[currentIndex].RoomBindings = append(
+			snapshots[currentIndex].RoomBindings,
+			service.CRSAccountRoomBindingSnapshot{
+				ListingID:  listingID.Int64,
+				RowVersion: rowVersion.Int64,
+			},
+		)
+		lastListingID = listingID.Int64
+	}
+	if err := rows.Err(); err != nil {
+		return nil, service.ErrCRSPreviewSnapshotUnavailable.WithMetadata(map[string]string{
+			"stage": "repository_iteration",
+		}).WithCause(err)
+	}
+	return snapshots, nil
+}
+
+type accountMutationRoomBinding struct {
+	accountID        int64
+	listingID        int64
+	rowVersion       int64
+	revisionID       *int64
+	lifecycleStatus  string
+	blockers         service.AccountShareRoomBlockers
+	openBindingCount int
+}
+
+type accountMutationLockedTarget struct {
+	request service.AccountMutationGuardTarget
+	before  *service.Account
+	groups  []int64
+	diff    service.AccountMutationDiff
+}
+
+func (r *accountRepository) WithAccountMutationGuard(
+	ctx context.Context,
+	request service.AccountMutationGuardRequest,
+	mutate func(context.Context) error,
+) error {
+	if r == nil || r.client == nil {
+		return service.ErrAccountMutationGuardUnavailable
+	}
+	if mutate == nil {
+		return service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{"stage": "mutation_callback"})
+	}
+	targets, ids, err := normalizeAccountMutationTargets(request.Targets)
+	if err != nil {
+		return err
+	}
+	if len(ids) == 0 {
+		return mutate(ctx)
+	}
+	if dbent.TxFromContext(ctx) != nil {
+		return service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{"stage": "nested_transaction"})
+	}
+	if r.sql == nil {
+		return service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{"stage": "discovery_executor"})
+	}
+
+	// Discover room bindings before the transaction so the write path can keep
+	// the global lock order: listing -> account -> membership/binding. The
+	// bindings are re-read after account locks are acquired; a newly committed
+	// binding that was not covered by this pre-lock set fails fast and retries
+	// instead of taking a listing lock in reverse order.
+	discoveredRoomBindings, err := loadAccountMutationRoomBindings(ctx, r.sql, ids)
+	if err != nil {
+		return service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{"stage": "room_binding_discovery"}).WithCause(err)
+	}
+
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	txCtx := dbent.NewTxContext(ctx, tx)
+	txClient := tx.Client()
+	exec := sqlExecutorFromEntClient(txClient)
+	if exec == nil {
+		return service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{"stage": "transaction_executor"})
+	}
+	if err := lockAndHydrateAccountMutationRooms(txCtx, exec, discoveredRoomBindings); err != nil {
+		return err
+	}
+
+	lockedEntities, err := txClient.Account.Query().
+		Where(dbaccount.IDIn(ids...)).
+		Order(dbaccount.ByID()).
+		ForUpdate().
+		All(txCtx)
+	if err != nil {
+		return translateAccountPersistenceError(err, service.ErrAccountNotFound)
+	}
+	if len(lockedEntities) != len(ids) {
+		return service.ErrAccountNotFound
+	}
+
+	lockedTargets := make(map[int64]*accountMutationLockedTarget, len(ids))
+	sensitiveIDs := make([]int64, 0, len(ids))
+	for _, entity := range lockedEntities {
+		target := targets[entity.ID]
+		before := accountEntityToService(entity)
+		if before == nil || target.After == nil {
+			return service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{
+				"account_id": strconv.FormatInt(entity.ID, 10),
+				"stage":      "target_snapshot",
+			})
+		}
+		if target.ExpectedUpdatedAt.IsZero() || !entity.UpdatedAt.Equal(target.ExpectedUpdatedAt) {
+			return service.ErrAccountMutationStale.WithMetadata(map[string]string{
+				"account_id": strconv.FormatInt(entity.ID, 10),
+			})
+		}
+		groups, err := loadAccountGroupIDsWithClient(txCtx, txClient, entity.ID)
+		if err != nil {
+			return err
+		}
+		diff := service.ClassifyAccountMutation(before, target.After, groups, target.GroupIDs)
+		lockedTargets[entity.ID] = &accountMutationLockedTarget{
+			request: target,
+			before:  before,
+			groups:  groups,
+			diff:    diff,
+		}
+		if diff.Sensitive {
+			sensitiveIDs = append(sensitiveIDs, entity.ID)
+		}
+	}
+
+	roomBindings, err := loadAccountMutationRoomBindings(txCtx, exec, sensitiveIDs)
+	if err != nil {
+		return service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{"stage": "room_bindings"}).WithCause(err)
+	}
+	if err := hydrateAccountMutationBindingsFromPrelocked(discoveredRoomBindings, roomBindings); err != nil {
+		return err
+	}
+	if err := authorizeAccountMutation(request, lockedTargets, roomBindings); err != nil {
+		return err
+	}
+
+	if err := mutate(service.WithAccountMutationGuardContext(txCtx)); err != nil {
+		return err
+	}
+
+	if request.ActorIsAdmin && request.ForceActiveEdit && len(roomBindings) > 0 {
+		if err := appendForcedAccountMutationEvents(txCtx, exec, request, lockedTargets, roomBindings, txClient); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	r.syncSchedulerAccountSnapshots(context.WithoutCancel(ctx), ids)
+	return nil
+}
+
+func normalizeAccountMutationTargets(
+	input []service.AccountMutationGuardTarget,
+) (map[int64]service.AccountMutationGuardTarget, []int64, error) {
+	targets := make(map[int64]service.AccountMutationGuardTarget, len(input))
+	ids := make([]int64, 0, len(input))
+	for _, target := range input {
+		if target.AccountID <= 0 || target.After == nil || target.After.ID != target.AccountID {
+			return nil, nil, service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{"stage": "invalid_target"})
+		}
+		if _, exists := targets[target.AccountID]; exists {
+			return nil, nil, service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{
+				"account_id": strconv.FormatInt(target.AccountID, 10),
+				"stage":      "duplicate_target",
+			})
+		}
+		target.GroupIDs = uniqueSortedPositiveInt64s(target.GroupIDs)
+		targets[target.AccountID] = target
+		ids = append(ids, target.AccountID)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return targets, ids, nil
+}
+
+func loadAccountMutationRoomBindings(
+	ctx context.Context,
+	exec sqlQueryExecutor,
+	accountIDs []int64,
+) ([]accountMutationRoomBinding, error) {
+	if len(accountIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := exec.QueryContext(ctx, `
+		SELECT room_account.account_id, room_account.listing_id
+		FROM account_share_room_accounts room_account
+		JOIN account_share_listings listing
+			ON listing.id = room_account.listing_id
+			AND listing.deleted_at IS NULL
+		WHERE room_account.account_id = ANY($1)
+		ORDER BY room_account.account_id, room_account.listing_id
+	`, pq.Array(accountIDs))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	bindings := make([]accountMutationRoomBinding, 0, len(accountIDs))
+	seen := make(map[string]struct{}, len(accountIDs))
+	for rows.Next() {
+		var binding accountMutationRoomBinding
+		if err := rows.Scan(&binding.accountID, &binding.listingID); err != nil {
+			return nil, err
+		}
+		key := strconv.FormatInt(binding.accountID, 10) + ":" + strconv.FormatInt(binding.listingID, 10)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		bindings = append(bindings, binding)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return bindings, nil
+}
+
+func lockAndHydrateAccountMutationRooms(
+	ctx context.Context,
+	exec sqlQueryExecutor,
+	bindings []accountMutationRoomBinding,
+) error {
+	if len(bindings) == 0 {
+		return nil
+	}
+	listingIDs := make([]int64, 0, len(bindings))
+	for _, binding := range bindings {
+		listingIDs = append(listingIDs, binding.listingID)
+	}
+	listingIDs = uniqueSortedPositiveInt64s(listingIDs)
+	rows, err := exec.QueryContext(ctx, `
+		SELECT
+			id,
+			row_version,
+			current_revision_id,
+			status,
+			(
+				edit_session_id IS NOT NULL
+				AND editing_expires_at IS NOT NULL
+				AND editing_expires_at > NOW()
+			),
+			(pending_operation_id IS NOT NULL),
+			COALESCE(pending_operation_id::text, '')
+		FROM account_share_listings
+		WHERE id = ANY($1)
+			AND deleted_at IS NULL
+		ORDER BY id
+		FOR UPDATE
+	`, pq.Array(listingIDs))
+	if err != nil {
+		return service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{"stage": "room_lock"}).WithCause(err)
+	}
+	defer func() { _ = rows.Close() }()
+	type roomVersion struct {
+		version          int64
+		revision         sql.NullInt64
+		lifecycleStatus  string
+		blockers         service.AccountShareRoomBlockers
+		openBindingCount int
+	}
+	versions := make(map[int64]roomVersion, len(listingIDs))
+	for rows.Next() {
+		var id int64
+		var version roomVersion
+		if err := rows.Scan(
+			&id,
+			&version.version,
+			&version.revision,
+			&version.lifecycleStatus,
+			&version.blockers.ValidEditSession,
+			&version.blockers.ConflictingOperation,
+			&version.blockers.ConflictingOperationID,
+		); err != nil {
+			return err
+		}
+		versions[id] = version
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{
+			"stage": "room_lock_close",
+		}).WithCause(err)
+	}
+	if len(versions) != len(listingIDs) {
+		return service.ErrAccountMutationStale.WithMetadata(map[string]string{"resource": "room"})
+	}
+
+	blockerRows, err := exec.QueryContext(ctx, `
+		WITH membership_blockers AS (
+			SELECT
+				listing_id,
+				COUNT(*) FILTER (WHERE status = 'active')::int AS active_count,
+				COUNT(*) FILTER (WHERE status = 'queued')::int AS queued_count,
+				COUNT(*) FILTER (WHERE status = 'ending')::int AS ending_count,
+				COUNT(*) FILTER (
+					WHERE settlement_status IN ('pending', 'processing', 'failed')
+				)::int AS settlement_count
+			FROM account_share_memberships
+			WHERE listing_id = ANY($1)
+				AND deleted_at IS NULL
+			GROUP BY listing_id
+		),
+		billing_blockers AS (
+			SELECT listing_id, COUNT(*)::int AS pending_count
+			FROM account_share_request_billing_intents
+			WHERE listing_id = ANY($1)
+				AND status NOT IN ('settled', 'cancelled')
+			GROUP BY listing_id
+		),
+		binding_blockers AS (
+			SELECT listing_id, COUNT(*)::int AS open_count
+			FROM account_share_membership_account_bindings
+			WHERE listing_id = ANY($1)
+				AND unbound_at IS NULL
+			GROUP BY listing_id
+		)
+		SELECT
+			listing.id,
+			COALESCE(membership_blockers.active_count, 0),
+			COALESCE(membership_blockers.queued_count, 0),
+			COALESCE(membership_blockers.ending_count, 0),
+			COALESCE(membership_blockers.settlement_count, 0),
+			COALESCE(billing_blockers.pending_count, 0),
+			COALESCE(binding_blockers.open_count, 0)
+		FROM account_share_listings listing
+		LEFT JOIN membership_blockers ON membership_blockers.listing_id = listing.id
+		LEFT JOIN billing_blockers ON billing_blockers.listing_id = listing.id
+		LEFT JOIN binding_blockers ON binding_blockers.listing_id = listing.id
+		WHERE listing.id = ANY($1)
+			AND listing.deleted_at IS NULL
+		ORDER BY listing.id
+	`, pq.Array(listingIDs))
+	if err != nil {
+		return service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{
+			"stage": "room_blockers",
+		}).WithCause(err)
+	}
+	defer func() { _ = blockerRows.Close() }()
+	blockerRowsSeen := 0
+	for blockerRows.Next() {
+		var listingID int64
+		var version roomVersion
+		if err := blockerRows.Scan(
+			&listingID,
+			&version.blockers.ActiveMembershipCount,
+			&version.blockers.QueuedMembershipCount,
+			&version.blockers.EndingMembershipCount,
+			&version.blockers.SynchronousBillingPendingCount,
+			&version.blockers.PendingBillingIntentCount,
+			&version.openBindingCount,
+		); err != nil {
+			return service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{
+				"stage": "room_blocker_scan",
+			}).WithCause(err)
+		}
+		current, ok := versions[listingID]
+		if !ok {
+			return service.ErrAccountMutationStale.WithMetadata(map[string]string{"resource": "room_blocker"})
+		}
+		current.blockers.ActiveMembershipCount = version.blockers.ActiveMembershipCount
+		current.blockers.QueuedMembershipCount = version.blockers.QueuedMembershipCount
+		current.blockers.EndingMembershipCount = version.blockers.EndingMembershipCount
+		current.blockers.SynchronousBillingPendingCount = version.blockers.SynchronousBillingPendingCount
+		current.blockers.PendingBillingIntentCount = version.blockers.PendingBillingIntentCount
+		current.openBindingCount = version.openBindingCount
+		versions[listingID] = current
+		blockerRowsSeen++
+	}
+	if err := blockerRows.Err(); err != nil {
+		return service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{
+			"stage": "room_blocker_iteration",
+		}).WithCause(err)
+	}
+	if blockerRowsSeen != len(listingIDs) {
+		return service.ErrAccountMutationStale.WithMetadata(map[string]string{"resource": "room_blocker"})
+	}
+	for i := range bindings {
+		version := versions[bindings[i].listingID]
+		bindings[i].rowVersion = version.version
+		bindings[i].lifecycleStatus = version.lifecycleStatus
+		bindings[i].blockers = version.blockers
+		bindings[i].openBindingCount = version.openBindingCount
+		if version.revision.Valid {
+			revisionID := version.revision.Int64
+			bindings[i].revisionID = &revisionID
+		}
+	}
+	return nil
+}
+
+func hydrateAccountMutationBindingsFromPrelocked(
+	prelocked []accountMutationRoomBinding,
+	current []accountMutationRoomBinding,
+) error {
+	type roomVersion struct {
+		rowVersion       int64
+		revisionID       *int64
+		lifecycleStatus  string
+		blockers         service.AccountShareRoomBlockers
+		openBindingCount int
+	}
+	versions := make(map[int64]roomVersion, len(prelocked))
+	for _, binding := range prelocked {
+		if binding.listingID <= 0 || binding.rowVersion <= 0 {
+			continue
+		}
+		version := roomVersion{
+			rowVersion:       binding.rowVersion,
+			lifecycleStatus:  binding.lifecycleStatus,
+			blockers:         binding.blockers,
+			openBindingCount: binding.openBindingCount,
+		}
+		if binding.revisionID != nil {
+			revisionID := *binding.revisionID
+			version.revisionID = &revisionID
+		}
+		versions[binding.listingID] = version
+	}
+	for i := range current {
+		version, ok := versions[current[i].listingID]
+		if !ok {
+			return service.ErrAccountMutationStale.WithMetadata(map[string]string{
+				"account_id": strconv.FormatInt(current[i].accountID, 10),
+				"listing_id": strconv.FormatInt(current[i].listingID, 10),
+				"resource":   "room_binding",
+			})
+		}
+		current[i].rowVersion = version.rowVersion
+		current[i].lifecycleStatus = version.lifecycleStatus
+		current[i].blockers = version.blockers
+		current[i].openBindingCount = version.openBindingCount
+		if version.revisionID != nil {
+			revisionID := *version.revisionID
+			current[i].revisionID = &revisionID
+		}
+	}
+	return nil
+}
+
+func authorizeAccountMutation(
+	request service.AccountMutationGuardRequest,
+	targets map[int64]*accountMutationLockedTarget,
+	bindings []accountMutationRoomBinding,
+) error {
+	if len(bindings) == 0 {
+		return nil
+	}
+	listingIDs := make([]int64, 0, len(bindings))
+	accountIDs := make([]int64, 0, len(bindings))
+	changedFields := make([]string, 0)
+	for _, binding := range bindings {
+		listingIDs = append(listingIDs, binding.listingID)
+		accountIDs = append(accountIDs, binding.accountID)
+		if target := targets[binding.accountID]; target != nil {
+			changedFields = append(changedFields, target.diff.ChangedFields...)
+		}
+	}
+	listingIDs = uniqueSortedPositiveInt64s(listingIDs)
+	accountIDs = uniqueSortedPositiveInt64s(accountIDs)
+	changedFields = uniqueSortedStrings(changedFields)
+	metadata := map[string]string{
+		"account_ids":    joinAccountDeletionInt64s(accountIDs),
+		"listing_ids":    joinAccountDeletionInt64s(listingIDs),
+		"changed_fields": strings.Join(changedFields, ","),
+	}
+
+	switch strings.TrimSpace(request.Intent) {
+	case service.AccountMutationIntentSystemTokenRefresh:
+		for _, binding := range bindings {
+			target := targets[binding.accountID]
+			if target == nil || !service.AccountMutationAllowedForSystemTokenRefresh(target.diff) {
+				return service.ErrAccountMutationSystemIntentInvalid.WithMetadata(metadata)
+			}
+		}
+		return nil
+	case service.AccountMutationIntentOwner, "":
+		if !request.ActorIsAdmin {
+			for _, binding := range bindings {
+				if binding.lifecycleStatus == service.AccountShareListingStatusPaused &&
+					!binding.blockers.Any() &&
+					binding.openBindingCount == 0 {
+					continue
+				}
+				for key, value := range binding.blockers.Metadata() {
+					metadata[key] = value
+				}
+				metadata["listing_id"] = strconv.FormatInt(binding.listingID, 10)
+				metadata["lifecycle_status"] = binding.lifecycleStatus
+				metadata["open_binding_count"] = strconv.Itoa(binding.openBindingCount)
+				return service.ErrAccountMutationBlocked.WithMetadata(metadata)
+			}
+			return nil
+		}
+	case service.AccountMutationIntentAdmin:
+	default:
+		return service.ErrAccountMutationSystemIntentInvalid.WithMetadata(metadata)
+	}
+
+	if !request.ActorIsAdmin || request.ActorUserID <= 0 {
+		return service.ErrAccountMutationForceRequired.WithMetadata(metadata)
+	}
+	if !request.ForceActiveEdit {
+		metadata["missing"] = "force_active_edit"
+		return service.ErrAccountMutationForceRequired.WithMetadata(metadata)
+	}
+	if !request.Confirmed {
+		metadata["missing"] = "confirmed"
+		return service.ErrAccountMutationForceRequired.WithMetadata(metadata)
+	}
+	if strings.TrimSpace(request.Reason) == "" {
+		metadata["missing"] = "reason"
+		return service.ErrAccountMutationForceRequired.WithMetadata(metadata)
+	}
+
+	if len(listingIDs) > 1 && request.ExpectedListingVersion != nil {
+		metadata["missing"] = "expected_versions"
+		return service.ErrAccountMutationForceRequired.WithMetadata(metadata)
+	}
+	for _, binding := range bindings {
+		expected, ok := request.ExpectedListingVersions[binding.listingID]
+		if !ok && len(listingIDs) == 1 && request.ExpectedListingVersion != nil {
+			expected = *request.ExpectedListingVersion
+			ok = true
+		}
+		if !ok || expected <= 0 {
+			metadata["missing"] = "expected_version"
+			if len(listingIDs) > 1 {
+				metadata["missing"] = "expected_versions"
+			}
+			return service.ErrAccountMutationForceRequired.WithMetadata(metadata)
+		}
+		if expected != binding.rowVersion {
+			metadata["listing_id"] = strconv.FormatInt(binding.listingID, 10)
+			metadata["expected_version"] = strconv.FormatInt(expected, 10)
+			metadata["actual_version"] = strconv.FormatInt(binding.rowVersion, 10)
+			return service.ErrAccountMutationVersionConflict.WithMetadata(metadata)
+		}
+	}
+	return nil
+}
+
+func appendForcedAccountMutationEvents(
+	ctx context.Context,
+	exec sqlQueryExecutor,
+	request service.AccountMutationGuardRequest,
+	targets map[int64]*accountMutationLockedTarget,
+	bindings []accountMutationRoomBinding,
+	txClient *dbent.Client,
+) error {
+	operationID := strings.TrimSpace(request.OperationID)
+	if operationID == "" {
+		operationID = uuid.NewString()
+	}
+	afterEntities, err := txClient.Account.Query().
+		Where(dbaccount.IDIn(accountMutationTargetIDs(targets)...)).
+		Order(dbaccount.ByID()).
+		All(ctx)
+	if err != nil {
+		return err
+	}
+	afterByID := make(map[int64]*service.Account, len(afterEntities))
+	afterGroupsByID := make(map[int64][]int64, len(afterEntities))
+	for _, entity := range afterEntities {
+		afterByID[entity.ID] = accountEntityToService(entity)
+		groups, err := loadAccountGroupIDsWithClient(ctx, txClient, entity.ID)
+		if err != nil {
+			return err
+		}
+		afterGroupsByID[entity.ID] = groups
+	}
+
+	bindingsByListing := make(map[int64][]accountMutationRoomBinding)
+	for _, binding := range bindings {
+		bindingsByListing[binding.listingID] = append(bindingsByListing[binding.listingID], binding)
+	}
+	listingIDs := make([]int64, 0, len(bindingsByListing))
+	for listingID := range bindingsByListing {
+		listingIDs = append(listingIDs, listingID)
+	}
+	sort.Slice(listingIDs, func(i, j int) bool { return listingIDs[i] < listingIDs[j] })
+
+	for _, listingID := range listingIDs {
+		listingBindings := bindingsByListing[listingID]
+		changes := make([]map[string]any, 0, len(listingBindings))
+		var revisionID any
+		var rowVersion int64
+		for _, binding := range listingBindings {
+			target := targets[binding.accountID]
+			after := afterByID[binding.accountID]
+			if target == nil || after == nil {
+				return service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{"stage": "audit_snapshot"})
+			}
+			actualDiff := service.ClassifyAccountMutation(target.before, after, target.groups, afterGroupsByID[binding.accountID])
+			if !actualDiff.Sensitive {
+				continue
+			}
+			changes = append(changes, map[string]any{
+				"account_id":              binding.accountID,
+				"changed_fields":          actualDiff.ChangedFields,
+				"credential_changed_keys": actualDiff.CredentialChangedKeys,
+				"extra_changed_keys":      actualDiff.ExtraChangedKeys,
+				"before":                  accountMutationAuditSnapshot(target.before, target.groups),
+				"after":                   accountMutationAuditSnapshot(after, afterGroupsByID[binding.accountID]),
+			})
+			rowVersion = binding.rowVersion
+			if binding.revisionID != nil {
+				revisionID = *binding.revisionID
+			}
+		}
+		if len(changes) == 0 {
+			continue
+		}
+		payload, err := json.Marshal(map[string]any{
+			"operation_id":  operationID,
+			"source":        service.AccountMutationIntentAdmin,
+			"force_applied": true,
+			"row_version":   rowVersion,
+			"changes":       changes,
+		})
+		if err != nil {
+			return err
+		}
+		if _, err := exec.ExecContext(ctx, `
+			INSERT INTO account_share_room_events (
+				listing_id, revision_id, event_type, actor_user_id, actor_role, reason, payload, created_at
+			) VALUES (
+				$1, $2, 'account.admin_forced_update', $3, 'admin', $4, $5::jsonb, NOW()
+			)
+		`, listingID, revisionID, request.ActorUserID, strings.TrimSpace(request.Reason), string(payload)); err != nil {
+			return service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{
+				"listing_id": strconv.FormatInt(listingID, 10),
+				"stage":      "audit_event",
+			}).WithCause(err)
+		}
+	}
+	return nil
+}
+
+func accountMutationAuditSnapshot(account *service.Account, groupIDs []int64) map[string]any {
+	if account == nil {
+		return map[string]any{}
+	}
+	return map[string]any{
+		"id":                    account.ID,
+		"name":                  account.Name,
+		"platform":              account.Platform,
+		"account_level":         account.AccountLevel,
+		"type":                  account.Type,
+		"owner_user_id":         account.OwnerUserID,
+		"share_mode":            account.ShareMode,
+		"share_status":          account.ShareStatus,
+		"share_policy_id":       account.SharePolicyID,
+		"proxy_id":              account.ProxyID,
+		"concurrency":           account.Concurrency,
+		"priority":              account.Priority,
+		"rate_multiplier":       account.RateMultiplier,
+		"load_factor":           account.LoadFactor,
+		"status":                account.Status,
+		"schedulable":           account.Schedulable,
+		"group_ids":             uniqueSortedPositiveInt64s(groupIDs),
+		"expires_at":            account.ExpiresAt,
+		"auto_pause_on_expired": account.AutoPauseOnExpired,
+		"updated_at":            account.UpdatedAt,
+	}
+}
+
+func accountMutationTargetIDs(targets map[int64]*accountMutationLockedTarget) []int64 {
+	ids := make([]int64, 0, len(targets))
+	for id := range targets {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
+}
+
+func uniqueSortedStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func loadAccountGroupIDsWithClient(ctx context.Context, client *dbent.Client, accountID int64) ([]int64, error) {
+	entries, err := client.AccountGroup.Query().
+		Where(dbaccountgroup.AccountIDEQ(accountID)).
+		Order(dbent.Asc(dbaccountgroup.FieldPriority), dbent.Asc(dbaccountgroup.FieldGroupID)).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]int64, 0, len(entries))
+	for _, entry := range entries {
+		ids = append(ids, entry.GroupID)
+	}
+	return ids, nil
+}
+
 func (r *accountRepository) Update(ctx context.Context, account *service.Account) error {
 	if account == nil {
 		return nil
 	}
 
-	builder := applyAccountUpdateFields(r.client.Account.UpdateOneID(account.ID), account)
+	client := clientFromContext(ctx, r.client)
+	builder := applyAccountUpdateFields(client.Account.UpdateOneID(account.ID), account)
 
 	updated, err := builder.Save(ctx)
 	if err != nil {
@@ -678,12 +1485,14 @@ func (r *accountRepository) Update(ctx context.Context, account *service.Account
 	if err := r.syncAccountErrorSince(ctx, account.ID, account.Status); err != nil {
 		return err
 	}
-	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &account.ID, nil, buildSchedulerGroupPayload(account.GroupIDs)); err != nil {
+	if err := enqueueSchedulerOutbox(ctx, txAwareSQLExecutor(ctx, r.sql, r.client), service.SchedulerOutboxEventAccountChanged, &account.ID, nil, buildSchedulerGroupPayload(account.GroupIDs)); err != nil {
 		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue account update failed: account=%d err=%v", account.ID, err)
 	}
 	// 普通账号编辑（如 model_mapping / credentials）也需要立即刷新单账号快照，
 	// 否则网关在 outbox worker 延迟或异常时仍可能读到旧配置。
-	r.syncSchedulerAccountSnapshot(ctx, account.ID)
+	if dbent.TxFromContext(ctx) == nil {
+		r.syncSchedulerAccountSnapshot(ctx, account.ID)
+	}
 	return nil
 }
 
@@ -787,13 +1596,20 @@ func (r *accountRepository) UpdateOwnedAccountWithLoadFactorCredits(ctx context.
 		return nil, service.ErrOwnedAccountLoadFactorOutOfRange
 	}
 
-	tx, err := r.client.Tx(ctx)
-	if err != nil {
-		return nil, err
+	var tx *dbent.Tx
+	txCtx := ctx
+	txClient := clientFromContext(ctx, r.client)
+	if dbent.TxFromContext(ctx) == nil {
+		var err error
+		tx, err = r.client.Tx(ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = tx.Rollback() }()
+		txCtx = dbent.NewTxContext(ctx, tx)
+		txClient = tx.Client()
 	}
-	defer func() { _ = tx.Rollback() }()
-	txCtx := dbent.NewTxContext(ctx, tx)
-	exec := sqlExecutorFromEntClient(tx.Client())
+	exec := sqlExecutorFromEntClient(txClient)
 	if exec == nil {
 		return nil, fmt.Errorf("transaction sql executor is unavailable")
 	}
@@ -843,7 +1659,7 @@ func (r *accountRepository) UpdateOwnedAccountWithLoadFactorCredits(ctx context.
 		}
 	}
 
-	updated, err := applyAccountUpdateFields(tx.Client().Account.UpdateOneID(account.ID), account).Save(txCtx)
+	updated, err := applyAccountUpdateFields(txClient.Account.UpdateOneID(account.ID), account).Save(txCtx)
 	if err != nil {
 		return nil, translateAccountPersistenceError(err, service.ErrAccountNotFound)
 	}
@@ -854,11 +1670,12 @@ func (r *accountRepository) UpdateOwnedAccountWithLoadFactorCredits(ctx context.
 	if err := enqueueSchedulerOutbox(txCtx, exec, service.SchedulerOutboxEventAccountChanged, &account.ID, nil, buildSchedulerGroupPayload(account.GroupIDs)); err != nil {
 		return nil, err
 	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		r.syncSchedulerAccountSnapshot(ctx, account.ID)
 	}
-
-	r.syncSchedulerAccountSnapshot(ctx, account.ID)
 	return account, nil
 }
 
@@ -961,44 +1778,190 @@ func debitUserLoadFactorCredits(ctx context.Context, exec sqlQueryExecutor, in u
 }
 
 func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, credentials map[string]any) error {
-	_, err := r.client.Account.UpdateOneID(id).
-		SetCredentials(normalizeJSONMap(credentials)).
-		Save(ctx)
-	if err != nil {
-		return translatePersistenceError(err, service.ErrAccountNotFound, nil)
-	}
-	r.syncSchedulerAccountSnapshot(ctx, id)
-	return nil
-}
-
-func (r *accountRepository) Delete(ctx context.Context, id int64) error {
-	groupIDs, err := r.loadAccountGroupIDs(ctx, id)
+	account, err := r.GetByID(ctx, id)
 	if err != nil {
 		return err
 	}
-	// 使用事务保证账号与关联分组的删除原子性
-	tx, err := r.client.Tx(ctx)
+	after := *account
+	after.Credentials = copyJSONMap(credentials)
+	target := service.AccountMutationGuardTarget{
+		AccountID:         id,
+		ExpectedUpdatedAt: account.UpdatedAt,
+		After:             &after,
+		GroupIDs:          append([]int64(nil), account.GroupIDs...),
+	}
+	return r.WithAccountMutationGuard(ctx, service.AccountMutationGuardRequest{
+		Targets: []service.AccountMutationGuardTarget{target},
+		Intent:  service.AccountMutationIntentSystemTokenRefresh,
+	}, func(txCtx context.Context) error {
+		client := clientFromContext(txCtx, r.client)
+		_, err := client.Account.UpdateOneID(id).
+			SetCredentials(normalizeJSONMap(credentials)).
+			Save(txCtx)
+		if err != nil {
+			return translatePersistenceError(err, service.ErrAccountNotFound, nil)
+		}
+		return enqueueSchedulerOutbox(
+			txCtx,
+			txAwareSQLExecutor(txCtx, r.sql, r.client),
+			service.SchedulerOutboxEventAccountChanged,
+			&id,
+			nil,
+			nil,
+		)
+	})
+}
+
+func (r *accountRepository) Delete(ctx context.Context, id int64) error {
+	return r.DeleteIfUnblocked(ctx, id)
+}
+
+func (r *accountRepository) DeleteIfUnblocked(ctx context.Context, accountID int64) error {
+	if accountID <= 0 {
+		return service.ErrAccountNotFound
+	}
+	return r.DeleteManyIfUnblocked(ctx, []int64{accountID})
+}
+
+func (r *accountRepository) DeleteManyIfUnblocked(ctx context.Context, accountIDs []int64) error {
+	return r.deleteManyIfUnblocked(ctx, accountIDs, nil)
+}
+
+func (r *accountRepository) DeleteOwnedIfUnblocked(ctx context.Context, ownerUserID, accountID int64) error {
+	if ownerUserID <= 0 || accountID <= 0 {
+		return service.ErrAccountNotFound
+	}
+	return r.deleteManyIfUnblocked(ctx, []int64{accountID}, &ownerUserID)
+}
+
+func (r *accountRepository) DeleteManyOwnedIfUnblocked(ctx context.Context, ownerUserID int64, accountIDs []int64) error {
+	if ownerUserID <= 0 {
+		return service.ErrAccountNotFound
+	}
+	return r.deleteManyIfUnblocked(ctx, accountIDs, &ownerUserID)
+}
+
+func (r *accountRepository) deleteManyIfUnblocked(ctx context.Context, accountIDs []int64, expectedOwnerUserID *int64) error {
+	for _, accountID := range accountIDs {
+		if accountID <= 0 {
+			return service.ErrAccountNotFound
+		}
+	}
+	ids := normalizeAccountDeletionIDs(accountIDs)
+	if len(ids) == 0 {
+		return nil
+	}
+	if r == nil || r.client == nil {
+		return accountDeletionGuardUnavailable(ids[0], "repository", errors.New("account repository is not configured"))
+	}
+
+	// Account row locks are acquired in a stable order. Besides serializing
+	// competing deletions, the FOR UPDATE lock conflicts with the key-share lock
+	// used by foreign-key inserts, closing the check/delete race for room rows,
+	// memberships, and billing intents that retain a live account FK. Owned
+	// deletion also revalidates every owner while these row locks are held.
+	baseClient := clientFromContext(ctx, r.client)
+	tx, err := baseClient.Tx(ctx)
 	if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
 		return err
 	}
 
-	var txClient *dbent.Client
+	txCtx := ctx
+	txClient := baseClient
 	if err == nil {
 		defer func() { _ = tx.Rollback() }()
 		txClient = tx.Client()
-	} else {
-		// 已处于外部事务中（ErrTxStarted），复用当前 client
-		txClient = r.client
+		txCtx = dbent.NewTxContext(ctx, tx)
 	}
 
-	if _, err := txClient.AccountGroup.Delete().Where(dbaccountgroup.AccountIDEQ(id)).Exec(ctx); err != nil {
+	lockedAccountCount := 0
+	for start := 0; start < len(ids); start += postgresParameterBatchSize {
+		end := start + postgresParameterBatchSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		lockQuery := txClient.Account.Query().
+			Where(dbaccount.IDIn(ids[start:end]...))
+		lockedAccounts, lockErr := lockQuery.
+			Order(dbaccount.ByID()).
+			ForUpdate().
+			All(txCtx)
+		if lockErr != nil {
+			return translatePersistenceError(lockErr, service.ErrAccountNotFound, nil)
+		}
+		if ownershipErr := validateLockedAccountDeletionOwnership(lockedAccounts, expectedOwnerUserID); ownershipErr != nil {
+			return ownershipErr
+		}
+		lockedAccountCount += len(lockedAccounts)
+	}
+	if lockedAccountCount != len(ids) {
+		return service.ErrAccountNotFound
+	}
+
+	exec := sqlExecutorFromEntClient(txClient)
+	if exec == nil {
+		return accountDeletionGuardUnavailable(ids[0], "sql_executor", errors.New("transaction sql executor is unavailable"))
+	}
+	for _, accountID := range ids {
+		blockers, checkErr := loadAccountDeletionBlockers(txCtx, exec, accountID)
+		if checkErr != nil {
+			return accountDeletionGuardUnavailable(accountID, "blocker_query", checkErr)
+		}
+		if blockers.hasAny() {
+			return blockers.conflictError(accountID)
+		}
+	}
+
+	groupIDsByAccount := make(map[int64][]int64, len(ids))
+	for start := 0; start < len(ids); start += postgresParameterBatchSize {
+		end := start + postgresParameterBatchSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		groupEntries, groupErr := txClient.AccountGroup.Query().
+			Where(dbaccountgroup.AccountIDIn(ids[start:end]...)).
+			All(txCtx)
+		if groupErr != nil {
+			return groupErr
+		}
+		for _, entry := range groupEntries {
+			groupIDsByAccount[entry.AccountID] = append(groupIDsByAccount[entry.AccountID], entry.GroupID)
+		}
+	}
+
+	for start := 0; start < len(ids); start += postgresParameterBatchSize {
+		end := start + postgresParameterBatchSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		if _, err := txClient.AccountGroup.Delete().
+			Where(dbaccountgroup.AccountIDIn(ids[start:end]...)).
+			Exec(txCtx); err != nil {
+			return err
+		}
+	}
+	if _, err := txClient.ExecContext(txCtx, "DELETE FROM scheduled_test_plans WHERE account_id = ANY($1)", pq.Array(ids)); err != nil {
 		return err
 	}
-	if _, err := txClient.ExecContext(ctx, "DELETE FROM scheduled_test_plans WHERE account_id = $1", id); err != nil {
-		return err
+	deletedAccountCount := 0
+	for start := 0; start < len(ids); start += postgresParameterBatchSize {
+		end := start + postgresParameterBatchSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		deleteQuery := txClient.Account.Delete().
+			Where(dbaccount.IDIn(ids[start:end]...))
+		if expectedOwnerUserID != nil {
+			deleteQuery = deleteQuery.Where(dbaccount.OwnerUserIDEQ(*expectedOwnerUserID))
+		}
+		deleted, deleteErr := deleteQuery.Exec(txCtx)
+		if deleteErr != nil {
+			return deleteErr
+		}
+		deletedAccountCount += deleted
 	}
-	if _, err := txClient.Account.Delete().Where(dbaccount.IDEQ(id)).Exec(ctx); err != nil {
-		return err
+	if deletedAccountCount != len(ids) {
+		return service.ErrAccountNotFound
 	}
 
 	if tx != nil {
@@ -1006,11 +1969,301 @@ func (r *accountRepository) Delete(ctx context.Context, id int64) error {
 			return err
 		}
 	}
-	r.deleteSchedulerAccountSnapshot(ctx, id)
-	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, buildSchedulerGroupPayload(groupIDs)); err != nil {
-		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue account delete failed: account=%d err=%v", id, err)
+	for _, accountID := range ids {
+		r.deleteSchedulerAccountSnapshot(ctx, accountID)
+		if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &accountID, nil, buildSchedulerGroupPayload(groupIDsByAccount[accountID])); err != nil {
+			logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue account delete failed: account=%d err=%v", accountID, err)
+		}
 	}
 	return nil
+}
+
+func validateLockedAccountDeletionOwnership(accounts []*dbent.Account, expectedOwnerUserID *int64) error {
+	if expectedOwnerUserID == nil {
+		return nil
+	}
+	if *expectedOwnerUserID <= 0 {
+		return service.ErrAccountNotFound
+	}
+	for _, account := range accounts {
+		if account == nil || account.OwnerUserID == nil || *account.OwnerUserID != *expectedOwnerUserID {
+			return service.ErrAccountNotFound
+		}
+	}
+	return nil
+}
+
+const accountDeletionBlockerSampleLimit = 10
+
+type accountDeletionBlockers struct {
+	roomListingIDs            []int64
+	roomStates                []string
+	liveMembershipCount       int64
+	liveMembershipIDs         []int64
+	liveMembershipListingIDs  []int64
+	liveMembershipStates      []string
+	openBindingCount          int64
+	openBindingIDs            []int64
+	openBindingMembershipIDs  []int64
+	openBindingListingIDs     []int64
+	pendingBillingIntentCount int64
+	pendingBillingIntentIDs   []int64
+	pendingBillingStates      []string
+}
+
+func (b accountDeletionBlockers) hasAny() bool {
+	return len(b.roomListingIDs) > 0 ||
+		b.liveMembershipCount > 0 ||
+		b.openBindingCount > 0 ||
+		b.pendingBillingIntentCount > 0
+}
+
+func (b accountDeletionBlockers) conflictError(accountID int64) error {
+	blockerTypes := make([]string, 0, 4)
+	metadata := map[string]string{
+		"account_id":                   strconv.FormatInt(accountID, 10),
+		"room_account_count":           strconv.Itoa(len(b.roomListingIDs)),
+		"live_membership_count":        strconv.FormatInt(b.liveMembershipCount, 10),
+		"open_binding_count":           strconv.FormatInt(b.openBindingCount, 10),
+		"pending_billing_intent_count": strconv.FormatInt(b.pendingBillingIntentCount, 10),
+	}
+	if len(b.roomListingIDs) > 0 {
+		blockerTypes = append(blockerTypes, "room_account")
+		metadata["room_listing_ids"] = joinAccountDeletionInt64s(b.roomListingIDs)
+		metadata["room_account_states"] = strings.Join(b.roomStates, ",")
+	}
+	if b.liveMembershipCount > 0 {
+		blockerTypes = append(blockerTypes, "live_membership")
+		metadata["live_membership_sample_ids"] = joinAccountDeletionInt64s(b.liveMembershipIDs)
+		metadata["live_membership_listing_sample_ids"] = joinAccountDeletionInt64s(b.liveMembershipListingIDs)
+		metadata["live_membership_sample_states"] = strings.Join(b.liveMembershipStates, ",")
+		metadata["live_membership_sample_truncated"] = strconv.FormatBool(b.liveMembershipCount > int64(len(b.liveMembershipIDs)))
+	}
+	if b.openBindingCount > 0 {
+		blockerTypes = append(blockerTypes, "open_binding")
+		metadata["open_binding_sample_ids"] = joinAccountDeletionInt64s(b.openBindingIDs)
+		metadata["open_binding_membership_sample_ids"] = joinAccountDeletionInt64s(b.openBindingMembershipIDs)
+		metadata["open_binding_listing_sample_ids"] = joinAccountDeletionInt64s(b.openBindingListingIDs)
+		metadata["open_binding_sample_truncated"] = strconv.FormatBool(b.openBindingCount > int64(len(b.openBindingIDs)))
+	}
+	if b.pendingBillingIntentCount > 0 {
+		blockerTypes = append(blockerTypes, "pending_billing_intent")
+		metadata["pending_billing_intent_sample_ids"] = joinAccountDeletionInt64s(b.pendingBillingIntentIDs)
+		metadata["pending_billing_intent_sample_states"] = strings.Join(b.pendingBillingStates, ",")
+		metadata["pending_billing_intent_sample_truncated"] = strconv.FormatBool(b.pendingBillingIntentCount > int64(len(b.pendingBillingIntentIDs)))
+	}
+	metadata["blocker_types"] = strings.Join(blockerTypes, ",")
+	return service.ErrAccountDeletionBlocked.WithMetadata(metadata)
+}
+
+func loadAccountDeletionBlockers(ctx context.Context, exec sqlQueryExecutor, accountID int64) (accountDeletionBlockers, error) {
+	var blockers accountDeletionBlockers
+	if exec == nil {
+		return blockers, errors.New("account deletion blocker executor is unavailable")
+	}
+
+	roomRows, err := exec.QueryContext(ctx, `
+		SELECT listing_id, state
+		FROM account_share_room_accounts
+		WHERE account_id = $1
+		ORDER BY listing_id
+	`, accountID)
+	if err != nil {
+		return blockers, fmt.Errorf("query room account blockers: %w", err)
+	}
+	for roomRows.Next() {
+		var listingID int64
+		var state string
+		if err := roomRows.Scan(&listingID, &state); err != nil {
+			_ = roomRows.Close()
+			return blockers, fmt.Errorf("scan room account blocker: %w", err)
+		}
+		blockers.roomListingIDs = append(blockers.roomListingIDs, listingID)
+		blockers.roomStates = append(blockers.roomStates, state)
+	}
+	if err := roomRows.Err(); err != nil {
+		_ = roomRows.Close()
+		return blockers, fmt.Errorf("iterate room account blockers: %w", err)
+	}
+	if err := roomRows.Close(); err != nil {
+		return blockers, fmt.Errorf("close room account blockers: %w", err)
+	}
+
+	membershipRows, err := exec.QueryContext(ctx, `
+		SELECT id, listing_id, status, COUNT(*) OVER ()
+		FROM account_share_memberships
+		WHERE account_id = $1
+		  AND deleted_at IS NULL
+		  AND status IN ('active', 'queued', 'ending')
+		ORDER BY id
+		LIMIT $2
+	`, accountID, accountDeletionBlockerSampleLimit)
+	if err != nil {
+		return blockers, fmt.Errorf("query live membership blockers: %w", err)
+	}
+	for membershipRows.Next() {
+		var membershipID, listingID, total int64
+		var state string
+		if err := membershipRows.Scan(&membershipID, &listingID, &state, &total); err != nil {
+			_ = membershipRows.Close()
+			return blockers, fmt.Errorf("scan live membership blocker: %w", err)
+		}
+		blockers.liveMembershipCount = total
+		blockers.liveMembershipIDs = append(blockers.liveMembershipIDs, membershipID)
+		blockers.liveMembershipListingIDs = append(blockers.liveMembershipListingIDs, listingID)
+		blockers.liveMembershipStates = append(blockers.liveMembershipStates, state)
+	}
+	if err := membershipRows.Err(); err != nil {
+		_ = membershipRows.Close()
+		return blockers, fmt.Errorf("iterate live membership blockers: %w", err)
+	}
+	if err := membershipRows.Close(); err != nil {
+		return blockers, fmt.Errorf("close live membership blockers: %w", err)
+	}
+
+	bindingTableExists, err := accountDeletionOptionalTableExists(ctx, exec, "public.account_share_membership_account_bindings")
+	if err != nil {
+		return blockers, err
+	}
+	if bindingTableExists {
+		bindingRows, queryErr := exec.QueryContext(ctx, `
+			SELECT id, membership_id, listing_id, COUNT(*) OVER ()
+			FROM account_share_membership_account_bindings
+			WHERE account_id_snapshot = $1
+			  AND unbound_at IS NULL
+			ORDER BY id
+			LIMIT $2
+		`, accountID, accountDeletionBlockerSampleLimit)
+		if queryErr != nil {
+			return blockers, fmt.Errorf("query open membership binding blockers: %w", queryErr)
+		}
+		for bindingRows.Next() {
+			var bindingID, membershipID, listingID, total int64
+			if err := bindingRows.Scan(&bindingID, &membershipID, &listingID, &total); err != nil {
+				_ = bindingRows.Close()
+				return blockers, fmt.Errorf("scan open membership binding blocker: %w", err)
+			}
+			blockers.openBindingCount = total
+			blockers.openBindingIDs = append(blockers.openBindingIDs, bindingID)
+			blockers.openBindingMembershipIDs = append(blockers.openBindingMembershipIDs, membershipID)
+			blockers.openBindingListingIDs = append(blockers.openBindingListingIDs, listingID)
+		}
+		if err := bindingRows.Err(); err != nil {
+			_ = bindingRows.Close()
+			return blockers, fmt.Errorf("iterate open membership binding blockers: %w", err)
+		}
+		if err := bindingRows.Close(); err != nil {
+			return blockers, fmt.Errorf("close open membership binding blockers: %w", err)
+		}
+	}
+
+	billingIntentTableExists, err := accountDeletionOptionalTableExists(ctx, exec, "public.account_share_request_billing_intents")
+	if err != nil {
+		return blockers, err
+	}
+	if !billingIntentTableExists {
+		return blockers, nil
+	}
+
+	billingRows, err := exec.QueryContext(ctx, `
+		SELECT id, status, COUNT(*) OVER ()
+		FROM account_share_request_billing_intents
+		WHERE account_id_snapshot = $1
+		  AND status NOT IN ('settled', 'cancelled')
+		ORDER BY id
+		LIMIT $2
+	`, accountID, accountDeletionBlockerSampleLimit)
+	if err != nil {
+		return blockers, fmt.Errorf("query pending billing intent blockers: %w", err)
+	}
+	for billingRows.Next() {
+		var intentID, total int64
+		var state string
+		if err := billingRows.Scan(&intentID, &state, &total); err != nil {
+			_ = billingRows.Close()
+			return blockers, fmt.Errorf("scan pending billing intent blocker: %w", err)
+		}
+		blockers.pendingBillingIntentCount = total
+		blockers.pendingBillingIntentIDs = append(blockers.pendingBillingIntentIDs, intentID)
+		blockers.pendingBillingStates = append(blockers.pendingBillingStates, state)
+	}
+	if err := billingRows.Err(); err != nil {
+		_ = billingRows.Close()
+		return blockers, fmt.Errorf("iterate pending billing intent blockers: %w", err)
+	}
+	if err := billingRows.Close(); err != nil {
+		return blockers, fmt.Errorf("close pending billing intent blockers: %w", err)
+	}
+	return blockers, nil
+}
+
+func accountDeletionOptionalTableExists(ctx context.Context, exec sqlQueryExecutor, qualifiedTableName string) (bool, error) {
+	if strings.TrimSpace(qualifiedTableName) == "" {
+		return false, errors.New("optional account-share table name is required")
+	}
+	rows, err := exec.QueryContext(ctx, `
+		SELECT to_regclass($1) IS NOT NULL
+	`, qualifiedTableName)
+	if err != nil {
+		return false, fmt.Errorf("detect optional account-share table %q: %w", qualifiedTableName, err)
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return false, fmt.Errorf("iterate optional account-share table %q detection: %w", qualifiedTableName, err)
+		}
+		return false, fmt.Errorf("optional account-share table %q detection returned no row", qualifiedTableName)
+	}
+	var exists bool
+	if err := rows.Scan(&exists); err != nil {
+		return false, fmt.Errorf("scan optional account-share table %q detection: %w", qualifiedTableName, err)
+	}
+	if rows.Next() {
+		return false, fmt.Errorf("optional account-share table %q detection returned multiple rows", qualifiedTableName)
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("iterate optional account-share table %q detection: %w", qualifiedTableName, err)
+	}
+	return exists, nil
+}
+
+func normalizeAccountDeletionIDs(values []int64) []int64 {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[int64]struct{}, len(values))
+	ids := make([]int64, 0, len(values))
+	for _, value := range values {
+		if value <= 0 {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		ids = append(ids, value)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
+}
+
+func joinAccountDeletionInt64s(values []int64) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, strconv.FormatInt(value, 10))
+	}
+	return strings.Join(parts, ",")
+}
+
+func accountDeletionGuardUnavailable(accountID int64, stage string, cause error) error {
+	err := service.ErrAccountDeletionGuardUnavailable.WithMetadata(map[string]string{
+		"account_id": strconv.FormatInt(accountID, 10),
+		"stage":      stage,
+	})
+	if cause != nil {
+		return err.WithCause(cause)
+	}
+	return err
 }
 
 func (r *accountRepository) DeleteStaleErrorAccounts(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
@@ -2128,22 +3381,20 @@ func (r *accountRepository) BindGroups(ctx context.Context, accountID int64, gro
 	if err != nil {
 		return err
 	}
-	// 使用事务保证删除旧绑定与创建新绑定的原子性
-	tx, err := r.client.Tx(ctx)
-	if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
-		return err
-	}
-
-	var txClient *dbent.Client
-	if err == nil {
+	var tx *dbent.Tx
+	txCtx := ctx
+	txClient := clientFromContext(ctx, r.client)
+	if dbent.TxFromContext(ctx) == nil {
+		tx, err = r.client.Tx(ctx)
+		if err != nil {
+			return err
+		}
 		defer func() { _ = tx.Rollback() }()
 		txClient = tx.Client()
-	} else {
-		// 已处于外部事务中（ErrTxStarted），复用当前 client
-		txClient = r.client
+		txCtx = dbent.NewTxContext(ctx, tx)
 	}
 
-	if _, err := txClient.AccountGroup.Delete().Where(dbaccountgroup.AccountIDEQ(accountID)).Exec(ctx); err != nil {
+	if _, err := txClient.AccountGroup.Delete().Where(dbaccountgroup.AccountIDEQ(accountID)).Exec(txCtx); err != nil {
 		return err
 	}
 
@@ -2157,19 +3408,19 @@ func (r *accountRepository) BindGroups(ctx context.Context, accountID int64, gro
 			)
 		}
 
-		if _, err := txClient.AccountGroup.CreateBulk(builders...).Save(ctx); err != nil {
+		if _, err := txClient.AccountGroup.CreateBulk(builders...).Save(txCtx); err != nil {
 			return err
 		}
 	}
 
+	payload := buildSchedulerGroupPayload(mergeGroupIDs(existingGroupIDs, groupIDs))
+	if err := enqueueSchedulerOutbox(txCtx, txAwareSQLExecutor(txCtx, r.sql, r.client), service.SchedulerOutboxEventAccountGroupsChanged, &accountID, nil, payload); err != nil {
+		return err
+	}
 	if tx != nil {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
-	}
-	payload := buildSchedulerGroupPayload(mergeGroupIDs(existingGroupIDs, groupIDs))
-	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountGroupsChanged, &accountID, nil, payload); err != nil {
-		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue bind groups failed: account=%d err=%v", accountID, err)
 	}
 	return nil
 }
@@ -2661,17 +3912,20 @@ func (r *accountRepository) UpdateSessionWindow(ctx context.Context, id int64, s
 }
 
 func (r *accountRepository) SetSchedulable(ctx context.Context, id int64, schedulable bool) error {
-	_, err := r.client.Account.Update().
+	_, err := clientFromContext(ctx, r.client).Account.Update().
 		Where(dbaccount.IDEQ(id)).
 		SetSchedulable(schedulable).
 		Save(ctx)
 	if err != nil {
 		return err
 	}
-	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
+	if err := enqueueSchedulerOutbox(ctx, txAwareSQLExecutor(ctx, r.sql, r.client), service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
+		if dbent.TxFromContext(ctx) != nil {
+			return err
+		}
 		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue schedulable change failed: account=%d err=%v", id, err)
 	}
-	if !schedulable {
+	if !schedulable && dbent.TxFromContext(ctx) == nil {
 		r.syncSchedulerAccountSnapshot(ctx, id)
 	}
 	return nil
@@ -2922,7 +4176,11 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 	query := "UPDATE accounts SET " + joinClauses(setClauses, ", ") + " WHERE id = ANY($" + itoa(idx) + ") AND deleted_at IS NULL"
 	args = append(args, pq.Array(ids))
 
-	result, err := r.sql.ExecContext(ctx, query, args...)
+	exec := txAwareSQLExecutor(ctx, r.sql, r.client)
+	if exec == nil {
+		return 0, service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{"stage": "bulk_update_executor"})
+	}
+	result, err := exec.ExecContext(ctx, query, args...)
 	if err != nil {
 		return 0, translateAccountPersistenceError(err, nil)
 	}
@@ -2932,7 +4190,10 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 	}
 	if rows > 0 {
 		payload := map[string]any{"account_ids": ids}
-		if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountBulkChanged, nil, nil, payload); err != nil {
+		if err := enqueueSchedulerOutbox(ctx, exec, service.SchedulerOutboxEventAccountBulkChanged, nil, nil, payload); err != nil {
+			if dbent.TxFromContext(ctx) != nil {
+				return 0, err
+			}
 			logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue bulk update failed: err=%v", err)
 		}
 		shouldSync := false
@@ -2942,7 +4203,7 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		if updates.Schedulable != nil && !*updates.Schedulable {
 			shouldSync = true
 		}
-		if shouldSync {
+		if shouldSync && dbent.TxFromContext(ctx) == nil {
 			r.syncSchedulerAccountSnapshots(ctx, ids)
 		}
 	}
@@ -3330,9 +4591,10 @@ func (r *accountRepository) loadAccountGroups(ctx context.Context, accountIDs []
 }
 
 func (r *accountRepository) loadAccountGroupIDs(ctx context.Context, accountID int64) ([]int64, error) {
-	entries, err := r.client.AccountGroup.
+	entries, err := clientFromContext(ctx, r.client).AccountGroup.
 		Query().
 		Where(dbaccountgroup.AccountIDEQ(accountID)).
+		Order(dbent.Asc(dbaccountgroup.FieldPriority), dbent.Asc(dbaccountgroup.FieldGroupID)).
 		All(ctx)
 	if err != nil {
 		return nil, err

@@ -48,6 +48,7 @@ var headerOverrideBlockedNames = map[string]struct{}{
 	"chatgpt-account-id":       {},
 	"x-claude-code-session-id": {},
 	"x-client-request-id":      {},
+	"x-grok-conv-id":           {},
 }
 
 func isHeaderOverrideBlockedName(lowerName string) bool {
@@ -57,10 +58,17 @@ func isHeaderOverrideBlockedName(lowerName string) bool {
 
 // IsHeaderOverrideEligible reports whether the account type supports header overrides.
 func (a *Account) IsHeaderOverrideEligible() bool {
-	if a == nil || a.Type != AccountTypeAPIKey {
+	if a == nil {
 		return false
 	}
-	return a.Platform == PlatformAnthropic || a.Platform == PlatformOpenAI
+	switch a.Platform {
+	case PlatformAnthropic, PlatformOpenAI:
+		return a.Type == AccountTypeAPIKey
+	case PlatformGrok:
+		return a.Type == AccountTypeAPIKey || a.Type == AccountTypeOAuth
+	default:
+		return false
+	}
 }
 
 // IsHeaderOverrideEnabled reports whether header overrides are explicitly enabled.

@@ -167,6 +167,111 @@ func (p *GrokTokenProvider) GetAccessToken(ctx context.Context, account *Account
 	return accessToken, nil
 }
 
+// GetAccessTokenForManualTest returns a credential for an administrator's
+// explicit connection probe without applying the production scheduling gate.
+// A valid access token remains testable while the account is disabled,
+// rate-limited, overloaded, or temporarily unschedulable.
+func (p *GrokTokenProvider) GetAccessTokenForManualTest(ctx context.Context, account *Account) (string, error) {
+	if account == nil {
+		return "", errors.New("account is nil")
+	}
+	if account.Platform != PlatformGrok || account.Type != AccountTypeOAuth {
+		return "", errors.New("not a grok oauth account")
+	}
+	if account.ProxyID != nil && account.Proxy == nil {
+		return "", errGrokOAuthConfiguredProxyMiss
+	}
+	if strings.TrimSpace(account.GetGrokRefreshToken()) == "" {
+		return "", errGrokOAuthRefreshTokenMissing
+	}
+
+	accessToken := strings.TrimSpace(account.GetGrokAccessToken())
+	expiresAt := account.GetCredentialAsTime("expires_at")
+	tokenValid := accessToken != "" && expiresAt != nil && time.Now().Before(*expiresAt)
+	if accessToken != "" && expiresAt != nil && time.Until(*expiresAt) > grokTokenRefreshSkew {
+		return accessToken, nil
+	}
+	if account.Status != StatusActive {
+		if tokenValid {
+			return accessToken, nil
+		}
+		if accessToken == "" {
+			return "", errGrokOAuthAccessTokenMissing
+		}
+		return "", errGrokOAuthAccessTokenExpired
+	}
+
+	if p.refreshAPI == nil || p.executor == nil {
+		if tokenValid {
+			return accessToken, nil
+		}
+		return "", errGrokOAuthRefreshNotConfigured
+	}
+
+	refreshCtx, cancel := context.WithTimeout(ctx, grokRequestRefreshTimeout)
+	defer cancel()
+	result, err := p.refreshAPI.RefreshIfNeeded(refreshCtx, account, p.executor, grokTokenRefreshSkew)
+	if err != nil {
+		if tokenValid {
+			return accessToken, nil
+		}
+		return "", err
+	}
+	if result != nil && result.LockHeld {
+		if tokenValid {
+			return accessToken, nil
+		}
+		return "", errors.New("token refresh is already in progress on another worker; retry in a few seconds")
+	}
+	if result != nil && result.Account != nil {
+		account = result.Account
+	}
+
+	accessToken = strings.TrimSpace(account.GetGrokAccessToken())
+	if accessToken == "" {
+		return "", errGrokOAuthAccessTokenMissing
+	}
+	if latestExpiry := account.GetCredentialAsTime("expires_at"); latestExpiry != nil && !time.Now().Before(*latestExpiry) {
+		return "", errGrokOAuthAccessTokenExpired
+	}
+	return accessToken, nil
+}
+
+// RefreshNow performs an explicit administrative Grok refresh through the
+// shared refresh coordinator. It never bypasses locking or conditional DB
+// persistence and does not mutate account scheduling state on failure.
+func (p *GrokTokenProvider) RefreshNow(ctx context.Context, account *Account) (*Account, error) {
+	if account == nil {
+		return nil, errors.New("account is nil")
+	}
+	if account.Platform != PlatformGrok || account.Type != AccountTypeOAuth {
+		return nil, errors.New("not a grok oauth account")
+	}
+	if p.refreshAPI == nil || p.executor == nil {
+		return nil, errGrokOAuthRefreshNotConfigured
+	}
+	if strings.TrimSpace(account.GetGrokRefreshToken()) == "" {
+		return nil, errGrokOAuthRefreshTokenMissing
+	}
+
+	refreshCtx, cancel := context.WithTimeout(ctx, grokRequestRefreshTimeout)
+	defer cancel()
+	result, err := p.refreshAPI.RefreshNow(refreshCtx, account, p.executor)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, errors.New("grok oauth refresh returned no result")
+	}
+	if result.LockHeld {
+		return nil, errors.New("grok oauth refresh is already in progress")
+	}
+	if result.Account == nil {
+		return nil, errors.New("grok oauth refresh returned no account state")
+	}
+	return result.Account, nil
+}
+
 func (p *GrokTokenProvider) waitForRefreshedToken(ctx context.Context, account *Account, cacheKey string) (string, error) {
 	waitCtx, cancel := context.WithTimeout(ctx, grokRefreshLockWaitTimeout)
 	defer cancel()

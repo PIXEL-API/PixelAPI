@@ -138,6 +138,7 @@ func ProvideAdminAccountHandler(
 	geminiOAuthService *service.GeminiOAuthService,
 	antigravityOAuthService *service.AntigravityOAuthService,
 	grokOAuthService *service.GrokOAuthService,
+	grokTokenProvider *service.GrokTokenProvider,
 	rateLimitService *service.RateLimitService,
 	accountUsageService *service.AccountUsageService,
 	accountTestService *service.AccountTestService,
@@ -167,6 +168,7 @@ func ProvideAdminAccountHandler(
 		accountBatchTaskService,
 	)
 	h.SetGrokOAuthService(grokOAuthService)
+	h.SetGrokTokenProvider(grokTokenProvider)
 	h.SetGrokImportProber(grokQuotaService)
 	return h
 }
@@ -184,6 +186,7 @@ func ProvideUserAccountHandler(
 	geminiOAuthService *service.GeminiOAuthService,
 	antigravityOAuthService *service.AntigravityOAuthService,
 	grokOAuthService *service.GrokOAuthService,
+	grokTokenProvider *service.GrokTokenProvider,
 	concurrencyService *service.ConcurrencyService,
 	sessionLimitCache service.SessionLimitCache,
 	rpmCache service.RPMCache,
@@ -204,6 +207,7 @@ func ProvideUserAccountHandler(
 	h.SetOpenAIQuotaService(openaiQuotaService)
 	h.SetUserContentModerationService(userContentModerationService)
 	h.SetGrokOAuthService(grokOAuthService)
+	h.SetGrokTokenProvider(grokTokenProvider)
 	h.SetRuntimeCapacityProviders(concurrencyService, sessionLimitCache, rpmCache)
 	return h
 }

@@ -31,6 +31,11 @@ const (
 	DatabaseMigrationModeValidate = "validate"
 )
 
+const (
+	AccountShareQuotaModeShadow  = "shadow"
+	AccountShareQuotaModeEnforce = "enforce"
+)
+
 // 使用量记录队列溢出策略
 const (
 	UsageRecordOverflowPolicyDrop   = "drop"
@@ -80,6 +85,7 @@ type Config struct {
 	Billing                 BillingConfig                 `mapstructure:"billing"`
 	Turnstile               TurnstileConfig               `mapstructure:"turnstile"`
 	Database                DatabaseConfig                `mapstructure:"database"`
+	AccountShareRollout     AccountShareRolloutConfig     `mapstructure:"account_share_rollout"`
 	Redis                   RedisConfig                   `mapstructure:"redis"`
 	Ops                     OpsConfig                     `mapstructure:"ops"`
 	JWT                     JWTConfig                     `mapstructure:"jwt"`
@@ -108,6 +114,15 @@ type Config struct {
 	Update                  UpdateConfig                  `mapstructure:"update"`
 	Idempotency             IdempotencyConfig             `mapstructure:"idempotency"`
 	ReceiptCodeStorage      ReceiptCodeStorageConfig      `mapstructure:"receipt_code_storage"`
+}
+
+// AccountShareRolloutConfig keeps expand releases backward-compatible until
+// the separately scheduled contract migration has completed its observation
+// window.
+type AccountShareRolloutConfig struct {
+	LifecycleContractEnabled    bool   `mapstructure:"lifecycle_contract_enabled"`
+	DeferredQueueBindingEnabled bool   `mapstructure:"deferred_queue_binding_enabled"`
+	QuotaMode                   string `mapstructure:"quota_mode"`
 }
 
 type LogConfig struct {
@@ -1736,6 +1751,7 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	cfg.Cluster.NodeID = strings.TrimSpace(cfg.Cluster.NodeID)
 	cfg.Database.MigrationMode = strings.ToLower(strings.TrimSpace(cfg.Database.MigrationMode))
 	cfg.Database.MigrationThrough = strings.TrimSpace(cfg.Database.MigrationThrough)
+	cfg.AccountShareRollout.QuotaMode = strings.ToLower(strings.TrimSpace(cfg.AccountShareRollout.QuotaMode))
 	cfg.JWT.Secret = strings.TrimSpace(cfg.JWT.Secret)
 	cfg.LinuxDo.ClientID = strings.TrimSpace(cfg.LinuxDo.ClientID)
 	cfg.LinuxDo.ClientSecret = strings.TrimSpace(cfg.LinuxDo.ClientSecret)
@@ -2058,6 +2074,12 @@ func setDefaults() {
 	viper.SetDefault("database.max_idle_conns", 15)
 	viper.SetDefault("database.conn_max_lifetime_minutes", 30)
 	viper.SetDefault("database.conn_max_idle_time_minutes", 5)
+
+	// Account-share staged rollout. Contract behavior stays disabled until the
+	// expand schema has been observed and the dedicated contract release runs.
+	viper.SetDefault("account_share_rollout.lifecycle_contract_enabled", false)
+	viper.SetDefault("account_share_rollout.deferred_queue_binding_enabled", false)
+	viper.SetDefault("account_share_rollout.quota_mode", AccountShareQuotaModeShadow)
 
 	// Redis
 	viper.SetDefault("redis.host", "localhost")
@@ -2778,6 +2800,11 @@ func (c *Config) Validate() error {
 	if strings.ContainsAny(c.Database.MigrationThrough, `/\`) ||
 		(c.Database.MigrationThrough != "" && !strings.HasSuffix(c.Database.MigrationThrough, ".sql")) {
 		return fmt.Errorf("database.migration_through must be an embedded migration filename ending in .sql")
+	}
+	switch c.AccountShareRollout.QuotaMode {
+	case AccountShareQuotaModeShadow, AccountShareQuotaModeEnforce:
+	default:
+		return fmt.Errorf("account_share_rollout.quota_mode must be one of: shadow/enforce")
 	}
 	if c.Database.MaxOpenConns <= 0 {
 		return fmt.Errorf("database.max_open_conns must be positive")

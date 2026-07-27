@@ -224,3 +224,33 @@ func TestIsCountTokensUnsupported404(t *testing.T) {
 		})
 	}
 }
+
+func TestDefaultBetaPolicyContext1MAllowsOnlySonnet5Family(t *testing.T) {
+	settings := DefaultBetaPolicySettings()
+	var context1MRule *BetaPolicyRule
+	for i := range settings.Rules {
+		if settings.Rules[i].BetaToken == "context-1m-2025-08-07" {
+			context1MRule = &settings.Rules[i]
+			break
+		}
+	}
+	require.NotNil(t, context1MRule)
+	require.Equal(t, BetaPolicyActionPass, context1MRule.Action)
+	require.Equal(t, BetaPolicyActionFilter, context1MRule.FallbackAction)
+
+	tests := map[string]string{
+		"claude-sonnet-5":                                BetaPolicyActionPass,
+		"claude-sonnet-5@20260701":                       BetaPolicyActionPass,
+		"us.anthropic.claude-sonnet-5-v1":                BetaPolicyActionPass,
+		"global.anthropic.claude-sonnet-5-20260701-v1:0": BetaPolicyActionPass,
+		"claude-sonnet-4-6":                              BetaPolicyActionFilter,
+		"claude-opus-5":                                  BetaPolicyActionFilter,
+		"claude-sonnet-50":                               BetaPolicyActionFilter,
+	}
+	for model, want := range tests {
+		t.Run(model, func(t *testing.T) {
+			got, _ := resolveRuleAction(*context1MRule, model)
+			require.Equal(t, want, got)
+		})
+	}
+}

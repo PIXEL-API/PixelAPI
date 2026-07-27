@@ -1,4 +1,4 @@
-//go:build unit
+//go:build unit || account_delete_unit
 
 // 账号服务删除方法的单元测试
 // 测试 AccountService.Delete 方法在各种场景下的行为
@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
 )
@@ -26,14 +27,23 @@ import (
 //   - getIDs/existsIDs: 记录查询调用的账号 ID，用于断言验证
 //   - deletedIDs: 记录被调用删除的账号 ID，用于断言验证
 type accountRepoStub struct {
-	account    *Account
-	getErr     error
-	exists     bool    // ExistsByID 的返回值
-	existsErr  error   // ExistsByID 的错误返回值
-	deleteErr  error   // Delete 的错误返回值
-	getIDs     []int64 // 记录已查询的账号 ID 列表
-	existsIDs  []int64 // 记录已检查存在性的账号 ID 列表
-	deletedIDs []int64 // 记录已删除的账号 ID 列表
+	account          *Account
+	accounts         []*Account
+	getErr           error
+	getByIDsErr      error
+	exists           bool      // ExistsByID 的返回值
+	existsErr        error     // ExistsByID 的错误返回值
+	deleteErr        error     // 守门删除返回值
+	deleteManyErr    error     // 批量守门删除返回值
+	getIDs           []int64   // 记录已查询的账号 ID 列表
+	getByIDsCalls    [][]int64 // 记录批量查询调用
+	existsIDs        []int64   // 记录已检查存在性的账号 ID 列表
+	deletedIDs       []int64   // 记录守门删除的账号 ID
+	deleteManyCalls  [][]int64 // 记录原子批量删除调用
+	ownedDeletedIDs  []int64
+	ownedDeleteCalls [][]int64
+	ownedDeleteUsers []int64
+	legacyDeletedIDs []int64 // 记录不应再调用的旧删除入口
 }
 
 // 以下方法在本测试中不应被调用，使用 panic 确保测试失败时能快速定位问题
@@ -48,7 +58,8 @@ func (s *accountRepoStub) GetByID(ctx context.Context, id int64) (*Account, erro
 }
 
 func (s *accountRepoStub) GetByIDs(ctx context.Context, ids []int64) ([]*Account, error) {
-	panic("unexpected GetByIDs call")
+	s.getByIDsCalls = append(s.getByIDsCalls, append([]int64(nil), ids...))
+	return s.accounts, s.getByIDsErr
 }
 
 // ExistsByID 返回预设的存在性检查结果。
@@ -77,8 +88,46 @@ func (s *accountRepoStub) Update(ctx context.Context, account *Account) error {
 // Delete 记录被删除的账号 ID 并返回预设的错误。
 // 通过 deletedIDs 可以验证删除操作是否被正确调用。
 func (s *accountRepoStub) Delete(ctx context.Context, id int64) error {
+	s.legacyDeletedIDs = append(s.legacyDeletedIDs, id)
+	return s.deleteErr
+}
+
+func (s *accountRepoStub) DeleteIfUnblocked(ctx context.Context, id int64) error {
 	s.deletedIDs = append(s.deletedIDs, id)
 	return s.deleteErr
+}
+
+func (s *accountRepoStub) DeleteManyIfUnblocked(ctx context.Context, ids []int64) error {
+	s.deleteManyCalls = append(s.deleteManyCalls, append([]int64(nil), ids...))
+	if s.deleteManyErr != nil {
+		return s.deleteManyErr
+	}
+	s.deletedIDs = append(s.deletedIDs, ids...)
+	return nil
+}
+
+func (s *accountRepoStub) DeleteOwnedIfUnblocked(ctx context.Context, ownerUserID, id int64) error {
+	s.ownedDeleteUsers = append(s.ownedDeleteUsers, ownerUserID)
+	s.ownedDeleteCalls = append(s.ownedDeleteCalls, []int64{id})
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
+	s.ownedDeletedIDs = append(s.ownedDeletedIDs, id)
+	return nil
+}
+
+func (s *accountRepoStub) DeleteManyOwnedIfUnblocked(ctx context.Context, ownerUserID int64, ids []int64) error {
+	s.ownedDeleteUsers = append(s.ownedDeleteUsers, ownerUserID)
+	s.ownedDeleteCalls = append(s.ownedDeleteCalls, append([]int64(nil), ids...))
+	if s.deleteManyErr != nil {
+		return s.deleteManyErr
+	}
+	s.ownedDeletedIDs = append(s.ownedDeletedIDs, ids...)
+	return nil
+}
+
+type accountRepoWithoutDeletionGuard struct {
+	AccountRepository
 }
 
 // 以下是接口要求实现但本测试不关心的方法
@@ -229,6 +278,7 @@ func TestAccountService_Delete_NotFound(t *testing.T) {
 	require.Equal(t, []int64{55}, repo.getIDs)
 	require.Empty(t, repo.existsIDs)
 	require.Empty(t, repo.deletedIDs) // 验证删除操作未被调用
+	require.Empty(t, repo.legacyDeletedIDs)
 }
 
 // TestAccountService_Delete_CheckError 测试存在性检查失败时的错误处理。
@@ -250,6 +300,7 @@ func TestAccountService_Delete_CheckError(t *testing.T) {
 	require.Equal(t, []int64{55}, repo.getIDs)
 	require.Equal(t, []int64{55}, repo.existsIDs)
 	require.Empty(t, repo.deletedIDs)
+	require.Empty(t, repo.legacyDeletedIDs)
 }
 
 // TestAccountService_Delete_DeleteError 测试删除操作失败时的错误处理。
@@ -272,6 +323,7 @@ func TestAccountService_Delete_DeleteError(t *testing.T) {
 	require.Equal(t, []int64{55}, repo.getIDs)
 	require.Empty(t, repo.existsIDs)
 	require.Equal(t, []int64{55}, repo.deletedIDs) // 验证删除操作被调用
+	require.Empty(t, repo.legacyDeletedIDs)
 }
 
 // TestAccountService_Delete_Success 测试删除操作成功的场景。
@@ -289,4 +341,114 @@ func TestAccountService_Delete_Success(t *testing.T) {
 	require.Equal(t, []int64{55}, repo.getIDs)
 	require.Empty(t, repo.existsIDs)
 	require.Equal(t, []int64{55}, repo.deletedIDs) // 验证正确的 ID 被删除
+	require.Empty(t, repo.legacyDeletedIDs)
+}
+
+func TestAccountService_Delete_FailsClosedWithoutDeletionGuard(t *testing.T) {
+	baseRepo := &accountRepoStub{account: &Account{ID: 55}}
+	repo := &accountRepoWithoutDeletionGuard{AccountRepository: baseRepo}
+	svc := &AccountService{accountRepo: repo}
+
+	err := svc.Delete(context.Background(), 55)
+
+	require.ErrorIs(t, err, ErrAccountDeletionGuardUnavailable)
+	appErr := infraerrors.FromError(err)
+	require.Equal(t, "55", appErr.Metadata["account_id"])
+	require.Equal(t, "delete_account", appErr.Metadata["operation"])
+	require.Empty(t, baseRepo.deletedIDs)
+	require.Empty(t, baseRepo.legacyDeletedIDs)
+}
+
+func TestAccountService_Delete_PreservesStructuredBlocker(t *testing.T) {
+	blocked := ErrAccountDeletionBlocked.WithMetadata(map[string]string{
+		"account_id":            "55",
+		"blocker_types":         "room_account,live_membership",
+		"room_account_count":    "1",
+		"live_membership_count": "2",
+		"room_listing_ids":      "91",
+	})
+	repo := &accountRepoStub{
+		account:   &Account{ID: 55},
+		deleteErr: blocked,
+	}
+	svc := &AccountService{accountRepo: repo}
+
+	err := svc.Delete(context.Background(), 55)
+
+	require.ErrorIs(t, err, ErrAccountDeletionBlocked)
+	appErr := infraerrors.FromError(err)
+	require.Equal(t, "room_account,live_membership", appErr.Metadata["blocker_types"])
+	require.Equal(t, "91", appErr.Metadata["room_listing_ids"])
+	require.Equal(t, []int64{55}, repo.deletedIDs)
+	require.Empty(t, repo.legacyDeletedIDs)
+}
+
+func TestAccountService_DeleteOwned_UsesGuardedDeletion(t *testing.T) {
+	ownerUserID := int64(9)
+	repo := &accountRepoStub{
+		account: &Account{ID: 55, OwnerUserID: &ownerUserID},
+	}
+	svc := &AccountService{accountRepo: repo}
+
+	err := svc.DeleteOwned(context.Background(), ownerUserID, 55)
+
+	require.NoError(t, err)
+	require.Equal(t, []int64{ownerUserID}, repo.ownedDeleteUsers)
+	require.Equal(t, [][]int64{{55}}, repo.ownedDeleteCalls)
+	require.Equal(t, []int64{55}, repo.ownedDeletedIDs)
+	require.Empty(t, repo.deletedIDs)
+	require.Empty(t, repo.legacyDeletedIDs)
+}
+
+func TestAccountService_BulkDeleteOwned_UsesAtomicGuardedDeletion(t *testing.T) {
+	ownerUserID := int64(9)
+	repo := &accountRepoStub{
+		accounts: []*Account{
+			{ID: 55, OwnerUserID: &ownerUserID},
+			{ID: 56, OwnerUserID: &ownerUserID},
+		},
+	}
+	svc := &AccountService{accountRepo: repo}
+
+	result, err := svc.BulkDeleteOwned(context.Background(), ownerUserID, []int64{56, 55, 56})
+
+	require.NoError(t, err)
+	require.Equal(t, []int64{ownerUserID}, repo.ownedDeleteUsers)
+	require.Equal(t, [][]int64{{56, 55}}, repo.ownedDeleteCalls)
+	require.Equal(t, []int64{56, 55}, repo.ownedDeletedIDs)
+	require.Empty(t, repo.deleteManyCalls)
+	require.Empty(t, repo.deletedIDs)
+	require.Empty(t, repo.legacyDeletedIDs)
+	require.Equal(t, 2, result.Success)
+	require.Zero(t, result.Failed)
+	require.Equal(t, []int64{56, 55}, result.SuccessIDs)
+}
+
+func TestAccountService_BulkDeleteOwned_BlockedBatchDeletesNothing(t *testing.T) {
+	ownerUserID := int64(9)
+	repo := &accountRepoStub{
+		accounts: []*Account{
+			{ID: 55, OwnerUserID: &ownerUserID},
+			{ID: 56, OwnerUserID: &ownerUserID},
+		},
+		deleteManyErr: ErrAccountDeletionBlocked.WithMetadata(map[string]string{
+			"account_id":    "56",
+			"blocker_types": "pending_billing_intent",
+		}),
+	}
+	svc := &AccountService{accountRepo: repo}
+
+	result, err := svc.BulkDeleteOwned(context.Background(), ownerUserID, []int64{55, 56})
+
+	require.Nil(t, result)
+	require.ErrorIs(t, err, ErrAccountDeletionBlocked)
+	appErr := infraerrors.FromError(err)
+	require.Equal(t, "56", appErr.Metadata["account_id"])
+	require.Equal(t, "pending_billing_intent", appErr.Metadata["blocker_types"])
+	require.Equal(t, []int64{ownerUserID}, repo.ownedDeleteUsers)
+	require.Equal(t, [][]int64{{55, 56}}, repo.ownedDeleteCalls)
+	require.Empty(t, repo.ownedDeletedIDs)
+	require.Empty(t, repo.deleteManyCalls)
+	require.Empty(t, repo.deletedIDs)
+	require.Empty(t, repo.legacyDeletedIDs)
 }

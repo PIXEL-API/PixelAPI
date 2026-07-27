@@ -193,7 +193,8 @@ func (h *OpenAIOAuthHandler) RefreshAccountToken(c *gin.Context) {
 	}
 
 	updatedAccount, err := h.adminService.UpdateAccount(c.Request.Context(), accountID, &service.UpdateAccountInput{
-		Credentials: newCredentials,
+		Credentials:    newCredentials,
+		MutationIntent: service.AccountMutationIntentSystemTokenRefresh,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)

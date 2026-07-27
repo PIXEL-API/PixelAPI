@@ -358,6 +358,38 @@ func TestEmitTurnCompleteCoverage(t *testing.T) {
 	require.Equal(t, "", got.RequestModel)
 }
 
+func TestEmitTurnCompleteUsesPerTurnImageDelta(t *testing.T) {
+	t.Parallel()
+
+	state := &relayState{
+		requestModel: "gpt-5.4",
+		imageCounter: newImageOutputCounter(),
+	}
+	var imageCounts []int
+	onComplete := func(turn RelayTurnResult) {
+		imageCounts = append(imageCounts, turn.Usage.ImageCount)
+	}
+	emit := func(responseID string) {
+		emitTurnComplete(onComplete, state, observedUpstreamEvent{
+			terminal:   true,
+			eventType:  "response.completed",
+			responseID: responseID,
+			usage:      Usage{},
+		})
+	}
+
+	state.imageCounter.AddMessage([]byte(`{"type":"response.output_item.done","item":{"id":"ig_turn_1","type":"image_generation_call","result":"MQ=="}}`))
+	emit("resp_turn_1")
+
+	state.imageCounter.AddMessage([]byte(`{"type":"response.output_item.done","item":{"id":"ig_turn_2","type":"image_generation_call","result":"Mg=="}}`))
+	emit("resp_turn_2")
+
+	emit("resp_turn_3")
+
+	require.Equal(t, []int{1, 1, 0}, imageCounts)
+	require.Equal(t, 2, state.settledImageCount)
+}
+
 func TestIsDisconnectErrorCoverage_CloseStatusesAndMessageBranches(t *testing.T) {
 	t.Parallel()
 

@@ -786,6 +786,13 @@ export default {
     subscription: "Sub",
     private: "Private",
     rateLabel: "Rate",
+    apiKeyBadge: {
+      hidden: "Hidden",
+      recommended: "Recommended",
+      constrained: "Resource constrained",
+      unavailable: "Unavailable",
+      custom: "Custom label",
+    },
     rateSources: {
       newUserGroup: "New",
       userGroup: "Custom",
@@ -810,7 +817,7 @@ export default {
       noSearchResults: "No matching accounts.",
       healthy: "Healthy",
       unavailable: "Unavailable",
-      concurrency: "Current concurrency",
+      concurrency: "Configured concurrency / runtime request capacity",
       priority: "Scheduling priority",
       lastUsed: "Last used: {time}",
       loadFailed: "Failed to load room accounts. Try again.",
@@ -846,7 +853,37 @@ export default {
       addFailed: "Failed to join the room for {count} account(s).",
       removeFailed: "Failed to exit the room for {count} account(s).",
       addRequestFailed: "Failed to join the room. Try again.",
-      removeRequestFailed: "Failed to exit the room. Try again."
+      removeRequestFailed: "Failed to exit the room. Try again.",
+      createCompatibleAccount: "Create an account and add it to this room",
+      createCompatibleAccountHint: "The creator locks the room platform and account level, then converts and attaches the new account automatically.",
+      createCompatibleAccountUnavailable: "The room platform or account level is unknown, so a compatible account cannot be created safely.",
+      createFlow: {
+        creatorTitle: "New account · Join {room}",
+        progressTitle: "Adding account to room",
+        targetRoom: "Target room",
+        preparing: "Reading an account snapshot so the new account can be identified safely…",
+        created: "Account created",
+        identifying: "Identifying the new account",
+        converting: "Convert account placement",
+        convertingHint: "Move the new account from private placement into this room. A failure never deletes the account.",
+        attaching: "Attach to room",
+        attachingHint: "Create the room link. A retry only repeats this step and never recreates or reconverts the account.",
+        completed: "Account joined the room",
+        completedHint: "The new account can now participate in scheduling for “{room}”.",
+        identifyFailed: "The account was created but could not be identified uniquely",
+        conversionFailed: "The account was created but placement conversion did not finish",
+        attachFailed: "The account was converted but did not join the room",
+        accountPreserved: "Account “{name}” (#{id}) is preserved and will not be deleted because of this failure.",
+        multipleCreated: "The create action returned multiple accounts, so none can be selected safely. Close this flow and add the intended account from the existing account list.",
+        identifyAmbiguous: "{count} newly created account(s) were detected, so none can be selected safely. Retry identification or add the intended account from the existing account list.",
+        identifyUnavailable: "The create action returned no account ID and the before-create snapshot is unavailable. Close this flow and confirm the new account in the existing account list.",
+        conversionRequestFailed: "Placement conversion failed. Retry with the same idempotency key.",
+        attachRequestFailed: "Joining the room failed. Retry only the attach step.",
+        retryIdentify: "Identify again",
+        retryConversion: "Retry conversion",
+        retryAttach: "Retry attach only",
+        keepOpen: "Processing—keep this window open"
+      }
     }
   },
 
@@ -1061,7 +1098,8 @@ export default {
     importPlatformGrok: "Grok / xAI official account",
     importAuthMode: "OpenAI authentication method",
     importAuthModeOAuth: "OAuth / Refresh Token",
-    importAuthModeOAuthDesc: "Import OAuth JSON or a refresh token and validate the selected account level",
+    importAuthModeOAuthDesc:
+      "Import OAuth JSON, a Refresh Token, or an Access Token in JSON format and validate the selected account level",
     importAuthModeAgentIdentity: "Codex Agent Identity",
     importAuthModeAgentIdentityDesc: "Import Agent Identity JSON and isolate it by the Team in the credential",
     importAgentIdentityNoticeTitle: "Agent Identity import rules",
@@ -1161,11 +1199,16 @@ export default {
       "Paste one token per line, or paste a complete JSON object / JSON array.",
     importTextPlaceholderAgentIdentity: "Paste complete Codex Agent Identity JSON or a JSON array",
     importTextHint:
-      "Plain tokens are treated as OpenAI Refresh Tokens unless they are Claude Session Keys.",
+      "Plain tokens are treated as OpenAI Refresh Tokens. Use the dedicated AT input or the JSON format below for OpenAI Access Tokens. Claude Session Keys are detected automatically.",
     importTextHintChoosePlatform:
       "Select a platform first, then paste OAuth credentials for that platform.",
     importTextHintOpenAI:
-      "OpenAI Free / Plus / Team can import OAuth JSON or Refresh Tokens; Pro must use account login.",
+      "OpenAI Free / Plus / Team can import OAuth JSON or one Refresh Token per line. Use the JSON example below for Access Tokens; Pro must use account login.",
+    importOpenAIFormatExamples: "View OpenAI JSON format examples",
+    importOpenAIAccessTokenJSON: "Access Token only (minimum format)",
+    importOpenAIOAuthJSON: "Complete OAuth credentials",
+    importOpenAIFormatHint:
+      "A plain token entered on its own line is treated as a Refresh Token. Use the minimum JSON format above for an Access Token. AT-only accounts require a known expiry (JWT exp or account expiry) and are paused when expired.",
     importTextHintAgentIdentity:
       "Only complete Codex Agent Identity JSON objects or arrays are supported; file import accepts .json only.",
     importTextHintClaude:
@@ -1265,8 +1308,6 @@ export default {
     namePlaceholder: "My API Key",
     groupLabel: "Group",
     selectGroup: "Select a group",
-    groupRecommended: "Recommended",
-    poolScarceWarning: "Pool capacity is scarce; requests may fail",
     statusLabel: "Status",
     statusFilterLabel: "Filter by status",
     selectStatus: "Select status",
@@ -3694,6 +3735,7 @@ export default {
         rpmDefault: "default",
         type: "Type",
         accounts: "Accounts",
+        apiKeyBadge: "API Key Label",
         capacity: "Capacity",
         usage: "Usage",
         status: "Status",
@@ -3710,6 +3752,18 @@ export default {
       accountsRateLimited: "Limited:",
       accountsTotal: "Total:",
       accountsUnit: "",
+      apiKeyBadge: {
+        privateNotApplicable: "Not applicable to private groups",
+        customPlaceholder: "Up to 20 characters",
+        customRequired: "Enter a custom label",
+        customTooLong: "Custom labels cannot exceed 20 characters",
+        editorLabel: 'Set the API key label for group "{name}"',
+        customInputLabel: 'Custom API key label for group "{name}"',
+        saved: "API key label updated",
+        saveFailed: "Failed to update API key label",
+        confirmCustom: "Save custom label",
+        cancelCustom: "Cancel custom label editing",
+      },
       rateAndAccounts: "{rate}x rate · {count} accounts",
       newUserRateAction: "New Rate",
       newUserRateShort: "New",
@@ -5759,6 +5813,14 @@ export default {
             "Enter your existing OpenAI Refresh Token(s). Supports batch input (one per line). The system will automatically validate and create accounts.",
           refreshTokenPlaceholder:
             "Paste your OpenAI Refresh Token...\nSupports multiple, one per line",
+          accessTokenDesc:
+            "Enter your existing OpenAI Access Token(s), one per line. The system extracts identity and expiry from JWTs when available and validates lifecycle before creating each account.",
+          accessTokenPlaceholder:
+            "Paste your OpenAI Access Token...\nSupports multiple, one per line",
+          accessTokenHint:
+            "Access Tokens cannot be refreshed. Their expiry must come from the JWT or an account expiry setting, and the account is paused automatically when either expires.",
+          importingAccessToken: "Importing Access Token...",
+          importAccessTokenAndCreate: "Import Access Token & Create Account",
           sessionTokenAuth: "Manual ST Input",
           sessionTokenDesc:
             "Enter your existing Session Token(s). Supports batch input (one per line). The system will automatically validate and create accounts.",
@@ -5779,6 +5841,7 @@ export default {
           validating: "Validating...",
           validateAndCreate: "Validate & Create Account",
           pleaseEnterRefreshToken: "Please enter Refresh Token",
+          pleaseEnterAccessToken: "Please enter Access Token",
           pleaseEnterSessionToken: "Please enter Session Token",
         },
         // Gemini specific
@@ -6149,7 +6212,7 @@ export default {
         noData: "No usage data available for this account",
         accountLedger: "Account Usage Ledger",
         accountLedgerSubtitle:
-          "Shows only this account's cost on Pixel. Upstream quota windows, selected history, and queryable lifetime totals are separated.",
+          "Tracks this account's Pixel cost, user charges, and owner settlement income. Quota windows, the selected period, and queryable lifetime usage are shown separately.",
         customRange: "Custom statistics dates",
         startDate: "Start date",
         endDate: "End date",
@@ -6184,17 +6247,25 @@ export default {
           "Only queryable Pixel usage since {start} is included; earlier usage is not counted.",
         windowCompleteCoverage: "Pixel detail data fully covers the current upstream window.",
         rangeSummary: "{range} summary",
-        pixelBillingOnly: "All costs in this section are Pixel account costs, not user charges.",
+        pixelBillingOnly:
+          "User charges include request charges and net hourly fees. Owner income covers external consumers only and uses immutable historical settlements, never the current share ratio.",
         periodCost: "Account cost",
+        pixelUserCost: "Pixel user charges",
+        ownerIncome: "Owner income",
+        ownerNetIncome: "Book net income",
         periodRequests: "Requests",
         periodTokens: "Tokens",
         activeDays: "Active days",
         pixelCostNote: "Calculated with account multiplier",
+        pixelUserCostNote: "Includes hourly fees; share-eligible ${amount}",
+        ownerIncomeNote: "Net historical settlements from external consumers",
+        ownerNetIncomeNote: "Owner income − Pixel account cost",
         requestCountNote: "Requests forwarded by Pixel",
         tokenCountNote: "Input, output, and cache tokens",
         activeDaysNote: "Business days with account usage",
-        dailyTrend: "Daily cost and request trend",
-        dailyTrendHint: "Aggregated by Asia/Shanghai business day",
+        dailyTrend: "Daily finance and request trend",
+        dailyTrendHint:
+          "Aggregated by Asia/Shanghai business day; refunds and waivers are negative",
         lifetimeSummary: "Queryable lifetime summary",
         lifetimeCostHint: "Combines daily snapshots with unarchived raw records",
         mergedAccountRecords: "Merged account records",
@@ -6204,10 +6275,11 @@ export default {
         lifetimeMergeHint:
           "After an account is deleted and re-added, history is merged only when its stable upstream ID and ownership match. Email alone never triggers a merge.",
         dailyDetails: "Daily details",
-        dailyDetailsHint: "All queryable business days within {range}",
+        dailyDetailsHint:
+          "All queryable business days within {range}; net income is the owner's book value",
         breakdowns: "Usage breakdown",
         breakdownCoverageHint:
-          "Model and endpoint details include only queryable data in the selected range.",
+          "Models and endpoints split Pixel account cost and request charges. Hourly fees and owner income cannot be attributed reliably, so they appear only in totals and daily details.",
         models: "Models",
         inbound: "Pixel endpoint",
         upstream: "Upstream endpoint",

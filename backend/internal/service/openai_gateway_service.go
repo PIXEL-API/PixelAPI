@@ -260,6 +260,27 @@ type OpenAIForwardResult struct {
 	WebSearchCalls int
 }
 
+func OpenAIForwardResultHasBillableUsage(result *OpenAIForwardResult) bool {
+	if result == nil {
+		return false
+	}
+	usage := result.Usage
+	return usage.InputTokens > 0 ||
+		usage.TextInputTokens > 0 ||
+		usage.ImageInputTokens > 0 ||
+		usage.OutputTokens > 0 ||
+		usage.TextOutputTokens > 0 ||
+		usage.CacheCreationInputTokens > 0 ||
+		usage.CacheReadInputTokens > 0 ||
+		usage.TextCacheReadInputTokens > 0 ||
+		usage.ImageCacheReadInputTokens > 0 ||
+		usage.ImageOutputTokens > 0 ||
+		usage.ImageCount > 0 ||
+		result.ImageCount > 0 ||
+		result.VideoCount > 0 ||
+		result.WebSearchCalls > 0
+}
+
 type openAIResponseImageBillingConfig struct {
 	Intent bool
 	Model  string
@@ -1834,31 +1855,20 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwarenessForRequest(ctx cont
 			stickyAccountID = accountID
 		}
 	}
-	if account, handled, err := s.resolveAccountShareModeBoundAccount(ctx, groupID, requestedModel, excludedIDs, requireCompact); handled {
+	if selection, _, handled, err := s.selectAccountShareModeBoundAccount(
+		ctx,
+		groupID,
+		requestedModel,
+		excludedIDs,
+		OpenAIUpstreamTransportHTTPSSE,
+		"",
+		"",
+		requireCompact,
+	); handled {
 		if err != nil {
-			return nil, err
+			return nil, wrapAccountShareModeSelectionError(err)
 		}
-		result, err := s.tryAcquireAccountSlot(ctx, account.ID, account.Concurrency)
-		if err == nil && result.Acquired {
-			return newAccountShareModeSelectionResult(account, true, result.ReleaseFunc, nil), nil
-		}
-		if preserveStickyWait && stickyAccountID > 0 && stickyAccountID == account.ID && s.concurrencyService != nil {
-			waitingCount, _ := s.concurrencyService.GetAccountWaitingCount(ctx, account.ID)
-			if waitingCount < cfg.StickySessionMaxWaiting {
-				return newAccountShareModeSelectionResult(account, false, nil, &AccountWaitPlan{
-					AccountID:      account.ID,
-					MaxConcurrency: account.Concurrency,
-					Timeout:        cfg.StickySessionWaitTimeout,
-					MaxWaiting:     cfg.StickySessionMaxWaiting,
-				}), nil
-			}
-		}
-		return newAccountShareModeSelectionResult(account, false, nil, &AccountWaitPlan{
-			AccountID:      account.ID,
-			MaxConcurrency: account.Concurrency,
-			Timeout:        cfg.FallbackWaitTimeout,
-			MaxWaiting:     cfg.FallbackMaxWaiting,
-		}), nil
+		return selection, nil
 	}
 	if s.concurrencyService == nil || !cfg.LoadBatchEnabled {
 		account, err := s.selectAccountForModelWithExclusions(ctx, groupID, sessionHash, requestedModel, excludedIDs, requireCompact, stickyAccountID)
@@ -2379,13 +2389,24 @@ func (s *OpenAIGatewayService) newSelectionResult(ctx context.Context, account *
 	}, nil
 }
 
-func newAccountShareModeSelectionResult(account *Account, acquired bool, release func(), waitPlan *AccountWaitPlan) *AccountSelectionResult {
-	return &AccountSelectionResult{
-		Account:     account,
-		Acquired:    acquired,
-		ReleaseFunc: release,
-		WaitPlan:    waitPlan,
+func newAccountShareModeRuntimeSelection(ctx context.Context, account *Account, accountSlot, membershipSlot *AcquireResult) (*AccountSelectionResult, error) {
+	lease, err := NewAccountShareRuntimeLease(ctx, accountSlot, membershipSlot)
+	if err != nil {
+		if accountSlot != nil && accountSlot.ReleaseFunc != nil {
+			accountSlot.ReleaseFunc()
+		}
+		if membershipSlot != nil && membershipSlot.ReleaseFunc != nil {
+			membershipSlot.ReleaseFunc()
+		}
+		return nil, err
 	}
+	return &AccountSelectionResult{
+		Account:          account,
+		Acquired:         true,
+		ReleaseFunc:      lease.Release,
+		AccountShareMode: true,
+		RuntimeLease:     lease,
+	}, nil
 }
 
 func (s *OpenAIGatewayService) schedulingConfig() config.GatewaySchedulingConfig {
@@ -6628,10 +6649,7 @@ func nonNegativeOpenAITokenCount(v int) int {
 }
 
 func detachOpenAIUpstreamContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	if ctx == nil {
-		return context.Background(), func() {}
-	}
-	return context.WithoutCancel(ctx), func() {}
+	return DetachAccountShareRuntimeLeaseContext(ctx)
 }
 
 func (s *OpenAIGatewayService) detachedUsageDrainEnabled(ctx context.Context) bool {
@@ -6696,14 +6714,19 @@ func (s *OpenAIGatewayService) legacyLogClientDisconnectDrainDecision(ctx contex
 func (s *OpenAIGatewayService) detachedNonStreamingReadContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	timeout := s.detachedUsageDrainTimeout()
 	base := context.Background()
+	baseCancel := func() {}
 	if ctx != nil {
 		if s.detachedUsageDrainEnabled(ctx) {
-			base = context.WithoutCancel(ctx)
+			base, baseCancel = DetachAccountShareRuntimeLeaseContext(ctx)
 		} else {
 			base = ctx
 		}
 	}
-	return context.WithTimeout(base, timeout)
+	timeoutCtx, timeoutCancel := context.WithTimeout(base, timeout)
+	return timeoutCtx, func() {
+		timeoutCancel()
+		baseCancel()
+	}
 }
 
 func (s *OpenAIGatewayService) detachedUsageDrainTimeout() time.Duration {
@@ -7388,7 +7411,14 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		if accountShareListing != nil && accountShareListing.AccountID != account.ID {
 			return ErrNoAvailableAccounts
 		}
-		if IsAccountShareModeOwnerSelfUse(accountShareMembership, accountShareListing) {
+		durableMultiplier, durable, durableErr := accountShareBillingRateMultiplierFromContext(ctx)
+		if durableErr != nil {
+			return durableErr
+		}
+		if durable {
+			multiplier = durableMultiplier
+			rateMultiplierSource = RateMultiplierSourceAccountShare
+		} else if IsAccountShareModeOwnerSelfUse(accountShareMembership, accountShareListing) {
 			ownerMultiplier, resolveErr := s.accountShareModeService.ResolveOwnerSelfUseMultiplier(ctx)
 			if resolveErr != nil {
 				return resolveErr
@@ -7440,7 +7470,8 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		cost = &CostBreakdown{BillingMode: string(BillingModeToken)}
 	}
 	var accountShareModeSettlement *AccountShareModeBillingSnapshot
-	if accountShareMembership != nil && accountShareListing != nil && cost != nil {
+	_, durableAccountShareBilling := accountShareBillingCommandFromContext(ctx)
+	if !durableAccountShareBilling && accountShareMembership != nil && accountShareListing != nil && cost != nil {
 		baseCharge := cost.ActualCost
 		hourlyCharge := 0.0
 		policy, err := s.accountShareModeService.ResolvePolicy(ctx)
@@ -7568,6 +7599,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		return nil
 	}
 
+	_, durableDispatch := AccountShareBillingDispatchFromContext(ctx)
 	billingErr := func() error {
 		privateGroupCommissionRate := 0.0
 		if isSubscriptionBilling && apiKey.Group != nil && apiKey.Group.IsUserPrivateScope() && s.settingService != nil {
@@ -7594,7 +7626,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if billingErr != nil {
 		return billingErr
 	}
-	writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")
+	if !durableDispatch {
+		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")
+	}
 
 	return nil
 }

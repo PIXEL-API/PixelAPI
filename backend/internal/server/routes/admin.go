@@ -29,6 +29,8 @@ func RegisterAdminRoutes(
 		// 账号管理
 		registerAccountRoutes(admin, h)
 		registerAccountSharePolicyRoutes(admin, h)
+		registerAccountShareBillingRoutes(admin, h)
+		registerAccountShareQuotaRoutes(admin, h)
 
 		// 公告管理
 		registerAnnouncementRoutes(admin, h)
@@ -453,6 +455,30 @@ func registerAccountSharePolicyRoutes(admin *gin.RouterGroup, h *handler.Handler
 		policies.POST("", h.Admin.AccountSharePolicy.Create)
 		policies.PUT("/:id", h.Admin.AccountSharePolicy.Update)
 		policies.DELETE("/:id", h.Admin.AccountSharePolicy.Delete)
+	}
+}
+
+func registerAccountShareBillingRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	intents := admin.Group("/account-share/billing-intents")
+	{
+		intents.GET("/needs-attention", h.AccountShareMode.ListBillingIntentsNeedingAttention)
+		intents.GET("/:id", h.AccountShareMode.GetBillingIntentForAdmin)
+		intents.POST("/:id/waive", h.AccountShareMode.WaiveBillingIntentForAdmin)
+	}
+}
+
+func registerAccountShareQuotaRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	quotas := admin.Group("/account-share/quotas")
+	{
+		quotas.GET("/global", h.AccountShareMode.GetGlobalQuotaForAdmin)
+		quotas.PUT("/global", h.AccountShareMode.UpdateGlobalQuotaForAdmin)
+		quotas.GET("/owners/:owner_id", h.AccountShareMode.GetOwnerQuotaForAdmin)
+		quotas.PUT("/owners/:owner_id", h.AccountShareMode.UpsertOwnerQuotaForAdmin)
+		quotas.POST("/owners/:owner_id/grandfather", h.AccountShareMode.GrandfatherOwnerQuotaForAdmin)
+		quotas.POST("/owners/:owner_id/revoke", h.AccountShareMode.RevokeOwnerQuotaForAdmin)
+		quotas.GET("/audit", h.AccountShareMode.ListQuotaAuditForAdmin)
+		quotas.GET("/grandfather-candidates", h.AccountShareMode.ListGrandfatherCandidatesForAdmin)
+		quotas.POST("/grandfather/batch", h.AccountShareMode.BatchGrandfatherQuotaForAdmin)
 	}
 }
 

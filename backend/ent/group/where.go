@@ -125,6 +125,11 @@ func Scope(v string) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldScope, v))
 }
 
+// APIKeyBadgeText applies equality check predicate on the "api_key_badge_text" field. It's identical to APIKeyBadgeTextEQ.
+func APIKeyBadgeText(v string) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldAPIKeyBadgeText, v))
+}
+
 // Platform applies equality check predicate on the "platform" field. It's identical to PlatformEQ.
 func Platform(v string) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldPlatform, v))
@@ -903,6 +908,91 @@ func ScopeEqualFold(v string) predicate.Group {
 // ScopeContainsFold applies the ContainsFold predicate on the "scope" field.
 func ScopeContainsFold(v string) predicate.Group {
 	return predicate.Group(sql.FieldContainsFold(FieldScope, v))
+}
+
+// APIKeyBadgeTypeEQ applies the EQ predicate on the "api_key_badge_type" field.
+func APIKeyBadgeTypeEQ(v APIKeyBadgeType) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldAPIKeyBadgeType, v))
+}
+
+// APIKeyBadgeTypeNEQ applies the NEQ predicate on the "api_key_badge_type" field.
+func APIKeyBadgeTypeNEQ(v APIKeyBadgeType) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldAPIKeyBadgeType, v))
+}
+
+// APIKeyBadgeTypeIn applies the In predicate on the "api_key_badge_type" field.
+func APIKeyBadgeTypeIn(vs ...APIKeyBadgeType) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldAPIKeyBadgeType, vs...))
+}
+
+// APIKeyBadgeTypeNotIn applies the NotIn predicate on the "api_key_badge_type" field.
+func APIKeyBadgeTypeNotIn(vs ...APIKeyBadgeType) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldAPIKeyBadgeType, vs...))
+}
+
+// APIKeyBadgeTextEQ applies the EQ predicate on the "api_key_badge_text" field.
+func APIKeyBadgeTextEQ(v string) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldAPIKeyBadgeText, v))
+}
+
+// APIKeyBadgeTextNEQ applies the NEQ predicate on the "api_key_badge_text" field.
+func APIKeyBadgeTextNEQ(v string) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldAPIKeyBadgeText, v))
+}
+
+// APIKeyBadgeTextIn applies the In predicate on the "api_key_badge_text" field.
+func APIKeyBadgeTextIn(vs ...string) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldAPIKeyBadgeText, vs...))
+}
+
+// APIKeyBadgeTextNotIn applies the NotIn predicate on the "api_key_badge_text" field.
+func APIKeyBadgeTextNotIn(vs ...string) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldAPIKeyBadgeText, vs...))
+}
+
+// APIKeyBadgeTextGT applies the GT predicate on the "api_key_badge_text" field.
+func APIKeyBadgeTextGT(v string) predicate.Group {
+	return predicate.Group(sql.FieldGT(FieldAPIKeyBadgeText, v))
+}
+
+// APIKeyBadgeTextGTE applies the GTE predicate on the "api_key_badge_text" field.
+func APIKeyBadgeTextGTE(v string) predicate.Group {
+	return predicate.Group(sql.FieldGTE(FieldAPIKeyBadgeText, v))
+}
+
+// APIKeyBadgeTextLT applies the LT predicate on the "api_key_badge_text" field.
+func APIKeyBadgeTextLT(v string) predicate.Group {
+	return predicate.Group(sql.FieldLT(FieldAPIKeyBadgeText, v))
+}
+
+// APIKeyBadgeTextLTE applies the LTE predicate on the "api_key_badge_text" field.
+func APIKeyBadgeTextLTE(v string) predicate.Group {
+	return predicate.Group(sql.FieldLTE(FieldAPIKeyBadgeText, v))
+}
+
+// APIKeyBadgeTextContains applies the Contains predicate on the "api_key_badge_text" field.
+func APIKeyBadgeTextContains(v string) predicate.Group {
+	return predicate.Group(sql.FieldContains(FieldAPIKeyBadgeText, v))
+}
+
+// APIKeyBadgeTextHasPrefix applies the HasPrefix predicate on the "api_key_badge_text" field.
+func APIKeyBadgeTextHasPrefix(v string) predicate.Group {
+	return predicate.Group(sql.FieldHasPrefix(FieldAPIKeyBadgeText, v))
+}
+
+// APIKeyBadgeTextHasSuffix applies the HasSuffix predicate on the "api_key_badge_text" field.
+func APIKeyBadgeTextHasSuffix(v string) predicate.Group {
+	return predicate.Group(sql.FieldHasSuffix(FieldAPIKeyBadgeText, v))
+}
+
+// APIKeyBadgeTextEqualFold applies the EqualFold predicate on the "api_key_badge_text" field.
+func APIKeyBadgeTextEqualFold(v string) predicate.Group {
+	return predicate.Group(sql.FieldEqualFold(FieldAPIKeyBadgeText, v))
+}
+
+// APIKeyBadgeTextContainsFold applies the ContainsFold predicate on the "api_key_badge_text" field.
+func APIKeyBadgeTextContainsFold(v string) predicate.Group {
+	return predicate.Group(sql.FieldContainsFold(FieldAPIKeyBadgeText, v))
 }
 
 // PlatformEQ applies the EQ predicate on the "platform" field.

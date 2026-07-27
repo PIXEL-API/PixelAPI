@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -119,7 +120,7 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 			Message:            upstreamMsg,
 		})
 		s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
-		if s.shouldFailoverUpstreamError(resp.StatusCode) {
+		if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
 			return nil, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,
@@ -266,7 +267,7 @@ func (s *OpenAIGatewayService) forwardGrokChatCompletions(
 			Message:            upstreamMsg,
 		})
 		s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
-		if s.shouldFailoverUpstreamError(resp.StatusCode) {
+		if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
 			return nil, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,
@@ -716,6 +717,7 @@ func (s *OpenAIGatewayService) buildGrokResponsesRequest(ctx context.Context, c 
 			req.Header.Set("OpenAI-Beta", v)
 		}
 	}
+	account.ApplyHeaderOverrides(req.Header)
 	return req, nil
 }
 
@@ -727,6 +729,7 @@ func applyGrokCLIHeaders(headers http.Header) {
 	}
 	headers.Set("User-Agent", grokUpstreamUserAgent)
 	headers.Set("X-Grok-Client-Version", grokCLIVersion)
+	headers.Set("X-Grok-Client-Mode", "interactive")
 }
 
 func (s *OpenAIGatewayService) updateGrokUsageSnapshot(ctx context.Context, accountID int64, snapshot *xai.QuotaSnapshot) {
@@ -745,11 +748,16 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 	if s == nil || account == nil {
 		return
 	}
+	if isGrokContentPolicyRejection(statusCode, responseBody) {
+		return
+	}
 	switch statusCode {
 	case http.StatusUnauthorized:
-		s.tempUnscheduleGrok(ctx, account, 10*time.Minute, "grok oauth token unauthorized")
+		s.tempUnscheduleGrokCredentialIfMatch(ctx, account, 10*time.Minute, "grok oauth token unauthorized")
+	case http.StatusPaymentRequired:
+		s.tempUnscheduleGrokCredentialIfMatch(ctx, account, 30*time.Minute, "grok payment required")
 	case http.StatusForbidden:
-		s.tempUnscheduleGrok(ctx, account, 30*time.Minute, "grok entitlement or subscription tier denied")
+		s.tempUnscheduleGrokCredentialIfMatch(ctx, account, 30*time.Minute, "grok entitlement or subscription tier denied")
 	case http.StatusTooManyRequests:
 		cooldown := 2 * time.Minute
 		if snapshot := xai.ParseQuotaHeaders(headers, statusCode); snapshot != nil && snapshot.RetryAfterSeconds != nil && *snapshot.RetryAfterSeconds > 0 {
@@ -757,11 +765,43 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 		}
 		s.tempUnscheduleGrok(ctx, account, cooldown, "grok rate limited")
 	default:
-		if statusCode >= 500 {
+		if statusCode >= 500 && !account.IsPoolMode() {
 			s.tempUnscheduleGrok(ctx, account, 2*time.Minute, "grok upstream temporary error")
 		}
 	}
 	_ = responseBody
+}
+
+func (s *OpenAIGatewayService) tempUnscheduleGrokCredentialIfMatch(ctx context.Context, account *Account, cooldown time.Duration, reason string) {
+	if s == nil || account == nil {
+		return
+	}
+	if !account.IsGrokOAuth() {
+		s.tempUnscheduleGrok(ctx, account, cooldown, reason)
+		return
+	}
+	repo, ok := s.accountRepo.(grokCredentialConditionalStateRepository)
+	if !ok {
+		slog.Error("grok_credential_temp_unsched_repository_unavailable", "account_id", account.ID, "reason", reason)
+		return
+	}
+	stateCtx, cancel := openAIAccountStateContext(ctx)
+	defer cancel()
+	until := time.Now().Add(cooldown)
+	updated, err := repo.SetGrokCredentialTempUnschedulableIfMatch(
+		stateCtx,
+		account.ID,
+		grokCredentialMutationSnapshot(account),
+		until,
+		reason,
+	)
+	if err != nil {
+		slog.Warn("grok_credential_temp_unsched_failed", "account_id", account.ID, "reason", reason, "error", err)
+		return
+	}
+	if updated {
+		s.BlockAccountScheduling(account, until, reason)
+	}
 }
 
 func (s *OpenAIGatewayService) tempUnscheduleGrok(ctx context.Context, account *Account, cooldown time.Duration, reason string) {

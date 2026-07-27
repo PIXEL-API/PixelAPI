@@ -4,6 +4,7 @@ import { nextTick } from 'vue'
 
 import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
+import GroupApiKeyBadge from '@/components/common/GroupApiKeyBadge.vue'
 import GroupOptionItem from '@/components/common/GroupOptionItem.vue'
 import KeysView from '../KeysView.vue'
 
@@ -77,12 +78,13 @@ const group = {
   name: 'Primary group',
   description: 'Primary test group',
   platform: 'openai',
-  scope: 'private',
+  scope: 'user_private',
   subscription_type: 'standard',
   rate_multiplier: 1,
   effective_rate_multiplier: 1,
   effective_rate_multiplier_source: 'group_default',
-  pool_scarce: false,
+  api_key_badge_type: 'hidden',
+  api_key_badge_text: '',
 }
 
 const apiKey = {
@@ -324,10 +326,22 @@ describe('user KeysView accessibility interactions', () => {
     expect(wrapper.get('select-stub[arialabelledby="key-status-label"]').exists()).toBe(true)
   })
 
-  it('sorts recommended groups before scarce groups while keeping scarce options selectable', async () => {
+  it('preserves server order and keeps unavailable groups selectable', async () => {
     getAvailableGroups.mockResolvedValue([
-      { ...group, id: 10, name: 'Scarce pool', pool_scarce: true },
-      { ...group, id: 11, name: 'Healthy pool', pool_scarce: false },
+      {
+        ...group,
+        id: 10,
+        name: 'Unavailable group',
+        scope: 'public',
+        api_key_badge_type: 'unavailable',
+      },
+      {
+        ...group,
+        id: 11,
+        name: 'Recommended group',
+        scope: 'public',
+        api_key_badge_type: 'recommended',
+      },
     ])
     const wrapper = mountKeysView()
     await flushPromises()
@@ -336,13 +350,16 @@ describe('user KeysView accessibility interactions', () => {
 
     const options = wrapper.getComponent('[data-tour="key-form-group"]').props('options') as Array<{
       label: string
-      poolScarce: boolean
+      apiKeyBadgeType: string
       disabled?: boolean
     }>
 
-    expect(options.map((option) => option.label)).toEqual(['Healthy pool', 'Scarce pool'])
-    expect(options[1].poolScarce).toBe(true)
-    expect(options[1].disabled).toBeUndefined()
+    expect(options.map((option) => option.label)).toEqual([
+      'Unavailable group',
+      'Recommended group',
+    ])
+    expect(options[0].apiKeyBadgeType).toBe('unavailable')
+    expect(options[0].disabled).toBeUndefined()
   })
 
   it('constrains long API key names without forcing the table wider', async () => {
@@ -475,46 +492,78 @@ describe('KeysView group-route translations', () => {
       expect(locale.keys.customKeyTooLong).toBeTruthy()
       expect(locale.keys.groupFilterLabel).toBeTruthy()
       expect(locale.keys.statusFilterLabel).toBeTruthy()
-      expect(locale.keys.groupRecommended).toBeTruthy()
-      expect(locale.keys.poolScarceWarning).toBeTruthy()
+      expect(Object.values(locale.groups.apiKeyBadge)).toHaveLength(5)
+      expect(Object.values(locale.groups.apiKeyBadge).every(Boolean)).toBe(true)
       for (const key of expectedKeys) {
         expect(locale.keys.groupRoutes[key]).toBeTruthy()
       }
       expect(Object.values(locale.keys.groupRoutes.validation)).toHaveLength(5)
       expect(Object.values(locale.keys.groupRoutes.validation).every(Boolean)).toBe(true)
     }
+    expect(zh.groups.apiKeyBadge).toMatchObject({
+      hidden: '不显示',
+      recommended: '推荐使用',
+      constrained: '资源紧张',
+      unavailable: '不可用',
+      custom: '自定义标签',
+    })
   })
 })
 
-describe('GroupOptionItem pool status', () => {
-  it('renders a scarce pool warning as red status text before the group badge', () => {
-    const wrapper = mount(GroupOptionItem, {
-      props: {
-        name: 'Scarce pool',
-        platform: 'openai',
-        statusLabel: '号池紧缺，可能无法使用',
-        statusTone: 'warning',
-      },
+describe('API key group badges', () => {
+  it.each([
+    ['recommended', 'groups.apiKeyBadge.recommended', 'text-emerald-600'],
+    ['constrained', 'groups.apiKeyBadge.constrained', 'text-amber-700'],
+    ['unavailable', 'groups.apiKeyBadge.unavailable', 'text-red-600'],
+  ] as const)('renders the %s fixed badge', (type, label, colorClass) => {
+    const wrapper = mount(GroupApiKeyBadge, {
+      props: { type },
     })
 
-    const warning = wrapper.get('span.text-red-600')
-    expect(warning.text()).toBe('号池紧缺，可能无法使用')
-    expect(warning.element.compareDocumentPosition(wrapper.getComponent({ name: 'GroupBadge' }).element))
-      .toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    const badge = wrapper.get(`[data-api-key-badge="${type}"]`)
+    expect(badge.text()).toBe(label)
+    expect(badge.classes()).toContain(colorClass)
   })
 
-  it('renders usable pools with a green recommended status', () => {
-    const wrapper = mount(GroupOptionItem, {
+  it('renders custom labels with the shared blue style', () => {
+    const wrapper = mount(GroupApiKeyBadge, {
       props: {
-        name: 'Healthy pool',
-        platform: 'openai',
-        statusLabel: '推荐使用',
-        statusTone: 'recommended',
+        type: 'custom',
+        text: '低延迟',
       },
     })
 
-    const recommendation = wrapper.get('span.text-emerald-600')
-    expect(recommendation.text()).toBe('推荐使用')
-    expect(recommendation.classes()).toContain('bg-emerald-50')
+    const badge = wrapper.get('[data-api-key-badge="custom"]')
+    expect(badge.text()).toBe('低延迟')
+    expect(badge.classes()).toContain('text-blue-700')
+  })
+
+  it('does not render hidden or user-private badges', () => {
+    const hidden = mount(GroupApiKeyBadge, {
+      props: {
+        type: 'hidden',
+      },
+    })
+    const privateGroup = mount(GroupApiKeyBadge, {
+      props: {
+        type: 'recommended',
+        scope: 'user_private',
+      },
+    })
+
+    expect(hidden.find('[data-api-key-badge]').exists()).toBe(false)
+    expect(privateGroup.find('[data-api-key-badge]').exists()).toBe(false)
+  })
+
+  it('keeps GroupOptionItem compatible when no API key badge is configured', () => {
+    const wrapper = mount(GroupOptionItem, {
+      props: {
+        name: 'Regular group',
+        platform: 'openai',
+      },
+    })
+
+    expect(wrapper.find('[data-api-key-badge]').exists()).toBe(false)
+    expect(wrapper.getComponent({ name: 'GroupBadge' }).exists()).toBe(true)
   })
 })

@@ -212,6 +212,18 @@ func GroupFromServiceAdmin(g *service.Group) *AdminGroup {
 }
 
 func groupFromServiceBase(g *service.Group) Group {
+	apiKeyBadgeType := g.APIKeyBadgeType
+	apiKeyBadgeText := g.APIKeyBadgeText
+	if apiKeyBadgeType == "" {
+		apiKeyBadgeType = service.GroupAPIKeyBadgeTypeHidden
+	}
+	if g.IsUserPrivateScope() {
+		apiKeyBadgeType = service.GroupAPIKeyBadgeTypeHidden
+		apiKeyBadgeText = ""
+	} else if apiKeyBadgeType != service.GroupAPIKeyBadgeTypeCustom {
+		apiKeyBadgeText = ""
+	}
+
 	return Group{
 		ID:                              g.ID,
 		Name:                            g.Name,
@@ -229,6 +241,8 @@ func groupFromServiceBase(g *service.Group) Group {
 		Status:                          g.Status,
 		OwnerUserID:                     g.OwnerUserID,
 		Scope:                           service.NormalizeGroupScope(g.Scope),
+		APIKeyBadgeType:                 apiKeyBadgeType,
+		APIKeyBadgeText:                 apiKeyBadgeText,
 		SubscriptionType:                g.SubscriptionType,
 		DailyLimitUSD:                   g.DailyLimitUSD,
 		WeeklyLimitUSD:                  g.WeeklyLimitUSD,
@@ -252,7 +266,6 @@ func groupFromServiceBase(g *service.Group) Group {
 		RequireOAuthOnly:                g.RequireOAuthOnly,
 		RequirePrivacySet:               g.RequirePrivacySet,
 		RPMLimit:                        g.RPMLimit,
-		PoolScarce:                      g.PoolScarce,
 		CreatedAt:                       g.CreatedAt,
 		UpdatedAt:                       g.UpdatedAt,
 	}

@@ -208,6 +208,92 @@ func wrapReleaseOnDone(ctx context.Context, releaseFunc func()) func() {
 	return release
 }
 
+// wrapAccountSelectionReleaseOnDone keeps account-share runtime leases alive
+// after a client disconnect; those leases are released only after forwarding
+// (including detached usage draining) has actually finished.
+func wrapAccountSelectionReleaseOnDone(ctx context.Context, selection *service.AccountSelectionResult, releaseFunc func()) func() {
+	if selection == nil || selection.RuntimeLease == nil {
+		return wrapReleaseOnDone(ctx, releaseFunc)
+	}
+	if releaseFunc == nil {
+		return nil
+	}
+	var once sync.Once
+	return func() {
+		once.Do(releaseFunc)
+	}
+}
+
+func bindAccountSelectionForwardContext(ctx context.Context, selection *service.AccountSelectionResult) (context.Context, context.CancelFunc) {
+	if selection == nil || selection.RuntimeLease == nil {
+		if ctx == nil {
+			return context.Background(), func() {}
+		}
+		return ctx, func() {}
+	}
+	return service.BindAccountShareRuntimeLeaseContext(ctx, selection.RuntimeLease)
+}
+
+type accountShareBillingDispatcher interface {
+	BeginAccountShareBillingDispatch(
+		ctx context.Context,
+		input service.AccountShareBillingDispatchInput,
+	) (*service.AccountShareBillingDispatch, error)
+}
+
+func beginAccountShareBillingDispatch(
+	ctx context.Context,
+	dispatcher accountShareBillingDispatcher,
+	selection *service.AccountSelectionResult,
+	attemptNo *int,
+	input service.AccountShareBillingDispatchInput,
+) (context.Context, error) {
+	if selection == nil || !selection.AccountShareMode {
+		return ctx, nil
+	}
+	if dispatcher == nil || selection.Account == nil || selection.RuntimeLease == nil || attemptNo == nil {
+		return ctx, service.ErrAccountShareRuntimeLeaseUnavailable
+	}
+	*attemptNo = *attemptNo + 1
+	input.AttemptNo = *attemptNo
+	input.Account = selection.Account
+	dispatch, err := dispatcher.BeginAccountShareBillingDispatch(ctx, input)
+	if err != nil {
+		return ctx, err
+	}
+	if dispatch == nil {
+		return ctx, service.ErrServiceUnavailable
+	}
+	return service.WithAccountShareBillingDispatch(ctx, dispatch), nil
+}
+
+func completeAccountShareBillingDispatchWithoutUsage(
+	ctx context.Context,
+	forwardErr error,
+	hasBillableUsage bool,
+	streamed bool,
+) error {
+	if forwardErr == nil || hasBillableUsage {
+		return nil
+	}
+	_, err := service.CompleteAccountShareBillingDispatchWithoutUsage(
+		ctx,
+		service.AccountShareBillingResponseSummaryV1{
+			SchemaVersion: service.AccountShareBillingResponseSchemaV1,
+			Streamed:      streamed,
+			ErrorCode:     "forward_failed_no_usage",
+		},
+	)
+	return err
+}
+
+func accountShareBillingRequestType(stream bool) service.RequestType {
+	if stream {
+		return service.RequestTypeStream
+	}
+	return service.RequestTypeSync
+}
+
 // IncrementWaitCount increments the wait count for a user
 func (h *ConcurrencyHelper) IncrementWaitCount(ctx context.Context, userID int64, maxWait int) (bool, error) {
 	return h.concurrencyService.IncrementWaitCount(ctx, userID, maxWait)

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -49,6 +51,15 @@ var (
 	ErrOwnedAgentIdentityWSInvalidatorUnavailable = infraerrors.InternalServer("OWNED_AGENT_IDENTITY_WS_INVALIDATOR_UNAVAILABLE", "Codex Agent Identity connection invalidation is unavailable")
 	ErrOwnedAccountShareModeBoundaryUnavailable   = infraerrors.InternalServer("OWNED_ACCOUNT_SHARE_MODE_BOUNDARY_UNAVAILABLE", "account share mode boundary check is unavailable")
 	ErrOwnedAccountProxyValidationUnavailable     = infraerrors.InternalServer("OWNED_ACCOUNT_PROXY_VALIDATION_UNAVAILABLE", "owned account proxy validation is unavailable")
+	ErrAccountDeletionBlocked                     = infraerrors.Conflict("ACCOUNT_DELETION_BLOCKED", "account cannot be deleted while account-share usage is still active")
+	ErrAccountDeletionGuardUnavailable            = infraerrors.InternalServer("ACCOUNT_DELETION_GUARD_UNAVAILABLE", "account deletion safety check is unavailable")
+	ErrAccountMutationBlocked                     = infraerrors.Conflict("ACCOUNT_MUTATION_BLOCKED_BY_ROOM", "account-sensitive settings cannot be changed while the account is assigned to an active room")
+	ErrAccountMutationForceRequired               = infraerrors.Conflict("ACCOUNT_MUTATION_FORCE_REQUIRED", "administrator confirmation is required to change room-assigned account settings")
+	ErrAccountMutationVersionConflict             = infraerrors.Conflict("ACCOUNT_MUTATION_VERSION_CONFLICT", "the room changed after it was loaded; refresh and confirm again")
+	ErrAccountMutationGuardUnavailable            = infraerrors.InternalServer("ACCOUNT_MUTATION_GUARD_UNAVAILABLE", "account mutation safety check is unavailable")
+	ErrAccountMutationStale                       = infraerrors.Conflict("ACCOUNT_MUTATION_STALE", "the account changed after it was loaded; refresh and try again")
+	ErrAccountMutationSystemIntentInvalid         = infraerrors.InternalServer("ACCOUNT_MUTATION_SYSTEM_INTENT_INVALID", "system account mutation exceeded its allowed fields")
+	ErrCRSPreviewSnapshotUnavailable              = infraerrors.InternalServer("CRS_PREVIEW_SNAPSHOT_UNAVAILABLE", "CRS account room snapshot lookup is unavailable")
 )
 
 const AccountListGroupUngrouped int64 = -1
@@ -77,6 +88,28 @@ const (
 	AccountLevelTeam    = domain.AccountLevelTeam
 	AccountLevelK12     = domain.AccountLevelK12
 )
+
+// CRSAccountRoomBindingSnapshot is the optimistic-concurrency state exposed by
+// CRS preview for a non-deleted room that currently uses a local account.
+type CRSAccountRoomBindingSnapshot struct {
+	ListingID  int64 `json:"listing_id"`
+	RowVersion int64 `json:"row_version"`
+}
+
+// CRSAccountPreviewSnapshot is a read-only local snapshot used to classify CRS
+// accounts and prepare the explicit administrator force-edit contract.
+type CRSAccountPreviewSnapshot struct {
+	CRSAccountID   string
+	LocalAccountID int64
+	RoomBindings   []CRSAccountRoomBindingSnapshot
+}
+
+// CRSPreviewSnapshotRepository is deliberately separate from AccountRepository.
+// Preview must fail closed when this capability is absent rather than treating a
+// potentially room-bound account as safe.
+type CRSPreviewSnapshotRepository interface {
+	ListCRSAccountPreviewSnapshots(ctx context.Context) ([]CRSAccountPreviewSnapshot, error)
+}
 
 type AccountRepository interface {
 	Create(ctx context.Context, account *Account) error
@@ -137,6 +170,258 @@ type AccountRepository interface {
 	ResetQuotaUsed(ctx context.Context, id int64) error
 }
 
+// AccountDeletionGuardRepository owns the atomic safety boundary for physical
+// account deletion. Implementations must lock the target account rows, inspect
+// all account-share blockers, and delete only when every target is safe.
+//
+// This remains a separate capability so legacy/test repositories cannot gain an
+// unsafe default implementation. AccountService fails closed when it is absent.
+type AccountDeletionGuardRepository interface {
+	DeleteIfUnblocked(ctx context.Context, accountID int64) error
+	DeleteManyIfUnblocked(ctx context.Context, accountIDs []int64) error
+}
+
+type AccountOwnedDeletionGuardRepository interface {
+	DeleteOwnedIfUnblocked(ctx context.Context, ownerUserID, accountID int64) error
+	DeleteManyOwnedIfUnblocked(ctx context.Context, ownerUserID int64, accountIDs []int64) error
+}
+
+const (
+	AccountMutationIntentOwner              = "owner_edit"
+	AccountMutationIntentAdmin              = "admin_edit"
+	AccountMutationIntentSystemTokenRefresh = "system_token_refresh"
+)
+
+type AccountMutationGuardTarget struct {
+	AccountID         int64
+	ExpectedUpdatedAt time.Time
+	After             *Account
+	GroupIDs          []int64
+}
+
+type AccountMutationGuardRequest struct {
+	Targets                 []AccountMutationGuardTarget
+	ActorUserID             int64
+	ActorIsAdmin            bool
+	Intent                  string
+	ForceActiveEdit         bool
+	Confirmed               bool
+	Reason                  string
+	ExpectedListingVersion  *int64
+	ExpectedListingVersions map[int64]int64
+	OperationID             string
+}
+
+// AccountMutationGuardRepository owns the atomic account/room boundary. The
+// implementation discovers room bindings without locks, then locks referenced
+// live rooms before account rows in a stable order. It revalidates bindings and
+// optimistic versions inside the transaction, runs mutate, and appends
+// immutable room events for administrator-forced changes.
+type AccountMutationGuardRepository interface {
+	WithAccountMutationGuard(ctx context.Context, request AccountMutationGuardRequest, mutate func(context.Context) error) error
+}
+
+type accountMutationGuardContextKey struct{}
+
+func WithAccountMutationGuardContext(ctx context.Context) context.Context {
+	return context.WithValue(ctx, accountMutationGuardContextKey{}, true)
+}
+
+func AccountMutationGuardActive(ctx context.Context) bool {
+	active, _ := ctx.Value(accountMutationGuardContextKey{}).(bool)
+	return active
+}
+
+type AccountMutationDiff struct {
+	ChangedFields         []string
+	CredentialChangedKeys []string
+	ExtraChangedKeys      []string
+	Sensitive             bool
+}
+
+var systemTokenRefreshCredentialKeys = map[string]struct{}{
+	"_token_version":          {},
+	"access_token":            {},
+	"refresh_token":           {},
+	"id_token":                {},
+	"expires_at":              {},
+	"expires_in":              {},
+	"token_type":              {},
+	"scope":                   {},
+	"client_id":               {},
+	"email":                   {},
+	"email_address":           {},
+	"chatgpt_account_id":      {},
+	"chatgpt_user_id":         {},
+	"organization_id":         {},
+	"plan_type":               {},
+	"subscription_expires_at": {},
+	"project_id":              {},
+	"tier_id":                 {},
+	"oauth_type":              {},
+	"subscription_tier":       {},
+	"entitlement_status":      {},
+	"base_url":                {},
+	"task_id":                 {},
+	"drive_storage_limit":     {},
+	"drive_storage_usage":     {},
+	"drive_tier_updated_at":   {},
+}
+
+func ClassifyAccountMutation(before, after *Account, beforeGroupIDs, afterGroupIDs []int64) AccountMutationDiff {
+	if before == nil || after == nil {
+		return AccountMutationDiff{Sensitive: true, ChangedFields: []string{"account"}}
+	}
+	diff := AccountMutationDiff{}
+	add := func(field string, sensitive bool) {
+		diff.ChangedFields = append(diff.ChangedFields, field)
+		diff.Sensitive = diff.Sensitive || sensitive
+	}
+	if before.Name != after.Name {
+		add("name", false)
+	}
+	if !reflect.DeepEqual(before.Notes, after.Notes) {
+		add("notes", false)
+	}
+	if before.Platform != after.Platform {
+		add("platform", true)
+	}
+	if NormalizeAccountLevel(before.AccountLevel) != NormalizeAccountLevel(after.AccountLevel) {
+		add("account_level", true)
+	}
+	if before.Type != after.Type {
+		add("type", true)
+	}
+	diff.CredentialChangedKeys = changedAccountMapKeys(before.Credentials, after.Credentials)
+	if len(diff.CredentialChangedKeys) > 0 {
+		add("credentials", true)
+	}
+	diff.ExtraChangedKeys = changedAccountMapKeys(before.Extra, after.Extra)
+	if len(diff.ExtraChangedKeys) > 0 {
+		extraSensitive := false
+		for _, key := range diff.ExtraChangedKeys {
+			if key != "privacy_mode" {
+				extraSensitive = true
+				break
+			}
+		}
+		add("extra", extraSensitive)
+	}
+	if !equalOptionalInt64(before.OwnerUserID, after.OwnerUserID) {
+		add("owner_user_id", true)
+	}
+	if NormalizeAccountShareMode(before.ShareMode) != NormalizeAccountShareMode(after.ShareMode) {
+		add("share_mode", true)
+	}
+	if NormalizeAccountShareStatus(before.ShareStatus) != NormalizeAccountShareStatus(after.ShareStatus) {
+		add("share_status", true)
+	}
+	if !equalOptionalInt64(before.SharePolicyID, after.SharePolicyID) {
+		add("share_policy_id", true)
+	}
+	if !equalOptionalInt64(before.ProxyID, after.ProxyID) {
+		add("proxy_id", true)
+	}
+	if before.Concurrency != after.Concurrency {
+		add("concurrency", after.Concurrency < before.Concurrency)
+	}
+	if before.Priority != after.Priority {
+		add("priority", false)
+	}
+	if !equalOptionalFloat64(before.RateMultiplier, after.RateMultiplier) {
+		add("rate_multiplier", true)
+	}
+	if !equalOptionalInt(before.LoadFactor, after.LoadFactor) {
+		add("load_factor", true)
+	}
+	if before.Status != after.Status {
+		add("status", before.Status == StatusActive && after.Status != StatusActive)
+	}
+	if before.Schedulable != after.Schedulable {
+		add("schedulable", before.Schedulable && !after.Schedulable)
+	}
+	if !equalOptionalTime(before.ExpiresAt, after.ExpiresAt) {
+		add("expires_at", true)
+	}
+	if before.AutoPauseOnExpired != after.AutoPauseOnExpired {
+		add("auto_pause_on_expired", true)
+	}
+	if !equalNormalizedAccountGroupIDs(beforeGroupIDs, afterGroupIDs) {
+		add("group_ids", true)
+	}
+	sort.Strings(diff.ChangedFields)
+	return diff
+}
+
+func AccountMutationAllowedForSystemTokenRefresh(diff AccountMutationDiff) bool {
+	if len(diff.ChangedFields) == 0 {
+		return true
+	}
+	if len(diff.ChangedFields) != 1 || diff.ChangedFields[0] != "credentials" {
+		return false
+	}
+	for _, key := range diff.CredentialChangedKeys {
+		if _, ok := systemTokenRefreshCredentialKeys[strings.ToLower(strings.TrimSpace(key))]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func changedAccountMapKeys(before, after map[string]any) []string {
+	keys := make(map[string]struct{}, len(before)+len(after))
+	for key := range before {
+		keys[key] = struct{}{}
+	}
+	for key := range after {
+		keys[key] = struct{}{}
+	}
+	changed := make([]string, 0, len(keys))
+	for key := range keys {
+		if !reflect.DeepEqual(before[key], after[key]) {
+			changed = append(changed, key)
+		}
+	}
+	sort.Strings(changed)
+	return changed
+}
+
+func equalOptionalInt64(left, right *int64) bool {
+	return (left == nil && right == nil) || (left != nil && right != nil && *left == *right)
+}
+
+func equalOptionalInt(left, right *int) bool {
+	return (left == nil && right == nil) || (left != nil && right != nil && *left == *right)
+}
+
+func equalOptionalFloat64(left, right *float64) bool {
+	return (left == nil && right == nil) || (left != nil && right != nil && *left == *right)
+}
+
+func equalOptionalTime(left, right *time.Time) bool {
+	return (left == nil && right == nil) || (left != nil && right != nil && left.Equal(*right))
+}
+
+func equalNormalizedAccountGroupIDs(left, right []int64) bool {
+	normalize := func(values []int64) []int64 {
+		seen := make(map[int64]struct{}, len(values))
+		out := make([]int64, 0, len(values))
+		for _, value := range values {
+			if value <= 0 {
+				continue
+			}
+			if _, ok := seen[value]; ok {
+				continue
+			}
+			seen[value] = struct{}{}
+			out = append(out, value)
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+		return out
+	}
+	return reflect.DeepEqual(normalize(left), normalize(right))
+}
+
 // AccountBulkUpdate describes the fields that can be updated in a bulk operation.
 // Nil pointers mean "do not change".
 type AccountBulkUpdate struct {
@@ -190,6 +475,7 @@ type UpdateAccountRequest struct {
 	ExpiresAt          *time.Time      `json:"expires_at"`
 	ClearExpiresAt     bool            `json:"-"`
 	AutoPauseOnExpired *bool           `json:"auto_pause_on_expired"`
+	MutationIntent     string          `json:"-"`
 }
 
 type OwnedPublicShareApprovalOptions struct {
@@ -732,13 +1018,27 @@ func (s *AccountService) updateOwnedAgentIdentityImport(
 	}
 	account.ExpiresAt = nil
 	account.GroupIDs = append([]int64(nil), groupIDs...)
-	if err := s.accountRepo.Update(ctx, account); err != nil {
-		return nil, fmt.Errorf("update owned Agent Identity account: %w", err)
+	if err := s.withAccountMutationGuard(ctx, AccountMutationGuardRequest{
+		Targets: []AccountMutationGuardTarget{{
+			AccountID:         account.ID,
+			ExpectedUpdatedAt: before.UpdatedAt,
+			After:             account,
+			GroupIDs:          append([]int64(nil), groupIDs...),
+		}},
+		ActorUserID: ownerUserID,
+		Intent:      AccountMutationIntentOwner,
+	}, func(txCtx context.Context) error {
+		if updateErr := s.accountRepo.Update(txCtx, account); updateErr != nil {
+			return fmt.Errorf("update owned Agent Identity account: %w", updateErr)
+		}
+		if bindErr := s.accountRepo.BindGroups(txCtx, account.ID, groupIDs); bindErr != nil {
+			return fmt.Errorf("bind private Agent Identity account group: %w", bindErr)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	s.agentIdentityWSInvalidator.InvalidateAgentIdentityWSConnections(account.ID)
-	if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
-		return nil, fmt.Errorf("bind private Agent Identity account group: %w", err)
-	}
 	s.notifyAccountChanged(ctx, before, account)
 	return account, nil
 }
@@ -1546,6 +1846,9 @@ func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID
 		return nil, err
 	}
 	account.AccountLevel = NormalizeOpenAIAccountLevelWithConfigs(account.Platform, account.AccountLevel, account.Credentials, account.Extra, levelConfigs)
+	if strings.TrimSpace(req.MutationIntent) == AccountMutationIntentSystemTokenRefresh {
+		account.AccountLevel = before.AccountLevel
+	}
 	if req.ProxyID != nil {
 		proxyRequired := ownedPersonalAccountRequiresProxy(account, levelConfigs)
 		if *req.ProxyID <= 0 {
@@ -1669,29 +1972,87 @@ func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID
 		}
 		shouldBindGroups = true
 	}
-	if req.LoadFactor != nil {
-		repo, ok := s.accountRepo.(ownedLoadFactorCreditAccountRepository)
-		if !ok {
-			return nil, ErrOwnedAccountLoadFactorCreditsUnavailable
-		}
-		account, err = repo.UpdateOwnedAccountWithLoadFactorCredits(ctx, ownerUserID, account)
-		if err != nil {
-			return nil, fmt.Errorf("update account: %w", err)
-		}
-	} else if err := s.accountRepo.Update(ctx, account); err != nil {
-		return nil, fmt.Errorf("update account: %w", err)
+	targetGroupIDs := append([]int64(nil), before.GroupIDs...)
+	if shouldBindGroups {
+		targetGroupIDs = append([]int64(nil), groupIDs...)
 	}
-	if shouldInvalidateAgentIdentityWS {
+	intent := strings.TrimSpace(req.MutationIntent)
+	if intent == "" {
+		intent = AccountMutationIntentOwner
+	}
+	guardRequest := AccountMutationGuardRequest{
+		Targets: []AccountMutationGuardTarget{{
+			AccountID:         account.ID,
+			ExpectedUpdatedAt: before.UpdatedAt,
+			After:             account,
+			GroupIDs:          targetGroupIDs,
+		}},
+		ActorUserID: ownerUserID,
+		Intent:      intent,
+	}
+	_, atomicMutationGuard := s.accountRepo.(AccountMutationGuardRepository)
+	if err := s.withAccountMutationGuard(ctx, guardRequest, func(txCtx context.Context) error {
+		if req.LoadFactor != nil {
+			repo, ok := s.accountRepo.(ownedLoadFactorCreditAccountRepository)
+			if !ok {
+				return ErrOwnedAccountLoadFactorCreditsUnavailable
+			}
+			var updateErr error
+			account, updateErr = repo.UpdateOwnedAccountWithLoadFactorCredits(txCtx, ownerUserID, account)
+			if updateErr != nil {
+				return fmt.Errorf("update account: %w", updateErr)
+			}
+		} else if updateErr := s.accountRepo.Update(txCtx, account); updateErr != nil {
+			return fmt.Errorf("update account: %w", updateErr)
+		}
+		if shouldInvalidateAgentIdentityWS && !atomicMutationGuard {
+			s.agentIdentityWSInvalidator.InvalidateAgentIdentityWSConnections(account.ID)
+		}
+		if shouldBindGroups {
+			if bindErr := s.accountRepo.BindGroups(txCtx, account.ID, groupIDs); bindErr != nil {
+				return fmt.Errorf("bind groups: %w", bindErr)
+			}
+			account.GroupIDs = append([]int64(nil), groupIDs...)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	if shouldInvalidateAgentIdentityWS && atomicMutationGuard && !AccountMutationGuardActive(ctx) {
 		s.agentIdentityWSInvalidator.InvalidateAgentIdentityWSConnections(account.ID)
 	}
-	if shouldBindGroups {
-		if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
-			return nil, fmt.Errorf("bind groups: %w", err)
-		}
-		account.GroupIDs = append([]int64(nil), groupIDs...)
+	if !AccountMutationGuardActive(ctx) {
+		s.notifyAccountChanged(ctx, before, account)
 	}
-	s.notifyAccountChanged(ctx, before, account)
 	return account, nil
+}
+
+func (s *AccountService) withAccountMutationGuard(
+	ctx context.Context,
+	request AccountMutationGuardRequest,
+	mutate func(context.Context) error,
+) error {
+	if AccountMutationGuardActive(ctx) {
+		return mutate(ctx)
+	}
+	repo, ok := s.accountRepo.(AccountMutationGuardRepository)
+	if ok && repo != nil {
+		return repo.WithAccountMutationGuard(ctx, request, mutate)
+	}
+	for _, target := range request.Targets {
+		if target.After == nil {
+			continue
+		}
+		if target.After.AccountShareModeListingID != nil ||
+			(target.After.ExternalPlacement != nil && target.After.ExternalPlacement.Target == AccountExternalPlacementRoom) {
+			return ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{
+				"account_id": fmt.Sprintf("%d", target.AccountID),
+			})
+		}
+	}
+	// Lightweight test/legacy repositories cannot contain the SQL room
+	// projection. Production accountRepository always implements the guard.
+	return mutate(ctx)
 }
 
 func ownedAgentIdentityAuthMaterialChanged(before, after *Account) bool {
@@ -1727,40 +2088,114 @@ func (s *AccountService) DeleteOwned(ctx context.Context, ownerUserID, accountID
 	if err != nil {
 		return err
 	}
-	if err := s.accountRepo.Delete(ctx, accountID); err != nil {
+	deletionRepo, err := s.accountOwnedDeletionGuardRepository(map[string]string{
+		"account_id": fmt.Sprintf("%d", accountID),
+		"operation":  "delete_owned_account",
+	})
+	if err != nil {
+		return err
+	}
+	if err := deletionRepo.DeleteOwnedIfUnblocked(ctx, ownerUserID, accountID); err != nil {
 		return fmt.Errorf("delete account: %w", err)
 	}
 	s.notifyAccountDeleted(ctx, account)
 	return nil
 }
 
-// Delete 删除账号
-// 优化：使用 ExistsByID 替代 GetByID 进行存在性检查，
-// 避免加载完整账号对象及其关联数据，提升删除操作的性能
 func (s *AccountService) BulkDeleteOwned(ctx context.Context, ownerUserID int64, accountIDs []int64) (*BulkUpdateAccountsResult, error) {
 	if ownerUserID <= 0 {
 		return nil, ErrUserNotFound
 	}
 	ids := normalizeOwnedBulkAccountIDs(accountIDs)
+	if len(ids) == 0 {
+		return &BulkUpdateAccountsResult{
+			SuccessIDs: []int64{},
+			FailedIDs:  []int64{},
+			Results:    []BulkUpdateAccountResult{},
+		}, nil
+	}
+
+	deletionRepo, err := s.accountOwnedDeletionGuardRepository(map[string]string{
+		"account_ids": joinInt64Metadata(ids),
+		"operation":   "bulk_delete_owned_accounts",
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	accounts, err := s.accountRepo.GetByIDs(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("get accounts for bulk delete: %w", err)
+	}
+	accountsByID := make(map[int64]*Account, len(accounts))
+	for _, account := range accounts {
+		if account == nil {
+			return nil, ErrAccountNotFound
+		}
+		if account.OwnerUserID == nil || *account.OwnerUserID != ownerUserID {
+			return nil, ErrAccountNotFound
+		}
+		accountsByID[account.ID] = account
+	}
+	if len(accountsByID) != len(ids) {
+		return nil, ErrAccountNotFound
+	}
+	for _, accountID := range ids {
+		if accountsByID[accountID] == nil {
+			return nil, ErrAccountNotFound
+		}
+	}
+
+	if err := deletionRepo.DeleteManyOwnedIfUnblocked(ctx, ownerUserID, ids); err != nil {
+		return nil, fmt.Errorf("bulk delete accounts: %w", err)
+	}
+
 	result := &BulkUpdateAccountsResult{
 		SuccessIDs: make([]int64, 0, len(ids)),
-		FailedIDs:  make([]int64, 0, len(ids)),
+		FailedIDs:  []int64{},
 		Results:    make([]BulkUpdateAccountResult, 0, len(ids)),
 	}
 	for _, accountID := range ids {
-		entry := BulkUpdateAccountResult{AccountID: accountID}
-		if err := s.DeleteOwned(ctx, ownerUserID, accountID); err != nil {
-			entry.Error = err.Error()
-			result.Failed++
-			result.FailedIDs = append(result.FailedIDs, accountID)
-		} else {
-			entry.Success = true
-			result.Success++
-			result.SuccessIDs = append(result.SuccessIDs, accountID)
-		}
+		entry := BulkUpdateAccountResult{AccountID: accountID, Success: true}
+		result.Success++
+		result.SuccessIDs = append(result.SuccessIDs, accountID)
 		result.Results = append(result.Results, entry)
+		s.notifyAccountDeleted(ctx, accountsByID[accountID])
 	}
 	return result, nil
+}
+
+func (s *AccountService) accountDeletionGuardRepository(metadata map[string]string) (AccountDeletionGuardRepository, error) {
+	if s == nil || s.accountRepo == nil {
+		return nil, ErrAccountDeletionGuardUnavailable.WithMetadata(metadata)
+	}
+	repo, ok := s.accountRepo.(AccountDeletionGuardRepository)
+	if !ok || repo == nil {
+		return nil, ErrAccountDeletionGuardUnavailable.WithMetadata(metadata)
+	}
+	return repo, nil
+}
+
+func (s *AccountService) accountOwnedDeletionGuardRepository(metadata map[string]string) (AccountOwnedDeletionGuardRepository, error) {
+	if s == nil || s.accountRepo == nil {
+		return nil, ErrAccountDeletionGuardUnavailable.WithMetadata(metadata)
+	}
+	repo, ok := s.accountRepo.(AccountOwnedDeletionGuardRepository)
+	if !ok || repo == nil {
+		return nil, ErrAccountDeletionGuardUnavailable.WithMetadata(metadata)
+	}
+	return repo, nil
+}
+
+func joinInt64Metadata(values []int64) string {
+	if len(values) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, fmt.Sprintf("%d", value))
+	}
+	return strings.Join(parts, ",")
 }
 
 func normalizeOwnedBulkAccountIDs(ids []int64) []int64 {
@@ -2051,6 +2486,8 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 		return nil, err
 	}
 	updatedIdentityAccounts := make([]*Account, 0, len(accountIDs))
+	agentIdentityWSInvalidationIDs := make([]int64, 0, len(accountIDs))
+	guardTargets := make([]AccountMutationGuardTarget, 0, len(accountIDs))
 	for _, accountID := range accountIDs {
 		account := accountsByID[accountID]
 		if account == nil || account.OwnerUserID == nil || *account.OwnerUserID != ownerUserID {
@@ -2088,6 +2525,31 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 		if err := ValidateAccountLoadFactor(nextLoadFactor); err != nil {
 			return nil, err
 		}
+		nextAccount.Concurrency = nextConcurrency
+		nextAccount.LoadFactor = nextLoadFactor
+		nextAccount.AccountLevel = nextAccountLevel
+		if input.Priority != nil {
+			nextAccount.Priority = *input.Priority
+		}
+		if status != "" {
+			nextAccount.Status = status
+		}
+		if input.Schedulable != nil {
+			nextAccount.Schedulable = *input.Schedulable
+		}
+		if shareMode != "" {
+			nextAccount.ShareMode = shareMode
+		}
+		if ownedAgentIdentityAuthMaterialChanged(account, &nextAccount) ||
+			ownedAgentIdentityPublicAccessRevoked(account, &nextAccount) {
+			agentIdentityWSInvalidationIDs = append(agentIdentityWSInvalidationIDs, account.ID)
+		}
+		guardTargets = append(guardTargets, AccountMutationGuardTarget{
+			AccountID:         account.ID,
+			ExpectedUpdatedAt: account.UpdatedAt,
+			After:             &nextAccount,
+			GroupIDs:          append([]int64(nil), account.GroupIDs...),
+		})
 		if len(input.Credentials) > 0 || len(input.Extra) > 0 {
 			if err := s.ensureOwnedAccountNotDuplicate(ctx, ownerUserID, &nextAccount, accountIDs...); err != nil {
 				return nil, err
@@ -2101,52 +2563,61 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 
 	requiresPerAccountUpdate := input.LoadFactor != nil || shareMode != "" || len(input.Credentials) > 0 || len(input.Extra) > 0
 	if requiresPerAccountUpdate {
-		for _, accountID := range accountIDs {
-			account := accountsByID[accountID]
-			entry := BulkUpdateAccountResult{AccountID: accountID}
-			updateReq := UpdateAccountRequest{
-				Concurrency:  input.Concurrency,
-				LoadFactor:   input.LoadFactor,
-				Priority:     input.Priority,
-				Schedulable:  input.Schedulable,
-				AccountLevel: input.AccountLevel,
-			}
-			if status != "" {
-				updateReq.Status = &status
-			}
-			if shareMode != "" {
-				updateReq.ShareMode = &shareMode
-			}
-			if len(input.Credentials) > 0 {
-				credentials := mergeAccountMap(account.Credentials, input.Credentials)
-				credentials, _ = applyOwnedPersonalAccountTemplateToMaps(account.Platform, credentials, account.Extra)
-				updateReq.Credentials = &credentials
-			}
-			if len(input.Extra) > 0 {
-				extra := mergeAccountMap(account.Extra, input.Extra)
-				_, extra = applyOwnedPersonalAccountTemplateToMaps(account.Platform, account.Credentials, extra)
-				extra, err = NormalizeCodexQuotaLimitExtra(account.Platform, account.Type, extra)
-				if err != nil {
-					entry.Error = err.Error()
-					result.Failed++
-					result.FailedIDs = append(result.FailedIDs, accountID)
-					result.Results = append(result.Results, entry)
-					continue
+		guardRequest := AccountMutationGuardRequest{
+			Targets:     guardTargets,
+			ActorUserID: ownerUserID,
+			Intent:      AccountMutationIntentOwner,
+		}
+		if err := s.withAccountMutationGuard(ctx, guardRequest, func(txCtx context.Context) error {
+			for _, accountID := range accountIDs {
+				account := accountsByID[accountID]
+				updateReq := UpdateAccountRequest{
+					Concurrency:  input.Concurrency,
+					LoadFactor:   input.LoadFactor,
+					Priority:     input.Priority,
+					Schedulable:  input.Schedulable,
+					AccountLevel: input.AccountLevel,
 				}
-				updateReq.Extra = &extra
+				if status != "" {
+					updateReq.Status = &status
+				}
+				if shareMode != "" {
+					updateReq.ShareMode = &shareMode
+				}
+				if len(input.Credentials) > 0 {
+					credentials := mergeAccountMap(account.Credentials, input.Credentials)
+					credentials, _ = applyOwnedPersonalAccountTemplateToMaps(account.Platform, credentials, account.Extra)
+					updateReq.Credentials = &credentials
+				}
+				if len(input.Extra) > 0 {
+					extra := mergeAccountMap(account.Extra, input.Extra)
+					_, extra = applyOwnedPersonalAccountTemplateToMaps(account.Platform, account.Credentials, extra)
+					extra, normalizeErr := NormalizeCodexQuotaLimitExtra(account.Platform, account.Type, extra)
+					if normalizeErr != nil {
+						return normalizeErr
+					}
+					updateReq.Extra = &extra
+				}
+				if _, updateErr := s.UpdateOwned(txCtx, ownerUserID, accountID, updateReq); updateErr != nil {
+					return updateErr
+				}
 			}
-			if _, err := s.UpdateOwned(ctx, ownerUserID, accountID, updateReq); err != nil {
-				entry.Error = err.Error()
-				result.Failed++
-				result.FailedIDs = append(result.FailedIDs, accountID)
-				result.Results = append(result.Results, entry)
-				continue
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+		if _, atomicGuard := s.accountRepo.(AccountMutationGuardRepository); atomicGuard {
+			for _, accountID := range agentIdentityWSInvalidationIDs {
+				s.agentIdentityWSInvalidator.InvalidateAgentIdentityWSConnections(accountID)
 			}
-			entry.Success = true
+		}
+		for _, accountID := range accountIDs {
+			entry := BulkUpdateAccountResult{AccountID: accountID, Success: true}
 			result.Success++
 			result.SuccessIDs = append(result.SuccessIDs, accountID)
 			result.Results = append(result.Results, entry)
 		}
+		s.notifyBulkOwnedAccountsChanged(ctx, accountsByID, accountIDs)
 		return result, nil
 	}
 
@@ -2166,12 +2637,21 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 		repoUpdates.Status = &status
 	}
 
-	updated, err := s.accountRepo.BulkUpdate(ctx, accountIDs, repoUpdates)
-	if err != nil {
-		return nil, fmt.Errorf("bulk update owned accounts: %w", err)
-	}
-	if updated != int64(len(accountIDs)) {
-		return nil, ErrAccountNotFound
+	if err := s.withAccountMutationGuard(ctx, AccountMutationGuardRequest{
+		Targets:     guardTargets,
+		ActorUserID: ownerUserID,
+		Intent:      AccountMutationIntentOwner,
+	}, func(txCtx context.Context) error {
+		updated, updateErr := s.accountRepo.BulkUpdate(txCtx, accountIDs, repoUpdates)
+		if updateErr != nil {
+			return fmt.Errorf("bulk update owned accounts: %w", updateErr)
+		}
+		if updated != int64(len(accountIDs)) {
+			return ErrAccountNotFound
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	for _, accountID := range accountIDs {
 		entry := BulkUpdateAccountResult{AccountID: accountID, Success: true}
@@ -2198,7 +2678,14 @@ func (s *AccountService) Delete(ctx context.Context, id int64) error {
 		return ErrAccountNotFound
 	}
 
-	if err := s.accountRepo.Delete(ctx, id); err != nil {
+	deletionRepo, err := s.accountDeletionGuardRepository(map[string]string{
+		"account_id": fmt.Sprintf("%d", id),
+		"operation":  "delete_account",
+	})
+	if err != nil {
+		return err
+	}
+	if err := deletionRepo.DeleteIfUnblocked(ctx, id); err != nil {
 		return fmt.Errorf("delete account: %w", err)
 	}
 

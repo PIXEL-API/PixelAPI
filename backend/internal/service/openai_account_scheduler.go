@@ -1509,15 +1509,11 @@ func (s *OpenAIGatewayService) selectAccountShareModeBoundAccount(
 		return nil, decision, true, ErrNoAvailableAccounts
 	}
 
-	release := func() {
-		if accountSlot.ReleaseFunc != nil {
-			accountSlot.ReleaseFunc()
-		}
-		if membershipSlot.ReleaseFunc != nil {
-			membershipSlot.ReleaseFunc()
-		}
+	selection, err := newAccountShareModeRuntimeSelection(ctx, account, accountSlot, membershipSlot)
+	if err != nil {
+		return nil, decision, true, err
 	}
-	return newAccountShareModeSelectionResult(account, true, release, nil), decision, true, nil
+	return selection, decision, true, nil
 }
 
 func (s *OpenAIGatewayService) selectAccountWithScheduler(
@@ -1534,7 +1530,7 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
 	decision := OpenAIAccountScheduleDecision{}
 	if selection, accountModeDecision, handled, err := s.selectAccountShareModeBoundAccount(ctx, groupID, requestedModel, excludedIDs, requiredTransport, requiredImageCapability, requiredEndpointCapability, requireCompact); handled {
-		return selection, accountModeDecision, err
+		return selection, accountModeDecision, wrapAccountShareModeSelectionError(err)
 	}
 	scheduler := s.getOpenAIAccountScheduler(ctx)
 	if scheduler == nil {

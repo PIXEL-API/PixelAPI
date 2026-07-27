@@ -11,7 +11,14 @@ vi.mock('vue-i18n', () => ({
 const mountedWrappers: VueWrapper[] = []
 
 const mountDialog = (
-  props: { show: boolean; title: string; closeOnEscape?: boolean; zIndex?: number },
+  props: {
+    show: boolean
+    title: string
+    closeOnEscape?: boolean
+    closeOnClickOutside?: boolean
+    closeDisabled?: boolean
+    zIndex?: number
+  },
   slotButtons: Array<{ id: string; label: string; tabindex?: number }> = []
 ) => {
   const wrapper = mount(BaseDialog, {
@@ -111,6 +118,38 @@ describe('BaseDialog focus management', () => {
     const event = dispatchTab()
     expect(event.defaultPrevented).toBe(true)
     expect(document.activeElement).toBe(closeButton)
+  })
+
+  it('blocks header, outside-click, and Escape close requests while closeDisabled is active', async () => {
+    const wrapper = mountDialog({
+      show: true,
+      title: 'Busy dialog',
+      closeOnClickOutside: true,
+      closeDisabled: true,
+    })
+    await nextTick()
+
+    const closeButton = document.body.querySelector<HTMLButtonElement>('.modal-header button')!
+    const overlay = document.body.querySelector<HTMLElement>('.modal-overlay')!
+
+    expect(closeButton.disabled).toBe(true)
+    closeButton.click()
+    overlay.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    )
+    expect(wrapper.emitted('close')).toBeUndefined()
+
+    await wrapper.setProps({ closeDisabled: false })
+    await nextTick()
+
+    expect(closeButton.disabled).toBe(false)
+    closeButton.click()
+    overlay.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    )
+    expect(wrapper.emitted('close')).toHaveLength(3)
   })
 
   it('closes only the top nested dialog and restores focus through the stack', async () => {

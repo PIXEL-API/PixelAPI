@@ -66,6 +66,56 @@ func TestExecuteAdminIdempotentJSONFailCloseOnStoreUnavailable(t *testing.T) {
 	require.Equal(t, 0, executed, "fail-close should block business execution when idempotency store is unavailable")
 }
 
+func TestExecuteAdminStrictIdempotentJSONFailsClosedWithoutCoordinator(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service.SetDefaultIdempotencyCoordinator(nil)
+
+	var executed int
+	router := gin.New()
+	router.POST("/idempotent", func(c *gin.Context) {
+		executeAdminStrictIdempotentJSON(c, "admin.test.strict", map[string]any{"a": 1}, time.Minute, func(ctx context.Context) (any, error) {
+			executed++
+			return gin.H{"ok": true}, nil
+		})
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/idempotent", bytes.NewBufferString(`{"a":1}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "strict-key")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	require.Zero(t, executed)
+}
+
+func TestExecuteAdminStrictIdempotentJSONRequiresKeyDuringObserveOnly(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service.SetDefaultIdempotencyCoordinator(
+		service.NewIdempotencyCoordinator(newMemoryIdempotencyRepoStub(), service.DefaultIdempotencyConfig()),
+	)
+	t.Cleanup(func() {
+		service.SetDefaultIdempotencyCoordinator(nil)
+	})
+
+	var executed int
+	router := gin.New()
+	router.POST("/idempotent", func(c *gin.Context) {
+		executeAdminStrictIdempotentJSON(c, "admin.test.strict", map[string]any{"a": 1}, time.Minute, func(ctx context.Context) (any, error) {
+			executed++
+			return gin.H{"ok": true}, nil
+		})
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/idempotent", bytes.NewBufferString(`{"a":1}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Zero(t, executed)
+}
+
 func TestExecuteAdminIdempotentJSONFailOpenOnStoreUnavailable(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	service.SetDefaultIdempotencyCoordinator(service.NewIdempotencyCoordinator(storeUnavailableRepoStub{}, service.DefaultIdempotencyConfig()))

@@ -3,7 +3,9 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
+	"errors"
 	"regexp"
 	"strings"
 	"testing"
@@ -34,6 +36,27 @@ var migrationIndexCatalogColumns = []string{
 }
 
 const openAIAgentIdentityDuplicatePrecheckPattern = `(?s)WITH identities AS.*identity_value_1.*identity_value_2.*FROM public\.accounts.*GROUP BY identity_name, owner_user_id, identity_value_1, identity_value_2`
+
+type migrationExecFuncDatabase struct {
+	migrationDatabase
+	execContext func(context.Context, string, ...any) (sql.Result, error)
+	raw         func(func(any) error) error
+}
+
+func (db *migrationExecFuncDatabase) ExecContext(
+	ctx context.Context,
+	query string,
+	args ...any,
+) (sql.Result, error) {
+	return db.execContext(ctx, query, args...)
+}
+
+func (db *migrationExecFuncDatabase) Raw(callback func(any) error) error {
+	if db.raw == nil {
+		return errors.New("unexpected raw connection access")
+	}
+	return db.raw(callback)
+}
 
 func matchingMigrationIndexCatalogRows(
 	t *testing.T,
@@ -190,6 +213,216 @@ DROP PROCEDURE IF EXISTS backfill_rows();
 	})
 }
 
+func TestExecuteNonTransactionalMigrationSessionCleanup(t *testing.T) {
+	const (
+		migrationName      = "001_session_cleanup_notx.sql"
+		migrationStatement = "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_t_a ON t(a)"
+		migrationContent   = migrationStatement + ";"
+	)
+
+	t.Run("sets finite timeouts and resets them on success", func(t *testing.T) {
+		db, mock := newMigrationSessionTestDB(t)
+
+		expectNonTransactionalMigrationSessionTimeouts(mock)
+		mock.ExpectExec(regexp.QuoteMeta(migrationStatement)).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		expectNonTransactionalMigrationSessionReset(mock)
+
+		err := executeNonTransactionalMigration(context.Background(), db, migrationName, migrationContent)
+
+		require.NoError(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("migration statement failure still resets both settings", func(t *testing.T) {
+		db, mock := newMigrationSessionTestDB(t)
+		statementErr := errors.New("create index failed")
+
+		expectNonTransactionalMigrationSessionTimeouts(mock)
+		mock.ExpectExec(regexp.QuoteMeta(migrationStatement)).
+			WillReturnError(statementErr)
+		expectNonTransactionalMigrationSessionReset(mock)
+
+		err := executeNonTransactionalMigration(context.Background(), db, migrationName, migrationContent)
+
+		require.ErrorIs(t, err, statementErr)
+		require.ErrorContains(t, err, "non-tx statement 1")
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("partial timeout setup failure still resets both settings", func(t *testing.T) {
+		db, mock := newMigrationSessionTestDB(t)
+		setErr := errors.New("set statement timeout failed")
+
+		mock.ExpectExec(regexp.QuoteMeta("SET lock_timeout = '2s'")).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec(regexp.QuoteMeta("SET statement_timeout = '30min'")).
+			WillReturnError(setErr)
+		expectNonTransactionalMigrationSessionReset(mock)
+
+		err := executeNonTransactionalMigration(context.Background(), db, migrationName, migrationContent)
+
+		require.ErrorIs(t, err, setErr)
+		require.ErrorContains(t, err, "statement_timeout")
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("initial timeout setup failure still resets both settings", func(t *testing.T) {
+		db, mock := newMigrationSessionTestDB(t)
+		setErr := errors.New("set lock timeout failed")
+
+		mock.ExpectExec(regexp.QuoteMeta("SET lock_timeout = '2s'")).
+			WillReturnError(setErr)
+		expectNonTransactionalMigrationSessionReset(mock)
+
+		err := executeNonTransactionalMigration(context.Background(), db, migrationName, migrationContent)
+
+		require.ErrorIs(t, err, setErr)
+		require.ErrorContains(t, err, "lock_timeout")
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("reset failure is returned", func(t *testing.T) {
+		db, mock := newMigrationSessionTestDB(t)
+		resetErr := errors.New("reset lock timeout failed")
+
+		expectNonTransactionalMigrationSessionTimeouts(mock)
+		mock.ExpectExec(regexp.QuoteMeta(migrationStatement)).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec(regexp.QuoteMeta("RESET lock_timeout")).
+			WillReturnError(resetErr)
+		mock.ExpectExec(regexp.QuoteMeta("RESET statement_timeout")).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+
+		err := executeNonTransactionalMigration(context.Background(), db, migrationName, migrationContent)
+
+		require.ErrorIs(t, err, resetErr)
+		require.ErrorContains(t, err, "reset migration "+migrationName+" non-transactional session")
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("reset failure discards a pinned raw connection", func(t *testing.T) {
+		resetErr := errors.New("reset lock timeout failed")
+		rawCalled := false
+		db := &migrationExecFuncDatabase{
+			execContext: func(_ context.Context, query string, _ ...any) (sql.Result, error) {
+				switch query {
+				case "SET lock_timeout = '2s'",
+					"SET statement_timeout = '30min'",
+					migrationStatement,
+					"RESET statement_timeout":
+					return sqlmock.NewResult(0, 0), nil
+				case "RESET lock_timeout":
+					return nil, resetErr
+				default:
+					t.Fatalf("unexpected query %q", query)
+					return nil, nil
+				}
+			},
+			raw: func(callback func(any) error) error {
+				rawCalled = true
+				callbackErr := callback(struct{}{})
+				require.ErrorIs(t, callbackErr, driver.ErrBadConn)
+				return callbackErr
+			},
+		}
+
+		err := executeNonTransactionalMigration(context.Background(), db, migrationName, migrationContent)
+
+		require.ErrorIs(t, err, resetErr)
+		require.True(t, rawCalled)
+	})
+
+	t.Run("reset and connection discard errors both remain observable", func(t *testing.T) {
+		resetErr := errors.New("reset lock timeout failed")
+		discardErr := errors.New("raw connection access failed")
+		db := &migrationExecFuncDatabase{
+			execContext: func(_ context.Context, query string, _ ...any) (sql.Result, error) {
+				switch query {
+				case "SET lock_timeout = '2s'",
+					"SET statement_timeout = '30min'",
+					migrationStatement,
+					"RESET statement_timeout":
+					return sqlmock.NewResult(0, 0), nil
+				case "RESET lock_timeout":
+					return nil, resetErr
+				default:
+					t.Fatalf("unexpected query %q", query)
+					return nil, nil
+				}
+			},
+			raw: func(func(any) error) error {
+				return discardErr
+			},
+		}
+
+		err := executeNonTransactionalMigration(context.Background(), db, migrationName, migrationContent)
+
+		require.ErrorIs(t, err, resetErr)
+		require.ErrorIs(t, err, discardErr)
+	})
+
+	t.Run("migration and both reset errors remain observable", func(t *testing.T) {
+		db, mock := newMigrationSessionTestDB(t)
+		statementErr := errors.New("create index failed")
+		lockResetErr := errors.New("reset lock timeout failed")
+		statementResetErr := errors.New("reset statement timeout failed")
+
+		expectNonTransactionalMigrationSessionTimeouts(mock)
+		mock.ExpectExec(regexp.QuoteMeta(migrationStatement)).
+			WillReturnError(statementErr)
+		mock.ExpectExec(regexp.QuoteMeta("RESET lock_timeout")).
+			WillReturnError(lockResetErr)
+		mock.ExpectExec(regexp.QuoteMeta("RESET statement_timeout")).
+			WillReturnError(statementResetErr)
+
+		err := executeNonTransactionalMigration(context.Background(), db, migrationName, migrationContent)
+
+		require.ErrorIs(t, err, statementErr)
+		require.ErrorIs(t, err, lockResetErr)
+		require.ErrorIs(t, err, statementResetErr)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("cancelled migration context does not cancel reset contexts", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		var queries []string
+		var resetContextErrors []error
+		db := &migrationExecFuncDatabase{
+			execContext: func(callCtx context.Context, query string, _ ...any) (sql.Result, error) {
+				queries = append(queries, query)
+				switch query {
+				case "SET lock_timeout = '2s'", "SET statement_timeout = '30min'":
+					return sqlmock.NewResult(0, 0), nil
+				case migrationStatement:
+					cancel()
+					return nil, ctx.Err()
+				case "RESET lock_timeout", "RESET statement_timeout":
+					resetContextErrors = append(resetContextErrors, callCtx.Err())
+					return sqlmock.NewResult(0, 0), nil
+				default:
+					t.Fatalf("unexpected query %q", query)
+					return nil, nil
+				}
+			},
+		}
+
+		err := executeNonTransactionalMigration(ctx, db, migrationName, migrationContent)
+
+		require.ErrorIs(t, err, context.Canceled)
+		require.Equal(t, []string{
+			"SET lock_timeout = '2s'",
+			"SET statement_timeout = '30min'",
+			migrationStatement,
+			"RESET lock_timeout",
+			"RESET statement_timeout",
+		}, queries)
+		require.Equal(t, []error{nil, nil}, resetContextErrors)
+	})
+}
+
 func TestApplyMigrationsFS_NonTransactionalMigration_LatestAPIKeyIPIndexDropsInvalidIndexBeforeRetry(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -199,6 +432,7 @@ func TestApplyMigrationsFS_NonTransactionalMigration_LatestAPIKeyIPIndexDropsInv
 	mock.ExpectQuery("SELECT checksum FROM schema_migrations WHERE filename = \\$1").
 		WithArgs(latestAPIKeyIPIndexMigration).
 		WillReturnError(sql.ErrNoRows)
+	expectNonTransactionalMigrationSessionTimeouts(mock)
 	mock.ExpectQuery("SELECT EXISTS \\(").
 		WithArgs(latestAPIKeyIPIndex).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
@@ -206,6 +440,7 @@ func TestApplyMigrationsFS_NonTransactionalMigration_LatestAPIKeyIPIndexDropsInv
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_usage_logs_api_key_latest_ip").
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	expectNonTransactionalMigrationSessionReset(mock)
 	mock.ExpectExec("INSERT INTO schema_migrations \\(filename, checksum\\) VALUES \\(\\$1, \\$2\\)").
 		WithArgs(latestAPIKeyIPIndexMigration, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -321,6 +556,388 @@ func TestPrepareAccountShareModeGlobalInvitePolicyIndexesDropsInvalidIndexBefore
 
 	err = prepareNonTransactionalMigration(context.Background(), db, accountShareModeGlobalInvitePolicyIndexesMigration)
 	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPrepareAccountShareFollowupIndexesDropsOnlyInvalidTargets(t *testing.T) {
+	tests := []struct {
+		name         string
+		migration    string
+		requirements []migrationIndexRequirement
+	}{
+		{
+			name:         "runtime identity",
+			migration:    accountShareRuntimeIdentityIndexesMigration,
+			requirements: accountShareRuntimeIdentityIndexRequirements,
+		},
+		{
+			name:         "billing history",
+			migration:    accountShareBillingHistoryIndexesMigration,
+			requirements: accountShareBillingHistoryIndexRequirements,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer func() { _ = db.Close() }()
+
+			for _, requirement := range test.requirements {
+				mock.ExpectQuery("SELECT EXISTS \\(").
+					WithArgs(requirement.index.name).
+					WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+			}
+
+			err = prepareNonTransactionalMigration(context.Background(), db, test.migration)
+			require.NoError(t, err)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestPrepareAccountShareFollowupIndexesDropsInvalidTargetBeforeRetry(t *testing.T) {
+	tests := []struct {
+		name         string
+		migration    string
+		requirements []migrationIndexRequirement
+	}{
+		{
+			name:         "runtime identity",
+			migration:    accountShareRuntimeIdentityIndexesMigration,
+			requirements: accountShareRuntimeIdentityIndexRequirements,
+		},
+		{
+			name:         "billing history",
+			migration:    accountShareBillingHistoryIndexesMigration,
+			requirements: accountShareBillingHistoryIndexRequirements,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer func() { _ = db.Close() }()
+
+			for i, requirement := range test.requirements {
+				invalid := i == 0
+				mock.ExpectQuery("SELECT EXISTS \\(").
+					WithArgs(requirement.index.name).
+					WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(invalid))
+				if invalid {
+					mock.ExpectExec(regexp.QuoteMeta(
+						"DROP INDEX CONCURRENTLY IF EXISTS " + quoteMigrationCatalogName(requirement.index),
+					)).WillReturnResult(sqlmock.NewResult(0, 0))
+				}
+			}
+
+			err = prepareNonTransactionalMigration(context.Background(), db, test.migration)
+			require.NoError(t, err)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestPrepareAccountShareLifecycleTargetsVerifiesGuardsBeforeDroppingInvalidTarget(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	for _, requirement := range accountShareLifecycleUniqueGuardIndexRequirements {
+		expectMigrationIndexCatalogQuery(mock, requirement, matchingMigrationIndexCatalogRows(t, requirement, nil))
+	}
+	for i, requirement := range accountShareLifecycleIndexRequirements {
+		invalid := i == 0
+		mock.ExpectQuery("SELECT EXISTS \\(").
+			WithArgs(requirement.index.name).
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(invalid))
+		if invalid {
+			mock.ExpectExec(regexp.QuoteMeta(
+				"DROP INDEX CONCURRENTLY IF EXISTS " + quoteMigrationCatalogName(requirement.index),
+			)).WillReturnResult(sqlmock.NewResult(0, 0))
+		}
+	}
+
+	err = prepareAccountShareLifecycleTargetIndexes(context.Background(), db)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestVerifyAccountShareFollowupIndexesRequiresExactDefinitions(t *testing.T) {
+	tests := []struct {
+		name         string
+		migration    string
+		requirements []migrationIndexRequirement
+	}{
+		{
+			name:         "runtime identity",
+			migration:    accountShareRuntimeIdentityIndexesMigration,
+			requirements: accountShareRuntimeIdentityIndexRequirements,
+		},
+		{
+			name:         "lifecycle",
+			migration:    accountShareLifecycleIndexesMigration,
+			requirements: accountShareLifecycleIndexRequirements,
+		},
+		{
+			name:         "billing history",
+			migration:    accountShareBillingHistoryIndexesMigration,
+			requirements: accountShareBillingHistoryIndexRequirements,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer func() { _ = db.Close() }()
+
+			for _, requirement := range test.requirements {
+				expectMigrationIndexCatalogQuery(mock, requirement, matchingMigrationIndexCatalogRows(t, requirement, nil))
+			}
+
+			err = verifyNonTransactionalMigrationResult(context.Background(), db, test.migration)
+			require.NoError(t, err)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestExecuteAccountShareLifecycleIndexesKeepsGuardsUntilTargetsAreVerified(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	migrationSQL, err := migrations.FS.ReadFile(accountShareLifecycleIndexesMigration)
+	require.NoError(t, err)
+
+	expectNonTransactionalMigrationSessionTimeouts(mock)
+	for _, requirement := range accountShareLifecycleUniqueGuardIndexRequirements {
+		mock.ExpectQuery("SELECT EXISTS \\(").
+			WithArgs(requirement.index.name).
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	}
+	for _, requirement := range accountShareLifecycleUniqueGuardIndexRequirements {
+		mock.ExpectExec("CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS " + requirement.index.name).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+	for _, requirement := range accountShareLifecycleUniqueGuardIndexRequirements {
+		expectMigrationIndexCatalogQuery(mock, requirement, matchingMigrationIndexCatalogRows(t, requirement, nil))
+	}
+	for i, requirement := range accountShareLifecycleIndexRequirements {
+		invalid := i == 0
+		mock.ExpectQuery("SELECT EXISTS \\(").
+			WithArgs(requirement.index.name).
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(invalid))
+		if invalid {
+			mock.ExpectExec(regexp.QuoteMeta(
+				"DROP INDEX CONCURRENTLY IF EXISTS " + quoteMigrationCatalogName(requirement.index),
+			)).WillReturnResult(sqlmock.NewResult(0, 0))
+		}
+	}
+	for _, requirement := range accountShareLifecycleIndexRequirements {
+		prefix := "CREATE INDEX CONCURRENTLY IF NOT EXISTS "
+		if requirement.unique {
+			prefix = "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "
+		}
+		mock.ExpectExec(prefix + requirement.index.name).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+	for _, requirement := range accountShareLifecycleIndexRequirements {
+		expectMigrationIndexCatalogQuery(mock, requirement, matchingMigrationIndexCatalogRows(t, requirement, nil))
+	}
+	for _, requirement := range accountShareLifecycleUniqueGuardIndexRequirements {
+		expectMigrationIndexCatalogQuery(mock, requirement, matchingMigrationIndexCatalogRows(t, requirement, nil))
+	}
+	for _, requirement := range accountShareLifecycleUniqueGuardIndexRequirements {
+		mock.ExpectExec(regexp.QuoteMeta(
+			"DROP INDEX CONCURRENTLY IF EXISTS " + quoteMigrationCatalogName(requirement.index),
+		)).WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+	expectNonTransactionalMigrationSessionReset(mock)
+
+	nonTransactionalDB := &migrationExecFuncDatabase{
+		migrationDatabase: db,
+		execContext:       db.ExecContext,
+		raw: func(callback func(any) error) error {
+			return callback(nil)
+		},
+	}
+	err = executeNonTransactionalMigration(
+		context.Background(),
+		nonTransactionalDB,
+		accountShareLifecycleIndexesMigration,
+		string(migrationSQL),
+	)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestExecuteAccountShareLifecycleIndexesStopsWhenGuardCreationFails(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	migrationSQL, err := migrations.FS.ReadFile(accountShareLifecycleIndexesMigration)
+	require.NoError(t, err)
+	createErr := errors.New("guard create failed")
+
+	expectNonTransactionalMigrationSessionTimeouts(mock)
+	for _, requirement := range accountShareLifecycleUniqueGuardIndexRequirements {
+		mock.ExpectQuery("SELECT EXISTS \\(").
+			WithArgs(requirement.index.name).
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	}
+	mock.ExpectExec("CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS " + accountShareLifecycleUniqueGuardIndexRequirements[0].index.name).
+		WillReturnError(createErr)
+	expectNonTransactionalMigrationSessionReset(mock)
+
+	nonTransactionalDB := &migrationExecFuncDatabase{
+		migrationDatabase: db,
+		execContext:       db.ExecContext,
+		raw: func(callback func(any) error) error {
+			return callback(nil)
+		},
+	}
+	err = executeNonTransactionalMigration(
+		context.Background(),
+		nonTransactionalDB,
+		accountShareLifecycleIndexesMigration,
+		string(migrationSQL),
+	)
+	require.ErrorIs(t, err, createErr)
+	require.ErrorContains(t, err, "non-tx statement 1")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestExecuteAccountShareLifecycleIndexesRecoversAfterGuardCleanupIsInterrupted(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	migrationSQL, err := migrations.FS.ReadFile(accountShareLifecycleIndexesMigration)
+	require.NoError(t, err)
+	cleanupErr := errors.New("guard cleanup interrupted")
+
+	expectExecution := func(cleanupFailure error) {
+		expectNonTransactionalMigrationSessionTimeouts(mock)
+		for _, requirement := range accountShareLifecycleUniqueGuardIndexRequirements {
+			// A missing guard and a valid guard both return false here because
+			// prepare only removes same-named invalid indexes. CREATE IF NOT
+			// EXISTS below recreates a missing guard and preserves a valid one.
+			mock.ExpectQuery("SELECT EXISTS \\(").
+				WithArgs(requirement.index.name).
+				WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+		}
+		for _, requirement := range accountShareLifecycleUniqueGuardIndexRequirements {
+			mock.ExpectExec("CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS " + requirement.index.name).
+				WillReturnResult(sqlmock.NewResult(0, 0))
+		}
+		for _, requirement := range accountShareLifecycleUniqueGuardIndexRequirements {
+			expectMigrationIndexCatalogQuery(mock, requirement, matchingMigrationIndexCatalogRows(t, requirement, nil))
+		}
+		for _, requirement := range accountShareLifecycleIndexRequirements {
+			mock.ExpectQuery("SELECT EXISTS \\(").
+				WithArgs(requirement.index.name).
+				WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+		}
+		for _, requirement := range accountShareLifecycleIndexRequirements {
+			prefix := "CREATE INDEX CONCURRENTLY IF NOT EXISTS "
+			if requirement.unique {
+				prefix = "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "
+			}
+			mock.ExpectExec(prefix + requirement.index.name).
+				WillReturnResult(sqlmock.NewResult(0, 0))
+		}
+		for _, requirement := range accountShareLifecycleIndexRequirements {
+			expectMigrationIndexCatalogQuery(mock, requirement, matchingMigrationIndexCatalogRows(t, requirement, nil))
+		}
+		for _, requirement := range accountShareLifecycleUniqueGuardIndexRequirements {
+			expectMigrationIndexCatalogQuery(mock, requirement, matchingMigrationIndexCatalogRows(t, requirement, nil))
+		}
+		for i, requirement := range accountShareLifecycleUniqueGuardIndexRequirements {
+			drop := mock.ExpectExec(regexp.QuoteMeta(
+				"DROP INDEX CONCURRENTLY IF EXISTS " + quoteMigrationCatalogName(requirement.index),
+			))
+			if cleanupFailure != nil && i == 1 {
+				drop.WillReturnError(cleanupFailure)
+				break
+			}
+			drop.WillReturnResult(sqlmock.NewResult(0, 0))
+		}
+		expectNonTransactionalMigrationSessionReset(mock)
+	}
+
+	nonTransactionalDB := &migrationExecFuncDatabase{
+		migrationDatabase: db,
+		execContext:       db.ExecContext,
+		raw: func(callback func(any) error) error {
+			return callback(nil)
+		},
+	}
+
+	expectExecution(cleanupErr)
+	err = executeNonTransactionalMigration(
+		context.Background(),
+		nonTransactionalDB,
+		accountShareLifecycleIndexesMigration,
+		string(migrationSQL),
+	)
+	require.ErrorIs(t, err, cleanupErr)
+	require.ErrorContains(t, err, "finalize migration "+accountShareLifecycleIndexesMigration)
+
+	// The first guard was already removed before the interruption. A retry
+	// recreates it, verifies every target, and completes all guard cleanup.
+	expectExecution(nil)
+	err = executeNonTransactionalMigration(
+		context.Background(),
+		nonTransactionalDB,
+		accountShareLifecycleIndexesMigration,
+		string(migrationSQL),
+	)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestExecuteAccountShareLifecycleIndexesRejectsValidWrongGuardBeforeTargetRepair(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	migrationSQL, err := migrations.FS.ReadFile(accountShareLifecycleIndexesMigration)
+	require.NoError(t, err)
+
+	expectNonTransactionalMigrationSessionTimeouts(mock)
+	for _, requirement := range accountShareLifecycleUniqueGuardIndexRequirements {
+		mock.ExpectQuery("SELECT EXISTS \\(").
+			WithArgs(requirement.index.name).
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	}
+	for _, requirement := range accountShareLifecycleUniqueGuardIndexRequirements {
+		mock.ExpectExec("CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS " + requirement.index.name).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+	wrongGuard := accountShareLifecycleUniqueGuardIndexRequirements[0]
+	expectMigrationIndexCatalogQuery(mock, wrongGuard, matchingMigrationIndexCatalogRows(t, wrongGuard, func(state *migrationIndexCatalogState) {
+		state.keys[0].Definition = "unexpected_consumer_user_id"
+	}))
+	expectNonTransactionalMigrationSessionReset(mock)
+
+	nonTransactionalDB := &migrationExecFuncDatabase{
+		migrationDatabase: db,
+		execContext:       db.ExecContext,
+		raw: func(callback func(any) error) error {
+			return callback(nil)
+		},
+	}
+	err = executeNonTransactionalMigration(
+		context.Background(),
+		nonTransactionalDB,
+		accountShareLifecycleIndexesMigration,
+		string(migrationSQL),
+	)
+	require.ErrorContains(t, err, "temporary live-membership uniqueness guards are missing, invalid, or have an unexpected definition")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -578,8 +1195,10 @@ func TestApplyMigrationsFS_NonTransactionalMigration(t *testing.T) {
 	mock.ExpectQuery("SELECT checksum FROM schema_migrations WHERE filename = \\$1").
 		WithArgs("001_add_idx_notx.sql").
 		WillReturnError(sql.ErrNoRows)
+	expectNonTransactionalMigrationSessionTimeouts(mock)
 	mock.ExpectExec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_t_a ON t\\(a\\)").
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	expectNonTransactionalMigrationSessionReset(mock)
 	mock.ExpectExec("INSERT INTO schema_migrations \\(filename, checksum\\) VALUES \\(\\$1, \\$2\\)").
 		WithArgs("001_add_idx_notx.sql", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -598,6 +1217,37 @@ func TestApplyMigrationsFS_NonTransactionalMigration(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestApplyMigrationsFS_NonTransactionalMigration_ResetFailureIsNotRecorded(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	resetErr := errors.New("reset lock timeout failed")
+
+	prepareMigrationsBootstrapExpectations(mock)
+	mock.ExpectQuery("SELECT checksum FROM schema_migrations WHERE filename = \\$1").
+		WithArgs("001_add_idx_notx.sql").
+		WillReturnError(sql.ErrNoRows)
+	expectNonTransactionalMigrationSessionTimeouts(mock)
+	mock.ExpectExec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_t_a ON t\\(a\\)").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("RESET lock_timeout")).
+		WillReturnError(resetErr)
+	mock.ExpectExec(regexp.QuoteMeta("RESET statement_timeout")).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	fsys := fstest.MapFS{
+		"001_add_idx_notx.sql": &fstest.MapFile{
+			Data: []byte("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_t_a ON t(a);"),
+		},
+	}
+
+	err = applyMigrationsFS(context.Background(), db, fsys)
+
+	require.ErrorIs(t, err, resetErr)
+	require.ErrorContains(t, err, "reset migration 001_add_idx_notx.sql non-transactional session")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestApplyMigrationsFS_NonTransactionalMigration_MultiStatements(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -607,10 +1257,12 @@ func TestApplyMigrationsFS_NonTransactionalMigration_MultiStatements(t *testing.
 	mock.ExpectQuery("SELECT checksum FROM schema_migrations WHERE filename = \\$1").
 		WithArgs("001_add_multi_idx_notx.sql").
 		WillReturnError(sql.ErrNoRows)
+	expectNonTransactionalMigrationSessionTimeouts(mock)
 	mock.ExpectExec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_t_a ON t\\(a\\)").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_t_b ON t\\(b\\)").
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	expectNonTransactionalMigrationSessionReset(mock)
 	mock.ExpectExec("INSERT INTO schema_migrations \\(filename, checksum\\) VALUES \\(\\$1, \\$2\\)").
 		WithArgs("001_add_multi_idx_notx.sql", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -643,8 +1295,10 @@ func TestApplyMigrationsFS_PaymentOrdersOutTradeNoUniqueMigration_FailsFastOnDup
 	mock.ExpectQuery("SELECT checksum FROM schema_migrations WHERE filename = \\$1").
 		WithArgs("120_enforce_payment_orders_out_trade_no_unique_notx.sql").
 		WillReturnError(sql.ErrNoRows)
+	expectNonTransactionalMigrationSessionTimeouts(mock)
 	mock.ExpectQuery("SELECT out_trade_no, COUNT\\(\\*\\) AS duplicate_count FROM payment_orders").
 		WillReturnRows(sqlmock.NewRows([]string{"out_trade_no", "duplicate_count"}).AddRow("dup-out-trade-no", 2))
+	expectNonTransactionalMigrationSessionReset(mock)
 	mock.ExpectExec("SELECT pg_advisory_unlock\\(\\$1\\)").
 		WithArgs(migrationsAdvisoryLockID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -677,6 +1331,7 @@ func TestApplyMigrationsFS_PaymentOrdersOutTradeNoUniqueMigration_DropsInvalidIn
 	mock.ExpectQuery("SELECT checksum FROM schema_migrations WHERE filename = \\$1").
 		WithArgs("120_enforce_payment_orders_out_trade_no_unique_notx.sql").
 		WillReturnError(sql.ErrNoRows)
+	expectNonTransactionalMigrationSessionTimeouts(mock)
 	mock.ExpectQuery("SELECT out_trade_no, COUNT\\(\\*\\) AS duplicate_count FROM payment_orders").
 		WillReturnRows(sqlmock.NewRows([]string{"out_trade_no", "duplicate_count"}))
 	mock.ExpectQuery("SELECT EXISTS \\(").
@@ -688,6 +1343,7 @@ func TestApplyMigrationsFS_PaymentOrdersOutTradeNoUniqueMigration_DropsInvalidIn
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("DROP INDEX CONCURRENTLY IF EXISTS paymentorder_out_trade_no").
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	expectNonTransactionalMigrationSessionReset(mock)
 	mock.ExpectExec("INSERT INTO schema_migrations \\(filename, checksum\\) VALUES \\(\\$1, \\$2\\)").
 		WithArgs("120_enforce_payment_orders_out_trade_no_unique_notx.sql", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -721,9 +1377,11 @@ func TestApplyMigrationsFS_OwnedAccountIdentityUniqueMigration_FailsFastOnDuplic
 	mock.ExpectQuery("SELECT checksum FROM schema_migrations WHERE filename = \\$1").
 		WithArgs("140_owned_account_identity_unique_notx.sql").
 		WillReturnError(sql.ErrNoRows)
+	expectNonTransactionalMigrationSessionTimeouts(mock)
 	mock.ExpectQuery("WITH identities AS").
 		WillReturnRows(sqlmock.NewRows([]string{"identity_name", "owner_user_id", "duplicate_count", "sample_ids"}).
 			AddRow("openai.chatgpt_account_id", int64(101), 2, "1,2"))
+	expectNonTransactionalMigrationSessionReset(mock)
 	mock.ExpectExec("SELECT pg_advisory_unlock\\(\\$1\\)").
 		WithArgs(migrationsAdvisoryLockID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -751,6 +1409,7 @@ func TestApplyMigrationsFS_OwnedAccountIdentityUniqueMigration_DropsInvalidIndex
 	mock.ExpectQuery("SELECT checksum FROM schema_migrations WHERE filename = \\$1").
 		WithArgs("140_owned_account_identity_unique_notx.sql").
 		WillReturnError(sql.ErrNoRows)
+	expectNonTransactionalMigrationSessionTimeouts(mock)
 	mock.ExpectQuery("WITH identities AS").
 		WillReturnRows(sqlmock.NewRows([]string{"identity_name", "owner_user_id", "duplicate_count", "sample_ids"}))
 	for i, indexName := range ownedAccountIdentityUniqueIndexes {
@@ -765,6 +1424,7 @@ func TestApplyMigrationsFS_OwnedAccountIdentityUniqueMigration_DropsInvalidIndex
 	}
 	mock.ExpectExec("CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_accounts_owned_openai_chatgpt_account_id_uniq").
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	expectNonTransactionalMigrationSessionReset(mock)
 	mock.ExpectExec("INSERT INTO schema_migrations \\(filename, checksum\\) VALUES \\(\\$1, \\$2\\)").
 		WithArgs("140_owned_account_identity_unique_notx.sql", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -792,9 +1452,11 @@ func TestApplyMigrationsFS_OpenAIOwnedAccountOrgIdentityUniqueMigration_FailsFas
 	mock.ExpectQuery("SELECT checksum FROM schema_migrations WHERE filename = \\$1").
 		WithArgs("168_openai_owned_account_org_identity_unique_notx.sql").
 		WillReturnError(sql.ErrNoRows)
+	expectNonTransactionalMigrationSessionTimeouts(mock)
 	mock.ExpectQuery("WITH identities AS").
 		WillReturnRows(sqlmock.NewRows([]string{"identity_name", "owner_user_id", "duplicate_count", "sample_ids"}).
 			AddRow("openai.org_user", int64(101), 2, "1,2"))
+	expectNonTransactionalMigrationSessionReset(mock)
 	mock.ExpectExec("SELECT pg_advisory_unlock\\(\\$1\\)").
 		WithArgs(migrationsAdvisoryLockID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -822,6 +1484,7 @@ func TestApplyMigrationsFS_OpenAIOwnedAccountOrgIdentityUniqueMigration_DropsInv
 	mock.ExpectQuery("SELECT checksum FROM schema_migrations WHERE filename = \\$1").
 		WithArgs("168_openai_owned_account_org_identity_unique_notx.sql").
 		WillReturnError(sql.ErrNoRows)
+	expectNonTransactionalMigrationSessionTimeouts(mock)
 	mock.ExpectQuery("WITH identities AS").
 		WillReturnRows(sqlmock.NewRows([]string{"identity_name", "owner_user_id", "duplicate_count", "sample_ids"}))
 	for i, indexName := range openAIOwnedAccountOrgIdentityUniqueIndexes {
@@ -838,6 +1501,7 @@ func TestApplyMigrationsFS_OpenAIOwnedAccountOrgIdentityUniqueMigration_DropsInv
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("DROP INDEX CONCURRENTLY IF EXISTS idx_accounts_owned_openai_chatgpt_account_id_uniq").
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	expectNonTransactionalMigrationSessionReset(mock)
 	mock.ExpectExec("INSERT INTO schema_migrations \\(filename, checksum\\) VALUES \\(\\$1, \\$2\\)").
 		WithArgs("168_openai_owned_account_org_identity_unique_notx.sql", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -1011,6 +1675,7 @@ func TestApplyOpenAIOwnedAgentIdentityMigrationVerifiesNewIndexesBeforeProtected
 	mock.ExpectQuery("SELECT checksum FROM schema_migrations WHERE filename = \\$1").
 		WithArgs(openAIOwnedAgentIdentityUniqueMigration).
 		WillReturnError(sql.ErrNoRows)
+	expectNonTransactionalMigrationSessionTimeouts(mock)
 	mock.ExpectQuery(openAIAgentIdentityDuplicatePrecheckPattern).
 		WillReturnRows(sqlmock.NewRows([]string{"identity_name", "owner_user_id", "duplicate_count", "sample_ids"}))
 	for _, requirement := range openAIOwnedAgentIdentityUniqueIndexRequirements {
@@ -1027,6 +1692,7 @@ func TestApplyOpenAIOwnedAgentIdentityMigrationVerifiesNewIndexesBeforeProtected
 	mock.ExpectQuery("SELECT\\s+tbl_ns\\.nspname").
 		WithArgs(firstRequirement.index.schema, firstRequirement.index.name).
 		WillReturnError(sql.ErrNoRows)
+	expectNonTransactionalMigrationSessionReset(mock)
 	mock.ExpectExec("SELECT pg_advisory_unlock\\(\\$1\\)").
 		WithArgs(migrationsAdvisoryLockID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -1231,4 +1897,31 @@ func prepareMigrationsBootstrapExpectations(mock sqlmock.Sqlmock) {
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM atlas_schema_revisions").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+}
+
+func newMigrationSessionTestDB(t *testing.T) (*sql.Conn, sqlmock.Sqlmock) {
+	t.Helper()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	conn, err := db.Conn(context.Background())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = conn.Close()
+		_ = db.Close()
+	})
+	return conn, mock
+}
+
+func expectNonTransactionalMigrationSessionTimeouts(mock sqlmock.Sqlmock) {
+	mock.ExpectExec(regexp.QuoteMeta("SET lock_timeout = '2s'")).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("SET statement_timeout = '30min'")).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+}
+
+func expectNonTransactionalMigrationSessionReset(mock sqlmock.Sqlmock) {
+	mock.ExpectExec(regexp.QuoteMeta("RESET lock_timeout")).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("RESET statement_timeout")).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 }

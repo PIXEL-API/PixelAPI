@@ -1,8 +1,12 @@
 package service
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"encoding/base64"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -169,6 +173,36 @@ func (r *inMemoryIdempotencyRepo) DeleteExpired(_ context.Context, now time.Time
 	return deleted, nil
 }
 
+type cancellationAwareIdempotencyRepo struct {
+	*inMemoryIdempotencyRepo
+}
+
+func (r *cancellationAwareIdempotencyRepo) MarkSucceeded(
+	ctx context.Context,
+	id int64,
+	responseStatus int,
+	responseBody string,
+	expiresAt time.Time,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return r.inMemoryIdempotencyRepo.MarkSucceeded(ctx, id, responseStatus, responseBody, expiresAt)
+}
+
+func (r *cancellationAwareIdempotencyRepo) MarkFailedRetryable(
+	ctx context.Context,
+	id int64,
+	errorReason string,
+	lockedUntil time.Time,
+	expiresAt time.Time,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return r.inMemoryIdempotencyRepo.MarkFailedRetryable(ctx, id, errorReason, lockedUntil, expiresAt)
+}
+
 func TestIdempotencyCoordinator_RequireKey(t *testing.T) {
 	resetIdempotencyMetricsForTest()
 	repo := newInMemoryIdempotencyRepo()
@@ -224,6 +258,77 @@ func TestIdempotencyCoordinator_ReplaySucceededResult(t *testing.T) {
 	metrics := GetIdempotencyMetricsSnapshot()
 	require.Equal(t, uint64(1), metrics.ClaimTotal)
 	require.Equal(t, uint64(1), metrics.ReplayTotal)
+}
+
+func TestIdempotencyCoordinator_ReplaysCompressedResponse(t *testing.T) {
+	repo := newInMemoryIdempotencyRepo()
+	cfg := DefaultIdempotencyConfig()
+	cfg.MaxStoredResponseLen = 128
+	coordinator := NewIdempotencyCoordinator(repo, cfg)
+	opts := IdempotencyExecuteOptions{
+		Scope:          "test.scope.compressed",
+		Method:         "POST",
+		Route:          "/test/compressed",
+		ActorScope:     "admin:1",
+		RequireKey:     true,
+		IdempotencyKey: "compressed-response",
+		Payload:        map[string]any{"a": 1},
+	}
+	responseValue := strings.Repeat("账号广场", 256)
+	execCount := 0
+
+	first, err := coordinator.Execute(context.Background(), opts, func(context.Context) (any, error) {
+		execCount++
+		return map[string]any{"value": responseValue}, nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, responseValue, first.Data.(map[string]any)["value"])
+
+	stored, err := repo.GetByScopeAndKeyHash(context.Background(), opts.Scope, HashIdempotencyKey(opts.IdempotencyKey))
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	require.NotNil(t, stored.ResponseBody)
+	require.True(t, strings.HasPrefix(*stored.ResponseBody, idempotencyCompressedResponsePrefix))
+	require.LessOrEqual(t, len(*stored.ResponseBody), cfg.MaxStoredResponseLen)
+
+	replayed, err := coordinator.Execute(context.Background(), opts, func(context.Context) (any, error) {
+		execCount++
+		return nil, errors.New("must not execute during replay")
+	})
+	require.NoError(t, err)
+	require.True(t, replayed.Replayed)
+	require.Equal(t, responseValue, replayed.Data.(map[string]any)["value"])
+	require.Equal(t, 1, execCount)
+}
+
+func TestIdempotencyCoordinator_FinalizesAfterRequestCancellation(t *testing.T) {
+	repo := &cancellationAwareIdempotencyRepo{inMemoryIdempotencyRepo: newInMemoryIdempotencyRepo()}
+	coordinator := NewIdempotencyCoordinator(repo, DefaultIdempotencyConfig())
+	ctx, cancel := context.WithCancel(context.Background())
+
+	opts := IdempotencyExecuteOptions{
+		Scope:          "test.scope.cancelled",
+		Method:         "POST",
+		Route:          "/test/cancelled",
+		ActorScope:     "admin:1",
+		RequireKey:     true,
+		IdempotencyKey: "cancelled-after-effect",
+		Payload:        map[string]any{"a": 1},
+	}
+
+	first, err := coordinator.Execute(ctx, opts, func(context.Context) (any, error) {
+		cancel()
+		return map[string]any{"ok": true}, nil
+	})
+	require.NoError(t, err)
+	require.False(t, first.Replayed)
+
+	replayed, err := coordinator.Execute(context.Background(), opts, func(context.Context) (any, error) {
+		t.Fatal("successful cancelled request must have been finalized for replay")
+		return nil, nil
+	})
+	require.NoError(t, err)
+	require.True(t, replayed.Replayed)
 }
 
 func TestIdempotencyCoordinator_ReclaimExpiredSucceededRecord(t *testing.T) {
@@ -779,7 +884,7 @@ func TestIdempotencyCoordinator_HelperBranches(t *testing.T) {
 		SystemOperationTTL:   time.Hour,
 		ProcessingTimeout:    time.Second,
 		FailedRetryBackoff:   time.Second,
-		MaxStoredResponseLen: 12,
+		MaxStoredResponseLen: 96,
 		ObserveOnly:          false,
 	})
 
@@ -788,10 +893,25 @@ func TestIdempotencyCoordinator_HelperBranches(t *testing.T) {
 	err := c.conflictWithRetryAfter(base, nil, time.Now())
 	require.Equal(t, infraerrors.Code(base), infraerrors.Code(err))
 
-	// marshalStoredResponse should truncate.
-	body, err := c.marshalStoredResponse(map[string]any{"long": "abcdefghijklmnopqrstuvwxyz"})
+	// Large, compressible responses stay within the configured storage limit
+	// and remain valid JSON after replay.
+	body, err := c.marshalStoredResponse(map[string]any{"long": strings.Repeat("a", 1024)})
 	require.NoError(t, err)
-	require.Contains(t, body, "...(truncated)")
+	require.True(t, strings.HasPrefix(body, idempotencyCompressedResponsePrefix))
+	require.LessOrEqual(t, len(body), c.cfg.MaxStoredResponseLen)
+	decoded, err := c.decodeStoredResponse(&body)
+	require.NoError(t, err)
+	require.Equal(t, strings.Repeat("a", 1024), decoded.(map[string]any)["long"])
+
+	// Responses that still cannot fit must fail explicitly and never persist
+	// the previous invalid "...(truncated)" pseudo-JSON.
+	tiny := NewIdempotencyCoordinator(newInMemoryIdempotencyRepo(), IdempotencyConfig{
+		MaxStoredResponseLen: 12,
+	})
+	body, err = tiny.marshalStoredResponse(map[string]any{"long": "abcdefghijklmnopqrstuvwxyz"})
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrIdempotencyResponseTooBig)
+	require.Empty(t, body)
 
 	// decodeStoredResponse empty and invalid json.
 	out, err := c.decodeStoredResponse(nil)
@@ -802,4 +922,39 @@ func TestIdempotencyCoordinator_HelperBranches(t *testing.T) {
 	invalid := "{invalid"
 	_, err = c.decodeStoredResponse(&invalid)
 	require.Error(t, err)
+
+	invalidCompressed := idempotencyCompressedResponsePrefix + "not-base64"
+	_, err = c.decodeStoredResponse(&invalidCompressed)
+	require.ErrorContains(t, err, "decode compressed stored response")
+
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	_, err = writer.Write(bytes.Repeat([]byte("a"), idempotencyMaxDecodedResponseLen+1))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	oversizedCompressed := idempotencyCompressedResponsePrefix + base64.StdEncoding.EncodeToString(compressed.Bytes())
+	_, err = c.decodeStoredResponse(&oversizedCompressed)
+	require.ErrorContains(t, err, "decoded response exceeds")
+}
+
+func TestValidateIdempotencyResponseCapacityUsesActiveCoordinator(t *testing.T) {
+	SetDefaultIdempotencyCoordinator(nil)
+	t.Cleanup(func() {
+		SetDefaultIdempotencyCoordinator(nil)
+	})
+
+	err := ValidateIdempotencyResponseCapacity(map[string]any{"ok": true})
+	require.Equal(t, infraerrors.Code(ErrIdempotencyStoreUnavail), infraerrors.Code(err))
+
+	SetDefaultIdempotencyCoordinator(NewIdempotencyCoordinator(newInMemoryIdempotencyRepo(), IdempotencyConfig{
+		MaxStoredResponseLen: 96,
+	}))
+	err = ValidateIdempotencyResponseCapacity(map[string]any{"long": strings.Repeat("a", 1024)})
+	require.NoError(t, err)
+
+	SetDefaultIdempotencyCoordinator(NewIdempotencyCoordinator(newInMemoryIdempotencyRepo(), IdempotencyConfig{
+		MaxStoredResponseLen: 12,
+	}))
+	err = ValidateIdempotencyResponseCapacity(map[string]any{"long": "abcdefghijklmnopqrstuvwxyz"})
+	require.ErrorIs(t, err, ErrIdempotencyResponseTooBig)
 }

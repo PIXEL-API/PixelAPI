@@ -300,11 +300,13 @@ func TestOpenAICleanRelay_AccountShareModeUsesMembershipAccount(t *testing.T) {
 	}
 	shareRepo := &accountShareModeRepoStub{
 		membership: &AccountShareMembership{ID: 1, AccountID: boundAccount.ID, ConsumerUserID: 5580, APIKeyID: 20103},
-		listing:    &AccountShareListing{ID: 1, OwnerUserID: 1, Status: AccountShareListingStatusActive},
+		listing:    &AccountShareListing{ID: 1, OwnerUserID: 1, Status: AccountShareListingStatusActive, PerUserConcurrency: 1},
 	}
+	concurrencyService, accountShareService := newAccountShareRuntimeLeaseTestServices(shareRepo)
 	svc := &OpenAIGatewayService{
 		accountRepo:             stubOpenAIAccountRepo{accounts: []Account{boundAccount}},
-		accountShareModeService: &AccountShareModeService{repo: shareRepo},
+		accountShareModeService: accountShareService,
+		concurrencyService:      concurrencyService,
 	}
 	baseCtx := context.WithValue(context.Background(), ctxkey.AuthenticatedUserID, int64(5580))
 	ctx := WithAccountShareModeRequest(baseCtx, 5580, 20103)

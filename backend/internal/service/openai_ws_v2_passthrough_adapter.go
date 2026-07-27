@@ -77,17 +77,40 @@ func (c *openAIWSPolicyEnforcingFrameConn) ReadFrame(ctx context.Context) (coder
 // turn must not acquire its slots until the preceding terminal/error callback
 // has released them.
 type openAIWSPassthroughTurnLifecycle struct {
-	mu         sync.Mutex
-	hooks      *OpenAIWSIngressHooks
-	nextTurn   int
-	activeTurn int
+	mu                    sync.Mutex
+	ctx                   context.Context
+	hooks                 *OpenAIWSIngressHooks
+	onTurnContextDone     func(error)
+	nextTurn              int
+	activeTurn            int
+	activePayload         []byte
+	activeContext         context.Context
+	activeContextCause    error
+	stopActiveContext     func() bool
+	afterTurnLifecycleErr error
 }
 
 func newOpenAIWSPassthroughTurnLifecycle(hooks *OpenAIWSIngressHooks) *openAIWSPassthroughTurnLifecycle {
-	return &openAIWSPassthroughTurnLifecycle{hooks: hooks, nextTurn: 1}
+	return newOpenAIWSPassthroughTurnLifecycleWithContext(context.Background(), hooks, nil)
 }
 
-func (l *openAIWSPassthroughTurnLifecycle) begin() (int, error) {
+func newOpenAIWSPassthroughTurnLifecycleWithContext(
+	ctx context.Context,
+	hooks *OpenAIWSIngressHooks,
+	onTurnContextDone func(error),
+) *openAIWSPassthroughTurnLifecycle {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return &openAIWSPassthroughTurnLifecycle{
+		ctx:               ctx,
+		hooks:             hooks,
+		onTurnContextDone: onTurnContextDone,
+		nextTurn:          1,
+	}
+}
+
+func (l *openAIWSPassthroughTurnLifecycle) begin(payload ...[]byte) (int, error) {
 	if l == nil {
 		return 0, errors.New("passthrough turn lifecycle is unavailable")
 	}
@@ -104,31 +127,74 @@ func (l *openAIWSPassthroughTurnLifecycle) begin() (int, error) {
 	if turn <= 0 {
 		turn = 1
 	}
-	if l.hooks != nil && l.hooks.BeforeTurn != nil {
-		if err := l.hooks.BeforeTurn(turn); err != nil {
-			return 0, err
-		}
+	var payloadBytes []byte
+	if len(payload) > 0 {
+		payloadBytes = payload[0]
+	}
+	turnPayload := cloneOpenAIWSPayloadBytes(payloadBytes)
+	turnCtx, err := beginOpenAIWSIngressTurn(l.ctx, l.hooks, turn, turnPayload)
+	if err != nil {
+		return 0, err
 	}
 	l.activeTurn = turn
+	l.activePayload = turnPayload
+	l.activeContext = turnCtx
+	l.activeContextCause = nil
 	l.nextTurn = turn + 1
+	if turnCtx != nil && turnCtx.Done() != nil && l.onTurnContextDone != nil {
+		l.stopActiveContext = context.AfterFunc(turnCtx, func() {
+			cause := context.Cause(turnCtx)
+			if cause == nil {
+				cause = turnCtx.Err()
+			}
+			l.mu.Lock()
+			active := l.activeTurn == turn && l.activeContext == turnCtx
+			if active {
+				l.activeContextCause = cause
+			}
+			onDone := l.onTurnContextDone
+			l.mu.Unlock()
+			if active && onDone != nil {
+				onDone(cause)
+			}
+		})
+	}
 	return turn, nil
 }
 
 func (l *openAIWSPassthroughTurnLifecycle) finish(result *OpenAIForwardResult, turnErr error) (int, bool) {
+	turn, finished, _ := l.finishWithError(result, turnErr)
+	return turn, finished
+}
+
+func (l *openAIWSPassthroughTurnLifecycle) finishWithError(result *OpenAIForwardResult, turnErr error) (int, bool, error) {
 	if l == nil {
-		return 0, false
+		return 0, false, nil
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	turn := l.activeTurn
 	if turn <= 0 {
-		return 0, false
+		return 0, false, nil
 	}
+	if l.stopActiveContext != nil {
+		_ = l.stopActiveContext()
+	}
+	payload := l.activePayload
+	contextCause := l.activeContextCause
 	l.activeTurn = 0
-	if l.hooks != nil && l.hooks.AfterTurn != nil {
-		l.hooks.AfterTurn(turn, result, turnErr)
+	l.activePayload = nil
+	l.activeContext = nil
+	l.activeContextCause = nil
+	l.stopActiveContext = nil
+	if turnErr == nil && contextCause != nil {
+		turnErr = contextCause
 	}
-	return turn, true
+	hookErr := finishOpenAIWSIngressTurn(l.hooks, turn, payload, result, turnErr)
+	if hookErr != nil {
+		l.afterTurnLifecycleErr = errors.Join(l.afterTurnLifecycleErr, hookErr)
+	}
+	return turn, true, hookErr
 }
 
 func (l *openAIWSPassthroughTurnLifecycle) hasActive() bool {
@@ -138,6 +204,24 @@ func (l *openAIWSPassthroughTurnLifecycle) hasActive() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.activeTurn > 0
+}
+
+func (l *openAIWSPassthroughTurnLifecycle) activeCause() error {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.activeContextCause
+}
+
+func (l *openAIWSPassthroughTurnLifecycle) lifecycleError() error {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.afterTurnLifecycleErr
 }
 
 func (c *openAIWSPolicyEnforcingFrameConn) WriteFrame(ctx context.Context, msgType coderws.MessageType, payload []byte) error {
@@ -228,6 +312,61 @@ func (s *openAIResponseImageBillingConfigStore) Load() openAIResponseImageBillin
 	return cfg
 }
 
+func openAIUsageFromWSV2Relay(usage openaiwsv2.Usage) OpenAIUsage {
+	return OpenAIUsage{
+		InputTokens:               usage.InputTokens,
+		TextInputTokens:           usage.TextInputTokens,
+		ImageInputTokens:          usage.ImageInputTokens,
+		OutputTokens:              usage.OutputTokens,
+		TextOutputTokens:          usage.TextOutputTokens,
+		CacheCreationInputTokens:  usage.CacheCreationInputTokens,
+		CacheReadInputTokens:      usage.CacheReadInputTokens,
+		TextCacheReadInputTokens:  usage.TextCacheReadInputTokens,
+		ImageCacheReadInputTokens: usage.ImageCacheReadInputTokens,
+		ImageOutputTokens:         usage.ImageOutputTokens,
+		ImageCount:                usage.ImageCount,
+	}
+}
+
+func addOpenAIUsage(total *OpenAIUsage, delta OpenAIUsage) {
+	if total == nil {
+		return
+	}
+	total.InputTokens += delta.InputTokens
+	total.TextInputTokens += delta.TextInputTokens
+	total.ImageInputTokens += delta.ImageInputTokens
+	total.OutputTokens += delta.OutputTokens
+	total.TextOutputTokens += delta.TextOutputTokens
+	total.CacheCreationInputTokens += delta.CacheCreationInputTokens
+	total.CacheReadInputTokens += delta.CacheReadInputTokens
+	total.TextCacheReadInputTokens += delta.TextCacheReadInputTokens
+	total.ImageCacheReadInputTokens += delta.ImageCacheReadInputTokens
+	total.ImageOutputTokens += delta.ImageOutputTokens
+	total.ImageCount += delta.ImageCount
+}
+
+func subtractOpenAIUsage(total OpenAIUsage, settled OpenAIUsage) OpenAIUsage {
+	nonNegativeDifference := func(value int, deducted int) int {
+		if value <= deducted {
+			return 0
+		}
+		return value - deducted
+	}
+	return OpenAIUsage{
+		InputTokens:               nonNegativeDifference(total.InputTokens, settled.InputTokens),
+		TextInputTokens:           nonNegativeDifference(total.TextInputTokens, settled.TextInputTokens),
+		ImageInputTokens:          nonNegativeDifference(total.ImageInputTokens, settled.ImageInputTokens),
+		OutputTokens:              nonNegativeDifference(total.OutputTokens, settled.OutputTokens),
+		TextOutputTokens:          nonNegativeDifference(total.TextOutputTokens, settled.TextOutputTokens),
+		CacheCreationInputTokens:  nonNegativeDifference(total.CacheCreationInputTokens, settled.CacheCreationInputTokens),
+		CacheReadInputTokens:      nonNegativeDifference(total.CacheReadInputTokens, settled.CacheReadInputTokens),
+		TextCacheReadInputTokens:  nonNegativeDifference(total.TextCacheReadInputTokens, settled.TextCacheReadInputTokens),
+		ImageCacheReadInputTokens: nonNegativeDifference(total.ImageCacheReadInputTokens, settled.ImageCacheReadInputTokens),
+		ImageOutputTokens:         nonNegativeDifference(total.ImageOutputTokens, settled.ImageOutputTokens),
+		ImageCount:                nonNegativeDifference(total.ImageCount, settled.ImageCount),
+	}
+}
+
 var _ openaiwsv2.FrameConn = (*openAIWSClientFrameConn)(nil)
 
 func (c *openAIWSClientFrameConn) ReadFrame(ctx context.Context) (coderws.MessageType, []byte, error) {
@@ -286,6 +425,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if err := validateOpenAIWSBearerToken(account, token); err != nil {
 		return err
 	}
+	preparedFirstMessage, prepareErr := applyOpenAIWSFixedTurnModel(firstClientMessage, hooks)
+	if prepareErr != nil {
+		return prepareErr
+	}
+	firstClientMessage = preparedFirstMessage
 	if account.IsOpenAIOAuth() && isOpenAIResponsesLiteWebSocketPayload(firstClientMessage) {
 		liteFirstMessage, _, liteErr := normalizeOpenAIResponsesLiteToolsPayload(firstClientMessage)
 		if liteErr != nil {
@@ -466,7 +610,16 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	}
 
 	completedTurns := atomic.Int32{}
-	turnLifecycle := newOpenAIWSPassthroughTurnLifecycle(hooks)
+	var completedUsageMu sync.Mutex
+	var completedUsage OpenAIUsage
+	turnLifecycle := newOpenAIWSPassthroughTurnLifecycleWithContext(ctx, hooks, func(cause error) {
+		logOpenAIWSV2Passthrough(
+			"turn_context_done account_id=%d cause=%s",
+			account.ID,
+			truncateOpenAIWSLogValue(relayErrorText(cause), openAIWSLogValueMaxLen),
+		)
+		_ = upstreamFrameConn.Close()
+	})
 	policyClientConn := &openAIWSPolicyEnforcingFrameConn{
 		inner: &openAIWSClientFrameConn{conn: clientConn},
 		// 注意线程安全：filter 仅在 runClientToUpstream 这一条
@@ -477,6 +630,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			if msgType != coderws.MessageText {
 				return payload, nil, nil
 			}
+			preparedPayload, prepareErr := applyOpenAIWSFixedTurnModel(payload, hooks)
+			if prepareErr != nil {
+				return payload, nil, prepareErr
+			}
+			payload = preparedPayload
 			if strings.TrimSpace(gjson.GetBytes(payload, "type").String()) == "response.create" &&
 				account.IsOpenAIOAuth() && isOpenAIResponsesLiteWebSocketPayload(payload) {
 				litePayload, _, liteErr := normalizeOpenAIResponsesLiteToolsPayload(payload)
@@ -551,7 +709,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				if msgType != coderws.MessageText || strings.TrimSpace(gjson.GetBytes(payload, "type").String()) != "response.create" {
 					return nil
 				}
-				if _, beginErr := turnLifecycle.begin(); beginErr != nil {
+				if _, beginErr := turnLifecycle.begin(payload); beginErr != nil {
 					return beginErr
 				}
 				// Update per-turn accounting only after lifecycle acquisition. A
@@ -566,21 +724,10 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				return nil
 			},
 			OnTurnComplete: func(turn openaiwsv2.RelayTurnResult) {
+				turnUsage := openAIUsageFromWSV2Relay(turn.Usage)
 				turnResult := &OpenAIForwardResult{
-					RequestID: turn.RequestID,
-					Usage: OpenAIUsage{
-						InputTokens:               turn.Usage.InputTokens,
-						TextInputTokens:           turn.Usage.TextInputTokens,
-						ImageInputTokens:          turn.Usage.ImageInputTokens,
-						OutputTokens:              turn.Usage.OutputTokens,
-						TextOutputTokens:          turn.Usage.TextOutputTokens,
-						CacheCreationInputTokens:  turn.Usage.CacheCreationInputTokens,
-						CacheReadInputTokens:      turn.Usage.CacheReadInputTokens,
-						TextCacheReadInputTokens:  turn.Usage.TextCacheReadInputTokens,
-						ImageCacheReadInputTokens: turn.Usage.ImageCacheReadInputTokens,
-						ImageOutputTokens:         turn.Usage.ImageOutputTokens,
-						ImageCount:                turn.Usage.ImageCount,
-					},
+					RequestID:       turn.RequestID,
+					Usage:           turnUsage,
 					Model:           turn.RequestModel,
 					UpstreamModel:   turn.RequestModel,
 					ServiceTier:     requestServiceTierPtr.Load(),
@@ -591,7 +738,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					FirstTokenMs:    turn.FirstTokenMs,
 				}
 				applyOpenAIResponseImageAccounting(turnResult, imageBillingConfigStore.Load())
-				turnNo, finished := turnLifecycle.finish(turnResult, nil)
+				turnNo, finished, hookErr := turnLifecycle.finishWithError(turnResult, nil)
 				if !finished {
 					logOpenAIWSV2Passthrough(
 						"relay_terminal_without_active_turn account_id=%d request_id=%s terminal_event=%s",
@@ -601,6 +748,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					)
 					return
 				}
+				if hookErr != nil {
+					_ = upstreamFrameConn.Close()
+					return
+				}
+				completedUsageMu.Lock()
+				addOpenAIUsage(&completedUsage, turnUsage)
+				completedUsageMu.Unlock()
 				completedTurns.Add(1)
 				logOpenAIWSV2Passthrough(
 					"relay_turn_completed account_id=%d turn=%d request_id=%s terminal_event=%s duration_ms=%d first_token_ms=%d input_tokens=%d output_tokens=%d cache_read_tokens=%d",
@@ -632,20 +786,8 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	})
 
 	result := &OpenAIForwardResult{
-		RequestID: relayResult.RequestID,
-		Usage: OpenAIUsage{
-			InputTokens:               relayResult.Usage.InputTokens,
-			TextInputTokens:           relayResult.Usage.TextInputTokens,
-			ImageInputTokens:          relayResult.Usage.ImageInputTokens,
-			OutputTokens:              relayResult.Usage.OutputTokens,
-			TextOutputTokens:          relayResult.Usage.TextOutputTokens,
-			CacheCreationInputTokens:  relayResult.Usage.CacheCreationInputTokens,
-			CacheReadInputTokens:      relayResult.Usage.CacheReadInputTokens,
-			TextCacheReadInputTokens:  relayResult.Usage.TextCacheReadInputTokens,
-			ImageCacheReadInputTokens: relayResult.Usage.ImageCacheReadInputTokens,
-			ImageOutputTokens:         relayResult.Usage.ImageOutputTokens,
-			ImageCount:                relayResult.Usage.ImageCount,
-		},
+		RequestID:       relayResult.RequestID,
+		Usage:           openAIUsageFromWSV2Relay(relayResult.Usage),
 		Model:           relayResult.RequestModel,
 		UpstreamModel:   relayResult.RequestModel,
 		ServiceTier:     requestServiceTierPtr.Load(),
@@ -656,16 +798,43 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		FirstTokenMs:    relayResult.FirstTokenMs,
 	}
 	applyOpenAIResponseImageAccounting(result, imageBillingConfigStore.Load())
+	buildUnsettledTurnResult := func() *OpenAIForwardResult {
+		completedUsageMu.Lock()
+		settledUsage := completedUsage
+		completedUsageMu.Unlock()
+		unsettledUsage := subtractOpenAIUsage(result.Usage, settledUsage)
+		partial := &OpenAIForwardResult{
+			Usage:           unsettledUsage,
+			Model:           relayResult.RequestModel,
+			UpstreamModel:   relayResult.RequestModel,
+			ServiceTier:     requestServiceTierPtr.Load(),
+			Stream:          true,
+			OpenAIWSMode:    true,
+			ResponseHeaders: cloneHeader(handshakeHeaders),
+			Duration:        relayResult.Duration,
+			FirstTokenMs:    relayResult.FirstTokenMs,
+		}
+		applyOpenAIResponseImageAccounting(partial, imageBillingConfigStore.Load())
+		if !OpenAIForwardResultHasBillableUsage(partial) {
+			return nil
+		}
+		return partial
+	}
 
 	turnCount := int(completedTurns.Load())
 	if relayExit == nil {
+		if lifecycleErr := turnLifecycle.lifecycleError(); lifecycleErr != nil {
+			return lifecycleErr
+		}
 		if turnLifecycle.hasActive() {
 			turnErr := wrapOpenAIWSIngressTurnError(
 				"incomplete_turn",
 				errors.New("upstream websocket closed before a terminal response event"),
 				relayResult.UpstreamToClientFrames > 0,
 			)
-			turnLifecycle.finish(nil, turnErr)
+			if _, _, hookErr := turnLifecycle.finishWithError(buildUnsettledTurnResult(), turnErr); hookErr != nil {
+				return errors.Join(turnErr, hookErr)
+			}
 			return turnErr
 		}
 		logOpenAIWSV2Passthrough(
@@ -707,7 +876,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		relayErr,
 		relayExit.WroteDownstream,
 	)
-	turnLifecycle.finish(nil, turnErr)
+	if cause := turnLifecycle.activeCause(); cause != nil {
+		turnErr = wrapOpenAIWSIngressTurnError(relayExit.Stage, cause, relayExit.WroteDownstream)
+	}
+	turnLifecycle.finishWithError(buildUnsettledTurnResult(), turnErr)
+	if lifecycleErr := turnLifecycle.lifecycleError(); lifecycleErr != nil {
+		return errors.Join(turnErr, lifecycleErr)
+	}
 	return turnErr
 }
 

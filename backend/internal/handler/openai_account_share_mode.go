@@ -70,6 +70,9 @@ func (h *OpenAIGatewayHandler) handleAccountShareModeSelectionError(c *gin.Conte
 	case errors.Is(err, service.ErrAccountShareModeUnsupportedModel):
 		h.handleStreamingAwareError(c, http.StatusBadRequest, "account_share_model_unsupported", "模型不支持", streamStarted)
 		return true
+	case errors.Is(err, service.ErrAccountShareModeSelection):
+		h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "account_share_unavailable", "共享账号暂时不可用，请稍后重试", streamStarted)
+		return true
 	default:
 		return false
 	}
@@ -88,6 +91,9 @@ func (h *OpenAIGatewayHandler) handleAccountShareModeAnthropicError(c *gin.Conte
 		return true
 	case errors.Is(err, service.ErrAccountShareModeUnsupportedModel):
 		h.anthropicStreamingAwareError(c, http.StatusBadRequest, "invalid_request_error", "模型不支持", streamStarted)
+		return true
+	case errors.Is(err, service.ErrAccountShareModeSelection):
+		h.anthropicStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "共享账号暂时不可用，请稍后重试", streamStarted)
 		return true
 	default:
 		return false

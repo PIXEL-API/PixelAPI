@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 )
@@ -123,6 +124,47 @@ func EnrichOpenAIOAuthCredentialsFromIDToken(credentials map[string]any) error {
 		return nil
 	}
 
+	enrichOpenAIOAuthIdentityFields(credentials, userInfo)
+	return nil
+}
+
+// EnrichOpenAIOAuthCredentialsFromAccessToken extracts lifecycle and identity
+// metadata from an OpenAI JWT access token. Opaque access tokens remain
+// importable, while a parseable expired token is rejected when no refresh
+// token is available.
+func EnrichOpenAIOAuthCredentialsFromAccessToken(credentials map[string]any) error {
+	if credentials == nil {
+		return nil
+	}
+	accessToken := importStringField(credentials, "access_token", "accessToken")
+	if accessToken == "" {
+		return nil
+	}
+
+	claims, err := openai.DecodeIDToken(accessToken)
+	if err != nil {
+		// OpenAI may issue opaque access tokens. Their lifecycle must then be
+		// supplied through the account-level expires_at setting.
+		return nil
+	}
+
+	if claims.Exp > 0 {
+		const clockSkewTolerance = 120 * time.Second
+		expiresAt := time.Unix(claims.Exp, 0).UTC()
+		if time.Now().UTC().After(expiresAt.Add(clockSkewTolerance)) &&
+			importStringField(credentials, "refresh_token", "refreshToken") == "" {
+			return fmt.Errorf("OpenAI access_token has expired at %s", expiresAt.Format(time.RFC3339))
+		}
+		credentials["expires_at"] = expiresAt.Format(time.RFC3339)
+	}
+
+	if userInfo := claims.GetUserInfo(); userInfo != nil {
+		enrichOpenAIOAuthIdentityFields(credentials, userInfo)
+	}
+	return nil
+}
+
+func enrichOpenAIOAuthIdentityFields(credentials map[string]any, userInfo *openai.UserInfo) {
 	setIfMissing := func(key, value string) {
 		if value == "" {
 			return
@@ -141,7 +183,33 @@ func EnrichOpenAIOAuthCredentialsFromIDToken(credentials map[string]any) error {
 	setIfMissing("chatgpt_account_id", userInfo.ChatGPTAccountID)
 	setIfMissing("chatgpt_user_id", userInfo.ChatGPTUserID)
 	setIfMissing("organization_id", userInfo.OrganizationID)
-	return nil
+}
+
+// ResolveOpenAIAccessTokenOnlyLifecycle ensures an access-token-only account
+// cannot remain schedulable past the token or explicitly configured account
+// expiry. The returned boolean indicates whether auto-pause must be forced on.
+func ResolveOpenAIAccessTokenOnlyLifecycle(credentials map[string]any, configuredExpiresAt *time.Time) (*time.Time, bool, error) {
+	if importStringField(credentials, "access_token", "accessToken") == "" ||
+		importStringField(credentials, "refresh_token", "refreshToken") != "" {
+		return configuredExpiresAt, false, nil
+	}
+
+	effectiveExpiresAt := configuredExpiresAt
+	account := &Account{Credentials: credentials}
+	if tokenExpiresAt := account.GetCredentialAsTime("expires_at"); tokenExpiresAt != nil {
+		tokenExpiry := tokenExpiresAt.UTC()
+		if effectiveExpiresAt == nil || tokenExpiry.Before(*effectiveExpiresAt) {
+			effectiveExpiresAt = &tokenExpiry
+		}
+	}
+
+	if effectiveExpiresAt == nil {
+		return nil, false, fmt.Errorf("OpenAI access-token-only import requires a JWT with exp or an account expires_at")
+	}
+	if !time.Now().UTC().Before(*effectiveExpiresAt) {
+		return nil, false, fmt.Errorf("OpenAI access-token-only import expiry has already passed")
+	}
+	return effectiveExpiresAt, true, nil
 }
 
 func BuildOpenAIAccountCredentialImportExtra(tokenInfo *OpenAITokenInfo) map[string]any {
@@ -335,6 +403,11 @@ func accountCredentialImportSourceFromMap(item map[string]any) (AccountCredentia
 		}
 		if accessToken := importStringField(credentials, "access_token", "accessToken"); accessToken != "" {
 			credentials["access_token"] = accessToken
+			if platform == PlatformOpenAI {
+				if err := EnrichOpenAIOAuthCredentialsFromAccessToken(credentials); err != nil {
+					return AccountCredentialImportSource{}, err
+				}
+			}
 			return AccountCredentialImportSource{
 				Kind:        AccountCredentialImportKindOAuthCredentials,
 				Name:        name,
@@ -375,6 +448,9 @@ func accountCredentialImportSourceFromMap(item map[string]any) (AccountCredentia
 			if refreshToken := importStringField(tokens, "refresh_token", "refreshToken"); refreshToken != "" {
 				tokens["refresh_token"] = refreshToken
 			}
+			if err := EnrichOpenAIOAuthCredentialsFromAccessToken(tokens); err != nil {
+				return AccountCredentialImportSource{}, err
+			}
 			return AccountCredentialImportSource{
 				Kind:        AccountCredentialImportKindOAuthCredentials,
 				Name:        tokenName,
@@ -408,6 +484,11 @@ func accountCredentialImportSourceFromMap(item map[string]any) (AccountCredentia
 		}
 		credentials := copyImportMap(item)
 		credentials["access_token"] = accessToken
+		if platform == PlatformOpenAI {
+			if err := EnrichOpenAIOAuthCredentialsFromAccessToken(credentials); err != nil {
+				return AccountCredentialImportSource{}, err
+			}
+		}
 		return AccountCredentialImportSource{
 			Kind:        AccountCredentialImportKindOAuthCredentials,
 			Name:        name,
@@ -625,6 +706,9 @@ func accountCredentialImportSourceFromCodexManagerExport(item map[string]any) (A
 	}
 	if refreshToken := importStringField(tokens, "refresh_token", "refreshToken"); refreshToken != "" {
 		credentials["refresh_token"] = refreshToken
+	}
+	if err := EnrichOpenAIOAuthCredentialsFromAccessToken(credentials); err != nil {
+		return AccountCredentialImportSource{}, true, err
 	}
 	if chatgptAccountID := importStringField(meta, "chatgpt_account_id", "chatgptAccountId"); chatgptAccountID != "" {
 		credentials["chatgpt_account_id"] = chatgptAccountID

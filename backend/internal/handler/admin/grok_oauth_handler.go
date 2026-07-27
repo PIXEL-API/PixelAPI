@@ -18,20 +18,23 @@ import (
 const grokSSOImportConcurrency = 3
 
 type GrokOAuthHandler struct {
-	grokOAuthService *service.GrokOAuthService
-	adminService     service.AdminService
-	quotaService     *service.GrokQuotaService
+	grokOAuthService  *service.GrokOAuthService
+	grokTokenProvider *service.GrokTokenProvider
+	adminService      service.AdminService
+	quotaService      *service.GrokQuotaService
 }
 
 func NewGrokOAuthHandler(
 	grokOAuthService *service.GrokOAuthService,
+	grokTokenProvider *service.GrokTokenProvider,
 	adminService service.AdminService,
 	quotaService *service.GrokQuotaService,
 ) *GrokOAuthHandler {
 	return &GrokOAuthHandler{
-		grokOAuthService: grokOAuthService,
-		adminService:     adminService,
-		quotaService:     quotaService,
+		grokOAuthService:  grokOAuthService,
+		grokTokenProvider: grokTokenProvider,
+		adminService:      adminService,
+		quotaService:      quotaService,
 	}
 }
 
@@ -106,9 +109,15 @@ func (h *GrokOAuthHandler) RefreshToken(c *gin.Context) {
 	var proxyURL string
 	if req.ProxyID != nil {
 		proxy, err := h.adminService.GetProxy(c.Request.Context(), *req.ProxyID)
-		if err == nil && proxy != nil {
-			proxyURL = proxy.URL()
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
 		}
+		if proxy == nil {
+			response.BadRequest(c, "Proxy not found")
+			return
+		}
+		proxyURL = proxy.URL()
 	}
 	tokenInfo, err := h.grokOAuthService.RefreshToken(c.Request.Context(), refreshToken, proxyURL, req.ClientID)
 	if err != nil {
@@ -137,19 +146,11 @@ func (h *GrokOAuthHandler) RefreshAccountToken(c *gin.Context) {
 		response.BadRequest(c, "Cannot refresh non-OAuth account credentials")
 		return
 	}
-	tokenInfo, err := h.grokOAuthService.RefreshAccountToken(c.Request.Context(), account)
-	if err != nil {
-		response.ErrorFrom(c, err)
+	if h.grokTokenProvider == nil {
+		response.ErrorFrom(c, infraerrors.ServiceUnavailable("GROK_TOKEN_PROVIDER_UNAVAILABLE", "grok token provider is unavailable"))
 		return
 	}
-	newCredentials := h.grokOAuthService.BuildAccountCredentials(tokenInfo)
-	newCredentials = service.MergeCredentials(account.Credentials, newCredentials)
-	if baseURL := strings.TrimSpace(account.GetCredential("base_url")); baseURL != "" {
-		newCredentials["base_url"] = baseURL
-	}
-	updatedAccount, err := h.adminService.UpdateAccount(c.Request.Context(), accountID, &service.UpdateAccountInput{
-		Credentials: newCredentials,
-	})
+	updatedAccount, err := h.grokTokenProvider.RefreshNow(c.Request.Context(), account)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

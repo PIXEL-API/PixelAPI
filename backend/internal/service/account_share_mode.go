@@ -12,6 +12,7 @@ import (
 	"math"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,19 +28,26 @@ const (
 	AccountShareModeGroupPlatformOpenAI    = PlatformOpenAI
 	AccountShareModeGroupPlatformAnthropic = PlatformAnthropic
 
-	AccountShareListingStatusActive   = "active"
-	AccountShareListingStatusPaused   = "paused"
+	AccountShareListingStatusActive = "active"
+	AccountShareListingStatusPaused = "paused"
+	// AccountShareListingStatusDisabled remains readable and writable during
+	// the expand observation window so the previous binary stays rollback-safe.
 	AccountShareListingStatusDisabled = "disabled"
 
 	AccountShareMembershipStatusActive = "active"
 	AccountShareMembershipStatusQueued = "queued"
 	AccountShareMembershipStatusEnded  = "ended"
 
+	AccountShareSnapshotQualityExact             = "exact"
+	AccountShareSnapshotQualityBackfilledCurrent = "backfilled_current"
+	AccountShareSnapshotQualityUnknown           = "unknown"
+
 	AccountShareModeDefaultMinBalance               = 1.0
 	AccountShareModeDefaultCodexLimitPercent        = CodexQuotaDefaultLimitPercent
-	AccountShareModeMinSeats                        = 2
-	AccountShareModeMaxSeats                        = 12
+	AccountShareModeMinSeats                        = 1
+	AccountShareModeMaxSeats                        = 15
 	AccountShareModeDefaultPerUserConcurrency       = 5
+	AccountShareModeMaxPerUserConcurrency           = 50
 	AccountShareModeDefaultAccountConcurrency       = 20
 	AccountShareModeMaxAccountConcurrency           = 50
 	AccountShareModeSeatPrepayDuration              = time.Minute
@@ -51,6 +59,7 @@ const (
 	AccountShareModeSeatWaiverCompensationBatchSize = 50
 	AccountShareModeSeatBillingInterval             = 15 * time.Second
 	AccountShareModeSeatBillingBatchSize            = 100
+	AccountShareModeJoinIntentTTL                   = 2 * time.Minute
 	AccountShareModeEndMembershipTokenTTL           = 2 * time.Minute
 	AccountShareModeMaxIdleTimeoutMinutes           = 10080
 	AccountShareModeLastRequestTouchInterval        = 30 * time.Second
@@ -58,6 +67,9 @@ const (
 	AccountShareModeMembershipTouchTimeout          = 5 * time.Second
 	AccountShareModeEditSessionTTL                  = 10 * time.Minute
 	AccountShareModeQueueMaxItems                   = 5
+	AccountShareModeRoomQueueMinimum                = 20
+	AccountShareModeRoomQueueMaximum                = 100
+	AccountShareModeRoomQueuePerSeat                = 10
 	AccountShareModeDispatchCooldown                = 5 * time.Minute
 	AccountShareModeConnectivityTestTimeout         = 90 * time.Second
 	AccountShareModeImageConnectivityTestTimeout    = 10 * time.Minute
@@ -73,6 +85,7 @@ const (
 	AccountShareModeListingTabHistory               = "history"
 	AccountShareModeListingTabAll                   = "all"
 	AccountShareModeListingTabMine                  = "mine"
+	AccountShareModeListingTabArchive               = "archive"
 	AccountExternalPlacementPrivate                 = "private"
 	AccountExternalPlacementPublicPool              = "public_pool"
 	AccountExternalPlacementRoom                    = "room"
@@ -103,6 +116,8 @@ const (
 	AccountShareMembershipEndReasonIdleTimeout      = "idle_timeout"
 	AccountShareMembershipEndReasonPrepay           = "prepay_insufficient"
 	AccountShareMembershipEndReasonUnavailable      = "account_unavailable"
+	AccountShareMembershipEndReasonQueueExpired     = "queue_expired"
+	AccountShareMembershipEndReasonRoomDraining     = "room_draining"
 	AccountShareReviewCommentStatusNone             = "none"
 	AccountShareReviewCommentStatusPending          = "pending"
 	AccountShareReviewCommentStatusApproved         = "approved"
@@ -115,9 +130,11 @@ const (
 	AccountShareRoomBatchMaxAccounts                = 1000
 	accountShareSeatBillingTaskName                 = "account_share_seat_billing"
 	accountShareSeatWaiverCompensationTaskName      = "account_share_seat_waiver_compensation"
+	accountShareRoomValidationTaskName              = "account_share_room_validation"
 	accountShareReviewModerationTaskName            = "account_share_review_moderation"
 	accountShareModeContextBindingMissingError      = "该分组未绑定账号"
-	accountShareModeEndMembershipTokenAction        = "account_share_mode:end_membership:v1"
+	accountShareModeJoinIntentTokenAction           = "account_share_mode:join_listing:v1"
+	accountShareModeEndMembershipTokenAction        = "account_share_mode:end_membership:v2"
 )
 
 var accountShareModeDefaultAllowedModels = []string{
@@ -128,7 +145,9 @@ var accountShareModeDefaultAllowedModels = []string{
 }
 
 var accountShareModeAnthropicDefaultAllowedModels = []string{
+	"claude-sonnet-5",
 	"claude-sonnet-4-6",
+	"claude-opus-5",
 	"claude-opus-4-8",
 	"claude-opus-4-7",
 	"claude-fable-5",
@@ -161,6 +180,7 @@ var (
 	ErrAccountShareAlreadyUsing                 = infraerrors.Conflict("ACCOUNT_SHARE_ALREADY_USING", "user is already using an account share listing")
 	ErrAccountShareAPIKeyAlreadyBound           = infraerrors.Conflict("ACCOUNT_SHARE_API_KEY_ALREADY_BOUND", "api key is already bound to an account share listing")
 	ErrAccountShareQueueFull                    = infraerrors.Conflict("ACCOUNT_SHARE_QUEUE_FULL", "account share reservation queue is full")
+	ErrAccountShareRoomQueueLimitExceeded       = infraerrors.Conflict("ACCOUNT_SHARE_ROOM_QUEUE_LIMIT_EXCEEDED", "account share room reservation queue is full")
 	ErrAccountShareQueueInvalid                 = infraerrors.BadRequest("ACCOUNT_SHARE_QUEUE_INVALID", "account share reservation queue is invalid")
 	ErrAccountShareAPIKeyMustUseModeGroup       = infraerrors.BadRequest("ACCOUNT_SHARE_API_KEY_MUST_USE_MODE_GROUP", "api key must use account mode group")
 	ErrAccountShareBalanceBelowMinimum          = infraerrors.Forbidden("ACCOUNT_SHARE_BALANCE_BELOW_MINIMUM", "user balance is below account share minimum")
@@ -169,10 +189,9 @@ var (
 	ErrAccountShareModeOpenAIOnly               = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_OPENAI_ONLY", "account share mode only supports OpenAI OAuth accounts")
 	ErrAccountShareModeProxyRequired            = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_PROXY_REQUIRED", "proxy is required before account share OAuth login")
 	ErrAccountShareModeAllowedModelsRequired    = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_MODELS_REQUIRED", "at least one allowed model is required")
-	ErrAccountShareModeInvalidSeats             = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_SEATS", "seat_limit must be between 2 and 12")
+	ErrAccountShareModeInvalidSeats             = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_SEATS", "seat_limit must be between 1 and 15")
 	ErrAccountShareModeInvalidRateMultiplier    = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_RATE_MULTIPLIER", "rate_multiplier must be non-negative")
 	ErrAccountShareModeInvalidConcurrency       = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_CONCURRENCY", "concurrency must be positive and no greater than 50")
-	ErrAccountShareModeInsufficientConcurrency  = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INSUFFICIENT_CONCURRENCY", "concurrency must be at least per_user_concurrency multiplied by seat_limit")
 	ErrAccountShareModeInvalidHourlyRate        = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_HOURLY_RATE", "hourly_rate must be non-negative")
 	ErrAccountShareModeInvalidMinBalance        = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_MIN_BALANCE", "min_balance_required must be non-negative")
 	ErrAccountShareModeInvalidWaiverMinimum     = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_WAIVER_MINIMUM", "hourly_fee_waiver_minimum must be non-negative")
@@ -183,13 +202,27 @@ var (
 	ErrAccountShareModeInvalidPolicyRatio       = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_POLICY_RATIO", "account share mode policy ratios must be between 0 and 1 and sum to at most 1")
 	ErrAccountShareModeInvalidProxy             = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_PROXY", "invalid proxy configuration")
 	ErrAccountShareModePublicPoolAccount        = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_PUBLIC_POOL_ACCOUNT", "public shared pool accounts cannot be used for account share mode")
+	ErrAccountShareJoinIntentRequired           = infraerrors.BadRequest("ACCOUNT_SHARE_JOIN_INTENT_REQUIRED", "account share join intent is required")
+	ErrAccountShareJoinIntentInvalid            = infraerrors.Forbidden("ACCOUNT_SHARE_JOIN_INTENT_INVALID", "account share join intent is invalid or expired")
+	ErrAccountShareJoinIntentConsumed           = infraerrors.Conflict("ACCOUNT_SHARE_JOIN_INTENT_CONSUMED", "account share join intent has already been consumed")
+	ErrAccountShareJoinTermsChanged             = infraerrors.Conflict("ACCOUNT_SHARE_JOIN_TERMS_CHANGED", "account share room terms changed; review the latest terms and try again")
+	ErrAccountShareMembershipEnding             = infraerrors.Conflict("ACCOUNT_SHARE_MEMBERSHIP_ENDING", "the previous room membership is still completing exit settlement")
+	ErrAccountShareQueueConfirmationRequired    = infraerrors.Conflict("ACCOUNT_SHARE_QUEUE_CONFIRMATION_REQUIRED", "joining this room requires explicit queue confirmation")
 	ErrAccountShareEndTokenRequired             = infraerrors.BadRequest("ACCOUNT_SHARE_END_TOKEN_REQUIRED", "account share end confirmation token is required")
 	ErrAccountShareEndTokenInvalid              = infraerrors.Forbidden("ACCOUNT_SHARE_END_TOKEN_INVALID", "account share end confirmation token is invalid or expired")
+	ErrAccountShareEndStateConflict             = infraerrors.Conflict("ACCOUNT_SHARE_END_STATE_CONFLICT", "account share membership changed after end confirmation; refresh and try again")
 	ErrAccountShareModeInvalidIdleTimeout       = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_IDLE_TIMEOUT", "idle_timeout_minutes must be between 1 and 10080")
 	ErrAccountShareListingInUse                 = infraerrors.Conflict("ACCOUNT_SHARE_LISTING_IN_USE", "account share listing has active seats")
 	ErrAccountShareListingEditing               = infraerrors.Conflict("ACCOUNT_SHARE_LISTING_EDITING", "account share listing is being edited")
 	ErrAccountShareEditSessionRequired          = infraerrors.BadRequest("ACCOUNT_SHARE_EDIT_SESSION_REQUIRED", "account share edit session is required")
 	ErrAccountShareEditSessionInvalid           = infraerrors.Conflict("ACCOUNT_SHARE_EDIT_SESSION_INVALID", "account share edit session is invalid or expired")
+	ErrAccountShareExpectedVersionRequired      = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_EXPECTED_VERSION_REQUIRED", "expected_version is required")
+	ErrAccountShareVersionConflict              = infraerrors.Conflict("ACCOUNT_SHARE_ROOM_VERSION_CONFLICT", "account share room version conflict")
+	ErrAccountShareForceAdminRequired           = infraerrors.Forbidden("ACCOUNT_SHARE_ROOM_FORCE_ADMIN_REQUIRED", "only an administrator can force an account share room update")
+	ErrAccountShareUpdateReasonRequired         = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_UPDATE_REASON_REQUIRED", "update reason is required")
+	ErrAccountShareForceReasonRequired          = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_FORCE_REASON_REQUIRED", "force update reason is required")
+	ErrAccountShareForceConfirmationRequired    = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_FORCE_CONFIRMATION_REQUIRED", "force update confirmation is required")
+	ErrAccountShareUpdateRequiresPaused         = infraerrors.Conflict("ACCOUNT_SHARE_ROOM_UPDATE_REQUIRES_PAUSED", "contract updates require a paused room with no active, queued, or ending memberships")
 	ErrAccountShareRelistAccountUnavailable     = infraerrors.BadRequest("ACCOUNT_SHARE_RELIST_ACCOUNT_UNAVAILABLE", "账号测试通过，但账号状态仍不可调度，请先启用账号或恢复调度后重试")
 	ErrAccountShareReviewInvalidScore           = infraerrors.BadRequest("ACCOUNT_SHARE_REVIEW_INVALID_SCORE", "评分必须在 0-10 之间")
 	ErrAccountShareReviewCommentTooLong         = infraerrors.BadRequest("ACCOUNT_SHARE_REVIEW_COMMENT_TOO_LONG", "评论最多 1000 个字符")
@@ -227,14 +260,15 @@ type AccountShareModeRequestContext struct {
 }
 
 type accountShareModeRequestState struct {
-	mu         sync.RWMutex
-	userID     int64
-	apiKeyID   int64
-	groupID    int64
-	resolved   bool
-	membership *AccountShareMembership
-	listing    *AccountShareListing
-	err        error
+	mu              sync.RWMutex
+	userID          int64
+	apiKeyID        int64
+	groupID         int64
+	resolved        bool
+	membership      *AccountShareMembership
+	listing         *AccountShareListing
+	billingDispatch *AccountShareBillingDispatch
+	err             error
 }
 
 func WithAccountShareModeRequest(ctx context.Context, userID, apiKeyID int64) context.Context {
@@ -257,9 +291,10 @@ func WithAccountShareModeRequestFromContext(ctx context.Context, source context.
 	}
 	requestCtx, ok := AccountShareModeRequestFromContext(source)
 	if !ok {
-		return ctx
+		return WithAccountShareBillingDispatchFromContext(ctx, source)
 	}
-	return context.WithValue(ctx, accountShareModeRequestContextKey{}, requestCtx)
+	ctx = context.WithValue(ctx, accountShareModeRequestContextKey{}, requestCtx)
+	return WithAccountShareBillingDispatchFromContext(ctx, source)
 }
 
 func AccountShareModeRequestFromContext(ctx context.Context) (AccountShareModeRequestContext, bool) {
@@ -306,11 +341,15 @@ func (s *accountShareModeRequestState) clear() {
 	s.resolved = false
 	s.membership = nil
 	s.listing = nil
+	s.billingDispatch = nil
 	s.err = nil
 }
 
 type AccountShareListing struct {
 	ID                              int64                       `json:"id"`
+	RowVersion                      int64                       `json:"row_version"`
+	CurrentRevisionID               *int64                      `json:"current_revision_id,omitempty"`
+	Deleted                         bool                        `json:"deleted"`
 	AccountID                       int64                       `json:"account_id"`
 	RoomName                        string                      `json:"room_name"`
 	AccountCount                    int                         `json:"account_count"`
@@ -383,6 +422,7 @@ type AccountShareListing struct {
 	QueueDispatchCooldownUntil      *time.Time                  `json:"queue_dispatch_cooldown_until,omitempty"`
 	LastUsedMembershipID            *int64                      `json:"last_used_membership_id,omitempty"`
 	LastUsedAt                      *time.Time                  `json:"last_used_at,omitempty"`
+	HistorySnapshotQuality          string                      `json:"history_snapshot_quality,omitempty"`
 	EditingByUserID                 *int64                      `json:"editing_by_user_id,omitempty"`
 	EditingByUsername               string                      `json:"editing_by_username,omitempty"`
 	EditingExpiresAt                *time.Time                  `json:"editing_expires_at,omitempty"`
@@ -403,12 +443,6 @@ type AccountShareRoomAccount struct {
 	Priority           int        `json:"priority"`
 	PlacementState     string     `json:"placement_state"`
 	LastUsedAt         *time.Time `json:"last_used_at,omitempty"`
-}
-
-type AccountShareRoomAccountMutationInput struct {
-	ListingID   int64
-	AccountID   int64
-	OwnerUserID int64
 }
 
 type BatchAccountShareRoomAccountsInput struct {
@@ -615,31 +649,122 @@ type AccountShareListingProxy struct {
 }
 
 type AccountShareMembership struct {
-	ID                             int64      `json:"id"`
-	ListingID                      int64      `json:"listing_id"`
-	AccountID                      int64      `json:"account_id"`
-	OwnerUserID                    int64      `json:"owner_user_id,omitempty"`
-	ConsumerUserID                 int64      `json:"consumer_user_id"`
-	APIKeyID                       int64      `json:"api_key_id"`
-	Status                         string     `json:"status"`
-	QueueRank                      int        `json:"queue_rank"`
-	HourlyRateSnapshot             float64    `json:"hourly_rate_snapshot"`
-	HourlyFeeWaiverMinimumSnapshot float64    `json:"hourly_fee_waiver_minimum_snapshot"`
-	IdleTimeoutMinutes             int        `json:"idle_timeout_minutes"`
-	JoinedAt                       time.Time  `json:"joined_at"`
-	LastRequestAt                  *time.Time `json:"last_request_at,omitempty"`
-	EndedAt                        *time.Time `json:"ended_at,omitempty"`
-	EndedReason                    string     `json:"ended_reason,omitempty"`
-	PaidUntil                      *time.Time `json:"paid_until,omitempty"`
-	BilledUntil                    *time.Time `json:"billed_until,omitempty"`
-	WaiverWindowStartedAt          *time.Time `json:"waiver_window_started_at,omitempty"`
-	WaiverWindowUsageAmount        float64    `json:"waiver_window_usage_amount"`
-	WaiverWindowRequestCount       int64      `json:"waiver_window_request_count"`
-	WaiverWindowLastRequestAt      *time.Time `json:"waiver_window_last_request_at,omitempty"`
-	DispatchFailedAt               *time.Time `json:"dispatch_failed_at,omitempty"`
-	DispatchCooldownUntil          *time.Time `json:"dispatch_cooldown_until,omitempty"`
-	CreatedAt                      time.Time  `json:"created_at"`
-	UpdatedAt                      time.Time  `json:"updated_at"`
+	ID                             int64                             `json:"id"`
+	ListingID                      int64                             `json:"listing_id"`
+	ListingRevisionID              *int64                            `json:"listing_revision_id,omitempty"`
+	ListingVersionSnapshot         *int64                            `json:"listing_version_snapshot,omitempty"`
+	AccountID                      int64                             `json:"account_id"`
+	OwnerUserID                    int64                             `json:"owner_user_id,omitempty"`
+	RoomNameSnapshot               string                            `json:"room_name_snapshot,omitempty"`
+	OwnerUserIDSnapshot            *int64                            `json:"owner_user_id_snapshot,omitempty"`
+	OwnerUsernameSnapshot          string                            `json:"owner_username_snapshot,omitempty"`
+	PlatformSnapshot               string                            `json:"platform_snapshot,omitempty"`
+	AccountLevelSnapshot           string                            `json:"account_level_snapshot,omitempty"`
+	APIKeyNameSnapshot             string                            `json:"api_key_name_snapshot,omitempty"`
+	TermsSnapshot                  *AccountShareListingTermsSnapshot `json:"terms_snapshot,omitempty"`
+	SnapshotQuality                string                            `json:"snapshot_quality,omitempty"`
+	ConsumerUserID                 int64                             `json:"consumer_user_id"`
+	APIKeyID                       int64                             `json:"api_key_id"`
+	Status                         string                            `json:"status"`
+	QueueRank                      int                               `json:"queue_rank"`
+	HourlyRateSnapshot             float64                           `json:"hourly_rate_snapshot"`
+	HourlyFeeWaiverMinimumSnapshot float64                           `json:"hourly_fee_waiver_minimum_snapshot"`
+	IdleTimeoutMinutes             int                               `json:"idle_timeout_minutes"`
+	JoinedAt                       time.Time                         `json:"joined_at"`
+	LastRequestAt                  *time.Time                        `json:"last_request_at,omitempty"`
+	EndedAt                        *time.Time                        `json:"ended_at,omitempty"`
+	EndedReason                    string                            `json:"ended_reason,omitempty"`
+	PaidUntil                      *time.Time                        `json:"paid_until,omitempty"`
+	BilledUntil                    *time.Time                        `json:"billed_until,omitempty"`
+	WaiverWindowStartedAt          *time.Time                        `json:"waiver_window_started_at,omitempty"`
+	WaiverWindowUsageAmount        float64                           `json:"waiver_window_usage_amount"`
+	WaiverWindowRequestCount       int64                             `json:"waiver_window_request_count"`
+	WaiverWindowLastRequestAt      *time.Time                        `json:"waiver_window_last_request_at,omitempty"`
+	DispatchFailedAt               *time.Time                        `json:"dispatch_failed_at,omitempty"`
+	DispatchCooldownUntil          *time.Time                        `json:"dispatch_cooldown_until,omitempty"`
+	EndingRequestedAt              *time.Time                        `json:"ending_requested_at,omitempty"`
+	EndingReason                   string                            `json:"ending_reason,omitempty"`
+	SettlementStatus               string                            `json:"settlement_status,omitempty"`
+	EndingOperationID              string                            `json:"ending_operation_id,omitempty"`
+	CreatedAt                      time.Time                         `json:"created_at"`
+	UpdatedAt                      time.Time                         `json:"updated_at"`
+}
+
+type AccountShareMembershipHistoryReview struct {
+	ID                  int64      `json:"id"`
+	Score               int        `json:"score"`
+	Comment             string     `json:"comment,omitempty"`
+	CommentStatus       string     `json:"comment_status"`
+	CommentRejectReason string     `json:"comment_reject_reason,omitempty"`
+	CreatedAt           *time.Time `json:"created_at,omitempty"`
+}
+
+// AccountShareMembershipHistoryEntry is an immutable, membership-scoped
+// history record. It intentionally does not depend on the current room account
+// assignment, so it remains readable after the room is soft-deleted or its
+// accounts are detached.
+type AccountShareMembershipHistoryEntry struct {
+	MembershipID                  int64                                `json:"membership_id"`
+	ListingID                     int64                                `json:"listing_id"`
+	ListingRevisionID             *int64                               `json:"listing_revision_id,omitempty"`
+	ListingVersionSnapshot        *int64                               `json:"listing_version_snapshot,omitempty"`
+	RoomName                      string                               `json:"room_name"`
+	RoomDeleted                   bool                                 `json:"room_deleted"`
+	RoomDeletedAt                 *time.Time                           `json:"room_deleted_at,omitempty"`
+	OwnerUserID                   int64                                `json:"owner_user_id"`
+	OwnerUsername                 string                               `json:"owner_username,omitempty"`
+	Platform                      string                               `json:"platform"`
+	AccountLevel                  string                               `json:"account_level,omitempty"`
+	AccountID                     int64                                `json:"account_id,omitempty"`
+	AccountName                   string                               `json:"account_name,omitempty"`
+	ConfiguredConcurrencySnapshot int                                  `json:"configured_concurrency_snapshot,omitempty"`
+	APIKeyID                      int64                                `json:"api_key_id"`
+	APIKeyName                    string                               `json:"api_key_name,omitempty"`
+	Status                        string                               `json:"status"`
+	JoinedAt                      time.Time                            `json:"joined_at"`
+	LastRequestAt                 *time.Time                           `json:"last_request_at,omitempty"`
+	EndedAt                       *time.Time                           `json:"ended_at,omitempty"`
+	EndedReason                   string                               `json:"ended_reason,omitempty"`
+	PaidUntil                     *time.Time                           `json:"paid_until,omitempty"`
+	BilledUntil                   *time.Time                           `json:"billed_until,omitempty"`
+	HourlyRateSnapshot            float64                              `json:"hourly_rate_snapshot"`
+	HourlyFeeWaiverMinimum        float64                              `json:"hourly_fee_waiver_minimum_snapshot"`
+	IdleTimeoutMinutes            int                                  `json:"idle_timeout_minutes"`
+	UsageRequestCount             int64                                `json:"usage_request_count"`
+	UsageRequestCost              float64                              `json:"usage_request_cost"`
+	TermsSnapshot                 *AccountShareListingTermsSnapshot    `json:"terms_snapshot,omitempty"`
+	SnapshotQuality               string                               `json:"snapshot_quality"`
+	Review                        *AccountShareMembershipHistoryReview `json:"review,omitempty"`
+}
+
+type AccountShareMembershipRuntimeBinding struct {
+	BindingID           int64 `json:"binding_id"`
+	MembershipID        int64 `json:"membership_id"`
+	ListingID           int64 `json:"listing_id"`
+	AccountID           int64 `json:"account_id"`
+	ListingRevisionID   int64 `json:"listing_revision_id"`
+	TermsRevisionNumber int64 `json:"terms_revision_number"`
+	RoutingGeneration   int64 `json:"routing_generation"`
+}
+
+type AccountShareListingTermsSnapshot struct {
+	ListingRevisionID       int64    `json:"listing_revision_id"`
+	RowVersion              int64    `json:"row_version"`
+	SchemaVersion           int      `json:"schema_version"`
+	RoomName                string   `json:"room_name"`
+	Status                  string   `json:"status"`
+	SeatLimit               int      `json:"seat_limit"`
+	RateMultiplier          float64  `json:"rate_multiplier"`
+	AllowedModels           []string `json:"allowed_models"`
+	PerUserConcurrency      int      `json:"per_user_concurrency"`
+	HourlyRate              float64  `json:"hourly_rate"`
+	HourlyFeeWaiverMinimum  float64  `json:"hourly_fee_waiver_minimum"`
+	MinBalanceRequired      float64  `json:"min_balance_required"`
+	CodexCLIOnly            bool     `json:"codex_cli_only"`
+	Codex5hLimitPercent     float64  `json:"codex_5h_limit_percent"`
+	Codex7dLimitPercent     float64  `json:"codex_7d_limit_percent"`
+	Anthropic5hLimitPercent float64  `json:"anthropic_5h_limit_percent,omitempty"`
+	Anthropic7dLimitPercent float64  `json:"anthropic_7d_limit_percent,omitempty"`
 }
 
 type AccountShareReview struct {
@@ -757,11 +882,83 @@ type AccountShareEndMembershipToken struct {
 	ExpiresAt    time.Time `json:"expires_at"`
 }
 
+type CreateAccountShareJoinIntentInput struct {
+	APIKeyID           int64
+	IdleTimeoutMinutes int
+	AcceptQueue        bool
+}
+
+type CompleteAccountShareJoinInput struct {
+	APIKeyID           int64
+	IdleTimeoutMinutes int
+	IntentToken        string
+	ExpectedVersion    int64
+	ExpectedRevisionID int64
+	AcceptQueue        bool
+}
+
+type AccountShareJoinIntent struct {
+	ListingID          int64                             `json:"listing_id"`
+	APIKeyID           int64                             `json:"api_key_id"`
+	Token              string                            `json:"token"`
+	ExpiresAt          time.Time                         `json:"expires_at"`
+	ExpectedVersion    int64                             `json:"expected_version"`
+	ExpectedRevisionID int64                             `json:"expected_revision_id,omitempty"`
+	AcceptQueue        bool                              `json:"accept_queue"`
+	QueueMayBeRequired bool                              `json:"queue_may_be_required"`
+	Terms              *AccountShareListingTermsSnapshot `json:"terms"`
+}
+
+type AccountShareJoinRepositoryInput struct {
+	ConsumerUserID     int64
+	APIKeyID           int64
+	ListingID          int64
+	IdleTimeoutMinutes int
+	ExpectedVersion    int64
+	ExpectedRevisionID int64
+	AcceptQueue        bool
+	IntentIssuedAt     time.Time
+	IntentNonce        string
+	AcceptedTerms      *AccountShareListingTermsSnapshot
+}
+
+type accountShareJoinIntentTokenClaims struct {
+	Action             string                           `json:"action"`
+	ConsumerID         int64                            `json:"consumer_user_id"`
+	ListingID          int64                            `json:"listing_id"`
+	APIKeyID           int64                            `json:"api_key_id"`
+	IdleTimeoutMinutes int                              `json:"idle_timeout_minutes"`
+	ExpectedVersion    int64                            `json:"expected_version"`
+	ExpectedRevisionID int64                            `json:"expected_revision_id,omitempty"`
+	AcceptQueue        bool                             `json:"accept_queue"`
+	Terms              AccountShareListingTermsSnapshot `json:"terms"`
+	Nonce              string                           `json:"nonce"`
+	IssuedAt           int64                            `json:"issued_at"`
+	ExpiresAt          int64                            `json:"expires_at"`
+}
+
 type accountShareEndMembershipTokenClaims struct {
-	Action       string `json:"action"`
-	ConsumerID   int64  `json:"consumer_user_id"`
-	MembershipID int64  `json:"membership_id"`
-	ExpiresAt    int64  `json:"expires_at"`
+	Action            string `json:"action"`
+	ConsumerID        int64  `json:"consumer_user_id"`
+	MembershipID      int64  `json:"membership_id"`
+	MembershipStatus  string `json:"membership_status"`
+	MembershipUpdated int64  `json:"membership_updated_at_unix_nano"`
+	OperationID       string `json:"operation_id"`
+	Nonce             string `json:"nonce"`
+	ExpiresAt         int64  `json:"expires_at"`
+}
+
+type BeginAccountShareMembershipEndInput struct {
+	ConsumerUserID           int64
+	MembershipID             int64
+	ExpectedMembershipStatus string
+	ExpectedUpdatedAt        time.Time
+	OperationID              string
+}
+
+type AccountShareEndingMembershipCandidate struct {
+	MembershipID int64
+	OperationID  string
 }
 
 type AccountShareSeatBillingResult struct {
@@ -878,6 +1075,9 @@ type UpdateAccountShareListingInput struct {
 	Concurrency             *int
 	EditSessionID           string
 	ForceActiveEdit         bool
+	ExpectedVersion         *int64
+	Reason                  string
+	Confirmed               bool
 }
 
 type BeginAccountShareListingEditInput struct {
@@ -917,11 +1117,15 @@ type AccountShareModeRepository interface {
 	BeginListingEdit(ctx context.Context, actorUserID int64, actorIsAdmin bool, listingID int64, input BeginAccountShareListingEditInput) (*AccountShareListing, error)
 	ReleaseListingEdit(ctx context.Context, actorUserID int64, actorIsAdmin bool, listingID int64, sessionID string) (*AccountShareListing, error)
 	UpdateListing(ctx context.Context, actorUserID int64, actorIsAdmin bool, listingID int64, input UpdateAccountShareListingInput) (*AccountShareListing, error)
-	JoinListing(ctx context.Context, consumerUserID int64, apiKeyID int64, listingID int64, idleTimeoutMinutes int) (*AccountShareMembership, error)
-	EndMembership(ctx context.Context, consumerUserID int64, membershipID int64) (*AccountShareMembership, *AccountShareSeatBillingResult, error)
+	EnsureListingRevisionTerms(ctx context.Context, listingID int64) (*AccountShareListingTermsSnapshot, error)
+	JoinListing(ctx context.Context, input AccountShareJoinRepositoryInput) (*AccountShareMembership, error)
+	GetMembershipForEnd(ctx context.Context, consumerUserID int64, membershipID int64) (*AccountShareMembership, error)
+	BeginMembershipEnd(ctx context.Context, input BeginAccountShareMembershipEndInput) (*AccountShareMembership, *AccountShareSeatBillingResult, error)
+	FinalizeMembershipEnd(ctx context.Context, membershipID int64, operationID string) (*AccountShareMembership, *AccountShareSeatBillingResult, bool, error)
+	ListEndingMembershipCandidates(ctx context.Context, limit int) ([]AccountShareEndingMembershipCandidate, error)
 	UpdateMembershipIdleTimeout(ctx context.Context, consumerUserID int64, membershipID int64, idleTimeoutMinutes int) (*AccountShareMembership, error)
 	SubmitReview(ctx context.Context, consumerUserID int64, membershipID int64, input SubmitAccountShareReviewInput) (*AccountShareReview, error)
-	ListListingReviews(ctx context.Context, viewerUserID int64, listingID int64, params pagination.PaginationParams) ([]AccountShareReview, *pagination.PaginationResult, error)
+	ListListingReviews(ctx context.Context, viewerUserID int64, viewerIsAdmin bool, listingID int64, params pagination.PaginationParams) ([]AccountShareReview, *pagination.PaginationResult, error)
 	ListOwnerReviews(ctx context.Context, viewerUserID int64, ownerUserID int64, params pagination.PaginationParams) ([]AccountShareReview, *pagination.PaginationResult, error)
 	ClaimPendingReviewModerations(ctx context.Context, now time.Time, limit int) ([]AccountShareReview, error)
 	CompleteReviewModeration(ctx context.Context, reviewID int64, result AccountShareReviewModerationResult) error
@@ -947,17 +1151,33 @@ type AccountShareModeRepository interface {
 	ResolvePolicy(ctx context.Context) (*AccountSharePolicy, error)
 }
 
+type AccountShareHistoryRepository interface {
+	ListMembershipHistory(
+		ctx context.Context,
+		consumerUserID int64,
+		params pagination.PaginationParams,
+	) ([]AccountShareMembershipHistoryEntry, *pagination.PaginationResult, error)
+}
+
 type AccountShareRoomRepository interface {
 	CreateRoomFromOwnedAccount(ctx context.Context, ownerUserID, accountID, modeGroupID int64, idempotencyKey string, listing *AccountShareListing) (*AccountShareListing, error)
 	ListRoomAccounts(ctx context.Context, listingID, viewerUserID int64, viewerIsAdmin bool) ([]AccountShareRoomAccount, error)
-	AttachRoomAccount(ctx context.Context, input AccountShareRoomAccountMutationInput) error
-	DetachRoomAccount(ctx context.Context, input AccountShareRoomAccountMutationInput) (*AccountShareSeatBillingResult, error)
+	AttachRoomAccountsAtomic(ctx context.Context, input BatchAccountShareRoomAccountsInput) error
+	DetachRoomAccountsAtomic(ctx context.Context, input BatchAccountShareRoomAccountsInput) (*AccountShareSeatBillingResult, error)
 	HasRoomAccount(ctx context.Context, ownerUserID, accountID int64) (bool, error)
 	GetExternalPlacement(ctx context.Context, ownerUserID, accountID int64) (*AccountExternalPlacement, error)
 	BeginExternalPlacementDrain(ctx context.Context, ownerUserID, accountID int64) (bool, error)
 	RestoreExternalPlacementAfterDrain(ctx context.Context, ownerUserID, accountID int64) error
 	ConvertExternalPlacement(ctx context.Context, input ConvertAccountExternalPlacementInput) (*ConvertAccountExternalPlacementResult, error)
 	RebindMembershipToHealthyRoomAccount(ctx context.Context, membershipID, currentAccountID int64, now time.Time) (bool, error)
+}
+
+type AccountShareRuntimeBindingRepository interface {
+	GetOpenMembershipRuntimeBinding(
+		ctx context.Context,
+		membershipID int64,
+		accountID int64,
+	) (*AccountShareMembershipRuntimeBinding, error)
 }
 
 type AccountShareModeProxyRepository interface {
@@ -975,34 +1195,37 @@ type accountShareRecommendationUsageProfileRepository interface {
 }
 
 type AccountShareModeService struct {
-	repo                 AccountShareModeRepository
-	accountRepo          AccountRepository
-	apiKeyRepo           APIKeyRepository
-	userRepo             UserRepository
-	proxyRepo            AccountShareModeProxyRepository
-	usageProfileRepo     accountShareRecommendationUsageProfileRepository
-	openaiOAuthService   *OpenAIOAuthService
-	oauthService         *OAuthService
-	accountTestService   accountShareConnectivityTester
-	rateLimitService     accountShareAccountStateRecovery
-	concurrencyService   *ConcurrencyService
-	authCacheInvalidator APIKeyAuthCacheInvalidator
-	billingCacheService  *BillingCacheService
-	billingService       *BillingService
-	modelPricingResolver *ModelPricingResolver
-	settingService       *SettingService
-	reviewSettingRepo    SettingRepository
-	reviewHTTPClient     *http.Client
-	taskExecutor         *ClusterTaskExecutor
-	actionTokenSecret    []byte
-	seatBillingStopCh    chan struct{}
-	seatBillingStopOnce  sync.Once
-	seatBillingStartOnce sync.Once
-	seatBillingWG        sync.WaitGroup
-	reviewStopCh         chan struct{}
-	reviewStopOnce       sync.Once
-	reviewStartOnce      sync.Once
-	reviewWG             sync.WaitGroup
+	repo                     AccountShareModeRepository
+	accountRepo              AccountRepository
+	apiKeyRepo               APIKeyRepository
+	userRepo                 UserRepository
+	proxyRepo                AccountShareModeProxyRepository
+	usageProfileRepo         accountShareRecommendationUsageProfileRepository
+	openaiOAuthService       *OpenAIOAuthService
+	oauthService             *OAuthService
+	accountTestService       accountShareConnectivityTester
+	rateLimitService         accountShareAccountStateRecovery
+	concurrencyService       *ConcurrencyService
+	authCacheInvalidator     APIKeyAuthCacheInvalidator
+	billingCacheService      *BillingCacheService
+	billingService           *BillingService
+	modelPricingResolver     *ModelPricingResolver
+	settingService           *SettingService
+	reviewSettingRepo        SettingRepository
+	reviewHTTPClient         *http.Client
+	taskExecutor             *ClusterTaskExecutor
+	billingIntentRepository  AccountShareBillingIntentRepository
+	billingIntentWorker      *AccountShareBillingWorker
+	actionTokenSecret        []byte
+	lifecycleContractEnabled bool
+	seatBillingStopCh        chan struct{}
+	seatBillingStopOnce      sync.Once
+	seatBillingStartOnce     sync.Once
+	seatBillingWG            sync.WaitGroup
+	reviewStopCh             chan struct{}
+	reviewStopOnce           sync.Once
+	reviewStartOnce          sync.Once
+	reviewWG                 sync.WaitGroup
 }
 
 func NewAccountShareModeService(
@@ -1102,14 +1325,50 @@ func (s *AccountShareModeService) SetActionTokenSecret(secret string) {
 	s.actionTokenSecret = []byte(strings.TrimSpace(secret))
 }
 
+func (s *AccountShareModeService) SetLifecycleContractEnabled(enabled bool) {
+	if s == nil {
+		return
+	}
+	s.lifecycleContractEnabled = enabled
+}
+
+func (s *AccountShareModeService) initialListingStatus() string {
+	if s != nil && s.lifecycleContractEnabled {
+		return AccountShareListingStatusValidating
+	}
+	return AccountShareListingStatusActive
+}
+
+func (s *AccountShareModeService) requireLifecycleContract() error {
+	if s == nil || !s.lifecycleContractEnabled {
+		return ErrAccountShareLifecycleRolloutDisabled
+	}
+	return nil
+}
+
+func (s *AccountShareModeService) SetBillingIntentWorker(worker *AccountShareBillingWorker) {
+	if s == nil {
+		return
+	}
+	s.billingIntentWorker = worker
+}
+
+func (s *AccountShareModeService) SetBillingIntentRepository(repository AccountShareBillingIntentRepository) {
+	if s == nil {
+		return
+	}
+	s.billingIntentRepository = repository
+}
+
 func (s *AccountShareModeService) StartSeatBillingWorker() {
 	if s == nil || s.repo == nil {
 		return
 	}
 	s.seatBillingStartOnce.Do(func() {
-		s.seatBillingWG.Add(2)
+		s.seatBillingWG.Add(3)
 		go s.runSeatBillingWorker()
 		go s.runSeatWaiverCompensationWorker()
+		go s.runRoomValidationWorker()
 	})
 }
 
@@ -1198,8 +1457,71 @@ func (s *AccountShareModeService) processSeatBillingOnceLeased(ctx context.Conte
 		}
 		s.invalidateSeatBillingCaches(result)
 		if result == nil || result.Processed < AccountShareModeSeatBillingBatchSize {
-			return nil
+			break
 		}
+	}
+	if err := guard.Check(ctx); err != nil {
+		return err
+	}
+	var billingRecoveryErr error
+	if s.billingIntentRepository != nil {
+		_, billingRecoveryErr = s.recoverStaleBillingIntentsOnce(ctx, time.Now().UTC(), guard.Check)
+		logAccountShareBillingRecoveryError(billingRecoveryErr)
+	}
+	if err := guard.Check(ctx); err != nil {
+		return errors.Join(billingRecoveryErr, err)
+	}
+	var billingIntentErr error
+	if s.billingIntentWorker != nil {
+		_, billingIntentErr = s.billingIntentWorker.RunUntilDrained(
+			ctx,
+			AccountShareBillingWorkerDefaultDrainSoftBudget,
+			guard.Check,
+		)
+	}
+	if err := guard.Check(ctx); err != nil {
+		return errors.Join(billingRecoveryErr, billingIntentErr, err)
+	}
+	s.processEndingMembershipsOnce(ctx)
+	if err := guard.Check(ctx); err != nil {
+		return errors.Join(billingRecoveryErr, billingIntentErr, err)
+	}
+	s.processRoomLifecycleOnce(ctx)
+	return errors.Join(billingRecoveryErr, billingIntentErr)
+}
+
+func (s *AccountShareModeService) processEndingMembershipsOnce(ctx context.Context) {
+	if s == nil || s.repo == nil {
+		return
+	}
+	candidates, err := s.repo.ListEndingMembershipCandidates(ctx, AccountShareModeSeatBillingBatchSize)
+	if err != nil {
+		log.Printf("account_share_mode: list ending memberships failed: %v", err)
+		return
+	}
+	for _, candidate := range candidates {
+		if candidate.MembershipID <= 0 || strings.TrimSpace(candidate.OperationID) == "" {
+			continue
+		}
+		hasLease, leaseErr := s.hasActiveMembershipLease(ctx, candidate.MembershipID)
+		if leaseErr != nil {
+			// Redis is the runtime lease authority. An unavailable or
+			// unsupported lease inspector is deliberately fail-closed.
+			log.Printf("account_share_mode: defer membership %d finalization because lease state is unknown: %v", candidate.MembershipID, leaseErr)
+			continue
+		}
+		if hasLease {
+			continue
+		}
+		membership, billing, finalized, finalizeErr := s.repo.FinalizeMembershipEnd(ctx, candidate.MembershipID, candidate.OperationID)
+		if finalizeErr != nil {
+			log.Printf("account_share_mode: finalize ending membership %d failed: %v", candidate.MembershipID, finalizeErr)
+			continue
+		}
+		if !finalized {
+			continue
+		}
+		s.invalidateMembershipEndCaches(ctx, membership, billing)
 	}
 }
 
@@ -1772,7 +2094,7 @@ func (s *AccountShareModeService) CreateOpenAIListingFromToken(ctx context.Conte
 	}
 	listing := &AccountShareListing{
 		OwnerUserID:            ownerUserID,
-		Status:                 AccountShareListingStatusActive,
+		Status:                 s.initialListingStatus(),
 		SeatLimit:              input.SeatLimit,
 		RateMultiplier:         input.RateMultiplier,
 		AllowedModels:          input.AllowedModels,
@@ -1874,7 +2196,7 @@ func (s *AccountShareModeService) CreateAnthropicListingFromToken(ctx context.Co
 	}
 	listing := &AccountShareListing{
 		OwnerUserID:             ownerUserID,
-		Status:                  AccountShareListingStatusActive,
+		Status:                  s.initialListingStatus(),
 		SeatLimit:               input.SeatLimit,
 		RateMultiplier:          input.RateMultiplier,
 		AllowedModels:           input.AllowedModels,
@@ -1929,17 +2251,17 @@ func (s *AccountShareModeService) CreateRoomFromOwnedAccount(ctx context.Context
 	if account.Status != StatusActive || !account.Schedulable {
 		return nil, ErrAccountShareAccountUnavailable
 	}
-	if s.concurrencyService != nil {
-		loadByAccountID, err := s.concurrencyService.GetAccountsLoadBatch(ctx, []AccountWithConcurrency{{
-			ID:             account.ID,
-			MaxConcurrency: account.Concurrency,
-		}})
-		if err != nil {
-			return nil, err
+	allowedModels := normalizeAllowedModelsOrDefaultForPlatform(account.Platform, input.AllowedModels)
+	for _, model := range allowedModels {
+		if !account.IsModelSupported(model) {
+			return nil, ErrAccountShareModeUnsupportedModel.WithMetadata(map[string]string{
+				"account_id": strconv.FormatInt(account.ID, 10),
+				"model":      model,
+			})
 		}
-		if load := loadByAccountID[account.ID]; load != nil && (load.CurrentConcurrency > 0 || load.WaitingCount > 0) {
-			return nil, ErrAccountExternalPlacementBusy
-		}
+	}
+	if err := ensureAccountExternalPlacementIdle(ctx, s.concurrencyService, account); err != nil {
+		return nil, err
 	}
 	accountLevel := NormalizeAccountLevel(account.AccountLevel)
 	var levelConfigs []OpenAIAccountLevelConfig
@@ -1953,7 +2275,6 @@ func (s *AccountShareModeService) CreateRoomFromOwnedAccount(ctx context.Context
 	if accountLevel == AccountLevelUnknown {
 		return nil, ErrAccountShareRoomUnknownLevel
 	}
-	allowedModels := normalizeAllowedModelsOrDefaultForPlatform(account.Platform, input.AllowedModels)
 	perUserConcurrency := normalizePositiveInt(input.PerUserConcurrency, AccountShareModeDefaultPerUserConcurrency)
 	if err := validateAccountShareListingConfig(
 		input.SeatLimit,
@@ -2009,7 +2330,7 @@ func (s *AccountShareModeService) CreateRoomFromOwnedAccount(ctx context.Context
 		Platform:                strings.ToLower(strings.TrimSpace(account.Platform)),
 		AccountLevel:            accountLevel,
 		OwnerUserID:             ownerUserID,
-		Status:                  AccountShareListingStatusActive,
+		Status:                  s.initialListingStatus(),
 		SeatLimit:               input.SeatLimit,
 		RateMultiplier:          input.RateMultiplier,
 		AllowedModels:           allowedModels,
@@ -2031,6 +2352,7 @@ func (s *AccountShareModeService) CreateRoomFromOwnedAccount(ctx context.Context
 	drained = false
 	normalizeAccountShareListingAccountLevelWithConfigs(created, levelConfigs)
 	s.enrichListingRuntime(ctx, created)
+	s.schedulePostCreateConnectivityTest(created)
 	return created, nil
 }
 
@@ -2070,8 +2392,12 @@ func (s *AccountShareModeService) mutateRoomAccounts(ctx context.Context, input 
 	if len(accountIDs) == 0 || len(accountIDs) > AccountShareRoomBatchMaxAccounts {
 		return nil, ErrAccountExternalPlacementInvalid.WithMetadata(map[string]string{"field": "account_ids"})
 	}
-	if _, err := NormalizeIdempotencyKey(input.IdempotencyKey); err != nil {
+	idempotencyKey, err := NormalizeIdempotencyKey(input.IdempotencyKey)
+	if err != nil {
 		return nil, err
+	}
+	if idempotencyKey == "" {
+		return nil, ErrIdempotencyKeyRequired
 	}
 	if s == nil || s.repo == nil {
 		return nil, ErrServiceUnavailable
@@ -2080,45 +2406,32 @@ func (s *AccountShareModeService) mutateRoomAccounts(ctx context.Context, input 
 	if !ok {
 		return nil, ErrServiceUnavailable
 	}
-	listing, err := s.repo.GetListingByID(ctx, input.ListingID, input.OwnerUserID)
+	input.AccountIDs = accountIDs
+	input.IdempotencyKey = idempotencyKey
+	if attach {
+		err = roomRepo.AttachRoomAccountsAtomic(ctx, input)
+	} else {
+		var billing *AccountShareSeatBillingResult
+		billing, err = roomRepo.DetachRoomAccountsAtomic(ctx, input)
+		if err == nil {
+			s.invalidateSeatBillingCaches(billing)
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
-	if listing == nil || listing.OwnerUserID != input.OwnerUserID {
-		return nil, ErrAccountShareRoomOwnerMismatch
-	}
-
 	result := &BulkUpdateAccountsResult{
-		SuccessIDs: make([]int64, 0, len(accountIDs)),
+		Success:    len(accountIDs),
+		Failed:     0,
+		SuccessIDs: append([]int64(nil), accountIDs...),
 		FailedIDs:  make([]int64, 0),
 		Results:    make([]BulkUpdateAccountResult, 0, len(accountIDs)),
 	}
 	for _, accountID := range accountIDs {
-		item := BulkUpdateAccountResult{AccountID: accountID}
-		mutation := AccountShareRoomAccountMutationInput{
-			ListingID:   input.ListingID,
-			AccountID:   accountID,
-			OwnerUserID: input.OwnerUserID,
-		}
-		if attach {
-			err = roomRepo.AttachRoomAccount(ctx, mutation)
-		} else {
-			var billing *AccountShareSeatBillingResult
-			billing, err = roomRepo.DetachRoomAccount(ctx, mutation)
-			if err == nil {
-				s.invalidateSeatBillingCaches(billing)
-			}
-		}
-		if err != nil {
-			item.Error = err.Error()
-			result.Failed++
-			result.FailedIDs = append(result.FailedIDs, accountID)
-		} else {
-			item.Success = true
-			result.Success++
-			result.SuccessIDs = append(result.SuccessIDs, accountID)
-		}
-		result.Results = append(result.Results, item)
+		result.Results = append(result.Results, BulkUpdateAccountResult{
+			AccountID: accountID,
+			Success:   true,
+		})
 	}
 	return result, nil
 }
@@ -2142,8 +2455,32 @@ func (s *AccountShareModeService) ListListings(ctx context.Context, viewerUserID
 		return nil, nil, err
 	}
 	normalizeAccountShareListingsAccountLevelWithConfigs(listings, levelConfigs)
-	s.enrichListingsRuntime(ctx, listings)
+	// History and archive projections are immutable snapshots. Enriching them
+	// with the current account load would leak unrelated live state after an
+	// account is detached, reused by another room, or the room is deleted.
+	if normalized.Tab != AccountShareModeListingTabHistory &&
+		normalized.Tab != AccountShareModeListingTabArchive {
+		s.enrichListingsRuntime(ctx, listings)
+	}
 	return listings, result, nil
+}
+
+func (s *AccountShareModeService) ListMembershipHistory(
+	ctx context.Context,
+	consumerUserID int64,
+	params pagination.PaginationParams,
+) ([]AccountShareMembershipHistoryEntry, *pagination.PaginationResult, error) {
+	if consumerUserID <= 0 {
+		return nil, nil, ErrUserNotFound
+	}
+	if s == nil || s.repo == nil {
+		return nil, nil, ErrServiceUnavailable
+	}
+	repo, ok := s.repo.(AccountShareHistoryRepository)
+	if !ok {
+		return nil, nil, ErrServiceUnavailable
+	}
+	return repo.ListMembershipHistory(ctx, consumerUserID, params)
 }
 
 func (s *AccountShareModeService) GetMySpendSummary(ctx context.Context, viewerUserID int64, input AccountShareMySpendInput) (*AccountShareMySpendSummary, error) {
@@ -2481,6 +2818,22 @@ func (s *AccountShareModeService) BeginListingEdit(ctx context.Context, actorUse
 	if s == nil || s.repo == nil {
 		return nil, ErrServiceUnavailable
 	}
+	if !actorIsAdmin || !force {
+		state, err := s.GetRoomManagementState(ctx, actorUserID, actorIsAdmin, listingID)
+		if err != nil {
+			return nil, err
+		}
+		blockers := state.Blockers
+		// An existing edit lease is resolved atomically by BeginListingEdit:
+		// the same actor/session may renew it, while another session is rejected.
+		blockers.ValidEditSession = false
+		if blockers.ConflictingOperation {
+			return nil, ErrAccountShareRoomOperationConflict.WithMetadata(blockers.Metadata())
+		}
+		if blockers.Any() {
+			return nil, ErrAccountShareListingInUse.WithMetadata(blockers.Metadata())
+		}
+	}
 	listing, err := s.repo.BeginListingEdit(ctx, actorUserID, actorIsAdmin, listingID, BeginAccountShareListingEditInput{
 		SessionID: sessionID,
 		Force:     force,
@@ -2535,8 +2888,37 @@ func (s *AccountShareModeService) UpdateListing(ctx context.Context, actorUserID
 	if actorUserID <= 0 {
 		return nil, ErrUserNotFound
 	}
+	if input.ExpectedVersion == nil || *input.ExpectedVersion <= 0 {
+		return nil, ErrAccountShareExpectedVersionRequired.WithMetadata(map[string]string{"field": "expected_version"})
+	}
+	if input.Status != nil {
+		return nil, ErrAccountShareRoomLifecycleCommandRequired
+	}
 	if input.ProxyID != nil || input.Concurrency != nil {
 		return nil, ErrAccountShareRoomAccountConfigUnsupported
+	}
+	if (input.Codex5hLimitPercent != nil && input.Anthropic5hLimitPercent != nil) ||
+		(input.Codex7dLimitPercent != nil && input.Anthropic7dLimitPercent != nil) {
+		return nil, ErrAccountShareRoomConflictingFields
+	}
+	if !hasAccountShareModeConfigUpdate(input) {
+		return nil, ErrAccountShareRoomNoChanges
+	}
+	input.Reason = strings.TrimSpace(input.Reason)
+	input.EditSessionID = strings.TrimSpace(input.EditSessionID)
+	if input.ForceActiveEdit && !actorIsAdmin {
+		return nil, ErrAccountShareForceAdminRequired
+	}
+	if input.Reason == "" {
+		if input.ForceActiveEdit {
+			return nil, ErrAccountShareForceReasonRequired.WithMetadata(map[string]string{"field": "reason"})
+		}
+		return nil, ErrAccountShareUpdateReasonRequired.WithMetadata(map[string]string{"field": "reason"})
+	}
+	if input.ForceActiveEdit {
+		if !input.Confirmed {
+			return nil, ErrAccountShareForceConfirmationRequired.WithMetadata(map[string]string{"field": "confirmed"})
+		}
 	}
 	if input.Name != nil {
 		name := compactAccountShareAccountName(*input.Name)
@@ -2555,24 +2937,19 @@ func (s *AccountShareModeService) UpdateListing(ctx context.Context, actorUserID
 		}
 		input.AllowedModels = &normalized
 	}
-	ownerRelist := !actorIsAdmin && isAccountShareModeOwnerRelistUpdate(input)
-	if !actorIsAdmin && !ownerRelist && !isAccountShareModeModelOnlyUpdate(input) && !isAccountShareModeOwnerConfigUpdate(input) {
-		return nil, ErrInsufficientPerms
-	}
-	if !actorIsAdmin && input.ForceActiveEdit {
+	if !actorIsAdmin && !isAccountShareModeModelOnlyUpdate(input) && !isAccountShareModeOwnerConfigUpdate(input) {
 		return nil, ErrInsufficientPerms
 	}
 	if requiresAccountShareModeEditSession(input) && strings.TrimSpace(input.EditSessionID) == "" {
 		return nil, ErrAccountShareEditSessionRequired
 	}
-	input.EditSessionID = strings.TrimSpace(input.EditSessionID)
 	if input.SeatLimit != nil && (*input.SeatLimit < AccountShareModeMinSeats || *input.SeatLimit > AccountShareModeMaxSeats) {
 		return nil, ErrAccountShareModeInvalidSeats
 	}
 	if input.RateMultiplier != nil && invalidNonNegativeFloat(*input.RateMultiplier) {
 		return nil, ErrAccountShareModeInvalidRateMultiplier
 	}
-	if input.PerUserConcurrency != nil && *input.PerUserConcurrency <= 0 {
+	if input.PerUserConcurrency != nil && (*input.PerUserConcurrency <= 0 || *input.PerUserConcurrency > AccountShareModeMaxPerUserConcurrency) {
 		return nil, ErrAccountShareModeInvalidConcurrency
 	}
 	if input.HourlyRate != nil && invalidNonNegativeFloat(*input.HourlyRate) {
@@ -2598,11 +2975,6 @@ func (s *AccountShareModeService) UpdateListing(ctx context.Context, actorUserID
 	}
 	if s == nil || s.repo == nil {
 		return nil, ErrServiceUnavailable
-	}
-	if ownerRelist {
-		if err := s.validateOwnerRelist(ctx, actorUserID, listingID); err != nil {
-			return nil, err
-		}
 	}
 	listing, err := s.repo.UpdateListing(ctx, actorUserID, actorIsAdmin, listingID, input)
 	if err != nil {
@@ -2650,7 +3022,22 @@ func isAccountShareModeOwnerConfigUpdate(input UpdateAccountShareListingInput) b
 }
 
 func requiresAccountShareModeEditSession(input UpdateAccountShareListingInput) bool {
-	return hasAccountShareModeConfigUpdate(input) && !isAccountShareModeModelOnlyUpdate(input)
+	return hasAccountShareModeContractUpdate(input)
+}
+
+func hasAccountShareModeContractUpdate(input UpdateAccountShareListingInput) bool {
+	return input.SeatLimit != nil ||
+		input.RateMultiplier != nil ||
+		input.AllowedModels != nil ||
+		input.PerUserConcurrency != nil ||
+		input.HourlyRate != nil ||
+		input.HourlyFeeWaiverMinimum != nil ||
+		input.MinBalanceRequired != nil ||
+		input.CodexCLIOnly != nil ||
+		input.Codex5hLimitPercent != nil ||
+		input.Codex7dLimitPercent != nil ||
+		input.Anthropic5hLimitPercent != nil ||
+		input.Anthropic7dLimitPercent != nil
 }
 
 func hasAccountShareModeConfigUpdate(input UpdateAccountShareListingInput) bool {
@@ -2840,7 +3227,211 @@ func normalizeAccountShareListingsAccountLevelWithConfigs(listings []AccountShar
 	}
 }
 
+type accountShareJoinPreparation struct {
+	apiKey       *APIKey
+	user         *User
+	listing      *AccountShareListing
+	ownerSelfUse bool
+	now          time.Time
+}
+
+func (s *AccountShareModeService) CreateJoinIntent(
+	ctx context.Context,
+	consumerUserID, listingID int64,
+	input CreateAccountShareJoinIntentInput,
+) (*AccountShareJoinIntent, error) {
+	preparation, err := s.prepareAccountShareJoin(
+		ctx,
+		consumerUserID,
+		listingID,
+		input.APIKeyID,
+		input.IdleTimeoutMinutes,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if len(s.actionTokenSecret) < 32 {
+		return nil, ErrServiceUnavailable
+	}
+	terms, err := s.repo.EnsureListingRevisionTerms(ctx, listingID)
+	if err != nil {
+		return nil, err
+	}
+	if terms == nil || terms.ListingRevisionID <= 0 || terms.RowVersion <= 0 {
+		return nil, fmt.Errorf("account share listing %d immutable terms are unavailable", listingID)
+	}
+	// Legacy listings may receive their first immutable revision while the
+	// intent is being created. Reload all join preconditions so the signed
+	// confirmation is based on the same revision the user sees.
+	preparation, err = s.prepareAccountShareJoin(
+		ctx,
+		consumerUserID,
+		listingID,
+		input.APIKeyID,
+		input.IdleTimeoutMinutes,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if !accountShareListingMatchesJoinTerms(preparation.listing, *terms) {
+		return nil, ErrAccountShareJoinTermsChanged.WithMetadata(map[string]string{
+			"expected_version": fmt.Sprintf("%d", terms.RowVersion),
+			"actual_version":   fmt.Sprintf("%d", preparation.listing.RowVersion),
+		})
+	}
+	listing := preparation.listing
+	now := preparation.now
+	expiresAt := now.Add(AccountShareModeJoinIntentTTL)
+	claims := accountShareJoinIntentTokenClaims{
+		Action:             accountShareModeJoinIntentTokenAction,
+		ConsumerID:         consumerUserID,
+		ListingID:          listingID,
+		APIKeyID:           input.APIKeyID,
+		IdleTimeoutMinutes: input.IdleTimeoutMinutes,
+		ExpectedVersion:    terms.RowVersion,
+		ExpectedRevisionID: terms.ListingRevisionID,
+		AcceptQueue:        input.AcceptQueue,
+		Terms:              *terms,
+		Nonce:              uuid.NewString(),
+		IssuedAt:           now.UnixNano(),
+		ExpiresAt:          expiresAt.UnixNano(),
+	}
+	token, err := s.signAccountShareActionToken(claims)
+	if err != nil {
+		return nil, err
+	}
+	queueMayBeRequired := !preparation.ownerSelfUse &&
+		listing.CurrentMembershipID == nil &&
+		(listing.QueueMembershipID != nil || listing.ActiveSeats >= listing.SeatLimit)
+	return &AccountShareJoinIntent{
+		ListingID:          listingID,
+		APIKeyID:           input.APIKeyID,
+		Token:              token,
+		ExpiresAt:          expiresAt,
+		ExpectedVersion:    terms.RowVersion,
+		ExpectedRevisionID: terms.ListingRevisionID,
+		AcceptQueue:        input.AcceptQueue,
+		QueueMayBeRequired: queueMayBeRequired,
+		Terms:              terms,
+	}, nil
+}
+
+// JoinListing is retained as a source-compatible entry point for internal
+// callers. Public joins require CompleteJoinListing and a signed join intent.
 func (s *AccountShareModeService) JoinListing(ctx context.Context, consumerUserID, listingID, apiKeyID int64, idleTimeoutMinutes int) (*AccountShareMembership, error) {
+	return s.CompleteJoinListing(ctx, consumerUserID, listingID, CompleteAccountShareJoinInput{
+		APIKeyID:           apiKeyID,
+		IdleTimeoutMinutes: idleTimeoutMinutes,
+	})
+}
+
+func (s *AccountShareModeService) CompleteJoinListing(
+	ctx context.Context,
+	consumerUserID, listingID int64,
+	input CompleteAccountShareJoinInput,
+) (*AccountShareMembership, error) {
+	if consumerUserID <= 0 {
+		return nil, ErrUserNotFound
+	}
+	if input.APIKeyID <= 0 {
+		return nil, ErrAPIKeyNotFound
+	}
+	if err := validateAccountShareIdleTimeoutMinutes(input.IdleTimeoutMinutes); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(input.IntentToken) == "" {
+		return nil, ErrAccountShareJoinIntentRequired
+	}
+	now := time.Now().UTC()
+	claims, err := s.validateJoinIntentToken(
+		input.IntentToken,
+		consumerUserID,
+		listingID,
+		input.APIKeyID,
+		input.IdleTimeoutMinutes,
+		now,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if input.ExpectedVersion != claims.ExpectedVersion ||
+		input.ExpectedRevisionID != claims.ExpectedRevisionID ||
+		input.AcceptQueue != claims.AcceptQueue {
+		return nil, ErrAccountShareJoinIntentInvalid
+	}
+	preparation, err := s.prepareAccountShareJoin(
+		ctx,
+		consumerUserID,
+		listingID,
+		input.APIKeyID,
+		input.IdleTimeoutMinutes,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if !accountShareListingMatchesJoinTerms(preparation.listing, claims.Terms) {
+		return nil, ErrAccountShareJoinTermsChanged.WithMetadata(map[string]string{
+			"expected_version": fmt.Sprintf("%d", claims.ExpectedVersion),
+			"actual_version":   fmt.Sprintf("%d", preparation.listing.RowVersion),
+		})
+	}
+
+	result, err := s.repo.ProcessSeatBillingForJoin(ctx, now, consumerUserID, input.APIKeyID, listingID)
+	if err != nil {
+		log.Printf("account_share_mode: join failed stage=seat_billing user_id=%d listing_id=%d api_key_id=%d account_id=%d err=%v",
+			consumerUserID,
+			listingID,
+			input.APIKeyID,
+			preparation.listing.AccountID,
+			err,
+		)
+		return nil, err
+	}
+	s.invalidateSeatBillingCaches(result)
+	if _, err := s.processIdleMemberships(ctx, now, AccountShareIdleMembershipFilter{
+		ConsumerUserID: consumerUserID,
+		APIKeyID:       input.APIKeyID,
+		ListingID:      listingID,
+	}, AccountShareModeSeatBillingBatchSize); err != nil {
+		return nil, err
+	}
+	issuedAt := time.Unix(0, claims.IssuedAt).UTC()
+	membership, err := s.repo.JoinListing(ctx, AccountShareJoinRepositoryInput{
+		ConsumerUserID:     consumerUserID,
+		APIKeyID:           input.APIKeyID,
+		ListingID:          listingID,
+		IdleTimeoutMinutes: input.IdleTimeoutMinutes,
+		ExpectedVersion:    claims.ExpectedVersion,
+		ExpectedRevisionID: claims.ExpectedRevisionID,
+		AcceptQueue:        claims.AcceptQueue,
+		IntentIssuedAt:     issuedAt,
+		IntentNonce:        claims.Nonce,
+		AcceptedTerms:      &claims.Terms,
+	})
+	if err != nil {
+		log.Printf("account_share_mode: join failed stage=repo_join user_id=%d listing_id=%d api_key_id=%d account_id=%d err=%v",
+			consumerUserID,
+			listingID,
+			input.APIKeyID,
+			preparation.listing.AccountID,
+			err,
+		)
+		return nil, err
+	}
+	if s.authCacheInvalidator != nil {
+		s.authCacheInvalidator.InvalidateAuthCacheByKey(ctx, preparation.apiKey.Key)
+	}
+	if !preparation.ownerSelfUse {
+		s.invalidateSeatBillingCaches(&AccountShareSeatBillingResult{DebitUserIDs: []int64{consumerUserID}})
+	}
+	return membership, nil
+}
+
+func (s *AccountShareModeService) prepareAccountShareJoin(
+	ctx context.Context,
+	consumerUserID, listingID, apiKeyID int64,
+	idleTimeoutMinutes int,
+) (*accountShareJoinPreparation, error) {
 	if consumerUserID <= 0 {
 		return nil, ErrUserNotFound
 	}
@@ -2877,6 +3468,9 @@ func (s *AccountShareModeService) JoinListing(ctx context.Context, consumerUserI
 	if err := s.ensureAPIKeyMatchesListingPlatform(ctx, apiKey, listing); err != nil {
 		return nil, err
 	}
+	if listing.QueueStatus == AccountShareMembershipStatusEnding {
+		return nil, ErrAccountShareMembershipEnding
+	}
 	ownerSelfUse := IsAccountShareModeOwnerSelfUse(&AccountShareMembership{ConsumerUserID: consumerUserID}, listing)
 	if listing.Status != AccountShareListingStatusActive {
 		return nil, ErrAccountShareListingNotActive
@@ -2903,43 +3497,13 @@ func (s *AccountShareModeService) JoinListing(ctx context.Context, consumerUserI
 	if !ownerSelfUse && user.Balance < listing.MinBalanceRequired {
 		return nil, ErrAccountShareBalanceBelowMinimum
 	}
-	result, err := s.repo.ProcessSeatBillingForJoin(ctx, now, consumerUserID, apiKeyID, listingID)
-	if err != nil {
-		log.Printf("account_share_mode: join failed stage=seat_billing user_id=%d listing_id=%d api_key_id=%d account_id=%d err=%v",
-			consumerUserID,
-			listingID,
-			apiKeyID,
-			listing.AccountID,
-			err,
-		)
-		return nil, err
-	}
-	s.invalidateSeatBillingCaches(result)
-	if _, err := s.processIdleMemberships(ctx, now, AccountShareIdleMembershipFilter{
-		ConsumerUserID: consumerUserID,
-		APIKeyID:       apiKeyID,
-		ListingID:      listingID,
-	}, AccountShareModeSeatBillingBatchSize); err != nil {
-		return nil, err
-	}
-	membership, err := s.repo.JoinListing(ctx, consumerUserID, apiKeyID, listingID, idleTimeoutMinutes)
-	if err != nil {
-		log.Printf("account_share_mode: join failed stage=repo_join user_id=%d listing_id=%d api_key_id=%d account_id=%d err=%v",
-			consumerUserID,
-			listingID,
-			apiKeyID,
-			listing.AccountID,
-			err,
-		)
-		return nil, err
-	}
-	if s.authCacheInvalidator != nil {
-		s.authCacheInvalidator.InvalidateAuthCacheByKey(ctx, apiKey.Key)
-	}
-	if !ownerSelfUse {
-		s.invalidateSeatBillingCaches(&AccountShareSeatBillingResult{DebitUserIDs: []int64{consumerUserID}})
-	}
-	return membership, nil
+	return &accountShareJoinPreparation{
+		apiKey:       apiKey,
+		user:         user,
+		listing:      listing,
+		ownerSelfUse: ownerSelfUse,
+		now:          now,
+	}, nil
 }
 
 func (s *AccountShareModeService) UpdateMembershipIdleTimeout(ctx context.Context, consumerUserID, membershipID int64, idleTimeoutMinutes int) (*AccountShareMembership, error) {
@@ -3043,15 +3607,39 @@ func (s *AccountShareModeService) CreateEndMembershipToken(ctx context.Context, 
 	if membershipID <= 0 {
 		return nil, ErrAccountShareListingNotFound
 	}
-	if s == nil {
+	if s == nil || s.repo == nil {
 		return nil, ErrServiceUnavailable
 	}
+	membership, err := s.repo.GetMembershipForEnd(ctx, consumerUserID, membershipID)
+	if err != nil {
+		return nil, err
+	}
+	if membership == nil || membership.ID != membershipID || membership.ConsumerUserID != consumerUserID {
+		return nil, ErrAccountShareMembershipNotFound
+	}
+	switch membership.Status {
+	case AccountShareMembershipStatusActive, AccountShareMembershipStatusQueued:
+	case AccountShareMembershipStatusEnding:
+		if strings.TrimSpace(membership.EndingOperationID) == "" {
+			return nil, ErrAccountShareEndStateConflict
+		}
+	default:
+		return nil, ErrAccountShareEndStateConflict
+	}
 	expiresAt := time.Now().UTC().Add(AccountShareModeEndMembershipTokenTTL)
+	operationID := strings.TrimSpace(membership.EndingOperationID)
+	if operationID == "" {
+		operationID = uuid.NewString()
+	}
 	claims := accountShareEndMembershipTokenClaims{
-		Action:       accountShareModeEndMembershipTokenAction,
-		ConsumerID:   consumerUserID,
-		MembershipID: membershipID,
-		ExpiresAt:    expiresAt.Unix(),
+		Action:            accountShareModeEndMembershipTokenAction,
+		ConsumerID:        consumerUserID,
+		MembershipID:      membershipID,
+		MembershipStatus:  membership.Status,
+		MembershipUpdated: membership.UpdatedAt.UTC().UnixNano(),
+		OperationID:       operationID,
+		Nonce:             uuid.NewString(),
+		ExpiresAt:         expiresAt.Unix(),
 	}
 	token, err := s.signEndMembershipToken(claims)
 	if err != nil {
@@ -3071,29 +3659,151 @@ func (s *AccountShareModeService) EndMembership(ctx context.Context, consumerUse
 	if s == nil || s.repo == nil {
 		return nil, ErrServiceUnavailable
 	}
-	if err := s.validateEndMembershipToken(confirmationToken, consumerUserID, membershipID, time.Now().UTC()); err != nil {
-		return nil, err
-	}
-	membership, billing, err := s.repo.EndMembership(ctx, consumerUserID, membershipID)
+	claims, err := s.validateEndMembershipToken(confirmationToken, consumerUserID, membershipID, time.Now().UTC())
 	if err != nil {
 		return nil, err
 	}
-	if s.authCacheInvalidator != nil && membership.APIKeyID > 0 && s.apiKeyRepo != nil {
+	membership, billing, err := s.repo.BeginMembershipEnd(ctx, BeginAccountShareMembershipEndInput{
+		ConsumerUserID:           consumerUserID,
+		MembershipID:             membershipID,
+		ExpectedMembershipStatus: claims.MembershipStatus,
+		ExpectedUpdatedAt:        time.Unix(0, claims.MembershipUpdated).UTC(),
+		OperationID:              claims.OperationID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if membership == nil {
+		return nil, ErrServiceUnavailable
+	}
+	s.invalidateMembershipEndCaches(ctx, membership, billing)
+	if membership.Status == AccountShareMembershipStatusEnded {
+		return membership, nil
+	}
+	if membership.Status != AccountShareMembershipStatusEnding {
+		return nil, ErrAccountShareEndStateConflict
+	}
+	hasLease, leaseErr := s.hasActiveMembershipLease(ctx, membership.ID)
+	if leaseErr != nil || hasLease {
+		// Once the durable ending fence exists, an unavailable Redis lease
+		// check must never degrade to synchronous settlement.
+		return membership, nil
+	}
+	finalizedMembership, finalizedBilling, finalized, err := s.repo.FinalizeMembershipEnd(ctx, membership.ID, claims.OperationID)
+	if err != nil {
+		return nil, err
+	}
+	if !finalized {
+		return finalizedMembership, nil
+	}
+	s.invalidateMembershipEndCaches(ctx, finalizedMembership, finalizedBilling)
+	return finalizedMembership, nil
+}
+
+func (s *AccountShareModeService) hasActiveMembershipLease(ctx context.Context, membershipID int64) (bool, error) {
+	if s == nil || s.concurrencyService == nil || s.concurrencyService.cache == nil || membershipID <= 0 {
+		return false, ErrServiceUnavailable
+	}
+	cache, ok := s.concurrencyService.cache.(accountShareMembershipConcurrencyCache)
+	if !ok {
+		return false, ErrServiceUnavailable
+	}
+	count, err := cache.GetAccountShareMembershipConcurrency(ctx, membershipID)
+	if err != nil {
+		return false, err
+	}
+	if count < 0 {
+		return false, fmt.Errorf("invalid account share membership lease count: %d", count)
+	}
+	return count > 0, nil
+}
+
+func (s *AccountShareModeService) invalidateMembershipEndCaches(
+	ctx context.Context,
+	membership *AccountShareMembership,
+	billing *AccountShareSeatBillingResult,
+) {
+	if s == nil {
+		return
+	}
+	if membership != nil && s.authCacheInvalidator != nil && membership.APIKeyID > 0 && s.apiKeyRepo != nil {
 		if key, keyErr := s.apiKeyRepo.GetByID(ctx, membership.APIKeyID); keyErr == nil && key != nil {
 			s.authCacheInvalidator.InvalidateAuthCacheByKey(ctx, key.Key)
 		}
 	}
 	s.invalidateSeatBillingCaches(billing)
-	return membership, nil
 }
 
-func (s *AccountShareModeService) signEndMembershipToken(claims accountShareEndMembershipTokenClaims) (string, error) {
+func accountShareJoinTermsFromListing(listing *AccountShareListing, revisionID int64) AccountShareListingTermsSnapshot {
+	if listing == nil {
+		return AccountShareListingTermsSnapshot{}
+	}
+	return AccountShareListingTermsSnapshot{
+		ListingRevisionID:       revisionID,
+		RowVersion:              listing.RowVersion,
+		SchemaVersion:           1,
+		RoomName:                listing.RoomName,
+		Status:                  listing.Status,
+		SeatLimit:               listing.SeatLimit,
+		RateMultiplier:          listing.RateMultiplier,
+		AllowedModels:           append([]string(nil), listing.AllowedModels...),
+		PerUserConcurrency:      listing.PerUserConcurrency,
+		HourlyRate:              listing.HourlyRate,
+		HourlyFeeWaiverMinimum:  listing.HourlyFeeWaiverMinimum,
+		MinBalanceRequired:      listing.MinBalanceRequired,
+		CodexCLIOnly:            listing.CodexCLIOnly,
+		Codex5hLimitPercent:     listing.Codex5hLimitPercent,
+		Codex7dLimitPercent:     listing.Codex7dLimitPercent,
+		Anthropic5hLimitPercent: listing.Anthropic5hLimitPercent,
+		Anthropic7dLimitPercent: listing.Anthropic7dLimitPercent,
+	}
+}
+
+func accountShareListingMatchesJoinTerms(listing *AccountShareListing, terms AccountShareListingTermsSnapshot) bool {
+	if listing == nil ||
+		listing.RowVersion != terms.RowVersion ||
+		listing.RoomName != terms.RoomName ||
+		listing.Status != terms.Status ||
+		listing.SeatLimit != terms.SeatLimit ||
+		listing.RateMultiplier != terms.RateMultiplier ||
+		listing.PerUserConcurrency != terms.PerUserConcurrency ||
+		listing.HourlyRate != terms.HourlyRate ||
+		listing.HourlyFeeWaiverMinimum != terms.HourlyFeeWaiverMinimum ||
+		listing.MinBalanceRequired != terms.MinBalanceRequired ||
+		listing.CodexCLIOnly != terms.CodexCLIOnly ||
+		listing.Codex5hLimitPercent != terms.Codex5hLimitPercent ||
+		listing.Codex7dLimitPercent != terms.Codex7dLimitPercent ||
+		listing.Anthropic5hLimitPercent != terms.Anthropic5hLimitPercent ||
+		listing.Anthropic7dLimitPercent != terms.Anthropic7dLimitPercent {
+		return false
+	}
+	currentRevisionID := int64(0)
+	if listing.CurrentRevisionID != nil {
+		currentRevisionID = *listing.CurrentRevisionID
+	}
+	if currentRevisionID != terms.ListingRevisionID {
+		return false
+	}
+	leftModels := normalizeAllowedModels(listing.AllowedModels)
+	rightModels := normalizeAllowedModels(terms.AllowedModels)
+	if len(leftModels) != len(rightModels) {
+		return false
+	}
+	for index := range leftModels {
+		if leftModels[index] != rightModels[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *AccountShareModeService) signAccountShareActionToken(value any) (string, error) {
 	if len(s.actionTokenSecret) < 32 {
 		return "", ErrServiceUnavailable
 	}
-	payload, err := json.Marshal(claims)
+	payload, err := json.Marshal(value)
 	if err != nil {
-		return "", fmt.Errorf("marshal account share end token: %w", err)
+		return "", fmt.Errorf("marshal account share action token: %w", err)
 	}
 	encodedPayload := base64.RawURLEncoding.EncodeToString(payload)
 	mac := hmac.New(sha256.New, s.actionTokenSecret)
@@ -3102,43 +3812,102 @@ func (s *AccountShareModeService) signEndMembershipToken(claims accountShareEndM
 	return encodedPayload + "." + base64.RawURLEncoding.EncodeToString(signature), nil
 }
 
-func (s *AccountShareModeService) validateEndMembershipToken(token string, consumerUserID, membershipID int64, now time.Time) error {
+func (s *AccountShareModeService) decodeAccountShareActionToken(token string, target any, invalidError error) error {
 	token = strings.TrimSpace(token)
 	if token == "" {
-		return ErrAccountShareEndTokenRequired
+		return invalidError
 	}
 	if len(s.actionTokenSecret) < 32 {
 		return ErrServiceUnavailable
 	}
 	parts := strings.Split(token, ".")
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return ErrAccountShareEndTokenInvalid
+		return invalidError
 	}
 	signature, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return ErrAccountShareEndTokenInvalid
+		return invalidError
 	}
 	mac := hmac.New(sha256.New, s.actionTokenSecret)
 	_, _ = mac.Write([]byte(parts[0]))
-	expected := mac.Sum(nil)
-	if !hmac.Equal(signature, expected) {
-		return ErrAccountShareEndTokenInvalid
+	if !hmac.Equal(signature, mac.Sum(nil)) {
+		return invalidError
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
-		return ErrAccountShareEndTokenInvalid
+		return invalidError
 	}
+	if err := json.Unmarshal(payload, target); err != nil {
+		return invalidError
+	}
+	return nil
+}
+
+func (s *AccountShareModeService) validateJoinIntentToken(
+	token string,
+	consumerUserID, listingID, apiKeyID int64,
+	idleTimeoutMinutes int,
+	now time.Time,
+) (accountShareJoinIntentTokenClaims, error) {
+	var claims accountShareJoinIntentTokenClaims
+	if strings.TrimSpace(token) == "" {
+		return claims, ErrAccountShareJoinIntentRequired
+	}
+	if err := s.decodeAccountShareActionToken(token, &claims, ErrAccountShareJoinIntentInvalid); err != nil {
+		return claims, err
+	}
+	if claims.Action != accountShareModeJoinIntentTokenAction ||
+		claims.ConsumerID != consumerUserID ||
+		claims.ListingID != listingID ||
+		claims.APIKeyID != apiKeyID ||
+		claims.IdleTimeoutMinutes != idleTimeoutMinutes ||
+		claims.ExpectedVersion <= 0 ||
+		claims.Terms.RowVersion != claims.ExpectedVersion ||
+		claims.Terms.ListingRevisionID != claims.ExpectedRevisionID ||
+		claims.IssuedAt <= 0 ||
+		claims.ExpiresAt <= claims.IssuedAt ||
+		claims.ExpiresAt <= now.UnixNano() ||
+		time.Duration(claims.ExpiresAt-claims.IssuedAt) > AccountShareModeJoinIntentTTL ||
+		claims.IssuedAt > now.Add(30*time.Second).UnixNano() {
+		return claims, ErrAccountShareJoinIntentInvalid
+	}
+	if _, err := uuid.Parse(claims.Nonce); err != nil {
+		return claims, ErrAccountShareJoinIntentInvalid
+	}
+	return claims, nil
+}
+
+func (s *AccountShareModeService) signEndMembershipToken(claims accountShareEndMembershipTokenClaims) (string, error) {
+	return s.signAccountShareActionToken(claims)
+}
+
+func (s *AccountShareModeService) validateEndMembershipToken(token string, consumerUserID, membershipID int64, now time.Time) (accountShareEndMembershipTokenClaims, error) {
 	var claims accountShareEndMembershipTokenClaims
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return ErrAccountShareEndTokenInvalid
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return claims, ErrAccountShareEndTokenRequired
+	}
+	if err := s.decodeAccountShareActionToken(token, &claims, ErrAccountShareEndTokenInvalid); err != nil {
+		return claims, err
 	}
 	if claims.Action != accountShareModeEndMembershipTokenAction ||
 		claims.ConsumerID != consumerUserID ||
 		claims.MembershipID != membershipID ||
+		(claims.MembershipStatus != AccountShareMembershipStatusActive &&
+			claims.MembershipStatus != AccountShareMembershipStatusQueued &&
+			claims.MembershipStatus != AccountShareMembershipStatusEnding) ||
+		claims.MembershipUpdated <= 0 ||
+		strings.TrimSpace(claims.Nonce) == "" ||
 		claims.ExpiresAt <= now.Unix() {
-		return ErrAccountShareEndTokenInvalid
+		return claims, ErrAccountShareEndTokenInvalid
 	}
-	return nil
+	if _, err := uuid.Parse(claims.OperationID); err != nil {
+		return claims, ErrAccountShareEndTokenInvalid
+	}
+	if _, err := uuid.Parse(claims.Nonce); err != nil {
+		return claims, ErrAccountShareEndTokenInvalid
+	}
+	return claims, nil
 }
 
 func validateAccountShareIdleTimeoutMinutes(value int) error {
@@ -3455,56 +4224,50 @@ func accountShareLogStringPtr(value *string) string {
 }
 
 func (s *AccountShareModeService) schedulePostCreateConnectivityTest(listing *AccountShareListing) {
-	if s == nil || s.accountTestService == nil || s.accountRepo == nil || listing == nil || listing.AccountID <= 0 {
+	if s == nil ||
+		!s.lifecycleContractEnabled ||
+		s.accountTestService == nil ||
+		s.rateLimitService == nil ||
+		s.accountRepo == nil ||
+		listing == nil ||
+		listing.ID <= 0 ||
+		listing.OwnerUserID <= 0 ||
+		listing.Status != AccountShareListingStatusValidating {
 		return
 	}
-	accountID := listing.AccountID
-	modelID := firstAllowedModel(listing.AllowedModels)
+	validationListing := *listing
+	validationListing.AllowedModels = append([]string(nil), listing.AllowedModels...)
+	timeout := accountShareConnectivityTestTimeout(firstAllowedModel(validationListing.AllowedModels)) + time.Minute
 	go func() {
-		testCtx, cancel := context.WithTimeout(context.Background(), accountShareConnectivityTestTimeout(modelID))
+		testCtx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-
-		result, err := s.accountTestService.RunTestBackground(testCtx, accountID, modelID)
-		errorMessage := ""
-		if err != nil {
-			errorMessage = strings.TrimSpace(err.Error())
-		}
-		if errorMessage == "" && result != nil && result.Status != "success" {
-			errorMessage = strings.TrimSpace(result.ErrorMessage)
-			if errorMessage == "" {
-				errorMessage = "account share mode post-create connectivity test failed"
-			}
-		}
-		if errorMessage == "" {
-			return
-		}
-		if testCtx.Err() != nil || isTransientAccountShareConnectivityFailure(errorMessage) {
-			safeMessage := truncateString(sanitizeUpstreamErrorMessage(errorMessage), 512)
-			log.Printf("account_share_mode: transient post-create connectivity test failure ignored: account_id=%d err=%s", accountID, safeMessage)
-			return
-		}
-
-		writeCtx, writeCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer writeCancel()
-		if err := s.accountRepo.SetError(writeCtx, accountID, errorMessage); err != nil {
-			log.Printf("account_share_mode: mark account %d error after connectivity test failed: %v", accountID, err)
+		if _, _, err := s.finalizeRoomValidation(testCtx, &validationListing, 0, true, nil); err != nil {
+			log.Printf(
+				"account_share_mode: finalize post-create room validation failed: listing_id=%d err=%v",
+				validationListing.ID,
+				err,
+			)
 		}
 	}()
 }
 
 func (s *AccountShareModeService) AcquireMembershipSlot(ctx context.Context, membershipID int64, maxConcurrency int) (*AcquireResult, error) {
-	if s == nil {
-		return &AcquireResult{Acquired: true, ReleaseFunc: func() {}}, nil
+	if s == nil ||
+		s.repo == nil ||
+		s.concurrencyService == nil ||
+		membershipID <= 0 ||
+		maxConcurrency <= 0 {
+		return nil, ErrAccountShareRuntimeLeaseUnavailable
 	}
-	var result *AcquireResult
-	var err error
-	if s.concurrencyService == nil {
-		result = &AcquireResult{Acquired: true, ReleaseFunc: func() {}}
-	} else {
-		result, err = s.concurrencyService.AcquireAccountShareMembershipSlot(ctx, membershipID, maxConcurrency)
-	}
-	if err != nil || result == nil || !result.Acquired || membershipID <= 0 || s.repo == nil {
+	result, err := s.concurrencyService.AcquireAccountShareMembershipSlot(ctx, membershipID, maxConcurrency)
+	if err != nil || result == nil || !result.Acquired {
 		return result, err
+	}
+	if result.ReleaseFunc == nil || result.RefreshFunc == nil || result.LeaseTTL <= 0 {
+		if result.ReleaseFunc != nil {
+			result.ReleaseFunc()
+		}
+		return nil, ErrAccountShareRuntimeLeaseUnavailable
 	}
 	underlyingRelease := result.ReleaseFunc
 	if err := s.forceTouchMembershipLastRequest(membershipID, time.Now().UTC()); err != nil {
@@ -3584,11 +4347,11 @@ func validateAccountShareListingConfig(seatLimit int, rateMultiplier float64, al
 	if len(normalizeAllowedModels(allowedModels)) == 0 {
 		return ErrAccountShareModeAllowedModelsRequired
 	}
-	if perUserConcurrency <= 0 || accountConcurrency <= 0 || accountConcurrency > AccountShareModeMaxAccountConcurrency {
+	if perUserConcurrency <= 0 ||
+		perUserConcurrency > AccountShareModeMaxPerUserConcurrency ||
+		accountConcurrency <= 0 ||
+		accountConcurrency > AccountShareModeMaxAccountConcurrency {
 		return ErrAccountShareModeInvalidConcurrency
-	}
-	if accountConcurrency < perUserConcurrency*seatLimit {
-		return ErrAccountShareModeInsufficientConcurrency
 	}
 	if invalidNonNegativeFloat(hourlyRate) {
 		return ErrAccountShareModeInvalidHourlyRate
@@ -3606,6 +4369,17 @@ func validateAccountShareListingConfig(seatLimit int, rateMultiplier float64, al
 		return ErrCodexQuotaLimitPercentInvalid
 	}
 	return nil
+}
+
+func AccountShareRoomQueueLimit(seatLimit int) int {
+	limit := seatLimit * AccountShareModeRoomQueuePerSeat
+	if limit < AccountShareModeRoomQueueMinimum {
+		return AccountShareModeRoomQueueMinimum
+	}
+	if limit > AccountShareModeRoomQueueMaximum {
+		return AccountShareModeRoomQueueMaximum
+	}
+	return limit
 }
 
 func validateAccountShareAccountName(name string) error {
@@ -3863,7 +4637,11 @@ func normalizeAnthropicLimitPercent(value float64) float64 {
 func normalizeListingFilters(filters AccountShareListingFilters) AccountShareListingFilters {
 	tab := strings.ToLower(strings.TrimSpace(filters.Tab))
 	switch tab {
-	case AccountShareModeListingTabUsing, AccountShareModeListingTabHistory, AccountShareModeListingTabAll, AccountShareModeListingTabMine:
+	case AccountShareModeListingTabUsing,
+		AccountShareModeListingTabHistory,
+		AccountShareModeListingTabAll,
+		AccountShareModeListingTabMine,
+		AccountShareModeListingTabArchive:
 	default:
 		tab = AccountShareModeListingTabAll
 	}
@@ -3878,7 +4656,11 @@ func normalizeListingFilters(filters AccountShareListingFilters) AccountShareLis
 	}
 	status := strings.ToLower(strings.TrimSpace(filters.Status))
 	switch status {
-	case AccountShareListingStatusActive, AccountShareListingStatusPaused, AccountShareListingStatusDisabled, "all":
+	case AccountShareListingStatusActive,
+		AccountShareListingStatusPaused,
+		AccountShareListingStatusDisabled,
+		AccountShareListingStatusSuspended,
+		"all":
 	default:
 		status = ""
 	}

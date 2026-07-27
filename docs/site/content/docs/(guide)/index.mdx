@@ -80,7 +80,7 @@ Pixel API 里最常见的是两类用户，两条教程路径完全独立，从�
     按 [测试私有自用](/docs/owner-test-private-account) 创建私有分组 Key，先自己发一条测试消息。
   </Step>
   <Step>
-    按 [开启公共共享](/docs/owner-public-share) 切公共模式并等待共享校验；如果要用户主动选择你的账号，再按 [上架账号广场](/docs/owner-account-marketplace) 和 [设置定价和限制](/docs/owner-pricing-limits) 配参数。
+    按 [开启公共共享](/docs/owner-public-share) 切公共模式并等待共享校验；如果要用户主动选择你的共享方案，再按 [创建和管理账号广场房间](/docs/owner-account-marketplace) 和 [设置房间定价和限制](/docs/owner-pricing-limits) 操作。
   </Step>
   <Step>
     按 [查看收益流水](/docs/owner-check-income) 确认收益到账，再按 [提现和收款码](/docs/owner-withdrawal-setup) 提交提现。
@@ -94,8 +94,8 @@ Pixel API 里最常见的是两类用户，两条教程路径完全独立，从�
 - [添加第一个账号](/docs/owner-create-first-account)
 - [测试私有自用](/docs/owner-test-private-account)
 - [开启公共共享](/docs/owner-public-share)
-- [上架账号广场](/docs/owner-account-marketplace)
-- [设置定价和限制](/docs/owner-pricing-limits)
+- [创建和管理账号广场房间](/docs/owner-account-marketplace)
+- [设置房间定价和限制](/docs/owner-pricing-limits)
 - [查看收益流水](/docs/owner-check-income)
 - [提现和收款码](/docs/owner-withdrawal-setup)
 - [号主问题排查](/docs/owner-troubleshooting)
@@ -133,7 +133,7 @@ curl "https://ai-pixel.online/v1/chat/completions" \
 | --- | --- | --- |
 | `XXX 共享分组` | 日常模型调用 | 选择你有权限、页面显示可用、余额/订阅满足要求的分组 |
 | `XXX 兜底分组` | 主共享分组临时不可用时回落 | 稳定性更强，成本可能更高 |
-| 账号模式分组 | 在账号广场选择具体账号 | 需要先创建账号模式 API Key |
+| 账号模式分组 | 在账号广场选择房间，由房间调度健康账号 | 需要先创建同平台账号模式 API Key |
 | 私有分组 | 调用自己的托管账号 | 只对账号本人可见 |
 
 <Callout title="担心号池临时不可用？">

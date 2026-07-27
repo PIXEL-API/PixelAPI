@@ -14,7 +14,7 @@
         <!-- Modal panel -->
         <div
           ref="dialogRef"
-          :class="['modal-content', widthClasses]"
+          :class="['modal-content', widthClasses, panelClass]"
           tabindex="-1"
           @click.stop
         >
@@ -28,8 +28,11 @@
             </div>
             <button
               type="button"
-              @click="emit('close')"
+              :disabled="closeDisabled"
+              :aria-disabled="closeDisabled"
+              @click="requestClose"
               class="-mr-2 ml-3 inline-flex min-h-11 min-w-11 cursor-pointer items-center justify-center rounded-xl text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50 dark:text-dark-500 dark:hover:bg-dark-700 dark:hover:text-dark-300"
+              :class="closeDisabled && 'cursor-not-allowed opacity-50 hover:bg-transparent hover:text-gray-400 dark:hover:bg-transparent dark:hover:text-dark-500'"
               :aria-label="t('common.close')"
             >
               <Icon name="x" size="md" />
@@ -37,7 +40,7 @@
           </div>
 
           <!-- Body -->
-          <div class="modal-body">
+          <div :class="['modal-body', bodyClass]">
             <slot></slot>
           </div>
 
@@ -193,6 +196,9 @@ interface Props {
   width?: DialogWidth
   closeOnEscape?: boolean
   closeOnClickOutside?: boolean
+  closeDisabled?: boolean
+  panelClass?: string
+  bodyClass?: string
   zIndex?: number
 }
 
@@ -204,6 +210,9 @@ const props = withDefaults(defineProps<Props>(), {
   width: 'normal',
   closeOnEscape: true,
   closeOnClickOutside: false,
+  closeDisabled: false,
+  panelClass: '',
+  bodyClass: '',
   zIndex: 50
 })
 
@@ -239,10 +248,14 @@ const widthClasses = computed(() => {
   return widths[props.width]
 })
 
+const requestClose = () => {
+  if (props.closeDisabled) return
+  emit('close')
+}
+
 const handleClose = () => {
-  if (props.closeOnClickOutside) {
-    emit('close')
-  }
+  if (!props.closeOnClickOutside) return
+  requestClose()
 }
 
 const getOwnedFocusPortalTrigger = (
@@ -315,10 +328,10 @@ const trapFocus = (event: KeyboardEvent) => {
 const handleDocumentKeydown = (event: KeyboardEvent) => {
   if (!props.show || !isTopDialog() || event.defaultPrevented) return
 
-  if (event.key === 'Escape' && props.closeOnEscape) {
+  if (event.key === 'Escape' && props.closeOnEscape && !props.closeDisabled) {
     event.preventDefault()
     event.stopPropagation()
-    emit('close')
+    requestClose()
     return
   }
 

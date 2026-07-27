@@ -201,6 +201,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 	// Track if we've started streaming (for error handling)
 	streamStarted := false
+	billingDispatchAttemptNo := 0
 
 	// 绑定错误透传服务，允许 service 层在非 failover 错误场景复用规则。
 	if h.errorPassthroughService != nil {
@@ -428,13 +429,44 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				}
 			}
 			// 账号槽位/等待计数需要在超时或断开时安全回收
-			accountReleaseFunc = wrapReleaseOnDone(c.Request.Context(), accountReleaseFunc)
+			accountReleaseFunc = wrapAccountSelectionReleaseOnDone(c.Request.Context(), selection, accountReleaseFunc)
 
 			// 转发请求 - 根据账号平台分流
 			var result *service.ForwardResult
-			requestCtx := c.Request.Context()
+			requestCtx := service.WithAccountShareModeRequestFromContext(c.Request.Context(), selectionCtx)
 			if fs.SwitchCount > 0 {
 				requestCtx = service.WithAccountSwitchCount(requestCtx, fs.SwitchCount, h.metadataBridgeEnabled())
+			}
+			requestCtx, cancelForward := bindAccountSelectionForwardContext(requestCtx, selection)
+			requestPayloadHash := service.HashUsageRequestPayload(body)
+			routedModel := account.GetMappedModel(reqModel)
+			requestCtx, err = beginAccountShareBillingDispatch(
+				requestCtx,
+				h.gatewayService,
+				selection,
+				&billingDispatchAttemptNo,
+				service.AccountShareBillingDispatchInput{
+					APIKey:             apiKey,
+					User:               apiKey.User,
+					Subscription:       subscription,
+					RequestedModel:     reqModel,
+					RoutedModel:        routedModel,
+					InboundEndpoint:    GetInboundEndpoint(c),
+					UpstreamEndpoint:   GetUpstreamEndpoint(c, account.Platform),
+					RequestType:        accountShareBillingRequestType(reqStream),
+					RequestPayloadHash: requestPayloadHash,
+					ReasoningEffort:    parsedReq.OutputEffort,
+					ChannelUsageFields: channelMapping.ToUsageFields(reqModel, routedModel),
+				},
+			)
+			if err != nil {
+				cancelForward()
+				if accountReleaseFunc != nil {
+					accountReleaseFunc()
+				}
+				reqLog.Error("gateway.messages.billing_dispatch_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable; no upstream request was sent", streamStarted)
+				return
 			}
 			// 记录 Forward 前已写入字节数，Forward 后若增加则说明 SSE 内容已发，禁止 failover
 			writerSizeBeforeForward := c.Writer.Size()
@@ -442,6 +474,69 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				result, err = h.antigravityGatewayService.ForwardGemini(requestCtx, c, account, reqModel, "generateContent", reqStream, body, hasBoundSession)
 			} else {
 				result, err = h.geminiCompatService.Forward(requestCtx, c, account, body)
+			}
+			cancelForward()
+			userAgent := c.GetHeader("User-Agent")
+			clientIP := ip.GetClientIP(c)
+			inboundEndpoint := GetInboundEndpoint(c)
+			upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
+			recordUsageResult := func(result *service.ForwardResult) {
+				if result == nil {
+					return
+				}
+				if result.ReasoningEffort == nil {
+					result.ReasoningEffort = service.NormalizeClaudeOutputEffort(parsedReq.OutputEffort)
+				}
+				if result.ReasoningEffort == nil && parsedReq.ThinkingEnabled {
+					protocolModel := result.UpstreamModel
+					if protocolModel == "" {
+						protocolModel = result.Model
+					}
+					result.ReasoningEffort = service.DefaultEffortForThinkingEnabled(protocolModel)
+				}
+				h.submitUsageRecordTask(func(ctx context.Context) {
+					usageCtx := service.WithAccountShareModeRequestFromContext(ctx, requestCtx)
+					if err := h.gatewayService.RecordUsage(usageCtx, &service.RecordUsageInput{
+						Result:             result,
+						ParsedRequest:      parsedReq,
+						APIKey:             apiKey,
+						User:               apiKey.User,
+						Account:            account,
+						Subscription:       subscription,
+						InboundEndpoint:    inboundEndpoint,
+						UpstreamEndpoint:   upstreamEndpoint,
+						UserAgent:          userAgent,
+						IPAddress:          clientIP,
+						RequestPayloadHash: requestPayloadHash,
+						ForceCacheBilling:  fs.ForceCacheBilling,
+						APIKeyService:      h.apiKeyService,
+						ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
+					}); err != nil {
+						logger.L().With(
+							zap.String("component", "handler.gateway.messages"),
+							zap.Int64("user_id", subject.UserID),
+							zap.Int64("api_key_id", apiKey.ID),
+							zap.Any("group_id", apiKey.GroupID),
+							zap.String("model", reqModel),
+							zap.Int64("account_id", account.ID),
+						).Error("gateway.record_usage_failed", zap.Error(err))
+					}
+				})
+			}
+			hasBillableUsage := result != nil &&
+				(service.IsBillableStreamUsageError(err) || service.ForwardResultHasBillableUsage(result))
+			if err != nil && hasBillableUsage {
+				recordUsageResult(result)
+			}
+			if finalizeErr := completeAccountShareBillingDispatchWithoutUsage(requestCtx, err, hasBillableUsage, reqStream); finalizeErr != nil {
+				if accountReleaseFunc != nil {
+					accountReleaseFunc()
+				}
+				reqLog.Error("gateway.messages.billing_dispatch_finalize_failed", zap.Int64("account_id", account.ID), zap.Error(finalizeErr))
+				if c.Writer.Size() == writerSizeBeforeForward {
+					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable", streamStarted)
+				}
+				return
 			}
 			if accountReleaseFunc != nil {
 				accountReleaseFunc()
@@ -498,53 +593,8 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				}
 			}
 
-			// 捕获请求信息（用于异步记录，避免在 goroutine 中访问 gin.Context）
-			userAgent := c.GetHeader("User-Agent")
-			clientIP := ip.GetClientIP(c)
-			requestPayloadHash := service.HashUsageRequestPayload(body)
-			inboundEndpoint := GetInboundEndpoint(c)
-			upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
-
-			if result.ReasoningEffort == nil {
-				result.ReasoningEffort = service.NormalizeClaudeOutputEffort(parsedReq.OutputEffort)
-			}
-			if result.ReasoningEffort == nil && parsedReq.ThinkingEnabled {
-				protocolModel := result.UpstreamModel
-				if protocolModel == "" {
-					protocolModel = result.Model
-				}
-				result.ReasoningEffort = service.DefaultEffortForThinkingEnabled(protocolModel)
-			}
-
 			// 使用量记录通过有界 worker 池提交，避免请求热路径创建无界 goroutine。
-			h.submitUsageRecordTask(func(ctx context.Context) {
-				usageCtx := service.WithAccountShareModeRequestFromContext(ctx, selectionCtx)
-				if err := h.gatewayService.RecordUsage(usageCtx, &service.RecordUsageInput{
-					Result:             result,
-					ParsedRequest:      parsedReq,
-					APIKey:             apiKey,
-					User:               apiKey.User,
-					Account:            account,
-					Subscription:       subscription,
-					InboundEndpoint:    inboundEndpoint,
-					UpstreamEndpoint:   upstreamEndpoint,
-					UserAgent:          userAgent,
-					IPAddress:          clientIP,
-					RequestPayloadHash: requestPayloadHash,
-					ForceCacheBilling:  fs.ForceCacheBilling,
-					APIKeyService:      h.apiKeyService,
-					ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
-				}); err != nil {
-					logger.L().With(
-						zap.String("component", "handler.gateway.messages"),
-						zap.Int64("user_id", subject.UserID),
-						zap.Int64("api_key_id", apiKey.ID),
-						zap.Any("group_id", apiKey.GroupID),
-						zap.String("model", reqModel),
-						zap.Int64("account_id", account.ID),
-					).Error("gateway.record_usage_failed", zap.Error(err))
-				}
-			})
+			recordUsageResult(result)
 			return
 		}
 	}
@@ -804,7 +854,7 @@ routeLoop:
 				}
 			}
 			// 账号槽位/等待计数需要在超时或断开时安全回收
-			accountReleaseFunc = wrapReleaseOnDone(c.Request.Context(), accountReleaseFunc)
+			accountReleaseFunc = wrapAccountSelectionReleaseOnDone(c.Request.Context(), selection, accountReleaseFunc)
 
 			// ===== 用户消息串行队列 START =====
 			var queueRelease func()
@@ -868,9 +918,44 @@ routeLoop:
 			// 转发请求 - 根据账号平台分流
 			c.Set("parsed_request", parsedReq)
 			var result *service.ForwardResult
-			requestCtx := c.Request.Context()
+			requestCtx := service.WithAccountShareModeRequestFromContext(c.Request.Context(), selectionCtx)
 			if fs.SwitchCount > 0 {
 				requestCtx = service.WithAccountSwitchCount(requestCtx, fs.SwitchCount, h.metadataBridgeEnabled())
+			}
+			requestCtx, cancelForward := bindAccountSelectionForwardContext(requestCtx, selection)
+			requestPayloadHash := service.HashUsageRequestPayload(routeBody)
+			routedModel := account.GetMappedModel(parsedReq.Model)
+			requestCtx, err = beginAccountShareBillingDispatch(
+				requestCtx,
+				h.gatewayService,
+				selection,
+				&billingDispatchAttemptNo,
+				service.AccountShareBillingDispatchInput{
+					APIKey:             currentAPIKey,
+					User:               currentAPIKey.User,
+					Subscription:       currentSubscription,
+					RequestedModel:     reqModel,
+					RoutedModel:        routedModel,
+					InboundEndpoint:    GetInboundEndpoint(c),
+					UpstreamEndpoint:   GetUpstreamEndpoint(c, account.Platform),
+					RequestType:        accountShareBillingRequestType(reqStream),
+					RequestPayloadHash: requestPayloadHash,
+					ReasoningEffort:    parsedReq.OutputEffort,
+					ChannelUsageFields: channelMapping.ToUsageFields(reqModel, routedModel),
+				},
+			)
+			if err != nil {
+				cancelForward()
+				if queueRelease != nil {
+					queueRelease()
+				}
+				parsedReq.OnUpstreamAccepted = nil
+				if accountReleaseFunc != nil {
+					accountReleaseFunc()
+				}
+				reqLog.Error("gateway.messages.billing_dispatch_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable; no upstream request was sent", streamStarted)
+				return
 			}
 			// 记录 Forward 前已写入字节数，Forward 后若增加则说明 SSE 内容已发，禁止 failover
 			writerSizeBeforeForward := c.Writer.Size()
@@ -878,6 +963,23 @@ routeLoop:
 				result, err = h.antigravityGatewayService.Forward(requestCtx, c, account, routeBody, currentHasBoundSession)
 			} else {
 				result, err = h.gatewayService.Forward(requestCtx, c, account, parsedReq)
+			}
+			cancelForward()
+			hasBillableUsage := result != nil &&
+				(service.IsBillableStreamUsageError(err) || service.ForwardResultHasBillableUsage(result))
+			if finalizeErr := completeAccountShareBillingDispatchWithoutUsage(requestCtx, err, hasBillableUsage, reqStream); finalizeErr != nil {
+				if queueRelease != nil {
+					queueRelease()
+				}
+				parsedReq.OnUpstreamAccepted = nil
+				if accountReleaseFunc != nil {
+					accountReleaseFunc()
+				}
+				reqLog.Error("gateway.messages.billing_dispatch_finalize_failed", zap.Int64("account_id", account.ID), zap.Error(finalizeErr))
+				if c.Writer.Size() == writerSizeBeforeForward {
+					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable", streamStarted)
+				}
+				return
 			}
 
 			// 兜底释放串行锁（正常情况已通过回调提前释放）
@@ -897,7 +999,6 @@ routeLoop:
 				}
 				userAgent := c.GetHeader("User-Agent")
 				clientIP := ip.GetClientIP(c)
-				requestPayloadHash := service.HashUsageRequestPayload(routeBody)
 				inboundEndpoint := GetInboundEndpoint(c)
 				upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
 
@@ -914,7 +1015,7 @@ routeLoop:
 
 				// 使用量记录通过有界 worker 池提交；提交被拒绝时 submitUsageRecordTask 会同步兜底。
 				h.submitUsageRecordTask(func(ctx context.Context) {
-					usageCtx := service.WithAccountShareModeRequestFromContext(ctx, selectionCtx)
+					usageCtx := service.WithAccountShareModeRequestFromContext(ctx, requestCtx)
 					if err := h.gatewayService.RecordUsage(usageCtx, &service.RecordUsageInput{
 						Result:             result,
 						ParsedRequest:      parsedReq,
@@ -944,7 +1045,7 @@ routeLoop:
 			}
 			if err != nil {
 				billableStreamUsageError := service.IsBillableStreamUsageError(err)
-				if result != nil && (billableStreamUsageError || service.ForwardResultHasBillableUsage(result)) {
+				if hasBillableUsage {
 					recordUsageResult(result)
 					usageRecordedEvent := "gateway.forward_usage_recorded_after_error"
 					if billableStreamUsageError {
@@ -1833,6 +1934,9 @@ func (h *GatewayHandler) handleAccountShareModeAnthropicError(c *gin.Context, er
 		return true
 	case errors.Is(err, service.ErrAccountShareModeUnsupportedModel):
 		h.handleStreamingAwareError(c, http.StatusBadRequest, "invalid_request_error", "模型不支持", streamStarted)
+		return true
+	case errors.Is(err, service.ErrAccountShareModeSelection):
+		h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "共享账号暂时不可用，请稍后重试", streamStarted)
 		return true
 	default:
 		return false

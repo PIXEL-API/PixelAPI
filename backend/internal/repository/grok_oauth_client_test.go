@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 )
 
@@ -70,6 +71,76 @@ func TestGrokOAuthClientExchangeAndRefreshUseFormFields(t *testing.T) {
 	require.Equal(t, "refresh-access", refreshed.AccessToken)
 	require.Equal(t, "refresh-rotated", refreshed.RefreshToken)
 	require.Equal(t, int64(7200), refreshed.ExpiresIn)
+}
+
+func TestGrokOAuthClientRejectsSuccessfulResponsesWithoutAccessToken(t *testing.T) {
+	tests := []struct {
+		name         string
+		responseBody string
+		call         func(context.Context, service.GrokOAuthClient) error
+	}{
+		{
+			name:         "exchange empty JSON",
+			responseBody: `{}`,
+			call: func(ctx context.Context, client service.GrokOAuthClient) error {
+				_, err := client.ExchangeCode(
+					ctx,
+					"auth-code",
+					"verifier",
+					"http://127.0.0.1:56121/callback",
+					"",
+					"client-id",
+				)
+				return err
+			},
+		},
+		{
+			name:         "exchange blank access token",
+			responseBody: `{"access_token":" \t\r\n "}`,
+			call: func(ctx context.Context, client service.GrokOAuthClient) error {
+				_, err := client.ExchangeCode(
+					ctx,
+					"auth-code",
+					"verifier",
+					"http://127.0.0.1:56121/callback",
+					"",
+					"client-id",
+				)
+				return err
+			},
+		},
+		{
+			name:         "refresh empty JSON",
+			responseBody: `{}`,
+			call: func(ctx context.Context, client service.GrokOAuthClient) error {
+				_, err := client.RefreshToken(ctx, "refresh-token", "", "client-id")
+				return err
+			},
+		},
+		{
+			name:         "refresh blank access token",
+			responseBody: `{"access_token":" \t\r\n "}`,
+			call: func(ctx context.Context, client service.GrokOAuthClient) error {
+				_, err := client.RefreshToken(ctx, "refresh-token", "", "client-id")
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tt.responseBody))
+			}))
+			defer server.Close()
+			t.Setenv(xai.EnvTokenURL, server.URL)
+
+			err := tt.call(context.Background(), NewGrokOAuthClient())
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "GROK_OAUTH_TOKEN_RESPONSE_INVALID")
+		})
+	}
 }
 
 func TestGrokOAuthClientRefreshForbiddenClassifiesEntitlement(t *testing.T) {

@@ -953,6 +953,8 @@ func groupEntityToService(g *dbent.Group) *service.Group {
 		Hydrated:                        true,
 		OwnerUserID:                     g.OwnerUserID,
 		Scope:                           service.NormalizeGroupScope(g.Scope),
+		APIKeyBadgeType:                 string(g.APIKeyBadgeType),
+		APIKeyBadgeText:                 g.APIKeyBadgeText,
 		SubscriptionType:                g.SubscriptionType,
 		RequiredAccountLevel:            service.NormalizeRequiredAccountLevel(g.RequiredAccountLevel),
 		DailyLimitUSD:                   g.DailyLimitUsd,

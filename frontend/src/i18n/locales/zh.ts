@@ -752,6 +752,13 @@ export default {
     subscription: "订阅",
     private: "私有",
     rateLabel: "倍率",
+    apiKeyBadge: {
+      hidden: "不显示",
+      recommended: "推荐使用",
+      constrained: "资源紧张",
+      unavailable: "不可用",
+      custom: "自定义标签",
+    },
     rateSources: {
       newUserGroup: "新客",
       userGroup: "专属",
@@ -776,7 +783,7 @@ export default {
       noSearchResults: "没有匹配的账号。",
       healthy: "健康",
       unavailable: "暂不可用",
-      concurrency: "当前并发",
+      concurrency: "配置并发/运行时请求能力",
       priority: "调度优先级",
       lastUsed: "最近使用：{time}",
       loadFailed: "加载房间账号失败，请重试。",
@@ -812,7 +819,37 @@ export default {
       addFailed: "加入房间失败，共 {count} 个账号未能处理。",
       removeFailed: "退出房间失败，共 {count} 个账号未能处理。",
       addRequestFailed: "加入房间失败，请重试。",
-      removeRequestFailed: "退出房间失败，请重试。"
+      removeRequestFailed: "退出房间失败，请重试。",
+      createCompatibleAccount: "新建账号并加入此房间",
+      createCompatibleAccountHint: "创建器会锁定房间的平台与账号等级，创建后自动转换账号归属并加入当前房间。",
+      createCompatibleAccountUnavailable: "房间平台或账号等级未知，暂不能安全创建兼容账号。",
+      createFlow: {
+        creatorTitle: "新增账号 · 加入 {room}",
+        progressTitle: "正在加入房间",
+        targetRoom: "目标房间",
+        preparing: "正在读取账号快照，确保创建结果可准确识别…",
+        created: "账号已创建",
+        identifying: "正在确认新账号标识",
+        converting: "转换账号归属",
+        convertingHint: "把新账号从仅本人模式切换到当前房间；失败不会删除账号。",
+        attaching: "加入房间",
+        attachingHint: "建立账号与房间关系；失败后只重试此步骤，不会重复创建或转换。",
+        completed: "账号已加入房间",
+        completedHint: "新账号已经可以在“{room}”中参与调度。",
+        identifyFailed: "账号已创建，但无法唯一识别",
+        conversionFailed: "账号已创建，归属转换未完成",
+        attachFailed: "账号已转换，加入房间未完成",
+        accountPreserved: "账号“{name}”（#{id}）已经保留，不会因本次失败被删除。",
+        multipleCreated: "本次返回了多个新账号，无法安全地自动选择。请关闭后在已有账号列表中确认并手动加入。",
+        identifyAmbiguous: "账号列表中识别到 {count} 个新增账号，无法安全地自动选择。请重试识别或在已有账号列表中手动加入。",
+        identifyUnavailable: "创建接口未返回账号标识，且创建前快照不可用。请关闭后在已有账号列表中确认新账号。",
+        conversionRequestFailed: "账号归属转换失败，请重试；系统会复用同一个幂等键。",
+        attachRequestFailed: "加入房间失败，请重试；系统只会重试加入步骤。",
+        retryIdentify: "重新识别",
+        retryConversion: "重试归属转换",
+        retryAttach: "仅重试加入",
+        keepOpen: "处理中，请保持窗口打开"
+      }
     }
   },
 
@@ -1019,7 +1056,8 @@ export default {
     importPlatformGrok: "Grok / xAI 官方账号",
     importAuthMode: "OpenAI 认证方式",
     importAuthModeOAuth: "OAuth / Refresh Token",
-    importAuthModeOAuthDesc: "导入 OAuth JSON 或 Refresh Token，并按账号等级校验",
+    importAuthModeOAuthDesc:
+      "导入 OAuth JSON、Refresh Token 或 JSON 格式的 Access Token，并按账号等级校验",
     importAuthModeAgentIdentity: "Codex Agent Identity",
     importAuthModeAgentIdentityDesc: "导入 Agent Identity JSON，按凭证中的 Team 自动隔离",
     importAgentIdentityNoticeTitle: "Agent Identity 导入规则",
@@ -1116,10 +1154,15 @@ export default {
       "普通 Token 可每行一个；完整 JSON / JSON 数组可整段粘贴。",
     importTextPlaceholderAgentIdentity: "粘贴完整的 Codex Agent Identity JSON 或 JSON 数组",
     importTextHint:
-      "普通 Token 默认按 OpenAI Refresh Token 处理；Claude Session Key 会自动识别并兑换为 OAuth 凭证。",
+      "普通 Token 默认按 OpenAI Refresh Token 处理；OpenAI Access Token 请使用独立 AT 入口或下方 JSON 格式；Claude Session Key 会自动识别并兑换为 OAuth 凭证。",
     importTextHintChoosePlatform: "先选择平台后再粘贴对应平台的 OAuth 凭证。",
     importTextHintOpenAI:
-      "OpenAI Free / Plus / Team 可粘贴 OAuth JSON 或 Refresh Token；Pro 请通过账号登录导入。",
+      "OpenAI Free / Plus / Team 可粘贴 OAuth JSON 或每行一个 Refresh Token；Access Token 请按下方 JSON 示例导入；Pro 请通过账号登录导入。",
+    importOpenAIFormatExamples: "查看 OpenAI JSON 格式示例",
+    importOpenAIAccessTokenJSON: "仅 Access Token（最小格式）",
+    importOpenAIOAuthJSON: "完整 OAuth 凭证",
+    importOpenAIFormatHint:
+      "裸 Token 每行输入时默认按 Refresh Token 处理。Access Token 请使用上方最小 JSON 格式；AT-only 账号必须有可确定的有效期（JWT exp 或账号到期时间），并会在到期时自动暂停。",
     importTextHintAgentIdentity:
       "仅支持完整的 Codex Agent Identity JSON 或 JSON 数组；文件导入仅接受 .json。",
     importTextHintClaude:
@@ -1214,8 +1257,6 @@ export default {
     namePlaceholder: "我的 API 密钥",
     groupLabel: "分组",
     selectGroup: "选择分组",
-    groupRecommended: "推荐使用",
-    poolScarceWarning: "号池紧缺，可能无法使用",
     statusLabel: "状态",
     statusFilterLabel: "按状态筛选",
     selectStatus: "选择状态",
@@ -3600,6 +3641,7 @@ export default {
         priority: "优先级",
         apiKeys: "API 密钥数",
         accounts: "账号数",
+        apiKeyBadge: "API 密钥标签",
         capacity: "容量",
         usage: "用量",
         status: "状态",
@@ -3616,6 +3658,18 @@ export default {
       accountsRateLimited: "限流:",
       accountsTotal: "总量:",
       accountsUnit: "个账号",
+      apiKeyBadge: {
+        privateNotApplicable: "私有分组不适用",
+        customPlaceholder: "最多 20 个字符",
+        customRequired: "请输入自定义标签",
+        customTooLong: "自定义标签不能超过 20 个字符",
+        editorLabel: "设置分组“{name}”的 API 密钥标签",
+        customInputLabel: "分组“{name}”的自定义 API 密钥标签",
+        saved: "API 密钥标签已更新",
+        saveFailed: "更新 API 密钥标签失败",
+        confirmCustom: "保存自定义标签",
+        cancelCustom: "取消编辑自定义标签",
+      },
       form: {
         name: "名称",
         description: "描述",
@@ -5701,6 +5755,14 @@ export default {
             "输入您已有的 OpenAI Refresh Token，支持批量输入（每行一个），系统将自动验证并创建账号。",
           refreshTokenPlaceholder:
             "粘贴您的 OpenAI Refresh Token...\n支持多个，每行一个",
+          accessTokenDesc:
+            "输入您已有的 OpenAI Access Token，支持批量输入（每行一个）。系统会尽可能从 JWT 中解析账号身份和有效期，并在校验生命周期后创建账号。",
+          accessTokenPlaceholder:
+            "粘贴您的 OpenAI Access Token...\n支持多个，每行一个",
+          accessTokenHint:
+            "Access Token 无法续期；必须能从 JWT 解析有效期，或先指定账号到期时间。令牌或账号到期后会自动暂停。",
+          importingAccessToken: "正在导入 Access Token...",
+          importAccessTokenAndCreate: "导入 Access Token 并创建账号",
           sessionTokenAuth: "手动输入 ST",
           sessionTokenDesc:
             "输入您已有的 Session Token，支持批量输入（每行一个），系统将自动验证并创建账号。",
@@ -5720,6 +5782,7 @@ export default {
           validating: "验证中...",
           validateAndCreate: "验证并创建账号",
           pleaseEnterRefreshToken: "请输入 Refresh Token",
+          pleaseEnterAccessToken: "请输入 Access Token",
           pleaseEnterSessionToken: "请输入 Session Token",
         },
         // Gemini specific
@@ -6077,7 +6140,7 @@ export default {
         noData: "该账号暂无使用数据",
         accountLedger: "账号用量账本",
         accountLedgerSubtitle:
-          "仅核算该账号在 Pixel 上产生的账号成本；上游额度窗口、历史范围与累计数据分别展示。",
+          "核算该账号在 Pixel 上产生的账号成本、用户扣费与号主结算收益；额度窗口、所选账期与可查累计数据分别展示。",
         customRange: "自定义统计日期",
         startDate: "开始日期",
         endDate: "结束日期",
@@ -6109,17 +6172,24 @@ export default {
         windowPartialCoverage: "仅统计 {start} 起仍可查询的 Pixel 用量，早期数据未计入。",
         windowCompleteCoverage: "Pixel 明细完整覆盖当前上游窗口。",
         rangeSummary: "{range} 使用汇总",
-        pixelBillingOnly: "本区所有费用均为 Pixel 账号成本，不包含用户扣费。",
+        pixelBillingOnly:
+          "用户扣费包含请求实际扣费与小时费净额；号主收益仅统计外部消费者，并以历史结算快照为准，不按当前分成比例回算。",
         periodCost: "范围内账号成本",
+        pixelUserCost: "Pixel 用户扣费",
+        ownerIncome: "号主收益",
+        ownerNetIncome: "账面净收益",
         periodRequests: "范围内请求",
         periodTokens: "范围内 Token",
         activeDays: "活跃天数",
         pixelCostNote: "按账号倍率核算",
+        pixelUserCostNote: "含小时费；其中参与分成 ${amount}",
+        ownerIncomeNote: "外部消费者的历史结算净额",
+        ownerNetIncomeNote: "号主收益 − Pixel 账号成本",
         requestCountNote: "Pixel 转发请求数",
         tokenCountNote: "输入、输出与缓存 Token",
         activeDaysNote: "产生账号用量的业务日",
-        dailyTrend: "每日成本与请求趋势",
-        dailyTrendHint: "按 Asia/Shanghai 业务日聚合",
+        dailyTrend: "每日账务与请求趋势",
+        dailyTrendHint: "按 Asia/Shanghai 业务日聚合；退款与豁免冲减记为负数",
         lifetimeSummary: "可查询累计汇总",
         lifetimeCostHint: "日快照与尚未归档的原始记录合并计算",
         mergedAccountRecords: "合并账号记录",
@@ -6129,9 +6199,10 @@ export default {
         lifetimeMergeHint:
           "账号删除后重新添加时，仅在稳定上游 ID 与账号归属一致的情况下合并历史；邮箱相同不会触发合并。",
         dailyDetails: "每日数据明细",
-        dailyDetailsHint: "显示 {range} 内所有可查询业务日",
+        dailyDetailsHint: "显示 {range} 内所有可查询业务日；净收益为号主视角账面值",
         breakdowns: "用量拆分",
-        breakdownCoverageHint: "模型与入口明细仅展示所选范围内仍可查询的数据。",
+        breakdownCoverageHint:
+          "模型与入口可拆分 Pixel 账号成本及请求扣费；小时费与号主收益无法可靠归属模型，因此仅在汇总和每日明细展示。",
         models: "模型",
         inbound: "Pixel 入口",
         upstream: "上游入口",

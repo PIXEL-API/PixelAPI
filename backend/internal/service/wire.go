@@ -9,6 +9,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/google/uuid"
 	"github.com/google/wire"
 	"github.com/redis/go-redis/v9"
 )
@@ -140,7 +141,7 @@ func ProvideGrokTokenProvider(
 	p := NewGrokTokenProvider(accountRepo, tokenCache)
 	executor := NewGrokTokenRefresher(grokOAuthService)
 	p.SetRefreshAPI(refreshAPI, executor)
-	p.SetRefreshPolicy(AntigravityProviderRefreshPolicy())
+	p.SetRefreshPolicy(GrokProviderRefreshPolicy())
 	p.SetTempUnschedCache(tempUnschedCache)
 	return p
 }
@@ -692,10 +693,13 @@ func ProvideAccountShareModeService(
 	settingRepo SettingRepository,
 	settingService *SettingService,
 	taskExecutor *ClusterTaskExecutor,
+	billingIntentRepository AccountShareBillingIntentRepository,
+	billingIntentWorker *AccountShareBillingWorker,
 ) *AccountShareModeService {
 	svc := NewAccountShareModeService(repo, accountRepo, apiKeyRepo, userRepo, proxyRepo, openaiOAuthService, oauthService)
 	if cfg != nil {
 		svc.SetActionTokenSecret(cfg.JWT.Secret)
+		svc.SetLifecycleContractEnabled(cfg.AccountShareRollout.LifecycleContractEnabled)
 	}
 	svc.SetRuntimeDependencies(concurrencyService, authCacheInvalidator, accountTestService, rateLimitService)
 	svc.SetBillingCacheService(billingCacheService)
@@ -703,10 +707,40 @@ func ProvideAccountShareModeService(
 	svc.SetSettingService(settingService)
 	svc.SetRecommendationUsageProfileRepository(usageLogRepo)
 	svc.SetReviewModerationSettingRepository(settingRepo)
+	svc.SetBillingIntentRepository(billingIntentRepository)
+	svc.SetBillingIntentWorker(billingIntentWorker)
 	svc.taskExecutor = taskExecutor
 	svc.StartSeatBillingWorker()
 	svc.StartReviewModerationWorker()
 	return svc
+}
+
+func ProvideAccountShareBillingWorker(
+	intentRepo AccountShareBillingIntentRepository,
+	usageBillingRepo UsageBillingRepository,
+	postCommitFinalizer UsageBillingPostCommitFinalizer,
+) (*AccountShareBillingWorker, error) {
+	return NewAccountShareBillingWorker(intentRepo, usageBillingRepo, postCommitFinalizer, AccountShareBillingWorkerConfig{
+		WorkerID: "account-share-billing:" + uuid.NewString(),
+	})
+}
+
+func ProvideUsageBillingPostCommitFinalizer(
+	billingCacheService *BillingCacheService,
+	deferredService *DeferredService,
+	authCacheInvalidator APIKeyAuthCacheInvalidator,
+	userRepo UserRepository,
+	accountRepo AccountRepository,
+	balanceNotifyService *BalanceNotifyService,
+) (UsageBillingPostCommitFinalizer, error) {
+	return NewUsageBillingPostCommitFinalizer(
+		billingCacheService,
+		deferredService,
+		authCacheInvalidator,
+		userRepo,
+		accountRepo,
+		balanceNotifyService,
+	)
 }
 
 func ProvideAccountShareModeServices(svc *AccountShareModeService) []*AccountShareModeService {
@@ -976,6 +1010,8 @@ var ProviderSet = wire.NewSet(
 	ProvideGroupRateScheduleService,
 	ProvideAccountService,
 	NewAccountSharePolicyService,
+	ProvideAccountShareBillingWorker,
+	ProvideUsageBillingPostCommitFinalizer,
 	ProvideAccountShareModeService,
 	ProvideAccountShareModeServices,
 	NewProxyService,

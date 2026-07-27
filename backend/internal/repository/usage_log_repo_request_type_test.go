@@ -531,21 +531,31 @@ func TestUsageLogRepositoryGetAccountUsageStatsUsesIdentityScope(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"date", "requests", "tokens", "cost", "actual_cost", "user_cost", "total_duration_ms"}).
 			AddRow("2025-01-15", int64(1), int64(150), 1.25, 1.25, 1.25, int64(120)).
 			AddRow("2025-01-16", int64(1), int64(15), 0.25, 0.25, 0.25, int64(120)))
-	mock.ExpectQuery(`FROM user_balance_ledger`).
-		WithArgs(sqlmock.AnyArg(), accountShareSeatPrepayReason, accountShareSeatRefundReason, accountShareSeatWaiverRefundReason, start, end).
-		WillReturnRows(sqlmock.NewRows([]string{"date", "hourly_cost"}).
-			AddRow("2025-01-16", 0.75).
-			AddRow("2025-01-17", -0.25))
+	mock.ExpectQuery(`WITH target_owner AS.*sm\.owner_user_id = \(SELECT owner_user_id FROM target_owner\).*sm\.account_id = ANY\(\$8\)`).
+		WithArgs(
+			int64(11),
+			sqlmock.AnyArg(),
+			accountShareSeatPrepayReason,
+			accountShareSeatRefundReason,
+			accountShareSeatWaiverRefundReason,
+			start,
+			end,
+			sqlmock.AnyArg(),
+		).
+		WillReturnRows(sqlmock.NewRows([]string{"date", "hourly_cost", "share_consumer_cost", "owner_income"}).
+			AddRow("2025-01-16", 0.75, 1.20, 1.08).
+			AddRow("2025-01-17", -0.25, -0.30, -0.27))
 	mock.ExpectQuery(`SELECT\s+COALESCE\(NULLIF\(TRIM\(requested_model\)`).
 		WithArgs(sqlmock.AnyArg(), start, end).
 		WillReturnRows(sqlmock.NewRows([]string{"model", "requests", "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens", "total_tokens", "cost", "actual_cost", "account_cost"}).
-			AddRow("gpt-5", int64(2), int64(110), int64(55), int64(0), int64(0), int64(165), 1.50, 1.50, 1.50))
+			AddRow("gpt-5", int64(2), int64(110), int64(55), int64(0), int64(0), int64(165), 1.50, 1.50, 1.20))
 	mock.ExpectQuery(`SELECT\s+COALESCE\(NULLIF\(TRIM\(inbound_endpoint\)`).
 		WithArgs(sqlmock.AnyArg(), start, end).
-		WillReturnRows(sqlmock.NewRows([]string{"endpoint", "requests", "total_tokens", "cost", "actual_cost"}))
+		WillReturnRows(sqlmock.NewRows([]string{"endpoint", "requests", "total_tokens", "cost", "actual_cost", "account_cost"}).
+			AddRow("/v1/responses", int64(2), int64(165), 1.50, 1.50, 1.20))
 	mock.ExpectQuery(`SELECT\s+COALESCE\(NULLIF\(TRIM\(upstream_endpoint\)`).
 		WithArgs(sqlmock.AnyArg(), start, end).
-		WillReturnRows(sqlmock.NewRows([]string{"endpoint", "requests", "total_tokens", "cost", "actual_cost"}))
+		WillReturnRows(sqlmock.NewRows([]string{"endpoint", "requests", "total_tokens", "cost", "actual_cost", "account_cost"}))
 
 	resp, err := repo.GetAccountUsageStats(context.Background(), 11, start, end)
 	require.NoError(t, err)
@@ -556,12 +566,23 @@ func TestUsageLogRepositoryGetAccountUsageStatsUsesIdentityScope(t *testing.T) {
 	require.InDelta(t, 1.50, resp.Summary.TotalRequestUserCost, 0.000001)
 	require.InDelta(t, 0.50, resp.Summary.TotalHourlyCost, 0.000001)
 	require.InDelta(t, 2.00, resp.Summary.TotalUserCost, 0.000001)
+	require.InDelta(t, 0.90, resp.Summary.TotalShareConsumerCost, 0.000001)
+	require.InDelta(t, 0.81, resp.Summary.TotalOwnerIncome, 0.000001)
+	require.InDelta(t, -0.69, resp.Summary.TotalOwnerNetIncome, 0.000001)
 	require.InDelta(t, 1.00, resp.History[1].UserCost, 0.000001)
+	require.InDelta(t, 1.08, resp.History[1].OwnerIncome, 0.000001)
+	require.InDelta(t, 0.83, resp.History[1].OwnerNetIncome, 0.000001)
 	require.InDelta(t, -0.25, resp.History[2].HourlyCost, 0.000001)
+	require.InDelta(t, -0.27, resp.History[2].OwnerIncome, 0.000001)
 	require.Equal(t, 2, resp.Lifetime.SourceAccountCount)
 	require.InDelta(t, 1.50, resp.Lifetime.TotalCost, 0.000001)
 	require.Len(t, resp.Models, 1)
 	require.Equal(t, int64(2), resp.Models[0].Requests)
+	require.InDelta(t, 1.50, resp.Models[0].ActualCost, 0.000001)
+	require.InDelta(t, 1.20, resp.Models[0].AccountCost, 0.000001)
+	require.Len(t, resp.Endpoints, 1)
+	require.InDelta(t, 1.50, resp.Endpoints[0].ActualCost, 0.000001)
+	require.InDelta(t, 1.20, resp.Endpoints[0].AccountCost, 0.000001)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

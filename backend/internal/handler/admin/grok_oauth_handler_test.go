@@ -25,6 +25,15 @@ type grokQuotaHandlerAccountRepo struct {
 	updates map[int64]map[string]any
 }
 
+type grokOAuthHandlerAdminService struct {
+	service.AdminService
+	account *service.Account
+}
+
+func (s *grokOAuthHandlerAdminService) GetAccount(_ context.Context, _ int64) (*service.Account, error) {
+	return s.account, nil
+}
+
 func (r *grokQuotaHandlerAccountRepo) GetByID(_ context.Context, id int64) (*service.Account, error) {
 	if r.account != nil && r.account.ID == id {
 		return r.account, nil
@@ -100,7 +109,7 @@ func TestGrokOAuthHandlerQueryQuotaProbesUpstream(t *testing.T) {
 		Body: io.NopCloser(strings.NewReader(`{"id":"resp_probe"}`)),
 	}}
 	quotaService := service.NewGrokQuotaService(repo, nil, service.NewGrokTokenProvider(repo, nil), upstream)
-	handler := NewGrokOAuthHandler(nil, nil, quotaService)
+	handler := NewGrokOAuthHandler(nil, nil, nil, quotaService)
 
 	router := gin.New()
 	router.GET("/api/v1/admin/grok/accounts/:id/quota", handler.QueryQuota)
@@ -127,7 +136,7 @@ func TestGrokOAuthHandlerResetQuotaReturnsUnsupported(t *testing.T) {
 		Type:     service.AccountTypeOAuth,
 	}}
 	quotaService := service.NewGrokQuotaService(repo, nil, nil, nil)
-	handler := NewGrokOAuthHandler(nil, nil, quotaService)
+	handler := NewGrokOAuthHandler(nil, nil, nil, quotaService)
 
 	router := gin.New()
 	router.POST("/api/v1/admin/grok/accounts/:id/reset-quota", handler.ResetQuota)
@@ -145,7 +154,7 @@ func TestGrokOAuthHandlerRuntimeSanityDoesNotExposeSecrets(t *testing.T) {
 	t.Setenv(xai.EnvBaseURL, "http://127.0.0.1:8080/v1?access_token=secret")
 	t.Setenv(xai.EnvClientID, "client-secret-like-value")
 
-	handler := NewGrokOAuthHandler(nil, nil, nil)
+	handler := NewGrokOAuthHandler(nil, nil, nil, nil)
 	router := gin.New()
 	router.GET("/api/v1/admin/grok/runtime-sanity", handler.RuntimeSanity)
 	rec := httptest.NewRecorder()
@@ -158,4 +167,23 @@ func TestGrokOAuthHandlerRuntimeSanityDoesNotExposeSecrets(t *testing.T) {
 	require.NotContains(t, rec.Body.String(), "access_token")
 	require.NotContains(t, rec.Body.String(), "secret")
 	require.NotContains(t, rec.Body.String(), "client-secret-like-value")
+}
+
+func TestGrokOAuthHandlerRefreshAccountTokenFailsWhenProviderUnavailable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	adminService := &grokOAuthHandlerAdminService{account: &service.Account{
+		ID:       44,
+		Platform: service.PlatformGrok,
+		Type:     service.AccountTypeOAuth,
+	}}
+	handler := NewGrokOAuthHandler(nil, nil, adminService, nil)
+	router := gin.New()
+	router.POST("/api/v1/admin/grok/accounts/:id/refresh", handler.RefreshAccountToken)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/grok/accounts/44/refresh", nil)
+
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	require.Contains(t, rec.Body.String(), `"reason":"GROK_TOKEN_PROVIDER_UNAVAILABLE"`)
 }

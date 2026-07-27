@@ -804,6 +804,12 @@ export type GroupPlatform = "anthropic" | "openai" | "gemini" | "antigravity" | 
 
 export type SubscriptionType = "standard" | "subscription";
 export type GroupScope = "public" | "user_private";
+export type ApiKeyGroupBadgeType =
+  | "hidden"
+  | "recommended"
+  | "constrained"
+  | "unavailable"
+  | "custom";
 
 export interface OpenAIMessagesDispatchModelConfig {
   opus_mapped_model?: string;
@@ -856,8 +862,8 @@ export interface Group {
   messages_dispatch_model_config?: OpenAIMessagesDispatchModelConfig;
   require_oauth_only: boolean;
   require_privacy_set: boolean;
-  // 脱敏的号池状态；true 表示当前没有可调度账号，不包含具体账号数量。
-  pool_scarce: boolean;
+  api_key_badge_type: ApiKeyGroupBadgeType;
+  api_key_badge_text: string;
   created_at: string;
   updated_at: string;
 }
@@ -991,6 +997,8 @@ export interface CreateGroupRequest {
   supported_model_scopes?: string[];
   require_oauth_only?: boolean;
   require_privacy_set?: boolean;
+  api_key_badge_type?: ApiKeyGroupBadgeType;
+  api_key_badge_text?: string;
   // 从指定分组复制账号
   copy_accounts_from_group_ids?: number[];
 }
@@ -1027,6 +1035,8 @@ export interface UpdateGroupRequest {
   supported_model_scopes?: string[];
   require_oauth_only?: boolean;
   require_privacy_set?: boolean;
+  api_key_badge_type?: ApiKeyGroupBadgeType;
+  api_key_badge_text?: string;
   copy_accounts_from_group_ids?: number[];
 }
 
@@ -1994,6 +2004,7 @@ export interface EndpointStat {
   total_tokens: number;
   cost: number;
   actual_cost: number;
+  account_cost: number;
 }
 
 export interface GroupStat {
@@ -2192,6 +2203,9 @@ export interface AccountUsageHistory {
   request_user_cost: number; // Request billed cost (group multiplier)
   hourly_cost: number; // Net hourly fee (prepay minus refunds)
   user_cost: number; // Total user billed cost (request + hourly)
+  share_consumer_cost: number; // External consumer charge eligible for owner sharing
+  owner_income: number; // Immutable owner settlement credit, net of reversals
+  owner_net_income: number; // Owner income minus Pixel account cost
 }
 
 export interface AccountUsageSummary {
@@ -2201,6 +2215,9 @@ export interface AccountUsageSummary {
   total_user_cost: number;
   total_request_user_cost: number;
   total_hourly_cost: number;
+  total_share_consumer_cost: number;
+  total_owner_income: number;
+  total_owner_net_income: number;
   total_standard_cost: number;
   total_requests: number;
   total_tokens: number;
@@ -2217,6 +2234,8 @@ export interface AccountUsageSummary {
     request_user_cost: number;
     hourly_cost: number;
     user_cost: number;
+    owner_income: number;
+    owner_net_income: number;
     requests: number;
     tokens: number;
   } | null;

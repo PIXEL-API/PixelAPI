@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -52,8 +53,11 @@ CREATE TABLE IF NOT EXISTS atlas_schema_revisions (
 const migrationsAdvisoryLockID int64 = 694208311321144027
 const migrationsLockRetryInterval = 500 * time.Millisecond
 const migrationsUnlockTimeout = 5 * time.Second
+const migrationsSessionResetTimeout = 5 * time.Second
 const nonTransactionalMigrationSuffix = "_notx.sql"
 const onlineMigrationSuffix = "_online.sql"
+const nonTransactionalMigrationLockTimeoutSQL = "SET lock_timeout = '2s'"
+const nonTransactionalMigrationStatementTimeoutSQL = "SET statement_timeout = '30min'"
 const paymentOrdersOutTradeNoUniqueMigration = "120_enforce_payment_orders_out_trade_no_unique_notx.sql"
 const paymentOrdersOutTradeNoUniqueIndex = "paymentorder_out_trade_no_unique"
 const ownedAccountIdentityUniqueMigration = "140_owned_account_identity_unique_notx.sql"
@@ -64,6 +68,9 @@ const latestAPIKeyIPIndex = "idx_usage_logs_api_key_latest_ip"
 const usageLogImageInputTokensMigration = "216_usage_log_image_input_tokens.sql"
 const openAIOwnedAgentIdentityUniqueMigration = "217_openai_owned_agent_identity_unique_notx.sql"
 const accountShareModeGlobalInvitePolicyIndexesMigration = "220_account_share_mode_global_invite_policy_indexes_notx.sql"
+const accountShareRuntimeIdentityIndexesMigration = "235_account_share_runtime_identity_indexes_notx.sql"
+const accountShareLifecycleIndexesMigration = "238_account_share_lifecycle_indexes_notx.sql"
+const accountShareBillingHistoryIndexesMigration = "245_account_share_billing_history_indexes_notx.sql"
 const accountShareSeatCostAutoIndexMaxRows int64 = 5_000_000
 const accountShareSeatCostAutoIndexMaxTableBytes int64 = 8 << 30
 const migrationIndexOptionDescNullsFirst int16 = 3
@@ -82,6 +89,15 @@ type migrationQueryExecutor interface {
 type migrationDatabase interface {
 	migrationQueryExecutor
 	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
+}
+
+type migrationConnectionDiscarder interface {
+	Raw(func(any) error) error
+}
+
+type nonTransactionalMigrationDatabase interface {
+	migrationDatabase
+	migrationConnectionDiscarder
 }
 
 type migrationIndexKeyRequirement struct {
@@ -246,6 +262,128 @@ var accountShareModeGlobalInvitePolicyIndexRequirements = []migrationIndexRequir
 			migrationColumnKeyRequirement("reversal_of_settlement_id", migrationInt8Key),
 		},
 		predicateCanonical: canonicalizeMigrationIndexExpression("reversal_of_settlement_id IS NOT NULL"),
+	},
+}
+
+var accountShareRuntimeIdentityIndexRequirements = []migrationIndexRequirement{
+	{
+		index:        migrationCatalogName{schema: "public", name: "uq_account_share_memberships_identity"},
+		table:        migrationCatalogName{schema: "public", name: "account_share_memberships"},
+		accessMethod: "btree",
+		unique:       true,
+		keys: []migrationIndexKeyRequirement{
+			migrationColumnKeyRequirement("id", migrationInt8Key),
+			migrationColumnKeyRequirement("listing_id", migrationInt8Key),
+		},
+	},
+	{
+		index:        migrationCatalogName{schema: "public", name: "uq_account_share_memberships_revision_identity"},
+		table:        migrationCatalogName{schema: "public", name: "account_share_memberships"},
+		accessMethod: "btree",
+		unique:       true,
+		keys: []migrationIndexKeyRequirement{
+			migrationColumnKeyRequirement("id", migrationInt8Key),
+			migrationColumnKeyRequirement("listing_id", migrationInt8Key),
+			migrationColumnKeyRequirement("listing_revision_id", migrationInt8Key),
+		},
+	},
+	{
+		index:        migrationCatalogName{schema: "public", name: "uq_account_share_listing_revision_terms_identity"},
+		table:        migrationCatalogName{schema: "public", name: "account_share_listing_revisions"},
+		accessMethod: "btree",
+		unique:       true,
+		keys: []migrationIndexKeyRequirement{
+			migrationColumnKeyRequirement("listing_id", migrationInt8Key),
+			migrationColumnKeyRequirement("id", migrationInt8Key),
+			migrationColumnKeyRequirement("revision_number", migrationInt8Key),
+		},
+	},
+}
+
+var accountShareLifecycleIndexRequirements = []migrationIndexRequirement{
+	{
+		index:              migrationCatalogName{schema: "public", name: "uq_account_share_memberships_live_consumer"},
+		table:              migrationCatalogName{schema: "public", name: "account_share_memberships"},
+		accessMethod:       "btree",
+		unique:             true,
+		keys:               []migrationIndexKeyRequirement{migrationColumnKeyRequirement("consumer_user_id", migrationInt8Key)},
+		predicateCanonical: canonicalizeMigrationIndexExpression("status IN ('active', 'ending') AND deleted_at IS NULL"),
+	},
+	{
+		index:              migrationCatalogName{schema: "public", name: "uq_account_share_memberships_live_api_key"},
+		table:              migrationCatalogName{schema: "public", name: "account_share_memberships"},
+		accessMethod:       "btree",
+		unique:             true,
+		keys:               []migrationIndexKeyRequirement{migrationColumnKeyRequirement("api_key_id", migrationInt8Key)},
+		predicateCanonical: canonicalizeMigrationIndexExpression("status IN ('active', 'ending') AND deleted_at IS NULL"),
+	},
+	{
+		index:        migrationCatalogName{schema: "public", name: "uq_account_share_memberships_live_listing_consumer"},
+		table:        migrationCatalogName{schema: "public", name: "account_share_memberships"},
+		accessMethod: "btree",
+		unique:       true,
+		keys: []migrationIndexKeyRequirement{
+			migrationColumnKeyRequirement("listing_id", migrationInt8Key),
+			migrationColumnKeyRequirement("consumer_user_id", migrationInt8Key),
+		},
+		predicateCanonical: canonicalizeMigrationIndexExpression("status IN ('active', 'queued', 'ending') AND deleted_at IS NULL"),
+	},
+	{
+		index:              migrationCatalogName{schema: "public", name: "uq_account_share_room_operations_open_membership"},
+		table:              migrationCatalogName{schema: "public", name: "account_share_room_operations"},
+		accessMethod:       "btree",
+		unique:             true,
+		keys:               []migrationIndexKeyRequirement{migrationColumnKeyRequirement("membership_id", migrationInt8Key)},
+		predicateCanonical: canonicalizeMigrationIndexExpression("action = 'end_membership' AND membership_id IS NOT NULL AND status IN ('pending', 'running', 'needs_attention')"),
+	},
+	{
+		index:        migrationCatalogName{schema: "public", name: "idx_account_share_memberships_queue_expiry"},
+		table:        migrationCatalogName{schema: "public", name: "account_share_memberships"},
+		accessMethod: "btree",
+		keys: []migrationIndexKeyRequirement{
+			migrationColumnKeyRequirement("queue_expires_at", migrationTimestamptzKey),
+			migrationColumnKeyRequirement("id", migrationInt8Key),
+		},
+		predicateCanonical: canonicalizeMigrationIndexExpression("status = 'queued' AND deleted_at IS NULL"),
+	},
+}
+
+var accountShareLifecycleUniqueGuardIndexRequirements = func() []migrationIndexRequirement {
+	guards := make([]migrationIndexRequirement, 3)
+	copy(guards, accountShareLifecycleIndexRequirements[:3])
+	for i, indexName := range []string{
+		"uq_as_memberships_live_consumer_rebuild_guard",
+		"uq_as_memberships_live_api_key_rebuild_guard",
+		"uq_as_memberships_live_listing_consumer_rebuild_guard",
+	} {
+		guards[i].index.name = indexName
+	}
+	return guards
+}()
+
+var accountShareBillingHistoryIndexRequirements = []migrationIndexRequirement{
+	{
+		index:        migrationCatalogName{schema: "public", name: "idx_account_share_billing_intents_membership_history"},
+		table:        migrationCatalogName{schema: "public", name: "account_share_request_billing_intents"},
+		accessMethod: "btree",
+		keys: []migrationIndexKeyRequirement{
+			migrationColumnKeyRequirement("membership_id", migrationInt8Key),
+			{column: "settled_at", resultType: migrationTimestamptzKey.resultType, operatorClass: migrationTimestamptzKey.operatorClass, optionBits: migrationIndexOptionDescNullsFirst},
+			{column: "id", resultType: migrationInt8Key.resultType, operatorClass: migrationInt8Key.operatorClass, optionBits: migrationIndexOptionDescNullsFirst},
+		},
+		predicateCanonical: canonicalizeMigrationIndexExpression("status = 'settled' AND usage_payload IS NOT NULL"),
+	},
+	{
+		index:        migrationCatalogName{schema: "public", name: "idx_account_share_billing_intents_consumer_spend"},
+		table:        migrationCatalogName{schema: "public", name: "account_share_request_billing_intents"},
+		accessMethod: "btree",
+		keys: []migrationIndexKeyRequirement{
+			migrationColumnKeyRequirement("listing_id", migrationInt8Key),
+			migrationColumnKeyRequirement("consumer_user_id_snapshot", migrationInt8Key),
+			{column: "settled_at", resultType: migrationTimestamptzKey.resultType, operatorClass: migrationTimestamptzKey.operatorClass, optionBits: migrationIndexOptionDescNullsFirst},
+			{column: "id", resultType: migrationInt8Key.resultType, operatorClass: migrationInt8Key.operatorClass, optionBits: migrationIndexOptionDescNullsFirst},
+		},
+		predicateCanonical: canonicalizeMigrationIndexExpression("status = 'settled' AND usage_payload IS NOT NULL"),
 	},
 }
 
@@ -647,37 +785,15 @@ func applyMigrationsOnConnectionThroughFS(ctx context.Context, db migrationDatab
 				}
 				continue
 			}
-			if err := prepareNonTransactionalMigration(ctx, db, name); err != nil {
-				return fmt.Errorf("prepare migration %s: %w", name, err)
+			sessionDB, ok := db.(nonTransactionalMigrationDatabase)
+			if !ok {
+				return fmt.Errorf(
+					"apply migration %s: non-transactional migrations require a pinned database connection",
+					name,
+				)
 			}
-
-			// *_notx.sql：用于 CREATE/DROP INDEX CONCURRENTLY 场景，必须非事务执行。
-			// 逐条语句执行，避免将多条 CONCURRENTLY 语句放入同一个隐式事务块。
-			statements := splitSQLStatements(content)
-			verifiedAgentIdentityIndexesBeforeDrop := false
-			for i, stmt := range statements {
-				trimmed := strings.TrimSpace(stmt)
-				if trimmed == "" {
-					continue
-				}
-				statementWithoutComments := stripSQLLineComment(trimmed)
-				if statementWithoutComments == "" {
-					continue
-				}
-				if name == openAIOwnedAgentIdentityUniqueMigration &&
-					!verifiedAgentIdentityIndexesBeforeDrop &&
-					strings.HasPrefix(strings.ToUpper(statementWithoutComments), "DROP INDEX CONCURRENTLY") {
-					if err := verifyNonTransactionalMigrationResult(ctx, db, name); err != nil {
-						return fmt.Errorf("verify migration %s before dropping protected indexes: %w", name, err)
-					}
-					verifiedAgentIdentityIndexesBeforeDrop = true
-				}
-				if _, err := db.ExecContext(ctx, trimmed); err != nil {
-					return fmt.Errorf("apply migration %s (non-tx statement %d): %w", name, i+1, err)
-				}
-			}
-			if err := verifyNonTransactionalMigrationResult(ctx, db, name); err != nil {
-				return fmt.Errorf("verify migration %s (non-tx): %w", name, err)
+			if err := executeNonTransactionalMigration(ctx, sessionDB, name, content); err != nil {
+				return err
 			}
 			if _, err := db.ExecContext(ctx, "INSERT INTO schema_migrations (filename, checksum) VALUES ($1, $2)", name, checksum); err != nil {
 				return fmt.Errorf("record migration %s (non-tx): %w", name, err)
@@ -723,6 +839,128 @@ func applyMigrationsOnConnectionThroughFS(ctx context.Context, db migrationDatab
 	}
 
 	return nil
+}
+
+func executeNonTransactionalMigration(
+	ctx context.Context,
+	db nonTransactionalMigrationDatabase,
+	name string,
+	content string,
+) (err error) {
+	// These settings are session-scoped because CREATE/DROP INDEX CONCURRENTLY
+	// cannot run inside a transaction. The caller pins one *sql.Conn, so the
+	// settings, migration statements, and resets all use the same PostgreSQL
+	// session. A reset failure is returned before migration bookkeeping occurs;
+	// a still-open underlying connection is explicitly discarded before return.
+	defer func() {
+		if resetErr := resetNonTransactionalMigrationSession(db); resetErr != nil {
+			var discardErr error
+			if !errors.Is(resetErr, driver.ErrBadConn) && !errors.Is(resetErr, sql.ErrConnDone) {
+				discardErr = discardNonTransactionalMigrationConnection(db)
+			}
+			err = errors.Join(
+				err,
+				fmt.Errorf("reset migration %s non-transactional session: %w", name, resetErr),
+				discardErr,
+			)
+		}
+	}()
+
+	if _, err := db.ExecContext(ctx, nonTransactionalMigrationLockTimeoutSQL); err != nil {
+		return fmt.Errorf("set migration %s lock_timeout: %w", name, err)
+	}
+	if _, err := db.ExecContext(ctx, nonTransactionalMigrationStatementTimeoutSQL); err != nil {
+		return fmt.Errorf("set migration %s statement_timeout: %w", name, err)
+	}
+	if err := prepareNonTransactionalMigration(ctx, db, name); err != nil {
+		return fmt.Errorf("prepare migration %s: %w", name, err)
+	}
+
+	// *_notx.sql：用于 CREATE/DROP INDEX CONCURRENTLY 场景，必须非事务执行。
+	// 逐条语句执行，避免将多条 CONCURRENTLY 语句放入同一个隐式事务块。
+	statements := splitSQLStatements(content)
+	verifiedAgentIdentityIndexesBeforeDrop := false
+	preparedAccountShareLifecycleTargets := false
+	for i, stmt := range statements {
+		trimmed := strings.TrimSpace(stmt)
+		if trimmed == "" {
+			continue
+		}
+		statementWithoutComments := stripSQLLineComment(trimmed)
+		if statementWithoutComments == "" {
+			continue
+		}
+		if name == openAIOwnedAgentIdentityUniqueMigration &&
+			!verifiedAgentIdentityIndexesBeforeDrop &&
+			strings.HasPrefix(strings.ToUpper(statementWithoutComments), "DROP INDEX CONCURRENTLY") {
+			if err := verifyNonTransactionalMigrationResult(ctx, db, name); err != nil {
+				return fmt.Errorf("verify migration %s before dropping protected indexes: %w", name, err)
+			}
+			verifiedAgentIdentityIndexesBeforeDrop = true
+		}
+		if name == accountShareLifecycleIndexesMigration &&
+			!preparedAccountShareLifecycleTargets &&
+			isAccountShareLifecycleTargetIndexCreate(statementWithoutComments) {
+			if err := prepareAccountShareLifecycleTargetIndexes(ctx, db); err != nil {
+				return fmt.Errorf("prepare migration %s target indexes: %w", name, err)
+			}
+			preparedAccountShareLifecycleTargets = true
+		}
+		if _, err := db.ExecContext(ctx, trimmed); err != nil {
+			return fmt.Errorf("apply migration %s (non-tx statement %d): %w", name, i+1, err)
+		}
+	}
+	if err := verifyNonTransactionalMigrationResult(ctx, db, name); err != nil {
+		return fmt.Errorf("verify migration %s (non-tx): %w", name, err)
+	}
+	if err := finalizeNonTransactionalMigration(ctx, db, name); err != nil {
+		return fmt.Errorf("finalize migration %s (non-tx): %w", name, err)
+	}
+	return nil
+}
+
+func resetNonTransactionalMigrationSession(db nonTransactionalMigrationDatabase) error {
+	var resetErr error
+	reset := func(query string) {
+		// Each RESET gets its own deadline so one stalled cleanup statement
+		// cannot prevent the other setting from being reset.
+		resetCtx, cancel := context.WithTimeout(context.Background(), migrationsSessionResetTimeout)
+		defer cancel()
+		if _, err := db.ExecContext(resetCtx, query); err != nil {
+			resetErr = errors.Join(resetErr, fmt.Errorf("%s: %w", strings.ToLower(query), err))
+		}
+	}
+
+	reset("RESET lock_timeout")
+	reset("RESET statement_timeout")
+	return resetErr
+}
+
+func discardNonTransactionalMigrationConnection(db nonTransactionalMigrationDatabase) error {
+	callbackCalled := false
+	err := db.Raw(func(any) error {
+		callbackCalled = true
+		return driver.ErrBadConn
+	})
+	if !callbackCalled {
+		if errors.Is(err, driver.ErrBadConn) || errors.Is(err, sql.ErrConnDone) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf(
+				"discard non-transactional migration connection: raw callback was not invoked: %w",
+				err,
+			)
+		}
+		return errors.New("discard non-transactional migration connection: raw callback was not invoked")
+	}
+	if errors.Is(err, driver.ErrBadConn) {
+		return nil
+	}
+	if err == nil {
+		return errors.New("discard non-transactional migration connection: driver.ErrBadConn was not propagated")
+	}
+	return fmt.Errorf("discard non-transactional migration connection: %w", err)
 }
 
 func migrationFilesThrough(fsys fs.FS, target string) ([]string, error) {
@@ -825,6 +1063,16 @@ func prepareNonTransactionalMigration(ctx context.Context, db migrationDatabase,
 		return prepareLatestAPIKeyIPIndexMigration(ctx, db)
 	case accountShareModeGlobalInvitePolicyIndexesMigration:
 		return prepareIndexesForRetry(ctx, db, accountShareModeGlobalInvitePolicyIndexRequirements)
+	case accountShareRuntimeIdentityIndexesMigration:
+		return prepareIndexesForRetry(ctx, db, accountShareRuntimeIdentityIndexRequirements)
+	case accountShareLifecycleIndexesMigration:
+		// The three temporary guards are created by the migration before this
+		// runner removes an invalid live-membership target. Cleaning up a stale
+		// invalid guard here is safe: a valid target still protects the data, and
+		// an invalid target provides no uniqueness guarantee to lose.
+		return prepareIndexesForRetry(ctx, db, accountShareLifecycleUniqueGuardIndexRequirements)
+	case accountShareBillingHistoryIndexesMigration:
+		return prepareIndexesForRetry(ctx, db, accountShareBillingHistoryIndexRequirements)
 	default:
 		return nil
 	}
@@ -865,6 +1113,16 @@ func verifyNonTransactionalMigrationResult(ctx context.Context, db migrationData
 		}
 		return nil
 	}
+	if requirements, description := accountShareIndexRequirementsForMigration(name); requirements != nil {
+		matches, err := indexesMatchRequirements(ctx, db, requirements)
+		if err != nil {
+			return fmt.Errorf("verify %s index definitions: %w", description, err)
+		}
+		if !matches {
+			return fmt.Errorf("one or more %s indexes are missing, invalid, or do not match migration %s", description, name[:3])
+		}
+		return nil
+	}
 	if name != accountShareSeatCostQueryIndexesMigration {
 		return nil
 	}
@@ -874,6 +1132,59 @@ func verifyNonTransactionalMigrationResult(ctx context.Context, db migrationData
 	}
 	if !ready {
 		return errors.New("one or more account-share seat-cost indexes are missing, invalid, or do not match migration 208")
+	}
+	return nil
+}
+
+func accountShareIndexRequirementsForMigration(name string) ([]migrationIndexRequirement, string) {
+	switch name {
+	case accountShareRuntimeIdentityIndexesMigration:
+		return accountShareRuntimeIdentityIndexRequirements, "account-share runtime identity"
+	case accountShareLifecycleIndexesMigration:
+		return accountShareLifecycleIndexRequirements, "account-share lifecycle"
+	case accountShareBillingHistoryIndexesMigration:
+		return accountShareBillingHistoryIndexRequirements, "account-share billing history"
+	default:
+		return nil, ""
+	}
+}
+
+func isAccountShareLifecycleTargetIndexCreate(statement string) bool {
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(statement)), "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS UQ_ACCOUNT_SHARE_MEMBERSHIPS_LIVE_CONSUMER")
+}
+
+func prepareAccountShareLifecycleTargetIndexes(ctx context.Context, db migrationDatabase) error {
+	guardsReady, err := indexesMatchRequirements(ctx, db, accountShareLifecycleUniqueGuardIndexRequirements)
+	if err != nil {
+		return fmt.Errorf("verify temporary uniqueness guards: %w", err)
+	}
+	if !guardsReady {
+		return errors.New("temporary live-membership uniqueness guards are missing, invalid, or have an unexpected definition")
+	}
+	return prepareIndexesForRetry(ctx, db, accountShareLifecycleIndexRequirements)
+}
+
+func finalizeNonTransactionalMigration(ctx context.Context, db migrationDatabase, name string) error {
+	if name != accountShareLifecycleIndexesMigration {
+		return nil
+	}
+
+	// These guards are reserved migration internals, are verified by catalog
+	// definition, and are removed only after every replacement target has been
+	// verified. They therefore cannot create a uniqueness gap or delete a
+	// caller-owned same-named index with an unexpected definition.
+	guardsReady, err := indexesMatchRequirements(ctx, db, accountShareLifecycleUniqueGuardIndexRequirements)
+	if err != nil {
+		return fmt.Errorf("verify temporary uniqueness guards before cleanup: %w", err)
+	}
+	if !guardsReady {
+		return errors.New("temporary live-membership uniqueness guards are missing, invalid, or have an unexpected definition before cleanup")
+	}
+	for _, requirement := range accountShareLifecycleUniqueGuardIndexRequirements {
+		qualifiedIndexName := quoteMigrationCatalogName(requirement.index)
+		if _, err := db.ExecContext(ctx, fmt.Sprintf("DROP INDEX CONCURRENTLY IF EXISTS %s", qualifiedIndexName)); err != nil {
+			return fmt.Errorf("drop verified temporary uniqueness guard %s: %w", requirement.index.name, err)
+		}
 	}
 	return nil
 }

@@ -37,8 +37,23 @@ vi.mock('vue-i18n', async () => {
 })
 
 const BaseDialogStub = {
-  props: ['show', 'title'],
-  template: '<section v-if="show"><h2>{{ title }}</h2><slot /><slot name="footer" /></section>',
+  name: 'BaseDialog',
+  props: ['show', 'title', 'closeDisabled'],
+  emits: ['close'],
+  template: `
+    <section
+      v-if="show"
+      data-testid="base-dialog"
+      :data-close-disabled="String(closeDisabled)"
+    >
+      <h2>{{ title }}</h2>
+      <button type="button" data-testid="base-dialog-close" @click="$emit('close')">
+        force close
+      </button>
+      <slot />
+      <slot name="footer" />
+    </section>
+  `,
 }
 
 function listing(id: number, roomName: string): AccountShareListing {
@@ -153,6 +168,18 @@ function mountDialog(room = listing(1, '测试房间')) {
       stubs: {
         BaseDialog: BaseDialogStub,
         Icon: true,
+        CreateRoomAccountFlow: {
+          name: 'CreateRoomAccountFlow',
+          props: ['show', 'listing', 'proxies'],
+          emits: ['close', 'completed'],
+          template: `
+            <section v-if="show" data-testid="create-room-account-flow">
+              <button type="button" data-testid="complete-room-account-flow" @click="$emit('completed')">
+                completed
+              </button>
+            </section>
+          `,
+        },
       },
     },
   })
@@ -262,6 +289,34 @@ describe('RoomAccountsDialog', () => {
     )).toHaveLength(1)
   })
 
+  it('opens the concentrated account creator and refreshes both room views after completion', async () => {
+    listRoomAccounts.mockResolvedValue([])
+    listAccounts.mockResolvedValue(paginatedAccounts([]))
+
+    const wrapper = mountDialog()
+    await flushPromises()
+    await wrapper.get('[data-testid="room-accounts-add-tab"]').trigger('click')
+    await wrapper.get('[data-testid="create-compatible-room-account"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="create-room-account-flow"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="base-dialog-close"]').trigger('click')
+    expect(wrapper.emitted('close')).toBeUndefined()
+
+    const roomCallsBeforeCompletion = listRoomAccounts.mock.calls.length
+    const candidateCallsBeforeCompletion = listAccounts.mock.calls.length
+    await wrapper.get('[data-testid="complete-room-account-flow"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="create-room-account-flow"]').exists()).toBe(false)
+    expect(listRoomAccounts.mock.calls.length).toBeGreaterThan(roomCallsBeforeCompletion)
+    expect(listAccounts.mock.calls.length).toBeGreaterThan(candidateCallsBeforeCompletion)
+    expect(wrapper.emitted('changed')).toEqual([[
+      { operation: 'add', success: 1, failed: 0 },
+    ]])
+    expect(wrapper.get('[data-testid="room-accounts-members-tab"]').attributes('aria-selected')).toBe('true')
+  })
+
   it('adds selected compatible accounts with a secure batch idempotency key', async () => {
     listRoomAccounts
       .mockResolvedValueOnce([])
@@ -329,6 +384,57 @@ describe('RoomAccountsDialog', () => {
       .toBe(attachRoomAccounts.mock.calls[1][1].idempotency_key)
   })
 
+  it('blocks every close path and duplicate submission while an operation is running', async () => {
+    let resolveAttach!: (result: {
+      success: number
+      failed: number
+      success_ids: number[]
+      failed_ids: number[]
+      results: Array<{ account_id: number; success: boolean; error?: string }>
+    }) => void
+    listRoomAccounts.mockResolvedValueOnce([])
+    listAccounts.mockResolvedValue(paginatedAccounts([account(19, '操作中账号')]))
+    attachRoomAccounts.mockReturnValueOnce(new Promise(resolve => {
+      resolveAttach = resolve
+    }))
+    vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(
+      '55555555-5555-4555-8555-555555555555'
+    )
+
+    const wrapper = mountDialog()
+    await flushPromises()
+    await wrapper.get('[data-testid="room-accounts-add-tab"]').trigger('click')
+    await wrapper.get('input[type="checkbox"]').setValue(true)
+
+    const submitButton = wrapper.get('[data-testid="add-selected-room-accounts"]')
+    await submitButton.trigger('click')
+
+    expect(wrapper.get('[data-testid="base-dialog"]').attributes('data-close-disabled'))
+      .toBe('true')
+    expect(wrapper.get('[data-testid="close-room-accounts-dialog"]').attributes('disabled'))
+      .toBeDefined()
+
+    await wrapper.get('[data-testid="base-dialog-close"]').trigger('click')
+    await submitButton.trigger('click')
+
+    expect(wrapper.emitted('close')).toBeUndefined()
+    expect(attachRoomAccounts).toHaveBeenCalledTimes(1)
+
+    resolveAttach({
+      success: 0,
+      failed: 1,
+      success_ids: [],
+      failed_ids: [19],
+      results: [{ account_id: 19, success: false, error: '账号仍有运行中请求' }],
+    })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="base-dialog"]').attributes('data-close-disabled'))
+      .toBe('false')
+    await wrapper.get('[data-testid="base-dialog-close"]').trigger('click')
+    expect(wrapper.emitted('close')).toHaveLength(1)
+  })
+
   it('detaches selected members without changing their account mode', async () => {
     listRoomAccounts
       .mockResolvedValueOnce([roomAccount(21, '待退出账号')])
@@ -349,6 +455,12 @@ describe('RoomAccountsDialog', () => {
     await flushPromises()
     await wrapper.get('input[type="checkbox"]').setValue(true)
     await wrapper.get('[data-testid="remove-selected-room-accounts"]').trigger('click')
+    await flushPromises()
+
+    expect(detachRoomAccounts).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="room-account-remove-confirmation"]').text())
+      .toContain('这会移出房间的最后一个账号')
+    await wrapper.get('[data-testid="confirm-remove-room-accounts"]').trigger('click')
     await flushPromises()
 
     expect(detachRoomAccounts).toHaveBeenCalledWith(1, {
@@ -386,6 +498,8 @@ describe('RoomAccountsDialog', () => {
     await flushPromises()
     await wrapper.get('[data-testid="select-all-room-members"]').trigger('click')
     await wrapper.get('[data-testid="remove-selected-room-accounts"]').trigger('click')
+    expect(detachRoomAccounts).not.toHaveBeenCalled()
+    await wrapper.get('[data-testid="confirm-remove-room-accounts"]').trigger('click')
     await flushPromises()
 
     expect(wrapper.get('[data-testid="room-accounts-operation-summary"]').text())

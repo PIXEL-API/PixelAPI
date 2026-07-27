@@ -90,7 +90,7 @@ const paths = [
       { text: '收益路径总览', href: '/docs/owner-start' },
       { text: '准备账号', href: '/docs/owner-prerequisites' },
       { text: '测试私有自用', href: '/docs/owner-test-private-account' },
-      { text: '上架账号广场', href: '/docs/owner-account-marketplace' },
+      { text: '创建账号广场房间', href: '/docs/owner-account-marketplace' },
       { text: '提现和收款码', href: '/docs/owner-withdrawal-setup' },
     ],
   },

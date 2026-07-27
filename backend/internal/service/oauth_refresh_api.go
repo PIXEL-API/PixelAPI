@@ -123,6 +123,28 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	executor OAuthRefreshExecutor,
 	refreshWindow time.Duration,
 ) (*OAuthRefreshResult, error) {
+	return api.refresh(ctx, account, executor, refreshWindow, false)
+}
+
+// RefreshNow forces one refresh attempt while retaining the same locking,
+// DB re-read, invalid_grant race recovery, and conditional persistence
+// guarantees as RefreshIfNeeded. Administrative refresh actions must use this
+// path instead of calling provider OAuth endpoints directly.
+func (api *OAuthRefreshAPI) RefreshNow(
+	ctx context.Context,
+	account *Account,
+	executor OAuthRefreshExecutor,
+) (*OAuthRefreshResult, error) {
+	return api.refresh(ctx, account, executor, 0, true)
+}
+
+func (api *OAuthRefreshAPI) refresh(
+	ctx context.Context,
+	account *Account,
+	executor OAuthRefreshExecutor,
+	refreshWindow time.Duration,
+	force bool,
+) (*OAuthRefreshResult, error) {
 	if api == nil || api.accountRepo == nil {
 		return nil, errors.New("oauth refresh account repository is not configured")
 	}
@@ -186,6 +208,12 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 		}
 	}
 	if !executor.CanRefresh(freshAccount) {
+		if force {
+			if freshAccount.IsGrokOAuth() && strings.TrimSpace(freshAccount.GetGrokRefreshToken()) == "" {
+				return &OAuthRefreshResult{Account: freshAccount}, errGrokOAuthRefreshTokenMissing
+			}
+			return &OAuthRefreshResult{Account: freshAccount}, errOAuthRefreshAccountStateChanged
+		}
 		if requestPath && freshAccount.IsGrokOAuth() && strings.TrimSpace(freshAccount.GetGrokRefreshToken()) == "" {
 			return nil, withGrokCredentialFailureSnapshot(errGrokOAuthRefreshTokenMissing, freshAccount)
 		}
@@ -193,7 +221,7 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	}
 
 	// 3. 二次检查是否仍需刷新（另一条路径可能已刷新）
-	if !executor.NeedsRefresh(freshAccount, refreshWindow) {
+	if !force && !executor.NeedsRefresh(freshAccount, refreshWindow) {
 		return &OAuthRefreshResult{
 			Account: freshAccount,
 		}, nil
@@ -257,7 +285,16 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 					}
 					return nil, &providerCycleContainmentRefreshError{err: fmt.Errorf("grok OAuth success CAS lost and current state is unavailable: %w", readErr)}
 				}
-				return &OAuthRefreshResult{Account: currentAccount}, nil
+				if grokOAuthRefreshGenerationAdvanced(freshAccount, currentAccount) {
+					slog.Info("oauth_refresh_success_cas_recovered_newer_generation",
+						"account_id", freshAccount.ID,
+						"platform", freshAccount.Platform,
+					)
+					return &OAuthRefreshResult{Account: currentAccount}, nil
+				}
+				return nil, &providerCycleContainmentRefreshError{
+					err: errors.New("grok OAuth refresh succeeded but credential persistence conflicted with a non-refresh account update"),
+				}
 			}
 			durableAccount, readErr := api.loadGrokDurableAccountAfterPersist(ctx, cacheKey, freshAccount.ID)
 			if readErr != nil || durableAccount == nil {
@@ -286,6 +323,23 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 		NewCredentials: newCredentials,
 		Account:        freshAccount,
 	}, nil
+}
+
+func grokOAuthRefreshGenerationAdvanced(attempted, current *Account) bool {
+	if attempted == nil || current == nil {
+		return false
+	}
+	currentAccessToken := strings.TrimSpace(current.GetGrokAccessToken())
+	currentRefreshToken := strings.TrimSpace(current.GetGrokRefreshToken())
+	if currentAccessToken == "" || currentRefreshToken == "" {
+		return false
+	}
+	if strings.TrimSpace(attempted.GetGrokRefreshToken()) != currentRefreshToken {
+		return true
+	}
+	attemptedVersion := attempted.GetCredentialAsInt64("_token_version")
+	currentVersion := current.GetCredentialAsInt64("_token_version")
+	return currentVersion > attemptedVersion
 }
 
 func (api *OAuthRefreshAPI) releaseRefreshLock(parent context.Context, cacheKey string) {

@@ -17,6 +17,38 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+type grokConditionalStateRepoStub struct {
+	AccountRepository
+	updated      bool
+	calls        int
+	lastUntil    time.Time
+	lastSnapshot GrokCredentialMutationSnapshot
+}
+
+func (r *grokConditionalStateRepoStub) SetGrokCredentialTempUnschedulableIfMatch(
+	_ context.Context,
+	_ int64,
+	snapshot GrokCredentialMutationSnapshot,
+	until time.Time,
+	_ string,
+) (bool, error) {
+	r.calls++
+	r.lastSnapshot = snapshot
+	r.lastUntil = until
+	return r.updated, nil
+}
+
+func (r *grokConditionalStateRepoStub) SetGrokCredentialErrorIfMatch(
+	_ context.Context,
+	_ int64,
+	snapshot GrokCredentialMutationSnapshot,
+	_ string,
+) (bool, error) {
+	r.calls++
+	r.lastSnapshot = snapshot
+	return r.updated, nil
+}
+
 func TestPatchGrokResponsesBodySanitizesComposerReasoningParameters(t *testing.T) {
 	t.Parallel()
 
@@ -59,6 +91,137 @@ func TestPatchGrokResponsesBodySanitizesComposerReasoningParameters(t *testing.T
 			require.False(t, gjson.GetBytes(patched, "reasoningEffort").Exists())
 		})
 	}
+}
+
+func TestApplyGrokCLIHeadersSetsInteractiveClientMode(t *testing.T) {
+	headers := http.Header{}
+
+	applyGrokCLIHeaders(headers)
+
+	require.Equal(t, "interactive", headers.Get("X-Grok-Client-Mode"))
+}
+
+func TestGrokUpstreamErrorFailoverPolicy(t *testing.T) {
+	svc := &OpenAIGatewayService{}
+
+	tests := []struct {
+		name       string
+		statusCode int
+		body       []byte
+		wantPolicy bool
+		wantFail   bool
+	}{
+		{
+			name:       "content policy 403 does not fail over",
+			statusCode: http.StatusForbidden,
+			body:       []byte(`{"error":{"code":"content_policy_violation","message":"prompt violates content policy"}}`),
+			wantPolicy: true,
+			wantFail:   false,
+		},
+		{
+			name:       "ordinary 403 fails over",
+			statusCode: http.StatusForbidden,
+			body:       []byte(`{"error":{"code":"permission_denied","message":"subscription required"}}`),
+			wantPolicy: false,
+			wantFail:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.wantPolicy, isGrokContentPolicyRejection(tt.statusCode, tt.body))
+			require.Equal(t, tt.wantFail, svc.shouldFailoverGrokUpstreamError(tt.statusCode, tt.body))
+		})
+	}
+}
+
+func TestHandleGrokAccountUpstreamErrorPoolMode502Scheduling(t *testing.T) {
+	tests := []struct {
+		name                string
+		poolMode            bool
+		wantTempUnschedable bool
+	}{
+		{name: "pool account remains schedulable", poolMode: true, wantTempUnschedable: false},
+		{name: "non-pool account is temporarily unschedulable", poolMode: false, wantTempUnschedable: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			account := &Account{
+				ID:       901,
+				Platform: PlatformGrok,
+				Type:     AccountTypeAPIKey,
+				Credentials: map[string]any{
+					"pool_mode": tt.poolMode,
+				},
+			}
+			svc := &OpenAIGatewayService{}
+
+			svc.handleGrokAccountUpstreamError(
+				context.Background(),
+				account,
+				http.StatusBadGateway,
+				nil,
+				[]byte(`{"error":{"message":"temporary upstream failure"}}`),
+			)
+
+			require.Equal(t, tt.wantTempUnschedable, svc.isOpenAIAccountRuntimeBlocked(account))
+		})
+	}
+}
+
+func TestHandleGrokAccountUpstreamErrorDoesNotBlockAfterCredentialCASMiss(t *testing.T) {
+	account := &Account{
+		ID:       902,
+		Platform: PlatformGrok,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token":   "stale-access",
+			"refresh_token":  "stale-refresh",
+			"_token_version": int64(100),
+		},
+	}
+	repo := &grokConditionalStateRepoStub{updated: false}
+	svc := &OpenAIGatewayService{accountRepo: repo}
+
+	svc.handleGrokAccountUpstreamError(
+		context.Background(),
+		account,
+		http.StatusUnauthorized,
+		nil,
+		[]byte(`{"error":{"message":"unauthorized"}}`),
+	)
+
+	require.Equal(t, 1, repo.calls)
+	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
+	require.JSONEq(t, `{"access_token":"stale-access","refresh_token":"stale-refresh","_token_version":100}`, repo.lastSnapshot.CredentialsJSON)
+}
+
+func TestHandleGrokAccountUpstreamErrorPaymentRequiredUsesThirtyMinuteCooldown(t *testing.T) {
+	account := &Account{
+		ID:       903,
+		Platform: PlatformGrok,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token":  "access",
+			"refresh_token": "refresh",
+		},
+	}
+	repo := &grokConditionalStateRepoStub{updated: true}
+	svc := &OpenAIGatewayService{accountRepo: repo}
+	startedAt := time.Now()
+
+	svc.handleGrokAccountUpstreamError(
+		context.Background(),
+		account,
+		http.StatusPaymentRequired,
+		nil,
+		[]byte(`{"error":{"message":"payment required"}}`),
+	)
+
+	require.Equal(t, 1, repo.calls)
+	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
+	require.WithinDuration(t, startedAt.Add(30*time.Minute), repo.lastUntil, 2*time.Second)
 }
 
 func TestForwardGrokResponsesAPIKeyUsesConfiguredXAIEndpoint(t *testing.T) {

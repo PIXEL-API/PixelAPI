@@ -55,6 +55,9 @@ func (c *grokOAuthClient) ExchangeCode(ctx context.Context, code, codeVerifier, 
 	if !resp.IsSuccessState() {
 		return nil, grokOAuthStatusError("GROK_OAUTH_TOKEN_EXCHANGE_FAILED", "token exchange failed", resp)
 	}
+	if strings.TrimSpace(tokenResp.AccessToken) == "" {
+		return nil, infraerrors.New(http.StatusBadGateway, "GROK_OAUTH_TOKEN_RESPONSE_INVALID", "token exchange response did not include access_token")
+	}
 	return &tokenResp, nil
 }
 
@@ -86,6 +89,9 @@ func (c *grokOAuthClient) RefreshToken(ctx context.Context, refreshToken, proxyU
 	}
 	if !resp.IsSuccessState() {
 		return nil, grokOAuthStatusError("GROK_OAUTH_TOKEN_REFRESH_FAILED", "token refresh failed", resp)
+	}
+	if strings.TrimSpace(tokenResp.AccessToken) == "" {
+		return nil, infraerrors.New(http.StatusBadGateway, "GROK_OAUTH_TOKEN_RESPONSE_INVALID", "token refresh response did not include access_token")
 	}
 	return &tokenResp, nil
 }

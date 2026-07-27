@@ -3,7 +3,8 @@
     :show="show"
     :title="t('accountShare.roomAccounts.title', { name: roomDisplayName })"
     width="wide"
-    @close="emit('close')"
+    :close-disabled="operating"
+    @close="requestClose"
   >
     <div class="space-y-4">
       <div
@@ -35,6 +36,7 @@
           :class="{ 'room-tab-active': activeTab === 'members' }"
           role="tab"
           :aria-selected="activeTab === 'members'"
+          :disabled="operating"
           data-testid="room-accounts-members-tab"
           @click="activeTab = 'members'"
         >
@@ -46,6 +48,7 @@
           :class="{ 'room-tab-active': activeTab === 'add' }"
           role="tab"
           :aria-selected="activeTab === 'add'"
+          :disabled="operating"
           data-testid="room-accounts-add-tab"
           @click="activeTab = 'add'"
         >
@@ -83,6 +86,7 @@
               type="search"
               class="input min-h-11 w-full"
               :placeholder="t('accountShare.roomAccounts.searchMembers')"
+              :disabled="operating"
             />
           </label>
           <button
@@ -188,7 +192,7 @@
             class="btn min-h-11 bg-red-600 text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
             :disabled="selectedMemberIDs.size === 0 || operating || loadingAccounts"
             data-testid="remove-selected-room-accounts"
-            @click="submitBatchOperation('remove')"
+            @click="openRemoveConfirmation"
           >
             <Icon
               :name="operating ? 'refresh' : 'trash'"
@@ -211,6 +215,27 @@
           }) }}
         </div>
 
+        <div class="create-compatible-account-card">
+          <div class="min-w-0">
+            <strong>{{ t('accountShare.roomAccounts.createCompatibleAccount') }}</strong>
+            <small>
+              {{ canCreateCompatibleAccount
+                ? t('accountShare.roomAccounts.createCompatibleAccountHint')
+                : t('accountShare.roomAccounts.createCompatibleAccountUnavailable') }}
+            </small>
+          </div>
+          <button
+            type="button"
+            class="btn btn-primary min-h-11"
+            :disabled="operating || !canCreateCompatibleAccount"
+            data-testid="create-compatible-room-account"
+            @click="openCreateAccountFlow"
+          >
+            <Icon name="plus" size="sm" class="mr-2" />
+            {{ t('userAccounts.createAccount') }}
+          </button>
+        </div>
+
         <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <label class="min-w-0 flex-1">
             <span class="sr-only">{{ t('accountShare.roomAccounts.searchCandidates') }}</span>
@@ -219,6 +244,7 @@
               type="search"
               class="input min-h-11 w-full"
               :placeholder="t('accountShare.roomAccounts.searchCandidates')"
+              :disabled="operating"
             />
           </label>
           <button
@@ -336,7 +362,8 @@
           type="button"
           class="btn btn-secondary min-h-11"
           :disabled="operating"
-          @click="emit('close')"
+          data-testid="close-room-accounts-dialog"
+          @click="requestClose"
         >
           {{ t('common.close') }}
         </button>
@@ -352,6 +379,110 @@
       </div>
     </template>
   </BaseDialog>
+
+  <BaseDialog
+    :show="pendingRemoveAccountIDs.length > 0"
+    title="确认移出房间账号"
+    width="narrow"
+    :z-index="65"
+    :close-disabled="operating"
+    :close-on-escape="!operating"
+    :close-on-click-outside="false"
+    @close="cancelRemoveConfirmation"
+  >
+    <div class="room-account-remove-confirmation" data-testid="room-account-remove-confirmation">
+      <div class="remove-impact-summary">
+        <div>
+          <span>本次移出</span>
+          <strong>{{ pendingRemoveAccountIDs.length }}</strong>
+        </div>
+        <div>
+          <span>当前账号</span>
+          <strong>{{ accounts.length }}</strong>
+        </div>
+        <div>
+          <span>预计剩余</span>
+          <strong>{{ remainingAccountCountAfterRemove }}</strong>
+        </div>
+      </div>
+
+      <div
+        class="remove-impact-notice"
+        :class="{ 'remove-impact-notice-critical': removingLastRoomAccounts }"
+        role="alert"
+      >
+        <Icon
+          :name="removingLastRoomAccounts ? 'exclamationCircle' : 'infoCircle'"
+          size="sm"
+        />
+        <div>
+          <strong>
+            {{ removingLastRoomAccounts
+              ? '这会移出房间的最后一个账号'
+              : '成员请求可能需要切换到剩余账号' }}
+          </strong>
+          <p>
+            {{ removingLastRoomAccounts
+              ? '操作成功后，房间将没有可调度账号，消费者请求无法继续；请随后暂停房间或立即补充兼容账号。'
+              : '若所选账号正在承载成员，服务端会在同一操作中处理重新绑定或必要结算；提交结果以服务端最新状态为准。' }}
+          </p>
+        </div>
+      </div>
+
+      <div class="remove-impact-runtime">
+        <span>当前占用/收口席位</span>
+        <strong>{{ Number(listing?.active_seats || 0) }}</strong>
+        <small>当前接口未返回预约与正在退出的拆分人数，因此这里不做估算。</small>
+      </div>
+
+      <div class="remove-account-list">
+        <span>将移出的账号</span>
+        <ul>
+          <li v-for="account in pendingRemoveAccounts" :key="account.account_id">
+            <strong>{{ account.account_name }}</strong>
+            <small>#{{ account.account_id }}</small>
+          </li>
+        </ul>
+      </div>
+    </div>
+
+    <template #footer>
+      <div class="remove-confirmation-footer">
+        <button
+          type="button"
+          class="btn btn-secondary min-h-11"
+          :disabled="operating"
+          data-testid="cancel-remove-room-accounts"
+          @click="cancelRemoveConfirmation"
+        >
+          返回检查
+        </button>
+        <button
+          type="button"
+          class="btn min-h-11 bg-red-600 text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="operating"
+          data-testid="confirm-remove-room-accounts"
+          @click="confirmRemoveAccounts"
+        >
+          <Icon
+            :name="operating ? 'refresh' : 'trash'"
+            size="sm"
+            class="mr-2"
+            :class="{ 'animate-spin': operating }"
+          />
+          {{ operating ? '正在安全移出…' : `确认移出 ${pendingRemoveAccountIDs.length} 个账号` }}
+        </button>
+      </div>
+    </template>
+  </BaseDialog>
+
+  <CreateRoomAccountFlow
+    :show="showCreateAccountFlow"
+    :listing="listing"
+    :proxies="proxies"
+    @close="closeCreateAccountFlow"
+    @completed="handleCreatedAccountAttached"
+  />
 </template>
 
 <script setup lang="ts">
@@ -366,13 +497,30 @@ import {
   type AccountShareRoomAccountsBatchResponse
 } from '@/api/accountShare'
 import { accountsAPI } from '@/api/accounts'
-import type { Account } from '@/types'
+import type { Account, Proxy } from '@/types'
 import { resolveAccountExternalPlacementTarget } from '@/components/account-share/externalPlacement'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { formatDateTime } from '@/utils/format'
+import CreateRoomAccountFlow from '@/components/account-share/CreateRoomAccountFlow.vue'
 
 type RoomAccountsTab = 'members' | 'add'
 type RoomAccountOperation = 'add' | 'remove'
+
+const ROOM_ACCOUNT_ERROR_MESSAGES: Record<string, string> = {
+  ACCOUNT_SHARE_ROOM_LIMIT_EXCEEDED: '未删除房间数量已达到配额上限',
+  ACCOUNT_SHARE_ROOM_CREATE_RATE_EXCEEDED: '最近 24 小时创建房间次数已达到配额上限',
+  ACCOUNT_SHARE_ROOM_ACCOUNT_LIMIT_EXCEEDED: '该房间的账号数量已达到上限，请先移出不再使用的账号',
+  ACCOUNT_SHARE_OWNER_ROOM_ACCOUNT_LIMIT_EXCEEDED: '房主管理的房间账号总数已达到上限，请先整理其他房间',
+  ACCOUNT_SHARE_ROOM_OWNER_MISMATCH: '该账号不属于当前房主，不能加入此房间',
+  ACCOUNT_SHARE_ROOM_PLATFORM_MISMATCH: '该账号与房间平台不一致',
+  ACCOUNT_SHARE_ROOM_LEVEL_MISMATCH: '该账号等级与房间要求不一致',
+  ACCOUNT_SHARE_ROOM_UNKNOWN_LEVEL: '该账号等级尚未识别，请先完成账号检测',
+  ACCOUNT_SHARE_ROOM_MODE_REQUIRED: '该账号尚未处于可加入房间的账号模式',
+  ACCOUNT_SHARE_ROOM_ACCOUNT_CONFLICT: '该账号已加入其他房间或正在切换归属',
+  ACCOUNT_SHARE_LISTING_NOT_FOUND: '房间不存在、已删除或当前无权管理',
+  ACCOUNT_SHARE_ROOM_DELETED: '房间已经删除，不能再调整房间账号',
+  IDEMPOTENCY_KEY_REQUIRED: '请求缺少安全幂等标识，请刷新页面后重试'
+}
 
 interface OperationSummary {
   tone: 'success' | 'warning' | 'error'
@@ -391,10 +539,13 @@ interface RoomAccountsChangedEvent {
   failed: number
 }
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   show: boolean
   listing: AccountShareListing | null
-}>()
+  proxies?: Proxy[]
+}>(), {
+  proxies: () => []
+})
 
 const emit = defineEmits<{
   (event: 'close'): void
@@ -416,6 +567,8 @@ const selectedMemberIDs = ref(new Set<number>())
 const selectedCandidateIDs = ref(new Set<number>())
 const memberSearch = ref('')
 const candidateSearch = ref('')
+const showCreateAccountFlow = ref(false)
+const pendingRemoveAccountIDs = ref<number[]>([])
 let accountsRequestVersion = 0
 let candidatesRequestVersion = 0
 let pendingOperationSignature = ''
@@ -468,6 +621,12 @@ const addableCandidateCount = computed(() => (
   candidateAccounts.value.filter((account) => isCandidateEligible(account)).length
 ))
 
+const canCreateCompatibleAccount = computed(() => {
+  const platform = normalizeComparableValue(props.listing?.platform)
+  return (platform === 'openai' || platform === 'anthropic')
+    && isKnownLevel(props.listing?.account_level)
+})
+
 const allVisibleMembersSelected = computed(() => (
   filteredMemberAccounts.value.length > 0
   && filteredMemberAccounts.value.every((account) => selectedMemberIDs.value.has(account.account_id))
@@ -479,6 +638,20 @@ const allVisibleCandidatesSelected = computed(() => (
 ))
 
 const refreshing = computed(() => loadingAccounts.value || loadingCandidates.value)
+
+const pendingRemoveAccounts = computed(() => {
+  const selected = new Set(pendingRemoveAccountIDs.value)
+  return accounts.value.filter(account => selected.has(account.account_id))
+})
+
+const remainingAccountCountAfterRemove = computed(() => (
+  Math.max(0, accounts.value.length - pendingRemoveAccounts.value.length)
+))
+
+const removingLastRoomAccounts = computed(() => (
+  pendingRemoveAccounts.value.length > 0
+  && remainingAccountCountAfterRemove.value === 0
+))
 
 const operationSummaryClass = computed(() => {
   if (operationSummary.value?.tone === 'success') {
@@ -508,6 +681,8 @@ watch(
     selectedCandidateIDs.value = new Set()
     memberSearch.value = ''
     candidateSearch.value = ''
+    showCreateAccountFlow.value = false
+    pendingRemoveAccountIDs.value = []
     activeTab.value = 'members'
     pendingOperationSignature = ''
     pendingOperationIdempotencyKey = ''
@@ -631,6 +806,37 @@ function toggleMember(accountID: number): void {
   selectedMemberIDs.value = next
 }
 
+function requestClose(): void {
+  if (
+    operating.value
+    || showCreateAccountFlow.value
+    || pendingRemoveAccountIDs.value.length > 0
+  ) {
+    return
+  }
+  emit('close')
+}
+
+function openCreateAccountFlow(): void {
+  if (operating.value || !canCreateCompatibleAccount.value) return
+  showCreateAccountFlow.value = true
+}
+
+function closeCreateAccountFlow(): void {
+  showCreateAccountFlow.value = false
+}
+
+async function handleCreatedAccountAttached(): Promise<void> {
+  showCreateAccountFlow.value = false
+  emit('changed', {
+    operation: 'add',
+    success: 1,
+    failed: 0
+  })
+  await refreshAll()
+  activeTab.value = 'members'
+}
+
 function toggleCandidate(account: Account): void {
   if (operating.value || !isCandidateEligible(account)) return
   const next = new Set(selectedCandidateIDs.value)
@@ -657,6 +863,29 @@ function toggleAllCandidates(): void {
     for (const account of visibleEligibleCandidates.value) next.add(account.id)
   }
   selectedCandidateIDs.value = next
+}
+
+function openRemoveConfirmation(): void {
+  if (operating.value || loadingAccounts.value || selectedMemberIDs.value.size === 0) return
+  const currentAccountIDs = new Set(accounts.value.map(account => account.account_id))
+  pendingRemoveAccountIDs.value = Array.from(selectedMemberIDs.value)
+    .filter(accountID => currentAccountIDs.has(accountID))
+    .sort((left, right) => left - right)
+}
+
+function cancelRemoveConfirmation(): void {
+  if (operating.value) return
+  pendingRemoveAccountIDs.value = []
+}
+
+async function confirmRemoveAccounts(): Promise<void> {
+  const accountIDs = [...pendingRemoveAccountIDs.value]
+  if (accountIDs.length === 0 || operating.value) return
+  try {
+    await submitBatchOperation('remove', accountIDs)
+  } finally {
+    pendingRemoveAccountIDs.value = []
+  }
 }
 
 function buildIdempotencyKey(
@@ -741,17 +970,28 @@ function collectOperationFailures(
     .map((item) => ({
       accountID: item.account_id,
       name: accountNameForOperation(operation, item.account_id),
-      error: item.error || t('accountShare.roomAccounts.unknownFailure')
+      error: roomAccountOperationFailureMessage(item.error)
     }))
 }
 
-async function submitBatchOperation(operation: RoomAccountOperation): Promise<void> {
+function roomAccountOperationFailureMessage(error?: string): string {
+  const normalized = error?.trim()
+  if (!normalized) return t('accountShare.roomAccounts.unknownFailure')
+  return ROOM_ACCOUNT_ERROR_MESSAGES[normalized] || normalized
+}
+
+async function submitBatchOperation(
+  operation: RoomAccountOperation,
+  accountIDsOverride?: number[]
+): Promise<void> {
   const listingID = props.listing?.id
   if (!listingID || operating.value) return
 
-  const accountIDs = operation === 'add'
-    ? Array.from(selectedCandidateIDs.value)
-    : Array.from(selectedMemberIDs.value)
+  const accountIDs = accountIDsOverride
+    ? [...accountIDsOverride]
+    : operation === 'add'
+      ? Array.from(selectedCandidateIDs.value)
+      : Array.from(selectedMemberIDs.value)
   if (accountIDs.length === 0) return
 
   operationSummary.value = null
@@ -787,7 +1027,8 @@ async function submitBatchOperation(operation: RoomAccountOperation): Promise<vo
         error,
         operation === 'add'
           ? t('accountShare.roomAccounts.addRequestFailed')
-          : t('accountShare.roomAccounts.removeRequestFailed')
+          : t('accountShare.roomAccounts.removeRequestFailed'),
+        ROOM_ACCOUNT_ERROR_MESSAGES
       )
     }
   } finally {
@@ -819,7 +1060,8 @@ async function loadAccounts(): Promise<void> {
     accounts.value = []
     accountsErrorMessage.value = extractApiErrorMessage(
       error,
-      t('accountShare.roomAccounts.loadFailed')
+      t('accountShare.roomAccounts.loadFailed'),
+      ROOM_ACCOUNT_ERROR_MESSAGES
     )
   } finally {
     if (currentVersion === accountsRequestVersion) {
@@ -859,7 +1101,8 @@ async function loadCandidates(): Promise<void> {
     candidates.value = []
     candidatesErrorMessage.value = extractApiErrorMessage(
       error,
-      t('accountShare.roomAccounts.candidateLoadFailed')
+      t('accountShare.roomAccounts.candidateLoadFailed'),
+      ROOM_ACCOUNT_ERROR_MESSAGES
     )
   } finally {
     if (currentVersion === candidatesRequestVersion) {
@@ -875,6 +1118,160 @@ async function loadCandidates(): Promise<void> {
   min-width: 0;
   flex-direction: column;
   gap: 0.25rem;
+}
+
+.room-account-remove-confirmation {
+  display: grid;
+  min-width: 0;
+  gap: 1rem;
+}
+
+.remove-impact-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.remove-impact-summary > div {
+  min-width: 0;
+  border: 1px solid rgb(226 232 240);
+  border-radius: 0.75rem;
+  background: rgb(248 250 252);
+  padding: 0.75rem;
+  text-align: center;
+}
+
+.remove-impact-summary span,
+.remove-impact-summary strong {
+  display: block;
+}
+
+.remove-impact-summary span {
+  color: rgb(100 116 139);
+  font-size: 0.6875rem;
+}
+
+.remove-impact-summary strong {
+  margin-top: 0.25rem;
+  color: rgb(15 23 42);
+  font-size: 1.125rem;
+}
+
+.remove-impact-notice {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 0.75rem;
+  border: 1px solid rgb(253 230 138);
+  border-radius: 0.875rem;
+  background: rgb(255 251 235);
+  padding: 0.875rem;
+  color: rgb(146 64 14);
+}
+
+.remove-impact-notice-critical {
+  border-color: rgb(254 202 202);
+  background: rgb(254 242 242);
+  color: rgb(153 27 27);
+}
+
+.remove-impact-notice > svg {
+  margin-top: 0.125rem;
+  flex-shrink: 0;
+}
+
+.remove-impact-notice strong,
+.remove-impact-notice p {
+  display: block;
+}
+
+.remove-impact-notice strong {
+  font-size: 0.8125rem;
+}
+
+.remove-impact-notice p {
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  line-height: 1.25rem;
+}
+
+.remove-impact-runtime {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.25rem 0.75rem;
+  border-radius: 0.75rem;
+  background: rgb(241 245 249);
+  padding: 0.75rem;
+}
+
+.remove-impact-runtime span,
+.remove-impact-runtime strong {
+  color: rgb(51 65 85);
+  font-size: 0.8125rem;
+}
+
+.remove-impact-runtime strong {
+  font-weight: 750;
+}
+
+.remove-impact-runtime small {
+  grid-column: 1 / -1;
+  color: rgb(100 116 139);
+  font-size: 0.6875rem;
+  line-height: 1.125rem;
+}
+
+.remove-account-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.remove-account-list > span {
+  color: rgb(51 65 85);
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+
+.remove-account-list ul {
+  display: grid;
+  max-height: 12rem;
+  gap: 0.375rem;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.remove-account-list li {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border: 1px solid rgb(226 232 240);
+  border-radius: 0.75rem;
+  padding: 0.625rem 0.75rem;
+}
+
+.remove-account-list strong {
+  overflow: hidden;
+  color: rgb(30 41 59);
+  font-size: 0.8125rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remove-account-list small {
+  flex-shrink: 0;
+  color: rgb(100 116 139);
+  font-size: 0.6875rem;
+}
+
+.remove-confirmation-footer {
+  display: flex;
+  width: 100%;
+  flex-direction: column-reverse;
+  gap: 0.625rem;
 }
 
 .room-summary-cell span {
@@ -905,6 +1302,11 @@ async function loadCandidates(): Promise<void> {
   outline-offset: 2px;
 }
 
+.room-tab:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .room-tab-active {
   background: rgb(255 255 255);
   color: rgb(17 24 39);
@@ -926,6 +1328,34 @@ async function loadCandidates(): Promise<void> {
   border-color: rgb(59 130 246);
   background: rgb(239 246 255);
   box-shadow: 0 0 0 2px rgb(59 130 246 / 0.12);
+}
+
+.create-compatible-account-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.875rem;
+  border: 1px solid rgb(191 219 254);
+  border-radius: 1rem;
+  background: linear-gradient(135deg, rgb(239 246 255), rgb(240 253 250));
+  padding: 1rem;
+}
+
+.create-compatible-account-card strong,
+.create-compatible-account-card small {
+  display: block;
+}
+
+.create-compatible-account-card strong {
+  color: rgb(30 64 175);
+  font-size: 0.875rem;
+}
+
+.create-compatible-account-card small {
+  margin-top: 0.375rem;
+  color: rgb(71 85 105);
+  font-size: 0.75rem;
+  line-height: 1.25rem;
 }
 
 .room-checkbox-control {
@@ -956,6 +1386,48 @@ async function loadCandidates(): Promise<void> {
   color: rgb(255 255 255);
 }
 
+:global(.dark) .remove-impact-summary > div,
+:global(.dark) .remove-account-list li {
+  border-color: rgb(63 63 70);
+  background: rgb(39 39 42 / 0.55);
+}
+
+:global(.dark) .remove-impact-summary strong,
+:global(.dark) .remove-account-list strong {
+  color: rgb(244 244 245);
+}
+
+:global(.dark) .remove-impact-summary span,
+:global(.dark) .remove-account-list small {
+  color: rgb(161 161 170);
+}
+
+:global(.dark) .remove-impact-notice {
+  border-color: rgb(120 53 15);
+  background: rgb(69 26 3 / 0.28);
+  color: rgb(253 186 116);
+}
+
+:global(.dark) .remove-impact-notice-critical {
+  border-color: rgb(127 29 29);
+  background: rgb(69 10 10 / 0.28);
+  color: rgb(252 165 165);
+}
+
+:global(.dark) .remove-impact-runtime {
+  background: rgb(39 39 42 / 0.75);
+}
+
+:global(.dark) .remove-impact-runtime span,
+:global(.dark) .remove-impact-runtime strong,
+:global(.dark) .remove-account-list > span {
+  color: rgb(212 212 216);
+}
+
+:global(.dark) .remove-impact-runtime small {
+  color: rgb(161 161 170);
+}
+
 :global(.dark) .room-tab {
   color: rgb(209 213 219);
 }
@@ -975,8 +1447,34 @@ async function loadCandidates(): Promise<void> {
   background: rgb(30 58 138 / 0.2);
 }
 
+:global(.dark) .create-compatible-account-card {
+  border-color: rgb(30 64 175 / 0.7);
+  background: linear-gradient(135deg, rgb(30 58 138 / 0.24), rgb(6 78 59 / 0.2));
+}
+
+:global(.dark) .create-compatible-account-card strong {
+  color: rgb(191 219 254);
+}
+
+:global(.dark) .create-compatible-account-card small {
+  color: rgb(161 161 170);
+}
+
 :global(.dark) .account-level-badge {
   background: rgb(49 46 129 / 0.45);
   color: rgb(199 210 254);
+}
+
+@media (min-width: 640px) {
+  .create-compatible-account-card {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .remove-confirmation-footer {
+    flex-direction: row;
+    justify-content: flex-end;
+  }
 }
 </style>

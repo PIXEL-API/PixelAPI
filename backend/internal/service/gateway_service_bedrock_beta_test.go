@@ -126,10 +126,9 @@ func TestResolveBedrockBetaTokensForRequest_FiltersAfterBedrockTransform(t *test
 	}
 }
 
-// TestResolveBedrockBetaTokensForRequest_BlocksBodyAutoInjectedThinking 验证：
-// 管理员 block 了 interleaved-thinking，客户端不在 header 中带该 token，
-// 但请求体包含 thinking 字段 → 自动注入后应被 block。
-func TestResolveBedrockBetaTokensForRequest_BlocksBodyAutoInjectedThinking(t *testing.T) {
+// TestResolveBedrockBetaTokensForRequest_DoesNotAutoInjectUnsupportedThinkingBeta 验证：
+// thinking 字段不再隐式产生 AWS Bedrock 未确认支持的 interleaved-thinking token。
+func TestResolveBedrockBetaTokensForRequest_DoesNotAutoInjectUnsupportedThinkingBeta(t *testing.T) {
 	settings := &BetaPolicySettings{
 		Rules: []BetaPolicyRule{
 			{
@@ -156,18 +155,20 @@ func TestResolveBedrockBetaTokensForRequest_BlocksBodyAutoInjectedThinking(t *te
 	account := &Account{Platform: PlatformAnthropic, Type: AccountTypeBedrock}
 
 	// header 中不带 beta token，但 body 中有 thinking 字段
-	_, err = svc.resolveBedrockBetaTokensForRequest(
+	betaTokens, err := svc.resolveBedrockBetaTokensForRequest(
 		context.Background(),
 		account,
 		"", // 空 header
 		[]byte(`{"thinking":{"type":"enabled","budget_tokens":10000},"messages":[{"role":"user","content":"hi"}]}`),
 		"us.anthropic.claude-opus-4-6-v1",
 	)
-	if err == nil {
-		t.Fatal("expected body-injected interleaved-thinking to be blocked")
-	}
-	if err.Error() != "thinking is blocked" {
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, token := range betaTokens {
+		if token == "interleaved-thinking-2025-05-14" {
+			t.Fatal("unsupported interleaved-thinking token must not be auto-injected")
+		}
 	}
 }
 
@@ -244,7 +245,7 @@ func TestResolveBedrockBetaTokensForRequest_PassesWhenNoBlockRuleMatches(t *test
 	}
 	account := &Account{Platform: PlatformAnthropic, Type: AccountTypeBedrock}
 
-	// body 中有 thinking（会注入 interleaved-thinking），但 block 规则只针对 computer-use
+	// body 中有 thinking，但不应再注入 Bedrock 未确认支持的 interleaved-thinking token。
 	tokens, err := svc.resolveBedrockBetaTokensForRequest(
 		context.Background(),
 		account,
@@ -255,13 +256,9 @@ func TestResolveBedrockBetaTokensForRequest_PassesWhenNoBlockRuleMatches(t *test
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	found := false
 	for _, token := range tokens {
 		if token == "interleaved-thinking-2025-05-14" {
-			found = true
+			t.Fatal("unsupported interleaved-thinking token must not be present")
 		}
-	}
-	if !found {
-		t.Fatal("expected interleaved-thinking token to be present")
 	}
 }

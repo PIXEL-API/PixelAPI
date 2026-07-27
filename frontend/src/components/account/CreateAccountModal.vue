@@ -1,8 +1,9 @@
 <template>
   <BaseDialog
     :show="show"
-    :title="t('admin.accounts.createAccount')"
+    :title="title || t('admin.accounts.createAccount')"
     width="wide"
+    :close-disabled="submitting || currentOAuthLoading"
     @close="handleClose"
   >
     <!-- Step Indicator for OAuth accounts -->
@@ -100,7 +101,7 @@
       </div>
 
       <!-- Platform Selection - Segmented Control Style -->
-      <div>
+      <div v-if="!lockPlatform">
         <label class="input-label">{{ t('admin.accounts.platform') }}</label>
         <div class="mt-2 flex flex-wrap rounded-lg bg-gray-100 p-1 dark:bg-dark-700" data-tour="account-form-platform">
           <button
@@ -192,6 +193,13 @@
             <Icon name="bolt" size="sm" />
             Grok
           </button>
+        </div>
+      </div>
+      <div v-else>
+        <label class="input-label">{{ t('admin.accounts.platform') }}</label>
+        <div class="input flex min-h-[44px] items-center justify-between bg-gray-50 text-gray-700 dark:bg-dark-800 dark:text-dark-200">
+          <strong>{{ form.platform === 'openai' ? 'OpenAI' : form.platform === 'anthropic' ? 'Anthropic' : form.platform }}</strong>
+          <span class="text-xs text-gray-500 dark:text-dark-400">由目标房间锁定</span>
         </div>
       </div>
 
@@ -390,7 +398,14 @@
 
       <div v-if="form.platform === 'openai'">
         <label class="input-label">{{ t('admin.accounts.accountLevel.label') }}</label>
-        <div v-if="isUserScope" class="grid gap-2 sm:grid-cols-4">
+        <div
+          v-if="isUserScope && lockAccountLevel"
+          class="input flex min-h-[44px] items-center justify-between bg-gray-50 text-gray-700 dark:bg-dark-800 dark:text-dark-200"
+        >
+          <strong>{{ form.account_level }}</strong>
+          <span class="text-xs text-gray-500 dark:text-dark-400">由目标房间锁定</span>
+        </div>
+        <div v-else-if="isUserScope" class="grid gap-2 sm:grid-cols-4">
           <button
             v-for="option in userOpenAIAccountLevelOptions"
             :key="option.value"
@@ -2948,13 +2963,13 @@
         :error="currentOAuthError"
         :show-help="form.platform === 'anthropic'"
         :show-proxy-warning="form.platform !== 'openai' && !!form.proxy_id"
-        :allow-multiple="form.platform === 'anthropic'"
+        :allow-multiple="allowMultipleOAuth && form.platform === 'anthropic'"
         :show-cookie-option="!isUserScope && form.platform === 'anthropic'"
         :show-refresh-token-option="!isUserScope && (form.platform === 'openai' || form.platform === 'antigravity' || form.platform === 'grok')"
         :show-sso-option="!isUserScope && form.platform === 'grok'"
         :show-mobile-refresh-token-option="!isUserScope && form.platform === 'openai'"
         :show-session-token-option="false"
-        :show-access-token-option="false"
+        :show-access-token-option="!isUserScope && form.platform === 'openai'"
         :platform="form.platform"
         :show-project-id="geminiOAuthType === 'code_assist'"
         @generate-url="handleGenerateUrl"
@@ -2962,6 +2977,7 @@
         @validate-refresh-token="handleValidateRefreshToken"
         @validate-mobile-refresh-token="handleOpenAIValidateMobileRT"
         @validate-session-token="handleValidateSessionToken"
+        @import-access-token="handleOpenAIImportAT"
         @import-sso="handleGrokImportSSO"
       />
 
@@ -2969,14 +2985,14 @@
 
     <template #footer>
       <div v-if="step === 1" class="flex justify-end gap-3">
-        <button @click="handleClose" type="button" class="btn btn-secondary">
+        <button @click="handleClose()" type="button" class="btn btn-secondary min-h-11">
           {{ t('common.cancel') }}
         </button>
         <button
           type="submit"
           form="create-account-form"
           :disabled="submitting"
-          class="btn btn-primary"
+          class="btn btn-primary min-h-11"
           data-tour="account-form-submit"
         >
           <svg
@@ -3009,14 +3025,14 @@
         </button>
       </div>
       <div v-else class="flex justify-between gap-3">
-        <button type="button" class="btn btn-secondary" @click="goBackToBasicInfo">
+        <button type="button" class="btn btn-secondary min-h-11" @click="goBackToBasicInfo">
           {{ t('common.back') }}
         </button>
         <button
           v-if="isManualInputMethod"
           type="button"
           :disabled="!canExchangeCode"
-          class="btn btn-primary"
+          class="btn btn-primary min-h-11"
           @click="handleExchangeCode"
         >
           <svg
@@ -3053,8 +3069,8 @@
   <BaseDialog
     :show="showGeminiHelpDialog"
     :title="t('admin.accounts.gemini.helpDialog.title')"
+    width="wide"
     @close="showGeminiHelpDialog = false"
-    max-width="max-w-3xl"
   >
     <div class="space-y-6">
       <!-- Setup Guide Section -->
@@ -3308,6 +3324,7 @@ import { useGeminiOAuth } from '@/composables/useGeminiOAuth'
 import { useAntigravityOAuth } from '@/composables/useAntigravityOAuth'
 import { useGrokOAuth } from '@/composables/useGrokOAuth'
 import type {
+  Account,
   Proxy,
   AdminGroup,
   AccountLevel,
@@ -3402,16 +3419,32 @@ interface Props {
   accountScope?: AccountApiScope
   allowProxy?: boolean
   allowBillingRate?: boolean
+  title?: string
+  initialPlatform?: AccountPlatform
+  lockPlatform?: boolean
+  initialAccountLevel?: AccountLevel
+  lockAccountLevel?: boolean
+  allowMultipleOAuth?: boolean
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  accountScope: 'admin',
+  allowProxy: true,
+  allowBillingRate: true,
+  title: '',
+  initialPlatform: 'anthropic',
+  lockPlatform: false,
+  initialAccountLevel: 'unknown',
+  lockAccountLevel: false,
+  allowMultipleOAuth: true
+})
 const emit = defineEmits<{
   close: []
-  created: []
+  created: [accounts?: Account[]]
 }>()
 
 const appStore = useAppStore()
-const accountScope = computed(() => props.accountScope ?? 'admin')
+const accountScope = computed(() => props.accountScope)
 const isUserScope = computed(() => accountScope.value === 'user')
 const canManageBillingRate = computed(() => !isUserScope.value && props.allowBillingRate !== false)
 
@@ -3911,6 +3944,12 @@ watch(
   () => props.show,
   (newVal) => {
     if (newVal) {
+      if (props.lockPlatform) {
+        form.platform = props.initialPlatform
+      }
+      if (props.lockAccountLevel) {
+        form.account_level = props.initialAccountLevel
+      }
       // Load TLS fingerprint profiles
       if (!isUserScope.value) {
         adminAPI.tlsFingerprintProfiles.list()
@@ -4435,7 +4474,7 @@ const sanitizeCreatePayload = (payload: CreateAccountRequest): CreateAccountRequ
   return next
 }
 
-const createAccount = (payload: CreateAccountRequest): Promise<unknown> => {
+const createAccount = (payload: CreateAccountRequest): Promise<Account> => {
   const next = sanitizeCreatePayload(payload)
   return isUserScope.value ? accountsAPI.create(next) : adminAPI.accounts.create(next)
 }
@@ -4443,10 +4482,10 @@ const createAccount = (payload: CreateAccountRequest): Promise<unknown> => {
 const submitCreateAccount = async (payload: CreateAccountRequest) => {
   submitting.value = true
   try {
-    await createAccount(withAntigravityConfirmFlag(payload))
+    const createdAccount = await createAccount(withAntigravityConfirmFlag(payload))
     appStore.showSuccess(isUserScope.value ? t('userAccounts.accountCreatedSuccess') : t('admin.accounts.accountCreated'))
-    emit('created')
-    handleClose()
+    emit('created', [createdAccount])
+    handleClose(true)
   } catch (error: any) {
     if (error.response?.status === 409 && error.response?.data?.error === 'mixed_channel_warning' && needsMixedChannelCheck(form.platform)) {
       openMixedChannelDialog({
@@ -4469,10 +4508,10 @@ const resetForm = () => {
   step.value = 1
   form.name = ''
   form.notes = ''
-  form.platform = 'anthropic'
+  form.platform = props.initialPlatform
   form.type = 'oauth'
   form.share_mode = 'private'
-  form.account_level = 'unknown'
+  form.account_level = props.initialAccountLevel
   form.credentials = {}
   form.proxy_id = null
   form.concurrency = isUserScope.value ? PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY : DEFAULT_ACCOUNT_CONCURRENCY
@@ -4565,7 +4604,8 @@ const resetForm = () => {
   clearMixedChannelDialog()
 }
 
-const handleClose = () => {
+const handleClose = (allowBusyClose = false) => {
+  if (!allowBusyClose && (submitting.value || currentOAuthLoading.value)) return
   antigravityMixedChannelConfirmed.value = false
   clearMixedChannelDialog()
   emit('close')
@@ -5153,8 +5193,9 @@ const handleOpenAIExchange = async (authCode: string) => {
       return
     }
 
+    let createdAccount: Account | undefined
     if (shouldCreateOpenAI) {
-      await createAccount({
+      createdAccount = await createAccount({
         name: form.name,
         notes: form.notes,
         platform: 'openai',
@@ -5174,8 +5215,8 @@ const handleOpenAIExchange = async (authCode: string) => {
       appStore.showSuccess(t('admin.accounts.accountCreated'))
     }
 
-    emit('created')
-    handleClose()
+    emit('created', createdAccount ? [createdAccount] : undefined)
+    handleClose(true)
   } catch (error: any) {
     oauthClient.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
     appStore.showError(oauthClient.error.value)
@@ -5187,6 +5228,24 @@ const handleOpenAIExchange = async (authCode: string) => {
 // OpenAI 手动 RT 批量验证和创建
 // OpenAI Mobile RT client_id
 const OPENAI_MOBILE_RT_CLIENT_ID = 'app_LlGpXReQgckcGGUo2JrYvtJK'
+
+const applyOpenAICredentialImportSettings = (credentials: Record<string, unknown>) => {
+  if (!isOpenAIModelRestrictionDisabled.value) {
+    const modelMapping = buildModelMappingObject(
+      modelRestrictionMode.value,
+      allowedModels.value,
+      modelMappings.value
+    )
+    if (modelMapping) {
+      credentials.model_mapping = modelMapping
+    }
+  }
+
+  const compactModelMapping = buildOpenAICompactModelMapping()
+  if (compactModelMapping) {
+    credentials.compact_model_mapping = compactModelMapping
+  }
+}
 
 // OpenAI RT 批量验证和创建（共享逻辑）
 const handleOpenAIBatchRT = async (refreshTokenInput: string, clientId?: string) => {
@@ -5233,18 +5292,8 @@ const handleOpenAIBatchRT = async (refreshTokenInput: string, clientId?: string)
         const oauthExtra = oauthClient.buildExtraInfo(tokenInfo) as Record<string, unknown> | undefined
         const extra = buildOpenAIExtra(oauthExtra)
 
-        // Add model mapping for OpenAI OAuth accounts（透传模式下不应用）
-        if (shouldCreateOpenAI && !isOpenAIModelRestrictionDisabled.value) {
-          const modelMapping = buildModelMappingObject(modelRestrictionMode.value, allowedModels.value, modelMappings.value)
-          if (modelMapping) {
-            credentials.model_mapping = modelMapping
-          }
-        }
         if (shouldCreateOpenAI) {
-          const compactModelMapping = buildOpenAICompactModelMapping()
-          if (compactModelMapping) {
-            credentials.compact_model_mapping = compactModelMapping
-          }
+          applyOpenAICredentialImportSettings(credentials)
         }
 
         // Generate account name; fallback to email if name is empty (ent schema requires NotEmpty)
@@ -5287,7 +5336,7 @@ const handleOpenAIBatchRT = async (refreshTokenInput: string, clientId?: string)
           : t('admin.accounts.accountCreated')
       )
       emit('created')
-      handleClose()
+      handleClose(true)
     } else if (successCount > 0 && failedCount > 0) {
       appStore.showWarning(
         t('admin.accounts.oauth.batchPartialSuccess', { success: successCount, failed: failedCount })
@@ -5308,6 +5357,91 @@ const handleOpenAIValidateRT = (rt: string) => handleOpenAIBatchRT(rt)
 
 // 手动输入 Mobile RT
 const handleOpenAIValidateMobileRT = (rt: string) => handleOpenAIBatchRT(rt, OPENAI_MOBILE_RT_CLIENT_ID)
+
+// OpenAI Access Token 批量导入。通过现有凭证导入服务统一解析 JWT 身份和过期时间。
+const handleOpenAIImportAT = async (accessTokenInput: string) => {
+  const oauthClient = openaiOAuth
+  const accessTokens = accessTokenInput
+    .split('\n')
+    .map((token) => token.trim())
+    .filter(Boolean)
+
+  if (accessTokens.length === 0) {
+    oauthClient.error.value = t('admin.accounts.oauth.openai.pleaseEnterAccessToken')
+    return
+  }
+
+  oauthClient.loading.value = true
+  oauthClient.error.value = ''
+
+  try {
+    const baseName = form.name || 'OpenAI OAuth Account'
+    const contents = accessTokens.map((accessToken, index) => {
+      const credentials: Record<string, unknown> = { access_token: accessToken }
+      applyOpenAICredentialImportSettings(credentials)
+
+      return JSON.stringify({
+        name: accessTokens.length > 1 ? `${baseName} #${index + 1}` : baseName,
+        notes: form.notes || undefined,
+        platform: 'openai',
+        type: 'oauth',
+        credentials,
+        extra: buildOpenAIExtra()
+      })
+    })
+
+    const result = await adminAPI.accounts.importCredentialContents({
+      contents,
+      account_level: form.account_level,
+      proxy_id: form.proxy_id,
+      concurrency: form.concurrency,
+      load_factor: form.load_factor ?? undefined,
+      priority: form.priority,
+      rate_multiplier: form.rate_multiplier,
+      group_ids: form.group_ids,
+      expires_at: form.expires_at,
+      auto_pause_on_expired: autoPauseOnExpired.value
+    })
+
+    const successCount = result.created + (result.updated || 0)
+    const failedCount = result.failed
+    const errorMessages = result.errors.map((item) => `#${item.index}: ${item.message}`)
+
+    if (successCount > 0 && failedCount === 0) {
+      appStore.showSuccess(
+        accessTokens.length > 1
+          ? t('admin.accounts.oauth.batchSuccess', { count: successCount })
+          : t('admin.accounts.accountCreated')
+      )
+      emit('created')
+      handleClose(true)
+      return
+    }
+
+    oauthClient.error.value = errorMessages.join('\n')
+    if (successCount > 0) {
+      appStore.showWarning(
+        t('admin.accounts.oauth.batchPartialSuccess', {
+          success: successCount,
+          failed: failedCount
+        })
+      )
+      emit('created')
+      return
+    }
+
+    appStore.showError(t('admin.accounts.oauth.batchFailed'))
+  } catch (error: any) {
+    oauthClient.error.value =
+      error.response?.data?.detail ||
+      error.response?.data?.message ||
+      error.message ||
+      t('admin.accounts.oauth.batchFailed')
+    appStore.showError(oauthClient.error.value)
+  } finally {
+    oauthClient.loading.value = false
+  }
+}
 
 // Antigravity 手动 RT 批量验证和创建
 const handleAntigravityValidateRT = async (refreshTokenInput: string) => {
@@ -5384,7 +5518,7 @@ const handleAntigravityValidateRT = async (refreshTokenInput: string) => {
           : t('admin.accounts.accountCreated')
       )
       emit('created')
-      handleClose()
+      handleClose(true)
     } else if (successCount > 0 && failedCount > 0) {
       appStore.showWarning(
         t('admin.accounts.oauth.batchPartialSuccess', { success: successCount, failed: failedCount })
@@ -5481,7 +5615,7 @@ const handleGrokValidateRT = async (refreshTokenInput: string) => {
           : t('admin.accounts.accountCreated')
       )
       emit('created')
-      handleClose()
+      handleClose(true)
     } else if (successCount > 0 && failedCount > 0) {
       appStore.showWarning(
         t('admin.accounts.oauth.batchPartialSuccess', { success: successCount, failed: failedCount })
@@ -5539,7 +5673,7 @@ const handleGrokImportSSO = async (ssoInput: string) => {
           : t('admin.accounts.accountCreated')
       )
       emit('created')
-      handleClose()
+      handleClose(true)
     } else if (successCount > 0) {
       appStore.showWarning(
         t('admin.accounts.oauth.batchPartialSuccess', {
@@ -5941,7 +6075,7 @@ const handleCookieAuth = async (sessionKey: string) => {
       appStore.showSuccess(t('admin.accounts.oauth.successCreated', { count: successCount }))
       if (failedCount === 0) {
         emit('created')
-        handleClose()
+        handleClose(true)
       } else {
         emit('created')
       }

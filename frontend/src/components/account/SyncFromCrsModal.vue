@@ -3,7 +3,9 @@
     :show="show"
     :title="t('admin.accounts.syncFromCrsTitle')"
     width="normal"
-    close-on-click-outside
+    :close-disabled="syncing || previewing"
+    :close-on-escape="!syncing && !previewing"
+    :close-on-click-outside="false"
     @close="handleClose"
   >
     <!-- Step 1: Input credentials -->
@@ -36,6 +38,7 @@
             type="text"
             class="input"
             required
+            :disabled="previewing || syncing"
             :placeholder="t('admin.accounts.crsBaseUrlPlaceholder')"
           />
         </div>
@@ -43,7 +46,15 @@
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
             <label for="crs-username" class="input-label">{{ t('admin.accounts.crsUsername') }}</label>
-            <input id="crs-username" v-model="form.username" type="text" class="input" required autocomplete="username" />
+            <input
+              id="crs-username"
+              v-model="form.username"
+              type="text"
+              class="input"
+              required
+              autocomplete="username"
+              :disabled="previewing || syncing"
+            />
           </div>
           <div>
             <label for="crs-password" class="input-label">{{ t('admin.accounts.crsPassword') }}</label>
@@ -54,6 +65,7 @@
               class="input"
               required
               autocomplete="current-password"
+              :disabled="previewing || syncing"
             />
           </div>
         </div>
@@ -63,6 +75,8 @@
             v-model="form.sync_proxies"
             type="checkbox"
             class="rounded border-gray-300 dark:border-dark-600"
+            :disabled="previewing || syncing"
+            data-testid="crs-sync-proxies"
           />
           {{ t('admin.accounts.syncProxies') }}
         </label>
@@ -84,14 +98,77 @@
           <div
             v-for="acc in previewResult.existing_accounts"
             :key="acc.crs_account_id"
-            class="flex items-center gap-2 py-0.5"
+            class="flex min-h-11 items-center gap-2 py-1"
           >
             <span
               class="inline-block rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
             >{{ acc.platform }} / {{ acc.type }}</span>
             <span class="truncate">{{ acc.name }}</span>
+            <span v-if="acc.local_account_id" class="text-[10px] text-gray-400">
+              本地 #{{ acc.local_account_id }}
+            </span>
+            <span
+              v-if="acc.requires_force_active_edit"
+              class="ml-auto rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+            >
+              房间账号 · {{ acc.room_bindings?.length || 0 }} 个房间
+            </span>
           </div>
         </div>
+      </div>
+
+      <div
+        v-if="requiresForceConfirmation"
+        class="space-y-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-100"
+        data-testid="crs-force-confirmation"
+      >
+        <div>
+          <strong>检测到 {{ forceSyncSnapshot.accounts.length }} 个房间账号</strong>
+          <p class="mt-1 text-xs leading-5">
+            CRS 同步会修改这些账号的凭证或配置，后端默认拒绝。继续前必须确认管理员强制编辑，并按本次预览中的
+            {{ forceSyncSnapshot.listingCount }} 个房间版本执行并发校验。
+          </p>
+        </div>
+        <div
+          v-if="forceSyncSnapshot.error"
+          class="rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-700 dark:bg-red-950/30 dark:text-red-200"
+          role="alert"
+          data-testid="crs-force-preview-error"
+        >
+          {{ forceSyncSnapshot.error }}
+        </div>
+        <template v-else>
+          <label class="flex min-h-11 cursor-pointer items-start gap-3 rounded border border-amber-200 bg-white/70 px-3 py-2 dark:border-amber-800 dark:bg-dark-900/50">
+            <input
+              v-model="forceConfirmed"
+              type="checkbox"
+              class="mt-1 rounded border-gray-300 dark:border-dark-600"
+              :disabled="syncing"
+              data-testid="crs-force-confirmed"
+            />
+            <span>
+              <strong class="block">我已核对房间账号，确认使用管理员强制编辑</strong>
+              <small class="mt-1 block leading-5 text-amber-700 dark:text-amber-200">
+                已有使用记录继续按历史条款结算；本次同步会产生可审计的修改记录。
+              </small>
+            </span>
+          </label>
+          <div>
+            <label for="crs-force-reason" class="input-label">强制同步原因</label>
+            <textarea
+              id="crs-force-reason"
+              v-model="forceReason"
+              class="input min-h-24 resize-y"
+              maxlength="500"
+              :disabled="syncing"
+              placeholder="例如：CRS 凭证轮换，已核对受影响房间与当前使用状态"
+              data-testid="crs-force-reason"
+            ></textarea>
+            <p class="mt-1 text-xs text-amber-700 dark:text-amber-200">
+              原因不能为空，并会随管理员操作写入审计记录。
+            </p>
+          </div>
+        </template>
       </div>
 
       <!-- New accounts (selectable) -->
@@ -104,12 +181,16 @@
           <div class="flex gap-2">
             <button
               type="button"
-              class="text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400"
+              class="min-h-11 rounded-md px-2 text-xs text-blue-600 hover:text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:text-blue-400 dark:focus-visible:ring-offset-dark-800"
+              :disabled="syncing"
+              data-testid="crs-select-all"
               @click="selectAll"
             >{{ t('admin.accounts.crsSelectAll') }}</button>
             <button
               type="button"
-              class="text-xs text-gray-500 hover:text-gray-600 dark:text-gray-400"
+              class="min-h-11 rounded-md px-2 text-xs text-gray-500 hover:text-gray-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:text-gray-400 dark:focus-visible:ring-offset-dark-800"
+              :disabled="syncing"
+              data-testid="crs-select-none"
               @click="selectNone"
             >{{ t('admin.accounts.crsSelectNone') }}</button>
           </div>
@@ -120,12 +201,14 @@
           <label
             v-for="acc in previewResult.new_accounts"
             :key="acc.crs_account_id"
-            class="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 hover:bg-gray-50 dark:hover:bg-dark-700/40"
+            class="flex min-h-11 cursor-pointer items-center gap-2 rounded px-2 py-1.5 hover:bg-gray-50 focus-within:ring-2 focus-within:ring-blue-500 focus-within:ring-offset-2 dark:hover:bg-dark-700/40 dark:focus-within:ring-offset-dark-800"
+            data-testid="crs-new-account-row"
           >
             <input
               type="checkbox"
               :checked="selectedIds.has(acc.crs_account_id)"
               class="rounded border-gray-300 dark:border-dark-600"
+              :disabled="syncing"
               @change="toggleSelect(acc.crs_account_id)"
             />
             <span
@@ -142,8 +225,8 @@
       <!-- Sync options summary -->
       <div class="flex items-center gap-2 text-xs text-gray-500 dark:text-dark-400">
         <span>{{ t('admin.accounts.syncProxies') }}:</span>
-        <span :class="form.sync_proxies ? 'text-green-600 dark:text-green-400' : 'text-gray-400 dark:text-dark-500'">
-          {{ form.sync_proxies ? t('common.yes') : t('common.no') }}
+        <span :class="previewConnectionSnapshot?.sync_proxies ? 'text-green-600 dark:text-green-400' : 'text-gray-400 dark:text-dark-500'">
+          {{ previewConnectionSnapshot?.sync_proxies ? t('common.yes') : t('common.no') }}
         </span>
       </div>
 
@@ -222,7 +305,7 @@
           <button
             class="btn btn-primary"
             type="button"
-            :disabled="syncing || hasNewButNoneSelected"
+            :disabled="syncDisabled"
             @click="handleSync"
           >
             {{ syncing ? t('admin.accounts.syncing') : t('admin.accounts.syncNow') }}
@@ -241,12 +324,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
-import type { PreviewFromCRSResult } from '@/api/admin/accounts'
+import type { CRSPreviewAccount, PreviewFromCRSResult } from '@/api/admin/accounts'
+import { extractApiErrorCode } from '@/utils/apiError'
 
 interface Props {
   show: boolean
@@ -264,12 +348,25 @@ const { t } = useI18n()
 const appStore = useAppStore()
 
 type Step = 'input' | 'preview' | 'result'
+interface CRSConnectionSnapshot {
+  readonly base_url: string
+  readonly username: string
+  readonly password: string
+  readonly sync_proxies: boolean
+}
+
 const currentStep = ref<Step>('input')
 const previewing = ref(false)
 const syncing = ref(false)
 const previewResult = ref<PreviewFromCRSResult | null>(null)
+const previewConnectionSnapshot = ref<Readonly<CRSConnectionSnapshot> | null>(null)
 const selectedIds = ref(new Set<string>())
 const result = ref<Awaited<ReturnType<typeof adminAPI.accounts.syncFromCrs>> | null>(null)
+const forceConfirmed = ref(false)
+const forceReason = ref('')
+const syncIdempotencyKey = ref('')
+const syncPayloadSignature = ref('')
+let previewRequestVersion = 0
 
 const form = reactive({
   base_url: '',
@@ -283,6 +380,67 @@ const hasNewButNoneSelected = computed(() => {
   return previewResult.value.new_accounts.length > 0 && selectedIds.value.size === 0
 })
 
+interface ForceSyncSnapshot {
+  accounts: CRSPreviewAccount[]
+  expectedVersions: Record<number, number>
+  listingCount: number
+  error: string
+}
+
+const forceSyncSnapshot = computed<ForceSyncSnapshot>(() => {
+  const accounts = (previewResult.value?.existing_accounts || []).filter(account =>
+    account.requires_force_active_edit || (Array.isArray(account.room_bindings) && account.room_bindings.length > 0)
+  )
+  const expectedVersions: Record<number, number> = {}
+  let error = ''
+
+  for (const account of accounts) {
+    if (!Number.isInteger(account.local_account_id) || Number(account.local_account_id) <= 0) {
+      error = '预览缺少有效的本地账号 ID，无法安全强制同步。请返回并重新预览。'
+      break
+    }
+    if (!Array.isArray(account.room_bindings) || account.room_bindings.length === 0) {
+      error = '预览缺少房间版本信息，无法安全强制同步。请返回并重新预览。'
+      break
+    }
+    for (const binding of account.room_bindings) {
+      const listingID = Number(binding?.listing_id || 0)
+      const rowVersion = Number(binding?.row_version || 0)
+      if (!Number.isInteger(listingID) || listingID <= 0 || !Number.isInteger(rowVersion) || rowVersion <= 0) {
+        error = '预览包含无效的房间版本，无法安全强制同步。请返回并重新预览。'
+        break
+      }
+      if (expectedVersions[listingID] && expectedVersions[listingID] !== rowVersion) {
+        error = `房间 #${listingID} 的预览版本不一致，无法安全强制同步。请返回并重新预览。`
+        break
+      }
+      expectedVersions[listingID] = rowVersion
+    }
+    if (error) break
+  }
+
+  return {
+    accounts,
+    expectedVersions,
+    listingCount: Object.keys(expectedVersions).length,
+    error
+  }
+})
+
+const requiresForceConfirmation = computed(() => forceSyncSnapshot.value.accounts.length > 0)
+const syncDisabled = computed(() => {
+  if (
+    syncing.value
+    || hasNewButNoneSelected.value
+    || !previewConnectionSnapshot.value
+    || !previewResult.value?.preview_token?.trim()
+  ) return true
+  if (!requiresForceConfirmation.value) return false
+  return Boolean(forceSyncSnapshot.value.error)
+    || !forceConfirmed.value
+    || forceReason.value.trim().length === 0
+})
+
 const errorItems = computed(() => {
   if (!result.value?.items) return []
   return result.value.items.filter(
@@ -294,41 +452,87 @@ watch(
   () => props.show,
   (open) => {
     if (open) {
-      currentStep.value = 'input'
-      previewResult.value = null
-      selectedIds.value = new Set()
-      result.value = null
-      form.base_url = ''
-      form.username = ''
+      resetModalState()
+    } else {
+      invalidatePreviewRequest()
+      previewConnectionSnapshot.value = null
       form.password = ''
-      form.sync_proxies = true
     }
-  }
+  },
+  { immediate: true }
 )
+
+onBeforeUnmount(() => {
+  invalidatePreviewRequest()
+  previewConnectionSnapshot.value = null
+})
+
+function invalidatePreviewRequest(): void {
+  previewRequestVersion += 1
+  previewing.value = false
+}
+
+function resetModalState(): void {
+  invalidatePreviewRequest()
+  currentStep.value = 'input'
+  previewResult.value = null
+  previewConnectionSnapshot.value = null
+  selectedIds.value = new Set()
+  result.value = null
+  forceConfirmed.value = false
+  forceReason.value = ''
+  syncIdempotencyKey.value = ''
+  syncPayloadSignature.value = ''
+  form.base_url = ''
+  form.username = ''
+  form.password = ''
+  form.sync_proxies = true
+}
+
+function createConnectionSnapshot(): Readonly<CRSConnectionSnapshot> | null {
+  const baseURL = form.base_url.trim()
+  const username = form.username.trim()
+  const password = form.password
+  if (!baseURL || !username || !password.trim()) return null
+  return Object.freeze({
+    base_url: baseURL,
+    username,
+    password,
+    sync_proxies: form.sync_proxies
+  })
+}
 
 const handleClose = () => {
   if (syncing.value || previewing.value) {
     return
   }
+  resetModalState()
   emit('close')
 }
 
 const handleBack = () => {
   currentStep.value = 'input'
   previewResult.value = null
+  previewConnectionSnapshot.value = null
   selectedIds.value = new Set()
+  forceConfirmed.value = false
+  forceReason.value = ''
+  syncIdempotencyKey.value = ''
+  syncPayloadSignature.value = ''
 }
 
 const selectAll = () => {
-  if (!previewResult.value) return
+  if (!previewResult.value || syncing.value) return
   selectedIds.value = new Set(previewResult.value.new_accounts.map((a) => a.crs_account_id))
 }
 
 const selectNone = () => {
+  if (syncing.value) return
   selectedIds.value = new Set()
 }
 
 const toggleSelect = (id: string) => {
+  if (syncing.value) return
   const s = new Set(selectedIds.value)
   if (s.has(id)) {
     s.delete(id)
@@ -339,45 +543,96 @@ const toggleSelect = (id: string) => {
 }
 
 const handlePreview = async () => {
-  if (!form.base_url.trim() || !form.username.trim() || !form.password.trim()) {
+  if (previewing.value || syncing.value) return
+  const connectionSnapshot = createConnectionSnapshot()
+  if (!connectionSnapshot) {
     appStore.showError(t('admin.accounts.syncMissingFields'))
     return
   }
 
+  const requestVersion = ++previewRequestVersion
   previewing.value = true
+  previewConnectionSnapshot.value = null
   try {
     const res = await adminAPI.accounts.previewFromCrs({
-      base_url: form.base_url.trim(),
-      username: form.username.trim(),
-      password: form.password
+      base_url: connectionSnapshot.base_url,
+      username: connectionSnapshot.username,
+      password: connectionSnapshot.password
     })
+    if (requestVersion !== previewRequestVersion || !props.show) return
+    if (
+      !res.preview_token?.trim()
+      || !Number.isSafeInteger(res.expires_at)
+      || res.expires_at <= 0
+    ) {
+      appStore.showError('CRS 预览响应缺少有效的安全令牌，请检查服务端配置后重试')
+      return
+    }
     previewResult.value = res
+    previewConnectionSnapshot.value = connectionSnapshot
     // Auto-select all new accounts
     selectedIds.value = new Set(res.new_accounts.map((a) => a.crs_account_id))
+    forceConfirmed.value = false
+    forceReason.value = ''
+    syncIdempotencyKey.value = ''
+    syncPayloadSignature.value = ''
     currentStep.value = 'preview'
   } catch (error: any) {
+    if (requestVersion !== previewRequestVersion || !props.show) return
     appStore.showError(error?.message || t('admin.accounts.crsPreviewFailed'))
   } finally {
-    previewing.value = false
+    if (requestVersion === previewRequestVersion) {
+      previewing.value = false
+    }
   }
 }
 
 const handleSync = async () => {
-  if (!form.base_url.trim() || !form.username.trim() || !form.password.trim()) {
+  if (syncing.value) return
+  const connectionSnapshot = previewConnectionSnapshot.value
+  const previewToken = previewResult.value?.preview_token?.trim()
+  if (!connectionSnapshot || !previewToken) {
     appStore.showError(t('admin.accounts.syncMissingFields'))
     return
+  }
+  if (syncDisabled.value) {
+    if (forceSyncSnapshot.value.error) {
+      appStore.showError(forceSyncSnapshot.value.error)
+    } else if (requiresForceConfirmation.value) {
+      appStore.showError('房间账号同步前必须确认管理员强制编辑并填写原因')
+    }
+    return
+  }
+
+  const forceActiveEdit = requiresForceConfirmation.value
+  const payload = {
+    base_url: connectionSnapshot.base_url,
+    username: connectionSnapshot.username,
+    password: connectionSnapshot.password,
+    sync_proxies: connectionSnapshot.sync_proxies,
+    selected_account_ids: [...selectedIds.value],
+    force_active_edit: forceActiveEdit,
+    confirmed: forceActiveEdit && forceConfirmed.value,
+    reason: forceActiveEdit ? forceReason.value.trim() : undefined,
+    expected_versions: forceActiveEdit ? forceSyncSnapshot.value.expectedVersions : undefined,
+    preview_token: previewToken
+  }
+  const payloadSignature = JSON.stringify(payload)
+  if (!syncIdempotencyKey.value || syncPayloadSignature.value !== payloadSignature) {
+    if (!globalThis.crypto?.randomUUID) {
+      appStore.showError('当前浏览器无法生成安全操作标识，请升级浏览器后重新预览')
+      return
+    }
+    syncIdempotencyKey.value = `crs-sync-${globalThis.crypto.randomUUID()}`
+    syncPayloadSignature.value = payloadSignature
   }
 
   syncing.value = true
   try {
-    const res = await adminAPI.accounts.syncFromCrs({
-      base_url: form.base_url.trim(),
-      username: form.username.trim(),
-      password: form.password,
-      sync_proxies: form.sync_proxies,
-      selected_account_ids: [...selectedIds.value]
-    })
+    const res = await adminAPI.accounts.syncFromCrs(payload, syncIdempotencyKey.value)
     result.value = res
+    previewConnectionSnapshot.value = null
+    form.password = ''
     currentStep.value = 'result'
 
     if (res.failed > 0) {
@@ -387,7 +642,18 @@ const handleSync = async () => {
     }
     emit('synced')
   } catch (error: any) {
-    appStore.showError(error?.message || t('admin.accounts.syncFailed'))
+    const code = extractApiErrorCode(error)
+    if (
+      code === 'CRS_PREVIEW_TOKEN_REQUIRED'
+      || code === 'CRS_PREVIEW_TOKEN_INVALID'
+      || code === 'CRS_PREVIEW_TOKEN_EXPIRED'
+      || code === 'CRS_PREVIEW_CONTEXT_CONFLICT'
+    ) {
+      appStore.showError('本次 CRS 预览已失效或数据已变化，请重新预览后再同步')
+      handleBack()
+    } else {
+      appStore.showError(error?.message || t('admin.accounts.syncFailed'))
+    }
   } finally {
     syncing.value = false
   }

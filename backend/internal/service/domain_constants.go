@@ -128,6 +128,15 @@ const (
 	GroupScopeUserPrivate = domain.GroupScopeUserPrivate
 )
 
+// Group API key badge type constants
+const (
+	GroupAPIKeyBadgeTypeHidden      = domain.GroupAPIKeyBadgeTypeHidden
+	GroupAPIKeyBadgeTypeRecommended = domain.GroupAPIKeyBadgeTypeRecommended
+	GroupAPIKeyBadgeTypeConstrained = domain.GroupAPIKeyBadgeTypeConstrained
+	GroupAPIKeyBadgeTypeUnavailable = domain.GroupAPIKeyBadgeTypeUnavailable
+	GroupAPIKeyBadgeTypeCustom      = domain.GroupAPIKeyBadgeTypeCustom
+)
+
 // Subscription status constants
 const (
 	SubscriptionStatusActive    = domain.SubscriptionStatusActive

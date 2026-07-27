@@ -21,6 +21,7 @@ import (
 // AlphaSearch proxies the standalone Codex web-search endpoint.
 func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 	streamStarted := false
+	billingDispatchAttemptNo := 0
 	defer h.recoverResponsesPanic(c, &streamStarted)
 	setOpenAIClientTransportHTTP(c)
 	requestStart := time.Now()
@@ -161,6 +162,9 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 			if failoverClientGone(c) {
 				return
 			}
+			if selectErr != nil && h.handleAccountShareModeSelectionError(c, selectErr, streamStarted) {
+				return
+			}
 			if lastFailoverErr != nil && routeCursor.hasNext() && shouldSwitchAPIKeyGroupRoute(lastFailoverErr) && routeCursor.switchToNext(currentAPIKey.ID, "alpha_search_account_selection_exhausted", reqLog) {
 				failedAccountIDs = make(map[int64]struct{})
 				sameAccountRetryCount = make(map[int64]int)
@@ -198,50 +202,95 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 			forwardBody = h.gatewayService.ReplaceModelInBody(body, channelMapping.MappedModel)
 		}
 		forwardStart := time.Now()
+		forwardCtx, cancelForward := bindAccountSelectionForwardContext(selectionCtx, selection)
+		requestPayloadHash := service.HashUsageRequestPayload(body)
+		routedModel := service.ResolveOpenAIForwardModel(account, selectionModel, "")
+		forwardCtx, err = beginAccountShareBillingDispatch(
+			forwardCtx,
+			h.gatewayService,
+			selection,
+			&billingDispatchAttemptNo,
+			service.AccountShareBillingDispatchInput{
+				APIKey:             currentAPIKey,
+				User:               currentAPIKey.User,
+				Subscription:       currentSubscription,
+				RequestedModel:     requestedModel,
+				RoutedModel:        routedModel,
+				InboundEndpoint:    GetInboundEndpoint(c),
+				UpstreamEndpoint:   GetUpstreamEndpoint(c, account.Platform),
+				RequestType:        service.RequestTypeSync,
+				RequestPayloadHash: requestPayloadHash,
+				ChannelUsageFields: channelMapping.ToUsageFields(requestedModel, routedModel),
+			},
+		)
+		if err != nil {
+			cancelForward()
+			if accountRelease != nil {
+				accountRelease()
+			}
+			reqLog.Error("openai_alpha_search.billing_dispatch_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+			h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable; no upstream request was sent")
+			return
+		}
 		result, forwardErr := func() (*service.OpenAIForwardResult, error) {
+			defer cancelForward()
 			if accountRelease != nil {
 				defer accountRelease()
 			}
-			return h.gatewayService.ForwardAlphaSearch(selectionCtx, c, account, forwardBody)
+			return h.gatewayService.ForwardAlphaSearch(forwardCtx, c, account, forwardBody)
 		}()
 		service.SetOpsLatencyMs(c, service.OpsResponseLatencyMsKey, time.Since(forwardStart).Milliseconds())
+		userAgent := c.GetHeader("User-Agent")
+		clientIP := ip.GetClientIP(c)
+		inboundEndpoint := GetInboundEndpoint(c)
+		upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
+		recordUsageResult := func(result *service.OpenAIForwardResult) {
+			if result == nil {
+				return
+			}
+			h.submitUsageRecordTask(func(ctx context.Context) {
+				usageCtx := service.WithAccountShareModeRequestFromContext(ctx, forwardCtx)
+				if err := h.gatewayService.RecordUsage(usageCtx, &service.OpenAIRecordUsageInput{
+					Result:             result,
+					APIKey:             currentAPIKey,
+					User:               currentAPIKey.User,
+					Account:            account,
+					Subscription:       currentSubscription,
+					InboundEndpoint:    inboundEndpoint,
+					UpstreamEndpoint:   upstreamEndpoint,
+					UserAgent:          userAgent,
+					IPAddress:          clientIP,
+					RequestPayloadHash: requestPayloadHash,
+					APIKeyService:      h.apiKeyService,
+					ChannelUsageFields: channelMapping.ToUsageFields(requestedModel, result.UpstreamModel),
+				}); err != nil {
+					logger.L().With(
+						zap.String("component", "handler.openai_gateway.alpha_search"),
+						zap.Int64("user_id", subject.UserID),
+						zap.Int64("api_key_id", currentAPIKey.ID),
+						zap.Any("group_id", currentAPIKey.GroupID),
+						zap.String("model", requestedModel),
+						zap.Int64("account_id", account.ID),
+					).Error("openai_alpha_search.record_usage_failed", zap.Error(err))
+				}
+			})
+		}
+		hasBillableUsage := service.OpenAIForwardResultHasBillableUsage(result)
+		if forwardErr != nil && hasBillableUsage {
+			recordUsageResult(result)
+		}
+		if finalizeErr := completeAccountShareBillingDispatchWithoutUsage(forwardCtx, forwardErr, hasBillableUsage, false); finalizeErr != nil {
+			reqLog.Error("openai_alpha_search.billing_dispatch_finalize_failed", zap.Int64("account_id", account.ID), zap.Error(finalizeErr))
+			if c.Writer.Size() == writerSizeBeforeForward {
+				h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable")
+			}
+			return
+		}
 
 		if forwardErr == nil {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, nil, account.GetMappedModel(selectionModel))
 			routeCursor.recordSuccess(currentAPIKey.ID)
-			if result != nil {
-				userAgent := c.GetHeader("User-Agent")
-				clientIP := ip.GetClientIP(c)
-				requestPayloadHash := service.HashUsageRequestPayload(body)
-				inboundEndpoint := GetInboundEndpoint(c)
-				upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
-				h.submitUsageRecordTask(func(ctx context.Context) {
-					usageCtx := service.WithAccountShareModeRequestFromContext(ctx, selectionCtx)
-					if err := h.gatewayService.RecordUsage(usageCtx, &service.OpenAIRecordUsageInput{
-						Result:             result,
-						APIKey:             currentAPIKey,
-						User:               currentAPIKey.User,
-						Account:            account,
-						Subscription:       currentSubscription,
-						InboundEndpoint:    inboundEndpoint,
-						UpstreamEndpoint:   upstreamEndpoint,
-						UserAgent:          userAgent,
-						IPAddress:          clientIP,
-						RequestPayloadHash: requestPayloadHash,
-						APIKeyService:      h.apiKeyService,
-						ChannelUsageFields: channelMapping.ToUsageFields(requestedModel, result.UpstreamModel),
-					}); err != nil {
-						logger.L().With(
-							zap.String("component", "handler.openai_gateway.alpha_search"),
-							zap.Int64("user_id", subject.UserID),
-							zap.Int64("api_key_id", currentAPIKey.ID),
-							zap.Any("group_id", currentAPIKey.GroupID),
-							zap.String("model", requestedModel),
-							zap.Int64("account_id", account.ID),
-						).Error("openai_alpha_search.record_usage_failed", zap.Error(err))
-					}
-				})
-			}
+			recordUsageResult(result)
 			return
 		}
 

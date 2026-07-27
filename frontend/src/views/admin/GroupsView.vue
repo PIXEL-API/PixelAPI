@@ -309,6 +309,102 @@
             </div>
           </template>
 
+          <template #cell-api_key_badge="{ row }">
+            <span
+              v-if="row.scope === 'user_private'"
+              class="text-xs text-gray-400 dark:text-gray-500"
+            >
+              {{ t("admin.groups.apiKeyBadge.privateNotApplicable") }}
+            </span>
+            <div v-else class="w-44 space-y-2">
+              <div class="flex items-center gap-2">
+                <Select
+                  :model-value="getApiKeyBadgeDraft(row).type"
+                  :options="apiKeyBadgeTypeOptions"
+                  :disabled="isApiKeyBadgeSaving(row.id)"
+                  :aria-label="
+                    t('admin.groups.apiKeyBadge.editorLabel', { name: row.name })
+                  "
+                  class="min-w-0 flex-1"
+                  @change="handleApiKeyBadgeTypeChange(row, $event)"
+                >
+                  <template #selected>
+                    <GroupApiKeyBadge
+                      v-if="getApiKeyBadgeDraft(row).type !== 'hidden'"
+                      :type="getApiKeyBadgeDraft(row).type"
+                      :text="
+                        getApiKeyBadgeDraft(row).type === 'custom'
+                          ? getApiKeyBadgeDraft(row).text ||
+                            t('groups.apiKeyBadge.custom')
+                          : ''
+                      "
+                    />
+                    <span v-else class="text-sm text-gray-500 dark:text-gray-400">
+                      {{ t("groups.apiKeyBadge.hidden") }}
+                    </span>
+                  </template>
+                </Select>
+                <Icon
+                  v-if="isApiKeyBadgeSaving(row.id)"
+                  name="refresh"
+                  size="sm"
+                  class="shrink-0 animate-spin text-primary-500"
+                />
+              </div>
+
+              <div
+                v-if="getApiKeyBadgeDraft(row).type === 'custom'"
+                class="space-y-1.5"
+              >
+                <input
+                  :value="getApiKeyBadgeDraft(row).text"
+                  type="text"
+                  maxlength="20"
+                  class="input min-h-9 py-1.5 text-xs"
+                  :disabled="isApiKeyBadgeSaving(row.id)"
+                  :placeholder="t('admin.groups.apiKeyBadge.customPlaceholder')"
+                  :aria-label="
+                    t('admin.groups.apiKeyBadge.customInputLabel', {
+                      name: row.name,
+                    })
+                  "
+                  @input="handleApiKeyBadgeTextInput(row, $event)"
+                  @keydown.enter.prevent="saveCustomApiKeyBadge(row)"
+                  @keydown.esc.prevent="resetApiKeyBadgeDraft(row)"
+                />
+                <p
+                  v-if="apiKeyBadgeErrors[row.id]"
+                  class="whitespace-normal text-xs text-red-600 dark:text-red-400"
+                  role="alert"
+                >
+                  {{ apiKeyBadgeErrors[row.id] }}
+                </p>
+                <div class="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    class="inline-flex min-h-8 items-center justify-center rounded-md bg-primary-600 px-2 text-xs font-medium text-white transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="isApiKeyBadgeSaving(row.id)"
+                    :title="t('admin.groups.apiKeyBadge.confirmCustom')"
+                    :aria-label="t('admin.groups.apiKeyBadge.confirmCustom')"
+                    @click="saveCustomApiKeyBadge(row)"
+                  >
+                    <Icon name="check" size="sm" />
+                  </button>
+                  <button
+                    type="button"
+                    class="inline-flex min-h-8 items-center justify-center rounded-md border border-gray-200 px-2 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-dark-600 dark:text-gray-300 dark:hover:bg-dark-700"
+                    :disabled="isApiKeyBadgeSaving(row.id)"
+                    :title="t('admin.groups.apiKeyBadge.cancelCustom')"
+                    :aria-label="t('admin.groups.apiKeyBadge.cancelCustom')"
+                    @click="resetApiKeyBadgeDraft(row)"
+                  >
+                    <Icon name="x" size="sm" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          </template>
+
           <template #cell-capacity="{ row }">
             <GroupCapacityBadge
               v-if="capacityMap.get(row.id)"
@@ -3110,7 +3206,13 @@ import { useAppStore } from "@/stores/app";
 import { useAdminSettingsStore } from "@/stores/adminSettings";
 import { useOnboardingStore } from "@/stores/onboarding";
 import { adminAPI } from "@/api/admin";
-import type { AccountLevel, AdminGroup, GroupPlatform, SubscriptionType } from "@/types";
+import type {
+  AccountLevel,
+  AdminGroup,
+  ApiKeyGroupBadgeType,
+  GroupPlatform,
+  SubscriptionType,
+} from "@/types";
 import type { Column } from "@/components/common/types";
 import AppLayout from "@/components/layout/AppLayout.vue";
 import TablePageLayout from "@/components/layout/TablePageLayout.vue";
@@ -3120,6 +3222,7 @@ import BaseDialog from "@/components/common/BaseDialog.vue";
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
 import Select from "@/components/common/Select.vue";
+import GroupApiKeyBadge from "@/components/common/GroupApiKeyBadge.vue";
 import PlatformIcon from "@/components/common/PlatformIcon.vue";
 import Icon from "@/components/icons/Icon.vue";
 import GroupRateMultipliersModal from "@/components/admin/group/GroupRateMultipliersModal.vue";
@@ -3181,6 +3284,12 @@ const allColumns = computed<Column[]>(() => [
     key: "account_count",
     label: t("admin.groups.columns.accounts"),
     sortable: true,
+  },
+  {
+    key: "api_key_badge",
+    label: t("admin.groups.columns.apiKeyBadge"),
+    sortable: false,
+    class: "min-w-44",
   },
   {
     key: "capacity",
@@ -3333,6 +3442,14 @@ const subscriptionTypeOptions = computed(() => [
   { value: "subscription", label: t("admin.groups.subscription.subscription") },
 ]);
 
+const apiKeyBadgeTypeOptions = computed(() => [
+  { value: "hidden", label: t("groups.apiKeyBadge.hidden") },
+  { value: "recommended", label: t("groups.apiKeyBadge.recommended") },
+  { value: "constrained", label: t("groups.apiKeyBadge.constrained") },
+  { value: "unavailable", label: t("groups.apiKeyBadge.unavailable") },
+  { value: "custom", label: t("groups.apiKeyBadge.custom") },
+]);
+
 const requiredAccountLevelOptions = computed(() =>
   openAIAccountLevelOptions(adminSettingsStore.openAIAccountLevels, {
     includeEmpty: true,
@@ -3446,6 +3563,14 @@ const copyAccountsGroupOptionsForEdit = computed(() => {
 });
 
 const groups = ref<AdminGroup[]>([]);
+interface ApiKeyBadgeDraft {
+  type: ApiKeyGroupBadgeType;
+  text: string;
+}
+
+const apiKeyBadgeDrafts = reactive<Record<number, ApiKeyBadgeDraft>>({});
+const apiKeyBadgeErrors = reactive<Record<number, string>>({});
+const savingApiKeyBadgeGroupIds = ref<Set<number>>(new Set());
 const loading = ref(false);
 const usageMap = ref<Map<number, { today_cost: number; total_cost: number }>>(
   new Map(),
@@ -3872,6 +3997,133 @@ const deleteConfirmMessage = computed(() => {
   return t("admin.groups.deleteConfirm", { name: deletingGroup.value.name });
 });
 
+const getApiKeyBadgeDraft = (group: AdminGroup): ApiKeyBadgeDraft =>
+  apiKeyBadgeDrafts[group.id] ?? {
+    type: group.api_key_badge_type,
+    text: group.api_key_badge_text,
+  };
+
+const resetApiKeyBadgeDraft = (group: AdminGroup) => {
+  apiKeyBadgeDrafts[group.id] = {
+    type: group.api_key_badge_type,
+    text: group.api_key_badge_text,
+  };
+  delete apiKeyBadgeErrors[group.id];
+};
+
+const syncApiKeyBadgeDrafts = (nextGroups: AdminGroup[]) => {
+  const nextGroupIds = new Set(nextGroups.map((group) => group.id));
+  for (const rawID of Object.keys(apiKeyBadgeDrafts)) {
+    const groupID = Number(rawID);
+    if (!nextGroupIds.has(groupID) && !savingApiKeyBadgeGroupIds.value.has(groupID)) {
+      delete apiKeyBadgeDrafts[groupID];
+      delete apiKeyBadgeErrors[groupID];
+    }
+  }
+  nextGroups.forEach(resetApiKeyBadgeDraft);
+};
+
+const isApiKeyBadgeSaving = (groupID: number) =>
+  savingApiKeyBadgeGroupIds.value.has(groupID);
+
+const isApiKeyGroupBadgeType = (
+  value: unknown,
+): value is ApiKeyGroupBadgeType =>
+  value === "hidden" ||
+  value === "recommended" ||
+  value === "constrained" ||
+  value === "unavailable" ||
+  value === "custom";
+
+const replaceGroupFromResponse = (updatedGroup: AdminGroup) => {
+  const index = groups.value.findIndex((group) => group.id === updatedGroup.id);
+  if (index !== -1) groups.value.splice(index, 1, updatedGroup);
+  resetApiKeyBadgeDraft(updatedGroup);
+};
+
+const saveApiKeyBadge = async (
+  group: AdminGroup,
+  type: ApiKeyGroupBadgeType,
+  text: string,
+) => {
+  if (group.scope === "user_private" || isApiKeyBadgeSaving(group.id)) return;
+
+  savingApiKeyBadgeGroupIds.value.add(group.id);
+  try {
+    const updatedGroup = await adminAPI.groups.update(group.id, {
+      api_key_badge_type: type,
+      api_key_badge_text: text,
+    });
+    replaceGroupFromResponse(updatedGroup);
+    appStore.showSuccess(t("admin.groups.apiKeyBadge.saved"));
+  } catch (error) {
+    resetApiKeyBadgeDraft(group);
+    appStore.showError(
+      extractApiErrorMessage(
+        error,
+        t("admin.groups.apiKeyBadge.saveFailed"),
+      ),
+    );
+  } finally {
+    savingApiKeyBadgeGroupIds.value.delete(group.id);
+  }
+};
+
+const handleApiKeyBadgeTypeChange = (
+  group: AdminGroup,
+  value: string | number | boolean | null,
+) => {
+  if (!isApiKeyGroupBadgeType(value)) {
+    throw new Error(`Unsupported API key badge type: ${String(value)}`);
+  }
+
+  const currentDraft = getApiKeyBadgeDraft(group);
+  apiKeyBadgeDrafts[group.id] = {
+    type: value,
+    text:
+      value === "custom" && currentDraft.type === "custom"
+        ? currentDraft.text
+        : "",
+  };
+  delete apiKeyBadgeErrors[group.id];
+
+  if (value !== "custom") {
+    void saveApiKeyBadge(group, value, "");
+  }
+};
+
+const handleApiKeyBadgeTextInput = (group: AdminGroup, event: Event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement)) {
+    throw new Error("API key badge text input event has no input target");
+  }
+
+  const draft = getApiKeyBadgeDraft(group);
+  apiKeyBadgeDrafts[group.id] = { ...draft, text: target.value };
+  delete apiKeyBadgeErrors[group.id];
+};
+
+const saveCustomApiKeyBadge = (group: AdminGroup) => {
+  const draft = getApiKeyBadgeDraft(group);
+  const text = draft.text.trim();
+  if (!text) {
+    apiKeyBadgeErrors[group.id] = t(
+      "admin.groups.apiKeyBadge.customRequired",
+    );
+    return;
+  }
+  if ([...text].length > 20) {
+    apiKeyBadgeErrors[group.id] = t(
+      "admin.groups.apiKeyBadge.customTooLong",
+    );
+    return;
+  }
+
+  apiKeyBadgeDrafts[group.id] = { type: "custom", text };
+  delete apiKeyBadgeErrors[group.id];
+  void saveApiKeyBadge(group, "custom", text);
+};
+
 const loadGroups = async () => {
   if (abortController) {
     abortController.abort();
@@ -3898,6 +4150,7 @@ const loadGroups = async () => {
       { signal },
     );
     if (signal.aborted) return;
+    syncApiKeyBadgeDrafts(response.items);
     groups.value = response.items;
     pagination.total = response.total;
     pagination.pages = response.pages;

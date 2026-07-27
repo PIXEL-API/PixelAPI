@@ -16346,6 +16346,8 @@ type GroupMutation struct {
 	owner_user_id                           *int64
 	addowner_user_id                        *int64
 	scope                                   *string
+	api_key_badge_type                      *group.APIKeyBadgeType
+	api_key_badge_text                      *string
 	platform                                *string
 	required_account_level                  *string
 	subscription_type                       *string
@@ -17164,6 +17166,78 @@ func (m *GroupMutation) OldScope(ctx context.Context) (v string, err error) {
 // ResetScope resets all changes to the "scope" field.
 func (m *GroupMutation) ResetScope() {
 	m.scope = nil
+}
+
+// SetAPIKeyBadgeType sets the "api_key_badge_type" field.
+func (m *GroupMutation) SetAPIKeyBadgeType(gkbt group.APIKeyBadgeType) {
+	m.api_key_badge_type = &gkbt
+}
+
+// APIKeyBadgeType returns the value of the "api_key_badge_type" field in the mutation.
+func (m *GroupMutation) APIKeyBadgeType() (r group.APIKeyBadgeType, exists bool) {
+	v := m.api_key_badge_type
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAPIKeyBadgeType returns the old "api_key_badge_type" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldAPIKeyBadgeType(ctx context.Context) (v group.APIKeyBadgeType, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAPIKeyBadgeType is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAPIKeyBadgeType requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAPIKeyBadgeType: %w", err)
+	}
+	return oldValue.APIKeyBadgeType, nil
+}
+
+// ResetAPIKeyBadgeType resets all changes to the "api_key_badge_type" field.
+func (m *GroupMutation) ResetAPIKeyBadgeType() {
+	m.api_key_badge_type = nil
+}
+
+// SetAPIKeyBadgeText sets the "api_key_badge_text" field.
+func (m *GroupMutation) SetAPIKeyBadgeText(s string) {
+	m.api_key_badge_text = &s
+}
+
+// APIKeyBadgeText returns the value of the "api_key_badge_text" field in the mutation.
+func (m *GroupMutation) APIKeyBadgeText() (r string, exists bool) {
+	v := m.api_key_badge_text
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAPIKeyBadgeText returns the old "api_key_badge_text" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldAPIKeyBadgeText(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAPIKeyBadgeText is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAPIKeyBadgeText requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAPIKeyBadgeText: %w", err)
+	}
+	return oldValue.APIKeyBadgeText, nil
+}
+
+// ResetAPIKeyBadgeText resets all changes to the "api_key_badge_text" field.
+func (m *GroupMutation) ResetAPIKeyBadgeText() {
+	m.api_key_badge_text = nil
 }
 
 // SetPlatform sets the "platform" field.
@@ -19302,7 +19376,7 @@ func (m *GroupMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *GroupMutation) Fields() []string {
-	fields := make([]string, 0, 47)
+	fields := make([]string, 0, 49)
 	if m.created_at != nil {
 		fields = append(fields, group.FieldCreatedAt)
 	}
@@ -19344,6 +19418,12 @@ func (m *GroupMutation) Fields() []string {
 	}
 	if m.scope != nil {
 		fields = append(fields, group.FieldScope)
+	}
+	if m.api_key_badge_type != nil {
+		fields = append(fields, group.FieldAPIKeyBadgeType)
+	}
+	if m.api_key_badge_text != nil {
+		fields = append(fields, group.FieldAPIKeyBadgeText)
 	}
 	if m.platform != nil {
 		fields = append(fields, group.FieldPlatform)
@@ -19480,6 +19560,10 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.OwnerUserID()
 	case group.FieldScope:
 		return m.Scope()
+	case group.FieldAPIKeyBadgeType:
+		return m.APIKeyBadgeType()
+	case group.FieldAPIKeyBadgeText:
+		return m.APIKeyBadgeText()
 	case group.FieldPlatform:
 		return m.Platform()
 	case group.FieldRequiredAccountLevel:
@@ -19583,6 +19667,10 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldOwnerUserID(ctx)
 	case group.FieldScope:
 		return m.OldScope(ctx)
+	case group.FieldAPIKeyBadgeType:
+		return m.OldAPIKeyBadgeType(ctx)
+	case group.FieldAPIKeyBadgeText:
+		return m.OldAPIKeyBadgeText(ctx)
 	case group.FieldPlatform:
 		return m.OldPlatform(ctx)
 	case group.FieldRequiredAccountLevel:
@@ -19755,6 +19843,20 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetScope(v)
+		return nil
+	case group.FieldAPIKeyBadgeType:
+		v, ok := value.(group.APIKeyBadgeType)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAPIKeyBadgeType(v)
+		return nil
+	case group.FieldAPIKeyBadgeText:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAPIKeyBadgeText(v)
 		return nil
 	case group.FieldPlatform:
 		v, ok := value.(string)
@@ -20443,6 +20545,12 @@ func (m *GroupMutation) ResetField(name string) error {
 		return nil
 	case group.FieldScope:
 		m.ResetScope()
+		return nil
+	case group.FieldAPIKeyBadgeType:
+		m.ResetAPIKeyBadgeType()
+		return nil
+	case group.FieldAPIKeyBadgeText:
+		m.ResetAPIKeyBadgeText()
 		return nil
 	case group.FieldPlatform:
 		m.ResetPlatform()

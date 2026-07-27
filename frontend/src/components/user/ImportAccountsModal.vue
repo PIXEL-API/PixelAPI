@@ -8,6 +8,9 @@
     :warning="importWarningText"
     :text-hint="importTextHint"
     :text-placeholder="importTextPlaceholder"
+    :show-openai-format-examples="
+      selectedPlatform === 'openai' && selectedOpenAIAuthMode === 'oauth'
+    "
     :file-accept="importFileAccept"
     :allowed-extensions="importAllowedExtensions"
     form-id="user-import-accounts-form"

@@ -94,6 +94,71 @@ func TestGrokTokenProviderRefreshesExpiredTokenOnRequestPath(t *testing.T) {
 	require.Equal(t, 1, cache.releaseCalls)
 }
 
+func TestGrokTokenProviderManualTestBypassesTemporaryUnschedulableGate(t *testing.T) {
+	future := time.Now().Add(2 * time.Hour)
+	account := &Account{
+		ID:                     56,
+		Platform:               PlatformGrok,
+		Type:                   AccountTypeOAuth,
+		Status:                 StatusActive,
+		Schedulable:            true,
+		TempUnschedulableUntil: &future,
+		Credentials: map[string]any{
+			"access_token":  "still-valid-token",
+			"refresh_token": "refresh-token",
+			"expires_at":    future.UTC().Format(time.RFC3339),
+		},
+	}
+	provider := NewGrokTokenProvider(&tokenRefreshAccountRepo{}, &grokTokenCacheForProviderTest{})
+
+	_, requestErr := provider.GetAccessToken(context.Background(), account)
+	require.ErrorIs(t, requestErr, errOAuthRefreshAccountStateChanged)
+
+	token, err := provider.GetAccessTokenForManualTest(context.Background(), account)
+	require.NoError(t, err)
+	require.Equal(t, "still-valid-token", token)
+}
+
+func TestGrokTokenProviderRefreshNowUsesCoordinatedForcedRefresh(t *testing.T) {
+	t.Setenv(xai.EnvBaseURL, xai.DefaultCLIBaseURL)
+
+	future := time.Now().Add(4 * time.Hour).UTC().Format(time.RFC3339)
+	account := &Account{
+		ID:          57,
+		Platform:    PlatformGrok,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Credentials: map[string]any{
+			"access_token":  "currently-valid-token",
+			"refresh_token": "refresh-token",
+			"expires_at":    future,
+			"base_url":      xai.DefaultCLIBaseURL,
+			"client_id":     "client-id",
+		},
+	}
+	repo := &tokenRefreshAccountRepo{}
+	repo.accountsByID = map[int64]*Account{account.ID: account}
+	cache := &grokTokenCacheForProviderTest{lockResult: true}
+	oauthSvc := NewGrokOAuthService(nil, &grokOAuthClientStub{
+		refreshResponse: &xai.TokenResponse{
+			AccessToken: "forced-new-token",
+			TokenType:   "Bearer",
+			ExpiresIn:   3600,
+		},
+	})
+	defer oauthSvc.Stop()
+	provider := NewGrokTokenProvider(repo, cache)
+	provider.SetRefreshAPI(NewOAuthRefreshAPI(repo, cache), NewGrokTokenRefresher(oauthSvc))
+
+	refreshed, err := provider.RefreshNow(context.Background(), account)
+
+	require.NoError(t, err)
+	require.Equal(t, "forced-new-token", refreshed.GetGrokAccessToken())
+	require.Equal(t, 1, repo.updateCredentialsCalls)
+	require.Equal(t, 1, cache.releaseCalls)
+}
+
 func TestGrokTokenProviderRefreshFailureUnschedulesWithRedactedReason(t *testing.T) {
 	expiredAt := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
 	account := &Account{

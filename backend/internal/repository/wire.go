@@ -80,6 +80,7 @@ var ProviderSet = wire.NewSet(
 	NewConversationRepository,
 	NewUsageLogRepository,
 	NewUsageBillingRepository,
+	NewAccountShareBillingIntentRepository,
 	NewAccountSharePolicyRepository,
 	NewAccountShareModeRepository,
 	NewAccountShareModeAPIKeyBindingChecker,

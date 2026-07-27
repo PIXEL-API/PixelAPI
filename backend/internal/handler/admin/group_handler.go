@@ -109,6 +109,8 @@ type CreateGroupRequest struct {
 	NewUserRateWindowSeconds int                `json:"new_user_rate_window_seconds"`
 	NewUserRateQuotaUSD      float64            `json:"new_user_rate_quota_usd"`
 	IsExclusive              bool               `json:"is_exclusive"`
+	APIKeyBadgeType          string             `json:"api_key_badge_type" binding:"omitempty,oneof=hidden recommended constrained unavailable custom"`
+	APIKeyBadgeText          string             `json:"api_key_badge_text"`
 	SubscriptionType         string             `json:"subscription_type" binding:"omitempty,oneof=standard subscription"`
 	RequiredAccountLevel     string             `json:"required_account_level"`
 	DailyLimitUSD            optionalLimitField `json:"daily_limit_usd"`
@@ -159,6 +161,8 @@ type UpdateGroupRequest struct {
 	NewUserRateWindowSeconds *int               `json:"new_user_rate_window_seconds"`
 	NewUserRateQuotaUSD      *float64           `json:"new_user_rate_quota_usd"`
 	IsExclusive              *bool              `json:"is_exclusive"`
+	APIKeyBadgeType          *string            `json:"api_key_badge_type" binding:"omitempty,oneof=hidden recommended constrained unavailable custom"`
+	APIKeyBadgeText          *string            `json:"api_key_badge_text"`
 	Status                   string             `json:"status" binding:"omitempty,oneof=active inactive"`
 	SubscriptionType         string             `json:"subscription_type" binding:"omitempty,oneof=standard subscription"`
 	RequiredAccountLevel     *string            `json:"required_account_level"`
@@ -306,6 +310,8 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		NewUserRateWindowSeconds:        req.NewUserRateWindowSeconds,
 		NewUserRateQuotaUSD:             req.NewUserRateQuotaUSD,
 		IsExclusive:                     req.IsExclusive,
+		APIKeyBadgeType:                 req.APIKeyBadgeType,
+		APIKeyBadgeText:                 req.APIKeyBadgeText,
 		SubscriptionType:                req.SubscriptionType,
 		RequiredAccountLevel:            req.RequiredAccountLevel,
 		DailyLimitUSD:                   req.DailyLimitUSD.ToServiceInput(),
@@ -371,6 +377,8 @@ func (h *GroupHandler) Update(c *gin.Context) {
 		NewUserRateWindowSeconds:        req.NewUserRateWindowSeconds,
 		NewUserRateQuotaUSD:             req.NewUserRateQuotaUSD,
 		IsExclusive:                     req.IsExclusive,
+		APIKeyBadgeType:                 req.APIKeyBadgeType,
+		APIKeyBadgeText:                 req.APIKeyBadgeText,
 		Status:                          req.Status,
 		SubscriptionType:                req.SubscriptionType,
 		RequiredAccountLevel:            req.RequiredAccountLevel,

@@ -375,6 +375,7 @@
       :title="t('admin.accounts.credentialImportTitle')"
       :hint="t('admin.accounts.credentialImportHint')"
       :warning="t('admin.accounts.credentialImportWarning')"
+      show-openai-format-examples
       form-id="admin-credential-import-form"
       :importer="importAdminCredentials"
       @close="showCredentialImport = false"

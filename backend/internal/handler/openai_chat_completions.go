@@ -22,6 +22,7 @@ import (
 // POST /v1/chat/completions
 func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	streamStarted := false
+	billingDispatchAttemptNo := 0
 	defer h.recoverResponsesPanic(c, &streamStarted)
 
 	requestStart := time.Now()
@@ -291,12 +292,92 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		if channelMapping.Mapped {
 			forwardBody = h.gatewayService.ReplaceModelInBody(body, channelMapping.MappedModel)
 		}
-		result, err := h.gatewayService.ForwardAsChatCompletions(selectionCtx, c, account, forwardBody, promptCacheKey, defaultMappedModel)
+		forwardCtx, cancelForward := bindAccountSelectionForwardContext(selectionCtx, selection)
+		requestPayloadHash := service.HashUsageRequestPayload(body)
+		routedModel := service.ResolveOpenAIForwardModel(account, dispatchModel, defaultMappedModel)
+		forwardCtx, err = beginAccountShareBillingDispatch(
+			forwardCtx,
+			h.gatewayService,
+			selection,
+			&billingDispatchAttemptNo,
+			service.AccountShareBillingDispatchInput{
+				APIKey:             currentAPIKey,
+				User:               currentAPIKey.User,
+				Subscription:       currentSubscription,
+				RequestedModel:     reqModel,
+				RoutedModel:        routedModel,
+				InboundEndpoint:    GetInboundEndpoint(c),
+				UpstreamEndpoint:   GetUpstreamEndpoint(c, account.Platform),
+				RequestType:        accountShareBillingRequestType(reqStream),
+				RequestPayloadHash: requestPayloadHash,
+				ChannelUsageFields: channelMapping.ToUsageFields(reqModel, routedModel),
+			},
+		)
+		if err != nil {
+			cancelForward()
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			reqLog.Error("openai_chat_completions.billing_dispatch_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+			h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable; no upstream request was sent", streamStarted)
+			return
+		}
+		result, err := h.gatewayService.ForwardAsChatCompletions(forwardCtx, c, account, forwardBody, promptCacheKey, defaultMappedModel)
+		cancelForward()
 		if service.GetOpsCyberPolicy(c) != nil {
 			h.gatewayService.MarkCyberSessionBlocked(selectionCtx, service.CyberSessionBlockKey(currentAPIKey.ID, c, body))
 		}
 
 		forwardDurationMs := time.Since(forwardStart).Milliseconds()
+		userAgent := c.GetHeader("User-Agent")
+		clientIP := ip.GetClientIP(c)
+		inboundEndpoint := GetInboundEndpoint(c)
+		upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
+		recordUsageResult := func(result *service.OpenAIForwardResult) {
+			if result == nil {
+				return
+			}
+			h.submitUsageRecordTask(func(ctx context.Context) {
+				usageCtx := service.WithAccountShareModeRequestFromContext(ctx, forwardCtx)
+				if err := h.gatewayService.RecordUsage(usageCtx, &service.OpenAIRecordUsageInput{
+					Result:             result,
+					APIKey:             currentAPIKey,
+					User:               currentAPIKey.User,
+					Account:            account,
+					Subscription:       currentSubscription,
+					InboundEndpoint:    inboundEndpoint,
+					UpstreamEndpoint:   upstreamEndpoint,
+					UserAgent:          userAgent,
+					IPAddress:          clientIP,
+					RequestPayloadHash: requestPayloadHash,
+					APIKeyService:      h.apiKeyService,
+					ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
+				}); err != nil {
+					logger.L().With(
+						zap.String("component", "handler.openai_gateway.chat_completions"),
+						zap.Int64("user_id", subject.UserID),
+						zap.Int64("api_key_id", currentAPIKey.ID),
+						zap.Any("group_id", currentAPIKey.GroupID),
+						zap.String("model", reqModel),
+						zap.Int64("account_id", account.ID),
+					).Error("openai_chat_completions.record_usage_failed", zap.Error(err))
+				}
+			})
+		}
+		hasBillableUsage := service.OpenAIForwardResultHasBillableUsage(result)
+		if err != nil && hasBillableUsage {
+			recordUsageResult(result)
+		}
+		if finalizeErr := completeAccountShareBillingDispatchWithoutUsage(forwardCtx, err, hasBillableUsage, reqStream); finalizeErr != nil {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			reqLog.Error("openai_chat_completions.billing_dispatch_finalize_failed", zap.Int64("account_id", account.ID), zap.Error(finalizeErr))
+			if c.Writer.Size() == writerSizeBeforeForward {
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable", streamStarted)
+			}
+			return
+		}
 		if accountReleaseFunc != nil {
 			accountReleaseFunc()
 		}
@@ -386,34 +467,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		}
 		routeCursor.recordSuccess(apiKey.ID)
 
-		userAgent := c.GetHeader("User-Agent")
-		clientIP := ip.GetClientIP(c)
-
-		h.submitUsageRecordTask(func(ctx context.Context) {
-			usageCtx := service.WithAccountShareModeRequestFromContext(ctx, selectionCtx)
-			if err := h.gatewayService.RecordUsage(usageCtx, &service.OpenAIRecordUsageInput{
-				Result:             result,
-				APIKey:             currentAPIKey,
-				User:               currentAPIKey.User,
-				Account:            account,
-				Subscription:       currentSubscription,
-				InboundEndpoint:    GetInboundEndpoint(c),
-				UpstreamEndpoint:   GetUpstreamEndpoint(c, account.Platform),
-				UserAgent:          userAgent,
-				IPAddress:          clientIP,
-				APIKeyService:      h.apiKeyService,
-				ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
-			}); err != nil {
-				logger.L().With(
-					zap.String("component", "handler.openai_gateway.chat_completions"),
-					zap.Int64("user_id", subject.UserID),
-					zap.Int64("api_key_id", currentAPIKey.ID),
-					zap.Any("group_id", currentAPIKey.GroupID),
-					zap.String("model", reqModel),
-					zap.Int64("account_id", account.ID),
-				).Error("openai_chat_completions.record_usage_failed", zap.Error(err))
-			}
-		})
+		recordUsageResult(result)
 		reqLog.Debug("openai_chat_completions.request_completed",
 			zap.Int64("account_id", account.ID),
 			zap.Int("switch_count", switchCount),

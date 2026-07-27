@@ -3,18 +3,68 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/httpclient"
+	"github.com/Wei-Shaw/sub2api/internal/util/logredact"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
+)
+
+const (
+	crsPreviewTokenVersion     = 1
+	crsPreviewTokenTTL         = 5 * time.Minute
+	crsPreviewTokenDomain      = "sub2api.crs-sync.preview.v1"
+	crsConnectionHashDomain    = "sub2api.crs-sync.connection.v1"
+	crsExportHashDomain        = "sub2api.crs-sync.export.v1"
+	crsLocalSnapshotHashDomain = "sub2api.crs-sync.local-snapshot.v1"
+	crsCapacityProbeDomain     = "sub2api.crs-sync.response-capacity.v1"
+	crsPreviewTokenMaxLength   = 4096
+	crsUnknownProxyIDForGuard  = int64(0)
+	crsSyncItemErrorMaxBytes   = 2048
+)
+
+var (
+	ErrCRSPreviewActorRequired = infraerrors.BadRequest(
+		"CRS_PREVIEW_ACTOR_REQUIRED",
+		"an authenticated administrator is required for CRS preview",
+	)
+	ErrCRSPreviewTokenRequired = infraerrors.BadRequest(
+		"CRS_PREVIEW_TOKEN_REQUIRED",
+		"a fresh CRS preview token is required before synchronization",
+	)
+	ErrCRSPreviewTokenInvalid = infraerrors.BadRequest(
+		"CRS_PREVIEW_TOKEN_INVALID",
+		"the CRS preview token is invalid",
+	)
+	ErrCRSPreviewTokenExpired = infraerrors.Conflict(
+		"CRS_PREVIEW_TOKEN_EXPIRED",
+		"the CRS preview expired; preview again before synchronizing",
+	)
+	ErrCRSPreviewContextConflict = infraerrors.Conflict(
+		"CRS_PREVIEW_CONTEXT_CONFLICT",
+		"the CRS preview no longer matches the synchronization request",
+	)
+	ErrCRSPreviewSigningUnavailable = infraerrors.Conflict(
+		"CRS_PREVIEW_SIGNING_UNAVAILABLE",
+		"CRS preview signing is unavailable",
+	)
+	ErrCRSExportInvalid = infraerrors.BadRequest(
+		"CRS_EXPORT_INVALID",
+		"the CRS export contains invalid or duplicate account identifiers",
+	)
 )
 
 type CRSSyncService struct {
@@ -24,6 +74,7 @@ type CRSSyncService struct {
 	openaiOAuthService *OpenAIOAuthService
 	geminiOAuthService *GeminiOAuthService
 	cfg                *config.Config
+	now                func() time.Time
 }
 
 func NewCRSSyncService(
@@ -41,6 +92,7 @@ func NewCRSSyncService(
 		openaiOAuthService: openaiOAuthService,
 		geminiOAuthService: geminiOAuthService,
 		cfg:                cfg,
+		now:                time.Now,
 	}
 }
 
@@ -50,6 +102,18 @@ type SyncFromCRSInput struct {
 	Password           string
 	SyncProxies        bool
 	SelectedAccountIDs []string // if non-empty, only create new accounts with these CRS IDs
+	ActorAdminID       int64
+	ForceActiveEdit    bool
+	Confirmed          bool
+	Reason             string
+	ExpectedVersion    *int64
+	ExpectedVersions   map[int64]int64
+	OperationID        string
+	PreviewToken       string
+	// ValidateResponseCapacity is injected by the HTTP idempotency boundary.
+	// It must run before any account or proxy write so a response that cannot
+	// be replayed is rejected without producing partial state.
+	ValidateResponseCapacity func(any) error
 }
 
 type SyncFromCRSItemResult struct {
@@ -77,18 +141,35 @@ type crsLoginResponse struct {
 }
 
 type crsExportResponse struct {
-	Success bool   `json:"success"`
-	Error   string `json:"error"`
-	Message string `json:"message"`
-	Data    struct {
-		ExportedAt              string                      `json:"exportedAt"`
-		ClaudeAccounts          []crsClaudeAccount          `json:"claudeAccounts"`
-		ClaudeConsoleAccounts   []crsConsoleAccount         `json:"claudeConsoleAccounts"`
-		OpenAIOAuthAccounts     []crsOpenAIOAuthAccount     `json:"openaiOAuthAccounts"`
-		OpenAIResponsesAccounts []crsOpenAIResponsesAccount `json:"openaiResponsesAccounts"`
-		GeminiOAuthAccounts     []crsGeminiOAuthAccount     `json:"geminiOAuthAccounts"`
-		GeminiAPIKeyAccounts    []crsGeminiAPIKeyAccount    `json:"geminiApiKeyAccounts"`
-	} `json:"data"`
+	Success bool          `json:"success"`
+	Error   string        `json:"error"`
+	Message string        `json:"message"`
+	Data    crsExportData `json:"data"`
+}
+
+type crsExportData struct {
+	ExportedAt              string                      `json:"exportedAt"`
+	ClaudeAccounts          []crsClaudeAccount          `json:"claudeAccounts"`
+	ClaudeConsoleAccounts   []crsConsoleAccount         `json:"claudeConsoleAccounts"`
+	OpenAIOAuthAccounts     []crsOpenAIOAuthAccount     `json:"openaiOAuthAccounts"`
+	OpenAIResponsesAccounts []crsOpenAIResponsesAccount `json:"openaiResponsesAccounts"`
+	GeminiOAuthAccounts     []crsGeminiOAuthAccount     `json:"geminiOAuthAccounts"`
+	GeminiAPIKeyAccounts    []crsGeminiAPIKeyAccount    `json:"geminiApiKeyAccounts"`
+}
+
+type normalizedCRSConnection struct {
+	BaseURL  string
+	Username string
+	Password string
+}
+
+type crsPreviewTokenPayload struct {
+	Version           int    `json:"version"`
+	ActorAdminID      int64  `json:"actor_admin_id"`
+	ConnectionHash    string `json:"connection_sha256"`
+	ExportHash        string `json:"export_sha256"`
+	LocalSnapshotHash string `json:"local_snapshot_sha256"`
+	ExpiresAt         int64  `json:"expires_at"`
 }
 
 type crsProxy struct {
@@ -97,6 +178,11 @@ type crsProxy struct {
 	Port     int    `json:"port"`
 	Username string `json:"username"`
 	Password string `json:"password"`
+}
+
+type crsProxyPlan struct {
+	resolvedID *int64
+	pending    *Proxy
 }
 
 type crsClaudeAccount struct {
@@ -191,30 +277,46 @@ type crsGeminiAPIKeyAccount struct {
 	Extra       map[string]any `json:"extra"`
 }
 
-// fetchCRSExport validates the connection parameters, authenticates with CRS,
-// and returns the exported accounts. Shared by SyncFromCRS and PreviewFromCRS.
-func (s *CRSSyncService) fetchCRSExport(ctx context.Context, baseURL, username, password string) (*crsExportResponse, error) {
+func (s *CRSSyncService) normalizeCRSConnection(
+	baseURL,
+	username,
+	password string,
+) (normalizedCRSConnection, error) {
 	if s.cfg == nil {
-		return nil, errors.New("config is not available")
+		return normalizedCRSConnection{}, errors.New("config is not available")
 	}
 	normalizedURL := strings.TrimSpace(baseURL)
 	if s.cfg.Security.URLAllowlist.Enabled {
 		normalized, err := normalizeBaseURL(normalizedURL, s.cfg.Security.URLAllowlist.CRSHosts, s.cfg.Security.URLAllowlist.AllowPrivateHosts)
 		if err != nil {
-			return nil, err
+			return normalizedCRSConnection{}, err
 		}
 		normalizedURL = normalized
 	} else {
 		normalized, err := urlvalidator.ValidateURLFormat(normalizedURL, s.cfg.Security.URLAllowlist.AllowInsecureHTTP)
 		if err != nil {
-			return nil, fmt.Errorf("invalid base_url: %w", err)
+			return normalizedCRSConnection{}, fmt.Errorf("invalid base_url: %w", err)
 		}
 		normalizedURL = normalized
 	}
-	if strings.TrimSpace(username) == "" || strings.TrimSpace(password) == "" {
-		return nil, errors.New("username and password are required")
+	normalizedUsername := strings.TrimSpace(username)
+	if normalizedUsername == "" || strings.TrimSpace(password) == "" {
+		return normalizedCRSConnection{}, errors.New("username and password are required")
 	}
 
+	return normalizedCRSConnection{
+		BaseURL:  normalizedURL,
+		Username: normalizedUsername,
+		Password: password,
+	}, nil
+}
+
+// fetchCRSExport authenticates with CRS and returns the exported accounts for
+// an already validated connection.
+func (s *CRSSyncService) fetchCRSExport(
+	ctx context.Context,
+	connection normalizedCRSConnection,
+) (*crsExportResponse, error) {
 	client, err := httpclient.GetClient(httpclient.Options{
 		Timeout:            20 * time.Second,
 		ValidateResolvedIP: s.cfg.Security.URLAllowlist.Enabled,
@@ -224,21 +326,459 @@ func (s *CRSSyncService) fetchCRSExport(ctx context.Context, baseURL, username, 
 		return nil, fmt.Errorf("create http client failed: %w", err)
 	}
 
-	adminToken, err := crsLogin(ctx, client, normalizedURL, username, password)
+	adminToken, err := crsLogin(
+		ctx,
+		client,
+		connection.BaseURL,
+		connection.Username,
+		connection.Password,
+	)
 	if err != nil {
 		return nil, err
 	}
 
-	return crsExportAccounts(ctx, client, normalizedURL, adminToken)
+	return crsExportAccounts(ctx, client, connection.BaseURL, adminToken)
+}
+
+func hashCRSPreviewValue(domain string, value any) (string, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	hasher := sha256.New()
+	_, _ = io.WriteString(hasher, domain)
+	_, _ = hasher.Write([]byte{0})
+	_, _ = hasher.Write(encoded)
+	return base64.RawURLEncoding.EncodeToString(hasher.Sum(nil)), nil
+}
+
+func hashCRSConnection(connection normalizedCRSConnection) (string, error) {
+	return hashCRSPreviewValue(crsConnectionHashDomain, struct {
+		BaseURL  string `json:"base_url"`
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}{
+		BaseURL:  connection.BaseURL,
+		Username: connection.Username,
+		Password: connection.Password,
+	})
+}
+
+func normalizeCRSExportAccounts[T any](
+	accounts []T,
+	category string,
+	kindAndID func(T) (string, string),
+	seen map[string]string,
+) ([]T, error) {
+	normalized := append([]T(nil), accounts...)
+	for _, account := range normalized {
+		_, id := kindAndID(account)
+		trimmedID := strings.TrimSpace(id)
+		if trimmedID == "" || trimmedID != id {
+			return nil, ErrCRSExportInvalid.WithMetadata(map[string]string{
+				"category": category,
+				"stage":    "invalid_account_id",
+			})
+		}
+		if existingCategory, exists := seen[id]; exists {
+			return nil, ErrCRSExportInvalid.WithMetadata(map[string]string{
+				"category":          category,
+				"crs_account_id":    id,
+				"existing_category": existingCategory,
+				"stage":             "duplicate_account_id",
+			})
+		}
+		seen[id] = category
+	}
+	sort.Slice(normalized, func(i, j int) bool {
+		leftKind, leftID := kindAndID(normalized[i])
+		rightKind, rightID := kindAndID(normalized[j])
+		if leftKind == rightKind {
+			return leftID < rightID
+		}
+		return leftKind < rightKind
+	})
+	return normalized, nil
+}
+
+func normalizeCRSExportData(exported *crsExportResponse) (crsExportData, error) {
+	if exported == nil {
+		return crsExportData{}, ErrCRSExportInvalid.WithMetadata(map[string]string{
+			"stage": "missing_export",
+		})
+	}
+	stableData := exported.Data
+	stableData.ExportedAt = ""
+	seen := make(map[string]string)
+	var err error
+	stableData.ClaudeAccounts, err = normalizeCRSExportAccounts(
+		exported.Data.ClaudeAccounts,
+		"claude",
+		func(account crsClaudeAccount) (string, string) { return account.Kind, account.ID },
+		seen,
+	)
+	if err != nil {
+		return crsExportData{}, err
+	}
+	stableData.ClaudeConsoleAccounts, err = normalizeCRSExportAccounts(
+		exported.Data.ClaudeConsoleAccounts,
+		"claude_console",
+		func(account crsConsoleAccount) (string, string) { return account.Kind, account.ID },
+		seen,
+	)
+	if err != nil {
+		return crsExportData{}, err
+	}
+	stableData.OpenAIOAuthAccounts, err = normalizeCRSExportAccounts(
+		exported.Data.OpenAIOAuthAccounts,
+		"openai_oauth",
+		func(account crsOpenAIOAuthAccount) (string, string) { return account.Kind, account.ID },
+		seen,
+	)
+	if err != nil {
+		return crsExportData{}, err
+	}
+	stableData.OpenAIResponsesAccounts, err = normalizeCRSExportAccounts(
+		exported.Data.OpenAIResponsesAccounts,
+		"openai_responses",
+		func(account crsOpenAIResponsesAccount) (string, string) { return account.Kind, account.ID },
+		seen,
+	)
+	if err != nil {
+		return crsExportData{}, err
+	}
+	stableData.GeminiOAuthAccounts, err = normalizeCRSExportAccounts(
+		exported.Data.GeminiOAuthAccounts,
+		"gemini_oauth",
+		func(account crsGeminiOAuthAccount) (string, string) { return account.Kind, account.ID },
+		seen,
+	)
+	if err != nil {
+		return crsExportData{}, err
+	}
+	stableData.GeminiAPIKeyAccounts, err = normalizeCRSExportAccounts(
+		exported.Data.GeminiAPIKeyAccounts,
+		"gemini_apikey",
+		func(account crsGeminiAPIKeyAccount) (string, string) { return account.Kind, account.ID },
+		seen,
+	)
+	if err != nil {
+		return crsExportData{}, err
+	}
+	return stableData, nil
+}
+
+func hashCRSExportAccounts(exported *crsExportResponse) (string, error) {
+	stableData, err := normalizeCRSExportData(exported)
+	if err != nil {
+		return "", err
+	}
+	return hashCRSPreviewValue(crsExportHashDomain, stableData)
+}
+
+func hashesMatch(expected, actual string) bool {
+	return hmac.Equal([]byte(expected), []byte(actual))
+}
+
+func boundedCRSSyncItemError(message string) string {
+	message = logredact.RedactText(message)
+	if len(message) <= crsSyncItemErrorMaxBytes {
+		return message
+	}
+	end := crsSyncItemErrorMaxBytes - len("...")
+	for end > 0 && (message[end]&0xc0) == 0x80 {
+		end--
+	}
+	return message[:end] + "..."
+}
+
+func buildCRSSyncCapacityProbeError(seed string) string {
+	var output strings.Builder
+	output.Grow(crsSyncItemErrorMaxBytes)
+	for counter := 0; output.Len() < crsSyncItemErrorMaxBytes; counter++ {
+		hasher := sha256.New()
+		_, _ = io.WriteString(hasher, crsCapacityProbeDomain)
+		_, _ = hasher.Write([]byte{0})
+		_, _ = io.WriteString(hasher, seed)
+		_, _ = hasher.Write([]byte{0})
+		_, _ = io.WriteString(hasher, strconv.Itoa(counter))
+		output.WriteString(base64.RawURLEncoding.EncodeToString(hasher.Sum(nil)))
+	}
+	return output.String()[:crsSyncItemErrorMaxBytes]
+}
+
+func buildCRSSyncResponseCapacityProbe(exported *crsExportResponse) *SyncFromCRSResult {
+	if exported == nil {
+		return &SyncFromCRSResult{Items: make([]SyncFromCRSItemResult, 0)}
+	}
+	total := len(exported.Data.ClaudeAccounts) +
+		len(exported.Data.ClaudeConsoleAccounts) +
+		len(exported.Data.OpenAIOAuthAccounts) +
+		len(exported.Data.OpenAIResponsesAccounts) +
+		len(exported.Data.GeminiOAuthAccounts) +
+		len(exported.Data.GeminiAPIKeyAccounts)
+	probe := &SyncFromCRSResult{
+		Created: total,
+		Updated: total,
+		Skipped: total,
+		Failed:  total,
+		Items:   make([]SyncFromCRSItemResult, 0, total),
+	}
+	appendItem := func(crsAccountID, kind, name string) {
+		itemIndex := len(probe.Items)
+		probe.Items = append(probe.Items, SyncFromCRSItemResult{
+			CRSAccountID: crsAccountID,
+			Kind:         kind,
+			Name:         name,
+			Action:       "updated",
+			Error: buildCRSSyncCapacityProbeError(
+				strconv.Itoa(itemIndex) + "\x00" + crsAccountID + "\x00" + kind + "\x00" + name,
+			),
+		})
+	}
+	for _, src := range exported.Data.ClaudeAccounts {
+		appendItem(src.ID, src.Kind, src.Name)
+	}
+	for _, src := range exported.Data.ClaudeConsoleAccounts {
+		appendItem(src.ID, src.Kind, src.Name)
+	}
+	for _, src := range exported.Data.OpenAIOAuthAccounts {
+		appendItem(src.ID, src.Kind, src.Name)
+	}
+	for _, src := range exported.Data.OpenAIResponsesAccounts {
+		appendItem(src.ID, src.Kind, src.Name)
+	}
+	for _, src := range exported.Data.GeminiOAuthAccounts {
+		appendItem(src.ID, src.Kind, src.Name)
+	}
+	for _, src := range exported.Data.GeminiAPIKeyAccounts {
+		appendItem(src.ID, src.Kind, src.Name)
+	}
+	return probe
+}
+
+func (s *CRSSyncService) crsPreviewSigningSecret() ([]byte, error) {
+	if s.cfg == nil || strings.TrimSpace(s.cfg.JWT.Secret) == "" {
+		return nil, ErrCRSPreviewSigningUnavailable
+	}
+	return []byte(s.cfg.JWT.Secret), nil
+}
+
+func (s *CRSSyncService) signCRSPreviewToken(payload crsPreviewTokenPayload) (string, error) {
+	secret, err := s.crsPreviewSigningSecret()
+	if err != nil {
+		return "", err
+	}
+	encodedPayload, err := json.Marshal(payload)
+	if err != nil {
+		return "", ErrCRSPreviewSigningUnavailable.WithMetadata(map[string]string{
+			"stage": "payload_encode",
+		}).WithCause(err)
+	}
+	payloadPart := base64.RawURLEncoding.EncodeToString(encodedPayload)
+	mac := hmac.New(sha256.New, secret)
+	_, _ = io.WriteString(mac, crsPreviewTokenDomain)
+	_, _ = mac.Write([]byte{0})
+	_, _ = io.WriteString(mac, payloadPart)
+	signaturePart := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return payloadPart + "." + signaturePart, nil
+}
+
+func (s *CRSSyncService) verifyCRSPreviewToken(rawToken string) (crsPreviewTokenPayload, error) {
+	var payload crsPreviewTokenPayload
+	token := strings.TrimSpace(rawToken)
+	if token == "" {
+		return payload, ErrCRSPreviewTokenRequired
+	}
+	if len(token) > crsPreviewTokenMaxLength {
+		return payload, ErrCRSPreviewTokenInvalid
+	}
+	secret, err := s.crsPreviewSigningSecret()
+	if err != nil {
+		return payload, err
+	}
+	parts := strings.Split(token, ".")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return payload, ErrCRSPreviewTokenInvalid
+	}
+	signature, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil ||
+		len(signature) != sha256.Size ||
+		base64.RawURLEncoding.EncodeToString(signature) != parts[1] {
+		return payload, ErrCRSPreviewTokenInvalid
+	}
+	mac := hmac.New(sha256.New, secret)
+	_, _ = io.WriteString(mac, crsPreviewTokenDomain)
+	_, _ = mac.Write([]byte{0})
+	_, _ = io.WriteString(mac, parts[0])
+	if !hmac.Equal(signature, mac.Sum(nil)) {
+		return payload, ErrCRSPreviewTokenInvalid
+	}
+	encodedPayload, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil || base64.RawURLEncoding.EncodeToString(encodedPayload) != parts[0] {
+		return payload, ErrCRSPreviewTokenInvalid
+	}
+	decoder := json.NewDecoder(bytes.NewReader(encodedPayload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&payload); err != nil {
+		return crsPreviewTokenPayload{}, ErrCRSPreviewTokenInvalid
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return crsPreviewTokenPayload{}, ErrCRSPreviewTokenInvalid
+	}
+	if payload.Version != crsPreviewTokenVersion ||
+		payload.ActorAdminID <= 0 ||
+		payload.ConnectionHash == "" ||
+		payload.ExportHash == "" ||
+		payload.LocalSnapshotHash == "" ||
+		payload.ExpiresAt <= 0 {
+		return crsPreviewTokenPayload{}, ErrCRSPreviewTokenInvalid
+	}
+	return payload, nil
+}
+
+func (s *CRSSyncService) loadValidatedCRSPreviewSnapshots(
+	ctx context.Context,
+) ([]CRSAccountPreviewSnapshot, map[string]CRSAccountPreviewSnapshot, error) {
+	snapshotRepo, ok := s.accountRepo.(CRSPreviewSnapshotRepository)
+	if !ok || snapshotRepo == nil {
+		return nil, nil, ErrCRSPreviewSnapshotUnavailable.WithMetadata(map[string]string{
+			"stage": "repository_capability",
+		})
+	}
+	localSnapshots, err := snapshotRepo.ListCRSAccountPreviewSnapshots(ctx)
+	if err != nil {
+		return nil, nil, ErrCRSPreviewSnapshotUnavailable.WithMetadata(map[string]string{
+			"stage": "repository_snapshot",
+		}).WithCause(err)
+	}
+	snapshots := append([]CRSAccountPreviewSnapshot(nil), localSnapshots...)
+	for index := range snapshots {
+		snapshot := &snapshots[index]
+		if strings.TrimSpace(snapshot.CRSAccountID) == "" || snapshot.LocalAccountID <= 0 {
+			return nil, nil, ErrCRSPreviewSnapshotUnavailable.WithMetadata(map[string]string{
+				"stage": "invalid_account_snapshot",
+			})
+		}
+		snapshot.RoomBindings = append(
+			[]CRSAccountRoomBindingSnapshot(nil),
+			snapshot.RoomBindings...,
+		)
+		sort.Slice(snapshot.RoomBindings, func(i, j int) bool {
+			if snapshot.RoomBindings[i].ListingID == snapshot.RoomBindings[j].ListingID {
+				return snapshot.RoomBindings[i].RowVersion < snapshot.RoomBindings[j].RowVersion
+			}
+			return snapshot.RoomBindings[i].ListingID < snapshot.RoomBindings[j].ListingID
+		})
+		for bindingIndex, binding := range snapshot.RoomBindings {
+			if binding.ListingID <= 0 ||
+				binding.RowVersion <= 0 ||
+				(bindingIndex > 0 &&
+					snapshot.RoomBindings[bindingIndex-1].ListingID == binding.ListingID) {
+				return nil, nil, ErrCRSPreviewSnapshotUnavailable.WithMetadata(map[string]string{
+					"account_id": strconv.FormatInt(snapshot.LocalAccountID, 10),
+					"stage":      "invalid_room_snapshot",
+				})
+			}
+		}
+	}
+	sort.Slice(snapshots, func(i, j int) bool {
+		if snapshots[i].CRSAccountID == snapshots[j].CRSAccountID {
+			return snapshots[i].LocalAccountID < snapshots[j].LocalAccountID
+		}
+		return snapshots[i].CRSAccountID < snapshots[j].CRSAccountID
+	})
+	existingByCRSID := make(map[string]CRSAccountPreviewSnapshot, len(snapshots))
+	localAccountIDs := make(map[int64]struct{}, len(snapshots))
+	for _, snapshot := range snapshots {
+		if _, exists := existingByCRSID[snapshot.CRSAccountID]; exists {
+			return nil, nil, ErrCRSPreviewSnapshotUnavailable.WithMetadata(map[string]string{
+				"crs_account_id": snapshot.CRSAccountID,
+				"stage":          "duplicate_crs_account_id",
+			})
+		}
+		if _, exists := localAccountIDs[snapshot.LocalAccountID]; exists {
+			return nil, nil, ErrCRSPreviewSnapshotUnavailable.WithMetadata(map[string]string{
+				"account_id": strconv.FormatInt(snapshot.LocalAccountID, 10),
+				"stage":      "duplicate_local_account_id",
+			})
+		}
+		existingByCRSID[snapshot.CRSAccountID] = snapshot
+		localAccountIDs[snapshot.LocalAccountID] = struct{}{}
+	}
+	return snapshots, existingByCRSID, nil
 }
 
 func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput) (*SyncFromCRSResult, error) {
-	exported, err := s.fetchCRSExport(ctx, input.BaseURL, input.Username, input.Password)
+	connection, err := s.normalizeCRSConnection(input.BaseURL, input.Username, input.Password)
 	if err != nil {
 		return nil, err
 	}
+	tokenPayload, err := s.verifyCRSPreviewToken(input.PreviewToken)
+	if err != nil {
+		return nil, err
+	}
+	now := s.now().UTC()
+	if now.Unix() >= tokenPayload.ExpiresAt {
+		return nil, ErrCRSPreviewTokenExpired
+	}
+	if input.ActorAdminID <= 0 || tokenPayload.ActorAdminID != input.ActorAdminID {
+		return nil, ErrCRSPreviewContextConflict.WithMetadata(map[string]string{
+			"stage": "actor",
+		})
+	}
+	connectionHash, err := hashCRSConnection(connection)
+	if err != nil {
+		return nil, ErrCRSPreviewSigningUnavailable.WithMetadata(map[string]string{
+			"stage": "connection_hash",
+		}).WithCause(err)
+	}
+	if !hashesMatch(tokenPayload.ConnectionHash, connectionHash) {
+		return nil, ErrCRSPreviewContextConflict.WithMetadata(map[string]string{
+			"stage": "connection",
+		})
+	}
+	exported, err := s.fetchCRSExport(ctx, connection)
+	if err != nil {
+		return nil, err
+	}
+	localSnapshots, _, err := s.loadValidatedCRSPreviewSnapshots(ctx)
+	if err != nil {
+		return nil, err
+	}
+	exportHash, err := hashCRSExportAccounts(exported)
+	if err != nil {
+		if errors.Is(err, ErrCRSExportInvalid) {
+			return nil, err
+		}
+		return nil, ErrCRSPreviewSigningUnavailable.WithMetadata(map[string]string{
+			"stage": "export_hash",
+		}).WithCause(err)
+	}
+	if !hashesMatch(tokenPayload.ExportHash, exportHash) {
+		return nil, ErrCRSPreviewContextConflict.WithMetadata(map[string]string{
+			"stage": "remote_export",
+		})
+	}
+	localSnapshotHash, err := hashCRSPreviewValue(crsLocalSnapshotHashDomain, localSnapshots)
+	if err != nil {
+		return nil, ErrCRSPreviewSigningUnavailable.WithMetadata(map[string]string{
+			"stage": "local_snapshot_hash",
+		}).WithCause(err)
+	}
+	if !hashesMatch(tokenPayload.LocalSnapshotHash, localSnapshotHash) {
+		return nil, ErrCRSPreviewContextConflict.WithMetadata(map[string]string{
+			"stage": "local_snapshot",
+		})
+	}
+	if input.ValidateResponseCapacity != nil {
+		if err := input.ValidateResponseCapacity(buildCRSSyncResponseCapacityProbe(exported)); err != nil {
+			return nil, err
+		}
+	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	syncedAt := now.Format(time.RFC3339)
 
 	result := &SyncFromCRSResult{
 		Items: make(
@@ -252,7 +792,13 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 
 	var proxies []Proxy
 	if input.SyncProxies {
-		proxies, _ = s.proxyRepo.ListActive(ctx)
+		if s.proxyRepo == nil {
+			return nil, errors.New("proxy repository is not available")
+		}
+		proxies, err = s.proxyRepo.ListActive(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list active proxies failed: %w", err)
+		}
 	}
 
 	// Claude OAuth / Setup Token -> sub2api anthropic oauth/setup-token
@@ -269,7 +815,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		}
 		if targetType != AccountTypeOAuth && targetType != AccountTypeSetupToken {
 			item.Action = "skipped"
-			item.Error = "unsupported authType: " + targetType
+			item.Error = boundedCRSSyncItemError("unsupported authType: " + targetType)
 			result.Skipped++
 			result.Items = append(result.Items, item)
 			continue
@@ -278,16 +824,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		accessToken, _ := src.Credentials["access_token"].(string)
 		if strings.TrimSpace(accessToken) == "" {
 			item.Action = "failed"
-			item.Error = "missing access_token"
-			result.Failed++
-			result.Items = append(result.Items, item)
-			continue
-		}
-
-		proxyID, err := s.mapOrCreateProxy(ctx, input.SyncProxies, &proxies, src.Proxy, fmt.Sprintf("crs-%s", src.Name))
-		if err != nil {
-			item.Action = "failed"
-			item.Error = "proxy sync failed: " + err.Error()
+			item.Error = boundedCRSSyncItemError("missing access_token")
 			result.Failed++
 			result.Items = append(result.Items, item)
 			continue
@@ -319,7 +856,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		}
 		extra["crs_account_id"] = src.ID
 		extra["crs_kind"] = src.Kind
-		extra["crs_synced_at"] = now
+		extra["crs_synced_at"] = syncedAt
 		// Extract org_uuid and account_uuid from CRS credentials to extra
 		if orgUUID, ok := src.Credentials["org_uuid"]; ok {
 			extra["org_uuid"] = orgUUID
@@ -331,17 +868,31 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		existing, err := s.accountRepo.GetByCRSAccountID(ctx, src.ID)
 		if err != nil {
 			item.Action = "failed"
-			item.Error = "db lookup failed: " + err.Error()
+			item.Error = boundedCRSSyncItemError("db lookup failed: " + err.Error())
 			result.Failed++
 			result.Items = append(result.Items, item)
 			continue
 		}
+		proxyPlan := planCRSProxy(
+			input.SyncProxies,
+			proxies,
+			src.Proxy,
+			fmt.Sprintf("crs-%s", src.Name),
+		)
 
 		if existing == nil {
 			if !shouldCreateAccount(src.ID, selectedSet) {
 				item.Action = "skipped"
-				item.Error = "not selected"
+				item.Error = boundedCRSSyncItemError("not selected")
 				result.Skipped++
+				result.Items = append(result.Items, item)
+				continue
+			}
+			proxyID, err := s.resolveCRSProxyPlan(ctx, &proxies, proxyPlan)
+			if err != nil {
+				item.Action = "failed"
+				item.Error = boundedCRSSyncItemError("proxy sync failed: " + err.Error())
+				result.Failed++
 				result.Items = append(result.Items, item)
 				continue
 			}
@@ -359,7 +910,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			}
 			if err := s.accountRepo.Create(ctx, account); err != nil {
 				item.Action = "failed"
-				item.Error = "create failed: " + err.Error()
+				item.Error = boundedCRSSyncItemError("create failed: " + err.Error())
 				result.Failed++
 				result.Items = append(result.Items, item)
 				continue
@@ -382,17 +933,14 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		existing.Platform = PlatformAnthropic
 		existing.Type = targetType
 		existing.Credentials = mergeMap(existing.Credentials, credentials)
-		if proxyID != nil {
-			existing.ProxyID = proxyID
-		}
 		existing.Concurrency = concurrency
 		existing.Priority = priority
 		existing.Status = status
 		existing.Schedulable = src.Schedulable
 
-		if err := s.accountRepo.Update(ctx, existing); err != nil {
+		if err := s.updateExistingAccountWithProxy(ctx, input, existing, &proxies, proxyPlan); err != nil {
 			item.Action = "failed"
-			item.Error = "update failed: " + err.Error()
+			item.Error = boundedCRSSyncItemError("update failed: " + err.Error())
 			result.Failed++
 			result.Items = append(result.Items, item)
 			continue
@@ -421,16 +969,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		apiKey, _ := src.Credentials["api_key"].(string)
 		if strings.TrimSpace(apiKey) == "" {
 			item.Action = "failed"
-			item.Error = "missing api_key"
-			result.Failed++
-			result.Items = append(result.Items, item)
-			continue
-		}
-
-		proxyID, err := s.mapOrCreateProxy(ctx, input.SyncProxies, &proxies, src.Proxy, fmt.Sprintf("crs-%s", src.Name))
-		if err != nil {
-			item.Action = "failed"
-			item.Error = "proxy sync failed: " + err.Error()
+			item.Error = boundedCRSSyncItemError("missing api_key")
 			result.Failed++
 			result.Items = append(result.Items, item)
 			continue
@@ -447,23 +986,37 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		extra := map[string]any{
 			"crs_account_id": src.ID,
 			"crs_kind":       src.Kind,
-			"crs_synced_at":  now,
+			"crs_synced_at":  syncedAt,
 		}
 
 		existing, err := s.accountRepo.GetByCRSAccountID(ctx, src.ID)
 		if err != nil {
 			item.Action = "failed"
-			item.Error = "db lookup failed: " + err.Error()
+			item.Error = boundedCRSSyncItemError("db lookup failed: " + err.Error())
 			result.Failed++
 			result.Items = append(result.Items, item)
 			continue
 		}
+		proxyPlan := planCRSProxy(
+			input.SyncProxies,
+			proxies,
+			src.Proxy,
+			fmt.Sprintf("crs-%s", src.Name),
+		)
 
 		if existing == nil {
 			if !shouldCreateAccount(src.ID, selectedSet) {
 				item.Action = "skipped"
-				item.Error = "not selected"
+				item.Error = boundedCRSSyncItemError("not selected")
 				result.Skipped++
+				result.Items = append(result.Items, item)
+				continue
+			}
+			proxyID, err := s.resolveCRSProxyPlan(ctx, &proxies, proxyPlan)
+			if err != nil {
+				item.Action = "failed"
+				item.Error = boundedCRSSyncItemError("proxy sync failed: " + err.Error())
+				result.Failed++
 				result.Items = append(result.Items, item)
 				continue
 			}
@@ -481,7 +1034,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			}
 			if err := s.accountRepo.Create(ctx, account); err != nil {
 				item.Action = "failed"
-				item.Error = "create failed: " + err.Error()
+				item.Error = boundedCRSSyncItemError("create failed: " + err.Error())
 				result.Failed++
 				result.Items = append(result.Items, item)
 				continue
@@ -497,17 +1050,14 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		existing.Platform = PlatformAnthropic
 		existing.Type = AccountTypeAPIKey
 		existing.Credentials = mergeMap(existing.Credentials, credentials)
-		if proxyID != nil {
-			existing.ProxyID = proxyID
-		}
 		existing.Concurrency = concurrency
 		existing.Priority = priority
 		existing.Status = status
 		existing.Schedulable = src.Schedulable
 
-		if err := s.accountRepo.Update(ctx, existing); err != nil {
+		if err := s.updateExistingAccountWithProxy(ctx, input, existing, &proxies, proxyPlan); err != nil {
 			item.Action = "failed"
-			item.Error = "update failed: " + err.Error()
+			item.Error = boundedCRSSyncItemError("update failed: " + err.Error())
 			result.Failed++
 			result.Items = append(result.Items, item)
 			continue
@@ -529,22 +1079,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		accessToken, _ := src.Credentials["access_token"].(string)
 		if strings.TrimSpace(accessToken) == "" {
 			item.Action = "failed"
-			item.Error = "missing access_token"
-			result.Failed++
-			result.Items = append(result.Items, item)
-			continue
-		}
-
-		proxyID, err := s.mapOrCreateProxy(
-			ctx,
-			input.SyncProxies,
-			&proxies,
-			src.Proxy,
-			fmt.Sprintf("crs-%s", src.Name),
-		)
-		if err != nil {
-			item.Action = "failed"
-			item.Error = "proxy sync failed: " + err.Error()
+			item.Error = boundedCRSSyncItemError("missing access_token")
 			result.Failed++
 			result.Items = append(result.Items, item)
 			continue
@@ -574,7 +1109,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		}
 		extra["crs_account_id"] = src.ID
 		extra["crs_kind"] = src.Kind
-		extra["crs_synced_at"] = now
+		extra["crs_synced_at"] = syncedAt
 		// Extract email from CRS extra (crs_email -> email)
 		if crsEmail, ok := src.Extra["crs_email"]; ok {
 			extra["email"] = crsEmail
@@ -583,17 +1118,31 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		existing, err := s.accountRepo.GetByCRSAccountID(ctx, src.ID)
 		if err != nil {
 			item.Action = "failed"
-			item.Error = "db lookup failed: " + err.Error()
+			item.Error = boundedCRSSyncItemError("db lookup failed: " + err.Error())
 			result.Failed++
 			result.Items = append(result.Items, item)
 			continue
 		}
+		proxyPlan := planCRSProxy(
+			input.SyncProxies,
+			proxies,
+			src.Proxy,
+			fmt.Sprintf("crs-%s", src.Name),
+		)
 
 		if existing == nil {
 			if !shouldCreateAccount(src.ID, selectedSet) {
 				item.Action = "skipped"
-				item.Error = "not selected"
+				item.Error = boundedCRSSyncItemError("not selected")
 				result.Skipped++
+				result.Items = append(result.Items, item)
+				continue
+			}
+			proxyID, err := s.resolveCRSProxyPlan(ctx, &proxies, proxyPlan)
+			if err != nil {
+				item.Action = "failed"
+				item.Error = boundedCRSSyncItemError("proxy sync failed: " + err.Error())
+				result.Failed++
 				result.Items = append(result.Items, item)
 				continue
 			}
@@ -611,7 +1160,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			}
 			if err := s.accountRepo.Create(ctx, account); err != nil {
 				item.Action = "failed"
-				item.Error = "create failed: " + err.Error()
+				item.Error = boundedCRSSyncItemError("create failed: " + err.Error())
 				result.Failed++
 				result.Items = append(result.Items, item)
 				continue
@@ -631,17 +1180,14 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		existing.Platform = PlatformOpenAI
 		existing.Type = AccountTypeOAuth
 		existing.Credentials = mergeMap(existing.Credentials, credentials)
-		if proxyID != nil {
-			existing.ProxyID = proxyID
-		}
 		existing.Concurrency = concurrency
 		existing.Priority = priority
 		existing.Status = status
 		existing.Schedulable = src.Schedulable
 
-		if err := s.accountRepo.Update(ctx, existing); err != nil {
+		if err := s.updateExistingAccountWithProxy(ctx, input, existing, &proxies, proxyPlan); err != nil {
 			item.Action = "failed"
-			item.Error = "update failed: " + err.Error()
+			item.Error = boundedCRSSyncItemError("update failed: " + err.Error())
 			result.Failed++
 			result.Items = append(result.Items, item)
 			continue
@@ -668,7 +1214,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		apiKey, _ := src.Credentials["api_key"].(string)
 		if strings.TrimSpace(apiKey) == "" {
 			item.Action = "failed"
-			item.Error = "missing api_key"
+			item.Error = boundedCRSSyncItemError("missing api_key")
 			result.Failed++
 			result.Items = append(result.Items, item)
 			continue
@@ -680,21 +1226,6 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		// 🔧 Remove /v1 suffix from base_url for OpenAI accounts
 		cleanBaseURL(src.Credentials, "/v1")
 
-		proxyID, err := s.mapOrCreateProxy(
-			ctx,
-			input.SyncProxies,
-			&proxies,
-			src.Proxy,
-			fmt.Sprintf("crs-%s", src.Name),
-		)
-		if err != nil {
-			item.Action = "failed"
-			item.Error = "proxy sync failed: " + err.Error()
-			result.Failed++
-			result.Items = append(result.Items, item)
-			continue
-		}
-
 		credentials := sanitizeCredentialsMap(src.Credentials)
 		priority := clampPriority(src.Priority)
 		concurrency := 3
@@ -703,23 +1234,37 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		extra := map[string]any{
 			"crs_account_id": src.ID,
 			"crs_kind":       src.Kind,
-			"crs_synced_at":  now,
+			"crs_synced_at":  syncedAt,
 		}
 
 		existing, err := s.accountRepo.GetByCRSAccountID(ctx, src.ID)
 		if err != nil {
 			item.Action = "failed"
-			item.Error = "db lookup failed: " + err.Error()
+			item.Error = boundedCRSSyncItemError("db lookup failed: " + err.Error())
 			result.Failed++
 			result.Items = append(result.Items, item)
 			continue
 		}
+		proxyPlan := planCRSProxy(
+			input.SyncProxies,
+			proxies,
+			src.Proxy,
+			fmt.Sprintf("crs-%s", src.Name),
+		)
 
 		if existing == nil {
 			if !shouldCreateAccount(src.ID, selectedSet) {
 				item.Action = "skipped"
-				item.Error = "not selected"
+				item.Error = boundedCRSSyncItemError("not selected")
 				result.Skipped++
+				result.Items = append(result.Items, item)
+				continue
+			}
+			proxyID, err := s.resolveCRSProxyPlan(ctx, &proxies, proxyPlan)
+			if err != nil {
+				item.Action = "failed"
+				item.Error = boundedCRSSyncItemError("proxy sync failed: " + err.Error())
+				result.Failed++
 				result.Items = append(result.Items, item)
 				continue
 			}
@@ -737,7 +1282,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			}
 			if err := s.accountRepo.Create(ctx, account); err != nil {
 				item.Action = "failed"
-				item.Error = "create failed: " + err.Error()
+				item.Error = boundedCRSSyncItemError("create failed: " + err.Error())
 				result.Failed++
 				result.Items = append(result.Items, item)
 				continue
@@ -753,17 +1298,14 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		existing.Platform = PlatformOpenAI
 		existing.Type = AccountTypeAPIKey
 		existing.Credentials = mergeMap(existing.Credentials, credentials)
-		if proxyID != nil {
-			existing.ProxyID = proxyID
-		}
 		existing.Concurrency = concurrency
 		existing.Priority = priority
 		existing.Status = status
 		existing.Schedulable = src.Schedulable
 
-		if err := s.accountRepo.Update(ctx, existing); err != nil {
+		if err := s.updateExistingAccountWithProxy(ctx, input, existing, &proxies, proxyPlan); err != nil {
 			item.Action = "failed"
-			item.Error = "update failed: " + err.Error()
+			item.Error = boundedCRSSyncItemError("update failed: " + err.Error())
 			result.Failed++
 			result.Items = append(result.Items, item)
 			continue
@@ -785,16 +1327,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		refreshToken, _ := src.Credentials["refresh_token"].(string)
 		if strings.TrimSpace(refreshToken) == "" {
 			item.Action = "failed"
-			item.Error = "missing refresh_token"
-			result.Failed++
-			result.Items = append(result.Items, item)
-			continue
-		}
-
-		proxyID, err := s.mapOrCreateProxy(ctx, input.SyncProxies, &proxies, src.Proxy, fmt.Sprintf("crs-%s", src.Name))
-		if err != nil {
-			item.Action = "failed"
-			item.Error = "proxy sync failed: " + err.Error()
+			item.Error = boundedCRSSyncItemError("missing refresh_token")
 			result.Failed++
 			result.Items = append(result.Items, item)
 			continue
@@ -819,22 +1352,36 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		}
 		extra["crs_account_id"] = src.ID
 		extra["crs_kind"] = src.Kind
-		extra["crs_synced_at"] = now
+		extra["crs_synced_at"] = syncedAt
 
 		existing, err := s.accountRepo.GetByCRSAccountID(ctx, src.ID)
 		if err != nil {
 			item.Action = "failed"
-			item.Error = "db lookup failed: " + err.Error()
+			item.Error = boundedCRSSyncItemError("db lookup failed: " + err.Error())
 			result.Failed++
 			result.Items = append(result.Items, item)
 			continue
 		}
+		proxyPlan := planCRSProxy(
+			input.SyncProxies,
+			proxies,
+			src.Proxy,
+			fmt.Sprintf("crs-%s", src.Name),
+		)
 
 		if existing == nil {
 			if !shouldCreateAccount(src.ID, selectedSet) {
 				item.Action = "skipped"
-				item.Error = "not selected"
+				item.Error = boundedCRSSyncItemError("not selected")
 				result.Skipped++
+				result.Items = append(result.Items, item)
+				continue
+			}
+			proxyID, err := s.resolveCRSProxyPlan(ctx, &proxies, proxyPlan)
+			if err != nil {
+				item.Action = "failed"
+				item.Error = boundedCRSSyncItemError("proxy sync failed: " + err.Error())
+				result.Failed++
 				result.Items = append(result.Items, item)
 				continue
 			}
@@ -852,7 +1399,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			}
 			if err := s.accountRepo.Create(ctx, account); err != nil {
 				item.Action = "failed"
-				item.Error = "create failed: " + err.Error()
+				item.Error = boundedCRSSyncItemError("create failed: " + err.Error())
 				result.Failed++
 				result.Items = append(result.Items, item)
 				continue
@@ -871,17 +1418,14 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		existing.Platform = PlatformGemini
 		existing.Type = AccountTypeOAuth
 		existing.Credentials = mergeMap(existing.Credentials, credentials)
-		if proxyID != nil {
-			existing.ProxyID = proxyID
-		}
 		existing.Concurrency = 3
 		existing.Priority = clampPriority(src.Priority)
 		existing.Status = mapCRSStatus(src.IsActive, src.Status)
 		existing.Schedulable = src.Schedulable
 
-		if err := s.accountRepo.Update(ctx, existing); err != nil {
+		if err := s.updateExistingAccountWithProxy(ctx, input, existing, &proxies, proxyPlan); err != nil {
 			item.Action = "failed"
-			item.Error = "update failed: " + err.Error()
+			item.Error = boundedCRSSyncItemError("update failed: " + err.Error())
 			result.Failed++
 			result.Items = append(result.Items, item)
 			continue
@@ -907,16 +1451,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		apiKey, _ := src.Credentials["api_key"].(string)
 		if strings.TrimSpace(apiKey) == "" {
 			item.Action = "failed"
-			item.Error = "missing api_key"
-			result.Failed++
-			result.Items = append(result.Items, item)
-			continue
-		}
-
-		proxyID, err := s.mapOrCreateProxy(ctx, input.SyncProxies, &proxies, src.Proxy, fmt.Sprintf("crs-%s", src.Name))
-		if err != nil {
-			item.Action = "failed"
-			item.Error = "proxy sync failed: " + err.Error()
+			item.Error = boundedCRSSyncItemError("missing api_key")
 			result.Failed++
 			result.Items = append(result.Items, item)
 			continue
@@ -935,22 +1470,36 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		}
 		extra["crs_account_id"] = src.ID
 		extra["crs_kind"] = src.Kind
-		extra["crs_synced_at"] = now
+		extra["crs_synced_at"] = syncedAt
 
 		existing, err := s.accountRepo.GetByCRSAccountID(ctx, src.ID)
 		if err != nil {
 			item.Action = "failed"
-			item.Error = "db lookup failed: " + err.Error()
+			item.Error = boundedCRSSyncItemError("db lookup failed: " + err.Error())
 			result.Failed++
 			result.Items = append(result.Items, item)
 			continue
 		}
+		proxyPlan := planCRSProxy(
+			input.SyncProxies,
+			proxies,
+			src.Proxy,
+			fmt.Sprintf("crs-%s", src.Name),
+		)
 
 		if existing == nil {
 			if !shouldCreateAccount(src.ID, selectedSet) {
 				item.Action = "skipped"
-				item.Error = "not selected"
+				item.Error = boundedCRSSyncItemError("not selected")
 				result.Skipped++
+				result.Items = append(result.Items, item)
+				continue
+			}
+			proxyID, err := s.resolveCRSProxyPlan(ctx, &proxies, proxyPlan)
+			if err != nil {
+				item.Action = "failed"
+				item.Error = boundedCRSSyncItemError("proxy sync failed: " + err.Error())
+				result.Failed++
 				result.Items = append(result.Items, item)
 				continue
 			}
@@ -968,7 +1517,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			}
 			if err := s.accountRepo.Create(ctx, account); err != nil {
 				item.Action = "failed"
-				item.Error = "create failed: " + err.Error()
+				item.Error = boundedCRSSyncItemError("create failed: " + err.Error())
 				result.Failed++
 				result.Items = append(result.Items, item)
 				continue
@@ -984,17 +1533,14 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		existing.Platform = PlatformGemini
 		existing.Type = AccountTypeAPIKey
 		existing.Credentials = mergeMap(existing.Credentials, credentials)
-		if proxyID != nil {
-			existing.ProxyID = proxyID
-		}
 		existing.Concurrency = 3
 		existing.Priority = clampPriority(src.Priority)
 		existing.Status = mapCRSStatus(src.IsActive, src.Status)
 		existing.Schedulable = src.Schedulable
 
-		if err := s.accountRepo.Update(ctx, existing); err != nil {
+		if err := s.updateExistingAccountWithProxy(ctx, input, existing, &proxies, proxyPlan); err != nil {
 			item.Action = "failed"
-			item.Error = "update failed: " + err.Error()
+			item.Error = boundedCRSSyncItemError("update failed: " + err.Error())
 			result.Failed++
 			result.Items = append(result.Items, item)
 			continue
@@ -1008,6 +1554,75 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 	return result, nil
 }
 
+func (s *CRSSyncService) updateExistingAccount(ctx context.Context, input SyncFromCRSInput, account *Account) error {
+	return s.updateExistingAccountWithProxy(ctx, input, account, nil, nil)
+}
+
+func (s *CRSSyncService) updateExistingAccountWithProxy(
+	ctx context.Context,
+	input SyncFromCRSInput,
+	account *Account,
+	cachedProxies *[]Proxy,
+	proxyPlan *crsProxyPlan,
+) error {
+	if account == nil {
+		return ErrAccountNilInput
+	}
+	guardSnapshot := account
+	if proxyPlan != nil {
+		snapshot := *account
+		if proxyPlan.resolvedID != nil {
+			proxyID := *proxyPlan.resolvedID
+			snapshot.ProxyID = &proxyID
+		} else {
+			pendingProxyID := crsUnknownProxyIDForGuard
+			snapshot.ProxyID = &pendingProxyID
+		}
+		guardSnapshot = &snapshot
+	}
+	request := AccountMutationGuardRequest{
+		Targets: []AccountMutationGuardTarget{{
+			AccountID:         account.ID,
+			ExpectedUpdatedAt: account.UpdatedAt,
+			After:             guardSnapshot,
+			GroupIDs:          append([]int64(nil), account.GroupIDs...),
+		}},
+		ActorUserID:             input.ActorAdminID,
+		ActorIsAdmin:            input.ActorAdminID > 0,
+		Intent:                  AccountMutationIntentAdmin,
+		ForceActiveEdit:         input.ForceActiveEdit,
+		Confirmed:               input.Confirmed,
+		Reason:                  input.Reason,
+		ExpectedListingVersion:  input.ExpectedVersion,
+		ExpectedListingVersions: input.ExpectedVersions,
+		OperationID:             input.OperationID,
+	}
+	mutate := func(mutationCtx context.Context) error {
+		if proxyPlan != nil {
+			proxyID, err := s.resolveCRSProxyPlan(mutationCtx, cachedProxies, proxyPlan)
+			if err != nil {
+				return fmt.Errorf("proxy sync failed: %w", err)
+			}
+			if proxyID != nil {
+				account.ProxyID = proxyID
+			}
+		}
+		return s.accountRepo.Update(mutationCtx, account)
+	}
+	if repo, ok := s.accountRepo.(AccountMutationGuardRepository); ok && repo != nil {
+		return repo.WithAccountMutationGuard(ctx, request, mutate)
+	}
+	if account.AccountShareModeListingID != nil ||
+		(account.ExternalPlacement != nil && account.ExternalPlacement.Target == AccountExternalPlacementRoom) {
+		return ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{
+			"account_id": strconv.FormatInt(account.ID, 10),
+		})
+	}
+	// Lightweight test/legacy repositories cannot contain the SQL room
+	// projection. Production accountRepository always implements the guard.
+	return mutate(ctx)
+}
+
 func mergeMap(existing map[string]any, updates map[string]any) map[string]any {
 	out := make(map[string]any, len(existing)+len(updates))
 	for k, v := range existing {
@@ -1019,9 +1634,9 @@ func mergeMap(existing map[string]any, updates map[string]any) map[string]any {
 	return out
 }
 
-func (s *CRSSyncService) mapOrCreateProxy(ctx context.Context, enabled bool, cached *[]Proxy, src *crsProxy, defaultName string) (*int64, error) {
+func planCRSProxy(enabled bool, cached []Proxy, src *crsProxy, defaultName string) *crsProxyPlan {
 	if !enabled || src == nil {
-		return nil, nil
+		return nil
 	}
 	protocol := strings.ToLower(strings.TrimSpace(src.Protocol))
 	switch protocol {
@@ -1036,40 +1651,59 @@ func (s *CRSSyncService) mapOrCreateProxy(ctx context.Context, enabled bool, cac
 	password := strings.TrimSpace(src.Password)
 
 	if protocol == "" || host == "" || port <= 0 {
-		return nil, nil
+		return nil
 	}
 	if protocol != "http" && protocol != "https" && protocol != "socks5" {
-		return nil, nil
+		return nil
 	}
 
 	// Find existing proxy (active only).
-	for _, p := range *cached {
+	for _, p := range cached {
 		if strings.EqualFold(p.Protocol, protocol) &&
 			p.Host == host &&
 			p.Port == port &&
 			p.Username == username &&
 			p.Password == password {
 			id := p.ID
-			return &id, nil
+			return &crsProxyPlan{resolvedID: &id}
 		}
 	}
 
-	// Create new proxy
-	proxy := &Proxy{
-		Name:     defaultProxyName(defaultName, protocol, host, port),
-		Protocol: protocol,
-		Host:     host,
-		Port:     port,
-		Username: username,
-		Password: password,
-		Status:   StatusActive,
+	return &crsProxyPlan{
+		pending: &Proxy{
+			Name:     defaultProxyName(defaultName, protocol, host, port),
+			Protocol: protocol,
+			Host:     host,
+			Port:     port,
+			Username: username,
+			Password: password,
+			Status:   StatusActive,
+		},
 	}
-	if err := s.proxyRepo.Create(ctx, proxy); err != nil {
+}
+
+func (s *CRSSyncService) resolveCRSProxyPlan(
+	ctx context.Context,
+	cached *[]Proxy,
+	plan *crsProxyPlan,
+) (*int64, error) {
+	if plan == nil {
+		return nil, nil
+	}
+	if plan.resolvedID != nil {
+		id := *plan.resolvedID
+		return &id, nil
+	}
+	if s.proxyRepo == nil || cached == nil || plan.pending == nil {
+		return nil, errors.New("proxy repository is not available")
+	}
+	if err := s.proxyRepo.Create(ctx, plan.pending); err != nil {
 		return nil, err
 	}
-
-	*cached = append(*cached, *proxy)
-	id := proxy.ID
+	*cached = append(*cached, *plan.pending)
+	id := plan.pending.ID
+	plan.resolvedID = &id
+	plan.pending = nil
 	return &id, nil
 }
 
@@ -1327,29 +1961,42 @@ func shouldCreateAccount(crsID string, selectedSet map[string]struct{}) bool {
 type PreviewFromCRSResult struct {
 	NewAccounts      []CRSPreviewAccount `json:"new_accounts"`
 	ExistingAccounts []CRSPreviewAccount `json:"existing_accounts"`
+	PreviewToken     string              `json:"preview_token"`
+	ExpiresAt        int64               `json:"expires_at"`
 }
 
 // CRSPreviewAccount represents a single account in the preview result.
 type CRSPreviewAccount struct {
-	CRSAccountID string `json:"crs_account_id"`
-	Kind         string `json:"kind"`
-	Name         string `json:"name"`
-	Platform     string `json:"platform"`
-	Type         string `json:"type"`
+	CRSAccountID            string                          `json:"crs_account_id"`
+	LocalAccountID          int64                           `json:"local_account_id,omitempty"`
+	Kind                    string                          `json:"kind"`
+	Name                    string                          `json:"name"`
+	Platform                string                          `json:"platform"`
+	Type                    string                          `json:"type"`
+	RequiresForceActiveEdit bool                            `json:"requires_force_active_edit"`
+	RoomBindings            []CRSAccountRoomBindingSnapshot `json:"room_bindings"`
 }
 
 // PreviewFromCRS connects to CRS, fetches all accounts, and classifies them
 // as new or existing by batch-querying local crs_account_id mappings.
 func (s *CRSSyncService) PreviewFromCRS(ctx context.Context, input SyncFromCRSInput) (*PreviewFromCRSResult, error) {
-	exported, err := s.fetchCRSExport(ctx, input.BaseURL, input.Username, input.Password)
+	if input.ActorAdminID <= 0 {
+		return nil, ErrCRSPreviewActorRequired
+	}
+	localSnapshots, existingByCRSID, err := s.loadValidatedCRSPreviewSnapshots(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	// Batch query all existing CRS account IDs
-	existingCRSIDs, err := s.accountRepo.ListCRSAccountIDs(ctx)
+	if _, err := s.crsPreviewSigningSecret(); err != nil {
+		return nil, err
+	}
+	connection, err := s.normalizeCRSConnection(input.BaseURL, input.Username, input.Password)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list existing CRS accounts: %w", err)
+		return nil, err
+	}
+	exported, err := s.fetchCRSExport(ctx, connection)
+	if err != nil {
+		return nil, err
 	}
 
 	result := &PreviewFromCRSResult{
@@ -1364,8 +2011,12 @@ func (s *CRSSyncService) PreviewFromCRS(ctx context.Context, input SyncFromCRSIn
 			Name:         defaultName(name, crsID),
 			Platform:     platform,
 			Type:         accountType,
+			RoomBindings: make([]CRSAccountRoomBindingSnapshot, 0),
 		}
-		if _, exists := existingCRSIDs[crsID]; exists {
+		if snapshot, exists := existingByCRSID[crsID]; exists {
+			preview.LocalAccountID = snapshot.LocalAccountID
+			preview.RoomBindings = append(preview.RoomBindings, snapshot.RoomBindings...)
+			preview.RequiresForceActiveEdit = len(preview.RoomBindings) > 0
 			result.ExistingAccounts = append(result.ExistingAccounts, preview)
 		} else {
 			result.NewAccounts = append(result.NewAccounts, preview)
@@ -1395,5 +2046,48 @@ func (s *CRSSyncService) PreviewFromCRS(ctx context.Context, input SyncFromCRSIn
 		classify(src.ID, src.Kind, src.Name, PlatformGemini, AccountTypeAPIKey)
 	}
 
+	sort.SliceStable(result.ExistingAccounts, func(i, j int) bool {
+		if result.ExistingAccounts[i].LocalAccountID == result.ExistingAccounts[j].LocalAccountID {
+			return result.ExistingAccounts[i].CRSAccountID < result.ExistingAccounts[j].CRSAccountID
+		}
+		return result.ExistingAccounts[i].LocalAccountID < result.ExistingAccounts[j].LocalAccountID
+	})
+	sort.SliceStable(result.NewAccounts, func(i, j int) bool {
+		return result.NewAccounts[i].CRSAccountID < result.NewAccounts[j].CRSAccountID
+	})
+	connectionHash, err := hashCRSConnection(connection)
+	if err != nil {
+		return nil, ErrCRSPreviewSigningUnavailable.WithMetadata(map[string]string{
+			"stage": "connection_hash",
+		}).WithCause(err)
+	}
+	exportHash, err := hashCRSExportAccounts(exported)
+	if err != nil {
+		if errors.Is(err, ErrCRSExportInvalid) {
+			return nil, err
+		}
+		return nil, ErrCRSPreviewSigningUnavailable.WithMetadata(map[string]string{
+			"stage": "export_hash",
+		}).WithCause(err)
+	}
+	localSnapshotHash, err := hashCRSPreviewValue(crsLocalSnapshotHashDomain, localSnapshots)
+	if err != nil {
+		return nil, ErrCRSPreviewSigningUnavailable.WithMetadata(map[string]string{
+			"stage": "local_snapshot_hash",
+		}).WithCause(err)
+	}
+	expiresAt := s.now().UTC().Add(crsPreviewTokenTTL).Unix()
+	result.PreviewToken, err = s.signCRSPreviewToken(crsPreviewTokenPayload{
+		Version:           crsPreviewTokenVersion,
+		ActorAdminID:      input.ActorAdminID,
+		ConnectionHash:    connectionHash,
+		ExportHash:        exportHash,
+		LocalSnapshotHash: localSnapshotHash,
+		ExpiresAt:         expiresAt,
+	})
+	if err != nil {
+		return nil, err
+	}
+	result.ExpiresAt = expiresAt
 	return result, nil
 }

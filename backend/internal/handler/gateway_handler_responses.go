@@ -22,6 +22,7 @@ import (
 // upstream, and converts responses back to Responses format.
 func (h *GatewayHandler) Responses(c *gin.Context) {
 	streamStarted := false
+	billingDispatchAttemptNo := 0
 
 	requestStart := time.Now()
 
@@ -167,8 +168,13 @@ routeLoop:
 		fs := NewFailoverState(h.maxAccountSwitches, false)
 
 		for {
-			selection, err := h.gatewayService.SelectAccountWithLoadAwareness(c.Request.Context(), currentAPIKey.GroupID, sessionHash, reqModel, fs.FailedAccountIDs, "", int64(0))
+			selectionCtx := openAIAccountShareModeRequestContext(c, currentAPIKey)
+			selection, err := h.gatewayService.SelectAccountWithLoadAwareness(selectionCtx, currentAPIKey.GroupID, sessionHash, reqModel, fs.FailedAccountIDs, "", int64(0))
 			if err != nil {
+				if errors.Is(err, service.ErrAccountShareModeSelection) {
+					h.responsesErrorResponse(c, http.StatusServiceUnavailable, "account_share_unavailable", "共享账号暂时不可用，请稍后重试")
+					return
+				}
 				if len(fs.FailedAccountIDs) == 0 {
 					if routeCursor.switchToNext(apiKey.ID, "account_select_failed", reqLog, zap.Error(err)) {
 						continue routeLoop
@@ -232,7 +238,7 @@ routeLoop:
 					return
 				}
 			}
-			accountReleaseFunc = wrapReleaseOnDone(c.Request.Context(), accountReleaseFunc)
+			accountReleaseFunc = wrapAccountSelectionReleaseOnDone(c.Request.Context(), selection, accountReleaseFunc)
 
 			// 5. Forward request
 			writerSizeBeforeForward := c.Writer.Size()
@@ -240,8 +246,89 @@ routeLoop:
 			if channelMapping.Mapped {
 				forwardBody = h.gatewayService.ReplaceModelInBody(body, channelMapping.MappedModel)
 			}
-			result, err := h.gatewayService.ForwardAsResponses(c.Request.Context(), c, account, forwardBody, parsedReq)
+			forwardCtx, cancelForward := bindAccountSelectionForwardContext(selectionCtx, selection)
+			routedModel := reqModel
+			if channelMapping.Mapped {
+				routedModel = channelMapping.MappedModel
+			}
+			routedModel = account.GetMappedModel(routedModel)
+			requestPayloadHash := service.HashUsageRequestPayload(body)
+			forwardCtx, err = beginAccountShareBillingDispatch(
+				forwardCtx,
+				h.gatewayService,
+				selection,
+				&billingDispatchAttemptNo,
+				service.AccountShareBillingDispatchInput{
+					APIKey:             currentAPIKey,
+					User:               currentAPIKey.User,
+					Subscription:       currentSubscription,
+					RequestedModel:     reqModel,
+					RoutedModel:        routedModel,
+					InboundEndpoint:    GetInboundEndpoint(c),
+					UpstreamEndpoint:   GetUpstreamEndpoint(c, account.Platform),
+					RequestType:        accountShareBillingRequestType(reqStream),
+					RequestPayloadHash: requestPayloadHash,
+					ChannelUsageFields: channelMapping.ToUsageFields(reqModel, routedModel),
+				},
+			)
+			if err != nil {
+				cancelForward()
+				if accountReleaseFunc != nil {
+					accountReleaseFunc()
+				}
+				reqLog.Error("gateway.responses.billing_dispatch_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+				h.responsesErrorResponse(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable; no upstream request was sent")
+				return
+			}
+			result, err := h.gatewayService.ForwardAsResponses(forwardCtx, c, account, forwardBody, parsedReq)
+			cancelForward()
 
+			userAgent := c.GetHeader("User-Agent")
+			clientIP := ip.GetClientIP(c)
+			inboundEndpoint := GetInboundEndpoint(c)
+			upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
+			recordUsageResult := func(result *service.ForwardResult) {
+				if result == nil {
+					return
+				}
+				h.submitUsageRecordTask(func(ctx context.Context) {
+					usageCtx := service.WithAccountShareModeRequestFromContext(ctx, forwardCtx)
+					if err := h.gatewayService.RecordUsage(usageCtx, &service.RecordUsageInput{
+						Result:             result,
+						APIKey:             currentAPIKey,
+						User:               currentAPIKey.User,
+						Account:            account,
+						Subscription:       currentSubscription,
+						InboundEndpoint:    inboundEndpoint,
+						UpstreamEndpoint:   upstreamEndpoint,
+						UserAgent:          userAgent,
+						IPAddress:          clientIP,
+						RequestPayloadHash: requestPayloadHash,
+						APIKeyService:      h.apiKeyService,
+						ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
+					}); err != nil {
+						reqLog.Error("gateway.responses.record_usage_failed",
+							zap.Int64("account_id", account.ID),
+							zap.Error(err),
+						)
+					}
+				})
+			}
+			hasBillableUsage := result != nil &&
+				(service.IsBillableStreamUsageError(err) || service.ForwardResultHasBillableUsage(result))
+			if err != nil && hasBillableUsage {
+				recordUsageResult(result)
+			}
+			if finalizeErr := completeAccountShareBillingDispatchWithoutUsage(forwardCtx, err, hasBillableUsage, reqStream); finalizeErr != nil {
+				if accountReleaseFunc != nil {
+					accountReleaseFunc()
+				}
+				reqLog.Error("gateway.responses.billing_dispatch_finalize_failed", zap.Int64("account_id", account.ID), zap.Error(finalizeErr))
+				if c.Writer.Size() == writerSizeBeforeForward {
+					h.responsesErrorResponse(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable")
+				}
+				return
+			}
 			if accountReleaseFunc != nil {
 				accountReleaseFunc()
 			}
@@ -281,33 +368,7 @@ routeLoop:
 			routeCursor.recordSuccess(apiKey.ID)
 
 			// 6. Record usage
-			userAgent := c.GetHeader("User-Agent")
-			clientIP := ip.GetClientIP(c)
-			requestPayloadHash := service.HashUsageRequestPayload(body)
-			inboundEndpoint := GetInboundEndpoint(c)
-			upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
-
-			h.submitUsageRecordTask(func(ctx context.Context) {
-				if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
-					Result:             result,
-					APIKey:             currentAPIKey,
-					User:               currentAPIKey.User,
-					Account:            account,
-					Subscription:       currentSubscription,
-					InboundEndpoint:    inboundEndpoint,
-					UpstreamEndpoint:   upstreamEndpoint,
-					UserAgent:          userAgent,
-					IPAddress:          clientIP,
-					RequestPayloadHash: requestPayloadHash,
-					APIKeyService:      h.apiKeyService,
-					ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
-				}); err != nil {
-					reqLog.Error("gateway.responses.record_usage_failed",
-						zap.Int64("account_id", account.ID),
-						zap.Error(err),
-					)
-				}
-			})
+			recordUsageResult(result)
 			return
 		}
 	}

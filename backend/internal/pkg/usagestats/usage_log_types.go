@@ -147,8 +147,9 @@ type EndpointStat struct {
 	Endpoint    string  `json:"endpoint"`
 	Requests    int64   `json:"requests"`
 	TotalTokens int64   `json:"total_tokens"`
-	Cost        float64 `json:"cost"`        // 标准计费
-	ActualCost  float64 `json:"actual_cost"` // 实际扣除
+	Cost        float64 `json:"cost"`         // 标准计费
+	ActualCost  float64 `json:"actual_cost"`  // 实际扣除
+	AccountCost float64 `json:"account_cost"` // 账号成本
 }
 
 // GroupUsageSummary represents today's and cumulative cost for a single group.
@@ -337,15 +338,18 @@ type BatchAPIKeyUsageStats struct {
 
 // AccountUsageHistory represents daily usage history for an account
 type AccountUsageHistory struct {
-	Date            string  `json:"date"`
-	Label           string  `json:"label"`
-	Requests        int64   `json:"requests"`
-	Tokens          int64   `json:"tokens"`
-	Cost            float64 `json:"cost"`              // 标准计费（total_cost）
-	ActualCost      float64 `json:"actual_cost"`       // 账号口径费用（total_cost * account_rate_multiplier）
-	RequestUserCost float64 `json:"request_user_cost"` // 请求扣费（actual_cost，受分组倍率影响）
-	HourlyCost      float64 `json:"hourly_cost"`       // 账号模式小时费净额（预扣 - 退回）
-	UserCost        float64 `json:"user_cost"`         // 用户扣费合计（请求扣费 + 小时费净额）
+	Date              string  `json:"date"`
+	Label             string  `json:"label"`
+	Requests          int64   `json:"requests"`
+	Tokens            int64   `json:"tokens"`
+	Cost              float64 `json:"cost"`                // 标准计费（total_cost）
+	ActualCost        float64 `json:"actual_cost"`         // 账号口径费用（total_cost * account_rate_multiplier）
+	RequestUserCost   float64 `json:"request_user_cost"`   // 请求扣费（actual_cost，受分组倍率影响）
+	HourlyCost        float64 `json:"hourly_cost"`         // 账号模式小时费净额（预扣 - 退回）
+	UserCost          float64 `json:"user_cost"`           // 用户扣费合计（请求扣费 + 小时费净额）
+	ShareConsumerCost float64 `json:"share_consumer_cost"` // 外部消费者参与分成的结算扣费
+	OwnerIncome       float64 `json:"owner_income"`        // 号主结算收益（历史快照，含退款冲减）
+	OwnerNetIncome    float64 `json:"owner_net_income"`    // 号主账面净收益（号主收益 - 账号成本）
 }
 
 // AccountUsageSummary represents summary statistics for an account
@@ -356,6 +360,9 @@ type AccountUsageSummary struct {
 	TotalUserCost           float64 `json:"total_user_cost"`         // 用户扣费合计
 	TotalRequestUserCost    float64 `json:"total_request_user_cost"` // 请求扣费合计
 	TotalHourlyCost         float64 `json:"total_hourly_cost"`       // 小时费净额合计
+	TotalShareConsumerCost  float64 `json:"total_share_consumer_cost"`
+	TotalOwnerIncome        float64 `json:"total_owner_income"`
+	TotalOwnerNetIncome     float64 `json:"total_owner_net_income"`
 	TotalStandardCost       float64 `json:"total_standard_cost"`
 	TotalRequests           int64   `json:"total_requests"`
 	TotalTokens             int64   `json:"total_tokens"`
@@ -372,6 +379,8 @@ type AccountUsageSummary struct {
 		RequestUserCost float64 `json:"request_user_cost"`
 		HourlyCost      float64 `json:"hourly_cost"`
 		UserCost        float64 `json:"user_cost"`
+		OwnerIncome     float64 `json:"owner_income"`
+		OwnerNetIncome  float64 `json:"owner_net_income"`
 		Requests        int64   `json:"requests"`
 		Tokens          int64   `json:"tokens"`
 	} `json:"today"`
