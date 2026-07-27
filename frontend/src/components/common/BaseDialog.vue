@@ -1,5 +1,5 @@
 <template>
-  <Teleport to="body">
+  <Teleport to="#dialog-root">
     <Transition name="modal">
       <div
         v-if="show"

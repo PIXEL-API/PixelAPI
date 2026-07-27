@@ -203,6 +203,9 @@ describe('Select keyboard accessibility', () => {
   })
 
   it('moves Tab from its teleported search input relative to its owning dialog trigger', async () => {
+    const dialogRoot = document.createElement('div')
+    dialogRoot.id = 'dialog-root'
+    document.body.appendChild(dialogRoot)
     const DialogWithSelect = defineComponent({
       setup() {
         return () => h(

@@ -2644,6 +2644,25 @@ func expectAccountShareMembershipBindingInsert(
 	generation int64,
 	queryErr error,
 ) {
+	mock.ExpectQuery("SELECT\\s+room_account.listing_id,\\s+room_account.account_id").
+		WithArgs(listingID, accountID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"listing_id", "account_id", "owner_user_id", "name",
+			"platform", "account_level", "concurrency", "created_at",
+		}).AddRow(
+			listingID,
+			accountID,
+			int64(42),
+			"room-account",
+			service.PlatformOpenAI,
+			service.AccountLevelPlus,
+			20,
+			time.Now().UTC(),
+		))
+	mock.ExpectQuery("SELECT id, listing_id, account_id_snapshot").
+		WithArgs(pq.Array([]int64{accountID})).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "listing_id", "account_id_snapshot"}).
+			AddRow(accountID+100000, listingID, accountID))
 	expectation := mock.ExpectQuery("WITH binding_source AS MATERIALIZED").
 		WithArgs(
 			membershipID,

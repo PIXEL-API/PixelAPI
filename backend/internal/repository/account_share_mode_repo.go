@@ -3034,6 +3034,81 @@ func applyAccountShareMembershipRuntimeTerms(
 	return nil
 }
 
+func ensureAccountShareMembershipBindingAssignmentInTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	listingID int64,
+	accountID int64,
+) error {
+	snapshot := accountShareRoomAssignmentSnapshot{}
+	var projectionCreatedAt time.Time
+	err := tx.QueryRowContext(ctx, `
+		SELECT
+			room_account.listing_id,
+			room_account.account_id,
+			room_account.owner_user_id,
+			account.name,
+			account.platform,
+			account.account_level,
+			account.concurrency,
+			room_account.created_at
+		FROM account_share_room_accounts room_account
+		JOIN accounts account
+			ON account.id = room_account.account_id
+			AND account.owner_user_id = room_account.owner_user_id
+			AND account.deleted_at IS NULL
+		WHERE room_account.listing_id = $1
+			AND room_account.account_id = $2
+			AND room_account.state = 'active'
+		FOR UPDATE OF room_account, account
+	`, listingID, accountID).Scan(
+		&snapshot.ListingID,
+		&snapshot.AccountID,
+		&snapshot.OwnerUserID,
+		&snapshot.AccountName,
+		&snapshot.Platform,
+		&snapshot.AccountLevel,
+		&snapshot.ConfiguredConcurrency,
+		&projectionCreatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf(
+			"account share membership cannot bind account %d: active room projection is missing",
+			accountID,
+		)
+	}
+	if err != nil {
+		return err
+	}
+	if projectionCreatedAt.IsZero() {
+		return fmt.Errorf(
+			"account share room account %d in listing %d has no trustworthy projection timestamp",
+			accountID,
+			listingID,
+		)
+	}
+	snapshot.Platform = strings.ToLower(strings.TrimSpace(snapshot.Platform))
+	snapshot.AccountLevel = service.NormalizeAccountLevel(snapshot.AccountLevel)
+
+	assignments, err := lockAccountShareRoomOpenAssignmentsInTx(ctx, tx, []int64{accountID})
+	if err != nil {
+		return err
+	}
+	if assignment, hasAssignment := assignments[accountID]; hasAssignment {
+		if assignment.ListingID != listingID {
+			return service.ErrAccountShareRoomAccountConflict
+		}
+		return nil
+	}
+	_, err = insertBackfilledAccountShareRoomAssignmentInTx(
+		ctx,
+		tx,
+		snapshot,
+		projectionCreatedAt,
+	)
+	return err
+}
+
 func (r *accountShareModeRepository) createAccountShareMembershipBindingInTx(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -3052,6 +3127,14 @@ func (r *accountShareModeRepository) createAccountShareMembershipBindingInTx(
 		membershipID <= 0 || listingID <= 0 || accountID <= 0 || listingRevisionID <= 0 ||
 		!accountShareBindingActorRoleValid(boundByRole) || bindReason == "" || boundAt.IsZero() {
 		return 0, 0, fmt.Errorf("invalid account-share membership binding input")
+	}
+	if err := ensureAccountShareMembershipBindingAssignmentInTx(
+		ctx,
+		tx,
+		listingID,
+		accountID,
+	); err != nil {
+		return 0, 0, err
 	}
 
 	var bindingID, routingGeneration int64
@@ -3542,8 +3625,8 @@ func (r *accountShareModeRepository) JoinListing(ctx context.Context, input serv
 			terms_snapshot, snapshot_quality, created_at, updated_at
 		)
 		VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, NULL, $11, $12, $13, 0, 0, NULL, NULL, NULL,
-			CASE WHEN $5 = 'queued' THEN NOW() + INTERVAL '2 hours' ELSE NULL END,
+			$1, $2, $3, $4, $5::varchar(20), $6, $7, $8, $9, $10, NULL, NULL, $11, $12, $13, 0, 0, NULL, NULL, NULL,
+			CASE WHEN $5::varchar(20) = 'queued'::varchar(20) THEN NOW() + INTERVAL '2 hours' ELSE NULL END,
 			$14, $15, $16, $17, $18, $19, $20, $21, $22::jsonb, $23, NOW(), NOW()
 		)
 		RETURNING id, listing_id, account_id, consumer_user_id, api_key_id, status, queue_rank,

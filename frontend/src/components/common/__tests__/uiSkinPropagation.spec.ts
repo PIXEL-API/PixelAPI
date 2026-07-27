@@ -25,6 +25,9 @@ describe('UI skin propagation through Teleport', () => {
   })
 
   it('marks a teleported dialog with the route skin', async () => {
+    const dialogRoot = document.createElement('div')
+    dialogRoot.id = 'dialog-root'
+    document.body.appendChild(dialogRoot)
     const wrapper = mount(withV2Skin(BaseDialog, { show: true, title: 'Dialog' }), {
       attachTo: document.body,
       global: { stubs: { Icon: true } }

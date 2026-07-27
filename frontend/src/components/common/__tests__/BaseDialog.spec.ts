@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, type VueWrapper } from '@vue/test-utils'
 import { h, nextTick } from 'vue'
 
@@ -9,6 +9,14 @@ vi.mock('vue-i18n', () => ({
 }))
 
 const mountedWrappers: VueWrapper[] = []
+
+const ensureDialogRoot = () => {
+  const dialogRoot = document.createElement('div')
+  dialogRoot.id = 'dialog-root'
+  dialogRoot.className = 'notranslate'
+  dialogRoot.translate = false
+  document.body.appendChild(dialogRoot)
+}
 
 const mountDialog = (
   props: {
@@ -48,6 +56,10 @@ const dispatchTab = (shiftKey = false) => {
 }
 
 describe('BaseDialog focus management', () => {
+  beforeEach(() => {
+    ensureDialogRoot()
+  })
+
   afterEach(() => {
     mountedWrappers.splice(0).reverse().forEach((wrapper) => wrapper.unmount())
     document.body.innerHTML = ''

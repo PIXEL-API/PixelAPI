@@ -42,6 +42,73 @@ func TestAccountShareRoomRepresentativeJoinUsesIndexedPlacementCandidates(t *tes
 	}
 }
 
+func TestEnsureAccountShareMembershipBindingAssignmentBackfillsLegacyProjection(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() {
+		_ = db.Close()
+	}()
+
+	listingID := int64(700)
+	accountID := int64(10)
+	ownerUserID := int64(42)
+	projectionCreatedAt := time.Date(2026, 7, 20, 9, 30, 0, 0, time.UTC)
+
+	mock.ExpectBegin()
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	mock.ExpectQuery("SELECT\\s+room_account.listing_id,\\s+room_account.account_id").
+		WithArgs(listingID, accountID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"listing_id", "account_id", "owner_user_id", "name",
+			"platform", "account_level", "concurrency", "created_at",
+		}).AddRow(
+			listingID,
+			accountID,
+			ownerUserID,
+			"legacy-room-account",
+			service.PlatformOpenAI,
+			service.AccountLevelPlus,
+			20,
+			projectionCreatedAt,
+		))
+	mock.ExpectQuery("SELECT id, listing_id, account_id_snapshot").
+		WithArgs(pq.Array([]int64{accountID})).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "listing_id", "account_id_snapshot"}))
+	mock.ExpectQuery("INSERT INTO account_share_room_account_assignments").
+		WithArgs(
+			listingID,
+			accountID,
+			ownerUserID,
+			"legacy-room-account",
+			service.PlatformOpenAI,
+			service.AccountLevelPlus,
+			20,
+			projectionCreatedAt,
+		).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(900)))
+
+	if err := ensureAccountShareMembershipBindingAssignmentInTx(
+		context.Background(),
+		tx,
+		listingID,
+		accountID,
+	); err != nil {
+		t.Fatalf("ensure binding assignment: %v", err)
+	}
+	mock.ExpectRollback()
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func TestAccountShareListingSelectSQLPreservesViewerMembershipLifecycle(t *testing.T) {
 	normalized := strings.ToLower(strings.Join(strings.Fields(accountShareListingSelectSQL()), " "))
 	currentStart := strings.Index(normalized, "select m.id, m.consumer_user_id")
@@ -1931,7 +1998,7 @@ func TestAccountShareModeRepositoryJoinListingOwnerSelfUseHasNoSeatPrepay(t *tes
 	mock.ExpectQuery("SELECT EXISTS").
 		WithArgs(accountID, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
-	mock.ExpectQuery("INSERT INTO account_share_memberships").
+	mock.ExpectQuery("(?s)INSERT INTO account_share_memberships.*\\$5::varchar\\(20\\).*CASE WHEN \\$5::varchar\\(20\\) = 'queued'::varchar\\(20\\)").
 		WithArgs(
 			listingID,
 			accountID,
@@ -7921,6 +7988,26 @@ func expectAccountShareMembershipBinding(
 	bindReason string,
 	routingGeneration int64,
 ) {
+	accountIDs := []int64{accountID}
+	mock.ExpectQuery("SELECT\\s+room_account.listing_id,\\s+room_account.account_id").
+		WithArgs(listingID, accountID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"listing_id", "account_id", "owner_user_id", "name",
+			"platform", "account_level", "concurrency", "created_at",
+		}).AddRow(
+			listingID,
+			accountID,
+			int64(42),
+			"room-account",
+			service.PlatformOpenAI,
+			service.AccountLevelPlus,
+			20,
+			time.Now().UTC(),
+		))
+	mock.ExpectQuery("SELECT id, listing_id, account_id_snapshot").
+		WithArgs(pq.Array(accountIDs)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "listing_id", "account_id_snapshot"}).
+			AddRow(accountID+100000, listingID, accountID))
 	mock.ExpectQuery("WITH binding_source AS MATERIALIZED").
 		WithArgs(
 			membershipID,
