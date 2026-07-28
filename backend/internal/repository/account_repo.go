@@ -60,6 +60,7 @@ type accountRepository struct {
 var _ service.AccountDeletionGuardRepository = (*accountRepository)(nil)
 var _ service.AccountMutationGuardRepository = (*accountRepository)(nil)
 var _ service.CRSPreviewSnapshotRepository = (*accountRepository)(nil)
+var _ service.GrokOAuthReconcileCandidatePager = (*accountRepository)(nil)
 
 var schedulerNeutralExtraKeyPrefixes = []string{
 	"codex_primary_",
@@ -2964,6 +2965,73 @@ func (r *accountRepository) ListOAuthRefreshCandidates(ctx context.Context, refr
 	return out, nil
 }
 
+func (r *accountRepository) ListGrokOAuthReconcileCandidatePage(
+	ctx context.Context,
+	afterID int64,
+	limit int,
+) (*service.GrokOAuthReconcileCandidatePage, error) {
+	if r.sql == nil {
+		return nil, errors.New("account repository SQL executor not configured")
+	}
+	if afterID < 0 || limit <= 0 {
+		return nil, errors.New("invalid Grok OAuth reconciliation cursor page")
+	}
+
+	rows, err := r.sql.QueryContext(ctx, `
+		SELECT id
+		FROM accounts
+		WHERE deleted_at IS NULL
+			AND status = $1
+			AND platform = $2
+			AND type = $3
+			AND id > $4
+		ORDER BY id ASC
+		LIMIT $5
+	`, service.StatusActive, service.PlatformGrok, service.AccountTypeOAuth, afterID, limit+1)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	ids := make([]int64, 0, limit+1)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	page := &service.GrokOAuthReconcileCandidatePage{}
+	if len(ids) == 0 {
+		page.Accounts = []service.Account{}
+		return page, nil
+	}
+	if len(ids) > limit {
+		page.HasMore = true
+		ids = ids[:limit]
+		page.NextAfterID = ids[len(ids)-1]
+	}
+
+	accounts, err := r.GetByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	page.Accounts = make([]service.Account, 0, len(accounts))
+	for _, account := range accounts {
+		if account != nil {
+			page.Accounts = append(page.Accounts, *account)
+		}
+	}
+	sort.Slice(page.Accounts, func(i, j int) bool {
+		return page.Accounts[i].ID < page.Accounts[j].ID
+	})
+	return page, nil
+}
+
 func buildOAuthRefreshCandidatesQuery(refreshWindow time.Duration) (string, []any) {
 	refreshWindowSeconds := int64(refreshWindow / time.Second)
 	if refreshWindowSeconds < 0 {
@@ -3133,21 +3201,27 @@ func (r *accountRepository) SetGrokCredentialErrorIfMatch(
 	result, err := r.sql.ExecContext(ctx, `
 		WITH updated AS (
 			UPDATE accounts AS a
-			SET status = $1, error_message = $2, schedulable = FALSE, updated_at = NOW()
+			SET status = $1,
+				error_message = $2,
+				error_since = COALESCE(a.error_since, NOW()),
+				schedulable = FALSE,
+				temp_unschedulable_until = NULL,
+				temp_unschedulable_reason = NULL,
+				updated_at = NOW()
 			WHERE a.id = $3
 				AND a.deleted_at IS NULL
 				AND a.status = $4
 				AND a.platform = $5
-				AND a.type = $6
+				AND a.type IN ($6, $7)
 				AND a.schedulable IS TRUE
-				AND a.credentials = $7::jsonb
-				AND a.proxy_id IS NOT DISTINCT FROM $8
+				AND a.credentials = $8::jsonb
+				AND a.proxy_id IS NOT DISTINCT FROM $9
 			RETURNING a.id
 		)
 		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
-		SELECT $9, updated.id, NULL, NULL FROM updated
+		SELECT $10, updated.id, NULL, NULL FROM updated
 	`, service.StatusError, errorMsg, id, service.StatusActive, service.PlatformGrok,
-		service.AccountTypeOAuth, snapshot.CredentialsJSON, snapshot.ProxyID,
+		service.AccountTypeOAuth, service.AccountTypeAPIKey, snapshot.CredentialsJSON, snapshot.ProxyID,
 		service.SchedulerOutboxEventAccountChanged)
 	if err != nil {
 		return false, err

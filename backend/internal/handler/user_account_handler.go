@@ -757,7 +757,7 @@ func (h *UserAccountHandler) executeUserSetPublicShareTaskItem(ctx context.Conte
 
 func (h *UserAccountHandler) buildAccountResponseWithRuntime(ctx context.Context, account *service.Account) userAccountWithRuntime {
 	item := userAccountWithRuntime{
-		Account: dto.AccountFromService(account),
+		Account: dto.AccountFromServiceForUser(account),
 	}
 	if account == nil {
 		return item
@@ -880,7 +880,7 @@ func (h *UserAccountHandler) buildAccountListResponseWithRuntime(ctx context.Con
 	for i := range accounts {
 		acc := &accounts[i]
 		item := userAccountWithRuntime{
-			Account:            dto.AccountFromService(acc),
+			Account:            dto.AccountFromServiceForUser(acc),
 			CurrentConcurrency: concurrencyCounts[acc.ID],
 		}
 		if cost, ok := windowCosts[acc.ID]; ok {

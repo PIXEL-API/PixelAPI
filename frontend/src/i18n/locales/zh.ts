@@ -5510,6 +5510,54 @@ export default {
       interceptWarmupRequests: "拦截预热请求",
       interceptWarmupRequestsDesc:
         "启用后，标题生成等预热请求将返回 mock 响应，不消耗上游 token",
+      headerOverride: {
+        title: "请求头覆写",
+        hint: "转发时用配置值覆盖同名请求头（不区分大小写）",
+        info:
+          "仅对本账号的出站请求生效：配置的请求头会在转发前覆盖客户端/网关生成的同名头。认证头（authorization、x-api-key）与连接控制头不允许覆写。",
+        namePlaceholder: "请求头名称（如 user-agent）",
+        valuePlaceholder: "覆写值（留空表示不覆写）",
+        addRow: "添加请求头",
+        importJson: "JSON 导入",
+        importJsonApply: "解析并填入",
+        importJsonCancel: "取消",
+        importJsonHint:
+          "粘贴扁平 JSON 对象（请求头名 → 值），解析后将整体替换当前列表。",
+        importJsonInvalid:
+          'JSON 格式不正确：需要"请求头名 → 字符串值"的扁平对象',
+        copyJson: "复制为 JSON",
+        emptyValueHint: "值留空的行不会参与覆盖，仅作为待填写的占位。",
+        bulkDisableHint: "保存后将关闭所选账号的请求头覆写并清空已有配置。",
+        bulkReplaceHint:
+          "保存后将用下方配置整体替换所选账号已有的请求头覆写配置。",
+        bulkEmptyRows:
+          "请至少添加一行请求头再保存；如需清空已有配置，请关闭上方开关。",
+        invalidName:
+          "请求头名称格式不正确（仅允许字母、数字和 !#$%&'*+-.^_`|~ 字符）",
+        blockedName:
+          "该请求头不允许覆写（认证头与连接控制头由系统管理）",
+        duplicateName: "存在重复的请求头名称（匹配不区分大小写）",
+        invalidValue:
+          "请求头值不合法（不允许控制字符，长度不超过 8192）",
+        tooManyEntries: "请求头覆写条目过多（最多 64 条）",
+      },
+      grokCustomBaseUrl: {
+        title: "自定义上游地址",
+        hint:
+          "开启后账号流量（对话/媒体/探测）改发指定地址；OAuth 授权与令牌刷新不受影响，仍走官方端点。",
+        placeholder: "https://relay.example.com/v1",
+        required: "开启自定义上游地址后必须填写地址",
+        invalid: "上游地址格式不正确（需为 http(s):// 开头的完整地址）",
+        presets: {
+          cli: "Grok Build CLI",
+          official: "官方 API",
+        },
+      },
+      grokClientToolCache: {
+        title: "客户端工具缓存（可能改变自动工具选择）",
+        hint:
+          "仅对已识别为 Free 的 Grok OAuth 账号生效，默认会为 Codex、Trae 等客户端函数工具请求启用上游提示缓存；如不接受自动工具选择行为，可关闭此开关退出。",
+      },
       autoPauseOnExpired: "过期自动暂停调度",
       autoPauseOnExpiredDesc: "启用后，账号过期将自动暂停调度",
       // Quota control (Anthropic OAuth/SetupToken only)

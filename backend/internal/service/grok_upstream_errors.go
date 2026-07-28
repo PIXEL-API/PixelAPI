@@ -1,9 +1,11 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // isGrokContentPolicyRejection identifies request-scoped safety refusals.
@@ -169,9 +171,46 @@ func grokContentPolicyMessage(value string) bool {
 	return false
 }
 
+func grokContentPolicyClientMessage(responseBody []byte) string {
+	message := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(responseBody)))
+	if message == "" {
+		return "Request blocked by upstream content policy"
+	}
+	return message
+}
+
 func (s *OpenAIGatewayService) shouldFailoverGrokUpstreamError(statusCode int, responseBody []byte) bool {
 	if isGrokContentPolicyRejection(statusCode, responseBody) {
 		return false
 	}
 	return s.shouldFailoverUpstreamError(statusCode)
+}
+
+// applyGrokForbiddenPolicy applies account-specific temporary unschedulable
+// rules while retaining Pixel's credential-version CAS for OAuth accounts.
+func (s *OpenAIGatewayService) applyGrokForbiddenPolicy(ctx context.Context, account *Account, responseBody []byte) bool {
+	if s == nil || account == nil || !account.IsTempUnschedulableEnabled() {
+		return false
+	}
+	body := responseBody
+	if len(body) > tempUnschedBodyMaxBytes {
+		body = body[:tempUnschedBodyMaxBytes]
+	}
+	bodyLower := strings.ToLower(string(body))
+	for _, rule := range account.GetTempUnschedulableRules() {
+		if rule.ErrorCode != http.StatusForbidden || rule.DurationMinutes <= 0 {
+			continue
+		}
+		if matchTempUnschedKeyword(bodyLower, rule.Keywords) == "" {
+			continue
+		}
+		s.tempUnscheduleGrokCredentialIfMatch(
+			ctx,
+			account,
+			time.Duration(rule.DurationMinutes)*time.Minute,
+			"grok configured forbidden rule",
+		)
+		return true
+	}
+	return false
 }

@@ -5550,6 +5550,56 @@ export default {
       interceptWarmupRequests: "Intercept Warmup Requests",
       interceptWarmupRequestsDesc:
         "When enabled, warmup requests like title generation will return mock responses without consuming upstream tokens",
+      headerOverride: {
+        title: "Header Override",
+        hint: "Override same-named request headers on forwarding (case-insensitive)",
+        info:
+          "Applies to outbound requests of this account only: configured headers override client/gateway-generated headers of the same name before forwarding. Auth headers (authorization, x-api-key) and connection-control headers cannot be overridden.",
+        namePlaceholder: "Header name (e.g. user-agent)",
+        valuePlaceholder: "Override value (leave empty to skip)",
+        addRow: "Add Header",
+        importJson: "Import JSON",
+        importJsonApply: "Parse & Fill",
+        importJsonCancel: "Cancel",
+        importJsonHint:
+          "Paste a flat JSON object (header name → value). Parsing replaces the current rows.",
+        importJsonInvalid:
+          "Invalid JSON: expected a flat object of header name → string value",
+        copyJson: "Copy as JSON",
+        emptyValueHint:
+          "Rows with an empty value are placeholders and do not override anything.",
+        bulkDisableHint:
+          "Saving will disable header override and clear existing configuration on the selected accounts.",
+        bulkReplaceHint:
+          "Saving will replace the existing header override configuration on all selected accounts with the rows below.",
+        bulkEmptyRows:
+          "Add at least one header row before saving, or turn the toggle off to clear existing configuration.",
+        invalidName:
+          "Invalid header name (only letters, digits and !#$%&'*+-.^_`|~ are allowed)",
+        blockedName:
+          "This header cannot be overridden (auth and connection-control headers are managed by the system)",
+        duplicateName: "Duplicate header name (matching is case-insensitive)",
+        invalidValue:
+          "Invalid header value (control characters are not allowed; max length 8192)",
+        tooManyEntries: "Too many header override entries (max 64)",
+      },
+      grokCustomBaseUrl: {
+        title: "Custom Upstream URL",
+        hint:
+          "When enabled, account traffic (chat/media/probes) is forwarded to the specified address. OAuth authorization and token refresh are unaffected and stay on the official endpoints.",
+        placeholder: "https://relay.example.com/v1",
+        required: "An address is required when Custom Upstream URL is enabled",
+        invalid: "Invalid upstream address (must be a full http(s):// URL)",
+        presets: {
+          cli: "Grok Build CLI",
+          official: "Official API",
+        },
+      },
+      grokClientToolCache: {
+        title: "Client Tool Cache (May Change Automatic Tool Selection)",
+        hint:
+          "For detected Grok Free OAuth accounts, this is enabled by default for client function tools such as Codex and Trae. Turn it off to opt out if the automatic tool-selection behavior is not acceptable.",
+      },
       autoPauseOnExpired: "Auto Pause On Expired",
       autoPauseOnExpiredDesc:
         "When enabled, the account will auto pause scheduling after it expires",

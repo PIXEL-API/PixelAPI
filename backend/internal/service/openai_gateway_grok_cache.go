@@ -21,7 +21,32 @@ const (
 	grokClientToolCacheOptInExtraKey = "grok_client_tool_cache_enabled"
 	grokFreeRolling24hTokenLimit     = int64(2_000_000)
 	grokBillingSnapshotCacheExtraKey = "grok_billing_snapshot"
+	openCodeSessionAffinityHeader    = "X-Session-Affinity"
+	openCodeSessionIDHeader          = "X-Session-Id"
+	openCodeNativeSessionHeader      = "X-OpenCode-Session"
+	codeBuddyConversationHeader      = "X-Conversation-ID"
 )
+
+var explicitOpenAIHeaderSessionNames = []string{
+	"session_id",
+	"conversation_id",
+	openCodeSessionAffinityHeader,
+	openCodeSessionIDHeader,
+	openCodeNativeSessionHeader,
+	codeBuddyConversationHeader,
+}
+
+func explicitOpenAIHeaderSessionID(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	for _, header := range explicitOpenAIHeaderSessionNames {
+		if sessionID := strings.TrimSpace(c.GetHeader(header)); sessionID != "" {
+			return sessionID
+		}
+	}
+	return ""
+}
 
 // Claude Code metadata.user_id often ends with _session_<uuid>.
 var claudeCodeSessionSuffixPattern = regexp.MustCompile(`_session_([a-f0-9-]+)$`)
@@ -85,21 +110,12 @@ func resolveGrokCacheIdentity(c *gin.Context, body []byte, explicitKey, upstream
 }
 
 func explicitGrokCacheSeed(c *gin.Context, body []byte, explicitKey string) string {
-	seed := ""
-	if c != nil {
-		seed = extractClaudeCodeSessionID(c, body)
-		if seed == "" {
-			seed = strings.TrimSpace(c.GetHeader("session_id"))
-		}
-		if seed == "" {
-			seed = strings.TrimSpace(c.GetHeader("conversation_id"))
-		}
-		if seed == "" {
-			seed = strings.TrimSpace(c.GetHeader(grokConversationIDHeader))
-		}
+	seed := extractClaudeCodeSessionID(c, body)
+	if seed == "" {
+		seed = explicitOpenAIHeaderSessionID(c)
 	}
-	if seed == "" && len(body) > 0 {
-		seed = extractClaudeCodeSessionIDFromPayload(body)
+	if seed == "" && c != nil {
+		seed = strings.TrimSpace(c.GetHeader(grokConversationIDHeader))
 	}
 	if seed == "" && len(body) > 0 {
 		seed = strings.TrimSpace(gjson.GetBytes(body, "prompt_cache_key").String())

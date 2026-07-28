@@ -800,6 +800,15 @@ func (s *AccountTestService) testGrokAccountConnection(c *gin.Context, account *
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode == http.StatusPaymentRequired {
+			_, stateErr := setGrokPaymentRequiredErrorIfMatch(ctx, s.accountRepo, account)
+			if stateErr != nil {
+				return s.sendErrorAndEnd(
+					c,
+					fmt.Sprintf("Grok API returned 402, but the account could not be marked as error: %s", stateErr),
+				)
+			}
+		}
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Grok API returned %d: %s", resp.StatusCode, string(body)))
 	}
 

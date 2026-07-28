@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -22,6 +23,14 @@ type GrokOAuthHandler struct {
 	grokTokenProvider *service.GrokTokenProvider
 	adminService      service.AdminService
 	quotaService      *service.GrokQuotaService
+	reconciler        service.GrokOAuthReconciler
+}
+
+func (h *GrokOAuthHandler) SetReconciler(reconciler service.GrokOAuthReconciler) {
+	if h == nil {
+		return
+	}
+	h.reconciler = reconciler
 }
 
 func NewGrokOAuthHandler(
@@ -156,6 +165,54 @@ func (h *GrokOAuthHandler) RefreshAccountToken(c *gin.Context) {
 		return
 	}
 	response.Success(c, dto.AccountFromService(updatedAccount))
+}
+
+type GrokOAuthReconcileRequest struct {
+	DryRun               *bool `json:"dry_run"`
+	Apply                bool  `json:"apply"`
+	AfterID              int64 `json:"after_id"`
+	Limit                int   `json:"limit"`
+	RefreshWindowSeconds int64 `json:"refresh_window_seconds"`
+}
+
+func (h *GrokOAuthHandler) ReconcileOAuthAccounts(c *gin.Context) {
+	var req GrokOAuthReconcileRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request")
+		return
+	}
+	dryRun := true
+	if req.DryRun != nil {
+		dryRun = *req.DryRun
+	}
+	if req.Apply == dryRun {
+		response.ErrorFrom(c, service.ErrGrokOAuthReconcileMode)
+		return
+	}
+	if req.RefreshWindowSeconds < 0 ||
+		req.RefreshWindowSeconds > int64((24*time.Hour)/time.Second) {
+		response.ErrorFrom(c, service.ErrGrokOAuthReconcileWindow)
+		return
+	}
+	if h.reconciler == nil {
+		response.InternalError(c, "Grok OAuth reconciliation service is unavailable")
+		return
+	}
+	result, err := h.reconciler.ReconcileGrokOAuth(
+		c.Request.Context(),
+		service.GrokOAuthReconcileInput{
+			DryRun:        dryRun,
+			Apply:         req.Apply,
+			AfterID:       req.AfterID,
+			Limit:         req.Limit,
+			RefreshWindow: time.Duration(req.RefreshWindowSeconds) * time.Second,
+		},
+	)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
 }
 
 func (h *GrokOAuthHandler) CreateAccountFromOAuth(c *gin.Context) {
@@ -327,8 +384,7 @@ func (h *GrokOAuthHandler) createAccountFromSSOToken(ctx context.Context, req Gr
 		return grokSSOImportWorkerResult{item: GrokSSOToOAuthItemResult{Index: index, Error: grokSSOImportErrorMessage(err)}}
 	}
 
-	credentials := h.grokOAuthService.BuildAccountCredentials(tokenInfo)
-	credentials = service.MergeCredentials(cloneGrokSSOMap(req.Credentials), credentials)
+	credentials := grokSSOImportCredentials(h.grokOAuthService.BuildAccountCredentials(tokenInfo), req.Credentials)
 	name := grokSSOImportAccountName(req.Name, tokenInfo, index, total)
 	expiresAt, autoPauseOnExpired := grokSSOImportExpiry(req.ExpiresAt, req.AutoPauseOnExpired, tokenInfo)
 	account, err := h.adminService.CreateAccount(ctx, &service.CreateAccountInput{
@@ -360,6 +416,17 @@ func (h *GrokOAuthHandler) createAccountFromSSOToken(ctx context.Context, req Gr
 			Account: dto.AccountFromService(account),
 		},
 	}
+}
+
+// grokSSOImportCredentials 合并 SSO 兑换凭据与导入请求携带的运营配置。
+// token 字段以兑换结果为准；base_url 属于管理员选择的出站配置，请求显式
+// 提供时必须保留，避免被 BuildAccountCredentials 的默认地址覆盖。
+func grokSSOImportCredentials(built map[string]any, reqCredentials map[string]any) map[string]any {
+	credentials := service.MergeCredentials(cloneGrokSSOMap(reqCredentials), built)
+	if reqBaseURL, ok := reqCredentials["base_url"].(string); ok && strings.TrimSpace(reqBaseURL) != "" {
+		credentials["base_url"] = strings.TrimSpace(reqBaseURL)
+	}
+	return credentials
 }
 
 func grokSSOImportExpiry(requestExpiresAt *int64, requestAutoPause *bool, tokenInfo *service.GrokTokenInfo) (*int64, *bool) {

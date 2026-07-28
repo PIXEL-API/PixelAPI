@@ -1344,6 +1344,14 @@ func hasNonEmptyStringField(values map[string]any, key string) bool {
 }
 
 func findDisallowedOwnedAccountField(values map[string]any) (string, bool) {
+	for _, key := range []string{
+		CredentialKeyHeaderOverrideEnabled,
+		CredentialKeyHeaderOverrides,
+	} {
+		if _, ok := values[key]; ok {
+			return key, true
+		}
+	}
 	return findDisallowedCredentialContent(values, credentialSafetyOptions{
 		AllowOAuthTokenValues:  true,
 		AllowOAuthMetadataURLs: true,
@@ -1556,6 +1564,8 @@ func ownedPersonalAccountRequiresProxy(account *Account, levelConfigs []OpenAIAc
 var ownedPersonalLockedCredentialKeys = []string{
 	"model_mapping",
 	"compact_model_mapping",
+	CredentialKeyHeaderOverrideEnabled,
+	CredentialKeyHeaderOverrides,
 }
 
 var ownedPersonalLockedOpenAIExtraKeys = []string{

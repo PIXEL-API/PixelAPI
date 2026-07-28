@@ -281,28 +281,32 @@ func TestGrokVideoMutationUsageIncludesPerSecondBillingMetadata(t *testing.T) {
 	}
 }
 
-func TestBuildGrokMediaURLSupportsVideoMutationsAndKeepsOAuthOnOfficialAPI(t *testing.T) {
+func TestBuildGrokMediaURLSupportsVideoMutationsAndHonorsOAuthRelay(t *testing.T) {
 	t.Parallel()
 
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = true
+	cfg.Security.URLAllowlist.AllowPrivateHosts = false
+	cfg.Security.URLAllowlist.UpstreamHosts = []string{"relay.example.test"}
 	account := &Account{
 		Platform: PlatformGrok,
 		Type:     AccountTypeOAuth,
 		Credentials: map[string]any{
-			"base_url": "https://untrusted.example.invalid",
+			"base_url": "https://relay.example.test/tenant/xai/v1",
 		},
 	}
 
-	editURL, err := buildGrokMediaURL(context.Background(), account, nil, nil, GrokMediaEndpointVideosEdits, "")
+	editURL, err := buildGrokMediaURL(context.Background(), account, cfg, nil, GrokMediaEndpointVideosEdits, "")
 	require.NoError(t, err)
-	require.Equal(t, "https://api.x.ai/v1/videos/edits", editURL)
+	require.Equal(t, "https://relay.example.test/tenant/xai/v1/videos/edits", editURL)
 
-	extensionURL, err := buildGrokMediaURL(context.Background(), account, nil, nil, GrokMediaEndpointVideosExtensions, "")
+	extensionURL, err := buildGrokMediaURL(context.Background(), account, cfg, nil, GrokMediaEndpointVideosExtensions, "")
 	require.NoError(t, err)
-	require.Equal(t, "https://api.x.ai/v1/videos/extensions", extensionURL)
+	require.Equal(t, "https://relay.example.test/tenant/xai/v1/videos/extensions", extensionURL)
 
-	contentURL, err := buildGrokMediaURL(context.Background(), account, nil, nil, GrokMediaEndpointVideoContent, "task/one")
+	contentURL, err := buildGrokMediaURL(context.Background(), account, cfg, nil, GrokMediaEndpointVideoContent, "task/one")
 	require.NoError(t, err)
-	require.Equal(t, "https://api.x.ai/v1/videos/task%2Fone/content", contentURL)
+	require.Equal(t, "https://relay.example.test/tenant/xai/v1/videos/task%2Fone/content", contentURL)
 }
 
 type grokURLSettingRepo struct {

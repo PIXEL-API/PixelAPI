@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,6 +14,55 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
+
+func TestHTTPUpstreamDoPreservesGrokCLIForbiddenWithoutRetry(t *testing.T) {
+	upstream := NewHTTPUpstream(nil)
+	svc, ok := upstream.(*httpUpstreamService)
+	require.True(t, ok)
+
+	const accountID int64 = 4421
+	isolation := svc.getIsolationMode()
+	profile := service.HTTPUpstreamProfileDefault
+	proxyKey := directProxyKey
+	protocolMode := svc.resolveProtocolMode(profile, proxyKey, nil)
+	settings := svc.applyProfilePoolSettings(svc.resolvePoolSettings(isolation, 1), profile)
+	cacheKey := buildCacheKey(isolation, proxyKey, accountID, protocolMode)
+
+	const payload = `{"model":"grok-4.5","input":"hello"}`
+	const deniedBody = `{"code":"permission_denied","error":"Access to the chat endpoint is denied."}`
+	var calls int
+	svc.clients[cacheKey] = &upstreamClientEntry{
+		client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			calls++
+			require.Equal(t, 1, calls, "403 must not trigger a second upstream request")
+			require.Equal(t, grokCLIProxyHost, req.URL.Hostname())
+			require.Equal(t, "/v1/responses", req.URL.Path)
+			require.Equal(t, "xai-grok-cli", req.Header.Get("X-XAI-Token-Auth"))
+			return &http.Response{
+				StatusCode: http.StatusForbidden,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(deniedBody)),
+				Request:    req,
+			}, nil
+		})},
+		proxyKey:     proxyKey,
+		poolKey:      buildPoolKey(settings, protocolMode),
+		protocolMode: protocolMode,
+	}
+
+	req, err := http.NewRequest(http.MethodPost, "https://cli-chat-proxy.grok.com/v1/responses", strings.NewReader(payload))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer oauth-token")
+
+	resp, err := svc.Do(req, "", accountID, 1)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusForbidden, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	require.Equal(t, deniedBody, string(body))
+	require.Equal(t, 1, calls)
+}
 
 // HTTPUpstreamSuite HTTP 上游服务测试套件
 // 使用 testify/suite 组织测试，支持 SetupTest 初始化

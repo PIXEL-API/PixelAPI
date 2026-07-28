@@ -10,8 +10,11 @@ import (
 )
 
 const (
-	credKeyHeaderOverrideEnabled = "header_override_enabled"
-	credKeyHeaderOverrides       = "header_overrides"
+	CredentialKeyHeaderOverrideEnabled = "header_override_enabled"
+	CredentialKeyHeaderOverrides       = "header_overrides"
+
+	credKeyHeaderOverrideEnabled = CredentialKeyHeaderOverrideEnabled
+	credKeyHeaderOverrides       = CredentialKeyHeaderOverrides
 
 	maxHeaderOverrideEntries     = 64
 	maxHeaderOverrideNameLength  = 200

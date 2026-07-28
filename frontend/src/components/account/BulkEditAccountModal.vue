@@ -168,6 +168,11 @@
           :placeholder="t('admin.accounts.bulkEdit.baseUrlPlaceholder')"
           aria-labelledby="bulk-edit-base-url-label"
         />
+        <GrokBaseUrlPresets
+          v-if="allTargetsGrok"
+          class="mt-2"
+          @select="baseUrl = $event; enableBaseUrl = true"
+        />
         <p class="input-hint">
           {{ t('admin.accounts.bulkEdit.baseUrlNotice') }}
         </p>
@@ -541,6 +546,72 @@
               ]"
             />
           </button>
+        </div>
+      </div>
+
+      <div
+        v-if="allHeaderOverrideCapable"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+        data-testid="bulk-grok-header-override"
+      >
+        <div class="flex items-center justify-between">
+          <div class="flex-1 pr-4">
+            <label
+              id="bulk-edit-header-override-label"
+              class="input-label mb-0"
+              for="bulk-edit-header-override-enabled"
+            >
+              {{ t('admin.accounts.headerOverride.title') }}
+            </label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.headerOverride.hint') }}
+            </p>
+          </div>
+          <input
+            v-model="enableHeaderOverride"
+            id="bulk-edit-header-override-enabled"
+            type="checkbox"
+            aria-controls="bulk-edit-header-override-body"
+            class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </div>
+        <div
+          v-if="enableHeaderOverride"
+          id="bulk-edit-header-override-body"
+          class="mt-3 space-y-3"
+        >
+          <button
+            type="button"
+            role="switch"
+            :aria-checked="headerOverrideEnabled"
+            :class="[
+              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+              headerOverrideEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+            ]"
+            @click="headerOverrideEnabled = !headerOverrideEnabled"
+          >
+            <span
+              :class="[
+                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                headerOverrideEnabled ? 'translate-x-5' : 'translate-x-0'
+              ]"
+            />
+          </button>
+          <template v-if="headerOverrideEnabled">
+            <p class="rounded-lg bg-blue-50 p-3 text-xs text-blue-700 dark:bg-blue-900/20 dark:text-blue-400">
+              {{ t('admin.accounts.headerOverride.info') }}
+            </p>
+            <p class="text-xs text-amber-600 dark:text-amber-400">
+              {{ t('admin.accounts.headerOverride.bulkReplaceHint') }}
+            </p>
+            <HeaderOverrideEditor
+              :rows="headerOverrideRows"
+              @update:rows="headerOverrideRows = $event"
+            />
+          </template>
+          <p v-else class="text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.headerOverride.bulkDisableHint') }}
+          </p>
         </div>
       </div>
 
@@ -1153,6 +1224,16 @@ import ProxySelector from '@/components/common/ProxySelector.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import Icon from '@/components/icons/Icon.vue'
+import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
+import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
+import {
+  buildHeaderOverridesObject,
+  isHeaderOverrideCapable,
+  validateHeaderOverrideRows,
+  HEADER_OVERRIDE_ENABLED_CREDENTIAL_KEY,
+  HEADER_OVERRIDES_CREDENTIAL_KEY,
+  type HeaderOverrideRow
+} from '@/components/account/credentialsBuilder'
 import {
   PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY,
   PERSONAL_ACCOUNT_DEFAULT_LOAD_FACTOR,
@@ -1228,6 +1309,13 @@ const targetMode = computed(() => props.target?.mode ?? 'selected')
 const targetPreviewCount = computed(() => props.target?.previewCount ?? props.accountIds.length)
 const targetSelectedPlatforms = computed(() => props.target?.selectedPlatforms ?? props.selectedPlatforms)
 const targetSelectedTypes = computed(() => props.target?.selectedTypes ?? props.selectedTypes)
+const allTargetsGrok = computed(
+  () =>
+    !isUserScope.value &&
+    targetSelectedPlatforms.value.length > 0 &&
+    targetSelectedPlatforms.value.every(platform => platform === 'grok') &&
+    targetSelectedTypes.value.length === 1
+)
 const isMixedPlatform = computed(() => targetSelectedPlatforms.value.length > 1)
 const bulkPlacementPlatform = computed<AccountPlatform | ''>(() => (
   targetSelectedPlatforms.value.length === 1 ? targetSelectedPlatforms.value[0] : ''
@@ -1314,6 +1402,12 @@ const allOpenAIAPIKey = computed(() => {
   )
 })
 
+const allHeaderOverrideCapable = computed(
+  () =>
+    allTargetsGrok.value &&
+    targetSelectedTypes.value.every(type => isHeaderOverrideCapable('grok', type))
+)
+
 // 是否全部为 Anthropic OAuth/SetupToken（RPM 配置仅在此条件下显示）
 const allAnthropicOAuthOrSetupToken = computed(() => {
   return (
@@ -1350,6 +1444,7 @@ const enableBaseUrl = ref(false)
 const enableModelRestriction = ref(false)
 const enableCustomErrorCodes = ref(false)
 const enableInterceptWarmup = ref(false)
+const enableHeaderOverride = ref(false)
 const enableProxy = ref(false)
 const enableConcurrency = ref(false)
 const enableLoadFactor = ref(false)
@@ -1382,6 +1477,8 @@ const modelMappings = ref<ModelMapping[]>([])
 const selectedErrorCodes = ref<number[]>([])
 const customErrorCodeInput = ref<number | null>(null)
 const interceptWarmupRequests = ref(false)
+const headerOverrideEnabled = ref(false)
+const headerOverrideRows = ref<HeaderOverrideRow[]>([])
 const proxyId = ref<number | null>(null)
 const concurrency = ref(1)
 const loadFactor = ref<number | null>(null)
@@ -1675,6 +1772,14 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
     credentialsChanged = true
   }
 
+  if (!isUserScope.value && allHeaderOverrideCapable.value && enableHeaderOverride.value) {
+    credentials[HEADER_OVERRIDE_ENABLED_CREDENTIAL_KEY] = headerOverrideEnabled.value
+    credentials[HEADER_OVERRIDES_CREDENTIAL_KEY] = headerOverrideEnabled.value
+      ? buildHeaderOverridesObject(headerOverrideRows.value)
+      : {}
+    credentialsChanged = true
+  }
+
   if (credentialsChanged) {
     updates.credentials = credentials
   }
@@ -1799,6 +1904,9 @@ const sanitizeBulkUpdatePayload = (payload: Record<string, unknown>) => {
     }
     if (isUserScope.value) {
       delete credentials.model_mapping
+      delete credentials.base_url
+      delete credentials.header_override_enabled
+      delete credentials.header_overrides
     }
     if (!canManageCustomErrorCodes.value) {
       delete credentials.custom_error_codes_enabled
@@ -1846,6 +1954,7 @@ const handleSubmit = async () => {
     (canManageModelRestriction.value && enableModelRestriction.value) ||
     (canManageCustomErrorCodes.value && enableCustomErrorCodes.value) ||
     enableInterceptWarmup.value ||
+    (!isUserScope.value && allHeaderOverrideCapable.value && enableHeaderOverride.value) ||
     (canManageProxy.value && enableProxy.value) ||
     enableConcurrency.value ||
     enableLoadFactor.value ||
@@ -1865,6 +1974,38 @@ const handleSubmit = async () => {
   if (!hasAnyFieldEnabled) {
     appStore.showError(t('admin.accounts.bulkEdit.noFieldsSelected'))
     return
+  }
+
+  if (!isUserScope.value && allTargetsGrok.value && enableBaseUrl.value) {
+    const trimmedBaseUrl = baseUrl.value.trim()
+    if (trimmedBaseUrl) {
+      try {
+        const parsedBaseUrl = new URL(trimmedBaseUrl)
+        if (parsedBaseUrl.protocol !== 'http:' && parsedBaseUrl.protocol !== 'https:') {
+          throw new Error('invalid protocol')
+        }
+      } catch {
+        appStore.showError(t('admin.accounts.grokCustomBaseUrl.invalid'))
+        return
+      }
+    }
+  }
+
+  if (
+    !isUserScope.value &&
+    allHeaderOverrideCapable.value &&
+    enableHeaderOverride.value &&
+    headerOverrideEnabled.value
+  ) {
+    if (!headerOverrideRows.value.some(row => row.name.trim())) {
+      appStore.showError(t('admin.accounts.headerOverride.bulkEmptyRows'))
+      return
+    }
+    const headerError = validateHeaderOverrideRows(headerOverrideRows.value)
+    if (headerError) {
+      appStore.showError(t(`admin.accounts.headerOverride.${headerError}`))
+      return
+    }
   }
 
   const built = buildUpdatePayload()
@@ -2044,6 +2185,7 @@ watch(
       enableModelRestriction.value = false
       enableCustomErrorCodes.value = false
       enableInterceptWarmup.value = false
+      enableHeaderOverride.value = false
       enableProxy.value = false
       enableConcurrency.value = false
       enableLoadFactor.value = false
@@ -2069,6 +2211,8 @@ watch(
       selectedErrorCodes.value = []
       customErrorCodeInput.value = null
       interceptWarmupRequests.value = false
+      headerOverrideEnabled.value = false
+      headerOverrideRows.value = []
       proxyId.value = null
       concurrency.value = isUserScope.value ? PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY : 1
       loadFactor.value = isUserScope.value ? PERSONAL_ACCOUNT_DEFAULT_LOAD_FACTOR : null

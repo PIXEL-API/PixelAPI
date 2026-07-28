@@ -419,7 +419,7 @@ var defaultOpenAICodexSnapshotPersistThrottle = newAccountWriteThrottle(openAICo
 
 // ErrNoAvailableCompactAccounts indicates the request needs /responses/compact
 // support but no compatible account is available.
-var ErrNoAvailableCompactAccounts = errors.New("no available OpenAI accounts support /responses/compact")
+var ErrNoAvailableCompactAccounts = errors.New("no available accounts support /responses/compact")
 
 // OpenAIGatewayService handles OpenAI API gateway operations
 type OpenAIGatewayService struct {
@@ -1548,10 +1548,16 @@ func noAvailableOpenAISelectionError(requestedModel string, compactBlocked bool)
 	return &noAvailableOpenAIAccountSelectionError{message: "no available OpenAI accounts"}
 }
 
-// openAICompactSupportTier classifies an OpenAI account by compact capability.
+// openAICompactSupportTier classifies an OpenAI-compatible account by compact capability.
 // 0 = explicitly unsupported, 1 = unknown / not yet probed, 2 = explicitly supported.
 func openAICompactSupportTier(account *Account) int {
-	if account == nil || !account.IsOpenAI() {
+	if account == nil {
+		return 0
+	}
+	if account.IsGrok() {
+		return 2
+	}
+	if !account.IsOpenAI() {
 		return 0
 	}
 	supported, known := account.OpenAICompactSupportKnown()
@@ -2572,6 +2578,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 // ForwardWithAnalysis forwards request to OpenAI API and reuses parsed /responses metadata when available.
 func (s *OpenAIGatewayService) ForwardWithAnalysis(ctx context.Context, c *gin.Context, account *Account, body []byte, analysis *OpenAIResponsesRequestAnalysis) (*OpenAIForwardResult, error) {
+	clearGrokResponsesClientToolMapping(c)
 	// Keep attempt TTFT separate from the end-to-end first-output budget. The
 	// scheduler uses FirstTokenMs to learn account health; including local
 	// queueing there would incorrectly penalize otherwise healthy accounts.
@@ -3543,6 +3550,7 @@ func (s *OpenAIGatewayService) ForwardWithAnalysis(ctx context.Context, c *gin.C
 		// Handle normal response
 		var usage *OpenAIUsage
 		var firstTokenMs *int
+		responseID := ""
 		if reqStream {
 			if resp != nil {
 				resp.Request = nil
@@ -3554,15 +3562,19 @@ func (s *OpenAIGatewayService) ForwardWithAnalysis(ctx context.Context, c *gin.C
 			if streamResult != nil {
 				usage = streamResult.usage
 				firstTokenMs = streamResult.firstTokenMs
+				responseID = strings.TrimSpace(streamResult.responseID)
 				if responseServiceTier := extractOpenAIServiceTierFromResponses(streamResult.responseServiceTier); responseServiceTier != nil {
 					serviceTier = responseServiceTier
 				}
 			}
 		} else {
-			usage, err = s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, upstreamModel)
+			nonStreamResult, nonStreamErr := s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, upstreamModel)
+			err = nonStreamErr
 			if err != nil {
 				return nil, err
 			}
+			usage = nonStreamResult.usage
+			responseID = strings.TrimSpace(nonStreamResult.responseID)
 			if usage != nil {
 				if responseServiceTier := extractOpenAIServiceTierFromResponses(usage.ResponseServiceTier); responseServiceTier != nil {
 					serviceTier = responseServiceTier
@@ -3583,6 +3595,7 @@ func (s *OpenAIGatewayService) ForwardWithAnalysis(ctx context.Context, c *gin.C
 
 		result := &OpenAIForwardResult{
 			RequestID:       resp.Header.Get("x-request-id"),
+			ResponseID:      responseID,
 			Usage:           *usage,
 			Model:           originalModel,
 			UpstreamModel:   upstreamModel,
@@ -5725,6 +5738,7 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 type openaiStreamingResult struct {
 	usage               *OpenAIUsage
 	firstTokenMs        *int
+	responseID          string
 	responseServiceTier string
 }
 
@@ -5787,6 +5801,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		maxLineSize = s.cfg.Gateway.MaxLineSize
 	}
 	var firstTokenMs *int
+	responseID := ""
 	bufferedWriter := bufio.NewWriterSize(w, 4*1024)
 	var firstOutputStage *openAIFirstOutputStage
 	if guardFirstOutput {
@@ -6005,7 +6020,12 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	imageCounter := newOpenAIImageOutputCounter()
 	resultWithUsage := func() *openaiStreamingResult {
 		usage.ImageCount = imageCounter.Count()
-		return &openaiStreamingResult{usage: usage, firstTokenMs: firstTokenMs, responseServiceTier: usage.ResponseServiceTier}
+		return &openaiStreamingResult{
+			usage:               usage,
+			firstTokenMs:        firstTokenMs,
+			responseID:          responseID,
+			responseServiceTier: usage.ResponseServiceTier,
+		}
 	}
 	flushPending := func(disconnectMessage string) {
 		if clientDisconnected || pendingBytes() == 0 {
@@ -6121,6 +6141,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		if data, ok := extractOpenAISSEDataLine(line); ok {
 
 			dataBytes := []byte(data)
+			if responseID == "" {
+				responseID = extractOpenAIResponseIDFromJSONBytes(dataBytes)
+			}
 			if account != nil && account.Platform == PlatformGrok {
 				if err := s.cacheGrokReasoningItemsFromResponsePayloadOnce(ctx, account, dataBytes, grokReasoningCachedItems); err != nil {
 					sendErrorEvent("grok_reasoning_state_unavailable")
@@ -6194,7 +6217,12 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				line = "data: " + data
 				eventType = strings.TrimSpace(gjson.GetBytes(dataBytes, "type").String())
 			}
-			restoredData, restoreErr := restoreOpenAIResponsesNamespacePayload(c, dataBytes)
+			restoredData, restoreErr := restoreGrokResponsesClientToolPayload(c, dataBytes)
+			if restoreErr != nil {
+				streamFailoverErr = fmt.Errorf("restore Grok Responses client tool response: %w", restoreErr)
+				return
+			}
+			restoredData, restoreErr = restoreOpenAIResponsesNamespacePayload(c, restoredData)
 			if restoreErr != nil {
 				streamFailoverErr = fmt.Errorf("restore OpenAI namespace response: %w", restoreErr)
 				return
@@ -6567,6 +6595,16 @@ func extractOpenAIUsageFromJSONBytes(body []byte) (OpenAIUsage, bool) {
 	return usage, true
 }
 
+func extractOpenAIResponseIDFromJSONBytes(body []byte) string {
+	if len(body) == 0 || !gjson.ValidBytes(body) {
+		return ""
+	}
+	if id := strings.TrimSpace(gjson.GetBytes(body, "id").String()); id != "" {
+		return id
+	}
+	return strings.TrimSpace(gjson.GetBytes(body, "response.id").String())
+}
+
 func openAIUsageTokens(usage OpenAIUsage) (UsageTokens, int) {
 	cacheReadTokens := usage.CacheReadInputTokens
 	if cacheReadTokens == 0 {
@@ -6768,7 +6806,13 @@ func (s *OpenAIGatewayService) startDisconnectedStreamDrainDeadline(ctx context.
 	return cancel
 }
 
-func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, originalModel, mappedModel string) (*OpenAIUsage, error) {
+type openaiNonStreamingResult struct {
+	*OpenAIUsage
+	usage      *OpenAIUsage
+	responseID string
+}
+
+func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, originalModel, mappedModel string) (*openaiNonStreamingResult, error) {
 	readCtx, cancelRead := s.detachedNonStreamingReadContext(ctx)
 	defer cancelRead()
 	body, err := ReadUpstreamResponseBodyWithContext(readCtx, resp.Body, s.cfg, c, openAITooLargeError)
@@ -6798,6 +6842,12 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 			writeGrokReasoningCompatibilityError(c, err)
 			return nil, err
 		}
+		if isOpenAIResponsesCompactPath(c) {
+			body, err = convertGrokResponseToOpenAICompact(body)
+			if err != nil {
+				return nil, fmt.Errorf("convert Grok compact response: %w", err)
+			}
+		}
 	}
 
 	usageValue, usageOK := extractOpenAIUsageFromJSONBytes(body)
@@ -6810,6 +6860,10 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	// Replace model in response if needed
 	if originalModel != mappedModel {
 		body = s.replaceModelInResponseBody(body, mappedModel, originalModel)
+	}
+	body, err = restoreGrokResponsesClientToolPayload(c, body)
+	if err != nil {
+		return nil, fmt.Errorf("restore Grok Responses client tool response: %w", err)
 	}
 	body, err = restoreOpenAIResponsesNamespacePayload(c, body)
 	if err != nil {
@@ -6829,7 +6883,11 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 		c.Data(resp.StatusCode, contentType, body)
 	}
 
-	return usage, nil
+	return &openaiNonStreamingResult{
+		OpenAIUsage: usage,
+		usage:       usage,
+		responseID:  extractOpenAIResponseIDFromJSONBytes(body),
+	}, nil
 }
 
 func isEventStreamResponse(header http.Header) bool {
@@ -6837,7 +6895,7 @@ func isEventStreamResponse(header http.Header) bool {
 	return strings.Contains(contentType, "text/event-stream")
 }
 
-func (s *OpenAIGatewayService) handleSSEToJSON(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, body []byte, originalModel, mappedModel string) (*OpenAIUsage, error) {
+func (s *OpenAIGatewayService) handleSSEToJSON(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, body []byte, originalModel, mappedModel string) (*openaiNonStreamingResult, error) {
 	bodyText := string(body)
 	if account != nil && account.Platform == PlatformGrok {
 		if err := s.cacheGrokReasoningItemsFromSSEBody(ctx, account, bodyText); err != nil {
@@ -6865,13 +6923,24 @@ func (s *OpenAIGatewayService) handleSSEToJSON(ctx context.Context, resp *http.R
 			}
 		}
 		finalResponse = supplementCompactionItemFromSSE(c, finalResponse, bodyText)
+		if account != nil && account.Platform == PlatformGrok && isOpenAIResponsesCompactPath(c) {
+			convertedResponse, convertErr := convertGrokResponseToOpenAICompact(finalResponse)
+			if convertErr != nil {
+				return nil, fmt.Errorf("convert Grok compact response: %w", convertErr)
+			}
+			finalResponse = convertedResponse
+		}
 		body = finalResponse
 		if originalModel != mappedModel {
 			body = s.replaceModelInResponseBody(body, mappedModel, originalModel)
 		}
 		// Correct tool calls in final response
 		body = s.correctToolCallsInResponseBody(body)
-		restoredBody, restoreErr := restoreOpenAIResponsesNamespacePayload(c, body)
+		restoredBody, restoreErr := restoreGrokResponsesClientToolPayload(c, body)
+		if restoreErr != nil {
+			return nil, fmt.Errorf("restore Grok Responses client tool response: %w", restoreErr)
+		}
+		restoredBody, restoreErr = restoreOpenAIResponsesNamespacePayload(c, restoredBody)
 		if restoreErr != nil {
 			return nil, fmt.Errorf("restore OpenAI namespace response: %w", restoreErr)
 		}
@@ -6915,7 +6984,11 @@ func (s *OpenAIGatewayService) handleSSEToJSON(ctx context.Context, resp *http.R
 		c.Data(resp.StatusCode, contentType, body)
 	}
 
-	return usage, nil
+	return &openaiNonStreamingResult{
+		OpenAIUsage: usage,
+		usage:       usage,
+		responseID:  extractOpenAIResponseIDFromJSONBytes(body),
+	}, nil
 }
 
 func extractOpenAISSETerminalEvent(body string) (string, []byte, bool) {

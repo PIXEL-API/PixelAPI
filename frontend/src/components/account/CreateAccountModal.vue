@@ -869,7 +869,7 @@
         </div>
       </div>
 
-      <!-- Account Type Selection (Grok - OAuth only) -->
+      <!-- Grok account type: user scope remains OAuth-only. -->
       <div v-if="form.platform === 'grok'">
         <label class="input-label">{{ t('admin.accounts.accountType') }}</label>
         <div class="mt-2 grid gap-3 sm:grid-cols-2">
@@ -902,6 +902,82 @@
               </span>
             </div>
           </button>
+          <button
+            v-if="!isUserScope"
+            type="button"
+            data-testid="grok-api-key-type"
+            @click="accountCategory = 'apikey'"
+            :class="[
+              'flex items-center gap-3 rounded-lg border-2 p-3 text-left transition-all',
+              accountCategory === 'apikey'
+                ? 'border-cyan-500 bg-cyan-50 dark:bg-cyan-900/20'
+                : 'border-gray-200 hover:border-cyan-300 dark:border-dark-600 dark:hover:border-cyan-700'
+            ]"
+          >
+            <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-cyan-500 text-white">
+              <Icon name="key" size="sm" />
+            </div>
+            <div>
+              <span class="block text-sm font-medium text-gray-900 dark:text-white">API Key</span>
+              <span class="text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.accounts.types.apikey') }}
+              </span>
+            </div>
+          </button>
+        </div>
+      </div>
+
+      <div
+        v-if="!isUserScope && form.platform === 'grok' && accountCategory === 'oauth-based'"
+        data-testid="grok-admin-upstream-config"
+        class="space-y-4 rounded-lg border border-gray-200 p-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between gap-4">
+          <div>
+            <label class="input-label mb-0">{{ t('admin.accounts.grokCustomBaseUrl.title') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.grokCustomBaseUrl.hint') }}
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            :aria-checked="grokCustomBaseUrlEnabled"
+            class="relative h-6 w-11 rounded-full transition-colors"
+            :class="grokCustomBaseUrlEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'"
+            @click="grokCustomBaseUrlEnabled = !grokCustomBaseUrlEnabled"
+          >
+            <span
+              class="absolute left-1 top-1 h-4 w-4 rounded-full bg-white transition-transform"
+              :class="grokCustomBaseUrlEnabled ? 'translate-x-5' : 'translate-x-0'"
+            />
+          </button>
+        </div>
+        <div v-if="grokCustomBaseUrlEnabled" class="space-y-2">
+          <input
+            v-model="grokBaseUrl"
+            type="url"
+            class="input"
+            :placeholder="t('admin.accounts.grokCustomBaseUrl.placeholder')"
+          />
+          <GrokBaseUrlPresets @select="grokBaseUrl = $event" />
+        </div>
+        <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
+          <label class="flex items-center gap-2">
+            <input v-model="headerOverrideEnabled" type="checkbox" />
+            <span class="text-sm font-medium text-gray-900 dark:text-white">
+              {{ t('admin.accounts.headerOverride.title') }}
+            </span>
+          </label>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.headerOverride.info') }}
+          </p>
+          <HeaderOverrideEditor
+            v-if="headerOverrideEnabled"
+            class="mt-3"
+            :rows="headerOverrideRows"
+            @update:rows="headerOverrideRows = $event"
+          />
         </div>
       </div>
 
@@ -1156,6 +1232,29 @@
             "
           />
           <p class="input-hint">{{ baseUrlHint }}</p>
+          <GrokBaseUrlPresets
+            v-if="form.platform === 'grok'"
+            class="mt-2"
+            @select="apiKeyBaseUrl = $event"
+          />
+        </div>
+
+        <div v-if="form.platform === 'grok'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+          <label class="flex items-center gap-2">
+            <input v-model="headerOverrideEnabled" type="checkbox" />
+            <span class="text-sm font-medium text-gray-900 dark:text-white">
+              {{ t('admin.accounts.headerOverride.title') }}
+            </span>
+          </label>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.headerOverride.info') }}
+          </p>
+          <HeaderOverrideEditor
+            v-if="headerOverrideEnabled"
+            class="mt-3"
+            :rows="headerOverrideRows"
+            @update:rows="headerOverrideRows = $event"
+          />
         </div>
         <div>
           <label class="input-label">{{ t('admin.accounts.apiKeyRequired') }}</label>
@@ -3343,8 +3442,15 @@ import ProxySelector from '@/components/common/ProxySelector.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
+import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
+import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import UserProxyQuickCreatePanel from '@/components/user/UserProxyQuickCreatePanel.vue'
-import { applyInterceptWarmup } from '@/components/account/credentialsBuilder'
+import {
+  applyHeaderOverride,
+  applyInterceptWarmup,
+  validateHeaderOverrideRows,
+  type HeaderOverrideRow
+} from '@/components/account/credentialsBuilder'
 import {
   PERSONAL_ACCOUNT_DEFAULT_AUTO_PAUSE_ON_EXPIRED,
   PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY,
@@ -3403,12 +3509,14 @@ const oauthStepTitle = computed(() => {
 const baseUrlHint = computed(() => {
   if (form.platform === 'openai') return t('admin.accounts.openai.baseUrlHint')
   if (form.platform === 'gemini') return t('admin.accounts.gemini.baseUrlHint')
+  if (form.platform === 'grok') return t('admin.accounts.grokCustomBaseUrl.hint')
   return t('admin.accounts.baseUrlHint')
 })
 
 const apiKeyHint = computed(() => {
   if (form.platform === 'openai') return t('admin.accounts.openai.apiKeyHint')
   if (form.platform === 'gemini') return t('admin.accounts.gemini.apiKeyHint')
+  if (form.platform === 'grok') return t('admin.accounts.apiKeyHint')
   return t('admin.accounts.apiKeyHint')
 })
 
@@ -3511,6 +3619,10 @@ const accountCategory = ref<'oauth-based' | 'apikey' | 'bedrock' | 'service_acco
 const addMethod = ref<AddMethod>('oauth') // For oauth-based: 'oauth' or 'setup-token'
 const apiKeyBaseUrl = ref('https://api.anthropic.com')
 const apiKeyValue = ref('')
+const grokCustomBaseUrlEnabled = ref(false)
+const grokBaseUrl = ref('')
+const headerOverrideEnabled = ref(false)
+const headerOverrideRows = ref<HeaderOverrideRow[]>([])
 const editQuotaLimit = ref<number | null>(null)
 const editQuotaDailyLimit = ref<number | null>(null)
 const editQuotaWeeklyLimit = ref<number | null>(null)
@@ -4050,7 +4162,9 @@ watch(
         ? 'https://api.openai.com'
         : newPlatform === 'gemini'
           ? 'https://generativelanguage.googleapis.com'
-          : 'https://api.anthropic.com'
+          : newPlatform === 'grok'
+            ? 'https://api.x.ai/v1'
+            : 'https://api.anthropic.com'
     // Clear model-related settings
     allowedModels.value = []
     modelMappings.value = []
@@ -4073,6 +4187,11 @@ watch(
       accountCategory.value = 'oauth-based'
       addMethod.value = 'oauth'
       form.type = 'oauth'
+    } else {
+      grokCustomBaseUrlEnabled.value = false
+      grokBaseUrl.value = ''
+      headerOverrideEnabled.value = false
+      headerOverrideRows.value = []
     }
     if (newPlatform !== 'gemini' && newPlatform !== 'anthropic' && accountCategory.value === 'service_account') {
       accountCategory.value = 'oauth-based'
@@ -4526,6 +4645,10 @@ const resetForm = () => {
   addMethod.value = 'oauth'
   apiKeyBaseUrl.value = 'https://api.anthropic.com'
   apiKeyValue.value = ''
+  grokCustomBaseUrlEnabled.value = false
+  grokBaseUrl.value = ''
+  headerOverrideEnabled.value = false
+  headerOverrideRows.value = []
   editQuotaLimit.value = null
   editQuotaDailyLimit.value = null
   editQuotaWeeklyLimit.value = null
@@ -4964,7 +5087,9 @@ const handleSubmit = async () => {
       ? 'https://api.openai.com'
       : form.platform === 'gemini'
         ? 'https://generativelanguage.googleapis.com'
-        : 'https://api.anthropic.com'
+        : form.platform === 'grok'
+          ? 'https://api.x.ai/v1'
+          : 'https://api.anthropic.com'
 
   // Build credentials with optional model mapping
   const credentials: Record<string, unknown> = {
@@ -5002,6 +5127,9 @@ const handleSubmit = async () => {
   }
 
   applyInterceptWarmup(credentials, interceptWarmupRequests.value, 'create')
+  if (!applyGrokAdminUpstreamConfig(credentials, 'apikey')) {
+    return
+  }
   if (!applyTempUnschedConfig(credentials)) {
     return
   }
@@ -5542,6 +5670,43 @@ const applyCurrentModelRestriction = (credentials: Record<string, unknown>) => {
   }
 }
 
+const applyGrokAdminUpstreamConfig = (
+  credentials: Record<string, unknown>,
+  accountType: 'apikey' | 'oauth'
+): boolean => {
+  if (isUserScope.value) {
+    delete credentials.base_url
+    delete credentials.header_override_enabled
+    delete credentials.header_overrides
+    return true
+  }
+  if (form.platform !== 'grok') return true
+  if (accountType === 'oauth' && grokCustomBaseUrlEnabled.value) {
+    const baseUrl = grokBaseUrl.value.trim()
+    if (!baseUrl) {
+      appStore.showError(t('admin.accounts.grokCustomBaseUrl.required'))
+      return false
+    }
+    try {
+      const parsed = new URL(baseUrl)
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error()
+    } catch {
+      appStore.showError(t('admin.accounts.grokCustomBaseUrl.invalid'))
+      return false
+    }
+    credentials.base_url = baseUrl
+  }
+  if (headerOverrideEnabled.value) {
+    const errorKey = validateHeaderOverrideRows(headerOverrideRows.value)
+    if (errorKey) {
+      appStore.showError(t(`admin.accounts.headerOverride.${errorKey}`))
+      return false
+    }
+  }
+  applyHeaderOverride(credentials, headerOverrideEnabled.value, headerOverrideRows.value, 'create')
+  return true
+}
+
 // Grok 手动 RT 批量验证和创建
 const handleGrokValidateRT = async (refreshTokenInput: string) => {
   if (!refreshTokenInput.trim()) return
@@ -5576,6 +5741,9 @@ const handleGrokValidateRT = async (refreshTokenInput: string) => {
 
         const credentials = grokOAuth.buildCredentials(tokenInfo)
         applyCurrentModelRestriction(credentials)
+        if (!applyGrokAdminUpstreamConfig(credentials, 'oauth')) {
+          return
+        }
         if (!applyTempUnschedConfig(credentials)) {
           return
         }
@@ -5643,6 +5811,10 @@ const handleGrokImportSSO = async (ssoInput: string) => {
 
   const credentials: Record<string, unknown> = {}
   applyCurrentModelRestriction(credentials)
+  if (!applyGrokAdminUpstreamConfig(credentials, 'oauth')) {
+    grokOAuth.loading.value = false
+    return
+  }
   if (!applyTempUnschedConfig(credentials)) {
     grokOAuth.loading.value = false
     return
@@ -5766,6 +5938,9 @@ const handleGrokExchange = async (authCode: string) => {
 
     const credentials = grokOAuth.buildCredentials(tokenInfo)
     applyCurrentModelRestriction(credentials)
+    if (!applyGrokAdminUpstreamConfig(credentials, 'oauth')) {
+      return
+    }
     const extra = grokOAuth.buildExtraInfo(tokenInfo)
     await createAccountAndFinish('grok', 'oauth', credentials, extra)
   } catch (error: any) {

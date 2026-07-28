@@ -10,6 +10,13 @@ import (
 // paths are appended.
 type BaseURLValidator func(string) (string, error)
 
+// IsParseableBaseURL 用于读取存量凭据；无法解析出 host 的脏值应回落默认端点。
+// 安全准入仍由调用方的 BaseURLValidator 决定。
+func IsParseableBaseURL(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	return err == nil && parsed.Host != ""
+}
+
 func validatedBaseURLWithValidator(override string, validator BaseURLValidator) (string, error) {
 	if validator == nil {
 		return ValidatedBaseURL(override)

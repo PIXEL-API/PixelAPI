@@ -17,11 +17,36 @@ import (
 
 type grokQuotaAccountRepo struct {
 	*mockAccountRepoForPlatform
-	updates               map[int64]map[string]any
-	tempUnschedCalls      int
-	lastTempUnschedID     int64
-	lastTempUnschedUntil  time.Time
-	lastTempUnschedReason string
+	updates                map[int64]map[string]any
+	credentialErrorCalls   int
+	lastCredentialError    string
+	lastCredentialSnapshot GrokCredentialMutationSnapshot
+	tempUnschedCalls       int
+	lastTempUnschedID      int64
+	lastTempUnschedUntil   time.Time
+	lastTempUnschedReason  string
+}
+
+func (r *grokQuotaAccountRepo) SetGrokCredentialErrorIfMatch(
+	_ context.Context,
+	_ int64,
+	snapshot GrokCredentialMutationSnapshot,
+	reason string,
+) (bool, error) {
+	r.credentialErrorCalls++
+	r.lastCredentialSnapshot = snapshot
+	r.lastCredentialError = reason
+	return true, nil
+}
+
+func (r *grokQuotaAccountRepo) SetGrokCredentialTempUnschedulableIfMatch(
+	_ context.Context,
+	_ int64,
+	_ GrokCredentialMutationSnapshot,
+	_ time.Time,
+	_ string,
+) (bool, error) {
+	return true, nil
 }
 
 func (r *grokQuotaAccountRepo) UpdateExtra(_ context.Context, id int64, updates map[string]any) error {
@@ -196,6 +221,31 @@ func TestGrokQuotaServiceProbeUsageReturnsRateLimitedSnapshot(t *testing.T) {
 	require.NotNil(t, result.Snapshot)
 	require.NotNil(t, result.Snapshot.RetryAfterSeconds)
 	require.Equal(t, 45, *result.Snapshot.RetryAfterSeconds)
+}
+
+func TestGrokQuotaServiceProbeUsagePaymentRequiredMarksAccountError(t *testing.T) {
+	t.Parallel()
+
+	account := healthyGrokQuotaOAuthAccount(47)
+	repo := &grokQuotaAccountRepo{
+		mockAccountRepoForPlatform: &mockAccountRepoForPlatform{
+			accountsByID: map[int64]*Account{47: account},
+		},
+	}
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusPaymentRequired,
+		Header:     http.Header{},
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"payment required"}}`)),
+	}}
+	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream)
+
+	_, err := svc.ProbeUsage(context.Background(), 47)
+
+	require.Error(t, err)
+	require.Equal(t, 1, repo.credentialErrorCalls)
+	require.Equal(t, grokPaymentRequiredErrorMessage, repo.lastCredentialError)
+	require.Equal(t, grokCredentialMutationSnapshot(account), repo.lastCredentialSnapshot)
+	require.Zero(t, repo.tempUnschedCalls)
 }
 
 func TestGrokQuotaServiceResetQuotaUnsupported(t *testing.T) {

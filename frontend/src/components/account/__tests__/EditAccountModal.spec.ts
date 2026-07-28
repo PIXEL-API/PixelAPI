@@ -506,4 +506,97 @@ describe('EditAccountModal', () => {
     expect(payload?.proxy_id).toBe(0)
     expect(payload?.credentials?.plan_type).toBe('plus')
   })
+
+  it('loads and preserves Grok OAuth upstream config for administrators', async () => {
+    const account = buildAccount()
+    account.name = 'Grok OAuth'
+    account.platform = 'grok'
+    account.type = 'oauth'
+    account.account_level = 'unknown'
+    account.credentials = {
+      access_token: 'grok-token',
+      refresh_token: 'grok-refresh',
+      base_url: 'https://relay.example.com/v1',
+      header_override_enabled: true,
+      header_overrides: {
+        'user-agent': 'grok-build',
+        'x-grok-client-version': '1.2.3'
+      }
+    }
+    account.extra = {
+      grok_client_tool_cache_enabled: false,
+      custom_setting: 'preserved'
+    }
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+
+    expect(wrapper.get('[data-testid="grok-custom-base-url-input"]').element).toHaveProperty(
+      'value',
+      'https://relay.example.com/v1'
+    )
+    expect(wrapper.get('[data-testid="grok-client-tool-cache-toggle"]').attributes('aria-checked')).toBe(
+      'false'
+    )
+    expect(wrapper.find('[data-testid="grok-header-override"]').exists()).toBe(true)
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const payload = updateAccountMock.mock.calls[0]?.[1]
+    expect(payload?.credentials).toMatchObject({
+      base_url: 'https://relay.example.com/v1',
+      header_override_enabled: true,
+      header_overrides: {
+        'user-agent': 'grok-build',
+        'x-grok-client-version': '1.2.3'
+      }
+    })
+    expect(payload?.extra).toMatchObject({
+      grok_client_tool_cache_enabled: false,
+      custom_setting: 'preserved'
+    })
+  })
+
+  it('does not expose or submit Grok administrator upstream controls in user scope', async () => {
+    const account = buildAccount()
+    account.platform = 'grok'
+    account.type = 'oauth'
+    account.account_level = 'unknown'
+    account.proxy_id = 7
+    account.credentials = {
+      access_token: 'grok-token',
+      refresh_token: 'grok-refresh',
+      base_url: 'https://relay.example.com/v1',
+      header_override_enabled: true,
+      header_overrides: {
+        'user-agent': 'grok-build'
+      }
+    }
+    account.extra = {
+      grok_client_tool_cache_enabled: true
+    }
+    updateUserAccountMock.mockReset()
+    updateUserAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account, { accountScope: 'user' })
+
+    expect(wrapper.find('[data-testid="grok-custom-base-url"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="grok-header-override"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="grok-client-tool-cache"]').exists()).toBe(false)
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(updateUserAccountMock).toHaveBeenCalledTimes(1)
+    const payload = updateUserAccountMock.mock.calls[0]?.[1]
+    expect(payload?.credentials).not.toHaveProperty('base_url')
+    expect(payload?.credentials).not.toHaveProperty('header_override_enabled')
+    expect(payload?.credentials).not.toHaveProperty('header_overrides')
+    expect(payload?.extra?.grok_client_tool_cache_enabled).toBeUndefined()
+  })
 })

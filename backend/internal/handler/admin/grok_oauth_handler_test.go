@@ -187,3 +187,37 @@ func TestGrokOAuthHandlerRefreshAccountTokenFailsWhenProviderUnavailable(t *test
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
 	require.Contains(t, rec.Body.String(), `"reason":"GROK_TOKEN_PROVIDER_UNAVAILABLE"`)
 }
+
+func TestGrokSSOImportCredentialsPreservesRequestedBaseURL(t *testing.T) {
+	built := map[string]any{
+		"access_token": "at-1",
+		"base_url":     xai.DefaultCLIBaseURL,
+	}
+	reqCredentials := map[string]any{
+		"base_url":                "https://relay.example.com/v1",
+		"header_override_enabled": true,
+		"header_overrides":        map[string]any{"x-relay-key": "k"},
+	}
+
+	credentials := grokSSOImportCredentials(built, reqCredentials)
+
+	require.Equal(t, "at-1", credentials["access_token"])
+	require.Equal(t, "https://relay.example.com/v1", credentials["base_url"])
+	require.Equal(t, true, credentials["header_override_enabled"])
+	require.Equal(t, map[string]any{"x-relay-key": "k"}, credentials["header_overrides"])
+	require.Equal(t, "https://relay.example.com/v1", reqCredentials["base_url"])
+}
+
+func TestGrokSSOImportCredentialsUsesBuiltDefaultWhenRequestHasNoBaseURL(t *testing.T) {
+	built := map[string]any{
+		"access_token": "at-1",
+		"base_url":     xai.DefaultCLIBaseURL,
+	}
+
+	credentials := grokSSOImportCredentials(built, nil)
+	require.Equal(t, xai.DefaultCLIBaseURL, credentials["base_url"])
+
+	credentials = grokSSOImportCredentials(built, map[string]any{"base_url": "   "})
+	require.Equal(t, xai.DefaultCLIBaseURL, credentials["base_url"])
+	require.Equal(t, "at-1", credentials["access_token"])
+}

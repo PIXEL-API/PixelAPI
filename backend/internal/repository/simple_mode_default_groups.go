@@ -9,6 +9,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
+const simpleModeDefaultGroupDescription = "Auto-created default group"
+
 func ensureSimpleModeDefaultGroups(ctx context.Context, client *dbent.Client) error {
 	if client == nil {
 		return fmt.Errorf("nil ent client")
@@ -19,6 +21,7 @@ func ensureSimpleModeDefaultGroups(ctx context.Context, client *dbent.Client) er
 		service.PlatformOpenAI:      1,
 		service.PlatformGemini:      1,
 		service.PlatformAntigravity: 2,
+		service.PlatformGrok:        1,
 	}
 
 	for platform, minCount := range requiredByPlatform {
@@ -64,12 +67,13 @@ func createGroupIfNotExists(ctx context.Context, client *dbent.Client, name, pla
 
 	_, err = client.Group.Create().
 		SetName(name).
-		SetDescription("Auto-created default group").
+		SetDescription(simpleModeDefaultGroupDescription).
 		SetPlatform(platform).
 		SetStatus(service.StatusActive).
 		SetSubscriptionType(service.SubscriptionTypeStandard).
 		SetRateMultiplier(1.0).
 		SetIsExclusive(false).
+		SetAllowImageGeneration(platform == service.PlatformGrok).
 		Save(ctx)
 	if err != nil {
 		if dbent.IsConstraintError(err) {

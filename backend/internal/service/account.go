@@ -2072,28 +2072,33 @@ func (a *Account) GetGrokBaseURL() string {
 	if !a.IsGrok() {
 		return ""
 	}
+	baseURL := strings.TrimSpace(a.GetCredential("base_url"))
 	if a.IsGrokOAuth() {
-		// OAuth subscription credentials must never be sent to an account-level
-		// custom host, even when unsafe development overrides are enabled.
-		return xai.DefaultCLIBaseURL
+		// Grok OAuth 允许管理员在官方 CLI、官方/区域 API 与受信任中继之间切换。
+		// 这里只决定账号配置语义；实际出站请求仍必须经过统一 URL 校验器。
+		if baseURL == "" || !xai.IsParseableBaseURL(baseURL) {
+			return xai.DefaultCLIBaseURL
+		}
+		return baseURL
 	}
-	baseURL := a.GetCredential("base_url")
 	if baseURL != "" {
 		return baseURL
 	}
 	return xai.DefaultBaseURL
 }
 
+// GetGrokMediaBaseURL selects the upstream used by Grok Imagine APIs.
+// CLI 网关的请求体限制不适合大体积媒体，因此仅当 OAuth 文本端点指向 CLI
+// 时把媒体请求切到官方 API；其他管理员选择的官方、区域或中继端点保持不变。
 func (a *Account) GetGrokMediaBaseURL() string {
 	if !a.IsGrok() {
 		return ""
 	}
-	if a.IsGrokOAuth() {
-		// OAuth text requests use the CLI gateway, while large media payloads
-		// must use xAI's official API route.
+	baseURL := a.GetGrokBaseURL()
+	if a.IsGrokOAuth() && isGrokCLIProxyTarget(baseURL) {
 		return xai.DefaultBaseURL
 	}
-	return a.GetGrokBaseURL()
+	return baseURL
 }
 
 func (a *Account) GetGrokAccessToken() string {

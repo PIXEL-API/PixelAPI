@@ -153,8 +153,35 @@ func TestValidateBaseURLAllowsPublicThirdPartyGrokAPI(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "https://grok.example.test/v1", baseURL)
 
+	prefixed, err := ValidateBaseURL("https://grok.example.test/tenant/xai/v1/")
+	require.NoError(t, err)
+	require.Equal(t, "https://grok.example.test/tenant/xai/v1", prefixed)
+
 	_, err = ValidateTrustedBaseURL("https://grok.example.test/v1")
 	require.Error(t, err)
+}
+
+func TestRegionalAPIEndpointsAreOfficialAndTrusted(t *testing.T) {
+	for _, raw := range []string{
+		"https://us-east-1.api.x.ai/v1",
+		"https://us-west-2.api.x.ai/v1",
+		"https://eu-west-1.api.x.ai/v1",
+	} {
+		require.True(t, IsOfficialBaseURL(raw))
+		validated, err := ValidateTrustedBaseURL(raw)
+		require.NoError(t, err)
+		require.Equal(t, raw, validated)
+	}
+
+	require.False(t, IsOfficialBaseURL("https://api.x.ai.evil.example.test/v1"))
+	_, err := ValidateTrustedBaseURL("https://us-east-1.api.x.ai/other")
+	require.Error(t, err)
+}
+
+func TestIsParseableBaseURL(t *testing.T) {
+	require.True(t, IsParseableBaseURL("https://relay.example.test/v1"))
+	require.False(t, IsParseableBaseURL("not a url"))
+	require.False(t, IsParseableBaseURL("   "))
 }
 
 func TestValidateBaseURLsRejectUnsafeComponents(t *testing.T) {

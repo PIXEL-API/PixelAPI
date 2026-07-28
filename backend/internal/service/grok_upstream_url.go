@@ -21,33 +21,55 @@ func grokBaseURLValidator(
 	}
 	switch account.Type {
 	case AccountTypeOAuth:
-		return redactedGrokBaseURLValidator(xai.ValidateTrustedBaseURL), nil
-	case AccountTypeAPIKey:
+		// 官方 CLI/API/区域端点始终使用 xAI 严格可信主机策略；OAuth 自定义
+		// 中继必须显式启用动态运营白名单，并保持私网访问关闭。
+		if xai.IsOfficialBaseURL(account.GetGrokBaseURL()) {
+			return redactedGrokBaseURLValidator(xai.ValidateTrustedBaseURL), nil
+		}
 		if cfg == nil {
-			return nil, fmt.Errorf("grok API key URL security configuration is required")
+			return nil, fmt.Errorf("grok OAuth relay URL security configuration is required")
 		}
 		if !cfg.Security.URLAllowlist.Enabled {
-			return redactedGrokBaseURLValidator(func(raw string) (string, error) {
-				return urlvalidator.ValidateURLFormat(raw, cfg.Security.URLAllowlist.AllowInsecureHTTP)
-			}), nil
+			return nil, fmt.Errorf("custom grok OAuth relay requires security.url_allowlist.enabled=true")
 		}
-		if ctx == nil {
-			ctx = context.Background()
+		if cfg.Security.URLAllowlist.AllowPrivateHosts {
+			return nil, fmt.Errorf("custom grok OAuth relay requires security.url_allowlist.allow_private_hosts=false")
 		}
-		allowedHosts, err := upstreamAllowlistHosts(ctx, cfg, settingService)
-		if err != nil {
-			return nil, fmt.Errorf("load grok upstream URL allowlist: %w", err)
-		}
-		return redactedGrokBaseURLValidator(func(raw string) (string, error) {
-			return urlvalidator.ValidateHTTPSURL(raw, urlvalidator.ValidationOptions{
-				AllowedHosts:     allowedHosts,
-				RequireAllowlist: true,
-				AllowPrivate:     cfg.Security.URLAllowlist.AllowPrivateHosts,
-			})
-		}), nil
+		return grokOperatorPolicyValidator(ctx, cfg, settingService)
+	case AccountTypeAPIKey:
+		return grokOperatorPolicyValidator(ctx, cfg, settingService)
 	default:
 		return nil, fmt.Errorf("unsupported grok account type: %s", account.Type)
 	}
+}
+
+func grokOperatorPolicyValidator(
+	ctx context.Context,
+	cfg *config.Config,
+	settingService *SettingService,
+) (xai.BaseURLValidator, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("grok URL security configuration is required")
+	}
+	if !cfg.Security.URLAllowlist.Enabled {
+		return redactedGrokBaseURLValidator(func(raw string) (string, error) {
+			return urlvalidator.ValidateURLFormat(raw, cfg.Security.URLAllowlist.AllowInsecureHTTP)
+		}), nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	allowedHosts, err := upstreamAllowlistHosts(ctx, cfg, settingService)
+	if err != nil {
+		return nil, fmt.Errorf("load grok upstream URL allowlist: %w", err)
+	}
+	return redactedGrokBaseURLValidator(func(raw string) (string, error) {
+		return urlvalidator.ValidateHTTPSURL(raw, urlvalidator.ValidationOptions{
+			AllowedHosts:     allowedHosts,
+			RequireAllowlist: true,
+			AllowPrivate:     cfg.Security.URLAllowlist.AllowPrivateHosts,
+		})
+	}), nil
 }
 
 func redactedGrokBaseURLValidator(validator xai.BaseURLValidator) xai.BaseURLValidator {
@@ -74,6 +96,20 @@ func buildGrokChatCompletionsURL(ctx context.Context, account *Account, cfg *con
 		return "", err
 	}
 	return xai.BuildChatCompletionsURLWithValidator(account.GetGrokBaseURL(), validator)
+}
+
+func buildGrokBillingURL(
+	ctx context.Context,
+	account *Account,
+	cfg *config.Config,
+	settingService *SettingService,
+	weekly bool,
+) (string, error) {
+	validator, err := grokBaseURLValidator(ctx, account, cfg, settingService)
+	if err != nil {
+		return "", err
+	}
+	return xai.BuildBillingURLWithValidator(account.GetGrokBaseURL(), weekly, validator)
 }
 
 func buildGrokMediaURL(

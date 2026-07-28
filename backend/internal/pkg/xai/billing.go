@@ -96,6 +96,18 @@ func BuildBillingURL(formatCredits bool) string {
 	return base + BillingMonthlyPath
 }
 
+// BuildBillingURLWithValidator 让计费探测跟随账号端点，并复用调用方的出站安全策略。
+func BuildBillingURLWithValidator(baseURL string, formatCredits bool, validator BaseURLValidator) (string, error) {
+	validatedBaseURL, err := validatedBaseURLWithValidator(baseURL, validator)
+	if err != nil {
+		return "", fmt.Errorf("invalid base url: %w", err)
+	}
+	if formatCredits {
+		return validatedBaseURL + BillingWeeklyPath, nil
+	}
+	return validatedBaseURL + BillingMonthlyPath, nil
+}
+
 // ApplyCLIBillingHeaders sets Authorization + CLI identity headers for billing GETs.
 func ApplyCLIBillingHeaders(req *http.Request, accessToken string) {
 	if req == nil {

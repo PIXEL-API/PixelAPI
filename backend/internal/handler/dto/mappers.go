@@ -495,6 +495,18 @@ func AccountFromService(a *service.Account) *Account {
 	return out
 }
 
+// AccountFromServiceForUser keeps administrator-managed upstream headers out of
+// user-scoped account responses. Administrators still receive the full header
+// override object through AccountFromService so existing edit flows keep working.
+func AccountFromServiceForUser(a *service.Account) *Account {
+	out := AccountFromService(a)
+	if out == nil || out.Credentials == nil {
+		return out
+	}
+	delete(out.Credentials, service.CredentialKeyHeaderOverrides)
+	return out
+}
+
 func timeToUnixSeconds(value *time.Time) *int64 {
 	if value == nil {
 		return nil

@@ -2,6 +2,7 @@ import type { GroupPlatform } from '@/types'
 
 export const OPENAI_CC_SWITCH_CODEX_MODEL = 'gpt-5.5'
 export const OPENAI_CC_SWITCH_REASONING_EFFORT = 'xhigh'
+export const GROK_CC_SWITCH_MODEL = 'grok-4.5'
 
 export type CcSwitchClientType = 'claude' | 'gemini'
 
@@ -43,6 +44,11 @@ function tomlString(value: string): string {
   return JSON.stringify(value)
 }
 
+function withSingleV1Endpoint(baseUrl: string): string {
+  const normalizedBaseUrl = baseUrl.trim().replace(/\/+$/, '').replace(/(?:\/v1)+$/i, '')
+  return `${normalizedBaseUrl}/v1`
+}
+
 function buildOpenAICodexConfig(baseUrl: string, providerName: string): string {
   const providerId = toCodexProviderId(providerName)
 
@@ -79,6 +85,12 @@ export function resolveCcSwitchImportConfig(
       return {
         app: 'gemini',
         endpoint: baseUrl
+      }
+    case 'grok':
+      return {
+        app: 'grokbuild',
+        endpoint: withSingleV1Endpoint(baseUrl),
+        model: GROK_CC_SWITCH_MODEL
       }
     default:
       return {

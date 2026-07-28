@@ -173,6 +173,23 @@ func ProvideAdminAccountHandler(
 	return h
 }
 
+func ProvideGrokOAuthHandler(
+	grokOAuthService *service.GrokOAuthService,
+	grokTokenProvider *service.GrokTokenProvider,
+	adminService service.AdminService,
+	quotaService *service.GrokQuotaService,
+	reconciler service.GrokOAuthReconciler,
+) *admin.GrokOAuthHandler {
+	h := admin.NewGrokOAuthHandler(
+		grokOAuthService,
+		grokTokenProvider,
+		adminService,
+		quotaService,
+	)
+	h.SetReconciler(reconciler)
+	return h
+}
+
 func ProvideUserAccountHandler(
 	accountService *service.AccountService,
 	accountUsageService *service.AccountUsageService,
@@ -319,7 +336,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewOpenAIOAuthHandler,
 	admin.NewGeminiOAuthHandler,
 	admin.NewAntigravityOAuthHandler,
-	admin.NewGrokOAuthHandler,
+	ProvideGrokOAuthHandler,
 	admin.NewProxyHandler,
 	admin.NewRedeemHandler,
 	admin.NewPromoHandler,

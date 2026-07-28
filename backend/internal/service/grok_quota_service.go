@@ -198,6 +198,16 @@ func (s *GrokQuotaService) probeUsage(ctx context.Context, accountID int64) (*Gr
 	if resp.StatusCode == http.StatusTooManyRequests {
 		return result, nil
 	}
+	if resp.StatusCode == http.StatusPaymentRequired {
+		if _, stateErr := setGrokPaymentRequiredErrorIfMatch(ctx, s.accountRepo, account); stateErr != nil {
+			return nil, infraerrors.Newf(
+				http.StatusInternalServerError,
+				"GROK_402_ACCOUNT_STATE_UPDATE_FAILED",
+				"Grok usage probe returned 402, but the account could not be marked as error: %v",
+				stateErr,
+			)
+		}
+	}
 	if resp.StatusCode >= 400 {
 		const reason = "GROK_QUOTA_PROBE_UPSTREAM_ERROR"
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
@@ -272,6 +282,16 @@ func (s *GrokQuotaService) probeBilling(ctx context.Context, accountID int64) (*
 
 	weeklyOK := weekly.summary != nil
 	monthlyOK := monthly.summary != nil
+	if weekly.status == http.StatusPaymentRequired || monthly.status == http.StatusPaymentRequired {
+		if _, stateErr := setGrokPaymentRequiredErrorIfMatch(ctx, s.accountRepo, account); stateErr != nil {
+			return nil, infraerrors.Newf(
+				http.StatusInternalServerError,
+				"GROK_402_ACCOUNT_STATE_UPDATE_FAILED",
+				"Grok billing probe returned 402, but the account could not be marked as error: %v",
+				stateErr,
+			)
+		}
+	}
 	previous, _ := grokBillingSnapshotFromExtra(account.Extra)
 	if !weeklyOK && !monthlyOK {
 		probeErr := mergeGrokBillingProbeErrors(weekly.status, monthly.status, weekly.err, monthly.err)
@@ -358,11 +378,16 @@ func (s *GrokQuotaService) fetchBilling(
 	proxyURL string,
 	weekly bool,
 ) (*xai.BillingSummary, int, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, xai.BuildBillingURL(weekly), nil)
+	billingURL, err := buildGrokBillingURL(ctx, account, s.cfg, s.settingService, weekly)
+	if err != nil {
+		return nil, 0, infraerrors.Newf(http.StatusBadRequest, "GROK_QUOTA_BASE_URL_INVALID", "invalid Grok base_url: %v", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, billingURL, nil)
 	if err != nil {
 		return nil, 0, infraerrors.Newf(http.StatusInternalServerError, "GROK_QUOTA_PROBE_REQUEST_BUILD_FAILED", "failed to build billing request: %v", err)
 	}
 	xai.ApplyCLIBillingHeaders(req, token)
+	account.ApplyHeaderOverrides(req.Header)
 	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, maxInt(account.Concurrency, 2))
 	if err != nil {
 		return nil, 0, infraerrors.Newf(http.StatusBadGateway, "GROK_QUOTA_PROBE_REQUEST_FAILED", "billing request failed: %v", err)

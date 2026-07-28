@@ -4,6 +4,10 @@ package service
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
 
 func TestGetBaseURL(t *testing.T) {
@@ -155,6 +159,98 @@ func TestGetGeminiBaseURL(t *testing.T) {
 			if result != tt.expected {
 				t.Errorf("GetGeminiBaseURL() = %q, want %q", result, tt.expected)
 			}
+		})
+	}
+}
+
+func TestGetGrokBaseURLUsesConfiguredOAuthEndpoint(t *testing.T) {
+	tests := []struct {
+		name     string
+		account  Account
+		expected string
+	}{
+		{
+			name:     "oauth without base_url uses CLI subscription proxy",
+			account:  Account{Type: AccountTypeOAuth, Platform: PlatformGrok, Credentials: map[string]any{}},
+			expected: xai.DefaultCLIBaseURL,
+		},
+		{
+			name: "oauth official API endpoint is honored",
+			account: Account{Type: AccountTypeOAuth, Platform: PlatformGrok, Credentials: map[string]any{
+				"base_url": xai.DefaultBaseURL,
+			}},
+			expected: xai.DefaultBaseURL,
+		},
+		{
+			name: "oauth custom relay is honored",
+			account: Account{Type: AccountTypeOAuth, Platform: PlatformGrok, Credentials: map[string]any{
+				"base_url": "https://relay.example.com/xai/v1",
+			}},
+			expected: "https://relay.example.com/xai/v1",
+		},
+		{
+			name: "oauth unparseable base_url falls back to CLI proxy",
+			account: Account{Type: AccountTypeOAuth, Platform: PlatformGrok, Credentials: map[string]any{
+				"base_url": "not a url",
+			}},
+			expected: xai.DefaultCLIBaseURL,
+		},
+		{
+			name:     "API key without base_url uses official API",
+			account:  Account{Type: AccountTypeAPIKey, Platform: PlatformGrok, Credentials: map[string]any{}},
+			expected: xai.DefaultBaseURL,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.expected, tt.account.GetGrokBaseURL())
+		})
+	}
+}
+
+func TestGetGrokMediaBaseURLOnlyRedirectsCLIGateway(t *testing.T) {
+	tests := []struct {
+		name     string
+		account  Account
+		expected string
+	}{
+		{
+			name:     "oauth default CLI uses official media API",
+			account:  Account{Type: AccountTypeOAuth, Platform: PlatformGrok, Credentials: map[string]any{}},
+			expected: xai.DefaultBaseURL,
+		},
+		{
+			name: "oauth CLI variant uses official media API",
+			account: Account{Type: AccountTypeOAuth, Platform: PlatformGrok, Credentials: map[string]any{
+				"base_url": "HTTPS://CLI-CHAT-PROXY.GROK.COM:443/%76%31/",
+			}},
+			expected: xai.DefaultBaseURL,
+		},
+		{
+			name: "oauth custom relay remains selected",
+			account: Account{Type: AccountTypeOAuth, Platform: PlatformGrok, Credentials: map[string]any{
+				"base_url": "https://relay.example.com/v1",
+			}},
+			expected: "https://relay.example.com/v1",
+		},
+		{
+			name: "API key custom endpoint remains selected",
+			account: Account{Type: AccountTypeAPIKey, Platform: PlatformGrok, Credentials: map[string]any{
+				"base_url": "https://grok.example.com/v1",
+			}},
+			expected: "https://grok.example.com/v1",
+		},
+		{
+			name:     "non-Grok account has no media base URL",
+			account:  Account{Type: AccountTypeOAuth, Platform: PlatformOpenAI, Credentials: map[string]any{}},
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.expected, tt.account.GetGrokMediaBaseURL())
 		})
 	}
 }

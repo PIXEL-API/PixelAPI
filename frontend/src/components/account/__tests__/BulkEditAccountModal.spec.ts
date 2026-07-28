@@ -591,4 +591,15 @@ describe('BulkEditAccountModal', () => {
       })
     ])
   })
+
+  it('用户作用域批量编辑不暴露 Grok 上游和请求头覆写入口', () => {
+    const wrapper = mountModal({
+      accountScope: 'user',
+      selectedPlatforms: ['grok'],
+      selectedTypes: ['oauth']
+    })
+
+    expect(wrapper.find('[data-testid="bulk-grok-header-override"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="grok-base-url-preset"]').exists()).toBe(false)
+  })
 })

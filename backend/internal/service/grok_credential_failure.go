@@ -13,7 +13,8 @@ import (
 )
 
 const (
-	grokCredentialMutationTimeout = 5 * time.Second
+	grokCredentialMutationTimeout   = 5 * time.Second
+	grokPaymentRequiredErrorMessage = "grok payment required (402): account billing or spending limit requires manual intervention"
 
 	GrokCredentialUnavailableClientMessage = "No healthy Grok OAuth account is currently available"
 
@@ -32,6 +33,7 @@ var (
 	errOAuthRefreshAccountRereadFailed = errors.New("oauth refresh account reread failed")
 	errOAuthRefreshAccountStateChanged = errors.New("oauth refresh account state changed")
 	errOAuthRefreshCredentialPersist   = errors.New("oauth refresh credential persistence failed")
+	errGrokConditionalStateUnsupported = errors.New("grok conditional account state repository is unavailable")
 )
 
 type providerConfigurationRefreshError struct{ err error }
@@ -93,6 +95,28 @@ func withGrokCredentialFailureSnapshot(err error, account *Account) error {
 type grokCredentialConditionalStateRepository interface {
 	SetGrokCredentialErrorIfMatch(context.Context, int64, GrokCredentialMutationSnapshot, string) (bool, error)
 	SetGrokCredentialTempUnschedulableIfMatch(context.Context, int64, GrokCredentialMutationSnapshot, time.Time, string) (bool, error)
+}
+
+func setGrokPaymentRequiredErrorIfMatch(
+	ctx context.Context,
+	accountRepo AccountRepository,
+	account *Account,
+) (bool, error) {
+	if accountRepo == nil || account == nil || account.Platform != PlatformGrok {
+		return false, errGrokConditionalStateUnsupported
+	}
+	repo, ok := accountRepo.(grokCredentialConditionalStateRepository)
+	if !ok {
+		return false, errGrokConditionalStateUnsupported
+	}
+	stateCtx, cancel := openAIAccountStateContext(ctx)
+	defer cancel()
+	return repo.SetGrokCredentialErrorIfMatch(
+		stateCtx,
+		account.ID,
+		grokCredentialMutationSnapshot(account),
+		grokPaymentRequiredErrorMessage,
+	)
 }
 
 // GetRequestCredential provides a safe request-path credential entry for
