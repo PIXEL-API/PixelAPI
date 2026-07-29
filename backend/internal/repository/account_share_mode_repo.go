@@ -4810,7 +4810,8 @@ func lockAccountShareEndRuntimeRowsInTx(
 			return 0, 0, err
 		}
 		if status != service.AccountShareBillingIntentStatusSettled &&
-			status != service.AccountShareBillingIntentStatusCancelled {
+			status != service.AccountShareBillingIntentStatusCancelled &&
+			status != service.AccountShareBillingIntentStatusNeedsAttention {
 			pendingIntents++
 		}
 	}

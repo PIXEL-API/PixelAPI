@@ -5170,6 +5170,52 @@ func TestAccountShareModeRepositoryFinalizeMembershipEndDefersPendingIntent(t *t
 	}
 }
 
+func TestLockAccountShareEndRuntimeRowsIgnoresNeedsAttentionIntent(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	membershipID := int64(251051)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT id\\s+FROM account_share_membership_account_bindings").
+		WithArgs(membershipID).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(4001)))
+	mock.ExpectQuery("SELECT id, status\\s+FROM account_share_request_billing_intents").
+		WithArgs(membershipID).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "status"}).
+			AddRow(int64(5001), service.AccountShareBillingIntentStatusNeedsAttention).
+			AddRow(int64(5002), service.AccountShareBillingIntentStatusSettled).
+			AddRow(int64(5003), service.AccountShareBillingIntentStatusReady))
+	mock.ExpectRollback()
+
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("BeginTx failed: %v", err)
+	}
+	openBindings, pendingIntents, err := lockAccountShareEndRuntimeRowsInTx(
+		context.Background(),
+		tx,
+		membershipID,
+	)
+	if err != nil {
+		t.Fatalf("lockAccountShareEndRuntimeRowsInTx failed: %v", err)
+	}
+	if openBindings != 1 {
+		t.Fatalf("expected one open binding, got %d", openBindings)
+	}
+	if pendingIntents != 1 {
+		t.Fatalf("only the ready intent should block membership end, got %d blockers", pendingIntents)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback failed: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func TestAccountShareModeRepositoryFinalizeMembershipEndClosesBindingAndOperation(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
