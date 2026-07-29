@@ -8885,6 +8885,9 @@ func accountShareListingSelectSQLWithAccountJoin(accountJoinSQL string) string {
 			qm.api_key_name,
 			qm.queue_rank,
 			qm.status,
+			qm.ending_operation_id,
+			qm.ending_operation_status,
+			qm.settlement_status,
 			qm.idle_timeout_minutes,
 			qm.dispatch_cooldown_until,
 			hm.id,
@@ -8951,14 +8954,35 @@ func accountShareListingSelectSQLWithAccountJoin(accountJoinSQL string) string {
 			LIMIT 1
 		) cm ON TRUE
 		LEFT JOIN LATERAL (
-			SELECT m.id, m.api_key_id, COALESCE(ak.name, '') AS api_key_name, m.queue_rank, m.status, m.idle_timeout_minutes, m.dispatch_cooldown_until
+			SELECT
+				m.id,
+				m.api_key_id,
+				COALESCE(ak.name, '') AS api_key_name,
+				m.queue_rank,
+				m.status,
+				COALESCE(m.ending_operation_id::text, '') AS ending_operation_id,
+				COALESCE(operation.status, '') AS ending_operation_status,
+				COALESCE(m.settlement_status, '') AS settlement_status,
+				m.idle_timeout_minutes,
+				m.dispatch_cooldown_until
 			FROM account_share_memberships m
 			LEFT JOIN api_keys ak ON ak.id = m.api_key_id
+			LEFT JOIN account_share_room_operations operation
+				ON operation.id = m.ending_operation_id
+				AND operation.action = 'end_membership'
+				AND operation.membership_id = m.id
 			WHERE m.listing_id = l.id
 				AND m.consumer_user_id = $1
 				AND m.status IN ('%s', '%s', '%s')
 				AND m.deleted_at IS NULL
-			ORDER BY m.queue_rank ASC, m.id ASC
+			ORDER BY
+				CASE m.status
+					WHEN '%s' THEN 0
+					WHEN '%s' THEN 1
+					ELSE 2
+				END,
+				m.queue_rank ASC,
+				m.id DESC
 			LIMIT 1
 		) qm ON TRUE
 		LEFT JOIN LATERAL (
@@ -8983,6 +9007,8 @@ func accountShareListingSelectSQLWithAccountJoin(accountJoinSQL string) string {
 		service.AccountShareMembershipStatusEnding,
 		service.AccountShareMembershipStatusActive,
 		service.AccountShareMembershipStatusQueued,
+		service.AccountShareMembershipStatusEnding,
+		service.AccountShareMembershipStatusActive,
 		service.AccountShareMembershipStatusEnding,
 		service.AccountShareMembershipStatusEnded,
 	)
@@ -9228,7 +9254,7 @@ func scanAccountShareListing(scanner accountShareListingScanner) (*service.Accou
 	var accountPlatform, accountType, accountLevel, accountStatus string
 	var accountSchedulable bool
 	var accountExpiresAt, accountLastUsedAt, rateLimitedAt, rateLimitResetAt, overloadUntil, tempUnschedulableUntil, sessionWindowStart, sessionWindowEnd sql.NullTime
-	var tempUnschedulableReason, sessionWindowStatus, subscriptionExpiresAtRaw, currentAPIKeyName, queueAPIKeyName, queueStatus sql.NullString
+	var tempUnschedulableReason, sessionWindowStatus, subscriptionExpiresAtRaw, currentAPIKeyName, queueAPIKeyName, queueStatus, queueEndingOperationID, queueEndingOperationStatus, queueSettlementStatus sql.NullString
 	var editingByUsername, editSessionID string
 	var credentialsRaw, extraRaw []byte
 	var currentWaiverWindowUsageAmount sql.NullString
@@ -9301,6 +9327,9 @@ func scanAccountShareListing(scanner accountShareListingScanner) (*service.Accou
 		&queueAPIKeyName,
 		&queueRank,
 		&queueStatus,
+		&queueEndingOperationID,
+		&queueEndingOperationStatus,
+		&queueSettlementStatus,
 		&queueIdleTimeoutMinutes,
 		&queueDispatchCooldownUntil,
 		&lastUsedMembershipID,
@@ -9464,6 +9493,9 @@ func scanAccountShareListing(scanner accountShareListingScanner) (*service.Accou
 	if queueStatus.Valid {
 		listing.QueueStatus = queueStatus.String
 	}
+	listing.QueueEndingOperationID = strings.TrimSpace(queueEndingOperationID.String)
+	listing.QueueEndingOperationStatus = strings.TrimSpace(queueEndingOperationStatus.String)
+	listing.QueueSettlementStatus = strings.TrimSpace(queueSettlementStatus.String)
 	if queueIdleTimeoutMinutes.Valid {
 		minutes := int(queueIdleTimeoutMinutes.Int64)
 		listing.QueueIdleTimeoutMinutes = &minutes

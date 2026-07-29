@@ -505,6 +505,7 @@ func TestAccountShareModeRepositoryListListingsRestoresEndingMembershipAfterRefr
 		membershipID int64 = 18012
 		apiKeyID     int64 = 15007
 	)
+	const operationID = "ca292d86-824f-4ac0-b10a-b9436b8f2669"
 	joinedAt := time.Date(2026, 7, 27, 8, 0, 0, 0, time.UTC)
 	expiredAt := joinedAt.Add(30 * time.Minute)
 
@@ -531,6 +532,9 @@ func TestAccountShareModeRepositoryListListingsRestoresEndingMembershipAfterRefr
 				row.QueueAPIKeyID = apiKeyID
 				row.QueueAPIKeyName = "coding-key"
 				row.QueueStatus = service.AccountShareMembershipStatusEnding
+				row.QueueEndingOperationID = operationID
+				row.QueueEndingOperationStatus = "running"
+				row.QueueSettlementStatus = "pending"
 			},
 		))
 
@@ -555,6 +559,11 @@ func TestAccountShareModeRepositoryListListingsRestoresEndingMembershipAfterRefr
 	}
 	if listing.QueueStatus != service.AccountShareMembershipStatusEnding {
 		t.Fatalf("queue status = %q, want %q", listing.QueueStatus, service.AccountShareMembershipStatusEnding)
+	}
+	if listing.QueueEndingOperationID != operationID ||
+		listing.QueueEndingOperationStatus != "running" ||
+		listing.QueueSettlementStatus != "pending" {
+		t.Fatalf("ending operation projection is incomplete: %#v", listing)
 	}
 	if listing.CurrentAPIKeyID == nil || *listing.CurrentAPIKeyID != apiKeyID ||
 		listing.QueueAPIKeyID == nil || *listing.QueueAPIKeyID != apiKeyID {
@@ -9809,6 +9818,9 @@ type accountShareListingRowData struct {
 	QueueAPIKeyName                         any
 	QueueRank                               any
 	QueueStatus                             any
+	QueueEndingOperationID                  any
+	QueueEndingOperationStatus              any
+	QueueSettlementStatus                   any
 	QueueIdleTimeoutMinutes                 any
 	QueueDispatchCooldownUntil              any
 	LastUsedMembershipID                    any
@@ -9904,6 +9916,9 @@ func accountShareListingRows(listingID, accountID, ownerUserID int64, editSessio
 		"queue_api_key_name",
 		"queue_rank",
 		"queue_status",
+		"queue_ending_operation_id",
+		"queue_ending_operation_status",
+		"queue_settlement_status",
 		"queue_idle_timeout_minutes",
 		"queue_dispatch_cooldown_until",
 		"last_used_membership_id",
@@ -9984,6 +9999,9 @@ func accountShareListingRows(listingID, accountID, ownerUserID int64, editSessio
 		row.QueueAPIKeyName,
 		row.QueueRank,
 		row.QueueStatus,
+		row.QueueEndingOperationID,
+		row.QueueEndingOperationStatus,
+		row.QueueSettlementStatus,
 		row.QueueIdleTimeoutMinutes,
 		row.QueueDispatchCooldownUntil,
 		row.LastUsedMembershipID,

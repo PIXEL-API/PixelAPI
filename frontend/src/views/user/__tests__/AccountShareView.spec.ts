@@ -2626,6 +2626,47 @@ describe('AccountShareView async snapshots and mode keys', () => {
     }
   })
 
+  it('restores an accepted exit operation from the listing projection after refresh', async () => {
+    vi.useFakeTimers()
+    const endingListing = listing({
+      id: 909,
+      current_membership_id: undefined,
+      queue_membership_id: 18012,
+      queue_api_key_id: 15007,
+      queue_api_key_name: '恢复测试 Key',
+      queue_status: 'ending',
+      queue_ending_operation_id: 'operation-restored-18012',
+      queue_ending_operation_status: 'running',
+      queue_settlement_status: 'pending',
+    })
+    listListings.mockResolvedValue(paginated([endingListing]))
+    getRoomOperation.mockResolvedValue(roomOperation({
+      id: 'operation-restored-18012',
+      listing_id: endingListing.id,
+      action: 'end_membership',
+      status: 'running',
+    }))
+
+    const wrapper = mountView()
+    try {
+      await flushPromises()
+
+      expect(wrapper.get('[data-testid="membership-ending-state"]').text()).toContain('退出/结算中')
+      expect(wrapper.text()).not.toContain('缺少进度标识')
+
+      await vi.advanceTimersByTimeAsync(8_000)
+      await flushPromises()
+
+      expect(getRoomOperation).toHaveBeenCalledWith(
+        'operation-restored-18012',
+        expect.objectContaining({ signal: expect.any(AbortSignal) })
+      )
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+
   it('disables rejoin while the listing projection is ending even without a membership id', async () => {
     listListings.mockResolvedValue(paginated([
       listing({

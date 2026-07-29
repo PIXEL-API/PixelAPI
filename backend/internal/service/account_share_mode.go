@@ -430,6 +430,9 @@ type AccountShareListing struct {
 	QueueAPIKeyName                         string                      `json:"queue_api_key_name,omitempty"`
 	QueueRank                               *int                        `json:"queue_rank,omitempty"`
 	QueueStatus                             string                      `json:"queue_status,omitempty"`
+	QueueEndingOperationID                  string                      `json:"queue_ending_operation_id,omitempty"`
+	QueueEndingOperationStatus              string                      `json:"queue_ending_operation_status,omitempty"`
+	QueueSettlementStatus                   string                      `json:"queue_settlement_status,omitempty"`
 	QueueIdleTimeoutMinutes                 *int                        `json:"queue_idle_timeout_minutes,omitempty"`
 	QueueDispatchCooldownUntil              *time.Time                  `json:"queue_dispatch_cooldown_until,omitempty"`
 	LastUsedMembershipID                    *int64                      `json:"last_used_membership_id,omitempty"`

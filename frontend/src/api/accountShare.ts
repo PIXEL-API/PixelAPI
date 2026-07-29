@@ -311,6 +311,9 @@ export interface AccountShareListing {
   queue_api_key_name?: string
   queue_rank?: number
   queue_status?: 'active' | 'queued' | string
+  queue_ending_operation_id?: string
+  queue_ending_operation_status?: string
+  queue_settlement_status?: string
   queue_idle_timeout_minutes?: number
   queue_dispatch_cooldown_until?: string
   last_used_membership_id?: number

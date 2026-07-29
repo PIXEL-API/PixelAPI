@@ -7899,6 +7899,12 @@ function listingWithPendingMembershipEnd(
 ): AccountShareListing {
   const pending = pendingMembershipEnds.value[listing.id]
   if (!pending) return listing
+  if (
+    listing.current_membership_id
+    && listing.current_membership_id !== pending.membershipID
+  ) {
+    return listing
+  }
   const snapshot = pending.listingSnapshot
   const membership = pending.membership
   return {
@@ -7921,6 +7927,64 @@ function listingWithPendingMembershipEnd(
     queue_idle_timeout_minutes: undefined,
     queue_dispatch_cooldown_until: undefined
   }
+}
+
+function syncListingEndingMemberships(resolvedListings: AccountShareListing[]): void {
+  const nextPending = { ...pendingMembershipEnds.value }
+
+  for (const listing of resolvedListings) {
+    const membershipID = Number(listing.queue_membership_id || 0)
+    const isEnding = listing.queue_status === 'ending' && membershipID > 0
+    const existing = nextPending[listing.id]
+
+    if (!isEnding) {
+      if (
+        existing
+        && listing.current_membership_id
+        && listing.current_membership_id !== existing.membershipID
+      ) {
+        delete nextPending[listing.id]
+      }
+      continue
+    }
+
+    const operationID = (listing.queue_ending_operation_id || '').trim()
+    const operationStatus = (listing.queue_ending_operation_status || '').trim()
+    const preserveOperationState = existing?.membershipID === membershipID
+      && existing.operationID === operationID
+    const membership: AccountShareMembership = {
+      id: membershipID,
+      listing_id: listing.id,
+      account_id: Number(listing.account_id || 0),
+      consumer_user_id: authStore.user?.id || 0,
+      api_key_id: Number(listing.queue_api_key_id || 0),
+      status: 'ending',
+      queue_rank: Number(listing.queue_rank || 0),
+      idle_timeout_minutes: Number(listing.queue_idle_timeout_minutes || 0),
+      joined_at: listing.current_joined_at || listing.updated_at,
+      last_request_at: listing.current_last_request_at,
+      ending_operation_id: operationID || undefined,
+      ending_operation_status: operationStatus || undefined,
+      settlement_status: listing.queue_settlement_status,
+      paid_until: listing.current_paid_until,
+      billed_until: listing.current_billed_until,
+      created_at: listing.created_at,
+      updated_at: listing.updated_at
+    }
+    nextPending[listing.id] = {
+      listingID: listing.id,
+      membershipID,
+      operationID,
+      operationStatus: operationStatus || (preserveOperationState ? existing.operationStatus : 'pending'),
+      operationError: preserveOperationState ? existing.operationError : '',
+      apiKeyID: listing.queue_api_key_id,
+      apiKeyName: listing.queue_api_key_name,
+      membership,
+      listingSnapshot: listing
+    }
+  }
+
+  pendingMembershipEnds.value = nextPending
 }
 
 function setPendingMembershipEnd(
@@ -8035,8 +8099,9 @@ async function loadListings(): Promise<boolean> {
       signal: controller.signal
     })
     if (controller.signal.aborted || requestSeq !== listingsRequestSeq) return false
-    const realListings = (result.items || [])
-      .map(normalizeListingForMerge)
+    const normalizedListings = (result.items || []).map(normalizeListingForMerge)
+    syncListingEndingMemberships(normalizedListings)
+    const realListings = normalizedListings
       .map(listingWithPendingMembershipEnd)
     pagination.total = result.total || 0
     pagination.page = result.page || pagination.page
