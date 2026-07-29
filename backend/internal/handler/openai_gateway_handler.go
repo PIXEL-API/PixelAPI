@@ -2299,7 +2299,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			}
 
 			if completeWithoutUsage {
-				if finalizeErr := completeAccountShareBillingDispatchWithoutUsage(turnCtx, turnErr, hasBillableUsage, true); finalizeErr != nil {
+				if finalizeErr := failAccountShareBillingDispatchWithoutUsage(turnCtx, turnErr, hasBillableUsage, true); finalizeErr != nil {
 					reqLog.Error("openai.websocket_billing_dispatch_finalize_failed",
 						zap.Int64("account_id", turnAccount.ID),
 						zap.Int("turn", turn),

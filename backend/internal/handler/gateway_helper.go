@@ -312,39 +312,39 @@ func withOpenAIForwardResultBillingGate(
 	return service.WithOpenAIForwardResultBillingGate(ctx, gate)
 }
 
-func completeAccountShareBillingDispatchWithoutUsage(
+func failAccountShareBillingDispatchWithoutUsage(
 	ctx context.Context,
 	forwardErr error,
 	hasBillableUsage bool,
-	streamed bool,
+	_ bool,
 ) error {
 	if hasBillableUsage {
 		return nil
 	}
-	errorCode := "forward_completed_no_usage"
+	errorCode := "forward_completed_without_usage_detail"
+	errorMessage := "upstream request completed without a complete usage detail"
 	if forwardErr != nil {
-		errorCode = "forward_failed_no_usage"
+		errorCode = "forward_failed_without_usage_detail"
+		errorMessage = "upstream request failed without a complete usage detail"
 		if errors.Is(forwardErr, service.ErrAccountShareBillingUsageValidation) {
 			errorCode = "forward_usage_incomplete"
+			errorMessage = "upstream response did not contain a complete usage detail"
 		} else if errors.Is(forwardErr, service.ErrAccountShareBillingPreTerminalCommit) {
 			return forwardErr
 		}
 	}
-	_, err := service.CompleteAccountShareBillingDispatchWithoutUsage(
+	_, err := service.FailAccountShareBillingDispatchWithoutUsage(
 		ctx,
-		service.AccountShareBillingResponseSummaryV1{
-			SchemaVersion: service.AccountShareBillingResponseSchemaV1,
-			Streamed:      streamed,
-			ErrorCode:     errorCode,
-		},
+		errorCode,
+		errorMessage,
 	)
 	return err
 }
 
 // finalizeAccountShareBillingAttempt closes the durable billing state before
 // releasing the paired runtime lease. The release barrier can therefore only
-// observe a ready/recovering dispatch or an explicitly completed no-usage
-// dispatch, never an unexamined in-flight intent.
+// observe a ready/recovering dispatch or a no-usage dispatch carrying its
+// real failure reason, never an unexamined in-flight intent.
 func finalizeAccountShareBillingAttempt(
 	ctx context.Context,
 	forwardErr error,
@@ -362,7 +362,7 @@ func finalizeAccountShareBillingAttempt(
 		}
 		recordUsage()
 	}
-	return completeAccountShareBillingDispatchWithoutUsage(ctx, forwardErr, hasBillableUsage, streamed)
+	return failAccountShareBillingDispatchWithoutUsage(ctx, forwardErr, hasBillableUsage, streamed)
 }
 
 func accountShareBillingRequestType(stream bool) service.RequestType {

@@ -10374,7 +10374,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 				Subscription:       subscription,
 				IsSubscriptionBill: isSubscriptionBilling,
 			})
-			handled, readyErr := markAccountShareBillingDispatchReadyNoCharge(ctx, command)
+			handled, readyErr := markAccountShareBillingDispatchReady(ctx, command)
 			if !handled {
 				dispatch.barrier.complete()
 				return ErrServiceUnavailable

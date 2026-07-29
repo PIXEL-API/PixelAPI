@@ -206,7 +206,7 @@ func TestRecoverStaleBillingIntentsFailsClosedWithoutRuntimeLeaseCapability(t *t
 	require.Empty(t, repo.escalations)
 }
 
-func TestAccountShareBillingAdminServiceRejectsNonAdminAndInvalidWaiver(t *testing.T) {
+func TestAccountShareBillingAdminServiceRejectsNonAdmin(t *testing.T) {
 	repo := &accountShareBillingAdminRepoStub{}
 	svc := &AccountShareModeService{billingIntentRepository: repo}
 
@@ -219,49 +219,11 @@ func TestAccountShareBillingAdminServiceRejectsNonAdminAndInvalidWaiver(t *testi
 	require.ErrorIs(t, err, ErrAccountShareBillingAdminRequired)
 	_, err = svc.GetBillingIntentForAdmin(context.Background(), 42, false, 100)
 	require.ErrorIs(t, err, ErrAccountShareBillingAdminRequired)
-	_, err = svc.WaiveBillingIntentForAdmin(
-		context.Background(),
-		42,
-		false,
-		100,
-		WaiveAccountShareBillingIntentInput{
-			ExpectedStateToken: 4,
-			Reason:             "not allowed",
-			Confirmed:          true,
-		},
-	)
-	require.ErrorIs(t, err, ErrAccountShareBillingAdminRequired)
-
-	_, err = svc.WaiveBillingIntentForAdmin(
-		context.Background(),
-		42,
-		true,
-		100,
-		WaiveAccountShareBillingIntentInput{
-			ExpectedStateToken: 4,
-			Reason:             " ",
-			Confirmed:          true,
-		},
-	)
-	require.ErrorIs(t, err, ErrAccountShareBillingWaiverReasonRequired)
-	_, err = svc.WaiveBillingIntentForAdmin(
-		context.Background(),
-		42,
-		true,
-		100,
-		WaiveAccountShareBillingIntentInput{
-			ExpectedStateToken: 4,
-			Reason:             "人工确认无法恢复",
-			Confirmed:          false,
-		},
-	)
-	require.ErrorIs(t, err, ErrAccountShareBillingWaiverConfirmationRequired)
 	require.Zero(t, repo.listCalls)
 	require.Zero(t, repo.getCalls)
-	require.Zero(t, repo.waiveCalls)
 }
 
-func TestAccountShareBillingAdminServiceListsAndWaivesUsingCAS(t *testing.T) {
+func TestAccountShareBillingAdminServiceListsReadOnlyRecords(t *testing.T) {
 	now := time.Date(2026, 7, 27, 6, 0, 0, 0, time.UTC)
 	record := AccountShareBillingIntentAdminRecord{
 		ID:           100,
@@ -275,25 +237,6 @@ func TestAccountShareBillingAdminServiceListsAndWaivesUsingCAS(t *testing.T) {
 	repo := &accountShareBillingAdminRepoStub{
 		items: []AccountShareBillingIntentAdminRecord{record},
 		total: 1,
-		waiverResult: &AccountShareBillingIntentWaiverResult{
-			Intent: AccountShareBillingIntentAdminRecord{
-				ID:           100,
-				Status:       AccountShareBillingIntentStatusCancelled,
-				StateToken:   5,
-				MembershipID: 11,
-				ListingID:    12,
-			},
-			Waiver: AccountShareBillingIntentAdminWaiver{
-				ID:                  200,
-				IntentID:            100,
-				ActorUserIDSnapshot: 42,
-				Reason:              "人工确认无法恢复",
-				PreviousStatus:      AccountShareBillingIntentStatusNeedsAttention,
-				ResultingStatus:     AccountShareBillingIntentStatusCancelled,
-				PreviousStateToken:  4,
-				ResultingStateToken: 5,
-			},
-		},
 	}
 	svc := &AccountShareModeService{billingIntentRepository: repo}
 
@@ -307,43 +250,6 @@ func TestAccountShareBillingAdminServiceListsAndWaivesUsingCAS(t *testing.T) {
 	require.Len(t, items, 1)
 	require.Equal(t, AccountShareBillingAdminMaxPageSize, page.PageSize)
 	require.Equal(t, AccountShareBillingAdminMaxPageSize, repo.listLimit)
-
-	result, err := svc.WaiveBillingIntentForAdmin(
-		context.Background(),
-		42,
-		true,
-		100,
-		WaiveAccountShareBillingIntentInput{
-			ExpectedStateToken: 4,
-			Reason:             "  人工确认无法恢复  ",
-			Confirmed:          true,
-		},
-	)
-	require.NoError(t, err)
-	require.Equal(t, AccountShareBillingIntentStatusCancelled, result.Intent.Status)
-	require.Equal(t, int64(4), repo.waiveInput.ExpectedStateToken)
-	require.Equal(t, int64(42), repo.waiveInput.ActorUserID)
-	require.Equal(t, "人工确认无法恢复", repo.waiveInput.Reason)
-}
-
-func TestAccountShareBillingAdminServiceMapsCASConflict(t *testing.T) {
-	repo := &accountShareBillingAdminRepoStub{
-		waiveErr: ErrAccountShareBillingIntentStateConflict,
-	}
-	svc := &AccountShareModeService{billingIntentRepository: repo}
-
-	_, err := svc.WaiveBillingIntentForAdmin(
-		context.Background(),
-		42,
-		true,
-		100,
-		WaiveAccountShareBillingIntentInput{
-			ExpectedStateToken: 4,
-			Reason:             "人工确认无法恢复",
-			Confirmed:          true,
-		},
-	)
-	require.ErrorIs(t, err, ErrAccountShareBillingAdminConflict)
 }
 
 func staleBillingIntentCandidate(updatedAt time.Time) AccountShareBillingIntentAttentionCandidate {
@@ -429,6 +335,15 @@ func (s *accountShareBillingRecoveryRepoStub) EscalateStaleToNeedsAttention(
 	}, nil
 }
 
+func (s *accountShareBillingRecoveryRepoStub) FailInFlightWithoutUsage(
+	context.Context,
+	AccountShareBillingIntentTransition,
+	string,
+	string,
+) (*AccountShareBillingIntentState, error) {
+	return nil, errors.New("not implemented")
+}
+
 type accountShareBillingRecoveryCacheStub struct {
 	ConcurrencyCache
 	ttl               time.Duration
@@ -492,19 +407,15 @@ type accountShareBillingRecoveryUnsupportedCache struct {
 
 type accountShareBillingAdminRepoStub struct {
 	AccountShareBillingIntentRepository
-	items        []AccountShareBillingIntentAdminRecord
-	total        int64
-	listErr      error
-	getResult    *AccountShareBillingIntentAdminRecord
-	getErr       error
-	waiverResult *AccountShareBillingIntentWaiverResult
-	waiveErr     error
-	listCalls    int
-	listOffset   int
-	listLimit    int
-	getCalls     int
-	waiveCalls   int
-	waiveInput   WaiveAccountShareBillingIntentRepositoryInput
+	items      []AccountShareBillingIntentAdminRecord
+	total      int64
+	listErr    error
+	getResult  *AccountShareBillingIntentAdminRecord
+	getErr     error
+	listCalls  int
+	listOffset int
+	listLimit  int
+	getCalls   int
 }
 
 func (s *accountShareBillingAdminRepoStub) ListNeedsAttentionForAdmin(
@@ -524,13 +435,4 @@ func (s *accountShareBillingAdminRepoStub) GetForAdmin(
 ) (*AccountShareBillingIntentAdminRecord, error) {
 	s.getCalls++
 	return s.getResult, s.getErr
-}
-
-func (s *accountShareBillingAdminRepoStub) WaiveNeedsAttention(
-	_ context.Context,
-	input WaiveAccountShareBillingIntentRepositoryInput,
-) (*AccountShareBillingIntentWaiverResult, error) {
-	s.waiveCalls++
-	s.waiveInput = input
-	return s.waiverResult, s.waiveErr
 }

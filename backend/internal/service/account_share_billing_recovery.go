@@ -5,9 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 )
@@ -295,7 +293,7 @@ func (s *AccountShareModeService) GetBillingIntentForAdmin(
 		return nil, ErrAccountShareBillingAdminRequired
 	}
 	if intentID <= 0 {
-		return nil, ErrAccountShareBillingWaiverInvalid
+		return nil, ErrAccountShareBillingIntentInvalid
 	}
 	repo, err := s.accountShareBillingAdminRepository()
 	if err != nil {
@@ -306,50 +304,6 @@ func (s *AccountShareModeService) GetBillingIntentForAdmin(
 		return nil, mapAccountShareBillingAdminError(err)
 	}
 	return record, nil
-}
-
-func (s *AccountShareModeService) WaiveBillingIntentForAdmin(
-	ctx context.Context,
-	actorUserID int64,
-	actorIsAdmin bool,
-	intentID int64,
-	input WaiveAccountShareBillingIntentInput,
-) (*AccountShareBillingIntentWaiverResult, error) {
-	if actorUserID <= 0 || !actorIsAdmin {
-		return nil, ErrAccountShareBillingAdminRequired
-	}
-	input.Reason = strings.TrimSpace(input.Reason)
-	if intentID <= 0 || input.ExpectedStateToken <= 0 {
-		return nil, ErrAccountShareBillingWaiverInvalid
-	}
-	if !input.Confirmed {
-		return nil, ErrAccountShareBillingWaiverConfirmationRequired
-	}
-	if input.Reason == "" {
-		return nil, ErrAccountShareBillingWaiverReasonRequired
-	}
-	if !utf8.ValidString(input.Reason) || utf8.RuneCountInString(input.Reason) > 1000 {
-		return nil, ErrAccountShareBillingWaiverInvalid
-	}
-	repo, err := s.accountShareBillingAdminRepository()
-	if err != nil {
-		return nil, err
-	}
-	result, err := repo.WaiveNeedsAttention(ctx, WaiveAccountShareBillingIntentRepositoryInput{
-		IntentID:           intentID,
-		ExpectedStateToken: input.ExpectedStateToken,
-		ActorUserID:        actorUserID,
-		Reason:             input.Reason,
-	})
-	if err != nil {
-		return nil, mapAccountShareBillingAdminError(err)
-	}
-	if result == nil ||
-		result.Intent.Status != AccountShareBillingIntentStatusCancelled ||
-		result.Waiver.IntentID != intentID {
-		return nil, ErrServiceUnavailable
-	}
-	return result, nil
 }
 
 func (s *AccountShareModeService) accountShareBillingAdminRepository() (
@@ -376,7 +330,7 @@ func mapAccountShareBillingAdminError(err error) error {
 		errors.Is(err, ErrAccountShareBillingIntentConflict):
 		return ErrAccountShareBillingAdminConflict
 	case errors.Is(err, ErrAccountShareBillingIntentInvalid):
-		return ErrAccountShareBillingWaiverInvalid
+		return ErrAccountShareBillingIntentInvalid
 	default:
 		return err
 	}

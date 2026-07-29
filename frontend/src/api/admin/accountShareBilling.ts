@@ -31,32 +31,6 @@ export interface AccountShareBillingIntentAdminRecord {
   updated_at: string
 }
 
-export interface AccountShareBillingIntentAdminWaiver {
-  id: number
-  intent_id: number
-  listing_id: number
-  membership_id: number
-  actor_user_id: number
-  reason: string
-  action: 'waive' | string
-  previous_status: string
-  resulting_status: string
-  previous_state_token: number
-  resulting_state_token: number
-  created_at: string
-}
-
-export interface AccountShareBillingIntentWaiverResult {
-  intent: AccountShareBillingIntentAdminRecord
-  waiver: AccountShareBillingIntentAdminWaiver
-}
-
-export interface WaiveAccountShareBillingIntentRequest {
-  expected_state_token: number
-  reason: string
-  confirmed: true
-}
-
 export interface AccountShareBillingAdminRequestOptions {
   signal?: AbortSignal
 }
@@ -92,21 +66,9 @@ export async function getBillingIntentForAdmin(
   return data
 }
 
-export async function waiveBillingIntentForAdmin(
-  intentID: number,
-  payload: WaiveAccountShareBillingIntentRequest
-): Promise<AccountShareBillingIntentWaiverResult> {
-  const { data } = await apiClient.post<AccountShareBillingIntentWaiverResult>(
-    `/admin/account-share/billing-intents/${intentID}/waive`,
-    payload
-  )
-  return data
-}
-
 export const accountShareBillingAdminAPI = {
   listNeedsAttention: listBillingIntentsNeedingAttention,
-  getDetail: getBillingIntentForAdmin,
-  waive: waiveBillingIntentForAdmin
+  getDetail: getBillingIntentForAdmin
 }
 
 export default accountShareBillingAdminAPI

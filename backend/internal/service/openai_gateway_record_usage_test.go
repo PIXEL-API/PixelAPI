@@ -9,6 +9,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1498,7 +1499,7 @@ func TestOpenAIGatewayServiceRecordUsage_SimpleModeSkipsBillingAfterPersist(t *t
 	require.Equal(t, 0, subRepo.incrementCalls)
 }
 
-func TestOpenAIGatewayServiceRecordUsage_SimpleModeDurableDispatchPersistsZeroChargeUsage(t *testing.T) {
+func TestOpenAIGatewayServiceRecordUsage_SimpleModeDurableDispatchPreservesCalculatedCharge(t *testing.T) {
 	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
 	svc := newOpenAIRecordUsageServiceForTest(
 		usageRepo,
@@ -1543,9 +1544,15 @@ func TestOpenAIGatewayServiceRecordUsage_SimpleModeDurableDispatchPersistsZeroCh
 	require.Len(t, intentRepo.ready, 1)
 	require.Equal(t, int64(10), intentRepo.ready[0].Usage.InputTokens)
 	require.Equal(t, int64(5), intentRepo.ready[0].Usage.OutputTokens)
-	require.Equal(t, "0", intentRepo.ready[0].Usage.ActualCost)
-	require.Equal(t, "0", intentRepo.ready[0].Usage.BalanceCost)
-	require.Equal(t, "0", intentRepo.ready[0].Usage.TotalCharge)
+	actualCost, err := decimal.NewFromString(intentRepo.ready[0].Usage.ActualCost)
+	require.NoError(t, err)
+	balanceCost, err := decimal.NewFromString(intentRepo.ready[0].Usage.BalanceCost)
+	require.NoError(t, err)
+	totalCharge, err := decimal.NewFromString(intentRepo.ready[0].Usage.TotalCharge)
+	require.NoError(t, err)
+	require.True(t, actualCost.IsPositive())
+	require.Equal(t, actualCost, balanceCost)
+	require.Equal(t, actualCost, totalCharge)
 }
 
 func TestOpenAIGatewayServiceRecordUsage_ImageOnlyUsageStillPersists(t *testing.T) {

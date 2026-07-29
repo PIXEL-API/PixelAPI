@@ -60,18 +60,6 @@ var (
 		"ACCOUNT_SHARE_BILLING_INTENT_ADMIN_CONFLICT",
 		"account share billing intent state or resolution has changed",
 	)
-	ErrAccountShareBillingWaiverInvalid = infraerrors.BadRequest(
-		"ACCOUNT_SHARE_BILLING_WAIVER_INVALID",
-		"account share billing waiver request is invalid",
-	)
-	ErrAccountShareBillingWaiverReasonRequired = infraerrors.BadRequest(
-		"ACCOUNT_SHARE_BILLING_WAIVER_REASON_REQUIRED",
-		"a reason is required to waive an account share billing intent",
-	)
-	ErrAccountShareBillingWaiverConfirmationRequired = infraerrors.BadRequest(
-		"ACCOUNT_SHARE_BILLING_WAIVER_CONFIRMATION_REQUIRED",
-		"explicit confirmation is required to waive an account share billing intent",
-	)
 )
 
 // AccountShareBillingCommand is the normalized pre-forward billing snapshot.
@@ -436,39 +424,6 @@ type AccountShareBillingIntentAdminRecord struct {
 	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
-type AccountShareBillingIntentAdminWaiver struct {
-	ID                  int64     `json:"id"`
-	IntentID            int64     `json:"intent_id"`
-	ListingID           int64     `json:"listing_id"`
-	MembershipID        int64     `json:"membership_id"`
-	ActorUserIDSnapshot int64     `json:"actor_user_id"`
-	Reason              string    `json:"reason"`
-	Action              string    `json:"action"`
-	PreviousStatus      string    `json:"previous_status"`
-	ResultingStatus     string    `json:"resulting_status"`
-	PreviousStateToken  int64     `json:"previous_state_token"`
-	ResultingStateToken int64     `json:"resulting_state_token"`
-	CreatedAt           time.Time `json:"created_at"`
-}
-
-type WaiveAccountShareBillingIntentRepositoryInput struct {
-	IntentID           int64
-	ExpectedStateToken int64
-	ActorUserID        int64
-	Reason             string
-}
-
-type AccountShareBillingIntentWaiverResult struct {
-	Intent AccountShareBillingIntentAdminRecord `json:"intent"`
-	Waiver AccountShareBillingIntentAdminWaiver `json:"waiver"`
-}
-
-type WaiveAccountShareBillingIntentInput struct {
-	ExpectedStateToken int64  `json:"expected_state_token"`
-	Reason             string `json:"reason"`
-	Confirmed          bool   `json:"confirmed"`
-}
-
 type AccountShareBillingIntentRepository interface {
 	CreatePrepared(ctx context.Context, input CreateAccountShareBillingIntentInput) (*AccountShareBillingIntentState, bool, error)
 	MarkInFlight(ctx context.Context, input AccountShareBillingIntentTransition) (*AccountShareBillingIntentState, error)
@@ -478,6 +433,7 @@ type AccountShareBillingIntentRepository interface {
 	RenewProcessingLease(ctx context.Context, input AccountShareBillingIntentLeaseTransition, leaseDuration time.Duration) (*AccountShareBillingIntentState, error)
 	MarkSettled(ctx context.Context, input MarkAccountShareBillingIntentSettledInput) (*AccountShareBillingIntentState, error)
 	MarkFailed(ctx context.Context, input MarkAccountShareBillingIntentFailedInput) (*AccountShareBillingIntentState, error)
+	FailInFlightWithoutUsage(ctx context.Context, input AccountShareBillingIntentTransition, reasonCode, reasonMessage string) (*AccountShareBillingIntentState, error)
 	EscalateStaleToNeedsAttention(ctx context.Context, input EscalateAccountShareBillingIntentInput) (*AccountShareBillingIntentState, error)
 	CountPendingByMembership(ctx context.Context, membershipID int64) (int64, error)
 	ListRecoveryCandidates(ctx context.Context, input ListAccountShareBillingRecoveryCandidatesInput) ([]AccountShareBillingIntentAttentionCandidate, error)
@@ -493,10 +449,6 @@ type AccountShareBillingIntentAdminRepository interface {
 		limit int,
 	) ([]AccountShareBillingIntentAdminRecord, int64, error)
 	GetForAdmin(ctx context.Context, intentID int64) (*AccountShareBillingIntentAdminRecord, error)
-	WaiveNeedsAttention(
-		ctx context.Context,
-		input WaiveAccountShareBillingIntentRepositoryInput,
-	) (*AccountShareBillingIntentWaiverResult, error)
 }
 
 func IsAccountShareBillingIntentStatus(status string) bool {

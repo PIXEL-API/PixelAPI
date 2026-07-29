@@ -771,6 +771,10 @@ func (s *accountShareBillingWorkerIntentRepoStub) EscalateStaleToNeedsAttention(
 	return nil, errors.New("not implemented")
 }
 
+func (s *accountShareBillingWorkerIntentRepoStub) FailInFlightWithoutUsage(context.Context, AccountShareBillingIntentTransition, string, string) (*AccountShareBillingIntentState, error) {
+	return nil, errors.New("not implemented")
+}
+
 func (s *accountShareBillingWorkerIntentRepoStub) CountPendingByMembership(context.Context, int64) (int64, error) {
 	return 0, errors.New("not implemented")
 }

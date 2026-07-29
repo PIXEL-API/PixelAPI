@@ -333,9 +333,10 @@ func (d *AccountShareBillingDispatch) markReady(ctx context.Context, command *Us
 	return d.markReadyLocked(ctx, readyInput)
 }
 
-func (d *AccountShareBillingDispatch) markReadyWithoutUsage(
+func (d *AccountShareBillingDispatch) failWithoutUsage(
 	ctx context.Context,
-	summary AccountShareBillingResponseSummaryV1,
+	errorCode string,
+	errorMessage string,
 ) error {
 	if d == nil || d.repository == nil || d.barrier == nil {
 		return ErrServiceUnavailable
@@ -343,39 +344,34 @@ func (d *AccountShareBillingDispatch) markReadyWithoutUsage(
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	readyInput := MarkAccountShareBillingIntentReadyInput{
-		AccountShareBillingIntentTransition: AccountShareBillingIntentTransition{
+	if d.state.Status == AccountShareBillingIntentStatusNeedsAttention {
+		d.barrier.complete()
+		return nil
+	}
+	if d.state.Status != AccountShareBillingIntentStatusInFlight {
+		d.barrier.complete()
+		return fmt.Errorf("%w: billing dispatch is in status %q", ErrAccountShareBillingIntentStateConflict, d.state.Status)
+	}
+	state, err := d.repository.FailInFlightWithoutUsage(
+		ctx,
+		AccountShareBillingIntentTransition{
 			ID:                 d.state.ID,
 			ExpectedStateToken: d.state.StateToken,
 		},
-		Usage: AccountShareBillingUsagePayloadV2{
-			SchemaVersion:         AccountShareBillingUsageSchemaV2,
-			UsageOccurredAt:       time.Now().UTC(),
-			Model:                 d.command.RoutedModel,
-			ServiceTier:           d.command.ServiceTier,
-			ReasoningEffort:       d.command.ReasoningEffort,
-			BillingMode:           string(BillingModeToken),
-			AppliedRateMultiplier: d.command.RateMultiplier,
-			InputCost:             "0",
-			OutputCost:            "0",
-			CacheCreationCost:     "0",
-			CacheReadCost:         "0",
-			ImageInputCost:        "0",
-			ImageOutputCost:       "0",
-			TotalCost:             "0",
-			ActualCost:            "0",
-			BalanceCost:           "0",
-			SubscriptionCost:      "0",
-			APIKeyQuotaCost:       "0",
-			APIKeyRateLimitCost:   "0",
-			AccountQuotaCost:      "0",
-			BaseCharge:            "0",
-			HourlyCharge:          "0",
-			TotalCharge:           "0",
-		},
-		ResponseSummary: summary,
+		strings.TrimSpace(errorCode),
+		strings.TrimSpace(errorMessage),
+	)
+	if err != nil {
+		d.barrier.complete()
+		return err
 	}
-	return d.markReadyLocked(ctx, readyInput)
+	if state == nil {
+		d.barrier.complete()
+		return ErrAccountShareBillingIntentNotFound
+	}
+	d.state = *state
+	d.barrier.complete()
+	return nil
 }
 
 func (d *AccountShareBillingDispatch) markReadyLocked(
@@ -1075,54 +1071,18 @@ func markAccountShareBillingDispatchReady(ctx context.Context, command *UsageBil
 	return true, dispatch.markReady(ctx, command)
 }
 
-func markAccountShareBillingDispatchReadyNoCharge(ctx context.Context, command *UsageBillingCommand) (bool, error) {
-	dispatch, ok := AccountShareBillingDispatchFromContext(ctx)
-	if !ok {
-		return false, nil
-	}
-	if command == nil || command.UsageLog == nil {
-		dispatch.barrier.complete()
-		return true, fmt.Errorf("%w: no-charge usage billing command is incomplete", ErrAccountShareBillingIntentInvalid)
-	}
-	noChargeCommand := *command
-	noChargeLog := *command.UsageLog
-	noChargeLog.InputCost = 0
-	noChargeLog.OutputCost = 0
-	noChargeLog.CacheCreationCost = 0
-	noChargeLog.CacheReadCost = 0
-	noChargeLog.ImageInputCost = 0
-	noChargeLog.ImageOutputCost = 0
-	noChargeLog.TotalCost = 0
-	noChargeLog.ActualCost = 0
-	noChargeLog.AccountStatsCost = nil
-	noChargeCommand.UsageLog = &noChargeLog
-	noChargeCommand.BalanceCost = 0
-	noChargeCommand.SubscriptionCost = 0
-	noChargeCommand.PrivateGroupCommissionCost = 0
-	noChargeCommand.APIKeyQuotaCost = 0
-	noChargeCommand.APIKeyRateLimitCost = 0
-	noChargeCommand.AccountQuotaCost = 0
-	noChargeCommand.AccountShareModeSettlement = nil
-
-	billingCtx, cancel := detachedBillingContext(ctx)
-	defer cancel()
-	return true, dispatch.markReady(billingCtx, &noChargeCommand)
-}
-
-func CompleteAccountShareBillingDispatchWithoutUsage(
+func FailAccountShareBillingDispatchWithoutUsage(
 	ctx context.Context,
-	summary AccountShareBillingResponseSummaryV1,
+	errorCode string,
+	errorMessage string,
 ) (bool, error) {
 	dispatch, ok := AccountShareBillingDispatchFromContext(ctx)
 	if !ok {
 		return false, nil
 	}
-	if summary.SchemaVersion == 0 {
-		summary.SchemaVersion = AccountShareBillingResponseSchemaV1
-	}
 	billingCtx, cancel := detachedBillingContext(ctx)
 	defer cancel()
-	return true, dispatch.markReadyWithoutUsage(billingCtx, summary)
+	return true, dispatch.failWithoutUsage(billingCtx, errorCode, errorMessage)
 }
 
 func isAccountShareBillingDispatchError(err error) bool {

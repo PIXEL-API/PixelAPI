@@ -7984,7 +7984,7 @@ func (s *OpenAIGatewayService) recordUsageOnce(ctx context.Context, input *OpenA
 				Subscription:       subscription,
 				IsSubscriptionBill: isSubscriptionBilling,
 			})
-			handled, readyErr := markAccountShareBillingDispatchReadyNoCharge(ctx, command)
+			handled, readyErr := markAccountShareBillingDispatchReady(ctx, command)
 			if !handled {
 				dispatch.barrier.complete()
 				return ErrServiceUnavailable

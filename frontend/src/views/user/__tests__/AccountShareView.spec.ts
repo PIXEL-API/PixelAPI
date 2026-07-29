@@ -511,7 +511,6 @@ function mountView(options: { renderDialogs?: boolean; attachTo?: HTMLElement } 
             </div>
           `,
         },
-        AdminBillingAttentionDialog: true,
         AccountShareQuotaAdminDialog: true,
         UsageProgressBar: true,
         Pagination: true,

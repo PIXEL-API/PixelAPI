@@ -464,7 +464,6 @@ func registerAccountShareBillingRoutes(admin *gin.RouterGroup, h *handler.Handle
 	{
 		intents.GET("/needs-attention", h.AccountShareMode.ListBillingIntentsNeedingAttention)
 		intents.GET("/:id", h.AccountShareMode.GetBillingIntentForAdmin)
-		intents.POST("/:id/waive", h.AccountShareMode.WaiveBillingIntentForAdmin)
 	}
 }
 

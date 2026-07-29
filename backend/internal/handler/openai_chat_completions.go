@@ -388,7 +388,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		if err != nil && hasBillableUsage {
 			recordUsageResult(result)
 		}
-		if finalizeErr := completeAccountShareBillingDispatchWithoutUsage(forwardCtx, err, hasBillableUsage, reqStream); finalizeErr != nil {
+		if finalizeErr := failAccountShareBillingDispatchWithoutUsage(forwardCtx, err, hasBillableUsage, reqStream); finalizeErr != nil {
 			if accountReleaseFunc != nil {
 				accountReleaseFunc()
 			}

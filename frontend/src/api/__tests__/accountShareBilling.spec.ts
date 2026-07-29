@@ -1,26 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { get, post } = vi.hoisted(() => ({
-  get: vi.fn(),
-  post: vi.fn()
+const { get } = vi.hoisted(() => ({
+  get: vi.fn()
 }))
 
 vi.mock('@/api/client', () => ({
-  apiClient: { get, post }
+  apiClient: { get }
 }))
 
 import {
   getBillingIntentForAdmin,
-  listBillingIntentsNeedingAttention,
-  waiveBillingIntentForAdmin
+  listBillingIntentsNeedingAttention
 } from '@/api/admin/accountShareBilling'
 
 describe('account share billing admin API', () => {
   beforeEach(() => {
     get.mockReset()
-    post.mockReset()
     get.mockResolvedValue({ data: {} })
-    post.mockResolvedValue({ data: {} })
   })
 
   it('reads the paginated attention list and a redacted detail with cancellation support', async () => {
@@ -41,21 +37,6 @@ describe('account share billing admin API', () => {
       2,
       '/admin/account-share/billing-intents/41',
       { signal: controller.signal }
-    )
-  })
-
-  it('submits an explicit waiver against the selected state token', async () => {
-    const payload = {
-      expected_state_token: 7,
-      reason: '人工确认无法恢复',
-      confirmed: true as const
-    }
-
-    await waiveBillingIntentForAdmin(41, payload)
-
-    expect(post).toHaveBeenCalledWith(
-      '/admin/account-share/billing-intents/41/waive',
-      payload
     )
   })
 })

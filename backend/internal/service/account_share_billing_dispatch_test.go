@@ -276,7 +276,7 @@ func TestApplyUsageBillingPersistsDurableAccountShareReadyIntentWithoutDirectBil
 	require.InDelta(t, 1.25, rateMultiplier, 1e-12)
 }
 
-func TestMarkAccountShareBillingDispatchReadyNoChargeKeepsUsageAndZerosFinancialFields(t *testing.T) {
+func TestFailAccountShareBillingDispatchWithoutUsageDoesNotCreateReadyPayload(t *testing.T) {
 	intentRepo := &accountShareBillingDispatchIntentRepoStub{}
 	dispatch := &AccountShareBillingDispatch{
 		repository: intentRepo,
@@ -295,55 +295,18 @@ func TestMarkAccountShareBillingDispatchReadyNoChargeKeepsUsageAndZerosFinancial
 		},
 	}
 	ctx := WithAccountShareBillingDispatch(context.Background(), dispatch)
-	statsCost := 0.3
-	command := &UsageBillingCommand{
-		APIKeyID:                   31,
-		UserID:                     21,
-		AccountID:                  51,
-		BalanceCost:                1.25,
-		SubscriptionCost:           2.5,
-		PrivateGroupCommissionCost: 0.2,
-		APIKeyQuotaCost:            1.25,
-		APIKeyRateLimitCost:        1.25,
-		AccountQuotaCost:           1.25,
-		UsageOccurredAt:            time.Now().UTC(),
-		UsageLog: &UsageLog{
-			RequestID:        "provider-request-simple",
-			Model:            "gpt-5.4",
-			InputTokens:      123,
-			OutputTokens:     45,
-			InputCost:        0.7,
-			OutputCost:       0.55,
-			TotalCost:        1.25,
-			ActualCost:       1.25,
-			AccountStatsCost: &statsCost,
-			RateMultiplier:   1.5,
-			RequestType:      RequestTypeStream,
-			Stream:           true,
-		},
-	}
-
-	handled, err := markAccountShareBillingDispatchReadyNoCharge(ctx, command)
+	handled, err := FailAccountShareBillingDispatchWithoutUsage(
+		ctx,
+		"forward_usage_incomplete",
+		"upstream response did not contain a complete usage detail",
+	)
 
 	require.NoError(t, err)
 	require.True(t, handled)
-	require.Len(t, intentRepo.ready, 1)
-	usage := intentRepo.ready[0].Usage
-	require.Equal(t, int64(123), usage.InputTokens)
-	require.Equal(t, int64(45), usage.OutputTokens)
-	require.Equal(t, "0", usage.InputCost)
-	require.Equal(t, "0", usage.OutputCost)
-	require.Equal(t, "0", usage.TotalCost)
-	require.Equal(t, "0", usage.ActualCost)
-	require.Nil(t, usage.AccountStatsCost)
-	require.Equal(t, "0", usage.BalanceCost)
-	require.Equal(t, "0", usage.SubscriptionCost)
-	require.Equal(t, "0", usage.PrivateGroupCommissionCost)
-	require.Equal(t, "0", usage.APIKeyQuotaCost)
-	require.Equal(t, "0", usage.APIKeyRateLimitCost)
-	require.Equal(t, "0", usage.AccountQuotaCost)
-	require.Equal(t, "0", usage.BaseCharge)
-	require.Equal(t, "0", usage.TotalCharge)
+	require.Empty(t, intentRepo.ready)
+	require.Len(t, intentRepo.escalated, 1)
+	require.Equal(t, "forward_usage_incomplete", intentRepo.escalated[0].ReasonCode)
+	require.Equal(t, AccountShareBillingIntentStatusNeedsAttention, dispatch.State().Status)
 }
 
 func TestAccountShareBillingRateMultiplierFromContext(t *testing.T) {
@@ -631,8 +594,17 @@ func TestAccountShareBillingDispatchKeepsRuntimeLeaseUntilTransientReadyWriteRec
 	require.NoError(t, lease.setAccountShareBillingBarrier(barrier))
 
 	billingCtx, cancelBilling := context.WithTimeout(context.Background(), 30*time.Millisecond)
-	err = dispatch.markReadyWithoutUsage(billingCtx, AccountShareBillingResponseSummaryV1{
-		SchemaVersion: AccountShareBillingResponseSchemaV1,
+	err = dispatch.markReadyLocked(billingCtx, MarkAccountShareBillingIntentReadyInput{
+		AccountShareBillingIntentTransition: AccountShareBillingIntentTransition{
+			ID:                 91,
+			ExpectedStateToken: 2,
+		},
+		Usage: AccountShareBillingUsagePayloadV2{
+			SchemaVersion:   AccountShareBillingUsageSchemaV2,
+			InputTokens:     1,
+			UsageOccurredAt: time.Now().UTC(),
+			Model:           "gpt-5.4",
+		},
 	})
 	cancelBilling()
 	require.Error(t, err)
@@ -651,7 +623,8 @@ func TestAccountShareBillingDispatchKeepsRuntimeLeaseUntilTransientReadyWriteRec
 }
 
 type accountShareBillingDispatchIntentRepoStub struct {
-	ready []MarkAccountShareBillingIntentReadyInput
+	ready     []MarkAccountShareBillingIntentReadyInput
+	escalated []EscalateAccountShareBillingIntentInput
 }
 
 func (s *accountShareBillingDispatchIntentRepoStub) CreatePrepared(context.Context, CreateAccountShareBillingIntentInput) (*AccountShareBillingIntentState, bool, error) {
@@ -667,6 +640,38 @@ func (s *accountShareBillingDispatchIntentRepoStub) MarkReady(_ context.Context,
 	return &AccountShareBillingIntentState{
 		ID:         input.ID,
 		Status:     AccountShareBillingIntentStatusReady,
+		StateToken: input.ExpectedStateToken + 1,
+		APIKeyID:   31,
+	}, nil
+}
+
+func (s *accountShareBillingDispatchIntentRepoStub) EscalateStaleToNeedsAttention(
+	_ context.Context,
+	input EscalateAccountShareBillingIntentInput,
+) (*AccountShareBillingIntentState, error) {
+	s.escalated = append(s.escalated, input)
+	return &AccountShareBillingIntentState{
+		ID:         input.ID,
+		Status:     AccountShareBillingIntentStatusNeedsAttention,
+		StateToken: input.ExpectedStateToken + 1,
+		APIKeyID:   31,
+	}, nil
+}
+
+func (s *accountShareBillingDispatchIntentRepoStub) FailInFlightWithoutUsage(
+	_ context.Context,
+	input AccountShareBillingIntentTransition,
+	reasonCode string,
+	reasonMessage string,
+) (*AccountShareBillingIntentState, error) {
+	s.escalated = append(s.escalated, EscalateAccountShareBillingIntentInput{
+		AccountShareBillingIntentTransition: input,
+		ReasonCode:                          reasonCode,
+		ReasonMessage:                       reasonMessage,
+	})
+	return &AccountShareBillingIntentState{
+		ID:         input.ID,
+		Status:     AccountShareBillingIntentStatusNeedsAttention,
 		StateToken: input.ExpectedStateToken + 1,
 		APIKeyID:   31,
 	}, nil
@@ -690,10 +695,6 @@ func (s *accountShareBillingDispatchIntentRepoStub) MarkSettled(context.Context,
 
 func (s *accountShareBillingDispatchIntentRepoStub) MarkFailed(context.Context, MarkAccountShareBillingIntentFailedInput) (*AccountShareBillingIntentState, error) {
 	return nil, errors.New("unexpected MarkFailed")
-}
-
-func (s *accountShareBillingDispatchIntentRepoStub) EscalateStaleToNeedsAttention(context.Context, EscalateAccountShareBillingIntentInput) (*AccountShareBillingIntentState, error) {
-	return nil, errors.New("unexpected EscalateStaleToNeedsAttention")
 }
 
 func (s *accountShareBillingDispatchIntentRepoStub) CountPendingByMembership(context.Context, int64) (int64, error) {

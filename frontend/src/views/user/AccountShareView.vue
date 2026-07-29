@@ -30,16 +30,6 @@
               <Icon name="cog" size="sm" class="mr-2" />
               房间配额
             </button>
-            <button
-              v-if="authStore.isAdmin"
-              class="account-share-admin-billing-button"
-              type="button"
-              data-testid="open-billing-attention"
-              @click="openAdminBillingDialog"
-            >
-              <Icon name="shield" size="sm" class="mr-2" />
-              异常计费处置
-            </button>
             <button class="account-share-guide-button" type="button" @click="openUsageGuideDialog">
               <Icon name="book" size="sm" class="mr-2" />
               使用说明
@@ -3442,10 +3432,6 @@
       @cancel="cancelDiscardDraft"
     />
 
-    <AdminBillingAttentionDialog
-      :show="showAdminBillingDialog"
-      @close="closeAdminBillingDialog"
-    />
     <AccountShareQuotaAdminDialog
       :show="showAdminQuotaDialog"
       @close="closeAdminQuotaDialog"
@@ -3517,7 +3503,6 @@ import ProxySelector from '@/components/common/ProxySelector.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import CreateRoomDialog from '@/components/account-share/CreateRoomDialog.vue'
 import RoomAccountsDialog from '@/components/account-share/RoomAccountsDialog.vue'
-import AdminBillingAttentionDialog from '@/components/account-share/AdminBillingAttentionDialog.vue'
 import AccountShareQuotaAdminDialog from '@/components/account-share/AccountShareQuotaAdminDialog.vue'
 import MembershipHistoryPanel from '@/components/account-share/MembershipHistoryPanel.vue'
 import { resolveAccountExternalPlacementTarget } from '@/components/account-share/externalPlacement'
@@ -4250,7 +4235,6 @@ const recommendationResult = ref<AccountShareRecommendationResult | null>(null)
 const recommendationRequestSnapshot = ref<AccountShareRecommendationRequest | null>(null)
 const recommendationPage = ref(1)
 const showUsageGuideDialog = ref(false)
-const showAdminBillingDialog = ref(false)
 const showAdminQuotaDialog = ref(false)
 const showRecommendationDialog = ref(false)
 const queueMembershipsByApiKey = ref<Record<number, AccountShareMembership[]>>({})
@@ -7512,15 +7496,6 @@ function openUsageGuideDialog(): void {
 
 function closeUsageGuideDialog(): void {
   showUsageGuideDialog.value = false
-}
-
-function openAdminBillingDialog(): void {
-  if (!authStore.isAdmin) return
-  showAdminBillingDialog.value = true
-}
-
-function closeAdminBillingDialog(): void {
-  showAdminBillingDialog.value = false
 }
 
 function openAdminQuotaDialog(): void {
@@ -11158,7 +11133,6 @@ onBeforeUnmount(() => {
 }
 
 .account-share-admin-quota-button,
-.account-share-admin-billing-button,
 .account-share-guide-button,
 .account-share-spend-button {
   display: inline-flex;
@@ -11178,25 +11152,11 @@ onBeforeUnmount(() => {
 }
 
 .account-share-admin-quota-button:hover,
-.account-share-admin-billing-button:hover,
 .account-share-guide-button:hover,
 .account-share-spend-button:hover {
   border-color: rgb(96 165 250);
   background: rgb(219 234 254);
   box-shadow: 0 8px 18px rgb(37 99 235 / 0.1);
-}
-
-.account-share-admin-billing-button {
-  border-color: rgb(253 230 138);
-  background: rgb(255 251 235);
-  color: rgb(180 83 9);
-}
-
-.account-share-admin-billing-button:hover {
-  border-color: rgb(251 191 36);
-  background: rgb(254 243 199);
-  color: rgb(146 64 14);
-  box-shadow: 0 8px 18px rgb(245 158 11 / 0.12);
 }
 
 .account-share-admin-quota-button {
@@ -12188,7 +12148,6 @@ onBeforeUnmount(() => {
 }
 
 .dark .account-share-admin-quota-button,
-.dark .account-share-admin-billing-button,
 .dark .account-share-guide-button,
 .dark .account-share-spend-button {
   border-color: rgb(59 130 246 / 0.38);
@@ -12197,23 +12156,11 @@ onBeforeUnmount(() => {
 }
 
 .dark .account-share-admin-quota-button:hover,
-.dark .account-share-admin-billing-button:hover,
 .dark .account-share-guide-button:hover,
 .dark .account-share-spend-button:hover {
   border-color: rgb(96 165 250 / 0.7);
   background: rgb(30 64 175 / 0.34);
   box-shadow: 0 8px 18px rgb(0 0 0 / 0.2);
-}
-
-.dark .account-share-admin-billing-button {
-  border-color: rgb(245 158 11 / 0.38);
-  background: rgb(120 53 15 / 0.22);
-  color: rgb(253 230 138);
-}
-
-.dark .account-share-admin-billing-button:hover {
-  border-color: rgb(251 191 36 / 0.68);
-  background: rgb(120 53 15 / 0.34);
 }
 
 .dark .account-share-admin-quota-button {
@@ -12618,7 +12565,6 @@ onBeforeUnmount(() => {
   }
 
   .account-share-admin-quota-button,
-  .account-share-admin-billing-button,
   .account-share-guide-button,
   .account-share-spend-button {
     align-self: center;

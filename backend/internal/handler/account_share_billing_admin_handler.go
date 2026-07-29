@@ -53,34 +53,3 @@ func (h *AccountShareModeHandler) GetBillingIntentForAdmin(c *gin.Context) {
 	}
 	response.Success(c, intent)
 }
-
-func (h *AccountShareModeHandler) WaiveBillingIntentForAdmin(c *gin.Context) {
-	subject, ok := middleware2.GetAuthSubjectFromContext(c)
-	if !ok {
-		response.Unauthorized(c, "User not authenticated")
-		return
-	}
-	intentID, err := parseInt64Param(c, "id")
-	if err != nil {
-		response.BadRequest(c, "Invalid billing intent ID")
-		return
-	}
-	var input service.WaiveAccountShareBillingIntentInput
-	if err := c.ShouldBindJSON(&input); err != nil {
-		response.BadRequest(c, "Invalid billing intent waiver request")
-		return
-	}
-	role, _ := middleware2.GetUserRoleFromContext(c)
-	result, err := h.service.WaiveBillingIntentForAdmin(
-		c.Request.Context(),
-		subject.UserID,
-		role == service.RoleAdmin,
-		intentID,
-		input,
-	)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, result)
-}

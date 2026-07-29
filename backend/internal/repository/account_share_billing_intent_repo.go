@@ -688,6 +688,47 @@ func (r *accountShareBillingIntentRepository) EscalateStaleToNeedsAttention(
 	return state, err
 }
 
+func (r *accountShareBillingIntentRepository) FailInFlightWithoutUsage(
+	ctx context.Context,
+	input service.AccountShareBillingIntentTransition,
+	reasonCode string,
+	reasonMessage string,
+) (*service.AccountShareBillingIntentState, error) {
+	if err := r.validate(); err != nil {
+		return nil, err
+	}
+	if input.ID <= 0 || input.ExpectedStateToken <= 0 {
+		return nil, fmt.Errorf("%w: billing intent transition is invalid", service.ErrAccountShareBillingIntentInvalid)
+	}
+	reasonCode = strings.TrimSpace(reasonCode)
+	if reasonCode == "" {
+		return nil, fmt.Errorf("%w: failure reason code is required", service.ErrAccountShareBillingIntentInvalid)
+	}
+	state, err := scanAccountShareBillingIntentState(r.db.QueryRowContext(ctx, `
+		UPDATE account_share_request_billing_intents
+		SET status = 'needs_attention',
+			state_token = state_token + 1,
+			lease_owner = NULL,
+			lease_expires_at = NULL,
+			next_attempt_at = NULL,
+			last_error_code = $3,
+			last_error_message = NULLIF($4, ''),
+			updated_at = clock_timestamp()
+		WHERE id = $1
+			AND state_token = $2
+			AND status = 'in_flight'
+		RETURNING `+accountShareBillingIntentStateColumns,
+		input.ID,
+		input.ExpectedStateToken,
+		reasonCode,
+		strings.TrimSpace(reasonMessage),
+	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, r.classifyMutationMiss(ctx, input.ID, false)
+	}
+	return state, err
+}
+
 func (r *accountShareBillingIntentRepository) CountPendingByMembership(ctx context.Context, membershipID int64) (int64, error) {
 	if err := r.validate(); err != nil {
 		return 0, err

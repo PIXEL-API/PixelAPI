@@ -352,7 +352,7 @@ routeLoop:
 			if err != nil && hasBillableUsage {
 				recordUsageResult(result)
 			}
-			if finalizeErr := completeAccountShareBillingDispatchWithoutUsage(forwardCtx, err, hasBillableUsage, parsed.Stream); finalizeErr != nil {
+			if finalizeErr := failAccountShareBillingDispatchWithoutUsage(forwardCtx, err, hasBillableUsage, parsed.Stream); finalizeErr != nil {
 				if accountReleaseFunc != nil {
 					accountReleaseFunc()
 				}
