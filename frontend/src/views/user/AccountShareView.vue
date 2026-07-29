@@ -2072,7 +2072,7 @@
                     class="membership-end-button"
                     type="button"
                     :disabled="endingId !== null || isListingMembershipEnding(listing)"
-                    @click="openEndUseConfirm(listing)"
+                    @click="handleEndUseClick(listing)"
                   >
                     {{ listing.current_membership_id ? '结束使用' : '移出预约' }}
                   </button>
@@ -9849,7 +9849,7 @@ async function submitJoinUse(pendingJoin: PendingJoinConfirmation): Promise<void
   }
 }
 
-function openEndUseConfirm(listing: AccountShareListing): void {
+function handleEndUseClick(listing: AccountShareListing): void {
   const membershipID = Number(listing.queue_membership_id || listing.current_membership_id || 0)
   if (
     membershipID <= 0
@@ -9858,13 +9858,18 @@ function openEndUseConfirm(listing: AccountShareListing): void {
   ) {
     return
   }
-  pendingEndUse.value = {
+  const pending: PendingEndUseState = {
     membershipID,
     apiKeyID: listing.queue_api_key_id || listing.current_api_key_id,
     apiKeyName: boundApiKeyName(listing),
     status: listing.queue_status || (listing.current_membership_id ? 'active' : ''),
     listing
   }
+  if (pending.status === 'queued') {
+    void endUse(pending)
+    return
+  }
+  pendingEndUse.value = pending
 }
 
 async function pollPendingMembershipEndOperations(): Promise<PendingMembershipEnd[]> {

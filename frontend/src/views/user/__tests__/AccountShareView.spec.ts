@@ -2667,6 +2667,43 @@ describe('AccountShareView async snapshots and mode keys', () => {
     }
   })
 
+  it('removes a queued reservation directly from the visible action button', async () => {
+    const queuedListing = listing({
+      id: 910,
+      current_membership_id: undefined,
+      queue_membership_id: 63368,
+      queue_api_key_id: 23185,
+      queue_api_key_name: 'gpt',
+      queue_rank: 1,
+      queue_status: 'queued',
+    })
+    listListings.mockResolvedValue(paginated([queuedListing]))
+    createEndMembershipIntent.mockResolvedValue({
+      token: 'queued-end-intent',
+      operation_id: 'queued-end-operation',
+      expires_at: '2099-07-11T01:02:00Z',
+    })
+    endMembership.mockResolvedValue(membership({
+      id: 63368,
+      listing_id: queuedListing.id,
+      api_key_id: 23185,
+      status: 'ended',
+      ended_reason: 'manual',
+    }))
+
+    const wrapper = mountView()
+    await flushPromises()
+    const removeButton = wrapper.get('button.membership-end-button')
+
+    await removeButton.trigger('click')
+    await flushPromises()
+
+    expect(createEndMembershipIntent).toHaveBeenCalledWith(63368)
+    expect(endMembership).toHaveBeenCalledWith(63368, 'queued-end-intent')
+    expect(wrapper.text()).not.toContain('确认将该账号')
+    wrapper.unmount()
+  })
+
   it('disables rejoin while the listing projection is ending even without a membership id', async () => {
     listListings.mockResolvedValue(paginated([
       listing({
