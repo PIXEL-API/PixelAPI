@@ -180,6 +180,12 @@ import { useClipboard } from '@/composables/useClipboard'
 import { ADMIN_UI_REQUEST_HEADER, USER_UI_REQUEST_HEADER } from '@/api/adminUIRequest'
 import { adminAPI } from '@/api/admin'
 import type { Account, ClaudeModel } from '@/types'
+import {
+  DEFAULT_GROK_TEST_MODEL,
+  DEFAULT_OPENAI_TEST_MODEL,
+  prepareAccountTestModels,
+  selectDefaultAccountTestModel
+} from '@/utils/accountTestModels'
 
 const { t } = useI18n()
 const { copyToClipboard } = useClipboard()
@@ -210,33 +216,8 @@ const availableModels = ref<ClaudeModel[]>([])
 const selectedModelId = ref('')
 const loadingModels = ref(false)
 let abortController: AbortController | null = null
-const prioritizedGeminiModels = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-2.0-flash']
-const isImageGenerationModel = (modelId: string) => {
-  const modelID = modelId.toLowerCase()
-  const generationSegment = 'image'
-  return (
-    modelID.startsWith(['gpt', generationSegment].join('-') + '-') ||
-    (modelID.startsWith('gemini-') && modelID.includes(`-${generationSegment}`)) ||
-    (modelID.startsWith('grok-') && (modelID.includes(`-${generationSegment}`) || modelID.includes('-video'))) ||
-    modelID === 'grok-imagine' ||
-    modelID.startsWith('cog' + 'view')
-  )
-}
 const isUserScope = computed(() => props.accountScope === 'user')
 const testEndpointBase = computed(() => props.testEndpointBase ?? '/api/v1/admin/accounts')
-const defaultOpenAITestModel = 'gpt-5.5'
-const defaultGrokTestModel = 'grok-4.5'
-
-const sortTestModels = (models: ClaudeModel[]) => {
-  const priorityMap = new Map(prioritizedGeminiModels.map((id, index) => [id, index]))
-
-  return [...models].sort((a, b) => {
-    const aPriority = priorityMap.get(a.id) ?? Number.MAX_SAFE_INTEGER
-    const bPriority = priorityMap.get(b.id) ?? Number.MAX_SAFE_INTEGER
-    if (aPriority !== bPriority) return aPriority - bPriority
-    return 0
-  })
-}
 
 // Load available models when modal opens
 watch(
@@ -260,26 +241,11 @@ const loadAvailableModels = async () => {
     const models = isUserScope.value
       ? getUserDefaultTestModels(props.account)
       : await adminAPI.accounts.getAvailableModels(props.account.id)
-    const testModels = models.filter((model) => !isImageGenerationModel(model.id))
-    availableModels.value = props.account.platform === 'gemini' || props.account.platform === 'antigravity'
-      ? sortTestModels(testModels)
-      : testModels
-    // Default selection by platform
-    if (availableModels.value.length > 0) {
-      if (props.account.platform === 'gemini') {
-        selectedModelId.value = availableModels.value[0].id
-      } else if (props.account.platform === 'openai') {
-        const defaultModel = availableModels.value.find((m) => m.id === defaultOpenAITestModel)
-        selectedModelId.value = defaultModel?.id || availableModels.value[0].id
-      } else if (props.account.platform === 'grok') {
-        const defaultModel = availableModels.value.find((m) => m.id === defaultGrokTestModel)
-        selectedModelId.value = defaultModel?.id || availableModels.value[0].id
-      } else {
-        // Try to select Sonnet as default, otherwise use first model
-        const sonnetModel = availableModels.value.find((m) => m.id.includes('sonnet'))
-        selectedModelId.value = sonnetModel?.id || availableModels.value[0].id
-      }
-    }
+    availableModels.value = prepareAccountTestModels(models, props.account.platform)
+    selectedModelId.value = selectDefaultAccountTestModel(
+      availableModels.value,
+      props.account.platform
+    )
   } catch (error) {
     console.error('Failed to load available models:', error)
     // Fallback to empty list
@@ -293,13 +259,13 @@ const loadAvailableModels = async () => {
 const getUserDefaultTestModels = (account: Account): ClaudeModel[] => {
   switch (account.platform) {
     case 'openai':
-      return [{ id: defaultOpenAITestModel, type: 'model', display_name: defaultOpenAITestModel, created_at: '' }]
+      return [{ id: DEFAULT_OPENAI_TEST_MODEL, type: 'model', display_name: DEFAULT_OPENAI_TEST_MODEL, created_at: '' }]
     case 'gemini':
       return [{ id: 'gemini-2.5-flash', type: 'model', display_name: 'gemini-2.5-flash', created_at: '' }]
     case 'antigravity':
       return [{ id: 'gemini-2.5-flash', type: 'model', display_name: 'gemini-2.5-flash', created_at: '' }]
     case 'grok':
-      return [{ id: defaultGrokTestModel, type: 'model', display_name: defaultGrokTestModel, created_at: '' }]
+      return [{ id: DEFAULT_GROK_TEST_MODEL, type: 'model', display_name: DEFAULT_GROK_TEST_MODEL, created_at: '' }]
     default:
       return [{ id: 'claude-sonnet-4-5-20250929', type: 'model', display_name: 'Claude Sonnet 4.5', created_at: '' }]
   }

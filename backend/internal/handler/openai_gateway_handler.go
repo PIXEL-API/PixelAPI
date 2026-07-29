@@ -544,36 +544,56 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable; no upstream request was sent", streamStarted)
 			return
 		}
+		userAgent := c.GetHeader("User-Agent")
+		clientIP := ip.GetClientIP(c)
+		inboundEndpoint := GetInboundEndpoint(c)
+		upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
+		recordUsage := func(ctx context.Context, result *service.OpenAIForwardResult) error {
+			if result == nil {
+				return nil
+			}
+			return h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
+				Result:             result,
+				APIKey:             currentAPIKey,
+				User:               currentAPIKey.User,
+				Account:            account,
+				Subscription:       currentSubscription,
+				InboundEndpoint:    inboundEndpoint,
+				UpstreamEndpoint:   upstreamEndpoint,
+				UserAgent:          userAgent,
+				IPAddress:          clientIP,
+				RequestPayloadHash: requestPayloadHash,
+				APIKeyService:      h.apiKeyService,
+				ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
+			})
+		}
+		forwardCtx = withOpenAIForwardResultBillingGate(forwardCtx, recordUsage)
 		result, err := h.gatewayService.ForwardWithAnalysis(forwardCtx, c, account, forwardBody, forwardAnalysis)
 		cancelForward()
 		if service.GetOpsCyberPolicy(c) != nil {
 			h.gatewayService.MarkCyberSessionBlocked(dispatchCtx, service.CyberSessionBlockKey(currentAPIKey.ID, c, sessionHashBody))
 		}
 		forwardDurationMs := time.Since(forwardStart).Milliseconds()
-		userAgent := c.GetHeader("User-Agent")
-		clientIP := ip.GetClientIP(c)
-		inboundEndpoint := GetInboundEndpoint(c)
-		upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
 		recordUsageResult := func(result *service.OpenAIForwardResult) {
 			if result == nil {
 				return
 			}
-			h.submitUsageRecordTask(func(ctx context.Context) {
+			if handled, billingErr := service.CommitOpenAIForwardResultBillingGate(forwardCtx, result); handled {
+				if billingErr != nil {
+					logger.L().With(
+						zap.String("component", "handler.openai_gateway.responses"),
+						zap.Int64("user_id", subject.UserID),
+						zap.Int64("api_key_id", currentAPIKey.ID),
+						zap.Any("group_id", currentAPIKey.GroupID),
+						zap.String("model", reqModel),
+						zap.Int64("account_id", account.ID),
+					).Error("openai.record_usage_failed", zap.Error(billingErr))
+				}
+				return
+			}
+			h.submitUsageRecordTask(forwardCtx, func(ctx context.Context) {
 				usageCtx := service.WithAccountShareModeRequestFromContext(ctx, forwardCtx)
-				if err := h.gatewayService.RecordUsage(usageCtx, &service.OpenAIRecordUsageInput{
-					Result:             result,
-					APIKey:             currentAPIKey,
-					User:               currentAPIKey.User,
-					Account:            account,
-					Subscription:       currentSubscription,
-					InboundEndpoint:    inboundEndpoint,
-					UpstreamEndpoint:   upstreamEndpoint,
-					UserAgent:          userAgent,
-					IPAddress:          clientIP,
-					RequestPayloadHash: requestPayloadHash,
-					APIKeyService:      h.apiKeyService,
-					ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
-				}); err != nil {
+				if err := recordUsage(usageCtx, result); err != nil {
 					logger.L().With(
 						zap.String("component", "handler.openai_gateway.responses"),
 						zap.Int64("user_id", subject.UserID),
@@ -1180,6 +1200,30 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			h.anthropicStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable; no upstream request was sent", streamStarted)
 			return
 		}
+		userAgent := c.GetHeader("User-Agent")
+		clientIP := ip.GetClientIP(c)
+		inboundEndpoint := GetInboundEndpoint(c)
+		upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
+		recordUsage := func(ctx context.Context, result *service.OpenAIForwardResult) error {
+			if result == nil {
+				return nil
+			}
+			return h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
+				Result:             result,
+				APIKey:             currentAPIKey,
+				User:               currentAPIKey.User,
+				Account:            account,
+				Subscription:       currentSubscription,
+				InboundEndpoint:    inboundEndpoint,
+				UpstreamEndpoint:   upstreamEndpoint,
+				UserAgent:          userAgent,
+				IPAddress:          clientIP,
+				RequestPayloadHash: requestPayloadHash,
+				APIKeyService:      h.apiKeyService,
+				ChannelUsageFields: channelMappingMsg.ToUsageFields(reqModel, result.UpstreamModel),
+			})
+		}
+		forwardCtx = withOpenAIForwardResultBillingGate(forwardCtx, recordUsage)
 		result, err := h.gatewayService.ForwardAsAnthropic(forwardCtx, c, account, forwardBody, promptCacheKey, defaultMappedModel)
 		cancelForward()
 		if service.GetOpsCyberPolicy(c) != nil {
@@ -1187,30 +1231,26 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		}
 
 		forwardDurationMs := time.Since(forwardStart).Milliseconds()
-		userAgent := c.GetHeader("User-Agent")
-		clientIP := ip.GetClientIP(c)
-		inboundEndpoint := GetInboundEndpoint(c)
-		upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
 		recordUsageResult := func(result *service.OpenAIForwardResult) {
 			if result == nil {
 				return
 			}
-			h.submitUsageRecordTask(func(ctx context.Context) {
+			if handled, billingErr := service.CommitOpenAIForwardResultBillingGate(forwardCtx, result); handled {
+				if billingErr != nil {
+					logger.L().With(
+						zap.String("component", "handler.openai_gateway.messages"),
+						zap.Int64("user_id", subject.UserID),
+						zap.Int64("api_key_id", currentAPIKey.ID),
+						zap.Any("group_id", currentAPIKey.GroupID),
+						zap.String("model", reqModel),
+						zap.Int64("account_id", account.ID),
+					).Error("openai_messages.record_usage_failed", zap.Error(billingErr))
+				}
+				return
+			}
+			h.submitUsageRecordTask(forwardCtx, func(ctx context.Context) {
 				usageCtx := service.WithAccountShareModeRequestFromContext(ctx, forwardCtx)
-				if err := h.gatewayService.RecordUsage(usageCtx, &service.OpenAIRecordUsageInput{
-					Result:             result,
-					APIKey:             currentAPIKey,
-					User:               currentAPIKey.User,
-					Account:            account,
-					Subscription:       currentSubscription,
-					InboundEndpoint:    inboundEndpoint,
-					UpstreamEndpoint:   upstreamEndpoint,
-					UserAgent:          userAgent,
-					IPAddress:          clientIP,
-					RequestPayloadHash: requestPayloadHash,
-					APIKeyService:      h.apiKeyService,
-					ChannelUsageFields: channelMappingMsg.ToUsageFields(reqModel, result.UpstreamModel),
-				}); err != nil {
+				if err := recordUsage(usageCtx, result); err != nil {
 					logger.L().With(
 						zap.String("component", "handler.openai_gateway.messages"),
 						zap.Int64("user_id", subject.UserID),
@@ -2156,6 +2196,30 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					billingErr,
 				)
 			}
+			billingSourceCtx := turnCtx
+			billingAPIKey := currentAPIKey
+			billingSubscription := currentSubscription
+			billingAccount := latest
+			turnCtx = withOpenAIForwardResultBillingGate(turnCtx, func(taskCtx context.Context, result *service.OpenAIForwardResult) error {
+				if result == nil {
+					return nil
+				}
+				usageCtx := service.WithAccountShareModeRequestFromContext(taskCtx, billingSourceCtx)
+				return h.gatewayService.RecordUsage(usageCtx, &service.OpenAIRecordUsageInput{
+					Result:             result,
+					APIKey:             billingAPIKey,
+					User:               billingAPIKey.User,
+					Account:            billingAccount,
+					Subscription:       billingSubscription,
+					InboundEndpoint:    inboundEndpoint,
+					UpstreamEndpoint:   upstreamEndpoint,
+					UserAgent:          userAgent,
+					IPAddress:          clientIP,
+					RequestPayloadHash: payloadHash,
+					APIKeyService:      h.apiKeyService,
+					ChannelUsageFields: channelMappingWS.ToUsageFields(reqModel, result.UpstreamModel),
+				})
+			})
 
 			activeTurnNo = turn
 			activeTurnCtx = turnCtx
@@ -2215,6 +2279,13 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 						)
 					}
 				}
+				if handled, billingErr := service.CommitOpenAIForwardResultBillingGate(turnCtx, result); handled {
+					if billingErr != nil {
+						logRecordUsageError(billingErr)
+						return billingErr
+					}
+					return nil
+				}
 				if turnSelection.AccountShareMode {
 					// A paired account-share lease cannot be reacquired for the
 					// next turn until this turn's durable intent reaches ready.
@@ -2228,7 +2299,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 						return recordErr
 					}
 				} else {
-					h.submitUsageRecordTask(func(taskCtx context.Context) {
+					h.submitUsageRecordTask(turnCtx, func(taskCtx context.Context) {
 						logRecordUsageError(recordTurnUsage(taskCtx))
 					})
 				}
@@ -2420,8 +2491,12 @@ func getContextInt64(c *gin.Context, key string) (int64, bool) {
 	}
 }
 
-func (h *OpenAIGatewayHandler) submitUsageRecordTask(task service.UsageRecordTask) {
+func (h *OpenAIGatewayHandler) submitUsageRecordTask(requestCtx context.Context, task service.UsageRecordTask) {
 	if task == nil {
+		return
+	}
+	if _, durable := service.AccountShareBillingDispatchFromContext(requestCtx); durable {
+		runUsageRecordTaskSync(requestCtx, task, "handler.openai_gateway.responses", "openai.usage_record_task_panic_recovered")
 		return
 	}
 	if h.usageRecordWorkerPool != nil {
@@ -2433,7 +2508,7 @@ func (h *OpenAIGatewayHandler) submitUsageRecordTask(task service.UsageRecordTas
 			zap.String("component", "handler.openai_gateway.responses"),
 		).Warn("openai.usage_record_task_dropped_sync_fallback")
 	}
-	runUsageRecordTaskSync(task, "handler.openai_gateway.responses", "openai.usage_record_task_panic_recovered")
+	runUsageRecordTaskSync(requestCtx, task, "handler.openai_gateway.responses", "openai.usage_record_task_panic_recovered")
 }
 
 // handleConcurrencyError distinguishes a gateway first-output budget from a

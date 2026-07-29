@@ -140,7 +140,16 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode >= 400 {
+	if !isOpenAIUpstreamSuccessStatus(resp.StatusCode) {
+		if !isOpenAIUpstreamErrorStatus(resp.StatusCode) {
+			return rejectUnexpectedOpenAIUpstreamStatus(
+				resp,
+				c,
+				account,
+				false,
+				writeResponsesError,
+			)
+		}
 		respBody := s.readUpstreamErrorBody(resp)
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
 		s.updateGrokUsageSnapshot(ctx, account.ID, xai.ParseQuotaHeaders(resp.Header, resp.StatusCode))
@@ -349,7 +358,16 @@ func (s *OpenAIGatewayService) forwardGrokChatCompletions(
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode >= 400 {
+	if !isOpenAIUpstreamSuccessStatus(resp.StatusCode) {
+		if !isOpenAIUpstreamErrorStatus(resp.StatusCode) {
+			return rejectUnexpectedOpenAIUpstreamStatus(
+				resp,
+				c,
+				account,
+				false,
+				writeChatCompletionsError,
+			)
+		}
 		respBody := s.readUpstreamErrorBody(resp)
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
 		s.updateGrokUsageSnapshot(ctx, account.ID, xai.ParseQuotaHeaders(resp.Header, resp.StatusCode))
@@ -388,7 +406,7 @@ func (s *OpenAIGatewayService) forwardGrokChatCompletions(
 	if clientStream {
 		result, handleErr = s.handleChatStreamingResponse(ctx, resp, c, account, originalModel, billingModel, upstreamModel, includeUsage, startTime)
 	} else {
-		result, handleErr = s.handleChatBufferedStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime)
+		result, handleErr = s.handleChatBufferedStreamingResponse(ctx, resp, c, account, originalModel, billingModel, upstreamModel, startTime)
 	}
 	if handleErr == nil && result != nil {
 		result.ServiceTier = extractOpenAIServiceTierFromBody(patchedBody)
@@ -838,7 +856,12 @@ func (s *OpenAIGatewayService) buildGrokResponsesRequest(ctx context.Context, c 
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(
+		WithHTTPUpstreamRedirectsDisabled(ctx),
+		http.MethodPost,
+		targetURL,
+		bytes.NewReader(body),
+	)
 	if err != nil {
 		return nil, err
 	}

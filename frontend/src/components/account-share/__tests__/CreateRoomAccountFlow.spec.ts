@@ -16,12 +16,16 @@ const {
   listAccounts: vi.fn(),
 }))
 
-vi.mock('@/api/accountShare', () => ({
-  accountShareAPI: {
-    attachRoomAccounts,
-    convertAccountExternalPlacement,
-  },
-}))
+vi.mock('@/api/accountShare', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/accountShare')>()
+  return {
+    ...actual,
+    accountShareAPI: {
+      attachRoomAccounts,
+      convertAccountExternalPlacement,
+    },
+  }
+})
 
 vi.mock('@/api/accounts', () => ({
   accountsAPI: {

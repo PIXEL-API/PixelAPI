@@ -2,16 +2,68 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"hash/crc32"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+func buildBedrockEventStreamFrameForTest(eventType string, payload []byte) []byte {
+	var headersBuf bytes.Buffer
+	_ = headersBuf.WriteByte(byte(len(":event-type")))
+	_, _ = headersBuf.WriteString(":event-type")
+	_ = headersBuf.WriteByte(7)
+	_ = binary.Write(&headersBuf, binary.BigEndian, uint16(len(eventType)))
+	_, _ = headersBuf.WriteString(eventType)
+	_ = headersBuf.WriteByte(byte(len(":message-type")))
+	_, _ = headersBuf.WriteString(":message-type")
+	_ = headersBuf.WriteByte(7)
+	_ = binary.Write(&headersBuf, binary.BigEndian, uint16(len("event")))
+	_, _ = headersBuf.WriteString("event")
+
+	headers := headersBuf.Bytes()
+	headersLen := uint32(len(headers))
+	totalLen := uint32(12 + len(headers) + len(payload) + 4)
+
+	var preludeBuf bytes.Buffer
+	_ = binary.Write(&preludeBuf, binary.BigEndian, totalLen)
+	_ = binary.Write(&preludeBuf, binary.BigEndian, headersLen)
+	preludeBytes := preludeBuf.Bytes()
+
+	var frame bytes.Buffer
+	_, _ = frame.Write(preludeBytes)
+	_ = binary.Write(&frame, binary.BigEndian, crc32.ChecksumIEEE(preludeBytes))
+	_, _ = frame.Write(headers)
+	_, _ = frame.Write(payload)
+	_ = binary.Write(&frame, binary.BigEndian, crc32.ChecksumIEEE(frame.Bytes()))
+	return frame.Bytes()
+}
+
+func buildBedrockChunkFrameForTest(data string) []byte {
+	encoded := base64.StdEncoding.EncodeToString([]byte(data))
+	return buildBedrockEventStreamFrameForTest("chunk", []byte(`{"bytes":"`+encoded+`"}`))
+}
+
+func buildBedrockEventStreamPreludeForTest(totalLength, headersLength uint32) []byte {
+	var prelude bytes.Buffer
+	_ = binary.Write(&prelude, binary.BigEndian, totalLength)
+	_ = binary.Write(&prelude, binary.BigEndian, headersLength)
+	_ = binary.Write(&prelude, binary.BigEndian, crc32.ChecksumIEEE(prelude.Bytes()))
+	return prelude.Bytes()
+}
 
 func TestExtractBedrockChunkData(t *testing.T) {
 	t.Run("valid base64 payload", func(t *testing.T) {
@@ -19,23 +71,27 @@ func TestExtractBedrockChunkData(t *testing.T) {
 		b64 := base64.StdEncoding.EncodeToString([]byte(original))
 		payload := []byte(`{"bytes":"` + b64 + `"}`)
 
-		result := extractBedrockChunkData(payload)
+		result, err := extractBedrockChunkData(payload)
+		require.NoError(t, err)
 		require.NotNil(t, result)
 		assert.JSONEq(t, original, string(result))
 	})
 
 	t.Run("empty bytes field", func(t *testing.T) {
-		result := extractBedrockChunkData([]byte(`{"bytes":""}`))
+		result, err := extractBedrockChunkData([]byte(`{"bytes":""}`))
+		require.Error(t, err)
 		assert.Nil(t, result)
 	})
 
 	t.Run("no bytes field", func(t *testing.T) {
-		result := extractBedrockChunkData([]byte(`{"other":"value"}`))
+		result, err := extractBedrockChunkData([]byte(`{"other":"value"}`))
+		require.Error(t, err)
 		assert.Nil(t, result)
 	})
 
 	t.Run("invalid base64", func(t *testing.T) {
-		result := extractBedrockChunkData([]byte(`{"bytes":"not-valid-base64!!!"}`))
+		result, err := extractBedrockChunkData([]byte(`{"bytes":"not-valid-base64!!!"}`))
+		require.Error(t, err)
 		assert.Nil(t, result)
 	})
 }
@@ -116,49 +172,7 @@ func TestExtractEventStreamHeaderValue(t *testing.T) {
 }
 
 func TestBedrockEventStreamDecoder(t *testing.T) {
-	crc32IeeeTab := crc32.MakeTable(crc32.IEEE)
-
-	// Build a valid EventStream frame with correct CRC32/IEEE checksums.
-	buildFrame := func(eventType string, payload []byte) []byte {
-		// Build headers
-		var headersBuf bytes.Buffer
-		// :event-type header
-		_ = headersBuf.WriteByte(byte(len(":event-type")))
-		_, _ = headersBuf.WriteString(":event-type")
-		_ = headersBuf.WriteByte(7) // string type
-		_ = binary.Write(&headersBuf, binary.BigEndian, uint16(len(eventType)))
-		_, _ = headersBuf.WriteString(eventType)
-		// :message-type header
-		_ = headersBuf.WriteByte(byte(len(":message-type")))
-		_, _ = headersBuf.WriteString(":message-type")
-		_ = headersBuf.WriteByte(7)
-		_ = binary.Write(&headersBuf, binary.BigEndian, uint16(len("event")))
-		_, _ = headersBuf.WriteString("event")
-
-		headers := headersBuf.Bytes()
-		headersLen := uint32(len(headers))
-		// total = 12 (prelude) + headers + payload + 4 (message_crc)
-		totalLen := uint32(12 + len(headers) + len(payload) + 4)
-
-		// Prelude: total_length(4) + headers_length(4)
-		var preludeBuf bytes.Buffer
-		_ = binary.Write(&preludeBuf, binary.BigEndian, totalLen)
-		_ = binary.Write(&preludeBuf, binary.BigEndian, headersLen)
-		preludeBytes := preludeBuf.Bytes()
-		preludeCRC := crc32.Checksum(preludeBytes, crc32IeeeTab)
-
-		// Build frame: prelude + prelude_crc + headers + payload
-		var frame bytes.Buffer
-		_, _ = frame.Write(preludeBytes)
-		_ = binary.Write(&frame, binary.BigEndian, preludeCRC)
-		_, _ = frame.Write(headers)
-		_, _ = frame.Write(payload)
-
-		// Message CRC covers everything before itself
-		messageCRC := crc32.Checksum(frame.Bytes(), crc32IeeeTab)
-		_ = binary.Write(&frame, binary.BigEndian, messageCRC)
-		return frame.Bytes()
-	}
+	buildFrame := buildBedrockEventStreamFrameForTest
 
 	t.Run("decode chunk event", func(t *testing.T) {
 		payload := []byte(`{"bytes":"dGVzdA=="}`) // base64("test")
@@ -187,6 +201,33 @@ func TestBedrockEventStreamDecoder(t *testing.T) {
 		decoder := newBedrockEventStreamDecoder(bytes.NewReader(nil))
 		_, err := decoder.Decode()
 		assert.Equal(t, io.EOF, err)
+	})
+
+	t.Run("reject oversized total length before allocation", func(t *testing.T) {
+		prelude := buildBedrockEventStreamPreludeForTest(bedrockEventStreamMaxMessageBytes+1, 0)
+		decoder := newBedrockEventStreamDecoder(bytes.NewReader(prelude))
+		_, err := decoder.Decode()
+		require.ErrorContains(t, err, "total_length")
+		require.ErrorContains(t, err, "exceeds limit")
+	})
+
+	t.Run("reject oversized headers before allocation", func(t *testing.T) {
+		prelude := buildBedrockEventStreamPreludeForTest(
+			bedrockEventStreamMaxMessageBytes,
+			bedrockEventStreamMaxHeadersBytes+1,
+		)
+		decoder := newBedrockEventStreamDecoder(bytes.NewReader(prelude))
+		_, err := decoder.Decode()
+		require.ErrorContains(t, err, "headers_length")
+		require.ErrorContains(t, err, "exceeds limit")
+	})
+
+	t.Run("reject headers longer than frame data", func(t *testing.T) {
+		prelude := buildBedrockEventStreamPreludeForTest(16, 1)
+		decoder := newBedrockEventStreamDecoder(bytes.NewReader(prelude))
+		_, err := decoder.Decode()
+		require.ErrorContains(t, err, "headers_length")
+		require.ErrorContains(t, err, "exceeds available")
 	})
 
 	t.Run("corrupted prelude CRC", func(t *testing.T) {
@@ -241,6 +282,243 @@ func TestBedrockEventStreamDecoder(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "prelude CRC mismatch")
 	})
+}
+
+func TestHandleBedrockStreamingResponseBillingGateBlocksMessageStop(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	var stream bytes.Buffer
+	_, _ = stream.Write(buildBedrockChunkFrameForTest(`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"amazon-bedrock-invocationMetrics":{"inputTokenCount":9,"outputTokenCount":4}}`))
+	_, _ = stream.Write(buildBedrockChunkFrameForTest(`{"type":"message_stop"}`))
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"x-amzn-requestid": []string{"bedrock-request"}},
+		Body:       io.NopCloser(bytes.NewReader(stream.Bytes())),
+	}
+	submitErr := errors.New("billing unavailable")
+	submitCalls := 0
+	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(result *ForwardResult) error {
+		submitCalls++
+		require.Equal(t, 9, result.Usage.InputTokens)
+		require.Equal(t, 4, result.Usage.OutputTokens)
+		return submitErr
+	}))
+	svc := &GatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}}
+
+	result, err := svc.handleBedrockStreamingResponseWithModels(
+		ctx,
+		resp,
+		c,
+		&Account{ID: 17},
+		time.Now(),
+		"claude-original",
+		"claude-bedrock",
+	)
+
+	require.NotNil(t, result)
+	require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
+	require.ErrorIs(t, err, submitErr)
+	require.Equal(t, 1, submitCalls)
+	require.Contains(t, recorder.Body.String(), `"type":"message_delta"`)
+	require.NotContains(t, recorder.Body.String(), `"type":"message_stop"`)
+}
+
+func TestHandleBedrockStreamingResponseBillingGateRejectsPartialUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	var stream bytes.Buffer
+	_, _ = stream.Write(buildBedrockChunkFrameForTest(`{"type":"message_delta","amazon-bedrock-invocationMetrics":{"inputTokenCount":9}}`))
+	_, _ = stream.Write(buildBedrockChunkFrameForTest(`{"type":"message_stop"}`))
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(bytes.NewReader(stream.Bytes())),
+	}
+	submitCalls := 0
+	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(*ForwardResult) error {
+		submitCalls++
+		return nil
+	}))
+	svc := &GatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}}
+
+	result, err := svc.handleBedrockStreamingResponseWithModels(
+		ctx,
+		resp,
+		c,
+		&Account{ID: 19},
+		time.Now(),
+		"claude-original",
+		"claude-bedrock",
+	)
+
+	require.NotNil(t, result)
+	require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
+	require.Zero(t, submitCalls)
+	require.NotContains(t, recorder.Body.String(), `"type":"message_stop"`)
+}
+
+func TestHandleBedrockStreamingResponseRejectsInvalidChunkBeforeLaterTerminal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	var stream bytes.Buffer
+	_, _ = stream.Write(buildBedrockEventStreamFrameForTest("chunk", []byte(`{"bytes":"not-valid-base64!!!"}`)))
+	_, _ = stream.Write(buildBedrockChunkFrameForTest(`{"type":"message_stop"}`))
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(bytes.NewReader(stream.Bytes())),
+	}
+	svc := &GatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}}
+
+	result, err := svc.handleBedrockStreamingResponseWithModels(
+		context.Background(),
+		resp,
+		c,
+		&Account{ID: 20},
+		time.Now(),
+		"claude-original",
+		"claude-bedrock",
+	)
+
+	require.NotNil(t, result)
+	require.ErrorContains(t, err, "decode bedrock chunk")
+	require.Empty(t, recorder.Body.String())
+}
+
+func TestHandleBedrockStreamingResponseStopsAfterMessageStop(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	var stream bytes.Buffer
+	_, _ = stream.Write(buildBedrockChunkFrameForTest(`{"type":"message_delta","amazon-bedrock-invocationMetrics":{"inputTokenCount":3,"outputTokenCount":2}}`))
+	_, _ = stream.Write(buildBedrockChunkFrameForTest(`{"type":"message_stop"}`))
+	_, _ = stream.Write(buildBedrockChunkFrameForTest(`{"type":"content_block_delta","delta":{"type":"text_delta","text":"must-not-leak"}}`))
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(bytes.NewReader(stream.Bytes())),
+	}
+	svc := &GatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}}
+
+	result, err := svc.handleBedrockStreamingResponseWithModels(
+		context.Background(),
+		resp,
+		c,
+		&Account{ID: 21},
+		time.Now(),
+		"claude-original",
+		"claude-bedrock",
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Contains(t, recorder.Body.String(), `"type":"message_stop"`)
+	require.NotContains(t, recorder.Body.String(), "must-not-leak")
+}
+
+func TestHandleBedrockNonStreamingResponseBillingGateBlocksBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"x-amzn-requestid": []string{"bedrock-nonstream"}},
+		Body:       io.NopCloser(strings.NewReader(`{"type":"message","usage":{"input_tokens":9,"output_tokens":4}}`)),
+	}
+	submitErr := errors.New("billing unavailable")
+	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(*ForwardResult) error {
+		return submitErr
+	}))
+	svc := &GatewayService{cfg: &config.Config{}}
+
+	usage, err := svc.handleBedrockNonStreamingResponseWithModels(
+		ctx,
+		resp,
+		c,
+		&Account{ID: 22},
+		time.Now(),
+		"claude-original",
+		"claude-bedrock",
+	)
+
+	require.NotNil(t, usage)
+	require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
+	require.ErrorIs(t, err, submitErr)
+	require.Empty(t, recorder.Body.String())
+}
+
+func TestHandleBedrockNonStreamingResponseBillingGateRejectsPartialUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(`{"type":"message","usage":{"input_tokens":9}}`)),
+	}
+	submitCalls := 0
+	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(*ForwardResult) error {
+		submitCalls++
+		return nil
+	}))
+	svc := &GatewayService{cfg: &config.Config{}}
+
+	usage, err := svc.handleBedrockNonStreamingResponseWithModels(
+		ctx,
+		resp,
+		c,
+		&Account{ID: 23},
+		time.Now(),
+		"claude-original",
+		"claude-bedrock",
+	)
+
+	require.NotNil(t, usage)
+	require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
+	require.Zero(t, submitCalls)
+	require.Empty(t, recorder.Body.String())
+}
+
+func TestHandleBedrockStreamingResponseRejectsDoneWithoutMessageStop(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	var stream bytes.Buffer
+	_, _ = stream.Write(buildBedrockChunkFrameForTest(`{"type":"message_delta","amazon-bedrock-invocationMetrics":{"inputTokenCount":3,"outputTokenCount":2}}`))
+	_, _ = stream.Write(buildBedrockChunkFrameForTest(`[DONE]`))
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(bytes.NewReader(stream.Bytes())),
+	}
+	svc := &GatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}}
+
+	result, err := svc.handleBedrockStreamingResponseWithModels(
+		context.Background(),
+		resp,
+		c,
+		&Account{ID: 18},
+		time.Now(),
+		"claude-original",
+		"claude-bedrock",
+	)
+
+	require.NotNil(t, result)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unexpected [DONE] before message_stop")
+	require.Equal(t, 3, result.usage.InputTokens)
+	require.Equal(t, 2, result.usage.OutputTokens)
+	require.NotContains(t, recorder.Body.String(), "[DONE]")
 }
 
 func TestBuildBedrockURL(t *testing.T) {

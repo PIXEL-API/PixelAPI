@@ -110,6 +110,8 @@
                   v-for="model in section.supported_models"
                   :key="`${section.platform}-${model.name}`"
                   :model="model"
+                  :monitor-summary="resolveMonitorSummary(model.name, section)"
+                  :monitor-loading="monitorLoading"
                   :pricing-key-prefix="pricingKeyPrefix"
                   :no-pricing-label="noPricingLabel"
                   @select="selectModel(model, section)"
@@ -154,10 +156,12 @@ import type {
   UserChannelPlatformSection,
   UserSupportedModel,
 } from '@/api/channels'
+import type { MonitorStatus, UserMonitorView } from '@/api/channelMonitor'
+import type { AvailableModelMonitorSummary } from './AvailableModelCard.vue'
 import type { GroupPlatform, SubscriptionType } from '@/types'
 import { platformAccentBarClass, platformBadgeClass, platformBorderClass } from '@/utils/platformColors'
 
-defineProps<{
+const props = defineProps<{
   rows: UserAvailableChannel[]
   loading: boolean
   pricingKeyPrefix: string
@@ -165,6 +169,8 @@ defineProps<{
   noModelsLabel: string
   emptyLabel: string
   userGroupRates: Record<number, number>
+  monitorItems: UserMonitorView[]
+  monitorLoading: boolean
 }>()
 
 const { t } = useI18n()
@@ -218,6 +224,60 @@ function selectModel(model: UserSupportedModel, section: UserChannelPlatformSect
     model,
     platform: section.platform,
     groups: section.groups,
+  }
+}
+
+const STATUS_PRIORITY: Record<MonitorStatus, number> = {
+  operational: 0,
+  degraded: 1,
+  failed: 2,
+  error: 3,
+}
+
+function resolveMonitorSummary(
+  modelName: string,
+  section: UserChannelPlatformSection,
+): AvailableModelMonitorSummary | null {
+  const platform = section.platform.trim().toLowerCase()
+  const groupNames = new Set(
+    section.groups.map(group => group.name.trim().toLowerCase()),
+  )
+  const candidates: AvailableModelMonitorSummary[] = []
+
+  for (const monitor of props.monitorItems) {
+    if (monitor.provider.toLowerCase() !== platform) continue
+    const monitorGroup = monitor.group_name.trim().toLowerCase()
+    if (monitorGroup && !groupNames.has(monitorGroup)) continue
+
+    if (monitor.primary_model === modelName) {
+      candidates.push({
+        status: monitor.primary_status,
+        availability: monitor.availability_7d,
+        latencyMs: monitor.primary_latency_ms,
+        monitorCount: 1,
+      })
+    }
+
+    const extra = monitor.extra_models.find(item => item.model === modelName)
+    if (extra) {
+      candidates.push({
+        status: extra.status,
+        availability: null,
+        latencyMs: extra.latency_ms,
+        monitorCount: 1,
+      })
+    }
+  }
+
+  if (candidates.length === 0) return null
+  const worst = candidates.reduce((current, candidate) =>
+    STATUS_PRIORITY[candidate.status] > STATUS_PRIORITY[current.status]
+      ? candidate
+      : current,
+  )
+  return {
+    ...worst,
+    monitorCount: candidates.length,
   }
 }
 </script>

@@ -40,6 +40,7 @@ type Usage struct {
 type RelayResult struct {
 	RequestModel            string
 	Usage                   Usage
+	BillingUsageComplete    bool
 	RequestID               string
 	TerminalEventType       string
 	FirstTokenMs            *int
@@ -50,12 +51,13 @@ type RelayResult struct {
 }
 
 type RelayTurnResult struct {
-	RequestModel      string
-	Usage             Usage
-	RequestID         string
-	TerminalEventType string
-	Duration          time.Duration
-	FirstTokenMs      *int
+	RequestModel         string
+	Usage                Usage
+	BillingUsageComplete bool
+	RequestID            string
+	TerminalEventType    string
+	Duration             time.Duration
+	FirstTokenMs         *int
 }
 
 type RelayExit struct {
@@ -71,6 +73,7 @@ type RelayOptions struct {
 	FirstMessageType     coderws.MessageType
 	OnUsageParseFailure  func(eventType string, usageRaw string)
 	OnTurnComplete       func(turn RelayTurnResult)
+	BeforeTerminalFrame  func(turn RelayTurnResult) error
 	BeforeClientFrame    func(msgType coderws.MessageType, payload []byte) error
 	OnTrace              func(event RelayTraceEvent)
 	Now                  func() time.Time
@@ -87,14 +90,15 @@ type RelayTraceEvent struct {
 }
 
 type relayState struct {
-	usage             Usage
-	requestModel      string
-	lastResponseID    string
-	terminalEventType string
-	firstTokenMs      *int
-	turnTimingByID    map[string]*relayTurnTiming
-	imageCounter      *imageOutputCounter
-	settledImageCount int
+	usage                Usage
+	requestModel         string
+	lastResponseID       string
+	terminalEventType    string
+	firstTokenMs         *int
+	turnTimingByID       map[string]*relayTurnTiming
+	imageCounter         *imageOutputCounter
+	settledImageCount    int
+	billingUsageComplete bool
 }
 
 type relayExitSignal struct {
@@ -105,12 +109,13 @@ type relayExitSignal struct {
 }
 
 type observedUpstreamEvent struct {
-	terminal   bool
-	eventType  string
-	responseID string
-	usage      Usage
-	duration   time.Duration
-	firstToken *int
+	terminal             bool
+	eventType            string
+	responseID           string
+	usage                Usage
+	billingUsageComplete bool
+	duration             time.Duration
+	firstToken           *int
 }
 
 type relayTurnTiming struct {
@@ -315,6 +320,7 @@ func Relay(
 		state,
 		options.OnUsageParseFailure,
 		options.OnTurnComplete,
+		options.BeforeTerminalFrame,
 		&dropDownstreamWrites,
 		upstreamToClientFrames,
 		droppedDownstreamFrames,
@@ -495,6 +501,7 @@ func runUpstreamToClient(
 	state *relayState,
 	onUsageParseFailure func(eventType string, usageRaw string),
 	onTurnComplete func(turn RelayTurnResult),
+	beforeTerminalFrame func(turn RelayTurnResult) error,
 	dropDownstreamWrites *atomic.Bool,
 	forwardedFrames *atomic.Int64,
 	droppedFrames *atomic.Int64,
@@ -546,7 +553,28 @@ func runUpstreamToClient(
 		case coderws.MessageBinary:
 			// binary frame 直接透传，不进入 JSON 观测路径（避免无效解析开销）。
 		}
-		emitTurnComplete(onTurnComplete, state, observedEvent)
+		turnResult, terminalObserved := buildRelayTurnResult(state, observedEvent)
+		if terminalObserved && beforeTerminalFrame != nil {
+			if err := beforeTerminalFrame(turnResult); err != nil {
+				emitRelayTrace(onTrace, RelayTraceEvent{
+					Stage:           "before_terminal_frame_failed",
+					Direction:       "upstream_to_client",
+					MessageType:     relayMessageTypeString(msgType),
+					PayloadBytes:    len(payload),
+					WroteDownstream: wroteDownstream,
+					Error:           err.Error(),
+				})
+				exitCh <- relayExitSignal{
+					stage:           "before_terminal_frame",
+					err:             err,
+					wroteDownstream: wroteDownstream,
+				}
+				return
+			}
+		}
+		if terminalObserved && onTurnComplete != nil && strings.TrimSpace(turnResult.RequestID) != "" {
+			onTurnComplete(turnResult)
+		}
 		if dropDownstreamWrites != nil && dropDownstreamWrites.Load() {
 			if droppedFrames != nil {
 				droppedFrames.Add(1)
@@ -702,9 +730,10 @@ func observeUpstreamMessage(
 	state.imageCounter.AddMessage(message)
 	parsedUsage := parseUsageAndAccumulate(state, message, eventType, onUsageParseFailure)
 	observed := observedUpstreamEvent{
-		eventType:  eventType,
-		responseID: responseID,
-		usage:      parsedUsage,
+		eventType:            eventType,
+		responseID:           responseID,
+		usage:                parsedUsage,
+		billingUsageComplete: openAIWSV2BillingUsageComplete(message),
 	}
 	if responseID != "" {
 		turnTiming := openAIWSRelayGetOrInitTurnTiming(state, responseID, now)
@@ -720,6 +749,7 @@ func observeUpstreamMessage(
 	}
 	observed.terminal = true
 	state.terminalEventType = eventType
+	state.billingUsageComplete = state.billingUsageComplete || observed.billingUsageComplete
 	if responseID != "" {
 		state.lastResponseID = responseID
 		if turnTiming, ok := openAIWSRelayDeleteTurnTiming(state, responseID); ok {
@@ -739,13 +769,21 @@ func emitTurnComplete(
 	state *relayState,
 	observed observedUpstreamEvent,
 ) {
-	if onTurnComplete == nil || !observed.terminal {
+	if onTurnComplete == nil {
 		return
+	}
+	turnResult, ok := buildRelayTurnResult(state, observed)
+	if !ok || strings.TrimSpace(turnResult.RequestID) == "" {
+		return
+	}
+	onTurnComplete(turnResult)
+}
+
+func buildRelayTurnResult(state *relayState, observed observedUpstreamEvent) (RelayTurnResult, bool) {
+	if !observed.terminal {
+		return RelayTurnResult{}, false
 	}
 	responseID := strings.TrimSpace(observed.responseID)
-	if responseID == "" {
-		return
-	}
 	requestModel := ""
 	turnUsage := observed.usage
 	if state != nil {
@@ -761,14 +799,29 @@ func emitTurnComplete(
 		}
 		state.settledImageCount = cumulativeImageCount
 	}
-	onTurnComplete(RelayTurnResult{
-		RequestModel:      requestModel,
-		Usage:             turnUsage,
-		RequestID:         responseID,
-		TerminalEventType: observed.eventType,
-		Duration:          observed.duration,
-		FirstTokenMs:      openAIWSRelayCloneIntPtr(observed.firstToken),
-	})
+	return RelayTurnResult{
+		RequestModel:         requestModel,
+		Usage:                turnUsage,
+		BillingUsageComplete: observed.billingUsageComplete,
+		RequestID:            responseID,
+		TerminalEventType:    observed.eventType,
+		Duration:             observed.duration,
+		FirstTokenMs:         openAIWSRelayCloneIntPtr(observed.firstToken),
+	}, true
+}
+
+func openAIWSV2BillingUsageComplete(message []byte) bool {
+	if len(message) == 0 || !gjson.ValidBytes(message) {
+		return false
+	}
+	usage := gjson.GetBytes(message, "response.usage")
+	if !usage.Exists() || !usage.IsObject() {
+		return false
+	}
+	input := usage.Get("input_tokens")
+	output := usage.Get("output_tokens")
+	return input.Exists() && input.Type == gjson.Number && input.Int() >= 0 &&
+		output.Exists() && output.Type == gjson.Number && output.Int() >= 0
 }
 
 func openAIWSRelayGetOrInitTurnTiming(state *relayState, responseID string, now time.Time) *relayTurnTiming {
@@ -895,6 +948,9 @@ func parseUsageIntField(value gjson.Result, required bool) (int, bool) {
 	if value.Type != gjson.Number {
 		return 0, false
 	}
+	if value.Int() < 0 {
+		return 0, false
+	}
 	return int(value.Int()), true
 }
 
@@ -935,6 +991,7 @@ func enrichResult(result *RelayResult, state *relayState, duration time.Duration
 	}
 	result.RequestModel = state.requestModel
 	result.Usage = state.usage
+	result.BillingUsageComplete = state.billingUsageComplete
 	if state.imageCounter != nil {
 		result.Usage.ImageCount = state.imageCounter.Count()
 	}

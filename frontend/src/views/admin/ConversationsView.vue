@@ -105,6 +105,7 @@
 
           <div v-if="pagination.total > pagination.page_size" class="flex-shrink-0 border-t border-gray-100 p-3 dark:border-dark-700">
             <Pagination
+              compact
               :page="pagination.page"
               :total="pagination.total"
               :page-size="pagination.page_size"

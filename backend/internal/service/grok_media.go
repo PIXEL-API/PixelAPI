@@ -432,7 +432,12 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 	}
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	defer releaseUpstreamCtx()
-	upstreamReq, err := http.NewRequestWithContext(upstreamCtx, endpoint.httpMethod(), targetURL, bodyReader)
+	upstreamReq, err := http.NewRequestWithContext(
+		WithHTTPUpstreamRedirectsDisabled(upstreamCtx),
+		endpoint.httpMethod(),
+		targetURL,
+		bodyReader,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -466,7 +471,16 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 
 	requestIDHeader := firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("xai-request-id"))
 	requestModel := requestInfo.Model
-	if resp.StatusCode >= 400 {
+	if !isOpenAIUpstreamSuccessStatus(resp.StatusCode) {
+		if !isOpenAIUpstreamErrorStatus(resp.StatusCode) {
+			return rejectUnexpectedOpenAIUpstreamStatus(
+				resp,
+				c,
+				account,
+				false,
+				writeGrokMediaErrorResponse,
+			)
+		}
 		s.updateGrokUsageSnapshot(ctx, account.ID, xai.ParseQuotaHeaders(resp.Header, resp.StatusCode))
 		return s.handleGrokMediaErrorResponse(ctx, resp, c, account, requestIDHeader, requestModel)
 	}
@@ -483,9 +497,23 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 			grokMediaContentProxyURL(c, requestID),
 		)
 	}
-	writeGrokMediaResponse(c, resp, respBody, s.responseHeaderFilter)
-	usage := grokMediaUsageFromResponse(endpoint, requestInfo, respBody)
-	return &OpenAIForwardResult{
+	usage, err := grokMediaUsageFromResponse(endpoint, requestInfo, respBody)
+	if err != nil {
+		safeMessage := sanitizeUpstreamErrorMessage(err.Error())
+		setOpsUpstreamError(c, resp.StatusCode, safeMessage, "")
+		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			Platform:           account.Platform,
+			AccountID:          account.ID,
+			AccountName:        account.Name,
+			UpstreamStatusCode: resp.StatusCode,
+			UpstreamRequestID:  requestIDHeader,
+			Kind:               "invalid_response",
+			Message:            safeMessage,
+		})
+		writeGrokMediaErrorResponse(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
+		return nil, err
+	}
+	result := &OpenAIForwardResult{
 		RequestID:            requestIDHeader,
 		ResponseID:           usage.ResponseID,
 		Usage:                usage.Usage,
@@ -501,7 +529,14 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 		VideoCount:           usage.VideoCount,
 		VideoResolution:      usage.VideoResolution,
 		VideoDurationSeconds: usage.VideoDurationSeconds,
-	}, nil
+	}
+	if endpoint.IsGenerationRequest() {
+		if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
+			return result, billingErr
+		}
+	}
+	writeGrokMediaResponse(c, resp, respBody, s.responseHeaderFilter)
+	return result, nil
 }
 
 func (s *OpenAIGatewayService) forwardGrokMediaVideoContent(
@@ -547,12 +582,18 @@ func (s *OpenAIGatewayService) forwardGrokMediaVideoContent(
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 	}
 	statusRequestID := firstNonEmpty(statusResp.Header.Get("x-request-id"), statusResp.Header.Get("xai-request-id"))
-	if statusResp.StatusCode >= http.StatusMultipleChoices {
-		defer func() { _ = statusResp.Body.Close() }()
+	if !isOpenAIUpstreamSuccessStatus(statusResp.StatusCode) {
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
-		if statusResp.StatusCode < http.StatusBadRequest {
-			return nil, fmt.Errorf("grok media status redirect is not allowed")
+		if !isOpenAIUpstreamErrorStatus(statusResp.StatusCode) {
+			return rejectUnexpectedOpenAIUpstreamStatus(
+				statusResp,
+				c,
+				account,
+				false,
+				writeGrokMediaErrorResponse,
+			)
 		}
+		defer func() { _ = statusResp.Body.Close() }()
 		return s.handleGrokMediaErrorResponse(ctx, statusResp, c, account, statusRequestID, "")
 	}
 	statusBody, err := ReadUpstreamResponseBody(statusResp.Body, s.cfg, c, openAITooLargeError)
@@ -614,10 +655,17 @@ func (s *OpenAIGatewayService) forwardGrokMediaVideoContent(
 		contentResp.Header.Get("xai-request-id"),
 		statusRequestID,
 	)
-	if contentResp.StatusCode >= http.StatusMultipleChoices && contentResp.StatusCode < http.StatusBadRequest {
-		return nil, fmt.Errorf("grok media content redirect is not allowed")
-	}
-	if contentResp.StatusCode >= http.StatusBadRequest && contentResp.StatusCode != http.StatusRequestedRangeNotSatisfiable {
+	if !isOpenAIUpstreamSuccessStatus(contentResp.StatusCode) &&
+		contentResp.StatusCode != http.StatusRequestedRangeNotSatisfiable {
+		if !isOpenAIUpstreamErrorStatus(contentResp.StatusCode) {
+			return rejectUnexpectedOpenAIUpstreamStatus(
+				contentResp,
+				c,
+				account,
+				false,
+				writeGrokMediaErrorResponse,
+			)
+		}
 		return s.handleGrokMediaErrorResponse(ctx, contentResp, c, account, contentRequestID, "")
 	}
 
@@ -810,17 +858,18 @@ type grokMediaUsageMetadata struct {
 	VideoDurationSeconds int
 }
 
-func grokMediaUsageFromResponse(endpoint GrokMediaEndpoint, requestInfo GrokMediaRequestInfo, responseBody []byte) grokMediaUsageMetadata {
+func grokMediaUsageFromResponse(
+	endpoint GrokMediaEndpoint,
+	requestInfo GrokMediaRequestInfo,
+	responseBody []byte,
+) (grokMediaUsageMetadata, error) {
 	usage, _ := extractOpenAIUsageFromJSONBytes(responseBody)
 	meta := grokMediaUsageMetadata{Usage: usage}
 	switch endpoint {
 	case GrokMediaEndpointImagesGenerations, GrokMediaEndpointImagesEdits:
 		imageCount := countOpenAIResponseImageOutputsFromJSONBytes(responseBody)
 		if imageCount <= 0 {
-			imageCount = requestInfo.N
-		}
-		if imageCount <= 0 {
-			imageCount = 1
+			return meta, fmt.Errorf("grok media upstream returned a successful response without image output")
 		}
 		meta.ImageCount = imageCount
 		meta.ImageSize = requestInfo.SizeTier
@@ -828,13 +877,16 @@ func grokMediaUsageFromResponse(endpoint GrokMediaEndpoint, requestInfo GrokMedi
 		meta.ImageOutputSizes = collectOpenAIResponseImageOutputSizesFromJSONBytes(responseBody)
 	case GrokMediaEndpointVideosGenerations, GrokMediaEndpointVideosEdits, GrokMediaEndpointVideosExtensions:
 		meta.ResponseID = extractGrokMediaVideoRequestID(responseBody)
+		if meta.ResponseID == "" {
+			return meta, fmt.Errorf("grok media upstream returned a successful response without a video request id")
+		}
 		meta.VideoCount = 1
 		meta.VideoResolution = requestInfo.Resolution
 		meta.VideoDurationSeconds = requestInfo.DurationSeconds
 		// Keep the legacy media-unit counter populated for existing usage displays.
 		meta.ImageCount = 1
 	}
-	return meta
+	return meta, nil
 }
 
 func extractGrokMediaVideoRequestID(body []byte) string {

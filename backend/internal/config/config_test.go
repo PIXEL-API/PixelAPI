@@ -223,7 +223,17 @@ func TestLoadClusterDefaultsPreserveSingleInstanceMode(t *testing.T) {
 	require.Equal(t, 30, cfg.Server.CleanupTimeoutSeconds)
 	require.False(t, cfg.AccountShareRollout.LifecycleContractEnabled)
 	require.False(t, cfg.AccountShareRollout.DeferredQueueBindingEnabled)
+	require.False(t, cfg.AccountShareRollout.ReviewRoomSubjectWritesEnabled)
 	require.Equal(t, AccountShareQuotaModeShadow, cfg.AccountShareRollout.QuotaMode)
+}
+
+func TestLoadAccountShareReviewRoomSubjectWritesEnabledFromEnvironment(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("ACCOUNT_SHARE_ROLLOUT_REVIEW_ROOM_SUBJECT_WRITES_ENABLED", "true")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.True(t, cfg.AccountShareRollout.ReviewRoomSubjectWritesEnabled)
 }
 
 func TestLoadClusterConfig(t *testing.T) {
@@ -476,6 +486,29 @@ func TestValidateAccountShareRolloutQuotaMode(t *testing.T) {
 	}
 	cfg.AccountShareRollout.QuotaMode = "disabled"
 	require.ErrorContains(t, cfg.Validate(), "account_share_rollout.quota_mode")
+}
+
+func TestValidateAccountShareReviewRoomSubjectWritesMigrationGate(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	cfg.Database.MigrationThrough = "251_account_share_lifecycle_contract.sql"
+	cfg.AccountShareRollout.ReviewRoomSubjectWritesEnabled = false
+	require.NoError(t, cfg.Validate(), "phase-one nodes must remain valid before migration 252")
+
+	cfg.AccountShareRollout.ReviewRoomSubjectWritesEnabled = true
+	require.ErrorContains(
+		t,
+		cfg.Validate(),
+		"account_share_rollout.review_room_subject_writes_enabled requires database.migration_through to include 252_account_share_reviews_room_subject.sql",
+	)
+
+	cfg.Database.MigrationThrough = accountShareReviewRoomSubjectMigration
+	require.NoError(t, cfg.Validate(), "phase-two nodes may enable room-subject writes at migration 252")
+
+	cfg.Database.MigrationThrough = ""
+	require.NoError(t, cfg.Validate(), "an empty target validates all embedded migrations")
 }
 
 func TestNormalizeRunMode(t *testing.T) {

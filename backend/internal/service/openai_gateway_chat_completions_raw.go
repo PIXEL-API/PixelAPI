@@ -59,6 +59,15 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 		return nil, err
 	}
 	serviceTier := extractOpenAIServiceTierFromBody(upstreamBody)
+	forwardResult := &OpenAIForwardResult{
+		Model:           originalModel,
+		BillingModel:    billingModel,
+		UpstreamModel:   upstreamModel,
+		ReasoningEffort: reasoningEffort,
+		ServiceTier:     serviceTier,
+		Stream:          clientStream,
+	}
+	ctx = withOpenAIForwardResultBillingState(ctx, forwardResult, startTime, openAIResponseImageBillingConfig{})
 	if clientStream {
 		upstreamBody, err = ensureOpenAIChatStreamUsage(upstreamBody)
 		if err != nil {
@@ -130,7 +139,16 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode >= 400 {
+	if !isOpenAIUpstreamSuccessStatus(resp.StatusCode) {
+		if !isOpenAIUpstreamErrorStatus(resp.StatusCode) {
+			return rejectUnexpectedOpenAIUpstreamStatus(
+				resp,
+				c,
+				account,
+				false,
+				writeChatCompletionsError,
+			)
+		}
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 		_ = resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
@@ -193,8 +211,11 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
 
 	var usage OpenAIUsage
-	usageComplete := false
+	var billingUsageObservation openAIChatCompletionsBillingUsageObservation
 	var firstTokenMs *int
+	var responseID string
+	var responseServiceTier string
+	sawDone := false
 	clientDisconnected := false
 	var cancelDisconnectedDrain context.CancelFunc
 	defer func() {
@@ -207,17 +228,53 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 			cancelDisconnectedDrain = s.startDisconnectedStreamDrainDeadline(ctx, resp.Body, requestID)
 		}
 	}
+	resultWithUsage := func() *OpenAIForwardResult {
+		usage.ResponseServiceTier = responseServiceTier
+		result := updateOpenAIForwardResultBillingState(ctx, openAIForwardResultSnapshot{
+			requestID:            requestID,
+			responseID:           responseID,
+			usage:                &usage,
+			firstTokenMs:         firstTokenMs,
+			responseHeaders:      resp.Header,
+			billingUsageComplete: billingUsageObservation.complete(),
+		})
+		result.Model = originalModel
+		result.BillingModel = billingModel
+		result.UpstreamModel = upstreamModel
+		result.ReasoningEffort = reasoningEffort
+		if result.ServiceTier == nil {
+			result.ServiceTier = serviceTier
+		}
+		result.ResponseServiceTier = responseServiceTier
+		result.Stream = true
+		return result
+	}
 	for scanner.Scan() {
 		line := scanner.Text()
-		if payload, ok := extractOpenAISSEDataLine(line); ok && strings.TrimSpace(payload) != "[DONE]" {
-			usageOnlyChunk := isOpenAIChatUsageOnlyStreamChunk(payload)
-			if u := extractOpenAIChatStreamUsage(payload); u != nil {
-				usageComplete = true
-				usage = *u
-			}
-			if firstTokenMs == nil && !usageOnlyChunk {
-				ms := int(time.Since(startTime).Milliseconds())
-				firstTokenMs = &ms
+		if payload, ok := extractOpenAISSEDataLine(line); ok {
+			trimmedPayload := strings.TrimSpace(payload)
+			if trimmedPayload == "[DONE]" {
+				sawDone = true
+				result := resultWithUsage()
+				if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
+					return result, billingErr
+				}
+			} else {
+				billingUsageObservation.observePayload([]byte(payload))
+				usageOnlyChunk := isOpenAIChatUsageOnlyStreamChunk(payload)
+				if u := extractOpenAIChatStreamUsage(payload); u != nil {
+					usage = *u
+				}
+				if responseID == "" {
+					responseID = strings.TrimSpace(gjson.Get(payload, "id").String())
+				}
+				if tier := strings.TrimSpace(gjson.Get(payload, "service_tier").String()); tier != "" {
+					responseServiceTier = tier
+				}
+				if firstTokenMs == nil && !usageOnlyChunk {
+					ms := int(time.Since(startTime).Milliseconds())
+					firstTokenMs = &ms
+				}
 			}
 		}
 		if !clientDisconnected {
@@ -229,6 +286,18 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 				c.Writer.Flush()
 			}
 		}
+		if sawDone {
+			if !clientDisconnected {
+				if _, err := c.Writer.WriteString("\n"); err != nil {
+					clientDisconnected = true
+					startDisconnectedDrain()
+					s.logClientDisconnectDrainDecision(ctx, "openai chat_completions raw", requestID, "write_terminal_delimiter")
+				} else {
+					c.Writer.Flush()
+				}
+			}
+			break
+		}
 	}
 	if err := scanner.Err(); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		logger.L().Warn("openai chat_completions raw: stream read error",
@@ -238,35 +307,17 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	}
 	if clientDisconnected {
 		streamErr := s.clientDisconnectIncompleteUsageError(ctx)
-		if streamErr == nil && !usageComplete {
+		if streamErr == nil && !billingUsageObservation.complete() {
 			streamErr = errors.New("stream usage incomplete after disconnect: missing terminal usage")
 		}
-		return &OpenAIForwardResult{
-			RequestID:       requestID,
-			Usage:           usage,
-			Model:           originalModel,
-			BillingModel:    billingModel,
-			UpstreamModel:   upstreamModel,
-			ReasoningEffort: reasoningEffort,
-			ServiceTier:     serviceTier,
-			Stream:          true,
-			Duration:        time.Since(startTime),
-			FirstTokenMs:    firstTokenMs,
-		}, streamErr
+		return resultWithUsage(), streamErr
 	}
 
-	return &OpenAIForwardResult{
-		RequestID:       requestID,
-		Usage:           usage,
-		Model:           originalModel,
-		BillingModel:    billingModel,
-		UpstreamModel:   upstreamModel,
-		ReasoningEffort: reasoningEffort,
-		ServiceTier:     serviceTier,
-		Stream:          true,
-		Duration:        time.Since(startTime),
-		FirstTokenMs:    firstTokenMs,
-	}, nil
+	result := resultWithUsage()
+	if !sawDone {
+		return result, errors.New("upstream chat completions stream ended without [DONE]")
+	}
+	return result, nil
 }
 
 func ensureOpenAIChatStreamUsage(body []byte) ([]byte, error) {
@@ -328,19 +379,28 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 	if contentType == "" {
 		contentType = "application/json"
 	}
+	usage.ResponseServiceTier = strings.TrimSpace(gjson.GetBytes(respBody, "service_tier").String())
+	result := updateOpenAIForwardResultBillingState(ctx, openAIForwardResultSnapshot{
+		requestID:            requestID,
+		responseID:           strings.TrimSpace(gjson.GetBytes(respBody, "id").String()),
+		usage:                &usage,
+		responseHeaders:      resp.Header,
+		billingUsageComplete: openAIChatCompletionsBillingUsageComplete(respBody),
+	})
+	result.Model = originalModel
+	result.BillingModel = billingModel
+	result.UpstreamModel = upstreamModel
+	result.ReasoningEffort = reasoningEffort
+	if result.ServiceTier == nil {
+		result.ServiceTier = serviceTier
+	}
+	result.ResponseServiceTier = usage.ResponseServiceTier
+	result.Stream = false
+	if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
+		return result, billingErr
+	}
 	c.Data(http.StatusOK, contentType, respBody)
-
-	return &OpenAIForwardResult{
-		RequestID:       requestID,
-		Usage:           usage,
-		Model:           originalModel,
-		BillingModel:    billingModel,
-		UpstreamModel:   upstreamModel,
-		ReasoningEffort: reasoningEffort,
-		ServiceTier:     serviceTier,
-		Stream:          false,
-		Duration:        time.Since(startTime),
-	}, nil
+	return result, nil
 }
 
 func openAIUsageFromChatCompletionsUsage(payload string) *OpenAIUsage {

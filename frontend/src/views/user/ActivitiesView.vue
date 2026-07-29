@@ -361,7 +361,17 @@
               </div>
 
               <div v-else class="archive-grid">
-                <article v-for="campaign in pastCampaigns" :key="campaign.id" class="archive-card">
+                <article
+                  v-for="campaign in pastCampaigns"
+                  :key="campaign.id"
+                  class="archive-card archive-card-interactive"
+                  role="button"
+                  tabindex="0"
+                  :aria-label="t('activities.winners.viewAllFor', { name: campaign.name })"
+                  @click="openPastCampaign(campaign)"
+                  @keydown.enter.prevent="openPastCampaign(campaign)"
+                  @keydown.space.prevent="openPastCampaign(campaign)"
+                >
                   <header>
                     <div>
                       <span class="status-badge">{{ t('activities.status.ended') }}</span>
@@ -387,7 +397,13 @@
                     </div>
                   </dl>
                   <section class="archive-winners">
-                    <h4>{{ t('activities.winners.recent') }}</h4>
+                    <header>
+                      <h4>{{ t('activities.winners.recent') }}</h4>
+                      <span>
+                        {{ t('activities.winners.viewAll') }}
+                        <Icon name="arrowRight" size="xs" />
+                      </span>
+                    </header>
                     <div v-if="campaign.recent_winners?.length">
                       <p v-for="winner in campaign.recent_winners.slice(0, 5)" :key="winner.id">
                         <span>{{ winner.masked_user }}</span>
@@ -630,6 +646,80 @@
     </div>
 
     <BaseDialog
+      :show="Boolean(selectedPastCampaign)"
+      :title="selectedPastCampaign?.name || t('activities.winners.fullRecord')"
+      width="extra-wide"
+      body-class="activity-winner-dialog-body"
+      @close="closePastCampaign"
+    >
+      <div v-if="selectedPastCampaign" class="activity-winner-dialog">
+        <header class="activity-winner-dialog-summary">
+          <div>
+            <span class="status-badge">{{ t('activities.status.ended') }}</span>
+            <strong>{{ t('activities.winners.fullRecord') }}</strong>
+            <p>{{ selectedPastCampaign.description || t('activities.ui.noDescription') }}</p>
+          </div>
+          <dl>
+            <div>
+              <dt>{{ t('activities.rule.drawAt') }}</dt>
+              <dd>{{ formatDateTime(selectedPastCampaign.draw_at) || '-' }}</dd>
+            </div>
+            <div>
+              <dt>{{ t('activities.winners.total') }}</dt>
+              <dd>{{ formatCount(publicWinnerPagination.total) }}</dd>
+            </div>
+          </dl>
+        </header>
+
+        <div v-if="publicWinnersLoading" class="activity-loading activity-winner-dialog-state">
+          <span></span>
+          <p>{{ t('common.loading') }}</p>
+        </div>
+        <div v-else-if="publicWinnersError" class="activity-empty activity-winner-dialog-state">
+          <span><Icon name="exclamationTriangle" size="lg" /></span>
+          <strong>{{ publicWinnersError }}</strong>
+          <button type="button" class="btn btn-secondary" @click="loadPublicWinners(publicWinnerPagination.page)">
+            {{ t('common.tryAgain') }}
+          </button>
+        </div>
+        <div v-else-if="publicWinners.length === 0" class="activity-empty activity-winner-dialog-state">
+          <span><Icon name="badge" size="lg" /></span>
+          <strong>{{ t('activities.winners.emptyRecent') }}</strong>
+        </div>
+        <div v-else class="activity-winner-table-wrap">
+          <table class="activity-winner-table">
+            <thead>
+              <tr>
+                <th>{{ t('activities.winners.columns.winner') }}</th>
+                <th>{{ t('activities.winners.columns.prize') }}</th>
+                <th>{{ t('activities.winners.columns.amount') }}</th>
+                <th>{{ t('activities.winners.columns.createdAt') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="winner in publicWinners" :key="winner.id">
+                <td><strong>{{ winner.masked_user }}</strong></td>
+                <td>{{ winner.prize_name }}</td>
+                <td>{{ prizeAmountText(winner.prize_type, winner.prize_amount) }}</td>
+                <td>{{ formatDateTime(winner.created_at) || '-' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <Pagination
+          v-if="!publicWinnersLoading && !publicWinnersError && publicWinnerPagination.total > publicWinnerPagination.page_size"
+          :page="publicWinnerPagination.page"
+          :page-size="publicWinnerPagination.page_size"
+          :total="publicWinnerPagination.total"
+          :show-page-size-selector="false"
+          compact
+          @update:page="loadPublicWinners"
+        />
+      </div>
+    </BaseDialog>
+
+    <BaseDialog
       :show="claimDialogOpen && Boolean(selectedWinner)"
       :title="t('activities.claim.title')"
       width="narrow"
@@ -692,12 +782,13 @@ import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
+import Pagination from '@/components/common/Pagination.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useAppStore } from '@/stores/app'
 import userAPI from '@/api/user'
 import { activityAPI } from '@/api/activity'
 import type { AffiliateInvitee, UserAffiliateDetail } from '@/types'
-import type { ActivityCampaign, ActivityMetric, ActivityPrizeType, ActivityWinner, ActivityWinnerStatus } from '@/types/activity'
+import type { ActivityCampaign, ActivityMetric, ActivityPrizeType, ActivityWinner, ActivityWinnerPublic, ActivityWinnerStatus } from '@/types/activity'
 import { useClipboard } from '@/composables/useClipboard'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { formatCurrency, formatDateTime } from '@/utils/format'
@@ -715,6 +806,7 @@ const hasLoaded = ref(false)
 const affiliateLoading = ref(false)
 const claimSubmitting = ref(false)
 const claimDialogOpen = ref(false)
+const publicWinnersLoading = ref(false)
 const tablistRef = ref<HTMLElement | null>(null)
 const activeTab = ref<ActivityTab>('open')
 const campaigns = ref<ActivityCampaign[]>([])
@@ -722,6 +814,15 @@ const winners = ref<ActivityWinner[]>([])
 const affiliateDetail = ref<UserAffiliateDetail | null>(null)
 const affiliateError = ref('')
 const selectedWinner = ref<ActivityWinner | null>(null)
+const selectedPastCampaign = ref<ActivityCampaign | null>(null)
+const publicWinners = ref<ActivityWinnerPublic[]>([])
+const publicWinnersError = ref('')
+const publicWinnerPagination = reactive({
+  page: 1,
+  page_size: 50,
+  total: 0,
+})
+let publicWinnersRequestID = 0
 const joiningCampaignIds = ref<Set<number>>(new Set())
 const claimForm = reactive<Record<string, string>>({})
 
@@ -998,6 +1099,43 @@ function openClaim(winner: ActivityWinner): void {
 
 function closeClaimDialog(): void {
   claimDialogOpen.value = false
+}
+
+function openPastCampaign(campaign: ActivityCampaign): void {
+  selectedPastCampaign.value = campaign
+  publicWinners.value = []
+  publicWinnersError.value = ''
+  publicWinnerPagination.page = 1
+  publicWinnerPagination.total = 0
+  void loadPublicWinners(1)
+}
+
+function closePastCampaign(): void {
+  publicWinnersRequestID += 1
+  selectedPastCampaign.value = null
+  publicWinnersLoading.value = false
+}
+
+async function loadPublicWinners(page: number): Promise<void> {
+  const campaign = selectedPastCampaign.value
+  if (!campaign || page < 1) return
+  const requestID = ++publicWinnersRequestID
+  publicWinnersLoading.value = true
+  publicWinnersError.value = ''
+  try {
+    const result = await activityAPI.listPublicWinners(campaign.id, page, publicWinnerPagination.page_size)
+    if (requestID !== publicWinnersRequestID || selectedPastCampaign.value?.id !== campaign.id) return
+    publicWinners.value = result.items
+    publicWinnerPagination.page = result.page
+    publicWinnerPagination.page_size = result.page_size
+    publicWinnerPagination.total = result.total
+  } catch (error) {
+    if (requestID !== publicWinnersRequestID) return
+    publicWinners.value = []
+    publicWinnersError.value = extractApiErrorMessage(error, t('activities.winners.loadFailed'))
+  } finally {
+    if (requestID === publicWinnersRequestID) publicWinnersLoading.value = false
+  }
 }
 
 async function submitClaim(): Promise<void> {

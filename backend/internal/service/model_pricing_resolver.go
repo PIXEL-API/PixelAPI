@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"log/slog"
+	"strings"
 )
 
 // PricingSource 定价来源标识
@@ -104,6 +105,54 @@ func (r *ModelPricingResolver) Resolve(ctx context.Context, input PricingInput) 
 	}
 
 	return resolved
+}
+
+// HasConfiguredPricing reports whether a model has an explicit global or
+// channel price. Pointer-valued channel fields distinguish an intentional zero
+// price from a missing price, which is required by fail-closed billing paths.
+func (r *ModelPricingResolver) HasConfiguredPricing(ctx context.Context, input PricingInput) bool {
+	if r == nil || r.billingService == nil || strings.TrimSpace(input.Model) == "" {
+		return false
+	}
+	if _, err := r.billingService.GetModelPricing(input.Model); err == nil {
+		return true
+	}
+	if input.GroupID == nil || *input.GroupID <= 0 || r.channelService == nil {
+		return false
+	}
+	pricing := r.channelService.GetChannelModelPricing(ctx, *input.GroupID, input.Model)
+	if pricing == nil {
+		return false
+	}
+	if pricing.BillingMode == BillingModePerRequest || pricing.BillingMode == BillingModeImage {
+		if pricing.PerRequestPrice != nil {
+			return true
+		}
+		for _, interval := range pricing.Intervals {
+			if interval.PerRequestPrice != nil {
+				return true
+			}
+		}
+		return false
+	}
+	if pricing.InputPrice != nil ||
+		pricing.OutputPrice != nil ||
+		pricing.CacheWritePrice != nil ||
+		pricing.CacheReadPrice != nil ||
+		pricing.ImageInputPrice != nil ||
+		pricing.ImageCacheReadPrice != nil ||
+		pricing.ImageOutputPrice != nil {
+		return true
+	}
+	for _, interval := range pricing.Intervals {
+		if interval.InputPrice != nil ||
+			interval.OutputPrice != nil ||
+			interval.CacheWritePrice != nil ||
+			interval.CacheReadPrice != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveBasePricing 从 LiteLLM 或 Fallback 获取基础定价

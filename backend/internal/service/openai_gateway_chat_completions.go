@@ -191,6 +191,20 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	}
 	responsesBody = updatedBody
 	forwardedServiceTier := extractOpenAIServiceTierFromBody(responsesBody)
+	var reasoningEffort *string
+	if responsesReq.Reasoning != nil && strings.TrimSpace(responsesReq.Reasoning.Effort) != "" {
+		effort := responsesReq.Reasoning.Effort
+		reasoningEffort = &effort
+	}
+	forwardResult := &OpenAIForwardResult{
+		Model:           originalModel,
+		BillingModel:    billingModel,
+		UpstreamModel:   upstreamModel,
+		ServiceTier:     forwardedServiceTier,
+		ReasoningEffort: reasoningEffort,
+		Stream:          clientStream,
+	}
+	ctx = withOpenAIForwardResultBillingState(ctx, forwardResult, startTime, openAIResponseImageBillingConfig{})
 
 	// 5. Get access token
 	token, _, err := s.GetAccessToken(ctx, account)
@@ -234,8 +248,11 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	// 8. Handle error response with failover
-	if resp.StatusCode >= 400 {
+	// 8. Handle non-success response with failover
+	if !isOpenAIUpstreamSuccessStatus(resp.StatusCode) {
+		if !isOpenAIUpstreamErrorStatus(resp.StatusCode) {
+			return rejectUnexpectedOpenAIUpstreamStatus(resp, c, account, false, writeChatCompletionsError)
+		}
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 		_ = resp.Body.Close()
 		if account.IsOpenAIAgentIdentity() && !agentIdentityTaskRecoveryWasTried(ctx) &&
@@ -288,7 +305,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	if clientStream {
 		result, handleErr = s.handleChatStreamingResponse(ctx, resp, c, account, originalModel, billingModel, upstreamModel, includeUsage, startTime)
 	} else {
-		result, handleErr = s.handleChatBufferedStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime)
+		result, handleErr = s.handleChatBufferedStreamingResponse(ctx, resp, c, account, originalModel, billingModel, upstreamModel, startTime)
 	}
 
 	// Propagate ServiceTier and ReasoningEffort to result for billing
@@ -298,10 +315,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		} else if forwardedServiceTier != nil {
 			result.ServiceTier = forwardedServiceTier
 		}
-		if responsesReq.Reasoning != nil && responsesReq.Reasoning.Effort != "" {
-			re := responsesReq.Reasoning.Effort
-			result.ReasoningEffort = &re
-		}
+		result.ReasoningEffort = reasoningEffort
 	}
 
 	// Extract and save Codex usage snapshot from response headers (for OAuth accounts)
@@ -368,6 +382,7 @@ func (s *OpenAIGatewayService) handleChatCompletionsErrorResponse(
 // upstream, finds the terminal event, converts to a Chat Completions JSON
 // response, and writes it to the client.
 func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
+	ctx context.Context,
 	resp *http.Response,
 	c *gin.Context,
 	account *Account,
@@ -387,6 +402,7 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 
 	var finalResponse *apicompat.ResponsesResponse
 	var usage OpenAIUsage
+	var billingUsageObservation openAIResponsesBillingUsageObservation
 	acc := apicompat.NewBufferedResponseAccumulator()
 
 	for scanner.Scan() {
@@ -395,6 +411,7 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 		if !ok || strings.TrimSpace(payload) == "[DONE]" {
 			continue
 		}
+		billingUsageObservation.observePayload([]byte(payload))
 
 		var event apicompat.ResponsesStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
@@ -471,22 +488,28 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 	acc.SupplementResponseOutput(finalResponse)
 
 	chatResp := apicompat.ResponsesToChatCompletions(finalResponse, originalModel)
+	usage.ResponseServiceTier = finalResponse.ServiceTier
+	result := updateOpenAIForwardResultBillingState(ctx, openAIForwardResultSnapshot{
+		requestID:            requestID,
+		responseID:           finalResponse.ID,
+		usage:                &usage,
+		responseHeaders:      resp.Header,
+		billingUsageComplete: billingUsageObservation.complete(),
+	})
+	result.Model = originalModel
+	result.BillingModel = billingModel
+	result.UpstreamModel = upstreamModel
+	result.ResponseServiceTier = finalResponse.ServiceTier
+	result.Stream = false
+	if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
+		return result, billingErr
+	}
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	}
 	c.JSON(http.StatusOK, chatResp)
-
-	return &OpenAIForwardResult{
-		RequestID:           requestID,
-		Usage:               usage,
-		Model:               originalModel,
-		BillingModel:        billingModel,
-		UpstreamModel:       upstreamModel,
-		ResponseServiceTier: finalResponse.ServiceTier,
-		Stream:              false,
-		Duration:            time.Since(startTime),
-	}, nil
+	return result, nil
 }
 
 // handleChatStreamingResponse reads Responses SSE events from upstream,
@@ -517,10 +540,12 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	state.IncludeUsage = includeUsage
 
 	var usage OpenAIUsage
-	usageComplete := false
+	var billingUsageObservation openAIResponsesBillingUsageObservation
 	var firstTokenMs *int
 	var responseServiceTier string
+	var responseID string
 	firstChunk := true
+	sawSuccessTerminal := false
 	var terminalErr error
 	clientDisconnected := false
 	var cancelDisconnectedDrain context.CancelFunc
@@ -543,17 +568,21 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
 
 	resultWithUsage := func() *OpenAIForwardResult {
-		return &OpenAIForwardResult{
-			RequestID:           requestID,
-			Usage:               usage,
-			Model:               originalModel,
-			BillingModel:        billingModel,
-			UpstreamModel:       upstreamModel,
-			ResponseServiceTier: responseServiceTier,
-			Stream:              true,
-			Duration:            time.Since(startTime),
-			FirstTokenMs:        firstTokenMs,
-		}
+		usage.ResponseServiceTier = responseServiceTier
+		result := updateOpenAIForwardResultBillingState(ctx, openAIForwardResultSnapshot{
+			requestID:            requestID,
+			responseID:           responseID,
+			usage:                &usage,
+			firstTokenMs:         firstTokenMs,
+			responseHeaders:      resp.Header,
+			billingUsageComplete: billingUsageObservation.complete(),
+		})
+		result.Model = originalModel
+		result.BillingModel = billingModel
+		result.UpstreamModel = upstreamModel
+		result.ResponseServiceTier = responseServiceTier
+		result.Stream = true
+		return result
 	}
 
 	processDataLine := func(payload string) bool {
@@ -563,6 +592,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			firstTokenMs = &ms
 		}
 
+		billingUsageObservation.observePayload([]byte(payload))
 		var event apicompat.ResponsesStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			logger.L().Warn("openai chat_completions stream: failed to parse event",
@@ -573,13 +603,15 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		}
 
 		// Extract usage from completion events
-		if (event.Type == "response.completed" || event.Type == "response.incomplete" || event.Type == "response.failed") &&
+		if (event.Type == "response.completed" || event.Type == "response.done" || event.Type == "response.incomplete" || event.Type == "response.failed") &&
 			event.Response != nil && event.Response.Usage != nil {
 			if event.Response.ServiceTier != "" {
 				responseServiceTier = event.Response.ServiceTier
 			}
-			usageComplete = true
 			usage = copyOpenAIUsageFromResponsesUsage(event.Response.Usage)
+		}
+		if event.Response != nil && strings.TrimSpace(event.Response.ID) != "" {
+			responseID = event.Response.ID
 		}
 		if event.Type == "response.failed" {
 			payloadBytes := []byte(payload)
@@ -628,18 +660,31 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			terminalErr = fmt.Errorf("upstream response failed: %s", errMsg)
 			return true
 		}
-
+		successTerminal := event.Type == "response.completed" || event.Type == "response.done" || event.Type == "response.incomplete"
+		if event.Type == "response.done" {
+			event.Type = "response.completed"
+		}
 		chunks := apicompat.ResponsesEventToChatChunks(&event, state)
+		serializedChunks := make([]string, 0, len(chunks))
+		for _, chunk := range chunks {
+			sse, err := apicompat.ChatChunkToSSE(chunk)
+			if err != nil {
+				terminalErr = fmt.Errorf("marshal chat completions stream chunk: %w", err)
+				return true
+			}
+			serializedChunks = append(serializedChunks, sse)
+		}
+		if successTerminal {
+			sawSuccessTerminal = true
+			result := resultWithUsage()
+			if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
+				terminalErr = billingErr
+				return true
+			}
+		}
+
 		if !clientDisconnected {
-			for _, chunk := range chunks {
-				sse, err := apicompat.ChatChunkToSSE(chunk)
-				if err != nil {
-					logger.L().Warn("openai chat_completions stream: failed to marshal chunk",
-						zap.Error(err),
-						zap.String("request_id", requestID),
-					)
-					continue
-				}
+			for _, sse := range serializedChunks {
 				if _, err := fmt.Fprint(c.Writer, sse); err != nil {
 					clientDisconnected = true
 					startDisconnectedDrain()
@@ -648,7 +693,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				}
 			}
 		}
-		if !clientDisconnected && len(chunks) > 0 {
+		if !clientDisconnected && len(serializedChunks) > 0 {
 			c.Writer.Flush()
 		}
 		return false
@@ -659,24 +704,24 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			if err := s.clientDisconnectIncompleteUsageError(ctx); err != nil {
 				return resultWithUsage(), err
 			}
-			if !usageComplete {
+			if !billingUsageObservation.complete() {
 				return resultWithUsage(), errors.New("stream usage incomplete after disconnect: missing terminal usage")
 			}
 			return resultWithUsage(), nil
 		}
-		if finalChunks := apicompat.FinalizeResponsesChatStream(state); len(finalChunks) > 0 {
-			for _, chunk := range finalChunks {
-				sse, err := apicompat.ChatChunkToSSE(chunk)
-				if err != nil {
-					continue
-				}
-				fmt.Fprint(c.Writer, sse) //nolint:errcheck
-			}
+		result := resultWithUsage()
+		if !sawSuccessTerminal {
+			return result, errors.New("upstream responses stream ended without a successful terminal event")
+		}
+		if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
+			return result, billingErr
 		}
 		// Send [DONE] sentinel
-		fmt.Fprint(c.Writer, "data: [DONE]\n\n") //nolint:errcheck
+		if _, err := fmt.Fprint(c.Writer, "data: [DONE]\n\n"); err != nil {
+			return result, fmt.Errorf("write chat completions terminal sentinel: %w", err)
+		}
 		c.Writer.Flush()
-		return resultWithUsage(), nil
+		return result, nil
 	}
 
 	handleScanErr := func(err error) {

@@ -207,6 +207,42 @@ func TestExtractOpenAICodexProbeUpdatesAccepts429WithCodexHeaders(t *testing.T) 
 	}
 }
 
+func TestExtractOpenAICodexProbeUpdatesRejectsUnexpectedStatusBeforeQuotaHeaders(t *testing.T) {
+	t.Parallel()
+
+	headers := make(http.Header)
+	headers.Set("x-codex-primary-used-percent", "100")
+	headers.Set("x-codex-primary-reset-after-seconds", "604800")
+	headers.Set("x-codex-primary-window-minutes", "10080")
+	headers.Set("x-codex-secondary-used-percent", "100")
+	headers.Set("x-codex-secondary-reset-after-seconds", "18000")
+	headers.Set("x-codex-secondary-window-minutes", "300")
+
+	for _, statusCode := range []int{
+		http.StatusContinue,
+		http.StatusFound,
+		http.StatusNotModified,
+		http.StatusTemporaryRedirect,
+		http.StatusPermanentRedirect,
+	} {
+		statusCode := statusCode
+		t.Run(http.StatusText(statusCode), func(t *testing.T) {
+			t.Parallel()
+
+			updates, err := extractOpenAICodexProbeUpdates(&http.Response{
+				StatusCode: statusCode,
+				Header:     headers.Clone(),
+			})
+			if err == nil {
+				t.Fatalf("extractOpenAICodexProbeUpdates() error = nil, want unexpected status %d", statusCode)
+			}
+			if len(updates) != 0 {
+				t.Fatalf("extractOpenAICodexProbeUpdates() updates = %#v, want none", updates)
+			}
+		})
+	}
+}
+
 func TestAccountUsageService_PersistOpenAICodexProbeSnapshotOnlyUpdatesExtra(t *testing.T) {
 	t.Parallel()
 

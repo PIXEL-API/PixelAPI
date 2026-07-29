@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -178,7 +179,74 @@ func TestAccountShareBillingWorkerRetriesWhenPostCommitFinalizationFails(t *test
 	require.Equal(t, AccountShareBillingWorkerRunResult{Claimed: 1, RetryScheduled: 1}, result)
 	require.Empty(t, intentRepo.settled)
 	require.Len(t, intentRepo.failed, 1)
-	require.Equal(t, "billing_apply_temporary", intentRepo.failed[0].ErrorCode)
+	require.Equal(t, "billing_post_commit_finalize_temporary", intentRepo.failed[0].ErrorCode)
+	require.False(t, intentRepo.failed[0].NeedsAttention)
+	require.NotNil(t, intentRepo.failed[0].RetryAt)
+}
+
+func TestAccountShareBillingWorkerKeepsRetryingPostCommitFinalizationAfterFinancialRetryBudget(t *testing.T) {
+	item := accountShareBillingWorkerTestItem(t, "worker-a")
+	item.AttemptCount = 4
+	usageLogID := int64(73)
+	intentRepo := &accountShareBillingWorkerIntentRepoStub{
+		claimItems: []AccountShareBillingIntentWorkItem{item},
+	}
+	billingRepo := &accountShareBillingWorkerUsageRepoStub{
+		apply: func(context.Context, *UsageBillingCommand) (*UsageBillingApplyResult, error) {
+			return &UsageBillingApplyResult{Applied: false, UsageLogID: &usageLogID}, nil
+		},
+	}
+	worker, err := NewAccountShareBillingWorker(
+		intentRepo,
+		billingRepo,
+		accountShareBillingWorkerFinalizerStub{
+			finalize: func(context.Context, *UsageBillingCommand, *UsageBillingApplyResult) error {
+				return errors.New("cache invalidation remains unavailable")
+			},
+		},
+		AccountShareBillingWorkerConfig{
+			WorkerID:      "worker-a",
+			BatchSize:     10,
+			LeaseDuration: 6 * time.Second,
+			MaxAttempts:   4,
+			RetryBase:     5 * time.Second,
+			RetryMax:      time.Minute,
+		},
+	)
+	require.NoError(t, err)
+
+	result, err := worker.RunOnce(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, AccountShareBillingWorkerRunResult{Claimed: 1, RetryScheduled: 1}, result)
+	require.Empty(t, intentRepo.settled)
+	require.Len(t, intentRepo.failed, 1)
+	require.Equal(t, "billing_post_commit_finalize_temporary", intentRepo.failed[0].ErrorCode)
+	require.False(t, intentRepo.failed[0].NeedsAttention)
+	require.NotNil(t, intentRepo.failed[0].RetryAt)
+}
+
+func TestAccountShareBillingWorkerStillEscalatesTemporaryApplyFailureWhenRetriesExhausted(t *testing.T) {
+	item := accountShareBillingWorkerTestItem(t, "worker-a")
+	item.AttemptCount = 4
+	intentRepo := &accountShareBillingWorkerIntentRepoStub{
+		claimItems: []AccountShareBillingIntentWorkItem{item},
+	}
+	billingRepo := &accountShareBillingWorkerUsageRepoStub{
+		apply: func(context.Context, *UsageBillingCommand) (*UsageBillingApplyResult, error) {
+			return nil, errors.New("temporary billing database failure")
+		},
+	}
+	worker := newAccountShareBillingWorkerForTest(t, intentRepo, billingRepo, "worker-a")
+
+	result, err := worker.RunOnce(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, AccountShareBillingWorkerRunResult{Claimed: 1, NeedsAttention: 1}, result)
+	require.Empty(t, intentRepo.settled)
+	require.Len(t, intentRepo.failed, 1)
+	require.True(t, intentRepo.failed[0].NeedsAttention)
+	require.Equal(t, "billing_retry_exhausted", intentRepo.failed[0].ErrorCode)
 }
 
 func TestAccountShareBillingWorkerEscalatesFingerprintConflict(t *testing.T) {
@@ -220,13 +288,14 @@ func TestAccountShareBillingWorkerDoesNotDowngradeAfterApplyWhenMarkSettledLoses
 }
 
 func TestAccountShareBillingWorkerRunUntilDrainedAggregatesFullAndPartialBatches(t *testing.T) {
+	claimItems := append(
+		accountShareBillingWorkerTestBatch(t, "worker-a", 2, 100),
+		accountShareBillingWorkerTestBatch(t, "worker-a", 2, 200)...,
+	)
+	claimItems = append(claimItems, accountShareBillingWorkerTestBatch(t, "worker-a", 2, 300)...)
+	claimItems = append(claimItems, accountShareBillingWorkerTestBatch(t, "worker-a", 1, 400)...)
 	intentRepo := &accountShareBillingWorkerIntentRepoStub{
-		claimBatches: [][]AccountShareBillingIntentWorkItem{
-			accountShareBillingWorkerTestBatch(t, "worker-a", 2, 100),
-			accountShareBillingWorkerTestBatch(t, "worker-a", 2, 200),
-			accountShareBillingWorkerTestBatch(t, "worker-a", 2, 300),
-			accountShareBillingWorkerTestBatch(t, "worker-a", 1, 400),
-		},
+		claimItems: claimItems,
 	}
 	worker := newAccountShareBillingWorkerForTest(
 		t,
@@ -253,11 +322,12 @@ func TestAccountShareBillingWorkerRunUntilDrainedAggregatesFullAndPartialBatches
 }
 
 func TestAccountShareBillingWorkerRunUntilDrainedStopsBeforeClaimWhenBudgetExhausted(t *testing.T) {
+	claimItems := append(
+		accountShareBillingWorkerTestBatch(t, "worker-a", 2, 100),
+		accountShareBillingWorkerTestBatch(t, "worker-a", 2, 200)...,
+	)
 	intentRepo := &accountShareBillingWorkerIntentRepoStub{
-		claimBatches: [][]AccountShareBillingIntentWorkItem{
-			accountShareBillingWorkerTestBatch(t, "worker-a", 2, 100),
-			accountShareBillingWorkerTestBatch(t, "worker-a", 2, 200),
-		},
+		claimItems: claimItems,
 	}
 	worker := newAccountShareBillingWorkerForTest(
 		t,
@@ -292,6 +362,69 @@ func TestAccountShareBillingWorkerRunUntilDrainedStopsBeforeClaimWhenBudgetExhau
 	}, result)
 	require.Equal(t, 1, intentRepo.claimCalls)
 	require.Equal(t, 1, beforeBatchCalls)
+}
+
+func TestAccountShareBillingWorkerClaimsBoundedBatchBeforeProcessing(t *testing.T) {
+	intentRepo := &accountShareBillingWorkerIntentRepoStub{
+		claimItems: accountShareBillingWorkerTestBatch(t, "worker-a", 3, 100),
+	}
+	applyCalls := 0
+	intentRepo.onClaim = func(callIndex int, input ClaimAccountShareBillingIntentsInput) {
+		require.Equal(t, 0, callIndex)
+		require.Equal(t, 3, input.Limit)
+		require.Zero(t, applyCalls)
+	}
+	billingRepo := &accountShareBillingWorkerUsageRepoStub{
+		apply: func(context.Context, *UsageBillingCommand) (*UsageBillingApplyResult, error) {
+			applyCalls++
+			return &UsageBillingApplyResult{Applied: true}, nil
+		},
+	}
+	worker := newAccountShareBillingWorkerForTest(t, intentRepo, billingRepo, "worker-a")
+	worker.config.BatchSize = 3
+
+	result, err := worker.RunOnce(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, AccountShareBillingWorkerRunResult{Claimed: 3, Settled: 3}, result)
+	require.Equal(t, 1, intentRepo.claimCalls)
+	require.Equal(t, 3, applyCalls)
+}
+
+func TestAccountShareBillingWorkerProcessesSameMembershipIntentsAcrossSeparateClaims(t *testing.T) {
+	first := accountShareBillingWorkerTestItem(t, "worker-a")
+	first.ID = 101
+	second := accountShareBillingWorkerTestItem(t, "worker-a")
+	second.ID = 102
+	require.Equal(t, first.MembershipID, second.MembershipID)
+
+	intentRepo := &accountShareBillingWorkerIntentRepoStub{
+		claimBatches: [][]AccountShareBillingIntentWorkItem{
+			{first},
+			{second},
+		},
+	}
+	worker := newAccountShareBillingWorkerForTest(
+		t,
+		intentRepo,
+		&accountShareBillingWorkerUsageRepoStub{},
+		"worker-a",
+	)
+	worker.config.BatchSize = accountShareBillingWorkerMaxConcurrency
+
+	firstResult, err := worker.RunOnce(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, AccountShareBillingWorkerRunResult{Claimed: 1, Settled: 1}, firstResult)
+	require.Equal(t, 1, intentRepo.claimCalls)
+	require.Len(t, intentRepo.settled, 1)
+	require.Equal(t, first.ID, intentRepo.settled[0].ID)
+
+	secondResult, err := worker.RunOnce(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, AccountShareBillingWorkerRunResult{Claimed: 1, Settled: 1}, secondResult)
+	require.Equal(t, 2, intentRepo.claimCalls)
+	require.Len(t, intentRepo.settled, 2)
+	require.Equal(t, second.ID, intentRepo.settled[1].ID)
 }
 
 func TestAccountShareBillingWorkerRunUntilDrainedStopsOnBeforeBatchAndRunOnceError(t *testing.T) {
@@ -342,11 +475,13 @@ func TestAccountShareBillingWorkerRunUntilDrainedStopsOnBeforeBatchAndRunOnceErr
 }
 
 func TestAccountShareBillingWorkerRunUntilDrainedStopsAtMaximumBatches(t *testing.T) {
-	claimBatches := make([][]AccountShareBillingIntentWorkItem, AccountShareBillingWorkerMaxDrainBatches+1)
-	for i := range claimBatches {
-		claimBatches[i] = accountShareBillingWorkerTestBatch(t, "worker-a", 1, int64(100+i))
-	}
-	intentRepo := &accountShareBillingWorkerIntentRepoStub{claimBatches: claimBatches}
+	claimItems := accountShareBillingWorkerTestBatch(
+		t,
+		"worker-a",
+		AccountShareBillingWorkerMaxDrainBatches+1,
+		100,
+	)
+	intentRepo := &accountShareBillingWorkerIntentRepoStub{claimItems: claimItems}
 	worker := newAccountShareBillingWorkerForTest(
 		t,
 		intentRepo,
@@ -515,6 +650,7 @@ func (s *accountShareBillingWorkerUsageRepoStub) Apply(ctx context.Context, comm
 }
 
 type accountShareBillingWorkerIntentRepoStub struct {
+	mu             sync.Mutex
 	claimItems     []AccountShareBillingIntentWorkItem
 	claimBatches   [][]AccountShareBillingIntentWorkItem
 	claimErr       error
@@ -548,6 +684,8 @@ func (s *accountShareBillingWorkerIntentRepoStub) ClaimReady(
 	_ context.Context,
 	input ClaimAccountShareBillingIntentsInput,
 ) ([]AccountShareBillingIntentWorkItem, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	callIndex := s.claimCalls
 	s.claimCalls++
 	if s.onClaim != nil {
@@ -559,7 +697,19 @@ func (s *accountShareBillingWorkerIntentRepoStub) ClaimReady(
 	if callIndex < len(s.claimBatches) {
 		return append([]AccountShareBillingIntentWorkItem(nil), s.claimBatches[callIndex]...), nil
 	}
-	return append([]AccountShareBillingIntentWorkItem(nil), s.claimItems...), s.claimErr
+	if s.claimErr != nil {
+		return nil, s.claimErr
+	}
+	if len(s.claimItems) == 0 {
+		return nil, nil
+	}
+	limit := input.Limit
+	if limit <= 0 || limit > len(s.claimItems) {
+		limit = len(s.claimItems)
+	}
+	items := append([]AccountShareBillingIntentWorkItem(nil), s.claimItems[:limit]...)
+	s.claimItems = s.claimItems[limit:]
+	return items, nil
 }
 
 func (s *accountShareBillingWorkerIntentRepoStub) RenewProcessingLease(
@@ -567,6 +717,8 @@ func (s *accountShareBillingWorkerIntentRepoStub) RenewProcessingLease(
 	transition AccountShareBillingIntentLeaseTransition,
 	_ time.Duration,
 ) (*AccountShareBillingIntentState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.renewed = append(s.renewed, transition)
 	return &AccountShareBillingIntentState{
 		ID:         transition.ID,
@@ -581,6 +733,8 @@ func (s *accountShareBillingWorkerIntentRepoStub) MarkSettled(
 	_ context.Context,
 	input MarkAccountShareBillingIntentSettledInput,
 ) (*AccountShareBillingIntentState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.settled = append(s.settled, input)
 	if s.markSettledErr != nil {
 		return nil, s.markSettledErr
@@ -596,6 +750,8 @@ func (s *accountShareBillingWorkerIntentRepoStub) MarkFailed(
 	_ context.Context,
 	input MarkAccountShareBillingIntentFailedInput,
 ) (*AccountShareBillingIntentState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.failed = append(s.failed, input)
 	if s.markFailedErr != nil {
 		return nil, s.markFailedErr
@@ -619,6 +775,6 @@ func (s *accountShareBillingWorkerIntentRepoStub) CountPendingByMembership(conte
 	return 0, errors.New("not implemented")
 }
 
-func (s *accountShareBillingWorkerIntentRepoStub) ListStaleForAttention(context.Context, time.Time, int) ([]AccountShareBillingIntentAttentionCandidate, error) {
+func (s *accountShareBillingWorkerIntentRepoStub) ListRecoveryCandidates(context.Context, ListAccountShareBillingRecoveryCandidatesInput) ([]AccountShareBillingIntentAttentionCandidate, error) {
 	return nil, errors.New("not implemented")
 }

@@ -181,6 +181,7 @@ func (l *openAIWSPassthroughTurnLifecycle) finishWithError(result *OpenAIForward
 		_ = l.stopActiveContext()
 	}
 	payload := l.activePayload
+	activeContext := l.activeContext
 	contextCause := l.activeContextCause
 	l.activeTurn = 0
 	l.activePayload = nil
@@ -189,6 +190,11 @@ func (l *openAIWSPassthroughTurnLifecycle) finishWithError(result *OpenAIForward
 	l.stopActiveContext = nil
 	if turnErr == nil && contextCause != nil {
 		turnErr = contextCause
+	}
+	if turnErr == nil && result != nil {
+		if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(activeContext, result); handled && billingErr != nil {
+			turnErr = billingErr
+		}
 	}
 	hookErr := finishOpenAIWSIngressTurn(l.hooks, turn, payload, result, turnErr)
 	if hookErr != nil {
@@ -689,6 +695,25 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			cancel()
 		},
 	}
+	buildCompletedTurnResult := func(turn openaiwsv2.RelayTurnResult) *OpenAIForwardResult {
+		turnUsage := openAIUsageFromWSV2Relay(turn.Usage)
+		turnResult := &OpenAIForwardResult{
+			RequestID:            turn.RequestID,
+			Usage:                turnUsage,
+			BillingUsageComplete: turn.BillingUsageComplete,
+			Model:                turn.RequestModel,
+			UpstreamModel:        turn.RequestModel,
+			ServiceTier:          requestServiceTierPtr.Load(),
+			Stream:               true,
+			OpenAIWSMode:         true,
+			ResponseHeaders:      cloneHeader(handshakeHeaders),
+			Duration:             turn.Duration,
+			FirstTokenMs:         turn.FirstTokenMs,
+		}
+		applyOpenAIResponseImageAccounting(turnResult, imageBillingConfigStore.Load())
+		return turnResult
+	}
+	var completedTurnNo atomic.Int32
 	relayResult, relayExit := openaiwsv2.RunEntry(openaiwsv2.EntryInput{
 		Ctx:                ctx,
 		ClientConn:         policyClientConn,
@@ -723,33 +748,36 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				imageBillingConfigStore.Store(resolveOpenAIResponseImageBillingConfigFromBody(openAIResponsesEndpoint, frameModel, payload))
 				return nil
 			},
-			OnTurnComplete: func(turn openaiwsv2.RelayTurnResult) {
-				turnUsage := openAIUsageFromWSV2Relay(turn.Usage)
-				turnResult := &OpenAIForwardResult{
-					RequestID:       turn.RequestID,
-					Usage:           turnUsage,
-					Model:           turn.RequestModel,
-					UpstreamModel:   turn.RequestModel,
-					ServiceTier:     requestServiceTierPtr.Load(),
-					Stream:          true,
-					OpenAIWSMode:    true,
-					ResponseHeaders: cloneHeader(handshakeHeaders),
-					Duration:        turn.Duration,
-					FirstTokenMs:    turn.FirstTokenMs,
+			BeforeTerminalFrame: func(turn openaiwsv2.RelayTurnResult) error {
+				turnResult := buildCompletedTurnResult(turn)
+				var turnErr error
+				if strings.EqualFold(strings.TrimSpace(turn.TerminalEventType), "response.failed") {
+					turnErr = errors.New("upstream websocket response failed")
 				}
-				applyOpenAIResponseImageAccounting(turnResult, imageBillingConfigStore.Load())
-				turnNo, finished, hookErr := turnLifecycle.finishWithError(turnResult, nil)
+				turnNo, finished, hookErr := turnLifecycle.finishWithError(turnResult, turnErr)
 				if !finished {
+					return fmt.Errorf(
+						"websocket terminal event %q has no active turn",
+						strings.TrimSpace(turn.TerminalEventType),
+					)
+				}
+				if hookErr != nil {
+					return hookErr
+				}
+				completedTurnNo.Store(int32(turnNo))
+				return nil
+			},
+			OnTurnComplete: func(turn openaiwsv2.RelayTurnResult) {
+				turnResult := buildCompletedTurnResult(turn)
+				turnUsage := turnResult.Usage
+				turnNo := int(completedTurnNo.Swap(0))
+				if turnNo <= 0 {
 					logOpenAIWSV2Passthrough(
 						"relay_terminal_without_active_turn account_id=%d request_id=%s terminal_event=%s",
 						account.ID,
 						truncateOpenAIWSLogValue(turnResult.RequestID, openAIWSIDValueMaxLen),
 						truncateOpenAIWSLogValue(turn.TerminalEventType, openAIWSLogValueMaxLen),
 					)
-					return
-				}
-				if hookErr != nil {
-					_ = upstreamFrameConn.Close()
 					return
 				}
 				completedUsageMu.Lock()
@@ -786,16 +814,17 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	})
 
 	result := &OpenAIForwardResult{
-		RequestID:       relayResult.RequestID,
-		Usage:           openAIUsageFromWSV2Relay(relayResult.Usage),
-		Model:           relayResult.RequestModel,
-		UpstreamModel:   relayResult.RequestModel,
-		ServiceTier:     requestServiceTierPtr.Load(),
-		Stream:          true,
-		OpenAIWSMode:    true,
-		ResponseHeaders: cloneHeader(handshakeHeaders),
-		Duration:        relayResult.Duration,
-		FirstTokenMs:    relayResult.FirstTokenMs,
+		RequestID:            relayResult.RequestID,
+		Usage:                openAIUsageFromWSV2Relay(relayResult.Usage),
+		BillingUsageComplete: relayResult.BillingUsageComplete,
+		Model:                relayResult.RequestModel,
+		UpstreamModel:        relayResult.RequestModel,
+		ServiceTier:          requestServiceTierPtr.Load(),
+		Stream:               true,
+		OpenAIWSMode:         true,
+		ResponseHeaders:      cloneHeader(handshakeHeaders),
+		Duration:             relayResult.Duration,
+		FirstTokenMs:         relayResult.FirstTokenMs,
 	}
 	applyOpenAIResponseImageAccounting(result, imageBillingConfigStore.Load())
 	buildUnsettledTurnResult := func() *OpenAIForwardResult {

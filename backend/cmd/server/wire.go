@@ -84,6 +84,7 @@ func provideCleanup(
 	tokenRefresh *service.TokenRefreshService,
 	accountExpiry *service.AccountExpiryService,
 	accountErrorCleanup *service.AccountErrorCleanupService,
+	conversationAdminReplyTimeout *service.ConversationAdminReplyTimeoutService,
 	subscriptionExpiry *service.SubscriptionExpiryService,
 	usageCleanup *service.UsageCleanupService,
 	idempotencyCleanup *service.IdempotencyCleanupService,
@@ -195,6 +196,12 @@ func provideCleanup(
 			{"AccountErrorCleanupService", func() error {
 				if accountErrorCleanup != nil {
 					accountErrorCleanup.Stop()
+				}
+				return nil
+			}},
+			{"ConversationAdminReplyTimeoutService", func() error {
+				if conversationAdminReplyTimeout != nil {
+					conversationAdminReplyTimeout.Stop()
 				}
 				return nil
 			}},

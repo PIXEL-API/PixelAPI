@@ -258,12 +258,12 @@ func (r *accountShareModeRepository) TransitionRoomLifecycle(
 			return nil, service.ErrAccountShareRoomInvalidTransition
 		}
 		nextStatus = service.AccountShareListingStatusDraining
-		statusReasonCode = "owner_draining"
-		eventType = "listing.drain_requested"
-		source = "drain_room"
-		operationID = uuid.NewString()
+		statusReasonCode = "owner_delisted"
+		eventType = "listing.delisted"
+		source = "delist_room"
 	case service.AccountShareRoomActionActivate:
 		if listing.Status != service.AccountShareListingStatusPaused &&
+			listing.Status != service.AccountShareListingStatusDraining &&
 			!(actorIsAdmin && listing.Status == service.AccountShareListingStatusSuspended) {
 			return nil, service.ErrAccountShareRoomInvalidTransition
 		}
@@ -292,6 +292,7 @@ func (r *accountShareModeRepository) TransitionRoomLifecycle(
 		}
 		switch listing.Status {
 		case service.AccountShareListingStatusActive,
+			service.AccountShareListingStatusDraining,
 			service.AccountShareListingStatusPaused,
 			service.AccountShareListingStatusValidating:
 		default:
@@ -303,34 +304,6 @@ func (r *accountShareModeRepository) TransitionRoomLifecycle(
 		source = "suspend_room"
 	default:
 		return nil, service.ErrAccountShareRoomInvalidTransition
-	}
-
-	if command == service.AccountShareRoomActionDrain {
-		if err := endQueuedMembershipsForRoomDrainInTx(ctx, tx, listing.ID, actorUserID, accountShareRevisionActorRole(actorUserID, actorIsAdmin)); err != nil {
-			return nil, err
-		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO account_share_room_operations (
-				id, listing_id, action, actor_user_id, actor_role, source,
-				expected_version, start_version, status, blocker, result,
-				created_at, updated_at
-			)
-			VALUES (
-				$1::uuid, $2, $3, $4, $5, 'api',
-				$6, $7, 'pending', '{}'::jsonb, '{}'::jsonb,
-				NOW(), NOW()
-			)
-		`,
-			operationID,
-			listing.ID,
-			accountShareRoomOperationActionDrain,
-			nullablePositiveInt64(actorUserID),
-			accountShareRevisionActorRole(actorUserID, actorIsAdmin),
-			listing.RowVersion,
-			listing.RowVersion+1,
-		); err != nil {
-			return nil, translateAccountShareLifecyclePersistenceError(err)
-		}
 	}
 
 	result, err := tx.ExecContext(ctx, `
@@ -488,9 +461,12 @@ func (r *accountShareModeRepository) FinalizeDrainingRoom(
 	return r.GetListingByID(ctx, listing.ID, listing.OwnerUserID)
 }
 
-func (r *accountShareModeRepository) ListDrainingRoomIDs(ctx context.Context, limit int) ([]int64, error) {
+func (r *accountShareModeRepository) ListDrainingRoomIDs(ctx context.Context, afterID int64, limit int) ([]int64, error) {
 	if r == nil || r.db == nil {
 		return nil, service.ErrServiceUnavailable
+	}
+	if afterID < 0 {
+		afterID = 0
 	}
 	if limit <= 0 || limit > 500 {
 		limit = 100
@@ -501,9 +477,10 @@ func (r *accountShareModeRepository) ListDrainingRoomIDs(ctx context.Context, li
 		WHERE status = 'draining'
 			AND pending_operation_id IS NOT NULL
 			AND deleted_at IS NULL
-		ORDER BY updated_at ASC, id ASC
-		LIMIT $1
-	`, limit)
+			AND id > $1
+		ORDER BY id ASC
+		LIMIT $2
+	`, afterID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -517,6 +494,58 @@ func (r *accountShareModeRepository) ListDrainingRoomIDs(ctx context.Context, li
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+func (r *accountShareModeRepository) FindRoomDeleteOperation(
+	ctx context.Context,
+	actorUserID int64,
+	actorIsAdmin bool,
+	listingID int64,
+	requestID string,
+) (*service.AccountShareRoomOperation, error) {
+	if r == nil || r.db == nil {
+		return nil, service.ErrServiceUnavailable
+	}
+	requestID = strings.TrimSpace(requestID)
+	if listingID <= 0 || requestID == "" || (!actorIsAdmin && actorUserID <= 0) {
+		return nil, nil
+	}
+	operation, err := scanAccountShareRoomOperation(r.db.QueryRowContext(ctx, `
+		SELECT
+			operation.id::text,
+			operation.listing_id,
+			operation.membership_id,
+			operation.actor_user_id,
+			operation.actor_role,
+			operation.action,
+			operation.status,
+			operation.expected_version,
+			operation.start_version,
+			operation.final_version,
+			operation.blocker,
+			operation.result,
+			COALESCE(operation.error_code, ''),
+			COALESCE(operation.error_message, ''),
+			operation.created_at,
+			operation.started_at,
+			operation.completed_at,
+			operation.updated_at
+		FROM account_share_room_operations operation
+		JOIN account_share_listings listing ON listing.id = operation.listing_id
+		WHERE operation.listing_id = $1
+			AND operation.action = 'delete_room'
+			AND operation.request_id = $2
+			AND ($3::boolean OR listing.owner_user_id = $4)
+		ORDER BY operation.created_at DESC, operation.id DESC
+		LIMIT 1
+	`, listingID, requestID, actorIsAdmin, actorUserID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return operation, nil
 }
 
 func (r *accountShareModeRepository) ListValidatingRoomIDs(

@@ -2468,7 +2468,7 @@ func (r *stubUsageLogRepo) GetUserStatsAggregated(ctx context.Context, userID in
 	}, nil
 }
 
-func (r *stubUsageLogRepo) GetAccountShareRecommendationUsageProfile(ctx context.Context, userID int64, model string, startTime, endTime time.Time) (*service.AccountShareRecommendationUsageProfileStats, error) {
+func (r *stubUsageLogRepo) GetAccountShareRecommendationUsageProfile(ctx context.Context, userID int64, platform, model string, startTime, endTime time.Time) (*service.AccountShareRecommendationUsageProfileStats, error) {
 	return &service.AccountShareRecommendationUsageProfileStats{}, nil
 }
 

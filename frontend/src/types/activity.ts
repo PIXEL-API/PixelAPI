@@ -215,3 +215,4 @@ export interface ActivityCampaignPayload {
 
 export type ActivityCampaignPage = BasePaginationResponse<ActivityCampaign>
 export type ActivityWinnerPage = BasePaginationResponse<ActivityWinner>
+export type ActivityWinnerPublicPage = BasePaginationResponse<ActivityWinnerPublic>

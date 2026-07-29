@@ -33,9 +33,10 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 	failedAccountIDs := make(map[int64]struct{})
 	switchCount := 0
 	var lastUpstreamErr error
+	selectionCtx := openAIAccountShareModeRequestContext(c, apiKey)
 
 	for {
-		account, err := h.gatewayService.SelectAccountForModelWithExclusions(c.Request.Context(), apiKey.GroupID, "", "", failedAccountIDs)
+		account, err := h.gatewayService.SelectAccountForModelWithExclusions(selectionCtx, apiKey.GroupID, "", "", failedAccountIDs)
 		if err != nil {
 			if c.Request.Context().Err() != nil {
 				return
@@ -48,7 +49,7 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 			return
 		}
 
-		manifest, err := h.gatewayService.FetchCodexModelsManifest(c.Request.Context(), account, c.Query("client_version"), c.GetHeader("If-None-Match"))
+		manifest, err := h.gatewayService.FetchCodexModelsManifest(selectionCtx, account, c.Query("client_version"), c.GetHeader("If-None-Match"))
 		if err != nil {
 			if c.Request.Context().Err() != nil {
 				return

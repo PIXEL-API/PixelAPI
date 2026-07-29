@@ -1277,6 +1277,7 @@
       :key-name="accountShareConflict.key?.name || ''"
       :active-count="accountShareConflict.activeCount"
       :queued-count="accountShareConflict.queuedCount"
+      :ending-count="accountShareConflict.endingCount"
       :navigating="accountShareConflictNavigating"
       @close="closeAccountShareConflict"
       @resolve="navigateToAccountShareResolution"
@@ -1546,7 +1547,7 @@ import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 	} from '@/types'
 import type { Column } from '@/components/common/types'
 import type { BatchApiKeyUsageStats } from '@/api/usage'
-import type { AccountShareMembership } from '@/api/accountShare'
+import type { AccountShareAPIKeyBindingStatus } from '@/api/accountShare'
 import { formatDateTime } from '@/utils/format'
 import { maskApiKey } from '@/utils/maskApiKey'
 import { buildCcSwitchImportDeeplink } from '@/utils/ccswitchImport'
@@ -1565,6 +1566,7 @@ interface AccountShareConflictState {
   key: ApiKey | null
   activeCount: number | null
   queuedCount: number | null
+  endingCount: number | null
 }
 
 // Helper to format date for datetime-local input
@@ -1835,14 +1837,15 @@ const dropdownRef = ref<HTMLElement | null>(null)
 const groupSearchInputRef = ref<HTMLInputElement | null>(null)
 const dropdownPosition = ref<{ top: number; left: number } | null>(null)
 const groupButtonRefs = ref<Map<number, HTMLElement>>(new Map())
-const accountShareBindingChecks = new Map<number, Promise<AccountShareMembership[]>>()
+const accountShareBindingChecks = new Map<number, Promise<AccountShareAPIKeyBindingStatus>>()
 const accountShareConflictNavigating = ref(false)
 const accountShareConflict = ref<AccountShareConflictState>({
   show: false,
   action: 'change_group',
   key: null,
   activeCount: null,
-  queuedCount: null
+  queuedCount: null,
+  endingCount: null
 })
 let abortController: AbortController | null = null
 let copiedKeyResetTimer: ReturnType<typeof setTimeout> | null = null
@@ -2112,6 +2115,42 @@ const resolvePrimaryGroupId = (routes: ApiKeyGroupRoute[] | null): number | null
   )).group_id
 }
 
+const canonicalGroupRouteSignatures = (
+  groupId: number | null,
+  routes?: ApiKeyGroupRoute[]
+): string[] => {
+  const canonicalRoutes = routes && routes.length > 0
+    ? routes
+    : groupId === null
+      ? []
+      : [{
+          group_id: groupId,
+          priority: 100,
+          weight: 1,
+          enabled: true,
+          cooldown_seconds: 30
+        }]
+  return canonicalRoutes
+    .map((route) => [
+      route.group_id,
+      route.priority,
+      route.weight,
+      route.enabled,
+      route.cooldown_seconds
+    ].join(':'))
+    .sort()
+}
+
+const groupRoutingChanged = (
+  key: ApiKey,
+  nextGroupId: number | null,
+  nextRoutes: ApiKeyGroupRoute[]
+): boolean => (
+  key.group_id !== nextGroupId ||
+  canonicalGroupRouteSignatures(key.group_id, key.group_routes).join('|') !==
+    canonicalGroupRouteSignatures(nextGroupId, nextRoutes).join('|')
+)
+
 // Group dropdown search
 const groupSearchQuery = ref('')
 const filteredGroupOptions = computed(() => {
@@ -2375,15 +2414,11 @@ const handleGroupSelectorViewportChange = () => {
   if (!updateGroupSelectorPosition()) closeGroupSelectorPopover(false)
 }
 
-const blockingAccountShareMemberships = (memberships: AccountShareMembership[]) => (
-  memberships.filter((membership) => membership.status === 'active' || membership.status === 'queued')
-)
-
-const loadAccountShareMemberships = (keyId: number): Promise<AccountShareMembership[]> => {
+const loadAccountShareBindingStatus = (keyId: number): Promise<AccountShareAPIKeyBindingStatus> => {
   const activeRequest = accountShareBindingChecks.get(keyId)
   if (activeRequest) return activeRequest
 
-  const request = accountShareAPI.listMembershipQueue(keyId)
+  const request = accountShareAPI.getAPIKeyBindingStatus(keyId)
   accountShareBindingChecks.set(keyId, request)
   void request.then(
     () => accountShareBindingChecks.delete(keyId),
@@ -2395,19 +2430,15 @@ const loadAccountShareMemberships = (keyId: number): Promise<AccountShareMembers
 const showAccountShareConflict = (
   key: ApiKey,
   action: AccountShareBlockedAction,
-  memberships: AccountShareMembership[] | null
+  status: AccountShareAPIKeyBindingStatus | null
 ) => {
-  const blockingMemberships = memberships ? blockingAccountShareMemberships(memberships) : null
   accountShareConflict.value = {
     show: true,
     action,
     key,
-    activeCount: blockingMemberships
-      ? blockingMemberships.filter((membership) => membership.status === 'active').length
-      : null,
-    queuedCount: blockingMemberships
-      ? blockingMemberships.filter((membership) => membership.status === 'queued').length
-      : null
+    activeCount: status?.active_count ?? null,
+    queuedCount: status?.queued_count ?? null,
+    endingCount: status?.ending_count ?? null
   }
 }
 
@@ -2416,9 +2447,9 @@ const checkAccountShareBindings = async (
   action: AccountShareBlockedAction
 ): Promise<boolean> => {
   try {
-    const memberships = await loadAccountShareMemberships(key.id)
-    if (blockingAccountShareMemberships(memberships).length === 0) return true
-    showAccountShareConflict(key, action, memberships)
+    const status = await loadAccountShareBindingStatus(key.id)
+    if (status.blocking_count === 0) return true
+    showAccountShareConflict(key, action, status)
     return false
   } catch (error: unknown) {
     appStore.showError(extractApiErrorMessage(error, t('keys.accountShareConflict.checkFailed')))
@@ -2431,8 +2462,12 @@ const showAccountShareConflictFromGuard = async (
   action: AccountShareBlockedAction
 ) => {
   try {
-    const memberships = await loadAccountShareMemberships(key.id)
-    showAccountShareConflict(key, action, memberships)
+    const status = await loadAccountShareBindingStatus(key.id)
+    if (status.blocking_count === 0) {
+      appStore.showSuccess(t('keys.accountShareConflict.resolvedDuringRetry'))
+      return
+    }
+    showAccountShareConflict(key, action, status)
   } catch {
     showAccountShareConflict(key, action, null)
   }
@@ -2567,6 +2602,18 @@ const handleSubmit = async () => {
     rate_limit_7d: formData.value.rate_limit_7d && formData.value.rate_limit_7d > 0 ? formData.value.rate_limit_7d : 0,
   } : { rate_limit_5h: 0, rate_limit_1d: 0, rate_limit_7d: 0 }
 
+  const editingKey = showEditModal.value ? selectedKey.value : null
+  const changesGroupRouting = Boolean(
+    editingKey && groupRoutingChanged(editingKey, primaryGroupId, groupRoutes)
+  )
+  if (
+    editingKey &&
+    changesGroupRouting &&
+    !(await checkAccountShareBindings(editingKey, 'change_group'))
+  ) {
+    return
+  }
+
   submitting.value = true
   try {
     if (showEditModal.value && selectedKey.value) {
@@ -2607,6 +2654,16 @@ const handleSubmit = async () => {
     closeModals()
     loadApiKeys()
   } catch (error: any) {
+    if (
+      changesGroupRouting &&
+      showEditModal.value &&
+      selectedKey.value &&
+      isAccountShareBindingConflict(error)
+    ) {
+      showEditModal.value = false
+      await showAccountShareConflictFromGuard(selectedKey.value, 'change_group')
+      return
+    }
     const errorMsg = error.response?.data?.detail || t('keys.failedToSave')
     appStore.showError(errorMsg)
     // Don't advance tour on error

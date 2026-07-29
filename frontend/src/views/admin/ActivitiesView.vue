@@ -638,7 +638,7 @@
     </div>
 
     <Teleport to="body">
-      <div v-if="dialogOpen" class="activity-drawer-backdrop" role="presentation" @click.self="closeEditor">
+      <div v-if="dialogOpen" class="activity-drawer-backdrop" role="presentation">
         <form
           class="activity-editor-drawer"
           role="dialog"

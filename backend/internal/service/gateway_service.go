@@ -160,6 +160,45 @@ func anthropicStreamEventIsTerminal(eventName, data string) bool {
 	return gjson.Get(trimmed, "type").String() == "message_stop"
 }
 
+type billingUsageObservation struct {
+	inputTokensObserved  bool
+	outputTokensObserved bool
+}
+
+func (o *billingUsageObservation) observeAnthropicPayload(data string) {
+	if o == nil {
+		return
+	}
+	parsed := gjson.Parse(strings.TrimSpace(data))
+	o.inputTokensObserved = o.inputTokensObserved ||
+		billingTokenFieldObserved(parsed.Get("message.usage.input_tokens")) ||
+		billingTokenFieldObserved(parsed.Get("usage.input_tokens")) ||
+		billingTokenFieldObserved(parsed.Get("amazon-bedrock-invocationMetrics.inputTokenCount"))
+	o.outputTokensObserved = o.outputTokensObserved ||
+		billingTokenFieldObserved(parsed.Get("message.usage.output_tokens")) ||
+		billingTokenFieldObserved(parsed.Get("usage.output_tokens")) ||
+		billingTokenFieldObserved(parsed.Get("amazon-bedrock-invocationMetrics.outputTokenCount"))
+}
+
+func (o billingUsageObservation) complete() bool {
+	return o.inputTokensObserved && o.outputTokensObserved
+}
+
+func anthropicResponseBillingUsageComplete(body []byte) bool {
+	usage := gjson.GetBytes(body, "usage")
+	return usage.Exists() &&
+		billingTokenFieldObserved(usage.Get("input_tokens")) &&
+		billingTokenFieldObserved(usage.Get("output_tokens"))
+}
+
+func billingTokenFieldObserved(value gjson.Result) bool {
+	if !value.Exists() || value.Type != gjson.Number {
+		return false
+	}
+	parsed, err := strconv.ParseInt(value.Raw, 10, 64)
+	return err == nil && parsed >= 0
+}
+
 func cloneStringSlice(src []string) []string {
 	if len(src) == 0 {
 		return nil
@@ -533,9 +572,10 @@ type ClaudeUsage struct {
 
 // ForwardResult 转发结果
 type ForwardResult struct {
-	RequestID string
-	Usage     ClaudeUsage
-	Model     string
+	RequestID            string
+	Usage                ClaudeUsage
+	BillingUsageComplete bool
+	Model                string
 	// UpstreamModel is the actual upstream model after mapping.
 	// Prefer empty when it is identical to Model; persistence normalizes equal values away as no-op mappings.
 	UpstreamModel    string
@@ -576,7 +616,17 @@ func IsBillableStreamUsageError(err error) bool {
 }
 
 func ForwardResultHasBillableUsage(result *ForwardResult) bool {
-	return result != nil && claudeUsageHasBillableTokens(&result.Usage)
+	return result != nil && (result.ImageCount > 0 || claudeUsageHasBillableTokens(&result.Usage))
+}
+
+func ForwardResultHasCompleteBillableUsage(result *ForwardResult) bool {
+	if result == nil {
+		return false
+	}
+	if result.ImageCount > 0 {
+		return true
+	}
+	return result.BillingUsageComplete
 }
 
 func claudeUsageHasBillableTokens(usage *ClaudeUsage) bool {
@@ -1569,6 +1619,18 @@ func (s *GatewayService) SelectAccountForModelWithExclusions(ctx context.Context
 		platform = PlatformAnthropic
 	}
 
+	if account, handled, err := s.resolveAccountShareModeBoundAccountForLookup(
+		ctx,
+		groupID,
+		requestedModel,
+		excludedIDs,
+	); handled {
+		if err != nil {
+			return nil, wrapAccountShareModeSelectionError(err)
+		}
+		return account, nil
+	}
+
 	// Claude Code 限制可能已将 groupID 解析为 fallback group，
 	// 渠道限制预检查必须使用解析后的分组。
 	if s.checkChannelPricingRestriction(ctx, groupID, requestedModel) {
@@ -1595,6 +1657,76 @@ func (s *GatewayService) SelectAccountForModelWithExclusions(ctx context.Context
 		return nil, err
 	}
 	return s.hydrateSelectedAccount(ctx, account)
+}
+
+// resolveAccountShareModeBoundAccountForLookup keeps non-concurrency lookup
+// endpoints (for example count_tokens) pinned to the request's active
+// membership. A mode group must never fall through to the ordinary group pool,
+// even when the request identity context is missing.
+func (s *GatewayService) resolveAccountShareModeBoundAccountForLookup(
+	ctx context.Context,
+	groupID *int64,
+	requestedModel string,
+	excludedIDs map[int64]struct{},
+) (*Account, bool, error) {
+	if s == nil || s.accountShareModeService == nil || s.accountRepo == nil || groupID == nil || *groupID <= 0 {
+		return nil, false, nil
+	}
+	if !s.accountShareModeService.IsModeGroup(ctx, *groupID) {
+		return nil, false, nil
+	}
+	requestCtx, ok := AccountShareModeRequestFromContext(ctx)
+	if !ok || requestCtx.UserID <= 0 || requestCtx.APIKeyID <= 0 {
+		return nil, true, ErrAccountShareModeGroupUnbound
+	}
+	membership, listing, err := s.accountShareModeService.ResolveActiveBindingForRequest(
+		ctx,
+		requestCtx.UserID,
+		requestCtx.APIKeyID,
+		*groupID,
+	)
+	if err != nil {
+		return nil, true, err
+	}
+	if membership == nil || listing == nil || membership.AccountID <= 0 {
+		return nil, true, ErrAccountShareModeGroupUnbound
+	}
+	if excludedIDs != nil {
+		if _, excluded := excludedIDs[membership.AccountID]; excluded {
+			return nil, true, ErrNoAvailableAccounts
+		}
+	}
+	if s.userRepo != nil {
+		user, err := s.userRepo.GetByID(ctx, requestCtx.UserID)
+		if err != nil {
+			return nil, true, err
+		}
+		if user == nil || user.Balance < listing.MinBalanceRequired {
+			return nil, true, ErrAccountShareBalanceBelowMinimum
+		}
+	}
+	account, err := s.accountRepo.GetByID(ctx, membership.AccountID)
+	if err != nil {
+		return nil, true, err
+	}
+	if requestedModel != "" && !accountShareListingAllowsModel(listing, requestedModel) {
+		return nil, true, accountShareModeUnsupportedModelError(requestedModel)
+	}
+	if requestedModel != "" && account != nil && !s.isModelSupportedByAccountWithContext(ctx, account, requestedModel) {
+		return nil, true, accountShareModeUnsupportedModelError(requestedModel)
+	}
+	if account == nil ||
+		account.ID != membership.AccountID ||
+		account.Platform != PlatformAnthropic ||
+		account.Type != AccountTypeOAuth ||
+		!s.isAccountSchedulableForSelection(account) ||
+		!s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) ||
+		!s.isAccountSchedulableForQuota(account) ||
+		!s.isAccountSchedulableForWindowCost(ctx, account, false) ||
+		!s.isAccountSchedulableForRPM(ctx, account, false) {
+		return nil, true, ErrNoAvailableAccounts
+	}
+	return account, true, nil
 }
 
 // SelectAccountWithLoadAwareness selects account with load-awareness and wait plan.
@@ -2335,6 +2467,9 @@ func (s *GatewayService) selectAccountShareModeBoundAccount(ctx context.Context,
 				lastErr = ErrNoAvailableAccounts
 				retryCurrentMembership = true
 			}
+		}
+		if !retryCurrentMembership && requestedModel != "" && !accountShareListingAllowsModel(listing, requestedModel) {
+			return nil, true, accountShareModeUnsupportedModelError(requestedModel)
 		}
 		if !retryCurrentMembership && requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, account, requestedModel) {
 			return nil, true, accountShareModeUnsupportedModelError(requestedModel)
@@ -5119,6 +5254,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	if parsed == nil {
 		return nil, fmt.Errorf("parse request: empty request")
 	}
+	ctx = WithHTTPUpstreamRedirectsDisabled(ctx)
 
 	// Web Search 模拟：纯 web_search 请求时，直接调用搜索 API 构造响应
 	if account != nil && s.shouldEmulateWebSearch(ctx, account, parsed.GroupID, parsed.Body) {
@@ -5579,7 +5715,11 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 
 		// 不需要重试（成功或不可重试的错误），跳出循环
 		// DEBUG: 输出响应 headers（用于检测 rate limit 信息）
-		if account.Platform == PlatformGemini && resp.StatusCode < 400 && s.cfg != nil && s.cfg.Gateway.GeminiDebugResponseHeaders {
+		if account.Platform == PlatformGemini &&
+			resp.StatusCode >= http.StatusOK &&
+			resp.StatusCode < http.StatusMultipleChoices &&
+			s.cfg != nil &&
+			s.cfg.Gateway.GeminiDebugResponseHeaders {
 			logger.LegacyPrintf("service.gateway", "[DEBUG] Gemini API Response Headers for account %d:", account.ID)
 			for k, v := range resp.Header {
 				logger.LegacyPrintf("service.gateway", "[DEBUG]   %s: %v", k, v)
@@ -5659,7 +5799,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
 		}
 	}
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		// 可选：对部分 400 触发 failover（默认关闭以保持语义）
 		if resp.StatusCode == 400 && s.cfg != nil && s.cfg.Gateway.FailoverOn400 {
 			respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
@@ -5750,7 +5890,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					"[Forward] SSE error event in stream: Account=%d(%s) RequestID=%s Body=%s",
 					account.ID, account.Name, resp.Header.Get("x-request-id"), truncateString(sseErr.RawData, 1000),
 				)
-				if streamingResultHasBillableUsage(streamResult) {
+				if streamingResultHasBillableUsage(streamResult) || errors.Is(err, ErrAccountShareBillingPreTerminalCommit) {
 					return &ForwardResult{
 						RequestID:        resp.Header.Get("x-request-id"),
 						Usage:            *streamResult.usage,
@@ -5767,7 +5907,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					ResponseBody: body,
 				}
 			}
-			if streamingResultHasBillableUsage(streamResult) {
+			if streamingResultHasBillableUsage(streamResult) || errors.Is(err, ErrAccountShareBillingPreTerminalCommit) {
 				return &ForwardResult{
 					RequestID:        resp.Header.Get("x-request-id"),
 					Usage:            *streamResult.usage,
@@ -5785,8 +5925,18 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		firstTokenMs = streamResult.firstTokenMs
 		clientDisconnect = streamResult.clientDisconnect
 	} else {
-		usage, err = s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, reqModel)
+		usage, err = s.handleNonStreamingResponse(ctx, resp, c, account, startTime, originalModel, reqModel)
 		if err != nil {
+			if usage != nil && errors.Is(err, ErrAccountShareBillingPreTerminalCommit) {
+				return &ForwardResult{
+					RequestID:     resp.Header.Get("x-request-id"),
+					Usage:         *usage,
+					Model:         originalModel,
+					UpstreamModel: mappedModel,
+					Stream:        false,
+					Duration:      time.Since(startTime),
+				}, &BillableStreamUsageError{Err: err}
+			}
 			return nil, err
 		}
 	}
@@ -6024,7 +6174,7 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 		}
 	}
 
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return s.handleErrorResponse(ctx, resp, c, account)
 	}
 
@@ -6036,9 +6186,17 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 			resp.Request = nil
 		}
 		input.Body = nil
-		streamResult, err := s.handleStreamingResponseAnthropicAPIKeyPassthrough(ctx, resp, c, account, input.StartTime, input.RequestModel)
+		streamResult, err := s.handleStreamingResponseAnthropicAPIKeyPassthroughWithModels(
+			ctx,
+			resp,
+			c,
+			account,
+			input.StartTime,
+			input.OriginalModel,
+			input.RequestModel,
+		)
 		if err != nil {
-			if streamingResultHasBillableUsage(streamResult) {
+			if streamingResultHasBillableUsage(streamResult) || errors.Is(err, ErrAccountShareBillingPreTerminalCommit) {
 				return &ForwardResult{
 					RequestID:        resp.Header.Get("x-request-id"),
 					Usage:            *streamResult.usage,
@@ -6056,8 +6214,26 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 		firstTokenMs = streamResult.firstTokenMs
 		clientDisconnect = streamResult.clientDisconnect
 	} else {
-		usage, err = s.handleNonStreamingResponseAnthropicAPIKeyPassthrough(ctx, resp, c, account)
+		usage, err = s.handleNonStreamingResponseAnthropicAPIKeyPassthroughWithModels(
+			ctx,
+			resp,
+			c,
+			account,
+			input.StartTime,
+			input.OriginalModel,
+			input.RequestModel,
+		)
 		if err != nil {
+			if usage != nil && errors.Is(err, ErrAccountShareBillingPreTerminalCommit) {
+				return &ForwardResult{
+					RequestID:     resp.Header.Get("x-request-id"),
+					Usage:         *usage,
+					Model:         input.OriginalModel,
+					UpstreamModel: input.RequestModel,
+					Stream:        false,
+					Duration:      time.Since(input.StartTime),
+				}, &BillableStreamUsageError{Err: err}
+			}
 			return nil, err
 		}
 	}
@@ -6148,6 +6324,26 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 	startTime time.Time,
 	model string,
 ) (*streamingResult, error) {
+	return s.handleStreamingResponseAnthropicAPIKeyPassthroughWithModels(
+		ctx,
+		resp,
+		c,
+		account,
+		startTime,
+		model,
+		model,
+	)
+}
+
+func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthroughWithModels(
+	ctx context.Context,
+	resp *http.Response,
+	c *gin.Context,
+	account *Account,
+	startTime time.Time,
+	originalModel string,
+	upstreamModel string,
+) (*streamingResult, error) {
 	if s.rateLimitService != nil {
 		s.rateLimitService.UpdateSessionWindow(ctx, account, resp.Header)
 	}
@@ -6177,9 +6373,65 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 	}
 
 	usage := &ClaudeUsage{}
+	var billingUsage billingUsageObservation
 	var firstTokenMs *int
 	clientDisconnected := false
 	sawTerminalEvent := false
+	terminalEventPending := false
+	terminalEventLines := make([]string, 0, 3)
+	commitTerminalBilling := func() error {
+		if !terminalEventPending {
+			return nil
+		}
+		result := &ForwardResult{
+			RequestID:            resp.Header.Get("x-request-id"),
+			Usage:                *usage,
+			BillingUsageComplete: billingUsage.complete(),
+			Model:                originalModel,
+			UpstreamModel:        upstreamModel,
+			Stream:               true,
+			Duration:             time.Since(startTime),
+			FirstTokenMs:         firstTokenMs,
+			ClientDisconnect:     clientDisconnected,
+		}
+		if handled, billingErr := CommitForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
+			return billingErr
+		}
+		sawTerminalEvent = true
+		terminalEventPending = false
+		return nil
+	}
+	writePassthroughLine := func(line string) {
+		if clientDisconnected {
+			return
+		}
+		restored := string(reverseToolNamesIfPresent(c, []byte(line)))
+		if _, err := io.WriteString(w, restored); err != nil {
+			clientDisconnected = true
+			s.stopUpstreamOnClientDisconnect(ctx, resp.Body)
+			s.legacyLogClientDisconnectDrainDecision(ctx, "[Anthropic passthrough] Client disconnected during streaming, continue draining upstream for usage: account=%d", account.ID)
+			return
+		}
+		if _, err := io.WriteString(w, "\n"); err != nil {
+			clientDisconnected = true
+			s.stopUpstreamOnClientDisconnect(ctx, resp.Body)
+			s.legacyLogClientDisconnectDrainDecision(ctx, "[Anthropic passthrough] Client disconnected during streaming, continue draining upstream for usage: account=%d", account.ID)
+			return
+		}
+		if line == "" {
+			// 按 SSE 事件边界刷出，减少每行 flush 带来的 syscall 开销。
+			flusher.Flush()
+		}
+	}
+	writePendingTerminalEvent := func(ensureBoundary bool) {
+		if ensureBoundary && (len(terminalEventLines) == 0 || terminalEventLines[len(terminalEventLines)-1] != "") {
+			terminalEventLines = append(terminalEventLines, "")
+		}
+		for _, line := range terminalEventLines {
+			writePassthroughLine(line)
+		}
+		terminalEventLines = terminalEventLines[:0]
+	}
 
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
@@ -6245,6 +6497,12 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 		select {
 		case ev, ok := <-events:
 			if !ok {
+				if terminalEventPending {
+					if err := commitTerminalBilling(); err != nil {
+						return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected}, err
+					}
+					writePendingTerminalEvent(true)
+				}
 				if !clientDisconnected {
 					// 兜底补刷，确保最后一个未以空行结尾的事件也能及时送达客户端。
 					flusher.Flush()
@@ -6289,8 +6547,9 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 			line := ev.line
 			if data, ok := extractAnthropicSSEDataLine(line); ok {
 				trimmed := strings.TrimSpace(data)
+				billingUsage.observeAnthropicPayload(trimmed)
 				if anthropicStreamEventIsTerminal("", trimmed) {
-					sawTerminalEvent = true
+					terminalEventPending = true
 				}
 				if firstTokenMs == nil && trimmed != "" && trimmed != "[DONE]" {
 					ms := int(time.Since(startTime).Milliseconds())
@@ -6300,25 +6559,23 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 			} else {
 				trimmed := strings.TrimSpace(line)
 				if strings.HasPrefix(trimmed, "event:") && anthropicStreamEventIsTerminal(strings.TrimSpace(strings.TrimPrefix(trimmed, "event:")), "") {
-					sawTerminalEvent = true
+					terminalEventPending = true
 				}
 			}
-
-			if !clientDisconnected {
-				restored := string(reverseToolNamesIfPresent(c, []byte(line)))
-				if _, err := io.WriteString(w, restored); err != nil {
-					clientDisconnected = true
-					s.stopUpstreamOnClientDisconnect(ctx, resp.Body)
-					s.legacyLogClientDisconnectDrainDecision(ctx, "[Anthropic passthrough] Client disconnected during streaming, continue draining upstream for usage: account=%d", account.ID)
-				} else if _, err := io.WriteString(w, "\n"); err != nil {
-					clientDisconnected = true
-					s.stopUpstreamOnClientDisconnect(ctx, resp.Body)
-					s.legacyLogClientDisconnectDrainDecision(ctx, "[Anthropic passthrough] Client disconnected during streaming, continue draining upstream for usage: account=%d", account.ID)
-				} else if line == "" {
-					// 按 SSE 事件边界刷出，减少每行 flush 带来的 syscall 开销。
-					flusher.Flush()
-				}
+			if terminalEventPending {
+				terminalEventLines = append(terminalEventLines, line)
 			}
+			if terminalEventPending && line == "" {
+				if err := commitTerminalBilling(); err != nil {
+					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected}, err
+				}
+				writePendingTerminalEvent(false)
+				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected}, nil
+			}
+			if terminalEventPending {
+				continue
+			}
+			writePassthroughLine(line)
 
 		case <-intervalCh:
 			lastRead := time.Unix(0, atomic.LoadInt64(&lastReadAt))
@@ -6328,9 +6585,9 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 			if clientDisconnected {
 				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, fmt.Errorf("stream usage incomplete after timeout")
 			}
-			logger.LegacyPrintf("service.gateway", "[Anthropic passthrough] Stream data interval timeout: account=%d model=%s interval=%s", account.ID, model, streamInterval)
+			logger.LegacyPrintf("service.gateway", "[Anthropic passthrough] Stream data interval timeout: account=%d model=%s interval=%s", account.ID, upstreamModel, streamInterval)
 			if s.rateLimitService != nil {
-				s.rateLimitService.HandleStreamTimeout(ctx, account, model)
+				s.rateLimitService.HandleStreamTimeout(ctx, account, upstreamModel)
 			}
 			return &streamingResult{usage: usage, firstTokenMs: firstTokenMs}, fmt.Errorf("stream data interval timeout")
 		}
@@ -6515,6 +6772,26 @@ func (s *GatewayService) handleNonStreamingResponseAnthropicAPIKeyPassthrough(
 	c *gin.Context,
 	account *Account,
 ) (*ClaudeUsage, error) {
+	return s.handleNonStreamingResponseAnthropicAPIKeyPassthroughWithModels(
+		ctx,
+		resp,
+		c,
+		account,
+		time.Now(),
+		"",
+		"",
+	)
+}
+
+func (s *GatewayService) handleNonStreamingResponseAnthropicAPIKeyPassthroughWithModels(
+	ctx context.Context,
+	resp *http.Response,
+	c *gin.Context,
+	account *Account,
+	startTime time.Time,
+	originalModel string,
+	upstreamModel string,
+) (*ClaudeUsage, error) {
 	if s.rateLimitService != nil {
 		s.rateLimitService.UpdateSessionWindow(ctx, account, resp.Header)
 	}
@@ -6541,6 +6818,18 @@ func (s *GatewayService) handleNonStreamingResponseAnthropicAPIKeyPassthrough(
 		contentType = "application/json"
 	}
 	body = reverseToolNamesIfPresent(c, body)
+	result := &ForwardResult{
+		RequestID:            resp.Header.Get("x-request-id"),
+		Usage:                *usage,
+		BillingUsageComplete: anthropicResponseBillingUsageComplete(body),
+		Model:                originalModel,
+		UpstreamModel:        upstreamModel,
+		Stream:               false,
+		Duration:             time.Since(startTime),
+	}
+	if handled, billingErr := CommitForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
+		return usage, billingErr
+	}
 	c.Data(resp.StatusCode, contentType, body)
 	return usage, nil
 }
@@ -6635,7 +6924,7 @@ func (s *GatewayService) forwardBedrock(
 	}
 
 	// 错误/failover 处理
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return s.handleBedrockUpstreamErrors(ctx, resp, c, account)
 	}
 
@@ -6644,16 +6933,54 @@ func (s *GatewayService) forwardBedrock(
 	var firstTokenMs *int
 	var clientDisconnect bool
 	if reqStream {
-		streamResult, err := s.handleBedrockStreamingResponse(ctx, resp, c, account, startTime, reqModel)
+		streamResult, err := s.handleBedrockStreamingResponseWithModels(
+			ctx,
+			resp,
+			c,
+			account,
+			startTime,
+			reqModel,
+			mappedModel,
+		)
 		if err != nil {
+			if streamingResultHasBillableUsage(streamResult) || errors.Is(err, ErrAccountShareBillingPreTerminalCommit) {
+				return &ForwardResult{
+					RequestID:        resp.Header.Get("x-amzn-requestid"),
+					Usage:            *streamResult.usage,
+					Model:            reqModel,
+					UpstreamModel:    mappedModel,
+					Stream:           true,
+					Duration:         time.Since(startTime),
+					FirstTokenMs:     streamResult.firstTokenMs,
+					ClientDisconnect: streamResult.clientDisconnect,
+				}, &BillableStreamUsageError{Err: err}
+			}
 			return nil, err
 		}
 		usage = streamResult.usage
 		firstTokenMs = streamResult.firstTokenMs
 		clientDisconnect = streamResult.clientDisconnect
 	} else {
-		usage, err = s.handleBedrockNonStreamingResponse(ctx, resp, c, account)
+		usage, err = s.handleBedrockNonStreamingResponseWithModels(
+			ctx,
+			resp,
+			c,
+			account,
+			startTime,
+			reqModel,
+			mappedModel,
+		)
 		if err != nil {
+			if usage != nil && errors.Is(err, ErrAccountShareBillingPreTerminalCommit) {
+				return &ForwardResult{
+					RequestID:     resp.Header.Get("x-amzn-requestid"),
+					Usage:         *usage,
+					Model:         reqModel,
+					UpstreamModel: mappedModel,
+					Stream:        false,
+					Duration:      time.Since(startTime),
+				}, &BillableStreamUsageError{Err: err}
+			}
 			return nil, err
 		}
 	}
@@ -6896,10 +7223,32 @@ func (s *GatewayService) handleBedrockNonStreamingResponse(
 	c *gin.Context,
 	account *Account,
 ) (*ClaudeUsage, error) {
+	return s.handleBedrockNonStreamingResponseWithModels(
+		ctx,
+		resp,
+		c,
+		account,
+		time.Now(),
+		"",
+		"",
+	)
+}
+
+func (s *GatewayService) handleBedrockNonStreamingResponseWithModels(
+	ctx context.Context,
+	resp *http.Response,
+	c *gin.Context,
+	account *Account,
+	startTime time.Time,
+	originalModel string,
+	upstreamModel string,
+) (*ClaudeUsage, error) {
 	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, anthropicTooLargeError)
 	if err != nil {
 		return nil, err
 	}
+	var billingUsage billingUsageObservation
+	billingUsage.observeAnthropicPayload(string(body))
 
 	// 转换 Bedrock 特有的 amazon-bedrock-invocationMetrics 为标准 Anthropic usage 格式
 	// 并移除该字段避免透传给客户端
@@ -6910,6 +7259,18 @@ func (s *GatewayService) handleBedrockNonStreamingResponse(
 	c.Header("Content-Type", "application/json")
 	if v := resp.Header.Get("x-amzn-requestid"); v != "" {
 		c.Header("x-request-id", v)
+	}
+	result := &ForwardResult{
+		RequestID:            resp.Header.Get("x-amzn-requestid"),
+		Usage:                *usage,
+		BillingUsageComplete: billingUsage.complete(),
+		Model:                originalModel,
+		UpstreamModel:        upstreamModel,
+		Stream:               false,
+		Duration:             time.Since(startTime),
+	}
+	if handled, billingErr := CommitForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
+		return usage, billingErr
 	}
 	c.Data(resp.StatusCode, "application/json", body)
 	return usage, nil
@@ -8264,6 +8625,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	}
 
 	usage := &ClaudeUsage{}
+	var billingUsage billingUsageObservation
 	var firstTokenMs *int
 	scanner := bufio.NewScanner(resp.Body)
 	// 设置更大的buffer以处理长行
@@ -8371,9 +8733,9 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 
 	pendingEventLines := make([]string, 0, 4)
 
-	processSSEEvent := func(lines []string) ([]string, string, *sseUsagePatch, error) {
+	processSSEEvent := func(lines []string) ([]string, string, *sseUsagePatch, bool, error) {
 		if len(lines) == 0 {
-			return nil, "", nil, nil
+			return nil, "", nil, false, nil
 		}
 
 		eventName := ""
@@ -8390,21 +8752,21 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		}
 
 		if eventName == "error" {
-			return nil, dataLine, nil, &sseStreamErrorEventError{RawData: dataLine}
+			return nil, dataLine, nil, false, &sseStreamErrorEventError{RawData: dataLine}
 		}
+		isTerminal := anthropicStreamEventIsTerminal(eventName, dataLine)
 
 		if dataLine == "" {
-			return []string{strings.Join(lines, "\n") + "\n\n"}, "", nil, nil
+			return []string{strings.Join(lines, "\n") + "\n\n"}, "", nil, isTerminal, nil
 		}
 
 		if dataLine == "[DONE]" {
-			sawTerminalEvent = true
 			block := ""
 			if eventName != "" {
 				block = "event: " + eventName + "\n"
 			}
 			block += "data: " + dataLine + "\n\n"
-			return []string{block}, dataLine, nil, nil
+			return []string{block}, dataLine, nil, isTerminal, nil
 		}
 
 		var event map[string]any
@@ -8415,7 +8777,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 				block = "event: " + eventName + "\n"
 			}
 			block += "data: " + dataLine + "\n\n"
-			return []string{block}, dataLine, nil, nil
+			return []string{block}, dataLine, nil, isTerminal, nil
 		}
 
 		eventType, _ := event["type"].(string)
@@ -8465,16 +8827,13 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		}
 
 		usagePatch := s.extractSSEUsagePatch(event)
-		if anthropicStreamEventIsTerminal(eventName, dataLine) {
-			sawTerminalEvent = true
-		}
 		if !eventChanged {
 			block := ""
 			if eventName != "" {
 				block = "event: " + eventName + "\n"
 			}
 			block += "data: " + dataLine + "\n\n"
-			return []string{block}, dataLine, usagePatch, nil
+			return []string{block}, dataLine, usagePatch, isTerminal, nil
 		}
 
 		newData, err := json.Marshal(event)
@@ -8485,7 +8844,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 				block = "event: " + eventName + "\n"
 			}
 			block += "data: " + dataLine + "\n\n"
-			return []string{block}, dataLine, usagePatch, nil
+			return []string{block}, dataLine, usagePatch, isTerminal, nil
 		}
 
 		block := ""
@@ -8493,7 +8852,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			block = "event: " + eventName + "\n"
 		}
 		block += "data: " + string(newData) + "\n\n"
-		return []string{block}, string(newData), usagePatch, nil
+		return []string{block}, string(newData), usagePatch, isTerminal, nil
 	}
 
 	flushPendingEvent := func(writeBlocks bool) error {
@@ -8501,10 +8860,38 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			return nil
 		}
 
-		outputBlocks, data, usagePatch, err := processSSEEvent(pendingEventLines)
+		outputBlocks, data, usagePatch, isTerminal, err := processSSEEvent(pendingEventLines)
 		pendingEventLines = pendingEventLines[:0]
 		if err != nil {
 			return err
+		}
+
+		if data != "" {
+			billingUsage.observeAnthropicPayload(data)
+			if firstTokenMs == nil && data != "[DONE]" {
+				ms := int(time.Since(startTime).Milliseconds())
+				firstTokenMs = &ms
+			}
+			if usagePatch != nil {
+				mergeSSEUsagePatch(usage, usagePatch)
+			}
+		}
+		if isTerminal {
+			sawTerminalEvent = true
+			result := &ForwardResult{
+				RequestID:            resp.Header.Get("x-request-id"),
+				Usage:                *usage,
+				BillingUsageComplete: billingUsage.complete(),
+				Model:                originalModel,
+				UpstreamModel:        mappedModel,
+				Stream:               true,
+				Duration:             time.Since(startTime),
+				FirstTokenMs:         firstTokenMs,
+				ClientDisconnect:     clientDisconnected,
+			}
+			if handled, billingErr := CommitForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
+				return billingErr
+			}
 		}
 
 		if writeBlocks {
@@ -8522,15 +8909,6 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 				}
 			}
 		}
-		if data != "" {
-			if firstTokenMs == nil && data != "[DONE]" {
-				ms := int(time.Since(startTime).Milliseconds())
-				firstTokenMs = &ms
-			}
-			if usagePatch != nil {
-				mergeSSEUsagePatch(usage, usagePatch)
-			}
-		}
 		return nil
 	}
 
@@ -8543,7 +8921,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		case ev, ok := <-events:
 			if !ok {
 				if err := flushPendingEvent(true); err != nil {
-					if claudeUsageHasBillableTokens(usage) {
+					if errors.Is(err, ErrAccountShareBillingPreTerminalCommit) || claudeUsageHasBillableTokens(usage) {
 						return streamResultWithCurrentUsage(clientDisconnected), err
 					}
 					if clientDisconnected {
@@ -8567,7 +8945,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			}
 			if ev.err != nil {
 				if err := flushPendingEvent(c.Writer.Written()); err != nil {
-					if claudeUsageHasBillableTokens(usage) {
+					if errors.Is(err, ErrAccountShareBillingPreTerminalCommit) || claudeUsageHasBillableTokens(usage) {
 						return streamResultWithCurrentUsage(clientDisconnected), err
 					}
 					if clientDisconnected {
@@ -8633,7 +9011,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 				}
 
 				if err := flushPendingEvent(true); err != nil {
-					if claudeUsageHasBillableTokens(usage) {
+					if errors.Is(err, ErrAccountShareBillingPreTerminalCommit) || claudeUsageHasBillableTokens(usage) {
 						return streamResultWithCurrentUsage(clientDisconnected), err
 					}
 					if clientDisconnected {
@@ -8643,6 +9021,9 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 						return streamResultWithCurrentUsage(true), err
 					}
 					return nil, err
+				}
+				if sawTerminalEvent {
+					return streamResultWithCurrentUsage(clientDisconnected), nil
 				}
 				continue
 			}
@@ -8918,7 +9299,15 @@ func (s *GatewayService) resolveCacheTTLUsageOverrideTarget(ctx context.Context,
 	return "", false
 }
 
-func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, originalModel, mappedModel string) (*ClaudeUsage, error) {
+func (s *GatewayService) handleNonStreamingResponse(
+	ctx context.Context,
+	resp *http.Response,
+	c *gin.Context,
+	account *Account,
+	startTime time.Time,
+	originalModel,
+	mappedModel string,
+) (*ClaudeUsage, error) {
 	// 更新5h窗口状态
 	s.rateLimitService.UpdateSessionWindow(ctx, account, resp.Header)
 
@@ -8988,6 +9377,19 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 	}
 
 	body = reverseToolNamesIfPresent(c, body)
+
+	result := &ForwardResult{
+		RequestID:            resp.Header.Get("x-request-id"),
+		Usage:                response.Usage,
+		BillingUsageComplete: anthropicResponseBillingUsageComplete(body),
+		Model:                originalModel,
+		UpstreamModel:        mappedModel,
+		Stream:               false,
+		Duration:             time.Since(startTime),
+	}
+	if handled, billingErr := CommitForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
+		return &response.Usage, billingErr
+	}
 
 	// 写入响应
 	c.Data(resp.StatusCode, contentType, body)
@@ -9739,7 +10141,7 @@ type recordUsageOpts struct {
 
 // RecordUsage 记录使用量并扣费（或更新订阅用量）
 func (s *GatewayService) RecordUsage(ctx context.Context, input *RecordUsageInput) error {
-	return s.recordUsageCore(ctx, &recordUsageCoreInput{
+	coreInput := &recordUsageCoreInput{
 		Result:             input.Result,
 		APIKey:             input.APIKey,
 		User:               input.User,
@@ -9753,8 +10155,12 @@ func (s *GatewayService) RecordUsage(ctx context.Context, input *RecordUsageInpu
 		ForceCacheBilling:  input.ForceCacheBilling,
 		APIKeyService:      input.APIKeyService,
 		ChannelUsageFields: input.ChannelUsageFields,
-	}, &recordUsageOpts{
+	}
+	opts := &recordUsageOpts{
 		EnableClaudePath: true,
+	}
+	return retryAccountShareBillingRecordUsage(ctx, func(attemptCtx context.Context) error {
+		return s.recordUsageCore(attemptCtx, coreInput, opts)
 	})
 }
 
@@ -9780,7 +10186,7 @@ type RecordUsageLongContextInput struct {
 
 // RecordUsageWithLongContext 记录使用量并扣费，支持长上下文双倍计费（用于 Gemini）
 func (s *GatewayService) RecordUsageWithLongContext(ctx context.Context, input *RecordUsageLongContextInput) error {
-	return s.recordUsageCore(ctx, &recordUsageCoreInput{
+	coreInput := &recordUsageCoreInput{
 		Result:             input.Result,
 		APIKey:             input.APIKey,
 		User:               input.User,
@@ -9794,9 +10200,13 @@ func (s *GatewayService) RecordUsageWithLongContext(ctx context.Context, input *
 		ForceCacheBilling:  input.ForceCacheBilling,
 		APIKeyService:      input.APIKeyService,
 		ChannelUsageFields: input.ChannelUsageFields,
-	}, &recordUsageOpts{
+	}
+	opts := &recordUsageOpts{
 		LongContextThreshold:  input.LongContextThreshold,
 		LongContextMultiplier: input.LongContextMultiplier,
+	}
+	return retryAccountShareBillingRecordUsage(ctx, func(attemptCtx context.Context) error {
+		return s.recordUsageCore(attemptCtx, coreInput, opts)
 	})
 }
 
@@ -9908,7 +10318,10 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	}
 
 	// 计算费用
-	cost := s.calculateRecordUsageCost(ctx, result, apiKey, billingModel, multiplier, opts)
+	cost, err := s.calculateRecordUsageCost(ctx, result, apiKey, billingModel, multiplier, opts)
+	if err != nil {
+		return err
+	}
 	var accountShareModeSettlement *AccountShareModeBillingSnapshot
 	_, durableAccountShareBilling := accountShareBillingCommandFromContext(ctx)
 	if !durableAccountShareBilling && accountShareMembership != nil && accountShareListing != nil && cost != nil {
@@ -9952,6 +10365,22 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	}
 
 	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
+		if dispatch, durable := AccountShareBillingDispatchFromContext(ctx); durable {
+			command := buildUsageBillingCommand(usageLog.RequestID, usageLog, &postUsageBillingParams{
+				Cost:               cost,
+				User:               user,
+				APIKey:             apiKey,
+				Account:            account,
+				Subscription:       subscription,
+				IsSubscriptionBill: isSubscriptionBilling,
+			})
+			handled, readyErr := markAccountShareBillingDispatchReadyNoCharge(ctx, command)
+			if !handled {
+				dispatch.barrier.complete()
+				return ErrServiceUnavailable
+			}
+			return readyErr
+		}
 		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.gateway")
 		logger.LegacyPrintf("service.gateway", "[SIMPLE MODE] Usage recorded (not billed): user=%d, tokens=%d", usageLog.UserID, usageLog.TotalTokens())
 		s.deferredService.ScheduleLastUsedUpdate(account.ID)
@@ -9998,7 +10427,7 @@ func (s *GatewayService) calculateRecordUsageCost(
 	billingModel string,
 	multiplier float64,
 	opts *recordUsageOpts,
-) *CostBreakdown {
+) (*CostBreakdown, error) {
 	// 图片生成计费
 	if result.ImageCount > 0 {
 		return s.calculateImageCost(ctx, result, apiKey, billingModel, multiplier)
@@ -10064,7 +10493,7 @@ func (s *GatewayService) calculateImageCost(
 	apiKey *APIKey,
 	billingModel string,
 	multiplier float64,
-) *CostBreakdown {
+) (*CostBreakdown, error) {
 	if resolved := s.resolveChannelPricing(ctx, billingModel, apiKey); resolved != nil {
 		tokens := UsageTokens{
 			InputTokens:       result.Usage.InputTokens,
@@ -10083,10 +10512,9 @@ func (s *GatewayService) calculateImageCost(
 			Resolved:       resolved,
 		})
 		if err != nil {
-			logger.LegacyPrintf("service.gateway", "Calculate image token cost failed: %v", err)
-			return &CostBreakdown{ActualCost: 0}
+			return nil, fmt.Errorf("calculate image token cost for model %s: %w", billingModel, err)
 		}
-		return cost
+		return cost, nil
 	}
 
 	var groupConfig *ImagePriceConfig
@@ -10097,7 +10525,7 @@ func (s *GatewayService) calculateImageCost(
 			Price4K: apiKey.Group.ImagePrice4K,
 		}
 	}
-	return s.billingService.CalculateImageCost(billingModel, result.ImageSize, result.ImageCount, groupConfig, multiplier)
+	return s.billingService.CalculateImageCost(billingModel, result.ImageSize, result.ImageCount, groupConfig, multiplier), nil
 }
 
 // calculateTokenCost 计算 Token 计费：根据 opts 决定走普通/长上下文/渠道统一计费。
@@ -10108,7 +10536,7 @@ func (s *GatewayService) calculateTokenCost(
 	billingModel string,
 	multiplier float64,
 	opts *recordUsageOpts,
-) *CostBreakdown {
+) (*CostBreakdown, error) {
 	tokens := UsageTokens{
 		InputTokens:           result.Usage.InputTokens,
 		OutputTokens:          result.Usage.OutputTokens,
@@ -10145,10 +10573,9 @@ func (s *GatewayService) calculateTokenCost(
 		cost, err = s.billingService.CalculateCost(billingModel, tokens, multiplier)
 	}
 	if err != nil {
-		logger.LegacyPrintf("service.gateway", "Calculate cost failed: %v", err)
-		return &CostBreakdown{ActualCost: 0}
+		return nil, fmt.Errorf("calculate usage cost for model %s: %w", billingModel, err)
 	}
-	return cost
+	return cost, nil
 }
 
 // buildRecordUsageLog 构建使用日志并设置计费模式。
@@ -10355,6 +10782,7 @@ func (s *GatewayService) isStickyAccountUpstreamRestricted(ctx context.Context, 
 // ForwardCountTokens 转发 count_tokens 请求到上游 API
 // 特点：不记录使用量、仅支持非流式响应
 func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest) error {
+	ctx = WithHTTPUpstreamRedirectsDisabled(ctx)
 	if parsed == nil {
 		s.countTokensError(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
 		return fmt.Errorf("parse request: empty request")
@@ -10498,7 +10926,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	}
 
 	// 处理错误响应
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		// 标记账号状态（429/529等）
 		s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
 
@@ -10597,7 +11025,7 @@ func (s *GatewayService) forwardCountTokensAnthropicAPIKeyPassthrough(ctx contex
 		return err
 	}
 
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		if s.rateLimitService != nil {
 			s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
 		}

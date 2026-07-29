@@ -806,6 +806,15 @@
     transform 180ms ease;
 }
 
+.archive-card-interactive {
+  cursor: pointer;
+}
+
+.archive-card-interactive:focus-visible {
+  outline: 2px solid rgb(var(--ui-brand));
+  outline-offset: 3px;
+}
+
 .archive-card > header {
   display: flex;
   flex-wrap: wrap;
@@ -872,6 +881,22 @@
   border-top: 1px solid rgb(var(--ui-border));
 }
 
+.archive-winners > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.archive-winners > header > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: rgb(var(--ui-brand));
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
 .archive-winners > div {
   display: grid;
   gap: 0.35rem;
@@ -905,6 +930,112 @@
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.activity-winner-dialog {
+  display: grid;
+  min-width: 0;
+  gap: 1rem;
+}
+
+.activity-winner-dialog-summary {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid rgb(var(--ui-border));
+  border-radius: 0.75rem;
+  background: rgb(var(--ui-surface-subtle));
+}
+
+.activity-winner-dialog-summary > div {
+  min-width: 0;
+}
+
+.activity-winner-dialog-summary strong {
+  display: block;
+  margin-top: 0.625rem;
+  color: rgb(var(--ui-text));
+  font-size: 1rem;
+}
+
+.activity-winner-dialog-summary p {
+  margin: 0.35rem 0 0;
+  color: rgb(var(--ui-text-muted));
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+
+.activity-winner-dialog-summary dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.625rem;
+  margin: 0;
+}
+
+.activity-winner-dialog-summary dl > div {
+  min-width: 0;
+  padding: 0.75rem;
+  border-radius: 0.625rem;
+  background: rgb(var(--ui-surface));
+}
+
+.activity-winner-dialog-summary dt {
+  color: rgb(var(--ui-text-subtle));
+  font-size: 0.75rem;
+}
+
+.activity-winner-dialog-summary dd {
+  overflow: hidden;
+  margin: 0.25rem 0 0;
+  color: rgb(var(--ui-text));
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-winner-dialog-state {
+  min-height: 16rem;
+}
+
+.activity-winner-table-wrap {
+  min-width: 0;
+  overflow-x: auto;
+  border: 1px solid rgb(var(--ui-border));
+  border-radius: 0.75rem;
+}
+
+.activity-winner-table {
+  width: 100%;
+  min-width: 42rem;
+  border-collapse: collapse;
+}
+
+.activity-winner-table th,
+.activity-winner-table td {
+  padding: 0.8rem 1rem;
+  border-bottom: 1px solid rgb(var(--ui-border));
+  color: rgb(var(--ui-text-muted));
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  text-align: left;
+}
+
+.activity-winner-table th {
+  background: rgb(var(--ui-surface-subtle));
+  color: rgb(var(--ui-text-subtle));
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.activity-winner-table td strong {
+  color: rgb(var(--ui-text));
+  font-weight: 600;
+}
+
+.activity-winner-table tbody tr:last-child td {
+  border-bottom: 0;
 }
 
 .affiliate-panel {
@@ -1744,6 +1875,12 @@
 
   .archive-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .activity-winner-dialog-summary {
+    grid-template-columns: minmax(0, 1fr) minmax(20rem, 0.65fr);
+    align-items: center;
+    padding: 1.25rem;
   }
 
   .affiliate-card-header,

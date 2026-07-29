@@ -300,7 +300,7 @@ func TestOpenAICleanRelay_AccountShareModeUsesMembershipAccount(t *testing.T) {
 	}
 	shareRepo := &accountShareModeRepoStub{
 		membership: &AccountShareMembership{ID: 1, AccountID: boundAccount.ID, ConsumerUserID: 5580, APIKeyID: 20103},
-		listing:    &AccountShareListing{ID: 1, OwnerUserID: 1, Status: AccountShareListingStatusActive, PerUserConcurrency: 1},
+		listing:    &AccountShareListing{ID: 1, OwnerUserID: 1, Status: AccountShareListingStatusActive, AllowedModels: []string{"gpt-5.5"}, PerUserConcurrency: 1},
 	}
 	concurrencyService, accountShareService := newAccountShareRuntimeLeaseTestServices(shareRepo)
 	svc := &OpenAIGatewayService{

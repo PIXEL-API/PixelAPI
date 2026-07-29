@@ -217,7 +217,11 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { accountShareAPI, type AccountShareListing } from '@/api/accountShare'
+import {
+  accountShareAPI,
+  loadAllPaginatedItems,
+  type AccountShareListing
+} from '@/api/accountShare'
 import { accountsAPI } from '@/api/accounts'
 import type { Account, AccountPlatform, Proxy } from '@/types'
 import { extractApiErrorMessage } from '@/utils/apiError'
@@ -261,6 +265,7 @@ const attachIdempotencyKey = ref('')
 const discardConfirmationOpen = ref(false)
 let activationVersion = 0
 let completionEmitted = false
+let accountSnapshotRequestController: AbortController | null = null
 
 const roomDisplayName = computed(() => (
   props.listing?.room_name
@@ -322,6 +327,8 @@ watch(
   () => [props.show, props.listing?.id] as const,
   ([show]) => {
     const currentActivation = ++activationVersion
+    accountSnapshotRequestController?.abort()
+    accountSnapshotRequestController = null
     resetFlow()
     if (!show || !props.listing) return
     void prepareCreator(currentActivation)
@@ -343,7 +350,7 @@ function resetFlow(): void {
 
 async function prepareCreator(currentActivation: number): Promise<void> {
   try {
-    const existingAccounts = await listAllPlatformAccounts(roomPlatform.value)
+    const existingAccounts = await listAllPlatformAccounts(roomPlatform.value, currentActivation)
     if (currentActivation !== activationVersion || !props.show) return
     accountIDsBeforeCreate.value = new Set(existingAccounts.map((account) => account.id))
     snapshotLoaded.value = true
@@ -356,21 +363,34 @@ async function prepareCreator(currentActivation: number): Promise<void> {
   }
 }
 
-async function listAllPlatformAccounts(platform: AccountPlatform): Promise<Account[]> {
-  const firstPage = await accountsAPI.list(1, 100, { platform })
-  const remainingPages = Array.from(
-    { length: Math.max(0, Number(firstPage.pages || 1) - 1) },
-    (_, index) => index + 2
-  )
-  const remainingResults = await Promise.all(
-    remainingPages.map((page) => accountsAPI.list(page, 100, { platform }))
-  )
-  const accountByID = new Map<number, Account>()
-  for (const account of firstPage.items || []) accountByID.set(account.id, account)
-  for (const result of remainingResults) {
-    for (const account of result.items || []) accountByID.set(account.id, account)
+async function listAllPlatformAccounts(
+  platform: AccountPlatform,
+  currentActivation: number
+): Promise<Account[]> {
+  accountSnapshotRequestController?.abort()
+  const controller = new AbortController()
+  accountSnapshotRequestController = controller
+  try {
+    const loadedAccounts = await loadAllPaginatedItems(
+      (page) => accountsAPI.list(page, 100, { platform }, { signal: controller.signal }),
+      {
+        signal: controller.signal,
+        isCurrent: () => (
+          currentActivation === activationVersion
+          && props.show
+          && roomPlatform.value === platform
+        ),
+        concurrency: 3
+      }
+    )
+    const accountByID = new Map<number, Account>()
+    for (const account of loadedAccounts) accountByID.set(account.id, account)
+    return Array.from(accountByID.values())
+  } finally {
+    if (accountSnapshotRequestController === controller) {
+      accountSnapshotRequestController = null
+    }
   }
-  return Array.from(accountByID.values())
 }
 
 async function handleAccountCreated(accounts?: Account[]): Promise<void> {
@@ -407,7 +427,7 @@ async function resolveCreatedAccount(
   }
 
   try {
-    const currentAccounts = await listAllPlatformAccounts(roomPlatform.value)
+    const currentAccounts = await listAllPlatformAccounts(roomPlatform.value, currentActivation)
     if (!isCurrentFlow(currentActivation, listingID) || stage.value !== 'created') return null
     const candidates = snapshotLoaded.value
       ? currentAccounts.filter((account) => !accountIDsBeforeCreate.value.has(account.id))

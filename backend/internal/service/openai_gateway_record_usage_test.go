@@ -953,7 +953,7 @@ func TestOpenAIGatewayServiceRecordUsage_ZeroUsageStillPersists(t *testing.T) {
 	require.Equal(t, string(BillingModeToken), *usageRepo.lastLog.BillingMode)
 }
 
-func TestOpenAIGatewayServiceRecordUsage_UnpricedModelPersistsZeroCost(t *testing.T) {
+func TestOpenAIGatewayServiceRecordUsage_UnpricedModelFailsClosed(t *testing.T) {
 	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
 	userRepo := &openAIRecordUsageUserRepoStub{}
 	subRepo := &openAIRecordUsageSubRepoStub{}
@@ -974,16 +974,10 @@ func TestOpenAIGatewayServiceRecordUsage_UnpricedModelPersistsZeroCost(t *testin
 		Account: &Account{ID: 3011, Platform: PlatformOpenAI},
 	})
 
-	require.NoError(t, err)
-	require.Equal(t, 1, usageRepo.calls)
+	require.ErrorIs(t, err, ErrModelPricingUnavailable)
+	require.Equal(t, 0, usageRepo.calls)
 	require.Equal(t, 0, userRepo.deductCalls)
-	require.NotNil(t, usageRepo.lastLog)
-	require.Equal(t, 5, usageRepo.lastLog.InputTokens)
-	require.Equal(t, 2, usageRepo.lastLog.OutputTokens)
-	require.Zero(t, usageRepo.lastLog.TotalCost)
-	require.Zero(t, usageRepo.lastLog.ActualCost)
-	require.NotNil(t, usageRepo.lastLog.BillingMode)
-	require.Equal(t, string(BillingModeToken), *usageRepo.lastLog.BillingMode)
+	require.Nil(t, usageRepo.lastLog)
 }
 
 func TestOpenAIGatewayServiceRecordUsage_Gpt54LongContextDefaultsToBasePricingWhenUngrouped(t *testing.T) {
@@ -1502,6 +1496,56 @@ func TestOpenAIGatewayServiceRecordUsage_SimpleModeSkipsBillingAfterPersist(t *t
 	require.Equal(t, 1, usageRepo.calls)
 	require.Equal(t, 0, userRepo.deductCalls)
 	require.Equal(t, 0, subRepo.incrementCalls)
+}
+
+func TestOpenAIGatewayServiceRecordUsage_SimpleModeDurableDispatchPersistsZeroChargeUsage(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	svc := newOpenAIRecordUsageServiceForTest(
+		usageRepo,
+		&openAIRecordUsageUserRepoStub{},
+		&openAIRecordUsageSubRepoStub{},
+		nil,
+	)
+	svc.cfg.RunMode = config.RunModeSimple
+	intentRepo := &accountShareBillingDispatchIntentRepoStub{}
+	dispatch := &AccountShareBillingDispatch{
+		repository: intentRepo,
+		barrier:    newAccountShareBillingReleaseBarrier(time.Second),
+		command: AccountShareBillingCommand{
+			SchemaVersion:     AccountShareBillingCommandSchemaV3,
+			RateMultiplier:    "1",
+			SettlementEnabled: true,
+		},
+		state: AccountShareBillingIntentState{
+			ID:           91,
+			Status:       AccountShareBillingIntentStatusInFlight,
+			StateToken:   2,
+			APIKeyID:     1000,
+			MembershipID: 41,
+		},
+	}
+	ctx := WithAccountShareBillingDispatch(context.Background(), dispatch)
+
+	err := svc.RecordUsage(ctx, &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID: "resp_simple_durable",
+			Usage:     OpenAIUsage{InputTokens: 10, OutputTokens: 5},
+			Model:     "gpt-5.1",
+			Duration:  time.Second,
+		},
+		APIKey:  &APIKey{ID: 1000},
+		User:    &User{ID: 2000},
+		Account: &Account{ID: 3000},
+	})
+
+	require.NoError(t, err)
+	require.Zero(t, usageRepo.calls, "durable worker owns the usage log insert")
+	require.Len(t, intentRepo.ready, 1)
+	require.Equal(t, int64(10), intentRepo.ready[0].Usage.InputTokens)
+	require.Equal(t, int64(5), intentRepo.ready[0].Usage.OutputTokens)
+	require.Equal(t, "0", intentRepo.ready[0].Usage.ActualCost)
+	require.Equal(t, "0", intentRepo.ready[0].Usage.BalanceCost)
+	require.Equal(t, "0", intentRepo.ready[0].Usage.TotalCharge)
 }
 
 func TestOpenAIGatewayServiceRecordUsage_ImageOnlyUsageStillPersists(t *testing.T) {

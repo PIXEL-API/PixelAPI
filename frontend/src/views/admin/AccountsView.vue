@@ -147,8 +147,10 @@
       <template #table>
         <AccountBulkActionsBar
           :selected-ids="selIds"
+          :testing-connections="submittingBulkTest"
           @delete="handleBulkDelete"
           @reset-status="handleBulkResetStatus"
+          @test-connection="openBulkTestModal"
           @refresh-token="handleBulkRefreshToken"
           @edit-selected="openBulkEditSelected"
           @edit-filtered="openBulkEditFiltered"
@@ -366,6 +368,14 @@
     <EditAccountModal :show="showEdit" :account="edAcc" :proxies="proxies" :groups="groups" @close="showEdit = false" @updated="handleAccountUpdated" />
     <ReAuthAccountModal :show="showReAuth" :account="reAuthAcc" @close="closeReAuthModal" @reauthorized="handleAccountUpdated" />
     <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" @test-success="handleTestSuccess" />
+    <AccountBatchTestModal
+      :show="showBulkTest"
+      :representative-account="bulkTestRepresentativeAccount"
+      :selected-count="selIds.length"
+      :submitting="submittingBulkTest"
+      @close="closeBulkTestModal"
+      @confirm="submitBulkTest"
+    />
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
     <ScheduledTestsPanel :show="showSchedulePanel" :account-id="scheduleAcc?.id ?? null" :model-options="scheduleModelOptions" @close="closeSchedulePanel" />
     <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" />
@@ -428,6 +438,7 @@ import { CreateAccountModal, EditAccountModal, BulkEditAccountModal, SyncFromCrs
 import AccountTableActions from '@/components/admin/account/AccountTableActions.vue'
 import AccountTableFilters from '@/components/admin/account/AccountTableFilters.vue'
 import AccountBulkActionsBar from '@/components/admin/account/AccountBulkActionsBar.vue'
+import AccountBatchTestModal from '@/components/admin/account/AccountBatchTestModal.vue'
 import AccountActionMenu from '@/components/admin/account/AccountActionMenu.vue'
 import ImportDataModal from '@/components/admin/account/ImportDataModal.vue'
 import ReAuthAccountModal from '@/components/admin/account/ReAuthAccountModal.vue'
@@ -521,6 +532,7 @@ const showTempUnsched = ref(false)
 const showDeleteDialog = ref(false)
 const showReAuth = ref(false)
 const showTest = ref(false)
+const showBulkTest = ref(false)
 const showStats = ref(false)
 const showErrorPassthrough = ref(false)
 const showTLSFingerprintProfiles = ref(false)
@@ -529,6 +541,8 @@ const tempUnschedAcc = ref<Account | null>(null)
 const deletingAcc = ref<Account | null>(null)
 const reAuthAcc = ref<Account | null>(null)
 const testingAcc = ref<Account | null>(null)
+const bulkTestRepresentativeAccount = ref<Account | null>(null)
+const submittingBulkTest = ref(false)
 const statsAcc = ref<Account | null>(null)
 const showSchedulePanel = ref(false)
 const scheduleAcc = ref<Account | null>(null)
@@ -1339,6 +1353,79 @@ const handleBulkResetStatus = async () => {
     appStore.showError(String(error))
   }
 }
+
+const openBulkTestModal = async () => {
+  if (submittingBulkTest.value || selIds.value.length === 0) return
+
+  const selectedRows = accounts.value.filter((account) => isSelected(account.id))
+  const visiblePlatforms = new Set(selectedRows.map((account) => account.platform))
+  if (visiblePlatforms.size > 1) {
+    appStore.showError(t('admin.accounts.bulkTest.mixedPlatforms'))
+    return
+  }
+
+  try {
+    bulkTestRepresentativeAccount.value =
+      selectedRows[0] ?? await adminAPI.accounts.getById(selIds.value[0])
+    showBulkTest.value = true
+  } catch (error: any) {
+    console.error('Failed to prepare batch account connection test:', error)
+    appStore.showError(
+      error?.response?.data?.message ||
+        error?.message ||
+        t('admin.accounts.bulkTest.prepareFailed')
+    )
+  }
+}
+
+const closeBulkTestModal = () => {
+  if (submittingBulkTest.value) return
+  showBulkTest.value = false
+  bulkTestRepresentativeAccount.value = null
+}
+
+const submitBulkTest = async (modelId: string) => {
+  if (submittingBulkTest.value || selIds.value.length === 0) return
+
+  submittingBulkTest.value = true
+  try {
+    const task = await adminAPI.accounts.createBatchTestConnectionTask(
+      [...selIds.value],
+      modelId
+    )
+    showBulkTest.value = false
+    bulkTestRepresentativeAccount.value = null
+    appStore.showSuccess(
+      t('admin.accounts.bulkTest.submitted', {
+        count: task.total,
+        model: modelId
+      })
+    )
+    clearSelection()
+    void pollAdminAccountBatchTask(task.id, (result) => {
+      usageManualRefreshToken.value += 1
+      const message = t('admin.accounts.bulkTest.completed', {
+        success: result.success,
+        failed: result.failed
+      })
+      if (result.failed > 0) {
+        appStore.showError(message)
+      } else {
+        appStore.showSuccess(message)
+      }
+    })
+  } catch (error: any) {
+    console.error('Failed to submit batch account connection test:', error)
+    appStore.showError(
+      error?.response?.data?.message ||
+        error?.message ||
+        t('admin.accounts.bulkTest.submitFailed')
+    )
+  } finally {
+    submittingBulkTest.value = false
+  }
+}
+
 const handleBulkRefreshToken = async () => {
   if (!confirm(t('common.confirm'))) return
   try {

@@ -1504,7 +1504,8 @@ func (r *usageLogRepository) GetUserStats(ctx context.Context, userID int64, sta
 // DashboardStats 仪表盘统计
 type DashboardStats = usagestats.DashboardStats
 
-func (r *usageLogRepository) GetAccountShareRecommendationUsageProfile(ctx context.Context, userID int64, model string, startTime, endTime time.Time) (*service.AccountShareRecommendationUsageProfileStats, error) {
+func (r *usageLogRepository) GetAccountShareRecommendationUsageProfile(ctx context.Context, userID int64, platform, model string, startTime, endTime time.Time) (*service.AccountShareRecommendationUsageProfileStats, error) {
+	platform = strings.ToLower(strings.TrimSpace(platform))
 	model = strings.TrimSpace(model)
 	tzName := resolveUsageStatsTimezone()
 	query := `
@@ -1514,29 +1515,36 @@ func (r *usageLogRepository) GetAccountShareRecommendationUsageProfile(ctx conte
 			COALESCE(SUM(output_tokens), 0) AS all_output_tokens,
 			COALESCE(SUM(cache_creation_tokens), 0) AS all_cache_creation_tokens,
 			COALESCE(SUM(cache_read_tokens), 0) AS all_cache_read_tokens,
+			COALESCE(SUM(image_input_tokens), 0) AS all_image_input_tokens,
 			COALESCE(SUM(image_output_tokens), 0) AS all_image_output_tokens,
-			COUNT(DISTINCT date_trunc('hour', created_at AT TIME ZONE $5)) AS all_active_hour_buckets,
+			COUNT(DISTINCT date_trunc('hour', created_at AT TIME ZONE $6)) AS all_active_hour_buckets,
 			COUNT(*) FILTER (WHERE model_match) AS model_requests,
 			COALESCE(SUM(input_tokens) FILTER (WHERE model_match), 0) AS model_input_tokens,
 			COALESCE(SUM(output_tokens) FILTER (WHERE model_match), 0) AS model_output_tokens,
 			COALESCE(SUM(cache_creation_tokens) FILTER (WHERE model_match), 0) AS model_cache_creation_tokens,
 			COALESCE(SUM(cache_read_tokens) FILTER (WHERE model_match), 0) AS model_cache_read_tokens,
+			COALESCE(SUM(image_input_tokens) FILTER (WHERE model_match), 0) AS model_image_input_tokens,
 			COALESCE(SUM(image_output_tokens) FILTER (WHERE model_match), 0) AS model_image_output_tokens,
-			COUNT(DISTINCT date_trunc('hour', created_at AT TIME ZONE $5)) FILTER (WHERE model_match) AS model_active_hour_buckets
+			COUNT(DISTINCT date_trunc('hour', created_at AT TIME ZONE $6)) FILTER (WHERE model_match) AS model_active_hour_buckets
 		FROM (
 			SELECT
-				input_tokens,
-				output_tokens,
-				cache_creation_tokens,
-				cache_read_tokens,
-				image_output_tokens,
-				created_at,
-				($4 <> '' AND (
-					requested_model = $4 OR
-					((requested_model IS NULL OR requested_model = '') AND model = $4)
+				usage_log.input_tokens,
+				usage_log.output_tokens,
+				usage_log.cache_creation_tokens,
+				usage_log.cache_read_tokens,
+				usage_log.image_input_tokens,
+				usage_log.image_output_tokens,
+				usage_log.created_at,
+				($5 <> '' AND (
+					usage_log.requested_model = $5 OR
+					((usage_log.requested_model IS NULL OR usage_log.requested_model = '') AND usage_log.model = $5)
 				)) AS model_match
-			FROM usage_logs
-			WHERE user_id = $1 AND created_at >= $2 AND created_at < $3
+			FROM usage_logs usage_log
+			JOIN accounts usage_account ON usage_account.id = usage_log.account_id
+			WHERE usage_log.user_id = $1
+				AND usage_log.created_at >= $2
+				AND usage_log.created_at < $3
+				AND LOWER(BTRIM(usage_account.platform)) = $4
 		) scoped
 	`
 
@@ -1545,12 +1553,13 @@ func (r *usageLogRepository) GetAccountShareRecommendationUsageProfile(ctx conte
 		ctx,
 		r.sql,
 		query,
-		[]any{userID, startTime, endTime, model, tzName},
+		[]any{userID, startTime, endTime, platform, model, tzName},
 		&allStats.TotalRequests,
 		&allStats.TotalInputTokens,
 		&allStats.TotalOutputTokens,
 		&allStats.TotalCacheCreationTokens,
 		&allStats.TotalCacheReadTokens,
+		&allStats.TotalImageInputTokens,
 		&allStats.TotalImageOutputTokens,
 		&allStats.ActiveHourBuckets,
 		&modelStats.TotalRequests,
@@ -1558,6 +1567,7 @@ func (r *usageLogRepository) GetAccountShareRecommendationUsageProfile(ctx conte
 		&modelStats.TotalOutputTokens,
 		&modelStats.TotalCacheCreationTokens,
 		&modelStats.TotalCacheReadTokens,
+		&modelStats.TotalImageInputTokens,
 		&modelStats.TotalImageOutputTokens,
 		&modelStats.ActiveHourBuckets,
 	); err != nil {

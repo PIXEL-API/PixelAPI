@@ -60,6 +60,21 @@ type accountShareRoomBatchHandlerRepoStub struct {
 	detachErr   error
 }
 
+type accountShareRoomBatchConcurrencyCacheStub struct {
+	service.ConcurrencyCache
+}
+
+func (accountShareRoomBatchConcurrencyCacheStub) GetAccountConcurrencyBatch(
+	_ context.Context,
+	accountIDs []int64,
+) (map[int64]int, error) {
+	result := make(map[int64]int, len(accountIDs))
+	for _, accountID := range accountIDs {
+		result[accountID] = 0
+	}
+	return result, nil
+}
+
 type accountShareEndHandlerRepoStub struct {
 	service.AccountShareModeRepository
 	snapshot *service.AccountShareMembership
@@ -72,6 +87,55 @@ type accountShareHistoryHandlerRepoStub struct {
 	result         *pagination.PaginationResult
 	consumerUserID int64
 	params         pagination.PaginationParams
+}
+
+type accountShareBindingStatusHandlerRepoStub struct {
+	service.AccountShareModeRepository
+	service.APIKeyRepository
+
+	key         *service.APIKey
+	memberships []service.AccountShareMembership
+	consumerID  int64
+	apiKeyID    int64
+}
+
+func (s *accountShareBindingStatusHandlerRepoStub) GetByID(_ context.Context, _ int64) (*service.APIKey, error) {
+	key := *s.key
+	return &key, nil
+}
+
+func (s *accountShareBindingStatusHandlerRepoStub) ListAPIKeyBindingMemberships(
+	_ context.Context,
+	consumerUserID int64,
+	apiKeyID int64,
+) ([]service.AccountShareMembership, error) {
+	s.consumerID = consumerUserID
+	s.apiKeyID = apiKeyID
+	return append([]service.AccountShareMembership(nil), s.memberships...), nil
+}
+
+type accountShareVisibleListingHandlerRepoStub struct {
+	service.AccountShareModeRepository
+
+	viewerUserID  int64
+	viewerIsAdmin bool
+	listingID     int64
+}
+
+func (s *accountShareVisibleListingHandlerRepoStub) GetVisibleListingByID(
+	_ context.Context,
+	listingID int64,
+	viewerUserID int64,
+	viewerIsAdmin bool,
+) (*service.AccountShareListing, error) {
+	s.viewerUserID = viewerUserID
+	s.viewerIsAdmin = viewerIsAdmin
+	s.listingID = listingID
+	return &service.AccountShareListing{
+		ID:          listingID,
+		OwnerUserID: 700,
+		Status:      service.AccountShareListingStatusPaused,
+	}, nil
 }
 
 func (s *accountShareHistoryHandlerRepoStub) ListMembershipHistory(
@@ -352,6 +416,98 @@ func TestAccountShareModeHandlerListMembershipHistoryScopesConsumerAndPagination
 		envelope.Data.Items[0].SnapshotQuality != service.AccountShareSnapshotQualityUnknown ||
 		envelope.Data.Items[1].SnapshotQuality != service.AccountShareSnapshotQualityUnknown {
 		t.Fatalf("unexpected history response: %#v", envelope)
+	}
+}
+
+func TestAccountShareModeHandlerGetAPIKeyBindingStatusIncludesEnding(t *testing.T) {
+	repo := &accountShareBindingStatusHandlerRepoStub{
+		key: &service.APIKey{ID: 42, UserID: 7},
+		memberships: []service.AccountShareMembership{
+			{ID: 1, APIKeyID: 42, Status: service.AccountShareMembershipStatusActive},
+			{ID: 2, APIKeyID: 42, Status: service.AccountShareMembershipStatusQueued},
+			{
+				ID:                    3,
+				APIKeyID:              42,
+				Status:                service.AccountShareMembershipStatusEnding,
+				SettlementStatus:      "pending",
+				EndingOperationID:     "00000000-0000-4000-8000-000000000003",
+				EndingOperationStatus: "needs_attention",
+			},
+		},
+	}
+	svc := service.NewAccountShareModeService(repo, nil, repo, nil, nil, nil)
+	handler := NewAccountShareModeHandler(svc)
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/account-share/api-key-bindings/42/status",
+		nil,
+	)
+	c.Params = []gin.Param{{Key: "apiKeyID", Value: "42"}}
+	c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 7})
+
+	handler.GetAPIKeyBindingStatus(c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if repo.consumerID != 7 || repo.apiKeyID != 42 {
+		t.Fatalf("unexpected binding status scope: consumer=%d api_key=%d", repo.consumerID, repo.apiKeyID)
+	}
+	var envelope struct {
+		Data service.AccountShareAPIKeyBindingStatus `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if envelope.Data.APIKeyID != 42 ||
+		envelope.Data.ActiveCount != 1 ||
+		envelope.Data.QueuedCount != 1 ||
+		envelope.Data.EndingCount != 1 ||
+		envelope.Data.BlockingCount != 3 ||
+		len(envelope.Data.Memberships) != 3 ||
+		envelope.Data.Memberships[2].EndingOperationStatus != "needs_attention" {
+		t.Fatalf("unexpected binding status response: %#v", envelope.Data)
+	}
+}
+
+func TestAccountShareModeHandlerGetListingPassesViewerRoleToVisibilityQuery(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		role      string
+		wantAdmin bool
+	}{
+		{name: "ordinary user", role: service.RoleUser},
+		{name: "administrator", role: service.RoleAdmin, wantAdmin: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &accountShareVisibleListingHandlerRepoStub{}
+			svc := service.NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
+			handler := NewAccountShareModeHandler(svc)
+			gin.SetMode(gin.TestMode)
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/account-share/listings/7", nil)
+			c.Params = []gin.Param{{Key: "id", Value: "7"}}
+			c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 42})
+			c.Set(string(middleware2.ContextKeyUserRole), tt.role)
+
+			handler.GetListing(c)
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+			}
+			if repo.viewerUserID != 42 || repo.viewerIsAdmin != tt.wantAdmin || repo.listingID != 7 {
+				t.Fatalf(
+					"unexpected visibility query: viewer=%d admin=%t listing=%d",
+					repo.viewerUserID,
+					repo.viewerIsAdmin,
+					repo.listingID,
+				)
+			}
+		})
 	}
 }
 
@@ -1003,6 +1159,12 @@ func TestAccountShareModeHandlerAttachBatchFailureReturnsErrorWithoutPartialData
 func TestAccountShareModeHandlerDetachBatchUsesAtomicRepositoryCall(t *testing.T) {
 	repo := &accountShareRoomBatchHandlerRepoStub{}
 	svc := service.NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
+	svc.SetRuntimeDependencies(
+		service.NewConcurrencyService(accountShareRoomBatchConcurrencyCacheStub{}),
+		nil,
+		nil,
+		nil,
+	)
 	handler := NewAccountShareModeHandler(svc)
 
 	recorder := performAccountShareRoomBatchMutation(
@@ -1059,6 +1221,14 @@ func TestAccountShareModeHandlerRoomBatchMutationsReplayAndRejectKeyReuse(t *tes
 		t.Run(tt.name, func(t *testing.T) {
 			repo := &accountShareRoomBatchHandlerRepoStub{}
 			svc := service.NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
+			if tt.name == "detach" {
+				svc.SetRuntimeDependencies(
+					service.NewConcurrencyService(accountShareRoomBatchConcurrencyCacheStub{}),
+					nil,
+					nil,
+					nil,
+				)
+			}
 			handler := NewAccountShareModeHandler(svc)
 			service.SetDefaultIdempotencyCoordinator(
 				service.NewIdempotencyCoordinator(

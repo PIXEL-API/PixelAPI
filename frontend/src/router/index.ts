@@ -249,13 +249,9 @@ const routes: RouteRecordRaw[] = [
   {
     path: "/redeem",
     name: "Redeem",
-    component: () => import("@/views/user/RedeemView.vue"),
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: false,
-      title: "Redeem Code",
-      titleKey: "redeem.title",
-      descriptionKey: "redeem.description",
+    redirect: {
+      path: "/purchase",
+      query: { tab: "redeem" },
     },
   },
   {
@@ -341,7 +337,6 @@ const routes: RouteRecordRaw[] = [
       title: "Purchase Subscription",
       titleKey: "nav.buySubscription",
       descriptionKey: "purchase.description",
-      requiresPayment: true,
     },
   },
   {
@@ -548,7 +543,10 @@ const routes: RouteRecordRaw[] = [
   {
     path: "/monitor",
     name: "ChannelStatus",
-    component: () => import("@/views/user/ChannelStatusView.vue"),
+    redirect: {
+      path: "/available-channels",
+      hash: "#channel-status",
+    },
     meta: {
       requiresAuth: true,
       requiresAdmin: false,

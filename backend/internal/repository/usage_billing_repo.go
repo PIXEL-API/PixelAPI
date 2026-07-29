@@ -113,6 +113,15 @@ func (r *usageBillingRepository) applyOnce(ctx context.Context, cmd *service.Usa
 			}
 			result.UsageLogID = usageLogID
 		}
+		if cmd.AccountShareModeSettlement != nil || cmd.ShareOwnerUserID != nil {
+			creditedUserIDs, err := findExistingUsageBillingCreditUserIDs(ctx, tx, cmd.RequestID, cmd.APIKeyID)
+			if err != nil {
+				return nil, err
+			}
+			for _, userID := range creditedUserIDs {
+				appendUsageBillingCreditUser(result, userID)
+			}
+		}
 		return result, nil
 	}
 
@@ -145,6 +154,49 @@ func findExistingUsageBillingLogID(ctx context.Context, tx *sql.Tx, requestID st
 		return nil, fmt.Errorf("usage billing replay returned invalid usage log id %d", usageLogID)
 	}
 	return &usageLogID, nil
+}
+
+func findExistingUsageBillingCreditUserIDs(ctx context.Context, tx *sql.Tx, requestID string, apiKeyID int64) ([]int64, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT credited_invites.inviter_user_id
+		FROM (
+			SELECT settlement.inviter_user_id, settlement.invite_credit
+			FROM account_share_mode_settlement_entries settlement
+			JOIN usage_logs usage_log ON usage_log.id = settlement.usage_log_id
+			WHERE usage_log.request_id = $1
+				AND usage_log.api_key_id = $2
+				AND settlement.api_key_id = $2
+				AND settlement.settlement_type = 'usage_request'
+
+			UNION ALL
+
+			SELECT settlement.inviter_user_id, settlement.invite_credit
+			FROM account_share_settlement_entries settlement
+			WHERE settlement.request_id = $1
+				AND settlement.api_key_id = $2
+		) credited_invites
+		WHERE credited_invites.inviter_user_id IS NOT NULL
+			AND credited_invites.invite_credit > 0
+	`, requestID, apiKeyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	userIDs := make([]int64, 0, 2)
+	for rows.Next() {
+		var userID int64
+		if err := rows.Scan(&userID); err != nil {
+			return nil, err
+		}
+		if userID > 0 {
+			userIDs = append(userIDs, userID)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return userIDs, nil
 }
 
 func isUsageBillingDeadlock(err error) bool {

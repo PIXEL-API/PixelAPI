@@ -50,6 +50,7 @@ func TestForwardAlphaSearchOAuthPreservesWire(t *testing.T) {
 	require.Equal(t, "0.144.1", upstream.lastReq.Header.Get("Version"))
 	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))
 	require.JSONEq(t, string(body), string(upstream.lastBody))
+	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.lastReq.Context()))
 }
 
 func TestForwardAlphaSearchAPIKeyMapsModelAndSanitizesUpstreamError(t *testing.T) {
@@ -73,7 +74,8 @@ func TestForwardAlphaSearchAPIKeyMapsModelAndSanitizesUpstreamError(t *testing.T
 
 	result, err := svc.ForwardAlphaSearch(context.Background(), c, account, body)
 
-	require.NoError(t, err)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "non-success status 400")
 	require.Nil(t, result)
 	require.Equal(t, http.StatusBadRequest, recorder.Code)
 	require.Equal(t, "upstream_error", gjson.Get(recorder.Body.String(), "error.type").String())
@@ -88,13 +90,21 @@ func TestForwardAlphaSearchAPIKeyMapsModelAndSanitizesUpstreamError(t *testing.T
 
 func TestForwardAlphaSearchStrict2xxOnly(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	for _, status := range []int{http.StatusContinue, http.StatusMultipleChoices, http.StatusMovedPermanently, http.StatusBadRequest} {
-		t.Run(http.StatusText(status), func(t *testing.T) {
+	for _, tt := range []struct {
+		status         int
+		downstreamCode int
+	}{
+		{status: http.StatusContinue, downstreamCode: http.StatusBadGateway},
+		{status: http.StatusMultipleChoices, downstreamCode: http.StatusBadGateway},
+		{status: http.StatusMovedPermanently, downstreamCode: http.StatusBadGateway},
+		{status: http.StatusBadRequest, downstreamCode: http.StatusBadRequest},
+	} {
+		t.Run(http.StatusText(tt.status), func(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(recorder)
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/alpha/search", strings.NewReader(`{"model":"gpt-5.6-sol"}`))
 			upstream := &httpUpstreamRecorder{resp: &http.Response{
-				StatusCode: status,
+				StatusCode: tt.status,
 				Header:     http.Header{"Content-Type": []string{"application/json"}},
 				Body:       io.NopCloser(strings.NewReader(`{"status":"not-success"}`)),
 			}}
@@ -103,9 +113,12 @@ func TestForwardAlphaSearchStrict2xxOnly(t *testing.T) {
 
 			result, err := svc.ForwardAlphaSearch(context.Background(), c, account, []byte(`{"model":"gpt-5.6-sol"}`))
 
-			require.NoError(t, err)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "non-success status")
 			require.Nil(t, result)
+			require.Equal(t, tt.downstreamCode, recorder.Code)
 			require.NotContains(t, recorder.Body.String(), "not-success")
+			require.True(t, HTTPUpstreamRedirectsDisabled(upstream.lastReq.Context()))
 		})
 	}
 }

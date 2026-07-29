@@ -577,7 +577,7 @@ func TestOpenAISelectAccountWithLoadAwareness_AccountShareModeUsesMembershipAcco
 	}
 	shareRepo := &accountShareModeRepoStub{
 		membership: &AccountShareMembership{ID: 1, AccountID: boundAccount.ID, ConsumerUserID: 5580, APIKeyID: 20103},
-		listing:    &AccountShareListing{ID: 1, OwnerUserID: 1, Status: AccountShareListingStatusActive, PerUserConcurrency: 1},
+		listing:    &AccountShareListing{ID: 1, OwnerUserID: 1, Status: AccountShareListingStatusActive, AllowedModels: []string{"gpt-4"}, PerUserConcurrency: 1},
 	}
 	concurrencyService, accountShareService := newAccountShareRuntimeLeaseTestServices(shareRepo)
 	svc := &OpenAIGatewayService{
@@ -606,6 +606,60 @@ func TestOpenAISelectAccountWithLoadAwareness_AccountShareModeUsesMembershipAcco
 	}
 }
 
+func TestOpenAILegacySelectorAccountShareModeUsesOnlyBoundAccount(t *testing.T) {
+	modeGroupID := int64(61712)
+	consumerUserID := int64(5581)
+	apiKeyID := int64(20104)
+	boundAccount := Account{
+		ID:          416110,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 20,
+	}
+	unboundAccount := Account{
+		ID:          416111,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 20,
+	}
+	shareRepo := &accountShareModeRepoStub{
+		membership: &AccountShareMembership{ID: 1, AccountID: boundAccount.ID, ConsumerUserID: consumerUserID, APIKeyID: apiKeyID},
+		listing:    &AccountShareListing{ID: 1, AccountID: boundAccount.ID, OwnerUserID: 1, Status: AccountShareListingStatusActive},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:             stubOpenAIAccountRepo{accounts: []Account{unboundAccount, boundAccount}},
+		accountShareModeService: &AccountShareModeService{repo: shareRepo},
+	}
+	ctx := WithAccountShareModeRequest(context.Background(), consumerUserID, apiKeyID)
+
+	account, err := svc.SelectAccountForModelWithExclusions(ctx, &modeGroupID, "", "", nil)
+
+	require.NoError(t, err)
+	require.NotNil(t, account)
+	require.Equal(t, boundAccount.ID, account.ID)
+	require.Equal(t, 1, shareRepo.bindingCalls)
+}
+
+func TestOpenAILegacySelectorAccountShareModeWithoutRequestContextFailsClosed(t *testing.T) {
+	modeGroupID := int64(61713)
+	modeGroup := true
+	shareRepo := &accountShareModeRepoStub{modeGroup: &modeGroup}
+	svc := &OpenAIGatewayService{
+		accountRepo:             stubOpenAIAccountRepo{accounts: []Account{{ID: 416112, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: true}}},
+		accountShareModeService: &AccountShareModeService{repo: shareRepo},
+	}
+
+	account, err := svc.SelectAccountForModelWithExclusions(context.Background(), &modeGroupID, "", "", nil)
+
+	require.Nil(t, account)
+	require.ErrorIs(t, err, ErrAccountShareModeGroupUnbound)
+	require.Equal(t, 0, shareRepo.bindingCalls)
+}
+
 func TestGatewayServiceAccountShareModeUnsupportedModelDoesNotDeferMembership(t *testing.T) {
 	modeGroupID := int64(61711)
 	consumerUserID := int64(5580)
@@ -619,13 +673,14 @@ func TestGatewayServiceAccountShareModeUnsupportedModelDoesNotDeferMembership(t 
 		Concurrency: 20,
 		Credentials: map[string]any{
 			"model_mapping": map[string]any{
-				"claude-sonnet-4-6": "claude-sonnet-4-6",
+				"claude-sonnet-4-6":         "claude-sonnet-4-6",
+				"claude-3-5-haiku-20241022": "claude-3-5-haiku-20241022",
 			},
 		},
 	}
 	shareRepo := &accountShareModeRepoStub{
 		membership: &AccountShareMembership{ID: 1, AccountID: boundAccount.ID, ConsumerUserID: consumerUserID, APIKeyID: apiKeyID},
-		listing:    &AccountShareListing{ID: 1, OwnerUserID: 1, Status: AccountShareListingStatusActive},
+		listing:    &AccountShareListing{ID: 1, OwnerUserID: 1, Status: AccountShareListingStatusActive, AllowedModels: []string{"claude-sonnet-4-6"}},
 	}
 	svc := &GatewayService{
 		accountRepo:             stubOpenAIAccountRepo{accounts: []Account{boundAccount}},
@@ -640,6 +695,41 @@ func TestGatewayServiceAccountShareModeUnsupportedModelDoesNotDeferMembership(t 
 	require.ErrorIs(t, err, ErrAccountShareModeUnsupportedModel)
 	require.Equal(t, 0, shareRepo.dispatchFailureCalls)
 	require.NotNil(t, shareRepo.membership)
+}
+
+func TestGatewayServiceAccountShareModeLookupRejectsModelOutsideListing(t *testing.T) {
+	modeGroupID := int64(61712)
+	consumerUserID := int64(5581)
+	apiKeyID := int64(20104)
+	boundAccount := Account{
+		ID:          416104,
+		Platform:    PlatformAnthropic,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 20,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"claude-sonnet-4-6": "claude-sonnet-4-6",
+				"claude-opus-4-6":   "claude-opus-4-6",
+			},
+		},
+	}
+	shareRepo := &accountShareModeRepoStub{
+		membership: &AccountShareMembership{ID: 1, AccountID: boundAccount.ID, ConsumerUserID: consumerUserID, APIKeyID: apiKeyID},
+		listing:    &AccountShareListing{ID: 1, OwnerUserID: 1, Status: AccountShareListingStatusActive, AllowedModels: []string{"claude-sonnet-4-6"}},
+	}
+	svc := &GatewayService{
+		accountRepo:             stubOpenAIAccountRepo{accounts: []Account{boundAccount}},
+		accountShareModeService: &AccountShareModeService{repo: shareRepo},
+	}
+	ctx := WithAccountShareModeRequest(context.Background(), consumerUserID, apiKeyID)
+
+	account, handled, err := svc.resolveAccountShareModeBoundAccountForLookup(ctx, &modeGroupID, "claude-opus-4-6", nil)
+
+	require.True(t, handled)
+	require.Nil(t, account)
+	require.ErrorIs(t, err, ErrAccountShareModeUnsupportedModel)
 }
 
 func TestGatewayServiceAccountShareModeUsesPrivateOwnerAccount(t *testing.T) {
@@ -665,7 +755,7 @@ func TestGatewayServiceAccountShareModeUsesPrivateOwnerAccount(t *testing.T) {
 	}
 	shareRepo := &accountShareModeRepoStub{
 		membership: &AccountShareMembership{ID: 1, AccountID: boundAccount.ID, ConsumerUserID: consumerUserID, APIKeyID: apiKeyID},
-		listing:    &AccountShareListing{ID: 1, AccountID: boundAccount.ID, OwnerUserID: ownerUserID, Status: AccountShareListingStatusActive, PerUserConcurrency: 1},
+		listing:    &AccountShareListing{ID: 1, AccountID: boundAccount.ID, OwnerUserID: ownerUserID, Status: AccountShareListingStatusActive, AllowedModels: []string{"claude-sonnet-4-6"}, PerUserConcurrency: 1},
 	}
 	concurrencyService, accountShareService := newAccountShareRuntimeLeaseTestServices(shareRepo)
 	svc := &GatewayService{
@@ -702,13 +792,14 @@ func TestOpenAISelectAccountWithLoadAwareness_AccountShareModeUnsupportedModelDo
 		Concurrency: 20,
 		Credentials: map[string]any{
 			"model_mapping": map[string]any{
-				"gpt-4o": "gpt-4o",
+				"gpt-4o":          "gpt-4o",
+				"gpt-unsupported": "gpt-unsupported",
 			},
 		},
 	}
 	shareRepo := &accountShareModeRepoStub{
 		membership: &AccountShareMembership{ID: 1, AccountID: boundAccount.ID, ConsumerUserID: consumerUserID, APIKeyID: apiKeyID},
-		listing:    &AccountShareListing{ID: 1, OwnerUserID: 1, Status: AccountShareListingStatusActive},
+		listing:    &AccountShareListing{ID: 1, OwnerUserID: 1, Status: AccountShareListingStatusActive, AllowedModels: []string{"gpt-4o"}},
 	}
 	svc := &OpenAIGatewayService{
 		accountRepo:             stubOpenAIAccountRepo{accounts: []Account{boundAccount}},
@@ -737,13 +828,14 @@ func TestOpenAISelectAccountWithScheduler_AccountShareModeUnsupportedModelDoesNo
 		Concurrency: 20,
 		Credentials: map[string]any{
 			"model_mapping": map[string]any{
-				"gpt-4o": "gpt-4o",
+				"gpt-4o":          "gpt-4o",
+				"gpt-unsupported": "gpt-unsupported",
 			},
 		},
 	}
 	shareRepo := &accountShareModeRepoStub{
 		membership: &AccountShareMembership{ID: 1, AccountID: boundAccount.ID, ConsumerUserID: consumerUserID, APIKeyID: apiKeyID},
-		listing:    &AccountShareListing{ID: 1, OwnerUserID: 1, Status: AccountShareListingStatusActive},
+		listing:    &AccountShareListing{ID: 1, OwnerUserID: 1, Status: AccountShareListingStatusActive, AllowedModels: []string{"gpt-4o"}},
 	}
 	svc := &OpenAIGatewayService{
 		accountRepo:             stubOpenAIAccountRepo{accounts: []Account{boundAccount}},
@@ -758,6 +850,41 @@ func TestOpenAISelectAccountWithScheduler_AccountShareModeUnsupportedModelDoesNo
 	require.ErrorIs(t, err, ErrAccountShareModeUnsupportedModel)
 	require.Equal(t, 0, shareRepo.dispatchFailureCalls)
 	require.NotNil(t, shareRepo.membership)
+}
+
+func TestOpenAIAccountShareModeLegacyLookupRejectsModelOutsideListing(t *testing.T) {
+	modeGroupID := int64(61713)
+	consumerUserID := int64(5582)
+	apiKeyID := int64(20105)
+	boundAccount := Account{
+		ID:          416105,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 20,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"gpt-5.4": "gpt-5.4",
+				"gpt-5.6": "gpt-5.6",
+			},
+		},
+	}
+	shareRepo := &accountShareModeRepoStub{
+		membership: &AccountShareMembership{ID: 1, AccountID: boundAccount.ID, ConsumerUserID: consumerUserID, APIKeyID: apiKeyID},
+		listing:    &AccountShareListing{ID: 1, OwnerUserID: 1, Status: AccountShareListingStatusActive, AllowedModels: []string{"gpt-5.4"}},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:             stubOpenAIAccountRepo{accounts: []Account{boundAccount}},
+		accountShareModeService: &AccountShareModeService{repo: shareRepo},
+	}
+	ctx := WithAccountShareModeRequest(context.Background(), consumerUserID, apiKeyID)
+
+	account, handled, err := svc.resolveAccountShareModeBoundAccount(ctx, &modeGroupID, "gpt-5.6", nil, false)
+
+	require.True(t, handled)
+	require.Nil(t, account)
+	require.ErrorIs(t, err, ErrAccountShareModeUnsupportedModel)
 }
 
 func TestOpenAIGatewayServiceRevalidateSelectedAccountForDispatchUsesLatestPublicState(t *testing.T) {
@@ -2330,6 +2457,116 @@ func TestOpenAINonStreamingContentTypeDefault(t *testing.T) {
 	if !strings.Contains(rec.Header().Get("Content-Type"), "application/json") {
 		t.Fatalf("expected default Content-Type, got %q", rec.Header().Get("Content-Type"))
 	}
+}
+
+func TestOpenAINonStreamingBillingGateUsesRawUsagePresence(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name         string
+		usage        string
+		wantComplete bool
+		wantError    bool
+	}{
+		{name: "missing output", usage: `"input_tokens":7`, wantError: true},
+		{name: "missing input", usage: `"output_tokens":3`, wantError: true},
+		{name: "explicit zero usage", usage: `"input_tokens":0,"output_tokens":0`, wantComplete: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gateCalls := 0
+			ctx := WithOpenAIForwardResultBillingGate(context.Background(), NewOpenAIForwardResultBillingGate(func(result *OpenAIForwardResult) error {
+				gateCalls++
+				require.Equal(t, tt.wantComplete, result.BillingUsageComplete)
+				return nil
+			}))
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+			body := []byte(`{"id":"resp_usage_presence","output":[],"usage":{` + tt.usage + `}}`)
+			resp := &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(body)),
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+			}
+
+			result, err := (&OpenAIGatewayService{}).handleNonStreamingResponse(ctx, resp, c, &Account{Type: AccountTypeAPIKey}, "model", "model")
+
+			require.NotNil(t, result)
+			if tt.wantError {
+				require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
+				require.False(t, result.usage == nil)
+				require.Zero(t, gateCalls)
+				require.Empty(t, rec.Body.String())
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, 1, gateCalls)
+			require.JSONEq(t, string(body), rec.Body.String())
+		})
+	}
+}
+
+func TestOpenAIStreamingBillingGateUsesRawUsagePresence(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name      string
+		usage     string
+		wantError bool
+	}{
+		{name: "missing output", usage: `"input_tokens":7`, wantError: true},
+		{name: "missing input", usage: `"output_tokens":3`, wantError: true},
+		{name: "explicit zero usage", usage: `"input_tokens":0,"output_tokens":0`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gateCalls := 0
+			ctx := WithOpenAIForwardResultBillingGate(context.Background(), NewOpenAIForwardResultBillingGate(func(result *OpenAIForwardResult) error {
+				gateCalls++
+				require.True(t, result.BillingUsageComplete)
+				return nil
+			}))
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+			terminal := `{"type":"response.completed","response":{"id":"resp_stream_usage_presence","output":[],"usage":{` + tt.usage + `}}}`
+			resp := &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("data: " + terminal + "\n\n")),
+				Header:     http.Header{},
+			}
+
+			result, err := (&OpenAIGatewayService{cfg: &config.Config{
+				Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize},
+			}}).handleStreamingResponse(ctx, resp, c, &Account{ID: 1, Platform: PlatformOpenAI}, time.Now(), "model", "model")
+
+			require.NotNil(t, result)
+			if tt.wantError {
+				require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
+				require.Zero(t, gateCalls)
+				require.NotContains(t, rec.Body.String(), `response.completed`)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, 1, gateCalls)
+			require.Contains(t, rec.Body.String(), `response.completed`)
+		})
+	}
+}
+
+func TestOpenAIResponsesBillingUsagePresenceKeepsUsageObjectsSeparateAndAccumulatesEvents(t *testing.T) {
+	require.False(t, openAIResponsesBillingUsageComplete([]byte(
+		`{"usage":{"input_tokens":1},"response":{"usage":{"output_tokens":2}}}`,
+	)))
+
+	sseBody := strings.Join([]string{
+		`data: {"type":"response.in_progress","response":{"usage":{"input_tokens":0}}}`,
+		``,
+		`data: {"type":"response.completed","response":{"usage":{"output_tokens":0}}}`,
+		``,
+	}, "\n")
+	require.True(t, openAIResponsesBillingUsageComplete([]byte(sseBody)))
 }
 
 func TestOpenAIStreamingHeadersOverride(t *testing.T) {

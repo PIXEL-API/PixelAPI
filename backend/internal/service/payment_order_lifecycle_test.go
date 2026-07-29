@@ -105,6 +105,10 @@ func (r *paymentOrderLifecycleRedeemRepo) Delete(context.Context, int64) error {
 	panic("unexpected call")
 }
 
+func (r *paymentOrderLifecycleRedeemRepo) DeleteBatch(context.Context, []int64) (int64, error) {
+	panic("unexpected call")
+}
+
 func (r *paymentOrderLifecycleRedeemRepo) Use(_ context.Context, id, userID int64) error {
 	for code, redeemCode := range r.codesByCode {
 		if redeemCode.ID != id {
@@ -128,7 +132,11 @@ func (r *paymentOrderLifecycleRedeemRepo) List(context.Context, pagination.Pagin
 	panic("unexpected call")
 }
 
-func (r *paymentOrderLifecycleRedeemRepo) ListWithFilters(context.Context, pagination.PaginationParams, string, string, string) ([]RedeemCode, *pagination.PaginationResult, error) {
+func (r *paymentOrderLifecycleRedeemRepo) ListWithFilters(context.Context, pagination.PaginationParams, string, string, string, string) ([]RedeemCode, *pagination.PaginationResult, error) {
+	panic("unexpected call")
+}
+
+func (r *paymentOrderLifecycleRedeemRepo) ListCategories(context.Context) ([]string, error) {
 	panic("unexpected call")
 }
 

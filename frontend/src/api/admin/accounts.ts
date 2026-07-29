@@ -734,6 +734,7 @@ export interface AccountBatchTask {
   failed: number
   created_by: number
   owner_user_id?: number
+  parameters?: Record<string, unknown>
   error_message?: string
   items?: AccountBatchTaskItem[]
 }
@@ -767,6 +768,17 @@ export async function batchRefresh(accountIds: number[]): Promise<BatchOperation
 export async function createBatchRefreshTask(accountIds: number[]): Promise<AccountBatchTask> {
   const { data } = await apiClient.post<AccountBatchTask>('/admin/accounts/batch-refresh/async', {
     account_ids: accountIds
+  })
+  return data
+}
+
+export async function createBatchTestConnectionTask(
+  accountIds: number[],
+  modelId: string
+): Promise<AccountBatchTask> {
+  const { data } = await apiClient.post<AccountBatchTask>('/admin/accounts/batch-test/async', {
+    account_ids: accountIds,
+    model_id: modelId
   })
   return data
 }
@@ -836,6 +848,7 @@ export const accountsAPI = {
   batchClearError,
   batchRefresh,
   createBatchRefreshTask,
+  createBatchTestConnectionTask,
   getBatchTask,
   setPrivacy,
   queryOpenAIQuota,

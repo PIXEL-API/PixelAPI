@@ -75,7 +75,7 @@ type UsageLogRepository interface {
 
 	// Aggregated stats (optimized)
 	GetUserStatsAggregated(ctx context.Context, userID int64, startTime, endTime time.Time) (*usagestats.UsageStats, error)
-	GetAccountShareRecommendationUsageProfile(ctx context.Context, userID int64, model string, startTime, endTime time.Time) (*AccountShareRecommendationUsageProfileStats, error)
+	GetAccountShareRecommendationUsageProfile(ctx context.Context, userID int64, platform, model string, startTime, endTime time.Time) (*AccountShareRecommendationUsageProfileStats, error)
 	GetAPIKeyStatsAggregated(ctx context.Context, apiKeyID int64, startTime, endTime time.Time) (*usagestats.UsageStats, error)
 	GetAccountStatsAggregated(ctx context.Context, accountID int64, startTime, endTime time.Time) (*usagestats.UsageStats, error)
 	GetModelStatsAggregated(ctx context.Context, modelName string, startTime, endTime time.Time) (*usagestats.UsageStats, error)
@@ -1008,6 +1008,9 @@ func (s *AccountUsageService) persistOpenAICodexProbeSnapshot(accountID int64, u
 func extractOpenAICodexProbeUpdates(resp *http.Response) (map[string]any, error) {
 	if resp == nil {
 		return nil, nil
+	}
+	if !isOpenAIUpstreamSuccessStatus(resp.StatusCode) && !isOpenAIUpstreamErrorStatus(resp.StatusCode) {
+		return nil, fmt.Errorf("openai codex probe returned unexpected status %d", resp.StatusCode)
 	}
 	if snapshot := ParseCodexRateLimitHeaders(resp.Header); snapshot != nil {
 		return buildCodexUsageExtraUpdates(snapshot, time.Now()), nil

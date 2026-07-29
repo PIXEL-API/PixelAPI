@@ -588,7 +588,13 @@ func (h *AccountShareModeHandler) GetListing(c *gin.Context) {
 		response.BadRequest(c, "Invalid listing ID")
 		return
 	}
-	listing, err := h.service.GetListing(c.Request.Context(), subject.UserID, listingID)
+	role, _ := middleware2.GetUserRoleFromContext(c)
+	listing, err := h.service.GetVisibleListing(
+		c.Request.Context(),
+		subject.UserID,
+		role == service.RoleAdmin,
+		listingID,
+	)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -956,6 +962,25 @@ func (h *AccountShareModeHandler) ListMembershipQueue(c *gin.Context) {
 		return
 	}
 	response.Success(c, memberships)
+}
+
+func (h *AccountShareModeHandler) GetAPIKeyBindingStatus(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	apiKeyID, err := parseInt64Param(c, "apiKeyID")
+	if err != nil {
+		response.BadRequest(c, "Invalid API key ID")
+		return
+	}
+	status, err := h.service.GetAPIKeyBindingStatus(c.Request.Context(), subject.UserID, apiKeyID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, status)
 }
 
 func (h *AccountShareModeHandler) ReorderMembershipQueue(c *gin.Context) {

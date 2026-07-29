@@ -141,6 +141,63 @@ func TestUsageBillingRepositoryReplayReturnsExistingUsageLogID(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestUsageBillingRepositoryReplayRestoresInviteCreditCacheTargets(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageBillingRepository{db: db}
+	ownerUserID := int64(41)
+	cmd := newUsageBillingRetryTestCommand()
+	cmd.ShareOwnerUserID = &ownerUserID
+	cmd.Normalize()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`INSERT INTO usage_billing_dedup`).
+		WithArgs(cmd.RequestID, cmd.APIKeyID, cmd.RequestFingerprint).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	mock.ExpectQuery(`SELECT request_fingerprint\s+FROM usage_billing_dedup`).
+		WithArgs(cmd.RequestID, cmd.APIKeyID).
+		WillReturnRows(sqlmock.NewRows([]string{"request_fingerprint"}).AddRow(cmd.RequestFingerprint))
+	mock.ExpectQuery(`(?s)SELECT credited_invites\.inviter_user_id\s+FROM.*account_share_mode_settlement_entries.*UNION ALL.*account_share_settlement_entries`).
+		WithArgs(cmd.RequestID, cmd.APIKeyID).
+		WillReturnRows(sqlmock.NewRows([]string{"inviter_user_id"}).
+			AddRow(int64(52)).
+			AddRow(int64(63)).
+			AddRow(int64(52)))
+	mock.ExpectRollback()
+
+	result, err := repo.Apply(context.Background(), cmd)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.Applied)
+	require.Equal(t, []int64{52, 63}, result.BalanceCreditUserIDs)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUsageBillingRepositoryReplayFailsWhenCreditTargetsCannotBeRestored(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageBillingRepository{db: db}
+	cmd := newUsageBillingRetryTestCommand()
+	cmd.AccountShareModeSettlement = &service.AccountShareModeBillingSnapshot{MembershipID: 23}
+	cmd.Normalize()
+	queryErr := errors.New("settlement lookup failed")
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`INSERT INTO usage_billing_dedup`).
+		WithArgs(cmd.RequestID, cmd.APIKeyID, cmd.RequestFingerprint).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	mock.ExpectQuery(`SELECT request_fingerprint\s+FROM usage_billing_dedup`).
+		WithArgs(cmd.RequestID, cmd.APIKeyID).
+		WillReturnRows(sqlmock.NewRows([]string{"request_fingerprint"}).AddRow(cmd.RequestFingerprint))
+	mock.ExpectQuery(`(?s)SELECT credited_invites\.inviter_user_id\s+FROM.*account_share_mode_settlement_entries.*UNION ALL.*account_share_settlement_entries`).
+		WithArgs(cmd.RequestID, cmd.APIKeyID).
+		WillReturnError(queryErr)
+	mock.ExpectRollback()
+
+	result, err := repo.Apply(context.Background(), cmd)
+	require.Nil(t, result)
+	require.ErrorIs(t, err, queryErr)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestIsUsageBillingDeadlock(t *testing.T) {
 	var typedNil *pq.Error
 	tests := []struct {

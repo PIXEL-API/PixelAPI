@@ -194,3 +194,59 @@ func TestOpenAIWSPassthroughTurnLifecyclePropagatesTurnContextLossOnce(t *testin
 	require.Equal(t, 1, afterCalls)
 	require.ErrorIs(t, afterErr, ErrAccountShareRuntimeLeaseLost)
 }
+
+func TestOpenAIWSPassthroughTurnLifecycleEnforcesCompleteUsageBeforeTerminal(t *testing.T) {
+	tests := []struct {
+		name          string
+		result        *OpenAIForwardResult
+		wantError     bool
+		wantGateCalls int
+	}{
+		{
+			name:      "partial usage is rejected",
+			result:    &OpenAIForwardResult{RequestID: "resp_partial", Usage: OpenAIUsage{InputTokens: 1}},
+			wantError: true,
+		},
+		{
+			name: "explicit zero usage is accepted",
+			result: &OpenAIForwardResult{
+				RequestID:            "resp_zero",
+				BillingUsageComplete: true,
+			},
+			wantGateCalls: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gateCalls := 0
+			turnCtx := WithOpenAIForwardResultBillingGate(context.Background(), NewOpenAIForwardResultBillingGate(func(*OpenAIForwardResult) error {
+				gateCalls++
+				return nil
+			}))
+			lifecycle := newOpenAIWSPassthroughTurnLifecycleWithContext(
+				context.Background(),
+				&OpenAIWSIngressHooks{
+					BeforeTurnPayload: func(_ int, _ []byte) (context.Context, error) {
+						return turnCtx, nil
+					},
+					AfterTurnPayload: func(_ int, _ []byte, _ *OpenAIForwardResult, turnErr error) error {
+						return turnErr
+					},
+				},
+				nil,
+			)
+			_, err := lifecycle.begin([]byte(`{"type":"response.create","model":"gpt-5.1"}`))
+			require.NoError(t, err)
+
+			_, finished, finishErr := lifecycle.finishWithError(tt.result, nil)
+
+			require.True(t, finished)
+			if tt.wantError {
+				require.ErrorIs(t, finishErr, ErrAccountShareBillingPreTerminalCommit)
+			} else {
+				require.NoError(t, finishErr)
+			}
+			require.Equal(t, tt.wantGateCalls, gateCalls)
+		})
+	}
+}

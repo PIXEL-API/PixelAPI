@@ -494,7 +494,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					}
 					result.ReasoningEffort = service.DefaultEffortForThinkingEnabled(protocolModel)
 				}
-				h.submitUsageRecordTask(func(ctx context.Context) {
+				h.submitUsageRecordTask(requestCtx, func(ctx context.Context) {
 					usageCtx := service.WithAccountShareModeRequestFromContext(ctx, requestCtx)
 					if err := h.gatewayService.RecordUsage(usageCtx, &service.RecordUsageInput{
 						Result:             result,
@@ -957,9 +957,48 @@ routeLoop:
 				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable; no upstream request was sent", streamStarted)
 				return
 			}
+			userAgent := c.GetHeader("User-Agent")
+			clientIP := ip.GetClientIP(c)
+			inboundEndpoint := GetInboundEndpoint(c)
+			upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
+			recordUsage := func(ctx context.Context, result *service.ForwardResult) error {
+				if result == nil {
+					return nil
+				}
+				if result.ReasoningEffort == nil {
+					result.ReasoningEffort = service.NormalizeClaudeOutputEffort(parsedReq.OutputEffort)
+				}
+				if result.ReasoningEffort == nil && parsedReq.ThinkingEnabled {
+					protocolModel := result.UpstreamModel
+					if protocolModel == "" {
+						protocolModel = result.Model
+					}
+					result.ReasoningEffort = service.DefaultEffortForThinkingEnabled(protocolModel)
+				}
+				return h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
+					Result:             result,
+					ParsedRequest:      parsedReq,
+					APIKey:             currentAPIKey,
+					User:               currentAPIKey.User,
+					Account:            account,
+					Subscription:       currentSubscription,
+					InboundEndpoint:    inboundEndpoint,
+					UpstreamEndpoint:   upstreamEndpoint,
+					UserAgent:          userAgent,
+					IPAddress:          clientIP,
+					RequestPayloadHash: requestPayloadHash,
+					ForceCacheBilling:  fs.ForceCacheBilling,
+					APIKeyService:      h.apiKeyService,
+					ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
+				})
+			}
+			directGatewayForward := account.Platform != service.PlatformAntigravity || account.Type == service.AccountTypeAPIKey
+			if directGatewayForward {
+				requestCtx = withForwardResultBillingGate(requestCtx, recordUsage)
+			}
 			// 记录 Forward 前已写入字节数，Forward 后若增加则说明 SSE 内容已发，禁止 failover
 			writerSizeBeforeForward := c.Writer.Size()
-			if account.Platform == service.PlatformAntigravity && account.Type != service.AccountTypeAPIKey {
+			if !directGatewayForward {
 				result, err = h.antigravityGatewayService.Forward(requestCtx, c, account, routeBody, currentHasBoundSession)
 			} else {
 				result, err = h.gatewayService.Forward(requestCtx, c, account, parsedReq)
@@ -997,41 +1036,23 @@ routeLoop:
 				if result == nil {
 					return
 				}
-				userAgent := c.GetHeader("User-Agent")
-				clientIP := ip.GetClientIP(c)
-				inboundEndpoint := GetInboundEndpoint(c)
-				upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
-
-				if result.ReasoningEffort == nil {
-					result.ReasoningEffort = service.NormalizeClaudeOutputEffort(parsedReq.OutputEffort)
-				}
-				if result.ReasoningEffort == nil && parsedReq.ThinkingEnabled {
-					protocolModel := result.UpstreamModel
-					if protocolModel == "" {
-						protocolModel = result.Model
+				if handled, billingErr := service.CommitForwardResultBillingGate(requestCtx, result); handled {
+					if billingErr != nil {
+						logger.L().With(
+							zap.String("component", "handler.gateway.messages"),
+							zap.Int64("user_id", subject.UserID),
+							zap.Int64("api_key_id", currentAPIKey.ID),
+							zap.Any("group_id", currentAPIKey.GroupID),
+							zap.String("model", reqModel),
+							zap.Int64("account_id", account.ID),
+						).Error("gateway.record_usage_failed", zap.Error(billingErr))
 					}
-					result.ReasoningEffort = service.DefaultEffortForThinkingEnabled(protocolModel)
+					return
 				}
-
 				// 使用量记录通过有界 worker 池提交；提交被拒绝时 submitUsageRecordTask 会同步兜底。
-				h.submitUsageRecordTask(func(ctx context.Context) {
+				h.submitUsageRecordTask(requestCtx, func(ctx context.Context) {
 					usageCtx := service.WithAccountShareModeRequestFromContext(ctx, requestCtx)
-					if err := h.gatewayService.RecordUsage(usageCtx, &service.RecordUsageInput{
-						Result:             result,
-						ParsedRequest:      parsedReq,
-						APIKey:             currentAPIKey,
-						User:               currentAPIKey.User,
-						Account:            account,
-						Subscription:       currentSubscription,
-						InboundEndpoint:    inboundEndpoint,
-						UpstreamEndpoint:   upstreamEndpoint,
-						UserAgent:          userAgent,
-						IPAddress:          clientIP,
-						RequestPayloadHash: requestPayloadHash,
-						ForceCacheBilling:  fs.ForceCacheBilling,
-						APIKeyService:      h.apiKeyService,
-						ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
-					}); err != nil {
+					if err := recordUsage(usageCtx, result); err != nil {
 						logger.L().With(
 							zap.String("component", "handler.gateway.messages"),
 							zap.Int64("user_id", subject.UserID),
@@ -2092,7 +2113,8 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 	sessionHash := h.gatewayService.GenerateSessionHash(parsedReq)
 
 	// 选择支持该模型的账号
-	account, err := h.gatewayService.SelectAccountForModel(c.Request.Context(), apiKey.GroupID, sessionHash, parsedReq.Model)
+	selectionCtx := openAIAccountShareModeRequestContext(c, apiKey)
+	account, err := h.gatewayService.SelectAccountForModel(selectionCtx, apiKey.GroupID, sessionHash, parsedReq.Model)
 	if err != nil {
 		reqLog.Warn("gateway.count_tokens_select_account_failed", zap.Error(err))
 		cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, parsedReq.Model, parsedReq.Model, service.PlatformAnthropic)
@@ -2102,7 +2124,7 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 	setOpsSelectedAccount(c, account.ID, account.Platform)
 
 	// 转发请求（不记录使用量）
-	if err := h.gatewayService.ForwardCountTokens(c.Request.Context(), c, account, parsedReq); err != nil {
+	if err := h.gatewayService.ForwardCountTokens(selectionCtx, c, account, parsedReq); err != nil {
 		reqLog.Error("gateway.count_tokens_forward_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 		// 错误响应已在 ForwardCountTokens 中处理
 		return
@@ -2400,8 +2422,12 @@ func (h *GatewayHandler) maybeLogCompatibilityFallbackMetrics(reqLog *zap.Logger
 	)
 }
 
-func (h *GatewayHandler) submitUsageRecordTask(task service.UsageRecordTask) {
+func (h *GatewayHandler) submitUsageRecordTask(requestCtx context.Context, task service.UsageRecordTask) {
 	if task == nil {
+		return
+	}
+	if _, durable := service.AccountShareBillingDispatchFromContext(requestCtx); durable {
+		runUsageRecordTaskSync(requestCtx, task, "handler.gateway.messages", "gateway.usage_record_task_panic_recovered")
 		return
 	}
 	if h.usageRecordWorkerPool != nil {
@@ -2413,16 +2439,17 @@ func (h *GatewayHandler) submitUsageRecordTask(task service.UsageRecordTask) {
 			zap.String("component", "handler.gateway.messages"),
 		).Warn("gateway.usage_record_task_dropped_sync_fallback")
 	}
-	runUsageRecordTaskSync(task, "handler.gateway.messages", "gateway.usage_record_task_panic_recovered")
+	runUsageRecordTaskSync(requestCtx, task, "handler.gateway.messages", "gateway.usage_record_task_panic_recovered")
 }
 
-func runUsageRecordTaskSync(task service.UsageRecordTask, component, panicEvent string) {
+func runUsageRecordTaskSync(requestCtx context.Context, task service.UsageRecordTask, component, panicEvent string) {
 	if task == nil {
 		return
 	}
 	// 回退路径：worker 池未注入或提交被拒绝时同步执行，避免计费记录被静默丢弃。
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	ctx = service.WithAccountShareBillingDispatchFromContext(ctx, requestCtx)
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			logger.L().With(

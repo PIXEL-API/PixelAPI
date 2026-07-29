@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -52,5 +53,17 @@ func TestConversationRepositoryRejectsInvalidScopedInputsBeforeDB(t *testing.T) 
 	require.ErrorIs(t, err, service.ErrConversationInputRequired)
 
 	_, err = repo.CountUnreadForUser(context.Background(), 0)
+	require.ErrorIs(t, err, service.ErrConversationInputRequired)
+
+	timeoutRepo, ok := repo.(service.ConversationAdminReplyTimeoutRepository)
+	require.True(t, ok)
+
+	_, err = timeoutRepo.SendAdminReplyTimeoutNotices(context.Background(), time.Time{}, 100, service.AdminReplyTimeoutNoticeText)
+	require.ErrorIs(t, err, service.ErrConversationInputRequired)
+
+	_, err = timeoutRepo.SendAdminReplyTimeoutNotices(context.Background(), time.Now(), 0, service.AdminReplyTimeoutNoticeText)
+	require.ErrorIs(t, err, service.ErrConversationInputRequired)
+
+	_, err = timeoutRepo.SendAdminReplyTimeoutNotices(context.Background(), time.Now(), 100, " ")
 	require.ErrorIs(t, err, service.ErrConversationInputRequired)
 }

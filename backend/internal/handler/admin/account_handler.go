@@ -134,6 +134,7 @@ func (h *AccountHandler) registerAccountBatchExecutors() {
 		return
 	}
 	h.accountBatchTaskService.RegisterExecutor(service.AccountBatchTaskOperationAdminRefreshCredentials, h.executeAdminRefreshCredentialsTaskItem)
+	h.accountBatchTaskService.RegisterExecutor(service.AccountBatchTaskOperationAdminTestConnection, h.executeAdminTestConnectionTaskItem)
 }
 
 func (h *AccountHandler) executeAdminRefreshCredentialsTaskItem(ctx context.Context, task *service.AccountBatchTask, item service.AccountBatchTaskItem) (map[string]any, error) {
@@ -150,6 +151,70 @@ func (h *AccountHandler) executeAdminRefreshCredentialsTaskItem(ctx context.Cont
 		result["warning"] = warning
 	}
 	return result, nil
+}
+
+func (h *AccountHandler) executeAdminTestConnectionTaskItem(ctx context.Context, task *service.AccountBatchTask, item service.AccountBatchTaskItem) (map[string]any, error) {
+	if h.accountTestService == nil {
+		return nil, infraerrors.ServiceUnavailable("ACCOUNT_TEST_SERVICE_UNAVAILABLE", "account test service is unavailable")
+	}
+	modelID, err := adminBatchTestConnectionModelID(task)
+	if err != nil {
+		return nil, err
+	}
+
+	testCtx, cancel := context.WithTimeout(ctx, adminAccountBatchConnectionTestTimeout)
+	defer cancel()
+	testResult, err := h.accountTestService.RunTestBackground(testCtx, item.AccountID, modelID)
+	if err != nil {
+		return nil, err
+	}
+	if testResult == nil {
+		return nil, errors.New("account test did not return a result")
+	}
+	if strings.TrimSpace(testResult.Status) != "success" {
+		message := strings.TrimSpace(testResult.ErrorMessage)
+		if message == "" {
+			message = "account test failed"
+		}
+		return nil, errors.New(message)
+	}
+
+	result := map[string]any{
+		"account_id": item.AccountID,
+		"model_id":   modelID,
+		"status":     testResult.Status,
+		"latency_ms": testResult.LatencyMs,
+	}
+	if h.rateLimitService != nil {
+		recovery, err := h.rateLimitService.RecoverAccountAfterSuccessfulTest(ctx, item.AccountID)
+		if err != nil {
+			return nil, fmt.Errorf("recover account after successful test: %w", err)
+		}
+		if recovery != nil {
+			result["cleared_error"] = recovery.ClearedError
+			result["cleared_rate_limit"] = recovery.ClearedRateLimit
+		}
+	}
+	return result, nil
+}
+
+func adminBatchTestConnectionModelID(task *service.AccountBatchTask) (string, error) {
+	if task == nil {
+		return "", errors.New("account batch task is required")
+	}
+	rawModelID, ok := task.Parameters["model_id"]
+	if !ok {
+		return "", errors.New("account batch task model_id parameter is required")
+	}
+	modelID, ok := rawModelID.(string)
+	if !ok {
+		return "", errors.New("account batch task model_id parameter must be a string")
+	}
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
+		return "", errors.New("account batch task model_id parameter is required")
+	}
+	return modelID, nil
 }
 
 // CreateAccountRequest represents create account request
@@ -289,6 +354,7 @@ const (
 	adminOwnedPublicShareValidationQueueSize   = 1024
 	adminOwnedPublicShareValidationWorkers     = 2
 	adminOwnedPublicShareValidationTestTimeout = 30 * time.Second
+	adminAccountBatchConnectionTestTimeout     = 90 * time.Second
 )
 
 type ownedPublicShareValidationJob struct {
@@ -1637,6 +1703,80 @@ func (h *AccountHandler) CreateBatchRefreshTask(c *gin.Context) {
 	task, err := h.accountBatchTaskService.CreateTask(c.Request.Context(), service.CreateAccountBatchTaskInput{
 		Scope:      service.AccountBatchTaskScopeAdmin,
 		Operation:  service.AccountBatchTaskOperationAdminRefreshCredentials,
+		AccountIDs: accountIDs,
+		CreatedBy:  createdBy,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Accepted(c, task)
+}
+
+// CreateBatchTestConnectionTask creates an async account connection test task.
+// POST /api/v1/admin/accounts/batch-test/async
+func (h *AccountHandler) CreateBatchTestConnectionTask(c *gin.Context) {
+	if h.accountBatchTaskService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Account batch task service is unavailable")
+		return
+	}
+	if h.accountTestService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Account test service is unavailable")
+		return
+	}
+	var req struct {
+		AccountIDs []int64 `json:"account_ids"`
+		ModelID    string  `json:"model_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	accountIDs := normalizeInt64IDList(req.AccountIDs)
+	if len(accountIDs) == 0 {
+		response.BadRequest(c, "account_ids is required")
+		return
+	}
+	modelID := strings.TrimSpace(req.ModelID)
+	if modelID == "" {
+		response.BadRequest(c, "model_id is required")
+		return
+	}
+
+	accounts, err := h.adminService.GetAccountsByIDs(c.Request.Context(), accountIDs)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	accountsByID := make(map[int64]*service.Account, len(accounts))
+	for _, account := range accounts {
+		if account != nil {
+			accountsByID[account.ID] = account
+		}
+	}
+	for _, accountID := range accountIDs {
+		if _, ok := accountsByID[accountID]; !ok {
+			response.BadRequest(c, fmt.Sprintf("account not found: %d", accountID))
+			return
+		}
+	}
+	platform := accountsByID[accountIDs[0]].Platform
+	for _, accountID := range accountIDs[1:] {
+		if accountsByID[accountID].Platform != platform {
+			response.BadRequest(c, "all accounts must use the same platform")
+			return
+		}
+	}
+
+	createdBy, ok := currentAdminUserID(c)
+	if !ok {
+		response.Error(c, http.StatusUnauthorized, "Invalid admin identity")
+		return
+	}
+	task, err := h.accountBatchTaskService.CreateTask(c.Request.Context(), service.CreateAccountBatchTaskInput{
+		Scope:      service.AccountBatchTaskScopeAdmin,
+		Operation:  service.AccountBatchTaskOperationAdminTestConnection,
+		Parameters: map[string]any{"model_id": modelID},
 		AccountIDs: accountIDs,
 		CreatedBy:  createdBy,
 	})

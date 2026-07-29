@@ -65,6 +65,11 @@ func TestTranslateAccountShareRoomPersistenceErrorForOpenAssignmentConflict(t *t
 	}
 }
 
+func TestTranslateAccountShareRoomPersistenceErrorForRoomNameTooLong(t *testing.T) {
+	err := translateAccountShareRoomPersistenceError(&pq.Error{Code: "22001"})
+	require.ErrorIs(t, err, service.ErrAccountShareModeInvalidName)
+}
+
 func TestListRoomAccountsRejectsNonOwnerUser(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -154,7 +159,7 @@ func TestAttachRoomAccountsAtomicLocksSortedIDsAndKeepsPausedRoomPaused(t *testi
 		WithArgs(int64(700)).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id", "platform", "account_level", "status", "allowed_models"}).
 			AddRow(int64(700), int64(42), service.PlatformOpenAI, service.AccountLevelPlus, service.AccountShareListingStatusPaused, `["gpt-5.5"]`))
-	mock.ExpectQuery("SELECT\\s+id, name, platform, account_level, concurrency, priority").
+	mock.ExpectQuery("SELECT\\s+a\\.id, a\\.name, a\\.platform, a\\.account_level, a\\.concurrency, a\\.priority").
 		WithArgs(pq.Array(accountIDs), int64(42)).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "name", "platform", "account_level", "concurrency", "priority",
@@ -245,7 +250,7 @@ func TestAttachRoomAccountsAtomicRollsBackEarlierWritesWhenLaterAssignmentFails(
 		WithArgs(int64(700)).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id", "platform", "account_level", "status", "allowed_models"}).
 			AddRow(int64(700), int64(42), service.PlatformOpenAI, service.AccountLevelPlus, service.AccountShareListingStatusActive, `["gpt-5.5"]`))
-	mock.ExpectQuery("SELECT\\s+id, name, platform, account_level, concurrency, priority").
+	mock.ExpectQuery("SELECT\\s+a\\.id, a\\.name, a\\.platform, a\\.account_level, a\\.concurrency, a\\.priority").
 		WithArgs(pq.Array(accountIDs), int64(42)).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "name", "platform", "account_level", "concurrency", "priority",
@@ -397,7 +402,7 @@ func TestAttachRoomAccountsAtomicRejectsUnavailableOrModelIncompatibleAccounts(t
 				WithArgs(int64(700)).
 				WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id", "platform", "account_level", "status", "allowed_models"}).
 					AddRow(int64(700), int64(42), service.PlatformOpenAI, service.AccountLevelPlus, service.AccountShareListingStatusActive, `["gpt-5.5"]`))
-			mock.ExpectQuery("SELECT\\s+id, name, platform, account_level, concurrency, priority").
+			mock.ExpectQuery(`(?s)SELECT\s+a\.id, a\.name, a\.platform, a\.account_level, a\.concurrency, a\.priority,.*a\.auto_pause_on_expired.*AS schedulable`).
 				WithArgs(pq.Array(accountIDs), int64(42)).
 				WillReturnRows(sqlmock.NewRows([]string{
 					"id", "name", "platform", "account_level", "concurrency", "priority",
@@ -428,6 +433,79 @@ func TestAttachRoomAccountsAtomicRejectsUnavailableOrModelIncompatibleAccounts(t
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 	}
+}
+
+func TestCreateRoomFromOwnedAccountRejectsDynamicallyUnavailableAccountInLockedTransaction(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	repo := &accountShareModeRepository{db: db}
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SELECT pg_advisory_xact_lock").
+		WithArgs("account_share_owner_quota:42").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`(?s)SELECT\s+name,\s+platform,\s+account_level,\s+status,.*a\.auto_pause_on_expired.*FROM accounts a.*FOR UPDATE`).
+		WithArgs(int64(10), int64(42)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"name", "platform", "account_level", "status", "schedulable",
+			"concurrency", "priority", "credentials", "extra",
+		}).AddRow(
+			"expired-owned-account",
+			service.PlatformOpenAI,
+			service.AccountLevelPlus,
+			service.StatusActive,
+			false,
+			20,
+			3,
+			`{}`,
+			`{}`,
+		))
+	mock.ExpectQuery("FROM account_external_placement_conversions conversion").
+		WithArgs(
+			int64(42),
+			"create-room-expired-account",
+			"room-a",
+			1,
+			1.0,
+			`["gpt-5.5"]`,
+			1,
+			0.0,
+			0.0,
+			0.0,
+			false,
+			0.0,
+			0.0,
+		).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"account_id",
+			"target_type",
+			"target_listing_id",
+			"target_public_group_id",
+			"payload_matches",
+		}))
+	mock.ExpectRollback()
+
+	created, err := repo.CreateRoomFromOwnedAccount(
+		context.Background(),
+		42,
+		10,
+		5,
+		"create-room-expired-account",
+		&service.AccountShareListing{
+			RoomName:           "room-a",
+			Platform:           service.PlatformOpenAI,
+			AccountLevel:       service.AccountLevelPlus,
+			SeatLimit:          1,
+			RateMultiplier:     1,
+			AllowedModels:      []string{"gpt-5.5"},
+			PerUserConcurrency: 1,
+		},
+	)
+
+	require.Nil(t, created)
+	require.ErrorIs(t, err, service.ErrAccountShareAccountUnavailable)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestAttachRoomAccountsAtomicRejectsDrainingRoom(t *testing.T) {
@@ -684,7 +762,7 @@ func TestAttachRoomAccountsAtomicBackfillsLegacyProjectionOnIdempotentTouch(t *t
 		WithArgs(snapshot.ListingID).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id", "platform", "account_level", "status", "allowed_models"}).
 			AddRow(snapshot.ListingID, snapshot.OwnerUserID, snapshot.Platform, snapshot.AccountLevel, service.AccountShareListingStatusActive, `["gpt-5.5"]`))
-	mock.ExpectQuery("SELECT\\s+id, name, platform, account_level, concurrency, priority").
+	mock.ExpectQuery("SELECT\\s+a\\.id, a\\.name, a\\.platform, a\\.account_level, a\\.concurrency, a\\.priority").
 		WithArgs(pq.Array(accountIDs), snapshot.OwnerUserID).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "name", "platform", "account_level", "concurrency", "priority",
@@ -763,7 +841,7 @@ func TestDetachRoomAccountsAtomicBackfillsAndClosesHistoryBeforeProjectionDelete
 		WithArgs(snapshot.ListingID).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id", "platform", "account_level", "status", "allowed_models"}).
 			AddRow(snapshot.ListingID, snapshot.OwnerUserID, snapshot.Platform, snapshot.AccountLevel, service.AccountShareListingStatusActive, `["gpt-5.5"]`))
-	mock.ExpectQuery("SELECT\\s+id, name, platform, account_level, concurrency, priority").
+	mock.ExpectQuery("SELECT\\s+a\\.id, a\\.name, a\\.platform, a\\.account_level, a\\.concurrency, a\\.priority").
 		WithArgs(pq.Array(accountIDs), snapshot.OwnerUserID).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "name", "platform", "account_level", "concurrency", "priority",
@@ -898,7 +976,7 @@ func TestDetachRoomAccountsAtomicRollsBackClosedHistoryWhenProjectionDeleteFails
 		WithArgs(snapshot.ListingID).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id", "platform", "account_level", "status", "allowed_models"}).
 			AddRow(snapshot.ListingID, snapshot.OwnerUserID, snapshot.Platform, snapshot.AccountLevel, service.AccountShareListingStatusActive, `["gpt-5.5"]`))
-	mock.ExpectQuery("SELECT\\s+id, name, platform, account_level, concurrency, priority").
+	mock.ExpectQuery("SELECT\\s+a\\.id, a\\.name, a\\.platform, a\\.account_level, a\\.concurrency, a\\.priority").
 		WithArgs(pq.Array(accountIDs), snapshot.OwnerUserID).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "name", "platform", "account_level", "concurrency", "priority",
@@ -1615,7 +1693,7 @@ func TestGetIdempotentRoomCreationReturnsOriginalListing(t *testing.T) {
 	}
 	expectIdempotentRoomCreationQuery(mock, listing, true)
 
-	listingID, err := getIdempotentRoomCreationInTx(
+	listingID, err := getIdempotentRoomCreation(
 		context.Background(),
 		tx,
 		42,
@@ -1626,7 +1704,7 @@ func TestGetIdempotentRoomCreationReturnsOriginalListing(t *testing.T) {
 		`["gpt-5"]`,
 	)
 	if err != nil {
-		t.Fatalf("getIdempotentRoomCreationInTx: %v", err)
+		t.Fatalf("getIdempotentRoomCreation: %v", err)
 	}
 	if listingID != 700 {
 		t.Fatalf("listingID = %d, want 700", listingID)
@@ -1655,7 +1733,7 @@ func TestGetIdempotentRoomCreationRejectsPayloadMismatch(t *testing.T) {
 	}
 	expectIdempotentRoomCreationQuery(mock, listing, false)
 
-	_, err = getIdempotentRoomCreationInTx(
+	_, err = getIdempotentRoomCreation(
 		context.Background(),
 		tx,
 		42,

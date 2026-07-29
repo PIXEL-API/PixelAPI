@@ -157,6 +157,64 @@ export interface AccountShareRequestOptions {
   signal?: AbortSignal
 }
 
+export interface BoundedPaginationOptions extends AccountShareRequestOptions {
+  concurrency?: number
+  isCurrent?: () => boolean
+}
+
+function throwCanceledPaginatedLoad(): never {
+  const error = new Error('Paginated request canceled')
+  error.name = 'AbortError'
+  throw error
+}
+
+export async function loadAllPaginatedItems<T>(
+  loadPage: (page: number) => Promise<PaginatedResponse<T>>,
+  options: BoundedPaginationOptions = {}
+): Promise<T[]> {
+  const concurrency = Math.max(1, Math.min(5, Math.trunc(options.concurrency ?? 3)))
+  const assertCurrent = (): void => {
+    if (options.signal?.aborted || (options.isCurrent && !options.isCurrent())) {
+      throwCanceledPaginatedLoad()
+    }
+  }
+
+  assertCurrent()
+  const firstPage = await loadPage(1)
+  assertCurrent()
+  const totalPages = Math.max(1, Math.trunc(Number(firstPage.pages) || 1))
+  const itemsByPage = new Map<number, T[]>([[1, firstPage.items || []]])
+  let nextPage = 2
+  let failed = false
+
+  const loadWorker = async (): Promise<void> => {
+    while (!failed) {
+      assertCurrent()
+      const page = nextPage
+      nextPage += 1
+      if (page > totalPages) return
+      try {
+        const result = await loadPage(page)
+        assertCurrent()
+        itemsByPage.set(page, result.items || [])
+      } catch (error) {
+        failed = true
+        throw error
+      }
+    }
+  }
+
+  const workerCount = Math.min(concurrency, Math.max(0, totalPages - 1))
+  await Promise.all(Array.from({ length: workerCount }, () => loadWorker()))
+  assertCurrent()
+
+  const items: T[] = []
+  for (let page = 1; page <= totalPages; page += 1) {
+    items.push(...(itemsByPage.get(page) || []))
+  }
+  return items
+}
+
 export interface AccountShareWaiverProgress {
   enabled: boolean
   status: 'in_progress' | 'met' | string
@@ -182,11 +240,13 @@ export interface AccountShareListing {
   current_revision_id?: number
   deleted?: boolean
   history_snapshot_quality?: 'exact' | 'backfilled_current' | 'unknown'
-  account_id: number
+  account_id?: number
   room_name?: string
   account_count?: number
   healthy_account_count?: number
   accounts?: AccountShareRoomAccount[]
+  account_sample_scope?: 'representative'
+  quota_summary?: AccountShareRoomQuotaSummary
   platform: 'openai' | 'anthropic' | string
   owner_user_id: number
   owner_username?: string
@@ -217,6 +277,7 @@ export interface AccountShareListing {
   account_status?: AccountStatus | string
   account_schedulable?: boolean
   current_concurrency?: number
+  runtime_load_known?: boolean
   account_expires_at?: string
   subscription_expires_at?: string
   account_last_used_at?: string
@@ -261,6 +322,23 @@ export interface AccountShareListing {
   edit_session_id?: string
   created_at: string
   updated_at: string
+}
+
+export interface AccountShareRoomQuotaWindow {
+  known_count: number
+  min_utilization: number | null
+  max_utilization: number | null
+  average_utilization: number | null
+  max_utilization_resets_at?: string | null
+  partial: boolean
+}
+
+export interface AccountShareRoomQuotaSummary {
+  scope: 'room'
+  attached_count: number
+  eligible_count: number
+  window_5h?: AccountShareRoomQuotaWindow
+  window_7d?: AccountShareRoomQuotaWindow
 }
 
 export interface AccountShareListingTermsSnapshot {
@@ -429,7 +507,9 @@ export interface AccountShareRecommendationUsageProfile {
   input_tokens_per_request: number
   output_tokens_per_request: number
   cache_creation_tokens_per_request: number
+  /** Informational total cache reads; history cannot split text and image cache. */
   cache_read_tokens_per_request: number
+  image_input_tokens_per_request: number
   image_output_tokens_per_request: number
 }
 
@@ -512,6 +592,7 @@ export interface AccountShareMembership {
   ending_requested_at?: string
   ending_reason?: string
   ending_operation_id?: string
+  ending_operation_status?: string
   settlement_status?: string
   ended_at?: string
   ended_reason?: string
@@ -521,6 +602,15 @@ export interface AccountShareMembership {
   dispatch_cooldown_until?: string
   created_at: string
   updated_at: string
+}
+
+export interface AccountShareAPIKeyBindingStatus {
+  api_key_id: number
+  active_count: number
+  queued_count: number
+  ending_count: number
+  blocking_count: number
+  memberships: AccountShareMembership[]
 }
 
 export interface AccountShareJoinIntent {
@@ -603,13 +693,14 @@ export interface AccountShareMySpendSummary {
 
 export interface AccountShareEndMembershipIntent {
   membership_id: number
+  operation_id: string
   token: string
   expires_at: string
 }
 
 export interface AccountShareReview {
   id: number
-  account_identity_id: number
+  account_identity_id?: number
   listing_id?: number
   account_id?: number
   membership_id?: number
@@ -838,18 +929,29 @@ export async function listMembershipHistory(
   return data
 }
 
-export async function recommendListings(payload: AccountShareRecommendationRequest): Promise<AccountShareRecommendationResult> {
-  const { data } = await apiClient.post<AccountShareRecommendationResult>('/account-share/recommendations', payload)
+export async function recommendListings(
+  payload: AccountShareRecommendationRequest,
+  options: AccountShareRequestOptions = {}
+): Promise<AccountShareRecommendationResult> {
+  const { data } = await apiClient.post<AccountShareRecommendationResult>(
+    '/account-share/recommendations',
+    payload,
+    { signal: options.signal }
+  )
   return data
 }
 
-export async function getRecommendationUsageProfile(payload: AccountShareRecommendationUsageProfileRequest): Promise<AccountShareRecommendationUsageProfile> {
+export async function getRecommendationUsageProfile(
+  payload: AccountShareRecommendationUsageProfileRequest,
+  options: AccountShareRequestOptions = {}
+): Promise<AccountShareRecommendationUsageProfile> {
   const { data } = await apiClient.get<AccountShareRecommendationUsageProfile>('/account-share/recommendations/usage-profile', {
     params: {
       platform: payload.platform,
       model: payload.model,
       days: payload.days
-    }
+    },
+    signal: options.signal
   })
   return data
 }
@@ -1017,12 +1119,16 @@ export async function updateListing(
 export async function beginListingEdit(
   id: number,
   payload: AccountShareListingEditSessionRequest,
-  idempotencyKey: string
+  idempotencyKey: string,
+  options: AccountShareRequestOptions = {}
 ): Promise<AccountShareListing> {
   const { data } = await apiClient.post<AccountShareListing>(
     `/account-share/listings/${id}/edit-session`,
     payload,
-    idempotencyRequestConfig(idempotencyKey)
+    {
+      ...idempotencyRequestConfig(idempotencyKey),
+      signal: options.signal
+    }
   )
   return data
 }
@@ -1073,6 +1179,17 @@ export async function listMembershipQueue(
   return data
 }
 
+export async function getAPIKeyBindingStatus(
+  apiKeyID: number,
+  options: AccountShareRequestOptions = {}
+): Promise<AccountShareAPIKeyBindingStatus> {
+  const { data } = await apiClient.get<AccountShareAPIKeyBindingStatus>(
+    `/account-share/api-key-bindings/${apiKeyID}/status`,
+    { signal: options.signal }
+  )
+  return data
+}
+
 export async function reorderMembershipQueue(payload: ReorderAccountShareQueueRequest): Promise<AccountShareMembership[]> {
   const { data } = await apiClient.patch<AccountShareMembership[]>('/account-share/queue', payload)
   return data
@@ -1118,13 +1235,15 @@ export async function listListingReviews(
 export async function listOwnerReviews(
   ownerUserID: number,
   page = 1,
-  pageSize = 20
+  pageSize = 20,
+  options: AccountShareRequestOptions = {}
 ): Promise<PaginatedResponse<AccountShareReview>> {
   const { data } = await apiClient.get<PaginatedResponse<AccountShareReview>>(`/account-share/owners/${ownerUserID}/reviews`, {
     params: {
       page,
       page_size: pageSize
-    }
+    },
+    signal: options.signal
   })
   return data
 }
@@ -1207,6 +1326,7 @@ export const accountShareAPI = {
   joinListing,
   updateMembershipIdleTimeout,
   listMembershipQueue,
+  getAPIKeyBindingStatus,
   reorderMembershipQueue,
   createEndMembershipIntent,
   endMembership,

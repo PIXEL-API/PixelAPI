@@ -353,7 +353,10 @@
               </div>
 
               <div
-                v-if="getApiKeyBadgeDraft(row).type === 'custom'"
+                v-if="
+                  getApiKeyBadgeDraft(row).type === 'custom' &&
+                  isApiKeyBadgeEditing(row.id)
+                "
                 class="space-y-1.5"
               >
                 <input
@@ -3570,6 +3573,7 @@ interface ApiKeyBadgeDraft {
 
 const apiKeyBadgeDrafts = reactive<Record<number, ApiKeyBadgeDraft>>({});
 const apiKeyBadgeErrors = reactive<Record<number, string>>({});
+const editingApiKeyBadgeGroupIds = ref<Set<number>>(new Set());
 const savingApiKeyBadgeGroupIds = ref<Set<number>>(new Set());
 const loading = ref(false);
 const usageMap = ref<Map<number, { today_cost: number; total_cost: number }>>(
@@ -4008,6 +4012,7 @@ const resetApiKeyBadgeDraft = (group: AdminGroup) => {
     type: group.api_key_badge_type,
     text: group.api_key_badge_text,
   };
+  editingApiKeyBadgeGroupIds.value.delete(group.id);
   delete apiKeyBadgeErrors[group.id];
 };
 
@@ -4017,11 +4022,15 @@ const syncApiKeyBadgeDrafts = (nextGroups: AdminGroup[]) => {
     const groupID = Number(rawID);
     if (!nextGroupIds.has(groupID) && !savingApiKeyBadgeGroupIds.value.has(groupID)) {
       delete apiKeyBadgeDrafts[groupID];
+      editingApiKeyBadgeGroupIds.value.delete(groupID);
       delete apiKeyBadgeErrors[groupID];
     }
   }
   nextGroups.forEach(resetApiKeyBadgeDraft);
 };
+
+const isApiKeyBadgeEditing = (groupID: number) =>
+  editingApiKeyBadgeGroupIds.value.has(groupID);
 
 const isApiKeyBadgeSaving = (groupID: number) =>
   savingApiKeyBadgeGroupIds.value.has(groupID);
@@ -4087,9 +4096,13 @@ const handleApiKeyBadgeTypeChange = (
   };
   delete apiKeyBadgeErrors[group.id];
 
-  if (value !== "custom") {
-    void saveApiKeyBadge(group, value, "");
+  if (value === "custom") {
+    editingApiKeyBadgeGroupIds.value.add(group.id);
+    return;
   }
+
+  editingApiKeyBadgeGroupIds.value.delete(group.id);
+  void saveApiKeyBadge(group, value, "");
 };
 
 const handleApiKeyBadgeTextInput = (group: AdminGroup, event: Event) => {

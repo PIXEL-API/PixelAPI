@@ -168,8 +168,11 @@ type gatewayAccountShareModeContextUpstream struct {
 type gatewayAccountShareModeContextBillingIntentRepo struct {
 	service.AccountShareBillingIntentRepository
 
-	mu    sync.Mutex
-	state service.AccountShareBillingIntentState
+	mu                      sync.Mutex
+	state                   service.AccountShareBillingIntentState
+	markReadyCalls          int
+	markReadyBeforeResponse bool
+	responseSize            func() int
 }
 
 func (r *gatewayAccountShareModeContextBillingIntentRepo) CreatePrepared(
@@ -211,6 +214,10 @@ func (r *gatewayAccountShareModeContextBillingIntentRepo) MarkReady(
 ) (*service.AccountShareBillingIntentState, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.markReadyCalls++
+	if r.responseSize != nil && r.responseSize() == 0 {
+		r.markReadyBeforeResponse = true
+	}
 	r.state.Status = service.AccountShareBillingIntentStatusReady
 	r.state.StateToken = input.ExpectedStateToken + 1
 	state := r.state
@@ -229,6 +236,12 @@ func (r *gatewayAccountShareModeContextBillingIntentRepo) CancelCreated(
 	r.state.StateToken = input.ExpectedStateToken + 1
 	state := r.state
 	return &state, nil
+}
+
+func (r *gatewayAccountShareModeContextBillingIntentRepo) snapshot() (service.AccountShareBillingIntentState, int, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.state, r.markReadyCalls, r.markReadyBeforeResponse
 }
 
 func (u *gatewayAccountShareModeContextUpstream) Do(
@@ -260,6 +273,9 @@ func (u *gatewayAccountShareModeContextUpstream) response() *http.Response {
 		``,
 		`event: message_delta`,
 		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}`,
+		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
 		``,
 	}, "\n")
 	return &http.Response{
@@ -347,14 +363,16 @@ func TestGatewayHandlerCompatibleEndpointsPreserveAccountShareModeContext(t *tes
 				},
 			}
 			listing := &service.AccountShareListing{
-				ID:                 listingID,
-				AccountID:          accountID,
-				OwnerUserID:        ownerUserID,
-				Status:             service.AccountShareListingStatusActive,
-				PerUserConcurrency: 1,
-				RateMultiplier:     1,
-				AccountStatus:      service.StatusActive,
-				AccountSchedulable: true,
+				ID:                               listingID,
+				AccountID:                        accountID,
+				OwnerUserID:                      ownerUserID,
+				Status:                           service.AccountShareListingStatusActive,
+				AllowedModels:                    []string{"claude-sonnet-4-5"},
+				PerUserConcurrency:               1,
+				RateMultiplier:                   1,
+				RepresentativeAccountConcurrency: 1,
+				AccountStatus:                    service.StatusActive,
+				AccountSchedulable:               true,
 			}
 
 			accountShareRepo := &gatewayAccountShareModeContextRepo{
@@ -374,6 +392,10 @@ func TestGatewayHandlerCompatibleEndpointsPreserveAccountShareModeContext(t *tes
 			cfg := &config.Config{RunMode: config.RunModeSimple}
 			cfg.Default.RateMultiplier = 1
 			billingService := service.NewBillingService(cfg, nil)
+			accountShareService.SetRecommendationPricingDependencies(
+				billingService,
+				service.NewModelPricingResolver(nil, billingService),
+			)
 			deferredService := service.NewDeferredService(accountRepo, nil, time.Hour)
 			concurrencyCache := &concurrencyCacheMock{
 				acquireUserSlotFn: func(context.Context, int64, int, string) (bool, error) {
@@ -385,7 +407,8 @@ func TestGatewayHandlerCompatibleEndpointsPreserveAccountShareModeContext(t *tes
 			}
 			concurrencyService := service.NewConcurrencyService(concurrencyCache)
 			accountShareService.SetRuntimeDependencies(concurrencyService, nil, nil, nil)
-			accountShareService.SetBillingIntentRepository(&gatewayAccountShareModeContextBillingIntentRepo{})
+			billingIntentRepo := &gatewayAccountShareModeContextBillingIntentRepo{}
+			accountShareService.SetBillingIntentRepository(billingIntentRepo)
 			gatewayService := service.NewGatewayService(
 				accountRepo,
 				nil,
@@ -431,6 +454,9 @@ func TestGatewayHandlerCompatibleEndpointsPreserveAccountShareModeContext(t *tes
 			}
 
 			recorder := httptest.NewRecorder()
+			billingIntentRepo.responseSize = func() int {
+				return recorder.Body.Len()
+			}
 			c, _ := gin.CreateTestContext(recorder)
 			request := httptest.NewRequest(http.MethodPost, tt.path, bytes.NewBufferString(tt.body))
 			request.Header.Set("Content-Type", "application/json")
@@ -475,6 +501,11 @@ func TestGatewayHandlerCompatibleEndpointsPreserveAccountShareModeContext(t *tes
 			require.True(t, usageContextOK)
 			require.Equal(t, userID, usageRequest.UserID)
 			require.Equal(t, apiKeyID, usageRequest.APIKeyID)
+
+			intentState, markReadyCalls, markReadyBeforeResponse := billingIntentRepo.snapshot()
+			require.Equal(t, 1, markReadyCalls)
+			require.Equal(t, service.AccountShareBillingIntentStatusReady, intentState.Status)
+			require.True(t, markReadyBeforeResponse, "成功响应写出前必须先持久化账号广场计费结果")
 		})
 	}
 }

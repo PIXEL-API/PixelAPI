@@ -24,8 +24,8 @@ const (
 //
 // A non-nil result is returned only for a strict 2xx upstream response. Any
 // non-failover response (including 1xx/3xx) is rewritten as a locally owned,
-// sanitized error and returns (nil, nil), so it cannot leak upstream details or
-// be billed as a successful search.
+// sanitized error and returns an error, so callers can finalize durable billing
+// state without treating the request as a successful search.
 func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
 	if s == nil || c == nil || account == nil {
 		return nil, fmt.Errorf("service, context, and account are required")
@@ -46,7 +46,13 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 		return nil, err
 	}
 	clientBeta := strings.TrimSpace(c.GetHeader("OpenAI-Beta"))
-	req, err := s.buildUpstreamRequestOpenAIPassthrough(ctx, c, account, body, token)
+	req, err := s.buildUpstreamRequestOpenAIPassthrough(
+		WithHTTPUpstreamProfile(ctx, HTTPUpstreamProfileOpenAI),
+		c,
+		account,
+		body,
+		token,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -91,6 +97,12 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	if !isOpenAIUpstreamSuccessStatus(resp.StatusCode) && !isOpenAIUpstreamErrorStatus(resp.StatusCode) {
+		MarkResponseCommitted(c)
+		writeOpenAIPassthroughErrorEnvelope(c, http.StatusBadGateway, resp.Header, "Upstream request failed")
+		return nil, fmt.Errorf("alpha search upstream returned non-success status %d", resp.StatusCode)
+	}
+
 	respBody, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
 		return nil, fmt.Errorf("read alpha search response: %w", err)
@@ -114,7 +126,7 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		MarkResponseCommitted(c)
 		writeSanitizedOpenAIPassthroughError(c, resp.StatusCode, resp.Header)
-		return nil, nil
+		return nil, fmt.Errorf("alpha search upstream returned non-success status %d", resp.StatusCode)
 	}
 
 	s.UpdateCodexUsageSnapshotFromHeaders(ctx, account.ID, resp.Header)
@@ -123,15 +135,19 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 	if contentType == "" {
 		contentType = "application/json"
 	}
+	result := &OpenAIForwardResult{
+		RequestID:       strings.TrimSpace(resp.Header.Get("x-request-id")),
+		Model:           requestedModel,
+		UpstreamModel:   upstreamModel,
+		ResponseHeaders: resp.Header.Clone(),
+		Duration:        time.Since(upstreamStart),
+		WebSearchCalls:  1,
+	}
+	if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
+		return result, billingErr
+	}
 	c.Data(resp.StatusCode, contentType, respBody)
-
-	return &OpenAIForwardResult{
-		RequestID:      strings.TrimSpace(resp.Header.Get("x-request-id")),
-		Model:          requestedModel,
-		UpstreamModel:  upstreamModel,
-		Duration:       time.Since(upstreamStart),
-		WebSearchCalls: 1,
-	}, nil
+	return result, nil
 }
 
 func (s *OpenAIGatewayService) openAIAlphaSearchURL(account *Account) (string, error) {

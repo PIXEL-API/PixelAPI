@@ -43,6 +43,27 @@ func (h *ActivityHandler) ListMyWinners(c *gin.Context) {
 	response.Success(c, items)
 }
 
+func (h *ActivityHandler) ListPublicWinners(c *gin.Context) {
+	if _, ok := requireAuth(c); !ok {
+		return
+	}
+	campaignID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || campaignID <= 0 {
+		response.BadRequest(c, "Invalid activity id")
+		return
+	}
+	page, pageSize := response.ParsePagination(c)
+	if pageSize > 50 {
+		pageSize = 50
+	}
+	items, total, err := h.activityService.UserListPublicWinners(c.Request.Context(), campaignID, page, pageSize)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Paginated(c, items, total, page, pageSize)
+}
+
 func (h *ActivityHandler) JoinDraw(c *gin.Context) {
 	subject, ok := requireAuth(c)
 	if !ok {

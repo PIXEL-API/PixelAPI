@@ -101,6 +101,40 @@ const (
 
 var _ service.AccountShareRuntimeBindingRepository = (*accountShareModeRepository)(nil)
 
+type accountShareRoomQueryRower interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func (r *accountShareModeRepository) FindRoomCreationByIdempotency(
+	ctx context.Context,
+	ownerUserID, accountID int64,
+	idempotencyKey string,
+	listing *service.AccountShareListing,
+) (*service.AccountShareListing, error) {
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	if r == nil || r.db == nil || ownerUserID <= 0 || accountID <= 0 || listing == nil || idempotencyKey == "" {
+		return nil, service.ErrAccountNilInput
+	}
+	allowedModelsJSON, err := json.Marshal(listing.AllowedModels)
+	if err != nil {
+		return nil, err
+	}
+	listingID, err := getIdempotentRoomCreation(
+		ctx,
+		r.db,
+		ownerUserID,
+		accountID,
+		idempotencyKey,
+		strings.TrimSpace(listing.RoomName),
+		listing,
+		string(allowedModelsJSON),
+	)
+	if err != nil || listingID <= 0 {
+		return nil, err
+	}
+	return r.GetListingByID(ctx, listingID, ownerUserID)
+}
+
 func (r *accountShareModeRepository) CreateRoomFromOwnedAccount(ctx context.Context, ownerUserID, accountID, modeGroupID int64, idempotencyKey string, listing *service.AccountShareListing) (*service.AccountShareListing, error) {
 	idempotencyKey = strings.TrimSpace(idempotencyKey)
 	if ownerUserID <= 0 || accountID <= 0 || modeGroupID <= 0 || listing == nil || idempotencyKey == "" || len(idempotencyKey) > 128 {
@@ -130,15 +164,15 @@ func (r *accountShareModeRepository) CreateRoomFromOwnedAccount(ctx context.Cont
 			platform,
 			account_level,
 			status,
-			schedulable,
+			NOT `+accountShareAccountUnavailableConditionSQL("NOW()")+` AS schedulable,
 			concurrency,
 			priority,
 			credentials,
 			extra
-		FROM accounts
-		WHERE id = $1
-			AND owner_user_id = $2
-			AND deleted_at IS NULL
+		FROM accounts a
+		WHERE a.id = $1
+			AND a.owner_user_id = $2
+			AND a.deleted_at IS NULL
 		FOR UPDATE
 	`, accountID, ownerUserID).Scan(
 		&accountName,
@@ -156,6 +190,34 @@ func (r *accountShareModeRepository) CreateRoomFromOwnedAccount(ctx context.Cont
 		return nil, err
 	}
 	platform = strings.ToLower(strings.TrimSpace(platform))
+	roomName := strings.TrimSpace(listing.RoomName)
+	if roomName == "" {
+		return nil, service.ErrAccountShareModeInvalidName
+	}
+	allowedModelsJSON, err := json.Marshal(listing.AllowedModels)
+	if err != nil {
+		return nil, err
+	}
+	idempotentListingID, err := getIdempotentRoomCreation(
+		ctx,
+		tx,
+		ownerUserID,
+		accountID,
+		idempotencyKey,
+		roomName,
+		listing,
+		string(allowedModelsJSON),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if idempotentListingID > 0 {
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		tx = nil
+		return r.GetListingByID(ctx, idempotentListingID, ownerUserID)
+	}
 	accountLevel = service.NormalizeAccountLevel(accountLevel)
 	if accountLevel == service.AccountLevelUnknown {
 		return nil, service.ErrAccountShareRoomUnknownLevel
@@ -176,34 +238,6 @@ func (r *accountShareModeRepository) CreateRoomFromOwnedAccount(ctx context.Cont
 	}
 	if listing.AccountLevel != "" && service.NormalizeAccountLevel(listing.AccountLevel) != accountLevel {
 		return nil, service.ErrAccountShareRoomLevelMismatch
-	}
-	roomName := strings.TrimSpace(listing.RoomName)
-	if roomName == "" {
-		return nil, service.ErrAccountShareModeInvalidName
-	}
-	allowedModelsJSON, err := json.Marshal(listing.AllowedModels)
-	if err != nil {
-		return nil, err
-	}
-	idempotentListingID, err := getIdempotentRoomCreationInTx(
-		ctx,
-		tx,
-		ownerUserID,
-		accountID,
-		idempotencyKey,
-		roomName,
-		listing,
-		string(allowedModelsJSON),
-	)
-	if err != nil {
-		return nil, err
-	}
-	if idempotentListingID > 0 {
-		if err := tx.Commit(); err != nil {
-			return nil, err
-		}
-		tx = nil
-		return r.GetListingByID(ctx, idempotentListingID, ownerUserID)
 	}
 	if err := r.enforceAccountShareRoomCreationQuotaInTx(ctx, tx, ownerUserID); err != nil {
 		return nil, err
@@ -797,21 +831,21 @@ func lockAccountShareRoomAccountCandidatesInTx(
 	if tx == nil || ownerUserID <= 0 || listingID <= 0 || len(accountIDs) == 0 {
 		return nil, service.ErrAccountExternalPlacementInvalid
 	}
-	deletedFilter := "AND deleted_at IS NULL"
+	deletedFilter := "AND a.deleted_at IS NULL"
 	if includeDeleted {
 		deletedFilter = ""
 	}
 	rows, err := tx.QueryContext(ctx, fmt.Sprintf(`
 		SELECT
-			id, name, platform, account_level, concurrency, priority,
-			status, schedulable, type, credentials, extra
-		FROM accounts
-		WHERE id = ANY($1)
-			AND owner_user_id = $2
+			a.id, a.name, a.platform, a.account_level, a.concurrency, a.priority,
+			a.status, NOT %s AS schedulable, a.type, a.credentials, a.extra
+		FROM accounts a
+		WHERE a.id = ANY($1)
+			AND a.owner_user_id = $2
 			%s
-		ORDER BY id ASC
+		ORDER BY a.id ASC
 		FOR UPDATE
-	`, deletedFilter), pq.Array(accountIDs), ownerUserID)
+	`, accountShareAccountUnavailableConditionSQL("NOW()"), deletedFilter), pq.Array(accountIDs), ownerUserID)
 	if err != nil {
 		return nil, err
 	}
@@ -2240,9 +2274,9 @@ func getIdempotentExternalPlacementConversionInTx(ctx context.Context, tx *sql.T
 	return &result, nil
 }
 
-func getIdempotentRoomCreationInTx(
+func getIdempotentRoomCreation(
 	ctx context.Context,
-	tx *sql.Tx,
+	queryer accountShareRoomQueryRower,
 	ownerUserID, accountID int64,
 	idempotencyKey, roomName string,
 	listing *service.AccountShareListing,
@@ -2252,7 +2286,7 @@ func getIdempotentRoomCreationInTx(
 	var storedTarget string
 	var storedListingID, storedPublicGroupID sql.NullInt64
 	var payloadMatches bool
-	err := tx.QueryRowContext(ctx, `
+	err := queryer.QueryRowContext(ctx, `
 		SELECT
 			conversion.account_id,
 			conversion.target_type,
@@ -3000,6 +3034,9 @@ func translateAccountShareRoomPersistenceError(err error) error {
 	var pqErr *pq.Error
 	if !errors.As(err, &pqErr) {
 		return err
+	}
+	if pqErr.Code == "22001" {
+		return service.ErrAccountShareModeInvalidName
 	}
 	switch pqErr.Constraint {
 	case "uq_account_share_rooms_owner_name_live":

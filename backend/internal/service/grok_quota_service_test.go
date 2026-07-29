@@ -133,6 +133,84 @@ func TestGrokQuotaServiceProbeUsageStoresHeaders(t *testing.T) {
 	require.NotNil(t, repo.updates[42][grokQuotaSnapshotExtraKey])
 }
 
+func TestGrokQuotaServiceProbeUsageRejectsUnexpectedStatusBeforePersisting(t *testing.T) {
+	for _, statusCode := range []int{
+		http.StatusContinue,
+		http.StatusFound,
+		http.StatusNotModified,
+		http.StatusTemporaryRedirect,
+		http.StatusPermanentRedirect,
+	} {
+		t.Run(http.StatusText(statusCode), func(t *testing.T) {
+			account := healthyGrokQuotaOAuthAccount(142)
+			repo := &grokQuotaAccountRepo{
+				mockAccountRepoForPlatform: &mockAccountRepoForPlatform{
+					accountsByID: map[int64]*Account{142: account},
+				},
+			}
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: statusCode,
+				Header: http.Header{
+					"Location":                       []string{"https://attacker.invalid/private"},
+					"X-Ratelimit-Limit-Requests":     []string{"999"},
+					"X-Ratelimit-Remaining-Requests": []string{"0"},
+				},
+				Body: io.NopCloser(strings.NewReader(`{"secret":"must-not-be-observed"}`)),
+			}}
+			svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream)
+
+			result, err := svc.ProbeUsage(context.Background(), 142)
+
+			require.Error(t, err)
+			require.Nil(t, result)
+			require.Equal(t, http.StatusBadGateway, infraerrors.Code(err))
+			require.Empty(t, repo.updates)
+			require.NotNil(t, upstream.lastReq)
+			require.True(t, HTTPUpstreamRedirectsDisabled(upstream.lastReq.Context()))
+		})
+	}
+}
+
+func TestGrokQuotaServiceFetchBillingRejectsUnexpectedStatusBeforeParsing(t *testing.T) {
+	for _, statusCode := range []int{
+		http.StatusContinue,
+		http.StatusFound,
+		http.StatusNotModified,
+		http.StatusTemporaryRedirect,
+		http.StatusPermanentRedirect,
+	} {
+		t.Run(http.StatusText(statusCode), func(t *testing.T) {
+			account := healthyGrokQuotaOAuthAccount(143)
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: statusCode,
+				Header:     http.Header{"Location": []string{"https://attacker.invalid/private"}},
+				Body:       io.NopCloser(strings.NewReader(`{"config":{"plan_name":"forged"}}`)),
+			}}
+			svc := NewGrokQuotaService(
+				&grokQuotaAccountRepo{mockAccountRepoForPlatform: &mockAccountRepoForPlatform{}},
+				nil,
+				nil,
+				upstream,
+			)
+
+			summary, gotStatus, err := svc.fetchBilling(
+				context.Background(),
+				account,
+				"access-token",
+				"",
+				false,
+			)
+
+			require.Error(t, err)
+			require.Nil(t, summary)
+			require.Equal(t, statusCode, gotStatus)
+			require.Equal(t, http.StatusBadGateway, infraerrors.Code(err))
+			require.NotNil(t, upstream.lastReq)
+			require.True(t, HTTPUpstreamRedirectsDisabled(upstream.lastReq.Context()))
+		})
+	}
+}
+
 func TestGrokQuotaServiceProbeUsageLoadsProxyWhenAccountEdgeMissing(t *testing.T) {
 	t.Parallel()
 

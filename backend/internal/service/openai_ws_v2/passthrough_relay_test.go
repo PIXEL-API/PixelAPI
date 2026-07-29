@@ -206,6 +206,40 @@ func TestRelay_BasicRelayAndUsage(t *testing.T) {
 	require.JSONEq(t, `{"type":"response.completed","response":{"id":"resp_123","usage":{"input_tokens":7,"output_tokens":3,"input_tokens_details":{"cached_tokens":2,"cache_write_tokens":1}}}}`, string(clientWrites[0].payload))
 }
 
+func TestRelay_BeforeTerminalFrameFailureWithholdsTerminal(t *testing.T) {
+	t.Parallel()
+
+	clientConn := newPassthroughTestFrameConn(nil, false)
+	upstreamConn := newPassthroughTestFrameConn([]passthroughTestFrame{{
+		msgType: coderws.MessageText,
+		payload: []byte(`{"type":"response.completed","response":{"id":"resp_billing_gate","usage":{"input_tokens":7,"output_tokens":3}}}`),
+	}}, true)
+	billingErr := errors.New("billing unavailable")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, relayExit := Relay(
+		ctx,
+		clientConn,
+		upstreamConn,
+		[]byte(`{"type":"response.create","model":"gpt-5.3-codex","input":[]}`),
+		RelayOptions{
+			BeforeTerminalFrame: func(turn RelayTurnResult) error {
+				require.Equal(t, "resp_billing_gate", turn.RequestID)
+				require.Equal(t, 7, turn.Usage.InputTokens)
+				require.Equal(t, 3, turn.Usage.OutputTokens)
+				require.True(t, turn.BillingUsageComplete)
+				return billingErr
+			},
+		},
+	)
+
+	require.NotNil(t, relayExit)
+	require.Equal(t, "before_terminal_frame", relayExit.Stage)
+	require.ErrorIs(t, relayExit.Err, billingErr)
+	require.Empty(t, clientConn.Writes())
+}
+
 func TestRelay_RejectsMalformedUpstreamJSONWithoutForwarding(t *testing.T) {
 	t.Parallel()
 

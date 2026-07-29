@@ -23,7 +23,7 @@
         </div>
       </div>
 
-      <div v-if="hasCounts" class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div v-if="hasCounts" class="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <div class="rounded-2xl border border-red-200 bg-red-50 p-4 dark:border-red-900/70 dark:bg-red-950/25">
           <div class="flex items-center gap-2 text-red-700 dark:text-red-300">
             <Icon name="bolt" size="sm" :stroke-width="2" />
@@ -37,6 +37,13 @@
             <span class="text-sm font-medium">{{ t('keys.accountShareConflict.queuedLabel') }}</span>
           </div>
           <p class="mt-2 text-2xl font-bold text-amber-900 dark:text-amber-100">{{ queuedCount }}</p>
+        </div>
+        <div class="rounded-2xl border border-blue-200 bg-blue-50 p-4 dark:border-blue-900/70 dark:bg-blue-950/25">
+          <div class="flex items-center gap-2 text-blue-700 dark:text-blue-300">
+            <Icon name="refresh" size="sm" :stroke-width="2" />
+            <span class="text-sm font-medium">{{ t('keys.accountShareConflict.endingLabel') }}</span>
+          </div>
+          <p class="mt-2 text-2xl font-bold text-blue-900 dark:text-blue-100">{{ endingCount }}</p>
         </div>
       </div>
 
@@ -97,6 +104,7 @@ const props = defineProps<{
   keyName: string
   activeCount: number | null
   queuedCount: number | null
+  endingCount: number | null
   navigating?: boolean
 }>()
 
@@ -113,7 +121,11 @@ const dialogTitle = computed(() => (
     : t('keys.accountShareConflict.changeGroupTitle')
 ))
 
-const hasCounts = computed(() => props.activeCount !== null && props.queuedCount !== null)
+const hasCounts = computed(() => (
+  props.activeCount !== null &&
+  props.queuedCount !== null &&
+  props.endingCount !== null
+))
 
 const steps = computed(() => [
   t('keys.accountShareConflict.stepOpen'),

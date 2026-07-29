@@ -60,6 +60,7 @@ export function availablePricingItems(
   model: UserSupportedModel,
   translate: Translate,
   prefix: string,
+  multiplier = 1,
 ): AvailablePricingItem[] {
   const pricing = model.pricing
   if (!pricing) return []
@@ -77,7 +78,7 @@ export function availablePricingItems(
     items.push({
       key,
       label: translate(pricingKey(prefix, labelKey)),
-      value: formatAvailablePrice(value, scale, translate, prefix),
+      value: formatAvailablePrice(value * multiplier, scale, translate, prefix),
     })
   }
 
@@ -103,18 +104,23 @@ export function availableModelPriceSummary(
   translate: Translate,
   prefix: string,
   noPricingLabel: string,
+  multiplier = 1,
 ): string {
   const pricing = model.pricing
   if (!pricing) return noPricingLabel
 
   if (pricing.billing_mode === BILLING_MODE_TOKEN) {
-    return `${translate(pricingKey(prefix, 'inputPrice'))} ${formatScaled(pricing.input_price, TOKEN_PRICE_SCALE)} · ${translate(pricingKey(prefix, 'outputPrice'))} ${formatScaled(pricing.output_price, TOKEN_PRICE_SCALE)}`
+    const inputPrice = pricing.input_price == null ? null : pricing.input_price * multiplier
+    const outputPrice = pricing.output_price == null ? null : pricing.output_price * multiplier
+    return `${translate(pricingKey(prefix, 'inputPrice'))} ${formatScaled(inputPrice, TOKEN_PRICE_SCALE)} · ${translate(pricingKey(prefix, 'outputPrice'))} ${formatScaled(outputPrice, TOKEN_PRICE_SCALE)}`
   }
   if (pricing.billing_mode === BILLING_MODE_PER_REQUEST) {
-    return `${translate(pricingKey(prefix, 'perRequestPrice'))} ${formatScaled(pricing.per_request_price, 1)}`
+    const price = pricing.per_request_price == null ? null : pricing.per_request_price * multiplier
+    return `${translate(pricingKey(prefix, 'perRequestPrice'))} ${formatScaled(price, 1)}`
   }
   if (pricing.billing_mode === BILLING_MODE_IMAGE) {
-    return `${translate(pricingKey(prefix, 'imageOutputPrice'))} ${formatScaled(pricing.image_output_price, 1)}`
+    const price = pricing.image_output_price == null ? null : pricing.image_output_price * multiplier
+    return `${translate(pricingKey(prefix, 'imageOutputPrice'))} ${formatScaled(price, 1)}`
   }
   return billingModeLabel(pricing, translate, prefix)
 }

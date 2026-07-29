@@ -15,7 +15,10 @@ const {
   getUserGroupRates,
   listKeys,
   createKey,
+  updateKey,
+  getAPIKeyBindingStatus,
   showError,
+  showSuccess,
 } = vi.hoisted(() => ({
   getDashboardApiKeysUsage: vi.fn(),
   getPublicSettings: vi.fn(),
@@ -23,13 +26,16 @@ const {
   getUserGroupRates: vi.fn(),
   listKeys: vi.fn(),
   createKey: vi.fn(),
+  updateKey: vi.fn(),
+  getAPIKeyBindingStatus: vi.fn(),
   showError: vi.fn(),
+  showSuccess: vi.fn(),
 }))
 
 vi.mock('@/api', () => ({
   keysAPI: {
     list: listKeys,
-    update: vi.fn(),
+    update: updateKey,
     create: createKey,
     delete: vi.fn(),
     toggleStatus: vi.fn(),
@@ -40,13 +46,13 @@ vi.mock('@/api', () => ({
     getAvailable: getAvailableGroups,
     getUserGroupRates,
   },
-  accountShareAPI: { listMembershipQueue: vi.fn() },
+  accountShareAPI: { getAPIKeyBindingStatus },
 }))
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
     showError,
-    showSuccess: vi.fn(),
+    showSuccess,
   }),
 }))
 
@@ -93,6 +99,33 @@ const apiKey = {
   key: 'sk-test',
   group_id: group.id,
   group,
+}
+
+const editableApiKey = {
+  ...apiKey,
+  user_id: 1,
+  status: 'active',
+  ip_whitelist: [],
+  ip_blacklist: [],
+  last_used_at: null,
+  last_used_ip: null,
+  quota: 0,
+  quota_used: 0,
+  expires_at: null,
+  created_at: '2026-07-01T00:00:00Z',
+  updated_at: '2026-07-01T00:00:00Z',
+  rate_limit_5h: 0,
+  rate_limit_1d: 0,
+  rate_limit_7d: 0,
+  usage_5h: 0,
+  usage_1d: 0,
+  usage_7d: 0,
+  window_5h_start: null,
+  window_1d_start: null,
+  window_7d_start: null,
+  reset_5h_at: null,
+  reset_1d_at: null,
+  reset_7d_at: null,
 }
 
 const AppLayoutStub = { template: '<div><slot /></div>' }
@@ -165,7 +198,17 @@ describe('user KeysView accessibility interactions', () => {
     getAvailableGroups.mockReset().mockResolvedValue([group])
     getUserGroupRates.mockReset().mockResolvedValue({})
     createKey.mockReset().mockResolvedValue(apiKey)
+    updateKey.mockReset().mockResolvedValue(apiKey)
+    getAPIKeyBindingStatus.mockReset().mockResolvedValue({
+      api_key_id: apiKey.id,
+      active_count: 0,
+      queued_count: 0,
+      ending_count: 0,
+      blocking_count: 0,
+      memberships: [],
+    })
     showError.mockReset()
+    showSuccess.mockReset()
     window.localStorage.clear()
 
     Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 })
@@ -292,6 +335,99 @@ describe('user KeysView accessibility interactions', () => {
     await nextTick()
     expect(document.getElementById(dialogId)).toBeNull()
     expect(document.activeElement).toBe(outside)
+  })
+
+  it('blocks an inline group change while the API key is exiting and exposes the ending count', async () => {
+    getAPIKeyBindingStatus.mockResolvedValue({
+      api_key_id: apiKey.id,
+      active_count: 0,
+      queued_count: 0,
+      ending_count: 1,
+      blocking_count: 1,
+      memberships: [{ status: 'ending' }],
+    })
+    const wrapper = mountKeysView()
+    await flushPromises()
+    const setupState = (wrapper.vm as any).$?.setupState
+
+    await setupState.changeGroup(apiKey, 10)
+
+    expect(getAPIKeyBindingStatus).toHaveBeenCalledWith(apiKey.id)
+    expect(updateKey).not.toHaveBeenCalled()
+    expect(setupState.accountShareConflict).toMatchObject({
+      show: true,
+      activeCount: 0,
+      queuedCount: 0,
+      endingCount: 1,
+    })
+    expect(wrapper.getComponent({ name: 'ApiKeyAccountShareConflictDialog' }).props('endingCount')).toBe(1)
+  })
+
+  it('allows an inline group change only when the unified blocking count is zero', async () => {
+    const wrapper = mountKeysView()
+    await flushPromises()
+    const setupState = (wrapper.vm as any).$?.setupState
+
+    await setupState.changeGroup(apiKey, 10)
+
+    expect(getAPIKeyBindingStatus).toHaveBeenCalledWith(apiKey.id)
+    expect(updateKey).toHaveBeenCalledWith(apiKey.id, expect.objectContaining({
+      group_id: 10,
+    }))
+  })
+
+  it('does not show a zero-count conflict when the guard recheck is already clear', async () => {
+    updateKey.mockRejectedValueOnce({ reason: 'API_KEY_ACCOUNT_SHARE_BINDING_EXISTS' })
+    const wrapper = mountKeysView()
+    await flushPromises()
+    const setupState = (wrapper.vm as any).$?.setupState
+
+    await setupState.changeGroup(apiKey, 10)
+
+    expect(getAPIKeyBindingStatus).toHaveBeenCalledTimes(2)
+    expect(setupState.accountShareConflict.show).toBe(false)
+    expect(showSuccess).toHaveBeenCalledWith('keys.accountShareConflict.resolvedDuringRetry')
+  })
+
+  it('does not run the binding precheck for an edit that keeps group routing unchanged', async () => {
+    const wrapper = mountKeysView()
+    await flushPromises()
+    const setupState = (wrapper.vm as any).$?.setupState
+    setupState.editKey(editableApiKey)
+    setupState.formData.name = 'Renamed key'
+
+    await setupState.handleSubmit()
+
+    expect(getAPIKeyBindingStatus).not.toHaveBeenCalled()
+    expect(updateKey).toHaveBeenCalledWith(editableApiKey.id, expect.objectContaining({
+      name: 'Renamed key',
+      group_id: editableApiKey.group_id,
+    }))
+  })
+
+  it('reuses the unified binding precheck when an edit changes group routing', async () => {
+    getAPIKeyBindingStatus.mockResolvedValue({
+      api_key_id: editableApiKey.id,
+      active_count: 0,
+      queued_count: 0,
+      ending_count: 1,
+      blocking_count: 1,
+      memberships: [{ status: 'ending' }],
+    })
+    const wrapper = mountKeysView()
+    await flushPromises()
+    const setupState = (wrapper.vm as any).$?.setupState
+    setupState.editKey(editableApiKey)
+    setupState.formData.group_id = 10
+
+    await setupState.handleSubmit()
+
+    expect(getAPIKeyBindingStatus).toHaveBeenCalledWith(editableApiKey.id)
+    expect(updateKey).not.toHaveBeenCalled()
+    expect(setupState.accountShareConflict).toMatchObject({
+      show: true,
+      endingCount: 1,
+    })
   })
 
   it('gives filters and form selects distinct programmatic labels', async () => {

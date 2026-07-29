@@ -97,6 +97,14 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	if serviceTier == nil {
 		serviceTier = extractOpenAIServiceTierFromBody(chatBody)
 	}
+	ctx = withOpenAIForwardResultBillingState(ctx, &OpenAIForwardResult{
+		Model:           originalModel,
+		BillingModel:    billingModel,
+		UpstreamModel:   upstreamModel,
+		ReasoningEffort: reasoningEffort,
+		ServiceTier:     serviceTier,
+		Stream:          clientStream,
+	}, startTime, openAIResponseImageBillingConfig{})
 
 	logger.L().Debug("openai responses: forwarding via raw chat completions",
 		zap.Int64("account_id", account.ID),
@@ -175,7 +183,7 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 		_ = resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
@@ -214,12 +222,13 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	}
 
 	if clientStream {
-		return s.streamChatCompletionsAsResponses(c, resp, originalModel, customTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+		return s.streamChatCompletionsAsResponses(ctx, c, resp, originalModel, customTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	}
-	return s.bufferChatCompletionsAsResponses(c, resp, originalModel, customTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+	return s.bufferChatCompletionsAsResponses(ctx, c, resp, originalModel, customTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 }
 
 func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
+	ctx context.Context,
 	c *gin.Context,
 	resp *http.Response,
 	originalModel string,
@@ -259,8 +268,32 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
 	responsesResp := ChatCompletionsResponseToResponses(&ccResp, originalModel, customTools, toolSearch, namespaceTools)
 
 	usage := OpenAIUsage{}
+	usageComplete := openAIChatCompletionsBillingUsageComplete(respBody)
 	if parsed, ok := extractOpenAIUsageFromJSONBytes(respBody); ok {
 		usage = parsed
+	}
+
+	result := updateOpenAIForwardResultBillingState(ctx, openAIForwardResultSnapshot{
+		requestID:            requestID,
+		responseID:           responsesResp.ID,
+		usage:                &usage,
+		responseHeaders:      resp.Header,
+		billingUsageComplete: usageComplete,
+	})
+	result.Model = originalModel
+	result.BillingModel = billingModel
+	result.UpstreamModel = upstreamModel
+	result.ReasoningEffort = reasoningEffort
+	if result.ServiceTier == nil {
+		result.ServiceTier = serviceTier
+	}
+	result.Stream = false
+	result.Duration = time.Since(startTime)
+	if openAIForwardResultBillingGatePresent(ctx) && !usageComplete {
+		return result, errors.New("openai responses chat fallback response usage incomplete: missing upstream usage")
+	}
+	if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
+		return result, billingErr
 	}
 
 	if s.responseHeaderFilter != nil {
@@ -268,20 +301,11 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
 	}
 	c.JSON(http.StatusOK, responsesResp)
 
-	return &OpenAIForwardResult{
-		RequestID:       requestID,
-		Usage:           usage,
-		Model:           originalModel,
-		BillingModel:    billingModel,
-		UpstreamModel:   upstreamModel,
-		ReasoningEffort: reasoningEffort,
-		ServiceTier:     serviceTier,
-		Stream:          false,
-		Duration:        time.Since(startTime),
-	}, nil
+	return result, nil
 }
 
 func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
+	ctx context.Context,
 	c *gin.Context,
 	resp *http.Response,
 	originalModel string,
@@ -316,9 +340,30 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 	state.ToolSearchDeclared = toolSearch
 	state.NamespaceTools = namespaceTools
 	var usage OpenAIUsage
+	var billingUsageObservation openAIChatCompletionsBillingUsageObservation
 	var firstTokenMs *int
 	clientDisconnected := false
 	sawDone := false
+	resultWithUsage := func() *OpenAIForwardResult {
+		result := updateOpenAIForwardResultBillingState(ctx, openAIForwardResultSnapshot{
+			requestID:            requestID,
+			responseID:           state.ResponseID,
+			usage:                &usage,
+			firstTokenMs:         firstTokenMs,
+			responseHeaders:      resp.Header,
+			billingUsageComplete: billingUsageObservation.complete(),
+		})
+		result.Model = originalModel
+		result.BillingModel = billingModel
+		result.UpstreamModel = upstreamModel
+		result.ReasoningEffort = reasoningEffort
+		if result.ServiceTier == nil {
+			result.ServiceTier = serviceTier
+		}
+		result.Stream = true
+		result.Duration = time.Since(startTime)
+		return result
+	}
 
 	writeEvents := func(events []apicompat.ResponsesStreamEvent) {
 		if clientDisconnected || len(events) == 0 {
@@ -367,6 +412,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 			sawDone = true
 			break
 		}
+		billingUsageObservation.observePayload([]byte(payload))
 
 		if u := extractOpenAIChatStreamUsage(payload); u != nil {
 			usage = *u
@@ -394,18 +440,18 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 				zap.String("request_id", requestID),
 			)
 		}
-		return &OpenAIForwardResult{
-			RequestID:       requestID,
-			Usage:           usage,
-			Model:           originalModel,
-			BillingModel:    billingModel,
-			UpstreamModel:   upstreamModel,
-			ReasoningEffort: reasoningEffort,
-			ServiceTier:     serviceTier,
-			Stream:          true,
-			Duration:        time.Since(startTime),
-			FirstTokenMs:    firstTokenMs,
-		}, fmt.Errorf("stream usage incomplete: %w", err)
+		return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", err)
+	}
+
+	result := resultWithUsage()
+	if !sawDone && strings.TrimSpace(state.FinishReason) == "" {
+		return result, errors.New("upstream chat completions stream ended without a completion signal")
+	}
+	if openAIForwardResultBillingGatePresent(ctx) && !billingUsageObservation.complete() {
+		return result, errors.New("openai responses chat fallback stream usage incomplete: missing terminal usage")
+	}
+	if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
+		return result, billingErr
 	}
 
 	writeEvents(FinalizeChatCompletionsResponsesStream(state))
@@ -418,24 +464,15 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 			c.Writer.Flush()
 		}
 	}
-	if !sawDone {
-		logger.L().Debug("openai responses chat fallback: upstream stream ended without done sentinel",
-			zap.String("request_id", requestID),
-		)
-	}
+	return result, nil
+}
 
-	return &OpenAIForwardResult{
-		RequestID:       requestID,
-		Usage:           usage,
-		Model:           originalModel,
-		BillingModel:    billingModel,
-		UpstreamModel:   upstreamModel,
-		ReasoningEffort: reasoningEffort,
-		ServiceTier:     serviceTier,
-		Stream:          true,
-		Duration:        time.Since(startTime),
-		FirstTokenMs:    firstTokenMs,
-	}, nil
+func openAIForwardResultBillingGatePresent(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	gate, _ := ctx.Value(openAIForwardResultBillingGateContextKey{}).(*OpenAIForwardResultBillingGate)
+	return gate != nil
 }
 
 func chatChunkStartsResponsesOutput(chunk *apicompat.ChatCompletionsChunk) bool {

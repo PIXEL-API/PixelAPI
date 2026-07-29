@@ -14,7 +14,7 @@ func TestRecoverStaleBillingIntentsFailsClosedWhenRedisErrors(t *testing.T) {
 	now := time.Date(2026, 7, 27, 6, 0, 0, 0, time.UTC)
 	repo := &accountShareBillingRecoveryRepoStub{
 		candidates: []AccountShareBillingIntentAttentionCandidate{
-			staleBillingIntentCandidate(now.Add(-2 * time.Minute)),
+			staleBillingIntentCandidate(now.Add(-30 * 24 * time.Hour)),
 		},
 	}
 	cache := &accountShareBillingRecoveryCacheStub{
@@ -43,6 +43,25 @@ func TestRecoverStaleBillingIntentsKeepsIntentInFlightWhileLeaseExists(t *testin
 	require.NoError(t, err)
 	require.Equal(t, 1, result.ActiveLease)
 	require.Empty(t, repo.escalations)
+	require.Equal(t, 1, cache.countCalls)
+}
+
+func TestRecoverStaleBillingIntentsKeepsVeryOldIntentInFlightWhileLeaseExists(t *testing.T) {
+	now := time.Date(2026, 7, 27, 6, 0, 0, 0, time.UTC)
+	candidate := staleBillingIntentCandidate(now.Add(-30 * 24 * time.Hour))
+	repo := &accountShareBillingRecoveryRepoStub{
+		candidates: []AccountShareBillingIntentAttentionCandidate{candidate},
+	}
+	cache := &accountShareBillingRecoveryCacheStub{ttl: time.Minute, count: 1}
+	svc := accountShareBillingRecoveryTestService(repo, cache)
+
+	result, err := svc.recoverStaleBillingIntentsOnce(context.Background(), now, nil)
+
+	require.NoError(t, err)
+	require.Zero(t, result.Escalated)
+	require.Equal(t, 1, result.ActiveLease)
+	require.Empty(t, repo.escalations)
+	require.Equal(t, 1, cache.countCalls)
 }
 
 func TestRecoverStaleBillingIntentsEscalatesWithCutoffAndStateTokenOnlyAfterZeroLease(t *testing.T) {
@@ -71,6 +90,102 @@ func TestRecoverStaleBillingIntentsEscalatesWithCutoffAndStateTokenOnlyAfterZero
 	require.Equal(t, now.Add(-time.Minute), repo.escalations[0].StaleBefore)
 	require.Equal(t, accountShareBillingRecoveryReasonCode, repo.escalations[0].ReasonCode)
 	require.GreaterOrEqual(t, guardCalls, 3)
+}
+
+func TestRecoverStaleBillingIntentsCancelsStaleCreatedWithStateTokenCAS(t *testing.T) {
+	now := time.Date(2026, 7, 27, 6, 0, 0, 0, time.UTC)
+	candidate := staleBillingIntentCandidate(now.Add(-accountShareBillingCreatedRecoveryDelay - time.Second))
+	candidate.Status = AccountShareBillingIntentStatusCreated
+	candidate.ForwardStartedAt = nil
+	repo := &accountShareBillingRecoveryRepoStub{
+		candidates: []AccountShareBillingIntentAttentionCandidate{candidate},
+	}
+	cache := &accountShareBillingRecoveryCacheStub{ttl: time.Minute}
+	svc := accountShareBillingRecoveryTestService(repo, cache)
+
+	result, err := svc.recoverStaleBillingIntentsOnce(context.Background(), now, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, result.CreatedCancelled)
+	require.Empty(t, repo.escalations)
+	require.Len(t, repo.cancellations, 1)
+	require.Equal(t, candidate.ID, repo.cancellations[0].ID)
+	require.Equal(t, candidate.StateToken, repo.cancellations[0].ExpectedStateToken)
+	require.Zero(t, cache.countCalls, "created intents never started forwarding and need no runtime lease lookup")
+}
+
+func TestRecoverStaleBillingIntentsScansPastActiveLeasePage(t *testing.T) {
+	now := time.Date(2026, 7, 27, 6, 0, 0, 0, time.UTC)
+	first := staleBillingIntentCandidate(now.Add(-3 * time.Minute))
+	first.ID = 100
+	first.MembershipID = 1000
+	second := staleBillingIntentCandidate(now.Add(-2 * time.Minute))
+	second.ID = 200
+	second.MembershipID = 2000
+	repo := &accountShareBillingRecoveryRepoStub{
+		pages: [][]AccountShareBillingIntentAttentionCandidate{
+			{first},
+			{second},
+			nil,
+		},
+	}
+	cache := &accountShareBillingRecoveryCacheStub{
+		ttl: time.Minute,
+		countByMembership: map[int64]int{
+			first.MembershipID: 1,
+		},
+	}
+	svc := accountShareBillingRecoveryTestService(repo, cache)
+
+	result, err := svc.recoverStaleBillingIntentsOnce(context.Background(), now, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, 2, result.Examined)
+	require.Equal(t, 1, result.ActiveLease)
+	require.Equal(t, 1, result.Escalated)
+	require.Len(t, repo.listInputs, 3)
+	require.Nil(t, repo.listInputs[0].After)
+	require.NotNil(t, repo.listInputs[1].After)
+	require.Equal(t, first.ID, repo.listInputs[1].After.ID)
+	require.Equal(t, first.UpdatedAt, repo.listInputs[1].After.UpdatedAt)
+	require.Len(t, repo.escalations, 1)
+	require.Equal(t, second.ID, repo.escalations[0].ID)
+}
+
+func TestRecoverStaleBillingIntentsContinuesFromPriorCursorAfterMaxPages(t *testing.T) {
+	now := time.Date(2026, 7, 27, 6, 0, 0, 0, time.UTC)
+	pages := make([][]AccountShareBillingIntentAttentionCandidate, 0, accountShareBillingRecoveryMaxPages+2)
+	countByMembership := make(map[int64]int, accountShareBillingRecoveryMaxPages+1)
+	for index := 0; index < accountShareBillingRecoveryMaxPages+1; index++ {
+		candidate := staleBillingIntentCandidate(now.Add(-3*time.Minute + time.Duration(index)*time.Second))
+		candidate.ID = int64(index + 1)
+		candidate.MembershipID = int64(1000 + index)
+		pages = append(pages, []AccountShareBillingIntentAttentionCandidate{candidate})
+		countByMembership[candidate.MembershipID] = 1
+	}
+	pages = append(pages, nil)
+	repo := &accountShareBillingRecoveryRepoStub{pages: pages}
+	svc := accountShareBillingRecoveryTestService(repo, &accountShareBillingRecoveryCacheStub{
+		ttl:               time.Minute,
+		countByMembership: countByMembership,
+	})
+
+	first, err := svc.recoverStaleBillingIntentsOnce(context.Background(), now, nil)
+	require.NoError(t, err)
+	require.Equal(t, accountShareBillingRecoveryMaxPages, first.ScanPages)
+	require.Equal(t, accountShareBillingRecoveryMaxPages, first.Examined)
+
+	second, err := svc.recoverStaleBillingIntentsOnce(context.Background(), now, nil)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, second.ScanPages, 1)
+	require.GreaterOrEqual(t, second.Examined, 1)
+	require.GreaterOrEqual(t, len(repo.listInputs), accountShareBillingRecoveryMaxPages+2)
+	require.NotNil(t, repo.listInputs[accountShareBillingRecoveryMaxPages].After)
+	require.Equal(
+		t,
+		int64(accountShareBillingRecoveryMaxPages),
+		repo.listInputs[accountShareBillingRecoveryMaxPages].After.ID,
+	)
 }
 
 func TestRecoverStaleBillingIntentsFailsClosedWithoutRuntimeLeaseCapability(t *testing.T) {
@@ -255,20 +370,48 @@ func accountShareBillingRecoveryTestService(
 
 type accountShareBillingRecoveryRepoStub struct {
 	AccountShareBillingIntentRepository
-	candidates  []AccountShareBillingIntentAttentionCandidate
-	listErr     error
-	escalateErr error
-	listCalls   int
-	escalations []EscalateAccountShareBillingIntentInput
+	candidates    []AccountShareBillingIntentAttentionCandidate
+	pages         [][]AccountShareBillingIntentAttentionCandidate
+	listErr       error
+	escalateErr   error
+	cancelErr     error
+	listCalls     int
+	listInputs    []ListAccountShareBillingRecoveryCandidatesInput
+	escalations   []EscalateAccountShareBillingIntentInput
+	cancellations []AccountShareBillingIntentTransition
 }
 
-func (s *accountShareBillingRecoveryRepoStub) ListStaleForAttention(
-	context.Context,
-	time.Time,
-	int,
+func (s *accountShareBillingRecoveryRepoStub) ListRecoveryCandidates(
+	_ context.Context,
+	input ListAccountShareBillingRecoveryCandidatesInput,
 ) ([]AccountShareBillingIntentAttentionCandidate, error) {
+	s.listInputs = append(s.listInputs, input)
+	callIndex := s.listCalls
 	s.listCalls++
+	if callIndex < len(s.pages) {
+		return append([]AccountShareBillingIntentAttentionCandidate(nil), s.pages[callIndex]...), s.listErr
+	}
+	if callIndex > 0 {
+		return nil, s.listErr
+	}
 	return append([]AccountShareBillingIntentAttentionCandidate(nil), s.candidates...), s.listErr
+}
+
+func (s *accountShareBillingRecoveryRepoStub) CancelCreated(
+	_ context.Context,
+	input AccountShareBillingIntentTransition,
+	_ string,
+	_ string,
+) (*AccountShareBillingIntentState, error) {
+	s.cancellations = append(s.cancellations, input)
+	if s.cancelErr != nil {
+		return nil, s.cancelErr
+	}
+	return &AccountShareBillingIntentState{
+		ID:         input.ID,
+		Status:     AccountShareBillingIntentStatusCancelled,
+		StateToken: input.ExpectedStateToken + 1,
+	}, nil
 }
 
 func (s *accountShareBillingRecoveryRepoStub) EscalateStaleToNeedsAttention(
@@ -288,9 +431,11 @@ func (s *accountShareBillingRecoveryRepoStub) EscalateStaleToNeedsAttention(
 
 type accountShareBillingRecoveryCacheStub struct {
 	ConcurrencyCache
-	ttl      time.Duration
-	count    int
-	countErr error
+	ttl               time.Duration
+	count             int
+	countByMembership map[int64]int
+	countErr          error
+	countCalls        int
 }
 
 func (s *accountShareBillingRecoveryCacheStub) AcquireAccountShareMembershipSlot(
@@ -311,9 +456,13 @@ func (s *accountShareBillingRecoveryCacheStub) ReleaseAccountShareMembershipSlot
 }
 
 func (s *accountShareBillingRecoveryCacheStub) GetAccountShareMembershipConcurrency(
-	context.Context,
-	int64,
+	_ context.Context,
+	membershipID int64,
 ) (int, error) {
+	s.countCalls++
+	if s.countByMembership != nil {
+		return s.countByMembership[membershipID], s.countErr
+	}
 	return s.count, s.countErr
 }
 

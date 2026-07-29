@@ -41,6 +41,7 @@ type accountShareLifecycleRepoStub struct {
 	roomAccountsErr   error
 	roomAccountCalls  int
 	transitionSignal  chan accountShareLifecycleTransitionCall
+	transitionHook    func(string)
 
 	validatingRoomIDs     []int64
 	validatingRoomIDsErr  error
@@ -55,6 +56,10 @@ type accountShareLifecycleRepoStub struct {
 	softDeleteAdmin     bool
 	softDeleteListingID int64
 	softDeleteInput     AccountShareRoomDeleteInput
+
+	existingDeleteOperation *AccountShareRoomOperation
+	findDeleteCalls         int
+	findDeleteRequestID     string
 
 	finalizeOperation   *AccountShareRoomOperation
 	finalizeErr         error
@@ -108,6 +113,9 @@ func (r *accountShareLifecycleRepoStub) TransitionRoomLifecycle(
 		input:        input,
 	}
 	r.transitionCalls = append(r.transitionCalls, call)
+	if r.transitionHook != nil {
+		r.transitionHook(command)
+	}
 	if err := r.transitionErrors[command]; err != nil {
 		if r.transitionSignal != nil {
 			r.transitionSignal <- call
@@ -129,6 +137,19 @@ func (r *accountShareLifecycleRepoStub) TransitionRoomLifecycle(
 	return &cloned, nil
 }
 
+type accountShareLifecycleContextTester struct {
+	contextErr error
+}
+
+func (t *accountShareLifecycleContextTester) RunTestBackground(
+	ctx context.Context,
+	_ int64,
+	_ string,
+) (*ScheduledTestResult, error) {
+	t.contextErr = ctx.Err()
+	return &ScheduledTestResult{Status: "success"}, nil
+}
+
 func (r *accountShareLifecycleRepoStub) ListRoomAccounts(
 	_ context.Context,
 	_ int64,
@@ -147,7 +168,7 @@ func (r *accountShareLifecycleRepoStub) FinalizeDrainingRoom(
 	return nil, ErrAccountShareRoomInvalidTransition
 }
 
-func (r *accountShareLifecycleRepoStub) ListDrainingRoomIDs(context.Context, int) ([]int64, error) {
+func (r *accountShareLifecycleRepoStub) ListDrainingRoomIDs(context.Context, int64, int) ([]int64, error) {
 	return nil, nil
 }
 
@@ -291,6 +312,22 @@ func (r *accountShareLifecycleRepoStub) SoftDeleteRoom(
 		return nil, ErrAccountShareRoomOperationConflict
 	}
 	cloned := *r.softDeleteOperation
+	return &cloned, nil
+}
+
+func (r *accountShareLifecycleRepoStub) FindRoomDeleteOperation(
+	_ context.Context,
+	_ int64,
+	_ bool,
+	_ int64,
+	requestID string,
+) (*AccountShareRoomOperation, error) {
+	r.findDeleteCalls++
+	r.findDeleteRequestID = requestID
+	if r.existingDeleteOperation == nil {
+		return nil, nil
+	}
+	cloned := *r.existingDeleteOperation
 	return &cloned, nil
 }
 
@@ -881,6 +918,59 @@ func TestAccountShareRoomActivationValidationFailClosesRoom(t *testing.T) {
 	require.True(t, repo.transitionCalls[1].input.Confirmed)
 }
 
+func TestAccountShareRoomActivationContinuesAfterRequestContextCancellation(t *testing.T) {
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	repo := &accountShareLifecycleRepoStub{
+		accountShareModeRepoStub: &accountShareModeRepoStub{},
+		managementStates: []AccountShareRoomManagementState{{
+			ListingID:       7,
+			OwnerUserID:     42,
+			RowVersion:      3,
+			LifecycleStatus: AccountShareListingStatusActive,
+		}},
+		transitionResults: map[string]*AccountShareListing{
+			AccountShareRoomActionActivate: {
+				ID:            7,
+				RowVersion:    2,
+				AccountID:     99,
+				OwnerUserID:   42,
+				Status:        AccountShareListingStatusValidating,
+				AllowedModels: []string{"gpt-5.5"},
+			},
+			"validation-pass": {
+				ID:         7,
+				RowVersion: 3,
+				AccountID:  99,
+				Status:     AccountShareListingStatusActive,
+			},
+		},
+		roomAccounts: []AccountShareRoomAccount{accountShareLifecycleTestRoomAccount(99)},
+		transitionHook: func(command string) {
+			if command == AccountShareRoomActionActivate {
+				cancelRequest()
+			}
+		},
+	}
+	tester := &accountShareLifecycleContextTester{}
+	recovery := &accountShareModeRecoveryStub{}
+	accountRepo := accountShareLifecycleTestAccountRepository(&Account{ID: 99, Platform: PlatformOpenAI})
+	service := newAccountShareLifecycleTestService(repo, nil, tester, recovery, accountRepo)
+
+	state, err := service.ActivateRoom(
+		requestCtx,
+		42,
+		false,
+		7,
+		AccountShareRoomLifecycleCommandInput{ExpectedVersion: 1},
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, state)
+	require.NoError(t, tester.contextErr)
+	require.Len(t, repo.transitionCalls, 2)
+	require.Equal(t, "validation-pass", repo.transitionCalls[1].command)
+}
+
 func TestAccountShareRoomActivationValidatesEveryModelLocallyAndEveryRoutableAccountUpstream(t *testing.T) {
 	repo := &accountShareLifecycleRepoStub{
 		accountShareModeRepoStub: &accountShareModeRepoStub{},
@@ -1384,6 +1474,37 @@ func TestAccountShareRoomDeleteRejectsVersionChangedAfterIntent(t *testing.T) {
 
 	require.ErrorIs(t, err, ErrAccountShareVersionConflict)
 	require.Nil(t, operation)
+	require.Zero(t, repo.softDeleteCalls)
+}
+
+func TestAccountShareRoomDeleteReplaysDurableOperationBeforeMutablePreconditions(t *testing.T) {
+	repo := &accountShareLifecycleRepoStub{
+		accountShareModeRepoStub: &accountShareModeRepoStub{},
+		existingDeleteOperation: &AccountShareRoomOperation{
+			ID:        "delete-operation-1",
+			ListingID: 7,
+			Action:    AccountShareRoomOperationActionDelete,
+			Status:    "succeeded",
+		},
+	}
+	service := newAccountShareLifecycleTestService(repo, nil, nil, nil)
+
+	operation, err := service.DeleteRoom(
+		context.Background(),
+		42,
+		false,
+		7,
+		AccountShareRoomDeleteInput{
+			RequestID: " durable-request-1 ",
+		},
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, operation)
+	require.Equal(t, "succeeded", operation.Status)
+	require.Equal(t, 1, repo.findDeleteCalls)
+	require.Equal(t, "durable-request-1", repo.findDeleteRequestID)
+	require.Empty(t, repo.managementCalls)
 	require.Zero(t, repo.softDeleteCalls)
 }
 

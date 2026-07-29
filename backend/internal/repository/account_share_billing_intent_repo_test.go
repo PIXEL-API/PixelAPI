@@ -172,7 +172,7 @@ func TestAccountShareBillingIntentRepositoryMarkReadyUsesStateTokenCAS(t *testin
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestAccountShareBillingIntentRepositoryClaimReadyUsesSkipLockedAndFencingTokens(t *testing.T) {
+func TestAccountShareBillingIntentRepositoryClaimReadySerializesEachMembershipAndUsesFencingTokens(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
@@ -184,7 +184,7 @@ func TestAccountShareBillingIntentRepositoryClaimReadyUsesSkipLockedAndFencingTo
 	now := time.Date(2026, 7, 27, 2, 0, 0, 0, time.UTC)
 	leaseExpiresAt := now.Add(30 * time.Second)
 
-	mock.ExpectQuery(`(?s)FOR UPDATE SKIP LOCKED.*state_token = intent\.state_token \+ 1.*lease_token = intent\.lease_token \+ 1.*RETURNING`).
+	mock.ExpectQuery(`(?s)ROW_NUMBER\(\) OVER \(\s+PARTITION BY membership_id.*WHERE ranked\.membership_rank = 1\s+AND NOT EXISTS \(.*active_intent\.membership_id = ranked\.membership_id.*active_intent\.status = 'processing'.*active_intent\.lease_expires_at > clock_timestamp\(\).*FOR UPDATE OF intent SKIP LOCKED.*state_token = intent\.state_token \+ 1.*lease_token = intent\.lease_token \+ 1.*RETURNING`).
 		WithArgs(5, "worker-a", int64(30000)).
 		WillReturnRows(sqlmock.NewRows(billingIntentWorkColumnNames()).AddRow(
 			int64(100),
@@ -276,16 +276,21 @@ func TestAccountShareBillingIntentRepositoryCountPendingIncludesAttentionStates(
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestAccountShareBillingIntentRepositoryListStaleForAttention(t *testing.T) {
+func TestAccountShareBillingIntentRepositoryListRecoveryCandidatesUsesStatusCutoffsAndKeyset(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	repo := &accountShareBillingIntentRepository{db: db}
-	staleBefore := time.Date(2026, 7, 27, 1, 0, 0, 0, time.UTC)
-	now := staleBefore.Add(-time.Hour)
+	inFlightStaleBefore := time.Date(2026, 7, 27, 1, 0, 0, 0, time.UTC)
+	createdStaleBefore := inFlightStaleBefore.Add(-4 * time.Minute)
+	after := service.AccountShareBillingRecoveryCursor{
+		UpdatedAt: inFlightStaleBefore.Add(-2 * time.Hour),
+		ID:        99,
+	}
+	now := inFlightStaleBefore.Add(-time.Hour)
 
-	mock.ExpectQuery(`(?s)'forward_runtime_lease_expired'.*WHERE status = 'in_flight'\s+AND updated_at <= \$1\s+ORDER BY`).
-		WithArgs(staleBefore, 10).
+	mock.ExpectQuery(`(?s)CASE\s+WHEN status = 'created' THEN 'forward_never_started'.*status = 'created'\s+AND updated_at <= \$2.*status = 'in_flight'\s+AND updated_at <= \$1.*\(updated_at, id\) > \(\$3, \$4\).*ORDER BY updated_at ASC, id ASC\s+LIMIT \$5`).
+		WithArgs(inFlightStaleBefore, createdStaleBefore, after.UpdatedAt, after.ID, 10).
 		WillReturnRows(sqlmock.NewRows(billingIntentAttentionColumnNames()).AddRow(
 			int64(100),
 			"req-stale",
@@ -310,7 +315,12 @@ func TestAccountShareBillingIntentRepositoryListStaleForAttention(t *testing.T) 
 			nil,
 		))
 
-	items, err := repo.ListStaleForAttention(context.Background(), staleBefore, 10)
+	items, err := repo.ListRecoveryCandidates(context.Background(), service.ListAccountShareBillingRecoveryCandidatesInput{
+		InFlightStaleBefore: inFlightStaleBefore,
+		CreatedStaleBefore:  createdStaleBefore,
+		After:               &after,
+		Limit:               10,
+	})
 	require.NoError(t, err)
 	require.Len(t, items, 1)
 	require.Equal(t, "forward_runtime_lease_expired", items[0].ReasonCode)

@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -392,4 +393,119 @@ func TestHandleStreamingResponse_FailoverBodyDoesNotLeakAddresses(t *testing.T) 
 	// 仍然包含可诊断的根因
 	require.Contains(t, body, "connection reset by peer")
 	require.Contains(t, body, "upstream stream disconnected")
+}
+
+func TestHandleStreamingResponse_BillingGateBlocksTerminalEvent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := newMinimalGatewayService()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"req-gated-stream"}},
+		Body: io.NopCloser(strings.NewReader(
+			"event: message_start\n" +
+				"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":12}}}\n\n" +
+				"event: message_delta\n" +
+				"data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":7}}\n\n" +
+				"event: message_stop\n" +
+				"data: {\"type\":\"message_stop\"}\n\n",
+		)),
+	}
+
+	gateEntered := make(chan *ForwardResult, 1)
+	releaseGate := make(chan struct{})
+	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(result *ForwardResult) error {
+		gateEntered <- result
+		<-releaseGate
+		return nil
+	}))
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.handleStreamingResponse(ctx, resp, c, &Account{ID: 1}, time.Now(), "model", "model", false)
+		done <- err
+	}()
+
+	result := <-gateEntered
+	require.Equal(t, 12, result.Usage.InputTokens)
+	require.Equal(t, 7, result.Usage.OutputTokens)
+	require.NotContains(t, rec.Body.String(), "message_stop")
+	require.Contains(t, rec.Body.String(), "message_delta")
+
+	close(releaseGate)
+	require.NoError(t, <-done)
+	require.Contains(t, rec.Body.String(), "message_stop")
+}
+
+func TestHandleStreamingResponse_BillingGateRecognizesEventNameOnlyTerminal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := newMinimalGatewayService()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"req-event-name-terminal"}},
+		Body: io.NopCloser(strings.NewReader(
+			"event: message_start\n" +
+				"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":12}}}\n\n" +
+				"event: message_delta\n" +
+				"data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":7}}\n\n" +
+				"event: message_stop\n" +
+				"data: {}\n\n",
+		)),
+	}
+
+	gateErr := errors.New("billing unavailable")
+	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(result *ForwardResult) error {
+		require.Equal(t, 12, result.Usage.InputTokens)
+		require.Equal(t, 7, result.Usage.OutputTokens)
+		return gateErr
+	}))
+
+	_, err := svc.handleStreamingResponse(ctx, resp, c, &Account{ID: 1}, time.Now(), "model", "model", false)
+	require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
+	require.NotContains(t, rec.Body.String(), "event: message_stop")
+	require.Contains(t, rec.Body.String(), "event: message_delta")
+}
+
+func TestHandleNonStreamingResponse_BillingGateBlocksBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := newMinimalGatewayService()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"req-gated-sync"}},
+		Body: io.NopCloser(strings.NewReader(
+			`{"id":"msg_gated","model":"model","usage":{"input_tokens":12,"output_tokens":7}}`,
+		)),
+	}
+
+	gateEntered := make(chan *ForwardResult, 1)
+	releaseGate := make(chan struct{})
+	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(result *ForwardResult) error {
+		gateEntered <- result
+		<-releaseGate
+		return nil
+	}))
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.handleNonStreamingResponse(ctx, resp, c, &Account{ID: 1}, time.Now(), "model", "model")
+		done <- err
+	}()
+
+	result := <-gateEntered
+	require.Equal(t, 12, result.Usage.InputTokens)
+	require.Equal(t, 7, result.Usage.OutputTokens)
+	require.Empty(t, rec.Body.String())
+
+	close(releaseGate)
+	require.NoError(t, <-done)
+	require.Contains(t, rec.Body.String(), `"id":"msg_gated"`)
 }

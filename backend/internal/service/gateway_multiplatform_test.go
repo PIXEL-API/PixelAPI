@@ -3327,3 +3327,59 @@ func TestGatewayService_ResolveGatewayGroup_DetectsFallbackCycle(t *testing.T) {
 	require.Nil(t, gotID)
 	require.Contains(t, err.Error(), "fallback group cycle")
 }
+
+func TestGatewayLegacySelectorAccountShareModeUsesOnlyBoundAccount(t *testing.T) {
+	modeGroupID := int64(61721)
+	consumerUserID := int64(5582)
+	apiKeyID := int64(20105)
+	boundAccount := Account{
+		ID:          416120,
+		Platform:    PlatformAnthropic,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 20,
+	}
+	unboundAccount := Account{
+		ID:          416121,
+		Platform:    PlatformAnthropic,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 20,
+	}
+	shareRepo := &accountShareModeRepoStub{
+		membership: &AccountShareMembership{ID: 1, AccountID: boundAccount.ID, ConsumerUserID: consumerUserID, APIKeyID: apiKeyID},
+		listing:    &AccountShareListing{ID: 1, AccountID: boundAccount.ID, OwnerUserID: 1, Status: AccountShareListingStatusActive},
+	}
+	svc := &GatewayService{
+		accountRepo:             stubOpenAIAccountRepo{accounts: []Account{unboundAccount, boundAccount}},
+		groupRepo:               &mockGroupRepoForGateway{groups: map[int64]*Group{modeGroupID: {ID: modeGroupID, Platform: PlatformAnthropic, Status: StatusActive}}},
+		accountShareModeService: &AccountShareModeService{repo: shareRepo},
+	}
+	ctx := WithAccountShareModeRequest(context.Background(), consumerUserID, apiKeyID)
+
+	account, err := svc.SelectAccountForModelWithExclusions(ctx, &modeGroupID, "", "", nil)
+
+	require.NoError(t, err)
+	require.NotNil(t, account)
+	require.Equal(t, boundAccount.ID, account.ID)
+	require.Equal(t, 1, shareRepo.bindingCalls)
+}
+
+func TestGatewayLegacySelectorAccountShareModeWithoutRequestContextFailsClosed(t *testing.T) {
+	modeGroupID := int64(61722)
+	modeGroup := true
+	shareRepo := &accountShareModeRepoStub{modeGroup: &modeGroup}
+	svc := &GatewayService{
+		accountRepo:             stubOpenAIAccountRepo{accounts: []Account{{ID: 416122, Platform: PlatformAnthropic, Status: StatusActive, Schedulable: true}}},
+		groupRepo:               &mockGroupRepoForGateway{groups: map[int64]*Group{modeGroupID: {ID: modeGroupID, Platform: PlatformAnthropic, Status: StatusActive}}},
+		accountShareModeService: &AccountShareModeService{repo: shareRepo},
+	}
+
+	account, err := svc.SelectAccountForModelWithExclusions(context.Background(), &modeGroupID, "", "", nil)
+
+	require.Nil(t, account)
+	require.ErrorIs(t, err, ErrAccountShareModeGroupUnbound)
+	require.Equal(t, 0, shareRepo.bindingCalls)
+}

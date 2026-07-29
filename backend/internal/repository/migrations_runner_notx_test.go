@@ -293,6 +293,8 @@ func TestExecuteNonTransactionalMigrationSessionCleanup(t *testing.T) {
 			WillReturnError(resetErr)
 		mock.ExpectExec(regexp.QuoteMeta("RESET statement_timeout")).
 			WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec(regexp.QuoteMeta("RESET search_path")).
+			WillReturnResult(sqlmock.NewResult(0, 0))
 
 		err := executeNonTransactionalMigration(context.Background(), db, migrationName, migrationContent)
 
@@ -310,7 +312,8 @@ func TestExecuteNonTransactionalMigrationSessionCleanup(t *testing.T) {
 				case "SET lock_timeout = '2s'",
 					"SET statement_timeout = '30min'",
 					migrationStatement,
-					"RESET statement_timeout":
+					"RESET statement_timeout",
+					"RESET search_path":
 					return sqlmock.NewResult(0, 0), nil
 				case "RESET lock_timeout":
 					return nil, resetErr
@@ -342,7 +345,8 @@ func TestExecuteNonTransactionalMigrationSessionCleanup(t *testing.T) {
 				case "SET lock_timeout = '2s'",
 					"SET statement_timeout = '30min'",
 					migrationStatement,
-					"RESET statement_timeout":
+					"RESET statement_timeout",
+					"RESET search_path":
 					return sqlmock.NewResult(0, 0), nil
 				case "RESET lock_timeout":
 					return nil, resetErr
@@ -375,6 +379,8 @@ func TestExecuteNonTransactionalMigrationSessionCleanup(t *testing.T) {
 			WillReturnError(lockResetErr)
 		mock.ExpectExec(regexp.QuoteMeta("RESET statement_timeout")).
 			WillReturnError(statementResetErr)
+		mock.ExpectExec(regexp.QuoteMeta("RESET search_path")).
+			WillReturnResult(sqlmock.NewResult(0, 0))
 
 		err := executeNonTransactionalMigration(context.Background(), db, migrationName, migrationContent)
 
@@ -399,7 +405,7 @@ func TestExecuteNonTransactionalMigrationSessionCleanup(t *testing.T) {
 				case migrationStatement:
 					cancel()
 					return nil, ctx.Err()
-				case "RESET lock_timeout", "RESET statement_timeout":
+				case "RESET lock_timeout", "RESET statement_timeout", "RESET search_path":
 					resetContextErrors = append(resetContextErrors, callCtx.Err())
 					return sqlmock.NewResult(0, 0), nil
 				default:
@@ -418,8 +424,9 @@ func TestExecuteNonTransactionalMigrationSessionCleanup(t *testing.T) {
 			migrationStatement,
 			"RESET lock_timeout",
 			"RESET statement_timeout",
+			"RESET search_path",
 		}, queries)
-		require.Equal(t, []error{nil, nil}, resetContextErrors)
+		require.Equal(t, []error{nil, nil, nil}, resetContextErrors)
 	})
 }
 
@@ -1227,6 +1234,52 @@ func TestApplyMigrationsFS_NonTransactionalMigration(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestApplyMigrationsFS_OnlineMigrationResetsSession(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	prepareMigrationsBootstrapExpectations(mock)
+	mock.ExpectQuery("SELECT checksum FROM schema_migrations WHERE filename = \\$1").
+		WithArgs("001_backfill_online.sql").
+		WillReturnError(sql.ErrNoRows)
+	expectNonTransactionalMigrationSessionTimeouts(mock)
+	mock.ExpectExec("CREATE OR REPLACE PROCEDURE backfill_rows").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CALL backfill_rows\\(\\)").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("DROP PROCEDURE IF EXISTS backfill_rows\\(\\)").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	expectNonTransactionalMigrationSessionReset(mock)
+	mock.ExpectExec("INSERT INTO schema_migrations \\(filename, checksum\\) VALUES \\(\\$1, \\$2\\)").
+		WithArgs("001_backfill_online.sql", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("SELECT pg_advisory_unlock\\(\\$1\\)").
+		WithArgs(migrationsAdvisoryLockID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	fsys := fstest.MapFS{
+		"001_backfill_online.sql": &fstest.MapFile{
+			Data: []byte(`
+CREATE OR REPLACE PROCEDURE backfill_rows()
+LANGUAGE plpgsql
+AS $procedure$
+BEGIN
+    PERFORM set_config('search_path', 'pg_catalog, public', FALSE);
+    COMMIT;
+END
+$procedure$;
+CALL backfill_rows();
+DROP PROCEDURE IF EXISTS backfill_rows();
+`),
+		},
+	}
+
+	err = applyMigrationsFS(context.Background(), db, fsys)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestApplyMigrationsFS_NonTransactionalMigration_ResetFailureIsNotRecorded(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -1243,6 +1296,8 @@ func TestApplyMigrationsFS_NonTransactionalMigration_ResetFailureIsNotRecorded(t
 	mock.ExpectExec(regexp.QuoteMeta("RESET lock_timeout")).
 		WillReturnError(resetErr)
 	mock.ExpectExec(regexp.QuoteMeta("RESET statement_timeout")).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("RESET search_path")).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	fsys := fstest.MapFS{
@@ -1933,5 +1988,7 @@ func expectNonTransactionalMigrationSessionReset(mock sqlmock.Sqlmock) {
 	mock.ExpectExec(regexp.QuoteMeta("RESET lock_timeout")).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta("RESET statement_timeout")).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("RESET search_path")).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 }

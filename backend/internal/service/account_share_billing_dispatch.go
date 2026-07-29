@@ -24,6 +24,161 @@ const (
 var accountShareBillingDispatchNamespace = uuid.MustParse("919ac1d1-7dd8-4bbc-bb8e-2786627849d4")
 
 type accountShareBillingDispatchContextKey struct{}
+type forwardResultBillingGateContextKey struct{}
+type openAIForwardResultBillingGateContextKey struct{}
+
+// ForwardResultBillingGate serializes the durable billing transition for one
+// Anthropic-compatible forward result. The service layer invokes it before a
+// successful terminal response is exposed, while the handler may invoke it
+// again after Forward returns; sync.Once guarantees both callers observe the
+// same result without rebuilding a time-sensitive billing payload.
+type ForwardResultBillingGate struct {
+	once   sync.Once
+	submit func(*ForwardResult) error
+	err    error
+}
+
+// OpenAIForwardResultBillingGate is the OpenAI-compatible counterpart of
+// ForwardResultBillingGate.
+type OpenAIForwardResultBillingGate struct {
+	once   sync.Once
+	submit func(*OpenAIForwardResult) error
+	err    error
+}
+
+func NewForwardResultBillingGate(submit func(*ForwardResult) error) *ForwardResultBillingGate {
+	if submit == nil {
+		return nil
+	}
+	return &ForwardResultBillingGate{submit: submit}
+}
+
+func NewOpenAIForwardResultBillingGate(submit func(*OpenAIForwardResult) error) *OpenAIForwardResultBillingGate {
+	if submit == nil {
+		return nil
+	}
+	return &OpenAIForwardResultBillingGate{submit: submit}
+}
+
+func WithForwardResultBillingGate(ctx context.Context, gate *ForwardResultBillingGate) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if gate == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, forwardResultBillingGateContextKey{}, gate)
+}
+
+func WithOpenAIForwardResultBillingGate(ctx context.Context, gate *OpenAIForwardResultBillingGate) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if gate == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, openAIForwardResultBillingGateContextKey{}, gate)
+}
+
+func CommitForwardResultBillingGate(ctx context.Context, result *ForwardResult) (bool, error) {
+	return commitForwardResultBillingGate(ctx, result, false)
+}
+
+func CommitForwardResultBillingGateBeforeTerminal(ctx context.Context, result *ForwardResult) (bool, error) {
+	return commitForwardResultBillingGate(ctx, result, true)
+}
+
+func commitForwardResultBillingGate(ctx context.Context, result *ForwardResult, requireComplete bool) (bool, error) {
+	if ctx == nil {
+		return false, nil
+	}
+	gate, _ := ctx.Value(forwardResultBillingGateContextKey{}).(*ForwardResultBillingGate)
+	if gate == nil {
+		return false, nil
+	}
+	gate.once.Do(func() {
+		if result == nil {
+			gate.err = fmt.Errorf(
+				"%w: %w: forward result is required",
+				ErrAccountShareBillingPreTerminalCommit,
+				ErrAccountShareBillingIntentInvalid,
+			)
+			return
+		}
+		hasBillableUsage := ForwardResultHasBillableUsage(result)
+		hasCompleteUsage := ForwardResultHasCompleteBillableUsage(result)
+		if !hasBillableUsage && !(requireComplete && hasCompleteUsage) {
+			gate.err = fmt.Errorf(
+				"%w: %w: forward result has no billable usage",
+				ErrAccountShareBillingPreTerminalCommit,
+				ErrAccountShareBillingIntentInvalid,
+			)
+			return
+		}
+		if requireComplete && !hasCompleteUsage {
+			gate.err = fmt.Errorf(
+				"%w: %w: forward result has no complete billable usage",
+				ErrAccountShareBillingPreTerminalCommit,
+				ErrAccountShareBillingIntentInvalid,
+			)
+			return
+		}
+		if err := gate.submit(result); err != nil {
+			gate.err = fmt.Errorf("%w: %w", ErrAccountShareBillingPreTerminalCommit, err)
+		}
+	})
+	return true, gate.err
+}
+
+func CommitOpenAIForwardResultBillingGate(ctx context.Context, result *OpenAIForwardResult) (bool, error) {
+	return commitOpenAIForwardResultBillingGate(ctx, result, false)
+}
+
+func CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx context.Context, result *OpenAIForwardResult) (bool, error) {
+	return commitOpenAIForwardResultBillingGate(ctx, result, true)
+}
+
+func commitOpenAIForwardResultBillingGate(ctx context.Context, result *OpenAIForwardResult, requireComplete bool) (bool, error) {
+	if ctx == nil {
+		return false, nil
+	}
+	gate, _ := ctx.Value(openAIForwardResultBillingGateContextKey{}).(*OpenAIForwardResultBillingGate)
+	if gate == nil {
+		return false, nil
+	}
+	gate.once.Do(func() {
+		if result == nil {
+			gate.err = fmt.Errorf(
+				"%w: %w: OpenAI forward result is required",
+				ErrAccountShareBillingPreTerminalCommit,
+				ErrAccountShareBillingIntentInvalid,
+			)
+			return
+		}
+		hasBillableUsage := OpenAIForwardResultHasBillableUsage(result)
+		hasCompleteUsage := OpenAIForwardResultHasCompleteBillableUsage(result)
+		if !hasBillableUsage && !(requireComplete && hasCompleteUsage) {
+			gate.err = fmt.Errorf(
+				"%w: %w: OpenAI forward result has no billable usage",
+				ErrAccountShareBillingPreTerminalCommit,
+				ErrAccountShareBillingIntentInvalid,
+			)
+			return
+		}
+		if requireComplete && !hasCompleteUsage {
+			gate.err = fmt.Errorf(
+				"%w: %w: OpenAI forward result has no complete billable usage",
+				ErrAccountShareBillingPreTerminalCommit,
+				ErrAccountShareBillingIntentInvalid,
+			)
+			return
+		}
+		if err := gate.submit(result); err != nil {
+			gate.err = fmt.Errorf("%w: %w", ErrAccountShareBillingPreTerminalCommit, err)
+		}
+	})
+	return true, gate.err
+}
 
 type AccountShareBillingDispatchInput struct {
 	ClientRequestID    string
@@ -551,6 +706,17 @@ func (s *AccountShareModeService) buildAccountShareBillingDispatchCommand(
 		return AccountShareBillingCommand{}, "", fmt.Errorf("%w: request_type is required", ErrAccountShareBillingIntentInvalid)
 	}
 	groupID := *input.APIKey.GroupID
+	billingModel := accountShareBillingModelForDispatch(input.ChannelUsageFields, requestedModel, routedModel)
+	if s.modelPricingResolver == nil {
+		return AccountShareBillingCommand{}, "", ErrServiceUnavailable
+	}
+	if !s.modelPricingResolver.HasConfiguredPricing(ctx, PricingInput{Model: billingModel, GroupID: &groupID}) {
+		return AccountShareBillingCommand{}, "", fmt.Errorf(
+			"%w for account share billing model: %s",
+			ErrModelPricingUnavailable,
+			billingModel,
+		)
+	}
 	var subscriptionID *int64
 	billingType := BillingTypeBalance
 	if input.APIKey.Group != nil && input.APIKey.Group.IsSubscriptionType() {
@@ -577,16 +743,17 @@ func (s *AccountShareModeService) buildAccountShareBillingDispatchCommand(
 	if err != nil {
 		return AccountShareBillingCommand{}, "", err
 	}
-	ownerRatio, inviteRatio, platformRatio := 0.0, 0.0, 1.0
+	ownerRatio, inviteRatio, platformRatio := accountShareBillingRevenueRatios(0, 0)
 	var policyID *int64
 	policyVersion := 0
 	if !ownerSelfUse && policy != nil {
 		id := policy.ID
 		policyID = &id
 		policyVersion = policy.Version
-		ownerRatio = policy.OwnerShareRatio
-		inviteRatio = policy.InviteShareRatio
-		platformRatio = math.Max(0, 1-ownerRatio-inviteRatio)
+		ownerRatio, inviteRatio, platformRatio = accountShareBillingRevenueRatios(
+			policy.OwnerShareRatio,
+			policy.InviteShareRatio,
+		)
 	}
 	channelID := optionalPositiveAccountShareBillingID(input.ChannelUsageFields.ChannelID)
 	command := AccountShareBillingCommand{
@@ -608,9 +775,9 @@ func (s *AccountShareModeService) buildAccountShareBillingDispatchCommand(
 		RateMultiplierSource:  RateMultiplierSourceAccountShare,
 		AccountRateMultiplier: accountShareBillingDecimal(input.Account.BillingRateMultiplier()),
 		HourlyRate:            accountShareBillingDecimal(membership.HourlyRateSnapshot),
-		OwnerShareRatio:       accountShareBillingDecimal(ownerRatio),
-		InviteShareRatio:      accountShareBillingDecimal(inviteRatio),
-		PlatformShareRatio:    accountShareBillingDecimal(platformRatio),
+		OwnerShareRatio:       ownerRatio,
+		InviteShareRatio:      inviteRatio,
+		PlatformShareRatio:    platformRatio,
 		PolicyID:              policyID,
 		PolicyVersion:         policyVersion,
 		ChannelID:             channelID,
@@ -624,6 +791,36 @@ func (s *AccountShareModeService) buildAccountShareBillingDispatchCommand(
 		return AccountShareBillingCommand{}, "", err
 	}
 	return command, actorRole, nil
+}
+
+func accountShareBillingRevenueRatios(ownerRatio, inviteRatio float64) (string, string, string) {
+	owner := decimal.NewFromFloat(ownerRatio)
+	invite := decimal.NewFromFloat(inviteRatio)
+	platform := decimal.NewFromInt(1).Sub(owner).Sub(invite)
+	if platform.IsNegative() {
+		platform = decimal.Zero
+	}
+	return owner.String(), invite.String(), platform.String()
+}
+
+func accountShareBillingModelForDispatch(fields ChannelUsageFields, requestedModel, routedModel string) string {
+	switch strings.TrimSpace(fields.BillingModelSource) {
+	case BillingModelSourceRequested:
+		if model := strings.TrimSpace(fields.OriginalModel); model != "" {
+			return model
+		}
+		if model := strings.TrimSpace(requestedModel); model != "" {
+			return model
+		}
+	case BillingModelSourceChannelMapped:
+		if model := strings.TrimSpace(fields.ChannelMappedModel); model != "" {
+			return model
+		}
+	}
+	if model := strings.TrimSpace(routedModel); model != "" {
+		return model
+	}
+	return strings.TrimSpace(requestedModel)
 }
 
 func buildAccountShareBillingIntentReadyInput(
@@ -743,8 +940,8 @@ func accountShareBillingRateMultiplierFromContext(ctx context.Context) (float64,
 			ErrAccountShareBillingIntentInvalid,
 		)
 	}
-	multiplier, exact := value.Float64()
-	if !exact || math.IsNaN(multiplier) || math.IsInf(multiplier, 0) {
+	multiplier, _ := value.Float64()
+	if math.IsNaN(multiplier) || math.IsInf(multiplier, 0) || (!value.IsZero() && multiplier == 0) {
 		return 0, true, fmt.Errorf(
 			"%w: durable rate multiplier is outside float64 range",
 			ErrAccountShareBillingIntentInvalid,
@@ -779,10 +976,16 @@ func (s *AccountShareModeService) cancelAccountShareBillingDispatchBeforeForward
 		state.Status != AccountShareBillingIntentStatusCreated || state.ID <= 0 || state.StateToken <= 0 {
 		return
 	}
-	_, _ = s.billingIntentRepository.CancelCreated(ctx, AccountShareBillingIntentTransition{
+	if _, err := s.billingIntentRepository.CancelCreated(ctx, AccountShareBillingIntentTransition{
 		ID:                 state.ID,
 		ExpectedStateToken: state.StateToken,
-	}, reasonCode, "upstream dispatch was not started")
+	}, reasonCode, "upstream dispatch was not started"); err != nil {
+		log.Printf(
+			"account_share_billing: cancel created dispatch deferred to stale recovery intent_id=%d err=%v",
+			state.ID,
+			err,
+		)
+	}
 }
 
 func accountShareBillingDecimal(value float64) string {
@@ -864,6 +1067,40 @@ func markAccountShareBillingDispatchReady(ctx context.Context, command *UsageBil
 	return true, dispatch.markReady(ctx, command)
 }
 
+func markAccountShareBillingDispatchReadyNoCharge(ctx context.Context, command *UsageBillingCommand) (bool, error) {
+	dispatch, ok := AccountShareBillingDispatchFromContext(ctx)
+	if !ok {
+		return false, nil
+	}
+	if command == nil || command.UsageLog == nil {
+		dispatch.barrier.complete()
+		return true, fmt.Errorf("%w: no-charge usage billing command is incomplete", ErrAccountShareBillingIntentInvalid)
+	}
+	noChargeCommand := *command
+	noChargeLog := *command.UsageLog
+	noChargeLog.InputCost = 0
+	noChargeLog.OutputCost = 0
+	noChargeLog.CacheCreationCost = 0
+	noChargeLog.CacheReadCost = 0
+	noChargeLog.ImageInputCost = 0
+	noChargeLog.ImageOutputCost = 0
+	noChargeLog.TotalCost = 0
+	noChargeLog.ActualCost = 0
+	noChargeLog.AccountStatsCost = nil
+	noChargeCommand.UsageLog = &noChargeLog
+	noChargeCommand.BalanceCost = 0
+	noChargeCommand.SubscriptionCost = 0
+	noChargeCommand.PrivateGroupCommissionCost = 0
+	noChargeCommand.APIKeyQuotaCost = 0
+	noChargeCommand.APIKeyRateLimitCost = 0
+	noChargeCommand.AccountQuotaCost = 0
+	noChargeCommand.AccountShareModeSettlement = nil
+
+	billingCtx, cancel := detachedBillingContext(ctx)
+	defer cancel()
+	return true, dispatch.markReady(billingCtx, &noChargeCommand)
+}
+
 func CompleteAccountShareBillingDispatchWithoutUsage(
 	ctx context.Context,
 	summary AccountShareBillingResponseSummaryV1,
@@ -885,5 +1122,70 @@ func isAccountShareBillingDispatchError(err error) bool {
 		errors.Is(err, ErrAccountShareBillingIntentNotFound) ||
 		errors.Is(err, ErrAccountShareBillingIntentConflict) ||
 		errors.Is(err, ErrAccountShareBillingIntentStateConflict) ||
-		errors.Is(err, ErrAccountShareBillingBindingUnavailable)
+		errors.Is(err, ErrAccountShareBillingBindingUnavailable) ||
+		errors.Is(err, ErrAccountShareBillingPreTerminalCommit)
+}
+
+const (
+	accountShareBillingRecordUsageMaxAttempts = 3
+	accountShareBillingRecordUsageRetryBase   = 50 * time.Millisecond
+)
+
+// retryAccountShareBillingRecordUsage adds a small bounded retry around the
+// asynchronous usage-recording path used by durable account-share dispatches.
+// Other billing modes preserve their existing single-attempt behavior.
+func retryAccountShareBillingRecordUsage(
+	ctx context.Context,
+	operation func(context.Context) error,
+) error {
+	if operation == nil {
+		return fmt.Errorf("%w: record usage operation is required", ErrAccountShareBillingIntentInvalid)
+	}
+	if _, durable := AccountShareBillingDispatchFromContext(ctx); !durable {
+		return operation(ctx)
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= accountShareBillingRecordUsageMaxAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		lastErr = operation(ctx)
+		if lastErr == nil || !isRetryableAccountShareBillingRecordUsageError(lastErr) {
+			return lastErr
+		}
+		if attempt == accountShareBillingRecordUsageMaxAttempts {
+			break
+		}
+
+		delay := accountShareBillingRecordUsageRetryBase * time.Duration(1<<(attempt-1))
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return lastErr
+}
+
+func isRetryableAccountShareBillingRecordUsageError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, ErrModelPricingUnavailable) ||
+		errors.Is(err, ErrSubscriptionNotFound) ||
+		errors.Is(err, ErrNoAvailableAccounts) ||
+		errors.Is(err, ErrAccountShareMembershipNotFound) ||
+		errors.Is(err, ErrAccountNotFound) ||
+		errors.Is(err, ErrAPIKeyNotFound) ||
+		errors.Is(err, ErrUserNotFound) ||
+		errors.Is(err, ErrServiceUnavailable) ||
+		isAccountShareBillingDispatchError(err) {
+		return false
+	}
+	return true
 }

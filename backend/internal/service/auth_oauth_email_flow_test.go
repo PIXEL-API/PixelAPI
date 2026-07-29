@@ -63,6 +63,10 @@ func (s *redeemCodeRepoStub) Delete(context.Context, int64) error {
 	panic("unexpected Delete call")
 }
 
+func (s *redeemCodeRepoStub) DeleteBatch(context.Context, []int64) (int64, error) {
+	panic("unexpected DeleteBatch call")
+}
+
 func (s *redeemCodeRepoStub) Use(_ context.Context, id, userID int64) error {
 	for code, redeemCode := range s.codesByCode {
 		if redeemCode.ID != id {
@@ -86,8 +90,12 @@ func (s *redeemCodeRepoStub) List(context.Context, pagination.PaginationParams) 
 	panic("unexpected List call")
 }
 
-func (s *redeemCodeRepoStub) ListWithFilters(context.Context, pagination.PaginationParams, string, string, string) ([]RedeemCode, *pagination.PaginationResult, error) {
+func (s *redeemCodeRepoStub) ListWithFilters(context.Context, pagination.PaginationParams, string, string, string, string) ([]RedeemCode, *pagination.PaginationResult, error) {
 	panic("unexpected ListWithFilters call")
+}
+
+func (s *redeemCodeRepoStub) ListCategories(context.Context) ([]string, error) {
+	panic("unexpected ListCategories call")
 }
 
 func (s *redeemCodeRepoStub) ListByUser(context.Context, int64, int) ([]RedeemCode, error) {

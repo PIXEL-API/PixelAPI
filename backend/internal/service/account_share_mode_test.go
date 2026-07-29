@@ -88,6 +88,11 @@ type accountShareModeRepoStub struct {
 	revisionTermsErr     error
 	policy               *AccountSharePolicy
 	policyErr            error
+	bindingMemberships   []AccountShareMembership
+	bindingErr           error
+	bindingConsumerID    int64
+	bindingAPIKeyID      int64
+	bindingStatusCalls   int
 }
 
 type accountShareBillingLifecycleRepoStub struct {
@@ -134,9 +139,20 @@ func (r *accountShareBillingLifecycleRepoStub) FinalizeDrainingRoom(
 
 func (r *accountShareBillingLifecycleRepoStub) ListDrainingRoomIDs(
 	context.Context,
+	int64,
 	int,
 ) ([]int64, error) {
 	r.lifecycleCalls++
+	return nil, nil
+}
+
+func (r *accountShareBillingLifecycleRepoStub) FindRoomDeleteOperation(
+	context.Context,
+	int64,
+	bool,
+	int64,
+	string,
+) (*AccountShareRoomOperation, error) {
 	return nil, nil
 }
 
@@ -227,6 +243,13 @@ var _ AccountShareHistoryRepository = (*accountShareHistoryRepoStub)(nil)
 type accountShareRoomRepoStub struct {
 	*accountShareModeRepoStub
 	AccountShareRoomRepository
+	idempotentListing         *AccountShareListing
+	idempotentErr             error
+	idempotentCalls           int
+	idempotentOwnerUserID     int64
+	idempotentAccountID       int64
+	idempotentKey             string
+	idempotentListingSnapshot *AccountShareListing
 	roomAccountsViewerUserID  int64
 	roomAccountsViewerIsAdmin bool
 	roomAccountsListingID     int64
@@ -239,6 +262,99 @@ type accountShareRoomRepoStub struct {
 	detachBatchCalls          int
 	detachBatchBilling        *AccountShareSeatBillingResult
 	detachBatchErr            error
+}
+
+type accountShareVisibilityRuntimeRepoStub struct {
+	*accountShareModeRepoStub
+	visibleListing       *AccountShareListing
+	visibleErr           error
+	visibleCalls         int
+	visibleListingID     int64
+	visibleViewerUserID  int64
+	visibleViewerIsAdmin bool
+	runtimeAccounts      map[int64][]AccountWithConcurrency
+	runtimeErr           error
+	runtimeCalls         int
+	runtimeListingIDs    []int64
+}
+
+func (r *accountShareVisibilityRuntimeRepoStub) GetVisibleListingByID(
+	_ context.Context,
+	listingID int64,
+	viewerUserID int64,
+	viewerIsAdmin bool,
+) (*AccountShareListing, error) {
+	r.visibleCalls++
+	r.visibleListingID = listingID
+	r.visibleViewerUserID = viewerUserID
+	r.visibleViewerIsAdmin = viewerIsAdmin
+	if r.visibleErr != nil {
+		return nil, r.visibleErr
+	}
+	if r.visibleListing == nil {
+		return nil, ErrAccountShareListingNotFound
+	}
+	listing := *r.visibleListing
+	return &listing, nil
+}
+
+func (r *accountShareVisibilityRuntimeRepoStub) ListRoomRuntimeAccounts(
+	_ context.Context,
+	listingIDs []int64,
+	_ time.Time,
+) (map[int64][]AccountWithConcurrency, error) {
+	r.runtimeCalls++
+	r.runtimeListingIDs = append([]int64(nil), listingIDs...)
+	if r.runtimeErr != nil {
+		return nil, r.runtimeErr
+	}
+	return r.runtimeAccounts, nil
+}
+
+type accountShareRuntimeLoadCacheStub struct {
+	ConcurrencyCache
+	loads    map[int64]*AccountLoadInfo
+	err      error
+	calls    int
+	accounts []AccountWithConcurrency
+}
+
+func (c *accountShareRuntimeLoadCacheStub) GetAccountsLoadBatch(
+	_ context.Context,
+	accounts []AccountWithConcurrency,
+) (map[int64]*AccountLoadInfo, error) {
+	c.calls++
+	c.accounts = append([]AccountWithConcurrency(nil), accounts...)
+	if c.err != nil {
+		return nil, c.err
+	}
+	return c.loads, nil
+}
+
+func (r *accountShareRoomRepoStub) FindRoomCreationByIdempotency(
+	_ context.Context,
+	ownerUserID, accountID int64,
+	idempotencyKey string,
+	listing *AccountShareListing,
+) (*AccountShareListing, error) {
+	r.idempotentCalls++
+	r.idempotentOwnerUserID = ownerUserID
+	r.idempotentAccountID = accountID
+	r.idempotentKey = idempotencyKey
+	if listing != nil {
+		snapshot := *listing
+		snapshot.AllowedModels = append([]string(nil), listing.AllowedModels...)
+		r.idempotentListingSnapshot = &snapshot
+	}
+	if r.idempotentErr != nil {
+		return nil, r.idempotentErr
+	}
+	if r.idempotentListing == nil {
+		return nil, nil
+	}
+	result := *r.idempotentListing
+	result.AllowedModels = append([]string(nil), r.idempotentListing.AllowedModels...)
+	return &result, nil
 }
 
 type accountShareOwnedAccountRepoStub struct {
@@ -521,14 +637,16 @@ type accountShareRecommendationUsageProfileRepoStub struct {
 	err       error
 	calls     int
 	userID    int64
+	platform  string
 	model     string
 	startTime time.Time
 	endTime   time.Time
 }
 
-func (s *accountShareRecommendationUsageProfileRepoStub) GetAccountShareRecommendationUsageProfile(_ context.Context, userID int64, model string, startTime, endTime time.Time) (*AccountShareRecommendationUsageProfileStats, error) {
+func (s *accountShareRecommendationUsageProfileRepoStub) GetAccountShareRecommendationUsageProfile(_ context.Context, userID int64, platform, model string, startTime, endTime time.Time) (*AccountShareRecommendationUsageProfileStats, error) {
 	s.calls++
 	s.userID = userID
+	s.platform = platform
 	s.model = model
 	s.startTime = startTime
 	s.endTime = endTime
@@ -845,6 +963,9 @@ func TestDetachRoomAccountsUsesOneAtomicRepositoryCall(t *testing.T) {
 		},
 	}
 	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
+	svc.concurrencyService = NewConcurrencyService(&accountShareLifecycleConcurrencyCacheStub{
+		counts: map[int64]int{},
+	})
 
 	result, err := svc.DetachRoomAccounts(context.Background(), BatchAccountShareRoomAccountsInput{
 		ListingID:      700,
@@ -919,6 +1040,259 @@ func TestCreateRoomFromOwnedAccountFailsClosedWithoutConcurrencyService(t *testi
 	require.Empty(t, modeRepo.modeGroupEnsureCalls)
 }
 
+func TestCreateRoomFromOwnedAccountRejectsWhitespaceOnlyRoomName(t *testing.T) {
+	svc := NewAccountShareModeService(nil, nil, nil, nil, nil, nil)
+
+	listing, err := svc.CreateRoomFromOwnedAccount(
+		context.Background(),
+		42,
+		CreateAccountShareRoomInput{
+			AccountID:      70,
+			IdempotencyKey: "create-room-empty-name",
+			RoomName:       " \t\r\n ",
+		},
+	)
+
+	require.Nil(t, listing)
+	require.ErrorIs(t, err, ErrAccountShareModeInvalidName)
+}
+
+func TestCreateRoomFromOwnedAccountReplaysBeforeCurrentAccountAvailabilityChecks(t *testing.T) {
+	ownerUserID := int64(42)
+	replayed := &AccountShareListing{
+		ID:                 700,
+		AccountID:          70,
+		OwnerUserID:        ownerUserID,
+		Platform:           PlatformAnthropic,
+		RoomName:           "room-a",
+		SeatLimit:          1,
+		RateMultiplier:     1,
+		AllowedModels:      []string{"claude-sonnet-4-20250514"},
+		PerUserConcurrency: 1,
+		AccountSampleScope: AccountShareAccountSampleScopeRepresentative,
+	}
+	roomRepo := &accountShareRoomRepoStub{
+		accountShareModeRepoStub: &accountShareModeRepoStub{},
+		idempotentListing:        replayed,
+	}
+	accountRepo := &accountShareOwnedAccountRepoStub{
+		account: &Account{
+			ID:           70,
+			Name:         "owned-account",
+			Platform:     PlatformAnthropic,
+			AccountLevel: AccountLevelUnknown,
+			OwnerUserID:  &ownerUserID,
+			Status:       StatusDisabled,
+			Schedulable:  false,
+			Concurrency:  5,
+		},
+	}
+	svc := NewAccountShareModeService(roomRepo, accountRepo, nil, nil, nil, nil)
+
+	listing, err := svc.CreateRoomFromOwnedAccount(
+		context.Background(),
+		ownerUserID,
+		CreateAccountShareRoomInput{
+			AccountID:          70,
+			IdempotencyKey:     "create-room-replay",
+			RoomName:           "room-a",
+			SeatLimit:          1,
+			RateMultiplier:     1,
+			AllowedModels:      []string{"claude-sonnet-4-20250514"},
+			PerUserConcurrency: 1,
+		},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, replayed, listing)
+	require.Equal(t, 1, accountRepo.calls)
+	require.Equal(t, 1, roomRepo.idempotentCalls)
+	require.Equal(t, ownerUserID, roomRepo.idempotentOwnerUserID)
+	require.Equal(t, int64(70), roomRepo.idempotentAccountID)
+	require.Equal(t, "create-room-replay", roomRepo.idempotentKey)
+	require.Empty(t, roomRepo.modeGroupEnsureCalls)
+}
+
+func TestCreateRoomFromOwnedAccountRejectsDynamicallyUnavailableAccount(t *testing.T) {
+	ownerUserID := int64(42)
+	expiredAt := time.Now().UTC().Add(-time.Minute)
+	modeRepo := &accountShareModeRepoStub{}
+	roomRepo := &accountShareRoomRepoStub{
+		accountShareModeRepoStub: modeRepo,
+	}
+	accountRepo := &accountShareOwnedAccountRepoStub{
+		account: &Account{
+			ID:                 70,
+			Name:               "expired-owned-account",
+			Platform:           PlatformAnthropic,
+			AccountLevel:       AccountLevelPro,
+			OwnerUserID:        &ownerUserID,
+			Status:             StatusActive,
+			Schedulable:        true,
+			Concurrency:        5,
+			AutoPauseOnExpired: true,
+			ExpiresAt:          &expiredAt,
+		},
+	}
+	svc := NewAccountShareModeService(roomRepo, accountRepo, nil, nil, nil, nil)
+
+	listing, err := svc.CreateRoomFromOwnedAccount(
+		context.Background(),
+		ownerUserID,
+		CreateAccountShareRoomInput{
+			AccountID:          70,
+			IdempotencyKey:     "create-room-expired-account",
+			RoomName:           "room-a",
+			SeatLimit:          1,
+			RateMultiplier:     1,
+			AllowedModels:      []string{"claude-sonnet-4-20250514"},
+			PerUserConcurrency: 1,
+		},
+	)
+
+	require.Nil(t, listing)
+	require.ErrorIs(t, err, ErrAccountShareAccountUnavailable)
+	require.Equal(t, 1, accountRepo.calls)
+	require.Equal(t, 1, roomRepo.idempotentCalls)
+	require.Empty(t, modeRepo.modeGroupEnsureCalls)
+}
+
+func TestGetVisibleListingForwardsViewerRoleToVisibilityRepository(t *testing.T) {
+	repo := &accountShareVisibilityRuntimeRepoStub{
+		accountShareModeRepoStub: &accountShareModeRepoStub{},
+		visibleListing: &AccountShareListing{
+			ID:       700,
+			Platform: PlatformAnthropic,
+			Status:   AccountShareListingStatusPaused,
+		},
+	}
+	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
+
+	listing, err := svc.GetVisibleListing(context.Background(), 42, true, 700)
+
+	require.NoError(t, err)
+	require.NotNil(t, listing)
+	require.Equal(t, 1, repo.visibleCalls)
+	require.Equal(t, int64(700), repo.visibleListingID)
+	require.Equal(t, int64(42), repo.visibleViewerUserID)
+	require.True(t, repo.visibleViewerIsAdmin)
+}
+
+func TestGetVisibleListingHidesRepresentativeAccountFromPublicViewer(t *testing.T) {
+	identityID := int64(99)
+	proxyID := int64(88)
+	repo := &accountShareVisibilityRuntimeRepoStub{
+		accountShareModeRepoStub: &accountShareModeRepoStub{},
+		visibleListing: &AccountShareListing{
+			ID:                700,
+			OwnerUserID:       7,
+			AccountID:         70,
+			AccountName:       "底层账号",
+			AccountIdentityID: &identityID,
+			Accounts:          []AccountShareRoomAccount{{AccountID: 70, AccountName: "底层账号"}},
+			ProxyID:           &proxyID,
+			Proxy:             &AccountShareListingProxy{ID: proxyID},
+			AccountStatus:     StatusActive,
+			Platform:          PlatformAnthropic,
+			Status:            AccountShareListingStatusActive,
+		},
+	}
+	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
+
+	listing, err := svc.GetVisibleListing(context.Background(), 42, false, 700)
+
+	require.NoError(t, err)
+	require.Zero(t, listing.AccountID)
+	require.Empty(t, listing.AccountName)
+	require.Nil(t, listing.AccountIdentityID)
+	require.Empty(t, listing.Accounts)
+	require.Nil(t, listing.ProxyID)
+	require.Nil(t, listing.Proxy)
+	require.Equal(t, StatusActive, listing.AccountStatus)
+	require.Equal(t, AccountShareAccountSampleScopeRepresentative, listing.AccountSampleScope)
+
+	payload, err := json.Marshal(listing)
+	require.NoError(t, err)
+	var publicView map[string]any
+	require.NoError(t, json.Unmarshal(payload, &publicView))
+	require.NotContains(t, publicView, "account_id")
+}
+
+func TestEnrichListingsRuntimeAggregatesEveryRoomAccount(t *testing.T) {
+	repo := &accountShareVisibilityRuntimeRepoStub{
+		accountShareModeRepoStub: &accountShareModeRepoStub{},
+		runtimeAccounts: map[int64][]AccountWithConcurrency{
+			700: {
+				{ID: 10, MaxConcurrency: 5},
+				{ID: 11, MaxConcurrency: 7},
+			},
+			701: {
+				{ID: 12, MaxConcurrency: 3},
+			},
+		},
+	}
+	cache := &accountShareRuntimeLoadCacheStub{
+		loads: map[int64]*AccountLoadInfo{
+			10: {AccountID: 10, CurrentConcurrency: 2},
+			11: {AccountID: 11, CurrentConcurrency: 4},
+			12: {AccountID: 12, CurrentConcurrency: 1},
+		},
+	}
+	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
+	svc.SetRuntimeDependencies(&ConcurrencyService{cache: cache}, nil, nil, nil)
+	listings := []AccountShareListing{
+		{ID: 700, AccountID: 10, AccountConcurrency: 5},
+		{ID: 701, AccountID: 12, AccountConcurrency: 3},
+	}
+
+	svc.enrichListingsRuntime(context.Background(), listings)
+
+	require.Equal(t, 1, repo.runtimeCalls)
+	require.ElementsMatch(t, []int64{700, 701}, repo.runtimeListingIDs)
+	require.Equal(t, 1, cache.calls)
+	require.ElementsMatch(t, []AccountWithConcurrency{
+		{ID: 10, MaxConcurrency: 5},
+		{ID: 11, MaxConcurrency: 7},
+		{ID: 12, MaxConcurrency: 3},
+	}, cache.accounts)
+	require.Equal(t, 12, listings[0].AccountConcurrency)
+	require.Equal(t, 6, listings[0].CurrentConcurrency)
+	require.True(t, listings[0].RuntimeLoadKnown)
+	require.Equal(t, 3, listings[1].AccountConcurrency)
+	require.Equal(t, 1, listings[1].CurrentConcurrency)
+	require.True(t, listings[1].RuntimeLoadKnown)
+}
+
+func TestEnrichListingsRuntimeLeavesLoadUnknownWhenAnyRoomAccountIsMissing(t *testing.T) {
+	repo := &accountShareVisibilityRuntimeRepoStub{
+		accountShareModeRepoStub: &accountShareModeRepoStub{},
+		runtimeAccounts: map[int64][]AccountWithConcurrency{
+			700: {
+				{ID: 10, MaxConcurrency: 5},
+				{ID: 11, MaxConcurrency: 7},
+			},
+		},
+	}
+	cache := &accountShareRuntimeLoadCacheStub{
+		loads: map[int64]*AccountLoadInfo{
+			10: {AccountID: 10, CurrentConcurrency: 2},
+		},
+	}
+	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
+	svc.SetRuntimeDependencies(&ConcurrencyService{cache: cache}, nil, nil, nil)
+	listings := []AccountShareListing{{
+		ID:                 700,
+		AccountID:          10,
+		AccountConcurrency: 5,
+	}}
+
+	svc.enrichListingsRuntime(context.Background(), listings)
+
+	require.False(t, listings[0].RuntimeLoadKnown)
+	require.Zero(t, listings[0].CurrentConcurrency)
+	require.Equal(t, 5, listings[0].AccountConcurrency)
+}
+
 func TestCreateRoomFromOwnedAccountRejectsUnsupportedModelBeforeRuntimeMutation(t *testing.T) {
 	ownerUserID := int64(42)
 	modeRepo := &accountShareModeRepoStub{}
@@ -957,6 +1331,45 @@ func TestCreateRoomFromOwnedAccountRejectsUnsupportedModelBeforeRuntimeMutation(
 	require.Nil(t, listing)
 	require.ErrorIs(t, err, ErrAccountShareModeUnsupportedModel)
 	require.Equal(t, 1, accountRepo.calls)
+	require.Empty(t, modeRepo.modeGroupEnsureCalls)
+}
+
+func TestCreateRoomFromOwnedAccountRejectsUnsupportedPlatformBeforeRuntimeMutation(t *testing.T) {
+	ownerUserID := int64(42)
+	modeRepo := &accountShareModeRepoStub{}
+	roomRepo := &accountShareRoomRepoStub{accountShareModeRepoStub: modeRepo}
+	accountRepo := &accountShareOwnedAccountRepoStub{
+		account: &Account{
+			ID:           70,
+			Name:         "unsupported-owned-account",
+			Platform:     PlatformGrok,
+			AccountLevel: AccountLevelPro,
+			OwnerUserID:  &ownerUserID,
+			Status:       StatusActive,
+			Schedulable:  true,
+			Concurrency:  5,
+		},
+	}
+	svc := NewAccountShareModeService(roomRepo, accountRepo, nil, nil, nil, nil)
+
+	listing, err := svc.CreateRoomFromOwnedAccount(
+		context.Background(),
+		ownerUserID,
+		CreateAccountShareRoomInput{
+			AccountID:          70,
+			IdempotencyKey:     "unsupported-room-platform",
+			RoomName:           "room-a",
+			SeatLimit:          1,
+			RateMultiplier:     1,
+			AllowedModels:      []string{"grok-4"},
+			PerUserConcurrency: 1,
+		},
+	)
+
+	require.Nil(t, listing)
+	require.ErrorIs(t, err, ErrAccountPlatformUnsupported)
+	require.Equal(t, 1, accountRepo.calls)
+	require.Equal(t, 1, roomRepo.idempotentCalls)
 	require.Empty(t, modeRepo.modeGroupEnsureCalls)
 }
 
@@ -1111,6 +1524,10 @@ func (r *accountShareModeRepoStub) ClaimPendingReviewModerations(context.Context
 	return nil, nil
 }
 
+func (r *accountShareModeRepoStub) BeginReviewModerationAttempt(context.Context, int64, int) (bool, error) {
+	return true, nil
+}
+
 func (r *accountShareModeRepoStub) CompleteReviewModeration(context.Context, int64, AccountShareReviewModerationResult) error {
 	return nil
 }
@@ -1121,6 +1538,66 @@ func (r *accountShareModeRepoStub) FailReviewModeration(context.Context, int64, 
 
 func (r *accountShareModeRepoStub) ListMembershipQueue(context.Context, int64, int64) ([]AccountShareMembership, error) {
 	return nil, nil
+}
+
+func (r *accountShareModeRepoStub) ListAPIKeyBindingMemberships(_ context.Context, consumerUserID int64, apiKeyID int64) ([]AccountShareMembership, error) {
+	r.bindingStatusCalls++
+	r.bindingConsumerID = consumerUserID
+	r.bindingAPIKeyID = apiKeyID
+	if r.bindingErr != nil {
+		return nil, r.bindingErr
+	}
+	return append([]AccountShareMembership(nil), r.bindingMemberships...), nil
+}
+
+func TestAccountShareModeGetAPIKeyBindingStatusCountsEveryBlockingState(t *testing.T) {
+	repo := &accountShareModeRepoStub{
+		bindingMemberships: []AccountShareMembership{
+			{ID: 1, APIKeyID: 42, Status: AccountShareMembershipStatusActive},
+			{ID: 2, APIKeyID: 42, Status: AccountShareMembershipStatusQueued},
+			{
+				ID:                    3,
+				APIKeyID:              42,
+				Status:                AccountShareMembershipStatusEnding,
+				SettlementStatus:      "pending",
+				EndingOperationID:     "00000000-0000-4000-8000-000000000003",
+				EndingOperationStatus: "needs_attention",
+			},
+		},
+	}
+	apiKeyRepo := &accountShareRecommendationAPIKeyRepoStub{
+		key: &APIKey{ID: 42, UserID: 7},
+	}
+	svc := &AccountShareModeService{repo: repo, apiKeyRepo: apiKeyRepo}
+
+	status, err := svc.GetAPIKeyBindingStatus(context.Background(), 7, 42)
+
+	require.NoError(t, err)
+	require.Equal(t, int64(42), status.APIKeyID)
+	require.Equal(t, 1, status.ActiveCount)
+	require.Equal(t, 1, status.QueuedCount)
+	require.Equal(t, 1, status.EndingCount)
+	require.Equal(t, 3, status.BlockingCount)
+	require.Len(t, status.Memberships, 3)
+	require.Equal(t, "pending", status.Memberships[2].SettlementStatus)
+	require.Equal(t, "needs_attention", status.Memberships[2].EndingOperationStatus)
+	require.Equal(t, 1, repo.bindingStatusCalls)
+	require.Equal(t, int64(7), repo.bindingConsumerID)
+	require.Equal(t, int64(42), repo.bindingAPIKeyID)
+}
+
+func TestAccountShareModeGetAPIKeyBindingStatusRejectsForeignAPIKey(t *testing.T) {
+	repo := &accountShareModeRepoStub{}
+	apiKeyRepo := &accountShareRecommendationAPIKeyRepoStub{
+		key: &APIKey{ID: 42, UserID: 8},
+	}
+	svc := &AccountShareModeService{repo: repo, apiKeyRepo: apiKeyRepo}
+
+	status, err := svc.GetAPIKeyBindingStatus(context.Background(), 7, 42)
+
+	require.Nil(t, status)
+	require.ErrorIs(t, err, ErrInsufficientPerms)
+	require.Zero(t, repo.bindingStatusCalls)
 }
 
 func (r *accountShareModeRepoStub) ReorderMembershipQueue(context.Context, int64, int64, []int64) ([]AccountShareMembership, error) {
@@ -1236,6 +1713,33 @@ func (r *accountShareModeRepoStub) SuspendMembershipForDispatchFailure(context.C
 	return membership, accountShareModeStubBillingResult(membership), nil
 }
 
+type accountShareModeRebindRepoStub struct {
+	*accountShareModeRepoStub
+	AccountShareRoomRepository
+	rebindCalls       int
+	rebindToAccountID int64
+}
+
+func (r *accountShareModeRebindRepoStub) RebindMembershipToHealthyRoomAccount(
+	_ context.Context,
+	membershipID int64,
+	currentAccountID int64,
+	_ time.Time,
+) (bool, error) {
+	r.rebindCalls++
+	if r.accountShareModeRepoStub == nil ||
+		r.membership == nil ||
+		r.listing == nil ||
+		r.membership.ID != membershipID ||
+		r.membership.AccountID != currentAccountID {
+		return false, ErrAccountShareListingNotFound
+	}
+	r.membership.AccountID = r.rebindToAccountID
+	r.listing.AccountID = r.rebindToAccountID
+	r.listing.RepresentativeAccountConcurrency = 5
+	return true, nil
+}
+
 func accountShareModeStubBillingResult(membership *AccountShareMembership) *AccountShareSeatBillingResult {
 	result := &AccountShareSeatBillingResult{}
 	if membership == nil {
@@ -1273,7 +1777,7 @@ func TestAccountShareModeProcessSeatBillingDoesNotRunWaiverCompensation(t *testi
 	}
 }
 
-func TestAccountShareModeSeatBillingDrainsGuardedBatchesAndContinuesLifecycleLeased(t *testing.T) {
+func TestAccountShareModeBillingIntentWorkerDrainsGuardedBatchesIndependently(t *testing.T) {
 	baseRepo := &accountShareModeRepoStub{}
 	repo := &accountShareBillingLifecycleRepoStub{AccountShareModeRepository: baseRepo}
 	billingErr := errors.New("claim durable billing intents")
@@ -1310,19 +1814,74 @@ func TestAccountShareModeSeatBillingDrainsGuardedBatchesAndContinuesLifecycleLea
 	}
 	guard := &ClusterLeaseGuard{
 		executor:     executor,
-		taskName:     accountShareSeatBillingTaskName,
+		taskName:     accountShareBillingIntentTaskName,
 		fencingToken: 1,
 	}
 
-	err := svc.processSeatBillingOnceLeased(context.Background(), guard)
+	backlogLikely, err := svc.processBillingIntentsOnceLeased(context.Background(), guard)
 
 	require.ErrorIs(t, err, billingErr)
+	require.False(t, backlogLikely)
 	require.Equal(t, 2, intentRepo.claimCalls)
 	require.Len(t, guardChecksAtClaim, 2)
 	require.Greater(t, guardChecksAtClaim[0], 0)
 	require.Equal(t, guardChecksAtClaim[0]+1, guardChecksAtClaim[1])
+	require.Equal(t, 0, repo.endingCalls)
+	require.Equal(t, 0, repo.lifecycleCalls)
+}
+
+func TestAccountShareModeSeatBillingDoesNotRunBillingIntentWorkerOrRoomLifecycle(t *testing.T) {
+	baseRepo := &accountShareModeRepoStub{}
+	repo := &accountShareBillingLifecycleRepoStub{AccountShareModeRepository: baseRepo}
+	intentRepo := &accountShareBillingWorkerIntentRepoStub{
+		claimBatches: [][]AccountShareBillingIntentWorkItem{
+			accountShareBillingWorkerTestBatch(t, "worker-a", 1, 100),
+		},
+	}
+	worker := newAccountShareBillingWorkerForTest(
+		t,
+		intentRepo,
+		&accountShareBillingWorkerUsageRepoStub{},
+		"worker-a",
+	)
+	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
+	svc.SetLifecycleContractEnabled(true)
+	svc.SetBillingIntentWorker(worker)
+
+	err := svc.processSeatBillingOnceLeased(context.Background(), &ClusterLeaseGuard{})
+
+	require.NoError(t, err)
+	require.Zero(t, intentRepo.claimCalls)
 	require.Equal(t, 1, repo.endingCalls)
+	require.Zero(t, repo.lifecycleCalls)
+}
+
+func TestAccountShareModeRoomLifecycleFinalizerRunsIndependentlyFromSeatBilling(t *testing.T) {
+	baseRepo := &accountShareModeRepoStub{}
+	repo := &accountShareBillingLifecycleRepoStub{AccountShareModeRepository: baseRepo}
+	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
+	svc.SetLifecycleContractEnabled(true)
+	svc.taskExecutor = &ClusterTaskExecutor{}
+
+	svc.processRoomLifecycleFinalizationOnce()
+
 	require.Equal(t, 1, repo.lifecycleCalls)
+}
+
+func TestAccountShareModeBillingIntentWorkerUsesIndependentClusterLease(t *testing.T) {
+	repo := &accountShareModeRepoStub{}
+	intentRepo := &accountShareBillingRecoveryRepoStub{}
+	clusterRepo := &clusterAdminRepositoryStub{}
+	cfg := testClusterRuntimeConfig()
+	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
+	svc.SetBillingIntentRepository(intentRepo)
+	svc.taskExecutor = NewClusterTaskExecutor(cfg, clusterRepo, NewClusterNodeState(cfg))
+
+	backlogLikely := svc.processBillingIntentsOnce()
+
+	require.False(t, backlogLikely)
+	require.Equal(t, accountShareBillingIntentTaskName, clusterRepo.acquiredTaskName)
+	require.Empty(t, intentRepo.listInputs)
 }
 
 func TestAccountShareModeRecoverableUnavailableSkipsMembershipWithActiveConcurrency(t *testing.T) {
@@ -1852,6 +2411,65 @@ func TestAccountShareModeListListingsKeepsMineScopeAndAdminFlag(t *testing.T) {
 	}
 }
 
+func TestAccountShareModeListListingsProjectsSensitiveAccountFieldsByViewer(t *testing.T) {
+	identityID := int64(99)
+	proxyID := int64(88)
+	source := AccountShareListing{
+		ID:                700,
+		OwnerUserID:       7,
+		AccountID:         70,
+		AccountName:       "底层账号",
+		AccountIdentityID: &identityID,
+		Accounts:          []AccountShareRoomAccount{{AccountID: 70, AccountName: "底层账号"}},
+		ProxyID:           &proxyID,
+		Proxy:             &AccountShareListingProxy{ID: proxyID},
+		AccountStatus:     StatusActive,
+	}
+	for _, test := range []struct {
+		name          string
+		viewerUserID  int64
+		viewerIsAdmin bool
+		wantHidden    bool
+	}{
+		{name: "public", viewerUserID: 42, wantHidden: true},
+		{name: "owner", viewerUserID: 7, wantHidden: false},
+		{name: "admin", viewerUserID: 42, viewerIsAdmin: true, wantHidden: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo := &accountShareModeRepoStub{
+				listingsByPage: map[int][]AccountShareListing{1: {source}},
+			}
+			svc := &AccountShareModeService{repo: repo}
+
+			listings, _, err := svc.ListListings(
+				context.Background(),
+				test.viewerUserID,
+				test.viewerIsAdmin,
+				AccountShareListingFilters{},
+				pagination.PaginationParams{Page: 1, PageSize: 20},
+			)
+
+			require.NoError(t, err)
+			require.Len(t, listings, 1)
+			require.Equal(t, StatusActive, listings[0].AccountStatus)
+			if test.wantHidden {
+				require.Zero(t, listings[0].AccountID)
+				require.Empty(t, listings[0].AccountName)
+				require.Nil(t, listings[0].AccountIdentityID)
+				require.Empty(t, listings[0].Accounts)
+				require.Nil(t, listings[0].ProxyID)
+				require.Nil(t, listings[0].Proxy)
+			} else {
+				require.Equal(t, source.AccountID, listings[0].AccountID)
+				require.Equal(t, source.AccountName, listings[0].AccountName)
+				require.Equal(t, source.AccountIdentityID, listings[0].AccountIdentityID)
+				require.Equal(t, source.ProxyID, listings[0].ProxyID)
+				require.Equal(t, source.Proxy, listings[0].Proxy)
+			}
+		})
+	}
+}
+
 func TestAccountShareModeListMembershipHistoryForwardsConsumerAndKeepsSegments(t *testing.T) {
 	repo := &accountShareHistoryRepoStub{
 		entries: []AccountShareMembershipHistoryEntry{
@@ -2087,6 +2705,156 @@ func TestAccountShareModeRecommendListingsScansAllPagesAndKeepsTopCandidates(t *
 	if len(repo.listParams) == 0 || repo.listParams[0].PageSize != AccountShareRecommendationPageSize {
 		t.Fatalf("expected recommendation page size %d, got %#v", AccountShareRecommendationPageSize, repo.listParams)
 	}
+}
+
+func TestAccountShareModeRecommendListingsUsesRoomQuotaMaximumForRiskRanking(t *testing.T) {
+	high5h := 96.0
+	high7d := 91.0
+	low5h := 30.0
+	low7d := 40.0
+	repo := &accountShareModeRepoStub{
+		listingsByPage: map[int][]AccountShareListing{
+			1: {
+				{
+					ID:                 1,
+					AccountID:          101,
+					OwnerUserID:        100,
+					Status:             AccountShareListingStatusActive,
+					Platform:           PlatformOpenAI,
+					AllowedModels:      []string{"gpt-5.4"},
+					SeatLimit:          2,
+					RateMultiplier:     1,
+					PerUserConcurrency: 5,
+					AccountConcurrency: 20,
+					Codex5hUsage:       &UsageProgress{Utilization: 5},
+					Codex7dUsage:       &UsageProgress{Utilization: 10},
+					QuotaSummary: &AccountShareQuotaSummary{
+						Scope:         AccountShareQuotaSummaryScopeRoom,
+						AttachedCount: 2,
+						EligibleCount: 2,
+						Window5h: AccountShareQuotaWindowSummary{
+							KnownCount:     2,
+							MaxUtilization: &high5h,
+						},
+						Window7d: AccountShareQuotaWindowSummary{
+							KnownCount:     2,
+							MaxUtilization: &high7d,
+						},
+					},
+				},
+				{
+					ID:                 2,
+					AccountID:          102,
+					OwnerUserID:        101,
+					Status:             AccountShareListingStatusActive,
+					Platform:           PlatformOpenAI,
+					AllowedModels:      []string{"gpt-5.4"},
+					SeatLimit:          2,
+					RateMultiplier:     1,
+					PerUserConcurrency: 5,
+					AccountConcurrency: 20,
+					Codex5hUsage:       &UsageProgress{Utilization: 80},
+					Codex7dUsage:       &UsageProgress{Utilization: 85},
+					QuotaSummary: &AccountShareQuotaSummary{
+						Scope:         AccountShareQuotaSummaryScopeRoom,
+						AttachedCount: 2,
+						EligibleCount: 2,
+						Window5h: AccountShareQuotaWindowSummary{
+							KnownCount:     2,
+							MaxUtilization: &low5h,
+						},
+						Window7d: AccountShareQuotaWindowSummary{
+							KnownCount:     2,
+							MaxUtilization: &low7d,
+						},
+					},
+				},
+			},
+		},
+	}
+	apiKeyRepo := &accountShareRecommendationAPIKeyRepoStub{
+		key: &APIKey{ID: 7, UserID: 42, GroupID: accountShareModeInt64Ptr(1)},
+	}
+	svc := newAccountShareRecommendationTestService(repo, apiKeyRepo)
+
+	got, err := svc.RecommendListings(context.Background(), 42, false, AccountShareRecommendationInput{
+		Platform:               PlatformOpenAI,
+		Model:                  "gpt-5.4",
+		APIKeyID:               7,
+		RequestCount:           1,
+		ActiveHours:            1,
+		InputTokensPerRequest:  100,
+		OutputTokensPerRequest: 50,
+		Limit:                  2,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, got.Items, 2)
+	require.Equal(t, int64(2), got.Items[0].Listing.ID)
+	require.Greater(
+		t,
+		got.Items[0].ScoreBreakdown.RiskControlScore,
+		got.Items[1].ScoreBreakdown.RiskControlScore,
+	)
+}
+
+func TestAccountShareModeRecommendListingsExcludesRepresentativeAccountWithZeroConcurrency(t *testing.T) {
+	repo := &accountShareModeRepoStub{
+		listingsByPage: map[int][]AccountShareListing{
+			1: {
+				{
+					ID:                               1,
+					AccountID:                        101,
+					OwnerUserID:                      100,
+					Status:                           AccountShareListingStatusActive,
+					Platform:                         PlatformOpenAI,
+					AllowedModels:                    []string{"gpt-5.4"},
+					SeatLimit:                        2,
+					RateMultiplier:                   1,
+					PerUserConcurrency:               1,
+					AccountConcurrency:               20,
+					RepresentativeAccountConcurrency: 0,
+					AccountStatus:                    StatusActive,
+					AccountSchedulable:               true,
+				},
+				{
+					ID:                               2,
+					AccountID:                        102,
+					OwnerUserID:                      101,
+					Status:                           AccountShareListingStatusActive,
+					Platform:                         PlatformOpenAI,
+					AllowedModels:                    []string{"gpt-5.4"},
+					SeatLimit:                        2,
+					RateMultiplier:                   1,
+					PerUserConcurrency:               1,
+					AccountConcurrency:               5,
+					RepresentativeAccountConcurrency: 5,
+					AccountStatus:                    StatusActive,
+					AccountSchedulable:               true,
+				},
+			},
+		},
+	}
+	apiKeyRepo := &accountShareRecommendationAPIKeyRepoStub{
+		key: &APIKey{ID: 7, UserID: 42, GroupID: accountShareModeInt64Ptr(1)},
+	}
+	svc := newAccountShareRecommendationTestService(repo, apiKeyRepo)
+
+	got, err := svc.RecommendListings(context.Background(), 42, false, AccountShareRecommendationInput{
+		Platform:               PlatformOpenAI,
+		Model:                  "gpt-5.4",
+		APIKeyID:               7,
+		RequestCount:           1,
+		ActiveHours:            1,
+		InputTokensPerRequest:  100,
+		OutputTokensPerRequest: 50,
+		Limit:                  5,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, got.CandidateCount)
+	require.Len(t, got.Items, 1)
+	require.Equal(t, int64(2), got.Items[0].Listing.ID)
 }
 
 func TestAccountShareModeRecommendListingsRanksByEstimatedCostBeforeQuality(t *testing.T) {
@@ -2363,6 +3131,8 @@ func TestAccountShareModeGetRecommendationUsageProfileBuildsDailyAverages(t *tes
 			TotalOutputTokens:        402,
 			TotalCacheCreationTokens: 49,
 			TotalCacheReadTokens:     250,
+			TotalImageInputTokens:    201,
+			TotalImageOutputTokens:   102,
 			ActiveHourBuckets:        7,
 			ModelMatched:             true,
 		},
@@ -2377,8 +3147,8 @@ func TestAccountShareModeGetRecommendationUsageProfileBuildsDailyAverages(t *tes
 	if err != nil {
 		t.Fatalf("GetRecommendationUsageProfile failed: %v", err)
 	}
-	if repo.calls != 1 || repo.userID != 42 || repo.model != "gpt-5.5" {
-		t.Fatalf("unexpected repo call: calls=%d user=%d model=%q", repo.calls, repo.userID, repo.model)
+	if repo.calls != 1 || repo.userID != 42 || repo.platform != PlatformOpenAI || repo.model != "gpt-5.5" {
+		t.Fatalf("unexpected repo call: calls=%d user=%d platform=%q model=%q", repo.calls, repo.userID, repo.platform, repo.model)
 	}
 	if profile.RequestCount != 34 {
 		t.Fatalf("RequestCount = %d, want 34", profile.RequestCount)
@@ -2386,7 +3156,12 @@ func TestAccountShareModeGetRecommendationUsageProfileBuildsDailyAverages(t *tes
 	if profile.ActiveHours != 3 {
 		t.Fatalf("ActiveHours = %v, want 3", profile.ActiveHours)
 	}
-	if profile.InputTokensPerRequest != 11 || profile.OutputTokensPerRequest != 5 || profile.CacheCreationTokensPerRequest != 1 || profile.CacheReadTokensPerRequest != 3 {
+	if profile.InputTokensPerRequest != 8 ||
+		profile.OutputTokensPerRequest != 3 ||
+		profile.CacheCreationTokensPerRequest != 1 ||
+		profile.CacheReadTokensPerRequest != 3 ||
+		profile.ImageInputTokensPerRequest != 3 ||
+		profile.ImageOutputTokensPerRequest != 2 {
 		t.Fatalf("unexpected per-request tokens: %#v", profile)
 	}
 	if !profile.HasHistory || !profile.ModelMatched || profile.UsedModelFallback {
@@ -2395,6 +3170,31 @@ func TestAccountShareModeGetRecommendationUsageProfileBuildsDailyAverages(t *tes
 	if !profile.EndTime.After(profile.StartTime) {
 		t.Fatalf("expected valid time range: start=%s end=%s", profile.StartTime, profile.EndTime)
 	}
+}
+
+func TestBuildAccountShareQuotaWindowSummaryKeepsPartialAndMaxReset(t *testing.T) {
+	firstReset := time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC)
+	maxReset := firstReset.Add(time.Hour)
+	summary := buildAccountShareQuotaWindowSummary(
+		[]AccountShareRoomQuotaSnapshot{
+			{Window5h: &UsageProgress{Utilization: 20, ResetsAt: &firstReset}},
+			{Window5h: &UsageProgress{Utilization: 82, ResetsAt: &maxReset}},
+			{},
+		},
+		3,
+		true,
+	)
+
+	require.Equal(t, 2, summary.KnownCount)
+	require.NotNil(t, summary.MinUtilization)
+	require.Equal(t, 20.0, *summary.MinUtilization)
+	require.NotNil(t, summary.MaxUtilization)
+	require.Equal(t, 82.0, *summary.MaxUtilization)
+	require.NotNil(t, summary.AverageUtilization)
+	require.Equal(t, 51.0, *summary.AverageUtilization)
+	require.NotNil(t, summary.MaxUtilizationResetsAt)
+	require.True(t, summary.MaxUtilizationResetsAt.Equal(maxReset))
+	require.True(t, summary.Partial)
 }
 
 func TestAccountShareModeUpdateListingRejectsLifecycleStatusForAllRoles(t *testing.T) {
@@ -2734,7 +3534,7 @@ func TestAccountShareModeListingConfigRejectsNegativeWaiverMinimum(t *testing.T)
 	}
 }
 
-func TestAccountShareModeListingConfigAcceptsSeatAndConcurrencyIndependently(t *testing.T) {
+func TestAccountShareModeListingConfigRejectsPerUserConcurrencyAboveRoomConcurrency(t *testing.T) {
 	err := validateAccountShareListingConfig(
 		AccountShareModeMaxSeats,
 		1,
@@ -2747,9 +3547,35 @@ func TestAccountShareModeListingConfigAcceptsSeatAndConcurrencyIndependently(t *
 		AccountShareModeDefaultCodexLimitPercent,
 		AccountShareModeDefaultCodexLimitPercent,
 	)
-	if err != nil {
-		t.Fatalf("seat limit must not be derived from account concurrency, got %v", err)
+	if !errors.Is(err, ErrAccountShareModeInvalidConcurrency) {
+		t.Fatalf("expected per-user concurrency above room concurrency to be rejected, got %v", err)
 	}
+}
+
+func TestAccountShareModeUpdateListingRejectsPerUserConcurrencyAboveRoomConcurrency(t *testing.T) {
+	expectedVersion := int64(1)
+	perUserConcurrency := 6
+	repo := &accountShareModeRepoStub{
+		listing: &AccountShareListing{
+			ID:                 7,
+			OwnerUserID:        42,
+			AccountConcurrency: 5,
+			PerUserConcurrency: 1,
+		},
+		updateListing: &AccountShareListing{ID: 7, OwnerUserID: 42},
+	}
+	svc := &AccountShareModeService{repo: repo}
+
+	listing, err := svc.UpdateListing(context.Background(), 42, false, 7, UpdateAccountShareListingInput{
+		PerUserConcurrency: &perUserConcurrency,
+		EditSessionID:      "edit-session",
+		ExpectedVersion:    &expectedVersion,
+		Reason:             "调整单用户并发",
+	})
+
+	require.Nil(t, listing)
+	require.ErrorIs(t, err, ErrAccountShareModeInvalidConcurrency)
+	require.Zero(t, repo.updateCalls)
 }
 
 func TestAccountShareRoomQueueLimit(t *testing.T) {
@@ -2900,6 +3726,46 @@ func TestAccountShareModeJoinListingRejectsUnavailableAPIKey(t *testing.T) {
 	}
 }
 
+func TestAccountShareModeJoinIntentRejectsAutomaticallyPausedExpiredAccount(t *testing.T) {
+	groupID := int64(1)
+	expiredAt := time.Now().UTC().Add(-time.Minute)
+	repo := &accountShareModeRepoStub{
+		listing: &AccountShareListing{
+			ID:                                      2,
+			AccountID:                               10,
+			Platform:                                PlatformOpenAI,
+			OwnerUserID:                             42,
+			Status:                                  AccountShareListingStatusActive,
+			SeatLimit:                               3,
+			AccountStatus:                           StatusActive,
+			AccountSchedulable:                      true,
+			RepresentativeAccountConcurrency:        5,
+			RepresentativeAccountAutoPauseOnExpired: true,
+			AccountExpiresAt:                        &expiredAt,
+		},
+	}
+	svc := &AccountShareModeService{
+		repo: repo,
+		apiKeyRepo: &accountShareRecommendationAPIKeyRepoStub{key: &APIKey{
+			ID:      3,
+			UserID:  1,
+			Key:     "sk-account-share",
+			GroupID: &groupID,
+			Status:  StatusAPIKeyActive,
+		}},
+		userRepo: &accountShareJoinUserRepoStub{user: &User{ID: 1, Balance: 100}},
+	}
+
+	_, err := svc.CreateJoinIntent(context.Background(), 1, 2, CreateAccountShareJoinIntentInput{
+		APIKeyID:           3,
+		IdleTimeoutMinutes: 30,
+		AcceptQueue:        true,
+	})
+
+	require.ErrorIs(t, err, ErrAccountShareAccountUnavailable)
+	require.Zero(t, repo.joinInput.ListingID)
+}
+
 func TestAccountShareModeJoinIntentRejectsMembershipEnding(t *testing.T) {
 	groupID := int64(1)
 	revisionID := int64(91)
@@ -2943,29 +3809,30 @@ func TestAccountShareModeJoinIntentBindsAcceptedTermsToFinalJoin(t *testing.T) {
 	groupID := int64(1)
 	revisionID := int64(91)
 	listing := &AccountShareListing{
-		ID:                      2,
-		RowVersion:              7,
-		CurrentRevisionID:       &revisionID,
-		AccountID:               10,
-		RoomName:                "stable-room",
-		Platform:                PlatformOpenAI,
-		OwnerUserID:             42,
-		Status:                  AccountShareListingStatusActive,
-		SeatLimit:               3,
-		ActiveSeats:             1,
-		RateMultiplier:          0.75,
-		AllowedModels:           []string{"gpt-5.5"},
-		PerUserConcurrency:      2,
-		HourlyRate:              0.3,
-		HourlyFeeWaiverMinimum:  0.1,
-		MinBalanceRequired:      1,
-		CodexCLIOnly:            true,
-		Codex5hLimitPercent:     90,
-		Codex7dLimitPercent:     80,
-		AccountStatus:           StatusActive,
-		AccountSchedulable:      true,
-		Anthropic5hLimitPercent: 0,
-		Anthropic7dLimitPercent: 0,
+		ID:                               2,
+		RowVersion:                       7,
+		CurrentRevisionID:                &revisionID,
+		AccountID:                        10,
+		RoomName:                         "stable-room",
+		Platform:                         PlatformOpenAI,
+		OwnerUserID:                      42,
+		Status:                           AccountShareListingStatusActive,
+		SeatLimit:                        3,
+		ActiveSeats:                      1,
+		RateMultiplier:                   0.75,
+		AllowedModels:                    []string{"gpt-5.5"},
+		PerUserConcurrency:               2,
+		HourlyRate:                       0.3,
+		HourlyFeeWaiverMinimum:           0.1,
+		MinBalanceRequired:               1,
+		CodexCLIOnly:                     true,
+		Codex5hLimitPercent:              90,
+		Codex7dLimitPercent:              80,
+		AccountStatus:                    StatusActive,
+		AccountSchedulable:               true,
+		RepresentativeAccountConcurrency: 5,
+		Anthropic5hLimitPercent:          0,
+		Anthropic7dLimitPercent:          0,
 	}
 	repo := &accountShareModeRepoStub{
 		listing:        listing,
@@ -3018,27 +3885,28 @@ func TestAccountShareModeJoinIntentBindsAcceptedTermsToFinalJoin(t *testing.T) {
 func TestAccountShareModeJoinIntentMaterializesLegacyRevisionBeforeSigning(t *testing.T) {
 	groupID := int64(1)
 	listing := &AccountShareListing{
-		ID:                      2,
-		RowVersion:              1,
-		AccountID:               10,
-		RoomName:                "legacy-room",
-		Platform:                PlatformOpenAI,
-		OwnerUserID:             42,
-		Status:                  AccountShareListingStatusActive,
-		SeatLimit:               3,
-		RateMultiplier:          0.75,
-		AllowedModels:           []string{"gpt-5.5"},
-		PerUserConcurrency:      2,
-		HourlyRate:              0.3,
-		HourlyFeeWaiverMinimum:  0.1,
-		MinBalanceRequired:      1,
-		CodexCLIOnly:            true,
-		Codex5hLimitPercent:     90,
-		Codex7dLimitPercent:     80,
-		Anthropic5hLimitPercent: 90,
-		Anthropic7dLimitPercent: 80,
-		AccountStatus:           StatusActive,
-		AccountSchedulable:      true,
+		ID:                               2,
+		RowVersion:                       1,
+		AccountID:                        10,
+		RoomName:                         "legacy-room",
+		Platform:                         PlatformOpenAI,
+		OwnerUserID:                      42,
+		Status:                           AccountShareListingStatusActive,
+		SeatLimit:                        3,
+		RateMultiplier:                   0.75,
+		AllowedModels:                    []string{"gpt-5.5"},
+		PerUserConcurrency:               2,
+		HourlyRate:                       0.3,
+		HourlyFeeWaiverMinimum:           0.1,
+		MinBalanceRequired:               1,
+		CodexCLIOnly:                     true,
+		Codex5hLimitPercent:              90,
+		Codex7dLimitPercent:              80,
+		Anthropic5hLimitPercent:          90,
+		Anthropic7dLimitPercent:          80,
+		AccountStatus:                    StatusActive,
+		AccountSchedulable:               true,
+		RepresentativeAccountConcurrency: 5,
 	}
 	revisionTerms := accountShareJoinTermsFromListing(listing, 91)
 	repo := &accountShareModeRepoStub{
@@ -3076,24 +3944,25 @@ func TestAccountShareModeJoinIntentRejectsTermsChangedAfterConfirmation(t *testi
 	groupID := int64(1)
 	revisionID := int64(91)
 	listing := &AccountShareListing{
-		ID:                  2,
-		RowVersion:          7,
-		CurrentRevisionID:   &revisionID,
-		AccountID:           10,
-		RoomName:            "stable-room",
-		Platform:            PlatformOpenAI,
-		OwnerUserID:         42,
-		Status:              AccountShareListingStatusActive,
-		SeatLimit:           3,
-		RateMultiplier:      0.75,
-		AllowedModels:       []string{"gpt-5.5"},
-		PerUserConcurrency:  2,
-		HourlyRate:          0.3,
-		MinBalanceRequired:  1,
-		AccountStatus:       StatusActive,
-		AccountSchedulable:  true,
-		Codex5hLimitPercent: 90,
-		Codex7dLimitPercent: 80,
+		ID:                               2,
+		RowVersion:                       7,
+		CurrentRevisionID:                &revisionID,
+		AccountID:                        10,
+		RoomName:                         "stable-room",
+		Platform:                         PlatformOpenAI,
+		OwnerUserID:                      42,
+		Status:                           AccountShareListingStatusActive,
+		SeatLimit:                        3,
+		RateMultiplier:                   0.75,
+		AllowedModels:                    []string{"gpt-5.5"},
+		PerUserConcurrency:               2,
+		HourlyRate:                       0.3,
+		MinBalanceRequired:               1,
+		AccountStatus:                    StatusActive,
+		AccountSchedulable:               true,
+		RepresentativeAccountConcurrency: 5,
+		Codex5hLimitPercent:              90,
+		Codex7dLimitPercent:              80,
 	}
 	repo := &accountShareModeRepoStub{listing: listing}
 	svc := &AccountShareModeService{
@@ -3134,22 +4003,23 @@ func TestAccountShareModeJoinIntentRejectsTamperedTokenAndQueueFlag(t *testing.T
 	groupID := int64(1)
 	revisionID := int64(91)
 	listing := &AccountShareListing{
-		ID:                  2,
-		RowVersion:          7,
-		CurrentRevisionID:   &revisionID,
-		AccountID:           10,
-		RoomName:            "stable-room",
-		Platform:            PlatformOpenAI,
-		OwnerUserID:         42,
-		Status:              AccountShareListingStatusActive,
-		SeatLimit:           3,
-		AllowedModels:       []string{"gpt-5.5"},
-		PerUserConcurrency:  2,
-		MinBalanceRequired:  1,
-		AccountStatus:       StatusActive,
-		AccountSchedulable:  true,
-		Codex5hLimitPercent: 90,
-		Codex7dLimitPercent: 80,
+		ID:                               2,
+		RowVersion:                       7,
+		CurrentRevisionID:                &revisionID,
+		AccountID:                        10,
+		RoomName:                         "stable-room",
+		Platform:                         PlatformOpenAI,
+		OwnerUserID:                      42,
+		Status:                           AccountShareListingStatusActive,
+		SeatLimit:                        3,
+		AllowedModels:                    []string{"gpt-5.5"},
+		PerUserConcurrency:               2,
+		MinBalanceRequired:               1,
+		AccountStatus:                    StatusActive,
+		AccountSchedulable:               true,
+		RepresentativeAccountConcurrency: 5,
+		Codex5hLimitPercent:              90,
+		Codex7dLimitPercent:              80,
 	}
 	repo := &accountShareModeRepoStub{listing: listing}
 	svc := &AccountShareModeService{
@@ -3903,6 +4773,49 @@ func TestAccountShareModeResolveBindingClearsUnavailableAccount(t *testing.T) {
 	}
 }
 
+func TestAccountShareModeResolveBindingRebindsZeroConcurrencyAccountEvenWhenRoomHasCapacity(t *testing.T) {
+	baseRepo := &accountShareModeRepoStub{
+		membership: &AccountShareMembership{
+			ID:             11,
+			AccountID:      99,
+			ConsumerUserID: 20,
+			APIKeyID:       30,
+		},
+		listing: &AccountShareListing{
+			ID:                               12,
+			AccountID:                        99,
+			OwnerUserID:                      40,
+			Status:                           AccountShareListingStatusActive,
+			AccountStatus:                    StatusActive,
+			AccountSchedulable:               true,
+			AccountConcurrency:               20,
+			RepresentativeAccountConcurrency: 0,
+		},
+	}
+	repo := &accountShareModeRebindRepoStub{
+		accountShareModeRepoStub: baseRepo,
+		rebindToAccountID:        100,
+	}
+	svc := &AccountShareModeService{repo: repo}
+
+	membership, listing, err := svc.ResolveActiveBindingForRequest(
+		WithAccountShareModeRequest(context.Background(), 20, 30),
+		20,
+		30,
+		50,
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, repo.rebindCalls)
+	require.NotNil(t, membership)
+	require.Equal(t, int64(100), membership.AccountID)
+	require.NotNil(t, listing)
+	require.Equal(t, int64(100), listing.AccountID)
+	require.Equal(t, 20, listing.AccountConcurrency)
+	require.Equal(t, 5, listing.RepresentativeAccountConcurrency)
+	require.Zero(t, repo.dispatchFailureCalls)
+}
+
 func TestAccountShareModeResolveBindingCachesNonModeGroup(t *testing.T) {
 	repo := &accountShareModeRepoStub{modeGroup: accountShareModeBoolPtr(false)}
 	svc := &AccountShareModeService{repo: repo}
@@ -4062,4 +4975,14 @@ func accountShareRecommendationTestListingIDs(candidates []AccountShareRecommend
 		ids = append(ids, candidate.Listing.ID)
 	}
 	return ids
+}
+
+func TestValidateAccountShareAccountNameRejectsNamesLongerThanDatabaseLimit(t *testing.T) {
+	require.NoError(t, validateAccountShareAccountName(strings.Repeat("房", AccountShareRoomNameMaxRunes)))
+	require.NoError(t, validateAccountShareAccountName(strings.Repeat("😀", AccountShareRoomNameMaxRunes)))
+	require.ErrorIs(
+		t,
+		validateAccountShareAccountName(strings.Repeat("房", AccountShareRoomNameMaxRunes+1)),
+		ErrAccountShareModeInvalidName,
+	)
 }

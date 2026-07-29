@@ -911,6 +911,8 @@ const ChevronDownIcon = {
 const flagChannelMonitor = makeSidebarFlag(FeatureFlags.channelMonitor);
 const flagPayment = makeSidebarFlag(FeatureFlags.payment);
 const flagAvailableChannels = makeSidebarFlag(FeatureFlags.availableChannels);
+const flagChannelCenter = () =>
+  flagAvailableChannels() || flagChannelMonitor();
 const flagRiskControl = makeSidebarFlag(FeatureFlags.riskControl);
 const flagInvoiceManagement = makeSidebarFlag(FeatureFlags.invoiceManagement);
 const flagWithdrawalManagement = makeSidebarFlag(
@@ -924,8 +926,8 @@ const flagAdminFinance = () =>
 // buildSelfNavItems 构造用户自己的导航项（用户端主菜单和管理员的"我的账户"子菜单共享这组声明）。
 // withDashboard=true 时包含仪表盘（用户端），false 时不含（管理员的个人区已经有独立仪表盘入口）。
 //
-// 条目顺序：密钥 → 用量 → 可用渠道 → 渠道状态 → 订阅/支付 → 兑换/资料。
-// 可用渠道紧挨渠道状态之上，让用户"先看自己能用什么、再看对应状态"。
+// 条目顺序：密钥 → 用量 → 渠道中心 → 订阅/充值 → 资料。
+// 渠道中心在同一页集中展示可用渠道、容量与运行状态。
 function buildSelfNavItems(withDashboard: boolean): NavItem[] {
   const items: NavItem[] = [];
   if (withDashboard) {
@@ -966,13 +968,7 @@ function buildSelfNavItems(withDashboard: boolean): NavItem[] {
       label: t("nav.availableChannels"),
       icon: ChannelIcon,
       hideInSimpleMode: true,
-      featureFlag: flagAvailableChannels,
-    },
-    {
-      path: "/monitor",
-      label: t("nav.channelStatus"),
-      icon: SignalIcon,
-      featureFlag: flagChannelMonitor,
+      featureFlag: flagChannelCenter,
     },
     {
       path: "/subscriptions",
@@ -985,7 +981,6 @@ function buildSelfNavItems(withDashboard: boolean): NavItem[] {
       label: t("nav.buySubscription"),
       icon: RechargeSubscriptionIcon,
       hideInSimpleMode: true,
-      featureFlag: flagPayment,
     },
     {
       path: "/orders",
@@ -1000,12 +995,6 @@ function buildSelfNavItems(withDashboard: boolean): NavItem[] {
       icon: OrderListIcon,
       hideInSimpleMode: true,
       featureFlag: flagInvoiceManagement,
-    },
-    {
-      path: "/redeem",
-      label: t("nav.redeem"),
-      icon: GiftIcon,
-      hideInSimpleMode: true,
     },
     {
       path: "/activities",

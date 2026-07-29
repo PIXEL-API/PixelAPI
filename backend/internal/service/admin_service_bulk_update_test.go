@@ -153,7 +153,9 @@ func (s *accountRepoStubForBulkUpdate) ListWithFilters(_ context.Context, params
 
 // TestAdminService_BulkUpdateAccounts_AllSuccessIDs 验证批量更新成功时返回 success_ids/failed_ids。
 func TestAdminService_BulkUpdateAccounts_AllSuccessIDs(t *testing.T) {
-	repo := &accountRepoStubForBulkUpdate{}
+	repo := &accountRepoStubForBulkUpdate{
+		getByIDsAccounts: []*Account{{ID: 1}, {ID: 2}, {ID: 3}},
+	}
 	svc := &adminServiceImpl{accountRepo: repo}
 
 	schedulable := true
@@ -171,9 +173,10 @@ func TestAdminService_BulkUpdateAccounts_AllSuccessIDs(t *testing.T) {
 	require.Len(t, result.Results, 3)
 }
 
-// TestAdminService_BulkUpdateAccounts_PartialFailureIDs 验证部分失败时 success_ids/failed_ids 正确。
+// TestAdminService_BulkUpdateAccounts_PartialFailureIDs 验证分组绑定失败时不会报告部分成功。
 func TestAdminService_BulkUpdateAccounts_PartialFailureIDs(t *testing.T) {
 	repo := &accountRepoStubForBulkUpdate{
+		getByIDsAccounts: []*Account{{ID: 1}, {ID: 2}, {ID: 3}},
 		bindGroupErrByID: map[int64]error{
 			2: errors.New("bind failed"),
 		},
@@ -193,12 +196,10 @@ func TestAdminService_BulkUpdateAccounts_PartialFailureIDs(t *testing.T) {
 	}
 
 	result, err := svc.BulkUpdateAccounts(context.Background(), input)
-	require.NoError(t, err)
-	require.Equal(t, 2, result.Success)
-	require.Equal(t, 1, result.Failed)
-	require.ElementsMatch(t, []int64{1, 3}, result.SuccessIDs)
-	require.ElementsMatch(t, []int64{2}, result.FailedIDs)
-	require.Len(t, result.Results, 3)
+	require.Nil(t, result)
+	require.EqualError(t, err, "bind failed")
+	require.Equal(t, []int64{1, 2, 3}, repo.bulkUpdateIDs)
+	require.Equal(t, []int64{1, 2}, repo.bindGroupsCalls)
 }
 
 func TestAdminService_BulkUpdateAccounts_NilGroupRepoReturnsError(t *testing.T) {
@@ -609,7 +610,8 @@ func TestAdminServiceBulkUpdateAccounts_ResolvesIDsFromFilters(t *testing.T) {
 			{ID: 7},
 			{ID: 11},
 		},
-		listResult: &pagination.PaginationResult{Total: 2},
+		listResult:       &pagination.PaginationResult{Total: 2},
+		getByIDsAccounts: []*Account{{ID: 7}, {ID: 11}},
 	}
 	svc := &adminServiceImpl{accountRepo: repo}
 
@@ -652,8 +654,9 @@ func TestAdminServiceBulkUpdateAccounts_ResolvesIDsFromFilters(t *testing.T) {
 
 func TestAdminServiceBulkUpdateAccounts_ResolvesIDsFromUnassignedProxyFilter(t *testing.T) {
 	repo := &accountRepoStubForBulkUpdate{
-		listData:   []Account{{ID: 7}},
-		listResult: &pagination.PaginationResult{Total: 1},
+		listData:         []Account{{ID: 7}},
+		listResult:       &pagination.PaginationResult{Total: 1},
+		getByIDsAccounts: []*Account{{ID: 7}},
 	}
 	svc := &adminServiceImpl{accountRepo: repo}
 

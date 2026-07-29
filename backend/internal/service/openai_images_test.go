@@ -662,6 +662,78 @@ func TestOpenAIGatewayServiceForwardImages_APIKeyHTTP400PreservesRequestError(t 
 	require.Empty(t, recorder.Body.String())
 }
 
+func TestOpenAIGatewayServiceForwardImages_RejectsUnexpectedNon2xxBeforeSuccessHandling(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name         string
+		statusCode   int
+		accountType  string
+		upstreamBody string
+	}{
+		{
+			name:         "api key redirect",
+			statusCode:   http.StatusFound,
+			accountType:  AccountTypeAPIKey,
+			upstreamBody: `{"created":1710000007,"data":[{"b64_json":"secret-marker","revised_prompt":"secret-marker"}]}`,
+		},
+		{
+			name:        "oauth not modified",
+			statusCode:  http.StatusNotModified,
+			accountType: AccountTypeOAuth,
+			upstreamBody: "data: {\"type\":\"response.completed\",\"response\":{\"created_at\":1710000000,\"usage\":{\"input_tokens\":1,\"output_tokens\":1},\"output\":[{\"type\":\"image_generation_call\",\"result\":\"secret-marker\"}]}}\n\n" +
+				"data: [DONE]\n\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := []byte(`{"model":"gpt-image-2","prompt":"draw a cat","response_format":"b64_json"}`)
+			req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = req
+
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: tt.statusCode,
+				Header: http.Header{
+					"Content-Type": []string{"application/json"},
+					"Location":     []string{"https://redirect.invalid/private"},
+					"X-Request-Id": []string{"rid-image-unexpected-status"},
+				},
+				Body: io.NopCloser(strings.NewReader(tt.upstreamBody)),
+			}}
+			svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+			parsed, err := svc.ParseOpenAIImagesRequest(c, body)
+			require.NoError(t, err)
+			account := &Account{
+				ID:          6,
+				Name:        "openai-image",
+				Platform:    PlatformOpenAI,
+				Type:        tt.accountType,
+				Concurrency: 1,
+				Credentials: map[string]any{"api_key": "test-api-key", "access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
+			}
+
+			gateCalls := 0
+			ctx := WithOpenAIForwardResultBillingGate(context.Background(), NewOpenAIForwardResultBillingGate(func(*OpenAIForwardResult) error {
+				gateCalls++
+				return nil
+			}))
+			result, err := svc.ForwardImages(ctx, c, account, body, parsed, "")
+
+			require.Error(t, err)
+			require.Nil(t, result)
+			require.Zero(t, gateCalls)
+			require.Equal(t, http.StatusBadGateway, recorder.Code)
+			require.Equal(t, "Upstream request failed", gjson.Get(recorder.Body.String(), "error.message").String())
+			require.NotContains(t, recorder.Body.String(), "secret-marker")
+			require.NotContains(t, recorder.Header().Get("Location"), "redirect.invalid")
+		})
+	}
+}
+
 func TestOpenAIGatewayServiceForwardImages_APIKeyEditUsesConfiguredV1BaseURL(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -1133,6 +1205,76 @@ func TestOpenAIGatewayServiceForwardImages_OAuthStreamingHandlesOutputItemDoneFa
 	require.Equal(t, "gpt-image-2", gjson.Get(completed.Data, "model").String())
 	require.JSONEq(t, `{"images":1}`, gjson.Get(completed.Data, "usage").Raw)
 	require.NotContains(t, rec.Body.String(), "event: error")
+}
+
+func TestOpenAIImagesOAuthNonStreamingRejectsOutputItemDoneWithoutTerminal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"X-Request-Id": []string{"req_img_truncated_sync"}},
+		Body: io.NopCloser(strings.NewReader(
+			"data: {\"type\":\"response.output_item.done\",\"item\":{\"id\":\"ig_123\",\"type\":\"image_generation_call\",\"result\":\"ZmluYWw=\"}}\n\n",
+		)),
+	}
+	gateCalls := 0
+	ctx := WithOpenAIForwardResultBillingGate(context.Background(), NewOpenAIForwardResultBillingGate(func(*OpenAIForwardResult) error {
+		gateCalls++
+		return nil
+	}))
+
+	_, _, _, err := (&OpenAIGatewayService{}).handleOpenAIImagesOAuthNonStreamingResponse(
+		ctx,
+		resp,
+		c,
+		"b64_json",
+		"gpt-image-2",
+	)
+
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Contains(t, string(failoverErr.ResponseBody), "without a terminal event")
+	require.Zero(t, gateCalls)
+	require.Empty(t, rec.Body.String())
+}
+
+func TestOpenAIImagesOAuthStreamingRejectsOutputItemDoneWithoutTerminal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"X-Request-Id": []string{"req_img_truncated_stream"}},
+		Body: io.NopCloser(strings.NewReader(
+			"data: {\"type\":\"response.output_item.done\",\"item\":{\"id\":\"ig_123\",\"type\":\"image_generation_call\",\"result\":\"ZmluYWw=\"}}\n\n",
+		)),
+	}
+	gateCalls := 0
+	ctx := WithOpenAIForwardResultBillingGate(context.Background(), NewOpenAIForwardResultBillingGate(func(*OpenAIForwardResult) error {
+		gateCalls++
+		return nil
+	}))
+
+	_, _, _, _, err := (&OpenAIGatewayService{}).handleOpenAIImagesOAuthStreamingResponse(
+		ctx,
+		resp,
+		c,
+		time.Now(),
+		"b64_json",
+		"image_generation",
+		"gpt-image-2",
+	)
+
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Contains(t, string(failoverErr.ResponseBody), "before image generation completed")
+	require.Zero(t, gateCalls)
+	require.NotContains(t, rec.Body.String(), "image_generation.completed")
 }
 
 func TestOpenAIGatewayServiceForwardImages_OAuthStreamingPreservesUpstreamFailure(t *testing.T) {

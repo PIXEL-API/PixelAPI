@@ -9,6 +9,7 @@ import (
 	"hash/crc32"
 	"io"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -30,6 +31,26 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 	startTime time.Time,
 	model string,
 ) (*streamingResult, error) {
+	return s.handleBedrockStreamingResponseWithModels(
+		ctx,
+		resp,
+		c,
+		account,
+		startTime,
+		model,
+		model,
+	)
+}
+
+func (s *GatewayService) handleBedrockStreamingResponseWithModels(
+	ctx context.Context,
+	resp *http.Response,
+	c *gin.Context,
+	account *Account,
+	startTime time.Time,
+	originalModel string,
+	upstreamModel string,
+) (*streamingResult, error) {
 	w := c.Writer
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -45,8 +66,10 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 	}
 
 	usage := &ClaudeUsage{}
+	var billingUsage billingUsageObservation
 	var firstTokenMs *int
 	clientDisconnected := false
+	sawTerminalEvent := false
 
 	// Bedrock EventStream 使用 application/vnd.amazon.eventstream 二进制格式。
 	// 每个帧结构：total_length(4) + headers_length(4) + prelude_crc(4) + headers + payload + message_crc(4)
@@ -111,28 +134,35 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 				if !clientDisconnected {
 					flusher.Flush()
 				}
+				if !sawTerminalEvent {
+					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected}, errors.New("bedrock stream usage incomplete: missing terminal event")
+				}
 				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected}, nil
 			}
 			if ev.err != nil {
+				if sawTerminalEvent {
+					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected}, nil
+				}
 				if clientDisconnected {
-					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, nil
+					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, fmt.Errorf("bedrock stream usage incomplete after disconnect: %w", ev.err)
 				}
 				if errors.Is(ev.err, context.Canceled) || errors.Is(ev.err, context.DeadlineExceeded) {
-					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, nil
+					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, fmt.Errorf("bedrock stream usage incomplete: %w", ev.err)
 				}
 				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs}, fmt.Errorf("bedrock stream read error: %w", ev.err)
 			}
 
 			// payload 是 JSON，提取 chunk.bytes（base64 编码的 Claude SSE 事件数据）
-			sseData := extractBedrockChunkData(ev.payload)
-			if sseData == nil {
-				continue
+			sseData, chunkErr := extractBedrockChunkData(ev.payload)
+			if chunkErr != nil {
+				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected}, fmt.Errorf("decode bedrock chunk: %w", chunkErr)
 			}
 
 			if firstTokenMs == nil {
 				ms := int(time.Since(startTime).Milliseconds())
 				firstTokenMs = &ms
 			}
+			billingUsage.observeAnthropicPayload(string(sseData))
 
 			// 转换 Bedrock 特有的 amazon-bedrock-invocationMetrics 为标准 Anthropic usage 格式
 			// 同时移除该字段避免透传给客户端
@@ -143,6 +173,26 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 
 			// 确定 SSE event type
 			eventType := gjson.GetBytes(sseData, "type").String()
+			if strings.TrimSpace(string(sseData)) == "[DONE]" {
+				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected}, errors.New("bedrock stream usage incomplete: unexpected [DONE] before message_stop")
+			}
+			if eventType == "message_stop" {
+				result := &ForwardResult{
+					RequestID:            resp.Header.Get("x-amzn-requestid"),
+					Usage:                *usage,
+					BillingUsageComplete: billingUsage.complete(),
+					Model:                originalModel,
+					UpstreamModel:        upstreamModel,
+					Stream:               true,
+					Duration:             time.Since(startTime),
+					FirstTokenMs:         firstTokenMs,
+					ClientDisconnect:     clientDisconnected,
+				}
+				if handled, billingErr := CommitForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
+					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected}, billingErr
+				}
+				sawTerminalEvent = true
+			}
 
 			// 写入标准 SSE 格式
 			if !clientDisconnected {
@@ -159,6 +209,9 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 					flusher.Flush()
 				}
 			}
+			if eventType == "message_stop" {
+				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected}, nil
+			}
 
 		case <-intervalCh:
 			lastRead := time.Unix(0, lastReadAt.Load())
@@ -166,11 +219,14 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 				continue
 			}
 			if clientDisconnected {
-				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, nil
+				if sawTerminalEvent {
+					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, nil
+				}
+				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, errors.New("bedrock stream usage incomplete after disconnect timeout")
 			}
-			logger.LegacyPrintf("service.gateway", "[Bedrock] Stream data interval timeout: account=%d model=%s interval=%s", account.ID, model, streamInterval)
+			logger.LegacyPrintf("service.gateway", "[Bedrock] Stream data interval timeout: account=%d model=%s interval=%s", account.ID, upstreamModel, streamInterval)
 			if s.rateLimitService != nil {
-				s.rateLimitService.HandleStreamTimeout(ctx, account, model)
+				s.rateLimitService.HandleStreamTimeout(ctx, account, upstreamModel)
 			}
 			return &streamingResult{usage: usage, firstTokenMs: firstTokenMs}, fmt.Errorf("stream data interval timeout")
 		}
@@ -179,16 +235,22 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 
 // extractBedrockChunkData 从 Bedrock EventStream payload 中提取 Claude SSE 事件数据
 // Bedrock payload 格式：{"bytes":"<base64-encoded-json>"}
-func extractBedrockChunkData(payload []byte) []byte {
-	b64 := gjson.GetBytes(payload, "bytes").String()
-	if b64 == "" {
-		return nil
+func extractBedrockChunkData(payload []byte) ([]byte, error) {
+	if !gjson.ValidBytes(payload) {
+		return nil, errors.New("chunk payload is not valid JSON")
 	}
-	decoded, err := base64.StdEncoding.DecodeString(b64)
+	bytesField := gjson.GetBytes(payload, "bytes")
+	if !bytesField.Exists() || bytesField.Type != gjson.String || strings.TrimSpace(bytesField.String()) == "" {
+		return nil, errors.New("chunk payload has no non-empty bytes field")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(bytesField.String())
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("chunk bytes is not valid base64: %w", err)
 	}
-	return decoded
+	if len(decoded) == 0 {
+		return nil, errors.New("chunk bytes decoded to an empty payload")
+	}
+	return decoded, nil
 }
 
 // transformBedrockInvocationMetrics 将 Bedrock 特有的 amazon-bedrock-invocationMetrics
@@ -241,6 +303,11 @@ type bedrockEventStreamDecoder struct {
 	reader *bufio.Reader
 }
 
+const (
+	bedrockEventStreamMaxMessageBytes = 16 << 20
+	bedrockEventStreamMaxHeadersBytes = 128 << 10
+)
+
 func newBedrockEventStreamDecoder(r io.Reader) *bedrockEventStreamDecoder {
 	return &bedrockEventStreamDecoder{
 		reader: bufio.NewReaderSize(r, 64*1024),
@@ -267,6 +334,19 @@ func (d *bedrockEventStreamDecoder) Decode() ([]byte, error) {
 
 		if totalLength < 16 { // minimum: 12 prelude + 4 message_crc
 			return nil, fmt.Errorf("invalid eventstream frame: total_length=%d", totalLength)
+		}
+		if totalLength > bedrockEventStreamMaxMessageBytes {
+			return nil, fmt.Errorf("invalid eventstream frame: total_length=%d exceeds limit=%d", totalLength, bedrockEventStreamMaxMessageBytes)
+		}
+		if headersLength > bedrockEventStreamMaxHeadersBytes {
+			return nil, fmt.Errorf("invalid eventstream frame: headers_length=%d exceeds limit=%d", headersLength, bedrockEventStreamMaxHeadersBytes)
+		}
+		if headersLength > totalLength-16 {
+			return nil, fmt.Errorf(
+				"invalid eventstream frame: headers_length=%d exceeds available=%d",
+				headersLength,
+				totalLength-16,
+			)
 		}
 
 		// 读取 headers + payload + message_crc

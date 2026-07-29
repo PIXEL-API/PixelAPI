@@ -1,5 +1,5 @@
 <template>
-  <section class="rounded-lg border border-gray-200 bg-white p-3 shadow-sm dark:border-dark-700 dark:bg-dark-800">
+  <section class="min-w-0 overflow-hidden rounded-lg border border-gray-200 bg-white p-3 shadow-sm dark:border-dark-700 dark:bg-dark-800">
     <div class="flex flex-wrap items-center justify-between gap-3">
       <div class="flex min-w-0 items-center gap-3">
         <div class="rounded-lg bg-emerald-100 p-2 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
@@ -104,7 +104,20 @@
           v-for="summary in orderedGroupSummaries"
           :key="groupSummaryKey(summary)"
           class="rounded-md border p-2"
-          :class="groupCardClass(groupHealth(summary))"
+          :class="[
+            groupCardClass(groupHealth(summary)),
+            groupModels(summary).length
+              ? 'cursor-pointer transition-[border-color,box-shadow] duration-200 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/60'
+              : '',
+          ]"
+          :role="groupModels(summary).length ? 'button' : undefined"
+          :tabindex="groupModels(summary).length ? 0 : undefined"
+          :aria-label="groupModels(summary).length
+            ? t('availableChannels.groupDrawer.open', { group: groupName(summary) })
+            : undefined"
+          @click="openGroupDrawer(summary)"
+          @keydown.enter.prevent="openGroupDrawer(summary)"
+          @keydown.space.prevent="openGroupDrawer(summary)"
         >
           <div class="flex items-start justify-between gap-3">
             <div class="flex min-w-0 items-start gap-2">
@@ -209,6 +222,7 @@
               </div>
             </div>
           </div>
+
         </article>
       </div>
     </div>
@@ -312,16 +326,27 @@
         </div>
       </article>
     </div>
+
+    <AvailableGroupDetailsDrawer
+      :show="selectedGroupId !== null"
+      :group="selectedGroup"
+      :models="selectedGroupModels"
+      :user-group-rates="userGroupRates"
+      :no-pricing-label="t('availableChannels.noPricing')"
+      @close="selectedGroupId = null"
+    />
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { AccountQuotaDashboard, AccountQuotaDimensionSummary, AccountQuotaGroupSummary, AccountQuotaSummary, GroupPlatform } from '@/types'
+import type { UserAvailableGroup, UserSupportedModel } from '@/api/channels'
 import Icon from '@/components/icons/Icon.vue'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
+import AvailableGroupDetailsDrawer from '@/components/channels/AvailableGroupDetailsDrawer.vue'
 import { formatDateTime } from '@/utils/format'
 import { formatMultiplier } from '@/utils/formatters'
 import { platformLabel } from '@/utils/platformColors'
@@ -347,6 +372,9 @@ const props = defineProps<{
   loadFailedMessage?: string
   groupCapacityById?: Record<number, GroupConcurrencyCapacity>
   groupRateById?: Record<number, number>
+  groupModelsById?: Record<number, UserSupportedModel[]>
+  availableGroupsById?: Record<number, UserAvailableGroup>
+  userGroupRates?: Record<number, number>
 }>()
 
 const emit = defineEmits<{
@@ -360,6 +388,18 @@ const panelSubtitle = computed(() => props.subtitle ?? t('admin.accounts.quotaDa
 const emptyText = computed(() => props.emptyMessage ?? t('admin.accounts.quotaDashboard.empty'))
 const loadFailedText = computed(() => props.loadFailedMessage ?? t('admin.accounts.quotaDashboard.loadFailed'))
 const showSummaryBreakdown = computed(() => props.showSummaryBreakdown !== false)
+const selectedGroupId = ref<number | null>(null)
+const selectedGroup = computed(() =>
+  selectedGroupId.value == null
+    ? null
+    : props.availableGroupsById?.[selectedGroupId.value] ?? null,
+)
+const selectedGroupModels = computed(() =>
+  selectedGroupId.value == null
+    ? []
+    : props.groupModelsById?.[selectedGroupId.value] ?? [],
+)
+const userGroupRates = computed(() => props.userGroupRates ?? {})
 
 const emptyDimension: AccountQuotaDimensionSummary = {
   enabled_account_count: 0,
@@ -585,6 +625,16 @@ function groupRateLabel(summary: AccountQuotaGroupSummary): string {
   return t('admin.accounts.quotaDashboard.currentGroupRate', {
     rate: formatMultiplier(rate)
   })
+}
+
+function groupModels(summary: AccountQuotaGroupSummary): UserSupportedModel[] {
+  if (!summary.group_id) return []
+  return props.groupModelsById?.[summary.group_id] ?? []
+}
+
+function openGroupDrawer(summary: AccountQuotaGroupSummary): void {
+  if (!summary.group_id || groupModels(summary).length === 0) return
+  selectedGroupId.value = summary.group_id
 }
 
 function groupConcurrencyAvailable(capacity: GroupConcurrencyCapacity): number {

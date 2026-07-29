@@ -207,6 +207,20 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		}
 	}
 	forwardedServiceTier := extractOpenAIServiceTierFromBody(responsesBody)
+	var reasoningEffort *string
+	if responsesReq.Reasoning != nil && strings.TrimSpace(responsesReq.Reasoning.Effort) != "" {
+		effort := responsesReq.Reasoning.Effort
+		reasoningEffort = &effort
+	}
+	forwardResult := &OpenAIForwardResult{
+		Model:           originalModel,
+		BillingModel:    billingModel,
+		UpstreamModel:   upstreamModel,
+		ServiceTier:     forwardedServiceTier,
+		ReasoningEffort: reasoningEffort,
+		Stream:          clientStream,
+	}
+	ctx = withOpenAIForwardResultBillingState(ctx, forwardResult, startTime, openAIResponseImageBillingConfig{})
 
 	// 5. Get access token
 	token, _, err := s.GetAccessToken(ctx, account)
@@ -265,8 +279,11 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	// 8. Handle error response with failover
-	if resp.StatusCode >= 400 {
+	// 8. Handle non-success response with failover
+	if !isOpenAIUpstreamSuccessStatus(resp.StatusCode) {
+		if !isOpenAIUpstreamErrorStatus(resp.StatusCode) {
+			return rejectUnexpectedOpenAIUpstreamStatus(resp, c, account, false, writeAnthropicError)
+		}
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 		_ = resp.Body.Close()
 		if account.IsOpenAIAgentIdentity() && !agentIdentityTaskRecoveryWasTried(ctx) &&
@@ -322,7 +339,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		result, handleErr = s.handleAnthropicStreamingResponse(ctx, resp, c, account, originalModel, billingModel, upstreamModel, startTime)
 	} else {
 		// Client wants JSON: buffer the streaming response and assemble a JSON reply.
-		result, handleErr = s.handleAnthropicBufferedStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime)
+		result, handleErr = s.handleAnthropicBufferedStreamingResponse(ctx, resp, c, account, originalModel, billingModel, upstreamModel, startTime)
 	}
 
 	// Propagate ServiceTier and ReasoningEffort to result for billing
@@ -332,10 +349,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		} else if forwardedServiceTier != nil {
 			result.ServiceTier = forwardedServiceTier
 		}
-		if responsesReq.Reasoning != nil && responsesReq.Reasoning.Effort != "" {
-			re := responsesReq.Reasoning.Effort
-			result.ReasoningEffort = &re
-		}
+		result.ReasoningEffort = reasoningEffort
 	}
 
 	// Extract and save Codex usage snapshot from response headers (for OAuth accounts)
@@ -366,6 +380,7 @@ func (s *OpenAIGatewayService) handleAnthropicErrorResponse(
 // This is used when the client requested stream=false but the upstream is always
 // streaming.
 func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
+	ctx context.Context,
 	resp *http.Response,
 	c *gin.Context,
 	account *Account,
@@ -385,6 +400,7 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 
 	var finalResponse *apicompat.ResponsesResponse
 	var usage OpenAIUsage
+	var billingUsageObservation openAIResponsesBillingUsageObservation
 	acc := apicompat.NewBufferedResponseAccumulator()
 
 	for scanner.Scan() {
@@ -394,6 +410,7 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 		if !ok || strings.TrimSpace(payload) == "[DONE]" {
 			continue
 		}
+		billingUsageObservation.observePayload([]byte(payload))
 
 		var event apicompat.ResponsesStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
@@ -471,23 +488,29 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 	acc.SupplementResponseOutput(finalResponse)
 
 	anthropicResp := apicompat.ResponsesToAnthropic(finalResponse, originalModel)
+	usage.ResponseServiceTier = finalResponse.ServiceTier
+	result := updateOpenAIForwardResultBillingState(ctx, openAIForwardResultSnapshot{
+		requestID:            requestID,
+		responseID:           finalResponse.ID,
+		usage:                &usage,
+		responseHeaders:      resp.Header,
+		billingUsageComplete: billingUsageObservation.complete(),
+	})
+	result.Model = originalModel
+	result.BillingModel = billingModel
+	result.UpstreamModel = upstreamModel
+	result.ResponseServiceTier = finalResponse.ServiceTier
+	result.Stream = false
+	if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
+		return result, billingErr
+	}
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	}
 	c.Header("Content-Type", "application/json; charset=utf-8")
 	c.JSON(http.StatusOK, anthropicResp)
-
-	return &OpenAIForwardResult{
-		RequestID:           requestID,
-		Usage:               usage,
-		Model:               originalModel,
-		BillingModel:        billingModel,
-		UpstreamModel:       upstreamModel,
-		ResponseServiceTier: finalResponse.ServiceTier,
-		Stream:              false,
-		Duration:            time.Since(startTime),
-	}, nil
+	return result, nil
 }
 
 // handleAnthropicStreamingResponse reads Responses SSE events from upstream,
@@ -518,10 +541,12 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	state := apicompat.NewResponsesEventToAnthropicState()
 	state.Model = originalModel
 	var usage OpenAIUsage
-	usageComplete := false
+	var billingUsageObservation openAIResponsesBillingUsageObservation
 	var firstTokenMs *int
 	var responseServiceTier string
+	var responseID string
 	firstChunk := true
+	sawSuccessTerminal := false
 	var terminalErr error
 	clientDisconnected := false
 	var cancelDisconnectedDrain context.CancelFunc
@@ -545,17 +570,21 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 
 	// resultWithUsage builds the final result snapshot.
 	resultWithUsage := func() *OpenAIForwardResult {
-		return &OpenAIForwardResult{
-			RequestID:           requestID,
-			Usage:               usage,
-			Model:               originalModel,
-			BillingModel:        billingModel,
-			UpstreamModel:       upstreamModel,
-			ResponseServiceTier: responseServiceTier,
-			Stream:              true,
-			Duration:            time.Since(startTime),
-			FirstTokenMs:        firstTokenMs,
-		}
+		usage.ResponseServiceTier = responseServiceTier
+		result := updateOpenAIForwardResultBillingState(ctx, openAIForwardResultSnapshot{
+			requestID:            requestID,
+			responseID:           responseID,
+			usage:                &usage,
+			firstTokenMs:         firstTokenMs,
+			responseHeaders:      resp.Header,
+			billingUsageComplete: billingUsageObservation.complete(),
+		})
+		result.Model = originalModel
+		result.BillingModel = billingModel
+		result.UpstreamModel = upstreamModel
+		result.ResponseServiceTier = responseServiceTier
+		result.Stream = true
+		return result
 	}
 
 	// processDataLine handles a single "data: ..." SSE line from upstream.
@@ -567,6 +596,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			firstTokenMs = &ms
 		}
 
+		billingUsageObservation.observePayload([]byte(payload))
 		var event apicompat.ResponsesStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			logger.L().Warn("openai messages stream: failed to parse event",
@@ -580,13 +610,15 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		isBareErrorEvent := eventType == "error"
 
 		// Extract usage from completion events
-		if (eventType == "response.completed" || eventType == "response.incomplete" || eventType == "response.failed") &&
+		if (eventType == "response.completed" || eventType == "response.done" || eventType == "response.incomplete" || eventType == "response.failed") &&
 			event.Response != nil && event.Response.Usage != nil {
 			if event.Response.ServiceTier != "" {
 				responseServiceTier = event.Response.ServiceTier
 			}
-			usageComplete = true
 			usage = copyOpenAIUsageFromResponsesUsage(event.Response.Usage)
+		}
+		if event.Response != nil && strings.TrimSpace(event.Response.ID) != "" {
+			responseID = event.Response.ID
 		}
 		if eventType == "response.failed" || isBareErrorEvent {
 			payloadBytes := []byte(payload)
@@ -635,19 +667,35 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			terminalErr = fmt.Errorf("upstream response failed: %s", errMsg)
 			return true
 		}
+		successTerminal := eventType == "response.completed" || eventType == "response.done" || eventType == "response.incomplete"
+		if eventType == "response.done" {
+			event.Type = "response.completed"
+		}
 
-		// Convert to Anthropic events
+		// Convert and serialize the whole event before the durable billing gate.
+		// This ensures a conversion failure cannot leave a ready billing intent
+		// while withholding the corresponding terminal response from the client.
 		events := apicompat.ResponsesEventToAnthropicEvents(&event, state)
+		serializedEvents := make([]string, 0, len(events))
+		for _, evt := range events {
+			sse, err := apicompat.ResponsesAnthropicEventToSSE(evt)
+			if err != nil {
+				terminalErr = fmt.Errorf("marshal Anthropic stream event: %w", err)
+				return true
+			}
+			serializedEvents = append(serializedEvents, sse)
+		}
+		if successTerminal {
+			sawSuccessTerminal = true
+			result := resultWithUsage()
+			if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
+				terminalErr = billingErr
+				return true
+			}
+		}
+
 		if !clientDisconnected {
-			for _, evt := range events {
-				sse, err := apicompat.ResponsesAnthropicEventToSSE(evt)
-				if err != nil {
-					logger.L().Warn("openai messages stream: failed to marshal event",
-						zap.Error(err),
-						zap.String("request_id", requestID),
-					)
-					continue
-				}
+			for _, sse := range serializedEvents {
 				if _, err := fmt.Fprint(c.Writer, sse); err != nil {
 					clientDisconnected = true
 					startDisconnectedDrain()
@@ -656,7 +704,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				}
 			}
 		}
-		if !clientDisconnected && len(events) > 0 {
+		if !clientDisconnected && len(serializedEvents) > 0 {
 			c.Writer.Flush()
 		}
 		return false
@@ -668,10 +716,17 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			if err := s.clientDisconnectIncompleteUsageError(ctx); err != nil {
 				return resultWithUsage(), err
 			}
-			if !usageComplete {
+			if !billingUsageObservation.complete() {
 				return resultWithUsage(), errors.New("stream usage incomplete after disconnect: missing terminal usage")
 			}
 			return resultWithUsage(), nil
+		}
+		result := resultWithUsage()
+		if !sawSuccessTerminal {
+			return result, errors.New("upstream responses stream ended without a successful terminal event")
+		}
+		if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
+			return result, billingErr
 		}
 		if finalEvents := apicompat.FinalizeResponsesAnthropicStream(state); len(finalEvents) > 0 {
 			for _, evt := range finalEvents {

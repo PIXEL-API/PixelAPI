@@ -432,6 +432,7 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		accounts.POST("/batch-clear-error", h.Admin.Account.BatchClearError)
 		accounts.POST("/batch-refresh", h.Admin.Account.BatchRefresh)
 		accounts.POST("/batch-refresh/async", h.Admin.Account.CreateBatchRefreshTask)
+		accounts.POST("/batch-test/async", h.Admin.Account.CreateBatchTestConnectionTask)
 		accounts.GET("/batch-tasks/:task_id", h.Admin.Account.GetBatchTask)
 
 		// Antigravity 默认模型映射

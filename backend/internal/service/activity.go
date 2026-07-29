@@ -772,6 +772,62 @@ func (s *ActivityService) ListRecentWinners(ctx context.Context, campaignID int6
 	return out, nil
 }
 
+func (s *ActivityService) UserListPublicWinners(ctx context.Context, campaignID int64, page, pageSize int) ([]ActivityWinnerPublic, int64, error) {
+	campaign, err := s.getCampaign(ctx, campaignID)
+	if err != nil {
+		return nil, 0, err
+	}
+	if !campaign.PublicEnabled || (campaign.Status != ActivityStatusActive && campaign.Status != ActivityStatusEnded) {
+		return nil, 0, ErrActivityNotFound
+	}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 50 {
+		pageSize = 20
+	}
+
+	const visibleStatuses = "('pending_claim', 'pending_delivery', 'delivered')"
+	var total int64
+	if err := s.querySingle(ctx, `
+		SELECT COUNT(*)
+		FROM activity_winners
+		WHERE campaign_id = $1
+			AND status IN `+visibleStatuses+`
+	`, []any{campaignID}, &total); err != nil {
+		return nil, 0, fmt.Errorf("count public activity winners: %w", err)
+	}
+
+	offset := (page - 1) * pageSize
+	rows, err := s.entClient.QueryContext(ctx, `
+		SELECT w.id, w.campaign_id, c.name, w.prize_name, w.prize_type,
+			w.prize_amount::double precision, w.masked_user, w.created_at
+		FROM activity_winners w
+		INNER JOIN activity_campaigns c ON c.id = w.campaign_id
+		WHERE w.campaign_id = $1
+			AND w.status IN `+visibleStatuses+`
+		ORDER BY w.created_at DESC, w.id DESC
+		LIMIT $2 OFFSET $3
+	`, campaignID, pageSize, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query public activity winners: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	items := []ActivityWinnerPublic{}
+	for rows.Next() {
+		var item ActivityWinnerPublic
+		if err := rows.Scan(&item.ID, &item.CampaignID, &item.CampaignName, &item.PrizeName, &item.PrizeType, &item.PrizeAmount, &item.MaskedUser, &item.CreatedAt); err != nil {
+			return nil, 0, fmt.Errorf("scan public activity winner: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate public activity winners: %w", err)
+	}
+	return items, total, nil
+}
+
 func (s *ActivityService) UserListWinners(ctx context.Context, userID int64) ([]ActivityWinnerDTO, error) {
 	if userID <= 0 {
 		return nil, infraerrors.Unauthorized("UNAUTHORIZED", "authentication required")

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,16 @@ import (
 type grokMediaContentUpstreamStub struct {
 	requests  []*http.Request
 	responses []*http.Response
+}
+
+type grokMediaQuotaSnapshotRepoStub struct {
+	AccountRepository
+	updateExtraCalls int
+}
+
+func (s *grokMediaQuotaSnapshotRepoStub) UpdateExtra(context.Context, int64, map[string]any) error {
+	s.updateExtraCalls++
+	return nil
 }
 
 func (s *grokMediaContentUpstreamStub) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
@@ -177,60 +188,126 @@ func TestForwardGrokMediaContentPreservesRangeNotSatisfiable(t *testing.T) {
 		map[string]string{"Range": "bytes=500-600"},
 	)
 
-	_, err := svc.ForwardGrokMedia(
+	result, err := svc.ForwardGrokMedia(
 		context.Background(), c, grokMediaContentTestAccount(),
 		GrokMediaEndpointVideoContent, "task-1", nil, "",
 	)
 
 	require.NoError(t, err)
+	require.NotNil(t, result)
 	require.Equal(t, http.StatusRequestedRangeNotSatisfiable, recorder.Code)
 	require.Equal(t, "bad-range", recorder.Body.String())
 	require.Equal(t, "bytes */100", recorder.Header().Get("Content-Range"))
 	require.Equal(t, "bytes", recorder.Header().Get("Accept-Ranges"))
+	require.True(t, IsResponseCommitted(c))
+	require.Len(t, upstream.requests, 2)
+	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.requests[0].Context()))
+	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.requests[1].Context()))
 }
 
-func TestForwardGrokMediaContentRejectsRedirectResponses(t *testing.T) {
+func TestForwardGrokMediaStatusAndContentRejectNon2xxResponses(t *testing.T) {
+	unexpectedResponse := func(statusCode int) *http.Response {
+		return &http.Response{
+			StatusCode: statusCode,
+			Header: http.Header{
+				"Content-Type":                   []string{"text/plain"},
+				"Location":                       []string{"https://attacker.invalid/private"},
+				"X-Request-Id":                   []string{"unexpected-status-request"},
+				"X-Ratelimit-Limit-Requests":     []string{"999"},
+				"X-Ratelimit-Remaining-Requests": []string{"0"},
+			},
+			Body: io.NopCloser(strings.NewReader("secret-upstream-body")),
+		}
+	}
+
 	for _, tt := range []struct {
-		name      string
-		responses []*http.Response
-		wantCalls int
+		name       string
+		endpoint   GrokMediaEndpoint
+		responses  []*http.Response
+		wantCalls  int
+		wantStatus int
 	}{
 		{
-			name: "status redirect",
-			responses: []*http.Response{{
-				StatusCode: http.StatusFound,
-				Header:     http.Header{"Location": []string{"https://attacker.invalid/status"}},
-				Body:       http.NoBody,
-			}},
-			wantCalls: 1,
+			name:       "status endpoint informational",
+			endpoint:   GrokMediaEndpointVideoStatus,
+			responses:  []*http.Response{unexpectedResponse(http.StatusContinue)},
+			wantCalls:  1,
+			wantStatus: http.StatusContinue,
 		},
 		{
-			name: "content redirect",
+			name:       "status endpoint redirect",
+			endpoint:   GrokMediaEndpointVideoStatus,
+			responses:  []*http.Response{unexpectedResponse(http.StatusFound)},
+			wantCalls:  1,
+			wantStatus: http.StatusFound,
+		},
+		{
+			name:       "content status lookup informational",
+			endpoint:   GrokMediaEndpointVideoContent,
+			responses:  []*http.Response{unexpectedResponse(http.StatusContinue)},
+			wantCalls:  1,
+			wantStatus: http.StatusContinue,
+		},
+		{
+			name:       "content status lookup redirect",
+			endpoint:   GrokMediaEndpointVideoContent,
+			responses:  []*http.Response{unexpectedResponse(http.StatusFound)},
+			wantCalls:  1,
+			wantStatus: http.StatusFound,
+		},
+		{
+			name:     "content response informational",
+			endpoint: GrokMediaEndpointVideoContent,
 			responses: []*http.Response{
-				grokMediaContentStatusResponse(`{"status":"done","video":{"url":"https://vidgen.x.ai/task-1.mp4"}}`),
-				{
-					StatusCode: http.StatusTemporaryRedirect,
-					Header:     http.Header{"Location": []string{"https://attacker.invalid/content"}},
-					Body:       http.NoBody,
-				},
+				grokMediaContentStatusResponse(`{"status":"done"}`),
+				unexpectedResponse(http.StatusContinue),
 			},
-			wantCalls: 2,
+			wantCalls:  2,
+			wantStatus: http.StatusContinue,
+		},
+		{
+			name:     "content response redirect",
+			endpoint: GrokMediaEndpointVideoContent,
+			responses: []*http.Response{
+				grokMediaContentStatusResponse(`{"status":"done"}`),
+				unexpectedResponse(http.StatusTemporaryRedirect),
+			},
+			wantCalls:  2,
+			wantStatus: http.StatusTemporaryRedirect,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			upstream := &grokMediaContentUpstreamStub{responses: tt.responses}
-			svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
-			c, _ := grokMediaContentTestContext(
+			snapshotRepo := &grokMediaQuotaSnapshotRepoStub{}
+			svc := &OpenAIGatewayService{
+				cfg:          &config.Config{},
+				httpUpstream: upstream,
+				accountRepo:  snapshotRepo,
+			}
+			c, recorder := grokMediaContentTestContext(
 				http.MethodGet, "https://api.example/v1/videos/task-1/content", nil,
 			)
 
-			_, err := svc.ForwardGrokMedia(
+			result, err := svc.ForwardGrokMedia(
 				context.Background(), c, grokMediaContentTestAccount(),
-				GrokMediaEndpointVideoContent, "task-1", nil, "",
+				tt.endpoint, "task-1", nil, "",
 			)
 
-			require.ErrorContains(t, err, "redirect is not allowed")
+			require.Nil(t, result)
+			require.ErrorContains(
+				t,
+				err,
+				fmt.Sprintf("upstream returned non-success HTTP status %d", tt.wantStatus),
+			)
+			require.Equal(t, http.StatusBadGateway, recorder.Code)
+			require.Equal(t, "Upstream request failed", gjson.GetBytes(recorder.Body.Bytes(), "error.message").String())
+			require.NotContains(t, recorder.Body.String(), "secret-upstream-body")
+			require.Empty(t, recorder.Header().Get("Location"))
+			require.Zero(t, snapshotRepo.updateExtraCalls)
 			require.Len(t, upstream.requests, tt.wantCalls)
+			for _, request := range upstream.requests {
+				require.True(t, HTTPUpstreamRedirectsDisabled(request.Context()))
+			}
 		})
 	}
 }

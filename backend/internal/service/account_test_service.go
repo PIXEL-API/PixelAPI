@@ -321,7 +321,12 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 	// Send test_start event
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
 
-	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(payloadBytes))
+	req, err := http.NewRequestWithContext(
+		WithHTTPUpstreamRedirectsDisabled(ctx),
+		"POST",
+		apiURL,
+		bytes.NewReader(payloadBytes),
+	)
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Failed to create request")
 	}
@@ -356,6 +361,10 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Request failed: %s", err.Error()))
 	}
 	defer func() { _ = resp.Body.Close() }()
+
+	if !isOpenAIUpstreamSuccessStatus(resp.StatusCode) && !isOpenAIUpstreamErrorStatus(resp.StatusCode) {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("API returned unexpected HTTP status %d", resp.StatusCode))
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -411,7 +420,12 @@ func (s *AccountTestService) testClaudeVertexServiceAccountConnection(c *gin.Con
 
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(vertexBody))
+	req, err := http.NewRequestWithContext(
+		WithHTTPUpstreamRedirectsDisabled(ctx),
+		http.MethodPost,
+		fullURL,
+		bytes.NewReader(vertexBody),
+	)
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Failed to create request")
 	}
@@ -428,6 +442,10 @@ func (s *AccountTestService) testClaudeVertexServiceAccountConnection(c *gin.Con
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Request failed: %s", err.Error()))
 	}
 	defer func() { _ = resp.Body.Close() }()
+
+	if !isOpenAIUpstreamSuccessStatus(resp.StatusCode) && !isOpenAIUpstreamErrorStatus(resp.StatusCode) {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("API returned unexpected HTTP status %d", resp.StatusCode))
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -481,7 +499,12 @@ func (s *AccountTestService) testBedrockAccountConnection(c *gin.Context, ctx co
 
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
 
-	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(bedrockBody))
+	req, err := http.NewRequestWithContext(
+		WithHTTPUpstreamRedirectsDisabled(ctx),
+		"POST",
+		apiURL,
+		bytes.NewReader(bedrockBody),
+	)
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Failed to create request")
 	}
@@ -514,6 +537,10 @@ func (s *AccountTestService) testBedrockAccountConnection(c *gin.Context, ctx co
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Request failed: %s", err.Error()))
 	}
 	defer func() { _ = resp.Body.Close() }()
+
+	if !isOpenAIUpstreamSuccessStatus(resp.StatusCode) && !isOpenAIUpstreamErrorStatus(resp.StatusCode) {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("API returned unexpected HTTP status %d", resp.StatusCode))
+	}
 
 	body, _ := io.ReadAll(resp.Body)
 
@@ -673,6 +700,10 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		}
 		defer func() { _ = resp.Body.Close() }()
 
+		if !isOpenAIUpstreamSuccessStatus(resp.StatusCode) && !isOpenAIUpstreamErrorStatus(resp.StatusCode) {
+			return s.sendErrorAndEnd(c, fmt.Sprintf("API returned unexpected HTTP status %d", resp.StatusCode))
+		}
+
 		if isOAuth && s.accountRepo != nil {
 			if updates, err := extractOpenAICodexProbeUpdates(resp); err == nil && len(updates) > 0 {
 				_ = s.accountRepo.UpdateExtra(ctx, account.ID, updates)
@@ -762,7 +793,12 @@ func (s *AccountTestService) testGrokAccountConnection(c *gin.Context, account *
 	payloadBytes, _ := json.Marshal(createGrokTestPayload(testModelID, prompt))
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(payloadBytes))
+	req, err := http.NewRequestWithContext(
+		WithHTTPUpstreamRedirectsDisabled(ctx),
+		http.MethodPost,
+		apiURL,
+		bytes.NewReader(payloadBytes),
+	)
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Failed to create Grok request")
 	}
@@ -789,6 +825,10 @@ func (s *AccountTestService) testGrokAccountConnection(c *gin.Context, account *
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Grok request failed: %s", err.Error()))
 	}
 	defer func() { _ = resp.Body.Close() }()
+
+	if !isOpenAIUpstreamSuccessStatus(resp.StatusCode) && !isOpenAIUpstreamErrorStatus(resp.StatusCode) {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Grok API returned unexpected HTTP status %d", resp.StatusCode))
+	}
 
 	if s.accountRepo != nil {
 		if snapshot := xai.ParseQuotaHeaders(resp.Header, resp.StatusCode); snapshot != nil {
@@ -907,6 +947,10 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 			return s.sendErrorAndEnd(c, fmt.Sprintf("Request failed: %s", err.Error()))
 		}
 		defer func() { _ = resp.Body.Close() }()
+
+		if !isOpenAIUpstreamSuccessStatus(resp.StatusCode) && !isOpenAIUpstreamErrorStatus(resp.StatusCode) {
+			return s.sendErrorAndEnd(c, fmt.Sprintf("API returned unexpected HTTP status %d", resp.StatusCode))
+		}
 
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 		if account.IsOpenAIAgentIdentity() && !agentIdentityTaskRecoveryTried &&
@@ -1071,6 +1115,10 @@ func (s *AccountTestService) testGeminiAccountConnection(c *gin.Context, account
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Request failed: %s", err.Error()))
 	}
 	defer func() { _ = resp.Body.Close() }()
+
+	if !isOpenAIUpstreamSuccessStatus(resp.StatusCode) && !isOpenAIUpstreamErrorStatus(resp.StatusCode) {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("API returned unexpected HTTP status %d", resp.StatusCode))
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -1666,11 +1714,16 @@ func (s *AccountTestService) testOpenAIImageAPIKey(c *gin.Context, ctx context.C
 		proxyURL = account.Proxy.URL()
 	}
 
+	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
 	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Request failed: %s", err.Error()))
 	}
 	defer func() { _ = resp.Body.Close() }()
+
+	if !isOpenAIUpstreamSuccessStatus(resp.StatusCode) && !isOpenAIUpstreamErrorStatus(resp.StatusCode) {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("API returned unexpected HTTP status %d", resp.StatusCode))
+	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -1791,7 +1844,10 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 				_ = resp.Body.Close()
 			}
 		}()
-		if resp.StatusCode >= 400 {
+		if !isOpenAIUpstreamSuccessStatus(resp.StatusCode) && !isOpenAIUpstreamErrorStatus(resp.StatusCode) {
+			return s.sendErrorAndEnd(c, fmt.Sprintf("Responses API returned unexpected HTTP status %d", resp.StatusCode))
+		}
+		if !isOpenAIUpstreamSuccessStatus(resp.StatusCode) {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 			if account.IsOpenAIAgentIdentity() && !agentIdentityTaskRecoveryTried &&
 				isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, body) {

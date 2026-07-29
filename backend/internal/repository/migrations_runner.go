@@ -769,22 +769,6 @@ func applyMigrationsOnConnectionThroughFS(ctx context.Context, db migrationDatab
 		}
 
 		if nonTx {
-			if strings.HasSuffix(strings.ToLower(name), onlineMigrationSuffix) {
-				statements := splitSQLStatements(content)
-				for i, stmt := range statements {
-					trimmed := strings.TrimSpace(stmt)
-					if stripSQLLineComment(trimmed) == "" {
-						continue
-					}
-					if _, err := db.ExecContext(ctx, trimmed); err != nil {
-						return fmt.Errorf("apply migration %s (online statement %d): %w", name, i+1, err)
-					}
-				}
-				if _, err := db.ExecContext(ctx, "INSERT INTO schema_migrations (filename, checksum) VALUES ($1, $2)", name, checksum); err != nil {
-					return fmt.Errorf("record migration %s (online): %w", name, err)
-				}
-				continue
-			}
 			sessionDB, ok := db.(nonTransactionalMigrationDatabase)
 			if !ok {
 				return fmt.Errorf(
@@ -796,7 +780,7 @@ func applyMigrationsOnConnectionThroughFS(ctx context.Context, db migrationDatab
 				return err
 			}
 			if _, err := db.ExecContext(ctx, "INSERT INTO schema_migrations (filename, checksum) VALUES ($1, $2)", name, checksum); err != nil {
-				return fmt.Errorf("record migration %s (non-tx): %w", name, err)
+				return fmt.Errorf("record migration %s (non-transactional): %w", name, err)
 			}
 			continue
 		}
@@ -876,8 +860,9 @@ func executeNonTransactionalMigration(
 		return fmt.Errorf("prepare migration %s: %w", name, err)
 	}
 
-	// *_notx.sql：用于 CREATE/DROP INDEX CONCURRENTLY 场景，必须非事务执行。
-	// 逐条语句执行，避免将多条 CONCURRENTLY 语句放入同一个隐式事务块。
+	// *_notx.sql and *_online.sql migrations must run outside a surrounding
+	// transaction. Execute each top-level statement separately so concurrent
+	// indexes and procedures with explicit COMMIT statements remain valid.
 	statements := splitSQLStatements(content)
 	verifiedAgentIdentityIndexesBeforeDrop := false
 	preparedAccountShareLifecycleTargets := false
@@ -933,6 +918,7 @@ func resetNonTransactionalMigrationSession(db nonTransactionalMigrationDatabase)
 
 	reset("RESET lock_timeout")
 	reset("RESET statement_timeout")
+	reset("RESET search_path")
 	return resetErr
 }
 

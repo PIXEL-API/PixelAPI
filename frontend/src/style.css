@@ -1082,12 +1082,12 @@
   }
 
   .data-table-actions {
-    @apply grid grid-cols-2 gap-1.5 sm:grid-cols-3 md:flex md:flex-nowrap md:items-center md:gap-1;
+    @apply grid grid-cols-2 gap-1.5 sm:grid-cols-3 md:flex md:flex-nowrap md:items-stretch md:gap-1.5;
   }
 
   .data-table-action {
-    @apply flex min-h-10 min-w-0 items-center justify-center gap-1 rounded-control px-2 py-1.5 text-xs font-medium;
-    @apply transition-colors duration-150 md:flex-1 md:flex-col md:gap-0.5;
+    @apply flex min-h-10 min-w-0 items-center justify-center gap-1 whitespace-normal rounded-control px-2 py-1.5 text-center text-xs font-medium leading-tight;
+    @apply transition-colors duration-150 md:min-w-16 md:flex-none md:flex-col md:gap-0.5;
   }
 
   .data-teleport-panel {

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -20,6 +21,36 @@ import (
 	"github.com/lib/pq"
 	"github.com/shopspring/decimal"
 )
+
+func TestAccountShareIdentityHintIsUnicodeSafe(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		email string
+		want  string
+	}{
+		{name: "ascii", email: "Alice@Example.COM", want: "a***e@example.com"},
+		{name: "single ascii rune", email: "A@Example.COM", want: "a***@example.com"},
+		{name: "single chinese rune", email: "中@例子.公司", want: "中***@例子.公司"},
+		{name: "multiple chinese runes", email: "中文@例子.公司", want: "中***文@例子.公司"},
+		{name: "missing local part", email: "@example.com", want: ""},
+		{name: "multiple separators", email: "a@b@example.com", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := accountShareIdentityHint(tt.email)
+			if got != tt.want {
+				t.Fatalf("accountShareIdentityHint(%q) = %q, want %q", tt.email, got, tt.want)
+			}
+			if !utf8.ValidString(got) {
+				t.Fatalf("accountShareIdentityHint(%q) returned invalid UTF-8: %q", tt.email, got)
+			}
+		})
+	}
+}
 
 func TestAccountShareRoomRepresentativeJoinUsesIndexedPlacementCandidates(t *testing.T) {
 	query := accountShareRoomRepresentativeJoinSQL("NOW()")
@@ -381,6 +412,58 @@ func TestScanAccountShareListingProjectsMembershipLifecycleStates(t *testing.T) 
 	}
 }
 
+func TestScanAccountShareListingProjectsRepresentativeAccountEligibility(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	expiresAt := time.Date(2026, 7, 27, 9, 0, 0, 0, time.UTC)
+	mock.ExpectQuery("SELECT representative_eligibility").
+		WillReturnRows(accountShareListingRows(7, 8, 9, "", time.Time{}, func(row *accountShareListingRowData) {
+			row.RepresentativeAccountConcurrency = 0
+			row.RepresentativeAccountAutoPauseOnExpired = true
+			row.AccountExpiresAt = expiresAt
+		}))
+
+	listing, err := scanAccountShareListing(
+		db.QueryRowContext(context.Background(), "SELECT representative_eligibility"),
+	)
+	if err != nil {
+		t.Fatalf("scanAccountShareListing: %v", err)
+	}
+	if listing.RepresentativeAccountConcurrency != 0 {
+		t.Fatalf("representative concurrency = %d, want 0", listing.RepresentativeAccountConcurrency)
+	}
+	if !listing.RepresentativeAccountAutoPauseOnExpired {
+		t.Fatal("representative auto-pause-on-expired was not projected")
+	}
+	if listing.AccountExpiresAt == nil || !listing.AccountExpiresAt.Equal(expiresAt) {
+		t.Fatalf("representative expires_at = %v, want %v", listing.AccountExpiresAt, expiresAt)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestAccountShareAccountUnavailableConditionSQLIncludesConfiguredConcurrencyAndAutomaticExpiry(t *testing.T) {
+	normalized := strings.ToLower(strings.Join(
+		strings.Fields(accountShareAccountUnavailableConditionSQL("$1")),
+		" ",
+	))
+	for _, required := range []string{
+		"a.concurrency <= 0",
+		"a.auto_pause_on_expired = true",
+		"a.expires_at is not null",
+		"a.expires_at <= $1",
+	} {
+		if !strings.Contains(normalized, required) {
+			t.Fatalf("account unavailable SQL missing %q: %s", required, normalized)
+		}
+	}
+}
+
 func TestAccountShareModeRepositoryListListingsRestoresEndingMembershipAfterRefresh(t *testing.T) {
 	queryMatcher := sqlmock.QueryMatcherFunc(func(expectedSQL, actualSQL string) error {
 		normalized := strings.ToLower(strings.Join(strings.Fields(actualSQL), " "))
@@ -508,6 +591,108 @@ func TestAccountShareModeRepositoryHasActiveOrQueuedMembershipForAPIKey(t *testi
 	}
 	if !exists {
 		t.Fatalf("expected binding to exist")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestAccountShareModeRepositoryListAPIKeyBindingMembershipsIncludesEndingState(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	repo := &accountShareModeRepository{db: db}
+	consumerUserID := int64(7)
+	apiKeyID := int64(42)
+	now := time.Date(2026, 7, 28, 8, 0, 0, 0, time.UTC)
+	endingRequestedAt := now.Add(time.Minute)
+	operationID := "00000000-0000-4000-8000-000000000003"
+
+	mock.ExpectQuery(`(?s)SELECT\s+m\.id.*AND m\.status IN \(\$3, \$4, \$5\).*ORDER BY m\.queue_rank ASC, m\.id ASC`).
+		WithArgs(
+			consumerUserID,
+			apiKeyID,
+			service.AccountShareMembershipStatusActive,
+			service.AccountShareMembershipStatusQueued,
+			service.AccountShareMembershipStatusEnding,
+		).
+		WillReturnRows(
+			sqlmock.NewRows(accountShareMembershipColumns()).
+				AddRow(accountShareEndMembershipRow(
+					1,
+					11,
+					int64(101),
+					20,
+					consumerUserID,
+					apiKeyID,
+					service.AccountShareMembershipStatusActive,
+					now,
+					now,
+				)...).
+				AddRow(accountShareEndMembershipRow(
+					2,
+					12,
+					nil,
+					21,
+					consumerUserID,
+					apiKeyID,
+					service.AccountShareMembershipStatusQueued,
+					now,
+					now,
+				)...).
+				AddRow(accountShareEndMembershipRow(
+					3,
+					13,
+					int64(103),
+					22,
+					consumerUserID,
+					apiKeyID,
+					service.AccountShareMembershipStatusEnding,
+					now,
+					now,
+				)...),
+		)
+	mock.ExpectQuery(`(?s)SELECT\s+membership\.id,\s+membership\.ending_requested_at.*LEFT JOIN account_share_room_operations operation`).
+		WithArgs(sqlmock.AnyArg(), consumerUserID, apiKeyID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id",
+			"ending_requested_at",
+			"ending_reason",
+			"settlement_status",
+			"ending_operation_id",
+			"ending_operation_status",
+		}).AddRow(
+			int64(3),
+			endingRequestedAt,
+			service.AccountShareMembershipEndReasonManual,
+			"pending",
+			operationID,
+			"needs_attention",
+		))
+
+	memberships, err := repo.ListAPIKeyBindingMemberships(
+		context.Background(),
+		consumerUserID,
+		apiKeyID,
+	)
+	if err != nil {
+		t.Fatalf("ListAPIKeyBindingMemberships: %v", err)
+	}
+	if len(memberships) != 3 {
+		t.Fatalf("memberships = %d, want 3", len(memberships))
+	}
+	ending := memberships[2]
+	if ending.Status != service.AccountShareMembershipStatusEnding ||
+		ending.EndingRequestedAt == nil ||
+		!ending.EndingRequestedAt.Equal(endingRequestedAt) ||
+		ending.EndingReason != service.AccountShareMembershipEndReasonManual ||
+		ending.SettlementStatus != "pending" ||
+		ending.EndingOperationID != operationID ||
+		ending.EndingOperationStatus != "needs_attention" {
+		t.Fatalf("unexpected ending membership: %#v", ending)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
@@ -1011,7 +1196,7 @@ func TestAccountShareModeRepositoryUpdateListingDoesNotSyncAllowedModelsToRoomAc
 	mock.ExpectQuery("SELECT account_id\\s+FROM account_share_room_accounts").
 		WithArgs(int64(7)).
 		WillReturnRows(sqlmock.NewRows([]string{"account_id"}).AddRow(int64(10)))
-	mock.ExpectQuery("SELECT\\s+id, name, platform, account_level, concurrency, priority").
+	mock.ExpectQuery(`(?s)SELECT\s+a\.id, a\.name, a\.platform, a\.account_level, a\.concurrency, a\.priority,.*a\.auto_pause_on_expired.*AS schedulable`).
 		WithArgs(pq.Array([]int64{10}), int64(42)).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "name", "platform", "account_level", "concurrency", "priority",
@@ -1080,7 +1265,7 @@ func TestAccountShareModeRepositoryUpdateListingRejectsModelUnsupportedByCurrent
 	mock.ExpectQuery("SELECT account_id\\s+FROM account_share_room_accounts").
 		WithArgs(int64(7)).
 		WillReturnRows(sqlmock.NewRows([]string{"account_id"}).AddRow(int64(10)))
-	mock.ExpectQuery("SELECT\\s+id, name, platform, account_level, concurrency, priority").
+	mock.ExpectQuery(`(?s)SELECT\s+a\.id, a\.name, a\.platform, a\.account_level, a\.concurrency, a\.priority,.*a\.auto_pause_on_expired.*AS schedulable`).
 		WithArgs(pq.Array([]int64{10}), int64(42)).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "name", "platform", "account_level", "concurrency", "priority",
@@ -6216,6 +6401,209 @@ func TestAccountShareModeRepositoryListAllStillExcludesDeletedRooms(t *testing.T
 	}
 }
 
+func TestAccountShareModeRepositoryListingVisibilityMatrix(t *testing.T) {
+	tests := []struct {
+		name      string
+		filters   service.AccountShareListingFilters
+		required  []string
+		forbidden []string
+	}{
+		{
+			name: "public all cannot bypass active status",
+			filters: service.AccountShareListingFilters{
+				Tab:       service.AccountShareModeListingTabAll,
+				Status:    "all",
+				SkipTotal: true,
+			},
+			required: []string{"l.status = 'active'"},
+		},
+		{
+			name: "admin all keeps operational visibility",
+			filters: service.AccountShareListingFilters{
+				Tab:           service.AccountShareModeListingTabAll,
+				Status:        "all",
+				ViewerIsAdmin: true,
+				SkipTotal:     true,
+			},
+			forbidden: []string{"l.status = 'active'"},
+		},
+		{
+			name: "owner mine keeps non-public rooms",
+			filters: service.AccountShareListingFilters{
+				Tab:       service.AccountShareModeListingTabMine,
+				Status:    "all",
+				SkipTotal: true,
+			},
+			required:  []string{"l.owner_user_id = $1"},
+			forbidden: []string{"l.status = 'active'"},
+		},
+		{
+			name: "effective member using keeps non-public rooms",
+			filters: service.AccountShareListingFilters{
+				Tab:       service.AccountShareModeListingTabUsing,
+				Status:    "all",
+				SkipTotal: true,
+			},
+			required:  []string{"qm.id is not null"},
+			forbidden: []string{"l.status = 'active'"},
+		},
+		{
+			name: "history keeps ended membership rooms",
+			filters: service.AccountShareListingFilters{
+				Tab:       service.AccountShareModeListingTabHistory,
+				Status:    "all",
+				SkipTotal: true,
+			},
+			required:  []string{"hm.id is not null", "qm.id is null"},
+			forbidden: []string{"l.status = 'active'"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			matcher := sqlmock.QueryMatcherFunc(func(expectedSQL, actualSQL string) error {
+				if expectedSQL != "listing visibility matrix" {
+					return nil
+				}
+				normalized := strings.ToLower(strings.Join(strings.Fields(actualSQL), " "))
+				for _, fragment := range tt.required {
+					if !strings.Contains(normalized, fragment) {
+						return fmt.Errorf("listing query missing required visibility predicate %q", fragment)
+					}
+				}
+				for _, fragment := range tt.forbidden {
+					if strings.Contains(normalized, fragment) {
+						return fmt.Errorf("listing query contains forbidden visibility predicate %q", fragment)
+					}
+				}
+				return nil
+			})
+			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(matcher))
+			if err != nil {
+				t.Fatalf("sqlmock.New: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+			repo := &accountShareModeRepository{db: db}
+			querySentinel := errors.New("stop after visibility query")
+
+			mock.ExpectQuery("listing visibility matrix").
+				WithArgs(int64(42), 21, 0).
+				WillReturnError(querySentinel)
+
+			_, _, err = repo.ListListings(
+				context.Background(),
+				42,
+				tt.filters,
+				pagination.PaginationParams{Page: 1, PageSize: 20},
+			)
+			if !errors.Is(err, querySentinel) {
+				t.Fatalf("ListListings error = %v, want query sentinel", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("unmet expectations: %v", err)
+			}
+		})
+	}
+}
+
+func TestAccountShareModeRepositoryGetVisibleListingPermissionMatrix(t *testing.T) {
+	matcher := sqlmock.QueryMatcherFunc(func(expectedSQL, actualSQL string) error {
+		if expectedSQL != "visible listing detail" {
+			return nil
+		}
+		normalized := strings.ToLower(strings.Join(strings.Fields(actualSQL), " "))
+		for _, fragment := range []string{
+			"$3::boolean",
+			"l.status = 'active'",
+			"l.owner_user_id = $1",
+			"from account_share_memberships visible_membership",
+			"visible_membership.consumer_user_id = $1",
+			"visible_membership.status in ('active', 'queued', 'ending', 'ended')",
+			"visible_membership.deleted_at is null",
+		} {
+			if !strings.Contains(normalized, fragment) {
+				return fmt.Errorf("visible detail query missing %q", fragment)
+			}
+		}
+		return nil
+	})
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(matcher))
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	repo := &accountShareModeRepository{db: db}
+
+	mock.ExpectQuery("visible listing detail").
+		WithArgs(int64(42), int64(7), false).
+		WillReturnRows(accountShareListingRows(7, 70, 700, "", time.Time{}))
+
+	listing, err := repo.GetVisibleListingByID(context.Background(), 7, 42, false)
+	if err != nil {
+		t.Fatalf("GetVisibleListingByID failed: %v", err)
+	}
+	if listing == nil || listing.ID != 7 {
+		t.Fatalf("unexpected listing: %#v", listing)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestAccountShareModeRepositoryListRoomRuntimeAccountsBatchesActiveAccounts(t *testing.T) {
+	matcher := sqlmock.QueryMatcherFunc(func(expectedSQL, actualSQL string) error {
+		if expectedSQL != "room runtime accounts" {
+			return nil
+		}
+		normalized := strings.ToLower(strings.Join(strings.Fields(actualSQL), " "))
+		for _, fragment := range []string{
+			"from account_share_room_accounts room_account",
+			"join accounts a on a.id = room_account.account_id",
+			"room_account.listing_id = any($1)",
+			"room_account.state = 'active'",
+			"a.deleted_at is null",
+		} {
+			if !strings.Contains(normalized, fragment) {
+				return fmt.Errorf("runtime account query missing %q", fragment)
+			}
+		}
+		return nil
+	})
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(matcher))
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	repo := &accountShareModeRepository{db: db}
+	now := time.Date(2026, 7, 28, 8, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery("room runtime accounts").
+		WithArgs(pq.Array([]int64{7, 8}), now).
+		WillReturnRows(sqlmock.NewRows([]string{"listing_id", "account_id", "concurrency"}).
+			AddRow(int64(7), int64(70), 3).
+			AddRow(int64(7), int64(71), 4).
+			AddRow(int64(8), int64(80), 5))
+
+	accountsByListing, err := repo.ListRoomRuntimeAccounts(context.Background(), []int64{7, 8, 7, 0}, now)
+	if err != nil {
+		t.Fatalf("ListRoomRuntimeAccounts failed: %v", err)
+	}
+	if !reflect.DeepEqual(accountsByListing, map[int64][]service.AccountWithConcurrency{
+		7: {
+			{ID: 70, MaxConcurrency: 3},
+			{ID: 71, MaxConcurrency: 4},
+		},
+		8: {
+			{ID: 80, MaxConcurrency: 5},
+		},
+	}) {
+		t.Fatalf("unexpected runtime accounts: %#v", accountsByListing)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func TestAccountShareModeRepositoryArchiveScopesOwnerAndDoesNotRequireRepresentativeAccount(t *testing.T) {
 	queryMatcher := sqlmock.QueryMatcherFunc(func(expectedSQL, actualSQL string) error {
 		normalized := strings.ToLower(strings.Join(strings.Fields(actualSQL), " "))
@@ -6660,6 +7048,7 @@ func TestAccountShareModeRepositorySubmitReviewLocksListingBeforeMembership(t *t
 	accountID := int64(83)
 	ownerUserID := int64(84)
 	consumerUserID := int64(85)
+	identityID := int64(86)
 	lastRequestAt := time.Date(2026, 7, 11, 1, 5, 0, 0, time.UTC)
 
 	mock.ExpectBegin()
@@ -6669,11 +7058,9 @@ func TestAccountShareModeRepositorySubmitReviewLocksListingBeforeMembership(t *t
 	mock.ExpectQuery("SELECT\\s+m\\.listing_id.*FOR UPDATE OF m$").
 		WithArgs(membershipID, consumerUserID).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"listing_id", "current_account_id", "account_identity_id", "deleted_at",
-			"owner_user_id", "last_request_at", "status",
+			"listing_id", "current_account_id", "account_identity_id", "listing_deleted_at", "owner_user_id", "last_request_at", "status",
 		}).AddRow(
-			listingID, accountID, nil, nil,
-			ownerUserID, lastRequestAt, service.AccountShareMembershipStatusActive,
+			listingID, accountID, identityID, nil, ownerUserID, lastRequestAt, service.AccountShareMembershipStatusActive,
 		))
 	mock.ExpectRollback()
 
@@ -6711,8 +7098,7 @@ func TestAccountShareModeRepositorySubmitReviewAllowsDeletedUsedMembership(t *te
 	mock.ExpectQuery("SELECT\\s+m\\.listing_id.*FOR UPDATE OF m$").
 		WithArgs(membershipID, consumerUserID).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"listing_id", "current_account_id", "account_identity_id", "deleted_at",
-			"owner_user_id", "last_request_at", "status",
+			"listing_id", "current_account_id", "account_identity_id", "listing_deleted_at", "owner_user_id", "last_request_at", "status",
 		}).AddRow(
 			listingID,
 			accountID,
@@ -6740,7 +7126,7 @@ func TestAccountShareModeRepositorySubmitReviewAllowsDeletedUsedMembership(t *te
 	mock.ExpectExec("UPDATE account_share_listings l").
 		WithArgs(listingID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery("SELECT\\s+r\\.id,\\s+r\\.account_identity_id").
+	mock.ExpectQuery("SELECT\\s+r\\.id,\\s+COALESCE\\(r\\.account_identity_id, 0\\)").
 		WithArgs(reviewID).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id",
@@ -6802,6 +7188,162 @@ func TestAccountShareModeRepositorySubmitReviewAllowsDeletedUsedMembership(t *te
 	}
 }
 
+func TestAccountShareModeRepositorySubmitReviewSubjectWriteRollout(t *testing.T) {
+	insertErr := errors.New("stop after review insert")
+	lastRequestAt := time.Date(2026, 7, 11, 2, 5, 0, 0, time.UTC)
+
+	tests := []struct {
+		name                     string
+		roomSubjectWritesEnabled bool
+		legacyIdentityID         any
+		listingDeletedAt         any
+		resolveMissingIdentity   bool
+		resolvedIdentityID       int64
+		expectedInsertIdentity   any
+		expectedErr              error
+		expectInsert             bool
+	}{
+		{
+			name:                   "default writes legacy identity",
+			legacyIdentityID:       int64(304),
+			expectedInsertIdentity: int64(304),
+			expectedErr:            insertErr,
+			expectInsert:           true,
+		},
+		{
+			name:                     "enabled writes room subject without identity",
+			roomSubjectWritesEnabled: true,
+			legacyIdentityID:         int64(304),
+			expectedInsertIdentity:   nil,
+			expectedErr:              insertErr,
+			expectInsert:             true,
+		},
+		{
+			name:                   "default resolves and backfills missing legacy identity",
+			legacyIdentityID:       nil,
+			resolveMissingIdentity: true,
+			resolvedIdentityID:     int64(307),
+			expectedInsertIdentity: int64(307),
+			expectedErr:            insertErr,
+			expectInsert:           true,
+		},
+		{
+			name:             "default rejects deleted room when legacy identity is missing",
+			legacyIdentityID: nil,
+			listingDeletedAt: lastRequestAt.Add(time.Hour),
+			expectedErr:      service.ErrAccountShareReviewIdentityMissing,
+		},
+		{
+			name:                     "enabled writes room subject for deleted room without identity",
+			roomSubjectWritesEnabled: true,
+			legacyIdentityID:         nil,
+			listingDeletedAt:         lastRequestAt.Add(time.Hour),
+			expectedInsertIdentity:   nil,
+			expectedErr:              insertErr,
+			expectInsert:             true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("sqlmock.New: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+
+			repo := &accountShareModeRepository{db: db}
+			repo.rollout.ReviewRoomSubjectWritesEnabled = tt.roomSubjectWritesEnabled
+			membershipID := int64(301)
+			listingID := int64(302)
+			accountID := int64(303)
+			ownerUserID := int64(305)
+			consumerUserID := int64(306)
+
+			mock.ExpectBegin()
+			mock.ExpectQuery("SELECT\\s+l\\.id.*FOR UPDATE OF l$").
+				WithArgs(membershipID, consumerUserID).
+				WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(listingID))
+			mock.ExpectQuery("SELECT\\s+m\\.listing_id.*FOR UPDATE OF m$").
+				WithArgs(membershipID, consumerUserID).
+				WillReturnRows(sqlmock.NewRows([]string{
+					"listing_id",
+					"current_account_id",
+					"account_identity_id",
+					"listing_deleted_at",
+					"owner_user_id",
+					"last_request_at",
+					"status",
+				}).AddRow(
+					listingID,
+					accountID,
+					tt.legacyIdentityID,
+					tt.listingDeletedAt,
+					ownerUserID,
+					lastRequestAt,
+					service.AccountShareMembershipStatusEnded,
+				))
+			if tt.resolveMissingIdentity {
+				mock.ExpectQuery("SELECT\\s+COALESCE\\(name, ''\\)").
+					WithArgs(accountID).
+					WillReturnRows(sqlmock.NewRows([]string{
+						"name",
+						"platform",
+						"credentials",
+						"extra",
+					}).AddRow(
+						"legacy-account",
+						service.PlatformOpenAI,
+						[]byte(`{"email":"legacy@example.com"}`),
+						[]byte(`{}`),
+					))
+				mock.ExpectQuery("INSERT INTO account_share_account_identities").
+					WithArgs(
+						service.PlatformOpenAI,
+						"legacy@example.com",
+						"l***y@example.com",
+						accountID,
+					).
+					WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(tt.resolvedIdentityID))
+				mock.ExpectExec("UPDATE account_share_listings").
+					WithArgs(tt.resolvedIdentityID, listingID).
+					WillReturnResult(sqlmock.NewResult(0, 1))
+			}
+			if tt.expectInsert {
+				mock.ExpectQuery("INSERT INTO account_share_reviews").
+					WithArgs(
+						tt.expectedInsertIdentity,
+						listingID,
+						accountID,
+						membershipID,
+						ownerUserID,
+						consumerUserID,
+						7,
+						"",
+						service.AccountShareReviewCommentStatusNone,
+						nil,
+						nil,
+					).
+					WillReturnError(insertErr)
+			}
+			mock.ExpectRollback()
+
+			_, err = repo.SubmitReview(
+				context.Background(),
+				consumerUserID,
+				membershipID,
+				service.SubmitAccountShareReviewInput{Score: 7},
+			)
+			if !errors.Is(err, tt.expectedErr) {
+				t.Fatalf("SubmitReview error = %v, want %v", err, tt.expectedErr)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("unmet expectations: %v", err)
+			}
+		})
+	}
+}
+
 func TestAccountShareModeRepositorySubmitReviewDeletedRoomKeepsSelfReviewGuard(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -6823,8 +7365,7 @@ func TestAccountShareModeRepositorySubmitReviewDeletedRoomKeepsSelfReviewGuard(t
 	mock.ExpectQuery("SELECT\\s+m\\.listing_id.*FOR UPDATE OF m$").
 		WithArgs(membershipID, consumerUserID).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"listing_id", "current_account_id", "account_identity_id", "deleted_at",
-			"owner_user_id", "last_request_at", "status",
+			"listing_id", "current_account_id", "account_identity_id", "listing_deleted_at", "owner_user_id", "last_request_at", "status",
 		}).AddRow(
 			listingID,
 			accountID,
@@ -6872,8 +7413,7 @@ func TestAccountShareModeRepositorySubmitReviewDeletedRoomKeepsDuplicateGuard(t 
 	mock.ExpectQuery("SELECT\\s+m\\.listing_id.*FOR UPDATE OF m$").
 		WithArgs(membershipID, consumerUserID).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"listing_id", "current_account_id", "account_identity_id", "deleted_at",
-			"owner_user_id", "last_request_at", "status",
+			"listing_id", "current_account_id", "account_identity_id", "listing_deleted_at", "owner_user_id", "last_request_at", "status",
 		}).AddRow(
 			listingID,
 			accountID,
@@ -6953,10 +7493,13 @@ func TestAccountShareModeRepositoryListDeletedListingReviewsAccessBoundary(t *te
 		normalized := strings.ToLower(strings.Join(strings.Fields(actualSQL), " "))
 		for _, required := range []string{
 			"left join account_share_reviews r on r.listing_id = l.id",
-			"l.deleted_at is null or $3::boolean",
+			"(l.deleted_at is null and l.status = 'active') or $3::boolean",
 			"or l.owner_user_id = $4",
 			"from account_share_memberships viewer_membership",
 			"viewer_membership.consumer_user_id = $4",
+			"from account_share_membership_account_bindings viewer_binding",
+			"viewer_binding.membership_id = viewer_membership.id",
+			"viewer_binding.listing_id = viewer_membership.listing_id",
 		} {
 			if !strings.Contains(normalized, required) {
 				return fmt.Errorf("deleted listing review access query missing %q", required)
@@ -6975,8 +7518,9 @@ func TestAccountShareModeRepositoryListDeletedListingReviewsAccessBoundary(t *te
 		allowed       bool
 	}{
 		{name: "owner", viewerUserID: 301, allowed: true},
-		{name: "history consumer", viewerUserID: 302, allowed: true},
+		{name: "bound history consumer", viewerUserID: 302, allowed: true},
 		{name: "admin", viewerUserID: 303, viewerIsAdmin: true, allowed: true},
+		{name: "queued-only consumer", viewerUserID: 305, allowed: false},
 		{name: "unrelated user", viewerUserID: 304, allowed: false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -7027,6 +7571,49 @@ func TestAccountShareModeRepositoryListDeletedListingReviewsAccessBoundary(t *te
 				t.Fatalf("unmet expectations: %v", err)
 			}
 		})
+	}
+}
+
+func TestAccountShareModeRepositoryReviewDetailAuthorizationRequiresHistoricalBinding(t *testing.T) {
+	queryMatcher := sqlmock.QueryMatcherFunc(func(expectedSQL, actualSQL string) error {
+		if expectedSQL != "review detail authorization" {
+			return nil
+		}
+		normalized := strings.ToLower(strings.Join(strings.Fields(actualSQL), " "))
+		for _, required := range []string{
+			"listing.owner_user_id = $3",
+			"from account_share_memberships viewer_membership",
+			"viewer_membership.consumer_user_id = $3",
+			"from account_share_membership_account_bindings viewer_binding",
+			"viewer_binding.membership_id = viewer_membership.id",
+			"viewer_binding.listing_id = viewer_membership.listing_id",
+		} {
+			if !strings.Contains(normalized, required) {
+				return fmt.Errorf("review detail authorization query missing %q", required)
+			}
+		}
+		return nil
+	})
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(queryMatcher))
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	repo := &accountShareModeRepository{db: db}
+
+	mock.ExpectQuery("review detail authorization").
+		WithArgs(int64(300), false, int64(305)).
+		WillReturnRows(sqlmock.NewRows([]string{"allowed"}).AddRow(false))
+
+	allowed, err := repo.CanViewListingReviewDetails(context.Background(), 305, false, 300)
+	if err != nil {
+		t.Fatalf("CanViewListingReviewDetails failed: %v", err)
+	}
+	if allowed {
+		t.Fatal("queued-only viewer without a historical binding must not receive full review DTOs")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
 	}
 }
 
@@ -7107,6 +7694,9 @@ func TestAccountShareModeRepositoryClaimPendingReviewModerationsUsesTopLevelCTE(
 		if strings.Contains(normalized, "join ( with picked") {
 			return errors.New("postgres does not allow the data-modifying CTE inside a join subquery")
 		}
+		if strings.Contains(normalized, "moderation_attempts = r_claim.moderation_attempts + 1") {
+			return errors.New("claiming a review must not consume a moderation attempt")
+		}
 		return nil
 	})
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(matcher))
@@ -7129,6 +7719,39 @@ func TestAccountShareModeRepositoryClaimPendingReviewModerationsUsesTopLevelCTE(
 	}
 	if len(reviews) != 0 {
 		t.Fatalf("reviews len = %d, want 0", len(reviews))
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestAccountShareModeRepositoryBeginsModerationAttemptAtomically(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	repo := &accountShareModeRepository{db: db}
+
+	mock.ExpectExec("UPDATE account_share_reviews").
+		WithArgs(
+			int64(91),
+			service.AccountShareReviewCommentStatusPending,
+			service.AccountShareReviewCommentStatusFailed,
+			service.AccountShareReviewModerationMaxAttempts,
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	begun, err := repo.BeginReviewModerationAttempt(
+		context.Background(),
+		91,
+		service.AccountShareReviewModerationMaxAttempts,
+	)
+	if err != nil {
+		t.Fatalf("BeginReviewModerationAttempt failed: %v", err)
+	}
+	if !begun {
+		t.Fatal("expected moderation attempt to begin")
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
@@ -9105,57 +9728,61 @@ func accountShareAcceptedJoinTerms(
 }
 
 type accountShareListingRowData struct {
-	ListingID                        int64
-	RowVersion                       int64
-	CurrentRevisionID                any
-	Deleted                          bool
-	AccountID                        int64
-	OwnerUserID                      int64
-	RoomName                         string
-	Status                           string
-	EditSessionID                    string
-	EditingExpiresAt                 time.Time
-	RateMultiplier                   float64
-	HourlyRate                       float64
-	HourlyFeeWaiverMinimum           float64
-	CurrentMembershipID              any
-	CurrentConsumerUserID            any
-	CurrentAPIKeyID                  any
-	CurrentAPIKeyName                any
-	CurrentJoinedAt                  any
-	CurrentPaidUntil                 any
-	CurrentBilledUntil               any
-	CurrentIdleTimeoutMinutes        any
-	CurrentLastRequestAt             any
-	CurrentWaiverWindowStartedAt     any
-	CurrentWaiverWindowUsageAmount   any
-	CurrentWaiverWindowRequestCount  any
-	CurrentWaiverWindowLastRequestAt any
-	QueueMembershipID                any
-	QueueAPIKeyID                    any
-	QueueAPIKeyName                  any
-	QueueRank                        any
-	QueueStatus                      any
-	QueueIdleTimeoutMinutes          any
-	QueueDispatchCooldownUntil       any
-	LastUsedMembershipID             any
-	LastUsedAt                       any
+	ListingID                               int64
+	RowVersion                              int64
+	CurrentRevisionID                       any
+	Deleted                                 bool
+	AccountID                               int64
+	OwnerUserID                             int64
+	RoomName                                string
+	Status                                  string
+	EditSessionID                           string
+	EditingExpiresAt                        time.Time
+	RateMultiplier                          float64
+	RepresentativeAccountConcurrency        int
+	RepresentativeAccountAutoPauseOnExpired bool
+	AccountExpiresAt                        any
+	HourlyRate                              float64
+	HourlyFeeWaiverMinimum                  float64
+	CurrentMembershipID                     any
+	CurrentConsumerUserID                   any
+	CurrentAPIKeyID                         any
+	CurrentAPIKeyName                       any
+	CurrentJoinedAt                         any
+	CurrentPaidUntil                        any
+	CurrentBilledUntil                      any
+	CurrentIdleTimeoutMinutes               any
+	CurrentLastRequestAt                    any
+	CurrentWaiverWindowStartedAt            any
+	CurrentWaiverWindowUsageAmount          any
+	CurrentWaiverWindowRequestCount         any
+	CurrentWaiverWindowLastRequestAt        any
+	QueueMembershipID                       any
+	QueueAPIKeyID                           any
+	QueueAPIKeyName                         any
+	QueueRank                               any
+	QueueStatus                             any
+	QueueIdleTimeoutMinutes                 any
+	QueueDispatchCooldownUntil              any
+	LastUsedMembershipID                    any
+	LastUsedAt                              any
 }
 
 func accountShareListingRows(listingID, accountID, ownerUserID int64, editSessionID string, editingExpiresAt time.Time, configure ...func(*accountShareListingRowData)) *sqlmock.Rows {
 	now := time.Now().UTC()
 	row := &accountShareListingRowData{
-		ListingID:              listingID,
-		RowVersion:             1,
-		AccountID:              accountID,
-		OwnerUserID:            ownerUserID,
-		RoomName:               "shared-room",
-		Status:                 service.AccountShareListingStatusActive,
-		EditSessionID:          editSessionID,
-		EditingExpiresAt:       editingExpiresAt,
-		RateMultiplier:         0.2,
-		HourlyRate:             0.15,
-		HourlyFeeWaiverMinimum: 0,
+		ListingID:                        listingID,
+		RowVersion:                       1,
+		AccountID:                        accountID,
+		OwnerUserID:                      ownerUserID,
+		RoomName:                         "shared-room",
+		Status:                           service.AccountShareListingStatusActive,
+		EditSessionID:                    editSessionID,
+		EditingExpiresAt:                 editingExpiresAt,
+		RateMultiplier:                   0.2,
+		RepresentativeAccountConcurrency: 20,
+		HourlyRate:                       0.15,
+		HourlyFeeWaiverMinimum:           0,
 	}
 	for _, apply := range configure {
 		if apply != nil {
@@ -9186,6 +9813,8 @@ func accountShareListingRows(listingID, accountID, ownerUserID int64, editSessio
 		"allowed_models",
 		"per_user_concurrency",
 		"account_concurrency",
+		"representative_account_concurrency",
+		"representative_account_auto_pause_on_expired",
 		"hourly_rate",
 		"hourly_fee_waiver_minimum",
 		"min_balance_required",
@@ -9264,6 +9893,8 @@ func accountShareListingRows(listingID, accountID, ownerUserID int64, editSessio
 		[]byte(`["gpt-5.5"]`),
 		5,
 		20,
+		row.RepresentativeAccountConcurrency,
+		row.RepresentativeAccountAutoPauseOnExpired,
 		row.HourlyRate,
 		row.HourlyFeeWaiverMinimum,
 		1.0,
@@ -9275,7 +9906,7 @@ func accountShareListingRows(listingID, accountID, ownerUserID int64, editSessio
 		"pro",
 		service.StatusActive,
 		true,
-		nil, // expires_at
+		row.AccountExpiresAt,
 		nil, // last_used_at
 		nil, // rate_limited_at
 		nil, // rate_limit_reset_at

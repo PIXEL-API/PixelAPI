@@ -66,7 +66,7 @@
                   </span>
                 </div>
               </div>
-              <div class="rounded-2xl border border-white/80 bg-white/80 p-4 shadow-glass-sm backdrop-blur dark:border-dark-700/80 dark:bg-dark-900/75 sm:p-5">
+              <div class="hero-account-card rounded-2xl border border-white/80 bg-white/80 p-5 shadow-glass-sm backdrop-blur dark:border-dark-700/80 dark:bg-dark-900/75 sm:p-6">
                 <div class="flex items-center gap-3">
                   <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary-100 text-primary-600 dark:bg-primary-900/50 dark:text-primary-300">
                     <Icon name="user" size="lg" />
@@ -93,17 +93,40 @@
                     </button>
                   </div>
                 </div>
+                <dl class="hero-account-metrics">
+                  <div>
+                    <dt>
+                      <Icon name="bolt" size="sm" />
+                      {{ t('redeem.concurrency') }}
+                    </dt>
+                    <dd>
+                      {{ user?.concurrency || 0 }}
+                      <span>{{ t('redeem.requests') }}</span>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>
+                      <Icon name="gift" size="sm" />
+                      {{ t('redeem.points') }}
+                    </dt>
+                    <dd>{{ formatPoints(user?.points_balance || 0) }}</dd>
+                  </div>
+                </dl>
               </div>
             </div>
           </section>
 
-          <div class="flex flex-col gap-6 2xl:gap-8">
-          <div v-if="!hasVisibleContent" class="card order-1 py-16 text-center">
-            <Icon name="creditCard" size="xl" class="mx-auto mb-3 text-gray-300 dark:text-dark-600" />
-            <p class="text-gray-500 dark:text-gray-400">{{ t('payment.noVisibleContent') }}</p>
-          </div>
-          <section v-if="showExternalRechargeSection" id="external-recharge" class="order-3 scroll-mt-24">
-            <div class="card overflow-hidden p-0">
+          <div class="recharge-dashboard-grid">
+            <div class="recharge-dashboard-column flex min-w-0">
+              <RedeemCenterSection class="min-h-0 w-full" />
+            </div>
+            <div class="recharge-dashboard-column flex min-w-0 flex-col gap-6">
+          <section
+            v-if="showExternalRechargeSection"
+            id="external-recharge"
+            class="order-4 flex min-h-0 flex-1 scroll-mt-24"
+          >
+            <div class="card flex min-h-0 flex-1 flex-col overflow-hidden p-0">
               <div class="border-b border-gray-100 px-5 py-4 dark:border-dark-700 sm:px-6">
                 <div class="flex items-start gap-3">
                   <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300">
@@ -115,7 +138,7 @@
                   </div>
                 </div>
               </div>
-              <div class="external-link-grid p-4 sm:p-5">
+              <div class="external-link-grid flex-1 content-start p-4 sm:p-5">
                 <a
                   v-for="item in rechargeCenterItems"
                   :key="`${item.name}-${item.url}`"
@@ -134,7 +157,11 @@
             </div>
           </section>
 
-          <section v-if="showRechargeSection" id="balance-recharge" class="order-1 scroll-mt-24">
+          <section
+            v-if="showRechargeSection"
+            id="balance-recharge"
+            :class="[enabledMethods.length > 0 ? 'order-1' : 'order-2', 'scroll-mt-24']"
+          >
             <div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
               <div>
                 <div class="mb-1 flex items-center gap-2 text-sm font-semibold text-primary-600 dark:text-primary-400">
@@ -227,7 +254,10 @@
             </template>
           </section>
 
-          <section v-if="showSubscriptionSection" id="subscription-plans" class="order-2 scroll-mt-24">
+            </div>
+          </div>
+
+          <section v-if="showSubscriptionSection" id="subscription-plans" class="order-3 scroll-mt-24">
             <div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
               <div>
                 <div class="mb-1 flex items-center gap-2 text-sm font-semibold text-accent-700 dark:text-accent-300">
@@ -351,7 +381,6 @@
               </div>
             </template>
           </section>
-          </div>
         </template>
         <div v-if="(checkout.help_text || checkout.help_image_url) && paymentPhase === 'select' && !selectedPlan" class="card p-4">
           <div class="flex flex-col items-center gap-3">
@@ -422,6 +451,7 @@ import { platformAccentBarClass, platformBadgeLightClass, platformBadgeClass, pl
 import SubscriptionPlanCard from '@/components/payment/SubscriptionPlanCard.vue'
 import PaymentStatusPanel from '@/components/payment/PaymentStatusPanel.vue'
 import Icon from '@/components/icons/Icon.vue'
+import RedeemCenterSection from '@/components/user/redeem/RedeemCenterSection.vue'
 import type { PaymentMethodOption } from '@/components/payment/PaymentMethodSelector.vue'
 import { buildPaymentErrorToastMessage, describePaymentScenarioError } from './paymentUx'
 import { hasWechatResumeQuery, parseWechatResumeRoute, stripWechatResumeQuery } from './paymentWechatResume'
@@ -436,6 +466,10 @@ const appStore = useAppStore()
 
 const user = computed(() => authStore.user)
 const activeSubscriptions = computed(() => subscriptionStore.activeSubscriptions)
+
+function formatPoints(value: number): string {
+  return Number(value || 0).toFixed(10).replace(/\.?0+$/, '') || '0'
+}
 
 function getDaysRemaining(expiresAt: string): number {
   const diff = new Date(expiresAt).getTime() - Date.now()
@@ -704,17 +738,14 @@ const showSubscriptionSection = computed(() => publicPlans.value.length > 0)
 const showExternalRechargeSection = computed(() =>
   checkout.value.recharge_center_tab_enabled && rechargeCenterItems.value.length > 0,
 )
-const hasVisibleContent = computed(() =>
-  showRechargeSection.value || showSubscriptionSection.value || showExternalRechargeSection.value,
-)
 const primarySectionId = computed(() => {
-  if (showRechargeSection.value) return 'balance-recharge'
-  if (showSubscriptionSection.value) return 'subscription-plans'
-  if (showExternalRechargeSection.value) return 'external-recharge'
-  return ''
+  if (showRechargeSection.value && enabledMethods.value.length > 0) return 'balance-recharge'
+  return 'redeem-code'
 })
 const primaryActionLabel = computed(() =>
-  showRechargeSection.value ? t('payment.centerHero.startRecharge') : t('payment.centerHero.viewOptions'),
+  primarySectionId.value === 'balance-recharge'
+    ? t('payment.centerHero.startRecharge')
+    : t('redeem.redeemButton'),
 )
 const validAmount = computed(() => amount.value ?? 0)
 const balanceRechargeMultiplier = computed(() => {
@@ -1349,6 +1380,8 @@ onMounted(async () => {
       scrollToSection('external-recharge')
     } else if (route.query.tab === 'recharge' && showRechargeSection.value) {
       scrollToSection('balance-recharge')
+    } else if (route.query.tab === 'redeem' || route.hash === '#redeem-code') {
+      scrollToSection('redeem-code')
     }
   } catch (err: unknown) { appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error'))) }
   finally { loading.value = false }
@@ -1364,6 +1397,7 @@ onMounted(async () => {
 }
 
 .recharge-center-hero-grid,
+.recharge-dashboard-grid,
 .recharge-workspace-grid,
 .recharge-form-grid,
 .external-link-grid {
@@ -1372,6 +1406,14 @@ onMounted(async () => {
 
 .recharge-center-hero-grid {
   gap: 1.5rem;
+}
+
+.recharge-dashboard-grid {
+  gap: 1.5rem;
+}
+
+.recharge-dashboard-column {
+  container-type: inline-size;
 }
 
 .recharge-workspace-grid {
@@ -1390,10 +1432,47 @@ onMounted(async () => {
   gap: 0.75rem;
 }
 
+.hero-account-card {
+  min-width: 0;
+}
+
+.hero-account-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 1rem;
+  @apply overflow-hidden rounded-xl border border-gray-200/80 bg-white/70 dark:border-dark-700 dark:bg-dark-800/45;
+}
+
+.hero-account-metrics > div {
+  min-width: 0;
+  padding: 0.75rem 1rem;
+}
+
+.hero-account-metrics > div + div {
+  @apply border-l border-gray-200/80 dark:border-dark-700;
+}
+
+.hero-account-metrics dt {
+  @apply flex items-center gap-1.5 text-sm font-medium text-gray-500 dark:text-gray-400;
+}
+
+.hero-account-metrics dd {
+  @apply mt-1 truncate text-lg font-bold tabular-nums text-gray-950 dark:text-white;
+}
+
+.hero-account-metrics dd span {
+  @apply ml-1 text-sm font-normal text-gray-500 dark:text-gray-400;
+}
+
 @container (min-width: 64rem) {
   .recharge-center-hero-grid {
-    grid-template-columns: minmax(0, 1fr) minmax(19rem, 24rem);
+    grid-template-columns: minmax(0, 1.15fr) minmax(30rem, 0.85fr);
     gap: 2rem;
+  }
+
+  .recharge-dashboard-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1.5rem;
   }
 
   .recharge-workspace-grid {
@@ -1405,6 +1484,10 @@ onMounted(async () => {
 @container (min-width: 92rem) {
   .recharge-center-hero-grid {
     gap: 3rem;
+  }
+
+  .recharge-dashboard-grid {
+    gap: 2rem;
   }
 
   .recharge-form-grid {

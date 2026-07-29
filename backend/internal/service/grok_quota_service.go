@@ -153,7 +153,12 @@ func (s *GrokQuotaService) probeUsage(ctx context.Context, accountID int64) (*Gr
 
 	callCtx, cancel := context.WithTimeout(ctx, grokQuotaUpstreamTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(callCtx, http.MethodPost, targetURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(
+		WithHTTPUpstreamRedirectsDisabled(callCtx),
+		http.MethodPost,
+		targetURL,
+		bytes.NewReader(body),
+	)
 	if err != nil {
 		return nil, infraerrors.Newf(http.StatusInternalServerError, "GROK_QUOTA_PROBE_REQUEST_BUILD_FAILED", "failed to build upstream request: %v", err)
 	}
@@ -170,6 +175,24 @@ func (s *GrokQuotaService) probeUsage(ctx context.Context, accountID int64) (*Gr
 		return nil, infraerrors.Newf(http.StatusBadGateway, "GROK_QUOTA_PROBE_REQUEST_FAILED", "upstream probe failed: %v", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+
+	if !isOpenAIUpstreamSuccessStatus(resp.StatusCode) && !isOpenAIUpstreamErrorStatus(resp.StatusCode) {
+		const reason = "GROK_QUOTA_PROBE_UPSTREAM_ERROR"
+		slog.Warn(
+			"grok_quota_probe_failed",
+			"account_id", account.ID,
+			"model", probeModel,
+			"status", resp.StatusCode,
+			"reason", reason,
+		)
+		return nil, infraerrors.Newf(
+			http.StatusBadGateway,
+			reason,
+			"upstream returned unexpected HTTP status %d for probe model %q",
+			resp.StatusCode,
+			probeModel,
+		)
+	}
 
 	snapshot := xai.ObserveQuotaHeaders(resp.Header, resp.StatusCode, "active_probe")
 	resetAt, limited := grokRateLimitResetAtForAccount(account, snapshot, time.Now())
@@ -382,7 +405,12 @@ func (s *GrokQuotaService) fetchBilling(
 	if err != nil {
 		return nil, 0, infraerrors.Newf(http.StatusBadRequest, "GROK_QUOTA_BASE_URL_INVALID", "invalid Grok base_url: %v", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, billingURL, nil)
+	req, err := http.NewRequestWithContext(
+		WithHTTPUpstreamRedirectsDisabled(ctx),
+		http.MethodGet,
+		billingURL,
+		nil,
+	)
 	if err != nil {
 		return nil, 0, infraerrors.Newf(http.StatusInternalServerError, "GROK_QUOTA_PROBE_REQUEST_BUILD_FAILED", "failed to build billing request: %v", err)
 	}
@@ -394,11 +422,10 @@ func (s *GrokQuotaService) fetchBilling(
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode == http.StatusTooManyRequests {
 		return nil, resp.StatusCode, nil
 	}
-	if resp.StatusCode >= 400 {
+	if !isOpenAIUpstreamSuccessStatus(resp.StatusCode) {
 		const reason = "GROK_QUOTA_PROBE_UPSTREAM_ERROR"
 		slog.Warn(
 			"grok_quota_billing_failed",
@@ -407,8 +434,13 @@ func (s *GrokQuotaService) fetchBilling(
 			"status", resp.StatusCode,
 			"reason", reason,
 		)
-		return nil, resp.StatusCode, infraerrors.Newf(mapUpstreamStatus(resp.StatusCode), reason, "billing returned %d", resp.StatusCode)
+		statusCode := http.StatusBadGateway
+		if isOpenAIUpstreamErrorStatus(resp.StatusCode) {
+			statusCode = mapUpstreamStatus(resp.StatusCode)
+		}
+		return nil, resp.StatusCode, infraerrors.Newf(statusCode, reason, "billing returned non-success HTTP status %d", resp.StatusCode)
 	}
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	payload, err := xai.ParseBillingPayload(bodyBytes)
 	if err != nil {
 		return nil, resp.StatusCode, infraerrors.Newf(http.StatusBadGateway, "GROK_QUOTA_BILLING_PARSE_ERROR", "failed to parse billing body: %v", err)

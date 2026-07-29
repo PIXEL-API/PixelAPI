@@ -36,6 +36,8 @@ const (
 	AccountShareQuotaModeEnforce = "enforce"
 )
 
+const accountShareReviewRoomSubjectMigration = "252_account_share_reviews_room_subject.sql"
+
 // 使用量记录队列溢出策略
 const (
 	UsageRecordOverflowPolicyDrop   = "drop"
@@ -120,9 +122,10 @@ type Config struct {
 // the separately scheduled contract migration has completed its observation
 // window.
 type AccountShareRolloutConfig struct {
-	LifecycleContractEnabled    bool   `mapstructure:"lifecycle_contract_enabled"`
-	DeferredQueueBindingEnabled bool   `mapstructure:"deferred_queue_binding_enabled"`
-	QuotaMode                   string `mapstructure:"quota_mode"`
+	LifecycleContractEnabled       bool   `mapstructure:"lifecycle_contract_enabled"`
+	DeferredQueueBindingEnabled    bool   `mapstructure:"deferred_queue_binding_enabled"`
+	ReviewRoomSubjectWritesEnabled bool   `mapstructure:"review_room_subject_writes_enabled"`
+	QuotaMode                      string `mapstructure:"quota_mode"`
 }
 
 type LogConfig struct {
@@ -2079,6 +2082,7 @@ func setDefaults() {
 	// expand schema has been observed and the dedicated contract release runs.
 	viper.SetDefault("account_share_rollout.lifecycle_contract_enabled", false)
 	viper.SetDefault("account_share_rollout.deferred_queue_binding_enabled", false)
+	viper.SetDefault("account_share_rollout.review_room_subject_writes_enabled", false)
 	viper.SetDefault("account_share_rollout.quota_mode", AccountShareQuotaModeShadow)
 
 	// Redis
@@ -2800,6 +2804,14 @@ func (c *Config) Validate() error {
 	if strings.ContainsAny(c.Database.MigrationThrough, `/\`) ||
 		(c.Database.MigrationThrough != "" && !strings.HasSuffix(c.Database.MigrationThrough, ".sql")) {
 		return fmt.Errorf("database.migration_through must be an embedded migration filename ending in .sql")
+	}
+	if c.AccountShareRollout.ReviewRoomSubjectWritesEnabled &&
+		c.Database.MigrationThrough != "" &&
+		c.Database.MigrationThrough < accountShareReviewRoomSubjectMigration {
+		return fmt.Errorf(
+			"account_share_rollout.review_room_subject_writes_enabled requires database.migration_through to include %s",
+			accountShareReviewRoomSubjectMigration,
+		)
 	}
 	switch c.AccountShareRollout.QuotaMode {
 	case AccountShareQuotaModeShadow, AccountShareQuotaModeEnforce:

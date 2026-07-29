@@ -266,8 +266,15 @@ type accountShareLifecycleRepository interface {
 		listingID int64,
 		expectedVersion int64,
 	) (*AccountShareListing, error)
-	ListDrainingRoomIDs(ctx context.Context, limit int) ([]int64, error)
+	ListDrainingRoomIDs(ctx context.Context, afterID int64, limit int) ([]int64, error)
 	ListValidatingRoomIDs(ctx context.Context, staleBefore time.Time, limit int) ([]int64, error)
+	FindRoomDeleteOperation(
+		ctx context.Context,
+		actorUserID int64,
+		actorIsAdmin bool,
+		listingID int64,
+		requestID string,
+	) (*AccountShareRoomOperation, error)
 	SoftDeleteRoom(
 		ctx context.Context,
 		actorUserID int64,
@@ -414,8 +421,13 @@ func (s *AccountShareModeService) ActivateRoom(
 	if err != nil {
 		return nil, err
 	}
+	validationCtx, cancelValidation := context.WithTimeout(
+		context.WithoutCancel(ctx),
+		accountShareRoomValidationWorkerTimeout,
+	)
+	defer cancelValidation()
 	_, validationReason, err := s.finalizeRoomValidation(
-		ctx,
+		validationCtx,
 		validating,
 		actorUserID,
 		actorIsAdmin,
@@ -424,7 +436,7 @@ func (s *AccountShareModeService) ActivateRoom(
 	if err != nil {
 		return nil, err
 	}
-	state, stateErr := s.GetRoomManagementState(ctx, actorUserID, actorIsAdmin, listingID)
+	state, stateErr := s.GetRoomManagementState(validationCtx, actorUserID, actorIsAdmin, listingID)
 	if validationReason != "" {
 		if stateErr != nil {
 			return nil, stateErr
@@ -596,6 +608,26 @@ func (s *AccountShareModeService) DeleteRoom(
 	if listingID <= 0 {
 		return nil, ErrAccountShareListingNotFound
 	}
+	input.RequestID = strings.TrimSpace(input.RequestID)
+	repo, err := s.lifecycleRepository()
+	if err != nil {
+		return nil, err
+	}
+	if input.RequestID != "" && len(input.RequestID) <= 128 {
+		existing, err := repo.FindRoomDeleteOperation(
+			ctx,
+			actorUserID,
+			actorIsAdmin,
+			listingID,
+			input.RequestID,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if existing != nil {
+			return s.tryFinalizeRoomDeletion(ctx, repo, existing)
+		}
+	}
 	input.RoomName = strings.TrimSpace(input.RoomName)
 	input.Reason = strings.TrimSpace(input.Reason)
 	if input.ExpectedVersion <= 0 {
@@ -632,10 +664,6 @@ func (s *AccountShareModeService) DeleteRoom(
 	}
 	if state.Blockers.Any() {
 		return nil, ErrAccountShareRoomDeleteBlocked.WithMetadata(state.Blockers.Metadata())
-	}
-	repo, err := s.lifecycleRepository()
-	if err != nil {
-		return nil, err
 	}
 	operation, err := repo.SoftDeleteRoom(ctx, actorUserID, actorIsAdmin, listingID, input)
 	if err != nil {
@@ -789,9 +817,20 @@ func (s *AccountShareModeService) processRoomLifecycleOnce(ctx context.Context) 
 	if err != nil {
 		return
 	}
-	listingIDs, err := repo.ListDrainingRoomIDs(ctx, AccountShareModeSeatBillingBatchSize)
+	afterID := s.roomLifecycleCursor()
+	listingIDs, err := repo.ListDrainingRoomIDs(ctx, afterID, AccountShareModeSeatBillingBatchSize)
 	if err != nil {
 		return
+	}
+	if len(listingIDs) == 0 && afterID > 0 {
+		s.setRoomLifecycleCursor(0)
+		listingIDs, err = repo.ListDrainingRoomIDs(ctx, 0, AccountShareModeSeatBillingBatchSize)
+		if err != nil {
+			return
+		}
+	}
+	if len(listingIDs) > 0 {
+		s.setRoomLifecycleCursor(listingIDs[len(listingIDs)-1])
 	}
 	for _, listingID := range listingIDs {
 		state, err := repo.GetRoomManagementState(ctx, 0, true, listingID)
@@ -814,6 +853,27 @@ func (s *AccountShareModeService) processRoomLifecycleOnce(ctx context.Context) 
 			}
 		}
 	}
+}
+
+func (s *AccountShareModeService) roomLifecycleCursor() int64 {
+	if s == nil {
+		return 0
+	}
+	s.roomLifecycleCursorMu.Lock()
+	defer s.roomLifecycleCursorMu.Unlock()
+	return s.roomLifecycleAfterID
+}
+
+func (s *AccountShareModeService) setRoomLifecycleCursor(afterID int64) {
+	if s == nil {
+		return
+	}
+	if afterID < 0 {
+		afterID = 0
+	}
+	s.roomLifecycleCursorMu.Lock()
+	s.roomLifecycleAfterID = afterID
+	s.roomLifecycleCursorMu.Unlock()
 }
 
 func (s *AccountShareModeService) runRoomValidationWorker() {
@@ -842,7 +902,7 @@ func (s *AccountShareModeService) processRoomValidationOnce() {
 		s.taskExecutor == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), accountShareRoomValidationWorkerTimeout)
+	ctx, cancel := context.WithTimeout(s.seatBillingWorkerContext(), accountShareRoomValidationWorkerTimeout)
 	defer cancel()
 	_, err := s.taskExecutor.Run(ctx, accountShareRoomValidationTaskName, func(
 		taskCtx context.Context,
@@ -911,6 +971,11 @@ func accountShareRoomAllowedActions(state *AccountShareRoomManagementState, view
 		if viewerIsAdmin {
 			actions = append(actions, AccountShareRoomActionSuspend)
 		}
+	case AccountShareListingStatusDraining:
+		actions = append(actions, AccountShareRoomActionActivate)
+		if viewerIsAdmin {
+			actions = append(actions, AccountShareRoomActionSuspend)
+		}
 	case AccountShareListingStatusPaused:
 		actions = append(actions, AccountShareRoomActionActivate)
 	case AccountShareListingStatusSuspended:
@@ -920,7 +985,7 @@ func accountShareRoomAllowedActions(state *AccountShareRoomManagementState, view
 	}
 	if !state.Blockers.Any() {
 		switch state.LifecycleStatus {
-		case AccountShareListingStatusActive, AccountShareListingStatusPaused, AccountShareListingStatusSuspended:
+		case AccountShareListingStatusActive, AccountShareListingStatusDraining, AccountShareListingStatusPaused, AccountShareListingStatusSuspended:
 			actions = append(actions, AccountShareRoomActionDelete)
 		}
 	}

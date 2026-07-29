@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -329,6 +330,99 @@ func TestForwardGrokResponsesAPIKeyUsesConfiguredXAIEndpoint(t *testing.T) {
 	require.Equal(t, 1, result.Usage.OutputTokens)
 }
 
+func TestForwardGrokCompatRejectsUnexpectedStatusBeforeBillingOrSnapshot(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, route := range []string{"responses", "chat"} {
+		for _, statusCode := range []int{
+			http.StatusContinue,
+			http.StatusFound,
+			http.StatusNotModified,
+			http.StatusTemporaryRedirect,
+			http.StatusPermanentRedirect,
+		} {
+			t.Run(fmt.Sprintf("%s/%d", route, statusCode), func(t *testing.T) {
+				body := []byte(`{"model":"grok","input":"hi","stream":false}`)
+				path := "/v1/responses"
+				if route == "chat" {
+					body = []byte(`{"model":"grok","messages":[{"role":"user","content":"hi"}],"stream":false}`)
+					path = "/v1/chat/completions"
+				}
+				recorder := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(recorder)
+				c.Request = httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
+
+				upstream := &httpUpstreamRecorder{resp: &http.Response{
+					StatusCode: statusCode,
+					Header: http.Header{
+						"Content-Type":                   []string{"application/json"},
+						"Location":                       []string{"https://attacker.invalid/private"},
+						"X-Ratelimit-Limit-Requests":     []string{"999"},
+						"X-Ratelimit-Remaining-Requests": []string{"0"},
+					},
+					Body: io.NopCloser(strings.NewReader(`{"secret":"must-not-be-forwarded"}`)),
+				}}
+				snapshotRepo := &grokMediaQuotaSnapshotRepoStub{}
+				svc := &OpenAIGatewayService{
+					httpUpstream: upstream,
+					cfg:          &config.Config{},
+					accountRepo:  snapshotRepo,
+				}
+				account := &Account{
+					ID:          153,
+					Name:        "grok-api-key",
+					Platform:    PlatformGrok,
+					Type:        AccountTypeAPIKey,
+					Concurrency: 1,
+					Credentials: map[string]any{
+						"api_key":  "xai-test-key",
+						"base_url": "https://xai.example.com/v1",
+					},
+				}
+				gateCalls := 0
+				ctx := WithOpenAIForwardResultBillingGate(
+					context.Background(),
+					NewOpenAIForwardResultBillingGate(func(*OpenAIForwardResult) error {
+						gateCalls++
+						return nil
+					}),
+				)
+
+				var (
+					result *OpenAIForwardResult
+					err    error
+				)
+				if route == "chat" {
+					result, err = svc.forwardGrokChatCompletions(
+						ctx,
+						c,
+						account,
+						body,
+						"grok",
+						"grok",
+						"grok-4.5",
+						false,
+						false,
+						time.Now(),
+					)
+				} else {
+					result, err = svc.forwardGrokResponses(ctx, c, account, body, "grok", false, time.Now())
+				}
+
+				require.ErrorContains(t, err, fmt.Sprintf("non-success HTTP status %d", statusCode))
+				require.Nil(t, result)
+				require.Zero(t, gateCalls)
+				require.Zero(t, snapshotRepo.updateExtraCalls)
+				require.Equal(t, http.StatusBadGateway, recorder.Code)
+				require.Equal(t, "Upstream request failed", gjson.Get(recorder.Body.String(), "error.message").String())
+				require.NotContains(t, recorder.Body.String(), "must-not-be-forwarded")
+				require.Empty(t, recorder.Header().Get("Location"))
+				require.NotNil(t, upstream.lastReq)
+				require.True(t, HTTPUpstreamRedirectsDisabled(upstream.lastReq.Context()))
+			})
+		}
+	}
+}
+
 func TestAccountTestServiceGrokAPIKeyUsesResponsesEndpoint(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -367,6 +461,59 @@ func TestAccountTestServiceGrokAPIKeyUsesResponsesEndpoint(t *testing.T) {
 	require.Equal(t, "Bearer xai-test-key", upstream.lastReq.Header.Get("Authorization"))
 	require.Empty(t, upstream.lastReq.Header.Get("X-Grok-Client-Version"))
 	require.Contains(t, recorder.Body.String(), `"type":"test_complete"`)
+}
+
+func TestAccountTestServiceGrokRejectsUnexpectedStatusBeforeQuotaSnapshot(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, statusCode := range []int{
+		http.StatusContinue,
+		http.StatusFound,
+		http.StatusNotModified,
+		http.StatusTemporaryRedirect,
+		http.StatusPermanentRedirect,
+	} {
+		t.Run(fmt.Sprintf("status_%d", statusCode), func(t *testing.T) {
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: statusCode,
+				Header: http.Header{
+					"Location":                       []string{"https://attacker.invalid/private"},
+					"X-Ratelimit-Limit-Requests":     []string{"999"},
+					"X-Ratelimit-Remaining-Requests": []string{"0"},
+				},
+				Body: io.NopCloser(strings.NewReader(`{"secret":"must-not-be-forwarded"}`)),
+			}}
+			account := &Account{
+				ID:          154,
+				Platform:    PlatformGrok,
+				Type:        AccountTypeAPIKey,
+				Concurrency: 1,
+				Credentials: map[string]any{
+					"api_key":  "xai-test-key",
+					"base_url": "https://xai.example.com/v1",
+				},
+			}
+			snapshotRepo := &grokMediaQuotaSnapshotRepoStub{}
+			svc := &AccountTestService{
+				accountRepo:  snapshotRepo,
+				httpUpstream: upstream,
+				cfg: &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{
+					Enabled: false,
+				}}},
+			}
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/154/test", nil)
+
+			err := svc.testGrokAccountConnection(c, account, "grok", "hi")
+
+			require.ErrorContains(t, err, fmt.Sprintf("unexpected HTTP status %d", statusCode))
+			require.Zero(t, snapshotRepo.updateExtraCalls)
+			require.NotNil(t, upstream.lastReq)
+			require.True(t, HTTPUpstreamRedirectsDisabled(upstream.lastReq.Context()))
+			require.NotContains(t, recorder.Body.String(), "must-not-be-forwarded")
+			require.NotContains(t, recorder.Body.String(), "attacker.invalid")
+		})
+	}
 }
 
 func TestAccountTestServiceGrokOAuthPaymentRequiredMarksAccountError(t *testing.T) {

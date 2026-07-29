@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -244,6 +245,26 @@ func ProvideAccountErrorCleanupService(
 	svc := NewAccountErrorCleanupService(cleanupRepo, time.Minute, taskExecutor)
 	svc.Start()
 	return svc
+}
+
+func ProvideConversationAdminReplyTimeoutService(
+	conversationRepo ConversationRepository,
+	taskExecutor *ClusterTaskExecutor,
+) (*ConversationAdminReplyTimeoutService, error) {
+	timeoutRepo, ok := conversationRepo.(ConversationAdminReplyTimeoutRepository)
+	if !ok {
+		return nil, fmt.Errorf("conversation repository does not implement admin reply timeout processing")
+	}
+	if !validateAdminReplyTimeoutNoticeText() {
+		return nil, fmt.Errorf("conversation admin reply timeout notice text is empty")
+	}
+	svc := NewConversationAdminReplyTimeoutService(
+		timeoutRepo,
+		adminReplyTimeoutCheckInterval,
+		taskExecutor,
+	)
+	svc.Start()
+	return svc, nil
 }
 
 // ProvideSubscriptionExpiryService creates and starts SubscriptionExpiryService.
@@ -1077,6 +1098,7 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(GrokOAuthReconciler), new(*TokenRefreshService)),
 	ProvideAccountExpiryService,
 	ProvideAccountErrorCleanupService,
+	ProvideConversationAdminReplyTimeoutService,
 	ProvideSubscriptionExpiryService,
 	ProvideTimingWheelService,
 	ProvideDashboardAggregationService,

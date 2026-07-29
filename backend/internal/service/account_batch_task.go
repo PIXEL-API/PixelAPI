@@ -23,6 +23,7 @@ const (
 	AccountBatchTaskStatusCanceled  = "canceled"
 
 	AccountBatchTaskOperationAdminRefreshCredentials = "admin_refresh_credentials"
+	AccountBatchTaskOperationAdminTestConnection     = "admin_test_connection"
 	AccountBatchTaskOperationUserRefreshCredentials  = "user_refresh_credentials"
 	AccountBatchTaskOperationUserTestConnection      = "user_test_connection"
 	AccountBatchTaskOperationUserRevalidateShare     = "user_revalidate_public_share"
@@ -41,6 +42,7 @@ type AccountBatchTask struct {
 	ID           int64                  `json:"id"`
 	Scope        string                 `json:"scope"`
 	Operation    string                 `json:"operation"`
+	Parameters   map[string]any         `json:"parameters"`
 	Status       string                 `json:"status"`
 	Total        int                    `json:"total"`
 	Processed    int                    `json:"processed"`
@@ -72,6 +74,7 @@ type AccountBatchTaskItem struct {
 type CreateAccountBatchTaskInput struct {
 	Scope       string
 	Operation   string
+	Parameters  map[string]any
 	AccountIDs  []int64
 	CreatedBy   int64
 	OwnerUserID *int64
@@ -149,6 +152,7 @@ func (s *AccountBatchTaskService) CreateTask(ctx context.Context, input CreateAc
 	}
 	input.Scope = normalizeAccountBatchTaskScope(input.Scope)
 	input.Operation = strings.TrimSpace(input.Operation)
+	input.Parameters = normalizeAccountBatchTaskParameters(input.Parameters)
 	input.AccountIDs = normalizeBatchAccountIDs(input.AccountIDs)
 	if input.Scope == "" {
 		return nil, fmt.Errorf("invalid account batch task scope")
@@ -372,6 +376,17 @@ func normalizeBatchAccountIDs(ids []int64) []int64 {
 		out = append(out, id)
 	}
 	return out
+}
+
+func normalizeAccountBatchTaskParameters(parameters map[string]any) map[string]any {
+	if len(parameters) == 0 {
+		return map[string]any{}
+	}
+	normalized := make(map[string]any, len(parameters))
+	for key, value := range parameters {
+		normalized[key] = value
+	}
+	return normalized
 }
 
 func trimAccountBatchError(message string) string {

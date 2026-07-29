@@ -435,8 +435,20 @@ func (r *accountShareBillingIntentRepository) ClaimReady(
 	// therefore cannot introduce a reverse-lock cycle with ending, rebind, or
 	// delete operations.
 	rows, err := r.db.QueryContext(ctx, `
-		WITH candidates AS MATERIALIZED (
-			SELECT id
+		WITH ranked AS MATERIALIZED (
+			SELECT
+				id,
+				membership_id,
+				COALESCE(next_attempt_at, lease_expires_at, completed_at, created_at) AS available_at,
+				request_id,
+				api_key_id_snapshot,
+				ROW_NUMBER() OVER (
+					PARTITION BY membership_id
+					ORDER BY
+						COALESCE(next_attempt_at, lease_expires_at, completed_at, created_at) ASC,
+						request_id ASC,
+						api_key_id_snapshot ASC
+				) AS membership_rank
 			FROM account_share_request_billing_intents
 			WHERE (
 					status = 'ready'
@@ -451,12 +463,27 @@ func (r *accountShareBillingIntentRepository) ClaimReady(
 					status = 'processing'
 					AND lease_expires_at <= clock_timestamp()
 				)
+		),
+		candidates AS MATERIALIZED (
+			SELECT intent.id
+			FROM account_share_request_billing_intents AS intent
+			JOIN ranked
+				ON ranked.id = intent.id
+			WHERE ranked.membership_rank = 1
+				AND NOT EXISTS (
+					SELECT 1
+					FROM account_share_request_billing_intents AS active_intent
+					WHERE active_intent.membership_id = ranked.membership_id
+						AND active_intent.status = 'processing'
+						AND active_intent.lease_expires_at > clock_timestamp()
+				)
 			ORDER BY
-				COALESCE(next_attempt_at, lease_expires_at, completed_at, created_at) ASC,
-				request_id ASC,
-				api_key_id_snapshot ASC
+				ranked.membership_rank ASC,
+				ranked.available_at ASC,
+				ranked.request_id ASC,
+				ranked.api_key_id_snapshot ASC
 			LIMIT $1
-			FOR UPDATE SKIP LOCKED
+			FOR UPDATE OF intent SKIP LOCKED
 		)
 		UPDATE account_share_request_billing_intents AS intent
 		SET status = 'processing',
@@ -680,43 +707,63 @@ func (r *accountShareBillingIntentRepository) CountPendingByMembership(ctx conte
 	return count, nil
 }
 
-func (r *accountShareBillingIntentRepository) ListStaleForAttention(
+func (r *accountShareBillingIntentRepository) ListRecoveryCandidates(
 	ctx context.Context,
-	staleBefore time.Time,
-	limit int,
+	input service.ListAccountShareBillingRecoveryCandidatesInput,
 ) ([]service.AccountShareBillingIntentAttentionCandidate, error) {
 	if err := r.validate(); err != nil {
 		return nil, err
 	}
-	if staleBefore.IsZero() {
-		return nil, fmt.Errorf("%w: stale_before is required", service.ErrAccountShareBillingIntentInvalid)
+	if input.InFlightStaleBefore.IsZero() || input.CreatedStaleBefore.IsZero() {
+		return nil, fmt.Errorf("%w: recovery cutoffs are required", service.ErrAccountShareBillingIntentInvalid)
 	}
-	if limit <= 0 {
-		limit = service.AccountShareBillingIntentDefaultClaimLimit
+	if input.Limit <= 0 {
+		input.Limit = service.AccountShareBillingIntentDefaultClaimLimit
 	}
-	if limit > service.AccountShareBillingIntentMaxClaimLimit {
-		limit = service.AccountShareBillingIntentMaxClaimLimit
+	if input.Limit > service.AccountShareBillingIntentMaxClaimLimit {
+		input.Limit = service.AccountShareBillingIntentMaxClaimLimit
+	}
+	var afterUpdatedAt any
+	var afterID int64
+	if input.After != nil {
+		if input.After.UpdatedAt.IsZero() || input.After.ID <= 0 {
+			return nil, fmt.Errorf("%w: recovery cursor is invalid", service.ErrAccountShareBillingIntentInvalid)
+		}
+		afterUpdatedAt = input.After.UpdatedAt.UTC()
+		afterID = input.After.ID
 	}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT `+accountShareBillingIntentStateColumns+`,
-			'forward_runtime_lease_expired',
+			CASE
+				WHEN status = 'created' THEN 'forward_never_started'
+				ELSE 'forward_runtime_lease_expired'
+			END,
 			COALESCE(last_error_code, ''),
 			COALESCE(last_error_message, ''),
 			forward_started_at,
 			completed_at,
 			next_attempt_at
 		FROM account_share_request_billing_intents
-		WHERE status = 'in_flight'
-			AND updated_at <= $1
-		ORDER BY updated_at ASC, request_id ASC, api_key_id_snapshot ASC
-		LIMIT $2
-	`, staleBefore.UTC(), limit)
+		WHERE (
+				(status = 'created' AND updated_at <= $2)
+				OR (status = 'in_flight' AND updated_at <= $1)
+			)
+			AND ($3::timestamptz IS NULL OR (updated_at, id) > ($3, $4))
+		ORDER BY updated_at ASC, id ASC
+		LIMIT $5
+	`,
+		input.InFlightStaleBefore.UTC(),
+		input.CreatedStaleBefore.UTC(),
+		afterUpdatedAt,
+		afterID,
+		input.Limit,
+	)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 
-	candidates := make([]service.AccountShareBillingIntentAttentionCandidate, 0, limit)
+	candidates := make([]service.AccountShareBillingIntentAttentionCandidate, 0, input.Limit)
 	for rows.Next() {
 		candidate, scanErr := scanAccountShareBillingIntentAttentionCandidate(rows)
 		if scanErr != nil {

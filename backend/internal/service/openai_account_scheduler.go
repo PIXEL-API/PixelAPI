@@ -1439,6 +1439,9 @@ func (s *OpenAIGatewayService) selectAccountShareModeBoundAccount(
 				retryCurrentMembership = true
 			}
 		}
+		if !retryCurrentMembership && requestedModel != "" && !accountShareListingAllowsModel(listing, requestedModel) {
+			return nil, decision, true, accountShareModeUnsupportedModelError(requestedModel)
+		}
 		if !retryCurrentMembership && requestedModel != "" && !account.IsModelSupported(requestedModel) {
 			return nil, decision, true, accountShareModeUnsupportedModelError(requestedModel)
 		}

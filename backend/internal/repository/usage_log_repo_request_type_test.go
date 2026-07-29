@@ -764,6 +764,7 @@ func TestUsageLogRepositoryGetAccountShareRecommendationUsageProfilePrefersModel
 		"all_output_tokens",
 		"all_cache_creation_tokens",
 		"all_cache_read_tokens",
+		"all_image_input_tokens",
 		"all_image_output_tokens",
 		"all_active_hour_buckets",
 		"model_requests",
@@ -771,6 +772,7 @@ func TestUsageLogRepositoryGetAccountShareRecommendationUsageProfilePrefersModel
 		"model_output_tokens",
 		"model_cache_creation_tokens",
 		"model_cache_read_tokens",
+		"model_image_input_tokens",
 		"model_image_output_tokens",
 		"model_active_hour_buckets",
 	}).AddRow(
@@ -779,6 +781,7 @@ func TestUsageLogRepositoryGetAccountShareRecommendationUsageProfilePrefersModel
 		int64(3000),
 		int64(600),
 		int64(1200),
+		int64(100),
 		int64(0),
 		int64(9),
 		int64(30),
@@ -786,15 +789,23 @@ func TestUsageLogRepositoryGetAccountShareRecommendationUsageProfilePrefersModel
 		int64(450),
 		int64(90),
 		int64(150),
+		int64(30),
 		int64(0),
 		int64(2),
 	)
 
-	mock.ExpectQuery("SELECT\\s+COUNT\\(\\*\\) AS all_requests").
-		WithArgs(int64(42), start, end, "gpt-5.5", sqlmock.AnyArg()).
+	mock.ExpectQuery("(?s)SELECT\\s+COUNT\\(\\*\\) AS all_requests.*JOIN accounts usage_account.*LOWER\\(BTRIM\\(usage_account\\.platform\\)\\) = \\$4").
+		WithArgs(int64(42), start, end, service.PlatformOpenAI, "gpt-5.5", sqlmock.AnyArg()).
 		WillReturnRows(rows)
 
-	got, err := repo.GetAccountShareRecommendationUsageProfile(context.Background(), 42, "gpt-5.5", start, end)
+	got, err := repo.GetAccountShareRecommendationUsageProfile(
+		context.Background(),
+		42,
+		service.PlatformOpenAI,
+		"gpt-5.5",
+		start,
+		end,
+	)
 	require.NoError(t, err)
 	require.True(t, got.ModelMatched)
 	require.Equal(t, int64(30), got.TotalRequests)
@@ -802,6 +813,7 @@ func TestUsageLogRepositoryGetAccountShareRecommendationUsageProfilePrefersModel
 	require.Equal(t, int64(450), got.TotalOutputTokens)
 	require.Equal(t, int64(90), got.TotalCacheCreationTokens)
 	require.Equal(t, int64(150), got.TotalCacheReadTokens)
+	require.Equal(t, int64(30), got.TotalImageInputTokens)
 	require.Equal(t, int64(2), got.ActiveHourBuckets)
 	require.NoError(t, mock.ExpectationsWereMet())
 }

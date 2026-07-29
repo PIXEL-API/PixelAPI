@@ -871,6 +871,79 @@ func TestOpenAIGatewayService_OAuthPassthrough_UpstreamErrorIncludesPassthroughF
 	require.Equal(t, "http_error", arr[len(arr)-1].Kind)
 }
 
+func TestOpenAIGatewayService_RejectsUnexpectedNon2xxBeforeSuccessHandling(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name        string
+		statusCode  int
+		passthrough bool
+	}{
+		{name: "passthrough redirect", statusCode: http.StatusFound, passthrough: true},
+		{name: "standard not modified", statusCode: http.StatusNotModified, passthrough: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			body := []byte(`{"model":"gpt-5.2","stream":false,"input":"hello"}`)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+			c.Request.Header.Set("User-Agent", "codex_cli_rs/0.1.0")
+
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: tt.statusCode,
+				Header: http.Header{
+					"Content-Type": []string{"application/json"},
+					"Location":     []string{"https://redirect.invalid/private"},
+					"X-Request-Id": []string{"rid-unexpected-status"},
+				},
+				Body: io.NopCloser(strings.NewReader(`{"id":"resp_secret_marker","object":"response","status":"completed","model":"gpt-5.2","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`)),
+			}}
+			svc := &OpenAIGatewayService{
+				cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+				httpUpstream: upstream,
+			}
+			account := &Account{
+				ID:          123,
+				Name:        "acc",
+				Platform:    PlatformOpenAI,
+				Type:        AccountTypeOAuth,
+				Concurrency: 1,
+				Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
+				Status:      StatusActive,
+				Schedulable: true,
+			}
+			if tt.passthrough {
+				account.Extra = map[string]any{"openai_passthrough": true}
+			}
+
+			gateCalls := 0
+			ctx := WithOpenAIForwardResultBillingGate(context.Background(), NewOpenAIForwardResultBillingGate(func(*OpenAIForwardResult) error {
+				gateCalls++
+				return nil
+			}))
+			result, err := svc.Forward(ctx, c, account, body)
+
+			require.Error(t, err)
+			require.Nil(t, result)
+			require.Zero(t, gateCalls)
+			require.Equal(t, http.StatusBadGateway, rec.Code)
+			require.Equal(t, "upstream_error", gjson.Get(rec.Body.String(), "error.type").String())
+			require.Equal(t, "Upstream request failed", gjson.Get(rec.Body.String(), "error.message").String())
+			require.NotContains(t, rec.Body.String(), "secret_marker")
+			require.NotContains(t, rec.Header().Get("Location"), "redirect.invalid")
+
+			value, ok := c.Get(OpsUpstreamErrorsKey)
+			require.True(t, ok)
+			events, ok := value.([]*OpsUpstreamErrorEvent)
+			require.True(t, ok)
+			require.NotEmpty(t, events)
+			require.Equal(t, tt.statusCode, events[len(events)-1].UpstreamStatusCode)
+			require.Equal(t, tt.passthrough, events[len(events)-1].Passthrough)
+		})
+	}
+}
+
 func TestOpenAIGatewayService_OpenAIPassthrough_ContextWindowErrorPreservesSanitizedMessage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

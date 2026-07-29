@@ -1,6 +1,11 @@
 <template>
   <div
-    class="flex items-center justify-between border-t border-gray-200 bg-white px-4 py-3 dark:border-dark-700 dark:bg-dark-800 sm:px-6"
+    :class="[
+      'flex items-center justify-between',
+      compact
+        ? 'bg-transparent px-0 py-0'
+        : 'border-t border-gray-200 bg-white px-4 py-3 dark:border-dark-700 dark:bg-dark-800 sm:px-6'
+    ]"
   >
     <div class="flex flex-1 items-center justify-between sm:hidden">
       <!-- Mobile pagination -->
@@ -23,10 +28,20 @@
       </button>
     </div>
 
-    <div class="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between">
+    <div
+      :class="[
+        'hidden sm:flex sm:flex-1 sm:items-center',
+        compact ? 'sm:min-w-0 sm:flex-col sm:gap-3' : 'sm:justify-between'
+      ]"
+    >
       <!-- Desktop pagination info -->
-      <div class="flex items-center space-x-4">
-        <p class="text-sm text-gray-700 dark:text-gray-300">
+      <div
+        :class="[
+          'flex items-center',
+          compact ? 'w-full min-w-0 justify-between gap-3' : 'space-x-4'
+        ]"
+      >
+        <p class="whitespace-nowrap text-sm text-gray-700 dark:text-gray-300">
           {{ t('pagination.showing') }}
           <span class="font-medium">{{ fromItem }}</span>
           {{ t('pagination.to') }}
@@ -41,7 +56,7 @@
           <span class="text-sm text-gray-700 dark:text-gray-300"
             >{{ t('pagination.perPage') }}:</span
           >
-          <div class="page-size-select w-20">
+          <div class="page-size-select w-20 shrink-0">
             <Select
               :model-value="pageSize"
               :options="pageSizeSelectOptions"
@@ -69,7 +84,10 @@
 
       <!-- Desktop pagination buttons -->
       <nav
-        class="relative z-0 inline-flex -space-x-px rounded-md shadow-sm"
+        :class="[
+          'relative z-0 inline-flex -space-x-px rounded-md shadow-sm',
+          compact && 'self-center'
+        ]"
         aria-label="Pagination"
       >
         <!-- Previous button -->
@@ -89,7 +107,8 @@
           @click="typeof pageNum === 'number' && goToPage(pageNum)"
           :disabled="typeof pageNum !== 'number'"
           :class="[
-            'relative inline-flex items-center border px-4 py-2 text-sm font-medium',
+            'relative inline-flex items-center border py-2 text-sm font-medium',
+            compact ? 'px-3' : 'px-4',
             pageNum === page
               ? 'z-10 border-primary-500 bg-primary-50 text-primary-600 dark:bg-primary-900/30 dark:text-primary-400'
               : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50 dark:border-dark-600 dark:bg-dark-700 dark:text-gray-300 dark:hover:bg-dark-600',
@@ -134,6 +153,7 @@ interface Props {
   pageSizeOptions?: number[]
   showPageSizeSelector?: boolean
   showJump?: boolean
+  compact?: boolean
 }
 
 interface Emits {
@@ -144,7 +164,8 @@ interface Emits {
 const props = withDefaults(defineProps<Props>(), {
   pageSizeOptions: () => getConfiguredTablePageSizeOptions(),
   showPageSizeSelector: true,
-  showJump: false
+  showJump: false,
+  compact: false
 })
 
 const emit = defineEmits<Emits>()
@@ -179,9 +200,15 @@ const jumpPage = ref('')
 
 const visiblePages = computed(() => {
   const pages: (number | string)[] = []
-  const maxVisible = 7
   const total = totalPages.value
 
+  if (props.compact && total > 3) {
+    if (props.page <= 2) return [1, 2, 3, '...', total]
+    if (props.page >= total - 1) return [1, '...', total - 2, total - 1, total]
+    return [1, '...', props.page, '...', total]
+  }
+
+  const maxVisible = 7
   if (total <= maxVisible) {
     // Show all pages if total is small
     for (let i = 1; i <= total; i++) {

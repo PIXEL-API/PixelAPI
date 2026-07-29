@@ -125,11 +125,59 @@ func TestAccountTestService_OpenAISuccessPersistsSnapshotFromHeaders(t *testing.
 	require.Equal(t, 42.0, repo.updatedExtra["codex_5h_used_percent"])
 	require.Equal(t, 88.0, repo.updatedExtra["codex_7d_used_percent"])
 	require.Len(t, upstream.requests, 1)
+	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.requests[0].Context()))
 	require.Equal(t, "responses=experimental", upstream.requests[0].Header.Get("OpenAI-Beta"))
 	require.Equal(t, "codex_cli_rs", upstream.requests[0].Header.Get("Originator"))
 	require.Equal(t, codexCLIVersion, upstream.requests[0].Header.Get("Version"))
 	require.Equal(t, codexCLIUserAgent, upstream.requests[0].Header.Get("User-Agent"))
 	require.Contains(t, recorder.Body.String(), "test_complete")
+}
+
+func TestAccountTestService_OpenAIRejectsUnexpectedStatusBeforeReadingOrPersisting(t *testing.T) {
+	for _, statusCode := range []int{
+		http.StatusContinue,
+		http.StatusFound,
+		http.StatusNotModified,
+		http.StatusTemporaryRedirect,
+		http.StatusPermanentRedirect,
+	} {
+		statusCode := statusCode
+		t.Run(http.StatusText(statusCode), func(t *testing.T) {
+			ctx, recorder := newTestContext()
+			body := &accountTestTrackingBody{
+				reader: strings.NewReader(`data: {"type":"response.completed"}` + "\n\n"),
+			}
+			headers := make(http.Header)
+			headers.Set("x-codex-primary-used-percent", "100")
+			headers.Set("x-codex-primary-reset-after-seconds", "604800")
+			headers.Set("x-codex-primary-window-minutes", "10080")
+			repo := &openAIAccountTestRepo{}
+			upstream := &queuedHTTPUpstream{responses: []*http.Response{{
+				StatusCode: statusCode,
+				Header:     headers,
+				Body:       body,
+			}}}
+			svc := &AccountTestService{accountRepo: repo, httpUpstream: upstream}
+			account := &Account{
+				ID:          92,
+				Platform:    PlatformOpenAI,
+				Type:        AccountTypeOAuth,
+				Concurrency: 1,
+				Credentials: map[string]any{"access_token": "test-token"},
+			}
+
+			err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
+
+			require.Error(t, err)
+			require.Len(t, upstream.requests, 1)
+			require.True(t, HTTPUpstreamRedirectsDisabled(upstream.requests[0].Context()))
+			require.False(t, body.readCalled)
+			require.Empty(t, repo.updatedExtra)
+			require.Zero(t, repo.setErrorID)
+			require.Zero(t, repo.rateLimitedID)
+			require.NotContains(t, recorder.Body.String(), "\"success\":true")
+		})
+	}
 }
 
 func TestAccountTestService_OpenAITestMasksThirdPartyCustomUserAgent(t *testing.T) {

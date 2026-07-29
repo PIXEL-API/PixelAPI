@@ -168,7 +168,7 @@
           </div>
         </div>
 
-        <div class="key-resolution-counts" aria-label="待处理关联数量">
+        <div class="key-resolution-counts grid grid-cols-1 gap-2 sm:grid-cols-3" aria-label="待处理关联数量">
           <div>
             <span>正在使用</span>
             <strong>{{ (keyResolutionLoading && !keyResolutionLoaded) || keyResolutionError ? '—' : keyResolutionActiveCount }}</strong>
@@ -176,6 +176,10 @@
           <div>
             <span>预约中</span>
             <strong>{{ (keyResolutionLoading && !keyResolutionLoaded) || keyResolutionError ? '—' : keyResolutionQueuedCount }}</strong>
+          </div>
+          <div>
+            <span>退出/结算中</span>
+            <strong>{{ (keyResolutionLoading && !keyResolutionLoaded) || keyResolutionError ? '—' : keyResolutionEndingCount }}</strong>
           </div>
         </div>
 
@@ -453,7 +457,7 @@
               </button>
             </div>
             <p class="recommendation-profile-help">
-              近3天均值会读取你近 3 天历史请求中的单次输入 Token、单次输出 Token、单次 Cache 写入和单次 Cache 读取均值，再按每小时请求量测算预计使用额度。
+              近3天均值按你在当前平台的全部 API Key 汇总，不按所选 Key 单独统计；所选 Key 仅用于确定测算计费分组和后续加入房间。历史 Cache 读取无法可靠拆分文本和图片，两项均保留手工填写值。
             </p>
           </div>
 
@@ -485,11 +489,11 @@
               <input v-model.number="recommendationForm.active_hours" class="input h-10" type="number" min="0.1" step="0.1" />
             </label>
             <label class="field">
-              <span>单次输入 Token</span>
+              <span>单次文本输入 Token</span>
               <input v-model.number="recommendationForm.input_tokens_per_request" class="input h-10" type="number" min="0" step="1" />
             </label>
             <label class="field">
-              <span>单次输出 Token</span>
+              <span>单次文本输出 Token</span>
               <input v-model.number="recommendationForm.output_tokens_per_request" class="input h-10" type="number" min="0" step="1" />
             </label>
             <label class="field">
@@ -497,8 +501,20 @@
               <input v-model.number="recommendationForm.cache_creation_tokens_per_request" class="input h-10" type="number" min="0" step="1" />
             </label>
             <label class="field">
-              <span>单次 Cache 读取</span>
+              <span>单次文本 Cache 读取</span>
               <input v-model.number="recommendationForm.cache_read_tokens_per_request" class="input h-10" type="number" min="0" step="1" />
+            </label>
+            <label class="field">
+              <span>单次图片输入 Token</span>
+              <input v-model.number="recommendationForm.image_input_tokens_per_request" class="input h-10" type="number" min="0" step="1" />
+            </label>
+            <label class="field">
+              <span>单次图片输出 Token</span>
+              <input v-model.number="recommendationForm.image_output_tokens_per_request" class="input h-10" type="number" min="0" step="1" />
+            </label>
+            <label class="field">
+              <span>单次图片 Cache 读取</span>
+              <input v-model.number="recommendationForm.image_cache_read_tokens_per_request" class="input h-10" type="number" min="0" step="1" />
             </label>
           </div>
 
@@ -1106,7 +1122,7 @@
         </template>
       </BaseDialog>
 
-      <section ref="filterPanelRef" class="filter-panel" @keydown.esc="closeFilterPopover">
+      <section ref="filterPanelRef" class="filter-panel" @keydown.esc="handleFilterPopoverEscape">
         <div class="filter-toolbar">
           <div class="filter-primary-row">
             <label v-if="!isMembershipHistoryView" class="filter-search">
@@ -1178,24 +1194,33 @@
               <div class="filter-popover-wrap">
                 <span class="filter-section-label">状态</span>
                 <button
+                  ref="statusFilterTriggerRef"
                   type="button"
                   class="filter-trigger-button"
                   :class="[listingFilters.status !== '' && 'filter-trigger-selected', openFilterPopover === 'status' && 'filter-trigger-active']"
                   :aria-expanded="openFilterPopover === 'status'"
-                  aria-haspopup="menu"
+                  aria-controls="account-share-status-filter"
                   @click="toggleFilterPopover('status')"
                 >
                   <Icon name="filter" size="sm" />
                   <span>{{ statusFilterSummary }}</span>
                   <Icon name="chevronDown" size="xs" class="filter-trigger-chevron" />
                 </button>
-                <div v-if="openFilterPopover === 'status'" class="filter-popover status-popover" role="menu">
+                <div
+                  v-if="openFilterPopover === 'status'"
+                  id="account-share-status-filter"
+                  class="filter-popover status-popover"
+                  role="group"
+                  aria-label="状态选项"
+                  @keydown.escape.stop="handleFilterPopoverEscape"
+                >
                   <button
                     v-for="option in listingStatusFilterOptions"
                     :key="option.value"
                     type="button"
                     class="filter-menu-option"
                     :class="listingFilters.status === option.value && 'filter-menu-option-active'"
+                    :aria-pressed="listingFilters.status === option.value"
                     @click="setListingStatusFilter(option.value)"
                   >
                     <span>{{ option.label }}</span>
@@ -1207,24 +1232,33 @@
               <div v-if="isOpenAIListingPlatform" class="filter-popover-wrap">
                 <span class="filter-section-label">账号等级</span>
                 <button
+                  ref="levelFilterTriggerRef"
                   type="button"
                   class="filter-trigger-button"
                   :class="[listingFilters.accountLevel !== 'all' && 'filter-trigger-selected', openFilterPopover === 'level' && 'filter-trigger-active']"
                   :aria-expanded="openFilterPopover === 'level'"
-                  aria-haspopup="menu"
+                  aria-controls="account-share-level-filter"
                   @click="toggleFilterPopover('level')"
                 >
                   <Icon name="badge" size="sm" />
                   <span>{{ accountLevelFilterSummary }}</span>
                   <Icon name="chevronDown" size="xs" class="filter-trigger-chevron" />
                 </button>
-                <div v-if="openFilterPopover === 'level'" class="filter-popover level-popover" role="menu">
+                <div
+                  v-if="openFilterPopover === 'level'"
+                  id="account-share-level-filter"
+                  class="filter-popover level-popover"
+                  role="group"
+                  aria-label="账号等级选项"
+                  @keydown.escape.stop="handleFilterPopoverEscape"
+                >
                   <button
                     v-for="option in accountLevelFilterOptions"
                     :key="option.value"
                     type="button"
                     class="filter-menu-option"
                     :class="listingFilters.accountLevel === option.value && 'filter-menu-option-active'"
+                    :aria-pressed="listingFilters.accountLevel === option.value"
                     @click="setAccountLevelFilter(option.value)"
                   >
                     <span>{{ option.label }}</span>
@@ -1236,18 +1270,26 @@
               <div class="filter-popover-wrap">
                 <span class="filter-section-label">账号席位</span>
                 <button
+                  ref="seatFilterTriggerRef"
                   type="button"
                   class="filter-trigger-button"
                   :class="listingFilters.seatLimits.length > 0 && 'filter-trigger-selected'"
                   :aria-expanded="openFilterPopover === 'seat'"
-                  aria-haspopup="menu"
+                  aria-controls="account-share-seat-filter"
                   @click="toggleFilterPopover('seat')"
                 >
                   <Icon name="users" size="sm" />
                   <span>{{ seatFilterSummary }}</span>
                   <Icon name="chevronDown" size="xs" class="filter-trigger-chevron" />
                 </button>
-                <div v-if="openFilterPopover === 'seat'" class="filter-popover seat-popover" role="menu">
+                <div
+                  v-if="openFilterPopover === 'seat'"
+                  id="account-share-seat-filter"
+                  class="filter-popover seat-popover"
+                  role="group"
+                  aria-label="账号席位选项"
+                  @keydown.escape.stop="handleFilterPopoverEscape"
+                >
                   <div class="seat-chip-grid">
                     <button
                       v-for="seat in seatOptions"
@@ -1255,6 +1297,7 @@
                       type="button"
                       class="choice-chip"
                       :class="listingFilters.seatLimits.includes(seat) && 'choice-chip-active'"
+                      :aria-pressed="listingFilters.seatLimits.includes(seat)"
                       @click="toggleSeatFilter(seat)"
                     >
                       {{ seat }}人
@@ -1266,24 +1309,33 @@
               <div class="filter-popover-wrap">
                 <span class="filter-section-label">标签</span>
                 <button
+                  ref="featureFilterTriggerRef"
                   type="button"
                   class="filter-trigger-button"
                   :class="listingFilters.featureTags.length > 0 && 'filter-trigger-selected'"
                   :aria-expanded="openFilterPopover === 'feature'"
-                  aria-haspopup="menu"
+                  aria-controls="account-share-feature-filter"
                   @click="toggleFilterPopover('feature')"
                 >
                   <Icon name="filter" size="sm" />
                   <span>{{ featureTagFilterSummary }}</span>
                   <Icon name="chevronDown" size="xs" class="filter-trigger-chevron" />
                 </button>
-                <div v-if="openFilterPopover === 'feature'" class="filter-popover tag-popover" role="menu">
+                <div
+                  v-if="openFilterPopover === 'feature'"
+                  id="account-share-feature-filter"
+                  class="filter-popover tag-popover"
+                  role="group"
+                  aria-label="标签选项"
+                  @keydown.escape.stop="handleFilterPopoverEscape"
+                >
                   <button
                     v-for="option in visibleListingFeatureTagOptions"
                     :key="option.value"
                     type="button"
                     class="filter-menu-option"
                     :class="listingFilters.featureTags.includes(option.value) && 'filter-menu-option-active'"
+                    :aria-pressed="listingFilters.featureTags.includes(option.value)"
                     @click="toggleFeatureTagFilter(option.value)"
                   >
                     <span>{{ option.label }}</span>
@@ -1295,18 +1347,26 @@
               <div class="filter-popover-wrap model-filter-wrap">
                 <span class="filter-section-label">可用模型</span>
                 <button
+                  ref="modelFilterTriggerRef"
                   type="button"
                   class="filter-trigger-button"
                   :class="listingFilters.models.length > 0 && 'filter-trigger-selected'"
                   :aria-expanded="openFilterPopover === 'model'"
-                  aria-haspopup="menu"
+                  aria-controls="account-share-model-filter"
                   @click="toggleFilterPopover('model')"
                 >
                   <Icon name="filter" size="sm" />
                   <span>{{ modelFilterSummary }}</span>
                   <Icon name="chevronDown" size="xs" class="filter-trigger-chevron" />
                 </button>
-                <div v-if="openFilterPopover === 'model'" class="filter-popover model-popover" role="menu">
+                <div
+                  v-if="openFilterPopover === 'model'"
+                  id="account-share-model-filter"
+                  class="filter-popover model-popover"
+                  role="group"
+                  aria-label="可用模型选项"
+                  @keydown.escape.stop="handleFilterPopoverEscape"
+                >
                   <div class="model-filter-options">
                     <button
                       v-for="model in modelFilterOptions"
@@ -1314,6 +1374,7 @@
                       type="button"
                       class="filter-menu-option"
                       :class="listingFilters.models.includes(model) && 'filter-menu-option-active'"
+                      :aria-pressed="listingFilters.models.includes(model)"
                       @click="toggleModelFilter(model)"
                     >
                       <span>{{ model }}</span>
@@ -1558,64 +1619,55 @@
             这条历史记录由当前或最终房间信息回填，不是本次使用当时保存的精确快照。
           </div>
           <div class="listing-card-head">
-            <div class="listing-card-identity">
-              <div class="listing-badge-row">
-                <span class="feature-badge">{{ platformLabel(listingPlatform(listing)) }}</span>
-                <span v-if="isOpenAIListing(listing)" :class="accountLevelBadgeClass(listing)">
-                  {{ accountLevelBadgeLabel(listing) }}
-                </span>
-                <span v-if="isOpenAIListing(listing) && supportsImageGeneration(listing)" class="feature-badge feature-badge-image">支持生图</span>
-                <span v-if="isOpenAIListing(listing) && listing.codex_cli_only" class="feature-badge feature-badge-client-only">仅客户端</span>
-                <span
-                  v-if="listing.hourly_fee_waiver_minimum > 0"
-                  class="feature-badge feature-badge-waiver"
-                  :title="`每小时消费满 ${formatNumber(listing.hourly_fee_waiver_minimum)} 免小时费`"
-                >
-                  满低消免小时费
-                </span>
+            <div class="listing-card-main-row">
+              <div class="listing-card-identity">
+                <div class="listing-title-row">
+                  <div class="listing-title-line">
+                    <h2 class="listing-title">{{ listingDisplayName(listing) }}</h2>
+                    <div class="listing-badge-row">
+                      <span class="feature-badge">{{ platformLabel(listingPlatform(listing)) }}</span>
+                      <span v-if="isOpenAIListing(listing)" :class="accountLevelBadgeClass(listing)">
+                        {{ accountLevelBadgeLabel(listing) }}
+                      </span>
+                      <span v-if="isOpenAIListing(listing) && supportsImageGeneration(listing)" class="feature-badge feature-badge-image">支持生图</span>
+                      <span v-if="isOpenAIListing(listing) && listing.codex_cli_only" class="feature-badge feature-badge-client-only">仅客户端</span>
+                      <span
+                        v-if="listing.hourly_fee_waiver_minimum > 0"
+                        class="feature-badge feature-badge-waiver"
+                        :title="`每小时消费满 ${formatNumber(listing.hourly_fee_waiver_minimum)} 免小时费`"
+                      >
+                        满低消免小时费
+                      </span>
+                    </div>
+                  </div>
+                  <span class="listing-owner">
+                    号主：{{ listing.owner_username || `用户 ${listing.owner_user_id}` }}
+                    <button
+                      type="button"
+                      class="owner-inline-button"
+                      :title="isOwnListing(listing) ? '管理房间账号' : ownerDialogButtonTitle(listing)"
+                      @click="isOwnListing(listing) ? openRoomAccountsDialog(listing) : openOwnerDialog(listing)"
+                    >
+                      <Icon :name="isOwnListing(listing) ? 'database' : 'eye'" size="xs" />
+                      <span>{{ isOwnListing(listing) ? '管理账号' : '查看号主' }}</span>
+                    </button>
+                  </span>
+                </div>
               </div>
-              <div class="listing-title-row">
-                <h2 class="listing-title">{{ listing.room_name || listing.account_name || `房间 #${listing.id}` }}</h2>
-                <button
-                  v-if="isOwnListing(listing) && !listing.deleted"
-                  type="button"
-                  class="room-account-count-button"
-                  @click="openRoomAccountsDialog(listing)"
-                >
-                  <Icon name="database" size="xs" />
-                  健康账号 {{ listing.healthy_account_count ?? 0 }}/{{ listing.account_count ?? 0 }}
-                </button>
-                <span v-else class="room-account-count-pill">
-                  健康账号 {{ listing.healthy_account_count ?? 0 }}/{{ listing.account_count ?? 0 }}
+              <div class="listing-card-state">
+                <span class="listing-rating-pill">
+                  <Icon name="sparkles" size="xs" />
+                  <span>评分</span>
+                  <strong>{{ listingRatingLabel(listing) }}</strong>
                 </span>
-                <span class="listing-owner">
-                  号主：{{ listing.owner_username || `用户 ${listing.owner_user_id}` }}
-                  <button
-                    type="button"
-                    class="owner-inline-button"
-                    :title="ownerDialogButtonTitle(listing)"
-                    @click="openOwnerDialog(listing)"
-                  >
-                    <Icon name="eye" size="xs" />
-                    <span>其他账号</span>
-                  </button>
+                <span :class="listingStatusBadgeClass(listing)">
+                  {{ listingStatusLabel(listing) }}
                 </span>
-              </div>
-            </div>
-            <div class="listing-card-state">
-              <span class="listing-rating-pill">
-                <Icon name="sparkles" size="xs" />
-                <span>评分</span>
-                <strong>{{ listingRatingLabel(listing) }}</strong>
-              </span>
-              <span :class="listingStatusBadgeClass(listing)">
-                {{ listingStatusLabel(listing) }}
-              </span>
-              <div class="listing-member-limit">
-                <span class="listing-seat-pill">
-                  成员上限（1～15） · 消费者 {{ listing.active_seats }}/{{ listing.seat_limit }}
-                </span>
-                <small>{{ ACCOUNT_SHARE_MEMBER_LIMIT_HELP }}</small>
+                <div class="listing-member-limit">
+                  <span class="listing-seat-pill">
+                    席位 {{ listing.active_seats }}/{{ listing.seat_limit }}
+                  </span>
+                </div>
               </div>
             </div>
           </div>
@@ -1623,115 +1675,71 @@
           <div class="listing-health-panel">
             <div class="listing-health-grid">
               <div class="listing-status-stack">
-                <div class="listing-runtime-tile">
-                  <Icon name="users" size="sm" />
-                  <div>
-                    <span class="listing-runtime-label">账号状态</span>
-                    <div class="listing-runtime-value-row">
-                      <strong>{{ runtimeInsight(listing).label }}</strong>
-                      <span :class="runtimeInsightClass(runtimeInsight(listing).tone)">
-                        {{ runtimeInsight(listing).badge }}
-                      </span>
-                    </div>
-                    <p v-if="runtimeInsight(listing).detail">{{ runtimeInsight(listing).detail }}</p>
+                <div class="listing-runtime-tile listing-runtime-summary">
+                  <Icon name="database" size="sm" />
+                  <div class="listing-runtime-summary-content">
+                    <strong v-if="!listing.deleted && listing.status === 'active'">{{ roomAggregateAccountCountLabel(listing) }}</strong>
+                    <span :class="runtimeInsightClass(roomAggregateInsight(listing).tone)">
+                      {{ roomAggregateInsight(listing).badge }}
+                    </span>
                   </div>
                 </div>
-
-                <div class="capacity-panel">
-                  <div class="flex items-center justify-between gap-3">
-                    <span><Icon name="chart" size="sm" />运行时请求能力</span>
-                    <strong>配置并发 {{ listing.account_concurrency }}</strong>
+                <div class="listing-runtime-tile listing-runtime-summary">
+                  <Icon name="chart" size="sm" />
+                  <div class="listing-runtime-summary-content">
+                    <span>{{ listing.deleted || listing.status !== 'active' ? '并发状态' : '可用并发' }}</span>
+                    <strong>{{ listing.deleted || listing.status !== 'active' ? `当前${roomAvailableConcurrencyLabel(listing)}` : roomAvailableConcurrencyLabel(listing) }}</strong>
                   </div>
-                  <p>账号级请求能力配置，不代表实时空闲容量，也不决定成员上限。</p>
                 </div>
               </div>
 
-              <div v-if="showOpenAIUsageWindows(listing)" class="listing-usage-grid">
-                <div class="usage-window-row">
-                  <div class="usage-window-title">
-                    <Icon name="clock" size="sm" />
-                    <span>5小时可用量</span>
-                    <strong>{{ usageAvailableLabel(listing.codex_5h_usage) }}</strong>
+              <div
+                v-if="listing.quota_summary"
+                class="listing-combined-availability"
+                data-testid="room-quota-summary"
+              >
+                <div class="availability-progress-row">
+                  <div class="combined-availability-head">
+                    <span>5H 综合已用</span>
+                    <strong>{{ roomWindowUtilizationLabel(listing.quota_summary.window_5h) }}</strong>
                   </div>
-                  <UsageProgressBar
-                    v-if="listing.codex_5h_usage"
-                    label="5h"
-                    :utilization="listing.codex_5h_usage.utilization"
-                    :resets-at="listing.codex_5h_usage.resets_at"
-                    :window-stats="listing.codex_5h_usage.window_stats"
-                    :limit-percent="listing.codex_5h_limit_percent"
-                    color="indigo"
-                    show-now-when-idle
-                  />
-                  <span v-else class="usage-empty">暂无快照</span>
+                  <div
+                    v-if="roomWindowUtilization(listing.quota_summary.window_5h) !== null"
+                    class="combined-availability-track"
+                    role="progressbar"
+                    aria-label="房间 5H 综合已用量"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    :aria-valuenow="roomWindowUtilization(listing.quota_summary.window_5h) ?? undefined"
+                  >
+                    <span
+                      :class="roomWindowUtilizationBarClass(listing.quota_summary.window_5h)"
+                      :style="{ width: `${roomWindowUtilization(listing.quota_summary.window_5h) ?? 0}%` }"
+                    ></span>
+                  </div>
                 </div>
 
-                <div class="usage-window-row">
-                  <div class="usage-window-title">
-                    <Icon name="calendar" size="sm" />
-                    <span>7天可用量</span>
-                    <strong>{{ usageAvailableLabel(listing.codex_7d_usage) }}</strong>
+                <div class="availability-progress-row">
+                  <div class="combined-availability-head">
+                    <span>7D 综合已用</span>
+                    <strong>{{ roomWindowUtilizationLabel(listing.quota_summary.window_7d) }}</strong>
                   </div>
-                  <UsageProgressBar
-                    v-if="listing.codex_7d_usage"
-                    label="7d"
-                    :utilization="listing.codex_7d_usage.utilization"
-                    :resets-at="listing.codex_7d_usage.resets_at"
-                    :window-stats="listing.codex_7d_usage.window_stats"
-                    :limit-percent="listing.codex_7d_limit_percent"
-                    color="emerald"
-                    show-now-when-idle
-                  />
-                  <span v-else class="usage-empty">暂无快照</span>
+                  <div
+                    v-if="roomWindowUtilization(listing.quota_summary.window_7d) !== null"
+                    class="combined-availability-track"
+                    role="progressbar"
+                    aria-label="房间 7D 综合已用量"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    :aria-valuenow="roomWindowUtilization(listing.quota_summary.window_7d) ?? undefined"
+                  >
+                    <span
+                      :class="roomWindowUtilizationBarClass(listing.quota_summary.window_7d)"
+                      :style="{ width: `${roomWindowUtilization(listing.quota_summary.window_7d) ?? 0}%` }"
+                    ></span>
+                  </div>
                 </div>
               </div>
-              <div v-else-if="showAnthropicUsageWindows(listing)" class="listing-usage-grid">
-                <div class="usage-window-row">
-                  <div class="usage-window-title">
-                    <Icon name="clock" size="sm" />
-                    <span>5小时 Claude 额度</span>
-                    <strong>{{ usageAvailableLabel(listing.anthropic_5h_usage) }}</strong>
-                  </div>
-                  <UsageProgressBar
-                    v-if="listing.anthropic_5h_usage"
-                    label="5h"
-                    :utilization="listing.anthropic_5h_usage.utilization"
-                    :resets-at="listing.anthropic_5h_usage.resets_at"
-                    :window-stats="listing.anthropic_5h_usage.window_stats"
-                    :limit-percent="anthropic5hLimitPercent(listing)"
-                    color="indigo"
-                    show-now-when-idle
-                  />
-                  <span v-else class="usage-empty">暂无快照</span>
-                </div>
-
-                <div class="usage-window-row">
-                  <div class="usage-window-title">
-                    <Icon name="calendar" size="sm" />
-                    <span>7天 Claude 额度</span>
-                    <strong>{{ usageAvailableLabel(listing.anthropic_7d_usage) }}</strong>
-                  </div>
-                  <UsageProgressBar
-                    v-if="listing.anthropic_7d_usage"
-                    label="7d"
-                    :utilization="listing.anthropic_7d_usage.utilization"
-                    :resets-at="listing.anthropic_7d_usage.resets_at"
-                    :window-stats="listing.anthropic_7d_usage.window_stats"
-                    :limit-percent="anthropic7dLimitPercent(listing)"
-                    color="emerald"
-                    show-now-when-idle
-                  />
-                  <span v-else class="usage-empty">暂无快照</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="listing-health-foot" :class="{ 'listing-health-foot-empty': !listingHealthFootVisible(listing) }">
-              <span v-if="showOpenAIUsageWindows(listing) && listing.codex_usage_updated_at">用量更新：{{ formatDate(listing.codex_usage_updated_at) }}</span>
-              <span v-if="showOpenAIUsageWindows(listing) && listing.codex_quota_protection_reset_at">保护解除：{{ formatRelativeUntil(listing.codex_quota_protection_reset_at) }}</span>
-              <span v-if="showAnthropicUsageWindows(listing) && listing.anthropic_usage_updated_at">用量更新：{{ formatDate(listing.anthropic_usage_updated_at) }}</span>
-              <span v-if="showAnthropicUsageWindows(listing) && listing.anthropic_quota_protection_reset_at">保护解除：{{ formatRelativeUntil(listing.anthropic_quota_protection_reset_at) }}</span>
-              <span v-if="listing.rate_limit_reset_at">限流解除：{{ formatRelativeUntil(listing.rate_limit_reset_at) }}</span>
             </div>
 
             <div v-if="validityInfo(listing)" class="validity-strip">
@@ -1753,7 +1761,7 @@
               <strong>{{ formatNumber(listing.min_balance_required) }}</strong>
             </div>
             <div class="metric">
-              <span class="metric-label"><Icon name="users" size="xs" />配置并发</span>
+              <span class="metric-label"><Icon name="users" size="xs" />可调度总并发</span>
               <strong>{{ listing.account_concurrency }}</strong>
             </div>
             <div class="metric">
@@ -1827,10 +1835,33 @@
                   <Icon name="key" size="sm" />
                   <span>{{ singleModeApiKeyLabelForListing(listing) }}</span>
                 </div>
-                <select v-else v-model.number="selectedKeyByListing[listing.id]" class="input h-9" :disabled="modeKeysLoading || !modeKeysLoaded">
-                  <option :value="0">{{ modeApiKeyPlaceholderForListing(listing) }}</option>
-                  <option v-for="key in modeApiKeysForListing(listing)" :key="key.id" :value="key.id">{{ key.name || `Key #${key.id}` }}</option>
-                </select>
+                <Select
+                  v-else
+                  v-model="selectedKeyByListing[listing.id]"
+                  class="mode-key-select"
+                  :options="modeApiKeySelectOptionsForListing(listing)"
+                  :placeholder="modeApiKeyPlaceholderForListing(listing)"
+                  :aria-label="modeApiKeyPlaceholderForListing(listing)"
+                  :disabled="modeKeysLoading || !modeKeysLoaded"
+                  empty-text="暂无可用 Key"
+                >
+                  <template #selected="{ option }">
+                    <span class="mode-key-select-value">
+                      <Icon name="key" size="xs" />
+                      <span>{{ option?.label || modeApiKeyPlaceholderForListing(listing) }}</span>
+                    </span>
+                  </template>
+                  <template #option="{ option, selected }">
+                    <span class="mode-key-option-icon">
+                      <Icon name="key" size="xs" />
+                    </span>
+                    <span class="mode-key-option-copy">
+                      <strong>{{ option.label }}</strong>
+                      <small>账号模式 Key</small>
+                    </span>
+                    <Icon v-if="selected" name="check" size="sm" class="text-primary-500" />
+                  </template>
+                </Select>
                 <div class="listing-timeout-row">
                   <label class="idle-timeout-join idle-timeout-join-inline">
                     <span>空闲退出</span>
@@ -1869,36 +1900,36 @@
             <div class="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm dark:border-dark-700 dark:bg-dark-800/60">
               <div class="flex flex-col gap-1 text-gray-600 dark:text-dark-200">
                 <span>房间 ID：#{{ listing.id }}</span>
-                <span>房间账号：健康 {{ listing.healthy_account_count ?? 0 }} / 共 {{ listing.account_count ?? 0 }}</span>
+                <span>房间账号：{{ roomAggregateAccountCountLabel(listing) }}</span>
                 <span>更新：{{ formatDate(listing.updated_at) }}</span>
               </div>
-              <div v-if="!listing.deleted" class="mt-3 flex flex-wrap gap-2">
+              <div v-if="!listing.deleted" class="listing-management-actions">
                 <button
                   type="button"
-                  class="btn-secondary h-9"
+                  class="btn-secondary listing-management-action"
                   @click="openRoomAccountsDialog(listing)"
                 >
-                  <Icon name="database" size="xs" class="mr-2" />
+                  <Icon name="database" size="xs" />
                   查看房间账号
                 </button>
                 <button
                   type="button"
-                  class="btn-secondary h-9"
+                  class="btn-secondary listing-management-action"
                   :disabled="managedActionId === listing.id"
                   :title="listingEditLockedByOther(listing) ? listingEditLockLabel(listing) : ''"
                   @click="requestOpenConfigEdit(listing)"
                 >
-                  <Icon name="edit" size="xs" class="mr-2" />
+                  <Icon name="edit" size="xs" />
                   编辑配置
                 </button>
                 <button
                   v-if="(isOwnListing(listing) || authStore.isAdmin) && capabilities?.lifecycle_enabled !== false"
                   type="button"
-                  class="btn-secondary min-h-11"
+                  class="btn-secondary listing-management-action"
                   data-testid="room-lifecycle-entry"
                   @click="openRoomLifecycleDialog(listing)"
                 >
-                  <Icon name="cog" size="xs" class="mr-2" />
+                  <Icon name="cog" size="xs" />
                   房间管理
                 </button>
               </div>
@@ -2572,6 +2603,13 @@
           <Icon name="exclamationTriangle" size="sm" class="mt-0.5 flex-shrink-0" />
           <span>管理员强制编辑已确认；保存时将使用下方“本次修改原因”写入审计记录。</span>
         </div>
+        <div
+          v-else-if="editConsumerProtected"
+          class="notice-row border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-900/60 dark:bg-blue-900/20 dark:text-blue-200"
+        >
+          <Icon name="exclamationCircle" size="sm" class="mt-0.5 flex-shrink-0" />
+          <span>房间正在被使用：只允许降费、提高单用户并发、增加模型，或在保留现有席位与预约的前提下减少席位。</span>
+        </div>
 
         <div v-if="editErrorMessage" class="notice-row border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-300">
           <Icon name="exclamationCircle" size="sm" class="mt-0.5 flex-shrink-0" />
@@ -2721,8 +2759,8 @@
                 <strong>{{ editAllowedModels.length }}</strong>
               </div>
               <div class="compact-metric">
-                <span>房间账号</span>
-                <strong>{{ editingConfigListing?.healthy_account_count ?? 0 }}/{{ editingConfigListing?.account_count ?? 0 }}</strong>
+                <span>可调度账号</span>
+                <strong>{{ editingConfigListing ? roomEligibleAccountCount(editingConfigListing) : 0 }}/{{ editingConfigListing ? roomAttachedAccountCount(editingConfigListing) : 0 }}</strong>
               </div>
               <div class="compact-metric">
                 <span>成员上限（1～15）</span>
@@ -2861,10 +2899,6 @@
       @close="closeOwnerDialog"
     >
       <div class="space-y-4">
-        <div v-if="ownerDialog.error" class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200">
-          {{ ownerDialog.error }}
-        </div>
-
         <div class="flex flex-wrap gap-2">
           <button
             type="button"
@@ -2887,6 +2921,15 @@
         </div>
 
         <div v-if="ownerDialog.tab === 'listings'" class="space-y-3">
+          <div
+            v-if="ownerDialog.listingsError"
+            class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200"
+          >
+            <span>{{ ownerDialog.listingsError }}</span>
+            <button type="button" class="btn-secondary h-9" :disabled="ownerDialog.loadingListings" @click="loadOwnerListings()">
+              重试账号
+            </button>
+          </div>
           <div v-if="ownerDialog.loadingListings" class="rounded-lg border border-gray-200 p-6 text-center text-sm text-gray-500 dark:border-dark-700 dark:text-dark-300">
             正在加载账号...
           </div>
@@ -2914,10 +2957,31 @@
                 <span>小时费 {{ formatNumber(item.hourly_rate) }}</span>
               </div>
             </button>
+            <div class="col-span-full flex flex-wrap items-center justify-between gap-3 text-xs text-gray-500 dark:text-dark-300">
+              <span>已显示 {{ ownerDialog.listings.length }}/{{ ownerDialog.listingsTotal }}</span>
+              <button
+                v-if="ownerDialog.listingsPage < ownerDialog.listingsPages"
+                type="button"
+                class="btn-secondary h-9"
+                :disabled="ownerDialog.loadingListings"
+                @click="loadMoreOwnerListings"
+              >
+                继续加载账号
+              </button>
+            </div>
           </div>
         </div>
 
         <div v-else class="space-y-3">
+          <div
+            v-if="ownerDialog.reviewsError"
+            class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200"
+          >
+            <span>{{ ownerDialog.reviewsError }}</span>
+            <button type="button" class="btn-secondary h-9" :disabled="ownerDialog.loadingReviews" @click="loadOwnerReviews()">
+              重试评论
+            </button>
+          </div>
           <div v-if="ownerDialog.loadingReviews" class="rounded-lg border border-gray-200 p-6 text-center text-sm text-gray-500 dark:border-dark-700 dark:text-dark-300">
             正在加载评论...
           </div>
@@ -2936,10 +3000,22 @@
               </div>
               <p class="mt-2 whitespace-pre-wrap text-sm leading-6 text-gray-700 dark:text-dark-100">{{ review.comment }}</p>
               <div class="mt-3 flex flex-wrap gap-2 text-xs text-gray-500 dark:text-dark-300">
-                <span>{{ review.account_name || '账号房间' }}</span>
-                <span v-if="review.consumer_username">来自 {{ review.consumer_username }}</span>
+                <span>{{ review.platform ? platformLabel(review.platform) : '账号房间' }}</span>
+                <span>来自 匿名用户</span>
               </div>
             </article>
+            <div class="flex flex-wrap items-center justify-between gap-3 text-xs text-gray-500 dark:text-dark-300">
+              <span>已显示 {{ ownerDialog.reviews.length }}/{{ ownerDialog.reviewsTotal }}</span>
+              <button
+                v-if="ownerDialog.reviewsPage < ownerDialog.reviewsPages"
+                type="button"
+                class="btn-secondary h-9"
+                :disabled="ownerDialog.loadingReviews"
+                @click="loadMoreOwnerReviews"
+              >
+                继续加载评论
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -3060,7 +3136,7 @@
               <div>
                 <span class="room-lifecycle-eyebrow">可用操作</span>
                 <p class="mt-1 text-sm leading-6 text-gray-500 dark:text-dark-300">
-                  这里仅展示服务端允许的生命周期变更。排空会停止新成员进入，并等待现有请求与结算安全结束后暂停房间。
+                  下架后停止新增用户，现有消费者与预约保持不变；需要恢复招募时可重新上架。
                 </p>
               </div>
               <div class="room-lifecycle-action-grid">
@@ -3073,8 +3149,8 @@
                 >
                   <Icon name="clock" size="sm" />
                   <span>
-                    <strong>排空并暂停</strong>
-                    <small>停止准入，等待使用与结算收口</small>
+                    <strong>下架房间</strong>
+                    <small>停止新增，已有用户继续使用</small>
                   </span>
                 </button>
                 <button
@@ -3086,7 +3162,7 @@
                 >
                   <Icon name="play" size="sm" />
                   <span>
-                    <strong>恢复房间</strong>
+                    <strong>重新上架</strong>
                     <small>完成账号连通性校验后重新开放</small>
                   </span>
                 </button>
@@ -3099,8 +3175,8 @@
                 >
                   <Icon name="ban" size="sm" />
                   <span>
-                    <strong>暂停房间</strong>
-                    <small>立即停止房间准入</small>
+                    <strong>紧急停用</strong>
+                    <small>仅管理员用于异常处置</small>
                   </span>
                 </button>
                 <button
@@ -3173,12 +3249,12 @@
               <button
                 v-if="authStore.isAdmin && !roomDeleteIntent"
                 type="button"
-                class="btn-secondary min-h-11"
+                class="btn btn-secondary min-h-11"
                 :disabled="roomDeleteIntentLoading || !roomLifecycleReason.trim()"
                 data-testid="room-delete-intent-submit"
                 @click="loadRoomDeleteIntent"
               >
-                <Icon name="search" size="sm" class="mr-2" />
+                <Icon name="search" size="sm" />
                 检查删除条件
               </button>
 
@@ -3246,7 +3322,7 @@
           <button
             v-if="roomLifecycleAction !== null && !roomLifecycleHasPendingOperation && !roomLifecycleDeleted"
             type="button"
-            class="btn-secondary min-h-11"
+            class="btn btn-secondary min-h-11"
             :disabled="roomLifecycleCommandBusy"
             @click="resetRoomLifecycleAction"
           >
@@ -3255,7 +3331,7 @@
           <button
             v-else
             type="button"
-            class="btn-secondary min-h-11"
+            class="btn btn-secondary min-h-11"
             :disabled="roomLifecycleCommandBusy"
             @click="closeRoomLifecycleDialog"
           >
@@ -3264,28 +3340,28 @@
           <button
             v-if="roomLifecycleHasPendingOperation && !roomLifecycleDeleted"
             type="button"
-            class="btn-secondary min-h-11"
+            class="btn btn-secondary min-h-11"
             :disabled="roomLifecyclePolling"
             data-testid="room-operation-refresh"
             @click="pollRoomLifecycleOperationNow"
           >
-            <Icon name="refresh" size="sm" class="mr-2" :class="{ 'animate-spin': roomLifecyclePolling }" />
+            <Icon name="refresh" size="sm" :class="{ 'animate-spin': roomLifecyclePolling }" />
             {{ roomLifecyclePolling ? '自动查询中' : '继续查询' }}
           </button>
           <button
             v-else-if="roomLifecycleAction === null && !roomLifecycleDeleted"
             type="button"
-            class="btn-secondary min-h-11"
+            class="btn btn-secondary min-h-11"
             :disabled="roomLifecycleLoading"
             @click="refreshRoomLifecycleState"
           >
-            <Icon name="refresh" size="sm" class="mr-2" :class="{ 'animate-spin': roomLifecycleLoading }" />
+            <Icon name="refresh" size="sm" :class="{ 'animate-spin': roomLifecycleLoading }" />
             刷新状态
           </button>
           <button
             v-else-if="roomLifecycleAction === 'delete' && roomDeleteIntent && (!roomDeleteIntent.can_delete || roomDeleteIntentExpired)"
             type="button"
-            class="btn-secondary min-h-11"
+            class="btn btn-secondary min-h-11"
             :disabled="roomLifecycleCommandBusy"
             @click="loadRoomDeleteIntent"
           >
@@ -3294,7 +3370,7 @@
           <button
             v-else-if="roomLifecycleAction !== null && !roomLifecycleDeleted"
             type="button"
-            :class="roomLifecycleAction === 'delete' ? 'btn-danger min-h-11' : 'btn-primary min-h-11'"
+            :class="roomLifecycleAction === 'delete' ? 'btn btn-danger min-h-11' : 'btn btn-primary min-h-11'"
             :disabled="!canSubmitRoomLifecycleAction"
             data-testid="room-lifecycle-submit"
             @click="submitRoomLifecycleAction"
@@ -3302,7 +3378,6 @@
             <Icon
               :name="roomLifecycleAction === 'delete' ? 'trash' : 'checkCircle'"
               size="sm"
-              class="mr-2"
               :class="{ 'animate-pulse': roomLifecycleSubmitting }"
             />
             {{ roomLifecycleSubmitting ? '提交中...' : roomLifecycleSubmitLabel }}
@@ -3384,6 +3459,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { useRoute, useRouter } from 'vue-router'
 import {
   accountShareAPI,
+  loadAllPaginatedItems,
+  type AccountShareAPIKeyBindingStatus,
   type AccountShareCapabilities,
   type AccountShareJoinIntent,
   type AccountShareListing,
@@ -3400,6 +3477,7 @@ import {
   type AccountShareMySpendRange,
   type AccountShareMySpendSummary,
   type AccountShareRecommendationCandidate,
+  type AccountShareRecommendationRequest,
   type AccountShareRecommendationResult,
   type AccountShareRecommendationScoreBreakdown,
   type AccountShareRecommendationUsageProfile,
@@ -3411,11 +3489,12 @@ import {
   type AccountShareRoomLifecycleStatus,
   type AccountShareRoomManagementState,
   type AccountShareRoomOperation,
+  type AccountShareRoomQuotaWindow,
   type CreateAccountShareRoomRequest,
   type UpdateAccountShareListingRequest
 } from '@/api/accountShare'
 import { accountsAPI, keysAPI } from '@/api'
-import type { Account, AccountLevel, ApiKey, Proxy, ProxyProtocol, UsageProgress } from '@/types'
+import type { Account, AccountLevel, ApiKey, Proxy, ProxyProtocol } from '@/types'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { useClipboard } from '@/composables/useClipboard'
@@ -3430,17 +3509,18 @@ import {
 import AppLayout from '@/components/layout/AppLayout.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import Select, { type SelectOption } from '@/components/common/Select.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import OAuthAuthorizationFlow from '@/components/account/OAuthAuthorizationFlow.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
-import UsageProgressBar from '@/components/account/UsageProgressBar.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import CreateRoomDialog from '@/components/account-share/CreateRoomDialog.vue'
 import RoomAccountsDialog from '@/components/account-share/RoomAccountsDialog.vue'
 import AdminBillingAttentionDialog from '@/components/account-share/AdminBillingAttentionDialog.vue'
 import AccountShareQuotaAdminDialog from '@/components/account-share/AccountShareQuotaAdminDialog.vue'
 import MembershipHistoryPanel from '@/components/account-share/MembershipHistoryPanel.vue'
+import { resolveAccountExternalPlacementTarget } from '@/components/account-share/externalPlacement'
 
 interface FilterOption {
   key: string
@@ -3579,6 +3659,9 @@ interface RecommendationPreset {
   output_tokens_per_request: number
   cache_creation_tokens_per_request: number
   cache_read_tokens_per_request: number
+  image_input_tokens_per_request: number
+  image_output_tokens_per_request: number
+  image_cache_read_tokens_per_request: number
 }
 
 interface RecommendationFormState {
@@ -3590,6 +3673,9 @@ interface RecommendationFormState {
   output_tokens_per_request: number
   cache_creation_tokens_per_request: number
   cache_read_tokens_per_request: number
+  image_input_tokens_per_request: number
+  image_output_tokens_per_request: number
+  image_cache_read_tokens_per_request: number
 }
 
 interface RecommendationScoreItem {
@@ -3756,6 +3842,8 @@ const DEFAULT_ACCOUNT_SHARE_ALLOWED_MODELS_BY_PLATFORM: Record<AccountSharePlatf
 }
 const ACCOUNT_SHARE_RECOMMENDATION_LIMIT = 10
 const ACCOUNT_SHARE_RECOMMENDATION_PAGE_SIZE = 5
+const OWNER_LISTINGS_PAGE_SIZE = 24
+const OWNER_REVIEWS_PAGE_SIZE = 20
 const recommendationPresets: RecommendationPreset[] = [
   {
     key: 'light',
@@ -3765,7 +3853,10 @@ const recommendationPresets: RecommendationPreset[] = [
     input_tokens_per_request: 1000,
     output_tokens_per_request: 400,
     cache_creation_tokens_per_request: 0,
-    cache_read_tokens_per_request: 0
+    cache_read_tokens_per_request: 0,
+    image_input_tokens_per_request: 0,
+    image_output_tokens_per_request: 0,
+    image_cache_read_tokens_per_request: 0
   },
   {
     key: 'balanced',
@@ -3775,7 +3866,10 @@ const recommendationPresets: RecommendationPreset[] = [
     input_tokens_per_request: 3000,
     output_tokens_per_request: 1000,
     cache_creation_tokens_per_request: 0,
-    cache_read_tokens_per_request: 500
+    cache_read_tokens_per_request: 500,
+    image_input_tokens_per_request: 0,
+    image_output_tokens_per_request: 0,
+    image_cache_read_tokens_per_request: 0
   },
   {
     key: 'heavy',
@@ -3785,7 +3879,10 @@ const recommendationPresets: RecommendationPreset[] = [
     input_tokens_per_request: 8000,
     output_tokens_per_request: 2500,
     cache_creation_tokens_per_request: 500,
-    cache_read_tokens_per_request: 3000
+    cache_read_tokens_per_request: 3000,
+    image_input_tokens_per_request: 0,
+    image_output_tokens_per_request: 0,
+    image_cache_read_tokens_per_request: 0
   }
 ]
 const ACCOUNT_SHARE_PAGE_SIZE = 10
@@ -4130,7 +4227,10 @@ function buildDefaultRecommendationForm(): RecommendationFormState {
     input_tokens_per_request: preset.input_tokens_per_request,
     output_tokens_per_request: preset.output_tokens_per_request,
     cache_creation_tokens_per_request: preset.cache_creation_tokens_per_request,
-    cache_read_tokens_per_request: preset.cache_read_tokens_per_request
+    cache_read_tokens_per_request: preset.cache_read_tokens_per_request,
+    image_input_tokens_per_request: preset.image_input_tokens_per_request,
+    image_output_tokens_per_request: preset.image_output_tokens_per_request,
+    image_cache_read_tokens_per_request: preset.image_cache_read_tokens_per_request
   }
 }
 
@@ -4147,6 +4247,7 @@ const recommendationUsageProfileLoading = ref(false)
 const recommendationUsageProfileMessage = ref('')
 const recommendationError = ref('')
 const recommendationResult = ref<AccountShareRecommendationResult | null>(null)
+const recommendationRequestSnapshot = ref<AccountShareRecommendationRequest | null>(null)
 const recommendationPage = ref(1)
 const showUsageGuideDialog = ref(false)
 const showAdminBillingDialog = ref(false)
@@ -4155,6 +4256,7 @@ const showRecommendationDialog = ref(false)
 const queueMembershipsByApiKey = ref<Record<number, AccountShareMembership[]>>({})
 const keyResolutionMemberships = ref<AccountShareMembership[]>([])
 const keyResolutionListings = ref<AccountShareListing[]>([])
+const keyResolutionBindingStatus = ref<AccountShareAPIKeyBindingStatus | null>(null)
 const keyResolutionLoading = ref(false)
 const keyResolutionLoaded = ref(false)
 const keyResolutionError = ref('')
@@ -4197,6 +4299,7 @@ const ownedAccountsLoading = ref(false)
 const ownedAccountsError = ref('')
 const selectedOwnedAccountID = ref(0)
 let ownedAccountsRequestVersion = 0
+let ownedAccountsRequestController: AbortController | null = null
 let ownedAccountsLoadedPlatform: AccountSharePlatform | null = null
 let pendingCreateRoomIntentSignature = ''
 let pendingCreateRoomIdempotencyKey = ''
@@ -4243,7 +4346,14 @@ const ownerDialog = reactive({
   loadingReviews: false,
   listings: [] as AccountShareListing[],
   reviews: [] as AccountShareReview[],
-  error: ''
+  listingsPage: 1,
+  listingsPages: 1,
+  listingsTotal: 0,
+  reviewsPage: 1,
+  reviewsPages: 1,
+  reviewsTotal: 0,
+  listingsError: '',
+  reviewsError: ''
 })
 const showMySpendDialog = ref(false)
 const mySpendSelectedOptionKey = ref('')
@@ -4283,6 +4393,7 @@ const editingConfigListing = ref<AccountShareListing | null>(null)
 const editAllowedModels = ref<string[]>([])
 const editSessionID = ref('')
 const editForceActive = ref(false)
+const editConsumerProtected = ref(false)
 const editReason = ref('')
 const editErrorMessage = ref('')
 const editVersionConflict = ref(false)
@@ -4319,8 +4430,15 @@ const knownListings = ref<AccountShareListing[]>([])
 const proxyLoading = ref(false)
 const proxyLoadMessage = ref('')
 const searchQuery = ref(initialListingPreferences.search)
+const selectedOwnerID = ref(0)
+const selectedOwnerDisplayName = ref('')
 const modelFilterInput = ref('')
 const filterPanelRef = ref<HTMLElement | null>(null)
+const statusFilterTriggerRef = ref<HTMLButtonElement | null>(null)
+const levelFilterTriggerRef = ref<HTMLButtonElement | null>(null)
+const seatFilterTriggerRef = ref<HTMLButtonElement | null>(null)
+const featureFilterTriggerRef = ref<HTMLButtonElement | null>(null)
+const modelFilterTriggerRef = ref<HTMLButtonElement | null>(null)
 const openFilterPopover = ref<ListingFilterPopover | null>(null)
 const oauthFlowRef = ref<OAuthFlowInstance | null>(null)
 const showProxyDialog = ref(false)
@@ -4347,6 +4465,14 @@ let mySpendAccountsRequestController: AbortController | null = null
 let mySpendAccountsRequestSeq = 0
 let mySpendRequestController: AbortController | null = null
 let mySpendRequestSeq = 0
+let recommendationRequestController: AbortController | null = null
+let recommendationRequestSeq = 0
+let recommendationUsageProfileController: AbortController | null = null
+let recommendationUsageProfileRequestSeq = 0
+let editSessionRenewController: AbortController | null = null
+let ownerListingsRequestController: AbortController | null = null
+let ownerReviewsRequestController: AbortController | null = null
+let ownerDialogRequestSeq = 0
 let modeKeysRequestSeq = 0
 let keyResolutionRequestSeq = 0
 let membershipEndOperationRequestSeq = 0
@@ -4493,12 +4619,108 @@ function normalizeUsageLimitPercent(value: unknown): number {
   return Number.isFinite(numeric) && numeric >= 1 && numeric <= 100 ? numeric : 100
 }
 
-function listingHealthFootVisible(listing: AccountShareListing): boolean {
-  return Boolean(
-    listing.rate_limit_reset_at ||
-    (showOpenAIUsageWindows(listing) && (listing.codex_usage_updated_at || listing.codex_quota_protection_reset_at)) ||
-    (showAnthropicUsageWindows(listing) && (listing.anthropic_usage_updated_at || listing.anthropic_quota_protection_reset_at))
+function normalizeRoomAccountCount(value: unknown): number {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) && numeric > 0 ? Math.trunc(numeric) : 0
+}
+
+function roomAttachedAccountCount(listing: AccountShareListing): number {
+  return normalizeRoomAccountCount(
+    listing.quota_summary?.attached_count ?? listing.account_count
   )
+}
+
+function roomEligibleAccountCount(listing: AccountShareListing): number {
+  return normalizeRoomAccountCount(
+    listing.quota_summary?.eligible_count ?? listing.healthy_account_count
+  )
+}
+
+function roomAggregateAccountCountLabel(listing: AccountShareListing): string {
+  const prefix = listing.deleted || listing.status !== 'active' ? '健康账号' : '可调度账号'
+  return `${prefix} ${roomEligibleAccountCount(listing)}/${roomAttachedAccountCount(listing)}`
+}
+
+function roomAggregateInsight(listing: AccountShareListing): {
+  detail: string
+  badge: string
+  tone: RuntimeTone
+} {
+  const attached = roomAttachedAccountCount(listing)
+  const eligible = roomEligibleAccountCount(listing)
+  const lifecycle = listingStatusLabel(listing)
+  if (listing.deleted || listing.status !== 'active') {
+    return {
+      detail: `房间生命周期为“${lifecycle}”，当前不可新加入；挂载账号健康度仅反映账号状态，不代表房间已开放。`,
+      badge: lifecycle,
+      tone: listing.deleted
+        ? 'muted'
+        : listing.status === 'suspended' || listing.status === 'disabled'
+          ? 'danger'
+          : 'warning'
+    }
+  }
+  if (attached === 0) {
+    return {
+      detail: `房间生命周期为“${lifecycle}”，但当前没有挂载账号。`,
+      badge: '无账号',
+      tone: 'danger'
+    }
+  }
+  if (eligible === 0) {
+    return {
+      detail: `房间生命周期为“${lifecycle}”，但当前没有可路由账号。`,
+      badge: '不可用',
+      tone: 'danger'
+    }
+  }
+  if (eligible < attached) {
+    return {
+      detail: `房间生命周期为“${lifecycle}”；部分挂载账号当前不具备路由资格。`,
+      badge: '部分可用',
+      tone: 'warning'
+    }
+  }
+  return {
+    detail: `房间生命周期为“${lifecycle}”；全部挂载账号当前具备路由资格。`,
+    badge: '可用',
+    tone: 'normal'
+  }
+}
+
+function roomAvailableConcurrencyLabel(listing: AccountShareListing): string {
+  if (listing.deleted || listing.status !== 'active') return '不可新加入'
+  if (listing.runtime_load_known !== true) return '运行时未知'
+  const total = Number(listing.account_concurrency)
+  const used = Number(listing.current_concurrency)
+  if (!Number.isFinite(total) || !Number.isFinite(used)) return '运行时未知'
+  return `${Math.max(total - used, 0)} / ${Math.max(total, 0)}`
+}
+
+function quotaWindowUtilization(value: unknown): number | null {
+  const numeric = Number(value)
+  return value !== null && value !== undefined && Number.isFinite(numeric)
+    ? numeric
+    : null
+}
+
+function roomWindowUtilization(window?: AccountShareRoomQuotaWindow): number | null {
+  if (!window || window.known_count <= 0) return null
+  const utilization = quotaWindowUtilization(window.average_utilization)
+  if (utilization === null) return null
+  return Math.min(100, Math.max(0, utilization))
+}
+
+function roomWindowUtilizationLabel(window?: AccountShareRoomQuotaWindow): string {
+  const utilization = roomWindowUtilization(window)
+  return utilization === null ? '暂无数据' : `${formatNumber(utilization)}%`
+}
+
+function roomWindowUtilizationBarClass(window?: AccountShareRoomQuotaWindow): string {
+  const utilization = roomWindowUtilization(window)
+  if (utilization === null || utilization < 80) return 'combined-availability-fill combined-availability-fill-normal'
+  if (utilization < 100) return 'combined-availability-fill combined-availability-fill-warning'
+  return 'combined-availability-fill combined-availability-fill-danger'
 }
 
 function platformLabel(platform: string): string {
@@ -4514,7 +4736,7 @@ function isUsableModeApiKey(key: ApiKey, accountModeGroupID: number): boolean {
 
   if (key.expires_at) {
     const expiresAtMs = Date.parse(key.expires_at)
-    if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) return false
+    if (!Number.isFinite(expiresAtMs) || expiresAtMs <= nowMs.value) return false
   }
 
   const quota = Number(key.quota)
@@ -4533,11 +4755,20 @@ function clearInvalidSelectedModeApiKeys(platform: AccountSharePlatform, keys: A
 }
 
 function modeApiKeysForPlatform(platform: AccountSharePlatform): ApiKey[] {
-  return modeApiKeysByPlatform[platform] || []
+  const accountModeGroupID = modeGroupIDsByPlatform[platform]
+  return (modeApiKeysByPlatform[platform] || [])
+    .filter(key => isUsableModeApiKey(key, accountModeGroupID))
 }
 
 function modeApiKeysForListing(listing: AccountShareListing): ApiKey[] {
   return modeApiKeysForPlatform(listingPlatform(listing))
+}
+
+function modeApiKeySelectOptionsForListing(listing: AccountShareListing): SelectOption[] {
+  return modeApiKeysForListing(listing).map(key => ({
+    value: key.id,
+    label: modeKeyLabel(key)
+  }))
 }
 
 function modeKeysLoadingForPlatform(platform: AccountSharePlatform): boolean {
@@ -4582,7 +4813,7 @@ const pendingJoinExpired = computed(() => {
   const expiresAt = pendingJoinIntent.value?.expires_at
   if (!expiresAt) return true
   const expiresAtMs = Date.parse(expiresAt)
-  return !Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()
+  return !Number.isFinite(expiresAtMs) || expiresAtMs <= nowMs.value
 })
 const pendingJoinCanSubmit = computed(() => {
   const intent = pendingJoinIntent.value
@@ -4648,18 +4879,17 @@ const eligibleOwnedAccounts = computed(() => (
     .filter((account) => {
       if (account.platform.trim().toLowerCase() !== createPlatform.value) return false
       if (account.status !== 'active' || !account.schedulable) return false
+      if (!Number.isFinite(Number(account.concurrency)) || Number(account.concurrency) <= 0) return false
       if (!account.account_level || account.account_level.trim().toLowerCase() === 'unknown') return false
-      const placementTarget = account.external_placement?.target
+      if (account.external_placement && account.external_placement.state !== 'active') return false
+      const placementTarget = resolveAccountExternalPlacementTarget(account)
       if (placementTarget === 'room') {
         const boundRoomID = Number(
           account.account_share_mode_listing_id
           || account.external_placement?.room_id
           || 0
         )
-        if (boundRoomID > 0 || account.external_placement?.state !== 'active') return false
-      }
-      if (!placementTarget && Number(account.account_share_mode_listing_id || 0) > 0) {
-        return false
+        if (boundRoomID > 0) return false
       }
       return true
     })
@@ -4723,15 +4953,27 @@ const activeAdvancedFilterCount = computed(() => {
 const hasAdvancedFilters = computed(() => activeAdvancedFilterCount.value > 0)
 const activeResultFilterCount = computed(() => {
   const searchCount = searchQuery.value.trim() !== '' ? 1 : 0
-  return isArchiveView.value ? searchCount : activeAdvancedFilterCount.value + searchCount
+  const ownerCount = selectedOwnerID.value > 0 ? 1 : 0
+  return isArchiveView.value
+    ? searchCount
+    : activeAdvancedFilterCount.value + searchCount + ownerCount
 })
 const hasResultFilters = computed(() =>
-  searchQuery.value.trim() !== '' || (!isArchiveView.value && hasAdvancedFilters.value)
+  searchQuery.value.trim() !== ''
+  || (!isArchiveView.value && (selectedOwnerID.value > 0 || hasAdvancedFilters.value))
 )
 const maxPerUserConcurrency = computed(() => MAX_PER_USER_CONCURRENCY)
 const editMaxPerUserConcurrency = computed(() => MAX_PER_USER_CONCURRENCY)
-const accountNameValidationMessage = computed(() => validateAccountName(createForm.name))
-const editAccountNameValidationMessage = computed(() => validateAccountName(editForm.name, editingConfigListing.value?.id))
+const accountNameValidationMessage = computed(() =>
+  validateAccountName(createForm.name, undefined, Number(authStore.user?.id || 0))
+)
+const editAccountNameValidationMessage = computed(() =>
+  validateAccountName(
+    editForm.name,
+    editingConfigListing.value?.id,
+    Number(editingConfigListing.value?.owner_user_id || 0)
+  )
+)
 const concurrencyValidationMessage = computed(() => {
   const concurrency = Number(createForm.concurrency)
   if (!Number.isFinite(concurrency) || concurrency < 1) return '配置并发必须大于 0'
@@ -4925,11 +5167,11 @@ const canSubmitRoomLifecycleAction = computed(() => {
 const roomLifecycleSubmitLabel = computed(() => {
   switch (roomLifecycleAction.value) {
     case 'drain':
-      return '确认排空并暂停'
+      return '确认下架'
     case 'activate':
-      return '确认恢复'
+      return '确认重新上架'
     case 'suspend':
-      return '确认暂停'
+      return '确认紧急停用'
     case 'delete':
       return roomDeleteIntentExpired.value ? '确认已过期' : '确认软删除'
     default:
@@ -4944,11 +5186,15 @@ const keyResolutionApiKeyID = computed(() => {
 })
 const keyResolutionApiKeyName = computed(() => routeQueryString(route.query.api_key_name).trim())
 const keyResolutionKeyLabel = computed(() => keyResolutionApiKeyName.value || (keyResolutionApiKeyID.value > 0 ? `API Key #${keyResolutionApiKeyID.value}` : '指定 API Key'))
-const keyResolutionActiveCount = computed(() => keyResolutionMemberships.value.filter(item => item.status === 'active').length)
-const keyResolutionQueuedCount = computed(() => keyResolutionMemberships.value.filter(item => item.status === 'queued').length)
-const keyResolutionConflictCount = computed(() => keyResolutionActiveCount.value + keyResolutionQueuedCount.value)
+const keyResolutionActiveCount = computed(() => keyResolutionBindingStatus.value?.active_count ?? 0)
+const keyResolutionQueuedCount = computed(() => keyResolutionBindingStatus.value?.queued_count ?? 0)
+const keyResolutionEndingCount = computed(() => keyResolutionBindingStatus.value?.ending_count ?? 0)
 const keyResolutionAllClear = computed(() =>
-  keyResolutionLoaded.value && !keyResolutionLoading.value && !keyResolutionError.value && keyResolutionConflictCount.value === 0
+  keyResolutionLoaded.value &&
+  !keyResolutionLoading.value &&
+  !keyResolutionError.value &&
+  keyResolutionBindingStatus.value !== null &&
+  keyResolutionBindingStatus.value.blocking_count === 0
 )
 const keyResolutionListingIDs = computed(() => new Set(keyResolutionMemberships.value.map(item => Number(item.listing_id))))
 const keyResolutionPanelToneClass = computed(() => ({
@@ -4960,7 +5206,7 @@ const keyResolutionStatusMessage = computed(() => {
   if (keyResolutionLoading.value) return `正在核对 ${keyResolutionKeyLabel.value} 的使用与预约记录，请稍候。`
   if (keyResolutionError.value) return keyResolutionError.value
   if (keyResolutionAllClear.value) return '可以返回 API Key 管理重新执行删除或更换分组；系统不会自动继续原操作。'
-  return '请在下方关联账号中结束使用或移出预约。全部处理完成后，状态会自动重新核对。'
+  return '请在下方关联账号中结束使用、移出预约，并等待退出结算完成。全部处理完成后，状态会自动重新核对。'
 })
 const displayedListings = computed(() => isKeyResolutionMode.value ? keyResolutionListings.value : listings.value)
 const mySpendAccountOptions = computed(() =>
@@ -5101,6 +5347,16 @@ const selectedSortOptions = computed(() =>
 )
 const activeFilterChips = computed<ActiveFilterChip[]>(() => {
   const chips: ActiveFilterChip[] = []
+  if (selectedOwnerID.value > 0) {
+    chips.push({
+      key: `owner:${selectedOwnerID.value}`,
+      label: `号主：${selectedOwnerDisplayName.value || `用户 #${selectedOwnerID.value}`}`,
+      remove: () => {
+        selectedOwnerID.value = 0
+        selectedOwnerDisplayName.value = ''
+      }
+    })
+  }
   const statusOption = listingStatusFilterOptions.find(option => option.value === listingFilters.status)
   if (listingFilters.status !== '' && statusOption) {
     chips.push({
@@ -5159,29 +5415,32 @@ function normalizeAccountName(name: string): string {
   return name.trim().toLowerCase()
 }
 
-function hasKnownAccountName(name: string, excludeAccountID?: number): boolean {
+function hasKnownAccountName(name: string, ownerUserID: number, excludeAccountID?: number): boolean {
   const normalizedName = normalizeAccountName(name)
-  if (!normalizedName) return false
+  if (!normalizedName || !Number.isSafeInteger(ownerUserID) || ownerUserID <= 0) return false
   return [...knownListings.value, ...listings.value].some(listing => {
     if (excludeAccountID && listing.id === excludeAccountID) return false
+    if (listing.owner_user_id !== ownerUserID) return false
     return normalizeAccountName(listing.room_name || listing.account_name || '') === normalizedName
   })
 }
 
 function suggestedAccountName(platform: AccountSharePlatform = createPlatform.value): string {
   const baseName = ACCOUNT_NAME_BASE_BY_PLATFORM[platform]
+  const ownerUserID = Number(authStore.user?.id || 0)
   for (let index = 1; index <= 999; index += 1) {
     const candidate = index === 1 ? baseName : `${baseName}${index}`
-    if (!hasKnownAccountName(candidate)) return candidate
+    if (!hasKnownAccountName(candidate, ownerUserID)) return candidate
   }
   return `${baseName}${Date.now()}`
 }
 
-function validateAccountName(name: string, excludeAccountID?: number): string {
+function validateAccountName(name: string, excludeAccountID?: number, ownerUserID = 0): string {
   const value = name.trim()
   if (!value) return '请填写房间名称'
   if (/\s/.test(name)) return '房间名称不能包含空格、换行或制表符'
-  if (hasKnownAccountName(value, excludeAccountID)) return '房间名称已存在，请换一个名称'
+  if (Array.from(value).length > 100) return '房间名称不能超过 100 个字符'
+  if (hasKnownAccountName(value, ownerUserID, excludeAccountID)) return '房间名称已存在，请换一个名称'
   return ''
 }
 
@@ -5322,8 +5581,34 @@ function toggleFilterPopover(popover: ListingFilterPopover): void {
   openFilterPopover.value = openFilterPopover.value === popover ? null : popover
 }
 
-function closeFilterPopover(): void {
+function filterTriggerFor(popover: ListingFilterPopover): HTMLButtonElement | null {
+  switch (popover) {
+    case 'status':
+      return statusFilterTriggerRef.value
+    case 'level':
+      return levelFilterTriggerRef.value
+    case 'seat':
+      return seatFilterTriggerRef.value
+    case 'feature':
+      return featureFilterTriggerRef.value
+    case 'model':
+      return modelFilterTriggerRef.value
+  }
+}
+
+function closeFilterPopover(restoreFocus = false): void {
+  const closingPopover = openFilterPopover.value
   openFilterPopover.value = null
+  if (restoreFocus && closingPopover) {
+    void nextTick(() => {
+      filterTriggerFor(closingPopover)?.focus()
+    })
+  }
+}
+
+function handleFilterPopoverEscape(): void {
+  if (!openFilterPopover.value) return
+  closeFilterPopover(true)
 }
 
 function handleFilterPanelDocumentClick(event: MouseEvent): void {
@@ -5335,12 +5620,12 @@ function handleFilterPanelDocumentClick(event: MouseEvent): void {
 
 function setListingStatusFilter(status: ListingStatusFilterValue): void {
   listingFilters.status = status
-  closeFilterPopover()
+  closeFilterPopover(true)
 }
 
 function setAccountLevelFilter(level: AccountLevelFilterValue): void {
   listingFilters.accountLevel = level
-  closeFilterPopover()
+  closeFilterPopover(true)
 }
 
 function toggleSeatFilter(seat: number): void {
@@ -5383,14 +5668,15 @@ function addModelFilterFromInput(): void {
   modelFilterInput.value = ''
 }
 
-function buildListingFilters(): AccountShareListingFilters {
+function buildListingFilters(tab: AccountShareListingTab = activeFilter.value.tab): AccountShareListingFilters {
   const result: AccountShareListingFilters = {
-    tab: activeFilter.value.tab,
+    tab,
     platform: activeListingPlatform.value
   }
   const search = searchQuery.value.trim()
   if (search) result.search = search
-  if (isArchiveView.value) return result
+  if (tab === 'archive') return result
+  if (selectedOwnerID.value > 0) result.owner_user_id = selectedOwnerID.value
   if (listingFilters.status === 'available') {
     result.status = 'active'
     result.available_only = true
@@ -5468,6 +5754,8 @@ function resetListingFilters(): void {
   listingFilters.seatLimits = []
   listingFilters.featureTags = []
   listingFilters.models = []
+  selectedOwnerID.value = 0
+  selectedOwnerDisplayName.value = ''
   modelFilterInput.value = ''
   if (searchQuery.value !== '') {
     suppressNextSearchRefresh = true
@@ -5885,7 +6173,11 @@ function accountLevelBadgeClass(listing: AccountShareListing): string {
 }
 
 function listingDisplayName(listing: AccountShareListing): string {
-  return listing.room_name || listing.account_name || `房间 #${listing.id}`
+  if (listing.room_name) return listing.room_name
+  if ((isOwnListing(listing) || authStore.isAdmin) && listing.account_name) {
+    return listing.account_name
+  }
+  return `房间 #${listing.id}`
 }
 
 function isRateMultiplierExpensive(listing: AccountShareListing): boolean {
@@ -5913,12 +6205,6 @@ function supportsImageGeneration(listing: AccountShareListing): boolean {
     const value = model.toLowerCase()
     return /(^|[/_:])(?:gpt-image(?:-|$)|dall-e(?:-|$)|dalle(?:-|$))/.test(value)
   })
-}
-
-function usageAvailableLabel(progress?: UsageProgress | null): string {
-  if (!progress) return '暂无'
-  const available = Math.max(0, 100 - Number(progress.utilization || 0))
-  return `${formatNumber(available)}%可用`
 }
 
 function validityInfo(listing: AccountShareListing): { label: string; expiresAtLabel: string } | null {
@@ -5965,89 +6251,6 @@ function deletedHistorySnapshotMessage(listing: AccountShareListing): string {
   return `该房间已删除；${historySnapshotDescription(listing, 'archive')}。不能再加入、编辑或管理账号。`
 }
 
-function runtimeInsight(listing: AccountShareListing): { label: string; detail: string; badge: string; tone: RuntimeTone } {
-  if (listing.deleted) {
-    return {
-      label: '房间已删除',
-      detail: historySnapshotDescription(listing, 'archive'),
-      badge: '历史',
-      tone: 'muted'
-    }
-  }
-  if (showOpenAIUsageWindows(listing) && listing.codex_quota_protection_reason) {
-    const windowLabel = listing.codex_quota_protection_reason === '7d' ? '7天' : '5小时'
-    return {
-      label: `${windowLabel}保护中`,
-      detail: listing.codex_quota_protection_reset_at ? `预计 ${formatRelativeUntil(listing.codex_quota_protection_reset_at)} 后解除` : '',
-      badge: '保护',
-      tone: 'warning'
-    }
-  }
-  if (showAnthropicUsageWindows(listing) && listing.anthropic_quota_protection_reason) {
-    const windowLabel = listing.anthropic_quota_protection_reason === '7d' ? '7天' : '5小时'
-    return {
-      label: `Claude ${windowLabel}保护中`,
-      detail: listing.anthropic_quota_protection_reset_at ? `预计 ${formatRelativeUntil(listing.anthropic_quota_protection_reset_at)} 后解除` : '',
-      badge: '保护',
-      tone: 'warning'
-    }
-  }
-  if (isFuture(listing.rate_limit_reset_at)) {
-    return {
-      label: '限流中',
-      detail: `预计 ${formatRelativeUntil(listing.rate_limit_reset_at)} 后解除`,
-      badge: '限流',
-      tone: 'danger'
-    }
-  }
-  if (isFuture(listing.overload_until)) {
-    return {
-      label: '过载冷却',
-      detail: `预计 ${formatRelativeUntil(listing.overload_until)} 后恢复`,
-      badge: '冷却',
-      tone: 'warning'
-    }
-  }
-  if (isFuture(listing.temp_unschedulable_until)) {
-    return {
-      label: '临时不可调度',
-      detail: listing.temp_unschedulable_reason || `预计 ${formatRelativeUntil(listing.temp_unschedulable_until)} 后恢复`,
-      badge: '暂停',
-      tone: 'warning'
-    }
-  }
-  if (listing.account_status && listing.account_status !== 'active') {
-    return {
-      label: runtimeStatusLabel(listing.account_status),
-      detail: '',
-      badge: '异常',
-      tone: 'danger'
-    }
-  }
-  if (listing.account_schedulable === false) {
-    return {
-      label: '不可调度',
-      detail: '',
-      badge: '暂停',
-      tone: 'muted'
-    }
-  }
-  if (listing.status !== 'active') {
-    return {
-      label: listingStatusLabel(listing),
-      detail: '',
-      badge: '未上架',
-      tone: 'muted'
-    }
-  }
-  return {
-    label: '正常可用',
-    detail: '',
-    badge: '正常',
-    tone: 'normal'
-  }
-}
-
 function isOwnListing(listing: AccountShareListing): boolean {
   const currentUserID = Number(authStore.user?.id || 0)
   return currentUserID > 0 && listing.owner_user_id === currentUserID
@@ -6081,21 +6284,6 @@ function listingEditLockLabel(listing: AccountShareListing): string {
   const editor = listing.editing_mine ? '你' : (listing.editing_by_username || '其他用户')
   const until = listing.editing_expires_at ? formatCountdownUntil(listing.editing_expires_at) : '稍后'
   return `${editor}正在编辑账号配置，${until}前暂时不能加入使用。`
-}
-
-function runtimeStatusLabel(status: string): string {
-  switch (status) {
-    case 'active':
-      return '正常'
-    case 'inactive':
-      return '未激活'
-    case 'disabled':
-      return '已禁用'
-    case 'error':
-      return '异常'
-    default:
-      return status
-  }
 }
 
 function runtimeInsightClass(tone: RuntimeTone): string {
@@ -6817,6 +7005,7 @@ function prepareKeyResolutionMode(): void {
 
 function clearKeyResolutionState(): void {
   keyResolutionRequestSeq += 1
+  keyResolutionBindingStatus.value = null
   keyResolutionMemberships.value = []
   keyResolutionListings.value = []
   keyResolutionLoading.value = false
@@ -6847,7 +7036,9 @@ function resolutionListingFromMemberships(
   delete next.queue_idle_timeout_minutes
   delete next.queue_dispatch_cooldown_until
 
-  const membership = memberships.find(item => item.status === 'active') || memberships.find(item => item.status === 'queued')
+  const membership = memberships.find(item => item.status === 'active')
+    || memberships.find(item => item.status === 'queued')
+    || memberships.find(item => item.status === 'ending')
   if (!membership) return next
   const apiKeyName = keyResolutionApiKeyName.value
   next.queue_membership_id = membership.id
@@ -6870,6 +7061,49 @@ function resolutionListingFromMemberships(
   return next
 }
 
+function syncKeyResolutionEndingMemberships(
+  apiKeyID: number,
+  memberships: AccountShareMembership[],
+  resolvedListings: AccountShareListing[]
+): void {
+  const endingByListingID = new Map(
+    memberships
+      .filter(membership => membership.status === 'ending')
+      .map(membership => [Number(membership.listing_id), membership] as const)
+  )
+  const listingsByID = new Map(resolvedListings.map(listing => [Number(listing.id), listing]))
+  const nextPending = { ...pendingMembershipEnds.value }
+
+  for (const [listingID, pending] of Object.entries(nextPending)) {
+    if (Number(pending.apiKeyID || 0) === apiKeyID && !endingByListingID.has(Number(listingID))) {
+      delete nextPending[Number(listingID)]
+    }
+  }
+
+  for (const [listingID, membership] of endingByListingID) {
+    const listing = listingsByID.get(listingID)
+    if (!listing) continue
+    const existing = nextPending[listingID]
+    const operationID = (membership.ending_operation_id || '').trim()
+    const operationStatus = (membership.ending_operation_status || '').trim()
+    const preserveOperationState = existing?.membershipID === membership.id &&
+      existing.operationID === operationID
+    nextPending[listingID] = {
+      listingID,
+      membershipID: membership.id,
+      operationID,
+      operationStatus: operationStatus || (preserveOperationState ? existing.operationStatus : 'pending'),
+      operationError: preserveOperationState ? existing.operationError : '',
+      apiKeyID,
+      apiKeyName: keyResolutionApiKeyName.value,
+      membership,
+      listingSnapshot: listing
+    }
+  }
+
+  pendingMembershipEnds.value = nextPending
+}
+
 async function loadKeyResolutionState(): Promise<boolean> {
   if (!isKeyResolutionMode.value) {
     clearKeyResolutionState()
@@ -6883,6 +7117,7 @@ async function loadKeyResolutionState(): Promise<boolean> {
   if (apiKeyID <= 0) {
     keyResolutionMemberships.value = []
     keyResolutionListings.value = []
+    keyResolutionBindingStatus.value = null
     keyResolutionLoaded.value = true
     keyResolutionLoading.value = false
     keyResolutionError.value = '处置链接缺少有效的 API Key ID，请返回 API Key 管理后重新进入。'
@@ -6890,9 +7125,12 @@ async function loadKeyResolutionState(): Promise<boolean> {
   }
 
   try {
-    const memberships = (await accountShareAPI.listMembershipQueue(apiKeyID))
-      .filter(item => item.status === 'active' || item.status === 'queued')
+    const bindingStatus = await accountShareAPI.getAPIKeyBindingStatus(apiKeyID)
     if (requestSeq !== keyResolutionRequestSeq || apiKeyID !== keyResolutionApiKeyID.value) return false
+    if (bindingStatus.api_key_id !== apiKeyID) {
+      throw new Error('关联状态返回了不匹配的 API Key ID，无法安全展示处置入口。')
+    }
+    const memberships = bindingStatus.memberships
 
     const membershipsByListing = new Map<number, AccountShareMembership[]>()
     for (const membership of memberships) {
@@ -6913,6 +7151,8 @@ async function loadKeyResolutionState(): Promise<boolean> {
       listing,
       membershipsByListing.get(listing.id) || []
     ))
+    syncKeyResolutionEndingMemberships(apiKeyID, memberships, exactListings)
+    keyResolutionBindingStatus.value = bindingStatus
     keyResolutionMemberships.value = memberships
     keyResolutionListings.value = exactListings
     keyResolutionLoaded.value = true
@@ -6925,11 +7165,13 @@ async function loadKeyResolutionState(): Promise<boolean> {
     if (exactListings.length > 0) {
       activeListingPlatform.value = listingPlatform(exactListings[0])
     }
+    scheduleTransientStatusRefresh()
     return true
   } catch (error: unknown) {
     if (requestSeq !== keyResolutionRequestSeq) return false
     keyResolutionMemberships.value = []
     keyResolutionListings.value = []
+    keyResolutionBindingStatus.value = null
     keyResolutionLoaded.value = true
     keyResolutionError.value = extractApiErrorMessage(error, '加载 API Key 关联状态失败，请稍后重试。')
     return false
@@ -7101,6 +7343,8 @@ function sanitizeListingFiltersForPlatform(platform: AccountSharePlatform): void
 
 function setListingPlatform(platform: AccountSharePlatform): void {
   if (activeListingPlatform.value === platform) return
+  abortRecommendationAsyncRequests()
+  if (ownerDialog.show) closeOwnerDialog()
   clearSearchDebounceTimer()
   closeFilterPopover()
   activeListingPlatform.value = platform
@@ -7177,7 +7421,12 @@ function hasPollablePendingMembershipEnd(): boolean {
 
 function hasVisibleTransientStatus(): boolean {
   if (isMembershipHistoryView.value || isArchiveView.value) return false
-  return visibleValidatingListingIDs.value.size > 0 || hasPollablePendingMembershipEnd()
+  return visibleValidatingListingIDs.value.size > 0
+    || hasPollablePendingMembershipEnd()
+    || (
+      isKeyResolutionMode.value &&
+      (keyResolutionBindingStatus.value?.ending_count ?? 0) > 0
+    )
 }
 
 function clearMembershipStatusRefreshTimer(): void {
@@ -7215,7 +7464,8 @@ async function refreshTransientStatuses(): Promise<void> {
 
   const completedEnds = await pollPendingMembershipEndOperations()
   const refreshed = await loadListings()
-  if (!refreshed || completedEnds.length === 0 || pendingReview.value) return
+  const resolutionRefreshed = !isKeyResolutionMode.value || await loadKeyResolutionState()
+  if (!refreshed || !resolutionRefreshed || completedEnds.length === 0 || pendingReview.value) return
   const completed = completedEnds.find(item => Boolean(item.membership.last_request_at))
   if (!completed) return
   openReviewDialog(completed.listingSnapshot, completed.membership)
@@ -7302,6 +7552,7 @@ function openRecommendationDialog(): void {
 }
 
 function closeRecommendationDialog(): void {
+  abortRecommendationAsyncRequests()
   showRecommendationDialog.value = false
 }
 
@@ -7336,6 +7587,7 @@ function closeCreateDialog(): void {
     pendingDraftDiscardTarget.value = 'create'
     return
   }
+  abortOwnedAccountsRequest()
   showCreate.value = false
   createDraftBaseline.value = null
 }
@@ -7384,6 +7636,7 @@ function confirmDiscardDraft(): void {
   pendingDraftDiscardTarget.value = null
   if (target === 'create') {
     restoreCreateDraftBaseline()
+    abortOwnedAccountsRequest()
     showCreate.value = false
     createDraftBaseline.value = null
     return
@@ -7396,6 +7649,7 @@ function confirmDiscardDraft(): void {
 function selectCreatePlatform(platform: AccountSharePlatform): void {
   if (createPlatform.value === platform || creating.value || generatingOAuthURL.value) return
   const proxyID = createForm.proxy_id
+  abortOwnedAccountsRequest()
   createPlatform.value = platform
   Object.assign(createForm, buildDefaultCreateForm(), { proxy_id: proxyID })
   allowedModels.value = defaultAllowedModelsForPlatform(platform)
@@ -7598,7 +7852,11 @@ function proxyCapacityValidationMessage(proxy: Proxy | null | undefined): string
 }
 
 function validateCreateConfig(): string {
-  const accountNameError = validateAccountName(createForm.name)
+  const accountNameError = validateAccountName(
+    createForm.name,
+    undefined,
+    Number(authStore.user?.id || 0)
+  )
   if (accountNameError) return accountNameError
   if (createSourceMode.value === 'existing') {
     if (!selectedOwnedAccount.value) return '请选择一个可创建房间的自有账号'
@@ -7629,7 +7887,11 @@ function parseEditAllowedModels(): string[] {
 }
 
 function validateEditConfig(): string {
-  const accountNameError = validateAccountName(editForm.name, editingConfigListing.value?.id)
+  const accountNameError = validateAccountName(
+    editForm.name,
+    editingConfigListing.value?.id,
+    Number(editingConfigListing.value?.owner_user_id || 0)
+  )
   if (accountNameError) return accountNameError
   if (!seatOptions.includes(Number(editForm.seat_limit))) return `成员上限必须在 ${ACCOUNT_SHARE_MIN_SEATS}-${ACCOUNT_SHARE_MAX_SEATS} 人之间`
   if (editPerUserConcurrencyValidationMessage.value) return editPerUserConcurrencyValidationMessage.value
@@ -7794,7 +8056,7 @@ async function loadListings(): Promise<boolean> {
   loading.value = true
   errorMessage.value = ''
   try {
-    const result = await accountShareAPI.listListings(pagination.page, pagination.page_size, buildListingFilters(), {
+    const result = await accountShareAPI.listListings(pagination.page, pagination.page_size, buildListingFilters(requestTab), {
       signal: controller.signal
     })
     if (controller.signal.aborted || requestSeq !== listingsRequestSeq) return false
@@ -7891,9 +8153,18 @@ function mergeKnownListings(items: AccountShareListing[]): void {
   knownListings.value = Array.from(byID.values())
 }
 
+function removeKnownListing(listingID: number): void {
+  knownListings.value = knownListings.value.filter((listing) => listing.id !== listingID)
+}
+
 async function loadListingNameIndex(updateSuggestedName = true): Promise<void> {
   try {
-    const result = await accountShareAPI.listListings(1, 100, { tab: 'all', status: 'all' })
+    const ownerUserID = Number(authStore.user?.id || 0)
+    const result = await accountShareAPI.listListings(1, 100, {
+      tab: 'mine',
+      status: 'all',
+      owner_user_id: ownerUserID > 0 ? ownerUserID : undefined
+    })
     mergeKnownListings(result.items || [])
     if (updateSuggestedName && (!createForm.name.trim() || accountNameValidationMessage.value)) {
       createForm.name = suggestedAccountName()
@@ -7903,7 +8174,18 @@ async function loadListingNameIndex(updateSuggestedName = true): Promise<void> {
   }
 }
 
+function abortOwnerDialogRequests(): void {
+  ownerDialogRequestSeq += 1
+  ownerListingsRequestController?.abort()
+  ownerListingsRequestController = null
+  ownerReviewsRequestController?.abort()
+  ownerReviewsRequestController = null
+  ownerDialog.loadingListings = false
+  ownerDialog.loadingReviews = false
+}
+
 function closeOwnerDialog(): void {
+  abortOwnerDialogRequests()
   ownerDialog.show = false
   ownerDialog.ownerUserID = 0
   ownerDialog.ownerUsername = ''
@@ -7911,61 +8193,152 @@ function closeOwnerDialog(): void {
   ownerDialog.tab = 'listings'
   ownerDialog.listings = []
   ownerDialog.reviews = []
-  ownerDialog.error = ''
+  ownerDialog.listingsPage = 1
+  ownerDialog.listingsPages = 1
+  ownerDialog.listingsTotal = 0
+  ownerDialog.reviewsPage = 1
+  ownerDialog.reviewsPages = 1
+  ownerDialog.reviewsTotal = 0
+  ownerDialog.listingsError = ''
+  ownerDialog.reviewsError = ''
 }
 
 async function openOwnerDialog(listing: AccountShareListing): Promise<void> {
+  abortOwnerDialogRequests()
   ownerDialog.show = true
   ownerDialog.ownerUserID = listing.owner_user_id
   ownerDialog.ownerUsername = ownerDisplayName(listing)
   ownerDialog.sourceListing = listing
   ownerDialog.tab = 'listings'
-  ownerDialog.error = ''
+  ownerDialog.listingsError = ''
+  ownerDialog.reviewsError = ''
   ownerDialog.listings = []
   ownerDialog.reviews = []
+  ownerDialog.listingsPage = 1
+  ownerDialog.listingsPages = 1
+  ownerDialog.listingsTotal = 0
+  ownerDialog.reviewsPage = 1
+  ownerDialog.reviewsPages = 1
+  ownerDialog.reviewsTotal = 0
   await Promise.all([loadOwnerListings(), loadOwnerReviews()])
 }
 
 function searchOwnerFromDialog(): void {
-  const keyword = ownerDialog.ownerUsername || (ownerDialog.ownerUserID ? String(ownerDialog.ownerUserID) : '')
-  if (!keyword) return
-  searchQuery.value = keyword
+  const ownerUserID = Number(ownerDialog.ownerUserID || 0)
+  if (!Number.isSafeInteger(ownerUserID) || ownerUserID <= 0) return
+  selectedOwnerID.value = ownerUserID
+  selectedOwnerDisplayName.value = ownerDialog.ownerUsername || `用户 #${ownerUserID}`
+  if (searchQuery.value !== '') {
+    suppressNextSearchRefresh = true
+    searchQuery.value = ''
+  }
   pagination.page = 1
   closeOwnerDialog()
   applyListingFilters()
 }
 
-async function loadOwnerListings(): Promise<void> {
-  if (!ownerDialog.ownerUserID) return
+async function loadOwnerListings(append = false): Promise<void> {
+  if (!ownerDialog.ownerUserID || ownerDialog.loadingListings) return
+  const requestSeq = ownerDialogRequestSeq
+  const ownerUserID = ownerDialog.ownerUserID
+  const platform = activeListingPlatform.value
+  const page = append ? ownerDialog.listingsPage + 1 : 1
+  const controller = new AbortController()
+  ownerListingsRequestController?.abort()
+  ownerListingsRequestController = controller
   ownerDialog.loadingListings = true
+  ownerDialog.listingsError = ''
   try {
-    const result = await accountShareAPI.listListings(1, 24, {
+    const result = await accountShareAPI.listListings(page, OWNER_LISTINGS_PAGE_SIZE, {
       tab: 'all',
       status: 'all',
-      platform: activeListingPlatform.value,
-      owner_user_id: ownerDialog.ownerUserID,
+      platform,
+      owner_user_id: ownerUserID,
       sort_by: 'rating',
       sort_order: 'desc'
-    })
-    ownerDialog.listings = result.items || []
+    }, { signal: controller.signal })
+    if (
+      controller.signal.aborted
+      || requestSeq !== ownerDialogRequestSeq
+      || !ownerDialog.show
+      || ownerDialog.ownerUserID !== ownerUserID
+      || activeListingPlatform.value !== platform
+    ) return
+    const nextItems = result.items || []
+    if (append) {
+      const byID = new Map(ownerDialog.listings.map(item => [item.id, item]))
+      for (const item of nextItems) byID.set(item.id, item)
+      ownerDialog.listings = Array.from(byID.values())
+    } else {
+      ownerDialog.listings = nextItems
+    }
+    ownerDialog.listingsPage = result.page || page
+    ownerDialog.listingsPages = Math.max(ownerDialog.listingsPage, result.pages || 1)
+    ownerDialog.listingsTotal = Math.max(ownerDialog.listings.length, result.total || 0)
+    ownerDialog.listingsError = ''
   } catch (error: unknown) {
-    ownerDialog.error = extractApiErrorMessage(error, '加载号主账号失败')
+    if (controller.signal.aborted || requestSeq !== ownerDialogRequestSeq || isCanceledRequest(error)) return
+    ownerDialog.listingsError = extractApiErrorMessage(error, '加载号主账号失败')
   } finally {
-    ownerDialog.loadingListings = false
+    if (requestSeq === ownerDialogRequestSeq && ownerListingsRequestController === controller) {
+      ownerListingsRequestController = null
+      ownerDialog.loadingListings = false
+    }
   }
 }
 
-async function loadOwnerReviews(): Promise<void> {
-  if (!ownerDialog.ownerUserID) return
+function loadMoreOwnerListings(): void {
+  void loadOwnerListings(true)
+}
+
+async function loadOwnerReviews(append = false): Promise<void> {
+  if (!ownerDialog.ownerUserID || ownerDialog.loadingReviews) return
+  const requestSeq = ownerDialogRequestSeq
+  const ownerUserID = ownerDialog.ownerUserID
+  const page = append ? ownerDialog.reviewsPage + 1 : 1
+  const controller = new AbortController()
+  ownerReviewsRequestController?.abort()
+  ownerReviewsRequestController = controller
   ownerDialog.loadingReviews = true
+  ownerDialog.reviewsError = ''
   try {
-    const result = await accountShareAPI.listOwnerReviews(ownerDialog.ownerUserID, 1, 20)
-    ownerDialog.reviews = result.items || []
+    const result = await accountShareAPI.listOwnerReviews(
+      ownerUserID,
+      page,
+      OWNER_REVIEWS_PAGE_SIZE,
+      { signal: controller.signal }
+    )
+    if (
+      controller.signal.aborted
+      || requestSeq !== ownerDialogRequestSeq
+      || !ownerDialog.show
+      || ownerDialog.ownerUserID !== ownerUserID
+    ) return
+    const nextItems = result.items || []
+    if (append) {
+      const byID = new Map(ownerDialog.reviews.map(item => [item.id, item]))
+      for (const item of nextItems) byID.set(item.id, item)
+      ownerDialog.reviews = Array.from(byID.values())
+    } else {
+      ownerDialog.reviews = nextItems
+    }
+    ownerDialog.reviewsPage = result.page || page
+    ownerDialog.reviewsPages = Math.max(ownerDialog.reviewsPage, result.pages || 1)
+    ownerDialog.reviewsTotal = Math.max(ownerDialog.reviews.length, result.total || 0)
+    ownerDialog.reviewsError = ''
   } catch (error: unknown) {
-    ownerDialog.error = extractApiErrorMessage(error, '加载号主评论失败')
+    if (controller.signal.aborted || requestSeq !== ownerDialogRequestSeq || isCanceledRequest(error)) return
+    ownerDialog.reviewsError = extractApiErrorMessage(error, '加载号主评论失败')
   } finally {
-    ownerDialog.loadingReviews = false
+    if (requestSeq === ownerDialogRequestSeq && ownerReviewsRequestController === controller) {
+      ownerReviewsRequestController = null
+      ownerDialog.loadingReviews = false
+    }
   }
+}
+
+function loadMoreOwnerReviews(): void {
+  void loadOwnerReviews(true)
 }
 
 async function listAllModeApiKeys(
@@ -8085,8 +8458,28 @@ function refreshModeKeysInBackground(): void {
   })
 }
 
+function abortRecommendationRequest(): void {
+  recommendationRequestSeq += 1
+  recommendationRequestController?.abort()
+  recommendationRequestController = null
+  recommendationLoading.value = false
+}
+
+function abortRecommendationUsageProfileRequest(): void {
+  recommendationUsageProfileRequestSeq += 1
+  recommendationUsageProfileController?.abort()
+  recommendationUsageProfileController = null
+  recommendationUsageProfileLoading.value = false
+}
+
+function abortRecommendationAsyncRequests(): void {
+  abortRecommendationRequest()
+  abortRecommendationUsageProfileRequest()
+}
+
 function resetRecommendationResult(options: { keepUsageProfileMessage?: boolean } = {}): void {
   recommendationResult.value = null
+  recommendationRequestSnapshot.value = null
   recommendationError.value = ''
   recommendationPage.value = 1
   if (!options.keepUsageProfileMessage) {
@@ -8126,6 +8519,9 @@ function applyRecommendationPreset(key: RecommendationPresetKey): void {
   recommendationForm.output_tokens_per_request = preset.output_tokens_per_request
   recommendationForm.cache_creation_tokens_per_request = preset.cache_creation_tokens_per_request
   recommendationForm.cache_read_tokens_per_request = preset.cache_read_tokens_per_request
+  recommendationForm.image_input_tokens_per_request = preset.image_input_tokens_per_request
+  recommendationForm.image_output_tokens_per_request = preset.image_output_tokens_per_request
+  recommendationForm.image_cache_read_tokens_per_request = preset.image_cache_read_tokens_per_request
   resetRecommendationResult()
 }
 
@@ -8135,7 +8531,8 @@ function applyRecommendationUsageProfileToForm(profile: AccountShareRecommendati
   recommendationForm.input_tokens_per_request = profile.input_tokens_per_request
   recommendationForm.output_tokens_per_request = profile.output_tokens_per_request
   recommendationForm.cache_creation_tokens_per_request = profile.cache_creation_tokens_per_request
-  recommendationForm.cache_read_tokens_per_request = profile.cache_read_tokens_per_request
+  recommendationForm.image_input_tokens_per_request = profile.image_input_tokens_per_request
+  recommendationForm.image_output_tokens_per_request = profile.image_output_tokens_per_request
 }
 
 function buildRecommendationUsageProfileMessage(profile: AccountShareRecommendationUsageProfile): string {
@@ -8145,7 +8542,7 @@ function buildRecommendationUsageProfileMessage(profile: AccountShareRecommendat
   const capped = profile.capped ? '，部分数值已按测算上限处理' : ''
   const activeHours = normalizeRecommendationActiveHours(profile.active_hours)
   const requestsPerHour = profile.request_count / activeHours
-  return `${prefix}：单次输入 ${formatNumber(profile.input_tokens_per_request)}、输出 ${formatNumber(profile.output_tokens_per_request)}、Cache写入 ${formatNumber(profile.cache_creation_tokens_per_request)}、Cache读取 ${formatNumber(profile.cache_read_tokens_per_request)}；按 ${profile.request_count} 次 / ${formatNumber(activeHours)} 小时（${formatNumber(requestsPerHour)} 次/小时）测算预计额度${capped}`
+  return `${prefix}：单次文本输入 ${formatNumber(profile.input_tokens_per_request)}、文本输出 ${formatNumber(profile.output_tokens_per_request)}、Cache写入 ${formatNumber(profile.cache_creation_tokens_per_request)}、历史总Cache读取 ${formatNumber(profile.cache_read_tokens_per_request)}（未自动填入）、图片输入 ${formatNumber(profile.image_input_tokens_per_request)}、图片输出 ${formatNumber(profile.image_output_tokens_per_request)}；文本/图片Cache读取因无法可靠拆分，均保留手工值。按 ${profile.request_count} 次 / ${formatNumber(activeHours)} 小时（${formatNumber(requestsPerHour)} 次/小时）测算预计额度${capped}`
 }
 
 async function applyRecentUsageProfile(): Promise<void> {
@@ -8153,25 +8550,49 @@ async function applyRecentUsageProfile(): Promise<void> {
   recommendationUsageProfileMessage.value = ''
   recommendationError.value = ''
   syncRecommendationFormForPlatform()
+  const request = {
+    platform: activeListingPlatform.value,
+    model: recommendationForm.model.trim(),
+    days: 3
+  }
+  const requestSeq = ++recommendationUsageProfileRequestSeq
+  const controller = new AbortController()
+  recommendationUsageProfileController?.abort()
+  recommendationUsageProfileController = controller
   recommendationUsageProfileLoading.value = true
   try {
-    const profile = await accountShareAPI.getRecommendationUsageProfile({
-      platform: activeListingPlatform.value,
-      model: recommendationForm.model.trim(),
-      days: 3
-    })
+    const profile = await accountShareAPI.getRecommendationUsageProfile(
+      request,
+      { signal: controller.signal }
+    )
+    if (
+      controller.signal.aborted
+      || requestSeq !== recommendationUsageProfileRequestSeq
+      || !showRecommendationDialog.value
+      || activeListingPlatform.value !== request.platform
+      || recommendationForm.model.trim() !== request.model
+    ) return
     if (!profile.has_history) {
       recommendationUsageProfileMessage.value = '近3天暂无历史请求，已保留当前预设'
       return
     }
+    recommendationUsageProfileController = null
+    recommendationUsageProfileLoading.value = false
     selectedRecommendationPreset.value = 'history'
     applyRecommendationUsageProfileToForm(profile)
     resetRecommendationResult({ keepUsageProfileMessage: true })
     recommendationUsageProfileMessage.value = buildRecommendationUsageProfileMessage(profile)
   } catch (error: unknown) {
+    if (controller.signal.aborted || requestSeq !== recommendationUsageProfileRequestSeq || isCanceledRequest(error)) return
     recommendationUsageProfileMessage.value = extractApiErrorMessage(error, '近3天均值读取失败')
   } finally {
-    recommendationUsageProfileLoading.value = false
+    if (
+      requestSeq === recommendationUsageProfileRequestSeq
+      && recommendationUsageProfileController === controller
+    ) {
+      recommendationUsageProfileController = null
+      recommendationUsageProfileLoading.value = false
+    }
   }
 }
 
@@ -8190,7 +8611,10 @@ function validateRecommendationForm(): string {
     recommendationForm.input_tokens_per_request,
     recommendationForm.output_tokens_per_request,
     recommendationForm.cache_creation_tokens_per_request,
-    recommendationForm.cache_read_tokens_per_request
+    recommendationForm.cache_read_tokens_per_request,
+    recommendationForm.image_input_tokens_per_request,
+    recommendationForm.image_output_tokens_per_request,
+    recommendationForm.image_cache_read_tokens_per_request
   ]
   if (tokenFields.some(value => !Number.isFinite(Number(value)) || Number(value) < 0 || !Number.isInteger(Number(value)))) {
     return '单次 token 必须是非负整数'
@@ -8207,37 +8631,70 @@ async function runRecommendation(): Promise<void> {
     recommendationError.value = validationError
     return
   }
+  const payload: AccountShareRecommendationRequest = {
+    platform: activeListingPlatform.value,
+    model: recommendationForm.model.trim(),
+    api_key_id: Number(recommendationForm.api_key_id),
+    request_count: Number(recommendationForm.request_count),
+    active_hours: Number(recommendationForm.active_hours),
+    input_tokens_per_request: Number(recommendationForm.input_tokens_per_request),
+    output_tokens_per_request: Number(recommendationForm.output_tokens_per_request),
+    cache_creation_tokens_per_request: Number(recommendationForm.cache_creation_tokens_per_request),
+    cache_read_tokens_per_request: Number(recommendationForm.cache_read_tokens_per_request),
+    image_input_tokens_per_request: Number(recommendationForm.image_input_tokens_per_request),
+    image_output_tokens_per_request: Number(recommendationForm.image_output_tokens_per_request),
+    image_cache_read_tokens_per_request: Number(recommendationForm.image_cache_read_tokens_per_request),
+    limit: ACCOUNT_SHARE_RECOMMENDATION_LIMIT
+  }
+  const requestSeq = ++recommendationRequestSeq
+  const controller = new AbortController()
+  recommendationRequestController?.abort()
+  recommendationRequestController = controller
   recommendationLoading.value = true
   try {
-    const result = await accountShareAPI.recommendListings({
-      platform: activeListingPlatform.value,
-      model: recommendationForm.model.trim(),
-      api_key_id: Number(recommendationForm.api_key_id),
-      request_count: Number(recommendationForm.request_count),
-      active_hours: Number(recommendationForm.active_hours),
-      input_tokens_per_request: Number(recommendationForm.input_tokens_per_request),
-      output_tokens_per_request: Number(recommendationForm.output_tokens_per_request),
-      cache_creation_tokens_per_request: Number(recommendationForm.cache_creation_tokens_per_request),
-      cache_read_tokens_per_request: Number(recommendationForm.cache_read_tokens_per_request),
-      limit: ACCOUNT_SHARE_RECOMMENDATION_LIMIT
-    })
+    const result = await accountShareAPI.recommendListings(payload, { signal: controller.signal })
+    if (
+      controller.signal.aborted
+      || requestSeq !== recommendationRequestSeq
+      || !showRecommendationDialog.value
+    ) return
     recommendationResult.value = result
+    recommendationRequestSnapshot.value = payload
     recommendationPage.value = 1
     const recommendedListings = (result.items || []).map(item => item.listing)
     mergeKnownListings(recommendedListings)
     syncIdleTimeoutControls(recommendedListings)
   } catch (error: unknown) {
+    if (controller.signal.aborted || requestSeq !== recommendationRequestSeq || isCanceledRequest(error)) return
     recommendationResult.value = null
+    recommendationRequestSnapshot.value = null
     recommendationError.value = extractApiErrorMessage(error, '账号推荐测算失败', accountShareRecommendationErrorMessages)
   } finally {
-    recommendationLoading.value = false
+    if (requestSeq === recommendationRequestSeq && recommendationRequestController === controller) {
+      recommendationRequestController = null
+      recommendationLoading.value = false
+    }
   }
 }
 
 function useRecommendedListing(candidate: AccountShareRecommendationCandidate): void {
+  const requestSnapshot = recommendationRequestSnapshot.value
+  if (!requestSnapshot || !recommendationResult.value) {
+    recommendationError.value = '推荐结果已失效，请重新测算'
+    return
+  }
+  const currentApiKeyID = Number(recommendationForm.api_key_id || 0)
+  if (currentApiKeyID !== requestSnapshot.api_key_id) {
+    recommendationError.value = 'API Key 已改变，请重新测算后再使用推荐结果'
+    return
+  }
+  if (!recommendationKeyOptions.value.some(item => item.id === requestSnapshot.api_key_id)) {
+    recommendationError.value = '生成推荐时使用的 API Key 已不可用，请重新测算'
+    return
+  }
   const listing = candidate.listing
   mergeKnownListings([listing])
-  selectedKeyByListing[listing.id] = Number(recommendationForm.api_key_id || 0)
+  selectedKeyByListing[listing.id] = requestSnapshot.api_key_id
   if (!idleTimeoutByListing[listing.id]) {
     idleTimeoutByListing[listing.id] = DEFAULT_ACCOUNT_SHARE_IDLE_TIMEOUT_MINUTES
   }
@@ -8263,24 +8720,31 @@ async function loadOwnedAccounts(force = false): Promise<void> {
   if (!force && (ownedAccountsLoading.value || ownedAccountsLoadedPlatform === platform)) return
 
   const requestVersion = ++ownedAccountsRequestVersion
+  ownedAccountsRequestController?.abort()
+  const controller = new AbortController()
+  ownedAccountsRequestController = controller
   ownedAccountsLoading.value = true
   ownedAccountsError.value = ''
   try {
-    const firstPage = await accountsAPI.list(1, 100, { platform, status: 'active' })
-    const remainingPages = Array.from(
-      { length: Math.max(0, firstPage.pages - 1) },
-      (_, index) => index + 2
+    const loadedAccounts = await loadAllPaginatedItems(
+      (page) => accountsAPI.list(
+        page,
+        100,
+        { platform, status: 'active' },
+        { signal: controller.signal }
+      ),
+      {
+        signal: controller.signal,
+        isCurrent: () => (
+          requestVersion === ownedAccountsRequestVersion
+          && platform === createPlatform.value
+        ),
+        concurrency: 3
+      }
     )
-    const remainingResults = await Promise.all(
-      remainingPages.map(page => accountsAPI.list(page, 100, { platform, status: 'active' }))
-    )
-    if (requestVersion !== ownedAccountsRequestVersion || platform !== createPlatform.value) return
 
     const accountByID = new Map<number, Account>()
-    for (const account of firstPage.items || []) accountByID.set(account.id, account)
-    for (const result of remainingResults) {
-      for (const account of result.items || []) accountByID.set(account.id, account)
-    }
+    for (const account of loadedAccounts) accountByID.set(account.id, account)
     ownedAccounts.value = Array.from(accountByID.values())
     ownedAccountsLoadedPlatform = platform
     const shouldAdvanceDraftBaseline = showCreate.value && !createDraftHasChanges()
@@ -8292,7 +8756,11 @@ async function loadOwnedAccounts(force = false): Promise<void> {
       if (showCreate.value) captureCreateDraftBaseline()
     }
   } catch (error: unknown) {
-    if (requestVersion !== ownedAccountsRequestVersion) return
+    if (
+      requestVersion !== ownedAccountsRequestVersion
+      || controller.signal.aborted
+      || isCanceledRequest(error)
+    ) return
     const shouldAdvanceDraftBaseline = showCreate.value && !createDraftHasChanges()
     ownedAccounts.value = []
     ownedAccountsLoadedPlatform = null
@@ -8305,8 +8773,18 @@ async function loadOwnedAccounts(force = false): Promise<void> {
   } finally {
     if (requestVersion === ownedAccountsRequestVersion) {
       ownedAccountsLoading.value = false
+      if (ownedAccountsRequestController === controller) {
+        ownedAccountsRequestController = null
+      }
     }
   }
+}
+
+function abortOwnedAccountsRequest(): void {
+  ownedAccountsRequestVersion += 1
+  ownedAccountsRequestController?.abort()
+  ownedAccountsRequestController = null
+  ownedAccountsLoading.value = false
 }
 
 function buildCreateRoomPayload(accountID: number): Omit<CreateAccountShareRoomRequest, 'idempotency_key'> {
@@ -8513,38 +8991,38 @@ function roomLifecycleActionAllowed(action: AccountShareRoomLifecycleAction): bo
 function roomLifecycleActionTitle(action: Exclude<AccountShareRoomLifecycleAction, 'delete'>): string {
   switch (action) {
     case 'drain':
-      return '排空并暂停房间'
+      return '下架房间'
     case 'activate':
-      return '恢复房间'
+      return '重新上架'
     case 'suspend':
-      return '暂停房间'
+      return '紧急停用房间'
   }
 }
 
 function roomLifecycleActionDescription(action: Exclude<AccountShareRoomLifecycleAction, 'delete'>): string {
   switch (action) {
     case 'drain':
-      return '房间将立即停止接收新成员，排队项会结束，已有成员进入安全退出与结算流程。'
+      return '房间将停止接收新成员；现有消费者继续正常使用，已有预约不会被取消。'
     case 'activate':
       return '系统会校验房间主账号的连通性和可用状态；只有校验通过才会重新开放。'
     case 'suspend':
-      return '房间将停止准入，恢复前不会再分配给消费用户。'
+      return '管理员将因异常立即停用房间，恢复前不会再分配给消费用户。'
   }
 }
 
 function roomLifecycleActionImpact(action: Exclude<AccountShareRoomLifecycleAction, 'delete'>): string {
   switch (action) {
     case 'drain':
-      return '排空可能异步完成。你可以关闭窗口，稍后重新打开查看进度；历史消费与结算不会丢失。'
+      return '下架不会中断现有消费者，也不会删除房间或历史记录。'
     case 'activate':
       return '恢复校验失败时房间仍保持暂停，并展示失败原因，不会带病开放。'
     case 'suspend':
-      return '暂停不会删除房间或历史记录。'
+      return '紧急停用不会删除房间或历史记录，操作原因会被审计。'
   }
 }
 
 function roomLifecycleOperationLabel(operation: AccountShareRoomOperation): string {
-  const actionLabel = operation.action === 'delete_room' ? '软删除房间' : '排空房间'
+  const actionLabel = operation.action === 'delete_room' ? '软删除房间' : '旧版排空任务'
   switch (operation.status) {
     case 'succeeded':
       return `${actionLabel}已完成`
@@ -8871,9 +9349,15 @@ async function submitRoomLifecycleAction(): Promise<void> {
     if (refreshedListing) roomLifecycleListing.value = refreshedListing
     if (updatedState.pending_operation_id) {
       startRoomLifecycleOperationPolling(updatedState.pending_operation_id)
-      appStore.showSuccess('房间已进入安全排空流程')
+      appStore.showSuccess('旧版排空任务正在收口')
     } else {
-      appStore.showSuccess(action === 'activate' ? '房间已恢复开放' : '房间已暂停')
+      appStore.showSuccess(
+        action === 'activate'
+          ? '房间已重新上架'
+          : action === 'drain'
+            ? '房间已下架，现有用户不受影响'
+            : '房间已紧急停用'
+      )
     }
   } catch (error: unknown) {
     if (!roomLifecycleListing.value) return
@@ -8970,6 +9454,7 @@ async function handleRoomLifecycleTerminalOperation(
 
   clearRoomLifecycleError()
   if (operation.action === 'delete_room') {
+    removeKnownListing(operation.listing_id)
     roomLifecycleDeleted.value = true
     roomLifecycleAction.value = null
     roomDeleteIntent.value = null
@@ -9469,7 +9954,10 @@ async function endUse(pending: PendingEndUseState): Promise<AccountShareMembersh
   let endSucceeded = false
   try {
     const intent = await accountShareAPI.createEndMembershipIntent(membershipID)
-    const membership = await accountShareAPI.endMembership(membershipID, intent.token)
+    const responseMembership = await accountShareAPI.endMembership(membershipID, intent.token)
+    const membership = responseMembership.status === 'ending' && !responseMembership.ending_operation_id
+      ? { ...responseMembership, ending_operation_id: intent.operation_id }
+      : responseMembership
     endSucceeded = true
     if (membership.status === 'ending') {
       setPendingMembershipEnd(pending, membership)
@@ -9644,6 +10132,8 @@ function stopEditSessionRenewal(): void {
     window.clearInterval(editSessionRenewTimer)
     editSessionRenewTimer = null
   }
+  editSessionRenewController?.abort()
+  editSessionRenewController = null
 }
 
 function startEditSessionRenewal(): void {
@@ -9658,6 +10148,9 @@ async function renewConfigEditSession(): Promise<void> {
   const sessionID = editSessionID.value
   if (!listing || !sessionID) return
   const generation = editSessionGeneration
+  editSessionRenewController?.abort()
+  const controller = new AbortController()
+  editSessionRenewController = controller
   try {
     const payload = {
       session_id: sessionID,
@@ -9666,7 +10159,8 @@ async function renewConfigEditSession(): Promise<void> {
     const updated = await accountShareAPI.beginListingEdit(
       listing.id,
       payload,
-      `account-share-edit-renew-${listing.id}-${createSecureRequestID()}`
+      `account-share-edit-renew-${listing.id}-${createSecureRequestID()}`,
+      { signal: controller.signal }
     )
     if (
       generation !== editSessionGeneration
@@ -9678,8 +10172,21 @@ async function renewConfigEditSession(): Promise<void> {
     mergeListingUpdate(updated)
     editSessionID.value = updated.edit_session_id || sessionID
   } catch (error: unknown) {
+    if (
+      controller.signal.aborted
+      || generation !== editSessionGeneration
+      || editingConfigListing.value?.id !== listing.id
+      || editSessionID.value !== sessionID
+      || isCanceledRequest(error)
+    ) {
+      return
+    }
     stopEditSessionRenewal()
     editErrorMessage.value = extractApiErrorMessage(error, '编辑会话续期失败，请关闭后重新编辑')
+  } finally {
+    if (editSessionRenewController === controller) {
+      editSessionRenewController = null
+    }
   }
 }
 
@@ -9715,6 +10222,7 @@ function resetConfigEditState(): void {
   editAllowedModels.value = []
   editSessionID.value = ''
   editForceActive.value = false
+  editConsumerProtected.value = false
   editReason.value = ''
   editErrorMessage.value = ''
   editVersionConflict.value = false
@@ -9827,6 +10335,20 @@ async function openConfigEditDialog(
   }
 }
 
+async function openConsumerProtectedEditDialog(listing: AccountShareListing): Promise<void> {
+  await loadListingNameIndex(false)
+  editingConfigListing.value = listing
+  editSessionID.value = ''
+  editForceActive.value = false
+  editConsumerProtected.value = true
+  editReason.value = ''
+  editErrorMessage.value = ''
+  editVersionConflict.value = false
+  populateEditForm(listing)
+  captureConfigDraftBaseline()
+  showConfigEditDialog.value = true
+}
+
 async function requestOpenConfigEdit(listing: AccountShareListing): Promise<void> {
   if (
     managedActionId.value !== null
@@ -9870,7 +10392,7 @@ async function requestOpenConfigEdit(listing: AccountShareListing): Promise<void
       if (authStore.isAdmin) {
         prepareForceEdit(currentListing, state)
       } else {
-        showActionError(ownerEditBlockedMessage(state), '房间暂时不能编辑')
+        await openConsumerProtectedEditDialog(currentListing)
       }
       return
     }
@@ -9923,20 +10445,33 @@ async function saveConfigEdit(): Promise<void> {
       hourly_rate: Number(editForm.hourly_rate),
       hourly_fee_waiver_minimum: Number(editForm.hourly_fee_waiver_minimum),
       min_balance_required: Number(editForm.min_balance_required),
-      edit_session_id: editSessionID.value,
       reason: editReason.value.trim()
+    }
+    if (!editConsumerProtected.value) {
+      payload.edit_session_id = editSessionID.value
     }
     if (editForceActive.value && authStore.isAdmin) {
       payload.force_active_edit = true
       payload.confirmed = true
     }
-    if (listingPlatform(listing) === 'openai') {
+    if (!editConsumerProtected.value && listingPlatform(listing) === 'openai') {
       payload.codex_cli_only = editForm.codex_cli_only
       payload.codex_5h_limit_percent = Number(editForm.codex_5h_limit_percent)
       payload.codex_7d_limit_percent = Number(editForm.codex_7d_limit_percent)
-    } else if (listingPlatform(listing) === 'anthropic') {
+    } else if (!editConsumerProtected.value && listingPlatform(listing) === 'anthropic') {
       payload.anthropic_5h_limit_percent = Number(editForm.anthropic_5h_limit_percent)
       payload.anthropic_7d_limit_percent = Number(editForm.anthropic_7d_limit_percent)
+    }
+    if (editConsumerProtected.value && configDraftBaseline.value) {
+      const baseline = configDraftBaseline.value
+      if (editForm.name.trim() === baseline.form.name.trim()) delete payload.name
+      if (Number(editForm.seat_limit) === Number(baseline.form.seat_limit)) delete payload.seat_limit
+      if (Number(editForm.rate_multiplier) === Number(baseline.form.rate_multiplier)) delete payload.rate_multiplier
+      if (snapshotsMatch(parseEditAllowedModels(), baseline.allowedModels)) delete payload.allowed_models
+      if (Number(editForm.per_user_concurrency) === Number(baseline.form.per_user_concurrency)) delete payload.per_user_concurrency
+      if (Number(editForm.hourly_rate) === Number(baseline.form.hourly_rate)) delete payload.hourly_rate
+      if (Number(editForm.hourly_fee_waiver_minimum) === Number(baseline.form.hourly_fee_waiver_minimum)) delete payload.hourly_fee_waiver_minimum
+      if (Number(editForm.min_balance_required) === Number(baseline.form.min_balance_required)) delete payload.min_balance_required
     }
     const idempotencyKey = getStableIdempotencyKey(
       updateListingIntent,
@@ -9959,7 +10494,8 @@ async function saveConfigEdit(): Promise<void> {
       editErrorMessage.value = extractApiErrorMessage(error, '保存房间配置失败', {
         ACCOUNT_SHARE_ROOM_UPDATE_REASON_REQUIRED: '请填写本次房间配置修改原因',
         ACCOUNT_SHARE_ROOM_FORCE_REASON_REQUIRED: '管理员强制修改原因不能为空',
-        ACCOUNT_SHARE_ROOM_FORCE_CONFIRMATION_REQUIRED: '管理员强制修改必须完成明确确认'
+        ACCOUNT_SHARE_ROOM_FORCE_CONFIRMATION_REQUIRED: '管理员强制修改必须完成明确确认',
+        ACCOUNT_SHARE_CONSUMER_PROTECTION_VIOLATION: '当前房间已有消费者，只能降低费用、提高单用户并发、增加模型，或在不影响现有席位的前提下减少席位'
       })
     }
   } finally {
@@ -10032,7 +10568,8 @@ watch(searchQuery, () => {
   }, 300)
 })
 
-watch(modeApiKeys, () => {
+watch(modeApiKeys, keys => {
+  clearInvalidSelectedModeApiKeys(activeListingPlatform.value, keys)
   syncRecommendationApiKey()
 })
 
@@ -10063,11 +10600,25 @@ watch(
     recommendationForm.input_tokens_per_request,
     recommendationForm.output_tokens_per_request,
     recommendationForm.cache_creation_tokens_per_request,
-    recommendationForm.cache_read_tokens_per_request
+    recommendationForm.cache_read_tokens_per_request,
+    recommendationForm.image_input_tokens_per_request,
+    recommendationForm.image_output_tokens_per_request,
+    recommendationForm.image_cache_read_tokens_per_request
   ],
   () => {
+    abortRecommendationAsyncRequests()
     resetRecommendationResult()
-  }
+  },
+  { flush: 'sync' }
+)
+
+watch(
+  () => authStore.user?.id,
+  () => {
+    abortRecommendationAsyncRequests()
+    resetRecommendationResult()
+  },
+  { flush: 'sync' }
 )
 
 onMounted(async () => {
@@ -10108,6 +10659,8 @@ onBeforeUnmount(() => {
   abortMembershipHistoryRequest()
   abortMySpendAccountsRequest()
   abortMySpendRequest()
+  abortRecommendationAsyncRequests()
+  abortOwnerDialogRequests()
   roomLifecycleStateRequestSeq += 1
   roomLifecycleStateController?.abort()
   roomLifecycleStateController = null
@@ -10390,6 +10943,12 @@ onBeforeUnmount(() => {
   gap: 0.625rem;
 }
 
+.room-lifecycle-footer > button {
+  width: 100%;
+  min-width: 0;
+  white-space: nowrap;
+}
+
 .dark .room-lifecycle-state-message,
 .dark .room-lifecycle-overview,
 .dark .room-lifecycle-confirm-panel,
@@ -10470,6 +11029,12 @@ onBeforeUnmount(() => {
   .room-lifecycle-footer {
     display: flex;
     justify-content: flex-end;
+  }
+
+  .room-lifecycle-footer > button {
+    width: auto;
+    min-width: 6.5rem;
+    flex: 0 0 auto;
   }
 }
 
@@ -12300,6 +12865,101 @@ onBeforeUnmount(() => {
   color: rgb(191 219 254);
 }
 
+.mode-key-select {
+  min-width: 0;
+}
+
+.mode-key-select :deep(.select-trigger) {
+  min-height: 2.75rem;
+  border-radius: 0.625rem;
+  border-color: rgb(191 219 254);
+  background: linear-gradient(180deg, rgb(255 255 255), rgb(248 250 252));
+  padding: 0.5rem 0.625rem;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.04);
+}
+
+.mode-key-select :deep(.select-trigger:hover) {
+  border-color: rgb(96 165 250);
+}
+
+.mode-key-select-value {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.4375rem;
+  color: rgb(30 64 175);
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+
+.mode-key-select-value span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mode-key-option-icon {
+  display: inline-flex;
+  width: 1.75rem;
+  height: 1.75rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  background: rgb(239 246 255);
+  color: rgb(37 99 235);
+}
+
+.mode-key-option-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.0625rem;
+  text-align: left;
+}
+
+.mode-key-option-copy strong,
+.mode-key-option-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mode-key-option-copy strong {
+  color: rgb(30 41 59);
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+
+.mode-key-option-copy small {
+  color: rgb(100 116 139);
+  font-size: 0.6875rem;
+  line-height: 1rem;
+}
+
+.dark .mode-key-select :deep(.select-trigger) {
+  border-color: rgb(59 130 246 / 0.4);
+  background: linear-gradient(180deg, rgb(30 41 59), rgb(15 23 42));
+}
+
+.dark .mode-key-select-value {
+  color: rgb(191 219 254);
+}
+
+.dark .mode-key-option-icon {
+  background: rgb(30 64 175 / 0.24);
+  color: rgb(147 197 253);
+}
+
+.dark .mode-key-option-copy strong {
+  color: rgb(241 245 249);
+}
+
+.dark .mode-key-option-copy small {
+  color: rgb(148 163 184);
+}
+
 .listing-model-row {
   display: flex;
   min-width: 0;
@@ -13970,11 +14630,24 @@ onBeforeUnmount(() => {
   display: flex;
   min-width: 0;
   flex-direction: column;
+  border: 1px solid rgb(226 232 240);
+  border-radius: 0.625rem;
+  background: linear-gradient(135deg, rgb(248 250 252 / 0.96), rgb(255 255 255 / 0.92));
+  padding: 0.625rem 0.6875rem;
+}
+
+.listing-card-main-row {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
   gap: 0.5rem;
 }
 
 .listing-card-identity {
+  display: flex;
   min-width: 0;
+  flex: 1;
+  align-items: center;
 }
 
 .listing-badge-row {
@@ -13982,15 +14655,22 @@ onBeforeUnmount(() => {
   min-width: 0;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.375rem;
+  gap: 0.3125rem;
 }
 
 .listing-title-row {
-  margin-top: 0.4375rem;
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 0.1875rem;
+  gap: 0.4375rem;
+}
+
+.listing-title-line {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem 0.625rem;
 }
 
 .listing-title {
@@ -14001,48 +14681,12 @@ onBeforeUnmount(() => {
   overflow-wrap: anywhere;
 }
 
-.room-account-count-button,
-.room-account-count-pill {
-  display: inline-flex;
-  min-height: 2rem;
-  width: fit-content;
-  align-items: center;
-  gap: 0.3rem;
-  border-radius: 9999px;
-  border: 1px solid rgb(167 243 208);
-  background: rgb(236 253 245);
-  padding: 0.25rem 0.625rem;
-  color: rgb(4 120 87);
-  font-size: 0.71875rem;
-  font-weight: 800;
-  line-height: 1rem;
-}
-
-.room-account-count-button {
-  min-height: 2.75rem;
-  transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
-}
-
-.room-account-count-button:hover {
-  border-color: rgb(5 150 105);
-  background: rgb(5 150 105);
-  color: white;
-}
-
-.dark .room-account-count-button,
-.dark .room-account-count-pill {
-  border-color: rgb(6 95 70);
-  background: rgb(6 78 59 / 0.3);
-  color: rgb(110 231 183);
-}
-
-.dark .room-account-count-button:hover {
-  border-color: rgb(16 185 129);
-  background: rgb(5 150 105);
-  color: white;
-}
-
 .listing-owner {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
   color: rgb(107 114 128);
   font-size: 0.78125rem;
   font-weight: 600;
@@ -14051,17 +14695,15 @@ onBeforeUnmount(() => {
 }
 
 .owner-inline-button {
-  margin-left: 0.375rem;
   display: inline-flex;
-  min-width: 2.75rem;
-  min-height: 2.75rem;
+  min-height: 2rem;
   align-items: center;
   justify-content: center;
   gap: 0.25rem;
-  border-radius: 0.375rem;
+  border-radius: 9999px;
   border: 1px solid rgb(191 219 254);
   background: rgb(239 246 255);
-  padding: 0.125rem 0.375rem;
+  padding: 0.25rem 0.5625rem;
   color: rgb(30 64 175);
   font-size: 0.71875rem;
   font-weight: 800;
@@ -14128,29 +14770,20 @@ onBeforeUnmount(() => {
 }
 
 .listing-member-limit {
-  display: flex;
   min-width: 0;
-  flex: 1 1 100%;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.25rem;
-}
-
-.listing-member-limit small {
-  max-width: 44rem;
-  color: rgb(107 114 128);
-  font-size: 0.6875rem;
-  line-height: 1rem;
+  flex: 0 0 auto;
 }
 
 @media (min-width: 768px) {
   .listing-card {
     padding: 0.75rem 0.8125rem 0.8125rem;
   }
+}
 
-  .listing-card-head {
+@container account-listing-card (min-width: 38rem) {
+  .listing-card-main-row {
     flex-direction: row;
-    align-items: flex-start;
+    align-items: center;
     justify-content: space-between;
   }
 
@@ -14163,12 +14796,6 @@ onBeforeUnmount(() => {
 
   .listing-card-state {
     justify-content: flex-end;
-  }
-
-  .listing-member-limit {
-    flex: 0 1 34rem;
-    align-items: flex-end;
-    text-align: right;
   }
 }
 
@@ -14183,6 +14810,11 @@ onBeforeUnmount(() => {
 .dark .listing-card:hover {
   border-color: rgb(14 165 233 / 0.5);
   box-shadow: 0 20px 42px rgb(0 0 0 / 0.32);
+}
+
+.dark .listing-card-head {
+  border-color: rgb(63 63 70);
+  background: linear-gradient(135deg, rgb(39 39 42 / 0.72), rgb(24 24 27 / 0.9));
 }
 
 .dark .listing-title {
@@ -14222,10 +14854,6 @@ onBeforeUnmount(() => {
 .dark .listing-seat-pill {
   background: rgb(59 130 246 / 0.12);
   color: rgb(191 219 254);
-}
-
-.dark .listing-member-limit small {
-  color: rgb(161 161 170);
 }
 
 .account-level-badge {
@@ -14324,8 +14952,7 @@ onBeforeUnmount(() => {
   align-items: stretch;
 }
 
-.listing-status-stack,
-.listing-usage-grid {
+.listing-status-stack {
   display: contents;
 }
 
@@ -14348,6 +14975,33 @@ onBeforeUnmount(() => {
 
 .listing-runtime-tile > svg {
   color: rgb(107 114 128);
+}
+
+.listing-runtime-summary {
+  align-items: center;
+}
+
+.listing-runtime-summary-content {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  color: rgb(75 85 99);
+  font-size: 0.75rem;
+  line-height: 1rem;
+}
+
+.listing-runtime-summary-content > strong {
+  color: rgb(17 24 39);
+  font-size: 0.8125rem;
+  font-weight: 800;
+}
+
+.listing-runtime-summary-divider {
+  width: 1px;
+  height: 0.875rem;
+  background: rgb(209 213 219);
 }
 
 .listing-runtime-label {
@@ -14414,41 +15068,65 @@ onBeforeUnmount(() => {
   color: rgb(75 85 99);
 }
 
-.usage-window-row {
+.listing-combined-availability {
+  display: contents;
+}
+
+.availability-progress-row {
   display: grid;
   min-width: 0;
-  gap: 0.1875rem;
+  grid-template-columns: auto minmax(2.5rem, 1fr) auto;
+  align-items: center;
+  gap: 0.4375rem;
   border-radius: 0.5rem;
   background: white;
   padding: 0.5rem;
 }
 
-.usage-window-title {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 0.375rem;
-  font-size: 0.6875rem;
+.combined-availability-head {
+  display: contents;
+  font-size: 0.75rem;
   color: rgb(75 85 99);
 }
 
-.usage-window-title span {
-  min-width: 0;
-  line-height: 1rem;
-  overflow-wrap: anywhere;
+.combined-availability-head span {
+  grid-column: 1;
+  white-space: nowrap;
 }
 
-.usage-window-title strong {
-  margin-left: auto;
+.combined-availability-head strong {
+  grid-column: 3;
   color: rgb(17 24 39);
+  font-size: 0.875rem;
   font-weight: 800;
-  line-height: 0.9375rem;
-  text-align: right;
 }
 
-.usage-empty {
-  font-size: 0.75rem;
-  color: rgb(156 163 175);
+.combined-availability-track {
+  grid-column: 2;
+  grid-row: 1;
+  height: 0.4375rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgb(229 231 235);
+}
+
+.combined-availability-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  transition: width 300ms ease;
+}
+
+.combined-availability-fill-normal {
+  background: rgb(16 185 129);
+}
+
+.combined-availability-fill-warning {
+  background: rgb(245 158 11);
+}
+
+.combined-availability-fill-danger {
+  background: rgb(239 68 68);
 }
 
 .capacity-panel {
@@ -14511,20 +15189,6 @@ onBeforeUnmount(() => {
   text-align: right;
 }
 
-.listing-health-foot {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem 0.75rem;
-  border-top: 1px solid rgb(226 232 240);
-  padding-top: 0.25rem;
-  font-size: 0.65625rem;
-  color: rgb(107 114 128);
-}
-
-.listing-health-foot-empty {
-  display: none;
-}
-
 .dark .account-level-plus {
   border-color: rgb(129 140 248 / 0.35);
   background: rgb(49 46 129 / 0.4);
@@ -14571,19 +15235,21 @@ onBeforeUnmount(() => {
 }
 
 .dark .listing-runtime-label,
-.dark .listing-runtime-tile p,
-.dark .usage-window-title,
-.dark .listing-health-foot {
+.dark .listing-runtime-tile p {
   color: rgb(161 161 170);
 }
 
-.dark .listing-health-foot {
-  border-color: rgb(63 63 70);
+.dark .listing-runtime-tile,
+.dark .availability-progress-row {
+  background: rgb(39 39 42 / 0.45);
 }
 
-.dark .listing-runtime-tile,
-.dark .usage-window-row {
-  background: rgb(39 39 42 / 0.45);
+.dark .combined-availability-head {
+  color: rgb(161 161 170);
+}
+
+.dark .combined-availability-track {
+  background: rgb(63 63 70);
 }
 
 .dark .capacity-panel {
@@ -14596,7 +15262,7 @@ onBeforeUnmount(() => {
 }
 
 .dark .listing-runtime-value-row strong,
-.dark .usage-window-title strong,
+.dark .combined-availability-head strong,
 .dark .capacity-panel strong {
   color: white;
 }
@@ -15031,6 +15697,43 @@ onBeforeUnmount(() => {
 
 .listing-action-row .btn-primary {
   min-width: 6rem;
+}
+
+.listing-management-actions {
+  margin-top: 0.75rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.5rem;
+}
+
+.listing-management-action {
+  display: inline-flex;
+  min-height: 2.5rem;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4375rem;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1rem;
+  white-space: nowrap;
+}
+
+.listing-management-action svg {
+  flex: 0 0 auto;
+}
+
+@container account-listing-card (min-width: 28rem) {
+  .listing-management-actions {
+    display: flex;
+    flex-wrap: wrap;
+  }
+
+  .listing-management-action {
+    width: auto;
+  }
 }
 
 .listing-timeout-row {
@@ -16388,9 +17091,7 @@ onBeforeUnmount(() => {
 }
 
 .key-resolution-counts {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.5rem;
+  min-width: 0;
 }
 
 .key-resolution-counts > div {

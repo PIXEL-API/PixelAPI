@@ -12,13 +12,17 @@ const { attachRoomAccounts, detachRoomAccounts, listAccounts, listRoomAccounts }
   listRoomAccounts: vi.fn(),
 }))
 
-vi.mock('@/api/accountShare', () => ({
-  accountShareAPI: {
-    listRoomAccounts,
-    attachRoomAccounts,
-    detachRoomAccounts,
-  },
-}))
+vi.mock('@/api/accountShare', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/accountShare')>()
+  return {
+    ...actual,
+    accountShareAPI: {
+      listRoomAccounts,
+      attachRoomAccounts,
+      detachRoomAccounts,
+    },
+  }
+})
 
 vi.mock('@/api/accounts', () => ({
   accountsAPI: {
@@ -215,6 +219,23 @@ describe('RoomAccountsDialog', () => {
     expect(wrapper.text()).toContain('accountShare.roomAccounts.unavailable')
   })
 
+  it('does not count draining, zero-concurrency, or inactive-placement members as healthy', async () => {
+    listRoomAccounts.mockResolvedValueOnce([
+      roomAccount(11, '可调度账号'),
+      roomAccount(12, '排空账号', { status: 'draining' }),
+      roomAccount(13, '零并发账号', { current_concurrency: 0 }),
+      roomAccount(14, '迁移中账号', { placement_state: 'moving' }),
+    ])
+
+    const wrapper = mountDialog()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('1/4')
+    expect(wrapper.text().match(/accountShare\.roomAccounts\.healthy/g)).toHaveLength(1)
+    expect(wrapper.text().match(/accountShare\.roomAccounts\.unavailable/g)).toHaveLength(3)
+    wrapper.unmount()
+  })
+
   it('shows the API error without inventing fallback member data', async () => {
     listRoomAccounts.mockRejectedValueOnce(new Error('成员加载失败'))
 
@@ -273,8 +294,20 @@ describe('RoomAccountsDialog', () => {
     await flushPromises()
     await wrapper.get('[data-testid="room-accounts-add-tab"]').trigger('click')
 
-    expect(listAccounts).toHaveBeenNthCalledWith(1, 1, 100, { platform: 'openai' })
-    expect(listAccounts).toHaveBeenNthCalledWith(2, 2, 100, { platform: 'openai' })
+    expect(listAccounts).toHaveBeenNthCalledWith(
+      1,
+      1,
+      100,
+      { platform: 'openai' },
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
+    expect(listAccounts).toHaveBeenNthCalledWith(
+      2,
+      2,
+      100,
+      { platform: 'openai' },
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
     expect(wrapper.text()).toContain('兼容平台模式账号')
     expect(wrapper.text()).toContain('等级不符')
     expect(wrapper.text()).toContain('未知等级')
@@ -287,6 +320,31 @@ describe('RoomAccountsDialog', () => {
     expect(candidateCheckboxes.filter(
       (checkbox) => !(checkbox.element as HTMLInputElement).disabled
     )).toHaveLength(1)
+  })
+
+  it('loads candidate pages with bounded request concurrency', async () => {
+    let activeRequests = 0
+    let maximumActiveRequests = 0
+    listRoomAccounts.mockResolvedValue([])
+    listAccounts.mockImplementation((page: number) => {
+      if (page === 1) {
+        return Promise.resolve(paginatedAccounts([], 1, 4))
+      }
+      activeRequests += 1
+      maximumActiveRequests = Math.max(maximumActiveRequests, activeRequests)
+      return Promise.resolve(paginatedAccounts([
+        account(100 + page, `第 ${page} 页账号`),
+      ], page, 4)).finally(() => {
+        activeRequests -= 1
+      })
+    })
+
+    const wrapper = mountDialog()
+    await flushPromises()
+
+    expect(listAccounts).toHaveBeenCalledTimes(4)
+    expect(maximumActiveRequests).toBeLessThanOrEqual(3)
+    wrapper.unmount()
   })
 
   it('opens the concentrated account creator and refreshes both room views after completion', async () => {
@@ -349,6 +407,25 @@ describe('RoomAccountsDialog', () => {
     ]])
     expect(wrapper.get('[data-testid="room-accounts-operation-summary"]').text())
       .toContain('accountShare.roomAccounts.addSuccess')
+  })
+
+  it('revalidates selected candidates immediately before submit and drops newly ineligible accounts', async () => {
+    listRoomAccounts.mockResolvedValueOnce([])
+    listAccounts.mockResolvedValue(paginatedAccounts([account(17, '资格变化账号')]))
+
+    const wrapper = mountDialog()
+    await flushPromises()
+    await wrapper.get('[data-testid="room-accounts-add-tab"]').trigger('click')
+    await wrapper.get('input[type="checkbox"]').setValue(true)
+
+    const setupState = (wrapper.vm as any).$?.setupState
+    setupState.candidates[0].concurrency = 0
+    await wrapper.get('[data-testid="add-selected-room-accounts"]').trigger('click')
+    await flushPromises()
+
+    expect(attachRoomAccounts).not.toHaveBeenCalled()
+    expect(setupState.selectedCandidateIDs.size).toBe(0)
+    wrapper.unmount()
   })
 
   it('reuses the same idempotency key when retrying an uncertain network failure', async () => {

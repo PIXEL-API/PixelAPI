@@ -232,6 +232,30 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 			h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable; no upstream request was sent")
 			return
 		}
+		userAgent := c.GetHeader("User-Agent")
+		clientIP := ip.GetClientIP(c)
+		inboundEndpoint := GetInboundEndpoint(c)
+		upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
+		recordUsage := func(ctx context.Context, result *service.OpenAIForwardResult) error {
+			if result == nil {
+				return nil
+			}
+			return h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
+				Result:             result,
+				APIKey:             currentAPIKey,
+				User:               currentAPIKey.User,
+				Account:            account,
+				Subscription:       currentSubscription,
+				InboundEndpoint:    inboundEndpoint,
+				UpstreamEndpoint:   upstreamEndpoint,
+				UserAgent:          userAgent,
+				IPAddress:          clientIP,
+				RequestPayloadHash: requestPayloadHash,
+				APIKeyService:      h.apiKeyService,
+				ChannelUsageFields: channelMapping.ToUsageFields(requestedModel, result.UpstreamModel),
+			})
+		}
+		forwardCtx = withOpenAIForwardResultBillingGate(forwardCtx, recordUsage)
 		result, forwardErr := func() (*service.OpenAIForwardResult, error) {
 			defer cancelForward()
 			if accountRelease != nil {
@@ -240,30 +264,26 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 			return h.gatewayService.ForwardAlphaSearch(forwardCtx, c, account, forwardBody)
 		}()
 		service.SetOpsLatencyMs(c, service.OpsResponseLatencyMsKey, time.Since(forwardStart).Milliseconds())
-		userAgent := c.GetHeader("User-Agent")
-		clientIP := ip.GetClientIP(c)
-		inboundEndpoint := GetInboundEndpoint(c)
-		upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
 		recordUsageResult := func(result *service.OpenAIForwardResult) {
 			if result == nil {
 				return
 			}
-			h.submitUsageRecordTask(func(ctx context.Context) {
+			if handled, billingErr := service.CommitOpenAIForwardResultBillingGate(forwardCtx, result); handled {
+				if billingErr != nil {
+					logger.L().With(
+						zap.String("component", "handler.openai_gateway.alpha_search"),
+						zap.Int64("user_id", subject.UserID),
+						zap.Int64("api_key_id", currentAPIKey.ID),
+						zap.Any("group_id", currentAPIKey.GroupID),
+						zap.String("model", requestedModel),
+						zap.Int64("account_id", account.ID),
+					).Error("openai_alpha_search.record_usage_failed", zap.Error(billingErr))
+				}
+				return
+			}
+			h.submitUsageRecordTask(forwardCtx, func(ctx context.Context) {
 				usageCtx := service.WithAccountShareModeRequestFromContext(ctx, forwardCtx)
-				if err := h.gatewayService.RecordUsage(usageCtx, &service.OpenAIRecordUsageInput{
-					Result:             result,
-					APIKey:             currentAPIKey,
-					User:               currentAPIKey.User,
-					Account:            account,
-					Subscription:       currentSubscription,
-					InboundEndpoint:    inboundEndpoint,
-					UpstreamEndpoint:   upstreamEndpoint,
-					UserAgent:          userAgent,
-					IPAddress:          clientIP,
-					RequestPayloadHash: requestPayloadHash,
-					APIKeyService:      h.apiKeyService,
-					ChannelUsageFields: channelMapping.ToUsageFields(requestedModel, result.UpstreamModel),
-				}); err != nil {
+				if err := recordUsage(usageCtx, result); err != nil {
 					logger.L().With(
 						zap.String("component", "handler.openai_gateway.alpha_search"),
 						zap.Int64("user_id", subject.UserID),

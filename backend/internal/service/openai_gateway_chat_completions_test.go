@@ -224,6 +224,108 @@ func TestForceChatAnthropicMissingModelUsesAnthropicError(t *testing.T) {
 	require.Equal(t, "invalid_request_error", gjson.Get(recorder.Body.String(), "error.type").String())
 }
 
+func TestOpenAICompatRoutesRejectUnexpectedNon2xxBeforeSuccessHandling(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	responsesBody := strings.Join([]string{
+		`data: {"type":"response.completed","response":{"id":"resp_secret_marker","object":"response","model":"gpt-5.5","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"secret-marker"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		"",
+		"data: [DONE]",
+		"",
+	}, "\n")
+	chatBody := `{"id":"chatcmpl_secret_marker","object":"chat.completion","model":"gpt-5.5","choices":[{"index":0,"message":{"role":"assistant","content":"secret-marker"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`
+
+	tests := []struct {
+		name               string
+		route              string
+		statusCode         int
+		responsesSupported bool
+		requestBody        []byte
+		upstreamBody       string
+	}{
+		{
+			name:               "chat completions responses redirect",
+			route:              "chat",
+			statusCode:         http.StatusFound,
+			responsesSupported: true,
+			requestBody:        []byte(`{"model":"gpt-5.5","stream":false,"messages":[{"role":"user","content":"hello"}]}`),
+			upstreamBody:       responsesBody,
+		},
+		{
+			name:               "anthropic responses not modified",
+			route:              "anthropic",
+			statusCode:         http.StatusNotModified,
+			responsesSupported: true,
+			requestBody:        []byte(`{"model":"gpt-5.5","max_tokens":16,"stream":false,"messages":[{"role":"user","content":"hello"}]}`),
+			upstreamBody:       responsesBody,
+		},
+		{
+			name:               "anthropic raw chat redirect",
+			route:              "anthropic",
+			statusCode:         http.StatusFound,
+			responsesSupported: false,
+			requestBody:        []byte(`{"model":"gpt-5.5","max_tokens":16,"stream":false,"messages":[{"role":"user","content":"hello"}]}`),
+			upstreamBody:       chatBody,
+		},
+		{
+			name:               "chat completions raw continue",
+			route:              "chat",
+			statusCode:         http.StatusContinue,
+			responsesSupported: false,
+			requestBody:        []byte(`{"model":"gpt-5.5","stream":false,"messages":[{"role":"user","content":"hello"}]}`),
+			upstreamBody:       chatBody,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			path := "/v1/messages"
+			if tt.route == "chat" {
+				path = "/v1/chat/completions"
+			}
+			c.Request = httptest.NewRequest(http.MethodPost, path, bytes.NewReader(tt.requestBody))
+
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: tt.statusCode,
+				Header: http.Header{
+					"Content-Type": []string{"application/json"},
+					"Location":     []string{"https://redirect.invalid/private"},
+					"X-Request-Id": []string{"rid-compat-unexpected-status"},
+				},
+				Body: io.NopCloser(strings.NewReader(tt.upstreamBody)),
+			}}
+			service := newForceChatBridgeTestService(upstream)
+			account := newForceChatBridgeTestAccount()
+			account.Extra[openai_compat.ExtraKeyResponsesSupported] = tt.responsesSupported
+
+			gateCalls := 0
+			ctx := WithOpenAIForwardResultBillingGate(context.Background(), NewOpenAIForwardResultBillingGate(func(*OpenAIForwardResult) error {
+				gateCalls++
+				return nil
+			}))
+			var (
+				result *OpenAIForwardResult
+				err    error
+			)
+			if tt.route == "chat" {
+				result, err = service.ForwardAsChatCompletions(ctx, c, account, tt.requestBody, "", "")
+			} else {
+				result, err = service.ForwardAsAnthropic(ctx, c, account, tt.requestBody, "", "")
+			}
+
+			require.Error(t, err)
+			require.Nil(t, result)
+			require.Zero(t, gateCalls)
+			require.Equal(t, http.StatusBadGateway, recorder.Code)
+			require.Equal(t, "Upstream request failed", gjson.Get(recorder.Body.String(), "error.message").String())
+			require.NotContains(t, recorder.Body.String(), "secret-marker")
+			require.NotContains(t, recorder.Header().Get("Location"), "redirect.invalid")
+		})
+	}
+}
+
 func newForceChatBridgeTestService(upstream HTTPUpstream) *OpenAIGatewayService {
 	return &OpenAIGatewayService{
 		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
@@ -479,6 +581,8 @@ func TestForwardAsChatCompletions_APIKeyWithoutResponsesSupportUsesRawChat(t *te
 		"",
 		"data:[DONE]",
 		"",
+		`data: {"id":"chatcmpl_post_done","choices":[{"delta":{"content":"post_done_secret"}}]}`,
+		"",
 	}, "\n")
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
@@ -515,6 +619,7 @@ func TestForwardAsChatCompletions_APIKeyWithoutResponsesSupportUsesRawChat(t *te
 	require.Equal(t, 3, result.Usage.OutputTokens)
 	require.Equal(t, 4, result.Usage.CacheReadInputTokens)
 	require.Equal(t, 5, result.Usage.CacheCreationInputTokens)
+	require.NotContains(t, rec.Body.String(), "post_done_secret")
 }
 
 func TestForwardAsChatCompletions_RawNonStreamingClientCancelStillReturnsUsage(t *testing.T) {

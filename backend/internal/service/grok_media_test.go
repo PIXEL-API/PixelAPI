@@ -3,11 +3,14 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +18,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/model"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestGrokVideoMutationEndpointsAreBillableGenerationRequests(t *testing.T) {
@@ -33,6 +37,209 @@ func TestGrokVideoMutationEndpointsAreBillableGenerationRequests(t *testing.T) {
 	require.True(t, GrokMediaEndpointVideoStatus.IsVideoLookupRequest())
 	require.True(t, GrokMediaEndpointVideoContent.IsVideoLookupRequest())
 	require.False(t, GrokMediaEndpointVideoContent.RequiresRequestBody())
+}
+
+func TestForwardGrokMediaGenerationBillingGateFailureLeavesResponseBodyEmpty(t *testing.T) {
+	requestBody := []byte(`{"model":"grok-imagine-image-quality","prompt":"draw a cat","n":1}`)
+	upstream := &grokMediaContentUpstreamStub{
+		responses: []*http.Response{{
+			StatusCode: http.StatusOK,
+			Header: http.Header{
+				"Content-Type": []string{"application/json"},
+				"X-Request-Id": []string{"grok-generation-request"},
+			},
+			Body: io.NopCloser(bytes.NewReader([]byte(
+				`{"data":[{"url":"https://images.example/secret-image.png"}]}`,
+			))),
+		}},
+	}
+	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	c, recorder := grokMediaContentTestContext(
+		http.MethodPost,
+		"https://api.example/v1/images/generations",
+		map[string]string{"Content-Type": "application/json"},
+	)
+	billingErr := errors.New("billing gate rejected generation")
+	gateCalls := 0
+	ctx := WithOpenAIForwardResultBillingGate(
+		context.Background(),
+		NewOpenAIForwardResultBillingGate(func(result *OpenAIForwardResult) error {
+			gateCalls++
+			require.Equal(t, 1, result.ImageCount)
+			require.Equal(t, "grok-imagine-image-quality", result.BillingModel)
+			return billingErr
+		}),
+	)
+
+	result, err := svc.ForwardGrokMedia(
+		ctx,
+		c,
+		grokMediaContentTestAccount(),
+		GrokMediaEndpointImagesGenerations,
+		"",
+		requestBody,
+		"application/json",
+	)
+
+	require.ErrorIs(t, err, billingErr)
+	require.NotNil(t, result)
+	require.Equal(t, 1, gateCalls)
+	require.Empty(t, recorder.Body.String(), "upstream success body must not be exposed before billing commits")
+	require.Empty(t, recorder.Header().Get("Content-Type"))
+	require.False(t, IsResponseCommitted(c))
+	require.Len(t, upstream.requests, 1)
+	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.requests[0].Context()))
+}
+
+func TestGrokMediaUsageRejectsSuccessfulResponseWithoutTerminalOutput(t *testing.T) {
+	requestInfo := ParseGrokMediaRequest(
+		"application/json",
+		[]byte(`{"model":"grok-imagine-image-quality","n":3,"resolution":"720p","duration":9}`),
+	)
+	tests := []struct {
+		name      string
+		endpoints []GrokMediaEndpoint
+		bodies    [][]byte
+		wantError string
+	}{
+		{
+			name: "images",
+			endpoints: []GrokMediaEndpoint{
+				GrokMediaEndpointImagesGenerations,
+				GrokMediaEndpointImagesEdits,
+			},
+			bodies: [][]byte{
+				nil,
+				[]byte("not-json"),
+				[]byte(`{}`),
+				[]byte(`{"data":[]}`),
+			},
+			wantError: "without image output",
+		},
+		{
+			name: "videos",
+			endpoints: []GrokMediaEndpoint{
+				GrokMediaEndpointVideosGenerations,
+				GrokMediaEndpointVideosEdits,
+				GrokMediaEndpointVideosExtensions,
+			},
+			bodies: [][]byte{
+				nil,
+				[]byte("not-json"),
+				[]byte(`{}`),
+				[]byte(`{"status":"queued"}`),
+			},
+			wantError: "without a video request id",
+		},
+	}
+
+	for _, tt := range tests {
+		for _, endpoint := range tt.endpoints {
+			for bodyIndex, body := range tt.bodies {
+				t.Run(fmt.Sprintf("%s/%s/body_%d", tt.name, endpoint, bodyIndex), func(t *testing.T) {
+					metadata, err := grokMediaUsageFromResponse(endpoint, requestInfo, body)
+
+					require.ErrorContains(t, err, tt.wantError)
+					require.Zero(t, metadata.ImageCount)
+					require.Zero(t, metadata.VideoCount)
+					require.Empty(t, metadata.ResponseID)
+				})
+			}
+		}
+	}
+}
+
+func TestGrokMediaUsageAcceptsRecognizedTerminalOutputs(t *testing.T) {
+	requestInfo := ParseGrokMediaRequest(
+		"application/json",
+		[]byte(`{"model":"grok-imagine-image-quality","n":3,"size":"1024x1024"}`),
+	)
+	imageMetadata, err := grokMediaUsageFromResponse(
+		GrokMediaEndpointImagesGenerations,
+		requestInfo,
+		[]byte(`{"data":[{"url":"https://images.example/one.png"},{"b64_json":"aW1hZ2U="}]}`),
+	)
+	require.NoError(t, err)
+	require.Equal(t, 2, imageMetadata.ImageCount)
+
+	videoMetadata, err := grokMediaUsageFromResponse(
+		GrokMediaEndpointVideosGenerations,
+		requestInfo,
+		[]byte(`{"data":{"request_id":"video_req_123"}}`),
+	)
+	require.NoError(t, err)
+	require.Equal(t, "video_req_123", videoMetadata.ResponseID)
+	require.Equal(t, 1, videoMetadata.VideoCount)
+}
+
+func TestForwardGrokMediaInvalidGenerationSuccessDoesNotBillOrExposeBody(t *testing.T) {
+	tests := []struct {
+		name        string
+		endpoint    GrokMediaEndpoint
+		requestBody []byte
+		response    string
+	}{
+		{
+			name:        "image response has no output despite requested count",
+			endpoint:    GrokMediaEndpointImagesGenerations,
+			requestBody: []byte(`{"model":"grok-imagine-image-quality","prompt":"draw a cat","n":3}`),
+			response:    `{"data":[]}`,
+		},
+		{
+			name:        "video response has no request id",
+			endpoint:    GrokMediaEndpointVideosGenerations,
+			requestBody: []byte(`{"model":"grok-imagine-video-1.5","prompt":"draw a cat","duration":9}`),
+			response:    `{"status":"queued"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upstream := &grokMediaContentUpstreamStub{
+				responses: []*http.Response{{
+					StatusCode: http.StatusOK,
+					Header: http.Header{
+						"Content-Type": []string{"application/json"},
+						"X-Request-Id": []string{"invalid-generation-success"},
+					},
+					Body: io.NopCloser(strings.NewReader(tt.response)),
+				}},
+			}
+			svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+			c, recorder := grokMediaContentTestContext(
+				http.MethodPost,
+				"https://api.example/v1/media/generations",
+				map[string]string{"Content-Type": "application/json"},
+			)
+			gateCalls := 0
+			ctx := WithOpenAIForwardResultBillingGate(
+				context.Background(),
+				NewOpenAIForwardResultBillingGate(func(*OpenAIForwardResult) error {
+					gateCalls++
+					return nil
+				}),
+			)
+
+			result, err := svc.ForwardGrokMedia(
+				ctx,
+				c,
+				grokMediaContentTestAccount(),
+				tt.endpoint,
+				"",
+				tt.requestBody,
+				"application/json",
+			)
+
+			require.Error(t, err)
+			require.Nil(t, result)
+			require.Zero(t, gateCalls)
+			require.Equal(t, http.StatusBadGateway, recorder.Code)
+			require.Equal(t, "Upstream request failed", gjson.GetBytes(recorder.Body.Bytes(), "error.message").String())
+			require.NotContains(t, recorder.Body.String(), tt.response)
+			require.Len(t, upstream.requests, 1)
+			require.True(t, HTTPUpstreamRedirectsDisabled(upstream.requests[0].Context()))
+		})
+	}
 }
 
 func TestGrokMediaVideoRequestSessionHashIsOwnerScoped(t *testing.T) {
@@ -269,8 +476,9 @@ func TestGrokVideoMutationUsageIncludesPerSecondBillingMetadata(t *testing.T) {
 		GrokMediaEndpointVideosEdits,
 		GrokMediaEndpointVideosExtensions,
 	} {
-		metadata := grokMediaUsageFromResponse(endpoint, requestInfo, []byte(`{"data":{"request_id":"video_req_123"}}`))
+		metadata, err := grokMediaUsageFromResponse(endpoint, requestInfo, []byte(`{"data":{"request_id":"video_req_123"}}`))
 
+		require.NoError(t, err)
 		require.Equal(t, "video_req_123", metadata.ResponseID, endpoint)
 		require.Equal(t, 1, metadata.VideoCount, endpoint)
 		require.Equal(t, VideoBillingResolution720P, metadata.VideoResolution, endpoint)

@@ -19,6 +19,8 @@ const {
   listMembershipHistory,
   getMySpendSummary,
   listMembershipQueue,
+  getAPIKeyBindingStatus,
+  getListing,
   listModeGroups,
   getCapabilities,
   getRoomManagementState,
@@ -41,6 +43,9 @@ const {
   submitReview,
   listProxies,
   createRoom,
+  recommendListings,
+  getRecommendationUsageProfile,
+  listOwnerReviews,
   listAccounts,
   listKeys,
   fetchPublicSettings,
@@ -48,11 +53,14 @@ const {
   showSuccess,
   showWarning,
   authState,
+  routeQuery,
 } = vi.hoisted(() => ({
   listListings: vi.fn(),
   listMembershipHistory: vi.fn(),
   getMySpendSummary: vi.fn(),
   listMembershipQueue: vi.fn(),
+  getAPIKeyBindingStatus: vi.fn(),
+  getListing: vi.fn(),
   listModeGroups: vi.fn(),
   getCapabilities: vi.fn(),
   getRoomManagementState: vi.fn(),
@@ -75,6 +83,9 @@ const {
   submitReview: vi.fn(),
   listProxies: vi.fn(),
   createRoom: vi.fn(),
+  recommendListings: vi.fn(),
+  getRecommendationUsageProfile: vi.fn(),
+  listOwnerReviews: vi.fn(),
   listAccounts: vi.fn(),
   listKeys: vi.fn(),
   fetchPublicSettings: vi.fn(),
@@ -87,38 +98,48 @@ const {
     isAdmin: false,
     user: { id: 9, balance: 100 },
   },
+  routeQuery: {} as Record<string, string>,
 }))
 
-vi.mock('@/api/accountShare', () => ({
-  accountShareAPI: {
-    listListings,
-    listMembershipHistory,
-    getMySpendSummary,
-    listMembershipQueue,
-    listModeGroups,
-    getCapabilities,
-    getRoomManagementState,
-    drainRoom,
-    activateRoom,
-    suspendRoom,
-    createRoomDeleteIntent,
-    deleteRoom,
-    getRoomOperation,
-    createEndMembershipIntent,
-    endMembership,
-    updateMembershipIdleTimeout,
-    createJoinIntent,
-    joinListing,
-    updateListing,
-    beginListingEdit,
-    releaseListingEdit,
-    exchangeOpenAICode,
-    exchangeAnthropicCode,
-    submitReview,
-    listProxies,
-    createRoom,
-  },
-}))
+vi.mock('@/api/accountShare', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/accountShare')>()
+  return {
+    ...actual,
+    accountShareAPI: {
+      listListings,
+      listMembershipHistory,
+      getMySpendSummary,
+      listMembershipQueue,
+      getAPIKeyBindingStatus,
+      getListing,
+      listModeGroups,
+      getCapabilities,
+      getRoomManagementState,
+      drainRoom,
+      activateRoom,
+      suspendRoom,
+      createRoomDeleteIntent,
+      deleteRoom,
+      getRoomOperation,
+      createEndMembershipIntent,
+      endMembership,
+      updateMembershipIdleTimeout,
+      createJoinIntent,
+      joinListing,
+      updateListing,
+      beginListingEdit,
+      releaseListingEdit,
+      exchangeOpenAICode,
+      exchangeAnthropicCode,
+      submitReview,
+      listProxies,
+      createRoom,
+      recommendListings,
+      getRecommendationUsageProfile,
+      listOwnerReviews,
+    },
+  }
+})
 
 vi.mock('@/api', () => ({
   accountsAPI: {
@@ -152,7 +173,7 @@ vi.mock('@/stores/auth', () => ({
 }))
 
 vi.mock('vue-router', () => ({
-  useRoute: () => ({ query: {} }),
+  useRoute: () => ({ query: routeQuery }),
   useRouter: () => ({ push: vi.fn() }),
 }))
 
@@ -178,6 +199,7 @@ function listing(overrides: Partial<AccountShareListing> = {}): AccountShareList
     platform: 'openai',
     owner_user_id: 700,
     owner_username: 'owner',
+    room_name: '异步快照账号',
     account_name: '异步快照账号',
     status: 'active',
     seat_limit: 3,
@@ -446,8 +468,9 @@ function paginated(items: unknown[], page = 1, pages = 1, total = items.length, 
   }
 }
 
-function mountView(options: { renderDialogs?: boolean } = {}) {
+function mountView(options: { renderDialogs?: boolean; attachTo?: HTMLElement } = {}) {
   return mount(AccountShareView, {
+    ...(options.attachTo ? { attachTo: options.attachTo } : {}),
     global: {
       stubs: {
         AppLayout: AppLayoutStub,
@@ -457,6 +480,7 @@ function mountView(options: { renderDialogs?: boolean } = {}) {
         AccountStatsModal: true,
         AccountTestModal: true,
         ModelWhitelistSelector: true,
+        Select: true,
         OAuthAuthorizationFlow: {
           name: 'OAuthAuthorizationFlow',
           data: () => ({ authCode: '', oauthState: '' }),
@@ -504,6 +528,8 @@ describe('AccountShareView async snapshots and mode keys', () => {
     listMembershipHistory.mockReset()
     getMySpendSummary.mockReset()
     listMembershipQueue.mockReset()
+    getAPIKeyBindingStatus.mockReset()
+    getListing.mockReset()
     listModeGroups.mockReset()
     getCapabilities.mockReset()
     getRoomManagementState.mockReset()
@@ -526,6 +552,9 @@ describe('AccountShareView async snapshots and mode keys', () => {
     submitReview.mockReset()
     listProxies.mockReset()
     createRoom.mockReset()
+    recommendListings.mockReset()
+    getRecommendationUsageProfile.mockReset()
+    listOwnerReviews.mockReset()
     listAccounts.mockReset()
     listKeys.mockReset()
     fetchPublicSettings.mockReset()
@@ -533,6 +562,7 @@ describe('AccountShareView async snapshots and mode keys', () => {
     showWarning.mockReset()
     authState.isAdmin = false
     authState.user = { id: 9, balance: 100 }
+    Object.keys(routeQuery).forEach(key => delete routeQuery[key])
     publicSettings.user_private_group_commission_rate = 0.0075
 
     listListings.mockResolvedValue(paginated([]))
@@ -590,6 +620,7 @@ describe('AccountShareView async snapshots and mode keys', () => {
       capability_blockers: [],
     })
     listProxies.mockResolvedValue([])
+    listOwnerReviews.mockResolvedValue(paginated([]))
     listAccounts.mockResolvedValue(paginated([]))
     createRoom.mockResolvedValue(listing({ owner_user_id: 9, room_name: '新房间' }))
     getRoomManagementState.mockResolvedValue(roomManagementState())
@@ -628,6 +659,7 @@ describe('AccountShareView async snapshots and mode keys', () => {
     getRoomOperation.mockResolvedValue(roomOperation())
     createEndMembershipIntent.mockResolvedValue({
       membership_id: 801,
+      operation_id: 'operation-end-801',
       token: 'signed-end-intent',
       expires_at: '2099-07-11T01:02:00Z',
     })
@@ -668,8 +700,473 @@ describe('AccountShareView async snapshots and mode keys', () => {
     exchangeAnthropicCode.mockResolvedValue({})
     submitReview.mockResolvedValue(undefined)
     listMembershipQueue.mockResolvedValue([])
+    getAPIKeyBindingStatus.mockResolvedValue({
+      api_key_id: 1001,
+      active_count: 0,
+      queued_count: 0,
+      ending_count: 0,
+      blocking_count: 0,
+      memberships: [],
+    })
+    getListing.mockImplementation((id: number) => Promise.resolve(listing({ id })))
     listKeys.mockResolvedValue(paginated([]))
     fetchPublicSettings.mockResolvedValue(publicSettings)
+  })
+
+  it('keeps key resolution blocked and renders the ending membership from unified status', async () => {
+    routeQuery.mode = 'resolve-key-binding'
+    routeQuery.api_key_id = '1001'
+    routeQuery.api_key_name = '结算中的 Key'
+    getAPIKeyBindingStatus.mockResolvedValue({
+      api_key_id: 1001,
+      active_count: 0,
+      queued_count: 0,
+      ending_count: 1,
+      blocking_count: 1,
+      memberships: [membership({
+        listing_id: 501,
+        api_key_id: 1001,
+        status: 'ending',
+        ending_operation_id: undefined,
+        ending_operation_status: 'needs_attention',
+        settlement_status: 'pending',
+      })],
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+    const setupState = (wrapper.vm as any).$?.setupState
+
+    expect(getAPIKeyBindingStatus).toHaveBeenCalledWith(1001)
+    expect(setupState.keyResolutionAllClear).toBe(false)
+    expect(wrapper.text()).not.toContain('关联已全部解除')
+    expect(wrapper.text()).toContain('退出/结算中')
+    expect(wrapper.get('[data-testid="membership-ending-state"]').text()).toContain('结算待处理')
+    wrapper.unmount()
+  })
+
+  it('keeps polling unified status for an ending membership without an operation id and stops after unmount', async () => {
+    vi.useFakeTimers()
+    routeQuery.mode = 'resolve-key-binding'
+    routeQuery.api_key_id = '1001'
+    const endingStatus = {
+      api_key_id: 1001,
+      active_count: 0,
+      queued_count: 0,
+      ending_count: 1,
+      blocking_count: 1,
+      memberships: [membership({
+        listing_id: 501,
+        api_key_id: 1001,
+        status: 'ending' as const,
+        ending_operation_id: undefined,
+        ending_operation_status: undefined,
+        settlement_status: 'pending',
+      })],
+    }
+    getAPIKeyBindingStatus.mockResolvedValue(endingStatus)
+    const wrapper = mountView()
+    try {
+      await flushPromises()
+      const initialCalls = getAPIKeyBindingStatus.mock.calls.length
+
+      await vi.advanceTimersByTimeAsync(8_000)
+      await flushPromises()
+
+      expect(getAPIKeyBindingStatus.mock.calls.length).toBeGreaterThan(initialCalls)
+      wrapper.unmount()
+      const callsAfterUnmount = getAPIKeyBindingStatus.mock.calls.length
+
+      await vi.advanceTimersByTimeAsync(8_000)
+      await flushPromises()
+      expect(getAPIKeyBindingStatus).toHaveBeenCalledTimes(callsAfterUnmount)
+    } finally {
+      if (wrapper.exists()) wrapper.unmount()
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  it('only blocks duplicate room names owned by the same user', async () => {
+    const otherOwnerRoom = listing({
+      id: 601,
+      owner_user_id: 700,
+      room_name: '共享名称',
+    })
+    const ownRoom = listing({
+      id: 602,
+      owner_user_id: 9,
+      room_name: '我的重名房间',
+    })
+    listListings.mockResolvedValue(paginated([otherOwnerRoom, ownRoom]))
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const setupState = (wrapper.vm as any).$?.setupState
+    expect(setupState.validateAccountName('共享名称', undefined, 9)).toBe('')
+    expect(setupState.validateAccountName('我的重名房间', undefined, 9)).toBe('房间名称已存在，请换一个名称')
+    wrapper.unmount()
+  })
+
+  it('discards an older recommendation when its request inputs change', async () => {
+    let resolveRecommendation!: (value: unknown) => void
+    recommendListings.mockReturnValueOnce(new Promise(resolve => {
+      resolveRecommendation = resolve
+    }))
+    listKeys.mockImplementation((_page: number, _pageSize: number, filters: { group_id: number }) => (
+      Promise.resolve(paginated(
+        filters.group_id === 101
+          ? [apiKey(1001, 101, 'Key A'), apiKey(1002, 101, 'Key B')]
+          : []
+      ))
+    ))
+
+    const wrapper = mountView()
+    await flushPromises()
+    const setupState = (wrapper.vm as any).$?.setupState
+    setupState.openRecommendationDialog()
+    setupState.recommendationForm.api_key_id = 1001
+    const pending = setupState.runRecommendation()
+    await nextTick()
+    setupState.recommendationForm.api_key_id = 1002
+    await nextTick()
+
+    resolveRecommendation({
+      input: {
+        platform: 'openai',
+        model: 'gpt-5.5',
+        api_key_id: 1001,
+        request_count: 1,
+        active_hours: 1,
+        input_tokens: 1,
+        output_tokens: 1,
+        cache_creation_tokens: 0,
+        cache_read_tokens: 0,
+        image_input_tokens: 0,
+        image_cache_read_tokens: 0,
+        image_output_tokens: 0,
+        limit: 10,
+      },
+      candidate_count: 0,
+      items: [],
+    })
+    await pending
+    await flushPromises()
+
+    expect(setupState.recommendationResult).toBeNull()
+    expect(setupState.recommendationLoading).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('keeps the three-day usage profile scoped to user and platform and ignores a stale dialog response', async () => {
+    let resolveProfile!: (value: unknown) => void
+    getRecommendationUsageProfile.mockReturnValueOnce(new Promise(resolve => {
+      resolveProfile = resolve
+    }))
+
+    const wrapper = mountView()
+    await flushPromises()
+    const setupState = (wrapper.vm as any).$?.setupState
+    setupState.openRecommendationDialog()
+    const originalRequestCount = setupState.recommendationForm.request_count
+    const pending = setupState.applyRecentUsageProfile()
+    await nextTick()
+    setupState.closeRecommendationDialog()
+
+    resolveProfile({
+      platform: 'openai',
+      model: 'gpt-5.5',
+      days: 3,
+      start_time: '2026-07-01T00:00:00Z',
+      end_time: '2026-07-04T00:00:00Z',
+      has_history: true,
+      model_matched: true,
+      used_model_fallback: false,
+      capped: false,
+      total_requests: 30,
+      active_hour_buckets: 3,
+      request_count: 10,
+      active_hours: 1,
+      input_tokens_per_request: 100,
+      output_tokens_per_request: 50,
+      cache_creation_tokens_per_request: 0,
+      cache_read_tokens_per_request: 0,
+      image_output_tokens_per_request: 0,
+    })
+    await pending
+    await flushPromises()
+
+    expect(getRecommendationUsageProfile).toHaveBeenCalledWith(
+      {
+        platform: 'openai',
+        model: 'gpt-5.5',
+        days: 3,
+      },
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
+    expect(setupState.recommendationForm.request_count).toBe(originalRequestCount)
+    expect(setupState.recommendationUsageProfileMessage).toBe('')
+    expect(setupState.recommendationUsageProfileLoading).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('does not allow a late owner response to replace the currently open owner', async () => {
+    let resolveOwnerA!: (value: unknown) => void
+    let resolveOwnerB!: (value: unknown) => void
+    listListings.mockImplementation((_page: number, pageSize: number, filters?: { owner_user_id?: number }) => {
+      if (filters?.owner_user_id === 700) {
+        return new Promise(resolve => { resolveOwnerA = resolve })
+      }
+      if (filters?.owner_user_id === 701) {
+        return new Promise(resolve => { resolveOwnerB = resolve })
+      }
+      return Promise.resolve(paginated([], 1, 1, 0, pageSize))
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+    const setupState = (wrapper.vm as any).$?.setupState
+    const openingA = setupState.openOwnerDialog(listing({ owner_user_id: 700, owner_username: 'owner-a' }))
+    await nextTick()
+    const openingB = setupState.openOwnerDialog(listing({ owner_user_id: 701, owner_username: 'owner-b' }))
+    await nextTick()
+
+    resolveOwnerB(paginated([listing({ id: 702, owner_user_id: 701, room_name: 'B 的房间' })]))
+    await openingB
+    resolveOwnerA(paginated([listing({ id: 703, owner_user_id: 700, room_name: 'A 的房间' })]))
+    await openingA
+    await flushPromises()
+
+    expect(setupState.ownerDialog.ownerUserID).toBe(701)
+    expect(setupState.ownerDialog.listings.map((item: AccountShareListing) => item.room_name)).toEqual(['B 的房间'])
+    wrapper.unmount()
+  })
+
+  it('shows owner result totals and loads the remaining owner rooms on demand', async () => {
+    listListings.mockImplementation((page: number, pageSize: number, filters?: { owner_user_id?: number }) => {
+      if (!filters?.owner_user_id) return Promise.resolve(paginated([], 1, 1, 0, pageSize))
+      if (page === 1) {
+        return Promise.resolve(paginated(
+          [listing({ id: 711, owner_user_id: 700, room_name: '第一页房间' })],
+          1,
+          2,
+          2,
+          pageSize
+        ))
+      }
+      return Promise.resolve(paginated(
+        [listing({ id: 712, owner_user_id: 700, room_name: '第二页房间' })],
+        2,
+        2,
+        2,
+        pageSize
+      ))
+    })
+
+    const wrapper = mountView({ renderDialogs: true })
+    await flushPromises()
+    const setupState = (wrapper.vm as any).$?.setupState
+    await setupState.openOwnerDialog(listing({ owner_user_id: 700, owner_username: 'owner' }))
+    await nextTick()
+
+    expect(wrapper.text()).toContain('已显示 1/2')
+    const loadMore = wrapper.findAll('button').find(button => button.text().includes('继续加载账号'))
+    expect(loadMore).toBeDefined()
+    await loadMore?.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('第一页房间')
+    expect(wrapper.text()).toContain('第二页房间')
+    expect(wrapper.text()).toContain('已显示 2/2')
+    wrapper.unmount()
+  })
+
+  it('keeps owner rooms usable when reviews fail, searches by exact owner id, and anonymizes public reviews', async () => {
+    const ownerRoom = listing({
+      id: 721,
+      owner_user_id: 700,
+      owner_username: '目标号主',
+      room_name: '目标号主房间',
+    })
+    listListings.mockImplementation((_page: number, pageSize: number, filters?: { owner_user_id?: number }) => {
+      if (filters?.owner_user_id === 700) {
+        return Promise.resolve(paginated([ownerRoom], 1, 1, 1, pageSize))
+      }
+      return Promise.resolve(paginated([], 1, 1, 0, pageSize))
+    })
+    listOwnerReviews
+      .mockRejectedValueOnce(new Error('评论服务不可用'))
+      .mockResolvedValueOnce(paginated([{
+        id: 81,
+        owner_user_id: 700,
+        consumer_user_id: 912,
+        consumer_username: '不应公开的消费者',
+        account_identity_id: 991,
+        account_id: 992,
+        account_name: '不应公开的账号',
+        platform: 'openai',
+        score: 9,
+        comment: '公开评论正文',
+        comment_status: 'approved',
+        created_at: '2026-07-11T01:00:00Z',
+        updated_at: '2026-07-11T01:00:00Z',
+      }]))
+
+    const wrapper = mountView({ renderDialogs: true })
+    await flushPromises()
+    const setupState = (wrapper.vm as any).$?.setupState
+    await setupState.openOwnerDialog(ownerRoom)
+    await flushPromises()
+
+    expect(setupState.ownerDialog.listings.map((item: AccountShareListing) => item.id)).toEqual([721])
+    expect(setupState.ownerDialog.listingsError).toBe('')
+    expect(setupState.ownerDialog.reviewsError).toBe('评论服务不可用')
+
+    await setupState.loadOwnerReviews()
+    setupState.ownerDialog.tab = 'reviews'
+    await nextTick()
+    expect(wrapper.text()).toContain('公开评论正文')
+    expect(wrapper.text()).toContain('来自 匿名用户')
+    expect(wrapper.text()).not.toContain('不应公开的消费者')
+    expect(wrapper.text()).not.toContain('不应公开的账号')
+
+    const listingCallsBeforeSearch = listListings.mock.calls.length
+    setupState.searchQuery = '会造成模糊匹配的旧关键词'
+    setupState.searchOwnerFromDialog()
+    await flushPromises()
+
+    const exactOwnerCall = listListings.mock.calls.slice(listingCallsBeforeSearch).find(call =>
+      call[2]?.owner_user_id === 700
+    )
+    expect(exactOwnerCall?.[2]).toMatchObject({ owner_user_id: 700 })
+    expect(exactOwnerCall?.[2]).not.toHaveProperty('search')
+    expect(setupState.searchQuery).toBe('')
+    wrapper.unmount()
+  })
+
+  it('uses disclosure semantics for advanced filters instead of an incomplete menu pattern', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const statusTrigger = wrapper.get('button[aria-controls="account-share-status-filter"]')
+    expect(statusTrigger.attributes('aria-haspopup')).toBeUndefined()
+    await statusTrigger.trigger('click')
+    expect(wrapper.find('[role="menu"]').exists()).toBe(false)
+    expect(wrapper.get('#account-share-status-filter').attributes('role')).toBe('group')
+    expect(wrapper.get('#account-share-status-filter button').attributes('aria-pressed')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('restores keyboard focus to the filter trigger after Escape closes its disclosure', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const wrapper = mountView({ attachTo: host })
+    try {
+      await flushPromises()
+      const statusTrigger = wrapper.get('button[aria-controls="account-share-status-filter"]')
+      await statusTrigger.trigger('click')
+      const popover = wrapper.get('#account-share-status-filter')
+      ;(popover.element as HTMLElement).focus()
+      await popover.trigger('keydown', { key: 'Escape' })
+      await nextTick()
+
+      expect(wrapper.find('#account-share-status-filter').exists()).toBe(false)
+      expect(document.activeElement).toBe(statusTrigger.element)
+    } finally {
+      wrapper.unmount()
+      host.remove()
+    }
+  })
+
+  it('fills authoritative image usage while preserving manually split cache fields', async () => {
+    listKeys.mockImplementation((_page: number, _pageSize: number, filters: { group_id: number }) =>
+      Promise.resolve(paginated(
+        filters.group_id === 101 ? [apiKey(1001, 101, '推荐 Key')] : []
+      ))
+    )
+    getRecommendationUsageProfile.mockResolvedValue({
+      platform: 'openai',
+      model: 'gpt-5.5',
+      days: 3,
+      start_time: '2026-07-01T00:00:00Z',
+      end_time: '2026-07-04T00:00:00Z',
+      has_history: true,
+      model_matched: true,
+      used_model_fallback: false,
+      capped: false,
+      total_requests: 30,
+      active_hour_buckets: 3,
+      request_count: 10,
+      active_hours: 2,
+      input_tokens_per_request: 100,
+      output_tokens_per_request: 50,
+      cache_creation_tokens_per_request: 20,
+      cache_read_tokens_per_request: 30,
+      image_input_tokens_per_request: 220,
+      image_output_tokens_per_request: 440,
+    })
+    recommendListings.mockResolvedValue({
+      input: {
+        platform: 'openai',
+        model: 'gpt-5.5',
+        api_key_id: 1001,
+        request_count: 10,
+        active_hours: 2,
+        input_tokens: 1000,
+        output_tokens: 500,
+        cache_creation_tokens: 200,
+        cache_read_tokens: 300,
+        image_input_tokens: 2200,
+        image_cache_read_tokens: 330,
+        image_output_tokens: 4400,
+        limit: 10,
+      },
+      candidate_count: 0,
+      items: [],
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+    const setupState = (wrapper.vm as any).$?.setupState
+    setupState.openRecommendationDialog()
+    setupState.recommendationForm.cache_read_tokens_per_request = 44
+    setupState.recommendationForm.image_cache_read_tokens_per_request = 33
+    await setupState.applyRecentUsageProfile()
+    await flushPromises()
+
+    expect(getRecommendationUsageProfile).toHaveBeenCalledWith(
+      { platform: 'openai', model: 'gpt-5.5', days: 3 },
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
+    expect(setupState.recommendationForm).toMatchObject({
+      input_tokens_per_request: 100,
+      output_tokens_per_request: 50,
+      cache_creation_tokens_per_request: 20,
+      cache_read_tokens_per_request: 44,
+      image_input_tokens_per_request: 220,
+      image_output_tokens_per_request: 440,
+      image_cache_read_tokens_per_request: 33,
+    })
+    expect(setupState.recommendationUsageProfileMessage).toContain('历史总Cache读取 30（未自动填入）')
+    expect(setupState.recommendationUsageProfileMessage).toContain('文本/图片Cache读取因无法可靠拆分')
+
+    await setupState.runRecommendation()
+    await flushPromises()
+    expect(recommendListings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        api_key_id: 1001,
+        input_tokens_per_request: 100,
+        output_tokens_per_request: 50,
+        cache_creation_tokens_per_request: 20,
+        cache_read_tokens_per_request: 44,
+        image_input_tokens_per_request: 220,
+        image_output_tokens_per_request: 440,
+        image_cache_read_tokens_per_request: 33,
+      }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
+    wrapper.unmount()
   })
 
   it('renders the main listing before queue snapshots finish and enables reordering only after the snapshot arrives', async () => {
@@ -732,6 +1229,42 @@ describe('AccountShareView async snapshots and mode keys', () => {
     const setupState = (wrapper.vm as any).$?.setupState
     expect(setupState.modeApiKeysByPlatform.openai.map((key: ApiKey) => key.id)).toEqual([1001, 1002])
     wrapper.unmount()
+  })
+
+  it('removes a cached mode API Key when it expires while the page remains open', async () => {
+    vi.useFakeTimers()
+    let wrapper: ReturnType<typeof mountView> | undefined
+    try {
+      const consumerListing = listing({ id: 515, room_name: '等待 Key 过期的房间' })
+      listListings.mockResolvedValue(paginated([consumerListing]))
+      wrapper = mountView()
+      await flushPromises()
+
+      const setupState = (wrapper.vm as any).$?.setupState
+      const expiringKey = apiKey(1001, 101, '即将过期 Key')
+      expiringKey.expires_at = new Date(Date.now() + 5_000).toISOString()
+      setupState.modeGroupIDsByPlatform.openai = 101
+      setupState.modeApiKeysByPlatform.openai = [expiringKey]
+      setupState.modeKeysLoadedByPlatform.openai = true
+      setupState.selectedKeyByListing[consumerListing.id] = expiringKey.id
+      await nextTick()
+
+      expect(setupState.modeApiKeysForListing(consumerListing).map((key: ApiKey) => key.id)).toEqual([1001])
+      expect(wrapper.text()).toContain('即将过期 Key')
+
+      vi.advanceTimersByTime(30_000)
+      await nextTick()
+
+      expect(setupState.modeApiKeysForListing(consumerListing)).toEqual([])
+      expect(setupState.selectedKeyByListing[consumerListing.id]).toBe(0)
+      expect(wrapper.text()).not.toContain('即将过期 Key')
+      await wrapper.findAll('button').find(button => button.text() === '加入使用')?.trigger('click')
+      expect(createJoinIntent).not.toHaveBeenCalled()
+    } finally {
+      wrapper?.unmount()
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
   })
 
   it('renders the membership panel for a current membership without a queue membership', async () => {
@@ -836,6 +1369,43 @@ describe('AccountShareView async snapshots and mode keys', () => {
       accept_queue: false,
     })
     wrapper.unmount()
+  })
+
+  it('disables an expired join confirmation when the shared clock advances', async () => {
+    vi.useFakeTimers()
+    let wrapper: ReturnType<typeof mountView> | undefined
+    try {
+      const consumerListing = listing({ room_name: '即将过期的房间' })
+      wrapper = mountView({ renderDialogs: true })
+      await flushPromises()
+
+      const setupState = (wrapper.vm as any).$?.setupState
+      setupState.pendingJoinConfirmation = {
+        listingID: consumerListing.id,
+        ownerSelfUse: false,
+        platform: 'openai',
+        apiKeyID: 1001,
+        apiKeyLabel: '消费 Key',
+        idleTimeoutMinutes: 10,
+        intent: joinIntent(consumerListing, {
+          expires_at: new Date(Date.now() + 5_000).toISOString(),
+        }),
+      }
+      await nextTick()
+
+      const submitButton = wrapper.get('[data-testid="join-confirm-submit"]')
+      expect(submitButton.attributes('disabled')).toBeUndefined()
+
+      vi.advanceTimersByTime(30_000)
+      await nextTick()
+
+      expect(submitButton.attributes('disabled')).toBeDefined()
+      expect(joinListing).not.toHaveBeenCalled()
+    } finally {
+      wrapper?.unmount()
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
   })
 
   it('requires explicit queue consent, reissues the intent, and blocks every close path while submitting', async () => {
@@ -964,9 +1534,9 @@ describe('AccountShareView async snapshots and mode keys', () => {
     wrapper.unmount()
   })
 
-  it('defaults to existing accounts and filters out incompatible room members', async () => {
+  it('defaults to existing accounts, accepts an implicit private placement, and filters out incompatible room members', async () => {
     listAccounts.mockResolvedValue(paginated([
-      account({ id: 1, name: '可用私有账号', external_placement: { target: 'private', state: 'active', version: 1 } }),
+      account({ id: 1, name: '可用隐式私有账号', external_placement: null }),
       account({ id: 2, name: '公共号池账号', external_placement: { target: 'public_pool', state: 'active', version: 2 } }),
       account({ id: 3, name: '其他房间账号', external_placement: { target: 'room', room_id: 99, state: 'active', version: 3 } }),
       account({ id: 7, name: '未绑定平台模式账号', external_placement: { target: 'room', state: 'active', version: 4 } }),
@@ -987,7 +1557,7 @@ describe('AccountShareView async snapshots and mode keys', () => {
     expect(setupState.eligibleOwnedAccounts.map((item: Account) => item.id))
       .toEqual(expect.arrayContaining([1, 2, 7]))
     expect(wrapper.text()).toContain('公共号池账号')
-    expect(wrapper.text()).toContain('可用私有账号')
+    expect(wrapper.text()).toContain('可用隐式私有账号')
     expect(wrapper.text()).toContain('未绑定平台模式账号')
     expect(wrapper.text()).not.toContain('其他房间账号')
     expect(wrapper.text()).not.toContain('未知等级账号')
@@ -1094,17 +1664,114 @@ describe('AccountShareView async snapshots and mode keys', () => {
     const wrapper = mountView()
     await flushPromises()
     expect(wrapper.text()).toContain('我的共享房间')
-    expect(wrapper.text()).toContain('健康账号 2/3')
-    expect(wrapper.text()).toContain('成员上限（1～15）')
-    expect(wrapper.text()).toContain('由房主设置，与账号数量/账号并发无推导关系；房主自用不占消费者名额')
-    expect(wrapper.text()).toContain('运行时请求能力')
+    expect(wrapper.text()).toContain('可调度账号 2/3')
+    expect(wrapper.text()).toContain('席位 1/3')
+    expect(wrapper.text()).not.toContain('消费者 1/3')
+    expect(wrapper.text()).toContain('可用并发')
     expect(wrapper.text()).not.toContain('实时容量')
 
-    const roomCountButton = wrapper.findAll('button').find(button => button.text().includes('健康账号 2/3'))
+    const roomCountButton = wrapper.findAll('button').find(button => button.text().includes('管理账号'))
     await roomCountButton?.trigger('click')
     await nextTick()
 
     expect(wrapper.get('[data-testid="room-accounts-dialog"]').text()).toContain('我的共享房间')
+    wrapper.unmount()
+  })
+
+  it('renders one combined availability bar without leaking ranges or a public representative account', async () => {
+    const publicRoom = listing({
+      id: 903,
+      owner_user_id: 700,
+      room_name: undefined,
+      account_name: '不应公开的代表账号',
+      account_sample_scope: 'representative',
+      account_count: 3,
+      healthy_account_count: 1,
+      account_concurrency: 8,
+      current_concurrency: 0,
+      runtime_load_known: false,
+      accounts: [{
+        account_id: 601,
+        account_name: '不应公开的成员账号',
+        platform: 'openai',
+        account_level: 'plus',
+        status: 'active',
+        schedulable: true,
+        current_concurrency: 2,
+        priority: 50,
+        placement_state: 'active',
+      }],
+      quota_summary: {
+        scope: 'room',
+        attached_count: 3,
+        eligible_count: 2,
+        window_5h: {
+          known_count: 2,
+          min_utilization: 10,
+          max_utilization: 120,
+          average_utilization: 65,
+          partial: true,
+        },
+        window_7d: {
+          known_count: 3,
+          min_utilization: 40,
+          max_utilization: 40,
+          average_utilization: 40,
+          partial: false,
+        },
+      },
+    })
+    listListings.mockResolvedValue(paginated([publicRoom]))
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('房间 #903')
+    expect(wrapper.text()).toContain('可调度账号 2/3')
+    expect(wrapper.get('[data-testid="room-quota-summary"]').text()).toContain('5H 综合已用65%')
+    expect(wrapper.get('[data-testid="room-quota-summary"]').text()).toContain('7D 综合已用40%')
+    const progressBars = wrapper.findAll('[role="progressbar"]')
+    expect(progressBars).toHaveLength(2)
+    expect(progressBars[0]?.attributes('aria-valuenow')).toBe('65')
+    expect(progressBars[0]?.get('span').attributes('style')).toContain('width: 65%')
+    expect(progressBars[1]?.attributes('aria-valuenow')).toBe('40')
+    expect(progressBars[1]?.get('span').attributes('style')).toContain('width: 40%')
+    expect(wrapper.text()).not.toContain('用量范围')
+    expect(wrapper.text()).not.toContain('10%–120%')
+    expect(wrapper.text()).not.toContain('部分快照')
+    expect(wrapper.text()).toContain('运行时未知')
+    expect(wrapper.text()).not.toContain('不应公开的代表账号')
+    expect(wrapper.text()).not.toContain('不应公开的成员账号')
+    wrapper.unmount()
+  })
+
+  it.each([
+    { status: 'paused' as const, label: '已暂停' },
+    { status: 'validating' as const, label: '恢复校验中' },
+    { status: 'draining' as const, label: '安全排空中' },
+    { status: 'suspended' as const, label: '管理员暂停' },
+    { status: 'disabled' as const, label: '已下架' },
+  ])('prioritizes the $label lifecycle over healthy account availability', async ({ status, label }) => {
+    listListings.mockResolvedValue(paginated([
+      listing({
+        status,
+        account_count: 2,
+        healthy_account_count: 2,
+      }),
+    ]))
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const [aggregateTile, concurrencyTile] = wrapper.findAll('.listing-runtime-tile')
+    expect(aggregateTile).toBeDefined()
+    expect(concurrencyTile).toBeDefined()
+    expect(aggregateTile.text()).toContain(label)
+    expect(aggregateTile.text()).not.toContain('全部挂载账号当前具备路由资格')
+    expect(aggregateTile.text()).not.toContain('可调度账号')
+    expect(aggregateTile.text()).not.toContain('可用')
+    expect(concurrencyTile.text()).toContain('并发状态')
+    expect(concurrencyTile.text()).toContain('当前不可新加入')
     wrapper.unmount()
   })
 
@@ -1185,7 +1852,7 @@ describe('AccountShareView async snapshots and mode keys', () => {
     wrapper.unmount()
   })
 
-  it('keeps an active room read-only for its owner while a membership blocker exists', async () => {
+  it('opens consumer-protected editing without taking an exclusive edit lock', async () => {
     const activeRoom = listing({
       id: 906,
       owner_user_id: 9,
@@ -1211,8 +1878,10 @@ describe('AccountShareView async snapshots and mode keys', () => {
     await flushPromises()
 
     expect(beginListingEdit).not.toHaveBeenCalled()
-    expect(wrapper.text()).toContain('当前阻塞项：使用中 1')
-    expect(wrapper.text()).toContain('请先处理阻塞项后重试')
+    expect(setupState.showConfigEditDialog).toBe(true)
+    expect(setupState.editConsumerProtected).toBe(true)
+    expect(setupState.editSessionID).toBe('')
+    expect(wrapper.text()).toContain('基础配置')
     wrapper.unmount()
   })
 
@@ -1329,6 +1998,48 @@ describe('AccountShareView async snapshots and mode keys', () => {
     )
     expect(listListings).toHaveBeenCalled()
     expect(beginListingEdit).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('ignores a failed renewal from an older edit session after a newer session is active', async () => {
+    let rejectOlderRenewal!: (reason: unknown) => void
+    beginListingEdit.mockReturnValueOnce(new Promise((_resolve, reject) => {
+      rejectOlderRenewal = reject
+    }))
+
+    const wrapper = mountView()
+    await flushPromises()
+    const setupState = (wrapper.vm as any).$?.setupState
+    setupState.editingConfigListing = listing({
+      id: 930,
+      owner_user_id: 9,
+      status: 'paused',
+      editing_mine: true,
+      edit_session_id: 'older-session',
+    })
+    setupState.editSessionID = 'older-session'
+    const olderRenewal = setupState.renewConfigEditSession()
+    await nextTick()
+
+    setupState.resetConfigEditState()
+    setupState.editingConfigListing = listing({
+      id: 931,
+      owner_user_id: 9,
+      status: 'paused',
+      editing_mine: true,
+      edit_session_id: 'newer-session',
+    })
+    setupState.editSessionID = 'newer-session'
+    setupState.showConfigEditDialog = true
+
+    rejectOlderRenewal(new Error('旧续期失败'))
+    await olderRenewal
+    await flushPromises()
+
+    expect(setupState.editingConfigListing.id).toBe(931)
+    expect(setupState.editSessionID).toBe('newer-session')
+    expect(setupState.showConfigEditDialog).toBe(true)
+    expect(setupState.editErrorMessage).toBe('')
     wrapper.unmount()
   })
 
@@ -1554,7 +2265,7 @@ describe('AccountShareView async snapshots and mode keys', () => {
       resolveHistory = resolve
     }))
     listListings.mockResolvedValue(paginated([
-      listing({ id: 512, account_name: '当前账号列表' }),
+      listing({ id: 512, room_name: '当前账号列表', account_name: '不应公开的底层账号名' }),
     ]))
 
     const wrapper = mountView()
@@ -1756,6 +2467,28 @@ describe('AccountShareView async snapshots and mode keys', () => {
     wrapper.unmount()
   })
 
+  it('does not carry a hidden owner filter into an archive transition', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    const setupState = (wrapper.vm as any).$?.setupState
+    setupState.selectedOwnerID = 700
+    setupState.selectedOwnerDisplayName = '其他号主'
+    await nextTick()
+
+    const callsBeforeArchive = listListings.mock.calls.length
+    await wrapper.findAll('button').find(button => button.text().includes('已删除房间'))?.trigger('click')
+    await flushPromises()
+
+    const archiveCalls = listListings.mock.calls
+      .slice(callsBeforeArchive)
+      .filter(call => call[2]?.tab === 'archive')
+    expect(archiveCalls).toHaveLength(1)
+    expect(archiveCalls[0]?.[2]).not.toHaveProperty('owner_user_id')
+    expect(setupState.hasResultFilters).toBe(false)
+    expect(wrapper.text()).toContain('暂无已删除房间')
+    wrapper.unmount()
+  })
+
   it('refreshes room counts and rebinds the open dialog after room accounts change', async () => {
     const ownRoom = listing({
       id: 901,
@@ -1782,13 +2515,13 @@ describe('AccountShareView async snapshots and mode keys', () => {
     const wrapper = mountView()
     await flushPromises()
     const roomCountButton = wrapper.findAll('button').find(button =>
-      button.text().includes('健康账号 1/1')
+      button.text().includes('管理账号')
     )
     await roomCountButton?.trigger('click')
     await wrapper.get('[data-testid="room-accounts-changed"]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('健康账号 2/2')
+    expect(wrapper.text()).toContain('可调度账号 2/2')
     expect(wrapper.get('[data-testid="room-accounts-dialog"]').text()).toContain('待更新房间')
     expect(showSuccess).toHaveBeenCalledWith('已有 1 个账号成功加入房间')
     wrapper.unmount()
@@ -1839,7 +2572,7 @@ describe('AccountShareView async snapshots and mode keys', () => {
       status: 'ending',
       ended_at: undefined,
       last_request_at: '2026-07-11T01:00:00Z',
-      ending_operation_id: 'operation-end-801',
+      ending_operation_id: undefined,
       settlement_status: 'pending',
     }))
     getRoomOperation.mockResolvedValue(roomOperation({
@@ -1957,12 +2690,12 @@ describe('AccountShareView async snapshots and mode keys', () => {
     const wrapper = mountView()
     const setupState = (wrapper.vm as any).$?.setupState
     const newerLoad = setupState.loadListings()
-    resolveNewer(paginated([listing({ id: 502, account_name: '最新房间' })]))
+    resolveNewer(paginated([listing({ id: 502, room_name: '最新房间', account_name: '最新底层账号' })]))
     await newerLoad
     await nextTick()
     expect(wrapper.text()).toContain('最新房间')
 
-    resolveOlder(paginated([listing({ id: 501, account_name: '旧响应房间' })]))
+    resolveOlder(paginated([listing({ id: 501, room_name: '旧响应房间', account_name: '旧响应底层账号' })]))
     await flushPromises()
     expect(wrapper.text()).toContain('最新房间')
     expect(wrapper.text()).not.toContain('旧响应房间')
@@ -2003,6 +2736,9 @@ describe('AccountShareView async snapshots and mode keys', () => {
     expect(wrapper.find('[data-testid="room-lifecycle-action-suspend"]').exists()).toBe(false)
 
     await wrapper.get('[data-testid="room-lifecycle-action-drain"]').trigger('click')
+    expect(wrapper.get('[data-testid="room-lifecycle-submit"]').classes()).toEqual(
+      expect.arrayContaining(['btn', 'btn-primary', 'min-h-11'])
+    )
     await wrapper.get('[data-testid="room-lifecycle-submit"]').trigger('click')
     await wrapper.get('[data-testid="room-lifecycle-submit"]').trigger('click')
     await nextTick()
@@ -2098,6 +2834,13 @@ describe('AccountShareView async snapshots and mode keys', () => {
     await flushPromises()
 
     const submitButton = wrapper.get('[data-testid="room-lifecycle-submit"]')
+    expect(submitButton.classes()).toEqual(
+      expect.arrayContaining(['btn', 'btn-danger', 'min-h-11'])
+    )
+    const backButton = wrapper.findAll('button').find(button => button.text() === '返回')
+    expect(backButton?.classes()).toEqual(
+      expect.arrayContaining(['btn', 'btn-secondary', 'min-h-11'])
+    )
     expect(submitButton.attributes('disabled')).toBeDefined()
     await wrapper.get('[data-testid="room-delete-name-input"]').setValue('我的共享房间')
     await nextTick()

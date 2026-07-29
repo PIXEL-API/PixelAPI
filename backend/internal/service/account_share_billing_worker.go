@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"strings"
 	"time"
@@ -20,6 +21,7 @@ const (
 	AccountShareBillingWorkerDefaultDrainSoftBudget = 10 * time.Second
 	AccountShareBillingWorkerMaxDrainBatches        = 20
 	accountShareBillingWorkerFingerprintNamespace   = "account-share-billing-v2"
+	accountShareBillingWorkerMaxConcurrency         = 4
 )
 
 var ErrAccountShareBillingWorkerInvalid = errors.New("invalid account share billing worker configuration")
@@ -107,32 +109,64 @@ func (w *AccountShareBillingWorker) RunOnce(ctx context.Context) (AccountShareBi
 	if err := ctx.Err(); err != nil {
 		return runResult, err
 	}
-	items, err := w.intentRepository.ClaimReady(ctx, ClaimAccountShareBillingIntentsInput{
-		WorkerID:      w.config.WorkerID,
-		Limit:         w.config.BatchSize,
-		LeaseDuration: w.config.LeaseDuration,
-	})
-	if err != nil {
-		return runResult, err
-	}
-	runResult.Claimed = len(items)
-
 	var processErrors []error
-	for i := range items {
-		outcome, processErr := w.processClaimed(ctx, &items[i])
-		switch outcome {
-		case accountShareBillingWorkerOutcomeSettled:
-			runResult.Settled++
-		case accountShareBillingWorkerOutcomeRetryScheduled:
-			runResult.RetryScheduled++
-		case accountShareBillingWorkerOutcomeNeedsAttention:
-			runResult.NeedsAttention++
+	for runResult.Claimed < w.config.BatchSize {
+		claimLimit := min(accountShareBillingWorkerMaxConcurrency, w.config.BatchSize-runResult.Claimed)
+		items, err := w.intentRepository.ClaimReady(ctx, ClaimAccountShareBillingIntentsInput{
+			WorkerID:      w.config.WorkerID,
+			Limit:         claimLimit,
+			LeaseDuration: w.config.LeaseDuration,
+		})
+		if err != nil {
+			processErrors = append(processErrors, err)
+			break
 		}
-		if processErr != nil {
-			processErrors = append(processErrors, fmt.Errorf("process billing intent %d: %w", items[i].ID, processErr))
+		if len(items) == 0 {
+			break
+		}
+		if len(items) > claimLimit {
+			processErrors = append(processErrors, fmt.Errorf(
+				"%w: claim_ready returned %d items for limit %d",
+				ErrAccountShareBillingWorkerInvalid,
+				len(items),
+				claimLimit,
+			))
+			break
+		}
+
+		type claimedResult struct {
+			id      int64
+			outcome accountShareBillingWorkerOutcome
+			err     error
+		}
+		results := make(chan claimedResult, len(items))
+		for i := range items {
+			item := items[i]
+			go func() {
+				outcome, processErr := w.processClaimed(ctx, &item)
+				results <- claimedResult{id: item.ID, outcome: outcome, err: processErr}
+			}()
+		}
+		runResult.Claimed += len(items)
+		for range items {
+			processed := <-results
+			switch processed.outcome {
+			case accountShareBillingWorkerOutcomeSettled:
+				runResult.Settled++
+			case accountShareBillingWorkerOutcomeRetryScheduled:
+				runResult.RetryScheduled++
+			case accountShareBillingWorkerOutcomeNeedsAttention:
+				runResult.NeedsAttention++
+			}
+			if processed.err != nil {
+				processErrors = append(processErrors, fmt.Errorf("process billing intent %d: %w", processed.id, processed.err))
+			}
 		}
 		if err := ctx.Err(); err != nil {
 			processErrors = append(processErrors, err)
+			break
+		}
+		if len(items) < claimLimit {
 			break
 		}
 	}
@@ -223,7 +257,7 @@ func (w *AccountShareBillingWorker) processClaimed(
 		return w.markNeedsAttention(ctx, transition, "billing_payload_invalid", "durable billing payload is invalid")
 	}
 
-	applyResult, applyErr, heartbeatErr := w.applyWithLeaseHeartbeat(ctx, transition, command)
+	applyResult, applyErr, finalizeErr, heartbeatErr := w.applyWithLeaseHeartbeat(ctx, transition, command)
 	if heartbeatErr != nil {
 		return accountShareBillingWorkerOutcomeNone, heartbeatErr
 	}
@@ -236,24 +270,26 @@ func (w *AccountShareBillingWorker) processClaimed(
 	if applyResult == nil {
 		return w.markNeedsAttention(ctx, transition, "billing_result_invalid", "billing repository returned no result")
 	}
-
-	_, err = w.intentRepository.MarkSettled(ctx, MarkAccountShareBillingIntentSettledInput{
-		AccountShareBillingIntentLeaseTransition: transition,
-		UsageLogID:                               applyResult.UsageLogID,
-	})
-	if err != nil {
-		// Apply may already have committed. Never downgrade the intent here:
-		// the fenced lease must expire and replay the idempotent command.
-		return accountShareBillingWorkerOutcomeNone, err
+	if finalizeErr != nil {
+		slog.ErrorContext(
+			ctx,
+			"account-share billing post-commit finalizer failed after financial commit",
+			"billing_intent_id", item.ID,
+			"usage_log_id", applyResult.UsageLogID,
+			"attempt_count", item.AttemptCount,
+			"error", finalizeErr,
+		)
+		return w.handlePostCommitFinalizeFailure(ctx, item.AttemptCount, transition, applyResult)
 	}
-	return accountShareBillingWorkerOutcomeSettled, nil
+
+	return w.markSettledAfterApply(ctx, transition, applyResult)
 }
 
 func (w *AccountShareBillingWorker) applyWithLeaseHeartbeat(
 	ctx context.Context,
 	transition AccountShareBillingIntentLeaseTransition,
 	command *UsageBillingCommand,
-) (*UsageBillingApplyResult, error, error) {
+) (*UsageBillingApplyResult, error, error, error) {
 	applyCtx, cancelApply := context.WithCancel(ctx)
 	defer cancelApply()
 	stopHeartbeat := make(chan struct{})
@@ -263,15 +299,16 @@ func (w *AccountShareBillingWorker) applyWithLeaseHeartbeat(
 	}()
 
 	result, applyErr := w.billingRepository.Apply(applyCtx, command)
+	var finalizeErr error
 	if applyErr == nil && result != nil {
-		applyErr = w.postCommitFinalizer.Finalize(applyCtx, command, result)
+		finalizeErr = w.postCommitFinalizer.Finalize(applyCtx, command, result)
 	}
 	close(stopHeartbeat)
 	heartbeatErr := <-heartbeatDone
 	if errors.Is(heartbeatErr, context.Canceled) && ctx.Err() == nil {
 		heartbeatErr = nil
 	}
-	return result, applyErr, heartbeatErr
+	return result, applyErr, finalizeErr, heartbeatErr
 }
 
 func (w *AccountShareBillingWorker) renewLeaseUntilStopped(
@@ -337,6 +374,46 @@ func (w *AccountShareBillingWorker) handleApplyFailure(
 		return accountShareBillingWorkerOutcomeNone, err
 	}
 	return accountShareBillingWorkerOutcomeRetryScheduled, nil
+}
+
+func (w *AccountShareBillingWorker) handlePostCommitFinalizeFailure(
+	ctx context.Context,
+	attemptCount int,
+	transition AccountShareBillingIntentLeaseTransition,
+	_ *UsageBillingApplyResult,
+) (accountShareBillingWorkerOutcome, error) {
+	// Financial Apply is idempotent and may already have committed. Finalizer
+	// retries therefore use the persisted failed state independently from the
+	// financial retry ceiling; settling here would permanently discard cache
+	// invalidation and other post-commit work.
+	retryAt := w.now().UTC().Add(w.retryDelay(attemptCount))
+	_, err := w.intentRepository.MarkFailed(ctx, MarkAccountShareBillingIntentFailedInput{
+		AccountShareBillingIntentLeaseTransition: transition,
+		ErrorCode:                                "billing_post_commit_finalize_temporary",
+		ErrorMessage:                             "billing post-commit finalization failed temporarily",
+		RetryAt:                                  &retryAt,
+	})
+	if err != nil {
+		return accountShareBillingWorkerOutcomeNone, err
+	}
+	return accountShareBillingWorkerOutcomeRetryScheduled, nil
+}
+
+func (w *AccountShareBillingWorker) markSettledAfterApply(
+	ctx context.Context,
+	transition AccountShareBillingIntentLeaseTransition,
+	applyResult *UsageBillingApplyResult,
+) (accountShareBillingWorkerOutcome, error) {
+	_, err := w.intentRepository.MarkSettled(ctx, MarkAccountShareBillingIntentSettledInput{
+		AccountShareBillingIntentLeaseTransition: transition,
+		UsageLogID:                               applyResult.UsageLogID,
+	})
+	if err != nil {
+		// Apply may already have committed. Never downgrade the intent here:
+		// the fenced lease must expire and replay the idempotent command.
+		return accountShareBillingWorkerOutcomeNone, err
+	}
+	return accountShareBillingWorkerOutcomeSettled, nil
 }
 
 func (w *AccountShareBillingWorker) markNeedsAttention(

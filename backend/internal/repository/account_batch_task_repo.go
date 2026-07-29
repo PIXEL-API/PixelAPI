@@ -20,6 +20,10 @@ func NewAccountBatchTaskRepository(db *sql.DB) service.AccountBatchTaskRepositor
 }
 
 func (r *accountBatchTaskRepository) CreateTask(ctx context.Context, input service.CreateAccountBatchTaskInput) (*service.AccountBatchTask, error) {
+	parameters, err := json.Marshal(normalizeJSONMap(input.Parameters))
+	if err != nil {
+		return nil, fmt.Errorf("marshal account batch task parameters: %w", err)
+	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -27,13 +31,14 @@ func (r *accountBatchTaskRepository) CreateTask(ctx context.Context, input servi
 	defer func() { _ = tx.Rollback() }()
 
 	task, err := queryAccountBatchTask(ctx, tx, `
-		INSERT INTO account_batch_tasks (scope, operation, status, total, created_by, owner_user_id)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id, scope, operation, status, total, processed, success, failed, created_by, owner_user_id,
+		INSERT INTO account_batch_tasks (scope, operation, parameters, status, total, created_by, owner_user_id)
+		VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7)
+		RETURNING id, scope, operation, parameters, status, total, processed, success, failed, created_by, owner_user_id,
 			error_message, started_at, finished_at, created_at, updated_at
 	`, []any{
 		input.Scope,
 		input.Operation,
+		parameters,
 		service.AccountBatchTaskStatusPending,
 		len(input.AccountIDs),
 		input.CreatedBy,
@@ -68,7 +73,7 @@ func (r *accountBatchTaskRepository) CreateTask(ctx context.Context, input servi
 
 func (r *accountBatchTaskRepository) GetTask(ctx context.Context, id int64) (*service.AccountBatchTask, error) {
 	task, err := queryAccountBatchTask(ctx, r.db, `
-		SELECT id, scope, operation, status, total, processed, success, failed, created_by, owner_user_id,
+		SELECT id, scope, operation, parameters, status, total, processed, success, failed, created_by, owner_user_id,
 			error_message, started_at, finished_at, created_at, updated_at
 		FROM account_batch_tasks
 		WHERE id = $1
@@ -119,7 +124,7 @@ func (r *accountBatchTaskRepository) ClaimNextPendingTask(ctx context.Context, s
 			updated_at = NOW()
 		FROM next
 		WHERE tasks.id = next.id
-		RETURNING tasks.id, tasks.scope, tasks.operation, tasks.status, tasks.total, tasks.processed, tasks.success, tasks.failed,
+		RETURNING tasks.id, tasks.scope, tasks.operation, tasks.parameters, tasks.status, tasks.total, tasks.processed, tasks.success, tasks.failed,
 			tasks.created_by, tasks.owner_user_id, tasks.error_message, tasks.started_at, tasks.finished_at, tasks.created_at, tasks.updated_at
 	`, []any{
 		service.AccountBatchTaskStatusPending,
@@ -188,7 +193,7 @@ func (r *accountBatchTaskRepository) RefreshTaskProgress(ctx context.Context, ta
 			updated_at = NOW()
 		FROM counts
 		WHERE tasks.id = $1
-		RETURNING tasks.id, tasks.scope, tasks.operation, tasks.status, tasks.total, tasks.processed, tasks.success, tasks.failed,
+		RETURNING tasks.id, tasks.scope, tasks.operation, tasks.parameters, tasks.status, tasks.total, tasks.processed, tasks.success, tasks.failed,
 			tasks.created_by, tasks.owner_user_id, tasks.error_message, tasks.started_at, tasks.finished_at, tasks.created_at, tasks.updated_at
 	`, []any{
 		taskID,
@@ -277,6 +282,7 @@ func queryAccountBatchTask(ctx context.Context, q sqlQueryer, query string, args
 
 func scanAccountBatchTask(rows *sql.Rows) (service.AccountBatchTask, error) {
 	var task service.AccountBatchTask
+	var parametersJSON []byte
 	var ownerUserID sql.NullInt64
 	var errorMessage sql.NullString
 	var startedAt sql.NullTime
@@ -285,6 +291,7 @@ func scanAccountBatchTask(rows *sql.Rows) (service.AccountBatchTask, error) {
 		&task.ID,
 		&task.Scope,
 		&task.Operation,
+		&parametersJSON,
 		&task.Status,
 		&task.Total,
 		&task.Processed,
@@ -299,6 +306,13 @@ func scanAccountBatchTask(rows *sql.Rows) (service.AccountBatchTask, error) {
 		&task.UpdatedAt,
 	); err != nil {
 		return task, err
+	}
+	task.Parameters = map[string]any{}
+	if len(parametersJSON) > 0 {
+		if err := json.Unmarshal(parametersJSON, &task.Parameters); err != nil {
+			return task, fmt.Errorf("parse account batch task parameters: %w", err)
+		}
+		task.Parameters = normalizeJSONMap(task.Parameters)
 	}
 	if ownerUserID.Valid {
 		v := ownerUserID.Int64

@@ -340,12 +340,16 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	affiliateCodeCycleService := service.ProvideAffiliateCodeCycleService(affiliateService, clusterTaskExecutor)
 	accountExpiryService := service.ProvideAccountExpiryService(accountRepository, clusterTaskExecutor)
 	accountErrorCleanupService := service.ProvideAccountErrorCleanupService(accountRepository, clusterTaskExecutor)
+	conversationAdminReplyTimeoutService, err := service.ProvideConversationAdminReplyTimeoutService(conversationRepository, clusterTaskExecutor)
+	if err != nil {
+		return nil, err
+	}
 	subscriptionExpiryService := service.ProvideSubscriptionExpiryService(userSubscriptionRepository, clusterTaskExecutor)
 	scheduledTestRunnerService := service.ProvideScheduledTestRunnerService(scheduledTestPlanRepository, scheduledTestService, accountTestService, rateLimitService, configConfig, clusterTaskExecutor)
 	activityAutoDrawService := service.ProvideActivityAutoDrawService(activityService, clusterTaskExecutor)
 	paymentOrderExpiryService := service.ProvidePaymentOrderExpiryService(paymentService, clusterTaskExecutor)
 	channelMonitorRunner := service.ProvideChannelMonitorRunner(channelMonitorService, settingService, clusterTaskExecutor)
-	v3 := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, schedulerSnapshotService, groupRateScheduleService, affiliateCodeCycleService, tokenRefreshService, accountExpiryService, accountErrorCleanupService, subscriptionExpiryService, usageCleanupService, idempotencyCleanupService, concurrencyService, userMessageQueueService, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, grokOAuthService, accountShareModeService, openAIGatewayService, scheduledTestRunnerService, backupService, activityAutoDrawService, paymentOrderExpiryService, channelMonitorRunner, contentModerationService, clusterRuntime)
+	v3 := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, schedulerSnapshotService, groupRateScheduleService, affiliateCodeCycleService, tokenRefreshService, accountExpiryService, accountErrorCleanupService, conversationAdminReplyTimeoutService, subscriptionExpiryService, usageCleanupService, idempotencyCleanupService, concurrencyService, userMessageQueueService, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, grokOAuthService, accountShareModeService, openAIGatewayService, scheduledTestRunnerService, backupService, activityAutoDrawService, paymentOrderExpiryService, channelMonitorRunner, contentModerationService, clusterRuntime)
 	application := &Application{
 		Server:         httpServer,
 		Cleanup:        v3,
@@ -390,6 +394,7 @@ func provideCleanup(
 	tokenRefresh *service.TokenRefreshService,
 	accountExpiry *service.AccountExpiryService,
 	accountErrorCleanup *service.AccountErrorCleanupService,
+	conversationAdminReplyTimeout *service.ConversationAdminReplyTimeoutService,
 	subscriptionExpiry *service.SubscriptionExpiryService,
 	usageCleanup *service.UsageCleanupService,
 	idempotencyCleanup *service.IdempotencyCleanupService,
@@ -501,6 +506,12 @@ func provideCleanup(
 			{"AccountErrorCleanupService", func() error {
 				if accountErrorCleanup != nil {
 					accountErrorCleanup.Stop()
+				}
+				return nil
+			}},
+			{"ConversationAdminReplyTimeoutService", func() error {
+				if conversationAdminReplyTimeout != nil {
+					conversationAdminReplyTimeout.Stop()
 				}
 				return nil
 			}},

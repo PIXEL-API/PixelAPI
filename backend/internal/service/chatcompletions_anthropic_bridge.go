@@ -1071,6 +1071,15 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 	reasoningEffort := extractOpenAIReasoningEffortFromBody(body, upstreamModel, billingModel, originalModel)
 	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, billingModel)
 	serviceTier := extractOpenAIServiceTierFromBody(body)
+	forwardResult := &OpenAIForwardResult{
+		Model:           originalModel,
+		BillingModel:    billingModel,
+		UpstreamModel:   upstreamModel,
+		ReasoningEffort: reasoningEffort,
+		ServiceTier:     serviceTier,
+		Stream:          clientStream,
+	}
+	ctx = withOpenAIForwardResultBillingState(ctx, forwardResult, startTime, openAIResponseImageBillingConfig{})
 
 	chatBody, err := json.Marshal(chatReq)
 	if err != nil {
@@ -1131,7 +1140,10 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode >= http.StatusBadRequest {
+	if !isOpenAIUpstreamSuccessStatus(resp.StatusCode) {
+		if !isOpenAIUpstreamErrorStatus(resp.StatusCode) {
+			return rejectUnexpectedOpenAIUpstreamStatus(resp, c, account, false, writeAnthropicError)
+		}
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 		_ = resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
@@ -1183,11 +1195,26 @@ func (s *OpenAIGatewayService) bufferDirectChatCompletionsAsAnthropic(
 	if parsed := openAIUsageFromChatCompletionsUsage(string(respBody)); parsed != nil {
 		usage = *parsed
 	}
+	result := updateOpenAIForwardResultBillingState(ctx, openAIForwardResultSnapshot{
+		requestID:            requestID,
+		usage:                &usage,
+		responseHeaders:      resp.Header,
+		billingUsageComplete: openAIChatCompletionsBillingUsageComplete(respBody),
+	})
+	result.Model = originalModel
+	result.BillingModel = billingModel
+	result.UpstreamModel = upstreamModel
+	result.ReasoningEffort = reasoningEffort
+	result.ServiceTier = serviceTier
+	result.Stream = false
+	if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
+		return result, billingErr
+	}
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	}
 	c.JSON(http.StatusOK, ChatCompletionsResponseToAnthropic(&chatResp, originalModel))
-	return &OpenAIForwardResult{RequestID: requestID, Usage: usage, Model: originalModel, BillingModel: billingModel, UpstreamModel: upstreamModel, ReasoningEffort: reasoningEffort, ServiceTier: serviceTier, Stream: false, Duration: time.Since(startTime)}, nil
+	return result, nil
 }
 
 func (s *OpenAIGatewayService) streamDirectChatCompletionsAsAnthropic(
@@ -1201,7 +1228,8 @@ func (s *OpenAIGatewayService) streamDirectChatCompletionsAsAnthropic(
 	requestID := resp.Header.Get("x-request-id")
 	state := NewChatCompletionsToAnthropicStreamState(originalModel)
 	var usage OpenAIUsage
-	usageComplete := false
+	var billingUsageObservation openAIChatCompletionsBillingUsageObservation
+	sawDone := false
 	var firstTokenMs *int
 	clientDisconnected := false
 	var cancelDisconnectedDrain context.CancelFunc
@@ -1256,12 +1284,16 @@ func (s *OpenAIGatewayService) streamDirectChatCompletionsAsAnthropic(
 			continue
 		}
 		payload = strings.TrimSpace(payload)
-		if payload == "" || payload == "[DONE]" {
+		if payload == "" {
 			continue
 		}
+		if payload == "[DONE]" {
+			sawDone = true
+			continue
+		}
+		billingUsageObservation.observePayload([]byte(payload))
 		if parsed := extractOpenAIChatStreamUsage(payload); parsed != nil {
 			usage = *parsed
-			usageComplete = true
 		}
 		var chunk apicompat.ChatCompletionsChunk
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
@@ -1275,15 +1307,64 @@ func (s *OpenAIGatewayService) streamDirectChatCompletionsAsAnthropic(
 		emit(ChatCompletionsChunkToAnthropicEvents(&chunk, state))
 	}
 	if err := scanner.Err(); err != nil {
-		return &OpenAIForwardResult{RequestID: requestID, Usage: usage, Model: originalModel, BillingModel: billingModel, UpstreamModel: upstreamModel, ReasoningEffort: reasoningEffort, ServiceTier: serviceTier, Stream: true, Duration: time.Since(startTime), FirstTokenMs: firstTokenMs}, fmt.Errorf("stream usage incomplete: %w", err)
+		result := updateOpenAIForwardResultBillingState(ctx, openAIForwardResultSnapshot{
+			requestID:            requestID,
+			usage:                &usage,
+			firstTokenMs:         firstTokenMs,
+			responseHeaders:      resp.Header,
+			billingUsageComplete: billingUsageObservation.complete(),
+		})
+		return result, fmt.Errorf("stream usage incomplete: %w", err)
 	}
-	emit(FinalizeChatCompletionsAnthropicStream(state))
+	result := updateOpenAIForwardResultBillingState(ctx, openAIForwardResultSnapshot{
+		requestID:            requestID,
+		usage:                &usage,
+		firstTokenMs:         firstTokenMs,
+		responseHeaders:      resp.Header,
+		billingUsageComplete: billingUsageObservation.complete(),
+	})
+	result.Model = originalModel
+	result.BillingModel = billingModel
+	result.UpstreamModel = upstreamModel
+	result.ReasoningEffort = reasoningEffort
+	result.ServiceTier = serviceTier
+	result.Stream = true
 	if clientDisconnected {
 		streamErr := s.clientDisconnectIncompleteUsageError(ctx)
-		if streamErr == nil && !usageComplete {
+		if streamErr == nil && !billingUsageObservation.complete() {
 			streamErr = errors.New("stream usage incomplete after disconnect: missing terminal usage")
 		}
-		return &OpenAIForwardResult{RequestID: requestID, Usage: usage, Model: originalModel, BillingModel: billingModel, UpstreamModel: upstreamModel, ReasoningEffort: reasoningEffort, ServiceTier: serviceTier, Stream: true, Duration: time.Since(startTime), FirstTokenMs: firstTokenMs}, streamErr
+		return result, streamErr
 	}
-	return &OpenAIForwardResult{RequestID: requestID, Usage: usage, Model: originalModel, BillingModel: billingModel, UpstreamModel: upstreamModel, ReasoningEffort: reasoningEffort, ServiceTier: serviceTier, Stream: true, Duration: time.Since(startTime), FirstTokenMs: firstTokenMs}, nil
+	if !sawDone {
+		return result, errors.New("upstream chat completions stream ended without [DONE]")
+	}
+	finalEvents := FinalizeChatCompletionsAnthropicStream(state)
+	finalPayloads := make([]string, 0, len(finalEvents))
+	for _, event := range finalEvents {
+		payload, err := apicompat.ResponsesAnthropicEventToSSE(event)
+		if err != nil {
+			return result, fmt.Errorf("marshal final Anthropic stream event: %w", err)
+		}
+		finalPayloads = append(finalPayloads, payload)
+	}
+	if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
+		return result, billingErr
+	}
+	if !clientDisconnected {
+		for _, payload := range finalPayloads {
+			writeHeaders()
+			if _, err := fmt.Fprint(c.Writer, payload); err != nil {
+				clientDisconnected = true
+				break
+			}
+		}
+		if len(finalPayloads) > 0 && !clientDisconnected {
+			c.Writer.Flush()
+		}
+	}
+	if clientDisconnected {
+		return result, errors.New("client disconnected while writing final Anthropic stream event")
+	}
+	return result, nil
 }

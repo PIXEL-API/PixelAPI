@@ -73,9 +73,19 @@ func (s *AccountShareModeService) StopReviewModerationWorker() {
 		return
 	}
 	s.reviewStopOnce.Do(func() {
+		if s.reviewCancel != nil {
+			s.reviewCancel()
+		}
 		close(s.reviewStopCh)
 	})
 	s.reviewWG.Wait()
+}
+
+func (s *AccountShareModeService) reviewWorkerContext() context.Context {
+	if s != nil && s.reviewCtx != nil {
+		return s.reviewCtx
+	}
+	return context.Background()
 }
 
 func (s *AccountShareModeService) runReviewModerationWorker() {
@@ -98,7 +108,7 @@ func (s *AccountShareModeService) processReviewModerationOnce() {
 	if s == nil || s.repo == nil || s.reviewSettingRepo == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeout(s.reviewWorkerContext(), time.Minute)
 	defer cancel()
 	_, err := s.taskExecutor.Run(ctx, accountShareReviewModerationTaskName, func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
 		return s.processReviewModerationOnceLeased(taskCtx, guard)
@@ -122,12 +132,18 @@ func (s *AccountShareModeService) processReviewModerationOnceLeased(
 	if err := guard.Check(ctx); err != nil {
 		return err
 	}
-	reviews, err := s.repo.ClaimPendingReviewModerations(ctx, time.Now().UTC(), AccountShareReviewModerationBatchSize)
-	if err != nil {
-		return fmt.Errorf("claim moderation jobs: %w", err)
-	}
-	for i := range reviews {
-		review := reviews[i]
+	for processed := 0; processed < AccountShareReviewModerationBatchSize; processed++ {
+		if err := guard.Check(ctx); err != nil {
+			return err
+		}
+		reviews, err := s.repo.ClaimPendingReviewModerations(ctx, time.Now().UTC(), 1)
+		if err != nil {
+			return fmt.Errorf("claim moderation job: %w", err)
+		}
+		if len(reviews) == 0 {
+			return nil
+		}
+		review := reviews[0]
 		if err := s.processSingleReviewModeration(ctx, guard, cfg, &review); err != nil {
 			if errors.Is(err, ErrClusterTaskLeaseLost) ||
 				errors.Is(err, context.Canceled) ||
@@ -151,6 +167,17 @@ func (s *AccountShareModeService) processSingleReviewModeration(
 	}
 	if err := guard.Check(ctx); err != nil {
 		return err
+	}
+	begun, err := s.repo.BeginReviewModerationAttempt(
+		ctx,
+		review.ID,
+		AccountShareReviewModerationMaxAttempts,
+	)
+	if err != nil {
+		return fmt.Errorf("begin moderation attempt: %w", err)
+	}
+	if !begun {
+		return nil
 	}
 	result, err := s.callAccountShareCommentReviewModel(ctx, cfg, review)
 	if err != nil {
@@ -220,7 +247,30 @@ func (s *AccountShareModeService) ListListingReviews(
 	if s == nil || s.repo == nil {
 		return nil, nil, ErrServiceUnavailable
 	}
-	return s.repo.ListListingReviews(ctx, viewerUserID, viewerIsAdmin, listingID, params)
+	reviews, result, err := s.repo.ListListingReviews(ctx, viewerUserID, viewerIsAdmin, listingID, params)
+	if err != nil {
+		return nil, nil, err
+	}
+	canViewDetails := viewerIsAdmin
+	if !canViewDetails {
+		if authorizationRepo, ok := s.repo.(accountShareReviewDetailAuthorizationRepository); ok {
+			canViewDetails, err = authorizationRepo.CanViewListingReviewDetails(
+				ctx,
+				viewerUserID,
+				viewerIsAdmin,
+				listingID,
+			)
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+	}
+	if !canViewDetails {
+		for i := range reviews {
+			anonymizePublicAccountShareReview(&reviews[i])
+		}
+	}
+	return reviews, result, nil
 }
 
 func (s *AccountShareModeService) ListOwnerReviews(ctx context.Context, viewerUserID, ownerUserID int64, params pagination.PaginationParams) ([]AccountShareReview, *pagination.PaginationResult, error) {
@@ -233,7 +283,27 @@ func (s *AccountShareModeService) ListOwnerReviews(ctx context.Context, viewerUs
 	if s == nil || s.repo == nil {
 		return nil, nil, ErrServiceUnavailable
 	}
-	return s.repo.ListOwnerReviews(ctx, viewerUserID, ownerUserID, params)
+	reviews, result, err := s.repo.ListOwnerReviews(ctx, viewerUserID, ownerUserID, params)
+	if err != nil {
+		return nil, nil, err
+	}
+	for i := range reviews {
+		anonymizePublicAccountShareReview(&reviews[i])
+	}
+	return reviews, result, nil
+}
+
+func anonymizePublicAccountShareReview(review *AccountShareReview) {
+	if review == nil {
+		return
+	}
+	review.AccountIdentityID = 0
+	review.AccountID = 0
+	review.MembershipID = 0
+	review.ConsumerUserID = 0
+	review.ConsumerUsername = "匿名用户"
+	review.AccountName = ""
+	review.CommentRejectReason = ""
 }
 
 func (s *AccountShareModeService) loadAccountShareCommentReviewConfig(ctx context.Context) (accountShareCommentReviewConfig, bool, error) {
@@ -301,19 +371,24 @@ func (s *AccountShareModeService) callAccountShareCommentReviewModel(ctx context
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
-	resp, err := s.reviewHTTPClient.Do(req)
+	httpClient := *s.reviewHTTPClient
+	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return AccountShareReviewModerationResult{}, err
 	}
 	defer func() {
 		_ = resp.Body.Close()
 	}()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+		return AccountShareReviewModerationResult{}, fmt.Errorf("moderation api returned non-success status %d", resp.StatusCode)
+	}
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return AccountShareReviewModerationResult{}, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return AccountShareReviewModerationResult{}, fmt.Errorf("moderation api returned %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	var apiResp accountShareModerationResponse
 	if err := json.Unmarshal(respBody, &apiResp); err != nil {

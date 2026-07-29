@@ -280,33 +280,49 @@ routeLoop:
 				h.responsesErrorResponse(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable; no upstream request was sent")
 				return
 			}
-			result, err := h.gatewayService.ForwardAsResponses(forwardCtx, c, account, forwardBody, parsedReq)
-			cancelForward()
-
 			userAgent := c.GetHeader("User-Agent")
 			clientIP := ip.GetClientIP(c)
 			inboundEndpoint := GetInboundEndpoint(c)
 			upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
+			recordUsage := func(ctx context.Context, result *service.ForwardResult) error {
+				if result == nil {
+					return nil
+				}
+				return h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
+					Result:             result,
+					APIKey:             currentAPIKey,
+					User:               currentAPIKey.User,
+					Account:            account,
+					Subscription:       currentSubscription,
+					InboundEndpoint:    inboundEndpoint,
+					UpstreamEndpoint:   upstreamEndpoint,
+					UserAgent:          userAgent,
+					IPAddress:          clientIP,
+					RequestPayloadHash: requestPayloadHash,
+					APIKeyService:      h.apiKeyService,
+					ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
+				})
+			}
+			forwardCtx = withForwardResultBillingGate(forwardCtx, recordUsage)
+			result, err := h.gatewayService.ForwardAsResponses(forwardCtx, c, account, forwardBody, parsedReq)
+			cancelForward()
+
 			recordUsageResult := func(result *service.ForwardResult) {
 				if result == nil {
 					return
 				}
-				h.submitUsageRecordTask(func(ctx context.Context) {
+				if handled, billingErr := service.CommitForwardResultBillingGate(forwardCtx, result); handled {
+					if billingErr != nil {
+						reqLog.Error("gateway.responses.record_usage_failed",
+							zap.Int64("account_id", account.ID),
+							zap.Error(billingErr),
+						)
+					}
+					return
+				}
+				h.submitUsageRecordTask(forwardCtx, func(ctx context.Context) {
 					usageCtx := service.WithAccountShareModeRequestFromContext(ctx, forwardCtx)
-					if err := h.gatewayService.RecordUsage(usageCtx, &service.RecordUsageInput{
-						Result:             result,
-						APIKey:             currentAPIKey,
-						User:               currentAPIKey.User,
-						Account:            account,
-						Subscription:       currentSubscription,
-						InboundEndpoint:    inboundEndpoint,
-						UpstreamEndpoint:   upstreamEndpoint,
-						UserAgent:          userAgent,
-						IPAddress:          clientIP,
-						RequestPayloadHash: requestPayloadHash,
-						APIKeyService:      h.apiKeyService,
-						ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
-					}); err != nil {
+					if err := recordUsage(usageCtx, result); err != nil {
 						reqLog.Error("gateway.responses.record_usage_failed",
 							zap.Int64("account_id", account.ID),
 							zap.Error(err),

@@ -179,9 +179,9 @@ func (s *GatewayService) handleWebSearchEmulation(
 	}
 
 	if parsed.Stream {
-		return writeWebSearchStreamResponse(c, query, resp, model, startTime)
+		return writeWebSearchStreamResponse(ctx, c, query, resp, model, startTime)
 	}
-	return writeWebSearchNonStreamResponse(c, query, resp, model, startTime)
+	return writeWebSearchNonStreamResponse(ctx, c, query, resp, model, startTime)
 }
 
 func doWebSearch(ctx context.Context, account *Account, query string) (*websearch.SearchResponse, string, error) {
@@ -210,11 +210,27 @@ func resolveAccountProxyURL(account *Account) string {
 // --- SSE streaming response ---
 
 func writeWebSearchStreamResponse(
-	c *gin.Context, query string, resp *websearch.SearchResponse, model string, startTime time.Time,
+	ctx context.Context,
+	c *gin.Context,
+	query string,
+	resp *websearch.SearchResponse,
+	model string,
+	startTime time.Time,
 ) (*ForwardResult, error) {
 	msgID := webSearchMsgIDPrefix + uuid.New().String()
 	toolUseID := webSearchToolUseIDPrefix + uuid.New().String()[:16]
 	textSummary := buildTextSummary(query, resp.Results)
+	outputTokens := len(textSummary) / tokenEstimateDivisor
+	if outputTokens <= 0 {
+		outputTokens = 1
+	}
+	result := &ForwardResult{
+		Model:                model,
+		Stream:               true,
+		Duration:             time.Since(startTime),
+		Usage:                ClaudeUsage{OutputTokens: outputTokens},
+		BillingUsageComplete: true,
+	}
 
 	setSSEHeaders(c)
 	w := c.Writer
@@ -223,16 +239,22 @@ func writeWebSearchStreamResponse(
 		func() error { return writeSSEServerToolUse(w, toolUseID, query, 0) },
 		func() error { return writeSSEToolResult(w, toolUseID, resp.Results, 1) },
 		func() error { return writeSSETextBlock(w, textSummary, 2) },
-		func() error { return writeSSEMessageEnd(w, len(textSummary)/tokenEstimateDivisor) },
 	} {
 		if err := fn(); err != nil {
 			slog.Warn("web search emulation: SSE write failed, stopping", "error", err)
-			break
+			return result, &BillableStreamUsageError{Err: err}
 		}
 	}
-	w.Flush()
+	result.Duration = time.Since(startTime)
+	if handled, billingErr := CommitForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
+		return result, billingErr
+	}
+	if err := writeSSEMessageEnd(w, outputTokens); err != nil {
+		slog.Warn("web search emulation: terminal SSE write failed", "error", err)
+		return result, &BillableStreamUsageError{Err: err}
+	}
 
-	return &ForwardResult{Model: model, Duration: time.Since(startTime), Usage: ClaudeUsage{}}, nil
+	return result, nil
 }
 
 func setSSEHeaders(c *gin.Context) {
@@ -328,11 +350,20 @@ func flushSSEJSON(w http.ResponseWriter, event string, data any) error {
 // --- Non-streaming JSON response ---
 
 func writeWebSearchNonStreamResponse(
-	c *gin.Context, query string, resp *websearch.SearchResponse, model string, startTime time.Time,
+	ctx context.Context,
+	c *gin.Context,
+	query string,
+	resp *websearch.SearchResponse,
+	model string,
+	startTime time.Time,
 ) (*ForwardResult, error) {
 	msgID := webSearchMsgIDPrefix + uuid.New().String()
 	toolUseID := webSearchToolUseIDPrefix + uuid.New().String()[:16]
 	textSummary := buildTextSummary(query, resp.Results)
+	outputTokens := len(textSummary) / tokenEstimateDivisor
+	if outputTokens <= 0 {
+		outputTokens = 1
+	}
 
 	msg := map[string]any{
 		"id": msgID, "type": "message", "role": "assistant", "model": model,
@@ -348,16 +379,26 @@ func writeWebSearchNonStreamResponse(
 			map[string]any{"type": "text", "text": textSummary},
 		},
 		"stop_reason": "end_turn", "stop_sequence": nil,
-		"usage": map[string]int{"input_tokens": 0, "output_tokens": len(textSummary) / tokenEstimateDivisor},
+		"usage": map[string]int{"input_tokens": 0, "output_tokens": outputTokens},
 	}
 
 	body, err := json.Marshal(msg)
 	if err != nil {
 		return nil, fmt.Errorf("web search emulation: marshal response: %w", err)
 	}
+	result := &ForwardResult{
+		Model:                model,
+		Stream:               false,
+		Duration:             time.Since(startTime),
+		Usage:                ClaudeUsage{OutputTokens: outputTokens},
+		BillingUsageComplete: true,
+	}
+	if handled, billingErr := CommitForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
+		return result, billingErr
+	}
 	c.Data(http.StatusOK, "application/json", body)
 
-	return &ForwardResult{Model: model, Duration: time.Since(startTime), Usage: ClaudeUsage{}}, nil
+	return result, nil
 }
 
 // --- Helpers ---

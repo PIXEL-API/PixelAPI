@@ -691,7 +691,7 @@ func (s *UserService) buildEmailIdentitySummary(user *User, records []UserAuthId
 		summary.Bound = true
 		summary.BoundCount = len(filtered)
 		summary.DisplayName = email
-		summary.SubjectHint = maskEmailIdentity(email)
+		summary.SubjectHint = MaskEmailIdentity(email)
 		summary.ProviderKey = strings.TrimSpace(primary.ProviderKey)
 		summary.VerifiedAt = primary.VerifiedAt
 		return summary
@@ -705,7 +705,7 @@ func (s *UserService) buildEmailIdentitySummary(user *User, records []UserAuthId
 	summary.Bound = true
 	summary.BoundCount = 1
 	summary.DisplayName = email
-	summary.SubjectHint = maskEmailIdentity(email)
+	summary.SubjectHint = MaskEmailIdentity(email)
 	summary.ProviderKey = "email"
 	return summary
 }
@@ -943,7 +943,8 @@ func firstStringIdentityValue(values map[string]any, keys ...string) string {
 	return ""
 }
 
-func maskEmailIdentity(email string) string {
+// MaskEmailIdentity returns a Unicode-safe display hint for an email identity.
+func MaskEmailIdentity(email string) string {
 	local, domain, ok := strings.Cut(strings.TrimSpace(email), "@")
 	if !ok || local == "" || domain == "" {
 		return maskOpaqueIdentity(email)

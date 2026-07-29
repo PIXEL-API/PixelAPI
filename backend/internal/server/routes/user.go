@@ -45,6 +45,7 @@ func RegisterUserRoutes(
 	{
 		activities.GET("", h.Activity.ListWelfareActivities)
 		activities.GET("/winners", h.Activity.ListMyWinners)
+		activities.GET("/:id/public-winners", h.Activity.ListPublicWinners)
 		activities.POST("/:id/join", h.Activity.JoinDraw)
 		activities.POST("/winners/:id/claim", h.Activity.SubmitWinnerClaim)
 	}
@@ -205,6 +206,7 @@ func RegisterUserRoutes(
 			accountShare.POST("/listings/:id/join-intent", h.AccountShareMode.CreateJoinIntent)
 			accountShare.POST("/listings/:id/join", h.AccountShareMode.JoinListing)
 			accountShare.GET("/room-operations/:operation_id", h.AccountShareMode.GetRoomOperation)
+			accountShare.GET("/api-key-bindings/:apiKeyID/status", h.AccountShareMode.GetAPIKeyBindingStatus)
 			accountShare.GET("/queue/:apiKeyID", h.AccountShareMode.ListMembershipQueue)
 			accountShare.PATCH("/queue", h.AccountShareMode.ReorderMembershipQueue)
 			accountShare.PATCH("/memberships/:id/idle-timeout", h.AccountShareMode.UpdateMembershipIdleTimeout)

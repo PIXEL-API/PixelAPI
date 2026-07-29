@@ -123,6 +123,7 @@ func TestRunUpstreamToClient_ErrorAndDropPaths(t *testing.T) {
 			&relayState{},
 			nil,
 			nil,
+			nil,
 			drop,
 			nil,
 			nil,
@@ -150,6 +151,7 @@ func TestRunUpstreamToClient_ErrorAndDropPaths(t *testing.T) {
 			time.Now(),
 			time.Now,
 			&relayState{},
+			nil,
 			nil,
 			nil,
 			drop,
@@ -182,6 +184,7 @@ func TestRunUpstreamToClient_ErrorAndDropPaths(t *testing.T) {
 			time.Now(),
 			time.Now,
 			&relayState{},
+			nil,
 			nil,
 			nil,
 			drop,
@@ -313,6 +316,24 @@ func TestParseUsageAndEnrichCoverage(t *testing.T) {
 	parseUsageAndAccumulate(state, []byte(`{"type":"response.in_progress","response":{"usage":{"input_tokens":9}}}`), "response.in_progress", nil)
 	require.Equal(t, 5, state.usage.InputTokens)
 	enrichResult(nil, state, 0)
+}
+
+func TestOpenAIWSV2BillingUsageCompleteRequiresBothNonNegativeNumberFields(t *testing.T) {
+	require.True(t, openAIWSV2BillingUsageComplete([]byte(
+		`{"type":"response.completed","response":{"usage":{"input_tokens":0,"output_tokens":0}}}`,
+	)))
+	require.False(t, openAIWSV2BillingUsageComplete([]byte(
+		`{"type":"response.completed","response":{"usage":{"input_tokens":1}}}`,
+	)))
+	require.False(t, openAIWSV2BillingUsageComplete([]byte(
+		`{"type":"response.completed","response":{"usage":{"output_tokens":1}}}`,
+	)))
+	require.False(t, openAIWSV2BillingUsageComplete([]byte(
+		`{"type":"response.completed","response":{"usage":{"input_tokens":-1,"output_tokens":1}}}`,
+	)))
+	require.False(t, openAIWSV2BillingUsageComplete([]byte(
+		`{"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":"1"}}}`,
+	)))
 }
 
 func TestEmitTurnCompleteCoverage(t *testing.T) {

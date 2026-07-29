@@ -492,6 +492,7 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import {
   accountShareAPI,
+  loadAllPaginatedItems,
   type AccountShareListing,
   type AccountShareRoomAccount,
   type AccountShareRoomAccountsBatchResponse
@@ -571,6 +572,7 @@ const showCreateAccountFlow = ref(false)
 const pendingRemoveAccountIDs = ref<number[]>([])
 let accountsRequestVersion = 0
 let candidatesRequestVersion = 0
+let candidatesRequestController: AbortController | null = null
 let pendingOperationSignature = ''
 let pendingOperationIdempotencyKey = ''
 
@@ -668,6 +670,8 @@ watch(
   ([show]) => {
     accountsRequestVersion += 1
     candidatesRequestVersion += 1
+    candidatesRequestController?.abort()
+    candidatesRequestController = null
     loadingAccounts.value = false
     loadingCandidates.value = false
     operating.value = false
@@ -703,6 +707,8 @@ function isKnownLevel(value: unknown): boolean {
 function isRoomAccountHealthy(account: AccountShareRoomAccount): boolean {
   return account.status === 'active'
     && account.schedulable
+    && Number(account.current_concurrency) > 0
+    && account.placement_state === 'active'
 }
 
 function roomAccountHealthLabel(account: AccountShareRoomAccount): string {
@@ -723,9 +729,7 @@ function roomAccountHealthBadgeClass(account: AccountShareRoomAccount): string {
 }
 
 function isCandidateHealthy(account: Account): boolean {
-  return account.status === 'active'
-    && account.schedulable
-    && (!account.external_placement || account.external_placement.state === 'active')
+  return candidateAvailabilityDisabledReason(account) === ''
 }
 
 function candidateHealthLabel(account: Account): string {
@@ -736,6 +740,27 @@ function candidateHealthLabel(account: Account): string {
 
 function candidateHealthBadgeClass(account: Account): string {
   return badgeClass(isCandidateHealthy(account))
+}
+
+function candidateAvailabilityDisabledReason(account: Account): string {
+  if (account.status !== 'active') return t('accountShare.roomAccounts.accountInactive')
+  if (!account.schedulable) return t('accountShare.roomAccounts.accountUnschedulable')
+  if (!Number.isFinite(Number(account.concurrency)) || Number(account.concurrency) <= 0) {
+    return t('accountShare.roomAccounts.accountConcurrencyUnavailable')
+  }
+  if (!account.external_placement || account.external_placement.state !== 'active') {
+    return t('accountShare.roomAccounts.placementInactive')
+  }
+  const listingID = Number(props.listing?.id || 0)
+  const boundRoomID = Number(
+    account.account_share_mode_listing_id
+    || account.external_placement.room_id
+    || 0
+  )
+  if (boundRoomID > 0 && boundRoomID !== listingID) {
+    return t('accountShare.roomAccounts.accountOccupiedByOtherRoom')
+  }
+  return ''
 }
 
 function candidateDisabledReason(account: Account): string {
@@ -768,6 +793,9 @@ function candidateDisabledReason(account: Account): string {
       level: listing.account_level
     })
   }
+
+  const availabilityReason = candidateAvailabilityDisabledReason(account)
+  if (availabilityReason) return availabilityReason
 
   if (resolveAccountExternalPlacementTarget(account) !== 'room') {
     return t('accountShare.roomAccounts.platformModeRequired', {
@@ -992,15 +1020,24 @@ async function submitBatchOperation(
     : operation === 'add'
       ? Array.from(selectedCandidateIDs.value)
       : Array.from(selectedMemberIDs.value)
-  if (accountIDs.length === 0) return
+  const eligibleAccountIDs = operation === 'add'
+    ? accountIDs.filter((accountID) => {
+        const account = candidates.value.find((item) => item.id === accountID)
+        return Boolean(account && isCandidateEligible(account))
+      })
+    : accountIDs
+  if (operation === 'add' && eligibleAccountIDs.length !== accountIDs.length) {
+    selectedCandidateIDs.value = new Set(eligibleAccountIDs)
+  }
+  if (eligibleAccountIDs.length === 0) return
 
   operationSummary.value = null
   operationFailures.value = []
   operating.value = true
   try {
     const payload = {
-      account_ids: accountIDs,
-      idempotency_key: buildIdempotencyKey(operation, listingID, accountIDs)
+      account_ids: eligibleAccountIDs,
+      idempotency_key: buildIdempotencyKey(operation, listingID, eligibleAccountIDs)
     }
     const result = operation === 'add'
       ? await accountShareAPI.attachRoomAccounts(listingID, payload)
@@ -1075,29 +1112,31 @@ async function loadCandidates(): Promise<void> {
   if (!platform) return
 
   const currentVersion = ++candidatesRequestVersion
+  candidatesRequestController?.abort()
+  const controller = new AbortController()
+  candidatesRequestController = controller
   loadingCandidates.value = true
   candidatesErrorMessage.value = ''
   try {
-    const firstPage = await accountsAPI.list(1, 100, { platform })
-    const remainingPages = Array.from(
-      { length: Math.max(0, firstPage.pages - 1) },
-      (_, index) => index + 2
+    const loadedAccounts = await loadAllPaginatedItems(
+      (page) => accountsAPI.list(page, 100, { platform }, { signal: controller.signal }),
+      {
+        signal: controller.signal,
+        isCurrent: () => currentVersion === candidatesRequestVersion,
+        concurrency: 3
+      }
     )
-    const remainingResults = await Promise.all(
-      remainingPages.map((page) => accountsAPI.list(page, 100, { platform }))
-    )
-    if (currentVersion !== candidatesRequestVersion) return
-
     const accountByID = new Map<number, Account>()
-    for (const account of firstPage.items || []) accountByID.set(account.id, account)
-    for (const result of remainingResults) {
-      for (const account of result.items || []) accountByID.set(account.id, account)
-    }
+    for (const account of loadedAccounts) accountByID.set(account.id, account)
     candidates.value = Array.from(accountByID.values()).sort((left, right) => (
       left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: 'base' })
     ))
   } catch (error) {
-    if (currentVersion !== candidatesRequestVersion) return
+    if (
+      currentVersion !== candidatesRequestVersion
+      || controller.signal.aborted
+      || isCanceledRequest(error)
+    ) return
     candidates.value = []
     candidatesErrorMessage.value = extractApiErrorMessage(
       error,
@@ -1107,8 +1146,19 @@ async function loadCandidates(): Promise<void> {
   } finally {
     if (currentVersion === candidatesRequestVersion) {
       loadingCandidates.value = false
+      if (candidatesRequestController === controller) {
+        candidatesRequestController = null
+      }
     }
   }
+}
+
+function isCanceledRequest(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  const canceled = error as { code?: string; name?: string }
+  return canceled.code === 'ERR_CANCELED'
+    || canceled.name === 'CanceledError'
+    || canceled.name === 'AbortError'
 }
 </script>
 

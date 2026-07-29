@@ -46,6 +46,7 @@ var (
 	ErrAccountShareBillingIntentStateConflict = errors.New("account share billing intent state token conflict")
 	ErrAccountShareBillingIntentLeaseLost     = errors.New("account share billing intent worker lease lost")
 	ErrAccountShareBillingBindingUnavailable  = errors.New("account share billing binding is no longer active")
+	ErrAccountShareBillingPreTerminalCommit   = errors.New("account share billing was not durable before response completion")
 
 	ErrAccountShareBillingAdminRequired = infraerrors.Forbidden(
 		"ACCOUNT_SHARE_BILLING_ADMIN_REQUIRED",
@@ -401,6 +402,18 @@ type AccountShareBillingIntentAttentionCandidate struct {
 	NextAttemptAt    *time.Time
 }
 
+type AccountShareBillingRecoveryCursor struct {
+	UpdatedAt time.Time
+	ID        int64
+}
+
+type ListAccountShareBillingRecoveryCandidatesInput struct {
+	InFlightStaleBefore time.Time
+	CreatedStaleBefore  time.Time
+	After               *AccountShareBillingRecoveryCursor
+	Limit               int
+}
+
 // AccountShareBillingIntentAdminRecord is the deliberately small, non-secret
 // operator projection. It excludes command/usage payloads, credentials,
 // request bodies, headers, proxy data, and wallet data.
@@ -467,7 +480,7 @@ type AccountShareBillingIntentRepository interface {
 	MarkFailed(ctx context.Context, input MarkAccountShareBillingIntentFailedInput) (*AccountShareBillingIntentState, error)
 	EscalateStaleToNeedsAttention(ctx context.Context, input EscalateAccountShareBillingIntentInput) (*AccountShareBillingIntentState, error)
 	CountPendingByMembership(ctx context.Context, membershipID int64) (int64, error)
-	ListStaleForAttention(ctx context.Context, staleBefore time.Time, limit int) ([]AccountShareBillingIntentAttentionCandidate, error)
+	ListRecoveryCandidates(ctx context.Context, input ListAccountShareBillingRecoveryCandidatesInput) ([]AccountShareBillingIntentAttentionCandidate, error)
 }
 
 // AccountShareBillingIntentAdminRepository is intentionally separate from the

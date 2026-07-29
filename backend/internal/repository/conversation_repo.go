@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -103,6 +104,12 @@ func (r *conversationRepository) AddMessage(ctx context.Context, conversationID 
 	defer func() { _ = tx.Rollback() }()
 
 	txClient := tx.Client()
+	if _, err := txClient.SupportThread.Query().
+		Where(supportthread.IDEQ(conversationID)).
+		ForUpdate().
+		Only(ctx); err != nil {
+		return nil, translatePersistenceError(err, service.ErrConversationNotFound, nil)
+	}
 	createdMsg, err := txClient.SupportMessage.Create().
 		SetThreadID(conversationID).
 		SetSenderType(msg.SenderType).
@@ -129,6 +136,94 @@ func (r *conversationRepository) AddMessage(ctx context.Context, conversationID 
 		return nil, err
 	}
 	return r.GetByID(ctx, updatedThread.ID)
+}
+
+func (r *conversationRepository) SendAdminReplyTimeoutNotices(
+	ctx context.Context,
+	cutoff time.Time,
+	limit int,
+	content string,
+) (int, error) {
+	if cutoff.IsZero() || limit <= 0 || strings.TrimSpace(content) == "" {
+		return 0, service.ErrConversationInputRequired
+	}
+
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	txClient := tx.Client()
+	threads, err := txClient.SupportThread.Query().
+		Where(
+			supportthread.StatusEQ(service.ConversationStatusPendingAdmin),
+			supportthread.LastMessageSenderTypeEQ(service.ConversationSenderTypeUser),
+			supportthread.LastMessageAtLTE(cutoff),
+			supportthread.LastMessageIDNotNil(),
+		).
+		Order(dbent.Asc(supportthread.FieldLastMessageAt), dbent.Asc(supportthread.FieldID)).
+		Limit(limit).
+		ForUpdate(entsql.WithLockAction(entsql.SkipLocked)).
+		All(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	sent := 0
+	now := time.Now()
+	for _, thread := range threads {
+		if thread.LastMessageID == nil {
+			continue
+		}
+		sourceID := strconv.FormatInt(*thread.LastMessageID, 10)
+		exists, err := txClient.SupportMessage.Query().
+			Where(
+				supportmessage.ThreadIDEQ(thread.ID),
+				supportmessage.SourceEQ(service.AdminReplyTimeoutNoticeSource),
+				supportmessage.SourceIDEQ(sourceID),
+			).
+			Exist(ctx)
+		if err != nil {
+			return 0, err
+		}
+		if exists {
+			continue
+		}
+
+		message, err := txClient.SupportMessage.Create().
+			SetThreadID(thread.ID).
+			SetSenderType(service.ConversationSenderTypeSystem).
+			SetMessageType(service.ConversationMessageTypeNotice).
+			SetContentFormat(service.ConversationContentFormatPlain).
+			SetContent(content).
+			SetSource(service.AdminReplyTimeoutNoticeSource).
+			SetSourceID(sourceID).
+			SetMetadata(map[string]any{
+				"trigger_message_id": *thread.LastMessageID,
+				"timeout_hours":      int(service.AdminReplyTimeout / time.Hour),
+			}).
+			SetCreatedAt(now).
+			Save(ctx)
+		if err != nil {
+			return 0, err
+		}
+
+		if _, err := supportThreadLastMessageUpdate(
+			txClient.SupportThread.UpdateOneID(thread.ID),
+			message,
+		).
+			SetStatus(service.ConversationStatusPendingAdmin).
+			Save(ctx); err != nil {
+			return 0, translatePersistenceError(err, service.ErrConversationNotFound, nil)
+		}
+		sent++
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return sent, nil
 }
 
 func (r *conversationRepository) GetByID(ctx context.Context, id int64) (*service.Conversation, error) {

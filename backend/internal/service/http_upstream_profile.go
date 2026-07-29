@@ -22,7 +22,11 @@ func WithHTTPUpstreamProfile(ctx context.Context, profile HTTPUpstreamProfile) c
 	if profile == HTTPUpstreamProfileDefault {
 		return ctx
 	}
-	return context.WithValue(ctx, httpUpstreamProfileContextKey{}, profile)
+	ctx = context.WithValue(ctx, httpUpstreamProfileContextKey{}, profile)
+	if profile == HTTPUpstreamProfileOpenAI {
+		ctx = WithHTTPUpstreamRedirectsDisabled(ctx)
+	}
+	return ctx
 }
 
 // HTTPUpstreamProfileFromContext resolves the upstream transport profile from ctx.

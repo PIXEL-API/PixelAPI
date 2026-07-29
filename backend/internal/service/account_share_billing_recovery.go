@@ -14,8 +14,11 @@ import (
 
 const (
 	accountShareBillingRecoveryBatchSize = 100
+	accountShareBillingRecoveryMaxPages  = 10
 
-	accountShareBillingRecoveryReasonCode = "runtime_lease_expired_without_usage"
+	accountShareBillingRecoveryReasonCode   = "runtime_lease_expired_without_usage"
+	accountShareBillingCreatedReasonCode    = "forward_never_started_timeout"
+	accountShareBillingCreatedRecoveryDelay = 5 * time.Minute
 )
 
 type accountShareBillingRecoveryResult struct {
@@ -24,17 +27,32 @@ type accountShareBillingRecoveryResult struct {
 	ActiveLease       int
 	UnknownLeaseState int
 	ConcurrentChange  int
+	CreatedCancelled  int
+	ScanPages         int
 }
 
-// recoverStaleBillingIntentsOnce handles only in_flight intents whose durable
-// state is older than the runtime slot TTL. Redis remains authoritative: a
-// missing capability, Redis error, or positive lease count never escalates.
+// recoverStaleBillingIntentsOnce cancels created intents that never began
+// forwarding and escalates in-flight intents whose runtime lease disappeared.
+// A process-local keyset cursor advances across bounded scans and wraps only
+// after reaching the tail, so an active-lease prefix cannot starve later rows.
 func (s *AccountShareModeService) recoverStaleBillingIntentsOnce(
 	ctx context.Context,
 	now time.Time,
 	checkLease func(context.Context) error,
 ) (accountShareBillingRecoveryResult, error) {
 	result := accountShareBillingRecoveryResult{}
+	defer func() {
+		if result.CreatedCancelled > 0 || result.Escalated > 0 {
+			log.Printf(
+				"account_share_mode: billing recovery examined=%d created_cancelled=%d escalated=%d concurrent_change=%d scan_pages=%d",
+				result.Examined,
+				result.CreatedCancelled,
+				result.Escalated,
+				result.ConcurrentChange,
+				result.ScanPages,
+			)
+		}
+	}()
 	if s == nil || s.billingIntentRepository == nil {
 		return result, ErrServiceUnavailable
 	}
@@ -54,84 +72,172 @@ func (s *AccountShareModeService) recoverStaleBillingIntentsOnce(
 		now = now.UTC()
 	}
 	staleBefore := now.Add(-leaseTTL)
-	candidates, err := s.billingIntentRepository.ListStaleForAttention(
-		ctx,
-		staleBefore,
-		accountShareBillingRecoveryBatchSize,
-	)
-	if err != nil {
-		return result, err
-	}
+	createdStaleBefore := now.Add(-accountShareBillingCreatedRecoveryDelay)
 
 	var recoveryErrors []error
-	for _, candidate := range candidates {
-		result.Examined++
-		if err := checkLease(ctx); err != nil {
-			return result, errors.Join(append(recoveryErrors, err)...)
-		}
-		if candidate.ID <= 0 ||
-			candidate.MembershipID <= 0 ||
-			candidate.StateToken <= 0 ||
-			candidate.Status != AccountShareBillingIntentStatusInFlight ||
-			candidate.UpdatedAt.After(staleBefore) {
-			recoveryErrors = append(
-				recoveryErrors,
-				fmt.Errorf("invalid stale billing intent candidate id=%d", candidate.ID),
-			)
-			continue
-		}
-
-		hasLease, leaseErr := s.hasActiveMembershipLease(ctx, candidate.MembershipID)
-		if leaseErr != nil {
-			result.UnknownLeaseState++
-			recoveryErrors = append(
-				recoveryErrors,
-				fmt.Errorf("inspect billing intent %d runtime lease: %w", candidate.ID, leaseErr),
-			)
-			continue
-		}
-		if hasLease {
-			result.ActiveLease++
-			continue
-		}
-		if err := checkLease(ctx); err != nil {
-			return result, errors.Join(append(recoveryErrors, err)...)
-		}
-
-		state, escalateErr := s.billingIntentRepository.EscalateStaleToNeedsAttention(
+	s.billingRecoveryMu.Lock()
+	defer s.billingRecoveryMu.Unlock()
+	after := cloneAccountShareBillingRecoveryCursor(s.billingRecoveryAfter)
+	wrapped := after == nil
+	defer func() {
+		s.billingRecoveryAfter = cloneAccountShareBillingRecoveryCursor(after)
+	}()
+	for page := 0; page < accountShareBillingRecoveryMaxPages; page++ {
+		candidates, err := s.billingIntentRepository.ListRecoveryCandidates(
 			ctx,
-			EscalateAccountShareBillingIntentInput{
-				AccountShareBillingIntentTransition: AccountShareBillingIntentTransition{
-					ID:                 candidate.ID,
-					ExpectedStateToken: candidate.StateToken,
-				},
-				ReasonCode:    accountShareBillingRecoveryReasonCode,
-				ReasonMessage: "runtime membership lease expired before a durable usage payload was recorded",
-				StaleBefore:   staleBefore,
+			ListAccountShareBillingRecoveryCandidatesInput{
+				InFlightStaleBefore: staleBefore,
+				CreatedStaleBefore:  createdStaleBefore,
+				After:               after,
+				Limit:               accountShareBillingRecoveryBatchSize,
 			},
 		)
-		if errors.Is(escalateErr, ErrAccountShareBillingIntentStateConflict) ||
-			errors.Is(escalateErr, ErrAccountShareBillingIntentNotFound) {
-			result.ConcurrentChange++
-			continue
+		if err != nil {
+			return result, errors.Join(append(recoveryErrors, err)...)
 		}
-		if escalateErr != nil {
-			recoveryErrors = append(
-				recoveryErrors,
-				fmt.Errorf("escalate stale billing intent %d: %w", candidate.ID, escalateErr),
+		result.ScanPages++
+		if len(candidates) == 0 {
+			if after != nil && !wrapped {
+				after = nil
+				wrapped = true
+				continue
+			}
+			after = nil
+			break
+		}
+		for _, candidate := range candidates {
+			after = &AccountShareBillingRecoveryCursor{
+				UpdatedAt: candidate.UpdatedAt,
+				ID:        candidate.ID,
+			}
+			result.Examined++
+			if err := checkLease(ctx); err != nil {
+				return result, errors.Join(append(recoveryErrors, err)...)
+			}
+			if candidate.ID <= 0 ||
+				candidate.MembershipID <= 0 ||
+				candidate.StateToken <= 0 ||
+				candidate.UpdatedAt.IsZero() ||
+				(candidate.Status != AccountShareBillingIntentStatusCreated &&
+					candidate.Status != AccountShareBillingIntentStatusInFlight) {
+				recoveryErrors = append(
+					recoveryErrors,
+					fmt.Errorf("invalid stale billing intent candidate id=%d", candidate.ID),
+				)
+				continue
+			}
+			if candidate.Status == AccountShareBillingIntentStatusCreated {
+				if candidate.UpdatedAt.After(createdStaleBefore) || candidate.ForwardStartedAt != nil {
+					recoveryErrors = append(
+						recoveryErrors,
+						fmt.Errorf("invalid stale created billing intent candidate id=%d", candidate.ID),
+					)
+					continue
+				}
+				state, cancelErr := s.billingIntentRepository.CancelCreated(
+					ctx,
+					AccountShareBillingIntentTransition{
+						ID:                 candidate.ID,
+						ExpectedStateToken: candidate.StateToken,
+					},
+					accountShareBillingCreatedReasonCode,
+					"billing dispatch did not start before the recovery deadline",
+				)
+				if errors.Is(cancelErr, ErrAccountShareBillingIntentStateConflict) ||
+					errors.Is(cancelErr, ErrAccountShareBillingIntentNotFound) {
+					result.ConcurrentChange++
+					continue
+				}
+				if cancelErr != nil {
+					recoveryErrors = append(
+						recoveryErrors,
+						fmt.Errorf("cancel stale created billing intent %d: %w", candidate.ID, cancelErr),
+					)
+					continue
+				}
+				if state == nil || state.Status != AccountShareBillingIntentStatusCancelled {
+					recoveryErrors = append(
+						recoveryErrors,
+						fmt.Errorf("cancel stale created billing intent %d returned an invalid state", candidate.ID),
+					)
+					continue
+				}
+				result.CreatedCancelled++
+				continue
+			}
+			if candidate.UpdatedAt.After(staleBefore) {
+				recoveryErrors = append(
+					recoveryErrors,
+					fmt.Errorf("invalid stale in-flight billing intent candidate id=%d", candidate.ID),
+				)
+				continue
+			}
+
+			hasLease, leaseErr := s.hasActiveMembershipLease(ctx, candidate.MembershipID)
+			if leaseErr != nil {
+				result.UnknownLeaseState++
+				recoveryErrors = append(
+					recoveryErrors,
+					fmt.Errorf("inspect billing intent %d runtime lease: %w", candidate.ID, leaseErr),
+				)
+				continue
+			}
+			if hasLease {
+				result.ActiveLease++
+				continue
+			}
+			if err := checkLease(ctx); err != nil {
+				return result, errors.Join(append(recoveryErrors, err)...)
+			}
+
+			state, escalateErr := s.billingIntentRepository.EscalateStaleToNeedsAttention(
+				ctx,
+				EscalateAccountShareBillingIntentInput{
+					AccountShareBillingIntentTransition: AccountShareBillingIntentTransition{
+						ID:                 candidate.ID,
+						ExpectedStateToken: candidate.StateToken,
+					},
+					ReasonCode:    accountShareBillingRecoveryReasonCode,
+					ReasonMessage: "runtime membership lease expired before a durable usage payload was recorded",
+					StaleBefore:   staleBefore,
+				},
 			)
-			continue
+			if errors.Is(escalateErr, ErrAccountShareBillingIntentStateConflict) ||
+				errors.Is(escalateErr, ErrAccountShareBillingIntentNotFound) {
+				result.ConcurrentChange++
+				continue
+			}
+			if escalateErr != nil {
+				recoveryErrors = append(
+					recoveryErrors,
+					fmt.Errorf("escalate stale billing intent %d: %w", candidate.ID, escalateErr),
+				)
+				continue
+			}
+			if state == nil || state.Status != AccountShareBillingIntentStatusNeedsAttention {
+				recoveryErrors = append(
+					recoveryErrors,
+					fmt.Errorf("escalate stale billing intent %d returned an invalid state", candidate.ID),
+				)
+				continue
+			}
+			result.Escalated++
 		}
-		if state == nil || state.Status != AccountShareBillingIntentStatusNeedsAttention {
-			recoveryErrors = append(
-				recoveryErrors,
-				fmt.Errorf("escalate stale billing intent %d returned an invalid state", candidate.ID),
-			)
-			continue
+		if result.Escalated+result.CreatedCancelled+result.ConcurrentChange >= accountShareBillingRecoveryBatchSize {
+			break
 		}
-		result.Escalated++
 	}
 	return result, errors.Join(recoveryErrors...)
+}
+
+func cloneAccountShareBillingRecoveryCursor(
+	cursor *AccountShareBillingRecoveryCursor,
+) *AccountShareBillingRecoveryCursor {
+	if cursor == nil {
+		return nil
+	}
+	cloned := *cursor
+	return &cloned
 }
 
 func (s *AccountShareModeService) accountShareRuntimeLeaseTTL() (time.Duration, error) {

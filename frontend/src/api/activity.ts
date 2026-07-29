@@ -1,5 +1,5 @@
 import { apiClient } from './client'
-import type { ActivityCampaign, ActivityProgress, ActivityWinner } from '@/types/activity'
+import type { ActivityCampaign, ActivityProgress, ActivityWinner, ActivityWinnerPublicPage } from '@/types/activity'
 
 export const activityAPI = {
   async listWelfareActivities(): Promise<ActivityCampaign[]> {
@@ -10,6 +10,13 @@ export const activityAPI = {
   async listMyWinners(): Promise<ActivityWinner[]> {
     const { data } = await apiClient.get<ActivityWinner[]>('/activities/winners')
     return data || []
+  },
+
+  async listPublicWinners(id: number, page = 1, pageSize = 50): Promise<ActivityWinnerPublicPage> {
+    const { data } = await apiClient.get<ActivityWinnerPublicPage>(`/activities/${id}/public-winners`, {
+      params: { page, page_size: pageSize },
+    })
+    return data
   },
 
   async joinDraw(id: number): Promise<ActivityProgress> {

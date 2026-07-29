@@ -259,38 +259,41 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div v-if="allEndpoints.length > 0" class="flex min-w-0 flex-wrap gap-2">
+  <div
+    v-if="allEndpoints.length > 0"
+    class="grid min-w-0 grid-cols-1 gap-2.5 sm:grid-cols-2 xl:grid-cols-4"
+  >
     <div
       v-for="(item, index) in allEndpoints"
       :key="`${item.endpoint}:${index}`"
-      class="endpoint-chip flex w-full max-w-full min-w-0 flex-wrap items-center gap-1.5 rounded-control border border-line bg-surface px-2.5 py-1.5 text-xs transition-colors hover:border-line-strong sm:w-auto"
+      class="endpoint-chip group/card flex w-full max-w-full min-w-0 flex-wrap flex-col items-stretch overflow-visible rounded-control border border-line bg-surface p-2.5 text-xs shadow-sm transition-[border-color,box-shadow] hover:border-line-strong hover:shadow-md"
     >
-      <span
-        data-testid="endpoint-name"
-        class="min-w-0 max-w-full break-words font-medium text-content-muted [overflow-wrap:anywhere]"
-      >
-        {{ item.name }}
-      </span>
-      <span
-        v-if="item.isDefault"
-        class="flex-shrink-0 rounded bg-brand-soft px-1 py-px text-[10px] font-medium leading-tight text-brand"
-      >{{ t('keys.endpoints.default') }}</span>
-
-      <span class="hidden flex-shrink-0 text-line-strong sm:inline">|</span>
+      <div class="mb-2 flex min-w-0 items-center gap-1.5 px-0.5">
+        <span
+          data-testid="endpoint-name"
+          class="min-w-0 flex-1 break-words font-medium leading-5 text-content [overflow-wrap:anywhere]"
+        >
+          {{ item.name }}
+        </span>
+        <span
+          v-if="item.isDefault"
+          class="flex-shrink-0 rounded-full bg-brand-soft px-1.5 py-0.5 text-[10px] font-medium leading-tight text-brand"
+        >{{ t('keys.endpoints.default') }}</span>
+      </div>
 
       <div
         data-testid="endpoint-actions"
-        class="flex w-full min-w-0 items-start gap-1 sm:w-auto sm:flex-1"
+        class="flex w-full min-w-0 items-stretch rounded-lg bg-surface-subtle ring-1 ring-inset ring-line"
       >
         <div
           data-testid="endpoint-copy-region"
-          class="group/copy relative flex min-w-0 flex-1 items-start gap-1"
+          class="group/copy relative flex min-w-0 flex-1 items-center"
           @mouseenter="positionTooltip(index, $event)"
           @focusin="positionTooltip(index, $event)"
         >
           <code
             data-testid="endpoint-url"
-            class="min-w-0 flex-1 select-all whitespace-normal break-all py-1 font-mono leading-5 text-content-muted [overflow-wrap:anywhere]"
+            class="min-w-0 flex-1 select-all whitespace-normal break-all py-2 pl-2.5 font-mono text-[11px] leading-4 text-content-muted [overflow-wrap:anywhere]"
           >{{ item.endpoint }}</code>
 
           <button
@@ -361,7 +364,7 @@ onBeforeUnmount(() => {
           :href="speedTestUrl(item.endpoint)"
           target="_blank"
           rel="noopener noreferrer"
-          class="endpoint-action inline-flex min-h-11 min-w-11 flex-shrink-0 items-center justify-center rounded-lg text-content-subtle transition-colors hover:bg-surface-hover hover:text-warning"
+          class="endpoint-action inline-flex min-h-11 min-w-11 flex-shrink-0 items-center justify-center border-l border-line text-content-subtle transition-colors first:rounded-l-lg last:rounded-r-lg hover:bg-surface-hover hover:text-warning"
           :title="t('keys.endpoints.speedTest')"
           :aria-label="t('keys.endpoints.speedTest')"
         >

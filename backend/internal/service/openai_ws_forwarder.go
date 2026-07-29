@@ -2348,6 +2348,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	}
 
 	usage := &OpenAIUsage{}
+	var billingUsageObservation openAIResponsesBillingUsageObservation
 	imageCounter := newOpenAIImageOutputCounter()
 	var firstTokenMs *int
 	responseID := ""
@@ -2366,6 +2367,25 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	flushedBufferedEventCount := 0
 	firstEventType := ""
 	lastEventType := ""
+	buildForwardResult := func() *OpenAIForwardResult {
+		usage.ImageCount = imageCounter.Count()
+		result := &OpenAIForwardResult{
+			RequestID:            responseID,
+			Usage:                *usage,
+			BillingUsageComplete: billingUsageObservation.complete(),
+			Model:                originalModel,
+			UpstreamModel:        mappedModel,
+			ServiceTier:          serviceTier,
+			ReasoningEffort:      reasoningEffort,
+			Stream:               reqStream,
+			OpenAIWSMode:         true,
+			ResponseHeaders:      lease.HandshakeHeaders(),
+			Duration:             time.Since(startTime),
+			FirstTokenMs:         firstTokenMs,
+		}
+		applyOpenAIResponseImageAccounting(result, imageBillingConfig)
+		return result
+	}
 
 	var flusher http.Flusher
 	if reqStream {
@@ -2519,6 +2539,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		if normalized, changed := normalizeCompletedImageGenerationStatus(message); changed {
 			message = normalized
 		}
+		billingUsageObservation.observePayload(message)
 
 		eventType, eventResponseID, responseField := parseOpenAIWSEventEnvelope(message)
 		if eventType == "" {
@@ -2655,6 +2676,13 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				}
 			}
 		}
+		if reqStream && isOpenAIWSSuccessTerminalEvent(eventType) {
+			result := buildForwardResult()
+			if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
+				lease.MarkBroken()
+				return result, billingErr
+			}
+		}
 
 		if reqStream {
 			// 在首个 token 前先缓冲事件（如 response.created），
@@ -2721,6 +2749,11 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			responseID = strings.TrimSpace(gjson.GetBytes(finalResponse, "id").String())
 		}
 
+		result := buildForwardResult()
+		if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
+			lease.MarkBroken()
+			return result, billingErr
+		}
 		c.Data(http.StatusOK, "application/json", finalResponse)
 	} else {
 		flushStreamWriter(true)
@@ -2760,22 +2793,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		clientDisconnected,
 	)
 
-	usage.ImageCount = imageCounter.Count()
-	result := &OpenAIForwardResult{
-		RequestID:       responseID,
-		Usage:           *usage,
-		Model:           originalModel,
-		UpstreamModel:   mappedModel,
-		ServiceTier:     serviceTier,
-		ReasoningEffort: reasoningEffort,
-		Stream:          reqStream,
-		OpenAIWSMode:    true,
-		ResponseHeaders: lease.HandshakeHeaders(),
-		Duration:        time.Since(startTime),
-		FirstTokenMs:    firstTokenMs,
-	}
-	applyOpenAIResponseImageAccounting(result, imageBillingConfig)
-	return result, nil
+	return buildForwardResult(), nil
 }
 
 func (s *OpenAIGatewayService) openAIWSIngressInterTurnIdleTimeout() time.Duration {
@@ -3408,6 +3426,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 
 		responseID := ""
 		usage := OpenAIUsage{}
+		var billingUsageObservation openAIResponsesBillingUsageObservation
 		imageCounter := newOpenAIImageOutputCounter()
 		var firstTokenMs *int
 		reqStream := openAIWSPayloadBoolFromRaw(payload, "stream", true)
@@ -3435,17 +3454,18 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		buildTurnResult := func() *OpenAIForwardResult {
 			usage.ImageCount = imageCounter.Count()
 			result := &OpenAIForwardResult{
-				RequestID:       responseID,
-				Usage:           usage,
-				Model:           originalModel,
-				UpstreamModel:   mappedModel,
-				ServiceTier:     extractOpenAIServiceTierFromBody(payload),
-				ReasoningEffort: extractOpenAIReasoningEffortFromBody(payload, mappedModel, originalModel),
-				Stream:          reqStream,
-				OpenAIWSMode:    true,
-				ResponseHeaders: lease.HandshakeHeaders(),
-				Duration:        time.Since(turnStart),
-				FirstTokenMs:    firstTokenMs,
+				RequestID:            responseID,
+				Usage:                usage,
+				BillingUsageComplete: billingUsageObservation.complete(),
+				Model:                originalModel,
+				UpstreamModel:        mappedModel,
+				ServiceTier:          extractOpenAIServiceTierFromBody(payload),
+				ReasoningEffort:      extractOpenAIReasoningEffortFromBody(payload, mappedModel, originalModel),
+				Stream:               reqStream,
+				OpenAIWSMode:         true,
+				ResponseHeaders:      lease.HandshakeHeaders(),
+				Duration:             time.Since(turnStart),
+				FirstTokenMs:         firstTokenMs,
 			}
 			applyOpenAIResponseImageAccounting(result, imageBillingConfig)
 			return result
@@ -3471,6 +3491,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if normalized, changed := normalizeCompletedImageGenerationStatus(upstreamMessage); changed {
 				upstreamMessage = normalized
 			}
+			billingUsageObservation.observePayload(upstreamMessage)
 
 			eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(upstreamMessage)
 			if responseID == "" && eventResponseID != "" {
@@ -3573,6 +3594,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				parseOpenAIWSResponseUsageFromCompletedEvent(upstreamMessage, &usage)
 			}
 
+			var terminalResult *OpenAIForwardResult
 			if !clientDisconnected {
 				if needModelReplace && len(mappedModelBytes) > 0 && openAIWSEventMayContainModel(eventType) && bytes.Contains(upstreamMessage, mappedModelBytes) {
 					upstreamMessage = replaceOpenAIWSMessageModel(upstreamMessage, mappedModel, originalModel)
@@ -3582,6 +3604,15 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 						upstreamMessage = corrected
 					}
 				}
+			}
+			if isOpenAIWSSuccessTerminalEvent(eventType) {
+				terminalResult = buildTurnResult()
+				if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(turnCtx, terminalResult); handled && billingErr != nil {
+					lease.MarkBroken()
+					return terminalResult, billingErr
+				}
+			}
+			if !clientDisconnected {
 				if err := writeClientMessage(turnCtx, upstreamMessage); err != nil {
 					if isOpenAIWSClientDisconnectError(err) {
 						clientDisconnected = true
@@ -3631,7 +3662,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 						clientDisconnected,
 					)
 				}
-				return buildTurnResult(), nil
+				if terminalResult == nil {
+					terminalResult = buildTurnResult()
+				}
+				return terminalResult, nil
 			}
 		}
 	}
@@ -4496,6 +4530,15 @@ func payloadAsJSONBytes(payload map[string]any) []byte {
 func isOpenAIWSTerminalEvent(eventType string) bool {
 	switch strings.TrimSpace(eventType) {
 	case "response.completed", "response.done", "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
+		return true
+	default:
+		return false
+	}
+}
+
+func isOpenAIWSSuccessTerminalEvent(eventType string) bool {
+	switch strings.TrimSpace(eventType) {
+	case "response.completed", "response.done", "response.incomplete", "response.cancelled", "response.canceled":
 		return true
 	default:
 		return false

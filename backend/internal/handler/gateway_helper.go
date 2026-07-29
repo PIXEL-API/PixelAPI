@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"net/http"
@@ -20,6 +21,8 @@ import (
 var claudeCodeValidator = service.NewClaudeCodeValidator()
 
 const claudeCodeParsedRequestContextKey = "claude_code_parsed_request"
+
+const accountSharePreTerminalBillingTimeout = 20 * time.Second
 
 // SetClaudeCodeClientContext 检查请求是否来自 Claude Code 客户端，并设置到 context 中
 // 返回更新后的 context
@@ -267,6 +270,48 @@ func beginAccountShareBillingDispatch(
 	return service.WithAccountShareBillingDispatch(ctx, dispatch), nil
 }
 
+func withForwardResultBillingGate(
+	ctx context.Context,
+	submit func(context.Context, *service.ForwardResult) error,
+) context.Context {
+	if submit == nil {
+		return ctx
+	}
+	if _, durable := service.AccountShareBillingDispatchFromContext(ctx); !durable {
+		return ctx
+	}
+	sourceCtx := ctx
+	gate := service.NewForwardResultBillingGate(func(result *service.ForwardResult) error {
+		billingCtx, cancel := context.WithTimeout(context.Background(), accountSharePreTerminalBillingTimeout)
+		defer cancel()
+		billingCtx = service.WithAccountShareModeRequestFromContext(billingCtx, sourceCtx)
+		billingCtx = service.WithAccountShareBillingDispatchFromContext(billingCtx, sourceCtx)
+		return submit(billingCtx, result)
+	})
+	return service.WithForwardResultBillingGate(ctx, gate)
+}
+
+func withOpenAIForwardResultBillingGate(
+	ctx context.Context,
+	submit func(context.Context, *service.OpenAIForwardResult) error,
+) context.Context {
+	if submit == nil {
+		return ctx
+	}
+	if _, durable := service.AccountShareBillingDispatchFromContext(ctx); !durable {
+		return ctx
+	}
+	sourceCtx := ctx
+	gate := service.NewOpenAIForwardResultBillingGate(func(result *service.OpenAIForwardResult) error {
+		billingCtx, cancel := context.WithTimeout(context.Background(), accountSharePreTerminalBillingTimeout)
+		defer cancel()
+		billingCtx = service.WithAccountShareModeRequestFromContext(billingCtx, sourceCtx)
+		billingCtx = service.WithAccountShareBillingDispatchFromContext(billingCtx, sourceCtx)
+		return submit(billingCtx, result)
+	})
+	return service.WithOpenAIForwardResultBillingGate(ctx, gate)
+}
+
 func completeAccountShareBillingDispatchWithoutUsage(
 	ctx context.Context,
 	forwardErr error,
@@ -275,6 +320,9 @@ func completeAccountShareBillingDispatchWithoutUsage(
 ) error {
 	if forwardErr == nil || hasBillableUsage {
 		return nil
+	}
+	if errors.Is(forwardErr, service.ErrAccountShareBillingPreTerminalCommit) {
+		return forwardErr
 	}
 	_, err := service.CompleteAccountShareBillingDispatchWithoutUsage(
 		ctx,

@@ -52,6 +52,7 @@ func TestAccountTestService_TestAccountConnection_OpenAICompactOAuthSuccessPersi
 	err := svc.TestAccountConnection(c, account.ID, "gpt-5.4", "", AccountTestModeCompact)
 	require.NoError(t, err)
 
+	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.lastReq.Context()))
 	require.Equal(t, chatgptCodexAPIURL+"/compact", upstream.lastReq.URL.String())
 	require.Equal(t, "chatgpt.com", upstream.lastReq.Host)
 	require.Equal(t, "application/json", upstream.lastReq.Header.Get("Accept"))
@@ -151,6 +152,7 @@ func TestAccountTestService_TestAccountConnection_OpenAICompactAPIKeyUsesCompact
 	err := svc.TestAccountConnection(c, account.ID, "gpt-5.4", "", AccountTestModeCompact)
 	require.NoError(t, err)
 
+	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.lastReq.Context()))
 	require.Equal(t, "https://example.com/v1/responses/compact", upstream.lastReq.URL.String())
 	require.Equal(t, "gpt-5.4-openai-compact", gjson.GetBytes(upstream.lastBody, "model").String())
 	updates := <-updateCalls
@@ -196,4 +198,59 @@ func TestAccountTestService_TestAccountConnection_OpenAICompactAPIKeyDefaultBase
 	require.NoError(t, err)
 	require.Equal(t, "https://api.openai.com/v1/responses/compact", upstream.lastReq.URL.String())
 	<-updateCalls
+}
+
+func TestAccountTestService_OpenAICompactRejectsUnexpectedStatusBeforeReadingOrPersisting(t *testing.T) {
+	for _, statusCode := range []int{
+		http.StatusContinue,
+		http.StatusFound,
+		http.StatusNotModified,
+		http.StatusTemporaryRedirect,
+		http.StatusPermanentRedirect,
+	} {
+		statusCode := statusCode
+		t.Run(http.StatusText(statusCode), func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+
+			body := &accountTestTrackingBody{
+				reader: strings.NewReader(`{"id":"cmp_redirect","status":"completed"}`),
+			}
+			headers := make(http.Header)
+			headers.Set("x-codex-primary-used-percent", "100")
+			headers.Set("x-codex-primary-reset-after-seconds", "604800")
+			headers.Set("x-codex-primary-window-minutes", "10080")
+			updateCalls := make(chan map[string]any, 1)
+			repo := &snapshotUpdateAccountRepo{updateExtraCalls: updateCalls}
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: statusCode,
+				Header:     headers,
+				Body:       body,
+			}}
+			svc := &AccountTestService{
+				accountRepo:  repo,
+				httpUpstream: upstream,
+			}
+			account := &Account{
+				ID:          5,
+				Platform:    PlatformOpenAI,
+				Type:        AccountTypeOAuth,
+				Concurrency: 1,
+				Credentials: map[string]any{
+					"access_token": "oauth-token",
+				},
+			}
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/5/test", bytes.NewReader(nil))
+
+			err := svc.testOpenAICompactConnection(c, account, "gpt-5.4")
+
+			require.Error(t, err)
+			require.NotNil(t, upstream.lastReq)
+			require.True(t, HTTPUpstreamRedirectsDisabled(upstream.lastReq.Context()))
+			require.False(t, body.readCalled)
+			require.Empty(t, updateCalls)
+			require.NotContains(t, rec.Body.String(), "\"success\":true")
+		})
+	}
 }

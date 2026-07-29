@@ -233,6 +233,7 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardStreamPreservesBodyAnd
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, result.Stream)
+	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.lastReq.Context()))
 
 	require.Equal(t, "claude-3-haiku-20240307", gjson.GetBytes(upstream.lastBody, "model").String(), "透传模式应应用账号级模型映射")
 
@@ -1051,21 +1052,23 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_MissingTerminalEventReturnsEr
 		rateLimitService: &RateLimitService{},
 	}
 
+	upstreamSSE := strings.Join([]string{
+		`data: {"type":"message_start","message":{"usage":{"input_tokens":11}}}`,
+		"",
+		`data: {"type":"message_delta","usage":{"output_tokens":5}}`,
+		"",
+	}, "\n")
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
-			`data: {"type":"message_start","message":{"usage":{"input_tokens":11}}}`,
-			"",
-			`data: {"type":"message_delta","usage":{"output_tokens":5}}`,
-			"",
-		}, "\n"))),
+		Body:       io.NopCloser(strings.NewReader(upstreamSSE)),
 	}
 
 	result, err := svc.handleStreamingResponseAnthropicAPIKeyPassthrough(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "claude-3-7-sonnet-20250219")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "missing terminal event")
 	require.NotNil(t, result)
+	require.Equal(t, upstreamSSE, rec.Body.String(), "EOF must not synthesize an extra SSE boundary")
 }
 
 func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardDirect_NonStreamingSuccess(t *testing.T) {
@@ -1100,6 +1103,234 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardDirect_NonStreamingSuc
 	require.Equal(t, 5, result.Usage.CacheCreationInputTokens)
 	require.Equal(t, 4, result.Usage.CacheReadInputTokens)
 	require.Equal(t, upstreamJSON, rec.Body.String())
+}
+
+func TestGatewayService_AnthropicAPIKeyPassthrough_NonStreamingBillingGateBlocksBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	upstreamJSON := `{"id":"msg_1","type":"message","usage":{"input_tokens":12,"output_tokens":7}}`
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid-nonstream-gate"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamJSON)),
+	}
+	submitErr := errors.New("billing unavailable")
+	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(result *ForwardResult) error {
+		require.Equal(t, 12, result.Usage.InputTokens)
+		require.Equal(t, 7, result.Usage.OutputTokens)
+		return submitErr
+	}))
+	svc := &GatewayService{cfg: &config.Config{}, rateLimitService: &RateLimitService{}}
+
+	usage, err := svc.handleNonStreamingResponseAnthropicAPIKeyPassthroughWithModels(
+		ctx,
+		resp,
+		c,
+		newAnthropicAPIKeyAccountForTest(),
+		time.Now(),
+		"claude-original",
+		"claude-upstream",
+	)
+
+	require.NotNil(t, usage)
+	require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
+	require.ErrorIs(t, err, submitErr)
+	require.Empty(t, rec.Body.String())
+}
+
+func TestGatewayService_AnthropicAPIKeyPassthrough_NonStreamingBillingGateRejectsPartialUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"id":"msg_partial","type":"message","usage":{"input_tokens":12}}`)),
+	}
+	submitCalls := 0
+	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(*ForwardResult) error {
+		submitCalls++
+		return nil
+	}))
+	svc := &GatewayService{cfg: &config.Config{}, rateLimitService: &RateLimitService{}}
+
+	usage, err := svc.handleNonStreamingResponseAnthropicAPIKeyPassthroughWithModels(
+		ctx,
+		resp,
+		c,
+		newAnthropicAPIKeyAccountForTest(),
+		time.Now(),
+		"claude-original",
+		"claude-upstream",
+	)
+
+	require.NotNil(t, usage)
+	require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
+	require.Zero(t, submitCalls)
+	require.Empty(t, rec.Body.String())
+}
+
+func TestGatewayService_AnthropicAPIKeyPassthrough_StreamingBillingGateBlocksMessageStop(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	upstreamSSE := strings.Join([]string{
+		`data: {"type":"message_start","message":{"usage":{"input_tokens":11}}}`,
+		"",
+		`data: {"type":"message_delta","usage":{"output_tokens":5}}`,
+		"",
+		`data: {"type":"message_stop"}`,
+		"",
+	}, "\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid-stream-gate"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamSSE)),
+	}
+	submitErr := errors.New("billing unavailable")
+	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(result *ForwardResult) error {
+		require.Equal(t, 11, result.Usage.InputTokens)
+		require.Equal(t, 5, result.Usage.OutputTokens)
+		return submitErr
+	}))
+	svc := &GatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}}
+
+	result, err := svc.handleStreamingResponseAnthropicAPIKeyPassthroughWithModels(
+		ctx,
+		resp,
+		c,
+		newAnthropicAPIKeyAccountForTest(),
+		time.Now(),
+		"claude-original",
+		"claude-upstream",
+	)
+
+	require.NotNil(t, result)
+	require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
+	require.ErrorIs(t, err, submitErr)
+	require.Contains(t, rec.Body.String(), `"type":"message_delta"`)
+	require.NotContains(t, rec.Body.String(), `"type":"message_stop"`)
+}
+
+func TestGatewayService_AnthropicAPIKeyPassthrough_StreamingBillingGateRejectsPartialUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	upstreamSSE := strings.Join([]string{
+		`data: {"type":"message_start","message":{"usage":{"input_tokens":11}}}`,
+		"",
+		`data: {"type":"message_stop"}`,
+		"",
+	}, "\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamSSE)),
+	}
+	submitCalls := 0
+	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(*ForwardResult) error {
+		submitCalls++
+		return nil
+	}))
+	svc := &GatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}}
+
+	result, err := svc.handleStreamingResponseAnthropicAPIKeyPassthroughWithModels(
+		ctx,
+		resp,
+		c,
+		newAnthropicAPIKeyAccountForTest(),
+		time.Now(),
+		"claude-original",
+		"claude-upstream",
+	)
+
+	require.NotNil(t, result)
+	require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
+	require.Zero(t, submitCalls)
+	require.NotContains(t, rec.Body.String(), `"type":"message_stop"`)
+}
+
+func TestGatewayService_AnthropicAPIKeyPassthrough_StreamingStopsAfterMessageStop(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	upstreamSSE := strings.Join([]string{
+		`data: {"type":"message_start","message":{"usage":{"input_tokens":11}}}`,
+		"",
+		`data: {"type":"message_delta","usage":{"output_tokens":5}}`,
+		"",
+		`data: {"type":"message_stop"}`,
+		"",
+		`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"must-not-leak"}}`,
+		"",
+	}, "\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamSSE)),
+	}
+	svc := &GatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}}
+
+	result, err := svc.handleStreamingResponseAnthropicAPIKeyPassthroughWithModels(
+		context.Background(),
+		resp,
+		c,
+		newAnthropicAPIKeyAccountForTest(),
+		time.Now(),
+		"claude-original",
+		"claude-upstream",
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Contains(t, rec.Body.String(), `"type":"message_stop"`)
+	require.NotContains(t, rec.Body.String(), "must-not-leak")
+}
+
+func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardRejectsRedirect(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusFound,
+		Header:     http.Header{"Location": []string{"https://internal.example/secret"}},
+		Body:       io.NopCloser(strings.NewReader(`{"message":"redirected"}`)),
+	}}
+	svc := &GatewayService{
+		cfg:              &config.Config{},
+		httpUpstream:     upstream,
+		rateLimitService: &RateLimitService{},
+	}
+
+	result, err := svc.forwardAnthropicAPIKeyPassthrough(
+		context.Background(),
+		c,
+		newAnthropicAPIKeyAccountForTest(),
+		[]byte(`{"model":"claude-test"}`),
+		"claude-test",
+		"claude-test",
+		false,
+		time.Now(),
+	)
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.Equal(t, http.StatusBadGateway, rec.Code)
+	require.NotContains(t, rec.Body.String(), "internal.example")
+	require.NotContains(t, rec.Body.String(), "redirected")
 }
 
 func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardDirect_NonStreamingClientCancelStillReturnsUsage(t *testing.T) {

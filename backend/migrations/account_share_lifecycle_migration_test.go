@@ -96,3 +96,17 @@ func TestAccountShareLifecycleIndexesAreConcurrentAndIndependentFromAccountCapac
 	require.NotContains(t, upperSQL, "BEGIN")
 	require.NotContains(t, upperSQL, "COMMIT")
 }
+
+func TestAccountShareReviewRoomSubjectMigrationOnlyRelaxesIdentityNullability(t *testing.T) {
+	content, err := FS.ReadFile("252_account_share_reviews_room_subject.sql")
+	require.NoError(t, err)
+	sql := strings.Join(strings.Fields(string(content)), " ")
+	upperSQL := strings.ToUpper(sql)
+
+	require.Contains(t, sql, "SET LOCAL lock_timeout = '2s'")
+	require.Contains(t, sql, "SET LOCAL statement_timeout = '60s'")
+	require.Contains(t, sql, "ALTER TABLE account_share_reviews ALTER COLUMN account_identity_id DROP NOT NULL")
+	require.NotContains(t, upperSQL, "DELETE FROM ")
+	require.NotContains(t, upperSQL, "UPDATE ")
+	require.NotContains(t, upperSQL, "DROP COLUMN")
+}
