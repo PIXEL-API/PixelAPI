@@ -606,21 +606,19 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			})
 		}
 		hasBillableUsage := service.OpenAIForwardResultHasBillableUsage(result)
-		if err != nil && hasBillableUsage {
-			recordUsageResult(result)
-		}
-		if finalizeErr := completeAccountShareBillingDispatchWithoutUsage(forwardCtx, err, hasBillableUsage, reqStream); finalizeErr != nil {
-			if accountReleaseFunc != nil {
-				accountReleaseFunc()
-			}
+		if finalizeErr := finalizeAccountShareBillingAttempt(
+			forwardCtx,
+			err,
+			hasBillableUsage,
+			reqStream,
+			func() { recordUsageResult(result) },
+			accountReleaseFunc,
+		); finalizeErr != nil {
 			reqLog.Error("openai.billing_dispatch_finalize_failed", zap.Int64("account_id", account.ID), zap.Error(finalizeErr))
 			if service.OpenAICompactKeepaliveAdjustedWrittenSize(c) == writerSizeBeforeForward {
 				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable", streamStarted)
 			}
 			return
-		}
-		if accountReleaseFunc != nil {
-			accountReleaseFunc()
 		}
 		upstreamLatencyMs, _ := getContextInt64(c, service.OpsUpstreamLatencyMsKey)
 		responseLatencyMs := forwardDurationMs
@@ -734,8 +732,6 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		}
 		routeCursor.recordSuccess(apiKey.ID)
 
-		// 使用量记录通过有界 worker 池提交，避免请求热路径创建无界 goroutine。
-		recordUsageResult(result)
 		reqLog.Debug("openai.request_completed",
 			zap.Int64("account_id", account.ID),
 			zap.Int("switch_count", switchCount),
@@ -1263,21 +1259,19 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			})
 		}
 		hasBillableUsage := service.OpenAIForwardResultHasBillableUsage(result)
-		if err != nil && hasBillableUsage {
-			recordUsageResult(result)
-		}
-		if finalizeErr := completeAccountShareBillingDispatchWithoutUsage(forwardCtx, err, hasBillableUsage, reqStream); finalizeErr != nil {
-			if accountReleaseFunc != nil {
-				accountReleaseFunc()
-			}
+		if finalizeErr := finalizeAccountShareBillingAttempt(
+			forwardCtx,
+			err,
+			hasBillableUsage,
+			reqStream,
+			func() { recordUsageResult(result) },
+			accountReleaseFunc,
+		); finalizeErr != nil {
 			reqLog.Error("openai_messages.billing_dispatch_finalize_failed", zap.Int64("account_id", account.ID), zap.Error(finalizeErr))
 			if c.Writer.Size() == writerSizeBeforeForward {
 				h.anthropicStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable", streamStarted)
 			}
 			return
-		}
-		if accountReleaseFunc != nil {
-			accountReleaseFunc()
 		}
 		upstreamLatencyMs, _ := getContextInt64(c, service.OpsUpstreamLatencyMsKey)
 		responseLatencyMs := forwardDurationMs
@@ -1367,7 +1361,6 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		}
 		routeCursor.recordSuccess(apiKey.ID)
 
-		recordUsageResult(result)
 		reqLog.Debug("openai_messages.request_completed",
 			zap.Int64("account_id", account.ID),
 			zap.Int("switch_count", switchCount),

@@ -79,6 +79,7 @@ func TestForwardResultBillingGateRejectsIncompleteUsageBeforeSubmit(t *testing.T
 
 	require.True(t, handled)
 	require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
+	require.ErrorIs(t, err, ErrAccountShareBillingUsageValidation)
 	require.ErrorIs(t, err, ErrAccountShareBillingIntentInvalid)
 	require.Zero(t, calls.Load())
 }
@@ -135,6 +136,7 @@ func TestOpenAIForwardResultBillingGateRejectsIncompleteUsageBeforeSubmit(t *tes
 
 	require.True(t, handled)
 	require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
+	require.ErrorIs(t, err, ErrAccountShareBillingUsageValidation)
 	require.ErrorIs(t, err, ErrAccountShareBillingIntentInvalid)
 	require.Zero(t, calls.Load())
 }

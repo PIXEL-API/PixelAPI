@@ -2,11 +2,54 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/service"
 )
+
+func TestFinalizeAccountShareBillingAttemptRecordsUsageBeforeRelease(t *testing.T) {
+	events := make([]string, 0, 2)
+	err := finalizeAccountShareBillingAttempt(
+		context.Background(),
+		nil,
+		true,
+		true,
+		func() { events = append(events, "usage") },
+		func() { events = append(events, "release") },
+	)
+	if err != nil {
+		t.Fatalf("finalize billing attempt: %v", err)
+	}
+	if len(events) != 2 || events[0] != "usage" || events[1] != "release" {
+		t.Fatalf("unexpected event order: %v", events)
+	}
+}
+
+func TestFinalizeAccountShareBillingAttemptReleasesValidationFailure(t *testing.T) {
+	released := false
+	validationErr := errors.Join(
+		service.ErrAccountShareBillingPreTerminalCommit,
+		service.ErrAccountShareBillingUsageValidation,
+	)
+	err := finalizeAccountShareBillingAttempt(
+		context.Background(),
+		validationErr,
+		false,
+		true,
+		nil,
+		func() { released = true },
+	)
+	if err != nil {
+		t.Fatalf("finalize validation failure: %v", err)
+	}
+	if !released {
+		t.Fatal("runtime lease was not released")
+	}
+}
 
 // TestWrapReleaseOnDone_NoGoroutineLeak 验证 wrapReleaseOnDone 修复后不会泄露 goroutine
 func TestWrapReleaseOnDone_NoGoroutineLeak(t *testing.T) {

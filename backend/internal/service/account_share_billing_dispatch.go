@@ -27,6 +27,8 @@ type accountShareBillingDispatchContextKey struct{}
 type forwardResultBillingGateContextKey struct{}
 type openAIForwardResultBillingGateContextKey struct{}
 
+var ErrAccountShareBillingUsageValidation = errors.New("account share billing usage validation failed")
+
 // ForwardResultBillingGate serializes the durable billing transition for one
 // Anthropic-compatible forward result. The service layer invokes it before a
 // successful terminal response is exposed, while the handler may invoke it
@@ -99,8 +101,9 @@ func commitForwardResultBillingGate(ctx context.Context, result *ForwardResult, 
 	gate.once.Do(func() {
 		if result == nil {
 			gate.err = fmt.Errorf(
-				"%w: %w: forward result is required",
+				"%w: %w: %w: forward result is required",
 				ErrAccountShareBillingPreTerminalCommit,
+				ErrAccountShareBillingUsageValidation,
 				ErrAccountShareBillingIntentInvalid,
 			)
 			return
@@ -109,16 +112,18 @@ func commitForwardResultBillingGate(ctx context.Context, result *ForwardResult, 
 		hasCompleteUsage := ForwardResultHasCompleteBillableUsage(result)
 		if !hasBillableUsage && !(requireComplete && hasCompleteUsage) {
 			gate.err = fmt.Errorf(
-				"%w: %w: forward result has no billable usage",
+				"%w: %w: %w: forward result has no billable usage",
 				ErrAccountShareBillingPreTerminalCommit,
+				ErrAccountShareBillingUsageValidation,
 				ErrAccountShareBillingIntentInvalid,
 			)
 			return
 		}
 		if requireComplete && !hasCompleteUsage {
 			gate.err = fmt.Errorf(
-				"%w: %w: forward result has no complete billable usage",
+				"%w: %w: %w: forward result has no complete billable usage",
 				ErrAccountShareBillingPreTerminalCommit,
+				ErrAccountShareBillingUsageValidation,
 				ErrAccountShareBillingIntentInvalid,
 			)
 			return
@@ -149,8 +154,9 @@ func commitOpenAIForwardResultBillingGate(ctx context.Context, result *OpenAIFor
 	gate.once.Do(func() {
 		if result == nil {
 			gate.err = fmt.Errorf(
-				"%w: %w: OpenAI forward result is required",
+				"%w: %w: %w: OpenAI forward result is required",
 				ErrAccountShareBillingPreTerminalCommit,
+				ErrAccountShareBillingUsageValidation,
 				ErrAccountShareBillingIntentInvalid,
 			)
 			return
@@ -159,16 +165,18 @@ func commitOpenAIForwardResultBillingGate(ctx context.Context, result *OpenAIFor
 		hasCompleteUsage := OpenAIForwardResultHasCompleteBillableUsage(result)
 		if !hasBillableUsage && !(requireComplete && hasCompleteUsage) {
 			gate.err = fmt.Errorf(
-				"%w: %w: OpenAI forward result has no billable usage",
+				"%w: %w: %w: OpenAI forward result has no billable usage",
 				ErrAccountShareBillingPreTerminalCommit,
+				ErrAccountShareBillingUsageValidation,
 				ErrAccountShareBillingIntentInvalid,
 			)
 			return
 		}
 		if requireComplete && !hasCompleteUsage {
 			gate.err = fmt.Errorf(
-				"%w: %w: OpenAI forward result has no complete billable usage",
+				"%w: %w: %w: OpenAI forward result has no complete billable usage",
 				ErrAccountShareBillingPreTerminalCommit,
+				ErrAccountShareBillingUsageValidation,
 				ErrAccountShareBillingIntentInvalid,
 			)
 			return

@@ -332,21 +332,19 @@ routeLoop:
 			}
 			hasBillableUsage := result != nil &&
 				(service.IsBillableStreamUsageError(err) || service.ForwardResultHasBillableUsage(result))
-			if err != nil && hasBillableUsage {
-				recordUsageResult(result)
-			}
-			if finalizeErr := completeAccountShareBillingDispatchWithoutUsage(forwardCtx, err, hasBillableUsage, reqStream); finalizeErr != nil {
-				if accountReleaseFunc != nil {
-					accountReleaseFunc()
-				}
+			if finalizeErr := finalizeAccountShareBillingAttempt(
+				forwardCtx,
+				err,
+				hasBillableUsage,
+				reqStream,
+				func() { recordUsageResult(result) },
+				accountReleaseFunc,
+			); finalizeErr != nil {
 				reqLog.Error("gateway.cc.billing_dispatch_finalize_failed", zap.Int64("account_id", account.ID), zap.Error(finalizeErr))
 				if c.Writer.Size() == writerSizeBeforeForward {
 					h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable")
 				}
 				return
-			}
-			if accountReleaseFunc != nil {
-				accountReleaseFunc()
 			}
 			h.gatewayService.ReportAccountForwardResult(account.ID, result, err)
 
@@ -382,8 +380,6 @@ routeLoop:
 			}
 			routeCursor.recordSuccess(apiKey.ID)
 
-			// 6. Record usage
-			recordUsageResult(result)
 			return
 		}
 	}

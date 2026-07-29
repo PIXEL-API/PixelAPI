@@ -318,21 +318,51 @@ func completeAccountShareBillingDispatchWithoutUsage(
 	hasBillableUsage bool,
 	streamed bool,
 ) error {
-	if forwardErr == nil || hasBillableUsage {
+	if hasBillableUsage {
 		return nil
 	}
-	if errors.Is(forwardErr, service.ErrAccountShareBillingPreTerminalCommit) {
-		return forwardErr
+	errorCode := "forward_completed_no_usage"
+	if forwardErr != nil {
+		errorCode = "forward_failed_no_usage"
+		if errors.Is(forwardErr, service.ErrAccountShareBillingUsageValidation) {
+			errorCode = "forward_usage_incomplete"
+		} else if errors.Is(forwardErr, service.ErrAccountShareBillingPreTerminalCommit) {
+			return forwardErr
+		}
 	}
 	_, err := service.CompleteAccountShareBillingDispatchWithoutUsage(
 		ctx,
 		service.AccountShareBillingResponseSummaryV1{
 			SchemaVersion: service.AccountShareBillingResponseSchemaV1,
 			Streamed:      streamed,
-			ErrorCode:     "forward_failed_no_usage",
+			ErrorCode:     errorCode,
 		},
 	)
 	return err
+}
+
+// finalizeAccountShareBillingAttempt closes the durable billing state before
+// releasing the paired runtime lease. The release barrier can therefore only
+// observe a ready/recovering dispatch or an explicitly completed no-usage
+// dispatch, never an unexamined in-flight intent.
+func finalizeAccountShareBillingAttempt(
+	ctx context.Context,
+	forwardErr error,
+	hasBillableUsage bool,
+	streamed bool,
+	recordUsage func(),
+	release func(),
+) error {
+	if release != nil {
+		defer release()
+	}
+	if hasBillableUsage {
+		if recordUsage == nil {
+			return fmt.Errorf("%w: billable usage recorder is required", service.ErrAccountShareBillingIntentInvalid)
+		}
+		recordUsage()
+	}
+	return completeAccountShareBillingDispatchWithoutUsage(ctx, forwardErr, hasBillableUsage, streamed)
 }
 
 func accountShareBillingRequestType(stream bool) service.RequestType {

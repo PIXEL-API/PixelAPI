@@ -525,21 +525,19 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}
 			hasBillableUsage := result != nil &&
 				(service.IsBillableStreamUsageError(err) || service.ForwardResultHasBillableUsage(result))
-			if err != nil && hasBillableUsage {
-				recordUsageResult(result)
-			}
-			if finalizeErr := completeAccountShareBillingDispatchWithoutUsage(requestCtx, err, hasBillableUsage, reqStream); finalizeErr != nil {
-				if accountReleaseFunc != nil {
-					accountReleaseFunc()
-				}
+			if finalizeErr := finalizeAccountShareBillingAttempt(
+				requestCtx,
+				err,
+				hasBillableUsage,
+				reqStream,
+				func() { recordUsageResult(result) },
+				accountReleaseFunc,
+			); finalizeErr != nil {
 				reqLog.Error("gateway.messages.billing_dispatch_finalize_failed", zap.Int64("account_id", account.ID), zap.Error(finalizeErr))
 				if c.Writer.Size() == writerSizeBeforeForward {
 					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable", streamStarted)
 				}
 				return
-			}
-			if accountReleaseFunc != nil {
-				accountReleaseFunc()
 			}
 			h.gatewayService.ReportAccountForwardResult(account.ID, result, err)
 			if err != nil {
@@ -593,8 +591,6 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				}
 			}
 
-			// 使用量记录通过有界 worker 池提交，避免请求热路径创建无界 goroutine。
-			recordUsageResult(result)
 			return
 		}
 	}
@@ -996,42 +992,6 @@ routeLoop:
 			if directGatewayForward {
 				requestCtx = withForwardResultBillingGate(requestCtx, recordUsage)
 			}
-			// 记录 Forward 前已写入字节数，Forward 后若增加则说明 SSE 内容已发，禁止 failover
-			writerSizeBeforeForward := c.Writer.Size()
-			if !directGatewayForward {
-				result, err = h.antigravityGatewayService.Forward(requestCtx, c, account, routeBody, currentHasBoundSession)
-			} else {
-				result, err = h.gatewayService.Forward(requestCtx, c, account, parsedReq)
-			}
-			cancelForward()
-			hasBillableUsage := result != nil &&
-				(service.IsBillableStreamUsageError(err) || service.ForwardResultHasBillableUsage(result))
-			if finalizeErr := completeAccountShareBillingDispatchWithoutUsage(requestCtx, err, hasBillableUsage, reqStream); finalizeErr != nil {
-				if queueRelease != nil {
-					queueRelease()
-				}
-				parsedReq.OnUpstreamAccepted = nil
-				if accountReleaseFunc != nil {
-					accountReleaseFunc()
-				}
-				reqLog.Error("gateway.messages.billing_dispatch_finalize_failed", zap.Int64("account_id", account.ID), zap.Error(finalizeErr))
-				if c.Writer.Size() == writerSizeBeforeForward {
-					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable", streamStarted)
-				}
-				return
-			}
-
-			// 兜底释放串行锁（正常情况已通过回调提前释放）
-			if queueRelease != nil {
-				queueRelease()
-			}
-			// 清理回调引用，防止 failover 重试时旧回调被错误调用
-			parsedReq.OnUpstreamAccepted = nil
-
-			if accountReleaseFunc != nil {
-				accountReleaseFunc()
-			}
-			h.gatewayService.ReportAccountForwardResult(account.ID, result, err)
 			recordUsageResult := func(result *service.ForwardResult) {
 				if result == nil {
 					return
@@ -1049,7 +1009,6 @@ routeLoop:
 					}
 					return
 				}
-				// 使用量记录通过有界 worker 池提交；提交被拒绝时 submitUsageRecordTask 会同步兜底。
 				h.submitUsageRecordTask(requestCtx, func(ctx context.Context) {
 					usageCtx := service.WithAccountShareModeRequestFromContext(ctx, requestCtx)
 					if err := recordUsage(usageCtx, result); err != nil {
@@ -1064,10 +1023,46 @@ routeLoop:
 					}
 				})
 			}
+			// 记录 Forward 前已写入字节数，Forward 后若增加则说明 SSE 内容已发，禁止 failover
+			writerSizeBeforeForward := c.Writer.Size()
+			if !directGatewayForward {
+				result, err = h.antigravityGatewayService.Forward(requestCtx, c, account, routeBody, currentHasBoundSession)
+			} else {
+				result, err = h.gatewayService.Forward(requestCtx, c, account, parsedReq)
+			}
+			cancelForward()
+			hasBillableUsage := result != nil &&
+				(service.IsBillableStreamUsageError(err) || service.ForwardResultHasBillableUsage(result))
+			if finalizeErr := finalizeAccountShareBillingAttempt(
+				requestCtx,
+				err,
+				hasBillableUsage,
+				reqStream,
+				func() { recordUsageResult(result) },
+				accountReleaseFunc,
+			); finalizeErr != nil {
+				if queueRelease != nil {
+					queueRelease()
+				}
+				parsedReq.OnUpstreamAccepted = nil
+				reqLog.Error("gateway.messages.billing_dispatch_finalize_failed", zap.Int64("account_id", account.ID), zap.Error(finalizeErr))
+				if c.Writer.Size() == writerSizeBeforeForward {
+					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable", streamStarted)
+				}
+				return
+			}
+
+			// 兜底释放串行锁（正常情况已通过回调提前释放）
+			if queueRelease != nil {
+				queueRelease()
+			}
+			// 清理回调引用，防止 failover 重试时旧回调被错误调用
+			parsedReq.OnUpstreamAccepted = nil
+
+			h.gatewayService.ReportAccountForwardResult(account.ID, result, err)
 			if err != nil {
 				billableStreamUsageError := service.IsBillableStreamUsageError(err)
 				if hasBillableUsage {
-					recordUsageResult(result)
 					usageRecordedEvent := "gateway.forward_usage_recorded_after_error"
 					if billableStreamUsageError {
 						usageRecordedEvent = "gateway.billable_stream_usage_recorded_after_error"
@@ -1206,7 +1201,6 @@ routeLoop:
 				}
 			}
 
-			recordUsageResult(result)
 			return
 		}
 		if !retryWithFallback {
