@@ -4887,7 +4887,7 @@ func TestAccountShareModeRepositoryBeginMembershipEndQueuedEndsAtomically(t *tes
 			sqlmock.AnyArg(),
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery("UPDATE account_share_memberships m\\s+SET status").
+	mock.ExpectQuery("(?s)UPDATE account_share_memberships m\\s+SET status.*ended_reason = \\$3::text.*ending_reason = \\$8::text").
 		WithArgs(
 			service.AccountShareMembershipStatusEnded,
 			sqlmock.AnyArg(),
@@ -4896,6 +4896,7 @@ func TestAccountShareModeRepositoryBeginMembershipEndQueuedEndsAtomically(t *tes
 			membershipID,
 			service.AccountShareMembershipStatusQueued,
 			true,
+			service.AccountShareMembershipEndReasonManual,
 		).
 		WillReturnRows(sqlmock.NewRows(accountShareMembershipColumns()).AddRow(
 			accountShareEndMembershipEndedRow(

@@ -4247,12 +4247,12 @@ func (r *accountShareModeRepository) BeginMembershipEnd(
 			SET status = $1,
 				account_id = CASE WHEN $7::boolean THEN NULL ELSE m.account_id END,
 				ended_at = $2,
-				ended_reason = $3,
+				ended_reason = $3::text,
 				paid_until = NULL,
 				billed_until = NULL,
 				queue_expires_at = NULL,
 				ending_requested_at = $2,
-				ending_reason = $3,
+				ending_reason = $8::text,
 				ending_operation_id = $4::uuid,
 				settlement_status = 'not_required',
 				waiver_window_started_at = NULL,
@@ -4281,6 +4281,7 @@ func (r *accountShareModeRepository) BeginMembershipEnd(
 			membership.ID,
 			service.AccountShareMembershipStatusQueued,
 			r.deferredQueueBindingEnabled(),
+			service.AccountShareMembershipEndReasonManual,
 		))
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, service.ErrAccountShareEndStateConflict
