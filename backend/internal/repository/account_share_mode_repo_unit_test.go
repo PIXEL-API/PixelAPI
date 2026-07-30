@@ -4919,7 +4919,6 @@ func TestAccountShareModeRepositoryBeginMembershipEndQueuedEndsAtomically(t *tes
 		ConsumerUserID:           consumerUserID,
 		MembershipID:             membershipID,
 		ExpectedMembershipStatus: service.AccountShareMembershipStatusQueued,
-		ExpectedUpdatedAt:        updatedAt,
 		OperationID:              operationID,
 	})
 	if err != nil {
@@ -5003,7 +5002,6 @@ func TestAccountShareModeRepositoryBeginMembershipEndActiveCreatesDurableFence(t
 		ConsumerUserID:           consumerUserID,
 		MembershipID:             membershipID,
 		ExpectedMembershipStatus: service.AccountShareMembershipStatusActive,
-		ExpectedUpdatedAt:        updatedAt,
 		OperationID:              operationID,
 	})
 	if err != nil {
@@ -5024,7 +5022,7 @@ func TestAccountShareModeRepositoryBeginMembershipEndActiveCreatesDurableFence(t
 	}
 }
 
-func TestAccountShareModeRepositoryBeginMembershipEndStaleTokenRollsBack(t *testing.T) {
+func TestAccountShareModeRepositoryBeginMembershipEndLifecycleConflictRollsBack(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
@@ -5036,7 +5034,6 @@ func TestAccountShareModeRepositoryBeginMembershipEndStaleTokenRollsBack(t *test
 	listingID := int64(523)
 	consumerUserID := int64(18467)
 	updatedAt := time.Date(2026, 7, 27, 4, 15, 0, 0, time.UTC)
-	staleUpdatedAt := updatedAt.Add(-time.Second)
 
 	mock.ExpectBegin()
 	expectAccountShareEndListingLock(mock, membershipID, consumerUserID, listingID, 10)
@@ -5045,7 +5042,7 @@ func TestAccountShareModeRepositoryBeginMembershipEndStaleTokenRollsBack(t *test
 		WillReturnRows(sqlmock.NewRows(accountShareMembershipColumns()).AddRow(
 			accountShareEndMembershipRow(
 				membershipID, listingID, int64(90), int64(1001), consumerUserID, int64(91),
-				service.AccountShareMembershipStatusActive, updatedAt.Add(-time.Hour), updatedAt,
+				service.AccountShareMembershipStatusQueued, updatedAt.Add(-time.Hour), updatedAt,
 			)...,
 		))
 	expectAccountShareEndState(mock, membershipID, nil, nil, nil, nil)
@@ -5055,7 +5052,6 @@ func TestAccountShareModeRepositoryBeginMembershipEndStaleTokenRollsBack(t *test
 		ConsumerUserID:           consumerUserID,
 		MembershipID:             membershipID,
 		ExpectedMembershipStatus: service.AccountShareMembershipStatusActive,
-		ExpectedUpdatedAt:        staleUpdatedAt,
 		OperationID:              "7b4478d2-2256-4bf9-9904-3fc386e0de1c",
 	})
 	if !errors.Is(err, service.ErrAccountShareEndStateConflict) {
@@ -5111,7 +5107,6 @@ func TestAccountShareModeRepositoryBeginMembershipEndOperationFailureRollsBack(t
 		ConsumerUserID:           consumerUserID,
 		MembershipID:             membershipID,
 		ExpectedMembershipStatus: service.AccountShareMembershipStatusActive,
-		ExpectedUpdatedAt:        updatedAt,
 		OperationID:              operationID,
 	})
 	if !errors.Is(err, writeErr) {

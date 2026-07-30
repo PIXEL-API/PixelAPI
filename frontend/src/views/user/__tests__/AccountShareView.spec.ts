@@ -615,7 +615,7 @@ describe('AccountShareView async snapshots and mode keys', () => {
       owner_room_accounts: { limit: 100, used: 0, remaining: 100 },
       max_accounts_per_room: 20,
       seat_limit_minimum: 1,
-      seat_limit_maximum: 15,
+      seat_limit_maximum: 30,
       capability_blockers: [],
     })
     listProxies.mockResolvedValue([])
@@ -1560,8 +1560,13 @@ describe('AccountShareView async snapshots and mode keys', () => {
     expect(wrapper.text()).toContain('未绑定平台模式账号')
     expect(wrapper.text()).not.toContain('其他房间账号')
     expect(wrapper.text()).not.toContain('未知等级账号')
-    expect(wrapper.text()).toContain('成员上限（1～15）')
+    expect(wrapper.text()).toContain('成员上限（1～30）')
     expect(wrapper.text()).toContain('由房主设置，与账号数量/账号并发无推导关系；房主自用不占消费者名额')
+    const seatLimitInput = wrapper.get('[data-testid="create-room-seat-limit"]')
+    expect(seatLimitInput.attributes('type')).toBe('number')
+    expect(seatLimitInput.attributes('min')).toBe('1')
+    expect(seatLimitInput.attributes('max')).toBe('30')
+    expect((seatLimitInput.element as HTMLInputElement).value).toBe('5')
     wrapper.unmount()
   })
 
@@ -1603,7 +1608,7 @@ describe('AccountShareView async snapshots and mode keys', () => {
     expect(firstPayload).toMatchObject({
       account_id: 22,
       room_name: 'OpenAI房间',
-      seat_limit: 2,
+      seat_limit: 5,
       per_user_concurrency: 5,
     })
     expect(firstPayload.idempotency_key).toMatch(/^account-share-room-22-/)
@@ -1791,8 +1796,12 @@ describe('AccountShareView async snapshots and mode keys', () => {
     setupState.showConfigEditDialog = true
     await nextTick()
 
-    expect(wrapper.text()).toContain('成员上限（1～15）')
+    expect(wrapper.text()).toContain('成员上限（1～30）')
     expect(wrapper.text()).toContain('由房主设置，与账号数量/账号并发无推导关系；房主自用不占消费者名额')
+    const seatLimitInput = wrapper.get('[data-testid="edit-room-seat-limit"]')
+    expect(seatLimitInput.attributes('type')).toBe('number')
+    expect(seatLimitInput.attributes('min')).toBe('1')
+    expect(seatLimitInput.attributes('max')).toBe('30')
     wrapper.unmount()
   })
 
@@ -2534,7 +2543,7 @@ describe('AccountShareView async snapshots and mode keys', () => {
       owner_room_accounts: { limit: 100, used: 12, remaining: 88 },
       max_accounts_per_room: 20,
       seat_limit_minimum: 1,
-      seat_limit_maximum: 15,
+      seat_limit_maximum: 30,
       capability_blockers: [{
         code: 'ACCOUNT_SHARE_ROOM_LIMIT_EXCEEDED',
         message: '未删除房间数量已达到上限',
@@ -2996,7 +3005,7 @@ describe('AccountShareView async snapshots and mode keys', () => {
 
     const guideText = wrapper.text()
     expect(guideText).toContain('成员上限由房主设置')
-    expect(guideText).toContain('最低 1 人、最高 15 人')
+    expect(guideText).toContain('最低 1 人、最高 30 人')
     expect(guideText).toContain('房主自用不占消费者名额')
     expect(guideText).toContain('删除房间')
     expect(guideText).toContain('软删除')

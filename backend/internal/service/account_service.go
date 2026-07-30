@@ -32,7 +32,7 @@ var (
 	ErrOwnedAccountCredentialsInvalid             = infraerrors.BadRequest("OWNED_ACCOUNT_CREDENTIALS_INVALID", "OAuth account credentials must include an access token")
 	ErrOwnedAccountCredentialsNotAllowed          = infraerrors.BadRequest("OWNED_ACCOUNT_CREDENTIALS_NOT_ALLOWED", "user accounts cannot include API keys, custom URLs, upstream endpoints, cookies or manual session credentials")
 	ErrOwnedAgentIdentityCredentialsInvalid       = infraerrors.BadRequest("OWNED_AGENT_IDENTITY_CREDENTIALS_INVALID", "Codex Agent Identity credentials are invalid")
-	ErrOwnedAccountConcurrencyOutOfRange          = infraerrors.BadRequest("OWNED_ACCOUNT_CONCURRENCY_OUT_OF_RANGE", "personal account concurrency must be between 3 and 50")
+	ErrOwnedAccountConcurrencyOutOfRange          = infraerrors.BadRequest("OWNED_ACCOUNT_CONCURRENCY_OUT_OF_RANGE", "personal account concurrency must be between 1 and 30")
 	ErrOwnedAccountLoadFactorOutOfRange           = infraerrors.BadRequest("OWNED_ACCOUNT_LOAD_FACTOR_OUT_OF_RANGE", fmt.Sprintf("personal account load factor must be between 1 and %d", AccountMaxLoadFactor))
 	ErrOwnedAccountLoadFactorCreditsUnavailable   = infraerrors.InternalServer("OWNED_ACCOUNT_LOAD_FACTOR_CREDITS_UNAVAILABLE", "load factor credit accounting is unavailable")
 	ErrOwnedAccountLoadFactorCreditsInsufficient  = infraerrors.BadRequest("OWNED_ACCOUNT_LOAD_FACTOR_CREDITS_INSUFFICIENT", "load factor credits are insufficient")
@@ -65,8 +65,8 @@ var (
 const AccountListGroupUngrouped int64 = -1
 const AccountListProxyUnassigned int64 = -1
 const AccountPrivacyModeUnsetFilter = "__unset__"
-const ownedPersonalMinConcurrency = 3
-const ownedPersonalMaxConcurrency = 50
+const ownedPersonalMinConcurrency = 1
+const ownedPersonalMaxConcurrency = 30
 const ownedPersonalDefaultConcurrency = ownedPersonalMinConcurrency
 const ownedPersonalDefaultPriority = 1
 const ownedPersonalDefaultOpenAICompactMode = "force_on"

@@ -4216,7 +4216,6 @@ func TestAccountShareModeEndMembershipAcceptsIssuedConfirmationToken(t *testing.
 		t.Fatalf("queued membership must not enter active finalizer, got %d calls", repo.finalizeCalls)
 	}
 	if repo.endInput.ExpectedMembershipStatus != AccountShareMembershipStatusQueued ||
-		!repo.endInput.ExpectedUpdatedAt.Equal(updatedAt) ||
 		repo.endInput.OperationID == "" {
 		t.Fatalf("end snapshot was not bound to repository input: %#v", repo.endInput)
 	}
@@ -4363,7 +4362,7 @@ func TestAccountShareModeEndMembershipPendingIntentStaysEnding(t *testing.T) {
 	require.Equal(t, 1, repo.finalizeCalls)
 }
 
-func TestAccountShareModeEndMembershipStaleSnapshotIsRejected(t *testing.T) {
+func TestAccountShareModeEndMembershipRejectsLifecycleConflict(t *testing.T) {
 	updatedAt := time.Date(2026, 7, 27, 6, 25, 0, 0, time.UTC)
 	repo := &accountShareModeRepoStub{
 		endSnapshot: &AccountShareMembership{
@@ -4429,6 +4428,45 @@ func TestAccountShareModeEndMembershipTokenReplayUsesSameOperation(t *testing.T)
 	require.Equal(t, 2, repo.endCalls)
 	require.Equal(t, claims.OperationID, repo.endInput.OperationID)
 	require.Equal(t, claims.OperationID, repo.finalizeOperationID)
+}
+
+func TestAccountShareModeEndMembershipUsesExistingConcurrentOperation(t *testing.T) {
+	existingOperationID := "a8b25548-e953-42f8-83a5-c947fc2d629a"
+	repo := &accountShareModeRepoStub{
+		endSnapshot: &AccountShareMembership{
+			ID:             761,
+			ConsumerUserID: 42,
+			Status:         AccountShareMembershipStatusActive,
+			UpdatedAt:      time.Now().UTC(),
+		},
+		endMembership: &AccountShareMembership{
+			ID:                761,
+			ConsumerUserID:    42,
+			Status:            AccountShareMembershipStatusEnding,
+			EndingOperationID: existingOperationID,
+		},
+		finalizeMembership: &AccountShareMembership{
+			ID:                761,
+			ConsumerUserID:    42,
+			Status:            AccountShareMembershipStatusEnded,
+			EndingOperationID: existingOperationID,
+		},
+		finalizeDone: true,
+	}
+	svc := &AccountShareModeService{
+		repo:               repo,
+		concurrencyService: NewConcurrencyService(&accountShareMembershipConcurrencyCacheStub{current: 0}),
+	}
+	svc.SetActionTokenSecret(strings.Repeat("s", 32))
+
+	intent, err := svc.CreateEndMembershipToken(context.Background(), 42, 761)
+	require.NoError(t, err)
+	require.NotEqual(t, existingOperationID, intent.OperationID)
+
+	membership, err := svc.EndMembership(context.Background(), 42, 761, intent.Token)
+	require.NoError(t, err)
+	require.Equal(t, AccountShareMembershipStatusEnded, membership.Status)
+	require.Equal(t, existingOperationID, repo.finalizeOperationID)
 }
 
 func TestAccountShareModeCreateEndTokenRejectsEndedMembership(t *testing.T) {

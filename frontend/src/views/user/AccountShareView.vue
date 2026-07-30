@@ -239,7 +239,7 @@
             <div class="account-share-guide-rule-list">
               <div>
                 <Icon name="users" size="sm" />
-                <p><strong>成员上限由房主设置</strong>，最低 1 人、最高 15 人；不按房间账号数量或账号并发推导。</p>
+                <p><strong>成员上限由房主设置</strong>，最低 1 人、最高 30 人；不按房间账号数量或账号并发推导。</p>
               </div>
               <div>
                 <Icon name="user" size="sm" />
@@ -335,7 +335,7 @@
               </div>
               <div>
                 <dt>房间成员上限</dt>
-                <dd>由房主在 1～15 人范围内设置，仅约束消费者席位，房主自用不占用。</dd>
+                <dd>由房主在 1～30 人范围内设置，仅约束消费者席位，房主自用不占用。</dd>
               </div>
               <div>
                 <dt>房间账号数量</dt>
@@ -843,10 +843,17 @@
                 </div>
 
                 <label class="field">
-                  <span>成员上限（1～15）</span>
-                  <select v-model.number="createForm.seat_limit" class="input">
-                    <option v-for="seat in seatOptions" :key="seat" :value="seat">{{ seat }} 人</option>
-                  </select>
+                  <span>成员上限（1～30）</span>
+                  <input
+                    v-model.number="createForm.seat_limit"
+                    class="input"
+                    type="number"
+                    :min="ACCOUNT_SHARE_MIN_SEATS"
+                    :max="ACCOUNT_SHARE_MAX_SEATS"
+                    step="1"
+                    inputmode="numeric"
+                    data-testid="create-room-seat-limit"
+                  />
                   <small>{{ ACCOUNT_SHARE_MEMBER_LIMIT_HELP }}</small>
                 </label>
 
@@ -2634,10 +2641,17 @@
                 </label>
 
                 <label class="field">
-                  <span>成员上限（1～15）</span>
-                  <select v-model.number="editForm.seat_limit" class="input">
-                    <option v-for="seat in seatOptions" :key="seat" :value="seat">{{ seat }} 人</option>
-                  </select>
+                  <span>成员上限（1～30）</span>
+                  <input
+                    v-model.number="editForm.seat_limit"
+                    class="input"
+                    type="number"
+                    :min="ACCOUNT_SHARE_MIN_SEATS"
+                    :max="ACCOUNT_SHARE_MAX_SEATS"
+                    step="1"
+                    inputmode="numeric"
+                    data-testid="edit-room-seat-limit"
+                  />
                   <small>{{ ACCOUNT_SHARE_MEMBER_LIMIT_HELP }}</small>
                 </label>
 
@@ -2753,7 +2767,7 @@
                 <strong>{{ editingConfigListing ? roomEligibleAccountCount(editingConfigListing) : 0 }}/{{ editingConfigListing ? roomAttachedAccountCount(editingConfigListing) : 0 }}</strong>
               </div>
               <div class="compact-metric">
-                <span>成员上限（1～15）</span>
+                <span>成员上限（1～30）</span>
                 <strong>{{ editForm.seat_limit }}</strong>
               </div>
               <div class="compact-metric">
@@ -3787,7 +3801,7 @@ const EXPENSIVE_HOURLY_RATE = 2
 const MAX_ACCOUNT_CONCURRENCY = 50
 const MAX_PER_USER_CONCURRENCY = 50
 const ACCOUNT_SHARE_MIN_SEATS = 1
-const ACCOUNT_SHARE_MAX_SEATS = 15
+const ACCOUNT_SHARE_MAX_SEATS = 30
 const ACCOUNT_SHARE_MEMBER_LIMIT_HELP = '由房主设置，与账号数量/账号并发无推导关系；房主自用不占消费者名额'
 const ROOM_LIFECYCLE_OPERATION_POLL_INTERVAL_MS = 1500
 const ACCOUNT_SHARE_TRANSIENT_STATUS_REFRESH_INTERVAL_MS = 8_000
@@ -4489,7 +4503,7 @@ function buildDefaultCreateForm(): CreateFormState {
     name: suggestedAccountName(createPlatform.value),
     proxy_id: null,
     concurrency: DEFAULT_ACCOUNT_CONCURRENCY,
-    seat_limit: 2,
+    seat_limit: 5,
     rate_multiplier: 1,
     per_user_concurrency: DEFAULT_PER_USER_CONCURRENCY,
     hourly_rate: DEFAULT_HOURLY_RATE,

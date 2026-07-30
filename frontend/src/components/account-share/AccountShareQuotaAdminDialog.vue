@@ -680,7 +680,7 @@ const QuotaLimitsEditor = defineComponent({
     const fields: Array<{ key: keyof AccountShareQuotaLimits; label: string; help: string }> = [
       { key: 'max_live_rooms', label: '未删除房间上限', help: '包含运行、暂停、排空和管理员暂停房间。' },
       { key: 'max_room_creates_24_hours', label: '24 小时创建上限', help: '按滚动 24 小时窗口累计。' },
-      { key: 'max_accounts_per_room', label: '单房间账号上限', help: '与成员上限 1～15 人相互独立。' },
+      { key: 'max_accounts_per_room', label: '单房间账号上限', help: '与成员上限 1～30 人相互独立。' },
       { key: 'max_room_accounts_per_owner', label: '房间账号总上限', help: '不得小于单房间账号上限。' }
     ]
     const update = (key: keyof AccountShareQuotaLimits, event: Event) => {

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -106,10 +107,9 @@ func (s *OpenAIGatewayService) restoreGrokReasoningItems(
 	}
 
 	items := input.Array()
-	patchedItems := make([]json.RawMessage, len(items))
+	patchedItems := make([]json.RawMessage, 0, len(items))
 	changed := false
-	for index, item := range items {
-		patchedItems[index] = json.RawMessage(item.Raw)
+	for _, item := range items {
 		encryptedContent, needsRestore, err := inspectGrokReasoningInputItem(item)
 		if err != nil {
 			return nil, newGrokReasoningCompatibilityError(
@@ -123,14 +123,52 @@ func (s *OpenAIGatewayService) restoreGrokReasoningItems(
 			)
 		}
 		if !needsRestore {
+			patchedItems = append(patchedItems, json.RawMessage(item.Raw))
 			continue
 		}
 
 		restored, err := s.loadGrokReasoningItem(ctx, account.ID, encryptedContent)
 		if err != nil {
+			if errors.Is(err, ErrGatewaySessionStringNotFound) {
+				var inputItem map[string]any
+				if decodeErr := json.Unmarshal([]byte(item.Raw), &inputItem); decodeErr != nil {
+					return nil, newGrokReasoningCompatibilityError(
+						http.StatusBadRequest,
+						"invalid_request_error",
+						"Invalid Grok reasoning state; start a new conversation.",
+						"decode_request_item",
+						account.ID,
+						"",
+						decodeErr,
+					)
+				}
+				sanitized, _, keep := sanitizeEncryptedReasoningInputItem(inputItem)
+				if keep {
+					encoded, encodeErr := json.Marshal(sanitized)
+					if encodeErr != nil {
+						return nil, newGrokReasoningCompatibilityError(
+							http.StatusInternalServerError,
+							"api_error",
+							"Failed to restore Grok reasoning state.",
+							"encode_sanitized_item",
+							account.ID,
+							"",
+							encodeErr,
+						)
+					}
+					patchedItems = append(patchedItems, encoded)
+				}
+				digest, _ := grokReasoningItemCacheKey(encryptedContent)
+				slog.Warn("grok reasoning state unavailable; continuing with portable history",
+					"account_id", account.ID,
+					"reasoning_digest", digest,
+				)
+				changed = true
+				continue
+			}
 			return nil, err
 		}
-		patchedItems[index] = restored
+		patchedItems = append(patchedItems, restored)
 		changed = true
 	}
 

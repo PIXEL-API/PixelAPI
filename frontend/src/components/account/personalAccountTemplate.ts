@@ -2,8 +2,8 @@ import { getModelsByPlatform } from '@/composables/useModelWhitelist'
 import { OPENAI_WS_MODE_OFF } from '@/utils/openaiWsMode'
 import type { AccountPlatform, OpenAICompactMode } from '@/types'
 
-export const PERSONAL_ACCOUNT_MIN_CONCURRENCY = 3
-export const PERSONAL_ACCOUNT_MAX_CONCURRENCY = 50
+export const PERSONAL_ACCOUNT_MIN_CONCURRENCY = 1
+export const PERSONAL_ACCOUNT_MAX_CONCURRENCY = 30
 export const PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY = PERSONAL_ACCOUNT_MIN_CONCURRENCY
 export const PERSONAL_ACCOUNT_MIN_LOAD_FACTOR = 1
 export const PERSONAL_ACCOUNT_MAX_LOAD_FACTOR = 10000

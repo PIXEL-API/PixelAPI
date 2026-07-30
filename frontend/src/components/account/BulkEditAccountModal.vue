@@ -699,7 +699,7 @@
             class="input"
             :class="!enableConcurrency && 'cursor-not-allowed opacity-50'"
             aria-labelledby="bulk-edit-concurrency-label"
-            @input="normalizeConcurrencyInput"
+            @blur="normalizeConcurrencyInput"
           />
         </div>
         <div>

@@ -46,7 +46,7 @@ const (
 	AccountShareModeDefaultMinBalance               = 1.0
 	AccountShareModeDefaultCodexLimitPercent        = CodexQuotaDefaultLimitPercent
 	AccountShareModeMinSeats                        = 1
-	AccountShareModeMaxSeats                        = 15
+	AccountShareModeMaxSeats                        = 30
 	AccountShareModeDefaultPerUserConcurrency       = 5
 	AccountShareModeMaxPerUserConcurrency           = 50
 	AccountShareModeDefaultAccountConcurrency       = 20
@@ -195,7 +195,7 @@ var (
 	ErrAccountShareModeOpenAIOnly               = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_OPENAI_ONLY", "account share mode only supports OpenAI OAuth accounts")
 	ErrAccountShareModeProxyRequired            = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_PROXY_REQUIRED", "proxy is required before account share OAuth login")
 	ErrAccountShareModeAllowedModelsRequired    = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_MODELS_REQUIRED", "at least one allowed model is required")
-	ErrAccountShareModeInvalidSeats             = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_SEATS", "seat_limit must be between 1 and 15")
+	ErrAccountShareModeInvalidSeats             = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_SEATS", "seat_limit must be between 1 and 30")
 	ErrAccountShareModeInvalidRateMultiplier    = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_RATE_MULTIPLIER", "rate_multiplier must be non-negative")
 	ErrAccountShareModeInvalidConcurrency       = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_CONCURRENCY", "concurrency must be positive and no greater than 50")
 	ErrAccountShareModeInvalidHourlyRate        = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_HOURLY_RATE", "hourly_rate must be non-negative")
@@ -993,21 +993,19 @@ type accountShareJoinIntentTokenClaims struct {
 }
 
 type accountShareEndMembershipTokenClaims struct {
-	Action            string `json:"action"`
-	ConsumerID        int64  `json:"consumer_user_id"`
-	MembershipID      int64  `json:"membership_id"`
-	MembershipStatus  string `json:"membership_status"`
-	MembershipUpdated int64  `json:"membership_updated_at_unix_nano"`
-	OperationID       string `json:"operation_id"`
-	Nonce             string `json:"nonce"`
-	ExpiresAt         int64  `json:"expires_at"`
+	Action           string `json:"action"`
+	ConsumerID       int64  `json:"consumer_user_id"`
+	MembershipID     int64  `json:"membership_id"`
+	MembershipStatus string `json:"membership_status"`
+	OperationID      string `json:"operation_id"`
+	Nonce            string `json:"nonce"`
+	ExpiresAt        int64  `json:"expires_at"`
 }
 
 type BeginAccountShareMembershipEndInput struct {
 	ConsumerUserID           int64
 	MembershipID             int64
 	ExpectedMembershipStatus string
-	ExpectedUpdatedAt        time.Time
 	OperationID              string
 }
 
@@ -4158,14 +4156,13 @@ func (s *AccountShareModeService) CreateEndMembershipToken(ctx context.Context, 
 		operationID = uuid.NewString()
 	}
 	claims := accountShareEndMembershipTokenClaims{
-		Action:            accountShareModeEndMembershipTokenAction,
-		ConsumerID:        consumerUserID,
-		MembershipID:      membershipID,
-		MembershipStatus:  membership.Status,
-		MembershipUpdated: membership.UpdatedAt.UTC().UnixNano(),
-		OperationID:       operationID,
-		Nonce:             uuid.NewString(),
-		ExpiresAt:         expiresAt.Unix(),
+		Action:           accountShareModeEndMembershipTokenAction,
+		ConsumerID:       consumerUserID,
+		MembershipID:     membershipID,
+		MembershipStatus: membership.Status,
+		OperationID:      operationID,
+		Nonce:            uuid.NewString(),
+		ExpiresAt:        expiresAt.Unix(),
 	}
 	token, err := s.signEndMembershipToken(claims)
 	if err != nil {
@@ -4194,7 +4191,6 @@ func (s *AccountShareModeService) EndMembership(ctx context.Context, consumerUse
 		ConsumerUserID:           consumerUserID,
 		MembershipID:             membershipID,
 		ExpectedMembershipStatus: claims.MembershipStatus,
-		ExpectedUpdatedAt:        time.Unix(0, claims.MembershipUpdated).UTC(),
 		OperationID:              claims.OperationID,
 	})
 	if err != nil {
@@ -4210,13 +4206,17 @@ func (s *AccountShareModeService) EndMembership(ctx context.Context, consumerUse
 	if membership.Status != AccountShareMembershipStatusEnding {
 		return nil, ErrAccountShareEndStateConflict
 	}
+	operationID := strings.TrimSpace(membership.EndingOperationID)
+	if operationID == "" {
+		return nil, ErrAccountShareEndStateConflict
+	}
 	hasLease, leaseErr := s.hasActiveMembershipLease(ctx, membership.ID)
 	if leaseErr != nil || hasLease {
 		// Once the durable ending fence exists, an unavailable Redis lease
 		// check must never degrade to synchronous settlement.
 		return membership, nil
 	}
-	finalizedMembership, finalizedBilling, finalized, err := s.repo.FinalizeMembershipEnd(ctx, membership.ID, claims.OperationID)
+	finalizedMembership, finalizedBilling, finalized, err := s.repo.FinalizeMembershipEnd(ctx, membership.ID, operationID)
 	if err != nil {
 		return nil, err
 	}
@@ -4423,7 +4423,6 @@ func (s *AccountShareModeService) validateEndMembershipToken(token string, consu
 		(claims.MembershipStatus != AccountShareMembershipStatusActive &&
 			claims.MembershipStatus != AccountShareMembershipStatusQueued &&
 			claims.MembershipStatus != AccountShareMembershipStatusEnding) ||
-		claims.MembershipUpdated <= 0 ||
 		strings.TrimSpace(claims.Nonce) == "" ||
 		claims.ExpiresAt <= now.Unix() {
 		return claims, ErrAccountShareEndTokenInvalid

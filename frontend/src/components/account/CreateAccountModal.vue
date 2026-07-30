@@ -2721,7 +2721,7 @@
             :max="isUserScope ? PERSONAL_ACCOUNT_MAX_CONCURRENCY : undefined"
             step="1"
             class="input"
-            @input="normalizeConcurrencyInput"
+            @blur="normalizeConcurrencyInput"
           />
         </div>
         <div v-if="!isUserScope">

@@ -4156,7 +4156,6 @@ func (r *accountShareModeRepository) BeginMembershipEnd(
 	if r == nil || r.db == nil ||
 		input.ConsumerUserID <= 0 ||
 		input.MembershipID <= 0 ||
-		input.ExpectedUpdatedAt.IsZero() ||
 		operationID == "" ||
 		(expectedStatus != service.AccountShareMembershipStatusActive &&
 			expectedStatus != service.AccountShareMembershipStatusQueued &&
@@ -4188,16 +4187,21 @@ func (r *accountShareModeRepository) BeginMembershipEnd(
 
 	if membership.Status == service.AccountShareMembershipStatusEnding ||
 		membership.Status == service.AccountShareMembershipStatusEnded {
-		if membership.EndingOperationID != operationID {
-			return nil, nil, service.ErrAccountShareEndStateConflict
-		}
+		// Another confirmed request may already have moved this membership
+		// forward with a different operation ID. Ownership is locked and
+		// verified above, so return the durable current state instead of
+		// turning a successful concurrent end into a business error.
 		if err := tx.Commit(); err != nil {
 			return nil, nil, err
 		}
 		tx = nil
 		return membership, nil, nil
 	}
-	if membership.Status != expectedStatus || !membership.UpdatedAt.Equal(input.ExpectedUpdatedAt) {
+	// updated_at also changes for operational metadata such as queue rank,
+	// dispatch cooldown and request activity. The row is locked here, so bind
+	// the confirmation to the ownership and lifecycle status instead of that
+	// volatile timestamp.
+	if membership.Status != expectedStatus {
 		return nil, nil, service.ErrAccountShareEndStateConflict
 	}
 	if membership.Status != service.AccountShareMembershipStatusActive &&
