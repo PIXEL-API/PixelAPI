@@ -159,6 +159,7 @@ func TestAccountShareModeRepositoryRoomLifecycleOwnerDrainCommitsRevision(t *tes
 	)
 	reason := "owner maintenance"
 	repo, mock := newAccountShareLifecycleSQLMock(t)
+	operationID := &lifecycleCapturedStringArgument{}
 	mock.ExpectBegin()
 	expectLifecycleListingLock(
 		mock,
@@ -173,12 +174,23 @@ func TestAccountShareModeRepositoryRoomLifecycleOwnerDrainCommitsRevision(t *tes
 			oldVersion,
 		),
 	)
+	mock.ExpectExec("INSERT INTO account_share_room_operations").
+		WithArgs(
+			operationID,
+			listingID,
+			ownerID,
+			"owner",
+			nil,
+			oldVersion,
+			newVersion,
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("(?s)UPDATE account_share_listings\\s+SET status = \\$1::varchar\\(20\\).*CASE WHEN \\$1::varchar\\(20\\) = 'draining'::varchar\\(20\\)").
 		WithArgs(
 			service.AccountShareListingStatusDraining,
 			"owner_delisted",
 			reason,
-			nil,
+			operationID,
 			listingID,
 			oldVersion,
 		).
@@ -196,7 +208,7 @@ func TestAccountShareModeRepositoryRoomLifecycleOwnerDrainCommitsRevision(t *tes
 		"delist_room",
 		reason,
 		"listing.delisted",
-		nil,
+		operationID,
 	)
 	mock.ExpectCommit()
 	mock.ExpectQuery("SELECT\\s+l\\.id").
@@ -234,6 +246,9 @@ func TestAccountShareModeRepositoryRoomLifecycleOwnerDrainCommitsRevision(t *tes
 		*listing.CurrentRevisionID != revisionID ||
 		listing.Status != service.AccountShareListingStatusDraining {
 		t.Fatalf("unexpected drained listing: %#v", listing)
+	}
+	if operationID.value == "" {
+		t.Fatal("drain operation id was not persisted; draining room would be invisible to the finalizer")
 	}
 }
 
@@ -286,6 +301,7 @@ func TestAccountShareModeRepositoryRoomLifecycleRollsBackAfterRevisionFailure(t 
 		newVersion = int64(4)
 	)
 	repo, mock := newAccountShareLifecycleSQLMock(t)
+	operationID := &lifecycleCapturedStringArgument{}
 	sentinel := errors.New("revision persistence failed")
 
 	mock.ExpectBegin()
@@ -302,12 +318,23 @@ func TestAccountShareModeRepositoryRoomLifecycleRollsBackAfterRevisionFailure(t 
 			oldVersion,
 		),
 	)
+	mock.ExpectExec("INSERT INTO account_share_room_operations").
+		WithArgs(
+			operationID,
+			listingID,
+			ownerID,
+			"owner",
+			nil,
+			oldVersion,
+			newVersion,
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("(?s)UPDATE account_share_listings\\s+SET status = \\$1::varchar\\(20\\).*CASE WHEN \\$1::varchar\\(20\\) = 'draining'::varchar\\(20\\)").
 		WithArgs(
 			service.AccountShareListingStatusDraining,
 			"owner_delisted",
 			"atomic rollback",
-			nil,
+			operationID,
 			listingID,
 			oldVersion,
 		).

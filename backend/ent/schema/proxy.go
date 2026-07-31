@@ -52,6 +52,14 @@ func (Proxy) Fields() []ent.Field {
 		field.Int64("owner_user_id").
 			Optional().
 			Nillable(),
+		// platform 为空字符串表示通用代理（所有平台可用）。
+		field.String("platform").
+			MaxLen(32).
+			Default(""),
+		// required_account_level 为空字符串表示所有等级可用。
+		field.String("required_account_level").
+			MaxLen(20).
+			Default(""),
 		field.String("status").
 			MaxLen(20).
 			Default("active"),
@@ -77,6 +85,7 @@ func (Proxy) Indexes() []ent.Index {
 	return []ent.Index{
 		index.Fields("status"),
 		index.Fields("owner_user_id"),
+		index.Fields("platform", "required_account_level"),
 		index.Fields("deleted_at"),
 	}
 }

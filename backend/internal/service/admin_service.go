@@ -464,24 +464,32 @@ type BulkUpdateAccountsResult struct {
 }
 
 type CreateProxyInput struct {
-	Name        string
-	Protocol    string
-	Host        string
-	Port        int
-	Username    string
-	Password    string
-	MaxAccounts int
+	Name     string
+	Protocol string
+	Host     string
+	Port     int
+	Username string
+	Password string
+	// Platform 为空表示通用代理（所有平台可用）。
+	Platform string
+	// RequiredAccountLevel 为空表示所有账号等级可用。
+	RequiredAccountLevel string
+	MaxAccounts          int
 }
 
 type UpdateProxyInput struct {
-	Name        string
-	Protocol    string
-	Host        string
-	Port        int
-	Username    string
-	Password    string
-	Status      string
-	MaxAccounts *int
+	Name     string
+	Protocol string
+	Host     string
+	Port     int
+	Username string
+	Password string
+	Status   string
+	// Platform / RequiredAccountLevel 用指针区分“未提供”与“显式设为空”，
+	// 空字符串分别表示改为通用代理 / 所有等级可用。
+	Platform             *string
+	RequiredAccountLevel *string
+	MaxAccounts          *int
 }
 
 type GenerateRedeemCodesInput struct {
@@ -4692,15 +4700,23 @@ func (s *adminServiceImpl) CreateProxy(ctx context.Context, input *CreateProxyIn
 	if err := validateProxyMaxAccountsValue(input.MaxAccounts); err != nil {
 		return nil, err
 	}
+	if !IsValidProxyPlatform(input.Platform) {
+		return nil, ErrProxyPlatformInvalid
+	}
+	if err := s.validateProxyRequiredAccountLevel(ctx, input.RequiredAccountLevel); err != nil {
+		return nil, err
+	}
 	proxy := &Proxy{
-		Name:        input.Name,
-		Protocol:    input.Protocol,
-		Host:        input.Host,
-		Port:        input.Port,
-		Username:    input.Username,
-		Password:    input.Password,
-		Status:      StatusActive,
-		MaxAccounts: input.MaxAccounts,
+		Name:                 input.Name,
+		Protocol:             input.Protocol,
+		Host:                 input.Host,
+		Port:                 input.Port,
+		Username:             input.Username,
+		Password:             input.Password,
+		Platform:             NormalizeProxyPlatform(input.Platform),
+		RequiredAccountLevel: NormalizeRequiredAccountLevel(input.RequiredAccountLevel),
+		Status:               StatusActive,
+		MaxAccounts:          input.MaxAccounts,
 	}
 	if err := s.proxyRepo.Create(ctx, proxy); err != nil {
 		return nil, err
@@ -4708,6 +4724,32 @@ func (s *adminServiceImpl) CreateProxy(ctx context.Context, input *CreateProxyIn
 	// Probe latency asynchronously so creation isn't blocked by network timeout.
 	go s.probeProxyLatency(context.Background(), proxy)
 	return proxy, nil
+}
+
+// validateProxyRequiredAccountLevel 校验代理要求的账号等级：
+// 空字符串表示“所有等级可用”；非空则必须是当前配置中存在的账号等级（动态）。
+func (s *adminServiceImpl) validateProxyRequiredAccountLevel(ctx context.Context, level string) error {
+	normalized := NormalizeRequiredAccountLevel(level)
+	if normalized == "" {
+		return nil
+	}
+	if !IsValidRequiredAccountLevel(level) {
+		return ErrProxyRequiredAccountLevelInvalid
+	}
+	configs := DefaultOpenAIAccountLevelConfigs()
+	if s.settingService != nil {
+		loaded, err := s.settingService.GetOpenAIAccountLevelConfigs(ctx)
+		if err != nil {
+			return err
+		}
+		configs = loaded
+	}
+	for _, cfg := range configs {
+		if NormalizeRequiredAccountLevel(cfg.Key) == normalized {
+			return nil
+		}
+	}
+	return ErrProxyRequiredAccountLevelInvalid
 }
 
 func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *UpdateProxyInput) (*Proxy, error) {
@@ -4736,6 +4778,18 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 	}
 	if input.Status != "" {
 		proxy.Status = input.Status
+	}
+	if input.Platform != nil {
+		if !IsValidProxyPlatform(*input.Platform) {
+			return nil, ErrProxyPlatformInvalid
+		}
+		proxy.Platform = NormalizeProxyPlatform(*input.Platform)
+	}
+	if input.RequiredAccountLevel != nil {
+		if err := s.validateProxyRequiredAccountLevel(ctx, *input.RequiredAccountLevel); err != nil {
+			return nil, err
+		}
+		proxy.RequiredAccountLevel = NormalizeRequiredAccountLevel(*input.RequiredAccountLevel)
 	}
 	if input.MaxAccounts != nil {
 		if err := s.ensureProxyMaxAccountsCanBeSaved(ctx, id, *input.MaxAccounts); err != nil {

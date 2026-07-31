@@ -266,7 +266,7 @@ func TestOpenAIGatewayService_WSv2ErrorEventCapacityPersistsTempUnsched(t *testi
 
 	require.Empty(t, repo.rateLimitCalls)
 	require.Len(t, repo.tempCalls, 1)
-	require.WithinDuration(t, start.Add(openAIModelCapacityCooldown), repo.tempCalls[0], 5*time.Second)
+	require.WithinDuration(t, start.Add(openAITransientCapacityCooldownForCount(1)), repo.tempCalls[0], 5*time.Second)
 	require.Contains(t, repo.tempReasons[0], "openai_model_capacity")
 }
 

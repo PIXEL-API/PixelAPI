@@ -386,6 +386,19 @@ func (w *AccountShareBillingWorker) handlePostCommitFinalizeFailure(
 	// retries therefore use the persisted failed state independently from the
 	// financial retry ceiling; settling here would permanently discard cache
 	// invalidation and other post-commit work.
+	//
+	// The retry itself must still be bounded. Without a ceiling a persistently
+	// failing finalizer keeps the intent oscillating between failed and
+	// processing forever, so it never reaches a terminal state. Because a
+	// membership end treats only settled/cancelled/needs_attention intents as
+	// non-pending, an unbounded finalize retry pins pending_intents > 0 and the
+	// ending can never finalize — the seat is held indefinitely ("结束不了").
+	// Once retries are exhausted we escalate to needs_attention: the money is
+	// already durable, this only surfaces the lost post-commit work for manual
+	// follow-up and, critically, lets the ending release the seat.
+	if attemptCount >= w.config.MaxAttempts {
+		return w.markNeedsAttention(ctx, transition, "billing_post_commit_finalize_exhausted", "billing post-commit finalization exceeded the retry limit")
+	}
 	retryAt := w.now().UTC().Add(w.retryDelay(attemptCount))
 	_, err := w.intentRepository.MarkFailed(ctx, MarkAccountShareBillingIntentFailedInput{
 		AccountShareBillingIntentLeaseTransition: transition,

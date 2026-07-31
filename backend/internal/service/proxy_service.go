@@ -12,6 +12,10 @@ var (
 	ErrProxyNotFound             = infraerrors.NotFound("PROXY_NOT_FOUND", "proxy not found")
 	ErrProxyInUse                = infraerrors.Conflict("PROXY_IN_USE", "proxy is in use by accounts")
 	ErrProxyAccountLimitExceeded = infraerrors.Conflict("PROXY_ACCOUNT_LIMIT_EXCEEDED", "proxy account binding limit exceeded")
+	// ErrProxyPlatformInvalid 代理平台归属非法（空字符串表示通用代理）。
+	ErrProxyPlatformInvalid = infraerrors.BadRequest("PROXY_PLATFORM_INVALID", "proxy platform is invalid; leave empty for a universal proxy")
+	// ErrProxyRequiredAccountLevelInvalid 代理要求的账号等级非法（空字符串表示所有等级可用）。
+	ErrProxyRequiredAccountLevelInvalid = infraerrors.BadRequest("PROXY_REQUIRED_ACCOUNT_LEVEL_INVALID", "proxy required_account_level is invalid; leave empty to allow all levels")
 )
 
 type ProxyRepository interface {
@@ -26,36 +30,48 @@ type ProxyRepository interface {
 	ListWithFiltersAndAccountCount(ctx context.Context, params pagination.PaginationParams, protocol, status, search string) ([]ProxyWithAccountCount, *pagination.PaginationResult, error)
 	ListActive(ctx context.Context) ([]Proxy, error)
 	ListActiveWithAccountCount(ctx context.Context) ([]ProxyWithAccountCount, error)
-	ListActiveVisibleWithAccountCount(ctx context.Context, userID int64) ([]ProxyWithAccountCount, error)
-	GetVisibleByID(ctx context.Context, userID, id int64) (*Proxy, error)
-	FindVisibleActiveByEndpoint(ctx context.Context, userID int64, protocol, host string, port int, username, password string) (*Proxy, error)
+	ListActiveVisibleWithAccountCount(ctx context.Context, scope ProxyScope) ([]ProxyWithAccountCount, error)
+	GetVisibleByID(ctx context.Context, scope ProxyScope, id int64) (*Proxy, error)
+	FindVisibleActiveByEndpoint(ctx context.Context, scope ProxyScope, protocol, host string, port int, username, password string) (*Proxy, error)
 
 	ExistsByHostPortAuth(ctx context.Context, host string, port int, username, password string) (bool, error)
 	CountAccountsByProxyID(ctx context.Context, proxyID int64) (int64, error)
 	ListAccountSummariesByProxyID(ctx context.Context, proxyID int64) ([]ProxyAccountSummary, error)
+
+	// ResetRequiredAccountLevelNotIn 将 required_account_level 不在 keepLevels 内的代理
+	// 重置为 ''（所有等级可用），用于账号等级被管理员删除后同步代理。返回受影响的行数。
+	ResetRequiredAccountLevelNotIn(ctx context.Context, keepLevels []string) (int64, error)
 }
 
 // CreateProxyRequest 创建代理请求
 type CreateProxyRequest struct {
-	Name        string `json:"name"`
-	Protocol    string `json:"protocol"`
-	Host        string `json:"host"`
-	Port        int    `json:"port"`
-	Username    string `json:"username"`
-	Password    string `json:"password"`
-	MaxAccounts int    `json:"max_accounts"`
+	Name     string `json:"name"`
+	Protocol string `json:"protocol"`
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	// Platform 为空表示通用代理（所有平台可用）。
+	Platform string `json:"platform"`
+	// RequiredAccountLevel 为空表示所有账号等级可用。
+	RequiredAccountLevel string `json:"required_account_level"`
+	MaxAccounts          int    `json:"max_accounts"`
 }
 
 // UpdateProxyRequest 更新代理请求
 type UpdateProxyRequest struct {
-	Name        *string `json:"name"`
-	Protocol    *string `json:"protocol"`
-	Host        *string `json:"host"`
-	Port        *int    `json:"port"`
-	Username    *string `json:"username"`
-	Password    *string `json:"password"`
-	Status      *string `json:"status"`
-	MaxAccounts *int    `json:"max_accounts"`
+	Name     *string `json:"name"`
+	Protocol *string `json:"protocol"`
+	Host     *string `json:"host"`
+	Port     *int    `json:"port"`
+	Username *string `json:"username"`
+	Password *string `json:"password"`
+	// Platform 为空字符串表示改为通用代理。
+	Platform *string `json:"platform"`
+	// RequiredAccountLevel 为空字符串表示改为所有等级可用。
+	RequiredAccountLevel *string `json:"required_account_level"`
+	Status               *string `json:"status"`
+	MaxAccounts          *int    `json:"max_accounts"`
 }
 
 // ProxyService 代理管理服务
@@ -75,16 +91,24 @@ func (s *ProxyService) Create(ctx context.Context, req CreateProxyRequest) (*Pro
 	if req.MaxAccounts < 0 {
 		return nil, infraerrors.BadRequest("PROXY_MAX_ACCOUNTS_INVALID", "max_accounts must be >= 0")
 	}
+	if !IsValidProxyPlatform(req.Platform) {
+		return nil, ErrProxyPlatformInvalid
+	}
+	if !IsValidRequiredAccountLevel(req.RequiredAccountLevel) {
+		return nil, ErrProxyRequiredAccountLevelInvalid
+	}
 	// 创建代理
 	proxy := &Proxy{
-		Name:        req.Name,
-		Protocol:    req.Protocol,
-		Host:        req.Host,
-		Port:        req.Port,
-		Username:    req.Username,
-		Password:    req.Password,
-		Status:      StatusActive,
-		MaxAccounts: req.MaxAccounts,
+		Name:                 req.Name,
+		Protocol:             req.Protocol,
+		Host:                 req.Host,
+		Port:                 req.Port,
+		Username:             req.Username,
+		Password:             req.Password,
+		Platform:             NormalizeProxyPlatform(req.Platform),
+		RequiredAccountLevel: NormalizeRequiredAccountLevel(req.RequiredAccountLevel),
+		Status:               StatusActive,
+		MaxAccounts:          req.MaxAccounts,
 	}
 
 	if err := s.proxyRepo.Create(ctx, proxy); err != nil {
@@ -151,6 +175,20 @@ func (s *ProxyService) Update(ctx context.Context, id int64, req UpdateProxyRequ
 
 	if req.Password != nil {
 		proxy.Password = *req.Password
+	}
+
+	if req.Platform != nil {
+		if !IsValidProxyPlatform(*req.Platform) {
+			return nil, ErrProxyPlatformInvalid
+		}
+		proxy.Platform = NormalizeProxyPlatform(*req.Platform)
+	}
+
+	if req.RequiredAccountLevel != nil {
+		if !IsValidRequiredAccountLevel(*req.RequiredAccountLevel) {
+			return nil, ErrProxyRequiredAccountLevelInvalid
+		}
+		proxy.RequiredAccountLevel = NormalizeRequiredAccountLevel(*req.RequiredAccountLevel)
 	}
 
 	if req.Status != nil {

@@ -100,7 +100,6 @@ const basicStubs = {
   CredentialImportModal: CredentialImportModalStub,
   ProxySelector: true,
   OAuthAuthorizationFlow: true,
-  UserProxyQuickCreatePanel: true,
   Icon: true
 }
 

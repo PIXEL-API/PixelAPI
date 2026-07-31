@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -15,22 +14,34 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
-// failingAdminService 嵌入 stubAdminService，可配置 UpdateAccount 在指定 ID 时失败。
+// failingAdminService 嵌入 stubAdminService，记录 BulkUpdateAccounts 的调用次数，
+// 并可配置某个账号 ID 在批量更新中失败（由服务层统一汇总为部分成功）。
 type failingAdminService struct {
 	*stubAdminService
 	failOnAccountID int64
-	updateCallCount atomic.Int64
+	bulkCallCount   atomic.Int64
 }
 
-func (f *failingAdminService) UpdateAccount(ctx context.Context, id int64, input *service.UpdateAccountInput) (*service.Account, error) {
-	f.updateCallCount.Add(1)
-	if id == f.failOnAccountID {
-		return nil, errors.New("database error")
+func (f *failingAdminService) BulkUpdateAccounts(ctx context.Context, input *service.BulkUpdateAccountsInput) (*service.BulkUpdateAccountsResult, error) {
+	f.bulkCallCount.Add(1)
+	result := &service.BulkUpdateAccountsResult{
+		SuccessIDs: make([]int64, 0, len(input.AccountIDs)),
+		FailedIDs:  make([]int64, 0),
 	}
-	return f.stubAdminService.UpdateAccount(ctx, id, input)
+	for _, id := range input.AccountIDs {
+		if id == f.failOnAccountID {
+			result.Failed++
+			result.FailedIDs = append(result.FailedIDs, id)
+			continue
+		}
+		result.Success++
+		result.SuccessIDs = append(result.SuccessIDs, id)
+	}
+	return result, nil
 }
 
 func setupAccountHandlerWithService(adminSvc service.AdminService) (*gin.Engine, *AccountHandler) {
@@ -57,7 +68,13 @@ func TestBatchUpdateCredentials_AllSuccess(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code, "全部成功时应返回 200")
-	require.Equal(t, int64(3), svc.updateCallCount.Load(), "应调用 3 次 UpdateAccount")
+	require.Equal(t, int64(1), svc.bulkCallCount.Load(), "应调用一次 BulkUpdateAccounts")
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	data := resp["data"].(map[string]any)
+	require.Equal(t, float64(3), data["success"], "应有 3 个成功")
+	require.Equal(t, float64(0), data["failed"], "应有 0 个失败")
 }
 
 func TestBatchUpdateCredentials_PartialFailure(t *testing.T) {
@@ -88,17 +105,15 @@ func TestBatchUpdateCredentials_PartialFailure(t *testing.T) {
 	require.Equal(t, float64(2), data["success"], "应有 2 个成功")
 	require.Equal(t, float64(1), data["failed"], "应有 1 个失败")
 
-	// 所有 3 个账号都会被尝试更新（非 fail-fast）
-	require.Equal(t, int64(3), svc.updateCallCount.Load(),
-		"应调用 3 次 UpdateAccount（逐个尝试，失败后继续）")
+	// 服务层统一处理批量，handler 只调用一次 BulkUpdateAccounts
+	require.Equal(t, int64(1), svc.bulkCallCount.Load(),
+		"应调用一次 BulkUpdateAccounts（部分成功由服务层汇总）")
 }
 
-func TestBatchUpdateCredentials_FirstAccountNotFound(t *testing.T) {
-	// GetAccount 在 stubAdminService 中总是成功的，需要创建一个 GetAccount 会失败的 stub
-	svc := &getAccountFailingService{
-		stubAdminService: newStubAdminService(),
-		failOnAccountID:  1,
-	}
+func TestBatchUpdateCredentials_ServiceNotFoundMapsTo404(t *testing.T) {
+	// 服务层校验目标账号不存在时返回 NotFound，handler 应透传为 404。
+	svc := newStubAdminService()
+	svc.bulkUpdateAccountErr = infraerrors.NotFound("ACCOUNT_NOT_FOUND", "account not found")
 	router, _ := setupAccountHandlerWithService(svc)
 
 	body, _ := json.Marshal(BatchUpdateCredentialsRequest{
@@ -112,20 +127,7 @@ func TestBatchUpdateCredentials_FirstAccountNotFound(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
-	require.Equal(t, http.StatusNotFound, w.Code, "第一阶段验证失败应返回 404")
-}
-
-// getAccountFailingService 模拟 GetAccount 在特定 ID 时返回 not found。
-type getAccountFailingService struct {
-	*stubAdminService
-	failOnAccountID int64
-}
-
-func (f *getAccountFailingService) GetAccount(ctx context.Context, id int64) (*service.Account, error) {
-	if id == f.failOnAccountID {
-		return nil, errors.New("not found")
-	}
-	return f.stubAdminService.GetAccount(ctx, id)
+	require.Equal(t, http.StatusNotFound, w.Code, "服务层 NotFound 应映射为 404")
 }
 
 func TestBatchUpdateCredentials_InterceptWarmupRequests_NonBool(t *testing.T) {

@@ -38,6 +38,10 @@ type Proxy struct {
 	Password *string `json:"password,omitempty"`
 	// OwnerUserID holds the value of the "owner_user_id" field.
 	OwnerUserID *int64 `json:"owner_user_id,omitempty"`
+	// Platform holds the value of the "platform" field.
+	Platform string `json:"platform,omitempty"`
+	// RequiredAccountLevel holds the value of the "required_account_level" field.
+	RequiredAccountLevel string `json:"required_account_level,omitempty"`
 	// Status holds the value of the "status" field.
 	Status string `json:"status,omitempty"`
 	// MaxAccounts holds the value of the "max_accounts" field.
@@ -86,7 +90,7 @@ func (*Proxy) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case proxy.FieldID, proxy.FieldPort, proxy.FieldOwnerUserID, proxy.FieldMaxAccounts:
 			values[i] = new(sql.NullInt64)
-		case proxy.FieldName, proxy.FieldProtocol, proxy.FieldHost, proxy.FieldUsername, proxy.FieldPassword, proxy.FieldStatus:
+		case proxy.FieldName, proxy.FieldProtocol, proxy.FieldHost, proxy.FieldUsername, proxy.FieldPassword, proxy.FieldPlatform, proxy.FieldRequiredAccountLevel, proxy.FieldStatus:
 			values[i] = new(sql.NullString)
 		case proxy.FieldCreatedAt, proxy.FieldUpdatedAt, proxy.FieldDeletedAt:
 			values[i] = new(sql.NullTime)
@@ -174,6 +178,18 @@ func (_m *Proxy) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.OwnerUserID = new(int64)
 				*_m.OwnerUserID = value.Int64
+			}
+		case proxy.FieldPlatform:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field platform", values[i])
+			} else if value.Valid {
+				_m.Platform = value.String
+			}
+		case proxy.FieldRequiredAccountLevel:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field required_account_level", values[i])
+			} else if value.Valid {
+				_m.RequiredAccountLevel = value.String
 			}
 		case proxy.FieldStatus:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -270,6 +286,12 @@ func (_m *Proxy) String() string {
 		builder.WriteString("owner_user_id=")
 		builder.WriteString(fmt.Sprintf("%v", *v))
 	}
+	builder.WriteString(", ")
+	builder.WriteString("platform=")
+	builder.WriteString(_m.Platform)
+	builder.WriteString(", ")
+	builder.WriteString("required_account_level=")
+	builder.WriteString(_m.RequiredAccountLevel)
 	builder.WriteString(", ")
 	builder.WriteString("status=")
 	builder.WriteString(_m.Status)

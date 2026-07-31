@@ -26,25 +26,41 @@ func NewProxyHandler(adminService service.AdminService) *ProxyHandler {
 
 // CreateProxyRequest represents create proxy request
 type CreateProxyRequest struct {
-	Name        string `json:"name" binding:"required"`
-	Protocol    string `json:"protocol" binding:"required,oneof=http https socks5 socks5h"`
-	Host        string `json:"host" binding:"required"`
-	Port        int    `json:"port" binding:"required,min=1,max=65535"`
-	Username    string `json:"username"`
-	Password    string `json:"password"`
-	MaxAccounts int    `json:"max_accounts" binding:"min=0"`
+	Name     string `json:"name" binding:"required"`
+	Protocol string `json:"protocol" binding:"required,oneof=http https socks5 socks5h"`
+	Host     string `json:"host" binding:"required"`
+	Port     int    `json:"port" binding:"required,min=1,max=65535"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	// Platform 为空表示通用代理（所有平台可用）。
+	Platform string `json:"platform"`
+	// RequiredAccountLevel 为空表示所有账号等级可用。
+	RequiredAccountLevel string `json:"required_account_level"`
+	MaxAccounts          int    `json:"max_accounts" binding:"min=0"`
 }
 
 // UpdateProxyRequest represents update proxy request
 type UpdateProxyRequest struct {
-	Name        string `json:"name"`
-	Protocol    string `json:"protocol" binding:"omitempty,oneof=http https socks5 socks5h"`
-	Host        string `json:"host"`
-	Port        int    `json:"port" binding:"omitempty,min=1,max=65535"`
-	Username    string `json:"username"`
-	Password    string `json:"password"`
-	Status      string `json:"status" binding:"omitempty,oneof=active inactive"`
-	MaxAccounts *int   `json:"max_accounts" binding:"omitempty,min=0"`
+	Name     string `json:"name"`
+	Protocol string `json:"protocol" binding:"omitempty,oneof=http https socks5 socks5h"`
+	Host     string `json:"host"`
+	Port     int    `json:"port" binding:"omitempty,min=1,max=65535"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Status   string `json:"status" binding:"omitempty,oneof=active inactive"`
+	// Platform / RequiredAccountLevel 用指针区分“未提供”与“显式设为空”。
+	Platform             *string `json:"platform"`
+	RequiredAccountLevel *string `json:"required_account_level"`
+	MaxAccounts          *int    `json:"max_accounts" binding:"omitempty,min=0"`
+}
+
+// trimOptionalProxyString 对可选字符串字段做 trim，nil 表示“未提供”原样透传。
+func trimOptionalProxyString(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	return &trimmed
 }
 
 // List handles listing all proxies with pagination
@@ -137,13 +153,15 @@ func (h *ProxyHandler) Create(c *gin.Context) {
 
 	executeAdminIdempotentJSON(c, "admin.proxies.create", req, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
 		proxy, err := h.adminService.CreateProxy(ctx, &service.CreateProxyInput{
-			Name:        strings.TrimSpace(req.Name),
-			Protocol:    strings.TrimSpace(req.Protocol),
-			Host:        strings.TrimSpace(req.Host),
-			Port:        req.Port,
-			Username:    strings.TrimSpace(req.Username),
-			Password:    strings.TrimSpace(req.Password),
-			MaxAccounts: req.MaxAccounts,
+			Name:                 strings.TrimSpace(req.Name),
+			Protocol:             strings.TrimSpace(req.Protocol),
+			Host:                 strings.TrimSpace(req.Host),
+			Port:                 req.Port,
+			Username:             strings.TrimSpace(req.Username),
+			Password:             strings.TrimSpace(req.Password),
+			Platform:             strings.TrimSpace(req.Platform),
+			RequiredAccountLevel: strings.TrimSpace(req.RequiredAccountLevel),
+			MaxAccounts:          req.MaxAccounts,
 		})
 		if err != nil {
 			return nil, err
@@ -168,14 +186,16 @@ func (h *ProxyHandler) Update(c *gin.Context) {
 	}
 
 	proxy, err := h.adminService.UpdateProxy(c.Request.Context(), proxyID, &service.UpdateProxyInput{
-		Name:        strings.TrimSpace(req.Name),
-		Protocol:    strings.TrimSpace(req.Protocol),
-		Host:        strings.TrimSpace(req.Host),
-		Port:        req.Port,
-		Username:    strings.TrimSpace(req.Username),
-		Password:    strings.TrimSpace(req.Password),
-		Status:      strings.TrimSpace(req.Status),
-		MaxAccounts: req.MaxAccounts,
+		Name:                 strings.TrimSpace(req.Name),
+		Protocol:             strings.TrimSpace(req.Protocol),
+		Host:                 strings.TrimSpace(req.Host),
+		Port:                 req.Port,
+		Username:             strings.TrimSpace(req.Username),
+		Password:             strings.TrimSpace(req.Password),
+		Status:               strings.TrimSpace(req.Status),
+		Platform:             trimOptionalProxyString(req.Platform),
+		RequiredAccountLevel: trimOptionalProxyString(req.RequiredAccountLevel),
+		MaxAccounts:          req.MaxAccounts,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)

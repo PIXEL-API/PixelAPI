@@ -1998,6 +1998,7 @@ const accountDeletionBlockerSampleLimit = 10
 
 type accountDeletionBlockers struct {
 	roomListingIDs            []int64
+	roomListingNames          []string
 	roomStates                []string
 	liveMembershipCount       int64
 	liveMembershipIDs         []int64
@@ -2032,6 +2033,9 @@ func (b accountDeletionBlockers) conflictError(accountID int64) error {
 		blockerTypes = append(blockerTypes, "room_account")
 		metadata["room_listing_ids"] = joinAccountDeletionInt64s(b.roomListingIDs)
 		metadata["room_account_states"] = strings.Join(b.roomStates, ",")
+		if len(b.roomListingNames) > 0 {
+			metadata["room_listing_names"] = strings.Join(b.roomListingNames, ",")
+		}
 	}
 	if b.liveMembershipCount > 0 {
 		blockerTypes = append(blockerTypes, "live_membership")
@@ -2064,10 +2068,11 @@ func loadAccountDeletionBlockers(ctx context.Context, exec sqlQueryExecutor, acc
 	}
 
 	roomRows, err := exec.QueryContext(ctx, `
-		SELECT listing_id, state
-		FROM account_share_room_accounts
-		WHERE account_id = $1
-		ORDER BY listing_id
+		SELECT room_account.listing_id, room_account.state, COALESCE(listing.room_name, '')
+		FROM account_share_room_accounts room_account
+		LEFT JOIN account_share_listings listing ON listing.id = room_account.listing_id
+		WHERE room_account.account_id = $1
+		ORDER BY room_account.listing_id
 	`, accountID)
 	if err != nil {
 		return blockers, fmt.Errorf("query room account blockers: %w", err)
@@ -2075,12 +2080,15 @@ func loadAccountDeletionBlockers(ctx context.Context, exec sqlQueryExecutor, acc
 	for roomRows.Next() {
 		var listingID int64
 		var state string
-		if err := roomRows.Scan(&listingID, &state); err != nil {
+		var roomName string
+		if err := roomRows.Scan(&listingID, &state, &roomName); err != nil {
 			_ = roomRows.Close()
 			return blockers, fmt.Errorf("scan room account blocker: %w", err)
 		}
 		blockers.roomListingIDs = append(blockers.roomListingIDs, listingID)
 		blockers.roomStates = append(blockers.roomStates, state)
+		// room_name 可能含逗号，替换为空格避免破坏逗号分隔的 metadata。
+		blockers.roomListingNames = append(blockers.roomListingNames, strings.ReplaceAll(roomName, ",", " "))
 	}
 	if err := roomRows.Err(); err != nil {
 		_ = roomRows.Close()

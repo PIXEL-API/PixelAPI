@@ -261,6 +261,37 @@ func (r *accountShareModeRepository) TransitionRoomLifecycle(
 		statusReasonCode = "owner_delisted"
 		eventType = "listing.delisted"
 		source = "delist_room"
+		// Draining is an asynchronous transition: the room stays in
+		// 'draining' until the lifecycle finalizer observes that all
+		// blockers cleared, then flips it to 'paused'. That finalizer keys
+		// off pending_operation_id, so we must open a drain_room operation
+		// row here and stamp its id onto the listing. Without it the room
+		// is invisible to ListDrainingRoomIDs / FinalizeDrainingRoom and
+		// stays stuck in 'draining' forever.
+		operationID = uuid.NewString()
+		actorRole := accountShareRevisionActorRole(actorUserID, actorIsAdmin)
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO account_share_room_operations (
+				id, listing_id, action, actor_user_id, actor_role, source,
+				request_id, expected_version, start_version, status,
+				blocker, result, created_at, updated_at
+			)
+			VALUES (
+				$1::uuid, $2, 'drain_room', $3, $4, 'api',
+				$5, $6, $7, 'pending',
+				'{}'::jsonb, '{}'::jsonb, NOW(), NOW()
+			)
+		`,
+			operationID,
+			listing.ID,
+			nullablePositiveInt64(actorUserID),
+			actorRole,
+			nil, // request_id: lifecycle commands carry no idempotency key here
+			listing.RowVersion,
+			listing.RowVersion+1,
+		); err != nil {
+			return nil, translateAccountShareLifecyclePersistenceError(err)
+		}
 	case service.AccountShareRoomActionActivate:
 		if listing.Status != service.AccountShareListingStatusPaused &&
 			listing.Status != service.AccountShareListingStatusDraining &&

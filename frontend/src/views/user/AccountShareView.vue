@@ -806,36 +806,6 @@
                     disable-full
                     hide-endpoint
                   >
-                    <template #actions="{ close }">
-                      <div class="grid gap-2 sm:grid-cols-2">
-                        <button
-                          type="button"
-                          class="proxy-action-option"
-                          @click.stop="openProxyPurchase(close)"
-                        >
-                          <span class="proxy-action-icon bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-300">
-                            <Icon name="externalLink" size="sm" />
-                          </span>
-                          <span>
-                            <strong>购买 seekproxy</strong>
-                            <small>打开 seekproxy 新窗口</small>
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          class="proxy-action-option"
-                          @click.stop="openAddProxyDialog(close)"
-                        >
-                          <span class="proxy-action-icon bg-primary-50 text-primary-600 dark:bg-primary-500/10 dark:text-primary-300">
-                            <Icon name="plus" size="sm" />
-                          </span>
-                          <span>
-                            <strong>添加代理 IP</strong>
-                            <small>使用自己的动态或静态代理</small>
-                          </span>
-                        </button>
-                      </div>
-                    </template>
                   </ProxySelector>
                   <small :class="createProxyCapacityValidationMessage ? 'text-red-600 dark:text-red-300' : ''">
                     {{ createProxyHelperText }}
@@ -1002,122 +972,28 @@
                 <Icon v-else name="checkCircle" size="sm" class="mr-2" />
                 {{ creating ? '创建中...' : `完成 ${platformLabel(createPlatform)} OAuth 并上架` }}
               </button>
-              <button
-                v-else
-                class="btn-primary create-room-submit-button"
-                type="button"
-                :disabled="creating || !canCreateRoomFromOwnedAccount"
-                @click="createRoomFromOwnedAccount"
-              >
-                <Icon name="plus" size="sm" class="mr-2" :class="{ 'animate-pulse': creating }" />
-                {{ creating ? '创建房间中...' : '使用已有账号创建房间' }}
-              </button>
+              <template v-else>
+                <p
+                  v-if="createErrorMessage"
+                  class="create-room-error-message"
+                  role="alert"
+                >
+                  {{ createErrorMessage }}
+                </p>
+                <button
+                  class="btn-primary create-room-submit-button"
+                  type="button"
+                  :disabled="creating || !canCreateRoomFromOwnedAccount"
+                  @click="createRoomFromOwnedAccount"
+                >
+                  <Icon name="plus" size="sm" class="mr-2" :class="{ 'animate-pulse': creating }" />
+                  {{ creating ? '创建房间中...' : '使用已有账号创建房间' }}
+                </button>
+              </template>
             </div>
           </div>
         </div>
       </CreateRoomDialog>
-
-      <BaseDialog
-        :show="showProxyDialog"
-        title="添加代理 IP"
-        width="wide"
-        @close="closeProxyDialog"
-      >
-        <div class="space-y-6">
-          <div class="proxy-dialog-section">
-            <label class="proxy-dialog-label">智能识别（支持动态/静态代理 IP）</label>
-            <textarea
-              v-model="proxySmartInput"
-              class="proxy-smart-textarea"
-              rows="4"
-              placeholder="示例：
-192.168.0.1:8000:用户名:密码
-用户名:密码@192.168.0.1:8000"
-              @blur="applySmartProxyInput(false)"
-            ></textarea>
-            <div class="mt-2 flex flex-wrap items-center gap-2">
-              <button type="button" class="btn-secondary h-9" @click="applySmartProxyInput(true)">
-                <Icon name="sync" size="sm" class="mr-2" />
-                识别填入
-              </button>
-              <span class="text-xs text-gray-500 dark:text-dark-300">支持 socks5/http/https URL，也支持账号密码前置或冒号分隔格式。</span>
-            </div>
-          </div>
-
-          <div class="proxy-dialog-divider"></div>
-
-          <label class="proxy-dialog-section">
-            <span class="proxy-dialog-label">代理名称</span>
-            <input v-model.trim="proxyForm.name" class="input" maxlength="100" placeholder="例如：Roxy 独立 IP / 家宽代理" />
-            <small class="text-xs text-gray-500 dark:text-dark-300">用于在下拉框中识别该代理，仅自己可见；不填会按主机和端口自动生成。</small>
-          </label>
-
-          <div class="proxy-dialog-section">
-            <label class="proxy-dialog-label">代理 IP 类型</label>
-            <div class="proxy-ip-type-grid">
-              <button
-                type="button"
-                :class="['proxy-ip-type-option', proxyForm.ip_type === 'ipv4' && 'proxy-ip-type-option-active']"
-                @click="proxyForm.ip_type = 'ipv4'"
-              >
-                <span class="proxy-radio-dot"></span>
-                IPV4
-              </button>
-              <button
-                type="button"
-                :class="['proxy-ip-type-option', proxyForm.ip_type === 'ipv6' && 'proxy-ip-type-option-active']"
-                @click="proxyForm.ip_type = 'ipv6'"
-              >
-                <span class="proxy-radio-dot"></span>
-                IPV6
-              </button>
-            </div>
-          </div>
-
-          <div class="proxy-dialog-section">
-            <label class="proxy-dialog-label">代理 IP 信息</label>
-            <div class="proxy-endpoint-row">
-              <select v-model="proxyForm.protocol" class="proxy-protocol-select">
-                <option value="socks5">SOCKS5</option>
-                <option value="socks5h">SOCKS5H</option>
-                <option value="http">HTTP</option>
-                <option value="https">HTTPS</option>
-              </select>
-              <input v-model.trim="proxyForm.host" class="proxy-host-input" placeholder="主机" />
-              <span class="proxy-colon">:</span>
-              <input v-model.number="proxyForm.port" class="proxy-port-input" type="number" min="1" max="65535" placeholder="端口" />
-            </div>
-          </div>
-
-          <div class="grid gap-4 md:grid-cols-2">
-            <label class="proxy-dialog-section">
-              <span class="proxy-dialog-label">用户名</span>
-              <input v-model.trim="proxyForm.username" class="input" placeholder="请输入用户名" />
-            </label>
-            <label class="proxy-dialog-section">
-              <span class="proxy-dialog-label">密码</span>
-              <input v-model.trim="proxyForm.password" class="input" type="password" placeholder="请输入密码" />
-            </label>
-          </div>
-
-          <div v-if="proxyDialogError" class="notice-row border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-300">
-            <Icon name="exclamationCircle" size="sm" class="mt-0.5 flex-shrink-0" />
-            <span>{{ proxyDialogError }}</span>
-          </div>
-        </div>
-
-        <template #footer>
-          <button type="button" class="btn-secondary" :disabled="savingProxy" @click="closeProxyDialog">取消</button>
-          <button type="button" class="btn-primary" :disabled="savingProxy" @click="saveUserProxy">
-            <svg v-if="savingProxy" class="-ml-1 mr-2 h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-            </svg>
-            <Icon v-else name="checkCircle" size="sm" class="mr-2" />
-            保存并使用
-          </button>
-        </template>
-      </BaseDialog>
 
       <section ref="filterPanelRef" class="filter-panel" @keydown.esc="handleFilterPopoverEscape">
         <div class="filter-toolbar">
@@ -3494,7 +3370,7 @@ import {
   type UpdateAccountShareListingRequest
 } from '@/api/accountShare'
 import { accountsAPI, keysAPI } from '@/api'
-import type { Account, AccountLevel, ApiKey, Proxy, ProxyProtocol } from '@/types'
+import type { Account, AccountLevel, ApiKey, Proxy } from '@/types'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { useClipboard } from '@/composables/useClipboard'
@@ -3632,15 +3508,6 @@ interface OAuthFlowInstance {
   reset: () => void
 }
 
-interface UserProxyFormState {
-  ip_type: 'ipv4' | 'ipv6'
-  name: string
-  protocol: ProxyProtocol
-  host: string
-  port: number | null
-  username: string
-  password: string
-}
 
 type AccountShareActionErrorAction = 'create-mode-key' | null
 type AccountSharePlatform = 'openai' | 'anthropic'
@@ -3822,7 +3689,6 @@ const ROOM_LIFECYCLE_ERROR_MESSAGES: Record<string, string> = {
   ACCOUNT_SHARE_ROOM_VALIDATION_FAILED: '房间恢复校验未通过，请检查房间账号状态后重试。',
   ACCOUNT_SHARE_RUNTIME_DEPENDENCY_UNAVAILABLE: '运行时状态暂时不可用，为保护历史与结算安全，当前操作已停止。'
 }
-const PROXY_PURCHASE_URL = 'https://www.seekproxy.com/user/reg?invite_id=105978'
 const ACCOUNT_SHARE_PLATFORM_OPTIONS: Array<{ value: AccountSharePlatform; label: string }> = [
   { value: 'openai', label: 'OpenAI' },
   { value: 'anthropic', label: 'Anthropic' }
@@ -4299,6 +4165,7 @@ const selectedOwnedAccountID = ref(0)
 let ownedAccountsRequestVersion = 0
 let ownedAccountsRequestController: AbortController | null = null
 let ownedAccountsLoadedPlatform: AccountSharePlatform | null = null
+let lastScopeKey = ''
 let pendingCreateRoomIntentSignature = ''
 let pendingCreateRoomIdempotencyKey = ''
 const oauthExchangeIntent: StableIdempotencyIntent = { signature: '', key: '' }
@@ -4439,10 +4306,6 @@ const featureFilterTriggerRef = ref<HTMLButtonElement | null>(null)
 const modelFilterTriggerRef = ref<HTMLButtonElement | null>(null)
 const openFilterPopover = ref<ListingFilterPopover | null>(null)
 const oauthFlowRef = ref<OAuthFlowInstance | null>(null)
-const showProxyDialog = ref(false)
-const savingProxy = ref(false)
-const proxyDialogError = ref('')
-const proxySmartInput = ref('')
 const nowMs = ref(Date.now())
 let clockTimer: number | null = null
 let searchDebounceTimer: number | null = null
@@ -4488,15 +4351,6 @@ const listingFilters = reactive<ListingFilterState>({
   models: [...initialListingPreferences.models]
 })
 
-const proxyForm = reactive<UserProxyFormState>({
-  ip_type: 'ipv4',
-  name: '',
-  protocol: 'socks5',
-  host: '',
-  port: null,
-  username: '',
-  password: ''
-})
 
 function buildDefaultCreateForm(): CreateFormState {
   return {
@@ -5014,12 +4868,12 @@ const canSubmitOAuth = computed(() =>
   !concurrencyValidationMessage.value &&
   !perUserConcurrencyValidationMessage.value
 )
+// 按钮可用性直接复用提交时的权威校验，避免与 validateCreateConfig 漂移：
+// 旧实现只检查其中一个子集（模型/并发），却漏掉了 seat_limit 越界、倍率/时费/
+// 低消/准入余额为负、以及 5h/7d 保护百分比越界等项，导致按钮可点但提交必失败。
 const canCreateRoomFromOwnedAccount = computed(() =>
   selectedOwnedAccount.value !== null
-  && parsedAllowedModelCount.value > 0
-  && !accountNameValidationMessage.value
-  && !concurrencyValidationMessage.value
-  && !perUserConcurrencyValidationMessage.value
+  && validateCreateConfig() === ''
 )
 
 const proxyHelperText = computed(() => {
@@ -5030,7 +4884,7 @@ const proxyHelperText = computed(() => {
       ? '可选择平台代理或我的代理，支持名称/IP 模糊搜索并测试连通性。'
       : '可选择平台代理或我的代理，支持名称/IP 模糊搜索；如需测试连通性，请联系管理员。'
   }
-  return '暂无可选代理，可在下拉菜单中购买独立 IP 或添加自己的代理 IP。'
+  return '暂无可选代理，请联系管理员配置平台代理。'
 })
 const createProxyHelperText = computed(() => createProxyCapacityValidationMessage.value || proxyHelperText.value)
 const draftDiscardMessage = computed(() => (
@@ -7669,163 +7523,6 @@ function selectCreateSourceMode(mode: 'existing' | 'oauth'): void {
   }
 }
 
-function resetProxyForm(): void {
-  proxySmartInput.value = ''
-  proxyDialogError.value = ''
-  Object.assign(proxyForm, {
-    ip_type: 'ipv4',
-    name: '',
-    protocol: 'socks5',
-    host: '',
-    port: null,
-    username: '',
-    password: ''
-  } satisfies UserProxyFormState)
-}
-
-function openProxyPurchase(close?: () => void): void {
-  close?.()
-  window.open(PROXY_PURCHASE_URL, '_blank', 'noopener,noreferrer')
-}
-
-function openAddProxyDialog(close?: () => void): void {
-  close?.()
-  resetProxyForm()
-  showProxyDialog.value = true
-}
-
-function closeProxyDialog(): void {
-  if (savingProxy.value) return
-  showProxyDialog.value = false
-  proxyDialogError.value = ''
-}
-
-function extractProxyRemark(raw: string): { value: string; remark: string } {
-  let remark = ''
-  const value = raw
-    .replace(/\{([^}]*)}/g, (_, match: string) => {
-      remark = match.trim()
-      return ''
-    })
-    .replace(/\[[^\]]*]/g, '')
-    .trim()
-  return { value, remark }
-}
-
-function buildDefaultProxyName(host: string, port: number): string {
-  return `我的代理 ${host}:${port}`
-}
-
-function updateProxyNameFromParsedInput(host: string, port: number, remark: string): void {
-  if (remark) {
-    proxyForm.name = remark
-    return
-  }
-  if (!proxyForm.name.trim()) {
-    proxyForm.name = buildDefaultProxyName(host, port)
-  }
-}
-
-function applyParsedProxyURL(raw: string, fallbackProtocol: ProxyProtocol, remark: string): boolean {
-  const withProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `${fallbackProtocol}://${raw}`
-  try {
-    const parsed = new URL(withProtocol)
-    const protocol = parsed.protocol.replace(':', '').toLowerCase() as ProxyProtocol
-    if (!['http', 'https', 'socks5', 'socks5h'].includes(protocol)) return false
-    const port = Number(parsed.port)
-    if (!parsed.hostname || !Number.isInteger(port) || port < 1 || port > 65535) return false
-    proxyForm.protocol = protocol
-    proxyForm.host = parsed.hostname
-    proxyForm.port = port
-    proxyForm.username = decodeURIComponent(parsed.username || '')
-    proxyForm.password = decodeURIComponent(parsed.password || '')
-    updateProxyNameFromParsedInput(parsed.hostname, port, remark)
-    proxyForm.ip_type = parsed.hostname.includes(':') ? 'ipv6' : 'ipv4'
-    return true
-  } catch {
-    return false
-  }
-}
-
-function applySmartProxyInput(showError: boolean): void {
-  const raw = proxySmartInput.value.trim()
-  if (!raw) return
-  const firstLine = raw.split(/\r?\n/).map(line => line.trim()).filter(Boolean)[0] || ''
-  const { value, remark } = extractProxyRemark(firstLine)
-  if (!value) return
-
-  if (value.includes('://') || value.includes('@')) {
-    if (applyParsedProxyURL(value, proxyForm.protocol, remark)) {
-      proxyDialogError.value = ''
-      return
-    }
-  }
-
-  const parts = value.split(':')
-  if (parts.length >= 2) {
-    const host = parts[0]?.trim()
-    const port = Number(parts[1])
-    if (host && Number.isInteger(port) && port >= 1 && port <= 65535) {
-      proxyForm.host = host
-      proxyForm.port = port
-      proxyForm.username = (parts[2] || '').trim()
-      proxyForm.password = parts.slice(3).join(':').trim()
-      proxyForm.ip_type = host.includes(':') ? 'ipv6' : 'ipv4'
-      updateProxyNameFromParsedInput(host, port, remark)
-      proxyDialogError.value = ''
-      return
-    }
-  }
-
-  if (showError) {
-    proxyDialogError.value = '无法识别代理格式，请检查主机、端口、用户名和密码。'
-  }
-}
-
-function validateUserProxyForm(): string {
-  if (!['http', 'https', 'socks5', 'socks5h'].includes(proxyForm.protocol)) return '请选择代理协议'
-  if (!proxyForm.host.trim()) return '请输入代理主机'
-  if (/\s/.test(proxyForm.host)) return '代理主机不能包含空格'
-  const port = Number(proxyForm.port || 0)
-  if (!Number.isInteger(port) || port < 1 || port > 65535) return '代理端口必须在 1-65535 之间'
-  return ''
-}
-
-function upsertProxy(proxy: Proxy): void {
-  const index = proxies.value.findIndex(item => item.id === proxy.id)
-  if (index >= 0) {
-    proxies.value[index] = { ...proxies.value[index], ...proxy }
-    return
-  }
-  proxies.value = [proxy, ...proxies.value]
-}
-
-async function saveUserProxy(): Promise<void> {
-  applySmartProxyInput(false)
-  proxyDialogError.value = validateUserProxyForm()
-  if (proxyDialogError.value) return
-
-  savingProxy.value = true
-  try {
-    const created = await accountShareAPI.createProxy({
-      name: proxyForm.name.trim() || undefined,
-      protocol: proxyForm.protocol,
-      host: proxyForm.host.trim(),
-      port: Number(proxyForm.port),
-      username: proxyForm.username.trim() || undefined,
-      password: proxyForm.password.trim() || undefined
-    })
-    upsertProxy(created)
-    createForm.proxy_id = created.id
-    proxyLoadMessage.value = ''
-    showProxyDialog.value = false
-  } catch (error: unknown) {
-    proxyDialogError.value = extractApiErrorMessage(error, '添加代理 IP 失败')
-  } finally {
-    savingProxy.value = false
-  }
-}
-
 function findProxyByID(proxyID: number): Proxy | null {
   if (!Number.isFinite(proxyID) || proxyID <= 0) return null
   return proxies.value.find(proxy => proxy.id === proxyID) || null
@@ -7896,7 +7593,9 @@ function validateEditConfig(): string {
     if (!Number.isFinite(Number(editForm.anthropic_7d_limit_percent)) || Number(editForm.anthropic_7d_limit_percent) < 1 || Number(editForm.anthropic_7d_limit_percent) > 100) return 'Claude 7d 保护必须在 1-100 之间'
   }
   if (parseEditAllowedModels().length === 0) return '至少填写一个模型白名单'
-  if (!editSessionID.value) return '编辑会话已失效，请关闭后重新编辑'
+  // 受保护编辑（房间正在被使用）走无锁定路径，openConsumerProtectedEditDialog 会
+  // 刻意将 editSessionID 置空；此时不应再校验编辑会话，否则保存永远被拦下。
+  if (!editConsumerProtected.value && !editSessionID.value) return '编辑会话已失效，请关闭后重新编辑'
   if (
     !Number.isSafeInteger(Number(editingConfigListing.value?.row_version))
     || Number(editingConfigListing.value?.row_version) <= 0
@@ -8756,14 +8455,24 @@ function useRecommendedListing(candidate: AccountShareRecommendationCandidate): 
 }
 
 async function loadProxies(): Promise<void> {
-  if (proxyLoading.value || proxies.value.length > 0) return
+  const platform = createPlatform.value
+  const accountLevel = createSourceMode.value === 'existing'
+    ? selectedOwnedAccount.value?.account_level
+    : undefined
+  const scopeKey = `${platform}|${accountLevel ?? ''}`
+  if (proxyLoading.value) return
+  if (proxies.value.length > 0 && lastScopeKey === scopeKey) return
 
   proxyLoading.value = true
   proxyLoadMessage.value = ''
   try {
-    proxies.value = await accountShareAPI.listProxies()
+    proxies.value = await accountShareAPI.listProxies({
+      platform,
+      account_level: accountLevel
+    })
+    lastScopeKey = scopeKey
   } catch (error: unknown) {
-    proxyLoadMessage.value = `${extractApiErrorMessage(error, '代理列表加载失败')}，可尝试添加自己的代理 IP。`
+    proxyLoadMessage.value = extractApiErrorMessage(error, '代理列表加载失败')
   } finally {
     proxyLoading.value = false
   }
@@ -9056,7 +8765,7 @@ function roomLifecycleActionTitle(action: Exclude<AccountShareRoomLifecycleActio
 function roomLifecycleActionDescription(action: Exclude<AccountShareRoomLifecycleAction, 'delete'>): string {
   switch (action) {
     case 'drain':
-      return '房间将停止接收新成员；现有消费者继续正常使用，已有预约不会被取消。'
+      return '房间将停止接收新成员并进入“安全排空中”；现有消费者继续正常使用，待全部离开后房间自动转为“已暂停”，随时可重新上架。'
     case 'activate':
       return '系统会校验房间主账号的连通性和可用状态；只有校验通过才会重新开放。'
     case 'suspend':
@@ -9067,7 +8776,7 @@ function roomLifecycleActionDescription(action: Exclude<AccountShareRoomLifecycl
 function roomLifecycleActionImpact(action: Exclude<AccountShareRoomLifecycleAction, 'delete'>): string {
   switch (action) {
     case 'drain':
-      return '下架不会中断现有消费者，也不会删除房间或历史记录。'
+      return '下架会先进入排空阶段（不会中断现有消费者），全部用户离开后房间自动暂停；不会删除房间或历史记录。'
     case 'activate':
       return '恢复校验失败时房间仍保持暂停，并展示失败原因，不会带病开放。'
     case 'suspend':
@@ -14196,6 +13905,23 @@ onBeforeUnmount(() => {
 .create-room-submit-button {
   min-height: 3rem;
   width: 100%;
+}
+
+.create-room-error-message {
+  margin-bottom: 0.75rem;
+  padding: 0.625rem 0.875rem;
+  border: 1px solid rgb(248 113 113);
+  border-radius: 0.5rem;
+  background: rgb(254 242 242);
+  color: rgb(185 28 28);
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+.dark .create-room-error-message {
+  border-color: rgb(153 27 27);
+  background: rgb(69 10 10 / 0.4);
+  color: rgb(252 165 165);
 }
 
 .dark .create-room-source-stage,

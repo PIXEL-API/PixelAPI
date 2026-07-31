@@ -17,10 +17,10 @@ func TestLoadAccountDeletionBlockersCollectsStructuredMetadata(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
-	mock.ExpectQuery(`(?s)SELECT listing_id, state\s+FROM account_share_room_accounts\s+WHERE account_id = \$1\s+ORDER BY listing_id`).
+	mock.ExpectQuery(`(?s)SELECT room_account\.listing_id, room_account\.state, COALESCE\(listing\.room_name, ''\).*FROM account_share_room_accounts room_account.*LEFT JOIN account_share_listings listing.*WHERE room_account\.account_id = \$1.*ORDER BY room_account\.listing_id`).
 		WithArgs(int64(55)).
-		WillReturnRows(sqlmock.NewRows([]string{"listing_id", "state"}).
-			AddRow(int64(91), "failed"))
+		WillReturnRows(sqlmock.NewRows([]string{"listing_id", "state", "room_name"}).
+			AddRow(int64(91), "failed", "共享,房间"))
 	mock.ExpectQuery(`(?s)SELECT id, listing_id, status, COUNT\(\*\) OVER \(\).*account_share_memberships.*status IN \('active', 'queued', 'ending'\)`).
 		WithArgs(int64(55), accountDeletionBlockerSampleLimit).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "listing_id", "status", "count"}).
@@ -51,6 +51,7 @@ func TestLoadAccountDeletionBlockersCollectsStructuredMetadata(t *testing.T) {
 	require.Equal(t, "room_account,live_membership,open_binding,pending_billing_intent", appErr.Metadata["blocker_types"])
 	require.Equal(t, "91", appErr.Metadata["room_listing_ids"])
 	require.Equal(t, "failed", appErr.Metadata["room_account_states"])
+	require.Equal(t, "共享 房间", appErr.Metadata["room_listing_names"])
 	require.Equal(t, "3", appErr.Metadata["live_membership_count"])
 	require.Equal(t, "1001,1002", appErr.Metadata["live_membership_sample_ids"])
 	require.Equal(t, "true", appErr.Metadata["live_membership_sample_truncated"])
@@ -70,9 +71,9 @@ func TestLoadAccountDeletionBlockersSkipsOptionalQueriesWhenTablesDoNotExist(t *
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
-	mock.ExpectQuery(`(?s)SELECT listing_id, state.*account_share_room_accounts`).
+	mock.ExpectQuery(`(?s)SELECT room_account\.listing_id, room_account\.state.*account_share_room_accounts room_account`).
 		WithArgs(int64(55)).
-		WillReturnRows(sqlmock.NewRows([]string{"listing_id", "state"}))
+		WillReturnRows(sqlmock.NewRows([]string{"listing_id", "state", "room_name"}))
 	mock.ExpectQuery(`(?s)SELECT id, listing_id, status, COUNT\(\*\) OVER \(\).*account_share_memberships`).
 		WithArgs(int64(55), accountDeletionBlockerSampleLimit).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "listing_id", "status", "count"}))
@@ -95,9 +96,9 @@ func TestLoadAccountDeletionBlockersFailsClosedWhenSchemaDetectionFails(t *testi
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
-	mock.ExpectQuery(`(?s)SELECT listing_id, state.*account_share_room_accounts`).
+	mock.ExpectQuery(`(?s)SELECT room_account\.listing_id, room_account\.state.*account_share_room_accounts room_account`).
 		WithArgs(int64(55)).
-		WillReturnRows(sqlmock.NewRows([]string{"listing_id", "state"}))
+		WillReturnRows(sqlmock.NewRows([]string{"listing_id", "state", "room_name"}))
 	mock.ExpectQuery(`(?s)SELECT id, listing_id, status, COUNT\(\*\) OVER \(\).*account_share_memberships`).
 		WithArgs(int64(55), accountDeletionBlockerSampleLimit).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "listing_id", "status", "count"}))

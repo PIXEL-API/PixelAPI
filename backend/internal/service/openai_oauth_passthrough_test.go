@@ -1101,7 +1101,7 @@ func TestOpenAIGatewayService_OpenAIPassthrough_429And529TriggerFailover(t *test
 				require.Empty(t, repo.rateLimitCalls)
 				require.Empty(t, repo.overloadCalls)
 				require.Len(t, repo.tempCalls, 1)
-				require.WithinDuration(t, start.Add(openAIModelCapacityCooldown), repo.tempCalls[0], 5*time.Second)
+				require.WithinDuration(t, start.Add(openAITransientCapacityCooldownForCount(1)), repo.tempCalls[0], 5*time.Second)
 				require.Contains(t, repo.tempReasons[0], "openai_model_capacity")
 			},
 		},

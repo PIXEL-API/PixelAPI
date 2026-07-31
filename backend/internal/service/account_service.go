@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -535,7 +536,7 @@ type accountSubscriptionLookupRepository interface {
 }
 
 type ownedAccountProxyRepository interface {
-	GetVisibleByID(ctx context.Context, userID, id int64) (*Proxy, error)
+	GetVisibleByID(ctx context.Context, scope ProxyScope, id int64) (*Proxy, error)
 	CountAccountsByProxyID(ctx context.Context, proxyID int64) (int64, error)
 }
 
@@ -1043,12 +1044,12 @@ func (s *AccountService) updateOwnedAgentIdentityImport(
 	return account, nil
 }
 
-func (s *AccountService) EnsureOwnedProxyAvailableForNewAccount(ctx context.Context, ownerUserID, proxyID int64) error {
-	return s.ensureOwnedProxyAvailableForNewAccount(ctx, ownerUserID, proxyID)
+func (s *AccountService) EnsureOwnedProxyAvailableForNewAccount(ctx context.Context, scope ProxyScope, proxyID int64) error {
+	return s.ensureOwnedProxyAvailableForNewAccount(ctx, scope, proxyID)
 }
 
-func (s *AccountService) EnsureOwnedProxyUsableForLogin(ctx context.Context, ownerUserID, proxyID int64) error {
-	_, err := s.ensureOwnedProxyUsableForLogin(ctx, ownerUserID, proxyID)
+func (s *AccountService) EnsureOwnedProxyUsableForLogin(ctx context.Context, scope ProxyScope, proxyID int64) error {
+	_, err := s.ensureOwnedProxyUsableForLogin(ctx, scope, proxyID)
 	return err
 }
 
@@ -1167,7 +1168,7 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 			if err := creator.CreateOwnedWithProxyCapacity(ctx, ownerUserID, account); err != nil {
 				return nil, err
 			}
-		} else if err := s.ensureOwnedProxyAvailableForNewAccount(ctx, ownerUserID, *account.ProxyID); err != nil {
+		} else if err := s.ensureOwnedProxyAvailableForNewAccount(ctx, NewProxyScope(account.Platform, account.AccountLevel), *account.ProxyID); err != nil {
 			return nil, err
 		} else if err := s.accountRepo.Create(ctx, account); err != nil {
 			return nil, fmt.Errorf("create account: %w", err)
@@ -1452,8 +1453,8 @@ func validateOwnedPersonalAccountLoadFactor(loadFactor int) error {
 	return nil
 }
 
-func (s *AccountService) ensureOwnedProxyAvailableForNewAccount(ctx context.Context, ownerUserID, proxyID int64) error {
-	proxy, err := s.ensureOwnedProxyUsableForLogin(ctx, ownerUserID, proxyID)
+func (s *AccountService) ensureOwnedProxyAvailableForNewAccount(ctx context.Context, scope ProxyScope, proxyID int64) error {
+	proxy, err := s.ensureOwnedProxyUsableForLogin(ctx, scope, proxyID)
 	if err != nil {
 		return err
 	}
@@ -1471,14 +1472,14 @@ func (s *AccountService) ensureOwnedProxyAvailableForNewAccount(ctx context.Cont
 	return nil
 }
 
-func (s *AccountService) ensureOwnedProxyUsableForLogin(ctx context.Context, ownerUserID, proxyID int64) (*Proxy, error) {
+func (s *AccountService) ensureOwnedProxyUsableForLogin(ctx context.Context, scope ProxyScope, proxyID int64) (*Proxy, error) {
 	if proxyID <= 0 {
 		return nil, ErrOwnedAccountProxyRequired
 	}
 	if s == nil || s.proxyRepo == nil {
 		return nil, ErrOwnedAccountProxyValidationUnavailable
 	}
-	proxy, err := s.proxyRepo.GetVisibleByID(ctx, ownerUserID, proxyID)
+	proxy, err := s.proxyRepo.GetVisibleByID(ctx, scope, proxyID)
 	if err != nil {
 		return nil, err
 	}
@@ -1867,10 +1868,11 @@ func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID
 			}
 			account.ProxyID = nil
 		} else if existingProxyID != nil && *existingProxyID == *req.ProxyID {
-			if _, err := s.ensureOwnedProxyUsableForLogin(ctx, ownerUserID, *req.ProxyID); err != nil {
+			// 未更换代理：沿用既有绑定，附带遗留归属豁免，避免老用户的自有代理掉线。
+			if _, err := s.ensureOwnedProxyUsableForLogin(ctx, NewOwnedProxyScope(account.Platform, account.AccountLevel, ownerUserID), *req.ProxyID); err != nil {
 				return nil, err
 			}
-		} else if err := s.ensureOwnedProxyAvailableForNewAccount(ctx, ownerUserID, *req.ProxyID); err != nil {
+		} else if err := s.ensureOwnedProxyAvailableForNewAccount(ctx, NewProxyScope(account.Platform, account.AccountLevel), *req.ProxyID); err != nil {
 			return nil, err
 		} else {
 			proxyID := *req.ProxyID
@@ -1881,7 +1883,8 @@ func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID
 		if account.ProxyID == nil || *account.ProxyID <= 0 {
 			return nil, ErrOwnedAccountProxyRequired
 		}
-		if _, err := s.ensureOwnedProxyUsableForLogin(ctx, ownerUserID, *account.ProxyID); err != nil {
+		// 重新鉴权（更新凭据）时复核既有代理，附带遗留归属豁免。
+		if _, err := s.ensureOwnedProxyUsableForLogin(ctx, NewOwnedProxyScope(account.Platform, account.AccountLevel, ownerUserID), *account.ProxyID); err != nil {
 			return nil, err
 		}
 	}
@@ -2093,7 +2096,7 @@ func ownedAgentIdentityPublicAccessRevoked(before, after *Account) bool {
 	return before != nil && after != nil && before.IsOpenAIAgentIdentity() && before.IsPublicShareApproved() && !after.IsPublicShareApproved()
 }
 
-func (s *AccountService) DeleteOwned(ctx context.Context, ownerUserID, accountID int64) error {
+func (s *AccountService) DeleteOwned(ctx context.Context, ownerUserID, accountID int64, force bool) error {
 	account, err := s.GetOwnedByID(ctx, ownerUserID, accountID)
 	if err != nil {
 		return err
@@ -2105,14 +2108,22 @@ func (s *AccountService) DeleteOwned(ctx context.Context, ownerUserID, accountID
 	if err != nil {
 		return err
 	}
-	if err := deletionRepo.DeleteOwnedIfUnblocked(ctx, ownerUserID, accountID); err != nil {
-		return fmt.Errorf("delete account: %w", err)
+	deleteErr := deletionRepo.DeleteOwnedIfUnblocked(ctx, ownerUserID, accountID)
+	if deleteErr != nil && force && isRoomAccountDeletionBlocked(deleteErr) {
+		// 用户已在二次确认弹窗确认，尝试把账号从广场房间退出后再删除。
+		if detachErr := s.detachRoomAccountsForDeletion(ctx, ownerUserID, deleteErr); detachErr != nil {
+			return detachErr
+		}
+		deleteErr = deletionRepo.DeleteOwnedIfUnblocked(ctx, ownerUserID, accountID)
+	}
+	if deleteErr != nil {
+		return fmt.Errorf("delete account: %w", deleteErr)
 	}
 	s.notifyAccountDeleted(ctx, account)
 	return nil
 }
 
-func (s *AccountService) BulkDeleteOwned(ctx context.Context, ownerUserID int64, accountIDs []int64) (*BulkUpdateAccountsResult, error) {
+func (s *AccountService) BulkDeleteOwned(ctx context.Context, ownerUserID int64, accountIDs []int64, force bool) (*BulkUpdateAccountsResult, error) {
 	if ownerUserID <= 0 {
 		return nil, ErrUserNotFound
 	}
@@ -2156,8 +2167,19 @@ func (s *AccountService) BulkDeleteOwned(ctx context.Context, ownerUserID int64,
 		}
 	}
 
-	if err := deletionRepo.DeleteManyOwnedIfUnblocked(ctx, ownerUserID, ids); err != nil {
-		return nil, fmt.Errorf("bulk delete accounts: %w", err)
+	deleteErr := deletionRepo.DeleteManyOwnedIfUnblocked(ctx, ownerUserID, ids)
+	if deleteErr != nil && force {
+		// 原子批量删除一次只报告一个被房间占用的账号。用户已确认，逐个退房后重试，
+		// 直到删除成功或遇到无法自动解决的拦截（如房间无健康替补账号）。
+		for attempt := 0; attempt < len(ids) && deleteErr != nil && isRoomAccountDeletionBlocked(deleteErr); attempt++ {
+			if detachErr := s.detachRoomAccountsForDeletion(ctx, ownerUserID, deleteErr); detachErr != nil {
+				return nil, detachErr
+			}
+			deleteErr = deletionRepo.DeleteManyOwnedIfUnblocked(ctx, ownerUserID, ids)
+		}
+	}
+	if deleteErr != nil {
+		return nil, fmt.Errorf("bulk delete accounts: %w", deleteErr)
 	}
 
 	result := &BulkUpdateAccountsResult{
@@ -2195,6 +2217,95 @@ func (s *AccountService) accountOwnedDeletionGuardRepository(metadata map[string
 		return nil, ErrAccountDeletionGuardUnavailable.WithMetadata(metadata)
 	}
 	return repo, nil
+}
+
+// isRoomAccountDeletionBlocked 判断删除守卫返回的错误是否是「账号仍挂在广场房间」这类
+// 可以通过退房自动解除的拦截。只有 blocker_types 里含 room_account 才返回 true。
+func isRoomAccountDeletionBlocked(err error) bool {
+	if !errors.Is(err, ErrAccountDeletionBlocked) {
+		return false
+	}
+	appErr := infraerrors.FromError(err)
+	if appErr == nil {
+		return false
+	}
+	return roomListingIDsFromBlocker(appErr) != nil
+}
+
+// roomListingIDsFromBlocker 从删除守卫的 metadata 里解析出账号当前所在的房间 listing ID。
+func roomListingIDsFromBlocker(appErr *infraerrors.ApplicationError) []int64 {
+	if appErr == nil {
+		return nil
+	}
+	raw := strings.TrimSpace(appErr.Metadata["room_listing_ids"])
+	if raw == "" {
+		return nil
+	}
+	ids := make([]int64, 0, 4)
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		id, convErr := strconv.ParseInt(part, 10, 64)
+		if convErr != nil || id <= 0 {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	return ids
+}
+
+// detachRoomAccountsForDeletion 在用户确认强制删除后，把被拦截账号从其所在的广场房间退出。
+// 退房复用 DetachRoomAccountsAtomic：内部会先尝试把活跃租户重绑到房间内其它健康账号，
+// 只有房间没有可接替的健康账号时才会失败（no_healthy_replacement_account），该错误原样透传，
+// 由上层告知号主房间仍有租户在用、无法删除。
+func (s *AccountService) detachRoomAccountsForDeletion(ctx context.Context, ownerUserID int64, blockedErr error) error {
+	if s == nil || s.accountShareRoomRepo == nil {
+		return ErrOwnedAccountShareModeBoundaryUnavailable
+	}
+	appErr := infraerrors.FromError(blockedErr)
+	listingIDs := roomListingIDsFromBlocker(appErr)
+	if len(listingIDs) == 0 {
+		return blockedErr
+	}
+	accountID, _ := strconv.ParseInt(strings.TrimSpace(appErr.Metadata["account_id"]), 10, 64)
+	if accountID <= 0 {
+		return blockedErr
+	}
+	// 退房会打断账号上正在进行的会话，若账号仍有在途请求则拒绝，避免中断活跃调用。
+	if s.concurrencyService != nil {
+		inFlight, concErr := s.concurrencyService.GetAccountConcurrencyBatch(ctx, []int64{accountID})
+		if concErr != nil {
+			return concErr
+		}
+		if inFlight[accountID] > 0 {
+			return ErrAccountShareListingInUse.WithMetadata(map[string]string{
+				"blocker":               "account_in_flight",
+				"account_id":            strconv.FormatInt(accountID, 10),
+				"in_flight_concurrency": strconv.Itoa(inFlight[accountID]),
+			})
+		}
+	}
+	for _, listingID := range listingIDs {
+		input := BatchAccountShareRoomAccountsInput{
+			ListingID:      listingID,
+			AccountIDs:     []int64{accountID},
+			OwnerUserID:    ownerUserID,
+			IdempotencyKey: fmt.Sprintf("account-delete-detach-%d-%d", accountID, listingID),
+		}
+		billing, detachErr := s.accountShareRoomRepo.DetachRoomAccountsAtomic(ctx, input)
+		if detachErr != nil {
+			return detachErr
+		}
+		if s.accountShareBillingCache != nil {
+			s.accountShareBillingCache.invalidateSeatBillingCaches(billing)
+		}
+	}
+	return nil
 }
 
 func joinInt64Metadata(values []int64) string {

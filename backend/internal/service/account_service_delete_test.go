@@ -8,6 +8,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -35,6 +36,7 @@ type accountRepoStub struct {
 	existsErr        error     // ExistsByID 的错误返回值
 	deleteErr        error     // 守门删除返回值
 	deleteManyErr    error     // 批量守门删除返回值
+	ownedDeleteErrs  []error   // 逐次返回的 owned 删除错误（用于模拟退房后重试成功）
 	getIDs           []int64   // 记录已查询的账号 ID 列表
 	getByIDsCalls    [][]int64 // 记录批量查询调用
 	existsIDs        []int64   // 记录已检查存在性的账号 ID 列表
@@ -44,6 +46,16 @@ type accountRepoStub struct {
 	ownedDeleteCalls [][]int64
 	ownedDeleteUsers []int64
 	legacyDeletedIDs []int64 // 记录不应再调用的旧删除入口
+}
+
+// nextOwnedDeleteErr 从 ownedDeleteErrs 队列取下一个错误；队列为空时回退到 deleteErr/deleteManyErr。
+func (s *accountRepoStub) nextOwnedDeleteErr(fallback error) error {
+	if len(s.ownedDeleteErrs) > 0 {
+		err := s.ownedDeleteErrs[0]
+		s.ownedDeleteErrs = s.ownedDeleteErrs[1:]
+		return err
+	}
+	return fallback
 }
 
 // 以下方法在本测试中不应被调用，使用 panic 确保测试失败时能快速定位问题
@@ -109,8 +121,8 @@ func (s *accountRepoStub) DeleteManyIfUnblocked(ctx context.Context, ids []int64
 func (s *accountRepoStub) DeleteOwnedIfUnblocked(ctx context.Context, ownerUserID, id int64) error {
 	s.ownedDeleteUsers = append(s.ownedDeleteUsers, ownerUserID)
 	s.ownedDeleteCalls = append(s.ownedDeleteCalls, []int64{id})
-	if s.deleteErr != nil {
-		return s.deleteErr
+	if err := s.nextOwnedDeleteErr(s.deleteErr); err != nil {
+		return err
 	}
 	s.ownedDeletedIDs = append(s.ownedDeletedIDs, id)
 	return nil
@@ -119,8 +131,8 @@ func (s *accountRepoStub) DeleteOwnedIfUnblocked(ctx context.Context, ownerUserI
 func (s *accountRepoStub) DeleteManyOwnedIfUnblocked(ctx context.Context, ownerUserID int64, ids []int64) error {
 	s.ownedDeleteUsers = append(s.ownedDeleteUsers, ownerUserID)
 	s.ownedDeleteCalls = append(s.ownedDeleteCalls, append([]int64(nil), ids...))
-	if s.deleteManyErr != nil {
-		return s.deleteManyErr
+	if err := s.nextOwnedDeleteErr(s.deleteManyErr); err != nil {
+		return err
 	}
 	s.ownedDeletedIDs = append(s.ownedDeletedIDs, ids...)
 	return nil
@@ -128,6 +140,49 @@ func (s *accountRepoStub) DeleteManyOwnedIfUnblocked(ctx context.Context, ownerU
 
 type accountRepoWithoutDeletionGuard struct {
 	AccountRepository
+}
+
+// detachRoomRepoStub 是 AccountShareRoomRepository 的最小测试桩，只覆盖退房删除流程需要的
+// DetachRoomAccountsAtomic，其余方法在本测试中不应被调用。
+type detachRoomRepoStub struct {
+	detachErr   error
+	detachCalls []BatchAccountShareRoomAccountsInput
+}
+
+func (r *detachRoomRepoStub) DetachRoomAccountsAtomic(_ context.Context, input BatchAccountShareRoomAccountsInput) (*AccountShareSeatBillingResult, error) {
+	r.detachCalls = append(r.detachCalls, input)
+	if r.detachErr != nil {
+		return nil, r.detachErr
+	}
+	return &AccountShareSeatBillingResult{}, nil
+}
+
+func (r *detachRoomRepoStub) CreateRoomFromOwnedAccount(context.Context, int64, int64, int64, string, *AccountShareListing) (*AccountShareListing, error) {
+	panic("unexpected CreateRoomFromOwnedAccount call")
+}
+func (r *detachRoomRepoStub) ListRoomAccounts(context.Context, int64, int64, bool) ([]AccountShareRoomAccount, error) {
+	panic("unexpected ListRoomAccounts call")
+}
+func (r *detachRoomRepoStub) AttachRoomAccountsAtomic(context.Context, BatchAccountShareRoomAccountsInput) error {
+	panic("unexpected AttachRoomAccountsAtomic call")
+}
+func (r *detachRoomRepoStub) HasRoomAccount(context.Context, int64, int64) (bool, error) {
+	panic("unexpected HasRoomAccount call")
+}
+func (r *detachRoomRepoStub) GetExternalPlacement(context.Context, int64, int64) (*AccountExternalPlacement, error) {
+	panic("unexpected GetExternalPlacement call")
+}
+func (r *detachRoomRepoStub) BeginExternalPlacementDrain(context.Context, int64, int64) (bool, error) {
+	panic("unexpected BeginExternalPlacementDrain call")
+}
+func (r *detachRoomRepoStub) RestoreExternalPlacementAfterDrain(context.Context, int64, int64) error {
+	panic("unexpected RestoreExternalPlacementAfterDrain call")
+}
+func (r *detachRoomRepoStub) ConvertExternalPlacement(context.Context, ConvertAccountExternalPlacementInput) (*ConvertAccountExternalPlacementResult, error) {
+	panic("unexpected ConvertExternalPlacement call")
+}
+func (r *detachRoomRepoStub) RebindMembershipToHealthyRoomAccount(context.Context, int64, int64, time.Time) (bool, error) {
+	panic("unexpected RebindMembershipToHealthyRoomAccount call")
 }
 
 // 以下是接口要求实现但本测试不关心的方法
@@ -390,7 +445,7 @@ func TestAccountService_DeleteOwned_UsesGuardedDeletion(t *testing.T) {
 	}
 	svc := &AccountService{accountRepo: repo}
 
-	err := svc.DeleteOwned(context.Background(), ownerUserID, 55)
+	err := svc.DeleteOwned(context.Background(), ownerUserID, 55, false)
 
 	require.NoError(t, err)
 	require.Equal(t, []int64{ownerUserID}, repo.ownedDeleteUsers)
@@ -410,7 +465,7 @@ func TestAccountService_BulkDeleteOwned_UsesAtomicGuardedDeletion(t *testing.T) 
 	}
 	svc := &AccountService{accountRepo: repo}
 
-	result, err := svc.BulkDeleteOwned(context.Background(), ownerUserID, []int64{56, 55, 56})
+	result, err := svc.BulkDeleteOwned(context.Background(), ownerUserID, []int64{56, 55, 56}, false)
 
 	require.NoError(t, err)
 	require.Equal(t, []int64{ownerUserID}, repo.ownedDeleteUsers)
@@ -438,7 +493,7 @@ func TestAccountService_BulkDeleteOwned_BlockedBatchDeletesNothing(t *testing.T)
 	}
 	svc := &AccountService{accountRepo: repo}
 
-	result, err := svc.BulkDeleteOwned(context.Background(), ownerUserID, []int64{55, 56})
+	result, err := svc.BulkDeleteOwned(context.Background(), ownerUserID, []int64{55, 56}, false)
 
 	require.Nil(t, result)
 	require.ErrorIs(t, err, ErrAccountDeletionBlocked)
@@ -451,4 +506,121 @@ func TestAccountService_BulkDeleteOwned_BlockedBatchDeletesNothing(t *testing.T)
 	require.Empty(t, repo.deleteManyCalls)
 	require.Empty(t, repo.deletedIDs)
 	require.Empty(t, repo.legacyDeletedIDs)
+}
+
+func roomAccountBlocked(accountID int64) error {
+	return ErrAccountDeletionBlocked.WithMetadata(map[string]string{
+		"account_id":         strconv.FormatInt(accountID, 10),
+		"blocker_types":      "room_account",
+		"room_account_count": "1",
+		"room_listing_ids":   "91",
+		"room_listing_names": "OpenAI共享账号26",
+	})
+}
+
+// force=false 时命中 room_account 拦截应原样返回 409，不触发退房。
+func TestAccountService_DeleteOwned_RoomBlockedWithoutForceKeepsConflict(t *testing.T) {
+	ownerUserID := int64(9)
+	repo := &accountRepoStub{
+		account:   &Account{ID: 55, OwnerUserID: &ownerUserID},
+		deleteErr: roomAccountBlocked(55),
+	}
+	roomRepo := &detachRoomRepoStub{}
+	svc := &AccountService{accountRepo: repo, accountShareRoomRepo: roomRepo}
+
+	err := svc.DeleteOwned(context.Background(), ownerUserID, 55, false)
+
+	require.ErrorIs(t, err, ErrAccountDeletionBlocked)
+	require.Empty(t, roomRepo.detachCalls)
+	require.Empty(t, repo.ownedDeletedIDs)
+}
+
+// force=true 且仅 room_account 拦截时，退房后重试删除成功。
+func TestAccountService_DeleteOwned_ForceDetachesThenDeletes(t *testing.T) {
+	ownerUserID := int64(9)
+	repo := &accountRepoStub{
+		account:         &Account{ID: 55, OwnerUserID: &ownerUserID},
+		ownedDeleteErrs: []error{roomAccountBlocked(55), nil},
+	}
+	roomRepo := &detachRoomRepoStub{}
+	svc := &AccountService{accountRepo: repo, accountShareRoomRepo: roomRepo}
+
+	err := svc.DeleteOwned(context.Background(), ownerUserID, 55, true)
+
+	require.NoError(t, err)
+	require.Len(t, roomRepo.detachCalls, 1)
+	require.Equal(t, int64(91), roomRepo.detachCalls[0].ListingID)
+	require.Equal(t, []int64{55}, roomRepo.detachCalls[0].AccountIDs)
+	require.Equal(t, ownerUserID, roomRepo.detachCalls[0].OwnerUserID)
+	require.NotEmpty(t, roomRepo.detachCalls[0].IdempotencyKey)
+	require.Equal(t, []int64{55}, repo.ownedDeletedIDs)
+}
+
+// force=true 但退房因房间无健康替补账号而失败时，原样透传该错误，不吞不改。
+func TestAccountService_DeleteOwned_ForceSurfacesNoHealthyReplacement(t *testing.T) {
+	ownerUserID := int64(9)
+	noReplacement := ErrAccountShareRoomOperationConflict.WithMetadata(map[string]string{
+		"blocker":          "no_healthy_replacement_account",
+		"listing_id":       "91",
+		"membership_count": "3",
+	})
+	repo := &accountRepoStub{
+		account:   &Account{ID: 55, OwnerUserID: &ownerUserID},
+		deleteErr: roomAccountBlocked(55),
+	}
+	roomRepo := &detachRoomRepoStub{detachErr: noReplacement}
+	svc := &AccountService{accountRepo: repo, accountShareRoomRepo: roomRepo}
+
+	err := svc.DeleteOwned(context.Background(), ownerUserID, 55, true)
+
+	require.ErrorIs(t, err, ErrAccountShareRoomOperationConflict)
+	appErr := infraerrors.FromError(err)
+	require.Equal(t, "no_healthy_replacement_account", appErr.Metadata["blocker"])
+	require.Equal(t, "3", appErr.Metadata["membership_count"])
+	require.Len(t, roomRepo.detachCalls, 1)
+	require.Empty(t, repo.ownedDeletedIDs)
+}
+
+// force=true 但账号存在非房间类拦截（如 live_membership 但无 room_account）时不触发退房，保留原 409。
+func TestAccountService_DeleteOwned_ForceIgnoresNonRoomBlocker(t *testing.T) {
+	ownerUserID := int64(9)
+	liveOnly := ErrAccountDeletionBlocked.WithMetadata(map[string]string{
+		"account_id":            "55",
+		"blocker_types":         "live_membership",
+		"live_membership_count": "2",
+	})
+	repo := &accountRepoStub{
+		account:   &Account{ID: 55, OwnerUserID: &ownerUserID},
+		deleteErr: liveOnly,
+	}
+	roomRepo := &detachRoomRepoStub{}
+	svc := &AccountService{accountRepo: repo, accountShareRoomRepo: roomRepo}
+
+	err := svc.DeleteOwned(context.Background(), ownerUserID, 55, true)
+
+	require.ErrorIs(t, err, ErrAccountDeletionBlocked)
+	require.Empty(t, roomRepo.detachCalls)
+	require.Empty(t, repo.ownedDeletedIDs)
+}
+
+// force=true 批量删除：退房后重试直到删除成功。
+func TestAccountService_BulkDeleteOwned_ForceDetachesThenDeletes(t *testing.T) {
+	ownerUserID := int64(9)
+	repo := &accountRepoStub{
+		accounts: []*Account{
+			{ID: 55, OwnerUserID: &ownerUserID},
+			{ID: 56, OwnerUserID: &ownerUserID},
+		},
+		ownedDeleteErrs: []error{roomAccountBlocked(55), nil},
+	}
+	roomRepo := &detachRoomRepoStub{}
+	svc := &AccountService{accountRepo: repo, accountShareRoomRepo: roomRepo}
+
+	result, err := svc.BulkDeleteOwned(context.Background(), ownerUserID, []int64{55, 56}, true)
+
+	require.NoError(t, err)
+	require.Len(t, roomRepo.detachCalls, 1)
+	require.Equal(t, int64(91), roomRepo.detachCalls[0].ListingID)
+	require.Equal(t, []int64{55, 56}, repo.ownedDeletedIDs)
+	require.Equal(t, 2, result.Success)
 }

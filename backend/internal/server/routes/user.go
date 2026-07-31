@@ -178,10 +178,8 @@ func RegisterUserRoutes(
 			accountShare.POST("/openai/exchange-code", h.AccountShareMode.ExchangeOpenAICode)
 			accountShare.POST("/anthropic/auth-url", h.AccountShareMode.GenerateAnthropicAuthURL)
 			accountShare.POST("/anthropic/exchange-code", h.AccountShareMode.ExchangeAnthropicCode)
+			// 用户不再上传/管理代理，只能选择平台代理；仅保留只读的可选代理列表。
 			accountShare.GET("/proxies", h.AccountShareMode.ListAvailableProxies)
-			accountShare.POST("/proxies", h.AccountShareMode.CreateProxy)
-			accountShare.PUT("/proxies/:id", h.AccountShareMode.UpdateProxy)
-			accountShare.DELETE("/proxies/:id", h.AccountShareMode.DeleteProxy)
 			accountShare.POST("/rooms", h.AccountShareMode.CreateRoom)
 			accountShare.GET("/listings", h.AccountShareMode.ListListings)
 			accountShare.GET("/history/memberships", h.AccountShareMode.ListMembershipHistory)

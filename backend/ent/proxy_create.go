@@ -132,6 +132,34 @@ func (_c *ProxyCreate) SetNillableOwnerUserID(v *int64) *ProxyCreate {
 	return _c
 }
 
+// SetPlatform sets the "platform" field.
+func (_c *ProxyCreate) SetPlatform(v string) *ProxyCreate {
+	_c.mutation.SetPlatform(v)
+	return _c
+}
+
+// SetNillablePlatform sets the "platform" field if the given value is not nil.
+func (_c *ProxyCreate) SetNillablePlatform(v *string) *ProxyCreate {
+	if v != nil {
+		_c.SetPlatform(*v)
+	}
+	return _c
+}
+
+// SetRequiredAccountLevel sets the "required_account_level" field.
+func (_c *ProxyCreate) SetRequiredAccountLevel(v string) *ProxyCreate {
+	_c.mutation.SetRequiredAccountLevel(v)
+	return _c
+}
+
+// SetNillableRequiredAccountLevel sets the "required_account_level" field if the given value is not nil.
+func (_c *ProxyCreate) SetNillableRequiredAccountLevel(v *string) *ProxyCreate {
+	if v != nil {
+		_c.SetRequiredAccountLevel(*v)
+	}
+	return _c
+}
+
 // SetStatus sets the "status" field.
 func (_c *ProxyCreate) SetStatus(v string) *ProxyCreate {
 	_c.mutation.SetStatus(v)
@@ -245,6 +273,14 @@ func (_c *ProxyCreate) defaults() error {
 		v := proxy.DefaultUpdatedAt()
 		_c.mutation.SetUpdatedAt(v)
 	}
+	if _, ok := _c.mutation.Platform(); !ok {
+		v := proxy.DefaultPlatform
+		_c.mutation.SetPlatform(v)
+	}
+	if _, ok := _c.mutation.RequiredAccountLevel(); !ok {
+		v := proxy.DefaultRequiredAccountLevel
+		_c.mutation.SetRequiredAccountLevel(v)
+	}
 	if _, ok := _c.mutation.Status(); !ok {
 		v := proxy.DefaultStatus
 		_c.mutation.SetStatus(v)
@@ -299,6 +335,22 @@ func (_c *ProxyCreate) check() error {
 	if v, ok := _c.mutation.Password(); ok {
 		if err := proxy.PasswordValidator(v); err != nil {
 			return &ValidationError{Name: "password", err: fmt.Errorf(`ent: validator failed for field "Proxy.password": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.Platform(); !ok {
+		return &ValidationError{Name: "platform", err: errors.New(`ent: missing required field "Proxy.platform"`)}
+	}
+	if v, ok := _c.mutation.Platform(); ok {
+		if err := proxy.PlatformValidator(v); err != nil {
+			return &ValidationError{Name: "platform", err: fmt.Errorf(`ent: validator failed for field "Proxy.platform": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.RequiredAccountLevel(); !ok {
+		return &ValidationError{Name: "required_account_level", err: errors.New(`ent: missing required field "Proxy.required_account_level"`)}
+	}
+	if v, ok := _c.mutation.RequiredAccountLevel(); ok {
+		if err := proxy.RequiredAccountLevelValidator(v); err != nil {
+			return &ValidationError{Name: "required_account_level", err: fmt.Errorf(`ent: validator failed for field "Proxy.required_account_level": %w`, err)}
 		}
 	}
 	if _, ok := _c.mutation.Status(); !ok {
@@ -374,6 +426,14 @@ func (_c *ProxyCreate) createSpec() (*Proxy, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Password(); ok {
 		_spec.SetField(proxy.FieldPassword, field.TypeString, value)
 		_node.Password = &value
+	}
+	if value, ok := _c.mutation.Platform(); ok {
+		_spec.SetField(proxy.FieldPlatform, field.TypeString, value)
+		_node.Platform = value
+	}
+	if value, ok := _c.mutation.RequiredAccountLevel(); ok {
+		_spec.SetField(proxy.FieldRequiredAccountLevel, field.TypeString, value)
+		_node.RequiredAccountLevel = value
 	}
 	if value, ok := _c.mutation.Status(); ok {
 		_spec.SetField(proxy.FieldStatus, field.TypeString, value)
@@ -603,6 +663,30 @@ func (u *ProxyUpsert) UpdateOwnerUserID() *ProxyUpsert {
 // ClearOwnerUserID clears the value of the "owner_user_id" field.
 func (u *ProxyUpsert) ClearOwnerUserID() *ProxyUpsert {
 	u.SetNull(proxy.FieldOwnerUserID)
+	return u
+}
+
+// SetPlatform sets the "platform" field.
+func (u *ProxyUpsert) SetPlatform(v string) *ProxyUpsert {
+	u.Set(proxy.FieldPlatform, v)
+	return u
+}
+
+// UpdatePlatform sets the "platform" field to the value that was provided on create.
+func (u *ProxyUpsert) UpdatePlatform() *ProxyUpsert {
+	u.SetExcluded(proxy.FieldPlatform)
+	return u
+}
+
+// SetRequiredAccountLevel sets the "required_account_level" field.
+func (u *ProxyUpsert) SetRequiredAccountLevel(v string) *ProxyUpsert {
+	u.Set(proxy.FieldRequiredAccountLevel, v)
+	return u
+}
+
+// UpdateRequiredAccountLevel sets the "required_account_level" field to the value that was provided on create.
+func (u *ProxyUpsert) UpdateRequiredAccountLevel() *ProxyUpsert {
+	u.SetExcluded(proxy.FieldRequiredAccountLevel)
 	return u
 }
 
@@ -839,6 +923,34 @@ func (u *ProxyUpsertOne) UpdateOwnerUserID() *ProxyUpsertOne {
 func (u *ProxyUpsertOne) ClearOwnerUserID() *ProxyUpsertOne {
 	return u.Update(func(s *ProxyUpsert) {
 		s.ClearOwnerUserID()
+	})
+}
+
+// SetPlatform sets the "platform" field.
+func (u *ProxyUpsertOne) SetPlatform(v string) *ProxyUpsertOne {
+	return u.Update(func(s *ProxyUpsert) {
+		s.SetPlatform(v)
+	})
+}
+
+// UpdatePlatform sets the "platform" field to the value that was provided on create.
+func (u *ProxyUpsertOne) UpdatePlatform() *ProxyUpsertOne {
+	return u.Update(func(s *ProxyUpsert) {
+		s.UpdatePlatform()
+	})
+}
+
+// SetRequiredAccountLevel sets the "required_account_level" field.
+func (u *ProxyUpsertOne) SetRequiredAccountLevel(v string) *ProxyUpsertOne {
+	return u.Update(func(s *ProxyUpsert) {
+		s.SetRequiredAccountLevel(v)
+	})
+}
+
+// UpdateRequiredAccountLevel sets the "required_account_level" field to the value that was provided on create.
+func (u *ProxyUpsertOne) UpdateRequiredAccountLevel() *ProxyUpsertOne {
+	return u.Update(func(s *ProxyUpsert) {
+		s.UpdateRequiredAccountLevel()
 	})
 }
 
@@ -1246,6 +1358,34 @@ func (u *ProxyUpsertBulk) UpdateOwnerUserID() *ProxyUpsertBulk {
 func (u *ProxyUpsertBulk) ClearOwnerUserID() *ProxyUpsertBulk {
 	return u.Update(func(s *ProxyUpsert) {
 		s.ClearOwnerUserID()
+	})
+}
+
+// SetPlatform sets the "platform" field.
+func (u *ProxyUpsertBulk) SetPlatform(v string) *ProxyUpsertBulk {
+	return u.Update(func(s *ProxyUpsert) {
+		s.SetPlatform(v)
+	})
+}
+
+// UpdatePlatform sets the "platform" field to the value that was provided on create.
+func (u *ProxyUpsertBulk) UpdatePlatform() *ProxyUpsertBulk {
+	return u.Update(func(s *ProxyUpsert) {
+		s.UpdatePlatform()
+	})
+}
+
+// SetRequiredAccountLevel sets the "required_account_level" field.
+func (u *ProxyUpsertBulk) SetRequiredAccountLevel(v string) *ProxyUpsertBulk {
+	return u.Update(func(s *ProxyUpsert) {
+		s.SetRequiredAccountLevel(v)
+	})
+}
+
+// UpdateRequiredAccountLevel sets the "required_account_level" field to the value that was provided on create.
+func (u *ProxyUpsertBulk) UpdateRequiredAccountLevel() *ProxyUpsertBulk {
+	return u.Update(func(s *ProxyUpsert) {
+		s.UpdateRequiredAccountLevel()
 	})
 }
 

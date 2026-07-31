@@ -199,7 +199,8 @@ describe('AccountUsageCell', () => {
             props: ['label', 'utilization', 'resetsAt', 'windowStats', 'color'],
             template: '<div class="usage-bar">{{ label }}|{{ utilization }}|{{ windowStats?.tokens }}</div>'
           },
-          AccountQuotaInfo: true
+          AccountQuotaInfo: true,
+          OpenAIQuotaResetCell: true
         }
       }
     })
@@ -264,7 +265,8 @@ describe('AccountUsageCell', () => {
             props: ['label', 'utilization', 'resetsAt', 'windowStats', 'color'],
             template: '<div class="usage-bar">{{ label }}|{{ utilization }}|{{ windowStats?.tokens }}</div>'
           },
-          AccountQuotaInfo: true
+          AccountQuotaInfo: true,
+          OpenAIQuotaResetCell: true
         }
       }
     })
@@ -332,7 +334,8 @@ describe('AccountUsageCell', () => {
             props: ['label', 'utilization', 'resetsAt', 'windowStats', 'color'],
             template: '<div class="usage-bar">{{ label }}|{{ utilization }}|{{ windowStats?.tokens }}</div>'
           },
-          AccountQuotaInfo: true
+          AccountQuotaInfo: true,
+          OpenAIQuotaResetCell: true
         }
       }
     })
@@ -398,7 +401,8 @@ describe('AccountUsageCell', () => {
 	        props: ['label', 'utilization', 'resetsAt', 'windowStats', 'color'],
 	        template: '<div class="usage-bar">{{ label }}|{{ utilization }}|{{ windowStats?.tokens }}</div>'
 	      },
-	      AccountQuotaInfo: true
+	      AccountQuotaInfo: true,
+	      OpenAIQuotaResetCell: true
 	    }
 	  }
 	})
@@ -463,7 +467,8 @@ describe('AccountUsageCell', () => {
 	        props: ['label', 'utilization', 'resetsAt', 'windowStats', 'color'],
 	        template: '<div class="usage-bar">{{ label }}|{{ utilization }}|{{ windowStats?.tokens }}</div>'
 	      },
-	      AccountQuotaInfo: true
+	      AccountQuotaInfo: true,
+	      OpenAIQuotaResetCell: true
 	    }
 	  }
 	})
@@ -534,7 +539,8 @@ describe('AccountUsageCell', () => {
 	        props: ['label', 'utilization', 'resetsAt', 'windowStats', 'color'],
 	        template: '<div class="usage-bar">{{ label }}|{{ utilization }}|{{ windowStats?.tokens }}</div>'
 	      },
-	      AccountQuotaInfo: true
+	      AccountQuotaInfo: true,
+	      OpenAIQuotaResetCell: true
 	    }
 	  }
 	})

@@ -208,8 +208,10 @@ export async function revalidatePublicShare(id: number): Promise<Account> {
   return data
 }
 
-export async function deleteAccount(id: number): Promise<{ message: string }> {
-  const { data } = await apiClient.delete<{ message: string }>(`/accounts/${id}`)
+export async function deleteAccount(id: number, force = false): Promise<{ message: string }> {
+  const { data } = await apiClient.delete<{ message: string }>(`/accounts/${id}`, {
+    params: force ? { force: true } : undefined
+  })
   return data
 }
 
@@ -279,9 +281,10 @@ export async function bulkUpdate(
   return data
 }
 
-export async function bulkDelete(accountIds: number[]): Promise<UserBulkAccountOperationResponse> {
+export async function bulkDelete(accountIds: number[], force = false): Promise<UserBulkAccountOperationResponse> {
   const { data } = await apiClient.post<UserBulkAccountOperationResponse>('/accounts/bulk-delete', {
-    account_ids: accountIds
+    account_ids: accountIds,
+    force
   }, {
     timeout: USER_ACCOUNT_BULK_OPERATION_TIMEOUT_MS
   })

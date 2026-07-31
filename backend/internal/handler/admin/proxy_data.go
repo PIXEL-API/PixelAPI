@@ -52,15 +52,17 @@ func (h *ProxyHandler) ExportData(c *gin.Context) {
 		key := buildProxyKey(p.Protocol, p.Host, p.Port, p.Username, p.Password)
 		maxAccounts := p.MaxAccounts
 		dataProxies = append(dataProxies, DataProxy{
-			ProxyKey:    key,
-			Name:        p.Name,
-			Protocol:    p.Protocol,
-			Host:        p.Host,
-			Port:        p.Port,
-			Username:    p.Username,
-			Password:    p.Password,
-			Status:      p.Status,
-			MaxAccounts: &maxAccounts,
+			ProxyKey:             key,
+			Name:                 p.Name,
+			Protocol:             p.Protocol,
+			Host:                 p.Host,
+			Port:                 p.Port,
+			Username:             p.Username,
+			Password:             p.Password,
+			Status:               p.Status,
+			Platform:             p.Platform,
+			RequiredAccountLevel: p.RequiredAccountLevel,
+			MaxAccounts:          &maxAccounts,
 		})
 	}
 
@@ -135,7 +137,14 @@ func (h *ProxyHandler) ImportData(c *gin.Context) {
 			if item.MaxAccounts != nil && *item.MaxAccounts != existing.MaxAccounts {
 				updateInput.MaxAccounts = item.MaxAccounts
 			}
-			if updateInput.Status != "" || updateInput.MaxAccounts != nil {
+			if platform := strings.TrimSpace(item.Platform); platform != existing.Platform {
+				updateInput.Platform = &platform
+			}
+			if level := strings.TrimSpace(item.RequiredAccountLevel); level != existing.RequiredAccountLevel {
+				updateInput.RequiredAccountLevel = &level
+			}
+			if updateInput.Status != "" || updateInput.MaxAccounts != nil ||
+				updateInput.Platform != nil || updateInput.RequiredAccountLevel != nil {
 				if _, err := h.adminService.UpdateProxy(ctx, existing.ID, updateInput); err != nil {
 					result.Errors = append(result.Errors, DataImportError{
 						Kind:     "proxy",
@@ -150,13 +159,15 @@ func (h *ProxyHandler) ImportData(c *gin.Context) {
 		}
 
 		created, err := h.adminService.CreateProxy(ctx, &service.CreateProxyInput{
-			Name:        defaultProxyName(item.Name),
-			Protocol:    item.Protocol,
-			Host:        item.Host,
-			Port:        item.Port,
-			Username:    item.Username,
-			Password:    item.Password,
-			MaxAccounts: dataProxyMaxAccounts(item),
+			Name:                 defaultProxyName(item.Name),
+			Protocol:             item.Protocol,
+			Host:                 item.Host,
+			Port:                 item.Port,
+			Username:             item.Username,
+			Password:             item.Password,
+			Platform:             strings.TrimSpace(item.Platform),
+			RequiredAccountLevel: strings.TrimSpace(item.RequiredAccountLevel),
+			MaxAccounts:          dataProxyMaxAccounts(item),
 		})
 		if err != nil {
 			result.ProxyFailed++

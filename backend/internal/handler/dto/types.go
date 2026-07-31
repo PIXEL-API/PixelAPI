@@ -331,18 +331,23 @@ type AccountGroup struct {
 }
 
 type Proxy struct {
-	ID          int64     `json:"id"`
-	Name        string    `json:"name"`
-	Protocol    string    `json:"protocol"`
-	Host        string    `json:"host"`
-	Port        int       `json:"port"`
-	Username    string    `json:"username"`
-	Password    string    `json:"-"`
-	OwnerUserID *int64    `json:"owner_user_id,omitempty"`
-	Status      string    `json:"status"`
-	MaxAccounts int       `json:"max_accounts"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Protocol string `json:"protocol"`
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	Username string `json:"username"`
+	Password string `json:"-"`
+	// OwnerUserID 自迁移 256 起恒为 nil：所有代理均由平台管理。
+	OwnerUserID *int64 `json:"owner_user_id,omitempty"`
+	// Platform 为空表示通用代理（所有平台可用）。
+	Platform string `json:"platform"`
+	// RequiredAccountLevel 为空表示所有账号等级可用。
+	RequiredAccountLevel string    `json:"required_account_level"`
+	Status               string    `json:"status"`
+	MaxAccounts          int       `json:"max_accounts"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
 }
 
 type ProxyWithAccountCount struct {

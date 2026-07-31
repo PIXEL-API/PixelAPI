@@ -55,34 +55,14 @@
       <div v-if="requiresCredentialImportProxy" class="space-y-2">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <label class="input-label mb-0">{{ t('userAccounts.importProxy') }}</label>
-          <div class="flex flex-wrap items-center justify-end gap-2">
-            <button
-              type="button"
-              class="text-xs font-medium text-primary-600 hover:text-primary-700 disabled:cursor-not-allowed disabled:opacity-60 dark:text-primary-400"
-              :disabled="proxyLoading"
-              @click="loadProxies(true)"
-            >
-              {{ proxyLoading ? t('common.loading') : t('common.refresh') }}
-            </button>
-            <button
-              type="button"
-              class="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:border-sky-300 hover:bg-sky-50 dark:border-dark-700 dark:bg-dark-800 dark:text-dark-200 dark:hover:border-sky-500/70 dark:hover:bg-sky-900/20"
-              @click="openProxyPurchase()"
-            >
-              <Icon name="externalLink" size="xs" />
-              {{ t('userAccounts.proxyActionBuyTitle') }}
-            </button>
-            <button
-              type="button"
-              class="inline-flex items-center gap-1 rounded-md border border-primary-200 bg-primary-50 px-2.5 py-1.5 text-xs font-medium text-primary-700 hover:border-primary-300 hover:bg-primary-100 dark:border-primary-500/30 dark:bg-primary-500/10 dark:text-primary-300 dark:hover:bg-primary-500/20"
-              :aria-expanded="showProxyDialog"
-              data-testid="import-credential-user-proxy-panel"
-              @click="openAddProxyDialog()"
-            >
-              <Icon name="plus" size="xs" />
-              {{ t('userAccounts.proxyActionAddTitle') }}
-            </button>
-          </div>
+          <button
+            type="button"
+            class="text-xs font-medium text-primary-600 hover:text-primary-700 disabled:cursor-not-allowed disabled:opacity-60 dark:text-primary-400"
+            :disabled="proxyLoading"
+            @click="loadProxies(true)"
+          >
+            {{ proxyLoading ? t('common.loading') : t('common.refresh') }}
+          </button>
         </div>
         <ProxySelector
           v-model="selectedProxyId"
@@ -95,12 +75,6 @@
         <p class="input-hint">
           {{ proxyHelperText }}
         </p>
-        <UserProxyQuickCreatePanel
-          v-if="showProxyDialog"
-          class="mt-4"
-          @created="handleProxyCreated"
-          @cancel="closeProxyDialog"
-        />
       </div>
     </template>
   </CredentialImportModal>
@@ -146,34 +120,14 @@
       <div>
         <div class="mb-2 flex items-center justify-between gap-3">
           <label class="input-label mb-0">{{ t('userAccounts.importProxy') }}</label>
-          <div class="flex flex-wrap items-center justify-end gap-2">
-            <button
-              type="button"
-              class="text-xs font-medium text-primary-600 hover:text-primary-700 disabled:cursor-not-allowed disabled:opacity-60 dark:text-primary-400"
-              :disabled="proxyLoading"
-              @click="loadProxies(true)"
-            >
-              {{ proxyLoading ? t('common.loading') : t('common.refresh') }}
-            </button>
-            <button
-              type="button"
-              class="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:border-sky-300 hover:bg-sky-50 dark:border-dark-700 dark:bg-dark-800 dark:text-dark-200 dark:hover:border-sky-500/70 dark:hover:bg-sky-900/20"
-              @click="openProxyPurchase()"
-            >
-              <Icon name="externalLink" size="xs" />
-              {{ t('userAccounts.proxyActionBuyTitle') }}
-            </button>
-            <button
-              type="button"
-              class="inline-flex items-center gap-1 rounded-md border border-primary-200 bg-primary-50 px-2.5 py-1.5 text-xs font-medium text-primary-700 hover:border-primary-300 hover:bg-primary-100 dark:border-primary-500/30 dark:bg-primary-500/10 dark:text-primary-300 dark:hover:bg-primary-500/20"
-              :aria-expanded="showProxyDialog"
-              data-testid="import-open-user-proxy-panel"
-              @click="openAddProxyDialog()"
-            >
-              <Icon name="plus" size="xs" />
-              {{ t('userAccounts.proxyActionAddTitle') }}
-            </button>
-          </div>
+          <button
+            type="button"
+            class="text-xs font-medium text-primary-600 hover:text-primary-700 disabled:cursor-not-allowed disabled:opacity-60 dark:text-primary-400"
+            :disabled="proxyLoading"
+            @click="loadProxies(true)"
+          >
+            {{ proxyLoading ? t('common.loading') : t('common.refresh') }}
+          </button>
         </div>
         <ProxySelector
           v-model="selectedProxyId"
@@ -186,12 +140,6 @@
         <p class="input-hint">
           {{ proxyHelperText }}
         </p>
-        <UserProxyQuickCreatePanel
-          v-if="showProxyDialog"
-          class="mt-4"
-          @created="handleProxyCreated"
-          @cancel="closeProxyDialog"
-        />
       </div>
 
       <OAuthAuthorizationFlow
@@ -241,7 +189,6 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import CredentialImportModal from '@/components/account/CredentialImportModal.vue'
 import OAuthAuthorizationFlow from '@/components/account/OAuthAuthorizationFlow.vue'
-import UserProxyQuickCreatePanel from '@/components/user/UserProxyQuickCreatePanel.vue'
 import Icon from '@/components/icons/Icon.vue'
 import {
   PERSONAL_ACCOUNT_DEFAULT_AUTO_PAUSE_ON_EXPIRED,
@@ -278,7 +225,6 @@ const { t } = useI18n()
 const appStore = useAppStore()
 const openaiOAuth = useOpenAIOAuth('user')
 
-const PROXY_PURCHASE_URL = 'https://www.seekproxy.com/user/reg?invite_id=105978'
 
 const selectedPlatform = ref<ImportPlatform | ''>('')
 const selectedOpenAIAuthMode = ref<OpenAIImportAuthMode>('oauth')
@@ -290,7 +236,6 @@ const proxyLoadMessage = ref('')
 const oauthAccountName = ref('')
 const oauthSubmitting = ref(false)
 const oauthFlowRef = ref<InstanceType<typeof OAuthAuthorizationFlow> | null>(null)
-const showProxyDialog = ref(false)
 
 const importLimit = computed(() => {
   const configured = Number(appStore.cachedPublicSettings?.user_account_import_limit)
@@ -609,7 +554,6 @@ watch(
     selectedProxyId.value = null
     oauthAccountName.value = ''
     proxyLoadMessage.value = ''
-    showProxyDialog.value = false
     openaiOAuth.error.value = ''
     openaiOAuth.resetState()
     oauthFlowRef.value?.reset()
@@ -631,7 +575,6 @@ watch(
     } else {
       selectedProxyId.value = null
       oauthAccountName.value = ''
-      showProxyDialog.value = false
     }
   }
 )
@@ -672,7 +615,6 @@ function selectOpenAIAuthMode(mode: OpenAIImportAuthMode): void {
   selectedProxyId.value = null
   oauthAccountName.value = ''
   proxyLoadMessage.value = ''
-  showProxyDialog.value = false
   openaiOAuth.error.value = ''
   openaiOAuth.resetState()
   oauthFlowRef.value?.reset()
@@ -689,7 +631,6 @@ function resetOAuthImportState(): void {
   selectedProxyId.value = null
   oauthAccountName.value = ''
   proxyLoadMessage.value = ''
-  showProxyDialog.value = false
   openaiOAuth.resetState()
   oauthFlowRef.value?.reset()
 }
@@ -757,47 +698,27 @@ function importPersonalCredentials(contents: string[]): Promise<ImportCredential
   return accountsAPI.importCredentialContents(request)
 }
 
+// 用户只能选择平台代理：按当前平台/等级拉取可选代理。scope 变化用不同缓存键，
+// 保证切换平台或等级后（watcher 会重新调用 loadProxies）能取到对应的代理集合。
+let lastProxyScopeKey = ''
 async function loadProxies(force = false): Promise<void> {
-  if (proxyLoading.value || (!force && proxies.value.length > 0)) return
+  const scope = {
+    platform: selectedPlatform.value || '',
+    account_level: selectedAccountLevel.value || ''
+  }
+  const scopeKey = `${scope.platform}|${scope.account_level}`
+  if (proxyLoading.value) return
+  if (!force && scopeKey === lastProxyScopeKey && proxies.value.length > 0) return
   proxyLoading.value = true
   proxyLoadMessage.value = ''
   try {
-    proxies.value = await accountShareAPI.listProxies()
+    proxies.value = await accountShareAPI.listProxies(scope)
+    lastProxyScopeKey = scopeKey
   } catch (error: unknown) {
     proxyLoadMessage.value = extractApiErrorMessage(error, t('userAccounts.importProxyLoadFailed'))
   } finally {
     proxyLoading.value = false
   }
-}
-
-function openProxyPurchase(close?: () => void): void {
-  close?.()
-  window.open(PROXY_PURCHASE_URL, '_blank', 'noopener,noreferrer')
-}
-
-function openAddProxyDialog(close?: () => void): void {
-  close?.()
-  showProxyDialog.value = true
-}
-
-function closeProxyDialog(): void {
-  showProxyDialog.value = false
-}
-
-function upsertProxy(proxy: Proxy): void {
-  const index = proxies.value.findIndex(item => item.id === proxy.id)
-  if (index >= 0) {
-    proxies.value[index] = { ...proxies.value[index], ...proxy }
-    return
-  }
-  proxies.value = [proxy, ...proxies.value]
-}
-
-function handleProxyCreated(proxy: Proxy): void {
-  upsertProxy(proxy)
-  selectedProxyId.value = proxy.id
-  proxyLoadMessage.value = ''
-  showProxyDialog.value = false
 }
 
 async function generateOAuthUrl(): Promise<void> {

@@ -72,7 +72,9 @@ func TestProxyRepositoryVisibleScopeOnlyIncludesPlatformAndOwnProxies(t *testing
 		Status:      service.StatusDisabled,
 	})
 
-	visible, err := repo.ListActiveVisibleWithAccountCount(ctx, ownerA)
+	// 带遗留归属豁免的 scope：平台代理 + ownerA 自己的遗留自有代理可见，ownerB 的不可见。
+	scopeA := service.NewOwnedProxyScope("", "", ownerA)
+	visible, err := repo.ListActiveVisibleWithAccountCount(ctx, scopeA)
 	require.NoError(t, err)
 	visibleIDs := map[int64]bool{}
 	for _, item := range visible {
@@ -83,13 +85,15 @@ func TestProxyRepositoryVisibleScopeOnlyIncludesPlatformAndOwnProxies(t *testing
 	require.False(t, visibleIDs[ownedByB.ID], "other user's proxy must stay hidden")
 	require.Len(t, visibleIDs, 2)
 
-	_, err = repo.GetVisibleByID(ctx, ownerA, ownedByB.ID)
+	_, err = repo.GetVisibleByID(ctx, scopeA, ownedByB.ID)
 	require.ErrorIs(t, err, service.ErrProxyNotFound)
-	_, err = repo.FindVisibleActiveByEndpoint(ctx, ownerA, ownedByB.Protocol, ownedByB.Host, ownedByB.Port, ownedByB.Username, ownedByB.Password)
+	_, err = repo.FindVisibleActiveByEndpoint(ctx, scopeA, ownedByB.Protocol, ownedByB.Host, ownedByB.Port, ownedByB.Username, ownedByB.Password)
 	require.ErrorIs(t, err, service.ErrProxyNotFound)
 }
 
-func TestProxyRepositoryFindVisibleActiveByEndpointPrefersOwnProxyOverPlatformDuplicate(t *testing.T) {
+// 用户不再上传代理，遗留自有代理仅在带归属豁免的 scope 下对其 owner 可见。
+// 端点查询在同端点存在平台代理与该用户遗留自有代理时都可见，按 ID 倒序返回最新的一个。
+func TestProxyRepositoryFindVisibleActiveByEndpointReturnsVisibleProxy(t *testing.T) {
 	repo, client := newProxyEntRepo(t)
 	ctx := context.Background()
 	ownerID := createProxyOwner(t, ctx, client, "proxy-owner-duplicate@example.com")
@@ -114,11 +118,17 @@ func TestProxyRepositoryFindVisibleActiveByEndpointPrefersOwnProxyOverPlatformDu
 		Status:      service.StatusActive,
 	})
 
-	got, err := repo.FindVisibleActiveByEndpoint(ctx, ownerID, "http", "192.168.0.1", 8000, "user", "pass")
+	// 带归属豁免：平台代理与自有代理都可见，最新（ID 最大，即 owned）优先返回。
+	scope := service.NewOwnedProxyScope("", "", ownerID)
+	got, err := repo.FindVisibleActiveByEndpoint(ctx, scope, "http", "192.168.0.1", 8000, "user", "pass")
 	require.NoError(t, err)
 	require.Equal(t, owned.ID, got.ID)
-	require.NotNil(t, got.OwnerUserID)
-	require.Equal(t, ownerID, *got.OwnerUserID)
+
+	// 不带归属豁免（用户端选择器场景）：自有代理不可见，仅返回平台代理。
+	platformScope := service.NewProxyScope("", "")
+	gotPlatform, err := repo.FindVisibleActiveByEndpoint(ctx, platformScope, "http", "192.168.0.1", 8000, "user", "pass")
+	require.NoError(t, err)
+	require.Nil(t, gotPlatform.OwnerUserID, "only the platform proxy should be visible without owner allowance")
 }
 
 func createProxyOwner(t *testing.T, ctx context.Context, client *dbent.Client, email string) int64 {

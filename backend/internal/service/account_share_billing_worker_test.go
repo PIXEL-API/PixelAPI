@@ -184,9 +184,9 @@ func TestAccountShareBillingWorkerRetriesWhenPostCommitFinalizationFails(t *test
 	require.NotNil(t, intentRepo.failed[0].RetryAt)
 }
 
-func TestAccountShareBillingWorkerKeepsRetryingPostCommitFinalizationAfterFinancialRetryBudget(t *testing.T) {
+func TestAccountShareBillingWorkerRetriesPostCommitFinalizationBelowRetryBudget(t *testing.T) {
 	item := accountShareBillingWorkerTestItem(t, "worker-a")
-	item.AttemptCount = 4
+	item.AttemptCount = 3
 	usageLogID := int64(73)
 	intentRepo := &accountShareBillingWorkerIntentRepoStub{
 		claimItems: []AccountShareBillingIntentWorkItem{item},
@@ -224,6 +224,54 @@ func TestAccountShareBillingWorkerKeepsRetryingPostCommitFinalizationAfterFinanc
 	require.Equal(t, "billing_post_commit_finalize_temporary", intentRepo.failed[0].ErrorCode)
 	require.False(t, intentRepo.failed[0].NeedsAttention)
 	require.NotNil(t, intentRepo.failed[0].RetryAt)
+}
+
+// A post-commit finalizer that never succeeds must not retry forever: an
+// unbounded retry keeps the intent out of a terminal state, which pins
+// pending_intents > 0 and blocks the membership end from releasing the seat
+// ("结束不了"). Once the retry budget is exhausted it escalates to
+// needs_attention (the money is already durable), which the ending path treats
+// as non-pending so the seat is freed.
+func TestAccountShareBillingWorkerEscalatesPostCommitFinalizationWhenRetriesExhausted(t *testing.T) {
+	item := accountShareBillingWorkerTestItem(t, "worker-a")
+	item.AttemptCount = 4
+	usageLogID := int64(73)
+	intentRepo := &accountShareBillingWorkerIntentRepoStub{
+		claimItems: []AccountShareBillingIntentWorkItem{item},
+	}
+	billingRepo := &accountShareBillingWorkerUsageRepoStub{
+		apply: func(context.Context, *UsageBillingCommand) (*UsageBillingApplyResult, error) {
+			return &UsageBillingApplyResult{Applied: false, UsageLogID: &usageLogID}, nil
+		},
+	}
+	worker, err := NewAccountShareBillingWorker(
+		intentRepo,
+		billingRepo,
+		accountShareBillingWorkerFinalizerStub{
+			finalize: func(context.Context, *UsageBillingCommand, *UsageBillingApplyResult) error {
+				return errors.New("cache invalidation remains unavailable")
+			},
+		},
+		AccountShareBillingWorkerConfig{
+			WorkerID:      "worker-a",
+			BatchSize:     10,
+			LeaseDuration: 6 * time.Second,
+			MaxAttempts:   4,
+			RetryBase:     5 * time.Second,
+			RetryMax:      time.Minute,
+		},
+	)
+	require.NoError(t, err)
+
+	result, err := worker.RunOnce(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, AccountShareBillingWorkerRunResult{Claimed: 1, NeedsAttention: 1}, result)
+	require.Empty(t, intentRepo.settled)
+	require.Len(t, intentRepo.failed, 1)
+	require.Equal(t, "billing_post_commit_finalize_exhausted", intentRepo.failed[0].ErrorCode)
+	require.True(t, intentRepo.failed[0].NeedsAttention)
+	require.Nil(t, intentRepo.failed[0].RetryAt)
 }
 
 func TestAccountShareBillingWorkerStillEscalatesTemporaryApplyFailureWhenRetriesExhausted(t *testing.T) {

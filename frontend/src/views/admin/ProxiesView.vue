@@ -485,6 +485,18 @@
           <p class="input-hint mt-2">{{ t('admin.proxies.maxAccountsHint') }}</p>
         </div>
 
+        <div>
+          <label class="input-label">{{ t('admin.proxies.platform') }}</label>
+          <Select v-model="createForm.platform" :options="proxyPlatformOptions" />
+          <p class="input-hint mt-2">{{ t('admin.proxies.platformHint') }}</p>
+        </div>
+
+        <div>
+          <label class="input-label">{{ t('admin.proxies.requiredAccountLevel') }}</label>
+          <Select v-model="createForm.required_account_level" :options="proxyAccountLevelOptions" />
+          <p class="input-hint mt-2">{{ t('admin.proxies.requiredAccountLevelHint') }}</p>
+        </div>
+
       </form>
 
       <!-- Batch Add Form -->
@@ -689,6 +701,16 @@
             :placeholder="t('admin.proxies.maxAccountsPlaceholder')"
           />
           <p class="input-hint mt-2">{{ t('admin.proxies.maxAccountsHint') }}</p>
+        </div>
+        <div>
+          <label class="input-label">{{ t('admin.proxies.platform') }}</label>
+          <Select v-model="editForm.platform" :options="proxyPlatformOptions" />
+          <p class="input-hint mt-2">{{ t('admin.proxies.platformHint') }}</p>
+        </div>
+        <div>
+          <label class="input-label">{{ t('admin.proxies.requiredAccountLevel') }}</label>
+          <Select v-model="editForm.required_account_level" :options="proxyAccountLevelOptions" />
+          <p class="input-hint mt-2">{{ t('admin.proxies.requiredAccountLevelHint') }}</p>
         </div>
         <div>
           <label class="input-label">{{ t('admin.proxies.status') }}</label>
@@ -901,6 +923,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
+import { useAdminSettingsStore } from '@/stores/adminSettings'
 import { adminAPI } from '@/api/admin'
 import type { Proxy, ProxyAccountSummary, ProxyProtocol, ProxyQualityCheckResult } from '@/types'
 import type { Column } from '@/components/common/types'
@@ -922,7 +945,27 @@ import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 
 const { t } = useI18n()
 const appStore = useAppStore()
+const adminSettingsStore = useAdminSettingsStore()
 const { copyToClipboard } = useClipboard()
+
+// 代理平台归属选项：空串=通用代理（所有平台可用），其余为固定的上游平台。
+const proxyPlatformOptions = computed(() => [
+  { value: '', label: t('admin.proxies.platformUniversal') },
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'anthropic', label: 'Anthropic' },
+  { value: 'gemini', label: 'Gemini' },
+  { value: 'antigravity', label: 'Antigravity' },
+  { value: 'grok', label: 'Grok' }
+])
+
+// 账号等级选项是动态的：来自后台“OpenAI 账号等级”配置。空串=所有等级可用。
+const proxyAccountLevelOptions = computed(() => {
+  const options = [{ value: '', label: t('admin.proxies.levelAllLevels') }]
+  for (const level of adminSettingsStore.openAIAccountLevels) {
+    options.push({ value: level.key, label: level.label || level.key })
+  }
+  return options
+})
 
 const columns = computed<Column[]>(() => [
   { key: 'select', label: '', sortable: false },
@@ -1056,6 +1099,8 @@ const createForm = reactive({
   port: 8080,
   username: '',
   password: '',
+  platform: '',
+  required_account_level: '',
   max_accounts: 0
 })
 
@@ -1066,6 +1111,8 @@ const editForm = reactive({
   port: 8080,
   username: '',
   password: '',
+  platform: '',
+  required_account_level: '',
   max_accounts: 0,
   status: 'active' as 'active' | 'inactive'
 })
@@ -1230,6 +1277,8 @@ const closeCreateModal = () => {
   createForm.port = 8080
   createForm.username = ''
   createForm.password = ''
+  createForm.platform = ''
+  createForm.required_account_level = ''
   createForm.max_accounts = 0
   createPasswordVisible.value = false
   batchInput.value = ''
@@ -1358,6 +1407,8 @@ const handleCreateProxy = async () => {
       port: createForm.port,
       username: createForm.username.trim() || null,
       password: createForm.password.trim() || null,
+      platform: createForm.platform,
+      required_account_level: createForm.required_account_level,
       max_accounts: maxAccounts
     })
     appStore.showSuccess(t('admin.proxies.proxyCreated'))
@@ -1379,6 +1430,8 @@ const handleEdit = (proxy: Proxy) => {
   editForm.port = proxy.port
   editForm.username = proxy.username || ''
   editForm.password = proxy.password || ''
+  editForm.platform = proxy.platform || ''
+  editForm.required_account_level = proxy.required_account_level || ''
   editForm.max_accounts = proxy.max_accounts || 0
   editForm.status = proxy.status
   editPasswordVisible.value = false
@@ -1421,6 +1474,8 @@ const handleUpdateProxy = async () => {
       host: editForm.host.trim(),
       port: editForm.port,
       username: editForm.username.trim() || null,
+      platform: editForm.platform,
+      required_account_level: editForm.required_account_level,
       max_accounts: maxAccounts,
       status: editForm.status
     }
@@ -1970,6 +2025,8 @@ function closeCopyMenu() {
 
 onMounted(() => {
   loadProxies()
+  // 加载动态账号等级配置，供代理表单的“账号等级”下拉使用（失败则回退到默认等级）。
+  adminSettingsStore.fetch().catch(() => {})
   document.addEventListener('click', closeCopyMenu)
 })
 

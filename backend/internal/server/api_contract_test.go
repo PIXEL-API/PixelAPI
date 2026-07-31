@@ -1688,7 +1688,16 @@ func (s *stubAccountRepo) GetByID(ctx context.Context, id int64) (*service.Accou
 }
 
 func (s *stubAccountRepo) GetByIDs(ctx context.Context, ids []int64) ([]*service.Account, error) {
-	return nil, errors.New("not implemented")
+	accounts := make([]*service.Account, 0, len(ids))
+	for _, id := range ids {
+		accounts = append(accounts, &service.Account{
+			ID:       id,
+			Platform: service.PlatformOpenAI,
+			Type:     service.AccountTypeOAuth,
+			Status:   service.StatusActive,
+		})
+	}
+	return accounts, nil
 }
 
 func (s *stubAccountRepo) ExistsByID(ctx context.Context, id int64) (bool, error) {
@@ -1890,16 +1899,20 @@ func (stubProxyRepo) ListActiveWithAccountCount(ctx context.Context) ([]service.
 	return nil, errors.New("not implemented")
 }
 
-func (stubProxyRepo) ListActiveVisibleWithAccountCount(ctx context.Context, userID int64) ([]service.ProxyWithAccountCount, error) {
+func (stubProxyRepo) ListActiveVisibleWithAccountCount(ctx context.Context, scope service.ProxyScope) ([]service.ProxyWithAccountCount, error) {
 	return nil, errors.New("not implemented")
 }
 
-func (stubProxyRepo) GetVisibleByID(ctx context.Context, userID, id int64) (*service.Proxy, error) {
+func (stubProxyRepo) GetVisibleByID(ctx context.Context, scope service.ProxyScope, id int64) (*service.Proxy, error) {
 	return nil, service.ErrProxyNotFound
 }
 
-func (stubProxyRepo) FindVisibleActiveByEndpoint(ctx context.Context, userID int64, protocol, host string, port int, username, password string) (*service.Proxy, error) {
+func (stubProxyRepo) FindVisibleActiveByEndpoint(ctx context.Context, scope service.ProxyScope, protocol, host string, port int, username, password string) (*service.Proxy, error) {
 	return nil, service.ErrProxyNotFound
+}
+
+func (stubProxyRepo) ResetRequiredAccountLevelNotIn(ctx context.Context, keepLevels []string) (int64, error) {
+	return 0, errors.New("not implemented")
 }
 
 func (stubProxyRepo) ExistsByHostPortAuth(ctx context.Context, host string, port int, username, password string) (bool, error) {

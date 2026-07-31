@@ -179,6 +179,34 @@ func (_u *ProxyUpdate) ClearOwnerUserID() *ProxyUpdate {
 	return _u
 }
 
+// SetPlatform sets the "platform" field.
+func (_u *ProxyUpdate) SetPlatform(v string) *ProxyUpdate {
+	_u.mutation.SetPlatform(v)
+	return _u
+}
+
+// SetNillablePlatform sets the "platform" field if the given value is not nil.
+func (_u *ProxyUpdate) SetNillablePlatform(v *string) *ProxyUpdate {
+	if v != nil {
+		_u.SetPlatform(*v)
+	}
+	return _u
+}
+
+// SetRequiredAccountLevel sets the "required_account_level" field.
+func (_u *ProxyUpdate) SetRequiredAccountLevel(v string) *ProxyUpdate {
+	_u.mutation.SetRequiredAccountLevel(v)
+	return _u
+}
+
+// SetNillableRequiredAccountLevel sets the "required_account_level" field if the given value is not nil.
+func (_u *ProxyUpdate) SetNillableRequiredAccountLevel(v *string) *ProxyUpdate {
+	if v != nil {
+		_u.SetRequiredAccountLevel(*v)
+	}
+	return _u
+}
+
 // SetStatus sets the "status" field.
 func (_u *ProxyUpdate) SetStatus(v string) *ProxyUpdate {
 	_u.mutation.SetStatus(v)
@@ -349,6 +377,16 @@ func (_u *ProxyUpdate) check() error {
 			return &ValidationError{Name: "password", err: fmt.Errorf(`ent: validator failed for field "Proxy.password": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.Platform(); ok {
+		if err := proxy.PlatformValidator(v); err != nil {
+			return &ValidationError{Name: "platform", err: fmt.Errorf(`ent: validator failed for field "Proxy.platform": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.RequiredAccountLevel(); ok {
+		if err := proxy.RequiredAccountLevelValidator(v); err != nil {
+			return &ValidationError{Name: "required_account_level", err: fmt.Errorf(`ent: validator failed for field "Proxy.required_account_level": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.Status(); ok {
 		if err := proxy.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "Proxy.status": %w`, err)}
@@ -404,6 +442,12 @@ func (_u *ProxyUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.PasswordCleared() {
 		_spec.ClearField(proxy.FieldPassword, field.TypeString)
+	}
+	if value, ok := _u.mutation.Platform(); ok {
+		_spec.SetField(proxy.FieldPlatform, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.RequiredAccountLevel(); ok {
+		_spec.SetField(proxy.FieldRequiredAccountLevel, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(proxy.FieldStatus, field.TypeString, value)
@@ -657,6 +701,34 @@ func (_u *ProxyUpdateOne) ClearOwnerUserID() *ProxyUpdateOne {
 	return _u
 }
 
+// SetPlatform sets the "platform" field.
+func (_u *ProxyUpdateOne) SetPlatform(v string) *ProxyUpdateOne {
+	_u.mutation.SetPlatform(v)
+	return _u
+}
+
+// SetNillablePlatform sets the "platform" field if the given value is not nil.
+func (_u *ProxyUpdateOne) SetNillablePlatform(v *string) *ProxyUpdateOne {
+	if v != nil {
+		_u.SetPlatform(*v)
+	}
+	return _u
+}
+
+// SetRequiredAccountLevel sets the "required_account_level" field.
+func (_u *ProxyUpdateOne) SetRequiredAccountLevel(v string) *ProxyUpdateOne {
+	_u.mutation.SetRequiredAccountLevel(v)
+	return _u
+}
+
+// SetNillableRequiredAccountLevel sets the "required_account_level" field if the given value is not nil.
+func (_u *ProxyUpdateOne) SetNillableRequiredAccountLevel(v *string) *ProxyUpdateOne {
+	if v != nil {
+		_u.SetRequiredAccountLevel(*v)
+	}
+	return _u
+}
+
 // SetStatus sets the "status" field.
 func (_u *ProxyUpdateOne) SetStatus(v string) *ProxyUpdateOne {
 	_u.mutation.SetStatus(v)
@@ -840,6 +912,16 @@ func (_u *ProxyUpdateOne) check() error {
 			return &ValidationError{Name: "password", err: fmt.Errorf(`ent: validator failed for field "Proxy.password": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.Platform(); ok {
+		if err := proxy.PlatformValidator(v); err != nil {
+			return &ValidationError{Name: "platform", err: fmt.Errorf(`ent: validator failed for field "Proxy.platform": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.RequiredAccountLevel(); ok {
+		if err := proxy.RequiredAccountLevelValidator(v); err != nil {
+			return &ValidationError{Name: "required_account_level", err: fmt.Errorf(`ent: validator failed for field "Proxy.required_account_level": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.Status(); ok {
 		if err := proxy.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "Proxy.status": %w`, err)}
@@ -912,6 +994,12 @@ func (_u *ProxyUpdateOne) sqlSave(ctx context.Context) (_node *Proxy, err error)
 	}
 	if _u.mutation.PasswordCleared() {
 		_spec.ClearField(proxy.FieldPassword, field.TypeString)
+	}
+	if value, ok := _u.mutation.Platform(); ok {
+		_spec.SetField(proxy.FieldPlatform, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.RequiredAccountLevel(); ok {
+		_spec.SetField(proxy.FieldRequiredAccountLevel, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(proxy.FieldStatus, field.TypeString, value)

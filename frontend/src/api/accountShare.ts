@@ -815,19 +815,6 @@ export interface AccountShareListingFilters {
   sorts?: AccountShareListingSortKey[]
 }
 
-export interface CreateAccountShareProxyRequest {
-  name?: string
-  protocol: Proxy['protocol']
-  host: string
-  port: number
-  username?: string
-  password?: string
-}
-
-export interface UpdateAccountShareProxyRequest extends Omit<CreateAccountShareProxyRequest, 'password'> {
-  password?: string
-}
-
 export interface JoinAccountShareListingRequest {
   api_key_id: number
   idle_timeout_minutes: number
@@ -959,23 +946,23 @@ export async function getRecommendationUsageProfile(
   return data
 }
 
-export async function listProxies(): Promise<Proxy[]> {
-  const { data } = await apiClient.get<Proxy[]>('/account-share/proxies')
-  return data
+// 用户不再上传/管理代理，只能选择平台代理。
+// 传入即将分享的账号平台与等级，后端据此返回该账号可用的平台代理（外加用户名下的遗留自有代理）。
+export interface ListProxiesScope {
+  platform?: string
+  account_level?: string
 }
 
-export async function createProxy(payload: CreateAccountShareProxyRequest): Promise<Proxy> {
-  const { data } = await apiClient.post<Proxy>('/account-share/proxies', payload)
+export async function listProxies(scope: ListProxiesScope = {}): Promise<Proxy[]> {
+  const params: Record<string, string> = {}
+  if (scope.platform) {
+    params.platform = scope.platform
+  }
+  if (scope.account_level) {
+    params.account_level = scope.account_level
+  }
+  const { data } = await apiClient.get<Proxy[]>('/account-share/proxies', { params })
   return data
-}
-
-export async function updateProxy(id: number, payload: UpdateAccountShareProxyRequest): Promise<Proxy> {
-  const { data } = await apiClient.put<Proxy>(`/account-share/proxies/${id}`, payload)
-  return data
-}
-
-export async function deleteProxy(id: number): Promise<void> {
-  await apiClient.delete(`/account-share/proxies/${id}`)
 }
 
 export async function getListing(id: number): Promise<AccountShareListing> {
@@ -1313,9 +1300,6 @@ export const accountShareAPI = {
   generateAnthropicAuthURL,
   exchangeAnthropicCode,
   listProxies,
-  createProxy,
-  updateProxy,
-  deleteProxy,
   listListings,
   listMembershipHistory,
   recommendListings,

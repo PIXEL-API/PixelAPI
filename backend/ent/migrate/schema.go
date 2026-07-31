@@ -1201,6 +1201,8 @@ var (
 		{Name: "port", Type: field.TypeInt},
 		{Name: "username", Type: field.TypeString, Nullable: true, Size: 100},
 		{Name: "password", Type: field.TypeString, Nullable: true, Size: 100},
+		{Name: "platform", Type: field.TypeString, Size: 32, Default: ""},
+		{Name: "required_account_level", Type: field.TypeString, Size: 20, Default: ""},
 		{Name: "status", Type: field.TypeString, Size: 20, Default: "active"},
 		{Name: "max_accounts", Type: field.TypeInt, Default: 0},
 		{Name: "owner_user_id", Type: field.TypeInt64, Nullable: true},
@@ -1213,7 +1215,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "proxies_users_owned_proxies",
-				Columns:    []*schema.Column{ProxiesColumns[12]},
+				Columns:    []*schema.Column{ProxiesColumns[14]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -1222,12 +1224,17 @@ var (
 			{
 				Name:    "proxy_status",
 				Unique:  false,
-				Columns: []*schema.Column{ProxiesColumns[10]},
+				Columns: []*schema.Column{ProxiesColumns[12]},
 			},
 			{
 				Name:    "proxy_owner_user_id",
 				Unique:  false,
-				Columns: []*schema.Column{ProxiesColumns[12]},
+				Columns: []*schema.Column{ProxiesColumns[14]},
+			},
+			{
+				Name:    "proxy_platform_required_account_level",
+				Unique:  false,
+				Columns: []*schema.Column{ProxiesColumns[10], ProxiesColumns[11]},
 			},
 			{
 				Name:    "proxy_deleted_at",

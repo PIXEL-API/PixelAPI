@@ -1139,24 +1139,6 @@ type BeginAccountShareListingEditInput struct {
 	Expires   time.Time
 }
 
-type CreateAccountShareProxyInput struct {
-	Name     string
-	Protocol string
-	Host     string
-	Port     int
-	Username string
-	Password string
-}
-
-type UpdateAccountShareProxyInput struct {
-	Name     string
-	Protocol string
-	Host     string
-	Port     int
-	Username string
-	Password *string
-}
-
 type AccountShareModeRepository interface {
 	EnsureModeGroup(ctx context.Context, platform string) (*Group, error)
 	GetModeGroup(ctx context.Context, platform string) (*Group, error)
@@ -1279,12 +1261,8 @@ type AccountShareRuntimeBindingRepository interface {
 }
 
 type AccountShareModeProxyRepository interface {
-	Create(ctx context.Context, proxy *Proxy) error
-	Update(ctx context.Context, proxy *Proxy) error
-	Delete(ctx context.Context, id int64) error
-	GetVisibleByID(ctx context.Context, userID, id int64) (*Proxy, error)
-	ListActiveVisibleWithAccountCount(ctx context.Context, userID int64) ([]ProxyWithAccountCount, error)
-	FindVisibleActiveByEndpoint(ctx context.Context, userID int64, protocol, host string, port int, username, password string) (*Proxy, error)
+	GetVisibleByID(ctx context.Context, scope ProxyScope, id int64) (*Proxy, error)
+	ListActiveVisibleWithAccountCount(ctx context.Context, scope ProxyScope) ([]ProxyWithAccountCount, error)
 	CountAccountsByProxyID(ctx context.Context, proxyID int64) (int64, error)
 }
 
@@ -1987,7 +1965,7 @@ func (s *AccountShareModeService) GenerateOpenAIAuthURL(ctx context.Context, own
 	if s == nil || s.openaiOAuthService == nil {
 		return nil, ErrServiceUnavailable
 	}
-	if err := s.ensureProxyAvailableForNewAccount(ctx, ownerUserID, *proxyID); err != nil {
+	if err := s.ensureProxyAvailableForNewAccount(ctx, NewProxyScope(PlatformOpenAI, AccountLevelUnknown), *proxyID); err != nil {
 		return nil, err
 	}
 	return s.openaiOAuthService.GenerateAuthURL(ctx, proxyID, redirectURI, PlatformOpenAI)
@@ -2003,123 +1981,19 @@ func (s *AccountShareModeService) GenerateAnthropicAuthURL(ctx context.Context, 
 	if s == nil || s.oauthService == nil {
 		return nil, ErrServiceUnavailable
 	}
-	if err := s.ensureProxyAvailableForNewAccount(ctx, ownerUserID, *proxyID); err != nil {
+	if err := s.ensureProxyAvailableForNewAccount(ctx, NewProxyScope(PlatformAnthropic, AccountLevelUnknown), *proxyID); err != nil {
 		return nil, err
 	}
 	return s.oauthService.GenerateAuthURL(ctx, proxyID)
 }
 
-func (s *AccountShareModeService) ListAvailableProxies(ctx context.Context, userID int64) ([]ProxyWithAccountCount, error) {
-	if userID <= 0 {
-		return nil, ErrUserNotFound
-	}
+// ListAvailableProxies 按账号平台与等级返回用户可选的平台代理。
+// scope 为空平台时仅返回通用代理，空等级时仅返回所有等级可用的代理。
+func (s *AccountShareModeService) ListAvailableProxies(ctx context.Context, scope ProxyScope) ([]ProxyWithAccountCount, error) {
 	if s == nil || s.proxyRepo == nil {
 		return []ProxyWithAccountCount{}, nil
 	}
-	return s.proxyRepo.ListActiveVisibleWithAccountCount(ctx, userID)
-}
-
-func (s *AccountShareModeService) CreateUserProxy(ctx context.Context, ownerUserID int64, input CreateAccountShareProxyInput) (*Proxy, error) {
-	if ownerUserID <= 0 {
-		return nil, ErrUserNotFound
-	}
-	if s == nil || s.proxyRepo == nil {
-		return nil, ErrServiceUnavailable
-	}
-	normalized, err := normalizeAccountShareProxyInput(ownerUserID, input)
-	if err != nil {
-		return nil, err
-	}
-	existing, err := s.proxyRepo.FindVisibleActiveByEndpoint(ctx, ownerUserID, normalized.Protocol, normalized.Host, normalized.Port, normalized.Username, normalized.Password)
-	if err == nil && isAccountShareProxyOwnedByUser(existing, ownerUserID) {
-		return existing, nil
-	}
-	if err != nil && !errors.Is(err, ErrProxyNotFound) {
-		return nil, err
-	}
-	if err := s.proxyRepo.Create(ctx, normalized); err != nil {
-		return nil, err
-	}
-	return normalized, nil
-}
-
-func (s *AccountShareModeService) UpdateUserProxy(ctx context.Context, ownerUserID, proxyID int64, input UpdateAccountShareProxyInput) (*Proxy, error) {
-	if ownerUserID <= 0 {
-		return nil, ErrUserNotFound
-	}
-	if proxyID <= 0 {
-		return nil, ErrProxyNotFound
-	}
-	if s == nil || s.proxyRepo == nil {
-		return nil, ErrServiceUnavailable
-	}
-
-	proxy, err := s.proxyRepo.GetVisibleByID(ctx, ownerUserID, proxyID)
-	if err != nil {
-		return nil, err
-	}
-	if !isAccountShareProxyOwnedByUser(proxy, ownerUserID) {
-		return nil, ErrProxyNotFound
-	}
-
-	password := proxy.Password
-	if input.Password != nil {
-		password = strings.TrimSpace(*input.Password)
-	}
-	normalized, err := normalizeAccountShareProxyInput(ownerUserID, CreateAccountShareProxyInput{
-		Name:     input.Name,
-		Protocol: input.Protocol,
-		Host:     input.Host,
-		Port:     input.Port,
-		Username: input.Username,
-		Password: password,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	proxy.Name = normalized.Name
-	proxy.Protocol = normalized.Protocol
-	proxy.Host = normalized.Host
-	proxy.Port = normalized.Port
-	proxy.Username = normalized.Username
-	proxy.Password = normalized.Password
-	if err := s.proxyRepo.Update(ctx, proxy); err != nil {
-		return nil, err
-	}
-	return proxy, nil
-}
-
-func (s *AccountShareModeService) DeleteUserProxy(ctx context.Context, ownerUserID, proxyID int64) error {
-	if ownerUserID <= 0 {
-		return ErrUserNotFound
-	}
-	if proxyID <= 0 {
-		return ErrProxyNotFound
-	}
-	if s == nil || s.proxyRepo == nil {
-		return ErrServiceUnavailable
-	}
-
-	proxy, err := s.proxyRepo.GetVisibleByID(ctx, ownerUserID, proxyID)
-	if err != nil {
-		return err
-	}
-	if !isAccountShareProxyOwnedByUser(proxy, ownerUserID) {
-		return ErrProxyNotFound
-	}
-	accountCount, err := s.proxyRepo.CountAccountsByProxyID(ctx, proxyID)
-	if err != nil {
-		return err
-	}
-	if accountCount > 0 {
-		return ErrProxyInUse
-	}
-	return s.proxyRepo.Delete(ctx, proxyID)
-}
-
-func isAccountShareProxyOwnedByUser(proxy *Proxy, userID int64) bool {
-	return proxy != nil && proxy.OwnerUserID != nil && *proxy.OwnerUserID == userID
+	return s.proxyRepo.ListActiveVisibleWithAccountCount(ctx, scope)
 }
 
 func (s *AccountShareModeService) ExchangeOpenAICodeAndCreateListing(ctx context.Context, ownerUserID int64, exchange *OpenAIExchangeCodeInput, input CreateAccountShareListingInput) (*AccountShareListing, error) {
@@ -2135,7 +2009,7 @@ func (s *AccountShareModeService) ExchangeOpenAICodeAndCreateListing(ctx context
 	if input.ProxyID != *exchange.ProxyID {
 		return nil, ErrAccountShareModeProxyRequired
 	}
-	if err := s.ensureProxyAvailableForNewAccount(ctx, ownerUserID, input.ProxyID); err != nil {
+	if err := s.ensureProxyAvailableForNewAccount(ctx, NewProxyScope(PlatformOpenAI, AccountLevelUnknown), input.ProxyID); err != nil {
 		return nil, err
 	}
 	if err := validateAccountShareAccountName(input.Name); err != nil {
@@ -2178,7 +2052,7 @@ func (s *AccountShareModeService) ExchangeAnthropicCodeAndCreateListing(ctx cont
 	if input.ProxyID != *exchange.ProxyID {
 		return nil, ErrAccountShareModeProxyRequired
 	}
-	if err := s.ensureProxyAvailableForNewAccount(ctx, ownerUserID, input.ProxyID); err != nil {
+	if err := s.ensureProxyAvailableForNewAccount(ctx, NewProxyScope(PlatformAnthropic, AccountLevelUnknown), input.ProxyID); err != nil {
 		return nil, err
 	}
 	if err := validateAccountShareAccountName(input.Name); err != nil {
@@ -2220,7 +2094,7 @@ func (s *AccountShareModeService) CreateOpenAIListingFromToken(ctx context.Conte
 	if input.TokenInfo == nil {
 		return nil, ErrOwnedAccountCredentialsInvalid
 	}
-	if err := s.ensureProxyAvailableForNewAccount(ctx, ownerUserID, input.ProxyID); err != nil {
+	if err := s.ensureProxyAvailableForNewAccount(ctx, NewProxyScope(PlatformOpenAI, AccountLevelUnknown), input.ProxyID); err != nil {
 		return nil, err
 	}
 	if err := validateAccountShareAccountName(input.Name); err != nil {
@@ -2341,7 +2215,7 @@ func (s *AccountShareModeService) CreateAnthropicListingFromToken(ctx context.Co
 	if input.AnthropicTokenInfo == nil {
 		return nil, ErrOwnedAccountCredentialsInvalid
 	}
-	if err := s.ensureProxyAvailableForNewAccount(ctx, ownerUserID, input.ProxyID); err != nil {
+	if err := s.ensureProxyAvailableForNewAccount(ctx, NewProxyScope(PlatformAnthropic, AccountLevelUnknown), input.ProxyID); err != nil {
 		return nil, err
 	}
 	if err := validateAccountShareAccountName(input.Name); err != nil {
@@ -4937,52 +4811,6 @@ func compactAccountShareAccountName(name string) string {
 	return strings.Join(strings.Fields(name), "")
 }
 
-func normalizeAccountShareProxyInput(ownerUserID int64, input CreateAccountShareProxyInput) (*Proxy, error) {
-	protocol := strings.ToLower(strings.TrimSpace(input.Protocol))
-	switch protocol {
-	case "http", "https", "socks5", "socks5h":
-	default:
-		return nil, ErrAccountShareModeInvalidProxy
-	}
-
-	host := strings.TrimSpace(input.Host)
-	if host == "" || strings.IndexFunc(host, unicode.IsSpace) >= 0 {
-		return nil, ErrAccountShareModeInvalidProxy
-	}
-	if input.Port < 1 || input.Port > 65535 {
-		return nil, ErrAccountShareModeInvalidProxy
-	}
-
-	name := strings.TrimSpace(input.Name)
-	if name == "" {
-		name = fmt.Sprintf("我的代理 %s:%d", host, input.Port)
-	}
-	name = truncateRunes(name, 100)
-	ownerID := ownerUserID
-	return &Proxy{
-		Name:        name,
-		Protocol:    protocol,
-		Host:        host,
-		Port:        input.Port,
-		Username:    strings.TrimSpace(input.Username),
-		Password:    strings.TrimSpace(input.Password),
-		OwnerUserID: &ownerID,
-		Status:      StatusActive,
-		MaxAccounts: 0,
-	}, nil
-}
-
-func truncateRunes(value string, limit int) string {
-	if limit <= 0 {
-		return ""
-	}
-	runes := []rune(value)
-	if len(runes) <= limit {
-		return value
-	}
-	return string(runes[:limit])
-}
-
 func (s *AccountShareModeService) attachListingEditProxy(ctx context.Context, listing *AccountShareListing) error {
 	if listing == nil || listing.ProxyID == nil || *listing.ProxyID <= 0 {
 		return nil
@@ -4993,7 +4821,8 @@ func (s *AccountShareModeService) attachListingEditProxy(ctx context.Context, li
 	if s == nil || s.proxyRepo == nil {
 		return ErrServiceUnavailable
 	}
-	proxy, err := s.proxyRepo.GetVisibleByID(ctx, listing.OwnerUserID, *listing.ProxyID)
+	// 展示既有房源的代理快照：附带遗留归属豁免，让老用户绑定的自有代理仍可见。
+	proxy, err := s.proxyRepo.GetVisibleByID(ctx, NewOwnedProxyScope(listing.Platform, listing.AccountLevel, listing.OwnerUserID), *listing.ProxyID)
 	if err != nil {
 		return err
 	}
@@ -5023,13 +4852,8 @@ func accountShareListingProxyFromService(proxy *Proxy) *AccountShareListingProxy
 	}
 }
 
-func (s *AccountShareModeService) ensureProxyVisibleToUser(ctx context.Context, ownerUserID, proxyID int64) error {
-	_, err := s.loadVisibleActiveProxyForUser(ctx, ownerUserID, proxyID)
-	return err
-}
-
-func (s *AccountShareModeService) ensureProxyAvailableForNewAccount(ctx context.Context, ownerUserID, proxyID int64) error {
-	proxy, err := s.loadVisibleActiveProxyForUser(ctx, ownerUserID, proxyID)
+func (s *AccountShareModeService) ensureProxyAvailableForNewAccount(ctx context.Context, scope ProxyScope, proxyID int64) error {
+	proxy, err := s.loadVisibleActiveProxyForScope(ctx, scope, proxyID)
 	if err != nil {
 		return err
 	}
@@ -5047,17 +4871,14 @@ func (s *AccountShareModeService) ensureProxyAvailableForNewAccount(ctx context.
 	return nil
 }
 
-func (s *AccountShareModeService) loadVisibleActiveProxyForUser(ctx context.Context, ownerUserID, proxyID int64) (*Proxy, error) {
-	if ownerUserID <= 0 {
-		return nil, ErrUserNotFound
-	}
+func (s *AccountShareModeService) loadVisibleActiveProxyForScope(ctx context.Context, scope ProxyScope, proxyID int64) (*Proxy, error) {
 	if proxyID <= 0 {
 		return nil, ErrAccountShareModeProxyRequired
 	}
 	if s == nil || s.proxyRepo == nil {
 		return nil, ErrServiceUnavailable
 	}
-	proxy, err := s.proxyRepo.GetVisibleByID(ctx, ownerUserID, proxyID)
+	proxy, err := s.proxyRepo.GetVisibleByID(ctx, scope, proxyID)
 	if err != nil {
 		return nil, err
 	}

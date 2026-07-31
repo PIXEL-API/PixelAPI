@@ -207,11 +207,12 @@ func (s *OpenAIGatewayService) recordOpenAIStreamUpstreamError(c *gin.Context, a
 		}
 		detail = truncateString(string(payload), maxBytes)
 	}
+	semanticStatus := openAIStreamFailedEventSemanticStatus(payload, message)
 	if c != nil {
-		setOpsUpstreamError(c, http.StatusBadGateway, message, detail)
+		setOpsUpstreamError(c, semanticStatus, message, detail)
 		event := OpsUpstreamErrorEvent{
 			Platform:           PlatformOpenAI,
-			UpstreamStatusCode: http.StatusBadGateway,
+			UpstreamStatusCode: semanticStatus,
 			UpstreamRequestID:  strings.TrimSpace(upstreamRequestID),
 			Passthrough:        passthrough,
 			Kind:               kind,

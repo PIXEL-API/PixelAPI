@@ -683,6 +683,10 @@ const (
 	// budget that expired before another upstream attempt could be started.
 	// It must not poison account health because no account response was observed.
 	GatewayFailureReasonRoutingBudgetExhausted GatewayFailureReason = "routing_budget_exhausted"
+	// GatewayFailureReasonOpenAITransientCapacity identifies OpenAI transient
+	// capacity errors (model_capacity, too_many_pending, upstream_overloaded)
+	// that should be retried on the same account before applying a penalty.
+	GatewayFailureReasonOpenAITransientCapacity GatewayFailureReason = "openai_transient_capacity"
 )
 
 // UpstreamFailoverError indicates an upstream or credential error that may
@@ -739,6 +743,17 @@ func (e *sseStreamErrorEventError) Error() string { return "have error in stream
 // 由 handler 层在同账号重试全部用尽、切换账号时调用。
 func (s *GatewayService) TempUnscheduleRetryableError(ctx context.Context, accountID int64, failoverErr *UpstreamFailoverError) {
 	if failoverErr == nil || !failoverErr.RetryableOnSameAccount {
+		return
+	}
+	// OpenAI 瞬时容量错误：通过 Reason 判别，调用阶梯冷却
+	if failoverErr.Reason == GatewayFailureReasonOpenAITransientCapacity {
+		account, err := s.accountRepo.GetByID(ctx, accountID)
+		if err != nil || account == nil {
+			return
+		}
+		if s.rateLimitService != nil {
+			s.rateLimitService.HandleUpstreamError(ctx, account, failoverErr.StatusCode, nil, failoverErr.ResponseBody)
+		}
 		return
 	}
 	// 根据状态码选择封禁策略

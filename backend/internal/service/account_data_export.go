@@ -11,15 +11,19 @@ type AccountDataPayload struct {
 }
 
 type AccountDataProxy struct {
-	ProxyKey    string `json:"proxy_key"`
-	Name        string `json:"name"`
-	Protocol    string `json:"protocol"`
-	Host        string `json:"host"`
-	Port        int    `json:"port"`
-	Username    string `json:"username,omitempty"`
-	Password    string `json:"password,omitempty"`
-	Status      string `json:"status"`
-	MaxAccounts *int   `json:"max_accounts,omitempty"`
+	ProxyKey string `json:"proxy_key"`
+	Name     string `json:"name"`
+	Protocol string `json:"protocol"`
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
+	Status   string `json:"status"`
+	// Platform 为空表示通用代理（所有平台可用）。
+	Platform string `json:"platform,omitempty"`
+	// RequiredAccountLevel 为空表示所有账号等级可用。
+	RequiredAccountLevel string `json:"required_account_level,omitempty"`
+	MaxAccounts          *int   `json:"max_accounts,omitempty"`
 }
 
 type AccountDataAccount struct {

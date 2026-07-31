@@ -1813,7 +1813,7 @@ func TestOpenAIStreamingResponseFailedCapacityAfterOutputTempUnscheds(t *testing
 	require.False(t, errors.As(err, &failoverErr), "已向客户端输出后不能安全 failover，但必须短冷却当前账号")
 	require.True(t, c.Writer.Written())
 	require.Len(t, repo.tempCalls, 1)
-	require.WithinDuration(t, start.Add(openAIModelCapacityCooldown), repo.tempCalls[0], 5*time.Second)
+	require.WithinDuration(t, start.Add(openAITransientCapacityCooldownForCount(1)), repo.tempCalls[0], 5*time.Second)
 	require.Contains(t, repo.tempReasons[0], "openai_model_capacity")
 }
 
@@ -2189,7 +2189,7 @@ func TestOpenAIStreamingPassthroughResponseFailedCapacityAfterOutputTempUnscheds
 	require.False(t, errors.As(err, &failoverErr), "passthrough 已输出后不能安全 failover，但必须短冷却当前账号")
 	require.True(t, c.Writer.Written())
 	require.Len(t, repo.tempCalls, 1)
-	require.WithinDuration(t, start.Add(openAIModelCapacityCooldown), repo.tempCalls[0], 5*time.Second)
+	require.WithinDuration(t, start.Add(openAITransientCapacityCooldownForCount(1)), repo.tempCalls[0], 5*time.Second)
 	require.Contains(t, repo.tempReasons[0], "openai_model_capacity")
 }
 

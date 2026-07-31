@@ -34,10 +34,6 @@
             <Icon name="upload" size="md" class="mr-2" />
             {{ t('userAccounts.importAccounts') }}
           </button>
-          <button type="button" class="btn btn-secondary" @click="openProxyManager">
-            <Icon name="server" size="md" class="mr-2" />
-            {{ t('userAccounts.manageProxies') }}
-          </button>
           <button type="button" class="btn btn-primary" @click="openCreateModal">
             <Icon name="plus" size="md" class="mr-2" />
             {{ t('userAccounts.createAccount') }}
@@ -468,6 +464,17 @@
     />
 
     <ConfirmDialog
+      :show="showRoomDetachConfirmDialog"
+      :title="t('userAccounts.deleteRoomDetachTitle')"
+      :message="roomDetachConfirmMessage"
+      :confirm-text="t('userAccounts.deleteRoomDetachConfirmButton')"
+      :cancel-text="t('common.cancel')"
+      danger
+      @confirm="confirmRoomDetachDelete"
+      @cancel="closeRoomDetachConfirmDialog"
+    />
+
+    <ConfirmDialog
       :show="showExportDataDialog"
       :title="t('userAccounts.exportAccounts')"
       :message="t('userAccounts.exportConfirmMessage')"
@@ -481,14 +488,6 @@
       :show="showImportModal"
       @close="showImportModal = false"
       @imported="handleAccountsImported"
-    />
-
-    <UserProxyManagerModal
-      :show="showProxyManager"
-      :proxies="userProxies"
-      :loading="userProxiesLoading"
-      @close="showProxyManager = false"
-      @changed="handleProxiesChanged"
     />
 
     <AccountTestModal
@@ -542,6 +541,7 @@ import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { accountsAPI, accountShareAPI, userGroupsAPI } from '@/api'
 import type { AccountBatchTask } from '@/api/accounts'
+import type { ListProxiesScope } from '@/api/accountShare'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
@@ -570,7 +570,6 @@ import AccountTestModal from '@/components/account/AccountTestModal.vue'
 import UserAccountActionMenu from '@/components/account/UserAccountActionMenu.vue'
 import UserContentModerationModal from '@/components/account/UserContentModerationModal.vue'
 import ImportAccountsModal from '@/components/user/ImportAccountsModal.vue'
-import UserProxyManagerModal from '@/components/user/UserProxyManagerModal.vue'
 import { ACCOUNT_STATUS_FILTER_OPTIONS } from '@/constants/account'
 import type { Account, AccountLevel, AccountPlatform, AccountType, AdminGroup, Group, Proxy, WindowStats } from '@/types'
 import type { Column } from '@/components/common/types'
@@ -600,12 +599,17 @@ const showImportModal = ref(false)
 const showBulkEditModal = ref(false)
 const showDeleteDialog = ref(false)
 const showBulkDeleteDialog = ref(false)
+// 账号仍挂在广场房间时的二次确认（退房后删除）
+const showRoomDetachConfirmDialog = ref(false)
+const roomDetachRoomNames = ref<string[]>([])
+const roomDetachIsBulk = ref(false)
+const roomDetachAccountIds = ref<number[]>([])
+const roomDetachSingleAccount = ref<Account | null>(null)
 const showExportDataDialog = ref(false)
 const showTestModal = ref(false)
 const showStatsModal = ref(false)
 const showReAuthModal = ref(false)
 const showModerationModal = ref(false)
-const showProxyManager = ref(false)
 const editingAccount = ref<Account | null>(null)
 const accountToDelete = ref<Account | null>(null)
 const testingAccount = ref<Account | null>(null)
@@ -752,6 +756,48 @@ const deleteConfirmMessage = computed(() =>
 const bulkDeleteConfirmMessage = computed(() =>
   t('admin.accounts.bulkDeleteConfirm', { count: selectedCount.value })
 )
+
+const roomDetachConfirmMessage = computed(() => {
+  const rooms = roomDetachRoomNames.value.filter(Boolean).join('、')
+  if (roomDetachIsBulk.value) {
+    return t('userAccounts.deleteRoomDetachConfirmBulk', {
+      count: roomDetachAccountIds.value.length,
+      rooms
+    })
+  }
+  return t('userAccounts.deleteRoomDetachConfirm', {
+    name: roomDetachSingleAccount.value?.name ?? '',
+    rooms
+  })
+})
+
+// 从错误响应中解析后端错误码（reason）与结构化 metadata。
+function extractErrorDetail(error: any): { reason: string; metadata: Record<string, string> } {
+  const data = error?.response?.data ?? {}
+  return {
+    reason: String(data.reason ?? data.code ?? ''),
+    metadata: (data.metadata ?? {}) as Record<string, string>
+  }
+}
+
+function isRoomAccountBlocked(reason: string, metadata: Record<string, string>): boolean {
+  if (reason !== 'ACCOUNT_DELETION_BLOCKED') return false
+  return (metadata.blocker_types ?? '').split(',').some((t) => t.trim() === 'room_account')
+}
+
+// 场景2：房间仍有租户在用且无健康替补账号，退房被拒。返回给号主的可读提示。
+function noHealthyReplacementMessage(metadata: Record<string, string>): string {
+  return t('userAccounts.deleteRoomNoHealthyReplacement', {
+    count: metadata.membership_count ?? metadata.membership_count_snapshot ?? '',
+    rooms: metadata.room_listing_names ?? ''
+  })
+}
+
+function roomNamesFromMetadata(metadata: Record<string, string>): string[] {
+  const names = (metadata.room_listing_names ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+  if (names.length > 0) return names
+  return (metadata.room_listing_ids ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+}
 
 function buildAccountQueryFilters(): {
   search?: string
@@ -1133,11 +1179,24 @@ async function loadGroups(): Promise<void> {
   }
 }
 
-async function loadUserProxies(force = false): Promise<void> {
-  if (userProxiesLoading.value || (!force && userProxies.value.length > 0)) return
+// 用户只能选择平台代理（外加自己名下的遗留自有代理）。按账号平台/等级拉取可选代理；
+// scope 变化时用不同的缓存键，避免切换账号后仍显示上一个账号的代理集合。
+let lastUserProxyScopeKey = ''
+async function loadUserProxies(
+  scope: ListProxiesScope = {},
+  force = false
+): Promise<void> {
+  const scopeKey = `${scope.platform || ''}|${scope.account_level || ''}`
+  if (
+    userProxiesLoading.value ||
+    (!force && scopeKey === lastUserProxyScopeKey && userProxies.value.length > 0)
+  ) {
+    return
+  }
   userProxiesLoading.value = true
   try {
-    userProxies.value = await accountShareAPI.listProxies()
+    userProxies.value = await accountShareAPI.listProxies(scope)
+    lastUserProxyScopeKey = scopeKey
   } catch (error) {
     console.error('Failed to load user proxies:', error)
     appStore.showError(extractApiErrorMessage(error, t('userAccounts.importProxyLoadFailed')))
@@ -1148,6 +1207,7 @@ async function loadUserProxies(force = false): Promise<void> {
 
 function openCreateModal(): void {
   showCreateModal.value = true
+  // 创建时平台/等级尚未选择，仅按平台代理（通用/所有等级）预取；模态内选定后可再细化。
   void loadUserProxies()
 }
 
@@ -1234,16 +1294,7 @@ function handlePageSizeChange(pageSize: number): void {
 function openEditModal(account: Account): void {
   editingAccount.value = account
   showEditModal.value = true
-  void loadUserProxies()
-}
-
-function openProxyManager(): void {
-  showProxyManager.value = true
-  void loadUserProxies(true)
-}
-
-async function handleProxiesChanged(): Promise<void> {
-  await loadUserProxies(true)
+  void loadUserProxies({ platform: account.platform, account_level: account.account_level ?? undefined })
 }
 
 function closeEditModal(): void {
@@ -1392,7 +1443,7 @@ function handleViewStats(account: Account): void {
 function handleReAuth(account: Account): void {
   reAuthAccount.value = account
   showReAuthModal.value = true
-  void loadUserProxies()
+  void loadUserProxies({ platform: account.platform, account_level: account.account_level ?? undefined })
 }
 
 async function handleAccountReauthorized(): Promise<void> {
@@ -1633,16 +1684,80 @@ async function revalidatePublicShare(account: Account): Promise<void> {
 
 async function deleteAccount(): Promise<void> {
   if (!accountToDelete.value) return
+  const account = accountToDelete.value
   try {
-    await accountsAPI.delete(accountToDelete.value.id)
+    await accountsAPI.delete(account.id)
     appStore.showSuccess(t('userAccounts.accountDeletedSuccess'))
     closeDeleteDialog()
     clearSelection()
     await loadAccounts()
   } catch (error: any) {
+    const { reason, metadata } = extractErrorDetail(error)
+    if (isRoomAccountBlocked(reason, metadata)) {
+      // 账号仍挂在广场房间，弹二次确认，确认后退房再删除。
+      closeDeleteDialog()
+      roomDetachIsBulk.value = false
+      roomDetachSingleAccount.value = account
+      roomDetachAccountIds.value = [account.id]
+      roomDetachRoomNames.value = roomNamesFromMetadata(metadata)
+      showRoomDetachConfirmDialog.value = true
+      return
+    }
     console.error('Failed to delete user account:', error)
     appStore.showError(error?.response?.data?.message || t('userAccounts.failedToDelete'))
   }
+}
+
+// 二次确认后带 force 重新删除（单个 / 批量共用）。
+async function confirmRoomDetachDelete(): Promise<void> {
+  const isBulk = roomDetachIsBulk.value
+  const accountIds = [...roomDetachAccountIds.value]
+  const singleAccount = roomDetachSingleAccount.value
+  showRoomDetachConfirmDialog.value = false
+  try {
+    if (isBulk) {
+      const result = await accountsAPI.bulkDelete(accountIds, true)
+      if (result.success > 0 && result.failed === 0) {
+        appStore.showSuccess(t('admin.accounts.bulkDeleteSuccess', { count: result.success }))
+      } else if (result.success > 0) {
+        appStore.showError(
+          t('admin.accounts.bulkDeletePartial', { success: result.success, failed: result.failed })
+        )
+      } else {
+        appStore.showError(t('admin.accounts.bulkDeleteFailed'))
+      }
+      usageManualRefreshToken.value += 1
+      await Promise.all([loadGroups(), loadAccounts()])
+    } else if (singleAccount) {
+      await accountsAPI.delete(singleAccount.id, true)
+      appStore.showSuccess(t('userAccounts.accountDeletedSuccess'))
+      await loadAccounts()
+    }
+    clearSelection()
+  } catch (error: any) {
+    const { reason, metadata } = extractErrorDetail(error)
+    // 场景2：房间还有租户在用且无健康替补账号，退房被拒，明确告知号主。
+    if (reason === 'ACCOUNT_SHARE_ROOM_OPERATION_CONFLICT' && metadata.blocker === 'no_healthy_replacement_account') {
+      appStore.showError(noHealthyReplacementMessage(metadata))
+    } else if (reason === 'ACCOUNT_SHARE_LISTING_IN_USE' && metadata.blocker === 'account_in_flight') {
+      appStore.showError(t('userAccounts.deleteRoomAccountInFlight'))
+    } else {
+      console.error('Failed to force delete user account:', error)
+      appStore.showError(
+        error?.response?.data?.message || (isBulk ? t('admin.accounts.bulkDeleteFailed') : t('userAccounts.failedToDelete'))
+      )
+    }
+  } finally {
+    closeRoomDetachConfirmDialog()
+  }
+}
+
+function closeRoomDetachConfirmDialog(): void {
+  showRoomDetachConfirmDialog.value = false
+  roomDetachRoomNames.value = []
+  roomDetachAccountIds.value = []
+  roomDetachSingleAccount.value = null
+  roomDetachIsBulk.value = false
 }
 
 async function bulkDeleteAccounts(): Promise<void> {
@@ -1667,6 +1782,17 @@ async function bulkDeleteAccounts(): Promise<void> {
     usageManualRefreshToken.value += 1
     await Promise.all([loadGroups(), loadAccounts()])
   } catch (error: any) {
+    const { reason, metadata } = extractErrorDetail(error)
+    if (isRoomAccountBlocked(reason, metadata)) {
+      // 批量删除中有账号仍挂在广场房间，弹二次确认，确认后统一退房再删除。
+      closeBulkDeleteDialog()
+      roomDetachIsBulk.value = true
+      roomDetachSingleAccount.value = null
+      roomDetachAccountIds.value = accountIds
+      roomDetachRoomNames.value = roomNamesFromMetadata(metadata)
+      showRoomDetachConfirmDialog.value = true
+      return
+    }
     console.error('Failed to bulk delete user accounts:', error)
     appStore.showError(error?.response?.data?.message || t('admin.accounts.bulkDeleteFailed'))
   }

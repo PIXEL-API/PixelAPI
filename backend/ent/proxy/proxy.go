@@ -35,6 +35,10 @@ const (
 	FieldPassword = "password"
 	// FieldOwnerUserID holds the string denoting the owner_user_id field in the database.
 	FieldOwnerUserID = "owner_user_id"
+	// FieldPlatform holds the string denoting the platform field in the database.
+	FieldPlatform = "platform"
+	// FieldRequiredAccountLevel holds the string denoting the required_account_level field in the database.
+	FieldRequiredAccountLevel = "required_account_level"
 	// FieldStatus holds the string denoting the status field in the database.
 	FieldStatus = "status"
 	// FieldMaxAccounts holds the string denoting the max_accounts field in the database.
@@ -74,6 +78,8 @@ var Columns = []string{
 	FieldUsername,
 	FieldPassword,
 	FieldOwnerUserID,
+	FieldPlatform,
+	FieldRequiredAccountLevel,
 	FieldStatus,
 	FieldMaxAccounts,
 }
@@ -112,6 +118,14 @@ var (
 	UsernameValidator func(string) error
 	// PasswordValidator is a validator for the "password" field. It is called by the builders before save.
 	PasswordValidator func(string) error
+	// DefaultPlatform holds the default value on creation for the "platform" field.
+	DefaultPlatform string
+	// PlatformValidator is a validator for the "platform" field. It is called by the builders before save.
+	PlatformValidator func(string) error
+	// DefaultRequiredAccountLevel holds the default value on creation for the "required_account_level" field.
+	DefaultRequiredAccountLevel string
+	// RequiredAccountLevelValidator is a validator for the "required_account_level" field. It is called by the builders before save.
+	RequiredAccountLevelValidator func(string) error
 	// DefaultStatus holds the default value on creation for the "status" field.
 	DefaultStatus string
 	// StatusValidator is a validator for the "status" field. It is called by the builders before save.
@@ -176,6 +190,16 @@ func ByPassword(opts ...sql.OrderTermOption) OrderOption {
 // ByOwnerUserID orders the results by the owner_user_id field.
 func ByOwnerUserID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldOwnerUserID, opts...).ToFunc()
+}
+
+// ByPlatform orders the results by the platform field.
+func ByPlatform(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPlatform, opts...).ToFunc()
+}
+
+// ByRequiredAccountLevel orders the results by the required_account_level field.
+func ByRequiredAccountLevel(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRequiredAccountLevel, opts...).ToFunc()
 }
 
 // ByStatus orders the results by the status field.

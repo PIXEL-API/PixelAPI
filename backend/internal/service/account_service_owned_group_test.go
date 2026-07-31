@@ -51,13 +51,13 @@ type ownedAccountProxyRepoStub struct {
 	countCalls      int
 }
 
-func (s *ownedAccountProxyRepoStub) GetVisibleByID(_ context.Context, userID, id int64) (*Proxy, error) {
+func (s *ownedAccountProxyRepoStub) GetVisibleByID(_ context.Context, scope ProxyScope, id int64) (*Proxy, error) {
 	s.getVisibleCalls++
 	proxy := s.proxies[id]
 	if proxy == nil {
 		return nil, ErrProxyNotFound
 	}
-	if proxy.OwnerUserID != nil && *proxy.OwnerUserID != userID {
+	if !scope.Allows(proxy) {
 		return nil, ErrProxyNotFound
 	}
 	cp := *proxy
@@ -966,7 +966,7 @@ func TestAccountServiceCreateOwnedRejectsOpenAIProWhenProxyFull(t *testing.T) {
 	repo := &ownedAccountDuplicateRepoStub{}
 	proxyRepo := &ownedAccountProxyRepoStub{
 		proxies: map[int64]*Proxy{
-			proxyID: {ID: proxyID, OwnerUserID: &ownerID, Status: StatusActive, MaxAccounts: 2},
+			proxyID: {ID: proxyID, Status: StatusActive, MaxAccounts: 2},
 		},
 		counts: map[int64]int64{proxyID: 2},
 	}
@@ -1002,7 +1002,7 @@ func TestAccountServiceCreateOwnedAllowsOpenAIProWhenProxyHasCapacity(t *testing
 	repo := &ownedAccountDuplicateRepoStub{}
 	proxyRepo := &ownedAccountProxyRepoStub{
 		proxies: map[int64]*Proxy{
-			proxyID: {ID: proxyID, OwnerUserID: &ownerID, Status: StatusActive, MaxAccounts: 2},
+			proxyID: {ID: proxyID, Status: StatusActive, MaxAccounts: 2},
 		},
 		counts: map[int64]int64{proxyID: 1},
 	}
@@ -1133,7 +1133,7 @@ func TestAccountServiceCreateOwnedKeepsAllowedPersonalConcurrency(t *testing.T) 
 		},
 		proxyRepo: &ownedAccountProxyRepoStub{
 			proxies: map[int64]*Proxy{
-				proxyID: {ID: proxyID, OwnerUserID: &ownerID, Status: StatusActive, MaxAccounts: 2},
+				proxyID: {ID: proxyID, Status: StatusActive, MaxAccounts: 2},
 			},
 			counts: map[int64]int64{proxyID: 0},
 		},
@@ -1348,7 +1348,7 @@ func TestAccountServiceUpdateOwnedBindsProxyForRequiredOAuthAccount(t *testing.T
 		accountRepo: repo,
 		proxyRepo: &ownedAccountProxyRepoStub{
 			proxies: map[int64]*Proxy{
-				proxyID: {ID: proxyID, OwnerUserID: &ownerID, Status: StatusActive, MaxAccounts: 2},
+				proxyID: {ID: proxyID, Status: StatusActive, MaxAccounts: 2},
 			},
 			counts: map[int64]int64{proxyID: 0},
 		},
@@ -1466,7 +1466,7 @@ func TestAccountServiceUpdateOwnedAllowsOptionalProxyForNonRequiredOAuthAccount(
 		accountRepo: repo,
 		proxyRepo: &ownedAccountProxyRepoStub{
 			proxies: map[int64]*Proxy{
-				proxyID: {ID: proxyID, OwnerUserID: &ownerID, Status: StatusActive},
+				proxyID: {ID: proxyID, Status: StatusActive},
 			},
 		},
 	}

@@ -3493,7 +3493,22 @@ func (s *SettingService) SetOpenAIAccountLevelConfigs(ctx context.Context, confi
 	if err != nil {
 		return fmt.Errorf("marshal openai account levels: %w", err)
 	}
-	return s.settingRepo.Set(ctx, SettingKeyOpenAIAccountLevels, string(raw))
+	if err := s.settingRepo.Set(ctx, SettingKeyOpenAIAccountLevels, string(raw)); err != nil {
+		return err
+	}
+	// 账号等级是动态的：管理员删除某个等级后，仍绑在该等级上的代理会对所有账号
+	// 永久不可见。这里把 required_account_level 不再存在的代理重置为“所有等级可用”，
+	// 保持代理与等级配置同步。这是尽力而为的收尾，失败不回滚等级配置本身。
+	if s.proxyRepo != nil {
+		keepLevels := make([]string, 0, len(normalized))
+		for _, cfg := range normalized {
+			keepLevels = append(keepLevels, cfg.Key)
+		}
+		if _, err := s.proxyRepo.ResetRequiredAccountLevelNotIn(ctx, keepLevels); err != nil {
+			return fmt.Errorf("sync proxies to updated account levels: %w", err)
+		}
+	}
+	return nil
 }
 
 func clampAffiliateRebateRate(value float64) float64 {

@@ -1046,17 +1046,20 @@ async function submitBatchOperation(
     pendingOperationIdempotencyKey = ''
     operationSummary.value = summarizeOperation(operation, result)
     operationFailures.value = collectOperationFailures(operation, result)
-    selectedMemberIDs.value = new Set()
-    selectedCandidateIDs.value = new Set()
 
     if ((result.success || 0) > 0) {
+      // 有成功项才清空选择，避免整体失败时把用户的选择也一并清掉、无法原样重试。
+      selectedMemberIDs.value = new Set()
+      selectedCandidateIDs.value = new Set()
       emit('changed', {
         operation,
         success: result.success || 0,
         failed: result.failed || 0
       })
-      await refreshAll()
     }
+    // 无论成功与否都刷新：整体失败时服务端仍可能已发生部分变化，
+    // 不刷新会让面板停留在过期状态。
+    await refreshAll()
   } catch (error) {
     operationSummary.value = {
       tone: 'error',

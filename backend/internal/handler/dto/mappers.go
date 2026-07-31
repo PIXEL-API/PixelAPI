@@ -534,17 +534,19 @@ func ProxyFromService(p *service.Proxy) *Proxy {
 		return nil
 	}
 	return &Proxy{
-		ID:          p.ID,
-		Name:        p.Name,
-		Protocol:    p.Protocol,
-		Host:        p.Host,
-		Port:        p.Port,
-		Username:    p.Username,
-		OwnerUserID: p.OwnerUserID,
-		Status:      p.Status,
-		MaxAccounts: p.MaxAccounts,
-		CreatedAt:   p.CreatedAt,
-		UpdatedAt:   p.UpdatedAt,
+		ID:                   p.ID,
+		Name:                 p.Name,
+		Protocol:             p.Protocol,
+		Host:                 p.Host,
+		Port:                 p.Port,
+		Username:             p.Username,
+		OwnerUserID:          p.OwnerUserID,
+		Platform:             p.Platform,
+		RequiredAccountLevel: p.RequiredAccountLevel,
+		Status:               p.Status,
+		MaxAccounts:          p.MaxAccounts,
+		CreatedAt:            p.CreatedAt,
+		UpdatedAt:            p.UpdatedAt,
 	}
 }
 

@@ -796,13 +796,16 @@ func (m *mockGeminiProxyRepo) ListActive(ctx context.Context) ([]Proxy, error) {
 func (m *mockGeminiProxyRepo) ListActiveWithAccountCount(ctx context.Context) ([]ProxyWithAccountCount, error) {
 	panic("not impl")
 }
-func (m *mockGeminiProxyRepo) ListActiveVisibleWithAccountCount(ctx context.Context, userID int64) ([]ProxyWithAccountCount, error) {
+func (m *mockGeminiProxyRepo) ListActiveVisibleWithAccountCount(ctx context.Context, scope ProxyScope) ([]ProxyWithAccountCount, error) {
 	panic("not impl")
 }
-func (m *mockGeminiProxyRepo) GetVisibleByID(ctx context.Context, userID, id int64) (*Proxy, error) {
+func (m *mockGeminiProxyRepo) GetVisibleByID(ctx context.Context, scope ProxyScope, id int64) (*Proxy, error) {
 	panic("not impl")
 }
-func (m *mockGeminiProxyRepo) FindVisibleActiveByEndpoint(ctx context.Context, userID int64, protocol, host string, port int, username, password string) (*Proxy, error) {
+func (m *mockGeminiProxyRepo) FindVisibleActiveByEndpoint(ctx context.Context, scope ProxyScope, protocol, host string, port int, username, password string) (*Proxy, error) {
+	panic("not impl")
+}
+func (m *mockGeminiProxyRepo) ResetRequiredAccountLevelNotIn(ctx context.Context, keepLevels []string) (int64, error) {
 	panic("not impl")
 }
 func (m *mockGeminiProxyRepo) ExistsByHostPortAuth(ctx context.Context, host string, port int, username, password string) (bool, error) {

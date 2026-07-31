@@ -105,33 +105,30 @@ func (s *OpenAIOAuthService) PrivacyClientFactory() PrivacyClientFactory {
 	return s.privacyClientFactory
 }
 
-func (s *OpenAIOAuthService) EnsureProxyVisibleToUser(ctx context.Context, userID int64, proxyID *int64) error {
-	_, err := s.visibleProxyForUser(ctx, userID, proxyID)
+func (s *OpenAIOAuthService) EnsureProxyVisibleToUser(ctx context.Context, scope ProxyScope, proxyID *int64) error {
+	_, err := s.visibleProxyForScope(ctx, scope, proxyID)
 	return err
 }
 
-func (s *OpenAIOAuthService) VisibleProxyURLForUser(ctx context.Context, userID int64, proxyID *int64) (string, error) {
+func (s *OpenAIOAuthService) VisibleProxyURLForUser(ctx context.Context, scope ProxyScope, proxyID *int64) (string, error) {
 	if proxyID == nil || *proxyID <= 0 {
 		return "", nil
 	}
-	proxy, err := s.visibleProxyForUser(ctx, userID, proxyID)
+	proxy, err := s.visibleProxyForScope(ctx, scope, proxyID)
 	if err != nil {
 		return "", err
 	}
 	return proxy.URL(), nil
 }
 
-func (s *OpenAIOAuthService) visibleProxyForUser(ctx context.Context, userID int64, proxyID *int64) (*Proxy, error) {
-	if userID <= 0 {
-		return nil, ErrUserNotFound
-	}
+func (s *OpenAIOAuthService) visibleProxyForScope(ctx context.Context, scope ProxyScope, proxyID *int64) (*Proxy, error) {
 	if proxyID == nil || *proxyID <= 0 {
 		return nil, ErrAccountShareModeProxyRequired
 	}
 	if s == nil || s.proxyRepo == nil {
 		return nil, ErrServiceUnavailable
 	}
-	proxy, err := s.proxyRepo.GetVisibleByID(ctx, userID, *proxyID)
+	proxy, err := s.proxyRepo.GetVisibleByID(ctx, scope, *proxyID)
 	if err != nil {
 		return nil, err
 	}

@@ -1084,6 +1084,10 @@ export interface Proxy {
   username: string | null;
   password?: string | null;
   owner_user_id?: number | null;
+  // platform 为空表示通用代理（所有平台可用）。
+  platform?: string;
+  // required_account_level 为空表示所有账号等级可用。
+  required_account_level?: string;
   status: "active" | "inactive";
   max_accounts: number;
   account_count?: number; // Number of accounts using this proxy
@@ -1643,6 +1647,10 @@ export interface CreateProxyRequest {
   port: number;
   username?: string | null;
   password?: string | null;
+  // platform 为空表示通用代理（所有平台可用）。
+  platform?: string;
+  // required_account_level 为空表示所有账号等级可用。
+  required_account_level?: string;
   max_accounts?: number;
 }
 
@@ -1654,6 +1662,9 @@ export interface UpdateProxyRequest {
   username?: string | null;
   password?: string | null;
   status?: "active" | "inactive";
+  // platform / required_account_level 为空字符串分别表示通用代理 / 所有等级可用。
+  platform?: string;
+  required_account_level?: string;
   max_accounts?: number;
 }
 

@@ -1449,14 +1449,26 @@ func init() {
 	proxyDescPassword := proxyFields[5].Descriptor()
 	// proxy.PasswordValidator is a validator for the "password" field. It is called by the builders before save.
 	proxy.PasswordValidator = proxyDescPassword.Validators[0].(func(string) error)
+	// proxyDescPlatform is the schema descriptor for platform field.
+	proxyDescPlatform := proxyFields[7].Descriptor()
+	// proxy.DefaultPlatform holds the default value on creation for the platform field.
+	proxy.DefaultPlatform = proxyDescPlatform.Default.(string)
+	// proxy.PlatformValidator is a validator for the "platform" field. It is called by the builders before save.
+	proxy.PlatformValidator = proxyDescPlatform.Validators[0].(func(string) error)
+	// proxyDescRequiredAccountLevel is the schema descriptor for required_account_level field.
+	proxyDescRequiredAccountLevel := proxyFields[8].Descriptor()
+	// proxy.DefaultRequiredAccountLevel holds the default value on creation for the required_account_level field.
+	proxy.DefaultRequiredAccountLevel = proxyDescRequiredAccountLevel.Default.(string)
+	// proxy.RequiredAccountLevelValidator is a validator for the "required_account_level" field. It is called by the builders before save.
+	proxy.RequiredAccountLevelValidator = proxyDescRequiredAccountLevel.Validators[0].(func(string) error)
 	// proxyDescStatus is the schema descriptor for status field.
-	proxyDescStatus := proxyFields[7].Descriptor()
+	proxyDescStatus := proxyFields[9].Descriptor()
 	// proxy.DefaultStatus holds the default value on creation for the status field.
 	proxy.DefaultStatus = proxyDescStatus.Default.(string)
 	// proxy.StatusValidator is a validator for the "status" field. It is called by the builders before save.
 	proxy.StatusValidator = proxyDescStatus.Validators[0].(func(string) error)
 	// proxyDescMaxAccounts is the schema descriptor for max_accounts field.
-	proxyDescMaxAccounts := proxyFields[8].Descriptor()
+	proxyDescMaxAccounts := proxyFields[10].Descriptor()
 	// proxy.DefaultMaxAccounts holds the default value on creation for the max_accounts field.
 	proxy.DefaultMaxAccounts = proxyDescMaxAccounts.Default.(int)
 	redeemcodeFields := schema.RedeemCode{}.Fields()

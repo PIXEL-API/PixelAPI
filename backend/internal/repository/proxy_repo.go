@@ -40,7 +40,9 @@ func (r *proxyRepository) Create(ctx context.Context, proxyIn *service.Proxy) er
 		SetHost(proxyIn.Host).
 		SetPort(proxyIn.Port).
 		SetStatus(proxyIn.Status).
-		SetMaxAccounts(proxyIn.MaxAccounts)
+		SetMaxAccounts(proxyIn.MaxAccounts).
+		SetPlatform(service.NormalizeProxyPlatform(proxyIn.Platform)).
+		SetRequiredAccountLevel(service.NormalizeRequiredAccountLevel(proxyIn.RequiredAccountLevel))
 	if proxyIn.Username != "" {
 		builder.SetUsername(proxyIn.Username)
 	}
@@ -95,7 +97,9 @@ func (r *proxyRepository) Update(ctx context.Context, proxyIn *service.Proxy) er
 		SetHost(proxyIn.Host).
 		SetPort(proxyIn.Port).
 		SetStatus(proxyIn.Status).
-		SetMaxAccounts(proxyIn.MaxAccounts)
+		SetMaxAccounts(proxyIn.MaxAccounts).
+		SetPlatform(service.NormalizeProxyPlatform(proxyIn.Platform)).
+		SetRequiredAccountLevel(service.NormalizeRequiredAccountLevel(proxyIn.RequiredAccountLevel))
 	if proxyIn.Username != "" {
 		builder.SetUsername(proxyIn.Username)
 	} else {
@@ -293,9 +297,9 @@ func (r *proxyRepository) ListActive(ctx context.Context) ([]service.Proxy, erro
 	return outProxies, nil
 }
 
-func (r *proxyRepository) ListActiveVisibleWithAccountCount(ctx context.Context, userID int64) ([]service.ProxyWithAccountCount, error) {
+func (r *proxyRepository) ListActiveVisibleWithAccountCount(ctx context.Context, scope service.ProxyScope) ([]service.ProxyWithAccountCount, error) {
 	proxies, err := r.client.Proxy.Query().
-		Where(proxy.StatusEQ(service.StatusActive), visibleProxyPredicate(userID)).
+		Where(proxy.StatusEQ(service.StatusActive), visibleProxyPredicate(scope)).
 		Order(dbent.Desc(proxy.FieldCreatedAt)).
 		All(ctx)
 	if err != nil {
@@ -321,9 +325,9 @@ func (r *proxyRepository) ListActiveVisibleWithAccountCount(ctx context.Context,
 	return result, nil
 }
 
-func (r *proxyRepository) GetVisibleByID(ctx context.Context, userID, id int64) (*service.Proxy, error) {
+func (r *proxyRepository) GetVisibleByID(ctx context.Context, scope service.ProxyScope, id int64) (*service.Proxy, error) {
 	m, err := r.client.Proxy.Query().
-		Where(proxy.IDEQ(id), visibleProxyPredicate(userID)).
+		Where(proxy.IDEQ(id), visibleProxyPredicate(scope)).
 		Only(ctx)
 	if err != nil {
 		if dbent.IsNotFound(err) {
@@ -334,11 +338,11 @@ func (r *proxyRepository) GetVisibleByID(ctx context.Context, userID, id int64) 
 	return proxyEntityToService(m), nil
 }
 
-func (r *proxyRepository) FindVisibleActiveByEndpoint(ctx context.Context, userID int64, protocol, host string, port int, username, password string) (*service.Proxy, error) {
+func (r *proxyRepository) FindVisibleActiveByEndpoint(ctx context.Context, scope service.ProxyScope, protocol, host string, port int, username, password string) (*service.Proxy, error) {
 	q := r.client.Proxy.Query().
 		Where(
 			proxy.StatusEQ(service.StatusActive),
-			visibleProxyPredicate(userID),
+			visibleProxyPredicate(scope),
 			proxy.ProtocolEQ(protocol),
 			proxy.HostEQ(host),
 			proxy.PortEQ(port),
@@ -355,10 +359,7 @@ func (r *proxyRepository) FindVisibleActiveByEndpoint(ctx context.Context, userI
 		q = q.Where(proxy.PasswordEQ(password))
 	}
 
-	m, err := q.Order(
-		proxy.ByOwnerUserID(entsql.OrderDesc(), entsql.OrderNullsLast()),
-		dbent.Desc(proxy.FieldID),
-	).First(ctx)
+	m, err := q.Order(dbent.Desc(proxy.FieldID)).First(ctx)
 	if err != nil {
 		if dbent.IsNotFound(err) {
 			return nil, service.ErrProxyNotFound
@@ -368,11 +369,70 @@ func (r *proxyRepository) FindVisibleActiveByEndpoint(ctx context.Context, userI
 	return proxyEntityToService(m), nil
 }
 
-func visibleProxyPredicate(userID int64) predicate.Proxy {
-	if userID <= 0 {
-		return proxy.OwnerUserIDIsNil()
+// visibleProxyPredicate 按“账号平台 + 账号等级”筛选可用代理。
+// 自本次更新起用户不能再上传代理，用户端只能选择平台代理（owner_user_id IS NULL），
+// 平台/等级为空的代理分别表示通用代理与所有等级可用。
+//
+// 归属豁免（grandfather）：更新前已存在的自有代理保留其 owner_user_id。
+// 当 scope.OwnerUserID > 0（账号重新鉴权/更新等场景）时，除平台代理外，
+// 还额外放行该用户名下的遗留自有代理，避免老用户的既有绑定在重新鉴权时掉线。
+func visibleProxyPredicate(scope service.ProxyScope) predicate.Proxy {
+	normalized := scope.Normalized()
+
+	platformPreds := []predicate.Proxy{proxy.OwnerUserIDIsNil()}
+	if normalized.Platform == "" {
+		platformPreds = append(platformPreds, proxy.PlatformEQ(""))
+	} else {
+		platformPreds = append(platformPreds, proxy.Or(proxy.PlatformEQ(""), proxy.PlatformEQ(normalized.Platform)))
 	}
-	return proxy.Or(proxy.OwnerUserIDIsNil(), proxy.OwnerUserIDEQ(userID))
+	if normalized.AccountLevel == "" {
+		platformPreds = append(platformPreds, proxy.RequiredAccountLevelEQ(""))
+	} else {
+		platformPreds = append(platformPreds, proxy.Or(
+			proxy.RequiredAccountLevelEQ(""),
+			proxy.RequiredAccountLevelEQ(normalized.AccountLevel),
+		))
+	}
+	platformProxy := proxy.And(platformPreds...)
+
+	if normalized.OwnerUserID <= 0 {
+		return platformProxy
+	}
+	// 平台代理 或 该用户的遗留自有代理。
+	return proxy.Or(platformProxy, proxy.OwnerUserIDEQ(normalized.OwnerUserID))
+}
+
+// ResetRequiredAccountLevelNotIn 将 required_account_level 落在 keepLevels 之外的代理
+// 重置为 ''（所有等级可用）。'' 本身始终保留。用于账号等级被删除后同步代理，
+// 避免代理被永久绑死在一个已不存在的等级上而对所有账号不可见。
+func (r *proxyRepository) ResetRequiredAccountLevelNotIn(ctx context.Context, keepLevels []string) (int64, error) {
+	keep := make([]string, 0, len(keepLevels)+1)
+	seen := map[string]struct{}{"": {}}
+	keep = append(keep, "")
+	for _, level := range keepLevels {
+		normalized := service.NormalizeRequiredAccountLevel(level)
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		keep = append(keep, normalized)
+	}
+
+	predicates := []predicate.Proxy{
+		proxy.RequiredAccountLevelNEQ(""),
+		proxy.RequiredAccountLevelNotIn(keep...),
+	}
+	affected, err := r.client.Proxy.Update().
+		Where(proxy.And(predicates...)).
+		SetRequiredAccountLevel("").
+		Save(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return int64(affected), nil
 }
 
 // ExistsByHostPortAuth checks if a proxy with the same host, port, username, and password exists
@@ -510,16 +570,18 @@ func proxyEntityToService(m *dbent.Proxy) *service.Proxy {
 		return nil
 	}
 	out := &service.Proxy{
-		ID:          m.ID,
-		Name:        m.Name,
-		Protocol:    m.Protocol,
-		Host:        m.Host,
-		Port:        m.Port,
-		OwnerUserID: m.OwnerUserID,
-		Status:      m.Status,
-		MaxAccounts: m.MaxAccounts,
-		CreatedAt:   m.CreatedAt,
-		UpdatedAt:   m.UpdatedAt,
+		ID:                   m.ID,
+		Name:                 m.Name,
+		Protocol:             m.Protocol,
+		Host:                 m.Host,
+		Port:                 m.Port,
+		OwnerUserID:          m.OwnerUserID,
+		Platform:             m.Platform,
+		RequiredAccountLevel: m.RequiredAccountLevel,
+		Status:               m.Status,
+		MaxAccounts:          m.MaxAccounts,
+		CreatedAt:            m.CreatedAt,
+		UpdatedAt:            m.UpdatedAt,
 	}
 	if m.Username != nil {
 		out.Username = *m.Username
@@ -536,6 +598,8 @@ func applyProxyEntityToService(dst *service.Proxy, src *dbent.Proxy) {
 	}
 	dst.ID = src.ID
 	dst.OwnerUserID = src.OwnerUserID
+	dst.Platform = src.Platform
+	dst.RequiredAccountLevel = src.RequiredAccountLevel
 	dst.MaxAccounts = src.MaxAccounts
 	dst.CreatedAt = src.CreatedAt
 	dst.UpdatedAt = src.UpdatedAt

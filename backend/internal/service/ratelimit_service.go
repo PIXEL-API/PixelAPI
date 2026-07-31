@@ -62,10 +62,23 @@ const (
 	openAI403CooldownMinutesDefault = 10
 	openAI403DisableThreshold       = 3
 	openAI403CounterWindowMinutes   = 180
-	openAIModelCapacityCooldown     = 2 * time.Minute
-	openAITransientCapacityCooldown = 2 * time.Minute
 	upstreamModelNotFoundCooldown   = 30 * time.Minute
+
+	// openAITransientCapacityCounterGrace 瞬时容量错误连续计数的宽限期。
+	// 上一次冷却结束后超过该时长才再次命中，视为新一轮上游波动，重新从最短档开始。
+	openAITransientCapacityCounterGrace = time.Minute
 )
+
+// openAITransientCapacityCooldownSteps OpenAI 瞬时容量错误（server_is_overloaded /
+// too_many_pending / model capacity）的递增冷却梯度。
+// 这类错误反映上游实时负载波动，不代表账号本身异常：首次命中只做很短的冷却，
+// 只有连续命中才逐级延长，上限保持 2 分钟，避免健康账号被长时间踢出轮转。
+var openAITransientCapacityCooldownSteps = []time.Duration{
+	15 * time.Second,
+	30 * time.Second,
+	time.Minute,
+	2 * time.Minute,
+}
 
 var cloudflareChallengeCooldownSteps = []time.Duration{
 	30 * time.Second,
@@ -138,12 +151,6 @@ func (s *RateLimitService) CheckErrorPolicy(ctx context.Context, account *Accoun
 // HandleUpstreamError 处理上游错误响应，标记账号状态
 // 返回是否应该停止该账号的调度
 func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte) (shouldDisable bool) {
-	if statusCode != 529 && account != nil && account.Platform == PlatformOpenAI {
-		if matchedKeyword := classifyOpenAITransientCapacityError(statusCode, "", responseBody); matchedKeyword != "" {
-			return s.handleOpenAITransientCapacityError(ctx, account, statusCode, matchedKeyword, responseBody)
-		}
-	}
-
 	customErrorCodesEnabled := account.IsCustomErrorCodesEnabled()
 
 	// 池模式默认不标记本地账号状态；仅当用户显式配置自定义错误码时按本地策略处理。
@@ -157,6 +164,13 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 	if !account.ShouldHandleErrorCode(statusCode) {
 		slog.Info("account_error_code_skipped", "account_id", account.ID, "status_code", statusCode)
 		return false
+	}
+
+	// OpenAI 瞬时容量错误：在自定义错误码门之后检查，允许池模式/自定义错误码账号选择退出
+	if statusCode != 529 && account.Platform == PlatformOpenAI {
+		if matchedKeyword := classifyOpenAITransientCapacityError(statusCode, "", responseBody); matchedKeyword != "" {
+			return s.handleOpenAITransientCapacityError(ctx, account, statusCode, matchedKeyword, responseBody)
+		}
 	}
 
 	if httputil.IsCloudflareChallengeResponse(statusCode, headers, responseBody) {
@@ -404,14 +418,16 @@ func (s *RateLimitService) handleOpenAITransientCapacityError(ctx context.Contex
 	}
 
 	now := time.Now()
-	until := now.Add(openAITransientCapacityCooldownFor(matchedKeyword))
+	consecutiveCount := nextOpenAITransientCapacityCount(account, now)
+	until := now.Add(openAITransientCapacityCooldownForCount(consecutiveCount))
 	state := &TempUnschedState{
-		UntilUnix:       until.Unix(),
-		TriggeredAtUnix: now.Unix(),
-		StatusCode:      statusCode,
-		MatchedKeyword:  matchedKeyword,
-		RuleIndex:       -1,
-		ErrorMessage:    truncateTempUnschedMessage(responseBody, tempUnschedMessageMaxBytes),
+		UntilUnix:        until.Unix(),
+		TriggeredAtUnix:  now.Unix(),
+		StatusCode:       statusCode,
+		MatchedKeyword:   matchedKeyword,
+		RuleIndex:        -1,
+		ErrorMessage:     truncateTempUnschedMessage(responseBody, tempUnschedMessageMaxBytes),
+		ConsecutiveCount: consecutiveCount,
 	}
 
 	reason := ""
@@ -426,23 +442,59 @@ func (s *RateLimitService) handleOpenAITransientCapacityError(ctx context.Contex
 		slog.Warn("openai_transient_capacity_temp_unsched_failed", "account_id", account.ID, "status_code", statusCode, "matched_keyword", matchedKeyword, "error", err)
 		return false
 	}
+	// 与 Cloudflare 挑战一致：同步内存态，使同一账号的后续命中能读回连续计数并逐级升档。
+	account.TempUnschedulableUntil = &until
+	account.TempUnschedulableReason = reason
+
 	if s.tempUnschedCache != nil {
 		if err := s.tempUnschedCache.SetTempUnsched(ctx, account.ID, state); err != nil {
 			slog.Warn("openai_transient_capacity_temp_unsched_cache_failed", "account_id", account.ID, "matched_keyword", matchedKeyword, "error", err)
 		}
 	}
 
-	slog.Info("openai_transient_capacity_temp_unscheduled", "account_id", account.ID, "status_code", statusCode, "matched_keyword", matchedKeyword, "until", until)
+	slog.Info("openai_transient_capacity_temp_unscheduled", "account_id", account.ID, "status_code", statusCode, "matched_keyword", matchedKeyword, "until", until, "consecutive_count", consecutiveCount)
 	return true
 }
 
-func openAITransientCapacityCooldownFor(matchedKeyword string) time.Duration {
-	switch matchedKeyword {
-	case "openai_model_capacity":
-		return openAIModelCapacityCooldown
+// isOpenAITransientCapacityKeyword 判断 TempUnschedState 里记录的关键字是否属于瞬时容量类。
+func isOpenAITransientCapacityKeyword(keyword string) bool {
+	switch keyword {
+	case "openai_model_capacity", "openai_too_many_pending", "openai_upstream_overloaded":
+		return true
 	default:
-		return openAITransientCapacityCooldown
+		return false
 	}
+}
+
+// nextOpenAITransientCapacityCount 计算本次瞬时容量错误的连续命中次数。
+// 上一次冷却结束后超过宽限期才再次命中，视为新一轮上游波动，从 1 重新开始。
+func nextOpenAITransientCapacityCount(account *Account, now time.Time) int {
+	if account == nil || account.TempUnschedulableUntil == nil ||
+		now.After(account.TempUnschedulableUntil.Add(openAITransientCapacityCounterGrace)) {
+		return 1
+	}
+	var previous TempUnschedState
+	if err := json.Unmarshal([]byte(account.TempUnschedulableReason), &previous); err != nil {
+		return 1
+	}
+	if !isOpenAITransientCapacityKeyword(previous.MatchedKeyword) {
+		return 1
+	}
+	if previous.ConsecutiveCount < 1 {
+		return 2
+	}
+	return previous.ConsecutiveCount + 1
+}
+
+func openAITransientCapacityCooldownForCount(count int) time.Duration {
+	if count <= 1 {
+		return openAITransientCapacityCooldownSteps[0]
+	}
+	index := count - 1
+	if index >= len(openAITransientCapacityCooldownSteps) {
+		index = len(openAITransientCapacityCooldownSteps) - 1
+	}
+	return openAITransientCapacityCooldownSteps[index]
 }
 
 // PreCheckUsage proactively checks local quota before dispatching a request.

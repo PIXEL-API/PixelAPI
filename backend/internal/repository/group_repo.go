@@ -126,9 +126,13 @@ func (r *groupRepository) GetByID(ctx context.Context, id int64) (*service.Group
 	if err != nil {
 		return nil, err
 	}
-	total, active, _ := r.GetAccountCount(ctx, out.ID)
-	out.AccountCount = total
-	out.ActiveAccountCount = active
+	counts, err := r.loadAccountCounts(ctx, []int64{out.ID})
+	if err != nil {
+		return nil, err
+	}
+	c := counts[out.ID]
+	out.AccountCount = c.Total
+	out.ActiveAccountCount = c.Active
 	return out, nil
 }
 

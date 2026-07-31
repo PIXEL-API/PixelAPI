@@ -105,6 +105,16 @@ func OwnerUserID(v int64) predicate.Proxy {
 	return predicate.Proxy(sql.FieldEQ(FieldOwnerUserID, v))
 }
 
+// Platform applies equality check predicate on the "platform" field. It's identical to PlatformEQ.
+func Platform(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldEQ(FieldPlatform, v))
+}
+
+// RequiredAccountLevel applies equality check predicate on the "required_account_level" field. It's identical to RequiredAccountLevelEQ.
+func RequiredAccountLevel(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldEQ(FieldRequiredAccountLevel, v))
+}
+
 // Status applies equality check predicate on the "status" field. It's identical to StatusEQ.
 func Status(v string) predicate.Proxy {
 	return predicate.Proxy(sql.FieldEQ(FieldStatus, v))
@@ -658,6 +668,136 @@ func OwnerUserIDIsNil() predicate.Proxy {
 // OwnerUserIDNotNil applies the NotNil predicate on the "owner_user_id" field.
 func OwnerUserIDNotNil() predicate.Proxy {
 	return predicate.Proxy(sql.FieldNotNull(FieldOwnerUserID))
+}
+
+// PlatformEQ applies the EQ predicate on the "platform" field.
+func PlatformEQ(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldEQ(FieldPlatform, v))
+}
+
+// PlatformNEQ applies the NEQ predicate on the "platform" field.
+func PlatformNEQ(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldNEQ(FieldPlatform, v))
+}
+
+// PlatformIn applies the In predicate on the "platform" field.
+func PlatformIn(vs ...string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldIn(FieldPlatform, vs...))
+}
+
+// PlatformNotIn applies the NotIn predicate on the "platform" field.
+func PlatformNotIn(vs ...string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldNotIn(FieldPlatform, vs...))
+}
+
+// PlatformGT applies the GT predicate on the "platform" field.
+func PlatformGT(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldGT(FieldPlatform, v))
+}
+
+// PlatformGTE applies the GTE predicate on the "platform" field.
+func PlatformGTE(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldGTE(FieldPlatform, v))
+}
+
+// PlatformLT applies the LT predicate on the "platform" field.
+func PlatformLT(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldLT(FieldPlatform, v))
+}
+
+// PlatformLTE applies the LTE predicate on the "platform" field.
+func PlatformLTE(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldLTE(FieldPlatform, v))
+}
+
+// PlatformContains applies the Contains predicate on the "platform" field.
+func PlatformContains(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldContains(FieldPlatform, v))
+}
+
+// PlatformHasPrefix applies the HasPrefix predicate on the "platform" field.
+func PlatformHasPrefix(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldHasPrefix(FieldPlatform, v))
+}
+
+// PlatformHasSuffix applies the HasSuffix predicate on the "platform" field.
+func PlatformHasSuffix(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldHasSuffix(FieldPlatform, v))
+}
+
+// PlatformEqualFold applies the EqualFold predicate on the "platform" field.
+func PlatformEqualFold(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldEqualFold(FieldPlatform, v))
+}
+
+// PlatformContainsFold applies the ContainsFold predicate on the "platform" field.
+func PlatformContainsFold(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldContainsFold(FieldPlatform, v))
+}
+
+// RequiredAccountLevelEQ applies the EQ predicate on the "required_account_level" field.
+func RequiredAccountLevelEQ(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldEQ(FieldRequiredAccountLevel, v))
+}
+
+// RequiredAccountLevelNEQ applies the NEQ predicate on the "required_account_level" field.
+func RequiredAccountLevelNEQ(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldNEQ(FieldRequiredAccountLevel, v))
+}
+
+// RequiredAccountLevelIn applies the In predicate on the "required_account_level" field.
+func RequiredAccountLevelIn(vs ...string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldIn(FieldRequiredAccountLevel, vs...))
+}
+
+// RequiredAccountLevelNotIn applies the NotIn predicate on the "required_account_level" field.
+func RequiredAccountLevelNotIn(vs ...string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldNotIn(FieldRequiredAccountLevel, vs...))
+}
+
+// RequiredAccountLevelGT applies the GT predicate on the "required_account_level" field.
+func RequiredAccountLevelGT(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldGT(FieldRequiredAccountLevel, v))
+}
+
+// RequiredAccountLevelGTE applies the GTE predicate on the "required_account_level" field.
+func RequiredAccountLevelGTE(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldGTE(FieldRequiredAccountLevel, v))
+}
+
+// RequiredAccountLevelLT applies the LT predicate on the "required_account_level" field.
+func RequiredAccountLevelLT(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldLT(FieldRequiredAccountLevel, v))
+}
+
+// RequiredAccountLevelLTE applies the LTE predicate on the "required_account_level" field.
+func RequiredAccountLevelLTE(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldLTE(FieldRequiredAccountLevel, v))
+}
+
+// RequiredAccountLevelContains applies the Contains predicate on the "required_account_level" field.
+func RequiredAccountLevelContains(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldContains(FieldRequiredAccountLevel, v))
+}
+
+// RequiredAccountLevelHasPrefix applies the HasPrefix predicate on the "required_account_level" field.
+func RequiredAccountLevelHasPrefix(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldHasPrefix(FieldRequiredAccountLevel, v))
+}
+
+// RequiredAccountLevelHasSuffix applies the HasSuffix predicate on the "required_account_level" field.
+func RequiredAccountLevelHasSuffix(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldHasSuffix(FieldRequiredAccountLevel, v))
+}
+
+// RequiredAccountLevelEqualFold applies the EqualFold predicate on the "required_account_level" field.
+func RequiredAccountLevelEqualFold(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldEqualFold(FieldRequiredAccountLevel, v))
+}
+
+// RequiredAccountLevelContainsFold applies the ContainsFold predicate on the "required_account_level" field.
+func RequiredAccountLevelContainsFold(v string) predicate.Proxy {
+	return predicate.Proxy(sql.FieldContainsFold(FieldRequiredAccountLevel, v))
 }
 
 // StatusEQ applies the EQ predicate on the "status" field.

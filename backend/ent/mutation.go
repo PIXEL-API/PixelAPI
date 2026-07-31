@@ -30569,31 +30569,33 @@ func (m *PromoCodeUsageMutation) ResetEdge(name string) error {
 // ProxyMutation represents an operation that mutates the Proxy nodes in the graph.
 type ProxyMutation struct {
 	config
-	op              Op
-	typ             string
-	id              *int64
-	created_at      *time.Time
-	updated_at      *time.Time
-	deleted_at      *time.Time
-	name            *string
-	protocol        *string
-	host            *string
-	port            *int
-	addport         *int
-	username        *string
-	password        *string
-	status          *string
-	max_accounts    *int
-	addmax_accounts *int
-	clearedFields   map[string]struct{}
-	accounts        map[int64]struct{}
-	removedaccounts map[int64]struct{}
-	clearedaccounts bool
-	owner           *int64
-	clearedowner    bool
-	done            bool
-	oldValue        func(context.Context) (*Proxy, error)
-	predicates      []predicate.Proxy
+	op                     Op
+	typ                    string
+	id                     *int64
+	created_at             *time.Time
+	updated_at             *time.Time
+	deleted_at             *time.Time
+	name                   *string
+	protocol               *string
+	host                   *string
+	port                   *int
+	addport                *int
+	username               *string
+	password               *string
+	platform               *string
+	required_account_level *string
+	status                 *string
+	max_accounts           *int
+	addmax_accounts        *int
+	clearedFields          map[string]struct{}
+	accounts               map[int64]struct{}
+	removedaccounts        map[int64]struct{}
+	clearedaccounts        bool
+	owner                  *int64
+	clearedowner           bool
+	done                   bool
+	oldValue               func(context.Context) (*Proxy, error)
+	predicates             []predicate.Proxy
 }
 
 var _ ent.Mutation = (*ProxyMutation)(nil)
@@ -31126,6 +31128,78 @@ func (m *ProxyMutation) ResetOwnerUserID() {
 	delete(m.clearedFields, proxy.FieldOwnerUserID)
 }
 
+// SetPlatform sets the "platform" field.
+func (m *ProxyMutation) SetPlatform(s string) {
+	m.platform = &s
+}
+
+// Platform returns the value of the "platform" field in the mutation.
+func (m *ProxyMutation) Platform() (r string, exists bool) {
+	v := m.platform
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPlatform returns the old "platform" field's value of the Proxy entity.
+// If the Proxy object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ProxyMutation) OldPlatform(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPlatform is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPlatform requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPlatform: %w", err)
+	}
+	return oldValue.Platform, nil
+}
+
+// ResetPlatform resets all changes to the "platform" field.
+func (m *ProxyMutation) ResetPlatform() {
+	m.platform = nil
+}
+
+// SetRequiredAccountLevel sets the "required_account_level" field.
+func (m *ProxyMutation) SetRequiredAccountLevel(s string) {
+	m.required_account_level = &s
+}
+
+// RequiredAccountLevel returns the value of the "required_account_level" field in the mutation.
+func (m *ProxyMutation) RequiredAccountLevel() (r string, exists bool) {
+	v := m.required_account_level
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRequiredAccountLevel returns the old "required_account_level" field's value of the Proxy entity.
+// If the Proxy object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ProxyMutation) OldRequiredAccountLevel(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRequiredAccountLevel is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRequiredAccountLevel requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRequiredAccountLevel: %w", err)
+	}
+	return oldValue.RequiredAccountLevel, nil
+}
+
+// ResetRequiredAccountLevel resets all changes to the "required_account_level" field.
+func (m *ProxyMutation) ResetRequiredAccountLevel() {
+	m.required_account_level = nil
+}
+
 // SetStatus sets the "status" field.
 func (m *ProxyMutation) SetStatus(s string) {
 	m.status = &s
@@ -31346,7 +31420,7 @@ func (m *ProxyMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ProxyMutation) Fields() []string {
-	fields := make([]string, 0, 12)
+	fields := make([]string, 0, 14)
 	if m.created_at != nil {
 		fields = append(fields, proxy.FieldCreatedAt)
 	}
@@ -31376,6 +31450,12 @@ func (m *ProxyMutation) Fields() []string {
 	}
 	if m.owner != nil {
 		fields = append(fields, proxy.FieldOwnerUserID)
+	}
+	if m.platform != nil {
+		fields = append(fields, proxy.FieldPlatform)
+	}
+	if m.required_account_level != nil {
+		fields = append(fields, proxy.FieldRequiredAccountLevel)
 	}
 	if m.status != nil {
 		fields = append(fields, proxy.FieldStatus)
@@ -31411,6 +31491,10 @@ func (m *ProxyMutation) Field(name string) (ent.Value, bool) {
 		return m.Password()
 	case proxy.FieldOwnerUserID:
 		return m.OwnerUserID()
+	case proxy.FieldPlatform:
+		return m.Platform()
+	case proxy.FieldRequiredAccountLevel:
+		return m.RequiredAccountLevel()
 	case proxy.FieldStatus:
 		return m.Status()
 	case proxy.FieldMaxAccounts:
@@ -31444,6 +31528,10 @@ func (m *ProxyMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldPassword(ctx)
 	case proxy.FieldOwnerUserID:
 		return m.OldOwnerUserID(ctx)
+	case proxy.FieldPlatform:
+		return m.OldPlatform(ctx)
+	case proxy.FieldRequiredAccountLevel:
+		return m.OldRequiredAccountLevel(ctx)
 	case proxy.FieldStatus:
 		return m.OldStatus(ctx)
 	case proxy.FieldMaxAccounts:
@@ -31526,6 +31614,20 @@ func (m *ProxyMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetOwnerUserID(v)
+		return nil
+	case proxy.FieldPlatform:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPlatform(v)
+		return nil
+	case proxy.FieldRequiredAccountLevel:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRequiredAccountLevel(v)
 		return nil
 	case proxy.FieldStatus:
 		v, ok := value.(string)
@@ -31673,6 +31775,12 @@ func (m *ProxyMutation) ResetField(name string) error {
 		return nil
 	case proxy.FieldOwnerUserID:
 		m.ResetOwnerUserID()
+		return nil
+	case proxy.FieldPlatform:
+		m.ResetPlatform()
+		return nil
+	case proxy.FieldRequiredAccountLevel:
+		m.ResetRequiredAccountLevel()
 		return nil
 	case proxy.FieldStatus:
 		m.ResetStatus()

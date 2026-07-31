@@ -24,9 +24,10 @@ type stubAdminService struct {
 	updatedProxyIDs      []int64
 	updatedProxies       []*service.UpdateProxyInput
 	testedProxyIDs       []int64
-	createAccountErr     error
-	updateAccountErr     error
-	bulkUpdateAccountErr error
+	createAccountErr      error
+	updateAccountErr      error
+	bulkUpdateAccountErr  error
+	bulkUpdateAccountFunc func(input *service.BulkUpdateAccountsInput) (*service.BulkUpdateAccountsResult, error)
 	checkMixedErr        error
 	lastMixedCheck       struct {
 		accountID int64
@@ -412,6 +413,9 @@ func (s *stubAdminService) SetAccountSchedulable(ctx context.Context, id int64, 
 }
 
 func (s *stubAdminService) BulkUpdateAccounts(ctx context.Context, input *service.BulkUpdateAccountsInput) (*service.BulkUpdateAccountsResult, error) {
+	if s.bulkUpdateAccountFunc != nil {
+		return s.bulkUpdateAccountFunc(input)
+	}
 	if s.bulkUpdateAccountErr != nil {
 		return nil, s.bulkUpdateAccountErr
 	}

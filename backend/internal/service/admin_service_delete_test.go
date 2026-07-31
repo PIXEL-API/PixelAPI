@@ -285,16 +285,20 @@ func (s *proxyRepoStub) ListActiveWithAccountCount(ctx context.Context) ([]Proxy
 	panic("unexpected ListActiveWithAccountCount call")
 }
 
-func (s *proxyRepoStub) ListActiveVisibleWithAccountCount(ctx context.Context, userID int64) ([]ProxyWithAccountCount, error) {
+func (s *proxyRepoStub) ListActiveVisibleWithAccountCount(ctx context.Context, scope ProxyScope) ([]ProxyWithAccountCount, error) {
 	panic("unexpected ListActiveVisibleWithAccountCount call")
 }
 
-func (s *proxyRepoStub) GetVisibleByID(ctx context.Context, userID, id int64) (*Proxy, error) {
+func (s *proxyRepoStub) GetVisibleByID(ctx context.Context, scope ProxyScope, id int64) (*Proxy, error) {
 	panic("unexpected GetVisibleByID call")
 }
 
-func (s *proxyRepoStub) FindVisibleActiveByEndpoint(ctx context.Context, userID int64, protocol, host string, port int, username, password string) (*Proxy, error) {
+func (s *proxyRepoStub) FindVisibleActiveByEndpoint(ctx context.Context, scope ProxyScope, protocol, host string, port int, username, password string) (*Proxy, error) {
 	panic("unexpected FindVisibleActiveByEndpoint call")
+}
+
+func (s *proxyRepoStub) ResetRequiredAccountLevelNotIn(ctx context.Context, keepLevels []string) (int64, error) {
+	panic("unexpected ResetRequiredAccountLevelNotIn call")
 }
 
 func (s *proxyRepoStub) ListWithFiltersAndAccountCount(ctx context.Context, params pagination.PaginationParams, protocol, status, search string) ([]ProxyWithAccountCount, *pagination.PaginationResult, error) {

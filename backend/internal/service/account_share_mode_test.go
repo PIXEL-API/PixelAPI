@@ -728,8 +728,8 @@ func (r *accountShareModeProxyRepoStub) Delete(_ context.Context, id int64) erro
 	return r.deleteErr
 }
 
-func (r *accountShareModeProxyRepoStub) GetVisibleByID(_ context.Context, userID, id int64) (*Proxy, error) {
-	r.getVisibleUserID = userID
+func (r *accountShareModeProxyRepoStub) GetVisibleByID(_ context.Context, scope ProxyScope, id int64) (*Proxy, error) {
+	r.getVisibleUserID = scope.OwnerUserID
 	r.getVisibleID = id
 	r.getVisibleCalls++
 	if r.getVisibleErr != nil {
@@ -741,14 +741,14 @@ func (r *accountShareModeProxyRepoStub) GetVisibleByID(_ context.Context, userID
 	return &Proxy{ID: 7, Name: "proxy", Protocol: "socks5", Host: "127.0.0.1", Port: 1080, Status: StatusActive}, nil
 }
 
-func (r *accountShareModeProxyRepoStub) ListActiveVisibleWithAccountCount(context.Context, int64) ([]ProxyWithAccountCount, error) {
+func (r *accountShareModeProxyRepoStub) ListActiveVisibleWithAccountCount(context.Context, ProxyScope) ([]ProxyWithAccountCount, error) {
 	if r.proxy != nil {
 		return []ProxyWithAccountCount{{Proxy: *r.proxy}}, nil
 	}
 	return []ProxyWithAccountCount{}, nil
 }
 
-func (r *accountShareModeProxyRepoStub) FindVisibleActiveByEndpoint(context.Context, int64, string, string, int, string, string) (*Proxy, error) {
+func (r *accountShareModeProxyRepoStub) FindVisibleActiveByEndpoint(context.Context, ProxyScope, string, string, int, string, string) (*Proxy, error) {
 	if r.proxy != nil {
 		return r.proxy, nil
 	}
@@ -2180,212 +2180,6 @@ func TestAccountShareModeCreateAnthropicListingDefaultsQuotaLimitPercents(t *tes
 	}
 	if got := repo.createdAccount.Extra["anthropic_7d_limit_percent"]; got != AnthropicQuotaDefaultLimitPercent {
 		t.Fatalf("expected account 7d anthropic limit extra, got %v", got)
-	}
-}
-
-func TestAccountShareModeCreateUserProxyAssignsCurrentOwner(t *testing.T) {
-	proxyRepo := &accountShareModeProxyRepoStub{}
-	svc := &AccountShareModeService{proxyRepo: proxyRepo}
-
-	got, err := svc.CreateUserProxy(context.Background(), 42, CreateAccountShareProxyInput{
-		Name:     " 我的代理 ",
-		Protocol: " SOCKS5 ",
-		Host:     " 192.168.0.1 ",
-		Port:     8000,
-		Username: " user ",
-		Password: " pass ",
-	})
-	if err != nil {
-		t.Fatalf("CreateUserProxy failed: %v", err)
-	}
-	if got.OwnerUserID == nil || *got.OwnerUserID != 42 {
-		t.Fatalf("expected owner_user_id=42, got %#v", got.OwnerUserID)
-	}
-	if got.Name != "我的代理" {
-		t.Fatalf("expected trimmed proxy name, got %q", got.Name)
-	}
-	if got.Protocol != "socks5" || got.Host != "192.168.0.1" || got.Username != "user" || got.Password != "pass" {
-		t.Fatalf("proxy normalization mismatch: %#v", got)
-	}
-}
-
-func TestAccountShareModeCreateUserProxyDoesNotAdoptPlatformProxy(t *testing.T) {
-	ownerID := int64(42)
-	proxyRepo := &accountShareModeProxyRepoStub{proxy: &Proxy{
-		ID: 7, Name: "platform", Protocol: "http", Host: "proxy.example.com", Port: 8080,
-		Status: StatusActive,
-	}}
-	svc := &AccountShareModeService{proxyRepo: proxyRepo}
-
-	created, err := svc.CreateUserProxy(context.Background(), ownerID, CreateAccountShareProxyInput{
-		Name: "mine", Protocol: "http", Host: "proxy.example.com", Port: 8080,
-	})
-	if err != nil {
-		t.Fatalf("CreateUserProxy failed: %v", err)
-	}
-	if proxyRepo.createCalls != 1 {
-		t.Fatalf("expected a user-owned proxy to be created, got %d create calls", proxyRepo.createCalls)
-	}
-	if created.OwnerUserID == nil || *created.OwnerUserID != ownerID {
-		t.Fatalf("expected owner %d, got %#v", ownerID, created.OwnerUserID)
-	}
-}
-
-func TestAccountShareModeUpdateUserProxyUpdatesOwnedProxyAndPreservesProtectedFields(t *testing.T) {
-	ownerID := int64(42)
-	createdAt := time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC)
-	proxyRepo := &accountShareModeProxyRepoStub{proxy: &Proxy{
-		ID: 7, Name: "旧名称", Protocol: "http", Host: "old.example.com", Port: 8080,
-		Username: "old-user", Password: "old-pass", OwnerUserID: &ownerID,
-		Status: StatusActive, MaxAccounts: 3, CreatedAt: createdAt,
-	}}
-	svc := &AccountShareModeService{proxyRepo: proxyRepo}
-
-	password := " new-pass "
-	got, err := svc.UpdateUserProxy(context.Background(), ownerID, 7, UpdateAccountShareProxyInput{
-		Name: " 新名称 ", Protocol: " SOCKS5 ", Host: " proxy.example.com ", Port: 1080,
-		Username: " new-user ", Password: &password,
-	})
-	if err != nil {
-		t.Fatalf("UpdateUserProxy failed: %v", err)
-	}
-	if proxyRepo.updateCalls != 1 {
-		t.Fatalf("expected one update call, got %d", proxyRepo.updateCalls)
-	}
-	if got.Name != "新名称" || got.Protocol != "socks5" || got.Host != "proxy.example.com" || got.Port != 1080 || got.Username != "new-user" || got.Password != "new-pass" {
-		t.Fatalf("unexpected updated proxy: %#v", got)
-	}
-	if got.ID != 7 || got.OwnerUserID == nil || *got.OwnerUserID != ownerID || got.Status != StatusActive || got.MaxAccounts != 3 || !got.CreatedAt.Equal(createdAt) {
-		t.Fatalf("protected fields changed: %#v", got)
-	}
-}
-
-func TestAccountShareModeUpdateUserProxyKeepsPasswordWhenOmitted(t *testing.T) {
-	ownerID := int64(42)
-	proxyRepo := &accountShareModeProxyRepoStub{proxy: &Proxy{
-		ID: 7, Name: "proxy", Protocol: "http", Host: "old.example.com", Port: 8080,
-		Password: "secret", OwnerUserID: &ownerID, Status: StatusActive,
-	}}
-	svc := &AccountShareModeService{proxyRepo: proxyRepo}
-
-	got, err := svc.UpdateUserProxy(context.Background(), ownerID, 7, UpdateAccountShareProxyInput{
-		Name: "proxy", Protocol: "http", Host: "new.example.com", Port: 8081,
-	})
-	if err != nil {
-		t.Fatalf("UpdateUserProxy failed: %v", err)
-	}
-	if got.Password != "secret" {
-		t.Fatalf("expected password to be preserved, got %q", got.Password)
-	}
-}
-
-func TestAccountShareModeUpdateUserProxyClearsPasswordWhenExplicitlyEmpty(t *testing.T) {
-	ownerID := int64(42)
-	emptyPassword := ""
-	proxyRepo := &accountShareModeProxyRepoStub{proxy: &Proxy{
-		ID: 7, Name: "proxy", Protocol: "http", Host: "old.example.com", Port: 8080,
-		Password: "secret", OwnerUserID: &ownerID, Status: StatusActive,
-	}}
-	svc := &AccountShareModeService{proxyRepo: proxyRepo}
-
-	got, err := svc.UpdateUserProxy(context.Background(), ownerID, 7, UpdateAccountShareProxyInput{
-		Name: "proxy", Protocol: "http", Host: "new.example.com", Port: 8081, Password: &emptyPassword,
-	})
-	if err != nil {
-		t.Fatalf("UpdateUserProxy failed: %v", err)
-	}
-	if got.Password != "" {
-		t.Fatalf("expected password to be cleared, got %q", got.Password)
-	}
-}
-
-func TestAccountShareModeUpdateUserProxyRejectsUnownedProxy(t *testing.T) {
-	ownerID := int64(42)
-	otherOwnerID := int64(99)
-	tests := []struct {
-		name    string
-		ownerID *int64
-	}{
-		{name: "platform proxy", ownerID: nil},
-		{name: "other user proxy", ownerID: &otherOwnerID},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			proxyRepo := &accountShareModeProxyRepoStub{proxy: &Proxy{
-				ID: 7, Protocol: "http", Host: "proxy.example.com", Port: 8080,
-				OwnerUserID: tt.ownerID, Status: StatusActive,
-			}}
-			svc := &AccountShareModeService{proxyRepo: proxyRepo}
-			_, err := svc.UpdateUserProxy(context.Background(), ownerID, 7, UpdateAccountShareProxyInput{
-				Protocol: "http", Host: "new.example.com", Port: 8081,
-			})
-			if !errors.Is(err, ErrProxyNotFound) {
-				t.Fatalf("expected ErrProxyNotFound, got %v", err)
-			}
-			if proxyRepo.updateCalls != 0 {
-				t.Fatalf("unowned proxy must not be updated, got %d calls", proxyRepo.updateCalls)
-			}
-		})
-	}
-}
-
-func TestAccountShareModeDeleteUserProxyRejectsProxyInUse(t *testing.T) {
-	ownerID := int64(42)
-	proxyRepo := &accountShareModeProxyRepoStub{
-		proxy:        &Proxy{ID: 7, OwnerUserID: &ownerID, Status: StatusActive},
-		accountCount: 1,
-	}
-	svc := &AccountShareModeService{proxyRepo: proxyRepo}
-
-	err := svc.DeleteUserProxy(context.Background(), ownerID, 7)
-	if !errors.Is(err, ErrProxyInUse) {
-		t.Fatalf("expected ErrProxyInUse, got %v", err)
-	}
-	if proxyRepo.deleteCalls != 0 {
-		t.Fatalf("in-use proxy must not be deleted, got %d calls", proxyRepo.deleteCalls)
-	}
-}
-
-func TestAccountShareModeDeleteUserProxyRejectsUnownedProxy(t *testing.T) {
-	ownerID := int64(42)
-	otherOwnerID := int64(99)
-	tests := []struct {
-		name    string
-		ownerID *int64
-	}{
-		{name: "platform proxy", ownerID: nil},
-		{name: "other user proxy", ownerID: &otherOwnerID},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			proxyRepo := &accountShareModeProxyRepoStub{
-				proxy: &Proxy{ID: 7, OwnerUserID: tt.ownerID, Status: StatusActive},
-			}
-			svc := &AccountShareModeService{proxyRepo: proxyRepo}
-
-			err := svc.DeleteUserProxy(context.Background(), ownerID, 7)
-			if !errors.Is(err, ErrProxyNotFound) {
-				t.Fatalf("expected ErrProxyNotFound, got %v", err)
-			}
-			if proxyRepo.countCalls != 0 || proxyRepo.deleteCalls != 0 {
-				t.Fatalf("unowned proxy must not be counted or deleted, count_calls=%d delete_calls=%d", proxyRepo.countCalls, proxyRepo.deleteCalls)
-			}
-		})
-	}
-}
-
-func TestAccountShareModeDeleteUserProxyDeletesUnusedOwnedProxy(t *testing.T) {
-	ownerID := int64(42)
-	proxyRepo := &accountShareModeProxyRepoStub{
-		proxy: &Proxy{ID: 7, OwnerUserID: &ownerID, Status: StatusActive},
-	}
-	svc := &AccountShareModeService{proxyRepo: proxyRepo}
-
-	if err := svc.DeleteUserProxy(context.Background(), ownerID, 7); err != nil {
-		t.Fatalf("DeleteUserProxy failed: %v", err)
-	}
-	if proxyRepo.deleteCalls != 1 || proxyRepo.deletedID != 7 {
-		t.Fatalf("expected proxy 7 to be deleted once, calls=%d id=%d", proxyRepo.deleteCalls, proxyRepo.deletedID)
 	}
 }
 

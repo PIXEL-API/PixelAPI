@@ -2673,26 +2673,6 @@
           <label class="input-label mb-0">
             {{ isUserScope ? t('userAccounts.importProxy') : t('admin.accounts.proxy') }}
           </label>
-          <div v-if="showUserProxyActions" class="flex flex-wrap items-center justify-end gap-2">
-            <button
-              type="button"
-              class="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:border-sky-300 hover:bg-sky-50 dark:border-dark-700 dark:bg-dark-800 dark:text-dark-200 dark:hover:border-sky-500/70 dark:hover:bg-sky-900/20"
-              @click="openProxyPurchase"
-            >
-              <Icon name="externalLink" size="xs" />
-              {{ t('userAccounts.proxyActionBuyTitle') }}
-            </button>
-            <button
-              type="button"
-              class="inline-flex items-center gap-1 rounded-md border border-primary-200 bg-primary-50 px-2.5 py-1.5 text-xs font-medium text-primary-700 hover:border-primary-300 hover:bg-primary-100 dark:border-primary-500/30 dark:bg-primary-500/10 dark:text-primary-300 dark:hover:bg-primary-500/20"
-              :aria-expanded="showUserProxyCreatePanel"
-              data-testid="create-open-user-proxy-panel"
-              @click="openUserProxyCreatePanel"
-            >
-              <Icon name="plus" size="xs" />
-              {{ t('userAccounts.proxyActionAddTitle') }}
-            </button>
-          </div>
         </div>
         <ProxySelector
           v-model="form.proxy_id"
@@ -2703,12 +2683,6 @@
         <p v-if="isUserScope" class="input-hint">
           {{ selectedProxyCapacityMessage || (proxyOptions.length > 0 ? t('userAccounts.importProxyHint') : t('userAccounts.importProxyEmpty')) }}
         </p>
-        <UserProxyQuickCreatePanel
-          v-if="showUserProxyCreatePanel"
-          class="mt-4"
-          @created="handleUserProxyCreated"
-          @cancel="closeUserProxyCreatePanel"
-        />
       </div>
 
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -3444,7 +3418,6 @@ import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
-import UserProxyQuickCreatePanel from '@/components/user/UserProxyQuickCreatePanel.vue'
 import {
   applyHeaderOverride,
   applyInterceptWarmup,
@@ -3917,20 +3890,8 @@ const canManageProxy = computed(() =>
   props.allowProxy !== false && (!isUserScope.value || userOAuthProxyLoginRequired.value)
 )
 
-const PROXY_PURCHASE_URL = 'https://www.seekproxy.com/user/reg?invite_id=105978'
-const showUserProxyCreatePanel = ref(false)
-const createdUserProxies = ref<Proxy[]>([])
-
-const proxyOptions = computed(() => {
-  const byId = new Map<number, Proxy>()
-  for (const proxy of props.proxies) {
-    byId.set(proxy.id, proxy)
-  }
-  for (const proxy of createdUserProxies.value) {
-    byId.set(proxy.id, proxy)
-  }
-  return Array.from(byId.values())
-})
+// 用户不再上传代理，只能从平台代理列表中选择。
+const proxyOptions = computed(() => props.proxies)
 
 const selectedProxy = computed(() => {
   const proxyId = form.proxy_id
@@ -3946,8 +3907,6 @@ const selectedProxyCapacityMessage = computed(() => {
   return `${t('admin.proxies.accountUsageFullTitle', { count, max })}，请选择其它代理 IP。`
 })
 
-const showUserProxyActions = computed(() => isUserScope.value && canManageProxy.value)
-
 function validateUserOAuthProxySelection(): boolean {
   if (!userOAuthProxyLoginRequired.value) return true
   if (!form.proxy_id) {
@@ -3959,33 +3918,6 @@ function validateUserOAuthProxySelection(): boolean {
     return false
   }
   return true
-}
-
-function openProxyPurchase(): void {
-  window.open(PROXY_PURCHASE_URL, '_blank', 'noopener,noreferrer')
-}
-
-function openUserProxyCreatePanel(): void {
-  showUserProxyCreatePanel.value = true
-}
-
-function closeUserProxyCreatePanel(): void {
-  showUserProxyCreatePanel.value = false
-}
-
-function upsertCreatedUserProxy(proxy: Proxy): void {
-  const index = createdUserProxies.value.findIndex(item => item.id === proxy.id)
-  if (index >= 0) {
-    createdUserProxies.value[index] = { ...createdUserProxies.value[index], ...proxy }
-    return
-  }
-  createdUserProxies.value = [proxy, ...createdUserProxies.value]
-}
-
-function handleUserProxyCreated(proxy: Proxy): void {
-  upsertCreatedUserProxy(proxy)
-  form.proxy_id = proxy.id
-  showUserProxyCreatePanel.value = false
 }
 
 const normalizeConcurrencyInput = () => {
@@ -4242,7 +4174,6 @@ watch(
   (required) => {
     if (!required) {
       form.proxy_id = null
-      showUserProxyCreatePanel.value = false
       openaiOAuth.resetState()
       geminiOAuth.resetState()
       antigravityOAuth.resetState()
@@ -4639,8 +4570,6 @@ const resetForm = () => {
   form.rate_multiplier = 1
   form.group_ids = []
   form.expires_at = null
-  showUserProxyCreatePanel.value = false
-  createdUserProxies.value = []
   accountCategory.value = 'oauth-based'
   addMethod.value = 'oauth'
   apiKeyBaseUrl.value = 'https://api.anthropic.com'

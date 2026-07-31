@@ -8849,6 +8849,93 @@ func expectAccountShareMembershipRuntimeBinding(
 		}).AddRow(listingRevisionID, termsRevisionNumber))
 }
 
+// Reordering must stage the final 1..N ranks through a temporary range that is
+// disjoint from every live queue_rank, because uq_account_share_memberships_queue_rank
+// is unique over (api_key_id, queue_rank) for live rows. The previous
+// "100+index" offset collided once any live rank reached >=100 (ranks climb
+// unbounded via MAX(queue_rank)+1 across join/leave churn). This test seeds
+// live ranks at 100 and 101 — the exact case that tripped the unique index —
+// and asserts the temp pass writes negative ranks before settling to 1..N.
+func TestReorderMembershipQueueStagesThroughCollisionFreeRanks(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	repo := &accountShareModeRepository{db: db}
+
+	const (
+		consumerUserID = int64(42)
+		apiKeyID       = int64(7)
+		ownerUserID    = int64(9)
+		listingID      = int64(700)
+		firstID        = int64(501)
+		secondID       = int64(502)
+	)
+	now := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
+
+	mock.ExpectBegin()
+	// Current live memberships, ordered by queue_rank. Ranks are high (100, 101)
+	// to reproduce the collision the old offset scheme suffered from.
+	mock.ExpectQuery("SELECT\\s+m\\.id, m\\.listing_id, m\\.account_id").
+		WithArgs(
+			consumerUserID,
+			apiKeyID,
+			service.AccountShareMembershipStatusActive,
+			service.AccountShareMembershipStatusQueued,
+		).
+		WillReturnRows(sqlmock.NewRows(accountShareMembershipColumns()).
+			AddRow(
+				firstID, listingID, int64(0), ownerUserID, consumerUserID, apiKeyID,
+				service.AccountShareMembershipStatusQueued, 100, "0", "0", 0,
+				now, nil, nil, "", nil, nil,
+				nil, "0", 0, nil,
+				nil, nil, now, now,
+			).
+			AddRow(
+				secondID, listingID, int64(0), ownerUserID, consumerUserID, apiKeyID,
+				service.AccountShareMembershipStatusQueued, 101, "0", "0", 0,
+				now, nil, nil, "", nil, nil,
+				nil, "0", 0, nil,
+				nil, nil, now, now,
+			))
+
+	// Requested order: put secondID first. Temp pass must use negative ranks.
+	mock.ExpectExec("UPDATE account_share_memberships\\s+SET queue_rank = \\$1").
+		WithArgs(-1, secondID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE account_share_memberships\\s+SET queue_rank = \\$1").
+		WithArgs(-2, firstID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	// Final pass assigns 1..N.
+	mock.ExpectExec("UPDATE account_share_memberships\\s+SET queue_rank = \\$1").
+		WithArgs(1, secondID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE account_share_memberships\\s+SET queue_rank = \\$1").
+		WithArgs(2, firstID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	out, err := repo.ReorderMembershipQueue(
+		context.Background(),
+		consumerUserID,
+		apiKeyID,
+		[]int64{secondID, firstID},
+	)
+	if err != nil {
+		t.Fatalf("ReorderMembershipQueue: %v", err)
+	}
+	if len(out) != 2 || out[0].ID != secondID || out[1].ID != firstID {
+		t.Fatalf("unexpected reorder result: %#v", out)
+	}
+	if out[0].QueueRank != 1 || out[1].QueueRank != 2 {
+		t.Fatalf("unexpected final ranks: %d, %d", out[0].QueueRank, out[1].QueueRank)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func accountShareMembershipColumns() []string {
 	return []string{
 		"id",

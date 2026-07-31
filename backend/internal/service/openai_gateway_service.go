@@ -4762,22 +4762,17 @@ func (s *OpenAIGatewayService) newOpenAIStreamFailoverError(
 			"message": message,
 		},
 	})
-	if isOpenAITransientCapacityError(http.StatusBadGateway, message, payload) ||
-		isOpenAITransientCapacityError(http.StatusBadGateway, message, body) {
-		ctx := context.Background()
-		if c != nil && c.Request != nil {
-			ctx = c.Request.Context()
-		}
-		cooldownBody := payload
-		if len(cooldownBody) == 0 {
-			cooldownBody = body
-		}
-		s.handleOpenAITransientCapacitySignal(ctx, account, http.StatusBadGateway, http.Header{}, cooldownBody, message)
+	isTransientCapacity := isOpenAITransientCapacityError(http.StatusBadGateway, message, payload) ||
+		isOpenAITransientCapacityError(http.StatusBadGateway, message, body)
+	failoverErr := &UpstreamFailoverError{
+		StatusCode:             http.StatusBadGateway,
+		ResponseBody:           body,
+		RetryableOnSameAccount: isTransientCapacity,
 	}
-	return &UpstreamFailoverError{
-		StatusCode:   http.StatusBadGateway,
-		ResponseBody: body,
+	if isTransientCapacity {
+		failoverErr.Reason = GatewayFailureReasonOpenAITransientCapacity
 	}
+	return failoverErr
 }
 
 func (s *OpenAIGatewayService) handleOpenAIModelCapacitySignal(ctx context.Context, account *Account, statusCode int, headers http.Header, payload []byte, message string) bool {

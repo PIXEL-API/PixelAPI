@@ -5598,13 +5598,22 @@ func (r *accountShareModeRepository) ReorderMembershipQueue(ctx context.Context,
 			return nil, service.ErrAccountShareQueueInvalid
 		}
 	}
+	// The partial unique index uq_account_share_memberships_queue_rank spans
+	// (api_key_id, queue_rank) over live rows, so the final 1..N ranks must be
+	// staged through a temporary range that cannot collide with any live row.
+	// Enqueue assigns MAX(queue_rank)+1, which climbs unbounded across
+	// join/leave churn — the old "100+index" offset was only safe while every
+	// live rank stayed below 100, and reorder is a client action, so a large
+	// enough rank makes 100+index collide with a not-yet-rewritten batch row
+	// and trips the unique index. Negative temp ranks are disjoint from all
+	// valid (>=1) ranks and therefore always safe.
 	for index, id := range membershipIDs {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE account_share_memberships
 			SET queue_rank = $1,
 				updated_at = NOW()
 			WHERE id = $2
-		`, 100+index, id); err != nil {
+		`, -(index + 1), id); err != nil {
 			return nil, err
 		}
 	}

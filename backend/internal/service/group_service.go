@@ -201,19 +201,13 @@ func (s *GroupService) GetStats(ctx context.Context, id int64) (map[string]any, 
 		return nil, fmt.Errorf("get group: %w", err)
 	}
 
-	// 获取账号数量
-	accountCount, _, err := s.groupRepo.GetAccountCount(ctx, id)
-	if err != nil {
-		return nil, fmt.Errorf("get account count: %w", err)
-	}
-
 	stats := map[string]any{
 		"id":              group.ID,
 		"name":            group.Name,
 		"rate_multiplier": group.RateMultiplier,
 		"is_exclusive":    group.IsExclusive,
 		"status":          group.Status,
-		"account_count":   accountCount,
+		"account_count":   group.AccountCount,
 	}
 
 	return stats, nil
