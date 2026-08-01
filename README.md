@@ -95,37 +95,62 @@ PixelAPI 把 AI 订阅账号（Claude、Codex/OpenAI、Gemini、Antigravity、Gr
 
 ## 部署
 
-### ⚠️ 本项目不提供 Docker 镜像和预编译二进制
+> **注意本项目与上游的产物区别**：本项目的镜像是 `ghcr.io/pixel-api/pixelapi`，二进制叫 `pixelapi`。
+> 网上流传的 `weishaw/sub2api` 镜像和 `Wei-Shaw/sub2api` 安装脚本属于**上游 Sub2API**，
+> 装了不会有本项目的账号广场、共享结算、Grok 接入等功能。
 
-**这一点请务必先看清楚，否则你装到的会是另一个项目。**
+### 方式一：Docker 镜像
 
-本仓库**没有**发布任何 Docker 镜像，Docker Hub 上不存在 PixelAPI 的镜像；本仓库的 Releases
-也只提供源码，**不附带预编译二进制**。
-
-而 `deploy/` 目录下的部署文件是从上游继承下来的，里面写死的地址**全部指向上游 Sub2API**：
-
-| 文件 | 里面写的东西 | 实际会装到什么 |
-| --- | --- | --- |
-| `deploy/docker-compose.yml`<br>`deploy/docker-compose.local.yml` | `image: weishaw/sub2api:latest` | **上游 Sub2API 的官方镜像**，不是本项目 |
-| `deploy/install.sh` | `GITHUB_REPO="Wei-Shaw/sub2api"` | 从**上游 Releases** 下载的二进制，不是本项目 |
-
-也就是说，直接 `docker compose up -d` 或者跑那条一键安装脚本，起来的是上游 Sub2API，
-本分支的账号广场、共享结算、Grok 接入等功能一个都不会有。
-
-**唯一受支持的方式是[从源码构建](#从源码构建)。**
-
-如果你确实需要容器化部署，得自己构建镜像——仓库根目录的 `Dockerfile` 是完整的多阶段构建
-（前端 + 内嵌前端的 Go 二进制），可以直接用：
+镜像发布在 GitHub Container Registry，支持 linux/amd64 与 linux/arm64：
 
 ```bash
-# 自行构建镜像
-docker build -t pixelapi:local .
-
-# 然后把 compose 文件里的 image 换成自己构建的 tag
-#   image: weishaw/sub2api:latest   ->   image: pixelapi:local
+docker pull ghcr.io/pixel-api/pixelapi:latest
 ```
 
-同理，`deploy/install.sh` 若要复用，需要自行把 `GITHUB_REPO` 和产物下载逻辑改成你自己的发布源。
+可用 tag：`latest`、`1.2.29`（精确版本）、`1.2`（次版本跟随）、`1`（主版本跟随）。
+
+用 Docker Compose 部署（自带 PostgreSQL 和 Redis）：
+
+```bash
+mkdir -p pixelapi-deploy && cd pixelapi-deploy
+
+# 取部署文件
+curl -sSLO https://raw.githubusercontent.com/PIXEL-API/PixelAPI/main/deploy/docker-compose.local.yml
+curl -sSLO https://raw.githubusercontent.com/PIXEL-API/PixelAPI/main/deploy/.env.example
+cp .env.example .env
+
+# 生成密钥填进 .env：POSTGRES_PASSWORD / JWT_SECRET / TOTP_ENCRYPTION_KEY
+openssl rand -hex 32
+
+mkdir -p data postgres_data redis_data
+docker compose -f docker-compose.local.yml up -d
+```
+
+访问 `http://服务器IP:8080` 进入初始化向导。
+
+### 方式二：一键安装脚本
+
+从本仓库 Releases 下载对应架构的二进制并注册 systemd 服务：
+
+```bash
+curl -sSL https://raw.githubusercontent.com/PIXEL-API/PixelAPI/main/deploy/install.sh | sudo bash
+```
+
+前置条件：Linux（amd64 或 arm64）、已装好并运行的 PostgreSQL 15+ 和 Redis 7+、root 权限。
+
+装完之后：
+
+```bash
+sudo systemctl start pixelapi
+sudo systemctl enable pixelapi
+```
+
+安装位置 `/opt/pixelapi`，配置目录 `/etc/pixelapi`，服务名 `pixelapi`。
+
+### 方式三：直接下载二进制
+
+[Releases](https://github.com/PIXEL-API/PixelAPI/releases) 提供 linux / macOS / Windows
+共 5 个平台的压缩包和 `checksums.txt`，解压即用，无需运行时依赖（前端已内嵌）。
 
 ### 从源码构建
 

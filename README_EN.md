@@ -99,39 +99,65 @@ by room or group, and the platform handles routing, metering, revenue split and 
 
 ## Deployment
 
-### ⚠️ No Docker Image or Prebuilt Binary Is Published
+> **Do not confuse this project's artifacts with upstream's.** This project ships
+> `ghcr.io/pixel-api/pixelapi` and a binary named `pixelapi`. The widely circulated
+> `weishaw/sub2api` image and `Wei-Shaw/sub2api` install script belong to **upstream Sub2API** and
+> contain none of this fork's account marketplace, shared-revenue settlement or Grok support.
 
-**Read this first, or you will end up installing a different project.**
+### Option 1: Docker Image
 
-This repository publishes **no Docker image** — there is no PixelAPI image on Docker Hub — and its
-Releases contain **source code only, with no prebuilt binaries attached**.
-
-The files under `deploy/` are inherited from upstream, and every address hardcoded in them points at
-**upstream Sub2API**:
-
-| File | What it references | What you actually get |
-| --- | --- | --- |
-| `deploy/docker-compose.yml`<br>`deploy/docker-compose.local.yml` | `image: weishaw/sub2api:latest` | **Upstream Sub2API's official image**, not this project |
-| `deploy/install.sh` | `GITHUB_REPO="Wei-Shaw/sub2api"` | A binary from **upstream Releases**, not this project |
-
-In other words, running `docker compose up -d` or that one-liner install script gives you upstream
-Sub2API — with none of this fork's account marketplace, shared-revenue settlement or Grok support.
-
-**Building [from source](#build-from-source) is the only supported path.**
-
-If you do need containerized deployment, build the image yourself. The `Dockerfile` at the repository
-root is a complete multi-stage build (frontend plus a Go binary with the frontend embedded):
+Images are published to the GitHub Container Registry for linux/amd64 and linux/arm64:
 
 ```bash
-# Build your own image
-docker build -t pixelapi:local .
-
-# Then replace the image in the compose files with your own tag
-#   image: weishaw/sub2api:latest   ->   image: pixelapi:local
+docker pull ghcr.io/pixel-api/pixelapi:latest
 ```
 
-Likewise, to reuse `deploy/install.sh` you must repoint `GITHUB_REPO` and its download logic at your
-own release source.
+Available tags: `latest`, `1.2.29` (exact version), `1.2` (minor track), `1` (major track).
+
+Deploy with Docker Compose (bundles PostgreSQL and Redis):
+
+```bash
+mkdir -p pixelapi-deploy && cd pixelapi-deploy
+
+# Fetch the deployment files
+curl -sSLO https://raw.githubusercontent.com/PIXEL-API/PixelAPI/main/deploy/docker-compose.local.yml
+curl -sSLO https://raw.githubusercontent.com/PIXEL-API/PixelAPI/main/deploy/.env.example
+cp .env.example .env
+
+# Generate secrets for .env: POSTGRES_PASSWORD / JWT_SECRET / TOTP_ENCRYPTION_KEY
+openssl rand -hex 32
+
+mkdir -p data postgres_data redis_data
+docker compose -f docker-compose.local.yml up -d
+```
+
+Open `http://YOUR_SERVER_IP:8080` for the setup wizard.
+
+### Option 2: Install Script
+
+Downloads the matching binary from this repository's Releases and registers a systemd service:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/PIXEL-API/PixelAPI/main/deploy/install.sh | sudo bash
+```
+
+Prerequisites: Linux (amd64 or arm64), PostgreSQL 15+ and Redis 7+ already installed and running,
+root privileges.
+
+Afterwards:
+
+```bash
+sudo systemctl start pixelapi
+sudo systemctl enable pixelapi
+```
+
+Installs to `/opt/pixelapi`, config in `/etc/pixelapi`, service name `pixelapi`.
+
+### Option 3: Download a Binary
+
+[Releases](https://github.com/PIXEL-API/PixelAPI/releases) carry archives for five platform targets
+across Linux, macOS and Windows plus `checksums.txt`. Extract and run — the frontend is embedded, so
+there are no runtime dependencies.
 
 ### Build From Source
 
