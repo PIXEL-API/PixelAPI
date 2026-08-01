@@ -362,10 +362,6 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 	respBytes = reverseToolNamesIfPresent(c, respBytes)
 
 	result := resultWithUsage(false)
-	billingHandled, billingErr := CommitForwardResultBillingGateBeforeTerminal(ctx, result)
-	if billingHandled && billingErr != nil {
-		return result, &BillableStreamUsageError{Err: billingErr}
-	}
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -375,9 +371,6 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 	if err := writeGatewayBridgePayload(c.Writer, respBytes); err != nil {
 		result.ClientDisconnect = true
 		writeErr := fmt.Errorf("write chat completions response: %w", err)
-		if billingHandled {
-			return result, &BillableStreamUsageError{Err: writeErr}
-		}
 		return gatewayBridgeFailure(result, writeErr)
 	}
 
@@ -515,13 +508,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 			sawMessageStop = true
 		}
 		result := resultWithUsage(false)
-		billingHandled := false
 		if isMessageStop {
-			var billingErr error
-			billingHandled, billingErr = CommitForwardResultBillingGateBeforeTerminal(ctx, result)
-			if billingHandled && billingErr != nil {
-				return result, &BillableStreamUsageError{Err: billingErr}
-			}
 			// A real message_stop must drive the terminal chunks. This call is
 			// normally a no-op because response.completed already finalized the
 			// state, but remains a guarded consistency check rather than an EOF
@@ -532,9 +519,6 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		for _, chunk := range chunks {
 			if err := writeChunk(chunk); err != nil {
 				result.ClientDisconnect = true
-				if billingHandled {
-					return result, &BillableStreamUsageError{Err: err}
-				}
 				return gatewayBridgeFailure(result, err)
 			}
 		}
@@ -542,9 +526,6 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 			if err := flushGatewayBridgeWriter(c.Writer); err != nil {
 				result.ClientDisconnect = true
 				flushErr := fmt.Errorf("flush chat completions stream: %w", err)
-				if billingHandled {
-					return result, &BillableStreamUsageError{Err: flushErr}
-				}
 				return gatewayBridgeFailure(result, flushErr)
 			}
 		}
@@ -552,17 +533,11 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 			if err := writeGatewayBridgePayload(c.Writer, []byte("data: [DONE]\n\n")); err != nil {
 				result.ClientDisconnect = true
 				writeErr := fmt.Errorf("write chat completions done marker: %w", err)
-				if billingHandled {
-					return result, &BillableStreamUsageError{Err: writeErr}
-				}
 				return gatewayBridgeFailure(result, writeErr)
 			}
 			if err := flushGatewayBridgeWriter(c.Writer); err != nil {
 				result.ClientDisconnect = true
 				flushErr := fmt.Errorf("flush chat completions done marker: %w", err)
-				if billingHandled {
-					return result, &BillableStreamUsageError{Err: flushErr}
-				}
 				return gatewayBridgeFailure(result, flushErr)
 			}
 			return result, nil

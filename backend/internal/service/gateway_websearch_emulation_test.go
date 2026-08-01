@@ -5,15 +5,11 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/websearch"
-	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -381,55 +377,4 @@ func TestShouldEmulateWebSearch_DefaultMode_NilChannelService(t *testing.T) {
 	groupID := int64(42)
 	// nil channelService + default mode → returns false
 	require.False(t, svc.shouldEmulateWebSearch(context.Background(), account, &groupID, webSearchToolBody))
-}
-
-func TestWriteWebSearchNonStreamResponseBlocksSuccessWhenBillingGateFails(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	submitErr := errors.New("billing unavailable")
-	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(result *ForwardResult) error {
-		require.Positive(t, result.Usage.OutputTokens)
-		return submitErr
-	}))
-
-	result, err := writeWebSearchNonStreamResponse(
-		ctx,
-		c,
-		"query",
-		&websearch.SearchResponse{Results: []websearch.SearchResult{{URL: "https://example.com", Title: "Example"}}},
-		"claude-test",
-		time.Now(),
-	)
-
-	require.NotNil(t, result)
-	require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
-	require.ErrorIs(t, err, submitErr)
-	require.Empty(t, recorder.Body.String())
-}
-
-func TestWriteWebSearchStreamResponseBlocksMessageStopWhenBillingGateFails(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	submitErr := errors.New("billing unavailable")
-	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(result *ForwardResult) error {
-		require.Positive(t, result.Usage.OutputTokens)
-		return submitErr
-	}))
-
-	result, err := writeWebSearchStreamResponse(
-		ctx,
-		c,
-		"query",
-		&websearch.SearchResponse{Results: []websearch.SearchResult{{URL: "https://example.com", Title: "Example"}}},
-		"claude-test",
-		time.Now(),
-	)
-
-	require.NotNil(t, result)
-	require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
-	require.ErrorIs(t, err, submitErr)
-	require.NotEmpty(t, recorder.Body.String())
-	require.False(t, strings.Contains(recorder.Body.String(), "event: message_stop"))
 }

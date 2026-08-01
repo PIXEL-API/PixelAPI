@@ -46,6 +46,7 @@
           input-name="edit-account-external-placement"
           :legend="t('userAccounts.externalPlacement.editLegend')"
           :platform-mode-disabled-reason="placementPlatformModeDisabledReason"
+          :target-disabled-reasons="placementTargetDisabledReasons"
         />
         <div
           v-if="placementSaveError"
@@ -2480,17 +2481,44 @@ const userAccountProxyRequired = computed(() => {
     props.account.platform === 'antigravity' ||
     props.account.platform === 'grok'
 })
+// 用户侧比创建时更宽松是有意为之：创建走 OAuth 登录，不需要代理登录的账号后端会拒收
+// proxy_id；但账号建好之后允许号主自行挂一个代理走流量（见 userAccounts.proxyOptionalEditHint
+// 与 TestAccountServiceUpdateOwnedAllowsOptionalProxyForNonRequiredOAuthAccount）。
 const canManageProxy = computed(() =>
   props.allowProxy !== false && (!isUserScope.value || !isAccountShareModeOnly.value)
 )
 const canManageBillingRate = computed(() => !isUserScope.value && props.allowBillingRate !== false)
-const hideProxyEndpoint = computed(() => props.hideProxyEndpoint === true)
+// 平台代理的 host:port 属于运营信息，用户侧默认隐藏；管理端保持可见。
+// 注意不能写成 `props.hideProxyEndpoint ?? isUserScope.value`：这是个未声明默认值的
+// boolean prop，父组件不传时 Vue 会把它转成 false 而不是 undefined，?? 永远不会兜底。
+const hideProxyEndpoint = computed(() => props.hideProxyEndpoint === true || isUserScope.value)
 const placementPlatformModeDisabledReason = computed(() => {
   if (!props.account) return ''
   if (props.account.platform !== 'openai' && props.account.platform !== 'anthropic') {
     return t('userAccounts.externalPlacement.unsupportedPlatform')
   }
   return ''
+})
+
+// 账号还挂在账号广场房间上时，后端 ConvertOwnedExternalPlacement 会以
+// ErrAccountShareRoomAccountAttached 拒绝一切非 room 的目标。这里提前禁用，
+// 否则基础字段已经保存、模式却切不过去，用户只会看到「已保存但切换失败」。
+//
+// 判据只能是 account_share_mode_listing_id：它由 loadAccountShareRoomListingIDs 按
+// state IN ('active','draining') 投影，正是后端 HasRoomAccount 守卫的镜像。
+// 不能用 external_placement.target === 'room'——那只表示「处于平台账号模式」，
+// 退房时 DetachRoomAccountsAtomic 不会把它写回 private，用它判断会把已经退房的账号
+// 永久锁死在平台账号模式里。extra.account_share_mode 同理（建房后不再清除）。
+const placementRoomAttached = computed(() => {
+  const account = props.account
+  if (!isUserScope.value || !account) return false
+  return Number(account.account_share_mode_listing_id || 0) > 0
+})
+
+const placementTargetDisabledReasons = computed<Partial<Record<AccountExternalPlacementTarget, string>>>(() => {
+  if (!placementRoomAttached.value) return {}
+  const reason = t('userAccounts.externalPlacement.roomAttachedDisabledHint')
+  return { private: reason, public_pool: reason }
 })
 
 // Platform-specific hint for Base URL
@@ -3841,6 +3869,14 @@ const handleSubmit = async () => {
   if (isUserScope.value && userAccountProxyRequired.value && (!form.proxy_id || form.proxy_id <= 0)) {
     appStore.showError(t('userAccounts.proxyRequiredReplaceOnly'))
     return
+  }
+  if (isUserScope.value && placementChanged.value) {
+    const blockedReason = placementTargetDisabledReasons.value[selectedExternalPlacementTarget.value]
+    if (blockedReason) {
+      placementSaveError.value = blockedReason
+      appStore.showError(blockedReason)
+      return
+    }
   }
   const updatePayload: Record<string, unknown> = { ...form }
   if (isUserScope.value || props.account.platform !== 'openai') {

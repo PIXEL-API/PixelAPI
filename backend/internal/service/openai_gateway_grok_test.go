@@ -378,14 +378,7 @@ func TestForwardGrokCompatRejectsUnexpectedStatusBeforeBillingOrSnapshot(t *test
 						"base_url": "https://xai.example.com/v1",
 					},
 				}
-				gateCalls := 0
-				ctx := WithOpenAIForwardResultBillingGate(
-					context.Background(),
-					NewOpenAIForwardResultBillingGate(func(*OpenAIForwardResult) error {
-						gateCalls++
-						return nil
-					}),
-				)
+				ctx := context.Background()
 
 				var (
 					result *OpenAIForwardResult
@@ -410,7 +403,6 @@ func TestForwardGrokCompatRejectsUnexpectedStatusBeforeBillingOrSnapshot(t *test
 
 				require.ErrorContains(t, err, fmt.Sprintf("non-success HTTP status %d", statusCode))
 				require.Nil(t, result)
-				require.Zero(t, gateCalls)
 				require.Zero(t, snapshotRepo.updateExtraCalls)
 				require.Equal(t, http.StatusBadGateway, recorder.Code)
 				require.Equal(t, "Upstream request failed", gjson.Get(recorder.Body.String(), "error.message").String())

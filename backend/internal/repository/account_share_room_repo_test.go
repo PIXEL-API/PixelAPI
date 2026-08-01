@@ -2139,9 +2139,6 @@ func TestRebindMembershipToHealthyRoomAccountMaterializesLegacyBindingAndRotates
 	mock.ExpectQuery("SELECT id, membership_id, listing_id, account_id_snapshot, listing_revision_id").
 		WithArgs(pq.Array([]int64{membershipID})).
 		WillReturnRows(sqlmock.NewRows(accountShareMembershipOpenBindingColumns()))
-	mock.ExpectQuery("SELECT id, membership_id, status\\s+FROM account_share_request_billing_intents").
-		WithArgs(pq.Array([]int64{membershipID})).
-		WillReturnRows(sqlmock.NewRows(accountShareMembershipPendingIntentColumns()))
 	expectAccountShareMembershipBindingInsert(
 		mock,
 		membershipID,
@@ -2199,73 +2196,6 @@ func TestRebindMembershipToHealthyRoomAccountMaterializesLegacyBindingAndRotates
 	}
 	if !rebound {
 		t.Fatal("expected membership to be rebound")
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet expectations: %v", err)
-	}
-}
-
-func TestRebindMembershipToHealthyRoomAccountRejectsPendingBillingIntent(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("sqlmock.New: %v", err)
-	}
-	defer func() { _ = db.Close() }()
-	repo := &accountShareModeRepository{db: db}
-	now := time.Date(2026, 7, 24, 2, 31, 0, 0, time.UTC)
-	membershipID := int64(500)
-	listingID := int64(700)
-	currentAccountID := int64(10)
-	replacementAccountID := int64(11)
-	listingRevisionID := int64(900)
-
-	mock.ExpectQuery("SELECT listing_id\\s+FROM account_share_memberships").
-		WithArgs(membershipID, currentAccountID, service.AccountShareMembershipStatusActive).
-		WillReturnRows(sqlmock.NewRows([]string{"listing_id"}).AddRow(listingID))
-	mock.ExpectBegin()
-	expectAccountShareRoomRebindScope(
-		mock,
-		listingID,
-		42,
-		service.PlatformOpenAI,
-		service.AccountLevelPlus,
-		[]int64{currentAccountID, replacementAccountID},
-	)
-	mock.ExpectQuery("SELECT a\\.id\\s+FROM account_share_room_accounts").
-		WithArgs(listingID, currentAccountID, now).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(replacementAccountID))
-	mock.ExpectQuery("SELECT id, listing_id, account_id, listing_revision_id").
-		WithArgs(listingID, currentAccountID, service.AccountShareMembershipStatusActive, membershipID).
-		WillReturnRows(sqlmock.NewRows(accountShareMembershipRebindColumns()).
-			AddRow(membershipID, listingID, currentAccountID, listingRevisionID))
-	mock.ExpectQuery("SELECT id, membership_id, listing_id, account_id_snapshot, listing_revision_id").
-		WithArgs(pq.Array([]int64{membershipID})).
-		WillReturnRows(sqlmock.NewRows(accountShareMembershipOpenBindingColumns()).
-			AddRow(int64(600), membershipID, listingID, currentAccountID, listingRevisionID))
-	mock.ExpectQuery("SELECT id, membership_id, status\\s+FROM account_share_request_billing_intents").
-		WithArgs(pq.Array([]int64{membershipID})).
-		WillReturnRows(sqlmock.NewRows(accountShareMembershipPendingIntentColumns()).
-			AddRow(int64(800), membershipID, "in_flight"))
-	mock.ExpectRollback()
-
-	rebound, err := repo.RebindMembershipToHealthyRoomAccount(
-		context.Background(),
-		membershipID,
-		currentAccountID,
-		now,
-	)
-	if rebound {
-		t.Fatal("pending billing intent must keep the original binding")
-	}
-	if !errors.Is(err, service.ErrAccountShareRoomOperationConflict) {
-		t.Fatalf("error = %v, want operation conflict", err)
-	}
-	appErr := infraerrors.FromError(err)
-	if appErr.Metadata["blocker"] != "pending_billing_intent" ||
-		appErr.Metadata["membership_id"] != "500" ||
-		appErr.Metadata["billing_intent_id"] != "800" ||
-		appErr.Metadata["intent_status"] != "in_flight" {
-		t.Fatalf("unexpected conflict metadata: %#v", appErr.Metadata)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
@@ -2339,9 +2269,6 @@ func TestRebindMembershipToHealthyRoomAccountRollsBackWhenNewBindingFails(t *tes
 		WithArgs(pq.Array([]int64{membershipID})).
 		WillReturnRows(sqlmock.NewRows(accountShareMembershipOpenBindingColumns()).
 			AddRow(int64(600), membershipID, listingID, currentAccountID, listingRevisionID))
-	mock.ExpectQuery("SELECT id, membership_id, status\\s+FROM account_share_request_billing_intents").
-		WithArgs(pq.Array([]int64{membershipID})).
-		WillReturnRows(sqlmock.NewRows(accountShareMembershipPendingIntentColumns()))
 	mock.ExpectExec("UPDATE account_share_membership_account_bindings").
 		WithArgs(
 			now,
@@ -2434,9 +2361,6 @@ func TestRebindRoomMembershipSetUsesStableReplacementOutsideRemovalSet(t *testin
 		WillReturnRows(sqlmock.NewRows(accountShareMembershipOpenBindingColumns()).
 			AddRow(int64(600), firstMembershipID, listingID, sourceAccountIDs[0], listingRevisionID).
 			AddRow(int64(601), secondMembershipID, listingID, sourceAccountIDs[1], listingRevisionID))
-	mock.ExpectQuery("SELECT id, membership_id, status\\s+FROM account_share_request_billing_intents").
-		WithArgs(pq.Array(membershipIDs)).
-		WillReturnRows(sqlmock.NewRows(accountShareMembershipPendingIntentColumns()))
 
 	for index, membershipID := range membershipIDs {
 		mock.ExpectExec("UPDATE account_share_membership_account_bindings").
@@ -2530,9 +2454,6 @@ func TestRebindRoomMembershipsRejectsLastAccountRemovalWithActiveMembership(t *t
 		WithArgs(pq.Array([]int64{membershipID})).
 		WillReturnRows(sqlmock.NewRows(accountShareMembershipOpenBindingColumns()).
 			AddRow(int64(600), membershipID, listingID, accountID, listingRevisionID))
-	mock.ExpectQuery("SELECT id, membership_id, status\\s+FROM account_share_request_billing_intents").
-		WithArgs(pq.Array([]int64{membershipID})).
-		WillReturnRows(sqlmock.NewRows(accountShareMembershipPendingIntentColumns()))
 	mock.ExpectRollback()
 
 	result, err := repo.rebindRoomMembershipsBeforePlacementRemovalInTx(
@@ -2766,8 +2687,4 @@ func accountShareMembershipRebindColumns() []string {
 
 func accountShareMembershipOpenBindingColumns() []string {
 	return []string{"id", "membership_id", "listing_id", "account_id_snapshot", "listing_revision_id"}
-}
-
-func accountShareMembershipPendingIntentColumns() []string {
-	return []string{"id", "membership_id", "status"}
 }

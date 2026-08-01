@@ -22,7 +22,6 @@ import (
 // POST /v1/images/edits
 func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 	streamStarted := false
-	billingDispatchAttemptNo := 0
 	defer h.recoverResponsesPanic(c, &streamStarted)
 
 	requestStart := time.Now()
@@ -258,38 +257,6 @@ routeLoop:
 			if parsed.Multipart {
 				requestPayloadHash = service.HashUsageRequestPayload([]byte(parsed.StickySessionSeed()))
 			}
-			routedModel := parsed.Model
-			if channelMapping.Mapped {
-				routedModel = channelMapping.MappedModel
-			}
-			routedModel = account.GetMappedModel(routedModel)
-			forwardCtx, err = beginAccountShareBillingDispatch(
-				forwardCtx,
-				h.gatewayService,
-				selection,
-				&billingDispatchAttemptNo,
-				service.AccountShareBillingDispatchInput{
-					APIKey:             currentAPIKey,
-					User:               currentAPIKey.User,
-					Subscription:       currentSubscription,
-					RequestedModel:     parsed.Model,
-					RoutedModel:        routedModel,
-					InboundEndpoint:    GetInboundEndpoint(c),
-					UpstreamEndpoint:   GetUpstreamEndpoint(c, account.Platform),
-					RequestType:        accountShareBillingRequestType(parsed.Stream),
-					RequestPayloadHash: requestPayloadHash,
-					ChannelUsageFields: channelMapping.ToUsageFields(parsed.Model, routedModel),
-				},
-			)
-			if err != nil {
-				cancelForward()
-				if accountReleaseFunc != nil {
-					accountReleaseFunc()
-				}
-				reqLog.Error("openai.images.billing_dispatch_failed", zap.Int64("account_id", account.ID), zap.Error(err))
-				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable; no upstream request was sent", streamStarted)
-				return
-			}
 			userAgent := c.GetHeader("User-Agent")
 			clientIP := ip.GetClientIP(c)
 			inboundEndpoint := GetInboundEndpoint(c)
@@ -313,25 +280,11 @@ routeLoop:
 					ChannelUsageFields: channelMapping.ToUsageFields(parsed.Model, result.UpstreamModel),
 				})
 			}
-			forwardCtx = withOpenAIForwardResultBillingGate(forwardCtx, recordUsage)
 			result, err := h.gatewayService.ForwardImages(forwardCtx, c, account, body, parsed, channelMapping.MappedModel)
 			cancelForward()
 			forwardDurationMs := time.Since(forwardStart).Milliseconds()
 			recordUsageResult := func(result *service.OpenAIForwardResult) {
 				if result == nil {
-					return
-				}
-				if handled, billingErr := service.CommitOpenAIForwardResultBillingGate(forwardCtx, result); handled {
-					if billingErr != nil {
-						logger.L().With(
-							zap.String("component", "handler.openai_gateway.images"),
-							zap.Int64("user_id", subject.UserID),
-							zap.Int64("api_key_id", currentAPIKey.ID),
-							zap.Any("group_id", currentAPIKey.GroupID),
-							zap.String("model", parsed.Model),
-							zap.Int64("account_id", account.ID),
-						).Error("openai.images.record_usage_failed", zap.Error(billingErr))
-					}
 					return
 				}
 				h.submitUsageRecordTask(forwardCtx, func(ctx context.Context) {
@@ -351,16 +304,6 @@ routeLoop:
 			hasBillableUsage := service.OpenAIForwardResultHasBillableUsage(result)
 			if err != nil && hasBillableUsage {
 				recordUsageResult(result)
-			}
-			if finalizeErr := failAccountShareBillingDispatchWithoutUsage(forwardCtx, err, hasBillableUsage, parsed.Stream); finalizeErr != nil {
-				if accountReleaseFunc != nil {
-					accountReleaseFunc()
-				}
-				reqLog.Error("openai.images.billing_dispatch_finalize_failed", zap.Int64("account_id", account.ID), zap.Error(finalizeErr))
-				if c.Writer.Size() == writerSizeBeforeForward {
-					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable", streamStarted)
-				}
-				return
 			}
 			if accountReleaseFunc != nil {
 				accountReleaseFunc()

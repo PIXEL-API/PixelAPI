@@ -1168,7 +1168,7 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 			if err := creator.CreateOwnedWithProxyCapacity(ctx, ownerUserID, account); err != nil {
 				return nil, err
 			}
-		} else if err := s.ensureOwnedProxyAvailableForNewAccount(ctx, NewProxyScope(account.Platform, account.AccountLevel), *account.ProxyID); err != nil {
+		} else if err := s.ensureOwnedProxyAvailableForNewAccount(ctx, NewOwnedProxyScope(account.Platform, account.AccountLevel, ownerUserID), *account.ProxyID); err != nil {
 			return nil, err
 		} else if err := s.accountRepo.Create(ctx, account); err != nil {
 			return nil, fmt.Errorf("create account: %w", err)
@@ -1872,7 +1872,7 @@ func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID
 			if _, err := s.ensureOwnedProxyUsableForLogin(ctx, NewOwnedProxyScope(account.Platform, account.AccountLevel, ownerUserID), *req.ProxyID); err != nil {
 				return nil, err
 			}
-		} else if err := s.ensureOwnedProxyAvailableForNewAccount(ctx, NewProxyScope(account.Platform, account.AccountLevel), *req.ProxyID); err != nil {
+		} else if err := s.ensureOwnedProxyAvailableForNewAccount(ctx, NewOwnedProxyScope(account.Platform, account.AccountLevel, ownerUserID), *req.ProxyID); err != nil {
 			return nil, err
 		} else {
 			proxyID := *req.ProxyID

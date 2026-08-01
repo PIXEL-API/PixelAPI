@@ -129,6 +129,15 @@ func (r *accountShareBillingLifecycleRepoStub) TransitionRoomLifecycle(
 	return nil, ErrServiceUnavailable
 }
 
+func (r *accountShareBillingLifecycleRepoStub) ClearRoomMembersForDrain(
+	context.Context,
+	int64,
+	bool,
+	int64,
+) (*AccountShareSeatBillingResult, error) {
+	return &AccountShareSeatBillingResult{}, nil
+}
+
 func (r *accountShareBillingLifecycleRepoStub) FinalizeDrainingRoom(
 	context.Context,
 	int64,
@@ -196,24 +205,6 @@ func (r *accountShareBillingLifecycleRepoStub) GetRoomOperation(
 	string,
 ) (*AccountShareRoomOperation, error) {
 	return nil, ErrServiceUnavailable
-}
-
-type accountShareBillingGuardRepoStub struct {
-	ClusterRepository
-	renewCalls int
-}
-
-func (r *accountShareBillingGuardRepoStub) RenewTaskLease(
-	context.Context,
-	string,
-	string,
-	string,
-	string,
-	int64,
-	time.Duration,
-) (bool, error) {
-	r.renewCalls++
-	return true, nil
 }
 
 type accountShareHistoryRepoStub struct {
@@ -1777,81 +1768,14 @@ func TestAccountShareModeProcessSeatBillingDoesNotRunWaiverCompensation(t *testi
 	}
 }
 
-func TestAccountShareModeBillingIntentWorkerDrainsGuardedBatchesIndependently(t *testing.T) {
+func TestAccountShareModeSeatBillingDoesNotRunRoomLifecycle(t *testing.T) {
 	baseRepo := &accountShareModeRepoStub{}
 	repo := &accountShareBillingLifecycleRepoStub{AccountShareModeRepository: baseRepo}
-	billingErr := errors.New("claim durable billing intents")
-	guardRepo := &accountShareBillingGuardRepoStub{}
-	guardChecksAtClaim := make([]int, 0, 2)
-	intentRepo := &accountShareBillingWorkerIntentRepoStub{
-		claimBatches: [][]AccountShareBillingIntentWorkItem{
-			accountShareBillingWorkerTestBatch(t, "worker-a", 1, 100),
-		},
-		claimErrors: []error{nil, billingErr},
-		onClaim: func(_ int, _ ClaimAccountShareBillingIntentsInput) {
-			guardChecksAtClaim = append(guardChecksAtClaim, guardRepo.renewCalls)
-		},
-	}
-	worker := newAccountShareBillingWorkerForTest(
-		t,
-		intentRepo,
-		&accountShareBillingWorkerUsageRepoStub{},
-		"worker-a",
-	)
-	worker.config.BatchSize = 1
 	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
-	svc.SetLifecycleContractEnabled(true)
-	svc.SetBillingIntentWorker(worker)
-	executor := &ClusterTaskExecutor{
-		repo:          guardRepo,
-		nodeState:     &ClusterNodeState{},
-		clusterMode:   true,
-		deploymentID:  "pixel-test",
-		nodeID:        "node-a",
-		bootID:        "boot-a",
-		leaseDuration: time.Minute,
-		renewInterval: time.Second,
-	}
-	guard := &ClusterLeaseGuard{
-		executor:     executor,
-		taskName:     accountShareBillingIntentTaskName,
-		fencingToken: 1,
-	}
-
-	backlogLikely, err := svc.processBillingIntentsOnceLeased(context.Background(), guard)
-
-	require.ErrorIs(t, err, billingErr)
-	require.False(t, backlogLikely)
-	require.Equal(t, 2, intentRepo.claimCalls)
-	require.Len(t, guardChecksAtClaim, 2)
-	require.Greater(t, guardChecksAtClaim[0], 0)
-	require.Equal(t, guardChecksAtClaim[0]+1, guardChecksAtClaim[1])
-	require.Equal(t, 0, repo.endingCalls)
-	require.Equal(t, 0, repo.lifecycleCalls)
-}
-
-func TestAccountShareModeSeatBillingDoesNotRunBillingIntentWorkerOrRoomLifecycle(t *testing.T) {
-	baseRepo := &accountShareModeRepoStub{}
-	repo := &accountShareBillingLifecycleRepoStub{AccountShareModeRepository: baseRepo}
-	intentRepo := &accountShareBillingWorkerIntentRepoStub{
-		claimBatches: [][]AccountShareBillingIntentWorkItem{
-			accountShareBillingWorkerTestBatch(t, "worker-a", 1, 100),
-		},
-	}
-	worker := newAccountShareBillingWorkerForTest(
-		t,
-		intentRepo,
-		&accountShareBillingWorkerUsageRepoStub{},
-		"worker-a",
-	)
-	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
-	svc.SetLifecycleContractEnabled(true)
-	svc.SetBillingIntentWorker(worker)
 
 	err := svc.processSeatBillingOnceLeased(context.Background(), &ClusterLeaseGuard{})
 
 	require.NoError(t, err)
-	require.Zero(t, intentRepo.claimCalls)
 	require.Equal(t, 1, repo.endingCalls)
 	require.Zero(t, repo.lifecycleCalls)
 }
@@ -1860,28 +1784,11 @@ func TestAccountShareModeRoomLifecycleFinalizerRunsIndependentlyFromSeatBilling(
 	baseRepo := &accountShareModeRepoStub{}
 	repo := &accountShareBillingLifecycleRepoStub{AccountShareModeRepository: baseRepo}
 	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
-	svc.SetLifecycleContractEnabled(true)
 	svc.taskExecutor = &ClusterTaskExecutor{}
 
 	svc.processRoomLifecycleFinalizationOnce()
 
 	require.Equal(t, 1, repo.lifecycleCalls)
-}
-
-func TestAccountShareModeBillingIntentWorkerUsesIndependentClusterLease(t *testing.T) {
-	repo := &accountShareModeRepoStub{}
-	intentRepo := &accountShareBillingRecoveryRepoStub{}
-	clusterRepo := &clusterAdminRepositoryStub{}
-	cfg := testClusterRuntimeConfig()
-	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
-	svc.SetBillingIntentRepository(intentRepo)
-	svc.taskExecutor = NewClusterTaskExecutor(cfg, clusterRepo, NewClusterNodeState(cfg))
-
-	backlogLikely := svc.processBillingIntentsOnce()
-
-	require.False(t, backlogLikely)
-	require.Equal(t, accountShareBillingIntentTaskName, clusterRepo.acquiredTaskName)
-	require.Empty(t, intentRepo.listInputs)
 }
 
 func TestAccountShareModeRecoverableUnavailableSkipsMembershipWithActiveConcurrency(t *testing.T) {
@@ -2092,7 +1999,6 @@ func TestAccountShareModeCreateOpenAIListingStartsValidating(t *testing.T) {
 		repo:                     repo,
 		proxyRepo:                proxyRepo,
 		openaiOAuthService:       &OpenAIOAuthService{},
-		lifecycleContractEnabled: true,
 	}
 
 	created, err := service.CreateOpenAIListingFromToken(
@@ -2132,7 +2038,6 @@ func TestAccountShareModeCreateAnthropicListingDefaultsQuotaLimitPercents(t *tes
 		repo:                     repo,
 		proxyRepo:                proxyRepo,
 		oauthService:             &OAuthService{},
-		lifecycleContractEnabled: true,
 	}
 
 	got, err := svc.CreateAnthropicListingFromToken(context.Background(), 42, CreateAccountShareListingInput{
@@ -3466,20 +3371,6 @@ func TestDefaultAccountShareModeAllowedModels(t *testing.T) {
 	}
 }
 
-func TestAccountShareModeEndMembershipRequiresConfirmationToken(t *testing.T) {
-	repo := &accountShareModeRepoStub{}
-	svc := &AccountShareModeService{repo: repo}
-	svc.SetActionTokenSecret(strings.Repeat("s", 32))
-
-	_, err := svc.EndMembership(context.Background(), 42, 7, "")
-	if !errors.Is(err, ErrAccountShareEndTokenRequired) {
-		t.Fatalf("expected token required error, got %v", err)
-	}
-	if repo.endCalls != 0 {
-		t.Fatalf("expected repository not called without token, got %d", repo.endCalls)
-	}
-}
-
 func TestAccountShareModeJoinListingRejectsZeroIdleTimeout(t *testing.T) {
 	svc := &AccountShareModeService{}
 
@@ -3971,50 +3862,6 @@ func TestAccountShareModeReviewModerationRejectRequiresReason(t *testing.T) {
 	}
 }
 
-func TestAccountShareModeEndMembershipAcceptsIssuedConfirmationToken(t *testing.T) {
-	updatedAt := time.Date(2026, 7, 27, 6, 0, 0, 123000000, time.UTC)
-	repo := &accountShareModeRepoStub{
-		endSnapshot: &AccountShareMembership{
-			ID:             7,
-			ConsumerUserID: 42,
-			Status:         AccountShareMembershipStatusQueued,
-			UpdatedAt:      updatedAt,
-		},
-		endMembership: &AccountShareMembership{
-			ID:             7,
-			ConsumerUserID: 42,
-			OwnerUserID:    100,
-			APIKeyID:       0,
-			Status:         AccountShareMembershipStatusEnded,
-			UpdatedAt:      updatedAt.Add(time.Second),
-		},
-	}
-	svc := &AccountShareModeService{repo: repo}
-	svc.SetActionTokenSecret(strings.Repeat("s", 32))
-
-	intent, err := svc.CreateEndMembershipToken(context.Background(), 42, 7)
-	if err != nil {
-		t.Fatalf("CreateEndMembershipToken failed: %v", err)
-	}
-	membership, err := svc.EndMembership(context.Background(), 42, 7, intent.Token)
-	if err != nil {
-		t.Fatalf("EndMembership failed: %v", err)
-	}
-	if membership == nil || membership.ID != 7 {
-		t.Fatalf("unexpected membership: %#v", membership)
-	}
-	if repo.endCalls != 1 {
-		t.Fatalf("expected repository called once, got %d", repo.endCalls)
-	}
-	if repo.finalizeCalls != 0 {
-		t.Fatalf("queued membership must not enter active finalizer, got %d calls", repo.finalizeCalls)
-	}
-	if repo.endInput.ExpectedMembershipStatus != AccountShareMembershipStatusQueued ||
-		repo.endInput.OperationID == "" {
-		t.Fatalf("end snapshot was not bound to repository input: %#v", repo.endInput)
-	}
-}
-
 func TestAccountShareModeEndMembershipActiveWithoutLeaseFinalizes(t *testing.T) {
 	updatedAt := time.Date(2026, 7, 27, 6, 5, 0, 456000000, time.UTC)
 	repo := &accountShareModeRepoStub{
@@ -4176,52 +4023,6 @@ func TestAccountShareModeEndMembershipRejectsLifecycleConflict(t *testing.T) {
 	require.ErrorIs(t, err, ErrAccountShareEndStateConflict)
 	require.Equal(t, 1, repo.endCalls)
 	require.Equal(t, 0, repo.finalizeCalls)
-}
-
-func TestAccountShareModeEndMembershipTokenReplayUsesSameOperation(t *testing.T) {
-	updatedAt := time.Date(2026, 7, 27, 6, 30, 0, 0, time.UTC)
-	repo := &accountShareModeRepoStub{
-		endSnapshot: &AccountShareMembership{
-			ID:             76,
-			ConsumerUserID: 42,
-			Status:         AccountShareMembershipStatusActive,
-			UpdatedAt:      updatedAt,
-		},
-		endMembership: &AccountShareMembership{
-			ID:             76,
-			ConsumerUserID: 42,
-			Status:         AccountShareMembershipStatusEnding,
-		},
-		finalizeMembership: &AccountShareMembership{
-			ID:             76,
-			ConsumerUserID: 42,
-			Status:         AccountShareMembershipStatusEnded,
-		},
-		finalizeDone: true,
-	}
-	cache := &accountShareMembershipConcurrencyCacheStub{current: 0}
-	svc := &AccountShareModeService{
-		repo:               repo,
-		concurrencyService: NewConcurrencyService(cache),
-	}
-	svc.SetActionTokenSecret(strings.Repeat("s", 32))
-
-	intent, err := svc.CreateEndMembershipToken(context.Background(), 42, 76)
-	require.NoError(t, err)
-	claims, err := svc.validateEndMembershipToken(intent.Token, 42, 76, time.Now().UTC())
-	require.NoError(t, err)
-	require.NotEmpty(t, claims.Nonce)
-	require.NotEmpty(t, claims.OperationID)
-
-	first, err := svc.EndMembership(context.Background(), 42, 76, intent.Token)
-	require.NoError(t, err)
-	second, err := svc.EndMembership(context.Background(), 42, 76, intent.Token)
-	require.NoError(t, err)
-	require.Equal(t, AccountShareMembershipStatusEnded, first.Status)
-	require.Equal(t, AccountShareMembershipStatusEnded, second.Status)
-	require.Equal(t, 2, repo.endCalls)
-	require.Equal(t, claims.OperationID, repo.endInput.OperationID)
-	require.Equal(t, claims.OperationID, repo.finalizeOperationID)
 }
 
 func TestAccountShareModeEndMembershipUsesExistingConcurrentOperation(t *testing.T) {

@@ -22,7 +22,6 @@ import (
 // upstream, and converts responses back to Responses format.
 func (h *GatewayHandler) Responses(c *gin.Context) {
 	streamStarted := false
-	billingDispatchAttemptNo := 0
 
 	requestStart := time.Now()
 
@@ -247,39 +246,7 @@ routeLoop:
 				forwardBody = h.gatewayService.ReplaceModelInBody(body, channelMapping.MappedModel)
 			}
 			forwardCtx, cancelForward := bindAccountSelectionForwardContext(selectionCtx, selection)
-			routedModel := reqModel
-			if channelMapping.Mapped {
-				routedModel = channelMapping.MappedModel
-			}
-			routedModel = account.GetMappedModel(routedModel)
 			requestPayloadHash := service.HashUsageRequestPayload(body)
-			forwardCtx, err = beginAccountShareBillingDispatch(
-				forwardCtx,
-				h.gatewayService,
-				selection,
-				&billingDispatchAttemptNo,
-				service.AccountShareBillingDispatchInput{
-					APIKey:             currentAPIKey,
-					User:               currentAPIKey.User,
-					Subscription:       currentSubscription,
-					RequestedModel:     reqModel,
-					RoutedModel:        routedModel,
-					InboundEndpoint:    GetInboundEndpoint(c),
-					UpstreamEndpoint:   GetUpstreamEndpoint(c, account.Platform),
-					RequestType:        accountShareBillingRequestType(reqStream),
-					RequestPayloadHash: requestPayloadHash,
-					ChannelUsageFields: channelMapping.ToUsageFields(reqModel, routedModel),
-				},
-			)
-			if err != nil {
-				cancelForward()
-				if accountReleaseFunc != nil {
-					accountReleaseFunc()
-				}
-				reqLog.Error("gateway.responses.billing_dispatch_failed", zap.Int64("account_id", account.ID), zap.Error(err))
-				h.responsesErrorResponse(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable; no upstream request was sent")
-				return
-			}
 			userAgent := c.GetHeader("User-Agent")
 			clientIP := ip.GetClientIP(c)
 			inboundEndpoint := GetInboundEndpoint(c)
@@ -303,21 +270,11 @@ routeLoop:
 					ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
 				})
 			}
-			forwardCtx = withForwardResultBillingGate(forwardCtx, recordUsage)
 			result, err := h.gatewayService.ForwardAsResponses(forwardCtx, c, account, forwardBody, parsedReq)
 			cancelForward()
 
 			recordUsageResult := func(result *service.ForwardResult) {
 				if result == nil {
-					return
-				}
-				if handled, billingErr := service.CommitForwardResultBillingGate(forwardCtx, result); handled {
-					if billingErr != nil {
-						reqLog.Error("gateway.responses.record_usage_failed",
-							zap.Int64("account_id", account.ID),
-							zap.Error(billingErr),
-						)
-					}
 					return
 				}
 				h.submitUsageRecordTask(forwardCtx, func(ctx context.Context) {
@@ -332,20 +289,7 @@ routeLoop:
 			}
 			hasBillableUsage := result != nil &&
 				(service.IsBillableStreamUsageError(err) || service.ForwardResultHasBillableUsage(result))
-			if finalizeErr := finalizeAccountShareBillingAttempt(
-				forwardCtx,
-				err,
-				hasBillableUsage,
-				reqStream,
-				func() { recordUsageResult(result) },
-				accountReleaseFunc,
-			); finalizeErr != nil {
-				reqLog.Error("gateway.responses.billing_dispatch_finalize_failed", zap.Int64("account_id", account.ID), zap.Error(finalizeErr))
-				if c.Writer.Size() == writerSizeBeforeForward {
-					h.responsesErrorResponse(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable")
-				}
-				return
-			}
+			finalizeAccountShareRequest(hasBillableUsage, func() { recordUsageResult(result) }, accountReleaseFunc)
 			h.gatewayService.ReportAccountForwardResult(account.ID, result, err)
 
 			if err != nil {

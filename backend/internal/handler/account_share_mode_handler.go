@@ -460,14 +460,22 @@ func (h *AccountShareModeHandler) GetRecommendationUsageProfile(c *gin.Context) 
 
 // ListAvailableProxies 按用户即将分享的账号平台与等级返回可选的平台代理。
 // 用户不再拥有代理，只能选择平台代理；platform / account_level 查询参数决定筛选范围。
+//
+// 这里必须带上调用者自己的遗留归属豁免：更新前用户可以自行上传代理，迁移 256 明确
+// 保留了这些代理的 owner_user_id。不带豁免的话，老用户账号上已经绑定的自有代理不会
+// 出现在列表里，选择器只能显示成「请选择」，重新授权时又会被 scope 校验拒绝。
+// 创建侧的事务内守卫（account_repo.ensureOwnedProxyCapacityForCreateInTx）本来就允许
+// owner_user_id = 调用者，这里放开只是让选择器与它保持一致。
 func (h *AccountShareModeHandler) ListAvailableProxies(c *gin.Context) {
-	if _, ok := middleware2.GetAuthSubjectFromContext(c); !ok {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
 		response.Unauthorized(c, "User not authenticated")
 		return
 	}
-	scope := service.NewProxyScope(
+	scope := service.NewOwnedProxyScope(
 		strings.TrimSpace(c.Query("platform")),
 		strings.TrimSpace(c.Query("account_level")),
+		subject.UserID,
 	)
 	proxies, err := h.service.ListAvailableProxies(c.Request.Context(), scope)
 	if err != nil {
@@ -944,11 +952,9 @@ func (h *AccountShareModeHandler) EndMembership(c *gin.Context) {
 		response.BadRequest(c, "Invalid membership ID")
 		return
 	}
+	// 单阶段结束：token 仅为旧前端兼容，缺省或无效均可直接结束
 	var req accountShareEndRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.ErrorFrom(c, service.ErrAccountShareEndTokenRequired)
-		return
-	}
+	_ = c.ShouldBindJSON(&req)
 	membership, err := h.service.EndMembership(c.Request.Context(), subject.UserID, membershipID, req.Token)
 	if err != nil {
 		logger.FromContext(c.Request.Context()).Warn("account share end failed",

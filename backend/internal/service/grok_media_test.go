@@ -3,7 +3,6 @@ package service
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -37,58 +36,6 @@ func TestGrokVideoMutationEndpointsAreBillableGenerationRequests(t *testing.T) {
 	require.True(t, GrokMediaEndpointVideoStatus.IsVideoLookupRequest())
 	require.True(t, GrokMediaEndpointVideoContent.IsVideoLookupRequest())
 	require.False(t, GrokMediaEndpointVideoContent.RequiresRequestBody())
-}
-
-func TestForwardGrokMediaGenerationBillingGateFailureLeavesResponseBodyEmpty(t *testing.T) {
-	requestBody := []byte(`{"model":"grok-imagine-image-quality","prompt":"draw a cat","n":1}`)
-	upstream := &grokMediaContentUpstreamStub{
-		responses: []*http.Response{{
-			StatusCode: http.StatusOK,
-			Header: http.Header{
-				"Content-Type": []string{"application/json"},
-				"X-Request-Id": []string{"grok-generation-request"},
-			},
-			Body: io.NopCloser(bytes.NewReader([]byte(
-				`{"data":[{"url":"https://images.example/secret-image.png"}]}`,
-			))),
-		}},
-	}
-	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
-	c, recorder := grokMediaContentTestContext(
-		http.MethodPost,
-		"https://api.example/v1/images/generations",
-		map[string]string{"Content-Type": "application/json"},
-	)
-	billingErr := errors.New("billing gate rejected generation")
-	gateCalls := 0
-	ctx := WithOpenAIForwardResultBillingGate(
-		context.Background(),
-		NewOpenAIForwardResultBillingGate(func(result *OpenAIForwardResult) error {
-			gateCalls++
-			require.Equal(t, 1, result.ImageCount)
-			require.Equal(t, "grok-imagine-image-quality", result.BillingModel)
-			return billingErr
-		}),
-	)
-
-	result, err := svc.ForwardGrokMedia(
-		ctx,
-		c,
-		grokMediaContentTestAccount(),
-		GrokMediaEndpointImagesGenerations,
-		"",
-		requestBody,
-		"application/json",
-	)
-
-	require.ErrorIs(t, err, billingErr)
-	require.NotNil(t, result)
-	require.Equal(t, 1, gateCalls)
-	require.Empty(t, recorder.Body.String(), "upstream success body must not be exposed before billing commits")
-	require.Empty(t, recorder.Header().Get("Content-Type"))
-	require.False(t, IsResponseCommitted(c))
-	require.Len(t, upstream.requests, 1)
-	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.requests[0].Context()))
 }
 
 func TestGrokMediaUsageRejectsSuccessfulResponseWithoutTerminalOutput(t *testing.T) {
@@ -211,17 +158,8 @@ func TestForwardGrokMediaInvalidGenerationSuccessDoesNotBillOrExposeBody(t *test
 				"https://api.example/v1/media/generations",
 				map[string]string{"Content-Type": "application/json"},
 			)
-			gateCalls := 0
-			ctx := WithOpenAIForwardResultBillingGate(
-				context.Background(),
-				NewOpenAIForwardResultBillingGate(func(*OpenAIForwardResult) error {
-					gateCalls++
-					return nil
-				}),
-			)
-
 			result, err := svc.ForwardGrokMedia(
-				ctx,
+				context.Background(),
 				c,
 				grokMediaContentTestAccount(),
 				tt.endpoint,
@@ -232,7 +170,6 @@ func TestForwardGrokMediaInvalidGenerationSuccessDoesNotBillOrExposeBody(t *test
 
 			require.Error(t, err)
 			require.Nil(t, result)
-			require.Zero(t, gateCalls)
 			require.Equal(t, http.StatusBadGateway, recorder.Code)
 			require.Equal(t, "Upstream request failed", gjson.GetBytes(recorder.Body.Bytes(), "error.message").String())
 			require.NotContains(t, recorder.Body.String(), tt.response)

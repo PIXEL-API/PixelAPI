@@ -3671,6 +3671,9 @@ const ACCOUNT_SHARE_MIN_SEATS = 1
 const ACCOUNT_SHARE_MAX_SEATS = 30
 const ACCOUNT_SHARE_MEMBER_LIMIT_HELP = '由房主设置，与账号数量/账号并发无推导关系；房主自用不占消费者名额'
 const ROOM_LIFECYCLE_OPERATION_POLL_INTERVAL_MS = 1500
+// 排空清退在下架请求内同步完成，仅剩进行中请求需要等待；后端另有 30 分钟强制收口。
+// 前端轮询 10 分钟后停止并提示手动刷新，避免对着永不推进的状态无限轮询。
+const ROOM_LIFECYCLE_OPERATION_POLL_MAX_MS = 10 * 60 * 1000
 const ACCOUNT_SHARE_TRANSIENT_STATUS_REFRESH_INTERVAL_MS = 8_000
 const ROOM_LIFECYCLE_TERMINAL_OPERATION_STATUSES = new Set([
   'succeeded',
@@ -3907,7 +3910,10 @@ const accountShareRecommendationErrorMessages: Record<string, string> = {
 }
 const accountShareEndErrorMessages: Record<string, string> = {
   ...accountShareJoinErrorMessages,
-  ACCOUNT_SHARE_LISTING_NOT_FOUND: '这次使用或预约状态已变化，请刷新账号广场后确认'
+  ACCOUNT_SHARE_LISTING_NOT_FOUND: '这次使用或预约状态已变化，请刷新账号广场后确认',
+  ACCOUNT_SHARE_END_STATE_CONFLICT: '这次使用或预约状态已变化，请刷新后重试',
+  ACCOUNT_SHARE_MEMBERSHIP_NOT_FOUND: '这次使用或预约已结束，请刷新账号广场后确认',
+  ACCOUNT_SHARE_MEMBERSHIP_ENDING: '上一次退出仍在结算中，请稍候片刻'
 }
 
 function getListingPreferencesStorageKey(): string {
@@ -4320,6 +4326,7 @@ let roomLifecycleOperationController: AbortController | null = null
 let roomLifecycleStateRequestSeq = 0
 let roomLifecycleOperationPollSeq = 0
 let roomLifecycleOperationPollTimer: number | null = null
+let roomLifecycleOperationPollStartedAt = 0
 let roomLifecycleIdempotencySignature = ''
 let roomLifecycleIdempotencyKey = ''
 let mySpendAccountsRequestController: AbortController | null = null
@@ -8765,7 +8772,7 @@ function roomLifecycleActionTitle(action: Exclude<AccountShareRoomLifecycleActio
 function roomLifecycleActionDescription(action: Exclude<AccountShareRoomLifecycleAction, 'delete'>): string {
   switch (action) {
     case 'drain':
-      return '房间将停止接收新成员并进入“安全排空中”；现有消费者继续正常使用，待全部离开后房间自动转为“已暂停”，随时可重新上架。'
+      return '房间将立即停止接收新成员，并清退全部现有成员：预约成员直接释放，使用中的成员按已用时长结算并退还未用预付款。等待进行中的请求结束后房间自动转为“已暂停”，随时可重新上架。'
     case 'activate':
       return '系统会校验房间主账号的连通性和可用状态；只有校验通过才会重新开放。'
     case 'suspend':
@@ -8776,7 +8783,7 @@ function roomLifecycleActionDescription(action: Exclude<AccountShareRoomLifecycl
 function roomLifecycleActionImpact(action: Exclude<AccountShareRoomLifecycleAction, 'delete'>): string {
   switch (action) {
     case 'drain':
-      return '下架会先进入排空阶段（不会中断现有消费者），全部用户离开后房间自动暂停；不会删除房间或历史记录。'
+      return '下架会立即清退全部成员并完成结算退款，通常在几分钟内自动转为“已暂停”；不会删除房间或历史记录。'
     case 'activate':
       return '恢复校验失败时房间仍保持暂停，并展示失败原因，不会带病开放。'
     case 'suspend':
@@ -8785,7 +8792,7 @@ function roomLifecycleActionImpact(action: Exclude<AccountShareRoomLifecycleActi
 }
 
 function roomLifecycleOperationLabel(operation: AccountShareRoomOperation): string {
-  const actionLabel = operation.action === 'delete_room' ? '软删除房间' : '旧版排空任务'
+  const actionLabel = operation.action === 'delete_room' ? '软删除房间' : '房间排空'
   switch (operation.status) {
     case 'succeeded':
       return `${actionLabel}已完成`
@@ -9112,13 +9119,13 @@ async function submitRoomLifecycleAction(): Promise<void> {
     if (refreshedListing) roomLifecycleListing.value = refreshedListing
     if (updatedState.pending_operation_id) {
       startRoomLifecycleOperationPolling(updatedState.pending_operation_id)
-      appStore.showSuccess('旧版排空任务正在收口')
+      appStore.showSuccess('房间正在排空收口')
     } else {
       appStore.showSuccess(
         action === 'activate'
           ? '房间已重新上架'
           : action === 'drain'
-            ? '房间已下架，现有用户不受影响'
+            ? '房间已下架并清退全部成员'
             : '房间已紧急停用'
       )
     }
@@ -9135,6 +9142,7 @@ function startRoomLifecycleOperationPolling(operationID: string): void {
   if (!normalizedOperationID || !roomLifecycleListing.value) return
   stopRoomLifecycleOperationPolling()
   const pollSeq = roomLifecycleOperationPollSeq
+  roomLifecycleOperationPollStartedAt = Date.now()
   roomLifecyclePolling.value = true
   void pollRoomLifecycleOperation(normalizedOperationID, pollSeq)
 }
@@ -9181,6 +9189,12 @@ async function pollRoomLifecycleOperation(
       roomLifecyclePolling.value = false
       roomLifecycleOperationController = null
       await handleRoomLifecycleTerminalOperation(operation)
+      return
+    }
+    if (Date.now() - roomLifecycleOperationPollStartedAt > ROOM_LIFECYCLE_OPERATION_POLL_MAX_MS) {
+      roomLifecyclePolling.value = false
+      roomLifecycleOperationController = null
+      appStore.showWarning('排空仍在进行，已停止自动查询；可点击“立即查询”手动刷新状态。')
       return
     }
     roomLifecycleOperationPollTimer = window.setTimeout(() => {
@@ -9721,11 +9735,7 @@ async function endUse(pending: PendingEndUseState): Promise<AccountShareMembersh
   endingId.value = membershipID
   let endSucceeded = false
   try {
-    const intent = await accountShareAPI.createEndMembershipIntent(membershipID)
-    const responseMembership = await accountShareAPI.endMembership(membershipID, intent.token)
-    const membership = responseMembership.status === 'ending' && !responseMembership.ending_operation_id
-      ? { ...responseMembership, ending_operation_id: intent.operation_id }
-      : responseMembership
+    const membership = await accountShareAPI.endMembership(membershipID)
     endSucceeded = true
     if (membership.status === 'ending') {
       setPendingMembershipEnd(pending, membership)
@@ -9741,11 +9751,7 @@ async function endUse(pending: PendingEndUseState): Promise<AccountShareMembersh
     const refreshed = await loadListings()
     const resolutionRefreshed = !isKeyResolutionMode.value || await loadKeyResolutionState()
     if (refreshed && resolutionRefreshed) {
-      if (membership.status === 'ending' && !membership.ending_operation_id) {
-        appStore.showWarning(`${successMessage}，但进度标识缺失；请刷新状态并联系管理员。`)
-      } else {
-        appStore.showSuccess(successMessage)
-      }
+      appStore.showSuccess(successMessage)
     } else {
       appStore.showWarning(`${successMessage}，但状态刷新失败；请稍后点击页面顶部“刷新”确认状态。`)
     }

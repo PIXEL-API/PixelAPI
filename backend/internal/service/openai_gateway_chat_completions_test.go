@@ -300,11 +300,7 @@ func TestOpenAICompatRoutesRejectUnexpectedNon2xxBeforeSuccessHandling(t *testin
 			account := newForceChatBridgeTestAccount()
 			account.Extra[openai_compat.ExtraKeyResponsesSupported] = tt.responsesSupported
 
-			gateCalls := 0
-			ctx := WithOpenAIForwardResultBillingGate(context.Background(), NewOpenAIForwardResultBillingGate(func(*OpenAIForwardResult) error {
-				gateCalls++
-				return nil
-			}))
+			ctx := context.Background()
 			var (
 				result *OpenAIForwardResult
 				err    error
@@ -317,7 +313,6 @@ func TestOpenAICompatRoutesRejectUnexpectedNon2xxBeforeSuccessHandling(t *testin
 
 			require.Error(t, err)
 			require.Nil(t, result)
-			require.Zero(t, gateCalls)
 			require.Equal(t, http.StatusBadGateway, recorder.Code)
 			require.Equal(t, "Upstream request failed", gjson.Get(recorder.Body.String(), "error.message").String())
 			require.NotContains(t, recorder.Body.String(), "secret-marker")

@@ -396,15 +396,6 @@ func updateOpenAIForwardResultBillingState(
 	return result
 }
 
-func commitOpenAIForwardResultBillingSnapshotBeforeTerminal(
-	ctx context.Context,
-	snapshot openAIForwardResultSnapshot,
-) (*OpenAIForwardResult, bool, error) {
-	result := updateOpenAIForwardResultBillingState(ctx, snapshot)
-	handled, err := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result)
-	return result, handled, err
-}
-
 func resolveOpenAIResponseImageBillingConfig(endpoint, requestedModel string, reqBody map[string]any) openAIResponseImageBillingConfig {
 	intent := IsImageGenerationIntentMap(endpoint, requestedModel, reqBody)
 	imageModel, imageSize, err := resolveOpenAIResponsesImageBillingConfig(reqBody, requestedModel)
@@ -3714,7 +3705,7 @@ func (s *OpenAIGatewayService) ForwardWithAnalysis(ctx context.Context, c *gin.C
 					firstTokenMs:    firstTokenMs,
 					responseHeaders: resp.Header,
 				})
-				if errors.Is(err, ErrAccountShareBillingPreTerminalCommit) || OpenAIForwardResultHasBillableUsage(result) {
+				if OpenAIForwardResultHasBillableUsage(result) {
 					return result, err
 				}
 				return nil, err
@@ -3738,7 +3729,7 @@ func (s *OpenAIGatewayService) ForwardWithAnalysis(ctx context.Context, c *gin.C
 					usage:           usage,
 					responseHeaders: resp.Header,
 				})
-				if errors.Is(err, ErrAccountShareBillingPreTerminalCommit) || OpenAIForwardResultHasBillableUsage(result) {
+				if OpenAIForwardResultHasBillableUsage(result) {
 					return result, err
 				}
 				return nil, err
@@ -4081,7 +4072,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 					firstTokenMs:    firstTokenMs,
 					responseHeaders: resp.Header,
 				})
-				if errors.Is(err, ErrAccountShareBillingPreTerminalCommit) || OpenAIForwardResultHasBillableUsage(result) {
+				if OpenAIForwardResultHasBillableUsage(result) {
 					return result, err
 				}
 				return nil, err
@@ -4094,7 +4085,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 					usage:           usage,
 					responseHeaders: resp.Header,
 				})
-				if errors.Is(err, ErrAccountShareBillingPreTerminalCommit) || OpenAIForwardResultHasBillableUsage(result) {
+				if OpenAIForwardResultHasBillableUsage(result) {
 					return result, err
 				}
 				return nil, err
@@ -5179,16 +5170,6 @@ streamLoop:
 				eventType != "error" &&
 				eventType != "response.error" {
 				usage.ImageCount = imageCounter.Count()
-				if _, handled, billingErr := commitOpenAIForwardResultBillingSnapshotBeforeTerminal(ctx, openAIForwardResultSnapshot{
-					requestID:            upstreamRequestID,
-					responseID:           responseID,
-					usage:                usage,
-					firstTokenMs:         firstTokenMs,
-					responseHeaders:      resp.Header,
-					billingUsageComplete: billingUsageObservation.complete(),
-				}); handled && billingErr != nil {
-					return resultWithUsage(), billingErr
-				}
 			}
 			if sanitizedData, sanitized := sanitizeOpenAIResponseFailedEventForClient(
 				dataBytes,
@@ -5391,15 +5372,6 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	if err != nil {
 		return nil, fmt.Errorf("restore OpenAI passthrough namespace response: %w", err)
 	}
-	if _, handled, billingErr := commitOpenAIForwardResultBillingSnapshotBeforeTerminal(ctx, openAIForwardResultSnapshot{
-		requestID:            resp.Header.Get("x-request-id"),
-		responseID:           extractOpenAIResponseIDFromJSONBytes(body),
-		usage:                usage,
-		responseHeaders:      resp.Header,
-		billingUsageComplete: openAIResponsesBillingUsageComplete(body),
-	}); handled && billingErr != nil {
-		return usage, billingErr
-	}
 	c.Data(resp.StatusCode, contentType, body)
 	return usage, nil
 }
@@ -5474,15 +5446,6 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(ctx context.Context, r
 		if contentType == "" {
 			contentType = "text/event-stream"
 		}
-	}
-	if _, handled, billingErr := commitOpenAIForwardResultBillingSnapshotBeforeTerminal(ctx, openAIForwardResultSnapshot{
-		requestID:            resp.Header.Get("x-request-id"),
-		responseID:           extractOpenAIResponseIDFromJSONBytes(body),
-		usage:                usage,
-		responseHeaders:      resp.Header,
-		billingUsageComplete: openAIResponsesBillingUsageComplete(body),
-	}); handled && billingErr != nil {
-		return usage, billingErr
 	}
 	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
 		c.Data(resp.StatusCode, contentType, body)
@@ -6520,17 +6483,6 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			}
 			if successTerminal {
 				usage.ImageCount = imageCounter.Count()
-				if _, handled, billingErr := commitOpenAIForwardResultBillingSnapshotBeforeTerminal(ctx, openAIForwardResultSnapshot{
-					requestID:            upstreamRequestID,
-					responseID:           responseID,
-					usage:                usage,
-					firstTokenMs:         firstTokenMs,
-					responseHeaders:      resp.Header,
-					billingUsageComplete: billingUsageObservation.complete(),
-				}); handled && billingErr != nil {
-					streamFailoverErr = billingErr
-					return
-				}
 			}
 			disposition := classifyOpenAIStreamEvent(data, eventType)
 			startsClientOutput := forceFlushFailedEvent || disposition.commitPending
@@ -7163,19 +7115,6 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 		}
 	}
 
-	if _, handled, billingErr := commitOpenAIForwardResultBillingSnapshotBeforeTerminal(ctx, openAIForwardResultSnapshot{
-		requestID:            resp.Header.Get("x-request-id"),
-		responseID:           extractOpenAIResponseIDFromJSONBytes(body),
-		usage:                usage,
-		responseHeaders:      resp.Header,
-		billingUsageComplete: openAIResponsesBillingUsageComplete(body),
-	}); handled && billingErr != nil {
-		return &openaiNonStreamingResult{
-			OpenAIUsage: usage,
-			usage:       usage,
-			responseID:  extractOpenAIResponseIDFromJSONBytes(body),
-		}, billingErr
-	}
 	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
 		c.Data(resp.StatusCode, contentType, body)
 	}
@@ -7276,19 +7215,6 @@ func (s *OpenAIGatewayService) handleSSEToJSON(ctx context.Context, resp *http.R
 		if contentType == "" {
 			contentType = "text/event-stream"
 		}
-	}
-	if _, handled, billingErr := commitOpenAIForwardResultBillingSnapshotBeforeTerminal(ctx, openAIForwardResultSnapshot{
-		requestID:            resp.Header.Get("x-request-id"),
-		responseID:           extractOpenAIResponseIDFromJSONBytes(body),
-		usage:                usage,
-		responseHeaders:      resp.Header,
-		billingUsageComplete: openAIResponsesBillingUsageComplete(body),
-	}); handled && billingErr != nil {
-		return &openaiNonStreamingResult{
-			OpenAIUsage: usage,
-			usage:       usage,
-			responseID:  extractOpenAIResponseIDFromJSONBytes(body),
-		}, billingErr
 	}
 	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
 		c.Data(resp.StatusCode, contentType, body)
@@ -7734,9 +7660,7 @@ type OpenAIRecordUsageInput struct {
 
 // RecordUsage records usage and deducts balance
 func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRecordUsageInput) error {
-	return retryAccountShareBillingRecordUsage(ctx, func(attemptCtx context.Context) error {
-		return s.recordUsageOnce(attemptCtx, input)
-	})
+	return s.recordUsageOnce(ctx, input)
 }
 
 func (s *OpenAIGatewayService) recordUsageOnce(ctx context.Context, input *OpenAIRecordUsageInput) error {
@@ -7800,14 +7724,7 @@ func (s *OpenAIGatewayService) recordUsageOnce(ctx context.Context, input *OpenA
 		if accountShareListing != nil && accountShareListing.AccountID != account.ID {
 			return ErrNoAvailableAccounts
 		}
-		durableMultiplier, durable, durableErr := accountShareBillingRateMultiplierFromContext(ctx)
-		if durableErr != nil {
-			return durableErr
-		}
-		if durable {
-			multiplier = durableMultiplier
-			rateMultiplierSource = RateMultiplierSourceAccountShare
-		} else if IsAccountShareModeOwnerSelfUse(accountShareMembership, accountShareListing) {
+		if IsAccountShareModeOwnerSelfUse(accountShareMembership, accountShareListing) {
 			ownerMultiplier, resolveErr := s.accountShareModeService.ResolveOwnerSelfUseMultiplier(ctx)
 			if resolveErr != nil {
 				return resolveErr
@@ -7847,8 +7764,7 @@ func (s *OpenAIGatewayService) recordUsageOnce(ctx context.Context, input *OpenA
 		return fmt.Errorf("calculate OpenAI usage cost for model %s: %w", billingModel, err)
 	}
 	var accountShareModeSettlement *AccountShareModeBillingSnapshot
-	_, durableAccountShareBilling := accountShareBillingCommandFromContext(ctx)
-	if !durableAccountShareBilling && accountShareMembership != nil && accountShareListing != nil && cost != nil {
+	if accountShareMembership != nil && accountShareListing != nil && cost != nil {
 		baseCharge := cost.ActualCost
 		hourlyCharge := 0.0
 		policy, err := s.accountShareModeService.ResolvePolicy(ctx)
@@ -7970,29 +7886,12 @@ func (s *OpenAIGatewayService) recordUsageOnce(ctx context.Context, input *OpenA
 	}
 
 	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
-		if dispatch, durable := AccountShareBillingDispatchFromContext(ctx); durable {
-			command := buildUsageBillingCommand(requestID, usageLog, &postUsageBillingParams{
-				Cost:               cost,
-				User:               user,
-				APIKey:             apiKey,
-				Account:            account,
-				Subscription:       subscription,
-				IsSubscriptionBill: isSubscriptionBilling,
-			})
-			handled, readyErr := markAccountShareBillingDispatchReady(ctx, command)
-			if !handled {
-				dispatch.barrier.complete()
-				return ErrServiceUnavailable
-			}
-			return readyErr
-		}
 		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")
 		logger.LegacyPrintf("service.openai_gateway", "[SIMPLE MODE] Usage recorded (not billed): user=%d, tokens=%d", usageLog.UserID, usageLog.TotalTokens())
 		s.deferredService.ScheduleLastUsedUpdate(account.ID)
 		return nil
 	}
 
-	_, durableDispatch := AccountShareBillingDispatchFromContext(ctx)
 	billingErr := func() error {
 		privateGroupCommissionRate := 0.0
 		if isSubscriptionBilling && apiKey.Group != nil && apiKey.Group.IsUserPrivateScope() && s.settingService != nil {
@@ -8019,9 +7918,7 @@ func (s *OpenAIGatewayService) recordUsageOnce(ctx context.Context, input *OpenA
 	if billingErr != nil {
 		return billingErr
 	}
-	if !durableDispatch {
-		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")
-	}
+	writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")
 
 	return nil
 }

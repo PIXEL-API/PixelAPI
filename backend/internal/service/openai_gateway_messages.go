@@ -501,9 +501,6 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 	result.UpstreamModel = upstreamModel
 	result.ResponseServiceTier = finalResponse.ServiceTier
 	result.Stream = false
-	if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
-		return result, billingErr
-	}
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -687,11 +684,6 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		}
 		if successTerminal {
 			sawSuccessTerminal = true
-			result := resultWithUsage()
-			if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
-				terminalErr = billingErr
-				return true
-			}
 		}
 
 		if !clientDisconnected {
@@ -724,9 +716,6 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		result := resultWithUsage()
 		if !sawSuccessTerminal {
 			return result, errors.New("upstream responses stream ended without a successful terminal event")
-		}
-		if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
-			return result, billingErr
 		}
 		if finalEvents := apicompat.FinalizeResponsesAnthropicStream(state); len(finalEvents) > 0 {
 			for _, evt := range finalEvents {

@@ -152,11 +152,15 @@ const ProxySelectorStub = defineComponent({
     allowEmpty: {
       type: Boolean,
       default: true
+    },
+    hideEndpoint: {
+      type: Boolean,
+      default: false
     }
   },
   emits: ['update:modelValue'],
   template: `
-    <div data-testid="proxy-selector" :data-allow-empty="String(allowEmpty)" :data-value="String(modelValue ?? '')">
+    <div data-testid="proxy-selector" :data-allow-empty="String(allowEmpty)" :data-hide-endpoint="String(hideEndpoint)" :data-value="String(modelValue ?? '')">
       <button type="button" data-testid="select-proxy-9" @click="$emit('update:modelValue', 9)">replace</button>
       <button v-if="allowEmpty" type="button" data-testid="clear-proxy" @click="$emit('update:modelValue', null)">clear</button>
     </div>
@@ -600,5 +604,116 @@ describe('EditAccountModal', () => {
     expect(payload?.credentials).not.toHaveProperty('header_override_enabled')
     expect(payload?.credentials).not.toHaveProperty('header_overrides')
     expect(payload?.extra?.grok_client_tool_cache_enabled).toBeUndefined()
+  })
+
+  function buildRoomAttachedAccount() {
+    const account = buildAccount()
+    account.type = 'oauth'
+    account.credentials = { access_token: 'oauth-token' }
+    account.share_mode = 'private'
+    // 后端 HasRoomAccount 用的就是这张表的状态，前端以此判断「还挂在房间上」
+    account.account_share_mode_listing_id = 31
+    account.external_placement = { target: 'room', state: 'active', version: 3 }
+    return account
+  }
+
+  it('账号仍挂在广场房间时禁用仅本人/公共号池并说明原因', async () => {
+    const account = buildRoomAttachedAccount()
+    updateUserAccountMock.mockReset()
+    updateUserAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account, { accountScope: 'user', ownerUserId: 9 })
+
+    expect(
+      wrapper.get('[data-testid="placement-target-private"]').attributes('disabled')
+    ).toBeDefined()
+    expect(
+      wrapper.get('[data-testid="placement-target-public_pool"]').attributes('disabled')
+    ).toBeDefined()
+    // 当前生效的模式不能被禁用，否则等于一个都选不中
+    expect(
+      wrapper.get('[data-testid="placement-target-room"]').attributes('disabled')
+    ).toBeUndefined()
+    expect(wrapper.get('[data-testid="placement-disabled-reason-private"]').text()).toBe(
+      'userAccounts.externalPlacement.roomAttachedDisabledHint'
+    )
+  })
+
+  it('房间账号点不动被禁用的模式，保存其它字段也不会触发注定失败的转换', async () => {
+    const account = buildRoomAttachedAccount()
+    updateUserAccountMock.mockReset()
+    updateUserAccountMock.mockResolvedValue(account)
+    convertPlacementMock.mockReset()
+
+    const wrapper = mountModal(account, { accountScope: 'user', ownerUserId: 9 })
+
+    // 被禁用的 radio 不会响应点击，模式停在 room
+    await wrapper.get('[data-testid="placement-target-private"]').setValue()
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(updateUserAccountMock).toHaveBeenCalledTimes(1)
+    // 修复前这里会调用转换并被后端以 ErrAccountShareRoomAccountAttached 拒绝，
+    // 用户看到的是「账号其他设置已保存，但模式切换失败」
+    expect(convertPlacementMock).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="edit-placement-save-error"]').exists()).toBe(false)
+  })
+
+  it('已退房但仍处于平台账号模式的账号可以切回仅本人', async () => {
+    const account = buildAccount()
+    account.type = 'oauth'
+    account.credentials = { access_token: 'oauth-token' }
+    account.share_mode = 'private'
+    // 退房后 account_share_room_accounts 里没有记录了（listing id 为空），
+    // 但 DetachRoomAccountsAtomic 不会把 placement.target 写回 private
+    account.external_placement = { target: 'room', state: 'active', version: 4 }
+
+    const wrapper = mountModal(account, { accountScope: 'user', ownerUserId: 9 })
+
+    expect(
+      wrapper.get('[data-testid="placement-target-private"]').attributes('disabled')
+    ).toBeUndefined()
+    expect(
+      wrapper.get('[data-testid="placement-target-public_pool"]').attributes('disabled')
+    ).toBeUndefined()
+  })
+
+  it('用户侧默认隐藏平台代理的 host:port，管理端仍可见', async () => {
+    const account = buildAccount()
+    account.type = 'oauth'
+    account.credentials = { access_token: 'oauth-token' }
+    account.proxy_id = 7
+    const proxies = [
+      { id: 7, name: 'p', protocol: 'http', host: 'proxy.example.com', port: 8080, status: 'active', max_accounts: 0 }
+    ]
+
+    // 两边都显式给 allowProxy：这个 prop 没有声明默认值，不传时 Vue 会把它转成 false，
+    // 选择器根本不会渲染（与 hide-endpoint 无关的另一个问题）。
+    const userWrapper = mountModal(account, { accountScope: 'user', allowProxy: true, proxies })
+    expect(
+      userWrapper.get('[data-testid="proxy-selector"]').attributes('data-hide-endpoint')
+    ).toBe('true')
+
+    const adminWrapper = mountModal(account, { allowProxy: true, proxies })
+    expect(
+      adminWrapper.get('[data-testid="proxy-selector"]').attributes('data-hide-endpoint')
+    ).toBe('false')
+  })
+
+  it('未挂房间的账号仍可自由切换模式', async () => {
+    const account = buildAccount()
+    account.type = 'oauth'
+    account.credentials = { access_token: 'oauth-token' }
+    account.share_mode = 'private'
+
+    const wrapper = mountModal(account, { accountScope: 'user', ownerUserId: 9 })
+
+    expect(
+      wrapper.get('[data-testid="placement-target-private"]').attributes('disabled')
+    ).toBeUndefined()
+    expect(
+      wrapper.get('[data-testid="placement-target-public_pool"]').attributes('disabled')
+    ).toBeUndefined()
+    expect(wrapper.find('[data-testid="placement-disabled-reason-public_pool"]').exists()).toBe(false)
   })
 })

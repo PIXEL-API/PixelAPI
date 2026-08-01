@@ -692,7 +692,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 				imageCount:      imageCount,
 				imageSize:       parsed.SizeTier,
 			})
-			if errors.Is(err, ErrAccountShareBillingPreTerminalCommit) || OpenAIForwardResultHasBillableUsage(result) {
+			if OpenAIForwardResultHasBillableUsage(result) {
 				return result, err
 			}
 			return nil, err
@@ -711,7 +711,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 				imageCount:      imageCount,
 				imageSize:       parsed.SizeTier,
 			})
-			if errors.Is(err, ErrAccountShareBillingPreTerminalCommit) || OpenAIForwardResultHasBillableUsage(result) {
+			if OpenAIForwardResultHasBillableUsage(result) {
 				return result, err
 			}
 			if ctx != nil && ctx.Err() != nil {
@@ -898,16 +898,6 @@ func (s *OpenAIGatewayService) handleOpenAIImagesNonStreamingResponse(ctx contex
 	}
 	usage, _ := extractOpenAIUsageFromJSONBytes(body)
 	imageCount := extractOpenAIImageCountFromJSONBytes(body)
-	if _, handled, billingErr := commitOpenAIForwardResultBillingSnapshotBeforeTerminal(ctx, openAIForwardResultSnapshot{
-		requestID:            resp.Header.Get("x-request-id"),
-		responseID:           extractOpenAIResponseIDFromJSONBytes(body),
-		usage:                &usage,
-		responseHeaders:      resp.Header,
-		imageCount:           imageCount,
-		billingUsageComplete: openAIResponsesBillingUsageComplete(body),
-	}); handled && billingErr != nil {
-		return usage, imageCount, billingErr
-	}
 	c.Data(resp.StatusCode, contentType, body)
 	return usage, imageCount, nil
 }
@@ -1333,16 +1323,6 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 			eventType == "response.completed" ||
 			strings.EqualFold(strings.TrimSpace(eventName), "image_generation.completed") {
 			sawTerminal = true
-			if _, handled, billingErr := commitOpenAIForwardResultBillingSnapshotBeforeTerminal(ctx, openAIForwardResultSnapshot{
-				requestID:            resp.Header.Get("x-request-id"),
-				usage:                &usage,
-				firstTokenMs:         firstTokenMs,
-				responseHeaders:      resp.Header,
-				imageCount:           imageCount,
-				billingUsageComplete: billingUsageObservation.complete(),
-			}); handled && billingErr != nil {
-				return billingErr
-			}
 		}
 		written := pump.write(event, meaningfulData)
 		if written && meaningfulData && firstTokenMs == nil {

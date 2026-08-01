@@ -168,6 +168,15 @@ func (r *accountShareLifecycleRepoStub) FinalizeDrainingRoom(
 	return nil, ErrAccountShareRoomInvalidTransition
 }
 
+func (r *accountShareLifecycleRepoStub) ClearRoomMembersForDrain(
+	context.Context,
+	int64,
+	bool,
+	int64,
+) (*AccountShareSeatBillingResult, error) {
+	return &AccountShareSeatBillingResult{}, nil
+}
+
 func (r *accountShareLifecycleRepoStub) ListDrainingRoomIDs(context.Context, int64, int) ([]int64, error) {
 	return nil, nil
 }
@@ -426,7 +435,6 @@ func newAccountShareLifecycleTestService(
 		concurrencyService:       NewConcurrencyService(cache),
 		accountTestService:       tester,
 		rateLimitService:         recovery,
-		lifecycleContractEnabled: true,
 	}
 	service.SetActionTokenSecret(accountShareLifecycleTestTokenSecret)
 	return service
@@ -444,20 +452,6 @@ func accountShareLifecycleTestRoomAccount(accountID int64) AccountShareRoomAccou
 
 func accountShareLifecycleTestAccountRepository(accounts ...*Account) AccountRepository {
 	return &accountShareOwnedAccountRepoStub{accounts: accounts}
-}
-
-func TestAccountShareLifecycleRolloutDisabledBlocksMutations(t *testing.T) {
-	service := &AccountShareModeService{}
-
-	_, err := service.DrainRoom(
-		context.Background(),
-		42,
-		false,
-		7,
-		AccountShareRoomLifecycleCommandInput{ExpectedVersion: 1},
-	)
-
-	require.ErrorIs(t, err, ErrAccountShareLifecycleRolloutDisabled)
 }
 
 func TestCreateRoomFromOwnedAccountStartsValidatingAndCompletesAsyncValidation(t *testing.T) {
@@ -521,7 +515,6 @@ func TestCreateRoomFromOwnedAccountStartsValidatingAndCompletesAsyncValidation(t
 		concurrencyService:       NewConcurrencyService(nil),
 		accountTestService:       tester,
 		rateLimitService:         recovery,
-		lifecycleContractEnabled: true,
 	}
 
 	type createRoomResult struct {

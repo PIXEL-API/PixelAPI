@@ -30,7 +30,6 @@ const {
   createRoomDeleteIntent,
   deleteRoom,
   getRoomOperation,
-  createEndMembershipIntent,
   endMembership,
   updateMembershipIdleTimeout,
   createJoinIntent,
@@ -70,7 +69,6 @@ const {
   createRoomDeleteIntent: vi.fn(),
   deleteRoom: vi.fn(),
   getRoomOperation: vi.fn(),
-  createEndMembershipIntent: vi.fn(),
   endMembership: vi.fn(),
   updateMembershipIdleTimeout: vi.fn(),
   createJoinIntent: vi.fn(),
@@ -121,8 +119,7 @@ vi.mock('@/api/accountShare', async (importOriginal) => {
       createRoomDeleteIntent,
       deleteRoom,
       getRoomOperation,
-      createEndMembershipIntent,
-      endMembership,
+          endMembership,
       updateMembershipIdleTimeout,
       createJoinIntent,
       joinListing,
@@ -538,7 +535,6 @@ describe('AccountShareView async snapshots and mode keys', () => {
     createRoomDeleteIntent.mockReset()
     deleteRoom.mockReset()
     getRoomOperation.mockReset()
-    createEndMembershipIntent.mockReset()
     endMembership.mockReset()
     updateMembershipIdleTimeout.mockReset()
     createJoinIntent.mockReset()
@@ -656,12 +652,6 @@ describe('AccountShareView async snapshots and mode keys', () => {
       completed_at: '2026-07-11T01:00:01Z',
     }))
     getRoomOperation.mockResolvedValue(roomOperation())
-    createEndMembershipIntent.mockResolvedValue({
-      membership_id: 801,
-      operation_id: 'operation-end-801',
-      token: 'signed-end-intent',
-      expires_at: '2099-07-11T01:02:00Z',
-    })
     endMembership.mockResolvedValue(membership())
     updateMembershipIdleTimeout.mockResolvedValue(membership({ status: 'active' }))
     createJoinIntent.mockImplementation((id: number) => {
@@ -2580,7 +2570,8 @@ describe('AccountShareView async snapshots and mode keys', () => {
       status: 'ending',
       ended_at: undefined,
       last_request_at: '2026-07-11T01:00:00Z',
-      ending_operation_id: undefined,
+      // 单阶段结束：operation id 由后端生成并随响应返回
+      ending_operation_id: 'operation-end-801',
       settlement_status: 'pending',
     }))
     getRoomOperation.mockResolvedValue(roomOperation({
@@ -2611,8 +2602,7 @@ describe('AccountShareView async snapshots and mode keys', () => {
       await setupState.confirmEndUse()
       await flushPromises()
 
-      expect(createEndMembershipIntent).toHaveBeenCalledWith(801)
-      expect(endMembership).toHaveBeenCalledWith(801, 'signed-end-intent')
+      expect(endMembership).toHaveBeenCalledWith(801)
       expect(setupState.pendingReview).toBeNull()
       expect(wrapper.get('[data-testid="membership-ending-state"]').text()).toContain('退出/结算中')
       expect(getRoomOperation).not.toHaveBeenCalled()
@@ -2687,11 +2677,6 @@ describe('AccountShareView async snapshots and mode keys', () => {
       queue_status: 'queued',
     })
     listListings.mockResolvedValue(paginated([queuedListing]))
-    createEndMembershipIntent.mockResolvedValue({
-      token: 'queued-end-intent',
-      operation_id: 'queued-end-operation',
-      expires_at: '2099-07-11T01:02:00Z',
-    })
     endMembership.mockResolvedValue(membership({
       id: 63368,
       listing_id: queuedListing.id,
@@ -2707,8 +2692,7 @@ describe('AccountShareView async snapshots and mode keys', () => {
     await removeButton.trigger('click')
     await flushPromises()
 
-    expect(createEndMembershipIntent).toHaveBeenCalledWith(63368)
-    expect(endMembership).toHaveBeenCalledWith(63368, 'queued-end-intent')
+    expect(endMembership).toHaveBeenCalledWith(63368)
     expect(wrapper.text()).not.toContain('确认将该账号')
     wrapper.unmount()
   })

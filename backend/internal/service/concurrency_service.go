@@ -333,11 +333,9 @@ type AccountShareRuntimeLease struct {
 	membershipSlot accountShareRuntimeLeaseSlot
 	refreshEvery   time.Duration
 
-	releaseOnce      sync.Once
-	billingBarrierMu sync.Mutex
-	billingBarrier   *accountShareBillingReleaseBarrier
-	stopCh           chan struct{}
-	doneCh           chan struct{}
+	releaseOnce sync.Once
+	stopCh      chan struct{}
+	doneCh      chan struct{}
 }
 
 func (l *AccountShareRuntimeLease) Context() context.Context {
@@ -354,14 +352,6 @@ func (l *AccountShareRuntimeLease) Release() {
 		return
 	}
 	l.releaseOnce.Do(func() {
-		barrier := l.accountShareBillingBarrier()
-		if barrier != nil && !barrier.completed() {
-			go func() {
-				barrier.wait(l.Context())
-				l.releaseNow()
-			}()
-			return
-		}
 		l.releaseNow()
 	})
 }
@@ -385,28 +375,6 @@ func (l *AccountShareRuntimeLease) releaseNow() {
 	if l.membershipSlot.release != nil {
 		l.membershipSlot.release()
 	}
-}
-
-func (l *AccountShareRuntimeLease) setAccountShareBillingBarrier(barrier *accountShareBillingReleaseBarrier) error {
-	if l == nil || barrier == nil {
-		return ErrAccountShareRuntimeLeaseUnavailable
-	}
-	l.billingBarrierMu.Lock()
-	defer l.billingBarrierMu.Unlock()
-	if l.billingBarrier != nil && l.billingBarrier != barrier {
-		return ErrAccountShareRuntimeLeaseUnavailable
-	}
-	l.billingBarrier = barrier
-	return nil
-}
-
-func (l *AccountShareRuntimeLease) accountShareBillingBarrier() *accountShareBillingReleaseBarrier {
-	if l == nil {
-		return nil
-	}
-	l.billingBarrierMu.Lock()
-	defer l.billingBarrierMu.Unlock()
-	return l.billingBarrier
 }
 
 func (l *AccountShareRuntimeLease) refreshLoop() {

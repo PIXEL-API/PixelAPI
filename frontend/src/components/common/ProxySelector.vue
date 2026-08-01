@@ -306,8 +306,10 @@ const filteredProxies = computed(() => {
   const query = searchQuery.value.toLowerCase()
   return props.proxies.filter((proxy) => {
     const name = proxy.name.toLowerCase()
-    const host = proxy.host.toLowerCase()
-    return name.includes(query) || host.includes(query)
+    if (name.includes(query)) return true
+    // 隐藏端点时也不能按 host 过滤，否则搜索框就成了探测代理 IP 的旁路。
+    if (props.hideEndpoint) return false
+    return proxy.host.toLowerCase().includes(query)
   })
 })
 

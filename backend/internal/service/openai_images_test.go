@@ -716,16 +716,10 @@ func TestOpenAIGatewayServiceForwardImages_RejectsUnexpectedNon2xxBeforeSuccessH
 				Credentials: map[string]any{"api_key": "test-api-key", "access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
 			}
 
-			gateCalls := 0
-			ctx := WithOpenAIForwardResultBillingGate(context.Background(), NewOpenAIForwardResultBillingGate(func(*OpenAIForwardResult) error {
-				gateCalls++
-				return nil
-			}))
-			result, err := svc.ForwardImages(ctx, c, account, body, parsed, "")
+			result, err := svc.ForwardImages(context.Background(), c, account, body, parsed, "")
 
 			require.Error(t, err)
 			require.Nil(t, result)
-			require.Zero(t, gateCalls)
 			require.Equal(t, http.StatusBadGateway, recorder.Code)
 			require.Equal(t, "Upstream request failed", gjson.Get(recorder.Body.String(), "error.message").String())
 			require.NotContains(t, recorder.Body.String(), "secret-marker")
@@ -1219,14 +1213,8 @@ func TestOpenAIImagesOAuthNonStreamingRejectsOutputItemDoneWithoutTerminal(t *te
 			"data: {\"type\":\"response.output_item.done\",\"item\":{\"id\":\"ig_123\",\"type\":\"image_generation_call\",\"result\":\"ZmluYWw=\"}}\n\n",
 		)),
 	}
-	gateCalls := 0
-	ctx := WithOpenAIForwardResultBillingGate(context.Background(), NewOpenAIForwardResultBillingGate(func(*OpenAIForwardResult) error {
-		gateCalls++
-		return nil
-	}))
-
 	_, _, _, err := (&OpenAIGatewayService{}).handleOpenAIImagesOAuthNonStreamingResponse(
-		ctx,
+		context.Background(),
 		resp,
 		c,
 		"b64_json",
@@ -1237,7 +1225,6 @@ func TestOpenAIImagesOAuthNonStreamingRejectsOutputItemDoneWithoutTerminal(t *te
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
 	require.Contains(t, string(failoverErr.ResponseBody), "without a terminal event")
-	require.Zero(t, gateCalls)
 	require.Empty(t, rec.Body.String())
 }
 
@@ -1253,14 +1240,8 @@ func TestOpenAIImagesOAuthStreamingRejectsOutputItemDoneWithoutTerminal(t *testi
 			"data: {\"type\":\"response.output_item.done\",\"item\":{\"id\":\"ig_123\",\"type\":\"image_generation_call\",\"result\":\"ZmluYWw=\"}}\n\n",
 		)),
 	}
-	gateCalls := 0
-	ctx := WithOpenAIForwardResultBillingGate(context.Background(), NewOpenAIForwardResultBillingGate(func(*OpenAIForwardResult) error {
-		gateCalls++
-		return nil
-	}))
-
 	_, _, _, _, err := (&OpenAIGatewayService{}).handleOpenAIImagesOAuthStreamingResponse(
-		ctx,
+		context.Background(),
 		resp,
 		c,
 		time.Now(),
@@ -1273,7 +1254,6 @@ func TestOpenAIImagesOAuthStreamingRejectsOutputItemDoneWithoutTerminal(t *testi
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
 	require.Contains(t, string(failoverErr.ResponseBody), "before image generation completed")
-	require.Zero(t, gateCalls)
 	require.NotContains(t, rec.Body.String(), "image_generation.completed")
 }
 

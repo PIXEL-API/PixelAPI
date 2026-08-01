@@ -9,7 +9,6 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
-	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1497,62 +1496,6 @@ func TestOpenAIGatewayServiceRecordUsage_SimpleModeSkipsBillingAfterPersist(t *t
 	require.Equal(t, 1, usageRepo.calls)
 	require.Equal(t, 0, userRepo.deductCalls)
 	require.Equal(t, 0, subRepo.incrementCalls)
-}
-
-func TestOpenAIGatewayServiceRecordUsage_SimpleModeDurableDispatchPreservesCalculatedCharge(t *testing.T) {
-	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
-	svc := newOpenAIRecordUsageServiceForTest(
-		usageRepo,
-		&openAIRecordUsageUserRepoStub{},
-		&openAIRecordUsageSubRepoStub{},
-		nil,
-	)
-	svc.cfg.RunMode = config.RunModeSimple
-	intentRepo := &accountShareBillingDispatchIntentRepoStub{}
-	dispatch := &AccountShareBillingDispatch{
-		repository: intentRepo,
-		barrier:    newAccountShareBillingReleaseBarrier(time.Second),
-		command: AccountShareBillingCommand{
-			SchemaVersion:     AccountShareBillingCommandSchemaV3,
-			RateMultiplier:    "1",
-			SettlementEnabled: true,
-		},
-		state: AccountShareBillingIntentState{
-			ID:           91,
-			Status:       AccountShareBillingIntentStatusInFlight,
-			StateToken:   2,
-			APIKeyID:     1000,
-			MembershipID: 41,
-		},
-	}
-	ctx := WithAccountShareBillingDispatch(context.Background(), dispatch)
-
-	err := svc.RecordUsage(ctx, &OpenAIRecordUsageInput{
-		Result: &OpenAIForwardResult{
-			RequestID: "resp_simple_durable",
-			Usage:     OpenAIUsage{InputTokens: 10, OutputTokens: 5},
-			Model:     "gpt-5.1",
-			Duration:  time.Second,
-		},
-		APIKey:  &APIKey{ID: 1000},
-		User:    &User{ID: 2000},
-		Account: &Account{ID: 3000},
-	})
-
-	require.NoError(t, err)
-	require.Zero(t, usageRepo.calls, "durable worker owns the usage log insert")
-	require.Len(t, intentRepo.ready, 1)
-	require.Equal(t, int64(10), intentRepo.ready[0].Usage.InputTokens)
-	require.Equal(t, int64(5), intentRepo.ready[0].Usage.OutputTokens)
-	actualCost, err := decimal.NewFromString(intentRepo.ready[0].Usage.ActualCost)
-	require.NoError(t, err)
-	balanceCost, err := decimal.NewFromString(intentRepo.ready[0].Usage.BalanceCost)
-	require.NoError(t, err)
-	totalCharge, err := decimal.NewFromString(intentRepo.ready[0].Usage.TotalCharge)
-	require.NoError(t, err)
-	require.True(t, actualCost.IsPositive())
-	require.Equal(t, actualCost, balanceCost)
-	require.Equal(t, actualCost, totalCharge)
 }
 
 func TestOpenAIGatewayServiceRecordUsage_ImageOnlyUsageStillPersists(t *testing.T) {

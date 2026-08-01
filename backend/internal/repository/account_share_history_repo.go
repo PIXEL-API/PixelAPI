@@ -124,16 +124,12 @@ func (r *accountShareModeRepository) ListMembershipHistory(
 		LEFT JOIN LATERAL (
 			SELECT
 				COUNT(*)::bigint AS usage_request_count,
-				COALESCE(
-					SUM((intent.usage_payload ->> 'actual_cost')::numeric),
-					0
-				)::double precision AS usage_request_cost
-			FROM account_share_request_billing_intents intent
-			WHERE intent.membership_id = membership.id
-				AND intent.listing_id = membership.listing_id
-				AND intent.consumer_user_id_snapshot = membership.consumer_user_id
-				AND intent.status = $5
-				AND intent.usage_payload IS NOT NULL
+				COALESCE(SUM(entry.base_charge), 0)::double precision AS usage_request_cost
+			FROM account_share_mode_settlement_entries entry
+			WHERE entry.membership_id = membership.id
+				AND entry.listing_id = membership.listing_id
+				AND entry.consumer_user_id = membership.consumer_user_id
+				AND entry.settlement_type = 'usage_request'
 		) spend ON TRUE
 		LEFT JOIN account_share_reviews review
 			ON review.membership_id = membership.id
@@ -144,7 +140,7 @@ func (r *accountShareModeRepository) ListMembershipHistory(
 			AND membership.deleted_at IS NULL
 		ORDER BY COALESCE(membership.ended_at, membership.updated_at, membership.joined_at) DESC, membership.id DESC
 		LIMIT $3 OFFSET $4
-	`, consumerUserID, service.AccountShareMembershipStatusEnded, limit, offset, service.AccountShareBillingIntentStatusSettled)
+	`, consumerUserID, service.AccountShareMembershipStatusEnded, limit, offset)
 	if err != nil {
 		return nil, nil, err
 	}

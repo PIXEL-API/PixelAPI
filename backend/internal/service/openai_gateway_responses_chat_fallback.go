@@ -289,13 +289,6 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
 	}
 	result.Stream = false
 	result.Duration = time.Since(startTime)
-	if openAIForwardResultBillingGatePresent(ctx) && !usageComplete {
-		return result, errors.New("openai responses chat fallback response usage incomplete: missing upstream usage")
-	}
-	if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
-		return result, billingErr
-	}
-
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	}
@@ -447,13 +440,6 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 	if !sawDone && strings.TrimSpace(state.FinishReason) == "" {
 		return result, errors.New("upstream chat completions stream ended without a completion signal")
 	}
-	if openAIForwardResultBillingGatePresent(ctx) && !billingUsageObservation.complete() {
-		return result, errors.New("openai responses chat fallback stream usage incomplete: missing terminal usage")
-	}
-	if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
-		return result, billingErr
-	}
-
 	writeEvents(FinalizeChatCompletionsResponsesStream(state))
 	if !clientDisconnected {
 		writeStreamHeaders()
@@ -465,14 +451,6 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 		}
 	}
 	return result, nil
-}
-
-func openAIForwardResultBillingGatePresent(ctx context.Context) bool {
-	if ctx == nil {
-		return false
-	}
-	gate, _ := ctx.Value(openAIForwardResultBillingGateContextKey{}).(*OpenAIForwardResultBillingGate)
-	return gate != nil
 }
 
 func chatChunkStartsResponsesOutput(chunk *apicompat.ChatCompletionsChunk) bool {

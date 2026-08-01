@@ -531,9 +531,6 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 		VideoDurationSeconds: usage.VideoDurationSeconds,
 	}
 	if endpoint.IsGenerationRequest() {
-		if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
-			return result, billingErr
-		}
 	}
 	writeGrokMediaResponse(c, resp, respBody, s.responseHeaderFilter)
 	return result, nil

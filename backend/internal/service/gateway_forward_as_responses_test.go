@@ -42,11 +42,6 @@ func TestForwardAsResponses_RejectsNon2xxBeforeSuccessBridge(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gateCalls := 0
-			ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(*ForwardResult) error {
-				gateCalls++
-				return nil
-			}))
 			svc := newGatewayBridgeStatusTestService(tt.status)
 			rec := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(rec)
@@ -54,7 +49,7 @@ func TestForwardAsResponses_RejectsNon2xxBeforeSuccessBridge(t *testing.T) {
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body)))
 
 			result, err := svc.ForwardAsResponses(
-				ctx,
+				context.Background(),
 				c,
 				newGatewayBridgeStatusTestAccount(),
 				body,
@@ -66,7 +61,6 @@ func TestForwardAsResponses_RejectsNon2xxBeforeSuccessBridge(t *testing.T) {
 			require.Equal(t, http.StatusBadGateway, rec.Code)
 			require.Contains(t, rec.Body.String(), `"error"`)
 			require.NotContains(t, rec.Body.String(), `response.completed`)
-			require.Zero(t, gateCalls)
 		})
 	}
 }
@@ -288,104 +282,9 @@ func TestHandleResponsesStreamingResponse_ReadErrorFailsClosed(t *testing.T) {
 	require.NotContains(t, rec.Body.String(), `response.completed`)
 }
 
-func TestHandleResponsesStreamingResponse_BillingGateBlocksTerminal(t *testing.T) {
+func TestHandleResponsesBufferedStreamingResponse_OutputOnlyUsageMarkedIncomplete(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	gateErr := errors.New("billing unavailable")
-	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(result *ForwardResult) error {
-		require.Equal(t, 20, result.Usage.InputTokens)
-		require.Equal(t, 8, result.Usage.OutputTokens)
-		require.True(t, result.BillingUsageComplete)
-		return gateErr
-	}))
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	resp := &http.Response{
-		Header: http.Header{"x-request-id": []string{"rid_stream_gate"}},
-		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
-			`event: message_start`,
-			`data: {"type":"message_start","message":{"id":"msg_gate","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4.5","usage":{"input_tokens":20}}}`,
-			``,
-			`event: message_delta`,
-			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":8}}`,
-			``,
-			`event: message_stop`,
-			`data: {"type":"message_stop"}`,
-			``,
-		}, "\n"))),
-	}
-
-	result, err := (&GatewayService{}).handleResponsesStreamingResponse(
-		ctx,
-		resp,
-		c,
-		"claude-sonnet-4.5",
-		"claude-sonnet-4.5",
-		nil,
-		time.Now(),
-	)
-
-	require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
-	require.ErrorIs(t, err, gateErr)
-	require.True(t, IsBillableStreamUsageError(err))
-	require.NotNil(t, result)
-	require.Equal(t, 20, result.Usage.InputTokens)
-	require.Equal(t, 8, result.Usage.OutputTokens)
-	require.NotContains(t, rec.Body.String(), `response.completed`)
-}
-
-func TestHandleResponsesBufferedStreamingResponse_BillingGateBlocksBody(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	gateErr := errors.New("billing unavailable")
-	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(result *ForwardResult) error {
-		require.Equal(t, 12, result.Usage.InputTokens)
-		require.Equal(t, 7, result.Usage.OutputTokens)
-		require.True(t, result.BillingUsageComplete)
-		return gateErr
-	}))
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	resp := &http.Response{
-		Header: http.Header{"x-request-id": []string{"rid_buffered_gate"}},
-		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
-			`event: message_start`,
-			`data: {"type":"message_start","message":{"id":"msg_gate","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4.5","usage":{"input_tokens":12}}}`,
-			``,
-			`event: message_delta`,
-			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}`,
-			``,
-			`event: message_stop`,
-			`data: {"type":"message_stop"}`,
-			``,
-		}, "\n"))),
-	}
-
-	result, err := (&GatewayService{}).handleResponsesBufferedStreamingResponse(
-		ctx,
-		resp,
-		c,
-		"claude-sonnet-4.5",
-		"claude-sonnet-4.5",
-		nil,
-		time.Now(),
-	)
-
-	require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
-	require.ErrorIs(t, err, gateErr)
-	require.True(t, IsBillableStreamUsageError(err))
-	require.NotNil(t, result)
-	require.Empty(t, rec.Body.String())
-}
-
-func TestHandleResponsesBufferedStreamingResponse_BillingGateRejectsOutputOnlyUsage(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	gateCalls := 0
-	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(*ForwardResult) error {
-		gateCalls++
-		return nil
-	}))
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	resp := &http.Response{
@@ -404,7 +303,7 @@ func TestHandleResponsesBufferedStreamingResponse_BillingGateRejectsOutputOnlyUs
 	}
 
 	result, err := (&GatewayService{}).handleResponsesBufferedStreamingResponse(
-		ctx,
+		context.Background(),
 		resp,
 		c,
 		"claude-sonnet-4.5",
@@ -413,25 +312,17 @@ func TestHandleResponsesBufferedStreamingResponse_BillingGateRejectsOutputOnlyUs
 		time.Now(),
 	)
 
-	require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
-	require.ErrorContains(t, err, "no complete billable usage")
-	require.True(t, IsBillableStreamUsageError(err))
+	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Zero(t, result.Usage.InputTokens)
 	require.Equal(t, 7, result.Usage.OutputTokens)
 	require.False(t, result.BillingUsageComplete)
-	require.Zero(t, gateCalls)
-	require.Empty(t, rec.Body.String())
+	require.NotEmpty(t, rec.Body.String())
 }
 
-func TestHandleResponsesStreamingResponse_BillingGateRejectsInputOnlyUsage(t *testing.T) {
+func TestHandleResponsesStreamingResponse_InputOnlyUsageMarkedIncomplete(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	gateCalls := 0
-	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(*ForwardResult) error {
-		gateCalls++
-		return nil
-	}))
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	resp := &http.Response{
@@ -450,7 +341,7 @@ func TestHandleResponsesStreamingResponse_BillingGateRejectsInputOnlyUsage(t *te
 	}
 
 	result, err := (&GatewayService{}).handleResponsesStreamingResponse(
-		ctx,
+		context.Background(),
 		resp,
 		c,
 		"claude-sonnet-4.5",
@@ -459,28 +350,17 @@ func TestHandleResponsesStreamingResponse_BillingGateRejectsInputOnlyUsage(t *te
 		time.Now(),
 	)
 
-	require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
-	require.ErrorContains(t, err, "no complete billable usage")
-	require.True(t, IsBillableStreamUsageError(err))
+	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, 20, result.Usage.InputTokens)
 	require.Zero(t, result.Usage.OutputTokens)
 	require.False(t, result.BillingUsageComplete)
-	require.Zero(t, gateCalls)
-	require.NotContains(t, rec.Body.String(), `response.completed`)
+	require.Contains(t, rec.Body.String(), `response.completed`)
 }
 
-func TestHandleResponsesBufferedStreamingResponse_WriteFailureAfterBillingPreservesUsage(t *testing.T) {
+func TestHandleResponsesBufferedStreamingResponse_WriteFailurePreservesUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	gateCalls := 0
-	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(result *ForwardResult) error {
-		gateCalls++
-		require.Equal(t, 12, result.Usage.InputTokens)
-		require.Equal(t, 7, result.Usage.OutputTokens)
-		require.True(t, result.BillingUsageComplete)
-		return nil
-	}))
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	writeErr := errors.New("injected client write failure")
@@ -504,7 +384,7 @@ func TestHandleResponsesBufferedStreamingResponse_WriteFailureAfterBillingPreser
 	}
 
 	result, err := (&GatewayService{}).handleResponsesBufferedStreamingResponse(
-		ctx,
+		context.Background(),
 		resp,
 		c,
 		"claude-sonnet-4.5",
@@ -519,21 +399,12 @@ func TestHandleResponsesBufferedStreamingResponse_WriteFailureAfterBillingPreser
 	require.True(t, result.ClientDisconnect)
 	require.Equal(t, 12, result.Usage.InputTokens)
 	require.Equal(t, 7, result.Usage.OutputTokens)
-	require.Equal(t, 1, gateCalls)
 	require.Empty(t, rec.Body.String())
 }
 
-func TestHandleResponsesStreamingResponse_TerminalWriteFailureAfterBillingPreservesUsage(t *testing.T) {
+func TestHandleResponsesStreamingResponse_TerminalWriteFailurePreservesUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	gateCalls := 0
-	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(result *ForwardResult) error {
-		gateCalls++
-		require.Equal(t, 20, result.Usage.InputTokens)
-		require.Equal(t, 8, result.Usage.OutputTokens)
-		require.True(t, result.BillingUsageComplete)
-		return nil
-	}))
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	writeErr := errors.New("injected terminal write failure")
@@ -558,7 +429,7 @@ func TestHandleResponsesStreamingResponse_TerminalWriteFailureAfterBillingPreser
 	}
 
 	result, err := (&GatewayService{}).handleResponsesStreamingResponse(
-		ctx,
+		context.Background(),
 		resp,
 		c,
 		"claude-sonnet-4.5",
@@ -573,7 +444,6 @@ func TestHandleResponsesStreamingResponse_TerminalWriteFailureAfterBillingPreser
 	require.True(t, result.ClientDisconnect)
 	require.Equal(t, 20, result.Usage.InputTokens)
 	require.Equal(t, 8, result.Usage.OutputTokens)
-	require.Equal(t, 1, gateCalls)
 	require.NotContains(t, rec.Body.String(), `response.completed`)
 }
 
@@ -589,11 +459,6 @@ func TestForwardResponsesViaRawChatCompletions_RejectsRedirectForBothStreamModes
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gateCalls := 0
-			ctx := WithOpenAIForwardResultBillingGate(context.Background(), NewOpenAIForwardResultBillingGate(func(*OpenAIForwardResult) error {
-				gateCalls++
-				return nil
-			}))
 			upstream := &rawChatResponsesUpstreamStub{resp: &http.Response{
 				StatusCode: http.StatusFound,
 				Header: http.Header{
@@ -611,7 +476,7 @@ func TestForwardResponsesViaRawChatCompletions_RejectsRedirectForBothStreamModes
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(tt.body))
 
 			result, err := svc.forwardResponsesViaRawChatCompletions(
-				ctx,
+				context.Background(),
 				c,
 				&Account{
 					ID:          91,
@@ -629,7 +494,6 @@ func TestForwardResponsesViaRawChatCompletions_RejectsRedirectForBothStreamModes
 
 			require.Error(t, err)
 			require.Nil(t, result)
-			require.Zero(t, gateCalls)
 			require.Contains(t, rec.Body.String(), `"error"`)
 			require.NotContains(t, rec.Body.String(), `response.completed`)
 			require.NotContains(t, rec.Body.String(), `data: [DONE]`)
@@ -639,59 +503,9 @@ func TestForwardResponsesViaRawChatCompletions_RejectsRedirectForBothStreamModes
 	}
 }
 
-func TestBufferChatCompletionsAsResponses_BillingGateBlocksBody(t *testing.T) {
+func TestBufferChatCompletionsAsResponses_MissingUsageMarkedIncomplete(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	gateErr := errors.New("billing unavailable")
-	gateCalls := 0
-	ctx := WithOpenAIForwardResultBillingGate(context.Background(), NewOpenAIForwardResultBillingGate(func(result *OpenAIForwardResult) error {
-		gateCalls++
-		require.Equal(t, "rid_raw_buffer_gate", result.RequestID)
-		require.Equal(t, "chatcmpl-buffer-gate", result.ResponseID)
-		require.Equal(t, 12, result.Usage.InputTokens)
-		require.Equal(t, 2, result.Usage.OutputTokens)
-		require.Equal(t, "gpt-5.5", result.BillingModel)
-		return gateErr
-	}))
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	resp := &http.Response{
-		Header: http.Header{"X-Request-Id": []string{"rid_raw_buffer_gate"}},
-		Body: io.NopCloser(strings.NewReader(
-			`{"id":"chatcmpl-buffer-gate","object":"chat.completion","model":"gpt-5.5","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":2,"total_tokens":14}}`,
-		)),
-	}
-
-	result, err := (&OpenAIGatewayService{}).bufferChatCompletionsAsResponses(
-		ctx,
-		c,
-		resp,
-		"gpt-5.5",
-		nil,
-		false,
-		nil,
-		"gpt-5.5",
-		"gpt-5.5",
-		nil,
-		nil,
-		time.Now(),
-	)
-
-	require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
-	require.ErrorIs(t, err, gateErr)
-	require.NotNil(t, result)
-	require.Equal(t, 1, gateCalls)
-	require.Empty(t, rec.Body.String())
-}
-
-func TestBufferChatCompletionsAsResponses_BillingGateRequiresUsage(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	gateCalls := 0
-	ctx := WithOpenAIForwardResultBillingGate(context.Background(), NewOpenAIForwardResultBillingGate(func(*OpenAIForwardResult) error {
-		gateCalls++
-		return nil
-	}))
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	resp := &http.Response{
@@ -702,7 +516,7 @@ func TestBufferChatCompletionsAsResponses_BillingGateRequiresUsage(t *testing.T)
 	}
 
 	result, err := (&OpenAIGatewayService{}).bufferChatCompletionsAsResponses(
-		ctx,
+		context.Background(),
 		c,
 		resp,
 		"gpt-5.5",
@@ -716,13 +530,13 @@ func TestBufferChatCompletionsAsResponses_BillingGateRequiresUsage(t *testing.T)
 		time.Now(),
 	)
 
-	require.ErrorContains(t, err, "missing upstream usage")
+	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Zero(t, gateCalls)
-	require.Empty(t, rec.Body.String())
+	require.False(t, result.BillingUsageComplete)
+	require.Contains(t, rec.Body.String(), `"id":"chatcmpl-buffer-missing-usage"`)
 }
 
-func TestBufferChatCompletionsAsResponses_BillingGateRejectsPartialUsage(t *testing.T) {
+func TestBufferChatCompletionsAsResponses_PartialUsageMarkedIncomplete(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	tests := []struct {
@@ -734,11 +548,6 @@ func TestBufferChatCompletionsAsResponses_BillingGateRejectsPartialUsage(t *test
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gateCalls := 0
-			ctx := WithOpenAIForwardResultBillingGate(context.Background(), NewOpenAIForwardResultBillingGate(func(*OpenAIForwardResult) error {
-				gateCalls++
-				return nil
-			}))
 			rec := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(rec)
 			resp := &http.Response{
@@ -749,7 +558,7 @@ func TestBufferChatCompletionsAsResponses_BillingGateRejectsPartialUsage(t *test
 			}
 
 			result, err := (&OpenAIGatewayService{}).bufferChatCompletionsAsResponses(
-				ctx,
+				context.Background(),
 				c,
 				resp,
 				"gpt-5.5",
@@ -763,26 +572,17 @@ func TestBufferChatCompletionsAsResponses_BillingGateRejectsPartialUsage(t *test
 				time.Now(),
 			)
 
-			require.ErrorContains(t, err, "missing upstream usage")
+			require.NoError(t, err)
 			require.NotNil(t, result)
 			require.False(t, result.BillingUsageComplete)
-			require.Zero(t, gateCalls)
-			require.Empty(t, rec.Body.String())
+			require.Contains(t, rec.Body.String(), `"id":"chatcmpl-buffer-partial-usage"`)
 		})
 	}
 }
 
-func TestBufferChatCompletionsAsResponses_BillingGateAllowsExplicitZeroUsage(t *testing.T) {
+func TestBufferChatCompletionsAsResponses_ExplicitZeroUsageMarkedComplete(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	gateCalls := 0
-	ctx := WithOpenAIForwardResultBillingGate(context.Background(), NewOpenAIForwardResultBillingGate(func(result *OpenAIForwardResult) error {
-		gateCalls++
-		require.True(t, result.BillingUsageComplete)
-		require.Zero(t, result.Usage.InputTokens)
-		require.Zero(t, result.Usage.OutputTokens)
-		return nil
-	}))
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	resp := &http.Response{
@@ -793,7 +593,7 @@ func TestBufferChatCompletionsAsResponses_BillingGateAllowsExplicitZeroUsage(t *
 	}
 
 	result, err := (&OpenAIGatewayService{}).bufferChatCompletionsAsResponses(
-		ctx,
+		context.Background(),
 		c,
 		resp,
 		"gpt-5.5",
@@ -810,58 +610,12 @@ func TestBufferChatCompletionsAsResponses_BillingGateAllowsExplicitZeroUsage(t *
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, result.BillingUsageComplete)
-	require.Equal(t, 1, gateCalls)
+	require.Zero(t, result.Usage.InputTokens)
+	require.Zero(t, result.Usage.OutputTokens)
 	require.Contains(t, rec.Body.String(), `"id":"chatcmpl-buffer-zero-usage"`)
 }
 
-func TestStreamChatCompletionsAsResponses_BillingGateBlocksTerminal(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	gateErr := errors.New("billing unavailable")
-	gateCalls := 0
-	ctx := WithOpenAIForwardResultBillingGate(context.Background(), NewOpenAIForwardResultBillingGate(func(result *OpenAIForwardResult) error {
-		gateCalls++
-		require.Equal(t, "rid_raw_stream_gate", result.RequestID)
-		require.Equal(t, "chatcmpl-stream-gate", result.ResponseID)
-		require.Equal(t, 12, result.Usage.InputTokens)
-		require.Equal(t, 2, result.Usage.OutputTokens)
-		return gateErr
-	}))
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	resp := rawChatCompletionsResponsesStream("rid_raw_stream_gate", []string{
-		`data: {"id":"chatcmpl-stream-gate","object":"chat.completion.chunk","model":"gpt-5.5","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"}}]}`,
-		``,
-		`data: {"id":"chatcmpl-stream-gate","object":"chat.completion.chunk","model":"gpt-5.5","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":2,"total_tokens":14}}`,
-		``,
-		`data: [DONE]`,
-		``,
-	})
-
-	result, err := (&OpenAIGatewayService{}).streamChatCompletionsAsResponses(
-		ctx,
-		c,
-		resp,
-		"gpt-5.5",
-		nil,
-		false,
-		nil,
-		"gpt-5.5",
-		"gpt-5.5",
-		nil,
-		nil,
-		time.Now(),
-	)
-
-	require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
-	require.ErrorIs(t, err, gateErr)
-	require.NotNil(t, result)
-	require.Equal(t, 1, gateCalls)
-	require.NotContains(t, rec.Body.String(), `response.completed`)
-	require.NotContains(t, rec.Body.String(), `data: [DONE]`)
-}
-
-func TestStreamChatCompletionsAsResponses_BillingGateRejectsPartialUsage(t *testing.T) {
+func TestStreamChatCompletionsAsResponses_PartialUsageMarkedIncomplete(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	tests := []struct {
@@ -873,11 +627,6 @@ func TestStreamChatCompletionsAsResponses_BillingGateRejectsPartialUsage(t *test
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gateCalls := 0
-			ctx := WithOpenAIForwardResultBillingGate(context.Background(), NewOpenAIForwardResultBillingGate(func(*OpenAIForwardResult) error {
-				gateCalls++
-				return nil
-			}))
 			rec := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(rec)
 			resp := rawChatCompletionsResponsesStream("rid_raw_stream_partial_usage", []string{
@@ -890,7 +639,7 @@ func TestStreamChatCompletionsAsResponses_BillingGateRejectsPartialUsage(t *test
 			})
 
 			result, err := (&OpenAIGatewayService{}).streamChatCompletionsAsResponses(
-				ctx,
+				context.Background(),
 				c,
 				resp,
 				"gpt-5.5",
@@ -904,27 +653,18 @@ func TestStreamChatCompletionsAsResponses_BillingGateRejectsPartialUsage(t *test
 				time.Now(),
 			)
 
-			require.ErrorContains(t, err, "missing terminal usage")
+			require.NoError(t, err)
 			require.NotNil(t, result)
 			require.False(t, result.BillingUsageComplete)
-			require.Zero(t, gateCalls)
-			require.NotContains(t, rec.Body.String(), `response.completed`)
-			require.NotContains(t, rec.Body.String(), `data: [DONE]`)
+			require.Contains(t, rec.Body.String(), `response.completed`)
+			require.Contains(t, rec.Body.String(), `data: [DONE]`)
 		})
 	}
 }
 
-func TestStreamChatCompletionsAsResponses_BillingGateAllowsExplicitZeroUsage(t *testing.T) {
+func TestStreamChatCompletionsAsResponses_ExplicitZeroUsageMarkedComplete(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	gateCalls := 0
-	ctx := WithOpenAIForwardResultBillingGate(context.Background(), NewOpenAIForwardResultBillingGate(func(result *OpenAIForwardResult) error {
-		gateCalls++
-		require.True(t, result.BillingUsageComplete)
-		require.Zero(t, result.Usage.InputTokens)
-		require.Zero(t, result.Usage.OutputTokens)
-		return nil
-	}))
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	resp := rawChatCompletionsResponsesStream("rid_raw_stream_zero_usage", []string{
@@ -937,7 +677,7 @@ func TestStreamChatCompletionsAsResponses_BillingGateAllowsExplicitZeroUsage(t *
 	})
 
 	result, err := (&OpenAIGatewayService{}).streamChatCompletionsAsResponses(
-		ctx,
+		context.Background(),
 		c,
 		resp,
 		"gpt-5.5",
@@ -954,7 +694,8 @@ func TestStreamChatCompletionsAsResponses_BillingGateAllowsExplicitZeroUsage(t *
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, result.BillingUsageComplete)
-	require.Equal(t, 1, gateCalls)
+	require.Zero(t, result.Usage.InputTokens)
+	require.Zero(t, result.Usage.OutputTokens)
 	require.Contains(t, rec.Body.String(), `response.completed`)
 	require.Contains(t, rec.Body.String(), `data: [DONE]`)
 }
@@ -962,13 +703,6 @@ func TestStreamChatCompletionsAsResponses_BillingGateAllowsExplicitZeroUsage(t *
 func TestStreamChatCompletionsAsResponses_AcceptsFinishReasonWithoutDoneSentinel(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	gateCalls := 0
-	ctx := WithOpenAIForwardResultBillingGate(context.Background(), NewOpenAIForwardResultBillingGate(func(result *OpenAIForwardResult) error {
-		gateCalls++
-		require.Equal(t, 12, result.Usage.InputTokens)
-		require.Equal(t, 2, result.Usage.OutputTokens)
-		return nil
-	}))
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	resp := rawChatCompletionsResponsesStream("rid_raw_stream_finish", []string{
@@ -979,7 +713,7 @@ func TestStreamChatCompletionsAsResponses_AcceptsFinishReasonWithoutDoneSentinel
 	})
 
 	result, err := (&OpenAIGatewayService{}).streamChatCompletionsAsResponses(
-		ctx,
+		context.Background(),
 		c,
 		resp,
 		"gpt-5.5",
@@ -995,7 +729,8 @@ func TestStreamChatCompletionsAsResponses_AcceptsFinishReasonWithoutDoneSentinel
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Equal(t, 1, gateCalls)
+	require.Equal(t, 12, result.Usage.InputTokens)
+	require.Equal(t, 2, result.Usage.OutputTokens)
 	require.Contains(t, rec.Body.String(), `response.completed`)
 	require.Contains(t, rec.Body.String(), `data: [DONE]`)
 }
@@ -1003,11 +738,6 @@ func TestStreamChatCompletionsAsResponses_AcceptsFinishReasonWithoutDoneSentinel
 func TestStreamChatCompletionsAsResponses_RejectsEOFFromIncompleteStream(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	gateCalls := 0
-	ctx := WithOpenAIForwardResultBillingGate(context.Background(), NewOpenAIForwardResultBillingGate(func(*OpenAIForwardResult) error {
-		gateCalls++
-		return nil
-	}))
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	resp := rawChatCompletionsResponsesStream("rid_raw_stream_truncated", []string{
@@ -1018,7 +748,7 @@ func TestStreamChatCompletionsAsResponses_RejectsEOFFromIncompleteStream(t *test
 	})
 
 	result, err := (&OpenAIGatewayService{}).streamChatCompletionsAsResponses(
-		ctx,
+		context.Background(),
 		c,
 		resp,
 		"gpt-5.5",
@@ -1036,21 +766,15 @@ func TestStreamChatCompletionsAsResponses_RejectsEOFFromIncompleteStream(t *test
 	require.NotNil(t, result)
 	require.Equal(t, 12, result.Usage.InputTokens)
 	require.Equal(t, 2, result.Usage.OutputTokens)
-	require.Zero(t, gateCalls)
 	require.NotContains(t, rec.Body.String(), `response.completed`)
 	require.NotContains(t, rec.Body.String(), `data: [DONE]`)
 	var failoverErr *UpstreamFailoverError
 	require.False(t, errors.As(err, &failoverErr))
 }
 
-func TestStreamChatCompletionsAsResponses_BillingGateRequiresTerminalUsage(t *testing.T) {
+func TestStreamChatCompletionsAsResponses_MissingTerminalUsageMarkedIncomplete(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	gateCalls := 0
-	ctx := WithOpenAIForwardResultBillingGate(context.Background(), NewOpenAIForwardResultBillingGate(func(*OpenAIForwardResult) error {
-		gateCalls++
-		return nil
-	}))
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	resp := rawChatCompletionsResponsesStream("rid_raw_stream_missing_usage", []string{
@@ -1063,7 +787,7 @@ func TestStreamChatCompletionsAsResponses_BillingGateRequiresTerminalUsage(t *te
 	})
 
 	result, err := (&OpenAIGatewayService{}).streamChatCompletionsAsResponses(
-		ctx,
+		context.Background(),
 		c,
 		resp,
 		"gpt-5.5",
@@ -1077,11 +801,11 @@ func TestStreamChatCompletionsAsResponses_BillingGateRequiresTerminalUsage(t *te
 		time.Now(),
 	)
 
-	require.ErrorContains(t, err, "missing terminal usage")
+	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Zero(t, gateCalls)
-	require.NotContains(t, rec.Body.String(), `response.completed`)
-	require.NotContains(t, rec.Body.String(), `data: [DONE]`)
+	require.False(t, result.BillingUsageComplete)
+	require.Contains(t, rec.Body.String(), `response.completed`)
+	require.Contains(t, rec.Body.String(), `data: [DONE]`)
 }
 
 func rawChatCompletionsResponsesStream(requestID string, lines []string) *http.Response {

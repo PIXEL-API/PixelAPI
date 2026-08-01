@@ -199,7 +199,7 @@
         <label class="input-label">{{ t('admin.accounts.platform') }}</label>
         <div class="input flex min-h-[44px] items-center justify-between bg-gray-50 text-gray-700 dark:bg-dark-800 dark:text-dark-200">
           <strong>{{ form.platform === 'openai' ? 'OpenAI' : form.platform === 'anthropic' ? 'Anthropic' : form.platform }}</strong>
-          <span class="text-xs text-gray-500 dark:text-dark-400">由目标房间锁定</span>
+          <span class="text-xs text-gray-500 dark:text-dark-400">{{ t('admin.accounts.lockedByRoom') }}</span>
         </div>
       </div>
 
@@ -403,7 +403,7 @@
           class="input flex min-h-[44px] items-center justify-between bg-gray-50 text-gray-700 dark:bg-dark-800 dark:text-dark-200"
         >
           <strong>{{ form.account_level }}</strong>
-          <span class="text-xs text-gray-500 dark:text-dark-400">由目标房间锁定</span>
+          <span class="text-xs text-gray-500 dark:text-dark-400">{{ t('admin.accounts.lockedByRoom') }}</span>
         </div>
         <div v-else-if="isUserScope" class="grid gap-2 sm:grid-cols-4">
           <button
@@ -2678,10 +2678,11 @@
           v-model="form.proxy_id"
           :proxies="proxyOptions"
           :can-test="!isUserScope"
+          :hide-endpoint="isUserScope"
           disable-full
         />
         <p v-if="isUserScope" class="input-hint">
-          {{ selectedProxyCapacityMessage || (proxyOptions.length > 0 ? t('userAccounts.importProxyHint') : t('userAccounts.importProxyEmpty')) }}
+          {{ userProxyHintText }}
         </p>
       </div>
 
@@ -3522,6 +3523,9 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits<{
   close: []
   created: [accounts?: Account[]]
+  // 通知父组件当前选中的平台/等级，父组件据此拉取「该范围内可用」的平台代理。
+  // 不发这个事件的话，父组件只能按空范围取到通用代理，平台/等级专属代理永远选不到。
+  'proxy-scope-change': [scope: { platform: AccountPlatform; account_level: AccountLevel }]
 }>()
 
 const appStore = useAppStore()
@@ -3904,7 +3908,14 @@ const selectedProxyCapacityMessage = computed(() => {
   if (!isProxyAccountFull(proxy)) return ''
   const count = normalizeProxyAccountCount(proxy)
   const max = normalizeProxyMaxAccounts(proxy)
-  return `${t('admin.proxies.accountUsageFullTitle', { count, max })}，请选择其它代理 IP。`
+  return t('admin.proxies.accountUsageFullSelectOther', { count, max })
+})
+
+const userProxyHintText = computed(() => {
+  if (selectedProxyCapacityMessage.value) return selectedProxyCapacityMessage.value
+  if (proxyOptions.value.length > 0) return t('userAccounts.importProxyHint')
+  // 列表已按平台/等级取过，空列表说明是「该范围内」没有代理，而不是全局没有代理。
+  return t('userAccounts.importProxyEmptyForScope')
 })
 
 function validateUserOAuthProxySelection(): boolean {
@@ -3913,12 +3924,42 @@ function validateUserOAuthProxySelection(): boolean {
     appStore.showError(t('userAccounts.importProxyRequired'))
     return false
   }
+  // 选中的代理必须仍在当前平台/等级的可选列表里，否则后端 scope 校验会拒绝。
+  if (isUserScope.value && !selectedProxy.value) {
+    form.proxy_id = null
+    appStore.showError(t('userAccounts.importProxyOutOfScope'))
+    return false
+  }
   if (selectedProxyCapacityMessage.value) {
     appStore.showError(selectedProxyCapacityMessage.value)
     return false
   }
   return true
 }
+
+// 平台/等级变化时告知父组件重新按范围取代理；模态打开时也发一次，
+// 因为父组件在打开瞬间并不知道用户会选哪个平台。
+watch(
+  [() => props.show, () => form.platform, () => form.account_level],
+  ([show, platform, accountLevel]) => {
+    if (!show) return
+    emit('proxy-scope-change', {
+      platform: platform as AccountPlatform,
+      account_level: accountLevel as AccountLevel
+    })
+  },
+  { immediate: true }
+)
+
+// 代理列表换了范围之后，丢弃已经不在列表里的选择，避免把越界的 proxy_id 提交给后端。
+watch(
+  () => props.proxies,
+  (proxies) => {
+    if (!isUserScope.value || !form.proxy_id) return
+    if (proxies.some(proxy => proxy.id === form.proxy_id)) return
+    form.proxy_id = null
+  }
+)
 
 const normalizeConcurrencyInput = () => {
   if (isUserScope.value) {

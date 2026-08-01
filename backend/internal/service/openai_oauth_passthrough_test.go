@@ -917,16 +917,10 @@ func TestOpenAIGatewayService_RejectsUnexpectedNon2xxBeforeSuccessHandling(t *te
 				account.Extra = map[string]any{"openai_passthrough": true}
 			}
 
-			gateCalls := 0
-			ctx := WithOpenAIForwardResultBillingGate(context.Background(), NewOpenAIForwardResultBillingGate(func(*OpenAIForwardResult) error {
-				gateCalls++
-				return nil
-			}))
-			result, err := svc.Forward(ctx, c, account, body)
+			result, err := svc.Forward(context.Background(), c, account, body)
 
 			require.Error(t, err)
 			require.Nil(t, result)
-			require.Zero(t, gateCalls)
 			require.Equal(t, http.StatusBadGateway, rec.Code)
 			require.Equal(t, "upstream_error", gjson.Get(rec.Body.String(), "error.type").String())
 			require.Equal(t, "Upstream request failed", gjson.Get(rec.Body.String(), "error.message").String())

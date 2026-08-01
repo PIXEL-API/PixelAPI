@@ -2,7 +2,7 @@
   <CreateAccountModal
     :show="show && stage === 'creating'"
     :title="t('accountShare.roomAccounts.createFlow.creatorTitle', { room: roomDisplayName })"
-    :proxies="proxies"
+    :proxies="effectiveProxies"
     :groups="[]"
     account-scope="user"
     :allow-proxy="true"
@@ -14,6 +14,7 @@
     :allow-multiple-o-auth="false"
     @created="handleAccountCreated"
     @close="requestClose"
+    @proxy-scope-change="handleProxyScopeChange"
   />
 
   <BaseDialog
@@ -288,6 +289,41 @@ const roomAccountLevel = computed(() => (
     : 'unknown'
 ))
 
+// 父级传下来的 proxies 是「创建房间」表单那次拉取的结果，范围未必等于本房间的
+// 平台/等级；而这里的平台和等级是锁死的。所以按模态回报的范围自己取一次，
+// 取到之前先用父级的列表兜底。
+const scopedProxies = ref<Proxy[]>([])
+const scopedProxiesLoaded = ref(false)
+let scopedProxyScopeKey = ''
+let scopedProxyRequestSeq = 0
+
+const effectiveProxies = computed<Proxy[]>(() => (
+  scopedProxiesLoaded.value ? scopedProxies.value : props.proxies
+))
+
+async function handleProxyScopeChange(scope: { platform: string; account_level: string }): Promise<void> {
+  const scopeKey = `${scope.platform || ''}|${scope.account_level || ''}`
+  if (scopeKey === scopedProxyScopeKey && scopedProxiesLoaded.value) {
+    scopedProxyRequestSeq++
+    return
+  }
+  const seq = ++scopedProxyRequestSeq
+  try {
+    const list = await accountShareAPI.listProxies({
+      platform: scope.platform,
+      account_level: scope.account_level
+    })
+    if (seq !== scopedProxyRequestSeq) return
+    scopedProxies.value = list
+    scopedProxyScopeKey = scopeKey
+    scopedProxiesLoaded.value = true
+  } catch (error) {
+    if (seq !== scopedProxyRequestSeq) return
+    // 取不到就继续用父级列表，至少不比修复前差。
+    console.error('Failed to load room-scoped proxies:', error)
+  }
+}
+
 const busy = computed(() => (
   stage.value === 'preparing'
   || stage.value === 'created'
@@ -346,6 +382,12 @@ function resetFlow(): void {
   attachIdempotencyKey.value = ''
   discardConfirmationOpen.value = false
   completionEmitted = false
+  // 换房间/重开流程后上一轮按范围取到的代理不再适用；序号自增顺带作废还在飞的旧请求，
+  // 否则它回来会把上一个房间的列表标记成「已加载」。
+  scopedProxies.value = []
+  scopedProxiesLoaded.value = false
+  scopedProxyScopeKey = ''
+  scopedProxyRequestSeq++
 }
 
 async function prepareCreator(currentActivation: number): Promise<void> {

@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math/rand/v2"
 	"net/http"
@@ -237,132 +236,20 @@ func bindAccountSelectionForwardContext(ctx context.Context, selection *service.
 	return service.BindAccountShareRuntimeLeaseContext(ctx, selection.RuntimeLease)
 }
 
-type accountShareBillingDispatcher interface {
-	BeginAccountShareBillingDispatch(
-		ctx context.Context,
-		input service.AccountShareBillingDispatchInput,
-	) (*service.AccountShareBillingDispatch, error)
-}
 
-func beginAccountShareBillingDispatch(
-	ctx context.Context,
-	dispatcher accountShareBillingDispatcher,
-	selection *service.AccountSelectionResult,
-	attemptNo *int,
-	input service.AccountShareBillingDispatchInput,
-) (context.Context, error) {
-	if selection == nil || !selection.AccountShareMode {
-		return ctx, nil
-	}
-	if dispatcher == nil || selection.Account == nil || selection.RuntimeLease == nil || attemptNo == nil {
-		return ctx, service.ErrAccountShareRuntimeLeaseUnavailable
-	}
-	*attemptNo = *attemptNo + 1
-	input.AttemptNo = *attemptNo
-	input.Account = selection.Account
-	dispatch, err := dispatcher.BeginAccountShareBillingDispatch(ctx, input)
-	if err != nil {
-		return ctx, err
-	}
-	if dispatch == nil {
-		return ctx, service.ErrServiceUnavailable
-	}
-	return service.WithAccountShareBillingDispatch(ctx, dispatch), nil
-}
-
-func withForwardResultBillingGate(
-	ctx context.Context,
-	submit func(context.Context, *service.ForwardResult) error,
-) context.Context {
-	if submit == nil {
-		return ctx
-	}
-	if _, durable := service.AccountShareBillingDispatchFromContext(ctx); !durable {
-		return ctx
-	}
-	sourceCtx := ctx
-	gate := service.NewForwardResultBillingGate(func(result *service.ForwardResult) error {
-		billingCtx, cancel := context.WithTimeout(context.Background(), accountSharePreTerminalBillingTimeout)
-		defer cancel()
-		billingCtx = service.WithAccountShareModeRequestFromContext(billingCtx, sourceCtx)
-		billingCtx = service.WithAccountShareBillingDispatchFromContext(billingCtx, sourceCtx)
-		return submit(billingCtx, result)
-	})
-	return service.WithForwardResultBillingGate(ctx, gate)
-}
-
-func withOpenAIForwardResultBillingGate(
-	ctx context.Context,
-	submit func(context.Context, *service.OpenAIForwardResult) error,
-) context.Context {
-	if submit == nil {
-		return ctx
-	}
-	if _, durable := service.AccountShareBillingDispatchFromContext(ctx); !durable {
-		return ctx
-	}
-	sourceCtx := ctx
-	gate := service.NewOpenAIForwardResultBillingGate(func(result *service.OpenAIForwardResult) error {
-		billingCtx, cancel := context.WithTimeout(context.Background(), accountSharePreTerminalBillingTimeout)
-		defer cancel()
-		billingCtx = service.WithAccountShareModeRequestFromContext(billingCtx, sourceCtx)
-		billingCtx = service.WithAccountShareBillingDispatchFromContext(billingCtx, sourceCtx)
-		return submit(billingCtx, result)
-	})
-	return service.WithOpenAIForwardResultBillingGate(ctx, gate)
-}
-
-func failAccountShareBillingDispatchWithoutUsage(
-	ctx context.Context,
-	forwardErr error,
+// finalizeAccountShareRequest records usage and releases the runtime lease.
+// Billing intent mechanism has been removed - usage is recorded synchronously.
+func finalizeAccountShareRequest(
 	hasBillableUsage bool,
-	_ bool,
-) error {
-	if hasBillableUsage {
-		return nil
-	}
-	errorCode := "forward_completed_without_usage_detail"
-	errorMessage := "upstream request completed without a complete usage detail"
-	if forwardErr != nil {
-		errorCode = "forward_failed_without_usage_detail"
-		errorMessage = "upstream request failed without a complete usage detail"
-		if errors.Is(forwardErr, service.ErrAccountShareBillingUsageValidation) {
-			errorCode = "forward_usage_incomplete"
-			errorMessage = "upstream response did not contain a complete usage detail"
-		} else if errors.Is(forwardErr, service.ErrAccountShareBillingPreTerminalCommit) {
-			return forwardErr
-		}
-	}
-	_, err := service.FailAccountShareBillingDispatchWithoutUsage(
-		ctx,
-		errorCode,
-		errorMessage,
-	)
-	return err
-}
-
-// finalizeAccountShareBillingAttempt closes the durable billing state before
-// releasing the paired runtime lease. The release barrier can therefore only
-// observe a ready/recovering dispatch or a no-usage dispatch carrying its
-// real failure reason, never an unexamined in-flight intent.
-func finalizeAccountShareBillingAttempt(
-	ctx context.Context,
-	forwardErr error,
-	hasBillableUsage bool,
-	streamed bool,
 	recordUsage func(),
 	release func(),
-) error {
+) {
 	if release != nil {
 		defer release()
 	}
-	if hasBillableUsage {
-		if recordUsage == nil {
-			return fmt.Errorf("%w: billable usage recorder is required", service.ErrAccountShareBillingIntentInvalid)
-		}
+	if hasBillableUsage && recordUsage != nil {
 		recordUsage()
 	}
-	return failAccountShareBillingDispatchWithoutUsage(ctx, forwardErr, hasBillableUsage, streamed)
 }
 
 func accountShareBillingRequestType(stream bool) service.RequestType {

@@ -84,12 +84,6 @@ type accountShareMembershipOpenBinding struct {
 	ListingRevisionID int64
 }
 
-type accountShareMembershipPendingIntent struct {
-	ID           int64
-	MembershipID int64
-	Status       string
-}
-
 const (
 	accountExternalPlacementDrainLease = 2 * time.Minute
 
@@ -2625,42 +2619,6 @@ func lockAccountShareMembershipOpenBindingsForRebindInTx(
 	return bindings, nil
 }
 
-func lockAccountShareMembershipPendingIntentsForRebindInTx(
-	ctx context.Context,
-	tx *sql.Tx,
-	membershipIDs []int64,
-) ([]accountShareMembershipPendingIntent, error) {
-	membershipIDs = uniqueSortedPositiveInt64s(membershipIDs)
-	if tx == nil || len(membershipIDs) == 0 {
-		return nil, nil
-	}
-	rows, err := tx.QueryContext(ctx, `
-		SELECT id, membership_id, status
-		FROM account_share_request_billing_intents
-		WHERE membership_id = ANY($1::bigint[])
-			AND status NOT IN ('settled', 'cancelled')
-		ORDER BY membership_id ASC, id ASC
-		FOR UPDATE
-	`, pq.Array(membershipIDs))
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-
-	intents := make([]accountShareMembershipPendingIntent, 0)
-	for rows.Next() {
-		var intent accountShareMembershipPendingIntent
-		if err := rows.Scan(&intent.ID, &intent.MembershipID, &intent.Status); err != nil {
-			return nil, err
-		}
-		intents = append(intents, intent)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return intents, nil
-}
-
 func (r *accountShareModeRepository) rebindLockedAccountShareMembershipsInTx(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -2678,19 +2636,6 @@ func (r *accountShareModeRepository) rebindLockedAccountShareMembershipsInTx(
 	openBindings, err := lockAccountShareMembershipOpenBindingsForRebindInTx(ctx, tx, membershipIDs)
 	if err != nil {
 		return err
-	}
-	pendingIntents, err := lockAccountShareMembershipPendingIntentsForRebindInTx(ctx, tx, membershipIDs)
-	if err != nil {
-		return err
-	}
-	if len(pendingIntents) > 0 {
-		intent := pendingIntents[0]
-		return service.ErrAccountShareRoomOperationConflict.WithMetadata(map[string]string{
-			"blocker":           "pending_billing_intent",
-			"membership_id":     fmt.Sprintf("%d", intent.MembershipID),
-			"billing_intent_id": fmt.Sprintf("%d", intent.ID),
-			"intent_status":     intent.Status,
-		})
 	}
 	if replacementAccountID <= 0 {
 		membership := memberships[0]

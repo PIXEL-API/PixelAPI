@@ -118,12 +118,10 @@ type Config struct {
 	ReceiptCodeStorage      ReceiptCodeStorageConfig      `mapstructure:"receipt_code_storage"`
 }
 
-// AccountShareRolloutConfig keeps expand releases backward-compatible until
-// the separately scheduled contract migration has completed its observation
-// window.
+// AccountShareRolloutConfig 保留仍有实际语义的开关；lifecycle 合约与排队延迟绑定
+// 已收敛为唯一形态，对应配置项（lifecycle_contract_enabled /
+// deferred_queue_binding_enabled）不再存在，历史环境变量会被忽略。
 type AccountShareRolloutConfig struct {
-	LifecycleContractEnabled       bool   `mapstructure:"lifecycle_contract_enabled"`
-	DeferredQueueBindingEnabled    bool   `mapstructure:"deferred_queue_binding_enabled"`
 	ReviewRoomSubjectWritesEnabled bool   `mapstructure:"review_room_subject_writes_enabled"`
 	QuotaMode                      string `mapstructure:"quota_mode"`
 }

@@ -964,6 +964,8 @@ export default {
       credentialsPreserved: "Changing mode keeps the account, credentials, proxy, and base status unchanged.",
       uuidUnavailable: "This browser cannot generate a secure idempotency key. Upgrade it and try again.",
       unsupportedPlatform: "Platform account mode is not supported for this platform.",
+      roomAttachedDisabledHint:
+        "This account is listed in an Account Plaza room. Leave the room in Account Plaza before switching to owner-only or public pool.",
       convertFailed: "Failed to change the account mode. Try again."
     },
     pendingReview: "Validation Pending",
@@ -1146,6 +1148,10 @@ export default {
       "Select a visible active proxy IP for generating the login URL and exchanging the authorization code.",
     importProxyEmpty:
       "No proxy IP is available. Add or buy one from account mode first.",
+    importProxyEmptyForScope:
+      "No proxy IP is available for the current platform or account level.",
+    importProxyOutOfScope:
+      "The selected proxy IP is not available for the current platform or account level. It was cleared; pick another.",
     importProxyLoading: "Loading proxy IPs...",
     importProxyLoadFailed: "Failed to load proxy IPs",
     importProxyRequired: "Select a proxy IP first",
@@ -4935,6 +4941,7 @@ export default {
       title: "Account Management",
       description: "Manage AI platform accounts and credentials",
       createAccount: "Create Account",
+      lockedByRoom: "Locked by the target room",
       duplicateAccount: "Duplicate Account",
       duplicateSuccess: 'Created "{name}" in a paused state. Review it before enabling scheduling.',
       duplicateFailed: "Failed to duplicate account",
@@ -6624,6 +6631,7 @@ export default {
       accountUsageUnlimitedTitle: "{count} accounts bound, no binding limit",
       accountUsageLimitedTitle: "{count} accounts bound, limit {max}",
       accountUsageFullTitle: "{count} accounts bound, limit {max} reached",
+      accountUsageFullSelectOther: "{count} accounts bound, limit {max} reached. Select a different proxy IP.",
       accountUsageExceededTitle: "{count} accounts bound, exceeds limit {max}",
       enterProxyName: "Enter proxy name",
       leaveEmptyToKeep: "Leave empty to keep current",

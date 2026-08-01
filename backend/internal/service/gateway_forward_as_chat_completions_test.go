@@ -50,11 +50,6 @@ func TestForwardAsChatCompletions_RejectsNon2xxBeforeSuccessBridge(t *testing.T)
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gateCalls := 0
-			ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(*ForwardResult) error {
-				gateCalls++
-				return nil
-			}))
 			svc := newGatewayBridgeStatusTestService(tt.status)
 			rec := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(rec)
@@ -62,7 +57,7 @@ func TestForwardAsChatCompletions_RejectsNon2xxBeforeSuccessBridge(t *testing.T)
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(string(body)))
 
 			result, err := svc.ForwardAsChatCompletions(
-				ctx,
+				context.Background(),
 				c,
 				newGatewayBridgeStatusTestAccount(),
 				body,
@@ -74,7 +69,6 @@ func TestForwardAsChatCompletions_RejectsNon2xxBeforeSuccessBridge(t *testing.T)
 			require.Equal(t, http.StatusBadGateway, rec.Code)
 			require.Contains(t, rec.Body.String(), `"error"`)
 			require.NotContains(t, rec.Body.String(), `[DONE]`)
-			require.Zero(t, gateCalls)
 		})
 	}
 }
@@ -235,106 +229,9 @@ func TestHandleCCStreamingFromAnthropic_RequiresMessageStopWithoutDone(t *testin
 	require.NotContains(t, rec.Body.String(), `"finish_reason":"stop"`)
 }
 
-func TestHandleCCStreamingFromAnthropic_BillingGateBlocksTerminal(t *testing.T) {
+func TestHandleCCBufferedFromAnthropic_InputOnlyUsageMarkedIncomplete(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	gateErr := errors.New("billing unavailable")
-	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(result *ForwardResult) error {
-		require.Equal(t, 20, result.Usage.InputTokens)
-		require.Equal(t, 8, result.Usage.OutputTokens)
-		require.True(t, result.BillingUsageComplete)
-		return gateErr
-	}))
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	resp := &http.Response{
-		Header: http.Header{"x-request-id": []string{"rid_cc_stream_gate"}},
-		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
-			`event: message_start`,
-			`data: {"type":"message_start","message":{"id":"msg_gate","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4.5","usage":{"input_tokens":20}}}`,
-			``,
-			`event: message_delta`,
-			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":8}}`,
-			``,
-			`event: message_stop`,
-			`data: {"type":"message_stop"}`,
-			``,
-		}, "\n"))),
-	}
-
-	result, err := (&GatewayService{}).handleCCStreamingFromAnthropic(
-		ctx,
-		resp,
-		c,
-		"gpt-5",
-		"claude-sonnet-4.5",
-		nil,
-		time.Now(),
-		true,
-	)
-
-	require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
-	require.ErrorIs(t, err, gateErr)
-	require.True(t, IsBillableStreamUsageError(err))
-	require.NotNil(t, result)
-	require.Equal(t, 20, result.Usage.InputTokens)
-	require.Equal(t, 8, result.Usage.OutputTokens)
-	require.NotContains(t, rec.Body.String(), `[DONE]`)
-	require.NotContains(t, rec.Body.String(), `"finish_reason":"stop"`)
-}
-
-func TestHandleCCBufferedFromAnthropic_BillingGateBlocksBody(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	gateErr := errors.New("billing unavailable")
-	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(result *ForwardResult) error {
-		require.Equal(t, 12, result.Usage.InputTokens)
-		require.Equal(t, 7, result.Usage.OutputTokens)
-		require.True(t, result.BillingUsageComplete)
-		return gateErr
-	}))
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	resp := &http.Response{
-		Header: http.Header{"x-request-id": []string{"rid_cc_buffered_gate"}},
-		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
-			`event: message_start`,
-			`data: {"type":"message_start","message":{"id":"msg_gate","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4.5","usage":{"input_tokens":12}}}`,
-			``,
-			`event: message_delta`,
-			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}`,
-			``,
-			`event: message_stop`,
-			`data: {"type":"message_stop"}`,
-			``,
-		}, "\n"))),
-	}
-
-	result, err := (&GatewayService{}).handleCCBufferedFromAnthropic(
-		ctx,
-		resp,
-		c,
-		"gpt-5",
-		"claude-sonnet-4.5",
-		nil,
-		time.Now(),
-	)
-
-	require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
-	require.ErrorIs(t, err, gateErr)
-	require.True(t, IsBillableStreamUsageError(err))
-	require.NotNil(t, result)
-	require.Empty(t, rec.Body.String())
-}
-
-func TestHandleCCBufferedFromAnthropic_BillingGateRejectsInputOnlyUsage(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	gateCalls := 0
-	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(*ForwardResult) error {
-		gateCalls++
-		return nil
-	}))
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	resp := &http.Response{
@@ -353,7 +250,7 @@ func TestHandleCCBufferedFromAnthropic_BillingGateRejectsInputOnlyUsage(t *testi
 	}
 
 	result, err := (&GatewayService{}).handleCCBufferedFromAnthropic(
-		ctx,
+		context.Background(),
 		resp,
 		c,
 		"gpt-5",
@@ -362,25 +259,17 @@ func TestHandleCCBufferedFromAnthropic_BillingGateRejectsInputOnlyUsage(t *testi
 		time.Now(),
 	)
 
-	require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
-	require.ErrorContains(t, err, "no complete billable usage")
-	require.True(t, IsBillableStreamUsageError(err))
+	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, 12, result.Usage.InputTokens)
 	require.Zero(t, result.Usage.OutputTokens)
 	require.False(t, result.BillingUsageComplete)
-	require.Zero(t, gateCalls)
-	require.Empty(t, rec.Body.String())
+	require.NotEmpty(t, rec.Body.String())
 }
 
-func TestHandleCCStreamingFromAnthropic_BillingGateRejectsOutputOnlyUsage(t *testing.T) {
+func TestHandleCCStreamingFromAnthropic_OutputOnlyUsageMarkedIncomplete(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	gateCalls := 0
-	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(*ForwardResult) error {
-		gateCalls++
-		return nil
-	}))
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	resp := &http.Response{
@@ -399,7 +288,7 @@ func TestHandleCCStreamingFromAnthropic_BillingGateRejectsOutputOnlyUsage(t *tes
 	}
 
 	result, err := (&GatewayService{}).handleCCStreamingFromAnthropic(
-		ctx,
+		context.Background(),
 		resp,
 		c,
 		"gpt-5",
@@ -409,29 +298,17 @@ func TestHandleCCStreamingFromAnthropic_BillingGateRejectsOutputOnlyUsage(t *tes
 		true,
 	)
 
-	require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
-	require.ErrorContains(t, err, "no complete billable usage")
-	require.True(t, IsBillableStreamUsageError(err))
+	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Zero(t, result.Usage.InputTokens)
 	require.Equal(t, 8, result.Usage.OutputTokens)
 	require.False(t, result.BillingUsageComplete)
-	require.Zero(t, gateCalls)
-	require.NotContains(t, rec.Body.String(), `[DONE]`)
-	require.NotContains(t, rec.Body.String(), `"finish_reason":"stop"`)
+	require.Contains(t, rec.Body.String(), `[DONE]`)
 }
 
-func TestHandleCCBufferedFromAnthropic_BillingGateAcceptsExplicitZeroUsage(t *testing.T) {
+func TestHandleCCBufferedFromAnthropic_ExplicitZeroUsageMarkedComplete(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	gateCalls := 0
-	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(result *ForwardResult) error {
-		gateCalls++
-		require.Zero(t, result.Usage.InputTokens)
-		require.Zero(t, result.Usage.OutputTokens)
-		require.True(t, result.BillingUsageComplete)
-		return nil
-	}))
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	resp := &http.Response{
@@ -450,7 +327,7 @@ func TestHandleCCBufferedFromAnthropic_BillingGateAcceptsExplicitZeroUsage(t *te
 	}
 
 	result, err := (&GatewayService{}).handleCCBufferedFromAnthropic(
-		ctx,
+		context.Background(),
 		resp,
 		c,
 		"gpt-5",
@@ -461,22 +338,15 @@ func TestHandleCCBufferedFromAnthropic_BillingGateAcceptsExplicitZeroUsage(t *te
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
+	require.Zero(t, result.Usage.InputTokens)
+	require.Zero(t, result.Usage.OutputTokens)
 	require.True(t, result.BillingUsageComplete)
-	require.Equal(t, 1, gateCalls)
 	require.NotEmpty(t, rec.Body.String())
 }
 
-func TestHandleCCStreamingFromAnthropic_DoneWriteFailureAfterBillingPreservesUsage(t *testing.T) {
+func TestHandleCCStreamingFromAnthropic_DoneWriteFailurePreservesUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	gateCalls := 0
-	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(result *ForwardResult) error {
-		gateCalls++
-		require.Equal(t, 20, result.Usage.InputTokens)
-		require.Equal(t, 8, result.Usage.OutputTokens)
-		require.True(t, result.BillingUsageComplete)
-		return nil
-	}))
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	writeErr := errors.New("injected done write failure")
@@ -501,7 +371,7 @@ func TestHandleCCStreamingFromAnthropic_DoneWriteFailureAfterBillingPreservesUsa
 	}
 
 	result, err := (&GatewayService{}).handleCCStreamingFromAnthropic(
-		ctx,
+		context.Background(),
 		resp,
 		c,
 		"gpt-5",
@@ -517,7 +387,6 @@ func TestHandleCCStreamingFromAnthropic_DoneWriteFailureAfterBillingPreservesUsa
 	require.True(t, result.ClientDisconnect)
 	require.Equal(t, 20, result.Usage.InputTokens)
 	require.Equal(t, 8, result.Usage.OutputTokens)
-	require.Equal(t, 1, gateCalls)
 	require.Contains(t, rec.Body.String(), `"finish_reason":"stop"`)
 	require.NotContains(t, rec.Body.String(), `[DONE]`)
 }

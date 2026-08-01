@@ -729,22 +729,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthNonStreamingResponse(
 		return OpenAIUsage{}, 0, nil, err
 	}
 	imageOutputSizes := openAIResponsesImageResultSizes(results)
-	responseID := ""
-	if finalResponse, ok := extractCodexFinalResponse(string(body)); ok {
-		responseID = extractOpenAIResponseIDFromJSONBytes(finalResponse)
-	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
-	if _, handled, billingErr := commitOpenAIForwardResultBillingSnapshotBeforeTerminal(ctx, openAIForwardResultSnapshot{
-		requestID:            resp.Header.Get("x-request-id"),
-		responseID:           responseID,
-		usage:                &usage,
-		responseHeaders:      resp.Header,
-		imageCount:           len(results),
-		imageOutputSizes:     imageOutputSizes,
-		billingUsageComplete: openAIResponsesBillingUsageComplete(body),
-	}); handled && billingErr != nil {
-		return usage, len(results), imageOutputSizes, billingErr
-	}
 	c.Data(resp.StatusCode, "application/json; charset=utf-8", responseBody)
 	return usage, len(results), imageOutputSizes, nil
 }
@@ -906,18 +891,6 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthStreamingResponse(
 						}
 						imageCount = len(finalResults)
 						imageOutputSizes = openAIResponsesImageResultSizes(finalResults)
-						if _, handled, billingErr := commitOpenAIForwardResultBillingSnapshotBeforeTerminal(ctx, openAIForwardResultSnapshot{
-							requestID:            resp.Header.Get("x-request-id"),
-							responseID:           extractOpenAIResponseIDFromJSONBytes(dataBytes),
-							usage:                &usage,
-							firstTokenMs:         firstTokenMs,
-							responseHeaders:      resp.Header,
-							imageCount:           imageCount,
-							imageOutputSizes:     imageOutputSizes,
-							billingUsageComplete: billingUsageObservation.complete(),
-						}); handled && billingErr != nil {
-							return usage, imageCount, imageOutputSizes, firstTokenMs, billingErr
-						}
 						eventName := streamPrefix + ".completed"
 						for _, img := range finalResults {
 							key := openAIResponsesImageResultKey("", img)
@@ -970,17 +943,6 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthStreamingResponse(
 		reconcileOpenAIResponsesImageResultSizes(finalResults, nil)
 		imageCount = len(finalResults)
 		imageOutputSizes = openAIResponsesImageResultSizes(finalResults)
-		if _, handled, billingErr := commitOpenAIForwardResultBillingSnapshotBeforeTerminal(ctx, openAIForwardResultSnapshot{
-			requestID:            resp.Header.Get("x-request-id"),
-			usage:                &usage,
-			firstTokenMs:         firstTokenMs,
-			responseHeaders:      resp.Header,
-			imageCount:           imageCount,
-			imageOutputSizes:     imageOutputSizes,
-			billingUsageComplete: billingUsageObservation.complete(),
-		}); handled && billingErr != nil {
-			return usage, imageCount, imageOutputSizes, firstTokenMs, billingErr
-		}
 		for _, img := range finalResults {
 			key := openAIResponsesImageResultKey("", img)
 			if _, exists := emitted[key]; exists {
@@ -1164,7 +1126,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 				imageSize:        parsed.SizeTier,
 				imageOutputSizes: imageOutputSizes,
 			})
-			if errors.Is(err, ErrAccountShareBillingPreTerminalCommit) || OpenAIForwardResultHasBillableUsage(result) {
+			if OpenAIForwardResultHasBillableUsage(result) {
 				return result, err
 			}
 			return nil, err
@@ -1180,7 +1142,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 				imageSize:        parsed.SizeTier,
 				imageOutputSizes: imageOutputSizes,
 			})
-			if errors.Is(err, ErrAccountShareBillingPreTerminalCommit) || OpenAIForwardResultHasBillableUsage(result) {
+			if OpenAIForwardResultHasBillableUsage(result) {
 				return result, err
 			}
 			if ctx != nil && ctx.Err() != nil {

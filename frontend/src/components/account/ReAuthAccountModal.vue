@@ -307,7 +307,7 @@ const selectedProxyCapacityMessage = computed(() => {
   if (currentAccountProxyId && proxy?.id === currentAccountProxyId) return ''
   const count = normalizeProxyAccountCount(proxy)
   const max = normalizeProxyMaxAccounts(proxy)
-  return `${t('admin.proxies.accountUsageFullTitle', { count, max })}，请选择其它代理 IP。`
+  return t('admin.proxies.accountUsageFullSelectOther', { count, max })
 })
 const effectiveProxyId = computed(() => {
   if (isUserScope.value) {

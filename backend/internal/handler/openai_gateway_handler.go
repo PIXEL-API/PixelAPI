@@ -131,7 +131,6 @@ func NewOpenAIGatewayHandler(
 func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// 局部兜底：确保该 handler 内部任何 panic 都不会击穿到进程级。
 	streamStarted := false
-	billingDispatchAttemptNo := 0
 	defer h.recoverResponsesPanic(c, &streamStarted)
 	compactStartedAt := time.Now()
 	defer h.logOpenAIRemoteCompactOutcome(c, compactStartedAt)
@@ -513,37 +512,6 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		}
 		forwardCtx, cancelForward := bindAccountSelectionForwardContext(dispatchCtx, selection)
 		requestPayloadHash := service.HashUsageRequestPayload(body)
-		routedModel := service.ResolveOpenAIForwardModel(account, selectionModel, "")
-		if requireCompact {
-			routedModel = service.ResolveOpenAICompactForwardModel(account, routedModel)
-		}
-		forwardCtx, err = beginAccountShareBillingDispatch(
-			forwardCtx,
-			h.gatewayService,
-			selection,
-			&billingDispatchAttemptNo,
-			service.AccountShareBillingDispatchInput{
-				APIKey:             currentAPIKey,
-				User:               currentAPIKey.User,
-				Subscription:       currentSubscription,
-				RequestedModel:     reqModel,
-				RoutedModel:        routedModel,
-				InboundEndpoint:    GetInboundEndpoint(c),
-				UpstreamEndpoint:   GetUpstreamEndpoint(c, account.Platform),
-				RequestType:        accountShareBillingRequestType(reqStream),
-				RequestPayloadHash: requestPayloadHash,
-				ChannelUsageFields: channelMapping.ToUsageFields(reqModel, routedModel),
-			},
-		)
-		if err != nil {
-			cancelForward()
-			if accountReleaseFunc != nil {
-				accountReleaseFunc()
-			}
-			reqLog.Error("openai.billing_dispatch_failed", zap.Int64("account_id", account.ID), zap.Error(err))
-			h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable; no upstream request was sent", streamStarted)
-			return
-		}
 		userAgent := c.GetHeader("User-Agent")
 		clientIP := ip.GetClientIP(c)
 		inboundEndpoint := GetInboundEndpoint(c)
@@ -567,7 +535,6 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
 			})
 		}
-		forwardCtx = withOpenAIForwardResultBillingGate(forwardCtx, recordUsage)
 		result, err := h.gatewayService.ForwardWithAnalysis(forwardCtx, c, account, forwardBody, forwardAnalysis)
 		cancelForward()
 		if service.GetOpsCyberPolicy(c) != nil {
@@ -576,19 +543,6 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		forwardDurationMs := time.Since(forwardStart).Milliseconds()
 		recordUsageResult := func(result *service.OpenAIForwardResult) {
 			if result == nil {
-				return
-			}
-			if handled, billingErr := service.CommitOpenAIForwardResultBillingGate(forwardCtx, result); handled {
-				if billingErr != nil {
-					logger.L().With(
-						zap.String("component", "handler.openai_gateway.responses"),
-						zap.Int64("user_id", subject.UserID),
-						zap.Int64("api_key_id", currentAPIKey.ID),
-						zap.Any("group_id", currentAPIKey.GroupID),
-						zap.String("model", reqModel),
-						zap.Int64("account_id", account.ID),
-					).Error("openai.record_usage_failed", zap.Error(billingErr))
-				}
 				return
 			}
 			h.submitUsageRecordTask(forwardCtx, func(ctx context.Context) {
@@ -606,20 +560,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			})
 		}
 		hasBillableUsage := service.OpenAIForwardResultHasBillableUsage(result)
-		if finalizeErr := finalizeAccountShareBillingAttempt(
-			forwardCtx,
-			err,
-			hasBillableUsage,
-			reqStream,
-			func() { recordUsageResult(result) },
-			accountReleaseFunc,
-		); finalizeErr != nil {
-			reqLog.Error("openai.billing_dispatch_finalize_failed", zap.Int64("account_id", account.ID), zap.Error(finalizeErr))
-			if service.OpenAICompactKeepaliveAdjustedWrittenSize(c) == writerSizeBeforeForward {
-				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable", streamStarted)
-			}
-			return
-		}
+		finalizeAccountShareRequest(hasBillableUsage, func() { recordUsageResult(result) }, accountReleaseFunc)
 		upstreamLatencyMs, _ := getContextInt64(c, service.OpsUpstreamLatencyMsKey)
 		responseLatencyMs := forwardDurationMs
 		if upstreamLatencyMs > 0 && forwardDurationMs > upstreamLatencyMs {
@@ -890,7 +831,6 @@ func (h *OpenAIGatewayHandler) logOpenAIRemoteCompactOutcome(c *gin.Context, sta
 // POST /v1/messages (when group platform is OpenAI)
 func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	streamStarted := false
-	billingDispatchAttemptNo := 0
 	defer h.recoverAnthropicMessagesPanic(c, &streamStarted)
 
 	requestStart := time.Now()
@@ -1168,34 +1108,6 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		}
 		forwardCtx, cancelForward := bindAccountSelectionForwardContext(selectionCtx, selection)
 		requestPayloadHash := service.HashUsageRequestPayload(body)
-		routedModel := service.ResolveOpenAIForwardModel(account, currentRoutingModel, defaultMappedModel)
-		forwardCtx, err = beginAccountShareBillingDispatch(
-			forwardCtx,
-			h.gatewayService,
-			selection,
-			&billingDispatchAttemptNo,
-			service.AccountShareBillingDispatchInput{
-				APIKey:             currentAPIKey,
-				User:               currentAPIKey.User,
-				Subscription:       currentSubscription,
-				RequestedModel:     reqModel,
-				RoutedModel:        routedModel,
-				InboundEndpoint:    GetInboundEndpoint(c),
-				UpstreamEndpoint:   GetUpstreamEndpoint(c, account.Platform),
-				RequestType:        accountShareBillingRequestType(reqStream),
-				RequestPayloadHash: requestPayloadHash,
-				ChannelUsageFields: channelMappingMsg.ToUsageFields(reqModel, routedModel),
-			},
-		)
-		if err != nil {
-			cancelForward()
-			if accountReleaseFunc != nil {
-				accountReleaseFunc()
-			}
-			reqLog.Error("openai_messages.billing_dispatch_failed", zap.Int64("account_id", account.ID), zap.Error(err))
-			h.anthropicStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable; no upstream request was sent", streamStarted)
-			return
-		}
 		userAgent := c.GetHeader("User-Agent")
 		clientIP := ip.GetClientIP(c)
 		inboundEndpoint := GetInboundEndpoint(c)
@@ -1219,7 +1131,6 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				ChannelUsageFields: channelMappingMsg.ToUsageFields(reqModel, result.UpstreamModel),
 			})
 		}
-		forwardCtx = withOpenAIForwardResultBillingGate(forwardCtx, recordUsage)
 		result, err := h.gatewayService.ForwardAsAnthropic(forwardCtx, c, account, forwardBody, promptCacheKey, defaultMappedModel)
 		cancelForward()
 		if service.GetOpsCyberPolicy(c) != nil {
@@ -1229,19 +1140,6 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		forwardDurationMs := time.Since(forwardStart).Milliseconds()
 		recordUsageResult := func(result *service.OpenAIForwardResult) {
 			if result == nil {
-				return
-			}
-			if handled, billingErr := service.CommitOpenAIForwardResultBillingGate(forwardCtx, result); handled {
-				if billingErr != nil {
-					logger.L().With(
-						zap.String("component", "handler.openai_gateway.messages"),
-						zap.Int64("user_id", subject.UserID),
-						zap.Int64("api_key_id", currentAPIKey.ID),
-						zap.Any("group_id", currentAPIKey.GroupID),
-						zap.String("model", reqModel),
-						zap.Int64("account_id", account.ID),
-					).Error("openai_messages.record_usage_failed", zap.Error(billingErr))
-				}
 				return
 			}
 			h.submitUsageRecordTask(forwardCtx, func(ctx context.Context) {
@@ -1259,20 +1157,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			})
 		}
 		hasBillableUsage := service.OpenAIForwardResultHasBillableUsage(result)
-		if finalizeErr := finalizeAccountShareBillingAttempt(
-			forwardCtx,
-			err,
-			hasBillableUsage,
-			reqStream,
-			func() { recordUsageResult(result) },
-			accountReleaseFunc,
-		); finalizeErr != nil {
-			reqLog.Error("openai_messages.billing_dispatch_finalize_failed", zap.Int64("account_id", account.ID), zap.Error(finalizeErr))
-			if c.Writer.Size() == writerSizeBeforeForward {
-				h.anthropicStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable", streamStarted)
-			}
-			return
-		}
+		finalizeAccountShareRequest(hasBillableUsage, func() { recordUsageResult(result) }, accountReleaseFunc)
 		upstreamLatencyMs, _ := getContextInt64(c, service.OpsUpstreamLatencyMsKey)
 		responseLatencyMs := forwardDurationMs
 		if upstreamLatencyMs > 0 && forwardDurationMs > upstreamLatencyMs {
@@ -2150,7 +2035,6 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			accountMaxConcurrency = latest.Concurrency
 
 			payloadHash := service.HashUsageRequestPayload(payload)
-			turnAttemptNo := 0
 			routedModel := service.ResolveOpenAIWebSocketForwardModel(latest, selectedRoutingModel)
 			if accountShareWS && routedModel != fixedRoutingModel {
 				cancelTurn()
@@ -2161,59 +2045,6 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					fmt.Errorf("websocket routed model changed from %q to %q", fixedRoutingModel, routedModel),
 				)
 			}
-			turnCtx, billingErr := beginAccountShareBillingDispatch(
-				turnCtx,
-				h.gatewayService,
-				turnSelection,
-				&turnAttemptNo,
-				service.AccountShareBillingDispatchInput{
-					ClientRequestID:    newOpenAIWSTurnClientRequestID(turn, payloadHash),
-					APIKey:             currentAPIKey,
-					User:               currentAPIKey.User,
-					Subscription:       currentSubscription,
-					RequestedModel:     reqModel,
-					RoutedModel:        routedModel,
-					InboundEndpoint:    inboundEndpoint,
-					UpstreamEndpoint:   upstreamEndpoint,
-					RequestType:        service.RequestTypeWSV2,
-					RequestPayloadHash: payloadHash,
-					ChannelUsageFields: channelMappingWS.ToUsageFields(reqModel, routedModel),
-				},
-			)
-			if billingErr != nil {
-				cancelTurn()
-				releaseTurnSlots()
-				return nil, service.NewOpenAIWSClientCloseError(
-					coderws.StatusTryAgainLater,
-					"billing state is temporarily unavailable; no upstream request was sent",
-					billingErr,
-				)
-			}
-			billingSourceCtx := turnCtx
-			billingAPIKey := currentAPIKey
-			billingSubscription := currentSubscription
-			billingAccount := latest
-			turnCtx = withOpenAIForwardResultBillingGate(turnCtx, func(taskCtx context.Context, result *service.OpenAIForwardResult) error {
-				if result == nil {
-					return nil
-				}
-				usageCtx := service.WithAccountShareModeRequestFromContext(taskCtx, billingSourceCtx)
-				return h.gatewayService.RecordUsage(usageCtx, &service.OpenAIRecordUsageInput{
-					Result:             result,
-					APIKey:             billingAPIKey,
-					User:               billingAPIKey.User,
-					Account:            billingAccount,
-					Subscription:       billingSubscription,
-					InboundEndpoint:    inboundEndpoint,
-					UpstreamEndpoint:   upstreamEndpoint,
-					UserAgent:          userAgent,
-					IPAddress:          clientIP,
-					RequestPayloadHash: payloadHash,
-					APIKeyService:      h.apiKeyService,
-					ChannelUsageFields: channelMappingWS.ToUsageFields(reqModel, result.UpstreamModel),
-				})
-			})
-
 			activeTurnNo = turn
 			activeTurnCtx = turnCtx
 			activeTurnCancel = cancelTurn
@@ -2243,7 +2074,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			if turnErr == nil && result == nil {
 				turnErr = errors.New("websocket turn result is nil")
 			}
-			recordUsage, completeWithoutUsage, hasBillableUsage := openAIWSTurnBillingDisposition(result, turnErr)
+			recordUsage, _, _ := openAIWSTurnBillingDisposition(result, turnErr)
 			if recordUsage {
 				recordTurnUsage := func(taskCtx context.Context) error {
 					usageCtx := service.WithAccountShareModeRequestFromContext(taskCtx, turnCtx)
@@ -2272,13 +2103,6 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 						)
 					}
 				}
-				if handled, billingErr := service.CommitOpenAIForwardResultBillingGate(turnCtx, result); handled {
-					if billingErr != nil {
-						logRecordUsageError(billingErr)
-						return billingErr
-					}
-					return nil
-				}
 				if turnSelection.AccountShareMode {
 					// A paired account-share lease cannot be reacquired for the
 					// next turn until this turn's durable intent reaches ready.
@@ -2298,16 +2122,6 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				}
 			}
 
-			if completeWithoutUsage {
-				if finalizeErr := failAccountShareBillingDispatchWithoutUsage(turnCtx, turnErr, hasBillableUsage, true); finalizeErr != nil {
-					reqLog.Error("openai.websocket_billing_dispatch_finalize_failed",
-						zap.Int64("account_id", turnAccount.ID),
-						zap.Int("turn", turn),
-						zap.Error(finalizeErr),
-					)
-					return finalizeErr
-				}
-			}
 			if turnErr != nil || result == nil {
 				return nil
 			}
@@ -2486,10 +2300,6 @@ func getContextInt64(c *gin.Context, key string) (int64, bool) {
 
 func (h *OpenAIGatewayHandler) submitUsageRecordTask(requestCtx context.Context, task service.UsageRecordTask) {
 	if task == nil {
-		return
-	}
-	if _, durable := service.AccountShareBillingDispatchFromContext(requestCtx); durable {
-		runUsageRecordTaskSync(requestCtx, task, "handler.openai_gateway.responses", "openai.usage_record_task_panic_recovered")
 		return
 	}
 	if h.usageRecordWorkerPool != nil {

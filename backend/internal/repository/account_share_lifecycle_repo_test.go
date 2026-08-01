@@ -450,7 +450,7 @@ func TestAccountShareModeRepositoryRoomDeletionSoftDeleteBlockedRollsBack(t *tes
 			5,
 		),
 	)
-	expectLifecycleDatabaseBlockers(mock, listingID, 1, 0, 0, 0, 0)
+	expectLifecycleDatabaseBlockers(mock, listingID, 1, 0, 0, 0)
 	mock.ExpectRollback()
 
 	operation, err := repo.SoftDeleteRoom(
@@ -606,7 +606,7 @@ func TestAccountShareModeRepositoryRoomDeletionSoftDeleteTxACommitsClaimOnly(t *
 			oldVersion,
 		),
 	)
-	expectLifecycleDatabaseBlockers(mock, listingID, 0, 0, 0, 0, 0)
+	expectLifecycleDatabaseBlockers(mock, listingID, 0, 0, 0, 0)
 	mock.ExpectExec("INSERT INTO account_share_room_operations").
 		WithArgs(
 			operationID,
@@ -719,7 +719,7 @@ func TestAccountShareModeRepositoryRoomDeletionFinalizeLiveMembershipBlocked(t *
 	mock.ExpectQuery("SELECT id\\s+FROM account_share_memberships\\s+WHERE listing_id = \\$1\\s+AND status IN").
 		WithArgs(listingID).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(901)))
-	expectLifecycleDatabaseBlockers(mock, listingID, 1, 0, 0, 0, 0)
+	expectLifecycleDatabaseBlockers(mock, listingID, 1, 0, 0, 0)
 	mock.ExpectRollback()
 
 	operation, err := repo.FinalizeRoomDeletion(context.Background(), listingID, operationID)
@@ -784,10 +784,7 @@ func TestAccountShareModeRepositoryRoomDeletionFinalizeClosesProjectionInOrder(t
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).
 			AddRow(bindingIDs[0]).
 			AddRow(bindingIDs[1]))
-	mock.ExpectQuery("SELECT id\\s+FROM account_share_request_billing_intents").
-		WithArgs(listingID).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}))
-	expectLifecycleDatabaseBlockers(mock, listingID, 0, 0, 0, 0, 0)
+	expectLifecycleDatabaseBlockers(mock, listingID, 0, 0, 0, 0)
 	mock.ExpectQuery("SELECT\\s+id::text, listing_id, membership_id").
 		WithArgs(operationID).
 		WillReturnRows(lifecycleOperationRows(
@@ -1145,7 +1142,6 @@ func expectLifecycleDatabaseBlockers(
 	queued int,
 	ending int,
 	synchronousBilling int,
-	pendingBillingIntents int,
 ) {
 	mock.ExpectQuery("SELECT\\s+COUNT\\(\\*\\) FILTER \\(WHERE status = 'active'\\)::int").
 		WithArgs(listingID).
@@ -1155,9 +1151,6 @@ func expectLifecycleDatabaseBlockers(
 			"ending_count",
 			"synchronous_billing_pending_count",
 		}).AddRow(active, queued, ending, synchronousBilling))
-	mock.ExpectQuery("SELECT COUNT\\(\\*\\)::int\\s+FROM account_share_request_billing_intents").
-		WithArgs(listingID).
-		WillReturnRows(sqlmock.NewRows([]string{"pending_count"}).AddRow(pendingBillingIntents))
 }
 
 func expectLifecycleRevisionSuccess(

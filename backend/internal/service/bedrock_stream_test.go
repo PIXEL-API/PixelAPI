@@ -5,12 +5,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/binary"
-	"errors"
 	"hash/crc32"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -284,84 +282,6 @@ func TestBedrockEventStreamDecoder(t *testing.T) {
 	})
 }
 
-func TestHandleBedrockStreamingResponseBillingGateBlocksMessageStop(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
-
-	var stream bytes.Buffer
-	_, _ = stream.Write(buildBedrockChunkFrameForTest(`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"amazon-bedrock-invocationMetrics":{"inputTokenCount":9,"outputTokenCount":4}}`))
-	_, _ = stream.Write(buildBedrockChunkFrameForTest(`{"type":"message_stop"}`))
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"x-amzn-requestid": []string{"bedrock-request"}},
-		Body:       io.NopCloser(bytes.NewReader(stream.Bytes())),
-	}
-	submitErr := errors.New("billing unavailable")
-	submitCalls := 0
-	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(result *ForwardResult) error {
-		submitCalls++
-		require.Equal(t, 9, result.Usage.InputTokens)
-		require.Equal(t, 4, result.Usage.OutputTokens)
-		return submitErr
-	}))
-	svc := &GatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}}
-
-	result, err := svc.handleBedrockStreamingResponseWithModels(
-		ctx,
-		resp,
-		c,
-		&Account{ID: 17},
-		time.Now(),
-		"claude-original",
-		"claude-bedrock",
-	)
-
-	require.NotNil(t, result)
-	require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
-	require.ErrorIs(t, err, submitErr)
-	require.Equal(t, 1, submitCalls)
-	require.Contains(t, recorder.Body.String(), `"type":"message_delta"`)
-	require.NotContains(t, recorder.Body.String(), `"type":"message_stop"`)
-}
-
-func TestHandleBedrockStreamingResponseBillingGateRejectsPartialUsage(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
-
-	var stream bytes.Buffer
-	_, _ = stream.Write(buildBedrockChunkFrameForTest(`{"type":"message_delta","amazon-bedrock-invocationMetrics":{"inputTokenCount":9}}`))
-	_, _ = stream.Write(buildBedrockChunkFrameForTest(`{"type":"message_stop"}`))
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Body:       io.NopCloser(bytes.NewReader(stream.Bytes())),
-	}
-	submitCalls := 0
-	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(*ForwardResult) error {
-		submitCalls++
-		return nil
-	}))
-	svc := &GatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}}
-
-	result, err := svc.handleBedrockStreamingResponseWithModels(
-		ctx,
-		resp,
-		c,
-		&Account{ID: 19},
-		time.Now(),
-		"claude-original",
-		"claude-bedrock",
-	)
-
-	require.NotNil(t, result)
-	require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
-	require.Zero(t, submitCalls)
-	require.NotContains(t, recorder.Body.String(), `"type":"message_stop"`)
-}
-
 func TestHandleBedrockStreamingResponseRejectsInvalidChunkBeforeLaterTerminal(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
@@ -422,70 +342,6 @@ func TestHandleBedrockStreamingResponseStopsAfterMessageStop(t *testing.T) {
 	require.NotNil(t, result)
 	require.Contains(t, recorder.Body.String(), `"type":"message_stop"`)
 	require.NotContains(t, recorder.Body.String(), "must-not-leak")
-}
-
-func TestHandleBedrockNonStreamingResponseBillingGateBlocksBody(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"x-amzn-requestid": []string{"bedrock-nonstream"}},
-		Body:       io.NopCloser(strings.NewReader(`{"type":"message","usage":{"input_tokens":9,"output_tokens":4}}`)),
-	}
-	submitErr := errors.New("billing unavailable")
-	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(*ForwardResult) error {
-		return submitErr
-	}))
-	svc := &GatewayService{cfg: &config.Config{}}
-
-	usage, err := svc.handleBedrockNonStreamingResponseWithModels(
-		ctx,
-		resp,
-		c,
-		&Account{ID: 22},
-		time.Now(),
-		"claude-original",
-		"claude-bedrock",
-	)
-
-	require.NotNil(t, usage)
-	require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
-	require.ErrorIs(t, err, submitErr)
-	require.Empty(t, recorder.Body.String())
-}
-
-func TestHandleBedrockNonStreamingResponseBillingGateRejectsPartialUsage(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Body:       io.NopCloser(strings.NewReader(`{"type":"message","usage":{"input_tokens":9}}`)),
-	}
-	submitCalls := 0
-	ctx := WithForwardResultBillingGate(context.Background(), NewForwardResultBillingGate(func(*ForwardResult) error {
-		submitCalls++
-		return nil
-	}))
-	svc := &GatewayService{cfg: &config.Config{}}
-
-	usage, err := svc.handleBedrockNonStreamingResponseWithModels(
-		ctx,
-		resp,
-		c,
-		&Account{ID: 23},
-		time.Now(),
-		"claude-original",
-		"claude-bedrock",
-	)
-
-	require.NotNil(t, usage)
-	require.ErrorIs(t, err, ErrAccountShareBillingPreTerminalCommit)
-	require.Zero(t, submitCalls)
-	require.Empty(t, recorder.Body.String())
 }
 
 func TestHandleBedrockStreamingResponseRejectsDoneWithoutMessageStop(t *testing.T) {

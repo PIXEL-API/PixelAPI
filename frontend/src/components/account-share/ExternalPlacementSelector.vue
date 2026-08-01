@@ -34,10 +34,11 @@
             {{ option.description }}
           </span>
           <span
-            v-if="option.value === 'room' && option.disabled && platformModeDisabledReason"
+            v-if="option.disabled && option.disabledReason"
             class="mt-1 block text-xs leading-5 text-amber-700 dark:text-amber-300"
+            :data-testid="`placement-disabled-reason-${option.value}`"
           >
-            {{ platformModeDisabledReason }}
+            {{ option.disabledReason }}
           </span>
         </span>
       </label>
@@ -67,6 +68,7 @@ interface TargetOption {
   label: string
   description: string
   disabled: boolean
+  disabledReason: string
 }
 
 const props = withDefaults(defineProps<{
@@ -76,12 +78,16 @@ const props = withDefaults(defineProps<{
   inputName?: string
   legend?: string
   platformModeDisabledReason?: string
+  // 每个目标各自的禁用原因；有原因即视为禁用。用于提前拦掉后端一定会拒绝的切换，
+  // 避免「基础设置已保存、模式切换失败」这种半成功。
+  targetDisabledReasons?: Partial<Record<AccountExternalPlacementTarget, string>>
   showPreservationHint?: boolean
 }>(), {
   disabled: false,
   inputName: 'external-placement-target',
   legend: '',
   platformModeDisabledReason: '',
+  targetDisabledReasons: () => ({}),
   showPreservationHint: true
 })
 
@@ -101,30 +107,44 @@ const supportsPlatformMode = computed(() => (
   props.platform === 'openai' || props.platform === 'anthropic'
 ))
 
-const targetOptions = computed<TargetOption[]>(() => [
-  {
-    value: 'private',
-    label: t('userAccounts.externalPlacement.privateTitle'),
-    description: t('userAccounts.externalPlacement.privateDescription'),
-    disabled: false
-  },
-  {
-    value: 'public_pool',
-    label: t('userAccounts.externalPlacement.publicPoolTitle'),
-    description: t('userAccounts.externalPlacement.publicPoolDescription'),
-    disabled: false
-  },
-  {
-    value: 'room',
-    label: t('userAccounts.externalPlacement.platformModeTitle', {
-      platform: platformDisplayName.value
-    }),
-    description: t('userAccounts.externalPlacement.platformModeDescription', {
-      platform: platformDisplayName.value
-    }),
-    disabled: !supportsPlatformMode.value
-  }
-])
+function explicitDisabledReason(target: AccountExternalPlacementTarget): string {
+  // 当前已经生效的模式永远不禁用，否则选择器会显示成「没有任何选项被选中」。
+  if (target === props.modelValue) return ''
+  return props.targetDisabledReasons?.[target] || ''
+}
+
+const targetOptions = computed<TargetOption[]>(() => {
+  const roomReason = supportsPlatformMode.value
+    ? explicitDisabledReason('room')
+    : (props.platformModeDisabledReason || t('userAccounts.externalPlacement.unsupportedPlatform'))
+  return [
+    {
+      value: 'private',
+      label: t('userAccounts.externalPlacement.privateTitle'),
+      description: t('userAccounts.externalPlacement.privateDescription'),
+      disabled: Boolean(explicitDisabledReason('private')),
+      disabledReason: explicitDisabledReason('private')
+    },
+    {
+      value: 'public_pool',
+      label: t('userAccounts.externalPlacement.publicPoolTitle'),
+      description: t('userAccounts.externalPlacement.publicPoolDescription'),
+      disabled: Boolean(explicitDisabledReason('public_pool')),
+      disabledReason: explicitDisabledReason('public_pool')
+    },
+    {
+      value: 'room',
+      label: t('userAccounts.externalPlacement.platformModeTitle', {
+        platform: platformDisplayName.value
+      }),
+      description: t('userAccounts.externalPlacement.platformModeDescription', {
+        platform: platformDisplayName.value
+      }),
+      disabled: !supportsPlatformMode.value || Boolean(roomReason),
+      disabledReason: roomReason
+    }
+  ]
+})
 
 function selectTarget(target: AccountExternalPlacementTarget): void {
   if (target === props.modelValue) return

@@ -177,20 +177,6 @@ func (s *GatewayService) handleBedrockStreamingResponseWithModels(
 				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected}, errors.New("bedrock stream usage incomplete: unexpected [DONE] before message_stop")
 			}
 			if eventType == "message_stop" {
-				result := &ForwardResult{
-					RequestID:            resp.Header.Get("x-amzn-requestid"),
-					Usage:                *usage,
-					BillingUsageComplete: billingUsage.complete(),
-					Model:                originalModel,
-					UpstreamModel:        upstreamModel,
-					Stream:               true,
-					Duration:             time.Since(startTime),
-					FirstTokenMs:         firstTokenMs,
-					ClientDisconnect:     clientDisconnected,
-				}
-				if handled, billingErr := CommitForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
-					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected}, billingErr
-				}
 				sawTerminalEvent = true
 			}
 

@@ -376,7 +376,7 @@ func TestRateLimitService_HandleUpstreamError_OpenAITransientCapacityTempUnsched
 			require.Equal(t, 1, repo.tempCalls)
 			require.Equal(t, 0, repo.setErrorCalls)
 			require.Contains(t, repo.lastTempReason, tc.matchedKeyword)
-			require.WithinDuration(t, before.Add(openAITransientCapacityCooldown), repo.lastTempUntil, 5*time.Second)
+			require.WithinDuration(t, before.Add(openAITransientCapacityCooldownForCount(1)), repo.lastTempUntil, 5*time.Second)
 		})
 	}
 }

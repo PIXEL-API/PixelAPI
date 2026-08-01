@@ -146,7 +146,6 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	channelRepository := repository.NewChannelRepository(db)
 	channelService := service.ProvideChannelService(channelRepository, groupRepository, apiKeyAuthCacheInvalidator, pricingService, clusterCacheCoordinator)
 	modelPricingResolver := service.NewModelPricingResolver(channelService, billingService)
-	accountShareBillingIntentRepository := repository.NewAccountShareBillingIntentRepository(db)
 	usageBillingRepository := repository.NewUsageBillingRepository(client, db)
 	timingWheelService, err := service.ProvideTimingWheelService()
 	if err != nil {
@@ -154,15 +153,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	}
 	deferredService := service.ProvideDeferredService(accountRepository, timingWheelService)
 	balanceNotifyService := service.ProvideBalanceNotifyService(emailService, settingRepository, accountRepository)
-	usageBillingPostCommitFinalizer, err := service.ProvideUsageBillingPostCommitFinalizer(billingCacheService, deferredService, apiKeyAuthCacheInvalidator, userRepository, accountRepository, balanceNotifyService)
-	if err != nil {
-		return nil, err
-	}
-	accountShareBillingWorker, err := service.ProvideAccountShareBillingWorker(accountShareBillingIntentRepository, usageBillingRepository, usageBillingPostCommitFinalizer)
-	if err != nil {
-		return nil, err
-	}
-	accountShareModeService := service.ProvideAccountShareModeService(configConfig, accountShareModeRepository, accountRepository, apiKeyRepository, usageLogRepository, userRepository, proxyRepository, openAIOAuthService, oAuthService, concurrencyService, apiKeyAuthCacheInvalidator, accountTestService, rateLimitService, billingCacheService, billingService, modelPricingResolver, settingRepository, settingService, clusterTaskExecutor, accountShareBillingIntentRepository, accountShareBillingWorker)
+	accountShareModeService := service.ProvideAccountShareModeService(configConfig, accountShareModeRepository, accountRepository, apiKeyRepository, usageLogRepository, userRepository, proxyRepository, openAIOAuthService, oAuthService, concurrencyService, apiKeyAuthCacheInvalidator, accountTestService, rateLimitService, billingCacheService, billingService, modelPricingResolver, settingRepository, settingService, clusterTaskExecutor)
 	accountShareModeHandler := handler.NewAccountShareModeHandler(accountShareModeService)
 	accountSharePolicyRepository := repository.NewAccountSharePolicyRepository(client, db)
 	accountService := service.ProvideAccountService(accountRepository, groupRepository, userRepository, userSubscriptionRepository, proxyRepository, accountSharePolicyRepository, accountShareModeRepository, userPrivateGroupProvisioner, concurrencyService, systemNoticeService, settingService, agentIdentityWSInvalidatorProxy, accountShareModeService)

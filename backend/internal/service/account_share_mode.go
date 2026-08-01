@@ -217,6 +217,9 @@ var (
 	ErrAccountShareEndTokenRequired             = infraerrors.BadRequest("ACCOUNT_SHARE_END_TOKEN_REQUIRED", "account share end confirmation token is required")
 	ErrAccountShareEndTokenInvalid              = infraerrors.Forbidden("ACCOUNT_SHARE_END_TOKEN_INVALID", "account share end confirmation token is invalid or expired")
 	ErrAccountShareEndStateConflict             = infraerrors.Conflict("ACCOUNT_SHARE_END_STATE_CONFLICT", "account share membership changed after end confirmation; refresh and try again")
+	// ErrAccountShareBillingBindingUnavailable 绑定/条款快照不可用（原属已删除的 billing intent 体系，
+	// 仍被绑定与条款校验路径使用）
+	ErrAccountShareBillingBindingUnavailable = errors.New("account share billing binding is no longer active")
 	ErrAccountShareModeInvalidIdleTimeout       = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_IDLE_TIMEOUT", "idle_timeout_minutes must be between 1 and 10080")
 	ErrAccountShareListingInUse                 = infraerrors.Conflict("ACCOUNT_SHARE_LISTING_IN_USE", "account share listing has active seats")
 	ErrAccountShareListingEditing               = infraerrors.Conflict("ACCOUNT_SHARE_LISTING_EDITING", "account share listing is being edited")
@@ -271,11 +274,10 @@ type accountShareModeRequestState struct {
 	userID          int64
 	apiKeyID        int64
 	groupID         int64
-	resolved        bool
-	membership      *AccountShareMembership
-	listing         *AccountShareListing
-	billingDispatch *AccountShareBillingDispatch
-	err             error
+	resolved   bool
+	membership *AccountShareMembership
+	listing    *AccountShareListing
+	err        error
 }
 
 func WithAccountShareModeRequest(ctx context.Context, userID, apiKeyID int64) context.Context {
@@ -298,10 +300,9 @@ func WithAccountShareModeRequestFromContext(ctx context.Context, source context.
 	}
 	requestCtx, ok := AccountShareModeRequestFromContext(source)
 	if !ok {
-		return WithAccountShareBillingDispatchFromContext(ctx, source)
+		return ctx
 	}
-	ctx = context.WithValue(ctx, accountShareModeRequestContextKey{}, requestCtx)
-	return WithAccountShareBillingDispatchFromContext(ctx, source)
+	return context.WithValue(ctx, accountShareModeRequestContextKey{}, requestCtx)
 }
 
 func AccountShareModeRequestFromContext(ctx context.Context) (AccountShareModeRequestContext, bool) {
@@ -348,7 +349,6 @@ func (s *accountShareModeRequestState) clear() {
 	s.resolved = false
 	s.membership = nil
 	s.listing = nil
-	s.billingDispatch = nil
 	s.err = nil
 }
 
@@ -1290,12 +1290,7 @@ type AccountShareModeService struct {
 	reviewSettingRepo        SettingRepository
 	reviewHTTPClient         *http.Client
 	taskExecutor             *ClusterTaskExecutor
-	billingIntentRepository  AccountShareBillingIntentRepository
-	billingIntentWorker      *AccountShareBillingWorker
-	billingRecoveryMu        sync.Mutex
-	billingRecoveryAfter     *AccountShareBillingRecoveryCursor
 	actionTokenSecret        []byte
-	lifecycleContractEnabled bool
 	seatBillingCtx           context.Context
 	seatBillingCancel        context.CancelFunc
 	seatBillingStopCh        chan struct{}
@@ -1415,39 +1410,9 @@ func (s *AccountShareModeService) SetActionTokenSecret(secret string) {
 	s.actionTokenSecret = []byte(strings.TrimSpace(secret))
 }
 
-func (s *AccountShareModeService) SetLifecycleContractEnabled(enabled bool) {
-	if s == nil {
-		return
-	}
-	s.lifecycleContractEnabled = enabled
-}
-
 func (s *AccountShareModeService) initialListingStatus() string {
-	if s != nil && s.lifecycleContractEnabled {
-		return AccountShareListingStatusValidating
-	}
-	return AccountShareListingStatusActive
-}
-
-func (s *AccountShareModeService) requireLifecycleContract() error {
-	if s == nil || !s.lifecycleContractEnabled {
-		return ErrAccountShareLifecycleRolloutDisabled
-	}
-	return nil
-}
-
-func (s *AccountShareModeService) SetBillingIntentWorker(worker *AccountShareBillingWorker) {
-	if s == nil {
-		return
-	}
-	s.billingIntentWorker = worker
-}
-
-func (s *AccountShareModeService) SetBillingIntentRepository(repository AccountShareBillingIntentRepository) {
-	if s == nil {
-		return
-	}
-	s.billingIntentRepository = repository
+	// 灰度已收敛：lifecycle 合约是唯一形态，新房间一律先验证。
+	return AccountShareListingStatusValidating
 }
 
 func (s *AccountShareModeService) StartSeatBillingWorker() {
@@ -1455,9 +1420,8 @@ func (s *AccountShareModeService) StartSeatBillingWorker() {
 		return
 	}
 	s.seatBillingStartOnce.Do(func() {
-		s.seatBillingWG.Add(5)
+		s.seatBillingWG.Add(4)
 		go s.runSeatBillingWorker()
-		go s.runBillingIntentWorker()
 		go s.runSeatWaiverCompensationWorker()
 		go s.runRoomLifecycleFinalizerWorker()
 		go s.runRoomValidationWorker()
@@ -1516,79 +1480,6 @@ func (s *AccountShareModeService) runSeatWaiverCompensationWorker() {
 	}
 }
 
-func (s *AccountShareModeService) runBillingIntentWorker() {
-	defer s.seatBillingWG.Done()
-	ticker := time.NewTicker(AccountShareModeSeatBillingInterval)
-	defer ticker.Stop()
-
-	for {
-		backlogLikely := s.processBillingIntentsOnce()
-		if backlogLikely {
-			select {
-			case <-s.seatBillingStopCh:
-				return
-			default:
-				continue
-			}
-		}
-		select {
-		case <-ticker.C:
-		case <-s.seatBillingStopCh:
-			return
-		}
-	}
-}
-
-func (s *AccountShareModeService) processBillingIntentsOnce() bool {
-	if s == nil || (s.billingIntentRepository == nil && s.billingIntentWorker == nil) {
-		return false
-	}
-	ctx, cancel := context.WithTimeout(s.seatBillingWorkerContext(), 5*time.Minute)
-	defer cancel()
-	backlogLikely := false
-	ran, err := s.taskExecutor.Run(ctx, accountShareBillingIntentTaskName, func(
-		taskCtx context.Context,
-		guard *ClusterLeaseGuard,
-	) error {
-		var processErr error
-		backlogLikely, processErr = s.processBillingIntentsOnceLeased(taskCtx, guard)
-		return processErr
-	})
-	if err != nil {
-		log.Printf("account_share_mode: billing intent worker lease failed: %v", err)
-	}
-	return ran && err == nil && backlogLikely
-}
-
-func (s *AccountShareModeService) processBillingIntentsOnceLeased(
-	ctx context.Context,
-	guard *ClusterLeaseGuard,
-) (bool, error) {
-	if err := guard.Check(ctx); err != nil {
-		return false, err
-	}
-	var recoveryErr error
-	if s.billingIntentRepository != nil {
-		_, recoveryErr = s.recoverStaleBillingIntentsOnce(ctx, time.Now().UTC(), guard.Check)
-		logAccountShareBillingRecoveryError(recoveryErr)
-	}
-	if err := guard.Check(ctx); err != nil {
-		return false, errors.Join(recoveryErr, err)
-	}
-	if s.billingIntentWorker == nil {
-		return false, recoveryErr
-	}
-	result, workerErr := s.billingIntentWorker.RunUntilDrained(
-		ctx,
-		AccountShareBillingWorkerDefaultDrainSoftBudget,
-		guard.Check,
-	)
-	if err := guard.Check(ctx); err != nil {
-		return result.BacklogLikely, errors.Join(recoveryErr, workerErr, err)
-	}
-	return result.BacklogLikely, errors.Join(recoveryErr, workerErr)
-}
-
 func (s *AccountShareModeService) runRoomLifecycleFinalizerWorker() {
 	defer s.seatBillingWG.Done()
 	ticker := time.NewTicker(AccountShareModeSeatBillingInterval)
@@ -1606,7 +1497,7 @@ func (s *AccountShareModeService) runRoomLifecycleFinalizerWorker() {
 }
 
 func (s *AccountShareModeService) processRoomLifecycleFinalizationOnce() {
-	if s == nil || s.repo == nil || !s.lifecycleContractEnabled {
+	if s == nil || s.repo == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(s.seatBillingWorkerContext(), 2*time.Minute)
@@ -1965,7 +1856,7 @@ func (s *AccountShareModeService) GenerateOpenAIAuthURL(ctx context.Context, own
 	if s == nil || s.openaiOAuthService == nil {
 		return nil, ErrServiceUnavailable
 	}
-	if err := s.ensureProxyAvailableForNewAccount(ctx, NewProxyScope(PlatformOpenAI, AccountLevelUnknown), *proxyID); err != nil {
+	if err := s.ensureProxyAvailableForNewAccount(ctx, NewOwnedProxyScope(PlatformOpenAI, AccountLevelUnknown, ownerUserID), *proxyID); err != nil {
 		return nil, err
 	}
 	return s.openaiOAuthService.GenerateAuthURL(ctx, proxyID, redirectURI, PlatformOpenAI)
@@ -1981,7 +1872,7 @@ func (s *AccountShareModeService) GenerateAnthropicAuthURL(ctx context.Context, 
 	if s == nil || s.oauthService == nil {
 		return nil, ErrServiceUnavailable
 	}
-	if err := s.ensureProxyAvailableForNewAccount(ctx, NewProxyScope(PlatformAnthropic, AccountLevelUnknown), *proxyID); err != nil {
+	if err := s.ensureProxyAvailableForNewAccount(ctx, NewOwnedProxyScope(PlatformAnthropic, AccountLevelUnknown, ownerUserID), *proxyID); err != nil {
 		return nil, err
 	}
 	return s.oauthService.GenerateAuthURL(ctx, proxyID)
@@ -2009,7 +1900,7 @@ func (s *AccountShareModeService) ExchangeOpenAICodeAndCreateListing(ctx context
 	if input.ProxyID != *exchange.ProxyID {
 		return nil, ErrAccountShareModeProxyRequired
 	}
-	if err := s.ensureProxyAvailableForNewAccount(ctx, NewProxyScope(PlatformOpenAI, AccountLevelUnknown), input.ProxyID); err != nil {
+	if err := s.ensureProxyAvailableForNewAccount(ctx, NewOwnedProxyScope(PlatformOpenAI, AccountLevelUnknown, ownerUserID), input.ProxyID); err != nil {
 		return nil, err
 	}
 	if err := validateAccountShareAccountName(input.Name); err != nil {
@@ -2052,7 +1943,7 @@ func (s *AccountShareModeService) ExchangeAnthropicCodeAndCreateListing(ctx cont
 	if input.ProxyID != *exchange.ProxyID {
 		return nil, ErrAccountShareModeProxyRequired
 	}
-	if err := s.ensureProxyAvailableForNewAccount(ctx, NewProxyScope(PlatformAnthropic, AccountLevelUnknown), input.ProxyID); err != nil {
+	if err := s.ensureProxyAvailableForNewAccount(ctx, NewOwnedProxyScope(PlatformAnthropic, AccountLevelUnknown, ownerUserID), input.ProxyID); err != nil {
 		return nil, err
 	}
 	if err := validateAccountShareAccountName(input.Name); err != nil {
@@ -2094,7 +1985,7 @@ func (s *AccountShareModeService) CreateOpenAIListingFromToken(ctx context.Conte
 	if input.TokenInfo == nil {
 		return nil, ErrOwnedAccountCredentialsInvalid
 	}
-	if err := s.ensureProxyAvailableForNewAccount(ctx, NewProxyScope(PlatformOpenAI, AccountLevelUnknown), input.ProxyID); err != nil {
+	if err := s.ensureProxyAvailableForNewAccount(ctx, NewOwnedProxyScope(PlatformOpenAI, AccountLevelUnknown, ownerUserID), input.ProxyID); err != nil {
 		return nil, err
 	}
 	if err := validateAccountShareAccountName(input.Name); err != nil {
@@ -2215,7 +2106,7 @@ func (s *AccountShareModeService) CreateAnthropicListingFromToken(ctx context.Co
 	if input.AnthropicTokenInfo == nil {
 		return nil, ErrOwnedAccountCredentialsInvalid
 	}
-	if err := s.ensureProxyAvailableForNewAccount(ctx, NewProxyScope(PlatformAnthropic, AccountLevelUnknown), input.ProxyID); err != nil {
+	if err := s.ensureProxyAvailableForNewAccount(ctx, NewOwnedProxyScope(PlatformAnthropic, AccountLevelUnknown, ownerUserID), input.ProxyID); err != nil {
 		return nil, err
 	}
 	if err := validateAccountShareAccountName(input.Name); err != nil {
@@ -4057,15 +3948,13 @@ func (s *AccountShareModeService) EndMembership(ctx context.Context, consumerUse
 	if s == nil || s.repo == nil {
 		return nil, ErrServiceUnavailable
 	}
-	claims, err := s.validateEndMembershipToken(confirmationToken, consumerUserID, membershipID, time.Now().UTC())
-	if err != nil {
-		return nil, err
-	}
+	// 单阶段结束：confirmationToken 仅为旧前端兼容而保留，不再校验——
+	// 结束动作按成员当前状态幂等收口，没有任何"确认后状态变化"可冲突。
+	_ = confirmationToken
 	membership, billing, err := s.repo.BeginMembershipEnd(ctx, BeginAccountShareMembershipEndInput{
-		ConsumerUserID:           consumerUserID,
-		MembershipID:             membershipID,
-		ExpectedMembershipStatus: claims.MembershipStatus,
-		OperationID:              claims.OperationID,
+		ConsumerUserID: consumerUserID,
+		MembershipID:   membershipID,
+		OperationID:    uuid.NewString(),
 	})
 	if err != nil {
 		return nil, err
@@ -4633,7 +4522,6 @@ func accountShareLogStringPtr(value *string) string {
 
 func (s *AccountShareModeService) schedulePostCreateConnectivityTest(listing *AccountShareListing) {
 	if s == nil ||
-		!s.lifecycleContractEnabled ||
 		s.accountTestService == nil ||
 		s.rateLimitService == nil ||
 		s.accountRepo == nil ||

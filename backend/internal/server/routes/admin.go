@@ -29,7 +29,6 @@ func RegisterAdminRoutes(
 		// 账号管理
 		registerAccountRoutes(admin, h)
 		registerAccountSharePolicyRoutes(admin, h)
-		registerAccountShareBillingRoutes(admin, h)
 		registerAccountShareQuotaRoutes(admin, h)
 
 		// 公告管理
@@ -456,14 +455,6 @@ func registerAccountSharePolicyRoutes(admin *gin.RouterGroup, h *handler.Handler
 		policies.POST("", h.Admin.AccountSharePolicy.Create)
 		policies.PUT("/:id", h.Admin.AccountSharePolicy.Update)
 		policies.DELETE("/:id", h.Admin.AccountSharePolicy.Delete)
-	}
-}
-
-func registerAccountShareBillingRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
-	intents := admin.Group("/account-share/billing-intents")
-	{
-		intents.GET("/needs-attention", h.AccountShareMode.ListBillingIntentsNeedingAttention)
-		intents.GET("/:id", h.AccountShareMode.GetBillingIntentForAdmin)
 	}
 }
 

@@ -373,10 +373,6 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 	respBytes = reverseToolNamesIfPresent(c, respBytes)
 
 	result := resultWithUsage(false)
-	billingHandled, billingErr := CommitForwardResultBillingGateBeforeTerminal(ctx, result)
-	if billingHandled && billingErr != nil {
-		return result, &BillableStreamUsageError{Err: billingErr}
-	}
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -386,9 +382,6 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 	if err := writeGatewayBridgePayload(c.Writer, respBytes); err != nil {
 		result.ClientDisconnect = true
 		writeErr := fmt.Errorf("write responses response: %w", err)
-		if billingHandled {
-			return result, &BillableStreamUsageError{Err: writeErr}
-		}
 		return gatewayBridgeFailure(result, writeErr)
 	}
 
@@ -519,22 +512,11 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 			sawMessageStop = true
 		}
 		result := resultWithUsage(false)
-		billingHandled := false
-		if isMessageStop {
-			var billingErr error
-			billingHandled, billingErr = CommitForwardResultBillingGateBeforeTerminal(ctx, result)
-			if billingHandled && billingErr != nil {
-				return result, &BillableStreamUsageError{Err: billingErr}
-			}
-		}
 
 		for _, output := range outputs {
 			if err := writeGatewayBridgePayload(c.Writer, []byte(output)); err != nil {
 				result.ClientDisconnect = true
 				writeErr := fmt.Errorf("write responses stream: %w", err)
-				if billingHandled {
-					return result, &BillableStreamUsageError{Err: writeErr}
-				}
 				return gatewayBridgeFailure(result, writeErr)
 			}
 		}
@@ -542,9 +524,6 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 			if err := flushGatewayBridgeWriter(c.Writer); err != nil {
 				result.ClientDisconnect = true
 				flushErr := fmt.Errorf("flush responses stream: %w", err)
-				if billingHandled {
-					return result, &BillableStreamUsageError{Err: flushErr}
-				}
 				return gatewayBridgeFailure(result, flushErr)
 			}
 		}

@@ -145,7 +145,7 @@ func (s *AccountShareModeService) GetCapabilities(ctx context.Context, ownerUser
 	}
 	limits := quota.Limits
 	result := &AccountShareCapabilities{
-		LifecycleEnabled:   s.lifecycleContractEnabled,
+		LifecycleEnabled:   true,
 		LiveRooms:          newAccountShareQuotaValue(limits.MaxLiveRooms, usage.LiveRooms),
 		RoomCreates24Hours: newAccountShareQuotaValue(limits.MaxRoomCreates24Hours, usage.RoomCreates24Hours),
 		OwnerRoomAccounts:  newAccountShareQuotaValue(limits.MaxRoomAccountsPerOwner, usage.OwnerRoomAccounts),

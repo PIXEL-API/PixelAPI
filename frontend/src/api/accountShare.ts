@@ -694,13 +694,6 @@ export interface AccountShareMySpendSummary {
   model_breakdown: AccountShareMySpendModelBreakdown[]
 }
 
-export interface AccountShareEndMembershipIntent {
-  membership_id: number
-  operation_id: string
-  token: string
-  expires_at: string
-}
-
 export interface AccountShareReview {
   id: number
   account_identity_id?: number
@@ -1185,13 +1178,8 @@ export async function reorderMembershipQueue(payload: ReorderAccountShareQueueRe
   return data
 }
 
-export async function createEndMembershipIntent(id: number): Promise<AccountShareEndMembershipIntent> {
-  const { data } = await apiClient.post<AccountShareEndMembershipIntent>(`/account-share/memberships/${id}/end-intent`)
-  return data
-}
-
-export async function endMembership(id: number, token: string): Promise<AccountShareMembership> {
-  const { data } = await apiClient.post<AccountShareMembership>(`/account-share/memberships/${id}/end`, { token })
+export async function endMembership(id: number): Promise<AccountShareMembership> {
+  const { data } = await apiClient.post<AccountShareMembership>(`/account-share/memberships/${id}/end`, {})
   return data
 }
 
@@ -1315,7 +1303,6 @@ export const accountShareAPI = {
   listMembershipQueue,
   getAPIKeyBindingStatus,
   reorderMembershipQueue,
-  createEndMembershipIntent,
   endMembership,
   submitReview,
   listListingReviews,

@@ -255,10 +255,6 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 			trimmedPayload := strings.TrimSpace(payload)
 			if trimmedPayload == "[DONE]" {
 				sawDone = true
-				result := resultWithUsage()
-				if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
-					return result, billingErr
-				}
 			} else {
 				billingUsageObservation.observePayload([]byte(payload))
 				usageOnlyChunk := isOpenAIChatUsageOnlyStreamChunk(payload)
@@ -396,9 +392,6 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 	}
 	result.ResponseServiceTier = usage.ResponseServiceTier
 	result.Stream = false
-	if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
-		return result, billingErr
-	}
 	c.Data(http.StatusOK, contentType, respBody)
 	return result, nil
 }

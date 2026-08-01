@@ -93,33 +93,6 @@ func TestGatewayHandlerSubmitUsageRecordTask_WithoutPool_TaskPanicRecovered(t *t
 	require.True(t, called.Load(), "panic 后后续任务应仍可执行")
 }
 
-func TestGatewayHandlerSubmitUsageRecordTask_DurableDispatchBypassesBusyPoolSynchronously(t *testing.T) {
-	pool := newUsageRecordTestPool(t)
-	blocked := make(chan struct{})
-	started := make(chan struct{})
-	require.NotEqual(t, service.UsageRecordSubmitModeDropped, pool.Submit(func(context.Context) {
-		close(started)
-		<-blocked
-	}))
-	<-started
-	t.Cleanup(func() { close(blocked) })
-
-	h := &GatewayHandler{usageRecordWorkerPool: pool}
-	requestCtx := service.WithAccountShareBillingDispatch(
-		context.Background(),
-		&service.AccountShareBillingDispatch{},
-	)
-	var called atomic.Bool
-
-	h.submitUsageRecordTask(requestCtx, func(taskCtx context.Context) {
-		_, durable := service.AccountShareBillingDispatchFromContext(taskCtx)
-		require.True(t, durable)
-		called.Store(true)
-	})
-
-	require.True(t, called.Load(), "durable usage must be persisted before returning to the handler")
-}
-
 func TestOpenAIGatewayHandlerSubmitUsageRecordTask_WithPool(t *testing.T) {
 	pool := newUsageRecordTestPool(t)
 	h := &OpenAIGatewayHandler{usageRecordWorkerPool: pool}

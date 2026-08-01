@@ -1207,9 +1207,6 @@ func (s *OpenAIGatewayService) bufferDirectChatCompletionsAsAnthropic(
 	result.ReasoningEffort = reasoningEffort
 	result.ServiceTier = serviceTier
 	result.Stream = false
-	if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
-		return result, billingErr
-	}
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	}
@@ -1347,9 +1344,6 @@ func (s *OpenAIGatewayService) streamDirectChatCompletionsAsAnthropic(
 			return result, fmt.Errorf("marshal final Anthropic stream event: %w", err)
 		}
 		finalPayloads = append(finalPayloads, payload)
-	}
-	if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
-		return result, billingErr
 	}
 	if !clientDisconnected {
 		for _, payload := range finalPayloads {

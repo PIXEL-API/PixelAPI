@@ -143,9 +143,6 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 		Duration:        time.Since(upstreamStart),
 		WebSearchCalls:  1,
 	}
-	if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
-		return result, billingErr
-	}
 	c.Data(resp.StatusCode, contentType, respBody)
 	return result, nil
 }

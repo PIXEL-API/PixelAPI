@@ -3,27 +3,19 @@ package handler
 import (
 	"context"
 	"sync/atomic"
-	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
-	"github.com/stretchr/testify/require"
 )
 
+// concurrencyCacheMock 是 handler 包内共享的 service.ConcurrencyCache 测试替身。
+// （原定义在 gateway_helper_fastpath_test.go / gateway_handler_account_share_mode_context_test.go，
+// 随 billing intent 机制删除后移植到本文件。）
 type concurrencyCacheMock struct {
 	acquireUserSlotFn    func(ctx context.Context, userID int64, maxConcurrency int, requestID string) (bool, error)
 	acquireAccountSlotFn func(ctx context.Context, accountID int64, maxConcurrency int, requestID string) (bool, error)
 	releaseUserCalled    int32
 	releaseAccountCalled int32
-}
-
-type nilAccountShareBillingDispatcher struct{}
-
-func (nilAccountShareBillingDispatcher) BeginAccountShareBillingDispatch(
-	context.Context,
-	service.AccountShareBillingDispatchInput,
-) (*service.AccountShareBillingDispatch, error) {
-	return nil, nil
 }
 
 func (m *concurrencyCacheMock) AcquireAccountSlot(ctx context.Context, accountID int64, maxConcurrency int, requestID string) (bool, error) {
@@ -102,74 +94,26 @@ func (m *concurrencyCacheMock) CleanupExpiredSlots(ctx context.Context) error {
 	return nil
 }
 
-func TestConcurrencyHelper_TryAcquireUserSlot(t *testing.T) {
-	cache := &concurrencyCacheMock{
-		acquireUserSlotFn: func(ctx context.Context, userID int64, maxConcurrency int, requestID string) (bool, error) {
-			return true, nil
-		},
-	}
-	helper := NewConcurrencyHelper(service.NewConcurrencyService(cache), SSEPingFormatNone, time.Second)
-
-	release, acquired, err := helper.TryAcquireUserSlot(context.Background(), 101, 2)
-	require.NoError(t, err)
-	require.True(t, acquired)
-	require.NotNil(t, release)
-
-	release()
-	require.Equal(t, int32(1), atomic.LoadInt32(&cache.releaseUserCalled))
+func (m *concurrencyCacheMock) AcquireAccountShareMembershipSlot(context.Context, int64, int, string) (bool, error) {
+	return true, nil
 }
 
-func TestConcurrencyHelper_TryAcquireAccountSlot_NotAcquired(t *testing.T) {
-	cache := &concurrencyCacheMock{
-		acquireAccountSlotFn: func(ctx context.Context, accountID int64, maxConcurrency int, requestID string) (bool, error) {
-			return false, nil
-		},
-	}
-	helper := NewConcurrencyHelper(service.NewConcurrencyService(cache), SSEPingFormatNone, time.Second)
-
-	release, acquired, err := helper.TryAcquireAccountSlot(context.Background(), 201, 1)
-	require.NoError(t, err)
-	require.False(t, acquired)
-	require.Nil(t, release)
-	require.Equal(t, int32(0), atomic.LoadInt32(&cache.releaseAccountCalled))
+func (m *concurrencyCacheMock) ReleaseAccountShareMembershipSlot(context.Context, int64, string) error {
+	return nil
 }
 
-func TestWrapAccountSelectionReleaseOnDone_IgnoresClientCancellationForRuntimeLease(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	var releaseCalls atomic.Int32
-	release := wrapAccountSelectionReleaseOnDone(
-		ctx,
-		&service.AccountSelectionResult{RuntimeLease: &service.AccountShareRuntimeLease{}},
-		func() { releaseCalls.Add(1) },
-	)
-	require.NotNil(t, release)
-
-	cancel()
-	require.Never(t, func() bool { return releaseCalls.Load() != 0 }, 20*time.Millisecond, time.Millisecond)
-
-	release()
-	release()
-	require.Equal(t, int32(1), releaseCalls.Load())
+func (m *concurrencyCacheMock) GetAccountShareMembershipConcurrency(context.Context, int64) (int, error) {
+	return 0, nil
 }
 
-func TestBeginAccountShareBillingDispatch_FailsClosedWhenDispatcherReturnsNil(t *testing.T) {
-	attemptNo := 0
-	selection := &service.AccountSelectionResult{
-		AccountShareMode: true,
-		Account:          &service.Account{ID: 7},
-		RuntimeLease:     &service.AccountShareRuntimeLease{},
-	}
+func (m *concurrencyCacheMock) RefreshAccountSlot(context.Context, int64, string) (bool, error) {
+	return true, nil
+}
 
-	ctx, err := beginAccountShareBillingDispatch(
-		context.Background(),
-		nilAccountShareBillingDispatcher{},
-		selection,
-		&attemptNo,
-		service.AccountShareBillingDispatchInput{},
-	)
+func (m *concurrencyCacheMock) RefreshAccountShareMembershipSlot(context.Context, int64, string) (bool, error) {
+	return true, nil
+}
 
-	require.ErrorIs(t, err, service.ErrServiceUnavailable)
-	require.Equal(t, 1, attemptNo)
-	_, ok := service.AccountShareBillingDispatchFromContext(ctx)
-	require.False(t, ok)
+func (m *concurrencyCacheMock) SlotLeaseTTL() time.Duration {
+	return time.Hour
 }

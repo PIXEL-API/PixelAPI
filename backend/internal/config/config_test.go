@@ -221,8 +221,6 @@ func TestLoadClusterDefaultsPreserveSingleInstanceMode(t *testing.T) {
 	require.Equal(t, 10, cfg.Server.DrainDelaySeconds)
 	require.Equal(t, 300, cfg.Server.HTTPDrainTimeoutSeconds)
 	require.Equal(t, 30, cfg.Server.CleanupTimeoutSeconds)
-	require.False(t, cfg.AccountShareRollout.LifecycleContractEnabled)
-	require.False(t, cfg.AccountShareRollout.DeferredQueueBindingEnabled)
 	require.False(t, cfg.AccountShareRollout.ReviewRoomSubjectWritesEnabled)
 	require.Equal(t, AccountShareQuotaModeShadow, cfg.AccountShareRollout.QuotaMode)
 }

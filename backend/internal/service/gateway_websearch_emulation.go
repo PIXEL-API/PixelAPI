@@ -246,9 +246,6 @@ func writeWebSearchStreamResponse(
 		}
 	}
 	result.Duration = time.Since(startTime)
-	if handled, billingErr := CommitForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
-		return result, billingErr
-	}
 	if err := writeSSEMessageEnd(w, outputTokens); err != nil {
 		slog.Warn("web search emulation: terminal SSE write failed", "error", err)
 		return result, &BillableStreamUsageError{Err: err}
@@ -392,9 +389,6 @@ func writeWebSearchNonStreamResponse(
 		Duration:             time.Since(startTime),
 		Usage:                ClaudeUsage{OutputTokens: outputTokens},
 		BillingUsageComplete: true,
-	}
-	if handled, billingErr := CommitForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
-		return result, billingErr
 	}
 	c.Data(http.StatusOK, "application/json", body)
 

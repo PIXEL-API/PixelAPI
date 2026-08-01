@@ -201,7 +201,6 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 	// Track if we've started streaming (for error handling)
 	streamStarted := false
-	billingDispatchAttemptNo := 0
 
 	// 绑定错误透传服务，允许 service 层在非 failover 错误场景复用规则。
 	if h.errorPassthroughService != nil {
@@ -439,35 +438,6 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}
 			requestCtx, cancelForward := bindAccountSelectionForwardContext(requestCtx, selection)
 			requestPayloadHash := service.HashUsageRequestPayload(body)
-			routedModel := account.GetMappedModel(reqModel)
-			requestCtx, err = beginAccountShareBillingDispatch(
-				requestCtx,
-				h.gatewayService,
-				selection,
-				&billingDispatchAttemptNo,
-				service.AccountShareBillingDispatchInput{
-					APIKey:             apiKey,
-					User:               apiKey.User,
-					Subscription:       subscription,
-					RequestedModel:     reqModel,
-					RoutedModel:        routedModel,
-					InboundEndpoint:    GetInboundEndpoint(c),
-					UpstreamEndpoint:   GetUpstreamEndpoint(c, account.Platform),
-					RequestType:        accountShareBillingRequestType(reqStream),
-					RequestPayloadHash: requestPayloadHash,
-					ReasoningEffort:    parsedReq.OutputEffort,
-					ChannelUsageFields: channelMapping.ToUsageFields(reqModel, routedModel),
-				},
-			)
-			if err != nil {
-				cancelForward()
-				if accountReleaseFunc != nil {
-					accountReleaseFunc()
-				}
-				reqLog.Error("gateway.messages.billing_dispatch_failed", zap.Int64("account_id", account.ID), zap.Error(err))
-				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable; no upstream request was sent", streamStarted)
-				return
-			}
 			// 记录 Forward 前已写入字节数，Forward 后若增加则说明 SSE 内容已发，禁止 failover
 			writerSizeBeforeForward := c.Writer.Size()
 			if account.Platform == service.PlatformAntigravity {
@@ -525,20 +495,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}
 			hasBillableUsage := result != nil &&
 				(service.IsBillableStreamUsageError(err) || service.ForwardResultHasBillableUsage(result))
-			if finalizeErr := finalizeAccountShareBillingAttempt(
-				requestCtx,
-				err,
-				hasBillableUsage,
-				reqStream,
-				func() { recordUsageResult(result) },
-				accountReleaseFunc,
-			); finalizeErr != nil {
-				reqLog.Error("gateway.messages.billing_dispatch_finalize_failed", zap.Int64("account_id", account.ID), zap.Error(finalizeErr))
-				if c.Writer.Size() == writerSizeBeforeForward {
-					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable", streamStarted)
-				}
-				return
-			}
+			finalizeAccountShareRequest(hasBillableUsage, func() { recordUsageResult(result) }, accountReleaseFunc)
 			h.gatewayService.ReportAccountForwardResult(account.ID, result, err)
 			if err != nil {
 				var failoverErr *service.UpstreamFailoverError
@@ -920,39 +877,6 @@ routeLoop:
 			}
 			requestCtx, cancelForward := bindAccountSelectionForwardContext(requestCtx, selection)
 			requestPayloadHash := service.HashUsageRequestPayload(routeBody)
-			routedModel := account.GetMappedModel(parsedReq.Model)
-			requestCtx, err = beginAccountShareBillingDispatch(
-				requestCtx,
-				h.gatewayService,
-				selection,
-				&billingDispatchAttemptNo,
-				service.AccountShareBillingDispatchInput{
-					APIKey:             currentAPIKey,
-					User:               currentAPIKey.User,
-					Subscription:       currentSubscription,
-					RequestedModel:     reqModel,
-					RoutedModel:        routedModel,
-					InboundEndpoint:    GetInboundEndpoint(c),
-					UpstreamEndpoint:   GetUpstreamEndpoint(c, account.Platform),
-					RequestType:        accountShareBillingRequestType(reqStream),
-					RequestPayloadHash: requestPayloadHash,
-					ReasoningEffort:    parsedReq.OutputEffort,
-					ChannelUsageFields: channelMapping.ToUsageFields(reqModel, routedModel),
-				},
-			)
-			if err != nil {
-				cancelForward()
-				if queueRelease != nil {
-					queueRelease()
-				}
-				parsedReq.OnUpstreamAccepted = nil
-				if accountReleaseFunc != nil {
-					accountReleaseFunc()
-				}
-				reqLog.Error("gateway.messages.billing_dispatch_failed", zap.Int64("account_id", account.ID), zap.Error(err))
-				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable; no upstream request was sent", streamStarted)
-				return
-			}
 			userAgent := c.GetHeader("User-Agent")
 			clientIP := ip.GetClientIP(c)
 			inboundEndpoint := GetInboundEndpoint(c)
@@ -989,24 +913,8 @@ routeLoop:
 				})
 			}
 			directGatewayForward := account.Platform != service.PlatformAntigravity || account.Type == service.AccountTypeAPIKey
-			if directGatewayForward {
-				requestCtx = withForwardResultBillingGate(requestCtx, recordUsage)
-			}
 			recordUsageResult := func(result *service.ForwardResult) {
 				if result == nil {
-					return
-				}
-				if handled, billingErr := service.CommitForwardResultBillingGate(requestCtx, result); handled {
-					if billingErr != nil {
-						logger.L().With(
-							zap.String("component", "handler.gateway.messages"),
-							zap.Int64("user_id", subject.UserID),
-							zap.Int64("api_key_id", currentAPIKey.ID),
-							zap.Any("group_id", currentAPIKey.GroupID),
-							zap.String("model", reqModel),
-							zap.Int64("account_id", account.ID),
-						).Error("gateway.record_usage_failed", zap.Error(billingErr))
-					}
 					return
 				}
 				h.submitUsageRecordTask(requestCtx, func(ctx context.Context) {
@@ -1033,24 +941,7 @@ routeLoop:
 			cancelForward()
 			hasBillableUsage := result != nil &&
 				(service.IsBillableStreamUsageError(err) || service.ForwardResultHasBillableUsage(result))
-			if finalizeErr := finalizeAccountShareBillingAttempt(
-				requestCtx,
-				err,
-				hasBillableUsage,
-				reqStream,
-				func() { recordUsageResult(result) },
-				accountReleaseFunc,
-			); finalizeErr != nil {
-				if queueRelease != nil {
-					queueRelease()
-				}
-				parsedReq.OnUpstreamAccepted = nil
-				reqLog.Error("gateway.messages.billing_dispatch_finalize_failed", zap.Int64("account_id", account.ID), zap.Error(finalizeErr))
-				if c.Writer.Size() == writerSizeBeforeForward {
-					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable", streamStarted)
-				}
-				return
-			}
+			finalizeAccountShareRequest(hasBillableUsage, func() { recordUsageResult(result) }, accountReleaseFunc)
 
 			// 兜底释放串行锁（正常情况已通过回调提前释放）
 			if queueRelease != nil {
@@ -2420,10 +2311,6 @@ func (h *GatewayHandler) submitUsageRecordTask(requestCtx context.Context, task 
 	if task == nil {
 		return
 	}
-	if _, durable := service.AccountShareBillingDispatchFromContext(requestCtx); durable {
-		runUsageRecordTaskSync(requestCtx, task, "handler.gateway.messages", "gateway.usage_record_task_panic_recovered")
-		return
-	}
 	if h.usageRecordWorkerPool != nil {
 		mode := h.usageRecordWorkerPool.Submit(task)
 		if mode != service.UsageRecordSubmitModeDropped {
@@ -2443,7 +2330,6 @@ func runUsageRecordTaskSync(requestCtx context.Context, task service.UsageRecord
 	// 回退路径：worker 池未注入或提交被拒绝时同步执行，避免计费记录被静默丢弃。
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	ctx = service.WithAccountShareBillingDispatchFromContext(ctx, requestCtx)
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			logger.L().With(

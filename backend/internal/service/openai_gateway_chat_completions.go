@@ -501,9 +501,6 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 	result.UpstreamModel = upstreamModel
 	result.ResponseServiceTier = finalResponse.ServiceTier
 	result.Stream = false
-	if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
-		return result, billingErr
-	}
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -676,11 +673,6 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		}
 		if successTerminal {
 			sawSuccessTerminal = true
-			result := resultWithUsage()
-			if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
-				terminalErr = billingErr
-				return true
-			}
 		}
 
 		if !clientDisconnected {
@@ -712,9 +704,6 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		result := resultWithUsage()
 		if !sawSuccessTerminal {
 			return result, errors.New("upstream responses stream ended without a successful terminal event")
-		}
-		if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
-			return result, billingErr
 		}
 		// Send [DONE] sentinel
 		if _, err := fmt.Fprint(c.Writer, "data: [DONE]\n\n"); err != nil {

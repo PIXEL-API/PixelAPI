@@ -266,6 +266,12 @@ type accountShareLifecycleRepository interface {
 		listingID int64,
 		expectedVersion int64,
 	) (*AccountShareListing, error)
+	ClearRoomMembersForDrain(
+		ctx context.Context,
+		actorUserID int64,
+		actorIsAdmin bool,
+		listingID int64,
+	) (*AccountShareSeatBillingResult, error)
 	ListDrainingRoomIDs(ctx context.Context, afterID int64, limit int) ([]int64, error)
 	ListValidatingRoomIDs(ctx context.Context, staleBefore time.Time, limit int) ([]int64, error)
 	FindRoomDeleteOperation(
@@ -361,9 +367,6 @@ func (s *AccountShareModeService) DrainRoom(
 	listingID int64,
 	input AccountShareRoomLifecycleCommandInput,
 ) (*AccountShareRoomManagementState, error) {
-	if err := s.requireLifecycleContract(); err != nil {
-		return nil, err
-	}
 	if err := validateAccountShareLifecycleCommand(actorUserID, listingID, input.ExpectedVersion); err != nil {
 		return nil, err
 	}
@@ -381,6 +384,13 @@ func (s *AccountShareModeService) DrainRoom(
 	); err != nil {
 		return nil, err
 	}
+	// 同步清退全部成员（排队直接终结、活跃结算+退款）。失败不阻塞下架——
+	// finalizer 每 15s 会对残留成员重跑清退直至收口。
+	if billing, err := repo.ClearRoomMembersForDrain(ctx, actorUserID, actorIsAdmin, listingID); err != nil {
+		log.Printf("account_share_mode: drain member clearing failed (finalizer will retry): listing=%d err=%v", listingID, err)
+	} else {
+		s.invalidateSeatBillingCaches(billing)
+	}
 	return s.GetRoomManagementState(ctx, actorUserID, actorIsAdmin, listingID)
 }
 
@@ -391,9 +401,6 @@ func (s *AccountShareModeService) ActivateRoom(
 	listingID int64,
 	input AccountShareRoomLifecycleCommandInput,
 ) (*AccountShareRoomManagementState, error) {
-	if err := s.requireLifecycleContract(); err != nil {
-		return nil, err
-	}
 	if err := validateAccountShareLifecycleCommand(actorUserID, listingID, input.ExpectedVersion); err != nil {
 		return nil, err
 	}
@@ -498,9 +505,6 @@ func (s *AccountShareModeService) SuspendRoom(
 	listingID int64,
 	input AccountShareRoomLifecycleCommandInput,
 ) (*AccountShareRoomManagementState, error) {
-	if err := s.requireLifecycleContract(); err != nil {
-		return nil, err
-	}
 	if err := validateAccountShareLifecycleCommand(actorUserID, listingID, input.ExpectedVersion); err != nil {
 		return nil, err
 	}
@@ -538,9 +542,6 @@ func (s *AccountShareModeService) CreateRoomDeleteIntent(
 	listingID int64,
 	input AccountShareRoomDeleteIntentInput,
 ) (*AccountShareRoomDeleteIntent, error) {
-	if err := s.requireLifecycleContract(); err != nil {
-		return nil, err
-	}
 	if actorUserID <= 0 {
 		return nil, ErrUserNotFound
 	}
@@ -599,9 +600,6 @@ func (s *AccountShareModeService) DeleteRoom(
 	listingID int64,
 	input AccountShareRoomDeleteInput,
 ) (*AccountShareRoomOperation, error) {
-	if err := s.requireLifecycleContract(); err != nil {
-		return nil, err
-	}
 	if actorUserID <= 0 {
 		return nil, ErrUserNotFound
 	}
@@ -810,7 +808,7 @@ func operationActorIsAdmin(operation *AccountShareRoomOperation) bool {
 }
 
 func (s *AccountShareModeService) processRoomLifecycleOnce(ctx context.Context) {
-	if s == nil || !s.lifecycleContractEnabled {
+	if s == nil {
 		return
 	}
 	repo, err := s.lifecycleRepository()
@@ -837,20 +835,49 @@ func (s *AccountShareModeService) processRoomLifecycleOnce(ctx context.Context) 
 		if err != nil || state == nil || strings.TrimSpace(state.PendingOperationID) == "" {
 			continue
 		}
-		if err := s.hydrateRoomRuntimeState(ctx, state); err != nil {
-			continue
-		}
+		hydrateErr := s.hydrateRoomRuntimeState(ctx, state)
 		operation, err := repo.GetRoomOperation(ctx, 0, true, state.PendingOperationID)
 		if err != nil || operation == nil {
 			continue
 		}
 		switch operation.Action {
 		case AccountShareRoomOperationActionDelete:
+			if hydrateErr != nil {
+				continue
+			}
 			_, _ = s.tryFinalizeRoomDeletion(ctx, repo, operation)
 		case AccountShareRoomOperationActionDrain:
-			if roomDeletionReadyForOperation(state, operation.ID) {
-				_, _ = repo.FinalizeDrainingRoom(ctx, listingID, state.RowVersion)
+			// 残留成员重清退：排空事务与"派发失败降级"并发时可能漏掉一个
+			// 恰在降级中的成员，这里幂等重跑清退直至归零。
+			if state.Blockers.QueuedMembershipCount > 0 || state.Blockers.ActiveMembershipCount > 0 {
+				billing, clearErr := repo.ClearRoomMembersForDrain(ctx, 0, true, listingID)
+				if clearErr != nil {
+					log.Printf("account_share_mode: drain member re-clearing failed: listing=%d err=%v", listingID, clearErr)
+				} else {
+					s.invalidateSeatBillingCaches(billing)
+				}
+				continue
 			}
+			if hydrateErr == nil && roomDeletionReadyForOperation(state, operation.ID) {
+				if _, err := repo.FinalizeDrainingRoom(ctx, listingID, state.RowVersion); err != nil {
+					log.Printf("account_share_mode: drain finalize failed: listing=%d err=%v", listingID, err)
+				}
+				continue
+			}
+			// 30 分钟强制收口兜底：DB 侧成员/结算已清零、仅剩运行时侧
+			// blocker（在途请求计数或运行时依赖不可用/hydrate 失败）时
+			// 不允许无限等待。FinalizeDrainingRoom 内部仍会复核全部 DB
+			// blocker，强制只是跳过运行时侧的不确定性。
+			if time.Since(operation.CreatedAt) > 30*time.Minute &&
+				state.Blockers.EndingMembershipCount == 0 &&
+				state.Blockers.SynchronousBillingPendingCount == 0 {
+				log.Printf("account_share_mode: drain force-finalize after timeout: listing=%d blockers=%v", listingID, state.Blockers.Metadata())
+				if _, err := repo.FinalizeDrainingRoom(ctx, listingID, state.RowVersion); err != nil {
+					log.Printf("account_share_mode: drain force-finalize failed: listing=%d err=%v", listingID, err)
+				}
+				continue
+			}
+			log.Printf("account_share_mode: drain finalize waiting: listing=%d hydrate_err=%v blockers=%v", listingID, hydrateErr, state.Blockers.Metadata())
 		}
 	}
 }
@@ -894,7 +921,6 @@ func (s *AccountShareModeService) runRoomValidationWorker() {
 
 func (s *AccountShareModeService) processRoomValidationOnce() {
 	if s == nil ||
-		!s.lifecycleContractEnabled ||
 		s.repo == nil ||
 		s.accountRepo == nil ||
 		s.accountTestService == nil ||

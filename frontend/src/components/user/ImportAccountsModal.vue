@@ -363,7 +363,7 @@ const selectedProxyCapacityMessage = computed(() => {
   if (!isProxyAccountFull(proxy)) return ''
   const count = normalizeProxyAccountCount(proxy)
   const max = normalizeProxyMaxAccounts(proxy)
-  return `${t('admin.proxies.accountUsageFullTitle', { count, max })}，请选择其它代理 IP。`
+  return t('admin.proxies.accountUsageFullSelectOther', { count, max })
 })
 
 const proxyHelperText = computed(() => {
@@ -700,24 +700,43 @@ function importPersonalCredentials(contents: string[]): Promise<ImportCredential
 
 // 用户只能选择平台代理：按当前平台/等级拉取可选代理。scope 变化用不同缓存键，
 // 保证切换平台或等级后（watcher 会重新调用 loadProxies）能取到对应的代理集合。
+//
+// 用请求序号而不是「有请求在飞就返回」来去重：快速连续切换平台/等级时，
+// 后一次请求必须能覆盖前一次，否则列表会停在上一个平台上（而 scope 键还记成了旧值）。
 let lastProxyScopeKey = ''
+let proxyRequestSeq = 0
 async function loadProxies(force = false): Promise<void> {
   const scope = {
     platform: selectedPlatform.value || '',
     account_level: selectedAccountLevel.value || ''
   }
   const scopeKey = `${scope.platform}|${scope.account_level}`
-  if (proxyLoading.value) return
-  if (!force && scopeKey === lastProxyScopeKey && proxies.value.length > 0) return
+  if (!force && scopeKey === lastProxyScopeKey && proxies.value.length > 0) {
+    // 同上：命中缓存时作废在飞的旧 scope 请求，并收掉它已经不会再清的 loading 标志。
+    proxyRequestSeq++
+    proxyLoading.value = false
+    return
+  }
+  const seq = ++proxyRequestSeq
   proxyLoading.value = true
   proxyLoadMessage.value = ''
   try {
-    proxies.value = await accountShareAPI.listProxies(scope)
+    const list = await accountShareAPI.listProxies(scope)
+    if (seq !== proxyRequestSeq) return
+    proxies.value = list
     lastProxyScopeKey = scopeKey
+    // 换了范围之后，之前选中的代理可能已经不在列表里，必须丢弃：
+    // 后端会按同样的 scope 校验，越界的 proxy_id 只会在提交时才报错。
+    if (selectedProxyId.value && !list.some(proxy => proxy.id === selectedProxyId.value)) {
+      selectedProxyId.value = null
+    }
   } catch (error: unknown) {
+    if (seq !== proxyRequestSeq) return
     proxyLoadMessage.value = extractApiErrorMessage(error, t('userAccounts.importProxyLoadFailed'))
   } finally {
-    proxyLoading.value = false
+    if (seq === proxyRequestSeq) {
+      proxyLoading.value = false
+    }
   }
 }
 

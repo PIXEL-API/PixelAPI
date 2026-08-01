@@ -409,6 +409,7 @@
       :allow-billing-rate="false"
       @close="showCreateModal = false"
       @created="handleAccountCreated"
+      @proxy-scope-change="handleCreateProxyScopeChange"
     />
 
     <EditAccountModal
@@ -1181,34 +1182,53 @@ async function loadGroups(): Promise<void> {
 
 // 用户只能选择平台代理（外加自己名下的遗留自有代理）。按账号平台/等级拉取可选代理；
 // scope 变化时用不同的缓存键，避免切换账号后仍显示上一个账号的代理集合。
+//
+// 这里不能用「有请求在飞就直接返回」来去重：那样第二个 scope 的请求会被静默丢掉，
+// 列表和 scope 键都停留在上一个 scope 上。改成请求序号，后发的请求永远赢，
+// 先发的响应回来时直接丢弃。
 let lastUserProxyScopeKey = ''
+let userProxyRequestSeq = 0
 async function loadUserProxies(
   scope: ListProxiesScope = {},
   force = false
 ): Promise<void> {
   const scopeKey = `${scope.platform || ''}|${scope.account_level || ''}`
-  if (
-    userProxiesLoading.value ||
-    (!force && scopeKey === lastUserProxyScopeKey && userProxies.value.length > 0)
-  ) {
+  if (!force && scopeKey === lastUserProxyScopeKey && userProxies.value.length > 0) {
+    // 命中缓存也要把仍在飞的旧请求作废：否则它回来时 seq 还等于当前值，
+    // 会把另一个 scope 的列表盖到已经正确的列表上（连 scope 键一起改掉）。
+    userProxyRequestSeq++
+    userProxiesLoading.value = false
     return
   }
+  const seq = ++userProxyRequestSeq
   userProxiesLoading.value = true
   try {
-    userProxies.value = await accountShareAPI.listProxies(scope)
+    const proxies = await accountShareAPI.listProxies(scope)
+    if (seq !== userProxyRequestSeq) return
+    userProxies.value = proxies
     lastUserProxyScopeKey = scopeKey
   } catch (error) {
+    if (seq !== userProxyRequestSeq) return
     console.error('Failed to load user proxies:', error)
     appStore.showError(extractApiErrorMessage(error, t('userAccounts.importProxyLoadFailed')))
   } finally {
-    userProxiesLoading.value = false
+    if (seq === userProxyRequestSeq) {
+      userProxiesLoading.value = false
+    }
   }
 }
 
 function openCreateModal(): void {
+  // 代理列表由模态发出的 proxy-scope-change 驱动：平台/等级只有模态里才知道，
+  // 在这里按空范围预取只会拿到通用代理，平台/等级专属代理永远选不到。
   showCreateModal.value = true
-  // 创建时平台/等级尚未选择，仅按平台代理（通用/所有等级）预取；模态内选定后可再细化。
-  void loadUserProxies()
+}
+
+function handleCreateProxyScopeChange(scope: { platform: AccountPlatform; account_level: AccountLevel }): void {
+  void loadUserProxies({
+    platform: scope.platform,
+    account_level: scope.account_level
+  })
 }
 
 function onFilterChange(): void {

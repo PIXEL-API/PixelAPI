@@ -330,6 +330,20 @@ func rejectUserProxyID(c *gin.Context, proxyID *int64) bool {
 	return false
 }
 
+// userOAuthProxyScope 构造用户 OAuth 登录/重新授权时的代理筛选范围。
+//
+// 带上调用者的遗留归属豁免：迁移 256 之前用户可以自行上传代理，这些代理的
+// owner_user_id 被有意保留。不带豁免时，账号上绑定的自有代理在 GetVisibleByID
+// 里查不到，老用户重新授权会直接 ErrProxyNotFound。放开的只是「调用者自己的」
+// 代理，跨用户仍然不可见（visibleProxyPredicate 用的是等值匹配）。
+func userOAuthProxyScope(c *gin.Context, platform, accountLevel string) service.ProxyScope {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		return service.NewProxyScope(platform, accountLevel)
+	}
+	return service.NewOwnedProxyScope(platform, accountLevel, subject.UserID)
+}
+
 func (h *UserAccountHandler) requireUserOAuthProxy(c *gin.Context, scope service.ProxyScope, proxyID *int64) bool {
 	if proxyID == nil || *proxyID <= 0 {
 		response.BadRequest(c, "proxy_id is required for user OAuth login")
@@ -360,7 +374,7 @@ func (h *UserAccountHandler) validateUserOpenAIOAuthProxy(c *gin.Context, ownerU
 	if !service.RequiresUserOpenAIProxyLoginWithConfigs(targetLevel, levelConfigs) {
 		return rejectUserProxyID(c, proxyID)
 	}
-	return h.requireUserOAuthProxy(c, service.NewProxyScope(service.PlatformOpenAI, targetLevel), proxyID)
+	return h.requireUserOAuthProxy(c, userOAuthProxyScope(c, service.PlatformOpenAI, targetLevel), proxyID)
 }
 
 func rejectUserManualCredentialAuth(c *gin.Context) {
@@ -387,7 +401,7 @@ func (h *UserAccountHandler) prepareUserAccountRequest(c *gin.Context, ownerUser
 	if req.Platform != service.PlatformOpenAI {
 		if service.RequiresUserAccountOAuthProxyWithConfigs(req.Platform, service.AccountLevelUnknown, levelConfigs) {
 			req.AccountLevel = service.AccountLevelUnknown
-			return h.requireUserOAuthProxy(c, service.NewProxyScope(req.Platform, service.AccountLevelUnknown), req.ProxyID)
+			return h.requireUserOAuthProxy(c, userOAuthProxyScope(c, req.Platform, service.AccountLevelUnknown), req.ProxyID)
 		}
 		req.AccountLevel = service.AccountLevelUnknown
 		return rejectUserProxyID(c, req.ProxyID)
@@ -406,7 +420,7 @@ func (h *UserAccountHandler) prepareUserAccountRequest(c *gin.Context, ownerUser
 		response.ErrorFrom(c, service.ErrServiceUnavailable)
 		return false
 	}
-	if err := h.openaiOAuthService.EnsureProxyVisibleToUser(c.Request.Context(), service.NewProxyScope(req.Platform, req.AccountLevel), req.ProxyID); err != nil {
+	if err := h.openaiOAuthService.EnsureProxyVisibleToUser(c.Request.Context(), userOAuthProxyScope(c, req.Platform, req.AccountLevel), req.ProxyID); err != nil {
 		response.ErrorFrom(c, err)
 		return false
 	}
@@ -1298,7 +1312,7 @@ func (h *UserAccountHandler) ImportCredentials(c *gin.Context) {
 		normalizeUserCredentialImportTargetLevel(&req, levelConfigs)
 	}
 	if !isAgentIdentityImport && service.RequiresUserAccountOAuthProxyWithConfigs(req.Platform, service.AccountLevelUnknown, levelConfigs) {
-		if !h.requireUserOAuthProxy(c, service.NewProxyScope(req.Platform, service.AccountLevelUnknown), req.ProxyID) {
+		if !h.requireUserOAuthProxy(c, userOAuthProxyScope(c, req.Platform, service.AccountLevelUnknown), req.ProxyID) {
 			return
 		}
 	}
@@ -2296,7 +2310,7 @@ func (h *UserAccountHandler) GenerateAnthropicOAuthURL(c *gin.Context) {
 	if !bindOptionalJSON(c, &req) {
 		return
 	}
-	if !h.requireUserOAuthProxy(c, service.NewProxyScope(service.PlatformAnthropic, service.AccountLevelUnknown), req.ProxyID) {
+	if !h.requireUserOAuthProxy(c, userOAuthProxyScope(c, service.PlatformAnthropic, service.AccountLevelUnknown), req.ProxyID) {
 		return
 	}
 	result, err := h.oauthService.GenerateAuthURL(c.Request.Context(), req.ProxyID)
@@ -2321,7 +2335,7 @@ func (h *UserAccountHandler) ExchangeAnthropicOAuthCode(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	if !h.requireUserOAuthProxy(c, service.NewProxyScope(service.PlatformAnthropic, service.AccountLevelUnknown), req.ProxyID) {
+	if !h.requireUserOAuthProxy(c, userOAuthProxyScope(c, service.PlatformAnthropic, service.AccountLevelUnknown), req.ProxyID) {
 		return
 	}
 	tokenInfo, err := h.oauthService.ExchangeCode(c.Request.Context(), &service.ExchangeCodeInput{
@@ -2431,7 +2445,7 @@ func (h *UserAccountHandler) GenerateGeminiOAuthURL(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	if !h.requireUserOAuthProxy(c, service.NewProxyScope(service.PlatformGemini, service.AccountLevelUnknown), req.ProxyID) {
+	if !h.requireUserOAuthProxy(c, userOAuthProxyScope(c, service.PlatformGemini, service.AccountLevelUnknown), req.ProxyID) {
 		return
 	}
 
@@ -2478,7 +2492,7 @@ func (h *UserAccountHandler) ExchangeGeminiOAuthCode(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	if !h.requireUserOAuthProxy(c, service.NewProxyScope(service.PlatformGemini, service.AccountLevelUnknown), req.ProxyID) {
+	if !h.requireUserOAuthProxy(c, userOAuthProxyScope(c, service.PlatformGemini, service.AccountLevelUnknown), req.ProxyID) {
 		return
 	}
 
@@ -2515,7 +2529,7 @@ func (h *UserAccountHandler) GenerateAntigravityOAuthURL(c *gin.Context) {
 	if !bindOptionalJSON(c, &req) {
 		return
 	}
-	if !h.requireUserOAuthProxy(c, service.NewProxyScope(service.PlatformAntigravity, service.AccountLevelUnknown), req.ProxyID) {
+	if !h.requireUserOAuthProxy(c, userOAuthProxyScope(c, service.PlatformAntigravity, service.AccountLevelUnknown), req.ProxyID) {
 		return
 	}
 	result, err := h.antigravityOAuthService.GenerateAuthURL(c.Request.Context(), req.ProxyID)
@@ -2536,7 +2550,7 @@ func (h *UserAccountHandler) ExchangeAntigravityOAuthCode(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	if !h.requireUserOAuthProxy(c, service.NewProxyScope(service.PlatformAntigravity, service.AccountLevelUnknown), req.ProxyID) {
+	if !h.requireUserOAuthProxy(c, userOAuthProxyScope(c, service.PlatformAntigravity, service.AccountLevelUnknown), req.ProxyID) {
 		return
 	}
 	tokenInfo, err := h.antigravityOAuthService.ExchangeCode(c.Request.Context(), &service.AntigravityExchangeCodeInput{
@@ -2569,7 +2583,7 @@ func (h *UserAccountHandler) GenerateGrokOAuthURL(c *gin.Context) {
 		response.ErrorFrom(c, service.ErrServiceUnavailable)
 		return
 	}
-	if !h.requireUserOAuthProxy(c, service.NewProxyScope(service.PlatformGrok, service.AccountLevelUnknown), req.ProxyID) {
+	if !h.requireUserOAuthProxy(c, userOAuthProxyScope(c, service.PlatformGrok, service.AccountLevelUnknown), req.ProxyID) {
 		return
 	}
 	result, err := h.grokOAuthService.GenerateAuthURL(c.Request.Context(), req.ProxyID, req.RedirectURI)
@@ -2594,7 +2608,7 @@ func (h *UserAccountHandler) ExchangeGrokOAuthCode(c *gin.Context) {
 		response.ErrorFrom(c, service.ErrServiceUnavailable)
 		return
 	}
-	if !h.requireUserOAuthProxy(c, service.NewProxyScope(service.PlatformGrok, service.AccountLevelUnknown), req.ProxyID) {
+	if !h.requireUserOAuthProxy(c, userOAuthProxyScope(c, service.PlatformGrok, service.AccountLevelUnknown), req.ProxyID) {
 		return
 	}
 	tokenInfo, err := h.grokOAuthService.ExchangeCode(c.Request.Context(), &service.GrokExchangeCodeInput{

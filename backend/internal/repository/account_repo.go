@@ -1065,11 +1065,8 @@ func lockAndHydrateAccountMutationRooms(
 			GROUP BY listing_id
 		),
 		billing_blockers AS (
-			SELECT listing_id, COUNT(*)::int AS pending_count
-			FROM account_share_request_billing_intents
-			WHERE listing_id = ANY($1)
-				AND status NOT IN ('settled', 'cancelled')
-			GROUP BY listing_id
+			SELECT NULL::bigint AS listing_id, 0::int AS pending_count
+			WHERE FALSE
 		),
 		binding_blockers AS (
 			SELECT listing_id, COUNT(*)::int AS open_count

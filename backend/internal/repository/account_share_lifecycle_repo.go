@@ -100,10 +100,7 @@ func (r *accountShareModeRepository) GetRoomManagementState(
 			WHERE room_account.listing_id = $1
 		),
 		billing_stats AS (
-			SELECT COUNT(*)::int AS pending_count
-			FROM account_share_request_billing_intents
-			WHERE listing_id = $1
-				AND status NOT IN ('settled', 'cancelled')
+			SELECT 0::int AS pending_count
 		)
 		SELECT
 			listing.id,
@@ -261,13 +258,12 @@ func (r *accountShareModeRepository) TransitionRoomLifecycle(
 		statusReasonCode = "owner_delisted"
 		eventType = "listing.delisted"
 		source = "delist_room"
-		// Draining is an asynchronous transition: the room stays in
-		// 'draining' until the lifecycle finalizer observes that all
-		// blockers cleared, then flips it to 'paused'. That finalizer keys
-		// off pending_operation_id, so we must open a drain_room operation
-		// row here and stamp its id onto the listing. Without it the room
-		// is invisible to ListDrainingRoomIDs / FinalizeDrainingRoom and
-		// stays stuck in 'draining' forever.
+		// 排空是同步收口的：本事务内立即清退全部排队成员（无费用）并按
+		// "结算到当前时刻+退还未用预付"结束全部活跃成员。房间短暂停留在
+		// 'draining'，仅等待运行时在途请求归零，由 lifecycle finalizer
+		// （15s 周期，无开关门控）flip 到 'paused'——因为准入已停止，
+		// 在途请求数单调递减，排空必然在分钟级完成。operation 行仅作
+		// 审计与前端进度展示。
 		operationID = uuid.NewString()
 		actorRole := accountShareRevisionActorRole(actorUserID, actorIsAdmin)
 		if _, err := tx.ExecContext(ctx, `
@@ -833,15 +829,6 @@ func (r *accountShareModeRepository) FinalizeRoomDeletion(
 	if err != nil {
 		return nil, err
 	}
-	pendingIntentIDs, err := lockPendingAccountShareBillingIntentIDsInTx(ctx, tx, listing.ID)
-	if err != nil {
-		return nil, err
-	}
-	if len(pendingIntentIDs) > 0 {
-		return nil, service.ErrAccountShareRoomDeleteBlocked.WithMetadata(map[string]string{
-			"pending_billing_intent_count": fmt.Sprintf("%d", len(pendingIntentIDs)),
-		})
-	}
 	blockers, err := accountShareLifecycleDatabaseBlockersInTx(ctx, tx, listing.ID)
 	if err != nil {
 		return nil, err
@@ -1322,16 +1309,142 @@ func accountShareLifecycleDatabaseBlockersInTx(
 		&blockers.EndingMembershipCount,
 		&blockers.SynchronousBillingPendingCount,
 	)
-	if err != nil {
-		return blockers, err
-	}
-	err = tx.QueryRowContext(ctx, `
-		SELECT COUNT(*)::int
-		FROM account_share_request_billing_intents
-		WHERE listing_id = $1
-			AND status NOT IN ('settled', 'cancelled')
-	`, listingID).Scan(&blockers.PendingBillingIntentCount)
+	// billing intent 体系已删除，PendingBillingIntentCount 恒为 0
 	return blockers, err
+}
+
+// ClearRoomMembersForDrain 在独立事务里清退排空中房间的全部存活成员：
+// 排队成员直接终结（未入座、无费用），活跃成员结算已用时段并退还未用预付后结束。
+// 幂等：由 DrainRoom 在状态转换后调用，也由 lifecycle finalizer 在发现残留成员时
+// 反复调用直至清空（覆盖"派发失败降级与排空并发"竞态与中途崩溃）。
+func (r *accountShareModeRepository) ClearRoomMembersForDrain(
+	ctx context.Context,
+	actorUserID int64,
+	actorIsAdmin bool,
+	listingID int64,
+) (*service.AccountShareSeatBillingResult, error) {
+	if r == nil || r.db == nil || listingID <= 0 {
+		return nil, service.ErrServiceUnavailable
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	listing, err := lockAccountShareLifecycleListingInTx(ctx, tx, listingID, 0, true)
+	if err != nil {
+		return nil, err
+	}
+	if listing.DeletedAt.Valid || listing.Status != service.AccountShareListingStatusDraining {
+		// 不在排空中：无事可做（可能已被 finalizer 收口）。
+		return &service.AccountShareSeatBillingResult{}, tx.Commit()
+	}
+	actorRole := accountShareRevisionActorRole(actorUserID, actorIsAdmin)
+	result, err := r.endLiveMembershipsForRoomDrainInTx(ctx, tx, listing.ID, actorUserID, actorRole)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (r *accountShareModeRepository) endLiveMembershipsForRoomDrainInTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	listingID int64,
+	actorUserID int64,
+	actorRole string,
+) (*service.AccountShareSeatBillingResult, error) {
+	result := &service.AccountShareSeatBillingResult{}
+	// 钱包行锁按 id 升序统一预锁（consumer/owner/inviter），与
+	// lockAccountShareEndBillingUsersInTx 的排序纪律一致，避免与并发的
+	// 单成员结算事务形成跨房间死锁环。
+	if _, err := lockAccountShareIDsInTx(ctx, tx, `
+		SELECT id
+		FROM users
+		WHERE deleted_at IS NULL
+			AND (
+				id IN (
+					SELECT consumer_user_id FROM account_share_memberships
+					WHERE listing_id = $1 AND status IN ('active', 'queued') AND deleted_at IS NULL
+				)
+				OR id = (SELECT owner_user_id FROM account_share_listings WHERE id = $1)
+				OR id IN (
+					SELECT affiliate.inviter_id
+					FROM user_affiliates affiliate
+					JOIN account_share_memberships m ON m.consumer_user_id = affiliate.user_id
+					WHERE m.listing_id = $1 AND m.status IN ('active', 'queued') AND m.deleted_at IS NULL
+				)
+			)
+		ORDER BY id ASC
+		FOR UPDATE
+	`, listingID); err != nil {
+		return nil, err
+	}
+	queuedConsumerIDs, err := lockAccountShareIDsInTx(ctx, tx, `
+		SELECT consumer_user_id
+		FROM account_share_memberships
+		WHERE listing_id = $1
+			AND status = 'queued'
+			AND deleted_at IS NULL
+		ORDER BY id ASC
+		FOR UPDATE
+	`, listingID)
+	if err != nil {
+		return nil, err
+	}
+	if err := endQueuedMembershipsForRoomDrainInTx(ctx, tx, listingID, actorUserID, actorRole); err != nil {
+		return nil, err
+	}
+	result.Processed += len(queuedConsumerIDs)
+	result.EndedConsumerUserIDs = append(result.EndedConsumerUserIDs, queuedConsumerIDs...)
+	activeIDs, err := lockAccountShareIDsInTx(ctx, tx, `
+		SELECT id
+		FROM account_share_memberships
+		WHERE listing_id = $1
+			AND status = 'active'
+			AND deleted_at IS NULL
+		ORDER BY id ASC
+		FOR UPDATE
+	`, listingID)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	for _, membershipID := range activeIDs {
+		membership, err := r.lockSeatBillingMembershipInTx(ctx, tx, membershipID, 0)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if membership == nil || membership.Status != service.AccountShareMembershipStatusActive {
+			continue
+		}
+		if _, err := r.closeAccountShareMembershipBindingInTx(
+			ctx, tx, membership.ID, actorUserID, actorRole,
+			service.AccountShareMembershipEndReasonRoomDraining, now,
+		); err != nil {
+			return nil, err
+		}
+		memberResult, err := r.endSeatBillingMembershipInTx(
+			ctx, tx, membership, now, service.AccountShareMembershipEndReasonRoomDraining,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if memberResult != nil {
+			result.Processed++
+			result.DebitUserIDs = append(result.DebitUserIDs, memberResult.DebitUserIDs...)
+			result.CreditUserIDs = append(result.CreditUserIDs, memberResult.CreditUserIDs...)
+			result.EndedConsumerUserIDs = append(result.EndedConsumerUserIDs, memberResult.EndedConsumerUserIDs...)
+		}
+	}
+	return result, nil
 }
 
 func endQueuedMembershipsForRoomDrainInTx(
@@ -1472,17 +1585,6 @@ func lockOpenAccountShareBindingIDsInTx(ctx context.Context, tx *sql.Tx, listing
 		WHERE listing_id = $1
 			AND unbound_at IS NULL
 		ORDER BY membership_id ASC, id ASC
-		FOR UPDATE
-	`, listingID)
-}
-
-func lockPendingAccountShareBillingIntentIDsInTx(ctx context.Context, tx *sql.Tx, listingID int64) ([]int64, error) {
-	return lockAccountShareIDsInTx(ctx, tx, `
-		SELECT id
-		FROM account_share_request_billing_intents
-		WHERE listing_id = $1
-			AND status NOT IN ('settled', 'cancelled')
-		ORDER BY request_id ASC, api_key_id_snapshot ASC, id ASC
 		FOR UPDATE
 	`, listingID)
 }

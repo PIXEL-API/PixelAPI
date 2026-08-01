@@ -21,7 +21,6 @@ import (
 // AlphaSearch proxies the standalone Codex web-search endpoint.
 func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 	streamStarted := false
-	billingDispatchAttemptNo := 0
 	defer h.recoverResponsesPanic(c, &streamStarted)
 	setOpenAIClientTransportHTTP(c)
 	requestStart := time.Now()
@@ -204,34 +203,6 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 		forwardStart := time.Now()
 		forwardCtx, cancelForward := bindAccountSelectionForwardContext(selectionCtx, selection)
 		requestPayloadHash := service.HashUsageRequestPayload(body)
-		routedModel := service.ResolveOpenAIForwardModel(account, selectionModel, "")
-		forwardCtx, err = beginAccountShareBillingDispatch(
-			forwardCtx,
-			h.gatewayService,
-			selection,
-			&billingDispatchAttemptNo,
-			service.AccountShareBillingDispatchInput{
-				APIKey:             currentAPIKey,
-				User:               currentAPIKey.User,
-				Subscription:       currentSubscription,
-				RequestedModel:     requestedModel,
-				RoutedModel:        routedModel,
-				InboundEndpoint:    GetInboundEndpoint(c),
-				UpstreamEndpoint:   GetUpstreamEndpoint(c, account.Platform),
-				RequestType:        service.RequestTypeSync,
-				RequestPayloadHash: requestPayloadHash,
-				ChannelUsageFields: channelMapping.ToUsageFields(requestedModel, routedModel),
-			},
-		)
-		if err != nil {
-			cancelForward()
-			if accountRelease != nil {
-				accountRelease()
-			}
-			reqLog.Error("openai_alpha_search.billing_dispatch_failed", zap.Int64("account_id", account.ID), zap.Error(err))
-			h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable; no upstream request was sent")
-			return
-		}
 		userAgent := c.GetHeader("User-Agent")
 		clientIP := ip.GetClientIP(c)
 		inboundEndpoint := GetInboundEndpoint(c)
@@ -255,7 +226,6 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 				ChannelUsageFields: channelMapping.ToUsageFields(requestedModel, result.UpstreamModel),
 			})
 		}
-		forwardCtx = withOpenAIForwardResultBillingGate(forwardCtx, recordUsage)
 		result, forwardErr := func() (*service.OpenAIForwardResult, error) {
 			defer cancelForward()
 			if accountRelease != nil {
@@ -266,19 +236,6 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 		service.SetOpsLatencyMs(c, service.OpsResponseLatencyMsKey, time.Since(forwardStart).Milliseconds())
 		recordUsageResult := func(result *service.OpenAIForwardResult) {
 			if result == nil {
-				return
-			}
-			if handled, billingErr := service.CommitOpenAIForwardResultBillingGate(forwardCtx, result); handled {
-				if billingErr != nil {
-					logger.L().With(
-						zap.String("component", "handler.openai_gateway.alpha_search"),
-						zap.Int64("user_id", subject.UserID),
-						zap.Int64("api_key_id", currentAPIKey.ID),
-						zap.Any("group_id", currentAPIKey.GroupID),
-						zap.String("model", requestedModel),
-						zap.Int64("account_id", account.ID),
-					).Error("openai_alpha_search.record_usage_failed", zap.Error(billingErr))
-				}
 				return
 			}
 			h.submitUsageRecordTask(forwardCtx, func(ctx context.Context) {
@@ -298,13 +255,6 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 		hasBillableUsage := service.OpenAIForwardResultHasBillableUsage(result)
 		if forwardErr != nil && hasBillableUsage {
 			recordUsageResult(result)
-		}
-		if finalizeErr := failAccountShareBillingDispatchWithoutUsage(forwardCtx, forwardErr, hasBillableUsage, false); finalizeErr != nil {
-			reqLog.Error("openai_alpha_search.billing_dispatch_finalize_failed", zap.Int64("account_id", account.ID), zap.Error(finalizeErr))
-			if c.Writer.Size() == writerSizeBeforeForward {
-				h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Billing state is temporarily unavailable")
-			}
-			return
 		}
 
 		if forwardErr == nil {

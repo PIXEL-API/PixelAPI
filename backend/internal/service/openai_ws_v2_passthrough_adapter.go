@@ -181,7 +181,6 @@ func (l *openAIWSPassthroughTurnLifecycle) finishWithError(result *OpenAIForward
 		_ = l.stopActiveContext()
 	}
 	payload := l.activePayload
-	activeContext := l.activeContext
 	contextCause := l.activeContextCause
 	l.activeTurn = 0
 	l.activePayload = nil
@@ -190,11 +189,6 @@ func (l *openAIWSPassthroughTurnLifecycle) finishWithError(result *OpenAIForward
 	l.stopActiveContext = nil
 	if turnErr == nil && contextCause != nil {
 		turnErr = contextCause
-	}
-	if turnErr == nil && result != nil {
-		if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(activeContext, result); handled && billingErr != nil {
-			turnErr = billingErr
-		}
 	}
 	hookErr := finishOpenAIWSIngressTurn(l.hooks, turn, payload, result, turnErr)
 	if hookErr != nil {

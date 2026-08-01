@@ -2676,14 +2676,6 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				}
 			}
 		}
-		if reqStream && isOpenAIWSSuccessTerminalEvent(eventType) {
-			result := buildForwardResult()
-			if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
-				lease.MarkBroken()
-				return result, billingErr
-			}
-		}
-
 		if reqStream {
 			// 在首个 token 前先缓冲事件（如 response.created），
 			// 以便上游早期断连时仍可安全回退到 HTTP，不给下游发送半截流。
@@ -2749,11 +2741,6 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			responseID = strings.TrimSpace(gjson.GetBytes(finalResponse, "id").String())
 		}
 
-		result := buildForwardResult()
-		if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(ctx, result); handled && billingErr != nil {
-			lease.MarkBroken()
-			return result, billingErr
-		}
 		c.Data(http.StatusOK, "application/json", finalResponse)
 	} else {
 		flushStreamWriter(true)
@@ -3607,10 +3594,6 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			if isOpenAIWSSuccessTerminalEvent(eventType) {
 				terminalResult = buildTurnResult()
-				if handled, billingErr := CommitOpenAIForwardResultBillingGateBeforeTerminal(turnCtx, terminalResult); handled && billingErr != nil {
-					lease.MarkBroken()
-					return terminalResult, billingErr
-				}
 			}
 			if !clientDisconnected {
 				if err := writeClientMessage(turnCtx, upstreamMessage); err != nil {

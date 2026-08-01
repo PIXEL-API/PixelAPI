@@ -1087,7 +1087,10 @@ func lockAccountShareModeMembershipBeforeWallet(ctx context.Context, tx *sql.Tx,
 	if tx == nil || cmd == nil || cmd.AccountShareModeSettlement == nil || cmd.AccountShareModeSettlement.MembershipID <= 0 {
 		return nil
 	}
-	var membershipID, listingID, accountID, ownerUserID, consumerUserID, apiKeyID int64
+	var membershipID, listingID, ownerUserID, consumerUserID, apiKeyID int64
+	// account_id 可空：成员被降级重排队/结束后为 NULL（迁移 240/248），
+	// 历史用量仍需结算，此时不做账号一致性比对。
+	var accountID sql.NullInt64
 	err := tx.QueryRowContext(ctx, `
 		SELECT m.id, m.listing_id, m.account_id, l.owner_user_id, m.consumer_user_id, m.api_key_id
 		FROM account_share_memberships m
@@ -1111,7 +1114,7 @@ func lockAccountShareModeMembershipBeforeWallet(ctx context.Context, tx *sql.Tx,
 	snapshot := cmd.AccountShareModeSettlement
 	if membershipID != snapshot.MembershipID ||
 		listingID != snapshot.ListingID ||
-		accountID != snapshot.AccountID ||
+		(accountID.Valid && accountID.Int64 != snapshot.AccountID) ||
 		ownerUserID != snapshot.OwnerUserID ||
 		consumerUserID != snapshot.ConsumerUserID ||
 		apiKeyID != snapshot.APIKeyID {

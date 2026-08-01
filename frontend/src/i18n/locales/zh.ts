@@ -929,6 +929,8 @@ export default {
       credentialsPreserved: "切换模式不会删除账号或重新登录，账号凭证、代理和基础状态保持不变。",
       uuidUnavailable: "当前浏览器无法生成安全的幂等键，请升级浏览器后重试。",
       unsupportedPlatform: "当前账号平台暂不支持平台账号模式。",
+      roomAttachedDisabledHint:
+        "该账号已加入账号广场房间，需先在“账号广场”退出房间后才能切换为仅本人或公共号池。",
       convertFailed: "账号模式切换失败，请重试。"
     },
     pendingReview: "待校验",
@@ -1102,6 +1104,8 @@ export default {
     importProxyHint:
       "请选择一个可见且启用的代理 IP，用于生成登录链接和兑换授权码。",
     importProxyEmpty: "暂无可选代理 IP，请先在账号模式中添加或购买代理 IP。",
+    importProxyEmptyForScope: "当前平台或账号等级暂无可选代理 IP。",
+    importProxyOutOfScope: "所选代理 IP 不适用于当前平台或账号等级，已自动清除，请重新选择。",
     importProxyLoading: "正在加载代理 IP...",
     importProxyLoadFailed: "代理 IP 加载失败",
     importProxyRequired: "请先选择代理 IP",
@@ -4827,6 +4831,7 @@ export default {
       title: "账号管理",
       description: "管理 AI 平台账号和 Cookie",
       createAccount: "添加账号",
+      lockedByRoom: "由目标房间锁定",
       duplicateAccount: "安全复制账号",
       duplicateSuccess: "已创建暂停调度的账号“{name}”，请检查配置后再启用调度。",
       duplicateFailed: "复制账号失败",
@@ -6471,6 +6476,7 @@ export default {
       accountUsageUnlimitedTitle: "当前绑定 {count} 个账号，无绑定上限",
       accountUsageLimitedTitle: "当前绑定 {count} 个账号，上限 {max} 个",
       accountUsageFullTitle: "当前绑定 {count} 个账号，已达到上限 {max} 个",
+      accountUsageFullSelectOther: "当前绑定 {count} 个账号，已达到上限 {max} 个，请选择其它代理 IP。",
       accountUsageExceededTitle: "当前绑定 {count} 个账号，已超过上限 {max} 个",
       enterProxyName: "请输入代理名称",
       optionalAuth: "可选认证信息",

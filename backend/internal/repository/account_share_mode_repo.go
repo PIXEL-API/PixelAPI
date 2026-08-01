@@ -402,16 +402,9 @@ func NewAccountShareModeRepository(
 }
 
 func (r *accountShareModeRepository) deferredQueueBindingEnabled() bool {
-	if r == nil {
-		return false
-	}
-	// Tests in this package historically constructed the unexported repository
-	// directly. Preserve the pre-rollout behavior for that zero-value fixture;
-	// production construction always initializes QuotaMode explicitly.
-	if r.rollout.QuotaMode == "" {
-		return true
-	}
-	return r.rollout.DeferredQueueBindingEnabled
+	// 灰度已收敛：排队成员延迟绑定是唯一形态（迁移 248 已把存量 queued 的
+	// account_id 置 NULL），不再受配置开关控制。
+	return r != nil
 }
 
 func (r *accountShareModeRepository) reviewRoomSubjectWritesEnabled() bool {
@@ -424,10 +417,8 @@ func (r *accountShareModeRepository) quotaEnforcementEnabled() bool {
 }
 
 func (r *accountShareModeRepository) listingSuspensionStatus() string {
-	if r != nil && (r.rollout.QuotaMode == "" || r.rollout.LifecycleContractEnabled) {
-		return service.AccountShareListingStatusSuspended
-	}
-	return service.AccountShareListingStatusDisabled
+	// 灰度已收敛：lifecycle 合约是唯一形态，暂停一律用 suspended。
+	return service.AccountShareListingStatusSuspended
 }
 
 func (r *accountShareModeRepository) EnsureListingRevisionTerms(
@@ -2164,17 +2155,18 @@ func (r *accountShareModeRepository) resolveMySpendMembership(ctx context.Contex
 }
 
 func (r *accountShareModeRepository) fillMySpendTotals(ctx context.Context, summary *service.AccountShareMySpendSummary, listingID, consumerID, membershipID int64) error {
-	whereSQL, args := accountShareMySpendIntentWhere(listingID, consumerID, membershipID, summary.StartTime, summary.EndTime)
+	whereSQL, args := accountShareMySpendSettlementWhere(listingID, consumerID, membershipID, summary.StartTime, summary.EndTime)
 	query := fmt.Sprintf(`
 		SELECT
-			COUNT(intent.id)::bigint,
-			COALESCE(SUM((intent.usage_payload ->> 'input_tokens')::bigint), 0)::bigint,
-			COALESCE(SUM((intent.usage_payload ->> 'output_tokens')::bigint), 0)::bigint,
-			COALESCE(SUM((intent.usage_payload ->> 'cache_creation_tokens')::bigint), 0)::bigint,
-			COALESCE(SUM((intent.usage_payload ->> 'cache_read_tokens')::bigint), 0)::bigint,
-			COALESCE(SUM((intent.usage_payload ->> 'actual_cost')::numeric), 0)::double precision,
-			MAX(COALESCE(intent.settled_at, intent.updated_at))
-		FROM account_share_request_billing_intents intent
+			COUNT(entry.id)::bigint,
+			COALESCE(SUM(ul.input_tokens), 0)::bigint,
+			COALESCE(SUM(ul.output_tokens), 0)::bigint,
+			COALESCE(SUM(ul.cache_creation_tokens), 0)::bigint,
+			COALESCE(SUM(ul.cache_read_tokens), 0)::bigint,
+			COALESCE(SUM(entry.base_charge), 0)::double precision,
+			MAX(entry.created_at)
+		FROM account_share_mode_settlement_entries entry
+		LEFT JOIN usage_logs ul ON ul.id = entry.usage_log_id
 		WHERE %s
 	`, whereSQL)
 	var lastActivityAt sql.NullTime
@@ -2258,20 +2250,21 @@ func accountShareMySpendLedgerWhere(listingID, consumerID, membershipID int64, s
 }
 
 func (r *accountShareModeRepository) listMySpendModelBreakdown(ctx context.Context, listingID, consumerID, membershipID int64, startTime, endTime time.Time) ([]service.AccountShareMySpendModelBreakdown, error) {
-	whereSQL, args := accountShareMySpendIntentWhere(listingID, consumerID, membershipID, startTime, endTime)
+	whereSQL, args := accountShareMySpendSettlementWhere(listingID, consumerID, membershipID, startTime, endTime)
 	query := fmt.Sprintf(`
 		SELECT
-			COALESCE(NULLIF(intent.usage_payload ->> 'model', ''), 'unknown') AS model,
-			COUNT(intent.id)::bigint,
-			COALESCE(SUM((intent.usage_payload ->> 'input_tokens')::bigint), 0)::bigint,
-			COALESCE(SUM((intent.usage_payload ->> 'output_tokens')::bigint), 0)::bigint,
-			COALESCE(SUM((intent.usage_payload ->> 'cache_creation_tokens')::bigint), 0)::bigint,
-			COALESCE(SUM((intent.usage_payload ->> 'cache_read_tokens')::bigint), 0)::bigint,
-			COALESCE(SUM((intent.usage_payload ->> 'actual_cost')::numeric), 0)::double precision
-		FROM account_share_request_billing_intents intent
+			COALESCE(NULLIF(ul.model, ''), 'unknown') AS model,
+			COUNT(entry.id)::bigint,
+			COALESCE(SUM(ul.input_tokens), 0)::bigint,
+			COALESCE(SUM(ul.output_tokens), 0)::bigint,
+			COALESCE(SUM(ul.cache_creation_tokens), 0)::bigint,
+			COALESCE(SUM(ul.cache_read_tokens), 0)::bigint,
+			COALESCE(SUM(entry.base_charge), 0)::double precision
+		FROM account_share_mode_settlement_entries entry
+		LEFT JOIN usage_logs ul ON ul.id = entry.usage_log_id
 		WHERE %s
-		GROUP BY COALESCE(NULLIF(intent.usage_payload ->> 'model', ''), 'unknown')
-		ORDER BY COALESCE(SUM((intent.usage_payload ->> 'actual_cost')::numeric), 0) DESC, COUNT(intent.id) DESC, model ASC
+		GROUP BY COALESCE(NULLIF(ul.model, ''), 'unknown')
+		ORDER BY COALESCE(SUM(entry.base_charge), 0) DESC, COUNT(entry.id) DESC, model ASC
 	`, whereSQL)
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -2306,23 +2299,22 @@ func (r *accountShareModeRepository) listMySpendModelBreakdown(ctx context.Conte
 	return items, nil
 }
 
-func accountShareMySpendIntentWhere(listingID, consumerID, membershipID int64, startTime, endTime time.Time) (string, []any) {
+func accountShareMySpendSettlementWhere(listingID, consumerID, membershipID int64, startTime, endTime time.Time) (string, []any) {
 	args := []any{listingID, consumerID}
 	where := []string{
-		"intent.listing_id = $1",
-		"intent.consumer_user_id_snapshot = $2",
-		"intent.status = 'settled'",
-		"intent.usage_payload IS NOT NULL",
+		"entry.listing_id = $1",
+		"entry.consumer_user_id = $2",
+		"entry.settlement_type = 'usage_request'",
 	}
 	if membershipID > 0 {
 		args = append(args, membershipID)
-		where = append(where, fmt.Sprintf("intent.membership_id = $%d", len(args)))
+		where = append(where, fmt.Sprintf("entry.membership_id = $%d", len(args)))
 	} else {
 		args = append(args, startTime, endTime)
 		where = append(
 			where,
-			"COALESCE(intent.settled_at, intent.updated_at) >= $3",
-			"COALESCE(intent.settled_at, intent.updated_at) < $4",
+			"entry.created_at >= $3",
+			"entry.created_at < $4",
 		)
 	}
 	return strings.Join(where, " AND "), args
@@ -4151,15 +4143,12 @@ func (r *accountShareModeRepository) BeginMembershipEnd(
 	ctx context.Context,
 	input service.BeginAccountShareMembershipEndInput,
 ) (*service.AccountShareMembership, *service.AccountShareSeatBillingResult, error) {
-	expectedStatus := strings.TrimSpace(input.ExpectedMembershipStatus)
+	// 单阶段结束：按成员当前状态收口，不再要求调用方携带状态快照。
 	operationID := strings.TrimSpace(input.OperationID)
 	if r == nil || r.db == nil ||
 		input.ConsumerUserID <= 0 ||
 		input.MembershipID <= 0 ||
-		operationID == "" ||
-		(expectedStatus != service.AccountShareMembershipStatusActive &&
-			expectedStatus != service.AccountShareMembershipStatusQueued &&
-			expectedStatus != service.AccountShareMembershipStatusEnding) {
+		operationID == "" {
 		return nil, nil, service.ErrAccountShareEndStateConflict
 	}
 
@@ -4197,13 +4186,6 @@ func (r *accountShareModeRepository) BeginMembershipEnd(
 		tx = nil
 		return membership, nil, nil
 	}
-	// updated_at also changes for operational metadata such as queue rank,
-	// dispatch cooldown and request activity. The row is locked here, so bind
-	// the confirmation to the ownership and lifecycle status instead of that
-	// volatile timestamp.
-	if membership.Status != expectedStatus {
-		return nil, nil, service.ErrAccountShareEndStateConflict
-	}
 	if membership.Status != service.AccountShareMembershipStatusActive &&
 		membership.Status != service.AccountShareMembershipStatusQueued {
 		return nil, nil, service.ErrAccountShareEndStateConflict
@@ -4211,18 +4193,13 @@ func (r *accountShareModeRepository) BeginMembershipEnd(
 
 	now := time.Now().UTC()
 	if membership.Status == service.AccountShareMembershipStatusQueued {
-		if (r.deferredQueueBindingEnabled() && membership.AccountID != 0) ||
-			(!r.deferredQueueBindingEnabled() && membership.AccountID == 0) ||
-			membership.PaidUntil != nil ||
-			membership.BilledUntil != nil {
-			return nil, nil, service.ErrAccountShareEndStateConflict
-		}
-		openBindings, pendingIntents, err := lockAccountShareEndRuntimeRowsInTx(ctx, tx, membership.ID)
-		if err != nil {
+		// 排队成员未入座、无费用，直接终结。降级重排队残留的
+		// billed_until/paid_until/绑定形态不构成阻塞（资金在降级时已结清），
+		// 兜底关闭可能残留的 open binding 即可。
+		if _, err := r.closeAccountShareMembershipBindingInTx(
+			ctx, tx, membership.ID, input.ConsumerUserID, "consumer", "membership_ended", now,
+		); err != nil {
 			return nil, nil, err
-		}
-		if openBindings != 0 || pendingIntents != 0 {
-			return nil, nil, service.ErrAccountShareEndStateConflict
 		}
 		resultPayload, err := json.Marshal(map[string]any{
 			"membership_id":     membership.ID,
@@ -4796,38 +4773,8 @@ func lockAccountShareEndRuntimeRowsInTx(
 		return 0, 0, err
 	}
 
-	intentRows, err := tx.QueryContext(ctx, `
-		SELECT id, status
-		FROM account_share_request_billing_intents
-		WHERE membership_id = $1
-		ORDER BY id ASC
-		FOR UPDATE
-	`, membershipID)
-	if err != nil {
-		return 0, 0, err
-	}
-	pendingIntents := 0
-	for intentRows.Next() {
-		var id int64
-		var status string
-		if err := intentRows.Scan(&id, &status); err != nil {
-			_ = intentRows.Close()
-			return 0, 0, err
-		}
-		if status != service.AccountShareBillingIntentStatusSettled &&
-			status != service.AccountShareBillingIntentStatusCancelled &&
-			status != service.AccountShareBillingIntentStatusNeedsAttention {
-			pendingIntents++
-		}
-	}
-	if err := intentRows.Err(); err != nil {
-		_ = intentRows.Close()
-		return 0, 0, err
-	}
-	if err := intentRows.Close(); err != nil {
-		return 0, 0, err
-	}
-	return openBindings, pendingIntents, nil
+	// billing intent 体系已删除：同步结算不存在"未结算 intent"，不再阻塞结束流程
+	return openBindings, 0, nil
 }
 
 func lockAccountShareEndBillingUsersInTx(
@@ -5832,21 +5779,18 @@ func (r *accountShareModeRepository) ProcessUnavailableMemberships(ctx context.C
 		return nil, err
 	}
 	result := &service.AccountShareSeatBillingResult{Processed: len(ids)}
-	result, err = r.processUnavailableMembershipIDs(ctx, ids, result, now)
-	if err != nil {
-		return result, err
+	result, unavailableErr := r.processUnavailableMembershipIDs(ctx, ids, result, now)
+	if result == nil {
+		result = &service.AccountShareSeatBillingResult{Processed: len(ids)}
 	}
-	remaining := limit - len(ids)
-	if remaining <= 0 {
-		return result, nil
+	// 排队过期清扫使用独立预算，且不因不可用成员处理出错而被饿死——
+	// 单条毒数据不再中断整条清理链（这是旧版排空长期卡死的帮凶之一）。
+	endedCount, endedUserIDs, staleErr := r.endStaleQueuedMemberships(ctx, now, limit)
+	if staleErr == nil {
+		result.Processed += endedCount
+		result.EndedConsumerUserIDs = append(result.EndedConsumerUserIDs, endedUserIDs...)
 	}
-	endedCount, endedUserIDs, err := r.endStaleQueuedMemberships(ctx, now, remaining)
-	if err != nil {
-		return result, err
-	}
-	result.Processed += endedCount
-	result.EndedConsumerUserIDs = append(result.EndedConsumerUserIDs, endedUserIDs...)
-	return result, nil
+	return result, errors.Join(unavailableErr, staleErr)
 }
 
 func (r *accountShareModeRepository) ListRecoverableUnavailableMembershipIDs(ctx context.Context, now time.Time, limit int) ([]int64, error) {
@@ -6019,7 +5963,7 @@ func (r *accountShareModeRepository) endStaleQueuedMemberships(ctx context.Conte
 					m.queue_expires_at <= $2
 					OR
 					l.deleted_at IS NOT NULL
-					OR l.status IN ($3, $4)
+					OR l.status IN ($3, $4, 'draining')
 				)
 			ORDER BY COALESCE(m.queue_expires_at, m.joined_at) ASC, m.id ASC
 			LIMIT $5
@@ -9883,7 +9827,7 @@ func endStaleQueuedMembershipsInTx(
 					WHERE l.id = m.listing_id
 						AND (
 							l.deleted_at IS NOT NULL
-							OR l.status IN ($8, $9)
+							OR l.status IN ($8, $9, 'draining')
 						)
 				)
 			)
