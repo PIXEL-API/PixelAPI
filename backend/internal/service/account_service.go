@@ -1215,6 +1215,31 @@ func validateOwnedAccountSource(accountType string, credentials, extra map[strin
 }
 
 func validateOwnedAccountSourceForPlatform(platform, accountType string, credentials, extra map[string]any) error {
+	return validateOwnedAccountSourceScoped(platform, accountType, credentials, extra,
+		ownedAccountSourceScope{Mode: ownedSourceScanFull})
+}
+
+// validateOwnedAccountSourceMutation 用于所有者更新账号：结构性检查（账号类型、
+// Agent Identity 必填项、access_token 存在性）依然针对完整凭证，内容安全扫描只
+// 针对本次请求相对库内快照引入或改动的部分。库里已经存在、这次没被碰过的值不再
+// 参与扫描——那些值不是所有者写进去的，用它们拒绝所有者是错的。
+func validateOwnedAccountSourceMutation(
+	platform, accountType string,
+	storedCredentials, storedExtra map[string]any,
+	credentials, extra map[string]any,
+) error {
+	return validateOwnedAccountSourceScoped(platform, accountType, credentials, extra, ownedAccountSourceScope{
+		Mode:              ownedSourceScanDelta,
+		StoredCredentials: storedCredentials,
+		StoredExtra:       storedExtra,
+	})
+}
+
+func validateOwnedAccountSourceScoped(
+	platform, accountType string,
+	credentials, extra map[string]any,
+	scope ownedAccountSourceScope,
+) error {
 	if !isAllowedOwnedAccountType(accountType) {
 		return ErrOwnedAccountTypeNotAllowed
 	}
@@ -1261,7 +1286,7 @@ func validateOwnedAccountSourceForPlatform(platform, accountType string, credent
 		if err := ValidateOpenAIAgentIdentityPrivateKey(importStringField(credentials, "agent_private_key")); err != nil {
 			return ErrOwnedAgentIdentityCredentialsInvalid.WithMetadata(map[string]string{"field": "agent_private_key"}).WithCause(err)
 		}
-		safetyCredentials := mergeAccountMap(credentials, nil)
+		safetyCredentials := mergeAccountMap(scope.credentialsToScan(credentials), nil)
 		removeImportMapField(safetyCredentials, "auth_mode")
 		removeImportMapField(safetyCredentials, "authMode")
 		if field, ok := findDisallowedOwnedAgentIdentityField(safetyCredentials); ok {
@@ -1274,7 +1299,7 @@ func validateOwnedAccountSourceForPlatform(platform, accountType string, credent
 		if !hasNonEmptyStringField(credentials, "access_token") {
 			return ErrOwnedAccountCredentialsInvalid
 		}
-		if field, ok := findDisallowedOwnedAccountField(credentials); ok {
+		if field, ok := findDisallowedOwnedAccountField(scope.credentialsToScan(credentials)); ok {
 			return ErrOwnedAccountCredentialsNotAllowed.WithMetadata(map[string]string{
 				"section": "credentials",
 				"field":   field,
@@ -1285,7 +1310,7 @@ func validateOwnedAccountSourceForPlatform(platform, accountType string, credent
 	if isAgentIdentity {
 		extraSafetyCheck = findDisallowedOwnedAgentIdentityField
 	}
-	if field, ok := extraSafetyCheck(extra); ok {
+	if field, ok := extraSafetyCheck(scope.extraToScan(extra)); ok {
 		return ErrOwnedAccountCredentialsNotAllowed.WithMetadata(map[string]string{
 			"section": "extra",
 			"field":   field,
@@ -1816,7 +1841,45 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 	return account, nil
 }
 
+// ownedAccountMutationRetryAttempts 是所有者更新遇到乐观锁冲突时的总尝试次数。
+const ownedAccountMutationRetryAttempts = 3
+
+// UpdateOwned 更新账号所有者可以自助修改的字段。
+//
+// 变更守卫用 updated_at 做乐观并发控制，而令牌刷新、用量快照、限流簿记这些后台
+// 写入随时会推进同一行的 updated_at。对于不产生任何前置副作用的请求（切调度、
+// 启停、改名、改优先级/并发），冲突后重读最新状态再试一次是安全的，否则用户在
+// 账号繁忙时会随机看到"操作失败"。带凭证/额外配置/代理/共享变更的请求不重试：
+// 它们在进入事务前就可能已经写过共享位或代理归属。
 func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID int64, req UpdateAccountRequest) (*Account, error) {
+	for attempt := 1; ; attempt++ {
+		account, err := s.updateOwnedOnce(ctx, ownerUserID, accountID, req)
+		if err == nil ||
+			attempt >= ownedAccountMutationRetryAttempts ||
+			!errors.Is(err, ErrAccountMutationStale) ||
+			!ownedAccountUpdateIsRetryable(req) {
+			return account, err
+		}
+		slog.Info("owned_account_update_retry_after_stale",
+			"account_id", accountID,
+			"owner_user_id", ownerUserID,
+			"attempt", attempt,
+		)
+	}
+}
+
+// ownedAccountUpdateIsRetryable 判断该请求在失败后能否原样重放。
+func ownedAccountUpdateIsRetryable(req UpdateAccountRequest) bool {
+	return req.Credentials == nil &&
+		req.Extra == nil &&
+		req.ProxyID == nil &&
+		req.ShareMode == nil &&
+		req.GroupIDs == nil &&
+		req.LoadFactor == nil &&
+		req.AccountLevel == nil
+}
+
+func (s *AccountService) updateOwnedOnce(ctx context.Context, ownerUserID, accountID int64, req UpdateAccountRequest) (*Account, error) {
 	if req.AccountLevel != nil {
 		return nil, ErrOwnedAccountLevelNotAllowed
 	}
@@ -1825,6 +1888,10 @@ func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID
 		return nil, err
 	}
 	before := cloneAccountForNotice(account)
+	// cloneAccountForNotice 只是浅拷贝，两份 Account 共享同一批 map，不能当作
+	// 安全扫描的基线。这里在任何改动发生之前单独复制一份库内快照。
+	storedCredentials := mergeAccountMap(account.Credentials, nil)
+	storedExtra := mergeAccountMap(account.Extra, nil)
 	existingProxyID := account.ProxyID
 	if err := sanitizeOwnedPersonalAccountUpdate(account, &req); err != nil {
 		return nil, err
@@ -1937,7 +2004,11 @@ func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID
 		groupIDs = managedGroupIDs
 		shouldBindGroups = true
 	}
-	if err := validateOwnedAccountSourceForPlatform(account.Platform, account.Type, account.Credentials, account.Extra); err != nil {
+	if err := validateOwnedAccountSourceMutation(
+		account.Platform, account.Type,
+		storedCredentials, storedExtra,
+		account.Credentials, account.Extra,
+	); err != nil {
 		return nil, err
 	}
 	if req.Credentials != nil || req.Extra != nil {
@@ -2609,6 +2680,18 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 	updatedIdentityAccounts := make([]*Account, 0, len(accountIDs))
 	agentIdentityWSInvalidationIDs := make([]int64, 0, len(accountIDs))
 	guardTargets := make([]AccountMutationGuardTarget, 0, len(accountIDs))
+	// 单个账号自身的校验失败只淘汰它自己：批量切调度不该因为选中列表里有一个
+	// 状态异常的账号，就让其余账号一起不生效。归属校验等安全性错误仍然整批中止。
+	applyIDs := make([]int64, 0, len(accountIDs))
+	recordBulkFailure := func(accountID int64, cause error) {
+		result.Failed++
+		result.FailedIDs = append(result.FailedIDs, accountID)
+		result.Results = append(result.Results, BulkUpdateAccountResult{
+			AccountID: accountID,
+			Success:   false,
+			Error:     cause.Error(),
+		})
+	}
 	for _, accountID := range accountIDs {
 		account := accountsByID[accountID]
 		if account == nil || account.OwnerUserID == nil || *account.OwnerUserID != ownerUserID {
@@ -2620,13 +2703,19 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 		nextCredentials, nextExtra = applyOwnedPersonalAccountTemplateToMaps(account.Platform, nextCredentials, nextExtra)
 		nextExtra, err = NormalizeCodexQuotaLimitExtra(account.Platform, account.Type, nextExtra)
 		if err != nil {
-			return nil, err
+			recordBulkFailure(accountID, err)
+			continue
 		}
 		nextAccount := *account
 		nextAccount.Credentials = nextCredentials
 		nextAccount.Extra = nextExtra
-		if err := validateOwnedAccountSourceForPlatform(account.Platform, account.Type, nextCredentials, nextExtra); err != nil {
-			return nil, err
+		if err := validateOwnedAccountSourceMutation(
+			account.Platform, account.Type,
+			account.Credentials, account.Extra,
+			nextCredentials, nextExtra,
+		); err != nil {
+			recordBulkFailure(accountID, err)
+			continue
 		}
 		nextConcurrency := normalizeOwnedPersonalAccountConcurrency(account.Concurrency)
 		if input.Concurrency != nil {
@@ -2641,10 +2730,12 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 			nextAccountLevel = NormalizeAccountLevel(*input.AccountLevel)
 		}
 		if err := ValidateOpenAIPlusConcurrency(account.Platform, nextAccountLevel, nextConcurrency); err != nil {
-			return nil, err
+			recordBulkFailure(accountID, err)
+			continue
 		}
 		if err := ValidateAccountLoadFactor(nextLoadFactor); err != nil {
-			return nil, err
+			recordBulkFailure(accountID, err)
+			continue
 		}
 		nextAccount.Concurrency = nextConcurrency
 		nextAccount.LoadFactor = nextLoadFactor
@@ -2661,6 +2752,14 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 		if shareMode != "" {
 			nextAccount.ShareMode = shareMode
 		}
+		if len(input.Credentials) > 0 || len(input.Extra) > 0 {
+			// 身份冲突是"这批请求本身"的性质：同一份凭据会写到所有选中账号上，
+			// 撞车说明请求写错了，整批拒绝而不是逐个淘汰。
+			if err := s.ensureOwnedAccountNotDuplicate(ctx, ownerUserID, &nextAccount, accountIDs...); err != nil {
+				return nil, err
+			}
+			updatedIdentityAccounts = append(updatedIdentityAccounts, &nextAccount)
+		}
 		if ownedAgentIdentityAuthMaterialChanged(account, &nextAccount) ||
 			ownedAgentIdentityPublicAccessRevoked(account, &nextAccount) {
 			agentIdentityWSInvalidationIDs = append(agentIdentityWSInvalidationIDs, account.ID)
@@ -2671,15 +2770,13 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 			After:             &nextAccount,
 			GroupIDs:          append([]int64(nil), account.GroupIDs...),
 		})
-		if len(input.Credentials) > 0 || len(input.Extra) > 0 {
-			if err := s.ensureOwnedAccountNotDuplicate(ctx, ownerUserID, &nextAccount, accountIDs...); err != nil {
-				return nil, err
-			}
-			updatedIdentityAccounts = append(updatedIdentityAccounts, &nextAccount)
-		}
+		applyIDs = append(applyIDs, accountID)
 	}
 	if err := ensureOwnedAccountBatchNotDuplicate(updatedIdentityAccounts); err != nil {
 		return nil, err
+	}
+	if len(applyIDs) == 0 {
+		return result, nil
 	}
 
 	requiresPerAccountUpdate := input.LoadFactor != nil || shareMode != "" || len(input.Credentials) > 0 || len(input.Extra) > 0
@@ -2690,7 +2787,7 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 			Intent:      AccountMutationIntentOwner,
 		}
 		if err := s.withAccountMutationGuard(ctx, guardRequest, func(txCtx context.Context) error {
-			for _, accountID := range accountIDs {
+			for _, accountID := range applyIDs {
 				account := accountsByID[accountID]
 				updateReq := UpdateAccountRequest{
 					Concurrency:  input.Concurrency,
@@ -2732,13 +2829,13 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 				s.agentIdentityWSInvalidator.InvalidateAgentIdentityWSConnections(accountID)
 			}
 		}
-		for _, accountID := range accountIDs {
+		for _, accountID := range applyIDs {
 			entry := BulkUpdateAccountResult{AccountID: accountID, Success: true}
 			result.Success++
 			result.SuccessIDs = append(result.SuccessIDs, accountID)
 			result.Results = append(result.Results, entry)
 		}
-		s.notifyBulkOwnedAccountsChanged(ctx, accountsByID, accountIDs)
+		s.notifyBulkOwnedAccountsChanged(ctx, accountsByID, applyIDs)
 		return result, nil
 	}
 
@@ -2763,24 +2860,24 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 		ActorUserID: ownerUserID,
 		Intent:      AccountMutationIntentOwner,
 	}, func(txCtx context.Context) error {
-		updated, updateErr := s.accountRepo.BulkUpdate(txCtx, accountIDs, repoUpdates)
+		updated, updateErr := s.accountRepo.BulkUpdate(txCtx, applyIDs, repoUpdates)
 		if updateErr != nil {
 			return fmt.Errorf("bulk update owned accounts: %w", updateErr)
 		}
-		if updated != int64(len(accountIDs)) {
+		if updated != int64(len(applyIDs)) {
 			return ErrAccountNotFound
 		}
 		return nil
 	}); err != nil {
 		return nil, err
 	}
-	for _, accountID := range accountIDs {
+	for _, accountID := range applyIDs {
 		entry := BulkUpdateAccountResult{AccountID: accountID, Success: true}
 		result.Success++
 		result.SuccessIDs = append(result.SuccessIDs, accountID)
 		result.Results = append(result.Results, entry)
 	}
-	s.notifyBulkOwnedAccountsChanged(ctx, accountsByID, accountIDs)
+	s.notifyBulkOwnedAccountsChanged(ctx, accountsByID, applyIDs)
 
 	return result, nil
 }

@@ -262,6 +262,7 @@ func (api *OAuthRefreshAPI) refresh(
 	// 5. 设置版本号 + 更新 DB
 	if newCredentials != nil {
 		newCredentials["_token_version"] = time.Now().UnixMilli()
+		newCredentials = sanitizeOwnedAccountCredentialWrite(freshAccount, newCredentials)
 		if freshAccount.IsGrokOAuth() {
 			conditionalRepo, ok := api.accountRepo.(GrokOAuthRefreshSuccessRepository)
 			if !ok {
