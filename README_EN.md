@@ -99,9 +99,39 @@ by room or group, and the platform handles routing, metering, revenue split and 
 
 ## Deployment
 
-> **Note**: `deploy/install.sh` and `deploy/docker-compose*.yml` still point at **upstream artifacts**
-> (`Wei-Shaw/sub2api` releases, the `weishaw/sub2api` image). Using them installs upstream Sub2API, not
-> this fork. Build from source for now.
+### ⚠️ No Docker Image or Prebuilt Binary Is Published
+
+**Read this first, or you will end up installing a different project.**
+
+This repository publishes **no Docker image** — there is no PixelAPI image on Docker Hub — and its
+Releases contain **source code only, with no prebuilt binaries attached**.
+
+The files under `deploy/` are inherited from upstream, and every address hardcoded in them points at
+**upstream Sub2API**:
+
+| File | What it references | What you actually get |
+| --- | --- | --- |
+| `deploy/docker-compose.yml`<br>`deploy/docker-compose.local.yml` | `image: weishaw/sub2api:latest` | **Upstream Sub2API's official image**, not this project |
+| `deploy/install.sh` | `GITHUB_REPO="Wei-Shaw/sub2api"` | A binary from **upstream Releases**, not this project |
+
+In other words, running `docker compose up -d` or that one-liner install script gives you upstream
+Sub2API — with none of this fork's account marketplace, shared-revenue settlement or Grok support.
+
+**Building [from source](#build-from-source) is the only supported path.**
+
+If you do need containerized deployment, build the image yourself. The `Dockerfile` at the repository
+root is a complete multi-stage build (frontend plus a Go binary with the frontend embedded):
+
+```bash
+# Build your own image
+docker build -t pixelapi:local .
+
+# Then replace the image in the compose files with your own tag
+#   image: weishaw/sub2api:latest   ->   image: pixelapi:local
+```
+
+Likewise, to reuse `deploy/install.sh` you must repoint `GITHUB_REPO` and its download logic at your
+own release source.
 
 ### Build From Source
 

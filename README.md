@@ -95,9 +95,37 @@ PixelAPI 把 AI 订阅账号（Claude、Codex/OpenAI、Gemini、Antigravity、Gr
 
 ## 部署
 
-> **注意**：`deploy/install.sh` 与 `deploy/docker-compose*.yml` 中的下载地址和镜像
-> （`Wei-Shaw/sub2api` releases、`weishaw/sub2api` 镜像）指向的是**上游发布物**，
-> 用它们装到的是上游 Sub2API，不是本分支。本分支目前请从源码构建。
+### ⚠️ 本项目不提供 Docker 镜像和预编译二进制
+
+**这一点请务必先看清楚，否则你装到的会是另一个项目。**
+
+本仓库**没有**发布任何 Docker 镜像，Docker Hub 上不存在 PixelAPI 的镜像；本仓库的 Releases
+也只提供源码，**不附带预编译二进制**。
+
+而 `deploy/` 目录下的部署文件是从上游继承下来的，里面写死的地址**全部指向上游 Sub2API**：
+
+| 文件 | 里面写的东西 | 实际会装到什么 |
+| --- | --- | --- |
+| `deploy/docker-compose.yml`<br>`deploy/docker-compose.local.yml` | `image: weishaw/sub2api:latest` | **上游 Sub2API 的官方镜像**，不是本项目 |
+| `deploy/install.sh` | `GITHUB_REPO="Wei-Shaw/sub2api"` | 从**上游 Releases** 下载的二进制，不是本项目 |
+
+也就是说，直接 `docker compose up -d` 或者跑那条一键安装脚本，起来的是上游 Sub2API，
+本分支的账号广场、共享结算、Grok 接入等功能一个都不会有。
+
+**唯一受支持的方式是[从源码构建](#从源码构建)。**
+
+如果你确实需要容器化部署，得自己构建镜像——仓库根目录的 `Dockerfile` 是完整的多阶段构建
+（前端 + 内嵌前端的 Go 二进制），可以直接用：
+
+```bash
+# 自行构建镜像
+docker build -t pixelapi:local .
+
+# 然后把 compose 文件里的 image 换成自己构建的 tag
+#   image: weishaw/sub2api:latest   ->   image: pixelapi:local
+```
+
+同理，`deploy/install.sh` 若要复用，需要自行把 `GITHUB_REPO` 和产物下载逻辑改成你自己的发布源。
 
 ### 从源码构建
 
