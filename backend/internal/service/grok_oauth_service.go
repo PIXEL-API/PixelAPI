@@ -257,7 +257,11 @@ func (s *GrokOAuthService) BuildAccountCredentials(tokenInfo *GrokTokenInfo) map
 	if tokenInfo.EntitlementStatus != "" {
 		creds["entitlement_status"] = tokenInfo.EntitlementStatus
 	}
-	creds["base_url"] = xai.DefaultCLIBaseURL
+	// 这里刻意不写入 base_url。出站地址由 Account.GetGrokBaseURL() 在请求时解析，
+	// 凭据缺失时它本来就回退到 xai.DefaultCLIBaseURL，把常量固化进 credentials 没有
+	// 任何收益，却会让自有账号的凭证安全扫描把"系统写的默认值"当成用户配置的自定义
+	// 上游而拒绝掉——令牌刷新会走同一个构造器，于是账号在首次刷新后被永久锁死。
+	// 管理员侧需要在编辑器里看到并覆盖出站地址，默认值由 admin 侧显式补齐。
 	return creds
 }
 

@@ -242,7 +242,7 @@ func (h *GrokOAuthHandler) CreateAccountFromOAuth(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	credentials := h.grokOAuthService.BuildAccountCredentials(tokenInfo)
+	credentials := withGrokAdminDefaultBaseURL(h.grokOAuthService.BuildAccountCredentials(tokenInfo))
 
 	name := strings.TrimSpace(req.Name)
 	if name == "" && tokenInfo.Email != "" {
@@ -425,6 +425,20 @@ func grokSSOImportCredentials(built map[string]any, reqCredentials map[string]an
 	credentials := service.MergeCredentials(cloneGrokSSOMap(reqCredentials), built)
 	if reqBaseURL, ok := reqCredentials["base_url"].(string); ok && strings.TrimSpace(reqBaseURL) != "" {
 		credentials["base_url"] = strings.TrimSpace(reqBaseURL)
+	}
+	return withGrokAdminDefaultBaseURL(credentials)
+}
+
+// withGrokAdminDefaultBaseURL 为管理员创建的 Grok 账号补齐 CLI 默认出站地址，
+// 使管理端编辑器仍然显示并可覆盖它。用户自有账号刻意不写这个字段：出站地址由
+// Account.GetGrokBaseURL() 在请求时回退到同一个常量，而写进 credentials 会被
+// 自有账号的凭证安全扫描判定为用户私自指定上游。
+func withGrokAdminDefaultBaseURL(credentials map[string]any) map[string]any {
+	if credentials == nil {
+		return nil
+	}
+	if value, ok := credentials["base_url"].(string); !ok || strings.TrimSpace(value) == "" {
+		credentials["base_url"] = xai.DefaultCLIBaseURL
 	}
 	return credentials
 }
