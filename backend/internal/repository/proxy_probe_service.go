@@ -3,10 +3,13 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -48,11 +51,15 @@ const (
 // 某些 AI API 专用代理只允许访问特定域名，因此需要多个备选
 var probeURLs = []struct {
 	url    string
-	parser string // "ip-api" or "httpbin"
+	name   string // 聚合错误信息里的短名，避免把完整 URL 拼进提示
+	parser string // "ip-api" or "ipify"
 }{
-	{"http://ip-api.com/json/?lang=zh-CN", "ip-api"},
-	{"http://httpbin.org/ip", "httpbin"},
+	{"http://ip-api.com/json/?lang=zh-CN", "ip-api", "ip-api"},
+	{"http://api64.ipify.org?format=json", "ipify", "ipify"},
 }
+
+// maxProbeReasonLen 单个探测点失败原因在聚合信息里的最大长度（按 rune 计）
+const maxProbeReasonLen = 60
 
 type proxyProbeService struct {
 	insecureSkipVerify bool
@@ -73,16 +80,62 @@ func (s *proxyProbeService) ProbeProxy(ctx context.Context, proxyURL string) (*s
 		return nil, 0, fmt.Errorf("failed to create proxy client: %w", err)
 	}
 
-	var lastErr error
+	reasons := make([]string, 0, len(probeURLs))
+	errs := make([]error, 0, len(probeURLs))
 	for _, probe := range probeURLs {
 		exitInfo, latencyMs, err := s.probeWithURL(ctx, client, probe.url, probe.parser)
 		if err == nil {
 			return exitInfo, latencyMs, nil
 		}
-		lastErr = err
+		reasons = append(reasons, probe.name+": "+summarizeProbeError(err))
+		errs = append(errs, fmt.Errorf("%s: %w", probe.name, err))
 	}
 
-	return nil, 0, fmt.Errorf("all probe URLs failed, last error: %w", lastErr)
+	return nil, 0, &probeFailureError{
+		summary: fmt.Sprintf("all probe URLs failed (%s)", strings.Join(reasons, "; ")),
+		errs:    errs,
+	}
+}
+
+// probeFailureError 对外只暴露一条精简的聚合提示，完整的逐个探测错误保留在
+// Unwrap 链上供 errors.Is/As 使用，避免把每个探测点的原始报文都堆到前端弹窗里。
+type probeFailureError struct {
+	summary string
+	errs    []error
+}
+
+func (e *probeFailureError) Error() string { return e.summary }
+
+func (e *probeFailureError) Unwrap() []error { return e.errs }
+
+// summarizeProbeError 把单个探测点的失败原因压成一句短语：
+// 常见网络故障归一成固定词，其余去掉 net/http 附带的完整 URL 后截断。
+func summarizeProbeError(err error) string {
+	if err == nil {
+		return "unknown"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "canceled"
+	}
+	var netErr net.Error
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
+		return "timeout"
+	}
+
+	msg := err.Error()
+	// url.Error 会把完整探测地址拼进消息（如 `Get "http://ip-api.com/...": xxx`），剥掉它
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		msg = strings.Replace(msg, fmt.Sprintf("%s %q: ", urlErr.Op, urlErr.URL), "", 1)
+	}
+	msg = strings.Join(strings.Fields(msg), " ")
+	if msg == "" {
+		return "unknown"
+	}
+	if runes := []rune(msg); len(runes) > maxProbeReasonLen {
+		msg = strings.TrimSpace(string(runes[:maxProbeReasonLen])) + "…"
+	}
+	return msg
 }
 
 func (s *proxyProbeService) probeWithURL(ctx context.Context, client *http.Client, url string, parser string) (*service.ProxyExitInfo, int64, error) {
@@ -119,8 +172,8 @@ func (s *proxyProbeService) probeWithURL(ctx context.Context, client *http.Clien
 	switch parser {
 	case "ip-api":
 		return s.parseIPAPI(body, latencyMs)
-	case "httpbin":
-		return s.parseHTTPBin(body, latencyMs)
+	case "ipify":
+		return s.parseIPify(body, latencyMs)
 	default:
 		return nil, latencyMs, fmt.Errorf("unknown parser: %s", parser)
 	}
@@ -165,18 +218,17 @@ func (s *proxyProbeService) parseIPAPI(body []byte, latencyMs int64) (*service.P
 	}, latencyMs, nil
 }
 
-func (s *proxyProbeService) parseHTTPBin(body []byte, latencyMs int64) (*service.ProxyExitInfo, int64, error) {
-	// httpbin.org/ip 返回格式: {"origin": "1.2.3.4"}
+func (s *proxyProbeService) parseIPify(body []byte, latencyMs int64) (*service.ProxyExitInfo, int64, error) {
 	var result struct {
-		Origin string `json:"origin"`
+		IP string `json:"ip"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, latencyMs, fmt.Errorf("failed to parse httpbin response: %w", err)
+		return nil, latencyMs, fmt.Errorf("failed to parse ipify response: %w", err)
 	}
-	if result.Origin == "" {
-		return nil, latencyMs, fmt.Errorf("httpbin: no IP found in response")
+	if result.IP == "" {
+		return nil, latencyMs, fmt.Errorf("ipify: no IP found in response")
 	}
 	return &service.ProxyExitInfo{
-		IP: result.Origin,
+		IP: result.IP,
 	}, latencyMs, nil
 }
