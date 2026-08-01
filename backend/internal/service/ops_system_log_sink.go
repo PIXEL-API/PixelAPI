@@ -29,6 +29,10 @@ type OpsSystemLogSink struct {
 	opsRepo OpsRepository
 	host    string
 
+	// indexHTTPAccess 为 false（默认）时，info 级 http.access 事件不入库；
+	// warn 及以上级别不受影响。见 ops.system_log_index_http_access。
+	indexHTTPAccess bool
+
 	queue chan *logger.LogEvent
 
 	batchSize     int
@@ -121,7 +125,7 @@ func (s *OpsSystemLogSink) shouldIndex(event *logger.LogEvent) bool {
 		}
 	}
 	if strings.Contains(component, "http.access") {
-		return true
+		return s.indexHTTPAccess
 	}
 	if strings.Contains(component, "audit") {
 		return true

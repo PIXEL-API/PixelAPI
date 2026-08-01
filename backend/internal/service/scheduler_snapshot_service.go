@@ -423,7 +423,13 @@ func (s *SchedulerSnapshotService) GetAccount(ctx context.Context, accountID int
 	if s.cache != nil {
 		account, err := s.cache.GetAccount(ctx, accountID)
 		if err != nil {
-			logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] account cache read failed: id=%d err=%v", accountID, err)
+			if errors.Is(err, context.Canceled) {
+				// 客户端断连导致的取消是常态，不值得进 ops 错误索引
+				//（曾以 error 级别写入每小时上万条）。
+				slog.Debug("[Scheduler] account cache read canceled", "account_id", accountID)
+			} else {
+				logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] account cache read failed: id=%d err=%v", accountID, err)
+			}
 		} else if account != nil {
 			return account, nil
 		}

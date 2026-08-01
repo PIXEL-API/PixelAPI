@@ -1459,6 +1459,11 @@ type OpsConfig struct {
 	// UsePreaggregatedTables prefers ops_metrics_hourly/daily for long-window dashboard queries.
 	UsePreaggregatedTables bool `mapstructure:"use_preaggregated_tables"`
 
+	// SystemLogIndexHTTPAccess 控制 info 级 http.access 访问日志是否写入 ops_system_logs。
+	// warn 及以上级别始终入库。访问日志占系统日志行数八成以上且 journald 已有一份，
+	// 默认关闭以控制 ops_system_logs 体量（生产实测约 2.7GB/天）。
+	SystemLogIndexHTTPAccess bool `mapstructure:"system_log_index_http_access"`
+
 	// Cleanup controls periodic deletion of old ops data to prevent unbounded growth.
 	Cleanup OpsCleanupConfig `mapstructure:"cleanup"`
 
@@ -2118,6 +2123,7 @@ func setDefaults() {
 	// Ops (vNext)
 	viper.SetDefault("ops.enabled", true)
 	viper.SetDefault("ops.use_preaggregated_tables", true)
+	viper.SetDefault("ops.system_log_index_http_access", false)
 	viper.SetDefault("ops.cleanup.enabled", true)
 	viper.SetDefault("ops.cleanup.schedule", "0 4 * * *")
 	viper.SetDefault("ops.cleanup.archive_expire_days", 30)

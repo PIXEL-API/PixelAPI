@@ -424,8 +424,11 @@ func ProvideOpsCleanupService(
 	return svc
 }
 
-func ProvideOpsSystemLogSink(opsRepo OpsRepository) *OpsSystemLogSink {
+func ProvideOpsSystemLogSink(opsRepo OpsRepository, cfg *config.Config) *OpsSystemLogSink {
 	sink := NewOpsSystemLogSink(opsRepo)
+	if cfg != nil {
+		sink.indexHTTPAccess = cfg.Ops.SystemLogIndexHTTPAccess
+	}
 	sink.Start()
 	logger.SetSink(sink)
 	return sink

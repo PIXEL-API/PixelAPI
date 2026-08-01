@@ -20,7 +20,10 @@ type opsDataRetentionSettingsApplier interface {
 }
 
 const (
-	opsMaxStoredRequestBodyBytes = 256 * 1024
+	// opsMaxStoredRequestBodyBytes 限制错误日志里持久化的请求体大小。
+	// 生产实测该列 p50≈1.3KB / p95≈124KB、平均 20KB，是 ops_error_logs TOAST
+	// 膨胀（百 GB 级）的主因；16KB 已覆盖绝大多数请求且保留对话结构裁剪。
+	opsMaxStoredRequestBodyBytes = 16 * 1024
 	opsMaxStoredErrorBodyBytes   = 20 * 1024
 )
 
