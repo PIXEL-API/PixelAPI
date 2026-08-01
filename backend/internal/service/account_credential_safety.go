@@ -166,52 +166,59 @@ func isAllowedOAuthMetadataURLField(key string) bool {
 	}
 }
 
+// forbiddenCredentialTextNeedles / forbiddenCredentialTextPrefixes 同时驱动
+// 检测（containsForbiddenCredentialText）与清洗（redactCredentialUnsafeText）。
+// 两者必须共用同一份清单，否则服务端自己写进 extra 的诊断文本会被自己的扫描拒绝。
+var forbiddenCredentialTextNeedles = []string{
+	"authorization:",
+	"authorization=",
+	"bearer ",
+	"api_key",
+	"apikey",
+	"x-api-key",
+	"x_api_key",
+	"base_url",
+	"baseurl",
+	"api_base_url",
+	"api_baseurl",
+	"custom_base_url",
+	"custom_baseurl",
+	"upstream_url",
+	"upstreamurl",
+	"upstream_base_url",
+	"upstream_baseurl",
+	"upstream_endpoint",
+	"upstreamendpoint",
+	"proxy_url",
+	"proxyurl",
+	"cookie:",
+	"cookie=",
+	"cookies:",
+	"cookies=",
+	"set-cookie",
+	"auth_mode",
+	"authmode",
+	"aws_access_key_id",
+	"awsaccesskeyid",
+	"aws_secret_access_key",
+	"awssecretaccesskey",
+	"aws_session_token",
+	"awssessiontoken",
+	"access_key_id",
+	"accesskeyid",
+	"secret_access_key",
+	"secretaccesskey",
+}
+
+var forbiddenCredentialTextPrefixes = []string{"endpoint", "host", "url"}
+
 func containsForbiddenCredentialText(lower string) bool {
-	for _, needle := range []string{
-		"authorization:",
-		"authorization=",
-		"bearer ",
-		"api_key",
-		"apikey",
-		"x-api-key",
-		"x_api_key",
-		"base_url",
-		"baseurl",
-		"api_base_url",
-		"api_baseurl",
-		"custom_base_url",
-		"custom_baseurl",
-		"upstream_url",
-		"upstreamurl",
-		"upstream_base_url",
-		"upstream_baseurl",
-		"upstream_endpoint",
-		"upstreamendpoint",
-		"proxy_url",
-		"proxyurl",
-		"cookie:",
-		"cookie=",
-		"cookies:",
-		"cookies=",
-		"set-cookie",
-		"auth_mode",
-		"authmode",
-		"aws_access_key_id",
-		"awsaccesskeyid",
-		"aws_secret_access_key",
-		"awssecretaccesskey",
-		"aws_session_token",
-		"awssessiontoken",
-		"access_key_id",
-		"accesskeyid",
-		"secret_access_key",
-		"secretaccesskey",
-	} {
+	for _, needle := range forbiddenCredentialTextNeedles {
 		if strings.Contains(lower, needle) {
 			return true
 		}
 	}
-	for _, prefix := range []string{"endpoint", "host", "url"} {
+	for _, prefix := range forbiddenCredentialTextPrefixes {
 		if strings.Contains(lower, prefix+"=") || strings.Contains(lower, prefix+":") {
 			return true
 		}
