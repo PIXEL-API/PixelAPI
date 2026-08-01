@@ -860,7 +860,7 @@ async function handleExportData(): Promise<void> {
     appStore.showSuccess(t('userAccounts.exportSuccess'))
   } catch (error: any) {
     console.error('Failed to export user accounts:', error)
-    appStore.showError(error?.response?.data?.message || error?.message || t('userAccounts.exportFailed'))
+    appStore.showError(extractApiErrorMessage(error, t('userAccounts.exportFailed')))
   } finally {
     exportingData.value = false
     showExportDataDialog.value = false
@@ -1486,7 +1486,7 @@ async function handleRefreshToken(account: Account): Promise<void> {
     }
   } catch (error: any) {
     console.error('Failed to refresh user account token:', error)
-    appStore.showError(error?.response?.data?.message || t('admin.accounts.oauth.authFailed'))
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.oauth.authFailed')))
   }
 }
 
@@ -1497,7 +1497,7 @@ async function handleSetPrivacy(account: Account): Promise<void> {
     appStore.showSuccess(t('common.success'))
   } catch (error: any) {
     console.error('Failed to set user account privacy:', error)
-    appStore.showError(error?.response?.data?.message || t('admin.accounts.privacyFailed'))
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.privacyFailed')))
   }
 }
 
@@ -1515,7 +1515,7 @@ async function toggleAccountStatus(account: Account): Promise<void> {
     )
   } catch (error) {
     console.error('Failed to toggle user account status:', error)
-    appStore.showError(t('userAccounts.failedToUpdateStatus'))
+    appStore.showError(extractApiErrorMessage(error, t('userAccounts.failedToUpdateStatus')))
   } finally {
     togglingStatusId.value = null
   }
@@ -1529,7 +1529,7 @@ async function toggleSchedulable(account: Account): Promise<void> {
     await refreshTodayStatsBatch()
   } catch (error) {
     console.error('Failed to toggle user account schedulable:', error)
-    appStore.showError(t('admin.accounts.failedToToggleSchedulable'))
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.failedToToggleSchedulable')))
   } finally {
     togglingSchedulableId.value = null
   }
@@ -1569,7 +1569,7 @@ async function bulkToggleSchedulable(schedulable: boolean): Promise<void> {
     await refreshTodayStatsBatch()
   } catch (error: any) {
     console.error('Failed to bulk toggle user account schedulable:', error)
-    appStore.showError(error?.response?.data?.message || t('common.error'))
+    appStore.showError(extractApiErrorMessage(error, t('common.error')))
   }
 }
 
@@ -1592,7 +1592,7 @@ async function bulkRefreshTokens(): Promise<void> {
     })
   } catch (error: any) {
     console.error('Failed to create user account refresh task:', error)
-    appStore.showError(error?.response?.data?.message || error?.message || t('common.error'))
+    appStore.showError(extractApiErrorMessage(error, t('common.error')))
   }
 }
 
@@ -1620,7 +1620,7 @@ async function bulkTestConnections(): Promise<void> {
   } catch (error: any) {
     console.error('Failed to create user account connection test task:', error)
     appStore.showError(
-      error?.response?.data?.message || error?.message || t('userAccounts.bulkTestSubmitFailed')
+      extractApiErrorMessage(error, t('userAccounts.bulkTestSubmitFailed'))
     )
   } finally {
     submittingBatchTest.value = false
@@ -1654,7 +1654,7 @@ async function pollUserAccountBatchTask(
   } catch (error: any) {
     if (isUnmounted) return
     console.error('Failed to poll user account batch task:', error)
-    appStore.showError(error?.response?.data?.message || error?.message || t('common.error'))
+    appStore.showError(extractApiErrorMessage(error, t('common.error')))
   } finally {
     activeBatchTaskPolls.delete(taskId)
   }
@@ -1679,7 +1679,7 @@ async function bulkRevalidatePublicShare(): Promise<void> {
     })
   } catch (error: any) {
     console.error('Failed to create public share revalidation task:', error)
-    appStore.showError(error?.response?.data?.message || error?.message || t('userAccounts.shareValidationFailedToRun'))
+    appStore.showError(extractApiErrorMessage(error, t('userAccounts.shareValidationFailedToRun')))
   }
 }
 
@@ -1696,7 +1696,7 @@ async function revalidatePublicShare(account: Account): Promise<void> {
     )
   } catch (error: any) {
     console.error('Failed to revalidate public share account:', error)
-    appStore.showError(error?.response?.data?.message || t('userAccounts.shareValidationFailedToRun'))
+    appStore.showError(extractApiErrorMessage(error, t('userAccounts.shareValidationFailedToRun')))
   } finally {
     revalidatingShareId.value = null
   }
@@ -1724,7 +1724,7 @@ async function deleteAccount(): Promise<void> {
       return
     }
     console.error('Failed to delete user account:', error)
-    appStore.showError(error?.response?.data?.message || t('userAccounts.failedToDelete'))
+    appStore.showError(extractApiErrorMessage(error, t('userAccounts.failedToDelete')))
   }
 }
 
@@ -1764,7 +1764,10 @@ async function confirmRoomDetachDelete(): Promise<void> {
     } else {
       console.error('Failed to force delete user account:', error)
       appStore.showError(
-        error?.response?.data?.message || (isBulk ? t('admin.accounts.bulkDeleteFailed') : t('userAccounts.failedToDelete'))
+        extractApiErrorMessage(
+          error,
+          isBulk ? t('admin.accounts.bulkDeleteFailed') : t('userAccounts.failedToDelete')
+        )
       )
     }
   } finally {
@@ -1814,7 +1817,7 @@ async function bulkDeleteAccounts(): Promise<void> {
       return
     }
     console.error('Failed to bulk delete user accounts:', error)
-    appStore.showError(error?.response?.data?.message || t('admin.accounts.bulkDeleteFailed'))
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.bulkDeleteFailed')))
   }
 }
 
