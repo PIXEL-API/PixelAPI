@@ -72,7 +72,7 @@ func buildOpenAICompactProbeExtraUpdates(resp *http.Response, body []byte, probe
 
 	switch {
 	case probeErr != nil:
-		updates["openai_compact_last_error"] = truncateString(sanitizeUpstreamErrorMessage(probeErr.Error()), 2048)
+		updates["openai_compact_last_error"] = truncateString(redactCredentialUnsafeText(sanitizeUpstreamErrorMessage(probeErr.Error())), 2048)
 	case resp == nil:
 		updates["openai_compact_last_error"] = "compact probe failed"
 	default:
@@ -83,7 +83,7 @@ func buildOpenAICompactProbeExtraUpdates(resp *http.Response, body []byte, probe
 		if errMsg == "" && (resp.StatusCode < 200 || resp.StatusCode >= 300) {
 			errMsg = "HTTP " + strconv.Itoa(resp.StatusCode)
 		}
-		errMsg = truncateString(sanitizeUpstreamErrorMessage(errMsg), 2048)
+		errMsg = truncateString(redactCredentialUnsafeText(sanitizeUpstreamErrorMessage(errMsg)), 2048)
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			updates["openai_compact_supported"] = true
 			updates["openai_compact_last_error"] = ""

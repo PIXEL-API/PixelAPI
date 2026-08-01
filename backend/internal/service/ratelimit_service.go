@@ -405,7 +405,24 @@ func modelRateLimitKeyForUpstreamModelNotFound(ctx context.Context, account *Acc
 			modelKey = resolved
 		}
 	}
+	if !isSafeModelRateLimitScope(modelKey) {
+		// 模型名来自客户端请求体，会原样变成 extra.model_rate_limits 下的 JSON 键。
+		// 名字如果落在凭证安全扫描的禁用键上（base-url / api-key / cookie ...），
+		// 这条限流记录就会把账号变成一个所有者再也改不动的对象。宁可不记这次冷却。
+		slog.Warn("upstream_model_not_found_unsafe_model_key_skipped",
+			"account_id", account.ID, "model", modelKey)
+		return ""
+	}
 	return modelKey
+}
+
+// isSafeModelRateLimitScope 拒绝会与凭证安全扫描的禁用键名冲突的模型名。
+func isSafeModelRateLimitScope(modelKey string) bool {
+	normalized := normalizeCredentialSafetyKey(modelKey)
+	if normalized == "" {
+		return false
+	}
+	return !isDisallowedCredentialSafetyFieldKey(normalized, credentialSafetyOptions{})
 }
 
 func (s *RateLimitService) handleOpenAITransientCapacityError(ctx context.Context, account *Account, statusCode int, matchedKeyword string, responseBody []byte) bool {
