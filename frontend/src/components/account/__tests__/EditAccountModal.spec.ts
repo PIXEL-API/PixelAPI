@@ -687,8 +687,6 @@ describe('EditAccountModal', () => {
       { id: 7, name: 'p', protocol: 'http', host: 'proxy.example.com', port: 8080, status: 'active', max_accounts: 0 }
     ]
 
-    // 两边都显式给 allowProxy：这个 prop 没有声明默认值，不传时 Vue 会把它转成 false，
-    // 选择器根本不会渲染（与 hide-endpoint 无关的另一个问题）。
     const userWrapper = mountModal(account, { accountScope: 'user', allowProxy: true, proxies })
     expect(
       userWrapper.get('[data-testid="proxy-selector"]').attributes('data-hide-endpoint')
@@ -698,6 +696,21 @@ describe('EditAccountModal', () => {
     expect(
       adminWrapper.get('[data-testid="proxy-selector"]').attributes('data-hide-endpoint')
     ).toBe('false')
+  })
+
+  it('管理端不传 allowProxy / allowBillingRate 时仍应显示代理与倍率字段', async () => {
+    const account = buildAccount()
+    account.proxy_id = 7
+    const proxies = [
+      { id: 7, name: 'p', protocol: 'http', host: 'proxy.example.com', port: 8080, status: 'active', max_accounts: 0 }
+    ]
+
+    // 与 views/admin/AccountsView.vue 的调用方式一致：只给 show/account/proxies/groups。
+    // 修复前这两个可选 boolean prop 会被 Vue 转成 false，两个字段一起消失。
+    const wrapper = mountModal(account, { proxies })
+
+    expect(wrapper.find('[data-testid="proxy-selector"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="rate-multiplier"]').exists()).toBe(true)
   })
 
   it('未挂房间的账号仍可自由切换模式', async () => {

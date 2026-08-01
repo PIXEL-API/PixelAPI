@@ -1471,7 +1471,14 @@
         </div>
         <div v-if="canManageBillingRate">
           <label class="input-label">{{ t('admin.accounts.billingRateMultiplier') }}</label>
-          <input v-model.number="form.rate_multiplier" type="number" min="0" step="0.001" class="input" />
+          <input
+            v-model.number="form.rate_multiplier"
+            type="number"
+            min="0"
+            step="0.001"
+            class="input"
+            data-testid="rate-multiplier"
+          />
           <p class="input-hint">{{ t('admin.accounts.billingRateMultiplierHint') }}</p>
         </div>
       </div>
@@ -2451,7 +2458,17 @@ interface Props {
   ownerUserId?: number
 }
 
-const props = defineProps<Props>()
+// 必须显式给 allowProxy / allowBillingRate 默认值：它们是可选 boolean，父组件不传时
+// Vue 会把值转成 false 而不是 undefined，`props.allowProxy !== false` 于是恒为 false，
+// 管理端（views/admin/AccountsView.vue 不传这两个 prop）的代理选择框和倍率字段会整个消失。
+// CreateAccountModal 一直用 withDefaults 给了 true，这边是漏了。
+//
+// accountScope 不在这里兜底：下面 2463 行的 `props.accountScope ?? 'admin'` 已经处理。
+// hideProxyEndpoint 也不给默认值：它靠 `=== true || isUserScope` 判断，不依赖 undefined。
+const props = withDefaults(defineProps<Props>(), {
+  allowProxy: true,
+  allowBillingRate: true
+})
 const emit = defineEmits<{
   close: []
   updated: [account: Account]
@@ -2489,8 +2506,8 @@ const canManageProxy = computed(() =>
 )
 const canManageBillingRate = computed(() => !isUserScope.value && props.allowBillingRate !== false)
 // 平台代理的 host:port 属于运营信息，用户侧默认隐藏；管理端保持可见。
-// 注意不能写成 `props.hideProxyEndpoint ?? isUserScope.value`：这是个未声明默认值的
-// boolean prop，父组件不传时 Vue 会把它转成 false 而不是 undefined，?? 永远不会兜底。
+// 注意不能写成 `props.hideProxyEndpoint ?? isUserScope.value`：上面的 withDefaults 刻意
+// 没给它默认值，父组件不传时 Vue 会把它转成 false 而不是 undefined，?? 永远不会兜底。
 const hideProxyEndpoint = computed(() => props.hideProxyEndpoint === true || isUserScope.value)
 const placementPlatformModeDisabledReason = computed(() => {
   if (!props.account) return ''
