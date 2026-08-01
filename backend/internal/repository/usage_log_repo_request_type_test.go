@@ -512,6 +512,23 @@ func TestUsageLogRepositoryGetModelStatsWithFiltersRequestTypePriority(t *testin
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+// newAccountUsageIdentityRows 与 loadAccountUsageIdentity 的 SELECT 列顺序保持一致，
+// 供身份点查（两步查重的第一步）的 sqlmock 断言复用。
+func newAccountUsageIdentityRows() *sqlmock.Rows {
+	return sqlmock.NewRows([]string{
+		"owner_user_id",
+		"platform",
+		"type",
+		"openai_org_id",
+		"chatgpt_user_id",
+		"chatgpt_account_id",
+		"claude_org_uuid",
+		"claude_account_uuid",
+		"gemini_oauth_type",
+		"project_id",
+	})
+}
+
 func TestUsageLogRepositoryGetAccountUsageStatsUsesIdentityScope(t *testing.T) {
 	db, mock := newSQLMock(t)
 	repo := &usageLogRepository{sql: db}
@@ -519,8 +536,12 @@ func TestUsageLogRepositoryGetAccountUsageStatsUsesIdentityScope(t *testing.T) {
 	start := time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC)
 	end := start.Add(72 * time.Hour)
 
-	mock.ExpectQuery(`WITH current_account AS`).
+	mock.ExpectQuery(`SELECT\s+owner_user_id,\s+platform,\s+type,`).
 		WithArgs(int64(11)).
+		WillReturnRows(newAccountUsageIdentityRows().
+			AddRow(int64(7), "openai", "oauth", "org_x", "user_x", nil, nil, nil, "code_assist", nil))
+	mock.ExpectQuery(`SELECT a\.id FROM accounts a WHERE a\.platform = 'openai' AND a\.type = 'oauth'`).
+		WithArgs(int64(7), "org_x", "user_x").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(10)).AddRow(int64(11)))
 	mock.ExpectQuery(`SELECT\s+MIN\(available_from\)`).
 		WithArgs(sqlmock.AnyArg()).

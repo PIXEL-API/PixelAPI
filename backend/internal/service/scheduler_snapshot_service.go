@@ -171,6 +171,13 @@ type SchedulerSnapshotService struct {
 	fullRebuildRequested uint64
 	fullRebuildCompleted uint64
 	fullRebuildLastErr   error
+
+	// 按 bucket 的重建去抖状态：间隔内重复触发的 bucket 转入 pendingRebuild，
+	// 由 Start() 的 drain goroutine 周期性兜底。仅作用于 outbox 增量重建入口
+	// （rebuildBuckets），分组生命周期与全量重建不经过去抖。
+	rebuildMu      sync.Mutex
+	lastRebuildAt  map[SchedulerBucket]time.Time
+	pendingRebuild map[SchedulerBucket]struct{}
 }
 
 func NewSchedulerSnapshotService(
@@ -185,13 +192,15 @@ func NewSchedulerSnapshotService(
 		maxQPS = cfg.Gateway.Scheduling.DbFallbackMaxQPS
 	}
 	return &SchedulerSnapshotService{
-		cache:         cache,
-		outboxRepo:    outboxRepo,
-		accountRepo:   accountRepo,
-		groupRepo:     groupRepo,
-		cfg:           cfg,
-		stopCh:        make(chan struct{}),
-		fallbackLimit: newFallbackLimiter(maxQPS),
+		cache:          cache,
+		outboxRepo:     outboxRepo,
+		accountRepo:    accountRepo,
+		groupRepo:      groupRepo,
+		cfg:            cfg,
+		stopCh:         make(chan struct{}),
+		fallbackLimit:  newFallbackLimiter(maxQPS),
+		lastRebuildAt:  make(map[SchedulerBucket]time.Time),
+		pendingRebuild: make(map[SchedulerBucket]struct{}),
 	}
 }
 
@@ -319,6 +328,14 @@ func (s *SchedulerSnapshotService) Start() {
 		go func() {
 			defer s.wg.Done()
 			s.runFullRebuildWorker(fullInterval)
+		}()
+	}
+
+	if debounceInterval := s.rebuildDebounceInterval(); debounceInterval > 0 {
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			s.runRebuildDebounceWorker(debounceInterval)
 		}()
 	}
 }
@@ -929,12 +946,99 @@ func (s *SchedulerSnapshotService) bucketsForPlatform(platform string, groupIDs 
 }
 
 func (s *SchedulerSnapshotService) rebuildBuckets(ctx context.Context, buckets []SchedulerBucket, reason string) error {
+	if interval := s.rebuildDebounceInterval(); interval > 0 {
+		buckets = s.debounceRebuildBuckets(dedupeBuckets(buckets), interval)
+		if len(buckets) == 0 {
+			return nil
+		}
+	}
 	tasks, firstErr := s.prepareBucketWriteTasks(ctx, buckets)
 	queries := newSchedulerAccountQueryCache(tasks)
 	if err := s.rebuildPreparedBucketTasks(ctx, tasks, reason, false, queries); err != nil && firstErr == nil {
 		firstErr = err
 	}
 	return firstErr
+}
+
+// debounceRebuildBuckets 返回本次需要立即重建的 bucket；间隔内已重建过的 bucket
+// 转入 pendingRebuild 等待 drain goroutine 兜底，调用方视其为已受理（返回 nil），
+// outbox watermark 照常推进。
+func (s *SchedulerSnapshotService) debounceRebuildBuckets(buckets []SchedulerBucket, interval time.Duration) []SchedulerBucket {
+	now := time.Now()
+	due := make([]SchedulerBucket, 0, len(buckets))
+	s.rebuildMu.Lock()
+	if s.lastRebuildAt == nil {
+		s.lastRebuildAt = make(map[SchedulerBucket]time.Time)
+	}
+	if s.pendingRebuild == nil {
+		s.pendingRebuild = make(map[SchedulerBucket]struct{})
+	}
+	for _, bucket := range buckets {
+		if last, ok := s.lastRebuildAt[bucket]; ok && now.Sub(last) < interval {
+			s.pendingRebuild[bucket] = struct{}{}
+			continue
+		}
+		s.lastRebuildAt[bucket] = now
+		due = append(due, bucket)
+	}
+	s.rebuildMu.Unlock()
+	return due
+}
+
+func (s *SchedulerSnapshotService) runRebuildDebounceWorker(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			s.drainPendingRebuilds(interval)
+		case <-s.stopCh:
+			return
+		}
+	}
+}
+
+func (s *SchedulerSnapshotService) drainPendingRebuilds(interval time.Duration) {
+	now := time.Now()
+	s.rebuildMu.Lock()
+	// 过期的 lastRebuildAt 条目不再抑制任何请求，顺手回收避免 map 无界增长。
+	for bucket, last := range s.lastRebuildAt {
+		if now.Sub(last) >= interval {
+			delete(s.lastRebuildAt, bucket)
+		}
+	}
+	if len(s.pendingRebuild) == 0 {
+		s.rebuildMu.Unlock()
+		return
+	}
+	buckets := make([]SchedulerBucket, 0, len(s.pendingRebuild))
+	for bucket := range s.pendingRebuild {
+		buckets = append(buckets, bucket)
+		s.lastRebuildAt[bucket] = now
+	}
+	s.pendingRebuild = make(map[SchedulerBucket]struct{})
+	s.rebuildMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), outboxEventTimeout)
+	defer cancel()
+	tasks, firstErr := s.prepareBucketWriteTasks(ctx, buckets)
+	queries := newSchedulerAccountQueryCache(tasks)
+	if err := s.rebuildPreparedBucketTasks(ctx, tasks, "rebuild_debounce", false, queries); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	if firstErr != nil {
+		// 重建幂等：全部重新入队，下个 tick 整批重试。
+		s.rebuildMu.Lock()
+		if s.pendingRebuild == nil {
+			s.pendingRebuild = make(map[SchedulerBucket]struct{})
+		}
+		for _, bucket := range buckets {
+			s.pendingRebuild[bucket] = struct{}{}
+		}
+		s.rebuildMu.Unlock()
+		logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] debounce drain rebuild failed: buckets=%d err=%v", len(buckets), firstErr)
+	}
 }
 
 func (s *SchedulerSnapshotService) prepareBucketWriteTasks(ctx context.Context, buckets []SchedulerBucket) ([]schedulerBucketWriteTask, error) {
@@ -1593,6 +1697,18 @@ func (s *SchedulerSnapshotService) outboxPollInterval() time.Duration {
 	sec := s.cfg.Gateway.Scheduling.OutboxPollIntervalSeconds
 	if sec <= 0 {
 		return time.Second
+	}
+	return time.Duration(sec) * time.Second
+}
+
+// rebuildDebounceInterval 返回增量重建去抖间隔；0 表示关闭（直通旧逻辑，可作回滚开关）。
+func (s *SchedulerSnapshotService) rebuildDebounceInterval() time.Duration {
+	if s == nil || s.cfg == nil {
+		return 0
+	}
+	sec := s.cfg.Gateway.Scheduling.RebuildDebounceSeconds
+	if sec <= 0 {
+		return 0
 	}
 	return time.Duration(sec) * time.Second
 }

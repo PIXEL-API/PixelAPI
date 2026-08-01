@@ -150,17 +150,20 @@ func DeriveUpstreamEndpoint(inbound, rawRequestPath, platform string) string {
 // responsesSubpathSuffix extracts the part after "/responses" in a raw
 // request path, e.g. "/openai/v1/responses/compact" → "/compact".
 // Returns "" when there is no meaningful suffix.
+//
+// The result becomes the recorded upstream endpoint label, so it is held to the
+// same path-segment rules as the suffix that actually reaches the upstream URL
+// (see service/upstream_path_guard.go). Malformed subpaths are already rejected
+// at the route edge; keeping the rules identical here stops a non-conforming
+// path from being recorded as if it had been forwarded.
 func responsesSubpathSuffix(rawPath string) string {
 	trimmed := strings.TrimRight(strings.TrimSpace(rawPath), "/")
 	idx := strings.LastIndex(trimmed, "/responses")
 	if idx < 0 {
 		return ""
 	}
-	suffix := trimmed[idx+len("/responses"):]
-	if suffix == "" || suffix == "/" {
-		return ""
-	}
-	if !strings.HasPrefix(suffix, "/") {
+	suffix, ok := service.SanitizedUpstreamPathSuffix(trimmed[idx+len("/responses"):])
+	if !ok {
 		return ""
 	}
 	return suffix

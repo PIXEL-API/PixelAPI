@@ -19,7 +19,7 @@ type SettingRepoSuite struct {
 func (s *SettingRepoSuite) SetupTest() {
 	s.ctx = context.Background()
 	tx := testEntTx(s.T())
-	s.repo = NewSettingRepository(tx.Client()).(*settingRepository)
+	s.repo = newSettingRepository(tx.Client())
 }
 
 func TestSettingRepoSuite(t *testing.T) {

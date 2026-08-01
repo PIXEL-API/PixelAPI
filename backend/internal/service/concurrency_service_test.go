@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -161,10 +162,25 @@ func (c *blockingConcurrencyCleanupCache) CleanupExpiredSlots(ctx context.Contex
 
 type concurrencyCleanupAccountRepo struct {
 	AccountRepository
+	listSchedulableCalls atomic.Int32
 }
 
 func (r *concurrencyCleanupAccountRepo) ListSchedulable(context.Context) ([]Account, error) {
+	r.listSchedulableCalls.Add(1)
 	return nil, nil
+}
+
+type signalCleanupCache struct {
+	stubConcurrencyCacheForTest
+	ran chan struct{}
+}
+
+func (c *signalCleanupCache) CleanupExpiredSlots(context.Context) error {
+	select {
+	case c.ran <- struct{}{}:
+	default:
+	}
+	return nil
 }
 
 func TestCleanupExpiredSlots_NilCache(t *testing.T) {
@@ -201,6 +217,23 @@ func TestConcurrencyServiceStopCancelsCleanupWorker(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("cleanup worker did not stop after cancellation")
 	}
+}
+
+// 全局 SCAN 清理已覆盖所有槽位，worker 不得再逐账号扫描（否则 3.5k 账号
+// 会在每轮制造同等数量的冗余 redis 调用与日志）。
+func TestSlotCleanupWorkerUsesGlobalCleanupOnly(t *testing.T) {
+	cache := &signalCleanupCache{ran: make(chan struct{}, 1)}
+	repo := &concurrencyCleanupAccountRepo{}
+	svc := NewConcurrencyService(cache)
+	svc.StartSlotCleanupWorker(repo, time.Hour)
+
+	select {
+	case <-cache.ran:
+	case <-time.After(time.Second):
+		t.Fatal("cleanup worker did not run")
+	}
+	svc.Stop()
+	require.Zero(t, repo.listSchedulableCalls.Load(), "worker 不应再调用 ListSchedulable")
 }
 
 func TestAcquireAccountSlot_Success(t *testing.T) {

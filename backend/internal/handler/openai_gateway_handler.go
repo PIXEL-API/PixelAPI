@@ -36,6 +36,7 @@ type OpenAIGatewayHandler struct {
 	contentModerationService   *service.ContentModerationService
 	userModerationService      *service.UserContentModerationService
 	grokMediaEligibilityProber grokMediaEligibilityProber
+	noAccountBackoffLimiter    service.NoAccountBackoffLimiter
 	concurrencyHelper          *ConcurrencyHelper
 	maxAccountSwitches         int
 	cfg                        *config.Config
@@ -102,6 +103,7 @@ func NewOpenAIGatewayHandler(
 	errorPassthroughService *service.ErrorPassthroughService,
 	contentModerationService *service.ContentModerationService,
 	userModerationService *service.UserContentModerationService,
+	noAccountBackoffLimiter service.NoAccountBackoffLimiter,
 	cfg *config.Config,
 ) *OpenAIGatewayHandler {
 	pingInterval := time.Duration(0)
@@ -120,10 +122,83 @@ func NewOpenAIGatewayHandler(
 		errorPassthroughService:  errorPassthroughService,
 		contentModerationService: contentModerationService,
 		userModerationService:    userModerationService,
+		noAccountBackoffLimiter:  noAccountBackoffLimiter,
 		concurrencyHelper:        NewConcurrencyHelper(concurrencyService, SSEPingFormatComment, pingInterval),
 		maxAccountSwitches:       maxAccountSwitches,
 		cfg:                      cfg,
 	}
+}
+
+// noAccountBackoffThrottledMessage 命中"无可用账号"退避时的 429 提示。
+const noAccountBackoffThrottledMessage = "No available accounts for this group; requests are temporarily throttled, please retry later"
+
+// gatewayCheckNoAccountBackoff 入口硬闸：(user, group) 处于"无可用账号"退避期时补
+// Retry-After 并经 writeErr 写 429，返回 true 表示已拦截。必须在读 body/开流之前调用，
+// 此时 writeErr 直接写 JSON 即可。cfg 未启用或 limiter 未装配时直接放行。
+func gatewayCheckNoAccountBackoff(
+	c *gin.Context,
+	limiter service.NoAccountBackoffLimiter,
+	cfg *config.Config,
+	userID int64,
+	groupID *int64,
+	writeErr func(c *gin.Context, status int, errType, message string),
+) bool {
+	if limiter == nil || cfg == nil || !cfg.RateLimit.NoAccountBackoff.Enabled {
+		return false
+	}
+	blocked, retryAfter := limiter.CheckBlocked(c.Request.Context(), userID, groupID)
+	if !blocked {
+		return false
+	}
+	if retryAfter <= 0 {
+		retryAfter = cfg.RateLimit.NoAccountBackoff.RetryAfterHintSeconds
+	}
+	if retryAfter > 0 {
+		c.Header("Retry-After", strconv.Itoa(retryAfter))
+	}
+	writeErr(c, http.StatusTooManyRequests, "rate_limit_error", noAccountBackoffThrottledMessage)
+	return true
+}
+
+// gatewayRecordNoAccountFailure 在"无可用账号"503 出口计一次失败；未开流时给 503 响应
+// 附带 Retry-After 提示。必须在写响应体之前调用（header 需先于 body 写出）。
+// 仅在本次记录跨过阈值（退避被激活）时打 warn，其余情况静默。
+func gatewayRecordNoAccountFailure(
+	c *gin.Context,
+	log *zap.Logger,
+	limiter service.NoAccountBackoffLimiter,
+	cfg *config.Config,
+	userID int64,
+	groupID *int64,
+	streamStarted bool,
+) {
+	if limiter == nil || cfg == nil || !cfg.RateLimit.NoAccountBackoff.Enabled {
+		return
+	}
+	backoffCfg := cfg.RateLimit.NoAccountBackoff
+	if !streamStarted && backoffCfg.RetryAfterHintSeconds > 0 {
+		c.Header("Retry-After", strconv.Itoa(backoffCfg.RetryAfterHintSeconds))
+	}
+	blocked, retryAfter := limiter.RecordFailure(c.Request.Context(), userID, groupID)
+	if !blocked {
+		return
+	}
+	log.Warn("gateway.no_account_backoff_armed",
+		zap.Int64("user_id", userID),
+		zap.Int64p("group_id", groupID),
+		zap.Int("count", backoffCfg.Threshold),
+		zap.Int("backoff_seconds", retryAfter),
+	)
+}
+
+// checkNoAccountBackoff 入口硬闸（OpenAI 侧），命中时已写响应，调用方直接 return。
+func (h *OpenAIGatewayHandler) checkNoAccountBackoff(c *gin.Context, userID int64, groupID *int64, writeErr func(c *gin.Context, status int, errType, message string)) bool {
+	return gatewayCheckNoAccountBackoff(c, h.noAccountBackoffLimiter, h.cfg, userID, groupID, writeErr)
+}
+
+// recordNoAccountFailure 记录一次"无可用账号"失败（OpenAI 侧），需在写 503 响应前调用。
+func (h *OpenAIGatewayHandler) recordNoAccountFailure(c *gin.Context, log *zap.Logger, userID int64, groupID *int64, streamStarted bool) {
+	gatewayRecordNoAccountFailure(c, log, h.noAccountBackoffLimiter, h.cfg, userID, groupID, streamStarted)
 }
 
 // Responses handles OpenAI Responses API endpoint
@@ -157,6 +232,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		zap.Int64("api_key_id", apiKey.ID),
 		zap.Any("group_id", apiKey.GroupID),
 	)
+	if h.checkNoAccountBackoff(c, subject.UserID, apiKey.GroupID, h.errorResponse) {
+		return
+	}
 	if !h.ensureResponsesDependencies(c, reqLog) {
 		return
 	}
@@ -414,10 +492,14 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					continue
 				}
 				if errors.Is(err, service.ErrNoAvailableCompactAccounts) {
+					h.recordNoAccountFailure(c, reqLog, subject.UserID, apiKey.GroupID, streamStarted)
 					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "compact_not_supported", "No available accounts support /responses/compact", streamStarted)
 					return
 				}
 				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, currentAPIKey, selectionModel, reqModel, routingPlatform)
+				if cls.Status == http.StatusServiceUnavailable {
+					h.recordNoAccountFailure(c, reqLog, subject.UserID, apiKey.GroupID, streamStarted)
+				}
 				h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
 				return
 			}
@@ -439,6 +521,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		if selection == nil || selection.Account == nil {
 			cancelSelectionRouting()
 			cls := classifyNoAccountErrorFromGin(c, h.gatewayService, currentAPIKey, selectionModel, reqModel, routingPlatform)
+			if cls.Status == http.StatusServiceUnavailable {
+				h.recordNoAccountFailure(c, reqLog, subject.UserID, apiKey.GroupID, streamStarted)
+			}
 			h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
 			return
 		}
@@ -853,6 +938,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		zap.Int64("api_key_id", apiKey.ID),
 		zap.Any("group_id", apiKey.GroupID),
 	)
+	if h.checkNoAccountBackoff(c, subject.UserID, apiKey.GroupID, h.anthropicErrorResponse) {
+		return
+	}
 
 	// 检查分组是否允许 /v1/messages 调度
 	if !h.ensureResponsesDependencies(c, reqLog) {
@@ -1045,6 +1133,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 						continue
 					}
 					cls := classifyNoAccountErrorFromGin(c, h.gatewayService, currentAPIKey, currentRoutingModel, reqModel, routingPlatform)
+					if cls.Status == http.StatusServiceUnavailable {
+						h.recordNoAccountFailure(c, reqLog, subject.UserID, apiKey.GroupID, streamStarted)
+					}
 					h.anthropicStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
 					return
 				}
@@ -1067,6 +1158,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		}
 		if selection == nil || selection.Account == nil {
 			cls := classifyNoAccountErrorFromGin(c, h.gatewayService, currentAPIKey, currentRoutingModel, reqModel, routingPlatform)
+			if cls.Status == http.StatusServiceUnavailable {
+				h.recordNoAccountFailure(c, reqLog, subject.UserID, apiKey.GroupID, streamStarted)
+			}
 			h.anthropicStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
 			return
 		}

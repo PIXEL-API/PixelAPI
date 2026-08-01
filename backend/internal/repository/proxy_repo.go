@@ -3,12 +3,15 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"sort"
 	"strings"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/ent/proxy"
+	"github.com/Wei-Shaw/sub2api/ent/user"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -91,7 +94,67 @@ func (r *proxyRepository) ListByIDs(ctx context.Context, ids []int64) ([]service
 }
 
 func (r *proxyRepository) Update(ctx context.Context, proxyIn *service.Proxy) error {
-	builder := r.client.Proxy.UpdateOneID(proxyIn.ID).
+	return r.updateWithClient(ctx, r.client, proxyIn)
+}
+
+// UpdateWithOwnerAssignment 在同一事务内锁定代理行、校验没有其他用户的账号绑定在该代理上，
+// 然后保存代理。行锁与用户建号路径（ensureOwnedProxyCapacityForCreateInTx）互斥，
+// 使"改归属"与"绑账号"无法交叉出「他人账号绑在专属代理上」的状态——那种状态下账号会在
+// 用户端重新鉴权时因代理不可见被拒。
+func (r *proxyRepository) UpdateWithOwnerAssignment(ctx context.Context, proxyIn *service.Proxy) error {
+	if proxyIn == nil {
+		return service.ErrProxyNotFound
+	}
+
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	txCtx := dbent.NewTxContext(ctx, tx)
+	exec := sqlExecutorFromEntClient(tx.Client())
+	if exec == nil {
+		return fmt.Errorf("transaction sql executor is unavailable")
+	}
+
+	var lockedID int64
+	if err := scanSingleRow(txCtx, exec, `
+		SELECT id
+		FROM proxies
+		WHERE id = $1
+			AND deleted_at IS NULL
+		FOR UPDATE
+	`, []any{proxyIn.ID}, &lockedID); errors.Is(err, sql.ErrNoRows) {
+		return service.ErrProxyNotFound
+	} else if err != nil {
+		return err
+	}
+
+	if proxyIn.OwnerUserID != nil && *proxyIn.OwnerUserID > 0 {
+		var boundToOthers int64
+		if err := scanSingleRow(txCtx, exec, `
+			SELECT COUNT(*)
+			FROM accounts
+			WHERE proxy_id = $1
+				AND deleted_at IS NULL
+				AND owner_user_id IS NOT NULL
+				AND owner_user_id <> $2
+		`, []any{proxyIn.ID, *proxyIn.OwnerUserID}, &boundToOthers); err != nil {
+			return err
+		}
+		if boundToOthers > 0 {
+			return service.ErrProxyOwnerConflict
+		}
+	}
+
+	if err := r.updateWithClient(txCtx, tx.Client(), proxyIn); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (r *proxyRepository) updateWithClient(ctx context.Context, client *dbent.Client, proxyIn *service.Proxy) error {
+	builder := client.Proxy.UpdateOneID(proxyIn.ID).
 		SetName(proxyIn.Name).
 		SetProtocol(proxyIn.Protocol).
 		SetHost(proxyIn.Host).
@@ -255,8 +318,53 @@ func (r *proxyRepository) buildProxyWithAccountCountResult(ctx context.Context, 
 			AccountCount: counts[proxyOut.ID],
 		})
 	}
+	if err := r.attachProxyOwnerInfo(ctx, result); err != nil {
+		return nil, nil, err
+	}
 
 	return result, paginationResultFromTotal(total, params), nil
+}
+
+// attachProxyOwnerInfo 为专属代理批量填充归属用户的用户名与邮箱（管理端展示用）。
+func (r *proxyRepository) attachProxyOwnerInfo(ctx context.Context, proxies []service.ProxyWithAccountCount) error {
+	ownerIDs := make([]int64, 0, len(proxies))
+	seen := make(map[int64]struct{}, len(proxies))
+	for i := range proxies {
+		if proxies[i].OwnerUserID == nil {
+			continue
+		}
+		id := *proxies[i].OwnerUserID
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ownerIDs = append(ownerIDs, id)
+	}
+	if len(ownerIDs) == 0 {
+		return nil
+	}
+
+	owners, err := r.client.User.Query().
+		Where(user.IDIn(ownerIDs...)).
+		Select(user.FieldID, user.FieldUsername, user.FieldEmail).
+		All(ctx)
+	if err != nil {
+		return err
+	}
+	byID := make(map[int64]*dbent.User, len(owners))
+	for i := range owners {
+		byID[owners[i].ID] = owners[i]
+	}
+	for i := range proxies {
+		if proxies[i].OwnerUserID == nil {
+			continue
+		}
+		if owner, ok := byID[*proxies[i].OwnerUserID]; ok {
+			proxies[i].OwnerUsername = owner.Username
+			proxies[i].OwnerEmail = owner.Email
+		}
+	}
+	return nil
 }
 
 func proxyListOrder(params pagination.PaginationParams) []func(*entsql.Selector) {
@@ -370,12 +478,10 @@ func (r *proxyRepository) FindVisibleActiveByEndpoint(ctx context.Context, scope
 }
 
 // visibleProxyPredicate 按“账号平台 + 账号等级”筛选可用代理。
-// 自本次更新起用户不能再上传代理，用户端只能选择平台代理（owner_user_id IS NULL），
-// 平台/等级为空的代理分别表示通用代理与所有等级可用。
+// 平台代理（owner_user_id IS NULL）按平台/等级过滤，为空分别表示通用代理与所有等级可用。
 //
-// 归属豁免（grandfather）：更新前已存在的自有代理保留其 owner_user_id。
-// 当 scope.OwnerUserID > 0（账号重新鉴权/更新等场景）时，除平台代理外，
-// 还额外放行该用户名下的遗留自有代理，避免老用户的既有绑定在重新鉴权时掉线。
+// 专属代理（owner_user_id 非空，来源为管理员指派或迁移 256 保留的历史自有代理）
+// 仅当 scope.OwnerUserID 与其归属一致时放行，且不受平台/等级过滤限制。
 func visibleProxyPredicate(scope service.ProxyScope) predicate.Proxy {
 	normalized := scope.Normalized()
 
@@ -398,7 +504,7 @@ func visibleProxyPredicate(scope service.ProxyScope) predicate.Proxy {
 	if normalized.OwnerUserID <= 0 {
 		return platformProxy
 	}
-	// 平台代理 或 该用户的遗留自有代理。
+	// 平台代理 或 归属该用户的专属代理。
 	return proxy.Or(platformProxy, proxy.OwnerUserIDEQ(normalized.OwnerUserID))
 }
 
@@ -560,6 +666,9 @@ func (r *proxyRepository) ListActiveWithAccountCount(ctx context.Context) ([]ser
 			Proxy:        *proxyOut,
 			AccountCount: counts[proxyOut.ID],
 		})
+	}
+	if err := r.attachProxyOwnerInfo(ctx, result); err != nil {
+		return nil, err
 	}
 
 	return result, nil

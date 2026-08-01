@@ -552,8 +552,8 @@ func TestLoadDefaultSchedulingConfig(t *testing.T) {
 	if !cfg.Gateway.Scheduling.LoadBatchEnabled {
 		t.Fatalf("LoadBatchEnabled = false, want true")
 	}
-	if cfg.Gateway.Scheduling.SlotCleanupInterval != 30*time.Second {
-		t.Fatalf("SlotCleanupInterval = %v, want 30s", cfg.Gateway.Scheduling.SlotCleanupInterval)
+	if cfg.Gateway.Scheduling.SlotCleanupInterval != 5*time.Minute {
+		t.Fatalf("SlotCleanupInterval = %v, want 5m", cfg.Gateway.Scheduling.SlotCleanupInterval)
 	}
 }
 

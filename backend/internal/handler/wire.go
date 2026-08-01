@@ -113,6 +113,7 @@ func ProvideOpenAIGatewayHandler(
 	contentModerationService *service.ContentModerationService,
 	userModerationService *service.UserContentModerationService,
 	grokQuotaService *service.GrokQuotaService,
+	noAccountBackoffLimiter service.NoAccountBackoffLimiter,
 	cfg *config.Config,
 ) *OpenAIGatewayHandler {
 	h := NewOpenAIGatewayHandler(
@@ -124,6 +125,7 @@ func ProvideOpenAIGatewayHandler(
 		errorPassthroughService,
 		contentModerationService,
 		userModerationService,
+		noAccountBackoffLimiter,
 		cfg,
 	)
 	h.grokMediaEligibilityProber = grokQuotaService

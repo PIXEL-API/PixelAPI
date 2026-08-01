@@ -4397,11 +4397,202 @@ type EndpointStat = usagestats.EndpointStat
 // resolveAccountUsageStatsScopeIDs expands display-only account stats to prior
 // account rows that represent the same external account, including soft-deleted
 // rows. Runtime quota, scheduling, and billing paths must keep using account.ID.
+//
+// 默认走两步查询（点查当前账号身份 + 按平台裁剪的可索引查重），
+// USAGE_SCOPE_LEGACY_CTE=1 时切回旧 CTE 实现（回滚开关）。
 func (r *usageLogRepository) resolveAccountUsageStatsScopeIDs(ctx context.Context, accountID int64) ([]int64, error) {
 	if accountID <= 0 {
 		return []int64{}, nil
 	}
+	if strings.TrimSpace(os.Getenv("USAGE_SCOPE_LEGACY_CTE")) == "1" {
+		return r.resolveAccountUsageStatsScopeIDsLegacyCTE(ctx, accountID)
+	}
 
+	identity, found, err := r.loadAccountUsageIdentity(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return []int64{accountID}, nil
+	}
+
+	query, args, hasIdentityArm := buildAccountUsageIdentityScopeQuery(identity)
+	if !hasIdentityArm {
+		// 非 oauth 平台或身份字段全空：口径只覆盖账号自身
+		return []int64{accountID}, nil
+	}
+
+	rows, err := r.sql.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	accountIDs := make([]int64, 0, 2)
+	selfIncluded := false
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		if id == accountID {
+			selfIncluded = true
+		}
+		accountIDs = append(accountIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if !selfIncluded {
+		accountIDs = append(accountIDs, accountID)
+		sort.Slice(accountIDs, func(i, j int) bool { return accountIDs[i] < accountIDs[j] })
+	}
+	return accountIDs, nil
+}
+
+// accountUsageIdentity 是当前账号的身份归并键。所有字段均由 SQL 端按与旧 CTE
+// 完全一致的表达式（BTRIM/NULLIF/LOWER/COALESCE 回退链）计算后带回，Go 侧不复刻。
+type accountUsageIdentity struct {
+	accountID        int64
+	ownerUserID      sql.NullInt64
+	platform         string
+	accountType      string
+	openaiOrgID      sql.NullString // openai: LOWER(BTRIM(credentials.organization_id))
+	chatgptUserID    sql.NullString // openai: BTRIM(credentials.chatgpt_user_id)，比较不做 LOWER
+	chatgptAccountID sql.NullString // openai: BTRIM(credentials.chatgpt_account_id)，比较不做 LOWER
+	claudeOrgUUID    sql.NullString // anthropic: LOWER(extra.org_uuid 优先，credentials.org_uuid 回退)
+	claudeAcctUUID   sql.NullString // anthropic: LOWER(extra.account_uuid 优先，credentials.account_uuid 回退)
+	geminiOAuthType  sql.NullString // gemini: LOWER(credentials.oauth_type)，空缺回退 code_assist
+	projectID        sql.NullString // gemini/antigravity: LOWER(BTRIM(credentials.project_id))
+}
+
+// loadAccountUsageIdentity 按主键点查当前账号并在 SQL 里算好全部身份表达式。
+// 刻意不带 deleted_at 过滤：统计口径包含软删行。
+func (r *usageLogRepository) loadAccountUsageIdentity(ctx context.Context, accountID int64) (accountUsageIdentity, bool, error) {
+	query := `
+		SELECT
+			owner_user_id,
+			platform,
+			type,
+			LOWER(NULLIF(BTRIM(credentials->>'organization_id'), '')) AS openai_org_id,
+			NULLIF(BTRIM(credentials->>'chatgpt_user_id'), '') AS chatgpt_user_id,
+			NULLIF(BTRIM(credentials->>'chatgpt_account_id'), '') AS chatgpt_account_id,
+			LOWER(COALESCE(NULLIF(BTRIM(extra->>'org_uuid'), ''), NULLIF(BTRIM(credentials->>'org_uuid'), ''))) AS claude_org_uuid,
+			LOWER(COALESCE(NULLIF(BTRIM(extra->>'account_uuid'), ''), NULLIF(BTRIM(credentials->>'account_uuid'), ''))) AS claude_account_uuid,
+			LOWER(COALESCE(NULLIF(BTRIM(credentials->>'oauth_type'), ''), 'code_assist')) AS gemini_oauth_type,
+			LOWER(NULLIF(BTRIM(credentials->>'project_id'), '')) AS project_id
+		FROM accounts
+		WHERE id = $1
+	`
+	rows, err := r.sql.QueryContext(ctx, query, accountID)
+	if err != nil {
+		return accountUsageIdentity{}, false, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	if !rows.Next() {
+		return accountUsageIdentity{}, false, rows.Err()
+	}
+	identity := accountUsageIdentity{accountID: accountID}
+	if err := rows.Scan(
+		&identity.ownerUserID,
+		&identity.platform,
+		&identity.accountType,
+		&identity.openaiOrgID,
+		&identity.chatgptUserID,
+		&identity.chatgptAccountID,
+		&identity.claudeOrgUUID,
+		&identity.claudeAcctUUID,
+		&identity.geminiOAuthType,
+		&identity.projectID,
+	); err != nil {
+		return accountUsageIdentity{}, false, err
+	}
+	return identity, true, rows.Err()
+}
+
+// buildAccountUsageIdentityScopeQuery 按平台生成身份查重 SQL。platform/type 内联
+// 字符串字面量（只用白名单常量，且是部分索引匹配的前提），身份 OR 臂按 c 侧值
+// 非空裁剪成唯一适用的一条，与旧 CTE 的守卫矩阵逐臂对应。
+// 刻意不带 deleted_at 过滤：统计口径包含软删行。
+func buildAccountUsageIdentityScopeQuery(identity accountUsageIdentity) (string, []any, bool) {
+	args := make([]any, 0, 4)
+	arg := func(v any) string {
+		args = append(args, v)
+		return "$" + strconv.Itoa(len(args))
+	}
+	ownerPredicate := "a.owner_user_id IS NULL"
+	if identity.ownerUserID.Valid {
+		ownerPredicate = "a.owner_user_id = " + arg(identity.ownerUserID.Int64)
+	}
+
+	var platformLiteral, identityPredicate string
+	switch {
+	case identity.platform == service.PlatformOpenAI && identity.accountType == service.AccountTypeOAuth:
+		platformLiteral = service.PlatformOpenAI
+		orgExpr := "LOWER(NULLIF(BTRIM(a.credentials->>'organization_id'), ''))"
+		userExpr := "NULLIF(BTRIM(a.credentials->>'chatgpt_user_id'), '')"
+		acctExpr := "NULLIF(BTRIM(a.credentials->>'chatgpt_account_id'), '')"
+		switch {
+		case identity.openaiOrgID.Valid && identity.chatgptUserID.Valid:
+			identityPredicate = orgExpr + " = " + arg(identity.openaiOrgID.String) +
+				" AND " + userExpr + " = " + arg(identity.chatgptUserID.String)
+		case identity.openaiOrgID.Valid && identity.chatgptAccountID.Valid:
+			identityPredicate = orgExpr + " = " + arg(identity.openaiOrgID.String) +
+				" AND " + userExpr + " IS NULL" +
+				" AND " + acctExpr + " = " + arg(identity.chatgptAccountID.String)
+		case identity.chatgptUserID.Valid:
+			identityPredicate = orgExpr + " IS NULL" +
+				" AND " + userExpr + " = " + arg(identity.chatgptUserID.String)
+		case identity.chatgptAccountID.Valid:
+			identityPredicate = orgExpr + " IS NULL" +
+				" AND " + userExpr + " IS NULL" +
+				" AND " + acctExpr + " = " + arg(identity.chatgptAccountID.String)
+		}
+	case identity.platform == service.PlatformAnthropic && identity.accountType == service.AccountTypeOAuth:
+		platformLiteral = service.PlatformAnthropic
+		orgExpr := "COALESCE(NULLIF(BTRIM(a.extra->>'org_uuid'), ''), NULLIF(BTRIM(a.credentials->>'org_uuid'), ''))"
+		acctExpr := "COALESCE(NULLIF(BTRIM(a.extra->>'account_uuid'), ''), NULLIF(BTRIM(a.credentials->>'account_uuid'), ''))"
+		switch {
+		case identity.claudeOrgUUID.Valid && identity.claudeAcctUUID.Valid:
+			identityPredicate = "LOWER(" + orgExpr + ") = " + arg(identity.claudeOrgUUID.String) +
+				" AND LOWER(" + acctExpr + ") = " + arg(identity.claudeAcctUUID.String)
+		case identity.claudeAcctUUID.Valid:
+			identityPredicate = orgExpr + " IS NULL" +
+				" AND LOWER(" + acctExpr + ") = " + arg(identity.claudeAcctUUID.String)
+		case identity.claudeOrgUUID.Valid:
+			identityPredicate = acctExpr + " IS NULL" +
+				" AND LOWER(" + orgExpr + ") = " + arg(identity.claudeOrgUUID.String)
+		}
+	case identity.platform == service.PlatformGemini && identity.accountType == service.AccountTypeOAuth:
+		if identity.projectID.Valid {
+			platformLiteral = service.PlatformGemini
+			identityPredicate = "LOWER(COALESCE(NULLIF(BTRIM(a.credentials->>'oauth_type'), ''), 'code_assist')) = " + arg(identity.geminiOAuthType.String) +
+				" AND LOWER(NULLIF(BTRIM(a.credentials->>'project_id'), '')) = " + arg(identity.projectID.String)
+		}
+	case identity.platform == service.PlatformAntigravity && identity.accountType == service.AccountTypeOAuth:
+		if identity.projectID.Valid {
+			platformLiteral = service.PlatformAntigravity
+			identityPredicate = "LOWER(NULLIF(BTRIM(a.credentials->>'project_id'), '')) = " + arg(identity.projectID.String)
+		}
+	}
+	if identityPredicate == "" {
+		return "", nil, false
+	}
+
+	query := "SELECT a.id" +
+		" FROM accounts a" +
+		" WHERE a.platform = '" + platformLiteral + "'" +
+		" AND a.type = 'oauth'" +
+		" AND " + ownerPredicate +
+		" AND (" + identityPredicate + ")" +
+		" ORDER BY a.id"
+	return query, args, true
+}
+
+// resolveAccountUsageStatsScopeIDsLegacyCTE 是改写前的 CTE 实现，仅供
+// USAGE_SCOPE_LEGACY_CTE=1 时回退使用。
+func (r *usageLogRepository) resolveAccountUsageStatsScopeIDsLegacyCTE(ctx context.Context, accountID int64) ([]int64, error) {
 	query := `
 		WITH current_account AS (
 			SELECT id, owner_user_id, platform, type, credentials, extra

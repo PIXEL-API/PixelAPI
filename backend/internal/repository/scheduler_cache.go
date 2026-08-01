@@ -46,6 +46,12 @@ const (
 	// 替代立即 DEL，让正在读取旧版本的 reader 有足够时间完成 ZRANGE。
 	snapshotGraceTTLSeconds = 60
 
+	// schedulerEmptySnapshotSentinel 空快照哨兵成员。空 bucket 写入该成员而非
+	// 跳过 ZSET，读侧据此把"真空 bucket"识别为缓存命中（返回空账号列表），
+	// 避免每个请求都回退数据库。哨兵不是合法账号 ID，读侧一律过滤。
+	// 旧二进制读到哨兵成员会因 meta MGet 为 nil 而按 miss 回退 DB，与旧行为一致。
+	schedulerEmptySnapshotSentinel = "__empty__"
+
 	schedulerGroupLifecycleLockPrefix      = "sched:group:lifecycle-lock:"
 	schedulerGroupLifecycleOwnerTokenBytes = 16
 )
@@ -284,8 +290,15 @@ func (c *schedulerCache) GetSnapshot(ctx context.Context, bucket service.Schedul
 	if err != nil {
 		return nil, false, err
 	}
+	ids, hasSentinel := filterEmptySnapshotSentinel(ids)
 	if len(ids) == 0 {
-		// 空快照视为缓存未命中，触发数据库回退查询
+		if hasSentinel {
+			// 带哨兵的空快照是确定性的"真空 bucket"，按命中返回空列表
+			accounts := []*service.Account{}
+			c.setLocalSnapshot(cacheKey, activeVal, accounts)
+			return accounts, true, nil
+		}
+		// 无哨兵的空快照视为缓存未命中，触发数据库回退查询
 		// 这解决了新分组创建后立即绑定账号时的竞态条件问题
 		return nil, false, nil
 	}
@@ -448,7 +461,11 @@ func (c *schedulerCache) writeSnapshotVersion(ctx context.Context, bucket servic
 		return err
 	}
 	if len(cacheableAccounts) == 0 {
-		return nil
+		// 空集也要落一个哨兵成员，否则激活后的空版本 ZRange 为空、被读侧当作 miss
+		return c.rdb.ZAdd(ctx, schedulerSnapshotKey(bucket, version), redis.Z{
+			Score:  0,
+			Member: schedulerEmptySnapshotSentinel,
+		}).Err()
 	}
 	members := make([]redis.Z, 0, len(cacheableAccounts))
 	for idx, account := range cacheableAccounts {
@@ -485,6 +502,28 @@ func (c *schedulerCache) activateSnapshotVersion(ctx context.Context, bucket ser
 		c.invalidateLocalSnapshot(bucket.String())
 	}
 	return nil
+}
+
+// filterEmptySnapshotSentinel 从快照成员中剔除空快照哨兵，返回剩余成员与是否含哨兵。
+func filterEmptySnapshotSentinel(ids []string) ([]string, bool) {
+	hasSentinel := false
+	for _, id := range ids {
+		if id == schedulerEmptySnapshotSentinel {
+			hasSentinel = true
+			break
+		}
+	}
+	if !hasSentinel {
+		return ids, false
+	}
+	filtered := make([]string, 0, len(ids)-1)
+	for _, id := range ids {
+		if id == schedulerEmptySnapshotSentinel {
+			continue
+		}
+		filtered = append(filtered, id)
+	}
+	return filtered, true
 }
 
 func schedulerBucketWriteResultError(result int64, bucket service.SchedulerBucket) error {
@@ -545,6 +584,7 @@ func (c *schedulerCache) GetCandidateSnapshot(ctx context.Context, bucket servic
 	if err != nil {
 		return nil, false, err
 	}
+	ids, _ = filterEmptySnapshotSentinel(ids)
 	if len(ids) == 0 {
 		return nil, false, nil
 	}

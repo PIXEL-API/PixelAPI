@@ -101,6 +101,9 @@ func (m *mockProxyRepoForOAuth) FindVisibleActiveByEndpoint(ctx context.Context,
 func (m *mockProxyRepoForOAuth) ResetRequiredAccountLevelNotIn(ctx context.Context, keepLevels []string) (int64, error) {
 	panic("ResetRequiredAccountLevelNotIn not implemented")
 }
+func (m *mockProxyRepoForOAuth) UpdateWithOwnerAssignment(ctx context.Context, proxy *Proxy) error {
+	panic("UpdateWithOwnerAssignment not implemented")
+}
 func (m *mockProxyRepoForOAuth) ExistsByHostPortAuth(ctx context.Context, host string, port int, username, password string) (bool, error) {
 	panic("ExistsByHostPortAuth not implemented")
 }

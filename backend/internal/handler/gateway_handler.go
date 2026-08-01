@@ -51,6 +51,7 @@ type GatewayHandler struct {
 	errorPassthroughService   *service.ErrorPassthroughService
 	contentModerationService  *service.ContentModerationService
 	userModerationService     *service.UserContentModerationService
+	noAccountBackoffLimiter   service.NoAccountBackoffLimiter
 	concurrencyHelper         *ConcurrencyHelper
 	userMsgQueueHelper        *UserMsgQueueHelper
 	maxAccountSwitches        int
@@ -74,6 +75,7 @@ func NewGatewayHandler(
 	contentModerationService *service.ContentModerationService,
 	userModerationService *service.UserContentModerationService,
 	userMsgQueueService *service.UserMessageQueueService,
+	noAccountBackoffLimiter service.NoAccountBackoffLimiter,
 	cfg *config.Config,
 	settingService *service.SettingService,
 ) *GatewayHandler {
@@ -108,6 +110,7 @@ func NewGatewayHandler(
 		errorPassthroughService:   errorPassthroughService,
 		contentModerationService:  contentModerationService,
 		userModerationService:     userModerationService,
+		noAccountBackoffLimiter:   noAccountBackoffLimiter,
 		concurrencyHelper:         NewConcurrencyHelper(concurrencyService, SSEPingFormatClaude, pingInterval),
 		userMsgQueueHelper:        umqHelper,
 		maxAccountSwitches:        maxAccountSwitches,
@@ -115,6 +118,16 @@ func NewGatewayHandler(
 		cfg:                       cfg,
 		settingService:            settingService,
 	}
+}
+
+// checkNoAccountBackoff 入口硬闸（Anthropic 侧），命中时已写响应，调用方直接 return。
+func (h *GatewayHandler) checkNoAccountBackoff(c *gin.Context, userID int64, groupID *int64, writeErr func(c *gin.Context, status int, errType, message string)) bool {
+	return gatewayCheckNoAccountBackoff(c, h.noAccountBackoffLimiter, h.cfg, userID, groupID, writeErr)
+}
+
+// recordNoAccountFailure 记录一次"无可用账号"失败（Anthropic 侧），需在写 503 响应前调用。
+func (h *GatewayHandler) recordNoAccountFailure(c *gin.Context, log *zap.Logger, userID int64, groupID *int64, streamStarted bool) {
+	gatewayRecordNoAccountFailure(c, log, h.noAccountBackoffLimiter, h.cfg, userID, groupID, streamStarted)
 }
 
 // Messages handles Claude API compatible messages endpoint
@@ -140,6 +153,10 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		zap.Any("group_id", apiKey.GroupID),
 	)
 	defer h.maybeLogCompatibilityFallbackMetrics(reqLog)
+
+	if h.checkNoAccountBackoff(c, subject.UserID, apiKey.GroupID, h.errorResponse) {
+		return
+	}
 
 	// 读取请求体
 	body, err := pkghttputil.ReadRequestBodyWithPrealloc(c.Request)
@@ -683,6 +700,9 @@ routeLoop:
 						zap.Bool("model_not_found", cls.ModelNotFound),
 						zap.Error(err),
 					)
+					if cls.Status == http.StatusServiceUnavailable {
+						h.recordNoAccountFailure(c, reqLog, subject.UserID, apiKey.GroupID, streamStarted)
+					}
 					message := cls.Message
 					if !cls.ModelNotFound {
 						message = "No available accounts: " + err.Error()

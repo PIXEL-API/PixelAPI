@@ -58,89 +58,99 @@ const (
 	AccountShareModeSeatWaiverCompensationInterval  = 10 * time.Minute
 	AccountShareModeSeatWaiverCompensationTimeout   = 2 * time.Minute
 	AccountShareModeSeatWaiverCompensationBatchSize = 50
-	AccountShareModeSeatBillingInterval             = 15 * time.Second
-	AccountShareModeSeatBillingBatchSize            = 100
-	AccountShareModeJoinIntentTTL                   = 2 * time.Minute
-	AccountShareModeEndMembershipTokenTTL           = 2 * time.Minute
-	AccountShareModeMaxIdleTimeoutMinutes           = 10080
-	AccountShareModeLastRequestTouchInterval        = 30 * time.Second
-	AccountShareModeRequestHeartbeatInterval        = 15 * time.Second
-	AccountShareModeMembershipTouchTimeout          = 5 * time.Second
-	AccountShareModeEditSessionTTL                  = 10 * time.Minute
-	AccountShareModeQueueMaxItems                   = 5
-	AccountShareModeRoomQueueMinimum                = 20
-	AccountShareModeRoomQueueMaximum                = 100
-	AccountShareModeRoomQueuePerSeat                = 10
-	AccountShareModeDispatchCooldown                = 5 * time.Minute
-	AccountShareModeConnectivityTestTimeout         = 90 * time.Second
-	AccountShareModeImageConnectivityTestTimeout    = 10 * time.Minute
-	AccountShareRecommendationDefaultLimit          = 5
-	AccountShareRecommendationMaxLimit              = 10
-	AccountShareRecommendationMaxRequests           = 1000000
-	AccountShareRecommendationMaxActiveHours        = 720
-	AccountShareRecommendationMaxTokensPerUnit      = 2000000
-	AccountShareRecommendationPageSize              = 1000
-	AccountShareRecommendationUsageProfileDays      = 3
-	AccountShareRecommendationUsageProfileMaxDays   = 7
-	AccountShareRoomNameMaxRunes                    = 100
-	AccountShareAccountSampleScopeRepresentative    = "representative"
-	AccountShareQuotaSummaryScopeRoom               = "room"
-	AccountShareModeListingTabUsing                 = "using"
-	AccountShareModeListingTabHistory               = "history"
-	AccountShareModeListingTabAll                   = "all"
-	AccountShareModeListingTabMine                  = "mine"
-	AccountShareModeListingTabArchive               = "archive"
-	AccountExternalPlacementPrivate                 = "private"
-	AccountExternalPlacementPublicPool              = "public_pool"
-	AccountExternalPlacementRoom                    = "room"
-	AccountShareListingSortDefault                  = "default"
-	AccountShareListingSortAccountConcurrency       = "account_concurrency"
-	AccountShareListingSortPerUserConcurrency       = "per_user_concurrency"
-	AccountShareListingSortMinBalanceRequired       = "min_balance_required"
-	AccountShareListingSortHourlyRate               = "hourly_rate"
-	AccountShareListingSortHourlyFeeWaiver          = "hourly_fee_waiver"
-	AccountShareListingSortRateMultiplier           = "rate_multiplier"
-	AccountShareListingSortRemainingSeats           = "remaining_seats"
-	AccountShareListingSortRating                   = "rating"
-	AccountShareListingSortUpdatedAt                = "updated_at"
-	AccountShareListingSortOrderAsc                 = "asc"
-	AccountShareListingSortOrderDesc                = "desc"
-	AccountShareListingFeatureHourlyFeeWaiver       = "hourly_fee_waiver"
-	AccountShareListingFeatureImageGeneration       = "image_generation"
-	AccountShareListingFeatureNoHourlyFee           = "no_hourly_fee"
-	AccountShareListingFeatureCodexCLIOnly          = "codex_cli_only"
-	AccountShareListingFeatureNonCodexCLIOnly       = "non_codex_cli_only"
-	AccountShareListingFeatureAvailable             = "available"
-	AccountShareWaiverProgressStatusInProgress      = "in_progress"
-	AccountShareWaiverProgressStatusMet             = "met"
-	AccountShareSpendRangeToday                     = "today"
-	AccountShareSpendRangeCurrentMembership         = "current_membership"
-	AccountShareSpendRangeSevenDays                 = "7d"
-	AccountShareMembershipEndReasonManual           = "manual"
-	AccountShareMembershipEndReasonIdleTimeout      = "idle_timeout"
-	AccountShareMembershipEndReasonPrepay           = "prepay_insufficient"
-	AccountShareMembershipEndReasonUnavailable      = "account_unavailable"
-	AccountShareMembershipEndReasonQueueExpired     = "queue_expired"
-	AccountShareMembershipEndReasonRoomDraining     = "room_draining"
-	AccountShareReviewCommentStatusNone             = "none"
-	AccountShareReviewCommentStatusPending          = "pending"
-	AccountShareReviewCommentStatusApproved         = "approved"
-	AccountShareReviewCommentStatusRejected         = "rejected"
-	AccountShareReviewCommentStatusFailed           = "failed"
-	AccountShareReviewMaxCommentRunes               = 1000
-	AccountShareReviewModerationInterval            = 15 * time.Second
-	AccountShareReviewModerationBatchSize           = 20
-	AccountShareReviewModerationMaxAttempts         = 5
-	AccountShareRoomBatchMaxAccounts                = 1000
-	accountShareSeatBillingTaskName                 = "account_share_seat_billing"
-	accountShareBillingIntentTaskName               = "account_share_billing_intents"
-	accountShareSeatWaiverCompensationTaskName      = "account_share_seat_waiver_compensation"
-	accountShareRoomLifecycleFinalizerTaskName      = "account_share_room_lifecycle_finalizer"
-	accountShareRoomValidationTaskName              = "account_share_room_validation"
-	accountShareReviewModerationTaskName            = "account_share_review_moderation"
-	accountShareModeContextBindingMissingError      = "该分组未绑定账号"
-	accountShareModeJoinIntentTokenAction           = "account_share_mode:join_listing:v1"
-	accountShareModeEndMembershipTokenAction        = "account_share_mode:end_membership:v2"
+	// 单轮软预算:批间检查,超过即收口,必须小于 CompensationTimeout,
+	// 留出最后一批评估事务的余量。
+	AccountShareModeSeatWaiverCompensationRoundBudget = 80 * time.Second
+	// 迟到 usage 反查的回看窗口:正常迟到落账是分钟级,72h 纯粹是
+	// worker 连续故障的容忍余量(覆盖整个周末档)。超过该窗口的漏评
+	// 走 playbook 把 waiver_evaluated_at 置 NULL 由积压分支兜底。
+	AccountShareModeSeatWaiverLateUsageLookback = 72 * time.Hour
+	// 由"迟到条目创建时间"推导"结算窗口终点下界"时的松弛量,
+	// 必须大于任何单请求的时长上限(现实上限 10 分钟)。
+	AccountShareModeSeatWaiverLateUsageSlack      = 24 * time.Hour
+	AccountShareModeSeatBillingInterval           = 15 * time.Second
+	AccountShareModeSeatBillingBatchSize          = 100
+	AccountShareModeJoinIntentTTL                 = 2 * time.Minute
+	AccountShareModeEndMembershipTokenTTL         = 2 * time.Minute
+	AccountShareModeMaxIdleTimeoutMinutes         = 10080
+	AccountShareModeLastRequestTouchInterval      = 30 * time.Second
+	AccountShareModeRequestHeartbeatInterval      = 15 * time.Second
+	AccountShareModeMembershipTouchTimeout        = 5 * time.Second
+	AccountShareModeEditSessionTTL                = 10 * time.Minute
+	AccountShareModeQueueMaxItems                 = 5
+	AccountShareModeRoomQueueMinimum              = 20
+	AccountShareModeRoomQueueMaximum              = 100
+	AccountShareModeRoomQueuePerSeat              = 10
+	AccountShareModeDispatchCooldown              = 5 * time.Minute
+	AccountShareModeConnectivityTestTimeout       = 90 * time.Second
+	AccountShareModeImageConnectivityTestTimeout  = 10 * time.Minute
+	AccountShareRecommendationDefaultLimit        = 5
+	AccountShareRecommendationMaxLimit            = 10
+	AccountShareRecommendationMaxRequests         = 1000000
+	AccountShareRecommendationMaxActiveHours      = 720
+	AccountShareRecommendationMaxTokensPerUnit    = 2000000
+	AccountShareRecommendationPageSize            = 1000
+	AccountShareRecommendationUsageProfileDays    = 3
+	AccountShareRecommendationUsageProfileMaxDays = 7
+	AccountShareRoomNameMaxRunes                  = 100
+	AccountShareAccountSampleScopeRepresentative  = "representative"
+	AccountShareQuotaSummaryScopeRoom             = "room"
+	AccountShareModeListingTabUsing               = "using"
+	AccountShareModeListingTabHistory             = "history"
+	AccountShareModeListingTabAll                 = "all"
+	AccountShareModeListingTabMine                = "mine"
+	AccountShareModeListingTabArchive             = "archive"
+	AccountExternalPlacementPrivate               = "private"
+	AccountExternalPlacementPublicPool            = "public_pool"
+	AccountExternalPlacementRoom                  = "room"
+	AccountShareListingSortDefault                = "default"
+	AccountShareListingSortAccountConcurrency     = "account_concurrency"
+	AccountShareListingSortPerUserConcurrency     = "per_user_concurrency"
+	AccountShareListingSortMinBalanceRequired     = "min_balance_required"
+	AccountShareListingSortHourlyRate             = "hourly_rate"
+	AccountShareListingSortHourlyFeeWaiver        = "hourly_fee_waiver"
+	AccountShareListingSortRateMultiplier         = "rate_multiplier"
+	AccountShareListingSortRemainingSeats         = "remaining_seats"
+	AccountShareListingSortRating                 = "rating"
+	AccountShareListingSortUpdatedAt              = "updated_at"
+	AccountShareListingSortOrderAsc               = "asc"
+	AccountShareListingSortOrderDesc              = "desc"
+	AccountShareListingFeatureHourlyFeeWaiver     = "hourly_fee_waiver"
+	AccountShareListingFeatureImageGeneration     = "image_generation"
+	AccountShareListingFeatureNoHourlyFee         = "no_hourly_fee"
+	AccountShareListingFeatureCodexCLIOnly        = "codex_cli_only"
+	AccountShareListingFeatureNonCodexCLIOnly     = "non_codex_cli_only"
+	AccountShareListingFeatureAvailable           = "available"
+	AccountShareWaiverProgressStatusInProgress    = "in_progress"
+	AccountShareWaiverProgressStatusMet           = "met"
+	AccountShareSpendRangeToday                   = "today"
+	AccountShareSpendRangeCurrentMembership       = "current_membership"
+	AccountShareSpendRangeSevenDays               = "7d"
+	AccountShareMembershipEndReasonManual         = "manual"
+	AccountShareMembershipEndReasonIdleTimeout    = "idle_timeout"
+	AccountShareMembershipEndReasonPrepay         = "prepay_insufficient"
+	AccountShareMembershipEndReasonUnavailable    = "account_unavailable"
+	AccountShareMembershipEndReasonQueueExpired   = "queue_expired"
+	AccountShareMembershipEndReasonRoomDraining   = "room_draining"
+	AccountShareReviewCommentStatusNone           = "none"
+	AccountShareReviewCommentStatusPending        = "pending"
+	AccountShareReviewCommentStatusApproved       = "approved"
+	AccountShareReviewCommentStatusRejected       = "rejected"
+	AccountShareReviewCommentStatusFailed         = "failed"
+	AccountShareReviewMaxCommentRunes             = 1000
+	AccountShareReviewModerationInterval          = 15 * time.Second
+	AccountShareReviewModerationBatchSize         = 20
+	AccountShareReviewModerationMaxAttempts       = 5
+	AccountShareRoomBatchMaxAccounts              = 1000
+	accountShareSeatBillingTaskName               = "account_share_seat_billing"
+	accountShareBillingIntentTaskName             = "account_share_billing_intents"
+	accountShareSeatWaiverCompensationTaskName    = "account_share_seat_waiver_compensation"
+	accountShareRoomLifecycleFinalizerTaskName    = "account_share_room_lifecycle_finalizer"
+	accountShareRoomValidationTaskName            = "account_share_room_validation"
+	accountShareReviewModerationTaskName          = "account_share_review_moderation"
+	accountShareModeContextBindingMissingError    = "该分组未绑定账号"
+	accountShareModeJoinIntentTokenAction         = "account_share_mode:join_listing:v1"
+	accountShareModeEndMembershipTokenAction      = "account_share_mode:end_membership:v2"
 )
 
 var accountShareModeDefaultAllowedModels = []string{
@@ -219,30 +229,30 @@ var (
 	ErrAccountShareEndStateConflict             = infraerrors.Conflict("ACCOUNT_SHARE_END_STATE_CONFLICT", "account share membership changed after end confirmation; refresh and try again")
 	// ErrAccountShareBillingBindingUnavailable 绑定/条款快照不可用（原属已删除的 billing intent 体系，
 	// 仍被绑定与条款校验路径使用）
-	ErrAccountShareBillingBindingUnavailable = errors.New("account share billing binding is no longer active")
-	ErrAccountShareModeInvalidIdleTimeout       = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_IDLE_TIMEOUT", "idle_timeout_minutes must be between 1 and 10080")
-	ErrAccountShareListingInUse                 = infraerrors.Conflict("ACCOUNT_SHARE_LISTING_IN_USE", "account share listing has active seats")
-	ErrAccountShareListingEditing               = infraerrors.Conflict("ACCOUNT_SHARE_LISTING_EDITING", "account share listing is being edited")
-	ErrAccountShareEditSessionRequired          = infraerrors.BadRequest("ACCOUNT_SHARE_EDIT_SESSION_REQUIRED", "account share edit session is required")
-	ErrAccountShareEditSessionInvalid           = infraerrors.Conflict("ACCOUNT_SHARE_EDIT_SESSION_INVALID", "account share edit session is invalid or expired")
-	ErrAccountShareExpectedVersionRequired      = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_EXPECTED_VERSION_REQUIRED", "expected_version is required")
-	ErrAccountShareVersionConflict              = infraerrors.Conflict("ACCOUNT_SHARE_ROOM_VERSION_CONFLICT", "account share room version conflict")
-	ErrAccountShareForceAdminRequired           = infraerrors.Forbidden("ACCOUNT_SHARE_ROOM_FORCE_ADMIN_REQUIRED", "only an administrator can force an account share room update")
-	ErrAccountShareUpdateReasonRequired         = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_UPDATE_REASON_REQUIRED", "update reason is required")
-	ErrAccountShareForceReasonRequired          = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_FORCE_REASON_REQUIRED", "force update reason is required")
-	ErrAccountShareForceConfirmationRequired    = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_FORCE_CONFIRMATION_REQUIRED", "force update confirmation is required")
-	ErrAccountShareUpdateRequiresPaused         = infraerrors.Conflict("ACCOUNT_SHARE_ROOM_UPDATE_REQUIRES_PAUSED", "contract updates require an empty active or paused room with no active, queued, or ending memberships")
-	ErrAccountShareConsumerProtectionViolation  = infraerrors.Conflict("ACCOUNT_SHARE_CONSUMER_PROTECTION_VIOLATION", "the update would reduce rights already granted to consumers")
-	ErrAccountShareRelistAccountUnavailable     = infraerrors.BadRequest("ACCOUNT_SHARE_RELIST_ACCOUNT_UNAVAILABLE", "账号测试通过，但账号状态仍不可调度，请先启用账号或恢复调度后重试")
-	ErrAccountShareReviewInvalidScore           = infraerrors.BadRequest("ACCOUNT_SHARE_REVIEW_INVALID_SCORE", "评分必须在 0-10 之间")
-	ErrAccountShareReviewCommentTooLong         = infraerrors.BadRequest("ACCOUNT_SHARE_REVIEW_COMMENT_TOO_LONG", "评论最多 1000 个字符")
-	ErrAccountShareReviewAlreadyExists          = infraerrors.Conflict("ACCOUNT_SHARE_REVIEW_ALREADY_EXISTS", "该次使用已评分")
-	ErrAccountShareReviewNoUsage                = infraerrors.BadRequest("ACCOUNT_SHARE_REVIEW_NO_USAGE", "该次使用没有实际请求记录，不能评分")
-	ErrAccountShareReviewSelfUse                = infraerrors.BadRequest("ACCOUNT_SHARE_REVIEW_SELF_USE", "不能评价自己上架的账号")
-	ErrAccountShareReviewIdentityMissing        = infraerrors.BadRequest("ACCOUNT_SHARE_REVIEW_IDENTITY_MISSING", "该账号缺少邮箱身份，不能评分")
-	ErrAccountShareCommentReviewUnavailable     = infraerrors.BadRequest("ACCOUNT_SHARE_COMMENT_REVIEW_UNAVAILABLE", "评论审核未启用或配置不完整，暂时不能提交评论")
-	ErrAccountShareRecommendationInvalid        = infraerrors.BadRequest("ACCOUNT_SHARE_RECOMMENDATION_INVALID", "账号推荐测算参数无效")
-	ErrAccountShareSpendInvalidRange            = infraerrors.BadRequest("ACCOUNT_SHARE_SPEND_INVALID_RANGE", "invalid account share spend range")
+	ErrAccountShareBillingBindingUnavailable   = errors.New("account share billing binding is no longer active")
+	ErrAccountShareModeInvalidIdleTimeout      = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_IDLE_TIMEOUT", "idle_timeout_minutes must be between 1 and 10080")
+	ErrAccountShareListingInUse                = infraerrors.Conflict("ACCOUNT_SHARE_LISTING_IN_USE", "account share listing has active seats")
+	ErrAccountShareListingEditing              = infraerrors.Conflict("ACCOUNT_SHARE_LISTING_EDITING", "account share listing is being edited")
+	ErrAccountShareEditSessionRequired         = infraerrors.BadRequest("ACCOUNT_SHARE_EDIT_SESSION_REQUIRED", "account share edit session is required")
+	ErrAccountShareEditSessionInvalid          = infraerrors.Conflict("ACCOUNT_SHARE_EDIT_SESSION_INVALID", "account share edit session is invalid or expired")
+	ErrAccountShareExpectedVersionRequired     = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_EXPECTED_VERSION_REQUIRED", "expected_version is required")
+	ErrAccountShareVersionConflict             = infraerrors.Conflict("ACCOUNT_SHARE_ROOM_VERSION_CONFLICT", "account share room version conflict")
+	ErrAccountShareForceAdminRequired          = infraerrors.Forbidden("ACCOUNT_SHARE_ROOM_FORCE_ADMIN_REQUIRED", "only an administrator can force an account share room update")
+	ErrAccountShareUpdateReasonRequired        = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_UPDATE_REASON_REQUIRED", "update reason is required")
+	ErrAccountShareForceReasonRequired         = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_FORCE_REASON_REQUIRED", "force update reason is required")
+	ErrAccountShareForceConfirmationRequired   = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_FORCE_CONFIRMATION_REQUIRED", "force update confirmation is required")
+	ErrAccountShareUpdateRequiresPaused        = infraerrors.Conflict("ACCOUNT_SHARE_ROOM_UPDATE_REQUIRES_PAUSED", "contract updates require an empty active or paused room with no active, queued, or ending memberships")
+	ErrAccountShareConsumerProtectionViolation = infraerrors.Conflict("ACCOUNT_SHARE_CONSUMER_PROTECTION_VIOLATION", "the update would reduce rights already granted to consumers")
+	ErrAccountShareRelistAccountUnavailable    = infraerrors.BadRequest("ACCOUNT_SHARE_RELIST_ACCOUNT_UNAVAILABLE", "账号测试通过，但账号状态仍不可调度，请先启用账号或恢复调度后重试")
+	ErrAccountShareReviewInvalidScore          = infraerrors.BadRequest("ACCOUNT_SHARE_REVIEW_INVALID_SCORE", "评分必须在 0-10 之间")
+	ErrAccountShareReviewCommentTooLong        = infraerrors.BadRequest("ACCOUNT_SHARE_REVIEW_COMMENT_TOO_LONG", "评论最多 1000 个字符")
+	ErrAccountShareReviewAlreadyExists         = infraerrors.Conflict("ACCOUNT_SHARE_REVIEW_ALREADY_EXISTS", "该次使用已评分")
+	ErrAccountShareReviewNoUsage               = infraerrors.BadRequest("ACCOUNT_SHARE_REVIEW_NO_USAGE", "该次使用没有实际请求记录，不能评分")
+	ErrAccountShareReviewSelfUse               = infraerrors.BadRequest("ACCOUNT_SHARE_REVIEW_SELF_USE", "不能评价自己上架的账号")
+	ErrAccountShareReviewIdentityMissing       = infraerrors.BadRequest("ACCOUNT_SHARE_REVIEW_IDENTITY_MISSING", "该账号缺少邮箱身份，不能评分")
+	ErrAccountShareCommentReviewUnavailable    = infraerrors.BadRequest("ACCOUNT_SHARE_COMMENT_REVIEW_UNAVAILABLE", "评论审核未启用或配置不完整，暂时不能提交评论")
+	ErrAccountShareRecommendationInvalid       = infraerrors.BadRequest("ACCOUNT_SHARE_RECOMMENDATION_INVALID", "账号推荐测算参数无效")
+	ErrAccountShareSpendInvalidRange           = infraerrors.BadRequest("ACCOUNT_SHARE_SPEND_INVALID_RANGE", "invalid account share spend range")
 )
 
 func accountShareModeUnsupportedModelError(requestedModel string) error {
@@ -270,10 +280,10 @@ type AccountShareModeRequestContext struct {
 }
 
 type accountShareModeRequestState struct {
-	mu              sync.RWMutex
-	userID          int64
-	apiKeyID        int64
-	groupID         int64
+	mu         sync.RWMutex
+	userID     int64
+	apiKeyID   int64
+	groupID    int64
 	resolved   bool
 	membership *AccountShareMembership
 	listing    *AccountShareListing
@@ -1021,6 +1031,16 @@ type AccountShareSeatBillingResult struct {
 	EndedConsumerUserIDs []int64
 }
 
+// AccountShareSeatWaiverBatch 是 waiver 补偿单批的结果。
+// Matched 是候选查询返回的行数(含逐行评估时被跳过的行),
+// 游标是本批最后一行的 (period_ended_at, id),供轮内 keyset 续扫。
+type AccountShareSeatWaiverBatch struct {
+	Billing             *AccountShareSeatBillingResult
+	Matched             int
+	CursorPeriodEndedAt time.Time
+	CursorID            int64
+}
+
 type AccountShareListingMaintenanceResult struct {
 	Processed int
 }
@@ -1178,7 +1198,8 @@ type AccountShareModeRepository interface {
 	EndUnavailableAccountMemberships(ctx context.Context, accountID int64, endedAt time.Time, limit int) (*AccountShareSeatBillingResult, error)
 	DisablePermanentlyUnavailableListings(ctx context.Context, now time.Time, limit int) (*AccountShareListingMaintenanceResult, error)
 	ProcessSeatBilling(ctx context.Context, now time.Time, limit int) (*AccountShareSeatBillingResult, error)
-	ProcessSeatWaiverCompensations(ctx context.Context, now time.Time, limit int) (*AccountShareSeatBillingResult, error)
+	ProcessSeatWaiverBacklogCompensations(ctx context.Context, now time.Time, limit int, cursorPeriodEndedAt time.Time, cursorID int64) (*AccountShareSeatWaiverBatch, error)
+	ProcessSeatWaiverLateUsageCompensations(ctx context.Context, now time.Time, limit int, usageSince, windowSince time.Time, cursorPeriodEndedAt time.Time, cursorID int64) (*AccountShareSeatWaiverBatch, error)
 	ProcessSeatBillingForJoin(ctx context.Context, now time.Time, consumerUserID, apiKeyID, listingID int64) (*AccountShareSeatBillingResult, error)
 	ProcessSeatBillingForRequest(ctx context.Context, now time.Time, consumerUserID, apiKeyID int64) (*AccountShareSeatBillingResult, error)
 	GetActiveMembershipForAPIKey(ctx context.Context, apiKeyID int64) (*AccountShareMembership, *AccountShareListing, error)
@@ -1271,40 +1292,43 @@ type accountShareRecommendationUsageProfileRepository interface {
 }
 
 type AccountShareModeService struct {
-	repo                     AccountShareModeRepository
-	accountRepo              AccountRepository
-	apiKeyRepo               APIKeyRepository
-	userRepo                 UserRepository
-	proxyRepo                AccountShareModeProxyRepository
-	usageProfileRepo         accountShareRecommendationUsageProfileRepository
-	openaiOAuthService       *OpenAIOAuthService
-	oauthService             *OAuthService
-	accountTestService       accountShareConnectivityTester
-	rateLimitService         accountShareAccountStateRecovery
-	concurrencyService       *ConcurrencyService
-	authCacheInvalidator     APIKeyAuthCacheInvalidator
-	billingCacheService      *BillingCacheService
-	billingService           *BillingService
-	modelPricingResolver     *ModelPricingResolver
-	settingService           *SettingService
-	reviewSettingRepo        SettingRepository
-	reviewHTTPClient         *http.Client
-	taskExecutor             *ClusterTaskExecutor
-	actionTokenSecret        []byte
-	seatBillingCtx           context.Context
-	seatBillingCancel        context.CancelFunc
-	seatBillingStopCh        chan struct{}
-	seatBillingStopOnce      sync.Once
-	seatBillingStartOnce     sync.Once
-	seatBillingWG            sync.WaitGroup
-	roomLifecycleCursorMu    sync.Mutex
-	roomLifecycleAfterID     int64
-	reviewCtx                context.Context
-	reviewCancel             context.CancelFunc
-	reviewStopCh             chan struct{}
-	reviewStopOnce           sync.Once
-	reviewStartOnce          sync.Once
-	reviewWG                 sync.WaitGroup
+	repo                 AccountShareModeRepository
+	accountRepo          AccountRepository
+	apiKeyRepo           APIKeyRepository
+	userRepo             UserRepository
+	proxyRepo            AccountShareModeProxyRepository
+	usageProfileRepo     accountShareRecommendationUsageProfileRepository
+	openaiOAuthService   *OpenAIOAuthService
+	oauthService         *OAuthService
+	accountTestService   accountShareConnectivityTester
+	rateLimitService     accountShareAccountStateRecovery
+	concurrencyService   *ConcurrencyService
+	authCacheInvalidator APIKeyAuthCacheInvalidator
+	billingCacheService  *BillingCacheService
+	billingService       *BillingService
+	modelPricingResolver *ModelPricingResolver
+	settingService       *SettingService
+	reviewSettingRepo    SettingRepository
+	reviewHTTPClient     *http.Client
+	taskExecutor         *ClusterTaskExecutor
+	actionTokenSecret    []byte
+	seatBillingCtx       context.Context
+	seatBillingCancel    context.CancelFunc
+	seatBillingStopCh    chan struct{}
+	seatBillingStopOnce  sync.Once
+	seatBillingStartOnce sync.Once
+	seatBillingWG        sync.WaitGroup
+	// 迟到 usage 反查的高水位,仅 waiver 补偿 worker 单 goroutine 读写。
+	// 重启/租约切换后归零,退化为 Lookback 下限——只多扫不漏扫。
+	seatWaiverLateUsageHWM time.Time
+	roomLifecycleCursorMu  sync.Mutex
+	roomLifecycleAfterID   int64
+	reviewCtx              context.Context
+	reviewCancel           context.CancelFunc
+	reviewStopCh           chan struct{}
+	reviewStopOnce         sync.Once
+	reviewStartOnce        sync.Once
+	reviewWG               sync.WaitGroup
 }
 
 func NewAccountShareModeService(
@@ -1615,22 +1639,71 @@ func (s *AccountShareModeService) processSeatWaiverCompensationsOnce() {
 	ctx, cancel := context.WithTimeout(s.seatBillingWorkerContext(), AccountShareModeSeatWaiverCompensationTimeout)
 	defer cancel()
 	_, err := s.taskExecutor.Run(ctx, accountShareSeatWaiverCompensationTaskName, func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
-		if err := guard.Check(taskCtx); err != nil {
-			return err
-		}
-		result, err := s.repo.ProcessSeatWaiverCompensations(
-			taskCtx,
-			time.Now().UTC(),
-			AccountShareModeSeatWaiverCompensationBatchSize,
-		)
-		if err != nil {
-			return fmt.Errorf("process seat waiver compensations: %w", err)
-		}
-		s.invalidateSeatBillingCaches(result)
-		return nil
+		return s.runSeatWaiverCompensationRound(taskCtx, guard)
 	})
 	if err != nil {
 		log.Printf("account_share_mode: process seat waiver compensations failed: %v", err)
+	}
+}
+
+// runSeatWaiverCompensationRound 两阶段消化 waiver 补偿:
+// 阶段1 排干未评估积压(迁移 203 回炉的历史行),阶段2 反查迟到 usage 触发的重评。
+// 两阶段共用轮内软预算与 keyset 游标;阶段2 的高水位仅在该阶段排干时推进,
+// 截断时冻结,保证不漏。
+func (s *AccountShareModeService) runSeatWaiverCompensationRound(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+	roundStart := time.Now().UTC()
+	deadline := roundStart.Add(AccountShareModeSeatWaiverCompensationRoundBudget)
+	batchSize := AccountShareModeSeatWaiverCompensationBatchSize
+
+	var cursorEndedAt time.Time
+	var cursorID int64
+	for {
+		if err := guard.Check(taskCtx); err != nil {
+			return err
+		}
+		batch, err := s.repo.ProcessSeatWaiverBacklogCompensations(taskCtx, time.Now().UTC(), batchSize, cursorEndedAt, cursorID)
+		if err != nil {
+			return fmt.Errorf("process seat waiver backlog compensations: %w", err)
+		}
+		if batch != nil {
+			s.invalidateSeatBillingCaches(batch.Billing)
+		}
+		if batch == nil || batch.Matched < batchSize {
+			break
+		}
+		cursorEndedAt, cursorID = batch.CursorPeriodEndedAt, batch.CursorID
+		if time.Now().UTC().After(deadline) {
+			// 积压未排干,本轮预算已尽:阶段2 留待下轮,HWM 不动。
+			return nil
+		}
+	}
+
+	usageSince := roundStart.Add(-AccountShareModeSeatWaiverLateUsageLookback)
+	if hwm := s.seatWaiverLateUsageHWM; !hwm.IsZero() && hwm.After(usageSince) {
+		usageSince = hwm
+	}
+	windowSince := usageSince.Add(-AccountShareModeSeatWaiverLateUsageSlack)
+	cursorEndedAt, cursorID = time.Time{}, 0
+	for {
+		if err := guard.Check(taskCtx); err != nil {
+			return err
+		}
+		batch, err := s.repo.ProcessSeatWaiverLateUsageCompensations(taskCtx, time.Now().UTC(), batchSize, usageSince, windowSince, cursorEndedAt, cursorID)
+		if err != nil {
+			return fmt.Errorf("process seat waiver late usage compensations: %w", err)
+		}
+		if batch != nil {
+			s.invalidateSeatBillingCaches(batch.Billing)
+		}
+		if batch == nil || batch.Matched < batchSize {
+			// 排干:推进高水位,留一个补偿延迟的余量覆盖在途落账。
+			s.seatWaiverLateUsageHWM = roundStart.Add(-AccountShareModeSeatWaiverCompensationDelay)
+			return nil
+		}
+		cursorEndedAt, cursorID = batch.CursorPeriodEndedAt, batch.CursorID
+		if time.Now().UTC().After(deadline) {
+			return nil
+		}
 	}
 }
 

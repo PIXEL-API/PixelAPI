@@ -891,9 +891,11 @@ func (s *ConcurrencyService) CleanupExpiredAccountSlots(ctx context.Context, acc
 	return s.cache.CleanupExpiredAccountSlots(ctx, accountID)
 }
 
-// StartSlotCleanupWorker starts a background cleanup worker for expired account slots.
-func (s *ConcurrencyService) StartSlotCleanupWorker(accountRepo AccountRepository, interval time.Duration) {
-	if s == nil || s.cache == nil || accountRepo == nil || interval <= 0 {
+// StartSlotCleanupWorker starts a background cleanup worker for expired slots.
+// CleanupExpiredSlots 的全局 SCAN 已覆盖所有账号/用户/共享成员槽位，无需再按
+// 账号逐一清理；AccountRepository 参数仅为保持 wire 装配签名兼容而保留。
+func (s *ConcurrencyService) StartSlotCleanupWorker(_ AccountRepository, interval time.Duration) {
+	if s == nil || s.cache == nil || interval <= 0 {
 		return
 	}
 
@@ -901,29 +903,20 @@ func (s *ConcurrencyService) StartSlotCleanupWorker(accountRepo AccountRepositor
 		if s.cleanupCtx == nil || s.cleanupCancel == nil {
 			s.cleanupCtx, s.cleanupCancel = context.WithCancel(context.Background())
 		}
+		// 单轮超时与清理周期挂钩，避免周期内一轮未完成又叠加下一轮；
+		// 封顶 2 分钟，防止超长周期配置让卡住的一轮迟迟不释放。
+		timeout := interval
+		if timeout > 2*time.Minute {
+			timeout = 2 * time.Minute
+		}
 		runCleanup := func() {
-			ctx, cancel := context.WithTimeout(s.cleanupCtx, 30*time.Second)
+			ctx, cancel := context.WithTimeout(s.cleanupCtx, timeout)
 			defer cancel()
 			run := func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
 				if err := guard.Check(taskCtx); err != nil {
 					return err
 				}
-				if err := s.cache.CleanupExpiredSlots(taskCtx); err != nil {
-					return err
-				}
-				accounts, err := accountRepo.ListSchedulable(taskCtx)
-				if err != nil {
-					return err
-				}
-				for _, account := range accounts {
-					if err := guard.Check(taskCtx); err != nil {
-						return err
-					}
-					if err := s.cache.CleanupExpiredAccountSlots(taskCtx, account.ID); err != nil {
-						logger.LegacyPrintf("service.concurrency", "Warning: cleanup expired slots failed for account %d: %v", account.ID, err)
-					}
-				}
-				return nil
+				return s.cache.CleanupExpiredSlots(taskCtx)
 			}
 			var err error
 			if s.taskExecutor == nil {

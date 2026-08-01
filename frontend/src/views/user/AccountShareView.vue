@@ -2484,7 +2484,7 @@
           <span>房间正在被使用：只允许降费、提高单用户并发、增加模型，或在保留现有席位与预约的前提下减少席位。</span>
         </div>
 
-        <div v-if="editErrorMessage" class="notice-row border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-300">
+        <div v-if="editErrorMessage" data-testid="config-edit-error" class="notice-row border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-300">
           <Icon name="exclamationCircle" size="sm" class="mt-0.5 flex-shrink-0" />
           <div class="min-w-0 flex-1">
             <span>{{ editErrorMessage }}</span>
@@ -2668,6 +2668,11 @@
       </div>
 
       <template #footer>
+        <span
+          v-if="configEditBlockedReason"
+          class="mr-auto text-sm text-amber-700 dark:text-amber-300"
+          data-testid="config-edit-blocked-reason"
+        >{{ configEditBlockedReason }}</span>
         <button type="button" class="btn-secondary" :disabled="savingConfigEdit || releasingConfigEdit" @click="() => closeConfigEditDialog()">取消</button>
         <button
           type="button"
@@ -4853,6 +4858,16 @@ const perUserConcurrencyValidationMessage = computed(() =>
 const editPerUserConcurrencyValidationMessage = computed(() =>
   validatePerUserConcurrencyValue(editForm.per_user_concurrency)
 )
+// 保存按钮被禁用时的具体原因：必填项缺失（如"本次修改原因"）会把按钮置灰，
+// 若不展示原因，用户只会看到"点了没反应"。
+const configEditBlockedReason = computed(() => {
+  if (savingConfigEdit.value || releasingConfigEdit.value) return ''
+  if (editVersionConflict.value) return ''
+  if (!editReason.value.trim()) return '请先填写下方“本次修改原因”后再保存'
+  if (editAllowedModels.value.length === 0) return '请至少保留一个模型白名单'
+  if (editPerUserConcurrencyValidationMessage.value) return editPerUserConcurrencyValidationMessage.value
+  return ''
+})
 const perUserConcurrencyLimitTip = computed(() =>
   buildPerUserConcurrencyLimitTip(maxPerUserConcurrency.value)
 )
@@ -10197,13 +10212,26 @@ function confirmForceEdit(): void {
   void openConfigEditDialog(listing, true, reason)
 }
 
+// 错误条渲染在弹窗顶部，而"保存配置"在长表单底部：只写 editErrorMessage 会让
+// 用户在滚动后看不到任何反馈（表现为"点了没反应"）。这里同时弹 toast 并把错误条滚入视野。
+function setConfigEditError(message: string): void {
+  editErrorMessage.value = message
+  if (!message) return
+  appStore.showError?.(message)
+  void nextTick(() => {
+    document
+      .querySelector('[data-testid="config-edit-error"]')
+      ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  })
+}
+
 async function saveConfigEdit(): Promise<void> {
   const listing = editingConfigListing.value
   if (!listing || savingConfigEdit.value) return
   editErrorMessage.value = ''
   const validationError = validateEditConfig()
   if (validationError) {
-    editErrorMessage.value = validationError
+    setConfigEditError(validationError)
     return
   }
 
@@ -10262,15 +10290,15 @@ async function saveConfigEdit(): Promise<void> {
   } catch (error: unknown) {
     if (extractApiErrorCode(error) === 'ACCOUNT_SHARE_ROOM_VERSION_CONFLICT') {
       editVersionConflict.value = true
-      editErrorMessage.value = '房间配置已被更新，请刷新后重新编辑'
+      setConfigEditError('房间配置已被更新，请刷新后重新编辑')
       stopEditSessionRenewal()
     } else {
-      editErrorMessage.value = extractApiErrorMessage(error, '保存房间配置失败', {
+      setConfigEditError(extractApiErrorMessage(error, '保存房间配置失败', {
         ACCOUNT_SHARE_ROOM_UPDATE_REASON_REQUIRED: '请填写本次房间配置修改原因',
         ACCOUNT_SHARE_ROOM_FORCE_REASON_REQUIRED: '管理员强制修改原因不能为空',
         ACCOUNT_SHARE_ROOM_FORCE_CONFIRMATION_REQUIRED: '管理员强制修改必须完成明确确认',
-        ACCOUNT_SHARE_CONSUMER_PROTECTION_VIOLATION: '当前房间已有消费者，只能降低费用、提高单用户并发、增加模型，或在不影响现有席位的前提下减少席位'
-      })
+        ACCOUNT_SHARE_CONSUMER_PROTECTION_VIOLATION: '当前房间已有消费者，只能降低费用、提高单用户并发、增加模型，或在不影响现有席位的前提下减少席位。如需移除模型，请先让现有消费者结束使用。'
+      }))
     }
   } finally {
     savingConfigEdit.value = false

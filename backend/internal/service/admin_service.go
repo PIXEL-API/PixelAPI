@@ -475,6 +475,8 @@ type CreateProxyInput struct {
 	// RequiredAccountLevel 为空表示所有账号等级可用。
 	RequiredAccountLevel string
 	MaxAccounts          int
+	// OwnerUserID 为 0 表示平台代理（所有用户可见）；>0 表示专属代理，仅对该用户显示可用。
+	OwnerUserID int64
 }
 
 type UpdateProxyInput struct {
@@ -490,6 +492,8 @@ type UpdateProxyInput struct {
 	Platform             *string
 	RequiredAccountLevel *string
 	MaxAccounts          *int
+	// OwnerUserID 为 nil 表示不修改；0 表示清空归属改回平台代理；>0 表示归属到该用户。
+	OwnerUserID *int64
 }
 
 type GenerateRedeemCodesInput struct {
@@ -3403,6 +3407,9 @@ func (s *adminServiceImpl) prepareAccountCreate(ctx context.Context, input *Crea
 		return nil, nil, err
 	}
 	if input.ProxyID != nil && *input.ProxyID > 0 {
+		if err := s.ensureProxyOwnerAllowsAccount(ctx, *input.ProxyID, input.OwnerUserID); err != nil {
+			return nil, nil, err
+		}
 		if err := s.ensureProxyAccountCapacity(ctx, *input.ProxyID, 1); err != nil {
 			return nil, nil, err
 		}
@@ -3550,6 +3557,25 @@ func shouldForceAdminOwnedAgentIdentityPending(
 	return enteredPublic || authMaterialChanged || ownerUserIDChanged || explicitlyApproved
 }
 
+// accountModelConfigCredentialKeys 是 credentials 里纯粹的模型路由配置，
+// 与账号身份/认证材料无关。共享中的账号调整这些键不改变消费者实际用到的是哪个账号，
+// 因此不需要走"外部投放转换"流程。
+var accountModelConfigCredentialKeys = map[string]struct{}{
+	"model_mapping":         {},
+	"compact_model_mapping": {},
+}
+
+// credentialsChangeAffectsAccountIdentity 判断本次 credentials 变更是否触及
+// 认证材料。仅调整模型白名单/映射时返回 false，避免把"改模型"误判成"换账号"。
+func credentialsChangeAffectsAccountIdentity(credentials map[string]any) bool {
+	for key := range credentials {
+		if _, benign := accountModelConfigCredentialKeys[key]; !benign {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *UpdateAccountInput) (*Account, error) {
 	account, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
@@ -3561,7 +3587,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			input.ShareMode != "" ||
 			input.ShareStatus != "" ||
 			input.AccountLevel != nil ||
-			len(input.Credentials) > 0 ||
+			credentialsChangeAffectsAccountIdentity(input.Credentials) ||
 			input.Extra != nil ||
 			input.GroupIDs != nil) {
 		return nil, ErrOwnedAccountPlacementConversionRequired
@@ -3701,6 +3727,15 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			account.OwnerUserID = nil
 		} else {
 			account.OwnerUserID = input.OwnerUserID
+		}
+	}
+	// 专属代理只能绑定其归属用户的账号。仅在代理或账号归属发生变化时校验，
+	// 免得历史遗留的不一致绑定把无关编辑（改名、改并发）也一并锁死。
+	if !sameInt64Ptr(before.ProxyID, account.ProxyID) || !sameInt64Ptr(before.OwnerUserID, account.OwnerUserID) {
+		if account.ProxyID != nil && *account.ProxyID > 0 {
+			if err := s.ensureProxyOwnerAllowsAccount(ctx, *account.ProxyID, account.OwnerUserID); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if input.ShareMode != "" {
@@ -3895,7 +3930,8 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		return preflightAccounts, nil
 	}
 
-	if input.GroupIDs != nil || input.AccountLevel != nil || len(input.Credentials) > 0 || input.Extra != nil {
+	if input.GroupIDs != nil || input.AccountLevel != nil ||
+		credentialsChangeAffectsAccountIdentity(input.Credentials) || input.Extra != nil {
 		accounts, err := loadPreflightAccounts()
 		if err != nil {
 			return nil, err
@@ -4007,6 +4043,10 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		if err != nil {
 			return nil, err
 		}
+		targetProxy, err := s.proxyRepo.GetByID(ctx, *input.ProxyID)
+		if err != nil {
+			return nil, fmt.Errorf("get proxy: %w", err)
+		}
 		var additional int64
 		for _, account := range accounts {
 			if account == nil {
@@ -4014,6 +4054,10 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			}
 			if account.ProxyID != nil && *account.ProxyID == *input.ProxyID {
 				continue
+			}
+			// 专属代理只能绑定其归属用户的账号，批量改绑同样不能绕过。
+			if !proxyOwnerAllowsAccountOwner(targetProxy, account.OwnerUserID) {
+				return nil, ErrProxyOwnerConflict
 			}
 			additional++
 		}
@@ -4706,6 +4750,10 @@ func (s *adminServiceImpl) CreateProxy(ctx context.Context, input *CreateProxyIn
 	if err := s.validateProxyRequiredAccountLevel(ctx, input.RequiredAccountLevel); err != nil {
 		return nil, err
 	}
+	ownerUserID, err := s.resolveProxyOwnerUserID(ctx, input.OwnerUserID)
+	if err != nil {
+		return nil, err
+	}
 	proxy := &Proxy{
 		Name:                 input.Name,
 		Protocol:             input.Protocol,
@@ -4713,6 +4761,7 @@ func (s *adminServiceImpl) CreateProxy(ctx context.Context, input *CreateProxyIn
 		Port:                 input.Port,
 		Username:             input.Username,
 		Password:             input.Password,
+		OwnerUserID:          ownerUserID,
 		Platform:             NormalizeProxyPlatform(input.Platform),
 		RequiredAccountLevel: NormalizeRequiredAccountLevel(input.RequiredAccountLevel),
 		Status:               StatusActive,
@@ -4797,11 +4846,87 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 		}
 		proxy.MaxAccounts = *input.MaxAccounts
 	}
+	ownerAssignmentChanged := false
+	if input.OwnerUserID != nil {
+		requested := *input.OwnerUserID
+		if requested < 0 {
+			requested = 0
+		}
+		current := int64(0)
+		if proxy.OwnerUserID != nil {
+			current = *proxy.OwnerUserID
+		}
+		// 归属没变就不校验归属用户、也不跑冲突守卫：否则归属用户已注销、
+		// 或代理上仍留着他人账号的历史代理会被锁死，连改名改端口都做不了。
+		if requested != current {
+			ownerUserID, err := s.resolveProxyOwnerUserID(ctx, requested)
+			if err != nil {
+				return nil, err
+			}
+			proxy.OwnerUserID = ownerUserID
+			ownerAssignmentChanged = true
+		}
+	}
 
+	// 归属变更走带行锁的事务写入，让"没有他人账号绑定"的守卫与写入原子生效。
+	if ownerAssignmentChanged {
+		if err := s.proxyRepo.UpdateWithOwnerAssignment(ctx, proxy); err != nil {
+			return nil, err
+		}
+		return proxy, nil
+	}
 	if err := s.proxyRepo.Update(ctx, proxy); err != nil {
 		return nil, err
 	}
 	return proxy, nil
+}
+
+// proxyOwnerAllowsAccountOwner 判断账号（归属 accountOwnerUserID，nil 表示管理员账号）
+// 是否可以绑定到该代理。专属代理只允许其归属用户的账号绑定：其他人的账号绑上去后，
+// 会在用户端重新鉴权时因代理不可见被拒，专属出口 IP 也会被别人的流量共用。
+func proxyOwnerAllowsAccountOwner(proxy *Proxy, accountOwnerUserID *int64) bool {
+	if proxy == nil || proxy.OwnerUserID == nil {
+		return true
+	}
+	return accountOwnerUserID != nil && *accountOwnerUserID == *proxy.OwnerUserID
+}
+
+// ensureProxyOwnerAllowsAccount 是 proxyOwnerAllowsAccountOwner 的取数版本，
+// 用于账号绑定代理的写路径。
+func (s *adminServiceImpl) ensureProxyOwnerAllowsAccount(ctx context.Context, proxyID int64, accountOwnerUserID *int64) error {
+	if proxyID <= 0 {
+		return nil
+	}
+	proxy, err := s.proxyRepo.GetByID(ctx, proxyID)
+	if err != nil {
+		return fmt.Errorf("get proxy: %w", err)
+	}
+	if !proxyOwnerAllowsAccountOwner(proxy, accountOwnerUserID) {
+		return ErrProxyOwnerConflict
+	}
+	return nil
+}
+
+func sameInt64Ptr(left, right *int64) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
+}
+
+// resolveProxyOwnerUserID 将请求中的归属用户 ID（0 = 平台代理）解析为存储用指针，
+// 非 0 时校验用户存在。
+func (s *adminServiceImpl) resolveProxyOwnerUserID(ctx context.Context, ownerUserID int64) (*int64, error) {
+	if ownerUserID <= 0 {
+		return nil, nil
+	}
+	if _, err := s.userRepo.GetByID(ctx, ownerUserID); err != nil {
+		if errors.Is(err, ErrUserNotFound) {
+			return nil, ErrProxyOwnerNotFound
+		}
+		return nil, fmt.Errorf("get proxy owner user: %w", err)
+	}
+	return &ownerUserID, nil
 }
 
 func (s *adminServiceImpl) DeleteProxy(ctx context.Context, id int64) error {

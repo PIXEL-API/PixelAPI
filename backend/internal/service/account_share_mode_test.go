@@ -69,6 +69,11 @@ type accountShareModeRepoStub struct {
 	requestBillingErr    error
 	waiverCompCalls      int
 	waiverCompLimit      int
+	waiverBacklogQueue   []*AccountShareSeatWaiverBatch
+	waiverBacklogCursors [][2]any
+	waiverLateCalls      int
+	waiverLateQueue      []*AccountShareSeatWaiverBatch
+	waiverLateUsageSince []time.Time
 	unavailableCalls     int
 	recoverableIDs       []int64
 	recoverableSuspend   *AccountShareMembership
@@ -1647,10 +1652,28 @@ func (r *accountShareModeRepoStub) ProcessSeatBilling(context.Context, time.Time
 	return &AccountShareSeatBillingResult{}, nil
 }
 
-func (r *accountShareModeRepoStub) ProcessSeatWaiverCompensations(_ context.Context, _ time.Time, limit int) (*AccountShareSeatBillingResult, error) {
+func (r *accountShareModeRepoStub) ProcessSeatWaiverBacklogCompensations(_ context.Context, _ time.Time, limit int, cursorPeriodEndedAt time.Time, cursorID int64) (*AccountShareSeatWaiverBatch, error) {
 	r.waiverCompCalls++
 	r.waiverCompLimit = limit
-	return &AccountShareSeatBillingResult{}, nil
+	r.waiverBacklogCursors = append(r.waiverBacklogCursors, [2]any{cursorPeriodEndedAt, cursorID})
+	if len(r.waiverBacklogQueue) > 0 {
+		batch := r.waiverBacklogQueue[0]
+		r.waiverBacklogQueue = r.waiverBacklogQueue[1:]
+		return batch, nil
+	}
+	return &AccountShareSeatWaiverBatch{Billing: &AccountShareSeatBillingResult{}}, nil
+}
+
+func (r *accountShareModeRepoStub) ProcessSeatWaiverLateUsageCompensations(_ context.Context, _ time.Time, limit int, usageSince, _ time.Time, _ time.Time, _ int64) (*AccountShareSeatWaiverBatch, error) {
+	r.waiverLateCalls++
+	r.waiverCompLimit = limit
+	r.waiverLateUsageSince = append(r.waiverLateUsageSince, usageSince)
+	if len(r.waiverLateQueue) > 0 {
+		batch := r.waiverLateQueue[0]
+		r.waiverLateQueue = r.waiverLateQueue[1:]
+		return batch, nil
+	}
+	return &AccountShareSeatWaiverBatch{Billing: &AccountShareSeatBillingResult{}}, nil
 }
 
 func (r *accountShareModeRepoStub) ProcessSeatBillingForJoin(context.Context, time.Time, int64, int64, int64) (*AccountShareSeatBillingResult, error) {
@@ -1847,10 +1870,90 @@ func TestAccountShareModeProcessSeatWaiverCompensationsUsesDedicatedBatchSize(t 
 	svc.processSeatWaiverCompensationsOnce()
 
 	if repo.waiverCompCalls != 1 {
-		t.Fatalf("expected one waiver compensation pass, got %d", repo.waiverCompCalls)
+		t.Fatalf("expected one waiver backlog pass, got %d", repo.waiverCompCalls)
+	}
+	if repo.waiverLateCalls != 1 {
+		t.Fatalf("expected one late usage pass, got %d", repo.waiverLateCalls)
 	}
 	if repo.waiverCompLimit != AccountShareModeSeatWaiverCompensationBatchSize {
 		t.Fatalf("waiver compensation limit = %d, want %d", repo.waiverCompLimit, AccountShareModeSeatWaiverCompensationBatchSize)
+	}
+	if svc.seatWaiverLateUsageHWM.IsZero() {
+		t.Fatal("expected late usage HWM to advance after drained round")
+	}
+}
+
+func TestAccountShareModeSeatWaiverBacklogLoopsWithCursorUntilDrained(t *testing.T) {
+	batch := AccountShareModeSeatWaiverCompensationBatchSize
+	repo := &accountShareModeRepoStub{
+		waiverBacklogQueue: []*AccountShareSeatWaiverBatch{
+			{Billing: &AccountShareSeatBillingResult{Processed: batch}, Matched: batch, CursorPeriodEndedAt: time.Unix(1000, 0).UTC(), CursorID: 42},
+			{Billing: &AccountShareSeatBillingResult{Processed: 3}, Matched: 3},
+		},
+	}
+	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
+	svc.taskExecutor = &ClusterTaskExecutor{}
+
+	svc.processSeatWaiverCompensationsOnce()
+
+	if repo.waiverCompCalls != 2 {
+		t.Fatalf("expected backlog loop to run twice, got %d", repo.waiverCompCalls)
+	}
+	if len(repo.waiverBacklogCursors) != 2 {
+		t.Fatalf("expected cursor recorded per call, got %d", len(repo.waiverBacklogCursors))
+	}
+	first, second := repo.waiverBacklogCursors[0], repo.waiverBacklogCursors[1]
+	if !first[0].(time.Time).IsZero() || first[1].(int64) != 0 {
+		t.Fatalf("first backlog call should start without cursor, got %#v", first)
+	}
+	if !second[0].(time.Time).Equal(time.Unix(1000, 0).UTC()) || second[1].(int64) != 42 {
+		t.Fatalf("second backlog call should resume from batch cursor, got %#v", second)
+	}
+	if repo.waiverLateCalls != 1 {
+		t.Fatalf("late usage pass should run once after backlog drained, got %d", repo.waiverLateCalls)
+	}
+}
+
+func TestAccountShareModeSeatWaiverHWMNarrowsLateUsageWindow(t *testing.T) {
+	repo := &accountShareModeRepoStub{}
+	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
+	svc.taskExecutor = &ClusterTaskExecutor{}
+
+	svc.processSeatWaiverCompensationsOnce()
+	firstHWM := svc.seatWaiverLateUsageHWM
+	svc.processSeatWaiverCompensationsOnce()
+
+	if len(repo.waiverLateUsageSince) != 2 {
+		t.Fatalf("expected two late usage passes, got %d", len(repo.waiverLateUsageSince))
+	}
+	lookbackFloor := time.Now().UTC().Add(-AccountShareModeSeatWaiverLateUsageLookback)
+	if !repo.waiverLateUsageSince[0].Before(lookbackFloor.Add(time.Minute)) {
+		t.Fatalf("first pass should use lookback floor, got %v", repo.waiverLateUsageSince[0])
+	}
+	if !repo.waiverLateUsageSince[1].Equal(firstHWM) {
+		t.Fatalf("second pass should use advanced HWM %v, got %v", firstHWM, repo.waiverLateUsageSince[1])
+	}
+}
+
+func TestAccountShareModeSeatWaiverLateUsageLoopsUntilDrained(t *testing.T) {
+	batch := AccountShareModeSeatWaiverCompensationBatchSize
+	repo := &accountShareModeRepoStub{
+		waiverLateQueue: []*AccountShareSeatWaiverBatch{
+			{Billing: &AccountShareSeatBillingResult{Processed: batch}, Matched: batch, CursorPeriodEndedAt: time.Unix(2000, 0).UTC(), CursorID: 7},
+			{Billing: &AccountShareSeatBillingResult{Processed: 1}, Matched: 1},
+		},
+	}
+	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
+	svc.taskExecutor = &ClusterTaskExecutor{}
+
+	svc.processSeatWaiverCompensationsOnce()
+
+	// 第一批满批未排干 → 续扫第二批(未满批,排干)→ HWM 才推进。
+	if repo.waiverLateCalls != 2 {
+		t.Fatalf("expected late usage loop to run twice, got %d", repo.waiverLateCalls)
+	}
+	if svc.seatWaiverLateUsageHWM.IsZero() {
+		t.Fatal("expected HWM to advance once late usage drained")
 	}
 }
 
@@ -1996,9 +2099,9 @@ func TestAccountShareModeCreateOpenAIListingStartsValidating(t *testing.T) {
 		},
 	}
 	service := &AccountShareModeService{
-		repo:                     repo,
-		proxyRepo:                proxyRepo,
-		openaiOAuthService:       &OpenAIOAuthService{},
+		repo:               repo,
+		proxyRepo:          proxyRepo,
+		openaiOAuthService: &OpenAIOAuthService{},
 	}
 
 	created, err := service.CreateOpenAIListingFromToken(
@@ -2035,9 +2138,9 @@ func TestAccountShareModeCreateAnthropicListingDefaultsQuotaLimitPercents(t *tes
 		proxy: &Proxy{ID: 7, Name: "proxy", Protocol: "socks5", Host: "127.0.0.1", Port: 1080, Status: StatusActive},
 	}
 	svc := &AccountShareModeService{
-		repo:                     repo,
-		proxyRepo:                proxyRepo,
-		oauthService:             &OAuthService{},
+		repo:         repo,
+		proxyRepo:    proxyRepo,
+		oauthService: &OAuthService{},
 	}
 
 	got, err := svc.CreateAnthropicListingFromToken(context.Background(), 42, CreateAccountShareListingInput{

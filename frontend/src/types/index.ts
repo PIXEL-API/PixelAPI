@@ -1083,7 +1083,11 @@ export interface Proxy {
   port: number;
   username: string | null;
   password?: string | null;
+  // owner_user_id 为空表示平台代理（所有用户可见）；>0 表示专属该用户。
   owner_user_id?: number | null;
+  // owner_username / owner_email 仅在 owner_user_id 非空时返回，用于展示。
+  owner_username?: string;
+  owner_email?: string;
   // platform 为空表示通用代理（所有平台可用）。
   platform?: string;
   // required_account_level 为空表示所有账号等级可用。
@@ -1647,6 +1651,8 @@ export interface CreateProxyRequest {
   port: number;
   username?: string | null;
   password?: string | null;
+  // owner_user_id 省略或为 0 表示平台代理（所有用户可见）；>0 表示专属该用户。
+  owner_user_id?: number;
   // platform 为空表示通用代理（所有平台可用）。
   platform?: string;
   // required_account_level 为空表示所有账号等级可用。
@@ -1662,6 +1668,8 @@ export interface UpdateProxyRequest {
   username?: string | null;
   password?: string | null;
   status?: "active" | "inactive";
+  // owner_user_id 缺省表示不修改；0 表示清空归属改回平台代理；>0 表示归属到该用户。
+  owner_user_id?: number;
   // platform / required_account_level 为空字符串分别表示通用代理 / 所有等级可用。
   platform?: string;
   required_account_level?: string;

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -738,35 +739,53 @@ func (c *concurrencyCache) CleanupExpiredAccountSlots(ctx context.Context, accou
 	return err
 }
 
+// cleanableSlotKeyPrefixes 是清理脚本允许触碰的键前缀白名单。
+// concurrency:* 命名空间下还存在不能交给该脚本的键：
+// concurrency:wait:* 是 string 计数器（ZSET 命令会 WRONGTYPE 使整批 pipeline 失败）；
+// concurrency:openai_ws_ingress:* 是 60s 租约键（脚本会按槽位 TTL 误删成员并拉长 EXPIRE）。
+var cleanableSlotKeyPrefixes = []string{accountSlotKeyPrefix, userSlotKeyPrefix, accountShareMembershipSlotKeyPrefix}
+
+func isCleanableSlotKey(key string) bool {
+	for _, prefix := range cleanableSlotKeyPrefixes {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *concurrencyCache) CleanupExpiredSlots(ctx context.Context) error {
 	now, err := c.redisUnixTime(ctx)
 	if err != nil {
 		return err
 	}
-	slotPatterns := []string{accountSlotKeyPrefix + "*", userSlotKeyPrefix + "*", accountShareMembershipSlotKeyPrefix + "*"}
-	for _, pattern := range slotPatterns {
-		if err := c.cleanupExpiredSlotsByPattern(ctx, pattern, now); err != nil {
-			return err
-		}
+	// pipeline 中 Script.Run 不会走 NOSCRIPT→EVAL 回退，Redis 重启/脚本被清空后
+	// 整批 EVALSHA 会持续失败，因此每轮先显式加载脚本（幂等）。
+	if err := cleanupExpiredSlotsScript.Load(ctx, c.rdb).Err(); err != nil {
+		return fmt.Errorf("load cleanup script: %w", err)
 	}
-	return nil
-}
-
-func (c *concurrencyCache) cleanupExpiredSlotsByPattern(ctx context.Context, pattern string, now int64) error {
-	const scanCount = 200
+	// 单趟 SCAN 遍历整个 concurrency:* 命名空间，Go 侧按白名单过滤，
+	// 避免旧实现按三个前缀各扫全键空间一遍。
+	const scanCount = 1000
 	var cursor uint64
 	for {
-		keys, nextCursor, err := c.rdb.Scan(ctx, cursor, pattern, scanCount).Result()
+		keys, nextCursor, err := c.rdb.Scan(ctx, cursor, "concurrency:*", scanCount).Result()
 		if err != nil {
-			return fmt.Errorf("scan %s: %w", pattern, err)
+			return fmt.Errorf("scan concurrency keys: %w", err)
 		}
-		if len(keys) != 0 {
+		matched := keys[:0]
+		for _, key := range keys {
+			if isCleanableSlotKey(key) {
+				matched = append(matched, key)
+			}
+		}
+		if len(matched) != 0 {
 			pipe := c.rdb.Pipeline()
-			for _, key := range keys {
+			for _, key := range matched {
 				cleanupExpiredSlotsScript.Run(ctx, pipe, []string{key}, c.slotTTLSeconds, now)
 			}
 			if _, err := pipe.Exec(ctx); err != nil {
-				return fmt.Errorf("cleanup expired slots %s: %w", pattern, err)
+				return fmt.Errorf("cleanup expired slots: %w", err)
 			}
 		}
 		cursor = nextCursor

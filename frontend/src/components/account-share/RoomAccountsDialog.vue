@@ -500,7 +500,7 @@ import {
 import { accountsAPI } from '@/api/accounts'
 import type { Account, Proxy } from '@/types'
 import { resolveAccountExternalPlacementTarget } from '@/components/account-share/externalPlacement'
-import { extractApiErrorMessage } from '@/utils/apiError'
+import { extractApiErrorMessage, extractApiErrorCode, extractApiErrorMetadata } from '@/utils/apiError'
 import { formatDateTime } from '@/utils/format'
 import CreateRoomAccountFlow from '@/components/account-share/CreateRoomAccountFlow.vue'
 
@@ -517,6 +517,8 @@ const ROOM_ACCOUNT_ERROR_MESSAGES: Record<string, string> = {
   ACCOUNT_SHARE_ROOM_LEVEL_MISMATCH: '该账号等级与房间要求不一致',
   ACCOUNT_SHARE_ROOM_UNKNOWN_LEVEL: '该账号等级尚未识别，请先完成账号检测',
   ACCOUNT_SHARE_ROOM_MODE_REQUIRED: '该账号尚未处于可加入房间的账号模式',
+  ACCOUNT_SHARE_MODE_UNSUPPORTED_MODEL: '该账号不支持房间要求的全部模型，请先在"我的账号"中补齐该账号的模型白名单',
+  OWNED_ACCOUNT_PLACEMENT_CONVERSION_REQUIRED: '该账号处于共享投放中，需先切换账号模式后再修改',
   ACCOUNT_SHARE_ROOM_ACCOUNT_CONFLICT: '该账号已加入其他房间或正在切换归属',
   ACCOUNT_SHARE_LISTING_NOT_FOUND: '房间不存在、已删除或当前无权管理',
   ACCOUNT_SHARE_ROOM_DELETED: '房间已经删除，不能再调整房间账号',
@@ -1002,6 +1004,25 @@ function collectOperationFailures(
     }))
 }
 
+// 后端把"缺哪个模型/哪个账号"放在错误 metadata 里；不带出来的话用户只能看到
+// 一句无从下手的"不支持请求的模型"。
+function describeRoomAccountOperationError(error: unknown, operation: RoomAccountOperation): string {
+  const base = extractApiErrorMessage(
+    error,
+    operation === 'add'
+      ? t('accountShare.roomAccounts.addRequestFailed')
+      : t('accountShare.roomAccounts.removeRequestFailed'),
+    ROOM_ACCOUNT_ERROR_MESSAGES
+  )
+  if (extractApiErrorCode(error) !== 'ACCOUNT_SHARE_MODE_UNSUPPORTED_MODEL') return base
+  const metadata = extractApiErrorMetadata(error) || {}
+  const model = typeof metadata.model === 'string' ? metadata.model.trim() : ''
+  const accountID = typeof metadata.account_id === 'string' ? metadata.account_id.trim() : ''
+  if (!model) return base
+  const who = accountID ? `账号 #${accountID}` : '该账号'
+  return `${who}缺少房间要求的模型「${model}」。请在"我的账号"中为该账号补上这个模型，或把它从房间允许模型中移除后再试。`
+}
+
 function roomAccountOperationFailureMessage(error?: string): string {
   const normalized = error?.trim()
   if (!normalized) return t('accountShare.roomAccounts.unknownFailure')
@@ -1063,13 +1084,7 @@ async function submitBatchOperation(
   } catch (error) {
     operationSummary.value = {
       tone: 'error',
-      text: extractApiErrorMessage(
-        error,
-        operation === 'add'
-          ? t('accountShare.roomAccounts.addRequestFailed')
-          : t('accountShare.roomAccounts.removeRequestFailed'),
-        ROOM_ACCOUNT_ERROR_MESSAGES
-      )
+      text: describeRoomAccountOperationError(error, operation)
     }
   } finally {
     operating.value = false

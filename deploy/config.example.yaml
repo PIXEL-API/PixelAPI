@@ -451,8 +451,8 @@ gateway:
     # 每次调度候选采样最多返回的账号数（1-1024）
     indexed_candidate_limit: 256
     # Slot cleanup interval (duration)
-    # 并发槽位清理周期（时间段）
-    slot_cleanup_interval: 30s
+    # 并发槽位清理周期（时间段）；清理是全局 SCAN 兜底，槽位本身有 TTL，无需高频执行
+    slot_cleanup_interval: 5m
     # 是否允许受控回源到 DB（默认 true，保持现有行为）
     db_fallback_enabled: true
     # 受控回源超时（秒），0 表示不额外收紧超时

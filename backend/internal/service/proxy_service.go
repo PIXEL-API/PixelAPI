@@ -16,6 +16,10 @@ var (
 	ErrProxyPlatformInvalid = infraerrors.BadRequest("PROXY_PLATFORM_INVALID", "proxy platform is invalid; leave empty for a universal proxy")
 	// ErrProxyRequiredAccountLevelInvalid 代理要求的账号等级非法（空字符串表示所有等级可用）。
 	ErrProxyRequiredAccountLevelInvalid = infraerrors.BadRequest("PROXY_REQUIRED_ACCOUNT_LEVEL_INVALID", "proxy required_account_level is invalid; leave empty to allow all levels")
+	// ErrProxyOwnerNotFound 归属用户不存在。
+	ErrProxyOwnerNotFound = infraerrors.NotFound("PROXY_OWNER_NOT_FOUND", "proxy owner user not found")
+	// ErrProxyOwnerConflict 代理已被其他用户的账号绑定，不能改归属；需先解绑再操作。
+	ErrProxyOwnerConflict = infraerrors.Conflict("PROXY_OWNER_CONFLICT", "proxy is bound to accounts owned by other users; unbind them before changing the owner")
 )
 
 type ProxyRepository interface {
@@ -23,6 +27,10 @@ type ProxyRepository interface {
 	GetByID(ctx context.Context, id int64) (*Proxy, error)
 	ListByIDs(ctx context.Context, ids []int64) ([]Proxy, error)
 	Update(ctx context.Context, proxy *Proxy) error
+	// UpdateWithOwnerAssignment 用于变更代理归属：在同一事务内锁定代理行、
+	// 校验没有其他用户的账号绑定在该代理上（否则返回 ErrProxyOwnerConflict），再保存。
+	// 锁与用户建号路径互斥，避免"改归属"与"绑账号"并发交叉后留下他人账号绑在专属代理上。
+	UpdateWithOwnerAssignment(ctx context.Context, proxy *Proxy) error
 	Delete(ctx context.Context, id int64) error
 
 	List(ctx context.Context, params pagination.PaginationParams) ([]Proxy, *pagination.PaginationResult, error)

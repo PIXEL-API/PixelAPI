@@ -309,6 +309,10 @@ func (s *proxyRepoStub) ExistsByHostPortAuth(ctx context.Context, host string, p
 	panic("unexpected ExistsByHostPortAuth call")
 }
 
+func (s *proxyRepoStub) UpdateWithOwnerAssignment(ctx context.Context, proxy *Proxy) error {
+	panic("unexpected UpdateWithOwnerAssignment call")
+}
+
 func (s *proxyRepoStub) CountAccountsByProxyID(ctx context.Context, proxyID int64) (int64, error) {
 	if s.countErr != nil {
 		return 0, s.countErr

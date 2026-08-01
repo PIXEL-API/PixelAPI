@@ -2601,7 +2601,7 @@ func (s *GatewayService) schedulingConfig() config.GatewaySchedulingConfig {
 		FallbackWaitTimeout:      30 * time.Second,
 		FallbackMaxWaiting:       100,
 		LoadBatchEnabled:         true,
-		SlotCleanupInterval:      30 * time.Second,
+		SlotCleanupInterval:      5 * time.Minute,
 	}
 }
 

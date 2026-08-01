@@ -13,7 +13,13 @@ type settingRepository struct {
 	client *ent.Client
 }
 
+// NewSettingRepository 返回带进程内读穿缓存的 settings 仓储（见 setting_repo_cache.go）。
+// 读路径命中缓存不落库；写路径透传底层实现并按 key 失效缓存。
 func NewSettingRepository(client *ent.Client) service.SettingRepository {
+	return newCachedSettingRepository(newSettingRepository(client))
+}
+
+func newSettingRepository(client *ent.Client) *settingRepository {
 	return &settingRepository{client: client}
 }
 

@@ -92,6 +92,7 @@ const {
   },
   showSuccess: vi.fn(),
   showWarning: vi.fn(),
+  showError: vi.fn(),
   authState: {
     isAdmin: false,
     user: { id: 9, balance: 100 },

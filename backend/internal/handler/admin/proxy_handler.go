@@ -37,6 +37,8 @@ type CreateProxyRequest struct {
 	// RequiredAccountLevel 为空表示所有账号等级可用。
 	RequiredAccountLevel string `json:"required_account_level"`
 	MaxAccounts          int    `json:"max_accounts" binding:"min=0"`
+	// OwnerUserID 为 0 或缺省表示平台代理（所有用户可见）；>0 表示专属代理，仅对该用户显示可用。
+	OwnerUserID int64 `json:"owner_user_id" binding:"omitempty,min=0"`
 }
 
 // UpdateProxyRequest represents update proxy request
@@ -52,6 +54,8 @@ type UpdateProxyRequest struct {
 	Platform             *string `json:"platform"`
 	RequiredAccountLevel *string `json:"required_account_level"`
 	MaxAccounts          *int    `json:"max_accounts" binding:"omitempty,min=0"`
+	// OwnerUserID 缺省表示不修改；0 表示清空归属改回平台代理；>0 表示归属到该用户。
+	OwnerUserID *int64 `json:"owner_user_id" binding:"omitempty,min=0"`
 }
 
 // trimOptionalProxyString 对可选字符串字段做 trim，nil 表示“未提供”原样透传。
@@ -162,6 +166,7 @@ func (h *ProxyHandler) Create(c *gin.Context) {
 			Platform:             strings.TrimSpace(req.Platform),
 			RequiredAccountLevel: strings.TrimSpace(req.RequiredAccountLevel),
 			MaxAccounts:          req.MaxAccounts,
+			OwnerUserID:          req.OwnerUserID,
 		})
 		if err != nil {
 			return nil, err
@@ -196,6 +201,7 @@ func (h *ProxyHandler) Update(c *gin.Context) {
 		Platform:             trimOptionalProxyString(req.Platform),
 		RequiredAccountLevel: trimOptionalProxyString(req.RequiredAccountLevel),
 		MaxAccounts:          req.MaxAccounts,
+		OwnerUserID:          req.OwnerUserID,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)

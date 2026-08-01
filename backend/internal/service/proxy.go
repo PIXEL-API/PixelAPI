@@ -19,7 +19,9 @@ type Proxy struct {
 	Port     int
 	Username string
 	Password string
-	// OwnerUserID 自迁移 256 起恒为 nil：所有代理均由平台管理。
+	// OwnerUserID 为 nil 表示平台代理（所有用户可见）；非 nil 表示专属代理，
+	// 仅对该用户显示可用。来源有二：管理员显式指派（自 1.2.29 起），
+	// 以及迁移 256 保留的历史用户自有代理。
 	OwnerUserID *int64
 	// Platform 为空字符串表示通用代理（所有平台可用）。
 	Platform string
@@ -58,7 +60,7 @@ func (p *Proxy) AllowsScope(platform, accountLevel string) bool {
 	return p.RequiredAccountLevel == NormalizeRequiredAccountLevel(accountLevel)
 }
 
-// IsOwnedBy 判断代理是否属于指定用户（遗留自有代理）。
+// IsOwnedBy 判断代理是否归属于指定用户（专属代理）。
 func (p *Proxy) IsOwnedBy(userID int64) bool {
 	return p != nil && userID > 0 && p.OwnerUserID != nil && *p.OwnerUserID == userID
 }
@@ -82,12 +84,11 @@ func IsValidProxyPlatform(platform string) bool {
 // Platform 为空表示调用方未提供平台信息，此时只有通用代理可用；
 // AccountLevel 为空/unknown 表示只有“所有等级可用”的代理可用。
 //
-// OwnerUserID 是历史遗留（grandfather）豁免：自本次更新起用户不能再上传代理，
-// 用户端只能选择平台代理（owner_user_id IS NULL）。但更新前已存在、且仍绑定在
-// 老用户账号上的自有代理需要在重新鉴权/更新时保持可见，避免老用户掉线。
-//   - 选择器等“挑选平台代理”的场景传 0，只返回平台代理；
-//   - 账号重新鉴权/更新等场景传账号 owner，使其既能看到平台代理，
-//     也能继续看到自己名下的遗留自有代理。
+// OwnerUserID 控制专属代理的可见性：owner_user_id 非空的代理（管理员指派的
+// 专属代理，或迁移 256 保留的历史用户自有代理）仅对其归属用户可见可用。
+//   - 传 0 时只返回平台代理（owner_user_id IS NULL）；
+//   - 传用户 ID 时，除平台代理外还放行该用户名下的专属代理。
+//     专属代理不受平台/等级筛选限制，对归属用户全量可见。
 type ProxyScope struct {
 	Platform     string
 	AccountLevel string
@@ -99,7 +100,7 @@ func NewProxyScope(platform, accountLevel string) ProxyScope {
 	return ProxyScope{Platform: platform, AccountLevel: accountLevel}.Normalized()
 }
 
-// NewOwnedProxyScope 在 NewProxyScope 基础上附带账号 owner 的遗留归属豁免。
+// NewOwnedProxyScope 在 NewProxyScope 基础上附带账号 owner 的专属代理可见范围。
 func NewOwnedProxyScope(platform, accountLevel string, ownerUserID int64) ProxyScope {
 	scope := NewProxyScope(platform, accountLevel)
 	if ownerUserID > 0 {
@@ -123,7 +124,7 @@ func (s ProxyScope) Normalized() ProxyScope {
 
 // Allows 判断代理是否落在该筛选范围内。
 // 平台代理（owner_user_id IS NULL）按平台 + 等级筛选；
-// 若 scope 带遗留归属豁免，则该用户自己的遗留自有代理也视为可用。
+// 专属代理仅当归属于 scope 指定的用户时可用（不受平台/等级限制）。
 func (s ProxyScope) Allows(p *Proxy) bool {
 	if p == nil {
 		return false
@@ -147,7 +148,10 @@ func (p *Proxy) URL() string {
 
 type ProxyWithAccountCount struct {
 	Proxy
-	AccountCount   int64
+	AccountCount int64
+	// OwnerUsername / OwnerEmail 仅在 OwnerUserID 非空时由管理端查询填充，用于展示归属用户。
+	OwnerUsername  string
+	OwnerEmail     string
 	LatencyMs      *int64
 	LatencyStatus  string
 	LatencyMessage string

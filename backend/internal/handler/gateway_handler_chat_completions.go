@@ -44,6 +44,10 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 		zap.Any("group_id", apiKey.GroupID),
 	)
 
+	if h.checkNoAccountBackoff(c, subject.UserID, apiKey.GroupID, h.chatCompletionsErrorResponse) {
+		return
+	}
+
 	// Read request body
 	body, err := pkghttputil.ReadRequestBodyWithPrealloc(c.Request)
 	if err != nil {
@@ -179,6 +183,9 @@ routeLoop:
 						continue routeLoop
 					}
 					cls := classifyNoAccountErrorFromGin(c, h.gatewayService, currentAPIKey, reqModel, reqModel, service.PlatformAnthropic)
+					if cls.Status == http.StatusServiceUnavailable {
+						h.recordNoAccountFailure(c, reqLog, subject.UserID, apiKey.GroupID, streamStarted)
+					}
 					message := cls.Message
 					if !cls.ModelNotFound {
 						message = "No available accounts: " + err.Error()

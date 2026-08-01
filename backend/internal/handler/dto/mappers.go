@@ -602,6 +602,8 @@ func ProxyWithAccountCountFromServiceAdmin(p *service.ProxyWithAccountCount) *Ad
 	return &AdminProxyWithAccountCount{
 		AdminProxy:     *admin,
 		AccountCount:   p.AccountCount,
+		OwnerUsername:  p.OwnerUsername,
+		OwnerEmail:     p.OwnerEmail,
 		LatencyMs:      p.LatencyMs,
 		LatencyStatus:  p.LatencyStatus,
 		LatencyMessage: p.LatencyMessage,

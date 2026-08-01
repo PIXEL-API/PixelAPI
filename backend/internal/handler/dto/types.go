@@ -338,7 +338,7 @@ type Proxy struct {
 	Port     int    `json:"port"`
 	Username string `json:"username"`
 	Password string `json:"-"`
-	// OwnerUserID 自迁移 256 起恒为 nil：所有代理均由平台管理。
+	// OwnerUserID 为 nil 表示平台代理（所有用户可见）；非 nil 表示专属代理，仅对该用户显示可用。
 	OwnerUserID *int64 `json:"owner_user_id,omitempty"`
 	// Platform 为空表示通用代理（所有平台可用）。
 	Platform string `json:"platform"`
@@ -378,7 +378,10 @@ type AdminProxy struct {
 // AdminProxyWithAccountCount 是管理员接口使用的带账号统计的 proxy DTO。
 type AdminProxyWithAccountCount struct {
 	AdminProxy
-	AccountCount   int64  `json:"account_count"`
+	AccountCount int64 `json:"account_count"`
+	// OwnerUsername / OwnerEmail 仅专属代理返回，用于管理端展示归属用户。
+	OwnerUsername  string `json:"owner_username,omitempty"`
+	OwnerEmail     string `json:"owner_email,omitempty"`
 	LatencyMs      *int64 `json:"latency_ms,omitempty"`
 	LatencyStatus  string `json:"latency_status,omitempty"`
 	LatencyMessage string `json:"latency_message,omitempty"`

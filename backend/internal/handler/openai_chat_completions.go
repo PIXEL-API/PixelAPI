@@ -44,6 +44,9 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		zap.Int64("api_key_id", apiKey.ID),
 		zap.Any("group_id", apiKey.GroupID),
 	)
+	if h.checkNoAccountBackoff(c, subject.UserID, apiKey.GroupID, h.errorResponse) {
+		return
+	}
 
 	if !h.ensureResponsesDependencies(c, reqLog) {
 		return
@@ -231,6 +234,9 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 						continue
 					}
 					cls := classifyNoAccountErrorFromGin(c, h.gatewayService, currentAPIKey, errorRoutingModel, reqModel, routingPlatform)
+					if cls.Status == http.StatusServiceUnavailable {
+						h.recordNoAccountFailure(c, reqLog, subject.UserID, apiKey.GroupID, streamStarted)
+					}
 					h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
 					return
 				}
@@ -253,6 +259,9 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		}
 		if selection == nil || selection.Account == nil {
 			cls := classifyNoAccountErrorFromGin(c, h.gatewayService, currentAPIKey, selectionModel, reqModel, routingPlatform)
+			if cls.Status == http.StatusServiceUnavailable {
+				h.recordNoAccountFailure(c, reqLog, subject.UserID, apiKey.GroupID, streamStarted)
+			}
 			h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
 			return
 		}

@@ -1207,12 +1207,24 @@ func (r *accountShareModeRepository) ListListings(ctx context.Context, viewerUse
 		queryLimit = limit + 1
 	}
 	args = append(args, queryLimit, offset)
+	// 两阶段分页:page CTE 只带 WHERE/ORDER BY 实际引用的轻量 join 先选出页内
+	// id(昂贵的 god-view LATERAL 不再对全部匹配行求值),外层完整 god-view 仅
+	// 对页内行取数。外层必须复用同一 ORDER BY 表达式,否则页内乱序;单条语句
+	// 同一快照,两阶段排序值一致。
+	orderSQL := accountShareListingOrderSQL(filters)
 	query := fmt.Sprintf(`
+		WITH page AS (
+			SELECT l.id
+			FROM account_share_listings l
+			%s
+			WHERE %s
+			ORDER BY %s
+			LIMIT $%d OFFSET $%d
+		)
 		%s
-		WHERE %s
+		WHERE l.id IN (SELECT id FROM page)
 		ORDER BY %s
-		LIMIT $%d OFFSET $%d
-	`, accountShareListingSelectSQL(), whereSQL, accountShareListingOrderSQL(filters), len(args)-1, len(args))
+	`, accountShareListingPageFromSQL(orderSQL), whereSQL, orderSQL, len(args)-1, len(args), accountShareListingSelectSQL(), orderSQL)
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, nil, err
@@ -6183,18 +6195,87 @@ func (r *accountShareModeRepository) ProcessSeatBilling(ctx context.Context, now
 	return r.processSeatBillingIDs(ctx, ids, result, now)
 }
 
-func (r *accountShareModeRepository) ProcessSeatWaiverCompensations(ctx context.Context, now time.Time, limit int) (*service.AccountShareSeatBillingResult, error) {
-	if limit <= 0 {
-		limit = service.AccountShareModeSeatWaiverCompensationBatchSize
-	}
-	now = now.UTC()
+func seatWaiverCompensationReadyBefore(now time.Time) time.Time {
 	delay := service.AccountShareModeSeatWaiverCompensationDelay
 	if delay <= 0 {
 		delay = service.AccountShareModeSeatWaiverSettlementGrace
 	}
-	readyBefore := now.Add(-delay)
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT sc.id
+	return now.UTC().Add(-delay)
+}
+
+// ProcessSeatWaiverBacklogCompensations 处理从未评估过的 seat_charge 积压
+// (waiver_evaluated_at IS NULL,主要是迁移 203 回炉的历史行)。
+// ORDER BY 必须以 waiver_evaluated_at 打头:IS NULL 不参与 planner 的 pathkey
+// 消除,不显式写进排序头部就拿不到 202 部分索引的有序扫描,LIMIT 无法截断。
+// 匹配集内该列全为 NULL,结果顺序语义与 (period_ended_at, id) 相同。
+func (r *accountShareModeRepository) ProcessSeatWaiverBacklogCompensations(ctx context.Context, now time.Time, limit int, cursorPeriodEndedAt time.Time, cursorID int64) (*service.AccountShareSeatWaiverBatch, error) {
+	if limit <= 0 {
+		limit = service.AccountShareModeSeatWaiverCompensationBatchSize
+	}
+	readyBefore := seatWaiverCompensationReadyBefore(now)
+
+	args := []any{accountShareSeatSettlementTypeCharge, accountShareSeatSettlementTypeWaiverRefund, readyBefore}
+	// 游标只在非零时拼入:写成 "$n IS NULL OR ..." 会把 row-compare 挤出 Index Cond。
+	cursorClause := ""
+	if !cursorPeriodEndedAt.IsZero() {
+		args = append(args, cursorPeriodEndedAt.UTC(), cursorID)
+		cursorClause = "AND (sc.period_ended_at, sc.id) > ($4, $5)"
+	}
+	args = append(args, limit)
+	query := fmt.Sprintf(`
+		SELECT sc.id, sc.period_ended_at
+		FROM account_share_mode_settlement_entries sc
+		JOIN account_share_memberships m ON m.id = sc.membership_id
+		WHERE sc.settlement_type = $1
+			AND sc.hourly_charge > 0
+			AND sc.period_started_at IS NOT NULL
+			AND sc.period_ended_at IS NOT NULL
+			AND sc.waiver_evaluated_at IS NULL
+			AND sc.period_ended_at > sc.period_started_at
+			AND sc.period_ended_at <= $3
+			%s
+			AND COALESCE(NULLIF(sc.waiver_minimum_snapshot, 0), m.hourly_fee_waiver_minimum_snapshot) > 0
+			AND NOT EXISTS (
+				SELECT 1
+				FROM account_share_mode_settlement_entries wr
+				WHERE wr.membership_id = sc.membership_id
+					AND wr.settlement_type = $2
+					AND wr.period_started_at = sc.period_started_at
+					AND wr.period_ended_at = sc.period_ended_at
+			)
+		ORDER BY sc.waiver_evaluated_at ASC, sc.period_ended_at ASC, sc.id ASC
+		LIMIT $%d
+	`, cursorClause, len(args))
+	return r.runSeatWaiverCompensationBatch(ctx, query, args, readyBefore, limit)
+}
+
+// ProcessSeatWaiverLateUsageCompensations 反查迟到 usage 触发的重评:
+// 已评估行中,存在与其计费窗口重叠、且晚于评估时间落账的 usage_request 条目。
+// usageSince 约束迟到条目的 created_at(迟到落账必然新近);windowSince 是由
+// 不变量 waiver_evaluated_at >= period_ended_at(三条写入路径均保证)推导出的
+// 语义超集双下界,让两列都进入 202 索引的 Index Cond。
+func (r *accountShareModeRepository) ProcessSeatWaiverLateUsageCompensations(ctx context.Context, now time.Time, limit int, usageSince, windowSince time.Time, cursorPeriodEndedAt time.Time, cursorID int64) (*service.AccountShareSeatWaiverBatch, error) {
+	if limit <= 0 {
+		limit = service.AccountShareModeSeatWaiverCompensationBatchSize
+	}
+	readyBefore := seatWaiverCompensationReadyBefore(now)
+
+	args := []any{
+		accountShareSeatSettlementTypeCharge,
+		accountShareSeatSettlementTypeWaiverRefund,
+		accountShareSeatSettlementTypeUsage,
+		readyBefore,
+		windowSince.UTC(),
+		usageSince.UTC(),
+	}
+	cursorClause := ""
+	if !cursorPeriodEndedAt.IsZero() {
+		args = append(args, cursorPeriodEndedAt.UTC(), cursorID)
+		cursorClause = "AND (sc.period_ended_at, sc.id) > ($7, $8)"
+	}
+	args = append(args, limit)
+	query := fmt.Sprintf(`
+		SELECT sc.id, sc.period_ended_at
 		FROM account_share_mode_settlement_entries sc
 		JOIN account_share_memberships m ON m.id = sc.membership_id
 		WHERE sc.settlement_type = $1
@@ -6203,25 +6284,27 @@ func (r *accountShareModeRepository) ProcessSeatWaiverCompensations(ctx context.
 			AND sc.period_ended_at IS NOT NULL
 			AND sc.period_ended_at > sc.period_started_at
 			AND sc.period_ended_at <= $4
+			AND sc.period_ended_at >= $5
+			AND sc.waiver_evaluated_at IS NOT NULL
+			AND sc.waiver_evaluated_at >= $5
+			%s
 			AND COALESCE(NULLIF(sc.waiver_minimum_snapshot, 0), m.hourly_fee_waiver_minimum_snapshot) > 0
-			AND (
-				sc.waiver_evaluated_at IS NULL
-				OR EXISTS (
-					SELECT 1
-					FROM account_share_mode_settlement_entries e
-					LEFT JOIN usage_logs ul ON ul.id = e.usage_log_id
-					WHERE e.membership_id = sc.membership_id
-						AND e.settlement_type = $3
-						AND COALESCE(e.period_ended_at, COALESCE(ul.created_at, e.created_at)) >= sc.period_started_at
-						AND COALESCE(
-							e.period_started_at,
-							COALESCE(ul.created_at, e.created_at) - (GREATEST(e.duration_ms, 0) * INTERVAL '1 millisecond')
-						) < sc.period_ended_at
-						AND (
-							e.created_at > sc.waiver_evaluated_at
-							OR COALESCE(ul.created_at, e.created_at) > sc.waiver_evaluated_at
-						)
-				)
+			AND EXISTS (
+				SELECT 1
+				FROM account_share_mode_settlement_entries e
+				LEFT JOIN usage_logs ul ON ul.id = e.usage_log_id
+				WHERE e.membership_id = sc.membership_id
+					AND e.settlement_type = $3
+					AND e.created_at >= $6
+					AND COALESCE(e.period_ended_at, COALESCE(ul.created_at, e.created_at)) >= sc.period_started_at
+					AND COALESCE(
+						e.period_started_at,
+						COALESCE(ul.created_at, e.created_at) - (GREATEST(e.duration_ms, 0) * INTERVAL '1 millisecond')
+					) < sc.period_ended_at
+					AND (
+						e.created_at > sc.waiver_evaluated_at
+						OR COALESCE(ul.created_at, e.created_at) > sc.waiver_evaluated_at
+					)
 			)
 			AND NOT EXISTS (
 				SELECT 1
@@ -6232,8 +6315,13 @@ func (r *accountShareModeRepository) ProcessSeatWaiverCompensations(ctx context.
 					AND wr.period_ended_at = sc.period_ended_at
 			)
 		ORDER BY sc.period_ended_at ASC, sc.id ASC
-		LIMIT $5
-	`, accountShareSeatSettlementTypeCharge, accountShareSeatSettlementTypeWaiverRefund, accountShareSeatSettlementTypeUsage, readyBefore, limit)
+		LIMIT $%d
+	`, cursorClause, len(args))
+	return r.runSeatWaiverCompensationBatch(ctx, query, args, readyBefore, limit)
+}
+
+func (r *accountShareModeRepository) runSeatWaiverCompensationBatch(ctx context.Context, query string, args []any, readyBefore time.Time, limit int) (*service.AccountShareSeatWaiverBatch, error) {
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -6242,22 +6330,28 @@ func (r *accountShareModeRepository) ProcessSeatWaiverCompensations(ctx context.
 	}()
 
 	ids := make([]int64, 0, limit)
+	batch := &service.AccountShareSeatWaiverBatch{}
 	for rows.Next() {
 		var id int64
-		if err := rows.Scan(&id); err != nil {
+		var periodEndedAt time.Time
+		if err := rows.Scan(&id, &periodEndedAt); err != nil {
 			return nil, err
 		}
 		ids = append(ids, id)
+		batch.CursorPeriodEndedAt = periodEndedAt
+		batch.CursorID = id
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	batch.Matched = len(ids)
 
 	result := &service.AccountShareSeatBillingResult{Processed: len(ids)}
+	batch.Billing = result
 	for _, id := range ids {
 		item, err := r.processSeatWaiverCompensation(ctx, id, readyBefore)
 		if err != nil {
-			return result, err
+			return batch, err
 		}
 		if item == nil {
 			continue
@@ -6265,7 +6359,7 @@ func (r *accountShareModeRepository) ProcessSeatWaiverCompensations(ctx context.
 		result.DebitUserIDs = append(result.DebitUserIDs, item.DebitUserIDs...)
 		result.CreditUserIDs = append(result.CreditUserIDs, item.CreditUserIDs...)
 	}
-	return result, nil
+	return batch, nil
 }
 
 func (r *accountShareModeRepository) ProcessSeatBillingForJoin(ctx context.Context, now time.Time, consumerUserID, apiKeyID, listingID int64) (*service.AccountShareSeatBillingResult, error) {
@@ -8770,6 +8864,103 @@ func accountShareSQLLiteral(value string) string {
 
 func accountShareListingSelectSQL() string {
 	return accountShareListingSelectSQLWithAccountJoin(accountShareRoomOptionalRepresentativeJoinSQL("NOW()"))
+}
+
+// accountShareListingPageFromSQL 构造两阶段分页里 page CTE 的 FROM 子句:
+// 代表账号 join、users、qm/hm 恒定保留(WHERE 可能引用 a./u./qm.id/hm.id),
+// cm/room_stats/ac 仅当排序表达式引用对应别名时才带上。各 LATERAL 的
+// WHERE/ORDER BY/LIMIT 与 god-view(accountShareListingSelectSQLWithAccountJoin)
+// 逐字一致,保证行选择相同,只裁剪与行选择无关的输出列和展示用 join。
+func accountShareListingPageFromSQL(orderSQL string) string {
+	var b strings.Builder
+	b.WriteString(accountShareRoomOptionalRepresentativeJoinSQL("NOW()"))
+	b.WriteString(`
+		LEFT JOIN users u ON u.id = l.owner_user_id`)
+	if strings.Contains(orderSQL, "cm.") {
+		b.WriteString(fmt.Sprintf(`
+		LEFT JOIN LATERAL (
+			SELECT m.id, m.joined_at
+			FROM account_share_memberships m
+			WHERE m.listing_id = l.id
+				AND m.consumer_user_id = $1
+				AND m.status IN ('%s', '%s')
+				AND m.deleted_at IS NULL
+				AND (
+					m.status = '%s'
+					OR (
+						(m.hourly_rate_snapshot <= 0 OR m.paid_until IS NULL OR m.paid_until > NOW())
+						AND (m.idle_timeout_minutes <= 0 OR COALESCE(m.last_request_at, m.joined_at) + (m.idle_timeout_minutes * INTERVAL '1 minute') > NOW())
+					)
+				)
+			ORDER BY m.joined_at DESC
+			LIMIT 1
+		) cm ON TRUE`,
+			service.AccountShareMembershipStatusActive,
+			service.AccountShareMembershipStatusEnding,
+			service.AccountShareMembershipStatusEnding,
+		))
+	}
+	b.WriteString(fmt.Sprintf(`
+		LEFT JOIN LATERAL (
+			SELECT m.id, m.queue_rank
+			FROM account_share_memberships m
+			WHERE m.listing_id = l.id
+				AND m.consumer_user_id = $1
+				AND m.status IN ('%s', '%s', '%s')
+				AND m.deleted_at IS NULL
+			ORDER BY
+				CASE m.status
+					WHEN '%s' THEN 0
+					WHEN '%s' THEN 1
+					ELSE 2
+				END,
+				m.queue_rank ASC,
+				m.id DESC
+			LIMIT 1
+		) qm ON TRUE
+		LEFT JOIN LATERAL (
+			SELECT m.id, COALESCE(m.ended_at, m.updated_at) AS ended_at
+			FROM account_share_memberships m
+			WHERE m.listing_id = l.id
+				AND m.consumer_user_id = $1
+				AND m.status = '%s'
+				AND m.deleted_at IS NULL
+			ORDER BY COALESCE(m.ended_at, m.updated_at) DESC
+			LIMIT 1
+		) hm ON TRUE`,
+		service.AccountShareMembershipStatusActive,
+		service.AccountShareMembershipStatusQueued,
+		service.AccountShareMembershipStatusEnding,
+		service.AccountShareMembershipStatusActive,
+		service.AccountShareMembershipStatusEnding,
+		service.AccountShareMembershipStatusEnded,
+	))
+	if strings.Contains(orderSQL, "room_stats.") {
+		b.WriteString(fmt.Sprintf(`
+		LEFT JOIN LATERAL (
+			SELECT COALESCE(SUM(a.concurrency) FILTER (WHERE NOT %s), 0)::int AS total_concurrency
+			FROM account_share_room_accounts room_account
+			JOIN accounts a ON a.id = room_account.account_id
+			WHERE room_account.listing_id = l.id
+				AND room_account.state = 'active'
+				AND a.deleted_at IS NULL
+		) room_stats ON TRUE`, accountShareAccountUnavailableConditionSQL("NOW()")))
+	}
+	if strings.Contains(orderSQL, "ac.") {
+		b.WriteString(fmt.Sprintf(`
+		LEFT JOIN LATERAL (
+			SELECT COUNT(*)::int AS active_seats
+			FROM account_share_memberships m
+			WHERE m.listing_id = l.id
+				AND m.status IN ('%s', '%s')
+				AND m.deleted_at IS NULL
+				AND m.consumer_user_id <> l.owner_user_id
+		) ac ON TRUE`,
+			service.AccountShareMembershipStatusActive,
+			service.AccountShareMembershipStatusEnding,
+		))
+	}
+	return b.String()
 }
 
 func accountShareListingSelectSQLWithAccountJoin(accountJoinSQL string) string {

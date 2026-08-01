@@ -1261,6 +1261,9 @@ type GatewaySchedulingConfig struct {
 	// 受控回源限流（实例级 QPS），0 表示不限制
 	DbFallbackMaxQPS int `mapstructure:"db_fallback_max_qps"`
 
+	// 快照重建去抖间隔（秒），同一调度桶在该间隔内的重复重建会被合并，0 表示关闭去抖
+	RebuildDebounceSeconds int `mapstructure:"rebuild_debounce_seconds"`
+
 	// Outbox 轮询与滞后阈值配置
 	// Outbox 轮询周期（秒）
 	OutboxPollIntervalSeconds int `mapstructure:"outbox_poll_interval_seconds"`
@@ -1584,6 +1587,23 @@ type DefaultConfig struct {
 type RateLimitConfig struct {
 	OverloadCooldownMinutes int `mapstructure:"overload_cooldown_minutes"`  // 529过载冷却时间(分钟)
 	OAuth401CooldownMinutes int `mapstructure:"oauth_401_cooldown_minutes"` // OAuth 401临时不可调度冷却(分钟)
+
+	// "无可用账号"快速失败的按用户退避限流
+	NoAccountBackoff NoAccountBackoffConfig `mapstructure:"no_account_backoff"`
+}
+
+// NoAccountBackoffConfig 对"无可用账号"503 快速失败做 per-(user,group) 退避,
+// 防止自动化重试循环以每秒十余次的频率空转选号/诊断逻辑。
+type NoAccountBackoffConfig struct {
+	Enabled bool `mapstructure:"enabled"`
+	// 滑动窗口长度（秒）
+	WindowSeconds int `mapstructure:"window_seconds"`
+	// 窗口内失败次数阈值，达到后进入退避
+	Threshold int `mapstructure:"threshold"`
+	// 退避时长（秒），窗口内请求直接 429
+	BackoffSeconds int `mapstructure:"backoff_seconds"`
+	// 503 响应附带的 Retry-After 提示（秒）
+	RetryAfterHintSeconds int `mapstructure:"retry_after_hint_seconds"`
 }
 
 // APIKeyAuthCacheConfig API Key 认证缓存配置
@@ -2139,6 +2159,11 @@ func setDefaults() {
 	// RateLimit
 	viper.SetDefault("rate_limit.overload_cooldown_minutes", 10)
 	viper.SetDefault("rate_limit.oauth_401_cooldown_minutes", 10)
+	viper.SetDefault("rate_limit.no_account_backoff.enabled", true)
+	viper.SetDefault("rate_limit.no_account_backoff.window_seconds", 60)
+	viper.SetDefault("rate_limit.no_account_backoff.threshold", 30)
+	viper.SetDefault("rate_limit.no_account_backoff.backoff_seconds", 60)
+	viper.SetDefault("rate_limit.no_account_backoff.retry_after_hint_seconds", 30)
 
 	// Pricing - 从 model-price-repo 同步模型定价和上下文窗口数据（固定到 commit，避免分支漂移）
 	viper.SetDefault("pricing.remote_url", "https://raw.githubusercontent.com/Wei-Shaw/model-price-repo/main/model_prices_and_context_window.json")
@@ -2319,7 +2344,8 @@ func setDefaults() {
 	viper.SetDefault("gateway.scheduling.snapshot_write_chunk_size", 256)
 	viper.SetDefault("gateway.scheduling.indexed_buckets", []string{})
 	viper.SetDefault("gateway.scheduling.indexed_candidate_limit", 256)
-	viper.SetDefault("gateway.scheduling.slot_cleanup_interval", 30*time.Second)
+	viper.SetDefault("gateway.scheduling.slot_cleanup_interval", 5*time.Minute)
+	viper.SetDefault("gateway.scheduling.rebuild_debounce_seconds", 10)
 	viper.SetDefault("gateway.scheduling.db_fallback_enabled", true)
 	viper.SetDefault("gateway.scheduling.db_fallback_timeout_seconds", 0)
 	viper.SetDefault("gateway.scheduling.db_fallback_max_qps", 0)

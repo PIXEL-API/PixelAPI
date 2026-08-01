@@ -160,11 +160,13 @@ func newCodexModelsRuntimeGateRouter(platform string) *gin.Engine {
 			nil,
 			nil,
 			nil,
+			nil,
 			cfg,
 			settingService,
 		),
 		OpenAIGateway: handler.NewOpenAIGatewayHandler(
 			openAIGatewayService,
+			nil,
 			nil,
 			nil,
 			nil,

@@ -183,6 +183,17 @@
             <span v-else class="text-sm text-gray-400">-</span>
           </template>
 
+          <template #cell-owner="{ row }">
+            <span
+              v-if="row.owner_user_id"
+              class="badge badge-primary"
+              :title="`${t('admin.proxies.ownerDedicated')} · ${row.owner_email || row.owner_username || `#${row.owner_user_id}`}`"
+            >
+              {{ proxyOwnerLabel(row) }}
+            </span>
+            <span v-else class="badge badge-gray">{{ t('admin.proxies.ownerPlatform') }}</span>
+          </template>
+
           <template #cell-location="{ row }">
             <div class="flex items-center gap-2">
               <img
@@ -497,6 +508,84 @@
           <p class="input-hint mt-2">{{ t('admin.proxies.requiredAccountLevelHint') }}</p>
         </div>
 
+        <div>
+          <label class="input-label">{{ t('admin.proxies.ownerUser') }}</label>
+          <div ref="createOwnerBoxRef" class="relative">
+            <div
+              v-if="selectedOwner"
+              class="flex items-center gap-2 rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 dark:border-dark-500 dark:bg-dark-700"
+              data-test="owner-selected"
+            >
+              <span class="min-w-0 flex-1 truncate text-sm font-medium text-gray-900 dark:text-white">
+                {{ selectedOwner.label }}
+              </span>
+              <span class="shrink-0 text-xs text-gray-400">#{{ selectedOwner.id }}</span>
+              <button
+                type="button"
+                class="shrink-0 rounded p-0.5 text-gray-400 transition-colors hover:text-red-600 dark:hover:text-red-400"
+                :title="t('admin.proxies.ownerClear')"
+                data-test="owner-clear"
+                @click="clearOwner"
+              >
+                <Icon name="x" size="sm" />
+              </button>
+            </div>
+            <template v-else>
+              <div class="relative">
+                <Icon
+                  name="search"
+                  size="sm"
+                  class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+                />
+                <input
+                  v-model="ownerSearchQuery"
+                  type="search"
+                  autocomplete="off"
+                  class="input pl-10"
+                  :placeholder="t('admin.proxies.ownerSearchPlaceholder')"
+                  data-test="owner-search-input"
+                  @input="handleOwnerSearchInput"
+                  @focus="ownerDropdownVisible = true"
+                  @keydown.esc="handleOwnerSearchEsc"
+                />
+              </div>
+              <div
+                v-if="ownerDropdownOpen"
+                class="absolute left-0 right-0 z-50 mt-1 max-h-60 overflow-auto rounded-lg border border-gray-200 bg-white shadow-lg dark:border-dark-600 dark:bg-dark-700"
+              >
+                <div v-if="ownerSearchLoading" class="px-4 py-2 text-sm text-gray-500 dark:text-gray-400">
+                  {{ t('common.loading') }}
+                </div>
+                <div v-else-if="ownerSearchFailed" class="px-4 py-2 text-sm text-red-600 dark:text-red-400">
+                  {{ t('admin.proxies.ownerSearchFailed') }}
+                </div>
+                <div
+                  v-else-if="ownerSearchResults.length === 0"
+                  class="px-4 py-2 text-sm text-gray-500 dark:text-gray-400"
+                >
+                  {{ t('admin.proxies.ownerSearchEmpty') }}
+                </div>
+                <template v-else>
+                  <button
+                    v-for="user in ownerSearchResults"
+                    :key="user.id"
+                    type="button"
+                    class="flex w-full items-center justify-between gap-3 px-4 py-2 text-left text-sm transition-colors hover:bg-gray-100 dark:hover:bg-dark-600"
+                    data-test="owner-option"
+                    @click="selectOwner(user)"
+                  >
+                    <span class="min-w-0 flex-1 truncate font-medium text-gray-900 dark:text-white">
+                      {{ user.email }}
+                    </span>
+                    <span class="shrink-0 text-xs text-gray-400">#{{ user.id }}</span>
+                  </button>
+                </template>
+              </div>
+            </template>
+          </div>
+          <p class="input-hint mt-2">{{ t('admin.proxies.ownerHint') }}</p>
+        </div>
+
       </form>
 
       <!-- Batch Add Form -->
@@ -713,6 +802,83 @@
           <p class="input-hint mt-2">{{ t('admin.proxies.requiredAccountLevelHint') }}</p>
         </div>
         <div>
+          <label class="input-label">{{ t('admin.proxies.ownerUser') }}</label>
+          <div ref="editOwnerBoxRef" class="relative">
+            <div
+              v-if="selectedOwner"
+              class="flex items-center gap-2 rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 dark:border-dark-500 dark:bg-dark-700"
+              data-test="owner-selected"
+            >
+              <span class="min-w-0 flex-1 truncate text-sm font-medium text-gray-900 dark:text-white">
+                {{ selectedOwner.label }}
+              </span>
+              <span class="shrink-0 text-xs text-gray-400">#{{ selectedOwner.id }}</span>
+              <button
+                type="button"
+                class="shrink-0 rounded p-0.5 text-gray-400 transition-colors hover:text-red-600 dark:hover:text-red-400"
+                :title="t('admin.proxies.ownerClear')"
+                data-test="owner-clear"
+                @click="clearOwner"
+              >
+                <Icon name="x" size="sm" />
+              </button>
+            </div>
+            <template v-else>
+              <div class="relative">
+                <Icon
+                  name="search"
+                  size="sm"
+                  class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+                />
+                <input
+                  v-model="ownerSearchQuery"
+                  type="search"
+                  autocomplete="off"
+                  class="input pl-10"
+                  :placeholder="t('admin.proxies.ownerSearchPlaceholder')"
+                  data-test="owner-search-input"
+                  @input="handleOwnerSearchInput"
+                  @focus="ownerDropdownVisible = true"
+                  @keydown.esc="handleOwnerSearchEsc"
+                />
+              </div>
+              <div
+                v-if="ownerDropdownOpen"
+                class="absolute left-0 right-0 z-50 mt-1 max-h-60 overflow-auto rounded-lg border border-gray-200 bg-white shadow-lg dark:border-dark-600 dark:bg-dark-700"
+              >
+                <div v-if="ownerSearchLoading" class="px-4 py-2 text-sm text-gray-500 dark:text-gray-400">
+                  {{ t('common.loading') }}
+                </div>
+                <div v-else-if="ownerSearchFailed" class="px-4 py-2 text-sm text-red-600 dark:text-red-400">
+                  {{ t('admin.proxies.ownerSearchFailed') }}
+                </div>
+                <div
+                  v-else-if="ownerSearchResults.length === 0"
+                  class="px-4 py-2 text-sm text-gray-500 dark:text-gray-400"
+                >
+                  {{ t('admin.proxies.ownerSearchEmpty') }}
+                </div>
+                <template v-else>
+                  <button
+                    v-for="user in ownerSearchResults"
+                    :key="user.id"
+                    type="button"
+                    class="flex w-full items-center justify-between gap-3 px-4 py-2 text-left text-sm transition-colors hover:bg-gray-100 dark:hover:bg-dark-600"
+                    data-test="owner-option"
+                    @click="selectOwner(user)"
+                  >
+                    <span class="min-w-0 flex-1 truncate font-medium text-gray-900 dark:text-white">
+                      {{ user.email }}
+                    </span>
+                    <span class="shrink-0 text-xs text-gray-400">#{{ user.id }}</span>
+                  </button>
+                </template>
+              </div>
+            </template>
+          </div>
+          <p class="input-hint mt-2">{{ t('admin.proxies.ownerHint') }}</p>
+        </div>
+        <div>
           <label class="input-label">{{ t('admin.proxies.status') }}</label>
           <Select v-model="editForm.status" :options="editStatusOptions" />
         </div>
@@ -925,7 +1091,8 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useAdminSettingsStore } from '@/stores/adminSettings'
 import { adminAPI } from '@/api/admin'
-import type { Proxy, ProxyAccountSummary, ProxyProtocol, ProxyQualityCheckResult } from '@/types'
+import type { CreateProxyRequest, Proxy, ProxyAccountSummary, ProxyProtocol, ProxyQualityCheckResult } from '@/types'
+import type { SimpleUser } from '@/api/admin/usage'
 import type { Column } from '@/components/common/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
@@ -973,6 +1140,7 @@ const columns = computed<Column[]>(() => [
   { key: 'protocol', label: t('admin.proxies.columns.protocol'), sortable: true },
   { key: 'address', label: t('admin.proxies.columns.address'), sortable: false },
   { key: 'auth', label: t('admin.proxies.columns.auth'), sortable: false },
+  { key: 'owner', label: t('admin.proxies.columns.owner'), sortable: false },
   { key: 'location', label: t('admin.proxies.columns.location'), sortable: false },
   { key: 'account_count', label: t('admin.proxies.columns.accounts'), sortable: true },
   { key: 'latency', label: t('admin.proxies.columns.latency'), sortable: false },
@@ -1116,6 +1284,121 @@ const editForm = reactive({
   max_accounts: 0,
   status: 'active' as 'active' | 'inactive'
 })
+
+// ── 归属用户选择（创建/编辑弹窗共用；BaseDialog 使用 v-if，两个弹窗不会同时挂载）──
+const createOwnerBoxRef = ref<HTMLElement | null>(null)
+const editOwnerBoxRef = ref<HTMLElement | null>(null)
+const selectedOwner = ref<{ id: number; label: string } | null>(null)
+const ownerSearchQuery = ref('')
+const ownerSearchResults = ref<SimpleUser[]>([])
+const ownerSearchLoading = ref(false)
+const ownerSearchFailed = ref(false)
+const ownerDropdownVisible = ref(false)
+// 打开编辑弹窗时的原始归属（0 = 平台代理），用于脏跟踪：
+// 归属未变化时 payload 完全省略 owner_user_id（契约缺省 = 不修改），
+// 避免无关编辑（改名/改端口）重跑后端归属守卫导致遗留数据代理被锁死无法编辑。
+let editOriginalOwnerId = 0
+let ownerSearchTimer: ReturnType<typeof setTimeout> | null = null
+let ownerSearchSequence = 0
+
+const clearOwnerPendingSearch = () => {
+  if (ownerSearchTimer) {
+    clearTimeout(ownerSearchTimer)
+    ownerSearchTimer = null
+  }
+  ownerSearchSequence += 1
+}
+
+const resetOwnerSelect = () => {
+  clearOwnerPendingSearch()
+  selectedOwner.value = null
+  ownerSearchQuery.value = ''
+  ownerSearchResults.value = []
+  ownerSearchLoading.value = false
+  ownerSearchFailed.value = false
+  ownerDropdownVisible.value = false
+}
+
+// 下拉真正可见的条件，模板与键盘处理共用，避免两处判断走偏。
+const ownerDropdownOpen = computed(
+  () => ownerDropdownVisible.value && ownerSearchQuery.value.trim().length > 0
+)
+
+// 下拉展开时 Esc 只收起下拉；未展开时放行给 BaseDialog，
+// 保持"Esc 关闭弹窗"的默认行为，也避免搜索时误关弹窗丢失未保存的编辑。
+const handleOwnerSearchEsc = (event: KeyboardEvent) => {
+  if (!ownerDropdownOpen.value) return
+  event.preventDefault()
+  event.stopPropagation()
+  ownerDropdownVisible.value = false
+}
+
+const handleOwnerSearchInput = () => {
+  clearOwnerPendingSearch()
+  const query = ownerSearchQuery.value.trim()
+  ownerDropdownVisible.value = true
+  ownerSearchFailed.value = false
+  if (!query) {
+    ownerSearchResults.value = []
+    ownerSearchLoading.value = false
+    return
+  }
+  const sequence = ownerSearchSequence
+  ownerSearchTimer = setTimeout(async () => {
+    ownerSearchLoading.value = true
+    try {
+      const results = await adminAPI.usage.searchUsers(query)
+      if (sequence === ownerSearchSequence) {
+        // 已注销用户选中后必然被后端拒（归属校验查不到用户），直接不展示。
+        ownerSearchResults.value = results.filter((user) => !user.deleted)
+      }
+    } catch {
+      if (sequence === ownerSearchSequence) {
+        ownerSearchResults.value = []
+        ownerSearchFailed.value = true
+      }
+    } finally {
+      if (sequence === ownerSearchSequence) {
+        ownerSearchLoading.value = false
+      }
+    }
+  }, 300)
+}
+
+const selectOwner = (user: SimpleUser) => {
+  selectedOwner.value = { id: user.id, label: user.email }
+  clearOwnerPendingSearch()
+  ownerSearchQuery.value = ''
+  ownerSearchResults.value = []
+  ownerSearchLoading.value = false
+  ownerSearchFailed.value = false
+  ownerDropdownVisible.value = false
+}
+
+const clearOwner = () => {
+  selectedOwner.value = null
+}
+
+const proxyOwnerLabel = (proxy: Proxy) =>
+  proxy.owner_username || proxy.owner_email || `#${proxy.owner_user_id}`
+
+// apiClient 拦截器把后端错误归一为 { status, code, reason, message, metadata }，
+// 其中 reason 才是 PROXY_OWNER_CONFLICT 这类字符串错误码（response.ErrorWithDetails 的 reason 字段）。
+// 归属相关的失败原因必须让管理员看懂，否则只会得到一句"操作失败"。
+const proxyErrorMessage = (error: any, fallbackKey: string): string => {
+  const reason = typeof error?.reason === 'string' ? error.reason : ''
+  if (reason === 'PROXY_OWNER_CONFLICT') return t('admin.proxies.ownerConflict')
+  if (reason === 'PROXY_OWNER_NOT_FOUND') return t('admin.proxies.ownerNotFound')
+  return t(fallbackKey)
+}
+
+const closeOwnerDropdownOnOutsideClick = (event: MouseEvent) => {
+  const target = event.target as Node | null
+  if (!target) return
+  if (createOwnerBoxRef.value?.contains(target)) return
+  if (editOwnerBoxRef.value?.contains(target)) return
+  ownerDropdownVisible.value = false
+}
 
 let abortController: AbortController | null = null
 
@@ -1281,6 +1564,7 @@ const closeCreateModal = () => {
   createForm.required_account_level = ''
   createForm.max_accounts = 0
   createPasswordVisible.value = false
+  resetOwnerSelect()
   batchInput.value = ''
   batchParseResult.total = 0
   batchParseResult.valid = 0
@@ -1400,7 +1684,7 @@ const handleCreateProxy = async () => {
   if (maxAccounts === null) return
   submitting.value = true
   try {
-    await adminAPI.proxies.create({
+    const createData: CreateProxyRequest = {
       name: createForm.name.trim(),
       protocol: createForm.protocol,
       host: createForm.host.trim(),
@@ -1410,12 +1694,17 @@ const handleCreateProxy = async () => {
       platform: createForm.platform,
       required_account_level: createForm.required_account_level,
       max_accounts: maxAccounts
-    })
+    }
+    // 归属用户仅在选择后传递；省略表示平台代理（所有用户可见）。
+    if (selectedOwner.value && selectedOwner.value.id > 0) {
+      createData.owner_user_id = selectedOwner.value.id
+    }
+    await adminAPI.proxies.create(createData)
     appStore.showSuccess(t('admin.proxies.proxyCreated'))
     closeCreateModal()
     loadProxies()
   } catch (error: any) {
-    appStore.showError(error.response?.data?.detail || t('admin.proxies.failedToCreate'))
+    appStore.showError(proxyErrorMessage(error, 'admin.proxies.failedToCreate'))
     console.error('Error creating proxy:', error)
   } finally {
     submitting.value = false
@@ -1436,6 +1725,15 @@ const handleEdit = (proxy: Proxy) => {
   editForm.status = proxy.status
   editPasswordVisible.value = false
   editPasswordDirty.value = false
+  resetOwnerSelect()
+  editOriginalOwnerId = proxy.owner_user_id ?? 0
+  // 编辑时回显已有归属（owner_username/owner_email 由列表接口返回）。
+  if (proxy.owner_user_id) {
+    selectedOwner.value = {
+      id: proxy.owner_user_id,
+      label: proxyOwnerLabel(proxy)
+    }
+  }
   showEditModal.value = true
 }
 
@@ -1444,6 +1742,7 @@ const closeEditModal = () => {
   editingProxy.value = null
   editPasswordVisible.value = false
   editPasswordDirty.value = false
+  resetOwnerSelect()
 }
 
 const handleUpdateProxy = async () => {
@@ -1480,6 +1779,13 @@ const handleUpdateProxy = async () => {
       status: editForm.status
     }
 
+    // 归属脏跟踪：仅在归属发生变化时携带 owner_user_id
+    //（缺省 = 不修改；0 = 清空归属改回平台代理；>0 = 归属到该用户）。
+    const nextOwnerId = selectedOwner.value?.id ?? 0
+    if (nextOwnerId !== editOriginalOwnerId) {
+      updateData.owner_user_id = nextOwnerId
+    }
+
     // Only include password if user actually modified the field
     if (editPasswordDirty.value) {
       updateData.password = editForm.password.trim() || null
@@ -1490,7 +1796,7 @@ const handleUpdateProxy = async () => {
     closeEditModal()
     loadProxies()
   } catch (error: any) {
-    appStore.showError(error.response?.data?.detail || t('admin.proxies.failedToUpdate'))
+    appStore.showError(proxyErrorMessage(error, 'admin.proxies.failedToUpdate'))
     console.error('Error updating proxy:', error)
   } finally {
     submitting.value = false
@@ -2028,11 +2334,14 @@ onMounted(() => {
   // 加载动态账号等级配置，供代理表单的“账号等级”下拉使用（失败则回退到默认等级）。
   adminSettingsStore.fetch().catch(() => {})
   document.addEventListener('click', closeCopyMenu)
+  document.addEventListener('click', closeOwnerDropdownOnOutsideClick)
 })
 
 onUnmounted(() => {
   clearTimeout(searchTimeout)
+  clearOwnerPendingSearch()
   abortController?.abort()
   document.removeEventListener('click', closeCopyMenu)
+  document.removeEventListener('click', closeOwnerDropdownOnOutsideClick)
 })
 </script>

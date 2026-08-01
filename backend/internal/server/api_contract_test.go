@@ -1923,6 +1923,10 @@ func (stubProxyRepo) CountAccountsByProxyID(ctx context.Context, proxyID int64) 
 	return 0, errors.New("not implemented")
 }
 
+func (stubProxyRepo) UpdateWithOwnerAssignment(ctx context.Context, proxy *service.Proxy) error {
+	return errors.New("not implemented")
+}
+
 func (stubProxyRepo) ListAccountSummariesByProxyID(ctx context.Context, proxyID int64) ([]service.ProxyAccountSummary, error) {
 	return nil, errors.New("not implemented")
 }

@@ -4474,9 +4474,9 @@ func TestAccountShareModeRepositoryProcessSeatWaiverCompensationsAggregatesDebit
 	charge := decimal.RequireFromString("0.0700018000")
 	ownerCredit := decimal.RequireFromString("0.0630016200")
 
-	mock.ExpectQuery("SELECT sc\\.id").
-		WithArgs(accountShareSeatSettlementTypeCharge, accountShareSeatSettlementTypeWaiverRefund, accountShareSeatSettlementTypeUsage, readyBefore, 1).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(settlementID))
+	mock.ExpectQuery("SELECT sc\\.id, sc\\.period_ended_at").
+		WithArgs(accountShareSeatSettlementTypeCharge, accountShareSeatSettlementTypeWaiverRefund, readyBefore, 1).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "period_ended_at"}).AddRow(settlementID, windowEnd))
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT\\s+sc\\.id,").
 		WithArgs(settlementID, accountShareSeatSettlementTypeCharge, readyBefore.UTC(), accountShareSeatSettlementTypeWaiverRefund).
@@ -4547,18 +4547,24 @@ func TestAccountShareModeRepositoryProcessSeatWaiverCompensationsAggregatesDebit
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	result, err := repo.ProcessSeatWaiverCompensations(context.Background(), now, 1)
+	batch, err := repo.ProcessSeatWaiverBacklogCompensations(context.Background(), now, 1, time.Time{}, 0)
 	if err != nil {
-		t.Fatalf("ProcessSeatWaiverCompensations failed: %v", err)
+		t.Fatalf("ProcessSeatWaiverBacklogCompensations failed: %v", err)
 	}
-	if result == nil {
-		t.Fatal("expected compensation result")
+	if batch == nil || batch.Billing == nil {
+		t.Fatal("expected compensation batch")
 	}
-	if got := strings.Trim(strings.Join(int64sToStrings(result.CreditUserIDs), ","), ","); got != "4866" {
+	if got := strings.Trim(strings.Join(int64sToStrings(batch.Billing.CreditUserIDs), ","), ","); got != "4866" {
 		t.Fatalf("credit users = %q, want 4866", got)
 	}
-	if got := strings.Trim(strings.Join(int64sToStrings(result.DebitUserIDs), ","), ","); got != "7001" {
+	if got := strings.Trim(strings.Join(int64sToStrings(batch.Billing.DebitUserIDs), ","), ","); got != "7001" {
 		t.Fatalf("debit users = %q, want 7001", got)
+	}
+	if batch.Matched != 1 {
+		t.Fatalf("matched = %d, want 1", batch.Matched)
+	}
+	if !batch.CursorPeriodEndedAt.Equal(windowEnd) || batch.CursorID != settlementID {
+		t.Fatalf("cursor = (%v, %d), want (%v, %d)", batch.CursorPeriodEndedAt, batch.CursorID, windowEnd, settlementID)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
@@ -4567,15 +4573,31 @@ func TestAccountShareModeRepositoryProcessSeatWaiverCompensationsAggregatesDebit
 
 func TestAccountShareModeRepositoryProcessSeatWaiverCompensationsUsesWindowEndReadiness(t *testing.T) {
 	matcher := sqlmock.QueryMatcherFunc(func(expectedSQL, actualSQL string) error {
-		if expectedSQL != "seat waiver compensation candidate query" {
-			return nil
-		}
 		normalized := strings.ToLower(strings.Join(strings.Fields(actualSQL), " "))
-		if !strings.Contains(normalized, "sc.period_ended_at <= $4") {
-			return errors.New("waiver compensation candidate query must wait until the charged window has ended")
-		}
-		if strings.Contains(normalized, "sc.created_at <= $4") {
-			return errors.New("waiver compensation candidate query must not use settlement creation time as readiness")
+		switch expectedSQL {
+		case "seat waiver backlog candidate query":
+			if !strings.Contains(normalized, "sc.period_ended_at <= $3") {
+				return errors.New("backlog candidate query must wait until the charged window has ended")
+			}
+			if !strings.Contains(normalized, "sc.waiver_evaluated_at is null") {
+				return errors.New("backlog candidate query must target unevaluated rows only")
+			}
+			if strings.Contains(normalized, "(sc.period_ended_at, sc.id) >") {
+				return errors.New("backlog candidate query must omit the cursor clause when cursor is zero")
+			}
+			if strings.Contains(normalized, "sc.created_at <=") {
+				return errors.New("candidate query must not use settlement creation time as readiness")
+			}
+		case "seat waiver late usage candidate query":
+			if !strings.Contains(normalized, "sc.period_ended_at <= $4") {
+				return errors.New("late usage candidate query must wait until the charged window has ended")
+			}
+			if !strings.Contains(normalized, "sc.period_ended_at >= $5") || !strings.Contains(normalized, "sc.waiver_evaluated_at >= $5") {
+				return errors.New("late usage candidate query must carry the window lower bounds")
+			}
+			if !strings.Contains(normalized, "e.created_at >= $6") {
+				return errors.New("late usage candidate query must bound late entries by created_at")
+			}
 		}
 		return nil
 	})
@@ -4590,16 +4612,102 @@ func TestAccountShareModeRepositoryProcessSeatWaiverCompensationsUsesWindowEndRe
 
 	now := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
 	readyBefore := now.Add(-service.AccountShareModeSeatWaiverCompensationDelay)
-	mock.ExpectQuery("seat waiver compensation candidate query").
-		WithArgs(accountShareSeatSettlementTypeCharge, accountShareSeatSettlementTypeWaiverRefund, accountShareSeatSettlementTypeUsage, readyBefore, service.AccountShareModeSeatWaiverCompensationBatchSize).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	usageSince := now.Add(-service.AccountShareModeSeatWaiverLateUsageLookback)
+	windowSince := usageSince.Add(-service.AccountShareModeSeatWaiverLateUsageSlack)
 
-	result, err := repo.ProcessSeatWaiverCompensations(context.Background(), now, 0)
+	mock.ExpectQuery("seat waiver backlog candidate query").
+		WithArgs(accountShareSeatSettlementTypeCharge, accountShareSeatSettlementTypeWaiverRefund, readyBefore, service.AccountShareModeSeatWaiverCompensationBatchSize).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "period_ended_at"}))
+	mock.ExpectQuery("seat waiver late usage candidate query").
+		WithArgs(
+			accountShareSeatSettlementTypeCharge,
+			accountShareSeatSettlementTypeWaiverRefund,
+			accountShareSeatSettlementTypeUsage,
+			readyBefore,
+			windowSince,
+			usageSince,
+			service.AccountShareModeSeatWaiverCompensationBatchSize,
+		).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "period_ended_at"}))
+
+	backlog, err := repo.ProcessSeatWaiverBacklogCompensations(context.Background(), now, 0, time.Time{}, 0)
 	if err != nil {
-		t.Fatalf("ProcessSeatWaiverCompensations failed: %v", err)
+		t.Fatalf("ProcessSeatWaiverBacklogCompensations failed: %v", err)
 	}
-	if result == nil || result.Processed != 0 {
-		t.Fatalf("processed = %#v, want 0", result)
+	if backlog == nil || backlog.Matched != 0 {
+		t.Fatalf("backlog matched = %#v, want 0", backlog)
+	}
+	late, err := repo.ProcessSeatWaiverLateUsageCompensations(context.Background(), now, 0, usageSince, windowSince, time.Time{}, 0)
+	if err != nil {
+		t.Fatalf("ProcessSeatWaiverLateUsageCompensations failed: %v", err)
+	}
+	if late == nil || late.Matched != 0 {
+		t.Fatalf("late usage matched = %#v, want 0", late)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestAccountShareModeRepositorySeatWaiverCursorClauseOnlyWhenSet(t *testing.T) {
+	matcher := sqlmock.QueryMatcherFunc(func(expectedSQL, actualSQL string) error {
+		normalized := strings.ToLower(strings.Join(strings.Fields(actualSQL), " "))
+		switch expectedSQL {
+		case "backlog with cursor":
+			if !strings.Contains(normalized, "(sc.period_ended_at, sc.id) > ($4, $5)") {
+				return errors.New("backlog query with cursor must carry the row-compare keyset clause")
+			}
+			if !strings.Contains(normalized, "limit $6") {
+				return errors.New("backlog query with cursor must renumber the limit placeholder")
+			}
+		case "late usage with cursor":
+			if !strings.Contains(normalized, "(sc.period_ended_at, sc.id) > ($7, $8)") {
+				return errors.New("late usage query with cursor must carry the row-compare keyset clause")
+			}
+			if !strings.Contains(normalized, "limit $9") {
+				return errors.New("late usage query with cursor must renumber the limit placeholder")
+			}
+		}
+		return nil
+	})
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(matcher))
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() {
+		_ = db.Close()
+	}()
+	repo := &accountShareModeRepository{db: db}
+
+	now := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	readyBefore := now.Add(-service.AccountShareModeSeatWaiverCompensationDelay)
+	usageSince := now.Add(-service.AccountShareModeSeatWaiverLateUsageLookback)
+	windowSince := usageSince.Add(-service.AccountShareModeSeatWaiverLateUsageSlack)
+	cursorEndedAt := time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC)
+	cursorID := int64(9911)
+
+	mock.ExpectQuery("backlog with cursor").
+		WithArgs(accountShareSeatSettlementTypeCharge, accountShareSeatSettlementTypeWaiverRefund, readyBefore, cursorEndedAt, cursorID, 25).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "period_ended_at"}))
+	mock.ExpectQuery("late usage with cursor").
+		WithArgs(
+			accountShareSeatSettlementTypeCharge,
+			accountShareSeatSettlementTypeWaiverRefund,
+			accountShareSeatSettlementTypeUsage,
+			readyBefore,
+			windowSince,
+			usageSince,
+			cursorEndedAt,
+			cursorID,
+			25,
+		).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "period_ended_at"}))
+
+	if _, err := repo.ProcessSeatWaiverBacklogCompensations(context.Background(), now, 25, cursorEndedAt, cursorID); err != nil {
+		t.Fatalf("ProcessSeatWaiverBacklogCompensations failed: %v", err)
+	}
+	if _, err := repo.ProcessSeatWaiverLateUsageCompensations(context.Background(), now, 25, usageSince, windowSince, cursorEndedAt, cursorID); err != nil {
+		t.Fatalf("ProcessSeatWaiverLateUsageCompensations failed: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)

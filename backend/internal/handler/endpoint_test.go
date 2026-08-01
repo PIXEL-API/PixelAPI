@@ -138,6 +138,14 @@ func TestResponsesSubpathSuffix(t *testing.T) {
 		{"/openai/v1/responses/compact/detail", "/compact/detail"},
 		{"/v1/messages", ""},
 		{"", ""},
+		// 不合规子路径不得成为上游端点标签的一部分（判定与真正拼进上游 URL 的
+		// 后缀共用 service/upstream_path_guard.go 的规则）。
+		{"/backend-api/codex/responses/../../api/auth/session", ""},
+		{"/v1/responses/../..", ""},
+		{"/v1/responses/./compact", ""},
+		{"/v1/responses//double", ""},
+		{"/v1/responses/compact?a=b", ""},
+		{"/v1/responses/compact#frag", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.raw, func(t *testing.T) {
