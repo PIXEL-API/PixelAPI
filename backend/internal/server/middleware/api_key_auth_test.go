@@ -889,3 +889,58 @@ func TestValidateAPIKeyGroupAllowed(t *testing.T) {
 		})
 	}
 }
+
+// D-5：分组被停用后，绑定它的 API Key 必须立刻失效。
+//
+// 停用是可逆操作、且不会清空 api_keys.group_id（只有删除才会，见
+// groupRepository.DeleteCascade），所以没有这层每请求复核，被停用分组下的 Key
+// 会继续正常访问该分组的账号池。
+func TestValidateAPIKeyGroupAvailable(t *testing.T) {
+	groupID := int64(7)
+
+	tests := []struct {
+		name   string
+		apiKey *service.APIKey
+		want   bool
+	}{
+		{
+			name:   "nil api key is not blocked here",
+			apiKey: nil,
+			want:   true,
+		},
+		{
+			name:   "key without group falls through to default group logic",
+			apiKey: &service.APIKey{},
+			want:   true,
+		},
+		{
+			// 分组被删除时 DeleteCascade 会清空 group_id，不会留下悬空引用。
+			// 真出现这种异常态也不在鉴权热路径上 fail-closed，避免误判变成全站 403。
+			name:   "dangling group id is not blocked here",
+			apiKey: &service.APIKey{GroupID: &groupID},
+			want:   true,
+		},
+		{
+			name: "active group passes",
+			apiKey: &service.APIKey{
+				GroupID: &groupID,
+				Group:   &service.Group{ID: groupID, Status: service.StatusActive},
+			},
+			want: true,
+		},
+		{
+			name: "disabled group is rejected",
+			apiKey: &service.APIKey{
+				GroupID: &groupID,
+				Group:   &service.Group{ID: groupID, Status: "disabled"},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, validateAPIKeyGroupAvailable(tt.apiKey))
+		})
+	}
+}

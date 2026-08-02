@@ -247,6 +247,22 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 		// OAuth 账号在 401 错误时临时不可调度（给 token 刷新窗口）；非 OAuth 账号保持原有 SetError 行为。
 		// Antigravity 除外：其 401 由 applyErrorPolicy 的 temp_unschedulable_rules 自行控制。
 		if account.Type == AccountTypeOAuth && account.Platform != PlatformAntigravity {
+			// 0. 没有 refresh_token 的 OAuth 账号**永远无法自愈**。
+			// 下面的临时冷却是为"等 token 刷新"留窗口，而刷新的前提就是有 refresh_token；
+			// 缺了它，冷却结束后账号会被重新选中 → 再次 401 → 再冷却，如此往复，
+			// 对用户表现为该账号持续吐 502。这类账号必须直接置为 error 等人工重新授权。
+			// 所有 OAuth 平台的 refresh_token 都存在同一个凭证键下
+			// （oauth_service / gemini_oauth_service / grok_oauth_service / antigravity 均为
+			// GetCredential("refresh_token")），故此处可以统一判定。
+			if strings.TrimSpace(account.GetCredential("refresh_token")) == "" {
+				msg := "Authentication failed (401): OAuth account has no refresh token, re-authorization required"
+				if upstreamMsg != "" {
+					msg = "OAuth 401 (no refresh token): " + upstreamMsg
+				}
+				s.handleAuthError(ctx, account, msg)
+				shouldDisable = true
+				break
+			}
 			// 1. 失效缓存
 			if s.tokenCacheInvalidator != nil {
 				if err := s.tokenCacheInvalidator.InvalidateToken(ctx, account); err != nil {

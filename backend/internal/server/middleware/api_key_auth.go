@@ -116,6 +116,14 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 			return
 		}
 
+		// 分组可用性复核：管理员把分组停用后，绑定它的 Key 必须立刻失效。
+		// 与下面的授权复核是两件事——授权管的是"这个用户能不能用这个分组"，
+		// 可用性管的是"这个分组现在还能不能用"。
+		// 放在 SimpleMode 早返回之前，使两条路径都受约束。
+		if abortIfAPIKeyGroupUnavailable(c, apiKey) {
+			return
+		}
+
 		// 专属分组的运行时授权复核。
 		// 授权是可以被撤销的，而 API Key 一旦建好就一直带着 group_id；
 		// 没有这层每请求复核，管理员撤销专属分组授权后，用户手里的 Key 仍能
@@ -296,6 +304,34 @@ func GetSubscriptionFromContext(c *gin.Context) (*service.UserSubscription, bool
 	}
 	subscription, ok := value.(*service.UserSubscription)
 	return subscription, ok
+}
+
+// abortIfAPIKeyGroupUnavailable 在 API Key 绑定的分组已被停用时拦截请求。
+func abortIfAPIKeyGroupUnavailable(c *gin.Context, apiKey *service.APIKey) bool {
+	if validateAPIKeyGroupAvailable(apiKey) {
+		return false
+	}
+	AbortWithError(c, 403, "GROUP_UNAVAILABLE", "API Key 所属分组已停用")
+	return true
+}
+
+// validateAPIKeyGroupAvailable 判定该 Key 绑定的分组当前是否仍可用。
+//
+// 只拦「分组存在但被停用」这一种情况，刻意不拦分组为空：
+//   - 未绑定分组（GroupID 为 nil）本就走默认分组逻辑；
+//   - 分组被删除时 groupRepo.DeleteCascade 会把 api_keys.group_id 一并清空
+//     （group_repo.go 的 "Clear group_id for api keys bound to this group"），
+//     不会留下悬空引用。因此 GroupID 非空但 Group 为空属于异常态，
+//     交由既有分支处理，这里不越权拦截——在鉴权热路径上 fail-closed 的误判
+//     会直接变成全站 403。
+//
+// 分组状态变更由 adminService.UpdateGroup 调 InvalidateAuthCacheByGroupID
+// 失效鉴权快照，停用最迟在缓存重建后一个请求内生效。
+func validateAPIKeyGroupAvailable(apiKey *service.APIKey) bool {
+	if apiKey == nil || apiKey.GroupID == nil || apiKey.Group == nil {
+		return true
+	}
+	return apiKey.Group.IsActive()
 }
 
 // abortIfAPIKeyGroupNotAllowed 在用户对 API Key 所属专属分组的授权已被撤销时拦截请求。

@@ -105,6 +105,9 @@ func TestRateLimitService_HandleUpstreamError_OAuth401SetsTempUnschedulable(t *t
 			Platform: PlatformGemini,
 			Type:     AccountTypeOAuth,
 			Credentials: map[string]any{
+				// 有 refresh_token 才走冷却路径：没有它的账号刷新不了，
+				// 冷却结束只会再 401 一次，改走 SetError（见 OAuth401NoRefreshToken）。
+				"refresh_token":              "rt",
 				"temp_unschedulable_enabled": true,
 				"temp_unschedulable_rules": []any{
 					map[string]any{
@@ -158,6 +161,8 @@ func TestRateLimitService_HandleUpstreamError_OAuth401InvalidatorError(t *testin
 		ID:       101,
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
+		// 有 refresh_token，账号可自愈 → 走冷却而非 SetError。
+		Credentials: map[string]any{"refresh_token": "rt"},
 	}
 
 	shouldDisable := service.HandleUpstreamError(context.Background(), account, 401, http.Header{}, []byte("unauthorized"))
@@ -251,4 +256,51 @@ func TestRateLimitService_HandleUpstreamError_Anthropic7dOiOnlyMarksFableModel(t
 	require.True(t, repo.modelRateLimitCalls[0].resetAt.Equal(resetOI))
 	require.Empty(t, repo.rateLimitCalls)
 	require.Equal(t, 0, repo.tempCalls)
+}
+
+// D-1：没有 refresh_token 的 OAuth 账号 401 后必须直接置为 error，而不是进冷却队列。
+//
+// 冷却是为「等 token 刷新」留窗口，而刷新的前提就是有 refresh_token。缺了它，
+// 冷却结束后账号会被重新选中 → 再次 401 → 再冷却，如此往复，对用户表现为
+// 该账号持续吐 502。所有 OAuth 平台的 refresh_token 都存在同一个凭证键下，
+// 故此判定对 openai/gemini/grok/claude 一致生效。
+func TestRateLimitService_HandleUpstreamError_OAuth401NoRefreshTokenSetsError(t *testing.T) {
+	for _, platform := range []string{PlatformOpenAI, PlatformGemini} {
+		t.Run(platform, func(t *testing.T) {
+			repo := &rateLimitAccountRepoStub{}
+			invalidator := &tokenCacheInvalidatorRecorder{}
+			service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+			service.SetTokenCacheInvalidator(invalidator)
+			account := &Account{
+				ID:       104,
+				Platform: platform,
+				Type:     AccountTypeOAuth,
+				// 只有 access_token，没有 refresh_token —— 永远无法自愈
+				Credentials: map[string]any{"access_token": "token"},
+			}
+
+			shouldDisable := service.HandleUpstreamError(context.Background(), account, 401, http.Header{}, []byte("unauthorized"))
+
+			require.True(t, shouldDisable)
+			require.Equal(t, 1, repo.setErrorCalls, "无 refresh_token 必须落 error")
+			require.Equal(t, 0, repo.tempCalls, "不得进冷却队列反复空转")
+			// 既然不再调度它，也没必要失效 token 缓存
+			require.Empty(t, invalidator.accounts)
+		})
+	}
+
+	t.Run("blank refresh token counts as missing", func(t *testing.T) {
+		repo := &rateLimitAccountRepoStub{}
+		service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+		account := &Account{
+			ID:          105,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeOAuth,
+			Credentials: map[string]any{"refresh_token": "   "},
+		}
+
+		require.True(t, service.HandleUpstreamError(context.Background(), account, 401, http.Header{}, []byte("unauthorized")))
+		require.Equal(t, 1, repo.setErrorCalls)
+		require.Equal(t, 0, repo.tempCalls)
+	})
 }
