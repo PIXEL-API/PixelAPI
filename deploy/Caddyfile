@@ -27,14 +27,20 @@ api.sub2api.com {
 		lb_try_interval 250ms
 		
 		# 传递真实客户端信息
-		# 兼容 Cloudflare 和直连：后端应优先读取 CF-Connecting-IP，其次 X-Real-IP
+		# 这些头一律由本层用实际 TCP 对端 {remote_host} 重新生成，
+		# 客户端自带的同名头会被覆盖，无法伪造来源 IP。
 		header_up X-Real-IP {remote_host}
 		header_up X-Forwarded-For {remote_host}
 		header_up X-Forwarded-Proto {scheme}
 		header_up X-Forwarded-Host {host}
-		# 保留 Cloudflare 原始头（如果存在）
-		# 后端获取 IP 的优先级建议: CF-Connecting-IP → X-Real-IP → X-Forwarded-For
-		header_up CF-Connecting-IP {http.request.header.CF-Connecting-IP}
+		#
+		# 安全：不要在这里原样透传 CF-Connecting-IP。
+		# 该头可由任意客户端直接构造，一旦原样转发给后端，
+		# 就能伪造 API Key 的 IP 白名单校验、审计日志来源与限流分桶。
+		# 若站点确实位于 Cloudflare 之后，正确做法是：
+		#   1) 仅允许 Cloudflare 官方 IP 段连入本层（防止绕过边缘直连源站）；
+		#   2) 在后端 security.forwarded_client_ip_headers 里显式声明信任 CF-Connecting-IP。
+		# 两者缺一不可，不要仅靠本层透传。
 		
 		# 连接池优化
 		transport http {
