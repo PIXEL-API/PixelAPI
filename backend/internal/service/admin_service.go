@@ -2057,7 +2057,24 @@ func (s *adminServiceImpl) ListGroups(ctx context.Context, page, pageSize int, p
 	return groups, result.Total, nil
 }
 
+// scopeIsNarrowed 判断调用方是否指定了具体作用域。
+// 空值与 "all" 表示不收窄，此时仍需读取全部活跃分组。
+func scopeIsNarrowed(scope string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(scope))
+	return normalized != "" && normalized != "all"
+}
+
 func (s *adminServiceImpl) GetAllGroups(ctx context.Context, scope string) ([]Group, error) {
+	if scopeIsNarrowed(scope) {
+		groups, err := s.groupRepo.ListActiveByScope(ctx, scope)
+		if err != nil {
+			return nil, err
+		}
+		// 仓储已按作用域过滤，这里再过一遍是防御性的：谓词与 NormalizeGroupScope
+		// 若将来发生偏差，结果集仍然正确，只是退化为多读几行。
+		return filterGroupsByScope(groups, scope), nil
+	}
+
 	groups, err := s.groupRepo.ListActive(ctx)
 	if err != nil {
 		return nil, err
@@ -2066,6 +2083,14 @@ func (s *adminServiceImpl) GetAllGroups(ctx context.Context, scope string) ([]Gr
 }
 
 func (s *adminServiceImpl) GetAllGroupsByPlatform(ctx context.Context, platform, scope string) ([]Group, error) {
+	if scopeIsNarrowed(scope) {
+		groups, err := s.groupRepo.ListActiveByPlatformAndScope(ctx, platform, scope)
+		if err != nil {
+			return nil, err
+		}
+		return filterGroupsByScope(groups, scope), nil
+	}
+
 	groups, err := s.groupRepo.ListActiveByPlatform(ctx, platform)
 	if err != nil {
 		return nil, err

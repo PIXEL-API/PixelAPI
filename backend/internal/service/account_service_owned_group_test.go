@@ -2342,3 +2342,11 @@ func TestAccountQuotaGroupDashboardUsesGeneratedAtForSchedulability(t *testing.T
 	require.Equal(t, 0, summaries[0].SchedulableAccountCount)
 	require.Equal(t, 1, summaries[0].RateLimitedAccountCount)
 }
+
+func (s *ownedPublicShareGroupRepoStub) ListActiveByScope(context.Context, string) ([]Group, error) {
+	return nil, nil
+}
+
+func (s *ownedPublicShareGroupRepoStub) ListActiveByPlatformAndScope(context.Context, string, string) ([]Group, error) {
+	return nil, nil
+}

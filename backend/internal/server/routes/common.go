@@ -3,9 +3,19 @@ package routes
 import (
 	"net/http"
 
+	"github.com/Wei-Shaw/sub2api/internal/handler"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
+
+// RegisterBrandAssetRoutes 注册品牌图片端点。
+//
+// 挂在引擎根上而不是 /api/v1 下是刻意的：生产边缘对 /api/ 前缀统一
+// X-Cache-Status: BYPASS，非 /api 的路径才会被缓存。该路径必须同时出现在
+// web.shouldBypassEmbeddedFrontend 的白名单里，否则会被 SPA 兜底吞成 index.html。
+func RegisterBrandAssetRoutes(r *gin.Engine, h *handler.Handlers) {
+	r.GET(service.BrandAssetPath, h.Setting.ServeSiteLogo)
+}
 
 // RegisterCommonRoutes 注册通用路由（健康检查、状态等）
 func RegisterCommonRoutes(r *gin.Engine, clusterRuntime *service.ClusterRuntime) {

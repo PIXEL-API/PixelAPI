@@ -89,7 +89,7 @@ import { useRoute } from 'vue-router'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import Icon from '@/components/icons/Icon.vue'
-import { getPublicSettings } from '@/api/auth'
+import { getLegalDocument, getPublicSettings } from '@/api/auth'
 import { sanitizeUrl } from '@/utils/url'
 import type { LoginAgreementDocument, PublicSettings } from '@/types'
 
@@ -114,6 +114,10 @@ const siteLogo = computed(() => sanitizeUrl(settings.value?.site_logo || '', {
 }))
 const updatedAt = computed(() => settings.value?.login_agreement_updated_at || '')
 
+// 正文单独获取：/settings/public 里的 documents 只带 id/title（正文约 43KB，
+// 不该进首屏载荷）。这里保留 documents 仅用于取标题与判断文档是否存在。
+const documentContent = ref('')
+
 const currentDocument = computed<LoginAgreementDocument | null>(() => {
   const id = documentId.value
   if (!id) {
@@ -122,10 +126,10 @@ const currentDocument = computed<LoginAgreementDocument | null>(() => {
   return documents.value.find((doc) => doc.id === id) ?? null
 })
 
-const hasContent = computed(() => Boolean(currentDocument.value?.content_md?.trim()))
+const hasContent = computed(() => Boolean(documentContent.value.trim()))
 
 const renderedHtml = computed(() => {
-  const content = currentDocument.value?.content_md?.trim() || ''
+  const content = documentContent.value.trim()
   if (!content) {
     return ''
   }
@@ -154,9 +158,22 @@ onMounted(async () => {
     settings.value = await getPublicSettings()
   } catch {
     loadError.value = true
-  } finally {
     loading.value = false
+    return
   }
+
+  // 设置拿到后再取正文。文档不存在（404）不算加载失败——模板已有
+  // "文档不存在" 的分支由 currentDocument 为空驱动，这里保持正文为空即可。
+  const id = documentId.value
+  if (id) {
+    try {
+      const doc = await getLegalDocument(id)
+      documentContent.value = doc.content_md || ''
+    } catch {
+      documentContent.value = ''
+    }
+  }
+  loading.value = false
 })
 </script>
 

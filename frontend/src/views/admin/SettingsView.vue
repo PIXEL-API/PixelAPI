@@ -9570,6 +9570,9 @@ async function saveSettings() {
     // Refresh cached settings so sidebar/header update immediately
     await appStore.fetchPublicSettings(true);
     await adminSettingsStore.fetch(true);
+    // Web Search 全局开关走独立端点与独立缓存，必须单独失效——否则同一 SPA 会话内
+    // 改了开关后回到账号页，弹窗读到的仍是旧状态。
+    adminSettingsStore.invalidateWebSearchEmulation();
     if (wsOk) {
       appStore.showSuccess(t("admin.settings.settingsSaved"));
     }

@@ -473,8 +473,29 @@ function getOpenAIAuthMode(account: Account): string | undefined {
   return typeof authMode === 'string' && authMode.trim() ? authMode : undefined
 }
 
-const proxies = ref<AccountProxy[]>([])
+// filterProxies 是全量代理（含已停用），供筛选下拉使用——筛选必须能选中已停用代理，
+// 否则绑定在其上的存量账号永远筛不出来。
 const filterProxies = ref<AccountProxy[]>([])
+
+// proxies 供「创建/编辑账号」等弹窗的可分配下拉使用：只要启用中的，按创建时间倒序。
+//
+// 此前这份数据由 /admin/proxies/all?with_count=true 单独再拉一次（112KB），
+// 但两个端点返回的是同一个 DTO、字段逐字段一致，filterProxies 是它的严格超集，
+// 差别只在 all 端点后端硬过滤了 active 且按 created_at 倒序。所以改为本地派生。
+//
+// 排序必须显式重做：filterProxies 来自 name 升序的列表端点，不重排会让弹窗下拉的
+// 顺序发生可见变化。ProxySelector 对 status 零感知，active 过滤也必须在这里做。
+const proxies = computed<AccountProxy[]>(() =>
+  filterProxies.value
+    .filter((proxy) => proxy.status === 'active')
+    .slice()
+    .sort((a, b) => {
+      const at = a.created_at ? Date.parse(a.created_at) : 0
+      const bt = b.created_at ? Date.parse(b.created_at) : 0
+      if (bt !== at) return bt - at
+      return b.id - a.id
+    })
+)
 const groups = ref<AdminGroup[]>([])
 const accountTableRef = ref<HTMLElement | null>(null)
 const dataTableRef = ref<InstanceType<typeof DataTable> | null>(null)
@@ -736,14 +757,19 @@ const saveAutoRefreshToStorage = () => {
 
 const loadAccountFilterProxies = async (): Promise<AccountProxy[]> => {
   const pageSize = 1000
+  // 页数上限：合并代理请求后这里是本页唯一的代理数据源，一旦后端 total 与 items
+  // 不自洽（例如并发删除导致 total 永远大于已取回数量），无上限循环会一直翻页。
+  const maxPages = 50
   const out: AccountProxy[] = []
-  for (let page = 1; ; page += 1) {
+  for (let page = 1; page <= maxPages; page += 1) {
     const result = await adminAPI.proxies.list(page, pageSize, { sort_by: 'name', sort_order: 'asc' })
     out.push(...(result.items || []))
     if (out.length >= (result.total || 0) || !result.items?.length) {
       return out
     }
   }
+  console.warn(`[AccountsView] 代理列表在 ${maxPages} 页后仍未取完，已截断`)
+  return out
 }
 
 if (typeof window !== 'undefined') {
@@ -1956,12 +1982,11 @@ onMounted(async () => {
   adminSettingsStore.fetch()
   load()
   try {
-    const [p, fp, g] = await Promise.all([
-      adminAPI.proxies.getAllWithCount(),
+    // 只拉一次代理：proxies 由 filterProxies 本地派生（见其定义）。
+    const [fp, g] = await Promise.all([
       loadAccountFilterProxies(),
       adminAPI.groups.getAll()
     ])
-    proxies.value = p
     filterProxies.value = fp
     groups.value = g
   } catch (error) {

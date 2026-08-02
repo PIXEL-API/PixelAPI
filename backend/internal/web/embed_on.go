@@ -352,6 +352,9 @@ func tryServeOverrideFile(c *gin.Context, overrideDir, cleanPath string) bool {
 func shouldBypassEmbeddedFrontend(path string) bool {
 	trimmed := strings.TrimSpace(path)
 	return strings.HasPrefix(trimmed, "/api/") ||
+		// 品牌图片端点。必须在此放行：否则会走到 SPA 兜底，返回 200 + text/html
+		// 的整个 index.html（约 128KB），表现为"图片坏了但状态码是成功"。
+		strings.HasPrefix(trimmed, "/brand/") ||
 		strings.HasPrefix(trimmed, "/.well-known/") ||
 		strings.HasPrefix(trimmed, "/v1/") ||
 		strings.HasPrefix(trimmed, "/v1beta/") ||

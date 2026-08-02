@@ -52,12 +52,18 @@ const createRect = (
 
 describe('DateRangePicker', () => {
   afterEach(() => {
+    vi.useRealTimers()
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
     document.body.innerHTML = ''
   })
 
   it('does not infer a rolling 24-hour preset from date-only props', async () => {
+    // 钉在月中：本用例刻意构造「昨天→今天」这种与 24 小时窗口同形的日期对。
+    // 若使用真实时钟，每月 2 号「昨天」恰为月初，日期对同时命中「本月至今」，
+    // 组件会推断出 thisMonth 预设，断言随日历假红。只伪造 Date，不动定时器。
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-06-17T12:00:00'))
     const now = new Date()
     const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000)
 

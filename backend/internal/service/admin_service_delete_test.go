@@ -217,6 +217,14 @@ func (s *groupRepoStub) ListActiveByPlatform(ctx context.Context, platform strin
 	panic("unexpected ListActiveByPlatform call")
 }
 
+func (s *groupRepoStub) ListActiveByScope(ctx context.Context, scope string) ([]Group, error) {
+	panic("unexpected ListActiveByScope call")
+}
+
+func (s *groupRepoStub) ListActiveByPlatformAndScope(ctx context.Context, platform, scope string) ([]Group, error) {
+	panic("unexpected ListActiveByPlatformAndScope call")
+}
+
 func (s *groupRepoStub) ExistsByName(ctx context.Context, name string) (bool, error) {
 	panic("unexpected ExistsByName call")
 }

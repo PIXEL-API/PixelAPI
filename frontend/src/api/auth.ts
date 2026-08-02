@@ -12,6 +12,7 @@ import type {
   SendVerifyCodeRequest,
   SendVerifyCodeResponse,
   PublicSettings,
+  LoginAgreementDocument,
   TotpLoginResponse,
   TotpLogin2FARequest
 } from '@/types'
@@ -333,6 +334,22 @@ export function isAuthenticated(): boolean {
  */
 export async function getPublicSettings(): Promise<PublicSettings> {
   const { data } = await apiClient.get<PublicSettings>('/settings/public')
+  return data
+}
+
+/**
+ * 按需获取单篇条款正文（无需认证）。
+ *
+ * 公开设置里的 login_agreement_documents 只带 id/title——四篇条款的正文合计约
+ * 43KB，而登录/注册页只需要标题。正文在用户真正打开某篇文档时才拉。
+ *
+ * @param id - 文档 ID（服务端会做归一化匹配）
+ * @returns 含正文的文档；不存在时抛出 404
+ */
+export async function getLegalDocument(id: string): Promise<LoginAgreementDocument> {
+  const { data } = await apiClient.get<LoginAgreementDocument>(
+    `/settings/legal-documents/${encodeURIComponent(id)}`
+  )
   return data
 }
 

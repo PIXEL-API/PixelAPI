@@ -128,6 +128,12 @@ func (s *apiKeyAvailableGroupsGroupRepoStub) ListActive(context.Context) ([]Grou
 func (s *apiKeyAvailableGroupsGroupRepoStub) ListActiveByPlatform(context.Context, string) ([]Group, error) {
 	panic("unexpected ListActiveByPlatform call")
 }
+func (s *apiKeyAvailableGroupsGroupRepoStub) ListActiveByScope(context.Context, string) ([]Group, error) {
+	panic("unexpected ListActiveByScope call")
+}
+func (s *apiKeyAvailableGroupsGroupRepoStub) ListActiveByPlatformAndScope(context.Context, string, string) ([]Group, error) {
+	panic("unexpected ListActiveByPlatformAndScope call")
+}
 func (s *apiKeyAvailableGroupsGroupRepoStub) ListActiveVisibleToUser(context.Context, int64, []int64) ([]Group, error) {
 	groups := make([]Group, len(s.groups))
 	copy(groups, s.groups)

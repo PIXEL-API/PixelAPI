@@ -50,6 +50,12 @@ func (s *stubGroupRepoForAvailable) ListWithFilters(ctx context.Context, params 
 func (s *stubGroupRepoForAvailable) ListActiveByPlatform(ctx context.Context, platform string) ([]Group, error) {
 	return nil, nil
 }
+func (s *stubGroupRepoForAvailable) ListActiveByScope(ctx context.Context, scope string) ([]Group, error) {
+	return nil, nil
+}
+func (s *stubGroupRepoForAvailable) ListActiveByPlatformAndScope(ctx context.Context, platform, scope string) ([]Group, error) {
+	return nil, nil
+}
 func (s *stubGroupRepoForAvailable) ExistsByName(ctx context.Context, name string) (bool, error) {
 	return false, nil
 }

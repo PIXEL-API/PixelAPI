@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -126,7 +127,17 @@ func TestSettingHandler_GetPublicSettings_ExposesLoginAgreement(t *testing.T) {
 	require.Len(t, resp.Data.LoginAgreementDocuments, 1)
 	require.Equal(t, "terms", resp.Data.LoginAgreementDocuments[0].ID)
 	require.Equal(t, "服务条款", resp.Data.LoginAgreementDocuments[0].Title)
-	require.Equal(t, "# 服务条款", resp.Data.LoginAgreementDocuments[0].ContentMD)
+	// 正文不再随公开设置下发：四篇条款合计约 43KB，而登录/注册页只用 id 与 title。
+	// 正文改由 GET /api/v1/settings/legal-documents/:id 按需获取。
+	require.Empty(t, resp.Data.LoginAgreementDocuments[0].ContentMD,
+		"公开设置不得携带条款正文")
+	// 金标：revision 必须仍由**含正文**的完整文档算出。
+	//
+	// 这个硬编码值是剥离正文之前的实际线上取值。它是登录门禁（auth_handler 比对）
+	// 与前端 localStorage 同意态的键——一旦改变，全体老用户会被要求重新同意条款。
+	// 如果你因为改动 revision 算法而让这条失败，请先确认这是有意的产品决策。
+	require.Equal(t, "0e0ba7f85f29a165", resp.Data.LoginAgreementRevision,
+		"revision 必须与剥离正文之前逐字节一致，否则全体用户会被要求重新同意条款")
 }
 
 func TestSettingHandler_GetPublicSettings_ExposesWeChatOAuthModeCapabilities(t *testing.T) {
@@ -166,4 +177,51 @@ func TestSettingHandler_GetPublicSettings_ExposesWeChatOAuthModeCapabilities(t *
 	require.True(t, resp.Data.WeChatOAuthEnabled)
 	require.True(t, resp.Data.WeChatOAuthOpenEnabled)
 	require.True(t, resp.Data.WeChatOAuthMPEnabled)
+}
+
+// TestSettingHandler_PublicSettings_SiteLogoIsDerivedURL 守护「两个公开出口下发同一个值」。
+//
+// 为什么单独写这条：dto.PublicSettings 与 service.PublicSettingsInjectionPayload 的
+// 差分测试只比对 JSON **字段名**，不比对值。本次瘦身把 site_logo 从 base64 data URI
+// 换成派生 URL 时，就出现过只改了 SSR 注入出口、漏改 HTTP 出口的情况——
+// 字段名一致所以差分测试全绿，但 /api/v1/settings/public 仍在下发 81KB 的 base64。
+func TestSettingHandler_PublicSettings_SiteLogoIsDerivedURL(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	const dataURI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+	repo := &settingHandlerPublicRepoStub{
+		values: map[string]string{service.SettingKeySiteLogo: dataURI},
+	}
+	svc := service.NewSettingService(repo, &config.Config{})
+	h := NewSettingHandler(svc, "test-version")
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/settings/public", nil)
+	h.GetPublicSettings(c)
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	var resp struct {
+		Data struct {
+			SiteLogo string `json:"site_logo"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
+
+	require.NotContains(t, resp.Data.SiteLogo, "base64",
+		"/api/v1/settings/public 不得下发 base64 data URI")
+	require.True(t, strings.HasPrefix(resp.Data.SiteLogo, "/brand/site-logo?v="),
+		"应下发派生 URL，实际为 %q", resp.Data.SiteLogo)
+
+	// 与 SSR 注入出口逐字节比对：两个出口必须给出同一个值。
+	injected, err := svc.GetPublicSettingsForInjection(context.Background())
+	require.NoError(t, err)
+	injectedJSON, err := json.Marshal(injected)
+	require.NoError(t, err)
+	var injectedFields struct {
+		SiteLogo string `json:"site_logo"`
+	}
+	require.NoError(t, json.Unmarshal(injectedJSON, &injectedFields))
+	require.Equal(t, injectedFields.SiteLogo, resp.Data.SiteLogo,
+		"SSR 注入与 /settings/public 的 site_logo 必须一致")
 }

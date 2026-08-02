@@ -263,13 +263,18 @@ type PublicSettings struct {
 	TurnstileEnabled                 bool
 	TurnstileSiteKey                 string
 	SiteName                         string
-	SiteLogo                         string
-	SiteSubtitle                     string
-	APIBaseURL                       string
-	ContactInfo                      string
-	DocURL                           string
-	HomeContent                      string
-	HideCcsImportButton              bool
+	// SiteLogo 是 settings 表里的原始值（通常是 base64 data URI），仅供内部使用。
+	// 面向浏览器的出口一律用 SiteLogoURL，不要下发这个字段。
+	SiteLogo string
+	// SiteLogoURL 是 SiteLogo 的对外形态：data URI 会被换成带内容哈希的
+	// /brand/site-logo?v=... 端点地址；外链与相对路径原样透传；不可解码时为空串。
+	SiteLogoURL         string
+	SiteSubtitle        string
+	APIBaseURL          string
+	ContactInfo         string
+	DocURL              string
+	HomeContent         string
+	HideCcsImportButton bool
 
 	PurchaseSubscriptionEnabled bool
 	PurchaseSubscriptionURL     string

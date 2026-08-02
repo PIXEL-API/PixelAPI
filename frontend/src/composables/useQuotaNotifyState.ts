@@ -1,5 +1,5 @@
-import { reactive, ref } from 'vue'
-import { adminAPI } from '@/api/admin'
+import { computed, reactive } from 'vue'
+import { useAdminSettingsStore } from '@/stores/adminSettings'
 import { QUOTA_THRESHOLD_TYPE_FIXED, type QuotaThresholdType } from '@/constants/account'
 
 export const QUOTA_NOTIFY_DIMS = ['daily', 'weekly', 'total'] as const
@@ -12,22 +12,28 @@ interface DimState {
 }
 
 export function useQuotaNotifyState() {
-  const globalEnabled = ref(false)
+  const adminSettingsStore = useAdminSettingsStore()
+
+  // 只读派生自 store：本 composable 的两个消费方（CreateAccountModal /
+  // EditAccountModal）对它只有 prop 下传，没有任何写入。
+  const globalEnabled = computed(() => adminSettingsStore.accountQuotaNotifyEnabled)
+
   const state = reactive<Record<QuotaNotifyDim, DimState>>({
     daily: { enabled: null, threshold: null, thresholdType: null },
     weekly: { enabled: null, threshold: null, thresholdType: null },
     total: { enabled: null, threshold: null, thresholdType: null },
   })
 
+  /**
+   * 确保全局开关已加载。
+   *
+   * 此前这里直连 /admin/settings 拉 211KB，只为读一个布尔字段；而调用方是账号页里
+   * 常驻挂载的弹窗，在 setup 顶层就执行——用户没打开任何弹窗就已经多打了两发。
+   * 现在改为触发 store 的 fetch，并发调用会被 store 合并成一次请求；
+   * 若 store 已加载则完全不产生网络请求。
+   */
   function loadGlobalState() {
-    adminAPI.settings
-      .getSettings()
-      .then((settings) => {
-        globalEnabled.value = settings.account_quota_notify_enabled === true
-      })
-      .catch(() => {
-        globalEnabled.value = false
-      })
+    void adminSettingsStore.fetch()
   }
 
   function loadFromExtra(extra: Record<string, unknown> | null | undefined) {

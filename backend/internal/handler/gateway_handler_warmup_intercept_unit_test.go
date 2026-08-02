@@ -83,6 +83,12 @@ func (f *fakeGroupRepo) ListActive(context.Context) ([]service.Group, error) { r
 func (f *fakeGroupRepo) ListActiveByPlatform(context.Context, string) ([]service.Group, error) {
 	return nil, nil
 }
+func (f *fakeGroupRepo) ListActiveByScope(context.Context, string) ([]service.Group, error) {
+	return nil, nil
+}
+func (f *fakeGroupRepo) ListActiveByPlatformAndScope(context.Context, string, string) ([]service.Group, error) {
+	return nil, nil
+}
 func (f *fakeGroupRepo) ExistsByName(context.Context, string) (bool, error) { return false, nil }
 func (f *fakeGroupRepo) GetAccountCount(context.Context, int64) (int64, int64, error) {
 	return 0, 0, nil
@@ -137,7 +143,7 @@ func (f *fakeConcurrencyCache) GetAccountConcurrencyBatch(_ context.Context, acc
 	return result, nil
 }
 func (f *fakeConcurrencyCache) CleanupExpiredAccountSlots(context.Context, int64) error { return nil }
-func (f *fakeConcurrencyCache) CleanupExpiredSlots(context.Context) error             { return nil }
+func (f *fakeConcurrencyCache) CleanupExpiredSlots(context.Context) error               { return nil }
 
 func newTestGatewayHandler(t *testing.T, group *service.Group, accounts []*service.Account) (*GatewayHandler, func()) {
 	t.Helper()

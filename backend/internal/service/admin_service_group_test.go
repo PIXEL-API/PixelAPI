@@ -114,6 +114,14 @@ func (s *groupRepoStubForAdmin) ListActiveByPlatform(_ context.Context, _ string
 	panic("unexpected ListActiveByPlatform call")
 }
 
+func (s *groupRepoStubForAdmin) ListActiveByScope(_ context.Context, _ string) ([]Group, error) {
+	panic("unexpected ListActiveByScope call")
+}
+
+func (s *groupRepoStubForAdmin) ListActiveByPlatformAndScope(_ context.Context, _, _ string) ([]Group, error) {
+	panic("unexpected ListActiveByPlatformAndScope call")
+}
+
 func (s *groupRepoStubForAdmin) ExistsByName(_ context.Context, _ string) (bool, error) {
 	panic("unexpected ExistsByName call")
 }
@@ -1478,4 +1486,20 @@ func TestAdminService_UpdateGroup_InvalidRequestFallbackAllowsAntigravity(t *tes
 	require.NotNil(t, group)
 	require.NotNil(t, repo.updated)
 	require.Equal(t, fallbackID, *repo.updated.FallbackGroupIDOnInvalidRequest)
+}
+
+func (s *groupRepoStubForFallbackCycle) ListActiveByScope(context.Context, string) ([]Group, error) {
+	panic("unexpected ListActiveByScope call")
+}
+
+func (s *groupRepoStubForFallbackCycle) ListActiveByPlatformAndScope(context.Context, string, string) ([]Group, error) {
+	panic("unexpected ListActiveByPlatformAndScope call")
+}
+
+func (s *groupRepoStubForInvalidRequestFallback) ListActiveByScope(context.Context, string) ([]Group, error) {
+	panic("unexpected ListActiveByScope call")
+}
+
+func (s *groupRepoStubForInvalidRequestFallback) ListActiveByPlatformAndScope(context.Context, string, string) ([]Group, error) {
+	panic("unexpected ListActiveByPlatformAndScope call")
 }

@@ -122,6 +122,13 @@ export default defineConfig(({ mode }) => {
         '/setup': {
           target: backendUrl,
           changeOrigin: true
+        },
+        // 品牌图片端点。它刻意不在 /api 前缀下（生产边缘对 /api 统一 BYPASS 缓存），
+        // 所以必须单独在这里转发；否则 dev 下会被 vite 的 SPA 兜底吃掉，
+        // 表现为「请求 200 但图裂了」——返回的其实是 index.html。
+        '/brand': {
+          target: backendUrl,
+          changeOrigin: true
         }
       }
     }

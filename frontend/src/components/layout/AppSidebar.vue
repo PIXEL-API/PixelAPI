@@ -288,7 +288,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, h, onBeforeUnmount, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import {
@@ -1425,11 +1425,10 @@ watch(
   { immediate: true },
 );
 
-onMounted(() => {
-  if (isAdmin.value) {
-    adminSettingsStore.fetch();
-  }
-});
+// 此处原有一个 onMounted(() => adminSettingsStore.fetch())。它与上方
+// watch(isAdmin, { immediate: true }) 是同一份逻辑的两个副本——immediate 已经覆盖了
+// "挂载时就是管理员"与"运行中变为管理员"两种情况。此前全靠 store 的 loading 闸门
+// 掩盖，闸门一旦失效就会变成两发 211KB 的请求，故删除。
 
 onBeforeUnmount(() => {
   conversationNotificationStore.stopPolling();

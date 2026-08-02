@@ -1,0 +1,87 @@
+/**
+ * 账号共享弹窗的共享样式原语。
+ *
+ * 这些类原先定义在 AccountShareView.vue 的 <style scoped> 中，被多个弹窗共用
+ * （config-edit / room-lifecycle / force-edit / review / my-spend）。弹窗拆分为
+ * 独立组件后必须有单一来源，否则搬走模板会静默丢失样式。
+ *
+ * 用法：在组件的 <style scoped> 顶部 @import 本文件，Vue 会为导入的规则一并加上
+ * scope 属性，行为与原先内联时一致。
+ */
+
+.field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.375rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: rgb(55 65 81);
+}
+
+.field small {
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1rem;
+  color: rgb(107 114 128);
+}
+
+.dark .field {
+  color: rgb(229 231 235);
+}
+
+.dark .field small {
+  color: rgb(161 161 170);
+}
+
+.input {
+  width: 100%;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(209 213 219);
+  background: white;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  color: rgb(17 24 39);
+  outline: none;
+}
+
+.input:focus {
+  border-color: rgb(14 165 233);
+  box-shadow: 0 0 0 3px rgb(14 165 233 / 0.14);
+}
+
+.input:disabled {
+  cursor: not-allowed;
+  background: rgb(249 250 251);
+  color: rgb(107 114 128);
+}
+
+.dark .input {
+  border-color: rgb(63 63 70);
+  background: rgb(24 24 27);
+  color: white;
+}
+
+.dark .input:disabled {
+  background: rgb(39 39 42);
+  color: rgb(161 161 170);
+}
+
+.notice-row {
+  display: flex;
+  gap: 0.5rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(191 219 254);
+  background: rgb(239 246 255);
+  padding: 0.75rem;
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+  color: rgb(30 64 175);
+}
+
+.dark .notice-row {
+  border-color: rgb(30 64 175 / 0.65);
+  background: rgb(30 64 175 / 0.12);
+  color: rgb(191 219 254);
+}
+

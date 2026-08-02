@@ -589,6 +589,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
+import { useAdminSettingsStore } from '@/stores/adminSettings'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { adminAPI } from '@/api/admin'
 import type { Channel, ChannelModelPricing, CreateChannelRequest, UpdateChannelRequest, AccountStatsPricingRule } from '@/api/admin/channels'
@@ -626,16 +627,11 @@ import { useKeyedDebouncedSearch } from '@/composables/useKeyedDebouncedSearch'
 const { t } = useI18n()
 const appStore = useAppStore()
 
-// Web Search global enabled state (loaded once on mount)
-const webSearchGlobalEnabled = ref(false)
-async function loadWebSearchGlobalState() {
-  try {
-    const cfg = await adminAPI.settings.getWebSearchEmulationConfig()
-    webSearchGlobalEnabled.value = cfg?.enabled === true && (cfg?.providers?.length ?? 0) > 0
-  } catch (err: unknown) {
-    console.warn('Failed to load web search global state:', err)
-    webSearchGlobalEnabled.value = false
-  }
+// Web Search 全局开关：与账号弹窗共用 store 缓存，跨页面只拉一次。
+const adminSettingsStore = useAdminSettingsStore()
+const webSearchGlobalEnabled = computed(() => adminSettingsStore.webSearchGlobalEnabled)
+function loadWebSearchGlobalState() {
+  void adminSettingsStore.ensureWebSearchEmulation()
 }
 
 // ── Form-level pricing rule type (per-platform) ──

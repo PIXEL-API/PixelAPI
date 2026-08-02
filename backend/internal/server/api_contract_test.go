@@ -1647,6 +1647,32 @@ func (r *stubGroupRepo) ListActiveByPlatform(ctx context.Context, platform strin
 	return out, nil
 }
 
+// ListActiveByScope / ListActiveByPlatformAndScope 复刻真实仓储的作用域语义：
+// NormalizeGroupScope 只认 user_private，其余取值一律归为 public。
+func (r *stubGroupRepo) ListActiveByScope(ctx context.Context, scope string) ([]service.Group, error) {
+	want := service.NormalizeGroupScope(scope)
+	out := make([]service.Group, 0, len(r.active))
+	for i := range r.active {
+		g := r.active[i]
+		if service.NormalizeGroupScope(g.Scope) == want {
+			out = append(out, g)
+		}
+	}
+	return out, nil
+}
+
+func (r *stubGroupRepo) ListActiveByPlatformAndScope(ctx context.Context, platform, scope string) ([]service.Group, error) {
+	want := service.NormalizeGroupScope(scope)
+	out := make([]service.Group, 0, len(r.active))
+	for i := range r.active {
+		g := r.active[i]
+		if g.Platform == platform && service.NormalizeGroupScope(g.Scope) == want {
+			out = append(out, g)
+		}
+	}
+	return out, nil
+}
+
 func (r *stubGroupRepo) ListActiveVisibleToUser(ctx context.Context, userID int64, subscribedGroupIDs []int64) ([]service.Group, error) {
 	return append([]service.Group(nil), r.active...), nil
 }

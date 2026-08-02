@@ -560,3 +560,11 @@ func TestUserAccountHandlerConvertExternalPlacementBatchRejectsForeignAccountBef
 	require.Equal(t, service.AccountShareModePrivate, repo.accounts[foreign.ID].ShareMode)
 	require.Nil(t, repo.accounts[foreign.ID].ExternalPlacement)
 }
+
+func (userAgentIdentityPublicGroupRepo) ListActiveByScope(context.Context, string) ([]service.Group, error) {
+	return nil, nil
+}
+
+func (userAgentIdentityPublicGroupRepo) ListActiveByPlatformAndScope(context.Context, string, string) ([]service.Group, error) {
+	return nil, nil
+}

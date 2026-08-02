@@ -2683,7 +2683,8 @@ const codex5hLimitPercent = ref(CODEX_QUOTA_DEFAULT_LIMIT_PERCENT)
 const codex7dLimitPercent = ref(CODEX_QUOTA_DEFAULT_LIMIT_PERCENT)
 const anthropicPassthroughEnabled = ref(false)
 const webSearchEmulationMode = ref('default')
-const webSearchGlobalEnabled = ref(false)
+// 派生自 store，供模板 v-if 使用；加载由下方 props.show 的 watch 惰性触发。
+const webSearchGlobalEnabled = computed(() => adminSettingsStore.webSearchGlobalEnabled)
 const {
   globalEnabled: quotaNotifyGlobalEnabled,
   state: quotaNotifyState,
@@ -2693,16 +2694,9 @@ const {
   reset: resetQuotaNotify,
 } = useQuotaNotifyState()
 
-// Load global feature states once
-if (!isUserScope.value) {
-  adminAPI.settings.getWebSearchEmulationConfig().then(cfg => {
-    webSearchGlobalEnabled.value = cfg?.enabled === true && (cfg?.providers?.length ?? 0) > 0
-  }).catch(() => { webSearchGlobalEnabled.value = false })
-}
-
-if (!isUserScope.value) {
-  loadQuotaNotifyGlobal()
-}
+// 全局开关的加载已惰性化到弹窗真正打开时（见下方 props.show 的 watch）。
+// 原因同 CreateAccountModal：本组件在账号页无 v-if 常驻挂载，写在 setup 顶层
+// 等于用户没开弹窗就先打两发请求。
 const editQuotaLimit = ref<number | null>(null)
 const editQuotaDailyLimit = ref<number | null>(null)
 const editQuotaWeeklyLimit = ref<number | null>(null)
@@ -3353,6 +3347,12 @@ watch(
     if (!wasShow || newAccount !== previousAccount) {
       syncFormFromAccount(newAccount)
       loadTLSProfiles()
+      // 全局开关按需加载；store 合并并发调用，已加载时不产生网络请求。
+      // 守卫保留：用户侧共用本组件，去掉会新增必然 403 的管理端请求。
+      if (!isUserScope.value) {
+        void adminSettingsStore.ensureWebSearchEmulation()
+        loadQuotaNotifyGlobal()
+      }
     }
   },
   { immediate: true }

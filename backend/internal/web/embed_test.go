@@ -27,6 +27,48 @@ func TestShouldBypassEmbeddedFrontendForGrokVideoAliases(t *testing.T) {
 	}
 }
 
+// TestShouldBypassEmbeddedFrontendForBrandAssets 守护品牌图片端点不被 SPA 兜底吞掉。
+//
+// 兜底逻辑对任何"嵌入产物里不存在"的路径都返回 200 + text/html 的整个 index.html
+// （约 128KB）。如果 /brand/ 不在白名单里，logo 端点会表现为"状态码成功但图是坏的"，
+// 而且每次都白烧一整个首页的字节。
+func TestShouldBypassEmbeddedFrontendForBrandAssets(t *testing.T) {
+	for _, path := range []string{"/brand/site-logo", "/brand/site-logo?v=abc123"} {
+		require.True(t, shouldBypassEmbeddedFrontend(path), "path=%s", path)
+	}
+}
+
+// TestSafeBrandImageURL 直接覆盖 URL 白名单。
+//
+// 该函数决定什么值能被写进 HTML 的 <link rel="icon"> href，此前只有
+// TestInjectSiteFavicon 间接覆盖两条路径。site_logo 现在下发的是带 query 的
+// 相对路径（/brand/site-logo?v=...），必须确认这一形态被放行。
+func TestSafeBrandImageURL(t *testing.T) {
+	allowed := []string{
+		"/brand/site-logo?v=abc123",
+		"/logo.png",
+		"data:image/png;base64,AAAA",
+		"https://cdn.example.com/logo.png",
+		"http://cdn.example.com/logo.png",
+	}
+	for _, v := range allowed {
+		require.Equal(t, v, safeBrandImageURL(v), "应放行: %s", v)
+	}
+
+	rejected := []string{
+		"",
+		"   ",
+		"//cdn.example.com/logo.png", // 协议相对 URL，会跟随页面协议指向外站
+		"javascript:alert(1)",
+		"ftp://example.com/logo.png",
+		"https://user:pass@example.com/logo.png", // 带 userinfo
+		"data:text/html;base64,AAAA",
+	}
+	for _, v := range rejected {
+		require.Equal(t, "", safeBrandImageURL(v), "应拒绝: %s", v)
+	}
+}
+
 func TestInjectSiteTitle(t *testing.T) {
 	t.Run("replaces_title_with_site_name", func(t *testing.T) {
 		html := []byte(`<html><head><title>Sub2API - AI API Gateway</title></head><body></body></html>`)
@@ -182,6 +224,48 @@ type mockSettingsProvider struct {
 func (m *mockSettingsProvider) GetPublicSettingsForInjection(ctx context.Context) (any, error) {
 	m.called++
 	return m.settings, m.err
+}
+
+// TestServedIndexHTMLCarriesNoInlineImages 是首屏载荷瘦身的防回归哨兵。
+//
+// 曾经的状态：site_logo 以完整 base64 data URI 注入 __APP_CONFIG__，
+// injectSiteFavicon 又把同一份写进 <link rel="icon">，生产实测首页 HTML 达 204KB
+// （其中约 162KB 是同一张图的两份 base64），而 HTML 是 no-cache，每次打开都要重下。
+//
+// 断言用"不含 data:image/ 且总长有上限"这种哨兵形式，而不是精确字节数：
+// 精确值会随任何文案改动而失效，哨兵只在真正把大对象塞回首屏时才失败。
+func TestServedIndexHTMLCarriesNoInlineImages(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	// 模拟服务层已把 site_logo 换成端点 URL 后的注入载荷。
+	provider := &mockSettingsProvider{
+		settings: map[string]any{
+			"site_name": "Pixel API",
+			"site_logo": "/brand/site-logo?v=0123456789abcdef",
+			"login_agreement_documents": []map[string]string{
+				{"id": "terms", "title": "服务条款", "content_md": ""},
+				{"id": "usage-policy", "title": "使用政策", "content_md": ""},
+			},
+		},
+	}
+
+	server, err := NewFrontendServer(provider)
+	require.NoError(t, err)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+	server.serveIndexHTML(c)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	body := recorder.Body.String()
+
+	require.NotContains(t, body, "data:image/",
+		"首屏 HTML 不得内联图片：logo 必须走 /brand/site-logo 端点")
+	require.Contains(t, body, "/brand/site-logo?v=",
+		"site_logo 应下发为端点 URL")
+	require.Less(t, len(body), 64*1024,
+		"首屏 HTML 超过 64KB，说明有大对象被塞回注入载荷（曾经是 204KB）")
 }
 
 func TestFrontendServer_InjectSettings(t *testing.T) {

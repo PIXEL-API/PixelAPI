@@ -25,6 +25,11 @@ type GroupRepository interface {
 	ListWithFilters(ctx context.Context, params pagination.PaginationParams, platform, status, search string, isExclusive *bool) ([]Group, *pagination.PaginationResult, error)
 	ListActive(ctx context.Context) ([]Group, error)
 	ListActiveByPlatform(ctx context.Context, platform string) ([]Group, error)
+	// ListActiveByScope / ListActiveByPlatformAndScope 把作用域过滤下推到 SQL。
+	// 只需要 public 分组时必须走这两个方法：生产库有 11.7 万个 user_private 分组、
+	// 11 个 public 分组，在应用层过滤会白白物化 11.7 万行（实测约 2.0 秒）。
+	ListActiveByScope(ctx context.Context, scope string) ([]Group, error)
+	ListActiveByPlatformAndScope(ctx context.Context, platform, scope string) ([]Group, error)
 
 	ExistsByName(ctx context.Context, name string) (bool, error)
 	GetAccountCount(ctx context.Context, groupID int64) (total int64, active int64, err error)

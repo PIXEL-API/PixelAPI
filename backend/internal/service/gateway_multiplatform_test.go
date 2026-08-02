@@ -300,6 +300,12 @@ func (m *mockGroupRepoForGateway) ListActive(ctx context.Context) ([]Group, erro
 func (m *mockGroupRepoForGateway) ListActiveByPlatform(ctx context.Context, platform string) ([]Group, error) {
 	return nil, nil
 }
+func (m *mockGroupRepoForGateway) ListActiveByScope(ctx context.Context, scope string) ([]Group, error) {
+	return nil, nil
+}
+func (m *mockGroupRepoForGateway) ListActiveByPlatformAndScope(ctx context.Context, platform, scope string) ([]Group, error) {
+	return nil, nil
+}
 func (m *mockGroupRepoForGateway) ExistsByName(ctx context.Context, name string) (bool, error) {
 	return false, nil
 }

@@ -3632,7 +3632,8 @@ const codex5hLimitPercent = ref(CODEX_QUOTA_DEFAULT_LIMIT_PERCENT)
 const codex7dLimitPercent = ref(CODEX_QUOTA_DEFAULT_LIMIT_PERCENT)
 const anthropicPassthroughEnabled = ref(false)
 const webSearchEmulationMode = ref('default')
-const webSearchGlobalEnabled = ref(false)
+// 派生自 store，供模板 v-if 使用；加载由下方 props.show 的 watch 惰性触发。
+const webSearchGlobalEnabled = computed(() => adminSettingsStore.webSearchGlobalEnabled)
 const {
   globalEnabled: quotaNotifyGlobalEnabled,
   state: quotaNotifyState,
@@ -3640,16 +3641,10 @@ const {
   writeToExtra: writeQuotaNotifyToExtra,
 } = useQuotaNotifyState()
 
-// Load global feature states once
-if (!isUserScope.value) {
-  adminAPI.settings.getWebSearchEmulationConfig().then(cfg => {
-    webSearchGlobalEnabled.value = cfg?.enabled === true && (cfg?.providers?.length ?? 0) > 0
-  }).catch(() => { webSearchGlobalEnabled.value = false })
-}
-
-if (!isUserScope.value) {
-  loadQuotaNotifyGlobal()
-}
+// 全局开关的加载已惰性化到 props.show 变为 true 时（见下方 watch）。
+//
+// 此前这两个请求写在 setup 顶层，而本组件在管理端账号页是**无 v-if 常驻挂载**的，
+// 于是用户没打开任何弹窗就已经打了两发请求（其中 /admin/settings 有 211KB）。
 const mixedScheduling = ref(false) // For antigravity accounts: enable mixed scheduling
 const allowOverages = ref(false) // For antigravity accounts: enable AI Credits overages
 const antigravityAccountType = ref<'oauth' | 'upstream'>('oauth') // For antigravity: oauth or upstream
@@ -4029,6 +4024,12 @@ watch(
   () => props.show,
   (newVal) => {
     if (newVal) {
+      // 全局开关按需加载；store 会合并并发调用，已加载时不产生网络请求。
+      // 守卫保留：用户侧账号页与账号广场共用本组件，去掉会新增必然 403 的管理端请求。
+      if (!isUserScope.value) {
+        void adminSettingsStore.ensureWebSearchEmulation()
+        loadQuotaNotifyGlobal()
+      }
       if (props.lockPlatform) {
         form.platform = props.initialPlatform
       }

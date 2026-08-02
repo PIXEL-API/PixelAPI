@@ -501,6 +501,65 @@ func (r *groupRepository) ListActive(ctx context.Context) ([]service.Group, erro
 	return outGroups, nil
 }
 
+// scopePredicate 把服务层 NormalizeGroupScope 的语义下推到 SQL。
+//
+// NormalizeGroupScope 只认 user_private，其余一律归为 public，因此 public 的谓词
+// 必须是「≠ user_private」而不是「= public」，否则历史遗留的非常规取值会被漏掉。
+func scopePredicate(scope string) predicate.Group {
+	if service.NormalizeGroupScope(scope) == service.GroupScopeUserPrivate {
+		return group.ScopeEQ(service.GroupScopeUserPrivate)
+	}
+	return group.ScopeNEQ(service.GroupScopeUserPrivate)
+}
+
+// ListActiveByScope 返回指定作用域的活跃分组。
+//
+// 存在的理由：user_private 分组是按用户创建的，生产库里有 11.7 万个，而 public 只有
+// 11 个。ListActive 不带 scope 条件，调用方在应用层过滤，等于每次都要物化 11.7 万行
+// （含 JSON 配置列）再丢掉 99.99%。实测该路径单次耗时约 2.0 秒。
+func (r *groupRepository) ListActiveByScope(ctx context.Context, scope string) ([]service.Group, error) {
+	client := clientFromContext(ctx, r.client)
+	groups, err := client.Group.Query().
+		Where(group.StatusEQ(service.StatusActive), scopePredicate(scope)).
+		Order(dbent.Asc(group.FieldSortOrder), dbent.Asc(group.FieldID)).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	outGroups := make([]service.Group, 0, len(groups))
+	for i := range groups {
+		g := groupEntityToService(groups[i])
+		outGroups = append(outGroups, *g)
+	}
+
+	return outGroups, nil
+}
+
+// ListActiveByPlatformAndScope 是 ListActiveByPlatform 的作用域收窄版本，动机同上。
+func (r *groupRepository) ListActiveByPlatformAndScope(ctx context.Context, platform, scope string) ([]service.Group, error) {
+	client := clientFromContext(ctx, r.client)
+	groups, err := client.Group.Query().
+		Where(
+			group.StatusEQ(service.StatusActive),
+			group.PlatformEQ(platform),
+			scopePredicate(scope),
+		).
+		Order(dbent.Asc(group.FieldSortOrder), dbent.Asc(group.FieldID)).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	outGroups := make([]service.Group, 0, len(groups))
+	for i := range groups {
+		g := groupEntityToService(groups[i])
+		outGroups = append(outGroups, *g)
+	}
+
+	return outGroups, nil
+}
+
 func (r *groupRepository) ListActiveByPlatform(ctx context.Context, platform string) ([]service.Group, error) {
 	client := clientFromContext(ctx, r.client)
 	groups, err := client.Group.Query().

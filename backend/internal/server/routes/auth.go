@@ -188,6 +188,9 @@ func RegisterAuthRoutes(
 	settings := v1.Group("/settings")
 	{
 		settings.GET("/public", h.Setting.GetPublicSettings)
+		// 条款正文按需获取：公开设置里的 login_agreement_documents 只带 id/title，
+		// 正文（约 43KB）在用户真正打开某篇文档时才拉。
+		settings.GET("/legal-documents/:id", h.Setting.GetLegalDocument)
 	}
 
 	// 需要认证的当前用户信息
