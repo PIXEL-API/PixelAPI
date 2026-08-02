@@ -320,6 +320,27 @@ B-2 上线瞬间鉴权快照版本 15→16 会触发全站缓存重建，有一�
   以及有没有出现 `REFUND_DEDUCTION_FAILED` 审计（那表示钱退了但没扣回，需人工补账）。
 - B-4 与 B-3 都动不到同一条热路径，可以同车发布；但若想稳，B-4 单独发更容易定位。
 
+**⚠️ 迁移 264 必须先于二进制切换（顺序不可颠倒）：**
+ent 生成的 SELECT 固定带上全部已声明列，新二进制会 `SELECT ... refund_trade_no,
+refund_deduct_on_settle ...`。若迁移没跑就切了 current 软链，**所有 payment_orders
+查询都会以 `column does not exist` 失败**（订单列表、支付回调、履约全挂）。
+而生产的启动期校验闸门是 `DATABASE_MIGRATION_THROUGH=251`，只校验到 251，
+**252–264 一律不校验** —— 漏跑迁移的进程会正常启动、`/health` 照样 200，
+故障要到第一个支付请求才暴露。既有 pixeldeploy 流程（`--migrate-only` 在切软链之前）
+顺序是对的，照走即可，但**不要跳过或调换这两步**。
+
+**⚠️ 回滚注意：先确认没有 REFUND_PENDING 订单。**
+两个新列本身回滚安全（NOT NULL DEFAULT，旧二进制的 INSERT 不带它们、SELECT 也不引用），
+但 `REFUND_PENDING` 这个**状态值**不是：旧二进制不认识它，也没有回查路由，
+这类订单会卡住。回滚前先跑
+`SELECT count(*) FROM payment_orders WHERE status='REFUND_PENDING';`，
+非 0 就先把它们回查收敛到终态再回滚。
+
+**上线后新增的两条要盯的审计动作：**
+- `REFUND_DEDUCTION_FAILED` —— 钱退了但扣款报错，必须人工补账
+- `REFUND_DEDUCTION_SHORTFALL` —— 钱退了但没足额扣到（余额被花光/找不到订阅），平台少收
+- `REFUND_TERMINAL_WRITE_FAILED` —— 极端情况：已退款已扣款但订单卡在 REFUNDING，需人工改状态
+
 
 **B-1 users 资金列保护（P0-6）** — 分两批，**不要直接 cherry-pick `86fb4781f`**（本地比上游多 4 个自研金额列 `points_balance` / `load_factor_credits_balance` / `load_factor_credits_used_total` / `prefer_points_billing`，还多一条 `UpdateWithAdminGovernanceGuard` 路径）。
 - 第一批（低风险先上）：把 `updateOp` 里 `SetBalance`/`SetPointsBalance`/`SetLoadFactorCreditsBalance`/`SetLoadFactorCreditsUsedTotal`/`SetTotalRecharged` 五个调用摘掉，让 `Update` 永不碰钱列。**落地前逐一 grep 16 个调用方**确认无人靠 `Update` 改余额，重点看 `content_moderation.go:1340/1996` 与 `admin_service.go:1070`
