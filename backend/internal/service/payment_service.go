@@ -420,16 +420,23 @@ func psSliceContains(sl []string, s string) bool {
 }
 
 // Subscription validity period unit constants.
+//
+// 管理端表单存的是复数形式（days / weeks / months，见 PlanEditDialog 的
+// validityUnitOptions），而这里原先只认单数，"months" 会落到 default 分支
+// 原样返回天数——管理员配置「1 个月」的套餐，用户付费后只拿到 1 天订阅。
+// 单复数两种写法都必须接受。
 const (
-	validityUnitWeek  = "week"
-	validityUnitMonth = "month"
+	validityUnitWeek   = "week"
+	validityUnitWeeks  = "weeks"
+	validityUnitMonth  = "month"
+	validityUnitMonths = "months"
 )
 
 func psComputeValidityDays(days int, unit string) int {
 	switch unit {
-	case validityUnitWeek:
+	case validityUnitWeek, validityUnitWeeks:
 		return days * 7
-	case validityUnitMonth:
+	case validityUnitMonth, validityUnitMonths:
 		return days * 30
 	default:
 		return days

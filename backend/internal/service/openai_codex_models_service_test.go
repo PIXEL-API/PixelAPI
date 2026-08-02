@@ -529,8 +529,11 @@ func TestCodexModelsOAuth401PersistsStateAfterCallerCancellation(t *testing.T) {
 		},
 	)
 
-	require.Equal(t, 1, repo.updateCredentialsCalls)
-	require.NoError(t, repo.updateCredentialsCtxErr)
+	// OAuth 401 分支不再写回 credentials JSONB：请求起始快照整列覆盖会把
+	// 并发刷新出来的新 refresh_token 回滚成旧值，进而让账号被错误 disable。
+	// 本用例真正要守的是「调用方已取消时状态仍能落库」，该语义由下面的
+	// SetTempUnschedulable 断言承载。
+	require.Equal(t, 0, repo.updateCredentialsCalls)
 	require.Equal(t, 1, repo.tempUnschedulableCalls)
 	require.NoError(t, repo.tempUnschedulableCtxErr)
 	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))

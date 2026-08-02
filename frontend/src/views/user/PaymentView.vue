@@ -431,6 +431,7 @@ import { useAppStore } from '@/stores'
 import { paymentAPI } from '@/api/payment'
 import { extractApiErrorMessage, extractI18nErrorMessage } from '@/utils/apiError'
 import { isMobileDevice } from '@/utils/device'
+import { formatPlanValiditySuffix } from '@/components/payment/validity'
 import type { SubscriptionPlan, CheckoutInfoResponse, CreateOrderResult, OrderType, RechargeCenterItem } from '@/types/payment'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import AmountInput from '@/components/payment/AmountInput.vue'
@@ -921,13 +922,7 @@ const renewalPlans = computed(() => {
   return publicPlans.value.filter(p => p.group_id === renewGroupId.value)
 })
 
-const planValiditySuffix = computed(() => {
-  if (!selectedPlan.value) return ''
-  const u = selectedPlan.value.validity_unit || 'day'
-  if (u === 'month') return t('payment.perMonth')
-  if (u === 'year') return t('payment.perYear')
-  return `${selectedPlan.value.validity_days}${t('payment.days')}`
-})
+const planValiditySuffix = computed(() => formatPlanValiditySuffix(selectedPlan.value, t))
 
 async function selectPlan(plan: SubscriptionPlan) {
   selectedPlan.value = plan

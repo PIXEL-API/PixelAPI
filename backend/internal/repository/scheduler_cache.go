@@ -1287,6 +1287,30 @@ func filterSchedulerExtra(extra map[string]any) map[string]any {
 		"codex_7d_limit_percent",
 		service.GrokMediaEligibleExtraKey,
 		"grok_billing_snapshot",
+		// 配额元数据：Account.IsQuotaExceededAt 在选号时会读这些键。
+		// 若在快照里剥掉，从 Redis 命中路径读回的账号 Extra 无配额字段，
+		// IsQuotaExceededAt 恒为 false，配额已耗尽的账号仍会被选中（资损）。
+		// *_reset_mode / quota_reset_timezone 也必须带上：
+		// GetQuotaDailyResetMode / GetQuotaWeeklyResetMode / 固定周期过期判定会读。
+		"quota_limit",
+		"quota_used",
+		"quota_daily_limit",
+		"quota_daily_used",
+		"quota_daily_start",
+		"quota_daily_reset_mode",
+		"quota_daily_reset_hour",
+		"quota_weekly_limit",
+		"quota_weekly_used",
+		"quota_weekly_start",
+		"quota_weekly_reset_mode",
+		"quota_weekly_reset_day",
+		"quota_weekly_reset_hour",
+		"quota_reset_timezone",
+		// 剥掉后 openAIQuotaHeadroomSnapshotStale 恒为 true，
+		// headroom 调度权重在热路径上被永久钉死为中性值。
+		"codex_usage_updated_at",
+		// isModelRateLimitedWithContext 依赖该键判定账号是否被按模型限流。
+		"model_rate_limits",
 	}
 	filtered := make(map[string]any)
 	for _, key := range keys {

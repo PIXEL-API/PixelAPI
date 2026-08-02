@@ -374,3 +374,36 @@ func newWeChatPaymentOAuthTestService(values map[string]string) *PaymentService 
 		},
 	}
 }
+
+func TestComputeValidityDaysSupportsSingularAndPluralUnits(t *testing.T) {
+	t.Parallel()
+
+	// 管理端表单只提供复数取值（days / weeks / months），历史数据里也可能存单数，
+	// 两种写法都必须换算正确，否则「1 个月」的套餐只会发出 1 天订阅。
+	tests := []struct {
+		name string
+		days int
+		unit string
+		want int
+	}{
+		{name: "empty", days: 30, unit: "", want: 30},
+		{name: "day", days: 1, unit: "day", want: 1},
+		{name: "days", days: 1, unit: "days", want: 1},
+		{name: "week", days: 1, unit: "week", want: 7},
+		{name: "weeks", days: 2, unit: "weeks", want: 14},
+		{name: "month", days: 1, unit: "month", want: 30},
+		{name: "months", days: 1, unit: "months", want: 30},
+		{name: "months_multi", days: 3, unit: "months", want: 90},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := psComputeValidityDays(tt.days, tt.unit); got != tt.want {
+				t.Fatalf("psComputeValidityDays(%d, %q) = %d, want %d", tt.days, tt.unit, got, tt.want)
+			}
+		})
+	}
+}

@@ -88,8 +88,19 @@ func ProvideRouter(
 	return SetupRouter(r, handlers, jwtAuth, adminAuth, apiKeyAuth, apiKeyService, subscriptionService, opsService, settingService, clusterRuntime, cfg, redisClient)
 }
 
+// standardForwardedClientIPHeaders 是默认信任的转发客户端 IP 头。
+//
+// 安全：这里刻意不包含 CF-Connecting-IP。该头可由任意客户端直接构造，
+// 而反向代理（nginx / Caddy）默认不会清理未知请求头，一旦它出现在本列表首位，
+// 客户端就能伪造来源 IP，进而绕过 API Key 的 IP 白名单、污染审计日志来源、
+// 并操纵按 IP 分桶的限流。
+//
+// 站点确实位于 Cloudflare 之后时，正确做法是两步同时满足：
+//  1. 边缘层只允许 Cloudflare 官方 IP 段连入（防止绕过边缘直连源站）；
+//  2. 在 security.forwarded_client_ip_headers 里显式声明信任 CF-Connecting-IP。
+//
+// 该头未被 forbiddenForwardedClientIPHeaders 禁止，所以第 2 步随时可配。
 var standardForwardedClientIPHeaders = []string{
-	"CF-Connecting-IP",
 	"X-Forwarded-For",
 	"X-Real-IP",
 }
