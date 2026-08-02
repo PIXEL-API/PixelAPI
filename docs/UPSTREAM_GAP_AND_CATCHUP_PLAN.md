@@ -387,7 +387,22 @@ refund_deduct_on_settle ...`。若迁移没跑就切了 current 软链，**所�
 
 ### 批次 D — P1 调度与账号池稳定性（9 件）
 
-1. **缺失 refresh_token 的 OAuth 账号不被剔除** —— 反复选中导致持续 502（与 A-3 同 case 块，合并改）
+**进度（2026-08-03）：第 1 与第 5 项已完成（提交 `f318beb96`，未发布），其余 7 项未开始。**
+
+- **第 1 项（缺 refresh_token）落地要点**：判定统一做 `GetCredential("refresh_token")` ——
+  已逐个核实 oauth_service / gemini / grok / antigravity 都用同一个凭证键，不存在别的键名。
+  **同步改了两个既有测试**（`OAuth401SetsTempUnschedulable/gemini`、`OAuth401InvalidatorError`）
+  与共享夹具 `newCodexModelsOAuthTestAccount`：它们原本没有 refresh_token 却断言走冷却路径，
+  夹具还会因 stub 未实现 SetError 而**空指针 panic**。改动这条分支时务必跑全量
+  `go test -tags=unit ./...`，只跑 ratelimit 子集会漏掉那个 panic。
+- **第 5 项（分组停用）范围被收窄**：计划书写「停用/删除」，实际**删除这条路本就闭合**
+  —— `groupRepository.DeleteCascade` 会清空 `api_keys.group_id`，不留悬空引用。
+  故只拦「分组存在且非 active」，刻意不对 `GroupID 非空但 Group 为空` fail-closed
+  （鉴权热路径上误判会直接变成全站 403）。**不需要 bump 鉴权快照版本**：
+  Group 快照本来就带 Status、两个装配点都已填充，且缓存失效已由
+  `adminService.UpdateGroup → InvalidateAuthCacheByGroupID` 覆盖。
+
+1. **缺失 refresh_token 的 OAuth 账号不被剔除** ✅ —— 反复选中导致持续 502（与 A-3 同 case 块，合并改）
 2. **`UpdateLastUsed` 是整份账号 JSON 的读-改-写**（冲突 **high**）—— 覆盖并发写入的其它字段
 3. **`BlockAccountScheduling` 无 CAS 与代际保护** —— 短冷却覆盖长冷却
 4. **空 model_mapping 的 OAuth 账号吸收全部模型** + passthrough 未短路
@@ -400,6 +415,33 @@ refund_deduct_on_settle ...`。若迁移没跑就切了 current 软链，**所�
 ---
 
 ### 批次 E — P1 运维护栏与 DB（含 5 条新迁移）
+
+**状态（2026-08-03）：未开始，被并行改动阻塞。**
+
+- **迁移编号从 267 起**：263 = 批次 0，264 = B-4，**265/266 已被另一条并行工作占用**
+  （`account_placement_mutation_audit`）。开工前先 `ls backend/migrations/ | tail` 复核，别撞号。
+- **阻塞原因**：E-1（无效鉴权爆破限流 + 鉴权回源并发上限）要改
+  `api_key_auth.go` / `api_key_auth_cache_impl.go` / `api_key_repo.go`，
+  而这几个文件当时正被另一条工作同时修改。等那边落定再开工。
+- 相对不冲突、可先做的六项：E-2（ops 设置热路径直查 DB）、E-5（ops 队列内存预算）、
+  E-7（TTFT 采样计数）、E-8（`account_groups` 复合索引）、E-10（密钥落库前校验）、
+  E-11（notx 唯一索引 invalid 自愈通用化）—— 只碰 ops / 迁移 / repository。
+
+#### ❌ E-4「鉴权缓存失效改 DB outbox」—— 决定不做（2026-08-03）
+
+上游用它解决「Redis pub/sub 丢消息 → 已吊销的 Key 仍可用」。**在本地收益接近零**：
+
+| 事实 | 影响 |
+|---|---|
+| `api_key_auth_cache.l1_ttl_seconds` 默认 **15 秒** | pub/sub 即使全丢，被吊销的 Key 最多多活 15 秒 |
+| 生产是 **单实例**（systemd 单服务） | 发布方 `deleteAuthCache` 会同步删自己的 L1，跨实例传播根本用不上，窗口实际为零 |
+| 计划书自评 **冲突 high** | 需新表 + 轮询器 + 去重，且本地已有 PostgreSQL 权威代际机制 `ClusterCacheCoordinator` |
+
+**重新评估的触发条件**：哪天生产变成**多实例**（多个 app 进程共享同一套 Redis/PG），
+这条立刻从"不做"变回"要做"——那时跨实例失效才是真实风险。
+届时优先复用 `ClusterCacheCoordinator` 而不是引入上游的新 pub/sub 通道。
+低成本替代方案（若还不想上 outbox）：把 L1 TTL 再压短 + 在删 Key/停用分组/撤销授权
+这三条关键吊销路径后同步做一次强制回源校验。
 
 | 项 | 说明 | 迁移 |
 |---|---|---|
@@ -421,16 +463,32 @@ refund_deduct_on_settle ...`。若迁移没跑就切了 current 软链，**所�
 
 ### 批次 F — P1 计费与前端细项（10 件）
 
-- hosted `image_generation` 工具的图片 token 在网关侧**全部漏计费**
-- fallback 定价告警每请求刷屏，直灌 `ops_system_logs`（与本地 ops 收口冲突面为零，纯收益）
-- 兜底定价缺 35 个模型（GLM/Kimi/MiniMax/DeepSeek/doubao 等）
+**进度（2026-08-03）：5 项已完成（提交 `b1a6db6a3`，未发布），其余 5 项未开始。**
+
+> **F 的图片计费主动偏离上游，后续同步时不要被"改回上游写法"**：
+> 上游 `865128998` 的 merge 只在图片桶为 0 时补充赋值、不动 InputTokens/OutputTokens 总量；
+> 本地改成**累加**。因为本地把图片 token 当作总量的**分类**
+> （`openAIUsageTokens` 里 `unclassified = actualInput - (text+image)`；
+> `billing_service` 里 `textOutput = OutputTokens - ImageOutputTokens`），
+> 照上游赋值只会把已计费的文本 token 挪进图片桶，漏计依旧存在还额外错分。
+> 依据：上游自带样本 `usage.total = 44797 = 43792 + 1005`，而
+> `tool_usage.image_gen.total = 8104` 完全在外，两块不重叠。
+> 核对：44090 文本输入 + 7620 图片输入 = 51710 = 43792 + 7918，不双计。
+>
+> 上线后建议拿一条真实 hosted image_generation 请求核对
+> `usage.total_tokens == usage.input_tokens + usage.output_tokens`，等式成立即本改动正确。
+
+- hosted `image_generation` 工具的图片 token 在网关侧**全部漏计费** ✅
+- fallback 定价告警每请求刷屏，直灌 `ops_system_logs`（与本地 ops 收口冲突面为零，纯收益）✅
+- 兜底定价缺 35 个模型（GLM/Kimi/MiniMax/DeepSeek/doubao 等）✅
+  （只补本地缺的、不覆盖本地已有条目；`glm-5.2` 必须排在 `glm-5` 之前防子串抢匹配）
 - 订阅配额窗口与订阅周期错位 + 日卡不是一次性配额 + 剩余天数向下取整
 - 支付宝 `page.pay` 跳转 URL 被当成二维码内容返回
 - 支付看板把多币种订单加成一个数并打美元符号
 - 优惠码 / Ops 时间选择器 UTC 与本地时区往返错位
 - **Stripe 弹窗轮询读错 localStorage key，订单状态查询完全无鉴权**（security）
-- Token 趋势图缓存命中率分母算错，OpenAI 模型恒显示 100%
-- 验证码与密码重置邮件正文未 HTML 转义站点名与重置链接
+- Token 趋势图缓存命中率分母算错，OpenAI 模型恒显示 100% ✅（两家 token 口径相反：OpenAI 的 prompt_tokens 含 cached，Anthropic 的 input_tokens 不含 cache_read，须分别计算）
+- 验证码与密码重置邮件正文未 HTML 转义站点名与重置链接 ✅（文本节点与 href 属性分别转义，href 校验 scheme 只允许 http/https；纯文本版邮件不转义）
 
 ---
 
