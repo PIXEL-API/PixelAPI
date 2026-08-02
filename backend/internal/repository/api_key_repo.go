@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -170,6 +171,19 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 				user.FieldRpmLimit,
 				user.FieldCreatedAt,
 			)
+			// allowed_groups 是走 user_allowed_groups 联接表的 M2M 边，Select 白名单
+			// 拿不到它，必须显式 eager-load。
+			//
+			// 漏了这一步，专属分组的运行时授权复核（middleware 的
+			// validateAPIKeyGroupAllowed → User.CanBindGroup）会拿到恒为 nil 的
+			// AllowedGroups：在 is_exclusive 也漏选时是「恒真」（复核形同虚设），
+			// 补上 is_exclusive 之后就变成「恒假」（专属标准分组全量 403）。
+			// 两个字段必须同时到位，这条复核才是真的在工作。
+			//
+			// 成本可控：只在鉴权快照未命中时查一次，命中 L1/Redis 的请求不触发。
+			q.WithAllowedGroups(func(gq *dbent.GroupQuery) {
+				gq.Select(group.FieldID)
+			})
 		}).
 		WithGroup(func(q *dbent.GroupQuery) {
 			q.Select(
@@ -177,6 +191,9 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 				group.FieldName,
 				group.FieldPlatform,
 				group.FieldStatus,
+				// is_exclusive 必须选出来：鉴权中间件与路由候选过滤都用它做专属分组的运行时
+				// 授权复核，漏选会让 ent 回填零值 false，复核直接退化成恒真。
+				group.FieldIsExclusive,
 				group.FieldScope,
 				group.FieldSubscriptionType,
 				group.FieldRateMultiplier,
@@ -836,6 +853,8 @@ func apiKeyGroupRouteQueryOptions(q *dbent.APIKeyGroupRouteQuery) {
 			group.FieldName,
 			group.FieldPlatform,
 			group.FieldStatus,
+			// 与主分组同理：路由候选过滤要靠 is_exclusive 判定专属分组授权。
+			group.FieldIsExclusive,
 			group.FieldScope,
 			group.FieldSubscriptionType,
 			group.FieldRateMultiplier,
@@ -930,6 +949,20 @@ func userEntityToService(u *dbent.User) *service.User {
 	// Parse extra emails JSON (supports both old []string and new []NotifyEmailEntry format)
 	if u.BalanceNotifyExtraEmails != "" && u.BalanceNotifyExtraEmails != "[]" {
 		out.BalanceNotifyExtraEmails = service.ParseNotifyEmails(u.BalanceNotifyExtraEmails)
+	}
+	// 仅在调用方 eager-load 了该边时才有值（当前只有 GetByKeyForAuth 会加载）。
+	// 未加载时 Edges.AllowedGroups 为 nil，这里保持 nil，与改动前行为一致。
+	// 排序是为了让鉴权快照的序列化结果稳定，避免同一份授权因联接表返回顺序不同
+	// 而产生内容不同的快照。
+	if len(u.Edges.AllowedGroups) > 0 {
+		allowed := make([]int64, 0, len(u.Edges.AllowedGroups))
+		for _, g := range u.Edges.AllowedGroups {
+			if g != nil {
+				allowed = append(allowed, g.ID)
+			}
+		}
+		sort.Slice(allowed, func(i, j int) bool { return allowed[i] < allowed[j] })
+		out.AllowedGroups = allowed
 	}
 	return out
 }

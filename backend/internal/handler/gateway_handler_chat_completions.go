@@ -126,6 +126,8 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 		return
 	}
 
+	var routeBillingGate apiKeyGroupRouteBillingGate
+
 routeLoop:
 	for {
 		routeCandidate, ok := routeCursor.current()
@@ -136,7 +138,11 @@ routeLoop:
 		currentAPIKey := routeCandidate.APIKey
 		currentSubscription, subErr := h.gatewayService.ResolveRouteSubscription(c.Request.Context(), currentAPIKey, subscription)
 		if subErr != nil {
-			status, code, message, retryAfter := billingErrorDetails(subErr)
+			retry, termErr := routeBillingGate.skipOrTerminate(routeCursor, subErr, "route_subscription_unavailable", reqLog)
+			if retry {
+				continue routeLoop
+			}
+			status, code, message, retryAfter := billingErrorDetails(termErr)
 			if retryAfter > 0 {
 				c.Header("Retry-After", strconv.Itoa(retryAfter))
 			}
@@ -157,7 +163,11 @@ routeLoop:
 				zap.Error(err),
 				zap.Int64p("group_id", currentAPIKey.GroupID),
 			)
-			status, code, message, retryAfter := billingErrorDetails(err)
+			retry, termErr := routeBillingGate.skipOrTerminate(routeCursor, err, "route_billing_ineligible", reqLog)
+			if retry {
+				continue routeLoop
+			}
+			status, code, message, retryAfter := billingErrorDetails(termErr)
 			if retryAfter > 0 {
 				c.Header("Retry-After", strconv.Itoa(retryAfter))
 			}
@@ -226,8 +236,20 @@ routeLoop:
 			// 4. Acquire account concurrency slot
 			accountReleaseFunc := selection.ReleaseFunc
 			if !selection.Acquired {
+				// 分组并发打满先尝试换下一条路由；已开始写字节后不能再换。
+				capacityUnavailable := func(reason string, writeErr func()) bool {
+					if !streamStarted && routeCursor.skipToNext(reason, reqLog, zap.Int64("account_id", account.ID)) {
+						return true
+					}
+					writeErr()
+					return false
+				}
 				if selection.WaitPlan == nil {
-					h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "api_error", "No available accounts")
+					if capacityUnavailable("account_slot_no_wait_plan", func() {
+						h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "api_error", "No available accounts")
+					}) {
+						continue routeLoop
+					}
 					return
 				}
 				accountReleaseFunc, err = h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(
@@ -240,7 +262,11 @@ routeLoop:
 				)
 				if err != nil {
 					reqLog.Warn("gateway.cc.account_slot_acquire_failed", zap.Int64("account_id", account.ID), zap.Error(err))
-					h.handleConcurrencyError(c, err, "account", streamStarted)
+					if capacityUnavailable("account_slot_acquire_timeout", func() {
+						h.handleConcurrencyError(c, err, "account", streamStarted)
+					}) {
+						continue routeLoop
+					}
 					return
 				}
 			}

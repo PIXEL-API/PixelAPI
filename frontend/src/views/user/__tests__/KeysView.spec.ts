@@ -610,14 +610,16 @@ describe('user KeysView accessibility interactions', () => {
 
 describe('KeysView group-route translations', () => {
   it('keeps complete Chinese and English labels and validation messages', () => {
+    // weight 已下线：多分组路由是按优先级的故障转移链，不做加权分流，
+    // 保留一个不起作用的输入框只会误导用户去配负载均衡。
     const expectedKeys = [
       'title',
       'description',
+      'platformLocked',
       'configuration',
       'enabled',
       'group',
       'priority',
-      'weight',
       'cooldownSeconds',
       'addRoute',
       'removeRoute',
@@ -633,7 +635,7 @@ describe('KeysView group-route translations', () => {
       for (const key of expectedKeys) {
         expect(locale.keys.groupRoutes[key]).toBeTruthy()
       }
-      expect(Object.values(locale.keys.groupRoutes.validation)).toHaveLength(5)
+      expect(Object.values(locale.keys.groupRoutes.validation)).toHaveLength(4)
       expect(Object.values(locale.keys.groupRoutes.validation).every(Boolean)).toBe(true)
     }
     expect(zh.groups.apiKeyBadge).toMatchObject({

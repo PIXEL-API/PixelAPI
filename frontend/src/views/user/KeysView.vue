@@ -569,6 +569,7 @@
               </label>
               <p id="key-group-routes-description" class="mt-1 max-w-2xl text-xs leading-5 text-gray-500 dark:text-dark-400">
                 {{ t('keys.groupRoutes.description') }}
+                <span class="block">{{ t('keys.groupRoutes.platformLocked') }}</span>
               </p>
             </div>
             <button
@@ -643,7 +644,7 @@
                 </div>
               </div>
 
-              <div class="grid gap-3 md:grid-cols-2 lg:grid-cols-[minmax(16rem,1fr)_8rem_8rem_9rem]">
+              <div class="grid gap-3 md:grid-cols-2 lg:grid-cols-[minmax(16rem,1fr)_8rem_9rem]">
                 <div class="md:col-span-2 lg:col-span-1">
                   <span
                     :id="`key-group-route-group-label-${index}`"
@@ -653,7 +654,7 @@
                   </span>
                   <Select
                     v-model="route.group_id"
-                    :options="groupOptions"
+                    :options="routeGroupOptions"
                     :searchable="true"
                     :search-placeholder="t('keys.searchGroup')"
                     :aria-labelledby="`key-group-route-group-label-${index}`"
@@ -703,19 +704,6 @@
                   <input
                     :id="`key-group-route-priority-${index}`"
                     v-model.number="route.priority"
-                    type="number"
-                    min="0"
-                    step="1"
-                    class="input"
-                  />
-                </div>
-                <div>
-                  <label :for="`key-group-route-weight-${index}`" class="mb-1 block text-xs text-gray-500 dark:text-dark-400">
-                    {{ t('keys.groupRoutes.weight') }}
-                  </label>
-                  <input
-                    :id="`key-group-route-weight-${index}`"
-                    v-model.number="route.weight"
                     type="number"
                     min="1"
                     step="1"
@@ -2026,6 +2014,31 @@ const groupOptions = computed<GroupOption[]>(() =>
   })
 )
 
+// 平台隔离：同一把 Key 的多条路由必须落在同一平台。第一条选定分组的平台即锁定整条链，
+// 后续下拉只列同平台分组。已选中的分组始终保留在选项里，否则存量的跨平台 Key 打开
+// 编辑框会看到空白下拉。
+const routeLockedPlatform = computed<string | null>(() => {
+  for (const route of formData.value.group_routes) {
+    if (route.group_id === null) continue
+    const option = groupOptions.value.find((opt) => opt.value === route.group_id)
+    if (option?.platform) return option.platform
+  }
+  return null
+})
+
+const routeGroupOptions = computed<GroupOption[]>(() => {
+  const platform = routeLockedPlatform.value
+  if (!platform) return groupOptions.value
+  const selectedIds = new Set(
+    formData.value.group_routes
+      .map((route) => route.group_id)
+      .filter((id): id is number => id !== null)
+  )
+  return groupOptions.value.filter(
+    (opt) => opt.platform === platform || selectedIds.has(opt.value)
+  )
+})
+
 const createRoutesFromKey = (key: ApiKey): ApiKeyGroupRouteForm[] => {
   if (key.group_routes && key.group_routes.length > 0) {
     return key.group_routes.map((route) => ({
@@ -2081,12 +2094,8 @@ const normalizeGroupRoutes = (): ApiKeyGroupRoute[] | null => {
       appStore.showError(t('keys.groupRoutes.validation.duplicateGroup'))
       return null
     }
-    if (!Number.isInteger(route.priority) || route.priority < 0) {
+    if (!Number.isInteger(route.priority) || route.priority < 1) {
       appStore.showError(t('keys.groupRoutes.validation.priority'))
-      return null
-    }
-    if (!Number.isInteger(route.weight) || route.weight < 1) {
-      appStore.showError(t('keys.groupRoutes.validation.weight'))
       return null
     }
     if (!Number.isInteger(route.cooldown_seconds) || route.cooldown_seconds < 0) {

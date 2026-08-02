@@ -18,7 +18,12 @@ import (
 // v16: 专属分组运行时授权复核所需的 User.AllowedGroups 与 Group.IsExclusive。
 // 必须随字段新增一起升版本：旧快照没有这两个字段，反序列化后是零值，
 // 中间件会把所有绑定专属分组的 Key 误判为越权并全量 403。
-const apiKeyAuthSnapshotVersion = 16
+//
+// v17: 修正 v16 的落地缺陷。快照结构里有 IsExclusive，但 GetByKeyForAuth 与
+// apiKeyGroupRouteQueryOptions 的 group Select 白名单漏掉了 group.FieldIsExclusive，
+// ent 回填零值 false，导致授权复核自 v16 起一直恒真、从未真正生效。补齐 Select 的
+// 同时必须升版本：存量快照里的 IsExclusive 全是 false，不升版本会一直沿用到 TTL 过期。
+const apiKeyAuthSnapshotVersion = 17
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int

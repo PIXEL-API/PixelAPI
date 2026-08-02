@@ -164,7 +164,10 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 				apiKey.Group.ID,
 			)
 			if subErr != nil {
-				if !skipBilling {
+				// 主分组订阅缺失时，若链上还有其它可用路由（典型配置就是「订阅分组用完走按量分组」），
+				// 不在这里终结请求——权威判定在 handler 的路由循环里逐条做，中间件提前 403
+				// 会让备用路由永远轮不到。
+				if !skipBilling && !service.APIKeyHasUsableAlternateGroupRoute(apiKey) {
 					AbortWithError(c, 403, "SUBSCRIPTION_NOT_FOUND", "No active subscription found for this group")
 					return
 				}
@@ -209,7 +212,9 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 					subscription = refreshed
 					_, validateErr = subscriptionService.ValidateAndCheckLimits(subscription, apiKey.Group)
 				}
-				if validateErr != nil {
+				// 主分组订阅超限不等于整把 Key 不可用：还有其它可用路由时放行，
+				// 由路由循环切到下一条（订阅跑满自动走按量分组正是靠这条）。
+				if validateErr != nil && !service.APIKeyHasUsableAlternateGroupRoute(apiKey) {
 					code := "SUBSCRIPTION_INVALID"
 					status := 403
 					if errors.Is(validateErr, service.ErrDailyLimitExceeded) ||
@@ -222,8 +227,9 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 					return
 				}
 			} else {
-				// 非订阅模式 或 订阅模式但 subscriptionService 未注入：回退到余额检查
-				if !service.HasUsageBillingFunds(apiKey.User) {
+				// 非订阅模式 或 订阅模式但 subscriptionService 未注入：回退到余额检查。
+				// 余额不足同样可能被备用路由救回来——下一条若是订阅型分组就不吃余额。
+				if !service.HasUsageBillingFunds(apiKey.User) && !service.APIKeyHasUsableAlternateGroupRoute(apiKey) {
 					AbortWithError(c, 403, "INSUFFICIENT_BALANCE", "Insufficient account balance")
 					return
 				}
@@ -307,8 +313,14 @@ func GetSubscriptionFromContext(c *gin.Context) (*service.UserSubscription, bool
 }
 
 // abortIfAPIKeyGroupUnavailable 在 API Key 绑定的分组已被停用时拦截请求。
+//
+// 多分组路由下只有主分组停用不足以否掉整把 Key：链上还有启用且未停用的分组时放行，
+// 由 handler 的路由循环逐条尝试（候选构建会把停用分组过滤掉，不会真的用上它）。
 func abortIfAPIKeyGroupUnavailable(c *gin.Context, apiKey *service.APIKey) bool {
 	if validateAPIKeyGroupAvailable(apiKey) {
+		return false
+	}
+	if service.APIKeyHasUsableAlternateGroupRoute(apiKey) {
 		return false
 	}
 	AbortWithError(c, 403, "GROUP_UNAVAILABLE", "API Key 所属分组已停用")
@@ -335,8 +347,15 @@ func validateAPIKeyGroupAvailable(apiKey *service.APIKey) bool {
 }
 
 // abortIfAPIKeyGroupNotAllowed 在用户对 API Key 所属专属分组的授权已被撤销时拦截请求。
+//
+// 同样对多分组路由放宽，但放宽的只是「是否在这里终结请求」——授权判定本身没有被跳过：
+// handler 的候选构建用同一个 service.GroupAuthorizedForUser 过滤，被撤销授权的分组
+// 不会进入候选，因此不存在「放行后又用回了被撤销的分组」的越权。
 func abortIfAPIKeyGroupNotAllowed(c *gin.Context, apiKey *service.APIKey) bool {
 	if validateAPIKeyGroupAllowed(apiKey) {
+		return false
+	}
+	if service.APIKeyHasUsableAlternateGroupRoute(apiKey) {
 		return false
 	}
 	AbortWithError(c, 403, "GROUP_NOT_ALLOWED", "API Key 所属专属分组不再允许当前用户使用")
@@ -356,11 +375,8 @@ func validateAPIKeyGroupAllowed(apiKey *service.APIKey) bool {
 	if apiKey == nil || apiKey.GroupID == nil || apiKey.User == nil || apiKey.Group == nil {
 		return true
 	}
-	group := apiKey.Group
-	if group.IsSubscriptionType() {
-		return true
-	}
-	return apiKey.User.CanBindGroup(group.ID, group.IsExclusive)
+	// 判定本体收敛到 service.GroupAuthorizedForUser，与 handler 的路由候选过滤共用同一套规则。
+	return service.GroupAuthorizedForUser(apiKey.User, apiKey.Group)
 }
 
 func setGroupContext(c *gin.Context, group *service.Group) {

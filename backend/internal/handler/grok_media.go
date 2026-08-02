@@ -299,12 +299,13 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		sessionHash = ensureOpenAIPoolModeSessionHash(sessionHash, account)
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		freshAccount, accountReleaseFunc, accountAcquired := h.acquireResponsesAccountSlot(c, requestCtx, apiKey.GroupID, sessionHash, service.OpenAIAccountDispatchRequirements{
+		// routeCursor 传 nil：Grok 媒体端点尚未接入多分组路由，槽位不可用时维持原有的就地报错。
+		freshAccount, accountReleaseFunc, accountAcquired, _ := h.acquireResponsesAccountSlot(c, requestCtx, apiKey.GroupID, sessionHash, service.OpenAIAccountDispatchRequirements{
 			RequestedModel:             requestModel,
 			RequiredTransport:          service.OpenAIUpstreamTransportHTTPSSE,
 			RequiredEndpointCapability: requiredCapability,
 			RequiredPlatform:           service.PlatformGrok,
-		}, selection, false, &streamStarted, reqLog)
+		}, selection, false, &streamStarted, nil, reqLog)
 		if !accountAcquired {
 			return
 		}

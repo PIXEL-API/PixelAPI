@@ -32,6 +32,8 @@ var (
 	ErrInvalidIPPattern                = infraerrors.BadRequest("INVALID_IP_PATTERN", "invalid IP or CIDR pattern")
 	ErrAPIKeyGroupRequired             = infraerrors.BadRequest("API_KEY_GROUP_REQUIRED", "api key group is required when ungrouped key scheduling is disabled")
 	ErrAPIKeyGroupRouteInvalid         = infraerrors.BadRequest("API_KEY_GROUP_ROUTE_INVALID", "invalid api key group route")
+	ErrAPIKeyGroupRoutePlatformMixed   = infraerrors.BadRequest("API_KEY_GROUP_ROUTE_PLATFORM_MIXED", "all group routes on one api key must use the same platform")
+	ErrAPIKeyGroupRoutePriorityInvalid = infraerrors.BadRequest("API_KEY_GROUP_ROUTE_PRIORITY_INVALID", "group route priority must be a positive integer")
 	ErrAPIKeyExpirationConflict        = infraerrors.BadRequest("API_KEY_EXPIRATION_CONFLICT", "expires_at and expires_in_days cannot be provided together")
 	ErrAPIKeyExpirationInvalid         = infraerrors.BadRequest("API_KEY_EXPIRATION_INVALID", "expires_at must be a valid RFC3339 timestamp")
 	ErrAPIKeyExpirationNotFuture       = infraerrors.BadRequest("API_KEY_EXPIRATION_NOT_FUTURE", "expires_at must be later than the current time")
@@ -468,7 +470,36 @@ func primaryGroupIDFromRoutes(routes []APIKeyGroupRoute) *int64 {
 	return &groupID
 }
 
-func (s *APIKeyService) validateAPIKeyGroupRoutes(ctx context.Context, user *User, routes []APIKeyGroupRoute) error {
+// sameAPIKeyGroupRouteSet 判断两组路由是否指向完全相同的分组集合。
+//
+// 用于「只拦新增」：存量的跨平台配置不动，用户改个名字、调个配额时会把原样的路由
+// 一起提交上来，这种未改动分组集合的更新不应该被新校验误伤。
+func sameAPIKeyGroupRouteSet(oldRoutes, newRoutes []APIKeyGroupRoute) bool {
+	if len(oldRoutes) != len(newRoutes) {
+		return false
+	}
+	seen := make(map[int64]struct{}, len(oldRoutes))
+	for i := range oldRoutes {
+		seen[oldRoutes[i].GroupID] = struct{}{}
+	}
+	for i := range newRoutes {
+		if _, ok := seen[newRoutes[i].GroupID]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// validateAPIKeyGroupRoutes 校验路由的分组绑定权限，并按需强制平台隔离。
+//
+// enforcePlatformIsolation 为 false 时跳过平台一致性检查——只在「分组集合未变动的
+// 存量更新」这一种情况下发生。
+func (s *APIKeyService) validateAPIKeyGroupRoutes(ctx context.Context, user *User, routes []APIKeyGroupRoute, enforcePlatformIsolation bool) error {
+	// 平台隔离：同一把 Key 的所有路由必须落在同一平台。
+	//
+	// 跨平台路由在网关侧是纯损耗——每条平台不匹配的路由都要先完整走一遍选号、失败、
+	// 再切换；而在只认主分组的入口（Gemini/Grok）上更会直接变成硬报错，没有兜底。
+	var platform string
 	for i := range routes {
 		group, err := s.groupRepo.GetByID(ctx, routes[i].GroupID)
 		if err != nil {
@@ -476,6 +507,13 @@ func (s *APIKeyService) validateAPIKeyGroupRoutes(ctx context.Context, user *Use
 		}
 		if !s.canUserBindGroup(ctx, user, group) {
 			return ErrGroupNotAllowed
+		}
+		if enforcePlatformIsolation && group != nil && group.Platform != "" {
+			if platform == "" {
+				platform = group.Platform
+			} else if group.Platform != platform {
+				return ErrAPIKeyGroupRoutePlatformMixed
+			}
 		}
 		routes[i].Group = group
 	}
@@ -550,7 +588,8 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 		groupRoutes = defaultAPIKeyGroupRoute(req.GroupID)
 	}
 	if len(groupRoutes) > 0 {
-		if err := s.validateAPIKeyGroupRoutes(ctx, user, groupRoutes); err != nil {
+		// 新建一律强制平台隔离。
+		if err := s.validateAPIKeyGroupRoutes(ctx, user, groupRoutes, true); err != nil {
 			return nil, err
 		}
 		primaryGroupID := primaryGroupIDFromRoutes(groupRoutes)
@@ -817,7 +856,9 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 			return nil, ErrAPIKeyGroupRequired
 		}
 		if len(groupRoutes) > 0 {
-			if err := s.validateAPIKeyGroupRoutes(ctx, user, groupRoutes); err != nil {
+			// 只拦新增：分组集合原样未动的存量更新（改名、调配额等）不受平台隔离约束。
+			enforcePlatformIsolation := !sameAPIKeyGroupRouteSet(currentAPIKey.GroupRoutes, groupRoutes)
+			if err := s.validateAPIKeyGroupRoutes(ctx, user, groupRoutes, enforcePlatformIsolation); err != nil {
 				return nil, err
 			}
 			primaryGroupID := primaryGroupIDFromRoutes(groupRoutes)

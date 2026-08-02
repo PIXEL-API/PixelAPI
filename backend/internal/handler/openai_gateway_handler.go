@@ -371,6 +371,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	moderatedRoutes := make(map[moderationRouteKey]struct{})
 	moderatedAccounts := make(map[int64]struct{})
 	var lastFailoverErr *service.UpstreamFailoverError
+	var routeBillingGate apiKeyGroupRouteBillingGate
 
 	for {
 		if reqStream && h.abortIfOpenAIFirstOutputBudgetExpired(c, streamStarted) {
@@ -399,7 +400,11 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		}
 		if subErr != nil {
 			cancelSelectionRouting()
-			status, code, message, retryAfter := billingErrorDetails(subErr)
+			retry, termErr := routeBillingGate.skipOrTerminate(routeCursor, subErr, "route_subscription_unavailable", reqLog)
+			if retry {
+				continue
+			}
+			status, code, message, retryAfter := billingErrorDetails(termErr)
 			if retryAfter > 0 {
 				c.Header("Retry-After", strconv.Itoa(retryAfter))
 			}
@@ -421,7 +426,11 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				zap.Error(err),
 				zap.Int64p("group_id", currentAPIKey.GroupID),
 			)
-			status, code, message, retryAfter := billingErrorDetails(err)
+			retry, termErr := routeBillingGate.skipOrTerminate(routeCursor, err, "route_billing_ineligible", reqLog)
+			if retry {
+				continue
+			}
+			status, code, message, retryAfter := billingErrorDetails(termErr)
 			if retryAfter > 0 {
 				c.Header("Retry-After", strconv.Itoa(retryAfter))
 			}
@@ -572,11 +581,19 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			return
 		}
 
-		freshAccount, accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, dispatchCtx, currentAPIKey.GroupID, sessionHash, service.OpenAIAccountDispatchRequirements{
+		freshAccount, accountReleaseFunc, acquired, retryRoute := h.acquireResponsesAccountSlot(c, dispatchCtx, currentAPIKey.GroupID, sessionHash, service.OpenAIAccountDispatchRequirements{
 			RequestedModel:    selectionModel,
 			RequiredTransport: service.OpenAIUpstreamTransportAny,
 			RequireCompact:    requireCompact,
-		}, selection, reqStream, &streamStarted, reqLog)
+		}, selection, reqStream, &streamStarted, routeCursor, reqLog)
+		if retryRoute {
+			// 当前分组并发打满，换下一条路由重试（未向客户端写任何响应）。
+			failedAccountIDs = make(map[int64]struct{})
+			sameAccountRetryCount = make(map[int64]int)
+			switchCount = 0
+			lastFailoverErr = nil
+			continue
+		}
 		if !acquired {
 			return
 		}
@@ -1028,6 +1045,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	failedAccountIDs := make(map[int64]struct{})
 	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
+	var routeBillingGate apiKeyGroupRouteBillingGate
 
 	for {
 		if failoverClientGone(c) {
@@ -1057,7 +1075,15 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		}
 		currentSubscription, subErr := h.gatewayService.ResolveRouteSubscription(c.Request.Context(), currentAPIKey, subscription)
 		if subErr != nil {
-			status, code, message, retryAfter := billingErrorDetails(subErr)
+			retry, termErr := routeBillingGate.skipOrTerminate(routeCursor, subErr, "route_subscription_unavailable", reqLog)
+			if retry {
+				failedAccountIDs = make(map[int64]struct{})
+				sameAccountRetryCount = make(map[int64]int)
+				switchCount = 0
+				lastFailoverErr = nil
+				continue
+			}
+			status, code, message, retryAfter := billingErrorDetails(termErr)
 			if retryAfter > 0 {
 				c.Header("Retry-After", strconv.Itoa(retryAfter))
 			}
@@ -1070,7 +1096,15 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				zap.Error(err),
 				zap.Int64p("group_id", currentAPIKey.GroupID),
 			)
-			status, code, message, retryAfter := billingErrorDetails(err)
+			retry, termErr := routeBillingGate.skipOrTerminate(routeCursor, err, "route_billing_ineligible", reqLog)
+			if retry {
+				failedAccountIDs = make(map[int64]struct{})
+				sameAccountRetryCount = make(map[int64]int)
+				switchCount = 0
+				lastFailoverErr = nil
+				continue
+			}
+			status, code, message, retryAfter := billingErrorDetails(termErr)
 			if retryAfter > 0 {
 				c.Header("Retry-After", strconv.Itoa(retryAfter))
 			}
@@ -1181,10 +1215,18 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			return
 		}
 
-		freshAccount, accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, selectionCtx, currentAPIKey.GroupID, sessionHash, service.OpenAIAccountDispatchRequirements{
+		freshAccount, accountReleaseFunc, acquired, retryRoute := h.acquireResponsesAccountSlot(c, selectionCtx, currentAPIKey.GroupID, sessionHash, service.OpenAIAccountDispatchRequirements{
 			RequestedModel:    currentRoutingModel,
 			RequiredTransport: service.OpenAIUpstreamTransportAny,
-		}, selection, reqStream, &streamStarted, reqLog)
+		}, selection, reqStream, &streamStarted, routeCursor, reqLog)
+		if retryRoute {
+			// 当前分组并发打满，换下一条路由重试（未向客户端写任何响应）。
+			failedAccountIDs = make(map[int64]struct{})
+			sameAccountRetryCount = make(map[int64]int)
+			switchCount = 0
+			lastFailoverErr = nil
+			continue
+		}
 		if !acquired {
 			return
 		}
@@ -1492,6 +1534,13 @@ func (h *OpenAIGatewayHandler) acquireResponsesUserSlot(
 	return wrapReleaseOnDone(ctx, userReleaseFunc), true
 }
 
+// acquireResponsesAccountSlot 取账号并发槽位。
+//
+// 返回 retryRoute=true 表示「当前分组吃不下这次请求，但多分组路由里还有下一条」——
+// 此时不会向客户端写任何响应，调用方应 continue 到下一条路由重试。分组被并发打满
+// 时直接回 429/503、连备用分组都不试，正是多分组路由「配了不生效」的主要原因之一。
+//
+// routeCursor 允许为 nil（尚未接入路由的调用方），此时退化为原有的就地写错误。
 func (h *OpenAIGatewayHandler) acquireResponsesAccountSlot(
 	c *gin.Context,
 	selectionCtx context.Context,
@@ -1501,21 +1550,34 @@ func (h *OpenAIGatewayHandler) acquireResponsesAccountSlot(
 	selection *service.AccountSelectionResult,
 	reqStream bool,
 	streamStarted *bool,
+	routeCursor *apiKeyGroupRouteCursor,
 	reqLog *zap.Logger,
-) (*service.Account, func(), bool) {
+) (acc *service.Account, release func(), acquired bool, retryRoute bool) {
 	if selection == nil || selection.Account == nil {
 		h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available accounts", *streamStarted)
-		return nil, nil, false
+		return nil, nil, false, false
 	}
 
 	ctx := c.Request.Context()
 	account := selection.Account
+
+	// capacityUnavailable 统一处理「这个分组当下吃不下这次请求」的终止点。
+	//
+	// 已经开始向客户端写字节（等槽位期间的 keepalive）之后不能再换路由：换了也只能
+	// 把新响应拼在旧字节后面，只好维持原样把错误写完。
+	capacityUnavailable := func(reason string, writeErr func()) (*service.Account, func(), bool, bool) {
+		if !*streamStarted && routeCursor.skipToNext(reason, reqLog, zap.Int64("account_id", account.ID)) {
+			return nil, nil, false, true
+		}
+		writeErr()
+		return nil, nil, false, false
+	}
 	dispatchRequirements := fallbackRequirements
 	if selection.OpenAIDispatchRequirements != nil {
 		dispatchRequirements = *selection.OpenAIDispatchRequirements
 	}
 	dispatchCtx := service.WithAccountShareModeRequestFromContext(ctx, selectionCtx)
-	finishAcquired := func(release func()) (*service.Account, func(), bool) {
+	finishAcquired := func(release func()) (*service.Account, func(), bool, bool) {
 		latest, err := h.gatewayService.RevalidateSelectedOpenAIAccountForDispatch(
 			dispatchCtx,
 			groupID,
@@ -1531,20 +1593,21 @@ func (h *OpenAIGatewayHandler) acquireResponsesAccountSlot(
 				zap.Error(err),
 			)
 			h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Selected account is no longer available, please retry", *streamStarted)
-			return nil, nil, false
+			return nil, nil, false, false
 		}
 		selection.Account = latest
 		if err := h.gatewayService.BindStickySession(ctx, groupID, sessionHash, latest.ID); err != nil {
 			reqLog.Warn("openai.bind_sticky_session_failed", zap.Int64("account_id", latest.ID), zap.Error(err))
 		}
-		return latest, wrapAccountSelectionReleaseOnDone(ctx, selection, release), true
+		return latest, wrapAccountSelectionReleaseOnDone(ctx, selection, release), true, false
 	}
 	if selection.Acquired {
 		return finishAcquired(selection.ReleaseFunc)
 	}
 	if selection.WaitPlan == nil {
-		h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available accounts", *streamStarted)
-		return nil, nil, false
+		return capacityUnavailable("account_slot_no_wait_plan", func() {
+			h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available accounts", *streamStarted)
+		})
 	}
 
 	fastReleaseFunc, fastAcquired, err := h.concurrencyHelper.TryAcquireAccountSlot(
@@ -1554,8 +1617,9 @@ func (h *OpenAIGatewayHandler) acquireResponsesAccountSlot(
 	)
 	if err != nil {
 		reqLog.Warn("openai.account_slot_quick_acquire_failed", zap.Int64("account_id", account.ID), zap.Error(err))
-		h.handleConcurrencyError(c, err, "account", *streamStarted)
-		return nil, nil, false
+		return capacityUnavailable("account_slot_quick_acquire_failed", func() {
+			h.handleConcurrencyError(c, err, "account", *streamStarted)
+		})
 	}
 	if fastAcquired {
 		return finishAcquired(fastReleaseFunc)
@@ -1569,8 +1633,9 @@ func (h *OpenAIGatewayHandler) acquireResponsesAccountSlot(
 			zap.Int64("account_id", account.ID),
 			zap.Int("max_waiting", selection.WaitPlan.MaxWaiting),
 		)
-		h.handleStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", "Too many pending requests, please retry later", *streamStarted)
-		return nil, nil, false
+		return capacityUnavailable("account_wait_queue_full", func() {
+			h.handleStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", "Too many pending requests, please retry later", *streamStarted)
+		})
 	}
 
 	accountWaitCounted := waitErr == nil && canWait
@@ -1592,8 +1657,9 @@ func (h *OpenAIGatewayHandler) acquireResponsesAccountSlot(
 	)
 	if err != nil {
 		reqLog.Warn("openai.account_slot_acquire_failed", zap.Int64("account_id", account.ID), zap.Error(err))
-		h.handleConcurrencyError(c, err, "account", *streamStarted)
-		return nil, nil, false
+		return capacityUnavailable("account_slot_acquire_timeout", func() {
+			h.handleConcurrencyError(c, err, "account", *streamStarted)
+		})
 	}
 
 	// Slot acquired: no longer waiting in queue.
@@ -1797,6 +1863,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	var selectedAccountShareCtx context.Context
 	var selectedRoutingModel string
 	var cyberBlockKeyWS string
+	var routeBillingGate apiKeyGroupRouteBillingGate
 	for {
 		if failoverClientGone(c) {
 			return
@@ -1820,6 +1887,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				zap.Error(subErr),
 				zap.Int64p("group_id", currentAPIKey.GroupID),
 			)
+			if retry, _ := routeBillingGate.skipOrTerminate(routeCursor, subErr, "route_subscription_unavailable", reqLog); retry {
+				continue
+			}
 			closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "subscription required")
 			return
 		}
@@ -1829,6 +1899,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				zap.Error(err),
 				zap.Int64p("group_id", currentAPIKey.GroupID),
 			)
+			if retry, _ := routeBillingGate.skipOrTerminate(routeCursor, err, "route_billing_ineligible", reqLog); retry {
+				continue
+			}
 			closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "billing check failed")
 			return
 		}

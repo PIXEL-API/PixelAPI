@@ -117,6 +117,8 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		return
 	}
 
+	var routeBillingGate apiKeyGroupRouteBillingGate
+
 routeLoop:
 	for {
 		if failoverClientGone(c) {
@@ -130,7 +132,11 @@ routeLoop:
 		currentAPIKey := routeCandidate.APIKey
 		currentSubscription, subErr := h.gatewayService.ResolveRouteSubscription(c.Request.Context(), currentAPIKey, subscription)
 		if subErr != nil {
-			status, code, message, retryAfter := billingErrorDetails(subErr)
+			retry, termErr := routeBillingGate.skipOrTerminate(routeCursor, subErr, "route_subscription_unavailable", reqLog)
+			if retry {
+				continue routeLoop
+			}
+			status, code, message, retryAfter := billingErrorDetails(termErr)
 			if retryAfter > 0 {
 				c.Header("Retry-After", strconv.Itoa(retryAfter))
 			}
@@ -144,7 +150,11 @@ routeLoop:
 				zap.Error(err),
 				zap.Int64p("group_id", currentAPIKey.GroupID),
 			)
-			status, code, message, retryAfter := billingErrorDetails(err)
+			retry, termErr := routeBillingGate.skipOrTerminate(routeCursor, err, "route_billing_ineligible", reqLog)
+			if retry {
+				continue routeLoop
+			}
+			status, code, message, retryAfter := billingErrorDetails(termErr)
 			if retryAfter > 0 {
 				c.Header("Retry-After", strconv.Itoa(retryAfter))
 			}
@@ -235,11 +245,15 @@ routeLoop:
 				return
 			}
 
-			freshAccount, accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, selectionCtx, currentAPIKey.GroupID, sessionHash, service.OpenAIAccountDispatchRequirements{
+			freshAccount, accountReleaseFunc, acquired, retryRoute := h.acquireResponsesAccountSlot(c, selectionCtx, currentAPIKey.GroupID, sessionHash, service.OpenAIAccountDispatchRequirements{
 				RequestedModel:          selectionModel,
 				RequiredTransport:       service.OpenAIUpstreamTransportHTTPSSE,
 				RequiredImageCapability: parsed.RequiredCapability,
-			}, selection, parsed.Stream, &streamStarted, reqLog)
+			}, selection, parsed.Stream, &streamStarted, routeCursor, reqLog)
+			if retryRoute {
+				// 当前分组并发打满，换下一条路由重试（未向客户端写任何响应）。
+				continue routeLoop
+			}
 			if !acquired {
 				return
 			}

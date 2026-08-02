@@ -38,9 +38,14 @@ func apiKeyGroupRouteRequestsToService(routes []APIKeyGroupRouteRequest) []servi
 		if route.Enabled != nil {
 			enabled = *route.Enabled
 		}
+		// priority 传 0 表示「没给」，由服务层填默认值；显式 0 已在入口被拒。
+		priority := 0
+		if route.Priority != nil {
+			priority = *route.Priority
+		}
 		out = append(out, service.APIKeyGroupRoute{
 			GroupID:         route.GroupID,
-			Priority:        route.Priority,
+			Priority:        priority,
 			Weight:          route.Weight,
 			Enabled:         enabled,
 			CooldownSeconds: route.CooldownSeconds,
@@ -87,11 +92,23 @@ type UpdateAPIKeyRequest struct {
 }
 
 type APIKeyGroupRouteRequest struct {
-	GroupID         int64 `json:"group_id"`
-	Priority        int   `json:"priority"`
+	GroupID int64 `json:"group_id"`
+	// Priority 用指针区分「没传」和「显式传 0」：没传走服务层默认值，显式 0 直接报错。
+	// 旧实现把 0 静默改写成 100，用户按「0 = 最高优先级」配下去时顺序会被整个翻转。
+	Priority        *int  `json:"priority"`
 	Weight          int   `json:"weight"`
 	Enabled         *bool `json:"enabled"`
 	CooldownSeconds int   `json:"cooldown_seconds"`
+}
+
+// validateAPIKeyGroupRouteRequests 校验请求中显式给出的路由参数。
+func validateAPIKeyGroupRouteRequests(routes []APIKeyGroupRouteRequest) error {
+	for _, route := range routes {
+		if route.Priority != nil && *route.Priority < 1 {
+			return service.ErrAPIKeyGroupRoutePriorityInvalid
+		}
+	}
+	return nil
 }
 
 func parseCreateAPIKeyExpiration(rawExpiresAt *string, expiresInDays *int, now time.Time) (*time.Time, error) {
@@ -207,6 +224,11 @@ func (h *APIKeyHandler) Create(c *gin.Context) {
 		return
 	}
 
+	if err := validateAPIKeyGroupRouteRequests(req.GroupRoutes); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
 	svcReq := service.CreateAPIKeyRequest{
 		Name:          req.Name,
 		GroupID:       req.GroupID,
@@ -271,6 +293,10 @@ func (h *APIKeyHandler) Update(c *gin.Context) {
 		ResetRateLimitUsage: req.ResetRateLimitUsage,
 	}
 	if req.GroupRoutes != nil {
+		if err := validateAPIKeyGroupRouteRequests(*req.GroupRoutes); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
 		routes := apiKeyGroupRouteRequestsToService(*req.GroupRoutes)
 		svcReq.GroupRoutes = &routes
 	}

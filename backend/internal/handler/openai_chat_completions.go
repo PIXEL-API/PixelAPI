@@ -116,6 +116,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	failedAccountIDs := make(map[int64]struct{})
 	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
+	var routeBillingGate apiKeyGroupRouteBillingGate
 
 	for {
 		if failoverClientGone(c) {
@@ -133,7 +134,11 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		}
 		currentSubscription, subErr := h.gatewayService.ResolveRouteSubscription(c.Request.Context(), currentAPIKey, subscription)
 		if subErr != nil {
-			status, code, message, retryAfter := billingErrorDetails(subErr)
+			retry, termErr := routeBillingGate.skipOrTerminate(routeCursor, subErr, "route_subscription_unavailable", reqLog)
+			if retry {
+				continue
+			}
+			status, code, message, retryAfter := billingErrorDetails(termErr)
 			if retryAfter > 0 {
 				c.Header("Retry-After", strconv.Itoa(retryAfter))
 			}
@@ -146,7 +151,11 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				zap.Error(err),
 				zap.Int64p("group_id", currentAPIKey.GroupID),
 			)
-			status, code, message, retryAfter := billingErrorDetails(err)
+			retry, termErr := routeBillingGate.skipOrTerminate(routeCursor, err, "route_billing_ineligible", reqLog)
+			if retry {
+				continue
+			}
+			status, code, message, retryAfter := billingErrorDetails(termErr)
 			if retryAfter > 0 {
 				c.Header("Retry-After", strconv.Itoa(retryAfter))
 			}
@@ -282,10 +291,18 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			return
 		}
 
-		freshAccount, accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, selectionCtx, currentAPIKey.GroupID, sessionHash, service.OpenAIAccountDispatchRequirements{
+		freshAccount, accountReleaseFunc, acquired, retryRoute := h.acquireResponsesAccountSlot(c, selectionCtx, currentAPIKey.GroupID, sessionHash, service.OpenAIAccountDispatchRequirements{
 			RequestedModel:    dispatchModel,
 			RequiredTransport: service.OpenAIUpstreamTransportAny,
-		}, selection, reqStream, &streamStarted, reqLog)
+		}, selection, reqStream, &streamStarted, routeCursor, reqLog)
+		if retryRoute {
+			// 当前分组并发打满，换下一条路由重试（未向客户端写任何响应）。
+			failedAccountIDs = make(map[int64]struct{})
+			sameAccountRetryCount = make(map[int64]int)
+			switchCount = 0
+			lastFailoverErr = nil
+			continue
+		}
 		if !acquired {
 			return
 		}

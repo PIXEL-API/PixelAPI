@@ -20,11 +20,13 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	pkgerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/gemini"
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -572,11 +574,14 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	currentAPIKey := apiKey
 	currentSubscription := subscription
 	routeCursor := newAPIKeyGroupRouteCursor(apiKey)
+	var routeBillingGate apiKeyGroupRouteBillingGate
 	if routeCandidate, ok := routeCursor.current(); ok {
 		currentAPIKey = routeCandidate.APIKey
 		var resolveErr error
 		currentSubscription, resolveErr = h.gatewayService.ResolveRouteSubscription(c.Request.Context(), currentAPIKey, subscription)
-		if resolveErr != nil {
+		// 可跳过的错误（订阅缺失/失效等）不在这里终结：下面的路由循环会统一做
+		// 「换下一条」的处理，在这里提前返回等于又把备用路由挡掉了。
+		if resolveErr != nil && !shouldSkipAPIKeyGroupRouteOnBillingError(resolveErr) {
 			status, code, message, retryAfter := billingErrorDetails(resolveErr)
 			if retryAfter > 0 {
 				c.Header("Retry-After", strconv.Itoa(retryAfter))
@@ -618,7 +623,12 @@ routeLoop:
 					zap.Error(resolveErr),
 					zap.Int64p("group_id", currentAPIKey.GroupID),
 				)
-				status, code, message, retryAfter := billingErrorDetails(resolveErr)
+				// 订阅型分组没有有效订阅，只说明这条路由用不了，不该拖垮整个请求。
+				retry, termErr := routeBillingGate.skipOrTerminate(routeCursor, resolveErr, "route_subscription_unavailable", reqLog)
+				if retry {
+					continue routeLoop
+				}
+				status, code, message, retryAfter := billingErrorDetails(termErr)
 				if retryAfter > 0 {
 					c.Header("Retry-After", strconv.Itoa(retryAfter))
 				}
@@ -638,7 +648,18 @@ routeLoop:
 				zap.Error(err),
 				zap.Int64p("group_id", currentAPIKey.GroupID),
 			)
-			status, code, message, retryAfter := billingErrorDetails(err)
+			// 订阅超限、分组 RPM、按量分组余额不足这类失败都是「这条路由不行」，
+			// 换下一条可能就通了——订阅分组用完自动走按量分组正是靠这里。
+			// 已经走进分组级 fallback 的请求不再换路由，避免两套兜底互相打架。
+			termErr := err
+			if routeBackedRequest {
+				retry, gated := routeBillingGate.skipOrTerminate(routeCursor, err, "route_billing_ineligible", reqLog)
+				if retry {
+					continue routeLoop
+				}
+				termErr = gated
+			}
+			status, code, message, retryAfter := billingErrorDetails(termErr)
 			if retryAfter > 0 {
 				c.Header("Retry-After", strconv.Itoa(retryAfter))
 			}
@@ -771,13 +792,27 @@ routeLoop:
 			// 3. 获取账号并发槽位
 			accountReleaseFunc := selection.ReleaseFunc
 			if !selection.Acquired {
+				// 分组被并发打满时先尝试换下一条路由，换不动了才把 429/503 写给客户端。
+				// 已经开始写字节（等槽位期间的 keepalive）之后不能再换，只能维持原样。
+				capacityUnavailable := func(reason string, writeErr func()) bool {
+					if !streamStarted && routeBackedRequest &&
+						routeCursor.skipToNext(reason, reqLog, zap.Int64("account_id", account.ID)) {
+						return true
+					}
+					writeErr()
+					return false
+				}
 				if selection.WaitPlan == nil {
 					reqLog.Warn("gateway.select_account_no_slot_no_wait_plan",
 						zap.Int64("account_id", account.ID),
 						zap.String("model", reqModel),
 						zap.String("platform", platform),
 					)
-					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available accounts", streamStarted)
+					if capacityUnavailable("account_slot_no_wait_plan", func() {
+						h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available accounts", streamStarted)
+					}) {
+						continue routeLoop
+					}
 					return
 				}
 				accountWaitCounted := false
@@ -789,7 +824,11 @@ routeLoop:
 						zap.Int64("account_id", account.ID),
 						zap.Int("max_waiting", selection.WaitPlan.MaxWaiting),
 					)
-					h.handleStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", "Too many pending requests, please retry later", streamStarted)
+					if capacityUnavailable("account_wait_queue_full", func() {
+						h.handleStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", "Too many pending requests, please retry later", streamStarted)
+					}) {
+						continue routeLoop
+					}
 					return
 				}
 				if err == nil && canWait {
@@ -813,7 +852,11 @@ routeLoop:
 				if err != nil {
 					reqLog.Warn("gateway.account_slot_acquire_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 					releaseWait()
-					h.handleConcurrencyError(c, err, "account", streamStarted)
+					if capacityUnavailable("account_slot_acquire_timeout", func() {
+						h.handleConcurrencyError(c, err, "account", streamStarted)
+					}) {
+						continue routeLoop
+					}
 					return
 				}
 				// Slot acquired: no longer waiting in queue.
@@ -1149,7 +1192,7 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 				ID:          modelID,
 				Type:        "model",
 				DisplayName: modelID,
-				CreatedAt:   "2024-01-01T00:00:00Z",
+				CreatedAt:   fallbackModelCreatedAt,
 			})
 		}
 		c.JSON(http.StatusOK, gin.H{
@@ -1160,18 +1203,61 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	}
 
 	// Fallback to default models
-	if platform == "openai" {
-		c.JSON(http.StatusOK, gin.H{
-			"object": "list",
-			"data":   openai.DefaultModels,
-		})
-		return
-	}
-
 	c.JSON(http.StatusOK, gin.H{
 		"object": "list",
-		"data":   claude.DefaultModels,
+		"data":   defaultModelsForPlatform(platform),
 	})
+}
+
+// fallbackModelCreatedAt 是没有真实上线时间时给出的占位创建时间。
+const fallbackModelCreatedAt = "2024-01-01T00:00:00Z"
+
+// defaultModelsForPlatform 返回分组内没有可调度账号时该平台的默认模型列表。
+//
+// 兜底必须按平台分流：分组刚建好还没绑账号时 GetAvailableModels 返回空，
+// 此前所有非 openai 平台一律回落到 Claude 列表，grok/gemini/antigravity 分组
+// 会拿到一串根本调不通的 claude-* 模型，看起来像分组平台配错了。
+//
+// 响应形状沿用各平台原生 /models 的形状：OpenAI 与 Grok 用 OpenAI 形状，
+// Antigravity 与 Anthropic 用 Claude 形状；Gemini 原生走 /v1beta，这里只在
+// Claude 兼容端点上按 Claude 形状给出同一份 ID。
+func defaultModelsForPlatform(platform string) any {
+	switch strings.TrimSpace(platform) {
+	case service.PlatformOpenAI:
+		return openai.DefaultModels
+	case service.PlatformGrok:
+		return xai.DefaultModels()
+	case service.PlatformAntigravity:
+		return antigravity.DefaultModels()
+	case service.PlatformGemini:
+		return geminiDefaultModelsClaudeShape()
+	default:
+		return claude.DefaultModels
+	}
+}
+
+// geminiDefaultModelsClaudeShape 把 Gemini 的兜底模型列表转成 Claude 形状，
+// 与 /v1beta/models 的兜底（gemini.FallbackModelsList）保持同一份来源。
+func geminiDefaultModelsClaudeShape() []claude.Model {
+	defaults := gemini.DefaultModels()
+	models := make([]claude.Model, 0, len(defaults))
+	for _, model := range defaults {
+		modelID := strings.TrimPrefix(strings.TrimSpace(model.Name), "models/")
+		if modelID == "" {
+			continue
+		}
+		displayName := strings.TrimSpace(model.DisplayName)
+		if displayName == "" {
+			displayName = modelID
+		}
+		models = append(models, claude.Model{
+			ID:          modelID,
+			Type:        "model",
+			DisplayName: displayName,
+			CreatedAt:   fallbackModelCreatedAt,
+		})
+	}
+	return models
 }
 
 // AntigravityModels 返回 Antigravity 支持的全部模型
@@ -1398,8 +1484,13 @@ func buildAPIKeyGroupRouteCandidates(apiKey *service.APIKey) ([]apiKeyGroupRoute
 	})
 	now := time.Now()
 	candidates := make([]apiKeyGroupRouteCandidate, 0, len(routes))
-	for _, route := range routes {
-		if !route.Enabled || route.Group == nil || route.GroupID <= 0 {
+	for i := range routes {
+		route := routes[i]
+		// 静态可用性与鉴权中间件共用同一套规则（service.APIKeyGroupRouteStaticallyUsable）：
+		// 已停用的分组、以及用户已被撤销授权的专属分组一律不进候选。中间件对多分组路由
+		// 放宽的只是「是否就地终结请求」，真正的授权闸门在这里，不存在放行后又用回
+		// 不该用的分组。
+		if !service.APIKeyGroupRouteStaticallyUsable(apiKey.User, &routes[i]) {
 			continue
 		}
 		if !apiKeyGroupRouteBreaker.available(apiKey.ID, route.GroupID, now) {
@@ -1438,6 +1529,61 @@ func buildAPIKeyGroupRouteCandidates(apiKey *service.APIKey) ([]apiKeyGroupRoute
 		})
 	}
 	return candidates, len(candidates) > 0
+}
+
+// shouldSkipAPIKeyGroupRouteOnBillingError 判定一次订阅/计费校验失败是否属于
+// 「这条路由用不了，换下一条试试」。
+//
+// 采用排除法而不是枚举法：绝大多数计费失败都是跟分组绑定的（订阅缺失/失效/超限、
+// 分组 RPM、按量分组的余额不足），换一条路由确实可能救回来；真正换路由也救不了的
+// 只有下面这几类与 Key/用户/服务本身绑定的错误。枚举「可跳过」的做法一旦漏掉某个
+// 错误码，表现就是功能悄悄不生效，这正是这次要修的老问题。
+func shouldSkipAPIKeyGroupRouteOnBillingError(err error) bool {
+	if err == nil {
+		return false
+	}
+	switch {
+	case errors.Is(err, service.ErrBillingServiceUnavailable),
+		errors.Is(err, service.ErrSubscriptionRepositoryUnavailable),
+		errors.Is(err, service.ErrAPIKeyRateLimit5hExceeded),
+		errors.Is(err, service.ErrAPIKeyRateLimit1dExceeded),
+		errors.Is(err, service.ErrAPIKeyRateLimit7dExceeded),
+		errors.Is(err, service.ErrUserRPMExceeded):
+		return false
+	}
+	return true
+}
+
+// apiKeyGroupRouteBillingGate 统一处理路由级的订阅/计费校验失败。
+//
+// 各协议 handler 的路由循环形状不同，但对这类失败的处理必须一致：可跳过的错误先换
+// 下一条路由，整条链都不行时，回给客户端的应当是「第一条路由」的错误——那才是用户
+// 眼里的主分组，拿最后一条备用路由的错误去回会把人带偏。
+type apiKeyGroupRouteBillingGate struct {
+	firstErr error
+}
+
+// skipOrTerminate 返回 retry=true 表示调用方应 continue 到下一条路由；
+// retry=false 时 terminalErr 是应当回给客户端的错误。
+func (g *apiKeyGroupRouteBillingGate) skipOrTerminate(
+	cursor *apiKeyGroupRouteCursor,
+	err error,
+	reason string,
+	reqLog *zap.Logger,
+) (retry bool, terminalErr error) {
+	if err == nil {
+		return false, nil
+	}
+	if !shouldSkipAPIKeyGroupRouteOnBillingError(err) {
+		return false, err
+	}
+	if g.firstErr == nil {
+		g.firstErr = err
+	}
+	if cursor.skipToNext(reason, reqLog, zap.Error(err)) {
+		return true, nil
+	}
+	return false, g.firstErr
 }
 
 func shouldSwitchAPIKeyGroupRoute(failoverErr *service.UpstreamFailoverError) bool {
