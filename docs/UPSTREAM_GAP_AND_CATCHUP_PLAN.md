@@ -126,27 +126,38 @@
 | 代码 `configureClientIPResolution`（`http.go:97`） | `len(TrustedProxies)==0` → `SetTrustedProxies(nil)` → gin **完全忽略所有转发头** |
 | `ip.GetSecurityClientIP`（`pkg/ip/ip.go:29`） | 仅 `normalizeIP(c.ClientIP())`，无旁路 |
 
-**当前不可被 CF-Connecting-IP 伪造打穿**，但属于"侥幸安全"，且代价严重：转发头被整体忽略后，`c.ClientIP()` 拿到的是 nginx 的 TCP 对端（回环地址），导致——
+#### ✅ 2026-08-02 运行时实测：上面的静态推导结论被推翻，以此节为准
 
-- **API Key 的 IP 白名单/黑名单形同虚设**（拿回环地址比对用户配置的真实 IP）
-- 审计日志与会话绑定记录的来源 IP 全站同一个值
-- **限流分桶全站坍缩成一个桶** —— 即 P0-12 的后半部分，且影响面比原描述更广（不止限流，是所有 IP 相关功能）
+上一版这里写的是"转发头被忽略 → `c.ClientIP()` 拿到 nginx 回环地址 → IP ACL / 审计 / 限流分桶全站坍缩"。
+**这个结论是错的**，实测数据如下：
 
-**🔒 强制执行顺序（写死，不得调换）：**
+| 实测项 | 结果 |
+|---|---|
+| `usage_logs.ip_address` 近 2h 分布 | 全是**真实公网 IP**（`159.195.12.14` 等），不是回环地址 |
+| 应用监听 | `*:8080`（不是 `127.0.0.1:8080`），**公网直接可达** |
+| 8080 established 连接 | **501 个，对端全是真实公网 IP**，含 Cloudflare 边缘段 `172.64/70/71.x` |
+| nginx `ai-pixel.online.conf` | 只 `listen 80` 并 `proxy_pass http://127.0.0.1:8080` |
 
-> **A-7（把 `CF-Connecting-IP` 移出 `standardForwardedClientIPHeaders` 默认列表）+ nginx 侧 `proxy_set_header CF-Connecting-IP "";`
-> 必须先于或同时于「给 `config.yaml` 加 `server.trusted_proxies`」落地。**
->
-> 原因：一旦先加了 `trusted_proxies`，gin 开始信任转发头，而 `CF-Connecting-IP` 在默认列表里排第一、nginx 又不清理它 —— 伪造来源 IP 会**立刻从"不可利用"变成"可利用"**，等于亲手打开一个当前并不存在的漏洞。
->
-> 这条约束直接影响 B-3（面板限流）：B-3 第一步"把 `c.ClientIP()` 换成安全客户端 IP 解析"要真正生效必然需要 `trusted_proxies`，所以 **B-3 必须排在 A-7 之后**。
+**根因：API 流量绝大部分绕过 nginx、直连 8080。** 因此 `RemoteAddr` 本来就是真实客户端 IP，
+`trusted_proxies` 为空 → gin 忽略全部转发头 → `c.ClientIP()` 返回 `RemoteAddr` = 真实 IP，一切正常。
 
-**待确认（运行时验证被权限策略拦截，未执行）：**
-```sql
-SELECT client_ip, count(*) FROM usage_logs
-WHERE created_at > now() - interval '2 hours' GROUP BY 1 ORDER BY 2 DESC LIMIT 5;
-```
-若结果确实全是同一个回环地址，即坐实上述推导。
+修正后的判断：
+
+- **CF-Connecting-IP 伪造不可利用**（转发头被整体忽略）—— 结论不变，但理由是"头被忽略"，不是"坍缩成回环"
+- **IP 白名单 / 审计来源 / 限流分桶都在正常工作**，没有坍缩 —— 原文那三条作废
+- **A-7 当前运行时影响为零**，属纯未来防护
+- **B-3 不再被 A-7 阻塞**：面板限流按用户 ID 分桶，不依赖 `trusted_proxies`
+
+**顺序约束降级为"未来注意事项"（不再是上线阻塞项）：**
+
+> 哪天要给 Cloudflare 流量取回真实用户 IP（现在这部分记的是 CF 边缘 IP），
+> 需要配 `server.trusted_proxies` + 在 `security.forwarded_client_ip_headers` 里显式信任
+> `CF-Connecting-IP`。**那一刻必须同时在边缘限制只允许 Cloudflare IP 段回源**，
+> 否则伪造来源 IP 立即可用。A-7 的改动保留了这条路径（该头未被 forbidden 列表禁止）。
+
+**顺带发现（非本次改动引入，待你决策）：**
+1. 应用以**明文 HTTP 暴露在公网 8080**，绕过 nginx 与 TLS；走 Cloudflare 的部分回源到 8080 也是明文。
+2. 走 Cloudflare 的流量记录的是 **CF 边缘 IP**，真实用户 IP 丢失。
 
 ---
 
@@ -176,13 +187,18 @@ A-4 的第三块（专属分组授权复核）按依赖关系留在 B-2，单独
 `go vet -tags=integration ./...` 通过（本机 Docker 未运行，integration 用例未实际执行）；
 前端 `vue-tsc` 通过、131 个测试文件 971 个用例全过。
 
-**上线前必做（批次 A 累积）：**
-1. **A-2**：flush `sched:meta:*` 或触发全量重建，否则存量快照仍是旧载荷，配额键不会生效。
-2. **A-5**：排查存量套餐与已售订单，人工补齐被少给周期的用户订阅时长（SQL 见 A-5 条目）。
-3. **A-6**：上线后观察 `BalanceOverdrafted` 置位频次；若量大说明预检门槛需要按实际请求成本调高
-   （`billing.minimum_balance_reserve`，默认 0.000001）。
-4. **A-7**：代码侧已把 `CF-Connecting-IP` 移出默认列表，但生产 nginx 仍未清理该头；
-   在加 `server.trusted_proxies` 之前必须先补 nginx 的 `proxy_set_header CF-Connecting-IP "";`。
+**上线前必做（已按 2026-08-02 生产实测收敛）：**
+
+| 项 | 实测结论 | 动作 |
+|---|---|---|
+| 迁移 263 | `user_provider_default_grants` 空表，约束确为 `('email','linuxdo','wechat','oidc')` | 直接上，零风险 |
+| A-5 | `subscription_plans` **空表** | ~~查存量补偿~~ **取消**，零存量影响 |
+| A-1 | 唯一索引存在；近 2h 写入 161830 行（≈22.5/s），队列容量 32768/4096 | 背压几乎不触发，无需动作 |
+| A-4 | 28533 个 Key 中仅 3 个配 IP 白名单，且均停用/从未使用/2.5 个月未用 | 回归面为零 |
+| A-6 | 1180 人负余额；`0 < balance < 1e-6` 区间 **0 人** | 新门槛不误伤任何现有用户 |
+| **A-2** | **0 个账号配了配额**（资损属预防性）；但 **5204 个带 `codex_usage_updated_at`、218 个带 `model_rate_limits`** | ⚠️ **本批唯一需紧盯的行为变化**：headroom 权重由恒定 0.5 变为真实值，会改变 5204 个 Codex 账号的调度分布。上线后盯 24h 账号分布与 429 率；并需 flush `sched:meta:*` 或触发全量重建 |
+| A-3 | openai 242 error / 15 disabled，grok 1080 error | 阻止新增受害者；**存量 error 账号不会自愈**，需人工重新授权 |
+| 迁移闸门 | `DATABASE_MIGRATION_THROUGH=251` 仅为运行时校验闸门，262 已于 08-02 应用 | 263 可正常落地，部署的 `--migrate-only` 会越过该闸门 |
 
 **A-1 usage_logs 丢弃（P0-1）** — 移植面比想象小，worker 池那一半（`config.go:2367` overflow_policy 默认 sync）已在本地。
 - `backend/internal/repository/usage_log_repo.go:336-338`（`CreateBestEffort`）与 `:459`（`createBatched`）删除 `default:` 立即丢弃分支，改 `select { case ch<-req: ; case <-ctx.Done(): }`
