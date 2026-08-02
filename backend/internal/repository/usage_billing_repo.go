@@ -280,9 +280,12 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 	}
 
 	if cmd.BalanceCost > 0 {
-		newPointsBalance, newBalance, pointsDeducted, balanceDeducted, err := deductUsageBillingWallet(ctx, tx, cmd.UserID, cmd.BalanceCost, cmd.PreferPointsBilling)
+		newPointsBalance, newBalance, pointsDeducted, balanceDeducted, sufficient, err := deductUsageBillingWallet(ctx, tx, cmd.UserID, cmd.BalanceCost, cmd.PreferPointsBilling)
 		if err != nil {
 			return err
+		}
+		if !sufficient {
+			result.BalanceOverdrafted = true
 		}
 		if pointsDeducted > 0 {
 			result.NewPointsBalance = &newPointsBalance
@@ -330,9 +333,12 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 		}
 	}
 	if cmd.PrivateGroupCommissionCost > 0 {
-		newBalance, err := deductUsageBillingBalance(ctx, tx, cmd.UserID, cmd.PrivateGroupCommissionCost)
+		newBalance, sufficient, err := deductUsageBillingBalance(ctx, tx, cmd.UserID, cmd.PrivateGroupCommissionCost)
 		if err != nil {
 			return err
+		}
+		if !sufficient {
+			result.BalanceOverdrafted = true
 		}
 		result.NewBalance = &newBalance
 		result.CommissionDeducted = cmd.PrivateGroupCommissionCost
@@ -422,9 +428,31 @@ func incrementUsageBillingSubscription(ctx context.Context, tx *sql.Tx, subscrip
 	return service.ErrSubscriptionNotFound
 }
 
-func deductUsageBillingBalance(ctx context.Context, tx *sql.Tx, userID int64, amount float64) (float64, error) {
-	var newBalance float64
-	err := tx.QueryRowContext(ctx, `
+// deductUsageBillingBalance 扣减余额，并回报本次扣款前余额是否充足。
+//
+// 先尝试带 balance >= $1 条件的 UPDATE：命中即余额充足。未命中说明要么余额不足、
+// 要么用户不存在，此时回落到无条件扣款——账已经用掉了，钱必须记上，这一点不变——
+// 但通过 sufficient=false 把「本次扣款把余额扣成了负数」的事实回传给上层。
+//
+// 守卫本身解决的是并发问题：原先无条件 UPDATE 让多个并发请求可以把余额一路
+// 扣成负数且无人知晓，preflight 又只判 balance > 0，形成可无限透支的窗口。
+func deductUsageBillingBalance(ctx context.Context, tx *sql.Tx, userID int64, amount float64) (newBalance float64, sufficient bool, err error) {
+	err = tx.QueryRowContext(ctx, `
+		UPDATE users
+		SET balance = balance - $1,
+			updated_at = NOW()
+		WHERE id = $2 AND deleted_at IS NULL AND balance >= $1
+		RETURNING balance
+	`, amount, userID).Scan(&newBalance)
+	if err == nil {
+		return newBalance, true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, false, err
+	}
+
+	// 余额不足或用户不存在：无条件扣款，靠这次是否返回行来区分两者。
+	err = tx.QueryRowContext(ctx, `
 		UPDATE users
 		SET balance = balance - $1,
 			updated_at = NOW()
@@ -432,21 +460,23 @@ func deductUsageBillingBalance(ctx context.Context, tx *sql.Tx, userID int64, am
 		RETURNING balance
 	`, amount, userID).Scan(&newBalance)
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, service.ErrUserNotFound
+		return 0, false, service.ErrUserNotFound
 	}
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
-	return newBalance, nil
+	return newBalance, false, nil
 }
 
-func deductUsageBillingWallet(ctx context.Context, tx *sql.Tx, userID int64, amount float64, preferPoints bool) (newPointsBalance float64, newBalance float64, pointsDeducted float64, balanceDeducted float64, err error) {
+// deductUsageBillingWallet 从积分/余额双钱包扣款。
+// sufficient=false 表示余额侧被扣成了负数（积分侧本身就按可用量截断，不会透支）。
+func deductUsageBillingWallet(ctx context.Context, tx *sql.Tx, userID int64, amount float64, preferPoints bool) (newPointsBalance float64, newBalance float64, pointsDeducted float64, balanceDeducted float64, sufficient bool, err error) {
 	if amount <= 0 {
-		return 0, 0, 0, 0, nil
+		return 0, 0, 0, 0, true, nil
 	}
 	if !preferPoints {
-		newBalance, err = deductUsageBillingBalance(ctx, tx, userID, amount)
-		return 0, newBalance, 0, amount, err
+		newBalance, sufficient, err = deductUsageBillingBalance(ctx, tx, userID, amount)
+		return 0, newBalance, 0, amount, sufficient, err
 	}
 
 	var currentBalance float64
@@ -460,10 +490,10 @@ func deductUsageBillingWallet(ctx context.Context, tx *sql.Tx, userID int64, amo
 		FOR NO KEY UPDATE
 	`, userID).Scan(&currentBalance, &currentPoints)
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, 0, 0, 0, service.ErrUserNotFound
+		return 0, 0, 0, 0, false, service.ErrUserNotFound
 	}
 	if err != nil {
-		return 0, 0, 0, 0, err
+		return 0, 0, 0, 0, false, err
 	}
 
 	pointsDeducted = amount
@@ -478,6 +508,10 @@ func deductUsageBillingWallet(ctx context.Context, tx *sql.Tx, userID int64, amo
 		balanceDeducted = 0
 	}
 
+	// 行已被 FOR NO KEY UPDATE 锁住，currentBalance 就是权威值，
+	// 可以直接判定余额侧是否会被扣成负数。
+	sufficient = currentBalance >= balanceDeducted
+
 	newPointsBalance = currentPoints - pointsDeducted
 	newBalance = currentBalance - balanceDeducted
 	_, err = tx.ExecContext(ctx, `
@@ -488,9 +522,9 @@ func deductUsageBillingWallet(ctx context.Context, tx *sql.Tx, userID int64, amo
 		WHERE id = $3 AND deleted_at IS NULL
 	`, decimalFromFloat(newPointsBalance).StringFixed(10), decimalFromSignedFloat(newBalance).StringFixed(10), userID)
 	if err != nil {
-		return 0, 0, 0, 0, err
+		return 0, 0, 0, 0, false, err
 	}
-	return newPointsBalance, newBalance, pointsDeducted, balanceDeducted, nil
+	return newPointsBalance, newBalance, pointsDeducted, balanceDeducted, sufficient, nil
 }
 
 func ensureUsageBillingLog(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand) (int64, error) {

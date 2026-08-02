@@ -293,7 +293,7 @@ func TestDeductUsageBillingWalletUsesNoKeyUpdateLock(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectRollback()
 
-	newPoints, newBalance, pointsDeducted, balanceDeducted, err := deductUsageBillingWallet(
+	newPoints, newBalance, pointsDeducted, balanceDeducted, sufficient, err := deductUsageBillingWallet(
 		context.Background(),
 		tx,
 		42,
@@ -305,6 +305,8 @@ func TestDeductUsageBillingWalletUsesNoKeyUpdateLock(t *testing.T) {
 	require.InDelta(t, 8, newBalance, 1e-9)
 	require.InDelta(t, 5, pointsDeducted, 1e-9)
 	require.InDelta(t, 2, balanceDeducted, 1e-9)
+	// 余额 10 足以覆盖积分截断后剩下的 2，不构成透支。
+	require.True(t, sufficient)
 	require.NoError(t, tx.Rollback())
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -327,4 +329,61 @@ func expectUsageBillingClaimAndArchiveMiss(mock sqlmock.Sqlmock, cmd *service.Us
 	mock.ExpectQuery(`SELECT request_fingerprint\s+FROM usage_billing_dedup_archive`).
 		WithArgs(cmd.RequestID, cmd.APIKeyID).
 		WillReturnError(sql.ErrNoRows)
+}
+
+// TestDeductUsageBillingBalanceReportsOverdraft 余额不足时必须回报 sufficient=false。
+//
+// 扣款本身仍然发生（账已经用掉了，钱必须记上），但守卫的意义在于并发：
+// 原先无条件 UPDATE 让多个并发请求可以把余额一路扣成负数且无人知晓。
+func TestDeductUsageBillingBalanceReportsOverdraft(t *testing.T) {
+	db, mock := newSQLMock(t)
+	mock.ExpectBegin()
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	// 带 balance >= $1 守卫的 UPDATE 不命中 → 余额不足。
+	mock.ExpectQuery(`UPDATE users\s+SET balance = balance - \$1,\s+updated_at = NOW\(\)\s+WHERE id = \$2 AND deleted_at IS NULL AND balance >= \$1`).
+		WithArgs(7.0, int64(42)).
+		WillReturnError(sql.ErrNoRows)
+	// 回落到无条件扣款，余额被扣成负数。
+	mock.ExpectQuery(`UPDATE users\s+SET balance = balance - \$1,\s+updated_at = NOW\(\)\s+WHERE id = \$2 AND deleted_at IS NULL\s+RETURNING balance`).
+		WithArgs(7.0, int64(42)).
+		WillReturnRows(sqlmock.NewRows([]string{"balance"}).AddRow(-2.0))
+	mock.ExpectRollback()
+
+	newBalance, sufficient, err := deductUsageBillingBalance(context.Background(), tx, 42, 7)
+	require.NoError(t, err)
+	require.False(t, sufficient)
+	require.InDelta(t, -2, newBalance, 1e-9)
+	require.NoError(t, tx.Rollback())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestDeductUsageBillingWalletReportsOverdraftOnPointsPath
+// 双钱包路径下，积分截断后剩余部分超过余额同样要回报透支。
+func TestDeductUsageBillingWalletReportsOverdraftOnPointsPath(t *testing.T) {
+	db, mock := newSQLMock(t)
+	mock.ExpectBegin()
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	// 余额 1、积分 5，本次扣 7：积分出 5，余额需出 2 但只有 1 → 透支。
+	mock.ExpectQuery(`SELECT balance, points_balance\s+FROM users\s+WHERE id = \$1 AND deleted_at IS NULL\s+FOR NO KEY UPDATE`).
+		WithArgs(int64(42)).
+		WillReturnRows(sqlmock.NewRows([]string{"balance", "points_balance"}).AddRow(1.0, 5.0))
+	mock.ExpectExec(`UPDATE users\s+SET points_balance = \$1::numeric,\s+balance = \$2::numeric`).
+		WithArgs("0.0000000000", "-1.0000000000", int64(42)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectRollback()
+
+	_, newBalance, pointsDeducted, balanceDeducted, sufficient, err := deductUsageBillingWallet(
+		context.Background(), tx, 42, 7, true,
+	)
+	require.NoError(t, err)
+	require.False(t, sufficient)
+	require.InDelta(t, -1, newBalance, 1e-9)
+	require.InDelta(t, 5, pointsDeducted, 1e-9)
+	require.InDelta(t, 2, balanceDeducted, 1e-9)
+	require.NoError(t, tx.Rollback())
+	require.NoError(t, mock.ExpectationsWereMet())
 }

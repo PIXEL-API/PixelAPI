@@ -46,6 +46,11 @@ const (
 	cacheWriteUpdateRateLimitUsage
 )
 
+// defaultMinimumBalanceReserve 是 billing.minimum_balance_reserve 未配置时的兜底门槛。
+// 取一个极小的正数：既保持「余额几乎为零即拒绝」的语义，
+// 又不会误伤正常的小额余额用户。
+const defaultMinimumBalanceReserve = 0.000001
+
 // 异步缓存写入工作池配置
 //
 // 性能优化说明：
@@ -802,11 +807,25 @@ func (s *BillingCacheService) checkBalanceEligibility(ctx context.Context, userI
 		s.circuitBreaker.OnSuccess()
 	}
 
-	if balance <= 0 {
+	if balance < s.minimumBalanceReserve() {
 		return ErrInsufficientBalance
 	}
 
 	return nil
+}
+
+// minimumBalanceReserve 返回允许继续放行请求的最低余额。
+// 原先这里只判 balance > 0：余额剩下极小一点时请求照样放行，
+// 而请求实际成本远超剩余余额，扣款就把账户扣成负数；
+// 并发场景下多个请求同时通过这道 preflight，可以把余额一路扣穿。
+func (s *BillingCacheService) minimumBalanceReserve() float64 {
+	if s == nil || s.cfg == nil {
+		return defaultMinimumBalanceReserve
+	}
+	if reserve := s.cfg.Billing.MinimumBalanceReserve; reserve > 0 {
+		return reserve
+	}
+	return defaultMinimumBalanceReserve
 }
 
 // checkBalanceOrPointsEligibility allows requests when either withdrawable balance

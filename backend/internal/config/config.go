@@ -868,6 +868,10 @@ type ProxyProbeConfig struct {
 
 type BillingConfig struct {
 	CircuitBreaker CircuitBreakerConfig `mapstructure:"circuit_breaker"`
+	// MinimumBalanceReserve 是余额模式下允许继续放行请求的最低余额（美元）。
+	// preflight 原先只判 balance > 0，余额极小时仍会放行，请求实际成本远超剩余
+	// 余额就把账户扣成负数。设一个保守门槛，低于它直接拒绝。
+	MinimumBalanceReserve float64 `mapstructure:"minimum_balance_reserve"`
 }
 
 type CircuitBreakerConfig struct {
@@ -2015,6 +2019,7 @@ func setDefaults() {
 	viper.SetDefault("billing.circuit_breaker.failure_threshold", 5)
 	viper.SetDefault("billing.circuit_breaker.reset_timeout_seconds", 30)
 	viper.SetDefault("billing.circuit_breaker.half_open_requests", 3)
+	viper.SetDefault("billing.minimum_balance_reserve", 0.000001)
 
 	// Turnstile
 	viper.SetDefault("turnstile.required", false)
@@ -2814,6 +2819,9 @@ func (c *Config) Validate() error {
 		if err := c.validateOIDCProvider(); err != nil {
 			return err
 		}
+	}
+	if c.Billing.MinimumBalanceReserve < 0 {
+		return fmt.Errorf("billing.minimum_balance_reserve must not be negative")
 	}
 	if c.Billing.CircuitBreaker.Enabled {
 		if c.Billing.CircuitBreaker.FailureThreshold <= 0 {

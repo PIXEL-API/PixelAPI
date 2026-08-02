@@ -163,6 +163,9 @@ type UsageBillingApplyResult struct {
 	QuotaState           *AccountQuotaState // post-increment quota state (nil = no quota increment)
 	UsageLogID           *int64             // persisted usage log id when the billing transaction wrote one
 	BalanceCreditUserIDs []int64            // users credited by settlement side effects; callers should invalidate balance caches
+	// BalanceOverdrafted 表示本次扣款把余额扣成了负数（扣款前余额不足）。
+	// 钱照扣不误——账已经用掉了——但这个标记让上层能打点告警并对账。
+	BalanceOverdrafted bool
 }
 
 type UsageBillingRepository interface {

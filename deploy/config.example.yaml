@@ -1128,6 +1128,14 @@ pricing:
 # 计费配置
 # =============================================================================
 billing:
+  # Minimum balance (USD) required to let a request through in balance mode.
+  # Preflight used to only check balance > 0, so an account with a tiny leftover
+  # balance still passed and the actual request cost pushed it negative;
+  # concurrent requests could clear the same check and overdraw without bound.
+  # 余额模式下放行请求所需的最低余额（美元）。
+  # 预检原先只判 balance > 0，余额剩极小一点仍会放行，请求实际成本会把账户扣成负数；
+  # 并发请求同时通过这道检查还可以把余额一路扣穿。设为 0 表示回退到默认门槛。
+  minimum_balance_reserve: 0.000001
   circuit_breaker:
     # Enable circuit breaker for billing service
     # 启用计费服务熔断器
