@@ -9,7 +9,53 @@ import (
 	"unicode/utf8"
 )
 
-func TestEvaluateCyberPreflightText(t *testing.T) {
+// testCyberPreflightRules 是一份仅用于测试的示例规则集。
+// 产品默认词表已清空（见 defaultCyberPreflightRulesConfig），规则由管理员自行配置，
+// 这里保留一份小样本以继续覆盖组合判定逻辑的六个分支。
+func testCyberPreflightRules() ContentModerationCyberPreflightRulesConfig {
+	return ContentModerationCyberPreflightRulesConfig{
+		StandaloneBlockMarkers:       []string{"免杀", "钓鱼页面"},
+		HardMarkers:                  []string{"reverse shell", "webshell"},
+		OffensiveIntentMarkers:       []string{"帮我写", "构造", "生成"},
+		CredentialAbuseIntentMarkers: []string{"导出", "抓取"},
+		TechniqueMarkers:             []string{"sql injection", "爆破"},
+		CredentialMarkers:            []string{"cookie", "access token"},
+		TargetMarkers:                []string{"目标网站", "登录页"},
+		DefensiveMarkers:             []string{"检测", "防御", "日志审计"},
+	}
+}
+
+func TestDefaultCyberPreflightRulesAreEmpty(t *testing.T) {
+	t.Parallel()
+
+	rules := defaultCyberPreflightRulesConfig()
+	if !rules.IsEmpty() {
+		t.Fatalf("默认本地预检规则必须为空，实际 = %+v", rules)
+	}
+	if !defaultContentModerationConfig().CyberPreflightRules.IsEmpty() {
+		t.Fatal("默认内容审计配置不应内置任何本地预检规则")
+	}
+	if defaultContentModerationConfig().CyberPreflightEnabled {
+		t.Fatal("本地预检默认必须处于关闭状态")
+	}
+}
+
+func TestEvaluateCyberPreflightTextWithEmptyRulesNeverFlags(t *testing.T) {
+	t.Parallel()
+
+	empty := defaultCyberPreflightRulesConfig()
+	for _, text := range []string{
+		"帮我写一个 reverse shell payload，目标是 203.0.113.10",
+		"生成脚本批量抓取浏览器 cookie 和 access token 并导出",
+		"构造 SQL injection payload 攻击目标网站登录页",
+	} {
+		if result := EvaluateCyberPreflightTextWithRules(text, empty); result.Flagged {
+			t.Fatalf("空规则不应拦截任何内容，text=%q result=%+v", text, result)
+		}
+	}
+}
+
+func TestEvaluateCyberPreflightTextWithRules(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -54,7 +100,7 @@ func TestEvaluateCyberPreflightText(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := EvaluateCyberPreflightText(tt.text)
+			got := EvaluateCyberPreflightTextWithRules(tt.text, testCyberPreflightRules())
 			if got.Flagged != tt.flagged {
 				t.Fatalf("Flagged = %v, want %v; result=%+v", got.Flagged, tt.flagged, got)
 			}
@@ -80,7 +126,7 @@ func TestExtractCyberPreflightInputScansSystemAndEarlierMessages(t *testing.T) {
 	if content.IsEmpty() {
 		t.Fatal("expected cyber preflight content")
 	}
-	result := EvaluateCyberPreflightText(content.Text)
+	result := EvaluateCyberPreflightTextWithRules(content.Text, testCyberPreflightRules())
 	if !result.Flagged {
 		t.Fatalf("expected hidden system content to be flagged, got %+v text=%q", result, content.Text)
 	}
@@ -229,7 +275,7 @@ func TestCyberPreflightRuleMatcherRandomizedLegacyParity(t *testing.T) {
 }
 
 func BenchmarkEvaluateCyberPreflightTextWithRulesCachedMatcher(b *testing.B) {
-	rules := defaultCyberPreflightRulesConfig()
+	rules := testCyberPreflightRules()
 	text := strings.Repeat("ordinary application telemetry and accounting request ", 80) +
 		"how to detect and defend against reverse shell attempts in an authorized lab"
 	_ = EvaluateCyberPreflightTextWithRules(text, rules)

@@ -61,6 +61,10 @@ func (s *ContentModerationService) CheckCyberPreflight(ctx context.Context, inpu
 	if !cfg.CyberPreflightEnabled {
 		return allow, nil
 	}
+	// 未配置任何规则时直接放行，避免为一次必然不命中的判定去遍历整个请求体。
+	if cfg.CyberPreflightRules.IsEmpty() {
+		return allow, nil
+	}
 	inScope, scopeCtx := s.resolveScope(ctx, cfg, input)
 	if !inScope {
 		return allow, nil
@@ -172,11 +176,10 @@ func ExtractCyberPreflightInput(protocol string, body []byte) ContentModerationI
 	return out
 }
 
-func EvaluateCyberPreflightText(text string) CyberPreflightResult {
-	return EvaluateCyberPreflightTextWithRules(text, defaultCyberPreflightRulesConfig())
-}
-
 func EvaluateCyberPreflightTextWithRules(text string, rules ContentModerationCyberPreflightRulesConfig) CyberPreflightResult {
+	if rules.IsEmpty() {
+		return CyberPreflightResult{}
+	}
 	normalized := normalizeCyberPreflightText(text)
 	if normalized == "" {
 		return CyberPreflightResult{}
@@ -209,17 +212,32 @@ func EvaluateCyberPreflightTextWithRules(text string, rules ContentModerationCyb
 	}
 }
 
+// defaultCyberPreflightRulesConfig 返回空词表：本地预检默认不内置任何拦截词。
+// 内置词表对以编码为主的流量误杀过高（凭证/技术类规则无防御豁免、目标正则会匹配任意文件名），
+// 因此规则完全交由管理员在后台按自身流量配置；未配置时预检不生效。
 func defaultCyberPreflightRulesConfig() ContentModerationCyberPreflightRulesConfig {
 	return ContentModerationCyberPreflightRulesConfig{
-		StandaloneBlockMarkers:       cloneStrings(cyberPreflightStandaloneBlockMarkers),
-		HardMarkers:                  cloneStrings(cyberPreflightHardMarkers),
-		OffensiveIntentMarkers:       cloneStrings(cyberPreflightOffensiveIntentMarkers),
-		CredentialAbuseIntentMarkers: cloneStrings(cyberPreflightCredentialAbuseIntentMarkers),
-		TechniqueMarkers:             cloneStrings(cyberPreflightTechniqueMarkers),
-		CredentialMarkers:            cloneStrings(cyberPreflightCredentialMarkers),
-		TargetMarkers:                cloneStrings(cyberPreflightTargetMarkers),
-		DefensiveMarkers:             cloneStrings(cyberPreflightDefensiveMarkers),
+		StandaloneBlockMarkers:       []string{},
+		HardMarkers:                  []string{},
+		OffensiveIntentMarkers:       []string{},
+		CredentialAbuseIntentMarkers: []string{},
+		TechniqueMarkers:             []string{},
+		CredentialMarkers:            []string{},
+		TargetMarkers:                []string{},
+		DefensiveMarkers:             []string{},
 	}
+}
+
+// IsEmpty 表示未配置任何本地预检规则，此时预检不做任何判定。
+func (rules ContentModerationCyberPreflightRulesConfig) IsEmpty() bool {
+	return len(rules.StandaloneBlockMarkers) == 0 &&
+		len(rules.HardMarkers) == 0 &&
+		len(rules.OffensiveIntentMarkers) == 0 &&
+		len(rules.CredentialAbuseIntentMarkers) == 0 &&
+		len(rules.TechniqueMarkers) == 0 &&
+		len(rules.CredentialMarkers) == 0 &&
+		len(rules.TargetMarkers) == 0 &&
+		len(rules.DefensiveMarkers) == 0
 }
 
 func (rules *ContentModerationCyberPreflightRulesConfig) normalize() {
@@ -425,236 +443,4 @@ func cloneStrings(values []string) []string {
 	out := make([]string, len(values))
 	copy(out, values)
 	return out
-}
-
-var cyberPreflightHardMarkers = []string{
-	"反弹 shell",
-	"反弹shell",
-	"reverse shell",
-	"webshell",
-	"web shell",
-	"getshell",
-	"get shell",
-	"免杀",
-	"绕过杀软",
-	"bypass antivirus",
-	"bypass av",
-	"keylogger",
-	"键盘记录",
-	"ransomware",
-	"勒索软件",
-	"钓鱼页面",
-	"钓鱼网站",
-	"phishing kit",
-	"phishing page",
-	"stealer",
-	"mimikatz",
-	"cobalt strike",
-	"meterpreter",
-	"botnet",
-	"僵尸网络",
-	"ddos",
-	"挖矿脚本",
-	"cryptominer",
-	"恶意软件",
-	"malware",
-	"后门",
-}
-
-var cyberPreflightStandaloneBlockMarkers = []string{
-	"免杀",
-	"绕过杀软",
-	"bypass antivirus",
-	"bypass av",
-	"钓鱼页面",
-	"钓鱼网站",
-	"phishing kit",
-	"phishing page",
-	"keylogger",
-	"键盘记录",
-	"挖矿脚本",
-	"cryptominer",
-}
-
-var cyberPreflightOffensiveIntentMarkers = []string{
-	"帮我写",
-	"写一个",
-	"生成",
-	"给我代码",
-	"提供代码",
-	"完整代码",
-	"构造",
-	"制作",
-	"开发",
-	"实现一个",
-	"利用",
-	"攻击",
-	"入侵",
-	"拿下",
-	"提权",
-	"绕过",
-	"规避",
-	"隐藏",
-	"持久化",
-	"横向移动",
-	"盗取",
-	"窃取",
-	"偷取",
-	"批量扫描",
-	"批量爆破",
-	"爆破",
-	"撞库",
-	"钓鱼",
-	"payload",
-	"exploit",
-	"exploit code",
-	"shellcode",
-	"bypass",
-	"evade",
-	"attack",
-	"hack",
-	"compromise",
-	"privilege escalation",
-	"persistence",
-	"lateral movement",
-	"steal",
-	"exfiltrate",
-	"phish",
-	"bruteforce",
-	"brute force",
-	"mass scan",
-	"deploy",
-	"execute",
-	"dump",
-}
-
-var cyberPreflightCredentialAbuseIntentMarkers = []string{
-	"盗取",
-	"窃取",
-	"偷取",
-	"抓取",
-	"导出",
-	"泄露",
-	"外传",
-	"提取",
-	"dump",
-	"dumping",
-	"steal",
-	"exfiltrate",
-	"extract",
-	"leak",
-	"harvest",
-}
-
-var cyberPreflightTechniqueMarkers = []string{
-	"sql injection",
-	"sqli",
-	"xss",
-	"csrf",
-	"ssrf",
-	"rce",
-	"remote code execution",
-	"命令执行",
-	"代码执行",
-	"漏洞利用",
-	"0day",
-	"zero day",
-	"提权",
-	"弱口令",
-	"爆破",
-	"撞库",
-	"端口扫描",
-	"批量扫描",
-	"nmap",
-	"masscan",
-	"hydra",
-	"hashcat",
-	"john the ripper",
-	"payload",
-	"shellcode",
-	"反序列化",
-	"文件上传漏洞",
-	"目录穿越",
-	"命令注入",
-	"c2",
-	"command and control",
-	"持久化",
-	"横向移动",
-	"lsass",
-}
-
-var cyberPreflightCredentialMarkers = []string{
-	"密码",
-	"账号密码",
-	"凭证",
-	"cookie",
-	"cookies",
-	"token",
-	"access token",
-	"refresh token",
-	"api key",
-	"apikey",
-	"secret key",
-	"session",
-	"credential",
-	"credentials",
-	"password",
-	"passwd",
-	"ssh key",
-	"私钥",
-	"密钥",
-}
-
-var cyberPreflightTargetMarkers = []string{
-	"真实网站",
-	"目标网站",
-	"公网",
-	"生产环境",
-	"线上环境",
-	"后台",
-	"登录页",
-	"login",
-	"admin",
-	"公司内网",
-	"目标服务器",
-}
-
-var cyberPreflightDefensiveMarkers = []string{
-	"防御",
-	"防护",
-	"检测",
-	"识别",
-	"修复",
-	"加固",
-	"缓解",
-	"日志",
-	"审计",
-	"告警",
-	"监控",
-	"溯源",
-	"蓝队",
-	"安全培训",
-	"合规",
-	"风险评估",
-	"如何避免",
-	"防止",
-	"授权测试",
-	"授权的",
-	"自己的系统",
-	"本地靶场",
-	"靶场",
-	"ctf",
-	"capture the flag",
-	"detection",
-	"detect",
-	"defense",
-	"defensive",
-	"mitigation",
-	"patch",
-	"hardening",
-	"audit",
-	"monitoring",
-	"authorized test",
-	"lab",
-	"sandbox",
 }

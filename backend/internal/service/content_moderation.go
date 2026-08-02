@@ -70,19 +70,21 @@ const (
 	defaultContentModerationCyberBlockMessage    = "请求可能涉及网络安全滥用风险，已在账号选择前拦截"
 	maxCyberPreflightRulePhrases                 = 512
 	maxCyberPreflightRulePhraseRunes             = 200
-	defaultContentModerationRetryCount           = 2
-	maxContentModerationRetryCount               = 5
-	defaultContentModerationHitRetentionDays     = 180
-	defaultContentModerationNonHitRetentionDays  = 3
-	maxContentModerationRetentionDays            = 3650
-	maxContentModerationNonHitRetentionDays      = 3
-	contentModerationKeyRateLimitFreezeDuration  = time.Minute
-	contentModerationKeyAuthFreezeDuration       = 10 * time.Minute
-	contentModerationKeyHTTPErrorFreezeDuration  = 10 * time.Second
-	maxContentModerationInputImages              = 1
-	maxContentModerationTestImages               = maxContentModerationInputImages
-	maxContentModerationTestImageBytes           = 8 * 1024 * 1024
-	maxContentModerationTestImageDataURLBytes    = 12 * 1024 * 1024
+	// 重试默认 1 次：审核调用同步挡在网关请求前面，每多一次重试就多一个 TimeoutMS
+	// 的最坏延迟，默认值优先保证尾延迟而不是审核成功率（失败时本就是放行）。
+	defaultContentModerationRetryCount          = 1
+	maxContentModerationRetryCount              = 5
+	defaultContentModerationHitRetentionDays    = 180
+	defaultContentModerationNonHitRetentionDays = 3
+	maxContentModerationRetentionDays           = 3650
+	maxContentModerationNonHitRetentionDays     = 3
+	contentModerationKeyRateLimitFreezeDuration = time.Minute
+	contentModerationKeyAuthFreezeDuration      = 10 * time.Minute
+	contentModerationKeyHTTPErrorFreezeDuration = 10 * time.Second
+	maxContentModerationInputImages             = 1
+	maxContentModerationTestImages              = maxContentModerationInputImages
+	maxContentModerationTestImageBytes          = 8 * 1024 * 1024
+	maxContentModerationTestImageDataURLBytes   = 12 * 1024 * 1024
 
 	contentModerationCleanupInterval = 24 * time.Hour
 	contentModerationCleanupTimeout  = 30 * time.Minute
@@ -91,6 +93,20 @@ const (
 
 	contentModerationRuntimeCacheTTL       = time.Second
 	contentModerationRuntimeRefreshTimeout = 5 * time.Second
+
+	// 账号广场模式分组的判定每个网关请求都要做一次，且底层是一次未缓存的 EXISTS 查询。
+	// 模式分组极少变动，短 TTL 缓存足以消掉这条每请求查询；最坏陈旧 TTL 后自愈。
+	contentModerationModeGroupCacheTTL = 30 * time.Second
+
+	// 命中后的告知邮件走异步、并按用户限频：邮件对同一用户的连续命中没有增量价值，
+	// 而同步发信会把 SMTP 握手压进网关请求，且可被用户自行刷量放大。
+	contentModerationViolationEmailCooldown = 30 * time.Minute
+	contentModerationEmailDispatchLimit     = 16
+	contentModerationEmailDispatchTimeout   = 30 * time.Second
+
+	// 少数 Warn 描述的是"持续存在的错误状态"（审核服务不可用、未配置 Key、Redis 故障），
+	// 一旦发生就会每个请求各打一条。这类日志按 key 限频，保证问题可见但不刷屏。
+	contentModerationWarnLogInterval = time.Minute
 
 	contentModerationScopeTypeGroup            = "group"
 	contentModerationScopeTypeAccountShareMode = "account_share_mode"
@@ -513,6 +529,8 @@ type ContentModerationRepository interface {
 
 type ContentModerationAccountShareModeResolver interface {
 	IsModeGroup(ctx context.Context, groupID int64) bool
+	// IsModeGroupChecked 必须区分"不是模式分组"与"查询失败"，供缓存层判断结果是否可缓存。
+	IsModeGroupChecked(ctx context.Context, groupID int64) (bool, error)
 	ResolveActiveBindingForRequest(ctx context.Context, userID, apiKeyID, groupID int64) (*AccountShareMembership, *AccountShareListing, error)
 }
 
@@ -574,6 +592,13 @@ type ContentModerationService struct {
 	runtimeRefreshRetryAt     atomic.Int64
 	keyHealthMu               sync.Mutex
 	keyHealth                 map[string]*contentModerationKeyHealth
+	modeGroupCacheMu          sync.Mutex
+	modeGroupCache            map[int64]contentModerationModeGroupCacheEntry
+	emailThrottleMu           sync.Mutex
+	emailThrottle             map[int64]time.Time
+	emailDispatchSlots        chan struct{}
+	warnThrottleMu            sync.Mutex
+	warnThrottle              map[string]time.Time
 	clusterCache              *ClusterCacheCoordinator
 	taskExecutor              *ClusterTaskExecutor
 	cancelCleanup             context.CancelFunc
@@ -595,6 +620,11 @@ type contentModerationTask struct {
 	inputHash  string
 	sampling   *ContentModerationDynamicSamplingDecision
 	enqueuedAt time.Time
+}
+
+type contentModerationModeGroupCacheEntry struct {
+	value     bool
+	expiresAt time.Time
 }
 
 type contentModerationKeyHealth struct {
@@ -633,6 +663,10 @@ func NewContentModerationService(
 		workerCount:          maxContentModerationWorkerCount,
 		asyncQueue:           make(chan contentModerationTask, maxContentModerationQueueSize),
 		keyHealth:            make(map[string]*contentModerationKeyHealth),
+		modeGroupCache:       make(map[int64]contentModerationModeGroupCacheEntry),
+		emailThrottle:        make(map[int64]time.Time),
+		emailDispatchSlots:   make(chan struct{}, contentModerationEmailDispatchLimit),
+		warnThrottle:         make(map[string]time.Time),
 		cancelCleanup:        cancelCleanup,
 	}
 	if len(taskExecutors) > 0 {
@@ -882,7 +916,7 @@ func (s *ContentModerationService) TestAPIKeys(ctx context.Context, input TestCo
 func (s *ContentModerationService) Check(ctx context.Context, input ContentModerationCheckInput) (*ContentModerationDecision, error) {
 	allow := &ContentModerationDecision{Allowed: true, Action: ContentModerationActionAllow}
 	if s == nil || s.settingRepo == nil || s.repo == nil {
-		slog.Info("content_moderation.skip_unavailable",
+		slog.Debug("content_moderation.skip_unavailable",
 			"user_id", input.UserID,
 			"api_key_id", input.APIKeyID,
 			"group_id", contentModerationLogGroupID(input.GroupID),
@@ -892,7 +926,7 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 	}
 	runtimeSnapshot, err := s.loadRuntimeSnapshot(ctx)
 	if err != nil {
-		slog.Warn("content_moderation.skip_config_load_failed",
+		s.warnThrottled("config_load_failed", "content_moderation.skip_config_load_failed",
 			"user_id", input.UserID,
 			"api_key_id", input.APIKeyID,
 			"group_id", contentModerationLogGroupID(input.GroupID),
@@ -902,7 +936,7 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 		return allow, nil
 	}
 	if !runtimeSnapshot.riskControlEnabled {
-		slog.Info("content_moderation.skip_feature_disabled",
+		slog.Debug("content_moderation.skip_feature_disabled",
 			"user_id", input.UserID,
 			"api_key_id", input.APIKeyID,
 			"group_id", contentModerationLogGroupID(input.GroupID),
@@ -912,7 +946,7 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 	}
 	cfg := runtimeSnapshot.config
 	inScope, scopeCtx := s.resolveScope(ctx, cfg, input)
-	slog.Info("content_moderation.config_loaded",
+	slog.Debug("content_moderation.config_loaded",
 		"user_id", input.UserID,
 		"api_key_id", input.APIKeyID,
 		"group_id", contentModerationLogGroupID(input.GroupID),
@@ -935,7 +969,7 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 		"pre_hash_check_enabled", cfg.PreHashCheckEnabled,
 		"record_non_hits", cfg.RecordNonHits)
 	if !cfg.Enabled {
-		slog.Info("content_moderation.skip_config_disabled",
+		slog.Debug("content_moderation.skip_config_disabled",
 			"user_id", input.UserID,
 			"api_key_id", input.APIKeyID,
 			"group_id", contentModerationLogGroupID(input.GroupID),
@@ -944,7 +978,7 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 		return allow, nil
 	}
 	if cfg.Mode == ContentModerationModeOff {
-		slog.Info("content_moderation.skip_mode_off",
+		slog.Debug("content_moderation.skip_mode_off",
 			"user_id", input.UserID,
 			"api_key_id", input.APIKeyID,
 			"group_id", contentModerationLogGroupID(input.GroupID),
@@ -953,7 +987,7 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 		return allow, nil
 	}
 	if !inScope {
-		slog.Info("content_moderation.skip_group_out_of_scope",
+		slog.Debug("content_moderation.skip_group_out_of_scope",
 			"user_id", input.UserID,
 			"api_key_id", input.APIKeyID,
 			"group_id", contentModerationLogGroupID(input.GroupID),
@@ -975,7 +1009,7 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 		content = ExtractContentModerationInput(input.Protocol, input.Body)
 	}
 	if content.IsEmpty() {
-		slog.Info("content_moderation.skip_empty_input",
+		slog.Debug("content_moderation.skip_empty_input",
 			"user_id", input.UserID,
 			"api_key_id", input.APIKeyID,
 			"group_id", contentModerationLogGroupID(input.GroupID),
@@ -985,7 +1019,7 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 		return allow, nil
 	}
 	content.Normalize()
-	slog.Info("content_moderation.input_extracted",
+	slog.Debug("content_moderation.input_extracted",
 		"user_id", input.UserID,
 		"api_key_id", input.APIKeyID,
 		"group_id", contentModerationLogGroupID(input.GroupID),
@@ -997,7 +1031,7 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 	if cfg.PreHashCheckEnabled && s.hashCache != nil {
 		matched, err := s.hashCache.HasFlaggedInputHash(ctx, hashText)
 		if err != nil {
-			slog.Warn("content_moderation.hash_check_failed", "user_id", input.UserID, "endpoint", input.Endpoint, "error", err)
+			s.warnThrottled("hash_check_failed", "content_moderation.hash_check_failed", "user_id", input.UserID, "endpoint", input.Endpoint, "error", err)
 		}
 		if matched {
 			slog.Info("content_moderation.hash_block",
@@ -1025,7 +1059,7 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 	}
 	var samplingDecision *ContentModerationDynamicSamplingDecision
 	if len(cfg.apiKeys()) == 0 {
-		slog.Warn("content_moderation.skip_no_audit_api_keys",
+		s.warnThrottled("no_audit_api_keys", "content_moderation.skip_no_audit_api_keys",
 			"user_id", input.UserID,
 			"api_key_id", input.APIKeyID,
 			"group_id", contentModerationLogGroupID(input.GroupID),
@@ -1036,7 +1070,7 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 	if cfg.DynamicSampling.Enabled && cfg.Mode != ContentModerationModeObserve {
 		samplingDecision, err = s.resolveDynamicSamplingDecision(ctx, cfg, input, content, scopeCtx, hashText)
 		if err != nil {
-			slog.Warn("content_moderation.dynamic_sampling_failed",
+			s.warnThrottled("dynamic_sampling_failed", "content_moderation.dynamic_sampling_failed",
 				"user_id", input.UserID,
 				"api_key_id", input.APIKeyID,
 				"group_id", contentModerationLogGroupID(input.GroupID),
@@ -1053,7 +1087,7 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 			}
 		}
 		if samplingDecision != nil && !samplingDecision.ShouldAudit {
-			slog.Info("content_moderation.dynamic_sampling_skip",
+			slog.Debug("content_moderation.dynamic_sampling_skip",
 				"user_id", input.UserID,
 				"api_key_id", input.APIKeyID,
 				"group_id", contentModerationLogGroupID(input.GroupID),
@@ -1065,7 +1099,7 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 			return allow, nil
 		}
 	} else if !cfg.DynamicSampling.Enabled && !cfg.shouldSample(hashText) {
-		slog.Info("content_moderation.skip_sample_rate",
+		slog.Debug("content_moderation.skip_sample_rate",
 			"user_id", input.UserID,
 			"api_key_id", input.APIKeyID,
 			"group_id", contentModerationLogGroupID(input.GroupID),
@@ -1075,7 +1109,7 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 		return allow, nil
 	}
 	if cfg.Mode == ContentModerationModeObserve {
-		slog.Info("content_moderation.enqueue_observe",
+		slog.Debug("content_moderation.enqueue_observe",
 			"user_id", input.UserID,
 			"api_key_id", input.APIKeyID,
 			"group_id", contentModerationLogGroupID(input.GroupID),
@@ -1095,7 +1129,7 @@ func (s *ContentModerationService) checkSync(ctx context.Context, input ContentM
 	result, err := s.callModeration(ctx, cfg, content)
 	latency := int(time.Since(start).Milliseconds())
 	if err != nil {
-		slog.Warn("content_moderation.audit_api_failed",
+		s.warnThrottled("audit_api_failed", "content_moderation.audit_api_failed",
 			"user_id", input.UserID,
 			"api_key_id", input.APIKeyID,
 			"group_id", contentModerationLogGroupID(input.GroupID),
@@ -1124,7 +1158,13 @@ func (s *ContentModerationService) checkSync(ctx context.Context, input ContentM
 		action = ContentModerationActionBlock
 		blocked = true
 	}
-	slog.Info("content_moderation.audit_result",
+	// 未命中的审核结果每个被审请求都会产生一条，只在 Debug 保留；
+	// 命中是低频且可行动的事件，保持 Info。
+	auditResultLog := slog.Debug
+	if flagged {
+		auditResultLog = slog.Info
+	}
+	auditResultLog("content_moderation.audit_result",
 		"user_id", input.UserID,
 		"api_key_id", input.APIKeyID,
 		"group_id", contentModerationLogGroupID(input.GroupID),
@@ -1144,7 +1184,7 @@ func (s *ContentModerationService) checkSync(ctx context.Context, input ContentM
 		log := s.buildLog(input, cfg, scopeCtx, action, flagged, highestCategory, highestScore, result.CategoryScores, content.ExcerptText(), &latency, queueDelay, "")
 		if flagged && s.hashCache != nil {
 			if err := s.hashCache.RecordFlaggedInputHash(ctx, hashText); err != nil {
-				slog.Warn("content_moderation.record_hash_failed", "user_id", input.UserID, "endpoint", input.Endpoint, "error", err)
+				s.warnThrottled("record_hash_failed", "content_moderation.record_hash_failed", "user_id", input.UserID, "endpoint", input.Endpoint, "error", err)
 			}
 		}
 		s.applyFlaggedSideEffects(ctx, cfg, log)
@@ -1186,7 +1226,7 @@ func (s *ContentModerationService) enqueueAsync(input ContentModerationCheckInpu
 		queueSize = cfg.QueueSize
 	}
 	if len(s.asyncQueue) >= queueSize {
-		slog.Warn("content_moderation.async_queue_full", "user_id", input.UserID, "endpoint", input.Endpoint, "queue_size", queueSize)
+		s.warnThrottled("async_queue_full", "content_moderation.async_queue_full", "user_id", input.UserID, "endpoint", input.Endpoint, "queue_size", queueSize)
 		s.asyncDropped.Add(1)
 		return
 	}
@@ -1205,7 +1245,7 @@ func (s *ContentModerationService) enqueueAsync(input ContentModerationCheckInpu
 	case s.asyncQueue <- task:
 		s.asyncEnqueued.Add(1)
 	default:
-		slog.Warn("content_moderation.async_queue_full", "user_id", input.UserID, "endpoint", input.Endpoint)
+		s.warnThrottled("async_queue_full", "content_moderation.async_queue_full", "user_id", input.UserID, "endpoint", input.Endpoint)
 		s.asyncDropped.Add(1)
 	}
 }
@@ -1244,7 +1284,7 @@ func (s *ContentModerationService) worker(id int) {
 			if cfg.DynamicSampling.Enabled {
 				samplingDecision, err := s.resolveDynamicSamplingDecision(ctx, cfg, task.input, task.content, scopeCtx, task.inputHash)
 				if err != nil {
-					slog.Warn("content_moderation.dynamic_sampling_failed",
+					s.warnThrottled("dynamic_sampling_failed", "content_moderation.dynamic_sampling_failed",
 						"user_id", task.input.UserID,
 						"api_key_id", task.input.APIKeyID,
 						"group_id", contentModerationLogGroupID(task.input.GroupID),
@@ -1261,7 +1301,7 @@ func (s *ContentModerationService) worker(id int) {
 					}
 				}
 				if samplingDecision != nil && !samplingDecision.ShouldAudit {
-					slog.Info("content_moderation.dynamic_sampling_skip",
+					slog.Debug("content_moderation.dynamic_sampling_skip",
 						"user_id", task.input.UserID,
 						"api_key_id", task.input.APIKeyID,
 						"group_id", contentModerationLogGroupID(task.input.GroupID),
@@ -1751,8 +1791,21 @@ func (s *ContentModerationService) callModeration(ctx context.Context, cfg *Cont
 	if attempts > maxContentModerationRetryCount+1 {
 		attempts = maxContentModerationRetryCount + 1
 	}
+
+	// 整轮审核（含全部重试、退避与智谱分块）共用一个总预算，保证同步挡在网关请求
+	// 前面的最坏附加延迟等于「超时 × 尝试次数」，不会被分块或退避二次放大。
+	budget := contentModerationCallBudget(cfg.TimeoutMS, attempts)
+	ctx, cancelBudget := context.WithTimeout(ctx, budget)
+	defer cancelBudget()
+
 	var lastErr error
 	for attempt := 0; attempt < attempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			if lastErr == nil {
+				lastErr = err
+			}
+			break
+		}
 		key, ok := s.nextUsableAPIKey(cfg)
 		if !ok {
 			lastErr = errors.New("no moderation api key available")
@@ -1782,6 +1835,19 @@ func (s *ContentModerationService) callModeration(ctx context.Context, cfg *Cont
 		}
 	}
 	return nil, lastErr
+}
+
+// contentModerationCallBudget 返回一整轮审核调用的总时间预算。
+func contentModerationCallBudget(timeoutMS int, attempts int) time.Duration {
+	if timeoutMS <= 0 {
+		timeoutMS = defaultContentModerationTimeoutMS
+	}
+	if attempts <= 0 {
+		attempts = 1
+	}
+	// 额外留出重试之间的退避时间（第 n 次退避 100n ms）。
+	backoff := time.Duration(50*attempts*(attempts-1)) * time.Millisecond
+	return time.Duration(timeoutMS)*time.Millisecond*time.Duration(attempts) + backoff
 }
 
 func (s *ContentModerationService) callModerationOnceWithContent(ctx context.Context, cfg *ContentModerationConfig, apiKey string, input ContentModerationInput, httpStatus *int) (*normalizedModerationResult, error) {
@@ -1866,13 +1932,40 @@ func (s *ContentModerationService) callZhipuModerationOnce(ctx context.Context, 
 	if len(chunks) == 0 {
 		chunks = []string{text}
 	}
-	results := make([]*normalizedModerationResult, 0, len(chunks))
-	for _, chunk := range chunks {
-		result, err := s.callZhipuModerationChunk(ctx, cfg, apiKey, chunk, httpStatus)
-		if err != nil {
-			return nil, err
+
+	// 分块并发发起：串行时每块各吃一个 TimeoutMS，12000 字会被切成 6 块，
+	// 单次尝试的最坏耗时变成 6×超时，再乘重试次数——这是同步路径上最长的一条尾巴。
+	// 并发后整批分块的耗时回到约一个 TimeoutMS，且共用 callModeration 的总预算。
+	results := make([]*normalizedModerationResult, len(chunks))
+	errs := make([]error, len(chunks))
+	statuses := make([]int, len(chunks))
+	var wg sync.WaitGroup
+	for index, chunk := range chunks {
+		wg.Add(1)
+		go func(index int, chunk string) {
+			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					errs[index] = fmt.Errorf("zhipu moderation chunk panic: %v", r)
+				}
+			}()
+			results[index], errs[index] = s.callZhipuModerationChunk(ctx, cfg, apiKey, chunk, &statuses[index])
+		}(index, chunk)
+	}
+	wg.Wait()
+
+	// 任一分块失败即整体失败（与串行实现一致），并回传该分块的 HTTP 状态码，
+	// 使上层的冻结与 400 不重试判定保持原有语义。
+	for index := range chunks {
+		if errs[index] != nil {
+			if httpStatus != nil {
+				*httpStatus = statuses[index]
+			}
+			return nil, errs[index]
 		}
-		results = append(results, result)
+	}
+	if httpStatus != nil && len(statuses) > 0 {
+		*httpStatus = statuses[len(statuses)-1]
 	}
 	return aggregateZhipuModerationResults(results), nil
 }
@@ -2009,22 +2102,98 @@ func (s *ContentModerationService) applyFlaggedSideEffects(ctx context.Context, 
 	if s.emailService == nil || strings.TrimSpace(log.UserEmail) == "" {
 		return
 	}
-	emailSent := false
-	if cfg.EmailOnHit {
-		if err := s.sendViolationEmail(ctx, cfg, log); err != nil {
-			slog.Warn("content_moderation.email_failed", "user_id", *log.UserID, "email", log.UserEmail, "error", err)
-		} else {
-			emailSent = true
+	// 违规告知邮件按用户限频：同一用户连续命中时后续邮件没有增量价值，
+	// 不限频则用户可以靠连发命中内容给自己刷信，放大 SMTP 配额与发信信誉损耗。
+	sendViolation := cfg.EmailOnHit && s.allowViolationEmail(*log.UserID)
+	if !sendViolation && !autoBanJustApplied {
+		return
+	}
+	// 发信改为异步：SMTP 握手耗时不可控，同步执行会把它压进网关请求的响应时间里。
+	// EmailSent 记录的是"已派发"，不再是"已投递成功"。
+	log.EmailSent = s.dispatchFlaggedEmails(cfg, log, sendViolation, autoBanJustApplied)
+}
+
+// warnThrottled 对描述"持续错误状态"的告警按 key 限频，避免故障期间每请求一条。
+func (s *ContentModerationService) warnThrottled(key string, msg string, args ...any) {
+	if s == nil {
+		return
+	}
+	now := time.Now()
+	s.warnThrottleMu.Lock()
+	if s.warnThrottle == nil {
+		s.warnThrottle = make(map[string]time.Time)
+	}
+	if last, ok := s.warnThrottle[key]; ok && now.Sub(last) < contentModerationWarnLogInterval {
+		s.warnThrottleMu.Unlock()
+		return
+	}
+	s.warnThrottle[key] = now
+	s.warnThrottleMu.Unlock()
+	slog.Warn(msg, args...)
+}
+
+// allowViolationEmail 在冷却窗口内对同一用户只放行一封违规告知邮件。
+func (s *ContentModerationService) allowViolationEmail(userID int64) bool {
+	if s == nil || userID <= 0 {
+		return false
+	}
+	now := time.Now()
+	s.emailThrottleMu.Lock()
+	defer s.emailThrottleMu.Unlock()
+	if s.emailThrottle == nil {
+		s.emailThrottle = make(map[int64]time.Time)
+	}
+	if last, ok := s.emailThrottle[userID]; ok && now.Sub(last) < contentModerationViolationEmailCooldown {
+		return false
+	}
+	// 顺带清掉已过冷却的条目，避免长期运行后 map 无界增长。
+	if len(s.emailThrottle) > 1024 {
+		for id, last := range s.emailThrottle {
+			if now.Sub(last) >= contentModerationViolationEmailCooldown {
+				delete(s.emailThrottle, id)
+			}
 		}
 	}
-	if autoBanJustApplied {
-		if err := s.sendAccountDisabledEmail(ctx, cfg, log); err != nil {
-			slog.Warn("content_moderation.ban_email_failed", "user_id", *log.UserID, "email", log.UserEmail, "error", err)
-		} else {
-			emailSent = true
-		}
+	s.emailThrottle[userID] = now
+	return true
+}
+
+// dispatchFlaggedEmails 把发信放到有界的后台协程里执行，返回是否已成功派发。
+func (s *ContentModerationService) dispatchFlaggedEmails(cfg *ContentModerationConfig, log *ContentModerationLog, sendViolation bool, sendBanNotice bool) bool {
+	if s == nil || log == nil || log.UserID == nil {
+		return false
 	}
-	log.EmailSent = emailSent
+	select {
+	case s.emailDispatchSlots <- struct{}{}:
+	default:
+		slog.Warn("content_moderation.email_dispatch_saturated", "user_id", *log.UserID, "email", log.UserEmail)
+		return false
+	}
+
+	userID := *log.UserID
+	// 快照所需字段：调用方在 CreateLog 时还会写 log，后台协程不再读它。
+	logCopy := *log
+	go func() {
+		defer func() { <-s.emailDispatchSlots }()
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("content_moderation.email_dispatch_panic", "user_id", userID, "recover", r)
+			}
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), contentModerationEmailDispatchTimeout)
+		defer cancel()
+		if sendViolation {
+			if err := s.sendViolationEmail(ctx, cfg, &logCopy); err != nil {
+				slog.Warn("content_moderation.email_failed", "user_id", userID, "email", logCopy.UserEmail, "error", err)
+			}
+		}
+		if sendBanNotice {
+			if err := s.sendAccountDisabledEmail(ctx, cfg, &logCopy); err != nil {
+				slog.Warn("content_moderation.ban_email_failed", "user_id", userID, "email", logCopy.UserEmail, "error", err)
+			}
+		}
+	}()
+	return true
 }
 
 func (s *ContentModerationService) notifyRiskControlBlocked(ctx context.Context, input ContentModerationCheckInput, decision *ContentModerationDecision) {
@@ -2254,7 +2423,7 @@ func (s *ContentModerationService) resolveScope(ctx context.Context, cfg *Conten
 	resolver := s.accountShareModeResolver
 	isModeGroup := false
 	if resolver != nil {
-		isModeGroup = resolver.IsModeGroup(ctx, groupID)
+		isModeGroup = s.isModeGroupCached(ctx, resolver, groupID)
 	}
 	if !isModeGroup {
 		return cfg.includesGroup(input.GroupID), scopeCtx
@@ -2267,7 +2436,7 @@ func (s *ContentModerationService) resolveScope(ctx context.Context, cfg *Conten
 	membership, listing, err := resolver.ResolveActiveBindingForRequest(ctx, input.UserID, input.APIKeyID, groupID)
 	if err != nil {
 		if errors.Is(err, ErrAccountShareModeGroupUnbound) {
-			slog.Info("content_moderation.skip_account_share_mode_unbound",
+			slog.Debug("content_moderation.skip_account_share_mode_unbound",
 				"user_id", input.UserID,
 				"api_key_id", input.APIKeyID,
 				"group_id", groupID,
@@ -2275,7 +2444,7 @@ func (s *ContentModerationService) resolveScope(ctx context.Context, cfg *Conten
 				"protocol", input.Protocol)
 			return false, scopeCtx
 		}
-		slog.Warn("content_moderation.account_share_scope_resolve_failed",
+		s.warnThrottled("account_share_scope_resolve_failed", "content_moderation.account_share_scope_resolve_failed",
 			"user_id", input.UserID,
 			"api_key_id", input.APIKeyID,
 			"group_id", groupID,
@@ -2309,6 +2478,51 @@ func (s *ContentModerationService) resolveScope(ctx context.Context, cfg *Conten
 		return true, scopeCtx
 	}
 	return accountScope.includesListing(listing.ID), scopeCtx
+}
+
+// isModeGroupCached 用短 TTL 缓存账号广场模式分组的判定结果。
+// 底层查询是一次未缓存的 EXISTS，而 resolveScope 每个在范围内的网关请求都会走到这里；
+// 模式分组本身极少变动，陈旧最多持续一个 TTL。
+//
+// 只缓存查询真正得出的结论：IsModeGroup 会把查询失败折叠成 false，一旦把它缓存下来，
+// 一次客户端断连或数据库抖动就会让该分组在整个 TTL 内被判为非模式分组——请求方可以
+// 主动中断一次请求来制造这个窗口。因此这里走 IsModeGroupChecked，出错时只影响当前请求。
+func (s *ContentModerationService) isModeGroupCached(ctx context.Context, resolver ContentModerationAccountShareModeResolver, groupID int64) bool {
+	if s == nil || resolver == nil || groupID <= 0 {
+		return false
+	}
+	now := time.Now()
+	s.modeGroupCacheMu.Lock()
+	if entry, ok := s.modeGroupCache[groupID]; ok && now.Before(entry.expiresAt) {
+		s.modeGroupCacheMu.Unlock()
+		return entry.value
+	}
+	s.modeGroupCacheMu.Unlock()
+
+	value, err := resolver.IsModeGroupChecked(ctx, groupID)
+	if err != nil {
+		s.warnThrottled("mode_group_lookup_failed", "content_moderation.mode_group_lookup_failed",
+			"group_id", groupID, "error", err)
+		return false
+	}
+
+	s.modeGroupCacheMu.Lock()
+	defer s.modeGroupCacheMu.Unlock()
+	if s.modeGroupCache == nil {
+		s.modeGroupCache = make(map[int64]contentModerationModeGroupCacheEntry)
+	}
+	if len(s.modeGroupCache) > 1024 {
+		for id, entry := range s.modeGroupCache {
+			if !now.Before(entry.expiresAt) {
+				delete(s.modeGroupCache, id)
+			}
+		}
+	}
+	s.modeGroupCache[groupID] = contentModerationModeGroupCacheEntry{
+		value:     value,
+		expiresAt: now.Add(contentModerationModeGroupCacheTTL),
+	}
+	return value
 }
 
 func contentModerationLogGroupID(groupID *int64) int64 {

@@ -308,6 +308,7 @@
               <div>
                 <label class="input-label">{{ t('admin.riskControl.timeoutMs') }}</label>
                 <input v-model.number="configForm.timeout_ms" type="number" min="500" max="30000" class="input" />
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.timeoutMsHint') }}</p>
               </div>
               <div>
                 <label class="input-label">{{ t('admin.riskControl.retryCount') }}</label>
@@ -1144,7 +1145,7 @@ const configForm = reactive({
   api_keys_mode: 'append' as APIKeysWriteMode,
   clear_api_key: false,
   timeout_ms: 3000,
-  retry_count: 2,
+  retry_count: 1,
   sample_rate: 100,
   dynamic_sampling: createDefaultDynamicSamplingConfig(),
   all_groups: true,
@@ -1583,7 +1584,7 @@ function applyConfig(config: ContentModerationConfig) {
   testedApiKeyStatuses.value = []
   apiKeyRowsExpanded.value = false
   configForm.timeout_ms = config.timeout_ms || 3000
-  configForm.retry_count = config.retry_count ?? 2
+  configForm.retry_count = config.retry_count ?? 1
   configForm.sample_rate = config.sample_rate ?? 100
   configForm.dynamic_sampling = normalizeDynamicSamplingConfig(config.dynamic_sampling)
   configForm.all_groups = config.all_groups

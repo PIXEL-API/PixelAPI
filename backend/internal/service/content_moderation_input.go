@@ -42,8 +42,12 @@ func (c *moderationInputCollector) Input() ContentModerationInput {
 	return out
 }
 
+// AddText 收录全部文本，不对 <system-reminder> 之类的标记做任何排除。
+// 客户端注入的提醒块与用户自己输入的同名标记在请求体里无法区分，任何基于标记的
+// 排除规则都可被伪造：曾经的实现只要正文出现 "<system-reminder>" 就丢弃整段，
+// 于是加上这一个标记即可让请求完全绕过内容审计。
 func (c *moderationInputCollector) AddText(text string) {
-	if c == nil || c.runeCount >= maxModerationInputRunes || strings.Contains(text, "<system-reminder>") {
+	if c == nil || c.runeCount >= maxModerationInputRunes {
 		return
 	}
 	text = strings.TrimSpace(text)
@@ -297,9 +301,7 @@ func collectAnthropicUserContentValue(value gjson.Result, parts *[]string, image
 	case !value.Exists():
 		return
 	case value.Type == gjson.String:
-		if !isAnthropicSystemReminderText(value.String()) {
-			addModerationText(parts, value.String())
-		}
+		addModerationText(parts, value.String())
 	case value.IsArray():
 		value.ForEach(func(_, item gjson.Result) bool {
 			collectAnthropicUserContentValue(item, parts, images)
@@ -309,7 +311,7 @@ func collectAnthropicUserContentValue(value gjson.Result, parts *[]string, image
 		typ := strings.ToLower(strings.TrimSpace(value.Get("type").String()))
 		switch typ {
 		case "", "text", "input_text", "message":
-			if value.Get("text").Exists() && !isAnthropicSystemReminderText(value.Get("text").String()) {
+			if value.Get("text").Exists() {
 				addModerationText(parts, value.Get("text").String())
 			}
 			if value.Get("content").Exists() {
@@ -319,10 +321,6 @@ func collectAnthropicUserContentValue(value gjson.Result, parts *[]string, image
 			collectContentValue(value, parts, images)
 		}
 	}
-}
-
-func isAnthropicSystemReminderText(text string) bool {
-	return strings.HasPrefix(strings.TrimSpace(text), "<system-reminder>")
 }
 
 func collectLastResponsesInput(input gjson.Result, parts *[]string, images *[]string) {
@@ -507,12 +505,10 @@ func limitContentModerationImages(images []string) []string {
 	return []string{images[randv2.IntN(len(images))]}
 }
 
+// addModerationText 收录全部文本；排除规则见 moderationInputCollector.AddText 的说明。
 func addModerationText(parts *[]string, text string) {
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return
-	}
-	if strings.Contains(text, "<system-reminder>") {
 		return
 	}
 	*parts = append(*parts, text)

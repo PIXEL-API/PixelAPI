@@ -7,13 +7,20 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 )
 
 func TestContentModerationZhipuChunksAndAggregates(t *testing.T) {
+	// 分块现在是并发发起的，计数与应答分配都必须自己加锁；
+	// 每块回什么风险等级按分配序号决定即可——聚合取最坏值，与分块顺序无关。
+	var mu sync.Mutex
 	callCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
 		callCount++
+		seq := callCount
+		mu.Unlock()
 		if r.URL.Path != "/api/paas/v4/moderations" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -35,11 +42,11 @@ func TestContentModerationZhipuChunksAndAggregates(t *testing.T) {
 		}
 		riskLevel := "PASS"
 		riskType := []string{}
-		if callCount == 2 {
+		if seq == 2 {
 			riskLevel = "REVIEW"
 			riskType = []string{"review_type"}
 		}
-		if callCount == 3 {
+		if seq == 3 {
 			riskLevel = "REJECT"
 			riskType = []string{"reject_type"}
 		}
@@ -70,8 +77,11 @@ func TestContentModerationZhipuChunksAndAggregates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("callModeration returned error: %v", err)
 	}
-	if callCount != 3 {
-		t.Fatalf("expected 3 chunks, got %d", callCount)
+	mu.Lock()
+	gotChunks := callCount
+	mu.Unlock()
+	if gotChunks != 3 {
+		t.Fatalf("expected 3 chunks, got %d", gotChunks)
 	}
 	if !result.Flagged || result.RiskLevel != "REJECT" || result.HighestCategory != "reject_type" || result.HighestScore != 1 {
 		t.Fatalf("unexpected aggregate result: %#v", result)
@@ -179,6 +189,10 @@ type contentModerationScopeResolverStub struct {
 
 func (s *contentModerationScopeResolverStub) IsModeGroup(_ context.Context, groupID int64) bool {
 	return s != nil && s.modeGroupID == groupID
+}
+
+func (s *contentModerationScopeResolverStub) IsModeGroupChecked(_ context.Context, groupID int64) (bool, error) {
+	return s != nil && s.modeGroupID == groupID, nil
 }
 
 func (s *contentModerationScopeResolverStub) ResolveActiveBindingForRequest(context.Context, int64, int64, int64) (*AccountShareMembership, *AccountShareListing, error) {

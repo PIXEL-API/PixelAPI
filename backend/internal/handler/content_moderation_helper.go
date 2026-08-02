@@ -146,8 +146,10 @@ func runContentModerationWithContext(ctx context.Context, c *gin.Context, reqLog
 	} else {
 		input.ContentSource = source
 	}
+	// 逐请求的进入/结束日志只在 Debug 保留：风控开着时它们会随每个网关请求各产生一条，
+	// 而真正需要在 Info 看到的是拦截与命中，见下方按 decision 分级。
 	if reqLog != nil {
-		reqLog.Info("content_moderation.gateway_check_start",
+		reqLog.Debug("content_moderation.gateway_check_start",
 			zap.String("request_id", input.RequestID),
 			zap.Int64("user_id", input.UserID),
 			zap.Int64("api_key_id", input.APIKeyID),
@@ -169,7 +171,11 @@ func runContentModerationWithContext(ctx context.Context, c *gin.Context, reqLog
 		return nil
 	}
 	if reqLog != nil && decision != nil {
-		reqLog.Info("content_moderation.gateway_check_done",
+		logDone := reqLog.Debug
+		if decision.Blocked || decision.Flagged {
+			logDone = reqLog.Info
+		}
+		logDone("content_moderation.gateway_check_done",
 			zap.String("request_id", input.RequestID),
 			zap.Bool("allowed", decision.Allowed),
 			zap.Bool("blocked", decision.Blocked),

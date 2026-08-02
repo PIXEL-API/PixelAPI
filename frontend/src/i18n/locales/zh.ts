@@ -4221,7 +4221,7 @@ export default {
       enabledHint: "关闭后即使风控中心菜单启用，也不会审核网关请求。",
       cyberPreflight: "账号安全前置拦截",
       cyberPreflightHint:
-        "开启后使用本地高风险网络滥用规则，在账号选择前拦截命中请求；需同时开启风控中心总开关。",
+        "开启后使用本地规则在账号选择前拦截命中请求；需同时开启风控中心总开关。系统不内置任何拦截词，需先在「账号安全规则」中配置，未配置时本开关不生效。",
       mode: "全局模式",
       modePreBlock: "前置拦截",
       modePreBlockDesc: "每次请求先同步审核最新用户输入，命中后立即拒绝请求。",
@@ -4319,6 +4319,8 @@ export default {
       clearApiKey: "清除已保存 Key",
       keepApiKey: "保留已保存 Key",
       timeoutMs: "HTTP 超时 (ms)",
+      timeoutMsHint:
+        "单次审核请求的超时。审核同步挡在网关请求前面，最坏附加延迟约为 超时 ×（重试次数 + 1），请按这个上限取值。",
       retryCount: "失败重试次数",
       sampleRate: "采样率",
       dynamicSampling: "动态用户采样",
@@ -4366,7 +4368,7 @@ export default {
       blockMessage: "自定义拦截提示",
       emailOnHit: "命中后发送邮件",
       emailOnHitHint:
-        "开启后每次达到阈值都会向用户发送风控提醒邮件；自动封禁通知始终发送。",
+        "开启后命中时向用户发送风控提醒邮件；同一用户 30 分钟内只发一封，发送为异步，不占用网关请求耗时。自动封禁通知始终发送。",
       autoBan: "自动封禁用户",
       autoBanHint:
         "命中次数达到阈值后将禁用用户账号、刷新认证缓存并发送封禁通知邮件。",
@@ -4483,10 +4485,10 @@ export default {
       },
       cyberRules: {
         notice:
-          "每行一条规则。保存后会在账号选择前本地判断；清空某个规则组表示禁用该组。",
+          "系统不内置任何拦截词，全部规则由你自行配置；未配置时本地预检不生效。每行一条，保存后在账号选择前本地判断，清空某个规则组表示禁用该组。注意规则为子串匹配且不区分词边界（如「利用」会命中「利用这个库」），并按组合命中，请优先填写专有名词、避免高频通用词。",
         placeholder: "每行一条",
         count: "{count} 条",
-        resetDefaults: "恢复默认规则",
+        resetDefaults: "清空全部规则",
         standaloneBlockMarkers: "高危独立拦截词",
         standaloneBlockMarkersHint:
           "命中后直接拦截，适合免杀、钓鱼页面、键盘记录等极高风险表达。",

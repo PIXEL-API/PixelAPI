@@ -4307,7 +4307,7 @@ export default {
         "When off, gateway requests are not moderated even if the menu is enabled.",
       cyberPreflight: "Account Safety Preflight",
       cyberPreflightHint:
-        "Uses local high-risk cyber abuse rules to block hits before account selection; the global risk-control switch must also be enabled.",
+        "Uses local rules to block matching requests before account selection; the global risk-control switch must also be enabled. No rules ship by default — configure them under Account Safety Rules first, otherwise this switch has no effect.",
       mode: "Global Mode",
       modePreBlock: "Pre-Block",
       modePreBlockDesc:
@@ -4410,6 +4410,8 @@ export default {
       clearApiKey: "Clear stored key",
       keepApiKey: "Keep stored key",
       timeoutMs: "HTTP Timeout (ms)",
+      timeoutMsHint:
+        "Timeout for a single moderation request. Moderation runs synchronously ahead of the gateway request, so worst-case added latency is about timeout × (retries + 1) — size it against that ceiling.",
       retryCount: "Retry Count",
       sampleRate: "Sample Rate",
       dynamicSampling: "Dynamic User Sampling",
@@ -4457,7 +4459,7 @@ export default {
       blockMessage: "Custom Block Message",
       emailOnHit: "Email on Hit",
       emailOnHitHint:
-        "When enabled, send a risk-control email on every hit; auto-ban notices are always sent.",
+        "When enabled, email the user on a hit; at most one email per user per 30 minutes, sent asynchronously so it never adds to gateway latency. Auto-ban notices are always sent.",
       autoBan: "Auto Ban User",
       autoBanHint:
         "Disable the user, invalidate auth cache, and send a ban notice after the hit threshold is reached.",
@@ -4580,10 +4582,10 @@ export default {
       },
       cyberRules: {
         notice:
-          "One rule per line. Saved rules are evaluated locally before account selection; clearing a group disables that group.",
+          "No rules ship by default — you configure all of them, and the local preflight stays inactive until you do. One rule per line, evaluated locally before account selection; clearing a group disables that group. Note that matching is substring-based with no word boundaries (e.g. \"exploit\" also matches \"exploitation\") and rules fire in combination, so prefer specific terms over common words.",
         placeholder: "One rule per line",
         count: "{count}",
-        resetDefaults: "Restore Defaults",
+        resetDefaults: "Clear All Rules",
         standaloneBlockMarkers: "Standalone high-risk blocks",
         standaloneBlockMarkersHint:
           "Directly blocks very high-risk phrases such as AV bypass, phishing pages, or keyloggers.",

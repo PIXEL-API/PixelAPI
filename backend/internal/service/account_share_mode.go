@@ -1912,11 +1912,18 @@ func (s *AccountShareModeService) GetOpenAIModeGroup(ctx context.Context) (*Grou
 }
 
 func (s *AccountShareModeService) IsModeGroup(ctx context.Context, groupID int64) bool {
-	if s == nil || s.repo == nil || groupID <= 0 {
-		return false
-	}
-	ok, err := s.repo.IsModeGroup(ctx, groupID)
+	ok, err := s.IsModeGroupChecked(ctx, groupID)
 	return err == nil && ok
+}
+
+// IsModeGroupChecked 与 IsModeGroup 判定相同，但把查询错误暴露给调用方。
+// IsModeGroup 会把"查询失败"和"不是模式分组"都折叠成 false，调用方无法区分；
+// 需要缓存判定结果的调用方必须用这个版本，否则会把一次失败缓存成长期的错误答案。
+func (s *AccountShareModeService) IsModeGroupChecked(ctx context.Context, groupID int64) (bool, error) {
+	if s == nil || s.repo == nil || groupID <= 0 {
+		return false, nil
+	}
+	return s.repo.IsModeGroup(ctx, groupID)
 }
 
 func (s *AccountShareModeService) GenerateOpenAIAuthURL(ctx context.Context, ownerUserID int64, proxyID *int64, redirectURI string) (*OpenAIAuthURLResult, error) {
