@@ -156,6 +156,7 @@ const WeChatConnectSyntheticEmailDomain = "@wechat-connect.invalid"
 // Setting keys
 const (
 	// 注册设置
+	SettingKeyPanelRateLimitSettings           = "panel_rate_limit_settings"           // 面板 API 限流配置（JSON）
 	SettingKeyRegistrationEnabled              = "registration_enabled"                // 是否开放注册
 	SettingKeyEmailVerifyEnabled               = "email_verify_enabled"                // 是否开启邮件验证
 	SettingKeyRegistrationEmailSuffixWhitelist = "registration_email_suffix_whitelist" // 注册邮箱后缀白名单（JSON 数组）

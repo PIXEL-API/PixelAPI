@@ -135,6 +135,12 @@ type SettingService struct {
 	version                 string // Application version
 	webSearchManagerBuilder WebSearchManagerBuilder
 	clusterCache            *ClusterCacheCoordinator
+
+	// 面板限流配置的进程内缓存（60s TTL）+ singleflight。
+	// 面板每个认证请求的热路径都会读它，绝不能每次访问 DB——
+	// 否则限流中间件本身就成了新的数据库压力源。
+	panelRateLimitCache atomic.Value // *cachedPanelRateLimitSettings
+	panelRateLimitSF    singleflight.Group
 }
 
 type ProviderDefaultGrantSettings struct {

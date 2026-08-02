@@ -8,6 +8,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// noopMiddleware 是一个什么都不做的中间件占位。
+// 用于「限流器可能为 nil」的场景下按路由挂载可选中间件，
+// 避免为此把每条路由都写成 if/else 两份注册。
+func noopMiddleware(c *gin.Context) { c.Next() }
+
 // RegisterBrandAssetRoutes 注册品牌图片端点。
 //
 // 挂在引擎根上而不是 /api/v1 下是刻意的：生产边缘对 /api/ 前缀统一

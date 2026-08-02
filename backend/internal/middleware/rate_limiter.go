@@ -121,6 +121,42 @@ func (r *RateLimiter) LimitWithOptions(key string, limit int, window time.Durati
 	}
 }
 
+// AllowResult 单次限流判定结果。
+type AllowResult struct {
+	Allowed    bool
+	RetryAfter time.Duration
+}
+
+// Allow 是不绑定 gin 上下文、也不自动拼接客户端 IP 的限流原语。
+//
+// 与 LimitWithOptions 的区别：后者固定按 "key:客户端IP" 分桶，
+// 而 Allow 完全由调用方决定桶的维度，因此可以按用户 ID 等非 IP 维度限流
+// ——反向代理/共享出口下按 IP 分桶会把所有用户合并成同一个桶，
+// 既全员误拦也能被单人占满。
+//
+// 出错时返回 error 交由调用方决定 fail-open / fail-close，本函数不做策略判断。
+func (r *RateLimiter) Allow(ctx context.Context, key string, limit int, window time.Duration) (AllowResult, error) {
+	if r == nil || r.redis == nil || limit <= 0 {
+		return AllowResult{Allowed: true}, nil
+	}
+
+	redisKey := r.prefix + key
+	windowMillis := windowTTLMillis(window)
+
+	count, repaired, err := rateLimitRun(ctx, r.redis, redisKey, windowMillis)
+	if err != nil {
+		return AllowResult{}, err
+	}
+	if repaired {
+		log.Printf("[RateLimit] ttl repaired: key=%s window_ms=%d", redisKey, windowMillis)
+	}
+	if count > int64(limit) {
+		// 底层脚本不回传剩余 TTL，用整个窗口作为保守上界。
+		return AllowResult{Allowed: false, RetryAfter: window}, nil
+	}
+	return AllowResult{Allowed: true}, nil
+}
+
 func windowTTLMillis(window time.Duration) int64 {
 	ttl := window.Milliseconds()
 	if ttl < 1 {

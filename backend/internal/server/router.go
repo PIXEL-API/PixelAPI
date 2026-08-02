@@ -111,10 +111,17 @@ func registerRoutes(
 	// API v1
 	v1 := r.Group("/api/v1")
 
+	// 面板 API 限流器：按用户 ID 分桶，保护数据库不被高频面板查询打爆。
+	// redisClient 为 nil（未启用 Redis）时不构造，路由侧按 nil 跳过挂载。
+	var panelRL *middleware2.PanelRateLimiter
+	if redisClient != nil && settingService != nil {
+		panelRL = middleware2.NewPanelRateLimiter(redisClient, settingService)
+	}
+
 	// 注册各模块路由
 	routes.RegisterOIDCProviderRoutes(r, v1, h.OIDCProvider, jwtAuth, cfg)
 	routes.RegisterAuthRoutes(v1, h, jwtAuth, redisClient, settingService)
-	routes.RegisterUserRoutes(v1, h, jwtAuth, settingService)
+	routes.RegisterUserRoutes(v1, h, jwtAuth, settingService, panelRL)
 	routes.RegisterAdminRoutes(v1, h, adminAuth)
 	routes.RegisterGatewayRoutes(r, h, apiKeyAuth, apiKeyService, subscriptionService, opsService, settingService, cfg)
 	routes.RegisterPaymentRoutes(v1, h.Payment, h.PaymentWebhook, h.Admin.Payment, jwtAuth, adminAuth, settingService)

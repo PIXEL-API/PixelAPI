@@ -14,6 +14,7 @@ func RegisterUserRoutes(
 	h *handler.Handlers,
 	jwtAuth middleware.JWTAuthMiddleware,
 	settingService *service.SettingService,
+	panelRL *middleware.PanelRateLimiter,
 ) {
 	public := v1.Group("/public")
 	{
@@ -33,6 +34,11 @@ func RegisterUserRoutes(
 	authenticated := v1.Group("")
 	authenticated.Use(gin.HandlerFunc(jwtAuth))
 	authenticated.Use(middleware.BackendModeUserGuard(settingService))
+	// 全局宽松档：覆盖所有登录后端点，按用户 ID 分桶。
+	// 必须挂在 jwtAuth 之后——限流依赖上下文里的认证主体。
+	if panelRL != nil {
+		authenticated.Use(panelRL.Global())
+	}
 	shop := authenticated.Group("/shop")
 	{
 		shop.GET("/draw-progress", h.Shop.ListDrawProgress)
@@ -113,15 +119,21 @@ func RegisterUserRoutes(
 
 		accounts := authenticated.Group("/accounts")
 		{
+			// 严格档只挂在聚合统计与全量导出这些真正重的读端点上，
+			// 不整组套用——本组还有大量轻量 CRUD，整组限流会误伤正常操作。
+			heavy := noopMiddleware
+			if panelRL != nil {
+				heavy = panelRL.Heavy()
+			}
 			accounts.GET("", h.UserAccount.List)
-			accounts.GET("/quota-dashboard", h.UserAccount.GetQuotaPoolDashboard)
-			accounts.GET("/data", h.UserAccount.ExportData)
-			accounts.POST("/today-stats/batch", h.UserAccount.GetBatchTodayStats)
-			accounts.GET("/:id/usage", h.UserAccount.GetUsage)
+			accounts.GET("/quota-dashboard", heavy, h.UserAccount.GetQuotaPoolDashboard)
+			accounts.GET("/data", heavy, h.UserAccount.ExportData)
+			accounts.POST("/today-stats/batch", heavy, h.UserAccount.GetBatchTodayStats)
+			accounts.GET("/:id/usage", heavy, h.UserAccount.GetUsage)
 			accounts.GET("/:id/openai-quota", h.UserAccount.QueryOpenAIQuota)
 			accounts.POST("/:id/openai-quota/reset", h.UserAccount.ResetOpenAIQuota)
-			accounts.GET("/:id/stats", h.UserAccount.GetStats)
-			accounts.GET("/:id/today-stats", h.UserAccount.GetTodayStats)
+			accounts.GET("/:id/stats", heavy, h.UserAccount.GetStats)
+			accounts.GET("/:id/today-stats", heavy, h.UserAccount.GetTodayStats)
 			accounts.GET("/:id/moderation/config", h.UserAccount.GetModerationConfig)
 			accounts.PUT("/:id/moderation/config", h.UserAccount.UpdateModerationConfig)
 			accounts.POST("/:id/moderation/test", h.UserAccount.TestModeration)
@@ -227,7 +239,11 @@ func RegisterUserRoutes(
 		}
 
 		// 使用记录
+		// 严格档：这一组全是聚合统计重查询，是打爆数据库最容易的入口。
 		usage := authenticated.Group("/usage")
+		if panelRL != nil {
+			usage.Use(panelRL.Heavy())
+		}
 		{
 			usage.GET("", h.Usage.List)
 			usage.GET("/balance-ledger/stats", h.Usage.BalanceLedgerStats)
