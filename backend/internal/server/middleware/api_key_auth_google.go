@@ -6,6 +6,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/googleapi"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -42,10 +43,27 @@ func APIKeyAuthWithSubscriptionGoogle(apiKeyService *service.APIKeyService, subs
 			return
 		}
 
-		if !apiKey.IsActive() {
+		// disabled / 未知状态 → 无条件拦截；expired 与 quota_exhausted 留给下面的计费段，
+		// 口径与主中间件 APIKeyAuth 保持一致。
+		if !apiKey.IsActive() &&
+			apiKey.Status != service.StatusAPIKeyExpired &&
+			apiKey.Status != service.StatusAPIKeyQuotaExhausted {
 			abortWithGoogleError(c, 401, "API key is disabled")
 			return
 		}
+
+		// 检查 IP 限制（白名单/黑名单）。
+		// 此前这里缺失，攻击者只要把请求换到 /v1beta 就能绕开 Key 上配置的 IP ACL。
+		// 错误信息故意模糊，避免暴露具体的 IP 限制机制。
+		if len(apiKey.IPWhitelist) > 0 || len(apiKey.IPBlacklist) > 0 {
+			clientIP := ip.GetSecurityClientIP(c)
+			allowed, _ := ip.CheckIPRestrictionWithCompiledRules(clientIP, apiKey.CompiledIPWhitelist, apiKey.CompiledIPBlacklist)
+			if !allowed {
+				abortWithGoogleError(c, 403, "Access denied")
+				return
+			}
+		}
+
 		if apiKey.User == nil {
 			abortWithGoogleError(c, 401, "User associated with API key not found")
 			return
@@ -67,6 +85,27 @@ func APIKeyAuthWithSubscriptionGoogle(apiKeyService *service.APIKeyService, subs
 			setGroupContext(c, apiKey.Group)
 			_ = apiKeyService.TouchLastUsed(c.Request.Context(), apiKey.ID)
 			c.Next()
+			return
+		}
+
+		// Key 状态检查 + 运行时过期/配额检查。
+		// 此前这里整段缺失：状态字段异步刷新存在滞后期，仅靠上面的 IsActive
+		// 无法拦住已过期或已超配额的 Key，攻击者换到 /v1beta 即可继续使用。
+		// 口径与主中间件 APIKeyAuth 的计费段一致（quota 用 429/RESOURCE_EXHAUSTED）。
+		switch apiKey.Status {
+		case service.StatusAPIKeyQuotaExhausted:
+			abortWithGoogleError(c, 429, "API key 额度已用完")
+			return
+		case service.StatusAPIKeyExpired:
+			abortWithGoogleError(c, 403, "API key 已过期")
+			return
+		}
+		if apiKey.IsExpired() {
+			abortWithGoogleError(c, 403, "API key 已过期")
+			return
+		}
+		if apiKey.IsQuotaExhausted() {
+			abortWithGoogleError(c, 429, "API key 额度已用完")
 			return
 		}
 
