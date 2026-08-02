@@ -168,8 +168,21 @@ integration 那套依赖 testcontainers + Docker，本机 Docker 未运行时只
 
 ### 批次 A — P0 资损与正确性（改动面小、冲突低）
 
-**进度：7 项中已完成 6 项**（A-1 ✅ / A-2 ✅ / A-3 ✅ / A-4 ✅部分 / A-5 ✅ / A-7 ✅），
-**A-6 待做**。提交：`d5459d230`（A-2/A-3/A-5/A-7）、`1a568f314`（A-1）、`57c9b1dd3`（A-4）。
+**✅ 批次 A 已全部完成**（A-1 / A-2 / A-3 / A-4 / A-5 / A-6 / A-7）。
+提交：`d5459d230`（A-2/A-3/A-5/A-7）、`1a568f314`（A-1）、`57c9b1dd3`（A-4）、`523181f95`（A-6）。
+A-4 的第三块（专属分组授权复核）按依赖关系留在 B-2，单独做会全量误判 403。
+
+验证口径：`go build ./...` 通过；`go test -tags=unit ./...` **47 个包全过、退出码 0**；
+`go vet -tags=integration ./...` 通过（本机 Docker 未运行，integration 用例未实际执行）；
+前端 `vue-tsc` 通过、131 个测试文件 971 个用例全过。
+
+**上线前必做（批次 A 累积）：**
+1. **A-2**：flush `sched:meta:*` 或触发全量重建，否则存量快照仍是旧载荷，配额键不会生效。
+2. **A-5**：排查存量套餐与已售订单，人工补齐被少给周期的用户订阅时长（SQL 见 A-5 条目）。
+3. **A-6**：上线后观察 `BalanceOverdrafted` 置位频次；若量大说明预检门槛需要按实际请求成本调高
+   （`billing.minimum_balance_reserve`，默认 0.000001）。
+4. **A-7**：代码侧已把 `CF-Connecting-IP` 移出默认列表，但生产 nginx 仍未清理该头；
+   在加 `server.trusted_proxies` 之前必须先补 nginx 的 `proxy_set_header CF-Connecting-IP "";`。
 
 **A-1 usage_logs 丢弃（P0-1）** — 移植面比想象小，worker 池那一半（`config.go:2367` overflow_policy 默认 sync）已在本地。
 - `backend/internal/repository/usage_log_repo.go:336-338`（`CreateBestEffort`）与 `:459`（`createBatched`）删除 `default:` 立即丢弃分支，改 `select { case ch<-req: ; case <-ctx.Done(): }`
