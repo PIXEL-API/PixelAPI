@@ -342,6 +342,36 @@ func (s *UserRepoSuite) TestUpdateBalance() {
 	s.Require().InDelta(12.5, got.Balance, 1e-6)
 }
 
+// TestUpdate_DoesNotRollbackConcurrentAtomicMoneyWrites
+// 陈旧快照调用 Update 不得回滚并发的原子资金写入。
+//
+// Update 是整行重写，而余额/积分/负载系数额度等列另有原子写入路径
+// （UpdateBalance / AddBalance / applyPointsAdjustmentInTx 以及计费事务里的
+// UPDATE ... SET balance = balance - amount）。若 Update 继续 Set 这些列，
+// 任何持稍旧快照的调用方保存一次就会把并发结果静默回滚，
+// 表现为「用户余额莫名被改回旧值」。
+func (s *UserRepoSuite) TestUpdate_DoesNotRollbackConcurrentAtomicMoneyWrites() {
+	user := s.mustCreateUser(&service.User{Email: "lostupdate@test.com", Balance: 10})
+
+	// 拿到一份快照（此时 balance=10），模拟请求开始时读到的对象。
+	stale, err := s.repo.GetByID(s.ctx, user.ID)
+	s.Require().NoError(err)
+	s.Require().InDelta(10, stale.Balance, 1e-6)
+
+	// 另一条链路原子加钱：10 → 35。
+	s.Require().NoError(s.repo.UpdateBalance(s.ctx, user.ID, 25))
+
+	// 持陈旧快照的调用方改了个与钱无关的字段后保存。
+	stale.Notes = "touched by a stale writer"
+	s.Require().NoError(s.repo.Update(s.ctx, stale))
+
+	got, err := s.repo.GetByID(s.ctx, user.ID)
+	s.Require().NoError(err)
+	// 余额必须仍是并发写入后的 35，而不是被快照里的 10 覆盖。
+	s.Require().InDelta(35, got.Balance, 1e-6, "Update 不得回滚并发原子写入的余额")
+	s.Require().Equal("touched by a stale writer", got.Notes, "非资金字段仍应正常保存")
+}
+
 func (s *UserRepoSuite) TestUpdateBalance_Negative() {
 	user := s.mustCreateUser(&service.User{Email: "balneg@test.com", Balance: 10})
 

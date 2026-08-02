@@ -317,15 +317,22 @@ func (r *userRepository) updateUser(
 		userIn.Role = existing.Role
 	}
 
+	// 资金列（balance / points_balance / load_factor_credits_* / total_recharged）
+	// 刻意不在这里 Set。
+	//
+	// Update 走的是「整行重写」：调用方传进来的 userIn 往往是某个时刻读到的快照，
+	// 而这些列另有原子写入路径（UpdateBalance / AddBalance / applyPointsAdjustmentInTx
+	// 以及计费事务里的 UPDATE ... SET balance = balance - $1）。任何持稍旧快照的
+	// 调用方保存一次，就会把并发原子写的结果静默回滚——典型表现是用户余额被改回旧值。
+	//
+	// 已逐一核对全部 16 个 userRepo.Update 调用方：没有任何一个依赖 Update 改钱。
+	// 唯二对 user.Balance 赋值的地方（auth_email_binding.go 的回填、shop.go 事务内
+	// 刷新内存值）都不跟 Update。钱一律走原子路径。
 	updateOp := txClient.User.UpdateOneID(userIn.ID).
 		SetEmail(userIn.Email).
 		SetUsername(userIn.Username).
 		SetNotes(userIn.Notes).
 		SetPasswordHash(userIn.PasswordHash).
-		SetBalance(userIn.Balance).
-		SetPointsBalance(userIn.PointsBalance).
-		SetLoadFactorCreditsBalance(userIn.LoadFactorCreditsBalance).
-		SetLoadFactorCreditsUsedTotal(userIn.LoadFactorCreditsUsedTotal).
 		SetPreferPointsBilling(userIn.PreferPointsBilling).
 		SetConcurrency(userIn.Concurrency).
 		SetStatus(userIn.Status).
@@ -333,7 +340,6 @@ func (r *userRepository) updateUser(
 		SetBalanceNotifyThresholdType(userIn.BalanceNotifyThresholdType).
 		SetNillableBalanceNotifyThreshold(userIn.BalanceNotifyThreshold).
 		SetBalanceNotifyExtraEmails(marshalExtraEmails(userIn.BalanceNotifyExtraEmails)).
-		SetTotalRecharged(userIn.TotalRecharged).
 		SetRpmLimit(userIn.RPMLimit)
 	if governance != nil && governance.UpdateRole {
 		updateOp = updateOp.SetRole(userIn.Role)
