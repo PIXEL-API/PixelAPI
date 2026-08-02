@@ -229,6 +229,27 @@ A-4 的第三块（专属分组授权复核）按依赖关系留在 B-2，单独
 
 ### 批次 B — P0 高冲突项（必须分步，单独发布）
 
+**进度（2026-08-02）：B-1 ✅ / B-2 ✅ / B-3 后端 ✅ 前端待做 / B-4 未开始**
+
+| 项 | 提交 | 状态 |
+|---|---|---|
+| B-1 资金列保护（第一步） | `2640e6afb` | ✅ 已完成。第二步（本地版列掩码 + api_keys 配额标记只写 status）未做，另行评估 |
+| B-2 专属分组授权复核 | `a00d93871` | ✅ 四步全做。生产核验爆炸半径为零（1371 个专属分组 Key 全是订阅型，走早返回） |
+| B-3 面板限流 | `<本次>` | ⚠️ **后端完成、前端配置卡片未做**。配置目前只能经管理端接口修改，默认值已生效 |
+| B-4 退款生命周期 | — | ❌ 未开始 |
+
+**B-3 遗留明细：**
+- 前端 `SettingsView.vue` 安全 tab 的配置卡片（上游 +240 行）、`api/admin/settings.ts`（+34 行）、中英文 i18n（各 +18 行）。
+- 后端接口已就绪：`GET/PUT /api/v1/admin/settings/panel-rate-limit`。
+- **主动偏离计划并已在提交说明中记录**：未把「商城下单 / 发票生成 / 账号广场结算」纳入 heavy 档
+  —— 这些是写路径，60/min 严格档会真实影响正常下单突发，属产品取舍；Global 档 240/min 已覆盖滥用面。
+  要收紧只需给对应路由加 `panelRL.Heavy()`。
+- `accounts` 组未整组套 Heavy（组内还有大量轻量 CRUD），只挂在 6 个聚合读端点上。
+
+**批次 B 发版纪律：B-2 与 B-3 都改动鉴权/限流热路径，必须分开发版、各自观察 24h。**
+B-2 上线瞬间鉴权快照版本 15→16 会触发全站缓存重建，有一波 DB 回源，需避开高峰并盯 `GROUP_NOT_ALLOWED` 403 率与 DB 连接数。
+
+
 **B-1 users 资金列保护（P0-6）** — 分两批，**不要直接 cherry-pick `86fb4781f`**（本地比上游多 4 个自研金额列 `points_balance` / `load_factor_credits_balance` / `load_factor_credits_used_total` / `prefer_points_billing`，还多一条 `UpdateWithAdminGovernanceGuard` 路径）。
 - 第一批（低风险先上）：把 `updateOp` 里 `SetBalance`/`SetPointsBalance`/`SetLoadFactorCreditsBalance`/`SetLoadFactorCreditsUsedTotal`/`SetTotalRecharged` 五个调用摘掉，让 `Update` 永不碰钱列。**落地前逐一 grep 16 个调用方**确认无人靠 `Update` 改余额，重点看 `content_moderation.go:1340/1996` 与 `admin_service.go:1070`
 - 第二批（可选）：引入本地版 `UserUpdateFields` 列掩码，字段集含 4 个自研金额列与 `prefer_points_billing`，让 `UpdateWithAdminGovernanceGuard` 复用同一掩码；再覆盖 `api_keys`（配额耗尽标记只写 status）
