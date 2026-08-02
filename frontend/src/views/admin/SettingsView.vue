@@ -194,6 +194,189 @@
               </div>
             </div>
           </div>
+
+          <!-- Panel API Rate Limit Settings -->
+          <div class="card">
+            <div
+              class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
+            >
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t("admin.settings.security.panelRateLimit.title") }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t("admin.settings.security.panelRateLimit.description") }}
+              </p>
+            </div>
+            <div class="space-y-5 p-6">
+              <div
+                v-if="panelRateLimitLoading"
+                class="flex items-center gap-2 text-gray-500"
+              >
+                <div
+                  class="h-4 w-4 animate-spin rounded-full border-b-2 border-primary-600"
+                ></div>
+                {{ t("common.loading") }}
+              </div>
+
+              <template v-else>
+                <!-- Enable Panel Rate Limit -->
+                <div class="flex items-center justify-between">
+                  <div>
+                    <label class="font-medium text-gray-900 dark:text-white">{{
+                      t("admin.settings.security.panelRateLimit.enabled")
+                    }}</label>
+                    <p class="text-sm text-gray-500 dark:text-gray-400">
+                      {{
+                        t("admin.settings.security.panelRateLimit.enabledHint")
+                      }}
+                    </p>
+                  </div>
+                  <Toggle v-model="panelRateLimitForm.enabled" />
+                </div>
+
+                <!-- Thresholds - Only show when enabled -->
+                <div
+                  v-if="panelRateLimitForm.enabled"
+                  class="space-y-4 border-t border-gray-100 pt-4 dark:border-dark-700"
+                >
+                  <!-- Global per-user RPM -->
+                  <div>
+                    <label
+                      class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                    >
+                      {{ t("admin.settings.security.panelRateLimit.userRpm") }}
+                    </label>
+                    <input
+                      v-model.number="panelRateLimitForm.user_rpm"
+                      type="number"
+                      min="0"
+                      max="100000"
+                      class="input w-32"
+                    />
+                    <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                      {{
+                        t("admin.settings.security.panelRateLimit.userRpmHint")
+                      }}
+                    </p>
+                  </div>
+
+                  <!-- Heavy per-user RPM -->
+                  <div>
+                    <label
+                      class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                    >
+                      {{ t("admin.settings.security.panelRateLimit.heavyRpm") }}
+                    </label>
+                    <input
+                      v-model.number="panelRateLimitForm.heavy_rpm"
+                      type="number"
+                      min="0"
+                      max="100000"
+                      class="input w-32"
+                    />
+                    <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                      {{
+                        t("admin.settings.security.panelRateLimit.heavyRpmHint")
+                      }}
+                    </p>
+                  </div>
+
+                  <!-- Public endpoint per-IP RPM -->
+                  <div>
+                    <label
+                      class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                    >
+                      {{
+                        t("admin.settings.security.panelRateLimit.publicIpRpm")
+                      }}
+                    </label>
+                    <input
+                      v-model.number="panelRateLimitForm.public_ip_rpm"
+                      type="number"
+                      min="0"
+                      max="100000"
+                      class="input w-32"
+                    />
+                    <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                      {{
+                        t(
+                          "admin.settings.security.panelRateLimit.publicIpRpmHint",
+                        )
+                      }}
+                    </p>
+                  </div>
+
+                  <!-- Exempt admins -->
+                  <div class="flex items-center justify-between">
+                    <div>
+                      <label
+                        class="font-medium text-gray-900 dark:text-white"
+                        >{{
+                          t(
+                            "admin.settings.security.panelRateLimit.exemptAdmin",
+                          )
+                        }}</label
+                      >
+                      <p class="text-sm text-gray-500 dark:text-gray-400">
+                        {{
+                          t(
+                            "admin.settings.security.panelRateLimit.exemptAdminHint",
+                          )
+                        }}
+                      </p>
+                    </div>
+                    <Toggle v-model="panelRateLimitForm.exempt_admin" />
+                  </div>
+
+                  <p class="text-xs text-gray-500 dark:text-gray-400">
+                    {{
+                      t(
+                        "admin.settings.security.panelRateLimit.propagationHint",
+                      )
+                    }}
+                  </p>
+                </div>
+
+                <!-- Save Button -->
+                <div
+                  class="flex justify-end border-t border-gray-100 pt-4 dark:border-dark-700"
+                >
+                  <button
+                    type="button"
+                    @click="savePanelRateLimitSettings"
+                    :disabled="panelRateLimitSaving"
+                    class="btn btn-primary btn-sm"
+                  >
+                    <svg
+                      v-if="panelRateLimitSaving"
+                      class="mr-1 h-4 w-4 animate-spin"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                    >
+                      <circle
+                        class="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        stroke-width="4"
+                      ></circle>
+                      <path
+                        class="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                      ></path>
+                    </svg>
+                    {{
+                      panelRateLimitSaving
+                        ? t("common.saving")
+                        : t("common.save")
+                    }}
+                  </button>
+                </div>
+              </template>
+            </div>
+          </div>
         </div>
         <!-- /Tab: Security — Admin API Key -->
 
@@ -7554,6 +7737,19 @@ const streamTimeoutForm = reactive({
   threshold_window_minutes: 10,
 });
 
+// Panel Rate Limit 状态
+// 默认值与后端 DefaultPanelRateLimitSettings 保持一致，
+// 让接口读取失败时页面展示的仍是真实生效的默认档位。
+const panelRateLimitLoading = ref(true);
+const panelRateLimitSaving = ref(false);
+const panelRateLimitForm = reactive({
+  enabled: true,
+  user_rpm: 240,
+  heavy_rpm: 60,
+  exempt_admin: true,
+  public_ip_rpm: 300,
+});
+
 // Rectifier 状态
 const rectifierLoading = ref(true);
 const rectifierSaving = ref(false);
@@ -9776,6 +9972,55 @@ async function saveStreamTimeoutSettings() {
   }
 }
 
+// Panel Rate Limit 方法
+// 清空数字输入时 v-model.number 得到的是空串，直接提交会被后端
+// ShouldBindJSON 挡成 "Invalid request body"（用户看不懂）。这里统一归一成
+// 非负整数，0 即"不限制"；上限仍交给后端校验，好让越界有明确报错。
+function panelRateLimitRpm(value: unknown): number {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) {
+    return 0;
+  }
+  return Math.trunc(n);
+}
+
+async function loadPanelRateLimitSettings() {
+  panelRateLimitLoading.value = true;
+  try {
+    const settings = await adminAPI.settings.getPanelRateLimitSettings();
+    Object.assign(panelRateLimitForm, settings);
+  } catch (_error: unknown) {
+    // Silent fail - settings will use defaults
+  } finally {
+    panelRateLimitLoading.value = false;
+  }
+}
+
+async function savePanelRateLimitSettings() {
+  panelRateLimitSaving.value = true;
+  try {
+    const updated = await adminAPI.settings.updatePanelRateLimitSettings({
+      enabled: panelRateLimitForm.enabled,
+      user_rpm: panelRateLimitRpm(panelRateLimitForm.user_rpm),
+      heavy_rpm: panelRateLimitRpm(panelRateLimitForm.heavy_rpm),
+      exempt_admin: panelRateLimitForm.exempt_admin,
+      public_ip_rpm: panelRateLimitRpm(panelRateLimitForm.public_ip_rpm),
+    });
+    // 后端会 clamp 取值，回写让管理员看到真正落库的档位
+    Object.assign(panelRateLimitForm, updated);
+    appStore.showSuccess(t("admin.settings.security.panelRateLimit.saved"));
+  } catch (error: unknown) {
+    appStore.showError(
+      extractApiErrorMessage(
+        error,
+        t("admin.settings.security.panelRateLimit.saveFailed"),
+      ),
+    );
+  } finally {
+    panelRateLimitSaving.value = false;
+  }
+}
+
 // Rectifier 方法
 async function loadRectifierSettings() {
   rectifierLoading.value = true;
@@ -10367,6 +10612,7 @@ onMounted(() => {
   loadStreamTimeoutSettings();
   loadRectifierSettings();
   loadBetaPolicySettings();
+  loadPanelRateLimitSettings();
   loadProviders();
 });
 

@@ -8355,6 +8355,30 @@ export default {
           invalid:
             "Invalid upstream allowlist. Use hosts, *.example.com wildcard hosts, IPs, or IP:port entries.",
         },
+        panelRateLimit: {
+          title: "Panel API Rate Limit",
+          description:
+            "Throttle authenticated panel endpoints so a single account cannot overwhelm the database with high-frequency aggregate queries. All thresholds are requests per minute; 0 means unlimited.",
+          enabled: "Enable panel rate limiting",
+          enabledHint:
+            "When disabled, panel endpoints are not throttled at all. Requests are allowed through if Redis is unavailable, so a rate limiter outage never takes the panel down.",
+          userRpm: "Global limit per user",
+          userRpmHint:
+            "Total authenticated panel requests a single account may make per minute. Counted by user ID, independent of the source IP, so reverse proxies and shared egress never affect each other. Default 240.",
+          heavyRpm: "Heavy-query limit per user",
+          heavyRpmHint:
+            "Per-minute limit for heavy SQL endpoints such as usage statistics and dashboard aggregates. Counted in addition to the global limit — one heavy request consumes both budgets — so keep this below the global limit. Default 60.",
+          publicIpRpm: "Public endpoint limit per IP",
+          publicIpRpmHint:
+            "Per-minute limit per IP for unauthenticated public endpoints (such as site settings), counted by the security client IP. Loopback, private and link-local addresses are skipped so an entire proxy chain is never collapsed into one bucket. Default 300.",
+          exemptAdmin: "Exempt administrators",
+          exemptAdminHint:
+            "Administrator accounts are not subject to the two per-user limits above.",
+          propagationHint:
+            "Takes effect immediately on this node after saving; with multiple nodes the config cache propagates within 60 seconds.",
+          saved: "Panel rate limit settings saved",
+          saveFailed: "Failed to save panel rate limit settings",
+        },
       },
       turnstile: {
         title: "Cloudflare Turnstile",

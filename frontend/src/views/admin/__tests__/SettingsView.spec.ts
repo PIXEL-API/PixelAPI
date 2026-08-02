@@ -14,6 +14,8 @@ const {
   getStreamTimeoutSettings,
   getRectifierSettings,
   getBetaPolicySettings,
+  getPanelRateLimitSettings,
+  updatePanelRateLimitSettings,
   getGroups,
   listProxies,
   getProviders,
@@ -34,6 +36,8 @@ const {
   getStreamTimeoutSettings: vi.fn(),
   getRectifierSettings: vi.fn(),
   getBetaPolicySettings: vi.fn(),
+  getPanelRateLimitSettings: vi.fn(),
+  updatePanelRateLimitSettings: vi.fn(),
   getGroups: vi.fn(),
   listProxies: vi.fn(),
   getProviders: vi.fn(),
@@ -60,6 +64,8 @@ vi.mock("@/api", () => ({
       getStreamTimeoutSettings,
       getRectifierSettings,
       getBetaPolicySettings,
+      getPanelRateLimitSettings,
+      updatePanelRateLimitSettings,
     },
     groups: {
       getAll: getGroups,
@@ -464,6 +470,8 @@ describe("admin SettingsView payment visible method controls", () => {
     getStreamTimeoutSettings.mockReset();
     getRectifierSettings.mockReset();
     getBetaPolicySettings.mockReset();
+    getPanelRateLimitSettings.mockReset();
+    updatePanelRateLimitSettings.mockReset();
     getGroups.mockReset();
     listProxies.mockReset();
     getProviders.mockReset();
@@ -514,6 +522,16 @@ describe("admin SettingsView payment visible method controls", () => {
     getBetaPolicySettings.mockResolvedValue({
       rules: [],
     });
+    getPanelRateLimitSettings.mockResolvedValue({
+      enabled: true,
+      user_rpm: 240,
+      heavy_rpm: 60,
+      exempt_admin: true,
+      public_ip_rpm: 300,
+    });
+    updatePanelRateLimitSettings.mockImplementation(
+      async (settings: unknown) => settings,
+    );
     getGroups.mockResolvedValue([]);
     listProxies.mockResolvedValue({
       items: [],
@@ -761,6 +779,8 @@ describe("admin SettingsView wechat connect controls", () => {
     getStreamTimeoutSettings.mockReset();
     getRectifierSettings.mockReset();
     getBetaPolicySettings.mockReset();
+    getPanelRateLimitSettings.mockReset();
+    updatePanelRateLimitSettings.mockReset();
     getGroups.mockReset();
     listProxies.mockReset();
     getProviders.mockReset();
@@ -814,6 +834,16 @@ describe("admin SettingsView wechat connect controls", () => {
     getBetaPolicySettings.mockResolvedValue({
       rules: [],
     });
+    getPanelRateLimitSettings.mockResolvedValue({
+      enabled: true,
+      user_rpm: 240,
+      heavy_rpm: 60,
+      exempt_admin: true,
+      public_ip_rpm: 300,
+    });
+    updatePanelRateLimitSettings.mockImplementation(
+      async (settings: unknown) => settings,
+    );
     getGroups.mockResolvedValue([]);
     listProxies.mockResolvedValue({
       items: [],
@@ -967,6 +997,84 @@ describe("admin SettingsView wechat connect controls", () => {
         oidc_connect_use_pkce: false,
         oidc_connect_validate_id_token: false,
       }),
+    );
+  });
+
+  function findPanelRateLimitCard(wrapper: ReturnType<typeof mountView>) {
+    const card = wrapper
+      .findAll(".card")
+      .find((node) =>
+        node.text().includes("admin.settings.security.panelRateLimit.title"),
+      );
+
+    expect(card).toBeDefined();
+    return card!;
+  }
+
+  it("loads panel rate limit thresholds into the security tab card", async () => {
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openSecurityTab(wrapper);
+
+    expect(getPanelRateLimitSettings).toHaveBeenCalledTimes(1);
+
+    const inputs = findPanelRateLimitCard(wrapper).findAll(
+      'input[type="number"]',
+    );
+
+    expect(inputs.map((node) => (node.element as HTMLInputElement).value)).toEqual(
+      ["240", "60", "300"],
+    );
+  });
+
+  it("saves panel rate limit settings through its dedicated endpoint", async () => {
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openSecurityTab(wrapper);
+
+    const card = findPanelRateLimitCard(wrapper);
+    const inputs = card.findAll('input[type="number"]');
+    await inputs[1]?.setValue("30");
+
+    const saveButton = card
+      .findAll("button")
+      .find((node) => node.text().includes("common.save"));
+    expect(saveButton).toBeDefined();
+    await saveButton?.trigger("click");
+    await flushPromises();
+
+    // 独立端点，绝不能顺带触发整页 saveSettings
+    expect(updateSettings).not.toHaveBeenCalled();
+    expect(updatePanelRateLimitSettings).toHaveBeenCalledTimes(1);
+    expect(updatePanelRateLimitSettings).toHaveBeenCalledWith({
+      enabled: true,
+      user_rpm: 240,
+      heavy_rpm: 30,
+      exempt_admin: true,
+      public_ip_rpm: 300,
+    });
+  });
+
+  it("normalizes a cleared threshold to 0 instead of posting an empty value", async () => {
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openSecurityTab(wrapper);
+
+    const card = findPanelRateLimitCard(wrapper);
+    const inputs = card.findAll('input[type="number"]');
+    await inputs[2]?.setValue("");
+
+    const saveButton = card
+      .findAll("button")
+      .find((node) => node.text().includes("common.save"));
+    await saveButton?.trigger("click");
+    await flushPromises();
+
+    expect(updatePanelRateLimitSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ public_ip_rpm: 0 }),
     );
   });
 });

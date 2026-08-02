@@ -1059,6 +1059,50 @@ export async function updateRectifierSettings(
   return data;
 }
 
+// ==================== Panel Rate Limit Settings ====================
+
+/**
+ * Panel API rate limit settings interface
+ *
+ * Authenticated panel endpoints are limited per user ID (independent of the
+ * client IP, so reverse proxies / shared egress never affect each other);
+ * public endpoints are limited per security client IP.
+ * A value of 0 disables that particular limit.
+ */
+export interface PanelRateLimitSettings {
+  enabled: boolean;
+  user_rpm: number;
+  heavy_rpm: number;
+  exempt_admin: boolean;
+  public_ip_rpm: number;
+}
+
+/**
+ * Get panel rate limit settings
+ * @returns Panel rate limit settings
+ */
+export async function getPanelRateLimitSettings(): Promise<PanelRateLimitSettings> {
+  const { data } = await apiClient.get<PanelRateLimitSettings>(
+    "/admin/settings/panel-rate-limit",
+  );
+  return data;
+}
+
+/**
+ * Update panel rate limit settings
+ * @param settings - Panel rate limit settings to update
+ * @returns Updated settings, normalized by the backend
+ */
+export async function updatePanelRateLimitSettings(
+  settings: PanelRateLimitSettings,
+): Promise<PanelRateLimitSettings> {
+  const { data } = await apiClient.put<PanelRateLimitSettings>(
+    "/admin/settings/panel-rate-limit",
+    settings,
+  );
+  return data;
+}
+
 // ==================== OpenAI Fast Policy Settings ====================
 
 /**
@@ -1207,6 +1251,8 @@ export const settingsAPI = {
   updateRectifierSettings,
   getBetaPolicySettings,
   updateBetaPolicySettings,
+  getPanelRateLimitSettings,
+  updatePanelRateLimitSettings,
   getWebSearchEmulationConfig,
   updateWebSearchEmulationConfig,
   testWebSearchEmulation,

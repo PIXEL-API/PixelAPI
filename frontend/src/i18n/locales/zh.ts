@@ -8163,6 +8163,29 @@ export default {
           invalid:
             "上游白名单格式不正确，请填写域名、*.example.com、IP 或 IP:端口。",
         },
+        panelRateLimit: {
+          title: "面板 API 限流",
+          description:
+            "限制登录后面板接口的调用频率，防止单个账号高频刷重聚合查询打爆数据库。所有阈值单位为「次/分钟」，填 0 表示不限制。",
+          enabled: "启用面板限流",
+          enabledHint:
+            "关闭后面板接口将完全不限流。Redis 不可用时自动放行，不会因限流组件故障导致面板不可用。",
+          userRpm: "每用户全局上限",
+          userRpmHint:
+            "单个账号每分钟可调用的登录后面板接口总数。按用户 ID 计数，与来源 IP 无关，反向代理或共享出口不会互相误伤。默认 240。",
+          heavyRpm: "每用户重查询上限",
+          heavyRpmHint:
+            "用量统计、仪表盘聚合等重 SQL 接口的每分钟上限。与全局上限叠加计数：一次重查询同时消耗两档额度，因此该值应低于全局上限。默认 60。",
+          publicIpRpm: "公开接口每 IP 上限",
+          publicIpRpmHint:
+            "免登录公开接口（如站点设置）每分钟每 IP 的上限，按安全客户端 IP 计数。回环、内网与链路本地地址一律跳过，避免把整条反代链路合并成同一个桶。默认 300。",
+          exemptAdmin: "管理员豁免",
+          exemptAdminHint: "管理员账号不受上面两档按用户限流的约束。",
+          propagationHint:
+            "保存后当前节点立即生效；多节点部署因配置缓存最迟 60 秒内全部生效。",
+          saved: "面板限流设置保存成功",
+          saveFailed: "保存面板限流设置失败",
+        },
       },
       turnstile: {
         title: "Cloudflare Turnstile",
