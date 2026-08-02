@@ -288,8 +288,12 @@ func TestUsageLogRepositoryCreateBestEffort_BatchPathDuplicateRequestID(t *testi
 	}, 3*time.Second, 20*time.Millisecond)
 }
 
-func TestUsageLogRepositoryCreateBestEffort_QueueFullReturnsDropped(t *testing.T) {
-	ctx := context.Background()
+// 队列满时不再立刻丢弃（那会造成「已扣费但无 usage_log」的永久对账缺口），
+// 而是背压等待批处理器排空，退出条件交给调用方 ctx 的期限约束
+// ——生产上是 writeUsageLogBestEffort 的 detachedBillingContext 15s 窗口。
+func TestUsageLogRepositoryCreateBestEffort_QueueFullBlocksUntilContextDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
 	client := testEntClient(t)
 	repo := newUsageLogRepositoryWithSQL(client, integrationDB)
 	repo.bestEffortBatchCh = make(chan usageLogBestEffortRequest, 1)
@@ -299,6 +303,7 @@ func TestUsageLogRepositoryCreateBestEffort_QueueFullReturnsDropped(t *testing.T
 	apiKey := mustCreateApiKey(t, client, &service.APIKey{UserID: user.ID, Key: "sk-usage-best-effort-full-" + uuid.NewString(), Name: "k"})
 	account := mustCreateAccount(t, client, &service.Account{Name: "acc-usage-best-effort-full-" + uuid.NewString()})
 
+	start := time.Now()
 	err := repo.CreateBestEffort(ctx, &service.UsageLog{
 		UserID:       user.ID,
 		APIKeyID:     apiKey.ID,
@@ -314,6 +319,8 @@ func TestUsageLogRepositoryCreateBestEffort_QueueFullReturnsDropped(t *testing.T
 
 	require.Error(t, err)
 	require.True(t, service.IsUsageLogCreateDropped(err))
+	require.GreaterOrEqual(t, time.Since(start), 200*time.Millisecond,
+		"队列满时必须背压等待到 ctx 期限，而不是立刻丢弃")
 }
 
 func TestUsageLogRepositoryCreate_BatchPathCanceledContextMarksNotPersisted(t *testing.T) {
@@ -345,8 +352,10 @@ func TestUsageLogRepositoryCreate_BatchPathCanceledContextMarksNotPersisted(t *t
 	require.True(t, service.IsUsageLogCreateNotPersisted(err))
 }
 
-func TestUsageLogRepositoryCreate_BatchPathQueueFullMarksNotPersisted(t *testing.T) {
-	ctx := context.Background()
+// 同 best-effort 路径：批量入队队列满时背压等待，退出条件交给 ctx 期限。
+func TestUsageLogRepositoryCreate_BatchPathQueueFullBlocksUntilContextDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
 	client := testEntClient(t)
 	repo := newUsageLogRepositoryWithSQL(client, integrationDB)
 	repo.createBatchCh = make(chan usageLogCreateRequest, 1)
@@ -356,6 +365,7 @@ func TestUsageLogRepositoryCreate_BatchPathQueueFullMarksNotPersisted(t *testing
 	apiKey := mustCreateApiKey(t, client, &service.APIKey{UserID: user.ID, Key: "sk-usage-create-full-" + uuid.NewString(), Name: "k"})
 	account := mustCreateAccount(t, client, &service.Account{Name: "acc-usage-create-full-" + uuid.NewString()})
 
+	start := time.Now()
 	inserted, err := repo.Create(ctx, &service.UsageLog{
 		UserID:       user.ID,
 		APIKeyID:     apiKey.ID,
@@ -372,6 +382,8 @@ func TestUsageLogRepositoryCreate_BatchPathQueueFullMarksNotPersisted(t *testing
 	require.False(t, inserted)
 	require.Error(t, err)
 	require.True(t, service.IsUsageLogCreateNotPersisted(err))
+	require.GreaterOrEqual(t, time.Since(start), 200*time.Millisecond,
+		"队列满时必须背压等待到 ctx 期限，而不是立刻放弃")
 }
 
 func TestUsageLogRepositoryCreate_BatchPathCanceledAfterQueueMarksNotPersisted(t *testing.T) {

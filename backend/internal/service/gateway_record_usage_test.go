@@ -389,7 +389,13 @@ func TestGatewayServiceRecordUsage_GeneratesRequestIDWhenAllSourcesMissing(t *te
 	require.Equal(t, billingRepo.lastCmd.RequestID, usageRepo.lastLog.RequestID)
 }
 
-func TestGatewayServiceRecordUsage_DroppedUsageLogDoesNotSyncFallback(t *testing.T) {
+// TestGatewayServiceRecordUsage_DroppedUsageLogFallsBackToSyncWrite
+// best-effort 队列返回 dropped 时必须同步兜底写入。
+//
+// 这条路径上「已扣费但没有 usage_log」是永久对账缺口，不能靠下一次请求补回来。
+// 重复写入是安全的：所有插入路径都带
+// ON CONFLICT (request_id, api_key_id) DO NOTHING（唯一索引见迁移 027）。
+func TestGatewayServiceRecordUsage_DroppedUsageLogFallsBackToSyncWrite(t *testing.T) {
 	usageRepo := &openAIRecordUsageBestEffortLogRepoStub{
 		bestEffortErr: MarkUsageLogCreateDropped(errors.New("usage log best-effort queue full")),
 	}
@@ -413,7 +419,7 @@ func TestGatewayServiceRecordUsage_DroppedUsageLogDoesNotSyncFallback(t *testing
 
 	require.NoError(t, err)
 	require.Equal(t, 1, usageRepo.bestEffortCalls)
-	require.Equal(t, 0, usageRepo.createCalls)
+	require.Equal(t, 1, usageRepo.createCalls)
 }
 
 func TestGatewayServiceRecordUsage_BillingErrorSkipsUsageLogWrite(t *testing.T) {

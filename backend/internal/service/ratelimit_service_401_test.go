@@ -165,7 +165,8 @@ func TestRateLimitService_HandleUpstreamError_OAuth401InvalidatorError(t *testin
 	require.True(t, shouldDisable)
 	require.Equal(t, 0, repo.setErrorCalls)
 	require.Equal(t, 1, repo.tempCalls)
-	require.Equal(t, 1, repo.updateCredentialsCalls)
+	// 401 分支不再回写 credentials，见下面的 OAuth401DoesNotRewriteCredentials。
+	require.Equal(t, 0, repo.updateCredentialsCalls)
 	require.Len(t, invalidator.accounts, 1)
 }
 
@@ -187,7 +188,18 @@ func TestRateLimitService_HandleUpstreamError_NonOAuth401(t *testing.T) {
 	require.Empty(t, invalidator.accounts)
 }
 
-func TestRateLimitService_HandleUpstreamError_OAuth401UsesCredentialsUpdater(t *testing.T) {
+// TestRateLimitService_HandleUpstreamError_OAuth401DoesNotRewriteCredentials
+// OAuth 401 分支绝不能回写 credentials JSONB。
+//
+// 该分支拿到的 account 是网关 SelectAccount 时刻的请求起始快照。原实现会往里塞
+// expires_at 再经 persistAccountCredentials → UpdateCredentials 整列覆盖，
+// 若期间另一 worker 已经轮换过 refresh_token，就会把 DB 里的新值回滚成旧值；
+// 下一轮刷新拿旧 token 换到 invalid_grant，tryRecoverFromRefreshRace 重读 DB
+// 发现 currentRT == usedRT 直接放弃，账号被误判永久失效并禁用。
+//
+// 强制刷新的语义由冷却结束后 token_provider 的 NeedsRefresh 承担，这里只保留
+// 缓存失效 + 临时不可调度。
+func TestRateLimitService_HandleUpstreamError_OAuth401DoesNotRewriteCredentials(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{}
 	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
 	account := &Account{
@@ -195,15 +207,18 @@ func TestRateLimitService_HandleUpstreamError_OAuth401UsesCredentialsUpdater(t *
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
 		Credentials: map[string]any{
-			"access_token": "token",
+			"access_token":  "token",
+			"refresh_token": "fresh-rotated-token",
 		},
 	}
 
 	shouldDisable := service.HandleUpstreamError(context.Background(), account, 401, http.Header{}, []byte("unauthorized"))
 
 	require.True(t, shouldDisable)
-	require.Equal(t, 1, repo.updateCredentialsCalls)
-	require.NotEmpty(t, repo.lastCredentials["expires_at"])
+	require.Equal(t, 0, repo.updateCredentialsCalls)
+	require.Nil(t, repo.lastCredentials)
+	// 账号仍必须被挡在调度之外，等冷却结束后走带锁的正路刷新。
+	require.Equal(t, 1, repo.tempCalls)
 }
 
 func TestRateLimitService_HandleUpstreamError_Anthropic7dOiOnlyMarksFableModel(t *testing.T) {

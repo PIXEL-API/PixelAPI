@@ -329,12 +329,16 @@ func (r *usageLogRepository) CreateBestEffort(ctx context.Context, log *service.
 		}
 	}
 
+	// 队列满时阻塞等待批处理器排空，而不是立刻丢弃：
+	// 唯一调用方 writeUsageLogBestEffort 传入的是 detachedBillingContext
+	// （context.WithoutCancel + postUsageBillingTimeout），
+	// 背压窗口天然有界，也不会随客户端断连而塌缩。
+	// 原先的 default 分支会在高并发下直接终态丢弃，造成「已扣费但无 usage_log」
+	// 的永久对账缺口。
 	select {
 	case r.bestEffortBatchCh <- req:
 	case <-ctx.Done():
 		return service.MarkUsageLogCreateDropped(ctx.Err())
-	default:
-		return service.MarkUsageLogCreateDropped(errors.New("usage log best-effort queue full"))
 	}
 
 	select {
@@ -452,12 +456,12 @@ func (r *usageLogRepository) createBatched(ctx context.Context, log *service.Usa
 		resultCh: make(chan usageLogCreateResult, 1),
 	}
 
+	// 同 CreateBestEffort：队列满时阻塞等待而非立刻放弃，
+	// 退出条件交给调用方 ctx 的期限约束。
 	select {
 	case r.createBatchCh <- req:
 	case <-ctx.Done():
 		return false, service.MarkUsageLogCreateNotPersisted(ctx.Err())
-	default:
-		return false, service.MarkUsageLogCreateNotPersisted(errors.New("usage log create batch queue full"))
 	}
 
 	select {
@@ -479,7 +483,9 @@ func (r *usageLogRepository) createBatched(ctx context.Context, log *service.Usa
 }
 
 func (r *usageLogRepository) ensureCreateBatcher() {
-	if r == nil || r.db == nil || r.createBatchCh != nil {
+	// 不要在 Once 外读 r.createBatchCh 做快速路径：该读与 Once 内部的写构成数据竞争。
+	// sync.Once 本身已保证只初始化一次，且 Do 返回后写入对本 goroutine 可见。
+	if r == nil || r.db == nil {
 		return
 	}
 	r.createBatchOnce.Do(func() {
@@ -489,7 +495,8 @@ func (r *usageLogRepository) ensureCreateBatcher() {
 }
 
 func (r *usageLogRepository) ensureBestEffortBatcher() {
-	if r == nil || r.db == nil || r.bestEffortBatchCh != nil {
+	// 同 ensureCreateBatcher：去掉 Once 外的 channel 快速路径读，消除数据竞争。
+	if r == nil || r.db == nil {
 		return
 	}
 	r.bestEffortBatchOnce.Do(func() {

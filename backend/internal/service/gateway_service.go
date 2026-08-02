@@ -10016,12 +10016,23 @@ func writeUsageLogBestEffort(ctx context.Context, repo UsageLogRepository, usage
 	if writer, ok := repo.(usageLogBestEffortWriter); ok {
 		if err := writer.CreateBestEffort(usageCtx, usageLog); err != nil {
 			logger.LegacyPrintf(logKey, "Create usage log failed: %v", err)
-			if IsUsageLogCreateDropped(err) {
-				return
+			// dropped 不再早退：这条路径上「已扣费但无 usage_log」是永久对账缺口，必须兜底写入。
+			//
+			// 注意 ctx 的选择：入队去掉 default 分支后，dropped 只会在 usageCtx 到期时产生，
+			// 此时继续用 usageCtx 调 Create 会立刻因 ctx.Done() 失败，等于没兜底，
+			// 所以必须另开一个 detached 窗口。
+			//
+			// 重复写入是安全的：等待结果超时的那种 dropped，请求其实已经在队列里，
+			// 批处理器随后仍会写一次；所有插入路径都带
+			// ON CONFLICT (request_id, api_key_id) DO NOTHING（唯一索引见迁移 027）。
+			fallbackCtx, fallbackCancel := usageCtx, context.CancelFunc(func() {})
+			if fallbackCtx.Err() != nil {
+				fallbackCtx, fallbackCancel = detachedBillingContext(context.Background())
 			}
-			if _, syncErr := repo.Create(usageCtx, usageLog); syncErr != nil {
+			if _, syncErr := repo.Create(fallbackCtx, usageLog); syncErr != nil {
 				logger.LegacyPrintf(logKey, "Create usage log sync fallback failed: %v", syncErr)
 			}
+			fallbackCancel()
 		}
 		return
 	}
