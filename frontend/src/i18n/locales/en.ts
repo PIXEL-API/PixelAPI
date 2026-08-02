@@ -5794,6 +5794,47 @@ export default {
       failedToCreate: "Failed to create account",
       failedToUpdate: "Failed to update account",
       pleaseSelectStatus: "Please select a valid account status",
+      placementGuard: {
+        groupsLocked:
+          "This account is shared externally; its groups are maintained by the placement and cannot be edited here",
+        convertTitle: "Convert out of the shared placement first",
+        convertMessage:
+          "This account is shared externally. {fields} stay locked while it is placed. You can convert it back to private and this edit will be replayed automatically. Once private, marketplace consumers can no longer use it.",
+        convertConfirm: "Convert to private and continue",
+        convertFailed: "Failed to convert the account to private",
+        forceTitle: "Confirm editing a shared account",
+        forceMessage:
+          "This account is shared externally and this edit touches {fields}, which affects consumers currently using it.",
+        bulkForceMessage:
+          "This bulk edit includes accounts that are shared externally and touches {fields}, which affects consumers currently using them.",
+        bulkConversionBlocked:
+          "Account #{accountId} is shared externally and {fields} stay locked while it is placed, so bulk edit cannot apply it. Open that account individually and convert it to private first.",
+        forceScopeHint:
+          "Sessions already in flight keep the old configuration; the change applies only to sessions started afterwards.",
+        reasonLabel: "Reason",
+        reasonPlaceholder: "e.g. upstream account was banned, rotating credentials",
+        reasonHint: "The reason is stored in the audit log together with a before/after snapshot",
+        forceConfirm: "Apply change",
+        fields: {
+          credentials: "credentials",
+          extra: "extra settings",
+          proxy_id: "proxy",
+          concurrency: "concurrency",
+          rate_multiplier: "billing multiplier",
+          load_factor: "load factor",
+          status: "account status",
+          schedulable: "scheduling toggle",
+          expires_at: "expiry",
+          auto_pause_on_expired: "auto pause on expiry",
+          group_ids: "groups",
+          share_policy_id: "share policy",
+          type: "account type",
+          owner_user_id: "owner",
+          platform: "platform",
+          account_level: "account level",
+          share_mode: "share mode"
+        }
+      },
       mixedChannelWarningTitle: "Mixed Channel Warning",
       mixedChannelWarning:
         'Warning: Group "{groupName}" contains both {currentPlatform} and {otherPlatform} accounts. Mixing different channels may cause thinking block signature validation issues, which will fallback to non-thinking mode. Are you sure you want to continue?',

@@ -5740,6 +5740,45 @@ export default {
       failedToCreate: "创建账号失败",
       failedToUpdate: "更新账号失败",
       pleaseSelectStatus: "请选择有效的账号状态",
+      placementGuard: {
+        groupsLocked: "该账号正在共享投放中，分组由投放自动维护，无法手动调整",
+        convertTitle: "需要先转出共享投放",
+        convertMessage:
+          "该账号正在共享投放中，{fields} 在投放期间被锁定，无法直接修改。可以先把账号转为私有，再自动重放这次修改。转为私有后，广场上的消费者将无法继续使用该账号。",
+        convertConfirm: "转为私有并继续",
+        convertFailed: "转为私有失败",
+        forceTitle: "确认修改投放中的账号",
+        forceMessage:
+          "该账号正在共享投放中，本次修改涉及 {fields}，会影响正在使用它的消费者。",
+        bulkForceMessage:
+          "本次批量修改中包含正在共享投放的账号，涉及 {fields}，会影响正在使用这些账号的消费者。",
+        bulkConversionBlocked:
+          "账号 #{accountId} 正在共享投放中，{fields} 在投放期间被锁定，批量修改无法处理。请在该账号的单独编辑中先转为私有。",
+        forceScopeHint: "已在进行中的会话继续使用旧配置，修改仅对之后新建的会话生效。",
+        reasonLabel: "修改原因",
+        reasonPlaceholder: "例如：上游账号被封，更换凭证",
+        reasonHint: "原因会连同变更前后快照一起写入审计记录",
+        forceConfirm: "确认修改",
+        fields: {
+          credentials: "账号凭证",
+          extra: "扩展配置",
+          proxy_id: "代理",
+          concurrency: "并发数",
+          rate_multiplier: "计费倍率",
+          load_factor: "负载因子",
+          status: "账号状态",
+          schedulable: "调度开关",
+          expires_at: "过期时间",
+          auto_pause_on_expired: "过期自动暂停",
+          group_ids: "分组",
+          share_policy_id: "共享策略",
+          type: "账号类型",
+          owner_user_id: "归属用户",
+          platform: "平台",
+          account_level: "账号等级",
+          share_mode: "共享模式"
+        }
+      },
       mixedChannelWarningTitle: "混合渠道警告",
       mixedChannelWarning:
         '警告：分组 "{groupName}" 中同时包含 {currentPlatform} 和 {otherPlatform} 账号。混合使用不同渠道可能导致 thinking block 签名验证问题，会自动回退到非 thinking 模式。确定要继续吗？',

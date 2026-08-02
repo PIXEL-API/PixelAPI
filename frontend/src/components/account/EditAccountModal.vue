@@ -2308,6 +2308,8 @@
         :groups="groups"
         :platform="account?.platform"
         :mixed-scheduling="mixedScheduling"
+        :disabled="groupSelectionLocked"
+        :disabled-hint="t('admin.accounts.placementGuard.groupsLocked')"
         data-tour="account-form-groups"
       />
 
@@ -2362,6 +2364,63 @@
     @confirm="handleMixedChannelConfirm"
     @cancel="handleMixedChannelCancel"
   />
+
+  <!-- 投放中账号：必须先转出投放才能改的字段 -->
+  <ConfirmDialog
+    :show="showPlacementConvertDialog"
+    :title="t('admin.accounts.placementGuard.convertTitle')"
+    :message="t('admin.accounts.placementGuard.convertMessage', { fields: placementGuardFieldLabels })"
+    :confirm-text="t('admin.accounts.placementGuard.convertConfirm')"
+    :cancel-text="t('common.cancel')"
+    :danger="true"
+    @confirm="handlePlacementConvertConfirm"
+    @cancel="clearPlacementGuardDialogs"
+  />
+
+  <!-- 投放中账号：可以改但需要理由与二次确认的字段 -->
+  <BaseDialog
+    :show="showPlacementForceDialog"
+    :title="t('admin.accounts.placementGuard.forceTitle')"
+    width="normal"
+    @close="clearPlacementGuardDialogs"
+  >
+    <div class="space-y-4">
+      <p class="text-sm text-gray-600 dark:text-dark-300">
+        {{ t('admin.accounts.placementGuard.forceMessage', { fields: placementGuardFieldLabels }) }}
+      </p>
+      <p class="text-sm text-amber-600 dark:text-amber-400">
+        {{ t('admin.accounts.placementGuard.forceScopeHint') }}
+      </p>
+      <div>
+        <label class="input-label" for="placement-force-reason">
+          {{ t('admin.accounts.placementGuard.reasonLabel') }}
+        </label>
+        <textarea
+          id="placement-force-reason"
+          v-model="placementForceReason"
+          rows="3"
+          class="input"
+          :placeholder="t('admin.accounts.placementGuard.reasonPlaceholder')"
+        ></textarea>
+        <p class="input-hint mt-1">{{ t('admin.accounts.placementGuard.reasonHint') }}</p>
+      </div>
+    </div>
+    <template #footer>
+      <div class="flex justify-end gap-3">
+        <button type="button" class="btn btn-secondary" @click="clearPlacementGuardDialogs">
+          {{ t('common.cancel') }}
+        </button>
+        <button
+          type="button"
+          class="btn btn-danger"
+          :disabled="placementForceConfirmDisabled || submitting"
+          @click="handlePlacementForceConfirm"
+        >
+          {{ t('admin.accounts.placementGuard.forceConfirm') }}
+        </button>
+      </div>
+    </template>
+  </BaseDialog>
 </template>
 
 <script setup lang="ts">
@@ -2938,6 +2997,60 @@ const normalizePoolModeRetryCount = (value: number) => {
   return normalized
 }
 
+// ---------------------------------------------------------------------------
+// 投放守卫（仅管理端）
+//
+// 账号一旦投放进广场公共号池或房间，后端会把变更分成两类处置：
+//   - owner/platform/account_level/share_mode：数据库触发器硬锁，强制确认也没用，
+//     必须先转出投放 -> OWNED_ACCOUNT_PLACEMENT_CONVERSION_REQUIRED
+//   - 凭证/代理/降并发等：可以改，但要管理员填理由并二次确认，事务内落审计
+//     -> ACCOUNT_MUTATION_FORCE_REQUIRED
+//
+// 状态必须声明在 syncFormFromAccount 之前：那个函数会被 immediate 的 watch 在
+// setup 期同步调用，引用尚未初始化的 const 会直接抛 TDZ。
+// ---------------------------------------------------------------------------
+const PLACEMENT_TARGETS_IN_USE: readonly string[] = ['public_pool', 'room']
+
+const accountPlacementTarget = computed(() => {
+  const target = props.account?.external_placement?.target
+  return typeof target === 'string' ? target.trim().toLowerCase() : ''
+})
+
+const isAccountPlaced = computed(() => PLACEMENT_TARGETS_IN_USE.includes(accountPlacementTarget.value))
+
+// 投放中账号的分组由投放维护（公共池组 / 房间模式组），后端会忽略管理端传入的
+// group_ids。这里把选择器一并置灰，避免"点得动但不生效"的沉默失败。
+const groupSelectionLocked = computed(() => !isUserScope.value && isAccountPlaced.value)
+
+const showPlacementForceDialog = ref(false)
+const placementForceReason = ref('')
+const placementGuardFields = ref<string[]>([])
+const placementForceAction = ref<((reason: string) => Promise<void>) | null>(null)
+
+const showPlacementConvertDialog = ref(false)
+const placementConvertAction = ref<(() => Promise<void>) | null>(null)
+
+const placementGuardFieldLabels = computed(() =>
+  placementGuardFields.value
+    .map((field) => {
+      const key = `admin.accounts.placementGuard.fields.${field}`
+      const label = t(key)
+      return label === key ? field : label
+    })
+    .join('、')
+)
+
+const placementForceConfirmDisabled = computed(() => placementForceReason.value.trim().length === 0)
+
+const clearPlacementGuardDialogs = () => {
+  showPlacementForceDialog.value = false
+  showPlacementConvertDialog.value = false
+  placementForceReason.value = ''
+  placementGuardFields.value = []
+  placementForceAction.value = null
+  placementConvertAction.value = null
+}
+
 const syncFormFromAccount = (newAccount: Account | null) => {
   if (!newAccount) {
     return
@@ -2951,6 +3064,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   mixedChannelWarningDetails.value = null
   mixedChannelWarningRawMessage.value = ''
   mixedChannelWarningAction.value = null
+  clearPlacementGuardDialogs()
   form.name = newAccount.name
   form.notes = newAccount.notes || ''
   form.account_level = newAccount.platform === 'openai' ? (newAccount.account_level || 'unknown') : 'unknown'
@@ -3691,6 +3805,88 @@ const openMixedChannelDialog = (opts: {
   showMixedChannelWarning.value = true
 }
 
+const parsePlacementGuardFields = (metadata: unknown): string[] => {
+  if (!metadata || typeof metadata !== 'object') return []
+  const raw = (metadata as Record<string, unknown>).changed_fields
+  if (typeof raw !== 'string') return []
+  return raw.split(',').map((field) => field.trim()).filter(Boolean)
+}
+
+const handlePlacementForceConfirm = async () => {
+  const action = placementForceAction.value
+  const reason = placementForceReason.value.trim()
+  if (!action || !reason) return
+  clearPlacementGuardDialogs()
+  await action(reason)
+}
+
+const handlePlacementConvertConfirm = async () => {
+  const action = placementConvertAction.value
+  if (!action) return
+  clearPlacementGuardDialogs()
+  await action()
+}
+
+// 转私有之后重放本次编辑。
+//
+// 重放时必须丢掉 group_ids：转换事务已经把账号的分组重置成了所有者私有分组，
+// 而弹窗里的表单快照还停留在投放期间的公共池分组。原样重放会把刚设好的私有
+// 分组又冲回公共池分组，等于转换白做。
+const convertPlacementToPrivateAndRetry = async (
+  accountID: number,
+  updatePayload: Record<string, unknown>
+) => {
+  const requestID = globalThis.crypto?.randomUUID?.()
+  if (!requestID) {
+    appStore.showError(t('userAccounts.externalPlacement.uuidUnavailable'))
+    return
+  }
+  submitting.value = true
+  try {
+    await adminAPI.accounts.convertExternalPlacement(accountID, {
+      target: 'private',
+      idempotency_key: `admin-placement-${accountID}-${requestID}`
+    })
+  } catch (error) {
+    appStore.showError(
+      extractApiErrorMessage(error, t('admin.accounts.placementGuard.convertFailed'))
+    )
+    return
+  } finally {
+    submitting.value = false
+  }
+  const replayPayload = { ...updatePayload }
+  delete replayPayload.group_ids
+  await submitUpdateAccount(accountID, replayPayload)
+}
+
+// 不要凭空写入与"这个键不存在"等价的 extra 键。
+//
+// 弹窗每次保存都会按当前开关重建 extra，其中一部分键是无条件写的：例如 Grok 账号
+// 的 grok_client_tool_cache、OpenAI OAuth 的 websockets 模式。账号原本没有这个键
+// 时，写一个 false/'' 进去在行为上毫无区别，但在后端的 before/after diff 里就是
+// 一处货真价实的 extra 变更——于是"什么都没改就点保存"会被判成敏感变更，投放中的
+// 账号还会因此要求填写强制修改理由。
+//
+// 只清理"新增且取值等价于缺省"的键：已经存在的键即便被改成 false 也照常提交，
+// 那是管理员真的关掉了某个开关。
+const NO_OP_EXTRA_ADDITION_VALUES = new Set<unknown>([false, '', null, undefined])
+
+const dropNoOpExtraAdditions = (payload: Record<string, unknown>) => {
+  const extra = payload.extra
+  if (!extra || typeof extra !== 'object' || Array.isArray(extra)) return payload
+  const storedExtra = (props.account?.extra as Record<string, unknown> | undefined) ?? {}
+  const nextExtra: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(extra as Record<string, unknown>)) {
+    const isNewKey = !Object.prototype.hasOwnProperty.call(storedExtra, key)
+    if (isNewKey && NO_OP_EXTRA_ADDITION_VALUES.has(value)) {
+      continue
+    }
+    nextExtra[key] = value
+  }
+  return { ...payload, extra: nextExtra }
+}
+
 const withAntigravityConfirmFlag = (payload: Record<string, unknown>) => {
   if (needsMixedChannelCheck() && antigravityMixedChannelConfirmed.value) {
     return {
@@ -3747,6 +3943,7 @@ const parseDateTimeLocal = parseDateTimeLocalInput
 const handleClose = () => {
   antigravityMixedChannelConfirmed.value = false
   clearMixedChannelDialog()
+  clearPlacementGuardDialogs()
   emit('close')
 }
 
@@ -3807,7 +4004,9 @@ const submitUpdateAccount = async (accountID: number, updatePayload: Record<stri
 
   submitting.value = true
   try {
-    const payload = sanitizeUpdatePayload(withAntigravityConfirmFlag(updatePayload))
+    const payload = dropNoOpExtraAdditions(
+      sanitizeUpdatePayload(withAntigravityConfirmFlag(updatePayload))
+    )
     let updatedAccount = isUserScope.value
       ? await accountsAPI.update(accountID, payload as UpdateAccountRequest)
       : await adminAPI.accounts.update(accountID, payload)
@@ -3858,6 +4057,29 @@ const submitUpdateAccount = async (accountID: number, updatePayload: Record<stri
           await submitUpdateAccount(accountID, updatePayload)
         }
       })
+      return
+    }
+    const reasonCode = typeof error?.reason === 'string' ? error.reason : ''
+    if (!isUserScope.value && reasonCode === 'ACCOUNT_MUTATION_FORCE_REQUIRED') {
+      placementGuardFields.value = parsePlacementGuardFields(error?.metadata)
+      placementForceReason.value = ''
+      placementForceAction.value = async (reason: string) => {
+        await submitUpdateAccount(accountID, {
+          ...updatePayload,
+          force_active_edit: true,
+          confirmed: true,
+          reason
+        })
+      }
+      showPlacementForceDialog.value = true
+      return
+    }
+    if (!isUserScope.value && reasonCode === 'OWNED_ACCOUNT_PLACEMENT_CONVERSION_REQUIRED') {
+      placementGuardFields.value = parsePlacementGuardFields(error?.metadata)
+      placementConvertAction.value = async () => {
+        await convertPlacementToPrivateAndRetry(accountID, updatePayload)
+      }
+      showPlacementConvertDialog.value = true
       return
     }
     appStore.showError(error.message || t('admin.accounts.failedToUpdate'))

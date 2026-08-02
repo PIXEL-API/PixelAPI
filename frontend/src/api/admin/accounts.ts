@@ -508,6 +508,42 @@ export async function setSchedulable(id: number, schedulable: boolean): Promise<
   return data
 }
 
+export type AccountExternalPlacementTargetInput = 'private' | 'public_pool'
+
+export interface ConvertExternalPlacementResult {
+  account_id: number
+  current?: {
+    target: string
+    room_id?: number | null
+    state: string
+    version: number
+  } | null
+}
+
+/**
+ * 代账号所有者转换外部投放（广场公共池 <-> 私有）。
+ *
+ * owner/platform/account_level/share_mode 在投放期间被数据库锁死，强制确认也改不了，
+ * 只能先转出投放。管理端编辑弹窗遇到 OWNED_ACCOUNT_PLACEMENT_CONVERSION_REQUIRED
+ * 时用这个接口提供"转为私有并继续"。
+ *
+ * @param id - Account ID
+ * @param payload - 目标投放位置与幂等键
+ */
+export async function convertExternalPlacement(
+  id: number,
+  payload: {
+    target: AccountExternalPlacementTargetInput
+    idempotency_key: string
+  }
+): Promise<ConvertExternalPlacementResult> {
+  const { data } = await apiClient.post<ConvertExternalPlacementResult>(
+    `/admin/accounts/${id}/external-placement`,
+    payload
+  )
+  return data
+}
+
 /**
  * Get available models for an account
  * @param id - Account ID
@@ -832,6 +868,7 @@ export const accountsAPI = {
   getTempUnschedulableStatus,
   resetTempUnschedulable,
   setSchedulable,
+  convertExternalPlacement,
   getAvailableModels,
   generateAuthUrl,
   exchangeCode,

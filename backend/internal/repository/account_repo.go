@@ -790,6 +790,24 @@ type accountMutationLockedTarget struct {
 	before  *service.Account
 	groups  []int64
 	diff    service.AccountMutationDiff
+	impact  service.AccountPlacementImpact
+}
+
+// accountMutationPlacementBinding 是「投放进广场公共号池」的账号。
+//
+// 房间账号通过 account_share_room_accounts 产生 room binding，天然进得了守卫；
+// 公共池账号没有任何 listing，此前完全不在守卫覆盖范围内——这正是当初要在
+// service 层另立一道粗糙前置检查的原因。
+//
+// 这里刻意不做 SELECT ... FOR UPDATE：守卫已经对 accounts 行加了行锁，而
+// ConvertExternalPlacement 的每条转换路径都会在同一事务里 UPDATE accounts
+// （写 share_mode/share_status），因此账号行锁已经把我们和并发的投放转换串行化了。
+// 再对 account_external_placements 加锁只会引入新的加锁顺序，徒增死锁面。
+// 并发检测则由既有的 ExpectedUpdatedAt 乐观校验兜底：转换必然推进 accounts.updated_at。
+type accountMutationPlacementBinding struct {
+	accountID     int64
+	placementType string
+	version       int64
 }
 
 func (r *accountRepository) WithAccountMutationGuard(
@@ -856,6 +874,7 @@ func (r *accountRepository) WithAccountMutationGuard(
 
 	lockedTargets := make(map[int64]*accountMutationLockedTarget, len(ids))
 	sensitiveIDs := make([]int64, 0, len(ids))
+	placementForceIDs := make([]int64, 0, len(ids))
 	for _, entity := range lockedEntities {
 		target := targets[entity.ID]
 		before := accountEntityToService(entity)
@@ -875,14 +894,19 @@ func (r *accountRepository) WithAccountMutationGuard(
 			return err
 		}
 		diff := service.ClassifyAccountMutation(before, target.After, groups, target.GroupIDs)
+		impact := service.ClassifyAccountPlacementImpact(diff)
 		lockedTargets[entity.ID] = &accountMutationLockedTarget{
 			request: target,
 			before:  before,
 			groups:  groups,
 			diff:    diff,
+			impact:  impact,
 		}
 		if diff.Sensitive {
 			sensitiveIDs = append(sensitiveIDs, entity.ID)
+		}
+		if impact.RequiresForce() {
+			placementForceIDs = append(placementForceIDs, entity.ID)
 		}
 	}
 
@@ -893,7 +917,11 @@ func (r *accountRepository) WithAccountMutationGuard(
 	if err := hydrateAccountMutationBindingsFromPrelocked(discoveredRoomBindings, roomBindings); err != nil {
 		return err
 	}
-	if err := authorizeAccountMutation(request, lockedTargets, roomBindings); err != nil {
+	placementBindings, err := loadAccountMutationPublicPoolPlacements(txCtx, exec, placementForceIDs)
+	if err != nil {
+		return service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{"stage": "placement_bindings"}).WithCause(err)
+	}
+	if err := authorizeAccountMutation(request, lockedTargets, roomBindings, placementBindings); err != nil {
 		return err
 	}
 
@@ -901,8 +929,8 @@ func (r *accountRepository) WithAccountMutationGuard(
 		return err
 	}
 
-	if request.ActorIsAdmin && request.ForceActiveEdit && len(roomBindings) > 0 {
-		if err := appendForcedAccountMutationEvents(txCtx, exec, request, lockedTargets, roomBindings, txClient); err != nil {
+	if request.ActorIsAdmin && request.ForceActiveEdit && (len(roomBindings) > 0 || len(placementBindings) > 0) {
+		if err := appendForcedAccountMutationEvents(txCtx, exec, request, lockedTargets, roomBindings, placementBindings, txClient); err != nil {
 			return err
 		}
 	}
@@ -969,6 +997,43 @@ func loadAccountMutationRoomBindings(
 			continue
 		}
 		seen[key] = struct{}{}
+		bindings = append(bindings, binding)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return bindings, nil
+}
+
+// loadAccountMutationPublicPoolPlacements 读出这批账号里投放在广场公共号池的那些。
+//
+// 只查 public_pool：房间投放已经通过 account_share_room_accounts 产生了 room
+// binding，两边都算会让同一次变更被重复审计。
+func loadAccountMutationPublicPoolPlacements(
+	ctx context.Context,
+	exec sqlQueryExecutor,
+	accountIDs []int64,
+) ([]accountMutationPlacementBinding, error) {
+	if len(accountIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := exec.QueryContext(ctx, `
+		SELECT account_id, placement_type, version
+		FROM account_external_placements
+		WHERE account_id = ANY($1)
+			AND placement_type = 'public_pool'
+		ORDER BY account_id
+	`, pq.Array(accountIDs))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	bindings := make([]accountMutationPlacementBinding, 0, len(accountIDs))
+	for rows.Next() {
+		var binding accountMutationPlacementBinding
+		if err := rows.Scan(&binding.accountID, &binding.placementType, &binding.version); err != nil {
+			return nil, err
+		}
 		bindings = append(bindings, binding)
 	}
 	if err := rows.Err(); err != nil {
@@ -1202,7 +1267,13 @@ func authorizeAccountMutation(
 	request service.AccountMutationGuardRequest,
 	targets map[int64]*accountMutationLockedTarget,
 	bindings []accountMutationRoomBinding,
+	placements []accountMutationPlacementBinding,
 ) error {
+	// 一批账号里可能同时有房间账号和公共池账号（placement_type 互斥，但批量操作
+	// 会把两类混在一起）。两类各自判定，不能用 else 短路掉其中一类。
+	if err := authorizePublicPoolPlacementMutation(request, targets, placements); err != nil {
+		return err
+	}
 	if len(bindings) == 0 {
 		return nil
 	}
@@ -1300,12 +1371,76 @@ func authorizeAccountMutation(
 	return nil
 }
 
+// authorizePublicPoolPlacementMutation 管住「投放在广场公共号池」的账号。
+//
+// 与房间账号的差别在于角色，而不在于严格程度：
+//
+//   - 房主改自己的账号是正常自助行为，改完系统会自动把公共池账号打回 pending
+//     重验（见 prepareOwnedPublicShareRevalidation），这条链路本身就是安全的，
+//     不该额外设卡——否则用户连自己的号都动不了。
+//   - 管理员改的是别人的号，而且这个号此刻正被广场消费者使用。这类跨主体的
+//     改动必须是刻意的，并且要留下"谁、为什么"的记录。
+//
+// 并发保护不在这里做：守卫的 ExpectedUpdatedAt 已经覆盖了「读取后投放被改动」
+// 的场景——任何一次投放转换都会 UPDATE accounts 从而推进 updated_at。
+func authorizePublicPoolPlacementMutation(
+	request service.AccountMutationGuardRequest,
+	targets map[int64]*accountMutationLockedTarget,
+	placements []accountMutationPlacementBinding,
+) error {
+	if len(placements) == 0 {
+		return nil
+	}
+	switch strings.TrimSpace(request.Intent) {
+	case service.AccountMutationIntentAdmin:
+	default:
+		// 房主自助与系统令牌刷新维持既有行为。
+		return nil
+	}
+
+	accountIDs := make([]int64, 0, len(placements))
+	changedFields := make([]string, 0)
+	for _, placement := range placements {
+		target := targets[placement.accountID]
+		if target == nil || !target.impact.RequiresForce() {
+			continue
+		}
+		accountIDs = append(accountIDs, placement.accountID)
+		changedFields = append(changedFields, target.impact.ForceFields...)
+	}
+	if len(accountIDs) == 0 {
+		return nil
+	}
+	metadata := map[string]string{
+		"account_ids":      joinAccountDeletionInt64s(uniqueSortedPositiveInt64s(accountIDs)),
+		"placement_target": service.AccountExternalPlacementPublicPool,
+		"changed_fields":   strings.Join(uniqueSortedStrings(changedFields), ","),
+	}
+	if !request.ActorIsAdmin || request.ActorUserID <= 0 {
+		return service.ErrAccountMutationForceRequired.WithMetadata(metadata)
+	}
+	if !request.ForceActiveEdit {
+		metadata["missing"] = "force_active_edit"
+		return service.ErrAccountMutationForceRequired.WithMetadata(metadata)
+	}
+	if !request.Confirmed {
+		metadata["missing"] = "confirmed"
+		return service.ErrAccountMutationForceRequired.WithMetadata(metadata)
+	}
+	if strings.TrimSpace(request.Reason) == "" {
+		metadata["missing"] = "reason"
+		return service.ErrAccountMutationForceRequired.WithMetadata(metadata)
+	}
+	return nil
+}
+
 func appendForcedAccountMutationEvents(
 	ctx context.Context,
 	exec sqlQueryExecutor,
 	request service.AccountMutationGuardRequest,
 	targets map[int64]*accountMutationLockedTarget,
 	bindings []accountMutationRoomBinding,
+	placements []accountMutationPlacementBinding,
 	txClient *dbent.Client,
 ) error {
 	operationID := strings.TrimSpace(request.OperationID)
@@ -1391,6 +1526,52 @@ func appendForcedAccountMutationEvents(
 			return service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{
 				"listing_id": strconv.FormatInt(listingID, 10),
 				"stage":      "audit_event",
+			}).WithCause(err)
+		}
+	}
+
+	// 公共池投放的账号没有 listing，审计行改挂在 placement_account_id 上
+	// （265 号迁移把 listing_id 放开为可空并加了互斥约束）。每个账号一行，
+	// 不像房间那样按 listing 聚合——公共池本来就没有可聚合的房间维度。
+	for _, placement := range placements {
+		target := targets[placement.accountID]
+		after := afterByID[placement.accountID]
+		if target == nil || after == nil {
+			return service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{"stage": "audit_snapshot"})
+		}
+		actualDiff := service.ClassifyAccountMutation(target.before, after, target.groups, afterGroupsByID[placement.accountID])
+		if !service.ClassifyAccountPlacementImpact(actualDiff).RequiresForce() {
+			continue
+		}
+		payload, err := json.Marshal(map[string]any{
+			"operation_id":      operationID,
+			"source":            service.AccountMutationIntentAdmin,
+			"force_applied":     true,
+			"placement_target":  placement.placementType,
+			"placement_version": placement.version,
+			"changes": []map[string]any{{
+				"account_id":              placement.accountID,
+				"changed_fields":          actualDiff.ChangedFields,
+				"credential_changed_keys": actualDiff.CredentialChangedKeys,
+				"extra_changed_keys":      actualDiff.ExtraChangedKeys,
+				"before":                  accountMutationAuditSnapshot(target.before, target.groups),
+				"after":                   accountMutationAuditSnapshot(after, afterGroupsByID[placement.accountID]),
+			}},
+		})
+		if err != nil {
+			return err
+		}
+		if _, err := exec.ExecContext(ctx, `
+			INSERT INTO account_share_room_events (
+				listing_id, placement_account_id, revision_id, event_type,
+				actor_user_id, actor_role, reason, payload, created_at
+			) VALUES (
+				NULL, $1, NULL, 'account.admin_forced_update', $2, 'admin', $3, $4::jsonb, NOW()
+			)
+		`, placement.accountID, request.ActorUserID, strings.TrimSpace(request.Reason), string(payload)); err != nil {
+			return service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{
+				"account_id": strconv.FormatInt(placement.accountID, 10),
+				"stage":      "placement_audit_event",
 			}).WithCause(err)
 		}
 	}

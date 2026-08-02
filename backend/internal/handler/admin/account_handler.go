@@ -2492,6 +2492,66 @@ func (h *AccountHandler) SetSchedulable(c *gin.Context) {
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
 }
 
+// ConvertExternalPlacementRequest is the payload for admin-initiated placement conversion.
+type ConvertExternalPlacementRequest struct {
+	Target         string `json:"target" binding:"required"`
+	IdempotencyKey string `json:"idempotency_key" binding:"required"`
+}
+
+// ConvertExternalPlacement 代账号所有者执行外部投放转换。
+// POST /api/v1/admin/accounts/:id/external-placement
+//
+// 为什么管理端需要这个入口：owner_user_id / platform / account_level / share_mode
+// 被数据库触发器锁死在"投放中不可改"，强制确认也绕不过去，唯一出路是先把账号
+// 转出投放。此前转换接口只对房主开放，管理员遇到这类字段只能去联系房主，
+// 等于功能死路。
+//
+// 这里不重新实现转换逻辑，而是复用 ConvertOwnedExternalPlacement：排空、幂等、
+// 分组重算、席位计费失效、通知，全部走同一条路径，避免管理端出现一套语义略有
+// 差异的影子实现。
+func (h *AccountHandler) ConvertExternalPlacement(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || accountID <= 0 {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	var req ConvertExternalPlacementRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	account, err := h.adminService.GetAccount(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	// 投放是"所有者 + 账号"维度的概念：account_external_placements 里存着
+	// owner_user_id，没有所有者的账号根本不可能有投放，直接拒绝比让下游报
+	// 一个含糊的 ErrUserNotFound 更清楚。
+	if account.OwnerUserID == nil || *account.OwnerUserID <= 0 {
+		response.ErrorFrom(c, service.ErrAccountExternalPlacementInvalid.WithMetadata(map[string]string{
+			"reason": "account has no owner",
+		}))
+		return
+	}
+
+	result, err := h.accountService.ConvertOwnedExternalPlacement(
+		c.Request.Context(),
+		*account.OwnerUserID,
+		accountID,
+		service.ConvertAccountExternalPlacementInput{
+			Target:         req.Target,
+			IdempotencyKey: req.IdempotencyKey,
+		},
+	)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
 // GetAvailableModels handles getting available models for an account
 // GET /api/v1/admin/accounts/:id/models
 func (h *AccountHandler) GetAvailableModels(c *gin.Context) {

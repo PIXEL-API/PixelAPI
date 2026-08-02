@@ -1195,6 +1195,51 @@
     @confirm="handleMixedChannelConfirm"
     @cancel="handleMixedChannelCancel"
   />
+
+  <!-- 批量修改命中共享投放中的账号：需要理由与二次确认 -->
+  <BaseDialog
+    :show="showPlacementForceDialog"
+    :title="t('admin.accounts.placementGuard.forceTitle')"
+    width="normal"
+    @close="clearPlacementGuardDialog"
+  >
+    <div class="space-y-4">
+      <p class="text-sm text-gray-600 dark:text-dark-300">
+        {{ t('admin.accounts.placementGuard.bulkForceMessage', { fields: placementGuardFieldLabels }) }}
+      </p>
+      <p class="text-sm text-amber-600 dark:text-amber-400">
+        {{ t('admin.accounts.placementGuard.forceScopeHint') }}
+      </p>
+      <div>
+        <label class="input-label" for="bulk-placement-force-reason">
+          {{ t('admin.accounts.placementGuard.reasonLabel') }}
+        </label>
+        <textarea
+          id="bulk-placement-force-reason"
+          v-model="placementForceReason"
+          rows="3"
+          class="input"
+          :placeholder="t('admin.accounts.placementGuard.reasonPlaceholder')"
+        ></textarea>
+        <p class="input-hint mt-1">{{ t('admin.accounts.placementGuard.reasonHint') }}</p>
+      </div>
+    </div>
+    <template #footer>
+      <div class="flex justify-end gap-3">
+        <button type="button" class="btn btn-secondary" @click="clearPlacementGuardDialog">
+          {{ t('common.cancel') }}
+        </button>
+        <button
+          type="button"
+          class="btn btn-danger"
+          :disabled="placementForceConfirmDisabled || submitting"
+          @click="handlePlacementForceConfirm"
+        >
+          {{ t('admin.accounts.placementGuard.forceConfirm') }}
+        </button>
+      </div>
+    </template>
+  </BaseDialog>
 </template>
 
 <script setup lang="ts">
@@ -1470,6 +1515,31 @@ let pendingPlacementIdempotencyKey = ''
 const showMixedChannelWarning = ref(false)
 const mixedChannelWarningMessage = ref('')
 const pendingUpdatesForConfirm = ref<Record<string, unknown> | null>(null)
+
+// 投放守卫：批量修改里若包含正在共享投放的账号，后端会要求管理员填理由并二次确认。
+const showPlacementForceDialog = ref(false)
+const placementForceReason = ref('')
+const placementGuardFields = ref<string[]>([])
+
+const parsePlacementGuardFields = (metadata: unknown): string[] => {
+  if (!metadata || typeof metadata !== 'object') return []
+  const raw = (metadata as Record<string, unknown>).changed_fields
+  if (typeof raw !== 'string') return []
+  return raw.split(',').map((field) => field.trim()).filter(Boolean)
+}
+
+const formatPlacementGuardFields = (fields: string[]) =>
+  fields
+    .map((field) => {
+      const key = `admin.accounts.placementGuard.fields.${field}`
+      const label = t(key)
+      return label === key ? field : label
+    })
+    .join('、')
+
+const placementGuardFieldLabels = computed(() => formatPlacementGuardFields(placementGuardFields.value))
+const placementForceConfirmDisabled = computed(() => placementForceReason.value.trim().length === 0)
+
 const baseUrl = ref('')
 const modelRestrictionMode = ref<'whitelist' | 'mapping'>('whitelist')
 const allowedModels = ref<string[]>([])
@@ -2153,13 +2223,54 @@ const submitBulkUpdate = async (baseUpdates: Record<string, unknown> | null) => 
       pendingUpdatesForConfirm.value = baseUpdates
       mixedChannelWarningMessage.value = error.message
       showMixedChannelWarning.value = true
-    } else {
-      appStore.showError(error.message || t('admin.accounts.bulkEdit.failed'))
-      console.error('Error bulk updating accounts:', error)
+      return
     }
+    const reasonCode = typeof error?.reason === 'string' ? error.reason : ''
+    if (!isUserScope.value && reasonCode === 'ACCOUNT_MUTATION_FORCE_REQUIRED') {
+      placementGuardFields.value = parsePlacementGuardFields(error?.metadata)
+      placementForceReason.value = ''
+      pendingUpdatesForConfirm.value = baseUpdates
+      showPlacementForceDialog.value = true
+      return
+    }
+    if (!isUserScope.value && reasonCode === 'OWNED_ACCOUNT_PLACEMENT_CONVERSION_REQUIRED') {
+      // 批量场景刻意不提供"一键转私有"：那会把一批账号一次性下架，
+      // 影响面远超管理员此刻的意图。这里只精确点名是哪个账号、哪些字段卡住，
+      // 让管理员到单账号编辑里处理——那边才有带影响说明的转换流程。
+      const metadata = (error?.metadata ?? {}) as Record<string, unknown>
+      appStore.showError(
+        t('admin.accounts.placementGuard.bulkConversionBlocked', {
+          accountId: String(metadata.account_id ?? '-'),
+          fields: formatPlacementGuardFields(parsePlacementGuardFields(error?.metadata))
+        })
+      )
+      return
+    }
+    appStore.showError(error.message || t('admin.accounts.bulkEdit.failed'))
+    console.error('Error bulk updating accounts:', error)
   } finally {
     submitting.value = false
   }
+}
+
+const handlePlacementForceConfirm = async () => {
+  const reason = placementForceReason.value.trim()
+  const updates = pendingUpdatesForConfirm.value
+  if (!reason || !updates) return
+  showPlacementForceDialog.value = false
+  await submitBulkUpdate({
+    ...updates,
+    force_active_edit: true,
+    confirmed: true,
+    reason
+  })
+}
+
+const clearPlacementGuardDialog = () => {
+  showPlacementForceDialog.value = false
+  placementForceReason.value = ''
+  placementGuardFields.value = []
+  pendingUpdatesForConfirm.value = null
 }
 
 const handleMixedChannelConfirm = async () => {

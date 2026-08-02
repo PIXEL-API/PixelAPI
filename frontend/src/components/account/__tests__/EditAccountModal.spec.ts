@@ -8,12 +8,14 @@ const {
   updateUserAccountMock,
   getUserAccountMock,
   convertPlacementMock,
+  convertAdminPlacementMock,
   checkMixedChannelRiskMock
 } = vi.hoisted(() => ({
   updateAccountMock: vi.fn(),
   updateUserAccountMock: vi.fn(),
   getUserAccountMock: vi.fn(),
   convertPlacementMock: vi.fn(),
+  convertAdminPlacementMock: vi.fn(),
   checkMixedChannelRiskMock: vi.fn()
 }))
 
@@ -39,6 +41,7 @@ vi.mock('@/api/admin', () => ({
   adminAPI: {
     accounts: {
       update: updateAccountMock,
+      convertExternalPlacement: convertAdminPlacementMock,
       checkMixedChannelRisk: checkMixedChannelRiskMock
     },
     settings: {
@@ -223,8 +226,96 @@ describe('EditAccountModal', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     convertPlacementMock.mockReset()
+    convertAdminPlacementMock.mockReset()
     getUserAccountMock.mockReset()
   })
+
+  // 投放守卫：管理端命中"必须先转出投放"时，给出一键转私有并重放本次编辑的通路。
+  // 此前管理员遇到这类字段只能去找房主，功能上是死路。
+  it('管理端遇到投放硬锁字段时可一键转私有并重放，且重放不带分组', async () => {
+    const account = buildAccount()
+    account.owner_user_id = 5112
+    account.group_ids = [7, 9]
+    account.external_placement = { target: 'public_pool', state: 'active', version: 3 }
+
+    updateAccountMock.mockReset()
+    updateAccountMock.mockRejectedValueOnce({
+      status: 400,
+      reason: 'OWNED_ACCOUNT_PLACEMENT_CONVERSION_REQUIRED',
+      message: 'conversion required',
+      metadata: {
+        required_action: 'convert_external_placement',
+        changed_fields: 'account_level',
+        placement_target: 'public_pool'
+      }
+    })
+    updateAccountMock.mockResolvedValueOnce(account)
+    convertAdminPlacementMock.mockResolvedValue({
+      account_id: account.id,
+      current: { target: 'private', state: 'active', version: 4 }
+    })
+
+    const wrapper = mountModal(account)
+    await flushPromises()
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    // 弹窗里有多个 ConfirmDialog（混合渠道警告 / 投放转换），只有当前展示的那个才是目标。
+    const convertDialog = wrapper
+      .findAllComponents({ name: 'ConfirmDialog' })
+      .find((dialog) => dialog.props('show') === true)
+    expect(convertDialog).toBeTruthy()
+    convertDialog!.vm.$emit('confirm')
+    await flushPromises()
+
+    expect(convertAdminPlacementMock).toHaveBeenCalledTimes(1)
+    expect(convertAdminPlacementMock.mock.calls[0]?.[0]).toBe(account.id)
+    expect(convertAdminPlacementMock.mock.calls[0]?.[1]).toMatchObject({ target: 'private' })
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(2)
+    // 转换事务已经把分组重置成所有者私有分组，重放若原样带回投放期的分组会把它冲掉。
+    expect(updateAccountMock.mock.calls[1]?.[1]).not.toHaveProperty('group_ids')
+  })
+
+  // 可以改但影响在用消费者的字段：要求填写理由并二次确认，然后带着强制标记重放。
+  it('管理端遇到需强制确认的字段时，填写理由后带强制标记重放', async () => {
+    const account = buildAccount()
+    account.owner_user_id = 5112
+    account.external_placement = { target: 'public_pool', state: 'active', version: 3 }
+
+    updateAccountMock.mockReset()
+    updateAccountMock.mockRejectedValueOnce({
+      status: 409,
+      reason: 'ACCOUNT_MUTATION_FORCE_REQUIRED',
+      message: 'force required',
+      metadata: { missing: 'force_active_edit', changed_fields: 'credentials' }
+    })
+    updateAccountMock.mockResolvedValueOnce(account)
+
+    const wrapper = mountModal(account)
+    await flushPromises()
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    const reasonInput = wrapper.get('#placement-force-reason')
+    await reasonInput.setValue('上游账号被封，更换凭证')
+    await flushPromises()
+
+    const confirmButton = wrapper
+      .findAll('button')
+      .find((button) => button.text() === 'admin.accounts.placementGuard.forceConfirm')
+    expect(confirmButton).toBeTruthy()
+    await confirmButton!.trigger('click')
+    await flushPromises()
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(2)
+    expect(updateAccountMock.mock.calls[1]?.[1]).toMatchObject({
+      force_active_edit: true,
+      confirmed: true,
+      reason: '上游账号被封，更换凭证'
+    })
+  })
+
 
   it('用户可选择平台账号模式且无需选择具体房间', async () => {
     const account = buildAccount()

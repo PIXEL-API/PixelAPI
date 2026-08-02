@@ -133,6 +133,121 @@ func TestLockAndHydrateAccountMutationRoomsFailsClosedWhenBlockerQueryFails(t *t
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+// ---------------------------------------------------------------------------
+// 广场公共池投放（无 listing）的守卫。
+//
+// 房间账号通过 account_share_room_accounts 天然进得了守卫；公共池账号没有任何
+// listing，此前完全不在守卫覆盖范围内，只能靠 service 层一道粗糙的前置检查一刀切
+// 拒绝。现在它们走同一套判定，差别只在角色：房主自助照旧放行，管理员改别人的号
+// 需要刻意确认并留审计。
+// ---------------------------------------------------------------------------
+
+func accountMutationGuardPublicPoolPlacements(accountID int64) []accountMutationPlacementBinding {
+	return []accountMutationPlacementBinding{{
+		accountID:     accountID,
+		placementType: service.AccountExternalPlacementPublicPool,
+		version:       3,
+	}}
+}
+
+func TestAuthorizePublicPoolPlacementAllowsOwnerSelfService(t *testing.T) {
+	targets := accountMutationGuardSensitiveTargets(7)
+	request := service.AccountMutationGuardRequest{
+		ActorUserID: 42,
+		Intent:      service.AccountMutationIntentOwner,
+	}
+
+	// 房主改自己的号是正常自助行为：改完系统会把公共池账号自动打回 pending 重验，
+	// 这条链路本身就是安全的。额外设卡会让用户连自己的号都动不了。
+	require.NoError(t, authorizeAccountMutation(request, targets, nil, accountMutationGuardPublicPoolPlacements(7)))
+}
+
+func TestAuthorizePublicPoolPlacementAllowsSystemTokenRefresh(t *testing.T) {
+	targets := accountMutationGuardSensitiveTargets(7)
+	request := service.AccountMutationGuardRequest{
+		Intent: service.AccountMutationIntentSystemTokenRefresh,
+	}
+
+	require.NoError(t, authorizeAccountMutation(request, targets, nil, accountMutationGuardPublicPoolPlacements(7)))
+}
+
+func TestAuthorizePublicPoolPlacementRequiresAdminForceConfirmAndReason(t *testing.T) {
+	targets := accountMutationGuardSensitiveTargets(7)
+	placements := accountMutationGuardPublicPoolPlacements(7)
+	valid := service.AccountMutationGuardRequest{
+		ActorUserID:     99,
+		ActorIsAdmin:    true,
+		Intent:          service.AccountMutationIntentAdmin,
+		ForceActiveEdit: true,
+		Confirmed:       true,
+		Reason:          "上游账号被封，更换凭证",
+	}
+
+	require.NoError(t, authorizeAccountMutation(valid, targets, nil, placements))
+
+	tests := []struct {
+		name    string
+		mutate  func(*service.AccountMutationGuardRequest)
+		missing string
+	}{
+		{"missing force", func(r *service.AccountMutationGuardRequest) { r.ForceActiveEdit = false }, "force_active_edit"},
+		{"missing confirmation", func(r *service.AccountMutationGuardRequest) { r.Confirmed = false }, "confirmed"},
+		{"blank reason", func(r *service.AccountMutationGuardRequest) { r.Reason = "   " }, "reason"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := valid
+			test.mutate(&request)
+
+			err := authorizeAccountMutation(request, targets, nil, placements)
+
+			require.ErrorIs(t, err, service.ErrAccountMutationForceRequired)
+			appErr := infraerrors.FromError(err)
+			require.Equal(t, test.missing, appErr.Metadata["missing"])
+			require.Equal(t, "7", appErr.Metadata["account_ids"])
+			require.Equal(t, service.AccountExternalPlacementPublicPool, appErr.Metadata["placement_target"])
+			require.Equal(t, "credentials", appErr.Metadata["changed_fields"])
+		})
+	}
+}
+
+// 公共池投放不做 expected_version 校验：守卫已经用 ExpectedUpdatedAt 对账号行做了
+// 乐观并发控制，而任何一次投放转换都会 UPDATE accounts 推进 updated_at。
+// 再要求一个投放版本号只会让管理端多背一个无用参数。
+func TestAuthorizePublicPoolPlacementDoesNotRequireExpectedVersion(t *testing.T) {
+	targets := accountMutationGuardSensitiveTargets(7)
+	request := service.AccountMutationGuardRequest{
+		ActorUserID:     99,
+		ActorIsAdmin:    true,
+		Intent:          service.AccountMutationIntentAdmin,
+		ForceActiveEdit: true,
+		Confirmed:       true,
+		Reason:          "risk review",
+	}
+
+	require.NoError(t, authorizeAccountMutation(request, targets, nil, accountMutationGuardPublicPoolPlacements(7)))
+}
+
+// 只改模型映射的账号不算敏感变更，公共池守卫不该要求填理由。
+func TestAuthorizePublicPoolPlacementSkipsNonForceableTargets(t *testing.T) {
+	diff := service.AccountMutationDiff{
+		Sensitive:             true,
+		ChangedFields:         []string{"credentials"},
+		SensitiveFields:       []string{"credentials"},
+		CredentialChangedKeys: []string{"model_mapping"},
+	}
+	targets := map[int64]*accountMutationLockedTarget{
+		7: {diff: diff, impact: service.ClassifyAccountPlacementImpact(diff)},
+	}
+	request := service.AccountMutationGuardRequest{
+		ActorUserID:  99,
+		ActorIsAdmin: true,
+		Intent:       service.AccountMutationIntentAdmin,
+	}
+
+	require.NoError(t, authorizeAccountMutation(request, targets, nil, accountMutationGuardPublicPoolPlacements(7)))
+}
+
 func TestAuthorizeAccountMutationOwnerAllowsOnlyPausedDrainedRooms(t *testing.T) {
 	targets := accountMutationGuardSensitiveTargets(7)
 	request := service.AccountMutationGuardRequest{
@@ -146,7 +261,7 @@ func TestAuthorizeAccountMutationOwnerAllowsOnlyPausedDrainedRooms(t *testing.T)
 		lifecycleStatus: service.AccountShareListingStatusPaused,
 	}}
 
-	require.NoError(t, authorizeAccountMutation(request, targets, bindings))
+	require.NoError(t, authorizeAccountMutation(request, targets, bindings, nil))
 }
 
 func TestAuthorizeAccountMutationOwnerRejectsNonPausedRoomLifecycle(t *testing.T) {
@@ -168,7 +283,7 @@ func TestAuthorizeAccountMutationOwnerRejectsNonPausedRoomLifecycle(t *testing.T
 				listingID:       11,
 				rowVersion:      4,
 				lifecycleStatus: status,
-			}})
+			}}, nil)
 
 			require.ErrorIs(t, err, service.ErrAccountMutationBlocked)
 			appErr := infraerrors.FromError(err)
@@ -197,7 +312,7 @@ func TestAuthorizeAccountMutationOwnerRequiresEveryAssociatedRoomToBeSafe(t *tes
 			rowVersion:      8,
 			lifecycleStatus: service.AccountShareListingStatusDraining,
 		},
-	})
+	}, nil)
 
 	require.ErrorIs(t, err, service.ErrAccountMutationBlocked)
 	appErr := infraerrors.FromError(err)
@@ -271,7 +386,7 @@ func TestAuthorizeAccountMutationOwnerRejectsPausedRoomPersistentBlockers(t *tes
 				lifecycleStatus:  service.AccountShareListingStatusPaused,
 				blockers:         test.blockers,
 				openBindingCount: test.openBindingCount,
-			}})
+			}}, nil)
 
 			require.ErrorIs(t, err, service.ErrAccountMutationBlocked)
 			appErr := infraerrors.FromError(err)
@@ -305,7 +420,7 @@ func TestAuthorizeAccountMutationAdminForceContractIsUnchanged(t *testing.T) {
 		ExpectedListingVersion: &version,
 	}
 
-	require.NoError(t, authorizeAccountMutation(valid, targets, bindings))
+	require.NoError(t, authorizeAccountMutation(valid, targets, bindings, nil))
 
 	tests := []struct {
 		name   string
@@ -340,23 +455,27 @@ func TestAuthorizeAccountMutationAdminForceContractIsUnchanged(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			request := valid
 			test.mutate(&request)
-			require.ErrorIs(t, authorizeAccountMutation(request, targets, bindings), service.ErrAccountMutationForceRequired)
+			require.ErrorIs(t, authorizeAccountMutation(request, targets, bindings, nil), service.ErrAccountMutationForceRequired)
 		})
 	}
 
 	staleVersion := version - 1
 	stale := valid
 	stale.ExpectedListingVersion = &staleVersion
-	require.ErrorIs(t, authorizeAccountMutation(stale, targets, bindings), service.ErrAccountMutationVersionConflict)
+	require.ErrorIs(t, authorizeAccountMutation(stale, targets, bindings, nil), service.ErrAccountMutationVersionConflict)
 }
 
 func accountMutationGuardSensitiveTargets(accountID int64) map[int64]*accountMutationLockedTarget {
+	diff := service.AccountMutationDiff{
+		Sensitive:             true,
+		ChangedFields:         []string{"credentials"},
+		SensitiveFields:       []string{"credentials"},
+		CredentialChangedKeys: []string{"access_token"},
+	}
 	return map[int64]*accountMutationLockedTarget{
 		accountID: {
-			diff: service.AccountMutationDiff{
-				Sensitive:     true,
-				ChangedFields: []string{"credentials"},
-			},
+			diff:   diff,
+			impact: service.ClassifyAccountPlacementImpact(diff),
 		},
 	}
 }

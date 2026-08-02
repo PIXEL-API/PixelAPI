@@ -3582,42 +3582,26 @@ func shouldForceAdminOwnedAgentIdentityPending(
 	return enteredPublic || authMaterialChanged || ownerUserIDChanged || explicitlyApproved
 }
 
-// accountModelConfigCredentialKeys 是 credentials 里纯粹的模型路由配置，
-// 与账号身份/认证材料无关。共享中的账号调整这些键不改变消费者实际用到的是哪个账号，
-// 因此不需要走"外部投放转换"流程。
-var accountModelConfigCredentialKeys = map[string]struct{}{
-	"model_mapping":         {},
-	"compact_model_mapping": {},
-}
-
-// credentialsChangeAffectsAccountIdentity 判断本次 credentials 变更是否触及
-// 认证材料。仅调整模型白名单/映射时返回 false，避免把"改模型"误判成"换账号"。
-func credentialsChangeAffectsAccountIdentity(credentials map[string]any) bool {
-	for key := range credentials {
-		if _, benign := accountModelConfigCredentialKeys[key]; !benign {
-			return true
-		}
-	}
-	return false
-}
-
 func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *UpdateAccountInput) (*Account, error) {
 	account, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	systemTokenRefresh := strings.TrimSpace(input.MutationIntent) == AccountMutationIntentSystemTokenRefresh
-	if accountHasExternalPlacement(account) && !input.ForceActiveEdit && !systemTokenRefresh &&
-		(input.OwnerUserID != nil ||
-			input.ShareMode != "" ||
-			input.ShareStatus != "" ||
-			input.AccountLevel != nil ||
-			credentialsChangeAffectsAccountIdentity(input.Credentials) ||
-			input.Extra != nil ||
-			input.GroupIDs != nil) {
-		return nil, ErrOwnedAccountPlacementConversionRequired
-	}
 	before := cloneAccountForNotice(account)
+
+	// 投放中的账号（广场公共池 / 房间），分组完全由投放维护：公共池组由
+	// publicOwnedAccountGroupIDs 推导，房间组由 ConvertExternalPlacement 在转换
+	// 事务里统一写入。管理端传什么都不作数，直接沿用库里的现状。
+	//
+	// 这里不是"拒绝"而是"忽略"，因为管理端编辑弹窗是整表单提交、永远带
+	// group_ids。旧实现按"payload 里出现了 group_ids"整单拒绝，等于投放中账号
+	// 连改个并发数都保存不了。
+	accountPlaced := accountHasExternalPlacement(before)
+	groupIDs := input.GroupIDs
+	if accountPlaced {
+		groupIDs = nil
+	}
 	wasOveragesEnabled := account.IsOveragesEnabled()
 
 	if input.Name != "" {
@@ -3789,21 +3773,21 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	}
 
 	// 先验证分组是否存在（在任何写操作之前）
-	if input.GroupIDs != nil {
-		if err := s.validateGroupIDsExist(ctx, *input.GroupIDs); err != nil {
+	if groupIDs != nil {
+		if err := s.validateGroupIDsExist(ctx, *groupIDs); err != nil {
 			return nil, err
 		}
 
 		// 检查混合渠道风险（除非用户已确认）
 		if !input.SkipMixedChannelCheck {
-			if err := s.checkMixedChannelRisk(ctx, account.ID, account.Platform, *input.GroupIDs); err != nil {
+			if err := s.checkMixedChannelRisk(ctx, account.ID, account.Platform, *groupIDs); err != nil {
 				return nil, err
 			}
 		}
-		if err := s.validateAccountLevelGroupBinding(ctx, account.Platform, account.AccountLevel, *input.GroupIDs); err != nil {
+		if err := s.validateAccountLevelGroupBinding(ctx, account.Platform, account.AccountLevel, *groupIDs); err != nil {
 			return nil, err
 		}
-		if err := s.validateAccountShareGroupBinding(ctx, account, *input.GroupIDs); err != nil {
+		if err := s.validateAccountShareGroupBinding(ctx, account, *groupIDs); err != nil {
 			return nil, err
 		}
 	} else if input.AccountLevel != nil {
@@ -3811,7 +3795,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			return nil, err
 		}
 	}
-	if input.GroupIDs == nil && (input.OwnerUserID != nil || input.ShareMode != "" || input.ShareStatus != "") {
+	if groupIDs == nil && (input.OwnerUserID != nil || input.ShareMode != "" || input.ShareStatus != "") {
 		if err := s.validateAccountShareGroupBinding(ctx, account, account.GroupIDs); err != nil {
 			return nil, err
 		}
@@ -3831,9 +3815,29 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	}
 
 	targetGroupIDs := append([]int64(nil), before.GroupIDs...)
-	if input.GroupIDs != nil {
-		targetGroupIDs = append([]int64(nil), (*input.GroupIDs)...)
+	if groupIDs != nil {
+		targetGroupIDs = append([]int64(nil), (*groupIDs)...)
 	}
+
+	// 投放守卫：只看"值真的变了"，不看"payload 里出现了哪些字段"。
+	//
+	// owner_user_id / platform / account_level / share_mode 被 225 号迁移的触发器
+	// reconcile_account_external_placement_account_identity 硬锁死——管理员即便提交
+	// force_active_edit，写库那一刻仍会被打回 23514。所以这一类不给强制通道，
+	// 只能先把账号转出投放；错误里带上具体字段和当前投放目标，前端据此提供
+	// "转为私有并继续"的一键流程。
+	//
+	// 其余敏感字段（凭证、代理、降并发……）不在这里拦，交给下面的 mutation guard：
+	// 那里有完整的强制确认、理由、版本校验和事务内审计。
+	if accountPlaced {
+		impact := ClassifyAccountPlacementImpact(
+			ClassifyAccountMutation(before, account, before.GroupIDs, targetGroupIDs),
+		)
+		if impact.RequiresConversion() {
+			return nil, AccountPlacementConversionRequired(before, impact.ConversionFields)
+		}
+	}
+
 	intent := strings.TrimSpace(input.MutationIntent)
 	if intent == "" {
 		intent = AccountMutationIntentAdmin
@@ -3859,8 +3863,8 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		if updateErr := s.accountRepo.Update(txCtx, account); updateErr != nil {
 			return updateErr
 		}
-		if input.GroupIDs != nil {
-			if bindErr := s.accountRepo.BindGroups(txCtx, account.ID, *input.GroupIDs); bindErr != nil {
+		if groupIDs != nil {
+			if bindErr := s.accountRepo.BindGroups(txCtx, account.ID, *groupIDs); bindErr != nil {
 				return bindErr
 			}
 		}
@@ -3955,18 +3959,9 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		return preflightAccounts, nil
 	}
 
-	if input.GroupIDs != nil || input.AccountLevel != nil ||
-		credentialsChangeAffectsAccountIdentity(input.Credentials) || input.Extra != nil {
-		accounts, err := loadPreflightAccounts()
-		if err != nil {
-			return nil, err
-		}
-		for _, account := range accounts {
-			if accountHasExternalPlacement(account) && !input.ForceActiveEdit {
-				return nil, ErrOwnedAccountPlacementConversionRequired
-			}
-		}
-	}
+	// 投放守卫下移到构建 guard target 的循环里：那里已经算好了每个账号的
+	// before/after，可以按"值真的变了"逐账号判定，而不是在这里按"payload 里出现了
+	// 哪些字段"把整批打回。
 
 	var agentIdentityWSInvalidationIDs []int64
 	if len(input.Credentials) > 0 {
@@ -4195,6 +4190,9 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	}
 	beforeByID := make(map[int64]*Account, len(input.AccountIDs))
 	targets := make([]AccountMutationGuardTarget, 0, len(input.AccountIDs))
+	// placedAccountIDs 记录投放中的账号：它们的分组由投放维护，批量改组不能落到
+	// 它们头上，否则会把公共池组/房间模式组冲掉。
+	placedAccountIDs := make(map[int64]struct{}, len(input.AccountIDs))
 	for _, account := range accounts {
 		if account == nil {
 			return nil, ErrAccountNotFound
@@ -4202,9 +4200,19 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		before := cloneAccountForNotice(account)
 		beforeByID[account.ID] = before
 		after := previewAdminBulkAccountUpdate(account, repoUpdates)
+		accountPlaced := accountHasExternalPlacement(before)
 		targetGroupIDs := append([]int64(nil), account.GroupIDs...)
-		if input.GroupIDs != nil {
+		if input.GroupIDs != nil && !accountPlaced {
 			targetGroupIDs = append([]int64(nil), (*input.GroupIDs)...)
+		}
+		if accountPlaced {
+			placedAccountIDs[account.ID] = struct{}{}
+			impact := ClassifyAccountPlacementImpact(
+				ClassifyAccountMutation(before, after, before.GroupIDs, targetGroupIDs),
+			)
+			if impact.RequiresConversion() {
+				return nil, AccountPlacementConversionRequired(before, impact.ConversionFields)
+			}
 		}
 		targets = append(targets, AccountMutationGuardTarget{
 			AccountID:         account.ID,
@@ -4239,6 +4247,10 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		}
 		if input.GroupIDs != nil {
 			for _, accountID := range input.AccountIDs {
+				// 投放中的账号跳过改组：分组是投放的派生状态，见上面的 placedAccountIDs。
+				if _, placed := placedAccountIDs[accountID]; placed {
+					continue
+				}
 				if bindErr := s.accountRepo.BindGroups(txCtx, accountID, *input.GroupIDs); bindErr != nil {
 					return bindErr
 				}

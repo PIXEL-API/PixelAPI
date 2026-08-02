@@ -47,7 +47,7 @@ var (
 	ErrOwnedAccountPublicPolicyUnavailable        = infraerrors.BadRequest("OWNED_ACCOUNT_PUBLIC_POLICY_UNAVAILABLE", "account share policy is not configured for this public account pool")
 	ErrOwnedAccountPublicValidationFailed         = infraerrors.BadRequest("OWNED_ACCOUNT_PUBLIC_VALIDATION_FAILED", "public account validation failed")
 	ErrOwnedAccountShareModeOnly                  = infraerrors.BadRequest("OWNED_ACCOUNT_SHARE_MODE_ONLY", "account share mode accounts cannot be moved to the public shared account pool")
-	ErrOwnedAccountPlacementConversionRequired    = infraerrors.BadRequest("OWNED_ACCOUNT_PLACEMENT_CONVERSION_REQUIRED", "share mode changes must use the external placement conversion endpoint")
+	ErrOwnedAccountPlacementConversionRequired    = infraerrors.BadRequest("OWNED_ACCOUNT_PLACEMENT_CONVERSION_REQUIRED", "convert the account out of its external placement before changing these fields")
 	ErrOwnedAgentIdentityLookupUnavailable        = infraerrors.InternalServer("OWNED_AGENT_IDENTITY_LOOKUP_UNAVAILABLE", "Codex Agent Identity account lookup is unavailable")
 	ErrOwnedAgentIdentityWSInvalidatorUnavailable = infraerrors.InternalServer("OWNED_AGENT_IDENTITY_WS_INVALIDATOR_UNAVAILABLE", "Codex Agent Identity connection invalidation is unavailable")
 	ErrOwnedAccountShareModeBoundaryUnavailable   = infraerrors.InternalServer("OWNED_ACCOUNT_SHARE_MODE_BOUNDARY_UNAVAILABLE", "account share mode boundary check is unavailable")
@@ -237,7 +237,11 @@ type AccountMutationDiff struct {
 	ChangedFields         []string
 	CredentialChangedKeys []string
 	ExtraChangedKeys      []string
-	Sensitive             bool
+	// SensitiveFields 是 ChangedFields 中被判定为敏感的子集。Sensitive 只回答
+	// "这次变更整体敏不敏感"，而投放守卫需要知道"具体是哪几个字段敏感"，
+	// 才能区分「必须先转出投放」和「确认后可改」两类处置。
+	SensitiveFields []string
+	Sensitive       bool
 }
 
 var systemTokenRefreshCredentialKeys = map[string]struct{}{
@@ -276,6 +280,9 @@ func ClassifyAccountMutation(before, after *Account, beforeGroupIDs, afterGroupI
 	diff := AccountMutationDiff{}
 	add := func(field string, sensitive bool) {
 		diff.ChangedFields = append(diff.ChangedFields, field)
+		if sensitive {
+			diff.SensitiveFields = append(diff.SensitiveFields, field)
+		}
 		diff.Sensitive = diff.Sensitive || sensitive
 	}
 	if before.Name != after.Name {
@@ -351,7 +358,99 @@ func ClassifyAccountMutation(before, after *Account, beforeGroupIDs, afterGroupI
 		add("group_ids", true)
 	}
 	sort.Strings(diff.ChangedFields)
+	sort.Strings(diff.SensitiveFields)
 	return diff
+}
+
+// accountPlacementConversionFields 是账号处于外部投放（广场公共池 / 房间）期间
+// 被数据库硬锁死的字段。投放行 account_external_placements 缓存了账号的
+// owner_user_id / platform / account_level，触发器
+// reconcile_account_external_placement_account_identity（225 号迁移）会在这三个
+// 值发生变化时直接抛 23514。
+//
+// 关键区别：这几个字段不是"敏感、需要二次确认"，而是"强制确认也没用"——
+// 管理员即便提交 force_active_edit，写库那一刻仍会被触发器打回。唯一的出路是
+// 先把账号转出投放。因此它们必须与下面那类「确认后可改」的敏感字段分开处置。
+//
+// share_mode 同样归入此类：它本身就是投放目标的投影（转换事务里由
+// ConvertExternalPlacement 统一写入），单独改它等于绕过转换流程换投放。
+var accountPlacementConversionFields = map[string]struct{}{
+	"owner_user_id": {},
+	"platform":      {},
+	"account_level": {},
+	"share_mode":    {},
+}
+
+// accountModelConfigCredentialKeys 是 credentials 里纯粹的模型路由配置，
+// 与账号身份/认证材料无关。投放中的账号调整这些键不改变消费者实际用到的是哪个账号，
+// 因此不该被当作"换账号"来拦。
+var accountModelConfigCredentialKeys = map[string]struct{}{
+	"model_mapping":         {},
+	"compact_model_mapping": {},
+}
+
+// credentialKeysAffectAccountIdentity 判断本次 credentials 变更是否触及认证材料。
+// 仅调整模型白名单/映射时返回 false，避免把"改模型"误判成"换账号"。
+func credentialKeysAffectAccountIdentity(changedKeys []string) bool {
+	for _, key := range changedKeys {
+		if _, benign := accountModelConfigCredentialKeys[strings.TrimSpace(key)]; !benign {
+			return true
+		}
+	}
+	return false
+}
+
+// accountPlacementNeutralSensitiveFields 是「对账号整体敏感、但对投放中立」的字段。
+//
+// share_status 的变化绝大多数不是管理员的主动决定：改了凭证或等级之后，系统会把
+// 公共池账号自动打回 pending 重验（见 shouldForceAdminOwnedAgentIdentityPending
+// 与 prepareOwnedPublicShareRevalidation）。如果把它算进"需要强制确认"，管理员改
+// 一个无关字段就会被要求为系统的自我保护行为填写理由。
+//
+// 这里刻意用"排除法"而不是"允许名单"：将来新增的敏感字段默认落进 ForceFields，
+// 需要确认才能改，而不是默认放行。
+var accountPlacementNeutralSensitiveFields = map[string]struct{}{
+	"share_status": {},
+}
+
+// AccountPlacementImpact 描述一次账号变更对「外部投放」的影响，把敏感字段拆成
+// 处置方式完全不同的两组。
+type AccountPlacementImpact struct {
+	// ConversionFields 必须先把账号转出投放才能修改（数据库硬约束）。
+	ConversionFields []string
+	// ForceFields 在投放期间可以改，但管理员需要强制确认并留下审计。
+	ForceFields []string
+}
+
+func (i AccountPlacementImpact) RequiresConversion() bool {
+	return len(i.ConversionFields) > 0
+}
+
+func (i AccountPlacementImpact) RequiresForce() bool {
+	return len(i.ForceFields) > 0
+}
+
+// ClassifyAccountPlacementImpact 把一次变更的敏感字段按处置方式分组。
+//
+// 只看"值真的变了"的字段——调用方传入的 diff 来自 before/after 比对，
+// 因此前端整表单提交、只改了并发数却带上 group_ids 的请求不会被误判。
+func ClassifyAccountPlacementImpact(diff AccountMutationDiff) AccountPlacementImpact {
+	impact := AccountPlacementImpact{}
+	for _, field := range diff.SensitiveFields {
+		if _, hardLocked := accountPlacementConversionFields[field]; hardLocked {
+			impact.ConversionFields = append(impact.ConversionFields, field)
+			continue
+		}
+		if _, neutral := accountPlacementNeutralSensitiveFields[field]; neutral {
+			continue
+		}
+		// 只动模型映射不算换账号：消费者用的还是同一个上游账号。
+		if field == "credentials" && !credentialKeysAffectAccountIdentity(diff.CredentialChangedKeys) {
+			continue
+		}
+		impact.ForceFields = append(impact.ForceFields, field)
+	}
+	return impact
 }
 
 func AccountMutationAllowedForSystemTokenRefresh(diff AccountMutationDiff) bool {
@@ -3205,6 +3304,30 @@ func (s *AccountService) prepareOwnedPublicShareRevalidation(ctx context.Context
 	account.ShareStatus = AccountShareStatusPending
 	account.ErrorMessage = ""
 	return groupIDs, nil
+}
+
+// AccountPlacementConversionRequired 构造带可执行上下文的转换要求错误。
+//
+// 前端要靠 metadata 决定弹什么：changed_fields 用来告诉管理员到底是哪几个字段
+// 触发的（尤其是 OpenAI 账号改凭证会连带推导出新的 account_level 这种非显式改动），
+// placement_target 决定"转为私有"的按钮该不该出现，required_action 让前端不必
+// 反向猜测错误码语义。
+func AccountPlacementConversionRequired(account *Account, fields []string) error {
+	metadata := map[string]string{
+		"required_action": "convert_external_placement",
+		"changed_fields":  strings.Join(fields, ","),
+	}
+	if account != nil {
+		metadata["account_id"] = strconv.FormatInt(account.ID, 10)
+		if account.ExternalPlacement != nil {
+			metadata["placement_target"] = strings.ToLower(strings.TrimSpace(account.ExternalPlacement.Target))
+			metadata["placement_version"] = strconv.FormatInt(account.ExternalPlacement.Version, 10)
+			if account.ExternalPlacement.RoomID != nil {
+				metadata["room_id"] = strconv.FormatInt(*account.ExternalPlacement.RoomID, 10)
+			}
+		}
+	}
+	return ErrOwnedAccountPlacementConversionRequired.WithMetadata(metadata)
 }
 
 func accountHasExternalPlacement(account *Account) bool {

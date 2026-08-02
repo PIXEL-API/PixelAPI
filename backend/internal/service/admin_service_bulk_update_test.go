@@ -919,6 +919,77 @@ func TestAdminServiceUpdateExternalPlacementIdentityRequiresConversion(t *testin
 	require.Nil(t, repo.updatedAccount)
 }
 
+// 管理端编辑弹窗是整表单提交：即便只调了一个并发数，payload 里照样带着
+// group_ids / extra / credentials。旧守卫按"字段是否出现"判定，于是投放中的账号
+// 连改并发都保存不了（前端表现为一律 400）。新守卫按 before/after diff 判定。
+func TestAdminServiceUpdateExternalPlacementAllowsBenignFullFormSubmit(t *testing.T) {
+	account := newAdminOwnedAgentIdentityTestAccount(t, 101, AccountShareModePublic, AccountShareStatusApproved, "runtime-old")
+	account.GroupIDs = []int64{7, 9}
+	account.ExternalPlacement = &AccountExternalPlacement{
+		Target: AccountExternalPlacementPublicPool,
+		State:  "active",
+	}
+	repo := &accountRepoStubForBulkUpdate{getByIDAccounts: map[int64]*Account{account.ID: account}}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	concurrency := 30
+	// 整表单回传：分组原样带上，凭证与 extra 原样带上，只有并发数变了。
+	sameGroups := []int64{9, 7}
+	updated, err := svc.UpdateAccount(context.Background(), account.ID, &UpdateAccountInput{
+		Concurrency: &concurrency,
+		GroupIDs:    &sameGroups,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	require.Equal(t, 30, updated.Concurrency)
+	// 投放中账号的分组由投放维护，管理端传值一律忽略，不能触发 BindGroups。
+	require.Empty(t, repo.bindGroupsCalls)
+}
+
+// 投放中账号的分组是派生状态：管理员改组必须被忽略，而不是被拒绝，
+// 否则整表单提交会连带把无关编辑一起打回。
+func TestAdminServiceUpdateExternalPlacementIgnoresGroupChanges(t *testing.T) {
+	account := newAdminOwnedAgentIdentityTestAccount(t, 101, AccountShareModePublic, AccountShareStatusApproved, "runtime-old")
+	account.GroupIDs = []int64{7}
+	account.ExternalPlacement = &AccountExternalPlacement{
+		Target: AccountExternalPlacementPublicPool,
+		State:  "active",
+	}
+	repo := &accountRepoStubForBulkUpdate{getByIDAccounts: map[int64]*Account{account.ID: account}}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	otherGroups := []int64{42}
+	updated, err := svc.UpdateAccount(context.Background(), account.ID, &UpdateAccountInput{
+		GroupIDs: &otherGroups,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	require.Empty(t, repo.bindGroupsCalls)
+}
+
+// 未投放的账号不受影响：group_ids 仍然是一个真实的改动请求。
+//
+// 这里用"是否走到分组校验"作为判别点——上面两个投放中账号的用例共用同一个没有
+// 配置 groupRepo 的 svc 却能成功返回，正是因为投放中账号的 group_ids 在进入任何
+// 分组校验之前就被丢掉了。未投放账号则必须走进校验，于是撞上未配置的 groupRepo。
+func TestAdminServiceUpdateWithoutPlacementDoesNotIgnoreGroupIDs(t *testing.T) {
+	account := newAdminOwnedAgentIdentityTestAccount(t, 101, AccountShareModePrivate, AccountShareStatusApproved, "runtime-old")
+	account.GroupIDs = []int64{7}
+	repo := &accountRepoStubForBulkUpdate{getByIDAccounts: map[int64]*Account{account.ID: account}}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	nextGroups := []int64{42}
+	_, err := svc.UpdateAccount(context.Background(), account.ID, &UpdateAccountInput{
+		GroupIDs: &nextGroups,
+	})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "group repository not configured")
+	require.Empty(t, repo.bindGroupsCalls)
+}
+
 func TestAdminServiceBulkUpdateExternalPlacementIdentityRequiresConversion(t *testing.T) {
 	account := newAdminOwnedAgentIdentityTestAccount(t, 101, AccountShareModePublic, AccountShareStatusApproved, "runtime-old")
 	account.ExternalPlacement = &AccountExternalPlacement{
