@@ -13,11 +13,15 @@ const STATUS_BADGE_MAP: Record<string, string> = {
   FAILED: 'badge-danger',
   REFUND_REQUESTED: 'badge-warning',
   REFUNDING: 'badge-warning',
+  REFUND_PENDING: 'badge-warning',
   PARTIALLY_REFUNDED: 'badge-warning',
   REFUNDED: 'badge-info',
   REFUND_FAILED: 'badge-danger',
 }
 
+// REFUND_PENDING is deliberately NOT refundable: the gateway already accepted a
+// refund for this order and we are waiting on its final state. Re-submitting
+// would double-refund. Use the "query refund status" action instead.
 const REFUNDABLE_STATUSES = ['COMPLETED', 'PARTIALLY_REFUNDED', 'REFUND_REQUESTED', 'REFUND_FAILED']
 
 export function statusBadgeClass(status: string): string {

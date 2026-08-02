@@ -225,6 +225,65 @@ func (s *Stripe) Refund(ctx context.Context, req payment.RefundRequest) (*paymen
 	}, nil
 }
 
+// QueryRefund retrieves a previously created Stripe refund by its refund ID
+// (the `re_xxx` returned by Refund and persisted as payment_orders.refund_trade_no).
+//
+// 语义约定：网关调用失败、鉴权失败、退款单号不存在都返回 error，绝不降级成
+// ProviderStatusFailed——「退款确实失败了」会让订单进 REFUND_FAILED 并回滚扣减，
+// 而「我查不到」必须让订单留在 REFUND_PENDING 等人工核对。
+// 同理，Stripe 后续新增的未知 status 一律落到 pending，不擅自判死。
+func (s *Stripe) QueryRefund(ctx context.Context, req payment.RefundQueryRequest) (*payment.RefundResponse, error) {
+	s.ensureInit()
+
+	// 本地与上游的分叉点：上游在 RefundID 为空时会按 PaymentIntent 列取「最近一笔退款」
+	// 兜底，那是因为上游没有落库退款单号。本地迁移 264 已持久化 refund_trade_no，
+	// 列取兜底只会在多笔部分退款时挑错单子，故这里直接报错，不猜。
+	refundID := strings.TrimSpace(req.RefundID)
+	if refundID == "" {
+		return nil, fmt.Errorf("stripe query refund: missing refund id")
+	}
+
+	r, err := s.sc.V1Refunds.Retrieve(ctx, refundID, nil)
+	if err != nil {
+		return nil, fmt.Errorf("stripe query refund: %w", err)
+	}
+	if r == nil {
+		return nil, fmt.Errorf("stripe query refund: empty response for refund %s", refundID)
+	}
+
+	// 防串单：退款单号若被错记成别的订单的退款，宁可报错等人工，也不能把
+	// 另一笔订单的成功状态回写到本订单。两侧 ID 有任一为空时跳过校验。
+	if tradeNo := strings.TrimSpace(req.TradeNo); tradeNo != "" && r.PaymentIntent != nil && r.PaymentIntent.ID != "" {
+		if r.PaymentIntent.ID != tradeNo {
+			return nil, fmt.Errorf(
+				"stripe query refund: refund %s belongs to payment intent %s, not %s",
+				refundID, r.PaymentIntent.ID, tradeNo,
+			)
+		}
+	}
+
+	return &payment.RefundResponse{
+		RefundID: r.ID,
+		Status:   stripeRefundProviderStatus(r.Status),
+	}, nil
+}
+
+// stripeRefundProviderStatus maps a Stripe refund status onto the three
+// provider-level statuses the service layer understands. Unknown values are
+// treated as pending so a future Stripe status never silently fails an order.
+func stripeRefundProviderStatus(status stripe.RefundStatus) string {
+	switch status {
+	case stripe.RefundStatusSucceeded:
+		return payment.ProviderStatusSuccess
+	case stripe.RefundStatusFailed, stripe.RefundStatusCanceled:
+		return payment.ProviderStatusFailed
+	case stripe.RefundStatusPending, stripe.RefundStatusRequiresAction:
+		return payment.ProviderStatusPending
+	default:
+		return payment.ProviderStatusPending
+	}
+}
+
 // resolveStripeMethodTypes converts instance supported_types (comma-separated)
 // into Stripe API payment_method_types. Falls back to ["card"] if empty.
 func resolveStripeMethodTypes(instanceSubMethods string) []string {
@@ -267,6 +326,7 @@ func (s *Stripe) CancelPayment(ctx context.Context, tradeNo string) error {
 
 // Ensure interface compliance.
 var (
-	_ payment.Provider           = (*Stripe)(nil)
-	_ payment.CancelableProvider = (*Stripe)(nil)
+	_ payment.Provider            = (*Stripe)(nil)
+	_ payment.CancelableProvider  = (*Stripe)(nil)
+	_ payment.RefundQueryProvider = (*Stripe)(nil)
 )

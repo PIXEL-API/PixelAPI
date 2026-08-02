@@ -236,8 +236,7 @@ func (s *PaymentService) PrepareRefund(ctx context.Context, oid int64, amt float
 	if err != nil {
 		return nil, nil, infraerrors.NotFound("NOT_FOUND", "order not found")
 	}
-	ok := []string{OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundFailed}
-	if !psSliceContains(ok, o.Status) {
+	if !psSliceContains(refundInitiableStatuses(), o.Status) {
 		return nil, nil, infraerrors.BadRequest("INVALID_STATUS", "order status does not allow refund")
 	}
 	if err := s.ensureOrderRefundableByInvoice(ctx, o.ID); err != nil {
@@ -309,6 +308,20 @@ func (s *PaymentService) prepDeduct(ctx context.Context, o *dbent.PaymentOrder, 
 	return nil
 }
 
+// ExecuteRefund 执行退款。
+//
+// 执行顺序是 gateway-first：先调网关，**只有网关确认终态成功后才扣回**用户余额
+// 或订阅时长。这与改造前「先扣款再调网关、失败再回滚」的顺序相反，原因是网关会
+// 返回 pending —— Stripe / 微信 / 支付宝在「受理成功但尚未结算」时返回
+// status=pending 且 error 为 nil（stripe.go:217 / wxpay.go:487 / alipay.go:387）。
+//
+// pending 的终态确认必然发生在**另一个请求**里（管理员点回查），那时内存中的
+// RefundPlan 早已不存在，补偿回滚无从谈起。gateway-first 把「未确认成功就一分钱
+// 不扣」变成不变式，于是：
+//   - 补偿状态完全不需要持久化（没扣过就不用回滚）
+//   - RevokeSubscription 的硬删除不再有不可逆窗口（只在确认成功后才执行）
+//   - REFUND_ROLLBACK_FAILED 那个永久粘滞位（受 migration 131 的
+//     UNIQUE(order_id, action) 保护、无任何清除路径）不再会被写出
 func (s *PaymentService) ExecuteRefund(ctx context.Context, p *RefundPlan) (*RefundResult, error) {
 	c, err := s.entClient.PaymentOrder.Update().Where(paymentorder.IDEQ(p.OrderID), paymentorder.StatusIn(OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundFailed)).SetStatus(OrderStatusRefunding).Save(ctx)
 	if err != nil {
@@ -317,74 +330,143 @@ func (s *PaymentService) ExecuteRefund(ctx context.Context, p *RefundPlan) (*Ref
 	if c == 0 {
 		return nil, infraerrors.Conflict("CONFLICT", "order status changed")
 	}
-	if p.DeductionType == payment.DeductionTypeBalance && p.BalanceToDeduct > 0 {
-		// Skip balance deduction on retry if previous attempt already deducted
-		// but failed to roll back (REFUND_ROLLBACK_FAILED in audit log).
-		if !s.hasAuditLog(ctx, p.OrderID, "REFUND_ROLLBACK_FAILED") {
-			if err := s.userRepo.DeductBalance(ctx, p.Order.UserID, p.BalanceToDeduct); err != nil {
-				s.restoreStatus(ctx, p)
-				return nil, fmt.Errorf("deduction: %w", err)
-			}
-		} else {
-			slog.Warn("skipping balance deduction on retry (previous rollback failed)", "orderID", p.OrderID)
-			p.BalanceToDeduct = 0
-		}
-	}
-	if p.DeductionType == payment.DeductionTypeSubscription && p.SubDaysToDeduct > 0 && p.SubscriptionID > 0 {
-		if !s.hasAuditLog(ctx, p.OrderID, "REFUND_ROLLBACK_FAILED") {
-			_, err := s.subscriptionSvc.ExtendSubscription(ctx, p.SubscriptionID, -p.SubDaysToDeduct)
-			if err != nil {
-				if errors.Is(err, ErrAdjustWouldExpire) {
-					// Deduction would expire the subscription — revoke it entirely
-					slog.Info("subscription deduction would expire, revoking", "orderID", p.OrderID, "subID", p.SubscriptionID, "days", p.SubDaysToDeduct)
-					if revokeErr := s.subscriptionSvc.RevokeSubscription(ctx, p.SubscriptionID); revokeErr != nil {
-						s.restoreStatus(ctx, p)
-						return nil, fmt.Errorf("revoke subscription: %w", revokeErr)
-					}
-				} else {
-					// Other errors (DB failure, not found) — abort refund
-					s.restoreStatus(ctx, p)
-					return nil, fmt.Errorf("deduct subscription days: %w", err)
-				}
-			}
-		} else {
-			slog.Warn("skipping subscription deduction on retry (previous rollback failed)", "orderID", p.OrderID)
-			p.SubDaysToDeduct = 0
-		}
-	}
-	if err := s.gwRefund(ctx, p); err != nil {
+
+	resp, err := s.gwRefund(ctx, p)
+	if err != nil {
 		return s.handleGwFail(ctx, p, err)
 	}
-	return s.markRefundOk(ctx, p)
+
+	switch refundResponseStatus(resp) {
+	case payment.ProviderStatusPending:
+		return s.markRefundPending(ctx, p, resp)
+	case payment.ProviderStatusFailed:
+		return s.handleGwFail(ctx, p, fmt.Errorf("gateway reported refund failed"))
+	default:
+		return s.settleRefundSuccess(ctx, p)
+	}
 }
 
-func (s *PaymentService) gwRefund(ctx context.Context, p *RefundPlan) error {
+// refundResponseStatus 把 provider 返回的退款状态归一到
+// success / pending / failed 三态。
+//
+// resp == nil 表示 gwRefund 压根没调网关（订单没有交易号，直接跳过），
+// 按成功处理——与本次改造前的行为一致。状态串为空或无法识别时同样按成功处理，
+// 因为改造前的语义就是「error == nil 即成功」，不能因为归一化反而把
+// 既有 provider（如 easypay 恒返回 success）的成功退款改判成别的状态。
+func refundResponseStatus(resp *payment.RefundResponse) string {
+	if resp == nil {
+		return payment.ProviderStatusSuccess
+	}
+	switch strings.ToLower(strings.TrimSpace(resp.Status)) {
+	case payment.ProviderStatusPending:
+		return payment.ProviderStatusPending
+	case payment.ProviderStatusFailed:
+		return payment.ProviderStatusFailed
+	default:
+		return payment.ProviderStatusSuccess
+	}
+}
+
+// settleRefundSuccess 在网关确认终态成功后扣款并落终态。
+func (s *PaymentService) settleRefundSuccess(ctx context.Context, p *RefundPlan) (*RefundResult, error) {
+	warning := s.applyRefundDeductions(ctx, p)
+	result, err := s.markRefundOk(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	if warning != "" {
+		result.Warning = warning
+	}
+	return result, nil
+}
+
+// applyRefundDeductions 在退款已确认落地后扣回用户余额或订阅时长。
+//
+// 走到这里时钱已经从商户账户退给用户，是既成事实，因此扣减失败**不回滚、
+// 也不改判订单状态**——订单终态必须如实反映网关结果。失败只写一条高噪声审计
+// （REFUND_DEDUCTION_FAILED）并把告警文案带回管理端，交人工补账。
+// 返回空串表示无需告警。
+func (s *PaymentService) applyRefundDeductions(ctx context.Context, p *RefundPlan) string {
+	if !p.DeductBalance {
+		return ""
+	}
+	switch p.DeductionType {
+	case payment.DeductionTypeBalance:
+		if p.BalanceToDeduct <= 0 {
+			return ""
+		}
+		if err := s.userRepo.DeductBalance(ctx, p.Order.UserID, p.BalanceToDeduct); err != nil {
+			return s.reportRefundDeductionFailure(ctx, p, "balance", err)
+		}
+	case payment.DeductionTypeSubscription:
+		if p.SubDaysToDeduct <= 0 || p.SubscriptionID <= 0 {
+			return ""
+		}
+		if _, err := s.subscriptionSvc.ExtendSubscription(ctx, p.SubscriptionID, -p.SubDaysToDeduct); err != nil {
+			if !errors.Is(err, ErrAdjustWouldExpire) {
+				return s.reportRefundDeductionFailure(ctx, p, "subscription", err)
+			}
+			// 扣减会把订阅扣成过期 —— 直接整单撤销。
+			// 此处的硬删除是安全的：只有在网关已确认退款成功后才会走到这里。
+			slog.Info("subscription deduction would expire, revoking", "orderID", p.OrderID, "subID", p.SubscriptionID, "days", p.SubDaysToDeduct)
+			if revokeErr := s.subscriptionSvc.RevokeSubscription(ctx, p.SubscriptionID); revokeErr != nil {
+				return s.reportRefundDeductionFailure(ctx, p, "subscription_revoke", revokeErr)
+			}
+		}
+	}
+	return ""
+}
+
+func (s *PaymentService) reportRefundDeductionFailure(ctx context.Context, p *RefundPlan, kind string, err error) string {
+	slog.Error("[CRITICAL] refund settled at gateway but deduction failed",
+		"orderID", p.OrderID, "userID", p.Order.UserID, "kind", kind,
+		"balanceToDeduct", p.BalanceToDeduct, "subDaysToDeduct", p.SubDaysToDeduct, "error", err)
+	s.writeAuditLog(ctx, p.OrderID, "REFUND_DEDUCTION_FAILED", "admin", map[string]any{
+		"kind":            kind,
+		"detail":          psErrMsg(err),
+		"balanceToDeduct": p.BalanceToDeduct,
+		"subDaysToDeduct": p.SubDaysToDeduct,
+	})
+	return "refund settled at gateway but deduction failed (" + kind + "): " + psErrMsg(err) + "; manual reconciliation required"
+}
+
+// gwRefund 向网关发起退款。
+//
+// 返回值即 provider 的原始响应，调用方据此区分 success / pending / failed。
+// 改造前这里写的是 `_, err = prov.Refund(...)`，把响应连同 Status 和 RefundID
+// 一起丢弃，于是「受理但未结算」被当成终态成功 —— 这正是 B-4 要修的根因。
+//
+// 返回 (nil, nil) 表示订单没有交易号、根本没调网关，调用方按成功处理。
+func (s *PaymentService) gwRefund(ctx context.Context, p *RefundPlan) (*payment.RefundResponse, error) {
 	if p.Order.PaymentTradeNo == "" {
 		s.writeAuditLog(ctx, p.Order.ID, "REFUND_NO_TRADE_NO", "admin", map[string]any{"detail": "skipped"})
-		return nil
+		return nil, nil
 	}
 
 	// Use the exact provider instance that created this order, not a random one
 	// from the registry. Each instance has its own merchant credentials.
 	prov, err := s.getRefundProvider(ctx, p.Order)
 	if err != nil {
-		return fmt.Errorf("get refund provider: %w", err)
+		return nil, fmt.Errorf("get refund provider: %w", err)
 	}
 	if err := validateProviderSnapshotMetadata(p.Order, prov.ProviderKey(), providerMerchantIdentityMetadata(prov)); err != nil {
 		s.writeAuditLog(ctx, p.Order.ID, "REFUND_PROVIDER_METADATA_MISMATCH", "admin", map[string]any{
 			"detail": err.Error(),
 		})
-		return err
+		return nil, err
 	}
 	finishProviderCall := servertiming.ObserveDependency(ctx, "payment")
-	_, err = prov.Refund(ctx, payment.RefundRequest{
+	resp, err := prov.Refund(ctx, payment.RefundRequest{
 		TradeNo: p.Order.PaymentTradeNo,
 		OrderID: p.Order.OutTradeNo,
 		Amount:  strconv.FormatFloat(p.GatewayAmount, 'f', 2, 64),
 		Reason:  p.Reason,
 	})
 	finishProviderCall()
-	return err
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
 }
 
 // getRefundProvider creates a provider using the order's original instance config.
@@ -400,33 +482,32 @@ func (s *PaymentService) getRefundProvider(ctx context.Context, o *dbent.Payment
 	return s.createProviderFromInstance(ctx, inst)
 }
 
+// handleGwFail 处理网关退款失败。
+//
+// gateway-first 顺序下，走到这里时**尚未扣过任何余额或订阅**，因此不存在需要
+// 补偿回滚的动作，订单直接还原到发起退款前的状态供管理员重试。
+// 这也是本次改造删掉 RollbackRefund 与 REFUND_ROLLBACK_FAILED 粘滞位的原因。
 func (s *PaymentService) handleGwFail(ctx context.Context, p *RefundPlan, gErr error) (*RefundResult, error) {
-	if s.RollbackRefund(ctx, p, gErr) {
-		s.restoreStatus(ctx, p)
-		s.writeAuditLog(ctx, p.OrderID, "REFUND_GATEWAY_FAILED", "admin", map[string]any{"detail": psErrMsg(gErr)})
-		if failedOrder, err := s.entClient.PaymentOrder.Get(ctx, p.OrderID); err == nil {
-			s.notifyPaymentOrder(ctx, "refund_failed", failedOrder)
-		} else {
-			slog.Warn("payment.system_notice_refund_failed_reload_failed", "order_id", p.OrderID, "error", err)
-		}
-		return &RefundResult{Success: false, Warning: "gateway failed: " + psErrMsg(gErr) + ", rolled back"}, nil
-	}
-	now := time.Now()
-	_, _ = s.entClient.PaymentOrder.UpdateOneID(p.OrderID).SetStatus(OrderStatusRefundFailed).SetFailedAt(now).SetFailedReason(psErrMsg(gErr)).Save(ctx)
-	s.writeAuditLog(ctx, p.OrderID, "REFUND_FAILED", "admin", map[string]any{"detail": psErrMsg(gErr)})
+	s.restoreStatus(ctx, p)
+	s.writeAuditLog(ctx, p.OrderID, "REFUND_GATEWAY_FAILED", "admin", map[string]any{"detail": psErrMsg(gErr)})
 	if failedOrder, err := s.entClient.PaymentOrder.Get(ctx, p.OrderID); err == nil {
 		s.notifyPaymentOrder(ctx, "refund_failed", failedOrder)
 	} else {
 		slog.Warn("payment.system_notice_refund_failed_reload_failed", "order_id", p.OrderID, "error", err)
 	}
-	return nil, infraerrors.InternalServer("REFUND_FAILED", psErrMsg(gErr))
+	return &RefundResult{Success: false, Warning: "gateway failed: " + psErrMsg(gErr) + ", nothing was deducted"}, nil
+}
+
+// refundTerminalStatus 判定退款终态：部分退款与全额退款分属两个状态。
+func refundTerminalStatus(p *RefundPlan) string {
+	if p.Order != nil && p.RefundAmount < p.Order.Amount {
+		return OrderStatusPartiallyRefunded
+	}
+	return OrderStatusRefunded
 }
 
 func (s *PaymentService) markRefundOk(ctx context.Context, p *RefundPlan) (*RefundResult, error) {
-	fs := OrderStatusRefunded
-	if p.RefundAmount < p.Order.Amount {
-		fs = OrderStatusPartiallyRefunded
-	}
+	fs := refundTerminalStatus(p)
 	now := time.Now()
 	_, err := s.entClient.PaymentOrder.UpdateOneID(p.OrderID).SetStatus(fs).SetRefundAmount(p.RefundAmount).SetRefundReason(p.Reason).SetRefundAt(now).SetForceRefund(p.Force).Save(ctx)
 	if err != nil {
@@ -441,28 +522,23 @@ func (s *PaymentService) markRefundOk(ctx context.Context, p *RefundPlan) (*Refu
 	return &RefundResult{Success: true, BalanceDeducted: p.BalanceToDeduct, SubDaysDeducted: p.SubDaysToDeduct}, nil
 }
 
-func (s *PaymentService) RollbackRefund(ctx context.Context, p *RefundPlan, gErr error) bool {
-	if p.DeductionType == payment.DeductionTypeBalance && p.BalanceToDeduct > 0 {
-		if err := s.userRepo.UpdateBalance(ctx, p.Order.UserID, p.BalanceToDeduct); err != nil {
-			slog.Error("[CRITICAL] rollback failed", "orderID", p.OrderID, "amount", p.BalanceToDeduct, "error", err)
-			s.writeAuditLog(ctx, p.OrderID, "REFUND_ROLLBACK_FAILED", "admin", map[string]any{"gatewayError": psErrMsg(gErr), "rollbackError": psErrMsg(err), "balanceDeducted": p.BalanceToDeduct})
-			return false
-		}
-	}
-	if p.DeductionType == payment.DeductionTypeSubscription && p.SubDaysToDeduct > 0 && p.SubscriptionID > 0 {
-		if _, err := s.subscriptionSvc.ExtendSubscription(ctx, p.SubscriptionID, p.SubDaysToDeduct); err != nil {
-			slog.Error("[CRITICAL] subscription rollback failed", "orderID", p.OrderID, "subID", p.SubscriptionID, "days", p.SubDaysToDeduct, "error", err)
-			s.writeAuditLog(ctx, p.OrderID, "REFUND_ROLLBACK_FAILED", "admin", map[string]any{"gatewayError": psErrMsg(gErr), "rollbackError": psErrMsg(err), "subDaysDeducted": p.SubDaysToDeduct})
-			return false
-		}
-	}
-	return true
-}
-
+// restoreStatus 把订单还原到发起退款前的状态。
+//
+// 改造前这里硬编码只认 COMPLETED / REFUND_REQUESTED，会把从 REFUND_FAILED
+// 重试的订单静默降级成 COMPLETED。现在按原状态还原，仅在原状态不在
+// PrepareRefund 允许的白名单内时才回落 COMPLETED。
 func (s *PaymentService) restoreStatus(ctx context.Context, p *RefundPlan) {
 	rs := OrderStatusCompleted
-	if p.Order.Status == OrderStatusRefundRequested {
-		rs = OrderStatusRefundRequested
+	if p.Order != nil && psSliceContains(refundInitiableStatuses(), p.Order.Status) {
+		rs = p.Order.Status
 	}
 	_, _ = s.entClient.PaymentOrder.UpdateOneID(p.OrderID).SetStatus(rs).Save(ctx)
+}
+
+// refundInitiableStatuses 是允许**发起**退款的订单状态集合。
+//
+// 刻意不含 REFUND_PENDING：pending 订单已经在网关侧有一笔在途退款，
+// 再发起一次会造成重复退款。它只能经 QueryAndFinalizeRefund 收敛到终态。
+func refundInitiableStatuses() []string {
+	return []string{OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundFailed}
 }

@@ -23237,6 +23237,8 @@ type PaymentOrderMutation struct {
 	refund_requested_at      *time.Time
 	refund_request_reason    *string
 	refund_requested_by      *string
+	refund_trade_no          *string
+	refund_deduct_on_settle  *bool
 	expires_at               *time.Time
 	paid_at                  *time.Time
 	completed_at             *time.Time
@@ -24805,6 +24807,78 @@ func (m *PaymentOrderMutation) ResetRefundRequestedBy() {
 	delete(m.clearedFields, paymentorder.FieldRefundRequestedBy)
 }
 
+// SetRefundTradeNo sets the "refund_trade_no" field.
+func (m *PaymentOrderMutation) SetRefundTradeNo(s string) {
+	m.refund_trade_no = &s
+}
+
+// RefundTradeNo returns the value of the "refund_trade_no" field in the mutation.
+func (m *PaymentOrderMutation) RefundTradeNo() (r string, exists bool) {
+	v := m.refund_trade_no
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRefundTradeNo returns the old "refund_trade_no" field's value of the PaymentOrder entity.
+// If the PaymentOrder object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PaymentOrderMutation) OldRefundTradeNo(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRefundTradeNo is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRefundTradeNo requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRefundTradeNo: %w", err)
+	}
+	return oldValue.RefundTradeNo, nil
+}
+
+// ResetRefundTradeNo resets all changes to the "refund_trade_no" field.
+func (m *PaymentOrderMutation) ResetRefundTradeNo() {
+	m.refund_trade_no = nil
+}
+
+// SetRefundDeductOnSettle sets the "refund_deduct_on_settle" field.
+func (m *PaymentOrderMutation) SetRefundDeductOnSettle(b bool) {
+	m.refund_deduct_on_settle = &b
+}
+
+// RefundDeductOnSettle returns the value of the "refund_deduct_on_settle" field in the mutation.
+func (m *PaymentOrderMutation) RefundDeductOnSettle() (r bool, exists bool) {
+	v := m.refund_deduct_on_settle
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRefundDeductOnSettle returns the old "refund_deduct_on_settle" field's value of the PaymentOrder entity.
+// If the PaymentOrder object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PaymentOrderMutation) OldRefundDeductOnSettle(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRefundDeductOnSettle is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRefundDeductOnSettle requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRefundDeductOnSettle: %w", err)
+	}
+	return oldValue.RefundDeductOnSettle, nil
+}
+
+// ResetRefundDeductOnSettle resets all changes to the "refund_deduct_on_settle" field.
+func (m *PaymentOrderMutation) ResetRefundDeductOnSettle() {
+	m.refund_deduct_on_settle = nil
+}
+
 // SetExpiresAt sets the "expires_at" field.
 func (m *PaymentOrderMutation) SetExpiresAt(t time.Time) {
 	m.expires_at = &t
@@ -25291,7 +25365,7 @@ func (m *PaymentOrderMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *PaymentOrderMutation) Fields() []string {
-	fields := make([]string, 0, 40)
+	fields := make([]string, 0, 42)
 	if m.user != nil {
 		fields = append(fields, paymentorder.FieldUserID)
 	}
@@ -25381,6 +25455,12 @@ func (m *PaymentOrderMutation) Fields() []string {
 	}
 	if m.refund_requested_by != nil {
 		fields = append(fields, paymentorder.FieldRefundRequestedBy)
+	}
+	if m.refund_trade_no != nil {
+		fields = append(fields, paymentorder.FieldRefundTradeNo)
+	}
+	if m.refund_deduct_on_settle != nil {
+		fields = append(fields, paymentorder.FieldRefundDeductOnSettle)
 	}
 	if m.expires_at != nil {
 		fields = append(fields, paymentorder.FieldExpiresAt)
@@ -25480,6 +25560,10 @@ func (m *PaymentOrderMutation) Field(name string) (ent.Value, bool) {
 		return m.RefundRequestReason()
 	case paymentorder.FieldRefundRequestedBy:
 		return m.RefundRequestedBy()
+	case paymentorder.FieldRefundTradeNo:
+		return m.RefundTradeNo()
+	case paymentorder.FieldRefundDeductOnSettle:
+		return m.RefundDeductOnSettle()
 	case paymentorder.FieldExpiresAt:
 		return m.ExpiresAt()
 	case paymentorder.FieldPaidAt:
@@ -25569,6 +25653,10 @@ func (m *PaymentOrderMutation) OldField(ctx context.Context, name string) (ent.V
 		return m.OldRefundRequestReason(ctx)
 	case paymentorder.FieldRefundRequestedBy:
 		return m.OldRefundRequestedBy(ctx)
+	case paymentorder.FieldRefundTradeNo:
+		return m.OldRefundTradeNo(ctx)
+	case paymentorder.FieldRefundDeductOnSettle:
+		return m.OldRefundDeductOnSettle(ctx)
 	case paymentorder.FieldExpiresAt:
 		return m.OldExpiresAt(ctx)
 	case paymentorder.FieldPaidAt:
@@ -25807,6 +25895,20 @@ func (m *PaymentOrderMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetRefundRequestedBy(v)
+		return nil
+	case paymentorder.FieldRefundTradeNo:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRefundTradeNo(v)
+		return nil
+	case paymentorder.FieldRefundDeductOnSettle:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRefundDeductOnSettle(v)
 		return nil
 	case paymentorder.FieldExpiresAt:
 		v, ok := value.(time.Time)
@@ -26244,6 +26346,12 @@ func (m *PaymentOrderMutation) ResetField(name string) error {
 		return nil
 	case paymentorder.FieldRefundRequestedBy:
 		m.ResetRefundRequestedBy()
+		return nil
+	case paymentorder.FieldRefundTradeNo:
+		m.ResetRefundTradeNo()
+		return nil
+	case paymentorder.FieldRefundDeductOnSettle:
+		m.ResetRefundDeductOnSettle()
 		return nil
 	case paymentorder.FieldExpiresAt:
 		m.ResetExpiresAt()

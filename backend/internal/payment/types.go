@@ -22,15 +22,22 @@ const (
 
 // Order status constants shared across payment and service layers.
 const (
-	OrderStatusPending           = "PENDING"
-	OrderStatusPaid              = "PAID"
-	OrderStatusRecharging        = "RECHARGING"
-	OrderStatusCompleted         = "COMPLETED"
-	OrderStatusExpired           = "EXPIRED"
-	OrderStatusCancelled         = "CANCELLED"
-	OrderStatusFailed            = "FAILED"
-	OrderStatusRefundRequested   = "REFUND_REQUESTED"
-	OrderStatusRefunding         = "REFUNDING"
+	OrderStatusPending         = "PENDING"
+	OrderStatusPaid            = "PAID"
+	OrderStatusRecharging      = "RECHARGING"
+	OrderStatusCompleted       = "COMPLETED"
+	OrderStatusExpired         = "EXPIRED"
+	OrderStatusCancelled       = "CANCELLED"
+	OrderStatusFailed          = "FAILED"
+	OrderStatusRefundRequested = "REFUND_REQUESTED"
+	OrderStatusRefunding       = "REFUNDING"
+	// OrderStatusRefundPending 网关已受理退款但尚未落地。
+	//
+	// 与 REFUNDING 的区别：REFUNDING 是「本进程持锁执行中」的瞬时态，
+	// REFUND_PENDING 是「已离开本进程、等网关结算」的持久态，
+	// 需要管理员或后续回查把它推进到终态。两者不可合并——合并后回查器
+	// 无法区分「另一个请求正在执行」和「等待网关结果」。
+	OrderStatusRefundPending     = "REFUND_PENDING"
 	OrderStatusPartiallyRefunded = "PARTIALLY_REFUNDED"
 	OrderStatusRefunded          = "REFUNDED"
 	OrderStatusRefundFailed      = "REFUND_FAILED"
@@ -191,6 +198,15 @@ type RefundRequest struct {
 	Reason  string
 }
 
+// RefundQueryRequest contains identifiers needed to query a previously
+// requested refund.
+type RefundQueryRequest struct {
+	TradeNo  string
+	OrderID  string
+	RefundID string
+	Amount   string
+}
+
 // RefundResponse is returned after a refund request.
 type RefundResponse struct {
 	RefundID string
@@ -223,6 +239,16 @@ type Provider interface {
 	VerifyNotification(ctx context.Context, rawBody string, headers map[string]string) (*PaymentNotification, error)
 	// Refund requests a refund from the upstream provider.
 	Refund(ctx context.Context, req RefundRequest) (*RefundResponse, error)
+}
+
+// RefundQueryProvider extends Provider with refund status querying.
+//
+// 可选接口：未实现的 provider（easypay 恒返回 success，不会产生 pending；
+// alipay 目前无实现）由服务层类型断言失败后返回 REFUND_QUERY_UNSUPPORTED，
+// 提示管理员去网关后台人工核对。
+type RefundQueryProvider interface {
+	Provider
+	QueryRefund(ctx context.Context, req RefundQueryRequest) (*RefundResponse, error)
 }
 
 // CancelableProvider extends Provider with the ability to cancel pending payments.

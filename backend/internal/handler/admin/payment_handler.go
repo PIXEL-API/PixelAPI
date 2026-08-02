@@ -201,6 +201,25 @@ func (h *PaymentHandler) ProcessRefund(c *gin.Context) {
 	response.Success(c, result)
 }
 
+// QueryRefundStatus 向支付渠道回查一笔 REFUND_PENDING 退款，并把订单推进到终态。
+// POST /api/v1/admin/payment/orders/:id/refund/query
+//
+// 退款在网关侧「已受理但未结算」时订单会停在 REFUND_PENDING，这是它唯一的出口。
+// 回查失败（网络错误、渠道不支持）不会改判订单状态，订单留在 pending 供重试。
+func (h *PaymentHandler) QueryRefundStatus(c *gin.Context) {
+	orderID, ok := parseIDParam(c, "id")
+	if !ok {
+		return
+	}
+
+	result, err := h.paymentService.QueryAndFinalizeRefund(c.Request.Context(), orderID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
 // --- Subscription Plans ---
 
 // ListPlans returns all subscription plans.

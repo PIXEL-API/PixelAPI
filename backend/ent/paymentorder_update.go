@@ -593,6 +593,34 @@ func (_u *PaymentOrderUpdate) ClearRefundRequestedBy() *PaymentOrderUpdate {
 	return _u
 }
 
+// SetRefundTradeNo sets the "refund_trade_no" field.
+func (_u *PaymentOrderUpdate) SetRefundTradeNo(v string) *PaymentOrderUpdate {
+	_u.mutation.SetRefundTradeNo(v)
+	return _u
+}
+
+// SetNillableRefundTradeNo sets the "refund_trade_no" field if the given value is not nil.
+func (_u *PaymentOrderUpdate) SetNillableRefundTradeNo(v *string) *PaymentOrderUpdate {
+	if v != nil {
+		_u.SetRefundTradeNo(*v)
+	}
+	return _u
+}
+
+// SetRefundDeductOnSettle sets the "refund_deduct_on_settle" field.
+func (_u *PaymentOrderUpdate) SetRefundDeductOnSettle(v bool) *PaymentOrderUpdate {
+	_u.mutation.SetRefundDeductOnSettle(v)
+	return _u
+}
+
+// SetNillableRefundDeductOnSettle sets the "refund_deduct_on_settle" field if the given value is not nil.
+func (_u *PaymentOrderUpdate) SetNillableRefundDeductOnSettle(v *bool) *PaymentOrderUpdate {
+	if v != nil {
+		_u.SetRefundDeductOnSettle(*v)
+	}
+	return _u
+}
+
 // SetExpiresAt sets the "expires_at" field.
 func (_u *PaymentOrderUpdate) SetExpiresAt(v time.Time) *PaymentOrderUpdate {
 	_u.mutation.SetExpiresAt(v)
@@ -850,6 +878,11 @@ func (_u *PaymentOrderUpdate) check() error {
 			return &ValidationError{Name: "refund_requested_by", err: fmt.Errorf(`ent: validator failed for field "PaymentOrder.refund_requested_by": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.RefundTradeNo(); ok {
+		if err := paymentorder.RefundTradeNoValidator(v); err != nil {
+			return &ValidationError{Name: "refund_trade_no", err: fmt.Errorf(`ent: validator failed for field "PaymentOrder.refund_trade_no": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.ClientIP(); ok {
 		if err := paymentorder.ClientIPValidator(v); err != nil {
 			return &ValidationError{Name: "client_ip", err: fmt.Errorf(`ent: validator failed for field "PaymentOrder.client_ip": %w`, err)}
@@ -1036,6 +1069,12 @@ func (_u *PaymentOrderUpdate) sqlSave(ctx context.Context) (_node int, err error
 	}
 	if _u.mutation.RefundRequestedByCleared() {
 		_spec.ClearField(paymentorder.FieldRefundRequestedBy, field.TypeString)
+	}
+	if value, ok := _u.mutation.RefundTradeNo(); ok {
+		_spec.SetField(paymentorder.FieldRefundTradeNo, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.RefundDeductOnSettle(); ok {
+		_spec.SetField(paymentorder.FieldRefundDeductOnSettle, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.ExpiresAt(); ok {
 		_spec.SetField(paymentorder.FieldExpiresAt, field.TypeTime, value)
@@ -1692,6 +1731,34 @@ func (_u *PaymentOrderUpdateOne) ClearRefundRequestedBy() *PaymentOrderUpdateOne
 	return _u
 }
 
+// SetRefundTradeNo sets the "refund_trade_no" field.
+func (_u *PaymentOrderUpdateOne) SetRefundTradeNo(v string) *PaymentOrderUpdateOne {
+	_u.mutation.SetRefundTradeNo(v)
+	return _u
+}
+
+// SetNillableRefundTradeNo sets the "refund_trade_no" field if the given value is not nil.
+func (_u *PaymentOrderUpdateOne) SetNillableRefundTradeNo(v *string) *PaymentOrderUpdateOne {
+	if v != nil {
+		_u.SetRefundTradeNo(*v)
+	}
+	return _u
+}
+
+// SetRefundDeductOnSettle sets the "refund_deduct_on_settle" field.
+func (_u *PaymentOrderUpdateOne) SetRefundDeductOnSettle(v bool) *PaymentOrderUpdateOne {
+	_u.mutation.SetRefundDeductOnSettle(v)
+	return _u
+}
+
+// SetNillableRefundDeductOnSettle sets the "refund_deduct_on_settle" field if the given value is not nil.
+func (_u *PaymentOrderUpdateOne) SetNillableRefundDeductOnSettle(v *bool) *PaymentOrderUpdateOne {
+	if v != nil {
+		_u.SetRefundDeductOnSettle(*v)
+	}
+	return _u
+}
+
 // SetExpiresAt sets the "expires_at" field.
 func (_u *PaymentOrderUpdateOne) SetExpiresAt(v time.Time) *PaymentOrderUpdateOne {
 	_u.mutation.SetExpiresAt(v)
@@ -1962,6 +2029,11 @@ func (_u *PaymentOrderUpdateOne) check() error {
 			return &ValidationError{Name: "refund_requested_by", err: fmt.Errorf(`ent: validator failed for field "PaymentOrder.refund_requested_by": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.RefundTradeNo(); ok {
+		if err := paymentorder.RefundTradeNoValidator(v); err != nil {
+			return &ValidationError{Name: "refund_trade_no", err: fmt.Errorf(`ent: validator failed for field "PaymentOrder.refund_trade_no": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.ClientIP(); ok {
 		if err := paymentorder.ClientIPValidator(v); err != nil {
 			return &ValidationError{Name: "client_ip", err: fmt.Errorf(`ent: validator failed for field "PaymentOrder.client_ip": %w`, err)}
@@ -2165,6 +2237,12 @@ func (_u *PaymentOrderUpdateOne) sqlSave(ctx context.Context) (_node *PaymentOrd
 	}
 	if _u.mutation.RefundRequestedByCleared() {
 		_spec.ClearField(paymentorder.FieldRefundRequestedBy, field.TypeString)
+	}
+	if value, ok := _u.mutation.RefundTradeNo(); ok {
+		_spec.SetField(paymentorder.FieldRefundTradeNo, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.RefundDeductOnSettle(); ok {
+		_spec.SetField(paymentorder.FieldRefundDeductOnSettle, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.ExpiresAt(); ok {
 		_spec.SetField(paymentorder.FieldExpiresAt, field.TypeTime, value)

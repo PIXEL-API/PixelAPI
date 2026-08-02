@@ -74,6 +74,10 @@ const (
 	FieldRefundRequestReason = "refund_request_reason"
 	// FieldRefundRequestedBy holds the string denoting the refund_requested_by field in the database.
 	FieldRefundRequestedBy = "refund_requested_by"
+	// FieldRefundTradeNo holds the string denoting the refund_trade_no field in the database.
+	FieldRefundTradeNo = "refund_trade_no"
+	// FieldRefundDeductOnSettle holds the string denoting the refund_deduct_on_settle field in the database.
+	FieldRefundDeductOnSettle = "refund_deduct_on_settle"
 	// FieldExpiresAt holds the string denoting the expires_at field in the database.
 	FieldExpiresAt = "expires_at"
 	// FieldPaidAt holds the string denoting the paid_at field in the database.
@@ -140,6 +144,8 @@ var Columns = []string{
 	FieldRefundRequestedAt,
 	FieldRefundRequestReason,
 	FieldRefundRequestedBy,
+	FieldRefundTradeNo,
+	FieldRefundDeductOnSettle,
 	FieldExpiresAt,
 	FieldPaidAt,
 	FieldCompletedAt,
@@ -197,6 +203,12 @@ var (
 	DefaultForceRefund bool
 	// RefundRequestedByValidator is a validator for the "refund_requested_by" field. It is called by the builders before save.
 	RefundRequestedByValidator func(string) error
+	// DefaultRefundTradeNo holds the default value on creation for the "refund_trade_no" field.
+	DefaultRefundTradeNo string
+	// RefundTradeNoValidator is a validator for the "refund_trade_no" field. It is called by the builders before save.
+	RefundTradeNoValidator func(string) error
+	// DefaultRefundDeductOnSettle holds the default value on creation for the "refund_deduct_on_settle" field.
+	DefaultRefundDeductOnSettle bool
 	// ClientIPValidator is a validator for the "client_ip" field. It is called by the builders before save.
 	ClientIPValidator func(string) error
 	// SrcHostValidator is a validator for the "src_host" field. It is called by the builders before save.
@@ -360,6 +372,16 @@ func ByRefundRequestReason(opts ...sql.OrderTermOption) OrderOption {
 // ByRefundRequestedBy orders the results by the refund_requested_by field.
 func ByRefundRequestedBy(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldRefundRequestedBy, opts...).ToFunc()
+}
+
+// ByRefundTradeNo orders the results by the refund_trade_no field.
+func ByRefundTradeNo(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRefundTradeNo, opts...).ToFunc()
+}
+
+// ByRefundDeductOnSettle orders the results by the refund_deduct_on_settle field.
+func ByRefundDeductOnSettle(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRefundDeductOnSettle, opts...).ToFunc()
 }
 
 // ByExpiresAt orders the results by the expires_at field.

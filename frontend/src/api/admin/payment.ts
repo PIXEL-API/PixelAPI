@@ -7,6 +7,7 @@ import { apiClient } from '../client'
 import type {
   AdminPaymentOrderDetail,
   DashboardStats,
+  OrderStatus,
   PaymentOrder,
   PaymentChannel,
   SubscriptionPlan,
@@ -62,6 +63,16 @@ export interface UpdatePaymentConfigRequest {
   subscription_tab_enabled?: boolean
   help_image_url?: string
   help_text?: string
+}
+
+/** Result of POST /admin/payment/orders/:id/refund/query */
+export interface RefundQueryResult {
+  order_id: number
+  /** Order status after the gateway re-check */
+  order_status: OrderStatus
+  refund_status: 'success' | 'pending' | 'failed'
+  balance_deducted?: number
+  sub_days_deducted?: number
 }
 
 export interface AdminOrderFilters {
@@ -175,6 +186,15 @@ export const adminPaymentAPI = {
   /** Process a refund */
   refundOrder(id: number, data: { amount: number; reason: string; deduct_balance?: boolean; force?: boolean }) {
     return apiClient.post(`/admin/payment/orders/${id}/refund`, data)
+  },
+
+  /**
+   * Re-check a REFUND_PENDING order against the payment gateway and settle it
+   * to its terminal state. Returns 400 REFUND_QUERY_UNSUPPORTED when the
+   * provider cannot be queried and the refund must be reconciled by hand.
+   */
+  queryRefundStatus(id: number) {
+    return apiClient.post<RefundQueryResult>(`/admin/payment/orders/${id}/refund/query`)
   },
 
   // ==================== Channels ====================

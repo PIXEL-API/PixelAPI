@@ -10009,6 +10009,7 @@ export default {
       failed: "Failed",
       refund_requested: "Refund Requested",
       refunding: "Refunding",
+      refund_pending: "Refund pending",
       refunded: "Refunded",
       partially_refunded: "Partially Refunded",
       refund_failed: "Refund Failed",
@@ -10162,6 +10163,8 @@ export default {
       BALANCE_NOT_ENOUGH: "Refund amount exceeds balance.",
       REFUND_AMOUNT_EXCEEDED: "Refund amount exceeds the recharge amount.",
       REFUND_FAILED: "Refund failed.",
+      REFUND_QUERY_UNSUPPORTED:
+        "This payment provider does not support refund queries. Reconcile the refund manually in the gateway console.",
     },
     stripePay: "Pay Now",
     stripeSuccessProcessing: "Payment successful, processing your order...",
@@ -10263,6 +10266,15 @@ export default {
       manualFulfillSuccess: "Order fulfilled",
       approveRefund: "Approve Refund",
       retryRefund: "Retry Refund",
+      queryRefund: "Query Refund Status",
+      queryRefundHint:
+        "Ask the payment gateway for the final result of this refund and update the order accordingly",
+      refundQuerySuccess: "Refund confirmed. Order updated.",
+      refundQueryStillPending:
+        "The gateway is still processing this refund. Please query again later.",
+      refundQueryFailedState:
+        "The gateway reported a failed refund. The order is now marked as refund failed and can be retried.",
+      refundQueryError: "Failed to query refund status",
       refundRequestInfo: "Refund Request Info",
       refundRequestedAt: "Requested At",
       refundRequestedBy: "Requested By",

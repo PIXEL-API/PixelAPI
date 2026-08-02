@@ -371,6 +371,34 @@ func (_c *PaymentOrderCreate) SetNillableRefundRequestedBy(v *string) *PaymentOr
 	return _c
 }
 
+// SetRefundTradeNo sets the "refund_trade_no" field.
+func (_c *PaymentOrderCreate) SetRefundTradeNo(v string) *PaymentOrderCreate {
+	_c.mutation.SetRefundTradeNo(v)
+	return _c
+}
+
+// SetNillableRefundTradeNo sets the "refund_trade_no" field if the given value is not nil.
+func (_c *PaymentOrderCreate) SetNillableRefundTradeNo(v *string) *PaymentOrderCreate {
+	if v != nil {
+		_c.SetRefundTradeNo(*v)
+	}
+	return _c
+}
+
+// SetRefundDeductOnSettle sets the "refund_deduct_on_settle" field.
+func (_c *PaymentOrderCreate) SetRefundDeductOnSettle(v bool) *PaymentOrderCreate {
+	_c.mutation.SetRefundDeductOnSettle(v)
+	return _c
+}
+
+// SetNillableRefundDeductOnSettle sets the "refund_deduct_on_settle" field if the given value is not nil.
+func (_c *PaymentOrderCreate) SetNillableRefundDeductOnSettle(v *bool) *PaymentOrderCreate {
+	if v != nil {
+		_c.SetRefundDeductOnSettle(*v)
+	}
+	return _c
+}
+
 // SetExpiresAt sets the "expires_at" field.
 func (_c *PaymentOrderCreate) SetExpiresAt(v time.Time) *PaymentOrderCreate {
 	_c.mutation.SetExpiresAt(v)
@@ -551,6 +579,14 @@ func (_c *PaymentOrderCreate) defaults() {
 		v := paymentorder.DefaultForceRefund
 		_c.mutation.SetForceRefund(v)
 	}
+	if _, ok := _c.mutation.RefundTradeNo(); !ok {
+		v := paymentorder.DefaultRefundTradeNo
+		_c.mutation.SetRefundTradeNo(v)
+	}
+	if _, ok := _c.mutation.RefundDeductOnSettle(); !ok {
+		v := paymentorder.DefaultRefundDeductOnSettle
+		_c.mutation.SetRefundDeductOnSettle(v)
+	}
 	if _, ok := _c.mutation.CreatedAt(); !ok {
 		v := paymentorder.DefaultCreatedAt()
 		_c.mutation.SetCreatedAt(v)
@@ -659,6 +695,17 @@ func (_c *PaymentOrderCreate) check() error {
 		if err := paymentorder.RefundRequestedByValidator(v); err != nil {
 			return &ValidationError{Name: "refund_requested_by", err: fmt.Errorf(`ent: validator failed for field "PaymentOrder.refund_requested_by": %w`, err)}
 		}
+	}
+	if _, ok := _c.mutation.RefundTradeNo(); !ok {
+		return &ValidationError{Name: "refund_trade_no", err: errors.New(`ent: missing required field "PaymentOrder.refund_trade_no"`)}
+	}
+	if v, ok := _c.mutation.RefundTradeNo(); ok {
+		if err := paymentorder.RefundTradeNoValidator(v); err != nil {
+			return &ValidationError{Name: "refund_trade_no", err: fmt.Errorf(`ent: validator failed for field "PaymentOrder.refund_trade_no": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.RefundDeductOnSettle(); !ok {
+		return &ValidationError{Name: "refund_deduct_on_settle", err: errors.New(`ent: missing required field "PaymentOrder.refund_deduct_on_settle"`)}
 	}
 	if _, ok := _c.mutation.ExpiresAt(); !ok {
 		return &ValidationError{Name: "expires_at", err: errors.New(`ent: missing required field "PaymentOrder.expires_at"`)}
@@ -830,6 +877,14 @@ func (_c *PaymentOrderCreate) createSpec() (*PaymentOrder, *sqlgraph.CreateSpec)
 	if value, ok := _c.mutation.RefundRequestedBy(); ok {
 		_spec.SetField(paymentorder.FieldRefundRequestedBy, field.TypeString, value)
 		_node.RefundRequestedBy = &value
+	}
+	if value, ok := _c.mutation.RefundTradeNo(); ok {
+		_spec.SetField(paymentorder.FieldRefundTradeNo, field.TypeString, value)
+		_node.RefundTradeNo = value
+	}
+	if value, ok := _c.mutation.RefundDeductOnSettle(); ok {
+		_spec.SetField(paymentorder.FieldRefundDeductOnSettle, field.TypeBool, value)
+		_node.RefundDeductOnSettle = value
 	}
 	if value, ok := _c.mutation.ExpiresAt(); ok {
 		_spec.SetField(paymentorder.FieldExpiresAt, field.TypeTime, value)
@@ -1441,6 +1496,30 @@ func (u *PaymentOrderUpsert) UpdateRefundRequestedBy() *PaymentOrderUpsert {
 // ClearRefundRequestedBy clears the value of the "refund_requested_by" field.
 func (u *PaymentOrderUpsert) ClearRefundRequestedBy() *PaymentOrderUpsert {
 	u.SetNull(paymentorder.FieldRefundRequestedBy)
+	return u
+}
+
+// SetRefundTradeNo sets the "refund_trade_no" field.
+func (u *PaymentOrderUpsert) SetRefundTradeNo(v string) *PaymentOrderUpsert {
+	u.Set(paymentorder.FieldRefundTradeNo, v)
+	return u
+}
+
+// UpdateRefundTradeNo sets the "refund_trade_no" field to the value that was provided on create.
+func (u *PaymentOrderUpsert) UpdateRefundTradeNo() *PaymentOrderUpsert {
+	u.SetExcluded(paymentorder.FieldRefundTradeNo)
+	return u
+}
+
+// SetRefundDeductOnSettle sets the "refund_deduct_on_settle" field.
+func (u *PaymentOrderUpsert) SetRefundDeductOnSettle(v bool) *PaymentOrderUpsert {
+	u.Set(paymentorder.FieldRefundDeductOnSettle, v)
+	return u
+}
+
+// UpdateRefundDeductOnSettle sets the "refund_deduct_on_settle" field to the value that was provided on create.
+func (u *PaymentOrderUpsert) UpdateRefundDeductOnSettle() *PaymentOrderUpsert {
+	u.SetExcluded(paymentorder.FieldRefundDeductOnSettle)
 	return u
 }
 
@@ -2212,6 +2291,34 @@ func (u *PaymentOrderUpsertOne) UpdateRefundRequestedBy() *PaymentOrderUpsertOne
 func (u *PaymentOrderUpsertOne) ClearRefundRequestedBy() *PaymentOrderUpsertOne {
 	return u.Update(func(s *PaymentOrderUpsert) {
 		s.ClearRefundRequestedBy()
+	})
+}
+
+// SetRefundTradeNo sets the "refund_trade_no" field.
+func (u *PaymentOrderUpsertOne) SetRefundTradeNo(v string) *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.SetRefundTradeNo(v)
+	})
+}
+
+// UpdateRefundTradeNo sets the "refund_trade_no" field to the value that was provided on create.
+func (u *PaymentOrderUpsertOne) UpdateRefundTradeNo() *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.UpdateRefundTradeNo()
+	})
+}
+
+// SetRefundDeductOnSettle sets the "refund_deduct_on_settle" field.
+func (u *PaymentOrderUpsertOne) SetRefundDeductOnSettle(v bool) *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.SetRefundDeductOnSettle(v)
+	})
+}
+
+// UpdateRefundDeductOnSettle sets the "refund_deduct_on_settle" field to the value that was provided on create.
+func (u *PaymentOrderUpsertOne) UpdateRefundDeductOnSettle() *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.UpdateRefundDeductOnSettle()
 	})
 }
 
@@ -3172,6 +3279,34 @@ func (u *PaymentOrderUpsertBulk) UpdateRefundRequestedBy() *PaymentOrderUpsertBu
 func (u *PaymentOrderUpsertBulk) ClearRefundRequestedBy() *PaymentOrderUpsertBulk {
 	return u.Update(func(s *PaymentOrderUpsert) {
 		s.ClearRefundRequestedBy()
+	})
+}
+
+// SetRefundTradeNo sets the "refund_trade_no" field.
+func (u *PaymentOrderUpsertBulk) SetRefundTradeNo(v string) *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.SetRefundTradeNo(v)
+	})
+}
+
+// UpdateRefundTradeNo sets the "refund_trade_no" field to the value that was provided on create.
+func (u *PaymentOrderUpsertBulk) UpdateRefundTradeNo() *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.UpdateRefundTradeNo()
+	})
+}
+
+// SetRefundDeductOnSettle sets the "refund_deduct_on_settle" field.
+func (u *PaymentOrderUpsertBulk) SetRefundDeductOnSettle(v bool) *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.SetRefundDeductOnSettle(v)
+	})
+}
+
+// UpdateRefundDeductOnSettle sets the "refund_deduct_on_settle" field to the value that was provided on create.
+func (u *PaymentOrderUpsertBulk) UpdateRefundDeductOnSettle() *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.UpdateRefundDeductOnSettle()
 	})
 }
 

@@ -200,6 +200,16 @@ func RefundRequestedBy(v string) predicate.PaymentOrder {
 	return predicate.PaymentOrder(sql.FieldEQ(FieldRefundRequestedBy, v))
 }
 
+// RefundTradeNo applies equality check predicate on the "refund_trade_no" field. It's identical to RefundTradeNoEQ.
+func RefundTradeNo(v string) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldEQ(FieldRefundTradeNo, v))
+}
+
+// RefundDeductOnSettle applies equality check predicate on the "refund_deduct_on_settle" field. It's identical to RefundDeductOnSettleEQ.
+func RefundDeductOnSettle(v bool) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldEQ(FieldRefundDeductOnSettle, v))
+}
+
 // ExpiresAt applies equality check predicate on the "expires_at" field. It's identical to ExpiresAtEQ.
 func ExpiresAt(v time.Time) predicate.PaymentOrder {
 	return predicate.PaymentOrder(sql.FieldEQ(FieldExpiresAt, v))
@@ -1943,6 +1953,81 @@ func RefundRequestedByEqualFold(v string) predicate.PaymentOrder {
 // RefundRequestedByContainsFold applies the ContainsFold predicate on the "refund_requested_by" field.
 func RefundRequestedByContainsFold(v string) predicate.PaymentOrder {
 	return predicate.PaymentOrder(sql.FieldContainsFold(FieldRefundRequestedBy, v))
+}
+
+// RefundTradeNoEQ applies the EQ predicate on the "refund_trade_no" field.
+func RefundTradeNoEQ(v string) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldEQ(FieldRefundTradeNo, v))
+}
+
+// RefundTradeNoNEQ applies the NEQ predicate on the "refund_trade_no" field.
+func RefundTradeNoNEQ(v string) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldNEQ(FieldRefundTradeNo, v))
+}
+
+// RefundTradeNoIn applies the In predicate on the "refund_trade_no" field.
+func RefundTradeNoIn(vs ...string) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldIn(FieldRefundTradeNo, vs...))
+}
+
+// RefundTradeNoNotIn applies the NotIn predicate on the "refund_trade_no" field.
+func RefundTradeNoNotIn(vs ...string) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldNotIn(FieldRefundTradeNo, vs...))
+}
+
+// RefundTradeNoGT applies the GT predicate on the "refund_trade_no" field.
+func RefundTradeNoGT(v string) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldGT(FieldRefundTradeNo, v))
+}
+
+// RefundTradeNoGTE applies the GTE predicate on the "refund_trade_no" field.
+func RefundTradeNoGTE(v string) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldGTE(FieldRefundTradeNo, v))
+}
+
+// RefundTradeNoLT applies the LT predicate on the "refund_trade_no" field.
+func RefundTradeNoLT(v string) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldLT(FieldRefundTradeNo, v))
+}
+
+// RefundTradeNoLTE applies the LTE predicate on the "refund_trade_no" field.
+func RefundTradeNoLTE(v string) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldLTE(FieldRefundTradeNo, v))
+}
+
+// RefundTradeNoContains applies the Contains predicate on the "refund_trade_no" field.
+func RefundTradeNoContains(v string) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldContains(FieldRefundTradeNo, v))
+}
+
+// RefundTradeNoHasPrefix applies the HasPrefix predicate on the "refund_trade_no" field.
+func RefundTradeNoHasPrefix(v string) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldHasPrefix(FieldRefundTradeNo, v))
+}
+
+// RefundTradeNoHasSuffix applies the HasSuffix predicate on the "refund_trade_no" field.
+func RefundTradeNoHasSuffix(v string) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldHasSuffix(FieldRefundTradeNo, v))
+}
+
+// RefundTradeNoEqualFold applies the EqualFold predicate on the "refund_trade_no" field.
+func RefundTradeNoEqualFold(v string) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldEqualFold(FieldRefundTradeNo, v))
+}
+
+// RefundTradeNoContainsFold applies the ContainsFold predicate on the "refund_trade_no" field.
+func RefundTradeNoContainsFold(v string) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldContainsFold(FieldRefundTradeNo, v))
+}
+
+// RefundDeductOnSettleEQ applies the EQ predicate on the "refund_deduct_on_settle" field.
+func RefundDeductOnSettleEQ(v bool) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldEQ(FieldRefundDeductOnSettle, v))
+}
+
+// RefundDeductOnSettleNEQ applies the NEQ predicate on the "refund_deduct_on_settle" field.
+func RefundDeductOnSettleNEQ(v bool) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldNEQ(FieldRefundDeductOnSettle, v))
 }
 
 // ExpiresAtEQ applies the EQ predicate on the "expires_at" field.

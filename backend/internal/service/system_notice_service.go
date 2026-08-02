@@ -114,6 +114,9 @@ func (s *SystemNoticeService) NotifyPaymentOrder(ctx context.Context, event stri
 	case "refunded":
 		subject = "退款已完成"
 		content = fmt.Sprintf("你的订单 #%d 退款已完成。退款金额：%s。", order.ID, formatNoticeAmount(order.RefundAmount, PaymentOrderCurrency(order)))
+	case "refund_pending":
+		subject = "退款处理中"
+		content = fmt.Sprintf("你的订单 #%d 退款已受理，正在等待支付渠道结算，到账时间以渠道为准。退款金额：%s。", order.ID, formatNoticeAmount(order.RefundAmount, PaymentOrderCurrency(order)))
 	case "refund_failed":
 		subject = "退款处理失败"
 		content = fmt.Sprintf("你的订单 #%d 退款暂时处理失败，管理员会继续核查。", order.ID)

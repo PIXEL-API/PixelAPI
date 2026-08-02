@@ -63,6 +63,10 @@
               <Icon name="refresh" size="sm" />
               {{ t('payment.admin.retryRefund') }}
             </button>
+            <button v-else-if="row.status === 'REFUND_PENDING' && row.source !== 'shop_order'" :disabled="refundQueryingId === row.id" :title="t('payment.admin.queryRefundHint')" @click="handleQueryRefund(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-amber-600 hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-60 dark:text-amber-400 dark:hover:bg-amber-900/20">
+              <Icon :name="refundQueryingId === row.id ? 'refresh' : 'search'" size="sm" :class="refundQueryingId === row.id ? 'animate-spin' : ''" />
+              {{ refundQueryingId === row.id ? t('common.processing') : t('payment.admin.queryRefund') }}
+            </button>
             <button v-else-if="row.source !== 'shop_order' && (row.status === 'COMPLETED' || row.status === 'PARTIALLY_REFUNDED')" @click="openRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
               <Icon name="dollar" size="sm" />
               {{ t('payment.admin.refund') }}
@@ -256,6 +260,7 @@ const selectedShopOrder = ref<StoreOrder | null>(null)
 const showDetailDialog = ref(false)
 const showRefundDialog = ref(false)
 const refundSubmitting = ref(false)
+const refundQueryingId = ref<number | null>(null)
 const orderAuditLogs = ref<PaymentOrderAuditLog[]>([])
 const showManualFulfillDialog = ref(false)
 const manualFulfillSubmitting = ref(false)
@@ -355,6 +360,7 @@ const statusFilterOptions = computed(() => [
   { value: 'FAILED', label: t('payment.status.failed') },
   { value: 'REFUND_REQUESTED', label: t('payment.status.refund_requested') },
   { value: 'REFUNDING', label: t('payment.status.refunding') },
+  { value: 'REFUND_PENDING', label: t('payment.status.refund_pending') },
   { value: 'PARTIALLY_REFUNDED', label: t('payment.status.partially_refunded') },
   { value: 'REFUNDED', label: t('payment.status.refunded') },
   { value: 'REFUND_FAILED', label: t('payment.status.refund_failed') },
@@ -482,6 +488,32 @@ async function handleRefund(data: { amount: number; reason: string; deduct_balan
     appStore.showSuccess(t('payment.admin.refundSuccess')); showRefundDialog.value = false; loadOrders()
   } catch (err: unknown) { appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error'))) }
   finally { refundSubmitting.value = false }
+}
+
+/**
+ * Re-check a REFUND_PENDING order against the payment gateway. The gateway is
+ * the source of truth: the backend settles the order to REFUNDED / REFUND_FAILED
+ * (or leaves it pending) based on what it reports back.
+ */
+async function handleQueryRefund(order: PaymentOrder) {
+  if (refundQueryingId.value !== null) return
+  refundQueryingId.value = order.id
+  try {
+    const res = await adminPaymentAPI.queryRefundStatus(order.id)
+    const refundStatus = res.data?.refund_status
+    if (refundStatus === 'success') {
+      appStore.showSuccess(t('payment.admin.refundQuerySuccess'))
+    } else if (refundStatus === 'failed') {
+      appStore.showWarning(t('payment.admin.refundQueryFailedState'))
+    } else {
+      appStore.showInfo(t('payment.admin.refundQueryStillPending'))
+    }
+    await loadOrders()
+  } catch (err: unknown) {
+    appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('payment.admin.refundQueryError')))
+  } finally {
+    refundQueryingId.value = null
+  }
 }
 
 function formatDateTime(dateStr: string): string { return formatOrderDateTime(dateStr) }

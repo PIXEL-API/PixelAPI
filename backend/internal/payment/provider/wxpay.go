@@ -70,6 +70,9 @@ var (
 	wxpayJSAPIPrepayWithRequestPayment = func(ctx context.Context, svc jsapi.JsapiApiService, req jsapi.PrepayRequest) (*jsapi.PrepayWithRequestPaymentResponse, *core.APIResult, error) {
 		return svc.PrepayWithRequestPayment(ctx, req)
 	}
+	wxpayQueryRefundByOutRefundNo = func(ctx context.Context, svc refunddomestic.RefundsApiService, req refunddomestic.QueryByOutRefundNoRequest) (*refunddomestic.Refund, *core.APIResult, error) {
+		return svc.QueryByOutRefundNo(ctx, req)
+	}
 )
 
 type Wxpay struct {
@@ -471,24 +474,111 @@ func (w *Wxpay) Refund(ctx context.Context, req payment.RefundRequest) (*payment
 	}
 	rs := refunddomestic.RefundsApiService{Client: c}
 	cur := wxpayCurrency
+	outRefundNo := wxpayOutRefundNo(req.OrderID)
 	res, _, err := rs.Create(ctx, refunddomestic.CreateRequest{
 		OutTradeNo:  core.String(req.OrderID),
-		OutRefundNo: core.String(fmt.Sprintf("%s-refund-%d", req.OrderID, time.Now().UnixNano())),
+		OutRefundNo: core.String(outRefundNo),
 		Reason:      core.String(req.Reason),
 		Amount:      &refunddomestic.AmountReq{Refund: core.Int64(rf), Total: core.Int64(tf), Currency: &cur},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("wxpay refund: %w", err)
 	}
-	rid := wxSV(res.RefundId)
+	// 返回商户侧 out_refund_no，不是微信侧 res.RefundId：微信 v3 只提供
+	// GET /v3/refund/domestic/refunds/{out_refund_no}，没有按 refund_id 回查的接口，
+	// 返回微信侧 id 会让 QueryRefund 永远查不到这笔退款。服务层会把这个值落库到
+	// payment_orders.refund_trade_no，后续回查原样传回 RefundQueryRequest.RefundID。
+	var status *refunddomestic.Status
+	if res != nil {
+		status = res.Status
+	}
+	return &payment.RefundResponse{RefundID: outRefundNo, Status: mapWxRefundStatus(status)}, nil
+}
+
+// wxpayOutRefundNo 生成商户侧退款单号。带纳秒时间戳而非「订单号+金额」确定性推导：
+// 本地已把退款单号落库，不需要事后重算，而确定性推导会引入「同一订单同一金额只能退
+// 一次」的新约束（微信对重复 out_refund_no 直接报单号重复）。
+// 微信要求 out_refund_no ≤ 64 字符且仅含数字/大小写字母/_-|*@，订单号本身受 out_trade_no
+// ≤ 32 字符约束，加上固定后缀 27 字符后仍在限额内。
+func wxpayOutRefundNo(orderID string) string {
+	return fmt.Sprintf("%s-refund-%d", orderID, time.Now().UnixNano())
+}
+
+// mapWxRefundStatus 把微信退款单状态映射成服务层认识的三态：
+//
+//	SUCCESS    → success  退款成功，终态
+//	CLOSED     → failed   退款关闭，钱没退出去，终态失败
+//	PROCESSING → pending  退款处理中，继续轮询
+//	ABNORMAL   → pending  退款异常，需商户在微信商户平台人工处理
+//	nil / 未知  → pending  不擅自判死
+//
+// ABNORMAL 是本地与上游的分叉点：上游判 failed，本地判 pending。ABNORMAL 的含义是
+// 原路退款到银行失败（卡作废/冻结），钱已从商户账户扣走但没到用户手上，需要商户去
+// 微信商户平台手动处理；判 failed 会让服务层进 REFUND_FAILED 并回滚扣减，留 pending
+// 才能等人工处理完后由后续轮询收敛到 SUCCESS。
+func mapWxRefundStatus(status *refunddomestic.Status) string {
+	if status == nil {
+		return payment.ProviderStatusPending
+	}
+	switch *status {
+	case refunddomestic.STATUS_SUCCESS:
+		return payment.ProviderStatusSuccess
+	case refunddomestic.STATUS_CLOSED:
+		return payment.ProviderStatusFailed
+	case refunddomestic.STATUS_PROCESSING, refunddomestic.STATUS_ABNORMAL:
+		return payment.ProviderStatusPending
+	default:
+		return payment.ProviderStatusPending
+	}
+}
+
+// QueryRefund 按商户侧退款单号回查退款状态。
+//
+// 微信 v3 只有 GET /v3/refund/domestic/refunds/{out_refund_no} 一个退款查询入口，
+// 只能按商户侧 out_refund_no 查，没有按微信侧 refund_id 查的接口。所以 req.RefundID
+// 必须是 Refund() 返回、并由服务层落库到 payment_orders.refund_trade_no 的那个
+// out_refund_no。
+//
+// 语义约定：网关调用失败、鉴权失败、单号不存在一律返回 error，绝不降级成
+// ProviderStatusFailed ——「退款确实失败了」会让订单进 REFUND_FAILED 并回滚扣减，
+// 而「我查不到」必须让订单留在 REFUND_PENDING 等人工核对。
+func (w *Wxpay) QueryRefund(ctx context.Context, req payment.RefundQueryRequest) (*payment.RefundResponse, error) {
+	c, err := w.ensureClient()
+	if err != nil {
+		return nil, err
+	}
+	// 本地与上游的分叉点：上游在 RefundID 缺失时按「订单号+金额」推导 out_refund_no 兜底，
+	// 那是因为上游没有落库退款单号。本地迁移 264 已持久化 refund_trade_no，缺号时直接
+	// 报错等人工，不猜——猜错只会查到别人的单子或平白 404。
+	outRefundNo := strings.TrimSpace(req.RefundID)
+	if outRefundNo == "" {
+		return nil, fmt.Errorf("wxpay query refund: missing out_refund_no")
+	}
+	rs := refunddomestic.RefundsApiService{Client: c}
+	res, _, err := wxpayQueryRefundByOutRefundNo(ctx, rs, refunddomestic.QueryByOutRefundNoRequest{
+		OutRefundNo: core.String(outRefundNo),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("wxpay query refund: %w", err)
+	}
+	if res == nil {
+		return nil, fmt.Errorf("wxpay query refund: empty response for refund %s", outRefundNo)
+	}
+	// 防串单：退款单号若被错记成别的订单的退款，宁可报错等人工，也不能把另一笔订单的
+	// 成功状态回写到本订单。两侧订单号有任一为空时跳过校验。
+	if orderID := strings.TrimSpace(req.OrderID); orderID != "" {
+		if got := wxSV(res.OutTradeNo); got != "" && got != orderID {
+			return nil, fmt.Errorf(
+				"wxpay query refund: refund %s belongs to order %s, not %s",
+				outRefundNo, got, orderID,
+			)
+		}
+	}
+	rid := wxSV(res.OutRefundNo)
 	if rid == "" {
-		rid = fmt.Sprintf("%s-refund", req.OrderID)
+		rid = outRefundNo
 	}
-	st := payment.ProviderStatusPending
-	if res.Status != nil && *res.Status == refunddomestic.STATUS_SUCCESS {
-		st = payment.ProviderStatusSuccess
-	}
-	return &payment.RefundResponse{RefundID: rid, Status: st}, nil
+	return &payment.RefundResponse{RefundID: rid, Status: mapWxRefundStatus(res.Status)}, nil
 }
 
 func (w *Wxpay) queryOrderTotalFen(ctx context.Context, c *core.Client, orderID string) (int64, error) {
@@ -522,6 +612,7 @@ func (w *Wxpay) CancelPayment(ctx context.Context, tradeNo string) error {
 }
 
 var (
-	_ payment.Provider           = (*Wxpay)(nil)
-	_ payment.CancelableProvider = (*Wxpay)(nil)
+	_ payment.Provider            = (*Wxpay)(nil)
+	_ payment.CancelableProvider  = (*Wxpay)(nil)
+	_ payment.RefundQueryProvider = (*Wxpay)(nil)
 )

@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/wechatpay-apiv3/wechatpay-go/services/payments/h5"
 	"github.com/wechatpay-apiv3/wechatpay-go/services/payments/jsapi"
 	"github.com/wechatpay-apiv3/wechatpay-go/services/payments/native"
+	"github.com/wechatpay-apiv3/wechatpay-go/services/refunddomestic"
 )
 
 // generateTestKeyPair returns a fresh RSA 2048 key pair as PEM strings.
@@ -89,6 +91,213 @@ func TestMapWxState(t *testing.T) {
 				t.Errorf("mapWxState(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestMapWxRefundStatus(t *testing.T) {
+	t.Parallel()
+
+	statusPtr := func(s refunddomestic.Status) *refunddomestic.Status { return &s }
+
+	tests := []struct {
+		name  string
+		input *refunddomestic.Status
+		want  string
+	}{
+		{
+			name:  "SUCCESS maps to success",
+			input: statusPtr(refunddomestic.STATUS_SUCCESS),
+			want:  payment.ProviderStatusSuccess,
+		},
+		{
+			name:  "CLOSED maps to failed",
+			input: statusPtr(refunddomestic.STATUS_CLOSED),
+			want:  payment.ProviderStatusFailed,
+		},
+		{
+			name:  "PROCESSING maps to pending",
+			input: statusPtr(refunddomestic.STATUS_PROCESSING),
+			want:  payment.ProviderStatusPending,
+		},
+		{
+			// 分叉点：上游判 failed。ABNORMAL 是「钱已出商户账户但没到用户手上，
+			// 需人工在商户平台处理」，判 failed 会让服务层回滚扣减并结案。
+			name:  "ABNORMAL stays pending for manual handling",
+			input: statusPtr(refunddomestic.STATUS_ABNORMAL),
+			want:  payment.ProviderStatusPending,
+		},
+		{
+			name:  "unknown status maps to pending",
+			input: statusPtr(refunddomestic.Status("SOMETHING_NEW")),
+			want:  payment.ProviderStatusPending,
+		},
+		{
+			name:  "nil status maps to pending",
+			input: nil,
+			want:  payment.ProviderStatusPending,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := mapWxRefundStatus(tt.input); got != tt.want {
+				t.Errorf("mapWxRefundStatus() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWxpayOutRefundNoIsMerchantSideAndTimeSuffixed(t *testing.T) {
+	t.Parallel()
+
+	// 单号必须带时间戳后缀而不是「订单号+金额」确定性推导，否则同一订单同一金额
+	// 只能退一次（微信对重复 out_refund_no 报单号重复）。
+	// 注意不断言两次调用必不相同：Windows 上时钟粒度粗，同一 tick 内会取到同值；
+	// 生产是 Linux 纳秒粒度，且两次退款来自两次人工操作，不会撞在同一 tick。
+	no := wxpayOutRefundNo("sub2_88")
+
+	if !strings.HasPrefix(no, "sub2_88-refund-") {
+		t.Fatalf("out_refund_no = %q, want prefix %q", no, "sub2_88-refund-")
+	}
+	suffix := strings.TrimPrefix(no, "sub2_88-refund-")
+	if ts, err := strconv.ParseInt(suffix, 10, 64); err != nil || ts <= 0 {
+		t.Fatalf("out_refund_no suffix = %q, want a positive unix-nano timestamp", suffix)
+	}
+	if len(no) > 64 {
+		t.Fatalf("out_refund_no = %q, length %d exceeds WeChat limit 64", no, len(no))
+	}
+}
+
+func TestWxpayQueryRefundStatusMapping(t *testing.T) {
+	orig := wxpayQueryRefundByOutRefundNo
+	t.Cleanup(func() { wxpayQueryRefundByOutRefundNo = orig })
+
+	tests := []struct {
+		name       string
+		gwStatus   refunddomestic.Status
+		wantStatus string
+	}{
+		{name: "SUCCESS", gwStatus: refunddomestic.STATUS_SUCCESS, wantStatus: payment.ProviderStatusSuccess},
+		{name: "CLOSED", gwStatus: refunddomestic.STATUS_CLOSED, wantStatus: payment.ProviderStatusFailed},
+		{name: "PROCESSING", gwStatus: refunddomestic.STATUS_PROCESSING, wantStatus: payment.ProviderStatusPending},
+		{name: "ABNORMAL", gwStatus: refunddomestic.STATUS_ABNORMAL, wantStatus: payment.ProviderStatusPending},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotOutRefundNo := ""
+			wxpayQueryRefundByOutRefundNo = func(ctx context.Context, svc refunddomestic.RefundsApiService, req refunddomestic.QueryByOutRefundNoRequest) (*refunddomestic.Refund, *core.APIResult, error) {
+				gotOutRefundNo = wxSV(req.OutRefundNo)
+				status := tt.gwStatus
+				return &refunddomestic.Refund{
+					RefundId:    core.String("50000000382019052709732678859"),
+					OutRefundNo: core.String("sub2_88-refund-1719999999999999999"),
+					OutTradeNo:  core.String("sub2_88"),
+					Status:      &status,
+				}, nil, nil
+			}
+
+			provider := &Wxpay{
+				config:     map[string]string{"appId": "wx123", "mchId": "mch123"},
+				coreClient: &core.Client{},
+			}
+			resp, err := provider.QueryRefund(context.Background(), payment.RefundQueryRequest{
+				TradeNo:  "4200001234202606301234567890",
+				OrderID:  "sub2_88",
+				RefundID: "sub2_88-refund-1719999999999999999",
+				Amount:   "66.88",
+			})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			// 必须按商户侧 out_refund_no 查，微信没有按 refund_id 回查的接口。
+			if gotOutRefundNo != "sub2_88-refund-1719999999999999999" {
+				t.Fatalf("queried out_refund_no = %q, want the merchant-side refund no", gotOutRefundNo)
+			}
+			if resp.Status != tt.wantStatus {
+				t.Fatalf("status = %q, want %q", resp.Status, tt.wantStatus)
+			}
+			// 回传的 RefundID 必须仍是可再次回查的商户侧单号，不能换成微信侧 refund_id。
+			if resp.RefundID != "sub2_88-refund-1719999999999999999" {
+				t.Fatalf("refund id = %q, want the merchant-side refund no", resp.RefundID)
+			}
+		})
+	}
+}
+
+func TestWxpayQueryRefundGatewayErrorIsNotFailed(t *testing.T) {
+	orig := wxpayQueryRefundByOutRefundNo
+	t.Cleanup(func() { wxpayQueryRefundByOutRefundNo = orig })
+
+	wxpayQueryRefundByOutRefundNo = func(ctx context.Context, svc refunddomestic.RefundsApiService, req refunddomestic.QueryByOutRefundNoRequest) (*refunddomestic.Refund, *core.APIResult, error) {
+		return nil, nil, errors.New("RESOURCE_NOT_EXISTS")
+	}
+
+	provider := &Wxpay{
+		config:     map[string]string{"appId": "wx123", "mchId": "mch123"},
+		coreClient: &core.Client{},
+	}
+	resp, err := provider.QueryRefund(context.Background(), payment.RefundQueryRequest{
+		OrderID:  "sub2_88",
+		RefundID: "sub2_88-refund-1719999999999999999",
+	})
+	// 查不到 ≠ 退款失败：必须报错让订单留在 REFUND_PENDING，不能降级成 failed。
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if resp != nil {
+		t.Fatalf("expected nil response, got %+v", resp)
+	}
+	if !strings.Contains(err.Error(), "RESOURCE_NOT_EXISTS") {
+		t.Fatalf("error = %v, want wrapped gateway error", err)
+	}
+}
+
+func TestWxpayQueryRefundRejectsMissingAndCrossOrderRefundNo(t *testing.T) {
+	orig := wxpayQueryRefundByOutRefundNo
+	t.Cleanup(func() { wxpayQueryRefundByOutRefundNo = orig })
+
+	calls := 0
+	wxpayQueryRefundByOutRefundNo = func(ctx context.Context, svc refunddomestic.RefundsApiService, req refunddomestic.QueryByOutRefundNoRequest) (*refunddomestic.Refund, *core.APIResult, error) {
+		calls++
+		status := refunddomestic.STATUS_SUCCESS
+		return &refunddomestic.Refund{
+			OutRefundNo: core.String("sub2_77-refund-1719999999999999999"),
+			OutTradeNo:  core.String("sub2_77"),
+			Status:      &status,
+		}, nil, nil
+	}
+
+	provider := &Wxpay{
+		config:     map[string]string{"appId": "wx123", "mchId": "mch123"},
+		coreClient: &core.Client{},
+	}
+
+	// 缺退款单号：不推导、不猜，直接报错。
+	if _, err := provider.QueryRefund(context.Background(), payment.RefundQueryRequest{
+		OrderID: "sub2_88",
+		Amount:  "66.88",
+	}); err == nil {
+		t.Fatal("expected error for missing refund id, got nil")
+	}
+	if calls != 0 {
+		t.Fatalf("gateway calls = %d, want 0 when refund id is missing", calls)
+	}
+
+	// 串单：网关返回的订单号与本订单不符，宁可报错等人工。
+	resp, err := provider.QueryRefund(context.Background(), payment.RefundQueryRequest{
+		OrderID:  "sub2_88",
+		RefundID: "sub2_77-refund-1719999999999999999",
+	})
+	if err == nil {
+		t.Fatal("expected error for cross-order refund, got nil")
+	}
+	if resp != nil {
+		t.Fatalf("expected nil response, got %+v", resp)
+	}
+	if !strings.Contains(err.Error(), "sub2_77") {
+		t.Fatalf("error = %v, want the mismatched order id reported", err)
 	}
 }
 

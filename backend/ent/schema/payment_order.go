@@ -133,6 +133,16 @@ func (PaymentOrder) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			MaxLen(20),
+		// 网关侧退款单号。退款进入 REFUND_PENDING 后，终态化必须靠它回查上游，
+		// 否则订单会永远卡在 pending（网关只认自己的退款单号，订单号查不到）。
+		field.String("refund_trade_no").
+			MaxLen(128).
+			Default(""),
+		// 该笔 pending 退款在终态确认为成功后是否要扣回用户余额/订阅。
+		// 管理员发起退款时可以选择「不扣款」（PrepareRefund 的 deduct=false），
+		// 终态化发生在另一个请求里，这个意图必须落库才不会丢。
+		field.Bool("refund_deduct_on_settle").
+			Default(false),
 
 		// 时间节点
 		field.Time("expires_at").

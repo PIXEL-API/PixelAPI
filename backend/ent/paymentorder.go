@@ -79,6 +79,10 @@ type PaymentOrder struct {
 	RefundRequestReason *string `json:"refund_request_reason,omitempty"`
 	// RefundRequestedBy holds the value of the "refund_requested_by" field.
 	RefundRequestedBy *string `json:"refund_requested_by,omitempty"`
+	// RefundTradeNo holds the value of the "refund_trade_no" field.
+	RefundTradeNo string `json:"refund_trade_no,omitempty"`
+	// RefundDeductOnSettle holds the value of the "refund_deduct_on_settle" field.
+	RefundDeductOnSettle bool `json:"refund_deduct_on_settle,omitempty"`
 	// ExpiresAt holds the value of the "expires_at" field.
 	ExpiresAt time.Time `json:"expires_at,omitempty"`
 	// PaidAt holds the value of the "paid_at" field.
@@ -132,13 +136,13 @@ func (*PaymentOrder) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case paymentorder.FieldProviderSnapshot:
 			values[i] = new([]byte)
-		case paymentorder.FieldForceRefund:
+		case paymentorder.FieldForceRefund, paymentorder.FieldRefundDeductOnSettle:
 			values[i] = new(sql.NullBool)
 		case paymentorder.FieldAmount, paymentorder.FieldPayAmount, paymentorder.FieldFeeRate, paymentorder.FieldRefundAmount:
 			values[i] = new(sql.NullFloat64)
 		case paymentorder.FieldID, paymentorder.FieldUserID, paymentorder.FieldPlanID, paymentorder.FieldSubscriptionGroupID, paymentorder.FieldSubscriptionDays, paymentorder.FieldShopOrderID:
 			values[i] = new(sql.NullInt64)
-		case paymentorder.FieldUserEmail, paymentorder.FieldUserName, paymentorder.FieldUserNotes, paymentorder.FieldRechargeCode, paymentorder.FieldOutTradeNo, paymentorder.FieldPaymentType, paymentorder.FieldPaymentTradeNo, paymentorder.FieldPayURL, paymentorder.FieldQrCode, paymentorder.FieldQrCodeImg, paymentorder.FieldOrderType, paymentorder.FieldProviderInstanceID, paymentorder.FieldProviderKey, paymentorder.FieldStatus, paymentorder.FieldRefundReason, paymentorder.FieldRefundRequestReason, paymentorder.FieldRefundRequestedBy, paymentorder.FieldFailedReason, paymentorder.FieldClientIP, paymentorder.FieldSrcHost, paymentorder.FieldSrcURL:
+		case paymentorder.FieldUserEmail, paymentorder.FieldUserName, paymentorder.FieldUserNotes, paymentorder.FieldRechargeCode, paymentorder.FieldOutTradeNo, paymentorder.FieldPaymentType, paymentorder.FieldPaymentTradeNo, paymentorder.FieldPayURL, paymentorder.FieldQrCode, paymentorder.FieldQrCodeImg, paymentorder.FieldOrderType, paymentorder.FieldProviderInstanceID, paymentorder.FieldProviderKey, paymentorder.FieldStatus, paymentorder.FieldRefundReason, paymentorder.FieldRefundRequestReason, paymentorder.FieldRefundRequestedBy, paymentorder.FieldRefundTradeNo, paymentorder.FieldFailedReason, paymentorder.FieldClientIP, paymentorder.FieldSrcHost, paymentorder.FieldSrcURL:
 			values[i] = new(sql.NullString)
 		case paymentorder.FieldRefundAt, paymentorder.FieldRefundRequestedAt, paymentorder.FieldExpiresAt, paymentorder.FieldPaidAt, paymentorder.FieldCompletedAt, paymentorder.FieldFailedAt, paymentorder.FieldCreatedAt, paymentorder.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
@@ -359,6 +363,18 @@ func (_m *PaymentOrder) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.RefundRequestedBy = new(string)
 				*_m.RefundRequestedBy = value.String
+			}
+		case paymentorder.FieldRefundTradeNo:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field refund_trade_no", values[i])
+			} else if value.Valid {
+				_m.RefundTradeNo = value.String
+			}
+		case paymentorder.FieldRefundDeductOnSettle:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field refund_deduct_on_settle", values[i])
+			} else if value.Valid {
+				_m.RefundDeductOnSettle = value.Bool
 			}
 		case paymentorder.FieldExpiresAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
@@ -585,6 +601,12 @@ func (_m *PaymentOrder) String() string {
 		builder.WriteString("refund_requested_by=")
 		builder.WriteString(*v)
 	}
+	builder.WriteString(", ")
+	builder.WriteString("refund_trade_no=")
+	builder.WriteString(_m.RefundTradeNo)
+	builder.WriteString(", ")
+	builder.WriteString("refund_deduct_on_settle=")
+	builder.WriteString(fmt.Sprintf("%v", _m.RefundDeductOnSettle))
 	builder.WriteString(", ")
 	builder.WriteString("expires_at=")
 	builder.WriteString(_m.ExpiresAt.Format(time.ANSIC))

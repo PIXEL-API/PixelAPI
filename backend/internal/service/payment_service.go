@@ -31,6 +31,7 @@ const (
 	OrderStatusFailed            = payment.OrderStatusFailed
 	OrderStatusRefundRequested   = payment.OrderStatusRefundRequested
 	OrderStatusRefunding         = payment.OrderStatusRefunding
+	OrderStatusRefundPending     = payment.OrderStatusRefundPending
 	OrderStatusPartiallyRefunded = payment.OrderStatusPartiallyRefunded
 	OrderStatusRefunded          = payment.OrderStatusRefunded
 	OrderStatusRefundFailed      = payment.OrderStatusRefundFailed
@@ -334,9 +335,14 @@ func (s *PaymentService) loadProviders(ctx context.Context) {
 
 // --- Helpers ---
 
+// psIsRefundStatus 判定订单是否处于退款流程中。
+//
+// 该判定是履约闸门：RetryFulfillment / AdminManualFulfillOrder / 自动履约
+// 都靠它拦住退款中的订单，漏掉任何一个状态都会导致订单被**二次充值或二次发货**，
+// 是真实资损。新增退款态时必须同步加进这里。
 func psIsRefundStatus(s string) bool {
 	switch s {
-	case OrderStatusRefundRequested, OrderStatusRefunding, OrderStatusPartiallyRefunded, OrderStatusRefunded, OrderStatusRefundFailed:
+	case OrderStatusRefundRequested, OrderStatusRefunding, OrderStatusRefundPending, OrderStatusPartiallyRefunded, OrderStatusRefunded, OrderStatusRefundFailed:
 		return true
 	}
 	return false

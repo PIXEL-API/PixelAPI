@@ -39,6 +39,8 @@ const (
 	airwallexRefundStatusAccepted   = "ACCEPTED"
 	airwallexRefundStatusSettled    = "SETTLED"
 	airwallexRefundStatusFailed     = "FAILED"
+	airwallexRefundStatusCancelled  = "CANCELLED"
+	airwallexRefundStatusExpired    = "EXPIRED"
 )
 
 type Airwallex struct {
@@ -290,14 +292,52 @@ func (a *Airwallex) Refund(ctx context.Context, req payment.RefundRequest) (*pay
 	if strings.TrimSpace(resp.ID) == "" {
 		return nil, fmt.Errorf("airwallex refund: missing refund id")
 	}
-	refundResp := &payment.RefundResponse{
+	// 三态一律作为正常返回交给服务层判定，只有「拿不到网关结果」才返回 error：
+	//   pending —— 网关已受理但未结算，服务层落 REFUND_PENDING + refund_trade_no，
+	//              之后用 QueryRefund 回查推进终态。这里若返回 error，会被
+	//              handleGwFail 当成网关失败回滚，订单永远进不了 pending 态。
+	//   failed  —— 网关明确拒绝/失败，服务层落 REFUND_FAILED。
+	//   success —— 已结算。
+	return &payment.RefundResponse{
 		RefundID: resp.ID,
 		Status:   airwallexRefundProviderStatus(resp.Status),
+	}, nil
+}
+
+// QueryRefund 回查一笔已受理退款的最终状态，实现 payment.RefundQueryProvider。
+//
+// 错误语义（与 Refund 相反的一侧）：返回 error 表示「查不到」——网络故障、鉴权失败、
+// 退款单号不存在等，服务层应让订单留在 REFUND_PENDING 等下次回查或人工处理；
+// 只有网关明确回报失败状态时才返回 Status=failed，让订单落 REFUND_FAILED。
+// 二者不可混淆：把「查不到」吞成 failed 会造成已成功的退款被误判为失败。
+func (a *Airwallex) QueryRefund(ctx context.Context, req payment.RefundQueryRequest) (*payment.RefundResponse, error) {
+	refundID := strings.TrimSpace(req.RefundID)
+	if refundID == "" {
+		return nil, fmt.Errorf("airwallex query refund: missing refund id")
 	}
-	if refundResp.Status != payment.ProviderStatusSuccess {
-		return refundResp, fmt.Errorf("airwallex refund not settled: status %s", strings.ToUpper(strings.TrimSpace(resp.Status)))
+	token, err := a.accessToken(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("airwallex auth: %w", err)
 	}
-	return refundResp, nil
+
+	var resp airwallexRefund
+	if err := a.doJSON(ctx, http.MethodGet, "/pa/refunds/"+url.PathEscape(refundID), token, nil, &resp); err != nil {
+		return nil, fmt.Errorf("airwallex query refund: %w", err)
+	}
+	// 落库的 refund_trade_no 一旦与订单错位，会把别人的退款结果写到本单上，
+	// 因此两侧都拿得到 intent id 时做一次归属校验，不一致按「查不到」处理。
+	intentID := strings.TrimSpace(req.TradeNo)
+	gotIntentID := strings.TrimSpace(resp.PaymentIntentID)
+	if intentID != "" && gotIntentID != "" && !strings.EqualFold(intentID, gotIntentID) {
+		return nil, fmt.Errorf("airwallex query refund: refund %s belongs to payment intent %s, not %s", refundID, gotIntentID, intentID)
+	}
+	if strings.TrimSpace(resp.ID) == "" {
+		resp.ID = refundID
+	}
+	return &payment.RefundResponse{
+		RefundID: resp.ID,
+		Status:   airwallexRefundProviderStatus(resp.Status),
+	}, nil
 }
 
 func (a *Airwallex) CancelPayment(ctx context.Context, tradeNo string) error {
@@ -462,11 +502,18 @@ func airwallexProviderStatus(status string) string {
 	}
 }
 
+// airwallexRefundProviderStatus 把 Airwallex 退款状态收敛成服务层的三态。
+//
+//	SETTLED                      -> success  终态，钱已退回
+//	FAILED / CANCELLED / EXPIRED -> failed   终态，钱没退回，订单进 REFUND_FAILED
+//	RECEIVED / ACCEPTED          -> pending  网关已受理，等结算，订单进 REFUND_PENDING
+//	其它（含空串、未知枚举）     -> pending  保守留在 REFUND_PENDING 等回查或人工，
+//	                                        绝不把「看不懂」误判成「退款失败」
 func airwallexRefundProviderStatus(status string) string {
 	switch strings.ToUpper(strings.TrimSpace(status)) {
 	case airwallexRefundStatusSettled:
 		return payment.ProviderStatusSuccess
-	case airwallexRefundStatusFailed:
+	case airwallexRefundStatusFailed, airwallexRefundStatusCancelled, airwallexRefundStatusExpired:
 		return payment.ProviderStatusFailed
 	case airwallexRefundStatusReceived, airwallexRefundStatusAccepted:
 		return payment.ProviderStatusPending
@@ -635,5 +682,6 @@ func (e airwallexWebhookEvent) accountID() string {
 var (
 	_ payment.Provider                 = (*Airwallex)(nil)
 	_ payment.CancelableProvider       = (*Airwallex)(nil)
+	_ payment.RefundQueryProvider      = (*Airwallex)(nil)
 	_ payment.MerchantIdentityProvider = (*Airwallex)(nil)
 )

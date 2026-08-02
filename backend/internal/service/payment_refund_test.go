@@ -175,7 +175,7 @@ func TestGwRefundRejectsAlipayMerchantIdentitySnapshotMismatch(t *testing.T) {
 		loadBalancer: newWebhookProviderTestLoadBalancer(client),
 	}
 
-	err = svc.gwRefund(ctx, &RefundPlan{
+	resp, err := svc.gwRefund(ctx, &RefundPlan{
 		OrderID:       order.ID,
 		Order:         order,
 		RefundAmount:  order.Amount,
@@ -183,4 +183,5 @@ func TestGwRefundRejectsAlipayMerchantIdentitySnapshotMismatch(t *testing.T) {
 		Reason:        "snapshot mismatch",
 	})
 	require.ErrorContains(t, err, "alipay app_id mismatch")
+	require.Nil(t, resp)
 }
