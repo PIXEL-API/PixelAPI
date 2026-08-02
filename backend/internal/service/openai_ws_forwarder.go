@@ -531,6 +531,7 @@ func parseOpenAIWSResponseUsageFromCompletedEvent(message []byte, usage *OpenAIU
 	if !ok {
 		return
 	}
+	mergeHostedImageGenToolUsage(hostedImageGenToolUsage(message), &parsed)
 	*usage = parsed
 }
 

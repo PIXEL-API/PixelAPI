@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"fmt"
+	"html"
 	"log/slog"
 	"math/big"
 	"net"
@@ -390,7 +391,37 @@ func (s *EmailService) verifyCode(ctx context.Context, email, code string, consu
 	return nil
 }
 
+// emailSafeLinkURL 校验要放进邮件正文 href 属性的链接。
+// 只接受绝对 http/https URL，拦截 javascript: / data: 等伪协议以及带控制字符的畸形链接。
+// 返回空字符串表示链接不可信，调用方必须拒绝渲染成可点击链接。
+func emailSafeLinkURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	// 控制字符可用于绕过前端/邮件客户端的协议解析（例如 "java\nscript:"）。
+	if strings.ContainsAny(trimmed, "\r\n\t") {
+		return ""
+	}
+	u, err := url.Parse(trimmed)
+	if err != nil || !u.IsAbs() {
+		return ""
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+	default:
+		return ""
+	}
+	if strings.TrimSpace(u.Host) == "" {
+		return ""
+	}
+	return trimmed
+}
+
 // buildVerifyCodeEmailBody 构建验证码邮件HTML内容
+//
+// 安全：siteName 来自后台可配置项、code 来自缓存，全部按 HTML 文本节点转义后再拼接，
+// 避免管理员配置或缓存污染变成邮件正文里的 HTML 注入。
 func (s *EmailService) buildVerifyCodeEmailBody(code, siteName string) string {
 	return fmt.Sprintf(`
 <!DOCTYPE html>
@@ -427,7 +458,7 @@ func (s *EmailService) buildVerifyCodeEmailBody(code, siteName string) string {
     </div>
 </body>
 </html>
-`, siteName, code)
+`, html.EscapeString(siteName), html.EscapeString(code))
 }
 
 // TestSMTPConnectionWithConfig 使用指定配置测试SMTP连接
@@ -486,6 +517,13 @@ func (s *EmailService) GeneratePasswordResetToken() (string, error) {
 
 // SendPasswordResetEmail sends a password reset email with a reset link
 func (s *EmailService) SendPasswordResetEmail(ctx context.Context, email, siteName, resetURL string) error {
+	// 安全：重置链接会以 <a href> 形式发给用户。frontend_url 是后台可写设置项，
+	// 若被写成 javascript:/data: 之类的伪协议就会变成钓鱼载荷，这里 fail-closed，
+	// 宁可不发信也不发一封带不可信链接的邮件。
+	if emailSafeLinkURL(resetURL) == "" {
+		return fmt.Errorf("invalid password reset url: must be an absolute http(s) url")
+	}
+
 	var token string
 	var needSaveToken bool
 
@@ -582,7 +620,16 @@ func (s *EmailService) ConsumePasswordResetToken(ctx context.Context, email, tok
 }
 
 // buildPasswordResetEmailBody builds the HTML content for password reset email
+//
+// 安全：
+//   - siteName（后台可配置）与 resetURL 一律做 HTML 转义后再拼进正文；
+//   - href 属性额外要求链接是绝对 http/https URL，否则不渲染按钮，
+//     只在正文里以纯文本形式展示（文本节点不会被当成协议执行）。
 func (s *EmailService) buildPasswordResetEmailBody(resetURL, siteName string) string {
+	buttonBlock := ""
+	if safeURL := emailSafeLinkURL(resetURL); safeURL != "" {
+		buttonBlock = fmt.Sprintf(`<a href="%s" class="button">重置密码</a>`, html.EscapeString(safeURL))
+	}
 	return fmt.Sprintf(`
 <!DOCTYPE html>
 <html>
@@ -610,7 +657,7 @@ func (s *EmailService) buildPasswordResetEmailBody(resetURL, siteName string) st
         <div class="content">
             <p style="font-size: 18px; color: #333;">密码重置请求</p>
             <p style="color: #666;">您已请求重置密码。请点击下方按钮设置新密码：</p>
-            <a href="%s" class="button">重置密码</a>
+            %s
             <div class="info">
                 <p>此链接将在 <strong>30 分钟</strong>后失效。</p>
                 <p class="warning">如果您没有请求重置密码，请忽略此邮件。您的密码将保持不变。</p>
@@ -626,5 +673,5 @@ func (s *EmailService) buildPasswordResetEmailBody(resetURL, siteName string) st
     </div>
 </body>
 </html>
-`, siteName, resetURL, resetURL)
+`, html.EscapeString(siteName), buttonBlock, html.EscapeString(resetURL))
 }

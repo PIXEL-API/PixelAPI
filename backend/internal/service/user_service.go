@@ -10,6 +10,7 @@ import (
 	"fmt"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	"html"
 	"image"
 	"image/color"
 	stddraw "image/draw"
@@ -1400,6 +1401,8 @@ const notifyVerifyEmailTemplate = `<!DOCTYPE html>
 </html>`
 
 // buildNotifyVerifyEmailBody builds the HTML email body for notify email verification.
+//
+// 安全：siteName 是后台可配置项，必须 HTML 转义后再拼进正文，否则可注入任意 HTML。
 func buildNotifyVerifyEmailBody(code, siteName string) string {
-	return fmt.Sprintf(notifyVerifyEmailTemplate, siteName, code)
+	return fmt.Sprintf(notifyVerifyEmailTemplate, html.EscapeString(siteName), html.EscapeString(code))
 }

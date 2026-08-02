@@ -6812,6 +6812,7 @@ func (s *OpenAIGatewayService) parseSSEUsageBytes(data []byte, usage *OpenAIUsag
 		return
 	}
 	if parsed, ok := openAIUsageFromGJSON(gjson.GetBytes(data, "response.usage")); ok {
+		mergeHostedImageGenToolUsage(hostedImageGenToolUsage(data), &parsed)
 		*usage = parsed
 	}
 	if responseServiceTier := strings.TrimSpace(gjson.GetBytes(data, "response.service_tier").String()); responseServiceTier != "" {
@@ -6827,6 +6828,7 @@ func extractOpenAIUsageFromJSONBytes(body []byte) (OpenAIUsage, bool) {
 	if !ok {
 		return OpenAIUsage{}, false
 	}
+	mergeHostedImageGenToolUsage(hostedImageGenToolUsage(body), &usage)
 	usage.ResponseServiceTier = strings.TrimSpace(gjson.GetBytes(body, "service_tier").String())
 	return usage, true
 }

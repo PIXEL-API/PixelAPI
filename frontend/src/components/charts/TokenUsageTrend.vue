@@ -109,8 +109,16 @@ const chartData = computed(() => {
       {
         label: 'Cache Hit Rate',
         data: props.trendData.map((d) => {
-          const total = d.cache_read_tokens + d.cache_creation_tokens
-          return total > 0 ? (d.cache_read_tokens / total) * 100 : 0
+          // usage_logs 三个输入侧桶互斥：input_tokens 既不含 cache_read 也不含 cache_creation
+          // （Anthropic 原生如此；OpenAI 侧在 openAIUsageTokens 里已把 cached/cache-write 从
+          // prompt_tokens 中扣掉）。所以分母必须是三者之和，否则 OpenAI 因 cache_creation 恒为 0
+          // 会算成 cache_read/cache_read = 100%。
+          const totalPromptTokens =
+            Math.max(0, Number(d.input_tokens) || 0) +
+            Math.max(0, Number(d.cache_read_tokens) || 0) +
+            Math.max(0, Number(d.cache_creation_tokens) || 0)
+          if (totalPromptTokens <= 0) return 0
+          return (Math.max(0, Number(d.cache_read_tokens) || 0) / totalPromptTokens) * 100
         }),
         borderColor: chartColors.value.cacheHitRate,
         backgroundColor: `${chartColors.value.cacheHitRate}20`,

@@ -67,7 +67,11 @@ func newCodexModelsOAuthTestAccount() *Account {
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
 		Credentials: map[string]any{
-			"access_token":       "test-access-token",
+			"access_token": "test-access-token",
+			// 真实的 Codex OAuth 账号一定带 refresh_token。缺了它，401 分支会判定
+			// 该账号永远无法自愈而直接置 error（见 ratelimit_service.go 的
+			// "没有 refresh_token 的 OAuth 账号"分支），走不到临时冷却路径。
+			"refresh_token":      "test-refresh-token",
 			"chatgpt_account_id": "acc-123",
 		},
 	}
@@ -493,8 +497,17 @@ type codexModelsCanceledStateRepo struct {
 	AccountRepository
 	updateCredentialsCalls  int
 	tempUnschedulableCalls  int
+	setErrorCalls           int
 	updateCredentialsCtxErr error
 	tempUnschedulableCtxErr error
+}
+
+// SetError 必须实现：内嵌的 AccountRepository 是 nil 接口，未实现的方法一旦被调到
+// 就是空指针 panic 而不是可读的断言失败。401 分支的路由条件变化过一次
+// （无 refresh_token 的账号改走 SetError），当时正是靠这个 panic 才发现夹具没跟上。
+func (r *codexModelsCanceledStateRepo) SetError(_ context.Context, _ int64, _ string) error {
+	r.setErrorCalls++
+	return nil
 }
 
 func (r *codexModelsCanceledStateRepo) UpdateCredentials(ctx context.Context, _ int64, _ map[string]any) error {
