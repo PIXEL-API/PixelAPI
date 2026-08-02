@@ -116,6 +116,15 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 			return
 		}
 
+		// 专属分组的运行时授权复核。
+		// 授权是可以被撤销的，而 API Key 一旦建好就一直带着 group_id；
+		// 没有这层每请求复核，管理员撤销专属分组授权后，用户手里的 Key 仍能
+		// 继续访问该分组的账号池，直到 Key 被手工删掉。
+		// 放在 SimpleMode 早返回之前，使两条路径都受约束。
+		if abortIfAPIKeyGroupNotAllowed(c, apiKey) {
+			return
+		}
+
 		// ── 4. SimpleMode → early return ─────────────────────────────
 
 		if cfg.RunMode == config.RunModeSimple {
@@ -287,6 +296,35 @@ func GetSubscriptionFromContext(c *gin.Context) (*service.UserSubscription, bool
 	}
 	subscription, ok := value.(*service.UserSubscription)
 	return subscription, ok
+}
+
+// abortIfAPIKeyGroupNotAllowed 在用户对 API Key 所属专属分组的授权已被撤销时拦截请求。
+func abortIfAPIKeyGroupNotAllowed(c *gin.Context, apiKey *service.APIKey) bool {
+	if validateAPIKeyGroupAllowed(apiKey) {
+		return false
+	}
+	AbortWithError(c, 403, "GROUP_NOT_ALLOWED", "API Key 所属专属分组不再允许当前用户使用")
+	return true
+}
+
+// validateAPIKeyGroupAllowed 判定该 Key 当前是否仍被允许使用其绑定的分组。
+//
+// 放行条件：
+//   - Key 未绑定分组、或分组/用户信息缺失（交由既有分支处理，这里不越权拦截）；
+//   - 分组是订阅型：访问权由订阅有效性决定，不看 allowed_groups
+//     （本地自研的 user_private_group 正是「专属 + 订阅型」，属主也已写入 allowed_groups，
+//     两条路径都能放行）；
+//   - 非专属分组：所有用户可用；
+//   - 专属分组：用户的 allowed_groups 中必须仍包含该分组。
+func validateAPIKeyGroupAllowed(apiKey *service.APIKey) bool {
+	if apiKey == nil || apiKey.GroupID == nil || apiKey.User == nil || apiKey.Group == nil {
+		return true
+	}
+	group := apiKey.Group
+	if group.IsSubscriptionType() {
+		return true
+	}
+	return apiKey.User.CanBindGroup(group.ID, group.IsExclusive)
 }
 
 func setGroupContext(c *gin.Context, group *service.Group) {

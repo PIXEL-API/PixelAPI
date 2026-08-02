@@ -65,14 +65,22 @@ type APIKeyAuthUserSnapshot struct {
 	// UserGroupRPMOverride 该 API Key 对应的 (user, group) 专属 RPM 覆盖值。
 	// nil = 无 override（回退到 group/user 级）；0 = 不限流；>0 = 专属上限。
 	UserGroupRPMOverride *int `json:"user_group_rpm_override,omitempty"`
+
+	// AllowedGroups 用户被授权的专属分组 ID 列表。
+	// 中间件每次请求都要用它复核 API Key 所属专属分组的授权是否仍然有效，
+	// 否则管理员撤销授权后，用户手里已建好的 Key 仍能继续访问该分组的账号池。
+	// 缺了这个字段，鉴权走缓存命中路径时会读到零值并把所有专属分组 Key 误判为越权。
+	AllowedGroups []int64 `json:"allowed_groups,omitempty"`
 }
 
 // APIKeyAuthGroupSnapshot 分组快照
 type APIKeyAuthGroupSnapshot struct {
-	ID                              int64    `json:"id"`
-	Name                            string   `json:"name"`
-	Platform                        string   `json:"platform"`
-	Status                          string   `json:"status"`
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Platform string `json:"platform"`
+	Status   string `json:"status"`
+	// IsExclusive 该分组是否为专属分组。与 User.AllowedGroups 配合做运行时授权复核。
+	IsExclusive                     bool     `json:"is_exclusive"`
 	OwnerUserID                     *int64   `json:"owner_user_id,omitempty"`
 	Scope                           string   `json:"scope,omitempty"`
 	SubscriptionType                string   `json:"subscription_type"`

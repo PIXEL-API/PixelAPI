@@ -14,7 +14,11 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 15 // v14: Grok video pricing; v15: Codex alpha/search per-call price
+// v14: Grok video pricing; v15: Codex alpha/search per-call price;
+// v16: 专属分组运行时授权复核所需的 User.AllowedGroups 与 Group.IsExclusive。
+// 必须随字段新增一起升版本：旧快照没有这两个字段，反序列化后是零值，
+// 中间件会把所有绑定专属分组的 Key 误判为越权并全量 403。
+const apiKeyAuthSnapshotVersion = 16
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -227,6 +231,7 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			PointsBalance:              apiKey.User.PointsBalance,
 			PreferPointsBilling:        apiKey.User.PreferPointsBilling,
 			Concurrency:                apiKey.User.Concurrency,
+			AllowedGroups:              apiKey.User.AllowedGroups,
 			CreatedAt:                  apiKey.User.CreatedAt,
 			Email:                      apiKey.User.Email,
 			Username:                   apiKey.User.Username,
@@ -253,6 +258,7 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			Name:                            apiKey.Group.Name,
 			Platform:                        apiKey.Group.Platform,
 			Status:                          apiKey.Group.Status,
+			IsExclusive:                     apiKey.Group.IsExclusive,
 			OwnerUserID:                     apiKey.Group.OwnerUserID,
 			Scope:                           apiKey.Group.Scope,
 			SubscriptionType:                apiKey.Group.SubscriptionType,
@@ -334,6 +340,7 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			PointsBalance:              snapshot.User.PointsBalance,
 			PreferPointsBilling:        snapshot.User.PreferPointsBilling,
 			Concurrency:                snapshot.User.Concurrency,
+			AllowedGroups:              snapshot.User.AllowedGroups,
 			CreatedAt:                  snapshot.User.CreatedAt,
 			Email:                      snapshot.User.Email,
 			Username:                   snapshot.User.Username,
@@ -378,6 +385,7 @@ func groupAuthSnapshotFromService(group *Group) *APIKeyAuthGroupSnapshot {
 		Name:                            group.Name,
 		Platform:                        group.Platform,
 		Status:                          group.Status,
+		IsExclusive:                     group.IsExclusive,
 		OwnerUserID:                     group.OwnerUserID,
 		Scope:                           group.Scope,
 		SubscriptionType:                group.SubscriptionType,
@@ -425,6 +433,7 @@ func groupFromAuthSnapshot(snapshot *APIKeyAuthGroupSnapshot) *Group {
 		Platform:                        snapshot.Platform,
 		Status:                          snapshot.Status,
 		Hydrated:                        true,
+		IsExclusive:                     snapshot.IsExclusive,
 		OwnerUserID:                     snapshot.OwnerUserID,
 		Scope:                           snapshot.Scope,
 		SubscriptionType:                snapshot.SubscriptionType,

@@ -836,3 +836,56 @@ func (r *stubUserSubscriptionRepo) IncrementUsage(ctx context.Context, id int64,
 func (r *stubUserSubscriptionRepo) BatchUpdateExpiredStatus(ctx context.Context) (int64, error) {
 	return 0, errors.New("not implemented")
 }
+
+// TestValidateAPIKeyGroupAllowed 专属分组运行时授权复核的放行/拦截边界。
+//
+// 这层复核的目的：管理员撤销专属分组授权后，用户手里已建好的 Key 必须立刻失效，
+// 而不是等到 Key 被手工删掉。
+//
+// 同时必须守住三条绝不能被误拒的路径（生产上 1371 个绑定专属分组的活跃 Key
+// 全部落在「专属 + 订阅型」这一形态上）：
+//   - 订阅型分组（含本地自研的 user_private_group：专属 + 订阅型 + 属主已入 allowed_groups）
+//   - 非专属分组
+//   - 分组/用户信息缺失时不越权拦截，交由既有分支处理
+func TestValidateAPIKeyGroupAllowed(t *testing.T) {
+	groupID := int64(7)
+	mk := func(g *service.Group, allowed []int64) *service.APIKey {
+		return &service.APIKey{
+			GroupID: &groupID,
+			Group:   g,
+			User:    &service.User{ID: 1, AllowedGroups: allowed},
+		}
+	}
+	exclusiveOnDemand := &service.Group{ID: groupID, IsExclusive: true}
+	exclusiveSubscription := &service.Group{
+		ID:               groupID,
+		IsExclusive:      true,
+		SubscriptionType: service.SubscriptionTypeSubscription,
+	}
+	shared := &service.Group{ID: groupID}
+
+	tests := []struct {
+		name   string
+		apiKey *service.APIKey
+		want   bool
+	}{
+		{name: "专属且已授权", apiKey: mk(exclusiveOnDemand, []int64{groupID}), want: true},
+		{name: "专属但授权已撤销", apiKey: mk(exclusiveOnDemand, nil), want: false},
+		{name: "专属但授权指向别的分组", apiKey: mk(exclusiveOnDemand, []int64{groupID + 1}), want: false},
+		{name: "订阅型专属分组不看allowed_groups", apiKey: mk(exclusiveSubscription, nil), want: true},
+		{name: "非专属分组任何人可用", apiKey: mk(shared, nil), want: true},
+		{name: "未绑定分组", apiKey: &service.APIKey{User: &service.User{ID: 1}}, want: true},
+		{name: "分组信息缺失", apiKey: &service.APIKey{GroupID: &groupID, User: &service.User{ID: 1}}, want: true},
+		{name: "用户信息缺失", apiKey: &service.APIKey{GroupID: &groupID, Group: exclusiveOnDemand}, want: true},
+		{name: "apiKey 为空", apiKey: nil, want: true},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			if got := validateAPIKeyGroupAllowed(tt.apiKey); got != tt.want {
+				t.Fatalf("validateAPIKeyGroupAllowed() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
