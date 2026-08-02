@@ -10243,6 +10243,7 @@ export default {
       refundReasonPlaceholder: "Please enter refund reason",
       confirmRefund: "Confirm Refund",
       refundSuccess: "Refund successful",
+      refundNeedsAttention: "Refund submitted, but needs manual confirmation:",
       refundInfo: "Refund Info",
       refundEnabled: "Refund Enabled",
       allowUserRefund: "Allow User Refund",

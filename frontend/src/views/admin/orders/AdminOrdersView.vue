@@ -480,12 +480,32 @@ function openRefundDialog(order: PaymentOrder) {
   showRefundDialog.value = true
 }
 
+/**
+ * Submit a refund. The backend returns HTTP 200 for outcomes that are NOT a
+ * plain success, so the response body has to be inspected:
+ *  - success=false  → the gateway rejected it (or force is required); the order
+ *    was left retryable, so keep the dialog open.
+ *  - success=true + warning → the gateway accepted but has not settled yet, or
+ *    it settled but deducting the balance failed and needs manual reconciliation.
+ *    Reporting these as a plain "refund successful" is how money problems go
+ *    unnoticed, so they surface as a warning instead.
+ */
 async function handleRefund(data: { amount: number; reason: string; deduct_balance: boolean; force: boolean }) {
   if (!selectedOrder.value) return
   refundSubmitting.value = true
   try {
-    await adminPaymentAPI.refundOrder(selectedOrder.value.id, { amount: data.amount, reason: data.reason, deduct_balance: data.deduct_balance, force: data.force })
-    appStore.showSuccess(t('payment.admin.refundSuccess')); showRefundDialog.value = false; loadOrders()
+    const res = await adminPaymentAPI.refundOrder(selectedOrder.value.id, { amount: data.amount, reason: data.reason, deduct_balance: data.deduct_balance, force: data.force })
+    const result = res.data
+    if (result && result.success === false) {
+      appStore.showError(result.warning || t('common.error'))
+    } else if (result?.warning) {
+      appStore.showWarning(`${t('payment.admin.refundNeedsAttention')} ${result.warning}`)
+      showRefundDialog.value = false
+    } else {
+      appStore.showSuccess(t('payment.admin.refundSuccess'))
+      showRefundDialog.value = false
+    }
+    loadOrders()
   } catch (err: unknown) { appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error'))) }
   finally { refundSubmitting.value = false }
 }
@@ -501,7 +521,11 @@ async function handleQueryRefund(order: PaymentOrder) {
   try {
     const res = await adminPaymentAPI.queryRefundStatus(order.id)
     const refundStatus = res.data?.refund_status
-    if (refundStatus === 'success') {
+    const warning = res.data?.warning
+    if (refundStatus === 'success' && warning) {
+      // 退款已到账但扣款失败 —— 需要人工补账，不能报成普通成功
+      appStore.showWarning(`${t('payment.admin.refundNeedsAttention')} ${warning}`)
+    } else if (refundStatus === 'success') {
       appStore.showSuccess(t('payment.admin.refundQuerySuccess'))
     } else if (refundStatus === 'failed') {
       appStore.showWarning(t('payment.admin.refundQueryFailedState'))

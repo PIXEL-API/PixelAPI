@@ -9947,6 +9947,7 @@ export default {
       refundReasonPlaceholder: "请输入退款原因",
       confirmRefund: "确认退款",
       refundSuccess: "退款成功",
+      refundNeedsAttention: "退款已提交，但需要人工确认：",
       refundInfo: "退款信息",
       refundEnabled: "允许退款",
       alreadyRefunded: "已退款",

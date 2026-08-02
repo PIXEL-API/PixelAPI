@@ -21,6 +21,13 @@
 --
 -- 锁风险：PG 11+ 对「带非易失默认值的 ADD COLUMN」只改 catalog，不重写表，
 -- 因此这两条 ALTER 是 O(1) 元数据操作，与 payment_orders 的行数无关。
+-- 但「不重写表」不等于「不用等锁」：ADD COLUMN 仍要拿 ACCESS EXCLUSIVE，
+-- 被任何在跑的 payment_orders 查询挡住时，PG 的锁队列会把它后面的所有查询一起阻塞。
+-- 故与本仓既有事务型迁移一致，显式设置 lock_timeout：抢不到锁就快速失败回滚，
+-- 让部署在迁移这一步红掉，而不是把支付表拖死。
+
+SET LOCAL lock_timeout = '2s';
+SET LOCAL statement_timeout = '30s';
 
 ALTER TABLE payment_orders
     ADD COLUMN IF NOT EXISTS refund_trade_no VARCHAR(128) NOT NULL DEFAULT '';

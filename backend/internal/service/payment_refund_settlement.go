@@ -53,7 +53,22 @@ func (s *PaymentService) markRefundPending(ctx context.Context, p *RefundPlan, r
 		refundTradeNo = strings.TrimSpace(resp.RefundID)
 	}
 
+	// **先留痕，再落库。** 走到这里网关已经受理了退款，而 refundTradeNo 此刻只存在于
+	// 内存里。若下面的 UPDATE 失败，函数返回后这个单号就永久丢失，运维再也无法向网关
+	// 回查这笔在途退款（对微信尤其致命：它只能按 out_refund_no 查）。
+	// writeAuditLog 失败只 slog 不阻断，不会引入新的失败路径。
+	s.writeAuditLog(ctx, p.OrderID, "REFUND_PENDING", "admin", map[string]any{
+		"refundAmount":   p.RefundAmount,
+		"reason":         p.Reason,
+		"refundTradeNo":  refundTradeNo,
+		"deductOnSettle": p.DeductBalance,
+		"force":          p.Force,
+	})
+
 	// CAS 落库：只有仍处于 REFUNDING 的订单才会被推进到 REFUND_PENDING。
+	// 落库脱离请求 ctx：客户端断连不该让一笔网关已受理的退款卡在 REFUNDING
+	// （该状态没有任何出口，也没有后台清理任务）。
+	ctx = context.WithoutCancel(ctx)
 	affected, err := s.entClient.PaymentOrder.Update().
 		Where(paymentorder.IDEQ(p.OrderID), paymentorder.StatusEQ(OrderStatusRefunding)).
 		SetStatus(OrderStatusRefundPending).
@@ -70,13 +85,6 @@ func (s *PaymentService) markRefundPending(ctx context.Context, p *RefundPlan, r
 		return nil, infraerrors.Conflict("CONFLICT", "order status changed")
 	}
 
-	s.writeAuditLog(ctx, p.OrderID, "REFUND_PENDING", "admin", map[string]any{
-		"refundAmount":   p.RefundAmount,
-		"reason":         p.Reason,
-		"refundTradeNo":  refundTradeNo,
-		"deductOnSettle": p.DeductBalance,
-		"force":          p.Force,
-	})
 	if pendingOrder, err := s.entClient.PaymentOrder.Get(ctx, p.OrderID); err == nil {
 		s.notifyPaymentOrder(ctx, "refund_pending", pendingOrder)
 	} else {
@@ -179,7 +187,14 @@ func (s *PaymentService) QueryAndFinalizeRefund(ctx context.Context, oid int64) 
 			RefundStatus: payment.ProviderStatusPending,
 		}, nil
 	case payment.ProviderStatusFailed:
-		return s.finalizeRefundFailed(ctx, oid, "gateway reported refund failed")
+		res, ferr := s.finalizeRefundFailed(ctx, oid, "gateway reported refund failed")
+		if ferr != nil {
+			// 落终态失败 —— 必须还原回 pending，否则订单卡死在 REFUNDING（无出口）。
+			// 此路径尚未扣过任何款，还原是安全的。
+			restore()
+			return nil, ferr
+		}
+		return res, nil
 	}
 
 	// 终态成功：此刻才扣款。扣减计划按**当前**订单与用户状态重新推导，

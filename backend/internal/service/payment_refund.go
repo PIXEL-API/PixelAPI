@@ -20,6 +20,13 @@ import (
 
 // --- Refund Flow ---
 
+const (
+	// markRefundOkWriteTimeout 落退款终态那条 UPDATE 的独立超时。
+	markRefundOkWriteTimeout = 10 * time.Second
+	// markRefundOkWriteAttempts 落终态的尝试次数，用于扛住瞬时连接池抖动。
+	markRefundOkWriteAttempts = 3
+)
+
 var ErrPaymentOrderHasActiveInvoice = infraerrors.Conflict("PAYMENT_ORDER_HAS_ACTIVE_INVOICE", "payment order has an active invoice request")
 
 func (s *PaymentService) ensureOrderRefundableByInvoice(ctx context.Context, orderID int64) error {
@@ -393,14 +400,24 @@ func (s *PaymentService) applyRefundDeductions(ctx context.Context, p *RefundPla
 	switch p.DeductionType {
 	case payment.DeductionTypeBalance:
 		if p.BalanceToDeduct <= 0 {
-			return ""
+			return s.reportRefundDeductionShortfall(ctx, p, "balance_zero",
+				"balance deduction was skipped because the user's balance is already 0")
 		}
 		if err := s.userRepo.DeductBalance(ctx, p.Order.UserID, p.BalanceToDeduct); err != nil {
 			return s.reportRefundDeductionFailure(ctx, p, "balance", err)
 		}
+		// prepDeduct 用 min(退款额, 当时余额) 夹取。gateway-first 把扣款推迟到了网关
+		// 确认之后，pending 期间用户可能已经把余额花掉，扣到的钱会少于退款额。
+		// 差额不是错误，但绝不能静默——否则平台单方面亏损且无人知晓。
+		tolerance := paymentAmountToleranceForCurrency(PaymentOrderCurrency(p.Order))
+		if shortfall := p.RefundAmount - p.BalanceToDeduct; shortfall > tolerance {
+			return s.reportRefundDeductionShortfall(ctx, p, "balance_partial",
+				fmt.Sprintf("deducted %.2f of %.2f; user balance was insufficient", p.BalanceToDeduct, p.RefundAmount))
+		}
 	case payment.DeductionTypeSubscription:
 		if p.SubDaysToDeduct <= 0 || p.SubscriptionID <= 0 {
-			return ""
+			return s.reportRefundDeductionShortfall(ctx, p, "subscription_missing",
+				"subscription deduction was skipped: no active subscription to deduct from")
 		}
 		if _, err := s.subscriptionSvc.ExtendSubscription(ctx, p.SubscriptionID, -p.SubDaysToDeduct); err != nil {
 			if !errors.Is(err, ErrAdjustWouldExpire) {
@@ -413,8 +430,34 @@ func (s *PaymentService) applyRefundDeductions(ctx context.Context, p *RefundPla
 				return s.reportRefundDeductionFailure(ctx, p, "subscription_revoke", revokeErr)
 			}
 		}
+	default:
+		// DeductBalance=true 却没定出扣减方式：prepDeduct 在 force 模式下取用户
+		// 或订阅失败时会直接返回而不设置 DeductionType（payment_refund.go 的
+		// prepDeduct）。终态化路径固定用 force=true 调它，所以这条分支真的可达。
+		// 静默跳过等于平台白退一笔钱，必须留痕。
+		return s.reportRefundDeductionShortfall(ctx, p, "deduction_type_unresolved",
+			"refund was marked deductible but no deduction method could be resolved")
 	}
 	return ""
+}
+
+// reportRefundDeductionShortfall 记录「扣款没失败、但也没足额扣到」的情况。
+//
+// 与 reportRefundDeductionFailure 的区别：那个是操作报错，这个是操作本身成功
+// 但金额不足或压根没执行。两者对账面的后果相同（平台少收），都必须可见。
+func (s *PaymentService) reportRefundDeductionShortfall(ctx context.Context, p *RefundPlan, kind, detail string) string {
+	slog.Warn("refund settled at gateway but deduction was short",
+		"orderID", p.OrderID, "userID", p.Order.UserID, "kind", kind,
+		"refundAmount", p.RefundAmount, "balanceToDeduct", p.BalanceToDeduct,
+		"subDaysToDeduct", p.SubDaysToDeduct, "detail", detail)
+	s.writeAuditLog(ctx, p.OrderID, "REFUND_DEDUCTION_SHORTFALL", "admin", map[string]any{
+		"kind":            kind,
+		"detail":          detail,
+		"refundAmount":    p.RefundAmount,
+		"balanceToDeduct": p.BalanceToDeduct,
+		"subDaysToDeduct": p.SubDaysToDeduct,
+	})
+	return "refund settled at gateway but the deduction was short (" + kind + "): " + detail + "; manual reconciliation may be required"
 }
 
 func (s *PaymentService) reportRefundDeductionFailure(ctx context.Context, p *RefundPlan, kind string, err error) string {
@@ -506,13 +549,43 @@ func refundTerminalStatus(p *RefundPlan) string {
 	return OrderStatusRefunded
 }
 
+// markRefundOk 落退款终态。
+//
+// 调用它时网关已经确认退款成功、且 applyRefundDeductions 已经扣过款，
+// 因此这条 UPDATE **不能被放弃**：一旦失败，订单会停在 REFUNDING —— 那个状态
+// 没有任何出口，也没有后台清理任务，而钱已经退了、余额也已经扣了。
+// 更糟的是此时不能靠"还原状态让管理员重试"来兜底：扣款没有幂等保护，
+// 重试会二次扣款。所以这里脱离请求 ctx 并做有限次重试，尽量让它写成功。
 func (s *PaymentService) markRefundOk(ctx context.Context, p *RefundPlan) (*RefundResult, error) {
 	fs := refundTerminalStatus(p)
 	now := time.Now()
-	_, err := s.entClient.PaymentOrder.UpdateOneID(p.OrderID).SetStatus(fs).SetRefundAmount(p.RefundAmount).SetRefundReason(p.Reason).SetRefundAt(now).SetForceRefund(p.Force).Save(ctx)
+
+	// 脱离请求 ctx：客户端断连/超时不该把一笔已经退成功并已扣款的订单钉死在 REFUNDING。
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), markRefundOkWriteTimeout)
+	defer cancel()
+
+	var err error
+	for attempt := 0; attempt < markRefundOkWriteAttempts; attempt++ {
+		_, err = s.entClient.PaymentOrder.UpdateOneID(p.OrderID).SetStatus(fs).SetRefundAmount(p.RefundAmount).SetRefundReason(p.Reason).SetRefundAt(now).SetForceRefund(p.Force).Save(writeCtx)
+		if err == nil {
+			break
+		}
+		slog.Error("mark refund terminal status failed, retrying",
+			"orderID", p.OrderID, "attempt", attempt+1, "error", err)
+	}
 	if err != nil {
+		// 走到这里是最坏情况：钱退了、款扣了，订单卡在 REFUNDING。
+		// 必须留下足以人工修复的痕迹。
+		slog.Error("[CRITICAL] refund settled and deducted but order stuck in REFUNDING",
+			"orderID", p.OrderID, "targetStatus", fs, "refundAmount", p.RefundAmount, "error", err)
+		s.writeAuditLog(ctx, p.OrderID, "REFUND_TERMINAL_WRITE_FAILED", "admin", map[string]any{
+			"targetStatus": fs,
+			"refundAmount": p.RefundAmount,
+			"detail":       psErrMsg(err),
+		})
 		return nil, fmt.Errorf("mark refund: %w", err)
 	}
+	ctx = writeCtx
 	s.writeAuditLog(ctx, p.OrderID, "REFUND_SUCCESS", "admin", map[string]any{"refundAmount": p.RefundAmount, "reason": p.Reason, "balanceDeducted": p.BalanceToDeduct, "force": p.Force})
 	if refundedOrder, err := s.entClient.PaymentOrder.Get(ctx, p.OrderID); err == nil {
 		s.notifyPaymentOrder(ctx, "refunded", refundedOrder)

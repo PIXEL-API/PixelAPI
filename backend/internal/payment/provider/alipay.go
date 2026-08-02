@@ -383,12 +383,25 @@ func (a *Alipay) Refund(ctx context.Context, req payment.RefundRequest) (*paymen
 	if err != nil {
 		return nil, fmt.Errorf("alipay TradeRefund: %w", err)
 	}
-
-	refundStatus := payment.ProviderStatusPending
-	if result.FundChange == alipayFundChangeYes {
-		refundStatus = payment.ProviderStatusSuccess
+	if result == nil {
+		return nil, fmt.Errorf("alipay TradeRefund: empty response")
+	}
+	// 业务失败（code != 10000）必须报错。SDK 不会把业务码变成 error，
+	// 此前这里完全不判 code，失败响应会一路走到下面按 fund_change 归类，
+	// 与「成功但未变动资金」混为一谈。
+	if result.IsFailure() {
+		return nil, fmt.Errorf("alipay TradeRefund failed: %s", result.Error.Error())
 	}
 
+	// alipay.trade.refund 是**同步**接口：code == 10000 即表示退款已受理并生效。
+	//
+	// 不要用 fund_change 判 pending —— SDK 对该字段的定义是「**本次调用**是否发生了
+	// 资金变化」，幂等重试一笔已经退成功的退款会返回 N，它表示的是「这次没再扣一遍钱」，
+	// 不是「尚未结算」。把 N 当 pending 会让订单落进 REFUND_PENDING，而支付宝没有实现
+	// RefundQueryProvider，REFUND_PENDING 的唯一出口 QueryAndFinalizeRefund 会在类型
+	// 断言处直接 400，订单将永久卡死（既不能回查也不能重发）。
+	//
+	// 不变式：任何 Refund() 可能返回 pending 的 provider，都必须实现 RefundQueryProvider。
 	refundID := result.TradeNo
 	if refundID == "" {
 		refundID = req.OrderID + alipayRefundSuffix
@@ -396,7 +409,7 @@ func (a *Alipay) Refund(ctx context.Context, req payment.RefundRequest) (*paymen
 
 	return &payment.RefundResponse{
 		RefundID: refundID,
-		Status:   refundStatus,
+		Status:   payment.ProviderStatusSuccess,
 	}, nil
 }
 

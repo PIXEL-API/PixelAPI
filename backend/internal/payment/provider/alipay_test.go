@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 
@@ -376,4 +377,49 @@ func TestParseAlipayAmount(t *testing.T) {
 	if _, err := parseAlipayAmount("", "not-a-number"); err == nil {
 		t.Fatal("expected error when no valid amount field exists")
 	}
+}
+
+// 不变式回归：alipay 的 Refund() 绝不能返回 pending。
+//
+// 支付宝没有实现 payment.RefundQueryProvider，而 REFUND_PENDING 的唯一出口
+// QueryAndFinalizeRefund 会在类型断言处直接 400。一旦 alipay 退款落进
+// REFUND_PENDING，订单就没有任何代码出口：回查不了、也不能重发
+// （refundInitiableStatuses 刻意排除该状态），只能改库。
+//
+// 历史成因：改造前 Refund() 按 fund_change != "Y" 判 pending，而 fund_change
+// 的语义是「本次调用是否发生资金变化」——幂等重试一笔已成功的退款会返回 N。
+func TestAlipayNeverImplementsRefundQueryProviderWithoutPending(t *testing.T) {
+	var a any = &Alipay{}
+
+	_, queryable := a.(payment.RefundQueryProvider)
+	if queryable {
+		t.Skip("alipay 已实现 RefundQueryProvider，本不变式可以放宽")
+	}
+
+	// 未实现回查 ⇒ 源码里不允许出现 ProviderStatusPending。
+	src, err := os.ReadFile("alipay.go")
+	if err != nil {
+		t.Fatalf("read alipay.go: %v", err)
+	}
+	body := string(src)
+	refundIdx := strings.Index(body, "func (a *Alipay) Refund(")
+	if refundIdx < 0 {
+		t.Fatal("cannot locate Alipay.Refund")
+	}
+	// 只看 Refund 函数体到下一个顶层 func 之间的片段。
+	rest := body[refundIdx:]
+	if end := strings.Index(rest[1:], "\nfunc "); end >= 0 {
+		rest = rest[:end+1]
+	}
+	if strings.Contains(rest, "ProviderStatusPending") {
+		t.Fatal("Alipay.Refund 会返回 pending，但 Alipay 未实现 RefundQueryProvider —— " +
+			"这类订单会永久卡死在 REFUND_PENDING。要么让它不返回 pending，要么实现 QueryRefund。")
+	}
+}
+
+// 三家实现了 QueryRefund 的 provider 必须满足 RefundQueryProvider 接口。
+func TestRefundQueryProviderImplementors(t *testing.T) {
+	var _ payment.RefundQueryProvider = (*Stripe)(nil)
+	var _ payment.RefundQueryProvider = (*Wxpay)(nil)
+	var _ payment.RefundQueryProvider = (*Airwallex)(nil)
 }

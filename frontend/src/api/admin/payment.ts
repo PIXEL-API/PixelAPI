@@ -65,6 +65,22 @@ export interface UpdatePaymentConfigRequest {
   help_text?: string
 }
 
+/** Result of POST /admin/payment/orders/:id/refund */
+export interface RefundResult {
+  /** false means the refund did not go through; the order was left retryable */
+  success: boolean
+  /**
+   * Set when the outcome needs a human: the gateway accepted but has not settled
+   * yet, or the refund settled but deducting the user's balance failed. Backend
+   * text, surfaced verbatim — never silently drop it.
+   */
+  warning?: string
+  /** Admin must re-submit with force=true */
+  require_force?: boolean
+  balance_deducted?: number
+  subscription_days_deducted?: number
+}
+
 /** Result of POST /admin/payment/orders/:id/refund/query */
 export interface RefundQueryResult {
   order_id: number
@@ -73,6 +89,8 @@ export interface RefundQueryResult {
   refund_status: 'success' | 'pending' | 'failed'
   balance_deducted?: number
   sub_days_deducted?: number
+  /** Same semantics as RefundResult.warning */
+  warning?: string
 }
 
 export interface AdminOrderFilters {
@@ -183,9 +201,13 @@ export const adminPaymentAPI = {
     return apiClient.post(`/admin/payment/orders/${id}/manual-fulfill`, data)
   },
 
-  /** Process a refund */
+  /**
+   * Process a refund. Returns HTTP 200 even when the refund did not fully
+   * succeed — callers must inspect `success` and `warning`, not just the status
+   * code (a gateway rejection or a failed balance deduction both come back 200).
+   */
   refundOrder(id: number, data: { amount: number; reason: string; deduct_balance?: boolean; force?: boolean }) {
-    return apiClient.post(`/admin/payment/orders/${id}/refund`, data)
+    return apiClient.post<RefundResult>(`/admin/payment/orders/${id}/refund`, data)
   },
 
   /**
