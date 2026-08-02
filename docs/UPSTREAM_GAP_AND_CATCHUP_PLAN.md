@@ -229,25 +229,96 @@ A-4 的第三块（专属分组授权复核）按依赖关系留在 B-2，单独
 
 ### 批次 B — P0 高冲突项（必须分步，单独发布）
 
-**进度（2026-08-02）：B-1 ✅ / B-2 ✅ / B-3 后端 ✅ 前端待做 / B-4 未开始**
+**进度（2026-08-02）：B-1 ✅ / B-2 ✅ / B-3 ✅ / B-4 ✅ —— 批次 B 全部完成，均未发布**
 
 | 项 | 提交 | 状态 |
 |---|---|---|
 | B-1 资金列保护（第一步） | `2640e6afb` | ✅ 已完成。第二步（本地版列掩码 + api_keys 配额标记只写 status）未做，另行评估 |
 | B-2 专属分组授权复核 | `a00d93871` | ✅ 四步全做。生产核验爆炸半径为零（1371 个专属分组 Key 全是订阅型，走早返回） |
-| B-3 面板限流 | `<本次>` | ⚠️ **后端完成、前端配置卡片未做**。配置目前只能经管理端接口修改，默认值已生效 |
-| B-4 退款生命周期 | — | ❌ 未开始 |
+| B-3 面板限流 | `3c181479c`（后端）+ `10bca9f0e`（前端） | ✅ 完成 |
+| B-4 退款生命周期 | `5867e00e7` | ✅ 完成。**含迁移 264**，见下方「计划书原判断被推翻」 |
 
-**B-3 遗留明细：**
-- 前端 `SettingsView.vue` 安全 tab 的配置卡片（上游 +240 行）、`api/admin/settings.ts`（+34 行）、中英文 i18n（各 +18 行）。
-- 后端接口已就绪：`GET/PUT /api/v1/admin/settings/panel-rate-limit`。
+**B-3 备注：**
 - **主动偏离计划并已在提交说明中记录**：未把「商城下单 / 发票生成 / 账号广场结算」纳入 heavy 档
   —— 这些是写路径，60/min 严格档会真实影响正常下单突发，属产品取舍；Global 档 240/min 已覆盖滥用面。
   要收紧只需给对应路由加 `panelRL.Heavy()`。
 - `accounts` 组未整组套 Heavy（组内还有大量轻量 CRUD），只挂在 6 个聚合读端点上。
+- 前端卡片按本地 Pixel 卡片样式写，未照搬上游卡头 Icon 与 sky-* 提示条（本地卡头一律纯 h2+p、
+  提示条一律 amber-*）。文案按后端实测语义写，并补了一条上游没有的 `propagationHint`
+  （多节点最迟 60s 生效）。
+
+#### ⚠️ B-4 让计划书原有的两条判断被推翻（以本节为准）
+
+**1.「本地 payment_refund.go 接了自研的发票冲红与双钱包退回」—— 两条都不存在。**
+全仓搜 `冲红|红冲|credit_note|ReverseInvoice` 零命中；退款与发票的唯一交互是
+`ensureOrderRefundableByInvoice`（纯 SELECT，有活跃发票就 409 拒绝，**从不写发票表**），
+可开票额是 `invoice_repo.go:527` 查询期用 `GREATEST(pay_amount - refund_amount, 0)` 派生的。
+退款链路只碰 `users.balance`，唯一读写 `points_balance` 的 `AdjustUsageBillingWallet`
+在退款路径上零调用方。**真正需要挪到终态之后的是余额扣减与订阅撤销**，不是发票与积分。
+
+**2.「无迁移（order status 是字符串列）」—— 只对状态值成立，对 B-4 整体不成立。**
+`REFUND_PENDING` 确实可直接写入（`status` 是 `VARCHAR(30)` 无 CHECK），但「能回查」
+必须持久化网关退款单号，而 `payment_orders` 原本没有这个列。**已加迁移 264**
+（`refund_trade_no` + `refund_deduct_on_settle`，均为带默认值的 ADD COLUMN，
+PG 11+ 只改 catalog 不重写表）。
+
+**B-4 主动偏离上游：执行顺序改为 gateway-first。**
+上游保留「先扣款→调网关→失败回滚」；本地改成只有网关确认终态成功后才扣款。
+原因是引入 pending 后旧顺序会破——终态确认必然发生在另一个请求里，那时 `RefundPlan`
+早已不存在，而它的 `BalanceToDeduct`/`SubscriptionID` 一个字段都没落库，回滚无从谈起。
+gateway-first 连带消掉三个坑：补偿状态无需持久化、`RevokeSubscription` 硬删除的不可逆
+窗口消失、`REFUND_ROLLBACK_FAILED` 永久粘滞位（受上游 migration 131 的
+`UNIQUE(order_id,action)` 保护且无清除路径）不再会被写出。代价是「网关成功但扣款失败」
+会留下已退款未扣余额，此时不回滚、只写 `REFUND_DEDUCTION_FAILED` 审计交人工补账。
+
+**B-4 生产核查（2026-08-02，只读）：爆炸半径为零。**
+全部 265 笔退款均为 easypay（恒返回 success，无 pending 路径），
+stripe/wxpay/alipay 退款 **0 笔**，现存 `REFUND_PENDING` **0 条**，`REFUND_*` 审计 0 行。
+即该缺陷尚无存量订单踩到，本次属预防性修复；微信 `out_refund_no` 语义变更也因此
+**无历史兼容包袱**。
+
+**B-4 已知未做（留给后续，非本次范围）：**
+- **支付宝没有回查实现**。上游只给 stripe/wxpay/airwallex 写了 `QueryRefund`，
+  而支付宝恰好是会返回 pending 的三家之一。支付宝退款进 pending 后回查会返回
+  `REFUND_QUERY_UNSUPPORTED`，只能人工去网关后台核对。
+- **前后端「可退款状态」白名单不一致（既有缺陷，未改）**：前端
+  `orderUtils.ts` 的 `REFUNDABLE_STATUSES` 含 `PARTIALLY_REFUNDED`，后端
+  `refundInitiableStatuses()` 不含 —— 对部分退款订单点退款会报 `INVALID_STATUS`。
+  改哪边是产品取舍（是否允许二次部分退款），未擅自决定。
+- **`REFUND_PENDING` 停留时长无告警**。未知状态一律映射成 pending 是有意为之
+  （绝不擅自判死），代价是这类订单会静默堆积，建议后续加一条停留超时告警。
+
+#### 🔧 ent 代码生成在本机的坑（后续动 ent schema 必看）
+
+ent 的 codegen 会 mmap 自己随后要改写的源文件，在本机 **C: 盘必然中途失败**
+（`The requested operation cannot be performed on a file with a user-mapped section open`），
+且每次失败点不同、会把 `backend/ent/` 改坏，连跑几次后连 `go build ./ent/...` 都过不了。
+表现很像「生成器与仓库代码不同步、38 个文件有 churn」，**那是假象**——纯粹是半成品残留。
+
+可用办法（B-4 实测有效）：
+
+```bash
+git worktree add --detach /d/tmp/entgen-wt HEAD
+# 在 worktree 里改 ent/schema/*.go，然后
+cd /d/tmp/entgen-wt/backend && go generate ./ent && go build ./ent/...
+# 只把变更文件拷回主仓，再 git worktree remove
+```
+
+在 D: 盘的干净 worktree 里生成一次即成功，且对未改动部分 **零 churn**
+（B-4 加两个字段只产出 9 个文件）。**不要因为 C: 盘生成失败就改用裸 SQL 绕开 ent**：
+单测跑的是 SQLite 且 schema 由 ent 生成，SQL-only 列在单测里根本不存在，
+整条路径会失去单测覆盖。
 
 **批次 B 发版纪律：B-2 与 B-3 都改动鉴权/限流热路径，必须分开发版、各自观察 24h。**
 B-2 上线瞬间鉴权快照版本 15→16 会触发全站缓存重建，有一波 DB 回源，需避开高峰并盯 `GROUP_NOT_ALLOWED` 403 率与 DB 连接数。
+
+**B-4 发版补充：本批带迁移 264，是批次 B 里唯一需要 `--migrate-only` 的一批。**
+- 迁移 264 是两条带默认值的 `ADD COLUMN`，PG 11+ 只改 catalog、不重写表，与 `payment_orders` 行数无关，无锁风险。
+- 生产实测 stripe/wxpay/alipay 退款 0 笔、`REFUND_PENDING` 0 条，**上线不需要任何数据回填或存量处理**。
+- 上线后要盯的不是 429 或 403，而是有没有订单卡在 `REFUND_PENDING`：
+  `SELECT count(*) FROM payment_orders WHERE status='REFUND_PENDING';`
+  以及有没有出现 `REFUND_DEDUCTION_FAILED` 审计（那表示钱退了但没扣回，需人工补账）。
+- B-4 与 B-3 都动不到同一条热路径，可以同车发布；但若想稳，B-4 单独发更容易定位。
 
 
 **B-1 users 资金列保护（P0-6）** — 分两批，**不要直接 cherry-pick `86fb4781f`**（本地比上游多 4 个自研金额列 `points_balance` / `load_factor_credits_balance` / `load_factor_credits_used_total` / `prefer_points_billing`，还多一条 `UpdateWithAdminGovernanceGuard` 路径）。
@@ -268,7 +339,10 @@ B-2 上线瞬间鉴权快照版本 15→16 会触发全站缓存重建，有一�
 - 第二步：移植 `server/middleware/panel_rate_limit.go` + `service/setting_panel_rate_limit.go` + admin 设置接口，按用户 ID 限流（global / heavy 两档）。**本地需额外把账号广场结算、商城下单、发票生成纳入 heavy 档**，并确认计费 worker / 后台任务走内部调用不经中间件（`detached_usage_drain` 等链路不能被误限流）。配置读取必须走 `atomic.Value` + singleflight 缓存（照抄上游），否则限流中间件自己反而增加 DB 压力。面板档 Redis 故障 fail-open，auth 档保持 fail-close
 - 前端 `SettingsView` 安全 tab 加配置卡片。上线后用本地 ops 看板观察 429 率，阈值先宽后收
 
-**B-4 退款生命周期（P0-8）** — 按 `93a3bf307` → `7316d8302` 顺序手工移植。`payment/types.go` 加 `OrderStatusRefundPending` + `RefundQueryProvider`；Stripe/微信/Airwallex 各实现 `QueryRefund`；`payment_refund.go` 加 pending 落库 + 回查终态化，**务必把发票冲红与钱包退回挪到"终态 SUCCESS 后"执行**（本地接了自研发票冲红与双钱包退回，直接照搬会让发票/钱包状态与订单状态脱节）；`payment_order_lifecycle.go` 状态机加 `REFUND_PENDING` 合法转移；管理端加终态化路由 + 前端状态徽标。无迁移（order status 是字符串列）。
+**B-4 退款生命周期（P0-8）** — ✅ 已完成（`5867e00e7`），实际做法见上方「B-4 让计划书原有的两条判断被推翻」。
+> ~~务必把发票冲红与钱包退回挪到"终态 SUCCESS 后"执行~~ 与 ~~无迁移~~ 两条**均已查证不成立**，
+> 不要再按本段原文施工。实际是：改 gateway-first 执行顺序把**余额扣减与订阅撤销**挪到终态之后，
+> 并新增迁移 264 落退款单号。
 
 ---
 
@@ -320,7 +394,7 @@ B-2 上线瞬间鉴权快照版本 15→16 会触发全站缓存重建，有一�
 | 密文落库前未校验 `EncryptionKeyConfigured` | 重启后永久无法解密 | 无 |
 | notx 唯一索引缺 invalid 自愈登记 | 上游 `60cf89ae2` 通用化 —— 对应 memory 里的 PG 排序规则索引失效事故，**这条直接补上本地那个坑** | 无 |
 
-> 迁移编号建议：263（批次 0）之后，E 批占 **264–269**。所有涉及大表的一律用 `_notx` 并在低峰执行；`ops_error_logs`/`usage_logs` 是百 GB 级 TOAST 膨胀表，加列前先确认 `pg_total_relation_size`。
+> 迁移编号建议：263（批次 0）与 **264（批次 B-4，已占用）** 之后，E 批从 **265** 起顺序编号。所有涉及大表的一律用 `_notx` 并在低峰执行；`ops_error_logs`/`usage_logs` 是百 GB 级 TOAST 膨胀表，加列前先确认 `pg_total_relation_size`。
 
 ---
 
