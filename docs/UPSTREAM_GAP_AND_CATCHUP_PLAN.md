@@ -150,7 +150,26 @@ WHERE created_at > now() - interval '2 hours' GROUP BY 1 ORDER BY 2 DESC LIMIT 5
 
 ---
 
+### ⚠️ 验证纪律：跑测试必须带构建标签
+
+本仓库 **213 个测试文件带 `//go:build unit` 标签**，`go test ./...` 会**静默跳过它们**并报告全绿。CI 实际跑的是：
+
+```bash
+cd backend && make test-unit        # go test -tags=unit ./...
+cd backend && make test-integration # go test -tags=integration ./...
+```
+
+**任何"测试通过"的结论，必须来自带标签的运行。** 不带标签的绿灯没有意义。
+integration 那套依赖 testcontainers + Docker，本机 Docker 未运行时只能用
+`go vet -tags=integration ./...` 验证可编译，用例不会执行——改动涉及并发/阻塞语义时，
+必须人工核对 integration 用例是否会因新语义而**挂死**（不是失败）。
+
+---
+
 ### 批次 A — P0 资损与正确性（改动面小、冲突低）
+
+**进度：7 项中已完成 6 项**（A-1 ✅ / A-2 ✅ / A-3 ✅ / A-4 ✅部分 / A-5 ✅ / A-7 ✅），
+**A-6 待做**。提交：`d5459d230`（A-2/A-3/A-5/A-7）、`1a568f314`（A-1）、`57c9b1dd3`（A-4）。
 
 **A-1 usage_logs 丢弃（P0-1）** — 移植面比想象小，worker 池那一半（`config.go:2367` overflow_policy 默认 sync）已在本地。
 - `backend/internal/repository/usage_log_repo.go:336-338`（`CreateBestEffort`）与 `:459`（`createBatched`）删除 `default:` 立即丢弃分支，改 `select { case ch<-req: ; case <-ctx.Done(): }`
