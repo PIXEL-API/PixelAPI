@@ -3110,9 +3110,11 @@ func (s *AccountShareModeService) UpdateListing(ctx context.Context, actorUserID
 	if !actorIsAdmin && !isAccountShareModeModelOnlyUpdate(input) && !isAccountShareModeOwnerConfigUpdate(input) {
 		return nil, ErrInsufficientPerms
 	}
-	if requiresAccountShareModeEditSession(input) && strings.TrimSpace(input.EditSessionID) == "" {
-		return nil, ErrAccountShareEditSessionRequired
-	}
+	// 这里刻意不再做「合约字段必须带 edit_session_id」的前置判定。
+	// 仓储层对同一批字段有更完整的裁决：没带编辑锁时会先算一遍
+	// accountShareListingUpdateProtectsConsumers（只降费 / 提并发 / 加模型 / 不伤现有席位
+	// 地减席位即放行），算不过才要求编辑锁。前置判定的条件与那条免锁分支的进入条件
+	// 逐字相同，等于把整条「消费者安全更新」堵死，房间一有人用就永远保存不了。
 	if input.SeatLimit != nil && (*input.SeatLimit < AccountShareModeMinSeats || *input.SeatLimit > AccountShareModeMaxSeats) {
 		return nil, ErrAccountShareModeInvalidSeats
 	}
@@ -3151,8 +3153,25 @@ func (s *AccountShareModeService) UpdateListing(ctx context.Context, actorUserID
 		if err != nil {
 			return nil, err
 		}
-		if current == nil || current.AccountConcurrency <= 0 || *input.PerUserConcurrency > current.AccountConcurrency {
-			return nil, ErrAccountShareModeInvalidConcurrency
+		if current == nil {
+			return nil, ErrAccountShareListingNotFound
+		}
+		// 编辑弹窗是整表单提交，per_user_concurrency 永远随请求带上。只有真正改动它时
+		// 才需要用房间容量卡上限，否则「只改房间名」也会被这道校验连坐。
+		if *input.PerUserConcurrency != current.PerUserConcurrency {
+			ceiling, err := s.roomConfiguredConcurrencyCeiling(ctx, actorUserID, actorIsAdmin, listingID)
+			if err != nil {
+				return nil, err
+			}
+			if ceiling <= 0 {
+				ceiling = current.AccountConcurrency
+			}
+			if ceiling > 0 && *input.PerUserConcurrency > ceiling {
+				return nil, ErrAccountShareModeInvalidConcurrency.WithMetadata(map[string]string{
+					"field":   "per_user_concurrency",
+					"maximum": strconv.Itoa(ceiling),
+				})
+			}
 		}
 	}
 	listing, err := s.repo.UpdateListing(ctx, actorUserID, actorIsAdmin, listingID, input)
@@ -3166,6 +3185,35 @@ func (s *AccountShareModeService) UpdateListing(ctx context.Context, actorUserID
 	normalizeAccountShareListingAccountLevelWithConfigs(listing, levelConfigs)
 	s.enrichListingRuntime(ctx, listing)
 	return listing, nil
+}
+
+// roomConfiguredConcurrencyCeiling 返回房间内账号「配置并发」之和，作为单用户并发的上限。
+//
+// 刻意不用 listing.AccountConcurrency：那个值在 SQL 里按健康度过滤过（限流、额度保护、
+// 不可调度的账号都不计入），房间账号临时全部不可调度时会变成 0，于是任何取值都超标 ——
+// 房主连改个房间名都会被打成「并发非法」，且提示是误导性的「不能超过 50」。
+// 房间容量本身是配置属性，不该随账号的临时健康状态漂移。
+func (s *AccountShareModeService) roomConfiguredConcurrencyCeiling(
+	ctx context.Context,
+	actorUserID int64,
+	actorIsAdmin bool,
+	listingID int64,
+) (int, error) {
+	repo, err := s.roomManagementStateRepository()
+	if err != nil {
+		// 仓储没有实现房间管理状态查询：返回 0 让调用方退回 listing.AccountConcurrency 兜底。
+		// 这只是一道 UX 护栏（全局 50 上限与运行时派发限流都还在），不该因为一次辅助查询
+		// 拿不到就把房主的配置保存整个打死。
+		return 0, nil
+	}
+	state, err := repo.GetRoomManagementState(ctx, actorUserID, actorIsAdmin, listingID)
+	if err != nil {
+		return 0, err
+	}
+	if state == nil {
+		return 0, nil
+	}
+	return state.ConfiguredTotalConcurrency, nil
 }
 
 func isAccountShareModeModelOnlyUpdate(input UpdateAccountShareListingInput) bool {
@@ -3198,10 +3246,6 @@ func isAccountShareModeOwnerRelistUpdate(input UpdateAccountShareListingInput) b
 
 func isAccountShareModeOwnerConfigUpdate(input UpdateAccountShareListingInput) bool {
 	return input.Status == nil && hasAccountShareModeConfigUpdate(input)
-}
-
-func requiresAccountShareModeEditSession(input UpdateAccountShareListingInput) bool {
-	return hasAccountShareModeContractUpdate(input)
 }
 
 func hasAccountShareModeContractUpdate(input UpdateAccountShareListingInput) bool {

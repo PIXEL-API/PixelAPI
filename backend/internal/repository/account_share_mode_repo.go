@@ -2458,9 +2458,24 @@ func (r *accountShareModeRepository) UpdateListing(ctx context.Context, actorUse
 
 	now := time.Now().UTC()
 	activeEdit := activeEditSession.Valid && editingExpiresAt.Valid && editingExpiresAt.Time.After(now)
-	if activeEdit && (strings.TrimSpace(input.EditSessionID) == "" || activeEditSession.String != input.EditSessionID || !editingByUserID.Valid || editingByUserID.Int64 != actorUserID) {
+	editLockMine := activeEdit && editingByUserID.Valid && editingByUserID.Int64 == actorUserID
+	sessionProvided := strings.TrimSpace(input.EditSessionID) != ""
+	// 编辑锁只用于「不同用户之间」互斥：别人持锁一律拒绝。
+	// 自己持锁时不再强制要求带上 session id —— 免锁的消费者安全更新恒不带 session，
+	// 旧写法会让房主自己十分钟前留下的残留锁把这条路整个打死（连只改房间名都保存不了）。
+	// 同一房间的并发写由 expected_version 乐观锁兜底。
+	if activeEdit && !editLockMine {
 		return nil, service.ErrAccountShareListingEditing
 	}
+	// 锁已过期时不在这里拦：让它落到下面的 editSessionHeld 判定，合约变更会拿到
+	// ACCOUNT_SHARE_EDIT_SESSION_INVALID（可自愈：关窗重进编辑），纯改名则照常放行。
+	// 在这里拦会把「自己的会话续期失败后过期」误报成「别人正在编辑」，用户等谁都等不到。
+	if activeEdit && sessionProvided && activeEditSession.String != input.EditSessionID {
+		return nil, service.ErrAccountShareListingEditing
+	}
+	// 走加锁路径（合约变更且不是消费者安全更新）时必须真正握着自己的有效编辑会话，
+	// 不能靠「库里恰好有一把残留锁」蒙混过关。
+	editSessionHeld := editLockMine && sessionProvided && activeEditSession.String == input.EditSessionID
 	var currentAllowedModels []string
 	if err := json.Unmarshal(currentAllowedModelsRaw, &currentAllowedModels); err != nil {
 		return nil, err
@@ -2468,6 +2483,13 @@ func (r *accountShareModeRepository) UpdateListing(ctx context.Context, actorUse
 	contractUpdate := accountShareListingConfigUpdateRequiresEditSession(input)
 	consumerSafeUpdate := false
 	if contractUpdate && strings.TrimSpace(input.EditSessionID) == "" && !input.ForceActiveEdit {
+		// 免锁的「消费者安全更新」同样受房间生命周期状态约束。
+		// 状态门禁原本只写在下面 !consumerSafeUpdate 的分支里，免锁路径整个绕过它 ——
+		// 在这条路径此前不可达时无害，一旦放通就意味着 suspended（风控挂起）、draining
+		// 的房间也能被房主改合约字段并 bump row_version，等于风控挂起不再冻结配置。
+		if !accountShareOwnerEditableStatus(currentStatus) {
+			return nil, service.ErrAccountShareUpdateRequiresPaused
+		}
 		consumerSafeUpdate, err = accountShareListingUpdateProtectsConsumers(
 			ctx,
 			tx,
@@ -2487,7 +2509,7 @@ func (r *accountShareModeRepository) UpdateListing(ctx context.Context, actorUse
 		}
 	}
 	if contractUpdate && !consumerSafeUpdate {
-		if !activeEdit {
+		if !editSessionHeld {
 			return nil, service.ErrAccountShareEditSessionInvalid
 		}
 		if actorIsAdmin && input.ForceActiveEdit {
@@ -2501,7 +2523,7 @@ func (r *accountShareModeRepository) UpdateListing(ctx context.Context, actorUse
 			if !accountShareOwnerEditableStatus(currentStatus) {
 				return nil, service.ErrAccountShareUpdateRequiresPaused
 			}
-			blockers, err := accountShareLifecycleDatabaseBlockersInTx(ctx, tx, listingID)
+			blockers, err := accountShareListingEditBlockersInTx(ctx, tx, listingID)
 			if err != nil {
 				return nil, err
 			}
@@ -2943,7 +2965,7 @@ func (r *accountShareModeRepository) BeginListingEdit(ctx context.Context, actor
 		if !accountShareOwnerEditableStatus(listingStatus) {
 			return nil, service.ErrAccountShareUpdateRequiresPaused
 		}
-		blockers, err := accountShareLifecycleDatabaseBlockersInTx(ctx, tx, listingID)
+		blockers, err := accountShareListingEditBlockersInTx(ctx, tx, listingID)
 		if err != nil {
 			return nil, err
 		}

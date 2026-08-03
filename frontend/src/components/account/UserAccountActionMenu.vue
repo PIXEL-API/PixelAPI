@@ -17,7 +17,11 @@
             {{ t('admin.accounts.viewStats') }}
           </button>
           <template v-if="supportsCredentialMaintenance">
-            <button class="menu-item text-blue-600" @click="emitAction('reauth')">
+            <button
+              class="menu-item text-blue-600"
+              :title="reAuthAttachedToRoom ? t('userAccounts.reAuthRoomAttachedHint') : undefined"
+              @click="emitAction('reauth')"
+            >
               <Icon name="link" size="sm" />
               {{ t('admin.accounts.reAuthorize') }}
             </button>
@@ -26,6 +30,12 @@
               {{ t('admin.accounts.refreshToken') }}
             </button>
           </template>
+          <p
+            v-if="supportsCredentialMaintenance && reAuthAttachedToRoom"
+            class="px-3 pb-2 text-xs leading-snug text-gray-500 dark:text-gray-400"
+          >
+            {{ t('userAccounts.reAuthRoomAttachedHint') }}
+          </p>
           <button v-if="supportsPrivacy" class="menu-item text-emerald-600" @click="emitAction('set-privacy')">
             <Icon name="shield" size="sm" />
             {{ t('admin.accounts.setPrivacy') }}
@@ -78,6 +88,20 @@ const supportsCredentialMaintenance = computed(() => {
   const account = props.account
   return Boolean(account && (account.type === 'oauth' || account.type === 'setup-token') && !isOpenAIAgentIdentity.value)
 })
+
+// 账号还挂在广场房间时，重新授权很可能被守卫拦下（ACCOUNT_MUTATION_BLOCKED_BY_ROOM），
+// 用户会白走一套 OAuth、烧掉一次性 authorization code。这里给出事前提示。
+//
+// 刻意只提示、不置灰：后端的放行条件是「房间已暂停 + 无阻塞项 + 无未闭合绑定」
+// （account_repo.go 的 owner intent 分支），而 account_share_mode_listing_id 只按
+// room_account.state IN ('active','draining') 投影，**不看房间生命周期状态** ——
+// 房间下架变成已暂停后它仍然 > 0。拿它当禁用条件会把后端明明允许的那条路一起堵死，
+// 也和提示里「下架房间等它变成已暂停」的指引自相矛盾。
+// 真被拦下时，ReAuthAccountModal 现在会原样回显后端给出的具体原因。
+//
+// 不能用 external_placement.target === 'room'：退房不会把它写回 private，
+// 那样已经退房的账号会被永久标记。
+const reAuthAttachedToRoom = computed(() => Number(props.account?.account_share_mode_listing_id || 0) > 0)
 
 const supportsPrivacy = computed(() => {
   return (

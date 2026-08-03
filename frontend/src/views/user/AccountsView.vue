@@ -575,7 +575,7 @@ import { ACCOUNT_STATUS_FILTER_OPTIONS } from '@/constants/account'
 import type { Account, AccountLevel, AccountPlatform, AccountType, AdminGroup, Group, Proxy, WindowStats } from '@/types'
 import type { Column } from '@/components/common/types'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
-import { extractApiErrorMessage } from '@/utils/apiError'
+import { extractApiErrorCode, extractApiErrorMessage, extractApiErrorMetadata } from '@/utils/apiError'
 
 type UserAccountStatus = 'active' | 'disabled'
 
@@ -773,12 +773,48 @@ const roomDetachConfirmMessage = computed(() => {
 })
 
 // 从错误响应中解析后端错误码（reason）与结构化 metadata。
-function extractErrorDetail(error: any): { reason: string; metadata: Record<string, string> } {
-  const data = error?.response?.data ?? {}
-  return {
-    reason: String(data.reason ?? data.code ?? ''),
-    metadata: (data.metadata ?? {}) as Record<string, string>
+//
+// 必须走 apiError 工具：api client 的拦截器 reject 的是一个扁平对象
+// { status, code, reason, message, metadata }，根本没有 response 属性。
+// 旧实现读 error.response.data，reason 恒为空字符串、metadata 恒为空对象，
+// 于是 isRoomAccountBlocked 永远返回 false —— 挂在广场房间里的账号一律弹通用
+// 「删除失败」，退房二次确认弹窗从来没有机会出现，force 删除整条路径是死的。
+function extractErrorDetail(error: unknown): { reason: string; metadata: Record<string, string> } {
+  const raw = extractApiErrorMetadata(error) ?? {}
+  const metadata: Record<string, string> = {}
+  for (const [key, value] of Object.entries(raw)) {
+    metadata[key] = value == null ? '' : String(value)
   }
+  return { reason: extractApiErrorCode(error) ?? '', metadata }
+}
+
+// 退房能否解掉全部拦截，由后端在 metadata.detach_resolvable 里精确给出。
+// 不要在前端按 blocker_types 猜：退房会把活跃租户重绑到房间内的健康替补账号，
+// 所以 live_membership 多数时候恰恰是退房可解的；解不掉的是 queued / ending 那部分。
+function deletionResolvableByDetach(metadata: Record<string, string>): boolean {
+  return (metadata.detach_resolvable ?? '').trim() === 'true'
+}
+
+// 退房解不掉时给号主的可读原因。
+function unresolvableDeletionBlockerMessage(metadata: Record<string, string>): string {
+  const reasons: string[] = []
+  if (Number(metadata.unresolvable_membership_count || 0) > 0) {
+    reasons.push(t('userAccounts.deleteBlockedLiveMembership', {
+      count: metadata.unresolvable_membership_count ?? ''
+    }))
+  }
+  if (Number(metadata.unresolvable_binding_count || 0) > 0) {
+    reasons.push(t('userAccounts.deleteBlockedOpenBinding', {
+      count: metadata.unresolvable_binding_count ?? ''
+    }))
+  }
+  if (Number(metadata.pending_billing_intent_count || 0) > 0) {
+    reasons.push(t('userAccounts.deleteBlockedPendingBilling', {
+      count: metadata.pending_billing_intent_count ?? ''
+    }))
+  }
+  if (reasons.length === 0) return t('userAccounts.deleteBlockedGeneric')
+  return t('userAccounts.deleteBlockedSummary', { reasons: reasons.join('；') })
 }
 
 function isRoomAccountBlocked(reason: string, metadata: Record<string, string>): boolean {
@@ -1713,14 +1749,20 @@ async function deleteAccount(): Promise<void> {
     await loadAccounts()
   } catch (error: any) {
     const { reason, metadata } = extractErrorDetail(error)
-    if (isRoomAccountBlocked(reason, metadata)) {
-      // 账号仍挂在广场房间，弹二次确认，确认后退房再删除。
+    if (isRoomAccountBlocked(reason, metadata) && deletionResolvableByDetach(metadata)) {
+      // 账号仍挂在广场房间，且退房确实能解掉全部拦截：弹二次确认，确认后退房再删除。
       closeDeleteDialog()
       roomDetachIsBulk.value = false
       roomDetachSingleAccount.value = account
       roomDetachAccountIds.value = [account.id]
       roomDetachRoomNames.value = roomNamesFromMetadata(metadata)
       showRoomDetachConfirmDialog.value = true
+      return
+    }
+    if (reason === 'ACCOUNT_DELETION_BLOCKED') {
+      // 退房解不掉：直接说明在等什么，不要弹一个注定失败的「退房后删除」确认框——
+      // 那次退房会成功、删除仍会失败，账号被摘出房间却没删掉，且下次连确认框都不再弹。
+      appStore.showError(unresolvableDeletionBlockerMessage(metadata))
       return
     }
     console.error('Failed to delete user account:', error)
@@ -1806,6 +1848,11 @@ async function bulkDeleteAccounts(): Promise<void> {
     await Promise.all([loadGroups(), loadAccounts()])
   } catch (error: any) {
     const { reason, metadata } = extractErrorDetail(error)
+    if (reason === 'ACCOUNT_DELETION_BLOCKED' && !deletionResolvableByDetach(metadata)) {
+      // 退房解不掉的拦截：直接说明原因，不要弹一个注定失败的「退房后删除」确认框。
+      appStore.showError(unresolvableDeletionBlockerMessage(metadata))
+      return
+    }
     if (isRoomAccountBlocked(reason, metadata)) {
       // 批量删除中有账号仍挂在广场房间，弹二次确认，确认后统一退房再删除。
       closeBulkDeleteDialog()

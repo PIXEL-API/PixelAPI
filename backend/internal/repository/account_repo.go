@@ -2189,6 +2189,13 @@ type accountDeletionBlockers struct {
 	pendingBillingIntentCount int64
 	pendingBillingIntentIDs   []int64
 	pendingBillingStates      []string
+	// 退房（DetachRoomAccountsAtomic）会把 status='active' 的 membership 重绑到房间内的
+	// 健康替补账号，并同步关掉旧 binding、建新 binding，所以那部分拦截是「退房可解」的。
+	// 下面两个计数是「退房解不掉」的那部分：非 active 的存活 membership（queued / ending
+	// 不参与重绑），以及挂在非 active membership 上的未闭合 binding。
+	// 刻意用独立的精确计数而不是去解析 sample 串：sample 有 LIMIT，会截断。
+	unresolvableMembershipCount int64
+	unresolvableBindingCount    int64
 }
 
 func (b accountDeletionBlockers) hasAny() bool {
@@ -2196,6 +2203,21 @@ func (b accountDeletionBlockers) hasAny() bool {
 		b.liveMembershipCount > 0 ||
 		b.openBindingCount > 0 ||
 		b.pendingBillingIntentCount > 0
+}
+
+// detachResolvable 判断「把账号退出房间」这一步能否解掉全部拦截。
+//
+// 必须严格：判成 true 却解不掉，会导致退房成功、删除仍失败——账号被不可逆地摘出房间
+// 却没删掉，而且 room_account 拦截已消失，用户下次连二次确认都不会再弹。
+// 判成 false 则只是让用户手动处理，不产生破坏。
+func (b accountDeletionBlockers) detachResolvable() bool {
+	if len(b.roomListingIDs) == 0 {
+		// 压根不在房间里，退房是空操作，解不掉任何东西。
+		return false
+	}
+	return b.unresolvableMembershipCount == 0 &&
+		b.unresolvableBindingCount == 0 &&
+		b.pendingBillingIntentCount == 0
 }
 
 func (b accountDeletionBlockers) conflictError(accountID int64) error {
@@ -2236,7 +2258,38 @@ func (b accountDeletionBlockers) conflictError(accountID int64) error {
 		metadata["pending_billing_intent_sample_truncated"] = strconv.FormatBool(b.pendingBillingIntentCount > int64(len(b.pendingBillingIntentIDs)))
 	}
 	metadata["blocker_types"] = strings.Join(blockerTypes, ",")
+	// 明确告诉上层「退房能不能解掉」，别让 service / 前端去猜 blocker 类型或解析被截断的
+	// state 采样串。判据的完整依据见 detachResolvable 的注释。
+	metadata["detach_resolvable"] = strconv.FormatBool(b.detachResolvable())
+	metadata["unresolvable_membership_count"] = strconv.FormatInt(b.unresolvableMembershipCount, 10)
+	metadata["unresolvable_binding_count"] = strconv.FormatInt(b.unresolvableBindingCount, 10)
 	return service.ErrAccountDeletionBlocked.WithMetadata(metadata)
+}
+
+// queryAccountDeletionBlockerCount 跑一条单值 COUNT 查询。
+// 走 QueryContext 而不是 QueryRowContext：sqlQueryExecutor 只暴露 Exec/Query 两个方法，
+// 为一条计数去拓宽这个共享接口会牵动所有实现与替身。
+func queryAccountDeletionBlockerCount(
+	ctx context.Context,
+	exec sqlQueryExecutor,
+	query string,
+	accountID int64,
+) (int64, error) {
+	rows, err := exec.QueryContext(ctx, query, accountID)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = rows.Close() }()
+	var count int64
+	if rows.Next() {
+		if err := rows.Scan(&count); err != nil {
+			return 0, err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func loadAccountDeletionBlockers(ctx context.Context, exec sqlQueryExecutor, accountID int64) (accountDeletionBlockers, error) {
@@ -2308,6 +2361,20 @@ func loadAccountDeletionBlockers(ctx context.Context, exec sqlQueryExecutor, acc
 		return blockers, fmt.Errorf("close live membership blockers: %w", err)
 	}
 
+	// 退房只重绑 status='active' 的 membership（见 account_share_room_repo.go 的
+	// lockAccountShareMembershipsForAccountSetRebindInTx，SQL 里写死 status = $3）。
+	// queued / ending 不参与重绑，退房解不掉，必须精确计数（不能读上面那个带 LIMIT 的采样）。
+	blockers.unresolvableMembershipCount, err = queryAccountDeletionBlockerCount(ctx, exec, `
+		SELECT COUNT(*)
+		FROM account_share_memberships
+		WHERE account_id = $1
+		  AND deleted_at IS NULL
+		  AND status IN ('queued', 'ending')
+	`, accountID)
+	if err != nil {
+		return blockers, fmt.Errorf("count unresolvable live membership blockers: %w", err)
+	}
+
 	bindingTableExists, err := accountDeletionOptionalTableExists(ctx, exec, "public.account_share_membership_account_bindings")
 	if err != nil {
 		return blockers, err
@@ -2341,6 +2408,22 @@ func loadAccountDeletionBlockers(ctx context.Context, exec sqlQueryExecutor, acc
 		}
 		if err := bindingRows.Close(); err != nil {
 			return blockers, fmt.Errorf("close open membership binding blockers: %w", err)
+		}
+
+		// 退房只会关掉「挂在 active membership 上」的 binding（重绑时 close 旧的、建新的）。
+		// 归属已不存在 / 非 active membership 的未闭合 binding，退房解不掉。
+		blockers.unresolvableBindingCount, err = queryAccountDeletionBlockerCount(ctx, exec, `
+			SELECT COUNT(*)
+			FROM account_share_membership_account_bindings binding
+			LEFT JOIN account_share_memberships membership
+				ON membership.id = binding.membership_id
+				AND membership.deleted_at IS NULL
+			WHERE binding.account_id_snapshot = $1
+			  AND binding.unbound_at IS NULL
+			  AND (membership.id IS NULL OR membership.status <> 'active')
+		`, accountID)
+		if err != nil {
+			return blockers, fmt.Errorf("count unresolvable open binding blockers: %w", err)
 		}
 	}
 

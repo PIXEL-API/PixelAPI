@@ -515,6 +515,8 @@ func roomAccountBlocked(accountID int64) error {
 		"room_account_count": "1",
 		"room_listing_ids":   "91",
 		"room_listing_names": "OpenAI共享账号26",
+		// 纯房间挂载：退房就能解掉，仓储会给出 detach_resolvable=true。
+		"detach_resolvable": "true",
 	})
 }
 

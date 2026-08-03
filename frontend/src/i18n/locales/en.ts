@@ -1026,6 +1026,22 @@ export default {
     deleteRoomDetachConfirmButton: "Leave room and delete",
     deleteRoomNoHealthyReplacement: 'This account is the last usable account in room "{rooms}", which still has {count} active tenant(s), so it cannot be removed and deleted. Please add another usable account to the room, or wait for / migrate these tenants first.',
     deleteRoomAccountInFlight: "This account still has in-flight requests, so it cannot leave the room and be deleted right now. Please try again later.",
+    deleteBlockedSummary: "This account cannot be deleted yet: {reasons}. Leaving its room will not clear these, so they have to finish first.",
+    deleteBlockedGeneric: "This account cannot be deleted yet: the marketplace side still holds it, and leaving its room will not clear that. Please try again later.",
+    deleteBlockedLiveMembership: "{count} marketplace rental(s) are queued or still ending",
+    deleteBlockedOpenBinding: "{count} marketplace account binding(s) are still open",
+    deleteBlockedPendingBilling: "{count} marketplace charge(s) are still unsettled",
+    reAuthRoomAttachedHint: "This account is assigned to a marketplace room. Credentials can only be changed while the room is paused and idle; otherwise the request will be rejected. If the token merely expired, use \"Refresh Token\" instead — that needs no room change.",
+    reAuthErrors: {
+      ACCOUNT_MUTATION_BLOCKED_BY_ROOM:
+        "This account is assigned to a marketplace room. Credentials can only be changed while the room is paused and idle. Remove the account from the room (or take the room down and wait until it is paused) and retry. If the token merely expired, use \"Refresh Token\" instead — that needs no room change.",
+      ACCOUNT_MUTATION_FORCE_REQUIRED: "Changing these settings on a listed account requires administrator confirmation; owners cannot do it directly.",
+      ACCOUNT_MUTATION_STALE: "The account changed while you were working on it. Refresh the page and try again.",
+      OWNED_ACCOUNT_PLACEMENT_CONVERSION_REQUIRED:
+        "This account still carries a marketplace placement record. Convert its placement target back to \"private\" in the account editor before changing these fields.",
+      ACCOUNT_SHARE_ROOM_ACCOUNT_ATTACHED: "This account is still assigned to a marketplace room. Remove it from the room before changing the account mode.",
+      ACCOUNT_EXTERNAL_PLACEMENT_BUSY: "This account still has in-flight marketplace requests. Retry once they drain."
+    },
     failedToUpdateStatus: "Failed to update account status",
     invalidCredentialsJson: "Invalid credentials JSON",
     typeNotAllowed: "Please select a valid account type.",

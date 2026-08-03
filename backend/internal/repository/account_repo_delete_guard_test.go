@@ -26,6 +26,9 @@ func TestLoadAccountDeletionBlockersCollectsStructuredMetadata(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "listing_id", "status", "count"}).
 			AddRow(int64(1001), int64(91), "active", int64(3)).
 			AddRow(int64(1002), int64(91), "ending", int64(3)))
+	mock.ExpectQuery(`(?s)SELECT COUNT\(\*\).*FROM account_share_memberships.*status IN \('queued', 'ending'\)`).
+		WithArgs(int64(55)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
 	mock.ExpectQuery(`(?s)SELECT to_regclass\(\$1\) IS NOT NULL`).
 		WithArgs("public.account_share_membership_account_bindings").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
@@ -33,6 +36,9 @@ func TestLoadAccountDeletionBlockersCollectsStructuredMetadata(t *testing.T) {
 		WithArgs(int64(55), accountDeletionBlockerSampleLimit).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "membership_id", "listing_id", "count"}).
 			AddRow(int64(3001), int64(1003), int64(91), int64(2)))
+	mock.ExpectQuery(`(?s)SELECT COUNT\(\*\).*account_share_membership_account_bindings binding.*membership\.status <> 'active'`).
+		WithArgs(int64(55)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
 	mock.ExpectQuery(`(?s)SELECT to_regclass\(\$1\) IS NOT NULL`).
 		WithArgs("public.account_share_request_billing_intents").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
@@ -63,6 +69,10 @@ func TestLoadAccountDeletionBlockersCollectsStructuredMetadata(t *testing.T) {
 	require.Equal(t, "1", appErr.Metadata["pending_billing_intent_count"])
 	require.Equal(t, "2001", appErr.Metadata["pending_billing_intent_sample_ids"])
 	require.Equal(t, "needs_attention", appErr.Metadata["pending_billing_intent_sample_states"])
+	// 有 ending 席位、有挂在非活跃席位上的绑定、还有未结算计费：退房一个都解不掉。
+	require.Equal(t, "1", appErr.Metadata["unresolvable_membership_count"])
+	require.Equal(t, "1", appErr.Metadata["unresolvable_binding_count"])
+	require.Equal(t, "false", appErr.Metadata["detach_resolvable"])
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -77,6 +87,9 @@ func TestLoadAccountDeletionBlockersSkipsOptionalQueriesWhenTablesDoNotExist(t *
 	mock.ExpectQuery(`(?s)SELECT id, listing_id, status, COUNT\(\*\) OVER \(\).*account_share_memberships`).
 		WithArgs(int64(55), accountDeletionBlockerSampleLimit).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "listing_id", "status", "count"}))
+	mock.ExpectQuery(`(?s)SELECT COUNT\(\*\).*FROM account_share_memberships.*status IN \('queued', 'ending'\)`).
+		WithArgs(int64(55)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(0)))
 	mock.ExpectQuery(`(?s)SELECT to_regclass\(\$1\) IS NOT NULL`).
 		WithArgs("public.account_share_membership_account_bindings").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
@@ -102,6 +115,9 @@ func TestLoadAccountDeletionBlockersFailsClosedWhenSchemaDetectionFails(t *testi
 	mock.ExpectQuery(`(?s)SELECT id, listing_id, status, COUNT\(\*\) OVER \(\).*account_share_memberships`).
 		WithArgs(int64(55), accountDeletionBlockerSampleLimit).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "listing_id", "status", "count"}))
+	mock.ExpectQuery(`(?s)SELECT COUNT\(\*\).*FROM account_share_memberships.*status IN \('queued', 'ending'\)`).
+		WithArgs(int64(55)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(0)))
 	mock.ExpectQuery(`(?s)SELECT to_regclass\(\$1\) IS NOT NULL`).
 		WithArgs("public.account_share_membership_account_bindings").
 		WillReturnError(errors.New("catalog unavailable"))

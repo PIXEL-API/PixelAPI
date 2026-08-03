@@ -197,6 +197,7 @@ import { useOpenAIOAuth } from '@/composables/useOpenAIOAuth'
 import { useGeminiOAuth } from '@/composables/useGeminiOAuth'
 import { useAntigravityOAuth } from '@/composables/useAntigravityOAuth'
 import { useGrokOAuth } from '@/composables/useGrokOAuth'
+import { extractI18nErrorMessage } from '@/utils/apiError'
 import type { Account } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -248,6 +249,18 @@ const isGemini = computed(() => props.account?.platform === 'gemini')
 const isAnthropic = computed(() => props.account?.platform === 'anthropic')
 const isAntigravity = computed(() => props.account?.platform === 'antigravity')
 const isGrok = computed(() => props.account?.platform === 'grok')
+
+// 授权后回写账号会被广场守卫拦下（账号仍挂在房间、房间不是已暂停、需要 force 等）。
+// api client 的拦截器 reject 的是扁平对象、没有 response 字段，旧写法
+// error.response.data.detail 恒为 undefined，把后端给出的具体原因整个吞掉了。
+function reAuthUpdateErrorMessage(error: unknown): string {
+  return extractI18nErrorMessage(
+    error,
+    t,
+    'userAccounts.reAuthErrors',
+    t('admin.accounts.oauth.authFailed')
+  )
+}
 
 // Computed - current OAuth state based on platform
 const currentAuthUrl = computed(() => {
@@ -408,7 +421,7 @@ const handleExchangeCode = async () => {
       emit('reauthorized', updatedAccount)
       handleClose()
     } catch (error: any) {
-      oauthClient.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+      oauthClient.error.value = reAuthUpdateErrorMessage(error)
       appStore.showError(oauthClient.error.value)
     }
   } else if (isGemini.value) {
@@ -441,7 +454,7 @@ const handleExchangeCode = async () => {
       emit('reauthorized', updatedAccount)
       handleClose()
     } catch (error: any) {
-      geminiOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+      geminiOAuth.error.value = reAuthUpdateErrorMessage(error)
       appStore.showError(geminiOAuth.error.value)
     }
   } else if (isAntigravity.value) {
@@ -473,7 +486,7 @@ const handleExchangeCode = async () => {
       emit('reauthorized', updatedAccount)
       handleClose()
     } catch (error: any) {
-      antigravityOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+      antigravityOAuth.error.value = reAuthUpdateErrorMessage(error)
       appStore.showError(antigravityOAuth.error.value)
     }
   } else if (isGrok.value) {
@@ -510,7 +523,7 @@ const handleExchangeCode = async () => {
       emit('reauthorized', updatedAccount)
       handleClose()
     } catch (error: any) {
-      grokOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+      grokOAuth.error.value = reAuthUpdateErrorMessage(error)
       appStore.showError(grokOAuth.error.value)
     }
   } else {
@@ -550,7 +563,7 @@ const handleExchangeCode = async () => {
       emit('reauthorized', updatedAccount)
       handleClose()
     } catch (error: any) {
-      claudeOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+      claudeOAuth.error.value = reAuthUpdateErrorMessage(error)
       appStore.showError(claudeOAuth.error.value)
     } finally {
       claudeOAuth.loading.value = false
@@ -593,8 +606,12 @@ const handleCookieAuth = async (sessionKey: string) => {
     emit('reauthorized', updatedAccount)
     handleClose()
   } catch (error: any) {
-    claudeOAuth.error.value =
-      error.response?.data?.detail || t('admin.accounts.oauth.cookieAuthFailed')
+    claudeOAuth.error.value = extractI18nErrorMessage(
+      error,
+      t,
+      'userAccounts.reAuthErrors',
+      t('admin.accounts.oauth.cookieAuthFailed')
+    )
   } finally {
     claudeOAuth.loading.value = false
   }

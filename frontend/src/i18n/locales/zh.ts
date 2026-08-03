@@ -986,6 +986,22 @@ export default {
     deleteRoomDetachConfirmButton: "退出房间并删除",
     deleteRoomNoHealthyReplacement: "该账号是房间「{rooms}」内最后一个可用账号，且房间还有 {count} 位租户正在使用，无法退出并删除。请先向房间补充可用账号，或等待/迁移这些租户后再删除。",
     deleteRoomAccountInFlight: "该账号仍有正在进行的请求，暂时无法退出房间并删除。请稍后再试。",
+    deleteBlockedSummary: "该账号暂时不能删除：{reasons}。退出房间也解不掉这些占用，需要等它们结束后再删。",
+    deleteBlockedGeneric: "该账号暂时不能删除：广场侧仍有未结束的占用，退出房间也解不掉，请稍后再试。",
+    deleteBlockedLiveMembership: "还有 {count} 条广场租用关系处于排队或正在退租中",
+    deleteBlockedOpenBinding: "还有 {count} 条未闭合的广场账号绑定",
+    deleteBlockedPendingBilling: "还有 {count} 笔广场计费未结算",
+    reAuthRoomAttachedHint: "该账号正挂在广场房间里。房间处于「已暂停」且没有占用时才能换凭证，否则会被拦下。若只是 token 过期，直接用「刷新 Token」即可，不用动房间。",
+    reAuthErrors: {
+      ACCOUNT_MUTATION_BLOCKED_BY_ROOM:
+        "该账号正挂在广场房间里，房间不处于「已暂停」且无占用时不能换凭证。请先在广场把该账号退出房间（或下架房间、等它变成已暂停）后重试；若只是 token 过期，用「刷新 Token」即可，不用动房间。",
+      ACCOUNT_MUTATION_FORCE_REQUIRED: "改动投放中账号的这些设置需要管理员确认，房主无法直接执行。",
+      ACCOUNT_MUTATION_STALE: "账号在你操作期间被改动过，请刷新页面后重试。",
+      OWNED_ACCOUNT_PLACEMENT_CONVERSION_REQUIRED:
+        "该账号还带着广场投放记录，需要先在账号编辑里把投放目标转回「私有」，才能改这些字段。",
+      ACCOUNT_SHARE_ROOM_ACCOUNT_ATTACHED: "该账号仍挂在广场房间里，请先退出房间再改账号模式。",
+      ACCOUNT_EXTERNAL_PLACEMENT_BUSY: "该账号还有在途的广场请求，等请求排空后再重试。"
+    },
     failedToUpdateStatus: "更新账号状态失败",
     invalidCredentialsJson: "凭证 JSON 格式无效",
     typeNotAllowed: "请选择有效的账号类型。",

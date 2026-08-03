@@ -1313,6 +1313,41 @@ func accountShareLifecycleDatabaseBlockersInTx(
 	return blockers, err
 }
 
+// accountShareListingEditBlockersInTx 与 accountShareLifecycleDatabaseBlockersInTx 同源，
+// 区别是把「房主自己占的席位」排除在外，只用于配置编辑的准入判定。
+//
+// 房主自用自己的房间是产品显式支持且免费的常态。用 owner 也计入的口径，房主一边用
+// 一边就永远改不了自己房间的配置，等于自己把自己锁死。
+// 下架 / 删除房间仍然必须用 owner 计入的口径 —— 那些席位需要正常结束与结算，
+// 所以两个函数不能合并。
+func accountShareListingEditBlockersInTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	listingID int64,
+) (service.AccountShareRoomBlockers, error) {
+	blockers := service.AccountShareRoomBlockers{}
+	err := tx.QueryRowContext(ctx, `
+		SELECT
+			COUNT(*) FILTER (WHERE membership.status = 'active')::int,
+			COUNT(*) FILTER (WHERE membership.status = 'queued')::int,
+			COUNT(*) FILTER (WHERE membership.status = 'ending')::int,
+			COUNT(*) FILTER (
+				WHERE membership.settlement_status IN ('pending', 'processing', 'failed')
+			)::int
+		FROM account_share_memberships membership
+		JOIN account_share_listings listing ON listing.id = membership.listing_id
+		WHERE membership.listing_id = $1
+			AND membership.deleted_at IS NULL
+			AND membership.consumer_user_id <> listing.owner_user_id
+	`, listingID).Scan(
+		&blockers.ActiveMembershipCount,
+		&blockers.QueuedMembershipCount,
+		&blockers.EndingMembershipCount,
+		&blockers.SynchronousBillingPendingCount,
+	)
+	return blockers, err
+}
+
 // ClearRoomMembersForDrain 在独立事务里清退排空中房间的全部存活成员：
 // 排队成员直接终结（未入座、无费用），活跃成员结算已用时段并退还未用预付后结束。
 // 幂等：由 DrainRoom 在状态转换后调用，也由 lifecycle finalizer 在发现残留成员时

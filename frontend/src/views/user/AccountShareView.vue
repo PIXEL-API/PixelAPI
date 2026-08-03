@@ -4549,10 +4549,14 @@ function roomRequiresForceEdit(
   state: AccountShareRoomManagementState
 ): boolean {
   const blockers = state.blockers
+  // active_seats / ending_seats 是「消费者」口径（SQL 里排除了房主自己的席位），
+  // blockers.active_membership_count / ending_membership_count 则把房主自用也算进去。
+  // 房主自用是免费且被显式支持的常态，用后者判定会让房主一边用自己的房间、
+  // 一边永远改不了它的配置——自己把自己锁死。这里与后端编辑准入口径保持一致。
   return !['active', 'paused'].includes(state.lifecycle_status)
-    || blockers.active_membership_count > 0
+    || state.active_seats > 0
     || blockers.queued_membership_count > 0
-    || blockers.ending_membership_count > 0
+    || state.ending_seats > 0
     || blockers.in_flight_request_count > 0
     || blockers.pending_billing_intent_count > 0
     || blockers.synchronous_billing_pending_count > 0
@@ -4832,7 +4836,9 @@ function suggestedAccountName(platform: AccountSharePlatform = createPlatform.va
 function validateAccountName(name: string, excludeAccountID?: number, ownerUserID = 0): string {
   const value = name.trim()
   if (!value) return '请填写房间名称'
-  if (/\s/.test(name)) return '房间名称不能包含空格、换行或制表符'
+  // 只校验 trim 之后的内容：首尾空格由 trim 消化，提交给后端的也是 trim 后的值。
+  // 校验原串会让一个尾随空格把整次保存打回，而用户可能压根没在改房间名。
+  if (/\s/.test(value)) return '房间名称不能包含空格、换行或制表符'
   if (Array.from(value).length > 100) return '房间名称不能超过 100 个字符'
   if (hasKnownAccountName(value, ownerUserID, excludeAccountID)) return '房间名称已存在，请换一个名称'
   return ''
@@ -9247,6 +9253,15 @@ async function saveConfigEdit(): Promise<void> {
       payload.anthropic_5h_limit_percent = Number(editForm.anthropic_5h_limit_percent)
       payload.anthropic_7d_limit_percent = Number(editForm.anthropic_7d_limit_percent)
     }
+    if (!editConsumerProtected.value && configDraftBaseline.value) {
+      // 房间名与单用户并发即使没改也会被后端真校验一遍（重名检查、房间容量上限）。
+      // 整表单提交时把它们原样带上，会让「只改价格」被一条完全无关的报错打回。
+      const baseline = configDraftBaseline.value
+      if (editForm.name.trim() === baseline.form.name.trim()) delete payload.name
+      if (Number(editForm.per_user_concurrency) === Number(baseline.form.per_user_concurrency)) {
+        delete payload.per_user_concurrency
+      }
+    }
     if (editConsumerProtected.value && configDraftBaseline.value) {
       const baseline = configDraftBaseline.value
       if (editForm.name.trim() === baseline.form.name.trim()) delete payload.name
@@ -9280,7 +9295,13 @@ async function saveConfigEdit(): Promise<void> {
         ACCOUNT_SHARE_ROOM_UPDATE_REASON_REQUIRED: '请填写本次房间配置修改原因',
         ACCOUNT_SHARE_ROOM_FORCE_REASON_REQUIRED: '管理员强制修改原因不能为空',
         ACCOUNT_SHARE_ROOM_FORCE_CONFIRMATION_REQUIRED: '管理员强制修改必须完成明确确认',
-        ACCOUNT_SHARE_CONSUMER_PROTECTION_VIOLATION: '当前房间已有消费者，只能降低费用、提高单用户并发、增加模型，或在不影响现有席位的前提下减少席位。如需移除模型，请先让现有消费者结束使用。'
+        ACCOUNT_SHARE_CONSUMER_PROTECTION_VIOLATION: '当前房间已有消费者，只能降低费用、提高单用户并发、增加模型，或在不影响现有席位的前提下减少席位。如需移除模型，请先让现有消费者结束使用。',
+        ACCOUNT_SHARE_EDIT_SESSION_INVALID: '本次改动超出了"对消费者无害"的范围，需要先取得编辑锁。请关闭本窗口后重新点击「编辑配置」；若房间仍有消费者在用，请先下架房间。',
+        ACCOUNT_SHARE_MODE_INVALID_CONCURRENCY: '单用户最高并发超出允许范围：既不能超过 50，也不能超过房间内账号的配置并发之和。',
+        ACCOUNT_SHARE_ROOM_UPDATE_REQUIRES_PAUSED: '房间当前状态不允许改配置，请先下架房间，等它变成「已暂停」后再编辑。',
+        ACCOUNT_SHARE_LISTING_IN_USE: '房间仍有消费者席位、排队或结算未结束，暂时不能改配置。可先下架房间等它清空。',
+        ACCOUNT_SHARE_LISTING_EDITING: '房间正被另一个编辑会话占用，请等对方结束或等编辑锁自然失效（最长 10 分钟）后重试。',
+        ACCOUNT_SHARE_ROOM_OPERATION_CONFLICT: '房间有一个生命周期操作正在执行，请等它结束后再改配置。'
       }))
     }
   } finally {

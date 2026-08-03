@@ -2279,7 +2279,7 @@ func (s *AccountService) DeleteOwned(ctx context.Context, ownerUserID, accountID
 		return err
 	}
 	deleteErr := deletionRepo.DeleteOwnedIfUnblocked(ctx, ownerUserID, accountID)
-	if deleteErr != nil && force && isRoomAccountDeletionBlocked(deleteErr) {
+	if deleteErr != nil && force && canResolveDeletionBlockersByDetach(deleteErr) {
 		// 用户已在二次确认弹窗确认，尝试把账号从广场房间退出后再删除。
 		if detachErr := s.detachRoomAccountsForDeletion(ctx, ownerUserID, deleteErr); detachErr != nil {
 			return detachErr
@@ -2341,7 +2341,7 @@ func (s *AccountService) BulkDeleteOwned(ctx context.Context, ownerUserID int64,
 	if deleteErr != nil && force {
 		// 原子批量删除一次只报告一个被房间占用的账号。用户已确认，逐个退房后重试，
 		// 直到删除成功或遇到无法自动解决的拦截（如房间无健康替补账号）。
-		for attempt := 0; attempt < len(ids) && deleteErr != nil && isRoomAccountDeletionBlocked(deleteErr); attempt++ {
+		for attempt := 0; attempt < len(ids) && deleteErr != nil && canResolveDeletionBlockersByDetach(deleteErr); attempt++ {
 			if detachErr := s.detachRoomAccountsForDeletion(ctx, ownerUserID, deleteErr); detachErr != nil {
 				return nil, detachErr
 			}
@@ -2400,6 +2400,28 @@ func isRoomAccountDeletionBlocked(err error) bool {
 		return false
 	}
 	return roomListingIDsFromBlocker(appErr) != nil
+}
+
+// canResolveDeletionBlockersByDetach 判断「先退房再删」这条自动重试路径是否真的能走通。
+//
+// 判据由仓储在 metadata.detach_resolvable 里精确给出，不在这里猜：
+//   - 退房会把 status='active' 的 membership 重绑到房间内的健康替补账号，并关掉旧 binding，
+//     所以那部分拦截是退房可解的（这是最主流的场景，不能一刀切拒绝）；
+//   - queued / ending 的 membership、挂在非 active membership 上的未闭合 binding、
+//     以及未结算的计费 intent，退房都解不掉。
+//
+// 判错的代价不对称：把不可解的判成可解，会导致退房成功但删除仍失败 —— 账号被不可逆地
+// 摘出房间却没删掉，且 room_account 拦截随之消失，用户下次连二次确认都不会再弹。
+// 所以 metadata 缺失时一律按「不可解」处理。
+func canResolveDeletionBlockersByDetach(err error) bool {
+	if !isRoomAccountDeletionBlocked(err) {
+		return false
+	}
+	appErr := infraerrors.FromError(err)
+	if appErr == nil {
+		return false
+	}
+	return strings.TrimSpace(appErr.Metadata["detach_resolvable"]) == "true"
 }
 
 // roomListingIDsFromBlocker 从删除守卫的 metadata 里解析出账号当前所在的房间 listing ID。

@@ -9477,7 +9477,9 @@ func expectAccountShareEditDatabaseBlockers(
 	endingCount int,
 	synchronousBillingPendingCount int,
 ) {
-	mock.ExpectQuery(`(?s)SELECT\s+COUNT\(\*\) FILTER \(WHERE status = 'active'\)::int.*settlement_status IN \('pending', 'processing', 'failed'\).*FROM account_share_memberships`).
+	// 编辑准入用的是 accountShareListingEditBlockersInTx：与生命周期口径同源，但 JOIN 上
+	// listings 并排除房主自己的席位（房主自用不该把自己锁死在改不了配置的状态）。
+	mock.ExpectQuery(`(?s)SELECT\s+COUNT\(\*\) FILTER \(WHERE membership\.status = 'active'\)::int.*settlement_status IN \('pending', 'processing', 'failed'\).*FROM account_share_memberships membership.*membership\.consumer_user_id <> listing\.owner_user_id`).
 		WithArgs(listingID).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"active_count",
@@ -10042,4 +10044,270 @@ func accountShareListingRows(listingID, accountID, ownerUserID int64, editSessio
 		now,
 	}
 	return sqlmock.NewRows(columns).AddRow(values...)
+}
+
+// 回归：风控 suspend 之后房间配置必须冻结。
+// 免锁的「消费者安全更新」分支此前从 HTTP 入口不可达（service 层有条件完全相同的前置判定
+// 堵着），该分支整个绕过了房间生命周期状态门禁；前置判定删掉后分支被激活，suspended、
+// draining 的房间就会因为「这次改动对消费者无害」被放行改合约字段并 bump row_version，
+// 等于风控挂起不再冻结配置。第二个子用例同时证明这条免锁分支在 paused 下确实可达，
+// 免得第一个子用例因为别的原因（比如压根没进这个分支）假绿。
+func TestAccountShareModeRepositoryUpdateListingRejectsConsumerSafeUpdateWhenSuspended(t *testing.T) {
+	listingID := int64(7)
+	ownerUserID := int64(42)
+
+	t.Run("suspended room freezes consumer safe update", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() {
+			_ = db.Close()
+		}()
+		repo := &accountShareModeRepository{db: db}
+
+		expectedVersion := int64(1)
+		loweredHourlyRate := 0.05
+
+		mock.ExpectBegin()
+		mock.ExpectQuery(accountShareUpdateListingLockQueryPattern).
+			WithArgs(listingID, ownerUserID).
+			WillReturnRows(accountShareUpdateListingLockRows(func(row *accountShareUpdateListingLockRowData) {
+				row.OwnerUserID = ownerUserID
+				row.RowVersion = expectedVersion
+				row.Status = service.AccountShareListingStatusSuspended
+			}))
+		// 状态门禁必须在消费者安全判定之前拦下：锁行之后不允许再有任何查询或 UPDATE。
+		mock.ExpectRollback()
+
+		_, err = repo.UpdateListing(context.Background(), ownerUserID, false, listingID, service.UpdateAccountShareListingInput{
+			HourlyRate:      &loweredHourlyRate,
+			ExpectedVersion: &expectedVersion,
+			Reason:          "lower price for consumers",
+		})
+		if !errors.Is(err, service.ErrAccountShareUpdateRequiresPaused) {
+			t.Fatalf("UpdateListing error = %v, want %v", err, service.ErrAccountShareUpdateRequiresPaused)
+		}
+		// sqlmock 是有序匹配：若代码真的执行了 UPDATE，上面的 errors.Is 会先失败；
+		// 这里再兜一层，确认锁行之后确实一条语句都没跑。
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("suspended room must be rejected before any further statement: %v", err)
+		}
+	})
+
+	t.Run("paused room still reaches update for the same input", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() {
+			_ = db.Close()
+		}()
+		repo := &accountShareModeRepository{db: db}
+
+		expectedVersion := int64(1)
+		loweredHourlyRate := 0.05
+		updateErr := errors.New("stop after update")
+
+		mock.ExpectBegin()
+		mock.ExpectQuery(accountShareUpdateListingLockQueryPattern).
+			WithArgs(listingID, ownerUserID).
+			WillReturnRows(accountShareUpdateListingLockRows(func(row *accountShareUpdateListingLockRowData) {
+				row.OwnerUserID = ownerUserID
+				row.RowVersion = expectedVersion
+				row.Status = service.AccountShareListingStatusPaused
+			}))
+		// 只降 hourly_rate 时消费者安全判定不需要查席位/并发，直接判定为安全，
+		// 于是免锁放行、跳过编辑会话与编辑阻塞项检查，直达 UPDATE。
+		mock.ExpectExec("UPDATE account_share_listings").
+			WithArgs(loweredHourlyRate, listingID, ownerUserID, expectedVersion).
+			WillReturnError(updateErr)
+		mock.ExpectRollback()
+
+		_, err = repo.UpdateListing(context.Background(), ownerUserID, false, listingID, service.UpdateAccountShareListingInput{
+			HourlyRate:      &loweredHourlyRate,
+			ExpectedVersion: &expectedVersion,
+			Reason:          "lower price for consumers",
+		})
+		if !errors.Is(err, updateErr) {
+			t.Fatalf("UpdateListing error = %v, want %v", err, updateErr)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unmet expectations: %v", err)
+		}
+	})
+}
+
+// 回归：自己的编辑锁过期后不能被误报成「别人正在编辑」。
+// 旧写法把「库里有一把（已过期的）锁」也算作占用，房主的会话续期一失败就再也保存不了
+// 任何东西——连不需要编辑会话的纯改房间名都被 ACCOUNT_SHARE_LISTING_EDITING 打死，
+// 而且等谁都等不到（锁是自己的，没有第二个人会来释放它）。
+// 现在过期锁不在编辑锁判定里拦，落到 editSessionHeld：纯改名照常放行，合约变更拿到
+// 可自愈的 ACCOUNT_SHARE_EDIT_SESSION_INVALID（关窗重进编辑即可）。
+func TestAccountShareModeRepositoryUpdateListingAllowsRenameWithExpiredOwnEditLock(t *testing.T) {
+	listingID := int64(7)
+	ownerUserID := int64(42)
+	staleEditSessionID := "expired-edit-session"
+
+	t.Run("rename only is saved", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() {
+			_ = db.Close()
+		}()
+		repo := &accountShareModeRepository{db: db}
+
+		expectedVersion := int64(1)
+		nextVersion := int64(2)
+		revisionID := int64(703)
+		name := "renamed-room"
+		reason := "rename after edit session expired"
+
+		mock.ExpectBegin()
+		mock.ExpectQuery(accountShareUpdateListingLockQueryPattern).
+			WithArgs(listingID, ownerUserID).
+			WillReturnRows(accountShareUpdateListingLockRows(func(row *accountShareUpdateListingLockRowData) {
+				row.OwnerUserID = ownerUserID
+				row.RowVersion = expectedVersion
+				// 锁是房主自己的，但已经过期：activeEdit=false，不该被当成占用。
+				row.EditSessionID = staleEditSessionID
+				row.EditingByUserID = ownerUserID
+				row.EditingExpiresAt = time.Now().UTC().Add(-10 * time.Minute)
+			}))
+		mock.ExpectExec("SELECT pg_advisory_xact_lock").
+			WithArgs("account_share_room_name:42:renamed-room").
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectQuery("SELECT l\\.id\\s+FROM account_share_listings l").
+			WithArgs(ownerUserID, name, listingID).
+			WillReturnRows(sqlmock.NewRows([]string{"id"}))
+		// 非合约字段：contractUpdate=false，所以 UPDATE 不会顺手清掉编辑锁字段。
+		mock.ExpectExec("UPDATE account_share_listings").
+			WithArgs(name, listingID, ownerUserID, expectedVersion).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectQuery("SELECT\\s+l\\.id, l\\.row_version").
+			WithArgs(listingID).
+			WillReturnRows(accountShareRevisionSnapshotRows(
+				listingID,
+				nextVersion,
+				name,
+				ownerUserID,
+				"owner",
+			))
+		mock.ExpectQuery("INSERT INTO account_share_listing_revisions").
+			WithArgs(
+				listingID,
+				nextVersion,
+				1,
+				service.AccountShareSnapshotQualityExact,
+				name,
+				service.PlatformOpenAI,
+				"pro",
+				ownerUserID,
+				"owner",
+				service.AccountShareListingStatusActive,
+				4,
+				0.2,
+				`["gpt-5.5"]`,
+				5,
+				0.15,
+				0.0,
+				1.0,
+				false,
+				99.0,
+				99.0,
+				ownerUserID,
+				"owner",
+				"update_listing",
+				reason,
+				nil,
+				false,
+			).
+			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(revisionID))
+		mock.ExpectExec("UPDATE account_share_listings\\s+SET current_revision_id").
+			WithArgs(revisionID, listingID, nextVersion).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("INSERT INTO account_share_room_events").
+			WithArgs(
+				listingID,
+				revisionID,
+				"listing.updated",
+				ownerUserID,
+				"owner",
+				reason,
+				`{"changed_fields":["room_name"],"force_applied":false,"row_version":2,"source":"update_listing"}`,
+			).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit()
+		mock.ExpectQuery("SELECT\\s+l\\.id").
+			WithArgs(ownerUserID, listingID).
+			WillReturnRows(accountShareListingRows(listingID, 99, ownerUserID, "", time.Time{}, func(row *accountShareListingRowData) {
+				row.RowVersion = nextVersion
+				row.CurrentRevisionID = revisionID
+				row.RoomName = name
+			}))
+
+		listing, err := repo.UpdateListing(context.Background(), ownerUserID, false, listingID, service.UpdateAccountShareListingInput{
+			Name:            &name,
+			EditSessionID:   staleEditSessionID,
+			ExpectedVersion: &expectedVersion,
+			Reason:          reason,
+		})
+		if errors.Is(err, service.ErrAccountShareListingEditing) {
+			t.Fatalf("expired own edit lock must not be reported as someone else editing: %v", err)
+		}
+		if err != nil {
+			t.Fatalf("UpdateListing failed: %v", err)
+		}
+		if listing.RoomName != name || listing.RowVersion != nextVersion {
+			t.Fatalf("unexpected listing state: room_name=%q row_version=%d", listing.RoomName, listing.RowVersion)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unmet expectations: %v", err)
+		}
+	})
+
+	t.Run("contract update reports a self healing edit session error", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() {
+			_ = db.Close()
+		}()
+		repo := &accountShareModeRepository{db: db}
+
+		expectedVersion := int64(1)
+		seatLimit := 6
+
+		mock.ExpectBegin()
+		mock.ExpectQuery(accountShareUpdateListingLockQueryPattern).
+			WithArgs(listingID, ownerUserID).
+			WillReturnRows(accountShareUpdateListingLockRows(func(row *accountShareUpdateListingLockRowData) {
+				row.OwnerUserID = ownerUserID
+				row.RowVersion = expectedVersion
+				row.Status = service.AccountShareListingStatusPaused
+				row.EditSessionID = staleEditSessionID
+				row.EditingByUserID = ownerUserID
+				row.EditingExpiresAt = time.Now().UTC().Add(-10 * time.Minute)
+			}))
+		mock.ExpectRollback()
+
+		_, err = repo.UpdateListing(context.Background(), ownerUserID, false, listingID, service.UpdateAccountShareListingInput{
+			SeatLimit:       &seatLimit,
+			EditSessionID:   staleEditSessionID,
+			ExpectedVersion: &expectedVersion,
+			Reason:          "raise seats after edit session expired",
+		})
+		if errors.Is(err, service.ErrAccountShareListingEditing) {
+			t.Fatalf("expired own edit lock must not be reported as someone else editing: %v", err)
+		}
+		if !errors.Is(err, service.ErrAccountShareEditSessionInvalid) {
+			t.Fatalf("UpdateListing error = %v, want %v", err, service.ErrAccountShareEditSessionInvalid)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unmet expectations: %v", err)
+		}
+	})
 }

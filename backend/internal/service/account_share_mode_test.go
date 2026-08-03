@@ -3071,13 +3071,25 @@ func TestAccountShareModeUpdateListingOwnerPermissions(t *testing.T) {
 		t.Fatalf("expected update reason to be required, got %v", err)
 	}
 
+	// 合约字段没带编辑锁时，service 层刻意不再直接拒绝：仓储会先算一遍
+	// accountShareListingUpdateProtectsConsumers（只降费 / 提并发 / 加模型 / 不伤现有席位地
+	// 减席位即免锁放行），算不过才要求编辑锁。旧的前置判定条件与那条免锁分支的进入条件
+	// 逐字相同，等于把整条「消费者安全更新」堵死。裁决权归仓储，见
+	// account_share_mode_repo.go 的 contractUpdate / consumerSafeUpdate 分支。
+	callsBeforeSessionless := repo.updateCalls
 	_, err = svc.UpdateListing(context.Background(), 42, false, 7, UpdateAccountShareListingInput{
 		AllowedModels:   &models,
 		ExpectedVersion: &expectedVersion,
 		Reason:          "调整可用模型",
 	})
-	if !errors.Is(err, ErrAccountShareEditSessionRequired) {
-		t.Fatalf("expected allowed_models to require an edit session, got %v", err)
+	if err != nil {
+		t.Fatalf("expected sessionless contract update to reach the repository, got %v", err)
+	}
+	if repo.updateCalls != callsBeforeSessionless+1 {
+		t.Fatalf("expected sessionless contract update to be forwarded to the repository, calls=%d", repo.updateCalls)
+	}
+	if strings.TrimSpace(repo.updateInput.EditSessionID) != "" {
+		t.Fatalf("expected empty edit session to be forwarded verbatim, got %q", repo.updateInput.EditSessionID)
 	}
 
 	sessionID := "edit-session-1"
@@ -3090,20 +3102,21 @@ func TestAccountShareModeUpdateListingOwnerPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected owner model update with edit session to pass, got %v", err)
 	}
-	if repo.updateCalls != 1 || repo.updateAdmin {
-		t.Fatalf("expected one non-admin repository update, calls=%d admin=%t", repo.updateCalls, repo.updateAdmin)
+	if repo.updateCalls != callsBeforeSessionless+2 || repo.updateAdmin {
+		t.Fatalf("expected one more non-admin repository update, calls=%d admin=%t", repo.updateCalls, repo.updateAdmin)
 	}
 	got := strings.Join(*repo.updateInput.AllowedModels, ",")
 	if got != "gpt-5.5,gpt-5.4" {
 		t.Fatalf("normalized models = %q", got)
 	}
 
+	callsBeforeName := repo.updateCalls
 	name := "共享账号一"
 	_, err = svc.UpdateListing(context.Background(), 42, false, 7, UpdateAccountShareListingInput{Name: &name, ExpectedVersion: &expectedVersion})
 	if !errors.Is(err, ErrAccountShareUpdateReasonRequired) {
 		t.Fatalf("expected room-name update reason to be required, got %v", err)
 	}
-	if repo.updateCalls != 1 {
+	if repo.updateCalls != callsBeforeName {
 		t.Fatalf("expected missing reason to skip repository, got %d calls", repo.updateCalls)
 	}
 
@@ -3115,19 +3128,20 @@ func TestAccountShareModeUpdateListingOwnerPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected audited room-name hot update to pass without edit session, got %v", err)
 	}
-	if repo.updateCalls != 2 {
-		t.Fatalf("expected repository update twice, got %d", repo.updateCalls)
+	if repo.updateCalls != callsBeforeName+1 {
+		t.Fatalf("expected one more repository update, got %d", repo.updateCalls)
 	}
 	if repo.updateInput.Name == nil || *repo.updateInput.Name != name {
 		t.Fatalf("expected trimmed name in update input, got %#v", repo.updateInput.Name)
 	}
 
+	callsBeforeStatus := repo.updateCalls
 	status := AccountShareListingStatusPaused
 	_, err = svc.UpdateListing(context.Background(), 42, false, 7, UpdateAccountShareListingInput{Status: &status, ExpectedVersion: &expectedVersion})
 	if !errors.Is(err, ErrAccountShareRoomLifecycleCommandRequired) {
 		t.Fatalf("expected status PATCH to require a lifecycle command, got %v", err)
 	}
-	if repo.updateCalls != 2 {
+	if repo.updateCalls != callsBeforeStatus {
 		t.Fatalf("expected rejected update to skip repository, got %d calls", repo.updateCalls)
 	}
 
