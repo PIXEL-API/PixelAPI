@@ -2,13 +2,15 @@
 @import 'fumadocs-ui/css/vitepress.css';
 
 @theme {
+  /* 全部走系统字体：不下载任何字体文件，首屏没有 FOUT，中英文都用本机最合适的字形。
+     以前这里把 Inter / JetBrains Mono 写在首位，但站点从未加载过字体文件，
+     等于声明了一套永远不生效的字体，实际渲染仍落回系统字体。 */
   --font-sans:
-    'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
-    'HarmonyOS Sans SC', 'Source Han Sans SC', 'Microsoft YaHei UI', 'Microsoft YaHei',
-    sans-serif;
+    system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei UI', 'Microsoft YaHei', sans-serif;
   --font-mono:
-    'JetBrains Mono', ui-monospace, 'Cascadia Code', 'SF Mono', Consolas,
-    'Liberation Mono', Menlo, monospace;
+    ui-monospace, 'Cascadia Mono', 'SF Mono', Consolas, Menlo, 'Liberation Mono',
+    monospace;
 
   --color-fd-background: hsl(0, 0%, 100%);
   --color-fd-foreground: hsl(226, 30%, 13%);
@@ -70,48 +72,53 @@
   --brand-pink: hsl(330, 90%, 76%);
 }
 
-/* 每个顶部模块在其页面下暴露一个统一的 --module-accent，供侧栏/卡片/标题取用 */
-#nd-docs-layout:has(a[href^='/docs/wallet']) {
-  --module-accent: var(--accent-wallet);
-}
-#nd-docs-layout:has(a[href^='/docs/rewards']) {
-  --module-accent: var(--accent-rewards);
-}
-#nd-docs-layout:has(a[href^='/docs/api/']) {
-  --module-accent: var(--accent-api);
-}
-
-.docs-module-guide {
+/* 每个顶部模块在其页面下暴露一个统一的 --module-accent，供侧栏/卡片/标题取用。
+ *
+ * 判定依据是 #nd-page 上由 page.tsx 按 slug 写死的 docs-module-* 类，
+ * 从布局容器 :has() 它，变量才能同时被侧栏和正文继承（两者是兄弟节点，
+ * 只写在 #nd-page 上侧栏取不到）。
+ *
+ * 原来这里是 :has(a[href^='/docs/wallet']) 之类，按「页面里有没有这个链接」判定。
+ * 但顶部模块条在每一页都同时挂着 /docs/wallet、/docs/rewards、/docs/api 五个链接，
+ * 三条规则永远同时命中，最后一条生效 —— 结果全站每一页都被染成 rewards 的粉色，
+ * 五套模块配色一套都没生效。
+ */
+#nd-docs-layout:has(#nd-page.docs-module-guide) {
   --module-accent: var(--accent-guide);
 }
 
-.docs-module-wallet {
+#nd-docs-layout:has(#nd-page.docs-module-wallet) {
   --module-accent: var(--accent-wallet);
 }
 
-.docs-module-rewards {
+#nd-docs-layout:has(#nd-page.docs-module-rewards) {
   --module-accent: var(--accent-rewards);
 }
 
-.docs-module-api {
+#nd-docs-layout:has(#nd-page.docs-module-api) {
   --module-accent: var(--accent-api);
 }
 
-.docs-module-operations {
+#nd-docs-layout:has(#nd-page.docs-module-operations) {
   --module-accent: var(--accent-ops);
 }
 
 html {
-  scroll-behavior: smooth;
   /* 锚点跳转时预留粘顶导航的高度，避免标题被顶栏遮住 */
   scroll-padding-top: 5.5rem;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  html {
-    scroll-behavior: auto;
+/* 平滑滚动只给「页内锚点跳转」用。
+   如果无条件写在 html 上，Next 换页时那次 scrollTo(0, 0) 也会被动画化：
+   从长页面底部一路滚回顶部，看起来就像卡住了。
+   :has(:target) 让平滑只在 URL 带 hash（即用户点了目录/标题锚点）时生效。 */
+@media (prefers-reduced-motion: no-preference) {
+  html:has(:target) {
+    scroll-behavior: smooth;
   }
+}
 
+@media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
@@ -124,9 +131,10 @@ html {
 
 body {
   letter-spacing: 0;
-  text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  font-feature-settings: 'cv02', 'cv03', 'cv04';
+  /* 去掉了 font-feature-settings: 'cv02','cv03','cv04' —— 那是 Inter 专属的字形变体，
+     系统字体里没有这些 feature，纯空转；
+     也去掉了 text-rendering: optimizeLegibility —— 长页面上它会强制整篇重新排版。 */
 }
 
 ::selection {
@@ -164,56 +172,16 @@ body {
   padding: 1rem;
 }
 
+/* 每页第一段当导语：只放大一点、颜色压淡一点。
+   以前这里把第一段整体套成带 "i" 图标的信息框，61 页第一屏都是同一个灰蓝盒子，
+   而且一旦作者把第一个块级元素换成列表或 Callout，盒子就跑到错的地方去。
+   真的要强调就在 MDX 里显式写 <Callout>。 */
 .docs-page-shell .prose > p:first-child {
-  position: relative;
-  box-sizing: border-box;
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  margin: 1.125rem 0 1.875rem;
-  overflow: hidden;
-  border: 1px solid color-mix(in oklab, var(--module-accent, var(--color-fd-primary)) 18%, var(--color-fd-border));
-  border-left: 3px solid var(--module-accent, var(--color-fd-primary));
-  border-radius: 0.75rem;
-  background:
-    linear-gradient(
-      90deg,
-      color-mix(in oklab, var(--module-accent, var(--color-fd-primary)) 7%, transparent),
-      transparent 48%
-    ),
-    color-mix(in oklab, var(--color-fd-card) 94%, var(--color-fd-secondary));
-  padding: 0.95rem 1.1rem 0.95rem 3.35rem;
-  box-shadow:
-    0 1px 2px color-mix(in oklab, var(--color-fd-foreground) 5%, transparent),
-    0 0.9rem 2rem -1.35rem color-mix(in oklab, var(--module-accent, var(--color-fd-primary)) 46%, transparent);
-  color: color-mix(in oklab, var(--color-fd-foreground) 78%, var(--color-fd-muted-foreground));
-  font-size: 0.96rem;
-  font-weight: 520;
-  line-height: 1.85;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
-.docs-page-shell .prose > p:first-child::before {
-  content: 'i';
-  box-sizing: border-box;
-  position: absolute;
-  top: 1rem;
-  left: 1rem;
-  display: inline-flex;
-  width: 1.45rem;
-  height: 1.45rem;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid color-mix(in oklab, var(--module-accent, var(--color-fd-primary)) 28%, transparent);
-  border-radius: 0.45rem;
-  background: color-mix(in oklab, var(--module-accent, var(--color-fd-primary)) 10%, var(--color-fd-background));
-  color: var(--module-accent, var(--color-fd-primary));
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  font-weight: 780;
-  line-height: 1;
-  box-shadow: inset 0 1px 0 color-mix(in oklab, white 58%, transparent);
+  margin-top: 0;
+  margin-bottom: 1.75rem;
+  color: color-mix(in oklab, var(--color-fd-foreground) 74%, var(--color-fd-muted-foreground));
+  font-size: 1.0625rem;
+  line-height: 1.8;
 }
 
 .api-badge {
@@ -2081,11 +2049,10 @@ body {
   overflow: hidden;
   border: 1px solid color-mix(in oklab, var(--color-fd-border) 84%, var(--color-fd-primary));
   border-radius: 0.875rem;
-  background: color-mix(in oklab, var(--color-fd-card) 94%, transparent);
+  background: var(--color-fd-card);
   box-shadow:
     0 1px 2px color-mix(in oklab, var(--color-fd-foreground) 5%, transparent),
     0 1.5rem 4rem -1rem color-mix(in oklab, var(--color-fd-foreground) 16%, transparent);
-  backdrop-filter: blur(0.5rem);
   text-align: left;
 }
 
@@ -2291,9 +2258,8 @@ body {
 
 .home-cta-secondary {
   border: 1px solid var(--color-fd-border);
-  background: color-mix(in oklab, var(--color-fd-background) 70%, transparent);
+  background: var(--color-fd-background);
   color: var(--color-fd-foreground);
-  backdrop-filter: blur(0.5rem);
 }
 
 .home-cta-secondary:hover {
@@ -2351,9 +2317,10 @@ body {
   color: var(--color-fd-muted-foreground);
   font-size: 0.9375rem;
   text-decoration: none;
+  /* 位移走 transform 而不是 padding：只走合成层，不触发重排 */
   transition:
     color 160ms ease,
-    padding-left 160ms ease;
+    transform 160ms ease;
 }
 
 .home-path-link span {
@@ -2363,7 +2330,7 @@ body {
 
 .home-path-link:hover {
   color: var(--card-accent);
-  padding-left: 0.25rem;
+  transform: translateX(0.25rem);
 }
 
 .home-step {
@@ -2605,38 +2572,31 @@ body {
   align-items: center;
   gap: 1.5rem;
   border-bottom: 1px solid var(--color-fd-border);
-  background-color: color-mix(in oklab, var(--color-fd-background) 92%, transparent);
+  /* 用不透明底色而不是半透明 + backdrop-filter：
+     粘顶元素上的毛玻璃要在滚动的每一帧重新采样并模糊它下面的内容，
+     集显和中低端机上直接表现为滚动掉帧。 */
+  background-color: var(--color-fd-background);
   padding-block: 0.75rem 0;
-  backdrop-filter: blur(0.75rem);
 }
 
+/* 只调节尺寸和字重，颜色/下划线交给 Fumadocs 自己的选中态。
+ *
+ * 原来这里无条件写了 border-bottom-color: transparent 和 color: muted-foreground，
+ * 选择器带 id 权重远高于 Fumadocs 的工具类，把它给当前模块加的
+ * border-fd-primary / text-fd-primary 直接盖掉了；
+ * 而用来补回高亮的 [data-active='true'] 规则又永远不命中 ——
+ * Fumadocs 的顶部模块条是用 class 标选中，不写 data-active。
+ * 净效果是五个顶部模块长得一模一样，任何页面都看不出自己在哪个模块。 */
 #nd-docs-layout > div[class*='grid-area:main'] > a[href^='/docs'] {
   min-height: 2rem;
-  border-bottom-width: 2px;
-  border-bottom-color: transparent;
   padding-bottom: 0.55rem;
-  color: var(--color-fd-muted-foreground);
   font-weight: 650;
-  transition:
-    color 180ms ease,
-    border-color 180ms ease;
-}
-
-#nd-docs-layout > div[class*='grid-area:main'] > a[href^='/docs']:hover {
-  color: var(--color-fd-foreground);
-  border-bottom-color: color-mix(in oklab, var(--color-fd-primary) 40%, transparent);
-}
-
-#nd-docs-layout > div[class*='grid-area:main'] > a[href^='/docs'][data-active='true'] {
-  color: var(--color-fd-primary);
-  border-bottom-color: var(--color-fd-primary);
 }
 
 #nd-docs-layout #nd-subnav,
 [data-toc-popover] {
   border-color: var(--color-fd-border);
-  background-color: color-mix(in oklab, var(--color-fd-background) 88%, transparent);
-  backdrop-filter: blur(0.75rem);
+  background-color: var(--color-fd-background);
 }
 
 #nd-sidebar {
@@ -2682,18 +2642,19 @@ body {
   transform: none;
 }
 
-/* 所有侧栏链接统一顺滑过渡 + 悬停微移 */
+/* 侧栏链接只做底色过渡。
+   以前 hover 会把 padding-left 从默认值动画到 0.9rem，
+   padding 属于布局属性，动画期间每帧都要重排整条侧栏，
+   鼠标扫过目录时整列文字会跟着抖。 */
 #nd-sidebar a[href^='/docs'] {
   border-radius: 0.5rem;
   transition:
     background-color 160ms ease,
-    color 160ms ease,
-    padding-left 160ms ease;
+    color 160ms ease;
 }
 
 #nd-sidebar a[href^='/docs']:hover:not([data-active='true']) {
   background-color: color-mix(in oklab, var(--color-fd-accent) 50%, transparent);
-  padding-left: 0.9rem;
 }
 
 /* 通用：当前页链接用模块强调色高亮（wallet/rewards/api 各自着色，其余走主色） */
@@ -2857,13 +2818,6 @@ button[data-search-full] {
     padding-right: 1rem;
   }
 
-  .docs-page-shell .prose > p:first-child {
-    width: 100% !important;
-    max-width: 100% !important;
-    margin-right: 0 !important;
-    padding-right: 0.95rem;
-  }
-
   .home-terminal-body {
     font-size: 0.75rem;
     padding: 1rem;
@@ -2959,17 +2913,6 @@ button[data-search-full] {
   color: var(--color-fd-foreground);
 }
 
-/* ---------- 顶部模块切换条：当前模块用其强调色 ---------- */
-#nd-docs-layout:has(a[href^='/docs/wallet'])
-  > div[class*='grid-area:main']
-  > a[href^='/docs'][data-active='true'] {
-  color: var(--accent-wallet);
-  border-bottom-color: var(--accent-wallet);
-}
-
-#nd-docs-layout:has(a[href^='/docs/rewards'])
-  > div[class*='grid-area:main']
-  > a[href^='/docs'][data-active='true'] {
-  color: var(--accent-rewards);
-  border-bottom-color: var(--accent-rewards);
-}
+/* 顶部模块条的选中态统一用品牌主色（Fumadocs 自带的 border-fd-primary）。
+   这里不再按模块换色：换色需要再 hook 一层 Fumadocs 的内部 class，
+   而模块身份在侧栏当前项、卡片 hover 和首页卡片上已经有 --module-accent 表达了。 */

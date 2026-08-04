@@ -1,122 +1,42 @@
 ---
 title: 确认 Base URL
-description: 解释 Base URL、完整接口地址、/v1 前缀和不同客户端填写规则，避免把站点地址和 API Key 混淆。
+description: 一句话规则是只换域名不换路径。这页说清站点地址、带 /v1 的 Base URL 和完整接口地址三者分别填在哪。
 ---
 
-这一步的目标是：弄清楚请求应该发到哪里。
+API Key 回答"你是谁"，Base URL 回答"请求发到哪"。两个是不同的东西，别填串了。
 
-API Key 解决“你是谁”，Base URL 解决“请求发到哪里”。两者不是一回事。
+## 一句话规则：只换域名，不换路径
 
-## 一句话规则
+接入 Pixel API 不需要改接口格式，只需要把官方域名换成站点域名。
 
-Pixel API 通常不是让你改接口格式，而是把官方接口的域名替换成 Pixel API 站点地址。
-
-例如官方 OpenAI Chat Completions 地址是：
+官方 OpenAI 的 Chat Completions 是：
 
 ```text
 https://api.openai.com/v1/chat/completions
 ```
 
-接入 Pixel API 时，通常变成：
+换成 Pixel API 就是：
 
 ```text
 https://ai-pixel.online/v1/chat/completions
 ```
 
-也就是：
-
-```text
-官方域名 api.openai.com  →  Pixel API 域名 ai-pixel.online
-接口路径 /v1/chat/completions 保持一致
-```
-
-## Base URL 和完整地址的区别
-
-| 名称 | 示例 | 用在哪里 |
-| --- | --- | --- |
-| 站点地址 | `https://ai-pixel.online` | 大多数网页配置、Claude Code、Gemini CLI |
-| 带 `/v1` 的 Base URL | `https://ai-pixel.online/v1` | Codex 等部分 OpenAI SDK 风格配置 |
-| 完整接口地址 | `https://ai-pixel.online/v1/chat/completions` | cURL、Postman、某些 Endpoint 字段 |
-
-客户端字段名不同，填写方式也可能不同。
-
-## 客户端让你填 Base URL 时
-
-如果字段叫：
-
-- Base URL
-- API Base
-- Server URL
-- Provider URL
-
-通常填：
-
-```text
-https://ai-pixel.online
-```
-
-但有些客户端明确要求 OpenAI SDK 的 `base_url`，可能要填：
-
-```text
-https://ai-pixel.online/v1
-```
-
-这种情况以 API Key 页面「使用密钥」弹窗给出的配置为准。
-
-## 客户端让你填 Endpoint 时
-
-如果字段叫 Endpoint、URL、接口地址，并且它要完整地址，就填完整接口。
-
-Chat Completions：
-
-```text
-https://ai-pixel.online/v1/chat/completions
-```
-
-Responses：
-
-```text
-https://ai-pixel.online/v1/responses
-```
-
-Models：
-
-```text
-https://ai-pixel.online/v1/models
-```
+域名 `api.openai.com` → `ai-pixel.online`，后面的 `/v1/chat/completions` 一个字都不改。记住这条，大部分客户端都能自己推出来该怎么填。
 
 ## `/v1` 到底要不要带
 
-看客户端让你填什么：
+看客户端问你要什么：
 
-| 客户端字段 | `/v1` 怎么处理 |
-| --- | --- |
-| Base URL，客户端自己会拼 `/v1/chat/completions` | 不带 `/v1` |
-| OpenAI SDK 的 `base_url` | 通常带 `/v1` |
-| 完整接口地址 | 必须包含完整路径 |
-| API Key 页面给出的配置 | 完全照抄 |
+| 客户端的字段 | 你填 | 例子 |
+| --- | --- | --- |
+| Base URL / API Base / Server URL / Provider URL | 站点地址，不带 `/v1` | `https://ai-pixel.online` |
+| OpenAI SDK 风格的 `base_url`（如 Codex） | 带 `/v1` | `https://ai-pixel.online/v1` |
+| Endpoint / 接口地址（要完整的） | 带完整路径 | `https://ai-pixel.online/v1/chat/completions` |
 
-如果你不确定，优先照抄「使用密钥」弹窗。
+常用的完整地址就三个：Chat Completions 是 `/v1/chat/completions`，Responses 是 `/v1/responses`，列模型是 `/v1/models`。
 
-## 站点地址可能不是固定示例
+## 不确定就照抄弹窗
 
-文档里的示例是：
+上一页那个「使用密钥」弹窗里给的配置是按你这个 Key 的实际分组生成的，**照抄它永远对**。文档里的示例只是示例——如果你的控制台显示的是另一个域名，以控制台为准。
 
-```text
-https://ai-pixel.online
-```
-
-如果你的控制台、管理员或「使用密钥」弹窗显示了另一个地址，以实际显示为准。
-
-不要把 API Key 填到 Base URL 里，也不要把 Base URL 填到 API Key 里。
-
-## 成功标准
-
-进入下一步前，你应该知道：
-
-1. 我的站点地址是什么。
-2. 我的 API Key 是什么。
-3. 如果用网页 API 参考，应该填哪个 Base URL。
-4. 如果用客户端，要优先复制「使用密钥」弹窗里的配置。
-
-继续看 [在 API 参考里发送第一条消息](/docs/normal-send-test-message)。
+下一步：[发送第一条消息](/docs/normal-send-test-message)。

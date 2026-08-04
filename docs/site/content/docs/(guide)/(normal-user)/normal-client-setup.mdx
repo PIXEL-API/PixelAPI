@@ -3,59 +3,30 @@ title: 配置客户端
 description: 在网页测试已经跑通后，把 Pixel API 的 Base URL、API Key 和模型名填进 Codex、Claude Code、Gemini CLI、OpenCode 和通用客户端。
 ---
 
-这篇教程接着 [发送第一条消息](/docs/normal-send-test-message) 和 [查看使用记录](/docs/normal-check-usage) 往下走。
+**先把[网页测试](/docs/normal-send-test-message)跑通再来配客户端。** 网页通了说明账号、余额、分组、Key、Base URL、模型都没问题，客户端如果不通就只剩配置这一种可能，排查范围小得多。
 
-如果你还没有完成网页 API 参考里的测试，先不要急着配置客户端。先用网页请求面板确认账号、余额、分组、API Key、Base URL 和模型都能跑通，再把同一套配置放进真实客户端里。
+## 最省事的办法：照抄「使用密钥」弹窗
 
-## 先记住一条规则
+不管客户端叫什么名字，你要填的永远只有三样：站点地址、API Key、模型名。
 
-无论客户端叫什么，核心都只有两项：
+而这三样在「API 密钥」→「使用密钥」弹窗里已经按你这个 Key 的实际分组生成好了，切换上方的客户端标签就能直接复制。**照抄它比看文档准。**
 
-```text
-站点地址 / Base URL = https://ai-pixel.online
-API Key           = sk-你的密钥
-模型名             = 当前分组支持的模型
-```
-
-判断规则：`Base URL / API Base` 直接填站点地址 `https://ai-pixel.online`；个别客户端（例如 Codex 的 `base_url`）要求带上 `/v1` 接口前缀，以“使用密钥”弹窗给出的配置为准。如果客户端让你填完整 `Endpoint`，就保留官方接口后缀，例如 `/v1/chat/completions`、`/v1/responses` 或 `/v1/models`。
-
-<Screenshot src="/images/guide/real-use-key-modal.png" alt="Pixel API 使用 API 密钥弹窗截图，展示 Codex CLI、Codex WebSocket、Claude Code 和 OpenCode 的配置示例">
-  <strong>最省心的方式是打开这个弹窗：</strong>在 API 密钥列表点“使用密钥”，按上方客户端标签切换，复制页面给出的 Base URL、模型和配置文件内容。
+<Screenshot src="/images/guide/real-use-key-modal.webp" alt="Pixel API 使用 API 密钥弹窗截图，展示 Codex CLI、Codex WebSocket、Claude Code 和 OpenCode 的配置示例">
+  <strong>在 API 密钥列表点「使用密钥」：</strong>按上方客户端标签切换，复制页面给出的 Base URL、模型和配置文件内容。
 </Screenshot>
 
-有些客户端把 Base URL 叫作：
+弹窗给什么取决于 Key 的分组平台：OpenAI 分组给 Codex CLI、Codex WebSocket、Claude Code、OpenCode 的示例；Gemini 分组给 Gemini CLI、OpenCode；Antigravity 分组给 Claude Code、Gemini CLI、OpenCode。
 
-- API Base
-- Endpoint
-- Server URL
-- Provider URL
-- ANTHROPIC_BASE_URL
-- GOOGLE_GEMINI_BASE_URL
+提示"请先分配分组"就是 Key 还没绑分组——回列表点分组列选一个。
 
-有些客户端把 API Key 叫作：
+## 字段名对照
 
-- Token
-- Auth Token
-- Bearer Token
-- Secret Key
-- ANTHROPIC_AUTH_TOKEN
-- GEMINI_API_KEY
+各家客户端给这两样东西起的名字五花八门，看到下面任何一个都是同一回事：
 
-名字不同，本质一样。
+- **Base URL** = API Base、Endpoint、Server URL、Provider URL、`ANTHROPIC_BASE_URL`、`GOOGLE_GEMINI_BASE_URL`
+- **API Key** = Token、Auth Token、Bearer Token、Secret Key、`ANTHROPIC_AUTH_TOKEN`、`GEMINI_API_KEY`
 
-## 最推荐方式：在 API Key 页面点“使用密钥”
-
-进入“API 密钥”页面，找到你要用的 Key，点击“使用密钥”。
-
-系统会按这个 Key 的分组平台自动展示配置：
-
-| 分组平台 | 页面会给你什么 |
-| --- | --- |
-| OpenAI | Codex CLI、Codex WebSocket、Claude Code、OpenCode 等示例 |
-| Gemini | Gemini CLI、OpenCode 等示例 |
-| Antigravity | Claude Code、Gemini CLI、OpenCode 等示例 |
-
-如果页面提示“请先分配分组”，说明这个 Key 还没绑定可用分组。回到 API Key 列表，点击分组列，先给它选择分组。
+带不带 `/v1` 的判断规则见[确认 Base URL](/docs/normal-base-url)：`Base URL / API Base` 填站点地址不带 `/v1`；Codex 那种 OpenAI SDK 风格的 `base_url` 要带；要完整 `Endpoint` 的就带上 `/v1/chat/completions` 这类路径。
 
 ## Codex CLI 配置
 
@@ -122,15 +93,7 @@ requires_openai_auth = true
 }
 ```
 
-### Codex 成功标准
-
-重启 Codex CLI 后，发送一句：
-
-```text
-你好，请回复 Pixel API 已连接
-```
-
-如果能收到回复，再回 Pixel API 的“使用记录”确认新增了一条请求。
+配好后重启 Codex CLI，发一句"你好，请回复 Pixel API 已连接"，收到回复再回控制台「使用记录」确认多了一条请求。
 
 ## Claude Code 接入 GPT 或 OpenAI 兼容分组
 
@@ -154,7 +117,37 @@ $env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1"
 
 注意这里的地址通常不带 `/v1`，以 API Key 页面“使用密钥”弹窗展示为准。
 
-如果你用 CC-Switch 管理客户端，可以在 API Key 页面选择导入到 CC-Switch，再在 CC-Switch 里启用对应配置。
+### 用 CC-Switch 一键导入
+
+如果你要在多个客户端之间来回切，用 CC-Switch 统一管理会省事很多，它能同时管住 Codex、Claude Code、VS Code 插件和 CLI 的配置。
+
+1. 在 API 密钥页点“导入到 CCS”，浏览器会唤起 CC-Switch。
+2. 在 CC-Switch 里确认导入，并启用刚导入的 API 服务。
+3. 回客户端切换模型。
+
+导入后没立刻生效，就完全退出客户端再进——只关窗口不一定重读配置。
+
+如果下载不了 CC-Switch，可以从用户群文件里拿对应版本。
+
+### 在 Claude Code 里用 GPT 模型
+
+想让 Claude Code 实际调用 GPT 系列时，走 CC-Switch 的模型映射：
+
+1. 切到 CC-Switch 的 Claude 配置页，点新增。
+2. 填入 Pixel API 的 Base URL 和 API Key。
+3. 打开高级选项，找到模型映射。
+4. 把 Claude 侧模型映射到 `gpt-5.5` 或 `gpt-5.4`。
+5. 启用配置，重启 Claude Code 或 VS Code 插件会话。
+
+Claude 客户端界面还会显示 Claude 风格的模型名，那是客户端自己的展示逻辑，实际请求已经按映射转发。以站点「使用记录」里的模型为准。
+
+### 调用 Claude 系列模型
+
+Pixel API 也能代理 Claude AWS 渠道。用之前注意三件事：
+
+- Claude 单次调用成本通常明显高于 GPT 系列。
+- 创建 Key 时选 Claude 对应的兜底分组。
+- 导入 CC-Switch 后余额查询失败是正常现象，不影响模型调用。
 
 ## Gemini CLI 配置
 
@@ -200,56 +193,30 @@ opencode.jsonc
 
 如果 OpenCode 支持 `/connect` 命令，也可以用客户端自己的连接向导填入 Base URL 和 API Key。
 
-## 通用 OpenAI 兼容客户端
+## 其他 OpenAI 兼容客户端
 
-只要客户端支持 OpenAI 兼容接口，一般这样填：
+只要客户端支持 OpenAI 兼容接口，就填这三样：Base URL 填 `https://ai-pixel.online`（个别要求带 `/v1`）、API Key 填 `sk-你的密钥`、Model 填当前分组支持的模型。要单独填认证头的话是 `Bearer sk-你的密钥`。
 
-| 客户端字段 | 填什么 |
-| --- | --- |
-| Base URL / API Base | `https://ai-pixel.online`，个别客户端要求带 `/v1` 前缀 |
-| API Key / Token | `sk-你的密钥` |
-| Model | 当前分组支持的模型，例如 `gpt-5.5` |
-| Authorization | `Bearer sk-你的密钥` |
+客户端问接口路径时一般选 `/chat/completions`；用 Responses API 的按「使用密钥」弹窗里的 Codex 配置走。
 
-如果客户端问你接口路径，一般选：
+**不要把所有客户端都硬填成同一个完整 URL。** 规则始终是：域名换成 Pixel API，后缀跟客户端原本调的官方接口保持一致。
 
-```text
-/chat/completions
-```
+## 改完不生效？先完整重启
 
-如果客户端使用 Responses API，按 API Key 页面给出的 Codex 配置走。
+很多客户端只在启动时读一次配置。改完没反应就按顺序做：完全退出客户端 → 关掉相关终端窗口 → 重新打开终端和客户端。
 
-不要把所有客户端都硬填成同一个完整 URL。正确做法是：域名替换为 Pixel API，后缀跟客户端原本调用的官方接口保持一致。
+**只关聊天窗口不算重启。**
 
-## 配置后一定要重启客户端
+另外注意 Windows PowerShell 里的 `$env:...` 只对当前窗口有效，关掉就没了。要长期生效得写进系统环境变量或客户端配置文件。
 
-很多客户端启动时只读取一次配置。你改完 Base URL 和 API Key 后，如果没有生效，先做这三件事：
+## 模型名不知道填什么
 
-1. 完全退出客户端。
-2. 关闭相关终端窗口。
-3. 重新打开终端和客户端。
+按这个顺序找：「可用渠道」里能用的模型 → 账号广场账号卡片上的「可用模型」→「使用密钥」弹窗示例里的默认模型。都不确定就先用 `gpt-5.5` 试 OpenAI 分组。
 
-只关闭聊天窗口不一定会刷新配置。
+模型名必须精确，多一个空格少一个字符都会失败。
 
-## 不知道模型名该填什么
+## 配好之后跑一次闭环
 
-按这个顺序找：
+在客户端里发"你好，请只回复 Pixel API 已连接"，收到回复后回控制台「使用记录」找到这条请求，确认 Key、模型、分组、费用都符合预期。
 
-1. 打开“可用渠道”，看你能使用的模型。
-2. 如果你加入了账号广场，复制账号卡片上的“可用模型”。
-3. 打开“API 密钥”的“使用密钥”弹窗，看示例里的默认模型。
-4. 仍不确定时，先用 `gpt-5.5` 做 OpenAI 分组测试。
-
-模型名必须精确。多一个空格、少一个字符，都可能导致请求失败。
-
-## 客户端配置成功以后
-
-做一次完整闭环：
-
-1. 在客户端里发送：“你好，请只回复 Pixel API 已连接”。
-2. 确认客户端收到回复。
-3. 回到 Pixel API 的“使用记录”。
-4. 找到刚才那条请求。
-5. 确认 API Key、模型、分组、费用都符合预期。
-
-这个闭环成功后，你就可以把这个 Key 用于日常工作。
+这一步走通，这个 Key 就可以放心用于日常工作了。配置过程中卡住见[常见问题处理](/docs/normal-troubleshooting)。

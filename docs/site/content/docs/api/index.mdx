@@ -83,15 +83,7 @@ Authorization: Bearer sk-user-key
 4. Gemini 原生接口使用 `/v1beta` 前缀，路径中的 `{model}` 要替换为实际模型名。
 5. Antigravity 专用接口会强制走 Antigravity 账号，不与普通分组混合调度。
 
-## 阅读顺序
-
-如果你是第一次接入：
-
-1. 先看 [ChatCompletions 格式](/docs/api/chat-completions)，这是最常见的 OpenAI 兼容调用。
-2. 使用 Codex 或新版客户端时，再看 [Responses 格式](/docs/api/responses)。
-3. 使用 Claude Code 时，看 [原生 Claude 格式](/docs/api/claude-messages)。
-4. 使用 Gemini CLI 或 SDK 时，看 [Gemini 文本聊天](/docs/api/gemini-generate-content)。
-5. 模型名报错时，看 [列出模型](/docs/api/models)。
+第一次接入就从 [ChatCompletions 格式](/docs/api/chat-completions) 开始——它是最常见的 OpenAI 兼容调用，上面表格里其他页面按你实际用的客户端挑。模型名报错时去 [列出模型](/docs/api/models) 查当前 Key 能用什么。
 
 ## 最小测试
 

@@ -57,8 +57,8 @@ const modules = [
   },
   {
     title: '帮助支持',
-    description: '问题排查、状态码说明、常见问题与安全使用建议。',
-    href: '/docs/operations/troubleshooting',
+    description: '常见问题、状态码说明、安全使用建议与联系方式。',
+    href: '/docs/operations/faq',
     accent: 'var(--accent-ops)',
     icon: (
       <svg fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" viewBox="0 0 24 24" aria-hidden="true">
@@ -116,15 +116,15 @@ const readingPath = [
   },
   {
     mark: '02',
-    title: '号池共享',
-    description: '理解共享分组、私有分组、账号模式和收益分成，选择适合自己的调用方式。',
-    href: '/docs/api-keys',
+    title: '搞懂概念',
+    description: '一条链路讲清 API Key、分组、号池和上游账号的关系，后半页是全站术语速查。',
+    href: '/docs/concepts',
   },
   {
     mark: '03',
-    title: '问题排查',
-    description: '集中查看常见问题、状态码、余额、提现、代理和客户端配置排查路径。',
-    href: '/docs/operations/status-codes',
+    title: '出错排查',
+    description: '按错误码逐条列出原因和处理步骤，从 401 到 5xx，附客户端配置不生效的排查顺序。',
+    href: '/docs/normal-troubleshooting',
   },
 ];
 

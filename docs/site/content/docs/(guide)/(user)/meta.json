@@ -1,11 +1,8 @@
 {
-  "title": "功能参考",
+  "title": "进阶参考",
   "defaultOpen": false,
   "pages": [
     "api-keys",
-    "accounts",
-    "usage",
-    "billing",
-    "client-setup"
+    "billing"
   ]
 }

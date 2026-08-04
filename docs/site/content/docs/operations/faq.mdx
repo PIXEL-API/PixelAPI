@@ -3,7 +3,7 @@ title: 常见问题
 description: 用户充值、账号托管、共享号池和客户端接入的常见问题。
 ---
 
-这里按使用角色整理高频问题：普通用户先看第一组，托管账号或共享账号的号主看第二组。遇到具体问题时，可以直接展开对应条目核对原因和处理方式。
+这一页回答的是"这东西是怎么设计的"。如果你是**报错了打不通**，直接去对应的排查页，那里按错误码一条条列了处理步骤：[普通用户排查](/docs/normal-troubleshooting)、[号主排查](/docs/owner-troubleshooting)。
 
 ## 普通用户
 
@@ -81,15 +81,8 @@ description: 用户充值、账号托管、共享号池和客户端接入的常�
   </Accordion>
 </Accordions>
 
-## 常用工具
+## 常用客户端
 
-Windows 用户常见工具：
+常见的接入方式是 Codex CLI、Claude Code CLI、CC-Switch 和 Codex-PlusPlus。每个的具体配置见[配置客户端](/docs/normal-client-setup)。
 
-- Codex CLI
-- Claude Code CLI
-- CC-Switch
-- Codex-PlusPlus
-
-<Callout>
-  工具配置完成后，如果客户端没有读取新配置，请完全退出应用再重新启动。
-</Callout>
+配置改完没生效，先**完全退出应用再重启**——只关窗口通常不会重读配置。

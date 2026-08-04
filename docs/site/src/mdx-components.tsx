@@ -12,6 +12,7 @@ import {
   ParameterTable,
 } from '@/components/api-reference';
 import { ModelApiReference } from '@/components/model-api-reference';
+import { QqGroups } from '@/components/qq-groups';
 import { Screenshot } from '@/components/screenshot';
 
 export function getMDXComponents(components?: MDXComponents): MDXComponents {
@@ -27,6 +28,7 @@ export function getMDXComponents(components?: MDXComponents): MDXComponents {
     ModelApiReference,
     ParameterRow,
     ParameterTable,
+    QqGroups,
     Screenshot,
     Step,
     Steps,
