@@ -1701,7 +1701,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	reqLog.Info("openai.websocket_ingress_started")
 	clientIP := ip.GetClientIP(c)
 	userAgent := strings.TrimSpace(c.GetHeader("User-Agent"))
-	ctx := c.Request.Context()
+	// 必须在 ingress 租约覆盖请求上下文之前捕获：下面 c.Request 被替换后
+	// 就再也拿不到不含租约取消信号的原始生命周期 ctx。
+	clientLifecycleCtx := c.Request.Context()
+	ctx := clientLifecycleCtx
 	maxIngressConnections := 0
 	if h.cfg != nil {
 		maxIngressConnections = h.cfg.Gateway.OpenAIWS.MaxIngressConnectionsPerAPIKey
@@ -2078,8 +2081,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		fixedRoutingModel = service.ResolveOpenAIWebSocketForwardModel(account, selectedRoutingModel)
 	}
 	hooks := &service.OpenAIWSIngressHooks{
-		FixedRequestedModel: fixedRequestedModel,
-		FixedRoutingModel:   fixedRoutingModel,
+		ClientLifecycleContext: clientLifecycleCtx,
+		FixedRequestedModel:    fixedRequestedModel,
+		FixedRoutingModel:      fixedRoutingModel,
 		BeforeTurnPayload: func(turn int, payload []byte) (context.Context, error) {
 			if cyberBlockedThisConn {
 				return nil, service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, cyberSessionBlockedClientMsg, nil)

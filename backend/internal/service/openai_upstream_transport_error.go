@@ -39,7 +39,9 @@ type openAITransportErrorClass struct {
 // against the raw transport error) that indicate a durable proxy/network fault.
 // Matched signals are intentionally specific failure *reasons*, not the operation
 // (e.g. we match "connection refused", not "proxyconnect") so that a transient
-// failure of the same operation (a proxy timeout) is NOT misclassified as durable.
+// failure of the same operation is NOT misclassified as durable. The one
+// operation-scoped exception is a proxy-dial timeout — see
+// isOpenAIProxyDialTimeout below.
 var openAIPersistentTransportErrorMarkers = []string{
 	"authentication failed",         // SOCKS5 RFC1929 / proxy credentials rejected (expired account)
 	"proxy authentication required", // HTTP proxy 407
@@ -47,6 +49,30 @@ var openAIPersistentTransportErrorMarkers = []string{
 	"no route to host",
 	"network is unreachable",
 	"no such host", // DNS resolution failure (bad/expired proxy hostname)
+}
+
+// isOpenAIProxyDialTimeout reports whether the (lowercased) transport error is a
+// timeout while connecting to the account's OWN proxy endpoint — "proxyconnect"
+// is the net/http CONNECT-dial prefix, "socks connect" the SOCKS5 equivalent.
+//
+// Motivating incident (2026-08-04): a dedicated HTTP proxy black-holed its port
+// for 7 hours ("proxyconnect tcp: dial tcp <proxy>: i/o timeout"). Because
+// timeouts were exempt from the durable classification, the account was never
+// unscheduled: it was re-selected ~7.9k times, each request burning the full 10s
+// dial budget before failing over and re-queueing inside the same group.
+// A proxy that cannot complete a TCP handshake is operationally as dead as one
+// refusing connections, but costs users far more per encounter — so it earns the
+// same temp-unschedule.
+//
+// Scope is deliberately narrow: only the proxy-dial phase, and only the dialer's
+// own "i/o timeout". Timeouts talking to the real upstream through a healthy
+// proxy, and request-context expiry ("context deadline exceeded", e.g. the
+// first-output budget lapsing mid-dial), stay transient.
+func isOpenAIProxyDialTimeout(msg string) bool {
+	if !strings.Contains(msg, "proxyconnect") && !strings.Contains(msg, "socks connect") {
+		return false
+	}
+	return strings.Contains(msg, "i/o timeout")
 }
 
 // classifyOpenAITransportError decides whether a transport-level upstream error
@@ -87,6 +113,9 @@ func classifyOpenAITransportError(err error) openAITransportErrorClass {
 		if strings.Contains(msg, marker) {
 			return openAITransportErrorClass{Persistent: true}
 		}
+	}
+	if isOpenAIProxyDialTimeout(msg) {
+		return openAITransportErrorClass{Persistent: true}
 	}
 	return openAITransportErrorClass{}
 }

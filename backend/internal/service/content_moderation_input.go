@@ -240,7 +240,10 @@ func collectContentValueBounded(value gjson.Result, collector *moderationInputCo
 		collector.AddImage(value.Get("data").String())
 		collector.AddImage(value.Get("base64").String())
 		switch typ {
-		case "", "text", "input_text", "message":
+		// output_text 也必须收录：本 fork 的三处协议转换器（openai_codex_transform、
+		// chatcompletions_responses_bridge、apicompat/responses_to_anthropic_request）
+		// 都会把 output_text 的 text 透传给上游模型，审计端漏收就是一条静默绕过。
+		case "", "text", "input_text", "output_text", "message":
 			if text := value.Get("text"); text.Exists() && collector.runeCount < maxModerationInputRunes {
 				collector.AddText(text.String())
 			}
@@ -310,7 +313,9 @@ func collectAnthropicUserContentValue(value gjson.Result, parts *[]string, image
 	case value.IsObject():
 		typ := strings.ToLower(strings.TrimSpace(value.Get("type").String()))
 		switch typ {
-		case "", "text", "input_text", "message":
+		// Anthropic 原生 content block 不会出现 output_text，这里保持与
+		// collectContentValue 对称，纯防御性避免混合协议下的静默丢弃。
+		case "", "text", "input_text", "output_text", "message":
 			if value.Get("text").Exists() {
 				addModerationText(parts, value.Get("text").String())
 			}
@@ -431,7 +436,9 @@ func collectContentValue(value gjson.Result, parts *[]string, images *[]string) 
 		addModerationImage(images, value.Get("data").String())
 		addModerationImage(images, value.Get("base64").String())
 		switch typ {
-		case "", "text", "input_text", "message":
+		// 与 collectContentValueBounded 保持一致：output_text 会被转换器透传给上游，
+		// 审计端不能漏收。
+		case "", "text", "input_text", "output_text", "message":
 			if value.Get("text").Exists() {
 				addModerationText(parts, value.Get("text").String())
 			}

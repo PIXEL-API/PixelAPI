@@ -2889,11 +2889,12 @@ func TestOpenAIBuildUpstreamRequestOAuthOfficialClientOriginatorCompatibility(t 
 	}{
 		{name: "official UA pairs originator", userAgent: "Codex Desktop/1.2.3", wantOriginator: "Codex Desktop", wantUserAgent: "Codex Desktop/1.2.3"},
 		{
-			name:           "mismatched originator repaired from final UA",
+			// 从最终 UA 重配出 codex-tui 后，降载身份再被归一化为 CLI 身份。
+			name:           "mismatched originator repaired from final UA then normalized",
 			userAgent:      "codex-tui/0.140.2 (Mac OS X 14.0; arm64) iTerm (codex-tui; 0.140.2)",
 			originator:     "codex_cli_rs",
-			wantOriginator: "codex-tui",
-			wantUserAgent:  "codex-tui/0.140.2 (Mac OS X 14.0; arm64) iTerm (codex-tui; 0.140.2)",
+			wantOriginator: "codex_cli_rs",
+			wantUserAgent:  "codex_cli_rs/0.140.2 (Mac OS X 14.0; arm64) iTerm",
 		},
 		{name: "originator without UA falls back as a pair", originator: "codex_vscode", wantOriginator: "codex_cli_rs", wantUserAgent: codexCLIUserAgent},
 		{name: "third party UA falls back as a pair", userAgent: "luna/1.2.0", wantOriginator: "codex_cli_rs", wantUserAgent: codexCLIUserAgent},

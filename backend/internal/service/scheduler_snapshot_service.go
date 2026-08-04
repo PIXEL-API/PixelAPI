@@ -358,11 +358,20 @@ func (s *SchedulerSnapshotService) ListSchedulableAccounts(ctx context.Context, 
 	var lifecycleCache SchedulerLifecycleCache
 	canPublish := false
 
+	// 客户端已断连时不再往下走：后面的 guardFallback 会消耗稀缺的 DB 兜底令牌，
+	// 再打一发注定被取消的库查询——取消是常态（每小时上万次），这条路径必须尽早短路。
+	if err := ctx.Err(); err != nil {
+		return nil, useMixed, err
+	}
+
 	if s.cache != nil {
 		if candidateCache, ok := s.cache.(SchedulerCandidateCache); ok {
 			if !IsSchedulerCandidateIndexBypassed(ctx) {
 				samplingEnabled, candidateLimit, candidateThreshold := s.candidateSamplingSettings(ctx)
 				cached, hit, err := candidateCache.GetCandidateSnapshot(ctx, bucket, candidateLimit, candidateThreshold, samplingEnabled)
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return nil, useMixed, ctxErr
+				}
 				if err != nil {
 					logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] candidate cache read failed: bucket=%s err=%v", bucket.String(), err)
 				} else if hit {
@@ -371,6 +380,10 @@ func (s *SchedulerSnapshotService) ListSchedulableAccounts(ctx context.Context, 
 			}
 		}
 		cached, hit, err := s.cache.GetSnapshot(ctx, bucket)
+		// 取消导致的 Redis 失败会被下面记成「缓存读失败」并继续走兜底，先行短路。
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, useMixed, ctxErr
+		}
 		if err != nil {
 			logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] cache read failed: bucket=%s err=%v", bucket.String(), err)
 		} else if hit {
@@ -391,6 +404,11 @@ func (s *SchedulerSnapshotService) ListSchedulableAccounts(ctx context.Context, 
 		}
 	}
 
+	// CaptureBucketWriteToken 的取消同样会被降级成日志，这里兜住最后一道再进兜底。
+	if err := ctx.Err(); err != nil {
+		return nil, useMixed, err
+	}
+
 	if err := s.guardFallback(ctx); err != nil {
 		return nil, useMixed, err
 	}
@@ -400,6 +418,10 @@ func (s *SchedulerSnapshotService) ListSchedulableAccounts(ctx context.Context, 
 
 	accounts, err := s.loadAccountsFromDB(fallbackCtx, bucket, useMixed)
 	if err != nil {
+		return nil, useMixed, err
+	}
+	// 已取消就不要再把这批结果发布进缓存：请求方不会用它，写入只是白白占用 Redis 往返。
+	if err := ctx.Err(); err != nil {
 		return nil, useMixed, err
 	}
 
@@ -420,8 +442,14 @@ func (s *SchedulerSnapshotService) GetAccount(ctx context.Context, accountID int
 	if accountID <= 0 {
 		return nil, nil
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if s.cache != nil {
 		account, err := s.cache.GetAccount(ctx, accountID)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				// 客户端断连导致的取消是常态，不值得进 ops 错误索引

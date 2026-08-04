@@ -226,6 +226,11 @@ func openAIWSImageGenerationPermissionError(imageGenerationAllowed bool, request
 
 // OpenAIWSIngressHooks 定义入站 WS 每个 turn 的生命周期回调。
 type OpenAIWSIngressHooks struct {
+	// ClientLifecycleContext 是 ingress 租约挂上独立取消信号之前的请求上下文。
+	// 下行写绑定到它，使 shutdown / 客户端断连的取消仍然直达，而租约丢失不会
+	// 掐断在途的下行写。
+	ClientLifecycleContext context.Context
+
 	// BeforeTurn and AfterTurn are kept for compatibility with existing
 	// callers that only need the turn number.
 	BeforeTurn func(turn int) error
@@ -2791,6 +2796,21 @@ func (s *OpenAIGatewayService) openAIWSIngressInterTurnIdleTimeout() time.Durati
 	return time.Duration(s.cfg.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds) * time.Second
 }
 
+// newOpenAIWSDownstreamWriteContext binds writes directly to the client
+// lifecycle while excluding the separate ingress-lease cancellation signal.
+// This lets a lease-loss path finish its current client write before the
+// handler queues the retryable close frame.
+func newOpenAIWSDownstreamWriteContext(controlCtx context.Context, hooks *OpenAIWSIngressHooks, timeout time.Duration) (context.Context, context.CancelFunc) {
+	writeParent := controlCtx
+	if hooks != nil && hooks.ClientLifecycleContext != nil {
+		writeParent = hooks.ClientLifecycleContext
+	}
+	if writeParent == nil {
+		writeParent = context.Background()
+	}
+	return context.WithTimeout(writeParent, timeout)
+}
+
 // ProxyResponsesWebSocketFromClient 处理客户端入站 WebSocket（OpenAI Responses WS Mode）并转发到上游。
 // 当前实现按“单请求 -> 终止事件 -> 下一请求”的顺序代理，适配 Codex CLI 的 turn 模式。
 func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
@@ -3096,9 +3116,12 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			// 307-311), and the subsequent close handshake re-acquires the
 			// same writeFrameMu, so the error event is guaranteed to reach
 			// the kernel send buffer before any close frame is queued.
+			// The write context is additionally decoupled from the ingress
+			// lease cancellation (see newOpenAIWSDownstreamWriteContext), so
+			// a lease loss racing this path cannot drop the error event.
 			eventBytes := buildOpenAIFastPolicyBlockedWSEvent(blocked)
 			if eventBytes != nil {
-				writeCtx, cancel := context.WithTimeout(ctx, s.openAIWSWriteTimeout())
+				writeCtx, cancel := newOpenAIWSDownstreamWriteContext(ctx, hooks, s.openAIWSWriteTimeout())
 				_ = clientConn.Write(writeCtx, coderws.MessageText, eventBytes)
 				cancel()
 			}
@@ -3355,7 +3378,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		if turnCtx == nil {
 			turnCtx = ctx
 		}
-		writeCtx, cancel := context.WithTimeout(turnCtx, s.openAIWSWriteTimeout())
+		writeCtx, cancel := newOpenAIWSDownstreamWriteContext(turnCtx, hooks, s.openAIWSWriteTimeout())
 		defer cancel()
 		return clientConn.Write(writeCtx, coderws.MessageText, message)
 	}

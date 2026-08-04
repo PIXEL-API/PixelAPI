@@ -207,6 +207,9 @@ func (s *Stripe) Refund(ctx context.Context, req payment.RefundRequest) (*paymen
 		Amount:        stripe.Int64(amountInCents),
 		Reason:        stripe.String(string(stripe.RefundReasonRequestedByCustomer)),
 	}
+	// 幂等键：退款重试（网关超时、管理员重复点击、REFUND_FAILED 后重试）不能变成第二笔退款。
+	// 带上金额是为了让「改额后重新发起」被视作另一笔请求，而不是被 Stripe 当成重放返回旧结果。
+	params.SetIdempotencyKey(fmt.Sprintf("re-%s-%d", req.OrderID, amountInCents))
 	params.Context = ctx
 
 	r, err := s.sc.V1Refunds.Create(ctx, params)

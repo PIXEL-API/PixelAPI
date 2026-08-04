@@ -220,8 +220,9 @@ func TestApplyOpenAITestCodexHeadersPairsOnlyOAuthIdentity(t *testing.T) {
 			"user_agent": tuiUA,
 		},
 	}, "text/event-stream")
-	require.Equal(t, tuiUA, oauthHeaders.Get("User-Agent"))
-	require.Equal(t, "codex-tui", oauthHeaders.Get("Originator"))
+	// codex-tui 是上游降载桶身份，收口时改写为 CLI 身份（保留版本/OS/架构/终端指纹）。
+	require.Equal(t, "codex_cli_rs/0.140.2 (Mac OS X 14.0; arm64) iTerm", oauthHeaders.Get("User-Agent"))
+	require.Equal(t, "codex_cli_rs", oauthHeaders.Get("Originator"))
 
 	apiKeyHeaders := make(http.Header)
 	applyOpenAITestCodexHeaders(apiKeyHeaders, &Account{

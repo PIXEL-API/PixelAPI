@@ -311,7 +311,14 @@ func (s *PaymentService) prepDeduct(ctx context.Context, o *dbent.PaymentOrder, 
 		return nil
 	}
 	p.DeductionType = payment.DeductionTypeBalance
-	p.BalanceToDeduct = math.Min(p.RefundAmount, u.Balance)
+	// 余额不够全额扣回时先拦下来问管理员：钱一旦退出去就只能靠 applyRefundDeductions 事后
+	// 报差额（REFUND_DEDUCTION_SHORTFALL）人工补账，事前确认比事后补账便宜得多。
+	// 终态化路径固定 force=true（payment_refund_settlement.go），不受此门禁影响。
+	if u.Balance < p.RefundAmount && !force {
+		return &RefundResult{Success: false, Warning: "user balance is insufficient for deduction, use force", RequireForce: true}
+	}
+	// 下界夹到 0：余额为负时 min() 会得到负数，等于「退款还倒贴给用户加钱」。
+	p.BalanceToDeduct = math.Max(0, math.Min(p.RefundAmount, u.Balance))
 	return nil
 }
 

@@ -10298,6 +10298,10 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	}, s.billingDeps(), s.usageBillingRepo)
 
 	if billingErr != nil {
+		// 计费失败不能连用量记录一起丢：账单可以事后补，用量凭证丢了就再也拿不回来。
+		// ActualCost 归零表示「这条用量未产生扣费」，避免对账时被当成已计费。
+		usageLog.ActualCost = 0
+		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.gateway")
 		return billingErr
 	}
 	writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.gateway")

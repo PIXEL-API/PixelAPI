@@ -218,7 +218,7 @@
       </template>
     </BaseDialog>
 
-    <AdminRefundDialog :show="showRefundDialog" :order="selectedOrder" :submitting="refundSubmitting" @confirm="handleRefund" @cancel="showRefundDialog = false" />
+    <AdminRefundDialog :show="showRefundDialog" :order="selectedOrder" :submitting="refundSubmitting" :require-force="refundRequireForce" :warning="refundWarning" @confirm="handleRefund" @cancel="closeRefundDialog" />
   </AppLayout>
 </template>
 
@@ -260,6 +260,8 @@ const selectedShopOrder = ref<StoreOrder | null>(null)
 const showDetailDialog = ref(false)
 const showRefundDialog = ref(false)
 const refundSubmitting = ref(false)
+const refundRequireForce = ref(false)
+const refundWarning = ref('')
 const refundQueryingId = ref<number | null>(null)
 const orderAuditLogs = ref<PaymentOrderAuditLog[]>([])
 const showManualFulfillDialog = ref(false)
@@ -477,7 +479,15 @@ async function downloadAdminStoreFilesZip(orderId: number): Promise<void> {
 function openRefundDialog(order: PaymentOrder) {
   if (order.source === 'shop_order') return
   selectedOrder.value = order
+  refundRequireForce.value = false
+  refundWarning.value = ''
   showRefundDialog.value = true
+}
+
+function closeRefundDialog() {
+  showRefundDialog.value = false
+  refundRequireForce.value = false
+  refundWarning.value = ''
 }
 
 /**
@@ -496,14 +506,22 @@ async function handleRefund(data: { amount: number; reason: string; deduct_balan
   try {
     const res = await adminPaymentAPI.refundOrder(selectedOrder.value.id, { amount: data.amount, reason: data.reason, deduct_balance: data.deduct_balance, force: data.force })
     const result = res.data
+    if (result?.require_force) {
+      // 后端要求显式 force 确认（例如用户在申请退款后把余额花掉了）。对话框本就有
+      // force 勾选框，但此前从未有人把 require_force 绑上去，管理员只看得到一句报错、
+      // 无路可走。这里保持对话框打开并把后端告警一起展示出来。
+      refundRequireForce.value = true
+      refundWarning.value = result.warning || ''
+      return
+    }
     if (result && result.success === false) {
       appStore.showError(result.warning || t('common.error'))
     } else if (result?.warning) {
       appStore.showWarning(`${t('payment.admin.refundNeedsAttention')} ${result.warning}`)
-      showRefundDialog.value = false
+      closeRefundDialog()
     } else {
       appStore.showSuccess(t('payment.admin.refundSuccess'))
-      showRefundDialog.value = false
+      closeRefundDialog()
     }
     loadOrders()
   } catch (err: unknown) { appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error'))) }

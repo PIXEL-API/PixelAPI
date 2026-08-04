@@ -299,7 +299,17 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 
 		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
-		if s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, respBody) {
+		shouldFailover := s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, respBody)
+		// 命中「临时不可调度」规则的错误此前会被直接回给客户端：账号既没被标记，也没换号重试，
+		// 下一发请求还会落到同一个账号。这里在未提交响应、尚未判定 failover 时补一次策略检查，
+		// 命中即转为 failover。CheckErrorPolicy 自身已完成标记，故下面不再重复走错误处理。
+		tempUnscheduled := false
+		if c != nil && account != nil && account.Platform != PlatformGrok && !shouldFailover &&
+			!IsResponseCommitted(c) && s.rateLimitService != nil {
+			tempUnscheduled = s.rateLimitService.CheckErrorPolicy(ctx, account, resp.StatusCode, respBody) == ErrorPolicyTempUnscheduled
+			shouldFailover = tempUnscheduled
+		}
+		if shouldFailover {
 			upstreamDetail := ""
 			if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
 				maxBytes := s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes
@@ -318,7 +328,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 				Message:            upstreamMsg,
 				Detail:             upstreamDetail,
 			})
-			s.handleOpenAIAccountUpstreamErrorForModel(ctx, account, originalModel, resp.StatusCode, resp.Header, respBody)
+			if !tempUnscheduled {
+				s.handleOpenAIAccountUpstreamErrorForModel(ctx, account, originalModel, resp.StatusCode, resp.Header, respBody)
+			}
 			return nil, newOpenAIUpstreamFailoverError(
 				resp.StatusCode,
 				resp.Header,

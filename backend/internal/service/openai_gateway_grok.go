@@ -20,7 +20,7 @@ import (
 
 const (
 	grokUpstreamUserAgent        = "sub2api-grok/1.0"
-	grokCLIVersion               = "0.2.93"
+	grokCLIVersion               = xai.CLIClientVersion
 	grokDefaultResponsesModel    = "grok-4.5"
 	grok45DefaultReasoningEffort = "high"
 )

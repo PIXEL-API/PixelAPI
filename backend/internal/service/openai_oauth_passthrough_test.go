@@ -1235,7 +1235,9 @@ func TestOpenAIGatewayService_OAuthPassthrough_NonCodexUAFallbackToCodexUA(t *te
 	require.Equal(t, "codex_cli_rs", upstream.lastReq.Header.Get("Originator"))
 }
 
-func TestOpenAIGatewayService_OAuthPassthrough_CodexTUIIdentityPreservedAndPaired(t *testing.T) {
+// 透传路径上客户端真实 TUI 身份是降载桶身份的主要来源之一：出站前必须归一化为 CLI
+// 身份，否则上游按 originator 分桶把请求扔进降载桶，回 server_is_overloaded 并冷却账号。
+func TestOpenAIGatewayService_OAuthPassthrough_CodexTUIIdentityNormalizedAndPaired(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	const tuiUA = "codex-tui/0.140.2 (Mac OS X 14.0; arm64) iTerm (codex-tui; 0.140.2)"
 
@@ -1272,8 +1274,8 @@ func TestOpenAIGatewayService_OAuthPassthrough_CodexTUIIdentityPreservedAndPaire
 	_, err := svc.Forward(context.Background(), c, account, inputBody)
 	require.NoError(t, err)
 	require.NotNil(t, upstream.lastReq)
-	require.Equal(t, tuiUA, upstream.lastReq.Header.Get("User-Agent"))
-	require.Equal(t, "codex-tui", upstream.lastReq.Header.Get("Originator"))
+	require.Equal(t, "codex_cli_rs/0.140.2 (Mac OS X 14.0; arm64) iTerm", upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, "codex_cli_rs", upstream.lastReq.Header.Get("Originator"))
 }
 
 func TestOpenAIGatewayService_CodexCLIOnly_RejectsNonCodexClient(t *testing.T) {
