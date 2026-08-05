@@ -966,7 +966,61 @@ export default {
       unsupportedPlatform: "Platform account mode is not supported for this platform.",
       roomAttachedDisabledHint:
         "This account is listed in an Account Plaza room. Leave the room in Account Plaza before switching to owner-only or public pool.",
-      convertFailed: "Failed to change the account mode. Try again."
+      publicPoolUnschedulableHint:
+        "Scheduling is paused for this account, so moving it to the public pool would be rejected. Turn the Scheduling switch back on in the account list, then change the mode.",
+      convertFailed: "Failed to change the account mode. Try again.",
+      // Reason codes ConvertOwnedExternalPlacement can reject with. Without this table the
+      // raw backend English (e.g. "public account validation failed") reaches the toast and
+      // tells the user nothing about what to fix.
+      errors: {
+        OWNED_ACCOUNT_PUBLIC_VALIDATION_FAILED:
+          "This account is currently unschedulable (scheduling paused, inactive, auto-paused past expiry, rate limited, overloaded, temporarily unschedulable, or under quota protection), so it cannot join the public pool. Restore it to a schedulable state (turn scheduling back on, renew, or clear the rate limit) first.",
+        OWNED_ACCOUNT_PUBLIC_POOL_UNAVAILABLE:
+          "No public pool group is configured for this account's platform. Contact an administrator.",
+        OWNED_ACCOUNT_PUBLIC_POLICY_UNAVAILABLE:
+          "No share policy is configured for this public pool. Contact an administrator.",
+        ACCOUNT_SHARE_ROOM_ACCOUNT_ATTACHED:
+          "This account is still listed in an Account Plaza room. Leave the room there before changing the account mode.",
+        ACCOUNT_EXTERNAL_PLACEMENT_BUSY:
+          "This account still has in-flight requests draining. Try again in a few seconds.",
+        ACCOUNT_EXTERNAL_PLACEMENT_CONFLICT:
+          "This account's mode changed while you were editing. Refresh the page and try again.",
+        ACCOUNT_EXTERNAL_PLACEMENT_INVALID:
+          "The account mode change request was invalid. Refresh the page and try again.",
+        ACCOUNT_SHARE_ROOM_UNKNOWN_LEVEL:
+          "This account's level has not been detected yet, so platform account mode is unavailable. Test the account or wait for the level to refresh.",
+        ACCOUNT_SHARE_MODE_GROUP_UNAVAILABLE:
+          "No account mode group is configured for this platform. Contact an administrator.",
+        OWNED_ACCOUNT_TYPE_NOT_ALLOWED:
+          "Only accounts signed in with official OAuth can be moved to the public pool. Add the account with official OAuth instead.",
+        OWNED_AGENT_IDENTITY_CREDENTIALS_INVALID:
+          "This account's Codex Agent Identity credentials are incomplete or invalid. Fix them in the account details first.",
+        OWNED_ACCOUNT_CREDENTIALS_INVALID:
+          "This account is missing an access token in its credentials. Add it in the account details first.",
+        OWNED_ACCOUNT_CREDENTIALS_NOT_ALLOWED:
+          "Accounts moved to the public pool cannot contain API keys, custom URLs, upstream endpoints, cookies, or manual session credentials. Remove those fields first.",
+        OWNED_ACCOUNT_GROUP_PLATFORM_MISMATCH:
+          "The account's group platform does not match the account platform. Contact an administrator to fix the group configuration.",
+        OWNED_ACCOUNT_GROUP_VALIDATION_UNAVAILABLE:
+          "Group validation is temporarily unavailable. Try again in a moment.",
+        OWNED_ACCOUNT_SHARE_MODE_BOUNDARY_UNAVAILABLE:
+          "The account mode boundary check is temporarily unavailable. Try again in a moment.",
+        ACCOUNT_EXTERNAL_PLACEMENT_IDEMPOTENCY_CONFLICT:
+          "This account's mode was just changed. Refresh the page and try again.",
+        ACCOUNT_SHARE_ROOM_OWNER_MISMATCH:
+          "The account and room do not belong to the same user. Refresh the page and try again.",
+        // Private-group codes reachable via getPrivateGroupForOwnedAccount /
+        // accountOwnerPrivateGroupIDInTx: switching any mode is rejected when the
+        // owner's private group is missing or unhealthy.
+        ACCOUNT_SHARE_PRIVATE_GROUP_UNAVAILABLE:
+          "This account's private group is not configured or resolves to multiple groups, so the mode cannot be changed. Contact an administrator.",
+        USER_PRIVATE_GROUP_PLATFORM_UNSUPPORTED:
+          "This account's platform does not support private groups, so the mode cannot be changed. Contact an administrator.",
+        SUBSCRIPTION_EXPIRED:
+          "This account's private-group subscription has expired, so the mode cannot be changed. Renew it first.",
+        GROUP_NOT_ALLOWED:
+          "This account's private group is unavailable (inactive, not a subscription, or not owned by you), so the mode cannot be changed. Contact an administrator."
+      }
     },
     pendingReview: "Validation Pending",
     approved: "Approved",

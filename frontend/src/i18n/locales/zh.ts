@@ -931,7 +931,59 @@ export default {
       unsupportedPlatform: "当前账号平台暂不支持平台账号模式。",
       roomAttachedDisabledHint:
         "该账号已加入账号广场房间，需先在“账号广场”退出房间后才能切换为仅本人或公共号池。",
-      convertFailed: "账号模式切换失败，请重试。"
+      publicPoolUnschedulableHint:
+        "该账号当前已暂停调度，投放到公共号池会被拒绝。请先在账号列表把“调度”开关打开，再切换模式。",
+      convertFailed: "账号模式切换失败，请重试。",
+      // 后端 ConvertOwnedExternalPlacement 会拒绝的原因码。缺了这张表，用户看到的就是
+      // 后端英文原文（例如 "public account validation failed"），完全不知道该改什么。
+      errors: {
+        OWNED_ACCOUNT_PUBLIC_VALIDATION_FAILED:
+          "该账号当前不可调度（已暂停调度、停用、自动暂停已到期、限流、过载、临时不可调度或额度保护中），无法投放到公共号池。请先让账号恢复为可调度状态（如打开调度、续期或解除限流）再切换。",
+        OWNED_ACCOUNT_PUBLIC_POOL_UNAVAILABLE:
+          "该账号所属平台还没有配置公共号池分组，请联系管理员。",
+        OWNED_ACCOUNT_PUBLIC_POLICY_UNAVAILABLE:
+          "该公共号池还没有配置分成策略，请联系管理员。",
+        ACCOUNT_SHARE_ROOM_ACCOUNT_ATTACHED:
+          "该账号仍挂在账号广场房间里，请先在“账号广场”退出房间，再切换账号模式。",
+        ACCOUNT_EXTERNAL_PLACEMENT_BUSY:
+          "该账号还有在途请求没有排空，请等几秒后重试。",
+        ACCOUNT_EXTERNAL_PLACEMENT_CONFLICT:
+          "该账号的模式在你操作期间被改动过，请刷新页面后重试。",
+        ACCOUNT_EXTERNAL_PLACEMENT_INVALID:
+          "账号模式切换请求无效，请刷新页面后重试。",
+        ACCOUNT_SHARE_ROOM_UNKNOWN_LEVEL:
+          "该账号的等级还没有识别出来，无法启用平台账号模式。请先测试账号或等等级刷新后重试。",
+        ACCOUNT_SHARE_MODE_GROUP_UNAVAILABLE:
+          "该平台还没有配置账号模式分组，请联系管理员。",
+        OWNED_ACCOUNT_TYPE_NOT_ALLOWED:
+          "只有官方 OAuth 登录的账号才能投放到公共号池，请改用官方 OAuth 方式添加账号。",
+        OWNED_AGENT_IDENTITY_CREDENTIALS_INVALID:
+          "该账号的 Codex Agent Identity 凭证不完整或无效，请先在账号资料中修正凭证信息。",
+        OWNED_ACCOUNT_CREDENTIALS_INVALID:
+          "该账号凭证不完整，缺少访问令牌，请先在账号资料中补充凭证信息。",
+        OWNED_ACCOUNT_CREDENTIALS_NOT_ALLOWED:
+          "投放到公共号池的账号不允许包含 API 密钥、自定义地址、上游端点、Cookie 或手动会话凭证，请先清理这些字段。",
+        OWNED_ACCOUNT_GROUP_PLATFORM_MISMATCH:
+          "账号所属分组与账号平台不匹配，请联系管理员检查分组配置。",
+        OWNED_ACCOUNT_GROUP_VALIDATION_UNAVAILABLE:
+          "分组校验服务暂时不可用，请稍后重试。",
+        OWNED_ACCOUNT_SHARE_MODE_BOUNDARY_UNAVAILABLE:
+          "账号模式边界检查暂时不可用，请稍后重试。",
+        ACCOUNT_EXTERNAL_PLACEMENT_IDEMPOTENCY_CONFLICT:
+          "该账号模式刚被切换过，请刷新页面后重试。",
+        ACCOUNT_SHARE_ROOM_OWNER_MISMATCH:
+          "账号与房间不属于同一用户，无法完成切换，请刷新页面后重试。",
+        // 切换前/后私人群缺失或订阅异常（getPrivateGroupForOwnedAccount /
+        // accountOwnerPrivateGroupIDInTx 可达），私有分组不存在时切换任意模式都会被拒。
+        ACCOUNT_SHARE_PRIVATE_GROUP_UNAVAILABLE:
+          "该账号所属的私有分组未配置或存在多个，无法切换模式，请联系管理员。",
+        USER_PRIVATE_GROUP_PLATFORM_UNSUPPORTED:
+          "该账号所属平台暂不支持私有分组，无法切换模式，请联系管理员。",
+        SUBSCRIPTION_EXPIRED:
+          "该账号的私有分组订阅已过期，无法切换模式，请先续期。",
+        GROUP_NOT_ALLOWED:
+          "该账号所属私有分组不可用（已停用、非订阅或非本人），无法切换模式，请联系管理员。"
+      }
     },
     pendingReview: "待校验",
     approved: "已通过",

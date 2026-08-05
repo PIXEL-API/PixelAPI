@@ -2485,7 +2485,7 @@ import {
   normalizePersonalAccountLoadFactor
 } from '@/components/account/personalAccountTemplate'
 import { formatDateTime, formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
-import { extractApiErrorMessage } from '@/utils/apiError'
+import { extractApiErrorMessage, extractI18nErrorMessage } from '@/utils/apiError'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
 import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
 import { openAIAccountLevelLabel, openAIAccountLevelOptions, selectableOpenAIAccountLevels } from '@/utils/openaiAccountLevels'
@@ -2591,10 +2591,39 @@ const placementRoomAttached = computed(() => {
   return Number(account.account_share_mode_listing_id || 0) > 0
 })
 
+// 后端投放公共号池前要求账号可调度：ConvertOwnedExternalPlacement 的 public_pool 分支
+// 走 isOwnedAccountPublicShareApprovable → Account.IsSchedulable，第一条就是
+// `!a.IsActive() || !a.Schedulable`。调度开关关着必然被 OWNED_ACCOUNT_PUBLIC_VALIDATION_FAILED
+// 拒掉，而基础字段那时已经保存，用户只会看到「已保存但切换失败」。
+//
+// 只镜像 schedulable 这一个判据，是刻意的：
+// - 它不在本弹窗里编辑，保存前后不会变，提前禁用不会误伤；
+// - status 也会让后端拒绝，但它在用户弹窗里改不了：状态下拉被 v-if="!isUserScope" 隐藏，
+//   且 sanitizeUpdatePayload 对用户作用域直接 delete next.status、后端 user 更新也不接受
+//   status。照 props.account.status 拦只会把「账号列表里已停用的账号」在弹窗里锁死，无益。
+//   管理端能改 status，但本判据仅在 isUserScope 生效，管理端不受影响；
+// - 限流/过载/临时不可调度/额度保护是带时间窗的瞬时状态，把 isSchedulableAt 抄一份到
+//   前端只会随后端漂移。这两类交给后端拒绝 + externalPlacement.errors 里的中文文案。
+//
+// 注意 room 目标不需要这个判据：后端 room 分支只校验账号等级与模式分组，不看 schedulable。
+const placementPublicPoolUnschedulable = computed(() => {
+  const account = props.account
+  if (!isUserScope.value || !account) return false
+  return account.schedulable === false
+})
+
 const placementTargetDisabledReasons = computed<Partial<Record<AccountExternalPlacementTarget, string>>>(() => {
-  if (!placementRoomAttached.value) return {}
-  const reason = t('userAccounts.externalPlacement.roomAttachedDisabledHint')
-  return { private: reason, public_pool: reason }
+  const reasons: Partial<Record<AccountExternalPlacementTarget, string>> = {}
+  if (placementRoomAttached.value) {
+    const reason = t('userAccounts.externalPlacement.roomAttachedDisabledHint')
+    reasons.private = reason
+    reasons.public_pool = reason
+  }
+  // 已挂房间的理由更根本（不退房什么都切不了），保留它不被覆盖。
+  if (!reasons.public_pool && placementPublicPoolUnschedulable.value) {
+    reasons.public_pool = t('userAccounts.externalPlacement.publicPoolUnschedulableHint')
+  }
+  return reasons
 })
 
 // Platform-specific hint for Base URL
@@ -4027,8 +4056,13 @@ const submitUpdateAccount = async (accountID: number, updatePayload: Record<stri
             : null
         }))
       } catch (error) {
-        const detail = extractApiErrorMessage(
+        // 走 extractI18nErrorMessage 而不是 extractApiErrorMessage：后端这条链上的
+        // 拒绝理由（OWNED_ACCOUNT_PUBLIC_VALIDATION_FAILED 等）只有英文 message，
+        // 直接透出等于让用户猜。有中文映射就用中文，没有再退回后端原文。
+        const detail = extractI18nErrorMessage(
           error,
+          t,
+          'userAccounts.externalPlacement.errors',
           t('userAccounts.externalPlacement.convertFailed')
         )
         placementSaveError.value = t(

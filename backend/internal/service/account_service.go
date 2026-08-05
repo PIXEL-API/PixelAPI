@@ -3167,8 +3167,20 @@ func (s *AccountService) ConvertOwnedExternalPlacement(ctx context.Context, owne
 					slog.Error("account.external_placement_restore_failed", "account_id", accountID, "error", restoreErr)
 				}
 			}()
-			if err := s.ensureOwnedAccountExternalPlacementIdle(ctx, account); err != nil {
-				return nil, err
+			// 切回「仅本人」跳过在途排空检查：离开公共号池/房间是收敛性操作，
+			// repo 层在同一事务内原子改写 placement 与分组，现有在途请求会自然结束，
+			// 等待「归零」既不必要、也会被公共调度流量永远拖住（热门账号的
+			// CurrentConcurrency 几乎恒 > 0，导致永远切不回去）。
+			//
+			// 非 private 目标（上线公共号池、转入房间）保留排空检查，但注意它只在
+			// drained=true 时执行——即账号本就持有 placement 行（public_pool/room 之间
+			// 互转、或退房后残留 room 行的再上线）。纯私有账号从未投放、无 placement
+			// 行时，BeginExternalPlacementDrain 会因无行短路返回 drained=false，本检查
+			// 不执行——这是本提交之前就有的行为，这里刻意不做改变。
+			if target != AccountExternalPlacementPrivate {
+				if err := s.ensureOwnedAccountExternalPlacementIdle(ctx, account); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}

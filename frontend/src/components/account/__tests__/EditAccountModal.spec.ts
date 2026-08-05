@@ -804,6 +804,81 @@ describe('EditAccountModal', () => {
     expect(wrapper.find('[data-testid="rate-multiplier"]').exists()).toBe(true)
   })
 
+  function buildUnschedulableAccount() {
+    const account = buildAccount()
+    account.type = 'oauth'
+    account.credentials = { access_token: 'oauth-token' }
+    account.share_mode = 'private'
+    // 列表里显示成「暂停」的那一档：状态正常但调度开关关着。
+    // 后端 isOwnedAccountPublicShareApprovable → IsSchedulable 第一条就是 !a.Schedulable。
+    account.status = 'active'
+    account.schedulable = false
+    return account
+  }
+
+  it('账号暂停调度时禁用公共号池并说明原因，仅本人/平台账号模式不受影响', async () => {
+    const account = buildUnschedulableAccount()
+
+    const wrapper = mountModal(account, { accountScope: 'user', ownerUserId: 9 })
+
+    expect(
+      wrapper.get('[data-testid="placement-target-public_pool"]').attributes('disabled')
+    ).toBeDefined()
+    expect(wrapper.get('[data-testid="placement-disabled-reason-public_pool"]').text()).toBe(
+      'userAccounts.externalPlacement.publicPoolUnschedulableHint'
+    )
+    // 后端 room 分支只校验账号等级与模式分组，不看 schedulable；private 更不需要
+    expect(
+      wrapper.get('[data-testid="placement-target-private"]').attributes('disabled')
+    ).toBeUndefined()
+    expect(
+      wrapper.get('[data-testid="placement-target-room"]').attributes('disabled')
+    ).toBeUndefined()
+  })
+
+  it('暂停调度的账号保存其它字段不会触发注定失败的公共号池转换', async () => {
+    const account = buildUnschedulableAccount()
+    updateUserAccountMock.mockReset()
+    updateUserAccountMock.mockResolvedValue(account)
+    convertPlacementMock.mockReset()
+
+    const wrapper = mountModal(account, { accountScope: 'user', ownerUserId: 9 })
+
+    await wrapper.get('[data-testid="placement-target-public_pool"]').setValue()
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(updateUserAccountMock).toHaveBeenCalledTimes(1)
+    // 修复前这里会调用转换并被后端以 OWNED_ACCOUNT_PUBLIC_VALIDATION_FAILED 拒绝，
+    // 用户看到的是「账号其他设置已保存，但模式切换失败：public account validation failed」
+    expect(convertPlacementMock).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="edit-placement-save-error"]').exists()).toBe(false)
+  })
+
+  it('房间占用与暂停调度同时成立时，公共号池按更根本的房间原因提示', async () => {
+    const account = buildRoomAttachedAccount()
+    account.schedulable = false
+
+    const wrapper = mountModal(account, { accountScope: 'user', ownerUserId: 9 })
+
+    // 不退房什么模式都切不了，先说房间的事，别让用户先去开调度开关白折腾一轮
+    expect(wrapper.get('[data-testid="placement-disabled-reason-public_pool"]').text()).toBe(
+      'userAccounts.externalPlacement.roomAttachedDisabledHint'
+    )
+  })
+
+  it('调度正常的账号不会被误拦在公共号池外', async () => {
+    const account = buildUnschedulableAccount()
+    account.schedulable = true
+
+    const wrapper = mountModal(account, { accountScope: 'user', ownerUserId: 9 })
+
+    expect(
+      wrapper.get('[data-testid="placement-target-public_pool"]').attributes('disabled')
+    ).toBeUndefined()
+    expect(wrapper.find('[data-testid="placement-disabled-reason-public_pool"]').exists()).toBe(false)
+  })
+
   it('未挂房间的账号仍可自由切换模式', async () => {
     const account = buildAccount()
     account.type = 'oauth'
