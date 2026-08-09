@@ -1117,3 +1117,64 @@ func TestOpenAIResponsesDispatchContextDetachesRoutingCancellation(t *testing.T)
 	cancelRequest()
 	require.ErrorIs(t, dispatchCtx.Err(), context.Canceled)
 }
+
+func TestBuildOpenAIImagesOpsRequestBodyExcludesImagePayloads(t *testing.T) {
+	compression := 80
+	partialImages := 2
+	requestBody, err := buildOpenAIImagesOpsRequestBody(&service.OpenAIImagesRequest{
+		Endpoint:          "/v1/images/edits",
+		Model:             "gpt-image-1",
+		Prompt:            "replace the background",
+		Stream:            true,
+		N:                 2,
+		Size:              "1024x1024",
+		ResponseFormat:    "b64_json",
+		Quality:           "high",
+		Background:        "opaque",
+		OutputFormat:      "png",
+		Moderation:        "auto",
+		InputFidelity:     "high",
+		Style:             "natural",
+		OutputCompression: &compression,
+		PartialImages:     &partialImages,
+		HasMask:           true,
+		Multipart:         true,
+		InputImageURLs:    []string{"data:image/png;base64,secret-image-url"},
+		MaskImageURL:      "data:image/png;base64,secret-mask-url",
+		Uploads: []service.OpenAIImagesUpload{{
+			FieldName: "image",
+			FileName:  "private.png",
+			Data:      []byte("raw-private-image-bytes"),
+		}},
+	})
+	require.NoError(t, err)
+	require.True(t, json.Valid(requestBody))
+	require.Equal(t, "replace the background", gjson.GetBytes(requestBody, "prompt").String())
+	require.Equal(t, "gpt-image-1", gjson.GetBytes(requestBody, "model").String())
+	require.Equal(t, "/v1/images/edits", gjson.GetBytes(requestBody, "endpoint").String())
+	require.True(t, gjson.GetBytes(requestBody, "multipart").Bool())
+	require.NotContains(t, string(requestBody), "secret-image-url")
+	require.NotContains(t, string(requestBody), "secret-mask-url")
+	require.NotContains(t, string(requestBody), "raw-private-image-bytes")
+	require.NotContains(t, string(requestBody), "private.png")
+}
+
+func TestSetOpenAIWSOpsTurnRequestContextReplacesFirstTurnPayload(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+
+	setOpenAIWSOpsTurnRequestContext(c, "gpt-5", []byte(`{"type":"response.create","input":"first turn"}`))
+	setOpenAIWSOpsTurnRequestContext(c, "gpt-5", []byte(`{"type":"response.create","input":"second cyber turn"}`))
+
+	entry := &service.OpsInsertErrorLogInput{}
+	attachOpsRequestBodyToEntry(c, entry)
+	require.NotNil(t, entry.RequestBodyJSON)
+	require.Contains(t, *entry.RequestBodyJSON, "second cyber turn")
+	require.NotContains(t, *entry.RequestBodyJSON, "first turn")
+	model, _ := c.Get(opsModelKey)
+	stream, _ := c.Get(opsStreamKey)
+	require.Equal(t, "gpt-5", model)
+	require.Equal(t, true, stream)
+}

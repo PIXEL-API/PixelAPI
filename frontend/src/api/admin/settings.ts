@@ -581,7 +581,7 @@ export interface SystemSettings {
   // Risk control feature switch
   risk_control_enabled: boolean;
   cyber_session_block_enabled: boolean;
-  cyber_session_block_ttl_seconds: number;
+  openai_cyber_policy_enforced_group_ids: number[];
   account_share_comment_review_enabled: boolean;
   account_share_comment_review_url: string;
   account_share_comment_review_api_key_configured: boolean;
@@ -824,7 +824,7 @@ export interface UpdateSettingsRequest {
   // Risk control feature switch
   risk_control_enabled?: boolean;
   cyber_session_block_enabled?: boolean;
-  cyber_session_block_ttl_seconds?: number;
+  openai_cyber_policy_enforced_group_ids?: number[];
   account_share_comment_review_enabled?: boolean;
   account_share_comment_review_url?: string;
   account_share_comment_review_api_key?: string;

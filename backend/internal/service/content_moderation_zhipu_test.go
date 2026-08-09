@@ -111,14 +111,63 @@ func TestContentModerationZhipuRejectsImageInputExplicitly(t *testing.T) {
 	}
 }
 
-func TestContentModerationOpenAIThresholdCompatibility(t *testing.T) {
-	result := normalizeOpenAIModerationResult(&moderationAPIResult{
-		CategoryScores: map[string]float64{
-			"hate": 0.7,
+func TestContentModerationOpenAIFinalFlaggedDecision(t *testing.T) {
+	tests := []struct {
+		name            string
+		officialFlagged bool
+		score           float64
+		threshold       float64
+		expectedFlagged bool
+	}{
+		{
+			name:            "official and threshold both clear",
+			officialFlagged: false,
+			score:           0.4,
+			threshold:       0.8,
+			expectedFlagged: false,
 		},
-	}, map[string]float64{"hate": 0.65})
-	if result == nil || !result.Flagged || result.HighestCategory != "hate" || result.HighestScore != 0.7 {
-		t.Fatalf("unexpected normalized OpenAI result: %#v", result)
+		{
+			name:            "official flag is authoritative when local threshold is clear",
+			officialFlagged: true,
+			score:           0.4,
+			threshold:       0.8,
+			expectedFlagged: true,
+		},
+		{
+			name:            "local threshold can flag when official result is clear",
+			officialFlagged: false,
+			score:           0.9,
+			threshold:       0.8,
+			expectedFlagged: true,
+		},
+		{
+			name:            "official and threshold both flag",
+			officialFlagged: true,
+			score:           0.9,
+			threshold:       0.8,
+			expectedFlagged: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := normalizeOpenAIModerationResult(&moderationAPIResult{
+				Flagged: tt.officialFlagged,
+				CategoryScores: map[string]float64{
+					"violence": tt.score,
+				},
+			}, map[string]float64{"violence": tt.threshold})
+
+			if result == nil {
+				t.Fatal("expected normalized OpenAI moderation result")
+			}
+			if result.Flagged != tt.expectedFlagged {
+				t.Fatalf("unexpected final flagged decision: got %t, want %t", result.Flagged, tt.expectedFlagged)
+			}
+			if result.HighestCategory != "violence" || result.HighestScore != tt.score {
+				t.Fatalf("unexpected highest-risk details: category=%q score=%v", result.HighestCategory, result.HighestScore)
+			}
+		})
 	}
 }
 

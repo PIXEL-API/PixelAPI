@@ -8278,6 +8278,18 @@ export default {
         backup: "Backup",
         payment: "Payment",
       },
+      groupLoading: {
+        subscriptionErrorTitle: "Subscription groups failed to load",
+        subscriptionErrorHint:
+          "Available subscription groups could not be refreshed. Other group lists and saved subscription group IDs were not changed.",
+        openAIErrorTitle: "OpenAI Cyber groups failed to load",
+        openAIErrorHint:
+          "Available Cyber groups could not be refreshed. Subscription groups and saved Cyber group IDs were not changed.",
+        requestFailedDetail:
+          "The request failed. Check network connectivity or access permissions, then retry.",
+        retrySubscriptions: "Reload subscription groups",
+        retryOpenAI: "Reload OpenAI groups",
+      },
       features: {
         channelMonitor: {
           title: "Channel Monitor",
@@ -8350,12 +8362,16 @@ export default {
           enabled: "Enable Content Risk Control",
           enabledHint:
             "When off, moderation rules no longer participate in request handling; saved rules are preserved.",
-          cyberSessionBlockEnabled: "Enable cyber session block",
+          cyberSessionBlockEnabled: "Enable OpenAI Cyber group isolation",
           cyberSessionBlockEnabledHint:
-            "After upstream returns cyber_policy, later requests in the same explicit session are blocked before account selection. Disabled by default.",
-          cyberSessionBlockTTL: "Session block TTL (seconds)",
-          cyberSessionBlockTTLHint:
-            "3600 seconds is recommended. Applies only to session_id, conversation_id, or prompt_cache_key.",
+            "Handle upstream cyber_policy only for the selected OpenAI groups; unselected groups keep their existing error flow.",
+          cyberPolicyGroups: "OpenAI groups subject to Cyber handling",
+          cyberPolicyGroupsHint:
+            "Isolation is scoped to the API key and the actual routed group. Other groups on the same API key are unaffected.",
+          cyberPolicyScheduleHint:
+            "Within each calendar day, the first hit isolates for 5 minutes, the second for 15 minutes, and the third until 24:00. Counts reset at 00:00. Without an explicit session signal, the first two hits degrade to a short API-key-and-group isolation.",
+          cyberPolicyNoGroupsHint:
+            "No groups are selected. Even with the master switch enabled, no group receives Cyber-specific counting or isolation.",
         },
         affiliate: {
           title: "Invite Income",

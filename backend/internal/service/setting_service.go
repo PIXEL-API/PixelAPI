@@ -35,6 +35,10 @@ var (
 		"DEFAULT_SUBSCRIPTION_GROUP_DUPLICATE",
 		"default subscription group cannot be duplicated",
 	)
+	ErrOpenAICyberPolicyGroupInvalid = infraerrors.BadRequest(
+		"OPENAI_CYBER_POLICY_GROUP_INVALID",
+		"cyber policy enforcement groups must exist and use the openai platform",
+	)
 )
 
 type SettingRepository interface {
@@ -103,18 +107,18 @@ const gatewayForwardingCacheTTL = 60 * time.Second
 const gatewayForwardingErrorTTL = 5 * time.Second
 const gatewayForwardingDBTimeout = 5 * time.Second
 
-type cachedCyberSessionBlockRuntime struct {
-	enabled   bool
-	ttl       time.Duration
-	expiresAt int64 // unix nano
+type cachedOpenAICyberPolicyRuntime struct {
+	enabled          bool
+	enforcedGroupIDs map[int64]struct{}
+	expiresAt        int64 // unix nano
 }
 
-var cyberSessionBlockRuntimeCache atomic.Value // *cachedCyberSessionBlockRuntime
-var cyberSessionBlockRuntimeSF singleflight.Group
+var openAICyberPolicyRuntimeCache atomic.Value // *cachedOpenAICyberPolicyRuntime
+var openAICyberPolicyRuntimeSF singleflight.Group
 
-const cyberSessionBlockRuntimeCacheTTL = 60 * time.Second
-const cyberSessionBlockRuntimeErrorTTL = 5 * time.Second
-const cyberSessionBlockRuntimeDBTimeout = 5 * time.Second
+const openAICyberPolicyRuntimeCacheTTL = 60 * time.Second
+const openAICyberPolicyRuntimeErrorTTL = 5 * time.Second
+const openAICyberPolicyRuntimeDBTimeout = 5 * time.Second
 
 // DefaultSubscriptionGroupReader validates group references used by default subscriptions.
 type DefaultSubscriptionGroupReader interface {
@@ -563,6 +567,11 @@ func (s *SettingService) GetAllSettings(ctx context.Context) (*SystemSettings, e
 		return nil, fmt.Errorf("parse withdrawal rate limit settings: %w", err)
 	}
 	result := s.parseSettings(settings)
+	groupIDs, err := parseOpenAICyberPolicyEnforcedGroupIDs(settings[SettingKeyOpenAICyberPolicyEnforcedGroupIDs])
+	if err != nil {
+		return nil, fmt.Errorf("parse openai cyber policy enforced group ids: %w", err)
+	}
+	result.OpenAICyberPolicyEnforcedGroupIDs = groupIDs
 	result.WithdrawalRateLimitWindowDays = withdrawalRateLimit.WindowDays
 	result.WithdrawalRateLimitMax = withdrawalRateLimit.MaxRequests
 	result.WithdrawalRateLimitExemptAmount = withdrawalRateLimit.ExemptAmount
@@ -621,56 +630,105 @@ func (s *SettingService) GetFrontendURL(ctx context.Context) string {
 	return s.cfg.Server.FrontendURL
 }
 
-// GetCyberSessionBlockRuntime returns the cyber session block switch and TTL.
-// Defaults are deliberately conservative: disabled, 1 hour TTL.
-func (s *SettingService) GetCyberSessionBlockRuntime(ctx context.Context) (bool, time.Duration) {
-	if cached, ok := cyberSessionBlockRuntimeCache.Load().(*cachedCyberSessionBlockRuntime); ok && cached != nil {
+// IsOpenAICyberPolicyEnforcedGroup reports whether upstream cyber_policy handling
+// is enabled for the effective OpenAI group. A nil or non-positive group never
+// matches; an empty configured group list deliberately means no enforcement.
+func (s *SettingService) IsOpenAICyberPolicyEnforcedGroup(ctx context.Context, groupID *int64) bool {
+	if groupID == nil || *groupID <= 0 {
+		return false
+	}
+	entry := s.getOpenAICyberPolicyRuntime(ctx)
+	if !entry.enabled {
+		return false
+	}
+	_, ok := entry.enforcedGroupIDs[*groupID]
+	return ok
+}
+
+func (s *SettingService) getOpenAICyberPolicyRuntime(ctx context.Context) *cachedOpenAICyberPolicyRuntime {
+	if cached, ok := openAICyberPolicyRuntimeCache.Load().(*cachedOpenAICyberPolicyRuntime); ok && cached != nil {
 		if time.Now().UnixNano() < cached.expiresAt {
-			return cached.enabled, cached.ttl
+			return cached
 		}
 	}
 
-	result, _, _ := cyberSessionBlockRuntimeSF.Do("cyber_session_block_runtime", func() (any, error) {
-		if cached, ok := cyberSessionBlockRuntimeCache.Load().(*cachedCyberSessionBlockRuntime); ok && cached != nil {
+	result, _, _ := openAICyberPolicyRuntimeSF.Do("openai_cyber_policy_runtime", func() (any, error) {
+		if cached, ok := openAICyberPolicyRuntimeCache.Load().(*cachedOpenAICyberPolicyRuntime); ok && cached != nil {
 			if time.Now().UnixNano() < cached.expiresAt {
 				return cached, nil
 			}
 		}
 
-		dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cyberSessionBlockRuntimeDBTimeout)
+		dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), openAICyberPolicyRuntimeDBTimeout)
 		defer cancel()
 
 		values, err := s.settingRepo.GetMultiple(dbCtx, []string{
 			SettingKeyCyberSessionBlockEnabled,
-			SettingKeyCyberSessionBlockTTLSeconds,
+			SettingKeyOpenAICyberPolicyEnforcedGroupIDs,
 		})
 		if err != nil {
-			slog.Warn("failed to get cyber session block runtime settings", "error", err)
-			entry := &cachedCyberSessionBlockRuntime{
-				enabled:   false,
-				ttl:       time.Hour,
-				expiresAt: time.Now().Add(cyberSessionBlockRuntimeErrorTTL).UnixNano(),
+			slog.Warn("failed to get OpenAI cyber policy runtime settings", "error", err)
+			entry := &cachedOpenAICyberPolicyRuntime{
+				enabled:          false,
+				enforcedGroupIDs: map[int64]struct{}{},
+				expiresAt:        time.Now().Add(openAICyberPolicyRuntimeErrorTTL).UnixNano(),
 			}
-			cyberSessionBlockRuntimeCache.Store(entry)
+			openAICyberPolicyRuntimeCache.Store(entry)
 			return entry, nil
 		}
 
-		ttl := time.Hour
-		if n, perr := strconv.Atoi(strings.TrimSpace(values[SettingKeyCyberSessionBlockTTLSeconds])); perr == nil && n > 0 {
-			ttl = time.Duration(n) * time.Second
+		groupIDs, groupIDsErr := parseOpenAICyberPolicyEnforcedGroupIDs(values[SettingKeyOpenAICyberPolicyEnforcedGroupIDs])
+		if groupIDsErr != nil {
+			slog.Warn("failed to parse openai cyber policy enforced group ids", "error", groupIDsErr)
+			entry := &cachedOpenAICyberPolicyRuntime{
+				enabled:          false,
+				enforcedGroupIDs: map[int64]struct{}{},
+				expiresAt:        time.Now().Add(openAICyberPolicyRuntimeErrorTTL).UnixNano(),
+			}
+			openAICyberPolicyRuntimeCache.Store(entry)
+			return entry, nil
 		}
-		entry := &cachedCyberSessionBlockRuntime{
-			enabled:   strings.TrimSpace(values[SettingKeyCyberSessionBlockEnabled]) == "true",
-			ttl:       ttl,
-			expiresAt: time.Now().Add(cyberSessionBlockRuntimeCacheTTL).UnixNano(),
+		entry := &cachedOpenAICyberPolicyRuntime{
+			enabled:          strings.TrimSpace(values[SettingKeyCyberSessionBlockEnabled]) == "true",
+			enforcedGroupIDs: int64IDSet(groupIDs),
+			expiresAt:        time.Now().Add(openAICyberPolicyRuntimeCacheTTL).UnixNano(),
 		}
-		cyberSessionBlockRuntimeCache.Store(entry)
+		openAICyberPolicyRuntimeCache.Store(entry)
 		return entry, nil
 	})
-	if entry, ok := result.(*cachedCyberSessionBlockRuntime); ok && entry != nil {
-		return entry.enabled, entry.ttl
+	if entry, ok := result.(*cachedOpenAICyberPolicyRuntime); ok && entry != nil {
+		return entry
 	}
-	return false, time.Hour
+	return &cachedOpenAICyberPolicyRuntime{
+		enabled:          false,
+		enforcedGroupIDs: map[int64]struct{}{},
+	}
+}
+
+func parseOpenAICyberPolicyEnforcedGroupIDs(raw string) ([]int64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return []int64{}, nil
+	}
+
+	var groupIDs []int64
+	if err := json.Unmarshal([]byte(raw), &groupIDs); err != nil {
+		return nil, fmt.Errorf("invalid JSON array: %w", err)
+	}
+	for _, groupID := range groupIDs {
+		if groupID <= 0 {
+			return nil, fmt.Errorf("group id must be greater than 0: %d", groupID)
+		}
+	}
+	return normalizeInt64IDs(groupIDs), nil
+}
+
+func int64IDSet(ids []int64) map[int64]struct{} {
+	result := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		result[id] = struct{}{}
+	}
+	return result
 }
 
 // GetPublicSettings 获取公开设置（无需登录）
@@ -1611,6 +1669,11 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	if err := s.validateAccountShareCommentReviewSettings(ctx, settings); err != nil {
 		return nil, err
 	}
+	cyberPolicyGroupIDs, err := s.validateOpenAICyberPolicyEnforcedGroupIDs(ctx, settings.OpenAICyberPolicyEnforcedGroupIDs)
+	if err != nil {
+		return nil, err
+	}
+	settings.OpenAICyberPolicyEnforcedGroupIDs = cyberPolicyGroupIDs
 	if err := s.validateDefaultSubscriptionGroups(ctx, settings.DefaultSubscriptions); err != nil {
 		return nil, err
 	}
@@ -1977,10 +2040,11 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyOpenAIFreeAccountRepairWeeklyThresholdUSD] = strconv.FormatFloat(settings.OpenAIFreeAccountRepairWeeklyThresholdUSD, 'f', 8, 64)
 	updates[SettingKeyRiskControlEnabled] = strconv.FormatBool(settings.RiskControlEnabled)
 	updates[SettingKeyCyberSessionBlockEnabled] = strconv.FormatBool(settings.CyberSessionBlockEnabled)
-	if settings.CyberSessionBlockTTLSeconds <= 0 {
-		settings.CyberSessionBlockTTLSeconds = 3600
+	cyberPolicyGroupIDsJSON, err := json.Marshal(settings.OpenAICyberPolicyEnforcedGroupIDs)
+	if err != nil {
+		return nil, fmt.Errorf("marshal openai cyber policy enforced group ids: %w", err)
 	}
-	updates[SettingKeyCyberSessionBlockTTLSeconds] = strconv.Itoa(settings.CyberSessionBlockTTLSeconds)
+	updates[SettingKeyOpenAICyberPolicyEnforcedGroupIDs] = string(cyberPolicyGroupIDsJSON)
 	updates[SettingKeyAccountShareCommentReviewEnabled] = strconv.FormatBool(settings.AccountShareCommentReviewEnabled)
 	updates[SettingKeyAccountShareCommentReviewURL] = strings.TrimSpace(settings.AccountShareCommentReviewURL)
 	if strings.TrimSpace(settings.AccountShareCommentReviewAPIKey) != "" {
@@ -2103,15 +2167,11 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 		anthropicCacheTTL1hInjection:     settings.EnableAnthropicCacheTTL1hInjection,
 		expiresAt:                        time.Now().Add(gatewayForwardingCacheTTL).UnixNano(),
 	})
-	cyberSessionBlockRuntimeSF.Forget("cyber_session_block_runtime")
-	ttl := time.Duration(settings.CyberSessionBlockTTLSeconds) * time.Second
-	if ttl <= 0 {
-		ttl = time.Hour
-	}
-	cyberSessionBlockRuntimeCache.Store(&cachedCyberSessionBlockRuntime{
-		enabled:   settings.CyberSessionBlockEnabled,
-		ttl:       ttl,
-		expiresAt: time.Now().Add(cyberSessionBlockRuntimeCacheTTL).UnixNano(),
+	openAICyberPolicyRuntimeSF.Forget("openai_cyber_policy_runtime")
+	openAICyberPolicyRuntimeCache.Store(&cachedOpenAICyberPolicyRuntime{
+		enabled:          settings.CyberSessionBlockEnabled,
+		enforcedGroupIDs: int64IDSet(settings.OpenAICyberPolicyEnforcedGroupIDs),
+		expiresAt:        time.Now().Add(openAICyberPolicyRuntimeCacheTTL).UnixNano(),
 	})
 	openAIAdvancedSchedulerSettingSF.Forget(openAIAdvancedSchedulerSettingKey)
 	openAIAdvancedSchedulerSettingCache.Store(&cachedOpenAIAdvancedSchedulerSetting{
@@ -2167,6 +2227,41 @@ func (s *SettingService) validateDefaultSubscriptionGroups(ctx context.Context, 
 	}
 
 	return nil
+}
+
+func (s *SettingService) validateOpenAICyberPolicyEnforcedGroupIDs(ctx context.Context, groupIDs []int64) ([]int64, error) {
+	if len(groupIDs) == 0 {
+		return []int64{}, nil
+	}
+	for _, groupID := range groupIDs {
+		if groupID <= 0 {
+			return nil, ErrOpenAICyberPolicyGroupInvalid.WithMetadata(map[string]string{
+				"group_id": strconv.FormatInt(groupID, 10),
+			})
+		}
+	}
+	if s.defaultSubGroupReader == nil {
+		return nil, errors.New("openai cyber policy group validation unavailable")
+	}
+
+	normalized := normalizeInt64IDs(groupIDs)
+	for _, groupID := range normalized {
+		group, err := s.defaultSubGroupReader.GetByID(ctx, groupID)
+		if err != nil {
+			if errors.Is(err, ErrGroupNotFound) {
+				return nil, ErrOpenAICyberPolicyGroupInvalid.WithMetadata(map[string]string{
+					"group_id": strconv.FormatInt(groupID, 10),
+				})
+			}
+			return nil, fmt.Errorf("get openai cyber policy group %d: %w", groupID, err)
+		}
+		if group == nil || group.Platform != PlatformOpenAI {
+			return nil, ErrOpenAICyberPolicyGroupInvalid.WithMetadata(map[string]string{
+				"group_id": strconv.FormatInt(groupID, 10),
+			})
+		}
+	}
+	return normalized, nil
 }
 
 // IsRegistrationEnabled 检查是否开放注册
@@ -2965,7 +3060,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOpenAIFreeAccountRepairWeeklyThresholdUSD: "60",
 		SettingKeyRiskControlEnabled:                        "false",
 		SettingKeyCyberSessionBlockEnabled:                  "false",
-		SettingKeyCyberSessionBlockTTLSeconds:               "3600",
+		SettingKeyOpenAICyberPolicyEnforcedGroupIDs:         "[]",
 		SettingKeyAccountShareCommentReviewEnabled:          "false",
 		SettingKeyAccountShareCommentReviewURL:              "",
 		SettingKeyAccountShareCommentReviewAPIKey:           "",
@@ -3350,11 +3445,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.WithdrawalRateLimitExemptAmount = withdrawalRateLimit.ExemptAmount
 	result.RiskControlEnabled = settings[SettingKeyRiskControlEnabled] == "true"
 	result.CyberSessionBlockEnabled = settings[SettingKeyCyberSessionBlockEnabled] == "true"
-	if v, err := strconv.Atoi(strings.TrimSpace(settings[SettingKeyCyberSessionBlockTTLSeconds])); err == nil && v > 0 {
-		result.CyberSessionBlockTTLSeconds = v
-	} else {
-		result.CyberSessionBlockTTLSeconds = 3600
-	}
+	result.OpenAICyberPolicyEnforcedGroupIDs, _ = parseOpenAICyberPolicyEnforcedGroupIDs(settings[SettingKeyOpenAICyberPolicyEnforcedGroupIDs])
 	result.AccountShareCommentReviewEnabled = settings[SettingKeyAccountShareCommentReviewEnabled] == "true"
 	result.AccountShareCommentReviewURL = strings.TrimSpace(settings[SettingKeyAccountShareCommentReviewURL])
 	result.AccountShareCommentReviewAPIKey = strings.TrimSpace(settings[SettingKeyAccountShareCommentReviewAPIKey])

@@ -141,7 +141,7 @@ type SystemSettings struct {
 	WithdrawalRateLimitMax                    int
 	WithdrawalRateLimitExemptAmount           float64
 	CyberSessionBlockEnabled                  bool
-	CyberSessionBlockTTLSeconds               int
+	OpenAICyberPolicyEnforcedGroupIDs         []int64
 	AccountShareCommentReviewEnabled          bool
 	AccountShareCommentReviewURL              string
 	AccountShareCommentReviewAPIKey           string

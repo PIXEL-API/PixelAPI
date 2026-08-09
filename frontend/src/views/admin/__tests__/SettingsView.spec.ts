@@ -161,6 +161,13 @@ vi.mock("vue-i18n", async () => {
     "admin.settings.payment.findProvider": "查看支持的支付方式",
     "admin.settings.openaiExperimentalScheduler.title": "OpenAI 实验调度策略",
     "admin.settings.openaiExperimentalScheduler.description": "默认关闭。开启后仅影响本网关在 OpenAI 账号间的实验性调度选择逻辑，不代表上游 OpenAI 官方能力。",
+    "admin.settings.groupLoading.subscriptionErrorTitle": "订阅分组加载失败",
+    "admin.settings.groupLoading.subscriptionErrorHint": "无法刷新可选订阅分组；其他分组列表和已保存的订阅分组 ID 均未被改动。",
+    "admin.settings.groupLoading.openAIErrorTitle": "OpenAI Cyber 分组加载失败",
+    "admin.settings.groupLoading.openAIErrorHint": "无法刷新 Cyber 可选分组；订阅分组和已保存的 Cyber 分组 ID 均未被改动。",
+    "admin.settings.groupLoading.requestFailedDetail": "请求失败，请检查网络或访问权限后重试。",
+    "admin.settings.groupLoading.retrySubscriptions": "重新加载订阅分组",
+    "admin.settings.groupLoading.retryOpenAI": "重新加载 OpenAI 分组",
     "admin.settings.site.uploadImage": "上传图片",
     "admin.settings.site.remove": "移除",
   };
@@ -459,6 +466,16 @@ async function openUsersTab(wrapper: ReturnType<typeof mountView>) {
   await flushPromises();
 }
 
+async function openFeaturesTab(wrapper: ReturnType<typeof mountView>) {
+  const featuresTabButton = wrapper
+    .findAll("button")
+    .find((node) => node.text().includes("admin.settings.tabs.features"));
+
+  expect(featuresTabButton).toBeDefined();
+  await featuresTabButton?.trigger("click");
+  await flushPromises();
+}
+
 describe("admin SettingsView payment visible method controls", () => {
   beforeEach(() => {
     getSettings.mockReset();
@@ -747,6 +764,172 @@ describe("admin SettingsView payment visible method controls", () => {
       "默认关闭。开启后仅影响本网关在 OpenAI 账号间的实验性调度选择逻辑",
     );
     expect(wrapper.text()).not.toContain("OpenAI 高级调度器");
+  });
+
+  it("loads only public OpenAI groups for the Cyber policy selector", async () => {
+    mountView();
+
+    await flushPromises();
+
+    expect(getGroups).toHaveBeenCalledWith("openai", "public");
+  });
+
+  it("keeps subscription groups available when OpenAI groups fail and retries only OpenAI groups", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      cyber_session_block_enabled: true,
+      openai_cyber_policy_enforced_group_ids: [77],
+    });
+
+    let openAIGroupRequests = 0;
+    getGroups.mockImplementation(async (platform?: string) => {
+      if (platform === "openai") {
+        openAIGroupRequests += 1;
+        if (openAIGroupRequests === 1) {
+          throw new Error("OpenAI groups unavailable");
+        }
+        return [
+          {
+            id: 77,
+            name: "OpenAI Cyber",
+            platform: "openai",
+            status: "active",
+            subscription_type: "standard",
+            rate_multiplier: 1,
+            account_count: 1,
+          },
+        ];
+      }
+      return [
+        {
+          id: 11,
+          name: "Subscription Group",
+          platform: "openai",
+          status: "active",
+          subscription_type: "subscription",
+          rate_multiplier: 1,
+        },
+      ];
+    });
+
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openUsersTab(wrapper);
+
+    expect(wrapper.find('[data-testid="subscription-groups-load-error"]').exists()).toBe(false);
+    const addSubscriptionButton = wrapper
+      .findAll("button")
+      .find((node) => node.text().includes("admin.settings.defaults.addDefaultSubscription"));
+    expect(addSubscriptionButton?.attributes("disabled")).toBeUndefined();
+
+    await openFeaturesTab(wrapper);
+    expect(wrapper.get('[data-testid="openai-groups-load-error"]').text()).toContain(
+      "OpenAI Cyber 分组加载失败",
+    );
+
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        openai_cyber_policy_enforced_group_ids: [77],
+      }),
+    );
+
+    await wrapper.get('[data-testid="retry-openai-groups"]').trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="openai-groups-load-error"]').exists()).toBe(false);
+    expect(
+      wrapper
+        .get('[data-testid="openai-cyber-group-selector"]')
+        .find('input[type="checkbox"][value="77"]')
+        .exists(),
+    ).toBe(true);
+    expect(
+      getGroups.mock.calls.filter(([platform]) => platform === undefined),
+    ).toHaveLength(1);
+    expect(
+      getGroups.mock.calls.filter(([platform]) => platform === "openai"),
+    ).toHaveLength(2);
+  });
+
+  it("keeps OpenAI groups available when subscription groups fail and retries only subscription groups", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      default_subscriptions: [{ group_id: 11, validity_days: 30 }],
+      cyber_session_block_enabled: true,
+      openai_cyber_policy_enforced_group_ids: [77],
+    });
+
+    let subscriptionGroupRequests = 0;
+    getGroups.mockImplementation(async (platform?: string) => {
+      if (platform === "openai") {
+        return [
+          {
+            id: 77,
+            name: "OpenAI Cyber",
+            platform: "openai",
+            status: "active",
+            subscription_type: "standard",
+            rate_multiplier: 1,
+            account_count: 1,
+          },
+        ];
+      }
+      subscriptionGroupRequests += 1;
+      if (subscriptionGroupRequests === 1) {
+        throw new Error("Subscription groups unavailable");
+      }
+      return [
+        {
+          id: 11,
+          name: "Subscription Group",
+          platform: "openai",
+          status: "active",
+          subscription_type: "subscription",
+          rate_multiplier: 1,
+        },
+      ];
+    });
+
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openUsersTab(wrapper);
+    expect(wrapper.get('[data-testid="subscription-groups-load-error"]').text()).toContain(
+      "订阅分组加载失败",
+    );
+
+    await openFeaturesTab(wrapper);
+    expect(wrapper.find('[data-testid="openai-groups-load-error"]').exists()).toBe(false);
+    expect(
+      wrapper
+        .get('[data-testid="openai-cyber-group-selector"]')
+        .find('input[type="checkbox"][value="77"]')
+        .exists(),
+    ).toBe(true);
+
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        default_subscriptions: [{ group_id: 11, validity_days: 30 }],
+        openai_cyber_policy_enforced_group_ids: [77],
+      }),
+    );
+
+    await openUsersTab(wrapper);
+    await wrapper.get('[data-testid="retry-subscription-groups"]').trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="subscription-groups-load-error"]').exists()).toBe(false);
+    expect(
+      getGroups.mock.calls.filter(([platform]) => platform === undefined),
+    ).toHaveLength(2);
+    expect(
+      getGroups.mock.calls.filter(([platform]) => platform === "openai"),
+    ).toHaveLength(1);
   });
 
   it("passes translated upload and remove labels to the payment help image uploader", async () => {

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -237,7 +238,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		WithdrawalRateLimitMax:                    settings.WithdrawalRateLimitMax,
 		WithdrawalRateLimitExemptAmount:           settings.WithdrawalRateLimitExemptAmount,
 		CyberSessionBlockEnabled:                  settings.CyberSessionBlockEnabled,
-		CyberSessionBlockTTLSeconds:               settings.CyberSessionBlockTTLSeconds,
+		OpenAICyberPolicyEnforcedGroupIDs:         settings.OpenAICyberPolicyEnforcedGroupIDs,
 		AccountShareCommentReviewEnabled:          settings.AccountShareCommentReviewEnabled,
 		AccountShareCommentReviewURL:              settings.AccountShareCommentReviewURL,
 		AccountShareCommentReviewAPIKeyConfigured: settings.AccountShareCommentReviewAPIKeyConfigured,
@@ -553,7 +554,7 @@ type UpdateSettingsRequest struct {
 	DefaultBalance                           float64                           `json:"default_balance"`
 	RiskControlEnabled                       *bool                             `json:"risk_control_enabled"`
 	CyberSessionBlockEnabled                 *bool                             `json:"cyber_session_block_enabled"`
-	CyberSessionBlockTTLSeconds              *int                              `json:"cyber_session_block_ttl_seconds"`
+	OpenAICyberPolicyEnforcedGroupIDs        []int64                           `json:"openai_cyber_policy_enforced_group_ids"`
 	AccountShareCommentReviewEnabled         *bool                             `json:"account_share_comment_review_enabled"`
 	AccountShareCommentReviewURL             *string                           `json:"account_share_comment_review_url"`
 	AccountShareCommentReviewAPIKey          *string                           `json:"account_share_comment_review_api_key"`
@@ -773,10 +774,6 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	}
 	if req.DefaultBalance < 0 {
 		req.DefaultBalance = 0
-	}
-	if req.CyberSessionBlockTTLSeconds != nil && *req.CyberSessionBlockTTLSeconds <= 0 {
-		response.Error(c, http.StatusBadRequest, "cyber_session_block_ttl_seconds must be greater than 0")
-		return
 	}
 	if req.WithdrawalRateLimitWindowDays != nil {
 		windowDays := *req.WithdrawalRateLimitWindowDays
@@ -1639,12 +1636,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.CyberSessionBlockEnabled
 		}(),
-		CyberSessionBlockTTLSeconds: func() int {
-			if req.CyberSessionBlockTTLSeconds != nil {
-				return *req.CyberSessionBlockTTLSeconds
-			}
-			return previousSettings.CyberSessionBlockTTLSeconds
-		}(),
+		OpenAICyberPolicyEnforcedGroupIDs: req.OpenAICyberPolicyEnforcedGroupIDs,
 		AccountShareCommentReviewEnabled: func() bool {
 			if req.AccountShareCommentReviewEnabled != nil {
 				return *req.AccountShareCommentReviewEnabled
@@ -2137,7 +2129,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		WithdrawalRateLimitMax:                    updatedSettings.WithdrawalRateLimitMax,
 		WithdrawalRateLimitExemptAmount:           updatedSettings.WithdrawalRateLimitExemptAmount,
 		CyberSessionBlockEnabled:                  updatedSettings.CyberSessionBlockEnabled,
-		CyberSessionBlockTTLSeconds:               updatedSettings.CyberSessionBlockTTLSeconds,
+		OpenAICyberPolicyEnforcedGroupIDs:         updatedSettings.OpenAICyberPolicyEnforcedGroupIDs,
 		AccountShareCommentReviewEnabled:          updatedSettings.AccountShareCommentReviewEnabled,
 		AccountShareCommentReviewURL:              updatedSettings.AccountShareCommentReviewURL,
 		AccountShareCommentReviewAPIKeyConfigured: updatedSettings.AccountShareCommentReviewAPIKeyConfigured,
@@ -2561,8 +2553,8 @@ func preserveOmittedUpdateSettingsFields(req *UpdateSettingsRequest, previous *s
 	if !fieldProvided(fields, "cyber_session_block_enabled") {
 		req.CyberSessionBlockEnabled = &previous.CyberSessionBlockEnabled
 	}
-	if !fieldProvided(fields, "cyber_session_block_ttl_seconds") {
-		req.CyberSessionBlockTTLSeconds = &previous.CyberSessionBlockTTLSeconds
+	if !fieldProvided(fields, "openai_cyber_policy_enforced_group_ids") {
+		req.OpenAICyberPolicyEnforcedGroupIDs = append([]int64(nil), previous.OpenAICyberPolicyEnforcedGroupIDs...)
 	}
 	if !fieldProvided(fields, "account_share_comment_review_enabled") {
 		req.AccountShareCommentReviewEnabled = &previous.AccountShareCommentReviewEnabled
@@ -2879,8 +2871,8 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.CyberSessionBlockEnabled != after.CyberSessionBlockEnabled {
 		changed = append(changed, "cyber_session_block_enabled")
 	}
-	if before.CyberSessionBlockTTLSeconds != after.CyberSessionBlockTTLSeconds {
-		changed = append(changed, "cyber_session_block_ttl_seconds")
+	if !slices.Equal(before.OpenAICyberPolicyEnforcedGroupIDs, after.OpenAICyberPolicyEnforcedGroupIDs) {
+		changed = append(changed, "openai_cyber_policy_enforced_group_ids")
 	}
 	if before.AccountShareCommentReviewEnabled != after.AccountShareCommentReviewEnabled {
 		changed = append(changed, "account_share_comment_review_enabled")

@@ -748,7 +748,7 @@ func TestAPIContracts(t *testing.T) {
 					"contact_info": "support",
 					"doc_url": "https://docs.example.com",
 					"cyber_session_block_enabled": false,
-					"cyber_session_block_ttl_seconds": 3600,
+					"openai_cyber_policy_enforced_group_ids": [],
 					"auth_source_default_email_balance": 0,
 					"auth_source_default_email_concurrency": 5,
 					"auth_source_default_email_subscriptions": [],
@@ -1054,7 +1054,7 @@ func TestAPIContracts(t *testing.T) {
 					"login_agreement_mode": "modal",
 					"login_agreement_updated_at": "2026-03-31",
 					"cyber_session_block_enabled": false,
-					"cyber_session_block_ttl_seconds": 3600,
+					"openai_cyber_policy_enforced_group_ids": [],
 					"login_agreement_documents": [
 						{"id": "terms", "title": "服务条款", "content_md": ""},
 						{"id": "usage-policy", "title": "使用政策", "content_md": ""},

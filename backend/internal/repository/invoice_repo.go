@@ -58,10 +58,10 @@ func (r *invoiceRepository) CreateProfile(ctx context.Context, userID int64, inp
 	profile, err := queryInvoiceProfile(ctx, tx, `
 INSERT INTO invoice_profiles (
 	user_id, invoice_type, buyer_type, title_name, tax_id, registered_address,
-	registered_phone, bank_name, bank_account, recipient_email, recipient_phone, is_default
+	registered_phone, bank_name, bank_account, recipient_email, recipient_phone, remark, is_default
 ) VALUES (
 	$1, $2, $3, $4, $5, $6,
-	$7, $8, $9, $10, $11, $12
+	$7, $8, $9, $10, $11, $12, $13
 )
 RETURNING `+invoiceProfileColumns,
 		userID,
@@ -75,6 +75,7 @@ RETURNING `+invoiceProfileColumns,
 		input.BankAccount,
 		input.RecipientEmail,
 		input.RecipientPhone,
+		input.Remark,
 		input.IsDefault,
 	)
 	if err != nil {
@@ -120,9 +121,10 @@ SET invoice_type = $1,
 	bank_account = $8,
 	recipient_email = $9,
 	recipient_phone = $10,
-	is_default = $11,
+	remark = $11,
+	is_default = $12,
 	updated_at = NOW()
-WHERE id = $12 AND user_id = $13
+WHERE id = $13 AND user_id = $14
 RETURNING `+invoiceProfileColumns,
 		input.InvoiceType,
 		invoiceBuyerTypeForDB(input.InvoiceType),
@@ -134,6 +136,7 @@ RETURNING `+invoiceProfileColumns,
 		input.BankAccount,
 		input.RecipientEmail,
 		input.RecipientPhone,
+		input.Remark,
 		input.IsDefault,
 		id,
 		userID,
@@ -274,11 +277,11 @@ func (r *invoiceRepository) CreateRequest(ctx context.Context, userID int64, inp
 INSERT INTO invoice_requests (
 	request_no, user_id, user_email, invoice_type, buyer_type, title_name, tax_id,
 	registered_address, registered_phone, bank_name, bank_account, recipient_email,
-	recipient_phone, amount, status
+	recipient_phone, remark, amount, status
 ) VALUES (
 	$1, $2, $3, $4, $5, $6, $7,
 	$8, $9, $10, $11, $12,
-	$13, $14, $15
+	$13, $14, $15, $16
 )
 RETURNING `+invoiceRequestColumns,
 		requestNo,
@@ -294,6 +297,7 @@ RETURNING `+invoiceRequestColumns,
 		input.BankAccount,
 		input.RecipientEmail,
 		input.RecipientPhone,
+		input.Remark,
 		totalAmount,
 		service.InvoiceStatusPending,
 	)
@@ -428,22 +432,14 @@ func (r *invoiceRepository) IssueRequest(ctx context.Context, id, adminUserID in
 	req, err := queryInvoiceRequest(ctx, tx, `
 UPDATE invoice_requests
 SET status = $1,
-	invoice_number = $2,
-	invoice_code = $3,
-	invoice_file_url = $4,
-	invoice_file_name = $5,
 	issued_at = NOW(),
-	admin_note = NULLIF($6, ''),
-	processed_by_user_id = $7,
+	admin_note = NULLIF($2, ''),
+	processed_by_user_id = $3,
 	processed_at = NOW(),
 	updated_at = NOW()
-WHERE id = $8
+WHERE id = $4
 RETURNING `+invoiceRequestColumns,
 		service.InvoiceStatusIssued,
-		input.InvoiceNumber,
-		input.InvoiceCode,
-		input.InvoiceFileURL,
-		input.InvoiceFileName,
 		input.AdminNote,
 		adminUserID,
 		id,
@@ -451,10 +447,7 @@ RETURNING `+invoiceRequestColumns,
 	if err != nil {
 		return nil, err
 	}
-	if err := insertInvoiceEvent(ctx, tx, id, &adminUserID, "issued", input.AdminNote, map[string]any{
-		"invoice_number": input.InvoiceNumber,
-		"invoice_code":   input.InvoiceCode,
-	}); err != nil {
+	if err := insertInvoiceEvent(ctx, tx, id, &adminUserID, "issued", input.AdminNote, nil); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -624,7 +617,7 @@ func buildInvoiceRequestWhere(params service.InvoiceRequestListParams, forceUser
 	}
 	if keyword := strings.TrimSpace(params.Keyword); keyword != "" {
 		args = append(args, "%"+keyword+"%")
-		clauses = append(clauses, fmt.Sprintf("(request_no ILIKE $%d OR user_email ILIKE $%d OR title_name ILIKE $%d OR invoice_number ILIKE $%d)", len(args), len(args), len(args), len(args)))
+		clauses = append(clauses, fmt.Sprintf("(request_no ILIKE $%d OR user_email ILIKE $%d OR title_name ILIKE $%d)", len(args), len(args), len(args)))
 	}
 	if len(clauses) == 0 {
 		return "", args
@@ -708,6 +701,7 @@ func scanInvoiceProfile(row invoiceScanner) (*service.InvoiceProfile, error) {
 		&profile.BankAccount,
 		&profile.RecipientEmail,
 		&profile.RecipientPhone,
+		&profile.Remark,
 		&profile.IsDefault,
 		&profile.CreatedAt,
 		&profile.UpdatedAt,
@@ -737,13 +731,10 @@ func scanInvoiceRequest(row invoiceScanner) (*service.InvoiceRequest, error) {
 		&req.BankAccount,
 		&req.RecipientEmail,
 		&req.RecipientPhone,
+		&req.Remark,
 		&req.Amount,
 		&req.Currency,
 		&req.Status,
-		&req.InvoiceNumber,
-		&req.InvoiceCode,
-		&req.InvoiceFileURL,
-		&req.InvoiceFileName,
 		&issuedAt,
 		&rejectedReason,
 		&adminNote,
@@ -876,14 +867,14 @@ func isInvoiceUniqueViolation(err error) bool {
 const invoiceProfileColumns = `
 id, user_id, invoice_type, buyer_type, title_name, tax_id, registered_address,
 registered_phone, bank_name, bank_account, recipient_email, recipient_phone,
-is_default, created_at, updated_at`
+remark, is_default, created_at, updated_at`
 
 const invoiceRequestColumns = `
 id, request_no, user_id, user_email, invoice_type, buyer_type, title_name, tax_id,
 registered_address, registered_phone, bank_name, bank_account, recipient_email,
-recipient_phone, amount::double precision, currency, status, invoice_number,
-invoice_code, invoice_file_url, invoice_file_name, issued_at, rejected_reason,
-admin_note, processed_by_user_id, submitted_at, processed_at, created_at, updated_at`
+recipient_phone, remark, amount::double precision, currency, status, issued_at,
+rejected_reason, admin_note, processed_by_user_id, submitted_at, processed_at,
+created_at, updated_at`
 
 const invoiceRequestItemColumns = `
 id, invoice_request_id, source_type, source_id, source_no, source_label, item_type,

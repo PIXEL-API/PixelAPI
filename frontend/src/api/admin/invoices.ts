@@ -2,10 +2,6 @@ import { apiClient } from "../client";
 import type { BasePaginationResponse, InvoiceRequest } from "@/types";
 
 export interface IssueInvoicePayload {
-  invoice_number?: string;
-  invoice_code?: string;
-  invoice_file_url?: string;
-  invoice_file_name?: string;
   admin_note?: string;
 }
 

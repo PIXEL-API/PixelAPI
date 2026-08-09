@@ -2603,6 +2603,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		}
 
 		if eventType == "error" {
+			markOpsCyberPolicyPayload(c, message, http.StatusOK, usage.InputTokens, usage.OutputTokens)
 			errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(message)
 			s.persistOpenAIWSRateLimitSignal(ctx, account, originalModel, lease.HandshakeHeaders(), message, errCodeRaw, errTypeRaw, errMsgRaw)
 			errMsg := strings.TrimSpace(errMsgRaw)
@@ -2671,6 +2672,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		}
 
 		if eventType == "response.failed" {
+			markOpsCyberPolicyPayload(c, message, http.StatusOK, usage.InputTokens, usage.OutputTokens)
 			failedMsg := extractOpenAISSEErrorMessage(message)
 			if failedMsg == "" {
 				failedMsg = "OpenAI model capacity temporarily unavailable"
@@ -3517,6 +3519,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				lastEventType = eventType
 			}
 			if eventType == "error" {
+				markOpsCyberPolicyPayload(c, upstreamMessage, http.StatusOK, usage.InputTokens, usage.OutputTokens)
 				errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(upstreamMessage)
 				s.persistOpenAIWSRateLimitSignal(turnCtx, account, originalModel, lease.HandshakeHeaders(), upstreamMessage, errCodeRaw, errTypeRaw, errMsgRaw)
 				fallbackReason, _ := classifyOpenAIWSErrorEventFromRaw(errCodeRaw, errTypeRaw, errMsgRaw)
@@ -3578,6 +3581,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				}
 			}
 			if eventType == "response.failed" {
+				markOpsCyberPolicyPayload(c, upstreamMessage, http.StatusOK, usage.InputTokens, usage.OutputTokens)
 				failedMsg := extractOpenAISSEErrorMessage(upstreamMessage)
 				if failedMsg == "" {
 					failedMsg = "OpenAI model capacity temporarily unavailable"

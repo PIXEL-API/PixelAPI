@@ -2907,6 +2907,39 @@
 
         <!-- Tab: Users -->
         <div v-show="activeTab === 'users'" class="space-y-6">
+          <div
+            v-if="subscriptionGroupsLoadError"
+            data-testid="subscription-groups-load-error"
+            class="flex flex-col gap-3 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800 sm:flex-row sm:items-start sm:justify-between dark:border-red-900/70 dark:bg-red-950/30 dark:text-red-200"
+            role="alert"
+          >
+            <div class="min-w-0">
+              <p class="font-medium">
+                {{ t("admin.settings.groupLoading.subscriptionErrorTitle") }}
+              </p>
+              <p class="mt-1 leading-5">
+                {{ t("admin.settings.groupLoading.subscriptionErrorHint") }}
+              </p>
+              <p class="mt-1 break-words text-xs opacity-80">
+                {{ subscriptionGroupsLoadError }}
+              </p>
+            </div>
+            <button
+              type="button"
+              data-testid="retry-subscription-groups"
+              class="btn btn-secondary min-h-11 w-full shrink-0 sm:w-auto"
+              :disabled="subscriptionGroupsLoading"
+              :aria-busy="subscriptionGroupsLoading"
+              @click="loadSubscriptionGroups"
+            >
+              {{
+                subscriptionGroupsLoading
+                  ? t("common.loading")
+                  : t("admin.settings.groupLoading.retrySubscriptions")
+              }}
+            </button>
+          </div>
+
           <!-- Default Settings -->
           <div class="card">
             <div
@@ -5787,27 +5820,59 @@
                   <Toggle v-model="form.cyber_session_block_enabled" />
                 </div>
 
-                <div v-if="form.cyber_session_block_enabled" class="mt-4">
-                  <label class="input-label">
+                <div
+                  v-if="openAIGroupsLoadError"
+                  data-testid="openai-groups-load-error"
+                  class="mt-4 flex flex-col gap-3 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800 sm:flex-row sm:items-start sm:justify-between dark:border-red-900/70 dark:bg-red-950/30 dark:text-red-200"
+                  role="alert"
+                >
+                  <div class="min-w-0">
+                    <p class="font-medium">
+                      {{ t("admin.settings.groupLoading.openAIErrorTitle") }}
+                    </p>
+                    <p class="mt-1 leading-5">
+                      {{ t("admin.settings.groupLoading.openAIErrorHint") }}
+                    </p>
+                    <p class="mt-1 break-words text-xs opacity-80">
+                      {{ openAIGroupsLoadError }}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    data-testid="retry-openai-groups"
+                    class="btn btn-secondary min-h-11 w-full shrink-0 sm:w-auto"
+                    :disabled="openAIGroupsLoading"
+                    :aria-busy="openAIGroupsLoading"
+                    @click="loadOpenAIGroups"
+                  >
                     {{
-                      t(
-                        "admin.settings.features.riskControl.cyberSessionBlockTTL",
-                      )
+                      openAIGroupsLoading
+                        ? t("common.loading")
+                        : t("admin.settings.groupLoading.retryOpenAI")
                     }}
-                  </label>
-                  <input
-                    v-model.number="form.cyber_session_block_ttl_seconds"
-                    type="number"
-                    min="60"
-                    max="86400"
-                    class="input w-40"
+                  </button>
+                </div>
+
+                <div v-if="form.cyber_session_block_enabled" class="mt-4 space-y-2">
+                  <GroupSelector
+                    v-model="form.openai_cyber_policy_enforced_group_ids"
+                    data-testid="openai-cyber-group-selector"
+                    :groups="openAIGroups"
+                    platform="openai"
+                    :label="t('admin.settings.features.riskControl.cyberPolicyGroups')"
                   />
-                  <p class="mt-1 text-xs text-gray-400">
-                    {{
-                      t(
-                        "admin.settings.features.riskControl.cyberSessionBlockTTLHint",
-                      )
-                    }}
+                  <p class="text-xs leading-5 text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.features.riskControl.cyberPolicyGroupsHint") }}
+                  </p>
+                  <p class="text-xs leading-5 text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.features.riskControl.cyberPolicyScheduleHint") }}
+                  </p>
+                  <p
+                    v-if="form.openai_cyber_policy_enforced_group_ids.length === 0"
+                    class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700 dark:border-amber-800/70 dark:bg-amber-950/30 dark:text-amber-300"
+                    role="status"
+                  >
+                    {{ t("admin.settings.features.riskControl.cyberPolicyNoGroupsHint") }}
                   </p>
                 </div>
               </div>
@@ -7573,6 +7638,7 @@ import PaymentProviderList from "@/components/payment/PaymentProviderList.vue";
 import PaymentProviderDialog from "@/components/payment/PaymentProviderDialog.vue";
 import GroupBadge from "@/components/common/GroupBadge.vue";
 import GroupOptionItem from "@/components/common/GroupOptionItem.vue";
+import GroupSelector from "@/components/common/GroupSelector.vue";
 import Toggle from "@/components/common/Toggle.vue";
 import ProxySelector from "@/components/common/ProxySelector.vue";
 import ImageUpload from "@/components/common/ImageUpload.vue";
@@ -7717,6 +7783,11 @@ const adminApiKeyMasked = ref("");
 const adminApiKeyOperating = ref(false);
 const newAdminApiKey = ref("");
 const subscriptionGroups = ref<AdminGroup[]>([]);
+const openAIGroups = ref<AdminGroup[]>([]);
+const subscriptionGroupsLoading = ref(false);
+const subscriptionGroupsLoadError = ref("");
+const openAIGroupsLoading = ref(false);
+const openAIGroupsLoadError = ref("");
 
 // Overload Cooldown (529) 状态
 const overloadCooldownLoading = ref(true);
@@ -8106,7 +8177,7 @@ const form = reactive<SettingsForm>({
   // Risk control feature switch
   risk_control_enabled: false,
   cyber_session_block_enabled: false,
-  cyber_session_block_ttl_seconds: 3600,
+  openai_cyber_policy_enforced_group_ids: [],
   account_share_comment_review_enabled: false,
   account_share_comment_review_url: "",
   account_share_comment_review_api_key: "",
@@ -8990,15 +9061,44 @@ async function loadSettings() {
 }
 
 async function loadSubscriptionGroups() {
+  subscriptionGroupsLoading.value = true;
+  subscriptionGroupsLoadError.value = "";
   try {
-    const groups = await adminAPI.groups.getAll();
-    subscriptionGroups.value = groups.filter(
+    const subscriptionCandidates = await adminAPI.groups.getAll();
+    subscriptionGroups.value = subscriptionCandidates.filter(
       (group) =>
         group.subscription_type === "subscription" && group.status === "active",
     );
-  } catch (_error: unknown) {
-    subscriptionGroups.value = [];
+  } catch (error: unknown) {
+    subscriptionGroupsLoadError.value = extractApiErrorMessage(
+      error,
+      t("admin.settings.groupLoading.requestFailedDetail"),
+    );
+  } finally {
+    subscriptionGroupsLoading.value = false;
   }
+}
+
+async function loadOpenAIGroups() {
+  openAIGroupsLoading.value = true;
+  openAIGroupsLoadError.value = "";
+  try {
+    const openAICandidates = await adminAPI.groups.getAll("openai", "public");
+    openAIGroups.value = openAICandidates.filter(
+      (group) => group.platform === "openai" && group.status === "active",
+    );
+  } catch (error: unknown) {
+    openAIGroupsLoadError.value = extractApiErrorMessage(
+      error,
+      t("admin.settings.groupLoading.requestFailedDetail"),
+    );
+  } finally {
+    openAIGroupsLoading.value = false;
+  }
+}
+
+async function loadSettingsGroups() {
+  await Promise.allSettled([loadSubscriptionGroups(), loadOpenAIGroups()]);
 }
 
 function findNextAvailableSubscriptionGroup(
@@ -9560,13 +9660,9 @@ async function saveSettings() {
         form.payment_recharge_center_tab_enabled,
       risk_control_enabled: form.risk_control_enabled,
       cyber_session_block_enabled: form.cyber_session_block_enabled,
-      cyber_session_block_ttl_seconds: Math.min(
-        86400,
-        Math.max(
-          60,
-          Math.floor(Number(form.cyber_session_block_ttl_seconds) || 3600),
-        ),
-      ),
+      openai_cyber_policy_enforced_group_ids: [
+        ...form.openai_cyber_policy_enforced_group_ids,
+      ],
       payment_min_amount: Number(form.payment_min_amount) || 0,
       payment_max_amount: Number(form.payment_max_amount) || 0,
       payment_daily_limit: Number(form.payment_daily_limit) || 0,
@@ -10606,7 +10702,7 @@ async function handleDeleteProvider() {
 
 onMounted(() => {
   loadSettings();
-  loadSubscriptionGroups();
+  loadSettingsGroups();
   loadAdminApiKey();
   loadOverloadCooldownSettings();
   loadStreamTimeoutSettings();

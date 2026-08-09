@@ -23,6 +23,32 @@ type openAIWSClientFrameConn struct {
 	conn *coderws.Conn
 }
 
+// openAIWSCyberDetectingFrameConn observes upstream frames before the relay
+// forwards them to the client. This keeps passthrough WebSocket mode on the
+// same structured cyber_policy detector used by HTTP and SSE paths.
+type openAIWSCyberDetectingFrameConn struct {
+	inner openaiwsv2.FrameConn
+	c     *gin.Context
+}
+
+var _ openaiwsv2.FrameConn = (*openAIWSCyberDetectingFrameConn)(nil)
+
+func (c *openAIWSCyberDetectingFrameConn) ReadFrame(ctx context.Context) (coderws.MessageType, []byte, error) {
+	msgType, payload, err := c.inner.ReadFrame(ctx)
+	if err == nil && (msgType == coderws.MessageText || msgType == coderws.MessageBinary) {
+		markOpsCyberPolicyPayload(c.c, payload, http.StatusOK, 0, 0)
+	}
+	return msgType, payload, err
+}
+
+func (c *openAIWSCyberDetectingFrameConn) WriteFrame(ctx context.Context, msgType coderws.MessageType, payload []byte) error {
+	return c.inner.WriteFrame(ctx, msgType, payload)
+}
+
+func (c *openAIWSCyberDetectingFrameConn) Close() error {
+	return c.inner.Close()
+}
+
 // openAIWSPolicyEnforcingFrameConn wraps a client-side FrameConn and runs
 // every client→upstream frame through the passthrough request filter. It is
 // the relay equivalent of the parseClientPayload integration in the ingress
@@ -608,6 +634,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if !ok {
 		return errors.New("openai ws passthrough upstream connection does not support frame relay")
 	}
+	cyberDetectingUpstreamConn := &openAIWSCyberDetectingFrameConn{inner: upstreamFrameConn, c: c}
 
 	completedTurns := atomic.Int32{}
 	var completedUsageMu sync.Mutex
@@ -711,7 +738,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	relayResult, relayExit := openaiwsv2.RunEntry(openaiwsv2.EntryInput{
 		Ctx:                ctx,
 		ClientConn:         policyClientConn,
-		UpstreamConn:       upstreamFrameConn,
+		UpstreamConn:       cyberDetectingUpstreamConn,
 		FirstClientMessage: firstClientMessage,
 		Options: openaiwsv2.RelayOptions{
 			WriteTimeout:     s.openAIWSWriteTimeout(),

@@ -2881,9 +2881,9 @@ func normalizeOpenAIModerationResult(result *moderationAPIResult, thresholds map
 		scores = map[string]float64{}
 	}
 	thresholdSnapshot := mergeContentModerationThresholds(ContentModerationDefaultThresholds(), thresholds)
-	flagged, highestCategory, highestScore := evaluateModerationScores(scores, thresholdSnapshot)
+	thresholdFlagged, highestCategory, highestScore := evaluateModerationScores(scores, thresholdSnapshot)
 	return &normalizedModerationResult{
-		Flagged:         flagged,
+		Flagged:         result.Flagged || thresholdFlagged,
 		HighestCategory: highestCategory,
 		HighestScore:    highestScore,
 		CategoryScores:  scores,

@@ -460,7 +460,8 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 		writeAnthropicError(c, http.StatusBadGateway, "api_error", "Upstream stream ended without a terminal response event")
 		return nil, fmt.Errorf("upstream stream ended without terminal event")
 	}
-	if strings.EqualFold(strings.TrimSpace(finalResponse.Status), "failed") && finalResponse.Error != nil &&
+	if IsOpenAICyberPolicyEnforcedForCurrentAttempt(c) &&
+		strings.EqualFold(strings.TrimSpace(finalResponse.Status), "failed") && finalResponse.Error != nil &&
 		strings.EqualFold(strings.TrimSpace(finalResponse.Error.Code), "cyber_policy") {
 		clientMsg := openAICyberPolicyClientMessage(finalResponse.Error.Message)
 		MarkOpsCyberPolicy(c, CyberPolicyMark{
@@ -631,7 +632,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		}
 		if eventType == "response.failed" || isBareErrorEvent {
 			payloadBytes := []byte(payload)
-			if hit, _, msg := detectOpenAICyberPolicy([]byte(payload)); hit {
+			if hit, _, msg := detectOpenAICyberPolicyForCurrentAttempt(c, []byte(payload)); hit {
 				clientMsg := openAICyberPolicyClientMessage(msg)
 				MarkOpsCyberPolicy(c, CyberPolicyMark{
 					Message:        clientMsg,

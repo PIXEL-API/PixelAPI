@@ -61,6 +61,7 @@ type InvoiceProfile struct {
 	BankAccount       string    `json:"bank_account"`
 	RecipientEmail    string    `json:"recipient_email"`
 	RecipientPhone    string    `json:"recipient_phone"`
+	Remark            string    `json:"remark"`
 	IsDefault         bool      `json:"is_default"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
@@ -76,6 +77,7 @@ type InvoiceProfileInput struct {
 	BankAccount       string `json:"bank_account"`
 	RecipientEmail    string `json:"recipient_email"`
 	RecipientPhone    string `json:"recipient_phone"`
+	Remark            string `json:"remark"`
 	IsDefault         bool   `json:"is_default"`
 }
 
@@ -126,13 +128,10 @@ type InvoiceRequest struct {
 	BankAccount       string               `json:"bank_account"`
 	RecipientEmail    string               `json:"recipient_email"`
 	RecipientPhone    string               `json:"recipient_phone"`
+	Remark            string               `json:"remark"`
 	Amount            float64              `json:"amount"`
 	Currency          string               `json:"currency"`
 	Status            string               `json:"status"`
-	InvoiceNumber     string               `json:"invoice_number"`
-	InvoiceCode       string               `json:"invoice_code"`
-	InvoiceFileURL    string               `json:"invoice_file_url"`
-	InvoiceFileName   string               `json:"invoice_file_name"`
 	IssuedAt          *time.Time           `json:"issued_at,omitempty"`
 	RejectedReason    *string              `json:"rejected_reason,omitempty"`
 	AdminNote         *string              `json:"admin_note,omitempty"`
@@ -154,15 +153,12 @@ type InvoiceRequestInput struct {
 	BankAccount       string             `json:"bank_account"`
 	RecipientEmail    string             `json:"recipient_email"`
 	RecipientPhone    string             `json:"recipient_phone"`
+	Remark            string             `json:"remark"`
 	SourceRefs        []InvoiceSourceRef `json:"source_refs"`
 }
 
 type InvoiceIssueInput struct {
-	InvoiceNumber   string `json:"invoice_number"`
-	InvoiceCode     string `json:"invoice_code"`
-	InvoiceFileURL  string `json:"invoice_file_url"`
-	InvoiceFileName string `json:"invoice_file_name"`
-	AdminNote       string `json:"admin_note"`
+	AdminNote string `json:"admin_note"`
 }
 
 type InvoiceRequestListParams struct {
@@ -303,14 +299,7 @@ func (s *InvoiceService) AdminIssue(ctx context.Context, id, adminUserID int64, 
 	if err := s.ensureEnabled(ctx); err != nil {
 		return nil, err
 	}
-	input.InvoiceNumber = strings.TrimSpace(input.InvoiceNumber)
-	input.InvoiceCode = strings.TrimSpace(input.InvoiceCode)
-	input.InvoiceFileURL = strings.TrimSpace(input.InvoiceFileURL)
-	input.InvoiceFileName = strings.TrimSpace(input.InvoiceFileName)
 	input.AdminNote = strings.TrimSpace(input.AdminNote)
-	if input.InvoiceNumber == "" && input.InvoiceFileURL == "" {
-		return nil, infraerrors.BadRequest("INVOICE_ISSUE_INFO_REQUIRED", "invoice number or invoice file url is required")
-	}
 	return s.repo.IssueRequest(ctx, id, adminUserID, input)
 }
 
@@ -347,6 +336,7 @@ func normalizeInvoiceProfileInput(input InvoiceProfileInput) (InvoiceProfileInpu
 		BankAccount:       input.BankAccount,
 		RecipientEmail:    input.RecipientEmail,
 		RecipientPhone:    input.RecipientPhone,
+		Remark:            input.Remark,
 		SourceRefs:        []InvoiceSourceRef{{SourceType: InvoiceSourceTypePaymentOrder, SourceID: 1}},
 	}
 	normalized, err := normalizeInvoiceRequestInput(req)
@@ -363,6 +353,7 @@ func normalizeInvoiceProfileInput(input InvoiceProfileInput) (InvoiceProfileInpu
 		BankAccount:       normalized.BankAccount,
 		RecipientEmail:    normalized.RecipientEmail,
 		RecipientPhone:    normalized.RecipientPhone,
+		Remark:            normalized.Remark,
 		IsDefault:         input.IsDefault,
 	}, nil
 }
@@ -377,6 +368,7 @@ func normalizeInvoiceRequestInput(input InvoiceRequestInput) (InvoiceRequestInpu
 	input.BankAccount = strings.TrimSpace(input.BankAccount)
 	input.RecipientEmail = strings.TrimSpace(input.RecipientEmail)
 	input.RecipientPhone = strings.TrimSpace(input.RecipientPhone)
+	input.Remark = strings.TrimSpace(input.Remark)
 
 	if _, ok := invoiceBuyerType(input.InvoiceType); !ok {
 		return InvoiceRequestInput{}, ErrInvoiceTypeInvalid

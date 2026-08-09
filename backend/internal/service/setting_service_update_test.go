@@ -231,6 +231,102 @@ func TestSettingService_UpdateSettings_DefaultSubscriptions_RejectsDuplicateGrou
 	require.Nil(t, repo.updates)
 }
 
+func TestSettingService_UpdateSettings_OpenAICyberPolicyGroups_NormalizesAndPersists(t *testing.T) {
+	repo := &settingUpdateRepoStub{}
+	groupReader := &defaultSubGroupReaderStub{
+		byID: map[int64]*Group{
+			7:  {ID: 7, Platform: PlatformOpenAI},
+			11: {ID: 11, Platform: PlatformOpenAI},
+		},
+	}
+	svc := NewSettingService(repo, &config.Config{})
+	svc.SetDefaultSubscriptionGroupReader(groupReader)
+	settings := &SystemSettings{OpenAICyberPolicyEnforcedGroupIDs: []int64{11, 7, 11}}
+
+	err := svc.UpdateSettings(context.Background(), settings)
+
+	require.NoError(t, err)
+	require.Equal(t, []int64{7, 11}, groupReader.calls)
+	require.Equal(t, []int64{7, 11}, settings.OpenAICyberPolicyEnforcedGroupIDs)
+	require.Equal(t, `[7,11]`, repo.updates[SettingKeyOpenAICyberPolicyEnforcedGroupIDs])
+}
+
+func TestSettingService_UpdateSettings_OpenAICyberPolicyGroups_RejectsInvalidReferences(t *testing.T) {
+	tests := []struct {
+		name      string
+		groupIDs  []int64
+		reader    DefaultSubscriptionGroupReader
+		wantGroup string
+	}{
+		{
+			name:      "non-positive id",
+			groupIDs:  []int64{0},
+			reader:    &defaultSubGroupReaderStub{},
+			wantGroup: "0",
+		},
+		{
+			name:      "missing group",
+			groupIDs:  []int64{12},
+			reader:    &defaultSubGroupReaderStub{},
+			wantGroup: "12",
+		},
+		{
+			name:     "non-openai group",
+			groupIDs: []int64{13},
+			reader: &defaultSubGroupReaderStub{byID: map[int64]*Group{
+				13: {ID: 13, Platform: PlatformAnthropic},
+			}},
+			wantGroup: "13",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &settingUpdateRepoStub{}
+			svc := NewSettingService(repo, &config.Config{})
+			svc.SetDefaultSubscriptionGroupReader(tt.reader)
+
+			err := svc.UpdateSettings(context.Background(), &SystemSettings{
+				OpenAICyberPolicyEnforcedGroupIDs: tt.groupIDs,
+			})
+
+			require.Error(t, err)
+			require.Equal(t, "OPENAI_CYBER_POLICY_GROUP_INVALID", infraerrors.Reason(err))
+			require.Equal(t, tt.wantGroup, infraerrors.FromError(err).Metadata["group_id"])
+			require.Nil(t, repo.updates)
+		})
+	}
+}
+
+func TestSettingService_UpdateSettings_OpenAICyberPolicyGroups_RequiresGroupReader(t *testing.T) {
+	repo := &settingUpdateRepoStub{}
+	svc := NewSettingService(repo, &config.Config{})
+
+	err := svc.UpdateSettings(context.Background(), &SystemSettings{
+		OpenAICyberPolicyEnforcedGroupIDs: []int64{7},
+	})
+
+	require.EqualError(t, err, "openai cyber policy group validation unavailable")
+	require.Nil(t, repo.updates)
+}
+
+func TestParseOpenAICyberPolicyEnforcedGroupIDs(t *testing.T) {
+	got, err := parseOpenAICyberPolicyEnforcedGroupIDs(`[11,7,11]`)
+	require.NoError(t, err)
+	require.Equal(t, []int64{7, 11}, got)
+
+	got, err = parseOpenAICyberPolicyEnforcedGroupIDs("")
+	require.NoError(t, err)
+	require.Empty(t, got)
+	require.NotNil(t, got)
+
+	_, err = parseOpenAICyberPolicyEnforcedGroupIDs(`[7,0]`)
+	require.Error(t, err)
+
+	_, err = parseOpenAICyberPolicyEnforcedGroupIDs(`{"group_id":7}`)
+	require.Error(t, err)
+}
+
 func TestSettingService_UpdateSettings_RegistrationEmailSuffixWhitelist_Normalized(t *testing.T) {
 	repo := &settingUpdateRepoStub{}
 	svc := NewSettingService(repo, &config.Config{})

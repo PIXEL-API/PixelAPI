@@ -97,6 +97,11 @@ export default defineConfig(({ mode }) => {
               return 'vendor-i18n'
             }
 
+            // Excel 导出仅在后台发票页按需加载，避免进入通用首屏依赖包
+            if (id.includes('/xlsx/')) {
+              return 'vendor-xlsx'
+            }
+
             // 其他小型第三方库合并
             return 'vendor-misc'
           }

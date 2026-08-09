@@ -261,8 +261,7 @@ const (
 	SettingKeyAccountShareCommentReviewURL     = "account_share_comment_review_url"     // 账号广场评论审核模型 URL
 	SettingKeyAccountShareCommentReviewAPIKey  = "account_share_comment_review_api_key" // 账号广场评论审核 API Key
 	SettingKeyAccountShareCommentReviewModel   = "account_share_comment_review_model"   // 账号广场评论审核模型
-	SettingKeyCyberSessionBlockEnabled         = "cyber_session_block_enabled"          // cyber 命中后会话级自动屏蔽总开关（默认关）
-	SettingKeyCyberSessionBlockTTLSeconds      = "cyber_session_block_ttl_seconds"      // 会话屏蔽 TTL 秒数（默认 3600）
+	SettingKeyCyberSessionBlockEnabled         = "cyber_session_block_enabled"          // OpenAI cyber_policy 分组隔离总开关（默认关）
 	SettingKeyLoginAgreementEnabled            = "login_agreement_enabled"              // 登录前是否要求同意条款
 	SettingKeyLoginAgreementMode               = "login_agreement_mode"                 // 条款确认展示模式：modal / checkbox
 	SettingKeyLoginAgreementUpdatedAt          = "login_agreement_updated_at"           // 条款更新日期（展示用）
@@ -481,6 +480,10 @@ const (
 	// URL allowlist append-only settings. The config file still owns the security switch.
 	SettingKeyUpstreamURLAllowlistExtraHosts = "upstream_url_allowlist_extra_hosts" // JSON array
 )
+
+// SettingKeyOpenAICyberPolicyEnforcedGroupIDs controls which effective OpenAI groups
+// participate in upstream cyber_policy handling. The value is a JSON int64 array.
+const SettingKeyOpenAICyberPolicyEnforcedGroupIDs = "openai_cyber_policy_enforced_group_ids"
 
 // AdminAPIKeyPrefix is the prefix for admin API keys (distinct from user "sk-" keys).
 const AdminAPIKeyPrefix = "admin-"

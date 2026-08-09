@@ -1,16 +1,16 @@
 <template>
   <div>
     <label class="input-label">
-      {{ t('admin.users.groups') }}
+      {{ label || t('admin.users.groups') }}
       <span class="font-normal text-gray-400">{{ t('common.selectedCount', { count: modelValue.length }) }}</span>
     </label>
     <div
-      class="grid max-h-32 grid-cols-2 gap-1 overflow-y-auto rounded-lg border border-gray-200 bg-gray-50 p-2 dark:border-dark-600 dark:bg-dark-800"
+      class="grid max-h-48 grid-cols-1 gap-1 overflow-y-auto rounded-lg border border-gray-200 bg-gray-50 p-2 sm:grid-cols-2 dark:border-dark-600 dark:bg-dark-800"
     >
       <label
         v-for="group in filteredGroups"
         :key="group.id"
-        class="flex items-center gap-2 rounded px-2 py-1.5 transition-colors"
+        class="flex min-h-11 items-center gap-2 rounded px-2 py-1.5 transition-colors"
         :class="disabled
           ? 'cursor-not-allowed opacity-60'
           : 'cursor-pointer hover:bg-white dark:hover:bg-dark-700'"
@@ -36,7 +36,7 @@
       </label>
       <div
         v-if="filteredGroups.length === 0"
-        class="col-span-2 py-2 text-center text-sm text-gray-500 dark:text-gray-400"
+        class="py-3 text-center text-sm text-gray-500 sm:col-span-2 dark:text-gray-400"
       >
         {{ t('common.noGroupsAvailable') }}
       </div>
@@ -56,6 +56,7 @@ const { t } = useI18n()
 interface Props {
   modelValue: number[]
   groups: AdminGroup[]
+  label?: string
   platform?: GroupPlatform // Optional platform filter
   mixedScheduling?: boolean // For antigravity accounts: allow anthropic/gemini groups
   // 只读模式：分组由别处派生（如账号投放中，分组归投放维护），展示当前归属但不可改

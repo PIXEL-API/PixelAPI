@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -73,6 +74,11 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
+	opsRequestBody, err := buildOpenAIImagesOpsRequestBody(parsed)
+	if err != nil {
+		h.errorResponse(c, http.StatusInternalServerError, "api_error", "Failed to prepare request context")
+		return
+	}
 
 	reqLog = reqLog.With(
 		zap.String("model", parsed.Model),
@@ -81,11 +87,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		zap.String("capability", string(parsed.RequiredCapability)),
 	)
 
-	if parsed.Multipart {
-		setOpsRequestContext(c, parsed.Model, parsed.Stream, nil)
-	} else {
-		setOpsRequestContext(c, parsed.Model, parsed.Stream, nil)
-	}
+	setOpsRequestContext(c, parsed.Model, parsed.Stream, opsRequestBody)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(parsed.Stream, false)))
 
 	if h.errorPassthroughService != nil {
@@ -130,6 +132,12 @@ routeLoop:
 			return
 		}
 		currentAPIKey := routeCandidate.APIKey
+		switch h.checkCyberPolicyRouteBlock(c, currentAPIKey, body, parsed.Model, cyberBlockFormatChat, routeCursor, reqLog) {
+		case cyberPolicyRouteRejected:
+			return
+		case cyberPolicyRouteSkipped:
+			continue routeLoop
+		}
 		currentSubscription, subErr := h.gatewayService.ResolveRouteSubscription(c.Request.Context(), currentAPIKey, subscription)
 		if subErr != nil {
 			retry, termErr := routeBillingGate.skipOrTerminate(routeCursor, subErr, "route_subscription_unavailable", reqLog)
@@ -294,8 +302,10 @@ routeLoop:
 					ChannelUsageFields: channelMapping.ToUsageFields(parsed.Model, result.UpstreamModel),
 				})
 			}
+			upstreamAttemptID := h.beginOpenAIUpstreamAttempt(c, currentAPIKey, account)
 			result, err := h.gatewayService.ForwardImages(forwardCtx, c, account, body, parsed, channelMapping.MappedModel)
 			cancelForward()
+			cyberPolicyHit, _ := h.recordCyberPolicyHitForAttempt(selectionCtx, c, currentAPIKey, body, upstreamAttemptID)
 			forwardDurationMs := time.Since(forwardStart).Milliseconds()
 			recordUsageResult := func(result *service.OpenAIForwardResult) {
 				if result == nil {
@@ -330,6 +340,17 @@ routeLoop:
 			service.SetOpsLatencyMs(c, service.OpsResponseLatencyMsKey, responseLatencyMs)
 			if err == nil && result != nil && result.FirstTokenMs != nil {
 				service.SetOpsLatencyMs(c, service.OpsTimeToFirstTokenMsKey, int64(*result.FirstTokenMs))
+			}
+			if cyberPolicyHit {
+				if err != nil && !openAIForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err) {
+					h.ensureForwardErrorResponse(c, streamStarted)
+				}
+				reqLog.Warn("openai.images.cyber_policy_terminal",
+					zap.Int64("api_key_id", currentAPIKey.ID),
+					zap.Int64("effective_group_id", apiKeyGroupIDValue(currentAPIKey)),
+					zap.String("upstream_attempt_id", upstreamAttemptID),
+				)
+				return
 			}
 			if err != nil {
 				err = h.gatewayService.NormalizeGrokCredentialFailure(c.Request.Context(), c, account, err)
@@ -428,6 +449,51 @@ routeLoop:
 			return
 		}
 	}
+}
+
+type openAIImagesOpsRequestSnapshot struct {
+	Endpoint          string `json:"endpoint"`
+	Model             string `json:"model"`
+	Prompt            string `json:"prompt"`
+	Stream            bool   `json:"stream"`
+	N                 int    `json:"n"`
+	Size              string `json:"size"`
+	ResponseFormat    string `json:"response_format"`
+	Quality           string `json:"quality"`
+	Background        string `json:"background"`
+	OutputFormat      string `json:"output_format"`
+	Moderation        string `json:"moderation"`
+	InputFidelity     string `json:"input_fidelity"`
+	Style             string `json:"style"`
+	OutputCompression *int   `json:"output_compression,omitempty"`
+	PartialImages     *int   `json:"partial_images,omitempty"`
+	HasMask           bool   `json:"has_mask"`
+	Multipart         bool   `json:"multipart"`
+}
+
+func buildOpenAIImagesOpsRequestBody(parsed *service.OpenAIImagesRequest) ([]byte, error) {
+	if parsed == nil {
+		return nil, errors.New("parsed images request is required")
+	}
+	return json.Marshal(openAIImagesOpsRequestSnapshot{
+		Endpoint:          parsed.Endpoint,
+		Model:             parsed.Model,
+		Prompt:            parsed.Prompt,
+		Stream:            parsed.Stream,
+		N:                 parsed.N,
+		Size:              parsed.Size,
+		ResponseFormat:    parsed.ResponseFormat,
+		Quality:           parsed.Quality,
+		Background:        parsed.Background,
+		OutputFormat:      parsed.OutputFormat,
+		Moderation:        parsed.Moderation,
+		InputFidelity:     parsed.InputFidelity,
+		Style:             parsed.Style,
+		OutputCompression: parsed.OutputCompression,
+		PartialImages:     parsed.PartialImages,
+		HasMask:           parsed.HasMask,
+		Multipart:         parsed.Multipart,
+	})
 }
 
 func shouldReportOpenAIImagesScheduleFailure(failoverErr *service.UpstreamFailoverError) bool {

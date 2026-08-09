@@ -21,6 +21,17 @@ type settingHandlerRepoStub struct {
 	lastUpdates map[string]string
 }
 
+type settingHandlerGroupReaderStub struct {
+	groups map[int64]*service.Group
+}
+
+func (s *settingHandlerGroupReaderStub) GetByID(ctx context.Context, id int64) (*service.Group, error) {
+	if group, ok := s.groups[id]; ok {
+		return group, nil
+	}
+	return nil, service.ErrGroupNotFound
+}
+
 func (s *settingHandlerRepoStub) Get(ctx context.Context, key string) (*service.Setting, error) {
 	panic("unexpected Get call")
 }
@@ -245,9 +256,15 @@ func TestSettingHandler_UpdateSettings_PreservesOmittedSystemSettings(t *testing
 			service.SettingKeyChannelMonitorDefaultIntervalSeconds: "180",
 			service.SettingKeyAvailableChannelsEnabled:             "true",
 			service.SettingKeyAffiliateEnabled:                     "true",
+			service.SettingKeyOpenAICyberPolicyEnforcedGroupIDs:    `[7,11]`,
 		},
 	}
 	svc := service.NewSettingService(repo, &config.Config{Default: config.DefaultConfig{UserConcurrency: 5}})
+	svc.SetDefaultSubscriptionGroupReader(&settingHandlerGroupReaderStub{groups: map[int64]*service.Group{
+		7:  {ID: 7, Platform: service.PlatformOpenAI},
+		11: {ID: 11, Platform: service.PlatformOpenAI},
+		31: {ID: 31, SubscriptionType: service.SubscriptionTypeSubscription},
+	}})
 	handler := NewSettingHandler(svc, nil, nil, nil, nil, nil)
 
 	body := map[string]any{
@@ -273,6 +290,7 @@ func TestSettingHandler_UpdateSettings_PreservesOmittedSystemSettings(t *testing
 	require.Equal(t, "12.50000000", repo.values[service.SettingKeyDefaultBalance])
 	require.Equal(t, "0.25000000", repo.values[service.SettingKeyUserPrivateGroupCommissionRate])
 	require.Equal(t, `[{"group_id":31,"validity_days":15}]`, repo.values[service.SettingKeyDefaultSubscriptions])
+	require.Equal(t, `[7,11]`, repo.values[service.SettingKeyOpenAICyberPolicyEnforcedGroupIDs])
 
 	var resp response.Response
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
@@ -282,6 +300,26 @@ func TestSettingHandler_UpdateSettings_PreservesOmittedSystemSettings(t *testing
 	require.Equal(t, "Custom subtitle", data["site_subtitle"])
 	require.Equal(t, "https://api.example.com", data["api_base_url"])
 	require.Equal(t, 0.25, data["user_private_group_commission_rate"])
+	require.Equal(t, []any{float64(7), float64(11)}, data["openai_cyber_policy_enforced_group_ids"])
+}
+
+func TestSettingHandler_UpdateSettings_ClearsOpenAICyberPolicyGroupsWithExplicitEmptyList(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &settingHandlerRepoStub{values: map[string]string{
+		service.SettingKeyOpenAICyberPolicyEnforcedGroupIDs: `[7,11]`,
+	}}
+	svc := service.NewSettingService(repo, &config.Config{Default: config.DefaultConfig{UserConcurrency: 5}})
+	handler := NewSettingHandler(svc, nil, nil, nil, nil, nil)
+	rawBody := []byte(`{"openai_cyber_policy_enforced_group_ids":[]}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPut, "/api/v1/admin/settings", bytes.NewReader(rawBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	handler.UpdateSettings(c)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, `[]`, repo.values[service.SettingKeyOpenAICyberPolicyEnforcedGroupIDs])
 }
 
 func TestSettingHandler_UpdateSettings_PersistsPaymentVisibleMethodsAndAdvancedScheduler(t *testing.T) {

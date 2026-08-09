@@ -320,3 +320,53 @@ func TestSetOpsEndpointContext_NilContext(t *testing.T) {
 		setOpsEndpointContext(nil, "model", int16(1))
 	})
 }
+
+func TestApplyOpsEffectiveRoute_OverridesAuthenticationRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	groupID := int64(1215)
+	apiKey := &service.APIKey{
+		ID:      42,
+		UserID:  73,
+		GroupID: &groupID,
+		Group:   &service.Group{ID: groupID, Platform: "openai"},
+	}
+	account := &service.Account{ID: 88, Platform: "openai"}
+	setOpsEffectiveRoute(c, apiKey, account)
+
+	authAPIKeyID := int64(1)
+	authUserID := int64(2)
+	authGroupID := int64(3)
+	authAccountID := int64(4)
+	entry := &service.OpsInsertErrorLogInput{
+		APIKeyID:  &authAPIKeyID,
+		UserID:    &authUserID,
+		GroupID:   &authGroupID,
+		AccountID: &authAccountID,
+		Platform:  "anthropic",
+	}
+	applyOpsEffectiveRoute(c, entry)
+
+	require.Equal(t, int64(42), *entry.APIKeyID)
+	require.Equal(t, int64(73), *entry.UserID)
+	require.Equal(t, groupID, *entry.GroupID)
+	require.Equal(t, int64(88), *entry.AccountID)
+	require.Equal(t, "openai", entry.Platform)
+}
+
+func TestApplyOpsEffectiveRoute_InvalidContextValueDoesNotMutateEntry(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Set(opsEffectiveRouteKey, "invalid")
+
+	groupID := int64(7)
+	entry := &service.OpsInsertErrorLogInput{GroupID: &groupID, Platform: "openai"}
+	applyOpsEffectiveRoute(c, entry)
+
+	require.Equal(t, groupID, *entry.GroupID)
+	require.Equal(t, "openai", entry.Platform)
+}

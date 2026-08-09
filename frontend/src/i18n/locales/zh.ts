@@ -8099,6 +8099,17 @@ export default {
         backup: "数据备份",
         payment: "支付设置",
       },
+      groupLoading: {
+        subscriptionErrorTitle: "订阅分组加载失败",
+        subscriptionErrorHint:
+          "无法刷新可选订阅分组；其他分组列表和已保存的订阅分组 ID 均未被改动。",
+        openAIErrorTitle: "OpenAI Cyber 分组加载失败",
+        openAIErrorHint:
+          "无法刷新 Cyber 可选分组；订阅分组和已保存的 Cyber 分组 ID 均未被改动。",
+        requestFailedDetail: "请求失败，请检查网络或访问权限后重试。",
+        retrySubscriptions: "重新加载订阅分组",
+        retryOpenAI: "重新加载 OpenAI 分组",
+      },
       features: {
         channelMonitor: {
           title: "渠道监控",
@@ -8161,12 +8172,16 @@ export default {
           configureLink: "前往风控管理配置规则",
           enabled: "启用内容风控",
           enabledHint: "关闭后风控规则不会参与请求处理，已保存的规则会保留。",
-          cyberSessionBlockEnabled: "启用 cyber 会话级屏蔽",
+          cyberSessionBlockEnabled: "启用 OpenAI Cyber 分组隔离",
           cyberSessionBlockEnabledHint:
-            "上游返回 cyber_policy 后，把同一显式会话后续请求拦在账号选择前；默认关闭。",
-          cyberSessionBlockTTL: "会话屏蔽 TTL（秒）",
-          cyberSessionBlockTTLHint:
-            "建议 3600 秒。仅对 session_id、conversation_id 或 prompt_cache_key 生效。",
+            "仅对下方选中的 OpenAI 分组处理上游 cyber_policy；未选分组保持原有错误流程。",
+          cyberPolicyGroups: "需要处理 Cyber 的 OpenAI 分组",
+          cyberPolicyGroupsHint:
+            "隔离维度为 API Key + 本次实际路由分组；同一 API Key 的其他分组不受影响。",
+          cyberPolicyScheduleHint:
+            "同一自然日内第一次隔离 5 分钟，第二次隔离 15 分钟，第三次隔离到当天 24:00；每天 00:00 重新计次。缺少显式会话标识时，前两次退化为 API Key + 分组短期隔离。",
+          cyberPolicyNoGroupsHint:
+            "当前没有选择分组。即使总开关已开启，也不会对任何分组执行 Cyber 专项计次或隔离。",
         },
         affiliate: {
           title: "邀请收益",

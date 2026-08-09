@@ -129,8 +129,15 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		}
 		currentAPIKey := routeCandidate.APIKey
 		routingPlatform := openAICompatibleRoutingPlatform(currentAPIKey)
-		if h.rejectIfCyberSessionBlocked(c, currentAPIKey, body, reqModel, cyberBlockFormatChat) {
+		switch h.checkCyberPolicyRouteBlock(c, currentAPIKey, body, reqModel, cyberBlockFormatChat, routeCursor, reqLog) {
+		case cyberPolicyRouteRejected:
 			return
+		case cyberPolicyRouteSkipped:
+			failedAccountIDs = make(map[int64]struct{})
+			sameAccountRetryCount = make(map[int64]int)
+			switchCount = 0
+			lastFailoverErr = nil
+			continue
 		}
 		currentSubscription, subErr := h.gatewayService.ResolveRouteSubscription(c.Request.Context(), currentAPIKey, subscription)
 		if subErr != nil {
@@ -342,11 +349,10 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
 			})
 		}
+		upstreamAttemptID := h.beginOpenAIUpstreamAttempt(c, currentAPIKey, account)
 		result, err := h.gatewayService.ForwardAsChatCompletions(forwardCtx, c, account, forwardBody, promptCacheKey, defaultMappedModel)
 		cancelForward()
-		if service.GetOpsCyberPolicy(c) != nil {
-			h.gatewayService.MarkCyberSessionBlocked(selectionCtx, service.CyberSessionBlockKey(currentAPIKey.ID, c, body))
-		}
+		cyberPolicyHit, _ := h.recordCyberPolicyHitForAttempt(selectionCtx, c, currentAPIKey, body, upstreamAttemptID)
 
 		forwardDurationMs := time.Since(forwardStart).Milliseconds()
 		recordUsageResult := func(result *service.OpenAIForwardResult) {
@@ -382,6 +388,17 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		service.SetOpsLatencyMs(c, service.OpsResponseLatencyMsKey, responseLatencyMs)
 		if err == nil && result != nil && result.FirstTokenMs != nil {
 			service.SetOpsLatencyMs(c, service.OpsTimeToFirstTokenMsKey, int64(*result.FirstTokenMs))
+		}
+		if cyberPolicyHit {
+			if err != nil && !openAIForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err) {
+				h.ensureForwardErrorResponse(c, streamStarted)
+			}
+			reqLog.Warn("openai_chat_completions.cyber_policy_terminal",
+				zap.Int64("api_key_id", currentAPIKey.ID),
+				zap.Int64("effective_group_id", apiKeyGroupIDValue(currentAPIKey)),
+				zap.String("upstream_attempt_id", upstreamAttemptID),
+			)
+			return
 		}
 		if err != nil {
 			err = h.gatewayService.NormalizeGrokCredentialFailure(c.Request.Context(), c, account, err)

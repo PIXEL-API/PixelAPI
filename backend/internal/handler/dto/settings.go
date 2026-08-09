@@ -142,7 +142,7 @@ type SystemSettings struct {
 	DefaultBalance                            float64                      `json:"default_balance"`
 	RiskControlEnabled                        bool                         `json:"risk_control_enabled"`
 	CyberSessionBlockEnabled                  bool                         `json:"cyber_session_block_enabled"`
-	CyberSessionBlockTTLSeconds               int                          `json:"cyber_session_block_ttl_seconds"`
+	OpenAICyberPolicyEnforcedGroupIDs         []int64                      `json:"openai_cyber_policy_enforced_group_ids"`
 	AccountShareCommentReviewEnabled          bool                         `json:"account_share_comment_review_enabled"`
 	AccountShareCommentReviewURL              string                       `json:"account_share_comment_review_url"`
 	AccountShareCommentReviewAPIKeyConfigured bool                         `json:"account_share_comment_review_api_key_configured"`

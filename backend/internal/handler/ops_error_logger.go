@@ -30,6 +30,7 @@ const (
 	opsStreamKey                 = "ops_stream"
 	opsRequestBodyKey            = "ops_request_body"
 	opsAccountIDKey              = "ops_account_id"
+	opsEffectiveRouteKey         = "ops_effective_route"
 	opsRoutingCapacityLimitedKey = "ops_routing_capacity_limited"
 
 	opsUpstreamModelKey = "ops_upstream_model"
@@ -71,6 +72,14 @@ type opsRequestBodySnapshot struct {
 	raw       []byte
 	bytes     int
 	truncated bool
+}
+
+type opsEffectiveRouteContext struct {
+	apiKeyID  int64
+	userID    int64
+	groupID   int64
+	accountID int64
+	platform  string
 }
 
 type opsErrorLogJob struct {
@@ -429,6 +438,69 @@ func setOpsSelectedAccount(c *gin.Context, accountID int64, platform ...string) 
 			}
 		}
 		c.Request = c.Request.WithContext(ctx)
+	}
+}
+
+// setOpsEffectiveRoute records the route-scoped identity independently from
+// the authentication context. Multi-group routing must not overwrite the
+// original API key stored by authentication middleware.
+func setOpsEffectiveRoute(c *gin.Context, apiKey *service.APIKey, account *service.Account) {
+	if c == nil || apiKey == nil {
+		return
+	}
+	route := opsEffectiveRouteContext{
+		apiKeyID: apiKey.ID,
+		userID:   apiKey.UserID,
+	}
+	if apiKey.User != nil && apiKey.User.ID > 0 {
+		route.userID = apiKey.User.ID
+	}
+	if apiKey.GroupID != nil {
+		route.groupID = *apiKey.GroupID
+	}
+	if apiKey.Group != nil {
+		route.platform = strings.TrimSpace(apiKey.Group.Platform)
+	}
+	if account != nil {
+		route.accountID = account.ID
+		if route.platform == "" {
+			route.platform = strings.TrimSpace(account.Platform)
+		}
+	}
+	c.Set(opsEffectiveRouteKey, route)
+}
+
+func applyOpsEffectiveRoute(c *gin.Context, entry *service.OpsInsertErrorLogInput) {
+	if c == nil || entry == nil {
+		return
+	}
+	v, ok := c.Get(opsEffectiveRouteKey)
+	if !ok {
+		return
+	}
+	route, ok := v.(opsEffectiveRouteContext)
+	if !ok {
+		return
+	}
+	if route.apiKeyID > 0 {
+		id := route.apiKeyID
+		entry.APIKeyID = &id
+	}
+	if route.userID > 0 {
+		id := route.userID
+		entry.UserID = &id
+	}
+	if route.groupID > 0 {
+		id := route.groupID
+		entry.GroupID = &id
+	}
+	if route.accountID > 0 {
+		id := route.accountID
+		entry.AccountID = &id
+	}
+	if route.platform != "" {
+		entry.Platform = route.platform
+		entry.UpstreamEndpoint = GetUpstreamEndpoint(c, route.platform)
 	}
 }
 
@@ -843,6 +915,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 					entry.Platform = apiKey.Group.Platform
 				}
 			}
+			applyOpsEffectiveRoute(c, entry)
 
 			var clientIP string
 			if ip := strings.TrimSpace(ip.GetClientIP(c)); ip != "" {
@@ -1047,6 +1120,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 				entry.Platform = apiKey.Group.Platform
 			}
 		}
+		applyOpsEffectiveRoute(c, entry)
 
 		var clientIP string
 		if ip := strings.TrimSpace(ip.GetClientIP(c)); ip != "" {

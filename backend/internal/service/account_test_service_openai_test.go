@@ -312,16 +312,62 @@ func TestCreateOpenAITestPayload_OAuthOmitsMaxOutputTokens(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestCreateOpenAITestPayload_APIKeyKeepsMaxOutputTokens(t *testing.T) {
+// API Key 账号与上游一致：payload 只含 model/input/stream/instructions，
+// 不再携带 max_output_tokens、tools 或 tool_choice（推理模型会因 16 token 上限
+// 返回 response.incomplete，导致探针失败）。
+func TestCreateOpenAITestPayload_APIKeyOmitCapAndTools(t *testing.T) {
 	payload := createOpenAITestPayload("gpt-5.4", false)
 
-	require.Equal(t, openAITestMaxOutputTokens, payload["max_output_tokens"])
 	require.Equal(t, true, payload["stream"])
+	_, hasMaxOutputTokens := payload["max_output_tokens"]
+	require.False(t, hasMaxOutputTokens)
+	_, hasTools := payload["tools"]
+	require.False(t, hasTools)
+	_, hasToolChoice := payload["tool_choice"]
+	require.False(t, hasToolChoice)
 	_, hasStore := payload["store"]
 	require.False(t, hasStore)
 
+	// payload 必须携带 input（文本 completion 内容）与 instructions，
+	// 这是实际发送的探针请求体，缺失会让上游无法正常返回。
+	input, ok := payload["input"].([]map[string]any)
+	require.True(t, ok)
+	require.NotEmpty(t, input)
+	require.NotEmpty(t, payload["instructions"])
+
 	_, err := json.Marshal(payload)
 	require.NoError(t, err)
+}
+
+// 正向成功路径显式测试：apikey 账号 + 普通文本流（无任何工具），
+// 必须走到 test_complete 并 success:true。此前的 requireFunctionCall
+// 死代码回归正是靠这个隐式覆盖兜住的，现在显式断言。
+func TestAccountTestService_OpenAIAPIKeyPlainTextCompletionSucceeds(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, recorder := newTestContext()
+
+	resp := newJSONResponse(http.StatusOK, "")
+	resp.Body = io.NopCloser(strings.NewReader(`data: {"type":"response.output_text.delta","delta":"hi"}
+
+data: {"type":"response.completed"}
+
+`))
+
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{resp}}
+	svc := &AccountTestService{cfg: &config.Config{}, httpUpstream: upstream}
+	account := &Account{
+		ID:          104,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "sk-test"},
+	}
+
+	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4-mini", "", "")
+
+	require.NoError(t, err)
+	require.Contains(t, recorder.Body.String(), `"type":"test_complete"`)
+	require.Contains(t, recorder.Body.String(), `"success":true`)
 }
 
 func TestAccountTestService_OpenAIAPIKeyRootBaseURLUsesV1ResponsesPath(t *testing.T) {
@@ -329,7 +375,7 @@ func TestAccountTestService_OpenAIAPIKeyRootBaseURLUsesV1ResponsesPath(t *testin
 	ctx, _ := newTestContext()
 
 	resp := newJSONResponse(http.StatusOK, "")
-	resp.Body = io.NopCloser(strings.NewReader(`data: {"type":"response.output_item.done","item":{"type":"function_call","name":"probe_ping"}}
+	resp.Body = io.NopCloser(strings.NewReader(`data: {"type":"response.output_text.delta","delta":"hi"}
 
 data: {"type":"response.completed"}
 
@@ -380,6 +426,61 @@ func TestAccountTestService_OpenAIStreamEOFBeforeCompletedFails(t *testing.T) {
 	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
 	require.Error(t, err)
 	require.Contains(t, recorder.Body.String(), "response.completed")
+	require.NotContains(t, recorder.Body.String(), `"success":true`)
+}
+
+func TestAccountTestService_OpenAIResponseIncompleteFailsWithReason(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, recorder := newTestContext()
+
+	resp := newJSONResponse(http.StatusOK, "")
+	resp.Body = io.NopCloser(strings.NewReader(`data: {"type":"response.output_text.delta","delta":"hi"}
+
+data: {"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}
+
+`))
+
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{resp}}
+	svc := &AccountTestService{cfg: &config.Config{}, httpUpstream: upstream}
+	account := &Account{
+		ID:          91,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "sk-test"},
+	}
+
+	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
+	require.Error(t, err)
+	require.Contains(t, recorder.Body.String(), "response incomplete")
+	require.Contains(t, recorder.Body.String(), "max_output_tokens")
+	require.NotContains(t, recorder.Body.String(), `"success":true`)
+}
+
+// 兼容回退：incomplete_details 位于事件顶层（非标准位置）时，reason 也应能读出。
+func TestAccountTestService_OpenAIResponseIncompleteTopLevelReason(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, recorder := newTestContext()
+
+	resp := newJSONResponse(http.StatusOK, "")
+	resp.Body = io.NopCloser(strings.NewReader(`data: {"type":"response.incomplete","incomplete_details":{"reason":"max_output_tokens"}}
+
+`))
+
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{resp}}
+	svc := &AccountTestService{cfg: &config.Config{}, httpUpstream: upstream}
+	account := &Account{
+		ID:          105,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "sk-test"},
+	}
+
+	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
+	require.Error(t, err)
+	require.Contains(t, recorder.Body.String(), "response incomplete")
+	require.Contains(t, recorder.Body.String(), "max_output_tokens")
 	require.NotContains(t, recorder.Body.String(), `"success":true`)
 }
 

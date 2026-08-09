@@ -12,11 +12,11 @@
             处理用户提交的发票申请
           </p>
         </div>
-        <div class="flex flex-wrap gap-2">
+        <div class="flex w-full flex-wrap gap-2 lg:w-auto">
           <select
             v-model="filters.status"
-            class="input w-36"
-            @change="loadRequests"
+            class="input w-full sm:w-36"
+            @change="handleFilterChange"
           >
             <option value="">全部状态</option>
             <option value="pending">待处理</option>
@@ -26,24 +26,47 @@
           </select>
           <input
             v-model.trim="filters.keyword"
-            class="input w-56"
+            class="input w-full sm:w-56"
             type="search"
             placeholder="申请号 / 用户 / 抬头"
-            @keyup.enter="loadRequests"
+            @keyup.enter="handleSearch"
           />
           <button
-            class="btn btn-secondary"
+            class="btn btn-secondary min-h-11 flex-1 sm:flex-none"
             type="button"
-            @click="loadRequests"
+            @click="handleSearch"
             :disabled="loading"
           >
             查询
+          </button>
+          <button
+            class="btn btn-primary min-h-11 flex-1 sm:flex-none"
+            type="button"
+            @click="exportSelected"
+            :disabled="exporting || selectedCount === 0"
+          >
+            {{ exporting ? "正在导出" : `批量导出（${selectedCount}）` }}
           </button>
         </div>
       </div>
 
       <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
         <section class="card overflow-hidden">
+          <div
+            v-if="selectedCount > 0"
+            class="flex flex-col gap-2 border-b border-gray-100 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between dark:border-dark-700"
+          >
+            <span class="text-gray-600 dark:text-gray-300">
+              已选择 {{ selectedCount }} 条待处理申请
+            </span>
+            <button
+              class="btn btn-sm btn-secondary min-h-11 self-start sm:self-auto"
+              type="button"
+              @click="clearSelection"
+            >
+              清除选择
+            </button>
+          </div>
           <div class="overflow-x-auto">
             <table
               class="min-w-full divide-y divide-gray-100 text-sm dark:divide-dark-700"
@@ -52,6 +75,21 @@
                 class="bg-gray-50 text-left text-xs uppercase text-gray-500 dark:bg-dark-800 dark:text-gray-400"
               >
                 <tr>
+                  <th class="w-14 px-2 py-1 text-center">
+                    <label
+                      class="inline-flex min-h-11 min-w-11 cursor-pointer items-center justify-center"
+                    >
+                      <input
+                        type="checkbox"
+                        class="rounded border-gray-300 text-primary-600"
+                        :checked="allVisibleSelected"
+                        :indeterminate="someVisibleSelected"
+                        :disabled="selectableRequests.length === 0"
+                        @change="toggleVisibleSelection"
+                      />
+                      <span class="sr-only">选择当前待处理申请</span>
+                    </label>
+                  </th>
                   <th class="px-4 py-3">申请号</th>
                   <th class="px-4 py-3">用户</th>
                   <th class="px-4 py-3">抬头</th>
@@ -72,6 +110,21 @@
                   }"
                   @click="selectRequest(request)"
                 >
+                  <td class="px-2 py-1 text-center" @click.stop>
+                    <label
+                      v-if="request.status === 'pending'"
+                      class="inline-flex min-h-11 min-w-11 cursor-pointer items-center justify-center"
+                    >
+                      <input
+                        type="checkbox"
+                        class="rounded border-gray-300 text-primary-600"
+                        :checked="isSelected(request.id)"
+                        @change="toggleSelection(request.id)"
+                      />
+                      <span class="sr-only">选择 {{ request.request_no }}</span>
+                    </label>
+                    <span v-else class="text-gray-300 dark:text-dark-600">-</span>
+                  </td>
                   <td class="px-4 py-3 font-mono text-xs">
                     {{ request.request_no }}
                   </td>
@@ -92,7 +145,7 @@
                 </tr>
                 <tr v-if="!requests.length">
                   <td
-                    colspan="7"
+                    colspan="8"
                     class="px-4 py-8 text-center text-sm text-gray-500 dark:text-gray-400"
                   >
                     暂无发票申请
@@ -101,6 +154,15 @@
               </tbody>
             </table>
           </div>
+          <Pagination
+            v-if="pagination.total > 0"
+            class="invoice-pagination"
+            :page="pagination.page"
+            :page-size="pagination.page_size"
+            :total="pagination.total"
+            @update:page="handlePageChange"
+            @update:pageSize="handlePageSizeChange"
+          />
         </section>
 
         <aside class="card p-5">
@@ -148,6 +210,14 @@
                   class="text-right font-semibold text-gray-900 dark:text-white"
                 >
                   {{ formatMoney(selected.amount) }}
+                </dd>
+              </div>
+              <div class="flex justify-between gap-4">
+                <dt class="text-gray-500 dark:text-gray-400">发票备注</dt>
+                <dd
+                  class="max-w-[70%] whitespace-pre-wrap break-words text-right text-gray-900 dark:text-white"
+                >
+                  {{ selected.remark || "-" }}
                 </dd>
               </div>
             </dl>
@@ -210,42 +280,11 @@
 
             <div v-if="selected.status === 'pending'" class="mt-5 space-y-4">
               <div>
-                <label class="input-label">发票号码</label>
-                <input
-                  v-model.trim="issueForm.invoice_number"
-                  class="input"
-                  type="text"
-                />
-              </div>
-              <div>
-                <label class="input-label">发票代码</label>
-                <input
-                  v-model.trim="issueForm.invoice_code"
-                  class="input"
-                  type="text"
-                />
-              </div>
-              <div>
-                <label class="input-label">发票文件链接</label>
-                <input
-                  v-model.trim="issueForm.invoice_file_url"
-                  class="input"
-                  type="url"
-                />
-              </div>
-              <div>
-                <label class="input-label">文件名称</label>
-                <input
-                  v-model.trim="issueForm.invoice_file_name"
-                  class="input"
-                  type="text"
-                />
-              </div>
-              <div>
                 <label class="input-label">处理备注</label>
                 <textarea
                   v-model.trim="issueForm.admin_note"
                   class="input min-h-20"
+                  placeholder="可选，仅管理员可见"
                 ></textarea>
               </div>
               <div class="flex gap-2">
@@ -260,44 +299,29 @@
                 <button
                   class="btn btn-danger flex-1"
                   type="button"
-                  @click="rejectSelected"
+                  @click="openRejectDialog"
                   :disabled="processing"
                 >
                   驳回
                 </button>
               </div>
-              <textarea
-                v-model.trim="rejectReason"
-                class="input min-h-20"
-                placeholder="驳回原因"
-              ></textarea>
             </div>
 
             <div
               v-else
               class="mt-5 rounded border border-gray-100 p-3 text-sm dark:border-dark-700"
             >
-              <p v-if="selected.invoice_number">
-                <span class="text-gray-500 dark:text-gray-400">发票号码：</span
-                >{{ selected.invoice_number }}
-              </p>
-              <p v-if="selected.invoice_code">
-                <span class="text-gray-500 dark:text-gray-400">发票代码：</span
-                >{{ selected.invoice_code }}
+              <p v-if="selected.status === 'issued'">
+                该申请已标记为已开票。
               </p>
               <p v-if="selected.rejected_reason">
                 <span class="text-gray-500 dark:text-gray-400">驳回原因：</span
                 >{{ selected.rejected_reason }}
               </p>
-              <a
-                v-if="selected.invoice_file_url"
-                class="text-primary-600 hover:underline dark:text-primary-400"
-                :href="selected.invoice_file_url"
-                target="_blank"
-                rel="noreferrer"
-              >
-                打开发票文件
-              </a>
+              <p v-if="selected.admin_note">
+                <span class="text-gray-500 dark:text-gray-400">处理备注：</span
+                >{{ selected.admin_note }}
+              </p>
             </div>
           </template>
           <div
@@ -308,72 +332,204 @@
           </div>
         </aside>
       </div>
+
+      <BaseDialog
+        :show="!!rejectTarget"
+        title="驳回发票申请"
+        width="narrow"
+        :close-disabled="processing"
+        @close="closeRejectDialog"
+      >
+        <div v-if="rejectTarget" class="space-y-4">
+          <p class="text-sm text-gray-600 dark:text-gray-300">
+            正在驳回申请 {{ rejectTarget.request_no }}。驳回后会释放对应开票来源。
+          </p>
+          <div>
+            <label class="input-label">驳回原因（用户可见）</label>
+            <textarea
+              v-model="rejectReason"
+              class="input mt-1.5 min-h-24"
+              placeholder="请填写具体驳回原因"
+              required
+            ></textarea>
+            <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+              此原因会直接显示在用户的开票申请中。
+            </p>
+          </div>
+          <div class="flex justify-end gap-2">
+            <button
+              class="btn btn-secondary min-h-11"
+              type="button"
+              :disabled="processing"
+              @click="closeRejectDialog"
+            >
+              取消
+            </button>
+            <button
+              class="btn btn-danger min-h-11"
+              type="button"
+              :disabled="processing || !rejectReason.trim()"
+              @click="rejectSelected"
+            >
+              {{ processing ? "处理中" : "确认驳回" }}
+            </button>
+          </div>
+        </div>
+      </BaseDialog>
     </div>
   </AppLayout>
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref } from "vue";
+import { saveAs } from "file-saver";
+import type { CellObject } from "xlsx";
 import AppLayout from "@/components/layout/AppLayout.vue";
+import BaseDialog from "@/components/common/BaseDialog.vue";
+import Pagination from "@/components/common/Pagination.vue";
 import adminInvoicesAPI from "@/api/admin/invoices";
 import { useAppStore } from "@/stores/app";
 import type { InvoiceRequest, InvoiceType } from "@/types";
+import { getPersistedPageSize } from "@/composables/usePersistedPageSize";
+import { useTableSelection } from "@/composables/useTableSelection";
 import { extractApiErrorMessage } from "@/utils/apiError";
 import { formatCurrency, formatDateTime } from "@/utils/format";
+
+const invoiceExportHeaders = [
+  "序号",
+  "发票类型",
+  "公司名称",
+  "税号",
+  "开票 名称",
+  "总金额",
+  "邮箱号",
+  "开户行",
+  "银行账号",
+  "发票备注",
+] as const;
+const invoiceExportItemName = "信息服务费";
 
 const appStore = useAppStore();
 const loading = ref(false);
 const processing = ref(false);
+const exporting = ref(false);
 const requests = ref<InvoiceRequest[]>([]);
+let loadSequence = 0;
 const selected = ref<InvoiceRequest | null>(null);
+const rejectTarget = ref<InvoiceRequest | null>(null);
 const rejectReason = ref("");
 const filters = reactive({
   status: "",
   keyword: "",
 });
+const pagination = reactive({
+  page: 1,
+  page_size: getPersistedPageSize(50),
+  total: 0,
+});
 const issueForm = reactive({
-  invoice_number: "",
-  invoice_code: "",
-  invoice_file_url: "",
-  invoice_file_name: "",
   admin_note: "",
 });
+const selectableRequests = computed(() =>
+  requests.value.filter((request) => request.status === "pending"),
+);
+const {
+  selectedCount,
+  allVisibleSelected,
+  isSelected,
+  toggle: toggleSelection,
+  clear: clearSelection,
+  toggleVisible,
+} = useTableSelection({
+  rows: selectableRequests,
+  getId: (request) => request.id,
+});
+const someVisibleSelected = computed(
+  () =>
+    !allVisibleSelected.value &&
+    selectableRequests.value.some((request) => isSelected(request.id)),
+);
+const selectedRequests = computed(() =>
+  requests.value.filter(
+    (request) => request.status === "pending" && isSelected(request.id),
+  ),
+);
 
 onMounted(() => {
   void loadRequests();
 });
 
 async function loadRequests(): Promise<void> {
+  const currentLoadSequence = ++loadSequence;
   loading.value = true;
   try {
-    const { data } = await adminInvoicesAPI.list({
-      page: 1,
-      page_size: 50,
-      status: filters.status || undefined,
-      keyword: filters.keyword || undefined,
-    });
+    let { data } = await fetchRequestsPage();
+    if (currentLoadSequence !== loadSequence) return;
+
+    if (data.pages > 0 && pagination.page > data.pages) {
+      pagination.page = data.pages;
+      ({ data } = await fetchRequestsPage());
+      if (currentLoadSequence !== loadSequence) return;
+    }
+
     requests.value = data.items;
+    pagination.total = data.total;
+    pagination.page = data.pages === 0 ? 1 : data.page;
+    pagination.page_size = data.page_size;
+    clearSelection();
     if (selected.value) {
       selected.value =
         requests.value.find((item) => item.id === selected.value?.id) || null;
     }
   } catch (error) {
+    if (currentLoadSequence !== loadSequence) return;
     appStore.showError(extractApiErrorMessage(error, "发票申请加载失败"));
   } finally {
-    loading.value = false;
+    if (currentLoadSequence === loadSequence) {
+      loading.value = false;
+    }
   }
+}
+
+function fetchRequestsPage() {
+  return adminInvoicesAPI.list({
+    page: pagination.page,
+    page_size: pagination.page_size,
+    status: filters.status || undefined,
+    keyword: filters.keyword || undefined,
+  });
+}
+
+function handleFilterChange(): void {
+  pagination.page = 1;
+  clearSelection();
+  void loadRequests();
+}
+
+function handleSearch(): void {
+  pagination.page = 1;
+  clearSelection();
+  void loadRequests();
+}
+
+function handlePageChange(page: number): void {
+  pagination.page = page;
+  clearSelection();
+  void loadRequests();
+}
+
+function handlePageSizeChange(pageSize: number): void {
+  pagination.page = 1;
+  pagination.page_size = pageSize;
+  clearSelection();
+  void loadRequests();
 }
 
 async function selectRequest(request: InvoiceRequest): Promise<void> {
   try {
     const { data } = await adminInvoicesAPI.get(request.id);
     selected.value = data;
-    issueForm.invoice_number = data.invoice_number || "";
-    issueForm.invoice_code = data.invoice_code || "";
-    issueForm.invoice_file_url = data.invoice_file_url || "";
-    issueForm.invoice_file_name = data.invoice_file_name || "";
     issueForm.admin_note = data.admin_note || "";
-    rejectReason.value = data.rejected_reason || "";
   } catch (error) {
     appStore.showError(extractApiErrorMessage(error, "发票详情加载失败"));
   }
@@ -397,20 +553,123 @@ async function issueSelected(): Promise<void> {
 }
 
 async function rejectSelected(): Promise<void> {
-  if (!selected.value) return;
+  const target = rejectTarget.value;
+  const reason = rejectReason.value.trim();
+  if (!target) return;
+  if (!reason) {
+    appStore.showError("请填写驳回原因");
+    return;
+  }
   processing.value = true;
   try {
-    const { data } = await adminInvoicesAPI.reject(selected.value.id, {
-      reason: rejectReason.value,
+    const { data } = await adminInvoicesAPI.reject(target.id, {
+      reason,
       admin_note: issueForm.admin_note,
     });
-    selected.value = data;
+    if (selected.value?.id === target.id) selected.value = data;
+    rejectTarget.value = null;
+    rejectReason.value = "";
     appStore.showSuccess("发票申请已驳回");
     await loadRequests();
   } catch (error) {
     appStore.showError(extractApiErrorMessage(error, "驳回发票失败"));
   } finally {
     processing.value = false;
+  }
+}
+
+function openRejectDialog(): void {
+  if (!selected.value || selected.value.status !== "pending") return;
+  rejectReason.value = "";
+  rejectTarget.value = selected.value;
+}
+
+function closeRejectDialog(): void {
+  if (processing.value) return;
+  rejectTarget.value = null;
+  rejectReason.value = "";
+}
+
+function toggleVisibleSelection(event: Event): void {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement)) return;
+  toggleVisible(target.checked);
+}
+
+function textCell(value: string): CellObject {
+  return { t: "s", v: value };
+}
+
+function numberCell(value: number): CellObject {
+  return { t: "n", v: value };
+}
+
+function exportFileName(now: Date = new Date()): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const date = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
+  const time = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  return `批量开票-${date}-${time}.xls`;
+}
+
+async function exportSelected(): Promise<void> {
+  if (exporting.value) return;
+  const exportItems = selectedRequests.value;
+  if (exportItems.length === 0) {
+    appStore.showError("请选择待处理的发票申请");
+    return;
+  }
+
+  exporting.value = true;
+  try {
+    const XLSX = await import("xlsx");
+    const rows: CellObject[][] = [
+      invoiceExportHeaders.map((header) => textCell(header)),
+      ...exportItems.map((request, index) => [
+        numberCell(index + 1),
+        textCell(
+          request.invoice_type === "enterprise_special" ? "专票" : "普票",
+        ),
+        textCell(request.title_name),
+        textCell(request.tax_id),
+        textCell(invoiceExportItemName),
+        numberCell(request.amount),
+        textCell(request.recipient_email),
+        textCell(request.bank_name),
+        textCell(request.bank_account),
+        textCell(request.remark),
+      ]),
+    ];
+    const worksheet = XLSX.utils.aoa_to_sheet(rows);
+    worksheet["!cols"] = [
+      { wch: 8 },
+      { wch: 12 },
+      { wch: 38 },
+      { wch: 24 },
+      { wch: 20 },
+      { wch: 14 },
+      { wch: 28 },
+      { wch: 28 },
+      { wch: 26 },
+      { wch: 40 },
+    ];
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Sheet1");
+    const output = XLSX.write(workbook, {
+      type: "array",
+      bookType: "biff8",
+      bookSST: true,
+    });
+    saveAs(
+      new Blob([output], { type: "application/vnd.ms-excel" }),
+      exportFileName(),
+    );
+    appStore.showSuccess(`已导出 ${exportItems.length} 条发票申请`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "批量导出失败";
+    appStore.showError(message);
+  } finally {
+    exporting.value = false;
   }
 }
 
@@ -434,3 +693,10 @@ function formatMoney(value: number): string {
   return formatCurrency(value || 0, "CNY");
 }
 </script>
+
+<style scoped>
+.invoice-pagination :deep(button),
+.invoice-pagination :deep(.select-trigger) {
+  @apply min-h-11;
+}
+</style>

@@ -1578,6 +1578,27 @@ func (s *OpenAIGatewayService) GenerateSessionHash(c *gin.Context, body []byte) 
 	return currentHash
 }
 
+// GenerateOpenAIMessagesSessionIdentity preserves the historical Messages
+// sticky/cache identity. Explicit OpenAI session signals retain priority; when
+// they are absent, metadata.user_id is scoped to /v1/messages and combined with
+// the requested model so the same client identity does not merge model routes.
+func (s *OpenAIGatewayService) GenerateOpenAIMessagesSessionIdentity(
+	c *gin.Context,
+	body []byte,
+	requestedModel string,
+) (sessionHash, promptCacheKey string) {
+	promptCacheKey = s.ExtractSessionID(c, body)
+	if promptCacheKey != "" {
+		return s.GenerateSessionHash(c, body), promptCacheKey
+	}
+
+	if userID := strings.TrimSpace(gjson.GetBytes(body, "metadata.user_id").String()); userID != "" {
+		seed := strings.TrimSpace(requestedModel) + "-" + userID
+		return DeriveSessionHashFromSeed(seed), GenerateSessionUUID(seed)
+	}
+	return s.GenerateSessionHash(c, body), ""
+}
+
 // GenerateSessionHashWithFallback derives a stable session hash from request signals or fallback seed.
 func (s *OpenAIGatewayService) GenerateSessionHashWithFallback(c *gin.Context, body []byte, fallbackSeed string) string {
 	sessionHash := s.GenerateSessionHash(c, body)
@@ -4357,7 +4378,7 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
 		upstreamDetail = truncateString(string(body), maxBytes)
 	}
 	setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
-	cyberHit, cyberCode, cyberMsg := detectOpenAICyberPolicy(body)
+	cyberHit, cyberCode, cyberMsg := detectOpenAICyberPolicyForCurrentAttempt(c, body)
 	if cyberHit {
 		MarkOpsCyberPolicy(c, CyberPolicyMark{
 			Code:           cyberCode,
@@ -5131,7 +5152,7 @@ streamLoop:
 			if eventType == "response.failed" || eventType == "error" || eventType == "response.error" {
 				failedMessage = extractOpenAISSEErrorMessage(dataBytes)
 				s.parseSSEUsageBytes(dataBytes, usage)
-				if hit, code, msg := detectOpenAICyberPolicy(dataBytes); hit {
+				if hit, code, msg := detectOpenAICyberPolicyForCurrentAttempt(c, dataBytes); hit {
 					MarkOpsCyberPolicy(c, CyberPolicyMark{
 						Code:           code,
 						Message:        msg,
@@ -5343,6 +5364,17 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	if isEventStreamResponse(resp.Header) {
 		return s.handlePassthroughSSEToJSON(ctx, resp, c, account, body, originalModel, mappedModel)
 	}
+	if markOpsCyberPolicyPayload(c, body, resp.StatusCode, 0, 0) {
+		writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+		contentType := resp.Header.Get("Content-Type")
+		if contentType == "" {
+			contentType = "application/json"
+		}
+		if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
+			c.Data(resp.StatusCode, contentType, body)
+		}
+		return &OpenAIUsage{}, fmt.Errorf("openai cyber_policy: %s", openAICyberPolicyClientMessage(extractUpstreamErrorMessage(body)))
+	}
 
 	usage := &OpenAIUsage{}
 	usageParsed := false
@@ -5421,6 +5453,9 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(ctx context.Context, r
 		terminalType, terminalPayload, terminalOK := extractOpenAISSETerminalEvent(bodyText)
 		if terminalOK && terminalType == "response.failed" {
 			msg := extractOpenAISSEErrorMessage(terminalPayload)
+			if markOpsCyberPolicyPayload(c, terminalPayload, http.StatusOK, usage.InputTokens, usage.OutputTokens) {
+				return nil, s.writeOpenAINonStreamingProtocolError(resp, c, openAICyberPolicyClientMessage(msg))
+			}
 			if msg == "" {
 				msg = "Upstream compact response failed"
 			}
@@ -5641,7 +5676,7 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 	setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
 	logOpenAIInstructionsRequiredDebug(ctx, c, account, resp.StatusCode, upstreamMsg, requestBody, body)
 
-	if cyberHit, cyberCode, cyberMsg := detectOpenAICyberPolicy(body); cyberHit {
+	if cyberHit, cyberCode, cyberMsg := detectOpenAICyberPolicyForCurrentAttempt(c, body); cyberHit {
 		MarkOpsCyberPolicy(c, CyberPolicyMark{
 			Code:           cyberCode,
 			Message:        cyberMsg,
@@ -5877,7 +5912,7 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 	}
 	setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
 
-	if cyberHit, cyberCode, cyberMsg := detectOpenAICyberPolicy(body); cyberHit {
+	if cyberHit, cyberCode, cyberMsg := detectOpenAICyberPolicyForCurrentAttempt(c, body); cyberHit {
 		MarkOpsCyberPolicy(c, CyberPolicyMark{
 			Code:           cyberCode,
 			Message:        cyberMsg,
@@ -6397,7 +6432,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			if eventType == "response.failed" || eventType == "error" || eventType == "response.error" {
 				failedMessage = extractOpenAISSEErrorMessage(dataBytes)
 				s.parseSSEUsageBytes(dataBytes, usage)
-				if hit, code, msg := detectOpenAICyberPolicy(dataBytes); hit {
+				if hit, code, msg := detectOpenAICyberPolicyForCurrentAttempt(c, dataBytes); hit {
 					MarkOpsCyberPolicy(c, CyberPolicyMark{
 						Code:           code,
 						Message:        msg,
@@ -7080,6 +7115,19 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 			return s.handleSSEToJSON(ctx, resp, c, account, body, originalModel, mappedModel)
 		}
 	}
+	if markOpsCyberPolicyPayload(c, body, resp.StatusCode, 0, 0) {
+		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+		contentType := "application/json"
+		if s.cfg != nil && !s.cfg.Security.ResponseHeaders.Enabled {
+			if upstreamType := resp.Header.Get("Content-Type"); upstreamType != "" {
+				contentType = upstreamType
+			}
+		}
+		if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
+			c.Data(resp.StatusCode, contentType, body)
+		}
+		return nil, fmt.Errorf("openai cyber_policy: %s", openAICyberPolicyClientMessage(extractUpstreamErrorMessage(body)))
+	}
 	if account != nil && account.Platform == PlatformGrok {
 		if err := s.cacheGrokReasoningItemsFromResponsePayload(ctx, account, body); err != nil {
 			writeGrokReasoningCompatibilityError(c, err)
@@ -7192,6 +7240,9 @@ func (s *OpenAIGatewayService) handleSSEToJSON(ctx context.Context, resp *http.R
 		terminalType, terminalPayload, terminalOK := extractOpenAISSETerminalEvent(bodyText)
 		if terminalOK && terminalType == "response.failed" {
 			msg := extractOpenAISSEErrorMessage(terminalPayload)
+			if markOpsCyberPolicyPayload(c, terminalPayload, http.StatusOK, usage.InputTokens, usage.OutputTokens) {
+				return nil, s.writeOpenAINonStreamingProtocolError(resp, c, openAICyberPolicyClientMessage(msg))
+			}
 			if msg == "" {
 				msg = "Upstream compact response failed"
 			}

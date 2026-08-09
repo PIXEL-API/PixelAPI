@@ -178,6 +178,7 @@ export interface InvoiceProfile {
   bank_account: string;
   recipient_email: string;
   recipient_phone: string;
+  remark: string;
   is_default: boolean;
   created_at: string;
   updated_at: string;
@@ -193,6 +194,7 @@ export interface InvoiceProfileInput {
   bank_account?: string;
   recipient_email: string;
   recipient_phone?: string;
+  remark?: string;
   is_default?: boolean;
 }
 
@@ -243,13 +245,10 @@ export interface InvoiceRequest {
   bank_account: string;
   recipient_email: string;
   recipient_phone: string;
+  remark: string;
   amount: number;
   currency: string;
   status: InvoiceStatus;
-  invoice_number: string;
-  invoice_code: string;
-  invoice_file_url: string;
-  invoice_file_name: string;
   issued_at?: string | null;
   rejected_reason?: string | null;
   admin_note?: string | null;

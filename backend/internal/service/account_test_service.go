@@ -55,7 +55,8 @@ const (
 	defaultGeminiTextTestPrompt  = "hi"
 	defaultOpenAIImageTestPrompt = "Generate a cute orange cat astronaut sticker on a clean pastel background."
 	defaultGrokTestModel         = "grok-4.5"
-	openAITestMaxOutputTokens    = 16
+	// openAITestMaxOutputTokens 仅用于 Grok 测试 payload；OpenAI 探针已不再限输出。
+	openAITestMaxOutputTokens = 16
 )
 
 // isOpenAIImageModel checks if the model is an OpenAI image generation model (e.g. gpt-image-2).
@@ -736,7 +737,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		}
 
 		// Process SSE stream
-		return s.processOpenAIStream(c, resp.Body, !isOAuth)
+		return s.processOpenAIStream(c, resp.Body)
 	}
 }
 
@@ -852,7 +853,7 @@ func (s *AccountTestService) testGrokAccountConnection(c *gin.Context, account *
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Grok API returned %d: %s", resp.StatusCode, string(body)))
 	}
 
-	return s.processOpenAIStream(c, resp.Body, false)
+	return s.processOpenAIStream(c, resp.Body)
 }
 
 // testOpenAICompactConnection probes /responses/compact and persists the
@@ -1465,28 +1466,9 @@ func createOpenAITestPayload(modelID string, isOAuth bool) map[string]any {
 		"stream": true,
 	}
 
-	// OAuth accounts using ChatGPT internal API reject max_output_tokens and
-	// require store=false. API key accounts still use the public Responses API
-	// and can keep max_output_tokens to bound the test response size.
+	// OAuth accounts using ChatGPT internal API require store=false.
 	if isOAuth {
 		payload["store"] = false
-	} else {
-		payload["max_output_tokens"] = openAITestMaxOutputTokens
-		payload["tools"] = []map[string]any{
-			{
-				"type":        "function",
-				"name":        "probe_ping",
-				"description": "Capability probe. Call to acknowledge readiness.",
-				"parameters": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"ok": map[string]any{"type": "boolean"},
-					},
-					"required": []string{"ok"},
-				},
-			},
-		}
-		payload["tool_choice"] = "required"
 	}
 
 	// All accounts require instructions for Responses API
@@ -1573,19 +1555,15 @@ func (s *AccountTestService) processClaudeStream(c *gin.Context, body io.Reader)
 }
 
 // processOpenAIStream processes the SSE stream from OpenAI Responses API
-func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader, requireFunctionCall bool) error {
+func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader) error {
 	reader := bufio.NewReader(body)
 	seenCompleted := false
-	seenFunctionCall := false
 
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			if err == io.EOF {
 				if seenCompleted {
-					if requireFunctionCall && !seenFunctionCall {
-						return s.sendErrorAndEnd(c, "OpenAI Responses tool probe failed: response completed without function_call")
-					}
 					s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 					return nil
 				}
@@ -1614,9 +1592,6 @@ func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader,
 		}
 
 		eventType, _ := data["type"].(string)
-		if openAITestEventHasFunctionCall(eventType, data) {
-			seenFunctionCall = true
-		}
 
 		switch eventType {
 		case "response.output_text.delta":
@@ -1625,11 +1600,30 @@ func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader,
 				s.sendEvent(c, TestEvent{Type: "content", Text: delta})
 			}
 		case "response.completed", "response.done":
-			if requireFunctionCall && !seenFunctionCall {
-				return s.sendErrorAndEnd(c, "OpenAI Responses tool probe failed: response completed without function_call")
-			}
 			s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 			return nil
+		case "response.incomplete":
+			// Defensive: upstream may end a probe with response.incomplete
+			// instead of response.completed (e.g. reasoning models hitting an
+			// output token cap). Surface the reason so the failure is legible.
+			// Per the Responses API wire shape the details are nested inside
+			// the `response` object (same place response.failed reads its error);
+			// fall back to the top-level field to tolerate odd placements.
+			reason := ""
+			if responseData, ok := data["response"].(map[string]any); ok {
+				if incompleteDetails, ok := responseData["incomplete_details"].(map[string]any); ok {
+					reason, _ = incompleteDetails["reason"].(string)
+				}
+			}
+			if reason == "" {
+				if incompleteDetails, ok := data["incomplete_details"].(map[string]any); ok {
+					reason, _ = incompleteDetails["reason"].(string)
+				}
+			}
+			if reason == "" {
+				reason = "unknown"
+			}
+			return s.sendErrorAndEnd(c, fmt.Sprintf("OpenAI response incomplete (reason: %s)", reason))
 		case "response.failed":
 			errorMsg := "OpenAI response failed"
 			if responseData, ok := data["response"].(map[string]any); ok {
@@ -1650,29 +1644,6 @@ func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader,
 			return s.sendErrorAndEnd(c, errorMsg)
 		}
 	}
-}
-
-func openAITestEventHasFunctionCall(eventType string, data map[string]any) bool {
-	if strings.Contains(strings.ToLower(strings.TrimSpace(eventType)), "function_call") {
-		return true
-	}
-	if item, ok := data["item"].(map[string]any); ok {
-		if itemType, _ := item["type"].(string); strings.TrimSpace(itemType) == "function_call" {
-			return true
-		}
-	}
-	responseData, _ := data["response"].(map[string]any)
-	output, _ := responseData["output"].([]any)
-	for _, item := range output {
-		outputItem, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		if itemType, _ := outputItem["type"].(string); strings.TrimSpace(itemType) == "function_call" {
-			return true
-		}
-	}
-	return false
 }
 
 // testOpenAIImageAPIKey tests OpenAI image generation using an API Key account.

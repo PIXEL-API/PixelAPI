@@ -114,6 +114,15 @@
               />
             </div>
 
+            <div>
+              <label class="input-label">发票备注</label>
+              <textarea
+                v-model.trim="form.remark"
+                class="input min-h-20"
+                placeholder="可选，将写入批量开票文件的发票备注"
+              ></textarea>
+            </div>
+
             <label
               class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300"
             >
@@ -309,7 +318,7 @@
                 <th class="px-4 py-3 text-right">金额</th>
                 <th class="px-4 py-3">状态</th>
                 <th class="px-4 py-3">申请时间</th>
-                <th class="px-4 py-3 text-right">操作</th>
+                <th class="px-4 py-3 text-right">操作 / 说明</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
@@ -343,15 +352,12 @@
                   >
                     取消
                   </button>
-                  <a
-                    v-else-if="request.invoice_file_url"
-                    class="text-primary-600 hover:underline dark:text-primary-400"
-                    :href="request.invoice_file_url"
-                    target="_blank"
-                    rel="noreferrer"
+                  <span
+                    v-else-if="request.status === 'rejected'"
+                    class="inline-block max-w-64 whitespace-normal break-words text-red-600 dark:text-red-400"
                   >
-                    下载
-                  </a>
+                    {{ request.rejected_reason || "-" }}
+                  </span>
                   <span v-else>-</span>
                 </td>
               </tr>
@@ -407,6 +413,7 @@ const form = reactive<InvoiceProfileInput>({
   bank_account: "",
   recipient_email: "",
   recipient_phone: "",
+  remark: "",
   is_default: false,
 });
 
@@ -493,6 +500,7 @@ async function submitInvoice(): Promise<void> {
       bank_account: invoiceFields.bank_account,
       recipient_email: invoiceFields.recipient_email,
       recipient_phone: invoiceFields.recipient_phone,
+      remark: invoiceFields.remark,
       source_refs: selectedRefs.value,
     };
     await invoicesAPI.createRequest(payload);
@@ -547,6 +555,7 @@ function applyProfile(profile: InvoiceProfile): void {
   form.bank_account = profile.bank_account;
   form.recipient_email = profile.recipient_email;
   form.recipient_phone = profile.recipient_phone;
+  form.remark = profile.remark;
   form.is_default = profile.is_default;
 }
 
@@ -566,6 +575,7 @@ function resetForm(): void {
   form.bank_account = "";
   form.recipient_email = "";
   form.recipient_phone = "";
+  form.remark = "";
   form.is_default = false;
 }
 
@@ -584,6 +594,7 @@ function profilePayload(): InvoiceProfileInput {
     bank_account: isSpecial.value ? (form.bank_account || "").trim() : "",
     recipient_email: form.recipient_email.trim(),
     recipient_phone: (form.recipient_phone || "").trim(),
+    remark: (form.remark || "").trim(),
     is_default: form.is_default,
   };
 }

@@ -369,6 +369,42 @@ func TestOpenAIGatewayService_GenerateExplicitSessionHash_SkipsContentFallback(t
 		got := svc.GenerateExplicitSessionHash(c, []byte(`{"prompt_cache_key":"body-session"}`))
 		require.Equal(t, fmt.Sprintf("%016x", xxhash.Sum64String("header-session")), got)
 	})
+
+	t.Run("metadata user id is not an image session", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+
+		got := svc.GenerateExplicitSessionHash(c, []byte(`{"metadata":{"user_id":"business-user-42"}}`))
+		require.Empty(t, got)
+		require.Empty(t, openAILegacySessionHashFromContext(c.Request.Context()))
+	})
+}
+
+func TestOpenAIGatewayService_GenerateOpenAIMessagesSessionIdentity(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &OpenAIGatewayService{}
+	body := []byte(`{"metadata":{"user_id":"messages-session"},"messages":[{"role":"user","content":"hello"}]}`)
+
+	newContext := func() *gin.Context {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+		return c
+	}
+
+	modelAHash, modelAPromptKey := svc.GenerateOpenAIMessagesSessionIdentity(newContext(), body, "gpt-5")
+	modelBHash, modelBPromptKey := svc.GenerateOpenAIMessagesSessionIdentity(newContext(), body, "gpt-5.1")
+	require.Equal(t, DeriveSessionHashFromSeed("gpt-5-messages-session"), modelAHash)
+	require.Equal(t, GenerateSessionUUID("gpt-5-messages-session"), modelAPromptKey)
+	require.NotEqual(t, modelAHash, modelBHash, "the same metadata.user_id must remain isolated across models")
+	require.NotEqual(t, modelAPromptKey, modelBPromptKey)
+
+	explicitContext := newContext()
+	explicitContext.Request.Header.Set("session_id", "header-session")
+	explicitHash, explicitPromptKey := svc.GenerateOpenAIMessagesSessionIdentity(explicitContext, body, "gpt-5")
+	require.Equal(t, fmt.Sprintf("%016x", xxhash.Sum64String("header-session")), explicitHash)
+	require.Equal(t, "header-session", explicitPromptKey)
 }
 
 func TestOpenAIGatewayService_GenerateSessionHashWithFallback(t *testing.T) {
