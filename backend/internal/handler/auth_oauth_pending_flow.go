@@ -2031,6 +2031,14 @@ func (h *AuthHandler) ExchangePendingOAuthCompletion(c *gin.Context) {
 		response.Success(c, payload)
 		return
 	}
+	// Non-terminal sessions can already resolve to an existing email owner
+	// before the flow is finalized. Keep returning the pending payload until
+	// the session reaches a token-issuing terminal state. bind_current_user is
+	// the only safe exception because it targets the authenticated current user.
+	if !canIssueTokenPair && !strings.EqualFold(strings.TrimSpace(session.Intent), oauthIntentBindCurrentUser) {
+		response.Success(c, payload)
+		return
+	}
 	if !adoptionDecision.hasDecision() {
 		adoptionRequired, _ := payload["adoption_required"].(bool)
 		if adoptionRequired {

@@ -909,6 +909,103 @@ func TestExchangePendingOAuthCompletionRejectsDisabledTargetUser(t *testing.T) {
 	require.Nil(t, storedSession.ConsumedAt)
 }
 
+func TestExchangePendingOAuthCompletionChoiceStateDoesNotMutateIdentityState(t *testing.T) {
+	testCases := []struct {
+		name string
+		body string
+	}{
+		{name: "adopt profile", body: `{"adopt_display_name":true,"adopt_avatar":true}`},
+		{name: "keep existing profile", body: `{"adopt_display_name":false,"adopt_avatar":false}`},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			handler, client := newOAuthPendingFlowTestHandler(t, false)
+			ctx := context.Background()
+
+			existingUser, err := client.User.Create().
+				SetEmail("existing@example.com").
+				SetUsername("existing-user").
+				SetPasswordHash("hash").
+				SetRole(service.RoleUser).
+				SetStatus(service.StatusActive).
+				Save(ctx)
+			require.NoError(t, err)
+
+			session, err := client.PendingAuthSession.Create().
+				SetSessionToken("choice-state-pending-session-token").
+				SetIntent("login").
+				SetProviderType("linuxdo").
+				SetProviderKey("linuxdo").
+				SetProviderSubject("pending-subject-123").
+				SetTargetUserID(existingUser.ID).
+				SetResolvedEmail(existingUser.Email).
+				SetBrowserSessionKey("choice-state-pending-browser-session-key").
+				SetUpstreamIdentityClaims(map[string]any{
+					"username":               "pending_linuxdo_user",
+					"suggested_display_name": "Pending Display Name",
+					"suggested_avatar_url":   "https://cdn.example/pending.png",
+				}).
+				SetLocalFlowState(map[string]any{
+					oauthCompletionResponseKey: map[string]any{
+						"step":                      oauthPendingChoiceStep,
+						"adoption_required":         true,
+						"force_email_on_signup":     true,
+						"email_binding_required":    true,
+						"existing_account_bindable": true,
+						"email":                     existingUser.Email,
+						"resolved_email":            existingUser.Email,
+						"redirect":                  "/dashboard",
+					},
+				}).
+				SetExpiresAt(time.Now().UTC().Add(10 * time.Minute)).
+				Save(ctx)
+			require.NoError(t, err)
+
+			body := bytes.NewBufferString(testCase.body)
+			recorder := httptest.NewRecorder()
+			ginCtx, _ := gin.CreateTestContext(recorder)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/pending/exchange", body)
+			req.Header.Set("Content-Type", "application/json")
+			req.AddCookie(&http.Cookie{Name: oauthPendingSessionCookieName, Value: encodeCookieValue(session.SessionToken)})
+			req.AddCookie(&http.Cookie{Name: oauthPendingBrowserCookieName, Value: encodeCookieValue("choice-state-pending-browser-session-key")})
+			ginCtx.Request = req
+
+			handler.ExchangePendingOAuthCompletion(ginCtx)
+
+			require.Equal(t, http.StatusOK, recorder.Code)
+			data := decodeJSONResponseData(t, recorder)
+			require.NotContains(t, data, "access_token")
+			require.NotContains(t, data, "refresh_token")
+			require.Equal(t, oauthPendingChoiceStep, data["step"])
+
+			identityCount, err := client.AuthIdentity.Query().
+				Where(
+					authidentity.ProviderTypeEQ("linuxdo"),
+					authidentity.ProviderKeyEQ("linuxdo"),
+					authidentity.ProviderSubjectEQ("pending-subject-123"),
+				).
+				Count(ctx)
+			require.NoError(t, err)
+			require.Zero(t, identityCount)
+
+			decisionCount, err := client.IdentityAdoptionDecision.Query().
+				Where(identityadoptiondecision.PendingAuthSessionIDEQ(session.ID)).
+				Count(ctx)
+			require.NoError(t, err)
+			require.Zero(t, decisionCount)
+
+			storedUser, err := client.User.Get(ctx, existingUser.ID)
+			require.NoError(t, err)
+			require.Equal(t, "existing-user", storedUser.Username)
+
+			storedSession, err := client.PendingAuthSession.Get(ctx, session.ID)
+			require.NoError(t, err)
+			require.Nil(t, storedSession.ConsumedAt)
+		})
+	}
+}
+
 func TestNormalizePendingOAuthCompletionResponseScrubsLegacyTokenPayload(t *testing.T) {
 	payload := normalizePendingOAuthCompletionResponse(map[string]any{
 		"access_token":  "legacy-access-token",
