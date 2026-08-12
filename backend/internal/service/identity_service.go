@@ -23,7 +23,43 @@ import (
 var (
 	// 匹配 User-Agent 版本号: xxx/x.y.z
 	userAgentVersionRegex = regexp.MustCompile(`/(\d+)\.(\d+)\.(\d+)`)
+
+	// Validate persistent fingerprint user-agent shape:
+	// <product>/<major>.<minor>.<patch> followed by whitespace or end of string.
+	// Reject local/dev/build suffixes such as -local, -dev, +build.
+	fingerprintUserAgentPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+/\d+\.\d+\.\d+(\s|$)`)
 )
+
+const (
+	claudeCLIUserAgentProduct     = "claude-cli"
+	maxFingerprintUserAgentLength = 256
+	maxClaudeCLIMajorVersionSkew  = 2
+)
+
+// isAcceptableFingerprintUserAgent reports whether a user-agent is safe to
+// persist as account-level fingerprint state.
+func isAcceptableFingerprintUserAgent(ua string) bool {
+	ua = strings.TrimSpace(ua)
+	if ua == "" || len(ua) > maxFingerprintUserAgentLength {
+		return false
+	}
+	if !fingerprintUserAgentPattern.MatchString(ua) {
+		return false
+	}
+	if extractProduct(ua) != claudeCLIUserAgentProduct {
+		return true
+	}
+
+	major, _, _, ok := parseUserAgentVersion(ua)
+	if !ok {
+		return false
+	}
+	currentMajor, _, _, currentOK := parseUserAgentVersion(claudeCLIUserAgentProduct + "/" + claude.CLICurrentVersion)
+	if !currentOK {
+		return true
+	}
+	return major <= currentMajor+maxClaudeCLIMajorVersionSkew
+}
 
 // 默认指纹值（当客户端未提供时使用）
 var defaultFingerprint = Fingerprint{
@@ -76,20 +112,47 @@ func NewIdentityService(cache IdentityCache) *IdentityService {
 // 如果缓存存在，检测user-agent版本，新版本则更新
 // 如果缓存不存在，生成随机ClientID并从请求头创建指纹，然后缓存
 func (s *IdentityService) GetOrCreateFingerprint(ctx context.Context, accountID int64, headers http.Header) (*Fingerprint, error) {
+	clientUA := strings.TrimSpace(headers.Get("User-Agent"))
+	uaAcceptable := isAcceptableFingerprintUserAgent(clientUA)
+
 	// 尝试从缓存获取指纹
 	cached, err := s.cache.GetFingerprint(ctx, accountID)
 	if err == nil && cached != nil {
 		needWrite := false
 
-		// 检查客户端的user-agent是否是更新版本
-		clientUA := headers.Get("User-Agent")
-		if clientUA != "" && isNewerVersion(clientUA, cached.UserAgent) {
+		if !uaAcceptable && clientUA != "" && isNewerVersion(clientUA, cached.UserAgent) {
+			logger.LegacyPrintf(
+				"service.identity",
+				"Rejected fingerprint user-agent for account %d: %q (malformed or implausible version)",
+				accountID,
+				clientUA,
+			)
+		}
+
+		if !isAcceptableFingerprintUserAgent(cached.UserAgent) {
+			poisoned := cached.UserAgent
+			if uaAcceptable {
+				mergeHeadersIntoFingerprint(cached, headers)
+			} else {
+				cached.UserAgent = defaultFingerprint.UserAgent
+			}
+			needWrite = true
+			logger.LegacyPrintf(
+				"service.identity",
+				"Replaced malformed cached fingerprint for account %d: %q -> %q",
+				accountID,
+				poisoned,
+				cached.UserAgent,
+			)
+		} else if uaAcceptable && isNewerVersion(clientUA, cached.UserAgent) {
 			// 版本升级：merge 语义 — 仅更新请求中实际携带的字段，保留缓存值
 			// 避免缺失的头被硬编码默认值覆盖（如新 CLI 版本 + 旧 SDK 默认值的不一致）
 			mergeHeadersIntoFingerprint(cached, headers)
 			needWrite = true
 			logger.LegacyPrintf("service.identity", "Updated fingerprint for account %d: %s (merge update)", accountID, clientUA)
-		} else if time.Since(time.Unix(cached.UpdatedAt, 0)) > 24*time.Hour {
+		}
+
+		if !needWrite && time.Since(time.Unix(cached.UpdatedAt, 0)) > 24*time.Hour {
 			// 距上次写入超过24小时，续期TTL
 			needWrite = true
 		}
@@ -104,6 +167,14 @@ func (s *IdentityService) GetOrCreateFingerprint(ctx context.Context, accountID 
 	}
 
 	// 缓存不存在或解析失败，创建新指纹
+	if !uaAcceptable && clientUA != "" {
+		logger.LegacyPrintf(
+			"service.identity",
+			"Rejected fingerprint user-agent for account %d: %q (malformed or implausible version)",
+			accountID,
+			clientUA,
+		)
+	}
 	fp := s.createFingerprintFromHeaders(headers)
 
 	// 生成随机ClientID
@@ -123,8 +194,8 @@ func (s *IdentityService) GetOrCreateFingerprint(ctx context.Context, accountID 
 func (s *IdentityService) createFingerprintFromHeaders(headers http.Header) *Fingerprint {
 	fp := &Fingerprint{}
 
-	// 获取User-Agent
-	if ua := headers.Get("User-Agent"); ua != "" {
+	// 获取User-Agent：仅持久化形态合法、版本合理的账号指纹。
+	if ua := strings.TrimSpace(headers.Get("User-Agent")); isAcceptableFingerprintUserAgent(ua) {
 		fp.UserAgent = ua
 	} else {
 		fp.UserAgent = defaultFingerprint.UserAgent
