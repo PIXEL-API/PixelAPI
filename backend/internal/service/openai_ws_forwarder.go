@@ -1282,6 +1282,19 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 		if v := strings.TrimSpace(c.Request.Header.Get("accept-language")); v != "" {
 			headers.Set("accept-language", v)
 		}
+		for _, key := range []string{
+			"session-id",
+			"thread-id",
+			"x-client-request-id",
+			openAICleanRelayInstallationField,
+			"x-codex-window-id",
+		} {
+			for _, value := range c.Request.Header.Values(key) {
+				if value = strings.TrimSpace(value); value != "" {
+					headers.Add(key, value)
+				}
+			}
+		}
 		for _, value := range c.Request.Header.Values("x-codex-beta-features") {
 			if value = strings.TrimSpace(value); value != "" {
 				headers.Add("x-codex-beta-features", value)
@@ -1342,7 +1355,12 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 	if account != nil && account.IsOpenAIOAuth() {
 		enforceCodexIdentityHeaders(headers)
 	}
-	applyOpenAICleanRelayWSHeaders(c, headers)
+	headerContext := context.Background()
+	if c != nil && c.Request != nil {
+		headerContext = c.Request.Context()
+	}
+	s.applyCurrentCodexFingerprintHeaders(headerContext, c, account, headers)
+	s.applyOpenAICleanRelayWSHeaders(headerContext, c, account, headers)
 
 	return headers, sessionResolution
 }
@@ -2082,6 +2100,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		turnMetadata = strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader))
 	}
 	setOpenAIWSTurnMetadata(payload, turnMetadata)
+	if account != nil && account.Type == AccountTypeOAuth {
+		s.applyCodexFingerprintToRequestBody(ctx, c, account, payload)
+	}
 	if cleanRelayState, _, cleanRelayErr := s.applyOpenAICleanRelayToRequestBody(ctx, c, account, payload, payloadAsJSONBytes(reqBody)); cleanRelayErr != nil {
 		return nil, wrapOpenAIWSFallback("clean_relay", cleanRelayErr)
 	} else if cleanRelayState != nil && cleanRelayState.CleanStart {
@@ -3137,6 +3158,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			)
 		}
 		normalized = policyApplied
+		fingerprintedPayload, _, _, fingerprintErr := s.applyCodexFingerprintToRawBody(ctx, c, account, normalized)
+		if fingerprintErr != nil {
+			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", fingerprintErr)
+		}
+		normalized = fingerprintedPayload
 		cleanedPayload, cleanRelayState, _, cleanRelayErr := s.applyOpenAICleanRelayToRawBody(ctx, c, account, normalized, trimmed)
 		if cleanRelayErr != nil {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", cleanRelayErr)

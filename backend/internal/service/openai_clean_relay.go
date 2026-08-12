@@ -49,12 +49,19 @@ func (s *OpenAIGatewayService) applyOpenAICleanRelayToRequestBody(
 	reqBody map[string]any,
 	bodyForSession []byte,
 ) (*openAICleanRelayState, bool, error) {
+	if !s.isOpenAICleanRelayActive(ctx, account) {
+		clearOpenAICleanRelayState(c)
+		return nil, false, nil
+	}
 	if len(reqBody) == 0 {
 		return nil, false, nil
 	}
-	if existing := getOpenAICleanRelayState(c); existing != nil && account != nil && existing.Mapping.AccountID == account.ID {
-		changed := applyOpenAICleanRelayMappingToBody(reqBody, existing)
-		return existing, changed, nil
+	if existing := getOpenAICleanRelayState(c); existing != nil {
+		if account != nil && existing.Mapping.AccountID == account.ID {
+			changed := applyOpenAICleanRelayMappingToBody(reqBody, existing)
+			return existing, changed, nil
+		}
+		clearOpenAICleanRelayState(c)
 	}
 	state, err := s.resolveOpenAICleanRelayState(ctx, c, account, reqBody, bodyForSession)
 	if err != nil || state == nil {
@@ -72,10 +79,11 @@ func (s *OpenAIGatewayService) applyOpenAICleanRelayToRawBody(
 	body []byte,
 	bodyForSession []byte,
 ) ([]byte, *openAICleanRelayState, bool, error) {
-	if len(body) == 0 {
+	if !s.isOpenAICleanRelayActive(ctx, account) {
+		clearOpenAICleanRelayState(c)
 		return body, nil, false, nil
 	}
-	if !s.isOpenAICleanRelayActive(ctx, account) {
+	if len(body) == 0 {
 		return body, nil, false, nil
 	}
 	if !gjson.ValidBytes(body) {
@@ -84,9 +92,12 @@ func (s *OpenAIGatewayService) applyOpenAICleanRelayToRawBody(
 	if len(bodyForSession) == 0 {
 		bodyForSession = body
 	}
-	if existing := getOpenAICleanRelayState(c); existing != nil && account != nil && existing.Mapping.AccountID == account.ID {
-		rewritten, changed, err := applyOpenAICleanRelayMappingToRawBody(body, existing)
-		return rewritten, existing, changed, err
+	if existing := getOpenAICleanRelayState(c); existing != nil {
+		if account != nil && existing.Mapping.AccountID == account.ID {
+			rewritten, changed, err := applyOpenAICleanRelayMappingToRawBody(body, existing)
+			return rewritten, existing, changed, err
+		}
+		clearOpenAICleanRelayState(c)
 	}
 	state, err := s.resolveOpenAICleanRelayStateFromBody(ctx, c, account, bodyForSession)
 	if err != nil || state == nil {
@@ -505,7 +516,7 @@ func applyOpenAICleanRelayMappingToBody(reqBody map[string]any, state *openAICle
 		changed = true
 	}
 	if state.AllowBodyClientMetadata {
-		if setOpenAICleanRelayClientMetadata(reqBody, mapping.InstallationID) {
+		if setOpenAICleanRelayClientMetadata(reqBody, mapping.InstallationID, mapping.SessionID) {
 			changed = true
 		}
 	} else if _, exists := reqBody["client_metadata"]; exists {
@@ -541,9 +552,20 @@ func applyOpenAICleanRelayMappingToRawBody(body []byte, state *openAICleanRelayS
 		changed = true
 	}
 	if state.AllowBodyClientMetadata {
-		currentInstallationID := strings.TrimSpace(gjson.GetBytes(rewritten, "client_metadata."+openAICleanRelayInstallationField).String())
-		if strings.TrimSpace(mapping.InstallationID) != "" && currentInstallationID != mapping.InstallationID {
-			next, err := sjson.SetBytes(rewritten, "client_metadata."+openAICleanRelayInstallationField, mapping.InstallationID)
+		var metadataValue any
+		metadataResult := gjson.GetBytes(rewritten, "client_metadata")
+		if metadataResult.Exists() {
+			if err := decodeJSONPreservingNumbers([]byte(metadataResult.Raw), &metadataValue); err != nil {
+				return body, false, fmt.Errorf("openai clean relay parse client_metadata: %w", err)
+			}
+		}
+		reqBody := map[string]any{"client_metadata": metadataValue}
+		if setOpenAICleanRelayClientMetadata(reqBody, mapping.InstallationID, mapping.SessionID) {
+			metadata, err := json.Marshal(reqBody["client_metadata"])
+			if err != nil {
+				return body, false, fmt.Errorf("openai clean relay serialize client_metadata: %w", err)
+			}
+			next, err := sjson.SetRawBytes(rewritten, "client_metadata", metadata)
 			if err != nil {
 				return body, false, fmt.Errorf("openai clean relay set client_metadata: %w", err)
 			}
@@ -586,7 +608,7 @@ func trimOpenAIEncryptedReasoningItemsInRawBody(body []byte) ([]byte, bool, erro
 		return body, false, nil
 	}
 	var inputValue any
-	if err := json.Unmarshal([]byte(input.Raw), &inputValue); err != nil {
+	if err := decodeJSONPreservingNumbers([]byte(input.Raw), &inputValue); err != nil {
 		return body, false, fmt.Errorf("openai clean relay parse input for encrypted reasoning cleanup: %w", err)
 	}
 	reqBody := map[string]any{
@@ -614,30 +636,40 @@ func trimOpenAIEncryptedReasoningItemsInRawBody(body []byte) ([]byte, bool, erro
 	return next, true, nil
 }
 
-func (s *OpenAIGatewayService) applyOpenAICleanRelayHeaders(c *gin.Context, req *http.Request) {
-	state := getOpenAICleanRelayState(c)
+func (s *OpenAIGatewayService) applyOpenAICleanRelayHeaders(ctx context.Context, c *gin.Context, account *Account, req *http.Request) {
+	state := s.currentOpenAICleanRelayState(ctx, c, account)
 	if state == nil || req == nil {
 		return
 	}
 	mapping := state.Mapping
 	req.Header.Set(openAICleanRelayInstallationField, mapping.InstallationID)
+	req.Header.Set("session-id", mapping.SessionID)
 	req.Header.Set("session_id", mapping.SessionID)
 	req.Header.Set("conversation_id", mapping.ConversationID)
+	rewriteCodexTurnMetadataFields(req.Header, map[string]any{
+		"installation_id": mapping.InstallationID,
+		"session_id":      mapping.SessionID,
+	})
 	if state.CleanStart && !state.headersCleaned {
 		req.Header.Del(openAIWSTurnStateHeader)
 		state.headersCleaned = true
 	}
 }
 
-func applyOpenAICleanRelayWSHeaders(c *gin.Context, headers http.Header) {
-	state := getOpenAICleanRelayState(c)
+func (s *OpenAIGatewayService) applyOpenAICleanRelayWSHeaders(ctx context.Context, c *gin.Context, account *Account, headers http.Header) {
+	state := s.currentOpenAICleanRelayState(ctx, c, account)
 	if state == nil || headers == nil {
 		return
 	}
 	mapping := state.Mapping
 	headers.Set(openAICleanRelayInstallationField, mapping.InstallationID)
+	headers.Set("session-id", mapping.SessionID)
 	headers.Set("session_id", mapping.SessionID)
 	headers.Set("conversation_id", mapping.ConversationID)
+	rewriteCodexTurnMetadataFields(headers, map[string]any{
+		"installation_id": mapping.InstallationID,
+		"session_id":      mapping.SessionID,
+	})
 	if state.CleanStart && !state.headersCleaned {
 		headers.Del(openAIWSTurnStateHeader)
 		state.headersCleaned = true
@@ -648,6 +680,28 @@ func setOpenAICleanRelayState(c *gin.Context, state *openAICleanRelayState) {
 	if c != nil && state != nil {
 		c.Set(openAICleanRelayContextKey, state)
 	}
+}
+
+func clearOpenAICleanRelayState(c *gin.Context) {
+	if c != nil {
+		c.Set(openAICleanRelayContextKey, (*openAICleanRelayState)(nil))
+	}
+}
+
+func (s *OpenAIGatewayService) currentOpenAICleanRelayState(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+) *openAICleanRelayState {
+	state := getOpenAICleanRelayState(c)
+	if state == nil {
+		return nil
+	}
+	if !s.isOpenAICleanRelayActive(ctx, account) || state.Mapping.AccountID != account.ID {
+		clearOpenAICleanRelayState(c)
+		return nil
+	}
+	return state
 }
 
 func setOpenAICleanRelayGroupID(c *gin.Context, groupID *int64) {
@@ -723,33 +777,23 @@ func openAICleanRelayClientMetadataString(reqBody map[string]any, key string) st
 	return ""
 }
 
-func setOpenAICleanRelayClientMetadata(reqBody map[string]any, installationID string) bool {
+func setOpenAICleanRelayClientMetadata(reqBody map[string]any, installationID, sessionID string) bool {
 	installationID = strings.TrimSpace(installationID)
-	if len(reqBody) == 0 || installationID == "" {
+	sessionID = strings.TrimSpace(sessionID)
+	if len(reqBody) == 0 || installationID == "" || sessionID == "" {
 		return false
 	}
-	switch metadata := reqBody["client_metadata"].(type) {
-	case map[string]any:
-		if existing, _ := metadata[openAICleanRelayInstallationField].(string); strings.TrimSpace(existing) == installationID {
-			return false
-		}
-		metadata[openAICleanRelayInstallationField] = installationID
-		return true
-	case map[string]string:
-		if strings.TrimSpace(metadata[openAICleanRelayInstallationField]) == installationID {
-			return false
-		}
-		next := make(map[string]any, len(metadata)+1)
-		for k, v := range metadata {
-			next[k] = v
-		}
-		next[openAICleanRelayInstallationField] = installationID
-		reqBody["client_metadata"] = next
-		return true
-	default:
-		reqBody["client_metadata"] = map[string]any{
-			openAICleanRelayInstallationField: installationID,
-		}
-		return true
+	metadata := normalizeCodexClientMetadata(reqBody["client_metadata"])
+	changed := strings.TrimSpace(openAICleanRelayClientMetadataString(reqBody, openAICleanRelayInstallationField)) != installationID ||
+		strings.TrimSpace(openAICleanRelayClientMetadataString(reqBody, "session_id")) != sessionID
+	metadata[openAICleanRelayInstallationField] = installationID
+	metadata["session_id"] = sessionID
+	if rewriteClientMetadataEmbeddedTurnMetadata(metadata, map[string]any{
+		"installation_id": installationID,
+		"session_id":      sessionID,
+	}) {
+		changed = true
 	}
+	reqBody["client_metadata"] = metadata
+	return changed
 }

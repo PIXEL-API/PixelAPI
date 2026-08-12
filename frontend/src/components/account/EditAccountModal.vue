@@ -1740,6 +1740,21 @@
             />
           </button>
         </div>
+        <div v-if="!isUserScope" class="flex items-center justify-between gap-4">
+          <div class="min-w-0">
+            <label class="input-label mb-0">{{ t('admin.accounts.openai.codexFingerprintMode') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.codexFingerprintModeDesc') }}
+            </p>
+          </div>
+          <div class="w-52 flex-shrink-0">
+            <Select
+              v-model="codexFingerprintMode"
+              data-testid="edit-codex-fingerprint-mode-select"
+              :options="codexFingerprintModeOptions"
+            />
+          </div>
+        </div>
         <div>
           <label class="input-label">{{ t('admin.accounts.openai.codexQuotaLimit') }}</label>
           <p class="input-hint">{{ t('admin.accounts.openai.codexQuotaLimitDesc') }}</p>
@@ -2766,6 +2781,14 @@ const openAICompactMode = ref<OpenAICompactMode>('auto')
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const codexCLIOnlyEnabled = ref(false)
+type CodexFingerprintMode = 'off' | 'device' | 'session' | 'full'
+const codexFingerprintMode = ref<CodexFingerprintMode>('session')
+const codexFingerprintModeOptions = computed(() => [
+  { value: 'off' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintOff') },
+  { value: 'device' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintDevice') },
+  { value: 'session' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintSession') },
+  { value: 'full' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintFull') }
+])
 const CODEX_QUOTA_DEFAULT_LIMIT_PERCENT = 100
 const codex5hLimitPercent = ref(CODEX_QUOTA_DEFAULT_LIMIT_PERCENT)
 const codex7dLimitPercent = ref(CODEX_QUOTA_DEFAULT_LIMIT_PERCENT)
@@ -3139,6 +3162,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   codexCLIOnlyEnabled.value = false
+  codexFingerprintMode.value = 'session'
   codex5hLimitPercent.value = CODEX_QUOTA_DEFAULT_LIMIT_PERCENT
   codex7dLimitPercent.value = CODEX_QUOTA_DEFAULT_LIMIT_PERCENT
   anthropicPassthroughEnabled.value = false
@@ -3171,6 +3195,12 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       })
       if (newAccount.type === 'oauth') {
         codexCLIOnlyEnabled.value = extra?.codex_cli_only === true
+        const fingerprintMode = extra?.codex_fingerprint_mode
+        codexFingerprintMode.value =
+          typeof fingerprintMode === 'string' &&
+          ['off', 'device', 'session', 'full'].includes(fingerprintMode)
+            ? (fingerprintMode as CodexFingerprintMode)
+            : 'session'
       }
       const credentials = newAccount.credentials as Record<string, unknown> | undefined
       const compactMappings = credentials?.compact_model_mapping as Record<string, string> | undefined
@@ -4641,6 +4671,11 @@ const handleSubmit = async () => {
             newExtra.codex_cli_only = false
           } else {
             delete newExtra.codex_cli_only
+          }
+          if (codexFingerprintMode.value !== 'session') {
+            newExtra.codex_fingerprint_mode = codexFingerprintMode.value
+          } else {
+            delete newExtra.codex_fingerprint_mode
           }
         }
       }

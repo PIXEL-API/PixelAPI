@@ -5666,6 +5666,13 @@ export default {
         codexCLIOnly: "仅允许 Codex 官方客户端",
         codexCLIOnlyDesc:
           "仅对 OpenAI OAuth 生效。开启后仅允许 Codex 官方客户端家族访问；关闭后完全绕过并保持原逻辑。",
+        codexFingerprintMode: "Codex 指纹收敛",
+        codexFingerprintModeDesc:
+          "仅对 OpenAI OAuth 生效。默认按账号收敛设备与会话；全局 Clean Relay 开启时，其独占 installation、session、conversation 与 prompt-cache，账号模式仅在 session/full 下补充 thread、turn、window。",
+        codexFingerprintOff: "关闭（原样透传）",
+        codexFingerprintDevice: "设备（仅 installation）",
+        codexFingerprintSession: "会话（推荐）",
+        codexFingerprintFull: "完全收敛",
         codexQuotaLimit: "Codex 限额保护",
         codexQuotaLimitDesc:
           "仅对 OpenAI OAuth 生效。5h 或 7d 用量达到设置百分比后暂停调度，窗口重置后自动恢复；100% 表示按原始额度保护。",

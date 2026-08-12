@@ -62,33 +62,43 @@ const (
 
 // OpenAI allowed headers whitelist (for non-passthrough).
 var openaiAllowedHeaders = map[string]bool{
-	"accept-language":       true,
-	"content-type":          true,
-	"conversation_id":       true,
-	"user-agent":            true,
-	"originator":            true,
-	"session_id":            true,
-	"x-codex-beta-features": true,
-	"x-codex-turn-state":    true,
-	"x-codex-turn-metadata": true,
-	responsesLiteHeaderKey:  true,
+	"accept-language":         true,
+	"content-type":            true,
+	"conversation_id":         true,
+	"user-agent":              true,
+	"originator":              true,
+	"session-id":              true,
+	"session_id":              true,
+	"thread-id":               true,
+	"x-client-request-id":     true,
+	"x-codex-beta-features":   true,
+	"x-codex-installation-id": true,
+	"x-codex-turn-state":      true,
+	"x-codex-turn-metadata":   true,
+	"x-codex-window-id":       true,
+	responsesLiteHeaderKey:    true,
 }
 
 // OpenAI passthrough allowed headers whitelist.
 // Only low-risk request headers are forwarded in passthrough mode.
 var openaiPassthroughAllowedHeaders = map[string]bool{
-	"accept":                true,
-	"accept-language":       true,
-	"content-type":          true,
-	"conversation_id":       true,
-	"openai-beta":           true,
-	"user-agent":            true,
-	"originator":            true,
-	"session_id":            true,
-	"x-codex-beta-features": true,
-	"x-codex-turn-state":    true,
-	"x-codex-turn-metadata": true,
-	responsesLiteHeaderKey:  true,
+	"accept":                  true,
+	"accept-language":         true,
+	"content-type":            true,
+	"conversation_id":         true,
+	"openai-beta":             true,
+	"user-agent":              true,
+	"originator":              true,
+	"session-id":              true,
+	"session_id":              true,
+	"thread-id":               true,
+	"x-client-request-id":     true,
+	"x-codex-beta-features":   true,
+	"x-codex-installation-id": true,
+	"x-codex-turn-state":      true,
+	"x-codex-turn-metadata":   true,
+	"x-codex-window-id":       true,
+	responsesLiteHeaderKey:    true,
 }
 
 // codex_cli_only debug header whitelist for rejection diagnostics.
@@ -2742,6 +2752,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 // ForwardWithAnalysis forwards request to OpenAI API and reuses parsed /responses metadata when available.
 func (s *OpenAIGatewayService) ForwardWithAnalysis(ctx context.Context, c *gin.Context, account *Account, body []byte, analysis *OpenAIResponsesRequestAnalysis) (*OpenAIForwardResult, error) {
+	resetOpenAIRequestIdentityState(c)
 	beginUpstreamResponseModelObservation(c)
 	clearGrokResponsesClientToolMapping(c)
 	// Keep attempt TTFT separate from the end-to-end first-output budget. The
@@ -3152,6 +3163,12 @@ func (s *OpenAIGatewayService) ForwardWithAnalysis(ctx context.Context, c *gin.C
 		}
 		if codexResult.PromptCacheKey != "" {
 			promptCacheKey = codexResult.PromptCacheKey
+		}
+		if !isCompactRequest {
+			if _, fingerprintModified := s.applyCodexFingerprintToRequestBody(ctx, c, account, reqBody); fingerprintModified {
+				bodyModified = true
+				disablePatch()
+			}
 		}
 	}
 	if cleanRelayState, cleanRelayModified, cleanRelayErr := s.applyOpenAICleanRelayToRequestBody(ctx, c, account, reqBody, body); cleanRelayErr != nil {
@@ -3880,6 +3897,13 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	if sanitized {
 		body = sanitizedBody
 	}
+	if account != nil && account.Type == AccountTypeOAuth && !isOpenAIResponsesCompactPath(c) {
+		fingerprintedBody, _, _, fingerprintErr := s.applyCodexFingerprintToRawBody(ctx, c, account, body)
+		if fingerprintErr != nil {
+			return nil, fingerprintErr
+		}
+		body = fingerprintedBody
+	}
 	var cleanRelayState *openAICleanRelayState
 	body, cleanRelayState, _, err = s.applyOpenAICleanRelayToRawBody(ctx, c, account, body, cleanRelaySessionBody)
 	if err != nil {
@@ -4312,8 +4336,9 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	if req.Header.Get("content-type") == "" {
 		req.Header.Set("content-type", "application/json")
 	}
-	s.applyOpenAICleanRelayHeaders(c, req)
 	account.ApplyHeaderOverrides(req.Header)
+	s.applyCurrentCodexFingerprintHeaders(ctx, c, account, req.Header)
+	s.applyOpenAICleanRelayHeaders(ctx, c, account, req)
 	// Finalize the OAuth client identity after every User-Agent override. The
 	// Codex backend rejects mismatched originator/User-Agent pairs with 404.
 	if account.IsOpenAIOAuth() {
@@ -5697,8 +5722,9 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	if req.Header.Get("content-type") == "" {
 		req.Header.Set("content-type", "application/json")
 	}
-	s.applyOpenAICleanRelayHeaders(c, req)
 	account.ApplyHeaderOverrides(req.Header)
+	s.applyCurrentCodexFingerprintHeaders(ctx, c, account, req.Header)
+	s.applyOpenAICleanRelayHeaders(ctx, c, account, req)
 	// Finalize the OAuth client identity after every User-Agent override.
 	if account.IsOpenAIOAuth() {
 		enforceCodexIdentityHeaders(req.Header)

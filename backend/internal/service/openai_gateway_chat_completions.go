@@ -51,6 +51,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	promptCacheKey string,
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
+	resetOpenAIRequestIdentityState(c)
 	beginUpstreamResponseModelObservation(c)
 	if account.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
 		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
@@ -191,6 +192,21 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		return nil, policyErr
 	}
 	responsesBody = updatedBody
+	cleanRelaySessionBody := responsesBody
+	if account.IsOpenAIOAuth() {
+		fingerprintedBody, _, _, fingerprintErr := s.applyCodexFingerprintToRawBody(ctx, c, account, responsesBody)
+		if fingerprintErr != nil {
+			return nil, fingerprintErr
+		}
+		responsesBody = fingerprintedBody
+	}
+	responsesBody, cleanRelayState, _, cleanRelayErr := s.applyOpenAICleanRelayToRawBody(ctx, c, account, responsesBody, cleanRelaySessionBody)
+	if cleanRelayErr != nil {
+		return nil, cleanRelayErr
+	}
+	if cleanRelayState != nil {
+		promptCacheKey = cleanRelayState.Mapping.PromptCacheKey
+	}
 	forwardedServiceTier := extractOpenAIServiceTierFromBody(responsesBody)
 	var reasoningEffort *string
 	if responsesReq.Reasoning != nil && strings.TrimSpace(responsesReq.Reasoning.Effort) != "" {
@@ -222,7 +238,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	}
 	expectedAgentIdentityTaskID := strings.TrimSpace(account.GetCredential("task_id"))
 
-	if promptCacheKey != "" {
+	if promptCacheKey != "" && cleanRelayState == nil && !currentCodexFingerprintOwnsSession(c, account) {
 		upstreamReq.Header.Set("session_id", generateSessionUUID(promptCacheKey))
 	}
 

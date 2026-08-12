@@ -513,6 +513,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, blocked.Message, blocked)
 	}
 	firstClientMessage = updatedFirst
+	fingerprintedFirst, _, _, fingerprintErr := s.applyCodexFingerprintToRawBody(ctx, c, account, firstClientMessage)
+	if fingerprintErr != nil {
+		return fmt.Errorf("apply codex fingerprint on first ws frame: %w", fingerprintErr)
+	}
+	firstClientMessage = fingerprintedFirst
 	cleanedFirst, cleanRelayState, _, cleanRelayErr := s.applyOpenAICleanRelayToRawBody(ctx, c, account, firstClientMessage, firstClientMessage)
 	if cleanRelayErr != nil {
 		return fmt.Errorf("apply openai clean relay on first ws frame: %w", cleanRelayErr)
@@ -695,6 +700,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			out, blocked, policyErr := s.applyOpenAIFastPolicyToWSResponseCreate(ctx, account, model, payload)
 			if policyErr == nil && blocked == nil &&
 				strings.TrimSpace(gjson.GetBytes(out, "type").String()) == "response.create" {
+				fingerprintedOut, _, _, fingerprintErr := s.applyCodexFingerprintToRawBody(ctx, c, account, out)
+				if fingerprintErr != nil {
+					return out, nil, fingerprintErr
+				}
+				out = fingerprintedOut
 				cleanedOut, _, _, cleanRelayErr := s.applyOpenAICleanRelayToRawBody(ctx, c, account, out, payload)
 				if cleanRelayErr != nil {
 					return out, nil, cleanRelayErr

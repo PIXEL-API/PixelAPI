@@ -152,7 +152,7 @@ func TestOpenAICleanRelay_FirstCleanStartRewritesBodyAndHeaders(t *testing.T) {
 
 	headers := http.Header{}
 	headers.Set(openAIWSTurnStateHeader, "client-turn-state")
-	applyOpenAICleanRelayWSHeaders(c, headers)
+	svc.applyOpenAICleanRelayWSHeaders(ctx, c, account, headers)
 	require.Equal(t, state.Mapping.InstallationID, headers.Get(openAICleanRelayInstallationField))
 	require.Equal(t, state.Mapping.SessionID, headers.Get("session_id"))
 	require.Equal(t, state.Mapping.ConversationID, headers.Get("conversation_id"))
@@ -180,6 +180,60 @@ func TestOpenAICleanRelay_CacheReadErrorFailsFast(t *testing.T) {
 	require.Nil(t, state)
 	require.False(t, changed)
 	require.JSONEq(t, string(body), string(rewritten))
+}
+
+func TestOpenAICleanRelay_NonOAuthAttemptClearsPreviousAccountState(t *testing.T) {
+	ctx := context.Background()
+	svc := &OpenAIGatewayService{
+		cache:          &stubGatewayCache{},
+		settingService: newCleanRelaySettingService(true),
+	}
+	defer func() {
+		svc.settingService = newCleanRelaySettingService(false)
+	}()
+	c := newCleanRelayGinContext(101, 202)
+	oauthAccount := newCleanRelayOAuthAccount(303)
+	body := []byte(`{"model":"gpt-5.1","prompt_cache_key":"client-cache","input":"hello"}`)
+
+	_, state, _, err := svc.applyOpenAICleanRelayToRawBody(ctx, c, oauthAccount, body, body)
+	require.NoError(t, err)
+	require.NotNil(t, state)
+	require.NotNil(t, getOpenAICleanRelayState(c))
+
+	apiKeyAccount := &Account{ID: 404, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+	rewritten, nextState, changed, err := svc.applyOpenAICleanRelayToRawBody(ctx, c, apiKeyAccount, body, body)
+	require.NoError(t, err)
+	require.Nil(t, nextState)
+	require.False(t, changed)
+	require.Equal(t, body, rewritten)
+	require.Nil(t, getOpenAICleanRelayState(c))
+
+	req := httptest.NewRequest(http.MethodPost, "https://example.test/v1/responses", nil)
+	svc.applyOpenAICleanRelayHeaders(ctx, c, apiKeyAccount, req)
+	require.Empty(t, req.Header.Get(openAICleanRelayInstallationField))
+	require.Empty(t, req.Header.Get("session-id"))
+	require.Empty(t, req.Header.Get("session_id"))
+	require.Empty(t, req.Header.Get("conversation_id"))
+}
+
+func TestOpenAICleanRelayHeadersRejectStaleAccountState(t *testing.T) {
+	ctx := context.Background()
+	svc := &OpenAIGatewayService{settingService: newCleanRelaySettingService(true)}
+	defer func() {
+		svc.settingService = newCleanRelaySettingService(false)
+	}()
+	c := newCleanRelayGinContext(101, 202)
+	state := &openAICleanRelayState{Mapping: newOpenAICleanRelayMapping(303, 1, "relay-installation")}
+	setOpenAICleanRelayState(c, state)
+
+	req := httptest.NewRequest(http.MethodPost, "https://example.test/v1/responses", nil)
+	svc.applyOpenAICleanRelayHeaders(ctx, c, newCleanRelayOAuthAccount(404), req)
+
+	require.Nil(t, getOpenAICleanRelayState(c))
+	require.Empty(t, req.Header.Get(openAICleanRelayInstallationField))
+	require.Empty(t, req.Header.Get("session-id"))
+	require.Empty(t, req.Header.Get("session_id"))
+	require.Empty(t, req.Header.Get("conversation_id"))
 }
 
 func TestOpenAICleanRelay_CompactDoesNotInjectBodyClientMetadata(t *testing.T) {
@@ -230,6 +284,26 @@ func TestOpenAICleanRelay_RawRewriteReplacesInvalidClientMetadata(t *testing.T) 
 	require.NotNil(t, state)
 	require.Equal(t, state.Mapping.InstallationID, gjson.GetBytes(rewritten, "client_metadata.x-codex-installation-id").String())
 	require.Equal(t, state.Mapping.PromptCacheKey, gjson.GetBytes(rewritten, "prompt_cache_key").String())
+}
+
+func TestOpenAICleanRelay_RawRewritePreservesLargeMetadataIntegers(t *testing.T) {
+	state := &openAICleanRelayState{
+		Mapping: openAICleanRelayMapping{
+			InstallationID: "relay-installation",
+			SessionID:      "relay-session",
+			PromptCacheKey: "relay-cache",
+		},
+		AllowBodyClientMetadata: true,
+	}
+	body := []byte(`{"client_metadata":{"sequence":9007199254740993123,"x-codex-turn-metadata":"{\"sequence\":9007199254740993123}"}}`)
+
+	rewritten, changed, err := applyOpenAICleanRelayMappingToRawBody(body, state)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, "9007199254740993123", gjson.GetBytes(rewritten, "client_metadata.sequence").Raw)
+	embedded := gjson.GetBytes(rewritten, "client_metadata.x-codex-turn-metadata").String()
+	require.Equal(t, "9007199254740993123", gjson.Get(embedded, "sequence").Raw)
+	require.Equal(t, state.Mapping.SessionID, gjson.Get(embedded, "session_id").String())
 }
 
 func TestOpenAICleanRelay_PreselectsCachedAccountBeforeScheduler(t *testing.T) {

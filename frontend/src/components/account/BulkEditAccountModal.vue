@@ -904,6 +904,27 @@
         </div>
       </div>
 
+      <div v-if="!isUserScope && allOpenAIOAuth" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <div class="mb-3 flex items-center justify-between">
+          <label class="input-label mb-0">{{ t('admin.accounts.openai.codexFingerprintMode') }}</label>
+          <input
+            v-model="enableCodexFingerprintMode"
+            type="checkbox"
+            class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </div>
+        <div :class="!enableCodexFingerprintMode && 'pointer-events-none opacity-50'">
+          <p class="mb-2 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.openai.codexFingerprintModeDesc') }}
+          </p>
+          <Select
+            v-model="codexFingerprintMode"
+            data-testid="bulk-codex-fingerprint-mode-select"
+            :options="codexFingerprintModeOptions"
+          />
+        </div>
+      </div>
+
       <div v-if="allOpenAIOAuth" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
           <label
@@ -1502,6 +1523,7 @@ const enableOpenAIPassthrough = ref(false)
 const enableOpenAIWSMode = ref(false)
 const enableOpenAIAPIKeyWSMode = ref(false)
 const enableCodexCLIOnly = ref(false)
+const enableCodexFingerprintMode = ref(false)
 const enableCodexQuotaLimit = ref(false)
 const enableRpmLimit = ref(false)
 const enableExternalPlacement = ref(false)
@@ -1561,6 +1583,14 @@ const openaiPassthroughEnabled = ref(false)
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const codexCLIOnlyEnabled = ref(false)
+type CodexFingerprintMode = 'off' | 'device' | 'session' | 'full'
+const codexFingerprintMode = ref<CodexFingerprintMode>('session')
+const codexFingerprintModeOptions = computed(() => [
+  { value: 'off' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintOff') },
+  { value: 'device' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintDevice') },
+  { value: 'session' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintSession') },
+  { value: 'full' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintFull') }
+])
 const CODEX_QUOTA_DEFAULT_LIMIT_PERCENT = 100
 const bulkCodex5hLimitPercent = ref(CODEX_QUOTA_DEFAULT_LIMIT_PERCENT)
 const bulkCodex7dLimitPercent = ref(CODEX_QUOTA_DEFAULT_LIMIT_PERCENT)
@@ -1875,6 +1905,14 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
     extra.codex_cli_only = codexCLIOnlyEnabled.value
   }
 
+  if (enableCodexFingerprintMode.value) {
+    const extra = ensureExtra()
+    // Bulk updates merge JSONB patches into the existing extra object.  An
+    // omitted key cannot clear an existing off/device/full value, so the
+    // default session mode must be written explicitly here.
+    extra.codex_fingerprint_mode = codexFingerprintMode.value
+  }
+
   if (enableCodexQuotaLimit.value) {
     const extra = ensureExtra()
     bulkCodex5hLimitPercent.value = normalizeCodexQuotaLimitInput(Number(bulkCodex5hLimitPercent.value))
@@ -2036,6 +2074,7 @@ const handleSubmit = async () => {
     enableOpenAIWSMode.value ||
     enableOpenAIAPIKeyWSMode.value ||
     enableCodexCLIOnly.value ||
+    enableCodexFingerprintMode.value ||
     enableCodexQuotaLimit.value ||
     enableRpmLimit.value ||
     userMsgQueueMode.value !== null ||
@@ -2309,6 +2348,7 @@ watch(
       enableOpenAIWSMode.value = false
       enableOpenAIAPIKeyWSMode.value = false
       enableCodexCLIOnly.value = false
+      enableCodexFingerprintMode.value = false
       enableCodexQuotaLimit.value = false
       enableRpmLimit.value = false
       enableExternalPlacement.value = false
@@ -2335,6 +2375,7 @@ watch(
       openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
       openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
       codexCLIOnlyEnabled.value = false
+      codexFingerprintMode.value = 'session'
       bulkCodex5hLimitPercent.value = CODEX_QUOTA_DEFAULT_LIMIT_PERCENT
       bulkCodex7dLimitPercent.value = CODEX_QUOTA_DEFAULT_LIMIT_PERCENT
       rpmLimitEnabled.value = false

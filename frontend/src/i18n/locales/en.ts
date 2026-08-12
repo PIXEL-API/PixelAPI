@@ -5707,6 +5707,13 @@ export default {
         codexCLIOnly: "Codex official clients only",
         codexCLIOnlyDesc:
           "Only applies to OpenAI OAuth. When enabled, only Codex official client families are allowed; when disabled, the gateway bypasses this restriction and keeps existing behavior.",
+        codexFingerprintMode: "Codex fingerprint convergence",
+        codexFingerprintModeDesc:
+          "Only applies to OpenAI OAuth. Device and session IDs converge per account by default. When global Clean Relay is enabled, it exclusively owns installation, session, conversation, and prompt-cache; session/full modes only add thread, turn, and window IDs.",
+        codexFingerprintOff: "Off (pass through)",
+        codexFingerprintDevice: "Device (installation only)",
+        codexFingerprintSession: "Session (recommended)",
+        codexFingerprintFull: "Full convergence",
         codexQuotaLimit: "Codex quota protection",
         codexQuotaLimitDesc:
           "Only applies to OpenAI OAuth. When 5h or 7d usage reaches this percentage, the account is paused from scheduling until the window resets. 100% keeps the original quota behavior.",

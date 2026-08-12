@@ -34,6 +34,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	promptCacheKey string,
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
+	resetOpenAIRequestIdentityState(c)
 	beginUpstreamResponseModelObservation(c)
 	if account.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
 		return s.forwardAnthropicViaRawChatCompletions(ctx, c, account, body, defaultMappedModel)
@@ -181,6 +182,21 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		return nil, policyErr
 	}
 	responsesBody = updatedBody
+	cleanRelaySessionBody := responsesBody
+	if account.IsOpenAIOAuth() {
+		fingerprintedBody, _, _, fingerprintErr := s.applyCodexFingerprintToRawBody(ctx, c, account, responsesBody)
+		if fingerprintErr != nil {
+			return nil, fingerprintErr
+		}
+		responsesBody = fingerprintedBody
+	}
+	responsesBody, cleanRelayState, _, cleanRelayErr := s.applyOpenAICleanRelayToRawBody(ctx, c, account, responsesBody, cleanRelaySessionBody)
+	if cleanRelayErr != nil {
+		return nil, cleanRelayErr
+	}
+	if cleanRelayState != nil {
+		promptCacheKey = cleanRelayState.Mapping.PromptCacheKey
+	}
 	grokCacheIdentity := ""
 	if account.Platform == PlatformGrok {
 		grokIntentBody := responsesBody
@@ -253,7 +269,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 
 	// Override session_id with a deterministic UUID derived from the isolated
 	// session key, ensuring different API keys produce different upstream sessions.
-	if account.Platform != PlatformGrok && promptCacheKey != "" {
+	if account.Platform != PlatformGrok && promptCacheKey != "" && cleanRelayState == nil && !currentCodexFingerprintOwnsSession(c, account) {
 		apiKeyID := getAPIKeyIDFromContext(c)
 		upstreamReq.Header.Set("session_id", generateSessionUUID(isolateOpenAISessionID(apiKeyID, promptCacheKey)))
 	}
