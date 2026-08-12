@@ -57,7 +57,9 @@ const (
 	maxContentModerationTimeoutMS        = 30000
 	maxModerationInputRunes              = 12000
 	maxZhipuModerationInputRunes         = 2000
-	maxModerationExcerptRunes            = 240
+	// OpenAI flagged 是布尔信号，只有同时具备足够高的分类分数时才参与最终命中。
+	// 使用严格大于比较：恰好 70% 不命中官方路径；本地分类阈值仍独立生效。
+	openAIOfficialFlaggedScoreThreshold = 0.70
 
 	defaultContentModerationWorkerCount          = 4
 	maxContentModerationWorkerCount              = 32
@@ -2058,10 +2060,12 @@ func (s *ContentModerationService) buildLog(input ContentModerationCheckInput, c
 		HighestScore:          highestScore,
 		CategoryScores:        cloneFloatMap(scores),
 		ThresholdSnapshot:     cloneFloatMap(cfg.Thresholds),
-		InputExcerpt:          trimRunes(redactContentModerationSecrets(text), maxModerationExcerptRunes),
-		UpstreamLatencyMS:     latency,
-		QueueDelayMS:          queueDelay,
-		Error:                 errText,
+		// input_excerpt 是历史字段名；字段类型为 TEXT。这里保存实际送审文本的完整脱敏内容，
+		// 供管理端详情复盘，不再在持久化前截成固定长度。
+		InputExcerpt:      redactContentModerationSecrets(text),
+		UpstreamLatencyMS: latency,
+		QueueDelayMS:      queueDelay,
+		Error:             errText,
 	}
 }
 
@@ -2882,8 +2886,9 @@ func normalizeOpenAIModerationResult(result *moderationAPIResult, thresholds map
 	}
 	thresholdSnapshot := mergeContentModerationThresholds(ContentModerationDefaultThresholds(), thresholds)
 	thresholdFlagged, highestCategory, highestScore := evaluateModerationScores(scores, thresholdSnapshot)
+	officialFlagged := result.Flagged && highestScore > openAIOfficialFlaggedScoreThreshold
 	return &normalizedModerationResult{
-		Flagged:         result.Flagged || thresholdFlagged,
+		Flagged:         officialFlagged || thresholdFlagged,
 		HighestCategory: highestCategory,
 		HighestScore:    highestScore,
 		CategoryScores:  scores,

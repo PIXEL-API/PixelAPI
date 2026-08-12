@@ -953,9 +953,7 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 			}
 		}
 		enforceCodexIdentityHeaders(req.Header)
-		if chatgptAccountID := account.GetChatGPTAccountID(); chatgptAccountID != "" {
-			req.Header.Set("chatgpt-account-id", chatgptAccountID)
-		}
+		setOpenAIChatGPTAccountHeaders(req.Header, account)
 
 		resp, err := client.Do(req)
 		if err != nil {

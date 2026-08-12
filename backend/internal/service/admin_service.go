@@ -770,14 +770,20 @@ func invalidBulkAccountInput(message string) error {
 	return infraerrors.BadRequest("ACCOUNT_BULK_UPDATE_INVALID", message)
 }
 
-func (s *adminServiceImpl) validateRequiredOpenAIAccountLevel(ctx context.Context, platform, level string) (string, error) {
+func (s *adminServiceImpl) validateRequiredAccountLevel(ctx context.Context, platform, level string) (string, error) {
 	trimmed := strings.TrimSpace(level)
 	if trimmed != "" && NormalizeAccountLevelKey(trimmed) == "" {
-		return "", invalidGroupInput("required_account_level must be empty or an enabled OpenAI account level")
+		return "", invalidGroupInput("required_account_level must be empty or a valid account level key")
 	}
 	normalized := NormalizeRequiredAccountLevel(level)
 	if normalized == "" {
 		return "", nil
+	}
+	if platform == PlatformGrok {
+		if !IsUserSelectableGrokAccountLevel(normalized) {
+			return "", invalidGroupInput("required_account_level must be empty, free, or heavy for Grok groups")
+		}
+		return normalized, nil
 	}
 	if platform != PlatformOpenAI {
 		return normalized, nil
@@ -2126,7 +2132,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	if platform == "" {
 		platform = PlatformAnthropic
 	}
-	requiredAccountLevel, err := s.validateRequiredOpenAIAccountLevel(ctx, platform, input.RequiredAccountLevel)
+	requiredAccountLevel, err := s.validateRequiredAccountLevel(ctx, platform, input.RequiredAccountLevel)
 	if err != nil {
 		return nil, err
 	}
@@ -2514,7 +2520,7 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	group.APIKeyBadgeType = apiKeyBadgeType
 	group.APIKeyBadgeText = apiKeyBadgeText
 	if input.RequiredAccountLevel != nil {
-		requiredAccountLevel, err := s.validateRequiredOpenAIAccountLevel(ctx, group.Platform, *input.RequiredAccountLevel)
+		requiredAccountLevel, err := s.validateRequiredAccountLevel(ctx, group.Platform, *input.RequiredAccountLevel)
 		if err != nil {
 			return nil, err
 		}
@@ -5554,16 +5560,22 @@ func (s *adminServiceImpl) validateGroupIDsExist(ctx context.Context, groupIDs [
 }
 
 func (s *adminServiceImpl) validateAccountLevelGroupBinding(ctx context.Context, accountPlatform, accountLevel string, groupIDs []int64) error {
-	if len(groupIDs) == 0 || accountPlatform != PlatformOpenAI {
+	if len(groupIDs) == 0 || (accountPlatform != PlatformOpenAI && accountPlatform != PlatformGrok) {
 		return nil
 	}
-	levelConfigs, err := s.openAIAccountLevelConfigs(ctx)
-	if err != nil {
-		return err
-	}
 	level := NormalizeAccountLevel(accountLevel)
-	if err := ValidateConfiguredOpenAIAccountLevel(accountPlatform, level, levelConfigs); err != nil {
-		return infraerrors.BadRequest("ACCOUNT_GROUP_BINDING_INVALID", err.Error())
+	levelConfigs := DefaultOpenAIAccountLevelConfigs()
+	if accountPlatform == PlatformOpenAI {
+		var err error
+		levelConfigs, err = s.openAIAccountLevelConfigs(ctx)
+		if err != nil {
+			return err
+		}
+		if err := ValidateConfiguredOpenAIAccountLevel(accountPlatform, level, levelConfigs); err != nil {
+			return infraerrors.BadRequest("ACCOUNT_GROUP_BINDING_INVALID", err.Error())
+		}
+	} else if !IsUserSelectableGrokAccountLevel(level) {
+		return infraerrors.BadRequest("ACCOUNT_GROUP_BINDING_INVALID", "Grok account_level must be free or heavy")
 	}
 	for _, groupID := range groupIDs {
 		group, err := s.groupRepo.GetByIDLite(ctx, groupID)
@@ -5571,13 +5583,17 @@ func (s *adminServiceImpl) validateAccountLevelGroupBinding(ctx context.Context,
 			return fmt.Errorf("get group: %w", err)
 		}
 		required := NormalizeRequiredAccountLevel(group.RequiredAccountLevel)
-		if group.Platform != PlatformOpenAI || required == "" {
+		if group.Platform != accountPlatform || required == "" {
 			continue
 		}
-		if !CanOpenAIAccountJoinSharedPoolWithConfigs(level, required, levelConfigs) {
+		matches := level == required
+		if accountPlatform == PlatformOpenAI {
+			matches = CanOpenAIAccountJoinSharedPoolWithConfigs(level, required, levelConfigs)
+		}
+		if !matches {
 			return infraerrors.BadRequest(
 				"ACCOUNT_GROUP_BINDING_INVALID",
-				fmt.Sprintf("account_level mismatch: OpenAI account level %s cannot bind to group %s requiring %s", NormalizeOpenAISharedPoolAccountLevel(level), group.Name, required),
+				fmt.Sprintf("account_level mismatch: %s account level %s cannot bind to group %s requiring %s", accountPlatform, level, group.Name, required),
 			)
 		}
 	}
@@ -5748,7 +5764,7 @@ func (s *adminServiceImpl) normalizeAccountIDsForGroupBinding(ctx context.Contex
 			group.Platform == PlatformGemini ||
 			group.Platform == PlatformGrok)
 	requiredLevel := NormalizeRequiredAccountLevel(group.RequiredAccountLevel)
-	requiresLevelCheck := group.Platform == PlatformOpenAI && requiredLevel != ""
+	requiresLevelCheck := (group.Platform == PlatformOpenAI || group.Platform == PlatformGrok) && requiredLevel != ""
 	if !requiresOAuthFilter && !requiresLevelCheck {
 		return accountIDs, nil
 	}
@@ -5761,7 +5777,7 @@ func (s *adminServiceImpl) normalizeAccountIDsForGroupBinding(ctx context.Contex
 		return nil, fmt.Errorf("failed to fetch accounts for group binding: %w", err)
 	}
 	levelConfigs := DefaultOpenAIAccountLevelConfigs()
-	if requiresLevelCheck {
+	if requiresLevelCheck && group.Platform == PlatformOpenAI {
 		levelConfigs, err = s.openAIAccountLevelConfigs(ctx)
 		if err != nil {
 			return nil, err
@@ -5769,6 +5785,8 @@ func (s *adminServiceImpl) normalizeAccountIDsForGroupBinding(ctx context.Contex
 		if OpenAIAccountLevelConfigByKey(levelConfigs, requiredLevel) == nil {
 			return nil, invalidGroupInput("required_account_level must be empty or an enabled OpenAI account level")
 		}
+	} else if requiresLevelCheck && !IsUserSelectableGrokAccountLevel(requiredLevel) {
+		return nil, invalidGroupInput("required_account_level must be empty, free, or heavy for Grok groups")
 	}
 	accountByID := make(map[int64]*Account, len(accounts))
 	for _, account := range accounts {
@@ -5790,8 +5808,14 @@ func (s *adminServiceImpl) normalizeAccountIDsForGroupBinding(ctx context.Contex
 			continue
 		}
 		accountLevel := NormalizeAccountLevel(account.AccountLevel)
-		if requiresLevelCheck && account.Platform == PlatformOpenAI && !CanOpenAIAccountJoinSharedPoolWithConfigs(accountLevel, requiredLevel, levelConfigs) {
-			return nil, invalidGroupInput(fmt.Sprintf("account_level mismatch: OpenAI account %s level %s cannot bind to group %s requiring %s", account.Name, NormalizeOpenAISharedPoolAccountLevel(accountLevel), group.Name, requiredLevel))
+		if requiresLevelCheck && account.Platform == group.Platform {
+			matches := accountLevel == requiredLevel
+			if group.Platform == PlatformOpenAI {
+				matches = CanOpenAIAccountJoinSharedPoolWithConfigs(accountLevel, requiredLevel, levelConfigs)
+			}
+			if !matches {
+				return nil, invalidGroupInput(fmt.Sprintf("account_level mismatch: %s account %s level %s cannot bind to group %s requiring %s", group.Platform, account.Name, accountLevel, group.Name, requiredLevel))
+			}
 		}
 		filtered = append(filtered, accountID)
 	}

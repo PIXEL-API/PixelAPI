@@ -458,7 +458,7 @@ const handleGenerateUrl = async () => {
   } else if (isAntigravity.value) {
     await antigravityOAuth.generateAuthUrl(effectiveProxyId.value)
   } else if (isGrok.value) {
-    await grokOAuth.generateAuthUrl(effectiveProxyId.value)
+    await grokOAuth.generateAuthUrl(effectiveProxyId.value, { accountLevel: props.account.account_level })
   } else {
     await claudeOAuth.generateAuthUrl(addMethod.value, effectiveProxyId.value)
   }
@@ -603,7 +603,8 @@ const handleExchangeCode = async () => {
       code: authCode.trim(),
       sessionId,
       state: stateToUse,
-      proxyId: effectiveProxyId.value
+      proxyId: effectiveProxyId.value,
+      accountLevel: props.account.account_level
     })
     if (!tokenInfo) return
 

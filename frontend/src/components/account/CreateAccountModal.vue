@@ -431,6 +431,36 @@
         </p>
       </div>
 
+      <div v-if="form.platform === 'grok'">
+        <label class="input-label">{{ t('admin.accounts.accountLevel.label') }}</label>
+        <div
+          v-if="isUserScope && lockAccountLevel"
+          class="input flex min-h-[44px] items-center justify-between bg-gray-50 text-gray-700 dark:bg-dark-800 dark:text-dark-200"
+        >
+          <strong>{{ grokAccountLevelLabel(form.account_level) }}</strong>
+          <span class="text-xs text-gray-500 dark:text-dark-400">{{ t('admin.accounts.lockedByRoom') }}</span>
+        </div>
+        <div v-else class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <button
+            v-for="option in grokAccountLevelOptions"
+            :key="option.value"
+            type="button"
+            :aria-pressed="form.account_level === option.value"
+            :class="[
+              'flex min-h-[76px] cursor-pointer flex-col justify-center rounded-lg border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-dark-800',
+              form.account_level === option.value
+                ? 'border-cyan-400 bg-cyan-50 text-cyan-700 dark:border-cyan-500 dark:bg-cyan-900/30 dark:text-cyan-300'
+                : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-dark-700 dark:bg-dark-800 dark:text-dark-200 dark:hover:bg-dark-700'
+            ]"
+            @click="form.account_level = option.value"
+          >
+            <span class="text-sm font-semibold">{{ option.label }}</span>
+            <span class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ option.description }}</span>
+          </button>
+        </div>
+        <p class="input-hint">{{ t('admin.accounts.grokAccountLevel.hint') }}</p>
+      </div>
+
       <!-- Account Type Selection (Gemini) -->
       <div v-if="form.platform === 'gemini'">
         <div class="flex items-center justify-between">
@@ -3044,6 +3074,7 @@
         :show-mobile-refresh-token-option="!isUserScope && form.platform === 'openai'"
         :show-session-token-option="false"
         :show-access-token-option="!isUserScope && form.platform === 'openai'"
+        :show-codex-pat-option="!isUserScope && form.platform === 'openai'"
         :platform="form.platform"
         :show-project-id="geminiOAuthType === 'code_assist'"
         @generate-url="handleGenerateUrl"
@@ -3052,6 +3083,7 @@
         @validate-mobile-refresh-token="handleOpenAIValidateMobileRT"
         @validate-session-token="handleValidateSessionToken"
         @import-access-token="handleOpenAIImportAT"
+        @import-codex-pat="handleOpenAIImportCodexPAT"
         @import-sso="handleGrokImportSSO"
       />
 
@@ -3443,6 +3475,10 @@ import { isProxyAccountFull, normalizeProxyAccountCount, normalizeProxyMaxAccoun
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
 import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
 import { selectableOpenAIAccountLevels } from '@/utils/openaiAccountLevels'
+import {
+  GROK_ACCOUNT_LEVEL_OPTIONS,
+  grokAccountLevelLabel
+} from '@/utils/grokAccountLevels'
 import {
   OPENAI_WS_MODE_CTX_POOL,
   OPENAI_WS_MODE_OFF,
@@ -3873,6 +3909,13 @@ const userOpenAIAccountLevelOptions = computed<UserOpenAIAccountLevelOption[]>((
   }))
 )
 
+const grokAccountLevelOptions = computed(() =>
+  GROK_ACCOUNT_LEVEL_OPTIONS.map(option => ({
+    ...option,
+    description: t(`admin.accounts.grokAccountLevel.${option.value}Description`)
+  }))
+)
+
 const userOAuthProxyLoginRequired = computed(() => {
   if (!isUserScope.value) return false
   if (form.platform === 'openai') {
@@ -4190,13 +4233,15 @@ watch(
       interceptWarmupRequests.value = false
     }
     if (newPlatform !== 'openai') {
-      form.account_level = 'unknown'
       openaiPassthroughEnabled.value = false
       openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
       openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
       codexCLIOnlyEnabled.value = false
       codex5hLimitPercent.value = CODEX_QUOTA_DEFAULT_LIMIT_PERCENT
       codex7dLimitPercent.value = CODEX_QUOTA_DEFAULT_LIMIT_PERCENT
+    }
+    if (!props.lockAccountLevel || newPlatform !== props.initialPlatform) {
+      form.account_level = 'unknown'
     }
     if (newPlatform !== 'anthropic') {
       anthropicPassthroughEnabled.value = false
@@ -4907,6 +4952,10 @@ const handleSubmit = async () => {
       return
     }
   }
+  if (form.platform === 'grok' && !GROK_ACCOUNT_LEVEL_OPTIONS.some(option => option.value === form.account_level)) {
+    appStore.showError(t('admin.accounts.grokAccountLevel.required'))
+    return
+  }
   if (!validateUserOAuthProxySelection()) {
     return
   }
@@ -5144,7 +5193,7 @@ const handleGenerateUrl = async () => {
   } else if (form.platform === 'antigravity') {
     await antigravityOAuth.generateAuthUrl(form.proxy_id)
   } else if (form.platform === 'grok') {
-    await grokOAuth.generateAuthUrl(form.proxy_id)
+    await grokOAuth.generateAuthUrl(form.proxy_id, { accountLevel: form.account_level })
   } else {
     await oauth.generateAuthUrl(addMethod.value, form.proxy_id)
   }
@@ -5228,7 +5277,7 @@ const createAccountAndFinish = async (
     name: form.name,
     notes: form.notes,
     platform,
-    account_level: platform === 'openai' ? form.account_level : 'unknown',
+    account_level: platform === 'openai' || platform === 'grok' ? form.account_level : 'unknown',
     type,
     credentials,
     extra: finalExtra,
@@ -5346,6 +5395,15 @@ const applyOpenAICredentialImportSettings = (credentials: Record<string, unknown
   }
 }
 
+const buildOpenAICodexPATCredentialExtras = (): Record<string, unknown> | null => {
+  const credentials: Record<string, unknown> = {}
+  applyOpenAICredentialImportSettings(credentials)
+  if (!applyTempUnschedConfig(credentials)) {
+    return null
+  }
+  return credentials
+}
+
 // OpenAI RT 批量验证和创建（共享逻辑）
 const handleOpenAIBatchRT = async (refreshTokenInput: string, clientId?: string) => {
   const oauthClient = openaiOAuth
@@ -5456,6 +5514,51 @@ const handleOpenAIValidateRT = (rt: string) => handleOpenAIBatchRT(rt)
 
 // 手动输入 Mobile RT
 const handleOpenAIValidateMobileRT = (rt: string) => handleOpenAIBatchRT(rt, OPENAI_MOBILE_RT_CLIENT_ID)
+
+const handleOpenAIImportCodexPAT = async (accessToken: string) => {
+  const oauthClient = openaiOAuth
+  const trimmed = accessToken.trim()
+  if (!trimmed) {
+    oauthClient.error.value = t('admin.accounts.oauth.openai.codexPatEmpty')
+    return
+  }
+
+  const credentialExtras = buildOpenAICodexPATCredentialExtras()
+  if (credentialExtras === null) return
+
+  oauthClient.loading.value = true
+  oauthClient.error.value = ''
+  try {
+    await adminAPI.accounts.createOpenAICodexPAT({
+      access_token: trimmed,
+      name: form.name,
+      notes: form.notes || null,
+      account_level: form.account_level,
+      proxy_id: form.proxy_id,
+      concurrency: form.concurrency,
+      load_factor: form.load_factor ?? undefined,
+      priority: form.priority,
+      rate_multiplier: form.rate_multiplier,
+      group_ids: form.group_ids,
+      expires_at: form.expires_at,
+      auto_pause_on_expired: autoPauseOnExpired.value,
+      credential_extras: Object.keys(credentialExtras).length > 0 ? credentialExtras : undefined,
+      extra: buildOpenAIExtra()
+    })
+    appStore.showSuccess(t('admin.accounts.accountCreated'))
+    emit('created')
+    handleClose(true)
+  } catch (error: any) {
+    oauthClient.error.value =
+      error.response?.data?.detail ||
+      error.response?.data?.message ||
+      error.message ||
+      t('admin.accounts.oauth.openai.codexPatImportFailed')
+    appStore.showError(oauthClient.error.value)
+  } finally {
+    oauthClient.loading.value = false
+  }
+}
 
 // OpenAI Access Token 批量导入。通过现有凭证导入服务统一解析 JWT 身份和过期时间。
 const handleOpenAIImportAT = async (accessTokenInput: string) => {
@@ -5903,7 +6006,8 @@ const handleGrokExchange = async (authCode: string) => {
       code: authCode.trim(),
       sessionId: grokOAuth.sessionId.value,
       state: stateToUse,
-      proxyId: form.proxy_id
+      proxyId: form.proxy_id,
+      accountLevel: form.account_level
     })
     if (!tokenInfo) return
 

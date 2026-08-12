@@ -4234,9 +4234,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	if account.Type == AccountTypeOAuth {
 		promptCacheKey := strings.TrimSpace(gjson.GetBytes(body, "prompt_cache_key").String())
 		req.Host = "chatgpt.com"
-		if chatgptAccountID := account.GetChatGPTAccountID(); chatgptAccountID != "" {
-			req.Header.Set("chatgpt-account-id", chatgptAccountID)
-		}
+		setOpenAIChatGPTAccountHeaders(req.Header, account)
 		apiKeyID := getAPIKeyIDFromContext(c)
 		// 鍏堜繚瀛樺鎴风鍘熷鍊硷紝鍐嶅仛 compact 琛ュ厖锛岄伩鍏嶅悗缁粺涓€闅旂鏃惰鍒板凡澶勭悊鐨勫€笺€?
 		clientSessionID := strings.TrimSpace(req.Header.Get("session_id"))
@@ -5586,11 +5584,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	if account.Type == AccountTypeOAuth {
 		// Required: set Host for ChatGPT API (must use req.Host, not Header.Set)
 		req.Host = "chatgpt.com"
-		// Required: set chatgpt-account-id header
-		chatgptAccountID := account.GetChatGPTAccountID()
-		if chatgptAccountID != "" {
-			req.Header.Set("chatgpt-account-id", chatgptAccountID)
-		}
+		setOpenAIChatGPTAccountHeaders(req.Header, account)
 	}
 
 	// Whitelist passthrough headers

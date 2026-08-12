@@ -90,7 +90,8 @@ const CredentialImportModalStub = defineComponent({
     },
     fileAccept: String,
     allowedExtensions: Array,
-    textPlaceholder: String
+    textPlaceholder: String,
+    submitDisabled: Boolean
   },
   template: '<div v-if="show"><slot name="controls" /></div>'
 })
@@ -148,10 +149,53 @@ describe('ImportAccountsModal Agent Identity', () => {
 
     expect(importCredentialContentsMock).toHaveBeenCalledWith(expect.objectContaining({
       platform: 'openai',
+      openai_auth_mode: 'oauth',
       account_level: 'free',
       share_mode: 'private'
     }))
-    expect(importCredentialContentsMock.mock.calls[0]?.[0]).not.toHaveProperty('openai_auth_mode')
+  })
+
+  it('imports Codex PAT export JSON with an explicit auth mode and account level', async () => {
+    const wrapper = mount(ImportAccountsModal, {
+      props: { show: true },
+      global: { stubs: basicStubs }
+    })
+
+    await selectOpenAI(wrapper)
+    await wrapper.get('input[value="personal_access_token"]').setValue()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('userAccounts.importAccountLevel')
+    await findButtonByText(wrapper, 'Team').trigger('click')
+    const importModal = wrapper.getComponent(CredentialImportModalStub)
+    expect(importModal.props('fileAccept')).toBe('application/json,.json')
+    expect(importModal.props('allowedExtensions')).toEqual(['.json'])
+    expect(importModal.props('textPlaceholder')).toBe('userAccounts.importTextPlaceholderPersonalAccessToken')
+
+    const importer = importModal.props('importer') as (contents: string[]) => Promise<unknown>
+    await importer(['{"accounts":[{"platform":"openai","type":"oauth","credentials":{"access_token":"at-test-token","auth_mode":"personalAccessToken"}}]}'])
+
+    expect(importCredentialContentsMock).toHaveBeenCalledWith(expect.objectContaining({
+      platform: 'openai',
+      openai_auth_mode: 'personal_access_token',
+      account_level: 'team',
+      share_mode: 'private'
+    }))
+  })
+
+  it('requires a proxy for PAT levels configured for proxy login', async () => {
+    const wrapper = mount(ImportAccountsModal, {
+      props: { show: true },
+      global: { stubs: basicStubs }
+    })
+
+    await selectOpenAI(wrapper)
+    await wrapper.get('input[value="personal_access_token"]').setValue()
+    await findButtonByText(wrapper, 'Pro').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findComponent({ name: 'ProxySelector' }).exists()).toBe(true)
+    expect(wrapper.getComponent(CredentialImportModalStub).props('submitDisabled')).toBe(true)
   })
 
   it('imports Agent Identity as private by default without account level or OAuth flow', async () => {

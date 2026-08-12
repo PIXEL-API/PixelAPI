@@ -1153,9 +1153,11 @@ export default {
     selectedGroups: "{count} groups selected",
     importTitle: "Import Personal Accounts",
     importHint:
-      "Paste account credentials or import files. OpenAI supports OAuth / Refresh Token and Codex Agent Identity; other platforms create official OAuth accounts.",
+      "Paste account credentials or import files. OpenAI supports OAuth / Refresh Token, Codex personal access tokens, and Codex Agent Identity; other platforms create official OAuth accounts.",
     importHintAgentIdentity:
       "Paste or select Codex Agent Identity JSON. The account is private and visible only to you by default; after import, you can switch it to public, subject to server-side validation before public sharing.",
+    importHintPersonalAccessToken:
+      "Paste or select an account export JSON containing an at-* Codex personal access token. The server validates it with OpenAI whoami and rebuilds trusted credentials.",
     importWarning:
       "You can import up to {max} accounts at a time. Supported: Sub2API OAuth JSON, Codex-Manager ChatGPT token JSON, OpenAI Refresh Token, and Claude Session Key. API keys, URLs, upstream endpoints and cookies are rejected.",
     importWarningChoosePlatform:
@@ -1164,6 +1166,8 @@ export default {
       "You can import up to {max} OpenAI accounts. Available levels are configured by administrators; levels marked as requiring proxy login must use account login.",
     importWarningAgentIdentity:
       "You can import up to {max} Codex Agent Identities. Only complete Agent Identity JSON is accepted; regular OAuth JSON, refresh tokens, API keys, URLs, upstream endpoints, and cookies are rejected.",
+    importWarningPersonalAccessToken:
+      "You can import up to {max} Codex PAT accounts. Only OpenAI OAuth account export JSON is accepted; exported identity, proxy, and extra metadata are not trusted.",
     importWarningClaude:
       "You can import up to {max} Claude accounts. Supports Sub2API OAuth JSON or Claude Session Key.",
     importWarningGemini:
@@ -1183,6 +1187,9 @@ export default {
     importAuthModeOAuth: "OAuth / Refresh Token",
     importAuthModeOAuthDesc:
       "Import OAuth JSON, a Refresh Token, or an Access Token in JSON format and validate the selected account level",
+    importAuthModePersonalAccessToken: "Codex Personal Access Token",
+    importAuthModePersonalAccessTokenDesc:
+      "Import account JSON containing an at-* PAT; the server verifies identity with OpenAI whoami",
     importAuthModeAgentIdentity: "Codex Agent Identity",
     importAuthModeAgentIdentityDesc: "Import Agent Identity JSON and isolate it by the Team in the credential",
     importAgentIdentityNoticeTitle: "Agent Identity import rules",
@@ -1190,6 +1197,7 @@ export default {
     importAgentIdentityPrivate: "The account is private by default. After import, you can switch it to public; server-side validation is required before public sharing.",
     importAgentIdentityNoOAuthExpiry: "Agent Identity does not use an OAuth expiration time; credential validity is verified by the server.",
     importAgentIdentityJSONRequired: "Codex Agent Identity only accepts a complete JSON object or JSON array.",
+    importPersonalAccessTokenJSONRequired: "Codex personal access token import accepts only complete account export JSON.",
     importPlatformHintClaude:
       "Claude imports do not use OpenAI account levels. Use Claude OAuth JSON or Claude Session Key.",
     importPlatformHintGemini:
@@ -1197,11 +1205,14 @@ export default {
     importPlatformHintAntigravity:
       "Antigravity imports do not use OpenAI account levels. Import OAuth JSON containing platform: antigravity.",
     importPlatformHintGrok:
-      "Grok imports do not use OpenAI account levels. Import OAuth JSON containing platform: grok or platform: xai.",
+      "Select the Grok account level, then import OAuth JSON containing platform: grok or platform: xai.",
     importAccountLevel: "OpenAI Account Level",
     importAccountLevelHint:
       "Required only for OpenAI imports. OpenAI imports are checked strictly against the selected level; unconfirmed accounts follow the configured default rules; levels requiring proxy login must use account login.",
     importAccountLevelRequired: "Select the OpenAI account level first",
+    importGrokAccountLevel: "Grok Account Level",
+    importGrokAccountLevelHint: "Grok credential imports must select Free or Heavy. Publicly shared accounts enter the matching Grok shared pool.",
+    importGrokAccountLevelRequired: "Select the Grok account level first",
     importLevelFree: "Unconfirmed accounts go to Free",
     importLevelPlus: "Only actual Plus accounts",
     importLevelPro: "Requires login and proxy IP",
@@ -1285,6 +1296,7 @@ export default {
     importTextPlaceholder:
       "Paste one token per line, or paste a complete JSON object / JSON array.",
     importTextPlaceholderAgentIdentity: "Paste complete Codex Agent Identity JSON or a JSON array",
+    importTextPlaceholderPersonalAccessToken: "Paste a complete account export JSON containing an at-* PAT",
     importTextHint:
       "Plain tokens are treated as OpenAI Refresh Tokens. Use the dedicated AT input or the JSON format below for OpenAI Access Tokens. Claude Session Keys are detected automatically.",
     importTextHintChoosePlatform:
@@ -1298,6 +1310,8 @@ export default {
       "A plain token entered on its own line is treated as a Refresh Token. Use the minimum JSON format above for an Access Token. AT-only accounts require a known expiry (JWT exp or account expiry) and are paused when expired.",
     importTextHintAgentIdentity:
       "Only complete Codex Agent Identity JSON objects or arrays are supported; file import accepts .json only.",
+    importTextHintPersonalAccessToken:
+      "Only complete OpenAI OAuth account export JSON is supported. The token must be in credentials.access_token and auth mode markers must also be inside credentials.",
     importTextHintClaude:
       "Claude can import Claude Session Keys or OAuth JSON with Anthropic/Claude platform metadata.",
     importTextHintGemini:
@@ -3533,7 +3547,7 @@ export default {
       createUser: "Create User",
       editUser: "Edit User",
       deleteUser: "Delete User",
-      searchUsers: "Search by email, username, notes, or API key...",
+      searchUsers: "Search by ID, email, username, notes, or API key...",
       allRoles: "All Roles",
       allStatus: "All Status",
       allGroups: "All Groups",
@@ -3919,10 +3933,10 @@ export default {
         rpmLimitPlaceholder: "0 = unlimited",
         rpmLimitHint:
           "Max requests per minute for each user in this group; 0 = unlimited. Once set, it takes over per-user rate limiting in this group (overrides the user-level rpm_limit fallback).",
-        requiredAccountLevel: "OpenAI Account Level",
+        requiredAccountLevel: "Account Level",
         requiredAccountLevelAny: "No level restriction",
         requiredAccountLevelHint:
-          "When set, this OpenAI pool only accepts and schedules accounts at the selected level.",
+          "When set, this shared pool only accepts and schedules accounts on the same platform and at the selected level.",
       },
       enterGroupName: "Enter group name",
       optionalDescription: "Optional description",
@@ -4356,6 +4370,81 @@ export default {
     riskControl: {
       title: "Risk Control",
       description: "Configure content moderation and review audit records",
+      workspace: {
+        tabsLabel: "Risk control workspace",
+        moderation: "Content Moderation",
+        cyberPolicy: "Cyber Policy",
+      },
+      cyberRestriction: {
+        title: "Daily Cyber PRO Restriction",
+        description:
+          "After any API key first receives upstream cyber_policy in a managed group, that user cannot use the group again that day. Rotating or creating another API key cannot bypass it.",
+        userId: "User ID",
+        userIdPlaceholder: "Enter user ID",
+        user: "User",
+        userSearchPlaceholder: "Search by user ID, username, or email",
+        userSearchFailed: "Failed to search users",
+        userSearchEmpty: "No matching users",
+        groupId: "PRO group ID",
+        groupIdPlaceholder: "Enter managed group ID",
+        group: "PRO Group",
+        groupSearchPlaceholder: "Search by group ID or name",
+        groupSearchEmpty: "No matching OpenAI groups",
+        query: "Check restriction",
+        queryFailed: "Failed to check the daily Cyber restriction",
+        blocked: "This user is restricted from this group today",
+        notBlocked: "This user is not currently restricted from this group",
+        blockedUntil: "Restricted until",
+        clear: "Clear today's restriction",
+        clearConfirm:
+          "Clear today's Cyber restriction for user {userId} in group {groupId}? Every API key owned by the user will regain access to this group. A new cyber_policy hit today will restrict the user again immediately. This does not change the user account status or delete history.",
+        clearSuccess: "The user's Cyber group restriction for today was cleared",
+        clearFailed: "Failed to clear the Cyber group restriction",
+        hint: "Select a user by ID, username, or email and the actual routed group by ID or name to check or clear the exact daily restriction.",
+      },
+      cyberRequests: {
+        title: "Cyber Policy Requests",
+        description:
+          "Review requests marked cyber_policy by the upstream provider. Filter by user, group, model, endpoint, and time range, then export the current result set.",
+        loadFailed: "Failed to load Cyber Policy requests",
+        empty: "No Cyber Policy requests match the current filters",
+        export: "Export Current Filters",
+        exporting: "Exporting",
+        exportSuccess: "Cyber Policy requests exported",
+        exportFailed: "Failed to export Cyber Policy requests",
+        exportTruncated: "Export completed, but the server limit was reached. Only the first {limit} records are included. Narrow the filters and export again.",
+        invalidRange: "The start time must be earlier than the end time",
+        rangeTooLong: "The time range cannot exceed 31 days",
+        truncated: "Truncated",
+        detailTitle: "Cyber Policy Request Detail",
+        detailFailed: "Failed to load the Cyber Policy request detail",
+        contentTitle: "Request Content",
+        contentNotice: "Redacted and may be truncated due to length limits",
+        requestBytes: "Original Request Bytes",
+        noContent: "No request body was saved",
+        upstreamErrorTitle: "Upstream Error Detail",
+        filters: {
+          user: "User",
+          userPlaceholder: "User ID, username, or email",
+          group: "Group",
+          groupPlaceholder: "Group ID or name",
+          model: "Model",
+          modelPlaceholder: "Requested or upstream model",
+          endpoint: "Endpoint",
+          endpointPlaceholder: "Inbound or upstream endpoint",
+          from: "From",
+          to: "To",
+          defaultRangeHint: "The default range is the last 24 hours. Each query and export can cover up to 31 days.",
+        },
+        table: {
+          time: "Time / Request ID",
+          group: "Group",
+          user: "User",
+          route: "Model / Endpoint",
+          status: "Status",
+          content: "Request Content Preview",
+        },
+      },
       loadFailed: "Failed to load risk control",
       saveFailed: "Failed to save content moderation config",
       logsFailed: "Failed to load audit records",
@@ -5099,7 +5188,7 @@ export default {
       },
       accountLevel: {
         label: "Account Level",
-        hint: "Only OpenAI accounts use this field. Matching shared pools will only accept and schedule accounts at the same level.",
+        hint: "OpenAI and Grok accounts use this field. Matching shared pools only accept and schedule accounts at the same level.",
         autoDetected: "Auto detected",
         autoDetectedHint:
           "OpenAI account level is detected by the system from account credentials and cannot be edited manually.",
@@ -5111,6 +5200,12 @@ export default {
         pro: "Pro",
         team: "Team",
         k12: "K12",
+      },
+      grokAccountLevel: {
+        hint: "Select Free or Heavy manually. When public sharing is selected, the account enters the matching Grok shared pool after validation.",
+        required: "Select the Grok account level first",
+        freeDescription: "Standard Grok Free account",
+        heavyDescription: "SuperGrok Heavy account",
       },
       syncFromCrs: "Sync from CRS",
       dataExport: "Export",
@@ -6038,6 +6133,14 @@ export default {
           refreshTokenAuth: "Manual RT Input",
           mobileRefreshTokenAuth: "Manual Mobile RT Input",
           accessTokenAuth: "Manual AT Input",
+          codexPatAuth: "Codex Personal Access Token",
+          codexPatDesc: "Enter one Codex at- personal access token. The system validates it with OpenAI whoami and creates the account from trusted identity data.",
+          codexPatInputLabel: "Codex PAT",
+          codexPatPlaceholder: "at-...",
+          codexPatHint: "PAT is a separate auth mode. It stores no refresh token and no OAuth access-token expiration. Re-import after revocation.",
+          codexPatImportAndCreate: "Validate & Create Codex PAT Account",
+          codexPatEmpty: "Please enter a Codex personal access token",
+          codexPatImportFailed: "Failed to create Codex PAT account",
           refreshTokenDesc:
             "Enter your existing OpenAI Refresh Token(s). Supports batch input (one per line). The system will automatically validate and create accounts.",
           refreshTokenPlaceholder:
@@ -8362,16 +8465,16 @@ export default {
           enabled: "Enable Content Risk Control",
           enabledHint:
             "When off, moderation rules no longer participate in request handling; saved rules are preserved.",
-          cyberSessionBlockEnabled: "Enable OpenAI Cyber group isolation",
+          cyberSessionBlockEnabled: "Enable daily OpenAI Cyber user restrictions",
           cyberSessionBlockEnabledHint:
             "Handle upstream cyber_policy only for the selected OpenAI groups; unselected groups keep their existing error flow.",
           cyberPolicyGroups: "OpenAI groups subject to Cyber handling",
           cyberPolicyGroupsHint:
-            "Isolation is scoped to the API key and the actual routed group. Other groups on the same API key are unaffected.",
+            "Restrictions are scoped to the user and actual routed group. Rotating, creating, or switching API keys cannot bypass them; other groups without a hit remain unaffected.",
           cyberPolicyScheduleHint:
-            "Within each calendar day, the first hit isolates for 5 minutes, the second for 15 minutes, and the third until 24:00. Counts reset at 00:00. Without an explicit session signal, the first two hits degrade to a short API-key-and-group isolation.",
+            "The first structured cyber_policy hit restricts access until 24:00 in the business timezone. Administrators can check and clear it in Risk Control; a new hit that day immediately restricts the user again.",
           cyberPolicyNoGroupsHint:
-            "No groups are selected. Even with the master switch enabled, no group receives Cyber-specific counting or isolation.",
+            "No groups are selected. Even with the master switch enabled, no group receives daily Cyber user restrictions.",
         },
         affiliate: {
           title: "Invite Income",

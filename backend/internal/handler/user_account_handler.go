@@ -126,7 +126,7 @@ type createUserAccountRequest struct {
 type importUserAccountCredentialsRequest struct {
 	Contents           []string `json:"contents" binding:"required"`
 	Platform           string   `json:"platform" binding:"required,oneof=anthropic openai gemini antigravity grok"`
-	OpenAIAuthMode     string   `json:"openai_auth_mode" binding:"omitempty,oneof=oauth agent_identity"`
+	OpenAIAuthMode     string   `json:"openai_auth_mode" binding:"omitempty,oneof=oauth personal_access_token agent_identity"`
 	AccountLevel       string   `json:"account_level"`
 	ProxyID            *int64   `json:"proxy_id"`
 	ShareMode          string   `json:"share_mode" binding:"omitempty,oneof=private public"`
@@ -209,8 +209,9 @@ const userOwnedDefaultPriority = 1
 const userExternalPlacementBatchMaxAccounts = 1000
 
 const (
-	userOpenAIAuthModeOAuth         = "oauth"
-	userOpenAIAuthModeAgentIdentity = "agent_identity"
+	userOpenAIAuthModeOAuth               = "oauth"
+	userOpenAIAuthModePersonalAccessToken = "personal_access_token"
+	userOpenAIAuthModeAgentIdentity       = "agent_identity"
 )
 
 type userOAuthProxyRequest struct {
@@ -266,16 +267,18 @@ type userAntigravityExchangeCodeRequest struct {
 }
 
 type userGrokGenerateAuthURLRequest struct {
-	ProxyID     *int64 `json:"proxy_id"`
-	RedirectURI string `json:"redirect_uri"`
+	ProxyID      *int64 `json:"proxy_id"`
+	AccountLevel string `json:"account_level"`
+	RedirectURI  string `json:"redirect_uri"`
 }
 
 type userGrokExchangeCodeRequest struct {
-	SessionID   string `json:"session_id" binding:"required"`
-	State       string `json:"state"`
-	Code        string `json:"code" binding:"required"`
-	RedirectURI string `json:"redirect_uri"`
-	ProxyID     *int64 `json:"proxy_id"`
+	SessionID    string `json:"session_id" binding:"required"`
+	State        string `json:"state"`
+	Code         string `json:"code" binding:"required"`
+	RedirectURI  string `json:"redirect_uri"`
+	ProxyID      *int64 `json:"proxy_id"`
+	AccountLevel string `json:"account_level"`
 }
 
 type userBatchTodayStatsRequest struct {
@@ -344,6 +347,14 @@ func userOAuthProxyScope(c *gin.Context, platform, accountLevel string) service.
 	return service.NewOwnedProxyScope(platform, accountLevel, subject.UserID)
 }
 
+func userGrokOAuthProxyScope(c *gin.Context, accountLevel string) service.ProxyScope {
+	normalized := service.NormalizeAccountLevel(accountLevel)
+	if !service.IsUserSelectableGrokAccountLevel(normalized) {
+		normalized = service.AccountLevelUnknown
+	}
+	return userOAuthProxyScope(c, service.PlatformGrok, normalized)
+}
+
 func (h *UserAccountHandler) requireUserOAuthProxy(c *gin.Context, scope service.ProxyScope, proxyID *int64) bool {
 	if proxyID == nil || *proxyID <= 0 {
 		response.BadRequest(c, "proxy_id is required for user OAuth login")
@@ -398,6 +409,15 @@ func (h *UserAccountHandler) prepareUserAccountRequest(c *gin.Context, ownerUser
 		response.ErrorFrom(c, err)
 		return false
 	}
+	if req.Platform == service.PlatformGrok {
+		targetLevel := service.NormalizeAccountLevel(req.AccountLevel)
+		if !service.IsUserSelectableGrokAccountLevel(targetLevel) {
+			response.BadRequest(c, "Grok account level must be Free or Heavy")
+			return false
+		}
+		req.AccountLevel = targetLevel
+		return h.requireUserOAuthProxy(c, userOAuthProxyScope(c, req.Platform, targetLevel), req.ProxyID)
+	}
 	if req.Platform != service.PlatformOpenAI {
 		if service.RequiresUserAccountOAuthProxyWithConfigs(req.Platform, service.AccountLevelUnknown, levelConfigs) {
 			req.AccountLevel = service.AccountLevelUnknown
@@ -432,7 +452,11 @@ func normalizeUserCredentialImportTargetLevel(req *importUserAccountCredentialsR
 		return
 	}
 	targetLevel := service.NormalizeAccountLevel(req.AccountLevel)
-	if service.IsUserSelectableOpenAIAccountLevelWithConfigs(targetLevel, configs) {
+	if req.Platform == service.PlatformGrok && service.IsUserSelectableGrokAccountLevel(targetLevel) {
+		req.AccountLevel = targetLevel
+		return
+	}
+	if req.Platform == service.PlatformOpenAI && service.IsUserSelectableOpenAIAccountLevelWithConfigs(targetLevel, configs) {
 		req.AccountLevel = targetLevel
 		return
 	}
@@ -487,8 +511,13 @@ func validateOpenAIImportTargetLevel(defaults importUserAccountCredentialsReques
 	if !service.IsUserSelectableOpenAIAccountLevelWithConfigs(targetLevel, configs) {
 		return "", service.ErrOwnedOpenAIAccountLevelRequired
 	}
-	if service.RequiresUserOpenAIProxyLoginWithConfigs(targetLevel, configs) {
-		return "", service.ErrOwnedOpenAIAccountProxyRequired
+	return targetLevel, nil
+}
+
+func validateGrokImportTargetLevel(defaults importUserAccountCredentialsRequest) (string, error) {
+	targetLevel := service.NormalizeAccountLevel(defaults.AccountLevel)
+	if !service.IsUserSelectableGrokAccountLevel(targetLevel) {
+		return "", service.ErrOwnedGrokAccountLevelRequired
 	}
 	return targetLevel, nil
 }
@@ -496,34 +525,47 @@ func validateOpenAIImportTargetLevel(defaults importUserAccountCredentialsReques
 func resolveUserOpenAICredentialImportMode(
 	req importUserAccountCredentialsRequest,
 	sources []service.AccountCredentialImportSource,
-) (bool, error) {
+) (string, error) {
 	declaredMode := strings.ToLower(strings.TrimSpace(req.OpenAIAuthMode))
 	agentIdentityCount := 0
+	personalAccessTokenCount := 0
 	for _, source := range sources {
 		if source.Kind == service.AccountCredentialImportKindOpenAIAgentIdentity {
 			agentIdentityCount++
+		}
+		if source.Kind == service.AccountCredentialImportKindOpenAIPersonalAccessToken {
+			personalAccessTokenCount++
 		}
 	}
 
 	if declaredMode == userOpenAIAuthModeAgentIdentity {
 		if req.Platform != service.PlatformOpenAI {
-			return false, infraerrors.BadRequest("OWNED_AGENT_IDENTITY_PLATFORM_INVALID", "Codex Agent Identity 仅支持 OpenAI 平台")
+			return "", infraerrors.BadRequest("OWNED_AGENT_IDENTITY_PLATFORM_INVALID", "Codex Agent Identity 仅支持 OpenAI 平台")
 		}
 		if agentIdentityCount != len(sources) {
-			return false, infraerrors.BadRequest("OWNED_AGENT_IDENTITY_CONTENT_INVALID", "Agent Identity 模式只接受 Agent Identity JSON 凭证")
+			return "", infraerrors.BadRequest("OWNED_AGENT_IDENTITY_CONTENT_INVALID", "Agent Identity 模式只接受 Agent Identity JSON 凭证")
 		}
-		return true, nil
+		return userOpenAIAuthModeAgentIdentity, nil
 	}
-	if declaredMode == userOpenAIAuthModeOAuth && agentIdentityCount > 0 {
-		return false, infraerrors.BadRequest("OWNED_ACCOUNT_IMPORT_AUTH_MODE_MISMATCH", "导入凭证与所选 OpenAI 认证模式不一致")
+	if declaredMode == userOpenAIAuthModePersonalAccessToken {
+		if req.Platform != service.PlatformOpenAI || personalAccessTokenCount != len(sources) {
+			return "", infraerrors.BadRequest("OWNED_CODEX_PAT_CONTENT_INVALID", "Codex PAT 模式只接受 OpenAI Personal Access Token 导出凭证")
+		}
+		return userOpenAIAuthModePersonalAccessToken, nil
 	}
-	if agentIdentityCount == 0 {
-		return false, nil
+	if declaredMode == userOpenAIAuthModeOAuth && (agentIdentityCount > 0 || personalAccessTokenCount > 0) {
+		return "", infraerrors.BadRequest("OWNED_ACCOUNT_IMPORT_AUTH_MODE_MISMATCH", "导入凭证与所选 OpenAI 认证模式不一致")
 	}
-	if req.Platform != service.PlatformOpenAI || agentIdentityCount != len(sources) {
-		return false, infraerrors.BadRequest("OWNED_ACCOUNT_IMPORT_AUTH_MODE_MIXED", "Agent Identity 凭证不能与其他认证凭证混合导入")
+	if agentIdentityCount == 0 && personalAccessTokenCount == 0 {
+		return userOpenAIAuthModeOAuth, nil
 	}
-	return true, nil
+	if req.Platform != service.PlatformOpenAI || (agentIdentityCount != len(sources) && personalAccessTokenCount != len(sources)) {
+		return "", infraerrors.BadRequest("OWNED_ACCOUNT_IMPORT_AUTH_MODE_MIXED", "不同 OpenAI 认证模式的凭证不能混合导入")
+	}
+	if agentIdentityCount == len(sources) {
+		return userOpenAIAuthModeAgentIdentity, nil
+	}
+	return userOpenAIAuthModePersonalAccessToken, nil
 }
 
 func userUnixSecondsToTime(value *int64) *time.Time {
@@ -1293,7 +1335,7 @@ func (h *UserAccountHandler) ImportCredentials(c *gin.Context) {
 		response.BadRequest(c, "No importable account credentials found")
 		return
 	}
-	isAgentIdentityImport, err := resolveUserOpenAICredentialImportMode(req, sources)
+	openAIImportMode, err := resolveUserOpenAICredentialImportMode(req, sources)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -1303,6 +1345,7 @@ func (h *UserAccountHandler) ImportCredentials(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	isAgentIdentityImport := openAIImportMode == userOpenAIAuthModeAgentIdentity
 	if isAgentIdentityImport {
 		req.AccountLevel = service.AccountLevelUnknown
 		req.ProxyID = nil
@@ -1311,8 +1354,12 @@ func (h *UserAccountHandler) ImportCredentials(c *gin.Context) {
 	} else {
 		normalizeUserCredentialImportTargetLevel(&req, levelConfigs)
 	}
-	if !isAgentIdentityImport && service.RequiresUserAccountOAuthProxyWithConfigs(req.Platform, service.AccountLevelUnknown, levelConfigs) {
-		if !h.requireUserOAuthProxy(c, userOAuthProxyScope(c, req.Platform, service.AccountLevelUnknown), req.ProxyID) {
+	if !isAgentIdentityImport {
+		if service.RequiresUserAccountOAuthProxyWithConfigs(req.Platform, req.AccountLevel, levelConfigs) {
+			if !h.requireUserOAuthProxy(c, userOAuthProxyScope(c, req.Platform, req.AccountLevel), req.ProxyID) {
+				return
+			}
+		} else if !rejectUserProxyID(c, req.ProxyID) {
 			return
 		}
 	}
@@ -1370,11 +1417,12 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 	defaults importUserAccountCredentialsRequest,
 	sequence int,
 ) (*service.OwnedAccountImportResult, error) {
+	var validatedPersonalAccessTokenInfo *service.OpenAITokenInfo
 	if err := validateCredentialImportTargetPlatform(defaults, source); err != nil {
 		return nil, err
 	}
 
-	openAIAccountLevel := service.AccountLevelUnknown
+	targetAccountLevel := service.AccountLevelUnknown
 	isAgentIdentity := source.Kind == service.AccountCredentialImportKindOpenAIAgentIdentity
 	if credentialImportSourceIsOpenAI(source) && !isAgentIdentity {
 		levelConfigs, err := h.openAIAccountLevelConfigs(ctx)
@@ -1385,9 +1433,15 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 		if err != nil {
 			return nil, err
 		}
-		openAIAccountLevel = targetLevel
+		targetAccountLevel = targetLevel
+	} else if source.Platform == service.PlatformGrok {
+		targetLevel, err := validateGrokImportTargetLevel(defaults)
+		if err != nil {
+			return nil, err
+		}
+		targetAccountLevel = targetLevel
 	}
-	if err := enrichUserK12CredentialImportSource(&source, openAIAccountLevel); err != nil {
+	if err := enrichUserK12CredentialImportSource(&source, targetAccountLevel); err != nil {
 		slog.Debug(
 			"owned_k12_import_enrich_id_token_decode_failed",
 			"sequence",
@@ -1401,7 +1455,7 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 		Name:               strings.TrimSpace(source.Name),
 		Notes:              source.Notes,
 		Platform:           source.Platform,
-		AccountLevel:       service.AccountLevelUnknown,
+		AccountLevel:       targetAccountLevel,
 		Type:               service.AccountTypeOAuth,
 		Credentials:        source.Credentials,
 		Extra:              source.Extra,
@@ -1440,6 +1494,32 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 		if req.Name == "" {
 			req.Name = fmt.Sprintf("OpenAI OAuth Account #%d", sequence)
 		}
+	case service.AccountCredentialImportKindOpenAIPersonalAccessToken:
+		if h.openaiOAuthService == nil {
+			return nil, service.ErrServiceUnavailable
+		}
+		proxyURL, err := h.openaiOAuthService.VisibleProxyURLForUser(
+			ctx,
+			service.NewOwnedProxyScope(service.PlatformOpenAI, targetAccountLevel, ownerUserID),
+			defaults.ProxyID,
+		)
+		if err != nil {
+			return nil, err
+		}
+		tokenInfo, err := h.openaiOAuthService.ValidateCodexPersonalAccessToken(ctx, source.Token, proxyURL)
+		if err != nil {
+			return nil, infraerrors.BadRequest("OWNED_CODEX_PAT_VALIDATE_FAILED", "Codex Personal Access Token 校验失败，请检查令牌或代理后重试")
+		}
+		req.Platform = service.PlatformOpenAI
+		validatedPersonalAccessTokenInfo = tokenInfo
+		req.Credentials = service.BuildOpenAIPersonalAccessTokenCredentials(tokenInfo)
+		req.Extra = service.BuildOpenAIAccountCredentialImportExtra(tokenInfo)
+		if req.Name == "" {
+			req.Name = strings.TrimSpace(tokenInfo.Email)
+		}
+		if req.Name == "" {
+			req.Name = fmt.Sprintf("Codex PAT Account #%d", sequence)
+		}
 	case service.AccountCredentialImportKindOpenAIAgentIdentity:
 		req.Platform = service.PlatformOpenAI
 		req.AccountLevel = service.AccountLevelUnknown
@@ -1475,24 +1555,32 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 	}
 
 	if req.Platform == service.PlatformOpenAI {
-		req.AccountLevel = openAIAccountLevel
-		resolvedExpiresAt, forceAutoPause, err := service.ResolveOpenAIAccessTokenOnlyLifecycle(
-			req.Credentials,
-			req.ExpiresAt,
-		)
-		if err != nil {
-			return nil, err
-		}
-		req.ExpiresAt = resolvedExpiresAt
-		if forceAutoPause {
-			enabled := true
-			req.AutoPauseOnExpired = &enabled
+		req.AccountLevel = targetAccountLevel
+		if source.Kind != service.AccountCredentialImportKindOpenAIPersonalAccessToken {
+			resolvedExpiresAt, forceAutoPause, err := service.ResolveOpenAIAccessTokenOnlyLifecycle(
+				req.Credentials,
+				req.ExpiresAt,
+			)
+			if err != nil {
+				return nil, err
+			}
+			req.ExpiresAt = resolvedExpiresAt
+			if forceAutoPause {
+				enabled := true
+				req.AutoPauseOnExpired = &enabled
+			}
 		}
 	}
 	if strings.TrimSpace(req.Name) == "" {
 		return nil, fmt.Errorf("account name is required")
 	}
-	outcome, err := h.accountService.ImportOwnedWithResult(ctx, ownerUserID, req)
+	var outcome *service.OwnedAccountImportResult
+	var err error
+	if source.Kind == service.AccountCredentialImportKindOpenAIPersonalAccessToken {
+		outcome, err = h.accountService.ImportOwnedValidatedPersonalAccessTokenWithResult(ctx, ownerUserID, req, validatedPersonalAccessTokenInfo)
+	} else {
+		outcome, err = h.accountService.ImportOwnedWithResult(ctx, ownerUserID, req)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -2083,6 +2171,7 @@ func (h *UserAccountHandler) refreshOwnedAccount(ctx context.Context, ownerUserI
 				newCredentials[k] = v
 			}
 		}
+		newCredentials = service.NormalizeOpenAIPersonalAccessTokenCredentials(account, tokenInfo, newCredentials)
 	case account.Platform == service.PlatformGemini:
 		tokenInfo, err := h.geminiOAuthService.RefreshAccountToken(ctx, account)
 		if err != nil {
@@ -2583,7 +2672,7 @@ func (h *UserAccountHandler) GenerateGrokOAuthURL(c *gin.Context) {
 		response.ErrorFrom(c, service.ErrServiceUnavailable)
 		return
 	}
-	if !h.requireUserOAuthProxy(c, userOAuthProxyScope(c, service.PlatformGrok, service.AccountLevelUnknown), req.ProxyID) {
+	if !h.requireUserOAuthProxy(c, userGrokOAuthProxyScope(c, req.AccountLevel), req.ProxyID) {
 		return
 	}
 	result, err := h.grokOAuthService.GenerateAuthURL(c.Request.Context(), req.ProxyID, req.RedirectURI)
@@ -2608,7 +2697,7 @@ func (h *UserAccountHandler) ExchangeGrokOAuthCode(c *gin.Context) {
 		response.ErrorFrom(c, service.ErrServiceUnavailable)
 		return
 	}
-	if !h.requireUserOAuthProxy(c, userOAuthProxyScope(c, service.PlatformGrok, service.AccountLevelUnknown), req.ProxyID) {
+	if !h.requireUserOAuthProxy(c, userGrokOAuthProxyScope(c, req.AccountLevel), req.ProxyID) {
 		return
 	}
 	tokenInfo, err := h.grokOAuthService.ExchangeCode(c.Request.Context(), &service.GrokExchangeCodeInput{

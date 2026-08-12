@@ -5,6 +5,7 @@ import { adminAPI } from '@/api/admin'
 import { accountsAPI } from '@/api/accounts'
 import type { GrokTokenInfo } from '@/api/admin/grok'
 import type { AccountApiScope } from '@/composables/useAccountOAuth'
+import type { AccountLevel } from '@/types'
 import { extractApiErrorMessage, extractI18nErrorMessage } from '@/utils/apiError'
 
 export function useGrokOAuth(scope: AccountApiScope = 'admin') {
@@ -25,7 +26,10 @@ export function useGrokOAuth(scope: AccountApiScope = 'admin') {
     error.value = ''
   }
 
-  const generateAuthUrl = async (proxyId: number | null | undefined): Promise<boolean> => {
+  const generateAuthUrl = async (
+    proxyId: number | null | undefined,
+    options?: { accountLevel?: AccountLevel }
+  ): Promise<boolean> => {
     loading.value = true
     authUrl.value = ''
     sessionId.value = ''
@@ -35,6 +39,7 @@ export function useGrokOAuth(scope: AccountApiScope = 'admin') {
     try {
       const payload: Record<string, unknown> = {}
       if (proxyId) payload.proxy_id = proxyId
+      if (options?.accountLevel) payload.account_level = options.accountLevel
 
       const response =
         scope === 'user'
@@ -58,6 +63,7 @@ export function useGrokOAuth(scope: AccountApiScope = 'admin') {
     sessionId: string
     state: string
     proxyId?: number | null
+    accountLevel?: AccountLevel
   }): Promise<GrokTokenInfo | null> => {
     const code = params.code?.trim()
     if (!code || !params.sessionId || !params.state) {
@@ -75,6 +81,7 @@ export function useGrokOAuth(scope: AccountApiScope = 'admin') {
         code
       }
       if (params.proxyId) payload.proxy_id = params.proxyId
+      if (params.accountLevel) payload.account_level = params.accountLevel
 
       return scope === 'user'
         ? await accountsAPI.exchangeGrokOAuthCode(payload as any)

@@ -87,7 +87,7 @@ var (
 type UserListFilters struct {
 	Status     string           // User status filter
 	Role       string           // User role filter
-	Search     string           // Search in email, username
+	Search     string           // Search by ID, email, username, notes, or API key
 	GroupName  string           // Filter by allowed group name (fuzzy match)
 	Attributes map[int64]string // Custom attribute filters: attributeID -> value
 	// IncludeSubscriptions controls whether ListWithFilters should load active subscriptions.

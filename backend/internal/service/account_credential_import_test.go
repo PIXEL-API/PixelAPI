@@ -301,6 +301,140 @@ func TestAccountCredentialImportRejectsInvalidAgentIdentity(t *testing.T) {
 	}
 }
 
+func TestAccountCredentialImportSupportsOpenAIPersonalAccessTokenAccountExport(t *testing.T) {
+	content := `{
+		"exported_at":"2026-08-12T06:59:21Z",
+		"proxies":[],
+		"accounts":[{
+			"name":"personal PAT",
+			"notes":"keep this note",
+			"platform":"openai",
+			"type":"oauth",
+			"credentials":{
+				"access_token":"at-test-token",
+				"auth_mode":"personalAccessToken",
+				"openai_auth_mode":"personal_access_token",
+				"token_type":"Bearer",
+				"email":"untrusted@example.com",
+				"chatgpt_user_id":"untrusted-user",
+				"chatgpt_account_id":"untrusted-account",
+				"chatgpt_account_is_fedramp":false,
+				"plan_type":"team"
+			},
+			"extra":{
+				"access_token_sha256":"untrusted-fingerprint",
+				"auth_provider":"codex_personal_access_token",
+				"import_source":"codex_personal_access_token"
+			},
+			"concurrency":10,
+			"priority":1,
+			"rate_multiplier":1,
+			"auto_pause_on_expired":true
+		}]
+	}`
+
+	sources, errs := ParseAccountCredentialImportContents([]string{content})
+	require.Empty(t, errs)
+	require.Len(t, sources, 1)
+	source := sources[0]
+	require.Equal(t, AccountCredentialImportKindOpenAIPersonalAccessToken, source.Kind)
+	require.Equal(t, PlatformOpenAI, source.Platform)
+	require.Equal(t, "personal PAT", source.Name)
+	require.NotNil(t, source.Notes)
+	require.Equal(t, "keep this note", *source.Notes)
+	require.Equal(t, "at-test-token", source.Token)
+	require.Empty(t, source.Credentials)
+	require.Empty(t, source.Extra)
+}
+
+func TestAccountCredentialImportOpenAIPersonalAccessTokenAccountExportRejectsUnsafeContent(t *testing.T) {
+	tests := []struct {
+		name        string
+		outerFields string
+		credentials string
+		want        string
+	}{
+		{
+			name:        "conflicting auth markers",
+			credentials: `"access_token":"at-test-token","auth_mode":"personalAccessToken","openai_auth_mode":"oauth"`,
+			want:        "auth mode is invalid",
+		},
+		{
+			name:        "conflicting duplicate auth mode",
+			credentials: `"access_token":"at-test-token","auth_mode":"personalAccessToken","authMode":"oauth"`,
+			want:        "conflicting auth_mode fields",
+		},
+		{
+			name:        "wrong platform",
+			outerFields: `"platform":"anthropic","type":"oauth",`,
+			credentials: `"access_token":"at-test-token","auth_mode":"personalAccessToken"`,
+			want:        "platform must be OpenAI",
+		},
+		{
+			name:        "wrong account type",
+			outerFields: `"platform":"openai","type":"api_key",`,
+			credentials: `"access_token":"at-test-token","auth_mode":"personalAccessToken"`,
+			want:        "type must be OAuth",
+		},
+		{
+			name:        "outer auth mode",
+			outerFields: `"platform":"openai","type":"oauth","auth_mode":"personalAccessToken",`,
+			credentials: `"access_token":"at-test-token","auth_mode":"personalAccessToken"`,
+			want:        "must be declared only inside credentials",
+		},
+		{
+			name:        "outer access token",
+			outerFields: `"platform":"openai","type":"oauth","access_token":"at-test-outer",`,
+			credentials: `"access_token":"at-test-token","auth_mode":"personalAccessToken"`,
+			want:        "must not include token field outside credentials",
+		},
+		{
+			name:        "missing token",
+			credentials: `"auth_mode":"personalAccessToken"`,
+			want:        "must start with at-",
+		},
+		{
+			name:        "wrong token prefix",
+			credentials: `"access_token":"eyJ.test-token","auth_mode":"personalAccessToken"`,
+			want:        "must start with at-",
+		},
+		{
+			name:        "nested refresh token",
+			credentials: `"access_token":"at-test-token","auth_mode":"personalAccessToken","metadata":{"refreshToken":"must-reject"}`,
+			want:        "OAuth-only credential field: refreshToken",
+		},
+		{
+			name:        "nested access token",
+			credentials: `"access_token":"at-test-token","auth_mode":"personalAccessToken","metadata":{"access_token":"must-reject"}`,
+			want:        "OAuth-only credential field: access_token",
+		},
+		{
+			name:        "proxy URL",
+			outerFields: `"platform":"openai","type":"oauth","proxy":{"url":"https://proxy.example"},`,
+			credentials: `"access_token":"at-test-token","auth_mode":"personalAccessToken"`,
+			want:        "disallowed credential field",
+		},
+		{
+			name:        "API key",
+			credentials: `"access_token":"at-test-token","auth_mode":"personalAccessToken","api_key":"sk-test"`,
+			want:        "disallowed credential field: api_key",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			outerFields := test.outerFields
+			if outerFields == "" {
+				outerFields = `"platform":"openai","type":"oauth",`
+			}
+			content := `{"accounts":[{` + outerFields + `"credentials":{` + test.credentials + `}}]}`
+			_, errs := ParseAccountCredentialImportContents([]string{content})
+			require.Len(t, errs, 1)
+			require.Contains(t, errs[0].Message, test.want)
+		})
+	}
+}
+
 func TestAccountCredentialImportSupportsGrokOAuthJSON(t *testing.T) {
 	sources, errs := ParseAccountCredentialImportContents([]string{`{
 		"name": "work grok",

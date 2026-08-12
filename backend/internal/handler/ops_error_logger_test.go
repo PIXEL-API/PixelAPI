@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"testing"
 
@@ -86,6 +87,75 @@ func TestAttachOpsRequestBodyToEntry_LargeSnapshotKeepsSizeOnly(t *testing.T) {
 	require.Equal(t, len(raw), *entry.RequestBodyBytes)
 	require.True(t, entry.RequestBodyTruncated)
 	require.Equal(t, int64(0), OpsErrorLogSanitizedTotal())
+}
+
+func TestApplyOpsCyberPolicyFields(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	entry := &service.OpsInsertErrorLogInput{}
+
+	require.NotPanics(t, func() {
+		applyOpsCyberPolicyFields(nil, entry)
+		applyOpsCyberPolicyFields(c, nil)
+	})
+	applyOpsCyberPolicyFields(c, entry)
+	require.Empty(t, entry.ProviderErrorCode)
+
+	service.BeginOpenAIUpstreamAttempt(c, "attempt-1", true)
+	service.MarkOpsCyberPolicy(c, service.CyberPolicyMark{
+		Code:           "cyber_policy",
+		Message:        "blocked",
+		UpstreamStatus: http.StatusForbidden,
+	})
+	applyOpsCyberPolicyFields(c, entry)
+
+	require.Equal(t, "cyber_policy", entry.ProviderErrorCode)
+}
+
+func TestOpsErrorLoggerMiddlewarePersistsCyberPolicyCodeForSuccessAndError(t *testing.T) {
+	resetOpsErrorLoggerStateForTest(t)
+	t.Cleanup(func() { resetOpsErrorLoggerStateForTest(t) })
+	gin.SetMode(gin.TestMode)
+
+	// 使用不启动 worker 的测试队列，直接检查中间件实际入队的数据。
+	opsErrorLogOnce.Do(func() {})
+	opsErrorLogMu.Lock()
+	opsErrorLogQueue = make(chan opsErrorLogJob, 2)
+	opsErrorLogMu.Unlock()
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	router := gin.New()
+	router.Use(OpsErrorLoggerMiddleware(ops))
+	router.GET("/cyber/:status", func(c *gin.Context) {
+		service.BeginOpenAIUpstreamAttempt(c, "attempt-"+c.Param("status"), true)
+		service.MarkOpsCyberPolicy(c, service.CyberPolicyMark{
+			Message:        "blocked",
+			Body:           `{"error":{"code":"cyber_policy"}}`,
+			UpstreamStatus: http.StatusForbidden,
+		})
+		if c.Param("status") == "200" {
+			c.Status(http.StatusOK)
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request_error", "message": "blocked"}})
+	})
+
+	for _, status := range []int{http.StatusOK, http.StatusBadRequest} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/cyber/"+strconv.Itoa(status), nil)
+		router.ServeHTTP(recorder, request)
+		require.Equal(t, status, recorder.Code)
+
+		select {
+		case job := <-opsErrorLogQueue:
+			require.NotNil(t, job.entry)
+			require.Equal(t, "cyber_policy", job.entry.ProviderErrorCode)
+			require.Equal(t, status, job.entry.StatusCode)
+		default:
+			t.Fatalf("status %d did not enqueue Cyber Policy ops log", status)
+		}
+	}
 }
 
 func TestEnqueueOpsErrorLog_QueueFullDrop(t *testing.T) {

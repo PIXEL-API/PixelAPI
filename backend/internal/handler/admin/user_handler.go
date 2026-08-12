@@ -104,7 +104,7 @@ type BindUserAuthIdentityChannelRequest struct {
 // Query params:
 //   - status: filter by user status
 //   - role: filter by user role
-//   - search: search in email, username
+//   - search: search by ID, email, username, notes, or API key
 //   - attr[{id}]: filter by custom attribute value, e.g. attr[1]=company
 //   - group_name: fuzzy filter by allowed group name
 func (h *UserHandler) List(c *gin.Context) {

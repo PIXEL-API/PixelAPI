@@ -94,7 +94,7 @@ func (Group) Fields() []ent.Field {
 		field.String("required_account_level").
 			MaxLen(64).
 			Default("").
-			Comment("Required OpenAI account capability level key for this group; empty allows any level."),
+			Comment("Required account capability level key for this group; empty allows any level."),
 		field.String("subscription_type").
 			MaxLen(20).
 			Default(domain.SubscriptionTypeStandard),

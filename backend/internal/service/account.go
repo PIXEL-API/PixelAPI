@@ -20,7 +20,21 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
 
-const OpenAIAuthModeAgentIdentity = "agentIdentity"
+const (
+	OpenAIAuthModeAgentIdentity       = "agentIdentity"
+	OpenAIAuthModePersonalAccessToken = "personalAccessToken"
+	openAIAuthModeCredentialKey       = "auth_mode"
+	openAIAuthModeLegacyCredentialKey = "openai_auth_mode"
+)
+
+func isOpenAIPersonalAccessTokenAuthMode(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "personalaccesstoken", "personal_access_token":
+		return true
+	default:
+		return false
+	}
+}
 
 type Account struct {
 	ID            int64
@@ -181,6 +195,15 @@ func IsConcreteAccountLevel(level string) bool {
 
 func IsUserSelectableOpenAIAccountLevel(level string) bool {
 	return IsUserSelectableOpenAIAccountLevelWithConfigs(level, DefaultOpenAIAccountLevelConfigs())
+}
+
+func IsUserSelectableGrokAccountLevel(level string) bool {
+	switch NormalizeAccountLevel(level) {
+	case AccountLevelFree, AccountLevelHeavy:
+		return true
+	default:
+		return false
+	}
 }
 
 func RequiresUserOpenAIProxyLogin(level string) bool {
@@ -1672,6 +1695,23 @@ func (a *Account) IsOpenAIOAuth() bool {
 	return a.IsOpenAI() && a.Type == AccountTypeOAuth
 }
 
+// IsOpenAIPersonalAccessTokenCredentials reports whether credentials select
+// Codex Personal Access Token authentication. Platform and account-type checks
+// remain the caller's responsibility while create/import input is validated.
+func IsOpenAIPersonalAccessTokenCredentials(credentials map[string]any) bool {
+	if len(credentials) == 0 {
+		return false
+	}
+	return isOpenAIPersonalAccessTokenAuthMode(openAICredentialString(credentials[openAIAuthModeCredentialKey])) ||
+		isOpenAIPersonalAccessTokenAuthMode(openAICredentialString(credentials[openAIAuthModeLegacyCredentialKey]))
+}
+
+// IsOpenAIPersonalAccessToken reports whether the OpenAI OAuth account uses a
+// non-refreshable Codex at-* personal access token.
+func (a *Account) IsOpenAIPersonalAccessToken() bool {
+	return a != nil && a.IsOpenAIOAuth() && IsOpenAIPersonalAccessTokenCredentials(a.Credentials)
+}
+
 // IsOpenAIAgentIdentityCredentials reports whether credentials select the
 // Codex Agent Identity authentication mode. Platform and account-type checks
 // remain the caller's responsibility so this helper can also be used while a
@@ -2141,6 +2181,34 @@ func (a *Account) GetChatGPTAccountID() string {
 		return ""
 	}
 	return a.GetCredential("chatgpt_account_id")
+}
+
+func (a *Account) IsChatGPTAccountFedRAMP() bool {
+	if !a.IsOpenAIOAuth() || a.Credentials == nil {
+		return false
+	}
+	value, ok := a.Credentials["chatgpt_account_is_fedramp"]
+	if !ok || value == nil {
+		return false
+	}
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(typed))
+		return err == nil && parsed
+	case json.Number:
+		parsed, err := strconv.ParseBool(typed.String())
+		return err == nil && parsed
+	case float64:
+		return typed != 0
+	case int:
+		return typed != 0
+	case int64:
+		return typed != 0
+	default:
+		return false
+	}
 }
 
 func (a *Account) GetOpenAIDeviceID() string {

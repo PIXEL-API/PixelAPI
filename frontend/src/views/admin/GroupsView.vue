@@ -165,10 +165,10 @@
                 {{ t("admin.groups.platforms." + value) }}
               </span>
               <span
-                v-if="value === 'openai' && row.required_account_level"
+                v-if="(value === 'openai' || value === 'grok') && row.required_account_level"
                 class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-200"
               >
-                {{ requiredAccountLevelLabel(row.required_account_level) }}
+                {{ requiredAccountLevelLabel(value, row.required_account_level) }}
               </span>
             </div>
           </template>
@@ -584,11 +584,11 @@
           />
           <p class="input-hint">{{ t("admin.groups.platformHint") }}</p>
         </div>
-        <div v-if="createForm.platform === 'openai'">
+        <div v-if="createForm.platform === 'openai' || createForm.platform === 'grok'">
           <label class="input-label">{{ t("admin.groups.form.requiredAccountLevel") }}</label>
           <Select
             v-model="createForm.required_account_level"
-            :options="requiredAccountLevelOptions"
+            :options="requiredAccountLevelOptions(createForm.platform)"
           />
           <p class="input-hint">{{ t("admin.groups.form.requiredAccountLevelHint") }}</p>
         </div>
@@ -1773,11 +1773,11 @@
           />
           <p class="input-hint">{{ t("admin.groups.platformNotEditable") }}</p>
         </div>
-        <div v-if="editForm.platform === 'openai'">
+        <div v-if="editForm.platform === 'openai' || editForm.platform === 'grok'">
           <label class="input-label">{{ t("admin.groups.form.requiredAccountLevel") }}</label>
           <Select
             v-model="editForm.required_account_level"
-            :options="requiredAccountLevelOptions"
+            :options="requiredAccountLevelOptions(editForm.platform)"
           />
           <p class="input-hint">{{ t("admin.groups.form.requiredAccountLevelHint") }}</p>
         </div>
@@ -3242,6 +3242,10 @@ import {
   openAIAccountLevelOptions,
 } from "@/utils/openaiAccountLevels";
 import {
+  GROK_ACCOUNT_LEVEL_OPTIONS,
+  grokAccountLevelLabel,
+} from "@/utils/grokAccountLevels";
+import {
   createDefaultMessagesDispatchFormState,
   messagesDispatchConfigToFormState,
   messagesDispatchFormStateToConfig,
@@ -3453,15 +3457,22 @@ const apiKeyBadgeTypeOptions = computed(() => [
   { value: "custom", label: t("groups.apiKeyBadge.custom") },
 ]);
 
-const requiredAccountLevelOptions = computed(() =>
-  openAIAccountLevelOptions(adminSettingsStore.openAIAccountLevels, {
+const requiredAccountLevelOptions = (platform: GroupPlatform) => {
+  if (platform === "grok") {
+    return [
+      { value: "", label: t("admin.groups.form.requiredAccountLevelAny") },
+      ...GROK_ACCOUNT_LEVEL_OPTIONS,
+    ];
+  }
+  return openAIAccountLevelOptions(adminSettingsStore.openAIAccountLevels, {
     includeEmpty: true,
     emptyLabel: t("admin.groups.form.requiredAccountLevelAny"),
-  }),
-);
+  });
+};
 
-const requiredAccountLevelLabel = (level?: Exclude<AccountLevel, "unknown"> | "") => {
+const requiredAccountLevelLabel = (platform: GroupPlatform, level?: Exclude<AccountLevel, "unknown"> | "") => {
   if (!level) return "";
+  if (platform === "grok") return grokAccountLevelLabel(level);
   return openAIAccountLevelLabel(level, adminSettingsStore.openAIAccountLevels);
 };
 
@@ -4543,7 +4554,7 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.description = group.description || "";
   editForm.platform = group.platform;
   editForm.required_account_level =
-    group.platform === "openai"
+    group.platform === "openai" || group.platform === "grok"
       ? group.required_account_level || ""
       : "";
   editForm.rate_multiplier = group.rate_multiplier;
@@ -4825,8 +4836,12 @@ watch(
     if (!["anthropic", "antigravity"].includes(newVal)) {
       createForm.fallback_group_id_on_invalid_request = null;
     }
-    if (newVal !== "openai") {
+    if (newVal !== "openai" && newVal !== "grok") {
       createForm.required_account_level = "";
+    } else if (!requiredAccountLevelOptions(newVal).some((option) => option.value === createForm.required_account_level)) {
+      createForm.required_account_level = "";
+    }
+    if (newVal !== "openai") {
       resetMessagesDispatchFormState(createForm);
     }
     if (!["openai", "antigravity", "anthropic", "gemini", "grok"].includes(newVal)) {
@@ -4843,8 +4858,12 @@ watch(
     if (!["anthropic", "antigravity"].includes(newVal)) {
       editForm.fallback_group_id_on_invalid_request = null;
     }
-    if (newVal !== "openai") {
+    if (newVal !== "openai" && newVal !== "grok") {
       editForm.required_account_level = "";
+    } else if (!requiredAccountLevelOptions(newVal).some((option) => option.value === editForm.required_account_level)) {
+      editForm.required_account_level = "";
+    }
+    if (newVal !== "openai") {
       resetMessagesDispatchFormState(editForm);
       editForm.default_mapped_model = "";
     }

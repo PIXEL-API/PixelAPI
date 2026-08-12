@@ -258,6 +258,8 @@ func (s *OpsService) prepareErrorLogInput(ctx context.Context, entry *OpsInsertE
 			}
 		}
 	}
+	entry.ProviderErrorCode = strings.ToLower(strings.TrimSpace(entry.ProviderErrorCode))
+	entry.ProviderErrorCode = truncateString(entry.ProviderErrorCode, 64)
 
 	if err := sanitizeOpsUpstreamErrors(entry); err != nil {
 		return nil, false, err

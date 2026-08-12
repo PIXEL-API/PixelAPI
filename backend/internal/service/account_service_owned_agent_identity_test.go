@@ -171,6 +171,23 @@ func (s *ownedAgentIdentityRepoStub) GetOwnedOpenAIAgentIdentityByChatGPTAccount
 	return nil, nil
 }
 
+func (s *ownedAgentIdentityRepoStub) GetOwnedOpenAIPersonalAccessTokenByChatGPTUserID(
+	_ context.Context,
+	ownerUserID int64,
+	chatGPTUserID string,
+) (*Account, error) {
+	chatGPTUserID = strings.TrimSpace(chatGPTUserID)
+	for _, account := range s.accounts {
+		if account.OwnerUserID == nil || *account.OwnerUserID != ownerUserID || !account.IsOpenAIPersonalAccessToken() {
+			continue
+		}
+		if strings.TrimSpace(account.GetChatGPTUserID()) == chatGPTUserID {
+			return cloneOwnedAgentIdentityTestAccount(account), nil
+		}
+	}
+	return nil, nil
+}
+
 type recordingAgentIdentityWSInvalidator struct {
 	accountIDs []int64
 }
@@ -955,8 +972,8 @@ func TestConvertOwnedExternalPlacementRoomToPublicPoolStillRejectsInflight(t *te
 		Schedulable:  true,
 		GroupIDs:     []int64{ownedAgentIdentityPrivateGroupID},
 		ExternalPlacement: &AccountExternalPlacement{
-			Target: AccountExternalPlacementRoom,
-			State:  "active",
+			Target:  AccountExternalPlacementRoom,
+			State:   "active",
 			Version: 1,
 		},
 	}

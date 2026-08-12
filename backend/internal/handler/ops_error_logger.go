@@ -424,6 +424,15 @@ func attachOpsRequestBodyToEntry(c *gin.Context, entry *service.OpsInsertErrorLo
 	opsErrorLogSanitized.Add(1)
 }
 
+func applyOpsCyberPolicyFields(c *gin.Context, entry *service.OpsInsertErrorLogInput) {
+	if c == nil || entry == nil {
+		return
+	}
+	if mark := service.GetOpsCyberPolicy(c); mark != nil {
+		entry.ProviderErrorCode = strings.TrimSpace(mark.Code)
+	}
+}
+
 func setOpsSelectedAccount(c *gin.Context, accountID int64, platform ...string) {
 	if c == nil || accountID <= 0 {
 		return
@@ -901,6 +910,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 				CreatedAt:   time.Now(),
 			}
 			applyOpsLatencyFieldsFromContext(c, entry)
+			applyOpsCyberPolicyFields(c, entry)
 
 			if apiKey != nil {
 				entry.APIKeyID = &apiKey.ID
@@ -1052,6 +1062,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 			CreatedAt:   time.Now(),
 		}
 		applyOpsLatencyFieldsFromContext(c, entry)
+		applyOpsCyberPolicyFields(c, entry)
 
 		// Capture upstream error context set by gateway services (if present).
 		// This does NOT affect the client response; it enriches Ops troubleshooting data.

@@ -4,7 +4,7 @@
  */
 
 import { apiClient } from '../client'
-import type { GrokBillingSummary, GrokQuotaWindow, WindowStats } from '@/types'
+import type { AccountLevel, GrokBillingSummary, GrokQuotaWindow, WindowStats } from '@/types'
 
 export type { GrokBillingSummary, GrokQuotaWindow } from '@/types'
 
@@ -16,6 +16,7 @@ export interface GrokAuthUrlResponse {
 
 export interface GrokAuthUrlRequest {
   proxy_id?: number
+  account_level?: AccountLevel
   redirect_uri?: string
 }
 
@@ -24,6 +25,7 @@ export interface GrokExchangeCodeRequest {
   state: string
   code: string
   proxy_id?: number
+  account_level?: AccountLevel
   redirect_uri?: string
 }
 

@@ -17,6 +17,9 @@ type opsRepoMock struct {
 	ExportSystemLogsFn            func(ctx context.Context, filter *OpsSystemLogCleanupFilter) (io.ReadCloser, error)
 	DeleteSystemLogsFn            func(ctx context.Context, filter *OpsSystemLogCleanupFilter) (int64, error)
 	InsertSystemLogCleanupAuditFn func(ctx context.Context, input *OpsSystemLogCleanupAudit) error
+	ListCyberPolicyRequestsFn     func(ctx context.Context, filter CyberPolicyRequestFilter) (*CyberPolicyRequestList, error)
+	GetCyberPolicyRequestByIDFn   func(ctx context.Context, id int64) (*CyberPolicyRequestDetail, error)
+	ListCyberPolicyExportFn       func(ctx context.Context, filter CyberPolicyRequestFilter, limit int) ([]*CyberPolicyRequestDetail, error)
 }
 
 func (m *opsRepoMock) InsertErrorLog(ctx context.Context, input *OpsInsertErrorLogInput) (int64, error) {
@@ -85,6 +88,27 @@ func (m *opsRepoMock) InsertSystemLogCleanupAudit(ctx context.Context, input *Op
 		return m.InsertSystemLogCleanupAuditFn(ctx, input)
 	}
 	return nil
+}
+
+func (m *opsRepoMock) ListCyberPolicyRequests(ctx context.Context, filter CyberPolicyRequestFilter) (*CyberPolicyRequestList, error) {
+	if m.ListCyberPolicyRequestsFn != nil {
+		return m.ListCyberPolicyRequestsFn(ctx, filter)
+	}
+	return &CyberPolicyRequestList{Items: []*CyberPolicyRequest{}, Page: 1, PageSize: 20}, nil
+}
+
+func (m *opsRepoMock) GetCyberPolicyRequestByID(ctx context.Context, id int64) (*CyberPolicyRequestDetail, error) {
+	if m.GetCyberPolicyRequestByIDFn != nil {
+		return m.GetCyberPolicyRequestByIDFn(ctx, id)
+	}
+	return &CyberPolicyRequestDetail{}, nil
+}
+
+func (m *opsRepoMock) ListCyberPolicyRequestsForExport(ctx context.Context, filter CyberPolicyRequestFilter, limit int) ([]*CyberPolicyRequestDetail, error) {
+	if m.ListCyberPolicyExportFn != nil {
+		return m.ListCyberPolicyExportFn(ctx, filter, limit)
+	}
+	return []*CyberPolicyRequestDetail{}, nil
 }
 
 func (m *opsRepoMock) InsertRetryAttempt(ctx context.Context, input *OpsInsertRetryAttemptInput) (int64, error) {

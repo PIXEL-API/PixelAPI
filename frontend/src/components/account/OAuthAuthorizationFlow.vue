@@ -98,6 +98,62 @@
                 t('admin.accounts.oauth.openai.accessTokenAuth', '手动输入 AT')
               }}</span>
             </label>
+            <label
+              v-if="showCodexPatOption"
+              class="flex min-h-11 cursor-pointer items-center gap-2 py-2"
+            >
+              <input
+                v-model="inputMethod"
+                type="radio"
+                value="codex_pat"
+                class="text-blue-600 focus:ring-blue-500"
+              />
+              <span class="text-sm text-blue-900 dark:text-blue-200">{{
+                t('admin.accounts.oauth.openai.codexPatAuth')
+              }}</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Codex Personal Access Token -->
+        <div v-if="inputMethod === 'codex_pat'" class="space-y-4">
+          <div
+            class="rounded-lg border border-blue-300 bg-white/80 p-4 dark:border-blue-600 dark:bg-gray-800/80"
+          >
+            <p class="mb-3 text-sm leading-6 text-blue-700 dark:text-blue-300">
+              {{ t('admin.accounts.oauth.openai.codexPatDesc') }}
+            </p>
+            <div class="mb-4">
+              <label class="mb-2 flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-300">
+                <Icon name="key" size="sm" class="text-blue-500" />
+                {{ t('admin.accounts.oauth.openai.codexPatInputLabel') }}
+              </label>
+              <textarea
+                v-model="codexPATInput"
+                rows="3"
+                class="input w-full resize-y font-mono text-sm"
+                :placeholder="t('admin.accounts.oauth.openai.codexPatPlaceholder')"
+                spellcheck="false"
+              ></textarea>
+              <p class="mt-2 text-xs leading-5 text-amber-700 dark:text-amber-300">
+                {{ t('admin.accounts.oauth.openai.codexPatHint') }}
+              </p>
+            </div>
+            <div
+              v-if="error"
+              class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-700 dark:bg-red-900/30"
+            >
+              <p class="break-words whitespace-pre-line text-sm text-red-600 dark:text-red-400">{{ error }}</p>
+            </div>
+            <button
+              type="button"
+              class="btn btn-primary min-h-11 w-full"
+              :disabled="loading || !codexPATInput.trim()"
+              @click="handleImportCodexPAT"
+            >
+              <Icon name="sparkles" size="sm" class="mr-2" />
+              {{ loading ? t('admin.accounts.oauth.openai.validating') : t('admin.accounts.oauth.openai.codexPatImportAndCreate') }}
+            </button>
           </div>
         </div>
 
@@ -735,6 +791,7 @@ interface Props {
   showMobileRefreshTokenOption?: boolean // Whether to show mobile refresh token option (OpenAI only)
   showSessionTokenOption?: boolean
   showAccessTokenOption?: boolean
+  showCodexPatOption?: boolean
   platform?: AccountPlatform // Platform type for different UI/text
   showProjectId?: boolean // New prop to control project ID visibility
 }
@@ -754,6 +811,7 @@ const props = withDefaults(defineProps<Props>(), {
   showMobileRefreshTokenOption: false,
   showSessionTokenOption: false,
   showAccessTokenOption: false,
+  showCodexPatOption: false,
   platform: 'anthropic',
   showProjectId: true
 })
@@ -766,6 +824,7 @@ const emit = defineEmits<{
   'validate-mobile-refresh-token': [refreshToken: string]
   'validate-session-token': [sessionToken: string]
   'import-access-token': [accessToken: string]
+  'import-codex-pat': [accessToken: string]
   'import-sso': [content: string]
   'update:inputMethod': [method: AuthInputMethod]
 }>()
@@ -808,6 +867,7 @@ const authCodeInput = ref('')
 const sessionKeyInput = ref('')
 const refreshTokenInput = ref('')
 const accessTokenInput = ref('')
+const codexPATInput = ref('')
 const sessionTokenInput = ref('')
 const ssoCookieInput = ref('')
 const showHelpDialog = ref(false)
@@ -815,7 +875,7 @@ const oauthState = ref('')
 const projectId = ref('')
 
 // Computed: show method selection when either cookie or refresh token option is enabled
-const showMethodSelection = computed(() => props.showCookieOption || props.showRefreshTokenOption || props.showSsoOption || props.showMobileRefreshTokenOption || props.showSessionTokenOption || props.showAccessTokenOption)
+const showMethodSelection = computed(() => props.showCookieOption || props.showRefreshTokenOption || props.showSsoOption || props.showMobileRefreshTokenOption || props.showSessionTokenOption || props.showAccessTokenOption || props.showCodexPatOption)
 
 // Clipboard
 const { copied, copyToClipboard } = useClipboard()
@@ -935,6 +995,12 @@ const handleImportAccessToken = () => {
   }
 }
 
+const handleImportCodexPAT = () => {
+  if (codexPATInput.value.trim()) {
+    emit('import-codex-pat', codexPATInput.value.trim())
+  }
+}
+
 const handleImportSSO = () => {
   if (ssoCookieInput.value.trim()) {
     emit('import-sso', ssoCookieInput.value.trim())
@@ -949,6 +1015,7 @@ defineExpose({
   sessionKey: sessionKeyInput,
   refreshToken: refreshTokenInput,
   accessToken: accessTokenInput,
+  codexPAT: codexPATInput,
   sessionToken: sessionTokenInput,
   ssoCookie: ssoCookieInput,
   inputMethod,
@@ -959,6 +1026,7 @@ defineExpose({
     sessionKeyInput.value = ''
     refreshTokenInput.value = ''
     accessTokenInput.value = ''
+    codexPATInput.value = ''
     sessionTokenInput.value = ''
     ssoCookieInput.value = ''
     inputMethod.value = 'manual'

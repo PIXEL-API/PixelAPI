@@ -572,7 +572,7 @@ func TestAccountServiceResolveOwnedPublicShareGroup(t *testing.T) {
 }
 
 func TestAccountServiceResolveOwnedPublicShareGroupExcludesAccountModeGroups(t *testing.T) {
-	for _, platform := range []string{PlatformAnthropic, PlatformGemini, PlatformAntigravity, PlatformGrok} {
+	for _, platform := range []string{PlatformAnthropic, PlatformGemini, PlatformAntigravity} {
 		t.Run(platform, func(t *testing.T) {
 			svc := &AccountService{
 				groupRepo: &ownedPublicShareGroupRepoStub{
@@ -590,6 +590,36 @@ func TestAccountServiceResolveOwnedPublicShareGroupExcludesAccountModeGroups(t *
 			require.Equal(t, int64(11), group.ID)
 		})
 	}
+}
+
+func TestAccountServiceResolveOwnedPublicShareGroupMatchesGrokAccountLevel(t *testing.T) {
+	svc := &AccountService{
+		groupRepo: &ownedPublicShareGroupRepoStub{
+			groups: []Group{
+				{ID: 20, Name: "GROK共享号池【free】", Platform: PlatformGrok, Status: StatusActive, Scope: GroupScopePublic, RequiredAccountLevel: AccountLevelFree},
+				{ID: 21, Name: "GROK共享号池【heavy】", Platform: PlatformGrok, Status: StatusActive, Scope: GroupScopePublic, RequiredAccountLevel: AccountLevelHeavy},
+			},
+		},
+	}
+
+	group, err := svc.resolveOwnedPublicShareGroup(context.Background(), &Account{Platform: PlatformGrok, AccountLevel: AccountLevelHeavy})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(21), group.ID)
+}
+
+func TestAccountServiceResolveOwnedPublicShareGroupRejectsUnknownGrokLevel(t *testing.T) {
+	svc := &AccountService{
+		groupRepo: &ownedPublicShareGroupRepoStub{
+			groups: []Group{
+				{ID: 20, Name: "GROK共享号池【free】", Platform: PlatformGrok, Status: StatusActive, Scope: GroupScopePublic, RequiredAccountLevel: AccountLevelFree},
+			},
+		},
+	}
+
+	_, err := svc.resolveOwnedPublicShareGroup(context.Background(), &Account{Platform: PlatformGrok, AccountLevel: AccountLevelUnknown})
+
+	require.ErrorIs(t, err, ErrOwnedAccountPublicPoolUnavailable)
 }
 
 func TestAccountServiceResolveOwnedPublicShareGroupExcludesMisconfiguredOpenAIAccountModeGroup(t *testing.T) {

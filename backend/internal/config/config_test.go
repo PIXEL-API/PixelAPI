@@ -219,7 +219,7 @@ func TestLoadClusterDefaultsPreserveSingleInstanceMode(t *testing.T) {
 	require.Equal(t, 128, cfg.Redis.PoolSize)
 	require.Equal(t, 16, cfg.Redis.MinIdleConns)
 	require.Equal(t, 10, cfg.Server.DrainDelaySeconds)
-	require.Equal(t, 300, cfg.Server.HTTPDrainTimeoutSeconds)
+	require.Equal(t, 30, cfg.Server.HTTPDrainTimeoutSeconds)
 	require.Equal(t, 30, cfg.Server.CleanupTimeoutSeconds)
 	require.False(t, cfg.AccountShareRollout.ReviewRoomSubjectWritesEnabled)
 	require.Equal(t, AccountShareQuotaModeShadow, cfg.AccountShareRollout.QuotaMode)
@@ -267,6 +267,7 @@ totp:
 	require.Equal(t, "pixel-app-01", cfg.Cluster.NodeID)
 	require.Equal(t, 3, cfg.Cluster.ExpectedNodes)
 	require.Equal(t, "validate", cfg.Database.MigrationMode)
+	require.Equal(t, 300, cfg.Server.HTTPDrainTimeoutSeconds)
 }
 
 func TestLoadClusterConfigFromEnvironment(t *testing.T) {

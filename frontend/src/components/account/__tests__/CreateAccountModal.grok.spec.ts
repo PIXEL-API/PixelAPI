@@ -6,6 +6,10 @@ const source = readFileSync(
   resolve(process.cwd(), 'src/components/account/CreateAccountModal.vue'),
   'utf8'
 )
+const userImportSource = readFileSync(
+  resolve(process.cwd(), 'src/components/user/ImportAccountsModal.vue'),
+  'utf8'
+)
 
 describe('CreateAccountModal Grok administrator boundary', () => {
   it('offers API Key and administrator upstream configuration only outside user scope', () => {
@@ -26,5 +30,17 @@ describe('CreateAccountModal Grok administrator boundary', () => {
   it('uses the official xAI API endpoint as the Grok API Key default', () => {
     expect(source).toContain("newPlatform === 'grok'")
     expect(source).toContain("? 'https://api.x.ai/v1'")
+  })
+
+  it('requires Free or Heavy and submits the selected Grok account level', () => {
+    expect(source).toContain("GROK_ACCOUNT_LEVEL_OPTIONS")
+    expect(source).toContain("form.platform === 'grok'")
+    expect(source).toContain("platform === 'openai' || platform === 'grok' ? form.account_level : 'unknown'")
+  })
+
+  it('requires the Grok account level for credential imports', () => {
+    expect(userImportSource).toContain("selectedPlatform === 'grok'")
+    expect(userImportSource).toContain("request.account_level = accountLevel")
+    expect(userImportSource).toContain("importGrokAccountLevelRequired")
   })
 })

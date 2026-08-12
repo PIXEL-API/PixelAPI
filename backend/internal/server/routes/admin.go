@@ -155,6 +155,11 @@ func registerContentModerationRoutes(admin *gin.RouterGroup, h *handler.Handlers
 		risk.GET("/account-share/listings", h.Admin.ContentModeration.ListAccountShareModeListings)
 		risk.GET("/logs", h.Admin.ContentModeration.ListLogs)
 		risk.POST("/users/:user_id/unban", h.Admin.ContentModeration.UnbanUser)
+		risk.GET("/cyber-policy/requests", h.Admin.CyberPolicy.ListRequests)
+		risk.GET("/cyber-policy/requests/export", h.Admin.CyberPolicy.ExportRequests)
+		risk.GET("/cyber-policy/requests/:id", h.Admin.CyberPolicy.GetRequest)
+		risk.GET("/cyber-restrictions/users/:user_id/groups/:group_id", h.Admin.CyberPolicy.GetRestriction)
+		risk.DELETE("/cyber-restrictions/users/:user_id/groups/:group_id", h.Admin.CyberPolicy.ClearRestriction)
 		risk.DELETE("/hashes", h.Admin.ContentModeration.DeleteFlaggedHash)
 		risk.DELETE("/hashes/all", h.Admin.ContentModeration.ClearFlaggedHashes)
 	}
@@ -509,6 +514,7 @@ func registerOpenAIOAuthRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		openai.POST("/refresh-token", h.Admin.OpenAIOAuth.RefreshToken)
 		openai.POST("/accounts/:id/refresh", h.Admin.OpenAIOAuth.RefreshAccountToken)
 		openai.POST("/create-from-oauth", h.Admin.OpenAIOAuth.CreateAccountFromOAuth)
+		openai.POST("/create-from-codex-pat", h.Admin.OpenAIOAuth.CreateAccountFromCodexPAT)
 		openai.GET("/accounts/:id/quota", h.Admin.OpenAIOAuth.QueryQuota)
 		openai.POST("/accounts/:id/reset-quota", h.Admin.OpenAIOAuth.ResetQuota)
 	}

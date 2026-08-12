@@ -129,7 +129,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		}
 		currentAPIKey := routeCandidate.APIKey
 		routingPlatform := openAICompatibleRoutingPlatform(currentAPIKey)
-		switch h.checkCyberPolicyRouteBlock(c, currentAPIKey, body, reqModel, cyberBlockFormatChat, routeCursor, reqLog) {
+		switch h.checkCyberPolicyRouteBlock(c, currentAPIKey, reqModel, cyberBlockFormatChat, routeCursor, reqLog) {
 		case cyberPolicyRouteRejected:
 			return
 		case cyberPolicyRouteSkipped:
@@ -352,7 +352,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		upstreamAttemptID := h.beginOpenAIUpstreamAttempt(c, currentAPIKey, account)
 		result, err := h.gatewayService.ForwardAsChatCompletions(forwardCtx, c, account, forwardBody, promptCacheKey, defaultMappedModel)
 		cancelForward()
-		cyberPolicyHit, _ := h.recordCyberPolicyHitForAttempt(selectionCtx, c, currentAPIKey, body, upstreamAttemptID)
+		cyberPolicyHit, _ := h.recordCyberPolicyHitForAttempt(selectionCtx, c, currentAPIKey, upstreamAttemptID)
 
 		forwardDurationMs := time.Since(forwardStart).Milliseconds()
 		recordUsageResult := func(result *service.OpenAIForwardResult) {
@@ -394,6 +394,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				h.ensureForwardErrorResponse(c, streamStarted)
 			}
 			reqLog.Warn("openai_chat_completions.cyber_policy_terminal",
+				zap.Int64("user_id", currentAPIKey.UserID),
 				zap.Int64("api_key_id", currentAPIKey.ID),
 				zap.Int64("effective_group_id", apiKeyGroupIDValue(currentAPIKey)),
 				zap.String("upstream_attempt_id", upstreamAttemptID),

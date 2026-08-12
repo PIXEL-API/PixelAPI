@@ -277,6 +277,79 @@ export interface ClearFlaggedHashesResponse {
   deleted: number
 }
 
+export interface CyberPolicyRestriction {
+  user_id: number
+  group_id: number
+  blocked: boolean
+  scope: 'user_group_day' | ''
+  blocked_until: string | null
+  retry_after_seconds: number
+}
+
+export interface ClearCyberPolicyRestrictionResponse {
+  user_id: number
+  group_id: number
+  removed: boolean
+}
+
+export interface CyberPolicyRequestRecord {
+  id: number
+  created_at: string
+  request_id: string
+  user_id: number | null
+  user_name: string
+  user_email: string
+  group_id: number | null
+  group_name: string
+  api_key_id: number | null
+  api_key_name: string
+  account_id: number | null
+  account_name: string
+  requested_model: string
+  upstream_model: string
+  inbound_endpoint: string
+  upstream_endpoint: string
+  status_code: number
+  upstream_status_code: number | null
+  provider_error_code: string
+  upstream_error_message: string
+  request_content_preview: string
+  request_content_truncated: boolean
+  request_content_bytes: number | null
+}
+
+export interface CyberPolicyRequestDetail extends CyberPolicyRequestRecord {
+  request_content: string
+  upstream_error_detail: string
+  upstream_errors: string
+}
+
+export interface CyberPolicyRequestFilters {
+  page?: number
+  page_size?: number
+  group_query?: string
+  user_query?: string
+  model?: string
+  endpoint?: string
+  from?: string
+  to?: string
+}
+
+export interface CyberPolicyRequestsResponse {
+  items: CyberPolicyRequestRecord[]
+  total: number
+  page: number
+  page_size: number
+  pages: number
+}
+
+export interface CyberPolicyRequestExport {
+  blob: Blob
+  filename: string
+  truncated: boolean
+  limit: number
+}
+
 export async function getConfig(): Promise<ContentModerationConfig> {
   const { data } = await apiClient.get<ContentModerationConfig>('/admin/risk-control/config')
   return data
@@ -339,6 +412,68 @@ export async function clearFlaggedHashes(): Promise<ClearFlaggedHashesResponse> 
   return data
 }
 
+export async function getCyberPolicyRestriction(
+  userID: number,
+  groupID: number
+): Promise<CyberPolicyRestriction> {
+  const { data } = await apiClient.get<CyberPolicyRestriction>(
+    `/admin/risk-control/cyber-restrictions/users/${userID}/groups/${groupID}`
+  )
+  return data
+}
+
+export async function clearCyberPolicyRestriction(
+  userID: number,
+  groupID: number
+): Promise<ClearCyberPolicyRestrictionResponse> {
+  const { data } = await apiClient.delete<ClearCyberPolicyRestrictionResponse>(
+    `/admin/risk-control/cyber-restrictions/users/${userID}/groups/${groupID}`
+  )
+  return data
+}
+
+export async function listCyberPolicyRequests(
+  params: CyberPolicyRequestFilters = {},
+  options: { signal?: AbortSignal } = {}
+): Promise<CyberPolicyRequestsResponse> {
+  const { data } = await apiClient.get<CyberPolicyRequestsResponse>(
+    '/admin/risk-control/cyber-policy/requests',
+    { params, signal: options.signal }
+  )
+  return data
+}
+
+export async function getCyberPolicyRequest(
+  id: number,
+  options: { signal?: AbortSignal } = {}
+): Promise<CyberPolicyRequestDetail> {
+  const { data } = await apiClient.get<CyberPolicyRequestDetail>(
+    `/admin/risk-control/cyber-policy/requests/${id}`,
+    { signal: options.signal }
+  )
+  return data
+}
+
+export async function exportCyberPolicyRequests(
+  params: CyberPolicyRequestFilters = {},
+  options: { signal?: AbortSignal } = {}
+): Promise<CyberPolicyRequestExport> {
+  const response = await apiClient.get<Blob>('/admin/risk-control/cyber-policy/requests/export', {
+    params,
+    responseType: 'blob',
+    signal: options.signal,
+  })
+  const disposition = String(response.headers['content-disposition'] || '')
+  const fallbackFilename = `cyber-policy-requests-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`
+  const filename = String(response.headers['x-export-filename'] || disposition.match(/filename="?([^";]+)"?/i)?.[1] || fallbackFilename)
+  return {
+    blob: response.data,
+    filename,
+    truncated: String(response.headers['x-export-truncated']).toLowerCase() === 'true',
+    limit: Number(response.headers['x-export-limit']) || 0,
+  }
+}
+
 export const riskControlAPI = {
   getConfig,
   updateConfig,
@@ -349,6 +484,11 @@ export const riskControlAPI = {
   unbanUser,
   deleteFlaggedHash,
   clearFlaggedHashes,
+  getCyberPolicyRestriction,
+  clearCyberPolicyRestriction,
+  listCyberPolicyRequests,
+  getCyberPolicyRequest,
+  exportCyberPolicyRequests,
 }
 
 export default riskControlAPI

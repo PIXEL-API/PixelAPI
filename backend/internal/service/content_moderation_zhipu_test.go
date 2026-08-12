@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -127,10 +128,38 @@ func TestContentModerationOpenAIFinalFlaggedDecision(t *testing.T) {
 			expectedFlagged: false,
 		},
 		{
-			name:            "official flag is authoritative when local threshold is clear",
+			name:            "official flag below score gate is observation only",
 			officialFlagged: true,
 			score:           0.4,
 			threshold:       0.8,
+			expectedFlagged: false,
+		},
+		{
+			name:            "official flag at score gate is observation only",
+			officialFlagged: true,
+			score:           openAIOfficialFlaggedScoreThreshold,
+			threshold:       0.8,
+			expectedFlagged: false,
+		},
+		{
+			name:            "official flag above score gate can flag",
+			officialFlagged: true,
+			score:           math.Nextafter(openAIOfficialFlaggedScoreThreshold, 1),
+			threshold:       0.8,
+			expectedFlagged: true,
+		},
+		{
+			name:            "score above official gate alone does not flag",
+			officialFlagged: false,
+			score:           math.Nextafter(openAIOfficialFlaggedScoreThreshold, 1),
+			threshold:       0.8,
+			expectedFlagged: false,
+		},
+		{
+			name:            "local threshold remains inclusive at official score gate",
+			officialFlagged: true,
+			score:           openAIOfficialFlaggedScoreThreshold,
+			threshold:       openAIOfficialFlaggedScoreThreshold,
 			expectedFlagged: true,
 		},
 		{
@@ -168,6 +197,38 @@ func TestContentModerationOpenAIFinalFlaggedDecision(t *testing.T) {
 				t.Fatalf("unexpected highest-risk details: category=%q score=%v", result.HighestCategory, result.HighestScore)
 			}
 		})
+	}
+}
+
+func TestContentModerationBuildLogPreservesFullRedactedInput(t *testing.T) {
+	longText := strings.Repeat("完整送审内容", 80) + " password=super-secret-value"
+	expected := redactContentModerationSecrets(longText)
+	if len([]rune(expected)) <= 240 {
+		t.Fatalf("test input must exceed the removed excerpt limit, got %d runes", len([]rune(expected)))
+	}
+
+	svc := NewContentModerationService(nil, nil, nil, nil, nil, nil, nil)
+	cfg := defaultContentModerationConfig()
+	log := svc.buildLog(
+		ContentModerationCheckInput{},
+		cfg,
+		ContentModerationScopeContext{},
+		ContentModerationActionBlock,
+		true,
+		"violence",
+		0.9,
+		map[string]float64{"violence": 0.9},
+		longText,
+		nil,
+		nil,
+		"",
+	)
+
+	if log.InputExcerpt != expected {
+		t.Fatalf("stored moderation input was truncated or changed: got %d runes, want %d", len([]rune(log.InputExcerpt)), len([]rune(expected)))
+	}
+	if strings.Contains(log.InputExcerpt, "super-secret-value") {
+		t.Fatal("stored moderation input must retain secret redaction")
 	}
 }
 

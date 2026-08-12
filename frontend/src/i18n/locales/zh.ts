@@ -1109,9 +1109,11 @@ export default {
     selectedGroups: "已选 {count} 个分组",
     importTitle: "导入个人账号",
     importHint:
-      "粘贴账号凭证或导入文件。OpenAI 可选择 OAuth / Refresh Token 或 Codex Agent Identity，其他平台创建官方 OAuth 账号。",
+      "粘贴账号凭证或导入文件。OpenAI 可选择 OAuth / Refresh Token、Codex Personal Access Token 或 Codex Agent Identity，其他平台创建官方 OAuth 账号。",
     importHintAgentIdentity:
       "粘贴或选择 Codex Agent Identity JSON。账号导入时默认为当前用户可见的私有账号；导入后可主动切换为公共账号，公开共享前需通过服务端校验。",
+    importHintPersonalAccessToken:
+      "粘贴或选择包含 at-* Codex Personal Access Token 的账号导出 JSON。服务端会通过 OpenAI whoami 校验并重建可信凭据。",
     importWarning:
       "单次最多导入 {max} 个账号。支持 Sub2API OAuth JSON、Codex-Manager ChatGPT Token JSON、OpenAI Refresh Token、Claude Session Key；API Key、URL、Upstream、Cookie 会被拒绝。",
     importWarningChoosePlatform:
@@ -1120,6 +1122,8 @@ export default {
       "单次最多导入 {max} 个 OpenAI 账号。可导入等级由管理员后台配置；标记为需要代理登录的等级必须通过账号登录导入。",
     importWarningAgentIdentity:
       "单次最多导入 {max} 个 Codex Agent Identity。仅接受完整的 Agent Identity JSON；普通 OAuth JSON、Refresh Token、API Key、URL、Upstream 与 Cookie 会被拒绝。",
+    importWarningPersonalAccessToken:
+      "单次最多导入 {max} 个 Codex PAT 账号。只接受 OpenAI OAuth 账号导出 JSON；导出包中的身份、代理和额外元数据不会被信任。",
     importWarningClaude:
       "单次最多导入 {max} 个 Claude 账号。支持 Sub2API OAuth JSON 或 Claude Session Key。",
     importWarningGemini:
@@ -1139,6 +1143,9 @@ export default {
     importAuthModeOAuth: "OAuth / Refresh Token",
     importAuthModeOAuthDesc:
       "导入 OAuth JSON、Refresh Token 或 JSON 格式的 Access Token，并按账号等级校验",
+    importAuthModePersonalAccessToken: "Codex Personal Access Token",
+    importAuthModePersonalAccessTokenDesc:
+      "导入包含 at-* PAT 的账号 JSON，由服务端通过 OpenAI whoami 验证身份",
     importAuthModeAgentIdentity: "Codex Agent Identity",
     importAuthModeAgentIdentityDesc: "导入 Agent Identity JSON，按凭证中的 Team 自动隔离",
     importAgentIdentityNoticeTitle: "Agent Identity 导入规则",
@@ -1146,6 +1153,7 @@ export default {
     importAgentIdentityPrivate: "账号导入时默认为私有；导入后可主动切换为公共，公开共享前需通过服务端校验。",
     importAgentIdentityNoOAuthExpiry: "Agent Identity 不使用 OAuth 过期时间；凭证有效性由服务端校验。",
     importAgentIdentityJSONRequired: "Codex Agent Identity 仅接受完整的 JSON 对象或 JSON 数组。",
+    importPersonalAccessTokenJSONRequired: "Codex Personal Access Token 仅接受完整的账号导出 JSON。",
     importPlatformHintClaude:
       "Claude 导入不会使用 OpenAI 账号等级。请选择 Claude OAuth JSON 或 Claude Session Key。",
     importPlatformHintGemini:
@@ -1153,11 +1161,14 @@ export default {
     importPlatformHintAntigravity:
       "Antigravity 导入不会使用 OpenAI 账号等级。请导入包含 platform: antigravity 的 OAuth JSON。",
     importPlatformHintGrok:
-      "Grok 导入不会使用 OpenAI 账号等级。请导入包含 platform: grok 或 platform: xai 的 OAuth JSON。",
+      "请选择 Grok 账号等级，并导入包含 platform: grok 或 platform: xai 的 OAuth JSON。",
     importAccountLevel: "OpenAI 账号等级",
     importAccountLevelHint:
       "仅导入 OpenAI 账号时需要选择。OpenAI 会按所选等级严格校验；无法确认等级时按后台默认规则处理；需要代理登录的等级必须通过账号登录导入。",
     importAccountLevelRequired: "请先选择 OpenAI 账号等级",
+    importGrokAccountLevel: "Grok 账号等级",
+    importGrokAccountLevelHint: "Grok 凭证导入必须手动选择 Free 或 Heavy；公开共享后会进入相同等级的 Grok 共享号池。",
+    importGrokAccountLevelRequired: "请先选择 Grok 账号等级",
     importLevelFree: "无法确认等级时归入 Free",
     importLevelPlus: "只接受实际 Plus 账号",
     importLevelPro: "必须账号登录并选择 IP",
@@ -1236,6 +1247,7 @@ export default {
     importTextPlaceholder:
       "普通 Token 可每行一个；完整 JSON / JSON 数组可整段粘贴。",
     importTextPlaceholderAgentIdentity: "粘贴完整的 Codex Agent Identity JSON 或 JSON 数组",
+    importTextPlaceholderPersonalAccessToken: "粘贴包含 at-* PAT 的完整账号导出 JSON",
     importTextHint:
       "普通 Token 默认按 OpenAI Refresh Token 处理；OpenAI Access Token 请使用独立 AT 入口或下方 JSON 格式；Claude Session Key 会自动识别并兑换为 OAuth 凭证。",
     importTextHintChoosePlatform: "先选择平台后再粘贴对应平台的 OAuth 凭证。",
@@ -1248,6 +1260,8 @@ export default {
       "裸 Token 每行输入时默认按 Refresh Token 处理。Access Token 请使用上方最小 JSON 格式；AT-only 账号必须有可确定的有效期（JWT exp 或账号到期时间），并会在到期时自动暂停。",
     importTextHintAgentIdentity:
       "仅支持完整的 Codex Agent Identity JSON 或 JSON 数组；文件导入仅接受 .json。",
+    importTextHintPersonalAccessToken:
+      "仅支持完整的 OpenAI OAuth 账号导出 JSON；令牌必须位于 credentials.access_token，认证模式也必须声明在 credentials 内。",
     importTextHintClaude:
       "Claude 可粘贴 Claude Session Key 或包含 Anthropic/Claude 平台信息的 OAuth JSON。",
     importTextHintGemini:
@@ -3416,8 +3430,8 @@ export default {
       editUser: "编辑用户",
       deleteUser: "删除用户",
       deleteConfirmMessage: "确定要删除用户 '{email}' 吗？此操作无法撤销。",
-      searchPlaceholder: "邮箱/用户名/备注/API Key 模糊搜索...",
-      searchUsers: "邮箱/用户名/备注/API Key 模糊搜索",
+      searchPlaceholder: "ID/邮箱/用户名/备注/API Key 搜索...",
+      searchUsers: "ID/邮箱/用户名/备注/API Key 搜索",
       roleFilter: "角色筛选",
       allRoles: "全部角色",
       allStatus: "全部状态",
@@ -3803,10 +3817,10 @@ export default {
         rpmLimitPlaceholder: "0 表示不限制",
         rpmLimitHint:
           "每用户在本分组每分钟最大请求数，0 = 不限制；一旦设置即接管该用户的限流（覆盖用户级 rpm_limit）",
-        requiredAccountLevel: "OpenAI 账号等级",
+        requiredAccountLevel: "账号等级",
         requiredAccountLevelAny: "不限制账号等级",
         requiredAccountLevelHint:
-          "设置后，该 OpenAI 共享号池只接受并调度同等级账号。",
+          "设置后，该共享号池只接受并调度相同平台、相同等级的账号。",
         exclusiveLabel: "专属分组",
         exclusiveHint: "专属分组，可以手动指定给用户",
         platformLabel: "平台限制",
@@ -4269,6 +4283,81 @@ export default {
     riskControl: {
       title: "风控中心",
       description: "配置内容审计策略并查看审核记录",
+      workspace: {
+        tabsLabel: "风控中心工作区",
+        moderation: "内容审计",
+        cyberPolicy: "Cyber Policy",
+      },
+      cyberRestriction: {
+        title: "Cyber 当日 PRO 限制",
+        description:
+          "用户任一 API Key 在受管控分组首次命中上游 cyber_policy 后，该用户当天无法再使用该分组；更换或新建 API Key 也不能绕过。",
+        userId: "用户 ID",
+        userIdPlaceholder: "输入用户 ID",
+        user: "用户",
+        userSearchPlaceholder: "按用户 ID、用户名或邮箱搜索",
+        userSearchFailed: "搜索用户失败",
+        userSearchEmpty: "没有匹配的用户",
+        groupId: "PRO 分组 ID",
+        groupIdPlaceholder: "输入受管控分组 ID",
+        group: "PRO 分组",
+        groupSearchPlaceholder: "按分组 ID 或名称搜索",
+        groupSearchEmpty: "没有匹配的 OpenAI 分组",
+        query: "查询限制",
+        queryFailed: "查询 Cyber 当日限制失败",
+        blocked: "该用户今天已被限制使用此分组",
+        notBlocked: "该用户当前未被限制使用此分组",
+        blockedUntil: "限制到期时间",
+        clear: "解除当天限制",
+        clearConfirm:
+          "确认解除用户 {userId} 今天对分组 {groupId} 的 Cyber 限制？解除后该用户的所有 API Key 都可重新访问此分组；如果当天再次命中 cyber_policy，系统会再次立即限制。此操作不会修改用户账号状态或清除历史记录。",
+        clearSuccess: "已解除该用户今天的 Cyber 分组限制",
+        clearFailed: "解除 Cyber 分组限制失败",
+        hint: "按用户 ID、用户名或邮箱选择用户，并按分组 ID 或名称选择实际路由分组，可精确查询或解除当天限制。",
+      },
+      cyberRequests: {
+        title: "Cyber Policy 请求记录",
+        description:
+          "查看上游以 cyber_policy 标记的请求，支持按用户、分组、模型、端点和时间范围筛选，并按当前筛选条件导出。",
+        loadFailed: "加载 Cyber Policy 请求记录失败",
+        empty: "当前筛选条件下暂无 Cyber Policy 请求",
+        export: "导出当前筛选",
+        exporting: "正在导出",
+        exportSuccess: "Cyber Policy 请求记录已导出",
+        exportFailed: "导出 Cyber Policy 请求记录失败",
+        exportTruncated: "导出已完成，但记录超过服务端上限，仅包含前 {limit} 条。请缩小筛选范围后重新导出。",
+        invalidRange: "开始时间必须早于结束时间",
+        rangeTooLong: "时间范围不能超过 31 天",
+        truncated: "已截断",
+        detailTitle: "Cyber Policy 请求详情",
+        detailFailed: "加载 Cyber Policy 请求详情失败",
+        contentTitle: "请求内容",
+        contentNotice: "已脱敏，可能因长度限制被截断",
+        requestBytes: "原始请求字节数",
+        noContent: "未保存请求正文",
+        upstreamErrorTitle: "上游错误详情",
+        filters: {
+          user: "用户",
+          userPlaceholder: "用户 ID、用户名或邮箱",
+          group: "分组",
+          groupPlaceholder: "分组 ID 或名称",
+          model: "模型",
+          modelPlaceholder: "请求模型或上游模型",
+          endpoint: "端点",
+          endpointPlaceholder: "入口或上游端点",
+          from: "开始时间",
+          to: "结束时间",
+          defaultRangeHint: "未指定时间时默认查询最近 24 小时；单次查询和导出最多 31 天。",
+        },
+        table: {
+          time: "时间 / 请求 ID",
+          group: "分组",
+          user: "用户",
+          route: "模型 / 端点",
+          status: "状态",
+          content: "请求内容摘要",
+        },
+      },
       loadFailed: "加载风控中心失败",
       saveFailed: "保存内容审计配置失败",
       logsFailed: "加载审核记录失败",
@@ -4983,7 +5072,7 @@ export default {
       },
       accountLevel: {
         label: "账号等级",
-        hint: "仅 OpenAI 账号使用。设置后，账号只能绑定并调度到相同等级的共享号池。",
+        hint: "OpenAI 与 Grok 账号使用。设置后，账号只能绑定并调度到相同等级的共享号池。",
         autoDetected: "自动识别",
         autoDetectedHint:
           "OpenAI 账号等级由系统根据账号凭证自动识别，不支持手动修改。",
@@ -4995,6 +5084,12 @@ export default {
         pro: "Pro",
         team: "Team",
         k12: "K12",
+      },
+      grokAccountLevel: {
+        hint: "必须手动选择 Free 或 Heavy；选择公开共享后，账号会在校验通过时进入对应等级的 Grok 共享号池。",
+        required: "请先选择 Grok 账号等级",
+        freeDescription: "标准 Grok Free 账号",
+        heavyDescription: "SuperGrok Heavy 账号",
       },
       syncFromCrs: "从 CRS 同步",
       dataExport: "导出",
@@ -5972,6 +6067,14 @@ export default {
           refreshTokenAuth: "手动输入 RT",
           mobileRefreshTokenAuth: "手动输入 Mobile RT",
           accessTokenAuth: "手动输入 AT",
+          codexPatAuth: "Codex Personal Access Token",
+          codexPatDesc: "输入单个 Codex at- Personal Access Token，系统会先调用 OpenAI whoami 校验，再使用可信身份创建账号。",
+          codexPatInputLabel: "Codex PAT",
+          codexPatPlaceholder: "at-...",
+          codexPatHint: "PAT 是独立认证模式，不保存 Refresh Token，也不会写入 OAuth Access Token 过期时间。令牌撤销后需重新导入。",
+          codexPatImportAndCreate: "校验并创建 Codex PAT 账号",
+          codexPatEmpty: "请输入 Codex Personal Access Token",
+          codexPatImportFailed: "Codex PAT 账号创建失败",
           refreshTokenDesc:
             "输入您已有的 OpenAI Refresh Token，支持批量输入（每行一个），系统将自动验证并创建账号。",
           refreshTokenPlaceholder:
@@ -8172,16 +8275,16 @@ export default {
           configureLink: "前往风控管理配置规则",
           enabled: "启用内容风控",
           enabledHint: "关闭后风控规则不会参与请求处理，已保存的规则会保留。",
-          cyberSessionBlockEnabled: "启用 OpenAI Cyber 分组隔离",
+          cyberSessionBlockEnabled: "启用 OpenAI Cyber 用户当日限制",
           cyberSessionBlockEnabledHint:
             "仅对下方选中的 OpenAI 分组处理上游 cyber_policy；未选分组保持原有错误流程。",
           cyberPolicyGroups: "需要处理 Cyber 的 OpenAI 分组",
           cyberPolicyGroupsHint:
-            "隔离维度为 API Key + 本次实际路由分组；同一 API Key 的其他分组不受影响。",
+            "限制维度为用户 + 本次实际路由分组；同一用户更换、新建或轮换 API Key 均不能绕过，其他未命中的分组不受影响。",
           cyberPolicyScheduleHint:
-            "同一自然日内第一次隔离 5 分钟，第二次隔离 15 分钟，第三次隔离到当天 24:00；每天 00:00 重新计次。缺少显式会话标识时，前两次退化为 API Key + 分组短期隔离。",
+            "第一次结构化 cyber_policy 命中即限制到业务时区当天 24:00；管理员可在风控中心查询和解除。解除后当天再次命中会立即重新限制。",
           cyberPolicyNoGroupsHint:
-            "当前没有选择分组。即使总开关已开启，也不会对任何分组执行 Cyber 专项计次或隔离。",
+            "当前没有选择分组。即使总开关已开启，也不会对任何分组执行 Cyber 用户当日限制。",
         },
         affiliate: {
           title: "邀请收益",

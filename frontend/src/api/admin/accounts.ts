@@ -22,7 +22,8 @@ import type {
   CheckMixedChannelRequest,
   CheckMixedChannelResponse,
   OpenAIQuotaUsage,
-  OpenAIQuotaResetResult
+  OpenAIQuotaResetResult,
+  OpenAICodexPATCreateRequest
 } from '@/types'
 
 /**
@@ -701,6 +702,11 @@ export async function importCredentialContents(
   return data
 }
 
+export async function createOpenAICodexPAT(payload: OpenAICodexPATCreateRequest): Promise<Account> {
+  const { data } = await apiClient.post<Account>('/admin/openai/create-from-codex-pat', payload)
+  return data
+}
+
 /**
  * Get Antigravity default model mapping from backend
  * @returns Default model mapping (from -> to)
@@ -881,6 +887,7 @@ export const accountsAPI = {
   exportData,
   importData,
   importCredentialContents,
+  createOpenAICodexPAT,
   getAntigravityDefaultModelMapping,
   batchClearError,
   batchRefresh,

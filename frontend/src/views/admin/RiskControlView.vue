@@ -23,6 +23,39 @@
           </div>
         </div>
 
+        <nav
+          class="flex min-h-11 max-w-full gap-2 overflow-x-auto border-b border-gray-200 pb-2 dark:border-dark-700"
+          role="tablist"
+          :aria-label="t('admin.riskControl.workspace.tabsLabel')"
+        >
+          <button
+            v-for="(tab, index) in workspaceTabs"
+            :id="workspaceTabId(tab.id)"
+            :key="tab.id"
+            type="button"
+            role="tab"
+            class="inline-flex min-h-11 flex-shrink-0 items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-dark-900"
+            :class="activeWorkspace === tab.id
+              ? 'bg-primary-50 text-primary-700 dark:bg-primary-900/30 dark:text-primary-300'
+              : 'text-gray-500 hover:bg-white hover:text-gray-900 dark:text-gray-400 dark:hover:bg-dark-800 dark:hover:text-white'"
+            :aria-controls="workspacePanelId(tab.id)"
+            :aria-selected="activeWorkspace === tab.id"
+            :tabindex="activeWorkspace === tab.id ? 0 : -1"
+            @click="selectWorkspace(tab.id)"
+            @keydown="handleWorkspaceKeydown($event, index)"
+          >
+            <Icon :name="tab.icon" size="sm" />
+            <span>{{ tab.label }}</span>
+          </button>
+        </nav>
+
+        <section
+          v-show="activeWorkspace === 'moderation'"
+          :id="workspacePanelId('moderation')"
+          role="tabpanel"
+          :aria-labelledby="workspaceTabId('moderation')"
+          class="space-y-6"
+        >
         <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
           <div
             v-for="item in overviewItems"
@@ -183,6 +216,7 @@
                     <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-700 dark:text-gray-300">{{ formatDateTime(row.created_at) }}</td>
                     <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-700 dark:text-gray-300">
                       <div>{{ row.group_name || '-' }}</div>
+                      <div v-if="row.group_id" class="text-xs text-gray-400">ID {{ row.group_id }}</div>
                       <div v-if="row.scope_type === 'account_share_mode'" class="text-xs text-gray-400">
                         {{ accountShareLogMeta(row) }}
                       </div>
@@ -254,6 +288,20 @@
             @update:pageSize="onPageSizeChange"
           />
         </div>
+        </section>
+
+        <template v-if="cyberWorkspaceMounted">
+          <section
+            v-show="activeWorkspace === 'cyberPolicy'"
+            :id="workspacePanelId('cyberPolicy')"
+            role="tabpanel"
+            :aria-labelledby="workspaceTabId('cyberPolicy')"
+            class="space-y-6"
+          >
+            <CyberPolicyRestrictionPanel :groups="groups" />
+            <CyberPolicyRequestsPanel />
+          </section>
+        </template>
       </template>
 
       <BaseDialog :show="settingsOpen" :title="t('admin.riskControl.settingsTitle')" width="extra-wide" @close="settingsOpen = false">
@@ -1052,6 +1100,8 @@ import Icon from '@/components/icons/Icon.vue'
 import Select from '@/components/common/Select.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import Pagination from '@/components/common/Pagination.vue'
+import CyberPolicyRestrictionPanel from '@/components/admin/risk-control/CyberPolicyRestrictionPanel.vue'
+import CyberPolicyRequestsPanel from '@/components/admin/risk-control/CyberPolicyRequestsPanel.vue'
 import { adminAPI } from '@/api/admin'
 import type {
   ContentModerationAccountShareModeScope,
@@ -1073,6 +1123,7 @@ import { extractApiErrorMessage } from '@/utils/apiError'
 import { formatDateTime as formatDateTimeValue } from '@/utils/format'
 
 type SettingsTab = 'basic' | 'sampling' | 'scope' | 'cyberRules' | 'runtime' | 'response' | 'retention'
+type RiskControlWorkspace = 'moderation' | 'cyberPolicy'
 type CyberRuleKey = keyof ContentModerationCyberPreflightRules
 type WorkerSlotState = 'active' | 'idle' | 'disabled'
 type APIKeysWriteMode = 'append' | 'replace'
@@ -1111,6 +1162,8 @@ const unbanningUserID = ref<number | null>(null)
 const accountShareListingsLoading = ref(false)
 const settingsOpen = ref(false)
 const activeSettingsTab = ref<SettingsTab>('basic')
+const activeWorkspace = ref<RiskControlWorkspace>('moderation')
+const cyberWorkspaceMounted = ref(false)
 const groupSearch = ref('')
 const accountShareListingSearch = ref('')
 const flaggedHashInput = ref('')
@@ -1194,6 +1247,19 @@ const settingsTabs = computed<Array<{ id: SettingsTab; label: string }>>(() => [
   { id: 'runtime', label: t('admin.riskControl.tabs.runtime') },
   { id: 'response', label: t('admin.riskControl.tabs.response') },
   { id: 'retention', label: t('admin.riskControl.tabs.retention') },
+])
+
+const workspaceTabs = computed(() => [
+  {
+    id: 'moderation' as const,
+    label: t('admin.riskControl.workspace.moderation'),
+    icon: 'document' as const,
+  },
+  {
+    id: 'cyberPolicy' as const,
+    label: t('admin.riskControl.workspace.cyberPolicy'),
+    icon: 'shield' as const,
+  },
 ])
 
 const modeOptions = computed<SelectOption[]>(() => [
@@ -1810,6 +1876,37 @@ async function clearFlaggedHashes() {
 function openSettings() {
   activeSettingsTab.value = 'basic'
   settingsOpen.value = true
+}
+
+function selectWorkspace(workspace: RiskControlWorkspace): void {
+  activeWorkspace.value = workspace
+  if (workspace === 'cyberPolicy') {
+    cyberWorkspaceMounted.value = true
+  }
+}
+
+function handleWorkspaceKeydown(event: KeyboardEvent, index: number): void {
+  const keys = workspaceTabs.value.map((tab) => tab.id)
+  let nextIndex = index
+  if (event.key === 'ArrowRight') nextIndex = (index + 1) % keys.length
+  else if (event.key === 'ArrowLeft') nextIndex = (index - 1 + keys.length) % keys.length
+  else if (event.key === 'Home') nextIndex = 0
+  else if (event.key === 'End') nextIndex = keys.length - 1
+  else return
+
+  event.preventDefault()
+  const nextWorkspace = keys[nextIndex]
+  if (!nextWorkspace) return
+  selectWorkspace(nextWorkspace)
+  window.requestAnimationFrame(() => document.getElementById(workspaceTabId(nextWorkspace))?.focus())
+}
+
+function workspaceTabId(workspace: RiskControlWorkspace): string {
+  return `admin-risk-control-tab-${workspace}`
+}
+
+function workspacePanelId(workspace: RiskControlWorkspace): string {
+  return `admin-risk-control-panel-${workspace}`
 }
 
 function reloadLogsFromFirstPage() {

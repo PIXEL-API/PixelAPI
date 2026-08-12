@@ -30,7 +30,11 @@
         @select="selectOpenAIAuthMode"
       />
       <AccountLevelSelector
-        v-if="selectedPlatform === 'openai' && selectedOpenAIAuthMode === 'oauth'"
+        v-if="
+          selectedPlatform === 'grok' ||
+          (selectedPlatform === 'openai' && selectedOpenAIAuthMode !== 'agent_identity')
+        "
+        :platform="selectedPlatform"
         :selected-level="selectedAccountLevel"
         @select="selectAccountLevel"
       />
@@ -99,6 +103,7 @@
       />
       <AccountLevelSelector
         v-if="selectedPlatform === 'openai' && selectedOpenAIAuthMode === 'oauth'"
+        :platform="selectedPlatform"
         :selected-level="selectedAccountLevel"
         @select="selectAccountLevel"
       />
@@ -202,12 +207,13 @@ import { useOpenAIOAuth } from '@/composables/useOpenAIOAuth'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { isProxyAccountFull, normalizeProxyAccountCount, normalizeProxyMaxAccounts } from '@/utils/proxyCapacity'
 import { openAIAccountLevelLabel, selectableOpenAIAccountLevels } from '@/utils/openaiAccountLevels'
+import { GROK_ACCOUNT_LEVEL_OPTIONS } from '@/utils/grokAccountLevels'
 import type { ImportCredentialContentsRequest, ImportCredentialContentsResponse } from '@/api/accounts'
 import type { AccountLevel, AccountPlatform, Proxy } from '@/types'
 
-type SelectableOpenAILevel = Exclude<AccountLevel, 'unknown'>
+type SelectableImportLevel = Exclude<AccountLevel, 'unknown'>
 type ImportPlatform = AccountPlatform
-type OpenAIImportAuthMode = 'oauth' | 'agent_identity'
+type OpenAIImportAuthMode = 'oauth' | 'personal_access_token' | 'agent_identity'
 
 interface Props {
   show: boolean
@@ -228,7 +234,7 @@ const openaiOAuth = useOpenAIOAuth('user')
 
 const selectedPlatform = ref<ImportPlatform | ''>('')
 const selectedOpenAIAuthMode = ref<OpenAIImportAuthMode>('oauth')
-const selectedAccountLevel = ref<SelectableOpenAILevel | ''>('')
+const selectedAccountLevel = ref<SelectableImportLevel | ''>('')
 const selectedProxyId = ref<number | null>(null)
 const proxies = ref<Proxy[]>([])
 const proxyLoading = ref(false)
@@ -248,6 +254,9 @@ const openAIAccountLevelConfigs = computed(() => appStore.cachedPublicSettings?.
 const isAgentIdentityImport = computed(() =>
   selectedPlatform.value === 'openai' && selectedOpenAIAuthMode.value === 'agent_identity'
 )
+const isPersonalAccessTokenImport = computed(() =>
+  selectedPlatform.value === 'openai' && selectedOpenAIAuthMode.value === 'personal_access_token'
+)
 
 const requiresOAuthLogin = computed(() =>
   selectedPlatform.value === 'openai' &&
@@ -256,18 +265,30 @@ const requiresOAuthLogin = computed(() =>
     .some(level => level.key === selectedAccountLevel.value && level.requires_proxy_login)
 )
 
+const requiresPersonalAccessTokenProxy = computed(() =>
+  isPersonalAccessTokenImport.value &&
+  selectableOpenAIAccountLevels(openAIAccountLevelConfigs.value)
+    .some(level => level.key === selectedAccountLevel.value && level.requires_proxy_login)
+)
+
 const requiresCredentialImportProxy = computed(() =>
   selectedPlatform.value === 'anthropic' ||
   selectedPlatform.value === 'gemini' ||
   selectedPlatform.value === 'antigravity' ||
-  selectedPlatform.value === 'grok'
+  selectedPlatform.value === 'grok' ||
+  requiresPersonalAccessTokenProxy.value
 )
 
 const canSubmitCredentialImport = computed(() => {
   if (!selectedPlatform.value) return false
+  if (selectedPlatform.value === 'grok' && !selectedAccountLevel.value) return false
   if (selectedPlatform.value === 'openai') {
     if (isAgentIdentityImport.value) return true
-    return Boolean(selectedAccountLevel.value && !requiresOAuthLogin.value)
+    if (!selectedAccountLevel.value || requiresOAuthLogin.value) return false
+    if (requiresPersonalAccessTokenProxy.value) {
+      return Boolean(selectedProxyId.value && !selectedProxyCapacityMessage.value)
+    }
+    return true
   }
   if (requiresCredentialImportProxy.value) {
     return Boolean(selectedProxyId.value && !selectedProxyCapacityMessage.value)
@@ -278,12 +299,17 @@ const canSubmitCredentialImport = computed(() => {
 const importHintText = computed(() =>
   isAgentIdentityImport.value
     ? t('userAccounts.importHintAgentIdentity')
+    : isPersonalAccessTokenImport.value
+      ? t('userAccounts.importHintPersonalAccessToken')
     : t('userAccounts.importHint')
 )
 
 const importWarningText = computed(() => {
   if (isAgentIdentityImport.value) {
     return t('userAccounts.importWarningAgentIdentity', { max: importLimit.value })
+  }
+  if (isPersonalAccessTokenImport.value) {
+    return t('userAccounts.importWarningPersonalAccessToken', { max: importLimit.value })
   }
   switch (selectedPlatform.value) {
     case 'openai':
@@ -305,6 +331,9 @@ const importTextHint = computed(() => {
   if (isAgentIdentityImport.value) {
     return t('userAccounts.importTextHintAgentIdentity')
   }
+  if (isPersonalAccessTokenImport.value) {
+    return t('userAccounts.importTextHintPersonalAccessToken')
+  }
   switch (selectedPlatform.value) {
     case 'openai':
       return t('userAccounts.importTextHintOpenAI')
@@ -324,17 +353,21 @@ const importTextHint = computed(() => {
 const importTextPlaceholder = computed(() =>
   isAgentIdentityImport.value
     ? t('userAccounts.importTextPlaceholderAgentIdentity')
+    : isPersonalAccessTokenImport.value
+      ? t('userAccounts.importTextPlaceholderPersonalAccessToken')
     : t('userAccounts.importTextPlaceholder')
 )
 
 const importFileAccept = computed(() =>
-  isAgentIdentityImport.value
+  isAgentIdentityImport.value || isPersonalAccessTokenImport.value
     ? 'application/json,.json'
     : 'application/json,text/plain,.json,.txt'
 )
 
 const importAllowedExtensions = computed(() =>
-  isAgentIdentityImport.value ? ['.json'] : ['.json', '.txt']
+  isAgentIdentityImport.value || isPersonalAccessTokenImport.value
+    ? ['.json']
+    : ['.json', '.txt']
 )
 
 const selectedPlatformHint = computed(() => {
@@ -448,6 +481,11 @@ const OpenAIAuthModeSelector = defineComponent({
         desc: t('userAccounts.importAuthModeOAuthDesc')
       },
       {
+        value: 'personal_access_token',
+        label: t('userAccounts.importAuthModePersonalAccessToken'),
+        desc: t('userAccounts.importAuthModePersonalAccessTokenDesc')
+      },
+      {
         value: 'agent_identity',
         label: t('userAccounts.importAuthModeAgentIdentity'),
         desc: t('userAccounts.importAuthModeAgentIdentityDesc')
@@ -455,7 +493,7 @@ const OpenAIAuthModeSelector = defineComponent({
     ]
     return () => h('fieldset', { class: 'space-y-2' }, [
       h('legend', { class: 'input-label' }, t('userAccounts.importAuthMode')),
-      h('div', { class: 'grid grid-cols-1 gap-2 sm:grid-cols-2' }, options.map(option => {
+      h('div', { class: 'grid grid-cols-1 gap-2 sm:grid-cols-3' }, options.map(option => {
         const descriptionId = `openai-import-auth-mode-${option.value}-description`
         return h('label', { class: 'block cursor-pointer' }, [
           h('input', {
@@ -487,6 +525,10 @@ const OpenAIAuthModeSelector = defineComponent({
 const AccountLevelSelector = defineComponent({
   name: 'UserImportAccountLevelSelector',
   props: {
+    platform: {
+      type: String,
+      required: true
+    },
     selectedLevel: {
       type: String,
       default: ''
@@ -495,18 +537,31 @@ const AccountLevelSelector = defineComponent({
   emits: ['select'],
   setup(props, { emit }) {
     const appStore = useAppStore()
-    const options = computed<Array<{ value: SelectableOpenAILevel; label: string; desc: string }>>(() =>
-      selectableOpenAIAccountLevels(appStore.cachedPublicSettings?.openai_account_levels).map(level => ({
-        value: level.key as SelectableOpenAILevel,
+    const options = computed<Array<{ value: SelectableImportLevel; label: string; desc: string }>>(() => {
+      if (props.platform === 'grok') {
+        return GROK_ACCOUNT_LEVEL_OPTIONS.map(option => ({
+          value: option.value,
+          label: option.label,
+          desc: t(`admin.accounts.grokAccountLevel.${option.value}Description`)
+        }))
+      }
+      return selectableOpenAIAccountLevels(appStore.cachedPublicSettings?.openai_account_levels).map(level => ({
+        value: level.key as SelectableImportLevel,
         label: level.label,
         desc: level.requires_proxy_login
           ? t('userAccounts.importLevelRequiresProxy', { level: level.label })
           : t('userAccounts.importLevelDirect', { level: level.label })
       }))
-    )
+    })
     return () => h('div', { class: 'space-y-2' }, [
       h('div', { class: 'flex items-center justify-between gap-3' }, [
-        h('label', { class: 'input-label mb-0' }, t('userAccounts.importAccountLevel')),
+        h(
+          'label',
+          { class: 'input-label mb-0' },
+          props.platform === 'grok'
+            ? t('userAccounts.importGrokAccountLevel')
+            : t('userAccounts.importAccountLevel')
+        ),
         props.selectedLevel
           ? h(
               'button',
@@ -519,7 +574,7 @@ const AccountLevelSelector = defineComponent({
             )
           : null
       ]),
-      h('div', { class: 'grid gap-2 sm:grid-cols-4' }, options.value.map(option =>
+      h('div', { class: props.platform === 'grok' ? 'grid grid-cols-1 gap-2 sm:grid-cols-2' : 'grid gap-2 sm:grid-cols-4' }, options.value.map(option =>
         h(
           'button',
           {
@@ -539,18 +594,22 @@ const AccountLevelSelector = defineComponent({
           ]
         )
       )),
-      h('p', { class: 'input-hint' }, t('userAccounts.importAccountLevelHint'))
+      h(
+        'p',
+        { class: 'input-hint' },
+        props.platform === 'grok'
+          ? t('userAccounts.importGrokAccountLevelHint')
+          : t('userAccounts.importAccountLevelHint')
+      )
     ])
   }
 })
 
 watch(
   () => selectedPlatform.value,
-  (platform) => {
+  () => {
     selectedOpenAIAuthMode.value = 'oauth'
-    if (platform !== 'openai') {
-      selectedAccountLevel.value = ''
-    }
+    selectedAccountLevel.value = ''
     selectedProxyId.value = null
     oauthAccountName.value = ''
     proxyLoadMessage.value = ''
@@ -570,7 +629,7 @@ watch(
     openaiOAuth.error.value = ''
     openaiOAuth.resetState()
     oauthFlowRef.value?.reset()
-    if (selectedPlatform.value === 'openai' && requiresOAuthLogin.value) {
+    if (requiresCredentialImportProxy.value || (selectedPlatform.value === 'openai' && requiresOAuthLogin.value)) {
       loadProxies()
     } else {
       selectedProxyId.value = null
@@ -620,7 +679,7 @@ function selectOpenAIAuthMode(mode: OpenAIImportAuthMode): void {
   oauthFlowRef.value?.reset()
 }
 
-function selectAccountLevel(level: SelectableOpenAILevel | ''): void {
+function selectAccountLevel(level: SelectableImportLevel | ''): void {
   selectedAccountLevel.value = level
 }
 
@@ -658,8 +717,10 @@ function importPersonalCredentials(contents: string[]): Promise<ImportCredential
     appStore.showError(t('userAccounts.importPlatformRequired'))
     return Promise.reject(new Error(t('userAccounts.importPlatformRequired')))
   }
-  if (isAgentIdentityImport.value && !contents.every(isValidJSONDocument)) {
-    const message = t('userAccounts.importAgentIdentityJSONRequired')
+  if ((isAgentIdentityImport.value || isPersonalAccessTokenImport.value) && !contents.every(isValidJSONDocument)) {
+    const message = isPersonalAccessTokenImport.value
+      ? t('userAccounts.importPersonalAccessTokenJSONRequired')
+      : t('userAccounts.importAgentIdentityJSONRequired')
     appStore.showError(message)
     return Promise.reject(new Error(message))
   }
@@ -673,14 +734,21 @@ function importPersonalCredentials(contents: string[]): Promise<ImportCredential
     auto_pause_on_expired: PERSONAL_ACCOUNT_DEFAULT_AUTO_PAUSE_ON_EXPIRED
   }
   if (selectedPlatform.value === 'openai') {
+    request.openai_auth_mode = selectedOpenAIAuthMode.value
     if (isAgentIdentityImport.value) {
-      request.openai_auth_mode = 'agent_identity'
       return accountsAPI.importCredentialContents(request)
     }
     const accountLevel = selectedAccountLevel.value
     if (!accountLevel) {
       appStore.showError(t('userAccounts.importAccountLevelRequired'))
       return Promise.reject(new Error(t('userAccounts.importAccountLevelRequired')))
+    }
+    request.account_level = accountLevel
+  } else if (selectedPlatform.value === 'grok') {
+    const accountLevel = selectedAccountLevel.value
+    if (!accountLevel) {
+      appStore.showError(t('userAccounts.importGrokAccountLevelRequired'))
+      return Promise.reject(new Error(t('userAccounts.importGrokAccountLevelRequired')))
     }
     request.account_level = accountLevel
   }

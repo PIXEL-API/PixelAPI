@@ -16,25 +16,41 @@ func TestResolveUserOpenAICredentialImportMode(t *testing.T) {
 		Kind:     service.AccountCredentialImportKindOAuthCredentials,
 		Platform: service.PlatformOpenAI,
 	}
+	personalAccessToken := service.AccountCredentialImportSource{
+		Kind:     service.AccountCredentialImportKindOpenAIPersonalAccessToken,
+		Platform: service.PlatformOpenAI,
+	}
 
 	tests := []struct {
-		name      string
-		req       importUserAccountCredentialsRequest
-		sources   []service.AccountCredentialImportSource
-		wantAgent bool
-		wantErr   bool
+		name     string
+		req      importUserAccountCredentialsRequest
+		sources  []service.AccountCredentialImportSource
+		wantMode string
+		wantErr  bool
 	}{
 		{
-			name:      "declared Agent Identity",
-			req:       importUserAccountCredentialsRequest{Platform: service.PlatformOpenAI, OpenAIAuthMode: userOpenAIAuthModeAgentIdentity},
-			sources:   []service.AccountCredentialImportSource{agentIdentity},
-			wantAgent: true,
+			name:     "declared Agent Identity",
+			req:      importUserAccountCredentialsRequest{Platform: service.PlatformOpenAI, OpenAIAuthMode: userOpenAIAuthModeAgentIdentity},
+			sources:  []service.AccountCredentialImportSource{agentIdentity},
+			wantMode: userOpenAIAuthModeAgentIdentity,
 		},
 		{
-			name:      "legacy client infers Agent Identity",
-			req:       importUserAccountCredentialsRequest{Platform: service.PlatformOpenAI},
-			sources:   []service.AccountCredentialImportSource{agentIdentity},
-			wantAgent: true,
+			name:     "legacy client infers Agent Identity",
+			req:      importUserAccountCredentialsRequest{Platform: service.PlatformOpenAI},
+			sources:  []service.AccountCredentialImportSource{agentIdentity},
+			wantMode: userOpenAIAuthModeAgentIdentity,
+		},
+		{
+			name:     "declared PAT accepts only PAT",
+			req:      importUserAccountCredentialsRequest{Platform: service.PlatformOpenAI, OpenAIAuthMode: userOpenAIAuthModePersonalAccessToken},
+			sources:  []service.AccountCredentialImportSource{personalAccessToken},
+			wantMode: userOpenAIAuthModePersonalAccessToken,
+		},
+		{
+			name:     "legacy client infers PAT",
+			req:      importUserAccountCredentialsRequest{Platform: service.PlatformOpenAI},
+			sources:  []service.AccountCredentialImportSource{personalAccessToken},
+			wantMode: userOpenAIAuthModePersonalAccessToken,
 		},
 		{
 			name:    "declared Agent Identity rejects OAuth",
@@ -46,6 +62,18 @@ func TestResolveUserOpenAICredentialImportMode(t *testing.T) {
 			name:    "declared OAuth rejects Agent Identity",
 			req:     importUserAccountCredentialsRequest{Platform: service.PlatformOpenAI, OpenAIAuthMode: userOpenAIAuthModeOAuth},
 			sources: []service.AccountCredentialImportSource{agentIdentity},
+			wantErr: true,
+		},
+		{
+			name:    "declared OAuth rejects PAT",
+			req:     importUserAccountCredentialsRequest{Platform: service.PlatformOpenAI, OpenAIAuthMode: userOpenAIAuthModeOAuth},
+			sources: []service.AccountCredentialImportSource{personalAccessToken},
+			wantErr: true,
+		},
+		{
+			name:    "declared PAT rejects OAuth",
+			req:     importUserAccountCredentialsRequest{Platform: service.PlatformOpenAI, OpenAIAuthMode: userOpenAIAuthModePersonalAccessToken},
+			sources: []service.AccountCredentialImportSource{oauth},
 			wantErr: true,
 		},
 		{
@@ -64,13 +92,13 @@ func TestResolveUserOpenAICredentialImportMode(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			gotAgent, err := resolveUserOpenAICredentialImportMode(test.req, test.sources)
+			gotMode, err := resolveUserOpenAICredentialImportMode(test.req, test.sources)
 			if test.wantErr {
 				require.Error(t, err)
 				return
 			}
 			require.NoError(t, err)
-			require.Equal(t, test.wantAgent, gotAgent)
+			require.Equal(t, test.wantMode, gotMode)
 		})
 	}
 }

@@ -1945,7 +1945,7 @@ func setDefaults() {
 	viper.SetDefault("server.idle_timeout", 120)       // 120秒空闲超时
 	viper.SetDefault("server.shutdown_timeout_seconds", defaultServerShutdownTimeoutSeconds)
 	viper.SetDefault("server.drain_delay_seconds", 10)
-	viper.SetDefault("server.http_drain_timeout_seconds", 300)
+	viper.SetDefault("server.http_drain_timeout_seconds", 30)
 	viper.SetDefault("server.cleanup_timeout_seconds", 30)
 	viper.SetDefault("server.trusted_proxies", []string{})
 	viper.SetDefault("server.max_request_body_size", int64(256*1024*1024))

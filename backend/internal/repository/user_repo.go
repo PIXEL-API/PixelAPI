@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -551,14 +552,16 @@ func (r *userRepository) ListWithFilters(ctx context.Context, params pagination.
 		q = q.Where(dbuser.RoleEQ(filters.Role))
 	}
 	if filters.Search != "" {
-		q = q.Where(
-			dbuser.Or(
-				dbuser.EmailContainsFold(filters.Search),
-				dbuser.UsernameContainsFold(filters.Search),
-				dbuser.NotesContainsFold(filters.Search),
-				dbuser.HasAPIKeysWith(apikey.KeyContainsFold(filters.Search)),
-			),
-		)
+		searchMatches := []predicate.User{
+			dbuser.EmailContainsFold(filters.Search),
+			dbuser.UsernameContainsFold(filters.Search),
+			dbuser.NotesContainsFold(filters.Search),
+			dbuser.HasAPIKeysWith(apikey.KeyContainsFold(filters.Search)),
+		}
+		if userID, err := strconv.ParseInt(filters.Search, 10, 64); err == nil && userID > 0 {
+			searchMatches = append(searchMatches, dbuser.IDEQ(userID))
+		}
+		q = q.Where(dbuser.Or(searchMatches...))
 	}
 
 	if filters.GroupName != "" {

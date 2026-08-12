@@ -586,6 +586,69 @@ func (r *accountRepository) GetOwnedOpenAIAgentIdentityByChatGPTAccountID(
 	return account, nil
 }
 
+// GetOwnedOpenAIPersonalAccessTokenByChatGPTUserID returns one owner's PAT
+// account for a verified ChatGPT user. The auth-mode predicates deliberately
+// exclude ordinary refresh OAuth accounts so a PAT import can never convert a
+// different authentication mode merely because both rows share an identity.
+func (r *accountRepository) GetOwnedOpenAIPersonalAccessTokenByChatGPTUserID(
+	ctx context.Context,
+	ownerUserID int64,
+	chatGPTUserID string,
+) (*service.Account, error) {
+	chatGPTUserID = strings.TrimSpace(chatGPTUserID)
+	if ownerUserID <= 0 || chatGPTUserID == "" {
+		return nil, nil
+	}
+	trimFunction := "BTRIM"
+	if r.client.Driver().Dialect() != dialect.Postgres {
+		trimFunction = "TRIM"
+	}
+
+	m, err := r.client.Account.Query().
+		Where(
+			dbaccount.DeletedAtIsNil(),
+			dbaccount.OwnerUserIDEQ(ownerUserID),
+			dbaccount.PlatformEQ(service.PlatformOpenAI),
+			dbaccount.TypeEQ(service.AccountTypeOAuth),
+			func(selector *entsql.Selector) {
+				credentialsColumn := selector.C(dbaccount.FieldCredentials)
+				selector.Where(entsql.P(func(builder *entsql.Builder) {
+					builder.WriteString("NULLIF(").
+						WriteString(trimFunction).
+						WriteString("(").
+						Ident(credentialsColumn).
+						WriteString("->>'chatgpt_user_id'), '') = ").
+						Arg(chatGPTUserID).
+						WriteString(" AND (LOWER(NULLIF(").
+						WriteString(trimFunction).
+						WriteString("(").
+						Ident(credentialsColumn).
+						WriteString("->>'auth_mode'), '')) IN (").
+						Arg("personalaccesstoken").
+						WriteString(", ").
+						Arg("personal_access_token").
+						WriteString(") OR LOWER(NULLIF(").
+						WriteString(trimFunction).
+						WriteString("(").
+						Ident(credentialsColumn).
+						WriteString("->>'openai_auth_mode'), '')) IN (").
+						Arg("personalaccesstoken").
+						WriteString(", ").
+						Arg("personal_access_token").
+						WriteString("))")
+				}))
+			},
+		).
+		Only(ctx)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return accountEntityToService(m), nil
+}
+
 func (r *accountRepository) IsAccountShareModeListingAccount(ctx context.Context, id int64) (bool, error) {
 	if id <= 0 {
 		return false, nil
@@ -4589,6 +4652,11 @@ func (r *accountRepository) queryAccountsByGroup(ctx context.Context, groupID in
 				return []service.Account{}, nil
 			}
 			preds = append(preds, dbaccount.PlatformEQ(service.PlatformOpenAI), dbaccount.AccountLevelIn(allowedLevels...))
+		} else if group.Platform == service.PlatformGrok && requiredLevel != "" {
+			if !service.IsUserSelectableGrokAccountLevel(requiredLevel) {
+				return []service.Account{}, nil
+			}
+			preds = append(preds, dbaccount.PlatformEQ(service.PlatformGrok), dbaccount.AccountLevelEQ(requiredLevel))
 		}
 	}
 	if opts.status != "" {

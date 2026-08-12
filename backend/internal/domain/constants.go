@@ -39,6 +39,7 @@ const (
 const (
 	AccountLevelUnknown = "unknown"
 	AccountLevelFree    = "free"
+	AccountLevelHeavy   = "heavy"
 	AccountLevelPlus    = "plus"
 	AccountLevelPro     = "pro"
 	AccountLevelTeam    = "team"

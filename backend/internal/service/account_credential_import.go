@@ -36,10 +36,11 @@ func NormalizeUserAccountCredentialImportLimit(limit int) int {
 type AccountCredentialImportKind string
 
 const (
-	AccountCredentialImportKindOAuthCredentials    AccountCredentialImportKind = "oauth_credentials"
-	AccountCredentialImportKindOpenAIRefreshToken  AccountCredentialImportKind = "openai_refresh_token"
-	AccountCredentialImportKindClaudeSessionKey    AccountCredentialImportKind = "claude_session_key"
-	AccountCredentialImportKindOpenAIAgentIdentity AccountCredentialImportKind = "openai_agent_identity"
+	AccountCredentialImportKindOAuthCredentials          AccountCredentialImportKind = "oauth_credentials"
+	AccountCredentialImportKindOpenAIRefreshToken        AccountCredentialImportKind = "openai_refresh_token"
+	AccountCredentialImportKindClaudeSessionKey          AccountCredentialImportKind = "claude_session_key"
+	AccountCredentialImportKindOpenAIAgentIdentity       AccountCredentialImportKind = "openai_agent_identity"
+	AccountCredentialImportKindOpenAIPersonalAccessToken AccountCredentialImportKind = "openai_personal_access_token"
 )
 
 type AccountCredentialImportSource struct {
@@ -364,6 +365,9 @@ func accountCredentialImportSourceFromMap(item map[string]any) (AccountCredentia
 	if source, handled, err := accountCredentialImportSourceFromAgentIdentity(item); handled || err != nil {
 		return source, err
 	}
+	if source, handled, err := accountCredentialImportSourceFromPersonalAccessTokenAccountEnvelope(item); handled || err != nil {
+		return source, err
+	}
 	if source, handled, err := accountCredentialImportSourceFromCodexManagerExport(item); handled || err != nil {
 		return source, err
 	}
@@ -503,6 +507,125 @@ func accountCredentialImportSourceFromMap(item map[string]any) (AccountCredentia
 		return accountCredentialImportSourceFromString(value, name, notes)
 	}
 	return AccountCredentialImportSource{}, fmt.Errorf("unsupported credential import item")
+}
+
+func accountCredentialImportSourceFromPersonalAccessTokenAccountEnvelope(item map[string]any) (AccountCredentialImportSource, bool, error) {
+	credentials := importMapField(item, "credentials")
+	authMode, hasAuthMode, err := importUniqueStringField(credentials, "auth_mode", "auth_mode", "authMode")
+	if err != nil {
+		return AccountCredentialImportSource{}, true, err
+	}
+	legacyMode, hasLegacyMode, err := importUniqueStringField(credentials, "openai_auth_mode", "openai_auth_mode", "openaiAuthMode")
+	if err != nil {
+		return AccountCredentialImportSource{}, true, err
+	}
+	if !hasAuthMode && !hasLegacyMode {
+		return AccountCredentialImportSource{}, false, nil
+	}
+	if (hasAuthMode && !isOpenAIPersonalAccessTokenAuthMode(authMode)) ||
+		(hasLegacyMode && !isOpenAIPersonalAccessTokenAuthMode(legacyMode)) {
+		return AccountCredentialImportSource{}, true, fmt.Errorf("OpenAI personal access token auth mode is invalid")
+	}
+
+	if _, found, fieldErr := importUniqueStringField(item, "auth_mode", "auth_mode", "authMode", "openai_auth_mode", "openaiAuthMode"); fieldErr != nil || found {
+		if fieldErr != nil {
+			return AccountCredentialImportSource{}, true, fieldErr
+		}
+		return AccountCredentialImportSource{}, true, fmt.Errorf("OpenAI personal access token auth mode must be declared only inside credentials")
+	}
+	if normalizeCredentialImportPlatform(importStringField(item, "platform", "provider", "service")) != PlatformOpenAI {
+		return AccountCredentialImportSource{}, true, fmt.Errorf("OpenAI personal access token account platform must be OpenAI")
+	}
+	if strings.ToLower(strings.TrimSpace(importStringField(item, "type", "account_type", "accountType"))) != AccountTypeOAuth {
+		return AccountCredentialImportSource{}, true, fmt.Errorf("OpenAI personal access token account type must be OAuth")
+	}
+
+	accessToken, hasAccessToken, err := importUniqueStringField(credentials, "access_token", "access_token", "accessToken")
+	if err != nil {
+		return AccountCredentialImportSource{}, true, err
+	}
+	if !hasAccessToken || !strings.HasPrefix(strings.TrimSpace(accessToken), "at-") {
+		return AccountCredentialImportSource{}, true, fmt.Errorf("OpenAI personal access token must start with at-")
+	}
+
+	outerSafety := copyImportMap(item)
+	removeImportMapField(outerSafety, "credentials")
+	if field, found := findOAuthTokenCredentialImportField(outerSafety); found {
+		return AccountCredentialImportSource{}, true, fmt.Errorf("OpenAI personal access token account must not include token field outside credentials: %s", field)
+	}
+	if field, found := findDisallowedCredentialImportField(outerSafety); found {
+		return AccountCredentialImportSource{}, true, fmt.Errorf("disallowed credential field: %s", field)
+	}
+
+	credentialSafety := copyImportMap(credentials)
+	removeImportMapField(credentialSafety, "auth_mode")
+	removeImportMapField(credentialSafety, "authMode")
+	removeImportMapField(credentialSafety, "openai_auth_mode")
+	removeImportMapField(credentialSafety, "openaiAuthMode")
+	removeImportMapField(credentialSafety, "access_token")
+	removeImportMapField(credentialSafety, "accessToken")
+	if field, found := findOpenAIPersonalAccessTokenForbiddenCredentialField(credentialSafety); found {
+		return AccountCredentialImportSource{}, true, fmt.Errorf("OpenAI personal access token account must not include OAuth-only credential field: %s", field)
+	}
+	if field, found := findDisallowedCredentialImportField(credentialSafety); found {
+		return AccountCredentialImportSource{}, true, fmt.Errorf("disallowed credential field: %s", field)
+	}
+
+	return AccountCredentialImportSource{
+		Kind:     AccountCredentialImportKindOpenAIPersonalAccessToken,
+		Name:     credentialImportFirstNonEmptyString(importStringField(item, "name", "label")),
+		Notes:    importOptionalStringField(item, "notes", "note", "description"),
+		Platform: PlatformOpenAI,
+		Token:    strings.TrimSpace(accessToken),
+	}, true, nil
+}
+
+func importUniqueStringField(values map[string]any, label string, aliases ...string) (string, bool, error) {
+	aliasSet := make(map[string]struct{}, len(aliases))
+	for _, alias := range aliases {
+		aliasSet[normalizeCredentialImportKey(alias)] = struct{}{}
+	}
+	found := false
+	value := ""
+	for key, raw := range values {
+		if _, ok := aliasSet[normalizeCredentialImportKey(key)]; !ok {
+			continue
+		}
+		text, ok := raw.(string)
+		if !ok {
+			return "", true, fmt.Errorf("%s must be a string", label)
+		}
+		text = strings.TrimSpace(text)
+		if found && text != value {
+			return "", true, fmt.Errorf("conflicting %s fields", label)
+		}
+		found = true
+		value = text
+	}
+	return value, found, nil
+}
+
+func findOpenAIPersonalAccessTokenForbiddenCredentialField(value any) (string, bool) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, nested := range typed {
+			canonical := strings.NewReplacer("_", "", "-", "", ".", "").Replace(strings.ToLower(strings.TrimSpace(key)))
+			switch canonical {
+			case "accesstoken", "refreshtoken", "idtoken", "expiresat", "expiresin", "clientid":
+				return key, true
+			}
+			if field, found := findOpenAIPersonalAccessTokenForbiddenCredentialField(nested); found {
+				return field, true
+			}
+		}
+	case []any:
+		for _, item := range typed {
+			if field, found := findOpenAIPersonalAccessTokenForbiddenCredentialField(item); found {
+				return field, true
+			}
+		}
+	}
+	return "", false
 }
 
 func accountCredentialImportSourceFromAgentIdentityAccountEnvelope(item map[string]any) (AccountCredentialImportSource, bool, error) {

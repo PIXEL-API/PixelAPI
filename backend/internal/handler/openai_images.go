@@ -132,7 +132,7 @@ routeLoop:
 			return
 		}
 		currentAPIKey := routeCandidate.APIKey
-		switch h.checkCyberPolicyRouteBlock(c, currentAPIKey, body, parsed.Model, cyberBlockFormatChat, routeCursor, reqLog) {
+		switch h.checkCyberPolicyRouteBlock(c, currentAPIKey, parsed.Model, cyberBlockFormatChat, routeCursor, reqLog) {
 		case cyberPolicyRouteRejected:
 			return
 		case cyberPolicyRouteSkipped:
@@ -305,7 +305,7 @@ routeLoop:
 			upstreamAttemptID := h.beginOpenAIUpstreamAttempt(c, currentAPIKey, account)
 			result, err := h.gatewayService.ForwardImages(forwardCtx, c, account, body, parsed, channelMapping.MappedModel)
 			cancelForward()
-			cyberPolicyHit, _ := h.recordCyberPolicyHitForAttempt(selectionCtx, c, currentAPIKey, body, upstreamAttemptID)
+			cyberPolicyHit, _ := h.recordCyberPolicyHitForAttempt(selectionCtx, c, currentAPIKey, upstreamAttemptID)
 			forwardDurationMs := time.Since(forwardStart).Milliseconds()
 			recordUsageResult := func(result *service.OpenAIForwardResult) {
 				if result == nil {
@@ -346,6 +346,7 @@ routeLoop:
 					h.ensureForwardErrorResponse(c, streamStarted)
 				}
 				reqLog.Warn("openai.images.cyber_policy_terminal",
+					zap.Int64("user_id", currentAPIKey.UserID),
 					zap.Int64("api_key_id", currentAPIKey.ID),
 					zap.Int64("effective_group_id", apiKeyGroupIDValue(currentAPIKey)),
 					zap.String("upstream_attempt_id", upstreamAttemptID),

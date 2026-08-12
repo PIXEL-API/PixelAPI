@@ -33,12 +33,15 @@ var (
 	ErrOwnedAccountCredentialsInvalid             = infraerrors.BadRequest("OWNED_ACCOUNT_CREDENTIALS_INVALID", "OAuth account credentials must include an access token")
 	ErrOwnedAccountCredentialsNotAllowed          = infraerrors.BadRequest("OWNED_ACCOUNT_CREDENTIALS_NOT_ALLOWED", "user accounts cannot include API keys, custom URLs, upstream endpoints, cookies or manual session credentials")
 	ErrOwnedAgentIdentityCredentialsInvalid       = infraerrors.BadRequest("OWNED_AGENT_IDENTITY_CREDENTIALS_INVALID", "Codex Agent Identity credentials are invalid")
+	ErrOwnedPersonalAccessTokenValidationRequired = infraerrors.BadRequest("OWNED_CODEX_PAT_VALIDATION_REQUIRED", "Codex personal access token must be validated by OpenAI before import")
+	ErrOwnedPersonalAccessTokenLookupUnavailable  = infraerrors.InternalServer("OWNED_CODEX_PAT_LOOKUP_UNAVAILABLE", "Codex personal access token account lookup is unavailable")
 	ErrOwnedAccountConcurrencyOutOfRange          = infraerrors.BadRequest("OWNED_ACCOUNT_CONCURRENCY_OUT_OF_RANGE", "personal account concurrency must be between 1 and 30")
 	ErrOwnedAccountLoadFactorOutOfRange           = infraerrors.BadRequest("OWNED_ACCOUNT_LOAD_FACTOR_OUT_OF_RANGE", fmt.Sprintf("personal account load factor must be between 1 and %d", AccountMaxLoadFactor))
 	ErrOwnedAccountLoadFactorCreditsUnavailable   = infraerrors.InternalServer("OWNED_ACCOUNT_LOAD_FACTOR_CREDITS_UNAVAILABLE", "load factor credit accounting is unavailable")
 	ErrOwnedAccountLoadFactorCreditsInsufficient  = infraerrors.BadRequest("OWNED_ACCOUNT_LOAD_FACTOR_CREDITS_INSUFFICIENT", "load factor credits are insufficient")
 	ErrOwnedAccountLevelNotAllowed                = infraerrors.BadRequest("OWNED_ACCOUNT_LEVEL_NOT_ALLOWED", "user accounts cannot manually change account level")
 	ErrOwnedOpenAIAccountLevelRequired            = infraerrors.BadRequest("OWNED_OPENAI_ACCOUNT_LEVEL_REQUIRED", "OpenAI user accounts must select an account level before import")
+	ErrOwnedGrokAccountLevelRequired              = infraerrors.BadRequest("OWNED_GROK_ACCOUNT_LEVEL_REQUIRED", "Grok user accounts must select the Free or Heavy account level before import")
 	ErrOwnedAccountProxyRequired                  = infraerrors.BadRequest("OWNED_ACCOUNT_PROXY_REQUIRED", "user OAuth accounts must use account login with a selected proxy IP")
 	ErrOwnedOpenAIAccountProxyRequired            = ErrOwnedAccountProxyRequired
 	ErrOwnedAccountGroupPlatformMismatch          = infraerrors.BadRequest("OWNED_ACCOUNT_GROUP_PLATFORM_MISMATCH", "account group platform does not match account platform")
@@ -84,6 +87,7 @@ const accountQuotaPoolDashboardCacheMaxEntries = 4096
 const (
 	AccountLevelUnknown = domain.AccountLevelUnknown
 	AccountLevelFree    = domain.AccountLevelFree
+	AccountLevelHeavy   = domain.AccountLevelHeavy
 	AccountLevelPlus    = domain.AccountLevelPlus
 	AccountLevelPro     = domain.AccountLevelPro
 	AccountLevelTeam    = domain.AccountLevelTeam
@@ -655,6 +659,10 @@ type ownedOpenAIAgentIdentityRepository interface {
 	GetOwnedOpenAIAgentIdentityByChatGPTAccountID(ctx context.Context, ownerUserID int64, chatGPTAccountID string) (*Account, error)
 }
 
+type ownedOpenAIPersonalAccessTokenRepository interface {
+	GetOwnedOpenAIPersonalAccessTokenByChatGPTUserID(ctx context.Context, ownerUserID int64, chatGPTUserID string) (*Account, error)
+}
+
 type ownedLoadFactorCreditAccountRepository interface {
 	UpdateOwnedAccountWithLoadFactorCredits(ctx context.Context, ownerUserID int64, account *Account) (*Account, error)
 }
@@ -959,7 +967,7 @@ func (s *AccountService) CreateOwned(ctx context.Context, ownerUserID int64, req
 	if err := rejectOwnedAccountGrokManagedExtra(req.Extra); err != nil {
 		return nil, err
 	}
-	return s.createOwned(ctx, ownerUserID, req)
+	return s.createOwned(ctx, ownerUserID, req, false)
 }
 
 func (s *AccountService) ImportOwned(ctx context.Context, ownerUserID int64, req CreateAccountRequest) (*Account, error) {
@@ -975,7 +983,7 @@ func (s *AccountService) ImportOwnedWithResult(ctx context.Context, ownerUserID 
 		return nil, err
 	}
 	if !IsOpenAIAgentIdentityCredentials(req.Credentials) {
-		account, err := s.createOwned(ctx, ownerUserID, req)
+		account, err := s.createOwned(ctx, ownerUserID, req, false)
 		if err != nil {
 			return nil, err
 		}
@@ -1004,7 +1012,7 @@ func (s *AccountService) ImportOwnedWithResult(ctx context.Context, ownerUserID 
 		return &OwnedAccountImportResult{Account: account, Updated: true}, nil
 	}
 
-	account, err := s.createOwned(ctx, ownerUserID, req)
+	account, err := s.createOwned(ctx, ownerUserID, req, false)
 	if err == nil {
 		return &OwnedAccountImportResult{Account: account}, nil
 	}
@@ -1027,6 +1035,161 @@ func (s *AccountService) ImportOwnedWithResult(ctx context.Context, ownerUserID 
 		return nil, updateErr
 	}
 	return &OwnedAccountImportResult{Account: account, Updated: true}, nil
+}
+
+// ImportOwnedValidatedPersonalAccessTokenWithResult is the only owned-account
+// import boundary for Codex PAT credentials. It discards caller-provided
+// credentials, rebuilds them exclusively from a successful whoami result, and
+// converges repeated imports on the owner's existing PAT account.
+func (s *AccountService) ImportOwnedValidatedPersonalAccessTokenWithResult(
+	ctx context.Context,
+	ownerUserID int64,
+	req CreateAccountRequest,
+	tokenInfo *OpenAITokenInfo,
+) (*OwnedAccountImportResult, error) {
+	if tokenInfo == nil || !tokenInfo.personalAccessTokenValidated || tokenInfo.AuthMode != OpenAIAuthModePersonalAccessToken ||
+		!strings.HasPrefix(strings.TrimSpace(tokenInfo.AccessToken), "at-") {
+		return nil, ErrOwnedPersonalAccessTokenValidationRequired
+	}
+	req.Platform = PlatformOpenAI
+	req.Type = AccountTypeOAuth
+	req.Credentials = BuildOpenAIPersonalAccessTokenCredentials(tokenInfo)
+	if err := validateOwnedAccountSourceForPlatform(req.Platform, req.Type, req.Credentials, req.Extra); err != nil {
+		return nil, err
+	}
+	chatGPTUserID := importStringField(req.Credentials, "chatgpt_user_id")
+	repo, ok := s.accountRepo.(ownedOpenAIPersonalAccessTokenRepository)
+	if !ok {
+		return nil, ErrOwnedPersonalAccessTokenLookupUnavailable
+	}
+
+	existing, err := repo.GetOwnedOpenAIPersonalAccessTokenByChatGPTUserID(ctx, ownerUserID, chatGPTUserID)
+	if err != nil {
+		return nil, fmt.Errorf("lookup owned Codex PAT account: %w", err)
+	}
+	if existing != nil {
+		account, updateErr := s.updateOwnedPersonalAccessTokenImport(ctx, ownerUserID, existing, req)
+		if updateErr != nil {
+			return nil, updateErr
+		}
+		return &OwnedAccountImportResult{Account: account, Updated: true}, nil
+	}
+
+	account, err := s.createOwned(ctx, ownerUserID, req, true)
+	if err == nil {
+		return &OwnedAccountImportResult{Account: account}, nil
+	}
+	if !errors.Is(err, ErrOwnedAccountAlreadyExists) {
+		return nil, err
+	}
+
+	// A concurrent import may have committed the same owner+ChatGPT-user PAT
+	// after the lookup above. Reload only PAT accounts: a conflicting refresh
+	// OAuth account must remain a conflict instead of being converted silently.
+	existing, lookupErr := repo.GetOwnedOpenAIPersonalAccessTokenByChatGPTUserID(ctx, ownerUserID, chatGPTUserID)
+	if lookupErr != nil {
+		return nil, fmt.Errorf("reload concurrently imported Codex PAT account: %w", lookupErr)
+	}
+	if existing == nil {
+		return nil, err
+	}
+	account, updateErr := s.updateOwnedPersonalAccessTokenImport(ctx, ownerUserID, existing, req)
+	if updateErr != nil {
+		return nil, updateErr
+	}
+	return &OwnedAccountImportResult{Account: account, Updated: true}, nil
+}
+
+func (s *AccountService) updateOwnedPersonalAccessTokenImport(
+	ctx context.Context,
+	ownerUserID int64,
+	account *Account,
+	req CreateAccountRequest,
+) (*Account, error) {
+	if account == nil || account.OwnerUserID == nil || *account.OwnerUserID != ownerUserID || !account.IsOpenAIPersonalAccessToken() {
+		return nil, ErrAccountNotFound
+	}
+
+	// Start from the stored credential set so local routing/model settings survive
+	// a token rotation. Trusted whoami fields always win, then normalization strips
+	// every OAuth-only lifecycle field that an older PAT record may still contain.
+	storedCredentials := mergeAccountMap(account.Credentials, nil)
+	storedExtra := mergeAccountMap(account.Extra, nil)
+	nextCredentials := mergeAccountMap(storedCredentials, req.Credentials)
+	nextCredentials = NormalizeOpenAIPersonalAccessTokenCredentials(account, nil, nextCredentials)
+	nextExtra := mergeAccountMap(storedExtra, req.Extra)
+	if err := validateOwnedAccountSourceMutation(
+		PlatformOpenAI,
+		AccountTypeOAuth,
+		storedCredentials,
+		storedExtra,
+		nextCredentials,
+		nextExtra,
+	); err != nil {
+		return nil, err
+	}
+
+	levelConfigs, err := s.openAIAccountLevelConfigs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	accountLevel, err := resolveOwnedOpenAIAccountLevel(
+		PlatformOpenAI,
+		req.AccountLevel,
+		nextCredentials,
+		nextExtra,
+		levelConfigs,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	before := cloneAccountForNotice(account)
+	account.Credentials = nextCredentials
+	account.Extra = nextExtra
+	account.AccountLevel = accountLevel
+	account.ExpiresAt = nil
+	account.ErrorMessage = ""
+
+	shouldBindGroups := false
+	targetGroupIDs := append([]int64(nil), account.GroupIDs...)
+	if NormalizeAccountShareMode(account.ShareMode) == AccountShareModePublic {
+		targetGroupIDs, err = s.prepareOwnedPublicShareRevalidation(ctx, ownerUserID, account)
+		if err != nil {
+			return nil, err
+		}
+		shouldBindGroups = true
+	}
+
+	if err := s.ensureOwnedAccountNotDuplicate(ctx, ownerUserID, account, account.ID); err != nil {
+		return nil, err
+	}
+	if err := s.withAccountMutationGuard(ctx, AccountMutationGuardRequest{
+		Targets: []AccountMutationGuardTarget{{
+			AccountID:         account.ID,
+			ExpectedUpdatedAt: before.UpdatedAt,
+			After:             account,
+			GroupIDs:          append([]int64(nil), targetGroupIDs...),
+		}},
+		ActorUserID: ownerUserID,
+		Intent:      AccountMutationIntentOwner,
+	}, func(txCtx context.Context) error {
+		if updateErr := s.accountRepo.Update(txCtx, account); updateErr != nil {
+			return fmt.Errorf("update owned Codex PAT account: %w", updateErr)
+		}
+		if shouldBindGroups {
+			if bindErr := s.accountRepo.BindGroups(txCtx, account.ID, targetGroupIDs); bindErr != nil {
+				return fmt.Errorf("bind pending Codex PAT account group: %w", bindErr)
+			}
+			account.GroupIDs = append([]int64(nil), targetGroupIDs...)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	s.notifyAccountChanged(ctx, before, account)
+	return account, nil
 }
 
 func (s *AccountService) updateOwnedAgentIdentityImport(
@@ -1152,7 +1315,7 @@ func (s *AccountService) EnsureOwnedProxyUsableForLogin(ctx context.Context, sco
 	return err
 }
 
-func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req CreateAccountRequest) (*Account, error) {
+func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req CreateAccountRequest, allowValidatedPersonalAccessToken bool) (*Account, error) {
 	if ownerUserID <= 0 {
 		return nil, ErrUserNotFound
 	}
@@ -1160,6 +1323,9 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 		return nil, ErrAccountPlatformUnsupported
 	}
 	isAgentIdentity := IsOpenAIAgentIdentityCredentials(req.Credentials)
+	if IsOpenAIPersonalAccessTokenCredentials(req.Credentials) && !allowValidatedPersonalAccessToken {
+		return nil, ErrOwnedPersonalAccessTokenValidationRequired
+	}
 	if isAgentIdentity {
 		req.Credentials = normalizeOwnedAgentIdentityCredentials(req.Credentials)
 	}
@@ -1197,6 +1363,17 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 			req.ProxyID = proxyID
 		}
 		req.AccountLevel = targetLevel
+	} else if req.Platform == PlatformGrok {
+		if !IsUserSelectableGrokAccountLevel(targetLevel) {
+			return nil, ErrOwnedGrokAccountLevelRequired
+		}
+		if preserveProxy {
+			if proxyID == nil || *proxyID <= 0 {
+				return nil, ErrOwnedAccountProxyRequired
+			}
+			req.ProxyID = proxyID
+		}
+		req.AccountLevel = targetLevel
 	} else {
 		if preserveProxy {
 			if proxyID == nil || *proxyID <= 0 {
@@ -1222,7 +1399,7 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 		shareStatus = AccountShareStatusPending
 	}
 
-	accountLevel, err := resolveOwnedOpenAIAccountLevel(req.Platform, targetLevel, req.Credentials, req.Extra, levelConfigs)
+	accountLevel, err := resolveOwnedAccountLevel(req.Platform, targetLevel, req.Credentials, req.Extra, levelConfigs)
 	if err != nil {
 		return nil, err
 	}
@@ -1343,7 +1520,37 @@ func validateOwnedAccountSourceScoped(
 		return ErrOwnedAccountTypeNotAllowed
 	}
 	isAgentIdentity := IsOpenAIAgentIdentityCredentials(credentials)
-	if isAgentIdentity {
+	isPersonalAccessToken := IsOpenAIPersonalAccessTokenCredentials(credentials)
+	if isPersonalAccessToken {
+		if platform != PlatformOpenAI || strings.ToLower(strings.TrimSpace(accountType)) != AccountTypeOAuth {
+			return ErrOwnedPersonalAccessTokenValidationRequired
+		}
+		if openAICredentialString(credentials[openAIAuthModeCredentialKey]) != OpenAIAuthModePersonalAccessToken ||
+			openAICredentialString(credentials[openAIAuthModeLegacyCredentialKey]) != "personal_access_token" ||
+			!strings.EqualFold(openAICredentialString(credentials["token_type"]), "Bearer") ||
+			!strings.HasPrefix(openAICredentialString(credentials["access_token"]), "at-") {
+			return ErrOwnedPersonalAccessTokenValidationRequired
+		}
+		for _, key := range []string{"email", "chatgpt_user_id", "chatgpt_account_id", "plan_type"} {
+			if !hasNonEmptyStringField(credentials, key) {
+				return ErrOwnedPersonalAccessTokenValidationRequired.WithMetadata(map[string]string{"field": key})
+			}
+		}
+		if _, ok := credentials["chatgpt_account_is_fedramp"].(bool); !ok {
+			return ErrOwnedPersonalAccessTokenValidationRequired.WithMetadata(map[string]string{"field": "chatgpt_account_is_fedramp"})
+		}
+		for _, key := range openAIPersonalAccessTokenOAuthCredentialKeys {
+			if _, exists := credentials[key]; exists {
+				return ErrOwnedPersonalAccessTokenValidationRequired.WithMetadata(map[string]string{"field": key})
+			}
+		}
+		safetyCredentials := mergeAccountMap(scope.credentialsToScan(credentials), nil)
+		removeImportMapField(safetyCredentials, openAIAuthModeCredentialKey)
+		removeImportMapField(safetyCredentials, openAIAuthModeLegacyCredentialKey)
+		if field, ok := findDisallowedOwnedAccountField(safetyCredentials); ok {
+			return ErrOwnedAccountCredentialsNotAllowed.WithMetadata(map[string]string{"section": "credentials", "field": field})
+		}
+	} else if isAgentIdentity {
 		if platform != "" && platform != PlatformOpenAI {
 			return ErrOwnedAgentIdentityCredentialsInvalid.WithMetadata(map[string]string{"field": "platform"})
 		}
@@ -1416,6 +1623,17 @@ func validateOwnedAccountSourceScoped(
 		})
 	}
 	return nil
+}
+
+func resolveOwnedAccountLevel(platform, targetLevel string, credentials, extra map[string]any, configs []OpenAIAccountLevelConfig) (string, error) {
+	if platform == PlatformGrok {
+		target := NormalizeAccountLevel(targetLevel)
+		if !IsUserSelectableGrokAccountLevel(target) {
+			return "", ErrOwnedGrokAccountLevelRequired
+		}
+		return target, nil
+	}
+	return resolveOwnedOpenAIAccountLevel(platform, targetLevel, credentials, extra, configs)
 }
 
 func resolveOwnedOpenAIAccountLevel(platform, targetLevel string, credentials, extra map[string]any, configs []OpenAIAccountLevelConfig) (string, error) {
@@ -1985,6 +2203,10 @@ func (s *AccountService) updateOwnedOnce(ctx context.Context, ownerUserID, accou
 	account, err := s.GetOwnedByID(ctx, ownerUserID, accountID)
 	if err != nil {
 		return nil, err
+	}
+	if account.IsOpenAIPersonalAccessToken() && req.Credentials != nil &&
+		strings.TrimSpace(req.MutationIntent) != AccountMutationIntentSystemTokenRefresh {
+		return nil, ErrOwnedPersonalAccessTokenValidationRequired
 	}
 	before := cloneAccountForNotice(account)
 	// cloneAccountForNotice 只是浅拷贝，两份 Account 共享同一批 map，不能当作
@@ -2817,6 +3039,10 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 		account := accountsByID[accountID]
 		if account == nil || account.OwnerUserID == nil || *account.OwnerUserID != ownerUserID {
 			return nil, ErrAccountNotFound
+		}
+		if account.IsOpenAIPersonalAccessToken() && len(input.Credentials) > 0 {
+			recordBulkFailure(accountID, ErrOwnedPersonalAccessTokenValidationRequired)
+			continue
 		}
 
 		nextCredentials := mergeAccountMap(account.Credentials, input.Credentials)
@@ -3711,6 +3937,32 @@ func (s *AccountService) resolveOwnedPublicShareGroup(ctx context.Context, accou
 		}
 		if matchedGroup != nil {
 			return matchedGroup, nil
+		}
+		return nil, ErrOwnedAccountPublicPoolUnavailable.WithMetadata(map[string]string{
+			"platform":      platform,
+			"account_level": accountLevel,
+		})
+	}
+	if account.Platform == PlatformGrok {
+		accountLevel := NormalizeAccountLevel(account.AccountLevel)
+		if !IsUserSelectableGrokAccountLevel(accountLevel) {
+			return nil, ErrOwnedAccountPublicPoolUnavailable.WithMetadata(map[string]string{
+				"platform":      platform,
+				"account_level": accountLevel,
+			})
+		}
+		for i := range groups {
+			group := groups[i]
+			if NormalizeRequiredAccountLevel(group.RequiredAccountLevel) != accountLevel {
+				continue
+			}
+			eligible, err := s.isOwnedPublicSharePoolGroup(ctx, &group, platform)
+			if err != nil {
+				return nil, err
+			}
+			if eligible {
+				return &group, nil
+			}
 		}
 		return nil, ErrOwnedAccountPublicPoolUnavailable.WithMetadata(map[string]string{
 			"platform":      platform,

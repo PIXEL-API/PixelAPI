@@ -136,7 +136,7 @@ export async function importAccount(accountData: CreateAccountRequest): Promise<
 export interface ImportCredentialContentsRequest {
   contents: string[]
   platform?: Account['platform']
-  openai_auth_mode?: 'agent_identity'
+  openai_auth_mode?: 'oauth' | 'personal_access_token' | 'agent_identity'
   account_level?: Account['account_level']
   proxy_id?: number
   share_mode?: 'private' | 'public'

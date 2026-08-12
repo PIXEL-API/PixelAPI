@@ -397,7 +397,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		}
 		currentAPIKey := routeCandidate.APIKey
 		routingPlatform := openAICompatibleRoutingPlatform(currentAPIKey)
-		switch h.checkCyberPolicyRouteBlock(c, currentAPIKey, sessionHashBody, reqModel, cyberBlockFormatResponses, routeCursor, reqLog) {
+		switch h.checkCyberPolicyRouteBlock(c, currentAPIKey, reqModel, cyberBlockFormatResponses, routeCursor, reqLog) {
 		case cyberPolicyRouteRejected:
 			return
 		case cyberPolicyRouteSkipped:
@@ -657,7 +657,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		upstreamAttemptID := h.beginOpenAIUpstreamAttempt(c, currentAPIKey, account)
 		result, err := h.gatewayService.ForwardWithAnalysis(forwardCtx, c, account, forwardBody, forwardAnalysis)
 		cancelForward()
-		cyberPolicyHit, _ := h.recordCyberPolicyHitForAttempt(dispatchCtx, c, currentAPIKey, sessionHashBody, upstreamAttemptID)
+		cyberPolicyHit, _ := h.recordCyberPolicyHitForAttempt(dispatchCtx, c, currentAPIKey, upstreamAttemptID)
 		forwardDurationMs := time.Since(forwardStart).Milliseconds()
 		recordUsageResult := func(result *service.OpenAIForwardResult) {
 			if result == nil {
@@ -693,6 +693,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				h.ensureForwardErrorResponse(c, streamStarted)
 			}
 			reqLog.Warn("openai.cyber_policy_terminal",
+				zap.Int64("user_id", currentAPIKey.UserID),
 				zap.Int64("api_key_id", currentAPIKey.ID),
 				zap.Int64("effective_group_id", apiKeyGroupIDValue(currentAPIKey)),
 				zap.String("upstream_attempt_id", upstreamAttemptID),
@@ -1069,7 +1070,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		}
 		currentAPIKey := routeCandidate.APIKey
 		routingPlatform := openAICompatibleRoutingPlatform(currentAPIKey)
-		switch h.checkCyberPolicyRouteBlock(c, currentAPIKey, body, reqModel, cyberBlockFormatAnthropic, routeCursor, reqLog) {
+		switch h.checkCyberPolicyRouteBlock(c, currentAPIKey, reqModel, cyberBlockFormatAnthropic, routeCursor, reqLog) {
 		case cyberPolicyRouteRejected:
 			return
 		case cyberPolicyRouteSkipped:
@@ -1288,7 +1289,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		upstreamAttemptID := h.beginOpenAIUpstreamAttempt(c, currentAPIKey, account)
 		result, err := h.gatewayService.ForwardAsAnthropic(forwardCtx, c, account, forwardBody, promptCacheKey, defaultMappedModel)
 		cancelForward()
-		cyberPolicyHit, _ := h.recordCyberPolicyHitForAttempt(c.Request.Context(), c, currentAPIKey, body, upstreamAttemptID)
+		cyberPolicyHit, _ := h.recordCyberPolicyHitForAttempt(c.Request.Context(), c, currentAPIKey, upstreamAttemptID)
 
 		forwardDurationMs := time.Since(forwardStart).Milliseconds()
 		recordUsageResult := func(result *service.OpenAIForwardResult) {
@@ -1325,6 +1326,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				h.ensureAnthropicErrorResponse(c, streamStarted)
 			}
 			reqLog.Warn("openai_messages.cyber_policy_terminal",
+				zap.Int64("user_id", currentAPIKey.UserID),
 				zap.Int64("api_key_id", currentAPIKey.ID),
 				zap.Int64("effective_group_id", apiKeyGroupIDValue(currentAPIKey)),
 				zap.String("upstream_attempt_id", upstreamAttemptID),
@@ -1893,7 +1895,6 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	var scheduleDecision service.OpenAIAccountScheduleDecision
 	var selectedAccountShareCtx context.Context
 	var selectedRoutingModel string
-	var cyberSessionHashWS string
 	var routeBillingGate apiKeyGroupRouteBillingGate
 	for {
 		if failoverClientGone(c) {
@@ -1907,12 +1908,12 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		currentAPIKey = routeCandidate.APIKey
 		effectiveGroupID := apiKeyGroupIDValue(currentAPIKey)
 		setOpsEffectiveRoute(c, currentAPIKey, nil)
-		cyberSessionHashWS = service.CyberPolicyGroupSessionHash(currentAPIKey.ID, effectiveGroupID, c, firstMessage)
-		blockState := h.gatewayService.CheckCyberPolicyBlock(ctx, currentAPIKey.ID, effectiveGroupID, cyberSessionHashWS)
+		blockState := h.gatewayService.CheckCyberPolicyBlock(ctx, currentAPIKey.UserID, effectiveGroupID)
 		if blockState.Blocked {
 			if routeCursor.skipToNext(
 				"cyber_policy_route_blocked",
 				reqLog,
+				zap.Int64("user_id", currentAPIKey.UserID),
 				zap.Int64("api_key_id", currentAPIKey.ID),
 				zap.Int64("effective_group_id", effectiveGroupID),
 				zap.String("block_scope", string(blockState.Scope)),
@@ -2131,8 +2132,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				return nil, service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, cyberPolicyBlockedClientMsg, nil)
 			}
 			effectiveGroupID := apiKeyGroupIDValue(currentAPIKey)
-			turnSessionHash := service.CyberPolicyGroupSessionHash(currentAPIKey.ID, effectiveGroupID, c, payload)
-			blockState := h.gatewayService.CheckCyberPolicyBlock(dispatchCtx, currentAPIKey.ID, effectiveGroupID, turnSessionHash)
+			blockState := h.gatewayService.CheckCyberPolicyBlock(dispatchCtx, currentAPIKey.UserID, effectiveGroupID)
 			if blockState.Blocked {
 				cyberBlockedThisConn = true
 				return nil, service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, cyberPolicyBlockedClientMsg, nil)
@@ -2297,7 +2297,6 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				turnCtx,
 				c,
 				turnAPIKey,
-				payload,
 				turnUpstreamAttemptID,
 			)
 			if cyberPolicyHit && (hitDecision.HitSequence > 0 || hitDecision.Action != service.CyberPolicyBlockScopeNone || hitDecision.Duplicate) {
@@ -2725,7 +2724,6 @@ const (
 func (h *OpenAIGatewayHandler) checkCyberPolicyRouteBlock(
 	c *gin.Context,
 	apiKey *service.APIKey,
-	body []byte,
 	model string,
 	format cyberPolicyBlockFormat,
 	routeCursor *apiKeyGroupRouteCursor,
@@ -2739,14 +2737,14 @@ func (h *OpenAIGatewayHandler) checkCyberPolicyRouteBlock(
 		return cyberPolicyRouteAllowed
 	}
 	setOpsEffectiveRoute(c, apiKey, nil)
-	sessionHash := service.CyberPolicyGroupSessionHash(apiKey.ID, effectiveGroupID, c, body)
-	state := h.gatewayService.CheckCyberPolicyBlock(c.Request.Context(), apiKey.ID, effectiveGroupID, sessionHash)
+	state := h.gatewayService.CheckCyberPolicyBlock(c.Request.Context(), apiKey.UserID, effectiveGroupID)
 	if !state.Blocked {
 		return cyberPolicyRouteAllowed
 	}
 	if routeCursor != nil && routeCursor.skipToNext(
 		"cyber_policy_route_blocked",
 		reqLog,
+		zap.Int64("user_id", apiKey.UserID),
 		zap.Int64("api_key_id", apiKey.ID),
 		zap.Int64("effective_group_id", effectiveGroupID),
 		zap.String("block_scope", string(state.Scope)),
@@ -2778,6 +2776,7 @@ func (h *OpenAIGatewayHandler) checkCyberPolicyRouteBlock(
 	}
 	requestLogger(c, "handler.openai_gateway.cyber_session_block").Warn(
 		"openai.cyber_policy_route_blocked",
+		zap.Int64("user_id", apiKey.UserID),
 		zap.Int64("api_key_id", apiKey.ID),
 		zap.Int64("effective_group_id", effectiveGroupID),
 		zap.String("block_scope", string(state.Scope)),
@@ -2790,7 +2789,6 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyHitForAttempt(
 	ctx context.Context,
 	c *gin.Context,
 	apiKey *service.APIKey,
-	body []byte,
 	upstreamAttemptID string,
 ) (bool, service.CyberPolicyHitDecision) {
 	if h == nil || h.gatewayService == nil || c == nil || apiKey == nil {
@@ -2806,21 +2804,21 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyHitForAttempt(
 	if effectiveGroupID <= 0 {
 		return false, service.CyberPolicyHitDecision{}
 	}
-	sessionHash := service.CyberPolicyGroupSessionHash(apiKey.ID, effectiveGroupID, c, body)
 	decision := h.gatewayService.RecordCyberPolicyHitForEnforcedAttempt(
 		ctx,
-		apiKey.ID,
+		apiKey.UserID,
 		effectiveGroupID,
-		sessionHash,
 		upstreamAttemptID,
 	)
 	if decision.Enforced {
 		requestLogger(c, "handler.openai_gateway.cyber_policy_hit").Warn(
 			"openai.cyber_policy_hit",
+			zap.Int64("user_id", apiKey.UserID),
 			zap.Int64("api_key_id", apiKey.ID),
 			zap.Int64("effective_group_id", effectiveGroupID),
 			zap.Int64("hit_sequence", decision.HitSequence),
 			zap.String("action", string(decision.Action)),
+			zap.Time("blocked_until", decision.BlockedUntil),
 			zap.Bool("duplicate", decision.Duplicate),
 		)
 	}

@@ -154,7 +154,7 @@ func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*
 		var payload OpenAIQuotaUsage
 		resp, err := client.R().
 			SetContext(callCtx).
-			SetHeaders(buildOpenAIQuotaHeaders(authHeaders.Get("Authorization"), chatGPTAccountID)).
+			SetHeaders(buildOpenAIQuotaHeaders(authHeaders.Get("Authorization"), chatGPTAccountID, account.IsChatGPTAccountFedRAMP())).
 			SetSuccessResult(&payload).
 			Get(chatGPTUsageURL)
 		if err != nil {
@@ -213,7 +213,7 @@ func (s *OpenAIQuotaService) queryResetCreditDetails(
 	}
 	resp, err := client.R().
 		SetContext(ctx).
-		SetHeaders(buildOpenAIQuotaHeaders(authHeaders.Get("Authorization"), chatGPTAccountID)).
+		SetHeaders(buildOpenAIQuotaHeaders(authHeaders.Get("Authorization"), chatGPTAccountID, account.IsChatGPTAccountFedRAMP())).
 		Get(chatGPTRateLimitCreditsURL)
 	if err != nil {
 		slog.Warn("openai_quota_reset_credit_details_failed", "account_id", accountID, "error", err)
@@ -267,7 +267,7 @@ func (s *OpenAIQuotaService) ResetCredit(ctx context.Context, accountID int64) (
 	if err != nil {
 		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_QUOTA_AUTH_FAILED", "failed to build authentication: %v", err)
 	}
-	headers := buildOpenAIQuotaHeaders(authHeaders.Get("Authorization"), chatGPTAccountID)
+	headers := buildOpenAIQuotaHeaders(authHeaders.Get("Authorization"), chatGPTAccountID, account.IsChatGPTAccountFedRAMP())
 	headers["content-type"] = "application/json"
 
 	var payload OpenAIQuotaResetResult
@@ -362,8 +362,8 @@ func (s *OpenAIQuotaService) prepareUpstreamCallForAccount(ctx context.Context, 
 	return accessToken, chatGPTAccountID, proxyURL, nil
 }
 
-func buildOpenAIQuotaHeaders(authorization, chatGPTAccountID string) map[string]string {
-	return map[string]string{
+func buildOpenAIQuotaHeaders(authorization, chatGPTAccountID string, fedRAMP bool) map[string]string {
+	headers := map[string]string{
 		"authorization":      authorization,
 		"chatgpt-account-id": chatGPTAccountID,
 		"openai-beta":        openaiQuotaCodexBeta,
@@ -375,6 +375,10 @@ func buildOpenAIQuotaHeaders(authorization, chatGPTAccountID string) map[string]
 		"sec-fetch-dest":     "empty",
 		"priority":           "u=4, i",
 	}
+	if fedRAMP {
+		headers["x-openai-fedramp"] = "true"
+	}
+	return headers
 }
 
 func generateOpenAIQuotaRedeemRequestID() (string, error) {
