@@ -4889,6 +4889,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithReasoning(
 	sawTerminalEvent := false
 	var billingUsageObservation openAIResponsesBillingUsageObservation
 	sawFailedEvent := false
+	semanticOutputSeen := false
 	failedMessage := ""
 	clientOutputStarted := false
 	upstreamRequestID := strings.TrimSpace(resp.Header.Get("x-request-id"))
@@ -5205,6 +5206,21 @@ streamLoop:
 				line = "data: " + string(sanitizedData)
 			}
 			disposition := classifyOpenAIStreamEvent(trimmedData, eventType)
+			semanticOutputSeen = semanticOutputSeen || disposition.semanticOutput
+			if (eventType == "response.completed" || eventType == "response.done") &&
+				!sawFailedEvent &&
+				!semanticOutputSeen &&
+				!clientOutputStarted &&
+				openAIResponsesCompletedEventIsEmpty(dataBytes, usage) {
+				return resultWithUsage(), s.newOpenAIStreamFailoverError(
+					c,
+					account,
+					true,
+					upstreamRequestID,
+					nil,
+					openAIResponsesEmptyCompletedMessage,
+				)
+			}
 			lineStartsClientOutput = forceFlushFailedEvent || disposition.commitPending
 			if guardFirstOutput {
 				guardedEventHasSemanticOutput = guardedEventHasSemanticOutput || disposition.semanticOutput
@@ -6187,6 +6203,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	sawTerminalEvent := false
 	var billingUsageObservation openAIResponsesBillingUsageObservation
 	sawFailedEvent := false
+	responsesSemanticOutputSeen := false
 	failedMessage := ""
 	clientOutputStarted := false
 	neutralKeepaliveWritten := false
@@ -6527,6 +6544,25 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				usage.ImageCount = imageCounter.Count()
 			}
 			disposition := classifyOpenAIStreamEvent(data, eventType)
+			responsesSemanticOutputSeen = responsesSemanticOutputSeen || disposition.semanticOutput
+			if account != nil && account.Platform == PlatformOpenAI &&
+				(eventType == "response.completed" || eventType == "response.done") &&
+				!sawFailedEvent &&
+				!responsesSemanticOutputSeen &&
+				!clientOutputStarted &&
+				openAIResponsesCompletedEventIsEmpty(dataBytes, usage) {
+				failoverErr := s.newOpenAIStreamFailoverError(
+					c,
+					account,
+					false,
+					upstreamRequestID,
+					nil,
+					openAIResponsesEmptyCompletedMessage,
+				)
+				failoverErr.SafeToFailoverAfterWrite = neutralKeepaliveWritten
+				streamFailoverErr = failoverErr
+				return
+			}
 			startsClientOutput := forceFlushFailedEvent || disposition.commitPending
 			guardMayCommit := forceFlushFailedEvent || disposition.semanticOutput || disposition.timerSatisfied
 			if guardFirstOutput {
