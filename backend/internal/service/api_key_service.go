@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"html"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -214,6 +215,36 @@ type UpdateAPIKeyRequest struct {
 	RateLimit1d         *float64 `json:"rate_limit_1d"`
 	RateLimit7d         *float64 `json:"rate_limit_7d"`
 	ResetRateLimitUsage *bool    `json:"reset_rate_limit_usage"` // Reset all usage counters to 0
+}
+
+func validateAPIKeyLimit(v float64) error {
+	if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
+		return infraerrors.BadRequest("API_KEY_LIMIT_INVALID", "API key limits must be finite and non-negative")
+	}
+	return nil
+}
+
+func validateCreateAPIKeyRequest(req CreateAPIKeyRequest) error {
+	for _, v := range []float64{req.Quota, req.RateLimit5h, req.RateLimit1d, req.RateLimit7d} {
+		if err := validateAPIKeyLimit(v); err != nil {
+			return err
+		}
+	}
+	if req.ExpiresInDays != nil && *req.ExpiresInDays <= 0 {
+		return infraerrors.BadRequest("API_KEY_EXPIRY_DAYS_INVALID", "expires_in_days must be greater than zero")
+	}
+	return nil
+}
+
+func validateUpdateAPIKeyRequest(req UpdateAPIKeyRequest) error {
+	for _, v := range []*float64{req.Quota, req.RateLimit5h, req.RateLimit1d, req.RateLimit7d} {
+		if v != nil {
+			if err := validateAPIKeyLimit(*v); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // APIKeyService API Key服务
@@ -540,6 +571,9 @@ func resolveCreateAPIKeyExpiration(req CreateAPIKeyRequest, now time.Time) (*tim
 
 // Create 创建 API Key。
 func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIKeyRequest) (*APIKey, error) {
+	if err := validateCreateAPIKeyRequest(req); err != nil {
+		return nil, err
+	}
 	expiresAt, err := resolveCreateAPIKeyExpiration(req, time.Now())
 	if err != nil {
 		return nil, err
@@ -790,6 +824,9 @@ func apiKeyCredentialWithinLimit(key string) bool {
 
 // Update 更新API Key
 func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req UpdateAPIKeyRequest) (*APIKey, error) {
+	if err := validateUpdateAPIKeyRequest(req); err != nil {
+		return nil, err
+	}
 	apiKey, err := s.apiKeyRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("get api key: %w", err)
