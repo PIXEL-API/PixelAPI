@@ -139,6 +139,12 @@
           <Select v-model="filters.billing_mode" :options="billingModeOptions" @change="emitChange" />
         </div>
 
+
+        <div v-if="mode === 'usage'" class="w-full sm:w-auto sm:min-w-[220px]">
+          <label class="input-label">{{ t('admin.usage.upstreamModelAudit') }}</label>
+          <Select v-model="filters.upstream_model_mismatch" :options="upstreamModelMismatchOptions" @change="emitChange" />
+        </div>
+
         <div v-if="mode === 'errors'" class="w-full sm:w-auto sm:min-w-[180px]">
           <label class="input-label">{{ t('usage.errors.phase') }}</label>
           <Select v-model="filters.error_phase" :options="errorPhaseOptions" @change="emitChange" />
@@ -259,6 +265,12 @@ const billingModeOptions = ref<SelectOption[]>([
   { value: 'token', label: t('admin.usage.billingModeToken') },
   { value: 'per_request', label: t('admin.usage.billingModePerRequest') },
   { value: 'image', label: t('admin.usage.billingModeImage') }
+])
+
+const upstreamModelMismatchOptions = ref<SelectOption[]>([
+  { value: null, label: t('admin.usage.allUpstreamModelAudit') },
+  { value: true, label: t('admin.usage.upstreamModelMismatchOnly') },
+  { value: false, label: t('admin.usage.upstreamModelMatchedOnly') }
 ])
 
 const errorPhaseCodes = ['request', 'auth', 'routing', 'network', 'internal']

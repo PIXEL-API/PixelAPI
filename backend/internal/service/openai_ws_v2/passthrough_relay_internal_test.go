@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,6 +14,50 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+func TestNormalizeRelayResponseModelBoundsUnicodeRunes(t *testing.T) {
+	t.Parallel()
+
+	model := normalizeRelayResponseModel("  " + strings.Repeat("模", relayResponseModelMaxLength+1) + "  ")
+	require.Len(t, []rune(model), relayResponseModelMaxLength)
+	require.Equal(t, strings.Repeat("模", relayResponseModelMaxLength), model)
+	require.Equal(t, strings.Repeat("x", relayResponseModelMaxLength), normalizeRelayResponseModel(strings.Repeat("x", relayResponseModelMaxLength)))
+}
+
+func TestBuildRelayTurnResultResponseModelBillingEligibility(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		eventType string
+		eligible  bool
+	}{
+		{eventType: "response.completed", eligible: true},
+		{eventType: "response.done", eligible: true},
+		{eventType: "response.failed", eligible: false},
+		{eventType: "response.incomplete", eligible: false},
+		{eventType: "response.cancelled", eligible: false},
+		{eventType: "response.canceled", eligible: false},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.eventType, func(t *testing.T) {
+			t.Parallel()
+			result, ok := buildRelayTurnResult(nil, observedUpstreamEvent{
+				terminal:      true,
+				eventType:     test.eventType,
+				responseID:    "resp_test",
+				responseModel: "gpt-response",
+			})
+			require.True(t, ok)
+			require.Equal(t, "gpt-response", result.ResponseModel)
+			require.Equal(t, test.eligible, result.ResponseModelBillingEligible)
+		})
+	}
+
+	withoutModel, ok := buildRelayTurnResult(nil, observedUpstreamEvent{terminal: true, eventType: "response.completed", responseID: "resp_empty"})
+	require.True(t, ok)
+	require.False(t, withoutModel.ResponseModelBillingEligible)
+}
 
 func TestRunEntry_DelegatesRelay(t *testing.T) {
 	t.Parallel()

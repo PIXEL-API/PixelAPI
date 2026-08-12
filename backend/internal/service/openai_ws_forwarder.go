@@ -2045,6 +2045,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	attempt int,
 	lastFailureReason string,
 ) (*OpenAIForwardResult, error) {
+	responseModelObserver := &upstreamResponseModelObserver{}
 	if s == nil || account == nil {
 		return nil, wrapOpenAIWSFallback("invalid_state", errors.New("service or account is nil"))
 	}
@@ -2374,18 +2375,21 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	buildForwardResult := func() *OpenAIForwardResult {
 		usage.ImageCount = imageCounter.Count()
 		result := &OpenAIForwardResult{
-			RequestID:            responseID,
-			Usage:                *usage,
-			BillingUsageComplete: billingUsageObservation.complete(),
-			Model:                originalModel,
-			UpstreamModel:        mappedModel,
-			ServiceTier:          serviceTier,
-			ReasoningEffort:      reasoningEffort,
-			Stream:               reqStream,
-			OpenAIWSMode:         true,
-			ResponseHeaders:      lease.HandshakeHeaders(),
-			Duration:             time.Since(startTime),
-			FirstTokenMs:         firstTokenMs,
+			RequestID:                            responseID,
+			Usage:                                *usage,
+			BillingUsageComplete:                 billingUsageObservation.complete(),
+			Model:                                originalModel,
+			UpstreamModel:                        mappedModel,
+			UpstreamResponseModel:                responseModelObserver.Model(),
+			UpstreamResponseModelConflict:        responseModelObserver.Conflict(),
+			UpstreamResponseModelBillingEligible: responseModelObserver.BillingEligible(),
+			ServiceTier:                          serviceTier,
+			ReasoningEffort:                      reasoningEffort,
+			Stream:                               reqStream,
+			OpenAIWSMode:                         true,
+			ResponseHeaders:                      lease.HandshakeHeaders(),
+			Duration:                             time.Since(startTime),
+			FirstTokenMs:                         firstTokenMs,
 		}
 		applyOpenAIResponseImageAccounting(result, imageBillingConfig)
 		return result
@@ -2549,6 +2553,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		if eventType == "" {
 			continue
 		}
+		responseModelObserver.ObserveOpenAI(message, eventType)
 		eventCount++
 		if firstEventType == "" {
 			firstEventType = eventType
@@ -3410,6 +3415,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 
 	sendAndRelay := func(turnCtx context.Context, turn int, lease *openAIWSConnLease, payload []byte, payloadBytes int, originalModel string, imageBillingConfig openAIResponseImageBillingConfig) (*OpenAIForwardResult, error) {
+		responseModelObserver := &upstreamResponseModelObserver{}
 		if turnCtx == nil {
 			turnCtx = ctx
 		}
@@ -3465,18 +3471,21 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		buildTurnResult := func() *OpenAIForwardResult {
 			usage.ImageCount = imageCounter.Count()
 			result := &OpenAIForwardResult{
-				RequestID:            responseID,
-				Usage:                usage,
-				BillingUsageComplete: billingUsageObservation.complete(),
-				Model:                originalModel,
-				UpstreamModel:        mappedModel,
-				ServiceTier:          extractOpenAIServiceTierFromBody(payload),
-				ReasoningEffort:      extractOpenAIReasoningEffortFromBody(payload, mappedModel, originalModel),
-				Stream:               reqStream,
-				OpenAIWSMode:         true,
-				ResponseHeaders:      lease.HandshakeHeaders(),
-				Duration:             time.Since(turnStart),
-				FirstTokenMs:         firstTokenMs,
+				RequestID:                            responseID,
+				Usage:                                usage,
+				BillingUsageComplete:                 billingUsageObservation.complete(),
+				Model:                                originalModel,
+				UpstreamModel:                        mappedModel,
+				UpstreamResponseModel:                responseModelObserver.Model(),
+				UpstreamResponseModelConflict:        responseModelObserver.Conflict(),
+				UpstreamResponseModelBillingEligible: responseModelObserver.BillingEligible(),
+				ServiceTier:                          extractOpenAIServiceTierFromBody(payload),
+				ReasoningEffort:                      extractOpenAIReasoningEffortFromBody(payload, mappedModel, originalModel),
+				Stream:                               reqStream,
+				OpenAIWSMode:                         true,
+				ResponseHeaders:                      lease.HandshakeHeaders(),
+				Duration:                             time.Since(turnStart),
+				FirstTokenMs:                         firstTokenMs,
 			}
 			applyOpenAIResponseImageAccounting(result, imageBillingConfig)
 			return result
@@ -3505,6 +3514,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			billingUsageObservation.observePayload(upstreamMessage)
 
 			eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(upstreamMessage)
+			responseModelObserver.ObserveOpenAI(upstreamMessage, eventType)
 			if responseID == "" && eventResponseID != "" {
 				responseID = eventResponseID
 			}

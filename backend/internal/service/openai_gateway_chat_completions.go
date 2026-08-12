@@ -51,6 +51,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	promptCacheKey string,
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
+	beginUpstreamResponseModelObservation(c)
 	if account.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
 		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 	}
@@ -204,7 +205,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		ReasoningEffort: reasoningEffort,
 		Stream:          clientStream,
 	}
-	ctx = withOpenAIForwardResultBillingState(ctx, forwardResult, startTime, openAIResponseImageBillingConfig{})
+	ctx = withOpenAIForwardResultBillingState(ctx, c, forwardResult, startTime, openAIResponseImageBillingConfig{})
 
 	// 5. Get access token
 	token, _, err := s.GetAccessToken(ctx, account)
@@ -392,6 +393,10 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
 
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
@@ -411,6 +416,7 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 		if !ok || strings.TrimSpace(payload) == "[DONE]" {
 			continue
 		}
+		observer.ObserveOpenAI([]byte(payload), strings.TrimSpace(gjson.Get(payload, "type").String()))
 		billingUsageObservation.observePayload([]byte(payload))
 
 		var event apicompat.ResponsesStreamEvent
@@ -448,6 +454,7 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 		writeChatCompletionsError(c, http.StatusBadGateway, "api_error", "Upstream stream ended without a terminal response event")
 		return nil, fmt.Errorf("upstream stream ended without terminal event")
 	}
+	observer.Observe(finalResponse.Model, true)
 	if IsOpenAICyberPolicyEnforcedForCurrentAttempt(c) &&
 		strings.EqualFold(strings.TrimSpace(finalResponse.Status), "failed") && finalResponse.Error != nil &&
 		strings.EqualFold(strings.TrimSpace(finalResponse.Error.Code), "cyber_policy") {
@@ -459,7 +466,7 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 			UpstreamOutTok: usage.OutputTokens,
 		})
 		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", clientMsg)
-		return resultForOpenAICompatFailure(requestID, usage, originalModel, billingModel, upstreamModel, finalResponse.ServiceTier, false, startTime),
+		return resultForOpenAICompatFailure(c, requestID, usage, originalModel, billingModel, upstreamModel, finalResponse.ServiceTier, false, startTime),
 			fmt.Errorf("openai cyber_policy: %s", clientMsg)
 	}
 	if strings.EqualFold(strings.TrimSpace(finalResponse.Status), "failed") {
@@ -490,6 +497,7 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 
 	chatResp := apicompat.ResponsesToChatCompletions(finalResponse, originalModel)
 	usage.ResponseServiceTier = finalResponse.ServiceTier
+	markObservedUpstreamResponseModelBillingEligible(c)
 	result := updateOpenAIForwardResultBillingState(ctx, openAIForwardResultSnapshot{
 		requestID:            requestID,
 		responseID:           finalResponse.ID,
@@ -500,6 +508,8 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 	result.Model = originalModel
 	result.BillingModel = billingModel
 	result.UpstreamModel = upstreamModel
+	result.UpstreamResponseModel = observedUpstreamResponseModel(c)
+	result.UpstreamResponseModelConflict = observedUpstreamResponseModelConflict(c)
 	result.ResponseServiceTier = finalResponse.ServiceTier
 	result.Stream = false
 
@@ -524,6 +534,10 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -578,6 +592,8 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		result.Model = originalModel
 		result.BillingModel = billingModel
 		result.UpstreamModel = upstreamModel
+		result.UpstreamResponseModel = observedUpstreamResponseModel(c)
+		result.UpstreamResponseModelConflict = observedUpstreamResponseModelConflict(c)
 		result.ResponseServiceTier = responseServiceTier
 		result.Stream = true
 		return result
@@ -590,9 +606,11 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			firstTokenMs = &ms
 		}
 
-		billingUsageObservation.observePayload([]byte(payload))
+		payloadBytes := []byte(payload)
+		observer.ObserveOpenAI(payloadBytes, strings.TrimSpace(gjson.GetBytes(payloadBytes, "type").String()))
+		billingUsageObservation.observePayload(payloadBytes)
 		var event apicompat.ResponsesStreamEvent
-		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+		if err := json.Unmarshal(payloadBytes, &event); err != nil {
 			logger.L().Warn("openai chat_completions stream: failed to parse event",
 				zap.Error(err),
 				zap.String("request_id", requestID),
@@ -612,7 +630,6 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			responseID = event.Response.ID
 		}
 		if event.Type == "response.failed" {
-			payloadBytes := []byte(payload)
 			if hit, _, msg := detectOpenAICyberPolicyForCurrentAttempt(c, []byte(payload)); hit {
 				clientMsg := openAICyberPolicyClientMessage(msg)
 				MarkOpsCyberPolicy(c, CyberPolicyMark{
@@ -658,6 +675,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			terminalErr = fmt.Errorf("upstream response failed: %s", errMsg)
 			return true
 		}
+		// response.incomplete remains an accepted compatibility terminal for
+		// downstream conversion, while the observer's sticky rejection keeps its
+		// model audit-only and ineligible for billing.
 		successTerminal := event.Type == "response.completed" || event.Type == "response.done" || event.Type == "response.incomplete"
 		if event.Type == "response.done" {
 			event.Type = "response.completed"
@@ -667,6 +687,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		for _, chunk := range chunks {
 			sse, err := apicompat.ChatChunkToSSE(chunk)
 			if err != nil {
+				observer.RejectBilling()
 				terminalErr = fmt.Errorf("marshal chat completions stream chunk: %w", err)
 				return true
 			}
@@ -706,6 +727,8 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		if !sawSuccessTerminal {
 			return result, errors.New("upstream responses stream ended without a successful terminal event")
 		}
+		markObservedUpstreamResponseModelBillingEligible(c)
+		result = resultWithUsage()
 		// Send [DONE] sentinel
 		if _, err := fmt.Fprint(c.Writer, "data: [DONE]\n\n"); err != nil {
 			return result, fmt.Errorf("write chat completions terminal sentinel: %w", err)
@@ -846,6 +869,7 @@ func writeChatCompletionsStreamError(c *gin.Context, errType, message string) bo
 }
 
 func resultForOpenAICompatFailure(
+	c *gin.Context,
 	requestID string,
 	usage OpenAIUsage,
 	model string,
@@ -856,13 +880,15 @@ func resultForOpenAICompatFailure(
 	startTime time.Time,
 ) *OpenAIForwardResult {
 	return &OpenAIForwardResult{
-		RequestID:           requestID,
-		Usage:               usage,
-		Model:               model,
-		BillingModel:        billingModel,
-		UpstreamModel:       upstreamModel,
-		ResponseServiceTier: responseServiceTier,
-		Stream:              stream,
-		Duration:            time.Since(startTime),
+		RequestID:                     requestID,
+		Usage:                         usage,
+		Model:                         model,
+		BillingModel:                  billingModel,
+		UpstreamModel:                 upstreamModel,
+		UpstreamResponseModel:         observedUpstreamResponseModel(c),
+		UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
+		ResponseServiceTier:           responseServiceTier,
+		Stream:                        stream,
+		Duration:                      time.Since(startTime),
 	}
 }

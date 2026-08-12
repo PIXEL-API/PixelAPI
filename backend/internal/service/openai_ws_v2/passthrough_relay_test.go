@@ -522,11 +522,11 @@ func TestRelay_OnTurnComplete_PerTerminalEvent(t *testing.T) {
 	upstreamConn := newPassthroughTestFrameConn([]passthroughTestFrame{
 		{
 			msgType: coderws.MessageText,
-			payload: []byte(`{"type":"response.completed","response":{"id":"resp_turn_1","usage":{"input_tokens":2,"output_tokens":1}}}`),
+			payload: []byte(`{"type":"response.completed","response":{"id":"resp_turn_1","model":"model-a","usage":{"input_tokens":2,"output_tokens":1}}}`),
 		},
 		{
 			msgType: coderws.MessageText,
-			payload: []byte(`{"type":"response.failed","response":{"id":"resp_turn_2","usage":{"input_tokens":3,"output_tokens":4}}}`),
+			payload: []byte(`{"type":"response.failed","response":{"id":"resp_turn_2","model":"model-b","usage":{"input_tokens":3,"output_tokens":4}}}`),
 		},
 	}, true)
 
@@ -546,12 +546,20 @@ func TestRelay_OnTurnComplete_PerTerminalEvent(t *testing.T) {
 	require.Equal(t, "response.completed", turns[0].TerminalEventType)
 	require.Equal(t, 2, turns[0].Usage.InputTokens)
 	require.Equal(t, 1, turns[0].Usage.OutputTokens)
+	require.Equal(t, "model-a", turns[0].ResponseModel)
+	require.False(t, turns[0].ResponseModelConflict)
+	require.True(t, turns[0].ResponseModelBillingEligible)
 	require.Equal(t, "resp_turn_2", turns[1].RequestID)
 	require.Equal(t, "response.failed", turns[1].TerminalEventType)
 	require.Equal(t, 3, turns[1].Usage.InputTokens)
 	require.Equal(t, 4, turns[1].Usage.OutputTokens)
+	require.Equal(t, "model-b", turns[1].ResponseModel)
+	require.False(t, turns[1].ResponseModelConflict)
+	require.False(t, turns[1].ResponseModelBillingEligible)
 	require.Equal(t, 5, result.Usage.InputTokens)
 	require.Equal(t, 5, result.Usage.OutputTokens)
+	require.Equal(t, "model-b", result.ResponseModel)
+	require.False(t, result.ResponseModelBillingEligible)
 }
 
 func TestRelay_OnTurnComplete_ProvidesTurnMetrics(t *testing.T) {

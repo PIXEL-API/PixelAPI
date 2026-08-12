@@ -719,17 +719,20 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	buildCompletedTurnResult := func(turn openaiwsv2.RelayTurnResult) *OpenAIForwardResult {
 		turnUsage := openAIUsageFromWSV2Relay(turn.Usage)
 		turnResult := &OpenAIForwardResult{
-			RequestID:            turn.RequestID,
-			Usage:                turnUsage,
-			BillingUsageComplete: turn.BillingUsageComplete,
-			Model:                turn.RequestModel,
-			UpstreamModel:        turn.RequestModel,
-			ServiceTier:          requestServiceTierPtr.Load(),
-			Stream:               true,
-			OpenAIWSMode:         true,
-			ResponseHeaders:      cloneHeader(handshakeHeaders),
-			Duration:             turn.Duration,
-			FirstTokenMs:         turn.FirstTokenMs,
+			RequestID:                            turn.RequestID,
+			Usage:                                turnUsage,
+			BillingUsageComplete:                 turn.BillingUsageComplete,
+			Model:                                turn.RequestModel,
+			UpstreamModel:                        turn.RequestModel,
+			UpstreamResponseModel:                turn.ResponseModel,
+			UpstreamResponseModelConflict:        turn.ResponseModelConflict,
+			UpstreamResponseModelBillingEligible: turn.ResponseModelBillingEligible,
+			ServiceTier:                          requestServiceTierPtr.Load(),
+			Stream:                               true,
+			OpenAIWSMode:                         true,
+			ResponseHeaders:                      cloneHeader(handshakeHeaders),
+			Duration:                             turn.Duration,
+			FirstTokenMs:                         turn.FirstTokenMs,
 		}
 		applyOpenAIResponseImageAccounting(turnResult, imageBillingConfigStore.Load())
 		return turnResult
@@ -835,17 +838,20 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	})
 
 	result := &OpenAIForwardResult{
-		RequestID:            relayResult.RequestID,
-		Usage:                openAIUsageFromWSV2Relay(relayResult.Usage),
-		BillingUsageComplete: relayResult.BillingUsageComplete,
-		Model:                relayResult.RequestModel,
-		UpstreamModel:        relayResult.RequestModel,
-		ServiceTier:          requestServiceTierPtr.Load(),
-		Stream:               true,
-		OpenAIWSMode:         true,
-		ResponseHeaders:      cloneHeader(handshakeHeaders),
-		Duration:             relayResult.Duration,
-		FirstTokenMs:         relayResult.FirstTokenMs,
+		RequestID:                            relayResult.RequestID,
+		Usage:                                openAIUsageFromWSV2Relay(relayResult.Usage),
+		BillingUsageComplete:                 relayResult.BillingUsageComplete,
+		Model:                                relayResult.RequestModel,
+		UpstreamModel:                        relayResult.RequestModel,
+		UpstreamResponseModel:                relayResult.ResponseModel,
+		UpstreamResponseModelConflict:        relayResult.ResponseModelConflict,
+		UpstreamResponseModelBillingEligible: relayResult.ResponseModelBillingEligible,
+		ServiceTier:                          requestServiceTierPtr.Load(),
+		Stream:                               true,
+		OpenAIWSMode:                         true,
+		ResponseHeaders:                      cloneHeader(handshakeHeaders),
+		Duration:                             relayResult.Duration,
+		FirstTokenMs:                         relayResult.FirstTokenMs,
 	}
 	applyOpenAIResponseImageAccounting(result, imageBillingConfigStore.Load())
 	buildUnsettledTurnResult := func() *OpenAIForwardResult {
@@ -854,15 +860,18 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		completedUsageMu.Unlock()
 		unsettledUsage := subtractOpenAIUsage(result.Usage, settledUsage)
 		partial := &OpenAIForwardResult{
-			Usage:           unsettledUsage,
-			Model:           relayResult.RequestModel,
-			UpstreamModel:   relayResult.RequestModel,
-			ServiceTier:     requestServiceTierPtr.Load(),
-			Stream:          true,
-			OpenAIWSMode:    true,
-			ResponseHeaders: cloneHeader(handshakeHeaders),
-			Duration:        relayResult.Duration,
-			FirstTokenMs:    relayResult.FirstTokenMs,
+			Usage:         unsettledUsage,
+			Model:         relayResult.RequestModel,
+			UpstreamModel: relayResult.RequestModel,
+			// relayResult summarizes the last terminal response. An unsettled active
+			// turn must not inherit that turn's audit model or billing eligibility.
+			UpstreamResponseModelBillingEligible: false,
+			ServiceTier:                          requestServiceTierPtr.Load(),
+			Stream:                               true,
+			OpenAIWSMode:                         true,
+			ResponseHeaders:                      cloneHeader(handshakeHeaders),
+			Duration:                             relayResult.Duration,
+			FirstTokenMs:                         relayResult.FirstTokenMs,
 		}
 		applyOpenAIResponseImageAccounting(partial, imageBillingConfigStore.Load())
 		if !OpenAIForwardResultHasBillableUsage(partial) {

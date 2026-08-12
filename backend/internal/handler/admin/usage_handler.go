@@ -91,6 +91,18 @@ func parseAdminUsageQueryTimeRange(c *gin.Context) (*time.Time, *time.Time, erro
 	return parseAdminUsageDateRange(c)
 }
 
+func parseOptionalBoolUsageFilter(c *gin.Context, name string) (*bool, error) {
+	raw := strings.TrimSpace(c.Query(name))
+	if raw == "" {
+		return nil, nil
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return nil, err
+	}
+	return &value, nil
+}
+
 func parseAdminBalanceLedgerFilters(c *gin.Context) (service.UserBalanceLedgerFilters, error) {
 	var filters service.UserBalanceLedgerFilters
 	if userIDStr := strings.TrimSpace(c.Query("user_id")); userIDStr != "" {
@@ -205,6 +217,11 @@ func (h *UsageHandler) List(c *gin.Context) {
 		bt := int8(val)
 		billingType = &bt
 	}
+	upstreamModelMismatch, err := parseOptionalBoolUsageFilter(c, "upstream_model_mismatch")
+	if err != nil {
+		response.BadRequest(c, "Invalid upstream_model_mismatch value, use true or false")
+		return
+	}
 
 	startTime, endTime, err := parseAdminUsageQueryTimeRange(c)
 	if err != nil {
@@ -219,18 +236,19 @@ func (h *UsageHandler) List(c *gin.Context) {
 		SortOrder: c.DefaultQuery("sort_order", "desc"),
 	}
 	filters := usagestats.UsageLogFilters{
-		UserID:      userID,
-		APIKeyID:    apiKeyID,
-		AccountID:   accountID,
-		GroupID:     groupID,
-		Model:       model,
-		RequestType: requestType,
-		Stream:      stream,
-		BillingType: billingType,
-		BillingMode: billingMode,
-		StartTime:   startTime,
-		EndTime:     endTime,
-		ExactTotal:  exactTotal,
+		UserID:                userID,
+		APIKeyID:              apiKeyID,
+		AccountID:             accountID,
+		GroupID:               groupID,
+		Model:                 model,
+		RequestType:           requestType,
+		Stream:                stream,
+		BillingType:           billingType,
+		BillingMode:           billingMode,
+		UpstreamModelMismatch: upstreamModelMismatch,
+		StartTime:             startTime,
+		EndTime:               endTime,
+		ExactTotal:            exactTotal,
 	}
 
 	records, result, err := h.usageService.ListWithFilters(c.Request.Context(), params, filters)
@@ -376,6 +394,11 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 		bt := int8(val)
 		billingType = &bt
 	}
+	upstreamModelMismatch, err := parseOptionalBoolUsageFilter(c, "upstream_model_mismatch")
+	if err != nil {
+		response.BadRequest(c, "Invalid upstream_model_mismatch value, use true or false")
+		return
+	}
 
 	// Parse date range
 	userTZ := c.Query("timezone")
@@ -426,17 +449,18 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 
 	// Build filters and call GetStatsWithFilters
 	filters := usagestats.UsageLogFilters{
-		UserID:      userID,
-		APIKeyID:    apiKeyID,
-		AccountID:   accountID,
-		GroupID:     groupID,
-		Model:       model,
-		RequestType: requestType,
-		Stream:      stream,
-		BillingType: billingType,
-		BillingMode: billingMode,
-		StartTime:   &startTime,
-		EndTime:     &endTime,
+		UserID:                userID,
+		APIKeyID:              apiKeyID,
+		AccountID:             accountID,
+		GroupID:               groupID,
+		Model:                 model,
+		RequestType:           requestType,
+		Stream:                stream,
+		BillingType:           billingType,
+		BillingMode:           billingMode,
+		UpstreamModelMismatch: upstreamModelMismatch,
+		StartTime:             &startTime,
+		EndTime:               &endTime,
 	}
 
 	stats, err := h.usageService.GetStatsWithFilters(c.Request.Context(), filters)

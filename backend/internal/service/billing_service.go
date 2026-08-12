@@ -770,6 +770,28 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 }
 
 // GetModelPricing 获取模型价格配置
+// HasIdentifiedTokenPricing reports whether model has a deterministic token
+// price. It intentionally excludes family-name guesses used by the ordinary
+// billing fallback path because response-declared model names are untrusted.
+func (s *BillingService) HasIdentifiedTokenPricing(model string) bool {
+	if s == nil {
+		return false
+	}
+	model = strings.ToLower(strings.TrimSpace(model))
+	if model == "" {
+		return false
+	}
+	if s.pricingService != nil {
+		// Pixel's pricing parser retains only entries that declare at least one
+		// input/output token price, so a deterministic hit here is token-capable.
+		if pricing := s.pricingService.GetIdentifiedModelPricing(model); pricing != nil {
+			return true
+		}
+	}
+	pricing, ok := s.fallbackPrices[model]
+	return ok && pricing != nil
+}
+
 func (s *BillingService) GetModelPricing(model string) (*ModelPricing, error) {
 	// 标准化模型名称（转小写）
 	model = strings.ToLower(model)

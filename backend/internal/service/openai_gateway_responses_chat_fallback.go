@@ -16,6 +16,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
 
@@ -27,6 +28,7 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	account *Account,
 	body []byte,
 ) (*OpenAIForwardResult, error) {
+	beginUpstreamResponseModelObservation(c)
 	startTime := time.Now()
 
 	var responsesReq apicompat.ResponsesRequest
@@ -97,7 +99,7 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	if serviceTier == nil {
 		serviceTier = extractOpenAIServiceTierFromBody(chatBody)
 	}
-	ctx = withOpenAIForwardResultBillingState(ctx, &OpenAIForwardResult{
+	ctx = withOpenAIForwardResultBillingState(ctx, c, &OpenAIForwardResult{
 		Model:           originalModel,
 		BillingModel:    billingModel,
 		UpstreamModel:   upstreamModel,
@@ -265,6 +267,9 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
 		})
 		return nil, fmt.Errorf("parse chat completions response: %w", err)
 	}
+	observer := upstreamResponseModelObserverFromContext(c)
+	observer.ObserveOpenAI(respBody, strings.TrimSpace(gjson.GetBytes(respBody, "type").String()))
+	observer.MarkBillingEligible()
 	responsesResp := ChatCompletionsResponseToResponses(&ccResp, originalModel, customTools, toolSearch, namespaceTools)
 
 	usage := OpenAIUsage{}
@@ -405,6 +410,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 			sawDone = true
 			break
 		}
+		upstreamResponseModelObserverFromContext(c).ObserveOpenAI([]byte(payload), strings.TrimSpace(gjson.Get(payload, "type").String()))
 		billingUsageObservation.observePayload([]byte(payload))
 
 		if u := extractOpenAIChatStreamUsage(payload); u != nil {
@@ -439,6 +445,10 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 	result := resultWithUsage()
 	if !sawDone && strings.TrimSpace(state.FinishReason) == "" {
 		return result, errors.New("upstream chat completions stream ended without a completion signal")
+	}
+	if sawDone {
+		markObservedUpstreamResponseModelBillingEligible(c)
+		result = resultWithUsage()
 	}
 	writeEvents(FinalizeChatCompletionsResponsesStream(state))
 	if !clientDisconnected {

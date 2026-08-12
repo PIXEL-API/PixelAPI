@@ -17,6 +17,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
 
@@ -1042,6 +1043,7 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 	body []byte,
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
+	beginUpstreamResponseModelObservation(c)
 	startTime := time.Now()
 	var anthropicReq apicompat.AnthropicRequest
 	if err := json.Unmarshal(body, &anthropicReq); err != nil {
@@ -1079,7 +1081,7 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 		ServiceTier:     serviceTier,
 		Stream:          clientStream,
 	}
-	ctx = withOpenAIForwardResultBillingState(ctx, forwardResult, startTime, openAIResponseImageBillingConfig{})
+	ctx = withOpenAIForwardResultBillingState(ctx, c, forwardResult, startTime, openAIResponseImageBillingConfig{})
 
 	chatBody, err := json.Marshal(chatReq)
 	if err != nil {
@@ -1186,11 +1188,17 @@ func (s *OpenAIGatewayService) bufferDirectChatCompletionsAsAnthropic(
 		}
 		return nil, fmt.Errorf("read upstream body: %w", err)
 	}
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
+	observer.ObserveOpenAI(respBody, strings.TrimSpace(gjson.GetBytes(respBody, "type").String()))
 	var chatResp apicompat.ChatCompletionsResponse
 	if err := json.Unmarshal(respBody, &chatResp); err != nil {
 		writeAnthropicError(c, http.StatusBadGateway, "api_error", "Failed to parse upstream response")
 		return nil, fmt.Errorf("parse chat completions response: %w", err)
 	}
+	markObservedUpstreamResponseModelBillingEligible(c)
 	usage := OpenAIUsage{}
 	if parsed := openAIUsageFromChatCompletionsUsage(string(respBody)); parsed != nil {
 		usage = *parsed
@@ -1204,6 +1212,8 @@ func (s *OpenAIGatewayService) bufferDirectChatCompletionsAsAnthropic(
 	result.Model = originalModel
 	result.BillingModel = billingModel
 	result.UpstreamModel = upstreamModel
+	result.UpstreamResponseModel = observedUpstreamResponseModel(c)
+	result.UpstreamResponseModelConflict = observedUpstreamResponseModelConflict(c)
 	result.ReasoningEffort = reasoningEffort
 	result.ServiceTier = serviceTier
 	result.Stream = false
@@ -1223,6 +1233,10 @@ func (s *OpenAIGatewayService) streamDirectChatCompletionsAsAnthropic(
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
 	state := NewChatCompletionsToAnthropicStreamState(originalModel)
 	var usage OpenAIUsage
 	var billingUsageObservation openAIChatCompletionsBillingUsageObservation
@@ -1288,6 +1302,7 @@ func (s *OpenAIGatewayService) streamDirectChatCompletionsAsAnthropic(
 			sawDone = true
 			continue
 		}
+		observer.ObserveOpenAI([]byte(payload), strings.TrimSpace(gjson.Get(payload, "type").String()))
 		billingUsageObservation.observePayload([]byte(payload))
 		if parsed := extractOpenAIChatStreamUsage(payload); parsed != nil {
 			usage = *parsed
@@ -1311,6 +1326,14 @@ func (s *OpenAIGatewayService) streamDirectChatCompletionsAsAnthropic(
 			responseHeaders:      resp.Header,
 			billingUsageComplete: billingUsageObservation.complete(),
 		})
+		result.Model = originalModel
+		result.BillingModel = billingModel
+		result.UpstreamModel = upstreamModel
+		result.UpstreamResponseModel = observedUpstreamResponseModel(c)
+		result.UpstreamResponseModelConflict = observedUpstreamResponseModelConflict(c)
+		result.ReasoningEffort = reasoningEffort
+		result.ServiceTier = serviceTier
+		result.Stream = true
 		return result, fmt.Errorf("stream usage incomplete: %w", err)
 	}
 	result := updateOpenAIForwardResultBillingState(ctx, openAIForwardResultSnapshot{
@@ -1323,6 +1346,8 @@ func (s *OpenAIGatewayService) streamDirectChatCompletionsAsAnthropic(
 	result.Model = originalModel
 	result.BillingModel = billingModel
 	result.UpstreamModel = upstreamModel
+	result.UpstreamResponseModel = observedUpstreamResponseModel(c)
+	result.UpstreamResponseModelConflict = observedUpstreamResponseModelConflict(c)
 	result.ReasoningEffort = reasoningEffort
 	result.ServiceTier = serviceTier
 	result.Stream = true
@@ -1360,5 +1385,19 @@ func (s *OpenAIGatewayService) streamDirectChatCompletionsAsAnthropic(
 	if clientDisconnected {
 		return result, errors.New("client disconnected while writing final Anthropic stream event")
 	}
+	markObservedUpstreamResponseModelBillingEligible(c)
+	result = updateOpenAIForwardResultBillingState(ctx, openAIForwardResultSnapshot{
+		requestID:            requestID,
+		usage:                &usage,
+		firstTokenMs:         firstTokenMs,
+		responseHeaders:      resp.Header,
+		billingUsageComplete: billingUsageObservation.complete(),
+	})
+	result.Model = originalModel
+	result.BillingModel = billingModel
+	result.UpstreamModel = upstreamModel
+	result.ReasoningEffort = reasoningEffort
+	result.ServiceTier = serviceTier
+	result.Stream = true
 	return result, nil
 }

@@ -25,6 +25,11 @@ const messages: Record<string, string> = {
   'usage.tokenDetails': 'Token Details',
   'usage.totalTokens': 'Total Tokens',
   'usage.cacheHitRate': 'Cache Hit Rate',
+	'usage.upstreamResponseModel': 'Upstream Response Model',
+	'usage.requestedModel': 'Requested Model',
+	'usage.sentUpstreamModel': 'Sent Upstream Model',
+	'usage.modelVariant': 'Version Variant',
+	'usage.modelMismatch': 'Mismatch',
   'admin.usage.inputTokens': 'Input Tokens',
   'admin.usage.outputTokens': 'Output Tokens',
   'admin.usage.cacheReadTokens': 'Cache Read Tokens',
@@ -202,4 +207,35 @@ describe('admin UsageTable tooltip', () => {
     expect(text).toContain('claude-sonnet-4')
     expect(text).toContain('claude-sonnet-4-20250514')
   })
+
+	it('shows the response-declared model and classifies dated aliases as variants', () => {
+	  const row = {
+		request_id: 'req-admin-model-audit-1',
+		model: 'gpt-5',
+		upstream_model: 'gpt-5-latest',
+		upstream_response_model: 'gpt-5-2025-08-07',
+		upstream_model_mismatch: true,
+		actual_cost: 0,
+		total_cost: 0,
+		account_rate_multiplier: 1,
+		rate_multiplier: 1,
+		input_cost: 0,
+		output_cost: 0,
+		cache_creation_cost: 0,
+		cache_read_cost: 0,
+		input_tokens: 0,
+		output_tokens: 0,
+	  }
+
+	  const wrapper = mount(UsageTable, {
+		props: { data: [row], loading: false, columns: [] },
+		global: {
+		  stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true },
+		},
+	  })
+
+	  expect(wrapper.text()).toContain('Upstream Response Model')
+	  expect(wrapper.text()).toContain('gpt-5-2025-08-07')
+	  expect(wrapper.text()).toContain('Version Variant')
+	})
 })

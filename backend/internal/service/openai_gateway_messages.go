@@ -18,6 +18,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
 
@@ -33,6 +34,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	promptCacheKey string,
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
+	beginUpstreamResponseModelObservation(c)
 	if account.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
 		return s.forwardAnthropicViaRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 	}
@@ -220,7 +222,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		ReasoningEffort: reasoningEffort,
 		Stream:          clientStream,
 	}
-	ctx = withOpenAIForwardResultBillingState(ctx, forwardResult, startTime, openAIResponseImageBillingConfig{})
+	ctx = withOpenAIForwardResultBillingState(ctx, c, forwardResult, startTime, openAIResponseImageBillingConfig{})
 
 	// 5. Get access token
 	token, _, err := s.GetAccessToken(ctx, account)
@@ -402,6 +404,10 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
 
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
@@ -422,6 +428,7 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 		if !ok || strings.TrimSpace(payload) == "[DONE]" {
 			continue
 		}
+		observer.ObserveOpenAI([]byte(payload), strings.TrimSpace(gjson.Get(payload, "type").String()))
 		billingUsageObservation.observePayload([]byte(payload))
 
 		var event apicompat.ResponsesStreamEvent
@@ -460,6 +467,7 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 		writeAnthropicError(c, http.StatusBadGateway, "api_error", "Upstream stream ended without a terminal response event")
 		return nil, fmt.Errorf("upstream stream ended without terminal event")
 	}
+	observer.Observe(finalResponse.Model, true)
 	if IsOpenAICyberPolicyEnforcedForCurrentAttempt(c) &&
 		strings.EqualFold(strings.TrimSpace(finalResponse.Status), "failed") && finalResponse.Error != nil &&
 		strings.EqualFold(strings.TrimSpace(finalResponse.Error.Code), "cyber_policy") {
@@ -471,7 +479,7 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 			UpstreamOutTok: usage.OutputTokens,
 		})
 		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", clientMsg)
-		return resultForOpenAICompatFailure(requestID, usage, originalModel, billingModel, upstreamModel, finalResponse.ServiceTier, false, startTime),
+		return resultForOpenAICompatFailure(c, requestID, usage, originalModel, billingModel, upstreamModel, finalResponse.ServiceTier, false, startTime),
 			fmt.Errorf("openai cyber_policy: %s", clientMsg)
 	}
 	if strings.EqualFold(strings.TrimSpace(finalResponse.Status), "failed") {
@@ -502,6 +510,7 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 
 	anthropicResp := apicompat.ResponsesToAnthropic(finalResponse, originalModel)
 	usage.ResponseServiceTier = finalResponse.ServiceTier
+	markObservedUpstreamResponseModelBillingEligible(c)
 	result := updateOpenAIForwardResultBillingState(ctx, openAIForwardResultSnapshot{
 		requestID:            requestID,
 		responseID:           finalResponse.ID,
@@ -512,6 +521,8 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 	result.Model = originalModel
 	result.BillingModel = billingModel
 	result.UpstreamModel = upstreamModel
+	result.UpstreamResponseModel = observedUpstreamResponseModel(c)
+	result.UpstreamResponseModelConflict = observedUpstreamResponseModelConflict(c)
 	result.ResponseServiceTier = finalResponse.ServiceTier
 	result.Stream = false
 
@@ -539,6 +550,10 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -592,6 +607,8 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		result.Model = originalModel
 		result.BillingModel = billingModel
 		result.UpstreamModel = upstreamModel
+		result.UpstreamResponseModel = observedUpstreamResponseModel(c)
+		result.UpstreamResponseModelConflict = observedUpstreamResponseModelConflict(c)
 		result.ResponseServiceTier = responseServiceTier
 		result.Stream = true
 		return result
@@ -606,9 +623,11 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			firstTokenMs = &ms
 		}
 
-		billingUsageObservation.observePayload([]byte(payload))
+		payloadBytes := []byte(payload)
+		observer.ObserveOpenAI(payloadBytes, strings.TrimSpace(gjson.GetBytes(payloadBytes, "type").String()))
+		billingUsageObservation.observePayload(payloadBytes)
 		var event apicompat.ResponsesStreamEvent
-		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+		if err := json.Unmarshal(payloadBytes, &event); err != nil {
 			logger.L().Warn("openai messages stream: failed to parse event",
 				zap.Error(err),
 				zap.String("request_id", requestID),
@@ -631,7 +650,6 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			responseID = event.Response.ID
 		}
 		if eventType == "response.failed" || isBareErrorEvent {
-			payloadBytes := []byte(payload)
 			if hit, _, msg := detectOpenAICyberPolicyForCurrentAttempt(c, []byte(payload)); hit {
 				clientMsg := openAICyberPolicyClientMessage(msg)
 				MarkOpsCyberPolicy(c, CyberPolicyMark{
@@ -677,6 +695,9 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			terminalErr = fmt.Errorf("upstream response failed: %s", errMsg)
 			return true
 		}
+		// response.incomplete remains an accepted compatibility terminal for
+		// downstream conversion, while the observer's sticky rejection keeps its
+		// model audit-only and ineligible for billing.
 		successTerminal := eventType == "response.completed" || eventType == "response.done" || eventType == "response.incomplete"
 		if eventType == "response.done" {
 			event.Type = "response.completed"
@@ -690,6 +711,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		for _, evt := range events {
 			sse, err := apicompat.ResponsesAnthropicEventToSSE(evt)
 			if err != nil {
+				observer.RejectBilling()
 				terminalErr = fmt.Errorf("marshal Anthropic stream event: %w", err)
 				return true
 			}
@@ -730,6 +752,8 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		if !sawSuccessTerminal {
 			return result, errors.New("upstream responses stream ended without a successful terminal event")
 		}
+		markObservedUpstreamResponseModelBillingEligible(c)
+		result = resultWithUsage()
 		if finalEvents := apicompat.FinalizeResponsesAnthropicStream(state); len(finalEvents) > 0 {
 			for _, evt := range finalEvents {
 				sse, err := apicompat.ResponsesAnthropicEventToSSE(evt)

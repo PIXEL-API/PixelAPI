@@ -20,6 +20,22 @@ type dashboardUsageRepoCacheProbe struct {
 	usersTrendCalls atomic.Int32
 }
 
+func (r *dashboardUsageRepoCacheProbe) GetUsageTrendWithUsageFilters(
+	ctx context.Context,
+	startTime, endTime time.Time,
+	granularity string,
+	filters usagestats.UsageLogFilters,
+) ([]usagestats.TrendDataPoint, error) {
+	r.trendCalls.Add(1)
+	return []usagestats.TrendDataPoint{{
+		Date:        "2026-03-11",
+		Requests:    1,
+		TotalTokens: 2,
+		Cost:        3,
+		ActualCost:  4,
+	}}, nil
+}
+
 func (r *dashboardUsageRepoCacheProbe) GetUsageTrendWithFilters(
 	ctx context.Context,
 	startTime, endTime time.Time,
@@ -90,6 +106,97 @@ func TestDashboardHandler_GetUsageTrend_UsesCache(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec2.Code)
 	require.Equal(t, "hit", rec2.Header().Get("X-Snapshot-Cache"))
 	require.Equal(t, int32(1), repo.trendCalls.Load())
+}
+
+func TestDashboardHandler_GetUsageTrend_SeparatesMismatchCacheKeys(t *testing.T) {
+	t.Cleanup(resetDashboardReadCachesForTest)
+	resetDashboardReadCachesForTest()
+
+	gin.SetMode(gin.TestMode)
+	repo := &dashboardUsageRepoCacheProbe{}
+	dashboardSvc := service.NewDashboardService(repo, nil, nil, nil)
+	handler := NewDashboardHandler(dashboardSvc, nil)
+	router := gin.New()
+	router.GET("/admin/dashboard/trend", handler.GetUsageTrend)
+
+	baseURL := "/admin/dashboard/trend?start_date=2026-03-01&end_date=2026-03-07&granularity=day"
+	cases := []struct {
+		name       string
+		url        string
+		wantStatus string
+	}{
+		{name: "unfiltered_miss", url: baseURL, wantStatus: "miss"},
+		{name: "mismatch_true_miss", url: baseURL + "&upstream_model_mismatch=true", wantStatus: "miss"},
+		{name: "mismatch_false_miss", url: baseURL + "&upstream_model_mismatch=false", wantStatus: "miss"},
+		{name: "mismatch_true_hit", url: baseURL + "&upstream_model_mismatch=true", wantStatus: "hit"},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			require.Equal(t, http.StatusOK, rec.Code)
+			require.Equal(t, tt.wantStatus, rec.Header().Get("X-Snapshot-Cache"))
+		})
+	}
+
+	require.Equal(t, int32(3), repo.trendCalls.Load())
+}
+
+func TestDashboardHandler_GetSnapshotV2_SeparatesMismatchCacheKeys(t *testing.T) {
+	t.Cleanup(resetDashboardReadCachesForTest)
+	resetDashboardReadCachesForTest()
+
+	gin.SetMode(gin.TestMode)
+	repo := &dashboardUsageRepoCacheProbe{}
+	dashboardSvc := service.NewDashboardService(repo, nil, nil, nil)
+	handler := NewDashboardHandler(dashboardSvc, nil)
+	router := gin.New()
+	router.GET("/admin/dashboard/snapshot-v2", handler.GetSnapshotV2)
+
+	baseURL := "/admin/dashboard/snapshot-v2?start_date=2026-03-01&end_date=2026-03-07" +
+		"&include_stats=false&include_trend=false&include_model_stats=false" +
+		"&include_group_stats=false&include_users_trend=false"
+	cases := []struct {
+		name       string
+		url        string
+		wantStatus string
+	}{
+		{name: "unfiltered_miss", url: baseURL, wantStatus: "miss"},
+		{name: "mismatch_true_miss", url: baseURL + "&upstream_model_mismatch=true", wantStatus: "miss"},
+		{name: "mismatch_false_miss", url: baseURL + "&upstream_model_mismatch=false", wantStatus: "miss"},
+		{name: "mismatch_false_hit", url: baseURL + "&upstream_model_mismatch=false", wantStatus: "hit"},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			require.Equal(t, http.StatusOK, rec.Code)
+			require.Equal(t, tt.wantStatus, rec.Header().Get("X-Snapshot-Cache"))
+		})
+	}
+}
+
+func TestDashboardHandler_GetSnapshotV2_RejectsInvalidMismatchFilter(t *testing.T) {
+	t.Cleanup(resetDashboardReadCachesForTest)
+	resetDashboardReadCachesForTest()
+
+	gin.SetMode(gin.TestMode)
+	repo := &dashboardUsageRepoCacheProbe{}
+	dashboardSvc := service.NewDashboardService(repo, nil, nil, nil)
+	handler := NewDashboardHandler(dashboardSvc, nil)
+	router := gin.New()
+	router.GET("/admin/dashboard/snapshot-v2", handler.GetSnapshotV2)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/dashboard/snapshot-v2?upstream_model_mismatch=invalid", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), "Invalid upstream_model_mismatch value")
 }
 
 func TestDashboardHandler_GetUserUsageTrend_UsesCache(t *testing.T) {

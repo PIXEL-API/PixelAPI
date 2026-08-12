@@ -65,6 +65,8 @@ const openAIOwnedAccountOrgIdentityUniqueMigration = "168_openai_owned_account_o
 const accountShareSeatCostQueryIndexesMigration = "208_account_share_seat_cost_query_indexes_notx.sql"
 const latestAPIKeyIPIndexMigration = "212_add_usage_logs_api_key_latest_ip_index_notx.sql"
 const latestAPIKeyIPIndex = "idx_usage_logs_api_key_latest_ip"
+const usageLogsUpstreamModelMismatchIndexMigration = "270_add_usage_log_upstream_model_mismatch_index_notx.sql"
+const usageLogsUpstreamModelMismatchIndex = "idx_usage_logs_upstream_model_mismatch_created_at"
 const usageLogImageInputTokensMigration = "216_usage_log_image_input_tokens.sql"
 const openAIOwnedAgentIdentityUniqueMigration = "217_openai_owned_agent_identity_unique_notx.sql"
 const accountShareModeGlobalInvitePolicyIndexesMigration = "220_account_share_mode_global_invite_policy_indexes_notx.sql"
@@ -1047,6 +1049,8 @@ func prepareNonTransactionalMigration(ctx context.Context, db migrationDatabase,
 		return prepareAccountShareSeatCostQueryIndexesMigration(ctx, db)
 	case latestAPIKeyIPIndexMigration:
 		return prepareLatestAPIKeyIPIndexMigration(ctx, db)
+	case usageLogsUpstreamModelMismatchIndexMigration:
+		return dropInvalidIndexIfPresent(ctx, db, usageLogsUpstreamModelMismatchIndex)
 	case accountShareModeGlobalInvitePolicyIndexesMigration:
 		return prepareIndexesForRetry(ctx, db, accountShareModeGlobalInvitePolicyIndexRequirements)
 	case accountShareRuntimeIdentityIndexesMigration:
@@ -1065,15 +1069,19 @@ func prepareNonTransactionalMigration(ctx context.Context, db migrationDatabase,
 }
 
 func prepareLatestAPIKeyIPIndexMigration(ctx context.Context, db migrationDatabase) error {
-	invalid, err := indexIsInvalid(ctx, db, latestAPIKeyIPIndex)
+	return dropInvalidIndexIfPresent(ctx, db, latestAPIKeyIPIndex)
+}
+
+func dropInvalidIndexIfPresent(ctx context.Context, db migrationDatabase, indexName string) error {
+	invalid, err := indexIsInvalid(ctx, db, indexName)
 	if err != nil {
-		return fmt.Errorf("check invalid index %s: %w", latestAPIKeyIPIndex, err)
+		return fmt.Errorf("check invalid index %s: %w", indexName, err)
 	}
 	if !invalid {
 		return nil
 	}
-	if _, err := db.ExecContext(ctx, "DROP INDEX CONCURRENTLY IF EXISTS "+latestAPIKeyIPIndex); err != nil {
-		return fmt.Errorf("drop invalid index %s: %w", latestAPIKeyIPIndex, err)
+	if _, err := db.ExecContext(ctx, "DROP INDEX CONCURRENTLY IF EXISTS "+indexName); err != nil {
+		return fmt.Errorf("drop invalid index %s: %w", indexName, err)
 	}
 	return nil
 }

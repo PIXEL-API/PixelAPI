@@ -33,6 +33,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	body []byte,
 	parsed *ParsedRequest,
 ) (*ForwardResult, error) {
+	beginUpstreamResponseModelObservation(c)
 	startTime := time.Now()
 
 	// 1. Parse Chat Completions request
@@ -243,8 +244,8 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 	var billingUsage billingUsageObservation
 	sawMessageStop := false
 
-	resultWithUsage := func(clientDisconnect bool) *ForwardResult {
-		return &ForwardResult{
+	resultWithUsage := func(clientDisconnect bool, successful bool) *ForwardResult {
+		return applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{
 			RequestID:            requestID,
 			Usage:                usage,
 			BillingUsageComplete: sawMessageStop && billingUsage.complete(),
@@ -254,7 +255,7 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 			Stream:               false,
 			Duration:             time.Since(startTime),
 			ClientDisconnect:     clientDisconnect,
-		}
+		}, successful)
 	}
 
 	for scanner.Scan() {
@@ -266,20 +267,21 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 
 		if !scanner.Scan() {
 			if err := scanner.Err(); err != nil {
-				return gatewayBridgeFailure(resultWithUsage(false), fmt.Errorf("read upstream event %q data: %w", eventType, err))
+				return gatewayBridgeFailure(resultWithUsage(false, false), fmt.Errorf("read upstream event %q data: %w", eventType, err))
 			}
-			return gatewayBridgeFailure(resultWithUsage(false), fmt.Errorf("upstream event %q ended without data", eventType))
+			return gatewayBridgeFailure(resultWithUsage(false, false), fmt.Errorf("upstream event %q ended without data", eventType))
 		}
 		dataLine := scanner.Text()
 		if !strings.HasPrefix(dataLine, "data: ") {
-			return gatewayBridgeFailure(resultWithUsage(false), fmt.Errorf("upstream event %q has invalid data line", eventType))
+			return gatewayBridgeFailure(resultWithUsage(false, false), fmt.Errorf("upstream event %q has invalid data line", eventType))
 		}
 		payload := dataLine[6:]
+		upstreamResponseModelObserverFromContext(c).ObserveAnthropic([]byte(payload))
 		billingUsage.observeAnthropicPayload(payload)
 
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
-			return gatewayBridgeFailure(resultWithUsage(false), fmt.Errorf("parse upstream event %q: %w", eventType, err))
+			return gatewayBridgeFailure(resultWithUsage(false, false), fmt.Errorf("parse upstream event %q: %w", eventType, err))
 		}
 		if event.Type == "" {
 			event.Type = strings.TrimSpace(eventType)
@@ -329,14 +331,14 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 				zap.String("request_id", requestID),
 			)
 		}
-		return gatewayBridgeFailure(resultWithUsage(false), fmt.Errorf("read upstream stream: %w", err))
+		return gatewayBridgeFailure(resultWithUsage(false, false), fmt.Errorf("read upstream stream: %w", err))
 	}
 
 	if !sawMessageStop {
-		return gatewayBridgeFailure(resultWithUsage(false), fmt.Errorf("upstream stream ended without message_stop"))
+		return gatewayBridgeFailure(resultWithUsage(false, false), fmt.Errorf("upstream stream ended without message_stop"))
 	}
 	if finalResp == nil {
-		return gatewayBridgeFailure(resultWithUsage(false), fmt.Errorf("upstream stream ended without response"))
+		return gatewayBridgeFailure(resultWithUsage(false, false), fmt.Errorf("upstream stream ended without response"))
 	}
 
 	// Update usage from accumulated delta
@@ -355,13 +357,13 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 
 	respBytes, err := json.Marshal(ccResp)
 	if err != nil {
-		return gatewayBridgeFailure(resultWithUsage(false), fmt.Errorf("marshal chat completions response: %w", err))
+		return gatewayBridgeFailure(resultWithUsage(false, false), fmt.Errorf("marshal chat completions response: %w", err))
 	}
 	// Marshal then bytes-replace so tool name mapping is reversed at byte level
 	// (parity with Parrot non-stream flow that marshals → restore → emit).
 	respBytes = reverseToolNamesIfPresent(c, respBytes)
 
-	result := resultWithUsage(false)
+	result := resultWithUsage(false, true)
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -420,8 +422,8 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	}
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
 
-	resultWithUsage := func(clientDisconnect bool) *ForwardResult {
-		return &ForwardResult{
+	resultWithUsage := func(clientDisconnect bool, successful bool) *ForwardResult {
+		return applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{
 			RequestID:            requestID,
 			Usage:                usage,
 			BillingUsageComplete: sawMessageStop && billingUsage.complete(),
@@ -432,7 +434,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 			Duration:             time.Since(startTime),
 			FirstTokenMs:         firstTokenMs,
 			ClientDisconnect:     clientDisconnect,
-		}
+		}, successful)
 	}
 
 	writeChunk := func(chunk apicompat.ChatCompletionsChunk) error {
@@ -483,20 +485,21 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 
 		if !scanner.Scan() {
 			if err := scanner.Err(); err != nil {
-				return gatewayBridgeFailure(resultWithUsage(false), fmt.Errorf("read upstream event %q data: %w", eventType, err))
+				return gatewayBridgeFailure(resultWithUsage(false, false), fmt.Errorf("read upstream event %q data: %w", eventType, err))
 			}
-			return gatewayBridgeFailure(resultWithUsage(false), fmt.Errorf("upstream event %q ended without data", eventType))
+			return gatewayBridgeFailure(resultWithUsage(false, false), fmt.Errorf("upstream event %q ended without data", eventType))
 		}
 		dataLine := scanner.Text()
 		if !strings.HasPrefix(dataLine, "data: ") {
-			return gatewayBridgeFailure(resultWithUsage(false), fmt.Errorf("upstream event %q has invalid data line", eventType))
+			return gatewayBridgeFailure(resultWithUsage(false, false), fmt.Errorf("upstream event %q has invalid data line", eventType))
 		}
 		payload := dataLine[6:]
+		upstreamResponseModelObserverFromContext(c).ObserveAnthropic([]byte(payload))
 		billingUsage.observeAnthropicPayload(payload)
 
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
-			return gatewayBridgeFailure(resultWithUsage(false), fmt.Errorf("parse upstream event %q: %w", eventType, err))
+			return gatewayBridgeFailure(resultWithUsage(false, false), fmt.Errorf("parse upstream event %q: %w", eventType, err))
 		}
 		if event.Type == "" {
 			event.Type = strings.TrimSpace(eventType)
@@ -507,7 +510,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		if isMessageStop {
 			sawMessageStop = true
 		}
-		result := resultWithUsage(false)
+		result := resultWithUsage(false, isMessageStop)
 		if isMessageStop {
 			// A real message_stop must drive the terminal chunks. This call is
 			// normally a no-op because response.completed already finalized the
@@ -551,10 +554,10 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 				zap.String("request_id", requestID),
 			)
 		}
-		return gatewayBridgeFailure(resultWithUsage(false), fmt.Errorf("read upstream stream: %w", err))
+		return gatewayBridgeFailure(resultWithUsage(false, false), fmt.Errorf("read upstream stream: %w", err))
 	}
 
-	return gatewayBridgeFailure(resultWithUsage(false), fmt.Errorf("upstream stream ended without message_stop"))
+	return gatewayBridgeFailure(resultWithUsage(false, false), fmt.Errorf("upstream stream ended without message_stop"))
 }
 
 // writeGatewayCCError writes an error in OpenAI Chat Completions format for

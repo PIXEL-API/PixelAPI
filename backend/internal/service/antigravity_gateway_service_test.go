@@ -830,13 +830,16 @@ func TestStreamUpstreamResponse_NormalComplete(t *testing.T) {
 	go func() {
 		defer func() { _ = pw.Close() }()
 		fmt.Fprintln(pw, `event: message_start`)
-		fmt.Fprintln(pw, `data: {"type":"message_start","message":{"usage":{"input_tokens":10}}}`)
+		fmt.Fprintln(pw, `data: {"type":"message_start","message":{"model":"claude-sonnet-4","usage":{"input_tokens":10}}}`)
 		fmt.Fprintln(pw, "")
 		fmt.Fprintln(pw, `event: content_block_delta`)
 		fmt.Fprintln(pw, `data: {"type":"content_block_delta","delta":{"text":"hello"}}`)
 		fmt.Fprintln(pw, "")
 		fmt.Fprintln(pw, `event: message_delta`)
 		fmt.Fprintln(pw, `data: {"type":"message_delta","usage":{"output_tokens":5}}`)
+		fmt.Fprintln(pw, "")
+		fmt.Fprintln(pw, `event: message_stop`)
+		fmt.Fprintln(pw, `data: {"type":"message_stop"}`)
 		fmt.Fprintln(pw, "")
 	}()
 
@@ -854,6 +857,68 @@ func TestStreamUpstreamResponse_NormalComplete(t *testing.T) {
 	require.Contains(t, body, "event: message_start")
 	require.Contains(t, body, "content_block_delta")
 	require.Contains(t, body, "message_delta")
+	require.True(t, observedUpstreamResponseModelProtocolComplete(c))
+	require.Equal(t, "claude-sonnet-4", observedUpstreamResponseModel(c))
+	forwardResult := applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{}, observedUpstreamResponseModelProtocolComplete(c))
+	require.Equal(t, "claude-sonnet-4", forwardResult.UpstreamResponseModel)
+	require.True(t, forwardResult.UpstreamResponseModelBillingEligible)
+}
+
+func TestStreamUpstreamResponse_PartialEOFIsAuditOnly(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := newAntigravityTestService(&config.Config{
+		Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize},
+	})
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body: io.NopCloser(strings.NewReader(
+			"event: message_start\n" +
+				`data: {"type":"message_start","message":{"model":"claude-sonnet-4","usage":{"input_tokens":10}}}` + "\n\n",
+		)),
+		Header: http.Header{},
+	}
+
+	result := svc.streamUpstreamResponse(c, resp, time.Now())
+
+	require.NotNil(t, result)
+	require.Equal(t, "claude-sonnet-4", observedUpstreamResponseModel(c))
+	require.False(t, observedUpstreamResponseModelProtocolComplete(c))
+	forwardResult := applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{}, observedUpstreamResponseModelProtocolComplete(c))
+	require.Equal(t, "claude-sonnet-4", forwardResult.UpstreamResponseModel)
+	require.False(t, forwardResult.UpstreamResponseModelBillingEligible)
+}
+
+func TestStreamUpstreamResponse_EventNameCompletesResponseModelBilling(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := newAntigravityTestService(&config.Config{
+		Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize},
+	})
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body: io.NopCloser(strings.NewReader(
+			"event: message_start\n" +
+				`data: {"type":"message_start","message":{"model":"claude-sonnet-4"}}` + "\n\n" +
+				"event: message_stop\n" +
+				`data: {}` + "\n\n",
+		)),
+		Header: http.Header{},
+	}
+
+	result := svc.streamUpstreamResponse(c, resp, time.Now())
+	forwardResult := applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{}, observedUpstreamResponseModelProtocolComplete(c))
+
+	require.NotNil(t, result)
+	require.Equal(t, "claude-sonnet-4", forwardResult.UpstreamResponseModel)
+	require.True(t, forwardResult.UpstreamResponseModelBillingEligible)
 }
 
 // TestHandleGeminiStreamingResponse_NormalComplete
@@ -874,7 +939,7 @@ func TestHandleGeminiStreamingResponse_NormalComplete(t *testing.T) {
 	go func() {
 		defer func() { _ = pw.Close() }()
 		// 第一个 chunk（部分内容）
-		fmt.Fprintln(pw, `data: {"candidates":[{"content":{"parts":[{"text":"Hello"}]}}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":3}}`)
+		fmt.Fprintln(pw, `data: {"modelVersion":"gemini-3-pro","candidates":[{"content":{"parts":[{"text":"Hello"}]}}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":3}}`)
 		fmt.Fprintln(pw, "")
 		// 第二个 chunk（最终内容+完整 usage）
 		fmt.Fprintln(pw, `data: {"candidates":[{"content":{"parts":[{"text":" world"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":8,"cachedContentTokenCount":2}}`)
@@ -901,6 +966,38 @@ func TestHandleGeminiStreamingResponse_NormalComplete(t *testing.T) {
 	require.Contains(t, body, "world")
 	// 不应包含错误事件
 	require.NotContains(t, body, "event: error")
+	require.True(t, observedUpstreamResponseModelProtocolComplete(c))
+	forwardResult := applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{}, observedUpstreamResponseModelProtocolComplete(c))
+	require.Equal(t, "gemini-3-pro", forwardResult.UpstreamResponseModel)
+	require.True(t, forwardResult.UpstreamResponseModelBillingEligible)
+}
+
+func TestHandleGeminiStreamingResponse_PartialEOFIsAuditOnly(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := newAntigravityTestService(&config.Config{
+		Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize},
+	})
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body: io.NopCloser(strings.NewReader(
+			`data: {"modelVersion":"gemini-3-pro","candidates":[{"content":{"parts":[{"text":"partial"}]}}]}` + "\n\n",
+		)),
+		Header: http.Header{},
+	}
+
+	result, err := svc.handleGeminiStreamingResponse(c, resp, time.Now())
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "gemini-3-pro", observedUpstreamResponseModel(c))
+	require.False(t, observedUpstreamResponseModelProtocolComplete(c))
+	forwardResult := applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{}, observedUpstreamResponseModelProtocolComplete(c))
+	require.Equal(t, "gemini-3-pro", forwardResult.UpstreamResponseModel)
+	require.False(t, forwardResult.UpstreamResponseModelBillingEligible)
 }
 
 // TestHandleClaudeStreamingResponse_NormalComplete
@@ -922,7 +1019,7 @@ func TestHandleClaudeStreamingResponse_NormalComplete(t *testing.T) {
 		defer func() { _ = pw.Close() }()
 		// v1internal 包装格式：Gemini 数据嵌套在 "response" 字段下
 		// ProcessLine 先尝试反序列化为 V1InternalResponse，裸格式会导致 Response.UsageMetadata 为空
-		fmt.Fprintln(pw, `data: {"response":{"candidates":[{"content":{"parts":[{"text":"Hi there"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":3}}}`)
+		fmt.Fprintln(pw, `data: {"response":{"modelVersion":"gemini-3-pro","candidates":[{"content":{"parts":[{"text":"Hi there"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":3}}}`)
 		fmt.Fprintln(pw, "")
 	}()
 
@@ -944,6 +1041,39 @@ func TestHandleClaudeStreamingResponse_NormalComplete(t *testing.T) {
 	require.Contains(t, body, "event: message_stop", "should contain Claude message_stop event")
 	// 不应包含错误事件
 	require.NotContains(t, body, "event: error")
+	require.True(t, observedUpstreamResponseModelProtocolComplete(c))
+	forwardResult := applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{}, observedUpstreamResponseModelProtocolComplete(c))
+	require.Equal(t, "gemini-3-pro", forwardResult.UpstreamResponseModel)
+	require.True(t, forwardResult.UpstreamResponseModelBillingEligible)
+}
+
+func TestHandleClaudeStreamingResponse_SyntheticMessageStopDoesNotCompleteBilling(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := newAntigravityTestService(&config.Config{
+		Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize},
+	})
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body: io.NopCloser(strings.NewReader(
+			`data: {"response":{"modelVersion":"gemini-3-pro","candidates":[{"content":{"parts":[{"text":"partial"}]}}]}}` + "\n\n",
+		)),
+		Header: http.Header{},
+	}
+
+	result, err := svc.handleClaudeStreamingResponse(c, resp, time.Now(), "claude-sonnet-4-5")
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Contains(t, rec.Body.String(), "event: message_stop", "local protocol cleanup may still synthesize message_stop")
+	require.Equal(t, "gemini-3-pro", observedUpstreamResponseModel(c))
+	require.False(t, observedUpstreamResponseModelProtocolComplete(c), "synthetic downstream message_stop is not an upstream completion boundary")
+	forwardResult := applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{}, observedUpstreamResponseModelProtocolComplete(c))
+	require.Equal(t, "gemini-3-pro", forwardResult.UpstreamResponseModel)
+	require.False(t, forwardResult.UpstreamResponseModelBillingEligible)
 }
 
 // TestHandleGeminiStreamingResponse_ThoughtsTokenCount

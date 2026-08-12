@@ -677,6 +677,60 @@ func (s *PricingService) GetModelPricing(modelName string) *LiteLLMModelPricing 
 	return nil
 }
 
+// lookupIdentifiedModelPricingLocked performs only deterministic recognition:
+// exact catalog keys, known spelling variants, and equivalent names after
+// removing date/version suffixes. It deliberately excludes family and generic
+// fallbacks because those can assign a price to an untrusted, invented name.
+// The caller must hold s.mu for reading.
+func (s *PricingService) lookupIdentifiedModelPricingLocked(lookupCandidates []string) *LiteLLMModelPricing {
+	if len(lookupCandidates) == 0 {
+		return nil
+	}
+
+	for _, candidate := range lookupCandidates {
+		if candidate == "" {
+			continue
+		}
+		if pricing, ok := s.pricingData[candidate]; ok {
+			return pricing
+		}
+	}
+
+	// claude-opus-4-5-20251101 -> claude-opus-4.5-20251101
+	for _, candidate := range lookupCandidates {
+		normalized := strings.ReplaceAll(candidate, "-4-5-", "-4.5-")
+		if pricing, ok := s.pricingData[normalized]; ok {
+			return pricing
+		}
+	}
+
+	baseName := s.extractBaseName(lookupCandidates[0])
+	for key, pricing := range s.pricingData {
+		if s.extractBaseName(strings.ToLower(key)) == baseName {
+			return pricing
+		}
+	}
+
+	return nil
+}
+
+// GetIdentifiedModelPricing returns pricing only when the model can be
+// deterministically identified in the catalog. Unlike GetModelPricing, it
+// never guesses a model family from substrings such as "opus" or "haiku".
+func (s *PricingService) GetIdentifiedModelPricing(modelName string) *LiteLLMModelPricing {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	modelLower := strings.ToLower(strings.TrimSpace(modelName))
+	if modelLower == "" {
+		return nil
+	}
+	return s.lookupIdentifiedModelPricingLocked(s.buildModelLookupCandidates(modelLower))
+}
+
 func (s *PricingService) buildModelLookupCandidates(modelLower string) []string {
 	// Prefer canonical model name first (this also improves billing compatibility with "models/xxx").
 	candidates := []string{

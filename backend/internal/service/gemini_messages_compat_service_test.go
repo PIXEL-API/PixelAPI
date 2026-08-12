@@ -41,6 +41,120 @@ func (s *geminiCompatHTTPUpstreamStub) DoWithTLS(req *http.Request, proxyURL str
 	return s.Do(req, proxyURL, accountID, accountConcurrency)
 }
 
+func TestCollectGeminiSSEProtocolCompletion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		body      string
+		completed bool
+	}{
+		{
+			name:      "partial model followed by bare EOF",
+			body:      "data: {\"modelVersion\":\"gemini-3-pro\",\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"partial\"}]}}]}\n\n",
+			completed: false,
+		},
+		{
+			name: "finish reason survives content result selection",
+			body: "data: {\"modelVersion\":\"gemini-3-pro\",\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"complete\"}]}}]}\n\n" +
+				"data: {\"modelVersion\":\"gemini-3-pro\",\"candidates\":[{\"finishReason\":\"STOP\"}]}\n\n",
+			completed: true,
+		},
+		{
+			name: "done marker",
+			body: "data: {\"modelVersion\":\"gemini-3-pro\",\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"complete\"}]}}]}\n\n" +
+				"data: [DONE]\n\n",
+			completed: true,
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			response, _, completed, err := collectGeminiSSE(strings.NewReader(test.body), false)
+
+			require.NoError(t, err)
+			require.NotNil(t, response)
+			require.Equal(t, "gemini-3-pro", response["modelVersion"])
+			require.Equal(t, test.completed, completed)
+		})
+	}
+}
+
+func TestGeminiMessagesCompatServiceForward_CodeAssistStreamRequiresExplicitCompletionForResponseModelBilling(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name     string
+		body     string
+		eligible bool
+	}{
+		{
+			name: "partial followed by bare EOF",
+			body: `data: {"response":{"modelVersion":"gemini-3-pro","candidates":[{"content":{"parts":[{"text":"partial"}]}}]}}
+
+`,
+		},
+		{
+			name: "finish reason only terminal chunk",
+			body: `data: {"response":{"modelVersion":"gemini-3-pro","candidates":[{"content":{"parts":[{"text":"complete"}]}}]}}
+
+data: {"response":{"candidates":[{"finishReason":"STOP"}]}}
+
+`,
+			eligible: true,
+		},
+		{
+			name: "done marker",
+			body: `data: {"response":{"modelVersion":"gemini-3-pro","candidates":[{"content":{"parts":[{"text":"complete"}]}}]}}
+
+data: [DONE]
+
+`,
+			eligible: true,
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			httpStub := &geminiCompatHTTPUpstreamStub{response: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       io.NopCloser(strings.NewReader(test.body)),
+			}}
+			svc := &GeminiMessagesCompatService{
+				httpUpstream:  httpStub,
+				tokenProvider: &GeminiTokenProvider{},
+				cfg:           &config.Config{},
+			}
+			account := &Account{
+				ID:       101,
+				Platform: PlatformGemini,
+				Type:     AccountTypeOAuth,
+				Credentials: map[string]any{
+					"access_token": "test-token",
+					"expires_at":   time.Now().Add(time.Hour).Format(time.RFC3339),
+					"project_id":   "test-project",
+				},
+			}
+			body := []byte(`{"model":"gemini-3-pro","stream":false,"max_tokens":16,"messages":[{"role":"user","content":"hello"}]}`)
+
+			result, err := svc.Forward(context.Background(), c, account, body)
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Equal(t, "gemini-3-pro", result.UpstreamResponseModel)
+			require.Equal(t, test.eligible, result.UpstreamResponseModelBillingEligible)
+		})
+	}
+}
+
 // TestConvertClaudeToolsToGeminiTools_CustomType 测试custom类型工具转换
 func TestConvertClaudeToolsToGeminiTools_CustomType(t *testing.T) {
 	tests := []struct {

@@ -999,7 +999,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		Stream:        parsed.Stream,
 		ImageSize:     parsed.SizeTier,
 	}
-	ctx = withOpenAIForwardResultBillingState(ctx, forwardResult, startTime, openAIResponseImageBillingConfig{
+	ctx = withOpenAIForwardResultBillingState(ctx, c, forwardResult, startTime, openAIResponseImageBillingConfig{
 		Intent: true,
 		Model:  requestModel,
 		Size:   parsed.SizeTier,

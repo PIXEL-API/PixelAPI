@@ -235,6 +235,11 @@ type OpenAIForwardResult struct {
 	// UpstreamModel is the actual model sent to the upstream provider after mapping.
 	// Empty when no mapping was applied (requested model was used as-is).
 	UpstreamModel string
+	// UpstreamResponseModel is the model declared by the raw upstream response.
+	// Billing eligibility is tracked separately.
+	UpstreamResponseModel                string
+	UpstreamResponseModelConflict        bool
+	UpstreamResponseModelBillingEligible bool
 	// ServiceTier records the OpenAI Responses API service tier, e.g. "priority" / "flex".
 	// Nil means the request did not specify a recognized tier.
 	ServiceTier *string
@@ -306,9 +311,10 @@ type openAIResponseImageBillingConfig struct {
 type openAIForwardResultBillingStateContextKey struct{}
 
 type openAIForwardResultBillingState struct {
-	result             *OpenAIForwardResult
-	startTime          time.Time
-	imageBillingConfig openAIResponseImageBillingConfig
+	result                *OpenAIForwardResult
+	startTime             time.Time
+	imageBillingConfig    openAIResponseImageBillingConfig
+	responseModelObserver *upstreamResponseModelObserver
 }
 
 type openAIForwardResultSnapshot struct {
@@ -325,6 +331,7 @@ type openAIForwardResultSnapshot struct {
 
 func withOpenAIForwardResultBillingState(
 	ctx context.Context,
+	c *gin.Context,
 	result *OpenAIForwardResult,
 	startTime time.Time,
 	imageBillingConfig openAIResponseImageBillingConfig,
@@ -336,9 +343,10 @@ func withOpenAIForwardResultBillingState(
 		return ctx
 	}
 	return context.WithValue(ctx, openAIForwardResultBillingStateContextKey{}, &openAIForwardResultBillingState{
-		result:             result,
-		startTime:          startTime,
-		imageBillingConfig: imageBillingConfig,
+		result:                result,
+		startTime:             startTime,
+		imageBillingConfig:    imageBillingConfig,
+		responseModelObserver: upstreamResponseModelObserverFromContext(c),
 	})
 }
 
@@ -358,6 +366,11 @@ func updateOpenAIForwardResultBillingState(
 	}
 
 	result := state.result
+	if state.responseModelObserver != nil {
+		result.UpstreamResponseModel = state.responseModelObserver.Model()
+		result.UpstreamResponseModelConflict = state.responseModelObserver.Conflict()
+		result.UpstreamResponseModelBillingEligible = state.responseModelObserver.BillingEligible()
+	}
 	if requestID := strings.TrimSpace(snapshot.requestID); requestID != "" {
 		result.RequestID = requestID
 	}
@@ -394,6 +407,16 @@ func updateOpenAIForwardResultBillingState(
 	}
 	applyOpenAIResponseImageAccounting(result, state.imageBillingConfig)
 	return result
+}
+
+func beginOpenAIForwardResultResponseModelObservation(ctx context.Context, c *gin.Context) *upstreamResponseModelObserver {
+	observer := beginUpstreamResponseModelObservation(c)
+	if ctx != nil {
+		if state, _ := ctx.Value(openAIForwardResultBillingStateContextKey{}).(*openAIForwardResultBillingState); state != nil {
+			state.responseModelObserver = observer
+		}
+	}
+	return observer
 }
 
 func resolveOpenAIResponseImageBillingConfig(endpoint, requestedModel string, reqBody map[string]any) openAIResponseImageBillingConfig {
@@ -2719,6 +2742,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 // ForwardWithAnalysis forwards request to OpenAI API and reuses parsed /responses metadata when available.
 func (s *OpenAIGatewayService) ForwardWithAnalysis(ctx context.Context, c *gin.Context, account *Account, body []byte, analysis *OpenAIResponsesRequestAnalysis) (*OpenAIForwardResult, error) {
+	beginUpstreamResponseModelObservation(c)
 	clearGrokResponsesClientToolMapping(c)
 	// Keep attempt TTFT separate from the end-to-end first-output budget. The
 	// scheduler uses FirstTokenMs to learn account health; including local
@@ -3261,7 +3285,7 @@ func (s *OpenAIGatewayService) ForwardWithAnalysis(ctx context.Context, c *gin.C
 		Stream:          reqStream,
 		OpenAIWSMode:    false,
 	}
-	ctx = withOpenAIForwardResultBillingState(ctx, forwardResult, startTime, imageBillingConfig)
+	ctx = withOpenAIForwardResultBillingState(ctx, c, forwardResult, startTime, imageBillingConfig)
 
 	// Re-serialize body only if modified
 	if bodyModified {
@@ -3542,6 +3566,7 @@ func (s *OpenAIGatewayService) ForwardWithAnalysis(ctx context.Context, c *gin.C
 				nil,
 			)
 		}
+		beginOpenAIForwardResultResponseModelObservation(ctx, c)
 		// Build upstream request
 		upstreamCtx, releaseUpstreamCtx := s.detachOpenAIUpstreamContext(ctx)
 		var headerGuard *openAIFirstOutputHeaderGuard
@@ -3774,6 +3799,7 @@ func (s *OpenAIGatewayService) ForwardWithAnalysis(ctx context.Context, c *gin.C
 		}
 
 		forwardResult.ServiceTier = serviceTier
+		markObservedUpstreamResponseModelBillingEligible(c)
 		result := updateOpenAIForwardResultBillingState(ctx, openAIForwardResultSnapshot{
 			requestID:       resp.Header.Get("x-request-id"),
 			responseID:      responseID,
@@ -3890,7 +3916,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		Stream:          reqStream,
 		OpenAIWSMode:    false,
 	}
-	ctx = withOpenAIForwardResultBillingState(ctx, forwardResult, startTime, imageBillingConfig)
+	ctx = withOpenAIForwardResultBillingState(ctx, c, forwardResult, startTime, imageBillingConfig)
 	reasoningEffortValue := ""
 	if reasoningEffort != nil {
 		reasoningEffortValue = *reasoningEffort
@@ -3944,6 +3970,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 				nil,
 			)
 		}
+		beginOpenAIForwardResultResponseModelObservation(ctx, c)
 		upstreamCtx, releaseUpstreamCtx := s.detachOpenAIUpstreamContext(ctx)
 		var headerGuard *openAIFirstOutputHeaderGuard
 		if firstOutputTimeout > 0 {
@@ -4132,6 +4159,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		}
 
 		forwardResult.ServiceTier = serviceTier
+		markObservedUpstreamResponseModelBillingEligible(c)
 		result := updateOpenAIForwardResultBillingState(ctx, openAIForwardResultSnapshot{
 			requestID:       resp.Header.Get("x-request-id"),
 			usage:           usage,
@@ -4837,6 +4865,10 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithReasoning(
 	mappedModel string,
 	reasoningEffort string,
 ) (*openaiStreamingResultPassthrough, error) {
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginOpenAIForwardResultResponseModelObservation(ctx, c)
+	}
 	ctx, firstOutputStart := ensureOpenAIFirstOutputStart(ctx)
 	firstOutputTimeout := time.Duration(0)
 	if account != nil && account.Platform == PlatformOpenAI {
@@ -5120,6 +5152,9 @@ streamLoop:
 		if data, ok := extractOpenAISSEDataLine(line); ok {
 			dataBytes := []byte(data)
 			trimmedData := strings.TrimSpace(data)
+			if trimmedData != "[DONE]" {
+				observer.ObserveOpenAI(dataBytes, strings.TrimSpace(gjson.GetBytes(dataBytes, "type").String()))
+			}
 			if responseID == "" && trimmedData != "[DONE]" {
 				responseID = extractOpenAIResponseIDFromJSONBytes(dataBytes)
 			}
@@ -5369,6 +5404,15 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	body, err := ReadUpstreamResponseBodyWithContext(readCtx, resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
 		return nil, err
+	}
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginOpenAIForwardResultResponseModelObservation(ctx, c)
+	}
+	if isEventStreamResponse(resp.Header) {
+		observeOpenAISSEBody(observer, string(body))
+	} else {
+		observer.ObserveOpenAI(body, strings.TrimSpace(gjson.GetBytes(body, "type").String()))
 	}
 
 	// Detect SSE responses from upstream and convert to JSON.
@@ -6036,6 +6080,10 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 }
 
 func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, startTime time.Time, originalModel, mappedModel, reasoningEffort string) (*openaiStreamingResult, error) {
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginOpenAIForwardResultResponseModelObservation(ctx, c)
+	}
 	firstOutputTimeout := time.Duration(0)
 	if account != nil && account.Platform == PlatformOpenAI {
 		firstOutputTimeout = s.openAIFirstOutputTimeout(reasoningEffort)
@@ -6431,6 +6479,8 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		if data, ok := extractOpenAISSEDataLine(line); ok {
 
 			dataBytes := []byte(data)
+			eventType := strings.TrimSpace(gjson.GetBytes(dataBytes, "type").String())
+			observer.ObserveOpenAI(dataBytes, eventType)
 			billingUsageObservation.observePayload(dataBytes)
 			if responseID == "" {
 				responseID = extractOpenAIResponseIDFromJSONBytes(dataBytes)
@@ -6446,7 +6496,6 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			if openAIStreamEventIsTerminal(data) {
 				sawTerminalEvent = true
 			}
-			eventType := strings.TrimSpace(gjson.GetBytes(dataBytes, "type").String())
 			forceFlushFailedEvent := false
 			if eventType == "response.failed" || eventType == "error" || eventType == "response.error" {
 				failedMessage = extractOpenAISSEErrorMessage(dataBytes)
@@ -7134,6 +7183,18 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	body, err := ReadUpstreamResponseBodyWithContext(readCtx, resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
 		return nil, err
+	}
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginOpenAIForwardResultResponseModelObservation(ctx, c)
+	}
+	bodyLooksLikeSSE := isEventStreamResponse(resp.Header) ||
+		(account != nil && account.Type == AccountTypeOAuth &&
+			(bytes.Contains(body, []byte("data:")) || bytes.Contains(body, []byte("event:"))))
+	if bodyLooksLikeSSE {
+		observeOpenAISSEBody(observer, string(body))
+	} else {
+		observer.ObserveOpenAI(body, strings.TrimSpace(gjson.GetBytes(body, "type").String()))
 	}
 
 	// Detect SSE responses for ALL account types via Content-Type header.
@@ -7880,6 +7941,27 @@ func (s *OpenAIGatewayService) recordUsageOnce(ctx context.Context, input *OpenA
 	if err != nil {
 		return fmt.Errorf("calculate OpenAI usage cost for model %s: %w", billingModel, err)
 	}
+	// response_model is limited to token-only requests. The upstream declaration
+	// may replace the existing baseline only when it has deterministic pricing,
+	// cannot increase or erase the charge, and cannot bypass a channel price.
+	if responseModel := responseModelBillingDeclaration(
+		input.BillingModelSource,
+		result.UpstreamResponseModel,
+		result.UpstreamResponseModelConflict,
+		result.ImageCount > 0 || result.VideoCount > 0 || result.WebSearchCalls > 0,
+		result.UpstreamResponseModelBillingEligible,
+	); responseModel != "" && !strings.EqualFold(responseModel, strings.TrimSpace(billingModel)) {
+		if identified, responseChannelPriced := s.hasIdentifiedOpenAIResponsePricing(ctx, responseModel, apiKey); identified {
+			responseCost, responseErr := s.calculateOpenAIRecordUsageCost(ctx, result, apiKey, responseModel, multiplier, imageMultiplier, videoMultiplier, tokens, serviceTier)
+			if responseErr == nil {
+				baselineChannelPriced := s.resolveOpenAIChannelPricing(ctx, billingModel, apiKey) != nil
+				if responseModelBillingAdoptable(cost, responseCost, baselineChannelPriced, responseChannelPriced) {
+					logResponseModelBillingApplied("service.openai_gateway", account, result.RequestID, billingModel, responseModel, cost, responseCost)
+					cost = responseCost
+				}
+			}
+		}
+	}
 	var accountShareModeSettlement *AccountShareModeBillingSnapshot
 	if accountShareMembership != nil && accountShareListing != nil && cost != nil {
 		baseCharge := cost.ActualCost
@@ -7911,28 +7993,40 @@ func (s *OpenAIGatewayService) recordUsageOnce(ctx context.Context, input *OpenA
 	if input.OriginalModel != "" {
 		requestedModel = input.OriginalModel
 	}
+	sentModel := upstreamSentModel(result.Model, result.UpstreamModel)
+	if result.UpstreamResponseModelConflict {
+		slog.Warn("upstream_response_model_conflict",
+			"platform", account.Platform,
+			"account_id", account.ID,
+			"request_id", requestID,
+			"sent_model", sentModel,
+			"selected_response_model", strings.TrimSpace(result.UpstreamResponseModel),
+		)
+	}
 
 	usageLog := &UsageLog{
-		UserID:              user.ID,
-		APIKeyID:            apiKey.ID,
-		AccountID:           account.ID,
-		RequestID:           requestID,
-		Model:               result.Model,
-		RequestedModel:      requestedModel,
-		UpstreamModel:       optionalNonEqualStringPtr(result.UpstreamModel, result.Model),
-		ServiceTier:         result.ServiceTier,
-		ReasoningEffort:     result.ReasoningEffort,
-		InboundEndpoint:     optionalTrimmedStringPtr(input.InboundEndpoint),
-		UpstreamEndpoint:    optionalTrimmedStringPtr(input.UpstreamEndpoint),
-		InputTokens:         actualInputTokens,
-		OutputTokens:        result.Usage.OutputTokens,
-		CacheCreationTokens: result.Usage.CacheCreationInputTokens,
-		CacheReadTokens:     result.Usage.CacheReadInputTokens,
-		ImageInputTokens:    tokens.ImageInputTokens,
-		ImageOutputTokens:   result.Usage.ImageOutputTokens,
-		ImageCount:          result.ImageCount,
-		ImageSize:           optionalTrimmedStringPtr(result.ImageSize),
-		VideoCount:          result.VideoCount,
+		UserID:                user.ID,
+		APIKeyID:              apiKey.ID,
+		AccountID:             account.ID,
+		RequestID:             requestID,
+		Model:                 result.Model,
+		RequestedModel:        requestedModel,
+		UpstreamModel:         optionalNonEqualStringPtr(result.UpstreamModel, result.Model),
+		UpstreamResponseModel: optionalTrimmedStringPtr(result.UpstreamResponseModel),
+		UpstreamModelMismatch: upstreamModelMismatch(sentModel, result.UpstreamResponseModel),
+		ServiceTier:           result.ServiceTier,
+		ReasoningEffort:       result.ReasoningEffort,
+		InboundEndpoint:       optionalTrimmedStringPtr(input.InboundEndpoint),
+		UpstreamEndpoint:      optionalTrimmedStringPtr(input.UpstreamEndpoint),
+		InputTokens:           actualInputTokens,
+		OutputTokens:          result.Usage.OutputTokens,
+		CacheCreationTokens:   result.Usage.CacheCreationInputTokens,
+		CacheReadTokens:       result.Usage.CacheReadInputTokens,
+		ImageInputTokens:      tokens.ImageInputTokens,
+		ImageOutputTokens:     result.Usage.ImageOutputTokens,
+		ImageCount:            result.ImageCount,
+		ImageSize:             optionalTrimmedStringPtr(result.ImageSize),
+		VideoCount:            result.VideoCount,
 	}
 	if result.VideoCount > 0 {
 		usageLog.VideoResolution = optionalTrimmedStringPtr(NormalizeVideoBillingResolutionOrDefault(result.VideoResolution))
@@ -8216,6 +8310,25 @@ func (s *OpenAIGatewayService) resolveOpenAIChannelPricing(ctx context.Context, 
 		return resolved
 	}
 	return nil
+}
+
+// hasIdentifiedOpenAIResponsePricing accepts only explicit channel pricing or
+// a deterministic global/fallback token-price entry for an untrusted response
+// model. Generic family guesses are deliberately excluded.
+func (s *OpenAIGatewayService) hasIdentifiedOpenAIResponsePricing(ctx context.Context, model string, apiKey *APIKey) (identified bool, channelPriced bool) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return false, false
+	}
+	if resolved := s.resolveOpenAIChannelPricing(ctx, model, apiKey); resolved != nil {
+		// A response-declared model must not switch a token request into
+		// per-request/image pricing, even when that channel price is cheaper.
+		return resolved.Mode == BillingModeToken, resolved.Mode == BillingModeToken
+	}
+	if s.billingService == nil {
+		return false, false
+	}
+	return s.billingService.HasIdentifiedTokenPricing(model), false
 }
 
 // ParseCodexRateLimitHeaders extracts Codex usage limits from response headers.

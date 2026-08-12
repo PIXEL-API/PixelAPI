@@ -191,6 +191,8 @@ func TestUsageLogRepositoryCreateSyncRequestTypeAndLegacyFields(t *testing.T) {
 			log.Model,
 			log.RequestedModel,
 			sqlmock.AnyArg(), // upstream_model
+			sqlmock.AnyArg(), // upstream_response_model
+			sqlmock.AnyArg(), // upstream_model_mismatch
 			sqlmock.AnyArg(), // group_id
 			sqlmock.AnyArg(), // subscription_id
 			log.InputTokens,
@@ -275,6 +277,8 @@ func TestUsageLogRepositoryCreate_PersistsServiceTier(t *testing.T) {
 			log.RequestID,
 			log.Model,
 			log.RequestedModel,
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
@@ -382,6 +386,7 @@ func TestPrepareUsageLogInsert_ArgCountMatchesTypes(t *testing.T) {
 		CreatedAt:      time.Date(2025, 1, 5, 12, 0, 0, 0, time.UTC),
 	})
 
+	require.Len(t, prepared.args, 54)
 	require.Len(t, prepared.args, len(usageLogInsertArgTypes))
 }
 
@@ -397,8 +402,8 @@ func TestPrepareUsageLogInsert_PersistsImageInputUsage(t *testing.T) {
 		CreatedAt:        time.Date(2025, 1, 5, 12, 0, 0, 0, time.UTC),
 	})
 
-	require.Equal(t, 352, prepared.args[17])
-	require.InDelta(t, 0.002816, prepared.args[18], 1e-15)
+	require.Equal(t, 352, prepared.args[19])
+	require.InDelta(t, 0.002816, prepared.args[20], 1e-15)
 }
 
 func TestUsageBillingUsageLogInsertQuery_ArgCountMatchesPreparedInsert(t *testing.T) {
@@ -881,6 +886,11 @@ func TestBuildRequestTypeFilterConditionLegacyFallback(t *testing.T) {
 	}
 }
 
+func TestUpstreamModelMismatchConditionPreservesNullSemantics(t *testing.T) {
+	require.Equal(t, "upstream_model_mismatch IS TRUE", upstreamModelMismatchCondition("upstream_model_mismatch", true))
+	require.Equal(t, "ul.upstream_model_mismatch IS FALSE", upstreamModelMismatchCondition("ul.upstream_model_mismatch", false))
+}
+
 type usageLogScannerStub struct {
 	values []any
 }
@@ -910,28 +920,30 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{Valid: true, String: "req-1"},
 			"gpt-5", // model
 			sql.NullString{Valid: true, String: "gpt-5"}, // requested_model
-			sql.NullString{},  // upstream_model
-			sql.NullInt64{},   // group_id
-			sql.NullInt64{},   // subscription_id
-			1,                 // input_tokens
-			2,                 // output_tokens
-			3,                 // cache_creation_tokens
-			4,                 // cache_read_tokens
-			5,                 // cache_creation_5m_tokens
-			6,                 // cache_creation_1h_tokens
-			0,                 // image_output_tokens
-			0.0,               // image_output_cost
-			0,                 // image_input_tokens
-			0.0,               // image_input_cost
-			0.1,               // input_cost
-			0.2,               // output_cost
-			0.3,               // cache_creation_cost
-			0.4,               // cache_read_cost
-			1.0,               // total_cost
-			0.9,               // actual_cost
-			1.0,               // rate_multiplier
-			sql.NullString{},  // rate_multiplier_source
-			sql.NullFloat64{}, // account_rate_multiplier
+			sql.NullString{}, // upstream_model
+			sql.NullString{Valid: true, String: "gpt-5-2026-08-07"}, // upstream_response_model
+			sql.NullBool{Valid: true, Bool: true},                   // upstream_model_mismatch
+			sql.NullInt64{},                                         // group_id
+			sql.NullInt64{},                                         // subscription_id
+			1,                                                       // input_tokens
+			2,                                                       // output_tokens
+			3,                                                       // cache_creation_tokens
+			4,                                                       // cache_read_tokens
+			5,                                                       // cache_creation_5m_tokens
+			6,                                                       // cache_creation_1h_tokens
+			0,                                                       // image_output_tokens
+			0.0,                                                     // image_output_cost
+			0,                                                       // image_input_tokens
+			0.0,                                                     // image_input_cost
+			0.1,                                                     // input_cost
+			0.2,                                                     // output_cost
+			0.3,                                                     // cache_creation_cost
+			0.4,                                                     // cache_read_cost
+			1.0,                                                     // total_cost
+			0.9,                                                     // actual_cost
+			1.0,                                                     // rate_multiplier
+			sql.NullString{},                                        // rate_multiplier_source
+			sql.NullFloat64{},                                       // account_rate_multiplier
 			int16(service.BillingTypeBalance),
 			int16(service.RequestTypeWSV2),
 			false, // legacy stream
@@ -958,6 +970,10 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			now,
 		}})
 		require.NoError(t, err)
+		require.NotNil(t, log.UpstreamResponseModel)
+		require.Equal(t, "gpt-5-2026-08-07", *log.UpstreamResponseModel)
+		require.NotNil(t, log.UpstreamModelMismatch)
+		require.True(t, *log.UpstreamModelMismatch)
 		require.NotNil(t, log.ServiceTier)
 		require.Equal(t, "priority", *log.ServiceTier)
 		require.Equal(t, service.RequestTypeWSV2, log.RequestType)
@@ -976,6 +992,8 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			"gpt-5",
 			sql.NullString{Valid: true, String: "gpt-5"},
 			sql.NullString{},
+			sql.NullString{Valid: true, String: "gpt-5"},
+			sql.NullBool{Valid: true, Bool: false},
 			sql.NullInt64{},
 			sql.NullInt64{},
 			1, 2, 3, 4, 5, 6,
@@ -1011,6 +1029,10 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			now,
 		}})
 		require.NoError(t, err)
+		require.NotNil(t, log.UpstreamResponseModel)
+		require.Equal(t, "gpt-5", *log.UpstreamResponseModel)
+		require.NotNil(t, log.UpstreamModelMismatch)
+		require.False(t, *log.UpstreamModelMismatch)
 		require.NotNil(t, log.ServiceTier)
 		require.Equal(t, "flex", *log.ServiceTier)
 		require.Equal(t, service.RequestTypeStream, log.RequestType)
@@ -1029,6 +1051,8 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			"gpt-5.4",
 			sql.NullString{Valid: true, String: "gpt-5.4"},
 			sql.NullString{},
+			sql.NullString{},
+			sql.NullBool{},
 			sql.NullInt64{},
 			sql.NullInt64{},
 			1, 2, 3, 4, 5, 6,
@@ -1064,6 +1088,8 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			now,
 		}})
 		require.NoError(t, err)
+		require.Nil(t, log.UpstreamResponseModel)
+		require.Nil(t, log.UpstreamModelMismatch)
 		require.NotNil(t, log.ServiceTier)
 		require.Equal(t, "priority", *log.ServiceTier)
 		require.Equal(t, 1, log.VideoCount)

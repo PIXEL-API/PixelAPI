@@ -606,6 +606,7 @@ func (s *GeminiMessagesCompatService) SelectAccountForAIStudioEndpoints(ctx cont
 }
 
 func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*ForwardResult, error) {
+	beginUpstreamResponseModelObservation(c)
 	startTime := time.Now()
 
 	var req struct {
@@ -791,6 +792,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 	var resp *http.Response
 	signatureRetryStage := 0
 	for attempt := 1; attempt <= geminiMaxRetries; attempt++ {
+		beginUpstreamResponseModelObservation(c)
 		upstreamReq, idHeader, err := buildReq(ctx)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -1090,11 +1092,15 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 		firstTokenMs = streamRes.firstTokenMs
 	} else {
 		if useUpstreamStream {
-			collected, usageObj, err := collectGeminiSSE(resp.Body, true)
+			collected, usageObj, completed, err := collectGeminiSSE(resp.Body, true)
 			if err != nil {
 				return nil, s.writeClaudeError(c, http.StatusBadGateway, "upstream_error", "Failed to read upstream stream")
 			}
 			collectedBytes, _ := json.Marshal(collected)
+			upstreamResponseModelObserverFromContext(c).ObserveGemini(collectedBytes)
+			if completed {
+				markObservedUpstreamResponseModelProtocolComplete(c)
+			}
 			claudeResp, usageObj2 := convertGeminiToClaudeMessage(collected, originalModel, collectedBytes)
 			c.JSON(http.StatusOK, claudeResp)
 			usage = usageObj2
@@ -1115,7 +1121,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 		imageCount = 1
 	}
 
-	return &ForwardResult{
+	return applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{
 		RequestID:     requestID,
 		Usage:         *usage,
 		Model:         originalModel,
@@ -1125,7 +1131,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 		FirstTokenMs:  firstTokenMs,
 		ImageCount:    imageCount,
 		ImageSize:     imageSize,
-	}, nil
+	}, (!req.Stream && !useUpstreamStream) || observedUpstreamResponseModelProtocolComplete(c)), nil
 }
 
 func isGeminiSignatureRelatedError(respBody []byte) bool {
@@ -1137,6 +1143,7 @@ func isGeminiSignatureRelatedError(respBody []byte) bool {
 }
 
 func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.Context, account *Account, originalModel string, action string, stream bool, body []byte) (*ForwardResult, error) {
+	beginUpstreamResponseModelObservation(c)
 	startTime := time.Now()
 
 	if strings.TrimSpace(originalModel) == "" {
@@ -1316,6 +1323,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 
 	var resp *http.Response
 	for attempt := 1; attempt <= geminiMaxRetries; attempt++ {
+		beginUpstreamResponseModelObservation(c)
 		upstreamReq, idHeader, err := buildReq(ctx)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -1618,11 +1626,15 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		firstTokenMs = streamRes.firstTokenMs
 	} else {
 		if useUpstreamStream {
-			collected, usageObj, err := collectGeminiSSE(resp.Body, isOAuth)
+			collected, usageObj, completed, err := collectGeminiSSE(resp.Body, isOAuth)
 			if err != nil {
 				return nil, s.writeGoogleError(c, http.StatusBadGateway, "Failed to read upstream stream")
 			}
 			b, _ := json.Marshal(collected)
+			upstreamResponseModelObserverFromContext(c).ObserveGemini(b)
+			if completed {
+				markObservedUpstreamResponseModelProtocolComplete(c)
+			}
 			c.Data(http.StatusOK, "application/json", b)
 			usage = usageObj
 		} else {
@@ -1644,7 +1656,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		imageCount = 1
 	}
 
-	return &ForwardResult{
+	return applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{
 		RequestID:     requestID,
 		Usage:         *usage,
 		Model:         originalModel,
@@ -1654,7 +1666,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		FirstTokenMs:  firstTokenMs,
 		ImageCount:    imageCount,
 		ImageSize:     imageSize,
-	}, nil
+	}, (!stream && !useUpstreamStream) || observedUpstreamResponseModelProtocolComplete(c)), nil
 }
 
 // checkErrorPolicyInLoop 在重试循环内预检查错误策略。
@@ -1982,6 +1994,11 @@ func (s *GeminiMessagesCompatService) handleNonStreamingResponse(c *gin.Context,
 	if err != nil {
 		return nil, s.writeClaudeError(c, http.StatusBadGateway, "upstream_error", "Failed to parse upstream response")
 	}
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
+	observer.ObserveGemini(unwrappedBody)
 
 	var geminiResp map[string]any
 	if err := json.Unmarshal(unwrappedBody, &geminiResp); err != nil {
@@ -1995,6 +2012,10 @@ func (s *GeminiMessagesCompatService) handleNonStreamingResponse(c *gin.Context,
 }
 
 func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, resp *http.Response, startTime time.Time, originalModel string) (*geminiStreamResult, error) {
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
@@ -2055,6 +2076,9 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 		}
 		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if payload == "" || payload == "[DONE]" {
+			if payload == "[DONE]" {
+				observer.MarkProtocolComplete()
+			}
 			if errors.Is(err, io.EOF) {
 				break
 			}
@@ -2065,6 +2089,7 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 		if err != nil {
 			continue
 		}
+		observer.ObserveGemini(unwrappedBytes)
 
 		var geminiResp map[string]any
 		if err := json.Unmarshal(unwrappedBytes, &geminiResp); err != nil {
@@ -2291,13 +2316,14 @@ func unwrapIfNeeded(isOAuth bool, raw []byte) []byte {
 	return inner
 }
 
-func collectGeminiSSE(body io.Reader, isOAuth bool) (map[string]any, *ClaudeUsage, error) {
+func collectGeminiSSE(body io.Reader, isOAuth bool) (map[string]any, *ClaudeUsage, bool, error) {
 	reader := bufio.NewReader(body)
 
 	var last map[string]any
 	var lastWithParts map[string]any
 	var collectedTextParts []string // Collect all text parts for aggregation
 	usage := &ClaudeUsage{}
+	sawFinishReason := false
 
 	for {
 		line, err := reader.ReadString('\n')
@@ -2308,7 +2334,7 @@ func collectGeminiSSE(body io.Reader, isOAuth bool) (map[string]any, *ClaudeUsag
 				switch payload {
 				case "", "[DONE]":
 					if payload == "[DONE]" {
-						return mergeCollectedTextParts(pickGeminiCollectResult(last, lastWithParts), collectedTextParts), usage, nil
+						return mergeCollectedTextParts(pickGeminiCollectResult(last, lastWithParts), collectedTextParts), usage, true, nil
 					}
 				default:
 					var parsed map[string]any
@@ -2325,6 +2351,9 @@ func collectGeminiSSE(body io.Reader, isOAuth bool) (map[string]any, *ClaudeUsag
 					}
 					if parsed != nil {
 						last = parsed
+						if strings.TrimSpace(extractGeminiFinishReason(parsed)) != "" {
+							sawFinishReason = true
+						}
 						if u := extractGeminiUsage(rawBytes); u != nil {
 							usage = u
 						}
@@ -2346,11 +2375,12 @@ func collectGeminiSSE(body io.Reader, isOAuth bool) (map[string]any, *ClaudeUsag
 			break
 		}
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, false, err
 		}
 	}
 
-	return mergeCollectedTextParts(pickGeminiCollectResult(last, lastWithParts), collectedTextParts), usage, nil
+	result := mergeCollectedTextParts(pickGeminiCollectResult(last, lastWithParts), collectedTextParts)
+	return result, usage, sawFinishReason, nil
 }
 
 func pickGeminiCollectResult(last map[string]any, lastWithParts map[string]any) map[string]any {
@@ -2533,6 +2563,11 @@ func (s *GeminiMessagesCompatService) handleNativeNonStreamingResponse(c *gin.Co
 			respBody = unwrappedBody
 		}
 	}
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
+	observer.ObserveGemini(respBody)
 
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 
@@ -2581,6 +2616,10 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 
 	reader := bufio.NewReader(resp.Body)
 	usage := &ClaudeUsage{}
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
 	var firstTokenMs *int
 
 	for {
@@ -2591,6 +2630,9 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 				payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
 				// Keepalive / done markers
 				if payload == "" || payload == "[DONE]" {
+					if payload == "[DONE]" {
+						observer.MarkProtocolComplete()
+					}
 					_, _ = io.WriteString(c.Writer, line)
 					flusher.Flush()
 				} else {
@@ -2611,6 +2653,7 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 					if u := extractGeminiUsage(rawBytes); u != nil {
 						usage = u
 					}
+					observer.ObserveGemini(rawBytes)
 
 					if firstTokenMs == nil {
 						ms := int(time.Since(startTime).Milliseconds())

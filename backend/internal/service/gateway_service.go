@@ -578,12 +578,15 @@ type ForwardResult struct {
 	Model                string
 	// UpstreamModel is the actual upstream model after mapping.
 	// Prefer empty when it is identical to Model; persistence normalizes equal values away as no-op mappings.
-	UpstreamModel    string
-	Stream           bool
-	Duration         time.Duration
-	FirstTokenMs     *int // 首字时间（流式请求）
-	ClientDisconnect bool // 客户端是否在流式传输过程中断开
-	ReasoningEffort  *string
+	UpstreamModel                        string
+	UpstreamResponseModel                string
+	UpstreamResponseModelConflict        bool
+	UpstreamResponseModelBillingEligible bool
+	Stream                               bool
+	Duration                             time.Duration
+	FirstTokenMs                         *int // 首字时间（流式请求）
+	ClientDisconnect                     bool // 客户端是否在流式传输过程中断开
+	ReasoningEffort                      *string
 
 	// 图片生成计费字段（图片生成模型使用）
 	ImageCount int    // 生成的图片数量
@@ -5269,6 +5272,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	if parsed == nil {
 		return nil, fmt.Errorf("parse request: empty request")
 	}
+	beginUpstreamResponseModelObservation(c)
 	ctx = WithHTTPUpstreamRedirectsDisabled(ctx)
 
 	// Web Search 模拟：纯 web_search 请求时，直接调用搜索 API 构造响应
@@ -5464,6 +5468,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	var resp *http.Response
 	retryStart := time.Now()
 	for attempt := 1; attempt <= maxRetryAttempts; attempt++ {
+		beginUpstreamResponseModelObservation(c)
 		// 构建上游请求（每次重试需要重新构建，因为请求体需要重新读取）
 		upstreamCtx, releaseUpstreamCtx := s.detachClaudeMessagesUpstreamContext(ctx)
 		upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, body, token, tokenType, reqModel, reqStream, shouldMimicClaudeCode)
@@ -5906,7 +5911,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					account.ID, account.Name, resp.Header.Get("x-request-id"), truncateString(sseErr.RawData, 1000),
 				)
 				if streamingResultHasBillableUsage(streamResult) {
-					return &ForwardResult{
+					return applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{
 						RequestID:        resp.Header.Get("x-request-id"),
 						Usage:            *streamResult.usage,
 						Model:            originalModel,
@@ -5915,7 +5920,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 						Duration:         time.Since(startTime),
 						FirstTokenMs:     streamResult.firstTokenMs,
 						ClientDisconnect: streamResult.clientDisconnect,
-					}, &BillableStreamUsageError{Err: err}
+					}, false), &BillableStreamUsageError{Err: err}
 				}
 				return nil, &UpstreamFailoverError{
 					StatusCode:   http.StatusForbidden,
@@ -5923,7 +5928,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 				}
 			}
 			if streamingResultHasBillableUsage(streamResult) {
-				return &ForwardResult{
+				return applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{
 					RequestID:        resp.Header.Get("x-request-id"),
 					Usage:            *streamResult.usage,
 					Model:            originalModel,
@@ -5932,7 +5937,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					Duration:         time.Since(startTime),
 					FirstTokenMs:     streamResult.firstTokenMs,
 					ClientDisconnect: streamResult.clientDisconnect,
-				}, &BillableStreamUsageError{Err: err}
+				}, false), &BillableStreamUsageError{Err: err}
 			}
 			return nil, err
 		}
@@ -5946,7 +5951,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		}
 	}
 
-	return &ForwardResult{
+	return applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{
 		RequestID:        resp.Header.Get("x-request-id"),
 		Usage:            *usage,
 		Model:            originalModel, // 使用原始模型用于计费和日志
@@ -5955,7 +5960,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		Duration:         time.Since(startTime),
 		FirstTokenMs:     firstTokenMs,
 		ClientDisconnect: clientDisconnect,
-	}, nil
+	}, true), nil
 }
 
 type anthropicPassthroughForwardInput struct {
@@ -6019,6 +6024,7 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 	var resp *http.Response
 	retryStart := time.Now()
 	for attempt := 1; attempt <= maxRetryAttempts; attempt++ {
+		beginUpstreamResponseModelObservation(c)
 		upstreamCtx, releaseUpstreamCtx := s.detachClaudeMessagesUpstreamContext(ctx)
 		upstreamReq, err := s.buildUpstreamRequestAnthropicAPIKeyPassthrough(upstreamCtx, c, account, input.Body, token)
 		releaseUpstreamCtx()
@@ -6202,7 +6208,7 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 		)
 		if err != nil {
 			if streamingResultHasBillableUsage(streamResult) {
-				return &ForwardResult{
+				return applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{
 					RequestID:        resp.Header.Get("x-request-id"),
 					Usage:            *streamResult.usage,
 					Model:            input.OriginalModel,
@@ -6211,7 +6217,7 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 					Duration:         time.Since(input.StartTime),
 					FirstTokenMs:     streamResult.firstTokenMs,
 					ClientDisconnect: streamResult.clientDisconnect,
-				}, &BillableStreamUsageError{Err: err}
+				}, false), &BillableStreamUsageError{Err: err}
 			}
 			return nil, err
 		}
@@ -6236,7 +6242,7 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 		usage = &ClaudeUsage{}
 	}
 
-	return &ForwardResult{
+	return applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{
 		RequestID:        resp.Header.Get("x-request-id"),
 		Usage:            *usage,
 		Model:            input.OriginalModel,
@@ -6245,7 +6251,7 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 		Duration:         time.Since(input.StartTime),
 		FirstTokenMs:     firstTokenMs,
 		ClientDisconnect: clientDisconnect,
-	}, nil
+	}, true), nil
 }
 
 func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
@@ -6339,6 +6345,10 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthroughWithMo
 	originalModel string,
 	upstreamModel string,
 ) (*streamingResult, error) {
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
 	if s.rateLimitService != nil {
 		s.rateLimitService.UpdateSessionWindow(ctx, account, resp.Header)
 	}
@@ -6528,6 +6538,7 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthroughWithMo
 			line := ev.line
 			if data, ok := extractAnthropicSSEDataLine(line); ok {
 				trimmed := strings.TrimSpace(data)
+				observer.ObserveAnthropic([]byte(trimmed))
 				billingUsage.observeAnthropicPayload(trimmed)
 				if anthropicStreamEventIsTerminal("", trimmed) {
 					terminalEventPending = true
@@ -6783,6 +6794,11 @@ func (s *GatewayService) handleNonStreamingResponseAnthropicAPIKeyPassthroughWit
 	if err != nil {
 		return nil, err
 	}
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
+	observer.ObserveAnthropic(body)
 
 	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
 		var raw json.RawMessage
@@ -8547,6 +8563,10 @@ type streamingResult struct {
 }
 
 func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, startTime time.Time, originalModel, mappedModel string, mimicClaudeCode bool) (*streamingResult, error) {
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
 	// 更新5h窗口状态
 	s.rateLimitService.UpdateSessionWindow(ctx, account, resp.Header)
 
@@ -8706,6 +8726,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		if dataLine == "" {
 			return []string{strings.Join(lines, "\n") + "\n\n"}, "", nil, isTerminal, nil
 		}
+		observer.ObserveAnthropic([]byte(dataLine))
 
 		if dataLine == "[DONE]" {
 			block := ""
@@ -9250,6 +9271,11 @@ func (s *GatewayService) handleNonStreamingResponse(
 	if err != nil {
 		return nil, err
 	}
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
+	observer.ObserveAnthropic(body)
 
 	// 解析usage
 	var response struct {
@@ -10228,6 +10254,27 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	if err != nil {
 		return err
 	}
+	// response_model is an explicit opt-in for token-only requests. The
+	// response declaration is untrusted, so it must be deterministically priced
+	// and pass all cost/source safety checks before replacing the baseline.
+	if responseModel := responseModelBillingDeclaration(
+		input.BillingModelSource,
+		result.UpstreamResponseModel,
+		result.UpstreamResponseModelConflict,
+		result.ImageCount > 0,
+		result.UpstreamResponseModelBillingEligible,
+	); responseModel != "" && !strings.EqualFold(responseModel, strings.TrimSpace(billingModel)) {
+		if identified, responseChannelPriced := s.hasIdentifiedResponseModelPricing(ctx, responseModel, apiKey); identified {
+			responseCost, responseErr := s.calculateRecordUsageCost(ctx, result, apiKey, responseModel, multiplier, opts)
+			if responseErr == nil {
+				baselineChannelPriced := s.resolveChannelPricing(ctx, billingModel, apiKey) != nil
+				if responseModelBillingAdoptable(cost, responseCost, baselineChannelPriced, responseChannelPriced) {
+					logResponseModelBillingApplied("service.gateway", account, result.RequestID, billingModel, responseModel, cost, responseCost)
+					cost = responseCost
+				}
+			}
+		}
+	}
 	var accountShareModeSettlement *AccountShareModeBillingSnapshot
 	if accountShareMembership != nil && accountShareListing != nil && cost != nil {
 		policy, err := s.accountShareModeService.ResolvePolicy(ctx)
@@ -10362,6 +10409,24 @@ func (s *GatewayService) hasResolvableTokenPricing(ctx context.Context, model st
 	return err == nil
 }
 
+// hasIdentifiedResponseModelPricing is stricter than
+// hasResolvableTokenPricing: response-declared names may use only an explicit
+// channel price or a deterministic global/fallback entry, never a family guess.
+func (s *GatewayService) hasIdentifiedResponseModelPricing(ctx context.Context, model string, apiKey *APIKey) (identified bool, channelPriced bool) {
+	if strings.TrimSpace(model) == "" {
+		return false, false
+	}
+	if resolved := s.resolveChannelPricing(ctx, model, apiKey); resolved != nil {
+		// A response-declared model must not switch a token request into
+		// per-request/image pricing, even when that channel price is cheaper.
+		return resolved.Mode == BillingModeToken, resolved.Mode == BillingModeToken
+	}
+	if s.billingService == nil {
+		return false, false
+	}
+	return s.billingService.HasIdentifiedTokenPricing(model), false
+}
+
 // resolveChannelPricing 检查指定模型是否存在渠道级别定价。
 // 返回非 nil 的 ResolvedPricing 表示有渠道定价，nil 表示走默认定价路径。
 func (s *GatewayService) resolveChannelPricing(ctx context.Context, billingModel string, apiKey *APIKey) *ResolvedPricing {
@@ -10488,6 +10553,16 @@ func (s *GatewayService) buildRecordUsageLog(
 ) *UsageLog {
 	durationMs := int(result.Duration.Milliseconds())
 	requestID := resolveUsageBillingRequestID(ctx, result.RequestID)
+	sentModel := upstreamSentModel(result.Model, result.UpstreamModel)
+	if result.UpstreamResponseModelConflict {
+		slog.Warn("upstream_response_model_conflict",
+			"platform", account.Platform,
+			"account_id", account.ID,
+			"request_id", requestID,
+			"sent_model", sentModel,
+			"selected_response_model", strings.TrimSpace(result.UpstreamResponseModel),
+		)
+	}
 	usageLog := &UsageLog{
 		UserID:                user.ID,
 		APIKeyID:              apiKey.ID,
@@ -10496,6 +10571,8 @@ func (s *GatewayService) buildRecordUsageLog(
 		Model:                 result.Model,
 		RequestedModel:        requestedModel,
 		UpstreamModel:         optionalNonEqualStringPtr(result.UpstreamModel, result.Model),
+		UpstreamResponseModel: optionalTrimmedStringPtr(result.UpstreamResponseModel),
+		UpstreamModelMismatch: upstreamModelMismatch(sentModel, result.UpstreamResponseModel),
 		ReasoningEffort:       result.ReasoningEffort,
 		InboundEndpoint:       optionalTrimmedStringPtr(input.InboundEndpoint),
 		UpstreamEndpoint:      optionalTrimmedStringPtr(input.UpstreamEndpoint),

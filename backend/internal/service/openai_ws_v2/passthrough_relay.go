@@ -17,6 +17,8 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+const relayResponseModelMaxLength = 200
+
 type FrameConn interface {
 	ReadFrame(ctx context.Context) (coderws.MessageType, []byte, error)
 	WriteFrame(ctx context.Context, msgType coderws.MessageType, payload []byte) error
@@ -38,26 +40,32 @@ type Usage struct {
 }
 
 type RelayResult struct {
-	RequestModel            string
-	Usage                   Usage
-	BillingUsageComplete    bool
-	RequestID               string
-	TerminalEventType       string
-	FirstTokenMs            *int
-	Duration                time.Duration
-	ClientToUpstreamFrames  int64
-	UpstreamToClientFrames  int64
-	DroppedDownstreamFrames int64
+	RequestModel                 string
+	ResponseModel                string
+	ResponseModelConflict        bool
+	ResponseModelBillingEligible bool
+	Usage                        Usage
+	BillingUsageComplete         bool
+	RequestID                    string
+	TerminalEventType            string
+	FirstTokenMs                 *int
+	Duration                     time.Duration
+	ClientToUpstreamFrames       int64
+	UpstreamToClientFrames       int64
+	DroppedDownstreamFrames      int64
 }
 
 type RelayTurnResult struct {
-	RequestModel         string
-	Usage                Usage
-	BillingUsageComplete bool
-	RequestID            string
-	TerminalEventType    string
-	Duration             time.Duration
-	FirstTokenMs         *int
+	RequestModel                 string
+	ResponseModel                string
+	ResponseModelConflict        bool
+	ResponseModelBillingEligible bool
+	Usage                        Usage
+	BillingUsageComplete         bool
+	RequestID                    string
+	TerminalEventType            string
+	Duration                     time.Duration
+	FirstTokenMs                 *int
 }
 
 type RelayExit struct {
@@ -93,6 +101,8 @@ type relayState struct {
 	usage                Usage
 	requestModel         string
 	lastResponseID       string
+	lastResponseModel    string
+	responseConflict     bool
 	terminalEventType    string
 	firstTokenMs         *int
 	turnTimingByID       map[string]*relayTurnTiming
@@ -112,6 +122,8 @@ type observedUpstreamEvent struct {
 	terminal             bool
 	eventType            string
 	responseID           string
+	responseModel        string
+	responseConflict     bool
 	usage                Usage
 	billingUsageComplete bool
 	duration             time.Duration
@@ -119,8 +131,11 @@ type observedUpstreamEvent struct {
 }
 
 type relayTurnTiming struct {
-	startAt      time.Time
-	firstTokenMs *int
+	startAt               time.Time
+	firstTokenMs          *int
+	firstResponseModel    string
+	terminalResponseModel string
+	responseModelConflict bool
 }
 
 type imageOutputCounter struct {
@@ -737,6 +752,7 @@ func observeUpstreamMessage(
 	}
 	if responseID != "" {
 		turnTiming := openAIWSRelayGetOrInitTurnTiming(state, responseID, now)
+		observeRelayTurnResponseModel(turnTiming, firstRelayResponseModel(message), isTerminalEvent(eventType))
 		if turnTiming != nil && turnTiming.firstTokenMs == nil && isTokenEvent(eventType) {
 			ms := int(now.Sub(turnTiming.startAt).Milliseconds())
 			if ms >= 0 {
@@ -753,6 +769,10 @@ func observeUpstreamMessage(
 	if responseID != "" {
 		state.lastResponseID = responseID
 		if turnTiming, ok := openAIWSRelayDeleteTurnTiming(state, responseID); ok {
+			observed.responseModel = relayTurnResponseModel(&turnTiming)
+			observed.responseConflict = turnTiming.responseModelConflict
+			state.lastResponseModel = observed.responseModel
+			state.responseConflict = observed.responseConflict
 			duration := now.Sub(turnTiming.startAt)
 			if duration < 0 {
 				duration = 0
@@ -762,6 +782,64 @@ func observeUpstreamMessage(
 		}
 	}
 	return observed
+}
+
+func firstRelayResponseModel(message []byte) string {
+	if len(message) == 0 {
+		return ""
+	}
+	values := gjson.GetManyBytes(message, "response.model", "model")
+	for _, value := range values {
+		if value.Type == gjson.String {
+			if model := normalizeRelayResponseModel(value.String()); model != "" {
+				return model
+			}
+		}
+	}
+	return ""
+}
+
+func normalizeRelayResponseModel(model string) string {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return ""
+	}
+	runes := []rune(model)
+	if len(runes) > relayResponseModelMaxLength {
+		model = string(runes[:relayResponseModelMaxLength])
+	}
+	return model
+}
+
+func observeRelayTurnResponseModel(turn *relayTurnTiming, model string, terminal bool) {
+	if turn == nil {
+		return
+	}
+	model = normalizeRelayResponseModel(model)
+	if model == "" {
+		return
+	}
+	current := relayTurnResponseModel(turn)
+	if current != "" && !strings.EqualFold(current, model) {
+		turn.responseModelConflict = true
+	}
+	if terminal {
+		turn.terminalResponseModel = model
+		return
+	}
+	if turn.firstResponseModel == "" {
+		turn.firstResponseModel = model
+	}
+}
+
+func relayTurnResponseModel(turn *relayTurnTiming) string {
+	if turn == nil {
+		return ""
+	}
+	if turn.terminalResponseModel != "" {
+		return turn.terminalResponseModel
+	}
+	return turn.firstResponseModel
 }
 
 func emitTurnComplete(
@@ -800,13 +878,16 @@ func buildRelayTurnResult(state *relayState, observed observedUpstreamEvent) (Re
 		state.settledImageCount = cumulativeImageCount
 	}
 	return RelayTurnResult{
-		RequestModel:         requestModel,
-		Usage:                turnUsage,
-		BillingUsageComplete: observed.billingUsageComplete,
-		RequestID:            responseID,
-		TerminalEventType:    observed.eventType,
-		Duration:             observed.duration,
-		FirstTokenMs:         openAIWSRelayCloneIntPtr(observed.firstToken),
+		RequestModel:                 requestModel,
+		ResponseModel:                observed.responseModel,
+		ResponseModelConflict:        observed.responseConflict,
+		ResponseModelBillingEligible: observed.responseModel != "" && isSuccessfulTerminalEvent(observed.eventType),
+		Usage:                        turnUsage,
+		BillingUsageComplete:         observed.billingUsageComplete,
+		RequestID:                    responseID,
+		TerminalEventType:            observed.eventType,
+		Duration:                     observed.duration,
+		FirstTokenMs:                 openAIWSRelayCloneIntPtr(observed.firstToken),
 	}, true
 }
 
@@ -990,6 +1071,9 @@ func enrichResult(result *RelayResult, state *relayState, duration time.Duration
 		return
 	}
 	result.RequestModel = state.requestModel
+	result.ResponseModel = state.lastResponseModel
+	result.ResponseModelConflict = state.responseConflict
+	result.ResponseModelBillingEligible = state.lastResponseModel != "" && isSuccessfulTerminalEvent(state.terminalEventType)
 	result.Usage = state.usage
 	result.BillingUsageComplete = state.billingUsageComplete
 	if state.imageCounter != nil {
@@ -1025,6 +1109,15 @@ func isDisconnectError(err error) bool {
 func isTerminalEvent(eventType string) bool {
 	switch eventType {
 	case "response.completed", "response.done", "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSuccessfulTerminalEvent(eventType string) bool {
+	switch strings.TrimSpace(eventType) {
+	case "response.completed", "response.done":
 		return true
 	default:
 		return false

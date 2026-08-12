@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/gin-gonic/gin/binding"
 	"github.com/stretchr/testify/require"
 )
 
@@ -17,6 +18,20 @@ import (
 func float64Ptr(v float64) *float64 { return &v }
 func intPtr(v int) *int             { return &v }
 func boolPtr(v bool) *bool          { return &v }
+
+func TestChannelRequestsAcceptResponseModelBillingSource(t *testing.T) {
+	require.NoError(t, binding.Validator.ValidateStruct(&createChannelRequest{
+		Name:               "response-model-channel",
+		BillingModelSource: service.BillingModelSourceResponse,
+	}))
+	require.NoError(t, binding.Validator.ValidateStruct(&updateChannelRequest{
+		BillingModelSource: service.BillingModelSourceResponse,
+	}))
+	require.Error(t, binding.Validator.ValidateStruct(&createChannelRequest{
+		Name:               "invalid-channel",
+		BillingModelSource: "response",
+	}))
+}
 
 // ---------------------------------------------------------------------------
 // 1. channelToResponse

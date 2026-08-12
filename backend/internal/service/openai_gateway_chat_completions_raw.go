@@ -31,6 +31,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	body []byte,
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
+	beginUpstreamResponseModelObservation(c)
 	startTime := time.Now()
 
 	originalModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
@@ -67,7 +68,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 		ServiceTier:     serviceTier,
 		Stream:          clientStream,
 	}
-	ctx = withOpenAIForwardResultBillingState(ctx, forwardResult, startTime, openAIResponseImageBillingConfig{})
+	ctx = withOpenAIForwardResultBillingState(ctx, c, forwardResult, startTime, openAIResponseImageBillingConfig{})
 	if clientStream {
 		upstreamBody, err = ensureOpenAIChatStreamUsage(upstreamBody)
 		if err != nil {
@@ -193,6 +194,10 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	serviceTier *string,
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
 	requestID := resp.Header.Get("x-request-id")
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -241,6 +246,8 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 		result.Model = originalModel
 		result.BillingModel = billingModel
 		result.UpstreamModel = upstreamModel
+		result.UpstreamResponseModel = observedUpstreamResponseModel(c)
+		result.UpstreamResponseModelConflict = observedUpstreamResponseModelConflict(c)
 		result.ReasoningEffort = reasoningEffort
 		if result.ServiceTier == nil {
 			result.ServiceTier = serviceTier
@@ -256,6 +263,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 			if trimmedPayload == "[DONE]" {
 				sawDone = true
 			} else {
+				observer.ObserveOpenAI([]byte(payload), strings.TrimSpace(gjson.Get(payload, "type").String()))
 				billingUsageObservation.observePayload([]byte(payload))
 				usageOnlyChunk := isOpenAIChatUsageOnlyStreamChunk(payload)
 				if u := extractOpenAIChatStreamUsage(payload); u != nil {
@@ -313,6 +321,8 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	if !sawDone {
 		return result, errors.New("upstream chat completions stream ended without [DONE]")
 	}
+	markObservedUpstreamResponseModelBillingEligible(c)
+	result = resultWithUsage()
 	return result, nil
 }
 
@@ -362,6 +372,12 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 		}
 		return nil, fmt.Errorf("read upstream body: %w", err)
 	}
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
+	observer.ObserveOpenAI(respBody, strings.TrimSpace(gjson.GetBytes(respBody, "type").String()))
+	markObservedUpstreamResponseModelBillingEligible(c)
 
 	var usage OpenAIUsage
 	if u := openAIUsageFromChatCompletionsUsage(string(respBody)); u != nil {
@@ -386,6 +402,8 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 	result.Model = originalModel
 	result.BillingModel = billingModel
 	result.UpstreamModel = upstreamModel
+	result.UpstreamResponseModel = observedUpstreamResponseModel(c)
+	result.UpstreamResponseModelConflict = observedUpstreamResponseModelConflict(c)
 	result.ReasoningEffort = reasoningEffort
 	if result.ServiceTier == nil {
 		result.ServiceTier = serviceTier

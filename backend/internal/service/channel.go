@@ -32,6 +32,7 @@ const (
 	BillingModelSourceRequested     = "requested"
 	BillingModelSourceUpstream      = "upstream"
 	BillingModelSourceChannelMapped = "channel_mapped"
+	BillingModelSourceResponse      = "response_model"
 )
 
 // Channel 渠道实体
@@ -40,7 +41,7 @@ type Channel struct {
 	Name               string
 	Description        string
 	Status             string
-	BillingModelSource string         // "requested", "upstream", or "channel_mapped"
+	BillingModelSource string         // "requested", "upstream", "channel_mapped", or "response_model"
 	RestrictModels     bool           // 是否限制模型（仅允许定价列表中的模型）
 	Features           string         // 渠道特性描述（JSON 数组），用于支付页面展示
 	FeaturesConfig     map[string]any // 渠道功能配置（如 web search emulation）
@@ -363,7 +364,7 @@ type ChannelUsageFields struct {
 	ChannelID          int64  // 渠道 ID（0 = 无渠道）
 	OriginalModel      string // 用户原始请求模型（渠道映射前）
 	ChannelMappedModel string // 渠道映射后的模型名（无映射时等于 OriginalModel）
-	BillingModelSource string // 计费模型来源："requested" / "upstream" / "channel_mapped"
+	BillingModelSource string // 计费模型来源："requested" / "upstream" / "channel_mapped" / "response_model"
 	ModelMappingChain  string // 映射链描述，如 "a→b→c"
 }
 
