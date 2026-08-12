@@ -1027,6 +1027,18 @@ func (s *RateLimitService) handle403(ctx context.Context, account *Account, upst
 }
 
 func (s *RateLimitService) handleOpenAI403(ctx context.Context, account *Account, upstreamMsg string, responseBody []byte) (shouldDisable bool) {
+	// A proxy or CDN can reject the request before it reaches OpenAI and return
+	// an HTML 403 page instead of a structured API error. That is a request-path
+	// failure, not evidence that the account credentials are invalid.
+	if isHTMLResponse(responseBody) {
+		slog.Warn(
+			"openai_403_html_body_skips_account_penalty",
+			"account_id", account.ID,
+			"upstream_message", upstreamMsg,
+		)
+		return false
+	}
+
 	msg := buildForbiddenErrorMessage(
 		"Access forbidden (403):",
 		upstreamMsg,
@@ -1074,6 +1086,11 @@ func (s *RateLimitService) handleOpenAI403(ctx context.Context, account *Account
 // validation（需要验证）→ 永久 SetError（需人工去 Google 验证后恢复）
 // violation（违规封号）→ 永久 SetError（需人工处理）
 // generic（通用禁止）→ 永久 SetError
+func isHTMLResponse(responseBody []byte) bool {
+	trimmed := strings.TrimSpace(strings.ToLower(string(responseBody)))
+	return strings.HasPrefix(trimmed, "<!doctype html") || strings.HasPrefix(trimmed, "<html")
+}
+
 func (s *RateLimitService) handleAntigravity403(ctx context.Context, account *Account, upstreamMsg string, responseBody []byte) (shouldDisable bool) {
 	fbType := classifyForbiddenType(string(responseBody))
 
