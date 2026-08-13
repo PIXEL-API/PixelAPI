@@ -376,10 +376,6 @@ func ChatCompletionsResponseToAnthropic(resp *apicompat.ChatCompletionsResponse,
 			choice := resp.Choices[0]
 			out.Content = chatMessageToAnthropicBlocks(choice.Message)
 			out.StopReason = chatFinishReasonToAnthropicStopReason(choice.FinishReason, out.Content)
-			if choice.FinishReason == "length" {
-				// Anthropic conveys max-tokens via stop_reason only; no separate
-				// incomplete_details field. stop_sequence stays nil.
-			}
 		}
 		if resp.Usage != nil {
 			out.Usage = chatUsageToAnthropicUsage(resp.Usage)

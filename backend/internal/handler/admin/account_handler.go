@@ -2948,7 +2948,7 @@ func (h *AccountHandler) RefreshTier(c *gin.Context) {
 		Extra:       extra,
 	}
 	actorAdminID, _ := currentAdminUserID(c)
-	req.AdminAccountMutationConfirmation.apply(updateInput, actorAdminID, accountMutationOperationID(c))
+	req.apply(updateInput, actorAdminID, accountMutationOperationID(c))
 	_, updateErr := h.adminService.UpdateAccount(ctx, accountID, updateInput)
 	if updateErr != nil {
 		response.ErrorFrom(c, updateErr)
@@ -3046,7 +3046,7 @@ func (h *AccountHandler) BatchRefreshTier(c *gin.Context) {
 				Credentials: creds,
 				Extra:       extra,
 			}
-			req.AdminAccountMutationConfirmation.apply(updateInput, actorAdminID, operationID)
+			req.apply(updateInput, actorAdminID, operationID)
 			_, updateErr := h.adminService.UpdateAccount(gctx, acc.ID, updateInput)
 
 			mu.Lock()

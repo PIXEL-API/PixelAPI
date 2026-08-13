@@ -123,7 +123,7 @@ func TestOpsCleanupEffectiveConfigUsesAdvancedSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	svc := NewOpsCleanupService(&opsRepoMock{}, repo, db, nil, testOpsCleanupConfig(), nil, nil)
 
 	got, err := svc.loadEffectiveCleanupConfig(context.Background())
@@ -148,7 +148,7 @@ func TestOpsCleanupMalformedAdvancedSettingsFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	svc := NewOpsCleanupService(&opsRepoMock{}, repo, db, nil, testOpsCleanupConfig(), nil, nil)
 
 	if _, err := svc.loadEffectiveCleanupConfig(context.Background()); err == nil {
@@ -161,7 +161,7 @@ func TestOpsCleanupReconcileDataRetentionReschedulesAndDisables(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo := newRuntimeSettingRepoStub()
 	svc := NewOpsCleanupService(&opsRepoMock{}, repo, db, nil, testOpsCleanupConfig(), nil, nil)
 	svc.Start()
@@ -237,7 +237,7 @@ func TestOpsCleanupStartupSettingsFailureCanReconcileLater(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	svc := NewOpsCleanupService(&opsRepoMock{}, repo, db, nil, testOpsCleanupConfig(), nil, nil)
 	svc.Start()
 	defer svc.Stop()
@@ -278,7 +278,7 @@ func TestOpsCleanupErrorArchiveFailureStillAdvancesSystemLogs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	oldest := time.Now().UTC().AddDate(0, 0, -40)
 	mock.ExpectQuery(`SELECT MIN\(created_at\) FROM ops_error_logs`).
 		WithArgs(sqlmock.AnyArg()).
@@ -330,7 +330,7 @@ func TestOpsCleanupArchiveFailureDoesNotDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	oldest := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	mock.ExpectQuery(`SELECT MIN\(created_at\) FROM ops_error_logs`).
 		WithArgs(sqlmock.AnyArg()).
@@ -361,7 +361,7 @@ func TestOpsCleanupWindowsAdvanceByBoundedDay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	first := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	second := first.AddDate(0, 0, 1)
 	for _, oldest := range []time.Time{first, second} {
@@ -406,7 +406,7 @@ func TestOpsCleanupArchiveTimeoutDoesNotDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	oldest := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	mock.ExpectQuery(`SELECT MIN\(created_at\) FROM ops_error_logs`).
 		WithArgs(sqlmock.AnyArg()).
@@ -435,7 +435,7 @@ func TestOpsCleanupZeroRetentionDisablesTargets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	cfg := testOpsCleanupConfig()
 	cfg.Ops.Cleanup.ErrorLogRetentionDays = 0
 	svc := NewOpsCleanupService(&opsRepoMock{}, nil, db, nil, cfg, nil, nil)
@@ -456,7 +456,7 @@ func TestOpsCleanupArchivesBothLogTablesBeforeAuxiliaryDeletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	oldest := time.Now().UTC().AddDate(0, 0, -40)
 	mock.ExpectQuery(`SELECT MIN\(created_at\) FROM ops_error_logs`).

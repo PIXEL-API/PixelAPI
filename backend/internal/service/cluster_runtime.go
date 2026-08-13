@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/redis/go-redis/v9"
 )
 
 const (
@@ -62,7 +61,7 @@ type ClusterRuntime struct {
 	buildInfo    BuildInfo
 	repository   ClusterRepository
 	db           *sql.DB
-	redis        *redis.Client
+	redis        ClusterRedisPort
 	connections  *ClusterConnectionTracker
 	nodeState    *ClusterNodeState
 	clusterCache *ClusterCacheCoordinator
@@ -117,7 +116,7 @@ func NewClusterRuntime(
 	cfg *config.Config,
 	repository ClusterRepository,
 	db *sql.DB,
-	redisClient *redis.Client,
+	redisPort ClusterRedisPort,
 	connectionTracker *ClusterConnectionTracker,
 	nodeState *ClusterNodeState,
 	clusterCache *ClusterCacheCoordinator,
@@ -138,7 +137,7 @@ func NewClusterRuntime(
 		if db == nil {
 			missing = append(missing, "PostgreSQL")
 		}
-		if redisClient == nil {
+		if redisPort == nil {
 			missing = append(missing, "Redis")
 		}
 		if connectionTracker == nil {
@@ -180,7 +179,7 @@ func NewClusterRuntime(
 			clusterCache.deploymentID != cfg.Cluster.DeploymentID ||
 			clusterCache.nodeID != cfg.Cluster.NodeID ||
 			clusterCache.repository == nil ||
-			clusterCache.redis == nil {
+			clusterCache.publisher == nil {
 			return nil, errors.New("cluster runtime cache coordinator is not ready")
 		}
 		if channelService.clusterCache != clusterCache ||
@@ -200,7 +199,7 @@ func NewClusterRuntime(
 		buildInfo:     buildInfo,
 		repository:    repository,
 		db:            db,
-		redis:         redisClient,
+		redis:         redisPort,
 		connections:   connectionTracker,
 		channel:       channelService,
 		settings:      settingService,
@@ -604,7 +603,7 @@ func (r *ClusterRuntime) cacheSubscriberLoop() {
 		}
 		pubsub := r.redis.Subscribe(r.ctx, r.notifyTopic)
 		for {
-			_, err := pubsub.ReceiveMessage(r.ctx)
+			err := pubsub.Receive(r.ctx)
 			if err != nil {
 				_ = pubsub.Close()
 				break
@@ -635,7 +634,7 @@ func (r *ClusterRuntime) refreshDependencies(ctx context.Context) {
 	} else {
 		dbHealthy = true
 	}
-	if err := r.redis.Ping(ctx).Err(); err != nil {
+	if err := r.redis.Ping(ctx); err != nil {
 		healthErrors = append(healthErrors, "Redis: "+err.Error())
 	} else {
 		redisHealthy = true
@@ -724,8 +723,8 @@ func (r *ClusterRuntime) sendHeartbeat(ctx context.Context) error {
 	heartbeat.DBIdleConnections = dbStats.Idle
 	heartbeat.DBWaitCount = dbStats.WaitCount
 	heartbeat.DBMaxOpenConnections = dbStats.MaxOpenConnections
-	heartbeat.RedisPoolConnections = int(redisStats.TotalConns)
-	heartbeat.RedisIdleConnections = int(redisStats.IdleConns)
+	heartbeat.RedisPoolConnections = int(redisStats.TotalConnections)
+	heartbeat.RedisIdleConnections = int(redisStats.IdleConnections)
 	heartbeat.RedisPoolSize = r.redisCfg.PoolSize
 	heartbeat.CacheVersions = r.AppliedCacheVersions()
 	heartbeat.DatabaseHealthy = r.databaseHealthy.Load()
@@ -974,7 +973,7 @@ func (r *ClusterRuntime) bumpAndPublishCacheVersion(ctx context.Context, key str
 	if err != nil {
 		return nil, fmt.Errorf("encode cache notification: %w", err)
 	}
-	if err := r.redis.Publish(ctx, r.notifyTopic, payload).Err(); err != nil {
+	if err := r.redis.Publish(ctx, r.notifyTopic, payload); err != nil {
 		// PostgreSQL remains authoritative. Report the acceleration failure while
 		// still waking this node; every node also performs periodic reconciliation.
 		slog.Warn("cluster cache notification publish failed",

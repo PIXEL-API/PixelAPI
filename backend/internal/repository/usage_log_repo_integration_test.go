@@ -29,8 +29,8 @@ type UsageLogRepoSuite struct {
 }
 
 func (s *UsageLogRepoSuite) SetupTest() {
-	s.ctx = context.Background()
 	tx := testEntTx(s.T())
+	s.ctx = dbent.NewTxContext(context.Background(), tx)
 	s.tx = tx
 	s.client = tx.Client()
 	s.repo = newUsageLogRepositoryWithSQL(s.client, tx)
@@ -297,6 +297,7 @@ func TestUsageLogRepositoryCreateBestEffort_QueueFullBlocksUntilContextDeadline(
 	client := testEntClient(t)
 	repo := newUsageLogRepositoryWithSQL(client, integrationDB)
 	repo.bestEffortBatchCh = make(chan usageLogBestEffortRequest, 1)
+	repo.bestEffortBatchOnce.Do(func() {})
 	repo.bestEffortBatchCh <- usageLogBestEffortRequest{}
 
 	user := mustCreateUser(t, client, &service.User{Email: fmt.Sprintf("usage-best-effort-full-%d@example.com", time.Now().UnixNano())})
@@ -359,6 +360,7 @@ func TestUsageLogRepositoryCreate_BatchPathQueueFullBlocksUntilContextDeadline(t
 	client := testEntClient(t)
 	repo := newUsageLogRepositoryWithSQL(client, integrationDB)
 	repo.createBatchCh = make(chan usageLogCreateRequest, 1)
+	repo.createBatchOnce.Do(func() {})
 	repo.createBatchCh <- usageLogCreateRequest{}
 
 	user := mustCreateUser(t, client, &service.User{Email: fmt.Sprintf("usage-create-full-%d@example.com", time.Now().UnixNano())})
@@ -390,6 +392,9 @@ func TestUsageLogRepositoryCreate_BatchPathCanceledAfterQueueMarksNotPersisted(t
 	client := testEntClient(t)
 	repo := newUsageLogRepositoryWithSQL(client, integrationDB)
 	repo.createBatchCh = make(chan usageLogCreateRequest, 1)
+	// The test owns this deterministic queue and must prevent ensureCreateBatcher
+	// from replacing it with the production worker queue.
+	repo.createBatchOnce.Do(func() {})
 
 	user := mustCreateUser(t, client, &service.User{Email: fmt.Sprintf("usage-cancel-queued-%d@example.com", time.Now().UnixNano())})
 	apiKey := mustCreateApiKey(t, client, &service.APIKey{UserID: user.ID, Key: "sk-usage-cancel-queued-" + uuid.NewString(), Name: "k"})
@@ -418,10 +423,13 @@ func TestUsageLogRepositoryCreate_BatchPathCanceledAfterQueueMarksNotPersisted(t
 	require.NotNil(t, req.shared)
 	cancel()
 
+	// A queued request owns its completion. Complete it before waiting for the
+	// producer goroutine so the test cannot deadlock if cancellation races with
+	// the state transition from queued to canceled.
+	completeUsageLogCreateRequest(req, usageLogCreateResult{inserted: false, err: service.MarkUsageLogCreateNotPersisted(context.Canceled)})
 	err := <-errCh
 	require.Error(t, err)
 	require.True(t, service.IsUsageLogCreateNotPersisted(err))
-	completeUsageLogCreateRequest(req, usageLogCreateResult{inserted: false, err: service.MarkUsageLogCreateNotPersisted(context.Canceled)})
 }
 
 func TestUsageLogRepositoryFlushCreateBatch_CanceledRequestReturnsNotPersisted(t *testing.T) {
@@ -1534,6 +1542,9 @@ func (s *UsageLogRepoSuite) TestGetAccountUsageStats_MergesOwnedOpenAIIdentityHi
 			"email":           "same-openai-account@example.com",
 		},
 	})
+	deletedAt := time.Now().UTC()
+	_, err := s.client.Account.UpdateOneID(oldAccount.ID).SetDeletedAt(deletedAt).Save(s.ctx)
+	s.Require().NoError(err)
 	newAccount := mustCreateAccount(s.T(), s.client, &service.Account{
 		Name:        "acc-accstats-openai-new",
 		Platform:    service.PlatformOpenAI,
@@ -1573,8 +1584,6 @@ func (s *UsageLogRepoSuite) TestGetAccountUsageStats_MergesOwnedOpenAIIdentityHi
 	s.createUsageLog(owner, apiKey, newAccount, 10, 5, 0.25, base.Add(36*time.Hour))
 	s.createUsageLog(owner, apiKey, sameEmailDifferentIdentity, 500, 250, 50, base.Add(36*time.Hour))
 	s.createUsageLog(otherOwner, otherAPIKey, otherAccount, 1000, 500, 99, base.Add(36*time.Hour))
-
-	s.Require().NoError(s.client.Account.DeleteOneID(oldAccount.ID).Exec(s.ctx))
 
 	resp, err := s.repo.GetAccountUsageStats(s.ctx, newAccount.ID, base, base.Add(72*time.Hour))
 	s.Require().NoError(err)

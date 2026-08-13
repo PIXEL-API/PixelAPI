@@ -4,9 +4,27 @@ import { flushPromises, mount } from '@vue/test-utils'
 import type { BasePaginationResponse, InvoiceRequest } from '@/types'
 import AdminInvoicesView from '../invoices/AdminInvoicesView.vue'
 
-const { listInvoices } = vi.hoisted(() => ({
+const { aoaToSheet, appendSheet, bookNew, showError, showSuccess, saveAs, writeXlsx, listInvoices } = vi.hoisted(() => ({
+  aoaToSheet: vi.fn(() => ({})),
+  appendSheet: vi.fn(),
+  bookNew: vi.fn(() => ({ sheets: [] })),
+  showError: vi.fn(),
+  showSuccess: vi.fn(),
+  saveAs: vi.fn(),
+  writeXlsx: vi.fn(() => new Uint8Array([1, 2, 3])),
   listInvoices: vi.fn()
 }))
+
+vi.mock('xlsx', () => ({
+  utils: {
+    aoa_to_sheet: aoaToSheet,
+    book_new: bookNew,
+    book_append_sheet: appendSheet
+  },
+  write: writeXlsx
+}))
+
+vi.mock('file-saver', () => ({ saveAs }))
 
 vi.mock('@/api/admin/invoices', () => ({
   default: {
@@ -19,8 +37,8 @@ vi.mock('@/api/admin/invoices', () => ({
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
-    showError: vi.fn(),
-    showSuccess: vi.fn()
+    showError,
+    showSuccess
   })
 }))
 
@@ -113,6 +131,13 @@ describe('admin AdminInvoicesView pagination', () => {
     localStorage.clear()
     localStorage.setItem('table-page-size', '50')
     listInvoices.mockReset()
+    aoaToSheet.mockClear()
+    appendSheet.mockClear()
+    bookNew.mockClear()
+    showError.mockClear()
+    showSuccess.mockClear()
+    saveAs.mockClear()
+    writeXlsx.mockClear()
     listInvoices.mockImplementation((params: { page?: number; page_size?: number }) => {
       const page = params.page ?? 1
       const pageSize = params.page_size ?? 50
@@ -240,5 +265,54 @@ describe('admin AdminInvoicesView pagination', () => {
     expect(wrapper.text()).toContain('INV-99')
     expect(wrapper.text()).not.toContain('INV-2')
     expect(wrapper.get('[data-test="pagination"]').attributes('data-page')).toBe('1')
+  })
+
+  it('exports selected invoices with the stable BIFF8 contract', async () => {
+    const invoice = createInvoice(7)
+    invoice.invoice_type = 'enterprise_special'
+    invoice.title_name = '中文测试企业'
+    invoice.tax_id = '00123456789'
+    invoice.amount = 123.45
+    invoice.bank_name = '测试银行'
+    invoice.bank_account = '000012345678'
+    invoice.remark = '长备注 & 特殊字符'
+    listInvoices.mockResolvedValueOnce({ data: createPage(1, 50, 1, [invoice]) })
+
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.get('tbody input[type="checkbox"]').setValue(true)
+    const exportButton = wrapper.findAll('button').find((item) => item.text().startsWith('批量导出'))
+    if (!exportButton) throw new Error('批量导出按钮不存在')
+    await exportButton.trigger('click')
+    await flushPromises()
+
+    expect(aoaToSheet).toHaveBeenCalledOnce()
+    const rows = aoaToSheet.mock.calls[0]?.[0]
+    expect(rows).toHaveLength(2)
+    expect(rows[1]).toEqual([
+      { t: 'n', v: 1 },
+      { t: 's', v: '专票' },
+      { t: 's', v: '中文测试企业' },
+      { t: 's', v: '00123456789' },
+      { t: 's', v: '信息服务费' },
+      { t: 'n', v: 123.45 },
+      { t: 's', v: 'invoice-7@example.com' },
+      { t: 's', v: '测试银行' },
+      { t: 's', v: '000012345678' },
+      { t: 's', v: '长备注 & 特殊字符' }
+    ])
+    expect(appendSheet).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'Sheet1')
+    expect(writeXlsx).toHaveBeenCalledWith(expect.anything(), {
+      type: 'array',
+      bookType: 'biff8',
+      bookSST: true
+    })
+    expect(saveAs).toHaveBeenCalledOnce()
+    const [blob, filename] = saveAs.mock.calls[0] ?? []
+    expect(blob).toBeInstanceOf(Blob)
+    expect(blob.type).toBe('application/vnd.ms-excel')
+    expect(filename).toMatch(/^批量开票-\d{8}-\d{6}\.xls$/)
+    expect(showSuccess).toHaveBeenCalledWith('已导出 1 条发票申请')
+    expect(showError).not.toHaveBeenCalled()
   })
 })

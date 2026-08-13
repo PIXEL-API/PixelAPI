@@ -113,7 +113,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 		parsedReq = &service.ParsedRequest{Model: reqModel, Stream: reqStream, Body: body}
 	}
 	parsedReq.SessionContext = &service.SessionContext{
-		ClientIP:  ip.GetClientIP(c),
+		ClientIP:  ip.GetSecurityClientIP(c),
 		UserAgent: c.GetHeader("User-Agent"),
 		APIKeyID:  apiKey.ID,
 	}
@@ -281,7 +281,7 @@ routeLoop:
 			forwardCtx, cancelForward := bindAccountSelectionForwardContext(selectionCtx, selection)
 			requestPayloadHash := service.HashUsageRequestPayload(body)
 			userAgent := c.GetHeader("User-Agent")
-			clientIP := ip.GetClientIP(c)
+			clientIP := ip.GetSecurityClientIP(c)
 			inboundEndpoint := GetInboundEndpoint(c)
 			upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
 			recordUsage := func(ctx context.Context, result *service.ForwardResult) error {

@@ -5,6 +5,13 @@ on:
   pull_request:
   schedule:
     - cron: '0 3 * * 1'
+  workflow_call:
+    inputs:
+      checkout_ref:
+        description: 'Git ref to scan; defaults to the triggering ref'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -15,6 +22,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref || github.ref }}
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
@@ -34,6 +43,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref || github.ref }}
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -47,12 +58,23 @@ jobs:
       - name: Install dependencies
         working-directory: frontend
         run: pnpm install --frozen-lockfile
-      - name: Run pnpm audit
+      - name: Run pnpm audit and validate exceptions
         working-directory: frontend
         run: |
-          pnpm audit --prod --audit-level=high --json > audit.json || true
-      - name: Check audit exceptions
-        run: |
-          python tools/check_pnpm_audit_exceptions.py \
-            --audit frontend/audit.json \
-            --exceptions .github/audit-exceptions.yml
+          set -euo pipefail
+          audit_file="$(mktemp)"
+          trap 'rm -f "$audit_file"' EXIT
+
+          # pnpm 9 can return non-zero for lower-severity findings even when
+          # --audit-level=high is used. Preserve the complete JSON and let the
+          # policy checker distinguish findings from audit-service failures.
+          set +e
+          pnpm audit --prod --audit-level=high --json \
+            --registry=https://registry.npmjs.org > "$audit_file"
+          audit_status=$?
+          set -e
+
+          echo "pnpm audit exited with status $audit_status; validating JSON policy"
+          python ../tools/check_pnpm_audit_exceptions.py \
+            --audit "$audit_file" \
+            --exceptions ../.github/audit-exceptions.yml

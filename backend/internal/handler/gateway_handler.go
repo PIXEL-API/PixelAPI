@@ -248,7 +248,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 	// 计算粘性会话hash
 	parsedReq.SessionContext = &service.SessionContext{
-		ClientIP:  ip.GetClientIP(c),
+		ClientIP:  ip.GetSecurityClientIP(c),
 		UserAgent: c.GetHeader("User-Agent"),
 		APIKeyID:  apiKey.ID,
 	}
@@ -466,7 +466,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}
 			cancelForward()
 			userAgent := c.GetHeader("User-Agent")
-			clientIP := ip.GetClientIP(c)
+			clientIP := ip.GetSecurityClientIP(c)
 			inboundEndpoint := GetInboundEndpoint(c)
 			upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
 			recordUsageResult := func(result *service.ForwardResult) {
@@ -941,7 +941,7 @@ routeLoop:
 			requestCtx, cancelForward := bindAccountSelectionForwardContext(requestCtx, selection)
 			requestPayloadHash := service.HashUsageRequestPayload(routeBody)
 			userAgent := c.GetHeader("User-Agent")
-			clientIP := ip.GetClientIP(c)
+			clientIP := ip.GetSecurityClientIP(c)
 			inboundEndpoint := GetInboundEndpoint(c)
 			upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
 			recordUsage := func(ctx context.Context, result *service.ForwardResult) error {
@@ -2157,7 +2157,7 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 
 	// 计算粘性会话 hash
 	parsedReq.SessionContext = &service.SessionContext{
-		ClientIP:  ip.GetClientIP(c),
+		ClientIP:  ip.GetSecurityClientIP(c),
 		UserAgent: c.GetHeader("User-Agent"),
 		APIKeyID:  apiKey.ID,
 	}

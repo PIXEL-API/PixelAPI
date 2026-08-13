@@ -111,6 +111,56 @@ def iter_vulns(data: dict):
                 yield name, severity, advisory_id, title
 
 
+def validate_audit_payload(data: object) -> list[str]:
+    if not isinstance(data, dict):
+        return ["Audit output must be a JSON object"]
+    if data.get("error"):
+        detail = data["error"]
+        if isinstance(detail, dict):
+            code = detail.get("code") or "unknown"
+            message = detail.get("message") or "no message"
+            return [f"Audit service failed: {code}: {message}"]
+        return [f"Audit service failed: {detail}"]
+    result_sources = [
+        key
+        for key in ("advisories", "vulnerabilities")
+        if isinstance(data.get(key), dict)
+    ]
+    if not result_sources:
+        return ["Audit output is missing advisories/vulnerabilities results"]
+    if len(result_sources) != 1:
+        return ["Audit output has ambiguous advisories/vulnerabilities results"]
+    metadata = data.get("metadata")
+    if not isinstance(metadata, dict):
+        return ["Audit output is missing metadata"]
+    vulnerability_counts = metadata.get("vulnerabilities")
+    if not isinstance(vulnerability_counts, dict):
+        return ["Audit metadata is missing vulnerability counts"]
+    for severity in ("high", "critical"):
+        count = vulnerability_counts.get(severity)
+        if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+            return [f"Audit metadata has invalid {severity} vulnerability count"]
+        result_count = sum(
+            1
+            for result in data[result_sources[0]].values()
+            if isinstance(result, dict)
+            and normalize_severity(result.get("severity")) == severity
+        )
+        if count != result_count:
+            return [
+                "Audit metadata/result count mismatch for "
+                f"{severity}: metadata={count}, results={result_count}"
+            ]
+    total_dependencies = metadata.get("totalDependencies")
+    if (
+        not isinstance(total_dependencies, int)
+        or isinstance(total_dependencies, bool)
+        or total_dependencies < 0
+    ):
+        return ["Audit metadata has invalid totalDependencies count"]
+    return []
+
+
 def normalize_severity(severity: str) -> str:
     # 统一大小写，避免比较失败。
     return (severity or "").strip().lower()
@@ -145,13 +195,16 @@ def main() -> int:
     parser.add_argument("--exceptions", required=True)
     args = parser.parse_args()
 
-    with open(args.audit, "r", encoding="utf-8") as handle:
-        audit = json.load(handle)
+    if args.audit == "-":
+        audit = json.load(sys.stdin)
+    else:
+        with open(args.audit, "r", encoding="utf-8") as handle:
+            audit = json.load(handle)
 
     # 读取异常清单并建立索引，便于快速匹配包名 + advisory。
     exceptions = parse_exceptions(args.exceptions)
     exception_index = {}
-    errors = []
+    errors = validate_audit_payload(audit)
 
     for exc in exceptions:
         missing = [field for field in REQUIRED_FIELDS if not exc.get(field)]

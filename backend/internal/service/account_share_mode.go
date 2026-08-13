@@ -3608,7 +3608,7 @@ func (s *AccountShareModeService) CreateJoinIntent(
 	consumerUserID, listingID int64,
 	input CreateAccountShareJoinIntentInput,
 ) (*AccountShareJoinIntent, error) {
-	preparation, err := s.prepareAccountShareJoin(
+	_, err := s.prepareAccountShareJoin(
 		ctx,
 		consumerUserID,
 		listingID,
@@ -3631,7 +3631,7 @@ func (s *AccountShareModeService) CreateJoinIntent(
 	// Legacy listings may receive their first immutable revision while the
 	// intent is being created. Reload all join preconditions so the signed
 	// confirmation is based on the same revision the user sees.
-	preparation, err = s.prepareAccountShareJoin(
+	preparation, err := s.prepareAccountShareJoin(
 		ctx,
 		consumerUserID,
 		listingID,

@@ -2252,10 +2252,6 @@ func (h *UserAccountHandler) refreshOwnedAccount(ctx context.Context, ownerUserI
 		}
 	} else {
 		var err error
-		updatedAccount, err = h.accountService.GetOwnedByID(ctx, ownerUserID, account.ID)
-		if err != nil {
-			return nil, "", err
-		}
 		if h.rateLimitService == nil {
 			return nil, "", infraerrors.ServiceUnavailable("RATE_LIMIT_SERVICE_UNAVAILABLE", "rate limit service unavailable")
 		}

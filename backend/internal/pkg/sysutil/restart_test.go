@@ -146,7 +146,7 @@ func TestScheduleProcessSignalRejectsInvalidArguments(t *testing.T) {
 			if tt.nilScheduler {
 				scheduler = nil
 			}
-			var errorHandler func(error) = func(error) {
+			var errorHandler = func(error) {
 				handlerCalls++
 			}
 			if tt.nilErrHandler {

@@ -12,6 +12,10 @@ import type {
   UpdateGroupRequest,
   PaginatedResponse
 } from '@/types'
+import {
+  buildGroupUsageSummaryParams,
+  type GroupUsageSummary
+} from './groupUsageSummary'
 
 export type GroupScopeFilter = GroupScope | 'all'
 
@@ -122,26 +126,6 @@ export async function deleteGroup(id: number): Promise<{ message: string }> {
  */
 export async function toggleStatus(id: number, status: 'active' | 'inactive'): Promise<AdminGroup> {
   return update(id, { status })
-}
-
-/**
- * Get group statistics
- * @param id - Group ID
- * @returns Group usage statistics
- */
-export async function getStats(id: number): Promise<{
-  total_api_keys: number
-  active_api_keys: number
-  total_requests: number
-  total_cost: number
-}> {
-  const { data } = await apiClient.get<{
-    total_api_keys: number
-    active_api_keys: number
-    total_requests: number
-    total_cost: number
-  }>(`/admin/groups/${id}/stats`)
-  return data
 }
 
 /**
@@ -315,17 +299,16 @@ export async function clearGroupRPMOverrides(id: number): Promise<{ message: str
 }
 
 /**
- * Get usage summary (today + cumulative cost) for all groups
+ * Get usage summary (today + queryable cumulative cost) for the requested groups.
  * @param timezone - IANA timezone string (e.g. "Asia/Shanghai")
  * @returns Array of group usage summaries
  */
 export async function getUsageSummary(
+  groupIds: number[] = [],
   timezone?: string
-): Promise<{ group_id: number; today_cost: number; total_cost: number }[]> {
-  const { data } = await apiClient.get<
-    { group_id: number; today_cost: number; total_cost: number }[]
-  >('/admin/groups/usage-summary', {
-    params: timezone ? { timezone } : undefined
+): Promise<GroupUsageSummary[]> {
+  const { data } = await apiClient.get<GroupUsageSummary[]>('/admin/groups/usage-summary', {
+    params: buildGroupUsageSummaryParams(groupIds, timezone)
   })
   return data
 }
@@ -351,7 +334,6 @@ export const groupsAPI = {
   update,
   delete: deleteGroup,
   toggleStatus,
-  getStats,
   getGroupApiKeys,
   getGroupRateSchedules,
   replaceGroupRateSchedules,

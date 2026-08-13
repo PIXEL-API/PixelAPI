@@ -9,6 +9,8 @@
     "start": "next start",
     "images": "node scripts/optimize-screenshots.mjs",
     "lint": "eslint",
+    "check:links": "node scripts/check-internal-links.mjs",
+    "check": "pnpm run lint && pnpm run check:links && pnpm run build",
     "postinstall": "fumadocs-mdx"
   },
   "dependencies": {

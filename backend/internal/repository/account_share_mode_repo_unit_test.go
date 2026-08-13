@@ -574,6 +574,236 @@ func TestAccountShareModeRepositoryListListingsRestoresEndingMembershipAfterRefr
 	}
 }
 
+func TestAccountShareModeRepositoryListListingsCountPrunesUnusedJoins(t *testing.T) {
+	queryErr := errors.New("stop after count query validation")
+	tests := []struct {
+		name      string
+		filters   service.AccountShareListingFilters
+		required  []string
+		forbidden []string
+		withArgs  []driver.Value
+	}{
+		{
+			name:     "public all only counts listings",
+			required: []string{"from account_share_listings l", "l.deleted_at is null", "l.status = 'active'"},
+			forbidden: []string{
+				"account_share_room_accounts",
+				"left join users u",
+				") qm on true",
+				") hm on true",
+			},
+		},
+		{
+			name: "using keeps only queue visibility",
+			filters: service.AccountShareListingFilters{
+				Tab: service.AccountShareModeListingTabUsing,
+			},
+			required:  []string{"qm.id is not null", "m.status in ('active', 'queued', 'ending')"},
+			forbidden: []string{"account_share_room_accounts", "left join users u", ") hm on true"},
+			withArgs:  []driver.Value{int64(42)},
+		},
+		{
+			name: "history keeps queue and history visibility",
+			filters: service.AccountShareListingFilters{
+				Tab: service.AccountShareModeListingTabHistory,
+			},
+			required: []string{
+				"qm.id is null",
+				"hm.id is not null",
+				"m.status in ('active', 'queued', 'ending')",
+				"m.status = 'ended'",
+			},
+			forbidden: []string{"account_share_room_accounts", "left join users u"},
+			withArgs:  []driver.Value{int64(42)},
+		},
+		{
+			name: "mine only counts owned listings",
+			filters: service.AccountShareListingFilters{
+				Tab: service.AccountShareModeListingTabMine,
+			},
+			required:  []string{"l.owner_user_id = $1"},
+			forbidden: []string{"account_share_room_accounts", "left join users u", ") qm on true", ") hm on true"},
+			withArgs:  []driver.Value{int64(42)},
+		},
+		{
+			name: "archive only counts owned deleted listings",
+			filters: service.AccountShareListingFilters{
+				Tab: service.AccountShareModeListingTabArchive,
+			},
+			required:  []string{"l.deleted_at is not null", "l.owner_user_id = $1"},
+			forbidden: []string{"account_share_room_accounts", "left join users u", ") qm on true", ") hm on true"},
+			withArgs:  []driver.Value{int64(42)},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			matcher := sqlmock.QueryMatcherFunc(func(expectedSQL, actualSQL string) error {
+				if expectedSQL != "listing count join contract" {
+					return nil
+				}
+				normalized := strings.ToLower(strings.Join(strings.Fields(actualSQL), " "))
+				for _, fragment := range tt.required {
+					if !strings.Contains(normalized, fragment) {
+						return fmt.Errorf("count query missing required fragment %q: %s", fragment, normalized)
+					}
+				}
+				for _, fragment := range tt.forbidden {
+					if strings.Contains(normalized, fragment) {
+						return fmt.Errorf("count query contains forbidden fragment %q: %s", fragment, normalized)
+					}
+				}
+				return nil
+			})
+			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(matcher))
+			if err != nil {
+				t.Fatalf("sqlmock.New: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+			repo := &accountShareModeRepository{db: db}
+
+			expectation := mock.ExpectQuery("listing count join contract")
+			if len(tt.withArgs) > 0 {
+				expectation.WithArgs(tt.withArgs...)
+			}
+			expectation.WillReturnError(queryErr)
+
+			_, _, err = repo.ListListings(
+				context.Background(),
+				42,
+				tt.filters,
+				pagination.PaginationParams{Page: 1, PageSize: 20},
+			)
+			if !errors.Is(err, queryErr) {
+				t.Fatalf("ListListings error = %v, want count sentinel", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("unmet expectations: %v", err)
+			}
+		})
+	}
+}
+
+func TestAccountShareModeRepositoryListListingsMaterializesPageBeforeGodView(t *testing.T) {
+	queryErr := errors.New("stop after listing query validation")
+	matcher := sqlmock.QueryMatcherFunc(func(expectedSQL, actualSQL string) error {
+		if expectedSQL != "materialized listing query" {
+			return nil
+		}
+		normalized := strings.ToLower(strings.Join(strings.Fields(actualSQL), " "))
+		for _, fragment := range []string{
+			"with viewer_current_membership as materialized",
+			"page as materialized",
+			"paged_listings as materialized",
+			"select l.* from page join account_share_listings l on l.id = page.id",
+			"from paged_listings l",
+			"left join viewer_current_membership cm on cm.listing_id = l.id",
+		} {
+			if !strings.Contains(normalized, fragment) {
+				return fmt.Errorf("listing query missing materialization contract %q: %s", fragment, normalized)
+			}
+		}
+		pageBoundary := strings.Index(normalized, "paged_listings as materialized")
+		if pageBoundary < 0 {
+			return errors.New("listing query is missing paged_listings boundary")
+		}
+		pageSection := normalized[:pageBoundary]
+		for _, fragment := range []string{
+			"account_share_room_accounts",
+			"left join users u on u.id = l.owner_user_id",
+			") room_stats on true",
+			") ac on true",
+		} {
+			if strings.Contains(pageSection, fragment) {
+				return fmt.Errorf("default page contains unrelated god-view dependency %q: %s", fragment, pageSection)
+			}
+		}
+		if strings.Count(normalized, "from account_share_memberships m left join api_keys ak on ak.id = m.api_key_id where m.consumer_user_id = $1 and m.status in ('active', 'ending')") != 1 {
+			return errors.New("current viewer membership must be projected once and reused by page and god-view")
+		}
+		return nil
+	})
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(matcher))
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	repo := &accountShareModeRepository{db: db}
+
+	mock.ExpectQuery("materialized listing query").
+		WithArgs(int64(42), 21, 0).
+		WillReturnError(queryErr)
+	_, _, err = repo.ListListings(
+		context.Background(),
+		42,
+		service.AccountShareListingFilters{SkipTotal: true},
+		pagination.PaginationParams{Page: 1, PageSize: 20},
+	)
+	if !errors.Is(err, queryErr) {
+		t.Fatalf("ListListings error = %v, want listing sentinel", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestAccountShareListingSelectionJoinSQLTracksDynamicDependencies(t *testing.T) {
+	tests := []struct {
+		name         string
+		dependencies string
+		required     []string
+		forbidden    []string
+	}{
+		{
+			name:      "listing only",
+			forbidden: []string{"account_share_room_accounts", "left join users u", ") cm on true", ") qm on true", ") hm on true", ") room_stats on true", ") ac on true"},
+		},
+		{
+			name:         "search",
+			dependencies: "a.name ILIKE $2 OR COALESCE(u.username, '') ILIKE $2",
+			required:     []string{"account_share_room_accounts", "left join users u on u.id = l.owner_user_id"},
+			forbidden:    []string{") cm on true", ") qm on true", ") hm on true", ") room_stats on true", ") ac on true"},
+		},
+		{
+			name:         "default viewer order",
+			dependencies: "qm.queue_rank, COALESCE(cm.joined_at, hm.ended_at, l.updated_at)",
+			required:     []string{"left join viewer_current_membership cm", ") qm on true", ") hm on true"},
+			forbidden:    []string{"account_share_room_accounts", "left join users u", ") room_stats on true", ") ac on true"},
+		},
+		{
+			name:         "account concurrency sort",
+			dependencies: "COALESCE(room_stats.total_concurrency, a.concurrency, 0)",
+			required:     []string{"account_share_room_accounts", ") room_stats on true"},
+			forbidden:    []string{"left join users u", ") cm on true", ") qm on true", ") hm on true", ") ac on true"},
+		},
+		{
+			name:         "remaining seats sort",
+			dependencies: "l.seat_limit - COALESCE(ac.active_seats, 0)",
+			required:     []string{") ac on true"},
+			forbidden:    []string{"account_share_room_accounts", "left join users u", ") cm on true", ") qm on true", ") hm on true", ") room_stats on true"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			normalized := strings.ToLower(strings.Join(strings.Fields(accountShareListingSelectionJoinSQL(
+				tt.dependencies,
+				accountShareViewerCurrentMembershipJoinSQL(),
+			)), " "))
+			for _, fragment := range tt.required {
+				if !strings.Contains(normalized, fragment) {
+					t.Fatalf("selection joins missing required dependency %q: %s", fragment, normalized)
+				}
+			}
+			for _, fragment := range tt.forbidden {
+				if strings.Contains(normalized, fragment) {
+					t.Fatalf("selection joins contain forbidden dependency %q: %s", fragment, normalized)
+				}
+			}
+		})
+	}
+}
+
 func TestAccountShareModeRepositoryHasActiveOrQueuedMembershipForAPIKey(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -611,7 +841,7 @@ func TestAccountShareModeRepositoryListAPIKeyBindingMembershipsIncludesEndingSta
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	repo := &accountShareModeRepository{db: db}
 	consumerUserID := int64(7)
@@ -6367,7 +6597,7 @@ func TestAccountShareModeRepositoryListAllStillExcludesDeletedRooms(t *testing.T
 		normalized := strings.ToLower(strings.Join(strings.Fields(actualSQL), " "))
 		if !strings.Contains(
 			normalized,
-			"where l.deleted_at is null and a.deleted_at is null and l.status = 'active'",
+			"where l.deleted_at is null and l.status = 'active'",
 		) {
 			return errors.New("ordinary account plaza list must continue excluding deleted rooms")
 		}

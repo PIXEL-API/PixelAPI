@@ -382,8 +382,10 @@ func TestCRSSyncExistingAccountBranchesUseGuardAndKeepPerItemFailureSemantics(t 
 	accounts["claude"].AccountShareModeListingID = &listingID
 	previewSnapshots := make([]CRSAccountPreviewSnapshot, 0, len(accounts))
 	for _, account := range accounts {
+		crsAccountID, ok := account.Extra["crs_account_id"].(string)
+		require.True(t, ok)
 		snapshot := CRSAccountPreviewSnapshot{
-			CRSAccountID:   account.Extra["crs_account_id"].(string),
+			CRSAccountID:   crsAccountID,
 			LocalAccountID: account.ID,
 			RoomBindings:   []CRSAccountRoomBindingSnapshot{},
 		}
@@ -686,7 +688,9 @@ func TestCRSSyncIgnoresVolatileExportTimestampInPreviewSnapshot(t *testing.T) {
 		if call > 1 {
 			exportedAt = "2026-07-27T10:01:00Z"
 		}
-		payload["data"].(map[string]any)["exportedAt"] = exportedAt
+		data, ok := payload["data"].(map[string]any)
+		require.True(t, ok)
+		data["exportedAt"] = exportedAt
 		return payload
 	})
 	defer server.Close()

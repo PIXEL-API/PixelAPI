@@ -24,7 +24,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/redis/go-redis/v9"
 )
 
 const (
@@ -147,14 +146,14 @@ type OIDCProviderService struct {
 	requestTTL  time.Duration
 	codeTTL     time.Duration
 	accessTTL   time.Duration
-	redis       *redis.Client
+	stateStore  OIDCProviderStateStore
 	userService *UserService
 	signingKey  *rsa.PrivateKey
 	kid         string
 	clients     map[string]oidcProviderClient
 }
 
-func NewOIDCProviderService(cfg *config.Config, redisClient *redis.Client, userService *UserService) (*OIDCProviderService, error) {
+func NewOIDCProviderService(cfg *config.Config, stateStore OIDCProviderStateStore, userService *UserService) (*OIDCProviderService, error) {
 	if cfg == nil {
 		return nil, errors.New("oidc provider: config is nil")
 	}
@@ -163,7 +162,7 @@ func NewOIDCProviderService(cfg *config.Config, redisClient *redis.Client, userS
 	if !provider.Enabled {
 		return service, nil
 	}
-	if redisClient == nil {
+	if stateStore == nil {
 		return nil, errors.New("oidc provider: redis client is required")
 	}
 	if userService == nil {
@@ -193,7 +192,7 @@ func NewOIDCProviderService(cfg *config.Config, redisClient *redis.Client, userS
 	service.requestTTL = time.Duration(provider.RequestTTLSeconds) * time.Second
 	service.codeTTL = time.Duration(provider.CodeTTLSeconds) * time.Second
 	service.accessTTL = time.Duration(provider.AccessTokenTTLSeconds) * time.Second
-	service.redis = redisClient
+	service.stateStore = stateStore
 	service.userService = userService
 	service.signingKey = privateKey
 	service.kid = kid
@@ -341,7 +340,7 @@ func (s *OIDCProviderService) BeginAuthorization(ctx context.Context, input OIDC
 	if err != nil {
 		return "", newOIDCProviderError("server_error", "failed to generate authorization request", http.StatusInternalServerError)
 	}
-	if err := s.redis.Set(ctx, oidcProviderRedisPrefix+"request:"+hashOIDCProviderToken(requestID), encodedRequest, s.requestTTL).Err(); err != nil {
+	if err := s.stateStore.Set(ctx, oidcProviderRedisPrefix+"request:"+hashOIDCProviderToken(requestID), encodedRequest, s.requestTTL); err != nil {
 		return "", newOIDCProviderError("temporarily_unavailable", "authorization state store is unavailable", http.StatusServiceUnavailable)
 	}
 	frontendURL, err := url.Parse(s.frontendURL)
@@ -380,8 +379,8 @@ func (s *OIDCProviderService) CompleteAuthorization(ctx context.Context, request
 	if len(requestID) == 0 || len(requestID) > 512 || userID <= 0 {
 		return "", newOIDCProviderError("invalid_request", "request_id is invalid", http.StatusBadRequest)
 	}
-	encodedRequest, err := s.redis.GetDel(ctx, oidcProviderRedisPrefix+"request:"+hashOIDCProviderToken(requestID)).Bytes()
-	if errors.Is(err, redis.Nil) {
+	encodedRequest, found, err := s.stateStore.Take(ctx, oidcProviderRedisPrefix+"request:"+hashOIDCProviderToken(requestID))
+	if !found && err == nil {
 		return "", newOIDCProviderError("invalid_request", "authorization request is invalid, expired, or already used", http.StatusBadRequest)
 	}
 	if err != nil {
@@ -411,7 +410,7 @@ func (s *OIDCProviderService) CompleteAuthorization(ctx context.Context, request
 	if err != nil {
 		return "", newOIDCProviderError("server_error", "failed to generate authorization code", http.StatusInternalServerError)
 	}
-	if err := s.redis.Set(ctx, oidcProviderRedisPrefix+"code:"+hashOIDCProviderToken(code), encodedCode, s.codeTTL).Err(); err != nil {
+	if err := s.stateStore.Set(ctx, oidcProviderRedisPrefix+"code:"+hashOIDCProviderToken(code), encodedCode, s.codeTTL); err != nil {
 		return "", newOIDCProviderError("temporarily_unavailable", "authorization code store is unavailable", http.StatusServiceUnavailable)
 	}
 	redirectURL, err := url.Parse(request.RedirectURI)
@@ -445,8 +444,8 @@ func (s *OIDCProviderService) ExchangeCode(ctx context.Context, input OIDCProvid
 	if len(input.Code) == 0 || len(input.Code) > 512 {
 		return nil, newOIDCProviderError("invalid_grant", "authorization code is invalid", http.StatusBadRequest)
 	}
-	encodedCode, err := s.redis.GetDel(ctx, oidcProviderRedisPrefix+"code:"+hashOIDCProviderToken(input.Code)).Bytes()
-	if errors.Is(err, redis.Nil) {
+	encodedCode, found, err := s.stateStore.Take(ctx, oidcProviderRedisPrefix+"code:"+hashOIDCProviderToken(input.Code))
+	if !found && err == nil {
 		return nil, newOIDCProviderError("invalid_grant", "authorization code is invalid, expired, or already used", http.StatusBadRequest)
 	}
 	if err != nil {
@@ -487,12 +486,12 @@ func (s *OIDCProviderService) ExchangeCode(ctx context.Context, input OIDCProvid
 	if err != nil {
 		return nil, newOIDCProviderError("server_error", "failed to encode access token", http.StatusInternalServerError)
 	}
-	if err := s.redis.Set(ctx, oidcProviderRedisPrefix+"access:"+hashOIDCProviderToken(accessToken), encodedAccessState, s.accessTTL).Err(); err != nil {
+	if err := s.stateStore.Set(ctx, oidcProviderRedisPrefix+"access:"+hashOIDCProviderToken(accessToken), encodedAccessState, s.accessTTL); err != nil {
 		return nil, newOIDCProviderError("temporarily_unavailable", "access token store is unavailable", http.StatusServiceUnavailable)
 	}
 	idToken, err := s.signIDToken(ctx, user, codeState, accessToken)
 	if err != nil {
-		_ = s.redis.Del(ctx, oidcProviderRedisPrefix+"access:"+hashOIDCProviderToken(accessToken)).Err()
+		_ = s.stateStore.Delete(ctx, oidcProviderRedisPrefix+"access:"+hashOIDCProviderToken(accessToken))
 		return nil, newOIDCProviderError("server_error", "failed to sign ID token", http.StatusInternalServerError)
 	}
 	return &OIDCProviderTokenResponse{
@@ -595,8 +594,8 @@ func (s *OIDCProviderService) loadAccessTokenState(ctx context.Context, accessTo
 	if len(accessToken) == 0 || len(accessToken) > 512 {
 		return nil, newOIDCProviderError("invalid_token", "access token is invalid", http.StatusUnauthorized)
 	}
-	encodedState, err := s.redis.Get(ctx, oidcProviderRedisPrefix+"access:"+hashOIDCProviderToken(accessToken)).Bytes()
-	if errors.Is(err, redis.Nil) {
+	encodedState, found, err := s.stateStore.Get(ctx, oidcProviderRedisPrefix+"access:"+hashOIDCProviderToken(accessToken))
+	if !found && err == nil {
 		return nil, newOIDCProviderError("invalid_token", "access token is invalid or expired", http.StatusUnauthorized)
 	}
 	if err != nil {
@@ -614,8 +613,8 @@ func (s *OIDCProviderService) Revoke(ctx context.Context, clientID, accessToken 
 		return nil
 	}
 	key := oidcProviderRedisPrefix + "access:" + hashOIDCProviderToken(accessToken)
-	encodedState, err := s.redis.Get(ctx, key).Bytes()
-	if errors.Is(err, redis.Nil) {
+	encodedState, found, err := s.stateStore.Get(ctx, key)
+	if !found && err == nil {
 		return nil
 	}
 	if err != nil {
@@ -625,7 +624,7 @@ func (s *OIDCProviderService) Revoke(ctx context.Context, clientID, accessToken 
 	if json.Unmarshal(encodedState, &state) != nil || state.ClientID != clientID {
 		return nil
 	}
-	if err := s.redis.Del(ctx, key).Err(); err != nil {
+	if err := s.stateStore.Delete(ctx, key); err != nil {
 		return newOIDCProviderError("temporarily_unavailable", "access token store is unavailable", http.StatusServiceUnavailable)
 	}
 	return nil

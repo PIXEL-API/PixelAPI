@@ -129,8 +129,8 @@ func TestSchedulerCacheEmptySnapshotKeepsBucketRegistered(t *testing.T) {
 
 	snapshot, hit, err := cache.GetSnapshot(ctx, bucket)
 	require.NoError(t, err)
-	require.False(t, hit)
-	require.Nil(t, snapshot)
+	require.True(t, hit)
+	require.Empty(t, snapshot)
 
 	buckets, err = cache.ListBuckets(ctx)
 	require.NoError(t, err)

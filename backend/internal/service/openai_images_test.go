@@ -1423,7 +1423,7 @@ func TestOpenAIImagesDirectStreamKeepaliveDoesNotBlockFailover(t *testing.T) {
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
 	reader, writer := io.Pipe()
-	defer writer.Close()
+	defer func() { _ = writer.Close() }()
 	go func() {
 		time.Sleep(1100 * time.Millisecond)
 		_, _ = io.WriteString(writer, "event: error\ndata: {\"type\":\"error\",\"error\":{\"status\":429,\"message\":\"rate limited\"}}\n\n")
@@ -1449,7 +1449,7 @@ func TestOpenAIImagesDirectStreamIdleTimeoutBeforeOutputCanFailover(t *testing.T
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
 	reader, writer := io.Pipe()
-	defer writer.Close()
+	defer func() { _ = writer.Close() }()
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
@@ -1468,7 +1468,7 @@ func TestOpenAIImagesOAuthNonStreamingSSEUsesIdleTimeout(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	reader, writer := io.Pipe()
-	defer writer.Close()
+	defer func() { _ = writer.Close() }()
 	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: reader}
 	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{StreamDataIntervalTimeout: 1}}}
 

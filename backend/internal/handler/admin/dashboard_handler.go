@@ -3,6 +3,7 @@ package admin
 import (
 	"encoding/json"
 	"errors"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +15,22 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+const deprecatedAdminStatsReason = "ADMIN_STATS_ENDPOINT_DEPRECATED"
+
+func respondDeprecatedAdminStatsEndpoint(c *gin.Context, replacement string) {
+	message := "This admin statistics endpoint is deprecated and no longer returns statistics"
+	var metadata map[string]string
+	if replacement == "" {
+		message += ". No direct replacement is available."
+	} else {
+		message += ". Use " + replacement + "."
+		metadata = map[string]string{"replacement": replacement}
+	}
+
+	c.Header("Deprecation", "true")
+	response.ErrorWithDetails(c, http.StatusGone, message, deprecatedAdminStatsReason, metadata)
+}
 
 // DashboardHandler handles admin dashboard statistics
 type DashboardHandler struct {
@@ -199,16 +216,10 @@ func (h *DashboardHandler) BackfillAggregation(c *gin.Context) {
 	})
 }
 
-// GetRealtimeMetrics handles getting real-time system metrics
+// GetRealtimeMetrics returns the migration contract for the retired dashboard realtime endpoint.
 // GET /api/v1/admin/dashboard/realtime
 func (h *DashboardHandler) GetRealtimeMetrics(c *gin.Context) {
-	// Return mock data for now
-	response.Success(c, gin.H{
-		"active_requests":       0,
-		"requests_per_minute":   0,
-		"average_response_time": 0,
-		"error_rate":            0.0,
-	})
+	respondDeprecatedAdminStatsEndpoint(c, "GET /api/v1/admin/ops/realtime-traffic")
 }
 
 // GetUsageTrend handles getting usage trend data

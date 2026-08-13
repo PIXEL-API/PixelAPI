@@ -23,8 +23,8 @@ type APIKeyRepoSuite struct {
 }
 
 func (s *APIKeyRepoSuite) SetupTest() {
-	s.ctx = context.Background()
 	tx := testEntTx(s.T())
+	s.ctx = dbent.NewTxContext(context.Background(), tx)
 	s.client = tx.Client()
 	s.repo = newAPIKeyRepositoryWithSQL(s.client, tx)
 }

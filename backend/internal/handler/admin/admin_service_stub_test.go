@@ -10,26 +10,26 @@ import (
 )
 
 type stubAdminService struct {
-	users                []service.User
-	apiKeys              []service.APIKey
-	groups               []service.Group
-	accounts             []service.Account
-	proxies              []service.Proxy
-	proxyCounts          []service.ProxyWithAccountCount
-	redeems              []service.RedeemCode
-	boundAuthIdentity    *service.AdminBindAuthIdentityInput
-	boundAuthIdentityFor int64
-	createdAccounts      []*service.CreateAccountInput
-	createdProxies       []*service.CreateProxyInput
-	updatedProxyIDs      []int64
-	updatedProxies       []*service.UpdateProxyInput
-	testedProxyIDs       []int64
+	users                 []service.User
+	apiKeys               []service.APIKey
+	groups                []service.Group
+	accounts              []service.Account
+	proxies               []service.Proxy
+	proxyCounts           []service.ProxyWithAccountCount
+	redeems               []service.RedeemCode
+	boundAuthIdentity     *service.AdminBindAuthIdentityInput
+	boundAuthIdentityFor  int64
+	createdAccounts       []*service.CreateAccountInput
+	createdProxies        []*service.CreateProxyInput
+	updatedProxyIDs       []int64
+	updatedProxies        []*service.UpdateProxyInput
+	testedProxyIDs        []int64
 	createAccountErr      error
 	updateAccountErr      error
 	bulkUpdateAccountErr  error
 	bulkUpdateAccountFunc func(input *service.BulkUpdateAccountsInput) (*service.BulkUpdateAccountsResult, error)
-	checkMixedErr        error
-	lastMixedCheck       struct {
+	checkMixedErr         error
+	lastMixedCheck        struct {
 		accountID int64
 		platform  string
 		groupIDs  []int64
@@ -195,10 +195,6 @@ func (s *stubAdminService) UpdateUserLoadFactorCredits(ctx context.Context, user
 
 func (s *stubAdminService) GetUserAPIKeys(ctx context.Context, userID int64, page, pageSize int, sortBy, sortOrder string) ([]service.APIKey, int64, error) {
 	return s.apiKeys, int64(len(s.apiKeys)), nil
-}
-
-func (s *stubAdminService) GetUserUsageStats(ctx context.Context, userID int64, period string) (any, error) {
-	return map[string]any{"user_id": userID}, nil
 }
 
 func (s *stubAdminService) GetUserRPMStatus(ctx context.Context, userID int64) (*service.UserRPMStatus, error) {

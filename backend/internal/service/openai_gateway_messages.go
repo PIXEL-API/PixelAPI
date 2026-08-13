@@ -764,12 +764,10 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			}
 			return resultWithUsage(), nil
 		}
-		result := resultWithUsage()
 		if !sawSuccessTerminal {
-			return result, errors.New("upstream responses stream ended without a successful terminal event")
+			return resultWithUsage(), errors.New("upstream responses stream ended without a successful terminal event")
 		}
 		markObservedUpstreamResponseModelBillingEligible(c)
-		result = resultWithUsage()
 		if finalEvents := apicompat.FinalizeResponsesAnthropicStream(state); len(finalEvents) > 0 {
 			for _, evt := range finalEvents {
 				sse, err := apicompat.ResponsesAnthropicEventToSSE(evt)

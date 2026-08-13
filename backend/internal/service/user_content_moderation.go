@@ -266,7 +266,7 @@ func (s *UserContentModerationService) CheckAccountRequest(ctx context.Context, 
 		return allow, nil
 	}
 
-	content := ContentModerationInput{}
+	var content ContentModerationInput
 	if input.Content != nil {
 		content = input.Content.Clone()
 	} else if input.Moderation.Content != nil {

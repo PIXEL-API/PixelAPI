@@ -3258,6 +3258,10 @@ import {
   resetInactivePlatformPricing,
   type GroupPricingValidationError,
 } from "./groupPricingForm";
+import {
+  createGroupUsageSummaryMap,
+  formatGroupUsageCost,
+} from "@/api/admin/groupUsageSummary";
 
 const { t } = useI18n();
 const appStore = useAppStore();
@@ -4197,25 +4201,19 @@ const loadGroups = async () => {
   }
 };
 
-const formatCost = (cost: number): string => {
-  if (cost >= 1000) return cost.toFixed(0);
-  if (cost >= 100) return cost.toFixed(1);
-  return cost.toFixed(2);
-};
+const formatCost = formatGroupUsageCost;
 
 const loadUsageSummary = async () => {
   usageLoading.value = true;
   try {
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const data = await adminAPI.groups.getUsageSummary(tz);
-    const map = new Map<number, { today_cost: number; total_cost: number }>();
-    for (const item of data) {
-      map.set(item.group_id, {
-        today_cost: item.today_cost,
-        total_cost: item.total_cost,
-      });
+    const groupIds = groups.value.map((group) => group.id);
+    if (groupIds.length === 0) {
+      usageMap.value = new Map();
+      return;
     }
-    usageMap.value = map;
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const data = await adminAPI.groups.getUsageSummary(groupIds, tz);
+    usageMap.value = createGroupUsageSummaryMap(data);
   } catch (error) {
     console.error("Error loading group usage summary:", error);
   } finally {

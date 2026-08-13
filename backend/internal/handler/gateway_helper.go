@@ -236,7 +236,6 @@ func bindAccountSelectionForwardContext(ctx context.Context, selection *service.
 	return service.BindAccountShareRuntimeLeaseContext(ctx, selection.RuntimeLease)
 }
 
-
 // finalizeAccountShareRequest records usage and releases the runtime lease.
 // Billing intent mechanism has been removed - usage is recorded synchronously.
 func finalizeAccountShareRequest(

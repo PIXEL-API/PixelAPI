@@ -1758,7 +1758,7 @@ func credentialFieldExists(ctx context.Context, repository any, key, value strin
 func (s *AccountService) OpenAIAgentIdentityRuntimeIDExists(ctx context.Context, runtimeID string) (bool, error) {
 	runtimeID = strings.TrimSpace(runtimeID)
 	if runtimeID == "" {
-		return false, errors.New("Agent Identity runtime id is required")
+		return false, errors.New("agent identity runtime id is required")
 	}
 	if s == nil || s.accountRepo == nil {
 		return false, errors.New("account repository is required for Agent Identity duplicate detection")

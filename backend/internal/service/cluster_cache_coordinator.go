@@ -9,7 +9,6 @@ import (
 	"sync/atomic"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/redis/go-redis/v9"
 )
 
 // ClusterCacheCoordinator advances the PostgreSQL-authoritative generation
@@ -19,7 +18,7 @@ type ClusterCacheCoordinator struct {
 	deploymentID string
 	nodeID       string
 	repository   ClusterRepository
-	redis        *redis.Client
+	publisher    ClusterCachePublisher
 	topic        string
 	healthy      atomic.Bool
 	pendingMu    sync.Mutex
@@ -30,11 +29,11 @@ type ClusterCacheCoordinator struct {
 func NewClusterCacheCoordinator(
 	cfg *config.Config,
 	repository ClusterRepository,
-	redisClient *redis.Client,
+	publisher ClusterCachePublisher,
 ) *ClusterCacheCoordinator {
 	coordinator := &ClusterCacheCoordinator{
 		repository: repository,
-		redis:      redisClient,
+		publisher:  publisher,
 		pending:    make(map[string]struct{}, 3),
 	}
 	coordinator.healthy.Store(true)
@@ -52,7 +51,7 @@ func (c *ClusterCacheCoordinator) Advance(ctx context.Context, cacheKey string) 
 	if c == nil || !c.enabled {
 		return nil
 	}
-	if c.repository == nil || c.redis == nil {
+	if c.repository == nil || c.publisher == nil {
 		err := fmt.Errorf("cluster cache coordinator is unavailable")
 		c.markPending(cacheKey, err)
 		return err
@@ -72,7 +71,7 @@ func (c *ClusterCacheCoordinator) Advance(ctx context.Context, cacheKey string) 
 	if err != nil {
 		return fmt.Errorf("encode %s cache notification: %w", cacheKey, err)
 	}
-	if err := c.redis.Publish(ctx, c.topic, payload).Err(); err != nil {
+	if err := c.publisher.Publish(ctx, c.topic, payload); err != nil {
 		// PostgreSQL already contains the authoritative version. Periodic
 		// reconciliation is reliable, so Pub/Sub failure is observable but does
 		// not make the write inconsistent.

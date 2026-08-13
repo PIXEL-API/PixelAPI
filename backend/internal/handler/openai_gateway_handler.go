@@ -632,7 +632,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		forwardCtx, cancelForward := bindAccountSelectionForwardContext(dispatchCtx, selection)
 		requestPayloadHash := service.HashUsageRequestPayload(body)
 		userAgent := c.GetHeader("User-Agent")
-		clientIP := ip.GetClientIP(c)
+		clientIP := ip.GetSecurityClientIP(c)
 		inboundEndpoint := GetInboundEndpoint(c)
 		upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
 		recordUsage := func(ctx context.Context, result *service.OpenAIForwardResult) error {
@@ -1264,7 +1264,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		forwardCtx, cancelForward := bindAccountSelectionForwardContext(selectionCtx, selection)
 		requestPayloadHash := service.HashUsageRequestPayload(body)
 		userAgent := c.GetHeader("User-Agent")
-		clientIP := ip.GetClientIP(c)
+		clientIP := ip.GetSecurityClientIP(c)
 		inboundEndpoint := GetInboundEndpoint(c)
 		upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
 		recordUsage := func(ctx context.Context, result *service.OpenAIForwardResult) error {
@@ -1729,7 +1729,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		return
 	}
 	reqLog.Info("openai.websocket_ingress_started")
-	clientIP := ip.GetClientIP(c)
+	clientIP := ip.GetSecurityClientIP(c)
 	userAgent := strings.TrimSpace(c.GetHeader("User-Agent"))
 	// 必须在 ingress 租约覆盖请求上下文之前捕获：下面 c.Request 被替换后
 	// 就再也拿不到不含租约取消信号的原始生命周期 ctx。

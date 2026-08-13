@@ -1903,10 +1903,14 @@ func TestAccountShareModeSeatWaiverBacklogLoopsWithCursorUntilDrained(t *testing
 		t.Fatalf("expected cursor recorded per call, got %d", len(repo.waiverBacklogCursors))
 	}
 	first, second := repo.waiverBacklogCursors[0], repo.waiverBacklogCursors[1]
-	if !first[0].(time.Time).IsZero() || first[1].(int64) != 0 {
+	firstTime, firstTimeOK := first[0].(time.Time)
+	firstID, firstIDOK := first[1].(int64)
+	if !firstTimeOK || !firstIDOK || !firstTime.IsZero() || firstID != 0 {
 		t.Fatalf("first backlog call should start without cursor, got %#v", first)
 	}
-	if !second[0].(time.Time).Equal(time.Unix(1000, 0).UTC()) || second[1].(int64) != 42 {
+	secondTime, secondTimeOK := second[0].(time.Time)
+	secondID, secondIDOK := second[1].(int64)
+	if !secondTimeOK || !secondIDOK || !secondTime.Equal(time.Unix(1000, 0).UTC()) || secondID != 42 {
 		t.Fatalf("second backlog call should resume from batch cursor, got %#v", second)
 	}
 	if repo.waiverLateCalls != 1 {

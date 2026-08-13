@@ -247,30 +247,6 @@ export async function getUserApiKeys(id: number): Promise<PaginatedResponse<ApiK
 }
 
 /**
- * Get user's usage statistics
- * @param id - User ID
- * @param period - Time period
- * @returns User usage statistics
- */
-export async function getUserUsageStats(
-  id: number,
-  period: string = 'month'
-): Promise<{
-  total_requests: number
-  total_cost: number
-  total_tokens: number
-}> {
-  const { data } = await apiClient.get<{
-    total_requests: number
-    total_cost: number
-    total_tokens: number
-  }>(`/admin/users/${id}/usage`, {
-    params: { period }
-  })
-  return data
-}
-
-/**
  * Balance history item returned from the API
  */
 export interface BalanceHistoryItem {
@@ -359,7 +335,6 @@ export const usersAPI = {
   updateConcurrency,
   toggleStatus,
   getUserApiKeys,
-  getUserUsageStats,
   getUserBalanceHistory,
   replaceGroup,
   bindUserAuthIdentity

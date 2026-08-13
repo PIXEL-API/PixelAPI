@@ -530,8 +530,6 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 		VideoResolution:      usage.VideoResolution,
 		VideoDurationSeconds: usage.VideoDurationSeconds,
 	}
-	if endpoint.IsGenerationRequest() {
-	}
 	writeGrokMediaResponse(c, resp, respBody, s.responseHeaderFilter)
 	return result, nil
 }

@@ -35,14 +35,16 @@ type CapturedFingerprint struct {
 	EnableGREASE        bool     `json:"enable_grease"`
 }
 
-// TestDialerAgainstCaptureServer connects to the tls-fingerprint-web capture server
-// and verifies that the dialer's TLS fingerprint matches the configured Profile.
+// runDialerAgainstCaptureServer connects to the tls-fingerprint-web capture
+// server and verifies that the dialer's TLS fingerprint matches the configured
+// Profile. The explicit live-smoke test in dialer_capture_live_test.go calls
+// this helper; the standard integration suite remains provider-free.
 //
 // Default capture server: https://tls.sub2api.org:8090
 // Override with env: TLSFINGERPRINT_CAPTURE_URL=https://localhost:8443
 //
-// Run: go test -v -run TestDialerAgainstCaptureServer ./internal/pkg/tlsfingerprint/...
-func TestDialerAgainstCaptureServer(t *testing.T) {
+// Run: make test-integration-tls-live
+func runDialerAgainstCaptureServer(t *testing.T) {
 	captureURL := os.Getenv("TLSFINGERPRINT_CAPTURE_URL")
 	if captureURL == "" {
 		captureURL = "https://tls.sub2api.org:8090"

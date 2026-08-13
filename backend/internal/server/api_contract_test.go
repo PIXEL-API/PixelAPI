@@ -1255,6 +1255,70 @@ func TestAPIContracts(t *testing.T) {
 				}
 			}`,
 		},
+		{
+			name:       "GET /api/v1/admin/users/:id/usage is deprecated",
+			method:     http.MethodGet,
+			path:       "/api/v1/admin/users/1/usage?period=today",
+			wantStatus: http.StatusGone,
+			wantJSON: `{
+				"code": 410,
+				"message": "This admin statistics endpoint is deprecated and no longer returns statistics. Use POST /api/v1/admin/dashboard/users-usage.",
+				"reason": "ADMIN_STATS_ENDPOINT_DEPRECATED",
+				"metadata": {
+					"replacement": "POST /api/v1/admin/dashboard/users-usage"
+				}
+			}`,
+		},
+		{
+			name:       "GET /api/v1/admin/groups/:id/stats is deprecated",
+			method:     http.MethodGet,
+			path:       "/api/v1/admin/groups/2/stats",
+			wantStatus: http.StatusGone,
+			wantJSON: `{
+				"code": 410,
+				"message": "This admin statistics endpoint is deprecated and no longer returns statistics. Use GET /api/v1/admin/groups/usage-summary or GET /api/v1/admin/dashboard/groups.",
+				"reason": "ADMIN_STATS_ENDPOINT_DEPRECATED",
+				"metadata": {
+					"replacement": "GET /api/v1/admin/groups/usage-summary or GET /api/v1/admin/dashboard/groups"
+				}
+			}`,
+		},
+		{
+			name:       "GET /api/v1/admin/proxies/:id/stats is deprecated",
+			method:     http.MethodGet,
+			path:       "/api/v1/admin/proxies/4/stats",
+			wantStatus: http.StatusGone,
+			wantJSON: `{
+				"code": 410,
+				"message": "This admin statistics endpoint is deprecated and no longer returns statistics. No direct replacement is available.",
+				"reason": "ADMIN_STATS_ENDPOINT_DEPRECATED"
+			}`,
+		},
+		{
+			name:       "GET /api/v1/admin/redeem-codes/stats is deprecated",
+			method:     http.MethodGet,
+			path:       "/api/v1/admin/redeem-codes/stats",
+			wantStatus: http.StatusGone,
+			wantJSON: `{
+				"code": 410,
+				"message": "This admin statistics endpoint is deprecated and no longer returns statistics. No direct replacement is available.",
+				"reason": "ADMIN_STATS_ENDPOINT_DEPRECATED"
+			}`,
+		},
+		{
+			name:       "GET /api/v1/admin/dashboard/realtime is deprecated",
+			method:     http.MethodGet,
+			path:       "/api/v1/admin/dashboard/realtime",
+			wantStatus: http.StatusGone,
+			wantJSON: `{
+				"code": 410,
+				"message": "This admin statistics endpoint is deprecated and no longer returns statistics. Use GET /api/v1/admin/ops/realtime-traffic.",
+				"reason": "ADMIN_STATS_ENDPOINT_DEPRECATED",
+				"metadata": {
+					"replacement": "GET /api/v1/admin/ops/realtime-traffic"
+				}
+			}`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1343,6 +1407,11 @@ func newContractDeps(t *testing.T) *contractDeps {
 	usageHandler := handler.NewUsageHandler(usageService, apiKeyService)
 	adminSettingHandler := adminhandler.NewSettingHandler(settingService, nil, nil, nil, nil, nil)
 	adminAccountHandler := adminhandler.NewAccountHandler(adminService, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	adminUserHandler := adminhandler.NewUserHandler(adminService, nil)
+	adminGroupHandler := adminhandler.NewGroupHandler(adminService, nil, nil, nil)
+	adminProxyHandler := adminhandler.NewProxyHandler(adminService)
+	adminRedeemHandler := adminhandler.NewRedeemHandler(adminService, nil)
+	adminDashboardHandler := adminhandler.NewDashboardHandler(nil, nil)
 
 	jwtAuth := func(c *gin.Context) {
 		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{
@@ -1392,6 +1461,11 @@ func newContractDeps(t *testing.T) *contractDeps {
 	v1Admin.Use(adminAuth)
 	v1Admin.GET("/settings", adminSettingHandler.GetSettings)
 	v1Admin.POST("/accounts/bulk-update", adminAccountHandler.BulkUpdate)
+	v1Admin.GET("/users/:id/usage", adminUserHandler.GetUserUsage)
+	v1Admin.GET("/groups/:id/stats", adminGroupHandler.GetStats)
+	v1Admin.GET("/proxies/:id/stats", adminProxyHandler.GetStats)
+	v1Admin.GET("/redeem-codes/stats", adminRedeemHandler.GetStats)
+	v1Admin.GET("/dashboard/realtime", adminDashboardHandler.GetRealtimeMetrics)
 
 	return &contractDeps{
 		now:         now,
@@ -2611,7 +2685,7 @@ func (r *stubUsageLogRepo) GetAccountUsageStats(ctx context.Context, accountID i
 func (r *stubUsageLogRepo) GetStatsWithFilters(ctx context.Context, filters usagestats.UsageLogFilters) (*usagestats.UsageStats, error) {
 	return nil, errors.New("not implemented")
 }
-func (r *stubUsageLogRepo) GetAllGroupUsageSummary(ctx context.Context, todayStart time.Time) ([]usagestats.GroupUsageSummary, error) {
+func (r *stubUsageLogRepo) GetAllGroupUsageSummary(ctx context.Context, todayStart time.Time, groupIDs []int64) ([]usagestats.GroupUsageSummary, error) {
 	return nil, errors.New("not implemented")
 }
 

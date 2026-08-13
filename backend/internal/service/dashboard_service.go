@@ -261,9 +261,10 @@ func (s *DashboardService) GetGroupStatsWithUsageFilters(ctx context.Context, st
 	return s.GetGroupStatsWithFilters(ctx, startTime, endTime, filters.UserID, filters.APIKeyID, filters.AccountID, filters.GroupID, filters.RequestType, filters.Stream, filters.BillingType)
 }
 
-// GetGroupUsageSummary returns today's and cumulative cost for all groups.
-func (s *DashboardService) GetGroupUsageSummary(ctx context.Context, todayStart time.Time) ([]usagestats.GroupUsageSummary, error) {
-	results, err := s.usageRepo.GetAllGroupUsageSummary(ctx, todayStart)
+// GetGroupUsageSummary returns today's and cumulative cost for the requested groups.
+// An empty groupIDs slice preserves the legacy all-groups contract.
+func (s *DashboardService) GetGroupUsageSummary(ctx context.Context, todayStart time.Time, groupIDs []int64) ([]usagestats.GroupUsageSummary, error) {
+	results, err := s.usageRepo.GetAllGroupUsageSummary(ctx, todayStart, groupIDs)
 	if err != nil {
 		return nil, fmt.Errorf("get group usage summary: %w", err)
 	}

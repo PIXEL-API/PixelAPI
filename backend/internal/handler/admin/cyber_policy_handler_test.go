@@ -118,7 +118,8 @@ func TestCyberPolicyHandlerGetRestriction(t *testing.T) {
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Equal(t, [][2]int64{{445, 1198}}, stub.getCalls)
 	body := decodeCyberPolicyHandlerResponse(t, recorder)
-	data := body["data"].(map[string]any)
+	data, ok := body["data"].(map[string]any)
+	require.True(t, ok)
 	require.Equal(t, float64(445), data["user_id"])
 	require.Equal(t, float64(1198), data["group_id"])
 	require.Equal(t, true, data["blocked"])
@@ -134,7 +135,8 @@ func TestCyberPolicyHandlerGetRestrictionReturnsUnblockedShape(t *testing.T) {
 	newCyberPolicyHandlerTestRouter(stub).ServeHTTP(recorder, req)
 
 	require.Equal(t, http.StatusOK, recorder.Code)
-	data := decodeCyberPolicyHandlerResponse(t, recorder)["data"].(map[string]any)
+	data, ok := decodeCyberPolicyHandlerResponse(t, recorder)["data"].(map[string]any)
+	require.True(t, ok)
 	require.Equal(t, false, data["blocked"])
 	require.Equal(t, "", data["scope"])
 	require.Nil(t, data["blocked_until"])
@@ -149,7 +151,8 @@ func TestCyberPolicyHandlerClearRestrictionIsIdempotent(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Equal(t, [][2]int64{{445, 1198}}, stub.clearCalls)
-	data := decodeCyberPolicyHandlerResponse(t, recorder)["data"].(map[string]any)
+	data, ok := decodeCyberPolicyHandlerResponse(t, recorder)["data"].(map[string]any)
+	require.True(t, ok)
 	require.Equal(t, true, data["removed"])
 }
 
@@ -218,10 +221,13 @@ func TestCyberPolicyHandlerListRequestsPassesAllFilters(t *testing.T) {
 	require.Equal(t, "/v1/responses", filter.Endpoint)
 	require.Equal(t, 2, filter.Page)
 	require.Equal(t, 50, filter.PageSize)
-	data := decodeCyberPolicyHandlerResponse(t, recorder)["data"].(map[string]any)
+	data, ok := decodeCyberPolicyHandlerResponse(t, recorder)["data"].(map[string]any)
+	require.True(t, ok)
 	require.Equal(t, float64(1), data["total"])
 	require.Equal(t, float64(2), data["page"])
-	require.Len(t, data["items"].([]any), 1)
+	items, ok := data["items"].([]any)
+	require.True(t, ok)
+	require.Len(t, items, 1)
 }
 
 func TestCyberPolicyHandlerRequestTimeRangeValidation(t *testing.T) {
@@ -270,7 +276,8 @@ func TestCyberPolicyHandlerGetRequestReturnsDetail(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Equal(t, []int64{9}, stub.detailIDs)
-	data := decodeCyberPolicyHandlerResponse(t, recorder)["data"].(map[string]any)
+	data, ok := decodeCyberPolicyHandlerResponse(t, recorder)["data"].(map[string]any)
+	require.True(t, ok)
 	require.Equal(t, float64(9), data["id"])
 	require.Equal(t, `{"input":"hello"}`, data["request_content"])
 }

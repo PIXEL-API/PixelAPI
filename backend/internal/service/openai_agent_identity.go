@@ -147,29 +147,29 @@ func (r *agentIdentityTaskLockRegistry) size() int {
 func parseAgentIdentityPrivateKey(encoded string) (ed25519.PrivateKey, error) {
 	raw := strings.TrimSpace(encoded)
 	if raw == "" {
-		return nil, errors.New("Agent Identity private key is missing")
+		return nil, errors.New("agent identity private key is missing")
 	}
 	if strings.IndexFunc(raw, unicode.IsSpace) >= 0 {
-		return nil, errors.New("Agent Identity private key is not valid base64")
+		return nil, errors.New("agent identity private key is not valid base64")
 	}
 	der, err := base64.StdEncoding.Strict().DecodeString(raw)
 	if err != nil {
-		return nil, errors.New("Agent Identity private key is not valid base64")
+		return nil, errors.New("agent identity private key is not valid base64")
 	}
 	parsed, err := x509.ParsePKCS8PrivateKey(der)
 	if err != nil {
-		return nil, errors.New("Agent Identity private key is not valid PKCS#8")
+		return nil, errors.New("agent identity private key is not valid PKCS#8")
 	}
 	privateKey, ok := parsed.(ed25519.PrivateKey)
 	if !ok || len(privateKey) != ed25519.PrivateKeySize {
-		return nil, errors.New("Agent Identity private key must be Ed25519")
+		return nil, errors.New("agent identity private key must be Ed25519")
 	}
 	return privateKey, nil
 }
 
 func agentIdentityKeyFromAccount(account *Account) (agentIdentityKey, error) {
 	if account == nil {
-		return agentIdentityKey{}, errors.New("Agent Identity account is nil")
+		return agentIdentityKey{}, errors.New("agent identity account is nil")
 	}
 	privateKey, err := parseAgentIdentityPrivateKey(account.GetCredential("agent_private_key"))
 	if err != nil {
@@ -191,13 +191,13 @@ func agentIdentityKeyFromAccount(account *Account) (agentIdentityKey, error) {
 func normalizeAgentIdentityIdentifier(label, value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return "", fmt.Errorf("Agent Identity %s is missing", label)
+		return "", fmt.Errorf("agent identity %s is missing", label)
 	}
 	if len(value) > agentIdentityIdentifierMaxBytes {
-		return "", fmt.Errorf("Agent Identity %s exceeds %d bytes", label, agentIdentityIdentifierMaxBytes)
+		return "", fmt.Errorf("agent identity %s exceeds %d bytes", label, agentIdentityIdentifierMaxBytes)
 	}
 	if strings.IndexFunc(value, unicode.IsControl) >= 0 {
-		return "", fmt.Errorf("Agent Identity %s contains control characters", label)
+		return "", fmt.Errorf("agent identity %s contains control characters", label)
 	}
 	return value, nil
 }
@@ -212,13 +212,13 @@ func buildAgentAssertion(key agentIdentityKey, now time.Time) (string, error) {
 		return "", err
 	}
 	if len(key.privateKey) != ed25519.PrivateKeySize {
-		return "", errors.New("Agent Identity private key is invalid")
+		return "", errors.New("agent identity private key is invalid")
 	}
 	timestamp := now.UTC().Format(time.RFC3339)
 	payload := []byte(runtimeID + ":" + taskID + ":" + timestamp)
 	signature, err := key.privateKey.Sign(nil, payload, crypto.Hash(0))
 	if err != nil {
-		return "", errors.New("failed to sign Agent Identity assertion")
+		return "", errors.New("failed to sign agent identity assertion")
 	}
 	envelope := struct {
 		RuntimeID string `json:"agent_runtime_id"`
@@ -233,7 +233,7 @@ func buildAgentAssertion(key agentIdentityKey, now time.Time) (string, error) {
 	}
 	encoded, err := json.Marshal(envelope)
 	if err != nil {
-		return "", errors.New("failed to serialize Agent Identity assertion")
+		return "", errors.New("failed to serialize agent identity assertion")
 	}
 	return "AgentAssertion " + base64.RawURLEncoding.EncodeToString(encoded), nil
 }
@@ -244,12 +244,12 @@ func signAgentTaskRegistration(key agentIdentityKey, now time.Time) (string, str
 		return "", "", err
 	}
 	if len(key.privateKey) != ed25519.PrivateKeySize {
-		return "", "", errors.New("Agent Identity private key is invalid")
+		return "", "", errors.New("agent identity private key is invalid")
 	}
 	timestamp := now.UTC().Format(time.RFC3339)
 	signature, err := key.privateKey.Sign(nil, []byte(runtimeID+":"+timestamp), crypto.Hash(0))
 	if err != nil {
-		return "", "", errors.New("failed to sign Agent Identity task registration")
+		return "", "", errors.New("failed to sign agent identity task registration")
 	}
 	return timestamp, base64.StdEncoding.EncodeToString(signature), nil
 }
@@ -257,11 +257,11 @@ func signAgentTaskRegistration(key agentIdentityKey, now time.Time) (string, str
 func decryptAgentTaskID(key agentIdentityKey, encoded string) (string, error) {
 	raw := strings.TrimSpace(encoded)
 	if raw == "" || strings.IndexFunc(raw, unicode.IsSpace) >= 0 {
-		return "", errors.New("encrypted Agent Identity task id is not valid base64")
+		return "", errors.New("encrypted agent identity task id is not valid base64")
 	}
 	ciphertext, err := base64.StdEncoding.Strict().DecodeString(raw)
 	if err != nil {
-		return "", errors.New("encrypted Agent Identity task id is not valid base64")
+		return "", errors.New("encrypted agent identity task id is not valid base64")
 	}
 	seed := key.privateKey.Seed()
 	digest := sha512.Sum512(seed)
@@ -272,13 +272,13 @@ func decryptAgentTaskID(key agentIdentityKey, encoded string) (string, error) {
 	curvePrivate[31] |= 64
 	curvePublicBytes, err := curve25519.X25519(curvePrivate[:], curve25519.Basepoint)
 	if err != nil {
-		return "", errors.New("failed to derive Agent Identity decryption key")
+		return "", errors.New("failed to derive agent identity decryption key")
 	}
 	var curvePublic [32]byte
 	copy(curvePublic[:], curvePublicBytes)
 	plaintext, ok := box.OpenAnonymous(nil, ciphertext, &curvePublic, &curvePrivate)
 	if !ok {
-		return "", errors.New("failed to decrypt encrypted Agent Identity task id")
+		return "", errors.New("failed to decrypt encrypted agent identity task id")
 	}
 	return normalizeAgentIdentityIdentifier("task id", string(plaintext))
 }
@@ -290,13 +290,13 @@ func buildAgentIdentityTaskRegistrationURL(baseURL, runtimeID string) (string, e
 	}
 	parsed, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil || parsed == nil || parsed.Host == "" {
-		return "", errors.New("Agent Identity registration base URL is invalid")
+		return "", errors.New("agent identity registration base URL is invalid")
 	}
 	if parsed.Scheme != "https" && parsed.Scheme != "http" {
-		return "", errors.New("Agent Identity registration base URL has unsupported scheme")
+		return "", errors.New("agent identity registration base URL has unsupported scheme")
 	}
 	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return "", errors.New("Agent Identity registration base URL must not contain credentials, query, or fragment")
+		return "", errors.New("agent identity registration base URL must not contain credentials, query, or fragment")
 	}
 	basePath := strings.TrimRight(parsed.Path, "/")
 	escapedBasePath := strings.TrimRight(parsed.EscapedPath(), "/")
@@ -315,7 +315,7 @@ func selectAgentIdentityTaskID(key agentIdentityKey, result agentIdentityTaskReg
 		return "", err
 	}
 	if plain != "" && encrypted != "" {
-		return "", errors.New("Agent Identity task registration returned ambiguous task ids")
+		return "", errors.New("agent identity task registration returned ambiguous task ids")
 	}
 	if plain != "" {
 		return normalizeAgentIdentityIdentifier("task id", plain)
@@ -323,7 +323,7 @@ func selectAgentIdentityTaskID(key agentIdentityKey, result agentIdentityTaskReg
 	if encrypted != "" {
 		return decryptAgentTaskID(key, encrypted)
 	}
-	return "", errors.New("Agent Identity task registration response omitted task id")
+	return "", errors.New("agent identity task registration response omitted task id")
 }
 
 func selectMatchingAgentIdentityField(label string, values ...string) (string, error) {
@@ -334,7 +334,7 @@ func selectMatchingAgentIdentityField(label string, values ...string) (string, e
 			continue
 		}
 		if selected != "" && selected != value {
-			return "", fmt.Errorf("Agent Identity task registration returned conflicting %s fields", label)
+			return "", fmt.Errorf("agent identity task registration returned conflicting %s fields", label)
 		}
 		selected = value
 	}
@@ -364,36 +364,36 @@ func registerAgentIdentityTask(ctx context.Context, account *Account) (string, e
 		ResponseHeaderTimeout: 15 * time.Second,
 	})
 	if err != nil {
-		return "", errors.New("invalid proxy configuration for Agent Identity task registration")
+		return "", errors.New("invalid proxy configuration for agent identity task registration")
 	}
 	body, err := json.Marshal(map[string]string{"timestamp": timestamp, "signature": signature})
 	if err != nil {
-		return "", errors.New("failed to serialize Agent Identity task registration")
+		return "", errors.New("failed to serialize agent identity task registration")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {
-		return "", errors.New("failed to build Agent Identity task registration request")
+		return "", errors.New("failed to build agent identity task registration request")
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", errors.New("Agent Identity task registration request failed")
+		return "", errors.New("agent identity task registration request failed")
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return "", fmt.Errorf("Agent Identity task registration returned status %d", resp.StatusCode)
+		return "", fmt.Errorf("agent identity task registration returned status %d", resp.StatusCode)
 	}
 	responseBody, err := readUpstreamResponseBodyLimited(resp.Body, agentIdentityTaskRegistrationMaxBody)
 	if err != nil {
 		if errors.Is(err, ErrUpstreamResponseBodyTooLarge) {
-			return "", errors.New("Agent Identity task registration response exceeds 64 KiB")
+			return "", errors.New("agent identity task registration response exceeds 64 KiB")
 		}
-		return "", errors.New("failed to read Agent Identity task registration response")
+		return "", errors.New("failed to read agent identity task registration response")
 	}
 	var result agentIdentityTaskRegistrationResponse
 	if err := json.Unmarshal(responseBody, &result); err != nil {
-		return "", errors.New("Agent Identity task registration response is not one complete JSON object")
+		return "", errors.New("agent identity task registration response is not one complete JSON object")
 	}
 	return selectAgentIdentityTaskID(key, result)
 }
@@ -409,7 +409,7 @@ func shouldSkipAgentIdentityTaskRegistration(currentTaskID, expectedTaskID strin
 
 func persistAgentIdentityCredentials(ctx context.Context, repo AccountRepository, account *Account, credentials map[string]any) error {
 	if account == nil {
-		return errors.New("Agent Identity account is nil")
+		return errors.New("agent identity account is nil")
 	}
 	nextCredentials := cloneCredentials(credentials)
 	if account.ID <= 0 {
@@ -417,17 +417,17 @@ func persistAgentIdentityCredentials(ctx context.Context, repo AccountRepository
 		return nil
 	}
 	if repo == nil {
-		return errors.New("account repository is required to persist Agent Identity task")
+		return errors.New("account repository is required to persist agent identity task")
 	}
 	if updater, ok := any(repo).(accountCredentialsUpdater); ok {
 		if err := updater.UpdateCredentials(ctx, account.ID, nextCredentials); err != nil {
-			return fmt.Errorf("persist Agent Identity task: %w", err)
+			return fmt.Errorf("persist agent identity task: %w", err)
 		}
 	} else {
 		candidate := *account
 		candidate.Credentials = nextCredentials
 		if err := repo.Update(ctx, &candidate); err != nil {
-			return fmt.Errorf("persist Agent Identity task: %w", err)
+			return fmt.Errorf("persist agent identity task: %w", err)
 		}
 	}
 	account.Credentials = nextCredentials
@@ -451,7 +451,7 @@ func ensureAgentIdentityTaskForAccount(ctx context.Context, repo AccountReposito
 		}
 	} else {
 		if fallbackMu == nil {
-			return errors.New("Agent Identity task lock is unavailable")
+			return errors.New("agent identity task lock is unavailable")
 		}
 		fallbackMu.Lock()
 		unlock = fallbackMu.Unlock
@@ -461,14 +461,14 @@ func ensureAgentIdentityTaskForAccount(ctx context.Context, repo AccountReposito
 	credentialAccount := account
 	if account.ID > 0 {
 		if repo == nil {
-			return errors.New("account repository is required to refresh Agent Identity task state")
+			return errors.New("account repository is required to refresh agent identity task state")
 		}
 		refreshed, err := repo.GetByID(ctx, account.ID)
 		if err != nil {
-			return fmt.Errorf("reload Agent Identity account: %w", err)
+			return fmt.Errorf("reload agent identity account: %w", err)
 		}
 		if refreshed == nil || !refreshed.IsOpenAIAgentIdentity() {
-			return errors.New("Agent Identity credentials are unavailable")
+			return errors.New("agent identity credentials are unavailable")
 		}
 		credentialAccount = refreshed
 	}
@@ -496,7 +496,7 @@ func ensureAgentIdentityTaskForAccount(ctx context.Context, repo AccountReposito
 
 func (s *OpenAIGatewayService) ensureAgentIdentityTask(ctx context.Context, account *Account, expectedTaskID string) error {
 	if s == nil {
-		return errors.New("OpenAI gateway service is nil")
+		return errors.New("openAI gateway service is nil")
 	}
 	return ensureAgentIdentityTaskForAccount(ctx, s.accountRepo, s, &s.agentIdentityTaskMu, account, expectedTaskID)
 }
@@ -569,7 +569,7 @@ func (s *OpenAIGatewayService) buildOpenAIAuthenticationHeaders(ctx context.Cont
 	}
 	token = strings.TrimSpace(token)
 	if token == "" {
-		return nil, errors.New("OpenAI authentication token is missing")
+		return nil, errors.New("openAI authentication token is missing")
 	}
 	headers := make(http.Header)
 	headers.Set("Authorization", "Bearer "+token)
@@ -578,7 +578,7 @@ func (s *OpenAIGatewayService) buildOpenAIAuthenticationHeaders(ctx context.Cont
 
 func buildAgentIdentityAuthenticationHeaders(ctx context.Context, repo AccountRepository, wsInvalidator agentIdentityWSConnectionInvalidator, taskMu *sync.Mutex, account *Account) (http.Header, error) {
 	if account == nil || !account.IsOpenAIAgentIdentity() {
-		return nil, errors.New("Agent Identity account is required")
+		return nil, errors.New("agent identity account is required")
 	}
 	if err := ensureAgentIdentityTaskForAccount(ctx, repo, wsInvalidator, taskMu, account, ""); err != nil {
 		return nil, err
@@ -609,14 +609,14 @@ func (s *OpenAIGatewayService) refreshOpenAIAgentIdentityHeadersWithTask(ctx con
 	credentialAccount := account
 	if account.ID > 0 {
 		if s == nil || s.accountRepo == nil {
-			return nil, "", errors.New("account repository is required to refresh Agent Identity WS credentials")
+			return nil, "", errors.New("account repository is required to refresh agent identity WS credentials")
 		}
 		latest, err := s.accountRepo.GetByID(ctx, account.ID)
 		if err != nil {
-			return nil, "", fmt.Errorf("reload Agent Identity WS credentials: %w", err)
+			return nil, "", fmt.Errorf("reload agent identity WS credentials: %w", err)
 		}
 		if latest == nil || !latest.IsOpenAIAgentIdentity() {
-			return nil, "", errors.New("Agent Identity WS credentials are unavailable")
+			return nil, "", errors.New("agent identity WS credentials are unavailable")
 		}
 		credentialAccount = latest
 	}

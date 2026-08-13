@@ -325,7 +325,8 @@ func TestConvertOwnedExternalPlacementRestoresDrainAfterHistoricalIdempotencyRep
 	}
 	service, _ := newOwnedAgentIdentityService(repo)
 	service.concurrencyService = &ConcurrencyService{}
-	placementRepo := service.accountShareRoomRepo.(*ownedAgentIdentityPlacementRepoStub)
+	placementRepo, ok := service.accountShareRoomRepo.(*ownedAgentIdentityPlacementRepoStub)
+	require.True(t, ok)
 	placementRepo.beginDrain = true
 	placementRepo.conversionResult = &ConvertAccountExternalPlacementResult{
 		AccountID: 1,
@@ -768,7 +769,8 @@ func TestAccountServiceAutoRepairOwnedAgentIdentitySuspensionInvalidatesWS(t *te
 	require.NoError(t, err)
 	_, err = svc.ApproveOwnedPublicShare(context.Background(), 101, created.Account.ID)
 	require.NoError(t, err)
-	groupRepo := svc.groupRepo.(*ownedPublicShareGroupRepoStub)
+	groupRepo, ok := svc.groupRepo.(*ownedPublicShareGroupRepoStub)
+	require.True(t, ok)
 	groupRepo.groups = append(groupRepo.groups, Group{ID: 9100, Name: "FREE共享号池", Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopePublic, RequiredAccountLevel: AccountLevelFree})
 	account := repo.accounts[created.Account.ID]
 	now := time.Now().UTC()
@@ -923,7 +925,8 @@ func TestConvertOwnedExternalPlacementPublicPoolToPrivateSkipsIdleGuard(t *testi
 			1: {AccountID: 1, CurrentConcurrency: 2, WaitingCount: 0},
 		},
 	}}
-	placementRepo := svc.accountShareRoomRepo.(*ownedAgentIdentityPlacementRepoStub)
+	placementRepo, ok := svc.accountShareRoomRepo.(*ownedAgentIdentityPlacementRepoStub)
+	require.True(t, ok)
 	placementRepo.beginDrain = true
 
 	result, err := svc.ConvertOwnedExternalPlacement(
@@ -983,7 +986,8 @@ func TestConvertOwnedExternalPlacementRoomToPublicPoolStillRejectsInflight(t *te
 			1: {AccountID: 1, CurrentConcurrency: 1, WaitingCount: 0},
 		},
 	}}
-	placementRepo := svc.accountShareRoomRepo.(*ownedAgentIdentityPlacementRepoStub)
+	placementRepo, ok := svc.accountShareRoomRepo.(*ownedAgentIdentityPlacementRepoStub)
+	require.True(t, ok)
 	placementRepo.beginDrain = true
 
 	_, err := svc.ConvertOwnedExternalPlacement(

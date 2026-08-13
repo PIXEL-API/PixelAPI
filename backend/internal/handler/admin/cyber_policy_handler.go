@@ -183,7 +183,7 @@ func (h *CyberPolicyHandler) ExportRequests(c *gin.Context) {
 	}
 
 	var buffer bytes.Buffer
-	buffer.WriteString("\xEF\xBB\xBF")
+	_, _ = buffer.WriteString("\xEF\xBB\xBF")
 	writer := csv.NewWriter(&buffer)
 	header := []string{
 		"时间", "请求 ID", "分组名称", "分组 ID", "用户名", "邮箱", "用户 ID",

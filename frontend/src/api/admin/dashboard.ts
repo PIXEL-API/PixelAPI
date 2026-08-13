@@ -27,25 +27,6 @@ export async function getStats(options: { signal?: AbortSignal } = {}): Promise<
   return data
 }
 
-/**
- * Get real-time metrics
- * @returns Real-time system metrics
- */
-export async function getRealtimeMetrics(): Promise<{
-  active_requests: number
-  requests_per_minute: number
-  average_response_time: number
-  error_rate: number
-}> {
-  const { data } = await apiClient.get<{
-    active_requests: number
-    requests_per_minute: number
-    average_response_time: number
-    error_rate: number
-  }>('/admin/dashboard/realtime')
-  return data
-}
-
 export interface TrendParams {
   start_date?: string
   end_date?: string
@@ -349,7 +330,6 @@ export async function getBatchApiKeysUsage(
 
 export const dashboardAPI = {
   getStats,
-  getRealtimeMetrics,
   getUsageTrend,
   getModelStats,
   getGroupStats,

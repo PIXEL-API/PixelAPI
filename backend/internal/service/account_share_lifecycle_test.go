@@ -223,7 +223,7 @@ func (r *accountShareCreateValidationRepoStub) CreateRoomFromOwnedAccount(
 	created.OwnerUserID = ownerUserID
 	created.AccountID = accountID
 	r.createdListing = &created
-	r.accountShareModeRepoStub.listing = &created
+	r.listing = &created
 	result := created
 	result.AllowedModels = append([]string(nil), created.AllowedModels...)
 	return &result, nil
@@ -430,11 +430,11 @@ func newAccountShareLifecycleTestService(
 		accountRepo = accountRepositories[0]
 	}
 	service := &AccountShareModeService{
-		repo:                     repo,
-		accountRepo:              accountRepo,
-		concurrencyService:       NewConcurrencyService(cache),
-		accountTestService:       tester,
-		rateLimitService:         recovery,
+		repo:               repo,
+		accountRepo:        accountRepo,
+		concurrencyService: NewConcurrencyService(cache),
+		accountTestService: tester,
+		rateLimitService:   recovery,
 	}
 	service.SetActionTokenSecret(accountShareLifecycleTestTokenSecret)
 	return service
@@ -510,11 +510,11 @@ func TestCreateRoomFromOwnedAccountStartsValidatingAndCompletesAsyncValidation(t
 	}
 	recovery := &accountShareModeRecoveryStub{}
 	service := &AccountShareModeService{
-		repo:                     repo,
-		accountRepo:              accountRepo,
-		concurrencyService:       NewConcurrencyService(nil),
-		accountTestService:       tester,
-		rateLimitService:         recovery,
+		repo:               repo,
+		accountRepo:        accountRepo,
+		concurrencyService: NewConcurrencyService(nil),
+		accountTestService: tester,
+		rateLimitService:   recovery,
 	}
 
 	type createRoomResult struct {

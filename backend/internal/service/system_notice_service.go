@@ -153,9 +153,10 @@ func (s *SystemNoticeService) NotifyWithdrawal(ctx context.Context, event string
 	}
 	if note := withdrawalNoticeAdminNote(req); note != "" {
 		noteLabel := "处理备注"
-		if event == "settled" {
+		switch event {
+		case "settled":
 			noteLabel = "打款备注"
-		} else if event == "rejected" {
+		case "rejected":
 			noteLabel = "拒绝备注"
 		}
 		content += fmt.Sprintf("%s：%s。", noteLabel, note)

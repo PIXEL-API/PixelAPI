@@ -3,315 +3,224 @@
 package integration
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"strings"
+	"strconv"
 	"testing"
 	"time"
 )
 
-// E2E 用户流程测试
-// 测试完整的用户操作链路：注册 → 登录 → 创建 API Key → 调用网关 → 查询用量
-
-var (
-	testUserEmail    = "e2e-test-" + fmt.Sprintf("%d", time.Now().UnixMilli()) + "@test.local"
-	testUserPassword = "E2eTest@12345"
-	testUserName     = "e2e-test-user"
-)
-
-// TestUserRegistrationAndLogin 测试用户注册和登录流程
-func TestUserRegistrationAndLogin(t *testing.T) {
-	// 步骤 1: 注册新用户
-	t.Run("注册新用户", func(t *testing.T) {
-		payload := map[string]string{
-			"email":    testUserEmail,
-			"password": testUserPassword,
-			"username": testUserName,
-		}
-		body, _ := json.Marshal(payload)
-
-		resp, err := doRequest(t, "POST", "/api/auth/register", body, "")
-		if err != nil {
-			t.Skipf("注册接口不可用，跳过用户流程测试: %v", err)
-			return
-		}
-		defer resp.Body.Close()
-
-		respBody, _ := io.ReadAll(resp.Body)
-
-		// 注册可能返回 200（成功）或 400（邮箱已存在）或 403（注册已关闭）
-		switch resp.StatusCode {
-		case 200:
-			t.Logf("✅ 用户注册成功: %s", testUserEmail)
-		case 400:
-			t.Logf("⚠️ 用户可能已存在: %s", string(respBody))
-		case 403:
-			t.Skipf("注册功能已关闭: %s", string(respBody))
-		default:
-			t.Logf("⚠️ 注册返回 HTTP %d: %s（继续尝试登录）", resp.StatusCode, string(respBody))
-		}
-	})
-
-	// 步骤 2: 登录获取 JWT
-	var accessToken string
-	t.Run("用户登录获取JWT", func(t *testing.T) {
-		payload := map[string]string{
-			"email":    testUserEmail,
-			"password": testUserPassword,
-		}
-		body, _ := json.Marshal(payload)
-
-		resp, err := doRequest(t, "POST", "/api/auth/login", body, "")
-		if err != nil {
-			t.Fatalf("登录请求失败: %v", err)
-		}
-		defer resp.Body.Close()
-
-		respBody, _ := io.ReadAll(resp.Body)
-
-		if resp.StatusCode != 200 {
-			t.Skipf("登录失败 HTTP %d: %s（可能需要先注册用户）", resp.StatusCode, string(respBody))
-			return
-		}
-
-		var result map[string]any
-		if err := json.Unmarshal(respBody, &result); err != nil {
-			t.Fatalf("解析登录响应失败: %v", err)
-		}
-
-		// 尝试从标准响应格式获取 token
-		if token, ok := result["access_token"].(string); ok && token != "" {
-			accessToken = token
-		} else if data, ok := result["data"].(map[string]any); ok {
-			if token, ok := data["access_token"].(string); ok {
-				accessToken = token
-			}
-		}
-
-		if accessToken == "" {
-			t.Skipf("未获取到 access_token，响应: %s", string(respBody))
-			return
-		}
-
-		// 验证 token 不为空且格式基本正确
-		if len(accessToken) < 10 {
-			t.Fatalf("access_token 格式异常: %s", accessToken)
-		}
-
-		t.Logf("✅ 登录成功，获取 JWT（长度: %d）", len(accessToken))
-	})
-
-	if accessToken == "" {
-		t.Skip("未获取到 JWT，跳过后续测试")
-		return
-	}
-
-	// 步骤 3: 使用 JWT 获取当前用户信息
-	t.Run("获取当前用户信息", func(t *testing.T) {
-		resp, err := doRequest(t, "GET", "/api/user/me", nil, accessToken)
-		if err != nil {
-			t.Fatalf("请求失败: %v", err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != 200 {
-			body, _ := io.ReadAll(resp.Body)
-			t.Fatalf("HTTP %d: %s", resp.StatusCode, string(body))
-		}
-
-		t.Logf("✅ 成功获取用户信息")
-	})
+type contractAuthData struct {
+	AccessToken string `json:"access_token"`
+	User        struct {
+		ID    int64  `json:"id"`
+		Email string `json:"email"`
+		Role  string `json:"role"`
+	} `json:"user"`
 }
 
-// TestAPIKeyLifecycle 测试 API Key 的创建和使用
-func TestAPIKeyLifecycle(t *testing.T) {
-	// 先登录获取 JWT
-	accessToken := loginTestUser(t)
-	if accessToken == "" {
-		t.Skip("无法登录，跳过 API Key 生命周期测试")
-		return
-	}
-
-	var apiKey string
-
-	// 步骤 1: 创建 API Key
-	t.Run("创建API_Key", func(t *testing.T) {
-		payload := map[string]string{
-			"name": "e2e-test-key-" + fmt.Sprintf("%d", time.Now().UnixMilli()),
-		}
-		body, _ := json.Marshal(payload)
-
-		resp, err := doRequest(t, "POST", "/api/keys", body, accessToken)
-		if err != nil {
-			t.Fatalf("创建 API Key 请求失败: %v", err)
-		}
-		defer resp.Body.Close()
-
-		respBody, _ := io.ReadAll(resp.Body)
-
-		if resp.StatusCode != 200 {
-			t.Skipf("创建 API Key 失败 HTTP %d: %s", resp.StatusCode, string(respBody))
-			return
-		}
-
-		var result map[string]any
-		if err := json.Unmarshal(respBody, &result); err != nil {
-			t.Fatalf("解析响应失败: %v", err)
-		}
-
-		// 从响应中提取 key
-		if key, ok := result["key"].(string); ok {
-			apiKey = key
-		} else if data, ok := result["data"].(map[string]any); ok {
-			if key, ok := data["key"].(string); ok {
-				apiKey = key
-			}
-		}
-
-		if apiKey == "" {
-			t.Skipf("未获取到 API Key，响应: %s", string(respBody))
-			return
-		}
-
-		// 验证 API Key 脱敏日志（只显示前 8 位）
-		masked := apiKey
-		if len(masked) > 8 {
-			masked = masked[:8] + "..."
-		}
-		t.Logf("✅ API Key 创建成功: %s", masked)
-	})
-
-	if apiKey == "" {
-		t.Skip("未创建 API Key，跳过后续测试")
-		return
-	}
-
-	// 步骤 2: 使用 API Key 调用网关（需要 Claude 或 Gemini 可用）
-	t.Run("使用API_Key调用网关", func(t *testing.T) {
-		// 尝试调用 models 列表（最轻量的 API 调用）
-		resp, err := doRequest(t, "GET", "/v1/models", nil, apiKey)
-		if err != nil {
-			t.Fatalf("网关请求失败: %v", err)
-		}
-		defer resp.Body.Close()
-
-		respBody, _ := io.ReadAll(resp.Body)
-
-		// 可能返回 200（成功）或 402（余额不足）或 403（无可用账户）
-		switch {
-		case resp.StatusCode == 200:
-			t.Logf("✅ API Key 网关调用成功")
-		case resp.StatusCode == 402:
-			t.Logf("⚠️ 余额不足，但 API Key 认证通过")
-		case resp.StatusCode == 403:
-			t.Logf("⚠️ 无可用账户，但 API Key 认证通过")
-		default:
-			t.Logf("⚠️ 网关返回 HTTP %d: %s", resp.StatusCode, string(respBody))
-		}
-	})
-
-	// 步骤 3: 查询用量记录
-	t.Run("查询用量记录", func(t *testing.T) {
-		resp, err := doRequest(t, "GET", "/api/usage/dashboard", nil, accessToken)
-		if err != nil {
-			t.Fatalf("用量查询请求失败: %v", err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != 200 {
-			body, _ := io.ReadAll(resp.Body)
-			t.Logf("⚠️ 用量查询返回 HTTP %d: %s", resp.StatusCode, string(body))
-			return
-		}
-
-		t.Logf("✅ 用量查询成功")
-	})
+type contractGroupData struct {
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Platform string `json:"platform"`
 }
 
-// =============================================================================
-// 辅助函数
-// =============================================================================
+type contractAPIKeyData struct {
+	ID      int64  `json:"id"`
+	Key     string `json:"key"`
+	Name    string `json:"name"`
+	GroupID *int64 `json:"group_id"`
+}
 
-func doRequest(t *testing.T, method, path string, body []byte, token string) (*http.Response, error) {
+type contractAPIKeyListData struct {
+	Items []contractAPIKeyData `json:"items"`
+	Total int                  `json:"total"`
+}
+
+func contractLogin(t *testing.T, email, password string) contractAuthData {
 	t.Helper()
+	path := "/api/v1/auth/login"
+	resp, body := doJSONRequest(t, http.MethodPost, path, map[string]string{
+		"email":    email,
+		"password": password,
+	}, "", nil)
+	requireHTTPStatus(t, http.MethodPost, path, resp, body, http.StatusOK)
 
-	url := baseURL + path
-	var bodyReader io.Reader
-	if body != nil {
-		bodyReader = bytes.NewReader(body)
+	var auth contractAuthData
+	decodeEnvelopeData(t, body, &auth)
+	if auth.AccessToken == "" || auth.User.ID <= 0 {
+		t.Fatalf("login returned incomplete authentication data: %s", body)
 	}
-
-	req, err := http.NewRequest(method, url, bodyReader)
-	if err != nil {
-		return nil, fmt.Errorf("创建请求失败: %w", err)
-	}
-
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	return client.Do(req)
+	return auth
 }
 
-func loginTestUser(t *testing.T) string {
-	t.Helper()
+// TestContractRegistrationLoginAndAPIKeyLifecycle is intentionally provider-free.
+// It runs against an isolated PostgreSQL/Redis/application stack created by
+// scripts/e2e-test.sh and treats every contract step as required: no Skip can
+// turn a broken registration, login, JWT, API-key, or cache-invalidation path
+// into a green test.
+func TestContractRegistrationLoginAndAPIKeyLifecycle(t *testing.T) {
+	requireContractMode(t)
 
-	// 先尝试用管理员账户登录
-	adminEmail := getEnv("ADMIN_EMAIL", "admin@sub2api.local")
+	adminEmail := getEnv("ADMIN_EMAIL", "contract-admin@test.local")
 	adminPassword := getEnv("ADMIN_PASSWORD", "")
-
 	if adminPassword == "" {
-		// 尝试用测试用户
-		adminEmail = testUserEmail
-		adminPassword = testUserPassword
+		t.Fatal("ADMIN_PASSWORD is required for contract E2E")
+	}
+	admin := contractLogin(t, adminEmail, adminPassword)
+	if admin.User.Role != "admin" {
+		t.Fatalf("bootstrap login role=%q, want admin", admin.User.Role)
+	}
+	settingsPath := "/api/v1/admin/settings"
+	resp, body := doJSONRequest(t, http.MethodPut, settingsPath, map[string]bool{
+		"registration_enabled": true,
+	}, admin.AccessToken, nil)
+	requireHTTPStatus(t, http.MethodPut, settingsPath, resp, body, http.StatusOK)
+	var settings struct {
+		RegistrationEnabled bool `json:"registration_enabled"`
+	}
+	decodeEnvelopeData(t, body, &settings)
+	if !settings.RegistrationEnabled {
+		t.Fatalf("contract setup did not enable registration: %s", body)
 	}
 
-	payload := map[string]string{
-		"email":    adminEmail,
-		"password": adminPassword,
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	groupName := "contract-group-" + suffix
+	groupPath := "/api/v1/admin/groups"
+	resp, body = doJSONRequest(t, http.MethodPost, groupPath, map[string]any{
+		"name":            groupName,
+		"platform":        "anthropic",
+		"rate_multiplier": 1,
+	}, admin.AccessToken, nil)
+	requireHTTPStatus(t, http.MethodPost, groupPath, resp, body, http.StatusOK)
+	var group contractGroupData
+	decodeEnvelopeData(t, body, &group)
+	if group.ID <= 0 || group.Name != groupName || group.Platform != "anthropic" {
+		t.Fatalf("created group does not match request: %s", body)
 	}
-	body, _ := json.Marshal(payload)
+	t.Cleanup(func() {
+		path := groupPath + "/" + strconv.FormatInt(group.ID, 10)
+		cleanupResp, cleanupBody := doJSONRequest(t, http.MethodDelete, path, nil, admin.AccessToken, nil)
+		if cleanupResp.StatusCode != http.StatusOK && cleanupResp.StatusCode != http.StatusNotFound {
+			t.Errorf("cleanup group HTTP %d: %s", cleanupResp.StatusCode, cleanupBody)
+		}
+	})
 
-	resp, err := doRequest(t, "POST", "/api/auth/login", body, "")
-	if err != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return ""
-	}
-
-	respBody, _ := io.ReadAll(resp.Body)
-	var result map[string]any
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return ""
+	userEmail := "contract-user-" + suffix + "@test.local"
+	userPassword := "ContractTest@12345"
+	registerPath := "/api/v1/auth/register"
+	resp, body = doJSONRequest(t, http.MethodPost, registerPath, map[string]string{
+		"email":    userEmail,
+		"password": userPassword,
+	}, "", nil)
+	requireHTTPStatus(t, http.MethodPost, registerPath, resp, body, http.StatusOK)
+	var registration contractAuthData
+	decodeEnvelopeData(t, body, &registration)
+	if registration.AccessToken == "" || registration.User.Email != userEmail {
+		t.Fatalf("registration returned incomplete authentication data: %s", body)
 	}
 
-	if token, ok := result["access_token"].(string); ok {
-		return token
+	user := contractLogin(t, userEmail, userPassword)
+	if user.User.ID != registration.User.ID || user.User.Email != userEmail {
+		t.Fatalf("login identity does not match registered identity: registration=%+v login=%+v", registration.User, user.User)
 	}
-	if data, ok := result["data"].(map[string]any); ok {
-		if token, ok := data["access_token"].(string); ok {
-			return token
+
+	mePath := "/api/v1/auth/me"
+	resp, body = doJSONRequest(t, http.MethodGet, mePath, nil, user.AccessToken, nil)
+	requireHTTPStatus(t, http.MethodGet, mePath, resp, body, http.StatusOK)
+	var currentUser struct {
+		ID    int64  `json:"id"`
+		Email string `json:"email"`
+	}
+	decodeEnvelopeData(t, body, &currentUser)
+	if currentUser.ID != user.User.ID || currentUser.Email != userEmail {
+		t.Fatalf("current-user contract mismatch: %s", body)
+	}
+
+	availableGroupsPath := "/api/v1/groups/available"
+	resp, body = doJSONRequest(t, http.MethodGet, availableGroupsPath, nil, user.AccessToken, nil)
+	requireHTTPStatus(t, http.MethodGet, availableGroupsPath, resp, body, http.StatusOK)
+	var availableGroups []contractGroupData
+	decodeEnvelopeData(t, body, &availableGroups)
+	foundGroup := false
+	for _, available := range availableGroups {
+		if available.ID == group.ID {
+			foundGroup = true
+			break
 		}
 	}
-
-	return ""
-}
-
-// redactAPIKey API Key 脱敏，只显示前 8 位
-func redactAPIKey(key string) string {
-	key = strings.TrimSpace(key)
-	if len(key) <= 8 {
-		return "***"
+	if !foundGroup {
+		t.Fatalf("new public group %d is missing from user available groups: %s", group.ID, body)
 	}
-	return key[:8] + "..."
+
+	apiKeyPath := "/api/v1/keys"
+	apiKeyName := "contract-key-" + suffix
+	resp, body = doJSONRequest(t, http.MethodPost, apiKeyPath, map[string]any{
+		"name":     apiKeyName,
+		"group_id": group.ID,
+	}, user.AccessToken, map[string]string{
+		"Idempotency-Key": "contract-create-api-key-" + suffix,
+	})
+	requireHTTPStatus(t, http.MethodPost, apiKeyPath, resp, body, http.StatusOK)
+	var apiKey contractAPIKeyData
+	decodeEnvelopeData(t, body, &apiKey)
+	if apiKey.ID <= 0 || apiKey.Key == "" || apiKey.Name != apiKeyName || apiKey.GroupID == nil || *apiKey.GroupID != group.ID {
+		t.Fatalf("created API key does not match contract: %s", body)
+	}
+	safeLogKey(t, "contract API key", apiKey.Key)
+
+	apiKeyByIDPath := apiKeyPath + "/" + strconv.FormatInt(apiKey.ID, 10)
+	apiKeyDeleted := false
+	t.Cleanup(func() {
+		if apiKeyDeleted {
+			return
+		}
+		cleanupResp, cleanupBody := doJSONRequest(t, http.MethodDelete, apiKeyByIDPath, nil, user.AccessToken, nil)
+		if cleanupResp.StatusCode != http.StatusOK && cleanupResp.StatusCode != http.StatusNotFound {
+			t.Errorf("cleanup API key HTTP %d: %s", cleanupResp.StatusCode, cleanupBody)
+		}
+	})
+
+	resp, body = doJSONRequest(t, http.MethodGet, apiKeyByIDPath, nil, user.AccessToken, nil)
+	requireHTTPStatus(t, http.MethodGet, apiKeyByIDPath, resp, body, http.StatusOK)
+	var fetched contractAPIKeyData
+	decodeEnvelopeData(t, body, &fetched)
+	if fetched.ID != apiKey.ID || fetched.Key != apiKey.Key {
+		t.Fatalf("API key get contract mismatch: %s", body)
+	}
+
+	resp, body = doJSONRequest(t, http.MethodGet, apiKeyPath, nil, user.AccessToken, nil)
+	requireHTTPStatus(t, http.MethodGet, apiKeyPath, resp, body, http.StatusOK)
+	var listed contractAPIKeyListData
+	decodeEnvelopeData(t, body, &listed)
+	if listed.Total < 1 {
+		t.Fatalf("API key list did not include created key: %s", body)
+	}
+	foundKey := false
+	for _, item := range listed.Items {
+		if item.ID == apiKey.ID && item.Key == apiKey.Key {
+			foundKey = true
+			break
+		}
+	}
+	if !foundKey {
+		t.Fatalf("API key %d missing from list: %s", apiKey.ID, body)
+	}
+
+	// /v1/usage intentionally performs authentication without billing
+	// enforcement, so a fresh zero-balance user can prove the key is usable
+	// without requiring a real provider account or artificial wallet credit.
+	usagePath := "/v1/usage"
+	resp, body = doJSONRequest(t, http.MethodGet, usagePath, nil, apiKey.Key, nil)
+	requireHTTPStatus(t, http.MethodGet, usagePath, resp, body, http.StatusOK)
+
+	resp, body = doJSONRequest(t, http.MethodDelete, apiKeyByIDPath, nil, user.AccessToken, nil)
+	requireHTTPStatus(t, http.MethodDelete, apiKeyByIDPath, resp, body, http.StatusOK)
+	apiKeyDeleted = true
+
+	// Deletion must invalidate both L1 and Redis authentication caches. A 200
+	// here would prove that the lifecycle endpoint deleted the row but left the
+	// gateway credential usable.
+	resp, body = doJSONRequest(t, http.MethodGet, usagePath, nil, apiKey.Key, nil)
+	requireHTTPStatus(t, http.MethodGet, usagePath, resp, body, http.StatusUnauthorized)
 }

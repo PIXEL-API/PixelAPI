@@ -36,8 +36,8 @@ func (s *forbidSQLExecutor) QueryContext(ctx context.Context, query string, args
 }
 
 func (s *GroupRepoSuite) SetupTest() {
-	s.ctx = context.Background()
 	tx := testEntTx(s.T())
+	s.ctx = dbent.NewTxContext(context.Background(), tx)
 	s.tx = tx
 	s.repo = newGroupRepositoryWithSQL(tx.Client(), tx)
 }
@@ -564,6 +564,13 @@ func (s *GroupRepoSuite) TestListActive_DoesNotLoadAccountCounts() {
 }
 
 func (s *GroupRepoSuite) TestListActiveByPlatform() {
+	baselineGroups, err := s.repo.ListActiveByPlatform(s.ctx, service.PlatformAnthropic)
+	s.Require().NoError(err, "ListActiveByPlatform baseline")
+	baselineIDs := make(map[int64]struct{}, len(baselineGroups))
+	for _, group := range baselineGroups {
+		baselineIDs[group.ID] = struct{}{}
+	}
+
 	s.Require().NoError(s.repo.Create(s.ctx, &service.Group{
 		Name:             "g1",
 		Platform:         service.PlatformAnthropic,
@@ -591,17 +598,22 @@ func (s *GroupRepoSuite) TestListActiveByPlatform() {
 
 	groups, err := s.repo.ListActiveByPlatform(s.ctx, service.PlatformAnthropic)
 	s.Require().NoError(err, "ListActiveByPlatform")
-	// 1 default anthropic group + 1 test active anthropic group = 2 total
-	s.Require().Len(groups, 2)
-	// Verify our test group is in the results
+	s.Require().Len(groups, len(baselineGroups)+1)
+	// Existing seed groups may expand over time. Verify the query adds only the
+	// active Anthropic fixture and preserves every baseline group.
 	var found bool
+	returnedBaselineIDs := make(map[int64]struct{}, len(baselineGroups))
 	for _, g := range groups {
 		if g.Name == "g1" {
 			found = true
-			break
+			continue
+		}
+		if _, ok := baselineIDs[g.ID]; ok {
+			returnedBaselineIDs[g.ID] = struct{}{}
 		}
 	}
 	s.Require().True(found, "g1 group should be in results")
+	s.Require().Equal(baselineIDs, returnedBaselineIDs, "all baseline Anthropic groups should remain present")
 }
 
 func (s *GroupRepoSuite) TestListActiveVisibleToUser_LimitsCandidateSet() {

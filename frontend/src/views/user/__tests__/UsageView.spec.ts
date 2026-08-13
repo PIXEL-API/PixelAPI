@@ -531,10 +531,10 @@ describe('user UsageView', () => {
         output_cost: 0.00303,
         cache_creation_cost: 0.000001,
         cache_read_cost: 0.069568,
-        input_tokens: 4057,
+        input_tokens: 250,
         output_tokens: 101,
-        cache_creation_tokens: 4,
-        cache_read_tokens: 278272,
+        cache_creation_tokens: 250,
+        cache_read_tokens: 750,
         cache_creation_5m_tokens: 0,
         cache_creation_1h_tokens: 0,
         image_count: 0,
@@ -614,7 +614,7 @@ describe('user UsageView', () => {
     })
     expect(Array.from(csvBytes.slice(0, 3))).toEqual([0xef, 0xbb, 0xbf])
     expect(csvText).toContain('Cache Hit Rate')
-    expect(csvText).toContain('98.6%')
+    expect(csvText).toContain('60.0%')
     const hasSortedExportQuery = query.mock.calls.some((call) => {
       const params = call[0] as Record<string, unknown> | undefined
       const config = call[1]

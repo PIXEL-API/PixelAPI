@@ -42,11 +42,11 @@ func replaceAllFold(text, needle, replacement string) string {
 	for {
 		index := strings.Index(lowerText, lowerNeedle)
 		if index < 0 {
-			builder.WriteString(text)
+			_, _ = builder.WriteString(text)
 			return builder.String()
 		}
-		builder.WriteString(text[:index])
-		builder.WriteString(replacement)
+		_, _ = builder.WriteString(text[:index])
+		_, _ = builder.WriteString(replacement)
 		text = text[index+len(needle):]
 		lowerText = lowerText[index+len(needle):]
 	}

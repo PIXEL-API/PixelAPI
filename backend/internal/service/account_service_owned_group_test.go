@@ -194,7 +194,7 @@ type ownedAccountAtomicProxyCreateRepoStub struct {
 func (s *ownedAccountAtomicProxyCreateRepoStub) CreateOwnedWithProxyCapacity(ctx context.Context, ownerUserID int64, account *Account) error {
 	s.atomicCreateCalls++
 	s.atomicOwnerUserID = ownerUserID
-	return s.ownedAccountDuplicateRepoStub.Create(ctx, account)
+	return s.Create(ctx, account)
 }
 
 func (s *ownedAccountDuplicateRepoStub) Create(_ context.Context, account *Account) error {

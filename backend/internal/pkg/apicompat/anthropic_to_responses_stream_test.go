@@ -34,7 +34,7 @@ func TestAnthropicEventToResponsesTextEmitsOrderedContentPartEvents(t *testing.T
 	if partAdded < 0 || firstDelta < 0 || textDone < 0 || partDone < 0 {
 		t.Fatalf("missing required content events: %+v", eventTypes(events))
 	}
-	if !(partAdded < firstDelta && firstDelta < textDone && textDone < partDone) {
+	if partAdded >= firstDelta || firstDelta >= textDone || textDone >= partDone {
 		t.Fatalf("invalid content event order: %+v", eventTypes(events))
 	}
 	if events[textDone].Text != "Hello" {

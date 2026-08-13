@@ -928,7 +928,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 			applyOpsEffectiveRoute(c, entry)
 
 			var clientIP string
-			if ip := strings.TrimSpace(ip.GetClientIP(c)); ip != "" {
+			if ip := strings.TrimSpace(ip.GetSecurityClientIP(c)); ip != "" {
 				clientIP = ip
 				entry.ClientIP = &clientIP
 			}
@@ -1134,7 +1134,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 		applyOpsEffectiveRoute(c, entry)
 
 		var clientIP string
-		if ip := strings.TrimSpace(ip.GetClientIP(c)); ip != "" {
+		if ip := strings.TrimSpace(ip.GetSecurityClientIP(c)); ip != "" {
 			clientIP = ip
 			entry.ClientIP = &clientIP
 		}

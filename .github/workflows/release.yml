@@ -26,21 +26,81 @@ permissions:
   packages: write
 
 jobs:
+  resolve-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_sha: ${{ steps.resolve.outputs.release_sha }}
+      tag_name: ${{ steps.resolve.outputs.tag_name }}
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - name: Checkout release resolver
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve immutable release commit
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          EVENT_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG_NAME=$INPUT_TAG
+          else
+            case "$EVENT_REF" in
+              refs/tags/*) TAG_NAME=${EVENT_REF#refs/tags/} ;;
+              *) echo "Release must be triggered by a tag" >&2; exit 1 ;;
+            esac
+          fi
+
+          if ! [[ "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "Invalid release tag: $TAG_NAME" >&2
+            exit 1
+          fi
+
+          git fetch --force origin "refs/tags/$TAG_NAME:refs/tags/$TAG_NAME"
+          RELEASE_SHA=$(git rev-parse "$TAG_NAME^{commit}")
+          if ! [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Unable to resolve immutable commit for $TAG_NAME" >&2
+            exit 1
+          fi
+
+          echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG_NAME#v}" >> "$GITHUB_OUTPUT"
+          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "Resolved $TAG_NAME to $RELEASE_SHA"
+
+  quality-gate:
+    needs: resolve-release
+    uses: ./.github/workflows/backend-ci.yml
+    with:
+      frontend_coverage: true
+      upload_frontend_artifact: true
+      checkout_ref: ${{ needs.resolve-release.outputs.release_sha }}
+
+  security-gate:
+    needs: resolve-release
+    uses: ./.github/workflows/security-scan.yml
+    with:
+      checkout_ref: ${{ needs.resolve-release.outputs.release_sha }}
+
   # Update VERSION file with tag version
   update-version:
+    needs: resolve-release
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve-release.outputs.release_sha }}
 
       - name: Update VERSION file
+        env:
+          VERSION: ${{ needs.resolve-release.outputs.version }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION=${{ github.event.inputs.tag }}
-            VERSION=${VERSION#v}
-          else
-            VERSION=${GITHUB_REF#refs/tags/v}
-          fi
+          set -euo pipefail
           echo "$VERSION" > backend/cmd/server/VERSION
           echo "Updated VERSION file to: $VERSION"
 
@@ -51,48 +111,15 @@ jobs:
           path: backend/cmd/server/VERSION
           retention-days: 1
 
-  build-frontend:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: '20'
-          cache: 'pnpm'
-          cache-dependency-path: frontend/pnpm-lock.yaml
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-        working-directory: frontend
-
-      - name: Build frontend
-        run: pnpm run build
-        working-directory: frontend
-
-      - name: Upload frontend artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: frontend-dist
-          path: backend/internal/web/dist/
-          retention-days: 1
-
   release:
-    needs: [update-version, build-frontend]
+    needs: [resolve-release, quality-gate, security-gate, update-version]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ needs.resolve-release.outputs.release_sha }}
 
       - name: Download VERSION artifact
         uses: actions/download-artifact@v8
@@ -141,18 +168,24 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Fetch tags with annotations
+        env:
+          TAG_NAME: ${{ needs.resolve-release.outputs.tag_name }}
+          EXPECTED_SHA: ${{ needs.resolve-release.outputs.release_sha }}
         run: |
-          # 确保获取完整的 annotated tag 信息
-          git fetch --tags --force
+          set -euo pipefail
+          git fetch --force origin "refs/tags/$TAG_NAME:refs/tags/$TAG_NAME"
+          ACTUAL_SHA=$(git rev-parse "$TAG_NAME^{commit}")
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "Tag moved after validation: expected=$EXPECTED_SHA actual=$ACTUAL_SHA" >&2
+            exit 1
+          fi
 
       - name: Get tag message
         id: tag_message
+        env:
+          TAG_NAME: ${{ needs.resolve-release.outputs.tag_name }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG_NAME=${{ github.event.inputs.tag }}
-          else
-            TAG_NAME=${GITHUB_REF#refs/tags/}
-          fi
+          set -euo pipefail
           echo "Processing tag: $TAG_NAME"
 
           # 获取完整的 tag message（跳过第一行标题）
@@ -163,10 +196,13 @@ jobs:
           echo "Tag message preview:"
           echo "$TAG_MESSAGE" | head -10
 
-          # 使用 EOF 分隔符处理多行内容
-          echo "message<<EOF" >> $GITHUB_OUTPUT
-          echo "$TAG_MESSAGE" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          # 使用不可预测的分隔符安全处理不受信任的多行 tag 内容。
+          DELIMITER="TAG_MESSAGE_$(openssl rand -hex 16)"
+          {
+            echo "message<<$DELIMITER"
+            echo "$TAG_MESSAGE"
+            echo "$DELIMITER"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Set lowercase owner for GHCR
         id: lowercase
@@ -176,7 +212,7 @@ jobs:
         uses: goreleaser/goreleaser-action@v7
         with:
           version: '~> v2'
-          args: release --clean --skip=validate ${{ env.SIMPLE_RELEASE == 'true' && '--config=.goreleaser.simple.yaml' || '' }}
+          args: release --clean ${{ env.SIMPLE_RELEASE == 'true' && '--config=.goreleaser.simple.yaml' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_MESSAGE: ${{ steps.tag_message.outputs.message }}
@@ -205,6 +241,9 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          TAG_NAME: ${{ needs.resolve-release.outputs.tag_name }}
+          TAG_MESSAGE: ${{ steps.tag_message.outputs.message }}
+          REPO: ${{ github.repository }}
         continue-on-error: true
         run: |
           # 检查必要的环境变量
@@ -213,17 +252,10 @@ jobs:
             exit 0
           fi
 
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG_NAME=${{ github.event.inputs.tag }}
-          else
-            TAG_NAME=${GITHUB_REF#refs/tags/}
-          fi
           VERSION=${TAG_NAME#v}
-          REPO="${{ github.repository }}"
           GHCR_IMAGE="ghcr.io/${REPO,,}"  # ${,,} converts to lowercase
 
           # 获取 tag message 内容并转义 Markdown 特殊字符
-          TAG_MESSAGE='${{ steps.tag_message.outputs.message }}'
           TAG_MESSAGE=$(echo "$TAG_MESSAGE" | sed 's/\([_*`\[]\)/\\\1/g')
 
           # 限制消息长度（Telegram 消息限制 4096 字符，预留空间给头尾固定内容）
@@ -273,7 +305,7 @@ jobs:
               }')"
 
   sync-version-file:
-    needs: [release]
+    needs: [resolve-release, release]
     if: ${{ needs.release.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
@@ -283,13 +315,11 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
 
       - name: Sync VERSION file to released tag
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          VERSION: ${{ needs.resolve-release.outputs.version }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION=${{ github.event.inputs.tag }}
-            VERSION=${VERSION#v}
-          else
-            VERSION=${GITHUB_REF#refs/tags/v}
-          fi
+          set -euo pipefail
 
           CURRENT_VERSION=$(tr -d '\r\n' < backend/cmd/server/VERSION || true)
           if [ "$CURRENT_VERSION" = "$VERSION" ]; then
@@ -303,4 +333,4 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add backend/cmd/server/VERSION
           git commit -m "chore: sync VERSION to ${VERSION} [skip ci]"
-          git push origin HEAD:${{ github.event.repository.default_branch }}
+          git push origin "HEAD:$DEFAULT_BRANCH"

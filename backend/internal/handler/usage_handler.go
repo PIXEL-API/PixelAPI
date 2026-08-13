@@ -291,7 +291,7 @@ func parseUserBalanceLedgerFilters(c *gin.Context, userID int64) (service.UserBa
 	if refIDStr := strings.TrimSpace(c.Query("ref_id")); refIDStr != "" {
 		id, err := strconv.ParseInt(refIDStr, 10, 64)
 		if err != nil || id <= 0 {
-			return filters, fmt.Errorf("Invalid ref_id")
+			return filters, fmt.Errorf("invalid ref_id")
 		}
 		filters.RefID = &id
 	}
@@ -422,7 +422,7 @@ func parseUserDashboardTimestamp(raw string, location *time.Location, field stri
 			return timestamp, nil
 		}
 	}
-	return time.Time{}, fmt.Errorf("Invalid %s format, use RFC3339 or YYYY-MM-DDTHH:mm:ss", field)
+	return time.Time{}, fmt.Errorf("invalid %s format, use RFC3339 or YYYY-MM-DDTHH:mm:ss", field)
 }
 
 func parseUserDashboardExactTimeRange(c *gin.Context, location *time.Location) (*time.Time, *time.Time, bool, error) {

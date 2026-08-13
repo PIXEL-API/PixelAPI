@@ -21,7 +21,7 @@
         </p>
         <p class="text-xs text-gray-500">
           {{ t('admin.usage.cacheReadTokens') }}: {{ formatTokens(stats?.total_cache_read_tokens || 0) }} /
-          {{ t('usage.cacheHitRate') }}: {{ formatCacheHitRate(stats?.total_input_tokens, stats?.total_cache_read_tokens) }}
+          {{ t('usage.cacheHitRate') }}: {{ formatCacheHitRate(stats?.total_input_tokens, stats?.total_cache_creation_tokens, stats?.total_cache_read_tokens) }}
         </p>
       </div>
     </div>

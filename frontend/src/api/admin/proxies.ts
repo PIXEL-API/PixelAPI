@@ -157,28 +157,6 @@ export async function checkProxyQuality(id: number): Promise<ProxyQualityCheckRe
 }
 
 /**
- * Get proxy usage statistics
- * @param id - Proxy ID
- * @returns Proxy usage statistics
- */
-export async function getStats(id: number): Promise<{
-  total_accounts: number
-  active_accounts: number
-  total_requests: number
-  success_rate: number
-  average_latency: number
-}> {
-  const { data } = await apiClient.get<{
-    total_accounts: number
-    active_accounts: number
-    total_requests: number
-    success_rate: number
-    average_latency: number
-  }>(`/admin/proxies/${id}/stats`)
-  return data
-}
-
-/**
  * Get accounts using a proxy
  * @param id - Proxy ID
  * @returns List of accounts using the proxy
@@ -266,7 +244,6 @@ export const proxiesAPI = {
   toggleStatus,
   testProxy,
   checkProxyQuality,
-  getStats,
   getProxyAccounts,
   batchCreate,
   batchDelete,

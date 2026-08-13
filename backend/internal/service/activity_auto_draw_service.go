@@ -73,7 +73,7 @@ func (s *ActivityAutoDrawService) runOnce() {
 	ctx, cancel := context.WithTimeout(context.Background(), activityAutoDrawTimeout)
 	defer cancel()
 
-	executed, err := s.taskExecutor.Run(ctx, "activity_auto_draw", func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+	_, err := s.taskExecutor.Run(ctx, "activity_auto_draw", func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
 		if err := guard.Check(taskCtx); err != nil {
 			return err
 		}
@@ -81,8 +81,6 @@ func (s *ActivityAutoDrawService) runOnce() {
 	})
 	if err != nil {
 		slog.Error("[ActivityAutoDraw] failed to run due draws", "error", err)
-	}
-	if !executed {
 		return
 	}
 }

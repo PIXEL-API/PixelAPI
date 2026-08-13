@@ -40,7 +40,6 @@ type AdminService interface {
 	UpdateUserPoints(ctx context.Context, userID int64, points float64, operation string, notes string, operatorUserID int64) (*User, error)
 	UpdateUserLoadFactorCredits(ctx context.Context, userID int64, amount int, operation string, notes string, operatorUserID int64) (*User, error)
 	GetUserAPIKeys(ctx context.Context, userID int64, page, pageSize int, sortBy, sortOrder string) ([]APIKey, int64, error)
-	GetUserUsageStats(ctx context.Context, userID int64, period string) (any, error)
 	GetUserRPMStatus(ctx context.Context, userID int64) (*UserRPMStatus, error)
 	// GetUserBalanceHistory returns paginated balance/concurrency change records for a user.
 	// codeType is optional - pass empty string to return all types.
@@ -1681,17 +1680,6 @@ func (s *adminServiceImpl) GetUserRPMStatus(ctx context.Context, userID int64) (
 		UserRPMUsed:  userRPMUsed,
 		UserRPMLimit: user.RPMLimit,
 		PerGroup:     perGroup,
-	}, nil
-}
-
-func (s *adminServiceImpl) GetUserUsageStats(ctx context.Context, userID int64, period string) (any, error) {
-	// Return mock data for now
-	return map[string]any{
-		"period":          period,
-		"total_requests":  0,
-		"total_cost":      0.0,
-		"total_tokens":    0,
-		"avg_duration_ms": 0,
 	}, nil
 }
 

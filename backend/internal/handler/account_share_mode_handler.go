@@ -1153,15 +1153,15 @@ func parseAccountShareSortsQuery(c *gin.Context) ([]service.AccountShareListingS
 	for _, value := range values {
 		parts := strings.Split(value, ":")
 		if len(parts) != 2 {
-			return nil, fmt.Errorf("Invalid sorts")
+			return nil, fmt.Errorf("invalid sorts")
 		}
 		sortBy := service.NormalizeAccountShareListingSortBy(parts[0])
 		sortOrder := service.NormalizeAccountShareListingSortOrder(parts[1])
 		if sortBy == "" || sortOrder == "" {
-			return nil, fmt.Errorf("Invalid sorts")
+			return nil, fmt.Errorf("invalid sorts")
 		}
 		if _, ok := seen[sortBy]; ok {
-			return nil, fmt.Errorf("Invalid sorts")
+			return nil, fmt.Errorf("invalid sorts")
 		}
 		seen[sortBy] = struct{}{}
 		out = append(out, service.AccountShareListingSortCriterion{SortBy: sortBy, SortOrder: sortOrder})
@@ -1177,11 +1177,11 @@ func parseAccountShareSortQuery(c *gin.Context) (string, string, error) {
 	}
 	sortBy := service.NormalizeAccountShareListingSortBy(rawSortBy)
 	if sortBy == "" {
-		return "", "", fmt.Errorf("Invalid sort_by")
+		return "", "", fmt.Errorf("invalid sort_by")
 	}
 	sortOrder := service.NormalizeAccountShareListingSortOrder(rawSortOrder)
 	if sortOrder == "" {
-		return "", "", fmt.Errorf("Invalid sort_order")
+		return "", "", fmt.Errorf("invalid sort_order")
 	}
 	return sortBy, sortOrder, nil
 }

@@ -733,7 +733,6 @@ func ProvideAccountShareModeService(
 	return svc
 }
 
-
 func ProvideUsageBillingPostCommitFinalizer(
 	billingCacheService *BillingCacheService,
 	deferredService *DeferredService,

@@ -181,7 +181,7 @@ func findExistingUsageBillingCreditUserIDs(ctx context.Context, tx *sql.Tx, requ
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	userIDs := make([]int64, 0, 2)
 	for rows.Next() {

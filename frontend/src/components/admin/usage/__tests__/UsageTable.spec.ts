@@ -137,7 +137,7 @@ describe('admin UsageTable tooltip', () => {
       cache_read_cost: 0,
       input_tokens: 250,
       output_tokens: 100,
-      cache_creation_tokens: 0,
+      cache_creation_tokens: 250,
       cache_read_tokens: 750,
       cache_creation_5m_tokens: 0,
       cache_creation_1h_tokens: 0,
@@ -167,7 +167,7 @@ describe('admin UsageTable tooltip', () => {
 
     const text = wrapper.text()
     expect(text).toContain('Cache Hit Rate')
-    expect(text).toContain('75.0%')
+    expect(text).toContain('60.0%')
   })
 
   it('shows requested and upstream models separately for admin rows', () => {

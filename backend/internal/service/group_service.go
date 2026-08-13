@@ -198,22 +198,3 @@ func (s *GroupService) Delete(ctx context.Context, id int64) error {
 
 	return nil
 }
-
-// GetStats 获取分组统计信息
-func (s *GroupService) GetStats(ctx context.Context, id int64) (map[string]any, error) {
-	group, err := s.groupRepo.GetByID(ctx, id)
-	if err != nil {
-		return nil, fmt.Errorf("get group: %w", err)
-	}
-
-	stats := map[string]any{
-		"id":              group.ID,
-		"name":            group.Name,
-		"rate_multiplier": group.RateMultiplier,
-		"is_exclusive":    group.IsExclusive,
-		"status":          group.Status,
-		"account_count":   group.AccountCount,
-	}
-
-	return stats, nil
-}

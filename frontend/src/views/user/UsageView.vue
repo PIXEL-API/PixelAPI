@@ -42,7 +42,7 @@
                 </p>
                 <p class="data-stat-meta mt-0">
                   {{ t('admin.usage.cacheReadTokens') }}: {{ formatTokens(usageStats?.total_cache_read_tokens || 0) }} /
-                  {{ t('usage.cacheHitRate') }}: {{ formatCacheHitRate(usageStats?.total_input_tokens, usageStats?.total_cache_read_tokens) }}
+                  {{ t('usage.cacheHitRate') }}: {{ formatCacheHitRate(usageStats?.total_input_tokens, usageStats?.total_cache_creation_tokens, usageStats?.total_cache_read_tokens) }}
                 </p>
               </div>
             </div>
@@ -665,7 +665,7 @@
             </div>
             <div v-if="tokenTooltipData" class="flex items-center justify-between gap-4">
               <span class="text-gray-400">{{ t('usage.cacheHitRate') }}</span>
-              <span class="font-medium text-cyan-300">{{ formatCacheHitRate(tokenTooltipData.input_tokens, tokenTooltipData.cache_read_tokens) }}</span>
+              <span class="font-medium text-cyan-300">{{ formatCacheHitRate(tokenTooltipData.input_tokens, tokenTooltipData.cache_creation_tokens, tokenTooltipData.cache_read_tokens) }}</span>
             </div>
           </div>
           <!-- Total -->
@@ -1865,7 +1865,7 @@ const exportToCSV = async () => {
         log.output_tokens,
         log.cache_read_tokens,
         log.cache_creation_tokens,
-        formatCacheHitRate(log.input_tokens, log.cache_read_tokens),
+        formatCacheHitRate(log.input_tokens, log.cache_creation_tokens, log.cache_read_tokens),
         log.rate_multiplier,
         log.actual_cost.toFixed(8),
         log.total_cost.toFixed(8),

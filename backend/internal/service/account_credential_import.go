@@ -645,24 +645,24 @@ func accountCredentialImportSourceFromAgentIdentityAccountEnvelope(item map[stri
 	}
 
 	if outerAuthMode := importStringField(item, "auth_mode", "authMode"); outerAuthMode != "" {
-		return AccountCredentialImportSource{}, true, fmt.Errorf("Agent Identity auth_mode must be declared only inside credentials")
+		return AccountCredentialImportSource{}, true, fmt.Errorf("agent identity auth_mode must be declared only inside credentials")
 	}
 	if _, hasOuterIdentity := importAnyField(item, "agent_identity", "agentIdentity"); hasOuterIdentity {
-		return AccountCredentialImportSource{}, true, fmt.Errorf("Agent Identity must not be declared in both the account and credentials")
+		return AccountCredentialImportSource{}, true, fmt.Errorf("agent identity must not be declared in both the account and credentials")
 	}
 	declaredPlatform := importStringField(item, "platform", "provider", "service")
 	if declaredPlatform != "" && normalizeCredentialImportPlatform(declaredPlatform) != PlatformOpenAI {
-		return AccountCredentialImportSource{}, true, fmt.Errorf("Agent Identity account platform must be OpenAI")
+		return AccountCredentialImportSource{}, true, fmt.Errorf("agent identity account platform must be OpenAI")
 	}
 	accountType := strings.ToLower(strings.TrimSpace(importStringField(item, "type", "account_type", "accountType")))
 	if accountType != "" && accountType != AccountTypeOAuth {
-		return AccountCredentialImportSource{}, true, fmt.Errorf("Agent Identity account type must be OAuth")
+		return AccountCredentialImportSource{}, true, fmt.Errorf("agent identity account type must be OAuth")
 	}
 
 	outerSafety := copyImportMap(item)
 	removeImportMapField(outerSafety, "credentials")
 	if field, found := findOAuthTokenCredentialImportField(outerSafety); found {
-		return AccountCredentialImportSource{}, true, fmt.Errorf("Agent Identity must not include OAuth token field: %s", field)
+		return AccountCredentialImportSource{}, true, fmt.Errorf("agent identity must not include OAuth token field: %s", field)
 	}
 	if field, found := findDisallowedCredentialImportField(outerSafety); found {
 		return AccountCredentialImportSource{}, true, fmt.Errorf("disallowed credential field: %s", field)
@@ -675,7 +675,7 @@ func accountCredentialImportSourceFromAgentIdentityAccountEnvelope(item map[stri
 	identityInput := copyImportMap(credentials)
 	if idTokenValue, hasIDToken := importAnyField(identityInput, "id_token", "idToken"); hasIDToken {
 		if _, valid := idTokenValue.(string); !valid {
-			return AccountCredentialImportSource{}, true, fmt.Errorf("Agent Identity account id_token must be a string")
+			return AccountCredentialImportSource{}, true, fmt.Errorf("agent identity account id_token must be a string")
 		}
 		removeImportMapField(identityInput, "id_token")
 		removeImportMapField(identityInput, "idToken")
@@ -686,7 +686,7 @@ func accountCredentialImportSourceFromAgentIdentityAccountEnvelope(item map[stri
 		return AccountCredentialImportSource{}, true, err
 	}
 	if !handled {
-		return AccountCredentialImportSource{}, true, fmt.Errorf("Agent Identity credentials are invalid")
+		return AccountCredentialImportSource{}, true, fmt.Errorf("agent identity credentials are invalid")
 	}
 
 	source.Name = credentialImportFirstNonEmptyString(
@@ -706,10 +706,10 @@ func accountCredentialImportSourceFromAgentIdentity(item map[string]any) (Accoun
 		return AccountCredentialImportSource{}, false, nil
 	}
 	if authMode != "" && !isAgentAuthMode {
-		return AccountCredentialImportSource{}, true, fmt.Errorf("Agent Identity auth_mode is invalid")
+		return AccountCredentialImportSource{}, true, fmt.Errorf("agent identity auth_mode is invalid")
 	}
 	if field, found := findOAuthTokenCredentialImportField(item); found {
-		return AccountCredentialImportSource{}, true, fmt.Errorf("Agent Identity must not include OAuth token field: %s", field)
+		return AccountCredentialImportSource{}, true, fmt.Errorf("agent identity must not include OAuth token field: %s", field)
 	}
 
 	identity := item
@@ -724,7 +724,7 @@ func accountCredentialImportSourceFromAgentIdentity(item map[string]any) (Accoun
 	runtimeID := importStringField(identity, "agent_runtime_id", "agentRuntimeId")
 	privateKey := importStringField(identity, "agent_private_key", "agentPrivateKey")
 	if runtimeID == "" || privateKey == "" {
-		return AccountCredentialImportSource{}, true, fmt.Errorf("Agent Identity requires agent_runtime_id and agent_private_key")
+		return AccountCredentialImportSource{}, true, fmt.Errorf("agent identity requires agent_runtime_id and agent_private_key")
 	}
 	if err := ValidateOpenAIAgentIdentityPrivateKey(privateKey); err != nil {
 		return AccountCredentialImportSource{}, true, err

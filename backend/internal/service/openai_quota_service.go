@@ -103,7 +103,7 @@ func (s *OpenAIQuotaService) SetAgentIdentityWSInvalidator(invalidator *AgentIde
 func (s *OpenAIQuotaService) buildAuthenticationHeaders(ctx context.Context, account *Account, token string) (http.Header, error) {
 	if account != nil && account.IsOpenAIAgentIdentity() {
 		if s.agentIdentityWSInvalidator == nil {
-			return nil, fmt.Errorf("Agent Identity WS invalidator is not configured")
+			return nil, fmt.Errorf("agent identity WS invalidator is not configured")
 		}
 		return buildAgentIdentityAuthenticationHeaders(ctx, s.accountRepo, s.agentIdentityWSInvalidator, &s.agentIdentityTaskMu, account)
 	}

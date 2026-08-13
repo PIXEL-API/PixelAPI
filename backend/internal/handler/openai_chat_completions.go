@@ -327,7 +327,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		forwardCtx, cancelForward := bindAccountSelectionForwardContext(selectionCtx, selection)
 		requestPayloadHash := service.HashUsageRequestPayload(body)
 		userAgent := c.GetHeader("User-Agent")
-		clientIP := ip.GetClientIP(c)
+		clientIP := ip.GetSecurityClientIP(c)
 		inboundEndpoint := GetInboundEndpoint(c)
 		upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
 		recordUsage := func(ctx context.Context, result *service.OpenAIForwardResult) error {

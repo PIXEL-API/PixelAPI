@@ -21,8 +21,8 @@ type GatewayRoutingSuite struct {
 }
 
 func (s *GatewayRoutingSuite) SetupTest() {
-	s.ctx = context.Background()
 	tx := testEntTx(s.T())
+	s.ctx = dbent.NewTxContext(context.Background(), tx)
 	s.client = tx.Client()
 	s.accountRepo = newAccountRepositoryWithSQL(s.client, tx, nil)
 }

@@ -290,7 +290,11 @@ func (h prefixHook) DialHook(next redisclient.DialHook) redisclient.DialHook { r
 func (h prefixHook) ProcessHook(next redisclient.ProcessHook) redisclient.ProcessHook {
 	return func(ctx context.Context, cmd redisclient.Cmder) error {
 		h.prefixCmd(cmd)
-		return next(ctx, cmd)
+		if err := next(ctx, cmd); err != nil {
+			return err
+		}
+		h.stripScanPrefix(cmd)
+		return nil
 	}
 }
 
@@ -329,7 +333,7 @@ func (h prefixHook) prefixCmd(cmd redisclient.Cmder) {
 
 	switch strings.ToLower(cmd.Name()) {
 	case "get", "set", "setnx", "setex", "psetex", "incr", "decr", "incrby", "expire", "pexpire", "ttl", "pttl",
-		"hgetall", "hget", "hset", "hdel", "hincrbyfloat", "exists",
+		"hgetall", "hget", "hset", "hdel", "hincrbyfloat",
 		"sadd", "scard", "smembers", "sismember", "srem",
 		"zadd", "zcard", "zrange", "zrangebyscore", "zrem", "zremrangebyscore", "zrevrange", "zrevrangebyscore", "zscore":
 		prefixOne(1)
@@ -337,7 +341,7 @@ func (h prefixHook) prefixCmd(cmd redisclient.Cmder) {
 		for i := 1; i < len(args); i++ {
 			prefixOne(i)
 		}
-	case "del", "unlink":
+	case "del", "unlink", "exists":
 		for i := 1; i < len(args); i++ {
 			prefixOne(i)
 		}
@@ -360,6 +364,23 @@ func (h prefixHook) prefixCmd(cmd redisclient.Cmder) {
 			}
 		}
 	}
+}
+
+// SCAN 的 MATCH 参数需要带测试命名空间前缀，结果则必须恢复为业务代码
+// 期望的逻辑键名；否则 CleanupExpiredSlots 会把物理前缀误认为未知键而跳过。
+func (h prefixHook) stripScanPrefix(cmd redisclient.Cmder) {
+	if !strings.EqualFold(cmd.Name(), "scan") {
+		return
+	}
+	scanCmd, ok := cmd.(*redisclient.ScanCmd)
+	if !ok {
+		return
+	}
+	keys, cursor := scanCmd.Val()
+	for i := range keys {
+		keys[i] = strings.TrimPrefix(keys[i], h.prefix)
+	}
+	scanCmd.SetVal(keys, cursor)
 }
 
 // IntegrationRedisSuite provides a base suite for Redis integration tests.
@@ -399,9 +420,9 @@ type IntegrationDBSuite struct {
 
 // SetupTest initializes ctx and client for each test method.
 func (s *IntegrationDBSuite) SetupTest() {
-	s.ctx = context.Background()
 	// 统一使用 ent.Tx，确保每个测试都有独立事务并自动回滚。
 	tx := testEntTx(s.T())
+	s.ctx = dbent.NewTxContext(context.Background(), tx)
 	s.tx = tx
 	s.client = tx.Client()
 }

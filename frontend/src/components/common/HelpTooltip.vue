@@ -1,5 +1,11 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, useTemplateRef, nextTick } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef } from 'vue'
+
+type TooltipPlacement = 'top' | 'bottom'
+
+const VIEWPORT_PADDING = 16
+const TOOLTIP_GAP = 8
+const ARROW_EDGE_PADDING = 12
 
 const props = withDefaults(defineProps<{
   content?: string
@@ -14,6 +20,13 @@ const show = ref(false)
 const triggerRef = useTemplateRef<HTMLElement>('trigger')
 const tooltipRef = useTemplateRef<HTMLElement>('tooltip')
 const tooltipStyle = ref({ top: '0px', left: '0px' })
+const arrowStyle = ref({ left: '50%' })
+const placement = ref<TooltipPlacement>('top')
+
+function clamp(value: number, min: number, max: number): number {
+  if (max < min) return min
+  return Math.min(Math.max(value, min), max)
+}
 
 function openTooltip() {
   show.value = true
@@ -65,12 +78,59 @@ function onViewportChange() {
 }
 
 function updatePosition() {
-  const el = triggerRef.value
-  if (!el) return
-  const rect = el.getBoundingClientRect()
+  const trigger = triggerRef.value
+  const tooltip = tooltipRef.value
+  if (!trigger || !tooltip) return
+
+  const triggerRect = trigger.getBoundingClientRect()
+  const tooltipRect = tooltip.getBoundingClientRect()
+  const viewportWidth = window.innerWidth
+  const viewportHeight = window.innerHeight
+  const tooltipWidth = Math.min(
+    tooltipRect.width,
+    Math.max(viewportWidth - VIEWPORT_PADDING * 2, 0),
+  )
+  const triggerCenter = triggerRect.left + triggerRect.width / 2
+  const left = clamp(
+    triggerCenter - tooltipWidth / 2,
+    VIEWPORT_PADDING,
+    viewportWidth - VIEWPORT_PADDING - tooltipWidth,
+  )
+
+  const preferredTop = triggerRect.top - TOOLTIP_GAP - tooltipRect.height
+  const preferredBottom = triggerRect.bottom + TOOLTIP_GAP
+  const fitsAbove = preferredTop >= VIEWPORT_PADDING
+  const fitsBelow = preferredBottom + tooltipRect.height <= viewportHeight - VIEWPORT_PADDING
+  const availableAbove = triggerRect.top - TOOLTIP_GAP - VIEWPORT_PADDING
+  const availableBelow = viewportHeight - VIEWPORT_PADDING - preferredBottom
+
+  let top: number
+  if (fitsAbove || (!fitsBelow && availableAbove >= availableBelow)) {
+    placement.value = 'top'
+    top = clamp(
+      preferredTop,
+      VIEWPORT_PADDING,
+      viewportHeight - VIEWPORT_PADDING - tooltipRect.height,
+    )
+  } else {
+    placement.value = 'bottom'
+    top = clamp(
+      preferredBottom,
+      VIEWPORT_PADDING,
+      viewportHeight - VIEWPORT_PADDING - tooltipRect.height,
+    )
+  }
+
   tooltipStyle.value = {
-    top: `${rect.top + window.scrollY}px`,
-    left: `${rect.left + rect.width / 2 + window.scrollX}px`,
+    top: `${top}px`,
+    left: `${left}px`,
+  }
+  arrowStyle.value = {
+    left: `${clamp(
+      triggerCenter - left,
+      ARROW_EDGE_PADDING,
+      tooltipWidth - ARROW_EDGE_PADDING,
+    )}px`,
   }
 }
 
@@ -120,11 +180,12 @@ onBeforeUnmount(() => {
         ref="tooltip"
         v-show="show"
         role="tooltip"
+        :data-placement="placement"
         :class="[
-          'fixed z-[99999] -translate-x-1/2 -translate-y-full rounded-lg bg-gray-900 p-3 text-xs leading-relaxed text-white shadow-xl ring-1 ring-white/10 dark:bg-gray-800',
+          'fixed z-[99999] max-w-[calc(100vw-2rem)] rounded-lg bg-gray-900 p-3 text-xs leading-relaxed text-white shadow-xl ring-1 ring-white/10 dark:bg-gray-800',
           props.widthClass,
         ]"
-        :style="{ top: `calc(${tooltipStyle.top} - 8px)`, left: tooltipStyle.left }"
+        :style="tooltipStyle"
       >
         <button
           v-if="props.trigger === 'click'"
@@ -138,7 +199,11 @@ onBeforeUnmount(() => {
           </svg>
         </button>
         <slot>{{ content }}</slot>
-        <div class="absolute -bottom-1 left-1/2 h-2 w-2 -translate-x-1/2 rotate-45 bg-gray-900 dark:bg-gray-800"></div>
+        <div
+          class="absolute h-2 w-2 -translate-x-1/2 rotate-45 bg-gray-900 dark:bg-gray-800"
+          :class="placement === 'top' ? '-bottom-1' : '-top-1'"
+          :style="arrowStyle"
+        ></div>
       </div>
     </Teleport>
   </div>

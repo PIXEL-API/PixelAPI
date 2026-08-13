@@ -51,7 +51,8 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	proxyRepository := repository.NewProxyRepository(client, db)
 	clusterAdminRepository := repository.NewClusterRepository(db)
 	clusterRepository := repository.ProvideClusterRuntimeRepository(clusterAdminRepository)
-	clusterCacheCoordinator := service.NewClusterCacheCoordinator(configConfig, clusterRepository, redisClient)
+	clusterCachePublisher := repository.NewClusterCachePublisher(redisClient)
+	clusterCacheCoordinator := service.NewClusterCacheCoordinator(configConfig, clusterRepository, clusterCachePublisher)
 	settingService := service.ProvideSettingService(settingRepository, groupRepository, proxyRepository, configConfig, clusterCacheCoordinator)
 	emailCache := repository.NewEmailCache(redisClient)
 	emailService := service.NewEmailService(settingRepository, emailCache)
@@ -95,7 +96,8 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	totpCache := repository.NewTotpCache(redisClient)
 	totpService := service.NewTotpService(userRepository, secretEncryptor, totpCache, settingService, emailService, emailQueueService)
 	authHandler := handler.NewAuthHandler(configConfig, authService, userService, settingService, promoService, redeemService, totpService)
-	oidcProviderService, err := service.NewOIDCProviderService(configConfig, redisClient, userService)
+	oidcProviderStateStore := repository.NewOIDCProviderStateStore(redisClient)
+	oidcProviderService, err := service.NewOIDCProviderService(configConfig, oidcProviderStateStore, userService)
 	if err != nil {
 		return nil, err
 	}
@@ -146,13 +148,6 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	channelRepository := repository.NewChannelRepository(db)
 	channelService := service.ProvideChannelService(channelRepository, groupRepository, apiKeyAuthCacheInvalidator, pricingService, clusterCacheCoordinator)
 	modelPricingResolver := service.NewModelPricingResolver(channelService, billingService)
-	usageBillingRepository := repository.NewUsageBillingRepository(client, db)
-	timingWheelService, err := service.ProvideTimingWheelService()
-	if err != nil {
-		return nil, err
-	}
-	deferredService := service.ProvideDeferredService(accountRepository, timingWheelService)
-	balanceNotifyService := service.ProvideBalanceNotifyService(emailService, settingRepository, accountRepository)
 	accountShareModeService := service.ProvideAccountShareModeService(configConfig, accountShareModeRepository, accountRepository, apiKeyRepository, usageLogRepository, userRepository, proxyRepository, openAIOAuthService, oAuthService, concurrencyService, apiKeyAuthCacheInvalidator, accountTestService, rateLimitService, billingCacheService, billingService, modelPricingResolver, settingRepository, settingService, clusterTaskExecutor)
 	accountShareModeHandler := handler.NewAccountShareModeHandler(accountShareModeService)
 	accountSharePolicyRepository := repository.NewAccountSharePolicyRepository(client, db)
@@ -175,6 +170,10 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	sessionLimitCache := repository.ProvideSessionLimitCache(redisClient, configConfig)
 	rpmCache := repository.NewRPMCache(redisClient)
 	accountBatchTaskRepository := repository.NewAccountBatchTaskRepository(db)
+	timingWheelService, err := service.ProvideTimingWheelService()
+	if err != nil {
+		return nil, err
+	}
 	accountBatchTaskService := service.ProvideAccountBatchTaskService(accountBatchTaskRepository, timingWheelService, clusterTaskExecutor)
 	userAccountHandler := handler.ProvideUserAccountHandler(accountService, accountUsageService, accountTestService, rateLimitService, settingService, oAuthService, openAIOAuthService, openAIQuotaService, userContentModerationService, geminiOAuthService, antigravityOAuthService, grokOAuthService, grokTokenProvider, concurrencyService, sessionLimitCache, rpmCache, accountBatchTaskService)
 	usageService := service.NewUsageService(usageLogRepository, userRepository, client, apiKeyAuthCacheInvalidator)
@@ -224,8 +223,11 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	adminRedeemHandler := admin.NewRedeemHandler(adminService, redeemService)
 	promoHandler := admin.NewPromoHandler(promoService)
 	opsRepository := repository.NewOpsRepository(db)
+	usageBillingRepository := repository.NewUsageBillingRepository(client, db)
 	identityService := service.NewIdentityService(identityCache)
+	deferredService := service.ProvideDeferredService(accountRepository, timingWheelService)
 	digestSessionStore := service.NewDigestSessionStore()
+	balanceNotifyService := service.ProvideBalanceNotifyService(emailService, settingRepository, accountRepository)
 	gatewayService := service.ProvideGatewayService(accountRepository, accountSharePolicyRepository, groupRepository, usageLogRepository, usageBillingRepository, userRepository, userSubscriptionRepository, userGroupRateRepository, gatewayCache, configConfig, schedulerSnapshotService, concurrencyService, billingService, rateLimitService, billingCacheService, identityService, httpUpstream, deferredService, claudeTokenProvider, sessionLimitCache, rpmCache, digestSessionStore, settingService, tlsFingerprintProfileService, channelService, modelPricingResolver, balanceNotifyService, accountShareModeService)
 	v := service.ProvideAccountShareModeServices(accountShareModeService)
 	openAIGatewayService := service.ProvideOpenAIGatewayService(accountRepository, accountSharePolicyRepository, usageLogRepository, usageBillingRepository, userRepository, userSubscriptionRepository, userGroupRateRepository, gatewayCache, configConfig, schedulerSnapshotService, concurrencyService, billingService, rateLimitService, billingCacheService, httpUpstream, deferredService, openAITokenProvider, grokTokenProvider, modelPricingResolver, channelService, balanceNotifyService, settingService, accountService, agentIdentityWSInvalidatorProxy, v...)
@@ -318,8 +320,9 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	jwtAuthMiddleware := middleware.NewJWTAuthMiddleware(authService, userService)
 	adminAuthMiddleware := middleware.NewAdminAuthMiddleware(authService, userService, settingService)
 	apiKeyAuthMiddleware := middleware.NewAPIKeyAuthMiddleware(apiKeyService, subscriptionService, configConfig)
+	clusterRedisPort := repository.NewClusterRedisPort(redisClient)
 	clusterConnectionTracker := service.NewClusterConnectionTracker()
-	clusterRuntime, err := service.NewClusterRuntime(configConfig, clusterRepository, db, redisClient, clusterConnectionTracker, clusterNodeState, clusterCacheCoordinator, clusterTaskExecutor, serviceBuildInfo, channelService, settingService, contentModerationService)
+	clusterRuntime, err := service.NewClusterRuntime(configConfig, clusterRepository, db, clusterRedisPort, clusterConnectionTracker, clusterNodeState, clusterCacheCoordinator, clusterTaskExecutor, serviceBuildInfo, channelService, settingService, contentModerationService)
 	if err != nil {
 		return nil, err
 	}

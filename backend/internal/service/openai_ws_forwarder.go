@@ -1302,7 +1302,7 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 		}
 	}
 	// OAuth 账号：将 apiKeyID 混入 session 标识符，防止跨用户会话碰撞。
-	if account != nil && account.Type == AccountTypeOAuth {
+	if account.Type == AccountTypeOAuth {
 		apiKeyID := getAPIKeyIDFromContext(c)
 		if sessionResolution.SessionID != "" {
 			headers.Set("session_id", isolateOpenAISessionID(apiKeyID, sessionResolution.SessionID))
@@ -1325,7 +1325,7 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 		headers.Set(openAIWSTurnMetadataHeader, metadata)
 	}
 
-	if account != nil && account.Type == AccountTypeOAuth {
+	if account.Type == AccountTypeOAuth {
 		setOpenAIChatGPTAccountHeaders(headers, account)
 		headers.Set("originator", resolveOpenAIUpstreamOriginator(c, isCodexCLI))
 	}
@@ -2100,7 +2100,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		turnMetadata = strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader))
 	}
 	setOpenAIWSTurnMetadata(payload, turnMetadata)
-	if account != nil && account.Type == AccountTypeOAuth {
+	if account.Type == AccountTypeOAuth {
 		s.applyCodexFingerprintToRequestBody(ctx, c, account, payload)
 	}
 	if cleanRelayState, _, cleanRelayErr := s.applyOpenAICleanRelayToRequestBody(ctx, c, account, payload, payloadAsJSONBytes(reqBody)); cleanRelayErr != nil {

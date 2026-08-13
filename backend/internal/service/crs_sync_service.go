@@ -502,7 +502,7 @@ func buildCRSSyncCapacityProbeError(seed string) string {
 		_, _ = io.WriteString(hasher, seed)
 		_, _ = hasher.Write([]byte{0})
 		_, _ = io.WriteString(hasher, strconv.Itoa(counter))
-		output.WriteString(base64.RawURLEncoding.EncodeToString(hasher.Sum(nil)))
+		_, _ = output.WriteString(base64.RawURLEncoding.EncodeToString(hasher.Sum(nil)))
 	}
 	return output.String()[:crsSyncItemErrorMaxBytes]
 }

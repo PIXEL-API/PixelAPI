@@ -232,19 +232,19 @@ func (h *AccountHandler) createAccountFromCredentialImportSource(
 	case service.AccountCredentialImportKindOpenAIAgentIdentity:
 		if defaults.OwnerUserID != nil || strings.EqualFold(strings.TrimSpace(defaults.ShareMode), service.AccountShareModePublic) ||
 			strings.TrimSpace(defaults.ShareStatus) != "" || defaults.SharePolicyID != nil {
-			return nil, fmt.Errorf("Agent Identity accounts cannot be owned or publicly shared")
+			return nil, fmt.Errorf("agent identity accounts cannot be owned or publicly shared")
 		}
 		runtimeID, _ := source.Credentials["agent_runtime_id"].(string)
 		runtimeID = strings.TrimSpace(runtimeID)
 		if runtimeID == "" {
-			return nil, fmt.Errorf("Agent Identity runtime id is required")
+			return nil, fmt.Errorf("agent identity runtime id is required")
 		}
 		exists, err := h.accountService.OpenAIAgentIdentityRuntimeIDExists(ctx, runtimeID)
 		if err != nil {
 			return nil, fmt.Errorf("check Agent Identity runtime id: %w", err)
 		}
 		if exists {
-			return nil, fmt.Errorf("Agent Identity runtime id already exists")
+			return nil, fmt.Errorf("agent identity runtime id already exists")
 		}
 		input.Platform = service.PlatformOpenAI
 		input.Type = service.AccountTypeOAuth

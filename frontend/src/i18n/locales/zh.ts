@@ -3780,7 +3780,7 @@ export default {
         userStatus: "状态",
       },
       usageToday: "今日",
-      usageTotal: "累计",
+      usageTotal: "可查询累计",
       accountsAvailable: "可用:",
       accountsRateLimited: "限流:",
       accountsTotal: "总量:",

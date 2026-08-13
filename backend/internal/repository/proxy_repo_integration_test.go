@@ -21,8 +21,8 @@ type ProxyRepoSuite struct {
 }
 
 func (s *ProxyRepoSuite) SetupTest() {
-	s.ctx = context.Background()
 	tx := testEntTx(s.T())
+	s.ctx = dbent.NewTxContext(context.Background(), tx)
 	s.tx = tx
 	s.repo = newProxyRepositoryWithSQL(tx.Client(), tx)
 }

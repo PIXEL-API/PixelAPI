@@ -3878,7 +3878,7 @@ export default {
         userStatus: "Status",
       },
       usageToday: "Today",
-      usageTotal: "Total",
+      usageTotal: "Queryable total",
       accountsAvailable: "Avail:",
       accountsRateLimited: "Limited:",
       accountsTotal: "Total:",

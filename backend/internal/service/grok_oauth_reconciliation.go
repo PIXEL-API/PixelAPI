@@ -138,22 +138,22 @@ func (s *TokenRefreshService) ReconcileGrokOAuth(
 	}
 
 	if s == nil || s.accountRepo == nil {
-		return nil, errors.New("Grok OAuth reconciliation account repository is not configured")
+		return nil, errors.New("grok OAuth reconciliation account repository is not configured")
 	}
 	pager, ok := s.accountRepo.(GrokOAuthReconcileCandidatePager)
 	if !ok {
-		return nil, errors.New("Grok OAuth reconciliation candidate pager is not configured")
+		return nil, errors.New("grok OAuth reconciliation candidate pager is not configured")
 	}
 	conditionalRepo, ok := s.accountRepo.(grokCredentialConditionalStateRepository)
 	if input.Apply && !ok {
-		return nil, errors.New("Grok OAuth reconciliation conditional mutation repository is not configured")
+		return nil, errors.New("grok OAuth reconciliation conditional mutation repository is not configured")
 	}
 	executor, ok := s.grokOAuthReconcileExecutor()
 	if !ok {
-		return nil, errors.New("Grok OAuth refresher is not registered")
+		return nil, errors.New("grok OAuth refresher is not registered")
 	}
 	if input.Apply && s.refreshAPI == nil {
-		return nil, errors.New("Grok OAuth refresh coordinator is not configured")
+		return nil, errors.New("grok OAuth refresh coordinator is not configured")
 	}
 
 	page, err := pager.ListGrokOAuthReconcileCandidatePage(ctx, input.AfterID, limit)
@@ -161,13 +161,13 @@ func (s *TokenRefreshService) ReconcileGrokOAuth(
 		return nil, err
 	}
 	if page == nil {
-		return nil, errors.New("Grok OAuth reconciliation repository returned a nil cursor page")
+		return nil, errors.New("grok OAuth reconciliation repository returned a nil cursor page")
 	}
 	if !isStrictlyIncreasingGrokReconcilePage(page.Accounts, input.AfterID) {
-		return nil, errors.New("Grok OAuth reconciliation repository returned an invalid cursor page")
+		return nil, errors.New("grok OAuth reconciliation repository returned an invalid cursor page")
 	}
 	if page.HasMore && page.NextAfterID <= input.AfterID {
-		return nil, errors.New("Grok OAuth reconciliation repository returned invalid cursor metadata")
+		return nil, errors.New("grok OAuth reconciliation repository returned invalid cursor metadata")
 	}
 
 	dryRun := !input.Apply

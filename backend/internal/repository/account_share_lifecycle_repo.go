@@ -291,7 +291,7 @@ func (r *accountShareModeRepository) TransitionRoomLifecycle(
 	case service.AccountShareRoomActionActivate:
 		if listing.Status != service.AccountShareListingStatusPaused &&
 			listing.Status != service.AccountShareListingStatusDraining &&
-			!(actorIsAdmin && listing.Status == service.AccountShareListingStatusSuspended) {
+			(!actorIsAdmin || listing.Status != service.AccountShareListingStatusSuspended) {
 			return nil, service.ErrAccountShareRoomInvalidTransition
 		}
 		nextStatus = service.AccountShareListingStatusValidating
@@ -511,7 +511,7 @@ func (r *accountShareModeRepository) ListDrainingRoomIDs(ctx context.Context, af
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	ids := make([]int64, 0, limit)
 	for rows.Next() {
 		var id int64
@@ -599,7 +599,7 @@ func (r *accountShareModeRepository) ListValidatingRoomIDs(
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	ids := make([]int64, 0, limit)
 	for rows.Next() {
 		var id int64
@@ -1031,7 +1031,7 @@ func (r *accountShareModeRepository) ListPendingRoomDeletionOperations(
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	operations := make([]service.AccountShareRoomOperation, 0, limit)
 	for rows.Next() {
 		operation, err := scanAccountShareRoomOperation(rows)
@@ -1505,7 +1505,7 @@ func endQueuedMembershipsForRoomDrainInTx(
 	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return err
 		}
 		ids = append(ids, id)
@@ -1565,7 +1565,7 @@ func lockAccountShareRoomProjectionInTx(ctx context.Context, tx *sql.Tx, listing
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	ids := make([]int64, 0)
 	for rows.Next() {
 		var id int64
@@ -1591,7 +1591,7 @@ func lockAccountShareAccountsInTx(ctx context.Context, tx *sql.Tx, accountIDs []
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
@@ -1640,7 +1640,7 @@ func lockAccountShareIDsInTx(ctx context.Context, tx *sql.Tx, query string, list
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	ids := make([]int64, 0)
 	for rows.Next() {
 		var id int64

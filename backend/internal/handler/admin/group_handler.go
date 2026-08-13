@@ -441,33 +441,53 @@ func (h *GroupHandler) Delete(c *gin.Context) {
 	response.Success(c, gin.H{"message": "Group deleted successfully"})
 }
 
-// GetStats handles getting group statistics
+// GetStats returns the migration contract for the retired group statistics endpoint.
 // GET /api/v1/admin/groups/:id/stats
 func (h *GroupHandler) GetStats(c *gin.Context) {
-	groupID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		response.BadRequest(c, "Invalid group ID")
-		return
-	}
-
-	// Return mock data for now
-	response.Success(c, gin.H{
-		"total_api_keys":  0,
-		"active_api_keys": 0,
-		"total_requests":  0,
-		"total_cost":      0.0,
-	})
-	_ = groupID // TODO: implement actual stats
+	respondDeprecatedAdminStatsEndpoint(c, "GET /api/v1/admin/groups/usage-summary or GET /api/v1/admin/dashboard/groups")
 }
 
-// GetUsageSummary returns today's and cumulative cost for all groups.
-// GET /api/v1/admin/groups/usage-summary?timezone=Asia/Shanghai
+const maxGroupUsageSummaryIDs = 200
+
+func parseGroupUsageSummaryIDs(raw string) ([]int64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	parts := strings.Split(raw, ",")
+	if len(parts) > maxGroupUsageSummaryIDs {
+		return nil, fmt.Errorf("group_ids exceeds maximum of %d", maxGroupUsageSummaryIDs)
+	}
+	groupIDs := make([]int64, 0, len(parts))
+	seen := make(map[int64]struct{}, len(parts))
+	for _, part := range parts {
+		value, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64)
+		if err != nil || value <= 0 {
+			return nil, fmt.Errorf("invalid group_ids value %q", part)
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		groupIDs = append(groupIDs, value)
+	}
+	return groupIDs, nil
+}
+
+// GetUsageSummary returns today's and cumulative cost for selected groups.
+// GET /api/v1/admin/groups/usage-summary?timezone=Asia/Shanghai&group_ids=1,2
+// Omitting group_ids preserves the legacy all-groups response.
 func (h *GroupHandler) GetUsageSummary(c *gin.Context) {
+	groupIDs, err := parseGroupUsageSummaryIDs(c.Query("group_ids"))
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 	userTZ := c.Query("timezone")
 	now := timezone.NowInUserLocation(userTZ)
 	todayStart := timezone.StartOfDayInUserLocation(now, userTZ)
 
-	results, err := h.dashboardService.GetGroupUsageSummary(c.Request.Context(), todayStart)
+	results, err := h.dashboardService.GetGroupUsageSummary(c.Request.Context(), todayStart, groupIDs)
 	if err != nil {
 		response.Error(c, 500, "Failed to get group usage summary")
 		return

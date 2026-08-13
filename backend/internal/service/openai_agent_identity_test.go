@@ -87,7 +87,11 @@ func TestBuildAgentAssertionSignsExactEnvelope(t *testing.T) {
 		t.Fatalf("decode signature: %v", err)
 	}
 	payload := []byte(envelope.RuntimeID + ":" + envelope.TaskID + ":" + envelope.Timestamp)
-	if !ed25519.Verify(privateKey.Public().(ed25519.PublicKey), payload, signature) {
+	publicKey, ok := privateKey.Public().(ed25519.PublicKey)
+	if !ok {
+		t.Fatal("private key did not expose an Ed25519 public key")
+	}
+	if !ed25519.Verify(publicKey, payload, signature) {
 		t.Fatal("assertion signature did not verify")
 	}
 }

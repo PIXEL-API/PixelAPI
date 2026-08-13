@@ -469,7 +469,7 @@ func recordGrokMediaUsage(
 	requestID string,
 ) {
 	userAgent := c.GetHeader("User-Agent")
-	clientIP := ip.GetClientIP(c)
+	clientIP := ip.GetSecurityClientIP(c)
 	payloadForHash := body
 	if len(payloadForHash) == 0 && strings.TrimSpace(requestID) != "" {
 		payloadForHash = []byte(requestID)

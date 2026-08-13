@@ -367,7 +367,6 @@ func (s *ConcurrencyCacheSuite) TestGetUserConcurrency_Missing() {
 }
 
 func (s *ConcurrencyCacheSuite) TestGetAccountsLoadBatch() {
-	s.T().Skip("TODO: Fix this test - CurrentConcurrency returns 0 instead of expected value in CI")
 	// Setup: Create accounts with different load states
 	account1 := int64(100)
 	account2 := int64(101)
@@ -390,6 +389,29 @@ func (s *ConcurrencyCacheSuite) TestGetAccountsLoadBatch() {
 	require.True(s.T(), ok)
 
 	// Account 3: 0/1 slots used, 0 waiting (idle)
+	// Insert an expired member directly. The batch query must remove it before
+	// reporting CurrentConcurrency, otherwise stale leases inflate load.
+	redisNow, err := s.rdb.Time(s.ctx).Result()
+	require.NoError(s.T(), err)
+	expiredRequestID := "expired-request"
+	require.NoError(s.T(), s.rdb.ZAdd(
+		s.ctx,
+		accountSlotKey(account1),
+		redis.Z{
+			Score:  float64(redisNow.Unix() - int64(testSlotTTL.Seconds()) - 1),
+			Member: expiredRequestID,
+		},
+	).Err())
+
+	// Prove that the fixture is stored in the same namespaced Redis keys that
+	// GetAccountsLoadBatch reads. The original skipped test used a Lua script
+	// that built un-prefixed keys dynamically, so the integration namespace
+	// contained live slots while the batch reader saw an empty key and returned 0.
+	require.EqualValues(s.T(), 3, mustZCard(s.T(), s.rdb, accountSlotKey(account1)))
+	require.EqualValues(s.T(), 1, mustZCard(s.T(), s.rdb, accountSlotKey(account2)))
+	waiting, err := s.rdb.Get(s.ctx, accountWaitKey(account1)).Int()
+	require.NoError(s.T(), err)
+	require.Equal(s.T(), 1, waiting)
 
 	// Query batch load
 	accounts := []service.AccountWithConcurrency{
@@ -409,6 +431,8 @@ func (s *ConcurrencyCacheSuite) TestGetAccountsLoadBatch() {
 	require.Equal(s.T(), 2, load1.CurrentConcurrency)
 	require.Equal(s.T(), 1, load1.WaitingCount)
 	require.Equal(s.T(), 100, load1.LoadRate)
+	_, err = s.rdb.ZScore(s.ctx, accountSlotKey(account1), expiredRequestID).Result()
+	require.ErrorIs(s.T(), err, redis.Nil, "batch load query must reap expired account slots")
 
 	// Verify account2: (1 + 0) / 2 = 50%
 	load2 := loadMap[account2]
@@ -425,6 +449,13 @@ func (s *ConcurrencyCacheSuite) TestGetAccountsLoadBatch() {
 	require.Equal(s.T(), 0, load3.CurrentConcurrency)
 	require.Equal(s.T(), 0, load3.WaitingCount)
 	require.Equal(s.T(), 0, load3.LoadRate)
+}
+
+func mustZCard(t *testing.T, rdb *redis.Client, key string) int64 {
+	t.Helper()
+	count, err := rdb.ZCard(t.Context(), key).Result()
+	require.NoError(t, err)
+	return count
 }
 
 func (s *ConcurrencyCacheSuite) TestGetAccountsLoadBatch_Empty() {

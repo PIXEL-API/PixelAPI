@@ -51,6 +51,10 @@ type dashboardSnapshotV2Filters struct {
 	UpstreamModelMismatch *bool
 }
 
+type dashboardSnapshotV2ValidationError string
+
+func (e dashboardSnapshotV2ValidationError) Error() string { return string(e) }
+
 type dashboardSnapshotV2CacheKey struct {
 	StartTime             string `json:"start_time"`
 	EndTime               string `json:"end_time"`
@@ -339,7 +343,7 @@ func parseDashboardSnapshotV2Filters(c *gin.Context) (*dashboardSnapshotV2Filter
 	if mismatchStr := strings.TrimSpace(c.Query("upstream_model_mismatch")); mismatchStr != "" {
 		value, err := strconv.ParseBool(mismatchStr)
 		if err != nil {
-			return nil, errors.New("Invalid upstream_model_mismatch value, use true or false")
+			return nil, dashboardSnapshotV2ValidationError("Invalid upstream_model_mismatch value, use true or false")
 		}
 		filters.UpstreamModelMismatch = &value
 	}

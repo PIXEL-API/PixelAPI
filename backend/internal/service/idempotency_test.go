@@ -282,7 +282,9 @@ func TestIdempotencyCoordinator_ReplaysCompressedResponse(t *testing.T) {
 		return map[string]any{"value": responseValue}, nil
 	})
 	require.NoError(t, err)
-	require.Equal(t, responseValue, first.Data.(map[string]any)["value"])
+	firstData, ok := first.Data.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, responseValue, firstData["value"])
 
 	stored, err := repo.GetByScopeAndKeyHash(context.Background(), opts.Scope, HashIdempotencyKey(opts.IdempotencyKey))
 	require.NoError(t, err)
@@ -297,7 +299,9 @@ func TestIdempotencyCoordinator_ReplaysCompressedResponse(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, replayed.Replayed)
-	require.Equal(t, responseValue, replayed.Data.(map[string]any)["value"])
+	replayedData, ok := replayed.Data.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, responseValue, replayedData["value"])
 	require.Equal(t, 1, execCount)
 }
 
@@ -901,7 +905,9 @@ func TestIdempotencyCoordinator_HelperBranches(t *testing.T) {
 	require.LessOrEqual(t, len(body), c.cfg.MaxStoredResponseLen)
 	decoded, err := c.decodeStoredResponse(&body)
 	require.NoError(t, err)
-	require.Equal(t, strings.Repeat("a", 1024), decoded.(map[string]any)["long"])
+	decodedMap, ok := decoded.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, strings.Repeat("a", 1024), decodedMap["long"])
 
 	// Responses that still cannot fit must fail explicitly and never persist
 	// the previous invalid "...(truncated)" pseudo-JSON.
@@ -916,7 +922,7 @@ func TestIdempotencyCoordinator_HelperBranches(t *testing.T) {
 	// decodeStoredResponse empty and invalid json.
 	out, err := c.decodeStoredResponse(nil)
 	require.NoError(t, err)
-	_, ok := out.(map[string]any)
+	_, ok = out.(map[string]any)
 	require.True(t, ok)
 
 	invalid := "{invalid"

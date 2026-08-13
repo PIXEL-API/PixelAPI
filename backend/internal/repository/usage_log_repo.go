@@ -4302,23 +4302,37 @@ func (r *usageLogRepository) GetUserBreakdownStats(ctx context.Context, startTim
 	return results, nil
 }
 
-// GetAllGroupUsageSummary returns today's and cumulative actual_cost for every group.
-// todayStart is the start-of-day in the caller's timezone (UTC-based).
-// TODO(perf): This query scans ALL usage_logs rows for total_cost aggregation.
-// When usage_logs exceeds ~1M rows, consider adding a short-lived cache (30s)
-// or a materialized view / pre-aggregation table for cumulative costs.
-func (r *usageLogRepository) GetAllGroupUsageSummary(ctx context.Context, todayStart time.Time) ([]usagestats.GroupUsageSummary, error) {
+// GetAllGroupUsageSummary returns today's live actual_cost and the lifetime
+// actual_cost maintained by the append-only group_usage_cost_totals aggregate.
+// todayStart is the start-of-day in the caller's timezone (UTC-based). When
+// groupIDs is empty, the legacy all-groups response is preserved.
+func (r *usageLogRepository) GetAllGroupUsageSummary(ctx context.Context, todayStart time.Time, groupIDs []int64) ([]usagestats.GroupUsageSummary, error) {
 	query := `
+		WITH requested_groups AS (
+			SELECT g.id AS group_id
+			FROM groups g
+			WHERE CARDINALITY($2::bigint[]) = 0 OR g.id = ANY($2::bigint[])
+		), today_usage AS (
+			SELECT
+				ul.group_id,
+				COALESCE(SUM(ul.actual_cost), 0) AS today_cost
+			FROM usage_logs ul
+			WHERE ul.created_at >= $1
+				AND ul.group_id IS NOT NULL
+				AND (CARDINALITY($2::bigint[]) = 0 OR ul.group_id = ANY($2::bigint[]))
+			GROUP BY ul.group_id
+		)
 		SELECT
-			g.id AS group_id,
-			COALESCE(SUM(ul.actual_cost), 0) AS total_cost,
-			COALESCE(SUM(CASE WHEN ul.created_at >= $1 THEN ul.actual_cost ELSE 0 END), 0) AS today_cost
-		FROM groups g
-		LEFT JOIN usage_logs ul ON ul.group_id = g.id
-		GROUP BY g.id
+			requested.group_id,
+			COALESCE(totals.total_cost, 0) AS total_cost,
+			COALESCE(today.today_cost, 0) AS today_cost
+		FROM requested_groups requested
+		LEFT JOIN group_usage_cost_totals totals ON totals.group_id = requested.group_id
+		LEFT JOIN today_usage today ON today.group_id = requested.group_id
+		ORDER BY requested.group_id
 	`
 
-	rows, err := r.sql.QueryContext(ctx, query, todayStart)
+	rows, err := r.sql.QueryContext(ctx, query, todayStart, pq.Array(normalizePositiveInt64s(groupIDs)))
 	if err != nil {
 		return nil, err
 	}
@@ -4335,6 +4349,25 @@ func (r *usageLogRepository) GetAllGroupUsageSummary(ctx context.Context, todayS
 		return nil, err
 	}
 	return results, nil
+}
+
+func normalizePositiveInt64s(values []int64) []int64 {
+	if len(values) == 0 {
+		return []int64{}
+	}
+	seen := make(map[int64]struct{}, len(values))
+	result := make([]int64, 0, len(values))
+	for _, value := range values {
+		if value <= 0 {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 // resolveModelDimensionExpression maps model source type to a safe SQL expression.

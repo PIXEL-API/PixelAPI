@@ -524,7 +524,7 @@ func (c *IdempotencyCoordinator) decodeStoredResponse(stored *string) (any, erro
 		if err != nil {
 			return nil, fmt.Errorf("open compressed stored response: %w", err)
 		}
-		defer reader.Close()
+		defer func() { _ = reader.Close() }()
 
 		raw, err = io.ReadAll(io.LimitReader(reader, idempotencyMaxDecodedResponseLen+1))
 		if err != nil {

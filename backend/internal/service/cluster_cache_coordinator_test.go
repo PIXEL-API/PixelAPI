@@ -6,9 +6,16 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
+
+type clusterCachePublisherStub struct {
+	publishErr error
+}
+
+func (s clusterCachePublisherStub) Publish(context.Context, string, []byte) error {
+	return s.publishErr
+}
 
 func TestClusterCacheCoordinatorBumpFailureBlocksHealthUntilRetry(t *testing.T) {
 	bumpCalls := 0
@@ -31,9 +38,11 @@ func TestClusterCacheCoordinatorBumpFailureBlocksHealthUntilRetry(t *testing.T) 
 			}, nil
 		},
 	}
-	redisClient := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"})
-	require.NoError(t, redisClient.Close())
-	coordinator := NewClusterCacheCoordinator(testClusterCacheConfig(), repository, redisClient)
+	coordinator := NewClusterCacheCoordinator(
+		testClusterCacheConfig(),
+		repository,
+		clusterCachePublisherStub{publishErr: errors.New("redis unavailable")},
+	)
 
 	err := coordinator.Advance(context.Background(), ClusterCacheKeyPolicyMetadata)
 	require.ErrorContains(t, err, "database unavailable")
@@ -59,9 +68,11 @@ func TestClusterCacheCoordinatorPublishFailureKeepsPostgresVersionHealthy(t *tes
 			}, nil
 		},
 	}
-	redisClient := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"})
-	require.NoError(t, redisClient.Close())
-	coordinator := NewClusterCacheCoordinator(testClusterCacheConfig(), repository, redisClient)
+	coordinator := NewClusterCacheCoordinator(
+		testClusterCacheConfig(),
+		repository,
+		clusterCachePublisherStub{publishErr: errors.New("redis unavailable")},
+	)
 
 	require.NoError(t, coordinator.Advance(context.Background(), ClusterCacheKeyChannelRouting))
 	require.True(t, coordinator.Healthy())
@@ -83,9 +94,7 @@ func TestContentModerationUpdateAdvancesOnlyPolicyMetadataVersion(t *testing.T) 
 			}, nil
 		},
 	}
-	redisClient := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"})
-	require.NoError(t, redisClient.Close())
-	coordinator := NewClusterCacheCoordinator(testClusterCacheConfig(), repository, redisClient)
+	coordinator := NewClusterCacheCoordinator(testClusterCacheConfig(), repository, clusterCachePublisherStub{})
 	service := NewContentModerationService(
 		&contentModerationSettingRepoStub{},
 		nil,
@@ -109,7 +118,7 @@ func TestClusterRuntimeReadinessFailsWhileCacheVersionAdvanceIsPending(t *testin
 	coordinator := NewClusterCacheCoordinator(
 		testClusterCacheConfig(),
 		&clusterAdminRepositoryStub{},
-		redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"}),
+		clusterCachePublisherStub{},
 	)
 	coordinator.markPending(ClusterCacheKeyRuntimeSettings, errors.New("version bump failed"))
 	runtimeService := &ClusterRuntime{

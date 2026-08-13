@@ -1001,7 +1001,7 @@ func (r *accountShareModeRepository) ListListings(ctx context.Context, viewerUse
 	archiveView := filters.Tab == service.AccountShareModeListingTabArchive
 	whereParts := make([]string, 0, 16)
 	if !historyView && !archiveView {
-		whereParts = append(whereParts, "l.deleted_at IS NULL", "a.deleted_at IS NULL")
+		whereParts = append(whereParts, "l.deleted_at IS NULL")
 	}
 	args := []any{viewerUserID}
 	addArg := func(value any) string {
@@ -1167,37 +1167,16 @@ func (r *accountShareModeRepository) ListListings(ctx context.Context, viewerUse
 			SELECT COUNT(*)
 			FROM account_share_listings l
 			%s
-			LEFT JOIN users u ON u.id = l.owner_user_id
-			LEFT JOIN LATERAL (
-				SELECT m.id
-				FROM account_share_memberships m
-				WHERE m.listing_id = l.id
-					AND m.consumer_user_id = $1
-					AND m.status IN ('%s', '%s', '%s')
-					AND m.deleted_at IS NULL
-				ORDER BY m.queue_rank ASC, m.id ASC
-				LIMIT 1
-			) qm ON TRUE
-			LEFT JOIN LATERAL (
-				SELECT m.id
-				FROM account_share_memberships m
-				WHERE m.listing_id = l.id
-					AND m.consumer_user_id = $1
-					AND m.status = '%s'
-					AND m.deleted_at IS NULL
-				ORDER BY COALESCE(m.ended_at, m.updated_at) DESC
-				LIMIT 1
-			) hm ON TRUE
 			WHERE %s
 		`,
-			accountShareRoomOptionalRepresentativeJoinSQL("NOW()"),
-			service.AccountShareMembershipStatusActive,
-			service.AccountShareMembershipStatusQueued,
-			service.AccountShareMembershipStatusEnding,
-			service.AccountShareMembershipStatusEnded,
+			accountShareListingSelectionJoinSQL(whereSQL, accountShareViewerCurrentMembershipFullLateralSQL()),
 			whereSQL,
 		)
-		if err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		countArgs := args
+		if !strings.Contains(countQuery, "$") {
+			countArgs = nil
+		}
+		if err := r.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -1207,24 +1186,30 @@ func (r *accountShareModeRepository) ListListings(ctx context.Context, viewerUse
 		queryLimit = limit + 1
 	}
 	args = append(args, queryLimit, offset)
-	// 两阶段分页:page CTE 只带 WHERE/ORDER BY 实际引用的轻量 join 先选出页内
-	// id(昂贵的 god-view LATERAL 不再对全部匹配行求值),外层完整 god-view 仅
-	// 对页内行取数。外层必须复用同一 ORDER BY 表达式,否则页内乱序;单条语句
-	// 同一快照,两阶段排序值一致。
+	// 两阶段分页：viewer_current_membership 只求值一次，page 物化后再进入完整
+	// god-view，防止 PostgreSQL 将外层 LATERAL 提前到页内 ID 半连接之前执行。
+	// 外层必须复用同一 ORDER BY 表达式，否则页内乱序；单条语句同一快照下，
+	// 两阶段排序值保持一致。
 	orderSQL := accountShareListingOrderSQL(filters)
 	query := fmt.Sprintf(`
-		WITH page AS (
+		WITH %s,
+		page AS MATERIALIZED (
 			SELECT l.id
 			FROM account_share_listings l
 			%s
 			WHERE %s
 			ORDER BY %s
 			LIMIT $%d OFFSET $%d
+		),
+		paged_listings AS MATERIALIZED (
+			SELECT l.*
+			FROM page
+			JOIN account_share_listings l ON l.id = page.id
 		)
 		%s
 		WHERE l.id IN (SELECT id FROM page)
 		ORDER BY %s
-	`, accountShareListingPageFromSQL(orderSQL), whereSQL, orderSQL, len(args)-1, len(args), accountShareListingSelectSQL(), orderSQL)
+	`, accountShareViewerCurrentMembershipCTESQL(), accountShareListingSelectionJoinSQL(whereSQL+" "+orderSQL, accountShareViewerCurrentMembershipJoinSQL()), whereSQL, orderSQL, len(args)-1, len(args), accountShareListingSelectSQLFromPage(), orderSQL)
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, nil, err
@@ -4582,7 +4567,7 @@ func (r *accountShareModeRepository) ListEndingMembershipCandidates(
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	candidates := make([]service.AccountShareEndingMembershipCandidate, 0, limit)
 	for rows.Next() {
 		var candidate service.AccountShareEndingMembershipCandidate
@@ -4840,7 +4825,7 @@ func lockAccountShareEndBillingUsersInTx(
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	locked := make(map[int64]struct{}, 3)
 	for rows.Next() {
 		var userID int64
@@ -5479,7 +5464,7 @@ func (r *accountShareModeRepository) ListAPIKeyBindingMemberships(ctx context.Co
 	if err != nil {
 		return nil, err
 	}
-	defer endStateRows.Close()
+	defer func() { _ = endStateRows.Close() }()
 
 	loadedEndingStates := make(map[int64]struct{}, len(endingIDs))
 	for endStateRows.Next() {
@@ -8888,21 +8873,74 @@ func accountShareListingSelectSQL() string {
 	return accountShareListingSelectSQLWithAccountJoin(accountShareRoomOptionalRepresentativeJoinSQL("NOW()"))
 }
 
-// accountShareListingPageFromSQL 构造两阶段分页里 page CTE 的 FROM 子句:
-// 代表账号 join、users、qm/hm 恒定保留(WHERE 可能引用 a./u./qm.id/hm.id),
-// cm/room_stats/ac 仅当排序表达式引用对应别名时才带上。各 LATERAL 的
-// WHERE/ORDER BY/LIMIT 与 god-view(accountShareListingSelectSQLWithAccountJoin)
-// 逐字一致,保证行选择相同,只裁剪与行选择无关的输出列和展示用 join。
-func accountShareListingPageFromSQL(orderSQL string) string {
-	var b strings.Builder
-	b.WriteString(accountShareRoomOptionalRepresentativeJoinSQL("NOW()"))
-	b.WriteString(`
-		LEFT JOIN users u ON u.id = l.owner_user_id`)
-	if strings.Contains(orderSQL, "cm.") {
-		b.WriteString(fmt.Sprintf(`
+func accountShareListingSelectSQLFromPage() string {
+	return accountShareListingSelectSQLWithSourceAndCurrentMembershipJoin(
+		"paged_listings",
+		accountShareRoomOptionalRepresentativeJoinSQL("NOW()"),
+		accountShareViewerCurrentMembershipJoinSQL(),
+	)
+}
+
+func accountShareViewerCurrentMembershipCTESQL() string {
+	return fmt.Sprintf(`viewer_current_membership AS MATERIALIZED (
+		SELECT
+			m.id,
+			m.listing_id,
+			m.consumer_user_id,
+			m.api_key_id,
+			COALESCE(ak.name, '') AS api_key_name,
+			m.joined_at,
+			m.paid_until,
+			m.billed_until,
+			m.idle_timeout_minutes,
+			m.last_request_at,
+			m.waiver_window_started_at,
+			m.waiver_window_usage_amount,
+			m.waiver_window_request_count,
+			m.waiver_window_last_request_at
+		FROM account_share_memberships m
+		LEFT JOIN api_keys ak ON ak.id = m.api_key_id
+		WHERE m.consumer_user_id = $1
+			AND m.status IN ('%s', '%s')
+			AND m.deleted_at IS NULL
+			AND (
+				m.status = '%s'
+				OR (
+					(m.hourly_rate_snapshot <= 0 OR m.paid_until IS NULL OR m.paid_until > NOW())
+					AND (m.idle_timeout_minutes <= 0 OR COALESCE(m.last_request_at, m.joined_at) + (m.idle_timeout_minutes * INTERVAL '1 minute') > NOW())
+				)
+			)
+	)`,
+		service.AccountShareMembershipStatusActive,
+		service.AccountShareMembershipStatusEnding,
+		service.AccountShareMembershipStatusEnding,
+	)
+}
+
+func accountShareViewerCurrentMembershipJoinSQL() string {
+	return `
+		LEFT JOIN viewer_current_membership cm ON cm.listing_id = l.id`
+}
+
+func accountShareViewerCurrentMembershipFullLateralSQL() string {
+	return fmt.Sprintf(`
 		LEFT JOIN LATERAL (
-			SELECT m.id, m.joined_at
+			SELECT
+				m.id,
+				m.consumer_user_id,
+				m.api_key_id,
+				COALESCE(ak.name, '') AS api_key_name,
+				m.joined_at,
+				m.paid_until,
+				m.billed_until,
+				m.idle_timeout_minutes,
+				m.last_request_at,
+				m.waiver_window_started_at,
+				m.waiver_window_usage_amount,
+				m.waiver_window_request_count,
+				m.waiver_window_last_request_at
 			FROM account_share_memberships m
+			LEFT JOIN api_keys ak ON ak.id = m.api_key_id
 			WHERE m.listing_id = l.id
 				AND m.consumer_user_id = $1
 				AND m.status IN ('%s', '%s')
@@ -8917,12 +8955,29 @@ func accountShareListingPageFromSQL(orderSQL string) string {
 			ORDER BY m.joined_at DESC
 			LIMIT 1
 		) cm ON TRUE`,
-			service.AccountShareMembershipStatusActive,
-			service.AccountShareMembershipStatusEnding,
-			service.AccountShareMembershipStatusEnding,
-		))
+		service.AccountShareMembershipStatusActive,
+		service.AccountShareMembershipStatusEnding,
+		service.AccountShareMembershipStatusEnding,
+	)
+}
+
+// accountShareListingSelectionJoinSQL 只为筛选或排序实际引用的别名拼接
+// join。完整 god-view 的展示关联不经过这里，避免为了 count/page 输出列
+// 引入无关的代表账号、用户或聚合扫描。
+func accountShareListingSelectionJoinSQL(dependenciesSQL, currentMembershipJoinSQL string) string {
+	var b strings.Builder
+	if strings.Contains(dependenciesSQL, "a.") {
+		_, _ = b.WriteString(accountShareRoomOptionalRepresentativeJoinSQL("NOW()"))
 	}
-	b.WriteString(fmt.Sprintf(`
+	if strings.Contains(dependenciesSQL, "u.") {
+		_, _ = b.WriteString(`
+		LEFT JOIN users u ON u.id = l.owner_user_id`)
+	}
+	if strings.Contains(dependenciesSQL, "cm.") {
+		_, _ = b.WriteString(currentMembershipJoinSQL)
+	}
+	if strings.Contains(dependenciesSQL, "qm.") {
+		_, _ = b.WriteString(fmt.Sprintf(`
 		LEFT JOIN LATERAL (
 			SELECT m.id, m.queue_rank
 			FROM account_share_memberships m
@@ -8939,7 +8994,16 @@ func accountShareListingPageFromSQL(orderSQL string) string {
 				m.queue_rank ASC,
 				m.id DESC
 			LIMIT 1
-		) qm ON TRUE
+		) qm ON TRUE`,
+			service.AccountShareMembershipStatusActive,
+			service.AccountShareMembershipStatusQueued,
+			service.AccountShareMembershipStatusEnding,
+			service.AccountShareMembershipStatusActive,
+			service.AccountShareMembershipStatusEnding,
+		))
+	}
+	if strings.Contains(dependenciesSQL, "hm.") {
+		_, _ = b.WriteString(fmt.Sprintf(`
 		LEFT JOIN LATERAL (
 			SELECT m.id, COALESCE(m.ended_at, m.updated_at) AS ended_at
 			FROM account_share_memberships m
@@ -8950,15 +9014,11 @@ func accountShareListingPageFromSQL(orderSQL string) string {
 			ORDER BY COALESCE(m.ended_at, m.updated_at) DESC
 			LIMIT 1
 		) hm ON TRUE`,
-		service.AccountShareMembershipStatusActive,
-		service.AccountShareMembershipStatusQueued,
-		service.AccountShareMembershipStatusEnding,
-		service.AccountShareMembershipStatusActive,
-		service.AccountShareMembershipStatusEnding,
-		service.AccountShareMembershipStatusEnded,
-	))
-	if strings.Contains(orderSQL, "room_stats.") {
-		b.WriteString(fmt.Sprintf(`
+			service.AccountShareMembershipStatusEnded,
+		))
+	}
+	if strings.Contains(dependenciesSQL, "room_stats.") {
+		_, _ = b.WriteString(fmt.Sprintf(`
 		LEFT JOIN LATERAL (
 			SELECT COALESCE(SUM(a.concurrency) FILTER (WHERE NOT %s), 0)::int AS total_concurrency
 			FROM account_share_room_accounts room_account
@@ -8968,8 +9028,8 @@ func accountShareListingPageFromSQL(orderSQL string) string {
 				AND a.deleted_at IS NULL
 		) room_stats ON TRUE`, accountShareAccountUnavailableConditionSQL("NOW()")))
 	}
-	if strings.Contains(orderSQL, "ac.") {
-		b.WriteString(fmt.Sprintf(`
+	if strings.Contains(dependenciesSQL, "ac.") {
+		_, _ = b.WriteString(fmt.Sprintf(`
 		LEFT JOIN LATERAL (
 			SELECT COUNT(*)::int AS active_seats
 			FROM account_share_memberships m
@@ -8986,6 +9046,14 @@ func accountShareListingPageFromSQL(orderSQL string) string {
 }
 
 func accountShareListingSelectSQLWithAccountJoin(accountJoinSQL string) string {
+	return accountShareListingSelectSQLWithSourceAndCurrentMembershipJoin(
+		"account_share_listings",
+		accountJoinSQL,
+		accountShareViewerCurrentMembershipFullLateralSQL(),
+	)
+}
+
+func accountShareListingSelectSQLWithSourceAndCurrentMembershipJoin(listingSource, accountJoinSQL, currentMembershipJoinSQL string) string {
 	return fmt.Sprintf(`
 		SELECT
 			l.id,
@@ -9069,7 +9137,7 @@ func accountShareListingSelectSQLWithAccountJoin(accountJoinSQL string) string {
 			CASE WHEN l.editing_expires_at > NOW() AND l.editing_by_user_id = $1 THEN COALESCE(l.edit_session_id, '') ELSE '' END,
 			l.created_at,
 			l.updated_at
-		FROM account_share_listings l
+		FROM %s l
 		%s
 		LEFT JOIN users u ON u.id = l.owner_user_id
 		LEFT JOIN users eu ON eu.id = l.editing_by_user_id AND l.editing_expires_at > NOW()
@@ -9092,37 +9160,7 @@ func accountShareListingSelectSQLWithAccountJoin(accountJoinSQL string) string {
 				AND m.deleted_at IS NULL
 				AND m.consumer_user_id <> l.owner_user_id
 		) ac ON TRUE
-		LEFT JOIN LATERAL (
-			SELECT
-				m.id,
-				m.consumer_user_id,
-				m.api_key_id,
-				COALESCE(ak.name, '') AS api_key_name,
-				m.joined_at,
-				m.paid_until,
-				m.billed_until,
-				m.idle_timeout_minutes,
-				m.last_request_at,
-				m.waiver_window_started_at,
-				m.waiver_window_usage_amount,
-				m.waiver_window_request_count,
-				m.waiver_window_last_request_at
-			FROM account_share_memberships m
-			LEFT JOIN api_keys ak ON ak.id = m.api_key_id
-			WHERE m.listing_id = l.id
-				AND m.consumer_user_id = $1
-				AND m.status IN ('%s', '%s')
-				AND m.deleted_at IS NULL
-				AND (
-					m.status = '%s'
-					OR (
-						(m.hourly_rate_snapshot <= 0 OR m.paid_until IS NULL OR m.paid_until > NOW())
-						AND (m.idle_timeout_minutes <= 0 OR COALESCE(m.last_request_at, m.joined_at) + (m.idle_timeout_minutes * INTERVAL '1 minute') > NOW())
-					)
-				)
-			ORDER BY m.joined_at DESC
-			LIMIT 1
-		) cm ON TRUE
+		%s
 		LEFT JOIN LATERAL (
 			SELECT
 				m.id,
@@ -9167,14 +9205,13 @@ func accountShareListingSelectSQLWithAccountJoin(accountJoinSQL string) string {
 		) hm ON TRUE
 	`,
 		service.StatusDisabled,
+		listingSource,
 		accountJoinSQL,
 		accountShareAccountUnavailableConditionSQL("NOW()"),
 		accountShareAccountUnavailableConditionSQL("NOW()"),
 		service.AccountShareMembershipStatusActive,
 		service.AccountShareMembershipStatusEnding,
-		service.AccountShareMembershipStatusActive,
-		service.AccountShareMembershipStatusEnding,
-		service.AccountShareMembershipStatusEnding,
+		currentMembershipJoinSQL,
 		service.AccountShareMembershipStatusActive,
 		service.AccountShareMembershipStatusQueued,
 		service.AccountShareMembershipStatusEnding,

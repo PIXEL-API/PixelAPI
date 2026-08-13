@@ -509,7 +509,7 @@ func visibleProxyPredicate(scope service.ProxyScope) predicate.Proxy {
 }
 
 // ResetRequiredAccountLevelNotIn 将 required_account_level 落在 keepLevels 之外的代理
-// 重置为 ''（所有等级可用）。'' 本身始终保留。用于账号等级被删除后同步代理，
+// 重置为 ”（所有等级可用）。” 本身始终保留。用于账号等级被删除后同步代理，
 // 避免代理被永久绑死在一个已不存在的等级上而对所有账号不可见。
 func (r *proxyRepository) ResetRequiredAccountLevelNotIn(ctx context.Context, keepLevels []string) (int64, error) {
 	keep := make([]string, 0, len(keepLevels)+1)

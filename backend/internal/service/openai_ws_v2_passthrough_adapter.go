@@ -948,7 +948,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if cause := turnLifecycle.activeCause(); cause != nil {
 		turnErr = wrapOpenAIWSIngressTurnError(relayExit.Stage, cause, relayExit.WroteDownstream)
 	}
-	turnLifecycle.finishWithError(buildUnsettledTurnResult(), turnErr)
+	_, _, _ = turnLifecycle.finishWithError(buildUnsettledTurnResult(), turnErr)
 	if lifecycleErr := turnLifecycle.lifecycleError(); lifecycleErr != nil {
 		return errors.Join(turnErr, lifecycleErr)
 	}

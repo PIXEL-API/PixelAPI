@@ -20,6 +20,7 @@ func setupAdminRouter() (*gin.Engine, *stubAdminService) {
 	groupHandler := NewGroupHandler(adminSvc, nil, nil, nil)
 	proxyHandler := NewProxyHandler(adminSvc)
 	redeemHandler := NewRedeemHandler(adminSvc, nil)
+	dashboardHandler := NewDashboardHandler(nil, nil)
 
 	router.GET("/api/v1/admin/users", userHandler.List)
 	router.GET("/api/v1/admin/users/:id", userHandler.GetByID)
@@ -53,12 +54,13 @@ func setupAdminRouter() (*gin.Engine, *stubAdminService) {
 	router.GET("/api/v1/admin/proxies/:id/accounts", proxyHandler.GetProxyAccounts)
 
 	router.GET("/api/v1/admin/redeem-codes", redeemHandler.List)
+	router.GET("/api/v1/admin/redeem-codes/stats", redeemHandler.GetStats)
 	router.GET("/api/v1/admin/redeem-codes/:id", redeemHandler.GetByID)
 	router.POST("/api/v1/admin/redeem-codes", redeemHandler.Generate)
 	router.DELETE("/api/v1/admin/redeem-codes/:id", redeemHandler.Delete)
 	router.POST("/api/v1/admin/redeem-codes/batch-delete", redeemHandler.BatchDelete)
 	router.POST("/api/v1/admin/redeem-codes/:id/expire", redeemHandler.Expire)
-	router.GET("/api/v1/admin/redeem-codes/:id/stats", redeemHandler.GetStats)
+	router.GET("/api/v1/admin/dashboard/realtime", dashboardHandler.GetRealtimeMetrics)
 
 	return router, adminSvc
 }
@@ -123,11 +125,6 @@ func TestUserHandlerEndpoints(t *testing.T) {
 
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/admin/users/1/api-keys", nil)
-	router.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code)
-
-	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodGet, "/api/v1/admin/users/1/usage?period=today", nil)
 	router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 }
@@ -197,11 +194,6 @@ func TestGroupHandlerEndpoints(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodGet, "/api/v1/admin/groups/2/stats", nil)
-	router.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code)
-
-	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/admin/groups/2/api-keys", nil)
 	router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -261,11 +253,6 @@ func TestProxyHandlerEndpoints(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodGet, "/api/v1/admin/proxies/4/stats", nil)
-	router.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code)
-
-	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/admin/proxies/4/accounts", nil)
 	router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -306,9 +293,71 @@ func TestRedeemHandlerEndpoints(t *testing.T) {
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/admin/redeem-codes/5/expire", nil)
 	router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
+}
 
-	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodGet, "/api/v1/admin/redeem-codes/5/stats", nil)
-	router.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code)
+func TestDeprecatedAdminStatsEndpoints(t *testing.T) {
+	router, _ := setupAdminRouter()
+	tests := []struct {
+		name        string
+		path        string
+		replacement string
+	}{
+		{
+			name:        "user usage",
+			path:        "/api/v1/admin/users/1/usage?period=today",
+			replacement: "POST /api/v1/admin/dashboard/users-usage",
+		},
+		{
+			name:        "group stats",
+			path:        "/api/v1/admin/groups/2/stats",
+			replacement: "GET /api/v1/admin/groups/usage-summary or GET /api/v1/admin/dashboard/groups",
+		},
+		{
+			name: "proxy stats",
+			path: "/api/v1/admin/proxies/4/stats",
+		},
+		{
+			name: "redeem stats",
+			path: "/api/v1/admin/redeem-codes/stats",
+		},
+		{
+			name:        "dashboard realtime",
+			path:        "/api/v1/admin/dashboard/realtime",
+			replacement: "GET /api/v1/admin/ops/realtime-traffic",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			router.ServeHTTP(rec, req)
+
+			require.Equal(t, http.StatusGone, rec.Code)
+			require.Equal(t, "true", rec.Header().Get("Deprecation"))
+
+			var payload struct {
+				Code     int               `json:"code"`
+				Message  string            `json:"message"`
+				Reason   string            `json:"reason"`
+				Metadata map[string]string `json:"metadata"`
+				Data     json.RawMessage   `json:"data"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+			require.Equal(t, http.StatusGone, payload.Code)
+			require.Equal(t, deprecatedAdminStatsReason, payload.Reason)
+			require.Contains(t, payload.Message, "deprecated")
+			require.Empty(t, payload.Data)
+			require.NotContains(t, rec.Body.String(), "total_requests")
+			require.NotContains(t, rec.Body.String(), "success_rate")
+			require.NotContains(t, rec.Body.String(), "total_value_distributed")
+			if tt.replacement == "" {
+				require.Nil(t, payload.Metadata)
+				require.Contains(t, payload.Message, "No direct replacement")
+			} else {
+				require.Equal(t, tt.replacement, payload.Metadata["replacement"])
+				require.Contains(t, payload.Message, tt.replacement)
+			}
+		})
+	}
 }

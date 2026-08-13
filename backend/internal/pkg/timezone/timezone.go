@@ -154,7 +154,7 @@ func ParseUserTimestamp(raw, userTZ, field string) (time.Time, error) {
 			return t, nil
 		}
 	}
-	return time.Time{}, fmt.Errorf("Invalid %s format, use RFC3339 or YYYY-MM-DDTHH:mm:ss", field)
+	return time.Time{}, fmt.Errorf("invalid %s format, use RFC3339 or YYYY-MM-DDTHH:mm:ss", field)
 }
 
 // ParseExactTimeRange parses optional start_time/end_time query values.

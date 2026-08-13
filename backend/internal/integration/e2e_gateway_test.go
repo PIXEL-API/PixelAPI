@@ -68,13 +68,19 @@ var geminiModels = []string{
 }
 
 func TestMain(m *testing.M) {
+	suite := getEnv(e2eSuiteEnv, "")
+	if suite != e2eSuiteContract && suite != e2eSuiteLive {
+		fmt.Fprintf(os.Stderr, "%s must be %q or %q; use make test-e2e or make test-e2e-live\n", e2eSuiteEnv, e2eSuiteContract, e2eSuiteLive)
+		os.Exit(2)
+	}
 	mode := "混合模式"
 	if endpointPrefix != "" {
 		mode = "Antigravity 模式"
 	}
 	claudeKeySet := strings.TrimSpace(os.Getenv(claudeAPIKeyEnv)) != ""
 	geminiKeySet := strings.TrimSpace(os.Getenv(geminiAPIKeyEnv)) != ""
-	fmt.Printf("\n🚀 E2E Gateway Tests - %s (prefix=%q, %s, %s=%v, %s=%v)\n\n",
+	fmt.Printf("\n🚀 E2E Tests - suite=%s url=%s (prefix=%q, %s, %s=%v, %s=%v)\n\n",
+		suite,
 		baseURL,
 		endpointPrefix,
 		mode,
@@ -83,24 +89,57 @@ func TestMain(m *testing.M) {
 		geminiAPIKeyEnv,
 		geminiKeySet,
 	)
-	os.Exit(m.Run())
+	code := m.Run()
+	if suite == e2eSuiteLive {
+		attempts, report := liveSmokeSummary()
+		minimum := liveMinimumAttempts()
+		fmt.Printf("\nLive provider smoke matrix:\n%s\nminimum_attempts=%d actual_attempts=%d\n", report, minimum, attempts)
+		if code == 0 && attempts < minimum {
+			fmt.Fprintf(os.Stderr, "live provider smoke executed %d attempts, require at least %d\n", attempts, minimum)
+			code = 1
+		}
+	}
+	os.Exit(code)
+}
+
+func requireLiveMode(t *testing.T) {
+	t.Helper()
+	if getEnv(e2eSuiteEnv, "") != e2eSuiteLive {
+		t.Skip("external-provider smoke is disabled in the contract E2E suite")
+	}
 }
 
 func requireClaudeAPIKey(t *testing.T) string {
 	t.Helper()
+	requireLiveMode(t)
 	key := strings.TrimSpace(os.Getenv(claudeAPIKeyEnv))
 	if key == "" {
+		recordLiveMissing("claude")
 		t.Skipf("未设置 %s，跳过 Claude 相关 E2E 测试", claudeAPIKeyEnv)
 	}
+	recordLiveAttempt("claude")
+	t.Cleanup(func() {
+		if !t.Failed() && !t.Skipped() {
+			recordLivePass("claude")
+		}
+	})
 	return key
 }
 
 func requireGeminiAPIKey(t *testing.T) string {
 	t.Helper()
+	requireLiveMode(t)
 	key := strings.TrimSpace(os.Getenv(geminiAPIKeyEnv))
 	if key == "" {
+		recordLiveMissing("gemini")
 		t.Skipf("未设置 %s，跳过 Gemini 相关 E2E 测试", geminiAPIKeyEnv)
 	}
+	recordLiveAttempt("gemini")
+	t.Cleanup(func() {
+		if !t.Failed() && !t.Skipped() {
+			recordLivePass("gemini")
+		}
+	})
 	return key
 }
 
@@ -532,12 +571,12 @@ func testClaudeMessageWithTools(t *testing.T, claudeKey string, model string) {
 
 	// 503 可能是账号限流，不算测试失败
 	if resp.StatusCode == 503 {
-		t.Skipf("账号暂时不可用 (503): %s", string(respBody))
+		liveProviderDegraded(t, "claude", fmt.Sprintf("账号暂时不可用 (503): %s", string(respBody)))
 	}
 
 	// 429 是限流
 	if resp.StatusCode == 429 {
-		t.Skipf("请求被限流 (429): %s", string(respBody))
+		liveProviderDegraded(t, "claude", fmt.Sprintf("请求被限流 (429): %s", string(respBody)))
 	}
 
 	if resp.StatusCode != 200 {
@@ -660,12 +699,12 @@ func testClaudeThinkingWithToolHistory(t *testing.T, claudeKey string, model str
 
 	// 503 可能是账号限流，不算测试失败
 	if resp.StatusCode == 503 {
-		t.Skipf("账号暂时不可用 (503): %s", string(respBody))
+		liveProviderDegraded(t, "claude", fmt.Sprintf("账号暂时不可用 (503): %s", string(respBody)))
 	}
 
 	// 429 是限流
 	if resp.StatusCode == 429 {
-		t.Skipf("请求被限流 (429): %s", string(respBody))
+		liveProviderDegraded(t, "claude", fmt.Sprintf("请求被限流 (429): %s", string(respBody)))
 	}
 
 	if resp.StatusCode != 200 {
@@ -792,11 +831,11 @@ func testClaudeWithNoSignature(t *testing.T, claudeKey string, model string) {
 	}
 
 	if resp.StatusCode == 503 {
-		t.Skipf("账号暂时不可用 (503): %s", string(respBody))
+		liveProviderDegraded(t, "claude", fmt.Sprintf("账号暂时不可用 (503): %s", string(respBody)))
 	}
 
 	if resp.StatusCode == 429 {
-		t.Skipf("请求被限流 (429): %s", string(respBody))
+		liveProviderDegraded(t, "claude", fmt.Sprintf("请求被限流 (429): %s", string(respBody)))
 	}
 
 	if resp.StatusCode != 200 {

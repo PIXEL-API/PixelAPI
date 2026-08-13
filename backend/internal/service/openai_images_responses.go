@@ -889,7 +889,6 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthStreamingResponse(
 							err = fmt.Errorf("upstream did not return image output")
 							return usage, imageCount, imageOutputSizes, firstTokenMs, streamFailure(http.StatusBadGateway, err.Error(), err)
 						}
-						imageCount = len(finalResults)
 						imageOutputSizes = openAIResponsesImageResultSizes(finalResults)
 						eventName := streamPrefix + ".completed"
 						for _, img := range finalResults {
@@ -941,7 +940,6 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthStreamingResponse(
 			mergeOpenAIResponsesImageMeta(&finalResults[i], streamMeta)
 		}
 		reconcileOpenAIResponsesImageResultSizes(finalResults, nil)
-		imageCount = len(finalResults)
 		imageOutputSizes = openAIResponsesImageResultSizes(finalResults)
 		for _, img := range finalResults {
 			key := openAIResponsesImageResultKey("", img)

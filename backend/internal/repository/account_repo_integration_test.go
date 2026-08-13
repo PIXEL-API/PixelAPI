@@ -87,8 +87,8 @@ func (s *schedulerCacheRecorder) SetOutboxWatermark(ctx context.Context, id int6
 }
 
 func (s *AccountRepoSuite) SetupTest() {
-	s.ctx = context.Background()
 	tx := testEntTx(s.T())
+	s.ctx = dbent.NewTxContext(context.Background(), tx)
 	s.client = tx.Client()
 	s.repo = newAccountRepositoryWithSQL(s.client, tx, nil)
 }
@@ -139,12 +139,15 @@ func (s *AccountRepoSuite) TestUpdate() {
 }
 
 func (s *AccountRepoSuite) TestUpdate_SyncSchedulerSnapshotOnDisabled() {
-	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "sync-update", Status: service.StatusActive, Schedulable: true})
+	client := testEntClient(s.T())
+	repo := newAccountRepositoryWithSQL(client, integrationDB, nil)
+	account := mustCreateAccount(s.T(), client, &service.Account{Name: uniqueTestValue(s.T(), "sync-update"), Status: service.StatusActive, Schedulable: true})
+	s.T().Cleanup(func() { cleanupPersistentTestAccounts(s.T(), account.ID) })
 	cacheRecorder := &schedulerCacheRecorder{}
-	s.repo.schedulerCache = cacheRecorder
+	repo.schedulerCache = cacheRecorder
 
 	account.Status = service.StatusDisabled
-	err := s.repo.Update(s.ctx, account)
+	err := repo.Update(context.Background(), account)
 	s.Require().NoError(err, "Update")
 
 	s.Require().Len(cacheRecorder.setAccounts, 1)
@@ -153,8 +156,10 @@ func (s *AccountRepoSuite) TestUpdate_SyncSchedulerSnapshotOnDisabled() {
 }
 
 func (s *AccountRepoSuite) TestUpdate_SyncSchedulerSnapshotOnCredentialsChange() {
-	account := mustCreateAccount(s.T(), s.client, &service.Account{
-		Name:        "sync-credentials-update",
+	client := testEntClient(s.T())
+	repo := newAccountRepositoryWithSQL(client, integrationDB, nil)
+	account := mustCreateAccount(s.T(), client, &service.Account{
+		Name:        uniqueTestValue(s.T(), "sync-credentials-update"),
 		Status:      service.StatusActive,
 		Schedulable: true,
 		Credentials: map[string]any{
@@ -163,15 +168,16 @@ func (s *AccountRepoSuite) TestUpdate_SyncSchedulerSnapshotOnCredentialsChange()
 			},
 		},
 	})
+	s.T().Cleanup(func() { cleanupPersistentTestAccounts(s.T(), account.ID) })
 	cacheRecorder := &schedulerCacheRecorder{}
-	s.repo.schedulerCache = cacheRecorder
+	repo.schedulerCache = cacheRecorder
 
 	account.Credentials = map[string]any{
 		"model_mapping": map[string]any{
 			"gpt-5": "gpt-5.2",
 		},
 	}
-	err := s.repo.Update(s.ctx, account)
+	err := repo.Update(context.Background(), account)
 	s.Require().NoError(err, "Update")
 
 	s.Require().Len(cacheRecorder.setAccounts, 1)
@@ -799,13 +805,16 @@ func (s *AccountRepoSuite) TestListSchedulableByGroupIDAndPlatform_EmptyRequired
 }
 
 func (s *AccountRepoSuite) TestSetSchedulable() {
-	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-sched", Schedulable: true})
+	client := testEntClient(s.T())
+	repo := newAccountRepositoryWithSQL(client, integrationDB, nil)
+	account := mustCreateAccount(s.T(), client, &service.Account{Name: uniqueTestValue(s.T(), "acc-sched"), Schedulable: true})
+	s.T().Cleanup(func() { cleanupPersistentTestAccounts(s.T(), account.ID) })
 	cacheRecorder := &schedulerCacheRecorder{}
-	s.repo.schedulerCache = cacheRecorder
+	repo.schedulerCache = cacheRecorder
 
-	s.Require().NoError(s.repo.SetSchedulable(s.ctx, account.ID, false))
+	s.Require().NoError(repo.SetSchedulable(context.Background(), account.ID, false))
 
-	got, err := s.repo.GetByID(s.ctx, account.ID)
+	got, err := repo.GetByID(context.Background(), account.ID)
 	s.Require().NoError(err)
 	s.Require().False(got.Schedulable)
 	s.Require().Len(cacheRecorder.setAccounts, 1)
@@ -813,13 +822,16 @@ func (s *AccountRepoSuite) TestSetSchedulable() {
 }
 
 func (s *AccountRepoSuite) TestBulkUpdate_SyncSchedulerSnapshotOnDisabled() {
-	account1 := mustCreateAccount(s.T(), s.client, &service.Account{Name: "bulk-1", Status: service.StatusActive, Schedulable: true})
-	account2 := mustCreateAccount(s.T(), s.client, &service.Account{Name: "bulk-2", Status: service.StatusActive, Schedulable: true})
+	client := testEntClient(s.T())
+	repo := newAccountRepositoryWithSQL(client, integrationDB, nil)
+	account1 := mustCreateAccount(s.T(), client, &service.Account{Name: uniqueTestValue(s.T(), "bulk-1"), Status: service.StatusActive, Schedulable: true})
+	account2 := mustCreateAccount(s.T(), client, &service.Account{Name: uniqueTestValue(s.T(), "bulk-2"), Status: service.StatusActive, Schedulable: true})
+	s.T().Cleanup(func() { cleanupPersistentTestAccounts(s.T(), account1.ID, account2.ID) })
 	cacheRecorder := &schedulerCacheRecorder{}
-	s.repo.schedulerCache = cacheRecorder
+	repo.schedulerCache = cacheRecorder
 
 	disabled := service.StatusDisabled
-	rows, err := s.repo.BulkUpdate(s.ctx, []int64{account1.ID, account2.ID}, service.AccountBulkUpdate{
+	rows, err := repo.BulkUpdate(context.Background(), []int64{account1.ID, account2.ID}, service.AccountBulkUpdate{
 		Status: &disabled,
 	})
 	s.Require().NoError(err)
@@ -832,6 +844,15 @@ func (s *AccountRepoSuite) TestBulkUpdate_SyncSchedulerSnapshotOnDisabled() {
 	}
 	s.Require().Contains(ids, account1.ID)
 	s.Require().Contains(ids, account2.ID)
+}
+
+func cleanupPersistentTestAccounts(t *testing.T, accountIDs ...int64) {
+	t.Helper()
+	for _, accountID := range accountIDs {
+		_, _ = integrationDB.ExecContext(context.Background(), "DELETE FROM scheduler_outbox WHERE account_id = $1", accountID)
+		_, _ = integrationDB.ExecContext(context.Background(), "DELETE FROM account_groups WHERE account_id = $1", accountID)
+		_, _ = integrationDB.ExecContext(context.Background(), "DELETE FROM accounts WHERE id = $1", accountID)
+	}
 }
 
 // --- SetOverloaded / SetRateLimited / ClearRateLimit ---
@@ -1033,7 +1054,13 @@ func (s *AccountRepoSuite) TestUpdateExtra_SchedulerNeutralSkipsOutboxAndSyncsFr
 	s.Require().Equal(0.42, got.Extra["session_window_utilization"])
 
 	var outboxCount int
-	s.Require().NoError(scanSingleRow(s.ctx, s.repo.sql, "SELECT COUNT(*) FROM scheduler_outbox", nil, &outboxCount))
+	s.Require().NoError(scanSingleRow(
+		s.ctx,
+		s.repo.sql,
+		"SELECT COUNT(*) FROM scheduler_outbox WHERE account_id = $1",
+		[]any{account.ID},
+		&outboxCount,
+	))
 	s.Require().Zero(outboxCount)
 	s.Require().Len(cacheRecorder.setAccounts, 1)
 	s.Require().NotNil(cacheRecorder.accounts[account.ID])

@@ -292,7 +292,7 @@
             </div>
             <div v-if="tokenTooltipData" class="flex items-center justify-between gap-4">
               <span class="text-gray-400">{{ t('usage.cacheHitRate') }}</span>
-              <span class="font-medium text-cyan-300">{{ formatCacheHitRate(tokenTooltipData.input_tokens, tokenTooltipData.cache_read_tokens) }}</span>
+              <span class="font-medium text-cyan-300">{{ formatCacheHitRate(tokenTooltipData.input_tokens, tokenTooltipData.cache_creation_tokens, tokenTooltipData.cache_read_tokens) }}</span>
             </div>
           </div>
           <div class="flex items-center justify-between gap-6 border-t border-gray-700 pt-1.5">

@@ -68,14 +68,14 @@ func parseAdminUsageDateRange(c *gin.Context) (*time.Time, *time.Time, error) {
 	if startDateStr := strings.TrimSpace(c.Query("start_date")); startDateStr != "" {
 		t, err := timezone.ParseInUserLocation("2006-01-02", startDateStr, userTZ)
 		if err != nil {
-			return nil, nil, errors.New("Invalid start_date format, use YYYY-MM-DD")
+			return nil, nil, errors.New("invalid start_date format, use YYYY-MM-DD")
 		}
 		startTime = &t
 	}
 	if endDateStr := strings.TrimSpace(c.Query("end_date")); endDateStr != "" {
 		t, err := timezone.ParseInUserLocation("2006-01-02", endDateStr, userTZ)
 		if err != nil {
-			return nil, nil, errors.New("Invalid end_date format, use YYYY-MM-DD")
+			return nil, nil, errors.New("invalid end_date format, use YYYY-MM-DD")
 		}
 		t = t.AddDate(0, 0, 1)
 		endTime = &t
@@ -108,7 +108,7 @@ func parseAdminBalanceLedgerFilters(c *gin.Context) (service.UserBalanceLedgerFi
 	if userIDStr := strings.TrimSpace(c.Query("user_id")); userIDStr != "" {
 		id, err := strconv.ParseInt(userIDStr, 10, 64)
 		if err != nil || id <= 0 {
-			return filters, errors.New("Invalid user_id")
+			return filters, errors.New("invalid user_id")
 		}
 		filters.UserID = id
 	}
@@ -116,7 +116,7 @@ func parseAdminBalanceLedgerFilters(c *gin.Context) (service.UserBalanceLedgerFi
 	if refIDStr := strings.TrimSpace(c.Query("ref_id")); refIDStr != "" {
 		id, err := strconv.ParseInt(refIDStr, 10, 64)
 		if err != nil || id <= 0 {
-			return filters, errors.New("Invalid ref_id")
+			return filters, errors.New("invalid ref_id")
 		}
 		filters.RefID = &id
 	}

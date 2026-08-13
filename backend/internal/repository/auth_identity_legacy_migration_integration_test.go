@@ -951,9 +951,8 @@ TRUNCATE TABLE
 	auth_identity_migration_reports,
 	user_provider_default_grants,
 	user_avatars,
-	user_external_identities,
-	users
-RESTART IDENTITY CASCADE;
+	user_external_identities
+RESTART IDENTITY;
 `)
 	require.NoError(t, err)
 }

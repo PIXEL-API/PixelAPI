@@ -110,7 +110,7 @@ func (s *AccountTestService) buildOpenAIAuthenticationHeaders(ctx context.Contex
 	}
 	if account.IsOpenAIAgentIdentity() {
 		if s.agentIdentityWSInvalidator == nil {
-			return nil, errors.New("Agent Identity WS invalidator is not configured")
+			return nil, errors.New("agent identity WS invalidator is not configured")
 		}
 		return buildAgentIdentityAuthenticationHeaders(ctx, s.accountRepo, s.agentIdentityWSInvalidator, &s.agentIdentityTaskMu, account)
 	}
@@ -125,7 +125,7 @@ func (s *AccountTestService) buildOpenAIAuthenticationHeaders(ctx context.Contex
 
 func (s *AccountTestService) recoverAgentIdentityTask(ctx context.Context, account *Account, expectedTaskID string) error {
 	if s.agentIdentityWSInvalidator == nil {
-		return errors.New("Agent Identity WS invalidator is not configured")
+		return errors.New("agent identity WS invalidator is not configured")
 	}
 	return ensureAgentIdentityTaskForAccount(ctx, s.accountRepo, s.agentIdentityWSInvalidator, &s.agentIdentityTaskMu, account, expectedTaskID)
 }

@@ -1965,13 +1965,13 @@ func normalizeMigrationIndexInLists(expression string) string {
 	for searchFrom < len(expression) {
 		relativeStart := strings.Index(expression[searchFrom:], "IN(")
 		if relativeStart < 0 {
-			normalized.WriteString(expression[searchFrom:])
+			_, _ = normalized.WriteString(expression[searchFrom:])
 			break
 		}
 
 		listStart := searchFrom + relativeStart
-		normalized.WriteString(expression[searchFrom:listStart])
-		normalized.WriteString("IN[")
+		_, _ = normalized.WriteString(expression[searchFrom:listStart])
+		_, _ = normalized.WriteString("IN[")
 
 		depth := 1
 		inString := false
@@ -2001,12 +2001,12 @@ func normalizeMigrationIndexInLists(expression string) string {
 			}
 		}
 		if listEnd < 0 {
-			normalized.WriteString(expression[listStart+len("IN("):])
+			_, _ = normalized.WriteString(expression[listStart+len("IN("):])
 			return normalized.String()
 		}
 
-		normalized.WriteString(expression[listStart+len("IN(") : listEnd])
-		normalized.WriteByte(']')
+		_, _ = normalized.WriteString(expression[listStart+len("IN(") : listEnd])
+		_ = normalized.WriteByte(']')
 		searchFrom = listEnd + 1
 	}
 	return normalized.String()

@@ -63,14 +63,14 @@ func (c *moderationInputCollector) AddText(text string) {
 			continue
 		}
 		if pendingSpace {
-			c.text.WriteByte(' ')
+			_ = c.text.WriteByte(' ')
 			c.runeCount++
 			if c.runeCount >= maxModerationInputRunes {
 				return
 			}
 			pendingSpace = false
 		}
-		c.text.WriteRune(r)
+		_, _ = c.text.WriteRune(r)
 		c.runeCount++
 	}
 }
