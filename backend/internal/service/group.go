@@ -40,18 +40,23 @@ type Group struct {
 	DefaultValidityDays  int
 
 	// 媒体与网页搜索计费配置。
-	AllowImageGeneration  bool
-	ImageRateIndependent  bool
-	ImageRateMultiplier   float64
-	ImagePrice1K          *float64
-	ImagePrice2K          *float64
-	ImagePrice4K          *float64
-	VideoRateIndependent  bool
-	VideoRateMultiplier   float64
-	VideoPrice480P        *float64
-	VideoPrice720P        *float64
-	VideoPrice1080P       *float64
-	WebSearchPricePerCall *float64
+	AllowImageGeneration         bool
+	ImageRateIndependent         bool
+	ImageRateMultiplier          float64
+	ImagePrice1K                 *float64
+	ImagePrice2K                 *float64
+	ImagePrice4K                 *float64
+	VideoRateIndependent         bool
+	VideoRateMultiplier          float64
+	VideoPrice480P               *float64
+	VideoPrice720P               *float64
+	VideoPrice1080P              *float64
+	VideoModelPrices             map[string]map[string]float64
+	WebSearchPricePerCall        *float64
+	SearchPricePer1K             *float64
+	AudioRealtimePricePerMin     *float64
+	AudioTTSPricePerMillionChars *float64
+	AudioSTTPricePerHour         *float64
 
 	// Claude Code 客户端限制
 	ClaudeCodeOnly  bool
@@ -150,6 +155,43 @@ func (g *Group) GetVideoPrice(resolution string) *float64 {
 	default:
 		return g.VideoPrice480P
 	}
+}
+
+// GetVideoPriceForModel 优先返回模型族×分辨率覆盖价，再兼容旧的分辨率价格列。
+func (g *Group) GetVideoPriceForModel(model, resolution string) *float64 {
+	if g == nil {
+		return nil
+	}
+	if price := LookupVideoModelPrice(g.VideoModelPrices, model, resolution); price != nil {
+		return price
+	}
+	return g.GetVideoPrice(resolution)
+}
+
+func (g *Group) VideoPriceConfig() *VideoPriceConfig {
+	if g == nil {
+		return nil
+	}
+	return &VideoPriceConfig{
+		Price480P:   g.VideoPrice480P,
+		Price720P:   g.VideoPrice720P,
+		Price1080P:  g.VideoPrice1080P,
+		ModelPrices: NormalizeVideoModelPrices(g.VideoModelPrices),
+	}
+}
+
+// GetSearchPricePer1K 返回 Grok 原生搜索工具的显式每千次价格。
+// nil 表示缺少必需配置；0 表示管理员显式配置免费。
+func (g *Group) GetSearchPricePer1K() *float64 {
+	if g == nil {
+		return nil
+	}
+	return g.SearchPricePer1K
+}
+
+// GetSearchPricePer1k 保持与上游 Grok handler/billing 命名兼容。
+func (g *Group) GetSearchPricePer1k() *float64 {
+	return g.GetSearchPricePer1K()
 }
 
 // IsGroupContextValid reports whether a group from context has the fields required for routing decisions.

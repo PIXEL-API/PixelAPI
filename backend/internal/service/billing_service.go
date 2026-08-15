@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
 
 // APIKeyRateLimitCacheData holds rate limit usage data cached in Redis.
@@ -199,6 +200,18 @@ func NewBillingService(cfg *config.Config, pricingService *PricingService) *Bill
 // initFallbackPricing 初始化硬编码回退价格（当动态价格不可用时使用）
 // 价格单位：USD per token（与LiteLLM格式一致）
 func (s *BillingService) initFallbackPricing() {
+	// xAI Grok 4.6: $2 input / $0.50 cached input / $6 output per MTok below
+	// 200k prompt tokens. At and above 200k, input/cache/output are doubled.
+	s.fallbackPrices["grok-4.6"] = &ModelPricing{
+		InputPricePerToken:          2e-6,
+		OutputPricePerToken:         6e-6,
+		CacheReadPricePerToken:      0.5e-6,
+		SupportsCacheBreakdown:      false,
+		LongContextInputThreshold:   200000,
+		LongContextInputMultiplier:  2,
+		LongContextOutputMultiplier: 2,
+	}
+
 	// Claude 4.5 Opus
 	s.fallbackPrices["claude-opus-4.5"] = &ModelPricing{
 		InputPricePerToken:         5e-6,    // $5 per MTok
@@ -587,7 +600,14 @@ func (s *BillingService) initFallbackPricing() {
 
 // getFallbackPricing 根据模型系列获取回退价格
 func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
-	modelLower := strings.ToLower(model)
+	modelLower := strings.ToLower(strings.TrimSpace(model))
+	modelLower = strings.TrimPrefix(modelLower, "xai/")
+	modelLower = strings.TrimPrefix(modelLower, "x-ai/")
+	modelLower = strings.TrimPrefix(modelLower, "grok/")
+
+	if modelLower == "grok-4.6" || modelLower == "grok-4.6-latest" {
+		return s.fallbackPrices["grok-4.6"]
+	}
 
 	// 按模型系列匹配
 	if strings.Contains(modelLower, "opus") {
@@ -1402,9 +1422,10 @@ type ImagePriceConfig struct {
 
 // VideoPriceConfig 保存 Grok 视频每秒价格（USD/s）。
 type VideoPriceConfig struct {
-	Price480P  *float64
-	Price720P  *float64
-	Price1080P *float64
+	Price480P   *float64
+	Price720P   *float64
+	Price1080P  *float64
+	ModelPrices map[string]map[string]float64
 }
 
 const (
@@ -1430,6 +1451,65 @@ func (s *BillingService) CalculateWebSearchCost(callCount int, groupPrice *float
 		rateMultiplier = 0
 	}
 	totalCost := unitPrice * float64(callCount)
+	return &CostBreakdown{
+		TotalCost:   totalCost,
+		ActualCost:  totalCost * rateMultiplier,
+		BillingMode: string(BillingModePerRequest),
+	}
+}
+
+// CalculateSearchCost 按每千次价格计算 Grok 原生搜索工具附加费。
+// 缺价是否合法由调用方按 fail-closed 策略校验；0 表示显式免费。
+func (s *BillingService) CalculateSearchCost(callCount int, groupPricePer1K *float64, rateMultiplier float64) *CostBreakdown {
+	if callCount <= 0 || groupPricePer1K == nil {
+		return &CostBreakdown{}
+	}
+	if *groupPricePer1K == 0 {
+		return &CostBreakdown{BillingMode: string(BillingModePerRequest)}
+	}
+	if rateMultiplier < 0 {
+		rateMultiplier = 0
+	}
+	totalCost := (*groupPricePer1K / 1000) * float64(callCount)
+	return &CostBreakdown{
+		TotalCost:   totalCost,
+		ActualCost:  totalCost * rateMultiplier,
+		BillingMode: string(BillingModePerRequest),
+	}
+}
+
+type audioPriceConfig struct {
+	RealtimePerMin *float64
+	TTSPerMChars   *float64
+	STTPerHour     *float64
+}
+
+// CalculateAudioCost 按已归一化的计费单位计算 Grok Voice 成本。
+func (s *BillingService) CalculateAudioCost(mode string, units float64, groupConfig *audioPriceConfig, rateMultiplier float64) *CostBreakdown {
+	if units <= 0 {
+		return &CostBreakdown{}
+	}
+	var unitPrice *float64
+	if groupConfig != nil {
+		switch strings.ToLower(strings.TrimSpace(mode)) {
+		case "realtime":
+			unitPrice = groupConfig.RealtimePerMin
+		case "tts":
+			unitPrice = groupConfig.TTSPerMChars
+		case "stt":
+			unitPrice = groupConfig.STTPerHour
+		}
+	}
+	if unitPrice == nil {
+		return &CostBreakdown{}
+	}
+	if *unitPrice == 0 {
+		return &CostBreakdown{BillingMode: string(BillingModePerRequest)}
+	}
+	if rateMultiplier < 0 {
+		rateMultiplier = 0
+	}
+	totalCost := *unitPrice * units
 	return &CostBreakdown{
 		TotalCost:   totalCost,
 		ActualCost:  totalCost * rateMultiplier,
@@ -1512,6 +1592,9 @@ func (s *BillingService) getImageUnitPrice(model string, imageSize string, group
 
 func (s *BillingService) getVideoUnitPrice(model, resolution string, groupConfig *VideoPriceConfig) float64 {
 	if groupConfig != nil {
+		if price := LookupVideoModelPrice(groupConfig.ModelPrices, model, resolution); price != nil {
+			return *price
+		}
 		switch resolution {
 		case VideoBillingResolution480P:
 			if groupConfig.Price480P != nil {
@@ -1559,7 +1642,7 @@ func (s *BillingService) getDefaultImagePrice(model string, imageSize string) fl
 }
 
 func (s *BillingService) getDefaultVideoPrice(model, resolution string) float64 {
-	model = strings.ToLower(strings.TrimSpace(model))
+	model = xai.CanonicalImagineVideoModel(model)
 	resolution = NormalizeVideoBillingResolutionOrDefault(resolution)
 	switch {
 	case strings.HasPrefix(model, "grok-imagine-video-1.5"):

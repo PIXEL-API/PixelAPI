@@ -1781,6 +1781,11 @@ func applyAccountUpdateFields(builder *dbent.AccountUpdateOne, account *service.
 	} else {
 		builder.ClearProxyID()
 	}
+	if account.ProxyFallbackOriginID != nil {
+		builder.SetProxyFallbackOriginID(*account.ProxyFallbackOriginID)
+	} else {
+		builder.ClearProxyFallbackOriginID()
+	}
 	if account.LastUsedAt != nil {
 		builder.SetLastUsedAt(*account.LastUsedAt)
 	} else {
@@ -2056,6 +2061,90 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 
 func (r *accountRepository) Delete(ctx context.Context, id int64) error {
 	return r.DeleteIfUnblocked(ctx, id)
+}
+
+// RevertProxyFallback 在一个事务内把账号恢复到自动改投前的原代理，并清除来源标记。
+// 锁顺序保持为“目标代理 -> 账号”，与到期扫描器一致，避免并发回切和扫描形成死锁。
+func (r *accountRepository) RevertProxyFallback(ctx context.Context, accountID int64) error {
+	if accountID <= 0 {
+		return service.ErrAccountNotFound
+	}
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	txCtx := dbent.NewTxContext(ctx, tx)
+	exec := sqlExecutorFromEntClient(tx.Client())
+	if exec == nil {
+		return fmt.Errorf("account proxy fallback transaction SQL executor is unavailable")
+	}
+
+	// 先做无锁读取以确定锁定哪个代理；拿到代理锁后再锁账号并复核来源，
+	// 防止并发回切或管理员编辑在两次读取之间改变状态。
+	preview, err := tx.Client().Account.Query().Where(dbaccount.IDEQ(accountID)).Only(txCtx)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return service.ErrAccountNotFound
+		}
+		return err
+	}
+	if preview.ProxyFallbackOriginID == nil || *preview.ProxyFallbackOriginID <= 0 {
+		return service.ErrAccountNotInProxyFallback
+	}
+	originProxyID := *preview.ProxyFallbackOriginID
+
+	originRow, err := tx.Client().Proxy.Query().Where(dbproxy.IDEQ(originProxyID)).ForUpdate().Only(txCtx)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return service.ErrProxyFallbackOriginUnavailable
+		}
+		return err
+	}
+	lockedAccount, err := tx.Client().Account.Query().
+		Where(dbaccount.IDEQ(accountID), dbaccount.ProxyFallbackOriginIDEQ(originProxyID)).
+		ForUpdate().
+		Only(txCtx)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return service.ErrAccountNotInProxyFallback
+		}
+		return err
+	}
+
+	currentBindings, err := tx.Client().Account.Query().Where(dbaccount.ProxyIDEQ(originProxyID)).Count(txCtx)
+	if err != nil {
+		return err
+	}
+	// 异常历史数据可能已指向原代理但仍保留来源标记；这种情况下回切只清标记，
+	// 不应把账号自身重复计入容量增量。
+	if lockedAccount.ProxyID != nil && *lockedAccount.ProxyID == originProxyID && currentBindings > 0 {
+		currentBindings--
+	}
+	accountModel := accountEntityToService(lockedAccount)
+	originModel := proxyEntityToService(originRow)
+	if accountModel == nil || originModel == nil || !service.CanAccountUseProxyFallback(*originModel, *accountModel, int64(currentBindings), time.Now().UTC()) {
+		return service.ErrProxyFallbackOriginUnavailable
+	}
+
+	var updatedID int64
+	if err := scanSingleRow(txCtx, exec, `
+		UPDATE accounts
+		SET proxy_id=proxy_fallback_origin_id, proxy_fallback_origin_id=NULL,
+			extra=CASE WHEN type='apikey' AND extra ? 'upstream_billing_probe'
+				THEN extra - 'upstream_billing_probe' ELSE extra END,
+			updated_at=NOW()
+		WHERE id=$1 AND proxy_fallback_origin_id IS NOT NULL AND deleted_at IS NULL
+		RETURNING id
+	`, []any{accountID}, &updatedID); errors.Is(err, sql.ErrNoRows) {
+		return service.ErrAccountNotInProxyFallback
+	} else if err != nil {
+		return err
+	}
+	if err := enqueueSchedulerOutbox(txCtx, exec, service.SchedulerOutboxEventAccountChanged, &updatedID, nil, nil); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (r *accountRepository) DeleteIfUnblocked(ctx context.Context, accountID int64) error {
@@ -3547,14 +3636,129 @@ func (r *accountRepository) SetGrokCredentialErrorIfMatch(
 				AND a.type IN ($6, $7)
 				AND a.schedulable IS TRUE
 				AND a.credentials = $8::jsonb
-				AND a.proxy_id IS NOT DISTINCT FROM $9
+				AND (
+					(a.proxy_id IS NULL AND $9::bigint IS NULL AND $10::timestamptz IS NULL)
+					OR (
+						a.proxy_id = $9
+						AND (
+							($10::timestamptz IS NULL AND NOT EXISTS (
+								SELECT 1 FROM proxies AS p WHERE p.id = a.proxy_id
+							))
+							OR ($10::timestamptz IS NOT NULL AND EXISTS (
+								SELECT 1 FROM proxies AS p
+								WHERE p.id = a.proxy_id AND p.updated_at = $10
+							))
+						)
+					)
+				)
+			RETURNING a.id
+		)
+		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
+		SELECT $11, updated.id, NULL, NULL FROM updated
+	`, service.StatusError, errorMsg, id, service.StatusActive, service.PlatformGrok,
+		service.AccountTypeOAuth, service.AccountTypeAPIKey, snapshot.CredentialsJSON, snapshot.ProxyID,
+		snapshot.ProxyUpdatedAt, service.SchedulerOutboxEventAccountChanged)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil || affected == 0 {
+		return false, err
+	}
+	r.syncSchedulerAccountSnapshotDetached(ctx, id)
+	return true, nil
+}
+
+func (r *accountRepository) ListGrokProxyCredentialRecoveryCandidates(ctx context.Context, proxyID int64) ([]service.Account, error) {
+	if proxyID <= 0 {
+		return nil, errors.New("invalid Grok proxy recovery proxy ID")
+	}
+	rows, err := r.sql.QueryContext(ctx, `
+		SELECT id
+		FROM accounts
+		WHERE deleted_at IS NULL
+			AND platform = $1
+			AND type = $2
+			AND status = $3
+			AND schedulable IS FALSE
+			AND error_message = $4
+			AND proxy_id = $5
+		ORDER BY id ASC
+	`, service.PlatformGrok, service.AccountTypeOAuth, service.StatusError,
+		string(service.GrokCredentialReasonProxyInvalid), proxyID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	ids := make([]int64, 0)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return []service.Account{}, nil
+	}
+	accounts, err := r.GetByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]service.Account, 0, len(accounts))
+	for _, account := range accounts {
+		if account != nil {
+			out = append(out, *account)
+		}
+	}
+	return out, nil
+}
+
+func (r *accountRepository) RecoverGrokProxyCredentialFailureIfMatch(
+	ctx context.Context,
+	id int64,
+	snapshot service.GrokCredentialMutationSnapshot,
+) (bool, error) {
+	if id <= 0 || snapshot.ProxyID == nil || *snapshot.ProxyID <= 0 ||
+		snapshot.ProxyUpdatedAt == nil || snapshot.ProxyUpdatedAt.IsZero() {
+		return false, errors.New("invalid Grok proxy recovery snapshot")
+	}
+	result, err := r.sql.ExecContext(ctx, `
+		WITH updated AS (
+			UPDATE accounts AS a
+			SET status = $1,
+				error_message = '',
+				error_since = NULL,
+				schedulable = TRUE,
+				temp_unschedulable_until = NULL,
+				temp_unschedulable_reason = NULL,
+				updated_at = NOW()
+			WHERE a.id = $2
+				AND a.deleted_at IS NULL
+				AND a.platform = $3
+				AND a.type = $4
+				AND a.status = $5
+				AND a.schedulable IS FALSE
+				AND a.error_message = $6
+				AND a.credentials = $7::jsonb
+				AND a.proxy_id = $8
+				AND EXISTS (
+					SELECT 1
+					FROM proxies AS p
+					WHERE p.id = a.proxy_id
+						AND p.updated_at = $9
+				)
 			RETURNING a.id
 		)
 		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
 		SELECT $10, updated.id, NULL, NULL FROM updated
-	`, service.StatusError, errorMsg, id, service.StatusActive, service.PlatformGrok,
-		service.AccountTypeOAuth, service.AccountTypeAPIKey, snapshot.CredentialsJSON, snapshot.ProxyID,
-		service.SchedulerOutboxEventAccountChanged)
+	`, service.StatusActive, id, service.PlatformGrok, service.AccountTypeOAuth,
+		service.StatusError, string(service.GrokCredentialReasonProxyInvalid), snapshot.CredentialsJSON,
+		snapshot.ProxyID, snapshot.ProxyUpdatedAt, service.SchedulerOutboxEventAccountChanged)
 	if err != nil {
 		return false, err
 	}
@@ -4192,13 +4396,27 @@ func (r *accountRepository) SetGrokCredentialTempUnschedulableIfMatch(
 				AND a.type = $6
 				AND a.schedulable IS TRUE
 				AND a.credentials = $7::jsonb
-				AND a.proxy_id IS NOT DISTINCT FROM $8
+				AND (
+					(a.proxy_id IS NULL AND $8::bigint IS NULL AND $9::timestamptz IS NULL)
+					OR (
+						a.proxy_id = $8
+						AND (
+							($9::timestamptz IS NULL AND NOT EXISTS (
+								SELECT 1 FROM proxies AS p WHERE p.id = a.proxy_id
+							))
+							OR ($9::timestamptz IS NOT NULL AND EXISTS (
+								SELECT 1 FROM proxies AS p
+								WHERE p.id = a.proxy_id AND p.updated_at = $9
+							))
+						)
+					)
+				)
 			RETURNING a.id
 		)
 		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
-		SELECT $9, updated.id, NULL, NULL FROM updated
+		SELECT $10, updated.id, NULL, NULL FROM updated
 	`, until, reason, id, service.StatusActive, service.PlatformGrok,
-		service.AccountTypeOAuth, snapshot.CredentialsJSON, snapshot.ProxyID,
+		service.AccountTypeOAuth, snapshot.CredentialsJSON, snapshot.ProxyID, snapshot.ProxyUpdatedAt,
 		service.SchedulerOutboxEventAccountChanged)
 	if err != nil {
 		return false, err
@@ -4508,6 +4726,9 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 			args = append(args, *updates.ProxyID)
 			idx++
 		}
+		// 管理员显式改绑即接管自动改投状态，必须与 proxy_id 在同一次 UPDATE 中清除来源，
+		// 否则稍后的“回切”可能覆盖管理员刚刚选择的代理。
+		setClauses = append(setClauses, "proxy_fallback_origin_id = NULL")
 	}
 	if updates.Concurrency != nil {
 		setClauses = append(setClauses, "concurrency = $"+itoa(idx))
@@ -5071,6 +5292,7 @@ func accountEntityToService(m *dbent.Account) *service.Account {
 		ShareStatus:             service.NormalizeAccountShareStatus(m.ShareStatus),
 		SharePolicyID:           m.SharePolicyID,
 		ProxyID:                 m.ProxyID,
+		ProxyFallbackOriginID:   m.ProxyFallbackOriginID,
 		Concurrency:             m.Concurrency,
 		Priority:                m.Priority,
 		RateMultiplier:          &rateMultiplier,

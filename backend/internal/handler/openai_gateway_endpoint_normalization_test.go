@@ -54,3 +54,18 @@ func TestOpenAIUpstreamEndpoint_ViaGetUpstreamEndpoint(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveOpenAIUpstreamEndpointUsesRuntimeGrokRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, EndpointChatCompletions, nil)
+	account := &service.Account{Platform: service.PlatformGrok}
+
+	require.Equal(t, EndpointResponses, resolveOpenAIUpstreamEndpoint(c, account, &service.OpenAIForwardResult{
+		UpstreamEndpoint: EndpointResponses,
+	}))
+
+	service.SetActualOpenAIUpstreamEndpoint(c, EndpointChatCompletions)
+	require.Equal(t, EndpointChatCompletions, resolveOpenAIUpstreamEndpoint(c, account, nil))
+}

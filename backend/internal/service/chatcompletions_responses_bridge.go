@@ -55,6 +55,9 @@ func ResponsesToChatCompletionsRequest(req *apicompat.ResponsesRequest) (*apicom
 			if tool.Function != nil {
 				declared[tool.Function.Name] = true
 			}
+			if strings.EqualFold(strings.TrimSpace(tool.Type), "x_search") {
+				declared["x_search"] = true
+			}
 		}
 		if choice := responsesToolChoiceToChatToolChoice(req.ToolChoice, declared); len(choice) > 0 {
 			out.ToolChoice = choice
@@ -538,6 +541,16 @@ func responsesToolsToChatTools(tools []apicompat.ResponsesTool) ([]apicompat.Cha
 				return nil, err
 			}
 			out = append(out, flattened...)
+		case "x_search":
+			out = append(out, apicompat.ChatTool{
+				Type:                     "x_search",
+				AllowedXHandles:          tool.AllowedXHandles,
+				ExcludedXHandles:         tool.ExcludedXHandles,
+				FromDate:                 tool.FromDate,
+				ToDate:                   tool.ToDate,
+				EnableImageUnderstanding: tool.EnableImageUnderstanding,
+				EnableVideoUnderstanding: tool.EnableVideoUnderstanding,
+			})
 		}
 	}
 	return out, nil
@@ -603,6 +616,15 @@ func responsesToolChoiceToChatToolChoice(raw json.RawMessage, declared map[strin
 	}
 	var name string
 	switch rawString(choice["type"]) {
+	case "x_search":
+		if !declared["x_search"] {
+			return nil
+		}
+		out, err := json.Marshal(map[string]any{"type": "x_search"})
+		if err != nil {
+			return raw
+		}
+		return out
 	case "tool_search":
 		name = toolSearchProxyName
 	case "function", "custom":

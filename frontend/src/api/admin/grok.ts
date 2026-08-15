@@ -20,6 +20,17 @@ export interface GrokAuthUrlRequest {
   redirect_uri?: string
 }
 
+export interface GrokOAuthCapabilities {
+  password_auth_enabled: boolean
+}
+
+const GROK_AUTHORIZATION_TIMEOUT_MS = 120_000
+
+export async function getCapabilities(): Promise<GrokOAuthCapabilities> {
+  const { data } = await apiClient.get<GrokOAuthCapabilities>('/admin/grok/oauth/capabilities')
+  return data
+}
+
 export interface GrokExchangeCodeRequest {
   session_id: string
   state: string
@@ -153,6 +164,33 @@ export async function refreshGrokToken(
   return data
 }
 
+/** Convert one Web SSO cookie to Build OAuth without persisting raw SSO. */
+export async function validateSSOToken(
+  ssoToken: string,
+  proxyId?: number | null
+): Promise<GrokTokenInfo> {
+  const payload: Record<string, unknown> = { sso_token: ssoToken }
+  if (proxyId) payload.proxy_id = proxyId
+  const { data } = await apiClient.post<GrokTokenInfo>('/admin/grok/oauth/sso-token', payload, {
+    timeout: GROK_AUTHORIZATION_TIMEOUT_MS
+  })
+  return data
+}
+
+/** Password login -> ephemeral SSO -> Build OAuth. Password is never persisted. */
+export async function authorizePassword(
+  email: string,
+  password: string,
+  proxyId?: number | null
+): Promise<GrokTokenInfo> {
+  const payload: Record<string, unknown> = { email, password }
+  if (proxyId) payload.proxy_id = proxyId
+  const { data } = await apiClient.post<GrokTokenInfo>('/admin/grok/oauth/password', payload, {
+    timeout: GROK_AUTHORIZATION_TIMEOUT_MS
+  })
+  return data
+}
+
 export async function queryQuota(id: number): Promise<GrokQuotaProbeResult> {
   const { data } = await apiClient.get<GrokQuotaProbeResult>(`/admin/grok/accounts/${id}/quota`)
   return data
@@ -176,8 +214,11 @@ export async function createFromSSO(
 
 export default {
   generateAuthUrl,
+  getCapabilities,
   exchangeCode,
   refreshGrokToken,
+  validateSSOToken,
+  authorizePassword,
   queryQuota,
   resetQuota,
   createFromSSO

@@ -30,6 +30,7 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 	"github.com/cespare/xxhash/v2"
@@ -591,6 +592,10 @@ type ForwardResult struct {
 	// 图片生成计费字段（图片生成模型使用）
 	ImageCount int    // 生成的图片数量
 	ImageSize  string // 图片尺寸 "1K", "2K", "4K"
+	// SearchCount 是成功完成的 Grok 原生 web_search/x_search 调用次数。
+	SearchCount int
+	// AudioUsage 是 Grok Voice TTS/STT/Realtime 的显式计费单位。
+	AudioUsage *AudioUsage
 }
 
 // BillableStreamUsageError 表示流式响应未完整结束，但上游已经返回了可计费 usage。
@@ -2740,6 +2745,9 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 		accounts, useMixed, err := s.schedulerSnapshot.ListSchedulableAccounts(ctx, groupID, platform, hasForcePlatform)
 		if err == nil {
 			accounts = FilterAccountsVisibleToRequestUser(ctx, accounts)
+			if strings.EqualFold(platform, PlatformGrok) {
+				accounts = s.filterGrokFreeQuotaAccountsForGateway(ctx, accounts)
+			}
 			slog.Debug("account_scheduling_list_snapshot",
 				"group_id", derefGroupID(groupID),
 				"platform", platform,
@@ -2821,6 +2829,9 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 		return nil, useMixed, err
 	}
 	accounts = FilterAccountsVisibleToRequestUser(ctx, accounts)
+	if strings.EqualFold(platform, PlatformGrok) {
+		accounts = s.filterGrokFreeQuotaAccountsForGateway(ctx, accounts)
+	}
 	slog.Debug("account_scheduling_list_single",
 		"group_id", derefGroupID(groupID),
 		"platform", platform,
@@ -3219,6 +3230,11 @@ func (s *GatewayService) getSchedulableAccount(ctx context.Context, accountID in
 	}
 	if !IsAccountVisibleToRequestUser(ctx, account) {
 		return nil, ErrAccountNotFound
+	}
+	if account.IsGrok() {
+		if gated := s.filterGrokFreeQuotaAccountsForGateway(ctx, []Account{*account}); len(gated) == 0 {
+			return nil, nil
+		}
 	}
 	return account, nil
 }
@@ -4422,6 +4438,110 @@ func (s *GatewayService) getOAuthToken(ctx context.Context, account *Account) (s
 	}
 	// Token刷新由后台 TokenRefreshService 处理，此处只返回当前token
 	return accessToken, "oauth", nil
+}
+
+// DoGrokNativeResponsesJSON 转发独立 web_search/x_search 的非流式 Responses 请求。
+// 该方法只负责一次账号尝试；账号切换、并发槽和最终错误由 handler 的统一调度循环负责。
+func (s *GatewayService) DoGrokNativeResponsesJSON(ctx context.Context, account *Account, body []byte) ([]byte, error) {
+	if s == nil || s.httpUpstream == nil {
+		return nil, errors.New("http upstream not configured")
+	}
+	if account == nil || !account.IsGrok() {
+		return nil, errors.New("grok account required")
+	}
+	if !json.Valid(body) {
+		return nil, errors.New("grok responses request body must be valid JSON")
+	}
+	token, _, err := s.GetAccessToken(ctx, account)
+	if err != nil {
+		return nil, &UpstreamFailoverError{
+			StatusCode:        http.StatusUnauthorized,
+			Stage:             GatewayFailureStageAccountAuth,
+			Scope:             GatewayFailureScopeAccount,
+			Reason:            GatewayFailureReason("grok_search_token"),
+			NextAccountAction: NextAccountRetry,
+		}
+	}
+	if strings.TrimSpace(gjson.GetBytes(body, "model").String()) == "" {
+		body, err = sjson.SetBytes(body, "model", xai.DefaultTextModel)
+		if err != nil {
+			return nil, fmt.Errorf("set grok search model: %w", err)
+		}
+	}
+	targetURL, err := buildGrokResponsesURL(ctx, account, s.cfg, s.settingService)
+	if err != nil {
+		return nil, fmt.Errorf("build grok responses URL: %w", err)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("build grok responses request: %w", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json")
+	if account.IsGrokOAuth() {
+		applyGrokCLIHeaders(request.Header)
+	}
+	account.ApplyHeaderOverrides(request.Header)
+	proxyURL, err := grokAccountProxyURL(account)
+	if err != nil {
+		return nil, &UpstreamFailoverError{
+			StatusCode:        http.StatusBadGateway,
+			Stage:             GatewayFailureStageAccountAuth,
+			Scope:             GatewayFailureScopeAccount,
+			Reason:            GatewayFailureReason("grok_search_proxy"),
+			NextAccountAction: NextAccountRetry,
+		}
+	}
+	response, err := s.httpUpstream.Do(request, proxyURL, account.ID, account.Concurrency)
+	if err != nil {
+		return nil, &UpstreamFailoverError{
+			StatusCode:        http.StatusBadGateway,
+			Scope:             GatewayFailureScopeAccount,
+			Reason:            GatewayFailureReason("grok_search_transport"),
+			NextAccountAction: NextAccountRetry,
+		}
+	}
+	defer func() { _ = response.Body.Close() }()
+	const maxGrokSearchResponseBytes = 4 << 20
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxGrokSearchResponseBytes+1))
+	if err != nil {
+		return nil, &UpstreamFailoverError{StatusCode: http.StatusBadGateway, Reason: GatewayFailureReason("grok_search_read"), NextAccountAction: NextAccountRetry}
+	}
+	if len(responseBody) > maxGrokSearchResponseBytes {
+		return nil, fmt.Errorf("grok search response exceeds %d bytes", maxGrokSearchResponseBytes)
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		if isGrokContentPolicyRejection(response.StatusCode, responseBody) {
+			return nil, &UpstreamFailoverError{
+				StatusCode:        response.StatusCode,
+				ResponseBody:      responseBody,
+				Scope:             GatewayFailureScopeRequest,
+				NextAccountAction: NextAccountStop,
+				ClientStatusCode:  response.StatusCode,
+				ClientMessage:     grokContentPolicyClientMessage(responseBody),
+			}
+		}
+		decision := classifyGrokUpstreamFailure(response.StatusCode, responseBody, gjson.GetBytes(body, "model").String())
+		if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusMethodNotAllowed || decision.ShouldFailover {
+			return nil, &UpstreamFailoverError{
+				StatusCode:        response.StatusCode,
+				ResponseBody:      responseBody,
+				Scope:             GatewayFailureScopeAccount,
+				Reason:            GatewayFailureReason(firstNonEmpty(decision.Reason, "grok_search_upstream")),
+				NextAccountAction: NextAccountRetry,
+			}
+		}
+		message := sanitizeUpstreamErrorMessage(extractUpstreamErrorMessage(responseBody))
+		if message == "" {
+			message = http.StatusText(response.StatusCode)
+		}
+		return nil, fmt.Errorf("grok search upstream %d: %s", response.StatusCode, message)
+	}
+	if !json.Valid(responseBody) {
+		return nil, &UpstreamFailoverError{StatusCode: http.StatusBadGateway, ResponseBody: responseBody, Reason: GatewayFailureReason("grok_search_invalid_json"), NextAccountAction: NextAccountRetry}
+	}
+	return responseBody, nil
 }
 
 // 重试相关常量
@@ -10261,7 +10381,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 		input.BillingModelSource,
 		result.UpstreamResponseModel,
 		result.UpstreamResponseModelConflict,
-		result.ImageCount > 0,
+		result.ImageCount > 0 || result.SearchCount > 0 || result.AudioUsage != nil,
 		result.UpstreamResponseModelBillingEligible,
 	); responseModel != "" && !strings.EqualFold(responseModel, strings.TrimSpace(billingModel)) {
 		if identified, responseChannelPriced := s.hasIdentifiedResponseModelPricing(ctx, responseModel, apiKey); identified {
@@ -10368,6 +10488,50 @@ func (s *GatewayService) calculateRecordUsageCost(
 	// 图片生成计费
 	if result.ImageCount > 0 {
 		return s.calculateImageCost(ctx, result, apiKey, billingModel, multiplier)
+	}
+	if result.AudioUsage != nil {
+		if result.AudioUsage.DurationOrUnits <= 0 {
+			return nil, fmt.Errorf("grok audio billing units must be greater than zero")
+		}
+		config := groupAudioPriceConfigFromAPIKey(apiKey)
+		var price *float64
+		switch strings.ToLower(strings.TrimSpace(result.AudioUsage.Mode)) {
+		case "realtime":
+			if config != nil {
+				price = config.RealtimePerMin
+			}
+		case "tts":
+			if config != nil {
+				price = config.TTSPerMChars
+			}
+		case "stt":
+			if config != nil {
+				price = config.STTPerHour
+			}
+		default:
+			return nil, fmt.Errorf("unsupported grok audio billing mode %q", result.AudioUsage.Mode)
+		}
+		if err := validateExplicitGrokUsagePrice("audio_"+strings.ToLower(strings.TrimSpace(result.AudioUsage.Mode)), price); err != nil {
+			return nil, err
+		}
+		return s.billingService.CalculateAudioCost(result.AudioUsage.Mode, result.AudioUsage.DurationOrUnits, config, multiplier), nil
+	}
+	if result.SearchCount > 0 {
+		price := groupSearchPricePer1KFromAPIKey(apiKey)
+		if err := validateExplicitGrokUsagePrice("search_price_per_1k", price); err != nil {
+			return nil, err
+		}
+		searchCost := s.billingService.CalculateSearchCost(result.SearchCount, price, multiplier)
+		if !claudeUsageHasBillableTokens(&result.Usage) {
+			return searchCost, nil
+		}
+		tokenCost, err := s.calculateTokenCost(ctx, result, apiKey, billingModel, multiplier, opts)
+		if err != nil {
+			return nil, err
+		}
+		tokenCost.TotalCost += searchCost.TotalCost
+		tokenCost.ActualCost += searchCost.ActualCost
+		return tokenCost, nil
 	}
 
 	// Token 计费

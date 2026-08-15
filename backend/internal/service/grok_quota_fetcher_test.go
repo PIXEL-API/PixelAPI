@@ -134,3 +134,18 @@ func TestGrokQuotaFetcherClassifiesForbiddenAndReauth(t *testing.T) {
 		})
 	}
 }
+
+func TestGrokQuotaFetcherSurfacesSpendingLimitReauthWithoutSnapshot(t *testing.T) {
+	t.Parallel()
+
+	usage := NewGrokQuotaFetcher().BuildUsageInfo(&Account{
+		Platform: PlatformGrok,
+		Type:     AccountTypeOAuth,
+		Extra: map[string]any{
+			"grok_needs_reauth": true,
+		},
+	})
+
+	require.True(t, usage.NeedsReauth)
+	require.Equal(t, "spending_limit", usage.ErrorCode)
+}

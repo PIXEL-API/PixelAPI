@@ -45,12 +45,35 @@ func (h *ProxyHandler) ExportData(c *gin.Context) {
 			return
 		}
 	}
+	proxies, err = expandDataProxyBackupClosure(ctx, proxies, h.adminService.GetProxiesByIDs)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	proxyNameByID := make(map[int64]string, len(proxies))
+	proxyKeyByID := make(map[int64]string, len(proxies))
+	for i := range proxies {
+		p := proxies[i]
+		proxyNameByID[p.ID] = p.Name
+		proxyKeyByID[p.ID] = buildProxyKey(p.Protocol, p.Host, p.Port, p.Username, p.Password)
+	}
 
 	dataProxies := make([]DataProxy, 0, len(proxies))
 	for i := range proxies {
 		p := proxies[i]
-		key := buildProxyKey(p.Protocol, p.Host, p.Port, p.Username, p.Password)
+		key := proxyKeyByID[p.ID]
 		maxAccounts := p.MaxAccounts
+		var expiresAt *int64
+		if p.ExpiresAt != nil {
+			unix := p.ExpiresAt.Unix()
+			expiresAt = &unix
+		}
+		var backupProxyName, backupProxyKey string
+		if p.BackupProxyID != nil {
+			backupProxyName = proxyNameByID[*p.BackupProxyID]
+			backupProxyKey = proxyKeyByID[*p.BackupProxyID]
+		}
 		dataProxies = append(dataProxies, DataProxy{
 			ProxyKey:             key,
 			Name:                 p.Name,
@@ -60,6 +83,11 @@ func (h *ProxyHandler) ExportData(c *gin.Context) {
 			Username:             p.Username,
 			Password:             p.Password,
 			Status:               p.Status,
+			ExpiresAt:            expiresAt,
+			FallbackMode:         p.FallbackMode,
+			BackupProxyName:      backupProxyName,
+			BackupProxyKey:       backupProxyKey,
+			ExpiryWarnDays:       p.ExpiryWarnDays,
 			Platform:             p.Platform,
 			RequiredAccountLevel: p.RequiredAccountLevel,
 			MaxAccounts:          &maxAccounts,
@@ -109,6 +137,7 @@ func (h *ProxyHandler) ImportData(c *gin.Context) {
 	}
 
 	latencyProbeIDs := make([]int64, 0, len(req.Data.Proxies))
+	proxyImportRecords := make([]dataProxyImportRecord, 0, len(req.Data.Proxies))
 	for i := range req.Data.Proxies {
 		item := req.Data.Proxies[i]
 		key := item.ProxyKey
@@ -134,26 +163,38 @@ func (h *ProxyHandler) ImportData(c *gin.Context) {
 			if normalizedStatus != "" && normalizedStatus != existing.Status {
 				updateInput.Status = normalizedStatus
 			}
-			if item.MaxAccounts != nil && *item.MaxAccounts != existing.MaxAccounts {
-				updateInput.MaxAccounts = item.MaxAccounts
+			if item.HasMaxAccounts() {
+				maxAccounts := dataProxyMaxAccounts(item)
+				if maxAccounts != existing.MaxAccounts {
+					updateInput.MaxAccounts = &maxAccounts
+				}
 			}
-			if platform := strings.TrimSpace(item.Platform); platform != existing.Platform {
-				updateInput.Platform = &platform
+			if item.HasPlatform() {
+				platform := strings.TrimSpace(item.Platform)
+				if platform != existing.Platform {
+					updateInput.Platform = &platform
+				}
 			}
-			if level := strings.TrimSpace(item.RequiredAccountLevel); level != existing.RequiredAccountLevel {
-				updateInput.RequiredAccountLevel = &level
+			if item.HasRequiredAccountLevel() {
+				level := strings.TrimSpace(item.RequiredAccountLevel)
+				if level != existing.RequiredAccountLevel {
+					updateInput.RequiredAccountLevel = &level
+				}
 			}
 			if updateInput.Status != "" || updateInput.MaxAccounts != nil ||
 				updateInput.Platform != nil || updateInput.RequiredAccountLevel != nil {
-				if _, err := h.adminService.UpdateProxy(ctx, existing.ID, updateInput); err != nil {
+				if updated, err := h.adminService.UpdateProxy(ctx, existing.ID, updateInput); err != nil {
 					result.Errors = append(result.Errors, DataImportError{
 						Kind:     "proxy",
 						Name:     item.Name,
 						ProxyKey: key,
 						Message:  "update proxy failed: " + err.Error(),
 					})
+				} else if updated != nil {
+					existing = *updated
 				}
 			}
+			proxyImportRecords = append(proxyImportRecords, dataProxyImportRecord{item: item, key: key, proxy: existing})
 			latencyProbeIDs = append(latencyProbeIDs, existing.ID)
 			continue
 		}
@@ -168,6 +209,7 @@ func (h *ProxyHandler) ImportData(c *gin.Context) {
 			Platform:             strings.TrimSpace(item.Platform),
 			RequiredAccountLevel: strings.TrimSpace(item.RequiredAccountLevel),
 			MaxAccounts:          dataProxyMaxAccounts(item),
+			ExpiryWarnDays:       dataProxyExpiryWarnDays(item),
 		})
 		if err != nil {
 			result.ProxyFailed++
@@ -190,10 +232,19 @@ func (h *ProxyHandler) ImportData(c *gin.Context) {
 					ProxyKey: key,
 					Message:  "update status failed: " + err.Error(),
 				})
+			} else {
+				created.Status = normalizedStatus
 			}
 		}
+		proxyImportRecords = append(proxyImportRecords, dataProxyImportRecord{item: item, key: key, proxy: *created})
 		// CreateProxy already triggers a latency probe, avoid double probing here.
 	}
+	result.Errors = append(result.Errors, applyDataProxyLifecycleRelations(
+		ctx,
+		proxyImportRecords,
+		existingProxies,
+		h.adminService.UpdateProxy,
+	)...)
 
 	if len(latencyProbeIDs) > 0 {
 		ids := append([]int64(nil), latencyProbeIDs...)

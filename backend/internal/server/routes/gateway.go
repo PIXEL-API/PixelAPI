@@ -113,6 +113,19 @@ func RegisterGatewayRoutes(
 			},
 		})
 	}
+	grokVoiceHandler := func(endpoint string) gin.HandlerFunc {
+		return func(c *gin.Context) {
+			h.OpenAIGateway.GrokVoice(c, endpoint)
+		}
+	}
+	grokCustomVoiceItemHandler := func(c *gin.Context) {
+		endpoint := "custom-voices/" + c.Param("voice_id")
+		// 必须按注册路由模板判断；voice_id 本身可以合法地等于 "audio"。
+		if c.FullPath() == "/v1/custom-voices/:voice_id/audio" || c.FullPath() == "/custom-voices/:voice_id/audio" {
+			endpoint += "/audio"
+		}
+		h.OpenAIGateway.GrokVoice(c, endpoint)
+	}
 
 	// /responses/*subpath 的子路径会被转发到上游同名端点之后，因此在入口就拒掉
 	// 不可转发的子路径，不让它进入调度与转发流程。可转发的判定见
@@ -199,6 +212,17 @@ func RegisterGatewayRoutes(
 		gateway.POST("/videos/extensions", videoExtensionHandler)
 		gateway.GET("/videos/:request_id", videoStatusHandler)
 		gateway.GET("/videos/:request_id/content", videoContentHandler)
+		gateway.POST("/web_search", h.Gateway.WebSearch)
+		gateway.POST("/x_search", h.Gateway.XSearch)
+		gateway.POST("/tts", grokVoiceHandler("tts"))
+		gateway.POST("/stt", grokVoiceHandler("stt"))
+		gateway.POST("/custom-voices", grokVoiceHandler("custom-voices"))
+		gateway.GET("/custom-voices", grokVoiceHandler("custom-voices"))
+		gateway.GET("/custom-voices/:voice_id", grokCustomVoiceItemHandler)
+		gateway.PATCH("/custom-voices/:voice_id", grokCustomVoiceItemHandler)
+		gateway.DELETE("/custom-voices/:voice_id", grokCustomVoiceItemHandler)
+		gateway.GET("/custom-voices/:voice_id/audio", grokCustomVoiceItemHandler)
+		gateway.GET("/realtime", h.OpenAIGateway.GrokRealtime)
 	}
 
 	// Gemini 原生 API 兼容层（Gemini SDK/CLI 直连）
@@ -253,6 +277,17 @@ func RegisterGatewayRoutes(
 	r.POST("/videos/extensions", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, videoExtensionHandler)
 	r.GET("/videos/:request_id", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, videoStatusHandler)
 	r.GET("/videos/:request_id/content", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, videoContentHandler)
+	r.POST("/web_search", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, h.Gateway.WebSearch)
+	r.POST("/x_search", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, h.Gateway.XSearch)
+	r.POST("/tts", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, grokVoiceHandler("tts"))
+	r.POST("/stt", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, grokVoiceHandler("stt"))
+	r.POST("/custom-voices", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, grokVoiceHandler("custom-voices"))
+	r.GET("/custom-voices", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, grokVoiceHandler("custom-voices"))
+	r.GET("/custom-voices/:voice_id", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, grokCustomVoiceItemHandler)
+	r.PATCH("/custom-voices/:voice_id", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, grokCustomVoiceItemHandler)
+	r.DELETE("/custom-voices/:voice_id", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, grokCustomVoiceItemHandler)
+	r.GET("/custom-voices/:voice_id/audio", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, grokCustomVoiceItemHandler)
+	r.GET("/realtime", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, h.OpenAIGateway.GrokRealtime)
 
 	// Antigravity 模型列表
 	r.GET("/antigravity/models", gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, h.Gateway.AntigravityModels)

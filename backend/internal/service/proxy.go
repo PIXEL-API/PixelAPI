@@ -11,6 +11,12 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
+const (
+	FallbackModeNone   = "none"
+	FallbackModeProxy  = "proxy"
+	FallbackModeDirect = "direct"
+)
+
 type Proxy struct {
 	ID       int64
 	Name     string
@@ -29,13 +35,22 @@ type Proxy struct {
 	RequiredAccountLevel string
 	Status               string
 	// MaxAccounts controls how many accounts may bind to this proxy. 0 means unlimited.
-	MaxAccounts int
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	MaxAccounts    int
+	ExpiresAt      *time.Time
+	FallbackMode   string
+	BackupProxyID  *int64
+	ExpiryWarnDays int
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 func (p *Proxy) IsActive() bool {
 	return p.Status == StatusActive
+}
+
+// IsExpired 报告代理是否已达到有效期边界；空有效期表示永不过期。
+func (p *Proxy) IsExpired(now time.Time) bool {
+	return p != nil && p.ExpiresAt != nil && !p.ExpiresAt.After(now)
 }
 
 // IsUniversal 判断代理是否为通用代理（不限平台）。

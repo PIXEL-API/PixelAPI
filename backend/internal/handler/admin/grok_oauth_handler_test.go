@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +24,7 @@ type grokQuotaHandlerAccountRepo struct {
 	service.AccountRepository
 	account *service.Account
 	updates map[int64]map[string]any
+	mu      sync.Mutex
 }
 
 type grokOAuthHandlerAdminService struct {
@@ -42,6 +44,8 @@ func (r *grokQuotaHandlerAccountRepo) GetByID(_ context.Context, id int64) (*ser
 }
 
 func (r *grokQuotaHandlerAccountRepo) UpdateExtra(_ context.Context, id int64, updates map[string]any) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.updates == nil {
 		r.updates = make(map[int64]map[string]any)
 	}
@@ -49,17 +53,28 @@ func (r *grokQuotaHandlerAccountRepo) UpdateExtra(_ context.Context, id int64, u
 	return nil
 }
 
+func (r *grokQuotaHandlerAccountRepo) hasUpdate(id int64) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.updates[id] != nil
+}
+
 type grokQuotaHandlerUpstream struct {
 	resp     *http.Response
-	lastReq  *http.Request
-	lastBody []byte
+	mu       sync.Mutex
+	requests []*http.Request
+	bodies   [][]byte
 }
 
 func (u *grokQuotaHandlerUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
-	u.lastReq = req
+	var body []byte
 	if req.Body != nil {
-		u.lastBody, _ = io.ReadAll(req.Body)
+		body, _ = io.ReadAll(req.Body)
 	}
+	u.mu.Lock()
+	u.requests = append(u.requests, req.Clone(req.Context()))
+	u.bodies = append(u.bodies, body)
+	u.mu.Unlock()
 	if req.Method == http.MethodGet && req.URL.Path == "/v1/billing" {
 		body := `{"config":{"billingPeriodStart":"2026-07-01T00:00:00Z","billingPeriodEnd":"2026-08-01T00:00:00Z"}}`
 		if req.URL.Query().Get("format") == "credits" {
@@ -71,7 +86,25 @@ func (u *grokQuotaHandlerUpstream) Do(req *http.Request, _ string, _ int64, _ in
 			Body:       io.NopCloser(strings.NewReader(body)),
 		}, nil
 	}
+	if req.Method == http.MethodGet && req.URL.Path == "/v1/models" {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"data":[]}`)),
+		}, nil
+	}
 	return u.resp, nil
+}
+
+func (u *grokQuotaHandlerUpstream) responseProbe() (*http.Request, []byte, bool) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	for i, request := range u.requests {
+		if request.Method == http.MethodPost && request.URL.Path == "/v1/responses" {
+			return request, append([]byte(nil), u.bodies[i]...), true
+		}
+	}
+	return nil, nil, false
 }
 
 func (u *grokQuotaHandlerUpstream) DoWithTLS(
@@ -121,10 +154,55 @@ func TestGrokOAuthHandlerQueryQuotaProbesUpstream(t *testing.T) {
 	require.Contains(t, rec.Body.String(), `"source":"hybrid_probe"`)
 	require.Contains(t, rec.Body.String(), `"headers_observed":true`)
 	require.NotContains(t, rec.Body.String(), "access-token")
-	require.Equal(t, xai.DefaultCLIBaseURL+"/responses", upstream.lastReq.URL.String())
-	require.Equal(t, "Bearer access-token", upstream.lastReq.Header.Get("Authorization"))
-	require.Contains(t, string(upstream.lastBody), `"store":false`)
-	require.NotNil(t, repo.updates[42])
+	var probeRequest *http.Request
+	var probeBody []byte
+	require.Eventually(t, func() bool {
+		var found bool
+		probeRequest, probeBody, found = upstream.responseProbe()
+		return found
+	}, time.Second, 10*time.Millisecond)
+	require.Equal(t, xai.DefaultCLIBaseURL+"/responses", probeRequest.URL.String())
+	require.Equal(t, "Bearer access-token", probeRequest.Header.Get("Authorization"))
+	require.NotContains(t, string(probeBody), `"store"`)
+	require.True(t, repo.hasUpdate(42))
+}
+
+func TestGrokOAuthHandlerCapabilitiesDefaultPasswordAuthOff(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oauthService := service.NewGrokOAuthService(nil, nil)
+	defer oauthService.Stop()
+	handler := NewGrokOAuthHandler(oauthService, nil, nil, nil)
+
+	router := gin.New()
+	router.GET("/api/v1/admin/grok/oauth/capabilities", handler.GetCapabilities)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/admin/grok/oauth/capabilities", nil)
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"password_auth_enabled":false`)
+}
+
+func TestGrokOAuthHandlerPasswordDisabledRejectsBeforeParsingSensitiveBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oauthService := service.NewGrokOAuthService(nil, nil)
+	defer oauthService.Stop()
+	handler := NewGrokOAuthHandler(oauthService, nil, nil, nil)
+
+	router := gin.New()
+	router.POST("/api/v1/admin/grok/oauth/password", handler.AuthorizePassword)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/admin/grok/oauth/password",
+		strings.NewReader(`{"email":"admin@example.com","password":"password-secret"`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusForbidden, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"reason":"GROK_OAUTH_PASSWORD_AUTH_DISABLED"`)
+	require.NotContains(t, recorder.Body.String(), "password-secret")
 }
 
 func TestGrokOAuthHandlerResetQuotaReturnsUnsupported(t *testing.T) {
@@ -220,4 +298,59 @@ func TestGrokSSOImportCredentialsUsesBuiltDefaultWhenRequestHasNoBaseURL(t *test
 	credentials = grokSSOImportCredentials(built, map[string]any{"base_url": "   "})
 	require.Equal(t, xai.DefaultCLIBaseURL, credentials["base_url"])
 	require.Equal(t, "at-1", credentials["access_token"])
+}
+
+func TestGrokSSOImportCredentialsRejectsRequestSecretsAndUnknownFields(t *testing.T) {
+	built := map[string]any{
+		"access_token":  "built-access-token",
+		"refresh_token": "built-refresh-token",
+		"base_url":      xai.DefaultCLIBaseURL,
+	}
+	requestCredentials := map[string]any{
+		"access_token":           "request-access-token",
+		"refresh_token":          "request-refresh-token",
+		"password":               "secret",
+		"sso_token":              "sso-secret",
+		"cookie":                 "cookie-secret",
+		"unknown_operator_field": "must-not-persist",
+		"base_url":               "https://relay.example.com/v1",
+		"model_mapping":          map[string]any{"grok-4": "grok-4-fast"},
+		"custom_headers":         map[string]any{"X-Relay": "enabled"},
+	}
+
+	credentials := grokSSOImportCredentials(built, requestCredentials)
+
+	require.Equal(t, "built-access-token", credentials["access_token"])
+	require.Equal(t, "built-refresh-token", credentials["refresh_token"])
+	require.Equal(t, "https://relay.example.com/v1", credentials["base_url"])
+	require.Equal(t, requestCredentials["model_mapping"], credentials["model_mapping"])
+	require.Equal(t, requestCredentials["custom_headers"], credentials["custom_headers"])
+	for _, key := range []string{
+		"password",
+		"sso_token",
+		"cookie",
+		"unknown_operator_field",
+	} {
+		require.NotContains(t, credentials, key)
+	}
+}
+
+func TestGrokSSOImportCredentialsSanitizesConvertedCredentialResidue(t *testing.T) {
+	built := map[string]any{
+		"access_token":      "built-access-token",
+		"refresh_token":     "built-refresh-token",
+		"password":          "must-not-persist",
+		"sso":               "must-not-persist",
+		"sso-rw":            "must-not-persist",
+		"clearTextPassword": "must-not-persist",
+		"cookie":            "must-not-persist",
+	}
+
+	credentials := grokSSOImportCredentials(built, nil)
+
+	require.Equal(t, "built-access-token", credentials["access_token"])
+	require.Equal(t, "built-refresh-token", credentials["refresh_token"])
+	for _, key := range []string{"password", "sso", "sso-rw", "clearTextPassword", "cookie"} {
+		require.NotContains(t, credentials, key)
+	}
 }

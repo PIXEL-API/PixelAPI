@@ -79,7 +79,7 @@
             <button @click="showExportDataDialog = true" class="btn btn-secondary">
               {{ selectedCount > 0 ? t('admin.proxies.dataExportSelected') : t('admin.proxies.dataExport') }}
             </button>
-            <button @click="showCreateModal = true" class="btn btn-primary">
+            <button @click="openCreateModal" class="btn btn-primary">
               <Icon name="plus" size="md" class="mr-2" />
               {{ t('admin.proxies.createProxy') }}
             </button>
@@ -257,6 +257,16 @@
             </div>
           </template>
 
+          <template #cell-expiry="{ row }">
+            <span v-if="!row.expires_at" class="text-sm text-gray-400">
+              {{ t('admin.proxies.neverExpires') }}
+            </span>
+            <div v-else class="flex flex-col gap-1 text-xs">
+              <span class="text-gray-700 dark:text-gray-200">{{ formatDateTime(row.expires_at) }}</span>
+              <span :class="expiryBadgeClass(row)">{{ expiryLabel(row) }}</span>
+            </div>
+          </template>
+
           <template #cell-status="{ value }">
             <span :class="['badge', value === 'active' ? 'badge-success' : 'badge-danger']">
               {{ t('admin.accounts.status.' + value) }}
@@ -343,7 +353,7 @@
               :title="t('admin.proxies.noProxiesYet')"
               :description="t('admin.proxies.createFirstProxy')"
               :action-text="t('admin.proxies.createProxy')"
-              @action="showCreateModal = true"
+              @action="openCreateModal"
             />
           </template>
         </DataTable>
@@ -585,6 +595,56 @@
           </div>
           <p class="input-hint mt-2">{{ t('admin.proxies.ownerHint') }}</p>
         </div>
+
+        <fieldset class="space-y-4 rounded-lg border border-gray-200 p-4 dark:border-dark-600">
+          <legend class="px-1 text-sm font-semibold text-gray-900 dark:text-white">
+            {{ t('admin.proxies.lifecycleTitle') }}
+          </legend>
+          <div>
+            <label class="input-label">{{ t('admin.proxies.expiresAt') }}</label>
+            <Select v-model="createForm.expiry_mode" :options="createExpiryModeOptions" />
+            <input
+              v-if="createForm.expiry_mode === 'set'"
+              v-model="createForm.expires_at"
+              type="datetime-local"
+              class="input mt-2"
+              :aria-label="t('admin.proxies.expiresAt')"
+              required
+            />
+            <p class="input-hint mt-2">{{ t('admin.proxies.expiresAtHint') }}</p>
+          </div>
+          <div>
+            <label for="create-proxy-expiry-warn-days" class="input-label">
+              {{ t('admin.proxies.expiryWarnDays') }}
+            </label>
+            <input
+              id="create-proxy-expiry-warn-days"
+              v-model.number="createForm.expiry_warn_days"
+              type="number"
+              min="0"
+              step="1"
+              class="input"
+            />
+            <p class="input-hint mt-2">{{ t('admin.proxies.expiryWarnDaysHint') }}</p>
+          </div>
+          <div>
+            <label class="input-label">{{ t('admin.proxies.fallbackMode') }}</label>
+            <Select v-model="createForm.fallback_mode" :options="fallbackModeOptions" />
+            <p class="input-hint mt-2">{{ t('admin.proxies.fallbackModeHint') }}</p>
+          </div>
+          <div v-if="createForm.fallback_mode === 'proxy'">
+            <label class="input-label">{{ t('admin.proxies.backupProxy') }}</label>
+            <Select
+              v-model="createForm.backup_proxy_id"
+              :options="backupProxyOptions(undefined, createForm.platform, createForm.required_account_level)"
+              :disabled="backupProxiesLoading"
+              :placeholder="backupProxiesLoading ? t('common.loading') : t('admin.proxies.backupProxyPlaceholder')"
+              :empty-text="t('admin.proxies.backupProxyEmpty')"
+              searchable
+            />
+            <p class="input-hint mt-2">{{ t('admin.proxies.backupProxyHint') }}</p>
+          </div>
+        </fieldset>
 
       </form>
 
@@ -878,9 +938,66 @@
           </div>
           <p class="input-hint mt-2">{{ t('admin.proxies.ownerHint') }}</p>
         </div>
+        <fieldset class="space-y-4 rounded-lg border border-gray-200 p-4 dark:border-dark-600">
+          <legend class="px-1 text-sm font-semibold text-gray-900 dark:text-white">
+            {{ t('admin.proxies.lifecycleTitle') }}
+          </legend>
+          <div>
+            <label class="input-label">{{ t('admin.proxies.expiresAt') }}</label>
+            <Select v-model="editForm.expiry_mode" :options="editExpiryModeOptions" />
+            <input
+              v-if="editForm.expiry_mode === 'set'"
+              v-model="editForm.expires_at"
+              type="datetime-local"
+              class="input mt-2"
+              :aria-label="t('admin.proxies.expiresAt')"
+              required
+            />
+            <p class="input-hint mt-2">
+              {{ editForm.expiry_mode === 'keep' && editingProxy?.expires_at
+                ? t('admin.proxies.expiresAtCurrent', { time: formatDateTime(editingProxy.expires_at) })
+                : t('admin.proxies.expiresAtEditHint') }}
+            </p>
+          </div>
+          <div>
+            <label for="edit-proxy-expiry-warn-days" class="input-label">
+              {{ t('admin.proxies.expiryWarnDays') }}
+            </label>
+            <input
+              id="edit-proxy-expiry-warn-days"
+              v-model.number="editForm.expiry_warn_days"
+              type="number"
+              min="0"
+              step="1"
+              class="input"
+            />
+            <p class="input-hint mt-2">{{ t('admin.proxies.expiryWarnDaysHint') }}</p>
+          </div>
+          <div>
+            <label class="input-label">{{ t('admin.proxies.fallbackMode') }}</label>
+            <Select v-model="editForm.fallback_mode" :options="fallbackModeOptions" />
+            <p class="input-hint mt-2">{{ t('admin.proxies.fallbackModeHint') }}</p>
+          </div>
+          <div v-if="editForm.fallback_mode === 'proxy'">
+            <label class="input-label">{{ t('admin.proxies.backupProxy') }}</label>
+            <Select
+              v-model="editForm.backup_proxy_id"
+              :options="backupProxyOptions(editingProxy?.id, editForm.platform, editForm.required_account_level, editForm.backup_proxy_id)"
+              :disabled="backupProxiesLoading"
+              :placeholder="backupProxiesLoading ? t('common.loading') : t('admin.proxies.backupProxyPlaceholder')"
+              :empty-text="t('admin.proxies.backupProxyEmpty')"
+              searchable
+            />
+            <p class="input-hint mt-2">{{ t('admin.proxies.backupProxyHint') }}</p>
+          </div>
+        </fieldset>
         <div>
           <label class="input-label">{{ t('admin.proxies.status') }}</label>
-          <Select v-model="editForm.status" :options="editStatusOptions" />
+          <Select
+            v-model="editForm.status"
+            :options="editStatusOptions"
+            @change="editStatusDirty = true"
+          />
         </div>
 
       </form>
@@ -1091,7 +1208,15 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useAdminSettingsStore } from '@/stores/adminSettings'
 import { adminAPI } from '@/api/admin'
-import type { CreateProxyRequest, Proxy, ProxyAccountSummary, ProxyProtocol, ProxyQualityCheckResult } from '@/types'
+import type {
+  CreateProxyRequest,
+  Proxy,
+  ProxyAccountSummary,
+  ProxyFallbackMode,
+  ProxyProtocol,
+  ProxyQualityCheckResult,
+  UpdateProxyRequest
+} from '@/types'
 import type { SimpleUser } from '@/api/admin/usage'
 import type { Column } from '@/components/common/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -1109,6 +1234,13 @@ import { useClipboard } from '@/composables/useClipboard'
 import { useSwipeSelect } from '@/composables/useSwipeSelect'
 import { useTableSelection } from '@/composables/useTableSelection'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
+import { formatDateTime } from '@/utils/format'
+import {
+  dateTimeLocalToUnixSeconds,
+  proxyExpiryBadgeClass,
+  proxyExpiryLabelKey,
+  toDateTimeLocalValue
+} from '@/utils/proxyExpiry'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -1144,6 +1276,7 @@ const columns = computed<Column[]>(() => [
   { key: 'location', label: t('admin.proxies.columns.location'), sortable: false },
   { key: 'account_count', label: t('admin.proxies.columns.accounts'), sortable: true },
   { key: 'latency', label: t('admin.proxies.columns.latency'), sortable: false },
+  { key: 'expiry', label: t('admin.proxies.columns.expiry'), sortable: true },
   { key: 'status', label: t('admin.proxies.columns.status'), sortable: true },
   { key: 'actions', label: t('admin.proxies.columns.actions'), sortable: false }
 ])
@@ -1160,7 +1293,8 @@ const protocolOptions = computed(() => [
 const statusOptions = computed(() => [
   { value: '', label: t('admin.proxies.allStatus') },
   { value: 'active', label: t('admin.accounts.status.active') },
-  { value: 'inactive', label: t('admin.accounts.status.inactive') }
+  { value: 'inactive', label: t('admin.accounts.status.inactive') },
+  { value: 'expired', label: t('admin.accounts.status.expired') }
 ])
 
 // Form options
@@ -1174,6 +1308,23 @@ const protocolSelectOptions = computed(() => [
 const editStatusOptions = computed(() => [
   { value: 'active', label: t('admin.accounts.status.active') },
   { value: 'inactive', label: t('admin.accounts.status.inactive') }
+])
+
+const fallbackModeOptions = computed(() => [
+  { value: 'none', label: t('admin.proxies.fallbackNone') },
+  { value: 'direct', label: t('admin.proxies.fallbackDirect') },
+  { value: 'proxy', label: t('admin.proxies.fallbackProxy') }
+])
+
+const createExpiryModeOptions = computed(() => [
+  { value: 'none', label: t('admin.proxies.expiryModeNone') },
+  { value: 'set', label: t('admin.proxies.expiryModeSet') }
+])
+
+const editExpiryModeOptions = computed(() => [
+  { value: 'keep', label: t('admin.proxies.expiryModeKeep') },
+  { value: 'clear', label: t('admin.proxies.expiryModeClear') },
+  { value: 'set', label: t('admin.proxies.expiryModeSet') }
 ])
 
 const proxies = ref<Proxy[]>([])
@@ -1201,6 +1352,7 @@ const createPasswordVisible = ref(false)
 const showEditModal = ref(false)
 const editPasswordVisible = ref(false)
 const editPasswordDirty = ref(false)
+const editStatusDirty = ref(false)
 const showImportData = ref(false)
 const showDeleteDialog = ref(false)
 const showBatchDeleteDialog = ref(false)
@@ -1242,6 +1394,8 @@ const deletingProxy = ref<Proxy | null>(null)
 const showQualityReportDialog = ref(false)
 const qualityReportProxy = ref<Proxy | null>(null)
 const qualityReport = ref<ProxyQualityCheckResult | null>(null)
+const backupProxyCandidates = ref<Proxy[]>([])
+const backupProxiesLoading = ref(false)
 
 // Batch import state
 const createMode = ref<'standard' | 'batch'>('standard')
@@ -1269,7 +1423,12 @@ const createForm = reactive({
   password: '',
   platform: '',
   required_account_level: '',
-  max_accounts: 0
+  max_accounts: 0,
+  expiry_mode: 'none' as 'none' | 'set',
+  expires_at: '',
+  fallback_mode: 'none' as ProxyFallbackMode,
+  backup_proxy_id: null as number | null,
+  expiry_warn_days: 7
 })
 
 const editForm = reactive({
@@ -1282,7 +1441,12 @@ const editForm = reactive({
   platform: '',
   required_account_level: '',
   max_accounts: 0,
-  status: 'active' as 'active' | 'inactive'
+  status: 'active' as 'active' | 'inactive',
+  expiry_mode: 'keep' as 'keep' | 'clear' | 'set',
+  expires_at: '',
+  fallback_mode: 'none' as ProxyFallbackMode,
+  backup_proxy_id: null as number | null,
+  expiry_warn_days: 7
 })
 
 // ── 归属用户选择（创建/编辑弹窗共用；BaseDialog 使用 v-if，两个弹窗不会同时挂载）──
@@ -1389,7 +1553,58 @@ const proxyErrorMessage = (error: any, fallbackKey: string): string => {
   const reason = typeof error?.reason === 'string' ? error.reason : ''
   if (reason === 'PROXY_OWNER_CONFLICT') return t('admin.proxies.ownerConflict')
   if (reason === 'PROXY_OWNER_NOT_FOUND') return t('admin.proxies.ownerNotFound')
+  if (typeof error?.message === 'string' && error.message.trim()) return error.message
   return t(fallbackKey)
+}
+
+const loadBackupProxyCandidates = async () => {
+  if (backupProxiesLoading.value) return
+  backupProxiesLoading.value = true
+  try {
+    backupProxyCandidates.value = await adminAPI.proxies.getAllWithCount()
+  } catch (error) {
+    backupProxyCandidates.value = []
+    appStore.showError(t('admin.proxies.backupProxyLoadFailed'))
+    console.error('Failed to load backup proxy candidates:', error)
+  } finally {
+    backupProxiesLoading.value = false
+  }
+}
+
+const backupProxyOptions = (
+  excludeID: number | undefined,
+  sourcePlatform: string,
+  sourceAccountLevel: string,
+  currentBackupID?: number | null
+) => {
+  const sourceOwnerID = selectedOwner.value?.id ?? 0
+  const allCandidates = new Map<number, Proxy>()
+  for (const proxy of [...backupProxyCandidates.value, ...proxies.value]) {
+    allCandidates.set(proxy.id, proxy)
+  }
+
+  const options = [...allCandidates.values()]
+    .filter((proxy) => proxy.id !== excludeID && proxy.status === 'active')
+    .filter((proxy) => (proxy.owner_user_id ?? 0) === sourceOwnerID)
+    .filter((proxy) =>
+      sourcePlatform ? !proxy.platform || proxy.platform === sourcePlatform : !proxy.platform
+    )
+    .filter((proxy) =>
+      sourceAccountLevel
+        ? !proxy.required_account_level || proxy.required_account_level === sourceAccountLevel
+        : !proxy.required_account_level
+    )
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .map((proxy) => ({ value: proxy.id, label: proxy.name }))
+
+  if (currentBackupID && !options.some((option) => option.value === currentBackupID)) {
+    const current = allCandidates.get(currentBackupID)
+    options.unshift({
+      value: currentBackupID,
+      label: current?.name ?? t('admin.proxies.backupProxyById', { id: currentBackupID })
+    })
+  }
+  return options
 }
 
 const closeOwnerDropdownOnOutsideClick = (event: MouseEvent) => {
@@ -1424,7 +1639,7 @@ const toggleSelectAllVisible = (event: Event) => {
 
 const buildProxyQueryFilters = () => ({
   protocol: filters.protocol || undefined,
-  status: (filters.status || undefined) as 'active' | 'inactive' | undefined,
+  status: (filters.status || undefined) as 'active' | 'inactive' | 'expired' | undefined,
   search: searchQuery.value || undefined,
   sort_by: sortState.sort_by,
   sort_order: sortState.sort_order
@@ -1450,6 +1665,48 @@ const validateMaxAccounts = (value: unknown, currentCount = 0): number | null =>
   }
   return maxAccounts
 }
+
+const validateExpiryWarnDays = (value: unknown): number | null => {
+  const warnDays = Number(value)
+  if (!Number.isInteger(warnDays) || warnDays < 0) {
+    appStore.showError(t('admin.proxies.expiryWarnDaysInvalid'))
+    return null
+  }
+  return warnDays
+}
+
+const parseRequiredExpiry = (value: string): number | null => {
+  try {
+    return dateTimeLocalToUnixSeconds(value)
+  } catch {
+    appStore.showError(t('admin.proxies.expiresAtInvalid'))
+    return null
+  }
+}
+
+const validateBackupProxy = (
+  mode: ProxyFallbackMode,
+  backupProxyID: number | null
+): number | null | undefined => {
+  if (mode !== 'proxy') return null
+  if (!Number.isInteger(backupProxyID) || (backupProxyID ?? 0) <= 0) {
+    appStore.showError(t('admin.proxies.backupProxyRequired'))
+    return undefined
+  }
+  return backupProxyID
+}
+
+const expiryLabel = (proxy: Proxy): string => {
+  const label = proxyExpiryLabelKey(
+    proxy.expires_at,
+    proxy.status,
+    proxy.expiry_warn_days
+  )
+  return label.params ? t(label.key, label.params) : t(label.key)
+}
+
+const expiryBadgeClass = (proxy: Proxy): string =>
+  proxyExpiryBadgeClass(proxy.expires_at, proxy.status, proxy.expiry_warn_days)
 
 const proxyMaxAccounts = (proxy: Proxy): number => proxy.max_accounts || 0
 
@@ -1551,6 +1808,11 @@ const handleSort = (key: string, order: 'asc' | 'desc') => {
   loadProxies()
 }
 
+const openCreateModal = () => {
+  showCreateModal.value = true
+  void loadBackupProxyCandidates()
+}
+
 const closeCreateModal = () => {
   showCreateModal.value = false
   createMode.value = 'standard'
@@ -1563,6 +1825,11 @@ const closeCreateModal = () => {
   createForm.platform = ''
   createForm.required_account_level = ''
   createForm.max_accounts = 0
+  createForm.expiry_mode = 'none'
+  createForm.expires_at = ''
+  createForm.fallback_mode = 'none'
+  createForm.backup_proxy_id = null
+  createForm.expiry_warn_days = 7
   createPasswordVisible.value = false
   resetOwnerSelect()
   batchInput.value = ''
@@ -1682,6 +1949,17 @@ const handleCreateProxy = async () => {
   }
   const maxAccounts = validateMaxAccounts(createForm.max_accounts)
   if (maxAccounts === null) return
+  const expiryWarnDays = validateExpiryWarnDays(createForm.expiry_warn_days)
+  if (expiryWarnDays === null) return
+  const expiresAt = createForm.expiry_mode === 'set'
+    ? parseRequiredExpiry(createForm.expires_at)
+    : null
+  if (createForm.expiry_mode === 'set' && expiresAt === null) return
+  const backupProxyID = validateBackupProxy(
+    createForm.fallback_mode,
+    createForm.backup_proxy_id
+  )
+  if (backupProxyID === undefined) return
   submitting.value = true
   try {
     const createData: CreateProxyRequest = {
@@ -1693,7 +1971,11 @@ const handleCreateProxy = async () => {
       password: createForm.password.trim() || null,
       platform: createForm.platform,
       required_account_level: createForm.required_account_level,
-      max_accounts: maxAccounts
+      max_accounts: maxAccounts,
+      expires_at: expiresAt,
+      fallback_mode: createForm.fallback_mode,
+      backup_proxy_id: backupProxyID,
+      expiry_warn_days: expiryWarnDays
     }
     // 归属用户仅在选择后传递；省略表示平台代理（所有用户可见）。
     if (selectedOwner.value && selectedOwner.value.id > 0) {
@@ -1722,9 +2004,15 @@ const handleEdit = (proxy: Proxy) => {
   editForm.platform = proxy.platform || ''
   editForm.required_account_level = proxy.required_account_level || ''
   editForm.max_accounts = proxy.max_accounts || 0
-  editForm.status = proxy.status
+  editForm.status = proxy.status === 'expired' ? 'inactive' : proxy.status
+  editForm.expiry_mode = 'keep'
+  editForm.expires_at = toDateTimeLocalValue(proxy.expires_at)
+  editForm.fallback_mode = proxy.fallback_mode || 'none'
+  editForm.backup_proxy_id = proxy.backup_proxy_id ?? null
+  editForm.expiry_warn_days = proxy.expiry_warn_days ?? 7
   editPasswordVisible.value = false
   editPasswordDirty.value = false
+  editStatusDirty.value = false
   resetOwnerSelect()
   editOriginalOwnerId = proxy.owner_user_id ?? 0
   // 编辑时回显已有归属（owner_username/owner_email 由列表接口返回）。
@@ -1735,6 +2023,7 @@ const handleEdit = (proxy: Proxy) => {
     }
   }
   showEditModal.value = true
+  void loadBackupProxyCandidates()
 }
 
 const closeEditModal = () => {
@@ -1742,6 +2031,7 @@ const closeEditModal = () => {
   editingProxy.value = null
   editPasswordVisible.value = false
   editPasswordDirty.value = false
+  editStatusDirty.value = false
   resetOwnerSelect()
 }
 
@@ -1764,10 +2054,18 @@ const handleUpdateProxy = async () => {
     editingProxy.value.account_count || 0
   )
   if (maxAccounts === null) return
+  const expiryWarnDays = validateExpiryWarnDays(editForm.expiry_warn_days)
+  if (expiryWarnDays === null) return
+  const backupProxyID = validateBackupProxy(editForm.fallback_mode, editForm.backup_proxy_id)
+  if (backupProxyID === undefined) return
+  const expiresAt = editForm.expiry_mode === 'set'
+    ? parseRequiredExpiry(editForm.expires_at)
+    : null
+  if (editForm.expiry_mode === 'set' && expiresAt === null) return
 
   submitting.value = true
   try {
-    const updateData: any = {
+    const updateData: UpdateProxyRequest = {
       name: editForm.name.trim(),
       protocol: editForm.protocol,
       host: editForm.host.trim(),
@@ -1775,8 +2073,7 @@ const handleUpdateProxy = async () => {
       username: editForm.username.trim() || null,
       platform: editForm.platform,
       required_account_level: editForm.required_account_level,
-      max_accounts: maxAccounts,
-      status: editForm.status
+      max_accounts: maxAccounts
     }
 
     // 归属脏跟踪：仅在归属发生变化时携带 owner_user_id
@@ -1789,6 +2086,31 @@ const handleUpdateProxy = async () => {
     // Only include password if user actually modified the field
     if (editPasswordDirty.value) {
       updateData.password = editForm.password.trim() || null
+    }
+
+    // `expired` is a server lifecycle state, not an editable status option. A normal
+    // metadata edit must not silently rewrite it to inactive.
+    if (editingProxy.value.status !== 'expired' || editStatusDirty.value) {
+      updateData.status = editForm.status
+    }
+
+    // Nullable expiry is tri-state in the update contract: omitted=keep, null=clear, timestamp=set.
+    if (editForm.expiry_mode === 'clear') {
+      updateData.expires_at = null
+    } else if (editForm.expiry_mode === 'set') {
+      updateData.expires_at = expiresAt
+    }
+
+    const originalFallbackMode = editingProxy.value.fallback_mode || 'none'
+    const originalBackupProxyID = editingProxy.value.backup_proxy_id ?? null
+    if (editForm.fallback_mode !== originalFallbackMode) {
+      updateData.fallback_mode = editForm.fallback_mode
+    }
+    if (backupProxyID !== originalBackupProxyID) {
+      updateData.backup_proxy_id = backupProxyID
+    }
+    if (expiryWarnDays !== (editingProxy.value.expiry_warn_days ?? 7)) {
+      updateData.expiry_warn_days = expiryWarnDays
     }
 
     await adminAPI.proxies.update(editingProxy.value.id, updateData)

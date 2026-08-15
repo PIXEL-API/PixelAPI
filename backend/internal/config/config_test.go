@@ -568,6 +568,44 @@ func TestLoadDefaultOpenAIImageTimeoutConfig(t *testing.T) {
 	require.Equal(t, 180, cfg.Gateway.OpenAIHighEffortFirstOutputTimeoutSeconds)
 	require.Equal(t, 1800, cfg.Gateway.ImageNonstreamTotalTimeoutSeconds)
 	require.Equal(t, DefaultUpstreamResponseReadMaxBytes, cfg.Gateway.UpstreamResponseReadMaxBytes)
+	require.False(t, cfg.Gateway.Grok.PasswordAuthEnabled)
+	require.True(t, cfg.Gateway.Grok.FreeQuotaSoftGateEnabled)
+	require.Equal(t, int64(500_000), cfg.Gateway.Grok.FreeQuotaTokenLimit)
+	require.Equal(t, 95, cfg.Gateway.Grok.FreeQuotaSoftGatePercent)
+	require.Equal(t, 24, cfg.Gateway.Grok.FreeQuotaWindowHours)
+	require.Equal(t, 60, cfg.Gateway.Grok.FreeQuotaStatsCacheSeconds)
+}
+
+func TestValidateGrokFreeQuotaSoftGateConfig(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	tests := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr string
+	}{
+		{name: "token limit", mutate: func(c *Config) { c.Gateway.Grok.FreeQuotaTokenLimit = 0 }, wantErr: "gateway.grok.free_quota_token_limit"},
+		{name: "soft gate percent low", mutate: func(c *Config) { c.Gateway.Grok.FreeQuotaSoftGatePercent = 0 }, wantErr: "gateway.grok.free_quota_soft_gate_percent"},
+		{name: "soft gate percent high", mutate: func(c *Config) { c.Gateway.Grok.FreeQuotaSoftGatePercent = 101 }, wantErr: "gateway.grok.free_quota_soft_gate_percent"},
+		{name: "window hours", mutate: func(c *Config) { c.Gateway.Grok.FreeQuotaWindowHours = 0 }, wantErr: "gateway.grok.free_quota_window_hours"},
+		{name: "cache seconds", mutate: func(c *Config) { c.Gateway.Grok.FreeQuotaStatsCacheSeconds = -1 }, wantErr: "gateway.grok.free_quota_stats_cache_seconds"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := *cfg
+			tt.mutate(&candidate)
+			require.ErrorContains(t, candidate.Validate(), tt.wantErr)
+		})
+	}
+
+	disabled := *cfg
+	disabled.Gateway.Grok.FreeQuotaSoftGateEnabled = false
+	disabled.Gateway.Grok.FreeQuotaTokenLimit = 0
+	disabled.Gateway.Grok.FreeQuotaSoftGatePercent = 0
+	disabled.Gateway.Grok.FreeQuotaWindowHours = 0
+	require.NoError(t, disabled.Validate(), "disabled soft gate must not constrain unused threshold values")
 }
 
 func TestLoadDefaultOpenAIWSConfig(t *testing.T) {

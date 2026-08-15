@@ -5,8 +5,9 @@ import { nextTick } from 'vue'
 import type { Proxy } from '@/types'
 import ProxiesView from '../ProxiesView.vue'
 
-const { listProxies, createProxy, updateProxy, searchUsers, showError } = vi.hoisted(() => ({
+const { listProxies, getAllProxies, createProxy, updateProxy, searchUsers, showError } = vi.hoisted(() => ({
   listProxies: vi.fn(),
+  getAllProxies: vi.fn(),
   createProxy: vi.fn(),
   updateProxy: vi.fn(),
   searchUsers: vi.fn(),
@@ -17,6 +18,7 @@ vi.mock('@/api/admin', () => ({
   adminAPI: {
     proxies: {
       list: listProxies,
+      getAllWithCount: getAllProxies,
       create: createProxy,
       update: updateProxy,
       delete: vi.fn(),
@@ -77,6 +79,10 @@ const createProxyRow = (overrides: Partial<Proxy> = {}): Proxy => ({
   status: 'active',
   max_accounts: 0,
   account_count: 0,
+  expires_at: null,
+  fallback_mode: 'none',
+  backup_proxy_id: null,
+  expiry_warn_days: 7,
   created_at: '2026-08-01T00:00:00Z',
   updated_at: '2026-08-01T00:00:00Z',
   ...overrides
@@ -131,6 +137,7 @@ describe('admin ProxiesView owner user', () => {
     localStorage.clear()
 
     listProxies.mockReset()
+    getAllProxies.mockReset()
     createProxy.mockReset()
     updateProxy.mockReset()
     searchUsers.mockReset()
@@ -152,6 +159,7 @@ describe('admin ProxiesView owner user', () => {
       page_size: 20,
       pages: 1
     })
+    getAllProxies.mockResolvedValue([])
     createProxy.mockResolvedValue(createProxyRow({ id: 3 }))
     updateProxy.mockResolvedValue(createProxyRow({ id: 2 }))
     searchUsers.mockResolvedValue([{ id: 7, email: 'alice@example.com', deleted: false }])
@@ -197,6 +205,10 @@ describe('admin ProxiesView owner user', () => {
     await flushPromises()
     expect(updateProxy).toHaveBeenCalledTimes(1)
     expect(updateProxy.mock.calls[0][1]).not.toHaveProperty('owner_user_id')
+    expect(updateProxy.mock.calls[0][1]).not.toHaveProperty('expires_at')
+    expect(updateProxy.mock.calls[0][1]).not.toHaveProperty('fallback_mode')
+    expect(updateProxy.mock.calls[0][1]).not.toHaveProperty('backup_proxy_id')
+    expect(updateProxy.mock.calls[0][1]).not.toHaveProperty('expiry_warn_days')
 
     // Re-open, clear the owner, save: owner_user_id must be 0 (reset to platform proxy).
     await findEditButton()!.trigger('click')
@@ -206,6 +218,39 @@ describe('admin ProxiesView owner user', () => {
     await wrapper.get('form#edit-proxy-form').trigger('submit')
     await flushPromises()
     expect(updateProxy).toHaveBeenLastCalledWith(2, expect.objectContaining({ owner_user_id: 0 }))
+  })
+
+  it('does not rewrite an expired lifecycle status during an unrelated edit', async () => {
+    listProxies.mockResolvedValue({
+      items: [
+        createProxyRow({
+          id: 5,
+          name: 'expired-proxy',
+          status: 'expired',
+          expires_at: '2026-08-01T00:00:00Z'
+        })
+      ],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+    const editButton = wrapper
+      .get('[data-test="row-5"] [data-test="actions-cell"]')
+      .findAll('button')
+      .find((button) => button.text().includes('common.edit'))
+
+    await editButton!.trigger('click')
+    await wrapper.get('form#edit-proxy-form').trigger('submit')
+    await flushPromises()
+
+    expect(updateProxy).toHaveBeenCalledWith(
+      5,
+      expect.not.objectContaining({ status: expect.anything() })
+    )
   })
 
   it('hides deleted users from the owner search results', async () => {
@@ -338,5 +383,11 @@ describe('admin ProxiesView owner user', () => {
     await flushPromises()
     expect(createProxy).toHaveBeenCalledTimes(2)
     expect(createProxy.mock.calls[1][0]).not.toHaveProperty('owner_user_id')
+    expect(createProxy.mock.calls[1][0]).toMatchObject({
+      expires_at: null,
+      fallback_mode: 'none',
+      backup_proxy_id: null,
+      expiry_warn_days: 7
+    })
   })
 })

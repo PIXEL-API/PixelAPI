@@ -54,6 +54,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 
 	billingModel := resolveOpenAIForwardModel(account, normalizedModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
+	if account.Platform == PlatformGrok {
+		ctx = withGrokRequestedModel(ctx, upstreamModel)
+	}
 	compatGuardEnabled := shouldAutoInjectPromptCacheKeyForCompat(upstreamModel)
 	compatReplayTrimmed := false
 	if compatGuardEnabled && account.Type != AccountTypeOAuth {
@@ -282,6 +285,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	upstreamReq = upstreamReq.WithContext(WithHTTPUpstreamProfile(upstreamReq.Context(), HTTPUpstreamProfileOpenAI))
 	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 	if err != nil {
+		if account.Platform == PlatformGrok {
+			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
+		}
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
 		setOpsUpstreamError(c, 0, safeErr, "")
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
@@ -318,6 +324,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 		shouldFailover := s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, respBody)
+		if account.Platform == PlatformGrok {
+			shouldFailover = s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody)
+		}
 		// 命中「临时不可调度」规则的错误此前会被直接回给客户端：账号既没被标记，也没换号重试，
 		// 下一发请求还会落到同一个账号。这里在未提交响应、尚未判定 failover 时补一次策略检查，
 		// 命中即转为 failover。CheckErrorPolicy 自身已完成标记，故下面不再重复走错误处理。
@@ -346,7 +355,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 				Message:            upstreamMsg,
 				Detail:             upstreamDetail,
 			})
-			if !tempUnscheduled {
+			if account.Platform == PlatformGrok {
+				s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
+			} else if !tempUnscheduled {
 				s.handleOpenAIAccountUpstreamErrorForModel(ctx, account, originalModel, resp.StatusCode, resp.Header, respBody)
 			}
 			return nil, newOpenAIUpstreamFailoverError(
@@ -360,9 +371,25 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		// Non-failover error: return Anthropic-formatted error to client
 		return s.handleAnthropicErrorResponse(resp, c, account, originalModel)
 	}
+	if account.Platform == PlatformGrok {
+		s.updateGrokUsageFromResponse(ctx, account, resp.Header, resp.StatusCode)
+		configuredIdleSeconds := 0
+		if s.cfg != nil {
+			configuredIdleSeconds = s.cfg.Gateway.StreamDataIntervalTimeout
+		}
+		streamIdle := resolveGrokStreamIdleTimeout(configuredIdleSeconds)
+		resp.Body = newGrokStreamIdleReadCloser(resp.Body, streamIdle, func() {
+			s.tempUnscheduleGrok(ctx, account, grokStreamIdleCooldown, "grok stream idle timeout")
+		})
+	}
 
 	// 9. Handle normal response
 	// Upstream is always streaming; choose response format based on client preference.
+	maxLineSize := defaultMaxLineSize
+	if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
+		maxLineSize = s.cfg.Gateway.MaxLineSize
+	}
+	resp.Body = newGrokResponsesBillingPingFilterBody(resp.Body, account, maxLineSize)
 	var result *OpenAIForwardResult
 	var handleErr error
 	if clientStream {
@@ -477,6 +504,13 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 				zap.String("request_id", requestID),
 			)
 		}
+		if errors.Is(err, errGrokStreamIdleTimeout) && !c.Writer.Written() {
+			configuredSeconds := 0
+			if s.cfg != nil {
+				configuredSeconds = s.cfg.Gateway.StreamDataIntervalTimeout
+			}
+			return nil, grokStreamIdleFailoverError(account, resolveGrokStreamIdleTimeout(configuredSeconds))
+		}
 	}
 
 	if finalResponse == nil {
@@ -541,6 +575,14 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 	result.UpstreamResponseModelConflict = observedUpstreamResponseModelConflict(c)
 	result.ResponseServiceTier = finalResponse.ServiceTier
 	result.Stream = false
+	// Grok /v1/messages uses the Responses upstream. Preserve the completed
+	// native-search count so the shared usage layer can add the search surcharge
+	// instead of silently recording token cost only.
+	if account != nil && account.IsGrok() {
+		if responseBody, marshalErr := json.Marshal(finalResponse); marshalErr == nil {
+			result.SearchCount = countGrokNativeSearchCallsFromJSONBytes(responseBody)
+		}
+	}
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -586,6 +628,9 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	var firstTokenMs *int
 	var responseServiceTier string
 	var responseID string
+	searchCount := 0
+	streamSearchSeen := make(map[string]struct{})
+	countSearch := account != nil && account.IsGrok()
 	firstChunk := true
 	sawSuccessTerminal := false
 	var terminalErr error
@@ -627,6 +672,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		result.UpstreamResponseModelConflict = observedUpstreamResponseModelConflict(c)
 		result.ResponseServiceTier = responseServiceTier
 		result.Stream = true
+		result.SearchCount = searchCount
 		return result
 	}
 
@@ -640,6 +686,9 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		}
 
 		payloadBytes := []byte(payload)
+		if countSearch {
+			searchCount += countGrokNativeSearchCallsInSSEDataDedup(payloadBytes, streamSearchSeen)
+		}
 		observer.ObserveOpenAI(payloadBytes, strings.TrimSpace(gjson.GetBytes(payloadBytes, "type").String()))
 		billingUsageObservation.observePayload(payloadBytes)
 		var event apicompat.ResponsesStreamEvent
@@ -780,6 +829,23 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		}
 		return resultWithUsage(), nil
 	}
+	streamReadError := func(err error) error {
+		if errors.Is(err, errGrokStreamIdleTimeout) {
+			configuredSeconds := 0
+			if s.cfg != nil {
+				configuredSeconds = s.cfg.Gateway.StreamDataIntervalTimeout
+			}
+			idle := resolveGrokStreamIdleTimeout(configuredSeconds)
+			if !c.Writer.Written() {
+				return grokStreamIdleFailoverError(account, idle)
+			}
+			if !clientDisconnected {
+				_ = writeAnthropicStreamError(c, "api_error", "Grok upstream stream timed out")
+			}
+			return fmt.Errorf("grok stream idle timeout after partial Anthropic output: %w", err)
+		}
+		return err
+	}
 
 	// handleScanErr logs scanner errors if meaningful.
 	handleScanErr := func(err error) {
@@ -810,6 +876,9 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			}
 		}
 		handleScanErr(scanner.Err())
+		if scanErr := scanner.Err(); scanErr != nil {
+			return resultWithUsage(), streamReadError(scanErr)
+		}
 		return finalizeStream()
 	}
 
@@ -854,7 +923,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			}
 			if ev.err != nil {
 				handleScanErr(ev.err)
-				return finalizeStream()
+				return resultWithUsage(), streamReadError(ev.err)
 			}
 			lastDataAt = time.Now()
 			line := ev.line

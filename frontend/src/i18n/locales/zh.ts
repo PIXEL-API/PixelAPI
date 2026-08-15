@@ -3981,17 +3981,51 @@ export default {
         title: "图片生成计费",
         description: "配置图片生成模型的图片生成价格，留空则使用默认价格",
       },
+      pricing: {
+        unconfiguredPlaceholder: "未配置",
+      },
       videoPricing: {
         title: "Grok 视频生成计费",
-        description: "按视频时长配置 USD/秒价格，留空使用服务端对应模型的默认价格",
+        description:
+          "按视频时长配置 USD/秒价格；模型族价格优先，其次使用旧分辨率兼容价，最后使用服务端模型默认价。填写 0 表示免费。",
         independentMultiplier: "使用独立视频倍率",
         videoMultiplier: "视频倍率",
         modeHint: "关闭独立倍率时沿用分组倍率",
-        finalPricePreview: "单价预览：{price}",
+        modelOverrides: "模型族价格",
+        modelOverridesHint:
+          "只需填写需要覆盖的模型与分辨率；留空继续使用下方兼容价或服务端默认价。",
+        models: {
+          grokImagineVideo: "Grok Imagine Video",
+          grokImagineVideo15: "Grok Imagine Video 1.5",
+        },
+        inheritPricePlaceholder: "继承兼容价",
+        legacyFallback: "旧分辨率兼容价",
+        legacyFallbackHint:
+          "用于未配置模型族价格的请求；留空时使用服务端对应模型的默认价。",
+        finalPricePreview: "兼容价预览：{price}",
         serverModelDefault: "使用服务端模型默认价",
         defaultPricePlaceholder: "服务端默认",
         invalidMultiplier: "视频倍率必须是大于 0 的有限数字",
         invalidPrice: "视频价格必须是大于或等于 0 的有限数字",
+        invalidModelPrice:
+          "模型族视频价格必须是大于或等于 0 的有限数字",
+      },
+      grokSearchPricing: {
+        title: "Grok 原生搜索计费",
+        pricePer1K: "每千次搜索价格（USD）",
+        hint:
+          "留空表示未配置，Grok 搜索能力不可用；填写 0 表示免费；实际扣费还会应用分组倍率。",
+        invalidPrice:
+          "Grok 搜索价格必须是大于或等于 0 的有限数字",
+      },
+      grokAudioPricing: {
+        title: "Grok 音频计费",
+        hint:
+          "每项留空均表示该音频能力未配置且不可用；填写 0 表示免费；实际扣费还会应用分组倍率。",
+        realtimePerMin: "Realtime（USD/分钟）",
+        ttsPerMillionChars: "TTS（USD/百万字符）",
+        sttPerHour: "STT（USD/小时）",
+        invalidPrice: "音频价格必须是大于或等于 0 的有限数字",
       },
       webSearchPricing: {
         title: "Codex 网页搜索按次计费",
@@ -5002,6 +5036,14 @@ export default {
       duplicateAccount: "安全复制账号",
       duplicateSuccess: "已创建暂停调度的账号“{name}”，请检查配置后再启用调度。",
       duplicateFailed: "复制账号失败",
+      fallbackActive: "代理已自动改投",
+      fallbackActiveTip: "原代理 {origin} 到期后，系统已按降级策略改投此账号。",
+      revertProxy: "回切原代理",
+      revertingProxy: "回切中...",
+      revertProxyTitle: "回切原代理",
+      revertProxyConfirm: "确定将账号“{name}”回切到原代理 {origin} 吗？系统会重新校验代理状态、可见范围和容量。",
+      revertProxySuccess: "账号已回切到原代理",
+      revertProxyFailed: "回切原代理失败",
       autoRefresh: "自动刷新",
       enableAutoRefresh: "启用自动刷新",
       refreshInterval5s: "5 秒",
@@ -5340,6 +5382,7 @@ export default {
       status: {
         active: "正常",
         inactive: "停用",
+        expired: "已到期",
         disabled: "已禁用",
         error: "错误",
         cooldown: "冷却中",
@@ -6083,6 +6126,30 @@ export default {
           refreshTokenAuth: "手动输入 RT",
           mobileRefreshTokenAuth: "手动输入 Mobile RT",
           accessTokenAuth: "手动输入 AT",
+          codexSessionAuth: "Codex OAuth auth.json / AT 导入",
+          codexSessionDesc:
+            "粘贴上游标准的 Codex OAuth auth.json、Access Token 或混合批量内容，并按第一步配置导入账号。",
+          codexSessionInputLabel: "Codex OAuth auth.json 或 Access Token",
+          codexSessionPlaceholder:
+            "支持 auth.json / JSON 数组 / JSON stream / 每行一个 Access Token",
+          codexSessionHint:
+            "该入口严格使用上游 Codex 导入语义；现有 RT、AT 和 PAT 入口保持不变。",
+          codexSessionImportAndCreate: "导入 Codex 账号",
+          codexSessionEmpty: "请输入 Codex auth.json 或 Access Token",
+          codexSessionImportFailed: "Codex 账号导入失败",
+          codexSessionImportSuccess:
+            "导入完成：新增 {created}，更新 {updated}，跳过 {skipped}",
+          codexSessionImportPartial:
+            "部分成功：新增 {created}，更新 {updated}，跳过 {skipped}，失败 {failed}",
+          agentIdentityAuth: "Agent Identity auth.json",
+          agentIdentityDesc:
+            "导入 Codex Agent Identity auth.json，不保存 OAuth Access Token 或 Refresh Token。",
+          agentIdentityInputLabel: "Agent Identity auth.json",
+          agentIdentityPlaceholder: "粘贴一个 Agent Identity auth.json 对象",
+          agentIdentityHint:
+            "文件必须使用 auth_mode=agentIdentity；每次上游请求都会动态签名。",
+          agentIdentityInvalid:
+            "请使用 auth_mode=agentIdentity 的 Codex auth.json。",
           codexPatAuth: "Codex Personal Access Token",
           codexPatDesc: "输入单个 Codex at- Personal Access Token，系统会先调用 OpenAI whoami 校验，再使用可信身份创建账号。",
           codexPatInputLabel: "Codex PAT",
@@ -6243,6 +6310,20 @@ export default {
           ssoCookiePlaceholder: "每行一个 SSO key\n支持多个，每行一个",
           ssoCookieHint:
             "每行一个 SSO key。多个 key 以 3 路并发导入，每批预计约 90 秒；必要时请使用相同地区的代理。",
+          emailPasswordAuth: "邮箱密码登录",
+          emailPasswordDesc:
+            "使用 xAI 账号邮箱和密码完成一次性授权。该能力默认关闭，仅管理员显式启用后可用。",
+          emailLabel: "xAI 账号邮箱",
+          emailPlaceholder: "name@example.com",
+          passwordLabel: "xAI 账号密码",
+          passwordPlaceholder: "请输入账号密码",
+          emailPasswordPrivacyHint:
+            "密码仅用于本次授权请求，不会写入账号凭证、Extra 或日志；中间 SSO Cookie 也不会持久化。",
+          authorizingPassword: "授权中...",
+          authorizePassword: "登录并完成授权",
+          emailPasswordRequired: "请输入邮箱和密码",
+          passwordAuthDisabled: "Grok 密码授权未启用",
+          failedToAuthorizePassword: "Grok 密码授权失败",
           convertingSSO: "转换中...",
           convertSSOAndCreate: "转换并创建账号",
           validating: "验证中...",
@@ -6250,6 +6331,8 @@ export default {
           pleaseEnterRefreshToken: "请输入 Refresh Token",
           failedToValidateRT: "验证 Refresh Token 失败",
           failedToConvertSSO: "Grok SSO 转换失败",
+          pleaseEnterSSOToken: "请输入 SSO Cookie",
+          failedToValidateSSO: "验证 Grok SSO Cookie 失败",
           errors: {
             GROK_OAUTH_SESSION_NOT_FOUND:
               "授权会话不存在或已过期，请重新生成授权链接后重试。",
@@ -6265,6 +6348,20 @@ export default {
               "当前没有可用于完成 Grok 授权的代理，请检查账号代理配置。",
             GROK_OAUTH_PROXY_NOT_FOUND:
               "未找到已配置的代理，请选择可用代理后重试。",
+            GROK_OAUTH_PASSWORD_AUTH_DISABLED:
+              "Grok 密码授权默认关闭，请先由管理员在服务端配置中显式启用。",
+            GROK_OAUTH_PASSWORD_CLIENT_UNAVAILABLE:
+              "Grok 密码授权客户端尚未完成配置。",
+            GROK_OAUTH_CAPTCHA_KEY_REQUIRED:
+              "Grok 密码授权需要配置验证码服务密钥。",
+            GROK_OAUTH_CAPTCHA_FAILED:
+              "验证码服务暂时不可用，请稍后重试。",
+            GROK_OAUTH_CAPTCHA_TIMEOUT:
+              "验证码处理超时，请稍后重试。",
+            GROK_OAUTH_PASSWORD_LOGIN_FAILED:
+              "xAI 密码登录失败，请检查账号、密码、代理和验证码服务配置。",
+            GROK_OAUTH_EMAIL_REQUIRED: "请输入 xAI 账号邮箱。",
+            GROK_OAUTH_PASSWORD_REQUIRED: "请输入 xAI 账号密码。",
           },
         },
       },
@@ -6648,6 +6745,7 @@ export default {
         status: "状态",
         accounts: "账号数",
         latency: "延迟",
+        expiry: "有效期",
         actions: "操作",
         nameLabel: "名称",
         namePlaceholder: "请输入代理名称",
@@ -6693,6 +6791,36 @@ export default {
       maxAccounts: "账号绑定上限",
       maxAccountsPlaceholder: "0 表示不限制",
       maxAccountsHint: "限制此 IP 最多可绑定的账号数量，0 表示不限制绑定数量。",
+      lifecycleTitle: "有效期与到期降级",
+      expiresAt: "到期时间",
+      expiresAtHint: "不设置表示永久有效；设置时精确到分钟。",
+      expiresAtEditHint: "保持表示本次不修改；清空表示永久有效；设置表示写入新的到期时间。",
+      expiresAtCurrent: "本次保持不变；当前到期时间：{time}",
+      expiresAtInvalid: "请输入有效的到期时间",
+      expiryModeNone: "不设置（永久有效）",
+      expiryModeKeep: "保持现有设置",
+      expiryModeClear: "清空（永久有效）",
+      expiryModeSet: "设置到期时间",
+      expiryWarnDays: "提前告警天数",
+      expiryWarnDaysHint: "必须是非负整数；填写 0 表示不提前告警。",
+      expiryWarnDaysInvalid: "提前告警天数必须是非负整数",
+      fallbackMode: "到期处理方式",
+      fallbackModeHint: "不处理会停用到期代理；直连会移除账号代理；备用代理会将账号改投到指定代理。",
+      fallbackNone: "不自动改投",
+      fallbackDirect: "改为直连",
+      fallbackProxy: "改投备用代理",
+      backupProxy: "备用代理",
+      backupProxyPlaceholder: "选择备用代理",
+      backupProxyEmpty: "没有符合归属、平台和账号等级范围的启用代理",
+      backupProxyHint: "仅显示与当前代理归属一致、且覆盖当前平台和账号等级范围的启用代理。",
+      backupProxyRequired: "到期处理选择备用代理时，必须指定一个备用代理",
+      backupProxyLoadFailed: "加载备用代理候选失败",
+      backupProxyById: "代理 #{id}",
+      neverExpires: "永久有效",
+      expired: "已到期",
+      overdueDays: "已逾期 {days} 天",
+      expiringInDays: "{days} 天后到期",
+      remainingDays: "剩余 {days} 天",
       platform: "所属平台",
       platformUniversal: "通用（所有平台可用）",
       platformHint: "选择此代理归属的平台；通用代理对所有平台可用。",
@@ -7876,6 +8004,8 @@ export default {
           accountErrorCount: "错误账号数（不含临时不可调度）",
           accountErrorRatio: "错误账号比例 (%)",
           overloadAccountCount: "过载账号数",
+          proxyExpiredCount: "已到期代理数",
+          proxyExpiringSoonCount: "即将到期代理数",
         },
         metricDescriptions: {
           successRate: "统计窗口内成功请求占比（0~100）。",
@@ -7897,6 +8027,9 @@ export default {
             "统计窗口内产生错误的账号数量（不含临时不可调度）。",
           accountErrorRatio: "统计窗口内错误账号占比（0~100）。",
           overloadAccountCount: "统计窗口内过载账号数量。",
+          proxyExpiredCount: "当前状态为已到期的代理数量。",
+          proxyExpiringSoonCount:
+            "当前仍有效、但已进入各代理独立预警天数窗口的代理数量。",
         },
         hints: {
           recommended: "推荐：运算符 {operator}，阈值 {threshold}{unit}",

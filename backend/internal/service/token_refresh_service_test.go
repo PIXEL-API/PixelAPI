@@ -23,8 +23,37 @@ type tokenRefreshAccountRepo struct {
 	clearTempCalls         int
 	setTempUnschedCalls    int
 	lastTempUnschedReason  string
+	grokCredentialCASMatch bool
+	grokErrorCalls         int
+	grokTempCalls          int
+	lastGrokSnapshot       GrokCredentialMutationSnapshot
+	lastGrokErrorMessage   string
 	lastAccount            *Account
 	updateErr              error
+}
+
+func (r *tokenRefreshAccountRepo) SetGrokCredentialErrorIfMatch(
+	_ context.Context,
+	_ int64,
+	snapshot GrokCredentialMutationSnapshot,
+	errorMessage string,
+) (bool, error) {
+	r.grokErrorCalls++
+	r.lastGrokSnapshot = snapshot
+	r.lastGrokErrorMessage = errorMessage
+	return r.grokCredentialCASMatch, nil
+}
+
+func (r *tokenRefreshAccountRepo) SetGrokCredentialTempUnschedulableIfMatch(
+	_ context.Context,
+	_ int64,
+	snapshot GrokCredentialMutationSnapshot,
+	_ time.Time,
+	_ string,
+) (bool, error) {
+	r.grokTempCalls++
+	r.lastGrokSnapshot = snapshot
+	return r.grokCredentialCASMatch, nil
 }
 
 func (r *tokenRefreshAccountRepo) Update(ctx context.Context, account *Account) error {
@@ -101,6 +130,18 @@ type tempUnschedCacheStub struct {
 	deleteCalls int
 	setCalls    int
 	lastState   *TempUnschedState
+}
+
+type tokenRefreshSchedulerCacheStub struct {
+	SchedulerCache
+	setAccountCalls       int
+	needsReauthAtCacheSet bool
+}
+
+func (s *tokenRefreshSchedulerCacheStub) SetAccount(_ context.Context, account *Account) error {
+	s.setAccountCalls++
+	s.needsReauthAtCacheSet = accountGrokNeedsReauth(account)
+	return nil
 }
 
 func (s *tempUnschedCacheStub) SetTempUnsched(ctx context.Context, accountID int64, state *TempUnschedState) error {
@@ -356,6 +397,38 @@ func TestTokenRefreshService_RefreshWithRetry_NilInvalidator(t *testing.T) {
 	err := service.refreshWithRetry(context.Background(), account, refresher, refresher, time.Hour)
 	require.NoError(t, err)
 	require.Equal(t, 1, repo.updateCalls)
+}
+
+func TestTokenRefreshService_RefreshWithRetry_ClearsGrokReauthBeforeSchedulerCache(t *testing.T) {
+	repo := &tokenRefreshAccountRepo{}
+	schedulerCache := &tokenRefreshSchedulerCacheStub{}
+	cfg := &config.Config{
+		TokenRefresh: config.TokenRefreshConfig{
+			MaxRetries:          1,
+			RetryBackoffSeconds: 0,
+		},
+	}
+	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, schedulerCache, cfg, nil)
+	account := &Account{
+		ID:       71,
+		Platform: PlatformGrok,
+		Type:     AccountTypeOAuth,
+		Extra: map[string]any{
+			"grok_needs_reauth":        true,
+			"grok_needs_reauth_reason": "spending_limit",
+		},
+	}
+	refresher := &tokenRefresherStub{
+		credentials: map[string]any{
+			"access_token": "refreshed-grok-token",
+		},
+	}
+
+	err := service.refreshWithRetry(context.Background(), account, refresher, refresher, time.Hour)
+	require.NoError(t, err)
+	require.Equal(t, 1, schedulerCache.setAccountCalls)
+	require.False(t, schedulerCache.needsReauthAtCacheSet, "scheduler cache must not serialize stale reauth state")
+	require.False(t, accountGrokNeedsReauth(account))
 }
 
 // TestTokenRefreshService_RefreshWithRetry_Antigravity 测试 Antigravity 平台的缓存失效
@@ -708,6 +781,127 @@ func TestIsNonRetryableRefreshError(t *testing.T) {
 			require.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestTokenRefreshServiceGrokProxyAuthenticationFailureStopsRetryAndUsesCAS(t *testing.T) {
+	proxyID := int64(91)
+	account := &Account{
+		ID:       1901,
+		Platform: PlatformGrok,
+		Type:     AccountTypeOAuth,
+		ProxyID:  &proxyID,
+		Credentials: map[string]any{
+			"access_token":  "old-access",
+			"refresh_token": "old-refresh",
+		},
+	}
+	repo := &tokenRefreshAccountRepo{grokCredentialCASMatch: true}
+	cfg := &config.Config{TokenRefresh: config.TokenRefreshConfig{
+		MaxRetries:          3,
+		RetryBackoffSeconds: 0,
+	}}
+	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, nil, cfg, nil)
+	refresher := &countingTokenRefresherStub{err: errors.New(
+		`Post "https://auth.x.ai/oauth2/token": Proxy Authentication Required`,
+	)}
+
+	err := service.refreshWithRetry(context.Background(), account, refresher, refresher, time.Hour)
+
+	require.Error(t, err)
+	require.Equal(t, 1, refresher.calls, "deterministic proxy authentication failure must not be retried")
+	require.Equal(t, 1, repo.grokErrorCalls)
+	require.Zero(t, repo.grokTempCalls)
+	require.Zero(t, repo.setErrorCalls, "Grok failures must not bypass credential+proxy CAS")
+	require.Equal(t, grokCredentialMutationSnapshot(account), repo.lastGrokSnapshot)
+	class := classifyGrokCredentialFailure(account, err)
+	require.Equal(t, GrokCredentialReasonProxyInvalid, class.reason)
+}
+
+func TestTokenRefreshServiceGrokRetryExhaustionUsesObservedProxySnapshotFromError(t *testing.T) {
+	proxyID := int64(92)
+	staleUpdatedAt := time.Date(2026, 8, 14, 1, 0, 0, 0, time.UTC)
+	actualUpdatedAt := staleUpdatedAt.Add(time.Minute)
+	account := &Account{
+		ID:          1902,
+		Platform:    PlatformGrok,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		ProxyID:     &proxyID,
+		Proxy:       &Proxy{ID: proxyID, UpdatedAt: staleUpdatedAt},
+		Credentials: map[string]any{
+			"access_token":  "old-access",
+			"refresh_token": "old-refresh",
+		},
+	}
+	observedSnapshot := grokCredentialMutationSnapshot(account)
+	observedSnapshot.ProxyUpdatedAt = &actualUpdatedAt
+	retryableErr := withGrokCredentialFailureMutationSnapshot(errors.New("temporary upstream timeout"), observedSnapshot)
+	repo := &tokenRefreshAccountRepo{grokCredentialCASMatch: true}
+	cfg := &config.Config{TokenRefresh: config.TokenRefreshConfig{
+		MaxRetries:          1,
+		RetryBackoffSeconds: 0,
+	}}
+	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, nil, cfg, nil)
+	refresher := &countingTokenRefresherStub{err: retryableErr}
+
+	err := service.refreshWithRetry(context.Background(), account, refresher, refresher, time.Hour)
+
+	require.Error(t, err)
+	require.Equal(t, 1, repo.grokTempCalls)
+	require.Zero(t, repo.grokErrorCalls)
+	require.NotNil(t, repo.lastGrokSnapshot.ProxyUpdatedAt)
+	require.Equal(t, actualUpdatedAt, *repo.lastGrokSnapshot.ProxyUpdatedAt)
+	require.NotEqual(t, staleUpdatedAt, *repo.lastGrokSnapshot.ProxyUpdatedAt)
+}
+
+func TestGrokOAuthReconcileStructuralBlockPersistsStableCredentialReason(t *testing.T) {
+	account := &Account{
+		ID:          1903,
+		Platform:    PlatformGrok,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Credentials: map[string]any{"access_token": "access-without-refresh"},
+	}
+	repo := &tokenRefreshAccountRepo{
+		mockAccountRepoForGemini: mockAccountRepoForGemini{
+			accountsByID: map[int64]*Account{account.ID: account},
+		},
+		grokCredentialCASMatch: true,
+	}
+	service := &TokenRefreshService{accountRepo: repo}
+	item := &GrokOAuthReconcileItem{}
+
+	outcome := service.applyGrokOAuthReconcileStructuralBlock(
+		context.Background(),
+		repo,
+		account,
+		time.Hour,
+		item,
+	)
+
+	require.Equal(t, GrokOAuthReconcileOutcomePartial, outcome)
+	require.Equal(t, GrokOAuthReconcileReasonMissingRefreshToken, item.Reason)
+	require.Equal(t, string(GrokCredentialReasonMissing), repo.lastGrokErrorMessage)
+	require.NotContains(t, repo.lastGrokErrorMessage, "reconciliation")
+}
+
+type countingTokenRefresherStub struct {
+	calls int
+	err   error
+}
+
+func (r *countingTokenRefresherStub) CanRefresh(*Account) bool { return true }
+func (r *countingTokenRefresherStub) NeedsRefresh(*Account, time.Duration) bool {
+	return true
+}
+func (r *countingTokenRefresherStub) Refresh(context.Context, *Account) (map[string]any, error) {
+	r.calls++
+	return nil, r.err
+}
+func (r *countingTokenRefresherStub) CacheKey(account *Account) string {
+	return "test:counting:" + account.Platform
 }
 
 // ========== Path A (refreshAPI) 测试用例 ==========

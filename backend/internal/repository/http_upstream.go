@@ -71,9 +71,9 @@ const (
 	openAIHTTP2PingTimeout     = 15 * time.Second
 
 	// Grok CLI 代理要求官方客户端身份；允许通过环境变量前移到更新的兼容版本。
-	grokCLIProxyHost       = "cli-chat-proxy.grok.com"
+	grokCLIProxyHost       = xai.CLIProxyHost
 	grokCLIStableVersion   = xai.CLIClientVersion
-	grokCLIVersionOverride = "XAI_GROK_CLI_VERSION"
+	grokCLIVersionOverride = xai.CLIVersionEnv
 )
 
 const (
@@ -295,9 +295,10 @@ func applyGrokCLIProxyHeaders(req *http.Request) {
 	if !isSupportedGrokCLIVersion(version) {
 		version = grokCLIStableVersion
 	}
-	req.Header.Set("X-XAI-Token-Auth", "xai-grok-cli")
+	req.Header.Set("X-XAI-Token-Auth", xai.CLITokenAuthValue)
 	req.Header.Set("x-grok-client-version", version)
-	req.Header.Set("User-Agent", "xai-grok-workspace/"+version)
+	req.Header.Set("x-grok-client-identifier", xai.CLIClientIdentifier)
+	req.Header.Set("User-Agent", xai.CLIUserAgentForVersion(version))
 }
 
 func isSupportedGrokCLIVersion(version string) bool {

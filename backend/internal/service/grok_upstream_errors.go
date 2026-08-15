@@ -183,6 +183,16 @@ func (s *OpenAIGatewayService) shouldFailoverGrokUpstreamError(statusCode int, r
 	if isGrokContentPolicyRejection(statusCode, responseBody) {
 		return false
 	}
+	// 405 means this endpoint is unsupported by the selected upstream/account,
+	// not that the credential is unhealthy. Fail over so sticky routing can
+	// escape, while handleGrokAccountUpstreamError deliberately applies no
+	// account, model, or team cooldown for this status.
+	if statusCode == http.StatusMethodNotAllowed {
+		return true
+	}
+	if classifyGrokUpstreamFailure(statusCode, responseBody, "").ShouldFailover {
+		return true
+	}
 	return s.shouldFailoverUpstreamError(statusCode)
 }
 

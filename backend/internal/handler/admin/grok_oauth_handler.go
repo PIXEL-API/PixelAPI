@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +18,8 @@ import (
 )
 
 const grokSSOImportConcurrency = 3
+
+const grokSensitiveAuthRequestMaxBytes = 16 << 10
 
 type GrokOAuthHandler struct {
 	grokOAuthService  *service.GrokOAuthService
@@ -50,6 +53,14 @@ func NewGrokOAuthHandler(
 type GrokGenerateAuthURLRequest struct {
 	ProxyID     *int64 `json:"proxy_id"`
 	RedirectURI string `json:"redirect_uri"`
+}
+
+func (h *GrokOAuthHandler) GetCapabilities(c *gin.Context) {
+	if h == nil || h.grokOAuthService == nil {
+		response.ErrorFrom(c, infraerrors.ServiceUnavailable("GROK_OAUTH_SERVICE_UNAVAILABLE", "grok oauth service is unavailable"))
+		return
+	}
+	response.Success(c, h.grokOAuthService.GetCapabilities())
 }
 
 func (h *GrokOAuthHandler) GenerateAuthURL(c *gin.Context) {
@@ -100,6 +111,17 @@ type GrokRefreshTokenRequest struct {
 	ProxyID      *int64 `json:"proxy_id"`
 }
 
+type GrokSSOTokenRequest struct {
+	SSOToken string `json:"sso_token"`
+	ProxyID  *int64 `json:"proxy_id"`
+}
+
+type GrokPasswordAuthorizeRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	ProxyID  *int64 `json:"proxy_id"`
+}
+
 func (h *GrokOAuthHandler) RefreshToken(c *gin.Context) {
 	var req GrokRefreshTokenRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -129,6 +151,52 @@ func (h *GrokOAuthHandler) RefreshToken(c *gin.Context) {
 		proxyURL = proxy.URL()
 	}
 	tokenInfo, err := h.grokOAuthService.RefreshToken(c.Request.Context(), refreshToken, proxyURL, req.ClientID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, tokenInfo)
+}
+
+// ValidateSSOToken converts one Web SSO cookie into OAuth credentials. The
+// response never echoes the supplied SSO value.
+func (h *GrokOAuthHandler) ValidateSSOToken(c *gin.Context) {
+	if h == nil || h.grokOAuthService == nil {
+		response.ErrorFrom(c, infraerrors.ServiceUnavailable("GROK_OAUTH_SERVICE_UNAVAILABLE", "grok oauth service is unavailable"))
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, grokSensitiveAuthRequestMaxBytes)
+	var req GrokSSOTokenRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request")
+		return
+	}
+	tokenInfo, err := h.grokOAuthService.ValidateSSOToken(c.Request.Context(), req.SSOToken, req.ProxyID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, tokenInfo)
+}
+
+// AuthorizePassword performs password -> ephemeral SSO -> OAuth. The feature
+// gate is checked before reading the sensitive request body.
+func (h *GrokOAuthHandler) AuthorizePassword(c *gin.Context) {
+	if h == nil || h.grokOAuthService == nil {
+		response.ErrorFrom(c, infraerrors.ServiceUnavailable("GROK_OAUTH_SERVICE_UNAVAILABLE", "grok oauth service is unavailable"))
+		return
+	}
+	if !h.grokOAuthService.GetCapabilities().PasswordAuthEnabled {
+		response.ErrorFrom(c, service.ErrGrokPasswordAuthDisabled)
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, grokSensitiveAuthRequestMaxBytes)
+	var req GrokPasswordAuthorizeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request")
+		return
+	}
+	tokenInfo, err := h.grokOAuthService.AuthorizePassword(c.Request.Context(), req.Email, req.Password, req.ProxyID)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -418,15 +486,37 @@ func (h *GrokOAuthHandler) createAccountFromSSOToken(ctx context.Context, req Gr
 	}
 }
 
-// grokSSOImportCredentials 合并 SSO 兑换凭据与导入请求携带的运营配置。
-// token 字段以兑换结果为准；base_url 属于管理员选择的出站配置，请求显式
-// 提供时必须保留，避免被 BuildAccountCredentials 的默认地址覆盖。
+// grokSSOImportCredentials 只合并 SSO 兑换凭据与导入请求携带的运营配置。
+// token 和其他身份凭据必须以兑换结果为准；base_url 属于管理员选择的出站配置，
+// 请求显式提供时必须保留，避免被 BuildAccountCredentials 的默认地址覆盖。
 func grokSSOImportCredentials(built map[string]any, reqCredentials map[string]any) map[string]any {
-	credentials := service.MergeCredentials(cloneGrokSSOMap(reqCredentials), built)
+	operatorCredentials := make(map[string]any)
+	for key, value := range reqCredentials {
+		if !isAllowedGrokSSOImportCredentialKey(key) || service.IsSensitiveCredentialKey(key) {
+			continue
+		}
+		operatorCredentials[key] = cloneGrokSSOValue(value)
+	}
+
+	credentials := service.MergeCredentials(operatorCredentials, cloneGrokSSOMap(built))
 	if reqBaseURL, ok := reqCredentials["base_url"].(string); ok && strings.TrimSpace(reqBaseURL) != "" {
 		credentials["base_url"] = strings.TrimSpace(reqBaseURL)
 	}
-	return withGrokAdminDefaultBaseURL(credentials)
+	return service.SanitizeStoredCredentials(service.PlatformGrok, withGrokAdminDefaultBaseURL(credentials))
+}
+
+func isAllowedGrokSSOImportCredentialKey(key string) bool {
+	switch key {
+	case "base_url",
+		"model_mapping",
+		"header_override",
+		"header_overrides",
+		"header_override_enabled",
+		"custom_headers":
+		return true
+	default:
+		return false
+	}
 }
 
 // withGrokAdminDefaultBaseURL 为管理员创建的 Grok 账号补齐 CLI 默认出站地址，

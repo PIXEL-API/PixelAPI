@@ -83,6 +83,7 @@ func provideCleanup(
 	affiliateCodeCycle *service.AffiliateCodeCycleService,
 	tokenRefresh *service.TokenRefreshService,
 	accountExpiry *service.AccountExpiryService,
+	proxyExpiry *service.ProxyExpiryService,
 	accountErrorCleanup *service.AccountErrorCleanupService,
 	conversationAdminReplyTimeout *service.ConversationAdminReplyTimeoutService,
 	subscriptionExpiry *service.SubscriptionExpiryService,
@@ -191,6 +192,12 @@ func provideCleanup(
 			}},
 			{"AccountExpiryService", func() error {
 				accountExpiry.Stop()
+				return nil
+			}},
+			{"ProxyExpiryService", func() error {
+				if proxyExpiry != nil {
+					proxyExpiry.Stop()
+				}
 				return nil
 			}},
 			{"AccountErrorCleanupService", func() error {

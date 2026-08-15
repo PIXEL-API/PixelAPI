@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 
@@ -392,6 +393,94 @@ func TestAdminService_CreateGroup_RejectsInvalidIndependentVideoMultiplier(t *te
 	require.Nil(t, group)
 	require.Nil(t, repo.created)
 	require.Contains(t, err.Error(), "video_rate_multiplier")
+}
+
+func TestAdminService_CreateGroup_RejectsInvalidGrokCapabilityPricing(t *testing.T) {
+	tests := []struct {
+		name  string
+		input func() *CreateGroupInput
+		field string
+	}{
+		{
+			name: "search nan",
+			input: func() *CreateGroupInput {
+				value := math.NaN()
+				return &CreateGroupInput{SearchPricePer1K: &value}
+			},
+			field: "search_price_per_1k",
+		},
+		{
+			name: "audio infinity",
+			input: func() *CreateGroupInput {
+				value := math.Inf(1)
+				return &CreateGroupInput{AudioRealtimePricePerMin: &value}
+			},
+			field: "audio_realtime_price_per_min",
+		},
+		{
+			name: "negative video model price",
+			input: func() *CreateGroupInput {
+				return &CreateGroupInput{VideoModelPrices: map[string]map[string]float64{
+					VideoPriceFamilyGrokImagineVideo: {VideoBillingResolution720P: -0.01},
+				}}
+			},
+			field: "video_model_prices",
+		},
+		{
+			name: "unknown video model family",
+			input: func() *CreateGroupInput {
+				return &CreateGroupInput{VideoModelPrices: map[string]map[string]float64{
+					"unknown-video": {VideoBillingResolution720P: 0.07},
+				}}
+			},
+			field: "video_model_prices",
+		},
+		{
+			name: "unsupported future video model family",
+			input: func() *CreateGroupInput {
+				return &CreateGroupInput{VideoModelPrices: map[string]map[string]float64{
+					"grok-imagine-video-2": {VideoBillingResolution720P: 0.07},
+				}}
+			},
+			field: "video_model_prices",
+		},
+		{
+			name: "unrelated video 1.5 model family",
+			input: func() *CreateGroupInput {
+				return &CreateGroupInput{VideoModelPrices: map[string]map[string]float64{
+					"unrelated-video-1.5": {VideoBillingResolution720P: 0.07},
+				}}
+			},
+			field: "video_model_prices",
+		},
+		{
+			name: "unknown video resolution",
+			input: func() *CreateGroupInput {
+				return &CreateGroupInput{VideoModelPrices: map[string]map[string]float64{
+					VideoPriceFamilyGrokImagineVideo: {"4k": 0.07},
+				}}
+			},
+			field: "video_model_prices",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &groupRepoStubForAdmin{}
+			svc := &adminServiceImpl{groupRepo: repo}
+			input := tt.input()
+			input.Name = "invalid-grok-pricing"
+			input.Platform = PlatformGrok
+			input.RateMultiplier = 1
+
+			group, err := svc.CreateGroup(context.Background(), input)
+
+			require.Error(t, err)
+			require.Nil(t, group)
+			require.Nil(t, repo.created)
+			require.Contains(t, err.Error(), tt.field)
+		})
+	}
 }
 
 func TestAdminService_CreateGroup_PreservesOpenAIFreeWebSearchAndDropsVideoPricing(t *testing.T) {

@@ -133,18 +133,23 @@ type Group struct {
 	MonthlyLimitUSD  *float64 `json:"monthly_limit_usd"`
 
 	// 图片生成计费配置（仅 antigravity 平台使用）
-	AllowImageGeneration  bool     `json:"allow_image_generation"`
-	ImageRateIndependent  bool     `json:"image_rate_independent"`
-	ImageRateMultiplier   float64  `json:"image_rate_multiplier"`
-	ImagePrice1K          *float64 `json:"image_price_1k"`
-	ImagePrice2K          *float64 `json:"image_price_2k"`
-	ImagePrice4K          *float64 `json:"image_price_4k"`
-	VideoRateIndependent  bool     `json:"video_rate_independent"`
-	VideoRateMultiplier   float64  `json:"video_rate_multiplier"`
-	VideoPrice480P        *float64 `json:"video_price_480p"`
-	VideoPrice720P        *float64 `json:"video_price_720p"`
-	VideoPrice1080P       *float64 `json:"video_price_1080p"`
-	WebSearchPricePerCall *float64 `json:"web_search_price_per_call"`
+	AllowImageGeneration         bool                          `json:"allow_image_generation"`
+	ImageRateIndependent         bool                          `json:"image_rate_independent"`
+	ImageRateMultiplier          float64                       `json:"image_rate_multiplier"`
+	ImagePrice1K                 *float64                      `json:"image_price_1k"`
+	ImagePrice2K                 *float64                      `json:"image_price_2k"`
+	ImagePrice4K                 *float64                      `json:"image_price_4k"`
+	VideoRateIndependent         bool                          `json:"video_rate_independent"`
+	VideoRateMultiplier          float64                       `json:"video_rate_multiplier"`
+	VideoPrice480P               *float64                      `json:"video_price_480p"`
+	VideoPrice720P               *float64                      `json:"video_price_720p"`
+	VideoPrice1080P              *float64                      `json:"video_price_1080p"`
+	VideoModelPrices             map[string]map[string]float64 `json:"video_model_prices,omitempty"`
+	WebSearchPricePerCall        *float64                      `json:"web_search_price_per_call"`
+	SearchPricePer1K             *float64                      `json:"search_price_per_1k"`
+	AudioRealtimePricePerMin     *float64                      `json:"audio_realtime_price_per_min"`
+	AudioTTSPricePerMillionChars *float64                      `json:"audio_tts_price_per_million_chars"`
+	AudioSTTPricePerHour         *float64                      `json:"audio_stt_price_per_hour"`
 
 	// Claude Code 客户端限制
 	ClaudeCodeOnly  bool   `json:"claude_code_only"`
@@ -210,6 +215,7 @@ type Account struct {
 	AccountShareModeListingID *int64                    `json:"account_share_mode_listing_id,omitempty"`
 	ExternalPlacement         *AccountExternalPlacement `json:"external_placement,omitempty"`
 	ProxyID                   *int64                    `json:"proxy_id"`
+	ProxyFallbackOriginID     *int64                    `json:"proxy_fallback_origin_id"`
 	Concurrency               int                       `json:"concurrency"`
 	LoadFactor                *int                      `json:"load_factor,omitempty"`
 	LoadFactorPaidCeiling     int                       `json:"load_factor_paid_ceiling"`
@@ -343,11 +349,15 @@ type Proxy struct {
 	// Platform 为空表示通用代理（所有平台可用）。
 	Platform string `json:"platform"`
 	// RequiredAccountLevel 为空表示所有账号等级可用。
-	RequiredAccountLevel string    `json:"required_account_level"`
-	Status               string    `json:"status"`
-	MaxAccounts          int       `json:"max_accounts"`
-	CreatedAt            time.Time `json:"created_at"`
-	UpdatedAt            time.Time `json:"updated_at"`
+	RequiredAccountLevel string     `json:"required_account_level"`
+	Status               string     `json:"status"`
+	MaxAccounts          int        `json:"max_accounts"`
+	ExpiresAt            *time.Time `json:"expires_at"`
+	FallbackMode         string     `json:"fallback_mode"`
+	BackupProxyID        *int64     `json:"backup_proxy_id"`
+	ExpiryWarnDays       int        `json:"expiry_warn_days"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
 }
 
 type ProxyWithAccountCount struct {

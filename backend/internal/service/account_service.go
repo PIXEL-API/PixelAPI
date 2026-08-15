@@ -25,6 +25,9 @@ import (
 
 var (
 	ErrAccountNotFound                            = infraerrors.NotFound("ACCOUNT_NOT_FOUND", "account not found")
+	ErrAccountNotInProxyFallback                  = infraerrors.Conflict("ACCOUNT_NOT_IN_PROXY_FALLBACK", "account is not using an automatic proxy fallback")
+	ErrAccountProxyFallbackUnavailable            = infraerrors.ServiceUnavailable("ACCOUNT_PROXY_FALLBACK_UNAVAILABLE", "account proxy fallback repository is unavailable")
+	ErrProxyFallbackOriginUnavailable             = infraerrors.Conflict("PROXY_FALLBACK_ORIGIN_UNAVAILABLE", "original proxy is not currently eligible for this account")
 	ErrAccountNilInput                            = infraerrors.BadRequest("ACCOUNT_NIL_INPUT", "account input cannot be nil")
 	ErrAccountPlatformUnsupported                 = infraerrors.BadRequest("ACCOUNT_PLATFORM_UNSUPPORTED", "account platform is not supported")
 	ErrCodexQuotaLimitPercentInvalid              = infraerrors.BadRequest("CODEX_QUOTA_LIMIT_PERCENT_INVALID", "Codex quota limit percent must be between 1 and 100")
@@ -609,6 +612,9 @@ type AccountService struct {
 	quotaPoolDashboardCache    accountQuotaPoolDashboardCache
 	concurrencyService         *ConcurrencyService
 	accountShareBillingCache   accountShareSeatBillingCacheInvalidator
+	grokProxyRecovery          interface {
+		RecoverGrokProxyCredentialFailure(context.Context, int64) (*SuccessfulTestRecoveryResult, error)
+	}
 }
 
 type accountShareSeatBillingCacheInvalidator interface {
@@ -762,6 +768,15 @@ func (s *AccountService) SetAccountShareBillingCacheInvalidator(invalidator acco
 		return
 	}
 	s.accountShareBillingCache = invalidator
+}
+
+func (s *AccountService) SetGrokProxyCredentialRecovery(recovery interface {
+	RecoverGrokProxyCredentialFailure(context.Context, int64) (*SuccessfulTestRecoveryResult, error)
+}) {
+	if s == nil {
+		return
+	}
+	s.grokProxyRecovery = recovery
 }
 
 func (s *AccountService) SetSettingService(settingService *SettingService) {
@@ -2082,6 +2097,7 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 
 	if req.ProxyID != nil {
 		account.ProxyID = req.ProxyID
+		account.ProxyFallbackOriginID = nil
 	}
 
 	if req.Concurrency != nil {
@@ -2209,6 +2225,7 @@ func (s *AccountService) updateOwnedOnce(ctx context.Context, ownerUserID, accou
 		return nil, ErrOwnedPersonalAccessTokenValidationRequired
 	}
 	before := cloneAccountForNotice(account)
+	recoverGrokProxyFailure := req.Credentials != nil && isGrokProxyCredentialFailureAccount(before)
 	// cloneAccountForNotice 只是浅拷贝，两份 Account 共享同一批 map，不能当作
 	// 安全扫描的基线。这里在任何改动发生之前单独复制一份库内快照。
 	storedCredentials := mergeAccountMap(account.Credentials, nil)
@@ -2266,6 +2283,7 @@ func (s *AccountService) updateOwnedOnce(ctx context.Context, ownerUserID, accou
 			proxyID := *req.ProxyID
 			account.ProxyID = &proxyID
 		}
+		account.ProxyFallbackOriginID = nil
 	}
 	if (req.Credentials != nil || req.Extra != nil) && ownedPersonalAccountRequiresProxy(account, levelConfigs) {
 		if account.ProxyID == nil || *account.ProxyID <= 0 {
@@ -2428,6 +2446,19 @@ func (s *AccountService) updateOwnedOnce(ctx context.Context, ownerUserID, accou
 	}
 	if !AccountMutationGuardActive(ctx) {
 		s.notifyAccountChanged(ctx, before, account)
+	}
+	if recoverGrokProxyFailure {
+		if s.grokProxyRecovery == nil {
+			return nil, errors.New("Grok proxy credential recovery service is not configured")
+		}
+		if _, err := s.grokProxyRecovery.RecoverGrokProxyCredentialFailure(ctx, account.ID); err != nil {
+			return nil, err
+		}
+		recovered, err := s.GetOwnedByID(ctx, ownerUserID, account.ID)
+		if err != nil {
+			return nil, err
+		}
+		account = recovered
 	}
 	return account, nil
 }

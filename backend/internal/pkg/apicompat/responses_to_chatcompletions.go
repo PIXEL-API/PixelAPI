@@ -34,7 +34,43 @@ func ResponsesToChatCompletionsRequest(req *ResponsesRequest) (*ChatCompletionsR
 	if req.Reasoning != nil {
 		out.ReasoningEffort = req.Reasoning.Effort
 	}
+	for _, tool := range req.Tools {
+		if !strings.EqualFold(strings.TrimSpace(tool.Type), "x_search") {
+			continue
+		}
+		out.Tools = append(out.Tools, ChatTool{
+			Type:                     "x_search",
+			AllowedXHandles:          tool.AllowedXHandles,
+			ExcludedXHandles:         tool.ExcludedXHandles,
+			FromDate:                 tool.FromDate,
+			ToDate:                   tool.ToDate,
+			EnableImageUnderstanding: tool.EnableImageUnderstanding,
+			EnableVideoUnderstanding: tool.EnableVideoUnderstanding,
+		})
+	}
+	if len(out.Tools) > 0 && len(req.ToolChoice) > 0 {
+		if choice := responsesXSearchToolChoice(req.ToolChoice); len(choice) > 0 {
+			out.ToolChoice = choice
+		}
+	}
 	return out, nil
+}
+
+func responsesXSearchToolChoice(raw json.RawMessage) json.RawMessage {
+	var choiceString string
+	if json.Unmarshal(raw, &choiceString) == nil {
+		if strings.EqualFold(strings.TrimSpace(choiceString), "x_search") {
+			return append(json.RawMessage(nil), raw...)
+		}
+		return nil
+	}
+	var choice struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(raw, &choice) != nil || !strings.EqualFold(strings.TrimSpace(choice.Type), "x_search") {
+		return nil
+	}
+	return json.RawMessage(`{"type":"x_search"}`)
 }
 
 func responsesInputToChatMessages(instructions string, input json.RawMessage) ([]ChatMessage, error) {

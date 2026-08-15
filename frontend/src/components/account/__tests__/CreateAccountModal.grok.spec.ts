@@ -43,4 +43,13 @@ describe('CreateAccountModal Grok administrator boundary', () => {
     expect(userImportSource).toContain("request.account_level = accountLevel")
     expect(userImportSource).toContain("importGrokAccountLevelRequired")
   })
+
+  it('shows password authorization only for admin Grok OAuth when capability is enabled', () => {
+    expect(source).toContain(
+      ':show-email-password-option="!isUserScope && form.platform === \'grok\' && grokOAuth.passwordAuthEnabled.value"'
+    )
+    expect(source).toContain('await grokOAuth.loadCapabilities()')
+    expect(source).toContain('@authorize-password="handleGrokAuthorizePassword"')
+    expect(source).toContain('grokOAuth.buildCredentials(tokenInfo)')
+  })
 })

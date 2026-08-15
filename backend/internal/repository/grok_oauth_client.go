@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -20,8 +21,12 @@ type grokOAuthClient struct {
 	tokenURL string
 }
 
-func NewGrokOAuthClient() service.GrokOAuthClient {
-	return &grokOAuthClient{tokenURL: xai.EffectiveTokenURL()}
+func NewGrokOAuthClient() (service.GrokOAuthClient, error) {
+	tokenURL, err := xai.ValidatedTokenURL()
+	if err != nil || strings.TrimSpace(tokenURL) == "" {
+		return nil, errors.New("xAI OAuth token endpoint configuration is invalid")
+	}
+	return &grokOAuthClient{tokenURL: tokenURL}, nil
 }
 
 func (c *grokOAuthClient) ExchangeCode(ctx context.Context, code, codeVerifier, redirectURI, proxyURL, clientID string) (*xai.TokenResponse, error) {
@@ -111,6 +116,75 @@ func (c *grokOAuthClient) ConvertSSOToBuild(ctx context.Context, ssoToken, proxy
 	return tokenResp, nil
 }
 
+// LoginWithPassword performs password login through the account's selected
+// proxy and returns only an ephemeral SSO value. Captcha solving uses a
+// separate client because it targets YesCaptcha rather than the xAI account.
+func (c *grokOAuthClient) LoginWithPassword(ctx context.Context, email, password, proxyURL string) (*xai.GrokPasswordLoginResult, error) {
+	clientKey := strings.TrimSpace(os.Getenv("YESCAPTCHA_CLIENT_KEY"))
+	if clientKey == "" {
+		clientKey = strings.TrimSpace(os.Getenv("YESCAPTCHA_API_KEY"))
+	}
+	if clientKey == "" {
+		return nil, infraerrors.New(
+			http.StatusBadRequest,
+			"GROK_OAUTH_CAPTCHA_KEY_REQUIRED",
+			"YesCaptcha client key is required for Grok password authorization",
+		)
+	}
+
+	accountClient, err := createIsolatedGrokHTTPClient(proxyURL, 120*time.Second)
+	if err != nil {
+		return nil, infraerrors.New(
+			http.StatusBadGateway,
+			"GROK_OAUTH_CLIENT_INIT_FAILED",
+			"failed to initialize the Grok password authorization client",
+		)
+	}
+	captchaClient, err := createIsolatedGrokHTTPClient("", 120*time.Second)
+	if err != nil {
+		return nil, infraerrors.New(
+			http.StatusBadGateway,
+			"GROK_OAUTH_CAPTCHA_CLIENT_INIT_FAILED",
+			"failed to initialize the captcha client",
+		)
+	}
+
+	result, err := xai.LoginWithPassword(ctx, email, password, &xai.GrokPasswordLoginOptions{
+		HTTPClient:        accountClient,
+		CaptchaHTTPClient: captchaClient,
+		CaptchaClientKey:  clientKey,
+	})
+	if err == nil {
+		return result, nil
+	}
+	if errors.Is(err, xai.ErrGrokPasswordInputInvalid) {
+		return nil, infraerrors.New(
+			http.StatusBadRequest,
+			"GROK_OAUTH_PASSWORD_INPUT_INVALID",
+			"Grok password authorization input is invalid",
+		)
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return nil, infraerrors.New(
+			http.StatusGatewayTimeout,
+			"GROK_OAUTH_CAPTCHA_TIMEOUT",
+			"Grok password authorization captcha solving timed out",
+		)
+	}
+	if errors.Is(err, xai.ErrGrokCaptchaUnavailable) {
+		return nil, infraerrors.New(
+			http.StatusBadGateway,
+			"GROK_OAUTH_CAPTCHA_FAILED",
+			"Grok password authorization captcha solving failed",
+		)
+	}
+	return nil, infraerrors.New(
+		http.StatusBadGateway,
+		"GROK_OAUTH_PASSWORD_LOGIN_FAILED",
+		"Grok password authorization failed",
+	)
+}
+
 func createGrokReqClient(proxyURL string) (*req.Client, error) {
 	return getSharedReqClient(reqClientOptions{
 		ProxyURL: proxyURL,
@@ -131,6 +205,24 @@ func createGrokSSOHTTPClient(proxyURL string) (*http.Client, error) {
 	clone.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
+	clone.Jar = nil
+	return &clone, nil
+}
+
+func createIsolatedGrokHTTPClient(proxyURL string, timeout time.Duration) (*http.Client, error) {
+	client, err := sharedhttp.GetClient(sharedhttp.Options{
+		ProxyURL:              proxyURL,
+		Timeout:               timeout,
+		ResponseHeaderTimeout: 30 * time.Second,
+	})
+	if err != nil {
+		return nil, err
+	}
+	clone := *client
+	clone.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	clone.Jar = nil
 	return &clone, nil
 }
 

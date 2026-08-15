@@ -3086,9 +3086,12 @@
         :show-cookie-option="!isUserScope && form.platform === 'anthropic'"
         :show-refresh-token-option="!isUserScope && (form.platform === 'openai' || form.platform === 'antigravity' || form.platform === 'grok')"
         :show-sso-option="!isUserScope && form.platform === 'grok'"
+        :show-email-password-option="!isUserScope && form.platform === 'grok' && grokOAuth.passwordAuthEnabled.value"
         :show-mobile-refresh-token-option="!isUserScope && form.platform === 'openai'"
         :show-session-token-option="false"
         :show-access-token-option="!isUserScope && form.platform === 'openai'"
+        :show-codex-session-import-option="!isUserScope && form.platform === 'openai'"
+        :show-agent-identity-option="!isUserScope && form.platform === 'openai'"
         :show-codex-pat-option="!isUserScope && form.platform === 'openai'"
         :platform="form.platform"
         :show-project-id="geminiOAuthType === 'code_assist'"
@@ -3098,8 +3101,10 @@
         @validate-mobile-refresh-token="handleOpenAIValidateMobileRT"
         @validate-session-token="handleValidateSessionToken"
         @import-access-token="handleOpenAIImportAT"
+        @import-codex-session="handleOpenAIImportCodexSession"
         @import-codex-pat="handleOpenAIImportCodexPAT"
         @import-sso="handleGrokImportSSO"
+        @authorize-password="handleGrokAuthorizePassword"
       />
 
     </div>
@@ -3433,6 +3438,7 @@ import {
 import { useAuthStore } from '@/stores/auth'
 import { adminAPI } from '@/api/admin'
 import { accountsAPI } from '@/api/accounts'
+import { extractApiErrorMessage } from '@/utils/apiError'
 import { useQuotaNotifyState } from '@/composables/useQuotaNotifyState'
 import {
   useAccountOAuth,
@@ -3454,6 +3460,7 @@ import type {
   AccountType,
   CheckMixedChannelResponse,
   CreateAccountRequest,
+  CodexSessionImportMessage,
   OpenAICompactMode
 } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
@@ -3513,6 +3520,7 @@ interface OAuthFlowExposed {
   sessionKey: string
   refreshToken: string
   sessionToken: string
+  codexSession: string
   ssoCookie: string
   inputMethod: AuthInputMethod
   reset: () => void
@@ -4323,6 +4331,23 @@ watch(
     if (!geminiAIStudioOAuthEnabled.value && geminiOAuthType.value === 'ai_studio') {
       geminiOAuthType.value = 'code_assist'
     }
+  },
+  { immediate: true }
+)
+
+watch(
+  [() => props.show, () => form.platform, accountCategory],
+  async ([show, platform, category]) => {
+    if (
+      !show ||
+      isUserScope.value ||
+      platform !== 'grok' ||
+      category !== 'oauth-based'
+    ) {
+      grokOAuth.passwordAuthEnabled.value = false
+      return
+    }
+    await grokOAuth.loadCapabilities()
   },
   { immediate: true }
 )
@@ -5427,13 +5452,131 @@ const applyOpenAICredentialImportSettings = (credentials: Record<string, unknown
   }
 }
 
-const buildOpenAICodexPATCredentialExtras = (): Record<string, unknown> | null => {
+const buildOpenAICodexImportCredentialExtras = (): Record<string, unknown> | null => {
   const credentials: Record<string, unknown> = {}
   applyOpenAICredentialImportSettings(credentials)
   if (!applyTempUnschedConfig(credentials)) {
     return null
   }
   return credentials
+}
+
+const formatCodexImportMessages = (messages?: CodexSessionImportMessage[]) =>
+  (messages || [])
+    .map((item) => {
+      const name = item.name ? ` ${item.name}` : ''
+      return `#${item.index}${name}: ${item.message}`
+    })
+    .join('\n')
+
+const isAgentIdentityImportContent = (content: string): boolean => {
+  const isAgentIdentityValue = (value: unknown): boolean => {
+    if (Array.isArray(value)) return value.length > 0 && value.every(isAgentIdentityValue)
+    if (!value || typeof value !== 'object') return false
+    const record = value as Record<string, unknown>
+    const authMode = record.auth_mode ?? record.authMode
+    const agentIdentity = record.agent_identity ?? record.agentIdentity
+    return (
+      (typeof authMode === 'string' && authMode.toLowerCase() === 'agentidentity') ||
+      (!!agentIdentity && typeof agentIdentity === 'object')
+    )
+  }
+
+  try {
+    return isAgentIdentityValue(JSON.parse(content))
+  } catch {
+    const lines = content
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+    if (lines.length === 0) return false
+    try {
+      return lines.every((line) => isAgentIdentityValue(JSON.parse(line)))
+    } catch {
+      return false
+    }
+  }
+}
+
+const handleOpenAIImportCodexSession = async (content: string) => {
+  const oauthClient = openaiOAuth
+  const trimmed = content.trim()
+  if (!trimmed) {
+    oauthClient.error.value = t('admin.accounts.oauth.openai.codexSessionEmpty')
+    return
+  }
+  if (
+    oauthFlowRef.value?.inputMethod === 'agent_identity' &&
+    !isAgentIdentityImportContent(trimmed)
+  ) {
+    oauthClient.error.value = t('admin.accounts.oauth.openai.agentIdentityInvalid')
+    return
+  }
+
+  const credentialExtras = buildOpenAICodexImportCredentialExtras()
+  if (credentialExtras === null) return
+
+  oauthClient.loading.value = true
+  oauthClient.error.value = ''
+  try {
+    const result = await adminAPI.accounts.importCodexSession({
+      content: trimmed,
+      name: form.name,
+      notes: form.notes || null,
+      proxy_id: form.proxy_id,
+      concurrency: form.concurrency,
+      load_factor: form.load_factor ?? undefined,
+      priority: form.priority,
+      rate_multiplier: form.rate_multiplier,
+      group_ids: form.group_ids,
+      expires_at: form.expires_at,
+      auto_pause_on_expired: autoPauseOnExpired.value,
+      credential_extras: Object.keys(credentialExtras).length > 0 ? credentialExtras : undefined,
+      extra: buildOpenAIExtra(),
+      update_existing: true
+    })
+
+    const importedCount = result.created + result.updated
+    const acceptedCount = importedCount + result.skipped
+    const params = {
+      created: result.created,
+      updated: result.updated,
+      skipped: result.skipped,
+      failed: result.failed
+    }
+    const errorText = formatCodexImportMessages(result.errors)
+    const warningText = formatCodexImportMessages(result.warnings)
+    oauthClient.error.value = [errorText, warningText].filter(Boolean).join('\n')
+
+    if (result.failed === 0) {
+      if (oauthClient.error.value) {
+        appStore.showWarning(t('admin.accounts.oauth.openai.codexSessionImportSuccess', params))
+        if (importedCount > 0) emit('created')
+        return
+      }
+      appStore.showSuccess(t('admin.accounts.oauth.openai.codexSessionImportSuccess', params))
+      if (importedCount > 0) emit('created')
+      if (acceptedCount > 0) handleClose(true)
+      return
+    }
+
+    if (acceptedCount > 0) {
+      appStore.showWarning(t('admin.accounts.oauth.openai.codexSessionImportPartial', params))
+      if (importedCount > 0) emit('created')
+      return
+    }
+
+    appStore.showError(t('admin.accounts.oauth.openai.codexSessionImportFailed'))
+  } catch (error: any) {
+    oauthClient.error.value =
+      error.response?.data?.detail ||
+      error.response?.data?.message ||
+      error.message ||
+      t('admin.accounts.oauth.openai.codexSessionImportFailed')
+    appStore.showError(oauthClient.error.value)
+  } finally {
+    oauthClient.loading.value = false
+  }
 }
 
 // OpenAI RT 批量验证和创建（共享逻辑）
@@ -5555,7 +5698,7 @@ const handleOpenAIImportCodexPAT = async (accessToken: string) => {
     return
   }
 
-  const credentialExtras = buildOpenAICodexPATCredentialExtras()
+  const credentialExtras = buildOpenAICodexImportCredentialExtras()
   if (credentialExtras === null) return
 
   oauthClient.loading.value = true
@@ -5978,6 +6121,36 @@ const handleGrokImportSSO = async (ssoInput: string) => {
     appStore.showError(grokOAuth.error.value)
   } finally {
     grokOAuth.loading.value = false
+  }
+}
+
+const handleGrokAuthorizePassword = async (input: { email: string; password: string }) => {
+  if (isUserScope.value || form.platform !== 'grok' || !grokOAuth.passwordAuthEnabled.value) {
+    grokOAuth.error.value = t('admin.accounts.oauth.grok.passwordAuthDisabled')
+    return
+  }
+
+  const tokenInfo = await grokOAuth.authorizePassword(input.email, input.password, form.proxy_id)
+  if (!tokenInfo) return
+
+  const credentials = grokOAuth.buildCredentials(tokenInfo)
+  applyCurrentModelRestriction(credentials)
+  if (!applyGrokAdminUpstreamConfig(credentials, 'oauth')) return
+  if (!applyTempUnschedConfig(credentials)) return
+
+  try {
+    await createAccountAndFinish(
+      'grok',
+      'oauth',
+      credentials,
+      grokOAuth.buildExtraInfo(tokenInfo)
+    )
+  } catch (error: unknown) {
+    grokOAuth.error.value = extractApiErrorMessage(
+      error,
+      t('admin.accounts.failedToCreate')
+    )
+    appStore.showError(grokOAuth.error.value)
   }
 }
 

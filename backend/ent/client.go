@@ -4276,6 +4276,38 @@ func (c *ProxyClient) QueryOwner(_m *Proxy) *UserQuery {
 	return query
 }
 
+// QueryBackupProxy queries the backup_proxy edge of a Proxy.
+func (c *ProxyClient) QueryBackupProxy(_m *Proxy) *ProxyQuery {
+	query := (&ProxyClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(proxy.Table, proxy.FieldID, id),
+			sqlgraph.To(proxy.Table, proxy.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, proxy.BackupProxyTable, proxy.BackupProxyColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryFallbackSources queries the fallback_sources edge of a Proxy.
+func (c *ProxyClient) QueryFallbackSources(_m *Proxy) *ProxyQuery {
+	query := (&ProxyClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(proxy.Table, proxy.FieldID, id),
+			sqlgraph.To(proxy.Table, proxy.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, proxy.FallbackSourcesTable, proxy.FallbackSourcesColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
 // Hooks returns the client hooks.
 func (c *ProxyClient) Hooks() []Hook {
 	hooks := c.hooks.Proxy

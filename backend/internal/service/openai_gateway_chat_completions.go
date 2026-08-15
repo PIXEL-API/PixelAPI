@@ -52,7 +52,23 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
 	resetOpenAIRequestIdentityState(c)
+	SetActualOpenAIUpstreamEndpoint(c, "")
 	beginUpstreamResponseModelObservation(c)
+	if account.IsGrok() {
+		useResponses := account.Type != AccountTypeAPIKey || openai_compat.ShouldUseResponsesAPI(account.Extra)
+		if !useResponses {
+			return s.forwardGrokRawChatCompletions(ctx, c, account, body, defaultMappedModel)
+		}
+		if eligible, reason := grokChatResponsesBridgeEligibility(body); !eligible {
+			logger.L().Debug("grok chat_completions: using native raw endpoint",
+				zap.Int64("account_id", account.ID),
+				zap.String("reason", reason),
+			)
+			return s.forwardGrokRawChatCompletions(ctx, c, account, body, defaultMappedModel)
+		}
+		// The established Grok Responses path below owns conversion, cache
+		// identity, search counting, idle handling and billing filters.
+	}
 	if account.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
 		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 	}
@@ -464,6 +480,13 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 				zap.String("request_id", requestID),
 			)
 		}
+		if errors.Is(err, errGrokStreamIdleTimeout) && !c.Writer.Written() {
+			configuredSeconds := 0
+			if s.cfg != nil {
+				configuredSeconds = s.cfg.Gateway.StreamDataIntervalTimeout
+			}
+			return nil, grokStreamIdleFailoverError(account, resolveGrokStreamIdleTimeout(configuredSeconds))
+		}
 	}
 
 	if finalResponse == nil {
@@ -752,6 +775,24 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		c.Writer.Flush()
 		return result, nil
 	}
+	streamReadError := func(err error) error {
+		if errors.Is(err, errGrokStreamIdleTimeout) {
+			idle := resolveGrokStreamIdleTimeout(func() int {
+				if s.cfg == nil {
+					return 0
+				}
+				return s.cfg.Gateway.StreamDataIntervalTimeout
+			}())
+			if !c.Writer.Written() {
+				return grokStreamIdleFailoverError(account, idle)
+			}
+			if !clientDisconnected {
+				_ = writeChatCompletionsStreamError(c, "upstream_error", "Grok upstream stream timed out")
+			}
+			return fmt.Errorf("grok stream idle timeout after partial Chat Completions output: %w", err)
+		}
+		return err
+	}
 
 	handleScanErr := func(err error) {
 		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
@@ -781,6 +822,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			}
 		}
 		handleScanErr(scanner.Err())
+		if scanErr := scanner.Err(); scanErr != nil {
+			return resultWithUsage(), streamReadError(scanErr)
+		}
 		return finalizeStream()
 	}
 
@@ -824,7 +868,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			}
 			if ev.err != nil {
 				handleScanErr(ev.err)
-				return finalizeStream()
+				return resultWithUsage(), streamReadError(ev.err)
 			}
 			lastDataAt = time.Now()
 			line := ev.line

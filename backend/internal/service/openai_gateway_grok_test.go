@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -27,6 +29,33 @@ type grokConditionalStateRepoStub struct {
 	lastUntil    time.Time
 	lastReason   string
 	lastSnapshot GrokCredentialMutationSnapshot
+}
+
+func TestNormalizeGrokCredentialFailureUsesObservedProxySnapshotFromError(t *testing.T) {
+	proxyID := int64(701)
+	oldUpdatedAt := time.Date(2026, 8, 14, 1, 0, 0, 0, time.UTC)
+	actualUpdatedAt := oldUpdatedAt.Add(time.Minute)
+	account := &Account{
+		ID:          1701,
+		Platform:    PlatformGrok,
+		Type:        AccountTypeOAuth,
+		ProxyID:     &proxyID,
+		Proxy:       &Proxy{ID: proxyID, UpdatedAt: oldUpdatedAt},
+		Credentials: map[string]any{"refresh_token": "refresh"},
+	}
+	snapshot := grokCredentialMutationSnapshot(account)
+	snapshot.ProxyUpdatedAt = &actualUpdatedAt
+	repo := &grokConditionalStateRepoStub{updated: true}
+	svc := &OpenAIGatewayService{accountRepo: repo}
+	failure := withGrokCredentialFailureMutationSnapshot(errors.New("status 407"), snapshot)
+
+	err := svc.NormalizeGrokCredentialFailure(context.Background(), nil, account, failure)
+
+	require.Error(t, err)
+	require.Equal(t, 1, repo.errorCalls)
+	require.NotNil(t, repo.lastSnapshot.ProxyUpdatedAt)
+	require.Equal(t, actualUpdatedAt, *repo.lastSnapshot.ProxyUpdatedAt)
+	require.NotEqual(t, oldUpdatedAt, *repo.lastSnapshot.ProxyUpdatedAt)
 }
 
 func (r *grokConditionalStateRepoStub) SetGrokCredentialTempUnschedulableIfMatch(
@@ -102,11 +131,15 @@ func TestPatchGrokResponsesBodySanitizesComposerReasoningParameters(t *testing.T
 }
 
 func TestApplyGrokCLIHeadersSetsInteractiveClientMode(t *testing.T) {
+	t.Setenv(xai.CLIVersionEnv, "")
 	headers := http.Header{}
 
 	applyGrokCLIHeaders(headers)
 
 	require.Equal(t, "interactive", headers.Get("X-Grok-Client-Mode"))
+	require.Equal(t, xai.CLIClientVersion, headers.Get("X-Grok-Client-Version"))
+	require.Equal(t, xai.CLIClientIdentifier, headers.Get("x-grok-client-identifier"))
+	require.Equal(t, xai.CLIUserAgentForVersion(xai.CLIClientVersion), headers.Get("User-Agent"))
 }
 
 func TestGrokUpstreamErrorFailoverPolicy(t *testing.T) {

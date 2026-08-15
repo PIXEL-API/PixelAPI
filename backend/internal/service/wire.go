@@ -14,6 +14,20 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// ProvideGrokOAuthService wires the production Redis-backed single-use state
+// store. Tests that call NewGrokOAuthService directly retain the in-memory
+// implementation without weakening production multi-instance semantics.
+func ProvideGrokOAuthService(
+	proxyRepo ProxyRepository,
+	oauthClient GrokOAuthClient,
+	stateStore EphemeralStateStore,
+	cfg *config.Config,
+) *GrokOAuthService {
+	service := NewGrokOAuthService(proxyRepo, oauthClient, stateStore)
+	service.SetPasswordAuthEnabled(cfg != nil && cfg.Gateway.Grok.PasswordAuthEnabled)
+	return service
+}
+
 // BuildInfo contains build information
 type BuildInfo struct {
 	Version   string
@@ -232,6 +246,38 @@ func ProvideAccountExpiryService(
 	return svc
 }
 
+// ProvideProxyExpirySweeper exposes the lifecycle writer without widening the
+// long-standing ProxyRepository interface and its many existing test doubles.
+func ProvideProxyExpirySweeper(proxyRepo ProxyRepository) (ProxyExpirySweeper, error) {
+	sweeper, ok := proxyRepo.(ProxyExpirySweeper)
+	if !ok {
+		return nil, fmt.Errorf("proxy repository does not implement proxy expiry sweeping")
+	}
+	return sweeper, nil
+}
+
+func ProvideProxyExpiryMetricsRepository(proxyRepo ProxyRepository) (ProxyExpiryMetricsRepository, error) {
+	metrics, ok := proxyRepo.(ProxyExpiryMetricsRepository)
+	if !ok {
+		return nil, fmt.Errorf("proxy repository does not implement proxy expiry metrics")
+	}
+	return metrics, nil
+}
+
+// ProvideProxyExpiryService constructs the inert worker for lifecycle cleanup,
+// and starts it only when the dedicated opt-in configuration is enabled.
+func ProvideProxyExpiryService(repo ProxyExpirySweeper, cfg *config.Config) *ProxyExpiryService {
+	interval := 60 * time.Second
+	if cfg != nil && cfg.ProxyExpiry.IntervalSeconds > 0 {
+		interval = time.Duration(cfg.ProxyExpiry.IntervalSeconds) * time.Second
+	}
+	svc := NewProxyExpiryService(repo, interval)
+	if cfg != nil && cfg.ProxyExpiry.Enabled {
+		svc.Start()
+	}
+	return svc
+}
+
 // ProvideAccountErrorCleanupService creates and starts AccountErrorCleanupService.
 func ProvideAccountErrorCleanupService(
 	accountRepo AccountRepository,
@@ -347,12 +393,16 @@ func ProvideRateLimitService(
 	openAI403CounterCache OpenAI403CounterCache,
 	settingService *SettingService,
 	tokenCacheInvalidator TokenCacheInvalidator,
+	grokTokenProvider *GrokTokenProvider,
+	grokSchedulingBlockCleaner *GrokSchedulingBlockCleanerProxy,
 ) *RateLimitService {
 	svc := NewRateLimitService(accountRepo, usageRepo, cfg, geminiQuotaService, tempUnschedCache)
 	svc.SetTimeoutCounterCache(timeoutCounterCache)
 	svc.SetOpenAI403CounterCache(openAI403CounterCache)
 	svc.SetSettingService(settingService)
 	svc.SetTokenCacheInvalidator(tokenCacheInvalidator)
+	svc.SetGrokProxyCredentialRecoveryVerifier(grokTokenProvider)
+	svc.SetGrokSchedulingBlockCleaner(grokSchedulingBlockCleaner)
 	return svc
 }
 
@@ -396,8 +446,9 @@ func ProvideOpsAlertEvaluatorService(
 	redisClient *redis.Client,
 	cfg *config.Config,
 	taskExecutor *ClusterTaskExecutor,
+	proxyMetrics ProxyExpiryMetricsRepository,
 ) *OpsAlertEvaluatorService {
-	svc := NewOpsAlertEvaluatorService(opsService, opsRepo, emailService, redisClient, cfg)
+	svc := NewOpsAlertEvaluatorService(opsService, opsRepo, emailService, redisClient, cfg, proxyMetrics)
 	svc.taskExecutor = taskExecutor
 	svc.Start()
 	return svc
@@ -675,6 +726,7 @@ func ProvideAccountService(
 	settingService *SettingService,
 	agentIdentityWSInvalidator *AgentIdentityWSInvalidatorProxy,
 	accountShareModeService *AccountShareModeService,
+	rateLimitService *RateLimitService,
 ) *AccountService {
 	svc := NewAccountService(accountRepo, groupRepo, userRepo, userSubRepo, proxyRepo)
 	svc.SetAccountSharePolicyRepository(accountSharePolicyRepo)
@@ -685,6 +737,7 @@ func ProvideAccountService(
 	svc.SetSettingService(settingService)
 	svc.SetAgentIdentityWSInvalidator(agentIdentityWSInvalidator)
 	svc.SetAccountShareBillingCacheInvalidator(accountShareModeService)
+	svc.SetGrokProxyCredentialRecovery(rateLimitService)
 	return svc
 }
 
@@ -845,6 +898,7 @@ func ProvideOpenAIGatewayService(
 	settingService *SettingService,
 	accountService *AccountService,
 	agentIdentityWSInvalidator *AgentIdentityWSInvalidatorProxy,
+	grokSchedulingBlockCleaner *GrokSchedulingBlockCleanerProxy,
 	accountShareModeServices ...*AccountShareModeService,
 ) *OpenAIGatewayService {
 	svc := NewOpenAIGatewayService(
@@ -874,6 +928,7 @@ func ProvideOpenAIGatewayService(
 	)
 	svc.SetGrokTokenProvider(grokTokenProvider)
 	agentIdentityWSInvalidator.SetTarget(svc)
+	grokSchedulingBlockCleaner.SetTarget(svc)
 	return svc
 }
 
@@ -980,6 +1035,7 @@ func ProvideAdminService(
 	privateGroupProvisioner UserPrivateGroupProvisioner,
 	systemNoticeService *SystemNoticeService,
 	agentIdentityWSInvalidator *AgentIdentityWSInvalidatorProxy,
+	rateLimitService *RateLimitService,
 ) AdminService {
 	svc := NewAdminService(
 		userRepo,
@@ -1003,7 +1059,8 @@ func ProvideAdminService(
 	)
 	svc = SetAdminUserPrivateGroupProvisioner(svc, privateGroupProvisioner)
 	svc = SetAdminSystemNoticeService(svc, systemNoticeService)
-	return SetAdminAgentIdentityWSInvalidator(svc, agentIdentityWSInvalidator)
+	svc = SetAdminAgentIdentityWSInvalidator(svc, agentIdentityWSInvalidator)
+	return SetAdminGrokProxyCredentialRecovery(svc, rateLimitService)
 }
 
 // ProviderSet is the Wire provider set for all services
@@ -1035,9 +1092,10 @@ var ProviderSet = wire.NewSet(
 	ProvideGatewayService,
 	ProvideOpenAIGatewayService,
 	NewAgentIdentityWSInvalidatorProxy,
+	NewGrokSchedulingBlockCleanerProxy,
 	NewOAuthService,
 	ProvideOpenAIOAuthService,
-	NewGrokOAuthService,
+	ProvideGrokOAuthService,
 	NewGeminiOAuthService,
 	NewGeminiQuotaService,
 	NewCompositeTokenCacheInvalidator,
@@ -1082,6 +1140,9 @@ var ProviderSet = wire.NewSet(
 	ProvideTokenRefreshService,
 	wire.Bind(new(GrokOAuthReconciler), new(*TokenRefreshService)),
 	ProvideAccountExpiryService,
+	ProvideProxyExpirySweeper,
+	ProvideProxyExpiryMetricsRepository,
+	ProvideProxyExpiryService,
 	ProvideAccountErrorCleanupService,
 	ProvideConversationAdminReplyTimeoutService,
 	ProvideSubscriptionExpiryService,

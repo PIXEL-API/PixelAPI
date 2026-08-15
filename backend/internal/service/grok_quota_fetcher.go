@@ -67,6 +67,7 @@ func (f *GrokQuotaFetcher) BuildUsageInfo(account *Account) *UsageInfo {
 			usage.ErrorCode = "quota_unknown"
 			usage.Error = "Grok quota is unknown until the first upstream response includes xAI rate-limit headers or billing is probed"
 		}
+		applyGrokReauthUsageState(usage, account)
 		return usage
 	}
 
@@ -119,7 +120,18 @@ func (f *GrokQuotaFetcher) BuildUsageInfo(account *Account) *UsageInfo {
 		}
 	}
 	applyGrokCredentialUsageFallback(usage, account)
+	applyGrokReauthUsageState(usage, account)
 	return usage
+}
+
+func applyGrokReauthUsageState(usage *UsageInfo, account *Account) {
+	if usage == nil || !accountGrokNeedsReauth(account) {
+		return
+	}
+	usage.NeedsReauth = true
+	if usage.ErrorCode == "" || usage.ErrorCode == "quota_unknown" || usage.ErrorCode == "forbidden" {
+		usage.ErrorCode = "spending_limit"
+	}
 }
 
 func applyGrokCredentialUsageFallback(usage *UsageInfo, account *Account) {

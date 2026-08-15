@@ -92,6 +92,20 @@ func (s *SessionStore) Get(sessionID string) (*OAuthSession, bool) {
 	return session, true
 }
 
+// Take atomically reads and removes a session. Callers should validate a
+// session with Get first, then use Take immediately before the one-shot action.
+func (s *SessionStore) Take(sessionID string) (*OAuthSession, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	session, ok := s.sessions[sessionID]
+	if !ok || time.Since(session.CreatedAt) > SessionTTL {
+		delete(s.sessions, sessionID)
+		return nil, false
+	}
+	delete(s.sessions, sessionID)
+	return session, true
+}
+
 func (s *SessionStore) Delete(sessionID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

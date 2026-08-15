@@ -119,6 +119,9 @@ func (p *GrokTokenProvider) GetAccessToken(ctx context.Context, account *Account
 			}
 			account = result.Account
 			expiresAt = account.GetCredentialAsTime("expires_at")
+			if result.Refreshed {
+				clearGrokNeedsReauthExtra(refreshCtx, p.accountRepo, account)
+			}
 		}
 	}
 
@@ -269,7 +272,47 @@ func (p *GrokTokenProvider) RefreshNow(ctx context.Context, account *Account) (*
 	if result.Account == nil {
 		return nil, errors.New("grok oauth refresh returned no account state")
 	}
+	if result.Refreshed {
+		clearGrokNeedsReauthExtra(refreshCtx, p.accountRepo, result.Account)
+	}
 	return result.Account, nil
+}
+
+// VerifyGrokProxyCredentialRecovery forces a coordinated refresh through the
+// proxy version that is actually resolved by GrokOAuthService. The returned
+// snapshot binds the durable refreshed credentials to that exact proxy row.
+func (p *GrokTokenProvider) VerifyGrokProxyCredentialRecovery(
+	ctx context.Context,
+	account *Account,
+) (*Account, GrokCredentialMutationSnapshot, error) {
+	if account == nil || !isGrokProxyCredentialFailureAccount(account) {
+		return nil, GrokCredentialMutationSnapshot{}, errors.New("account is not eligible for Grok proxy credential recovery")
+	}
+	observedCtx, recorder := withGrokProxyVersionObservation(ctx)
+	refreshed, err := p.RefreshNow(observedCtx, account)
+	if err != nil {
+		return nil, GrokCredentialMutationSnapshot{}, err
+	}
+	observation := recorder.snapshot()
+	if observation == nil || account.ProxyID == nil || observation.ProxyID != *account.ProxyID || observation.UpdatedAt.IsZero() {
+		return nil, GrokCredentialMutationSnapshot{}, errors.New("Grok proxy version was not observed during credential verification")
+	}
+	observedProxy := &Proxy{
+		ID:                   observation.ProxyID,
+		Status:               observation.Status,
+		Platform:             observation.Platform,
+		RequiredAccountLevel: observation.RequiredAccountLevel,
+		UpdatedAt:            observation.UpdatedAt,
+	}
+	if !observedProxy.IsActive() || !observedProxy.AllowsScope(account.Platform, account.AccountLevel) {
+		return nil, GrokCredentialMutationSnapshot{}, errors.New("Grok proxy is not active for the account scope")
+	}
+	snapshot := grokCredentialMutationSnapshot(refreshed)
+	proxyID := observation.ProxyID
+	snapshot.ProxyID = &proxyID
+	updatedAt := observation.UpdatedAt
+	snapshot.ProxyUpdatedAt = &updatedAt
+	return refreshed, snapshot, nil
 }
 
 func (p *GrokTokenProvider) waitForRefreshedToken(ctx context.Context, account *Account, cacheKey string) (string, error) {

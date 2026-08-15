@@ -859,7 +859,8 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughModeR
 	upstreamConn := &openAIWSCaptureConn{
 		events: [][]byte{
 			[]byte(`{"type":"response.output_item.done","item":{"id":"ig_passthrough_turn_1","type":"image_generation_call","status":"generating","result":"ZmluYWw="}}`),
-			[]byte(`{"type":"response.completed","response":{"id":"resp_passthrough_turn_1","model":"gpt-5.1","usage":{"input_tokens":2,"output_tokens":3,"output_tokens_details":{"image_tokens":2}},"output":[{"id":"ig_passthrough_turn_1","type":"image_generation_call","status":"in_progress","result":"ZmluYWw="}]}}`),
+			[]byte(`{"type":"response.completed","data":{"response":{"id":"resp_passthrough_turn_1","model":"gpt-5.1","usage":{"input_tokens":2,"output_tokens":3,"output_tokens_details":{"image_tokens":2}},"output":[{"id":"ig_passthrough_turn_1","type":"image_generation_call","status":"in_progress","result":"ZmluYWw="}]}}}`),
+			[]byte(`{"type":"response.done","data":{"response":{"id":"resp_passthrough_turn_1","model":"gpt-5.1","usage":{"input_tokens":12,"output_tokens":6},"output":[{"id":"ig_passthrough_turn_1","type":"image_generation_call","status":"completed","result":"ZmluYWw="}]}}}`),
 		},
 	}
 	captureDialer := &openAIWSCaptureDialer{conn: upstreamConn}
@@ -968,8 +969,14 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughModeR
 	cancelRead()
 	require.NoError(t, readErr)
 	require.Equal(t, "response.completed", gjson.GetBytes(event, "type").String())
-	require.Equal(t, "resp_passthrough_turn_1", gjson.GetBytes(event, "response.id").String())
-	require.Equal(t, "completed", gjson.GetBytes(event, "response.output.0.status").String())
+	require.Equal(t, "resp_passthrough_turn_1", gjson.GetBytes(event, "data.response.id").String())
+	require.Equal(t, "in_progress", gjson.GetBytes(event, "data.response.output.0.status").String())
+	readCtx, cancelRead = context.WithTimeout(context.Background(), 3*time.Second)
+	_, event, readErr = clientConn.Read(readCtx)
+	cancelRead()
+	require.NoError(t, readErr)
+	require.Equal(t, "response.done", gjson.GetBytes(event, "type").String())
+	require.Equal(t, "resp_passthrough_turn_1", gjson.GetBytes(event, "data.response.id").String())
 	_ = clientConn.Close(coderws.StatusNormalClosure, "done")
 
 	select {
@@ -990,6 +997,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughModeR
 		require.True(t, result.OpenAIWSMode)
 		require.Equal(t, 2, result.Usage.InputTokens)
 		require.Equal(t, 3, result.Usage.OutputTokens)
+		require.True(t, result.BillingUsageComplete)
 		require.Equal(t, 2, result.Usage.ImageOutputTokens)
 		require.Equal(t, 1, result.Usage.ImageCount)
 		require.Equal(t, 1, result.ImageCount)

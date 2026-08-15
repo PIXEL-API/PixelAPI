@@ -34,6 +34,7 @@ return 0
 type OpsAlertEvaluatorService struct {
 	opsService   *OpsService
 	opsRepo      OpsRepository
+	proxyMetrics ProxyExpiryMetricsRepository
 	emailService *EmailService
 	taskExecutor *ClusterTaskExecutor
 
@@ -68,8 +69,9 @@ func NewOpsAlertEvaluatorService(
 	emailService *EmailService,
 	redisClient *redis.Client,
 	cfg *config.Config,
+	proxyMetrics ...ProxyExpiryMetricsRepository,
 ) *OpsAlertEvaluatorService {
-	return &OpsAlertEvaluatorService{
+	svc := &OpsAlertEvaluatorService{
 		opsService:   opsService,
 		opsRepo:      opsRepo,
 		emailService: emailService,
@@ -79,6 +81,10 @@ func NewOpsAlertEvaluatorService(
 		ruleStates:   map[int64]*opsAlertRuleState{},
 		emailLimiter: newSlidingWindowLimiter(0, time.Hour),
 	}
+	if len(proxyMetrics) > 0 {
+		svc.proxyMetrics = proxyMetrics[0]
+	}
+	return svc
 }
 
 func (s *OpsAlertEvaluatorService) Start() {
@@ -484,6 +490,18 @@ func (s *OpsAlertEvaluatorService) computeRuleMetric(
 		return 0, false
 	}
 	switch strings.TrimSpace(rule.MetricType) {
+	case "proxy_expired_count":
+		if s == nil || s.proxyMetrics == nil {
+			return 0, false
+		}
+		count, err := s.proxyMetrics.CountExpired(ctx)
+		return float64(count), err == nil
+	case "proxy_expiring_soon_count":
+		if s == nil || s.proxyMetrics == nil {
+			return 0, false
+		}
+		count, err := s.proxyMetrics.CountExpiringSoon(ctx, time.Now().UTC())
+		return float64(count), err == nil
 	case "cpu_usage_percent":
 		if systemMetrics != nil && systemMetrics.CPUUsagePercent != nil {
 			return *systemMetrics.CPUUsagePercent, true

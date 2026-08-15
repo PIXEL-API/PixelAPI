@@ -386,6 +386,17 @@ gateway:
     fallback_error_threshold: 2
     fallback_window_seconds: 60
     fallback_ttl_seconds: 600
+  # Grok 管理员密码授权。默认关闭；启用时还必须通过环境变量注入
+  # YESCAPTCHA_CLIENT_KEY（兼容 YESCAPTCHA_API_KEY），禁止把密钥写入本文件。
+  grok:
+    password_auth_enabled: false
+    # 仅对凭证明确标记 subscription_tier/plan_type=free 的 Grok OAuth 账号生效。
+    free_quota_soft_gate_enabled: true
+    free_quota_token_limit: 500000
+    free_quota_soft_gate_percent: 95
+    free_quota_window_hours: 24
+    # 调度热路径只读内存；缓存未命中时在后台批量刷新统计。
+    free_quota_stats_cache_seconds: 60
   # HTTP upstream connection pool settings (HTTP/2 + multi-proxy scenario defaults)
   # HTTP 上游连接池配置（HTTP/2 + 多代理场景默认值）
   # Max idle connections across all hosts
@@ -662,6 +673,16 @@ token_refresh:
   # Whether OpenAI refresh flow is allowed to sync linked Sora accounts
   # 是否允许 OpenAI 刷新流程同步覆盖 linked_openai_account_id 关联的 Sora 账号 token
   sync_linked_sora_accounts: false
+
+# Proxy expiry and fallback worker (opt-in)
+# 代理到期与自动改投任务（默认关闭，完成数据库迁移并确认后再启用）
+proxy_expiry:
+  # Start the write worker on service startup
+  # 服务启动时是否启动写任务
+  enabled: false
+  # Sweep interval in seconds; must be positive when enabled
+  # 扫描间隔（秒）；启用时必须大于 0
+  interval_seconds: 60
 
 # =============================================================================
 # API Key Auth Cache Configuration

@@ -89,6 +89,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 		return nil, err
 	}
 	targetURL := buildOpenAIChatCompletionsURL(validatedURL)
+	SetActualOpenAIUpstreamEndpoint(c, grokChatRawEndpoint)
 
 	upstreamCtx, releaseUpstreamCtx := s.detachOpenAIUpstreamContext(ctx)
 	upstreamReq, err := http.NewRequestWithContext(upstreamCtx, http.MethodPost, targetURL, bytes.NewReader(upstreamBody))

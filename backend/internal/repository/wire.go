@@ -138,7 +138,7 @@ var ProviderSet = wire.NewSet(
 	NewContentModerationHashCache,
 	NewClusterRedisPort,
 	NewClusterCachePublisher,
-	NewOIDCProviderStateStore,
+	NewEphemeralStateStore,
 
 	// Encryptors
 	NewAESEncryptor,

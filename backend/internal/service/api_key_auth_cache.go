@@ -80,33 +80,38 @@ type APIKeyAuthGroupSnapshot struct {
 	Platform string `json:"platform"`
 	Status   string `json:"status"`
 	// IsExclusive 该分组是否为专属分组。与 User.AllowedGroups 配合做运行时授权复核。
-	IsExclusive                     bool     `json:"is_exclusive"`
-	OwnerUserID                     *int64   `json:"owner_user_id,omitempty"`
-	Scope                           string   `json:"scope,omitempty"`
-	SubscriptionType                string   `json:"subscription_type"`
-	RateMultiplier                  float64  `json:"rate_multiplier"`
-	NewUserRateEnabled              bool     `json:"new_user_rate_enabled"`
-	NewUserRateMultiplier           float64  `json:"new_user_rate_multiplier"`
-	NewUserRateWindowSeconds        int      `json:"new_user_rate_window_seconds"`
-	NewUserRateQuotaUSD             float64  `json:"new_user_rate_quota_usd"`
-	DailyLimitUSD                   *float64 `json:"daily_limit_usd,omitempty"`
-	WeeklyLimitUSD                  *float64 `json:"weekly_limit_usd,omitempty"`
-	MonthlyLimitUSD                 *float64 `json:"monthly_limit_usd,omitempty"`
-	AllowImageGeneration            bool     `json:"allow_image_generation"`
-	ImageRateIndependent            bool     `json:"image_rate_independent"`
-	ImageRateMultiplier             float64  `json:"image_rate_multiplier"`
-	ImagePrice1K                    *float64 `json:"image_price_1k,omitempty"`
-	ImagePrice2K                    *float64 `json:"image_price_2k,omitempty"`
-	ImagePrice4K                    *float64 `json:"image_price_4k,omitempty"`
-	VideoRateIndependent            bool     `json:"video_rate_independent"`
-	VideoRateMultiplier             float64  `json:"video_rate_multiplier"`
-	VideoPrice480P                  *float64 `json:"video_price_480p,omitempty"`
-	VideoPrice720P                  *float64 `json:"video_price_720p,omitempty"`
-	VideoPrice1080P                 *float64 `json:"video_price_1080p,omitempty"`
-	WebSearchPricePerCall           *float64 `json:"web_search_price_per_call,omitempty"`
-	ClaudeCodeOnly                  bool     `json:"claude_code_only"`
-	FallbackGroupID                 *int64   `json:"fallback_group_id,omitempty"`
-	FallbackGroupIDOnInvalidRequest *int64   `json:"fallback_group_id_on_invalid_request,omitempty"`
+	IsExclusive                     bool                          `json:"is_exclusive"`
+	OwnerUserID                     *int64                        `json:"owner_user_id,omitempty"`
+	Scope                           string                        `json:"scope,omitempty"`
+	SubscriptionType                string                        `json:"subscription_type"`
+	RateMultiplier                  float64                       `json:"rate_multiplier"`
+	NewUserRateEnabled              bool                          `json:"new_user_rate_enabled"`
+	NewUserRateMultiplier           float64                       `json:"new_user_rate_multiplier"`
+	NewUserRateWindowSeconds        int                           `json:"new_user_rate_window_seconds"`
+	NewUserRateQuotaUSD             float64                       `json:"new_user_rate_quota_usd"`
+	DailyLimitUSD                   *float64                      `json:"daily_limit_usd,omitempty"`
+	WeeklyLimitUSD                  *float64                      `json:"weekly_limit_usd,omitempty"`
+	MonthlyLimitUSD                 *float64                      `json:"monthly_limit_usd,omitempty"`
+	AllowImageGeneration            bool                          `json:"allow_image_generation"`
+	ImageRateIndependent            bool                          `json:"image_rate_independent"`
+	ImageRateMultiplier             float64                       `json:"image_rate_multiplier"`
+	ImagePrice1K                    *float64                      `json:"image_price_1k,omitempty"`
+	ImagePrice2K                    *float64                      `json:"image_price_2k,omitempty"`
+	ImagePrice4K                    *float64                      `json:"image_price_4k,omitempty"`
+	VideoRateIndependent            bool                          `json:"video_rate_independent"`
+	VideoRateMultiplier             float64                       `json:"video_rate_multiplier"`
+	VideoPrice480P                  *float64                      `json:"video_price_480p,omitempty"`
+	VideoPrice720P                  *float64                      `json:"video_price_720p,omitempty"`
+	VideoPrice1080P                 *float64                      `json:"video_price_1080p,omitempty"`
+	VideoModelPrices                map[string]map[string]float64 `json:"video_model_prices,omitempty"`
+	WebSearchPricePerCall           *float64                      `json:"web_search_price_per_call,omitempty"`
+	SearchPricePer1K                *float64                      `json:"search_price_per_1k,omitempty"`
+	AudioRealtimePricePerMin        *float64                      `json:"audio_realtime_price_per_min,omitempty"`
+	AudioTTSPricePerMillionChars    *float64                      `json:"audio_tts_price_per_million_chars,omitempty"`
+	AudioSTTPricePerHour            *float64                      `json:"audio_stt_price_per_hour,omitempty"`
+	ClaudeCodeOnly                  bool                          `json:"claude_code_only"`
+	FallbackGroupID                 *int64                        `json:"fallback_group_id,omitempty"`
+	FallbackGroupIDOnInvalidRequest *int64                        `json:"fallback_group_id_on_invalid_request,omitempty"`
 
 	// Model routing is used by gateway account selection, so it must be part of auth cache snapshot.
 	// Only anthropic groups use these fields; others may leave them empty.

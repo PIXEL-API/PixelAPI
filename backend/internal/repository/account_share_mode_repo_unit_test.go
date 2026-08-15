@@ -585,13 +585,31 @@ func TestAccountShareModeRepositoryListListingsCountPrunesUnusedJoins(t *testing
 	}{
 		{
 			name:     "public all only counts listings",
-			required: []string{"from account_share_listings l", "l.deleted_at is null", "l.status = 'active'"},
+			required: []string{"from account_share_listings l", "$1::bigint > 0", "l.deleted_at is null", "l.status = 'active'"},
 			forbidden: []string{
 				"account_share_room_accounts",
 				"left join users u",
 				") qm on true",
 				") hm on true",
 			},
+			withArgs: []driver.Value{int64(42)},
+		},
+		{
+			name: "platform filter preserves typed viewer parameter",
+			filters: service.AccountShareListingFilters{
+				Platform: service.PlatformOpenAI,
+			},
+			required: []string{
+				"$1::bigint > 0",
+				"l.platform = $2",
+			},
+			forbidden: []string{
+				"account_share_room_accounts",
+				"left join users u",
+				") qm on true",
+				") hm on true",
+			},
+			withArgs: []driver.Value{int64(42), service.PlatformOpenAI},
 		},
 		{
 			name: "using keeps only queue visibility",

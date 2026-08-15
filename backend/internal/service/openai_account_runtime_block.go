@@ -112,7 +112,19 @@ func (s *OpenAIGatewayService) isOpenAIAccountModelRuntimeBlocked(account *Accou
 }
 
 func (s *OpenAIGatewayService) isOpenAIAccountRequestRuntimeBlocked(account *Account, requestedModel string) bool {
-	return s != nil && (s.isOpenAIAccountRuntimeBlocked(account) || s.isOpenAIAccountModelRuntimeBlocked(account, requestedModel))
+	if s == nil || account == nil {
+		return false
+	}
+	if s.isOpenAIAccountRuntimeBlocked(account) || s.isOpenAIAccountModelRuntimeBlocked(account, requestedModel) {
+		return true
+	}
+	if account.IsGrok() {
+		model := canonicalOpenAIAccountSchedulingModel(account, requestedModel)
+		now := time.Now()
+		return isGrokModelQuotaBlocked(account.ID, model, now) ||
+			isGrokTeamModelRateLimited(account, model, now)
+	}
+	return false
 }
 
 func shouldCooldownOpenAITransientUpstreamError(statusCode int, responseBody []byte) bool {

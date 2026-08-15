@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"math/rand"
 	"net/http"
 	"sort"
@@ -25,6 +26,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openaiusage"
 	"github.com/Wei-Shaw/sub2api/internal/util/logredact"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
@@ -55,6 +57,7 @@ const (
 	openAIWSRetryJitterRatioDefault    = 0.2
 	openAIUpstreamErrorBodyReadLimit   = 512 << 10
 	openAICompactSessionSeedKey        = "openai_compact_session_seed"
+	openAIUpstreamEndpointContextKey   = "openai_actual_upstream_endpoint"
 	codexCLIVersion                    = "0.144.1"
 	// Codex rate limit snapshots are throttled to avoid write amplification.
 	openAICodexSnapshotPersistMinInterval = 30 * time.Second
@@ -237,14 +240,16 @@ type OpenAIForwardResult struct {
 	ResponseID           string
 	Usage                OpenAIUsage
 	BillingUsageComplete bool
-	Model                string // 鍘熷妯″瀷锛堢敤浜庡搷搴斿拰鏃ュ織鏄剧ず锛?	// BillingModel is the model used for cost calculation.
+	Model                string // 原始模型（用于响应和日志显示）
+	// BillingModel is the model used for cost calculation.
 	// When non-empty, CalculateCost uses this instead of Model.
 	// This is set by the Anthropic Messages conversion path where
 	// the mapped upstream model differs from the client-facing model.
 	BillingModel string
 	// UpstreamModel is the actual model sent to the upstream provider after mapping.
 	// Empty when no mapping was applied (requested model was used as-is).
-	UpstreamModel string
+	UpstreamModel    string
+	UpstreamEndpoint string
 	// UpstreamResponseModel is the model declared by the raw upstream response.
 	// Billing eligibility is tracked separately.
 	UpstreamResponseModel                string
@@ -274,6 +279,31 @@ type OpenAIForwardResult struct {
 	VideoDurationSeconds int
 	// WebSearchCalls 是 Codex alpha/search 成功调用次数；大于 0 时按分组单次价格计费。
 	WebSearchCalls int
+	// SearchCount 是 Grok 原生 web_search/x_search 的成功搜索次数；按每千次价格计费。
+	SearchCount int
+	// AudioUsage 是 Grok Voice TTS/STT/Realtime 的显式计费单位。
+	AudioUsage *AudioUsage
+}
+
+// SetActualOpenAIUpstreamEndpoint records the endpoint selected by the current
+// forwarding attempt, including error paths where no result is returned.
+func SetActualOpenAIUpstreamEndpoint(c *gin.Context, endpoint string) {
+	if c == nil {
+		return
+	}
+	c.Set(openAIUpstreamEndpointContextKey, strings.TrimSpace(endpoint))
+}
+
+func GetActualOpenAIUpstreamEndpoint(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	value, exists := c.Get(openAIUpstreamEndpointContextKey)
+	if !exists {
+		return ""
+	}
+	endpoint, _ := value.(string)
+	return strings.TrimSpace(endpoint)
 }
 
 func OpenAIForwardResultHasBillableUsage(result *OpenAIForwardResult) bool {
@@ -294,7 +324,9 @@ func OpenAIForwardResultHasBillableUsage(result *OpenAIForwardResult) bool {
 		usage.ImageCount > 0 ||
 		result.ImageCount > 0 ||
 		result.VideoCount > 0 ||
-		result.WebSearchCalls > 0
+		result.WebSearchCalls > 0 ||
+		result.SearchCount > 0 ||
+		result.AudioUsage != nil
 }
 
 // OpenAIForwardResultHasCompleteBillableUsage distinguishes an explicitly
@@ -309,7 +341,9 @@ func OpenAIForwardResultHasCompleteBillableUsage(result *OpenAIForwardResult) bo
 		result.Usage.ImageCount > 0 ||
 		result.ImageCount > 0 ||
 		result.VideoCount > 0 ||
-		result.WebSearchCalls > 0
+		result.WebSearchCalls > 0 ||
+		result.SearchCount > 0 ||
+		result.AudioUsage != nil
 }
 
 type openAIResponseImageBillingConfig struct {
@@ -2306,7 +2340,11 @@ func (s *OpenAIGatewayService) listSchedulableAccounts(ctx context.Context, grou
 		if err != nil {
 			return nil, err
 		}
-		return FilterAccountsVisibleToRequestUser(ctx, accounts), nil
+		accounts = FilterAccountsVisibleToRequestUser(ctx, accounts)
+		if platform == PlatformGrok {
+			accounts = s.filterGrokFreeQuotaAccountsForOpenAI(ctx, accounts)
+		}
+		return accounts, nil
 	}
 	var accounts []Account
 	var err error
@@ -2320,7 +2358,11 @@ func (s *OpenAIGatewayService) listSchedulableAccounts(ctx context.Context, grou
 	if err != nil {
 		return nil, fmt.Errorf("query accounts failed: %w", err)
 	}
-	return FilterAccountsVisibleToRequestUser(ctx, accounts), nil
+	accounts = FilterAccountsVisibleToRequestUser(ctx, accounts)
+	if platform == PlatformGrok {
+		accounts = s.filterGrokFreeQuotaAccountsForOpenAI(ctx, accounts)
+	}
+	return accounts, nil
 }
 
 func (s *OpenAIGatewayService) resolveAccountShareModeBoundAccount(ctx context.Context, groupID *int64, requestedModel string, excludedIDs map[int64]struct{}, requireCompact bool) (*Account, bool, error) {
@@ -2526,6 +2568,11 @@ func (s *OpenAIGatewayService) getSchedulableAccount(ctx context.Context, accoun
 	}
 	if !IsAccountVisibleToRequestUser(ctx, account) {
 		return nil, ErrAccountNotFound
+	}
+	if account.IsGrok() {
+		if gated := s.filterGrokFreeQuotaAccountsForOpenAI(ctx, []Account{*account}); len(gated) == 0 {
+			return nil, nil
+		}
 	}
 	return account, nil
 }
@@ -2753,6 +2800,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 // ForwardWithAnalysis forwards request to OpenAI API and reuses parsed /responses metadata when available.
 func (s *OpenAIGatewayService) ForwardWithAnalysis(ctx context.Context, c *gin.Context, account *Account, body []byte, analysis *OpenAIResponsesRequestAnalysis) (*OpenAIForwardResult, error) {
 	resetOpenAIRequestIdentityState(c)
+	SetActualOpenAIUpstreamEndpoint(c, "")
 	beginUpstreamResponseModelObservation(c)
 	clearGrokResponsesClientToolMapping(c)
 	// Keep attempt TTFT separate from the end-to-end first-output budget. The
@@ -5044,6 +5092,13 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithReasoning(
 	if s.cfg != nil && s.cfg.Gateway.StreamDataIntervalTimeout > 0 {
 		streamInterval = time.Duration(s.cfg.Gateway.StreamDataIntervalTimeout) * time.Second
 	}
+	if account != nil && account.Platform == PlatformGrok {
+		configuredSeconds := 0
+		if s.cfg != nil {
+			configuredSeconds = s.cfg.Gateway.StreamDataIntervalTimeout
+		}
+		streamInterval = resolveGrokStreamIdleTimeout(configuredSeconds)
+	}
 	var streamIdleTimer *time.Timer
 	var streamIdleCh <-chan time.Time
 	if streamInterval > 0 {
@@ -5271,7 +5326,7 @@ streamLoop:
 				!sawFailedEvent &&
 				!semanticOutputSeen &&
 				!clientOutputStarted &&
-				openAIResponsesCompletedEventIsEmpty(dataBytes, usage) {
+				openAIResponsesCompletedEventIsEmpty(dataBytes, usage, billingUsageObservation.complete()) {
 				return resultWithUsage(), s.newOpenAIStreamFailoverError(
 					c,
 					account,
@@ -6099,6 +6154,7 @@ type openaiStreamingResult struct {
 	firstTokenMs        *int
 	responseID          string
 	responseServiceTier string
+	searchCount         int
 }
 
 func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, startTime time.Time, originalModel, mappedModel string) (*openaiStreamingResult, error) {
@@ -6215,6 +6271,13 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	streamInterval := time.Duration(0)
 	if s.cfg != nil && s.cfg.Gateway.StreamDataIntervalTimeout > 0 {
 		streamInterval = time.Duration(s.cfg.Gateway.StreamDataIntervalTimeout) * time.Second
+	}
+	if account != nil && account.Platform == PlatformGrok {
+		configuredSeconds := 0
+		if s.cfg != nil {
+			configuredSeconds = s.cfg.Gateway.StreamDataIntervalTimeout
+		}
+		streamInterval = resolveGrokStreamIdleTimeout(configuredSeconds)
 	}
 	// 浠呯洃鎺т笂娓告暟鎹棿闅旇秴鏃讹紝涓嶈涓嬫父鍐欏叆闃诲褰卞搷
 	var intervalTicker *time.Ticker
@@ -6382,6 +6445,8 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		grokReasoningCachedItems = make(map[string]struct{})
 	}
 	imageCounter := newOpenAIImageOutputCounter()
+	streamSearchSeen := make(map[string]struct{})
+	searchCount := 0
 	resultWithUsage := func() *openaiStreamingResult {
 		usage.ImageCount = imageCounter.Count()
 		return &openaiStreamingResult{
@@ -6389,6 +6454,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			firstTokenMs:        firstTokenMs,
 			responseID:          responseID,
 			responseServiceTier: usage.ResponseServiceTier,
+			searchCount:         searchCount,
 		}
 	}
 	flushPending := func(disconnectMessage string) {
@@ -6572,6 +6638,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				}
 			}
 			imageCounter.AddSSEData(dataBytes)
+			if account != nil && account.Platform == PlatformGrok {
+				searchCount += countGrokNativeSearchCallsInSSEDataDedup(dataBytes, streamSearchSeen)
+			}
 			s.parseSSEUsageBytes(dataBytes, usage)
 			successTerminal := openAIStreamEventIsTerminal(data) &&
 				eventType != "response.failed" &&
@@ -6625,7 +6694,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				!sawFailedEvent &&
 				!responsesSemanticOutputSeen &&
 				!clientOutputStarted &&
-				openAIResponsesCompletedEventIsEmpty(dataBytes, usage) {
+				openAIResponsesCompletedEventIsEmpty(dataBytes, usage, billingUsageObservation.complete()) {
 				failoverErr := s.newOpenAIStreamFailoverError(
 					c,
 					account,
@@ -6812,6 +6881,13 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				return resultWithUsage(), nil
 			}
 			logger.LegacyPrintf("service.openai_gateway", "Stream data interval timeout: account=%d model=%s interval=%s", account.ID, originalModel, streamInterval)
+			if account != nil && account.Platform == PlatformGrok {
+				s.tempUnscheduleGrok(ctx, account, grokStreamIdleCooldown, "grok stream idle timeout")
+				if !openAIStreamClientOutputStarted(c, clientOutputStarted) && !eventShouldFlush {
+					_ = resp.Body.Close()
+					return resultWithUsage(), grokStreamIdleFailoverError(account, streamInterval)
+				}
+			}
 			if guardFirstOutput && !clientOutputStarted {
 				_ = resp.Body.Close()
 				failoverErr := s.newOpenAIStreamFailoverError(c, account, false, upstreamRequestID, nil, "OpenAI stream produced no complete output event before the data interval timeout")
@@ -6955,18 +7031,17 @@ func (s *OpenAIGatewayService) parseSSEUsageBytes(data []byte, usage *OpenAIUsag
 	if usage == nil || len(data) == 0 || bytes.Equal(data, []byte("[DONE]")) {
 		return
 	}
-	// 閫夋嫨鎬цВ鏋愶細浠呭湪鏁版嵁涓寘鍚粓姝簨浠舵爣璇嗘椂鎵嶈繘鍏ュ瓧娈垫彁鍙栥€?
-	if len(data) < 72 {
-		return
-	}
 	eventType := gjson.GetBytes(data, "type").String()
 	if eventType != "response.completed" && eventType != "response.done" && eventType != "response.failed" &&
 		eventType != "response.incomplete" && eventType != "response.cancelled" && eventType != "response.canceled" {
 		return
 	}
-	if parsed, ok := openAIUsageFromGJSON(gjson.GetBytes(data, "response.usage")); ok {
-		mergeHostedImageGenToolUsage(hostedImageGenToolUsage(data), &parsed)
+	if parsed, ok := extractOpenAIUsageFromJSONBytes(data); ok {
+		if parsed.ResponseServiceTier == "" {
+			parsed.ResponseServiceTier = strings.TrimSpace(gjson.GetBytes(data, "response.service_tier").String())
+		}
 		*usage = parsed
+		return
 	}
 	if responseServiceTier := strings.TrimSpace(gjson.GetBytes(data, "response.service_tier").String()); responseServiceTier != "" {
 		usage.ResponseServiceTier = responseServiceTier
@@ -6974,15 +7049,16 @@ func (s *OpenAIGatewayService) parseSSEUsageBytes(data []byte, usage *OpenAIUsag
 }
 
 func extractOpenAIUsageFromJSONBytes(body []byte) (OpenAIUsage, bool) {
-	if len(body) == 0 || !gjson.ValidBytes(body) {
-		return OpenAIUsage{}, false
-	}
-	usage, ok := openAIUsageFromGJSON(gjson.GetBytes(body, "usage"))
+	envelope, ok := openaiusage.SelectEnvelope(body)
 	if !ok {
 		return OpenAIUsage{}, false
 	}
-	mergeHostedImageGenToolUsage(hostedImageGenToolUsage(body), &usage)
-	usage.ResponseServiceTier = strings.TrimSpace(gjson.GetBytes(body, "service_tier").String())
+	usage, ok := openAIUsageFromGJSON(envelope.Usage)
+	if !ok {
+		return OpenAIUsage{}, false
+	}
+	mergeHostedImageGenToolUsage(envelope.ImageGen, &usage)
+	usage.ResponseServiceTier = envelope.ServiceTier
 	return usage, true
 }
 
@@ -7199,8 +7275,9 @@ func (s *OpenAIGatewayService) startDisconnectedStreamDrainDeadline(ctx context.
 
 type openaiNonStreamingResult struct {
 	*OpenAIUsage
-	usage      *OpenAIUsage
-	responseID string
+	usage       *OpenAIUsage
+	responseID  string
+	searchCount int
 }
 
 func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, originalModel, mappedModel string) (*openaiNonStreamingResult, error) {
@@ -7303,6 +7380,12 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 		OpenAIUsage: usage,
 		usage:       usage,
 		responseID:  extractOpenAIResponseIDFromJSONBytes(body),
+		searchCount: func() int {
+			if account != nil && account.Platform == PlatformGrok {
+				return countGrokNativeSearchCallsFromJSONBytes(body)
+			}
+			return 0
+		}(),
 	}, nil
 }
 
@@ -7407,6 +7490,12 @@ func (s *OpenAIGatewayService) handleSSEToJSON(ctx context.Context, resp *http.R
 		OpenAIUsage: usage,
 		usage:       usage,
 		responseID:  extractOpenAIResponseIDFromJSONBytes(body),
+		searchCount: func() int {
+			if account != nil && account.Platform == PlatformGrok {
+				return countGrokNativeSearchCallsFromSSEBody(bodyText)
+			}
+			return 0
+		}(),
 	}, nil
 }
 
@@ -7974,7 +8063,7 @@ func (s *OpenAIGatewayService) recordUsageOnce(ctx context.Context, input *OpenA
 		input.BillingModelSource,
 		result.UpstreamResponseModel,
 		result.UpstreamResponseModelConflict,
-		result.ImageCount > 0 || result.VideoCount > 0 || result.WebSearchCalls > 0,
+		result.ImageCount > 0 || result.VideoCount > 0 || result.WebSearchCalls > 0 || result.SearchCount > 0 || result.AudioUsage != nil,
 		result.UpstreamResponseModelBillingEligible,
 	); responseModel != "" && !strings.EqualFold(responseModel, strings.TrimSpace(billingModel)) {
 		if identified, responseChannelPriced := s.hasIdentifiedOpenAIResponsePricing(ctx, responseModel, apiKey); identified {
@@ -8189,6 +8278,33 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
 	if result != nil && result.WebSearchCalls > 0 {
 		return s.billingService.CalculateWebSearchCost(result.WebSearchCalls, webSearchPricePerCallFromAPIKey(apiKey), multiplier), nil
 	}
+	if result != nil && result.AudioUsage != nil {
+		if result.AudioUsage.DurationOrUnits <= 0 {
+			return nil, fmt.Errorf("grok audio billing units must be greater than zero")
+		}
+		config := groupAudioPriceConfigFromAPIKey(apiKey)
+		var price *float64
+		switch strings.ToLower(strings.TrimSpace(result.AudioUsage.Mode)) {
+		case "realtime":
+			if config != nil {
+				price = config.RealtimePerMin
+			}
+		case "tts":
+			if config != nil {
+				price = config.TTSPerMChars
+			}
+		case "stt":
+			if config != nil {
+				price = config.STTPerHour
+			}
+		default:
+			return nil, fmt.Errorf("unsupported grok audio billing mode %q", result.AudioUsage.Mode)
+		}
+		if err := validateExplicitGrokUsagePrice("audio_"+strings.ToLower(strings.TrimSpace(result.AudioUsage.Mode)), price); err != nil {
+			return nil, err
+		}
+		return s.billingService.CalculateAudioCost(result.AudioUsage.Mode, result.AudioUsage.DurationOrUnits, config, multiplier), nil
+	}
 	if result != nil && result.VideoCount > 0 {
 		if resolved := s.resolveOpenAIChannelPricing(ctx, billingModel, apiKey); resolved == nil || resolved.Mode != BillingModeToken {
 			return s.calculateOpenAIVideoCost(ctx, billingModel, apiKey, result, videoMultiplier), nil
@@ -8214,21 +8330,67 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
 		}
 		return s.calculateOpenAIImageCost(ctx, billingModel, apiKey, result, imageMultiplier), nil
 	}
+	var tokenCost *CostBreakdown
 	var groupID *int64
 	if apiKey != nil && apiKey.Group != nil {
 		gid := apiKey.Group.ID
 		groupID = &gid
 	}
-	return s.billingService.CalculateCostUnified(CostInput{
-		Ctx:            ctx,
-		Model:          billingModel,
-		GroupID:        groupID,
-		Tokens:         tokens,
-		RequestCount:   1,
-		RateMultiplier: multiplier,
-		ServiceTier:    serviceTier,
-		Resolver:       s.resolver,
-	})
+	if hasBillableOpenAITokens(tokens) {
+		var err error
+		tokenCost, err = s.billingService.CalculateCostUnified(CostInput{
+			Ctx:            ctx,
+			Model:          billingModel,
+			GroupID:        groupID,
+			Tokens:         tokens,
+			RequestCount:   1,
+			RateMultiplier: multiplier,
+			ServiceTier:    serviceTier,
+			Resolver:       s.resolver,
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	if result == nil || result.SearchCount <= 0 {
+		if tokenCost == nil {
+			// Preserve the existing audit contract for a successfully completed
+			// token request whose upstream usage is explicitly zero. Search-only
+			// requests skip this branch and remain independent of token pricing.
+			return s.billingService.CalculateCostUnified(CostInput{
+				Ctx:            ctx,
+				Model:          billingModel,
+				GroupID:        groupID,
+				Tokens:         tokens,
+				RequestCount:   1,
+				RateMultiplier: multiplier,
+				ServiceTier:    serviceTier,
+				Resolver:       s.resolver,
+			})
+		}
+		return tokenCost, nil
+	}
+	searchPrice := groupSearchPricePer1KFromAPIKey(apiKey)
+	if err := validateExplicitGrokUsagePrice("search_price_per_1k", searchPrice); err != nil {
+		return nil, err
+	}
+	searchCost := s.billingService.CalculateSearchCost(result.SearchCount, searchPrice, multiplier)
+	if tokenCost == nil {
+		return searchCost, nil
+	}
+	tokenCost.TotalCost += searchCost.TotalCost
+	tokenCost.ActualCost += searchCost.ActualCost
+	return tokenCost, nil
+}
+
+func validateExplicitGrokUsagePrice(name string, price *float64) error {
+	if price == nil {
+		return fmt.Errorf("grok billing configuration %s is required", name)
+	}
+	if math.IsNaN(*price) || math.IsInf(*price, 0) || *price < 0 {
+		return fmt.Errorf("grok billing configuration %s must be a finite number greater than or equal to zero", name)
+	}
+	return nil
 }
 
 func (s *OpenAIGatewayService) calculateOpenAIVideoCost(
@@ -8245,7 +8407,7 @@ func (s *OpenAIGatewayService) calculateOpenAIVideoCost(
 	resolution := NormalizeVideoBillingResolutionOrDefault(result.VideoResolution)
 	durationSeconds := NormalizeVideoBillingDurationSecondsOrDefault(result.VideoDurationSeconds)
 	groupConfig := videoPriceConfigFromAPIKey(apiKey)
-	if apiKey != nil && apiKey.Group != nil && apiKey.Group.GetVideoPrice(resolution) != nil {
+	if apiKeyHasConfiguredVideoPrice(apiKey, billingModel, resolution) {
 		return s.billingService.CalculateVideoCost(billingModel, resolution, videoCount, durationSeconds, groupConfig, multiplier)
 	}
 

@@ -81,6 +81,7 @@ type AdminService interface {
 	RecoverDuplicateAccount(ctx context.Context, id int64, actorScope, operationKey string) (*Account, error)
 	UpdateAccount(ctx context.Context, id int64, input *UpdateAccountInput) (*Account, error)
 	DeleteAccount(ctx context.Context, id int64) error
+	RevertAccountProxyFallback(ctx context.Context, id int64) error
 	RefreshAccountCredentials(ctx context.Context, id int64) (*Account, error)
 	ClearAccountError(ctx context.Context, id int64) (*Account, error)
 	SetAccountError(ctx context.Context, id int64, errorMsg string) error
@@ -211,20 +212,25 @@ type CreateGroupInput struct {
 	WeeklyLimitUSD           *float64 // 周限额 (USD)
 	MonthlyLimitUSD          *float64 // 月限额 (USD)
 	// 图片生成计费配置（仅 antigravity 平台使用）
-	AllowImageGeneration  bool
-	ImageRateIndependent  bool
-	ImageRateMultiplier   *float64
-	ImagePrice1K          *float64
-	ImagePrice2K          *float64
-	ImagePrice4K          *float64
-	VideoRateIndependent  bool
-	VideoRateMultiplier   *float64
-	VideoPrice480P        *float64
-	VideoPrice720P        *float64
-	VideoPrice1080P       *float64
-	WebSearchPricePerCall *float64
-	ClaudeCodeOnly        bool   // 仅允许 Claude Code 客户端
-	FallbackGroupID       *int64 // 降级分组 ID
+	AllowImageGeneration         bool
+	ImageRateIndependent         bool
+	ImageRateMultiplier          *float64
+	ImagePrice1K                 *float64
+	ImagePrice2K                 *float64
+	ImagePrice4K                 *float64
+	VideoRateIndependent         bool
+	VideoRateMultiplier          *float64
+	VideoPrice480P               *float64
+	VideoPrice720P               *float64
+	VideoPrice1080P              *float64
+	VideoModelPrices             map[string]map[string]float64
+	WebSearchPricePerCall        *float64
+	SearchPricePer1K             *float64
+	AudioRealtimePricePerMin     *float64
+	AudioTTSPricePerMillionChars *float64
+	AudioSTTPricePerHour         *float64
+	ClaudeCodeOnly               bool   // 仅允许 Claude Code 客户端
+	FallbackGroupID              *int64 // 降级分组 ID
 	// 无效请求兜底分组 ID（仅 anthropic 平台使用）
 	FallbackGroupIDOnInvalidRequest *int64
 	// 模型路由配置（仅 anthropic 平台使用）
@@ -267,20 +273,25 @@ type UpdateGroupInput struct {
 	MonthlyLimitUSD          *float64 // 月限额 (USD)
 	MonthlyLimitUSDProvided  bool
 	// 图片生成计费配置（仅 antigravity 平台使用）
-	AllowImageGeneration  *bool
-	ImageRateIndependent  *bool
-	ImageRateMultiplier   *float64
-	ImagePrice1K          *float64
-	ImagePrice2K          *float64
-	ImagePrice4K          *float64
-	VideoRateIndependent  *bool
-	VideoRateMultiplier   *float64
-	VideoPrice480P        *float64
-	VideoPrice720P        *float64
-	VideoPrice1080P       *float64
-	WebSearchPricePerCall *float64
-	ClaudeCodeOnly        *bool  // 仅允许 Claude Code 客户端
-	FallbackGroupID       *int64 // 降级分组 ID
+	AllowImageGeneration         *bool
+	ImageRateIndependent         *bool
+	ImageRateMultiplier          *float64
+	ImagePrice1K                 *float64
+	ImagePrice2K                 *float64
+	ImagePrice4K                 *float64
+	VideoRateIndependent         *bool
+	VideoRateMultiplier          *float64
+	VideoPrice480P               *float64
+	VideoPrice720P               *float64
+	VideoPrice1080P              *float64
+	VideoModelPrices             map[string]map[string]float64
+	WebSearchPricePerCall        *float64
+	SearchPricePer1K             *float64
+	AudioRealtimePricePerMin     *float64
+	AudioTTSPricePerMillionChars *float64
+	AudioSTTPricePerHour         *float64
+	ClaudeCodeOnly               *bool  // 仅允许 Claude Code 客户端
+	FallbackGroupID              *int64 // 降级分组 ID
 	// 无效请求兜底分组 ID（仅 anthropic 平台使用）
 	FallbackGroupIDOnInvalidRequest *int64
 	// 模型路由配置（仅 anthropic 平台使用）
@@ -333,6 +344,12 @@ type CreateAccountInput struct {
 // commit or roll back together.
 type AdminAccountRepository interface {
 	CreateWithAccountGroups(ctx context.Context, account *Account, groups []AccountGroup) error
+}
+
+// AccountProxyFallbackRepository keeps the transaction-only fallback recovery
+// boundary separate from the broad AccountRepository used by existing callers.
+type AccountProxyFallbackRepository interface {
+	RevertProxyFallback(ctx context.Context, accountID int64) error
 }
 
 type UpdateAccountInput struct {
@@ -474,6 +491,10 @@ type CreateProxyInput struct {
 	// RequiredAccountLevel 为空表示所有账号等级可用。
 	RequiredAccountLevel string
 	MaxAccounts          int
+	ExpiresAt            *time.Time
+	FallbackMode         string
+	BackupProxyID        *int64
+	ExpiryWarnDays       int
 	// OwnerUserID 为 0 表示平台代理（所有用户可见）；>0 表示专属代理，仅对该用户显示可用。
 	OwnerUserID int64
 }
@@ -491,6 +512,14 @@ type UpdateProxyInput struct {
 	Platform             *string
 	RequiredAccountLevel *string
 	MaxAccounts          *int
+	// ExpiresAtProvided / BackupProxyIDProvided 区分 omitted 与显式 null。
+	// Provided=false 时保留旧值；Provided=true 且值为 nil 时清空。
+	ExpiresAt             *time.Time
+	ExpiresAtProvided     bool
+	FallbackMode          *string
+	BackupProxyID         *int64
+	BackupProxyIDProvided bool
+	ExpiryWarnDays        *int
 	// OwnerUserID 为 nil 表示不修改；0 表示清空归属改回平台代理；>0 表示归属到该用户。
 	OwnerUserID *int64
 }
@@ -628,6 +657,7 @@ type adminServiceImpl struct {
 	groupRepo                  GroupRepository
 	accountRepo                AccountRepository
 	accountDuplicateRepo       AdminAccountRepository
+	accountProxyFallbackRepo   AccountProxyFallbackRepository
 	proxyRepo                  ProxyRepository
 	apiKeyRepo                 APIKeyRepository
 	accountShareBindingChecker AccountShareAPIKeyBindingChecker
@@ -646,6 +676,10 @@ type adminServiceImpl struct {
 	privateGroupProvisioner    UserPrivateGroupProvisioner
 	systemNoticeService        *SystemNoticeService
 	agentIdentityWSInvalidator agentIdentityWSConnectionInvalidator
+	grokProxyRecovery          interface {
+		RecoverGrokProxyCredentialFailure(context.Context, int64) (*SuccessfulTestRecoveryResult, error)
+		ScheduleGrokProxyCredentialRecovery(proxyID int64)
+	}
 }
 
 type userGroupRateBatchReader interface {
@@ -674,11 +708,13 @@ func NewAdminService(
 	privacyClientFactory PrivacyClientFactory,
 ) AdminService {
 	accountDuplicateRepo, _ := accountRepo.(AdminAccountRepository)
+	accountProxyFallbackRepo, _ := accountRepo.(AccountProxyFallbackRepository)
 	return &adminServiceImpl{
 		userRepo:                   userRepo,
 		groupRepo:                  groupRepo,
 		accountRepo:                accountRepo,
 		accountDuplicateRepo:       accountDuplicateRepo,
+		accountProxyFallbackRepo:   accountProxyFallbackRepo,
 		proxyRepo:                  proxyRepo,
 		apiKeyRepo:                 apiKeyRepo,
 		accountShareBindingChecker: accountShareBindingChecker,
@@ -714,6 +750,16 @@ func SetAdminSystemNoticeService(svc AdminService, noticeService *SystemNoticeSe
 func SetAdminAgentIdentityWSInvalidator(svc AdminService, invalidator agentIdentityWSConnectionInvalidator) AdminService {
 	if impl, ok := svc.(*adminServiceImpl); ok {
 		impl.agentIdentityWSInvalidator = invalidator
+	}
+	return svc
+}
+
+func SetAdminGrokProxyCredentialRecovery(svc AdminService, recovery interface {
+	RecoverGrokProxyCredentialFailure(context.Context, int64) (*SuccessfulTestRecoveryResult, error)
+	ScheduleGrokProxyCredentialRecovery(proxyID int64)
+}) AdminService {
+	if impl, ok := svc.(*adminServiceImpl); ok {
+		impl.grokProxyRecovery = recovery
 	}
 	return svc
 }
@@ -2120,6 +2166,18 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	if platform == "" {
 		platform = PlatformAnthropic
 	}
+	if err := validateGroupPricingInput(
+		input.VideoModelPrices,
+		map[string]*float64{
+			"web_search_price_per_call":         input.WebSearchPricePerCall,
+			"search_price_per_1k":               input.SearchPricePer1K,
+			"audio_realtime_price_per_min":      input.AudioRealtimePricePerMin,
+			"audio_tts_price_per_million_chars": input.AudioTTSPricePerMillionChars,
+			"audio_stt_price_per_hour":          input.AudioSTTPricePerHour,
+		},
+	); err != nil {
+		return nil, err
+	}
 	requiredAccountLevel, err := s.validateRequiredAccountLevel(ctx, platform, input.RequiredAccountLevel)
 	if err != nil {
 		return nil, err
@@ -2165,6 +2223,10 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	videoPrice720P := normalizePrice(input.VideoPrice720P)
 	videoPrice1080P := normalizePrice(input.VideoPrice1080P)
 	webSearchPricePerCall := normalizePrice(input.WebSearchPricePerCall)
+	searchPricePer1K := normalizePrice(input.SearchPricePer1K)
+	audioRealtimePricePerMin := normalizePrice(input.AudioRealtimePricePerMin)
+	audioTTSPricePerMillionChars := normalizePrice(input.AudioTTSPricePerMillionChars)
+	audioSTTPricePerHour := normalizePrice(input.AudioSTTPricePerHour)
 
 	// 校验降级分组
 	if input.FallbackGroupID != nil {
@@ -2250,7 +2312,12 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		VideoPrice480P:                  videoPrice480P,
 		VideoPrice720P:                  videoPrice720P,
 		VideoPrice1080P:                 videoPrice1080P,
+		VideoModelPrices:                NormalizeVideoModelPrices(input.VideoModelPrices),
 		WebSearchPricePerCall:           webSearchPricePerCall,
+		SearchPricePer1K:                searchPricePer1K,
+		AudioRealtimePricePerMin:        audioRealtimePricePerMin,
+		AudioTTSPricePerMillionChars:    audioTTSPricePerMillionChars,
+		AudioSTTPricePerHour:            audioSTTPricePerHour,
 		ClaudeCodeOnly:                  input.ClaudeCodeOnly,
 		FallbackGroupID:                 input.FallbackGroupID,
 		FallbackGroupIDOnInvalidRequest: fallbackOnInvalidRequest,
@@ -2302,6 +2369,33 @@ func normalizePrice(price *float64) *float64 {
 	return price
 }
 
+func validateGroupPricingInput(videoModelPrices map[string]map[string]float64, scalarPrices map[string]*float64) error {
+	for field, price := range scalarPrices {
+		if price == nil {
+			continue
+		}
+		if math.IsNaN(*price) || math.IsInf(*price, 0) {
+			return invalidGroupInput(field + " must be a finite number")
+		}
+	}
+
+	for model, tiers := range videoModelPrices {
+		family := CanonicalGrokImagineVideoPriceFamily(model)
+		if family == "" {
+			return invalidGroupInput("video_model_prices contains an unsupported Grok video model family")
+		}
+		for resolution, price := range tiers {
+			if _, ok := NormalizeVideoBillingResolution(resolution); !ok {
+				return invalidGroupInput("video_model_prices contains an unsupported resolution")
+			}
+			if math.IsNaN(price) || math.IsInf(price, 0) || price < 0 {
+				return invalidGroupInput("video_model_prices values must be finite numbers >= 0")
+			}
+		}
+	}
+	return nil
+}
+
 func normalizeMediaRateMultiplier(multiplier *float64) float64 {
 	if multiplier == nil || *multiplier < 0 {
 		return 1.0
@@ -2322,6 +2416,13 @@ func sanitizeGroupPlatformPricingFields(group *Group) {
 		group.VideoPrice480P = nil
 		group.VideoPrice720P = nil
 		group.VideoPrice1080P = nil
+		group.VideoModelPrices = nil
+		group.SearchPricePer1K = nil
+		group.AudioRealtimePricePerMin = nil
+		group.AudioTTSPricePerMillionChars = nil
+		group.AudioSTTPricePerHour = nil
+	} else {
+		group.VideoModelPrices = NormalizeVideoModelPrices(group.VideoModelPrices)
 	}
 	if group.Platform != PlatformOpenAI {
 		group.WebSearchPricePerCall = nil
@@ -2450,6 +2551,18 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	if input.Platform != "" {
 		group.Platform = input.Platform
 	}
+	if err := validateGroupPricingInput(
+		input.VideoModelPrices,
+		map[string]*float64{
+			"web_search_price_per_call":         input.WebSearchPricePerCall,
+			"search_price_per_1k":               input.SearchPricePer1K,
+			"audio_realtime_price_per_min":      input.AudioRealtimePricePerMin,
+			"audio_tts_price_per_million_chars": input.AudioTTSPricePerMillionChars,
+			"audio_stt_price_per_hour":          input.AudioSTTPricePerHour,
+		},
+	); err != nil {
+		return nil, err
+	}
 	if input.RateMultiplier != nil {
 		if *input.RateMultiplier <= 0 {
 			return nil, invalidGroupInput("rate_multiplier must be > 0")
@@ -2558,8 +2671,23 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	if input.VideoPrice1080P != nil {
 		group.VideoPrice1080P = normalizePrice(input.VideoPrice1080P)
 	}
+	if input.VideoModelPrices != nil {
+		group.VideoModelPrices = NormalizeVideoModelPrices(input.VideoModelPrices)
+	}
 	if input.WebSearchPricePerCall != nil {
 		group.WebSearchPricePerCall = normalizePrice(input.WebSearchPricePerCall)
+	}
+	if input.SearchPricePer1K != nil {
+		group.SearchPricePer1K = normalizePrice(input.SearchPricePer1K)
+	}
+	if input.AudioRealtimePricePerMin != nil {
+		group.AudioRealtimePricePerMin = normalizePrice(input.AudioRealtimePricePerMin)
+	}
+	if input.AudioTTSPricePerMillionChars != nil {
+		group.AudioTTSPricePerMillionChars = normalizePrice(input.AudioTTSPricePerMillionChars)
+	}
+	if input.AudioSTTPricePerHour != nil {
+		group.AudioSTTPricePerHour = normalizePrice(input.AudioSTTPricePerHour)
 	}
 
 	// Claude Code 客户端限制
@@ -3692,6 +3820,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			account.ProxyID = input.ProxyID
 		}
 		account.Proxy = nil // 清除关联对象，防止 GORM Save 时根据 Proxy.ID 覆盖 ProxyID
+		account.ProxyFallbackOriginID = nil
 	}
 	// 只在指针非 nil 时更新 Concurrency（支持设置为 0）
 	if input.Concurrency != nil {
@@ -4383,6 +4512,16 @@ func (s *adminServiceImpl) DeleteAccount(ctx context.Context, id int64) error {
 	return nil
 }
 
+func (s *adminServiceImpl) RevertAccountProxyFallback(ctx context.Context, id int64) error {
+	if id <= 0 {
+		return ErrAccountNotFound
+	}
+	if s.accountProxyFallbackRepo == nil {
+		return ErrAccountProxyFallbackUnavailable
+	}
+	return s.accountProxyFallbackRepo.RevertProxyFallback(ctx, id)
+}
+
 func (s *adminServiceImpl) notifyAccountCreated(ctx context.Context, account *Account) {
 	if s == nil || s.systemNoticeService == nil {
 		return
@@ -4606,6 +4745,19 @@ func (s *adminServiceImpl) RefreshAccountCredentials(ctx context.Context, id int
 }
 
 func (s *adminServiceImpl) ClearAccountError(ctx context.Context, id int64) (*Account, error) {
+	account, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if isGrokProxyCredentialFailureAccount(account) {
+		if s.grokProxyRecovery == nil {
+			return nil, errors.New("Grok proxy credential recovery service is not configured")
+		}
+		if _, err := s.grokProxyRecovery.RecoverGrokProxyCredentialFailure(ctx, id); err != nil {
+			return nil, err
+		}
+		return s.accountRepo.GetByID(ctx, id)
+	}
 	if err := s.accountRepo.ClearError(ctx, id); err != nil {
 		return nil, err
 	}
@@ -4797,6 +4949,13 @@ func (s *adminServiceImpl) CreateProxy(ctx context.Context, input *CreateProxyIn
 		RequiredAccountLevel: NormalizeRequiredAccountLevel(input.RequiredAccountLevel),
 		Status:               StatusActive,
 		MaxAccounts:          input.MaxAccounts,
+		ExpiresAt:            input.ExpiresAt,
+		FallbackMode:         normalizeProxyFallbackMode(input.FallbackMode),
+		BackupProxyID:        input.BackupProxyID,
+		ExpiryWarnDays:       input.ExpiryWarnDays,
+	}
+	if err := s.validateProxyLifecycle(ctx, proxy); err != nil {
+		return nil, err
 	}
 	if err := s.proxyRepo.Create(ctx, proxy); err != nil {
 		return nil, err
@@ -4837,6 +4996,12 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 	if err != nil {
 		return nil, err
 	}
+	// 兼容第二期上线前的历史记录和测试 fixture：旧数据没有 fallback_mode，
+	// 与新建代理的默认语义一致按 none 处理，避免普通改名/改归属被新增校验阻断。
+	if strings.TrimSpace(proxy.FallbackMode) == "" {
+		proxy.FallbackMode = FallbackModeNone
+	}
+	before := *proxy
 
 	if input.Name != "" {
 		proxy.Name = input.Name
@@ -4877,6 +5042,18 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 		}
 		proxy.MaxAccounts = *input.MaxAccounts
 	}
+	if input.ExpiresAtProvided {
+		proxy.ExpiresAt = input.ExpiresAt
+	}
+	if input.FallbackMode != nil {
+		proxy.FallbackMode = normalizeProxyFallbackMode(*input.FallbackMode)
+	}
+	if input.BackupProxyIDProvided {
+		proxy.BackupProxyID = input.BackupProxyID
+	}
+	if input.ExpiryWarnDays != nil {
+		proxy.ExpiryWarnDays = *input.ExpiryWarnDays
+	}
 	ownerAssignmentChanged := false
 	if input.OwnerUserID != nil {
 		requested := *input.OwnerUserID
@@ -4898,18 +5075,54 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 			ownerAssignmentChanged = true
 		}
 	}
+	if err := s.validateProxyLifecycle(ctx, proxy); err != nil {
+		return nil, err
+	}
 
 	// 归属变更走带行锁的事务写入，让"没有他人账号绑定"的守卫与写入原子生效。
 	if ownerAssignmentChanged {
 		if err := s.proxyRepo.UpdateWithOwnerAssignment(ctx, proxy); err != nil {
 			return nil, err
 		}
-		return proxy, nil
+	} else {
+		if err := s.proxyRepo.Update(ctx, proxy); err != nil {
+			return nil, err
+		}
 	}
-	if err := s.proxyRepo.Update(ctx, proxy); err != nil {
-		return nil, err
+	if grokProxyRecoveryRelevantChange(&before, proxy) {
+		if s.grokProxyRecovery == nil {
+			slog.Error("grok_proxy_recovery_scheduler_unavailable", "proxy_id", proxy.ID)
+		} else {
+			s.grokProxyRecovery.ScheduleGrokProxyCredentialRecovery(proxy.ID)
+		}
 	}
 	return proxy, nil
+}
+
+func normalizeProxyFallbackMode(mode string) string {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		return FallbackModeNone
+	}
+	return mode
+}
+
+func (s *adminServiceImpl) validateProxyLifecycle(ctx context.Context, candidate *Proxy) error {
+	return validateProxyLifecycleWithRepository(ctx, s.proxyRepo, candidate)
+}
+
+func grokProxyRecoveryRelevantChange(before, after *Proxy) bool {
+	if before == nil || after == nil || before.ID <= 0 || before.ID != after.ID {
+		return false
+	}
+	return before.Protocol != after.Protocol ||
+		before.Host != after.Host ||
+		before.Port != after.Port ||
+		before.Username != after.Username ||
+		before.Password != after.Password ||
+		before.Status != after.Status ||
+		before.Platform != after.Platform ||
+		before.RequiredAccountLevel != after.RequiredAccountLevel
 }
 
 // proxyOwnerAllowsAccountOwner 判断账号（归属 accountOwnerUserID，nil 表示管理员账号）

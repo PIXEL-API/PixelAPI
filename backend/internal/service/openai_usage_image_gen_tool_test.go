@@ -51,6 +51,56 @@ func TestExtractOpenAIUsageFromJSONBytesAddsHostedImageGenFromUnwrappedResponse(
 	require.Equal(t, 7620, usage.ImageInputTokens)
 }
 
+func TestExtractOpenAIUsageFromJSONBytesMatchesHostedImageGenEnvelope(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "response envelope",
+			body: `{"response":{"usage":{"input_tokens":10,"output_tokens":5},"tool_usage":{"image_gen":{"input_tokens":7,"output_tokens":3,"input_tokens_details":{"image_tokens":7},"output_tokens_details":{"image_tokens":3}}}}}`,
+		},
+		{
+			name: "data envelope",
+			body: `{"data":{"usage":{"input_tokens":10,"output_tokens":5},"tool_usage":{"image_gen":{"input_tokens":7,"output_tokens":3,"input_tokens_details":{"image_tokens":7},"output_tokens_details":{"image_tokens":3}}}}}`,
+		},
+		{
+			name: "data response envelope",
+			body: `{"data":{"response":{"usage":{"input_tokens":10,"output_tokens":5},"tool_usage":{"image_gen":{"input_tokens":7,"output_tokens":3,"input_tokens_details":{"image_tokens":7},"output_tokens_details":{"image_tokens":3}}}}}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			usage, ok := extractOpenAIUsageFromJSONBytes([]byte(tt.body))
+
+			require.True(t, ok)
+			require.Equal(t, 17, usage.InputTokens)
+			require.Equal(t, 8, usage.OutputTokens)
+			require.Equal(t, 7, usage.ImageInputTokens)
+			require.Equal(t, 3, usage.ImageOutputTokens)
+		})
+	}
+}
+
+func TestExtractOpenAIUsageFromJSONBytesDoesNotMergeLowerPriorityImageUsage(t *testing.T) {
+	body := []byte(`{
+		"usage":{"input_tokens":10,"output_tokens":5},
+		"data":{
+			"usage":{"input_tokens":20,"output_tokens":10},
+			"tool_usage":{"image_gen":{"input_tokens":7,"output_tokens":3}}
+		}
+	}`)
+
+	usage, ok := extractOpenAIUsageFromJSONBytes(body)
+
+	require.True(t, ok)
+	require.Equal(t, 10, usage.InputTokens)
+	require.Equal(t, 5, usage.OutputTokens)
+	require.Zero(t, usage.ImageInputTokens)
+	require.Zero(t, usage.ImageOutputTokens)
+}
+
 func TestExtractOpenAIUsageFromJSONBytesWithoutToolUsageUnchanged(t *testing.T) {
 	body := []byte(`{"usage":{"input_tokens":100,"output_tokens":50}}`)
 
@@ -86,7 +136,7 @@ func TestParseOpenAIWSResponseUsageAddsHostedImageGenToolUsage(t *testing.T) {
 	message := []byte(`{"type":"response.completed","response":{` + hostedImageGenResponseFragment + `}}`)
 
 	usage := &OpenAIUsage{}
-	parseOpenAIWSResponseUsageFromCompletedEvent(message, usage)
+	parseOpenAIWSResponseUsageFromTerminalEvent(message, usage)
 
 	require.Equal(t, 51710, usage.InputTokens)
 	require.Equal(t, 7620, usage.ImageInputTokens)

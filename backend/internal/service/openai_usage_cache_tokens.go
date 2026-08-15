@@ -6,30 +6,32 @@ func openAIUsageFromGJSON(value gjson.Result) (OpenAIUsage, bool) {
 	if !value.Exists() || !value.IsObject() {
 		return OpenAIUsage{}, false
 	}
-	inputTokens := value.Get("input_tokens").Int()
-	if inputTokens == 0 {
-		inputTokens = value.Get("prompt_tokens").Int()
-	}
-	outputTokens := value.Get("output_tokens").Int()
-	if outputTokens == 0 {
-		outputTokens = value.Get("completion_tokens").Int()
-	}
-	imageOutputTokens := value.Get("output_tokens_details.image_tokens").Int()
-	if imageOutputTokens == 0 {
-		imageOutputTokens = value.Get("completion_tokens_details.image_tokens").Int()
-	}
+	inputTokens := openAIUsageIntAlias(value, "input_tokens", "prompt_tokens")
+	outputTokens := openAIUsageIntAlias(value, "output_tokens", "completion_tokens")
+	imageOutputTokens := openAIUsageIntAlias(value, "output_tokens_details.image_tokens", "completion_tokens_details.image_tokens")
 	return OpenAIUsage{
 		InputTokens:               int(inputTokens),
-		TextInputTokens:           int(value.Get("input_tokens_details.text_tokens").Int()),
-		ImageInputTokens:          int(value.Get("input_tokens_details.image_tokens").Int()),
+		TextInputTokens:           int(openAIUsageIntAlias(value, "input_tokens_details.text_tokens", "prompt_tokens_details.text_tokens")),
+		ImageInputTokens:          int(openAIUsageIntAlias(value, "input_tokens_details.image_tokens", "prompt_tokens_details.image_tokens")),
 		OutputTokens:              int(outputTokens),
-		TextOutputTokens:          int(value.Get("output_tokens_details.text_tokens").Int()),
+		TextOutputTokens:          int(openAIUsageIntAlias(value, "output_tokens_details.text_tokens", "completion_tokens_details.text_tokens")),
 		CacheCreationInputTokens:  openAICacheCreationTokensFromUsage(value),
 		CacheReadInputTokens:      openAICacheReadTokensFromUsage(value),
-		TextCacheReadInputTokens:  int(value.Get("input_tokens_details.cached_text_tokens").Int()),
-		ImageCacheReadInputTokens: int(value.Get("input_tokens_details.cached_image_tokens").Int()),
+		TextCacheReadInputTokens:  int(openAIUsageIntAlias(value, "input_tokens_details.cached_text_tokens", "prompt_tokens_details.cached_text_tokens")),
+		ImageCacheReadInputTokens: int(openAIUsageIntAlias(value, "input_tokens_details.cached_image_tokens", "prompt_tokens_details.cached_image_tokens")),
 		ImageOutputTokens:         int(imageOutputTokens),
 	}, true
+}
+
+// openAIUsageIntAlias uses field presence, not a non-zero heuristic. An
+// explicitly reported canonical zero is authoritative and must not be replaced
+// by a stale compatibility alias from the same Usage object.
+func openAIUsageIntAlias(value gjson.Result, canonicalPath, aliasPath string) int64 {
+	canonical := value.Get(canonicalPath)
+	if canonical.Exists() {
+		return canonical.Int()
+	}
+	return value.Get(aliasPath).Int()
 }
 
 func openAICacheReadTokensFromUsage(value gjson.Result) int {

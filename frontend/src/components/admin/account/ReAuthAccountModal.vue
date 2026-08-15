@@ -130,12 +130,18 @@
         :show-help="isAnthropic"
         :show-proxy-warning="isAnthropic"
         :show-cookie-option="isAnthropic"
+        :show-refresh-token-option="isGrok"
+        :show-sso-option="isGrok"
+        :show-email-password-option="isGrok && grokOAuth.passwordAuthEnabled.value"
         :allow-multiple="false"
         :method-label="t('admin.accounts.inputMethod')"
         :platform="isOpenAI ? 'openai' : isGemini ? 'gemini' : isAntigravity ? 'antigravity' : isGrok ? 'grok' : 'anthropic'"
         :show-project-id="isGemini && geminiOAuthType === 'code_assist'"
         @generate-url="handleGenerateUrl"
         @cookie-auth="handleCookieAuth"
+        @validate-refresh-token="handleGrokValidateRefreshToken"
+        @import-sso="handleGrokImportSSO"
+        @authorize-password="handleGrokAuthorizePassword"
       />
 
     </div>
@@ -188,6 +194,7 @@ import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
+import type { GrokTokenInfo } from '@/api/admin/grok'
 import {
   useAccountOAuth,
   type AddMethod,
@@ -294,7 +301,10 @@ const currentError = computed(() => {
 
 // Computed
 const isManualInputMethod = computed(() => {
-  // OpenAI/Gemini/Antigravity/Grok always use manual input (no cookie auth option)
+  const method = oauthFlowRef.value?.inputMethod
+  if (method === 'refresh_token' || method === 'sso_cookie' || method === 'email_password') {
+    return false
+  }
   return isOpenAILike.value || isGemini.value || isAntigravity.value || isGrok.value || oauthFlowRef.value?.inputMethod === 'manual'
 })
 
@@ -308,7 +318,7 @@ const canExchangeCode = computed(() => {
 // Watchers
 watch(
   () => props.show,
-  (newVal) => {
+  async (newVal) => {
     if (newVal && props.account) {
       // Initialize addMethod based on current account type (Claude only)
       if (
@@ -325,6 +335,9 @@ watch(
             : creds.oauth_type === 'ai_studio'
               ? 'ai_studio'
               : 'code_assist'
+      }
+      if (isGrok.value) {
+        await grokOAuth.loadCapabilities()
       }
     } else {
       resetState()
@@ -374,6 +387,18 @@ const mergeAccountRecord = (
   ...(previous || {}),
   ...next
 })
+
+const grokSensitiveCredentialKeys = new Set(['password', 'sso', 'sso-rw', 'sso_token'])
+
+const mergeSafeGrokAccountRecord = (
+  previous: Record<string, unknown> | undefined,
+  next: Record<string, unknown>
+): Record<string, unknown> =>
+  Object.fromEntries(
+    Object.entries(mergeAccountRecord(previous, next)).filter(
+      ([key]) => !grokSensitiveCredentialKeys.has(key)
+    )
+  )
 
 const handleExchangeCode = async () => {
   if (!props.account) return
@@ -510,8 +535,8 @@ const handleExchangeCode = async () => {
     })
     if (!tokenInfo) return
 
-    const credentials = mergeAccountRecord(props.account.credentials, grokOAuth.buildCredentials(tokenInfo))
-    const extra = mergeAccountRecord(props.account.extra, grokOAuth.buildExtraInfo(tokenInfo))
+    const credentials = mergeSafeGrokAccountRecord(props.account.credentials, grokOAuth.buildCredentials(tokenInfo))
+    const extra = mergeSafeGrokAccountRecord(props.account.extra, grokOAuth.buildExtraInfo(tokenInfo))
 
     try {
       await adminAPI.accounts.update(props.account.id, {
@@ -616,5 +641,66 @@ const handleCookieAuth = async (sessionKey: string) => {
   } finally {
     claudeOAuth.loading.value = false
   }
+}
+
+const applyGrokReauthorization = async (tokenInfo: GrokTokenInfo) => {
+  if (!props.account || !isGrok.value) return
+  const credentials = mergeSafeGrokAccountRecord(
+    props.account.credentials,
+    grokOAuth.buildCredentials(tokenInfo)
+  )
+  const extra = mergeSafeGrokAccountRecord(
+    props.account.extra,
+    grokOAuth.buildExtraInfo(tokenInfo)
+  )
+  try {
+    await adminAPI.accounts.update(props.account.id, {
+      type: 'oauth',
+      credentials,
+      extra
+    })
+    const updatedAccount = await adminAPI.accounts.clearError(props.account.id)
+    appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
+    emit('reauthorized', updatedAccount)
+    handleClose()
+  } catch (error: unknown) {
+    grokOAuth.error.value = reAuthUpdateErrorMessage(error)
+    appStore.showError(grokOAuth.error.value)
+  }
+}
+
+const firstNonEmptyLine = (value: string): string =>
+  value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean) || ''
+
+const handleGrokImportSSO = async (ssoInput: string) => {
+  if (!props.account || !isGrok.value) return
+  const ssoToken = firstNonEmptyLine(ssoInput)
+  if (!ssoToken) return
+  const tokenInfo = await grokOAuth.validateSSOToken(ssoToken, props.account.proxy_id)
+  if (tokenInfo) await applyGrokReauthorization(tokenInfo)
+}
+
+const handleGrokAuthorizePassword = async (input: { email: string; password: string }) => {
+  if (!props.account || !isGrok.value || !grokOAuth.passwordAuthEnabled.value) {
+    grokOAuth.error.value = t('admin.accounts.oauth.grok.passwordAuthDisabled')
+    return
+  }
+  const tokenInfo = await grokOAuth.authorizePassword(
+    input.email,
+    input.password,
+    props.account.proxy_id
+  )
+  if (tokenInfo) await applyGrokReauthorization(tokenInfo)
+}
+
+const handleGrokValidateRefreshToken = async (refreshTokenInput: string) => {
+  if (!props.account || !isGrok.value) return
+  const refreshToken = firstNonEmptyLine(refreshTokenInput)
+  if (!refreshToken) return
+  const tokenInfo = await grokOAuth.validateRefreshToken(refreshToken, props.account.proxy_id)
+  if (tokenInfo) await applyGrokReauthorization(tokenInfo)
 }
 </script>

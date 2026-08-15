@@ -385,6 +385,36 @@ func (s *TokenRefreshService) refreshWithRetryLeased(
 			return nil
 		}
 
+		// Grok permanent credential failures (including an account-bound proxy
+		// returning 407) are deterministic. Retrying the same credential/proxy
+		// only amplifies a refresh storm. Persist them through the existing
+		// credential+proxy snapshot CAS so a concurrent proxy/token repair wins.
+		if account.IsGrokOAuth() {
+			class := classifyGrokCredentialFailure(account, err)
+			if class.permanent {
+				if guardErr := checkTokenRefreshLease(ctx, guard); guardErr != nil {
+					return guardErr
+				}
+				conditionalRepo, ok := s.accountRepo.(grokCredentialConditionalStateRepository)
+				if !ok {
+					return &providerConfigurationRefreshError{err: errGrokConditionalStateUnsupported}
+				}
+				updated, setErr := conditionalRepo.SetGrokCredentialErrorIfMatch(
+					ctx,
+					account.ID,
+					grokCredentialMutationSnapshotFromError(err, account),
+					string(class.reason),
+				)
+				if setErr != nil {
+					return &providerCycleContainmentRefreshError{err: fmt.Errorf("persist Grok refresh failure: %w", setErr)}
+				}
+				if !updated {
+					return errRefreshSkipped
+				}
+				return err
+			}
+		}
+
 		// 不可重试错误（invalid_grant/invalid_client 等）直接标记 error 状态并返回
 		if IsNonRetryableRefreshError(err) {
 			errorMsg := fmt.Sprintf("Token refresh failed (non-retryable): %v", err)
@@ -444,7 +474,27 @@ func (s *TokenRefreshService) refreshWithRetryLeased(
 	if guardErr := checkTokenRefreshLease(ctx, guard); guardErr != nil {
 		return guardErr
 	}
-	if setErr := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason); setErr != nil {
+	var setErr error
+	if account.IsGrokOAuth() {
+		conditionalRepo, ok := s.accountRepo.(grokCredentialConditionalStateRepository)
+		if !ok {
+			return &providerConfigurationRefreshError{err: errGrokConditionalStateUnsupported}
+		}
+		var updated bool
+		updated, setErr = conditionalRepo.SetGrokCredentialTempUnschedulableIfMatch(
+			ctx,
+			account.ID,
+			grokCredentialMutationSnapshotFromError(lastErr, account),
+			until,
+			reason,
+		)
+		if setErr == nil && !updated {
+			return errRefreshSkipped
+		}
+	} else {
+		setErr = s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason)
+	}
+	if setErr != nil {
 		slog.Warn("token_refresh.set_temp_unschedulable_failed",
 			"account_id", account.ID,
 			"error", setErr,
@@ -533,6 +583,19 @@ func (s *TokenRefreshService) postRefreshActionsLeased(
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	// Grok spending-limit is a soft reauth marker. Clear it before serializing
+	// the refreshed account into the scheduler cache; the real cache stores a
+	// JSON snapshot, so clearing it afterwards would leave stale reauth state in
+	// Redis until another account synchronization happens.
+	if account != nil && account.Platform == PlatformGrok && accountGrokNeedsReauth(account) {
+		if err := checkTokenRefreshLease(ctx, guard); err != nil {
+			return err
+		}
+		clearGrokNeedsReauthExtra(ctx, s.accountRepo, account)
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	// 同步更新调度器缓存，确保调度获取的 Account 对象包含最新的 credentials
 	if s.schedulerCache != nil {
 		if err := checkTokenRefreshLease(ctx, guard); err != nil {
@@ -558,7 +621,10 @@ func (s *TokenRefreshService) postRefreshActionsLeased(
 		return ctx.Err()
 	}
 	// Antigravity OAuth: 刷新成功后，检查是否已设置 privacy_mode，未设置则调用 setUserSettings
-	return s.ensureAntigravityPrivacyLeased(ctx, account, guard)
+	if err := s.ensureAntigravityPrivacyLeased(ctx, account, guard); err != nil {
+		return err
+	}
+	return nil
 }
 
 // errRefreshSkipped 表示刷新被跳过（锁竞争或已被其他路径刷新），不计入 failed 或 refreshed

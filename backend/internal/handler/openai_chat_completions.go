@@ -329,7 +329,6 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		userAgent := c.GetHeader("User-Agent")
 		clientIP := ip.GetSecurityClientIP(c)
 		inboundEndpoint := GetInboundEndpoint(c)
-		upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
 		recordUsage := func(ctx context.Context, result *service.OpenAIForwardResult) error {
 			if result == nil {
 				return nil
@@ -341,7 +340,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				Account:            account,
 				Subscription:       currentSubscription,
 				InboundEndpoint:    inboundEndpoint,
-				UpstreamEndpoint:   upstreamEndpoint,
+				UpstreamEndpoint:   resolveOpenAIUpstreamEndpoint(c, account, result),
 				UserAgent:          userAgent,
 				IPAddress:          clientIP,
 				RequestPayloadHash: requestPayloadHash,
@@ -485,4 +484,21 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		)
 		return
 	}
+}
+
+// resolveOpenAIUpstreamEndpoint prefers the endpoint selected at runtime. A
+// single Chat Completions request can use native raw Chat or a Responses bridge.
+func resolveOpenAIUpstreamEndpoint(c *gin.Context, account *service.Account, result *service.OpenAIForwardResult) string {
+	if result != nil {
+		if endpoint := strings.TrimSpace(result.UpstreamEndpoint); endpoint != "" {
+			return endpoint
+		}
+	}
+	if endpoint := service.GetActualOpenAIUpstreamEndpoint(c); endpoint != "" {
+		return endpoint
+	}
+	if account == nil {
+		return GetInboundEndpoint(c)
+	}
+	return GetUpstreamEndpoint(c, account.Platform)
 }

@@ -158,11 +158,39 @@ func (Group) Fields() []ent.Field {
 			Nillable().
 			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}).
 			Comment("1080p 视频生成每秒单价（USD/s），Grok 平台使用"),
+		field.JSON("video_model_prices", map[string]map[string]float64{}).
+			Optional().
+			SchemaType(map[string]string{dialect.Postgres: "jsonb"}).
+			Comment("按 Grok 视频模型族和分辨率覆盖每秒价格"),
 		field.Float("web_search_price_per_call").
 			Optional().
 			Nillable().
 			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}).
 			Comment("Codex alpha/search 网页搜索单次价格（USD/次）；nil 表示默认 0.01"),
+		field.Float("search_price_per_1k").
+			Optional().
+			Nillable().
+			Min(0).
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}).
+			Comment("Grok 原生搜索工具每千次调用价格（USD）"),
+		field.Float("audio_realtime_price_per_min").
+			Optional().
+			Nillable().
+			Min(0).
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}).
+			Comment("Grok Voice Realtime 每分钟价格（USD）"),
+		field.Float("audio_tts_price_per_million_chars").
+			Optional().
+			Nillable().
+			Min(0).
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}).
+			Comment("Grok TTS 每百万字符价格（USD）"),
+		field.Float("audio_stt_price_per_hour").
+			Optional().
+			Nillable().
+			Min(0).
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}).
+			Comment("Grok STT 每小时价格（USD）"),
 
 		// Claude Code 客户端限制 (added by migration 029)
 		field.Bool("claude_code_only").

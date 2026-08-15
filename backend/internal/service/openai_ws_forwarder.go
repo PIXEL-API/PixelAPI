@@ -502,7 +502,12 @@ func openAIWSEventMayContainToolCalls(eventType string) bool {
 }
 
 func openAIWSEventShouldParseUsage(eventType string) bool {
-	return eventType == "response.completed" || strings.TrimSpace(eventType) == "response.completed"
+	switch strings.TrimSpace(eventType) {
+	case "response.completed", "response.done":
+		return true
+	default:
+		return false
+	}
 }
 
 func parseOpenAIWSEventEnvelope(message []byte) (eventType string, responseID string, response gjson.Result) {
@@ -528,16 +533,16 @@ func openAIWSMessageLikelyContainsToolCalls(message []byte) bool {
 		bytes.Contains(message, []byte(`"function_call"`))
 }
 
-func parseOpenAIWSResponseUsageFromCompletedEvent(message []byte, usage *OpenAIUsage) {
+func parseOpenAIWSResponseUsageFromTerminalEvent(message []byte, usage *OpenAIUsage) bool {
 	if usage == nil || len(message) == 0 {
-		return
+		return false
 	}
-	parsed, ok := openAIUsageFromGJSON(gjson.GetBytes(message, "response.usage"))
+	parsed, ok := extractOpenAIUsageFromJSONBytes(message)
 	if !ok {
-		return
+		return false
 	}
-	mergeHostedImageGenToolUsage(hostedImageGenToolUsage(message), &parsed)
 	*usage = parsed
+	return true
 }
 
 func parseOpenAIWSErrorEventFields(message []byte) (code string, errType string, errMessage string) {
@@ -2374,6 +2379,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	}
 
 	usage := &OpenAIUsage{}
+	terminalUsageParsed := false
 	var billingUsageObservation openAIResponsesBillingUsageObservation
 	imageCounter := newOpenAIImageOutputCounter()
 	var firstTokenMs *int
@@ -2623,7 +2629,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			}
 		}
 		if openAIWSEventShouldParseUsage(eventType) {
-			parseOpenAIWSResponseUsageFromCompletedEvent(message, usage)
+			terminalUsageParsed = parseOpenAIWSResponseUsageFromTerminalEvent(message, usage) || terminalUsageParsed
 		}
 
 		if eventType == "error" {
@@ -2767,7 +2773,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			finalResponse = s.replaceModelInResponseBody(finalResponse, mappedModel, originalModel)
 		}
 		finalResponse = s.correctToolCallsInResponseBody(finalResponse)
-		populateOpenAIUsageFromResponseJSON(finalResponse, usage)
+		if !terminalUsageParsed {
+			populateOpenAIUsageFromResponseJSON(finalResponse, usage)
+		}
 		imageCounter.AddJSONResponse(finalResponse)
 		if responseID == "" {
 			responseID = strings.TrimSpace(gjson.GetBytes(finalResponse, "id").String())
@@ -3640,7 +3648,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				firstTokenMs = &ms
 			}
 			if openAIWSEventShouldParseUsage(eventType) {
-				parseOpenAIWSResponseUsageFromCompletedEvent(upstreamMessage, &usage)
+				parseOpenAIWSResponseUsageFromTerminalEvent(upstreamMessage, &usage)
 			}
 
 			var terminalResult *OpenAIForwardResult

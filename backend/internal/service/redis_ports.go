@@ -34,11 +34,15 @@ type ClusterRedisPort interface {
 	PoolStats() ClusterRedisPoolStats
 }
 
-// OIDCProviderStateStore owns the short-lived, single-use state used by the
-// built-in OIDC provider. Take must atomically read and delete the value.
-type OIDCProviderStateStore interface {
+// EphemeralStateStore owns short-lived state that must be consumed at most
+// once. Take must atomically read and delete the value.
+type EphemeralStateStore interface {
 	Set(ctx context.Context, key string, value []byte, ttl time.Duration) error
 	Take(ctx context.Context, key string) (value []byte, found bool, err error)
 	Get(ctx context.Context, key string) (value []byte, found bool, err error)
 	Delete(ctx context.Context, key string) error
 }
+
+// OIDCProviderStateStore is kept as a semantic alias for the built-in OIDC
+// provider while Redis infrastructure is shared with other single-use flows.
+type OIDCProviderStateStore = EphemeralStateStore

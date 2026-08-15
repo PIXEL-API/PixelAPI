@@ -800,6 +800,16 @@ export interface PaginationConfig {
 // ==================== API Key & Group Types ====================
 
 export type GroupPlatform = "anthropic" | "openai" | "gemini" | "antigravity" | "grok";
+export type GrokVideoModelFamily =
+  | "grok-imagine-video"
+  | "grok-imagine-video-1.5";
+export type GrokVideoResolution = "480p" | "720p" | "1080p";
+export type GrokVideoModelPrices = Partial<
+  Record<
+    GrokVideoModelFamily,
+    Partial<Record<GrokVideoResolution, number>>
+  >
+>;
 
 export type SubscriptionType = "standard" | "subscription";
 export type GroupScope = "public" | "user_private";
@@ -849,8 +859,14 @@ export interface Group {
   video_price_480p: number | null;
   video_price_720p: number | null;
   video_price_1080p: number | null;
+  video_model_prices?: GrokVideoModelPrices | null;
   // Codex 网页搜索按次计费；null 表示使用默认价格
   web_search_price_per_call: number | null;
+  // Grok 原生搜索、音频计费；null 表示未配置且对应能力不可用
+  search_price_per_1k: number | null;
+  audio_realtime_price_per_min: number | null;
+  audio_tts_price_per_million_chars: number | null;
+  audio_stt_price_per_hour: number | null;
   // Claude Code 客户端限制
   claude_code_only: boolean;
   fallback_group_id: number | null;
@@ -988,7 +1004,12 @@ export interface CreateGroupRequest {
   video_price_480p?: number | null;
   video_price_720p?: number | null;
   video_price_1080p?: number | null;
+  video_model_prices?: GrokVideoModelPrices | null;
   web_search_price_per_call?: number | null;
+  search_price_per_1k?: number | null;
+  audio_realtime_price_per_min?: number | null;
+  audio_tts_price_per_million_chars?: number | null;
+  audio_stt_price_per_hour?: number | null;
   claude_code_only?: boolean;
   fallback_group_id?: number | null;
   fallback_group_id_on_invalid_request?: number | null;
@@ -1026,7 +1047,12 @@ export interface UpdateGroupRequest {
   video_price_480p?: number | null;
   video_price_720p?: number | null;
   video_price_1080p?: number | null;
+  video_model_prices?: GrokVideoModelPrices | null;
   web_search_price_per_call?: number | null;
+  search_price_per_1k?: number | null;
+  audio_realtime_price_per_min?: number | null;
+  audio_tts_price_per_million_chars?: number | null;
+  audio_stt_price_per_hour?: number | null;
   claude_code_only?: boolean;
   fallback_group_id?: number | null;
   fallback_group_id_on_invalid_request?: number | null;
@@ -1056,6 +1082,8 @@ export type AccountStatus = "active" | "inactive" | "disabled" | "error";
 export type OAuthAddMethod = "oauth" | "setup-token";
 export type ProxyProtocol = "http" | "https" | "socks5" | "socks5h";
 export type AccountExternalPlacementTarget = "private" | "public_pool" | "room";
+export type ProxyStatus = "active" | "inactive" | "expired";
+export type ProxyFallbackMode = "none" | "proxy" | "direct";
 
 export interface AccountExternalPlacement {
   target: AccountExternalPlacementTarget;
@@ -1091,7 +1119,7 @@ export interface Proxy {
   platform?: string;
   // required_account_level 为空表示所有账号等级可用。
   required_account_level?: string;
-  status: "active" | "inactive";
+  status: ProxyStatus;
   max_accounts: number;
   account_count?: number; // Number of accounts using this proxy
   latency_ms?: number;
@@ -1107,6 +1135,10 @@ export interface Proxy {
   quality_grade?: string;
   quality_summary?: string;
   quality_checked?: number;
+  expires_at: string | null;
+  fallback_mode: ProxyFallbackMode;
+  backup_proxy_id?: number | null;
+  expiry_warn_days: number;
   created_at: string;
   updated_at: string;
 }
@@ -1216,6 +1248,8 @@ export interface Account {
       >;
     } & Record<string, unknown>;
   proxy_id: number | null;
+  proxy_fallback_origin_id?: number | null;
+  proxy_fallback_origin_name?: string | null;
   owner_user_id?: number | null;
   share_mode?: AccountShareMode | string;
   share_status?: AccountShareStatus | string;
@@ -1601,6 +1635,57 @@ export interface OpenAICodexPATCreateRequest {
   confirm_mixed_channel_risk?: boolean;
 }
 
+/**
+ * Upstream-compatible Codex session/auth.json import contract.
+ * Keep this separate from the local generic credential import contract: raw
+ * strings are access tokens here, while the generic importer treats them as
+ * refresh tokens.
+ */
+export interface CodexSessionImportRequest {
+  content?: string;
+  contents?: string[];
+  name?: string;
+  notes?: string | null;
+  group_ids?: number[];
+  proxy_id?: number | null;
+  concurrency?: number;
+  priority?: number;
+  rate_multiplier?: number;
+  load_factor?: number | null;
+  expires_at?: number | null;
+  auto_pause_on_expired?: boolean;
+  credential_extras?: Record<string, unknown>;
+  extra?: Record<string, unknown>;
+  update_existing?: boolean;
+  skip_default_group_bind?: boolean;
+  confirm_mixed_channel_risk?: boolean;
+}
+
+export interface CodexSessionImportMessage {
+  index: number;
+  name?: string;
+  message: string;
+}
+
+export interface CodexSessionImportItem {
+  index: number;
+  name?: string;
+  action: "created" | "updated" | "skipped" | "failed";
+  account_id?: number;
+  message?: string;
+}
+
+export interface CodexSessionImportResult {
+  total: number;
+  created: number;
+  updated: number;
+  skipped: number;
+  failed: number;
+  items?: CodexSessionImportItem[];
+  warnings?: CodexSessionImportMessage[];
+  errors?: CodexSessionImportMessage[];
+}
+
 export interface CreateAccountRequest {
   name: string;
   notes?: string | null;
@@ -1676,6 +1761,10 @@ export interface CreateProxyRequest {
   // required_account_level 为空表示所有账号等级可用。
   required_account_level?: string;
   max_accounts?: number;
+  expires_at?: number | null;
+  fallback_mode?: ProxyFallbackMode;
+  backup_proxy_id?: number | null;
+  expiry_warn_days?: number;
 }
 
 export interface UpdateProxyRequest {
@@ -1685,13 +1774,18 @@ export interface UpdateProxyRequest {
   port?: number;
   username?: string | null;
   password?: string | null;
-  status?: "active" | "inactive";
+  status?: Exclude<ProxyStatus, "expired">;
   // owner_user_id 缺省表示不修改；0 表示清空归属改回平台代理；>0 表示归属到该用户。
   owner_user_id?: number;
   // platform / required_account_level 为空字符串分别表示通用代理 / 所有等级可用。
   platform?: string;
   required_account_level?: string;
   max_accounts?: number;
+  // Lifecycle fields are presence-aware: omitted keeps the persisted value; null clears nullable fields.
+  expires_at?: number | null;
+  fallback_mode?: ProxyFallbackMode;
+  backup_proxy_id?: number | null;
+  expiry_warn_days?: number;
 }
 
 export interface AdminDataPayload {
@@ -1710,8 +1804,18 @@ export interface AdminDataProxy {
   port: number;
   username?: string | null;
   password?: string | null;
-  status: "active" | "inactive";
+  status: ProxyStatus;
   max_accounts?: number;
+  // Local proxy-scope extensions are preserved in account and proxy data bundles.
+  platform?: string | null;
+  required_account_level?: string | null;
+  // Upstream-compatible lifecycle transport fields. expires_at is Unix seconds in data bundles.
+  expires_at?: number | null;
+  fallback_mode?: ProxyFallbackMode;
+  backup_proxy_name?: string | null;
+  // Stable local extension; backup_proxy_name remains accepted for upstream compatibility.
+  backup_proxy_key?: string | null;
+  expiry_warn_days?: number;
 }
 
 export interface AdminDataAccount {

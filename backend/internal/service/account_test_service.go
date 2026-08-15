@@ -55,8 +55,6 @@ const (
 	defaultGeminiTextTestPrompt  = "hi"
 	defaultOpenAIImageTestPrompt = "Generate a cute orange cat astronaut sticker on a clean pastel background."
 	defaultGrokTestModel         = "grok-4.5"
-	// openAITestMaxOutputTokens 仅用于 Grok 测试 payload；OpenAI 探针已不再限输出。
-	openAITestMaxOutputTokens = 16
 )
 
 // isOpenAIImageModel checks if the model is an OpenAI image generation model (e.g. gpt-image-2).
@@ -1470,26 +1468,7 @@ func createOpenAITestPayload(modelID string, isOAuth bool) map[string]any {
 }
 
 func createGrokTestPayload(modelID string, prompt string) map[string]any {
-	text := strings.TrimSpace(prompt)
-	if text == "" {
-		text = defaultGeminiTextTestPrompt
-	}
-	return map[string]any{
-		"model": modelID,
-		"input": []map[string]any{
-			{
-				"role": "user",
-				"content": []map[string]any{
-					{
-						"type": "input_text",
-						"text": text,
-					},
-				},
-			},
-		},
-		"stream":            true,
-		"max_output_tokens": openAITestMaxOutputTokens,
-	}
+	return createGrokProbePayload(modelID, prompt)
 }
 
 // processClaudeStream processes the SSE stream from Claude API

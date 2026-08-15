@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/mod/semver"
@@ -137,7 +138,8 @@ func newGrokCLIProxyRequest(t *testing.T) *http.Request {
 func requireGrokCLIFallsBackToPin(t *testing.T, req *http.Request) {
 	t.Helper()
 	require.Equal(t, grokCLIStableVersion, req.Header.Get("x-grok-client-version"))
-	require.Equal(t, "xai-grok-workspace/"+grokCLIStableVersion, req.Header.Get("User-Agent"))
+	require.Equal(t, xai.CLIClientIdentifier, req.Header.Get("x-grok-client-identifier"))
+	require.Equal(t, xai.CLIUserAgentForVersion(grokCLIStableVersion), req.Header.Get("User-Agent"))
 }
 
 func TestApplyGrokCLIProxyHeaders(t *testing.T) {
@@ -145,9 +147,10 @@ func TestApplyGrokCLIProxyHeaders(t *testing.T) {
 		t.Setenv(grokCLIVersionOverride, "")
 		req := newGrokCLIProxyRequest(t)
 		applyGrokCLIProxyHeaders(req)
-		require.Equal(t, "xai-grok-cli", req.Header.Get("X-XAI-Token-Auth"))
+		require.Equal(t, xai.CLITokenAuthValue, req.Header.Get("X-XAI-Token-Auth"))
 		require.Equal(t, grokCLIStableVersion, req.Header.Get("x-grok-client-version"))
-		require.Equal(t, "xai-grok-workspace/"+grokCLIStableVersion, req.Header.Get("User-Agent"))
+		require.Equal(t, xai.CLIClientIdentifier, req.Header.Get("x-grok-client-identifier"))
+		require.Equal(t, xai.CLIUserAgentForVersion(grokCLIStableVersion), req.Header.Get("User-Agent"))
 	})
 
 	t.Run("newer override", func(t *testing.T) {
@@ -160,7 +163,8 @@ func TestApplyGrokCLIProxyHeaders(t *testing.T) {
 		req := newGrokCLIProxyRequest(t)
 		applyGrokCLIProxyHeaders(req)
 		require.Equal(t, override, req.Header.Get("x-grok-client-version"))
-		require.Equal(t, "xai-grok-workspace/"+override, req.Header.Get("User-Agent"))
+		require.Equal(t, xai.CLIClientIdentifier, req.Header.Get("x-grok-client-identifier"))
+		require.Equal(t, xai.CLIUserAgentForVersion(override), req.Header.Get("User-Agent"))
 	})
 
 	t.Run("override below the pin is rejected", func(t *testing.T) {
@@ -207,5 +211,6 @@ func TestApplyGrokCLIProxyHeaders(t *testing.T) {
 		require.NoError(t, err)
 		applyGrokCLIProxyHeaders(req)
 		require.Empty(t, req.Header.Get("x-grok-client-version"))
+		require.Empty(t, req.Header.Get("x-grok-client-identifier"))
 	})
 }

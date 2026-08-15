@@ -9,8 +9,11 @@ const openAIResponsesEmptyCompletedMessage = "OpenAI upstream returned an empty 
 // The accumulated usage is consulted too, because OpenAI may deliver usage on
 // an earlier event. An empty terminal event after a stream with no semantic
 // output is treated as a silent upstream refusal.
-func openAIResponsesCompletedEventIsEmpty(data []byte, usage *OpenAIUsage) bool {
+func openAIResponsesCompletedEventIsEmpty(data []byte, usage *OpenAIUsage, usageFieldsComplete bool) bool {
 	if len(data) == 0 || !gjson.ValidBytes(data) {
+		return false
+	}
+	if usageFieldsComplete {
 		return false
 	}
 	if usage != nil && (usage.InputTokens > 0 || usage.OutputTokens > 0 ||
@@ -20,7 +23,7 @@ func openAIResponsesCompletedEventIsEmpty(data []byte, usage *OpenAIUsage) bool 
 		usage.TextCacheReadInputTokens > 0 || usage.ImageCacheReadInputTokens > 0) {
 		return false
 	}
-	if gjson.GetBytes(data, "usage").Exists() || gjson.GetBytes(data, "response.usage").Exists() {
+	if _, ok := extractOpenAIUsageFromJSONBytes(data); ok {
 		return false
 	}
 	if gjson.GetBytes(data, "error").Exists() || gjson.GetBytes(data, "response.error").Exists() {

@@ -53,29 +53,29 @@ func (s *clusterRedisSubscription) Close() error {
 	return s.pubsub.Close()
 }
 
-type oidcProviderRedisStateStore struct {
+type ephemeralRedisStateStore struct {
 	client *redis.Client
 }
 
-func NewOIDCProviderStateStore(client *redis.Client) service.OIDCProviderStateStore {
-	return &oidcProviderRedisStateStore{client: client}
+func NewEphemeralStateStore(client *redis.Client) service.EphemeralStateStore {
+	return &ephemeralRedisStateStore{client: client}
 }
 
-func (s *oidcProviderRedisStateStore) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
+func (s *ephemeralRedisStateStore) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
 	return s.client.Set(ctx, key, value, ttl).Err()
 }
 
-func (s *oidcProviderRedisStateStore) Take(ctx context.Context, key string) ([]byte, bool, error) {
+func (s *ephemeralRedisStateStore) Take(ctx context.Context, key string) ([]byte, bool, error) {
 	value, err := s.client.GetDel(ctx, key).Bytes()
 	return redisStateResult(value, err)
 }
 
-func (s *oidcProviderRedisStateStore) Get(ctx context.Context, key string) ([]byte, bool, error) {
+func (s *ephemeralRedisStateStore) Get(ctx context.Context, key string) ([]byte, bool, error) {
 	value, err := s.client.Get(ctx, key).Bytes()
 	return redisStateResult(value, err)
 }
 
-func (s *oidcProviderRedisStateStore) Delete(ctx context.Context, key string) error {
+func (s *ephemeralRedisStateStore) Delete(ctx context.Context, key string) error {
 	return s.client.Del(ctx, key).Err()
 }
 

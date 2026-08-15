@@ -23,6 +23,8 @@ import type {
   CheckMixedChannelResponse,
   OpenAIQuotaUsage,
   OpenAIQuotaResetResult,
+  CodexSessionImportRequest,
+  CodexSessionImportResult,
   OpenAICodexPATCreateRequest
 } from '@/types'
 
@@ -223,6 +225,16 @@ export async function checkMixedChannelRisk(
  */
 export async function deleteAccount(id: number): Promise<{ message: string }> {
   const { data } = await apiClient.delete<{ message: string }>(`/admin/accounts/${id}`)
+  return data
+}
+
+/**
+ * Revert an account that was automatically rerouted after its original proxy expired.
+ */
+export async function revertProxyFallback(id: number): Promise<{ message: string }> {
+  const { data } = await apiClient.post<{ message: string }>(
+    `/admin/accounts/${id}/revert-proxy-fallback`
+  )
   return data
 }
 
@@ -702,6 +714,17 @@ export async function importCredentialContents(
   return data
 }
 
+export async function importCodexSession(
+  payload: CodexSessionImportRequest
+): Promise<CodexSessionImportResult> {
+  const { data } = await apiClient.post<CodexSessionImportResult>(
+    '/admin/accounts/import/codex-session',
+    payload,
+    { timeout: 120000 }
+  )
+  return data
+}
+
 export async function createOpenAICodexPAT(payload: OpenAICodexPATCreateRequest): Promise<Account> {
   const { data } = await apiClient.post<Account>('/admin/openai/create-from-codex-pat', payload)
   return data
@@ -860,6 +883,7 @@ export const accountsAPI = {
   update,
   checkMixedChannelRisk,
   delete: deleteAccount,
+  revertProxyFallback,
   toggleStatus,
   testAccount,
   refreshCredentials,
@@ -887,6 +911,7 @@ export const accountsAPI = {
   exportData,
   importData,
   importCredentialContents,
+  importCodexSession,
   createOpenAICodexPAT,
   getAntigravityDefaultModelMapping,
   batchClearError,

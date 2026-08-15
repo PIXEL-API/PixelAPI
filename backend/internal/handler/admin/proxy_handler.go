@@ -2,8 +2,10 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
@@ -38,7 +40,11 @@ type CreateProxyRequest struct {
 	RequiredAccountLevel string `json:"required_account_level"`
 	MaxAccounts          int    `json:"max_accounts" binding:"min=0"`
 	// OwnerUserID 为 0 或缺省表示平台代理（所有用户可见）；>0 表示专属代理，仅对该用户显示可用。
-	OwnerUserID int64 `json:"owner_user_id" binding:"omitempty,min=0"`
+	OwnerUserID    int64  `json:"owner_user_id" binding:"omitempty,min=0"`
+	ExpiresAt      *int64 `json:"expires_at"`
+	FallbackMode   string `json:"fallback_mode" binding:"omitempty,oneof=none proxy direct"`
+	BackupProxyID  *int64 `json:"backup_proxy_id" binding:"omitempty,min=1"`
+	ExpiryWarnDays *int   `json:"expiry_warn_days" binding:"omitempty,min=0"`
 }
 
 // UpdateProxyRequest represents update proxy request
@@ -55,7 +61,40 @@ type UpdateProxyRequest struct {
 	RequiredAccountLevel *string `json:"required_account_level"`
 	MaxAccounts          *int    `json:"max_accounts" binding:"omitempty,min=0"`
 	// OwnerUserID 缺省表示不修改；0 表示清空归属改回平台代理；>0 表示归属到该用户。
-	OwnerUserID *int64 `json:"owner_user_id" binding:"omitempty,min=0"`
+	OwnerUserID    *int64  `json:"owner_user_id" binding:"omitempty,min=0"`
+	ExpiresAt      *int64  `json:"expires_at"`
+	FallbackMode   *string `json:"fallback_mode" binding:"omitempty,oneof=none proxy direct"`
+	BackupProxyID  *int64  `json:"backup_proxy_id" binding:"omitempty,min=1"`
+	ExpiryWarnDays *int    `json:"expiry_warn_days" binding:"omitempty,min=0"`
+
+	expiresAtProvided     bool
+	backupProxyIDProvided bool
+}
+
+type updateProxyRequestJSON UpdateProxyRequest
+
+// UnmarshalJSON 保留 nullable 生命周期字段的 presence，避免 PUT 改名时清空配置。
+func (r *UpdateProxyRequest) UnmarshalJSON(data []byte) error {
+	var decoded updateProxyRequestJSON
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*r = UpdateProxyRequest(decoded)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	_, r.expiresAtProvided = fields["expires_at"]
+	_, r.backupProxyIDProvided = fields["backup_proxy_id"]
+	return nil
+}
+
+func unixSecondsToTime(value *int64) *time.Time {
+	if value == nil {
+		return nil
+	}
+	converted := time.Unix(*value, 0).UTC()
+	return &converted
 }
 
 // trimOptionalProxyString 对可选字符串字段做 trim，nil 表示“未提供”原样透传。
@@ -167,6 +206,10 @@ func (h *ProxyHandler) Create(c *gin.Context) {
 			RequiredAccountLevel: strings.TrimSpace(req.RequiredAccountLevel),
 			MaxAccounts:          req.MaxAccounts,
 			OwnerUserID:          req.OwnerUserID,
+			ExpiresAt:            unixSecondsToTime(req.ExpiresAt),
+			FallbackMode:         strings.TrimSpace(req.FallbackMode),
+			BackupProxyID:        req.BackupProxyID,
+			ExpiryWarnDays:       proxyExpiryWarnDaysOrDefault(req.ExpiryWarnDays),
 		})
 		if err != nil {
 			return nil, err
@@ -191,17 +234,23 @@ func (h *ProxyHandler) Update(c *gin.Context) {
 	}
 
 	proxy, err := h.adminService.UpdateProxy(c.Request.Context(), proxyID, &service.UpdateProxyInput{
-		Name:                 strings.TrimSpace(req.Name),
-		Protocol:             strings.TrimSpace(req.Protocol),
-		Host:                 strings.TrimSpace(req.Host),
-		Port:                 req.Port,
-		Username:             strings.TrimSpace(req.Username),
-		Password:             strings.TrimSpace(req.Password),
-		Status:               strings.TrimSpace(req.Status),
-		Platform:             trimOptionalProxyString(req.Platform),
-		RequiredAccountLevel: trimOptionalProxyString(req.RequiredAccountLevel),
-		MaxAccounts:          req.MaxAccounts,
-		OwnerUserID:          req.OwnerUserID,
+		Name:                  strings.TrimSpace(req.Name),
+		Protocol:              strings.TrimSpace(req.Protocol),
+		Host:                  strings.TrimSpace(req.Host),
+		Port:                  req.Port,
+		Username:              strings.TrimSpace(req.Username),
+		Password:              strings.TrimSpace(req.Password),
+		Status:                strings.TrimSpace(req.Status),
+		Platform:              trimOptionalProxyString(req.Platform),
+		RequiredAccountLevel:  trimOptionalProxyString(req.RequiredAccountLevel),
+		MaxAccounts:           req.MaxAccounts,
+		OwnerUserID:           req.OwnerUserID,
+		ExpiresAt:             unixSecondsToTime(req.ExpiresAt),
+		ExpiresAtProvided:     req.expiresAtProvided,
+		FallbackMode:          trimOptionalProxyString(req.FallbackMode),
+		BackupProxyID:         req.BackupProxyID,
+		BackupProxyIDProvided: req.backupProxyIDProvided,
+		ExpiryWarnDays:        req.ExpiryWarnDays,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -209,6 +258,13 @@ func (h *ProxyHandler) Update(c *gin.Context) {
 	}
 
 	response.Success(c, dto.ProxyFromServiceAdmin(proxy))
+}
+
+func proxyExpiryWarnDaysOrDefault(value *int) int {
+	if value == nil {
+		return 7
+	}
+	return *value
 }
 
 // Delete handles deleting a proxy
@@ -362,12 +418,14 @@ func (h *ProxyHandler) BatchCreate(c *gin.Context) {
 
 		// Create proxy with default name
 		_, err = h.adminService.CreateProxy(c.Request.Context(), &service.CreateProxyInput{
-			Name:     "default",
-			Protocol: protocol,
-			Host:     host,
-			Port:     item.Port,
-			Username: username,
-			Password: password,
+			Name:           "default",
+			Protocol:       protocol,
+			Host:           host,
+			Port:           item.Port,
+			Username:       username,
+			Password:       password,
+			FallbackMode:   service.FallbackModeNone,
+			ExpiryWarnDays: 7,
 		})
 		if err != nil {
 			// If creation fails due to duplicate, count as skipped

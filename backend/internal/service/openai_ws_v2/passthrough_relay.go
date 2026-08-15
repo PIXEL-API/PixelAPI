@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openaiusage"
 	coderws "github.com/coder/websocket"
 	"github.com/tidwall/gjson"
 )
@@ -109,6 +110,7 @@ type relayState struct {
 	imageCounter         *imageOutputCounter
 	settledImageCount    int
 	billingUsageComplete bool
+	terminalResponseIDs  map[[sha256.Size]byte]struct{}
 }
 
 type relayExitSignal struct {
@@ -120,6 +122,7 @@ type relayExitSignal struct {
 
 type observedUpstreamEvent struct {
 	terminal             bool
+	duplicateTerminal    bool
 	eventType            string
 	responseID           string
 	responseModel        string
@@ -163,7 +166,16 @@ func (c *imageOutputCounter) AddMessage(message []byte) {
 	case "response.output_item.done":
 		c.addItem(root.Get("item"))
 	case "response.completed", "response.done":
-		c.addOutputArray(root.Get("response.output"))
+		if envelope, ok := openaiusage.SelectEnvelope(message); ok {
+			c.addOutputArray(envelope.Container.Get("output"))
+			return
+		}
+		for _, output := range gjson.GetManyBytes(message, "response.output", "data.response.output", "data.output", "output") {
+			if output.IsArray() {
+				c.addOutputArray(output)
+				return
+			}
+		}
 	case "image_generation.completed":
 		if item := root.Get("item"); item.Exists() {
 			c.addItem(item)
@@ -568,6 +580,15 @@ func runUpstreamToClient(
 		case coderws.MessageBinary:
 			// binary frame 直接透传，不进入 JSON 观测路径（避免无效解析开销）。
 		}
+		if observedEvent.duplicateTerminal {
+			emitRelayTrace(onTrace, RelayTraceEvent{
+				Stage:           "duplicate_terminal_ignored",
+				Direction:       "upstream_to_client",
+				MessageType:     relayMessageTypeString(msgType),
+				PayloadBytes:    len(payload),
+				WroteDownstream: wroteDownstream,
+			})
+		}
 		turnResult, terminalObserved := buildRelayTurnResult(state, observedEvent)
 		if terminalObserved && beforeTerminalFrame != nil {
 			if err := beforeTerminalFrame(turnResult); err != nil {
@@ -718,18 +739,18 @@ func observeUpstreamMessage(
 	if state == nil || len(message) == 0 {
 		return observedUpstreamEvent{}
 	}
-	values := gjson.GetManyBytes(message, "type", "response.id", "response_id", "id")
-	eventType := strings.TrimSpace(values[0].String())
+	eventType := strings.TrimSpace(gjson.GetBytes(message, "type").String())
 	if eventType == "" {
 		return observedUpstreamEvent{}
 	}
-	responseID := strings.TrimSpace(values[1].String())
-	if responseID == "" {
-		responseID = strings.TrimSpace(values[2].String())
-	}
-	// 仅 terminal 事件兜底读取顶层 id，避免把 event_id 当成 response_id 关联到 turn。
-	if responseID == "" && isTerminalEvent(eventType) {
-		responseID = strings.TrimSpace(values[3].String())
+	responseID := openAIWSV2ResponseID(message, isTerminalEvent(eventType))
+	if isTerminalEvent(eventType) && responseID != "" && state.hasTerminalResponseID(responseID) {
+		return observedUpstreamEvent{
+			terminal:          true,
+			duplicateTerminal: true,
+			eventType:         eventType,
+			responseID:        responseID,
+		}
 	}
 	now := nowFn()
 
@@ -748,7 +769,7 @@ func observeUpstreamMessage(
 		eventType:            eventType,
 		responseID:           responseID,
 		usage:                parsedUsage,
-		billingUsageComplete: openAIWSV2BillingUsageComplete(message),
+		billingUsageComplete: shouldParseUsage(eventType) && openAIWSV2BillingUsageComplete(message),
 	}
 	if responseID != "" {
 		turnTiming := openAIWSRelayGetOrInitTurnTiming(state, responseID, now)
@@ -767,6 +788,7 @@ func observeUpstreamMessage(
 	state.terminalEventType = eventType
 	state.billingUsageComplete = state.billingUsageComplete || observed.billingUsageComplete
 	if responseID != "" {
+		state.rememberTerminalResponseID(responseID)
 		state.lastResponseID = responseID
 		if turnTiming, ok := openAIWSRelayDeleteTurnTiming(state, responseID); ok {
 			observed.responseModel = relayTurnResponseModel(&turnTiming)
@@ -788,7 +810,12 @@ func firstRelayResponseModel(message []byte) string {
 	if len(message) == 0 {
 		return ""
 	}
-	values := gjson.GetManyBytes(message, "response.model", "model")
+	if envelope, ok := openaiusage.SelectEnvelope(message); ok {
+		if model := normalizeRelayResponseModel(envelope.Container.Get("model").String()); model != "" {
+			return model
+		}
+	}
+	values := gjson.GetManyBytes(message, "response.model", "data.response.model", "data.model", "model")
 	for _, value := range values {
 		if value.Type == gjson.String {
 			if model := normalizeRelayResponseModel(value.String()); model != "" {
@@ -858,7 +885,7 @@ func emitTurnComplete(
 }
 
 func buildRelayTurnResult(state *relayState, observed observedUpstreamEvent) (RelayTurnResult, bool) {
-	if !observed.terminal {
+	if !observed.terminal || observed.duplicateTerminal {
 		return RelayTurnResult{}, false
 	}
 	responseID := strings.TrimSpace(observed.responseID)
@@ -892,17 +919,13 @@ func buildRelayTurnResult(state *relayState, observed observedUpstreamEvent) (Re
 }
 
 func openAIWSV2BillingUsageComplete(message []byte) bool {
-	if len(message) == 0 || !gjson.ValidBytes(message) {
+	envelope, ok := openaiusage.SelectEnvelope(message)
+	if !ok {
 		return false
 	}
-	usage := gjson.GetBytes(message, "response.usage")
-	if !usage.Exists() || !usage.IsObject() {
-		return false
-	}
-	input := usage.Get("input_tokens")
-	output := usage.Get("output_tokens")
-	return input.Exists() && input.Type == gjson.Number && input.Int() >= 0 &&
-		output.Exists() && output.Type == gjson.Number && output.Int() >= 0
+	_, inputOK := parseUsageIntAliases(envelope.Usage, true, "input_tokens", "prompt_tokens")
+	_, outputOK := parseUsageIntAliases(envelope.Usage, true, "output_tokens", "completion_tokens")
+	return inputOK && outputOK
 }
 
 func openAIWSRelayGetOrInitTurnTiming(state *relayState, responseID string, now time.Time) *relayTurnTiming {
@@ -950,39 +973,30 @@ func parseUsageAndAccumulate(
 	if state == nil || len(message) == 0 || !shouldParseUsage(eventType) {
 		return Usage{}
 	}
-	usageResult := gjson.GetBytes(message, "response.usage")
-	if !usageResult.Exists() {
-		return Usage{}
-	}
-	usageRaw := strings.TrimSpace(usageResult.Raw)
-	if usageRaw == "" || !strings.HasPrefix(usageRaw, "{") {
-		recordUsageParseFailure()
-		if onParseFailure != nil {
-			onParseFailure(eventType, usageRaw)
+	envelope, found := openaiusage.SelectEnvelope(message)
+	if !found {
+		if invalidUsage, present := openaiusage.FirstPresentUsage(message); present {
+			recordUsageParseFailure()
+			if onParseFailure != nil {
+				onParseFailure(eventType, strings.TrimSpace(invalidUsage.Raw))
+			}
 		}
 		return Usage{}
 	}
-
-	inputResult := gjson.GetBytes(message, "response.usage.input_tokens")
-	textInputResult := gjson.GetBytes(message, "response.usage.input_tokens_details.text_tokens")
-	imageInputResult := gjson.GetBytes(message, "response.usage.input_tokens_details.image_tokens")
-	outputResult := gjson.GetBytes(message, "response.usage.output_tokens")
-	textOutputResult := gjson.GetBytes(message, "response.usage.output_tokens_details.text_tokens")
-	cachedResult := gjson.GetBytes(message, "response.usage.input_tokens_details.cached_tokens")
-	textCachedResult := gjson.GetBytes(message, "response.usage.input_tokens_details.cached_text_tokens")
-	imageCachedResult := gjson.GetBytes(message, "response.usage.input_tokens_details.cached_image_tokens")
-	imageTokensResult := gjson.GetBytes(message, "response.usage.output_tokens_details.image_tokens")
+	usageResult := envelope.Usage
+	usageRaw := strings.TrimSpace(usageResult.Raw)
 	cacheCreationTokens := openAICacheCreationTokensFromUsage(usageResult)
+	requireTokenTotals := usageObjectHasFields(usageResult)
 
-	inputTokens, inputOK := parseUsageIntField(inputResult, true)
-	textInputTokens, textInputOK := parseUsageIntField(textInputResult, false)
-	imageInputTokens, imageInputOK := parseUsageIntField(imageInputResult, false)
-	outputTokens, outputOK := parseUsageIntField(outputResult, true)
-	textOutputTokens, textOutputOK := parseUsageIntField(textOutputResult, false)
-	cachedTokens, cachedOK := parseUsageIntField(cachedResult, false)
-	textCachedTokens, textCachedOK := parseUsageIntField(textCachedResult, false)
-	imageCachedTokens, imageCachedOK := parseUsageIntField(imageCachedResult, false)
-	imageTokens, imageTokensOK := parseUsageIntField(imageTokensResult, false)
+	inputTokens, inputOK := parseUsageIntAliases(usageResult, requireTokenTotals, "input_tokens", "prompt_tokens")
+	textInputTokens, textInputOK := parseUsageIntAliases(usageResult, false, "input_tokens_details.text_tokens")
+	imageInputTokens, imageInputOK := parseUsageIntAliases(usageResult, false, "input_tokens_details.image_tokens")
+	outputTokens, outputOK := parseUsageIntAliases(usageResult, requireTokenTotals, "output_tokens", "completion_tokens")
+	textOutputTokens, textOutputOK := parseUsageIntAliases(usageResult, false, "output_tokens_details.text_tokens", "completion_tokens_details.text_tokens")
+	cachedTokens, cachedOK := parseUsageIntAliases(usageResult, false, "input_tokens_details.cached_tokens", "prompt_tokens_details.cached_tokens")
+	textCachedTokens, textCachedOK := parseUsageIntAliases(usageResult, false, "input_tokens_details.cached_text_tokens", "prompt_tokens_details.cached_text_tokens")
+	imageCachedTokens, imageCachedOK := parseUsageIntAliases(usageResult, false, "input_tokens_details.cached_image_tokens", "prompt_tokens_details.cached_image_tokens")
+	imageTokens, imageTokensOK := parseUsageIntAliases(usageResult, false, "output_tokens_details.image_tokens", "completion_tokens_details.image_tokens")
 	if !inputOK || !textInputOK || !imageInputOK || !outputOK || !textOutputOK || !cachedOK ||
 		!textCachedOK || !imageCachedOK || !imageTokensOK {
 		recordUsageParseFailure()
@@ -1004,22 +1018,104 @@ func parseUsageAndAccumulate(
 		ImageCacheReadInputTokens: imageCachedTokens,
 		ImageOutputTokens:         imageTokens,
 	}
+	mergeHostedImageGenUsage(envelope.ImageGen, &parsedUsage)
 	if state.imageCounter != nil {
 		parsedUsage.ImageCount = state.imageCounter.Count()
 	}
 
-	state.usage.InputTokens += parsedUsage.InputTokens
-	state.usage.TextInputTokens += parsedUsage.TextInputTokens
-	state.usage.ImageInputTokens += parsedUsage.ImageInputTokens
-	state.usage.OutputTokens += parsedUsage.OutputTokens
-	state.usage.TextOutputTokens += parsedUsage.TextOutputTokens
-	state.usage.CacheCreationInputTokens += parsedUsage.CacheCreationInputTokens
-	state.usage.CacheReadInputTokens += parsedUsage.CacheReadInputTokens
-	state.usage.TextCacheReadInputTokens += parsedUsage.TextCacheReadInputTokens
-	state.usage.ImageCacheReadInputTokens += parsedUsage.ImageCacheReadInputTokens
-	state.usage.ImageOutputTokens += parsedUsage.ImageOutputTokens
+	accumulateRelayUsage(&state.usage, parsedUsage)
 	state.usage.ImageCount = parsedUsage.ImageCount
 	return parsedUsage
+}
+
+func openAIWSV2ResponseID(message []byte, allowTopLevelID bool) string {
+	if envelope, ok := openaiusage.SelectEnvelope(message); ok {
+		if responseID := strings.TrimSpace(envelope.Container.Get("id").String()); responseID != "" &&
+			(envelope.Index != 0 || allowTopLevelID) {
+			return responseID
+		}
+	}
+	values := gjson.GetManyBytes(message, "response.id", "data.response.id", "data.id", "response_id")
+	for _, value := range values {
+		if responseID := strings.TrimSpace(value.String()); responseID != "" {
+			return responseID
+		}
+	}
+	// 顶层 id 在非终态帧中通常是 event_id，只有 terminal 才允许作为 response id 兜底。
+	if allowTopLevelID {
+		return strings.TrimSpace(gjson.GetBytes(message, "id").String())
+	}
+	return ""
+}
+
+func (state *relayState) hasTerminalResponseID(responseID string) bool {
+	if state == nil || state.terminalResponseIDs == nil {
+		return false
+	}
+	_, exists := state.terminalResponseIDs[sha256.Sum256([]byte(responseID))]
+	return exists
+}
+
+func (state *relayState) rememberTerminalResponseID(responseID string) {
+	if state == nil || responseID == "" || state.hasTerminalResponseID(responseID) {
+		return
+	}
+	if state.terminalResponseIDs == nil {
+		state.terminalResponseIDs = make(map[[sha256.Size]byte]struct{}, 8)
+	}
+	state.terminalResponseIDs[sha256.Sum256([]byte(responseID))] = struct{}{}
+}
+
+func accumulateRelayUsage(total *Usage, value Usage) {
+	if total == nil {
+		return
+	}
+	total.InputTokens += value.InputTokens
+	total.TextInputTokens += value.TextInputTokens
+	total.ImageInputTokens += value.ImageInputTokens
+	total.OutputTokens += value.OutputTokens
+	total.TextOutputTokens += value.TextOutputTokens
+	total.CacheCreationInputTokens += value.CacheCreationInputTokens
+	total.CacheReadInputTokens += value.CacheReadInputTokens
+	total.TextCacheReadInputTokens += value.TextCacheReadInputTokens
+	total.ImageCacheReadInputTokens += value.ImageCacheReadInputTokens
+	total.ImageOutputTokens += value.ImageOutputTokens
+}
+
+func mergeHostedImageGenUsage(imageGen gjson.Result, usage *Usage) {
+	if usage == nil {
+		return
+	}
+	toolUsage := openaiusage.ParseHostedImageGenTokens(imageGen)
+	usage.InputTokens += toolUsage.InputTokens
+	usage.ImageInputTokens += toolUsage.ImageInputTokens
+	if usage.TextInputTokens > 0 {
+		usage.TextInputTokens += toolUsage.TextInputTokens
+	}
+	usage.OutputTokens += toolUsage.OutputTokens
+	usage.ImageOutputTokens += toolUsage.ImageOutputTokens
+	if usage.TextOutputTokens > 0 {
+		usage.TextOutputTokens += toolUsage.TextOutputTokens
+	}
+}
+
+func parseUsageIntAliases(usage gjson.Result, required bool, paths ...string) (int, bool) {
+	for _, path := range paths {
+		value := usage.Get(path)
+		if value.Exists() {
+			return parseUsageIntField(value, true)
+		}
+	}
+	return 0, !required
+}
+
+func usageObjectHasFields(usage gjson.Result) bool {
+	hasFields := false
+	usage.ForEach(func(_, _ gjson.Result) bool {
+		hasFields = true
+		return false
+	})
+	return hasFields
 }
 
 func parseUsageIntField(value gjson.Result, required bool) (int, bool) {
@@ -1029,10 +1125,11 @@ func parseUsageIntField(value gjson.Result, required bool) (int, bool) {
 	if value.Type != gjson.Number {
 		return 0, false
 	}
-	if value.Int() < 0 {
+	parsed, err := strconv.ParseInt(value.Raw, 10, 0)
+	if err != nil || parsed < 0 {
 		return 0, false
 	}
-	return int(value.Int()), true
+	return int(parsed), true
 }
 
 func openAICacheCreationTokensFromUsage(value gjson.Result) int {

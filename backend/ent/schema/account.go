@@ -109,6 +109,11 @@ func (Account) Fields() []ent.Field {
 		field.Int64("proxy_id").
 			Optional().
 			Nillable(),
+		// proxy_fallback_origin_id 记录自动改投前的代理，供管理员显式回切。
+		// 不声明外键：即使原代理被软删除，也保留来源审计与可诊断状态。
+		field.Int64("proxy_fallback_origin_id").
+			Optional().
+			Nillable(),
 
 		// concurrency: 账户最大并发请求数
 		// 用于限制同一时间对该账户发起的请求数量
@@ -242,10 +247,11 @@ func (Account) Edges() []ent.Edge {
 // 每个索引对应一个常用的查询条件。
 func (Account) Indexes() []ent.Index {
 	return []ent.Index{
-		index.Fields("platform"),            // 按平台筛选
-		index.Fields("type"),                // 按认证类型筛选
-		index.Fields("status"),              // 按状态筛选
-		index.Fields("proxy_id"),            // 按代理筛选
+		index.Fields("platform"), // 按平台筛选
+		index.Fields("type"),     // 按认证类型筛选
+		index.Fields("status"),   // 按状态筛选
+		index.Fields("proxy_id"), // 按代理筛选
+		index.Fields("proxy_fallback_origin_id"),
 		index.Fields("priority"),            // 按优先级排序
 		index.Fields("last_used_at"),        // 按最后使用时间排序
 		index.Fields("schedulable"),         // 筛选可调度账户

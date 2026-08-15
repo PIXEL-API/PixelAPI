@@ -3,29 +3,48 @@ package service
 import (
 	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openaiusage"
 	"github.com/tidwall/gjson"
 )
 
 // openAIResponsesBillingUsageObservation tracks raw Responses usage fields
-// without inferring presence from the decoded integer values. Top-level usage
-// and response.usage are tracked separately so fields from different usage
-// objects cannot accidentally form a complete pair.
+// without inferring presence from the decoded integer values. Every supported
+// envelope is tracked separately so fields from different usage objects cannot
+// accidentally form a complete pair.
 type openAIResponsesBillingUsageObservation struct {
-	topLevelUsage billingUsageObservation
-	responseUsage billingUsageObservation
+	usageByEnvelope [openaiusage.EnvelopeCount]billingUsageObservation
 }
 
 func (o *openAIResponsesBillingUsageObservation) observePayload(payload []byte) {
 	if o == nil || len(payload) == 0 || !gjson.ValidBytes(payload) {
 		return
 	}
-	parsed := gjson.ParseBytes(payload)
-	observeOpenAIBillingUsagePair(&o.topLevelUsage, parsed.Get("usage"), "input_tokens", "output_tokens")
-	observeOpenAIBillingUsagePair(&o.responseUsage, parsed.Get("response.usage"), "input_tokens", "output_tokens")
+	envelope, ok := openaiusage.SelectEnvelope(payload)
+	if !ok {
+		return
+	}
+	observeOpenAIResponsesBillingUsage(&o.usageByEnvelope[envelope.Index], envelope.Usage)
 }
 
 func (o openAIResponsesBillingUsageObservation) complete() bool {
-	return o.topLevelUsage.complete() || o.responseUsage.complete()
+	for _, observation := range o.usageByEnvelope {
+		if observation.complete() {
+			return true
+		}
+	}
+	return false
+}
+
+func observeOpenAIResponsesBillingUsage(observation *billingUsageObservation, usage gjson.Result) {
+	if observation == nil || !usage.Exists() || !usage.IsObject() {
+		return
+	}
+	observation.inputTokensObserved = observation.inputTokensObserved ||
+		billingTokenFieldObserved(usage.Get("input_tokens")) ||
+		billingTokenFieldObserved(usage.Get("prompt_tokens"))
+	observation.outputTokensObserved = observation.outputTokensObserved ||
+		billingTokenFieldObserved(usage.Get("output_tokens")) ||
+		billingTokenFieldObserved(usage.Get("completion_tokens"))
 }
 
 type openAIChatCompletionsBillingUsageObservation struct {

@@ -2499,6 +2499,27 @@ func TestOpenAIResponsesBillingUsagePresenceKeepsUsageObjectsSeparateAndAccumula
 	require.False(t, openAIResponsesBillingUsageComplete([]byte(
 		`{"usage":{"input_tokens":1},"response":{"usage":{"output_tokens":2}}}`,
 	)))
+	require.True(t, openAIResponsesBillingUsageComplete([]byte(
+		`{"data":{"usage":{"input_tokens":0,"output_tokens":0}}}`,
+	)))
+	require.True(t, openAIResponsesBillingUsageComplete([]byte(
+		`{"data":{"response":{"usage":{"input_tokens":0,"output_tokens":0}}}}`,
+	)))
+	require.True(t, openAIResponsesBillingUsageComplete([]byte(
+		`{"data":{"usage":{"prompt_tokens":0,"completion_tokens":0}}}`,
+	)))
+	require.False(t, openAIResponsesBillingUsageComplete([]byte(
+		`{"data":{"usage":{"input_tokens":0},"response":{"usage":{"output_tokens":0}}}}`,
+	)))
+	require.False(t, openAIResponsesBillingUsageComplete([]byte(
+		`{"usage":{},"response":{"usage":{"input_tokens":0,"output_tokens":0}}}`,
+	)))
+	require.False(t, openAIResponsesBillingUsageComplete([]byte(
+		`{"response":{"usage":{"input_tokens":0}},"data":{"usage":{"output_tokens":0}}}`,
+	)))
+	require.False(t, openAIResponsesBillingUsageComplete([]byte(
+		`{"data":{"usage":{"input_tokens":0},"response":{"usage":{"output_tokens":0}}}}`,
+	)))
 
 	sseBody := strings.Join([]string{
 		`data: {"type":"response.in_progress","response":{"usage":{"input_tokens":0}}}`,
@@ -3231,6 +3252,132 @@ func TestParseSSEUsage_SelectiveParsing(t *testing.T) {
 	require.Equal(t, 13, usage.InputTokens)
 	require.Equal(t, 15, usage.OutputTokens)
 	require.Equal(t, 4, usage.CacheReadInputTokens)
+	require.Empty(t, usage.ResponseServiceTier)
+
+	// 统一提取器也必须支持较短的顶层 usage 终态，不能被长度启发式跳过。
+	svc.parseSSEUsage(`{"type":"response.done","usage":{"input_tokens":1}}`, usage)
+	require.Equal(t, 1, usage.InputTokens)
+	require.Zero(t, usage.OutputTokens)
+
+	// Pixel 会用上游回显的 service_tier 参与计费；统一提取时必须保留该字段。
+	svc.parseSSEUsage(`{"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":5},"service_tier":"priority"}}`, usage)
+	require.Equal(t, "priority", usage.ResponseServiceTier)
+
+	// 旧协议有时把 tier 与 usage 分开发送；没有 usage 时仍应保留上游回显。
+	svc.parseSSEUsage(`{"type":"response.done","response":{"service_tier":"flex"}}`, usage)
+	require.Equal(t, 3, usage.InputTokens)
+	require.Equal(t, 5, usage.OutputTokens)
+	require.Equal(t, "flex", usage.ResponseServiceTier)
+
+	// failed 终态同样可能通过兼容层携带已消耗用量。
+	svc.parseSSEUsage(`{"type":"response.failed","data":{"usage":{"input_tokens":17,"output_tokens":19}}}`, usage)
+	require.Equal(t, 17, usage.InputTokens)
+	require.Equal(t, 19, usage.OutputTokens)
+}
+
+func TestExtractOpenAIUsageFromJSONBytes_EnvelopePathPrecedence(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		wantInput  int
+		wantOutput int
+		wantCache  int
+		wantTier   string
+	}{
+		{
+			name:       "top level usage",
+			body:       `{"usage":{"input_tokens":1,"output_tokens":11,"input_tokens_details":{"cached_tokens":21}},"service_tier":"priority"}`,
+			wantInput:  1,
+			wantOutput: 11,
+			wantCache:  21,
+			wantTier:   "priority",
+		},
+		{
+			name:       "response usage",
+			body:       `{"response":{"usage":{"input_tokens":2,"output_tokens":12,"input_tokens_details":{"cached_tokens":22}},"service_tier":"flex"}}`,
+			wantInput:  2,
+			wantOutput: 12,
+			wantCache:  22,
+			wantTier:   "flex",
+		},
+		{
+			name:       "data usage",
+			body:       `{"data":{"usage":{"prompt_tokens":3,"completion_tokens":13,"prompt_tokens_details":{"cached_tokens":23}},"service_tier":"auto"}}`,
+			wantInput:  3,
+			wantOutput: 13,
+			wantCache:  23,
+			wantTier:   "auto",
+		},
+		{
+			name:       "data response usage",
+			body:       `{"data":{"response":{"usage":{"input_tokens":4,"output_tokens":14,"input_tokens_details":{"cached_tokens":24}},"service_tier":"default"}}}`,
+			wantInput:  4,
+			wantOutput: 14,
+			wantCache:  24,
+			wantTier:   "default",
+		},
+		{
+			name:       "canonical explicit zero beats legacy aliases",
+			body:       `{"usage":{"input_tokens":0,"prompt_tokens":5,"output_tokens":0,"completion_tokens":6}}`,
+			wantInput:  0,
+			wantOutput: 0,
+		},
+		{
+			name:       "top level beats lower priority paths",
+			body:       `{"usage":{"input_tokens":1,"output_tokens":11},"response":{"usage":{"input_tokens":2,"output_tokens":12}},"data":{"usage":{"input_tokens":3,"output_tokens":13},"response":{"usage":{"input_tokens":4,"output_tokens":14}}}}`,
+			wantInput:  1,
+			wantOutput: 11,
+		},
+		{
+			name:       "response beats data paths",
+			body:       `{"response":{"usage":{"input_tokens":2,"output_tokens":12}},"data":{"usage":{"input_tokens":3,"output_tokens":13},"response":{"usage":{"input_tokens":4,"output_tokens":14}}}}`,
+			wantInput:  2,
+			wantOutput: 12,
+		},
+		{
+			name:       "data beats data response",
+			body:       `{"data":{"usage":{"input_tokens":3,"output_tokens":13},"response":{"usage":{"input_tokens":4,"output_tokens":14}}}}`,
+			wantInput:  3,
+			wantOutput: 13,
+		},
+		{
+			name: "empty top level object stops search",
+			body: `{"usage":{},"response":{"usage":{"input_tokens":2,"output_tokens":12}},"data":{"usage":{"input_tokens":3,"output_tokens":13}}}`,
+		},
+		{
+			name: "zero response object stops search",
+			body: `{"response":{"usage":{"input_tokens":0,"output_tokens":0}},"data":{"usage":{"input_tokens":3,"output_tokens":13}}}`,
+		},
+		{
+			name: "empty data object stops search",
+			body: `{"data":{"usage":{},"response":{"usage":{"input_tokens":4,"output_tokens":14}}}}`,
+		},
+		{
+			name:       "invalid shapes are skipped",
+			body:       `{"usage":null,"response":{"usage":"invalid"},"data":{"usage":[],"response":{"usage":{"input_tokens":4,"output_tokens":14}}}}`,
+			wantInput:  4,
+			wantOutput: 14,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			usage, ok := extractOpenAIUsageFromJSONBytes([]byte(tt.body))
+
+			require.True(t, ok)
+			require.Equal(t, tt.wantInput, usage.InputTokens)
+			require.Equal(t, tt.wantOutput, usage.OutputTokens)
+			require.Equal(t, tt.wantCache, usage.CacheReadInputTokens)
+			require.Equal(t, tt.wantTier, usage.ResponseServiceTier)
+		})
+	}
+
+	_, ok := extractOpenAIUsageFromJSONBytes([]byte(`{"type":`))
+	require.False(t, ok)
+	_, ok = extractOpenAIUsageFromJSONBytes([]byte(`{"usage":null}`))
+	require.False(t, ok)
+	_, ok = extractOpenAIUsageFromJSONBytes([]byte(`{}`))
+	require.False(t, ok)
 }
 
 func TestExtractOpenAIUsageFromJSONBytes_ImageTokenDetails(t *testing.T) {

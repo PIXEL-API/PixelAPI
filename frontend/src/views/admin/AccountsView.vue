@@ -305,13 +305,38 @@
             />
           </template>
           <template #cell-proxy="{ row }">
-            <div v-if="row.proxy" class="flex items-center gap-2">
-              <span class="text-sm text-gray-700 dark:text-gray-300">{{ row.proxy.name }}</span>
-              <span v-if="row.proxy.country_code" class="text-xs text-gray-500 dark:text-gray-400">
-                ({{ row.proxy.country_code }})
-              </span>
+            <div class="flex flex-col items-start gap-1">
+              <div v-if="row.proxy" class="flex items-center gap-2">
+                <span class="text-sm text-gray-700 dark:text-gray-300">{{ row.proxy.name }}</span>
+                <span v-if="row.proxy.country_code" class="text-xs text-gray-500 dark:text-gray-400">
+                  ({{ row.proxy.country_code }})
+                </span>
+              </div>
+              <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
+              <div v-if="row.proxy_fallback_origin_id" class="flex flex-wrap items-center gap-1">
+                <span
+                  class="inline-flex rounded-md bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-200"
+                  :title="t('admin.accounts.fallbackActiveTip', { origin: row.proxy_fallback_origin_name || `#${row.proxy_fallback_origin_id}` })"
+                >
+                  {{ t('admin.accounts.fallbackActive') }}
+                </span>
+                <button
+                  type="button"
+                  class="inline-flex min-h-11 cursor-pointer items-center gap-1 rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-dark-600 dark:text-gray-200 dark:hover:bg-dark-700"
+                  :disabled="revertingProxyFallbackID === row.id"
+                  @click.stop="requestProxyFallbackRevert(row)"
+                >
+                  <span
+                    v-if="revertingProxyFallbackID === row.id"
+                    class="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent"
+                    aria-hidden="true"
+                  ></span>
+                  {{ revertingProxyFallbackID === row.id
+                    ? t('admin.accounts.revertingProxy')
+                    : t('admin.accounts.revertProxy') }}
+                </button>
+              </div>
             </div>
-            <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
           </template>
           <template #cell-rate_multiplier="{ row }">
             <span class="text-sm font-mono text-gray-700 dark:text-gray-300">
@@ -405,6 +430,18 @@
     />
     <TempUnschedStatusModal :show="showTempUnsched" :account="tempUnschedAcc" @close="showTempUnsched = false" @reset="handleTempUnschedReset" />
     <ConfirmDialog :show="showDeleteDialog" :title="t('admin.accounts.deleteAccount')" :message="t('admin.accounts.deleteConfirm', { name: deletingAcc?.name })" :confirm-text="t('common.delete')" :cancel-text="t('common.cancel')" :danger="true" @confirm="confirmDelete" @cancel="showDeleteDialog = false" />
+    <ConfirmDialog
+      :show="Boolean(fallbackRevertAccount)"
+      :title="t('admin.accounts.revertProxyTitle')"
+      :message="t('admin.accounts.revertProxyConfirm', {
+        name: fallbackRevertAccount?.name,
+        origin: fallbackRevertAccount?.proxy_fallback_origin_name || `#${fallbackRevertAccount?.proxy_fallback_origin_id}`
+      })"
+      :confirm-text="t('admin.accounts.revertProxy')"
+      :cancel-text="t('common.cancel')"
+      @confirm="confirmProxyFallbackRevert"
+      @cancel="fallbackRevertAccount = null"
+    />
     <ConfirmDialog :show="showExportDataDialog" :title="t('admin.accounts.dataExport')" :message="t('admin.accounts.dataExportConfirmMessage')" :confirm-text="t('admin.accounts.dataExportConfirm')" :cancel-text="t('common.cancel')" @confirm="handleExportData" @cancel="showExportDataDialog = false">
       <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
         <input type="checkbox" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" v-model="includeProxyOnExport" />
@@ -560,6 +597,8 @@ const showTLSFingerprintProfiles = ref(false)
 const edAcc = ref<Account | null>(null)
 const tempUnschedAcc = ref<Account | null>(null)
 const deletingAcc = ref<Account | null>(null)
+const fallbackRevertAccount = ref<Account | null>(null)
+const revertingProxyFallbackID = ref<number | null>(null)
 const reAuthAcc = ref<Account | null>(null)
 const testingAcc = ref<Account | null>(null)
 const bulkTestRepresentativeAccount = ref<Account | null>(null)
@@ -967,6 +1006,7 @@ const isAnyModalOpen = computed(() => {
     showBulkEdit.value ||
     showTempUnsched.value ||
     showDeleteDialog.value ||
+    Boolean(fallbackRevertAccount.value) ||
     showReAuth.value ||
     showTest.value ||
     showStats.value ||
@@ -1917,6 +1957,27 @@ const handleSetPrivacy = async (a: Account) => {
   } catch (error: any) {
     console.error('Failed to set privacy:', error)
     appStore.showError(error?.response?.data?.message || t('admin.accounts.privacyFailed'))
+  }
+}
+const requestProxyFallbackRevert = (account: Account) => {
+  if (!account.proxy_fallback_origin_id || revertingProxyFallbackID.value !== null) return
+  fallbackRevertAccount.value = account
+}
+const confirmProxyFallbackRevert = async () => {
+  const account = fallbackRevertAccount.value
+  if (!account || revertingProxyFallbackID.value !== null) return
+  fallbackRevertAccount.value = null
+  revertingProxyFallbackID.value = account.id
+  try {
+    await adminAPI.accounts.revertProxyFallback(account.id)
+    enterAutoRefreshSilentWindow()
+    await reload()
+    appStore.showSuccess(t('admin.accounts.revertProxySuccess'))
+  } catch (error: any) {
+    console.error('Failed to revert proxy fallback:', error)
+    appStore.showError(error?.message || t('admin.accounts.revertProxyFailed'))
+  } finally {
+    revertingProxyFallbackID.value = null
   }
 }
 const handleDelete = (a: Account) => { deletingAcc.value = a; showDeleteDialog.value = true }

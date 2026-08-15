@@ -379,6 +379,170 @@ func TestOpenAIWSV2BillingUsageCompleteRequiresBothNonNegativeNumberFields(t *te
 	require.False(t, openAIWSV2BillingUsageComplete([]byte(
 		`{"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":"1"}}}`,
 	)))
+	require.False(t, openAIWSV2BillingUsageComplete([]byte(
+		`{"type":"response.completed","response":{"usage":{"input_tokens":1.5,"output_tokens":2}}}`,
+	)))
+}
+
+func TestParseUsageAndAccumulateSupportsUsageEnvelopePrecedence(t *testing.T) {
+	tests := []struct {
+		name       string
+		message    string
+		wantInput  int
+		wantOutput int
+		wantImage  int
+		complete   bool
+	}{
+		{
+			name:       "top level usage",
+			message:    `{"type":"response.completed","usage":{"input_tokens":11,"output_tokens":7}}`,
+			wantInput:  11,
+			wantOutput: 7,
+			complete:   true,
+		},
+		{
+			name:       "response usage",
+			message:    `{"type":"response.completed","response":{"usage":{"input_tokens":12,"output_tokens":8}}}`,
+			wantInput:  12,
+			wantOutput: 8,
+			complete:   true,
+		},
+		{
+			name:       "data usage",
+			message:    `{"type":"response.done","data":{"usage":{"input_tokens":13,"output_tokens":9}}}`,
+			wantInput:  13,
+			wantOutput: 9,
+			complete:   true,
+		},
+		{
+			name:       "data response usage",
+			message:    `{"type":"response.done","data":{"response":{"usage":{"input_tokens":14,"output_tokens":10},"tool_usage":{"image_gen":{"input_tokens":7,"output_tokens":3,"output_tokens_details":{"image_tokens":3}}}}}}`,
+			wantInput:  21,
+			wantOutput: 13,
+			wantImage:  3,
+			complete:   true,
+		},
+		{
+			name:       "top level wins",
+			message:    `{"type":"response.completed","usage":{"input_tokens":1,"output_tokens":2},"response":{"usage":{"input_tokens":100,"output_tokens":200}}}`,
+			wantInput:  1,
+			wantOutput: 2,
+			complete:   true,
+		},
+		{
+			name:       "empty top level object blocks lower priority",
+			message:    `{"type":"response.completed","usage":{},"response":{"usage":{"input_tokens":100,"output_tokens":200}}}`,
+			wantInput:  0,
+			wantOutput: 0,
+			complete:   false,
+		},
+		{
+			name:       "invalid top level shape is skipped",
+			message:    `{"type":"response.completed","usage":null,"response":{"usage":{"input_tokens":3,"output_tokens":4}}}`,
+			wantInput:  3,
+			wantOutput: 4,
+			complete:   true,
+		},
+		{
+			name:       "prompt completion aliases are billing complete",
+			message:    `{"type":"response.completed","data":{"usage":{"prompt_tokens":5,"completion_tokens":6}}}`,
+			wantInput:  5,
+			wantOutput: 6,
+			complete:   true,
+		},
+		{
+			name:       "canonical explicit zero beats legacy aliases",
+			message:    `{"type":"response.completed","usage":{"input_tokens":0,"prompt_tokens":5,"output_tokens":0,"completion_tokens":6}}`,
+			wantInput:  0,
+			wantOutput: 0,
+			complete:   true,
+		},
+		{
+			name:       "different envelopes cannot form a pair",
+			message:    `{"type":"response.completed","usage":{"input_tokens":7},"response":{"usage":{"output_tokens":3}}}`,
+			wantInput:  0,
+			wantOutput: 0,
+			complete:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := &relayState{}
+			parsed := parseUsageAndAccumulate(state, []byte(tt.message), strings.TrimSpace(gjson.Get(tt.message, "type").String()), nil)
+			require.Equal(t, tt.wantInput, parsed.InputTokens)
+			require.Equal(t, tt.wantOutput, parsed.OutputTokens)
+			require.Equal(t, tt.wantImage, parsed.ImageOutputTokens)
+			require.Equal(t, tt.wantInput, state.usage.InputTokens)
+			require.Equal(t, tt.wantOutput, state.usage.OutputTokens)
+			require.Equal(t, tt.wantImage, state.usage.ImageOutputTokens)
+			require.Equal(t, tt.complete, openAIWSV2BillingUsageComplete([]byte(tt.message)))
+		})
+	}
+}
+
+func TestParseUsageAndAccumulateAcceptsEmptyUsageObjectWithoutParseFailure(t *testing.T) {
+	state := &relayState{}
+	parseFailures := 0
+
+	parsed := parseUsageAndAccumulate(
+		state,
+		[]byte(`{"type":"response.completed","usage":{},"response":{"usage":"invalid"}}`),
+		"response.completed",
+		func(string, string) { parseFailures++ },
+	)
+
+	require.Equal(t, Usage{}, parsed)
+	require.Equal(t, Usage{}, state.usage)
+	require.Zero(t, parseFailures)
+}
+
+func TestObserveUpstreamMessageDoesNotAccumulateDuplicateTerminalSnapshot(t *testing.T) {
+	now := time.Unix(100, 0)
+	state := &relayState{}
+	completed := []byte(`{"type":"response.completed","response":{"id":"resp_duplicate","usage":{"input_tokens":10,"output_tokens":5}}}`)
+	done := []byte(`{"type":"response.done","response":{"id":"resp_duplicate","usage":{"input_tokens":10,"output_tokens":5}}}`)
+
+	observeUpstreamMessage(state, completed, now, func() time.Time { return now }, nil)
+	observeUpstreamMessage(state, done, now, func() time.Time { return now }, nil)
+
+	require.Equal(t, 10, state.usage.InputTokens)
+	require.Equal(t, 5, state.usage.OutputTokens)
+}
+
+func TestObserveUpstreamMessageKeepsFirstTerminalSnapshot(t *testing.T) {
+	now := time.Unix(100, 0)
+	state := &relayState{}
+	first := []byte(`{"type":"response.completed","response":{"id":"resp_corrected","usage":{"input_tokens":10,"output_tokens":5}}}`)
+	corrected := []byte(`{"type":"response.done","response":{"id":"resp_corrected","usage":{"input_tokens":12,"output_tokens":6}}}`)
+
+	firstObserved := observeUpstreamMessage(state, first, now, func() time.Time { return now }, nil)
+	duplicateObserved := observeUpstreamMessage(state, corrected, now, func() time.Time { return now }, nil)
+
+	require.True(t, firstObserved.terminal)
+	require.False(t, firstObserved.duplicateTerminal)
+	require.True(t, duplicateObserved.terminal)
+	require.True(t, duplicateObserved.duplicateTerminal)
+	require.Equal(t, 10, state.usage.InputTokens)
+	require.Equal(t, 5, state.usage.OutputTokens)
+}
+
+func TestRelayStateTerminalResponseIDDigestSetDistinguishesIDsWithoutRetainingRawValues(t *testing.T) {
+	state := &relayState{}
+	firstID := "resp_terminal_exact_a"
+	secondID := "resp_terminal_exact_b"
+
+	state.rememberTerminalResponseID(firstID)
+	state.rememberTerminalResponseID(secondID)
+
+	require.True(t, state.hasTerminalResponseID(firstID))
+	require.True(t, state.hasTerminalResponseID(secondID))
+	require.False(t, state.hasTerminalResponseID("resp_terminal_exact_c"))
+	require.Len(t, state.terminalResponseIDs, 2)
+	for storedHash := range state.terminalResponseIDs {
+		require.NotContains(t, string(storedHash[:]), firstID)
+		require.NotContains(t, string(storedHash[:]), secondID)
+	}
 }
 
 func TestEmitTurnCompleteCoverage(t *testing.T) {
@@ -537,4 +701,15 @@ func TestObserveUpstreamMessage_ResponseIDFallbackPolicy(t *testing.T) {
 	)
 	require.True(t, observed.terminal)
 	require.Equal(t, "resp_fallback", observed.responseID)
+
+	// data.response Usage 的伴随 response id 必须保持在同一自然 envelope 中。
+	observed = observeUpstreamMessage(
+		state,
+		[]byte(`{"type":"response.done","data":{"response":{"id":"resp_data_nested","usage":{"input_tokens":2,"output_tokens":1}}}}`),
+		startAt,
+		nowFn,
+		nil,
+	)
+	require.True(t, observed.terminal)
+	require.Equal(t, "resp_data_nested", observed.responseID)
 }

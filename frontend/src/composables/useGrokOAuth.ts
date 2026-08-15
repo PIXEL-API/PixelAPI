@@ -17,6 +17,7 @@ export function useGrokOAuth(scope: AccountApiScope = 'admin') {
   const state = ref('')
   const loading = ref(false)
   const error = ref('')
+  const passwordAuthEnabled = ref(false)
 
   const resetState = () => {
     authUrl.value = ''
@@ -24,6 +25,20 @@ export function useGrokOAuth(scope: AccountApiScope = 'admin') {
     state.value = ''
     loading.value = false
     error.value = ''
+  }
+
+  // Capability discovery is fail-closed: an unavailable/old backend must not
+  // make the password form appear. Password auth is administrator-only.
+  const loadCapabilities = async (): Promise<boolean> => {
+    passwordAuthEnabled.value = false
+    if (scope !== 'admin') return false
+    try {
+      const capabilities = await adminAPI.grok.getCapabilities()
+      passwordAuthEnabled.value = capabilities.password_auth_enabled === true
+    } catch {
+      passwordAuthEnabled.value = false
+    }
+    return passwordAuthEnabled.value
   }
 
   const generateAuthUrl = async (
@@ -129,6 +144,66 @@ export function useGrokOAuth(scope: AccountApiScope = 'admin') {
     }
   }
 
+  const validateSSOToken = async (
+    ssoToken: string,
+    proxyId?: number | null
+  ): Promise<GrokTokenInfo | null> => {
+    if (scope !== 'admin') return null
+    const normalized = ssoToken.trim()
+    if (!normalized) {
+      error.value = t('admin.accounts.oauth.grok.pleaseEnterSSOToken')
+      return null
+    }
+    loading.value = true
+    error.value = ''
+    try {
+      return await adminAPI.grok.validateSSOToken(normalized, proxyId)
+    } catch (err: unknown) {
+      error.value = extractI18nErrorMessage(
+        err,
+        t,
+        'admin.accounts.oauth.grok.errors',
+        t('admin.accounts.oauth.grok.failedToValidateSSO')
+      )
+      appStore.showError(error.value)
+      return null
+    } finally {
+      loading.value = false
+    }
+  }
+
+  const authorizePassword = async (
+    email: string,
+    password: string,
+    proxyId?: number | null
+  ): Promise<GrokTokenInfo | null> => {
+    if (scope !== 'admin' || !passwordAuthEnabled.value) {
+      error.value = t('admin.accounts.oauth.grok.passwordAuthDisabled')
+      return null
+    }
+    const normalizedEmail = email.trim()
+    if (!normalizedEmail || !password) {
+      error.value = t('admin.accounts.oauth.grok.emailPasswordRequired')
+      return null
+    }
+    loading.value = true
+    error.value = ''
+    try {
+      return await adminAPI.grok.authorizePassword(normalizedEmail, password, proxyId)
+    } catch (err: unknown) {
+      error.value = extractI18nErrorMessage(
+        err,
+        t,
+        'admin.accounts.oauth.grok.errors',
+        t('admin.accounts.oauth.grok.failedToAuthorizePassword')
+      )
+      appStore.showError(error.value)
+      return null
+    } finally {
+      loading.value = false
+    }
+  }
+
   const buildCredentials = (tokenInfo: GrokTokenInfo): Record<string, unknown> => {
     const credentials: Record<string, unknown> = {
       access_token: tokenInfo.access_token,
@@ -161,10 +236,14 @@ export function useGrokOAuth(scope: AccountApiScope = 'admin') {
     state,
     loading,
     error,
+    passwordAuthEnabled,
     resetState,
+    loadCapabilities,
     generateAuthUrl,
     exchangeAuthCode,
     validateRefreshToken,
+    validateSSOToken,
+    authorizePassword,
     buildCredentials,
     buildExtraInfo
   }

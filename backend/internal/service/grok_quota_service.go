@@ -20,7 +20,7 @@ import (
 
 const (
 	grokQuotaUpstreamTimeout = 20 * time.Second
-	grokQuotaProbeInput      = "."
+	grokQuotaProbeInput      = "hi"
 	grokQuotaDefaultModel    = grokDefaultResponsesModel
 	grokBillingExtraKey      = "grok_billing_snapshot"
 )
@@ -91,6 +91,9 @@ func NewGrokQuotaService(
 func (s *GrokQuotaService) QueryQuota(ctx context.Context, accountID int64) (*GrokQuotaProbeResult, error) {
 	billingResult, billingErr := s.ProbeBilling(ctx, accountID)
 	if billingErr == nil && billingResult != nil && grokBillingHasAuthoritativeQuota(billingResult.Billing) {
+		if account, err := s.accountRepo.GetByID(ctx, accountID); err == nil {
+			s.scheduleGrokObservedModelsSync(account)
+		}
 		return billingResult, nil
 	}
 
@@ -115,6 +118,9 @@ func (s *GrokQuotaService) QueryQuota(ctx context.Context, accountID int64) (*Gr
 		probeResult.LocalUsage7d = billingResult.LocalUsage7d
 		probeResult.LocalUsageMonthly = billingResult.LocalUsageMonthly
 		probeResult.Persisted = probeResult.Persisted || billingResult.Persisted
+	}
+	if account, err := s.accountRepo.GetByID(ctx, accountID); err == nil {
+		s.scheduleGrokObservedModelsSync(account)
 	}
 	return probeResult, nil
 }
@@ -164,7 +170,7 @@ func (s *GrokQuotaService) probeUsage(ctx context.Context, accountID int64) (*Gr
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
 	if account.IsGrokOAuth() {
 		applyGrokCLIHeaders(req.Header)
 	}
@@ -202,7 +208,7 @@ func (s *GrokQuotaService) probeUsage(ctx context.Context, accountID int64) (*Gr
 	persistErr := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{
 		grokQuotaSnapshotExtraKey: snapshot,
 	})
-	if limited {
+	if limited && !account.IsPoolMode() {
 		persistGrokRateLimit(ctx, s.accountRepo, account, resetAt)
 	} else if isSuccessfulGrokRateLimitRecovery(account, snapshot) {
 		clearGrokRateLimitAfterRecovery(ctx, s.accountRepo, account)
@@ -249,6 +255,10 @@ func (s *GrokQuotaService) probeUsage(ctx context.Context, accountID int64) (*Gr
 			probeModel,
 		)
 	}
+	// Direct ProbeUsage is used by OAuth/SSO import jobs as well as QueryQuota.
+	// A successful import probe should therefore refresh the observed upstream
+	// model catalog too; the in-flight guard and snapshot TTL prevent duplicates.
+	s.scheduleGrokObservedModelsSync(account)
 	return result, nil
 }
 
@@ -565,10 +575,9 @@ func buildGrokQuotaProbeBody(model string) ([]byte, error) {
 		model = grokQuotaDefaultModel
 	}
 	return json.Marshal(map[string]any{
-		"model":             model,
-		"input":             grokQuotaProbeInput,
-		"max_output_tokens": 1,
-		"store":             false,
+		"model":  model,
+		"input":  grokQuotaProbeInput,
+		"stream": true,
 	})
 }
 

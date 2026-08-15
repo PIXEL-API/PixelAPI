@@ -158,6 +158,7 @@ var (
 		{Name: "share_mode", Type: field.TypeString, Size: 20, Default: "private"},
 		{Name: "share_status", Type: field.TypeString, Size: 20, Default: "approved"},
 		{Name: "share_policy_id", Type: field.TypeInt64, Nullable: true},
+		{Name: "proxy_fallback_origin_id", Type: field.TypeInt64, Nullable: true},
 		{Name: "concurrency", Type: field.TypeInt, Default: 3},
 		{Name: "load_factor", Type: field.TypeInt, Nullable: true},
 		{Name: "load_factor_paid_ceiling", Type: field.TypeInt, Default: 10},
@@ -188,13 +189,13 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "accounts_proxies_proxy",
-				Columns:    []*schema.Column{AccountsColumns[33]},
+				Columns:    []*schema.Column{AccountsColumns[34]},
 				RefColumns: []*schema.Column{ProxiesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "accounts_users_owned_accounts",
-				Columns:    []*schema.Column{AccountsColumns[34]},
+				Columns:    []*schema.Column{AccountsColumns[35]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -213,57 +214,62 @@ var (
 			{
 				Name:    "account_status",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[19]},
+				Columns: []*schema.Column{AccountsColumns[20]},
 			},
 			{
 				Name:    "account_proxy_id",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[33]},
+				Columns: []*schema.Column{AccountsColumns[34]},
+			},
+			{
+				Name:    "account_proxy_fallback_origin_id",
+				Unique:  false,
+				Columns: []*schema.Column{AccountsColumns[14]},
 			},
 			{
 				Name:    "account_priority",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[17]},
+				Columns: []*schema.Column{AccountsColumns[18]},
 			},
 			{
 				Name:    "account_last_used_at",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[21]},
+				Columns: []*schema.Column{AccountsColumns[22]},
 			},
 			{
 				Name:    "account_schedulable",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[24]},
+				Columns: []*schema.Column{AccountsColumns[25]},
 			},
 			{
 				Name:    "account_rate_limited_at",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[25]},
+				Columns: []*schema.Column{AccountsColumns[26]},
 			},
 			{
 				Name:    "account_rate_limit_reset_at",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[26]},
+				Columns: []*schema.Column{AccountsColumns[27]},
 			},
 			{
 				Name:    "account_overload_until",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[27]},
+				Columns: []*schema.Column{AccountsColumns[28]},
 			},
 			{
 				Name:    "account_platform_priority",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[7], AccountsColumns[17]},
+				Columns: []*schema.Column{AccountsColumns[7], AccountsColumns[18]},
 			},
 			{
 				Name:    "account_priority_status",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[17], AccountsColumns[19]},
+				Columns: []*schema.Column{AccountsColumns[18], AccountsColumns[20]},
 			},
 			{
 				Name:    "account_owner_user_id",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[34]},
+				Columns: []*schema.Column{AccountsColumns[35]},
 			},
 			{
 				Name:    "account_share_mode_share_status",
@@ -730,7 +736,12 @@ var (
 		{Name: "video_price_480p", Type: field.TypeFloat64, Nullable: true, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
 		{Name: "video_price_720p", Type: field.TypeFloat64, Nullable: true, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
 		{Name: "video_price_1080p", Type: field.TypeFloat64, Nullable: true, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
+		{Name: "video_model_prices", Type: field.TypeJSON, Nullable: true, SchemaType: map[string]string{"postgres": "jsonb"}},
 		{Name: "web_search_price_per_call", Type: field.TypeFloat64, Nullable: true, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
+		{Name: "search_price_per_1k", Type: field.TypeFloat64, Nullable: true, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
+		{Name: "audio_realtime_price_per_min", Type: field.TypeFloat64, Nullable: true, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
+		{Name: "audio_tts_price_per_million_chars", Type: field.TypeFloat64, Nullable: true, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
+		{Name: "audio_stt_price_per_hour", Type: field.TypeFloat64, Nullable: true, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
 		{Name: "claude_code_only", Type: field.TypeBool, Default: false},
 		{Name: "fallback_group_id", Type: field.TypeInt64, Nullable: true},
 		{Name: "fallback_group_id_on_invalid_request", Type: field.TypeInt64, Nullable: true},
@@ -795,7 +806,7 @@ var (
 			{
 				Name:    "group_sort_order",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[43]},
+				Columns: []*schema.Column{GroupsColumns[48]},
 			},
 		},
 	}
@@ -1207,6 +1218,10 @@ var (
 		{Name: "required_account_level", Type: field.TypeString, Size: 20, Default: ""},
 		{Name: "status", Type: field.TypeString, Size: 20, Default: "active"},
 		{Name: "max_accounts", Type: field.TypeInt, Default: 0},
+		{Name: "expires_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "fallback_mode", Type: field.TypeString, Size: 20, Default: "none"},
+		{Name: "expiry_warn_days", Type: field.TypeInt, Default: 7},
+		{Name: "backup_proxy_id", Type: field.TypeInt64, Nullable: true},
 		{Name: "owner_user_id", Type: field.TypeInt64, Nullable: true},
 	}
 	// ProxiesTable holds the schema information for the "proxies" table.
@@ -1216,8 +1231,14 @@ var (
 		PrimaryKey: []*schema.Column{ProxiesColumns[0]},
 		ForeignKeys: []*schema.ForeignKey{
 			{
+				Symbol:     "proxies_proxies_fallback_sources",
+				Columns:    []*schema.Column{ProxiesColumns[17]},
+				RefColumns: []*schema.Column{ProxiesColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+			{
 				Symbol:     "proxies_users_owned_proxies",
-				Columns:    []*schema.Column{ProxiesColumns[14]},
+				Columns:    []*schema.Column{ProxiesColumns[18]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -1231,12 +1252,22 @@ var (
 			{
 				Name:    "proxy_owner_user_id",
 				Unique:  false,
-				Columns: []*schema.Column{ProxiesColumns[14]},
+				Columns: []*schema.Column{ProxiesColumns[18]},
 			},
 			{
 				Name:    "proxy_platform_required_account_level",
 				Unique:  false,
 				Columns: []*schema.Column{ProxiesColumns[10], ProxiesColumns[11]},
+			},
+			{
+				Name:    "proxy_expires_at",
+				Unique:  false,
+				Columns: []*schema.Column{ProxiesColumns[14]},
+			},
+			{
+				Name:    "proxy_backup_proxy_id",
+				Unique:  false,
+				Columns: []*schema.Column{ProxiesColumns[17]},
 			},
 			{
 				Name:    "proxy_deleted_at",
@@ -2421,7 +2452,8 @@ func init() {
 	PromoCodeUsagesTable.Annotation = &entsql.Annotation{
 		Table: "promo_code_usages",
 	}
-	ProxiesTable.ForeignKeys[0].RefTable = UsersTable
+	ProxiesTable.ForeignKeys[0].RefTable = ProxiesTable
+	ProxiesTable.ForeignKeys[1].RefTable = UsersTable
 	ProxiesTable.Annotation = &entsql.Annotation{
 		Table: "proxies",
 	}

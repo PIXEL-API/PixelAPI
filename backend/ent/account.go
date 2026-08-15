@@ -50,6 +50,8 @@ type Account struct {
 	SharePolicyID *int64 `json:"share_policy_id,omitempty"`
 	// ProxyID holds the value of the "proxy_id" field.
 	ProxyID *int64 `json:"proxy_id,omitempty"`
+	// ProxyFallbackOriginID holds the value of the "proxy_fallback_origin_id" field.
+	ProxyFallbackOriginID *int64 `json:"proxy_fallback_origin_id,omitempty"`
 	// Concurrency holds the value of the "concurrency" field.
 	Concurrency int `json:"concurrency,omitempty"`
 	// LoadFactor holds the value of the "load_factor" field.
@@ -171,7 +173,7 @@ func (*Account) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullBool)
 		case account.FieldRateMultiplier:
 			values[i] = new(sql.NullFloat64)
-		case account.FieldID, account.FieldOwnerUserID, account.FieldSharePolicyID, account.FieldProxyID, account.FieldConcurrency, account.FieldLoadFactor, account.FieldLoadFactorPaidCeiling, account.FieldPriority:
+		case account.FieldID, account.FieldOwnerUserID, account.FieldSharePolicyID, account.FieldProxyID, account.FieldProxyFallbackOriginID, account.FieldConcurrency, account.FieldLoadFactor, account.FieldLoadFactorPaidCeiling, account.FieldPriority:
 			values[i] = new(sql.NullInt64)
 		case account.FieldName, account.FieldAccountLevel, account.FieldNotes, account.FieldPlatform, account.FieldType, account.FieldShareMode, account.FieldShareStatus, account.FieldStatus, account.FieldErrorMessage, account.FieldTempUnschedulableReason, account.FieldSessionWindowStatus:
 			values[i] = new(sql.NullString)
@@ -296,6 +298,13 @@ func (_m *Account) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.ProxyID = new(int64)
 				*_m.ProxyID = value.Int64
+			}
+		case account.FieldProxyFallbackOriginID:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field proxy_fallback_origin_id", values[i])
+			} else if value.Valid {
+				_m.ProxyFallbackOriginID = new(int64)
+				*_m.ProxyFallbackOriginID = value.Int64
 			}
 		case account.FieldConcurrency:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
@@ -536,6 +545,11 @@ func (_m *Account) String() string {
 	builder.WriteString(", ")
 	if v := _m.ProxyID; v != nil {
 		builder.WriteString("proxy_id=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.ProxyFallbackOriginID; v != nil {
+		builder.WriteString("proxy_fallback_origin_id=")
 		builder.WriteString(fmt.Sprintf("%v", *v))
 	}
 	builder.WriteString(", ")

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -20,29 +21,57 @@ import (
 
 // RateLimitService 处理限流和过载状态管理
 type RateLimitService struct {
-	accountRepo           AccountRepository
-	usageRepo             UsageLogRepository
-	cfg                   *config.Config
-	geminiQuotaService    *GeminiQuotaService
-	tempUnschedCache      TempUnschedCache
-	timeoutCounterCache   TimeoutCounterCache
-	openAI403CounterCache OpenAI403CounterCache
-	settingService        *SettingService
-	tokenCacheInvalidator TokenCacheInvalidator
-	usageCacheMu          sync.RWMutex
-	usageCache            map[int64]*geminiUsageCacheEntry
+	accountRepo                AccountRepository
+	usageRepo                  UsageLogRepository
+	cfg                        *config.Config
+	geminiQuotaService         *GeminiQuotaService
+	tempUnschedCache           TempUnschedCache
+	timeoutCounterCache        TimeoutCounterCache
+	openAI403CounterCache      OpenAI403CounterCache
+	settingService             *SettingService
+	tokenCacheInvalidator      TokenCacheInvalidator
+	grokProxyRecoveryVerifier  grokProxyCredentialRecoveryVerifier
+	grokSchedulingBlockCleaner grokAccountSchedulingBlockCleaner
+	grokProxyRecoveryMu        sync.Mutex
+	grokProxyRecoveryInFlight  map[int64]bool
+	usageCacheMu               sync.RWMutex
+	usageCache                 map[int64]*geminiUsageCacheEntry
 }
 
 // SuccessfulTestRecoveryResult 表示测试成功后恢复了哪些运行时状态。
 type SuccessfulTestRecoveryResult struct {
-	ClearedError     bool
-	ClearedRateLimit bool
+	ClearedError             bool
+	ClearedRateLimit         bool
+	RestoredSchedulable      bool
+	RuntimeCleanupIncomplete bool
 }
 
 // AccountRecoveryOptions 控制账号恢复时的附加行为。
 type AccountRecoveryOptions struct {
 	InvalidateToken bool
 }
+
+type grokProxyCredentialRecoveryRepository interface {
+	ListGrokProxyCredentialRecoveryCandidates(ctx context.Context, proxyID int64) ([]Account, error)
+	RecoverGrokProxyCredentialFailureIfMatch(ctx context.Context, accountID int64, snapshot GrokCredentialMutationSnapshot) (bool, error)
+}
+
+type grokProxyCredentialRecoveryVerifier interface {
+	VerifyGrokProxyCredentialRecovery(ctx context.Context, account *Account) (*Account, GrokCredentialMutationSnapshot, error)
+}
+
+type grokProxyCredentialRecoveryScheduler interface {
+	ScheduleGrokProxyCredentialRecovery(proxyID int64)
+}
+
+type GrokProxyCredentialRecoveryBatchResult struct {
+	Candidates    int
+	Recovered     int
+	Failed        int
+	CleanupFailed int
+}
+
+var ErrGrokProxyCredentialRecoveryConflict = errors.New("Grok proxy credential recovery state changed during verification")
 
 const TokenRefreshTempUnschedDuration = 10 * time.Minute
 
@@ -117,6 +146,14 @@ func (s *RateLimitService) SetSettingService(settingService *SettingService) {
 // SetTokenCacheInvalidator 设置 token 缓存清理器（可选依赖）
 func (s *RateLimitService) SetTokenCacheInvalidator(invalidator TokenCacheInvalidator) {
 	s.tokenCacheInvalidator = invalidator
+}
+
+func (s *RateLimitService) SetGrokProxyCredentialRecoveryVerifier(verifier grokProxyCredentialRecoveryVerifier) {
+	s.grokProxyRecoveryVerifier = verifier
+}
+
+func (s *RateLimitService) SetGrokSchedulingBlockCleaner(cleaner grokAccountSchedulingBlockCleaner) {
+	s.grokSchedulingBlockCleaner = cleaner
 }
 
 // ErrorPolicyResult 表示错误策略检查的结果
@@ -1856,6 +1893,9 @@ func (s *RateLimitService) RecoverAccountState(ctx context.Context, accountID in
 	if err != nil {
 		return nil, err
 	}
+	if isGrokProxyCredentialFailureAccount(account) {
+		return s.recoverGrokProxyCredentialFailure(ctx, account)
+	}
 
 	result := &SuccessfulTestRecoveryResult{}
 	if account.Status == StatusError {
@@ -1881,6 +1921,194 @@ func (s *RateLimitService) RecoverAccountState(ctx context.Context, accountID in
 	}
 
 	return result, nil
+}
+
+func isGrokProxyCredentialFailureAccount(account *Account) bool {
+	return account != nil &&
+		account.Platform == PlatformGrok &&
+		account.Type == AccountTypeOAuth &&
+		account.Status == StatusError &&
+		!account.Schedulable &&
+		account.ProxyID != nil && *account.ProxyID > 0 &&
+		strings.TrimSpace(account.ErrorMessage) == string(GrokCredentialReasonProxyInvalid)
+}
+
+func (s *RateLimitService) recoverGrokProxyCredentialFailure(
+	ctx context.Context,
+	account *Account,
+) (*SuccessfulTestRecoveryResult, error) {
+	if s == nil || s.accountRepo == nil || account == nil {
+		return nil, errors.New("Grok proxy credential recovery is not configured")
+	}
+	repo, ok := s.accountRepo.(grokProxyCredentialRecoveryRepository)
+	if !ok {
+		return nil, errors.New("Grok proxy credential recovery repository is not configured")
+	}
+	if s.grokProxyRecoveryVerifier == nil {
+		return nil, errors.New("Grok proxy credential recovery verifier is not configured")
+	}
+	verifiedAccount, snapshot, err := s.grokProxyRecoveryVerifier.VerifyGrokProxyCredentialRecovery(ctx, account)
+	if err != nil {
+		return nil, fmt.Errorf("verify Grok proxy credential recovery: %w", err)
+	}
+	if verifiedAccount == nil || verifiedAccount.ID != account.ID {
+		return nil, errors.New("Grok proxy credential recovery verifier returned an invalid account")
+	}
+	applied, err := repo.RecoverGrokProxyCredentialFailureIfMatch(ctx, account.ID, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	if !applied {
+		return nil, ErrGrokProxyCredentialRecoveryConflict
+	}
+	result := &SuccessfulTestRecoveryResult{
+		ClearedError:        true,
+		RestoredSchedulable: true,
+	}
+	var runtimeCleanupErr error
+	if s.tempUnschedCache != nil {
+		if err := s.tempUnschedCache.DeleteTempUnsched(ctx, account.ID); err != nil {
+			slog.Warn("grok_proxy_recovery_temp_cache_clear_failed", "account_id", account.ID, "error", err)
+			result.RuntimeCleanupIncomplete = true
+			runtimeCleanupErr = fmt.Errorf("clear Grok proxy recovery temporary scheduling cache: %w", err)
+		}
+	}
+	if s.grokSchedulingBlockCleaner != nil {
+		s.grokSchedulingBlockCleaner.ClearAccountSchedulingBlock(account.ID)
+	}
+	if runtimeCleanupErr != nil {
+		return result, runtimeCleanupErr
+	}
+	return result, nil
+}
+
+func (s *RateLimitService) RecoverGrokProxyCredentialFailure(
+	ctx context.Context,
+	accountID int64,
+) (*SuccessfulTestRecoveryResult, error) {
+	if s == nil || s.accountRepo == nil {
+		return nil, errors.New("Grok proxy credential recovery is not configured")
+	}
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	if !isGrokProxyCredentialFailureAccount(account) {
+		return &SuccessfulTestRecoveryResult{}, nil
+	}
+	return s.recoverGrokProxyCredentialFailure(ctx, account)
+}
+
+func (s *RateLimitService) RecoverGrokProxyCredentialFailuresByProxy(
+	ctx context.Context,
+	proxyID int64,
+) (*GrokProxyCredentialRecoveryBatchResult, error) {
+	if s == nil || s.accountRepo == nil || proxyID <= 0 {
+		return nil, errors.New("invalid Grok proxy credential recovery request")
+	}
+	repo, ok := s.accountRepo.(grokProxyCredentialRecoveryRepository)
+	if !ok {
+		return nil, errors.New("Grok proxy credential recovery repository is not configured")
+	}
+	candidates, err := repo.ListGrokProxyCredentialRecoveryCandidates(ctx, proxyID)
+	if err != nil {
+		return nil, err
+	}
+	result := &GrokProxyCredentialRecoveryBatchResult{Candidates: len(candidates)}
+	if len(candidates) == 0 {
+		return result, nil
+	}
+
+	const workerLimit = 4
+	workerCount := workerLimit
+	if len(candidates) < workerCount {
+		workerCount = len(candidates)
+	}
+	jobs := make(chan Account)
+	var resultMu sync.Mutex
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for i := 0; i < workerCount; i++ {
+		go func() {
+			defer workers.Done()
+			for candidate := range jobs {
+				recoveryResult, recoverErr := s.recoverGrokProxyCredentialFailure(ctx, &candidate)
+				resultMu.Lock()
+				if recoverErr != nil {
+					if recoveryResult != nil && recoveryResult.RestoredSchedulable {
+						result.Recovered++
+						result.CleanupFailed++
+					} else {
+						result.Failed++
+					}
+					slog.Warn("grok_proxy_account_recovery_failed", "proxy_id", proxyID, "account_id", candidate.ID, "error", recoverErr)
+				} else {
+					result.Recovered++
+				}
+				resultMu.Unlock()
+			}
+		}()
+	}
+	for i := range candidates {
+		select {
+		case jobs <- candidates[i]:
+		case <-ctx.Done():
+			close(jobs)
+			workers.Wait()
+			return result, ctx.Err()
+		}
+	}
+	close(jobs)
+	workers.Wait()
+	return result, nil
+}
+
+func (s *RateLimitService) ScheduleGrokProxyCredentialRecovery(proxyID int64) {
+	if s == nil || proxyID <= 0 {
+		return
+	}
+	s.grokProxyRecoveryMu.Lock()
+	if s.grokProxyRecoveryInFlight == nil {
+		s.grokProxyRecoveryInFlight = make(map[int64]bool)
+	}
+	if _, exists := s.grokProxyRecoveryInFlight[proxyID]; exists {
+		s.grokProxyRecoveryInFlight[proxyID] = true
+		s.grokProxyRecoveryMu.Unlock()
+		slog.Debug("grok_proxy_recovery_batch_coalesced", "proxy_id", proxyID)
+		return
+	}
+	s.grokProxyRecoveryInFlight[proxyID] = false
+	s.grokProxyRecoveryMu.Unlock()
+	go func() {
+		for {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			result, err := s.RecoverGrokProxyCredentialFailuresByProxy(ctx, proxyID)
+			cancel()
+			if err != nil {
+				slog.Error("grok_proxy_recovery_batch_failed", "proxy_id", proxyID, "error", err)
+			} else {
+				slog.Info("grok_proxy_recovery_batch_completed",
+					"proxy_id", proxyID,
+					"candidates", result.Candidates,
+					"recovered", result.Recovered,
+					"failed", result.Failed,
+					"cleanup_failed", result.CleanupFailed,
+				)
+			}
+
+			s.grokProxyRecoveryMu.Lock()
+			rerun := s.grokProxyRecoveryInFlight[proxyID]
+			if rerun {
+				s.grokProxyRecoveryInFlight[proxyID] = false
+				s.grokProxyRecoveryMu.Unlock()
+				slog.Debug("grok_proxy_recovery_batch_rerun", "proxy_id", proxyID)
+				continue
+			}
+			delete(s.grokProxyRecoveryInFlight, proxyID)
+			s.grokProxyRecoveryMu.Unlock()
+			return
+		}
+	}()
 }
 
 // RecoverAccountAfterSuccessfulTest 将一次成功测试视为正常请求。

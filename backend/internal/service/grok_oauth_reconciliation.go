@@ -277,7 +277,7 @@ func (s *TokenRefreshService) applyGrokOAuthReconcileStructuralBlock(
 		ctx,
 		latest.ID,
 		grokCredentialMutationSnapshot(latest),
-		"Grok OAuth credential reconciliation: "+latestReason,
+		string(GrokCredentialReasonMissing),
 	)
 	if err != nil {
 		return GrokOAuthReconcileOutcomeFailed
@@ -325,13 +325,13 @@ func (s *TokenRefreshService) applyGrokOAuthReconcileRefresh(
 		return GrokOAuthReconcileOutcomeFailed, class.scope == GatewayFailureScopeProvider
 	}
 
-	item.Reason = GrokOAuthReconcileReasonCredentialRejected
+	item.Reason = string(class.reason)
 	item.Action = GrokOAuthReconcileActionBlock
 	applied, mutationErr := repo.SetGrokCredentialErrorIfMatch(
 		ctx,
 		observedAccount.ID,
-		grokCredentialMutationSnapshot(observedAccount),
-		"Grok OAuth credential reconciliation: "+GrokOAuthReconcileReasonCredentialRejected,
+		grokCredentialMutationSnapshotFromError(err, observedAccount),
+		string(class.reason),
 	)
 	if mutationErr != nil {
 		return GrokOAuthReconcileOutcomeFailed, true

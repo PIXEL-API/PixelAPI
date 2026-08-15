@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
@@ -48,9 +49,11 @@ func TestGrokOAuthClientExchangeAndRefreshUseFormFields(t *testing.T) {
 		}
 	}))
 	defer server.Close()
+	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
 	t.Setenv(xai.EnvTokenURL, server.URL)
 
-	client := NewGrokOAuthClient()
+	client, err := NewGrokOAuthClient()
+	require.NoError(t, err)
 
 	exchanged, err := client.ExchangeCode(
 		context.Background(),
@@ -134,9 +137,12 @@ func TestGrokOAuthClientRejectsSuccessfulResponsesWithoutAccessToken(t *testing.
 				_, _ = w.Write([]byte(tt.responseBody))
 			}))
 			defer server.Close()
+			t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
 			t.Setenv(xai.EnvTokenURL, server.URL)
 
-			err := tt.call(context.Background(), NewGrokOAuthClient())
+			client, newErr := NewGrokOAuthClient()
+			require.NoError(t, newErr)
+			err := tt.call(context.Background(), client)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "GROK_OAUTH_TOKEN_RESPONSE_INVALID")
 		})
@@ -149,10 +155,12 @@ func TestGrokOAuthClientRefreshForbiddenClassifiesEntitlement(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":"subscription required"}`))
 	}))
 	defer server.Close()
+	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
 	t.Setenv(xai.EnvTokenURL, server.URL)
 
-	client := NewGrokOAuthClient()
-	_, err := client.RefreshToken(context.Background(), "refresh-token", "", "client-id")
+	client, err := NewGrokOAuthClient()
+	require.NoError(t, err)
+	_, err = client.RefreshToken(context.Background(), "refresh-token", "", "client-id")
 	require.Error(t, err)
 	require.Contains(t, strings.ToUpper(err.Error()), "GROK_OAUTH_ENTITLEMENT_DENIED")
 }
@@ -163,10 +171,12 @@ func TestGrokOAuthClientStatusErrorRedactsSensitiveResponseBody(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":"invalid_grant","access_token":"access-secret","refresh_token":"refresh-secret","code_verifier":"verifier-secret"}`))
 	}))
 	defer server.Close()
+	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
 	t.Setenv(xai.EnvTokenURL, server.URL)
 
-	client := NewGrokOAuthClient()
-	_, err := client.RefreshToken(context.Background(), "refresh-secret", "", "client-id")
+	client, err := NewGrokOAuthClient()
+	require.NoError(t, err)
+	_, err = client.RefreshToken(context.Background(), "refresh-secret", "", "client-id")
 	require.Error(t, err)
 
 	errText := err.Error()
@@ -175,4 +185,33 @@ func TestGrokOAuthClientStatusErrorRedactsSensitiveResponseBody(t *testing.T) {
 	require.NotContains(t, errText, "access-secret")
 	require.NotContains(t, errText, "refresh-secret")
 	require.NotContains(t, errText, "verifier-secret")
+}
+
+func TestNewGrokOAuthClientFailsFastForUnvalidatedTokenURL(t *testing.T) {
+	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "")
+	t.Setenv(xai.EnvTokenURL, "https://untrusted.example/oauth/token")
+
+	client, err := NewGrokOAuthClient()
+	require.Nil(t, client)
+	require.EqualError(t, err, "xAI OAuth token endpoint configuration is invalid")
+	require.NotContains(t, err.Error(), "untrusted.example")
+}
+
+func TestGrokOAuthClientPasswordLoginRequiresCaptchaKeyWithoutLeakingInput(t *testing.T) {
+	t.Setenv("YESCAPTCHA_CLIENT_KEY", "")
+	t.Setenv("YESCAPTCHA_API_KEY", "")
+	client := &grokOAuthClient{tokenURL: xai.DefaultTokenURL}
+
+	_, err := client.LoginWithPassword(
+		context.Background(),
+		"admin@example.com",
+		"password-secret",
+		"http://proxy-user:proxy-secret@127.0.0.1:8080",
+	)
+
+	require.Error(t, err)
+	require.Equal(t, http.StatusBadRequest, infraerrors.Code(err))
+	require.Equal(t, "GROK_OAUTH_CAPTCHA_KEY_REQUIRED", infraerrors.Reason(err))
+	require.NotContains(t, err.Error(), "password-secret")
+	require.NotContains(t, err.Error(), "proxy-secret")
 }

@@ -69,7 +69,15 @@ func TestOpenAIGatewayService_Forward_WSv2_SuccessAndBindSticky(t *testing.T) {
 			return
 		}
 		if err := conn.WriteJSON(map[string]any{
-			"type": "response.completed",
+			"type": "response.done",
+			"usage": map[string]any{
+				"input_tokens":  12,
+				"output_tokens": 7,
+				"input_tokens_details": map[string]any{
+					"cached_tokens":      3,
+					"cache_write_tokens": 4,
+				},
+			},
 			"response": map[string]any{
 				"id":    "resp_new_1",
 				"model": "gpt-5.1",
@@ -80,16 +88,12 @@ func TestOpenAIGatewayService_Forward_WSv2_SuccessAndBindSticky(t *testing.T) {
 					"result": "final-image",
 				}},
 				"usage": map[string]any{
-					"input_tokens":  12,
-					"output_tokens": 7,
-					"input_tokens_details": map[string]any{
-						"cached_tokens":      3,
-						"cache_write_tokens": 4,
-					},
+					"input_tokens":  120,
+					"output_tokens": 70,
 				},
 			},
 		}); err != nil {
-			t.Errorf("write response.completed failed: %v", err)
+			t.Errorf("write response.done failed: %v", err)
 			return
 		}
 	}))
@@ -158,6 +162,7 @@ func TestOpenAIGatewayService_Forward_WSv2_SuccessAndBindSticky(t *testing.T) {
 	require.Equal(t, 7, result.Usage.OutputTokens)
 	require.Equal(t, 3, result.Usage.CacheReadInputTokens)
 	require.Equal(t, 4, result.Usage.CacheCreationInputTokens)
+	require.True(t, result.BillingUsageComplete)
 	require.Equal(t, "resp_new_1", result.RequestID)
 	require.True(t, result.OpenAIWSMode)
 	require.False(t, gjson.GetBytes(upstream.lastBody, "model").Exists(), "WSv2 成功时不应回落 HTTP 上游")

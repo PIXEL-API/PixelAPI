@@ -1167,16 +1167,17 @@ func (r *accountShareModeRepository) ListListings(ctx context.Context, viewerUse
 			SELECT COUNT(*)
 			FROM account_share_listings l
 			%s
-			WHERE %s
+			WHERE $1::bigint > 0
+				AND %s
 		`,
 			accountShareListingSelectionJoinSQL(whereSQL, accountShareViewerCurrentMembershipFullLateralSQL()),
 			whereSQL,
 		)
-		countArgs := args
-		if !strings.Contains(countQuery, "$") {
-			countArgs = nil
-		}
-		if err := r.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+		// args 的第一个位置固定为 viewerUserID，后续动态筛选从 $2 开始。
+		// 即使 count 查询裁掉了所有依赖 viewer 的 join，也必须显式保留并标注
+		// $1 的类型，否则 PostgreSQL 面对仅含 $2 等后续占位符的查询时无法推断
+		// $1 类型，并返回 "could not determine data type of parameter $1"。
+		if err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 			return nil, nil, err
 		}
 	}

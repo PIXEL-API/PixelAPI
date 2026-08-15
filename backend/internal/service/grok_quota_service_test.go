@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 
 type grokQuotaAccountRepo struct {
 	*mockAccountRepoForPlatform
+	mu                     sync.Mutex
 	updates                map[int64]map[string]any
 	credentialErrorCalls   int
 	lastCredentialError    string
@@ -25,6 +27,8 @@ type grokQuotaAccountRepo struct {
 	lastTempUnschedID      int64
 	lastTempUnschedUntil   time.Time
 	lastTempUnschedReason  string
+	rateLimitedCalls       int
+	lastRateLimitResetAt   time.Time
 }
 
 func (r *grokQuotaAccountRepo) SetGrokCredentialErrorIfMatch(
@@ -50,11 +54,30 @@ func (r *grokQuotaAccountRepo) SetGrokCredentialTempUnschedulableIfMatch(
 }
 
 func (r *grokQuotaAccountRepo) UpdateExtra(_ context.Context, id int64, updates map[string]any) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.updates == nil {
 		r.updates = make(map[int64]map[string]any)
 	}
-	r.updates[id] = updates
+	if r.updates[id] == nil {
+		r.updates[id] = make(map[string]any)
+	}
+	for key, value := range updates {
+		r.updates[id][key] = value
+	}
 	return nil
+}
+
+func (r *grokQuotaAccountRepo) extraValue(id int64, key string) any {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.updates[id][key]
+}
+
+func (r *grokQuotaAccountRepo) updateCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.updates)
 }
 
 func (r *grokQuotaAccountRepo) SetTempUnschedulable(_ context.Context, id int64, until time.Time, reason string) error {
@@ -63,6 +86,16 @@ func (r *grokQuotaAccountRepo) SetTempUnschedulable(_ context.Context, id int64,
 	r.lastTempUnschedUntil = until
 	r.lastTempUnschedReason = reason
 	return nil
+}
+
+func (r *grokQuotaAccountRepo) SetRateLimited(_ context.Context, _ int64, resetAt time.Time) error {
+	r.rateLimitedCalls++
+	r.lastRateLimitResetAt = resetAt
+	return nil
+}
+
+func (r *grokQuotaAccountRepo) SetRateLimitedIfLater(ctx context.Context, id int64, resetAt time.Time) error {
+	return r.SetRateLimited(ctx, id, resetAt)
 }
 
 type grokQuotaProxyRepo struct {
@@ -116,6 +149,8 @@ func TestGrokQuotaServiceProbeUsageStoresHeaders(t *testing.T) {
 
 	result, err := svc.ProbeUsage(context.Background(), 42)
 	require.NoError(t, err)
+	probeReq, probeBody, found := upstream.requestByMethodAndPath(http.MethodPost, "/v1/responses")
+	require.True(t, found)
 	require.Equal(t, http.StatusOK, result.StatusCode)
 	require.True(t, result.HeadersObserved)
 	require.NotNil(t, result.Snapshot)
@@ -126,11 +161,11 @@ func TestGrokQuotaServiceProbeUsageStoresHeaders(t *testing.T) {
 	require.NotNil(t, result.Snapshot.Requests)
 	require.EqualValues(t, 10, *result.Snapshot.Requests.Limit)
 	require.EqualValues(t, 7, *result.Snapshot.Requests.Remaining)
-	require.Equal(t, "https://cli-chat-proxy.grok.com/v1/responses", upstream.lastReq.URL.String())
-	require.Equal(t, "Bearer access-token", upstream.lastReq.Header.Get("Authorization"))
-	require.Contains(t, string(upstream.lastBody), `"max_output_tokens":1`)
-	require.Contains(t, string(upstream.lastBody), `"store":false`)
-	require.NotNil(t, repo.updates[42][grokQuotaSnapshotExtraKey])
+	require.Equal(t, "https://cli-chat-proxy.grok.com/v1/responses", probeReq.URL.String())
+	require.Equal(t, "Bearer access-token", probeReq.Header.Get("Authorization"))
+	require.JSONEq(t, `{"model":"grok-4.5","input":"hi","stream":true}`, string(probeBody))
+	require.Equal(t, "application/json, text/event-stream", probeReq.Header.Get("Accept"))
+	require.NotNil(t, repo.extraValue(42, grokQuotaSnapshotExtraKey))
 }
 
 func TestGrokQuotaServiceProbeUsageRejectsUnexpectedStatusBeforePersisting(t *testing.T) {
@@ -164,7 +199,7 @@ func TestGrokQuotaServiceProbeUsageRejectsUnexpectedStatusBeforePersisting(t *te
 			require.Error(t, err)
 			require.Nil(t, result)
 			require.Equal(t, http.StatusBadGateway, infraerrors.Code(err))
-			require.Empty(t, repo.updates)
+			require.Zero(t, repo.updateCount())
 			require.NotNil(t, upstream.lastReq)
 			require.True(t, HTTPUpstreamRedirectsDisabled(upstream.lastReq.Context()))
 		})
@@ -271,7 +306,7 @@ func TestGrokQuotaServiceProbeUsageStoresNoHeadersState(t *testing.T) {
 	require.NotEmpty(t, result.Snapshot.LastProbeAt)
 	require.Empty(t, result.Snapshot.LastHeadersSeenAt)
 
-	stored, ok := repo.updates[45][grokQuotaSnapshotExtraKey].(*xai.QuotaSnapshot)
+	stored, ok := repo.extraValue(45, grokQuotaSnapshotExtraKey).(*xai.QuotaSnapshot)
 	require.True(t, ok)
 	require.False(t, stored.HeadersObserved)
 	require.Equal(t, http.StatusOK, stored.StatusCode)

@@ -166,6 +166,22 @@ const metricDefinitions = computed(() => {
       recommendedOperator: '>',
       recommendedThreshold: 10
     },
+    {
+      type: 'proxy_expired_count',
+      group: 'system',
+      label: t('admin.ops.alertRules.metrics.proxyExpiredCount'),
+      description: t('admin.ops.alertRules.metricDescriptions.proxyExpiredCount'),
+      recommendedOperator: '>',
+      recommendedThreshold: 0
+    },
+    {
+      type: 'proxy_expiring_soon_count',
+      group: 'system',
+      label: t('admin.ops.alertRules.metrics.proxyExpiringSoonCount'),
+      description: t('admin.ops.alertRules.metricDescriptions.proxyExpiringSoonCount'),
+      recommendedOperator: '>',
+      recommendedThreshold: 0
+    },
 
     // Group-level metrics (requires group_id filter)
     {

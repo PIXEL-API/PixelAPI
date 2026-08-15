@@ -21,6 +21,19 @@ type grokTokenCacheForProviderTest struct {
 	releaseCalls int
 }
 
+type grokReauthProviderRepo struct {
+	tokenRefreshAccountRepo
+	extraUpdates map[int64]map[string]any
+}
+
+func (r *grokReauthProviderRepo) UpdateExtra(_ context.Context, id int64, updates map[string]any) error {
+	if r.extraUpdates == nil {
+		r.extraUpdates = make(map[int64]map[string]any)
+	}
+	r.extraUpdates[id] = updates
+	return nil
+}
+
 func (c *grokTokenCacheForProviderTest) GetAccessToken(context.Context, string) (string, error) {
 	if c.token == "" {
 		return "", errors.New("not cached")
@@ -157,6 +170,42 @@ func TestGrokTokenProviderRefreshNowUsesCoordinatedForcedRefresh(t *testing.T) {
 	require.Equal(t, "forced-new-token", refreshed.GetGrokAccessToken())
 	require.Equal(t, 1, repo.updateCredentialsCalls)
 	require.Equal(t, 1, cache.releaseCalls)
+}
+
+func TestGrokTokenProviderRefreshNowClearsSpendingLimitReauth(t *testing.T) {
+	t.Setenv(xai.EnvBaseURL, xai.DefaultCLIBaseURL)
+
+	account := &Account{
+		ID:          58,
+		Platform:    PlatformGrok,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Credentials: map[string]any{
+			"access_token":  "currently-valid-token",
+			"refresh_token": "refresh-token",
+			"expires_at":    time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+			"client_id":     "client-id",
+		},
+		Extra: map[string]any{"grok_needs_reauth": true},
+	}
+	repo := &grokReauthProviderRepo{}
+	repo.accountsByID = map[int64]*Account{account.ID: account}
+	cache := &grokTokenCacheForProviderTest{lockResult: true}
+	oauthSvc := NewGrokOAuthService(nil, &grokOAuthClientStub{refreshResponse: &xai.TokenResponse{
+		AccessToken: "forced-new-token",
+		TokenType:   "Bearer",
+		ExpiresIn:   3600,
+	}})
+	defer oauthSvc.Stop()
+	provider := NewGrokTokenProvider(repo, cache)
+	provider.SetRefreshAPI(NewOAuthRefreshAPI(repo, cache), NewGrokTokenRefresher(oauthSvc))
+
+	refreshed, err := provider.RefreshNow(context.Background(), account)
+
+	require.NoError(t, err)
+	require.False(t, accountGrokNeedsReauth(refreshed))
+	require.Equal(t, false, repo.extraUpdates[account.ID]["grok_needs_reauth"])
 }
 
 func TestGrokTokenProviderRefreshFailureUnschedulesWithRedactedReason(t *testing.T) {

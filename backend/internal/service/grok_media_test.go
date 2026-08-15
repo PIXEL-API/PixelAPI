@@ -116,7 +116,7 @@ func TestGrokMediaUsageAcceptsRecognizedTerminalOutputs(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, "video_req_123", videoMetadata.ResponseID)
-	require.Equal(t, 1, videoMetadata.VideoCount)
+	require.Zero(t, videoMetadata.VideoCount, "async video creation must not bill before status=done + video.url")
 }
 
 func TestForwardGrokMediaInvalidGenerationSuccessDoesNotBillOrExposeBody(t *testing.T) {
@@ -251,7 +251,7 @@ func TestGrokMediaVideoRequestBindingRejectsOtherOwnersAndGroups(t *testing.T) {
 	require.NoError(t, svc.BindGrokMediaVideoRequestAccount(
 		context.Background(), &groupID, "request-1", 10, 20, 30,
 	))
-	require.Equal(t, 90*time.Second, cache.ttl)
+	require.Equal(t, 24*time.Hour, cache.ttl)
 
 	accountID, err := svc.ResolveGrokMediaVideoRequestAccount(
 		context.Background(), &groupID, "request-1", 10, 20,
@@ -399,7 +399,15 @@ func TestGrokVideoMutationJSONBodyIsPreserved(t *testing.T) {
 	}
 }
 
-func TestGrokVideoMutationUsageIncludesPerSecondBillingMetadata(t *testing.T) {
+func TestNormalizeGrokMediaModelForEndpoint(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "grok-imagine-image-quality", NormalizeGrokMediaModelForEndpoint(GrokMediaEndpointImagesGenerations, "grok-imagine"))
+	require.Equal(t, "grok-imagine-image-quality", NormalizeGrokMediaModelForEndpoint(GrokMediaEndpointImagesEdits, "grok-imagine-edit"))
+	require.Equal(t, "grok-imagine-video-1.5-preview", NormalizeGrokMediaModelForEndpoint(GrokMediaEndpointVideosGenerations, "grok-imagine-video-1.5-preview"))
+}
+
+func TestGrokVideoMutationUsageDefersBillingButRetainsPricingMetadata(t *testing.T) {
 	t.Parallel()
 
 	requestInfo := ParseGrokMediaRequest("application/json", []byte(`{
@@ -417,10 +425,10 @@ func TestGrokVideoMutationUsageIncludesPerSecondBillingMetadata(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Equal(t, "video_req_123", metadata.ResponseID, endpoint)
-		require.Equal(t, 1, metadata.VideoCount, endpoint)
+		require.Zero(t, metadata.VideoCount, endpoint)
 		require.Equal(t, VideoBillingResolution720P, metadata.VideoResolution, endpoint)
 		require.Equal(t, 9, metadata.VideoDurationSeconds, endpoint)
-		require.Equal(t, 1, metadata.ImageCount, endpoint)
+		require.Zero(t, metadata.ImageCount, endpoint)
 		require.Empty(t, metadata.ImageSize, endpoint)
 		require.Empty(t, metadata.ImageInputSize, endpoint)
 	}
@@ -550,13 +558,17 @@ func TestAppendGrokMediaRequestQueryRejectsCredentialParameters(t *testing.T) {
 
 type grokMediaStateRepo struct {
 	AccountRepository
-	tempUnschedCalls int
-	reason           string
+	rateLimitedCalls int
+	resetAt          time.Time
 }
 
-func (r *grokMediaStateRepo) SetTempUnschedulable(_ context.Context, _ int64, _ time.Time, reason string) error {
-	r.tempUnschedCalls++
-	r.reason = reason
+func (r *grokMediaStateRepo) UpdateExtra(_ context.Context, _ int64, _ map[string]any) error {
+	return nil
+}
+
+func (r *grokMediaStateRepo) SetRateLimited(_ context.Context, _ int64, resetAt time.Time) error {
+	r.rateLimitedCalls++
+	r.resetAt = resetAt
 	return nil
 }
 
@@ -612,8 +624,8 @@ func TestHandleGrokMediaErrorUpdatesAccountBeforeEarlyReturn(t *testing.T) {
 
 			_, err := svc.handleGrokMediaErrorResponse(context.Background(), resp, c, account, "req-1", "grok-4")
 			require.Error(t, err)
-			require.Equal(t, 1, repo.tempUnschedCalls)
-			require.Equal(t, "grok rate limited", repo.reason)
+			require.Equal(t, 1, repo.rateLimitedCalls)
+			require.WithinDuration(t, time.Now().Add(30*time.Second), repo.resetAt, time.Second)
 		})
 	}
 }

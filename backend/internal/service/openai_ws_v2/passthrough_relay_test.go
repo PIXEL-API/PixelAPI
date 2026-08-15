@@ -206,6 +206,96 @@ func TestRelay_BasicRelayAndUsage(t *testing.T) {
 	require.JSONEq(t, `{"type":"response.completed","response":{"id":"resp_123","usage":{"input_tokens":7,"output_tokens":3,"input_tokens_details":{"cached_tokens":2,"cache_write_tokens":1}}}}`, string(clientWrites[0].payload))
 }
 
+func TestRelay_ResponseDoneWithNestedUsage(t *testing.T) {
+	t.Parallel()
+
+	clientConn := newPassthroughTestFrameConn(nil, false)
+	terminal := []byte(`{"type":"response.done","data":{"response":{"id":"resp_done_nested","model":"gpt-5.3-codex","usage":{"input_tokens":9,"output_tokens":4},"output":[{"id":"ig_done_nested","type":"image_generation_call","result":"bmVzdGVk"}]}}}`)
+	upstreamConn := newPassthroughTestFrameConn([]passthroughTestFrame{{
+		msgType: coderws.MessageText,
+		payload: terminal,
+	}}, true)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	var turn RelayTurnResult
+	result, relayExit := Relay(
+		ctx,
+		clientConn,
+		upstreamConn,
+		[]byte(`{"type":"response.create","model":"gpt-5.3-codex","input":[]}`),
+		RelayOptions{OnTurnComplete: func(current RelayTurnResult) { turn = current }},
+	)
+
+	require.Nil(t, relayExit)
+	require.Equal(t, "response.done", result.TerminalEventType)
+	require.Equal(t, "resp_done_nested", result.RequestID)
+	require.Equal(t, 9, result.Usage.InputTokens)
+	require.Equal(t, 4, result.Usage.OutputTokens)
+	require.Equal(t, 1, result.Usage.ImageCount)
+	require.True(t, result.BillingUsageComplete)
+	require.Equal(t, result.Usage, turn.Usage)
+	require.Equal(t, "gpt-5.3-codex", turn.ResponseModel)
+	require.True(t, turn.BillingUsageComplete)
+	require.Len(t, clientConn.Writes(), 1)
+	require.Equal(t, terminal, clientConn.Writes()[0].payload)
+}
+
+func TestRelay_DuplicateTerminalForSameResponseSettlesOnce(t *testing.T) {
+	t.Parallel()
+
+	clientConn := newPassthroughTestFrameConn(nil, false)
+	completed := []byte(`{"type":"response.completed","response":{"id":"resp_duplicate_terminal","usage":{"input_tokens":10,"output_tokens":5}}}`)
+	done := []byte(`{"type":"response.done","response":{"id":"resp_duplicate_terminal","usage":{"input_tokens":12,"output_tokens":6}}}`)
+	upstreamConn := newPassthroughTestFrameConn([]passthroughTestFrame{
+		{msgType: coderws.MessageText, payload: completed},
+		{msgType: coderws.MessageText, payload: done},
+	}, true)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	activeTurn := true
+	beforeTerminalCalls := 0
+	turns := make([]RelayTurnResult, 0, 1)
+	duplicateTerminalTraces := 0
+	result, relayExit := Relay(
+		ctx,
+		clientConn,
+		upstreamConn,
+		[]byte(`{"type":"response.create","model":"gpt-5.3-codex","input":[]}`),
+		RelayOptions{
+			BeforeTerminalFrame: func(RelayTurnResult) error {
+				beforeTerminalCalls++
+				if !activeTurn {
+					return errors.New("terminal event has no active turn")
+				}
+				activeTurn = false
+				return nil
+			},
+			OnTurnComplete: func(turn RelayTurnResult) {
+				turns = append(turns, turn)
+			},
+			OnTrace: func(event RelayTraceEvent) {
+				if event.Stage == "duplicate_terminal_ignored" {
+					duplicateTerminalTraces++
+				}
+			},
+		},
+	)
+
+	require.Nil(t, relayExit)
+	require.Equal(t, 1, beforeTerminalCalls)
+	require.Len(t, turns, 1)
+	require.Equal(t, 1, duplicateTerminalTraces)
+	require.Equal(t, 10, turns[0].Usage.InputTokens)
+	require.Equal(t, 5, turns[0].Usage.OutputTokens)
+	require.Equal(t, 10, result.Usage.InputTokens)
+	require.Equal(t, 5, result.Usage.OutputTokens)
+	require.Len(t, clientConn.Writes(), 2)
+	require.Equal(t, completed, clientConn.Writes()[0].payload)
+	require.Equal(t, done, clientConn.Writes()[1].payload)
+}
+
 func TestRelay_BeforeTerminalFrameFailureWithholdsTerminal(t *testing.T) {
 	t.Parallel()
 

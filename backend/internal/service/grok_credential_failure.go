@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -71,6 +72,7 @@ type grokCredentialFailureClass struct {
 type GrokCredentialMutationSnapshot struct {
 	CredentialsJSON string
 	ProxyID         *int64
+	ProxyUpdatedAt  *time.Time
 }
 
 type grokCredentialFailureSnapshotError struct {
@@ -85,11 +87,94 @@ func withGrokCredentialFailureSnapshot(err error, account *Account) error {
 	if err == nil || account == nil || !account.IsGrokOAuth() {
 		return err
 	}
+	return withGrokCredentialFailureMutationSnapshot(err, grokCredentialMutationSnapshot(account))
+}
+
+func withGrokCredentialFailureMutationSnapshot(err error, snapshot GrokCredentialMutationSnapshot) error {
+	if err == nil {
+		return nil
+	}
 	var existing *grokCredentialFailureSnapshotError
 	if errors.As(err, &existing) {
 		return err
 	}
-	return &grokCredentialFailureSnapshotError{cause: err, snapshot: grokCredentialMutationSnapshot(account)}
+	return &grokCredentialFailureSnapshotError{cause: err, snapshot: cloneGrokCredentialMutationSnapshot(snapshot)}
+}
+
+func grokCredentialMutationSnapshotFromError(err error, fallback *Account) GrokCredentialMutationSnapshot {
+	var snapshotErr *grokCredentialFailureSnapshotError
+	if errors.As(err, &snapshotErr) && snapshotErr != nil {
+		return cloneGrokCredentialMutationSnapshot(snapshotErr.snapshot)
+	}
+	return grokCredentialMutationSnapshot(fallback)
+}
+
+func cloneGrokCredentialMutationSnapshot(snapshot GrokCredentialMutationSnapshot) GrokCredentialMutationSnapshot {
+	cloned := GrokCredentialMutationSnapshot{CredentialsJSON: snapshot.CredentialsJSON}
+	if snapshot.ProxyID != nil {
+		proxyID := *snapshot.ProxyID
+		cloned.ProxyID = &proxyID
+	}
+	if snapshot.ProxyUpdatedAt != nil {
+		updatedAt := *snapshot.ProxyUpdatedAt
+		cloned.ProxyUpdatedAt = &updatedAt
+	}
+	return cloned
+}
+
+type grokProxyVersionObservation struct {
+	ProxyID              int64
+	UpdatedAt            time.Time
+	Status               string
+	Platform             string
+	RequiredAccountLevel string
+}
+
+type grokProxyVersionObservationRecorder struct {
+	mu          sync.Mutex
+	observation *grokProxyVersionObservation
+}
+
+type grokProxyVersionObservationContextKey struct{}
+
+func withGrokProxyVersionObservation(ctx context.Context) (context.Context, *grokProxyVersionObservationRecorder) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	recorder := &grokProxyVersionObservationRecorder{}
+	return context.WithValue(ctx, grokProxyVersionObservationContextKey{}, recorder), recorder
+}
+
+func recordGrokProxyVersionObservation(ctx context.Context, proxy *Proxy) {
+	if ctx == nil || proxy == nil || proxy.ID <= 0 || proxy.UpdatedAt.IsZero() {
+		return
+	}
+	recorder, _ := ctx.Value(grokProxyVersionObservationContextKey{}).(*grokProxyVersionObservationRecorder)
+	if recorder == nil {
+		return
+	}
+	recorder.mu.Lock()
+	recorder.observation = &grokProxyVersionObservation{
+		ProxyID:              proxy.ID,
+		UpdatedAt:            proxy.UpdatedAt,
+		Status:               proxy.Status,
+		Platform:             proxy.Platform,
+		RequiredAccountLevel: proxy.RequiredAccountLevel,
+	}
+	recorder.mu.Unlock()
+}
+
+func (r *grokProxyVersionObservationRecorder) snapshot() *grokProxyVersionObservation {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.observation == nil {
+		return nil
+	}
+	copy := *r.observation
+	return &copy
 }
 
 type grokCredentialConditionalStateRepository interface {
@@ -104,6 +189,12 @@ func setGrokPaymentRequiredErrorIfMatch(
 ) (bool, error) {
 	if accountRepo == nil || account == nil || account.Platform != PlatformGrok {
 		return false, errGrokConditionalStateUnsupported
+	}
+	// Pool-mode accounts represent an upstream-managed credential pool. A 402
+	// from one pooled credential must not permanently poison the local wrapper
+	// account; pool health and rotation remain owned by that upstream.
+	if account.IsPoolMode() {
+		return false, nil
 	}
 	repo, ok := accountRepo.(grokCredentialConditionalStateRepository)
 	if !ok {
@@ -146,7 +237,7 @@ func (s *OpenAIGatewayService) NormalizeGrokCredentialFailure(ctx context.Contex
 
 	class := classifyGrokCredentialFailure(account, err)
 	if class.permanent || class.transient {
-		class = s.applyGrokCredentialFailureState(ctx, account, class)
+		class = s.applyGrokCredentialFailureState(ctx, account, err, class)
 	}
 	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 		Platform:  PlatformGrok,
@@ -188,6 +279,8 @@ func classifyGrokCredentialFailure(account *Account, err error) grokCredentialFa
 		return grokCredentialFailureClass{scope: GatewayFailureScopeAccount, reason: GrokCredentialReasonEntitlement, action: NextAccountRetry, permanent: true, message: "Grok OAuth entitlement requires account action"}
 	case errors.Is(err, errGrokOAuthConfiguredProxyMiss), contains("grok_oauth_proxy_not_found"):
 		return grokCredentialFailureClass{scope: GatewayFailureScopeAccount, reason: GrokCredentialReasonProxyInvalid, action: NextAccountRetry, permanent: true, message: "Grok OAuth account proxy configuration is invalid"}
+	case account != nil && account.ProxyID != nil && isGrokProxyAuthenticationFailure(err):
+		return grokCredentialFailureClass{scope: GatewayFailureScopeAccount, reason: GrokCredentialReasonProxyInvalid, action: NextAccountRetry, permanent: true, message: "Grok OAuth account proxy authentication failed"}
 	case errors.Is(err, errOAuthRefreshAccountStateChanged):
 		return grokCredentialFailureClass{scope: GatewayFailureScopeAccount, reason: GrokCredentialReasonAccountChanged, action: NextAccountRetry, message: "Grok OAuth account eligibility changed"}
 	case errors.As(err, &containmentErr):
@@ -205,7 +298,31 @@ func classifyGrokCredentialFailure(account *Account, err error) grokCredentialFa
 	}
 }
 
-func (s *OpenAIGatewayService) applyGrokCredentialFailureState(ctx context.Context, account *Account, class grokCredentialFailureClass) grokCredentialFailureClass {
+// isGrokProxyAuthenticationFailure recognizes stable HTTP/SOCKS proxy
+// credential failures. Callers must additionally require an account-bound
+// proxy so an xAI/OpenID authentication error cannot be mislabeled as proxy
+// configuration. No proxy URL or credentials are extracted or logged here.
+func isGrokProxyAuthenticationFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"proxy authentication required",
+		"proxy authentication failed",
+		"proxy authorization required",
+		"status 407",
+		"http 407",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return (strings.Contains(message, "proxyconnect") || strings.Contains(message, "socks")) &&
+		strings.Contains(message, "authentication failed")
+}
+
+func (s *OpenAIGatewayService) applyGrokCredentialFailureState(ctx context.Context, account *Account, failure error, class grokCredentialFailureClass) grokCredentialFailureClass {
 	if s == nil || s.accountRepo == nil {
 		return grokCredentialStateUpdateFailure()
 	}
@@ -218,7 +335,7 @@ func (s *OpenAIGatewayService) applyGrokCredentialFailureState(ctx context.Conte
 	}
 	stateCtx, cancel := context.WithTimeout(ctx, grokCredentialMutationTimeout)
 	defer cancel()
-	snapshot := grokCredentialMutationSnapshot(account)
+	snapshot := grokCredentialMutationSnapshotFromError(failure, account)
 
 	var updated bool
 	var err error
@@ -264,8 +381,65 @@ func grokCredentialMutationSnapshot(account *Account) GrokCredentialMutationSnap
 	if account.ProxyID != nil {
 		proxyID := *account.ProxyID
 		snapshot.ProxyID = &proxyID
+		if account.Proxy != nil && account.Proxy.ID == proxyID && !account.Proxy.UpdatedAt.IsZero() {
+			updatedAt := account.Proxy.UpdatedAt
+			snapshot.ProxyUpdatedAt = &updatedAt
+		}
 	}
 	return snapshot
+}
+
+func grokCredentialMutationSnapshotWithObservedProxy(account *Account, proxy *Proxy) GrokCredentialMutationSnapshot {
+	snapshot := grokCredentialMutationSnapshot(account)
+	snapshot.ProxyUpdatedAt = nil
+	if proxy == nil || proxy.ID <= 0 || proxy.UpdatedAt.IsZero() {
+		return snapshot
+	}
+	proxyID := proxy.ID
+	snapshot.ProxyID = &proxyID
+	updatedAt := proxy.UpdatedAt
+	snapshot.ProxyUpdatedAt = &updatedAt
+	return snapshot
+}
+
+type grokAccountSchedulingBlockCleaner interface {
+	ClearAccountSchedulingBlock(accountID int64)
+}
+
+// GrokSchedulingBlockCleanerProxy breaks the RateLimitService -> gateway
+// construction cycle. It only clears this process' short scheduling bridge;
+// cross-instance propagation requires a separate cluster mechanism.
+type GrokSchedulingBlockCleanerProxy struct {
+	mu     sync.RWMutex
+	target grokAccountSchedulingBlockCleaner
+}
+
+func NewGrokSchedulingBlockCleanerProxy() *GrokSchedulingBlockCleanerProxy {
+	return &GrokSchedulingBlockCleanerProxy{}
+}
+
+func (p *GrokSchedulingBlockCleanerProxy) SetTarget(target grokAccountSchedulingBlockCleaner) {
+	if p == nil || target == nil {
+		panic("Grok scheduling block cleaner target is required")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.target != nil && p.target != target {
+		panic("Grok scheduling block cleaner target is already configured")
+	}
+	p.target = target
+}
+
+func (p *GrokSchedulingBlockCleanerProxy) ClearAccountSchedulingBlock(accountID int64) {
+	if p == nil || accountID <= 0 {
+		return
+	}
+	p.mu.RLock()
+	target := p.target
+	p.mu.RUnlock()
+	if target != nil {
+		target.ClearAccountSchedulingBlock(accountID)
+	}
 }
 
 func grokCredentialProxyIDsEqual(left, right *int64) bool {

@@ -25,27 +25,48 @@ import (
 func f64p(v float64) *float64 { return &v }
 
 type httpUpstreamRecorder struct {
+	mu           sync.Mutex
 	lastReq      *http.Request
 	lastBody     []byte
 	lastProxyURL string
+	requests     []*http.Request
+	bodies       [][]byte
 
 	resp *http.Response
 	err  error
 }
 
 func (u *httpUpstreamRecorder) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
-	u.lastReq = req
-	u.lastProxyURL = proxyURL
+	var requestBody []byte
 	if req != nil && req.Body != nil {
 		b, _ := io.ReadAll(req.Body)
-		u.lastBody = b
+		requestBody = b
 		_ = req.Body.Close()
 		req.Body = io.NopCloser(bytes.NewReader(b))
 	}
+	u.mu.Lock()
+	u.lastReq = req
+	u.lastBody = requestBody
+	u.lastProxyURL = proxyURL
+	u.requests = append(u.requests, req)
+	u.bodies = append(u.bodies, append([]byte(nil), requestBody...))
+	u.mu.Unlock()
 	if u.err != nil {
 		return nil, u.err
 	}
 	return u.resp, nil
+}
+
+func (u *httpUpstreamRecorder) requestByMethodAndPath(method, path string) (*http.Request, []byte, bool) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	for i, req := range u.requests {
+		if req == nil || req.Method != method || req.URL == nil || req.URL.Path != path {
+			continue
+		}
+		return req, append([]byte(nil), u.bodies[i]...), true
+	}
+	return nil, nil, false
 }
 
 func (u *httpUpstreamRecorder) DoWithTLS(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, profile *tlsfingerprint.Profile) (*http.Response, error) {

@@ -15,7 +15,11 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-const stickySessionPrefix = "sticky_session:"
+const (
+	stickySessionPrefix           = "sticky_session:"
+	grokVideoPendingBillingPrefix = "grok_video_pending:"
+	grokVideoBilledPrefix         = "grok_video_billed:"
+)
 
 type gatewayCache struct {
 	rdb *redis.Client
@@ -332,4 +336,69 @@ func (c *gatewayCache) SetSessionString(ctx context.Context, groupID int64, sess
 func (c *gatewayCache) DeleteSessionString(ctx context.Context, groupID int64, sessionHash string) error {
 	key := buildSessionKey(groupID, sessionHash)
 	return c.rdb.Del(ctx, key).Err()
+}
+
+func (c *gatewayCache) SetGrokVideoPendingBilling(
+	ctx context.Context,
+	key string,
+	payload []byte,
+	ttl time.Duration,
+) error {
+	if c == nil || c.rdb == nil {
+		return errors.New("grok video pending billing redis is unavailable")
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return errors.New("grok video pending billing key is required")
+	}
+	if len(payload) == 0 {
+		return errors.New("grok video pending billing payload is required")
+	}
+	if ttl <= 0 {
+		return errors.New("grok video pending billing TTL must be greater than zero")
+	}
+	return c.rdb.Set(ctx, grokVideoPendingBillingPrefix+key, payload, ttl).Err()
+}
+
+func (c *gatewayCache) GetGrokVideoPendingBilling(ctx context.Context, key string) ([]byte, error) {
+	if c == nil || c.rdb == nil {
+		return nil, errors.New("grok video pending billing redis is unavailable")
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return nil, errors.New("grok video pending billing key is required")
+	}
+	payload, err := c.rdb.Get(ctx, grokVideoPendingBillingPrefix+key).Bytes()
+	if errors.Is(err, redis.Nil) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func (c *gatewayCache) ClaimGrokVideoBilled(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+	if c == nil || c.rdb == nil {
+		return false, errors.New("grok video billing claim redis is unavailable")
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return false, errors.New("grok video billing claim key is required")
+	}
+	if ttl <= 0 {
+		return false, errors.New("grok video billing claim TTL must be greater than zero")
+	}
+	return c.rdb.SetNX(ctx, grokVideoBilledPrefix+key, "1", ttl).Result()
+}
+
+func (c *gatewayCache) ReleaseGrokVideoBilled(ctx context.Context, key string) error {
+	if c == nil || c.rdb == nil {
+		return errors.New("grok video billing claim redis is unavailable")
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return errors.New("grok video billing claim key is required")
+	}
+	return c.rdb.Del(ctx, grokVideoBilledPrefix+key).Err()
 }

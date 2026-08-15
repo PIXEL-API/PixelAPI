@@ -3296,6 +3296,8 @@ type AccountMutation struct {
 	share_status                *string
 	share_policy_id             *int64
 	addshare_policy_id          *int64
+	proxy_fallback_origin_id    *int64
+	addproxy_fallback_origin_id *int64
 	concurrency                 *int
 	addconcurrency              *int
 	load_factor                 *int
@@ -4058,6 +4060,76 @@ func (m *AccountMutation) ProxyIDCleared() bool {
 func (m *AccountMutation) ResetProxyID() {
 	m.proxy = nil
 	delete(m.clearedFields, account.FieldProxyID)
+}
+
+// SetProxyFallbackOriginID sets the "proxy_fallback_origin_id" field.
+func (m *AccountMutation) SetProxyFallbackOriginID(i int64) {
+	m.proxy_fallback_origin_id = &i
+	m.addproxy_fallback_origin_id = nil
+}
+
+// ProxyFallbackOriginID returns the value of the "proxy_fallback_origin_id" field in the mutation.
+func (m *AccountMutation) ProxyFallbackOriginID() (r int64, exists bool) {
+	v := m.proxy_fallback_origin_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldProxyFallbackOriginID returns the old "proxy_fallback_origin_id" field's value of the Account entity.
+// If the Account object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountMutation) OldProxyFallbackOriginID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldProxyFallbackOriginID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldProxyFallbackOriginID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldProxyFallbackOriginID: %w", err)
+	}
+	return oldValue.ProxyFallbackOriginID, nil
+}
+
+// AddProxyFallbackOriginID adds i to the "proxy_fallback_origin_id" field.
+func (m *AccountMutation) AddProxyFallbackOriginID(i int64) {
+	if m.addproxy_fallback_origin_id != nil {
+		*m.addproxy_fallback_origin_id += i
+	} else {
+		m.addproxy_fallback_origin_id = &i
+	}
+}
+
+// AddedProxyFallbackOriginID returns the value that was added to the "proxy_fallback_origin_id" field in this mutation.
+func (m *AccountMutation) AddedProxyFallbackOriginID() (r int64, exists bool) {
+	v := m.addproxy_fallback_origin_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearProxyFallbackOriginID clears the value of the "proxy_fallback_origin_id" field.
+func (m *AccountMutation) ClearProxyFallbackOriginID() {
+	m.proxy_fallback_origin_id = nil
+	m.addproxy_fallback_origin_id = nil
+	m.clearedFields[account.FieldProxyFallbackOriginID] = struct{}{}
+}
+
+// ProxyFallbackOriginIDCleared returns if the "proxy_fallback_origin_id" field was cleared in this mutation.
+func (m *AccountMutation) ProxyFallbackOriginIDCleared() bool {
+	_, ok := m.clearedFields[account.FieldProxyFallbackOriginID]
+	return ok
+}
+
+// ResetProxyFallbackOriginID resets all changes to the "proxy_fallback_origin_id" field.
+func (m *AccountMutation) ResetProxyFallbackOriginID() {
+	m.proxy_fallback_origin_id = nil
+	m.addproxy_fallback_origin_id = nil
+	delete(m.clearedFields, account.FieldProxyFallbackOriginID)
 }
 
 // SetConcurrency sets the "concurrency" field.
@@ -5210,7 +5282,7 @@ func (m *AccountMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *AccountMutation) Fields() []string {
-	fields := make([]string, 0, 34)
+	fields := make([]string, 0, 35)
 	if m.created_at != nil {
 		fields = append(fields, account.FieldCreatedAt)
 	}
@@ -5255,6 +5327,9 @@ func (m *AccountMutation) Fields() []string {
 	}
 	if m.proxy != nil {
 		fields = append(fields, account.FieldProxyID)
+	}
+	if m.proxy_fallback_origin_id != nil {
+		fields = append(fields, account.FieldProxyFallbackOriginID)
 	}
 	if m.concurrency != nil {
 		fields = append(fields, account.FieldConcurrency)
@@ -5351,6 +5426,8 @@ func (m *AccountMutation) Field(name string) (ent.Value, bool) {
 		return m.SharePolicyID()
 	case account.FieldProxyID:
 		return m.ProxyID()
+	case account.FieldProxyFallbackOriginID:
+		return m.ProxyFallbackOriginID()
 	case account.FieldConcurrency:
 		return m.Concurrency()
 	case account.FieldLoadFactor:
@@ -5428,6 +5505,8 @@ func (m *AccountMutation) OldField(ctx context.Context, name string) (ent.Value,
 		return m.OldSharePolicyID(ctx)
 	case account.FieldProxyID:
 		return m.OldProxyID(ctx)
+	case account.FieldProxyFallbackOriginID:
+		return m.OldProxyFallbackOriginID(ctx)
 	case account.FieldConcurrency:
 		return m.OldConcurrency(ctx)
 	case account.FieldLoadFactor:
@@ -5580,6 +5659,13 @@ func (m *AccountMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetProxyID(v)
 		return nil
+	case account.FieldProxyFallbackOriginID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetProxyFallbackOriginID(v)
+		return nil
 	case account.FieldConcurrency:
 		v, ok := value.(int)
 		if !ok {
@@ -5724,6 +5810,9 @@ func (m *AccountMutation) AddedFields() []string {
 	if m.addshare_policy_id != nil {
 		fields = append(fields, account.FieldSharePolicyID)
 	}
+	if m.addproxy_fallback_origin_id != nil {
+		fields = append(fields, account.FieldProxyFallbackOriginID)
+	}
 	if m.addconcurrency != nil {
 		fields = append(fields, account.FieldConcurrency)
 	}
@@ -5749,6 +5838,8 @@ func (m *AccountMutation) AddedField(name string) (ent.Value, bool) {
 	switch name {
 	case account.FieldSharePolicyID:
 		return m.AddedSharePolicyID()
+	case account.FieldProxyFallbackOriginID:
+		return m.AddedProxyFallbackOriginID()
 	case account.FieldConcurrency:
 		return m.AddedConcurrency()
 	case account.FieldLoadFactor:
@@ -5774,6 +5865,13 @@ func (m *AccountMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddSharePolicyID(v)
+		return nil
+	case account.FieldProxyFallbackOriginID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddProxyFallbackOriginID(v)
 		return nil
 	case account.FieldConcurrency:
 		v, ok := value.(int)
@@ -5832,6 +5930,9 @@ func (m *AccountMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(account.FieldProxyID) {
 		fields = append(fields, account.FieldProxyID)
+	}
+	if m.FieldCleared(account.FieldProxyFallbackOriginID) {
+		fields = append(fields, account.FieldProxyFallbackOriginID)
 	}
 	if m.FieldCleared(account.FieldLoadFactor) {
 		fields = append(fields, account.FieldLoadFactor)
@@ -5897,6 +5998,9 @@ func (m *AccountMutation) ClearField(name string) error {
 		return nil
 	case account.FieldProxyID:
 		m.ClearProxyID()
+		return nil
+	case account.FieldProxyFallbackOriginID:
+		m.ClearProxyFallbackOriginID()
 		return nil
 	case account.FieldLoadFactor:
 		m.ClearLoadFactor()
@@ -5986,6 +6090,9 @@ func (m *AccountMutation) ResetField(name string) error {
 		return nil
 	case account.FieldProxyID:
 		m.ResetProxyID()
+		return nil
+	case account.FieldProxyFallbackOriginID:
+		m.ResetProxyFallbackOriginID()
 		return nil
 	case account.FieldConcurrency:
 		m.ResetConcurrency()
@@ -16378,8 +16485,17 @@ type GroupMutation struct {
 	addvideo_price_720p                     *float64
 	video_price_1080p                       *float64
 	addvideo_price_1080p                    *float64
+	video_model_prices                      *map[string]map[string]float64
 	web_search_price_per_call               *float64
 	addweb_search_price_per_call            *float64
+	search_price_per_1k                     *float64
+	addsearch_price_per_1k                  *float64
+	audio_realtime_price_per_min            *float64
+	addaudio_realtime_price_per_min         *float64
+	audio_tts_price_per_million_chars       *float64
+	addaudio_tts_price_per_million_chars    *float64
+	audio_stt_price_per_hour                *float64
+	addaudio_stt_price_per_hour             *float64
 	claude_code_only                        *bool
 	fallback_group_id                       *int64
 	addfallback_group_id                    *int64
@@ -18254,6 +18370,55 @@ func (m *GroupMutation) ResetVideoPrice1080p() {
 	delete(m.clearedFields, group.FieldVideoPrice1080p)
 }
 
+// SetVideoModelPrices sets the "video_model_prices" field.
+func (m *GroupMutation) SetVideoModelPrices(value map[string]map[string]float64) {
+	m.video_model_prices = &value
+}
+
+// VideoModelPrices returns the value of the "video_model_prices" field in the mutation.
+func (m *GroupMutation) VideoModelPrices() (r map[string]map[string]float64, exists bool) {
+	v := m.video_model_prices
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldVideoModelPrices returns the old "video_model_prices" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldVideoModelPrices(ctx context.Context) (v map[string]map[string]float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldVideoModelPrices is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldVideoModelPrices requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldVideoModelPrices: %w", err)
+	}
+	return oldValue.VideoModelPrices, nil
+}
+
+// ClearVideoModelPrices clears the value of the "video_model_prices" field.
+func (m *GroupMutation) ClearVideoModelPrices() {
+	m.video_model_prices = nil
+	m.clearedFields[group.FieldVideoModelPrices] = struct{}{}
+}
+
+// VideoModelPricesCleared returns if the "video_model_prices" field was cleared in this mutation.
+func (m *GroupMutation) VideoModelPricesCleared() bool {
+	_, ok := m.clearedFields[group.FieldVideoModelPrices]
+	return ok
+}
+
+// ResetVideoModelPrices resets all changes to the "video_model_prices" field.
+func (m *GroupMutation) ResetVideoModelPrices() {
+	m.video_model_prices = nil
+	delete(m.clearedFields, group.FieldVideoModelPrices)
+}
+
 // SetWebSearchPricePerCall sets the "web_search_price_per_call" field.
 func (m *GroupMutation) SetWebSearchPricePerCall(f float64) {
 	m.web_search_price_per_call = &f
@@ -18322,6 +18487,286 @@ func (m *GroupMutation) ResetWebSearchPricePerCall() {
 	m.web_search_price_per_call = nil
 	m.addweb_search_price_per_call = nil
 	delete(m.clearedFields, group.FieldWebSearchPricePerCall)
+}
+
+// SetSearchPricePer1k sets the "search_price_per_1k" field.
+func (m *GroupMutation) SetSearchPricePer1k(f float64) {
+	m.search_price_per_1k = &f
+	m.addsearch_price_per_1k = nil
+}
+
+// SearchPricePer1k returns the value of the "search_price_per_1k" field in the mutation.
+func (m *GroupMutation) SearchPricePer1k() (r float64, exists bool) {
+	v := m.search_price_per_1k
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSearchPricePer1k returns the old "search_price_per_1k" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldSearchPricePer1k(ctx context.Context) (v *float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSearchPricePer1k is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSearchPricePer1k requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSearchPricePer1k: %w", err)
+	}
+	return oldValue.SearchPricePer1k, nil
+}
+
+// AddSearchPricePer1k adds f to the "search_price_per_1k" field.
+func (m *GroupMutation) AddSearchPricePer1k(f float64) {
+	if m.addsearch_price_per_1k != nil {
+		*m.addsearch_price_per_1k += f
+	} else {
+		m.addsearch_price_per_1k = &f
+	}
+}
+
+// AddedSearchPricePer1k returns the value that was added to the "search_price_per_1k" field in this mutation.
+func (m *GroupMutation) AddedSearchPricePer1k() (r float64, exists bool) {
+	v := m.addsearch_price_per_1k
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearSearchPricePer1k clears the value of the "search_price_per_1k" field.
+func (m *GroupMutation) ClearSearchPricePer1k() {
+	m.search_price_per_1k = nil
+	m.addsearch_price_per_1k = nil
+	m.clearedFields[group.FieldSearchPricePer1k] = struct{}{}
+}
+
+// SearchPricePer1kCleared returns if the "search_price_per_1k" field was cleared in this mutation.
+func (m *GroupMutation) SearchPricePer1kCleared() bool {
+	_, ok := m.clearedFields[group.FieldSearchPricePer1k]
+	return ok
+}
+
+// ResetSearchPricePer1k resets all changes to the "search_price_per_1k" field.
+func (m *GroupMutation) ResetSearchPricePer1k() {
+	m.search_price_per_1k = nil
+	m.addsearch_price_per_1k = nil
+	delete(m.clearedFields, group.FieldSearchPricePer1k)
+}
+
+// SetAudioRealtimePricePerMin sets the "audio_realtime_price_per_min" field.
+func (m *GroupMutation) SetAudioRealtimePricePerMin(f float64) {
+	m.audio_realtime_price_per_min = &f
+	m.addaudio_realtime_price_per_min = nil
+}
+
+// AudioRealtimePricePerMin returns the value of the "audio_realtime_price_per_min" field in the mutation.
+func (m *GroupMutation) AudioRealtimePricePerMin() (r float64, exists bool) {
+	v := m.audio_realtime_price_per_min
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAudioRealtimePricePerMin returns the old "audio_realtime_price_per_min" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldAudioRealtimePricePerMin(ctx context.Context) (v *float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAudioRealtimePricePerMin is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAudioRealtimePricePerMin requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAudioRealtimePricePerMin: %w", err)
+	}
+	return oldValue.AudioRealtimePricePerMin, nil
+}
+
+// AddAudioRealtimePricePerMin adds f to the "audio_realtime_price_per_min" field.
+func (m *GroupMutation) AddAudioRealtimePricePerMin(f float64) {
+	if m.addaudio_realtime_price_per_min != nil {
+		*m.addaudio_realtime_price_per_min += f
+	} else {
+		m.addaudio_realtime_price_per_min = &f
+	}
+}
+
+// AddedAudioRealtimePricePerMin returns the value that was added to the "audio_realtime_price_per_min" field in this mutation.
+func (m *GroupMutation) AddedAudioRealtimePricePerMin() (r float64, exists bool) {
+	v := m.addaudio_realtime_price_per_min
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearAudioRealtimePricePerMin clears the value of the "audio_realtime_price_per_min" field.
+func (m *GroupMutation) ClearAudioRealtimePricePerMin() {
+	m.audio_realtime_price_per_min = nil
+	m.addaudio_realtime_price_per_min = nil
+	m.clearedFields[group.FieldAudioRealtimePricePerMin] = struct{}{}
+}
+
+// AudioRealtimePricePerMinCleared returns if the "audio_realtime_price_per_min" field was cleared in this mutation.
+func (m *GroupMutation) AudioRealtimePricePerMinCleared() bool {
+	_, ok := m.clearedFields[group.FieldAudioRealtimePricePerMin]
+	return ok
+}
+
+// ResetAudioRealtimePricePerMin resets all changes to the "audio_realtime_price_per_min" field.
+func (m *GroupMutation) ResetAudioRealtimePricePerMin() {
+	m.audio_realtime_price_per_min = nil
+	m.addaudio_realtime_price_per_min = nil
+	delete(m.clearedFields, group.FieldAudioRealtimePricePerMin)
+}
+
+// SetAudioTtsPricePerMillionChars sets the "audio_tts_price_per_million_chars" field.
+func (m *GroupMutation) SetAudioTtsPricePerMillionChars(f float64) {
+	m.audio_tts_price_per_million_chars = &f
+	m.addaudio_tts_price_per_million_chars = nil
+}
+
+// AudioTtsPricePerMillionChars returns the value of the "audio_tts_price_per_million_chars" field in the mutation.
+func (m *GroupMutation) AudioTtsPricePerMillionChars() (r float64, exists bool) {
+	v := m.audio_tts_price_per_million_chars
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAudioTtsPricePerMillionChars returns the old "audio_tts_price_per_million_chars" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldAudioTtsPricePerMillionChars(ctx context.Context) (v *float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAudioTtsPricePerMillionChars is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAudioTtsPricePerMillionChars requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAudioTtsPricePerMillionChars: %w", err)
+	}
+	return oldValue.AudioTtsPricePerMillionChars, nil
+}
+
+// AddAudioTtsPricePerMillionChars adds f to the "audio_tts_price_per_million_chars" field.
+func (m *GroupMutation) AddAudioTtsPricePerMillionChars(f float64) {
+	if m.addaudio_tts_price_per_million_chars != nil {
+		*m.addaudio_tts_price_per_million_chars += f
+	} else {
+		m.addaudio_tts_price_per_million_chars = &f
+	}
+}
+
+// AddedAudioTtsPricePerMillionChars returns the value that was added to the "audio_tts_price_per_million_chars" field in this mutation.
+func (m *GroupMutation) AddedAudioTtsPricePerMillionChars() (r float64, exists bool) {
+	v := m.addaudio_tts_price_per_million_chars
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearAudioTtsPricePerMillionChars clears the value of the "audio_tts_price_per_million_chars" field.
+func (m *GroupMutation) ClearAudioTtsPricePerMillionChars() {
+	m.audio_tts_price_per_million_chars = nil
+	m.addaudio_tts_price_per_million_chars = nil
+	m.clearedFields[group.FieldAudioTtsPricePerMillionChars] = struct{}{}
+}
+
+// AudioTtsPricePerMillionCharsCleared returns if the "audio_tts_price_per_million_chars" field was cleared in this mutation.
+func (m *GroupMutation) AudioTtsPricePerMillionCharsCleared() bool {
+	_, ok := m.clearedFields[group.FieldAudioTtsPricePerMillionChars]
+	return ok
+}
+
+// ResetAudioTtsPricePerMillionChars resets all changes to the "audio_tts_price_per_million_chars" field.
+func (m *GroupMutation) ResetAudioTtsPricePerMillionChars() {
+	m.audio_tts_price_per_million_chars = nil
+	m.addaudio_tts_price_per_million_chars = nil
+	delete(m.clearedFields, group.FieldAudioTtsPricePerMillionChars)
+}
+
+// SetAudioSttPricePerHour sets the "audio_stt_price_per_hour" field.
+func (m *GroupMutation) SetAudioSttPricePerHour(f float64) {
+	m.audio_stt_price_per_hour = &f
+	m.addaudio_stt_price_per_hour = nil
+}
+
+// AudioSttPricePerHour returns the value of the "audio_stt_price_per_hour" field in the mutation.
+func (m *GroupMutation) AudioSttPricePerHour() (r float64, exists bool) {
+	v := m.audio_stt_price_per_hour
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAudioSttPricePerHour returns the old "audio_stt_price_per_hour" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldAudioSttPricePerHour(ctx context.Context) (v *float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAudioSttPricePerHour is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAudioSttPricePerHour requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAudioSttPricePerHour: %w", err)
+	}
+	return oldValue.AudioSttPricePerHour, nil
+}
+
+// AddAudioSttPricePerHour adds f to the "audio_stt_price_per_hour" field.
+func (m *GroupMutation) AddAudioSttPricePerHour(f float64) {
+	if m.addaudio_stt_price_per_hour != nil {
+		*m.addaudio_stt_price_per_hour += f
+	} else {
+		m.addaudio_stt_price_per_hour = &f
+	}
+}
+
+// AddedAudioSttPricePerHour returns the value that was added to the "audio_stt_price_per_hour" field in this mutation.
+func (m *GroupMutation) AddedAudioSttPricePerHour() (r float64, exists bool) {
+	v := m.addaudio_stt_price_per_hour
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearAudioSttPricePerHour clears the value of the "audio_stt_price_per_hour" field.
+func (m *GroupMutation) ClearAudioSttPricePerHour() {
+	m.audio_stt_price_per_hour = nil
+	m.addaudio_stt_price_per_hour = nil
+	m.clearedFields[group.FieldAudioSttPricePerHour] = struct{}{}
+}
+
+// AudioSttPricePerHourCleared returns if the "audio_stt_price_per_hour" field was cleared in this mutation.
+func (m *GroupMutation) AudioSttPricePerHourCleared() bool {
+	_, ok := m.clearedFields[group.FieldAudioSttPricePerHour]
+	return ok
+}
+
+// ResetAudioSttPricePerHour resets all changes to the "audio_stt_price_per_hour" field.
+func (m *GroupMutation) ResetAudioSttPricePerHour() {
+	m.audio_stt_price_per_hour = nil
+	m.addaudio_stt_price_per_hour = nil
+	delete(m.clearedFields, group.FieldAudioSttPricePerHour)
 }
 
 // SetClaudeCodeOnly sets the "claude_code_only" field.
@@ -19376,7 +19821,7 @@ func (m *GroupMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *GroupMutation) Fields() []string {
-	fields := make([]string, 0, 49)
+	fields := make([]string, 0, 54)
 	if m.created_at != nil {
 		fields = append(fields, group.FieldCreatedAt)
 	}
@@ -19479,8 +19924,23 @@ func (m *GroupMutation) Fields() []string {
 	if m.video_price_1080p != nil {
 		fields = append(fields, group.FieldVideoPrice1080p)
 	}
+	if m.video_model_prices != nil {
+		fields = append(fields, group.FieldVideoModelPrices)
+	}
 	if m.web_search_price_per_call != nil {
 		fields = append(fields, group.FieldWebSearchPricePerCall)
+	}
+	if m.search_price_per_1k != nil {
+		fields = append(fields, group.FieldSearchPricePer1k)
+	}
+	if m.audio_realtime_price_per_min != nil {
+		fields = append(fields, group.FieldAudioRealtimePricePerMin)
+	}
+	if m.audio_tts_price_per_million_chars != nil {
+		fields = append(fields, group.FieldAudioTtsPricePerMillionChars)
+	}
+	if m.audio_stt_price_per_hour != nil {
+		fields = append(fields, group.FieldAudioSttPricePerHour)
 	}
 	if m.claude_code_only != nil {
 		fields = append(fields, group.FieldClaudeCodeOnly)
@@ -19600,8 +20060,18 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.VideoPrice720p()
 	case group.FieldVideoPrice1080p:
 		return m.VideoPrice1080p()
+	case group.FieldVideoModelPrices:
+		return m.VideoModelPrices()
 	case group.FieldWebSearchPricePerCall:
 		return m.WebSearchPricePerCall()
+	case group.FieldSearchPricePer1k:
+		return m.SearchPricePer1k()
+	case group.FieldAudioRealtimePricePerMin:
+		return m.AudioRealtimePricePerMin()
+	case group.FieldAudioTtsPricePerMillionChars:
+		return m.AudioTtsPricePerMillionChars()
+	case group.FieldAudioSttPricePerHour:
+		return m.AudioSttPricePerHour()
 	case group.FieldClaudeCodeOnly:
 		return m.ClaudeCodeOnly()
 	case group.FieldFallbackGroupID:
@@ -19707,8 +20177,18 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldVideoPrice720p(ctx)
 	case group.FieldVideoPrice1080p:
 		return m.OldVideoPrice1080p(ctx)
+	case group.FieldVideoModelPrices:
+		return m.OldVideoModelPrices(ctx)
 	case group.FieldWebSearchPricePerCall:
 		return m.OldWebSearchPricePerCall(ctx)
+	case group.FieldSearchPricePer1k:
+		return m.OldSearchPricePer1k(ctx)
+	case group.FieldAudioRealtimePricePerMin:
+		return m.OldAudioRealtimePricePerMin(ctx)
+	case group.FieldAudioTtsPricePerMillionChars:
+		return m.OldAudioTtsPricePerMillionChars(ctx)
+	case group.FieldAudioSttPricePerHour:
+		return m.OldAudioSttPricePerHour(ctx)
 	case group.FieldClaudeCodeOnly:
 		return m.OldClaudeCodeOnly(ctx)
 	case group.FieldFallbackGroupID:
@@ -19984,12 +20464,47 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetVideoPrice1080p(v)
 		return nil
+	case group.FieldVideoModelPrices:
+		v, ok := value.(map[string]map[string]float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetVideoModelPrices(v)
+		return nil
 	case group.FieldWebSearchPricePerCall:
 		v, ok := value.(float64)
 		if !ok {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetWebSearchPricePerCall(v)
+		return nil
+	case group.FieldSearchPricePer1k:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSearchPricePer1k(v)
+		return nil
+	case group.FieldAudioRealtimePricePerMin:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAudioRealtimePricePerMin(v)
+		return nil
+	case group.FieldAudioTtsPricePerMillionChars:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAudioTtsPricePerMillionChars(v)
+		return nil
+	case group.FieldAudioSttPricePerHour:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAudioSttPricePerHour(v)
 		return nil
 	case group.FieldClaudeCodeOnly:
 		v, ok := value.(bool)
@@ -20151,6 +20666,18 @@ func (m *GroupMutation) AddedFields() []string {
 	if m.addweb_search_price_per_call != nil {
 		fields = append(fields, group.FieldWebSearchPricePerCall)
 	}
+	if m.addsearch_price_per_1k != nil {
+		fields = append(fields, group.FieldSearchPricePer1k)
+	}
+	if m.addaudio_realtime_price_per_min != nil {
+		fields = append(fields, group.FieldAudioRealtimePricePerMin)
+	}
+	if m.addaudio_tts_price_per_million_chars != nil {
+		fields = append(fields, group.FieldAudioTtsPricePerMillionChars)
+	}
+	if m.addaudio_stt_price_per_hour != nil {
+		fields = append(fields, group.FieldAudioSttPricePerHour)
+	}
 	if m.addfallback_group_id != nil {
 		fields = append(fields, group.FieldFallbackGroupID)
 	}
@@ -20207,6 +20734,14 @@ func (m *GroupMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedVideoPrice1080p()
 	case group.FieldWebSearchPricePerCall:
 		return m.AddedWebSearchPricePerCall()
+	case group.FieldSearchPricePer1k:
+		return m.AddedSearchPricePer1k()
+	case group.FieldAudioRealtimePricePerMin:
+		return m.AddedAudioRealtimePricePerMin()
+	case group.FieldAudioTtsPricePerMillionChars:
+		return m.AddedAudioTtsPricePerMillionChars()
+	case group.FieldAudioSttPricePerHour:
+		return m.AddedAudioSttPricePerHour()
 	case group.FieldFallbackGroupID:
 		return m.AddedFallbackGroupID()
 	case group.FieldFallbackGroupIDOnInvalidRequest:
@@ -20350,6 +20885,34 @@ func (m *GroupMutation) AddField(name string, value ent.Value) error {
 		}
 		m.AddWebSearchPricePerCall(v)
 		return nil
+	case group.FieldSearchPricePer1k:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddSearchPricePer1k(v)
+		return nil
+	case group.FieldAudioRealtimePricePerMin:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddAudioRealtimePricePerMin(v)
+		return nil
+	case group.FieldAudioTtsPricePerMillionChars:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddAudioTtsPricePerMillionChars(v)
+		return nil
+	case group.FieldAudioSttPricePerHour:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddAudioSttPricePerHour(v)
+		return nil
 	case group.FieldFallbackGroupID:
 		v, ok := value.(int64)
 		if !ok {
@@ -20422,8 +20985,23 @@ func (m *GroupMutation) ClearedFields() []string {
 	if m.FieldCleared(group.FieldVideoPrice1080p) {
 		fields = append(fields, group.FieldVideoPrice1080p)
 	}
+	if m.FieldCleared(group.FieldVideoModelPrices) {
+		fields = append(fields, group.FieldVideoModelPrices)
+	}
 	if m.FieldCleared(group.FieldWebSearchPricePerCall) {
 		fields = append(fields, group.FieldWebSearchPricePerCall)
+	}
+	if m.FieldCleared(group.FieldSearchPricePer1k) {
+		fields = append(fields, group.FieldSearchPricePer1k)
+	}
+	if m.FieldCleared(group.FieldAudioRealtimePricePerMin) {
+		fields = append(fields, group.FieldAudioRealtimePricePerMin)
+	}
+	if m.FieldCleared(group.FieldAudioTtsPricePerMillionChars) {
+		fields = append(fields, group.FieldAudioTtsPricePerMillionChars)
+	}
+	if m.FieldCleared(group.FieldAudioSttPricePerHour) {
+		fields = append(fields, group.FieldAudioSttPricePerHour)
 	}
 	if m.FieldCleared(group.FieldFallbackGroupID) {
 		fields = append(fields, group.FieldFallbackGroupID)
@@ -20484,8 +21062,23 @@ func (m *GroupMutation) ClearField(name string) error {
 	case group.FieldVideoPrice1080p:
 		m.ClearVideoPrice1080p()
 		return nil
+	case group.FieldVideoModelPrices:
+		m.ClearVideoModelPrices()
+		return nil
 	case group.FieldWebSearchPricePerCall:
 		m.ClearWebSearchPricePerCall()
+		return nil
+	case group.FieldSearchPricePer1k:
+		m.ClearSearchPricePer1k()
+		return nil
+	case group.FieldAudioRealtimePricePerMin:
+		m.ClearAudioRealtimePricePerMin()
+		return nil
+	case group.FieldAudioTtsPricePerMillionChars:
+		m.ClearAudioTtsPricePerMillionChars()
+		return nil
+	case group.FieldAudioSttPricePerHour:
+		m.ClearAudioSttPricePerHour()
 		return nil
 	case group.FieldFallbackGroupID:
 		m.ClearFallbackGroupID()
@@ -20606,8 +21199,23 @@ func (m *GroupMutation) ResetField(name string) error {
 	case group.FieldVideoPrice1080p:
 		m.ResetVideoPrice1080p()
 		return nil
+	case group.FieldVideoModelPrices:
+		m.ResetVideoModelPrices()
+		return nil
 	case group.FieldWebSearchPricePerCall:
 		m.ResetWebSearchPricePerCall()
+		return nil
+	case group.FieldSearchPricePer1k:
+		m.ResetSearchPricePer1k()
+		return nil
+	case group.FieldAudioRealtimePricePerMin:
+		m.ResetAudioRealtimePricePerMin()
+		return nil
+	case group.FieldAudioTtsPricePerMillionChars:
+		m.ResetAudioTtsPricePerMillionChars()
+		return nil
+	case group.FieldAudioSttPricePerHour:
+		m.ResetAudioSttPricePerHour()
 		return nil
 	case group.FieldClaudeCodeOnly:
 		m.ResetClaudeCodeOnly()
@@ -30677,33 +31285,42 @@ func (m *PromoCodeUsageMutation) ResetEdge(name string) error {
 // ProxyMutation represents an operation that mutates the Proxy nodes in the graph.
 type ProxyMutation struct {
 	config
-	op                     Op
-	typ                    string
-	id                     *int64
-	created_at             *time.Time
-	updated_at             *time.Time
-	deleted_at             *time.Time
-	name                   *string
-	protocol               *string
-	host                   *string
-	port                   *int
-	addport                *int
-	username               *string
-	password               *string
-	platform               *string
-	required_account_level *string
-	status                 *string
-	max_accounts           *int
-	addmax_accounts        *int
-	clearedFields          map[string]struct{}
-	accounts               map[int64]struct{}
-	removedaccounts        map[int64]struct{}
-	clearedaccounts        bool
-	owner                  *int64
-	clearedowner           bool
-	done                   bool
-	oldValue               func(context.Context) (*Proxy, error)
-	predicates             []predicate.Proxy
+	op                      Op
+	typ                     string
+	id                      *int64
+	created_at              *time.Time
+	updated_at              *time.Time
+	deleted_at              *time.Time
+	name                    *string
+	protocol                *string
+	host                    *string
+	port                    *int
+	addport                 *int
+	username                *string
+	password                *string
+	platform                *string
+	required_account_level  *string
+	status                  *string
+	max_accounts            *int
+	addmax_accounts         *int
+	expires_at              *time.Time
+	fallback_mode           *string
+	expiry_warn_days        *int
+	addexpiry_warn_days     *int
+	clearedFields           map[string]struct{}
+	accounts                map[int64]struct{}
+	removedaccounts         map[int64]struct{}
+	clearedaccounts         bool
+	owner                   *int64
+	clearedowner            bool
+	backup_proxy            *int64
+	clearedbackup_proxy     bool
+	fallback_sources        map[int64]struct{}
+	removedfallback_sources map[int64]struct{}
+	clearedfallback_sources bool
+	done                    bool
+	oldValue                func(context.Context) (*Proxy, error)
+	predicates              []predicate.Proxy
 }
 
 var _ ent.Mutation = (*ProxyMutation)(nil)
@@ -31400,6 +32017,196 @@ func (m *ProxyMutation) ResetMaxAccounts() {
 	m.addmax_accounts = nil
 }
 
+// SetExpiresAt sets the "expires_at" field.
+func (m *ProxyMutation) SetExpiresAt(t time.Time) {
+	m.expires_at = &t
+}
+
+// ExpiresAt returns the value of the "expires_at" field in the mutation.
+func (m *ProxyMutation) ExpiresAt() (r time.Time, exists bool) {
+	v := m.expires_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldExpiresAt returns the old "expires_at" field's value of the Proxy entity.
+// If the Proxy object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ProxyMutation) OldExpiresAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldExpiresAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldExpiresAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldExpiresAt: %w", err)
+	}
+	return oldValue.ExpiresAt, nil
+}
+
+// ClearExpiresAt clears the value of the "expires_at" field.
+func (m *ProxyMutation) ClearExpiresAt() {
+	m.expires_at = nil
+	m.clearedFields[proxy.FieldExpiresAt] = struct{}{}
+}
+
+// ExpiresAtCleared returns if the "expires_at" field was cleared in this mutation.
+func (m *ProxyMutation) ExpiresAtCleared() bool {
+	_, ok := m.clearedFields[proxy.FieldExpiresAt]
+	return ok
+}
+
+// ResetExpiresAt resets all changes to the "expires_at" field.
+func (m *ProxyMutation) ResetExpiresAt() {
+	m.expires_at = nil
+	delete(m.clearedFields, proxy.FieldExpiresAt)
+}
+
+// SetFallbackMode sets the "fallback_mode" field.
+func (m *ProxyMutation) SetFallbackMode(s string) {
+	m.fallback_mode = &s
+}
+
+// FallbackMode returns the value of the "fallback_mode" field in the mutation.
+func (m *ProxyMutation) FallbackMode() (r string, exists bool) {
+	v := m.fallback_mode
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFallbackMode returns the old "fallback_mode" field's value of the Proxy entity.
+// If the Proxy object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ProxyMutation) OldFallbackMode(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFallbackMode is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFallbackMode requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFallbackMode: %w", err)
+	}
+	return oldValue.FallbackMode, nil
+}
+
+// ResetFallbackMode resets all changes to the "fallback_mode" field.
+func (m *ProxyMutation) ResetFallbackMode() {
+	m.fallback_mode = nil
+}
+
+// SetBackupProxyID sets the "backup_proxy_id" field.
+func (m *ProxyMutation) SetBackupProxyID(i int64) {
+	m.backup_proxy = &i
+}
+
+// BackupProxyID returns the value of the "backup_proxy_id" field in the mutation.
+func (m *ProxyMutation) BackupProxyID() (r int64, exists bool) {
+	v := m.backup_proxy
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBackupProxyID returns the old "backup_proxy_id" field's value of the Proxy entity.
+// If the Proxy object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ProxyMutation) OldBackupProxyID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBackupProxyID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBackupProxyID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBackupProxyID: %w", err)
+	}
+	return oldValue.BackupProxyID, nil
+}
+
+// ClearBackupProxyID clears the value of the "backup_proxy_id" field.
+func (m *ProxyMutation) ClearBackupProxyID() {
+	m.backup_proxy = nil
+	m.clearedFields[proxy.FieldBackupProxyID] = struct{}{}
+}
+
+// BackupProxyIDCleared returns if the "backup_proxy_id" field was cleared in this mutation.
+func (m *ProxyMutation) BackupProxyIDCleared() bool {
+	_, ok := m.clearedFields[proxy.FieldBackupProxyID]
+	return ok
+}
+
+// ResetBackupProxyID resets all changes to the "backup_proxy_id" field.
+func (m *ProxyMutation) ResetBackupProxyID() {
+	m.backup_proxy = nil
+	delete(m.clearedFields, proxy.FieldBackupProxyID)
+}
+
+// SetExpiryWarnDays sets the "expiry_warn_days" field.
+func (m *ProxyMutation) SetExpiryWarnDays(i int) {
+	m.expiry_warn_days = &i
+	m.addexpiry_warn_days = nil
+}
+
+// ExpiryWarnDays returns the value of the "expiry_warn_days" field in the mutation.
+func (m *ProxyMutation) ExpiryWarnDays() (r int, exists bool) {
+	v := m.expiry_warn_days
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldExpiryWarnDays returns the old "expiry_warn_days" field's value of the Proxy entity.
+// If the Proxy object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ProxyMutation) OldExpiryWarnDays(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldExpiryWarnDays is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldExpiryWarnDays requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldExpiryWarnDays: %w", err)
+	}
+	return oldValue.ExpiryWarnDays, nil
+}
+
+// AddExpiryWarnDays adds i to the "expiry_warn_days" field.
+func (m *ProxyMutation) AddExpiryWarnDays(i int) {
+	if m.addexpiry_warn_days != nil {
+		*m.addexpiry_warn_days += i
+	} else {
+		m.addexpiry_warn_days = &i
+	}
+}
+
+// AddedExpiryWarnDays returns the value that was added to the "expiry_warn_days" field in this mutation.
+func (m *ProxyMutation) AddedExpiryWarnDays() (r int, exists bool) {
+	v := m.addexpiry_warn_days
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetExpiryWarnDays resets all changes to the "expiry_warn_days" field.
+func (m *ProxyMutation) ResetExpiryWarnDays() {
+	m.expiry_warn_days = nil
+	m.addexpiry_warn_days = nil
+}
+
 // AddAccountIDs adds the "accounts" edge to the Account entity by ids.
 func (m *ProxyMutation) AddAccountIDs(ids ...int64) {
 	if m.accounts == nil {
@@ -31494,6 +32301,87 @@ func (m *ProxyMutation) ResetOwner() {
 	m.clearedowner = false
 }
 
+// ClearBackupProxy clears the "backup_proxy" edge to the Proxy entity.
+func (m *ProxyMutation) ClearBackupProxy() {
+	m.clearedbackup_proxy = true
+	m.clearedFields[proxy.FieldBackupProxyID] = struct{}{}
+}
+
+// BackupProxyCleared reports if the "backup_proxy" edge to the Proxy entity was cleared.
+func (m *ProxyMutation) BackupProxyCleared() bool {
+	return m.BackupProxyIDCleared() || m.clearedbackup_proxy
+}
+
+// BackupProxyIDs returns the "backup_proxy" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// BackupProxyID instead. It exists only for internal usage by the builders.
+func (m *ProxyMutation) BackupProxyIDs() (ids []int64) {
+	if id := m.backup_proxy; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetBackupProxy resets all changes to the "backup_proxy" edge.
+func (m *ProxyMutation) ResetBackupProxy() {
+	m.backup_proxy = nil
+	m.clearedbackup_proxy = false
+}
+
+// AddFallbackSourceIDs adds the "fallback_sources" edge to the Proxy entity by ids.
+func (m *ProxyMutation) AddFallbackSourceIDs(ids ...int64) {
+	if m.fallback_sources == nil {
+		m.fallback_sources = make(map[int64]struct{})
+	}
+	for i := range ids {
+		m.fallback_sources[ids[i]] = struct{}{}
+	}
+}
+
+// ClearFallbackSources clears the "fallback_sources" edge to the Proxy entity.
+func (m *ProxyMutation) ClearFallbackSources() {
+	m.clearedfallback_sources = true
+}
+
+// FallbackSourcesCleared reports if the "fallback_sources" edge to the Proxy entity was cleared.
+func (m *ProxyMutation) FallbackSourcesCleared() bool {
+	return m.clearedfallback_sources
+}
+
+// RemoveFallbackSourceIDs removes the "fallback_sources" edge to the Proxy entity by IDs.
+func (m *ProxyMutation) RemoveFallbackSourceIDs(ids ...int64) {
+	if m.removedfallback_sources == nil {
+		m.removedfallback_sources = make(map[int64]struct{})
+	}
+	for i := range ids {
+		delete(m.fallback_sources, ids[i])
+		m.removedfallback_sources[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedFallbackSources returns the removed IDs of the "fallback_sources" edge to the Proxy entity.
+func (m *ProxyMutation) RemovedFallbackSourcesIDs() (ids []int64) {
+	for id := range m.removedfallback_sources {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// FallbackSourcesIDs returns the "fallback_sources" edge IDs in the mutation.
+func (m *ProxyMutation) FallbackSourcesIDs() (ids []int64) {
+	for id := range m.fallback_sources {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetFallbackSources resets all changes to the "fallback_sources" edge.
+func (m *ProxyMutation) ResetFallbackSources() {
+	m.fallback_sources = nil
+	m.clearedfallback_sources = false
+	m.removedfallback_sources = nil
+}
+
 // Where appends a list predicates to the ProxyMutation builder.
 func (m *ProxyMutation) Where(ps ...predicate.Proxy) {
 	m.predicates = append(m.predicates, ps...)
@@ -31528,7 +32416,7 @@ func (m *ProxyMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ProxyMutation) Fields() []string {
-	fields := make([]string, 0, 14)
+	fields := make([]string, 0, 18)
 	if m.created_at != nil {
 		fields = append(fields, proxy.FieldCreatedAt)
 	}
@@ -31571,6 +32459,18 @@ func (m *ProxyMutation) Fields() []string {
 	if m.max_accounts != nil {
 		fields = append(fields, proxy.FieldMaxAccounts)
 	}
+	if m.expires_at != nil {
+		fields = append(fields, proxy.FieldExpiresAt)
+	}
+	if m.fallback_mode != nil {
+		fields = append(fields, proxy.FieldFallbackMode)
+	}
+	if m.backup_proxy != nil {
+		fields = append(fields, proxy.FieldBackupProxyID)
+	}
+	if m.expiry_warn_days != nil {
+		fields = append(fields, proxy.FieldExpiryWarnDays)
+	}
 	return fields
 }
 
@@ -31607,6 +32507,14 @@ func (m *ProxyMutation) Field(name string) (ent.Value, bool) {
 		return m.Status()
 	case proxy.FieldMaxAccounts:
 		return m.MaxAccounts()
+	case proxy.FieldExpiresAt:
+		return m.ExpiresAt()
+	case proxy.FieldFallbackMode:
+		return m.FallbackMode()
+	case proxy.FieldBackupProxyID:
+		return m.BackupProxyID()
+	case proxy.FieldExpiryWarnDays:
+		return m.ExpiryWarnDays()
 	}
 	return nil, false
 }
@@ -31644,6 +32552,14 @@ func (m *ProxyMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldStatus(ctx)
 	case proxy.FieldMaxAccounts:
 		return m.OldMaxAccounts(ctx)
+	case proxy.FieldExpiresAt:
+		return m.OldExpiresAt(ctx)
+	case proxy.FieldFallbackMode:
+		return m.OldFallbackMode(ctx)
+	case proxy.FieldBackupProxyID:
+		return m.OldBackupProxyID(ctx)
+	case proxy.FieldExpiryWarnDays:
+		return m.OldExpiryWarnDays(ctx)
 	}
 	return nil, fmt.Errorf("unknown Proxy field %s", name)
 }
@@ -31751,6 +32667,34 @@ func (m *ProxyMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetMaxAccounts(v)
 		return nil
+	case proxy.FieldExpiresAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetExpiresAt(v)
+		return nil
+	case proxy.FieldFallbackMode:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFallbackMode(v)
+		return nil
+	case proxy.FieldBackupProxyID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBackupProxyID(v)
+		return nil
+	case proxy.FieldExpiryWarnDays:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetExpiryWarnDays(v)
+		return nil
 	}
 	return fmt.Errorf("unknown Proxy field %s", name)
 }
@@ -31765,6 +32709,9 @@ func (m *ProxyMutation) AddedFields() []string {
 	if m.addmax_accounts != nil {
 		fields = append(fields, proxy.FieldMaxAccounts)
 	}
+	if m.addexpiry_warn_days != nil {
+		fields = append(fields, proxy.FieldExpiryWarnDays)
+	}
 	return fields
 }
 
@@ -31777,6 +32724,8 @@ func (m *ProxyMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedPort()
 	case proxy.FieldMaxAccounts:
 		return m.AddedMaxAccounts()
+	case proxy.FieldExpiryWarnDays:
+		return m.AddedExpiryWarnDays()
 	}
 	return nil, false
 }
@@ -31800,6 +32749,13 @@ func (m *ProxyMutation) AddField(name string, value ent.Value) error {
 		}
 		m.AddMaxAccounts(v)
 		return nil
+	case proxy.FieldExpiryWarnDays:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddExpiryWarnDays(v)
+		return nil
 	}
 	return fmt.Errorf("unknown Proxy numeric field %s", name)
 }
@@ -31819,6 +32775,12 @@ func (m *ProxyMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(proxy.FieldOwnerUserID) {
 		fields = append(fields, proxy.FieldOwnerUserID)
+	}
+	if m.FieldCleared(proxy.FieldExpiresAt) {
+		fields = append(fields, proxy.FieldExpiresAt)
+	}
+	if m.FieldCleared(proxy.FieldBackupProxyID) {
+		fields = append(fields, proxy.FieldBackupProxyID)
 	}
 	return fields
 }
@@ -31845,6 +32807,12 @@ func (m *ProxyMutation) ClearField(name string) error {
 		return nil
 	case proxy.FieldOwnerUserID:
 		m.ClearOwnerUserID()
+		return nil
+	case proxy.FieldExpiresAt:
+		m.ClearExpiresAt()
+		return nil
+	case proxy.FieldBackupProxyID:
+		m.ClearBackupProxyID()
 		return nil
 	}
 	return fmt.Errorf("unknown Proxy nullable field %s", name)
@@ -31896,18 +32864,36 @@ func (m *ProxyMutation) ResetField(name string) error {
 	case proxy.FieldMaxAccounts:
 		m.ResetMaxAccounts()
 		return nil
+	case proxy.FieldExpiresAt:
+		m.ResetExpiresAt()
+		return nil
+	case proxy.FieldFallbackMode:
+		m.ResetFallbackMode()
+		return nil
+	case proxy.FieldBackupProxyID:
+		m.ResetBackupProxyID()
+		return nil
+	case proxy.FieldExpiryWarnDays:
+		m.ResetExpiryWarnDays()
+		return nil
 	}
 	return fmt.Errorf("unknown Proxy field %s", name)
 }
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *ProxyMutation) AddedEdges() []string {
-	edges := make([]string, 0, 2)
+	edges := make([]string, 0, 4)
 	if m.accounts != nil {
 		edges = append(edges, proxy.EdgeAccounts)
 	}
 	if m.owner != nil {
 		edges = append(edges, proxy.EdgeOwner)
+	}
+	if m.backup_proxy != nil {
+		edges = append(edges, proxy.EdgeBackupProxy)
+	}
+	if m.fallback_sources != nil {
+		edges = append(edges, proxy.EdgeFallbackSources)
 	}
 	return edges
 }
@@ -31926,15 +32912,28 @@ func (m *ProxyMutation) AddedIDs(name string) []ent.Value {
 		if id := m.owner; id != nil {
 			return []ent.Value{*id}
 		}
+	case proxy.EdgeBackupProxy:
+		if id := m.backup_proxy; id != nil {
+			return []ent.Value{*id}
+		}
+	case proxy.EdgeFallbackSources:
+		ids := make([]ent.Value, 0, len(m.fallback_sources))
+		for id := range m.fallback_sources {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *ProxyMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 2)
+	edges := make([]string, 0, 4)
 	if m.removedaccounts != nil {
 		edges = append(edges, proxy.EdgeAccounts)
+	}
+	if m.removedfallback_sources != nil {
+		edges = append(edges, proxy.EdgeFallbackSources)
 	}
 	return edges
 }
@@ -31949,18 +32948,30 @@ func (m *ProxyMutation) RemovedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case proxy.EdgeFallbackSources:
+		ids := make([]ent.Value, 0, len(m.removedfallback_sources))
+		for id := range m.removedfallback_sources {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *ProxyMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 2)
+	edges := make([]string, 0, 4)
 	if m.clearedaccounts {
 		edges = append(edges, proxy.EdgeAccounts)
 	}
 	if m.clearedowner {
 		edges = append(edges, proxy.EdgeOwner)
+	}
+	if m.clearedbackup_proxy {
+		edges = append(edges, proxy.EdgeBackupProxy)
+	}
+	if m.clearedfallback_sources {
+		edges = append(edges, proxy.EdgeFallbackSources)
 	}
 	return edges
 }
@@ -31973,6 +32984,10 @@ func (m *ProxyMutation) EdgeCleared(name string) bool {
 		return m.clearedaccounts
 	case proxy.EdgeOwner:
 		return m.clearedowner
+	case proxy.EdgeBackupProxy:
+		return m.clearedbackup_proxy
+	case proxy.EdgeFallbackSources:
+		return m.clearedfallback_sources
 	}
 	return false
 }
@@ -31983,6 +32998,9 @@ func (m *ProxyMutation) ClearEdge(name string) error {
 	switch name {
 	case proxy.EdgeOwner:
 		m.ClearOwner()
+		return nil
+	case proxy.EdgeBackupProxy:
+		m.ClearBackupProxy()
 		return nil
 	}
 	return fmt.Errorf("unknown Proxy unique edge %s", name)
@@ -31997,6 +33015,12 @@ func (m *ProxyMutation) ResetEdge(name string) error {
 		return nil
 	case proxy.EdgeOwner:
 		m.ResetOwner()
+		return nil
+	case proxy.EdgeBackupProxy:
+		m.ResetBackupProxy()
+		return nil
+	case proxy.EdgeFallbackSources:
+		m.ResetFallbackSources()
 		return nil
 	}
 	return fmt.Errorf("unknown Proxy edge %s", name)

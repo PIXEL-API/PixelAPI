@@ -3,15 +3,21 @@ package service
 import (
 	"context"
 	"fmt"
+	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 )
 
 var (
-	ErrProxyNotFound             = infraerrors.NotFound("PROXY_NOT_FOUND", "proxy not found")
-	ErrProxyInUse                = infraerrors.Conflict("PROXY_IN_USE", "proxy is in use by accounts")
-	ErrProxyAccountLimitExceeded = infraerrors.Conflict("PROXY_ACCOUNT_LIMIT_EXCEEDED", "proxy account binding limit exceeded")
+	ErrProxyNotFound              = infraerrors.NotFound("PROXY_NOT_FOUND", "proxy not found")
+	ErrProxyInUse                 = infraerrors.Conflict("PROXY_IN_USE", "proxy is in use by accounts")
+	ErrProxyAccountLimitExceeded  = infraerrors.Conflict("PROXY_ACCOUNT_LIMIT_EXCEEDED", "proxy account binding limit exceeded")
+	ErrProxyFallbackModeInvalid   = infraerrors.BadRequest("PROXY_FALLBACK_MODE_INVALID", "fallback_mode must be one of none, direct, proxy")
+	ErrProxyBackupRequired        = infraerrors.BadRequest("PROXY_BACKUP_REQUIRED", "backup_proxy_id is required when fallback_mode is proxy")
+	ErrProxyBackupInvalid         = infraerrors.BadRequest("PROXY_BACKUP_INVALID", "backup proxy must be a different existing proxy")
+	ErrProxyBackupOwnerConflict   = infraerrors.BadRequest("PROXY_BACKUP_OWNER_CONFLICT", "backup proxy crosses the configured owner visibility boundary")
+	ErrProxyExpiryWarnDaysInvalid = infraerrors.BadRequest("PROXY_EXPIRY_WARN_DAYS_INVALID", "expiry_warn_days must be >= 0")
 	// ErrProxyPlatformInvalid 代理平台归属非法（空字符串表示通用代理）。
 	ErrProxyPlatformInvalid = infraerrors.BadRequest("PROXY_PLATFORM_INVALID", "proxy platform is invalid; leave empty for a universal proxy")
 	// ErrProxyRequiredAccountLevelInvalid 代理要求的账号等级非法（空字符串表示所有等级可用）。
@@ -64,6 +70,11 @@ type CreateProxyRequest struct {
 	// RequiredAccountLevel 为空表示所有账号等级可用。
 	RequiredAccountLevel string `json:"required_account_level"`
 	MaxAccounts          int    `json:"max_accounts"`
+	ExpiresAt            *time.Time
+	FallbackMode         string
+	BackupProxyID        *int64
+	// ExpiryWarnDays 为 nil 时使用本地原生创建默认值 7；显式 0 保持为 0。
+	ExpiryWarnDays *int
 }
 
 // UpdateProxyRequest 更新代理请求
@@ -77,9 +88,15 @@ type UpdateProxyRequest struct {
 	// Platform 为空字符串表示改为通用代理。
 	Platform *string `json:"platform"`
 	// RequiredAccountLevel 为空字符串表示改为所有等级可用。
-	RequiredAccountLevel *string `json:"required_account_level"`
-	Status               *string `json:"status"`
-	MaxAccounts          *int    `json:"max_accounts"`
+	RequiredAccountLevel  *string `json:"required_account_level"`
+	Status                *string `json:"status"`
+	MaxAccounts           *int    `json:"max_accounts"`
+	ExpiresAt             *time.Time
+	ExpiresAtProvided     bool
+	FallbackMode          *string
+	BackupProxyID         *int64
+	BackupProxyIDProvided bool
+	ExpiryWarnDays        *int
 }
 
 // ProxyService 代理管理服务
@@ -117,6 +134,13 @@ func (s *ProxyService) Create(ctx context.Context, req CreateProxyRequest) (*Pro
 		RequiredAccountLevel: NormalizeRequiredAccountLevel(req.RequiredAccountLevel),
 		Status:               StatusActive,
 		MaxAccounts:          req.MaxAccounts,
+		ExpiresAt:            req.ExpiresAt,
+		FallbackMode:         normalizeProxyFallbackMode(req.FallbackMode),
+		BackupProxyID:        req.BackupProxyID,
+		ExpiryWarnDays:       proxyExpiryWarnDaysOrDefaultValue(req.ExpiryWarnDays),
+	}
+	if err := validateProxyLifecycleWithRepository(ctx, s.proxyRepo, proxy); err != nil {
+		return nil, err
 	}
 
 	if err := s.proxyRepo.Create(ctx, proxy); err != nil {
@@ -131,6 +155,9 @@ func (s *ProxyService) GetByID(ctx context.Context, id int64) (*Proxy, error) {
 	proxy, err := s.proxyRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("get proxy: %w", err)
+	}
+	if proxy.FallbackMode == "" {
+		proxy.FallbackMode = FallbackModeNone
 	}
 	return proxy, nil
 }
@@ -208,12 +235,78 @@ func (s *ProxyService) Update(ctx context.Context, id int64, req UpdateProxyRequ
 		}
 		proxy.MaxAccounts = *req.MaxAccounts
 	}
+	if req.ExpiresAtProvided {
+		proxy.ExpiresAt = req.ExpiresAt
+	}
+	if req.FallbackMode != nil {
+		proxy.FallbackMode = normalizeProxyFallbackMode(*req.FallbackMode)
+	}
+	if req.BackupProxyIDProvided {
+		proxy.BackupProxyID = req.BackupProxyID
+	}
+	if req.ExpiryWarnDays != nil {
+		proxy.ExpiryWarnDays = *req.ExpiryWarnDays
+	}
+	if err := validateProxyLifecycleWithRepository(ctx, s.proxyRepo, proxy); err != nil {
+		return nil, err
+	}
 
 	if err := s.proxyRepo.Update(ctx, proxy); err != nil {
 		return nil, fmt.Errorf("update proxy: %w", err)
 	}
 
 	return proxy, nil
+}
+
+func proxyExpiryWarnDaysOrDefaultValue(value *int) int {
+	if value == nil {
+		return 7
+	}
+	return *value
+}
+
+func validateProxyLifecycleWithRepository(ctx context.Context, repo ProxyRepository, candidate *Proxy) error {
+	if candidate == nil {
+		return ErrProxyNotFound
+	}
+	switch candidate.FallbackMode {
+	case FallbackModeNone, FallbackModeDirect:
+	case FallbackModeProxy:
+		if candidate.BackupProxyID == nil || *candidate.BackupProxyID <= 0 {
+			return ErrProxyBackupRequired
+		}
+	default:
+		return ErrProxyFallbackModeInvalid
+	}
+	if candidate.ExpiryWarnDays < 0 {
+		return ErrProxyExpiryWarnDaysInvalid
+	}
+	if candidate.BackupProxyID == nil {
+		return nil
+	}
+	if *candidate.BackupProxyID <= 0 || candidate.ID > 0 && *candidate.BackupProxyID == candidate.ID {
+		return ErrProxyBackupInvalid
+	}
+	if repo == nil {
+		return ErrProxyBackupInvalid
+	}
+	target, err := repo.GetByID(ctx, *candidate.BackupProxyID)
+	if err != nil {
+		return err
+	}
+	if target == nil {
+		return ErrProxyBackupInvalid
+	}
+	if candidate.OwnerUserID == nil {
+		if target.OwnerUserID != nil {
+			return ErrProxyBackupOwnerConflict
+		}
+		return nil
+	}
+	if target.OwnerUserID != nil && *target.OwnerUserID != *candidate.OwnerUserID {
+		return ErrProxyBackupOwnerConflict
+	}
+	return nil
 }
 
 // Delete 删除代理

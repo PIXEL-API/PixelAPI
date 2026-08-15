@@ -100,6 +100,11 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 			response.ErrorFrom(c, err)
 			return
 		}
+		proxies, err = expandDataProxyBackupClosure(ctx, proxies, h.adminService.GetProxiesByIDs)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
 	} else {
 		proxies = []service.Proxy{}
 	}
@@ -374,12 +379,15 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 	}
 
 	proxyKeyToID := make(map[string]int64, len(existingProxies))
+	proxyByKey := make(map[string]service.Proxy, len(existingProxies))
 	for i := range existingProxies {
 		p := existingProxies[i]
 		key := buildProxyKey(p.Protocol, p.Host, p.Port, p.Username, p.Password)
 		proxyKeyToID[key] = p.ID
+		proxyByKey[key] = p
 	}
 
+	proxyImportRecords := make([]dataProxyImportRecord, 0, len(dataPayload.Proxies))
 	for i := range dataPayload.Proxies {
 		item := dataPayload.Proxies[i]
 		key := item.ProxyKey
@@ -397,41 +405,60 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 			continue
 		}
 		normalizedStatus := normalizeProxyStatus(item.Status)
-		if existingID, ok := proxyKeyToID[key]; ok {
-			proxyKeyToID[key] = existingID
+		if existing, ok := proxyByKey[key]; ok {
+			proxyKeyToID[key] = existing.ID
 			result.ProxyReused++
-			if normalizedStatus != "" || item.MaxAccounts != nil {
-				if proxy, getErr := h.adminService.GetProxy(ctx, existingID); getErr == nil && proxy != nil {
-					updateInput := &service.UpdateProxyInput{}
-					if normalizedStatus != "" && proxy.Status != normalizedStatus {
-						updateInput.Status = normalizedStatus
-					}
-					if item.MaxAccounts != nil && proxy.MaxAccounts != *item.MaxAccounts {
-						updateInput.MaxAccounts = item.MaxAccounts
-					}
-					if updateInput.Status != "" || updateInput.MaxAccounts != nil {
-						if _, updateErr := h.adminService.UpdateProxy(ctx, existingID, updateInput); updateErr != nil {
-							result.Errors = append(result.Errors, DataImportError{
-								Kind:     "proxy",
-								Name:     item.Name,
-								ProxyKey: key,
-								Message:  "update proxy failed: " + updateErr.Error(),
-							})
-						}
-					}
+			updateInput := &service.UpdateProxyInput{}
+			if normalizedStatus != "" && existing.Status != normalizedStatus {
+				updateInput.Status = normalizedStatus
+			}
+			if item.HasMaxAccounts() {
+				maxAccounts := dataProxyMaxAccounts(item)
+				if maxAccounts != existing.MaxAccounts {
+					updateInput.MaxAccounts = &maxAccounts
 				}
 			}
+			if item.HasPlatform() {
+				platform := strings.TrimSpace(item.Platform)
+				if platform != existing.Platform {
+					updateInput.Platform = &platform
+				}
+			}
+			if item.HasRequiredAccountLevel() {
+				level := strings.TrimSpace(item.RequiredAccountLevel)
+				if level != existing.RequiredAccountLevel {
+					updateInput.RequiredAccountLevel = &level
+				}
+			}
+			if updateInput.Status != "" || updateInput.MaxAccounts != nil ||
+				updateInput.Platform != nil || updateInput.RequiredAccountLevel != nil {
+				updated, updateErr := h.adminService.UpdateProxy(ctx, existing.ID, updateInput)
+				if updateErr != nil {
+					result.Errors = append(result.Errors, DataImportError{
+						Kind:     "proxy",
+						Name:     item.Name,
+						ProxyKey: key,
+						Message:  "update proxy failed: " + updateErr.Error(),
+					})
+				} else if updated != nil {
+					existing = *updated
+				}
+			}
+			proxyImportRecords = append(proxyImportRecords, dataProxyImportRecord{item: item, key: key, proxy: existing})
 			continue
 		}
 
 		created, createErr := h.adminService.CreateProxy(ctx, &service.CreateProxyInput{
-			Name:        defaultProxyName(item.Name),
-			Protocol:    item.Protocol,
-			Host:        item.Host,
-			Port:        item.Port,
-			Username:    item.Username,
-			Password:    item.Password,
-			MaxAccounts: dataProxyMaxAccounts(item),
+			Name:                 defaultProxyName(item.Name),
+			Protocol:             item.Protocol,
+			Host:                 item.Host,
+			Port:                 item.Port,
+			Username:             item.Username,
+			Password:             item.Password,
+			Platform:             strings.TrimSpace(item.Platform),
+			RequiredAccountLevel: strings.TrimSpace(item.RequiredAccountLevel),
+			MaxAccounts:          dataProxyMaxAccounts(item),
+			ExpiryWarnDays:       dataProxyExpiryWarnDays(item),
 		})
 		if createErr != nil {
 			result.ProxyFailed++
@@ -444,14 +471,32 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 			continue
 		}
 		proxyKeyToID[key] = created.ID
+		proxyByKey[key] = *created
 		result.ProxyCreated++
 
 		if normalizedStatus != "" && normalizedStatus != created.Status {
-			_, _ = h.adminService.UpdateProxy(ctx, created.ID, &service.UpdateProxyInput{
+			updated, updateErr := h.adminService.UpdateProxy(ctx, created.ID, &service.UpdateProxyInput{
 				Status: normalizedStatus,
 			})
+			if updateErr != nil {
+				result.Errors = append(result.Errors, DataImportError{
+					Kind:     "proxy",
+					Name:     item.Name,
+					ProxyKey: key,
+					Message:  "update status failed: " + updateErr.Error(),
+				})
+			} else if updated != nil {
+				created = updated
+			}
 		}
+		proxyImportRecords = append(proxyImportRecords, dataProxyImportRecord{item: item, key: key, proxy: *created})
 	}
+	result.Errors = append(result.Errors, applyDataProxyLifecycleRelations(
+		ctx,
+		proxyImportRecords,
+		existingProxies,
+		h.adminService.UpdateProxy,
+	)...)
 
 	// 收集需要异步设置隐私的 Antigravity OAuth 账号
 	var privacyAccounts []*service.Account
@@ -729,6 +774,16 @@ func validateDataProxy(item DataProxy) error {
 	if item.MaxAccounts != nil && *item.MaxAccounts < 0 {
 		return errors.New("proxy max_accounts must be >= 0")
 	}
+	if item.HasExpiryWarnDays() && item.ExpiryWarnDays < 0 {
+		return errors.New("proxy expiry_warn_days must be >= 0")
+	}
+	if item.HasFallbackMode() {
+		switch strings.TrimSpace(item.FallbackMode) {
+		case "", service.FallbackModeNone, service.FallbackModeDirect, service.FallbackModeProxy:
+		default:
+			return fmt.Errorf("proxy fallback_mode is invalid: %s", item.FallbackMode)
+		}
+	}
 	switch item.Protocol {
 	case "http", "https", "socks5", "socks5h":
 	default:
@@ -805,6 +860,15 @@ func dataProxyMaxAccounts(item DataProxy) int {
 		return 0
 	}
 	return *item.MaxAccounts
+}
+
+func dataProxyExpiryWarnDays(item DataProxy) int {
+	if !item.HasExpiryWarnDays() {
+		// Preserve upstream /accounts/data behavior: an omitted non-pointer
+		// expiry_warn_days imports as zero instead of the schema default.
+		return 0
+	}
+	return item.ExpiryWarnDays
 }
 
 // enrichCredentialsFromIDToken performs best-effort extraction of user info fields

@@ -902,19 +902,24 @@
 
         <!-- Grok 视频生成按秒计费配置 -->
         <div v-if="createForm.platform === 'grok'" class="border-t pt-4">
-          <label class="mb-2 block font-medium text-gray-700 dark:text-gray-300">
+          <h4 class="mb-2 font-medium text-gray-700 dark:text-gray-300">
             {{ t("admin.groups.videoPricing.title") }}
-          </label>
+          </h4>
           <p class="mb-3 text-xs text-gray-500 dark:text-gray-400">
             {{ t("admin.groups.videoPricing.description") }}
           </p>
-          <label class="mb-4 flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-            <input v-model="createForm.video_rate_independent" type="checkbox" class="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
+          <label class="mb-4 flex min-h-11 cursor-pointer items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+            <input
+              v-model="createForm.video_rate_independent"
+              type="checkbox"
+              class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
             {{ t("admin.groups.videoPricing.independentMultiplier") }}
           </label>
           <div v-if="createForm.video_rate_independent" class="mb-4">
-            <label class="input-label">{{ t("admin.groups.videoPricing.videoMultiplier") }}</label>
+            <label for="create-grok-video-multiplier" class="input-label">{{ t("admin.groups.videoPricing.videoMultiplier") }}</label>
             <input
+              id="create-grok-video-multiplier"
               v-model.number="createForm.video_rate_multiplier"
               type="number"
               step="0.0001"
@@ -924,14 +929,141 @@
               placeholder="1"
             />
           </div>
+          <h5 class="mb-1 text-sm font-medium text-gray-700 dark:text-gray-300">
+            {{ t("admin.groups.videoPricing.modelOverrides") }}
+          </h5>
+          <p class="mb-3 text-xs text-gray-500 dark:text-gray-400">
+            {{ t("admin.groups.videoPricing.modelOverridesHint") }}
+          </p>
+          <div class="space-y-3">
+            <section
+              v-for="family in GROK_VIDEO_MODEL_FAMILIES"
+              :key="family"
+              class="min-w-0 rounded-lg border border-gray-200 p-3 dark:border-dark-500"
+            >
+              <h6 class="break-words text-sm font-medium text-gray-800 dark:text-gray-200">
+                {{ grokVideoModelLabel(family) }}
+              </h6>
+              <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div v-for="resolution in GROK_VIDEO_RESOLUTIONS" :key="resolution" class="min-w-0">
+                  <label
+                    :for="`create-video-${family}-${resolution}`"
+                    class="input-label"
+                  >
+                    {{ resolution }} ($/s)
+                  </label>
+                  <input
+                    :id="`create-video-${family}-${resolution}`"
+                    v-model.number="createForm.video_model_prices[family][resolution]"
+                    type="number"
+                    inputmode="decimal"
+                    step="0.00000001"
+                    min="0"
+                    class="input min-w-0"
+                    :placeholder="t('admin.groups.videoPricing.inheritPricePlaceholder')"
+                  />
+                </div>
+              </div>
+            </section>
+          </div>
+          <h5 class="mb-1 mt-4 text-sm font-medium text-gray-700 dark:text-gray-300">
+            {{ t("admin.groups.videoPricing.legacyFallback") }}
+          </h5>
+          <p class="mb-3 text-xs text-gray-500 dark:text-gray-400">
+            {{ t("admin.groups.videoPricing.legacyFallbackHint") }}
+          </p>
           <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <div><label class="input-label">480p ($/s)</label><input v-model.number="createForm.video_price_480p" type="number" step="0.001" min="0" class="input" :placeholder="t('admin.groups.videoPricing.defaultPricePlaceholder')" /></div>
-            <div><label class="input-label">720p ($/s)</label><input v-model.number="createForm.video_price_720p" type="number" step="0.001" min="0" class="input" :placeholder="t('admin.groups.videoPricing.defaultPricePlaceholder')" /></div>
-            <div><label class="input-label">1080p ($/s)</label><input v-model.number="createForm.video_price_1080p" type="number" step="0.001" min="0" class="input" :placeholder="t('admin.groups.videoPricing.defaultPricePlaceholder')" /></div>
+            <div class="min-w-0"><label for="create-video-legacy-480p" class="input-label">480p ($/s)</label><input id="create-video-legacy-480p" v-model.number="createForm.video_price_480p" type="number" inputmode="decimal" step="0.001" min="0" class="input min-w-0" :placeholder="t('admin.groups.videoPricing.defaultPricePlaceholder')" /></div>
+            <div class="min-w-0"><label for="create-video-legacy-720p" class="input-label">720p ($/s)</label><input id="create-video-legacy-720p" v-model.number="createForm.video_price_720p" type="number" inputmode="decimal" step="0.001" min="0" class="input min-w-0" :placeholder="t('admin.groups.videoPricing.defaultPricePlaceholder')" /></div>
+            <div class="min-w-0"><label for="create-video-legacy-1080p" class="input-label">1080p ($/s)</label><input id="create-video-legacy-1080p" v-model.number="createForm.video_price_1080p" type="number" inputmode="decimal" step="0.001" min="0" class="input min-w-0" :placeholder="t('admin.groups.videoPricing.defaultPricePlaceholder')" /></div>
           </div>
           <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">{{ t("admin.groups.videoPricing.modeHint") }}</p>
           <div class="mt-2 rounded-lg bg-gray-50 p-3 text-xs text-gray-700 dark:bg-gray-800 dark:text-gray-300">
             {{ t("admin.groups.videoPricing.finalPricePreview", { price: videoFinalPricePreview(createForm) }) }}
+          </div>
+        </div>
+
+        <!-- Grok 原生搜索计费 -->
+        <div v-if="createForm.platform === 'grok'" class="border-t pt-4">
+          <h4 class="mb-2 font-medium text-gray-700 dark:text-gray-300">
+            {{ t("admin.groups.grokSearchPricing.title") }}
+          </h4>
+          <label for="create-grok-search-price" class="input-label">
+            {{ t("admin.groups.grokSearchPricing.pricePer1K") }}
+          </label>
+          <input
+            id="create-grok-search-price"
+            v-model.number="createForm.search_price_per_1k"
+            type="number"
+            inputmode="decimal"
+            step="0.00000001"
+            min="0"
+            class="input"
+            :placeholder="t('admin.groups.pricing.unconfiguredPlaceholder')"
+            aria-describedby="create-grok-search-price-hint"
+          />
+          <p id="create-grok-search-price-hint" class="input-hint">
+            {{ t("admin.groups.grokSearchPricing.hint") }}
+          </p>
+        </div>
+
+        <!-- Grok 音频计费 -->
+        <div v-if="createForm.platform === 'grok'" class="border-t pt-4">
+          <h4 class="mb-2 font-medium text-gray-700 dark:text-gray-300">
+            {{ t("admin.groups.grokAudioPricing.title") }}
+          </h4>
+          <p id="create-grok-audio-price-hint" class="mb-3 text-xs text-gray-500 dark:text-gray-400">
+            {{ t("admin.groups.grokAudioPricing.hint") }}
+          </p>
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div class="min-w-0">
+              <label for="create-grok-audio-realtime" class="input-label">
+                {{ t("admin.groups.grokAudioPricing.realtimePerMin") }}
+              </label>
+              <input
+                id="create-grok-audio-realtime"
+                v-model.number="createForm.audio_realtime_price_per_min"
+                type="number"
+                inputmode="decimal"
+                step="0.00000001"
+                min="0"
+                class="input min-w-0"
+                :placeholder="t('admin.groups.pricing.unconfiguredPlaceholder')"
+                aria-describedby="create-grok-audio-price-hint"
+              />
+            </div>
+            <div class="min-w-0">
+              <label for="create-grok-audio-tts" class="input-label">
+                {{ t("admin.groups.grokAudioPricing.ttsPerMillionChars") }}
+              </label>
+              <input
+                id="create-grok-audio-tts"
+                v-model.number="createForm.audio_tts_price_per_million_chars"
+                type="number"
+                inputmode="decimal"
+                step="0.00000001"
+                min="0"
+                class="input min-w-0"
+                :placeholder="t('admin.groups.pricing.unconfiguredPlaceholder')"
+                aria-describedby="create-grok-audio-price-hint"
+              />
+            </div>
+            <div class="min-w-0">
+              <label for="create-grok-audio-stt" class="input-label">
+                {{ t("admin.groups.grokAudioPricing.sttPerHour") }}
+              </label>
+              <input
+                id="create-grok-audio-stt"
+                v-model.number="createForm.audio_stt_price_per_hour"
+                type="number"
+                inputmode="decimal"
+                step="0.00000001"
+                min="0"
+                class="input min-w-0"
+                :placeholder="t('admin.groups.pricing.unconfiguredPlaceholder')"
+                aria-describedby="create-grok-audio-price-hint"
+              />
+            </div>
           </div>
         </div>
 
@@ -2094,19 +2226,24 @@
 
         <!-- Grok 视频生成按秒计费配置 -->
         <div v-if="editForm.platform === 'grok'" class="border-t pt-4">
-          <label class="mb-2 block font-medium text-gray-700 dark:text-gray-300">
+          <h4 class="mb-2 font-medium text-gray-700 dark:text-gray-300">
             {{ t("admin.groups.videoPricing.title") }}
-          </label>
+          </h4>
           <p class="mb-3 text-xs text-gray-500 dark:text-gray-400">
             {{ t("admin.groups.videoPricing.description") }}
           </p>
-          <label class="mb-4 flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-            <input v-model="editForm.video_rate_independent" type="checkbox" class="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
+          <label class="mb-4 flex min-h-11 cursor-pointer items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+            <input
+              v-model="editForm.video_rate_independent"
+              type="checkbox"
+              class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
             {{ t("admin.groups.videoPricing.independentMultiplier") }}
           </label>
           <div v-if="editForm.video_rate_independent" class="mb-4">
-            <label class="input-label">{{ t("admin.groups.videoPricing.videoMultiplier") }}</label>
+            <label for="edit-grok-video-multiplier" class="input-label">{{ t("admin.groups.videoPricing.videoMultiplier") }}</label>
             <input
+              id="edit-grok-video-multiplier"
               v-model.number="editForm.video_rate_multiplier"
               type="number"
               step="0.0001"
@@ -2116,14 +2253,141 @@
               placeholder="1"
             />
           </div>
+          <h5 class="mb-1 text-sm font-medium text-gray-700 dark:text-gray-300">
+            {{ t("admin.groups.videoPricing.modelOverrides") }}
+          </h5>
+          <p class="mb-3 text-xs text-gray-500 dark:text-gray-400">
+            {{ t("admin.groups.videoPricing.modelOverridesHint") }}
+          </p>
+          <div class="space-y-3">
+            <section
+              v-for="family in GROK_VIDEO_MODEL_FAMILIES"
+              :key="family"
+              class="min-w-0 rounded-lg border border-gray-200 p-3 dark:border-dark-500"
+            >
+              <h6 class="break-words text-sm font-medium text-gray-800 dark:text-gray-200">
+                {{ grokVideoModelLabel(family) }}
+              </h6>
+              <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div v-for="resolution in GROK_VIDEO_RESOLUTIONS" :key="resolution" class="min-w-0">
+                  <label
+                    :for="`edit-video-${family}-${resolution}`"
+                    class="input-label"
+                  >
+                    {{ resolution }} ($/s)
+                  </label>
+                  <input
+                    :id="`edit-video-${family}-${resolution}`"
+                    v-model.number="editForm.video_model_prices[family][resolution]"
+                    type="number"
+                    inputmode="decimal"
+                    step="0.00000001"
+                    min="0"
+                    class="input min-w-0"
+                    :placeholder="t('admin.groups.videoPricing.inheritPricePlaceholder')"
+                  />
+                </div>
+              </div>
+            </section>
+          </div>
+          <h5 class="mb-1 mt-4 text-sm font-medium text-gray-700 dark:text-gray-300">
+            {{ t("admin.groups.videoPricing.legacyFallback") }}
+          </h5>
+          <p class="mb-3 text-xs text-gray-500 dark:text-gray-400">
+            {{ t("admin.groups.videoPricing.legacyFallbackHint") }}
+          </p>
           <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <div><label class="input-label">480p ($/s)</label><input v-model.number="editForm.video_price_480p" type="number" step="0.001" min="0" class="input" :placeholder="t('admin.groups.videoPricing.defaultPricePlaceholder')" /></div>
-            <div><label class="input-label">720p ($/s)</label><input v-model.number="editForm.video_price_720p" type="number" step="0.001" min="0" class="input" :placeholder="t('admin.groups.videoPricing.defaultPricePlaceholder')" /></div>
-            <div><label class="input-label">1080p ($/s)</label><input v-model.number="editForm.video_price_1080p" type="number" step="0.001" min="0" class="input" :placeholder="t('admin.groups.videoPricing.defaultPricePlaceholder')" /></div>
+            <div class="min-w-0"><label for="edit-video-legacy-480p" class="input-label">480p ($/s)</label><input id="edit-video-legacy-480p" v-model.number="editForm.video_price_480p" type="number" inputmode="decimal" step="0.001" min="0" class="input min-w-0" :placeholder="t('admin.groups.videoPricing.defaultPricePlaceholder')" /></div>
+            <div class="min-w-0"><label for="edit-video-legacy-720p" class="input-label">720p ($/s)</label><input id="edit-video-legacy-720p" v-model.number="editForm.video_price_720p" type="number" inputmode="decimal" step="0.001" min="0" class="input min-w-0" :placeholder="t('admin.groups.videoPricing.defaultPricePlaceholder')" /></div>
+            <div class="min-w-0"><label for="edit-video-legacy-1080p" class="input-label">1080p ($/s)</label><input id="edit-video-legacy-1080p" v-model.number="editForm.video_price_1080p" type="number" inputmode="decimal" step="0.001" min="0" class="input min-w-0" :placeholder="t('admin.groups.videoPricing.defaultPricePlaceholder')" /></div>
           </div>
           <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">{{ t("admin.groups.videoPricing.modeHint") }}</p>
           <div class="mt-2 rounded-lg bg-gray-50 p-3 text-xs text-gray-700 dark:bg-gray-800 dark:text-gray-300">
             {{ t("admin.groups.videoPricing.finalPricePreview", { price: videoFinalPricePreview(editForm) }) }}
+          </div>
+        </div>
+
+        <!-- Grok 原生搜索计费 -->
+        <div v-if="editForm.platform === 'grok'" class="border-t pt-4">
+          <h4 class="mb-2 font-medium text-gray-700 dark:text-gray-300">
+            {{ t("admin.groups.grokSearchPricing.title") }}
+          </h4>
+          <label for="edit-grok-search-price" class="input-label">
+            {{ t("admin.groups.grokSearchPricing.pricePer1K") }}
+          </label>
+          <input
+            id="edit-grok-search-price"
+            v-model.number="editForm.search_price_per_1k"
+            type="number"
+            inputmode="decimal"
+            step="0.00000001"
+            min="0"
+            class="input"
+            :placeholder="t('admin.groups.pricing.unconfiguredPlaceholder')"
+            aria-describedby="edit-grok-search-price-hint"
+          />
+          <p id="edit-grok-search-price-hint" class="input-hint">
+            {{ t("admin.groups.grokSearchPricing.hint") }}
+          </p>
+        </div>
+
+        <!-- Grok 音频计费 -->
+        <div v-if="editForm.platform === 'grok'" class="border-t pt-4">
+          <h4 class="mb-2 font-medium text-gray-700 dark:text-gray-300">
+            {{ t("admin.groups.grokAudioPricing.title") }}
+          </h4>
+          <p id="edit-grok-audio-price-hint" class="mb-3 text-xs text-gray-500 dark:text-gray-400">
+            {{ t("admin.groups.grokAudioPricing.hint") }}
+          </p>
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div class="min-w-0">
+              <label for="edit-grok-audio-realtime" class="input-label">
+                {{ t("admin.groups.grokAudioPricing.realtimePerMin") }}
+              </label>
+              <input
+                id="edit-grok-audio-realtime"
+                v-model.number="editForm.audio_realtime_price_per_min"
+                type="number"
+                inputmode="decimal"
+                step="0.00000001"
+                min="0"
+                class="input min-w-0"
+                :placeholder="t('admin.groups.pricing.unconfiguredPlaceholder')"
+                aria-describedby="edit-grok-audio-price-hint"
+              />
+            </div>
+            <div class="min-w-0">
+              <label for="edit-grok-audio-tts" class="input-label">
+                {{ t("admin.groups.grokAudioPricing.ttsPerMillionChars") }}
+              </label>
+              <input
+                id="edit-grok-audio-tts"
+                v-model.number="editForm.audio_tts_price_per_million_chars"
+                type="number"
+                inputmode="decimal"
+                step="0.00000001"
+                min="0"
+                class="input min-w-0"
+                :placeholder="t('admin.groups.pricing.unconfiguredPlaceholder')"
+                aria-describedby="edit-grok-audio-price-hint"
+              />
+            </div>
+            <div class="min-w-0">
+              <label for="edit-grok-audio-stt" class="input-label">
+                {{ t("admin.groups.grokAudioPricing.sttPerHour") }}
+              </label>
+              <input
+                id="edit-grok-audio-stt"
+                v-model.number="editForm.audio_stt_price_per_hour"
+                type="number"
+                inputmode="decimal"
+                step="0.00000001"
+                min="0"
+                class="input min-w-0"
+                :placeholder="t('admin.groups.pricing.unconfiguredPlaceholder')"
+                aria-describedby="edit-grok-audio-price-hint"
+              />
+            </div>
           </div>
         </div>
 
@@ -3253,7 +3517,10 @@ import {
   type MessagesDispatchMappingRow,
 } from "./groupsMessagesDispatch";
 import {
+  createEmptyGrokVideoModelPricingForm,
   formatVideoPricePreview,
+  GROK_VIDEO_MODEL_FAMILIES,
+  GROK_VIDEO_RESOLUTIONS,
   normalizeGroupPricingPayload,
   resetInactivePlatformPricing,
   type GroupPricingValidationError,
@@ -3674,7 +3941,12 @@ const createForm = reactive({
   video_price_480p: null as number | null,
   video_price_720p: null as number | null,
   video_price_1080p: null as number | null,
+  video_model_prices: createEmptyGrokVideoModelPricingForm(),
   web_search_price_per_call: null as number | null,
+  search_price_per_1k: null as number | null,
+  audio_realtime_price_per_min: null as number | null,
+  audio_tts_price_per_million_chars: null as number | null,
+  audio_stt_price_per_hour: null as number | null,
   // Claude Code 客户端限制（仅 anthropic 平台使用）
   claude_code_only: false,
   fallback_group_id: null as number | null,
@@ -3968,7 +4240,12 @@ const editForm = reactive({
   video_price_480p: null as number | null,
   video_price_720p: null as number | null,
   video_price_1080p: null as number | null,
+  video_model_prices: createEmptyGrokVideoModelPricingForm(),
   web_search_price_per_call: null as number | null,
+  search_price_per_1k: null as number | null,
+  audio_realtime_price_per_min: null as number | null,
+  audio_tts_price_per_million_chars: null as number | null,
+  audio_stt_price_per_hour: null as number | null,
   // Claude Code 客户端限制（仅 anthropic 平台使用）
   claude_code_only: false,
   fallback_group_id: null as number | null,
@@ -4307,7 +4584,12 @@ const closeCreateModal = () => {
   createForm.video_price_480p = null;
   createForm.video_price_720p = null;
   createForm.video_price_1080p = null;
+  createForm.video_model_prices = createEmptyGrokVideoModelPricingForm();
   createForm.web_search_price_per_call = null;
+  createForm.search_price_per_1k = null;
+  createForm.audio_realtime_price_per_min = null;
+  createForm.audio_tts_price_per_million_chars = null;
+  createForm.audio_stt_price_per_hour = null;
   createForm.claude_code_only = false;
   createForm.fallback_group_id = null;
   createForm.fallback_group_id_on_invalid_request = null;
@@ -4366,6 +4648,13 @@ const videoFinalPricePreview = (form: Parameters<typeof formatVideoPricePreview>
     t("admin.groups.videoPricing.serverModelDefault"),
   );
 
+const grokVideoModelLabel = (
+  family: (typeof GROK_VIDEO_MODEL_FAMILIES)[number],
+): string =>
+  family === "grok-imagine-video-1.5"
+    ? t("admin.groups.videoPricing.models.grokImagineVideo15")
+    : t("admin.groups.videoPricing.models.grokImagineVideo");
+
 const webSearchFinalPrice = (form: { rate_multiplier: number | string; web_search_price_per_call: number | string | null }) =>
   formatPreviewPrice(previewPrice(form.web_search_price_per_call, DEFAULT_WEB_SEARCH_PRICE) * previewNumber(form.rate_multiplier, 1));
 
@@ -4377,6 +4666,12 @@ const groupPricingValidationMessage = (
       return t("admin.groups.videoPricing.invalidMultiplier");
     case "invalid_video_price":
       return t("admin.groups.videoPricing.invalidPrice");
+    case "invalid_video_model_price":
+      return t("admin.groups.videoPricing.invalidModelPrice");
+    case "invalid_grok_search_price":
+      return t("admin.groups.grokSearchPricing.invalidPrice");
+    case "invalid_grok_audio_price":
+      return t("admin.groups.grokAudioPricing.invalidPrice");
     case "invalid_web_search_price":
       return t("admin.groups.webSearchPricing.invalidPrice");
   }
@@ -4578,7 +4873,16 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.video_price_480p = group.video_price_480p ?? null;
   editForm.video_price_720p = group.video_price_720p ?? null;
   editForm.video_price_1080p = group.video_price_1080p ?? null;
+  editForm.video_model_prices = createEmptyGrokVideoModelPricingForm(
+    group.video_model_prices,
+  );
   editForm.web_search_price_per_call = group.web_search_price_per_call ?? null;
+  editForm.search_price_per_1k = group.search_price_per_1k ?? null;
+  editForm.audio_realtime_price_per_min =
+    group.audio_realtime_price_per_min ?? null;
+  editForm.audio_tts_price_per_million_chars =
+    group.audio_tts_price_per_million_chars ?? null;
+  editForm.audio_stt_price_per_hour = group.audio_stt_price_per_hour ?? null;
   editForm.claude_code_only = group.claude_code_only || false;
   editForm.fallback_group_id = group.fallback_group_id;
   editForm.fallback_group_id_on_invalid_request =
@@ -4631,7 +4935,12 @@ const closeEditModal = () => {
   editForm.video_price_480p = null;
   editForm.video_price_720p = null;
   editForm.video_price_1080p = null;
+  editForm.video_model_prices = createEmptyGrokVideoModelPricingForm();
   editForm.web_search_price_per_call = null;
+  editForm.search_price_per_1k = null;
+  editForm.audio_realtime_price_per_min = null;
+  editForm.audio_tts_price_per_million_chars = null;
+  editForm.audio_stt_price_per_hour = null;
   resetMessagesDispatchFormState(editForm);
 };
 

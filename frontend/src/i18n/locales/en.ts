@@ -4052,20 +4052,54 @@ export default {
         description:
           "Configure pricing for image generation models. Leave empty to use default prices.",
       },
+      pricing: {
+        unconfiguredPlaceholder: "Not configured",
+      },
       videoPricing: {
         title: "Grok Video Pricing",
         description:
-          "Configure USD-per-second prices. Leave empty to use the server default for the requested model.",
+          "Configure USD-per-second prices. Model-family prices take priority, then legacy resolution prices, then server model defaults. Enter 0 to make a tier free.",
         independentMultiplier: "Use an independent video multiplier",
         videoMultiplier: "Video multiplier",
         modeHint: "When disabled, the group multiplier is used.",
-        finalPricePreview: "Per-second preview: {price}",
+        modelOverrides: "Model-family prices",
+        modelOverridesHint:
+          "Only enter the model and resolution tiers you want to override. Blank tiers inherit the legacy price or server default below.",
+        models: {
+          grokImagineVideo: "Grok Imagine Video",
+          grokImagineVideo15: "Grok Imagine Video 1.5",
+        },
+        inheritPricePlaceholder: "Inherit legacy price",
+        legacyFallback: "Legacy resolution fallback",
+        legacyFallbackHint:
+          "Used when a model-family tier is not configured. Blank values use the server default for the requested model.",
+        finalPricePreview: "Legacy price preview: {price}",
         serverModelDefault: "use server model default",
         defaultPricePlaceholder: "Server default",
         invalidMultiplier:
           "The video multiplier must be a finite number greater than 0.",
         invalidPrice:
           "Video prices must be finite numbers greater than or equal to 0.",
+        invalidModelPrice:
+          "Model-family video prices must be finite numbers greater than or equal to 0.",
+      },
+      grokSearchPricing: {
+        title: "Grok Native Search Pricing",
+        pricePer1K: "Price per 1,000 searches (USD)",
+        hint:
+          "Blank means not configured and disables Grok search. Enter 0 for free searches. The group multiplier is applied to the actual charge.",
+        invalidPrice:
+          "The Grok search price must be a finite number greater than or equal to 0.",
+      },
+      grokAudioPricing: {
+        title: "Grok Audio Pricing",
+        hint:
+          "A blank field means that audio capability is not configured and unavailable. Enter 0 to make it free. The group multiplier is applied to the actual charge.",
+        realtimePerMin: "Realtime (USD/minute)",
+        ttsPerMillionChars: "TTS (USD/million chars)",
+        sttPerHour: "STT (USD/hour)",
+        invalidPrice:
+          "Audio prices must be finite numbers greater than or equal to 0.",
       },
       webSearchPricing: {
         title: "Codex Web Search Per-Call Pricing",
@@ -5114,6 +5148,16 @@ export default {
       duplicateAccount: "Duplicate Account",
       duplicateSuccess: 'Created "{name}" in a paused state. Review it before enabling scheduling.',
       duplicateFailed: "Failed to duplicate account",
+      fallbackActive: "Proxy fallback active",
+      fallbackActiveTip:
+        "The original proxy {origin} expired and this account was rerouted by its fallback policy.",
+      revertProxy: "Revert to original",
+      revertingProxy: "Reverting...",
+      revertProxyTitle: "Revert to Original Proxy",
+      revertProxyConfirm:
+        'Revert account "{name}" to its original proxy {origin}? Proxy status, visibility, and capacity will be validated again.',
+      revertProxySuccess: "Account reverted to its original proxy",
+      revertProxyFailed: "Failed to revert to the original proxy",
       autoRefresh: "Auto Refresh",
       enableAutoRefresh: "Enable auto refresh",
       refreshInterval5s: "5 seconds",
@@ -5334,6 +5378,7 @@ export default {
       status: {
         active: "Active",
         inactive: "Inactive",
+        expired: "Expired",
         disabled: "Disabled",
         error: "Error",
         cooldown: "Cooldown",
@@ -6149,6 +6194,30 @@ export default {
           refreshTokenAuth: "Manual RT Input",
           mobileRefreshTokenAuth: "Manual Mobile RT Input",
           accessTokenAuth: "Manual AT Input",
+          codexSessionAuth: "Codex OAuth auth.json / AT Import",
+          codexSessionDesc:
+            "Paste an upstream-compatible Codex OAuth auth.json, access token, or mixed batch content. Accounts use the settings from step 1.",
+          codexSessionInputLabel: "Codex OAuth auth.json or Access Token",
+          codexSessionPlaceholder:
+            "Supports auth.json, JSON arrays, JSON streams, or one access token per line",
+          codexSessionHint:
+            "This entry follows upstream Codex import semantics. Existing RT, AT, and PAT entry points remain unchanged.",
+          codexSessionImportAndCreate: "Import Codex Accounts",
+          codexSessionEmpty: "Please enter a Codex auth.json or access token",
+          codexSessionImportFailed: "Failed to import Codex accounts",
+          codexSessionImportSuccess:
+            "Import completed: created {created}, updated {updated}, skipped {skipped}",
+          codexSessionImportPartial:
+            "Partial success: created {created}, updated {updated}, skipped {skipped}, failed {failed}",
+          agentIdentityAuth: "Agent Identity auth.json",
+          agentIdentityDesc:
+            "Import a Codex Agent Identity auth.json. No OAuth access or refresh token is stored.",
+          agentIdentityInputLabel: "Agent Identity auth.json",
+          agentIdentityPlaceholder: "Paste one Agent Identity auth.json object",
+          agentIdentityHint:
+            "The file must use auth_mode=agentIdentity. Upstream requests are signed dynamically.",
+          agentIdentityInvalid:
+            "Use a Codex auth.json with auth_mode=agentIdentity.",
           codexPatAuth: "Codex Personal Access Token",
           codexPatDesc: "Enter one Codex at- personal access token. The system validates it with OpenAI whoami and creates the account from trusted identity data.",
           codexPatInputLabel: "Codex PAT",
@@ -6316,6 +6385,20 @@ export default {
             "One SSO key per line\nSupports multiple, one per line",
           ssoCookieHint:
             "One SSO key per line. Multiple keys are imported with 3-way concurrency; expect about 90 seconds per batch. Use a matching-region proxy if needed.",
+          emailPasswordAuth: "Email and Password",
+          emailPasswordDesc:
+            "Use an xAI account email and password for one-time authorization. This capability is disabled by default and appears only when an administrator explicitly enables it.",
+          emailLabel: "xAI Account Email",
+          emailPlaceholder: "name@example.com",
+          passwordLabel: "xAI Account Password",
+          passwordPlaceholder: "Enter the account password",
+          emailPasswordPrivacyHint:
+            "The password is used only for this authorization request and is never written to credentials, Extra, or logs. The intermediate SSO cookie is not persisted either.",
+          authorizingPassword: "Authorizing...",
+          authorizePassword: "Sign In and Authorize",
+          emailPasswordRequired: "Enter both email and password",
+          passwordAuthDisabled: "Grok password authorization is not enabled",
+          failedToAuthorizePassword: "Grok password authorization failed",
           convertingSSO: "Converting...",
           convertSSOAndCreate: "Convert & Create Account",
           validating: "Validating...",
@@ -6323,6 +6406,8 @@ export default {
           pleaseEnterRefreshToken: "Please enter Refresh Token",
           failedToValidateRT: "Failed to validate Refresh Token",
           failedToConvertSSO: "Failed to convert Grok SSO cookie",
+          pleaseEnterSSOToken: "Enter an SSO cookie",
+          failedToValidateSSO: "Failed to validate the Grok SSO cookie",
           errors: {
             GROK_OAUTH_SESSION_NOT_FOUND:
               "The authorization session was not found or has expired. Generate a new authorization URL and try again.",
@@ -6338,6 +6423,20 @@ export default {
               "No available proxy can complete Grok authorization. Check the account proxy configuration.",
             GROK_OAUTH_PROXY_NOT_FOUND:
               "The configured proxy was not found. Select an available proxy and try again.",
+            GROK_OAUTH_PASSWORD_AUTH_DISABLED:
+              "Grok password authorization is disabled by default. An administrator must explicitly enable it in server configuration.",
+            GROK_OAUTH_PASSWORD_CLIENT_UNAVAILABLE:
+              "The Grok password authorization client has not been configured.",
+            GROK_OAUTH_CAPTCHA_KEY_REQUIRED:
+              "Grok password authorization requires a configured captcha service key.",
+            GROK_OAUTH_CAPTCHA_FAILED:
+              "The captcha service is temporarily unavailable. Try again later.",
+            GROK_OAUTH_CAPTCHA_TIMEOUT:
+              "Captcha processing timed out. Try again later.",
+            GROK_OAUTH_PASSWORD_LOGIN_FAILED:
+              "xAI password login failed. Check the account, password, proxy, and captcha service configuration.",
+            GROK_OAUTH_EMAIL_REQUIRED: "Enter the xAI account email.",
+            GROK_OAUTH_PASSWORD_REQUIRED: "Enter the xAI account password.",
           },
         },
       }, // Gemini specific (platform-wide)
@@ -6816,6 +6915,7 @@ export default {
         status: "Status",
         accounts: "Accounts",
         latency: "Latency",
+        expiry: "Expiry",
         actions: "Actions",
       },
       testConnection: "Test Connection",
@@ -6852,6 +6952,41 @@ export default {
       maxAccountsPlaceholder: "0 means unlimited",
       maxAccountsHint:
         "Limits how many accounts can bind to this IP. 0 means no binding limit.",
+      lifecycleTitle: "Expiry and Fallback",
+      expiresAt: "Expires At",
+      expiresAtHint: "Leave unset for no expiry. Set values are precise to the minute.",
+      expiresAtEditHint:
+        "Keep omits this field, clear removes the expiry, and set writes a new expiry time.",
+      expiresAtCurrent: "Unchanged in this edit. Current expiry: {time}",
+      expiresAtInvalid: "Enter a valid expiry time",
+      expiryModeNone: "No expiry",
+      expiryModeKeep: "Keep current setting",
+      expiryModeClear: "Clear expiry",
+      expiryModeSet: "Set expiry time",
+      expiryWarnDays: "Advance warning days",
+      expiryWarnDaysHint:
+        "Enter a non-negative integer. Use 0 to disable advance warnings.",
+      expiryWarnDaysInvalid: "Advance warning days must be a non-negative integer",
+      fallbackMode: "Action on expiry",
+      fallbackModeHint:
+        "None leaves accounts unchanged, direct removes their proxy, and backup reroutes them to another proxy.",
+      fallbackNone: "Do not reroute",
+      fallbackDirect: "Switch to direct",
+      fallbackProxy: "Use backup proxy",
+      backupProxy: "Backup Proxy",
+      backupProxyPlaceholder: "Select a backup proxy",
+      backupProxyEmpty:
+        "No active proxy matches this owner, platform, and account-level scope",
+      backupProxyHint:
+        "Only active proxies with the same owner boundary and a compatible platform/account-level scope are shown.",
+      backupProxyRequired: "Select a backup proxy when backup fallback is enabled",
+      backupProxyLoadFailed: "Failed to load backup proxy candidates",
+      backupProxyById: "Proxy #{id}",
+      neverExpires: "Never expires",
+      expired: "Expired",
+      overdueDays: "Overdue by {days} days",
+      expiringInDays: "Expires in {days} days",
+      remainingDays: "{days} days remaining",
       platform: "Platform",
       platformUniversal: "Universal (all platforms)",
       platformHint: "Which platform this proxy belongs to; a universal proxy is available to all platforms.",
@@ -8007,6 +8142,8 @@ export default {
             "Error Accounts (excluding temporarily unschedulable)",
           accountErrorRatio: "Error Account Ratio (%)",
           overloadAccountCount: "Overloaded Accounts",
+          proxyExpiredCount: "Expired Proxies",
+          proxyExpiringSoonCount: "Proxies Expiring Soon",
         },
         metricDescriptions: {
           successRate:
@@ -8033,6 +8170,9 @@ export default {
           accountErrorRatio: "Error account ratio within the window (0-100).",
           overloadAccountCount:
             "Number of overloaded accounts within the window.",
+          proxyExpiredCount: "Current number of proxies marked as expired.",
+          proxyExpiringSoonCount:
+            "Current number of active proxies inside their individual expiry warning window.",
         },
         hints: {
           recommended:
