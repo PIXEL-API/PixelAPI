@@ -35,11 +35,12 @@ func TestProxyRepoSuite(t *testing.T) {
 
 func (s *ProxyRepoSuite) TestCreate() {
 	proxy := &service.Proxy{
-		Name:     "test-create",
-		Protocol: "http",
-		Host:     "127.0.0.1",
-		Port:     8080,
-		Status:   service.StatusActive,
+		Name:         "test-create",
+		Protocol:     "http",
+		Host:         "127.0.0.1",
+		Port:         8080,
+		Status:       service.StatusActive,
+		FallbackMode: service.FallbackModeNone,
 	}
 
 	err := s.repo.Create(s.ctx, proxy)
@@ -58,11 +59,12 @@ func (s *ProxyRepoSuite) TestGetByID_NotFound() {
 
 func (s *ProxyRepoSuite) TestUpdate() {
 	proxy := &service.Proxy{
-		Name:     "original",
-		Protocol: "http",
-		Host:     "127.0.0.1",
-		Port:     8080,
-		Status:   service.StatusActive,
+		Name:         "original",
+		Protocol:     "http",
+		Host:         "127.0.0.1",
+		Port:         8080,
+		Status:       service.StatusActive,
+		FallbackMode: service.FallbackModeNone,
 	}
 	s.Require().NoError(s.repo.Create(s.ctx, proxy))
 
@@ -77,11 +79,12 @@ func (s *ProxyRepoSuite) TestUpdate() {
 
 func (s *ProxyRepoSuite) TestDelete() {
 	proxy := &service.Proxy{
-		Name:     "to-delete",
-		Protocol: "http",
-		Host:     "127.0.0.1",
-		Port:     8080,
-		Status:   service.StatusActive,
+		Name:         "to-delete",
+		Protocol:     "http",
+		Host:         "127.0.0.1",
+		Port:         8080,
+		Status:       service.StatusActive,
+		FallbackMode: service.FallbackModeNone,
 	}
 	s.Require().NoError(s.repo.Create(s.ctx, proxy))
 
@@ -291,6 +294,9 @@ func (s *ProxyRepoSuite) TestExistsByHostPortAuth_And_AccountCountAggregates() {
 
 func (s *ProxyRepoSuite) mustCreateProxy(p *service.Proxy) *service.Proxy {
 	s.T().Helper()
+	if p.FallbackMode == "" {
+		p.FallbackMode = service.FallbackModeNone
+	}
 	s.Require().NoError(s.repo.Create(s.ctx, p), "create proxy")
 	return p
 }

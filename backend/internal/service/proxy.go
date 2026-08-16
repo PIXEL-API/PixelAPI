@@ -17,14 +17,6 @@ const (
 	FallbackModeDirect = "direct"
 )
 
-// NormalizeProxyFallbackMode 归一化代理到期回退模式，空值归一为 none（与库表默认一致）。
-func NormalizeProxyFallbackMode(mode string) string {
-	if normalized := strings.ToLower(strings.TrimSpace(mode)); normalized != "" {
-		return normalized
-	}
-	return FallbackModeNone
-}
-
 type Proxy struct {
 	ID       int64
 	Name     string
