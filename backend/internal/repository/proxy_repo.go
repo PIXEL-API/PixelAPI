@@ -47,7 +47,7 @@ func (r *proxyRepository) Create(ctx context.Context, proxyIn *service.Proxy) er
 		SetStatus(proxyIn.Status).
 		SetMaxAccounts(proxyIn.MaxAccounts).
 		SetNillableExpiresAt(proxyIn.ExpiresAt).
-		SetFallbackMode(proxyIn.FallbackMode).
+		SetFallbackMode(service.NormalizeProxyFallbackMode(proxyIn.FallbackMode)).
 		SetNillableBackupProxyID(proxyIn.BackupProxyID).
 		SetExpiryWarnDays(proxyIn.ExpiryWarnDays).
 		SetPlatform(service.NormalizeProxyPlatform(proxyIn.Platform)).
@@ -167,7 +167,7 @@ func (r *proxyRepository) updateWithClient(ctx context.Context, client *dbent.Cl
 		SetPort(proxyIn.Port).
 		SetStatus(proxyIn.Status).
 		SetMaxAccounts(proxyIn.MaxAccounts).
-		SetFallbackMode(proxyIn.FallbackMode).
+		SetFallbackMode(service.NormalizeProxyFallbackMode(proxyIn.FallbackMode)).
 		SetExpiryWarnDays(proxyIn.ExpiryWarnDays).
 		SetPlatform(service.NormalizeProxyPlatform(proxyIn.Platform)).
 		SetRequiredAccountLevel(service.NormalizeRequiredAccountLevel(proxyIn.RequiredAccountLevel))

@@ -67,28 +67,28 @@ const (
 	AccountShareModeSeatWaiverLateUsageLookback = 72 * time.Hour
 	// 由"迟到条目创建时间"推导"结算窗口终点下界"时的松弛量,
 	// 必须大于任何单请求的时长上限(现实上限 10 分钟)。
-	AccountShareModeSeatWaiverLateUsageSlack      = 24 * time.Hour
-	AccountShareModeSeatBillingInterval           = 15 * time.Second
-	AccountShareModeSeatBillingBatchSize          = 100
+	AccountShareModeSeatWaiverLateUsageSlack = 24 * time.Hour
+	AccountShareModeSeatBillingInterval      = 15 * time.Second
+	AccountShareModeSeatBillingBatchSize     = 100
 	// 孤儿 binding 清扫频率：低优先兜底 worker，处理历史遗留脏数据即可，不必高频。
 	AccountShareModeOrphanBindingCleanupInterval = 10 * time.Minute
 	// ending 结算超时兜底阈值：Redis lease 持续不可用时，超过该时长强制结算。
 	// 比在途 slot 的 TTL（默认 30 分钟）短，用户不必等满 slot 回收。
 	AccountShareModeEndSettlementForceTimeout = 10 * time.Minute
 	AccountShareModeJoinIntentTTL             = 2 * time.Minute
-	AccountShareModeEndMembershipTokenTTL         = 2 * time.Minute
-	AccountShareModeMaxIdleTimeoutMinutes         = 10080
-	AccountShareModeLastRequestTouchInterval      = 30 * time.Second
-	AccountShareModeRequestHeartbeatInterval      = 15 * time.Second
-	AccountShareModeMembershipTouchTimeout        = 5 * time.Second
-	AccountShareModeEditSessionTTL                = 10 * time.Minute
-	AccountShareModeQueueMaxItems                 = 5
-	AccountShareModeRoomQueueMinimum              = 20
-	AccountShareModeRoomQueueMaximum              = 100
-	AccountShareModeRoomQueuePerSeat              = 10
+	AccountShareModeEndMembershipTokenTTL     = 2 * time.Minute
+	AccountShareModeMaxIdleTimeoutMinutes     = 10080
+	AccountShareModeLastRequestTouchInterval  = 30 * time.Second
+	AccountShareModeRequestHeartbeatInterval  = 15 * time.Second
+	AccountShareModeMembershipTouchTimeout    = 5 * time.Second
+	AccountShareModeEditSessionTTL            = 10 * time.Minute
+	AccountShareModeQueueMaxItems             = 5
+	AccountShareModeRoomQueueMinimum          = 20
+	AccountShareModeRoomQueueMaximum          = 100
+	AccountShareModeRoomQueuePerSeat          = 10
 	// 排队成员的保留期限：入队/降级重排队后经过该时长仍未被激活则自动释放。
 	// 前端 queueIdleTimeoutSummary 的「预约最长保留 2 小时」文案与此对齐，改这里要同步改前端。
-	AccountShareModeQueueExpiryDuration = 2 * time.Hour
+	AccountShareModeQueueExpiryDuration           = 2 * time.Hour
 	AccountShareModeDispatchCooldown              = 5 * time.Minute
 	AccountShareModeConnectivityTestTimeout       = 90 * time.Second
 	AccountShareModeImageConnectivityTestTimeout  = 10 * time.Minute

@@ -565,8 +565,8 @@ func TestAllProfiles(t *testing.T) {
 			// 与 Node.js 24.x 仅差末尾 padding(21)。
 			// JA3 Hash: 50027c67d7d68e24c00d233bca146d88
 			// JA4: t13d1715h1_5b57614c22b0_7baf387fc6ff
-			Profile:    NewOpencodeProfile(),
-			ExpectedJA3: "50027c67d7d68e24c00d233bca146d88",
+			Profile:       NewOpencodeProfile(),
+			ExpectedJA3:   "50027c67d7d68e24c00d233bca146d88",
 			JA4CipherHash: "5b57614c22b0",
 		},
 		{

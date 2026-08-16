@@ -113,18 +113,18 @@ type antigravityUsageCache struct {
 }
 
 const (
-	apiCacheTTL             = 3 * time.Minute
-	apiErrorCacheTTL        = 1 * time.Minute        // 负缓存 TTL：429 等错误缓存 1 分钟
-	antigravityErrorTTL     = 1 * time.Minute        // Antigravity 错误缓存 TTL（可恢复错误）
-	apiQueryMaxJitter       = 800 * time.Millisecond // 用量查询最大随机延迟
-	windowStatsCacheTTL     = 1 * time.Minute
-	openAIProbeCacheTTL     = 10 * time.Minute
+	apiCacheTTL         = 3 * time.Minute
+	apiErrorCacheTTL    = 1 * time.Minute        // 负缓存 TTL：429 等错误缓存 1 分钟
+	antigravityErrorTTL = 1 * time.Minute        // Antigravity 错误缓存 TTL（可恢复错误）
+	apiQueryMaxJitter   = 800 * time.Millisecond // 用量查询最大随机延迟
+	windowStatsCacheTTL = 1 * time.Minute
+	openAIProbeCacheTTL = 10 * time.Minute
 	// opencodeUsageSyncProbeTimeout 是选号时同步刷新 opencode 用量窗口的超时上限。
 	// 同步拉取阻塞选号循环，超时要短；失败保留旧数据（fail-open），宁可短暂漏判一次，
 	// 也不让 usage 端点抖动拖垮选号。
 	opencodeUsageSyncProbeTimeout = 3 * time.Second
-	grokFreeQuotaWindow     = 24 * time.Hour
-	openAICodexProbeVersion = "0.144.1"
+	grokFreeQuotaWindow           = 24 * time.Hour
+	openAICodexProbeVersion       = "0.144.1"
 )
 
 // UsageCache 封装账户使用量相关的缓存

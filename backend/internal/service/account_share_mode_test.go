@@ -3748,8 +3748,8 @@ func TestAccountShareModeJoinIntentFlagsQueueWhenOtherRoomEnding(t *testing.T) {
 	}
 	revisionTerms := accountShareJoinTermsFromListing(listing, revisionID)
 	repo := &accountShareModeRepoStub{
-		listing:        listing,
-		revisionTerms:  &revisionTerms,
+		listing:       listing,
+		revisionTerms: &revisionTerms,
 		// 同一 key 在「其它房间」（ListingID=999）有退出结算中的 membership。
 		bindingMemberships: []AccountShareMembership{
 			{ID: 800, ListingID: 999, ConsumerUserID: 1, APIKeyID: 3, Status: AccountShareMembershipStatusEnding},

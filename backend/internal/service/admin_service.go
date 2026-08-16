@@ -3324,16 +3324,16 @@ var duplicateAccountDiscardedExtraKeys = map[string]struct{}{
 	"codex_7d_reset_at":                    {},
 
 	// opencode 订阅用量快照与额度派生窗口同样需从干净状态开始。
-	"opencode_5h_used_percent":      {},
-	"opencode_5h_reset_at":          {},
-	"opencode_5h_limit_percent":     {},
-	"opencode_7d_used_percent":      {},
-	"opencode_7d_reset_at":          {},
-	"opencode_7d_limit_percent":     {},
-	"opencode_30d_used_percent":     {},
-	"opencode_30d_reset_at":         {},
-	"opencode_30d_limit_percent":    {},
-	"opencode_usage_updated_at":     {},
+	"opencode_5h_used_percent":   {},
+	"opencode_5h_reset_at":       {},
+	"opencode_5h_limit_percent":  {},
+	"opencode_7d_used_percent":   {},
+	"opencode_7d_reset_at":       {},
+	"opencode_7d_limit_percent":  {},
+	"opencode_30d_used_percent":  {},
+	"opencode_30d_reset_at":      {},
+	"opencode_30d_limit_percent": {},
+	"opencode_usage_updated_at":  {},
 }
 
 func duplicateAccountExtra(value map[string]any) (map[string]any, error) {
