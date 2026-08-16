@@ -28,10 +28,10 @@ func CanonicalGrokImagineVideoPriceFamily(model string) string {
 			break
 		}
 	}
-	switch {
-	case model == "grok-imagine-video-1.5", model == "grok-imagine-video-1.5-preview", model == "grok-video-1.5":
+	switch model {
+	case "grok-imagine-video-1.5", "grok-imagine-video-1.5-preview", "grok-video-1.5":
 		return VideoPriceFamilyGrokImagineVideo15
-	case model == "grok-imagine-video", model == "grok-imagine-video-preview", model == "grok-video", model == "grok-video-latest":
+	case "grok-imagine-video", "grok-imagine-video-preview", "grok-video", "grok-video-latest":
 		return VideoPriceFamilyGrokImagineVideo
 	default:
 		return ""

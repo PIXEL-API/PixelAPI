@@ -71,7 +71,7 @@ type GrokProxyCredentialRecoveryBatchResult struct {
 	CleanupFailed int
 }
 
-var ErrGrokProxyCredentialRecoveryConflict = errors.New("Grok proxy credential recovery state changed during verification")
+var ErrGrokProxyCredentialRecoveryConflict = errors.New("grok proxy credential recovery state changed during verification")
 
 const TokenRefreshTempUnschedDuration = 10 * time.Minute
 
@@ -1938,21 +1938,21 @@ func (s *RateLimitService) recoverGrokProxyCredentialFailure(
 	account *Account,
 ) (*SuccessfulTestRecoveryResult, error) {
 	if s == nil || s.accountRepo == nil || account == nil {
-		return nil, errors.New("Grok proxy credential recovery is not configured")
+		return nil, errors.New("grok proxy credential recovery is not configured")
 	}
 	repo, ok := s.accountRepo.(grokProxyCredentialRecoveryRepository)
 	if !ok {
-		return nil, errors.New("Grok proxy credential recovery repository is not configured")
+		return nil, errors.New("grok proxy credential recovery repository is not configured")
 	}
 	if s.grokProxyRecoveryVerifier == nil {
-		return nil, errors.New("Grok proxy credential recovery verifier is not configured")
+		return nil, errors.New("grok proxy credential recovery verifier is not configured")
 	}
 	verifiedAccount, snapshot, err := s.grokProxyRecoveryVerifier.VerifyGrokProxyCredentialRecovery(ctx, account)
 	if err != nil {
 		return nil, fmt.Errorf("verify Grok proxy credential recovery: %w", err)
 	}
 	if verifiedAccount == nil || verifiedAccount.ID != account.ID {
-		return nil, errors.New("Grok proxy credential recovery verifier returned an invalid account")
+		return nil, errors.New("grok proxy credential recovery verifier returned an invalid account")
 	}
 	applied, err := repo.RecoverGrokProxyCredentialFailureIfMatch(ctx, account.ID, snapshot)
 	if err != nil {
@@ -1987,7 +1987,7 @@ func (s *RateLimitService) RecoverGrokProxyCredentialFailure(
 	accountID int64,
 ) (*SuccessfulTestRecoveryResult, error) {
 	if s == nil || s.accountRepo == nil {
-		return nil, errors.New("Grok proxy credential recovery is not configured")
+		return nil, errors.New("grok proxy credential recovery is not configured")
 	}
 	account, err := s.accountRepo.GetByID(ctx, accountID)
 	if err != nil {
@@ -2008,7 +2008,7 @@ func (s *RateLimitService) RecoverGrokProxyCredentialFailuresByProxy(
 	}
 	repo, ok := s.accountRepo.(grokProxyCredentialRecoveryRepository)
 	if !ok {
-		return nil, errors.New("Grok proxy credential recovery repository is not configured")
+		return nil, errors.New("grok proxy credential recovery repository is not configured")
 	}
 	candidates, err := repo.ListGrokProxyCredentialRecoveryCandidates(ctx, proxyID)
 	if err != nil {

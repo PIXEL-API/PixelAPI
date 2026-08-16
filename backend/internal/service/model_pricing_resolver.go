@@ -68,7 +68,7 @@ func NewModelPricingResolver(channelService *ChannelService, billingService *Bil
 // PricingInput 定价解析输入
 type PricingInput struct {
 	Model   string
-	GroupID *int64 // nil 表示不检查渠道
+	GroupID *int64    // nil 表示不检查渠道
 	Now     time.Time // 计费时刻（零值 = timezone.Now()），用于时间段定价命中
 }
 

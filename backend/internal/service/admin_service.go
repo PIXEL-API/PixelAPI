@@ -4775,7 +4775,7 @@ func (s *adminServiceImpl) ClearAccountError(ctx context.Context, id int64) (*Ac
 	}
 	if isGrokProxyCredentialFailureAccount(account) {
 		if s.grokProxyRecovery == nil {
-			return nil, errors.New("Grok proxy credential recovery service is not configured")
+			return nil, errors.New("grok proxy credential recovery service is not configured")
 		}
 		if _, err := s.grokProxyRecovery.RecoverGrokProxyCredentialFailure(ctx, id); err != nil {
 			return nil, err

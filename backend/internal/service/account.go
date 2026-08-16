@@ -157,10 +157,10 @@ const (
 )
 
 const (
-	AccountListStatusRateLimited          = "rate_limited"
-	AccountListStatusTempUnschedulable    = "temp_unschedulable"
-	AccountListStatusUnschedulable        = "unschedulable"
-	AccountListStatusCodexQuotaProtected  = "codex_quota_protected"
+	AccountListStatusRateLimited            = "rate_limited"
+	AccountListStatusTempUnschedulable      = "temp_unschedulable"
+	AccountListStatusUnschedulable          = "unschedulable"
+	AccountListStatusCodexQuotaProtected    = "codex_quota_protected"
 	AccountListStatusOpencodeQuotaProtected = "opencode_quota_protected"
 )
 

@@ -111,7 +111,7 @@ func (s *GrokQuotaService) syncGrokObservedModels(ctx context.Context, account *
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if !isOpenAIUpstreamSuccessStatus(resp.StatusCode) {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
 		return fmt.Errorf("grok models endpoint returned status %d", resp.StatusCode)

@@ -14,7 +14,8 @@ import (
 
 func TestNormalizeCodexImportEntryAcceptsAgentIdentityAuthJSON(t *testing.T) {
 	value := buildAgentIdentityImportValue(t, "runtime-import", "team-import", "user-import", "")
-	identity := value["agent_identity"].(map[string]any)
+	identity, ok := value["agent_identity"].(map[string]any)
+	require.True(t, ok)
 	identity["email"] = "agent@example.invalid"
 	identity["plan_type"] = "pro"
 	identity["chatgpt_account_is_fedramp"] = false
@@ -56,7 +57,8 @@ func TestCodexAgentIdentityIndexSeparatesTeamsAndMergesSameTeam(t *testing.T) {
 func TestImportCodexSessionsMergesAgentRuntimeForSameTeamWithoutOAuthExpiry(t *testing.T) {
 	first := buildAgentIdentityImportValue(t, "runtime-a", "team-a", "same-user", "task-a")
 	second := buildAgentIdentityImportValue(t, "runtime-b", "team-a", "same-user", "task-b")
-	firstIdentity := first["agent_identity"].(map[string]any)
+	firstIdentity, ok := first["agent_identity"].(map[string]any)
+	require.True(t, ok)
 	svc := newCodexImportMemoryAdminService([]service.Account{{
 		ID: 41, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
 		Credentials: map[string]any{

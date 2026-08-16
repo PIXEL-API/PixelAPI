@@ -94,8 +94,8 @@ type ChannelModelPricing struct {
 	LongContextPricingEnabled *bool
 	// LongContextInputTokenThreshold 在显式启用长上下文倍率时覆盖模型价卡阈值。
 	LongContextInputTokenThreshold *int
-	Intervals                      []PricingInterval   // 区间定价列表（按 context token 长度 / 按次分层）
-	TimeRanges                     []PricingTimeRange  // 时间段定价列表（按一天内分钟区间覆盖基础价）
+	Intervals                      []PricingInterval  // 区间定价列表（按 context token 长度 / 按次分层）
+	TimeRanges                     []PricingTimeRange // 时间段定价列表（按一天内分钟区间覆盖基础价）
 	CreatedAt                      time.Time
 	UpdatedAt                      time.Time
 }

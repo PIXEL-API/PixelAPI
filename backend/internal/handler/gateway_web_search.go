@@ -219,7 +219,7 @@ func (h *GatewayHandler) WebSearch(c *gin.Context) {
 	}
 
 	userAgent := c.GetHeader("User-Agent")
-	clientIP := ip.GetClientIP(c)
+	clientIP := ip.GetSecurityClientIP(c)
 	inboundEndpoint := GetInboundEndpoint(c)
 	upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
 	requestPayloadHash := service.HashUsageRequestPayload([]byte(req.Query))

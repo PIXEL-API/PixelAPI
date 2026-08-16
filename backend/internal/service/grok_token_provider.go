@@ -295,7 +295,7 @@ func (p *GrokTokenProvider) VerifyGrokProxyCredentialRecovery(
 	}
 	observation := recorder.snapshot()
 	if observation == nil || account.ProxyID == nil || observation.ProxyID != *account.ProxyID || observation.UpdatedAt.IsZero() {
-		return nil, GrokCredentialMutationSnapshot{}, errors.New("Grok proxy version was not observed during credential verification")
+		return nil, GrokCredentialMutationSnapshot{}, errors.New("grok proxy version was not observed during credential verification")
 	}
 	observedProxy := &Proxy{
 		ID:                   observation.ProxyID,
@@ -305,7 +305,7 @@ func (p *GrokTokenProvider) VerifyGrokProxyCredentialRecovery(
 		UpdatedAt:            observation.UpdatedAt,
 	}
 	if !observedProxy.IsActive() || !observedProxy.AllowsScope(account.Platform, account.AccountLevel) {
-		return nil, GrokCredentialMutationSnapshot{}, errors.New("Grok proxy is not active for the account scope")
+		return nil, GrokCredentialMutationSnapshot{}, errors.New("grok proxy is not active for the account scope")
 	}
 	snapshot := grokCredentialMutationSnapshot(refreshed)
 	proxyID := observation.ProxyID

@@ -65,8 +65,9 @@ func TestProxyExpiryFallbackValidationUsesExpandConstraintNames(t *testing.T) {
 func TestProxyExpiryFallbackIndexesAreOnlineAndNonDestructive(t *testing.T) {
 	sql := readNormalizedProxyExpiryMigration(t, proxyExpiryFallbackIndexMigration)
 
-	require.Contains(t, sql, "set lock_timeout")
-	require.Contains(t, sql, "set statement_timeout")
+	// *_notx.sql 迁移由 runner 统一注入 session 级 lock_timeout/statement_timeout
+	// （见 executeNonTransactionalMigration），文件本身只允许 CREATE/DROP INDEX
+	// CONCURRENTLY 语句，因此这里不要求文件内出现 SET lock_timeout/statement_timeout。
 	require.Contains(t, sql, "create index concurrently if not exists")
 	require.Contains(t, sql, "on proxies (expires_at)")
 	require.Contains(t, sql, "on proxies (backup_proxy_id)")
