@@ -1316,6 +1316,69 @@ func (r *accountShareModeRepository) ListRoomRuntimeAccounts(
 	return accountsByListing, nil
 }
 
+// ListRoomAccountModelInfos 返回每个房间内账号的模型映射键集合，
+// 用于计算房间可配置模型交集（supported_models）。
+func (r *accountShareModeRepository) ListRoomAccountModelInfos(
+	ctx context.Context,
+	listingIDs []int64,
+) (map[int64][]service.AccountShareRoomModelInfo, error) {
+	normalizedIDs := normalizeAccountShareListingIDs(listingIDs)
+	if len(normalizedIDs) == 0 {
+		return map[int64][]service.AccountShareRoomModelInfo{}, nil
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT
+			room_account.listing_id,
+			a.id,
+			a.platform,
+			a.credentials
+		FROM account_share_room_accounts room_account
+		JOIN accounts a ON a.id = room_account.account_id
+		WHERE room_account.listing_id = ANY($1)
+			AND room_account.state = 'active'
+			AND a.deleted_at IS NULL
+		ORDER BY room_account.listing_id ASC, a.id ASC
+	`, pq.Array(normalizedIDs))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	infosByListing := make(map[int64][]service.AccountShareRoomModelInfo, len(normalizedIDs))
+	for rows.Next() {
+		var listingID, accountID int64
+		var platform string
+		var credentialsRaw []byte
+		if err := rows.Scan(&listingID, &accountID, &platform, &credentialsRaw); err != nil {
+			return nil, err
+		}
+		account := &service.Account{
+			ID:       accountID,
+			Platform: strings.ToLower(strings.TrimSpace(platform)),
+		}
+		if len(credentialsRaw) > 0 {
+			var credentials map[string]any
+			if err := json.Unmarshal(credentialsRaw, &credentials); err != nil {
+				return nil, err
+			}
+			account.Credentials = credentials
+		}
+		info := service.AccountShareRoomModelInfo{AccountID: accountID}
+		if mapping := account.GetModelMapping(); len(mapping) > 0 {
+			info.Models = make([]string, 0, len(mapping))
+			for model := range mapping {
+				info.Models = append(info.Models, model)
+			}
+			sort.Strings(info.Models)
+		}
+		infosByListing[listingID] = append(infosByListing[listingID], info)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return infosByListing, nil
+}
+
 func (r *accountShareModeRepository) ListRoomQuotaSnapshots(
 	ctx context.Context,
 	listingIDs []int64,

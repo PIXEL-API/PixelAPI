@@ -95,7 +95,7 @@
     </div>
 
     <!-- Custom Model Input -->
-    <div class="mb-3">
+    <div v-if="allowCustom !== false" class="mb-3">
       <label class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.accounts.customModelName') }}</label>
       <div class="flex gap-2">
         <input
@@ -133,6 +133,8 @@ const props = defineProps<{
   modelValue: string[]
   platform?: string
   platforms?: string[]
+  allowedOptions?: string[]
+  allowCustom?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -163,6 +165,13 @@ const normalizedPlatforms = computed(() => {
 })
 
 const availableOptions = computed(() => {
+  // 受限可选集：调用方显式传入（如「编辑房间配置」传房间账号支持模型交集）时，
+  // 只允许在这些模型里勾选，从源头避免选到账号不支持的模型。
+  if (props.allowedOptions !== undefined) {
+    const allowed = new Set(props.allowedOptions)
+    return allModels.filter(model => allowed.has(model.value))
+  }
+
   if (normalizedPlatforms.value.length === 0) {
     return allModels
   }

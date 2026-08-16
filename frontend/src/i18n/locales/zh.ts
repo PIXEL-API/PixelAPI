@@ -4271,6 +4271,11 @@ export default {
         imageTiers: "图片计费层级（按次）",
         addTier: "添加层级",
         noTiersYet: "暂无层级，点击添加配置按次计费价格",
+        timeRanges: "时间段价格（峰谷价，可选）",
+        addTimeRange: "添加时间段",
+        timeRangesHint: "命中时段时按这些价格覆盖默认价；未填字段回退到默认价。",
+        startTime: "开始",
+        endTime: "结束",
         noPricingRules: '暂无定价规则，点击"添加"创建',
         perRequestPrice: "单次价格",
         perRequestPriceRequired:

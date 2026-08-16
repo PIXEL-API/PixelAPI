@@ -300,6 +300,36 @@
             />
           </div>
         </div>
+
+        <!-- 时间段价格（峰谷价） -->
+        <div class="mt-3 border-t border-gray-100 pt-3 dark:border-dark-600">
+          <div class="flex items-center justify-between">
+            <label class="text-xs font-medium text-gray-500 dark:text-gray-400">
+              {{ t('admin.channels.form.timeRanges', '时间段价格（峰谷价，可选）') }}
+            </label>
+            <button
+              type="button"
+              data-testid="add-time-range"
+              class="min-h-11 rounded px-2 text-xs text-primary-600 hover:text-primary-700"
+              @click="addTimeRange"
+            >
+              + {{ t('admin.channels.form.addTimeRange', '添加时间段') }}
+            </button>
+          </div>
+          <p class="mt-1 text-xs leading-5 text-gray-400">
+            {{ t('admin.channels.form.timeRangesHint', '命中时段时按这些价格覆盖默认价；未填字段回退到默认价。') }}
+          </p>
+          <div v-if="entry.time_ranges && entry.time_ranges.length > 0" class="mt-2 space-y-2">
+            <TimeRangeRow
+              v-for="(tr, idx) in entry.time_ranges"
+              :key="idx"
+              :range="tr"
+              :mode="entry.billing_mode"
+              @update="updateTimeRange(idx, $event)"
+              @remove="removeTimeRange(idx)"
+            />
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -312,8 +342,9 @@ import Select from '@/components/common/Select.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
 import IntervalRow from './IntervalRow.vue'
+import TimeRangeRow from './TimeRangeRow.vue'
 import ModelTagInput from './ModelTagInput.vue'
-import type { PricingFormEntry, IntervalFormEntry } from './types'
+import type { PricingFormEntry, IntervalFormEntry, TimeRangeFormEntry } from './types'
 import {
   MAX_LONG_CONTEXT_INPUT_TOKEN_THRESHOLD,
   getPlatformTagClass,
@@ -402,6 +433,7 @@ function onBillingModeUpdate(billingMode: BillingMode) {
     ...props.entry,
     billing_mode: billingMode,
     intervals: [],
+    time_ranges: [],
     long_context_pricing_enabled: resetLongContextPricing
       ? null
       : props.entry.long_context_pricing_enabled,
@@ -464,6 +496,30 @@ function removeInterval(idx: number) {
   const intervals = [...(props.entry.intervals || [])]
   intervals.splice(idx, 1)
   emit('update', { ...props.entry, intervals })
+}
+
+function addTimeRange() {
+  const timeRanges = [...(props.entry.time_ranges || [])]
+  timeRanges.push({
+    start_time: '09:00', end_time: '12:00',
+    input_price: null, output_price: null, cache_write_price: null, cache_read_price: null,
+    image_input_price: null, image_cache_read_price: null, image_output_price: null,
+    per_request_price: null,
+    sort_order: timeRanges.length
+  })
+  emit('update', { ...props.entry, time_ranges: timeRanges })
+}
+
+function updateTimeRange(idx: number, updated: TimeRangeFormEntry) {
+  const timeRanges = [...(props.entry.time_ranges || [])]
+  timeRanges[idx] = updated
+  emit('update', { ...props.entry, time_ranges: timeRanges })
+}
+
+function removeTimeRange(idx: number) {
+  const timeRanges = [...(props.entry.time_ranges || [])]
+  timeRanges.splice(idx, 1)
+  emit('update', { ...props.entry, time_ranges: timeRanges })
 }
 
 async function onModelsUpdate(newModels: string[]) {

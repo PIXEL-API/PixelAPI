@@ -1159,6 +1159,14 @@ func (s *BillingService) calculatePerRequestCost(resolved *ResolvedPricing, inpu
 		unitPrice, priceFound = input.Resolver.LookupRequestTierPriceByContext(resolved, totalContext)
 	}
 
+	// 时间段价作为中间层：优先于默认价，低于层级（层级/context 命中优先）。
+	if !priceFound {
+		if tr := resolved.ActiveTimeRange; tr != nil && tr.PerRequestPrice != nil {
+			unitPrice = *tr.PerRequestPrice
+			priceFound = true
+		}
+	}
+
 	// 回退到默认按次价格
 	if !priceFound {
 		unitPrice = resolved.DefaultPerRequestPrice

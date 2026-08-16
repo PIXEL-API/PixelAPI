@@ -3,6 +3,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -41,6 +42,21 @@ func TestOpencodeHelpersRejectNonOpencode(t *testing.T) {
 	}
 	if account.GetOpencodeApiKey() != "" {
 		t.Fatal("expected empty api key for non-opencode account")
+	}
+}
+
+func TestOpencodeSupportsAnthropicMessagesFormat(t *testing.T) {
+	if opencodeSupportsAnthropicMessagesFormat("grok-4.5") {
+		t.Fatal("grok-4.5 must be treated as chat-only (not anthropic-messages capable)")
+	}
+	if opencodeSupportsAnthropicMessagesFormat("grok-4.5[1m]") {
+		t.Fatal("grok-4.5[1m] should still route to chat-completions conversion")
+	}
+	if !opencodeSupportsAnthropicMessagesFormat("deepseek-v4-flash") {
+		t.Fatal("deepseek-v4-flash should keep the native anthropic messages path")
+	}
+	if !opencodeSupportsAnthropicMessagesFormat("") {
+		t.Fatal("empty model should keep the native anthropic messages path")
 	}
 }
 
@@ -292,3 +308,38 @@ func TestOpencodeTLSFingerprintAndUserAgent(t *testing.T) {
 }
 
 func floatPtr(v float64) *float64 { return &v }
+
+func TestRefreshOpencodeUsageIfStale_Guards(t *testing.T) {
+	svc := &AccountUsageService{
+		cache:       NewUsageCache(),
+		accountRepo: &accountUsageCodexProbeRepo{},
+	}
+
+	// 非 opencode 账号：不进 probe 门（throttle 不记录）。
+	svc.refreshOpencodeUsageIfStale(context.Background(), &Account{
+		ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+	})
+	if _, found := svc.cache.openAIProbeCache.Load(int64(1)); found {
+		t.Fatal("non-opencode account must not enter probe gate")
+	}
+
+	// 非 stale 的 opencode 账号：不进 probe 门。
+	fresh := time.Now().UTC().Format(time.RFC3339)
+	svc.refreshOpencodeUsageIfStale(context.Background(), &Account{
+		ID: 2, Platform: PlatformOpencode, Type: AccountTypeAPIKey,
+		Extra: map[string]any{"opencode_usage_updated_at": fresh},
+	})
+	if _, found := svc.cache.openAIProbeCache.Load(int64(2)); found {
+		t.Fatal("non-stale opencode account must not enter probe gate")
+	}
+
+	// stale 的 opencode 账号：进入 probe 门（throttle 记录时间戳）。
+	// 拉取会因无 api_key 而短路失败，但守卫已放行——这正是同步刷新的触发点。
+	svc.refreshOpencodeUsageIfStale(context.Background(), &Account{
+		ID: 3, Platform: PlatformOpencode, Type: AccountTypeAPIKey,
+		Extra: map[string]any{},
+	})
+	if _, found := svc.cache.openAIProbeCache.Load(int64(3)); !found {
+		t.Fatal("stale opencode account must enter probe gate")
+	}
+}

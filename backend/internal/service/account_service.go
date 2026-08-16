@@ -1762,7 +1762,7 @@ func ownedPersonalDefaultModelMapping(platform string) map[string]any {
 	switch platform {
 	case PlatformOpenAI:
 		models = append(models, openai.DefaultModelIDs()...)
-		models = append(models, "gpt-5.2-2025-12-11", "gpt-5.2-chat-latest", "gpt-5.2-pro", "gpt-5.2-pro-2025-12-11", "gpt-4o-audio-preview", "gpt-4o-realtime-preview")
+		models = append(models, "gpt-5.2-2025-12-11", "gpt-5.2-chat-latest", "gpt-5.2-pro", "gpt-5.2-pro-2025-12-11", "gpt-5.4-2026-03-05", "gpt-4o-audio-preview", "gpt-4o-realtime-preview")
 	case PlatformAnthropic:
 		models = append(models, claude.DefaultModelIDs()...)
 		models = append(models, "claude-3-5-sonnet-20241022", "claude-3-5-sonnet-20240620", "claude-3-5-haiku-20241022", "claude-3-7-sonnet-20250219", "claude-sonnet-4-20250514", "claude-opus-4-20250514", "claude-opus-4-1-20250805")

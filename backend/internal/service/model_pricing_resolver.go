@@ -4,6 +4,9 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 )
 
 // PricingSource 定价来源标识
@@ -23,6 +26,11 @@ type ResolvedPricing struct {
 
 	// Token 模式：区间定价列表（如有，覆盖 BasePricing 中的对应字段）
 	Intervals []PricingInterval
+
+	// 时间段定价列表（按一天内分钟区间覆盖基础价，与 Intervals 正交）
+	TimeRanges []PricingTimeRange
+	// Resolve 时按当前时刻解析出的命中时间段（nil 表示未命中或无时间段）
+	ActiveTimeRange *PricingTimeRange
 
 	// Token 模式：渠道级长上下文策略。nil 与 false 均表示关闭。
 	LongContextPricingEnabled *bool
@@ -61,12 +69,24 @@ func NewModelPricingResolver(channelService *ChannelService, billingService *Bil
 type PricingInput struct {
 	Model   string
 	GroupID *int64 // nil 表示不检查渠道
+	Now     time.Time // 计费时刻（零值 = timezone.Now()），用于时间段定价命中
+}
+
+// pricingNowMinute 将计费时刻折算为一天内分钟数（本系统配置时区）。
+func pricingNowMinute(now time.Time) int {
+	if now.IsZero() {
+		now = timezone.Now()
+	}
+	return now.Hour()*60 + now.Minute()
 }
 
 // Resolve 解析模型定价。
 // 1. 获取基础定价（LiteLLM → Fallback）
 // 2. 如果指定了 GroupID，查找渠道定价并覆盖
+// 3. 解析当前时刻命中的时间段（ActiveTimeRange），供计费层叠加
 func (r *ModelPricingResolver) Resolve(ctx context.Context, input PricingInput) *ResolvedPricing {
+	nowMinute := pricingNowMinute(input.Now)
+
 	var chPricing *ChannelModelPricing
 	if input.GroupID != nil && r.channelService != nil {
 		chPricing = r.channelService.GetChannelModelPricing(ctx, *input.GroupID, input.Model)
@@ -81,6 +101,7 @@ func (r *ModelPricingResolver) Resolve(ctx context.Context, input PricingInput) 
 					Source: PricingSourceChannel,
 				}
 				r.applyRequestTierOverrides(chPricing, resolved)
+				resolved.ActiveTimeRange = FindActiveTimeRange(resolved.TimeRanges, nowMinute)
 				return resolved
 			}
 		}
@@ -103,6 +124,7 @@ func (r *ModelPricingResolver) Resolve(ctx context.Context, input PricingInput) 
 	} else if input.GroupID != nil && r.channelService != nil {
 		r.applyChannelOverrides(ctx, *input.GroupID, input.Model, resolved)
 	}
+	resolved.ActiveTimeRange = FindActiveTimeRange(resolved.TimeRanges, nowMinute)
 
 	return resolved
 }
@@ -133,6 +155,11 @@ func (r *ModelPricingResolver) HasConfiguredPricing(ctx context.Context, input P
 				return true
 			}
 		}
+		for _, tr := range pricing.TimeRanges {
+			if tr.PerRequestPrice != nil {
+				return true
+			}
+		}
 		return false
 	}
 	if pricing.InputPrice != nil ||
@@ -149,6 +176,17 @@ func (r *ModelPricingResolver) HasConfiguredPricing(ctx context.Context, input P
 			interval.OutputPrice != nil ||
 			interval.CacheWritePrice != nil ||
 			interval.CacheReadPrice != nil {
+			return true
+		}
+	}
+	for _, tr := range pricing.TimeRanges {
+		if tr.InputPrice != nil ||
+			tr.OutputPrice != nil ||
+			tr.CacheWritePrice != nil ||
+			tr.CacheReadPrice != nil ||
+			tr.ImageInputPrice != nil ||
+			tr.ImageCacheReadPrice != nil ||
+			tr.ImageOutputPrice != nil {
 			return true
 		}
 	}
@@ -191,6 +229,7 @@ func (r *ModelPricingResolver) applyChannelOverrides(ctx context.Context, groupI
 func (r *ModelPricingResolver) applyTokenOverrides(chPricing *ChannelModelPricing, resolved *ResolvedPricing) {
 	resolved.LongContextPricingEnabled = chPricing.LongContextPricingEnabled
 	resolved.LongContextInputTokenThreshold = chPricing.LongContextInputTokenThreshold
+	resolved.TimeRanges = filterValidTimeRanges(chPricing.TimeRanges)
 
 	// 过滤掉所有价格字段都为空的无效 interval
 	validIntervals := filterValidIntervals(chPricing.Intervals)
@@ -242,6 +281,7 @@ func (r *ModelPricingResolver) applyTokenOverrides(chPricing *ChannelModelPricin
 // applyRequestTierOverrides 应用按次/图片模式的渠道覆盖
 func (r *ModelPricingResolver) applyRequestTierOverrides(chPricing *ChannelModelPricing, resolved *ResolvedPricing) {
 	resolved.RequestTiers = filterValidIntervals(chPricing.Intervals)
+	resolved.TimeRanges = filterValidTimeRanges(chPricing.TimeRanges)
 	if chPricing.PerRequestPrice != nil {
 		resolved.DefaultPerRequestPrice = *chPricing.PerRequestPrice
 	}
@@ -261,31 +301,90 @@ func filterValidIntervals(intervals []PricingInterval) []PricingInterval {
 	return valid
 }
 
-// GetIntervalPricing 根据 context token 数获取区间定价。
-// 如果有区间列表，找到匹配区间并构造 ModelPricing；否则直接返回 BasePricing。
-func (r *ModelPricingResolver) GetIntervalPricing(resolved *ResolvedPricing, totalContextTokens int) *ModelPricing {
-	if len(resolved.Intervals) == 0 {
-		return resolved.BasePricing
+// filterValidTimeRanges 过滤掉所有价格字段都为空的无效时间段。
+func filterValidTimeRanges(ranges []PricingTimeRange) []PricingTimeRange {
+	var valid []PricingTimeRange
+	for _, tr := range ranges {
+		if tr.InputPrice != nil || tr.OutputPrice != nil ||
+			tr.CacheWritePrice != nil || tr.CacheReadPrice != nil ||
+			tr.ImageInputPrice != nil || tr.ImageCacheReadPrice != nil ||
+			tr.ImageOutputPrice != nil || tr.PerRequestPrice != nil {
+			valid = append(valid, tr)
+		}
 	}
-
-	iv := FindMatchingInterval(resolved.Intervals, totalContextTokens)
-	if iv == nil {
-		return resolved.BasePricing
-	}
-
-	return intervalToModelPricing(iv, resolved.SupportsCacheBreakdown)
+	return valid
 }
 
-// intervalToModelPricing 将区间定价转换为 ModelPricing
-func intervalToModelPricing(iv *PricingInterval, supportsCacheBreakdown bool) *ModelPricing {
-	pricing := &ModelPricing{
-		SupportsCacheBreakdown: supportsCacheBreakdown,
+// GetIntervalPricing 合成 token 模式基础价。
+// 合成顺序：默认价(BasePricing) → 命中时间段(ActiveTimeRange) → 命中上下文区间(Intervals)。
+// 逐字段覆盖，未填字段逐级回退；上下文区间优先级最高。
+func (r *ModelPricingResolver) GetIntervalPricing(resolved *ResolvedPricing, totalContextTokens int) *ModelPricing {
+	pricing := cloneModelPricingBase(resolved.BasePricing, resolved.SupportsCacheBreakdown)
+
+	if tr := resolved.ActiveTimeRange; tr != nil {
+		applyTimeRangeToModelPricing(pricing, tr)
 	}
+
+	if len(resolved.Intervals) > 0 {
+		if iv := FindMatchingInterval(resolved.Intervals, totalContextTokens); iv != nil {
+			applyIntervalToModelPricing(pricing, iv)
+		}
+	}
+
+	return pricing
+}
+
+// cloneModelPricingBase 拷贝基础价，避免叠加时间段/区间时污染共享的 LiteLLM/fallback 指针。
+func cloneModelPricingBase(base *ModelPricing, supportsCacheBreakdown bool) *ModelPricing {
+	if base == nil {
+		return &ModelPricing{SupportsCacheBreakdown: supportsCacheBreakdown}
+	}
+	cp := *base
+	cp.SupportsCacheBreakdown = supportsCacheBreakdown
+	return &cp
+}
+
+// applyTimeRangeToModelPricing 将时间段的非空价格字段逐字段叠加到 pricing 上。
+func applyTimeRangeToModelPricing(pricing *ModelPricing, tr *PricingTimeRange) {
+	if tr.InputPrice != nil {
+		pricing.InputPricePerToken = *tr.InputPrice
+		pricing.InputPricePerTokenPriority = 0
+	}
+	if tr.OutputPrice != nil {
+		pricing.OutputPricePerToken = *tr.OutputPrice
+		pricing.OutputPricePerTokenPriority = 0
+	}
+	if tr.CacheWritePrice != nil {
+		pricing.CacheCreationPricePerToken = *tr.CacheWritePrice
+		pricing.CacheCreationPricePerTokenPriority = *tr.CacheWritePrice
+		pricing.CacheCreationPriceExplicit = true
+		pricing.CacheCreation5mPrice = *tr.CacheWritePrice
+		pricing.CacheCreation1hPrice = *tr.CacheWritePrice
+	}
+	if tr.CacheReadPrice != nil {
+		pricing.CacheReadPricePerToken = *tr.CacheReadPrice
+		pricing.CacheReadPricePerTokenPriority = 0
+	}
+	if tr.ImageInputPrice != nil {
+		pricing.ImageInputPricePerToken = *tr.ImageInputPrice
+	}
+	if tr.ImageCacheReadPrice != nil {
+		pricing.ImageCacheReadPricePerToken = *tr.ImageCacheReadPrice
+	}
+	if tr.ImageOutputPrice != nil {
+		pricing.ImageOutputPricePerToken = *tr.ImageOutputPrice
+	}
+}
+
+// applyIntervalToModelPricing 将上下文区间的非空价格字段逐字段叠加到 pricing 上（覆盖时间段/默认价的同名字段）。
+func applyIntervalToModelPricing(pricing *ModelPricing, iv *PricingInterval) {
 	if iv.InputPrice != nil {
 		pricing.InputPricePerToken = *iv.InputPrice
+		pricing.InputPricePerTokenPriority = 0
 	}
 	if iv.OutputPrice != nil {
 		pricing.OutputPricePerToken = *iv.OutputPrice
+		pricing.OutputPricePerTokenPriority = 0
 	}
 	if iv.CacheWritePrice != nil {
 		pricing.CacheCreationPricePerToken = *iv.CacheWritePrice
@@ -296,8 +395,8 @@ func intervalToModelPricing(iv *PricingInterval, supportsCacheBreakdown bool) *M
 	}
 	if iv.CacheReadPrice != nil {
 		pricing.CacheReadPricePerToken = *iv.CacheReadPrice
+		pricing.CacheReadPricePerTokenPriority = 0
 	}
-	return pricing
 }
 
 // LookupRequestTierPrice 根据层级标签获取按次价格，并区分显式免费与未命中。

@@ -608,14 +608,17 @@ import type { PricingFormEntry } from '@/components/admin/channel/types'
 import {
   apiIntervalsToForm,
   apiLongContextPricingToForm,
+  apiTimeRangesToForm,
   createPricingFormEntry,
   findModelConflict,
   formIntervalsToAPI,
   formLongContextPricingToAPI,
+  formTimeRangesToAPI,
   mTokToPerToken,
   perTokenToMTok,
   validateIntervals,
   validateLongContextPricing,
+  validateTimeRanges,
 } from '@/components/admin/channel/types'
 import type { AdminGroup, GroupPlatform } from '@/types'
 import type { Column } from '@/components/common/types'
@@ -995,7 +998,8 @@ function accountStatsRulesToAPI(): AccountStatsPricingRule[] {
             image_cache_read_price: mTokToPerToken(p.image_cache_read_price),
             image_output_price: mTokToPerToken(p.image_output_price),
             per_request_price: p.per_request_price != null && p.per_request_price !== '' ? Number(p.per_request_price) : null,
-            intervals: formIntervalsToAPI(p.intervals || [])
+            intervals: formIntervalsToAPI(p.intervals || []),
+            time_ranges: []
           }))
       })
     }
@@ -1038,7 +1042,8 @@ function formToAPI(): { group_ids: number[], model_pricing: ChannelModelPricing[
         image_cache_read_price: mTokToPerToken(entry.image_cache_read_price),
         image_output_price: mTokToPerToken(entry.image_output_price),
         per_request_price: entry.per_request_price != null && entry.per_request_price !== '' ? Number(entry.per_request_price) : null,
-        intervals: formIntervalsToAPI(entry.intervals || [])
+        intervals: formIntervalsToAPI(entry.intervals || []),
+        time_ranges: formTimeRangesToAPI(entry.time_ranges || [])
       })
     }
   }
@@ -1103,7 +1108,8 @@ function apiToForm(channel: Channel): PlatformSection[] {
         image_cache_read_price: perTokenToMTok(p.image_cache_read_price),
         image_output_price: perTokenToMTok(p.image_output_price),
         per_request_price: p.per_request_price,
-        intervals: apiIntervalsToForm(p.intervals || [])
+        intervals: apiIntervalsToForm(p.intervals || []),
+        time_ranges: apiTimeRangesToForm(p.time_ranges || [])
       } as PricingFormEntry))
 
     // Read web_search_emulation from features_config
@@ -1290,7 +1296,8 @@ function distributeRulesToPlatforms(apiRules: AccountStatsPricingRule[]) {
         image_cache_read_price: perTokenToMTok(p.image_cache_read_price),
         image_output_price: perTokenToMTok(p.image_output_price),
         per_request_price: p.per_request_price,
-        intervals: apiIntervalsToForm(p.intervals || [])
+        intervals: apiIntervalsToForm(p.intervals || []),
+        time_ranges: []
       } as PricingFormEntry))
     }
     section.account_stats_pricing_rules.push(formRule)
@@ -1420,6 +1427,21 @@ async function handleSubmit() {
         const platformLabel = t('admin.groups.platforms.' + section.platform, section.platform)
         const modelLabel = entry.models.join(', ') || t('admin.channels.form.unnamed')
         appStore.showError(`${platformLabel} - ${modelLabel}: ${intervalErr}`)
+        activeTab.value = section.platform
+        return
+      }
+    }
+  }
+
+  // 校验时间段价格合法性（时间格式、区间、重叠、至少一个价格）
+  for (const section of form.platforms.filter(s => s.enabled)) {
+    for (const entry of section.model_pricing) {
+      if (!entry.time_ranges || entry.time_ranges.length === 0) continue
+      const timeRangeErr = validateTimeRanges(entry.time_ranges)
+      if (timeRangeErr) {
+        const platformLabel = t('admin.groups.platforms.' + section.platform, section.platform)
+        const modelLabel = entry.models.join(', ') || t('admin.channels.form.unnamed')
+        appStore.showError(`${platformLabel} - ${modelLabel}: ${timeRangeErr}`)
         activeTab.value = section.platform
         return
       }

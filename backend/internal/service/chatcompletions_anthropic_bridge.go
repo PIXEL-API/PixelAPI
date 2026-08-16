@@ -1089,7 +1089,9 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 		return nil, fmt.Errorf("account %d missing api_key", account.ID)
 	}
 	baseURL := strings.TrimSpace(account.GetOpenAIBaseURL())
-	if baseURL == "" {
+	if account.IsOpencode() {
+		baseURL = account.GetOpencodeBaseURL()
+	} else if baseURL == "" {
 		baseURL = "https://api.openai.com"
 	}
 	validatedURL, err := s.validateUpstreamBaseURL(baseURL)
@@ -1128,7 +1130,7 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 		proxyURL = account.Proxy.URL()
 	}
 	upstreamReq = upstreamReq.WithContext(WithHTTPUpstreamProfile(upstreamReq.Context(), HTTPUpstreamProfileOpenAI))
-	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.resolveOpenAIAccountTLSProfile(account))
 	if err != nil {
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
 		setOpsUpstreamError(c, 0, safeErr, "")

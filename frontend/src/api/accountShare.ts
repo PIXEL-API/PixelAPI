@@ -262,6 +262,7 @@ export interface AccountShareListing {
   rating_avg: number
   rate_multiplier: number
   allowed_models: string[]
+  supported_models?: string[]
   per_user_concurrency: number
   account_concurrency: number
   hourly_rate: number

@@ -398,6 +398,7 @@ type AccountShareListing struct {
 	RatingAvg                               float64                     `json:"rating_avg"`
 	RateMultiplier                          float64                     `json:"rate_multiplier"`
 	AllowedModels                           []string                    `json:"allowed_models"`
+	SupportedModels                         []string                    `json:"supported_models,omitempty"`
 	PerUserConcurrency                      int                         `json:"per_user_concurrency"`
 	AccountConcurrency                      int                         `json:"account_concurrency"`
 	RepresentativeAccountConcurrency        int                         `json:"-"`
@@ -3526,6 +3527,7 @@ func (s *AccountShareModeService) enrichListingsRuntime(ctx context.Context, lis
 		}
 	}
 	s.enrichListingsQuotaSummary(ctx, listings, listingIDs, now)
+	s.enrichListingsSupportedModels(ctx, listings, listingIDs)
 	if s.concurrencyService == nil {
 		return
 	}
@@ -3620,6 +3622,76 @@ func (s *AccountShareModeService) enrichListingsRuntime(ctx context.Context, lis
 			listings[i].RuntimeLoadKnown = true
 		}
 	}
+}
+
+// AccountShareRoomModelInfo 记录房间账号的模型支持范围。
+// Models 为账号 model_mapping 的键集合；nil 表示账号未配置映射（放行所有模型）。
+type AccountShareRoomModelInfo struct {
+	AccountID int64
+	Models    []string
+}
+
+// accountShareRoomModelInfoRepository 查询房间账号的模型映射，用于计算房间可配置模型交集。
+type accountShareRoomModelInfoRepository interface {
+	ListRoomAccountModelInfos(ctx context.Context, listingIDs []int64) (map[int64][]AccountShareRoomModelInfo, error)
+}
+
+// enrichListingsSupportedModels 计算每个房间内账号共同支持的模型交集，
+// 供前端「编辑房间配置」的选择器限定可选模型，避免号主选到账号不支持的模型。
+func (s *AccountShareModeService) enrichListingsSupportedModels(
+	ctx context.Context,
+	listings []AccountShareListing,
+	listingIDs []int64,
+) {
+	repo, ok := s.repo.(accountShareRoomModelInfoRepository)
+	if !ok || len(listingIDs) == 0 {
+		return
+	}
+	infosByListing, err := repo.ListRoomAccountModelInfos(ctx, listingIDs)
+	if err != nil {
+		log.Printf("[AccountShareMode] list room account model infos failed: %v", err)
+		return
+	}
+	for i := range listings {
+		listings[i].SupportedModels = computeAccountShareSupportedModels(infosByListing[listings[i].ID])
+	}
+}
+
+// computeAccountShareSupportedModels 计算房间账号共同支持的模型交集。
+// 未配置映射（Models == nil）的账号放行所有模型，不参与交集收缩。
+// 返回值语义：nil 表示「不限」（无账号或所有账号均未配置映射，前端回退到平台全集）；
+// 空切片表示「交集为空」（存在窄映射账号但无共同支持的模型）。
+func computeAccountShareSupportedModels(infos []AccountShareRoomModelInfo) []string {
+	var intersection map[string]struct{}
+	initialized := false
+	for _, info := range infos {
+		if info.Models == nil {
+			continue // 未配置映射：放行所有，不收缩
+		}
+		set := make(map[string]struct{}, len(info.Models))
+		for _, model := range info.Models {
+			set[model] = struct{}{}
+		}
+		if !initialized {
+			intersection = set
+			initialized = true
+			continue
+		}
+		for model := range intersection {
+			if _, ok := set[model]; !ok {
+				delete(intersection, model)
+			}
+		}
+	}
+	if !initialized {
+		return nil
+	}
+	out := make([]string, 0, len(intersection))
+	for model := range intersection {
+		out = append(out, model)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (s *AccountShareModeService) enrichListingsQuotaSummary(

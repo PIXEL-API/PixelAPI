@@ -2574,7 +2574,12 @@
                 <div class="field">
                   <span>模型白名单</span>
                   <div class="model-selector-shell">
-                    <ModelWhitelistSelector v-model="editAllowedModels" :platform="listingPlatform(editingConfigListing)" />
+                    <ModelWhitelistSelector
+                      v-model="editAllowedModels"
+                      :platform="listingPlatform(editingConfigListing)"
+                      :allowed-options="editingConfigListing?.supported_models"
+                      :allow-custom="false"
+                    />
                   </div>
                 </div>
 
@@ -3032,7 +3037,7 @@ import type { Account, AccountLevel, ApiKey, Proxy } from '@/types'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { useClipboard } from '@/composables/useClipboard'
-import { extractApiErrorCode, extractApiErrorMessage } from '@/utils/apiError'
+import { extractApiErrorCode, extractApiErrorMessage, extractApiErrorMetadata } from '@/utils/apiError'
 import {
   createSecureRequestID,
   isCanceledRequest,
@@ -9368,10 +9373,23 @@ async function saveConfigEdit(): Promise<void> {
     appStore.showSuccess('房间配置已更新')
     resetConfigEditState()
   } catch (error: unknown) {
-    if (extractApiErrorCode(error) === 'ACCOUNT_SHARE_ROOM_VERSION_CONFLICT') {
+    const errorCode = extractApiErrorCode(error)
+    if (errorCode === 'ACCOUNT_SHARE_ROOM_VERSION_CONFLICT') {
       editVersionConflict.value = true
       setConfigEditError('房间配置已被更新，请刷新后重新编辑')
       stopEditSessionRenewal()
+    } else if (errorCode === 'ACCOUNT_SHARE_MODE_UNSUPPORTED_MODEL') {
+      // 后端把「缺哪个模型/哪个账号」放在错误 metadata 里；不带出来的话用户只能看到
+      // 一句无从下手的英文「不支持请求的模型」。这里与 RoomAccountsDialog 的写法对齐。
+      const metadata = extractApiErrorMetadata(error) || {}
+      const model = typeof metadata.model === 'string' ? metadata.model.trim() : ''
+      const accountID = typeof metadata.account_id === 'string' ? metadata.account_id.trim() : ''
+      if (model) {
+        const who = accountID ? `账号 #${accountID}` : '房间内某账号'
+        setConfigEditError(`${who}不支持所选模型「${model}」。请在"我的账号"中为该账号补上这个模型，或从白名单中移除它后再试。`)
+      } else {
+        setConfigEditError('房间内存在不支持所选模型的账号，请调整模型白名单后再试。')
+      }
     } else {
       setConfigEditError(extractApiErrorMessage(error, '保存房间配置失败', {
         ACCOUNT_SHARE_ROOM_UPDATE_REASON_REQUIRED: '请填写本次房间配置修改原因',

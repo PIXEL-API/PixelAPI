@@ -59,13 +59,13 @@ func (s *OpenAIGatewayService) resolveOpenAIAccountTLSProfile(account *Account) 
 	return s.tlsFPProfileService.ResolveTLSProfile(account)
 }
 
-// scheduleOpencodeUsageProbeIfStale 在调度选号时触发 opencode 账号的用量惰性刷新。
-// 幂等、非阻塞：内部有 stale/throttle/在飞任务三重守卫。
-func (s *OpenAIGatewayService) scheduleOpencodeUsageProbeIfStale(account *Account) {
+// refreshOpencodeUsageIfStale 在调度选号时同步刷新 opencode 账号的用量窗口（若 stale），
+// 让达限判定（IsOpencodeQuotaProtectionActiveAt）用最新 percent 而非异步拉取的旧值。
+func (s *OpenAIGatewayService) refreshOpencodeUsageIfStale(ctx context.Context, account *Account) {
 	if s == nil || s.accountUsageService == nil {
 		return
 	}
-	s.accountUsageService.ScheduleOpencodeUsageProbe(account)
+	s.accountUsageService.refreshOpencodeUsageIfStale(ctx, account)
 }
 
 func (s *OpenAIGatewayService) SelectAccountWithSchedulerForGrok(

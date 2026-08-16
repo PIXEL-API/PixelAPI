@@ -1,4 +1,4 @@
-import type { BillingMode, ChannelModelPricing, PricingInterval } from '@/api/admin/channels'
+import type { BillingMode, ChannelModelPricing, PricingInterval, PricingTimeRange } from '@/api/admin/channels'
 
 export interface IntervalFormEntry {
   min_tokens: number
@@ -8,6 +8,20 @@ export interface IntervalFormEntry {
   output_price: number | string | null
   cache_write_price: number | string | null
   cache_read_price: number | string | null
+  per_request_price: number | string | null
+  sort_order: number
+}
+
+export interface TimeRangeFormEntry {
+  start_time: string
+  end_time: string
+  input_price: number | string | null
+  output_price: number | string | null
+  cache_write_price: number | string | null
+  cache_read_price: number | string | null
+  image_input_price: number | string | null
+  image_cache_read_price: number | string | null
+  image_output_price: number | string | null
   per_request_price: number | string | null
   sort_order: number
 }
@@ -26,6 +40,7 @@ export interface PricingFormEntry {
   image_output_price: number | string | null
   per_request_price: number | string | null
   intervals: IntervalFormEntry[]
+  time_ranges: TimeRangeFormEntry[]
 }
 
 export const MAX_LONG_CONTEXT_INPUT_TOKEN_THRESHOLD = 2_147_483_647
@@ -51,6 +66,7 @@ export function createPricingFormEntry(options: CreatePricingFormEntryOptions = 
     image_output_price: null,
     per_request_price: null,
     intervals: [],
+    time_ranges: [],
   }
 }
 
@@ -137,6 +153,94 @@ export function formIntervalsToAPI(intervals: IntervalFormEntry[]): PricingInter
     per_request_price: toNullableNumber(iv.per_request_price),
     sort_order: iv.sort_order
   }))
+}
+
+// ── 时间段定价 ──────────────────────────────────────────────
+
+/** "HH:MM" → 一天内分钟数；非法返回 null。allowEndOfDay 允许 24:00 → 1440。 */
+export function parseMinute(value: string, allowEndOfDay: boolean): number | null {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim())
+  if (!match) return null
+  const hour = Number(match[1])
+  const minute = Number(match[2])
+  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return null
+  if (minute < 0 || minute > 59) return null
+  if (allowEndOfDay && hour === 24 && minute === 0) return 1440
+  if (hour < 0 || hour > 23) return null
+  return hour * 60 + minute
+}
+
+/** 一天内分钟数 → "HH:MM"（1440 → "24:00"）。 */
+export function minuteToText(minute: number): string {
+  if (minute === 1440) return '24:00'
+  const hour = Math.floor(minute / 60)
+  const min = minute % 60
+  return `${String(hour).padStart(2, '0')}:${String(min).padStart(2, '0')}`
+}
+
+export function apiTimeRangesToForm(timeRanges: PricingTimeRange[]): TimeRangeFormEntry[] {
+  return (timeRanges || []).map(tr => ({
+    start_time: minuteToText(tr.start_minute),
+    end_time: minuteToText(tr.end_minute),
+    input_price: perTokenToMTok(tr.input_price),
+    output_price: perTokenToMTok(tr.output_price),
+    cache_write_price: perTokenToMTok(tr.cache_write_price),
+    cache_read_price: perTokenToMTok(tr.cache_read_price),
+    image_input_price: perTokenToMTok(tr.image_input_price),
+    image_cache_read_price: perTokenToMTok(tr.image_cache_read_price),
+    image_output_price: perTokenToMTok(tr.image_output_price),
+    per_request_price: tr.per_request_price,
+    sort_order: tr.sort_order
+  }))
+}
+
+export function formTimeRangesToAPI(timeRanges: TimeRangeFormEntry[]): PricingTimeRange[] {
+  return (timeRanges || []).map(tr => ({
+    start_minute: parseMinute(tr.start_time, false) as number,
+    end_minute: parseMinute(tr.end_time, true) as number,
+    input_price: mTokToPerToken(tr.input_price),
+    output_price: mTokToPerToken(tr.output_price),
+    cache_write_price: mTokToPerToken(tr.cache_write_price),
+    cache_read_price: mTokToPerToken(tr.cache_read_price),
+    image_input_price: mTokToPerToken(tr.image_input_price),
+    image_cache_read_price: mTokToPerToken(tr.image_cache_read_price),
+    image_output_price: mTokToPerToken(tr.image_output_price),
+    per_request_price: toNullableNumber(tr.per_request_price),
+    sort_order: tr.sort_order
+  }))
+}
+
+/** 校验时间段列表：时间合法、区间有效、无重叠、至少一个价格。返回错误消息或 null。 */
+export function validateTimeRanges(timeRanges: TimeRangeFormEntry[]): string | null {
+  if (!timeRanges || timeRanges.length === 0) return null
+
+  const valid: { index: number; start: number; end: number }[] = []
+  for (let i = 0; i < timeRanges.length; i++) {
+    const tr = timeRanges[i]
+    const start = parseMinute(tr.start_time, false)
+    const end = parseMinute(tr.end_time, true)
+    if (start == null || end == null) {
+      return `时间段 #${i + 1}: 时间格式无效（应为 HH:MM）`
+    }
+    if (end <= start) {
+      return `时间段 #${i + 1}: 结束时间必须大于开始时间`
+    }
+    const hasPrice = [tr.input_price, tr.output_price, tr.cache_write_price, tr.cache_read_price,
+      tr.image_input_price, tr.image_cache_read_price, tr.image_output_price, tr.per_request_price]
+      .some(v => v != null && v !== '')
+    if (!hasPrice) {
+      return `时间段 #${i + 1}: 至少填写一个价格字段`
+    }
+    valid.push({ index: i, start, end })
+  }
+
+  const ordered = valid.sort((a, b) => a.start - b.start || a.end - b.end)
+  for (let i = 1; i < ordered.length; i++) {
+    if (ordered[i].start < ordered[i - 1].end) {
+      return `时间段 #${ordered[i - 1].index + 1} 与 #${ordered[i].index + 1} 重叠`
+    }
+  }
+  return null
 }
 
 // ── 模型模式冲突检测 ──────────────────────────────────────

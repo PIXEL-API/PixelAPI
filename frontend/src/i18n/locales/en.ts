@@ -4355,6 +4355,11 @@ export default {
         imageTiers: "Image Tiers (Per Request)",
         addTier: "Add Tier",
         noTiersYet: "No tiers yet. Click add to configure per-request pricing.",
+        timeRanges: "Time-range prices (peak/off-peak, optional)",
+        addTimeRange: "Add time range",
+        timeRangesHint: "When a time range matches, these prices override the default; unset fields fall back to the default.",
+        startTime: "Start",
+        endTime: "End",
         noPricingRules: 'No pricing rules yet. Click "Add" to create one.',
         perRequestPrice: "Price per Request",
         perRequestPriceRequired:

@@ -94,9 +94,30 @@ type ChannelModelPricing struct {
 	LongContextPricingEnabled *bool
 	// LongContextInputTokenThreshold 在显式启用长上下文倍率时覆盖模型价卡阈值。
 	LongContextInputTokenThreshold *int
-	Intervals                      []PricingInterval // 区间定价列表
+	Intervals                      []PricingInterval   // 区间定价列表（按 context token 长度 / 按次分层）
+	TimeRanges                     []PricingTimeRange  // 时间段定价列表（按一天内分钟区间覆盖基础价）
 	CreatedAt                      time.Time
 	UpdatedAt                      time.Time
+}
+
+// PricingTimeRange 时间段定价（按一天内分钟区间覆盖基础价）。
+// 与 PricingInterval（context 维度）正交：命中时逐字段覆盖默认价/区间价，未填字段回退。
+type PricingTimeRange struct {
+	ID                  int64
+	PricingID           int64
+	StartMinute         int      // 闭区间，0=00:00
+	EndMinute           int      // 开区间，1440=24:00
+	InputPrice          *float64 // token 模式：每 token 输入价
+	OutputPrice         *float64 // token 模式：每 token 输出价
+	CacheWritePrice     *float64 // token 模式：缓存写入价
+	CacheReadPrice      *float64 // token 模式：缓存读取价
+	ImageInputPrice     *float64 // 图片输入 token 价
+	ImageCacheReadPrice *float64 // 图片缓存读取 token 价
+	ImageOutputPrice    *float64 // 图片输出价（向后兼容）
+	PerRequestPrice     *float64 // 按次/图片模式：每次请求价格
+	SortOrder           int
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 // PricingInterval 定价区间（token 区间 / 按次分层 / 图片分辨率分层）
@@ -168,6 +189,19 @@ func (p *ChannelModelPricing) GetIntervalForContext(totalTokens int) *PricingInt
 	return FindMatchingInterval(p.Intervals, totalTokens)
 }
 
+// FindActiveTimeRange 在时间段列表中查找包含 currentMinute 的时间段。
+// 区间语义为 [start_minute, end_minute)，与分组倍率时间策略一致。
+// 未命中返回 nil。
+func FindActiveTimeRange(ranges []PricingTimeRange, currentMinute int) *PricingTimeRange {
+	for i := range ranges {
+		tr := &ranges[i]
+		if currentMinute >= tr.StartMinute && currentMinute < tr.EndMinute {
+			return tr
+		}
+	}
+	return nil
+}
+
 // GetTierByLabel 根据标签查找层级（用于 per_request / image 模式）
 func (p *ChannelModelPricing) GetTierByLabel(label string) *PricingInterval {
 	labelLower := strings.ToLower(label)
@@ -189,6 +223,10 @@ func (p ChannelModelPricing) Clone() ChannelModelPricing {
 	if p.Intervals != nil {
 		cp.Intervals = make([]PricingInterval, len(p.Intervals))
 		copy(cp.Intervals, p.Intervals)
+	}
+	if p.TimeRanges != nil {
+		cp.TimeRanges = make([]PricingTimeRange, len(p.TimeRanges))
+		copy(cp.TimeRanges, p.TimeRanges)
 	}
 	return cp
 }
@@ -357,6 +395,81 @@ func formatMaxTokensLabel(max *int) string {
 		return "∞"
 	}
 	return fmt.Sprintf("%d", *max)
+}
+
+// ValidateTimeRanges 校验时间段定价列表的合法性。
+// 规则：StartMinute ∈ [0,1439]；EndMinute ∈ (0,1440] 且 > StartMinute；
+// 所有价格字段 >= 0；每个时间段至少有一个价格字段；
+// 按 StartMinute 排序后无重叠（[start,end) 语义）。不允许跨天（可拆两条）。
+func ValidateTimeRanges(ranges []PricingTimeRange) error {
+	if len(ranges) == 0 {
+		return nil
+	}
+	sorted := make([]PricingTimeRange, len(ranges))
+	copy(sorted, ranges)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].StartMinute == sorted[j].StartMinute {
+			return sorted[i].EndMinute < sorted[j].EndMinute
+		}
+		return sorted[i].StartMinute < sorted[j].StartMinute
+	})
+
+	for i := range sorted {
+		if err := validateSingleTimeRange(&sorted[i], i); err != nil {
+			return err
+		}
+		if i == 0 {
+			continue
+		}
+		prev := sorted[i-1]
+		if sorted[i].StartMinute < prev.EndMinute {
+			return fmt.Errorf("time range #%d and #%d overlap: prev end=%d > cur start=%d",
+				i, i+1, prev.EndMinute, sorted[i].StartMinute)
+		}
+	}
+	return nil
+}
+
+// validateSingleTimeRange 校验单个时间段的字段合法性
+func validateSingleTimeRange(tr *PricingTimeRange, idx int) error {
+	if tr.StartMinute < 0 || tr.StartMinute >= 1440 {
+		return fmt.Errorf("time range #%d: start_minute (%d) must be in [0, 1439]", idx+1, tr.StartMinute)
+	}
+	if tr.EndMinute <= 0 || tr.EndMinute > 1440 {
+		return fmt.Errorf("time range #%d: end_minute (%d) must be in (0, 1440]", idx+1, tr.EndMinute)
+	}
+	if tr.EndMinute <= tr.StartMinute {
+		return fmt.Errorf("time range #%d: end_minute (%d) must be > start_minute (%d)",
+			idx+1, tr.EndMinute, tr.StartMinute)
+	}
+
+	hasPrice := false
+	prices := []struct {
+		name string
+		val  *float64
+	}{
+		{"input_price", tr.InputPrice},
+		{"output_price", tr.OutputPrice},
+		{"cache_write_price", tr.CacheWritePrice},
+		{"cache_read_price", tr.CacheReadPrice},
+		{"image_input_price", tr.ImageInputPrice},
+		{"image_cache_read_price", tr.ImageCacheReadPrice},
+		{"image_output_price", tr.ImageOutputPrice},
+		{"per_request_price", tr.PerRequestPrice},
+	}
+	for _, p := range prices {
+		if p.val == nil {
+			continue
+		}
+		if *p.val < 0 {
+			return fmt.Errorf("time range #%d: %s must be >= 0", idx+1, p.name)
+		}
+		hasPrice = true
+	}
+	if !hasPrice {
+		return fmt.Errorf("time range #%d: at least one price field is required", idx+1)
+	}
+	return nil
 }
 
 // ChannelUsageFields 渠道相关的使用记录字段（嵌入到各平台的 RecordUsageInput 中）

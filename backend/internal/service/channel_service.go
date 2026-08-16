@@ -613,6 +613,9 @@ func validatePricingEntries(pricing []ChannelModelPricing) error {
 	if err := validatePricingIntervals(pricing); err != nil {
 		return err
 	}
+	if err := validatePricingTimeRanges(pricing); err != nil {
+		return err
+	}
 	if err := validatePricingBillingMode(pricing); err != nil {
 		return err
 	}
@@ -1064,6 +1067,19 @@ func validatePricingIntervals(pricingList []ChannelModelPricing) error {
 			return infraerrors.BadRequest(
 				"INVALID_PRICING_INTERVALS",
 				fmt.Sprintf("invalid pricing intervals for platform '%s' models %v: %v",
+					pricing.Platform, pricing.Models, err),
+			)
+		}
+	}
+	return nil
+}
+
+func validatePricingTimeRanges(pricingList []ChannelModelPricing) error {
+	for _, pricing := range pricingList {
+		if err := ValidateTimeRanges(pricing.TimeRanges); err != nil {
+			return infraerrors.BadRequest(
+				"INVALID_PRICING_TIME_RANGES",
+				fmt.Sprintf("invalid pricing time ranges for platform '%s' models %v: %v",
 					pricing.Platform, pricing.Models, err),
 			)
 		}

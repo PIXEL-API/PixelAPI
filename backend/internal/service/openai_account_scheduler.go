@@ -1141,9 +1141,11 @@ func (s *defaultOpenAIAccountScheduler) filterOpenAIAccountsForLoadBalance(
 	loadReq := make([]AccountWithConcurrency, 0, len(accounts))
 	for i := range accounts {
 		account := &accounts[i]
-		// opencode 账号在调度时惰性刷新用量窗口，供额度守卫（IsSchedulable 内的
-		// IsOpencodeQuotaProtectionActiveAt）依据最新 percent 判定，不阻塞选号。
-		s.service.scheduleOpencodeUsageProbeIfStale(account)
+		// opencode 账号在调度时同步刷新用量窗口（若 stale），供额度守卫
+		// IsOpencodeQuotaProtectionActiveAt 依据最新 percent 判定，达限立即排除。
+		if account.IsOpencodeApiKey() {
+			s.service.refreshOpencodeUsageIfStale(ctx, account)
+		}
 		if req.ExcludedIDs != nil {
 			if _, excluded := req.ExcludedIDs[account.ID]; excluded {
 				continue

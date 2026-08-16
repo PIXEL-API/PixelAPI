@@ -119,6 +119,10 @@ const (
 	apiQueryMaxJitter       = 800 * time.Millisecond // 用量查询最大随机延迟
 	windowStatsCacheTTL     = 1 * time.Minute
 	openAIProbeCacheTTL     = 10 * time.Minute
+	// opencodeUsageSyncProbeTimeout 是选号时同步刷新 opencode 用量窗口的超时上限。
+	// 同步拉取阻塞选号循环，超时要短；失败保留旧数据（fail-open），宁可短暂漏判一次，
+	// 也不让 usage 端点抖动拖垮选号。
+	opencodeUsageSyncProbeTimeout = 3 * time.Second
 	grokFreeQuotaWindow     = 24 * time.Hour
 	openAICodexProbeVersion = "0.144.1"
 )
@@ -790,14 +794,11 @@ func (s *AccountUsageService) shouldProbeOpencodeUsageThrottle(accountID int64, 
 	return true
 }
 
-// opencodeUsageProbeFlight 防止同一 opencode 账号并发派发多个用量拉取后台任务。
-var opencodeUsageProbeFlight sync.Map
-
-// ScheduleOpencodeUsageProbe 在调度到 opencode 账号时惰性刷新其 5h/7d/30d 用量窗口。
-// 不阻塞调用方：仅当快照已过期、且 throttle 与在飞任务守卫都放行时才派发后台任务。
-// 这是 opencode 订阅额度守卫的数据来源——不依赖全局定时器，改为「用到才拉」，
-// 数据随调度自然保持新鲜（最多 10 分钟 stale 窗口）。
-func (s *AccountUsageService) ScheduleOpencodeUsageProbe(account *Account) {
+// refreshOpencodeUsageIfStale 同步刷新 opencode 账号的用量窗口（若快照已过期）。
+// 本方法阻塞调用方、拉取成功后直接把最新用量 merge 进传入 account.Extra，
+// 让紧随其后的 IsSchedulable 达限判定用最新数据，解决「账号窗口已 100% 但调度仍选中」
+// 的滞后问题。失败保留旧数据（fail-open）。
+func (s *AccountUsageService) refreshOpencodeUsageIfStale(ctx context.Context, account *Account) {
 	if s == nil || account == nil || !account.IsOpencodeApiKey() || s.accountRepo == nil || account.ID <= 0 {
 		return
 	}
@@ -805,24 +806,19 @@ func (s *AccountUsageService) ScheduleOpencodeUsageProbe(account *Account) {
 	if !isOpencodeUsageSnapshotStale(account, now) {
 		return
 	}
-	// throttle 保证同一账号 10 分钟内至多派发一次（含失败），避免坏账号热循环。
 	if !s.shouldProbeOpencodeUsageThrottle(account.ID, now) {
 		return
 	}
-	if _, loaded := opencodeUsageProbeFlight.LoadOrStore(account.ID, struct{}{}); loaded {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, opencodeUsageSyncProbeTimeout)
+	defer cancel()
+	updates, err := s.probeOpencodeUsage(probeCtx, account)
+	if err != nil || len(updates) == 0 {
 		return
 	}
-	copyAccount := *account
-	copyAccount.Credentials = cloneCredentials(account.Credentials)
-	copyAccount.Extra = cloneCredentials(account.Extra)
-	go func() {
-		defer opencodeUsageProbeFlight.Delete(copyAccount.ID)
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		if _, err := s.probeOpencodeUsage(ctx, &copyAccount); err != nil {
-			slog.Debug("opencode_usage_probe_failed", "account_id", copyAccount.ID, "error", err)
-		}
-	}()
+	mergeAccountExtra(account, updates)
 }
 
 // probeOpencodeUsage 主动拉取 opencode 的 GET /zen/go/v1/usage 端点，

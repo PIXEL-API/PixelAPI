@@ -37,6 +37,14 @@ func (r *channelRepository) ListModelPricing(ctx context.Context, channelID int6
 		for i := range result {
 			result[i].Intervals = intervalMap[result[i].ID]
 		}
+
+		timeRangeMap, err := r.batchLoadTimeRanges(ctx, pricingIDs)
+		if err != nil {
+			return nil, err
+		}
+		for i := range result {
+			result[i].TimeRanges = timeRangeMap[result[i].ID]
+		}
 	}
 
 	return result, nil
@@ -123,6 +131,16 @@ func (r *channelRepository) batchLoadModelPricing(ctx context.Context, channelID
 				pricingMap[chID][i].Intervals = intervalMap[pricingMap[chID][i].ID]
 			}
 		}
+
+		timeRangeMap, err := r.batchLoadTimeRanges(ctx, allPricingIDs)
+		if err != nil {
+			return nil, err
+		}
+		for chID := range pricingMap {
+			for i := range pricingMap[chID] {
+				pricingMap[chID][i].TimeRanges = timeRangeMap[pricingMap[chID][i].ID]
+			}
+		}
 	}
 
 	return pricingMap, nil
@@ -159,6 +177,41 @@ func (r *channelRepository) batchLoadIntervals(ctx context.Context, pricingIDs [
 		return nil, fmt.Errorf("iterate intervals: %w", err)
 	}
 	return intervalMap, nil
+}
+
+// batchLoadTimeRanges 批量加载多个定价条目的时间段定价
+func (r *channelRepository) batchLoadTimeRanges(ctx context.Context, pricingIDs []int64) (map[int64][]service.PricingTimeRange, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, pricing_id, start_minute, end_minute,
+		        input_price, output_price, cache_write_price, cache_read_price,
+		        image_input_price, image_cache_read_price, image_output_price,
+		        per_request_price, sort_order, created_at, updated_at
+		 FROM channel_pricing_time_ranges
+		 WHERE pricing_id = ANY($1) ORDER BY pricing_id, sort_order, id`,
+		pq.Array(pricingIDs),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("batch load time ranges: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	timeRangeMap := make(map[int64][]service.PricingTimeRange, len(pricingIDs))
+	for rows.Next() {
+		var tr service.PricingTimeRange
+		if err := rows.Scan(
+			&tr.ID, &tr.PricingID, &tr.StartMinute, &tr.EndMinute,
+			&tr.InputPrice, &tr.OutputPrice, &tr.CacheWritePrice, &tr.CacheReadPrice,
+			&tr.ImageInputPrice, &tr.ImageCacheReadPrice, &tr.ImageOutputPrice,
+			&tr.PerRequestPrice, &tr.SortOrder, &tr.CreatedAt, &tr.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan time range: %w", err)
+		}
+		timeRangeMap[tr.PricingID] = append(timeRangeMap[tr.PricingID], tr)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate time ranges: %w", err)
+	}
+	return timeRangeMap, nil
 }
 
 // --- 共享 scan 辅助 ---
@@ -249,6 +302,13 @@ func createModelPricingExec(ctx context.Context, exec dbExec, pricing *service.C
 		}
 	}
 
+	for i := range pricing.TimeRanges {
+		pricing.TimeRanges[i].PricingID = pricing.ID
+		if err := createTimeRangeExec(ctx, exec, &pricing.TimeRanges[i]); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -261,6 +321,18 @@ func createIntervalExec(ctx context.Context, exec dbExec, iv *service.PricingInt
 		iv.InputPrice, iv.OutputPrice, iv.CacheWritePrice, iv.CacheReadPrice,
 		iv.PerRequestPrice, iv.SortOrder,
 	).Scan(&iv.ID, &iv.CreatedAt, &iv.UpdatedAt)
+}
+
+func createTimeRangeExec(ctx context.Context, exec dbExec, tr *service.PricingTimeRange) error {
+	return exec.QueryRowContext(ctx,
+		`INSERT INTO channel_pricing_time_ranges
+		 (pricing_id, start_minute, end_minute, input_price, output_price, cache_write_price, cache_read_price,
+		  image_input_price, image_cache_read_price, image_output_price, per_request_price, sort_order)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id, created_at, updated_at`,
+		tr.PricingID, tr.StartMinute, tr.EndMinute,
+		tr.InputPrice, tr.OutputPrice, tr.CacheWritePrice, tr.CacheReadPrice,
+		tr.ImageInputPrice, tr.ImageCacheReadPrice, tr.ImageOutputPrice, tr.PerRequestPrice, tr.SortOrder,
+	).Scan(&tr.ID, &tr.CreatedAt, &tr.UpdatedAt)
 }
 
 func replaceModelPricingTx(ctx context.Context, exec dbExec, channelID int64, pricingList []service.ChannelModelPricing) error {

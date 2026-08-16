@@ -70,6 +70,7 @@ type channelModelPricingRequest struct {
 	LongContextPricingEnabled      *bool                    `json:"long_context_pricing_enabled"`
 	LongContextInputTokenThreshold *int                     `json:"long_context_input_token_threshold" binding:"omitempty,min=1,max=2147483647"`
 	Intervals                      []pricingIntervalRequest `json:"intervals"`
+	TimeRanges                     []pricingTimeRangeRequest `json:"time_ranges"`
 }
 
 type pricingIntervalRequest struct {
@@ -82,6 +83,20 @@ type pricingIntervalRequest struct {
 	CacheReadPrice  *float64 `json:"cache_read_price"`
 	PerRequestPrice *float64 `json:"per_request_price"`
 	SortOrder       int      `json:"sort_order"`
+}
+
+type pricingTimeRangeRequest struct {
+	StartMinute         int      `json:"start_minute"`
+	EndMinute           int      `json:"end_minute"`
+	InputPrice          *float64 `json:"input_price"`
+	OutputPrice         *float64 `json:"output_price"`
+	CacheWritePrice     *float64 `json:"cache_write_price"`
+	CacheReadPrice      *float64 `json:"cache_read_price"`
+	ImageInputPrice     *float64 `json:"image_input_price"`
+	ImageCacheReadPrice *float64 `json:"image_cache_read_price"`
+	ImageOutputPrice    *float64 `json:"image_output_price"`
+	PerRequestPrice     *float64 `json:"per_request_price"`
+	SortOrder           int      `json:"sort_order"`
 }
 
 type accountStatsPricingRuleRequest struct {
@@ -125,6 +140,7 @@ type channelModelPricingResponse struct {
 	LongContextPricingEnabled      *bool                     `json:"long_context_pricing_enabled"`
 	LongContextInputTokenThreshold *int                      `json:"long_context_input_token_threshold"`
 	Intervals                      []pricingIntervalResponse `json:"intervals"`
+	TimeRanges                     []pricingTimeRangeResponse `json:"time_ranges"`
 }
 
 type pricingIntervalResponse struct {
@@ -138,6 +154,21 @@ type pricingIntervalResponse struct {
 	CacheReadPrice  *float64 `json:"cache_read_price"`
 	PerRequestPrice *float64 `json:"per_request_price"`
 	SortOrder       int      `json:"sort_order"`
+}
+
+type pricingTimeRangeResponse struct {
+	ID                  int64    `json:"id"`
+	StartMinute         int      `json:"start_minute"`
+	EndMinute           int      `json:"end_minute"`
+	InputPrice          *float64 `json:"input_price"`
+	OutputPrice         *float64 `json:"output_price"`
+	CacheWritePrice     *float64 `json:"cache_write_price"`
+	CacheReadPrice      *float64 `json:"cache_read_price"`
+	ImageInputPrice     *float64 `json:"image_input_price"`
+	ImageCacheReadPrice *float64 `json:"image_cache_read_price"`
+	ImageOutputPrice    *float64 `json:"image_output_price"`
+	PerRequestPrice     *float64 `json:"per_request_price"`
+	SortOrder           int      `json:"sort_order"`
 }
 
 type accountStatsPricingRuleResponse struct {
@@ -220,6 +251,10 @@ func pricingToResponse(p *service.ChannelModelPricing) channelModelPricingRespon
 	for _, iv := range p.Intervals {
 		intervals = append(intervals, intervalToResponse(iv))
 	}
+	timeRanges := make([]pricingTimeRangeResponse, 0, len(p.TimeRanges))
+	for _, tr := range p.TimeRanges {
+		timeRanges = append(timeRanges, timeRangeToResponse(tr))
+	}
 	return channelModelPricingResponse{
 		ID:                             p.ID,
 		Platform:                       platform,
@@ -236,6 +271,7 @@ func pricingToResponse(p *service.ChannelModelPricing) channelModelPricingRespon
 		LongContextPricingEnabled:      p.LongContextPricingEnabled,
 		LongContextInputTokenThreshold: p.LongContextInputTokenThreshold,
 		Intervals:                      intervals,
+		TimeRanges:                     timeRanges,
 	}
 }
 
@@ -251,6 +287,23 @@ func intervalToResponse(iv service.PricingInterval) pricingIntervalResponse {
 		CacheReadPrice:  iv.CacheReadPrice,
 		PerRequestPrice: iv.PerRequestPrice,
 		SortOrder:       iv.SortOrder,
+	}
+}
+
+func timeRangeToResponse(tr service.PricingTimeRange) pricingTimeRangeResponse {
+	return pricingTimeRangeResponse{
+		ID:                  tr.ID,
+		StartMinute:         tr.StartMinute,
+		EndMinute:           tr.EndMinute,
+		InputPrice:          tr.InputPrice,
+		OutputPrice:         tr.OutputPrice,
+		CacheWritePrice:     tr.CacheWritePrice,
+		CacheReadPrice:      tr.CacheReadPrice,
+		ImageInputPrice:     tr.ImageInputPrice,
+		ImageCacheReadPrice: tr.ImageCacheReadPrice,
+		ImageOutputPrice:    tr.ImageOutputPrice,
+		PerRequestPrice:     tr.PerRequestPrice,
+		SortOrder:           tr.SortOrder,
 	}
 }
 
@@ -276,6 +329,22 @@ func pricingRequestToService(reqs []channelModelPricingRequest) []service.Channe
 				SortOrder:       iv.SortOrder,
 			})
 		}
+		timeRanges := make([]service.PricingTimeRange, 0, len(r.TimeRanges))
+		for _, tr := range r.TimeRanges {
+			timeRanges = append(timeRanges, service.PricingTimeRange{
+				StartMinute:         tr.StartMinute,
+				EndMinute:           tr.EndMinute,
+				InputPrice:          tr.InputPrice,
+				OutputPrice:         tr.OutputPrice,
+				CacheWritePrice:     tr.CacheWritePrice,
+				CacheReadPrice:      tr.CacheReadPrice,
+				ImageInputPrice:     tr.ImageInputPrice,
+				ImageCacheReadPrice: tr.ImageCacheReadPrice,
+				ImageOutputPrice:    tr.ImageOutputPrice,
+				PerRequestPrice:     tr.PerRequestPrice,
+				SortOrder:           tr.SortOrder,
+			})
+		}
 		result = append(result, service.ChannelModelPricing{
 			Platform:                       platform,
 			Models:                         r.Models,
@@ -291,6 +360,7 @@ func pricingRequestToService(reqs []channelModelPricingRequest) []service.Channe
 			LongContextPricingEnabled:      r.LongContextPricingEnabled,
 			LongContextInputTokenThreshold: r.LongContextInputTokenThreshold,
 			Intervals:                      intervals,
+			TimeRanges:                     timeRanges,
 		})
 	}
 	return result
