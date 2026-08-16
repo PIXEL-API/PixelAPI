@@ -1708,13 +1708,11 @@ func (h *UserAccountHandler) ConvertExternalPlacementBatch(c *gin.Context) {
 		response.BadRequest(c, "idempotency_key must contain 1 to 96 characters")
 		return
 	}
-	if req.Target == service.AccountExternalPlacementRoom {
-		if req.RoomID == nil || *req.RoomID <= 0 {
-			response.BadRequest(c, "room_id is required for room placement")
-			return
-		}
-	} else if req.RoomID != nil {
-		response.BadRequest(c, "room_id is only allowed for room placement")
+	// room 目标与单账号路径语义一致：不指定房间，由 service/repo 按「默认房间」匹配
+	// （ConvertOwnedExternalPlacement 对非空 RoomID 直接拒绝）。这里只做非法 room_id
+	// 的兜底校验，不强制必填——否则与单账号 convert 自相矛盾，批量入房永远 400。
+	if req.RoomID != nil && *req.RoomID > 0 {
+		response.BadRequest(c, "room_id is not supported for batch placement")
 		return
 	}
 
@@ -1747,6 +1745,15 @@ func (h *UserAccountHandler) ConvertExternalPlacementBatch(c *gin.Context) {
 		)
 		if err != nil {
 			item.Error = err.Error()
+			item.Reason = infraerrors.Reason(err)
+			// infraerrors.Message 对非 ApplicationError（裸 DB/Redis 错误）返回固定
+			// "internal error"，会遮蔽 err.Error() 里的真实原因。reason 为空时直接用
+			// 完整错误文本，让前端明细显示可读原因而非通用占位。
+			if item.Reason != "" {
+				item.Message = infraerrors.Message(err)
+			} else {
+				item.Message = err.Error()
+			}
 			result.Failed++
 			result.FailedIDs = append(result.FailedIDs, accountID)
 		} else {

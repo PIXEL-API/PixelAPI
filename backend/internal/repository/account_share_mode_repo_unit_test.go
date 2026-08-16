@@ -2418,7 +2418,7 @@ func TestAccountShareModeRepositoryJoinListingOwnerSelfUseHasNoSeatPrepay(t *tes
 	mock.ExpectQuery("SELECT EXISTS").
 		WithArgs(accountID, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
-	mock.ExpectQuery("(?s)INSERT INTO account_share_memberships.*\\$5::varchar\\(20\\).*CASE WHEN \\$5::varchar\\(20\\) = 'queued'::varchar\\(20\\)").
+	mock.ExpectQuery("(?s)INSERT INTO account_share_memberships.*\\$5::varchar\\(20\\).*CASE WHEN \\$5::varchar\\(20\\) = 'queued'::varchar\\(20\\).*make_interval\\(hours => \\$24\\)").
 		WithArgs(
 			listingID,
 			accountID,
@@ -2443,6 +2443,7 @@ func TestAccountShareModeRepositoryJoinListingOwnerSelfUseHasNoSeatPrepay(t *tes
 			"owner-key",
 			sqlmock.AnyArg(),
 			service.AccountShareSnapshotQualityExact,
+			service.AccountShareModeQueueExpiryDuration.Hours(),
 		).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id",
@@ -2648,6 +2649,7 @@ func TestAccountShareModeRepositoryJoinListingQueuesBehindExistingActiveMembersh
 			"consumer-key",
 			sqlmock.AnyArg(),
 			service.AccountShareSnapshotQualityExact,
+			service.AccountShareModeQueueExpiryDuration.Hours(),
 		).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id",
@@ -3149,6 +3151,7 @@ func TestAccountShareModeRepositoryJoinListingActivatesAfterStaleQueuedCleanup(t
 			"consumer-key",
 			sqlmock.AnyArg(),
 			service.AccountShareSnapshotQualityExact,
+			service.AccountShareModeQueueExpiryDuration.Hours(),
 		).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id",
@@ -5058,6 +5061,10 @@ func TestAccountShareModeRepositorySeatBillingEndsUnavailableAccount(t *testing.
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"status", "ended_at", "ended_reason", "paid_until", "billed_until", "updated_at"}).
 			AddRow(service.AccountShareMembershipStatusEnded, now, service.AccountShareMembershipEndReasonUnavailable, now, now, now))
+	// 结束路径必须同时关闭 membership binding，防止孤儿 binding 阻塞账号/房间删除。
+	mock.ExpectExec("UPDATE account_share_membership_account_bindings").
+		WithArgs(now, consumerUserID, "consumer", "membership_ended", membershipID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
 	result, err := repo.processSeatBillingMembership(context.Background(), membershipID, now)
@@ -8229,8 +8236,8 @@ func TestAccountShareModeRepositorySuspendsRecoverableUnavailableAndRefundsPrepa
 	mock.ExpectExec("UPDATE account_share_membership_account_bindings").
 		WithArgs(now, nil, "system", "membership_requeued", membershipID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery("(?s)UPDATE account_share_memberships m.*dispatch_failed_at = \\$3::timestamptz.*queue_expires_at = \\$3::timestamptz \\+ INTERVAL '2 hours'").
-		WithArgs(service.AccountShareMembershipStatusQueued, now, now, now, membershipID, service.AccountShareMembershipStatusActive, true).
+	mock.ExpectQuery("(?s)UPDATE account_share_memberships m.*dispatch_failed_at = \\$3::timestamptz.*queue_expires_at = \\$3::timestamptz \\+ make_interval\\(hours => \\$8\\)").
+		WithArgs(service.AccountShareMembershipStatusQueued, now, now, now, membershipID, service.AccountShareMembershipStatusActive, true, service.AccountShareModeQueueExpiryDuration.Hours()).
 		WillReturnRows(sqlmock.NewRows(accountShareMembershipColumns()).AddRow(
 			membershipID, listingID, nil, ownerUserID, consumerUserID, apiKeyID,
 			service.AccountShareMembershipStatusQueued, 1, 0.2, 0.0, 0,
@@ -9315,10 +9322,49 @@ func TestAccountShareModeRepositoryGetActiveMembershipForRequestUsesMembershipOn
 			"updated_at",
 		}))
 	mock.ExpectRollback()
+	// 无 active membership 时探测 ending 状态：本测试无 ending membership，返回 NotFound。
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs(int64(20), int64(30), service.AccountShareMembershipStatusEnding, int64(50)).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 
 	_, _, err = repo.GetActiveMembershipForRequest(context.Background(), 20, 30, 50)
 	if !errors.Is(err, service.ErrAccountShareListingNotFound) {
 		t.Fatalf("expected not found from empty binding query, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestAccountShareModeRepositoryGetActiveMembershipForRequestDetectsEnding(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() {
+		_ = db.Close()
+	}()
+	repo := &accountShareModeRepository{db: db}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT\\s+m\\.id").
+		WithArgs(int64(20), int64(30), int64(50)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "listing_id", "account_id", "owner_user_id", "consumer_user_id", "api_key_id", "status",
+			"queue_rank", "hourly_rate_snapshot", "hourly_fee_waiver_minimum_snapshot", "idle_timeout_minutes",
+			"joined_at", "last_request_at", "ended_at", "ended_reason", "paid_until", "billed_until",
+			"waiver_window_started_at", "waiver_window_usage_amount", "waiver_window_request_count", "waiver_window_last_request_at",
+			"dispatch_failed_at", "dispatch_cooldown_until", "created_at", "updated_at",
+		}))
+	mock.ExpectRollback()
+	// active 查不到，但有 ending membership → 返回 ACCOUNT_SHARE_MEMBERSHIP_ENDING。
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs(int64(20), int64(30), service.AccountShareMembershipStatusEnding, int64(50)).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+	_, _, err = repo.GetActiveMembershipForRequest(context.Background(), 20, 30, 50)
+	if !errors.Is(err, service.ErrAccountShareMembershipEnding) {
+		t.Fatalf("expected ending error when previous settlement pending, got %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)

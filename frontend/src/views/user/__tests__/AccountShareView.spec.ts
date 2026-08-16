@@ -3000,4 +3000,120 @@ describe('AccountShareView async snapshots and mode keys', () => {
 
     wrapper.unmount()
   })
+
+  it('buildListingFilters: available 只在 tab=all 翻译成 available_only，管理视图不全量过滤', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    const setupState = (wrapper.vm as any).$?.setupState
+    // 默认 status=available（广场默认只看可用）
+    expect(setupState.listingFilters.status).toBe('available')
+    // tab=all：available → status=active + available_only=true
+    const allFilters = setupState.buildListingFilters('all')
+    expect(allFilters.status).toBe('active')
+    expect(allFilters.available_only).toBe(true)
+    // tab=mine：available 不被翻译，管理视图全量
+    const mineFilters = setupState.buildListingFilters('mine')
+    expect(mineFilters.available_only).toBeUndefined()
+    expect(mineFilters.status).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('满员房间仍可加入（进预约队列），仅真正不可用状态才禁用加入按钮', async () => {
+    const fullRoom = listing({
+      id: 601,
+      room_name: '满员可排队房间',
+      seat_limit: 2,
+      active_seats: 2,
+      account_count: 1,
+      healthy_account_count: 1,
+      min_balance_required: 0,
+    })
+    const unavailableRoom = listing({
+      id: 602,
+      room_name: '无可路由账号房间',
+      seat_limit: 3,
+      active_seats: 1,
+      account_count: 1,
+      quota_summary: { eligible_count: 0, attached_count: 1 },
+      min_balance_required: 0,
+    })
+    listListings.mockResolvedValue(paginated([fullRoom, unavailableRoom]))
+    const wrapper = mountView()
+    await flushPromises()
+    const setupState = (wrapper.vm as any).$?.setupState
+    // 满员 = 可排队，不置灰
+    expect(setupState.listingJoinUnavailableReason(fullRoom)).toBe('')
+    // 无可路由账号 = 不可加入（quota_summary.eligible_count 明确为 0）
+    expect(setupState.listingJoinUnavailableReason(unavailableRoom)).toContain('没有可路由账号')
+    wrapper.unmount()
+  })
+
+  it('余额不足的房间对非号主置灰，号主自用不受余额限制', async () => {
+    const highBalanceRoom = listing({
+      id: 701,
+      room_name: '高余额门槛房间',
+      seat_limit: 3,
+      active_seats: 1,
+      account_count: 1,
+      healthy_account_count: 1,
+      min_balance_required: 999999,
+    })
+    const ownRoom = {
+      ...highBalanceRoom,
+      id: 702,
+      owner_user_id: 9, // 当前用户是号主
+      room_name: '号主自己的高门槛房间',
+    }
+    listListings.mockResolvedValue(paginated([highBalanceRoom, ownRoom]))
+    const wrapper = mountView()
+    await flushPromises()
+    const setupState = (wrapper.vm as any).$?.setupState
+    // 非号主：余额不足 → 不可加入
+    expect(setupState.listingJoinUnavailableReason(highBalanceRoom)).toContain('最低余额')
+    // 号主自用：不受余额限制
+    expect(setupState.listingJoinUnavailableReason(ownRoom)).toBe('')
+    wrapper.unmount()
+  })
+
+  it('管理员浏览广场默认不启用可用性过滤（保持全量）', async () => {
+    const originalUser = authState.user
+    authState.user = { ...(originalUser as object), role: 'admin' } as never
+    try {
+      const wrapper = mountView()
+      await flushPromises()
+      const setupState = (wrapper.vm as any).$?.setupState
+      // admin 默认 status 为空（非 available）
+      expect(setupState.listingFilters.status).toBe('')
+      // tab=all 下 admin 不翻译 available_only
+      const allFilters = setupState.buildListingFilters('all')
+      expect(allFilters.available_only).toBeUndefined()
+      wrapper.unmount()
+    } finally {
+      authState.user = originalUser
+    }
+  })
+
+  it('老用户 localStorage 的旧 status="" 会迁移为当前默认可用账号', async () => {
+    localStorage.setItem('account-share-listing-preferences:user:9', JSON.stringify({
+      platform: 'openai',
+      tab: 'all',
+      search: '',
+      pageSize: 10,
+      status: '', // 旧版本默认
+      accountLevel: 'all',
+      sortKeys: [],
+      seatLimits: [],
+      featureTags: [],
+      models: [],
+    }))
+    const wrapper = mountView()
+    await flushPromises()
+    const setupState = (wrapper.vm as any).$?.setupState
+    // 普通用户（非 admin）：旧 '' 迁移为 available
+    expect(setupState.listingFilters.status).toBe('available')
+    // 迁移写回 localStorage
+    const stored = JSON.parse(localStorage.getItem('account-share-listing-preferences:user:9') as string)
+    expect(stored.status).toBe('available')
+    wrapper.unmount()
+  })
 })

@@ -487,8 +487,8 @@ describe('BulkEditAccountModal', () => {
       success_ids: [],
       failed_ids: [1, 2],
       results: [
-        { account_id: 1, success: false, error: 'busy' },
-        { account_id: 2, success: false, error: 'busy' }
+        { account_id: 1, success: false, error: 'busy', reason: 'ACCOUNT_EXTERNAL_PLACEMENT_BUSY' },
+        { account_id: 2, success: false, error: 'busy', reason: 'ACCOUNT_EXTERNAL_PLACEMENT_BUSY' }
       ]
     } as any)
     const wrapper = mountModal({
@@ -508,6 +508,54 @@ describe('BulkEditAccountModal', () => {
     expect(accountsAPI.bulkUpdate).toHaveBeenCalledTimes(1)
     expect(accountsAPI.convertExternalPlacementBatch).toHaveBeenCalledTimes(1)
     expect(wrapper.emitted('updated')).toHaveLength(1)
+  })
+
+  it('批量模式切换部分失败时展示失败账号明细', async () => {
+    vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(
+      '44444444-4444-4444-8444-444444444444'
+    )
+    vi.mocked(accountsAPI.bulkUpdate).mockResolvedValueOnce({
+      success: 2,
+      failed: 0,
+      success_ids: [1, 2],
+      failed_ids: [],
+      results: [
+        { account_id: 1, success: true },
+        { account_id: 2, success: true }
+      ]
+    } as any)
+    vi.mocked(accountsAPI.convertExternalPlacementBatch).mockResolvedValueOnce({
+      success: 1,
+      failed: 1,
+      success_ids: [1],
+      failed_ids: [2],
+      results: [
+        { account_id: 1, success: true },
+        { account_id: 2, success: false, error: 'public account validation failed', reason: 'OWNED_ACCOUNT_PUBLIC_VALIDATION_FAILED', message: 'public account validation failed' }
+      ]
+    } as any)
+    const wrapper = mountModal({
+      accountScope: 'user',
+      ownerUserId: 9,
+      selectedPlatforms: ['openai'],
+      selectedTypes: ['oauth'],
+      selectedAccountLevels: ['plus']
+    })
+
+    await wrapper.get('#bulk-edit-external-placement-enabled').setValue(true)
+    await wrapper.get('[data-testid="placement-target-public_pool"]').setValue()
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(accountsAPI.convertExternalPlacementBatch).toHaveBeenCalledTimes(1)
+    const errorArea = wrapper.get('[data-testid="bulk-placement-submit-error"]')
+    expect(errorArea.text()).toContain('#2')
+    // i18n mock 的 t 直接返回 key，extractI18nErrorMessage 在无映射时退回后端 message。
+    expect(errorArea.text()).toContain('public account validation failed')
+    const details = wrapper.get('[data-testid="bulk-placement-failed-details"]')
+    expect(details.text()).toContain('#2')
+    // 部分失败时弹窗保持打开，失败明细才不会被关闭清空。
+    expect(wrapper.emitted('close')).toBeUndefined()
   })
 
   it('用户作用域提交普通字段时调用用户接口且不包含 share_mode', async () => {

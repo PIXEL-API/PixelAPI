@@ -1724,7 +1724,10 @@ func (s *GatewayService) resolveAccountShareModeBoundAccountForLookup(
 		if err != nil {
 			return nil, true, err
 		}
-		if user == nil || user.Balance < listing.MinBalanceRequired {
+		// 号主自用在 join 阶段已豁免余额校验，dispatch 路径保持一致，
+		// 否则号主余额跌破自己房间的 min_balance 后自用请求全被拒。
+		if user == nil ||
+			(!IsAccountShareModeOwnerSelfUse(membership, listing) && user.Balance < listing.MinBalanceRequired) {
 			return nil, true, ErrAccountShareBalanceBelowMinimum
 		}
 	}
@@ -2476,7 +2479,8 @@ func (s *GatewayService) selectAccountShareModeBoundAccount(ctx context.Context,
 			if err != nil {
 				return nil, true, err
 			}
-			if user.Balance < listing.MinBalanceRequired {
+			// 号主自用在 join 阶段已豁免余额校验，dispatch 路径保持一致。
+			if !IsAccountShareModeOwnerSelfUse(membership, listing) && user.Balance < listing.MinBalanceRequired {
 				lastErr = ErrAccountShareBalanceBelowMinimum
 				retryCurrentMembership = true
 			}

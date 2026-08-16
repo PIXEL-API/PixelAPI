@@ -205,6 +205,15 @@ func (s *ownedAgentIdentityPlacementRepoStub) HasRoomAccount(context.Context, in
 	return false, nil
 }
 
+func (s *ownedAgentIdentityPlacementRepoStub) GetModeGroup(context.Context, string) (*Group, error) {
+	return &Group{
+		ID:       ownedAgentIdentityTeamPublicGroupID,
+		Name:     "OpenAI mode group",
+		Platform: PlatformOpenAI,
+		Status:   StatusActive,
+	}, nil
+}
+
 func (s *ownedAgentIdentityPlacementRepoStub) BeginExternalPlacementDrain(_ context.Context, _ int64, accountID int64) (bool, error) {
 	if !s.beginDrain {
 		return false, nil
@@ -255,6 +264,10 @@ func (s *ownedAgentIdentityPlacementRepoStub) ConvertExternalPlacement(_ context
 	if input.Target == AccountExternalPlacementPublicPool {
 		account.ShareMode = AccountShareModePublic
 		account.ExternalPlacement.Target = AccountExternalPlacementPublicPool
+	}
+	if input.Target == AccountExternalPlacementRoom {
+		account.ExternalPlacement.Target = AccountExternalPlacementRoom
+		account.ExternalPlacement.State = "active"
 	}
 	if err := s.accountRepo.Update(context.Background(), account); err != nil {
 		if input.Target == AccountExternalPlacementPublicPool {
@@ -1004,4 +1017,68 @@ func TestConvertOwnedExternalPlacementRoomToPublicPoolStillRejectsInflight(t *te
 	// 被拒后 drain 必须恢复，账号 placement 保持 active，不能卡在 draining。
 	require.Equal(t, 1, placementRepo.restoreDrainCalls)
 	require.Equal(t, "active", repo.accounts[1].ExternalPlacement.State)
+}
+
+// 公共号池账号转入房间：即使账号正被公共调度（在途请求 > 0）也应成功。
+// 修复前 ensureOwnedAccountExternalPlacementIdle 只对 private 目标跳过——
+// room 目标（入房）同样被公共在途永久拖住：BeginExternalPlacementDrain 停掉公共
+// 调度 → idle 一次性快照见在途非零 → busy 拒绝 → defer 恢复 active → 公共调度
+// 重新派流量，重试多少次都卡死。入房与切回私有一致，都是 repo 层同一事务原子
+// 改写 placement 与分组，等待「归零」既不必要也等不到。仅 public_pool 目标保留
+// 排空守卫，见 TestConvertOwnedExternalPlacementRoomToPublicPoolStillRejectsInflight。
+func TestConvertOwnedExternalPlacementPublicPoolToRoomSkipsIdleGuard(t *testing.T) {
+	ownerUserID := int64(101)
+	publicGroupID := ownedAgentIdentityPlusPublicGroupID
+	repo := newOwnedAgentIdentityRepoStub()
+	repo.accounts[1] = &Account{
+		ID:           1,
+		Name:         "Shared pool account entering room",
+		OwnerUserID:  &ownerUserID,
+		Platform:     PlatformOpenAI,
+		Type:         AccountTypeOAuth,
+		AccountLevel: AccountLevelPlus,
+		Credentials:  map[string]any{"access_token": "test-token"},
+		Extra:        map[string]any{},
+		ShareMode:    AccountShareModePublic,
+		ShareStatus:  AccountShareStatusApproved,
+		Concurrency:  3,
+		Priority:     1,
+		Status:       StatusActive,
+		Schedulable:  true,
+		GroupIDs:     []int64{ownedAgentIdentityPrivateGroupID, publicGroupID},
+		ExternalPlacement: &AccountExternalPlacement{
+			Target:        AccountExternalPlacementPublicPool,
+			PublicGroupID: &publicGroupID,
+			State:         "active",
+			Version:       2,
+		},
+	}
+	svc, _ := newOwnedAgentIdentityService(repo)
+	// 模拟账号正被公共调度：Redis 槽位里有在途请求。
+	svc.concurrencyService = &ConcurrencyService{cache: &accountShareRuntimeLoadCacheStub{
+		loads: map[int64]*AccountLoadInfo{
+			1: {AccountID: 1, CurrentConcurrency: 2, WaitingCount: 0},
+		},
+	}}
+	placementRepo, ok := svc.accountShareRoomRepo.(*ownedAgentIdentityPlacementRepoStub)
+	require.True(t, ok)
+	placementRepo.beginDrain = true
+
+	result, err := svc.ConvertOwnedExternalPlacement(
+		context.Background(),
+		ownerUserID,
+		1,
+		ConvertAccountExternalPlacementInput{
+			Target:         AccountExternalPlacementRoom,
+			IdempotencyKey: "public-to-room-with-inflight",
+		},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, AccountExternalPlacementRoom, result.Current.Target)
+	require.Equal(t, "active", result.Current.State)
+	// 转换成功后 restore 只被调用一次（drained 置 false 后 defer 不再收尾）。
+	require.Equal(t, 1, placementRepo.restoreDrainCalls)
+	require.Equal(t, "active", repo.accounts[1].ExternalPlacement.State)
+	require.Equal(t, AccountExternalPlacementRoom, repo.accounts[1].ExternalPlacement.Target)
 }

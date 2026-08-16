@@ -85,7 +85,13 @@
           role="alert"
           data-testid="bulk-placement-submit-error"
         >
-          {{ placementSubmitError }}
+          <p>{{ placementSubmitError }}</p>
+          <ul v-if="placementFailedDetails.length" class="mt-2 space-y-1" data-testid="bulk-placement-failed-details">
+            <li v-for="detail in placementFailedDetails" :key="detail.accountId" class="flex gap-2">
+              <span class="shrink-0 font-medium">#{{ detail.accountId }}</span>
+              <span>{{ detail.reason }}</span>
+            </li>
+          </ul>
         </div>
       </section>
 
@@ -1323,7 +1329,7 @@ import {
   resolveOpenAIWSModeConcurrencyHintKey
 } from '@/utils/openaiWsMode'
 import { openAIAccountLevelOptions } from '@/utils/openaiAccountLevels'
-import { extractApiErrorMessage } from '@/utils/apiError'
+import { extractApiErrorMessage, extractI18nErrorMessage } from '@/utils/apiError'
 import type { OpenAIWSMode } from '@/utils/openaiWsMode'
 interface Props {
   show: boolean
@@ -1532,6 +1538,10 @@ const enableExternalPlacement = ref(false)
 const submitting = ref(false)
 const selectedExternalPlacementTarget = ref<AccountExternalPlacementTarget>('private')
 const placementSubmitError = ref('')
+// 批量模式切换失败的账号明细（账号 id → 中文原因），在错误区逐条列出。
+// 后端批量上限 1000，明细最多展示前几条，避免超长弹窗。
+const BULK_PLACEMENT_FAILURE_DETAIL_MAX = 5
+const placementFailedDetails = ref<{ accountId: number; reason: string }[]>([])
 let pendingPlacementIntentSignature = ''
 let pendingPlacementIdempotencyKey = ''
 const showMixedChannelWarning = ref(false)
@@ -1610,6 +1620,7 @@ watch(
   selectedExternalPlacementTarget,
   () => {
     placementSubmitError.value = ''
+    placementFailedDetails.value = []
     pendingPlacementIntentSignature = ''
     pendingPlacementIdempotencyKey = ''
   }
@@ -2131,6 +2142,9 @@ const handleSubmit = async () => {
 }
 
 const submitBulkUpdate = async (baseUpdates: Record<string, unknown> | null) => {
+  // 每次提交开始清空上一轮的错误与失败明细，避免同目标重试/整请求失败时残留陈旧内容。
+  placementSubmitError.value = ''
+  placementFailedDetails.value = []
   let placementIdempotencyKey = ''
   if (isUserScope.value && enableExternalPlacement.value) {
     try {
@@ -2204,6 +2218,22 @@ const submitBulkUpdate = async (baseUpdates: Record<string, unknown> | null) => 
         placementFailed = placementResult.failed || 0
         success = placementSuccess
         failed += placementFailed
+        // 批量转换是 200 + results[].reason 的形式（不走 catch），失败原因在结果里逐条透出。
+        // 收集失败账号的中文原因（按 reason 码映射），在错误区展示；上限截断避免超长弹窗。
+        placementFailedDetails.value = (placementResult.results || [])
+          .filter((item) => !item.success)
+          .slice(0, BULK_PLACEMENT_FAILURE_DETAIL_MAX)
+          .map((item) => ({
+            accountId: item.account_id,
+            reason: item.reason
+              ? extractI18nErrorMessage(
+                { reason: item.reason, metadata: undefined } as unknown,
+                t,
+                'userAccounts.externalPlacement.errors',
+                item.message || item.error || t('userAccounts.externalPlacement.convertFailed')
+              )
+              : item.message || item.error || t('userAccounts.externalPlacement.convertFailed')
+          }))
         if (placementResult.failed === 0) {
           pendingPlacementIntentSignature = ''
           pendingPlacementIdempotencyKey = ''
@@ -2228,15 +2258,19 @@ const submitBulkUpdate = async (baseUpdates: Record<string, unknown> | null) => 
       }
     }
 
-    if (baseUpdates && enableExternalPlacement.value && placementFailed > 0) {
-      placementSubmitError.value = t(
-        'userAccounts.externalPlacement.bulkBaseSavedPlacementPartial',
-        {
+    if (placementFailed > 0 && enableExternalPlacement.value) {
+      // 只要模式切换有失败就展示失败汇总 + 逐条原因（无论是否同时保存了基础设置）。
+      // 没有 baseUpdates 时是纯切换场景，用不带「其他设置已保存」字样的文案。
+      placementSubmitError.value = baseUpdates
+        ? t('userAccounts.externalPlacement.bulkBaseSavedPlacementPartial', {
           saved: baseSuccess,
           success: placementSuccess,
           failed: placementFailed
-        }
-      )
+        })
+        : t('userAccounts.externalPlacement.bulkConvertPartial', {
+          success: placementSuccess,
+          failed: placementFailed
+        })
       appStore.showError(placementSubmitError.value)
     } else if (success > 0 && failed === 0) {
       appStore.showSuccess(t('admin.accounts.bulkEdit.success', { count: success }))
@@ -2246,6 +2280,8 @@ const submitBulkUpdate = async (baseUpdates: Record<string, unknown> | null) => 
       appStore.showError(t('admin.accounts.bulkEdit.failed'))
     }
 
+    // 部分失败（placementFailed>0）时不关闭弹窗：失败明细只在弹窗错误区渲染，
+    // 关闭即被清空，用户就看不到哪些账号因何失败。全成功才关。
     if (success > 0 || baseSuccess > 0) {
       if (isUserScope.value) {
         await authStore.refreshUser().catch((error) => {
@@ -2254,7 +2290,9 @@ const submitBulkUpdate = async (baseUpdates: Record<string, unknown> | null) => 
       }
       pendingUpdatesForConfirm.value = null
       emit('updated')
-      handleClose()
+      if (placementFailed === 0) {
+        handleClose()
+      }
     }
   } catch (error: any) {
     // 兜底：多平台混合场景下，预检查跳过，由后端 409 触发确认框
@@ -2385,6 +2423,7 @@ watch(
       userMsgQueueMode.value = null
       selectedExternalPlacementTarget.value = 'private'
       placementSubmitError.value = ''
+      placementFailedDetails.value = []
       pendingPlacementIntentSignature = ''
       pendingPlacementIdempotencyKey = ''
 

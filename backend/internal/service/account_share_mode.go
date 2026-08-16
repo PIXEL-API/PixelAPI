@@ -70,7 +70,12 @@ const (
 	AccountShareModeSeatWaiverLateUsageSlack      = 24 * time.Hour
 	AccountShareModeSeatBillingInterval           = 15 * time.Second
 	AccountShareModeSeatBillingBatchSize          = 100
-	AccountShareModeJoinIntentTTL                 = 2 * time.Minute
+	// 孤儿 binding 清扫频率：低优先兜底 worker，处理历史遗留脏数据即可，不必高频。
+	AccountShareModeOrphanBindingCleanupInterval = 10 * time.Minute
+	// ending 结算超时兜底阈值：Redis lease 持续不可用时，超过该时长强制结算。
+	// 比在途 slot 的 TTL（默认 30 分钟）短，用户不必等满 slot 回收。
+	AccountShareModeEndSettlementForceTimeout = 10 * time.Minute
+	AccountShareModeJoinIntentTTL             = 2 * time.Minute
 	AccountShareModeEndMembershipTokenTTL         = 2 * time.Minute
 	AccountShareModeMaxIdleTimeoutMinutes         = 10080
 	AccountShareModeLastRequestTouchInterval      = 30 * time.Second
@@ -81,6 +86,9 @@ const (
 	AccountShareModeRoomQueueMinimum              = 20
 	AccountShareModeRoomQueueMaximum              = 100
 	AccountShareModeRoomQueuePerSeat              = 10
+	// 排队成员的保留期限：入队/降级重排队后经过该时长仍未被激活则自动释放。
+	// 前端 queueIdleTimeoutSummary 的「预约最长保留 2 小时」文案与此对齐，改这里要同步改前端。
+	AccountShareModeQueueExpiryDuration = 2 * time.Hour
 	AccountShareModeDispatchCooldown              = 5 * time.Minute
 	AccountShareModeConnectivityTestTimeout       = 90 * time.Second
 	AccountShareModeImageConnectivityTestTimeout  = 10 * time.Minute
@@ -147,6 +155,7 @@ const (
 	accountShareSeatWaiverCompensationTaskName    = "account_share_seat_waiver_compensation"
 	accountShareRoomLifecycleFinalizerTaskName    = "account_share_room_lifecycle_finalizer"
 	accountShareRoomValidationTaskName            = "account_share_room_validation"
+	accountShareOrphanBindingCleanupTaskName      = "account_share_orphan_binding_cleanup"
 	accountShareReviewModerationTaskName          = "account_share_review_moderation"
 	accountShareModeContextBindingMissingError    = "该分组未绑定账号"
 	accountShareModeJoinIntentTokenAction         = "account_share_mode:join_listing:v1"
@@ -1026,8 +1035,12 @@ type BeginAccountShareMembershipEndInput struct {
 }
 
 type AccountShareEndingMembershipCandidate struct {
-	MembershipID int64
-	OperationID  string
+	MembershipID      int64
+	OperationID       string
+	EndingRequestedAt time.Time
+	// LastRequestAt 是结束结算兜底的在途信号：在途请求的心跳会通过 DB 持续 touch
+	// last_request_at（与 Redis lease 无关），强制 finalize 前据此判断是否仍有请求在跑。
+	LastRequestAt time.Time
 }
 
 type AccountShareSeatBillingResult struct {
@@ -1245,6 +1258,12 @@ type accountShareRoomCreationIdempotencyRepository interface {
 	) (*AccountShareListing, error)
 }
 
+// accountShareOrphanBindingCleanupRepository 是可选接口：实现它的仓库提供孤儿 binding
+// 清扫能力（兜底处理历史遗留的未闭合 binding），不实现则清扫 worker 静默跳过。
+type accountShareOrphanBindingCleanupRepository interface {
+	CleanupOrphanMembershipBindings(ctx context.Context, now time.Time, limit int) (int, error)
+}
+
 type accountShareVisibleListingRepository interface {
 	GetVisibleListingByID(
 		ctx context.Context,
@@ -1450,11 +1469,12 @@ func (s *AccountShareModeService) StartSeatBillingWorker() {
 		return
 	}
 	s.seatBillingStartOnce.Do(func() {
-		s.seatBillingWG.Add(4)
+		s.seatBillingWG.Add(5)
 		go s.runSeatBillingWorker()
 		go s.runSeatWaiverCompensationWorker()
 		go s.runRoomLifecycleFinalizerWorker()
 		go s.runRoomValidationWorker()
+		go s.runOrphanBindingCleanupWorker()
 	})
 }
 
@@ -1523,6 +1543,69 @@ func (s *AccountShareModeService) runRoomLifecycleFinalizerWorker() {
 		case <-s.seatBillingStopCh:
 			return
 		}
+	}
+}
+
+// runOrphanBindingCleanupWorker 兜底清扫历史遗留的孤儿 binding（membership 已 ended
+// 但 binding 未闭合）。正常结束路径现已全部关闭 binding，本 worker 只处理存量脏数据，
+// 防止账号/房间删除被不可解析的未闭合 binding 永久阻塞。
+func (s *AccountShareModeService) runOrphanBindingCleanupWorker() {
+	defer s.seatBillingWG.Done()
+	ticker := time.NewTicker(AccountShareModeOrphanBindingCleanupInterval)
+	defer ticker.Stop()
+
+	s.processOrphanBindingCleanupOnce()
+	for {
+		select {
+		case <-ticker.C:
+			s.processOrphanBindingCleanupOnce()
+		case <-s.seatBillingStopCh:
+			return
+		}
+	}
+}
+
+func (s *AccountShareModeService) processOrphanBindingCleanupOnce() {
+	if s == nil || s.repo == nil {
+		return
+	}
+	if _, ok := s.repo.(accountShareOrphanBindingCleanupRepository); !ok {
+		return
+	}
+	// 孤儿清扫与其它周期性 worker 一致，走集群 lease 避免多实例重复执行。
+	// CleanupOrphanMembershipBindings 本身幂等（FOR UPDATE + 二次 0 行），但复用
+	// taskExecutor 统一多实例协调与可观测性。taskExecutor 为 nil 时退化为单实例直跑，
+	// 保证测试/最小化装配下清扫仍能工作。
+	if s.taskExecutor != nil {
+		ctx, cancel := context.WithTimeout(s.seatBillingWorkerContext(), AccountShareModeMembershipTouchTimeout*3)
+		defer cancel()
+		_, err := s.taskExecutor.Run(ctx, accountShareOrphanBindingCleanupTaskName, func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+			if err := guard.Check(taskCtx); err != nil {
+				return err
+			}
+			s.processOrphanBindingCleanupBatch(taskCtx)
+			return guard.Check(taskCtx)
+		})
+		if err != nil {
+			log.Printf("account_share_mode: orphan binding cleanup lease failed: %v", err)
+		}
+		return
+	}
+	s.processOrphanBindingCleanupBatch(s.seatBillingWorkerContext())
+}
+
+func (s *AccountShareModeService) processOrphanBindingCleanupBatch(ctx context.Context) {
+	cleanupRepo, ok := s.repo.(accountShareOrphanBindingCleanupRepository)
+	if !ok {
+		return
+	}
+	cleaned, err := cleanupRepo.CleanupOrphanMembershipBindings(ctx, time.Now().UTC(), AccountShareModeSeatBillingBatchSize)
+	if err != nil {
+		log.Printf("account_share_mode: orphan binding cleanup failed: %v", err)
+		return
+	}
+	if cleaned > 0 {
+		log.Printf("account_share_mode: cleaned %d orphan membership bindings", cleaned)
 	}
 }
 
@@ -1618,9 +1701,35 @@ func (s *AccountShareModeService) processEndingMembershipsOnce(ctx context.Conte
 		}
 		hasLease, leaseErr := s.hasActiveMembershipLease(ctx, candidate.MembershipID)
 		if leaseErr != nil {
-			// Redis is the runtime lease authority. An unavailable or
-			// unsupported lease inspector is deliberately fail-closed.
-			log.Printf("account_share_mode: defer membership %d finalization because lease state is unknown: %v", candidate.MembershipID, leaseErr)
+			// Redis 是运行时并发租约权威，不可用时默认 fail-closed（避免在有在途请求时
+			// 中途结算）。但结束结算不能无限期停摆：当 ending 已持续超过阈值时，需要一条
+			// 有界兜底路径。这里用两个信号共同决定是否强行走 finalize：
+			//
+			//   1. ending 已超过阈值（AccountShareModeEndSettlementForceTimeout）；
+			//   2. 结束请求之后没有仍在 touch 的在途请求。在途请求的心跳与 Redis lease 无关，
+			//      会持续通过 DB 刷新 last_request_at；若 last_request_at 晚于结束请求时间，
+			//      说明确有请求在跑，本轮跳过（下一轮仍会重估，直到请求自然结束）。
+			//
+			// 二者同时满足才 finalize。这样 DB 侧检查（last_request_at 心跳）真正兜住了
+			// 「Redis 断连期间有长请求在跑」的边界——不再依赖已被删除的 billing intent 检查。
+			// 代价是：Redis 断连且请求真在跑时，结束结算会继续等待，但这是 fail-closed 应有的
+			// 行为（宁慢勿错），且请求结束后下一轮即可完成结算。
+			now := time.Now().UTC()
+			if !candidate.EndingRequestedAt.IsZero() &&
+				now.Sub(candidate.EndingRequestedAt) >= AccountShareModeEndSettlementForceTimeout &&
+				!candidate.LastRequestAt.After(candidate.EndingRequestedAt) {
+				log.Printf("account_share_mode: force finalize ending membership %d after %s despite lease unknown: %v",
+					candidate.MembershipID, AccountShareModeEndSettlementForceTimeout, leaseErr)
+				membership, billing, finalized, finalizeErr := s.repo.FinalizeMembershipEnd(ctx, candidate.MembershipID, candidate.OperationID)
+				if finalizeErr != nil {
+					log.Printf("account_share_mode: force finalize ending membership %d failed: %v", candidate.MembershipID, finalizeErr)
+					continue
+				}
+				if !finalized {
+					continue
+				}
+				s.invalidateMembershipEndCaches(ctx, membership, billing)
+			}
 			continue
 		}
 		if hasLease {
@@ -2375,9 +2484,6 @@ func (s *AccountShareModeService) CreateRoomFromOwnedAccount(ctx context.Context
 			})
 		}
 	}
-	if err := ensureAccountExternalPlacementIdle(ctx, s.concurrencyService, account); err != nil {
-		return nil, err
-	}
 	accountLevel := NormalizeAccountLevel(account.AccountLevel)
 	var levelConfigs []OpenAIAccountLevelConfig
 	if account.Platform == PlatformOpenAI {
@@ -2413,6 +2519,10 @@ func (s *AccountShareModeService) CreateRoomFromOwnedAccount(ctx context.Context
 	}
 	drained := false
 	if account.ExternalPlacement != nil && account.ExternalPlacement.Target == AccountExternalPlacementPublicPool {
+		// 公共号池账号建房间是收敛性操作：repo 层 CreateRoomFromOwnedAccount 在同一事务
+		// 内原子改写 placement 与房间绑定，现有公共在途请求会自然结束。跳过在途空闲检查
+		// （与 ConvertOwnedExternalPlacement 的 room 目标一致）——热门公共池账号在途
+		// 恒 > 0，等待「归零」既不必要也等不到，只会把建房间永久卡死。
 		drained, err = roomRepo.BeginExternalPlacementDrain(ctx, ownerUserID, account.ID)
 		if err != nil {
 			return nil, err
@@ -2426,9 +2536,6 @@ func (s *AccountShareModeService) CreateRoomFromOwnedAccount(ctx context.Context
 					log.Printf("account_share_mode: restore placement after room creation failed: account=%d err=%v", account.ID, restoreErr)
 				}
 			}()
-			if err := ensureAccountExternalPlacementIdle(ctx, s.concurrencyService, account); err != nil {
-				return nil, err
-			}
 		}
 	}
 	listing.AccountLevel = accountLevel
@@ -2564,6 +2671,19 @@ func (s *AccountShareModeService) listListings(
 	}
 	normalized.AccountLevels = levelConfigs
 	normalized.ViewerIsAdmin = viewerIsAdmin
+	// 普通用户浏览广场（tab=all）默认只看可用房间：状态 active + 账号健康 +
+	// 有空余座位 + 无编辑锁。不可用的房间（已暂停/账号不可调度/无空位等）不应刷屏，
+	// 用户切到「显示全部」才可见全部 active 房间。号主管理视图（mine/using/
+	// history/archive）保持全量，号主需要看到自己的全部房间来维护。
+	// 注入条件：普通用户 + tab=all + 未显式指定状态过滤器（status 为空）且未显式
+	// 请求 available_only。用户选了「已上架」(status=active 不带 available_only) 表示
+	// 想看全部上架房间（含暂时不可用），此时尊重其意图、不做可用性过滤。
+	if !viewerIsAdmin &&
+		normalized.Tab == AccountShareModeListingTabAll &&
+		normalized.Status == "" &&
+		!normalized.AvailableOnly {
+		normalized.AvailableOnly = true
+	}
 	listings, result, err := s.repo.ListListings(ctx, viewerUserID, normalized, params)
 	if err != nil {
 		return nil, nil, err
@@ -3677,6 +3797,23 @@ func (s *AccountShareModeService) CreateJoinIntent(
 	queueMayBeRequired := !preparation.ownerSelfUse &&
 		listing.CurrentMembershipID == nil &&
 		(listing.QueueMembershipID != nil || listing.ActiveSeats >= listing.SeatLimit)
+	// 跨房 ending 强制排队：同一 key 上若存在「其它房间」的退出结算中 membership，
+	// 唯一索引 uq_account_share_memberships_live_api_key 会强制本次加入进入排队
+	// （repo JoinListing 的 hasLiveMembership 把 active+ending 都视为占用）。
+	// 这里把该情况提前纳入 queueMayBeRequired，让确认弹窗如实提示「需要预约队列」，
+	// 避免用户以为可直接加入、提交时才被后端拒绝。
+	if !preparation.ownerSelfUse && !queueMayBeRequired && listing.CurrentMembershipID == nil {
+		memberships, listErr := s.repo.ListAPIKeyBindingMemberships(ctx, consumerUserID, input.APIKeyID)
+		if listErr != nil {
+			return nil, listErr
+		}
+		for _, membership := range memberships {
+			if membership.Status == AccountShareMembershipStatusEnding && membership.ListingID != listingID {
+				queueMayBeRequired = true
+				break
+			}
+		}
+	}
 	return &AccountShareJoinIntent{
 		ListingID:          listingID,
 		APIKeyID:           input.APIKeyID,

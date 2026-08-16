@@ -1691,6 +1691,10 @@
             </div>
 
             <div v-if="canShowListingJoinSection(listing)" class="listing-join-section">
+              <div v-if="listingJoinUnavailableReason(listing)" class="edit-lock-strip">
+                <Icon name="exclamationCircle" size="sm" />
+                <span>{{ listingJoinUnavailableReason(listing) }}</span>
+              </div>
               <div v-if="listingEditLocked(listing)" class="edit-lock-strip">
                 <Icon name="exclamationCircle" size="sm" />
                 <span>账号配置正在编辑中，暂时不能加入使用，避免使用修改前的旧配置。</span>
@@ -1758,11 +1762,11 @@
                 <button
                   class="btn-primary h-9"
                   type="button"
-                  :disabled="isListingMembershipEnding(listing) || listingEditLocked(listing) || modeKeysLoading || preparingJoinId !== null || joiningId !== null || selfUseJoinUnavailable(listing)"
-                  :title="isListingMembershipEnding(listing) ? '退出结算处理中' : (selfUseJoinUnavailable(listing) ? selfUseSettingsError : undefined)"
+                  :disabled="Boolean(listingJoinUnavailableReason(listing)) || isListingMembershipEnding(listing) || listingEditLocked(listing) || modeKeysLoading || preparingJoinId !== null || joiningId !== null || selfUseJoinUnavailable(listing)"
+                  :title="isListingMembershipEnding(listing) ? '退出结算处理中' : (listingJoinUnavailableReason(listing) || (selfUseJoinUnavailable(listing) ? selfUseSettingsError : undefined))"
                   @click="joinUse(listing)"
                 >
-                  {{ isListingMembershipEnding(listing) ? '退出结算处理中' : (preparingJoinId === listing.id ? '准备确认中' : (joiningId === listing.id ? (isOwnListing(listing) ? '绑定中' : '加入中') : (modeKeysLoading ? '加载 Key 中' : (isOwnListing(listing) ? (selfUseSettingsLoading ? '加载自用配置' : (selfUseSettingsError ? '自用配置不可用' : '使用自己的账号')) : '加入使用')))) }}
+                  {{ isListingMembershipEnding(listing) ? '退出结算处理中' : (listingJoinUnavailableReason(listing) ? listingJoinUnavailableReason(listing) : (preparingJoinId === listing.id ? '准备确认中' : (joiningId === listing.id ? (isOwnListing(listing) ? '绑定中' : '加入中') : (modeKeysLoading ? '加载 Key 中' : (isOwnListing(listing) ? (selfUseSettingsLoading ? '加载自用配置' : (selfUseSettingsError ? '自用配置不可用' : '使用自己的账号')) : '加入使用'))))) }}
                 </button>
               </div>
             </div>
@@ -3351,6 +3355,8 @@ const DEFAULT_ACCOUNT_SHARE_ALLOWED_MODELS_BY_PLATFORM: Record<AccountSharePlatf
 }
 const ACCOUNT_SHARE_RECOMMENDATION_LIMIT = 10
 const ACCOUNT_SHARE_RECOMMENDATION_PAGE_SIZE = 5
+// 排队成员保留时长，与后端 service.AccountShareModeQueueExpiryDuration（2h）对齐。
+const ACCOUNT_SHARE_QUEUE_EXPIRY_HOURS = 2
 const OWNER_LISTINGS_PAGE_SIZE = 24
 const OWNER_REVIEWS_PAGE_SIZE = 20
 const recommendationPresets: RecommendationPreset[] = [
@@ -3565,12 +3571,18 @@ function getListingPreferencesStorageKey(): string {
 }
 
 function defaultListingPreferences(): ListingPreferenceState {
+  // 广场默认只看可用房间（状态 active + 账号健康 + 有空位）。后端对普通用户
+  // tab=all 也会强制 available_only 兜底；这里把状态筛选项默认置为「可用账号」，
+  // 让筛选 chip 明确显示当前处于「仅可用」模式，用户可切到「默认状态」看全部。
+  // 管理员例外：admin 浏览广场（tab=all）保持全量，便于监管查看所有房间
+  // （后端 listListings 对 !viewerIsAdmin 才注入 available_only，这里保持一致）。
+  const defaultStatus = authStore.user?.role === 'admin' ? '' : 'available'
   return {
     platform: 'openai',
     tab: 'all',
     search: '',
     pageSize: ACCOUNT_SHARE_PAGE_SIZE,
-    status: '',
+    status: defaultStatus,
     accountLevel: 'all',
     sortKeys: [],
     seatLimits: [],
@@ -3691,14 +3703,24 @@ function normalizeListingPreferences(value: unknown): ListingPreferenceState {
 function readListingPreferences(): ListingPreferenceState {
   if (typeof window === 'undefined') return defaultListingPreferences()
   const storageKey = getListingPreferencesStorageKey()
+  const defaults = defaultListingPreferences()
   try {
     const raw = window.localStorage.getItem(storageKey)
-    if (!raw) return defaultListingPreferences()
-    return normalizeListingPreferences(JSON.parse(raw))
+    if (!raw) return defaults
+    const parsed = normalizeListingPreferences(JSON.parse(raw))
+    // 迁移：旧版本持久化的 status=''（旧「默认状态」）现在对普通用户等价于
+    // 「可用账号」。检测到旧默认值时归一为当前默认并写回，让筛选 chip 与实际
+    // 过滤行为一致（否则老用户 chip 显示「默认状态」但后端兜底只返回可用房间，
+    // 用户看不到切换到「看全部」的入口）。
+    if (parsed.status === '' && defaults.status !== '') {
+      parsed.status = defaults.status
+      window.localStorage.setItem(storageKey, JSON.stringify(parsed))
+    }
+    return parsed
   } catch (error) {
     window.localStorage.removeItem(storageKey)
     console.warn('Failed to read account share listing preferences:', error)
-    return defaultListingPreferences()
+    return defaults
   }
 }
 
@@ -4760,6 +4782,8 @@ const activeFilterChips = computed<ActiveFilterChip[]>(() => {
     chips.push({
       key: `status:${listingFilters.status}`,
       label: `状态：${statusOption.label}`,
+      // 清除状态筛选语义：回到「默认状态」(空)。tab=all 下后端对空 status 兜底
+      // available_only=true（仍只显示可用），mine/using 管理视图下空 status 即全量。
       remove: () => { listingFilters.status = '' }
     })
   }
@@ -5077,9 +5101,16 @@ function buildListingFilters(tab: AccountShareListingTab = activeFilter.value.ta
   if (search) result.search = search
   if (tab === 'archive') return result
   if (selectedOwnerID.value > 0) result.owner_user_id = selectedOwnerID.value
+  // 「可用账号」只在浏览广场（tab=all）时翻译成 status=active + available_only。
+  // mine/using 是号主/消费者管理视图：仓库按 owner_user_id 或 active membership 全量
+  // 展示（paused/满员/账号临时不可用的房间也必须可见，便于维护与结束成员关系），
+  // 不能带可用性过滤——否则号主看不到自己需维护的房间、消费者看不到自己正在排队的
+  // 满员房间。其它显式状态（已上架/已暂停等）在管理视图照常透传。
   if (listingFilters.status === 'available') {
-    result.status = 'active'
-    result.available_only = true
+    if (tab === 'all') {
+      result.status = 'active'
+      result.available_only = true
+    }
   } else if (listingFilters.status !== '') {
     result.status = listingFilters.status
   }
@@ -5143,7 +5174,11 @@ function applyListingFilters(): void {
 
 function resetListingFilters(): void {
   closeFilterPopover()
-  listingFilters.status = ''
+  // 重置状态筛选：浏览广场（tab=all）回到「可用账号」默认（只看可用房间，管理员
+  // 除外——admin 重置回空看全量）；管理视图（mine/using/archive）回到空——号主/
+  // 消费者需要看到全部房间（含已暂停/满员/账号临时不可用的），不应被可用性过滤。
+  const defaultStatus = activeFilter.value.tab === 'all' && authStore.user?.role !== 'admin' ? 'available' : ''
+  listingFilters.status = defaultStatus
   listingFilters.accountLevel = 'all'
   listingFilters.sortKeys = []
   listingFilters.seatLimits = []
@@ -5650,6 +5685,45 @@ function selfUseJoinUnavailable(listing: AccountShareListing): boolean {
   return isOwnListing(listing) && (selfUseSettingsLoading.value || ownerSelfUseRateMultiplier.value === null)
 }
 
+// 房间对当前用户不可加入的具体原因；空串表示可加入。用于不可用房（用户切到
+// 「已上架/全部状态」时可见）置灰加入区并给出明确提示，避免点进去才被后端拒绝。
+// 已删除/已有 membership/在队列中的房间已被 canShowListingJoinSection 拦截，这里
+// 只覆盖「卡片可见但当前不可加入」的状态。
+//
+// 注意：座位满（active_seats >= seat_limit）刻意不算「不可加入」——满员是「需排队」
+// 而非「不可加入」，后端支持预约队列（queue consent），置灰会整体阻断排队能力。
+function listingJoinUnavailableReason(listing: AccountShareListing): string {
+  if (listing.deleted || listing.status !== 'active') {
+    return `房间当前${statusLabel(listing.status)}，不可新加入。`
+  }
+  // 号主自用不受座位/可路由账号数/余额限制：后端对 ownerSelfUse 跳过队列、座位与
+  // 余额校验（account_share_mode.go:2728 座位满仅对非号主拒绝，3682/3803/3876
+  // 自用免队列/余额）。号主即使房间满员或账号临时不可路由，也应能「使用自己的账号」。
+  if (!isOwnListing(listing)) {
+    // 余额不足：后端加入前校验 user.Balance < MinBalanceRequired 会拒绝
+    // （account_share_mode.go:3876，ErrAccountShareBalanceBelowMinimum）。
+    const balance = Number(authStore.user?.balance ?? 0)
+    const minBalance = Number(listing.min_balance_required ?? 0)
+    if (Number.isFinite(balance) && Number.isFinite(minBalance) && balance < minBalance) {
+      return '你的余额低于该房间的最低余额要求，暂时无法加入。'
+    }
+    // 只有明确知道「挂载账号数为 0」或「可路由账号数为 0」才判不可用；
+    // healthy_account_count 在部分快照/视图可能未填充（缺省 0），此时不拦截，
+    // 交给后端加入时的精确校验兜底，避免把可用房间误判为无账号。
+    const attached = roomAttachedAccountCount(listing)
+    const eligible = roomEligibleAccountCount(listing)
+    const attachedKnown = listing.quota_summary?.attached_count != null || Number(listing.account_count) > 0
+    const eligibleKnown = listing.quota_summary?.eligible_count != null || Number(listing.healthy_account_count) > 0
+    if (attachedKnown && attached <= 0) {
+      return '房间当前没有挂载账号，暂时无法加入。'
+    }
+    if (eligibleKnown && eligible <= 0) {
+      return '房间当前没有可路由账号，暂时无法加入。'
+    }
+  }
+  return ''
+}
+
 function canShowListingJoinSection(listing: AccountShareListing): boolean {
   return !listing.deleted
     && !listing.queue_membership_id
@@ -5874,8 +5948,10 @@ function idleTimeoutSummary(listing: AccountShareListing): string {
 
 function queueIdleTimeoutSummary(listing: AccountShareListing): string {
   const minutes = normalizeIdleTimeoutMinutes(listing.queue_idle_timeout_minutes ?? idleTimeoutByListing[listing.id] ?? 0)
-  if (minutes <= 0) return '激活后使用默认空闲退出'
-  return `激活后 ${formatIdleTimeoutSetting(minutes)} 无请求会自动退出`
+  const idleSummary = minutes <= 0 ? '激活后使用默认空闲退出' : `激活后 ${formatIdleTimeoutSetting(minutes)} 无请求会自动退出`
+  // 排队有固定保留期限（后端 queue_expires_at = 入队 + 2 小时），过期自动释放。
+  // 提前告知用户，避免预约静默失效时毫无察觉。
+  return `${idleSummary}；预约最长保留 ${ACCOUNT_SHARE_QUEUE_EXPIRY_HOURS} 小时，到期自动释放`
 }
 
 function pendingMembershipEndForListing(
@@ -6710,6 +6786,12 @@ function setFilter(filter: FilterOption): void {
   clearSearchDebounceTimer()
   closeFilterPopover()
   activeFilter.value = filter
+  // 「可用账号」只对浏览广场（tab=all）有意义。切到管理视图（mine/using/history）
+  // 时把 available 归一为空，避免 chip 显示「可用账号」但实际列表是全量（buildListingFilters
+  // 对非 all 标签不翻译 available）造成的误导。
+  if (filter.tab !== 'all' && listingFilters.status === 'available') {
+    listingFilters.status = ''
+  }
   if (filter.tab === 'history') {
     abortActiveListingsRequest()
     clearMembershipStatusRefreshTimer()

@@ -258,6 +258,10 @@ type accountShareRoomRepoStub struct {
 	detachBatchCalls          int
 	detachBatchBilling        *AccountShareSeatBillingResult
 	detachBatchErr            error
+	createRoomCalls           int
+	createRoomInput           CreateAccountShareRoomInput
+	createRoomListing         *AccountShareListing
+	createRoomErr             error
 }
 
 type accountShareVisibilityRuntimeRepoStub struct {
@@ -460,6 +464,36 @@ func (r *accountShareRoomRepoStub) DetachRoomAccountsAtomic(
 	r.detachBatchCalls++
 	r.detachBatchInput = input
 	return r.detachBatchBilling, r.detachBatchErr
+}
+
+func (r *accountShareRoomRepoStub) CreateRoomFromOwnedAccount(
+	_ context.Context,
+	_ int64, _ int64, _ int64, _ string,
+	listing *AccountShareListing,
+) (*AccountShareListing, error) {
+	r.createRoomCalls++
+	if r.createRoomErr != nil {
+		return nil, r.createRoomErr
+	}
+	if r.createRoomListing != nil {
+		result := *r.createRoomListing
+		result.AllowedModels = append([]string(nil), r.createRoomListing.AllowedModels...)
+		return &result, nil
+	}
+	if listing != nil {
+		result := *listing
+		result.AllowedModels = append([]string(nil), listing.AllowedModels...)
+		return &result, nil
+	}
+	return nil, nil
+}
+
+func (r *accountShareRoomRepoStub) BeginExternalPlacementDrain(context.Context, int64, int64) (bool, error) {
+	return true, nil
+}
+
+func (r *accountShareRoomRepoStub) RestoreExternalPlacementAfterDrain(context.Context, int64, int64) error {
+	return nil
 }
 
 type accountShareModeBindingResult struct {
@@ -996,46 +1030,6 @@ func TestMutateRoomAccountsRejectsBlankIdempotencyKeyBeforeRepositoryCall(t *tes
 	require.Zero(t, repo.attachBatchCalls)
 }
 
-func TestCreateRoomFromOwnedAccountFailsClosedWithoutConcurrencyService(t *testing.T) {
-	ownerUserID := int64(42)
-	modeRepo := &accountShareModeRepoStub{}
-	roomRepo := &accountShareRoomRepoStub{
-		accountShareModeRepoStub: modeRepo,
-	}
-	accountRepo := &accountShareOwnedAccountRepoStub{
-		account: &Account{
-			ID:           70,
-			Name:         "owned-account",
-			Platform:     PlatformAnthropic,
-			AccountLevel: AccountLevelPro,
-			OwnerUserID:  &ownerUserID,
-			Status:       StatusActive,
-			Schedulable:  true,
-			Concurrency:  5,
-		},
-	}
-	svc := NewAccountShareModeService(roomRepo, accountRepo, nil, nil, nil, nil)
-
-	listing, err := svc.CreateRoomFromOwnedAccount(
-		context.Background(),
-		ownerUserID,
-		CreateAccountShareRoomInput{
-			AccountID:          70,
-			IdempotencyKey:     "create-room-with-runtime-fence",
-			RoomName:           "room-a",
-			SeatLimit:          1,
-			RateMultiplier:     1,
-			AllowedModels:      []string{"claude-sonnet-4-20250514"},
-			PerUserConcurrency: 1,
-		},
-	)
-
-	require.Nil(t, listing)
-	require.ErrorIs(t, err, ErrServiceUnavailable)
-	require.Equal(t, 1, accountRepo.calls)
-	require.Empty(t, modeRepo.modeGroupEnsureCalls)
-}
-
 func TestCreateRoomFromOwnedAccountRejectsWhitespaceOnlyRoomName(t *testing.T) {
 	svc := NewAccountShareModeService(nil, nil, nil, nil, nil, nil)
 
@@ -1046,11 +1040,69 @@ func TestCreateRoomFromOwnedAccountRejectsWhitespaceOnlyRoomName(t *testing.T) {
 			AccountID:      70,
 			IdempotencyKey: "create-room-empty-name",
 			RoomName:       " \t\r\n ",
+			SeatLimit:      1,
 		},
 	)
 
 	require.Nil(t, listing)
 	require.ErrorIs(t, err, ErrAccountShareModeInvalidName)
+}
+
+// 公共号池账号在途请求 > 0 时也能建房间。修复前 ensureAccountExternalPlacementIdle
+// 会以 ACCOUNT_EXTERNAL_PLACEMENT_BUSY 拒绝——公共号池账号被公共调度占用时并发几乎
+// 恒 > 0，用户永远无法从广场把热门号建为房间。建房间与入房一致都是收敛性操作
+// （repo 层 CreateRoomFromOwnedAccount 同一事务原子改写 placement 与房间绑定），
+// 等待「归零」既不必要也等不到。
+func TestCreateRoomFromOwnedAccountPublicPoolSkipsIdleGuard(t *testing.T) {
+	ownerUserID := int64(42)
+	roomRepo := &accountShareRoomRepoStub{
+		accountShareModeRepoStub: &accountShareModeRepoStub{},
+	}
+	accountRepo := &accountShareOwnedAccountRepoStub{
+		account: &Account{
+			ID:           70,
+			Name:         "public-pool-account",
+			Platform:     PlatformAnthropic,
+			AccountLevel: AccountLevelPro,
+			OwnerUserID:  &ownerUserID,
+			Status:       StatusActive,
+			Schedulable:  true,
+			Concurrency:  5,
+			ShareMode:    AccountShareModePublic,
+			ExternalPlacement: &AccountExternalPlacement{
+				Target: AccountExternalPlacementPublicPool,
+				State:  "active",
+			},
+		},
+	}
+	svc := NewAccountShareModeService(roomRepo, accountRepo, nil, nil, nil, nil)
+	// 模拟账号正被公共调度：Redis 槽位里有在途请求。修复前这里会 ErrAccountExternalPlacementBusy。
+	svc.SetRuntimeDependencies(
+		&ConcurrencyService{cache: &accountShareRuntimeLoadCacheStub{loads: map[int64]*AccountLoadInfo{
+			70: {AccountID: 70, CurrentConcurrency: 3, WaitingCount: 0},
+		}}},
+		nil,
+		nil,
+		nil,
+	)
+
+	listing, err := svc.CreateRoomFromOwnedAccount(
+		context.Background(),
+		ownerUserID,
+		CreateAccountShareRoomInput{
+			AccountID:          70,
+			IdempotencyKey:     "create-room-public-pool-inflight",
+			RoomName:           "room-a",
+			SeatLimit:          1,
+			RateMultiplier:     1,
+			AllowedModels:      []string{"claude-sonnet-4-20250514"},
+			PerUserConcurrency: 1,
+		},
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, listing)
+	require.Equal(t, 1, roomRepo.createRoomCalls)
 }
 
 func TestCreateRoomFromOwnedAccountReplaysBeforeCurrentAccountAvailabilityChecks(t *testing.T) {
@@ -2214,6 +2266,64 @@ func TestAccountShareModeListListingsKeepsMineScopeAndAdminFlag(t *testing.T) {
 	}
 	if repo.listFilters.SeatLimit != 0 {
 		t.Fatalf("expected invalid seat limit to normalize to 0, got %d", repo.listFilters.SeatLimit)
+	}
+}
+
+// 普通用户浏览广场（tab=all、未选状态过滤器、未显式 available_only）时，
+// 列表默认只返回可用房间（service 层强制 available_only=true），
+// 避免不可用的房间（已暂停/账号不可调度/无空位等）刷屏。
+func TestAccountShareModeListListingsDefaultsToAvailableOnlyForPublicBrowse(t *testing.T) {
+	repo := &accountShareModeRepoStub{}
+	svc := &AccountShareModeService{repo: repo}
+
+	_, _, err := svc.ListListings(context.Background(), 42, false, AccountShareListingFilters{
+		Tab: AccountShareModeListingTabAll,
+	}, pagination.PaginationParams{Page: 1, PageSize: 20})
+	if err != nil {
+		t.Fatalf("ListListings failed: %v", err)
+	}
+	if !repo.listFilters.AvailableOnly {
+		t.Fatal("expected available_only to default true for public tab=all browse")
+	}
+	if repo.listFilters.Status != "" {
+		t.Fatalf("expected status to stay empty, got %q", repo.listFilters.Status)
+	}
+}
+
+// 普通用户显式选了「已上架」(status=active 不带 available_only) 时，
+// 表示想看全部上架房间（含暂时不可用），不应被强制可用性过滤。
+func TestAccountShareModeListListingsKeepsExplicitActiveStatusWithoutAvailableFilter(t *testing.T) {
+	repo := &accountShareModeRepoStub{}
+	svc := &AccountShareModeService{repo: repo}
+
+	_, _, err := svc.ListListings(context.Background(), 42, false, AccountShareListingFilters{
+		Tab:    AccountShareModeListingTabAll,
+		Status: AccountShareListingStatusActive,
+	}, pagination.PaginationParams{Page: 1, PageSize: 20})
+	if err != nil {
+		t.Fatalf("ListListings failed: %v", err)
+	}
+	if repo.listFilters.AvailableOnly {
+		t.Fatal("expected available_only to stay false when status=active explicitly requested")
+	}
+	if repo.listFilters.Status != AccountShareListingStatusActive {
+		t.Fatalf("expected status active, got %q", repo.listFilters.Status)
+	}
+}
+
+// 号主管理视图（tab=mine）即使普通用户身份也保持全量，不被可用性过滤。
+func TestAccountShareModeListListingsKeepsMineViewFullForOwner(t *testing.T) {
+	repo := &accountShareModeRepoStub{}
+	svc := &AccountShareModeService{repo: repo}
+
+	_, _, err := svc.ListListings(context.Background(), 42, false, AccountShareListingFilters{
+		Tab: AccountShareModeListingTabMine,
+	}, pagination.PaginationParams{Page: 1, PageSize: 20})
+	if err != nil {
+		t.Fatalf("ListListings failed: %v", err)
+	}
+	if repo.listFilters.AvailableOnly {
+		t.Fatal("expected available_only to stay false for tab=mine owner management view")
 	}
 }
 
@@ -3611,6 +3721,62 @@ func TestAccountShareModeJoinIntentRejectsMembershipEnding(t *testing.T) {
 	require.ErrorIs(t, err, ErrAccountShareMembershipEnding)
 }
 
+// 旧房间退出结算中（ending）时加入新房间：该 key 被唯一索引锁定，新加入必然进排队。
+// CreateJoinIntent 必须把跨房 ending 纳入 queue_may_be_required，让确认弹窗如实提示
+// 「需要预约队列」，避免用户以为可直接加入、提交时才被后端拒绝。
+func TestAccountShareModeJoinIntentFlagsQueueWhenOtherRoomEnding(t *testing.T) {
+	groupID := int64(1)
+	revisionID := int64(91)
+	listing := &AccountShareListing{
+		ID:                               2,
+		RowVersion:                       7,
+		CurrentRevisionID:                &revisionID,
+		AccountID:                        10,
+		RoomName:                         "target-room",
+		Platform:                         PlatformOpenAI,
+		OwnerUserID:                      42,
+		Status:                           AccountShareListingStatusActive,
+		SeatLimit:                        3,
+		ActiveSeats:                      1,
+		AllowedModels:                    []string{"gpt-5.5"},
+		PerUserConcurrency:               2,
+		HourlyRate:                       0.3,
+		MinBalanceRequired:               1,
+		AccountStatus:                    StatusActive,
+		AccountSchedulable:               true,
+		RepresentativeAccountConcurrency: 5,
+	}
+	revisionTerms := accountShareJoinTermsFromListing(listing, revisionID)
+	repo := &accountShareModeRepoStub{
+		listing:        listing,
+		revisionTerms:  &revisionTerms,
+		// 同一 key 在「其它房间」（ListingID=999）有退出结算中的 membership。
+		bindingMemberships: []AccountShareMembership{
+			{ID: 800, ListingID: 999, ConsumerUserID: 1, APIKeyID: 3, Status: AccountShareMembershipStatusEnding},
+		},
+	}
+	svc := &AccountShareModeService{
+		repo: repo,
+		apiKeyRepo: &accountShareRecommendationAPIKeyRepoStub{key: &APIKey{
+			ID:      3,
+			UserID:  1,
+			Key:     "sk-account-share",
+			GroupID: &groupID,
+			Status:  StatusAPIKeyActive,
+		}},
+		userRepo: &accountShareJoinUserRepoStub{user: &User{ID: 1, Balance: 100}},
+	}
+	svc.SetActionTokenSecret(strings.Repeat("s", 32))
+
+	intent, err := svc.CreateJoinIntent(context.Background(), 1, listing.ID, CreateAccountShareJoinIntentInput{
+		APIKeyID:           3,
+		IdleTimeoutMinutes: 30,
+		AcceptQueue:        true,
+	})
+	require.NoError(t, err)
+	require.True(t, intent.QueueMayBeRequired, "cross-room ending membership must force queue consent")
+}
+
 func TestAccountShareModeJoinIntentBindsAcceptedTermsToFinalJoin(t *testing.T) {
 	groupID := int64(1)
 	revisionID := int64(91)
@@ -4217,6 +4383,58 @@ func TestAccountShareModeEndingWorkerFinalizesAfterLeaseDrains(t *testing.T) {
 		finalizeDone: true,
 	}
 	cache := &accountShareMembershipConcurrencyCacheStub{current: 0}
+	svc := &AccountShareModeService{
+		repo:               repo,
+		concurrencyService: NewConcurrencyService(cache),
+	}
+
+	svc.processEndingMembershipsOnce(context.Background())
+
+	require.Equal(t, 1, repo.finalizeCalls)
+	require.Equal(t, operationID, repo.finalizeOperationID)
+}
+
+func TestAccountShareModeEndingWorkerForceFinalizeSkipsInFlightRequest(t *testing.T) {
+	operationID := "a19e2b8f-4c2d-4e9a-9b1c-7f6e5d4c3b2a"
+	endingRequestedAt := time.Now().UTC().Add(-AccountShareModeEndSettlementForceTimeout - time.Minute)
+	repo := &accountShareModeRepoStub{
+		endingCandidates: []AccountShareEndingMembershipCandidate{{
+			MembershipID:      79,
+			OperationID:       operationID,
+			EndingRequestedAt: endingRequestedAt,
+			// 在途请求的心跳把 last_request_at 刷到了结束请求之后：说明还有请求在跑，
+			// 即使 Redis 断连也不应强制结算。
+			LastRequestAt: endingRequestedAt.Add(5 * time.Minute),
+		}},
+		finalizeMembership: &AccountShareMembership{ID: 79, ConsumerUserID: 42, Status: AccountShareMembershipStatusEnded},
+		finalizeDone:       true,
+	}
+	cache := &accountShareMembershipConcurrencyCacheStub{currentErr: errors.New("redis unavailable")}
+	svc := &AccountShareModeService{
+		repo:               repo,
+		concurrencyService: NewConcurrencyService(cache),
+	}
+
+	svc.processEndingMembershipsOnce(context.Background())
+
+	require.Equal(t, 0, repo.finalizeCalls)
+}
+
+func TestAccountShareModeEndingWorkerForceFinalizesWhenNoInFlightRequest(t *testing.T) {
+	operationID := "b20e3c9a-5d3e-4fa0-8a2c-8a7f6e5d4c3b"
+	endingRequestedAt := time.Now().UTC().Add(-AccountShareModeEndSettlementForceTimeout - time.Minute)
+	repo := &accountShareModeRepoStub{
+		endingCandidates: []AccountShareEndingMembershipCandidate{{
+			MembershipID:      80,
+			OperationID:       operationID,
+			EndingRequestedAt: endingRequestedAt,
+			// 无在途请求（LastRequestAt 早于结束请求）：Redis 断连超过阈值后应强制结算。
+			LastRequestAt: endingRequestedAt.Add(-time.Minute),
+		}},
+		finalizeMembership: &AccountShareMembership{ID: 80, ConsumerUserID: 42, Status: AccountShareMembershipStatusEnded},
+		finalizeDone:       true,
+	}
+	cache := &accountShareMembershipConcurrencyCacheStub{currentErr: errors.New("redis unavailable")}
 	svc := &AccountShareModeService{
 		repo:               repo,
 		concurrencyService: NewConcurrencyService(cache),

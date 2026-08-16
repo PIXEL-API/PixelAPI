@@ -1383,6 +1383,9 @@ func (r *accountShareModeRepository) ListRoomQuotaSnapshots(
 		case service.PlatformAnthropic:
 			snapshot.Window5h = account.AnthropicUsageProgress(service.AnthropicQuotaWindow5h, now)
 			snapshot.Window7d = account.AnthropicUsageProgress(service.AnthropicQuotaWindow7d, now)
+		case service.PlatformOpencode:
+			snapshot.Window5h = account.OpencodeUsageProgress(service.OpencodeQuotaWindow5h, now)
+			snapshot.Window7d = account.OpencodeUsageProgress(service.OpencodeQuotaWindow7d, now)
 		}
 		snapshotsByListing[listingID] = append(snapshotsByListing[listingID], snapshot)
 	}
@@ -1447,6 +1450,12 @@ func sanitizeAccountShareHistoricalListing(listing *service.AccountShareListing,
 	listing.Anthropic5hUsage = nil
 	listing.Anthropic7dUsage = nil
 	listing.AnthropicUsageUpdatedAt = nil
+	listing.OpencodeQuotaProtectionReason = nil
+	listing.OpencodeQuotaProtectionResetAt = nil
+	listing.Opencode5hUsage = nil
+	listing.Opencode7dUsage = nil
+	listing.Opencode30dUsage = nil
+	listing.OpencodeUsageUpdatedAt = nil
 	listing.CurrentMembershipID = nil
 	listing.CurrentAPIKeyID = nil
 	listing.CurrentAPIKeyName = ""
@@ -3957,7 +3966,7 @@ func (r *accountShareModeRepository) JoinListing(ctx context.Context, input serv
 		)
 		VALUES (
 			$1, $2, $3, $4, $5::varchar(20), $6, $7, $8, $9, $10, NULL, NULL, $11, $12, $13, 0, 0, NULL, NULL, NULL,
-			CASE WHEN $5::varchar(20) = 'queued'::varchar(20) THEN NOW() + INTERVAL '2 hours' ELSE NULL END,
+			CASE WHEN $5::varchar(20) = 'queued'::varchar(20) THEN NOW() + make_interval(hours => $24) ELSE NULL END,
 			$14, $15, $16, $17, $18, $19, $20, $21, $22::jsonb, $23, NOW(), NOW()
 		)
 		RETURNING id, listing_id, account_id, consumer_user_id, api_key_id, status, queue_rank,
@@ -3988,6 +3997,7 @@ func (r *accountShareModeRepository) JoinListing(ctx context.Context, input serv
 		strings.TrimSpace(apiKeyName),
 		string(termsSnapshotJSON),
 		service.AccountShareSnapshotQualityExact,
+		service.AccountShareModeQueueExpiryDuration.Hours(),
 	).Scan(
 		&membership.ID,
 		&membership.ListingID,
@@ -4552,7 +4562,7 @@ func (r *accountShareModeRepository) ListEndingMembershipCandidates(
 		limit = service.AccountShareModeSeatBillingBatchSize
 	}
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT m.id, m.ending_operation_id::text
+		SELECT m.id, m.ending_operation_id::text, m.ending_requested_at, m.last_request_at
 		FROM account_share_memberships m
 		JOIN account_share_room_operations operation
 			ON operation.id = m.ending_operation_id
@@ -4572,8 +4582,14 @@ func (r *accountShareModeRepository) ListEndingMembershipCandidates(
 	candidates := make([]service.AccountShareEndingMembershipCandidate, 0, limit)
 	for rows.Next() {
 		var candidate service.AccountShareEndingMembershipCandidate
-		if err := rows.Scan(&candidate.MembershipID, &candidate.OperationID); err != nil {
+		var endingRequestedAt time.Time
+		var lastRequestAt sql.NullTime
+		if err := rows.Scan(&candidate.MembershipID, &candidate.OperationID, &endingRequestedAt, &lastRequestAt); err != nil {
 			return nil, err
+		}
+		candidate.EndingRequestedAt = endingRequestedAt.UTC()
+		if lastRequestAt.Valid {
+			candidate.LastRequestAt = lastRequestAt.Time.UTC()
 		}
 		candidates = append(candidates, candidate)
 	}
@@ -5756,6 +5772,19 @@ func (r *accountShareModeRepository) EndIdleMembership(ctx context.Context, memb
 		return nil, nil, err
 	}
 	applyAccountShareMembershipNullableFields(membership, sql.NullTime{}, endedAtNull, endedReasonNull, paidUntilNull, billedUntilNull)
+	// 空闲超时自动退出也必须关闭 binding（与 FinalizeMembershipEnd 对齐），
+	// 否则残留孤儿 binding 阻塞账号/房间删除。
+	if _, err := r.closeAccountShareMembershipBindingInTx(
+		ctx,
+		tx,
+		membership.ID,
+		membership.ConsumerUserID,
+		"consumer",
+		"membership_idle_timeout",
+		endedAt,
+	); err != nil {
+		return nil, nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, nil, err
 	}
@@ -5811,6 +5840,47 @@ func (r *accountShareModeRepository) ProcessUnavailableMemberships(ctx context.C
 		result.EndedConsumerUserIDs = append(result.EndedConsumerUserIDs, endedUserIDs...)
 	}
 	return result, errors.Join(unavailableErr, staleErr)
+}
+
+// CleanupOrphanMembershipBindings 兜底清理历史遗留的孤儿 binding：membership 已 ended
+// （或已删除）但 binding 仍 unbound_at 为 NULL 的行。这类行由早期 idle/预扣耗尽/账号
+// 不可用结束路径遗漏产生，会被账号删除守卫判为不可解析的阻塞项（account_repo.go:2567），
+// 导致账号/房间永远删不掉。正常结束路径（FinalizeMembershipEnd/EndIdleMembership/
+// endSeatBillingMembershipInTx）现已全部关闭 binding，本方法只处理存量脏数据。
+func (r *accountShareModeRepository) CleanupOrphanMembershipBindings(ctx context.Context, now time.Time, limit int) (int, error) {
+	if limit <= 0 {
+		limit = service.AccountShareModeSeatBillingBatchSize
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	now = now.UTC()
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE account_share_membership_account_bindings binding
+		SET unbound_at = $1,
+			unbound_by_user_id = NULL,
+			unbound_by_role = 'system',
+			unbind_reason = 'orphan_cleanup'
+		WHERE binding.id IN (
+			SELECT binding.id
+			FROM account_share_membership_account_bindings binding
+			JOIN account_share_memberships membership
+				ON membership.id = binding.membership_id
+			WHERE binding.unbound_at IS NULL
+				AND (membership.deleted_at IS NOT NULL OR membership.status = $2)
+			ORDER BY binding.id ASC
+			LIMIT $3
+			FOR UPDATE OF binding
+		)
+	`, now, service.AccountShareMembershipStatusEnded, limit)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(affected), nil
 }
 
 func (r *accountShareModeRepository) ListRecoverableUnavailableMembershipIDs(ctx context.Context, now time.Time, limit int) ([]int64, error) {
@@ -6587,6 +6657,19 @@ func (r *accountShareModeRepository) processSeatBillingMembership(ctx context.Co
 				return nil, err
 			}
 			result.EndedConsumerUserIDs = append(result.EndedConsumerUserIDs, membership.ConsumerUserID)
+			// 预扣耗尽自动终结也必须关闭 binding（与 FinalizeMembershipEnd 对齐），
+			// 否则残留孤儿 binding 阻塞账号/房间删除。
+			if _, err := r.closeAccountShareMembershipBindingInTx(
+				ctx,
+				tx,
+				membership.ID,
+				membership.ConsumerUserID,
+				"consumer",
+				"membership_ended",
+				*settledUntil,
+			); err != nil {
+				return nil, err
+			}
 			if err := tx.Commit(); err != nil {
 				return nil, err
 			}
@@ -7026,6 +7109,20 @@ func (r *accountShareModeRepository) endSeatBillingMembershipInTx(ctx context.Co
 		return nil, err
 	}
 	applyAccountShareMembershipNullableFields(membership, sql.NullTime{}, endedAtNull, endedReasonNull, paidUntilNull, billedUntilNull)
+	// 结束成员关系必须同时关闭其 account-share binding（与 FinalizeMembershipEnd 对齐），
+	// 否则残留 unbound_at 为 NULL 的孤儿 binding，会被账号删除守卫判为不可解析的阻塞项
+	// （account_repo.go:2567），导致账号/房间永远删不掉。
+	if _, err := r.closeAccountShareMembershipBindingInTx(
+		ctx,
+		tx,
+		membership.ID,
+		membership.ConsumerUserID,
+		"consumer",
+		"membership_ended",
+		endedAt,
+	); err != nil {
+		return nil, err
+	}
 	return &service.AccountShareSeatBillingResult{
 		DebitUserIDs:         []int64{membership.ConsumerUserID},
 		CreditUserIDs:        creditUserIDs,
@@ -7896,7 +7993,7 @@ func (r *accountShareModeRepository) GetActiveMembershipForAPIKey(ctx context.Co
 func (r *accountShareModeRepository) GetActiveMembershipForRequest(ctx context.Context, userID, apiKeyID, groupID int64) (*service.AccountShareMembership, *service.AccountShareListing, error) {
 	// The active membership is the source of truth for account-share mode routing.
 	// account_groups is scheduler metadata and can be rewritten by generic owned-account repair flows.
-	return r.queryActiveMembership(ctx, `
+	membership, listing, err := r.queryActiveMembership(ctx, `
 		m.consumer_user_id = $1
 		AND m.api_key_id = $2
 		AND a.platform = (
@@ -7905,6 +8002,52 @@ func (r *accountShareModeRepository) GetActiveMembershipForRequest(ctx context.C
 			WHERE mg.group_id = $3
 		)
 	`, userID, apiKeyID, groupID)
+	if err == nil {
+		return membership, listing, nil
+	}
+	if !errors.Is(err, service.ErrAccountShareListingNotFound) {
+		return nil, nil, err
+	}
+	// 无 active membership 时探测是否有「退出结算中」(ending) 的同平台 membership。
+	// 若有，说明用户刚结束使用、结算尚未完成——此时路由到「未绑定账号」会误导用户
+	// 去重新授权/解绑。返回专用的 ACCOUNT_SHARE_MEMBERSHIP_ENDING，让 handler 给出
+	// 「正在退出结算，请稍候」的中文提示。
+	ending, err := r.membershipEndingPendingForRequest(ctx, userID, apiKeyID, groupID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if ending {
+		return nil, nil, service.ErrAccountShareMembershipEnding
+	}
+	return nil, nil, service.ErrAccountShareListingNotFound
+}
+
+// membershipEndingPendingForRequest 判断该 (userID, apiKeyID) 在指定平台分组上
+// 是否有未完成结算的 ending membership。
+func (r *accountShareModeRepository) membershipEndingPendingForRequest(ctx context.Context, userID, apiKeyID, groupID int64) (bool, error) {
+	var exists bool
+	err := r.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM account_share_memberships m
+			JOIN account_share_listings l ON l.id = m.listing_id
+				AND l.deleted_at IS NULL
+			JOIN accounts a ON a.id = m.account_id
+			WHERE m.consumer_user_id = $1
+				AND m.api_key_id = $2
+				AND m.status = $3
+				AND m.deleted_at IS NULL
+				AND a.platform = (
+					SELECT mg.platform
+					FROM account_share_mode_groups mg
+					WHERE mg.group_id = $4
+				)
+		)
+	`, userID, apiKeyID, service.AccountShareMembershipStatusEnding, groupID).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
 }
 
 func (r *accountShareModeRepository) ActivateNextQueuedMembershipForRequest(ctx context.Context, userID, apiKeyID, groupID int64, afterRank int, now time.Time) (*service.AccountShareMembership, *service.AccountShareListing, error) {
@@ -8302,7 +8445,7 @@ func (r *accountShareModeRepository) suspendActiveMembershipInTx(ctx context.Con
 			waiver_window_last_request_at = NULL,
 			dispatch_failed_at = $3::timestamptz,
 			dispatch_cooldown_until = $4::timestamptz,
-			queue_expires_at = $3::timestamptz + INTERVAL '2 hours',
+			queue_expires_at = $3::timestamptz + make_interval(hours => $8),
 			updated_at = NOW()
 		FROM account_share_listings l
 		WHERE m.id = $5::bigint
@@ -8323,6 +8466,7 @@ func (r *accountShareModeRepository) suspendActiveMembershipInTx(ctx context.Con
 		membership.ID,
 		service.AccountShareMembershipStatusActive,
 		r.deferredQueueBindingEnabled(),
+		service.AccountShareModeQueueExpiryDuration.Hours(),
 	))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, service.ErrAccountShareListingNotFound
@@ -8605,6 +8749,21 @@ func accountShareAccountUnavailableConditionSQL(nowExpr string) string {
 			nowExpr,
 		),
 	)
+	opencodeProtectedSQL := fmt.Sprintf(`(
+		a.platform = '%s'
+		AND a.type = '%s'
+		AND (
+			%s
+			OR %s
+			OR %s
+		)
+	)`,
+		service.PlatformOpencode,
+		service.AccountTypeAPIKey,
+		accountShareCodexQuotaProtectedSQL("opencode_5h_used_percent", "opencode_5h_reset_at", "opencode_5h_limit_percent", nowExpr),
+		accountShareCodexQuotaProtectedSQL("opencode_7d_used_percent", "opencode_7d_reset_at", "opencode_7d_limit_percent", nowExpr),
+		accountShareCodexQuotaProtectedSQL("opencode_30d_used_percent", "opencode_30d_reset_at", "opencode_30d_limit_percent", nowExpr),
+	)
 	return fmt.Sprintf(`(
 		a.status <> '%s'
 		OR a.schedulable = FALSE
@@ -8615,6 +8774,7 @@ func accountShareAccountUnavailableConditionSQL(nowExpr string) string {
 		OR (a.temp_unschedulable_until IS NOT NULL AND a.temp_unschedulable_until > %s)
 		OR %s
 		OR %s
+		OR %s
 	)`,
 		service.StatusActive,
 		nowExpr,
@@ -8623,6 +8783,7 @@ func accountShareAccountUnavailableConditionSQL(nowExpr string) string {
 		nowExpr,
 		codexProtectedSQL,
 		anthropicProtectedSQL,
+		opencodeProtectedSQL,
 	)
 }
 
@@ -9619,6 +9780,14 @@ func scanAccountShareListing(scanner accountShareListingScanner) (*service.Accou
 	listing.Anthropic5hUsage = account.AnthropicUsageProgress(service.AnthropicQuotaWindow5h, now)
 	listing.Anthropic7dUsage = account.AnthropicUsageProgress(service.AnthropicQuotaWindow7d, now)
 	listing.AnthropicUsageUpdatedAt = account.AnthropicUsageUpdatedAt()
+	if reason := account.OpencodeQuotaProtectionReasonAt(now); reason != "" {
+		listing.OpencodeQuotaProtectionReason = &reason
+		listing.OpencodeQuotaProtectionResetAt = account.OpencodeQuotaProtectionResetAt(now)
+	}
+	listing.Opencode5hUsage = account.OpencodeUsageProgress(service.OpencodeQuotaWindow5h, now)
+	listing.Opencode7dUsage = account.OpencodeUsageProgress(service.OpencodeQuotaWindow7d, now)
+	listing.Opencode30dUsage = account.OpencodeUsageProgress(service.OpencodeQuotaWindow30d, now)
+	listing.OpencodeUsageUpdatedAt = account.OpencodeUsageUpdatedAt()
 	if currentMembershipID.Valid {
 		listing.CurrentMembershipID = &currentMembershipID.Int64
 	}

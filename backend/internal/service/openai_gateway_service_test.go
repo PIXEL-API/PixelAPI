@@ -3606,3 +3606,109 @@ func TestHandleSSEToJSON_ResponseFailedCapacityReturnsFailover(t *testing.T) {
 	require.False(t, c.Writer.Written(), "capacity terminal event should return failover for account switching instead of writing to the client")
 	require.Contains(t, string(failoverErr.ResponseBody), "Selected model is at capacity")
 }
+
+type stubUserRepoForShareMode struct {
+	UserRepository
+	users map[int64]*User
+}
+
+func (s *stubUserRepoForShareMode) GetByID(_ context.Context, id int64) (*User, error) {
+	if u, ok := s.users[id]; ok {
+		return u, nil
+	}
+	return nil, fmt.Errorf("user not found: %d", id)
+}
+
+// 号主自用（consumer 即房间 owner）在 dispatch 路径也应豁免余额校验：
+// join 阶段已豁免（account_share_mode.go:3876），dispatch 若不一致，
+// 号主余额跌破自己房间的 min_balance 后自用请求会被 ErrAccountShareBalanceBelowMinimum
+// 全部拒绝，自用闭环断链。
+func TestGatewayServiceAccountShareModeOwnerSelfUseSkipsMinBalance(t *testing.T) {
+	modeGroupID := int64(66866)
+	ownerUserID := int64(5580) // consumer == owner，号主自用
+	apiKeyID := int64(20103)
+	boundAccount := Account{
+		ID:          447296,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 20,
+		OwnerUserID: &ownerUserID,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{"gpt-4o": "gpt-4o"},
+		},
+	}
+	shareRepo := &accountShareModeRepoStub{
+		membership: &AccountShareMembership{ID: 1, AccountID: boundAccount.ID, ConsumerUserID: ownerUserID, APIKeyID: apiKeyID},
+		listing:    &AccountShareListing{ID: 1, OwnerUserID: ownerUserID, Status: AccountShareListingStatusActive, MinBalanceRequired: 1, AllowedModels: []string{"gpt-4o"}, PerUserConcurrency: 1},
+	}
+	concurrencyService, accountShareService := newAccountShareRuntimeLeaseTestServices(shareRepo)
+	svc := &OpenAIGatewayService{
+		accountRepo:             stubOpenAIAccountRepo{accounts: []Account{boundAccount}},
+		accountShareModeService: accountShareService,
+		concurrencyService:      concurrencyService,
+		userRepo: &stubUserRepoForShareMode{users: map[int64]*User{
+			ownerUserID: {ID: ownerUserID, Balance: 0.5}, // 余额低于房间 min_balance 1
+		}},
+	}
+	ctx := WithAccountShareModeRequest(context.Background(), ownerUserID, apiKeyID)
+
+	selection, _, handled, err := svc.selectAccountShareModeBoundAccount(
+		ctx, &modeGroupID, "gpt-4o", nil,
+		OpenAIUpstreamTransportHTTPSSE, OpenAIImagesCapabilityBasic, "", false,
+	)
+
+	require.True(t, handled)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.Equal(t, boundAccount.ID, selection.Account.ID)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+// 非号主消费者余额不足时，dispatch 仍拒绝（不因豁免被绕过）。
+func TestGatewayServiceAccountShareModeConsumerBelowMinBalanceRejected(t *testing.T) {
+	modeGroupID := int64(66866)
+	ownerUserID := int64(1)
+	consumerUserID := int64(5580) // 非号主
+	apiKeyID := int64(20103)
+	boundAccount := Account{
+		ID:          447296,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 20,
+		OwnerUserID: &ownerUserID,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{"gpt-4o": "gpt-4o"},
+		},
+	}
+	shareRepo := &accountShareModeRepoStub{
+		membership: &AccountShareMembership{ID: 1, AccountID: boundAccount.ID, ConsumerUserID: consumerUserID, APIKeyID: apiKeyID},
+		listing:    &AccountShareListing{ID: 1, OwnerUserID: ownerUserID, Status: AccountShareListingStatusActive, MinBalanceRequired: 1, AllowedModels: []string{"gpt-4o"}, PerUserConcurrency: 1},
+	}
+	concurrencyService, accountShareService := newAccountShareRuntimeLeaseTestServices(shareRepo)
+	svc := &OpenAIGatewayService{
+		accountRepo:             stubOpenAIAccountRepo{accounts: []Account{boundAccount}},
+		accountShareModeService: accountShareService,
+		concurrencyService:      concurrencyService,
+		userRepo: &stubUserRepoForShareMode{users: map[int64]*User{
+			consumerUserID: {ID: consumerUserID, Balance: 0.5},
+		}},
+	}
+	ctx := WithAccountShareModeRequest(context.Background(), consumerUserID, apiKeyID)
+
+	_, _, handled, err := svc.selectAccountShareModeBoundAccount(
+		ctx, &modeGroupID, "gpt-4o", nil,
+		OpenAIUpstreamTransportHTTPSSE, OpenAIImagesCapabilityBasic, "", false,
+	)
+
+	require.True(t, handled)
+	// 非号主余额不足必须被拒（不能因 ownerSelfUse 豁免而被放行）。生产上余额不足会
+	// 触发派发挂起→重试其它排队成员，最终错误可能是 BalanceBelowMinimum 或 UNBOUND
+	// （无其它成员时），核心断言是非号主不会像号主那样被豁免放行。
+	require.Error(t, err)
+}

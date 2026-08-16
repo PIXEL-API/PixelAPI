@@ -64,6 +64,9 @@ func openAIResponsesDispatchContext(c *gin.Context, routingCtx context.Context, 
 
 func (h *OpenAIGatewayHandler) handleAccountShareModeSelectionError(c *gin.Context, err error, streamStarted bool) bool {
 	switch {
+	case errors.Is(err, service.ErrAccountShareMembershipEnding):
+		h.handleStreamingAwareError(c, http.StatusConflict, "account_share_membership_ending", "上一个房间的退出结算尚未完成，请稍候再发起请求", streamStarted)
+		return true
 	case errors.Is(err, service.ErrAccountShareModeGroupUnbound):
 		h.handleStreamingAwareError(c, http.StatusBadRequest, "account_share_mode_unbound", "该分组未绑定账号", streamStarted)
 		return true
@@ -86,6 +89,9 @@ func (h *OpenAIGatewayHandler) handleAccountShareModeSelectionError(c *gin.Conte
 
 func (h *OpenAIGatewayHandler) handleAccountShareModeAnthropicError(c *gin.Context, err error, streamStarted bool) bool {
 	switch {
+	case errors.Is(err, service.ErrAccountShareMembershipEnding):
+		h.anthropicStreamingAwareError(c, http.StatusConflict, "invalid_request_error", "上一个房间的退出结算尚未完成，请稍候再发起请求", streamStarted)
+		return true
 	case errors.Is(err, service.ErrAccountShareModeGroupUnbound):
 		h.anthropicStreamingAwareError(c, http.StatusBadRequest, "invalid_request_error", "该分组未绑定账号", streamStarted)
 		return true

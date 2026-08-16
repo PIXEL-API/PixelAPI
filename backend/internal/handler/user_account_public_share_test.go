@@ -8,12 +8,14 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -149,6 +151,10 @@ type userAgentIdentityPlacementRepo struct {
 	service.AccountShareModeRepository
 	service.AccountShareRoomRepository
 	accountRepo *userAgentIdentityShareRepo
+	// convertErr 非空时按账号 id 匹配（含 0 表示全部）返回该错误，用于验证
+	// 批量转换失败项透出 reason/message。
+	convertErr    error
+	convertErrFor int64
 }
 
 func (r *userAgentIdentityPlacementRepo) HasRoomAccount(context.Context, int64, int64) (bool, error) {
@@ -168,6 +174,9 @@ func (r *userAgentIdentityPlacementRepo) RestoreExternalPlacementAfterDrain(cont
 }
 
 func (r *userAgentIdentityPlacementRepo) ConvertExternalPlacement(_ context.Context, input service.ConvertAccountExternalPlacementInput) (*service.ConvertAccountExternalPlacementResult, error) {
+	if r.convertErr != nil && (r.convertErrFor == 0 || r.convertErrFor == input.AccountID) {
+		return nil, r.convertErr
+	}
 	account, err := r.accountRepo.GetByID(context.Background(), input.AccountID)
 	if err != nil {
 		return nil, err
@@ -343,7 +352,7 @@ func newUserAgentIdentityShareHandler(
 	account *service.Account,
 	upstreamStatus int,
 	upstreamBody string,
-) (*UserAccountHandler, *userAgentIdentityShareRepo, *userAgentIdentityValidationUpstream, *userAgentIdentityWSInvalidationRecorder) {
+) (*UserAccountHandler, *userAgentIdentityShareRepo, *userAgentIdentityValidationUpstream, *userAgentIdentityWSInvalidationRecorder, *userAgentIdentityPlacementRepo) {
 	t.Helper()
 	repo := &userAgentIdentityShareRepo{
 		accounts: map[int64]*service.Account{account.ID: cloneUserAgentIdentityShareAccount(account)},
@@ -354,12 +363,13 @@ func newUserAgentIdentityShareHandler(
 	accountService := service.NewAccountService(repo, userAgentIdentityPublicGroupRepo{}, nil, nil, nil)
 	accountService.SetUserPrivateGroupProvisioner(userAgentIdentityPrivateGroupProvisioner{})
 	accountService.SetAccountSharePolicyRepository(userAgentIdentitySharePolicyRepo{})
-	accountService.SetAccountShareModeRepository(&userAgentIdentityPlacementRepo{accountRepo: repo})
+	placementRepo := &userAgentIdentityPlacementRepo{accountRepo: repo}
+	accountService.SetAccountShareModeRepository(placementRepo)
 	accountService.SetAgentIdentityWSInvalidator(invalidatorProxy)
 	upstream := &userAgentIdentityValidationUpstream{statusCode: upstreamStatus, body: upstreamBody}
 	accountTestService := service.NewAccountTestService(repo, nil, nil, nil, upstream, nil, nil, nil, invalidatorProxy)
 	handler := NewUserAccountHandler(accountService, nil, accountTestService, nil, nil, nil, nil, nil, nil, nil)
-	return handler, repo, upstream, invalidator
+	return handler, repo, upstream, invalidator, placementRepo
 }
 
 func runUserAgentIdentityUpdateRequest(t *testing.T, handler *UserAccountHandler, ownerUserID int64, body any) *httptest.ResponseRecorder {
@@ -391,7 +401,7 @@ func TestUserAccountHandlerUpdateAgentIdentityPrivateToPublicRequiresPlacementCo
 	ownerUserID := int64(101)
 
 	account := newUserAgentIdentityShareAccount(t, ownerUserID, service.AccountShareModePrivate, service.AccountShareStatusApproved)
-	handler, repo, upstream, _ := newUserAgentIdentityShareHandler(t, account, http.StatusOK, "")
+	handler, repo, upstream, _, _ := newUserAgentIdentityShareHandler(t, account, http.StatusOK, "")
 
 	recorder := runUserAgentIdentityUpdateRequest(t, handler, ownerUserID, map[string]any{"share_mode": service.AccountShareModePublic})
 
@@ -407,7 +417,7 @@ func TestUserAccountHandlerUpdateApprovedPublicAgentIdentityCredentialsRevalidat
 	gin.SetMode(gin.TestMode)
 	ownerUserID := int64(101)
 	account := newUserAgentIdentityShareAccount(t, ownerUserID, service.AccountShareModePublic, service.AccountShareStatusApproved)
-	handler, repo, upstream, invalidator := newUserAgentIdentityShareHandler(t, account, http.StatusOK, "")
+	handler, repo, upstream, invalidator, _ := newUserAgentIdentityShareHandler(t, account, http.StatusOK, "")
 	newCredentials := userAgentIdentityCredentials(t, "runtime-new", "task-new")
 
 	recorder := runUserAgentIdentityUpdateRequest(t, handler, ownerUserID, map[string]any{"credentials": newCredentials})
@@ -425,7 +435,7 @@ func TestUserAccountHandlerUpdateApprovedPublicAgentIdentityCredentialsRevalidat
 func TestUserAccountHandlerSetPublicShareExecutorValidatesAgentIdentityBeforeApproval(t *testing.T) {
 	ownerUserID := int64(101)
 	account := newUserAgentIdentityShareAccount(t, ownerUserID, service.AccountShareModePrivate, service.AccountShareStatusApproved)
-	handler, repo, upstream, _ := newUserAgentIdentityShareHandler(t, account, http.StatusOK, "")
+	handler, repo, upstream, _, _ := newUserAgentIdentityShareHandler(t, account, http.StatusOK, "")
 	task := &service.AccountBatchTask{
 		Operation:   service.AccountBatchTaskOperationUserSetPublicShare,
 		OwnerUserID: &ownerUserID,
@@ -460,7 +470,7 @@ func TestUserAccountHandlerConvertExternalPlacementBatch(t *testing.T) {
 	second.ID = 2
 	second.Name = "Agent Identity 2"
 
-	handler, repo, _, _ := newUserAgentIdentityShareHandler(t, first, http.StatusOK, "")
+	handler, repo, _, _, _ := newUserAgentIdentityShareHandler(t, first, http.StatusOK, "")
 	repo.accounts[second.ID] = cloneUserAgentIdentityShareAccount(second)
 
 	router := gin.New()
@@ -511,6 +521,185 @@ func TestUserAccountHandlerConvertExternalPlacementBatch(t *testing.T) {
 	}
 }
 
+// 批量转换部分失败时，失败项必须透出结构化错误码（reason）与用户可读 message，
+// 前端才能按 reason 映射中文文案（此前只返回 error 英文原文，批量场景根本读不到原因）。
+func TestUserAccountHandlerConvertExternalPlacementBatchExposesFailureReason(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ownerUserID := int64(101)
+	first := newUserAgentIdentityShareAccount(
+		t,
+		ownerUserID,
+		service.AccountShareModePrivate,
+		service.AccountShareStatusApproved,
+	)
+	second := newUserAgentIdentityShareAccount(
+		t,
+		ownerUserID,
+		service.AccountShareModePrivate,
+		service.AccountShareStatusApproved,
+	)
+	second.ID = 2
+	second.Name = "Agent Identity 2"
+
+	handler, repo, _, _, placementRepo := newUserAgentIdentityShareHandler(t, first, http.StatusOK, "")
+	repo.accounts[second.ID] = cloneUserAgentIdentityShareAccount(second)
+	// 账号 2 转换失败，注入一个带 reason 的结构化错误。
+	placementRepo.convertErr = infraerrors.BadRequest(
+		"OWNED_ACCOUNT_PUBLIC_VALIDATION_FAILED",
+		"public account validation failed",
+	)
+	placementRepo.convertErrFor = 2
+
+	router := gin.New()
+	router.POST("/accounts/external-placement:convert-batch", func(c *gin.Context) {
+		c.Set(
+			string(middleware2.ContextKeyUser),
+			middleware2.AuthSubject{UserID: ownerUserID},
+		)
+		handler.ConvertExternalPlacementBatch(c)
+	})
+	body := []byte(`{
+		"account_ids":[1,2],
+		"target":"public_pool",
+		"idempotency_key":"batch-placement-reason-test"
+	}`)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/accounts/external-placement:convert-batch",
+		bytes.NewReader(body),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	var envelope struct {
+		Code int `json:"code"`
+		Data struct {
+			Success    int     `json:"success"`
+			Failed     int     `json:"failed"`
+			SuccessIDs []int64 `json:"success_ids"`
+			FailedIDs  []int64 `json:"failed_ids"`
+			Results    []struct {
+				AccountID int64  `json:"account_id"`
+				Success   bool   `json:"success"`
+				Error     string `json:"error"`
+				Reason    string `json:"reason"`
+				Message   string `json:"message"`
+			} `json:"results"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &envelope))
+	require.Zero(t, envelope.Code)
+	require.Equal(t, 1, envelope.Data.Success)
+	require.Equal(t, 1, envelope.Data.Failed)
+	require.Equal(t, []int64{1}, envelope.Data.SuccessIDs)
+	require.Equal(t, []int64{2}, envelope.Data.FailedIDs)
+
+	var failed *struct {
+		AccountID int64  `json:"account_id"`
+		Success   bool   `json:"success"`
+		Error     string `json:"error"`
+		Reason    string `json:"reason"`
+		Message   string `json:"message"`
+	}
+	for i := range envelope.Data.Results {
+		if !envelope.Data.Results[i].Success {
+			failed = &envelope.Data.Results[i]
+			break
+		}
+	}
+	require.NotNil(t, failed, "batch results must include a failed entry")
+	require.Equal(t, int64(2), failed.AccountID)
+	require.Equal(t, "OWNED_ACCOUNT_PUBLIC_VALIDATION_FAILED", failed.Reason)
+	require.Equal(t, "public account validation failed", failed.Message)
+	require.Contains(t, failed.Error, "OWNED_ACCOUNT_PUBLIC_VALIDATION_FAILED")
+	// 成功的账号仍完成转换。
+	require.Equal(t, service.AccountShareModePublic, repo.accounts[1].ShareMode)
+	require.Equal(t, service.AccountShareModePrivate, repo.accounts[2].ShareMode)
+}
+
+// 非 ApplicationError（裸 DB/Redis 错误）时 message 不能是固定的 "internal error"——
+// 那会遮蔽 err.Error() 里的真实原因。reason 为空时 message 必须回退到真实错误文本。
+func TestUserAccountHandlerConvertExternalPlacementBatchExposesRawErrorMessage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ownerUserID := int64(101)
+	first := newUserAgentIdentityShareAccount(
+		t,
+		ownerUserID,
+		service.AccountShareModePrivate,
+		service.AccountShareStatusApproved,
+	)
+	second := newUserAgentIdentityShareAccount(
+		t,
+		ownerUserID,
+		service.AccountShareModePrivate,
+		service.AccountShareStatusApproved,
+	)
+	second.ID = 2
+	second.Name = "Agent Identity 2"
+
+	handler, repo, _, _, placementRepo := newUserAgentIdentityShareHandler(t, first, http.StatusOK, "")
+	repo.accounts[second.ID] = cloneUserAgentIdentityShareAccount(second)
+	// 注入裸错误（非 infraerrors.ApplicationError），模拟 repo 层 DB 抖动。
+	placementRepo.convertErr = errors.New("relation account_groups does not exist")
+	placementRepo.convertErrFor = 2
+
+	router := gin.New()
+	router.POST("/accounts/external-placement:convert-batch", func(c *gin.Context) {
+		c.Set(
+			string(middleware2.ContextKeyUser),
+			middleware2.AuthSubject{UserID: ownerUserID},
+		)
+		handler.ConvertExternalPlacementBatch(c)
+	})
+	body := []byte(`{
+		"account_ids":[1,2],
+		"target":"public_pool",
+		"idempotency_key":"batch-placement-raw-error-test"
+	}`)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/accounts/external-placement:convert-batch",
+		bytes.NewReader(body),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	var envelope struct {
+		Code int `json:"code"`
+		Data struct {
+			Failed  int `json:"failed"`
+			Results []struct {
+				AccountID int64  `json:"account_id"`
+				Success   bool   `json:"success"`
+				Reason    string `json:"reason"`
+				Message   string `json:"message"`
+			} `json:"results"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &envelope))
+	require.Equal(t, 1, envelope.Data.Failed)
+	var failed *struct {
+		AccountID int64  `json:"account_id"`
+		Success   bool   `json:"success"`
+		Reason    string `json:"reason"`
+		Message   string `json:"message"`
+	}
+	for i := range envelope.Data.Results {
+		if !envelope.Data.Results[i].Success {
+			failed = &envelope.Data.Results[i]
+			break
+		}
+	}
+	require.NotNil(t, failed)
+	require.Equal(t, int64(2), failed.AccountID)
+	require.Empty(t, failed.Reason)
+	require.Contains(t, failed.Message, "relation account_groups does not exist")
+}
+
 func TestUserAccountHandlerConvertExternalPlacementBatchRejectsForeignAccountBeforeChanges(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ownerUserID := int64(101)
@@ -529,7 +718,7 @@ func TestUserAccountHandlerConvertExternalPlacementBatchRejectsForeignAccountBef
 	)
 	foreign.ID = 2
 
-	handler, repo, _, _ := newUserAgentIdentityShareHandler(t, owned, http.StatusOK, "")
+	handler, repo, _, _, _ := newUserAgentIdentityShareHandler(t, owned, http.StatusOK, "")
 	repo.accounts[foreign.ID] = cloneUserAgentIdentityShareAccount(foreign)
 
 	router := gin.New()
