@@ -22,6 +22,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	utls "github.com/refraction-networking/utls"
 )
 
 // TestDialerBasicConnection tests that the dialer can establish TLS connections.
@@ -488,6 +490,35 @@ func TestBuildClientHelloSpec(t *testing.T) {
 	}
 }
 
+// TestOpencodeProfile verifies the official OpenCode CLI (Bun) profile carries a
+// trailing padding(21) extension — the sole difference from Node.js 24.x.
+func TestOpencodeProfile(t *testing.T) {
+	profile := NewOpencodeProfile()
+	if profile.Name != "OpenCode CLI (Bun 1.3.x)" {
+		t.Errorf("name = %q", profile.Name)
+	}
+	if len(profile.Extensions) == 0 {
+		t.Fatal("expected non-empty extension order")
+	}
+	if last := profile.Extensions[len(profile.Extensions)-1]; last != 21 {
+		t.Fatalf("last extension = %d, want 21 (padding)", last)
+	}
+
+	spec := buildClientHelloSpecFromProfile(profile)
+	if len(spec.Extensions) == 0 {
+		t.Fatal("expected non-empty spec extensions")
+	}
+	// 末尾扩展必须是 padding 扩展（BoringPaddingStyle 按 0x200 边界填充）。
+	last := spec.Extensions[len(spec.Extensions)-1]
+	pad, ok := last.(*utls.UtlsPaddingExtension)
+	if !ok {
+		t.Fatalf("last spec extension = %T, want *utls.UtlsPaddingExtension", last)
+	}
+	if pad.GetPaddingLen == nil {
+		t.Fatal("expected padding extension to carry BoringPaddingStyle functor")
+	}
+}
+
 // TestToUTLSCurves tests curve ID conversion.
 func TestToUTLSCurves(t *testing.T) {
 	input := []uint16{0x001d, 0x0017, 0x0018}
@@ -527,6 +558,15 @@ func TestAllProfiles(t *testing.T) {
 				Name:         "default_node_v24",
 				EnableGREASE: false,
 			},
+			JA4CipherHash: "5b57614c22b0",
+		},
+		{
+			// OpenCode CLI (Bun 1.3.x / BoringSSL) — 官方指纹。
+			// 与 Node.js 24.x 仅差末尾 padding(21)。
+			// JA3 Hash: 50027c67d7d68e24c00d233bca146d88
+			// JA4: t13d1715h1_5b57614c22b0_7baf387fc6ff
+			Profile:    NewOpencodeProfile(),
+			ExpectedJA3: "50027c67d7d68e24c00d233bca146d88",
 			JA4CipherHash: "5b57614c22b0",
 		},
 		{
