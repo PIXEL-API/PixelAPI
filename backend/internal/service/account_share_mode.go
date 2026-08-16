@@ -425,6 +425,12 @@ type AccountShareListing struct {
 	Anthropic5hUsage                        *UsageProgress              `json:"anthropic_5h_usage,omitempty"`
 	Anthropic7dUsage                        *UsageProgress              `json:"anthropic_7d_usage,omitempty"`
 	AnthropicUsageUpdatedAt                 *time.Time                  `json:"anthropic_usage_updated_at,omitempty"`
+	OpencodeQuotaProtectionReason           *string                     `json:"opencode_quota_protection_reason,omitempty"`
+	OpencodeQuotaProtectionResetAt          *time.Time                  `json:"opencode_quota_protection_reset_at,omitempty"`
+	Opencode5hUsage                         *UsageProgress              `json:"opencode_5h_usage,omitempty"`
+	Opencode7dUsage                         *UsageProgress              `json:"opencode_7d_usage,omitempty"`
+	Opencode30dUsage                        *UsageProgress              `json:"opencode_30d_usage,omitempty"`
+	OpencodeUsageUpdatedAt                  *time.Time                  `json:"opencode_usage_updated_at,omitempty"`
 	CurrentMembershipID                     *int64                      `json:"current_membership_id,omitempty"`
 	CurrentAPIKeyID                         *int64                      `json:"current_api_key_id,omitempty"`
 	CurrentAPIKeyName                       string                      `json:"current_api_key_name,omitempty"`
@@ -5081,6 +5087,8 @@ func normalizeAccountShareListingPlatform(platform string) string {
 		return PlatformOpenAI
 	case PlatformAnthropic:
 		return PlatformAnthropic
+	case PlatformOpencode:
+		return PlatformOpencode
 	default:
 		return ""
 	}

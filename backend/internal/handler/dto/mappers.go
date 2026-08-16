@@ -336,6 +336,20 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		}
 	}
 
+	if a.IsOpencodeApiKey() {
+		limit5h := a.GetOpencode5hLimitPercent()
+		limit7d := a.GetOpencode7dLimitPercent()
+		limit30d := a.GetOpencode30dLimitPercent()
+		out.Opencode5hLimitPercent = &limit5h
+		out.Opencode7dLimitPercent = &limit7d
+		out.Opencode30dLimitPercent = &limit30d
+		now := time.Now()
+		if reason := a.OpencodeQuotaProtectionReasonAt(now); reason != "" {
+			out.OpencodeQuotaProtectionReason = &reason
+			out.OpencodeQuotaProtectionResetAt = a.OpencodeQuotaProtectionResetAt(now)
+		}
+	}
+
 	// 提取 5h 窗口费用控制和会话数量控制配置（仅 Anthropic OAuth/SetupToken 账号有效）
 	if a.IsAnthropicOAuthOrSetupToken() {
 		if limit := a.GetWindowCostLimit(); limit > 0 {

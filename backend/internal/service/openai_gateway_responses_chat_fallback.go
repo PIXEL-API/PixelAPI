@@ -121,7 +121,9 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 		return nil, fmt.Errorf("account %d missing api_key", account.ID)
 	}
 	baseURL := account.GetOpenAIBaseURL()
-	if baseURL == "" {
+	if account.IsOpencode() {
+		baseURL = account.GetOpencodeBaseURL()
+	} else if baseURL == "" {
 		baseURL = "https://api.openai.com"
 	}
 	validatedURL, err := s.validateUpstreamBaseURL(baseURL)

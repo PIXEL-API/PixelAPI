@@ -626,7 +626,9 @@ type OpenAIGatewayService struct {
 	balanceNotifyService    *BalanceNotifyService
 	settingService          *SettingService
 	accountService          *AccountService
+	accountUsageService     *AccountUsageService
 	accountShareModeService *AccountShareModeService
+	tlsFPProfileService     *TLSFingerprintProfileService
 
 	openaiWSPoolOnce              sync.Once
 	openaiWSStateStoreOnce        sync.Once
@@ -2892,6 +2894,10 @@ func (s *OpenAIGatewayService) ForwardWithAnalysis(ctx context.Context, c *gin.C
 	if account != nil && account.Platform == PlatformGrok {
 		return s.forwardGrokResponses(ctx, c, account, body, originalModel, reqStream, startTime)
 	}
+	if account != nil && account.IsOpencode() {
+		// OpenCode Go 订阅端点不提供 /responses，统一落到原生 chat/completions。
+		return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body)
+	}
 	if account.Type == AccountTypeAPIKey && imageOnlyResponsesModel {
 		requestErr := fmt.Errorf("/v1/responses does not accept image-only model %q as the top-level model for API Key accounts; use /v1/images/generations, or use a Responses-compatible text model with the image_generation tool", reqModel)
 		return rejectImageOnlyResponsesRequest("model", requestErr)
@@ -3233,7 +3239,7 @@ func (s *OpenAIGatewayService) ForwardWithAnalysis(ctx context.Context, c *gin.C
 	if !isCodexCLI {
 		if maxOutputTokens, hasMaxOutputTokens := reqBody["max_output_tokens"]; hasMaxOutputTokens {
 			switch account.Platform {
-			case PlatformOpenAI:
+			case PlatformOpenAI, PlatformOpencode:
 				// Responses-native output limits are preserved. Compatible upstreams
 				// that explicitly reject this field are handled by the bounded retry
 				// loop below, avoiding unnecessary semantic loss for conforming APIs.

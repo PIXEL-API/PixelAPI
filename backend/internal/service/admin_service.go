@@ -439,6 +439,10 @@ type BulkUpdateAccountResult struct {
 	AccountID int64  `json:"account_id"`
 	Success   bool   `json:"success"`
 	Error     string `json:"error,omitempty"`
+	// Reason 携带结构化错误码（如 OWNED_ACCOUNT_PUBLIC_VALIDATION_FAILED），
+	// 供前端按错误码映射中文文案。Error 保留兼容：历史调用方只读 error 字符串。
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 // AdminUpdateAPIKeyGroupIDResult is the result of AdminUpdateAPIKeyGroupID.
@@ -829,6 +833,14 @@ func (s *adminServiceImpl) validateRequiredAccountLevel(ctx context.Context, pla
 			return "", invalidGroupInput("required_account_level must be empty, free, or heavy for Grok groups")
 		}
 		return normalized, nil
+	}
+	if platform == PlatformOpencode {
+		// opencode 账号恒为 AccountLevelUnknown（apikey-only），只能进空等级公开分组。
+		// 若允许非空等级，转公共时 resolveOwnedPublicShareGroup 会匹配失败，静默失效。
+		if normalized != "" {
+			return "", invalidGroupInput("required_account_level must be empty for OpenCode groups")
+		}
+		return "", nil
 	}
 	if platform != PlatformOpenAI {
 		return normalized, nil
@@ -3310,6 +3322,18 @@ var duplicateAccountDiscardedExtraKeys = map[string]struct{}{
 	"codex_7d_reset_after_seconds":         {},
 	"codex_7d_window_minutes":              {},
 	"codex_7d_reset_at":                    {},
+
+	// opencode 订阅用量快照与额度派生窗口同样需从干净状态开始。
+	"opencode_5h_used_percent":      {},
+	"opencode_5h_reset_at":          {},
+	"opencode_5h_limit_percent":     {},
+	"opencode_7d_used_percent":      {},
+	"opencode_7d_reset_at":          {},
+	"opencode_7d_limit_percent":     {},
+	"opencode_30d_used_percent":     {},
+	"opencode_30d_reset_at":         {},
+	"opencode_30d_limit_percent":    {},
+	"opencode_usage_updated_at":     {},
 }
 
 func duplicateAccountExtra(value map[string]any) (map[string]any, error) {

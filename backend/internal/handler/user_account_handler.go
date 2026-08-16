@@ -110,7 +110,7 @@ type createUserAccountRequest struct {
 	Notes              *string        `json:"notes"`
 	Platform           string         `json:"platform" binding:"required"`
 	AccountLevel       string         `json:"account_level"`
-	Type               string         `json:"type" binding:"required,oneof=oauth"`
+	Type               string         `json:"type" binding:"required,oneof=oauth apikey"`
 	Credentials        map[string]any `json:"credentials" binding:"required"`
 	Extra              map[string]any `json:"extra"`
 	ShareMode          string         `json:"share_mode" binding:"omitempty,oneof=private public"`
@@ -402,6 +402,11 @@ func (h *UserAccountHandler) openAIAccountLevelConfigs(ctx context.Context) ([]s
 func (h *UserAccountHandler) prepareUserAccountRequest(c *gin.Context, ownerUserID int64, req *createUserAccountRequest) bool {
 	if req == nil {
 		response.BadRequest(c, "Invalid account request")
+		return false
+	}
+	// 用户端自有账号仅 opencode 平台放开 apikey 类型，其余平台仍强制 OAuth。
+	if req.Type == service.AccountTypeAPIKey && req.Platform != service.PlatformOpencode {
+		response.BadRequest(c, "API key accounts are only supported for the opencode platform")
 		return false
 	}
 	levelConfigs, err := h.openAIAccountLevelConfigs(c.Request.Context())

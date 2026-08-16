@@ -96,8 +96,8 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	totpCache := repository.NewTotpCache(redisClient)
 	totpService := service.NewTotpService(userRepository, secretEncryptor, totpCache, settingService, emailService, emailQueueService)
 	authHandler := handler.NewAuthHandler(configConfig, authService, userService, settingService, promoService, redeemService, totpService)
-	ephemeralStateStore := repository.NewEphemeralStateStore(redisClient)
-	oidcProviderService, err := service.NewOIDCProviderService(configConfig, ephemeralStateStore, userService)
+	v := repository.NewEphemeralStateStore(redisClient)
+	oidcProviderService, err := service.NewOIDCProviderService(configConfig, v, userService)
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +131,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	if err != nil {
 		return nil, err
 	}
-	grokOAuthService := service.ProvideGrokOAuthService(proxyRepository, grokOAuthClient, ephemeralStateStore, configConfig)
+	grokOAuthService := service.ProvideGrokOAuthService(proxyRepository, grokOAuthClient, v, configConfig)
 	grokTokenProvider := service.ProvideGrokTokenProvider(accountRepository, geminiTokenCache, grokOAuthService, oAuthRefreshAPI, tempUnschedCache)
 	grokSchedulingBlockCleanerProxy := service.NewGrokSchedulingBlockCleanerProxy()
 	rateLimitService := service.ProvideRateLimitService(accountRepository, usageLogRepository, configConfig, geminiQuotaService, tempUnschedCache, timeoutCounterCache, openAI403CounterCache, settingService, compositeTokenCacheInvalidator, grokTokenProvider, grokSchedulingBlockCleanerProxy)
@@ -233,8 +233,8 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	digestSessionStore := service.NewDigestSessionStore()
 	balanceNotifyService := service.ProvideBalanceNotifyService(emailService, settingRepository, accountRepository)
 	gatewayService := service.ProvideGatewayService(accountRepository, accountSharePolicyRepository, groupRepository, usageLogRepository, usageBillingRepository, userRepository, userSubscriptionRepository, userGroupRateRepository, gatewayCache, configConfig, schedulerSnapshotService, concurrencyService, billingService, rateLimitService, billingCacheService, identityService, httpUpstream, deferredService, claudeTokenProvider, sessionLimitCache, rpmCache, digestSessionStore, settingService, tlsFingerprintProfileService, channelService, modelPricingResolver, balanceNotifyService, accountShareModeService)
-	v := service.ProvideAccountShareModeServices(accountShareModeService)
-	openAIGatewayService := service.ProvideOpenAIGatewayService(accountRepository, accountSharePolicyRepository, usageLogRepository, usageBillingRepository, userRepository, userSubscriptionRepository, userGroupRateRepository, gatewayCache, configConfig, schedulerSnapshotService, concurrencyService, billingService, rateLimitService, billingCacheService, httpUpstream, deferredService, openAITokenProvider, grokTokenProvider, modelPricingResolver, channelService, balanceNotifyService, settingService, accountService, agentIdentityWSInvalidatorProxy, grokSchedulingBlockCleanerProxy, v...)
+	v2 := service.ProvideAccountShareModeServices(accountShareModeService)
+	openAIGatewayService := service.ProvideOpenAIGatewayService(accountRepository, accountSharePolicyRepository, usageLogRepository, usageBillingRepository, userRepository, userSubscriptionRepository, userGroupRateRepository, gatewayCache, configConfig, schedulerSnapshotService, concurrencyService, billingService, rateLimitService, billingCacheService, httpUpstream, deferredService, openAITokenProvider, grokTokenProvider, modelPricingResolver, channelService, balanceNotifyService, settingService, accountService, agentIdentityWSInvalidatorProxy, grokSchedulingBlockCleanerProxy, accountUsageService, tlsFingerprintProfileService, v2...)
 	geminiMessagesCompatService := service.NewGeminiMessagesCompatService(accountRepository, groupRepository, gatewayCache, schedulerSnapshotService, geminiTokenProvider, rateLimitService, httpUpstream, antigravityGatewayService, configConfig, settingService)
 	opsSystemLogSink := service.ProvideOpsSystemLogSink(opsRepository, configConfig)
 	opsService := service.NewOpsService(opsRepository, settingRepository, configConfig, accountRepository, userRepository, concurrencyService, gatewayService, openAIGatewayService, geminiMessagesCompatService, antigravityGatewayService, opsSystemLogSink)
@@ -280,7 +280,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	channelMonitorRequestTemplateRepository := repository.NewChannelMonitorRequestTemplateRepository(client, db)
 	channelMonitorRequestTemplateService := service.NewChannelMonitorRequestTemplateService(channelMonitorRequestTemplateRepository)
 	channelMonitorRequestTemplateHandler := admin.NewChannelMonitorRequestTemplateHandler(channelMonitorRequestTemplateService)
-	contentModerationHandler := admin.NewContentModerationHandler(contentModerationService, v...)
+	contentModerationHandler := admin.NewContentModerationHandler(contentModerationService, v2...)
 	cyberPolicyHandler := admin.NewCyberPolicyHandler(openAIGatewayService, opsService)
 	paymentHandler := admin.NewPaymentHandler(paymentService, paymentConfigService)
 	revenueService := service.NewRevenueService(client)
@@ -319,8 +319,8 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	handlerActivityHandler := handler.NewActivityHandler(activityService)
 	idempotencyCoordinator := service.ProvideIdempotencyCoordinator(idempotencyRepository, configConfig)
 	idempotencyCleanupService := service.ProvideIdempotencyCleanupService(idempotencyRepository, configConfig, clusterTaskExecutor)
-	v2 := service.ProvideAccountBatchTaskServices(accountBatchTaskService)
-	handlers := handler.ProvideHandlers(authHandler, oidcProviderHandler, userHandler, apiKeyHandler, accountShareModeHandler, userAccountHandler, usageHandler, redeemHandler, subscriptionHandler, announcementHandler, conversationHandler, channelMonitorUserHandler, adminHandlers, gatewayHandler, openAIGatewayHandler, handlerSettingHandler, totpHandler, handlerPaymentHandler, paymentWebhookHandler, availableChannelHandler, receiptCodeHandler, handlerWithdrawalHandler, handlerInvoiceHandler, handlerShopHandler, handlerActivityHandler, idempotencyCoordinator, idempotencyCleanupService, v2)
+	v3 := service.ProvideAccountBatchTaskServices(accountBatchTaskService)
+	handlers := handler.ProvideHandlers(authHandler, oidcProviderHandler, userHandler, apiKeyHandler, accountShareModeHandler, userAccountHandler, usageHandler, redeemHandler, subscriptionHandler, announcementHandler, conversationHandler, channelMonitorUserHandler, adminHandlers, gatewayHandler, openAIGatewayHandler, handlerSettingHandler, totpHandler, handlerPaymentHandler, paymentWebhookHandler, availableChannelHandler, receiptCodeHandler, handlerWithdrawalHandler, handlerInvoiceHandler, handlerShopHandler, handlerActivityHandler, idempotencyCoordinator, idempotencyCleanupService, v3)
 	jwtAuthMiddleware := middleware.NewJWTAuthMiddleware(authService, userService)
 	adminAuthMiddleware := middleware.NewAdminAuthMiddleware(authService, userService, settingService)
 	apiKeyAuthMiddleware := middleware.NewAPIKeyAuthMiddleware(apiKeyService, subscriptionService, configConfig)
@@ -358,10 +358,10 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	activityAutoDrawService := service.ProvideActivityAutoDrawService(activityService, clusterTaskExecutor)
 	paymentOrderExpiryService := service.ProvidePaymentOrderExpiryService(paymentService, clusterTaskExecutor)
 	channelMonitorRunner := service.ProvideChannelMonitorRunner(channelMonitorService, settingService, clusterTaskExecutor)
-	v3 := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, schedulerSnapshotService, groupRateScheduleService, affiliateCodeCycleService, tokenRefreshService, accountExpiryService, proxyExpiryService, accountErrorCleanupService, conversationAdminReplyTimeoutService, subscriptionExpiryService, usageCleanupService, idempotencyCleanupService, concurrencyService, userMessageQueueService, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, grokOAuthService, accountShareModeService, openAIGatewayService, scheduledTestRunnerService, backupService, activityAutoDrawService, paymentOrderExpiryService, channelMonitorRunner, contentModerationService, clusterRuntime)
+	v4 := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, schedulerSnapshotService, groupRateScheduleService, affiliateCodeCycleService, tokenRefreshService, accountExpiryService, proxyExpiryService, accountErrorCleanupService, conversationAdminReplyTimeoutService, subscriptionExpiryService, usageCleanupService, idempotencyCleanupService, concurrencyService, userMessageQueueService, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, grokOAuthService, accountShareModeService, openAIGatewayService, scheduledTestRunnerService, backupService, activityAutoDrawService, paymentOrderExpiryService, channelMonitorRunner, contentModerationService, clusterRuntime)
 	application := &Application{
 		Server:         httpServer,
-		Cleanup:        v3,
+		Cleanup:        v4,
 		ClusterRuntime: clusterRuntime,
 	}
 	return application, nil

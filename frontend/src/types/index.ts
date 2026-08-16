@@ -799,7 +799,7 @@ export interface PaginationConfig {
 
 // ==================== API Key & Group Types ====================
 
-export type GroupPlatform = "anthropic" | "openai" | "gemini" | "antigravity" | "grok";
+export type GroupPlatform = "anthropic" | "openai" | "gemini" | "antigravity" | "grok" | "opencode";
 export type GrokVideoModelFamily =
   | "grok-imagine-video"
   | "grok-imagine-video-1.5";
@@ -1067,7 +1067,7 @@ export interface UpdateGroupRequest {
 
 // ==================== Account & Proxy Types ====================
 
-export type AccountPlatform = "anthropic" | "openai" | "gemini" | "antigravity" | "grok";
+export type AccountPlatform = "anthropic" | "openai" | "gemini" | "antigravity" | "grok" | "opencode";
 export type AccountType =
   | "oauth"
   | "setup-token"
@@ -1484,6 +1484,7 @@ export interface AccountUsageInfo {
   five_hour: UsageProgress | null;
   seven_day: UsageProgress | null;
   seven_day_sonnet: UsageProgress | null;
+  thirty_day?: UsageProgress | null;
   gemini_shared_daily?: UsageProgress | null;
   gemini_pro_daily?: UsageProgress | null;
   gemini_flash_daily?: UsageProgress | null;

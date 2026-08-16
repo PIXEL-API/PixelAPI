@@ -1285,6 +1285,18 @@ func filterSchedulerExtra(extra map[string]any) map[string]any {
 		"codex_7d_reset_at",
 		"codex_7d_reset_after_seconds",
 		"codex_7d_limit_percent",
+		// opencode 订阅用量窗口（5h/7d/30d）：调度守卫 IsOpencodeQuotaProtectionActiveAt
+		// 在选号热路径上读这些键，快照里剥掉会导致达限账号仍被选中（资损）。
+		"opencode_5h_used_percent",
+		"opencode_5h_reset_at",
+		"opencode_5h_limit_percent",
+		"opencode_7d_used_percent",
+		"opencode_7d_reset_at",
+		"opencode_7d_limit_percent",
+		"opencode_30d_used_percent",
+		"opencode_30d_reset_at",
+		"opencode_30d_limit_percent",
+		"opencode_usage_updated_at",
 		service.GrokMediaEligibleExtraKey,
 		"grok_billing_snapshot",
 		// 配额元数据：Account.IsQuotaExceededAt 在选号时会读这些键。

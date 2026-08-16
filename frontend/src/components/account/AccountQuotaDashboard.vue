@@ -524,7 +524,7 @@ function typeLabel(type: string): string {
 }
 
 function platformIconValue(platform: string): GroupPlatform | undefined {
-  if (platform === 'anthropic' || platform === 'openai' || platform === 'gemini' || platform === 'antigravity' || platform === 'grok') {
+  if (platform === 'anthropic' || platform === 'openai' || platform === 'gemini' || platform === 'antigravity' || platform === 'grok' || platform === 'opencode') {
     return platform
   }
   return undefined

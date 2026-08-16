@@ -151,13 +151,17 @@ const (
 	CodexQuotaWindow7d     = "7d"
 	AnthropicQuotaWindow5h = CodexQuotaWindow5h
 	AnthropicQuotaWindow7d = CodexQuotaWindow7d
+	OpencodeQuotaWindow5h  = CodexQuotaWindow5h
+	OpencodeQuotaWindow7d  = CodexQuotaWindow7d
+	OpencodeQuotaWindow30d = "30d"
 )
 
 const (
-	AccountListStatusRateLimited         = "rate_limited"
-	AccountListStatusTempUnschedulable   = "temp_unschedulable"
-	AccountListStatusUnschedulable       = "unschedulable"
-	AccountListStatusCodexQuotaProtected = "codex_quota_protected"
+	AccountListStatusRateLimited          = "rate_limited"
+	AccountListStatusTempUnschedulable    = "temp_unschedulable"
+	AccountListStatusUnschedulable        = "unschedulable"
+	AccountListStatusCodexQuotaProtected  = "codex_quota_protected"
+	AccountListStatusOpencodeQuotaProtected = "opencode_quota_protected"
 )
 
 func NormalizeAccountLevel(level string) string {
@@ -727,7 +731,7 @@ func (a *Account) isSchedulableAt(now time.Time, includeCodexQuotaProtection boo
 	if a.RateLimitResetAt != nil && now.Before(*a.RateLimitResetAt) {
 		return false
 	}
-	if includeCodexQuotaProtection && (a.IsCodexQuotaProtectionActiveAt(now) || a.IsAnthropicQuotaProtectionActiveAt(now)) {
+	if includeCodexQuotaProtection && (a.IsCodexQuotaProtectionActiveAt(now) || a.IsAnthropicQuotaProtectionActiveAt(now) || a.IsOpencodeQuotaProtectionActiveAt(now)) {
 		return false
 	}
 	if a.TempUnschedulableUntil != nil && now.Before(*a.TempUnschedulableUntil) {
@@ -796,7 +800,7 @@ func (a *Account) IsGrokOAuth() bool {
 }
 
 func (a *Account) IsOpenAICompatible() bool {
-	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok)
+	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok || a.Platform == PlatformOpencode)
 }
 
 func (a *Account) GeminiOAuthType() string {
@@ -1218,6 +1222,10 @@ func normalizeRequestedModelForLookup(platform, requestedModel string) string {
 	if trimmed == "" {
 		return ""
 	}
+	// Claude Code 用 "[1m]" 表示 1M 上下文选择，属于客户端侧语法而非模型 ID。
+	// 任何平台都不应拿带 [1m] 的模型名去做 model_mapping 精确匹配，否则
+	// 会因匹配不到裸 slug（如 deepseek-v4-flash）而误判 model_not_found。
+	trimmed = normalizeClaudeCodeLongContextModel(trimmed)
 	if platform != PlatformGemini && platform != PlatformAntigravity {
 		return trimmed
 	}
@@ -1689,6 +1697,14 @@ func (a *Account) IsOpenAI() bool {
 	return a.Platform == PlatformOpenAI
 }
 
+func (a *Account) IsOpencode() bool {
+	return a != nil && a.Platform == PlatformOpencode
+}
+
+func (a *Account) IsOpencodeApiKey() bool {
+	return a.IsOpencode() && a.Type == AccountTypeAPIKey
+}
+
 func (a *Account) IsAnthropic() bool {
 	return a.Platform == PlatformAnthropic
 }
@@ -1888,6 +1904,96 @@ func (a *Account) AnthropicUsageUpdatedAt() *time.Time {
 		return nil
 	}
 	return &updatedAt
+}
+
+func (a *Account) GetOpencode5hLimitPercent() float64 {
+	return a.getCodexQuotaLimitPercent("opencode_5h_limit_percent")
+}
+
+func (a *Account) GetOpencode7dLimitPercent() float64 {
+	return a.getCodexQuotaLimitPercent("opencode_7d_limit_percent")
+}
+
+func (a *Account) GetOpencode30dLimitPercent() float64 {
+	return a.getCodexQuotaLimitPercent("opencode_30d_limit_percent")
+}
+
+func (a *Account) GetOpencode5hUsedPercent() float64 {
+	return opencodeUsedPercentFromExtra(a, "opencode_5h_used_percent")
+}
+
+func (a *Account) GetOpencode7dUsedPercent() float64 {
+	return opencodeUsedPercentFromExtra(a, "opencode_7d_used_percent")
+}
+
+func (a *Account) GetOpencode30dUsedPercent() float64 {
+	return opencodeUsedPercentFromExtra(a, "opencode_30d_used_percent")
+}
+
+func (a *Account) IsOpencodeQuotaProtectionActiveAt(now time.Time) bool {
+	return a.OpencodeQuotaProtectionReasonAt(now) != ""
+}
+
+func (a *Account) OpencodeQuotaProtectionReasonAt(now time.Time) string {
+	reason, _ := a.opencodeQuotaProtectionWindowAt(now)
+	return reason
+}
+
+func (a *Account) OpencodeQuotaProtectionResetAt(now time.Time) *time.Time {
+	_, resetAt := a.opencodeQuotaProtectionWindowAt(now)
+	return resetAt
+}
+
+func (a *Account) OpencodeUsageProgress(window string, now time.Time) *UsageProgress {
+	if a == nil || !a.IsOpencodeApiKey() {
+		return nil
+	}
+	return buildOpencodeUsageProgressFromExtra(a.Extra, window, now)
+}
+
+func (a *Account) OpencodeUsageUpdatedAt() *time.Time {
+	if a == nil {
+		return nil
+	}
+	updatedAt := a.getExtraTime("opencode_usage_updated_at")
+	if updatedAt.IsZero() {
+		return nil
+	}
+	return &updatedAt
+}
+
+func opencodeUsedPercentFromExtra(a *Account, key string) float64 {
+	if a == nil || a.Extra == nil {
+		return 0
+	}
+	return parseExtraFloat64(a.Extra[key])
+}
+
+func (a *Account) opencodeQuotaProtectionWindowAt(now time.Time) (string, *time.Time) {
+	if a == nil || !a.IsOpencodeApiKey() || a.Extra == nil {
+		return "", nil
+	}
+	reason, resetAt := "", time.Time{}
+	if windowResetAt, ok := codexQuotaProtectedWindowResetAt(a.Extra, "opencode_5h_used_percent", "opencode_5h_reset_at", a.GetOpencode5hLimitPercent(), now); ok {
+		reason = OpencodeQuotaWindow5h
+		resetAt = windowResetAt
+	}
+	if windowResetAt, ok := codexQuotaProtectedWindowResetAt(a.Extra, "opencode_7d_used_percent", "opencode_7d_reset_at", a.GetOpencode7dLimitPercent(), now); ok {
+		if reason == "" || windowResetAt.After(resetAt) {
+			reason = OpencodeQuotaWindow7d
+			resetAt = windowResetAt
+		}
+	}
+	if windowResetAt, ok := codexQuotaProtectedWindowResetAt(a.Extra, "opencode_30d_used_percent", "opencode_30d_reset_at", a.GetOpencode30dLimitPercent(), now); ok {
+		if reason == "" || windowResetAt.After(resetAt) {
+			reason = OpencodeQuotaWindow30d
+			resetAt = windowResetAt
+		}
+	}
+	if reason == "" {
+		return "", nil
+	}
+	return reason, &resetAt
 }
 
 func (a *Account) codexQuotaProtectionWindowAt(now time.Time) (string, *time.Time) {
@@ -2165,13 +2271,34 @@ func (a *Account) GetOpenAIIDToken() string {
 }
 
 func (a *Account) GetOpenAIApiKey() string {
-	if !a.IsOpenAIApiKey() {
+	if !a.IsOpenAIApiKey() && !a.IsOpencodeApiKey() {
 		return ""
 	}
 	return a.GetCredential("api_key")
 }
 
+// OpencodeDefaultBaseURL 是 opencode OpenCode Go 订阅的官方端点。
+// opencode 账号锁定官方地址，用户端不提供 base_url 输入。
+const OpencodeDefaultBaseURL = "https://opencode.ai/zen/go/v1"
+
+func (a *Account) GetOpencodeApiKey() string {
+	if !a.IsOpencodeApiKey() {
+		return ""
+	}
+	return a.GetCredential("api_key")
+}
+
+func (a *Account) GetOpencodeBaseURL() string {
+	if !a.IsOpencode() {
+		return ""
+	}
+	return OpencodeDefaultBaseURL
+}
+
 func (a *Account) GetOpenAIUserAgent() string {
+	if a.IsOpencode() {
+		return "opencode/1.0"
+	}
 	if !a.IsOpenAI() {
 		return ""
 	}
@@ -2641,9 +2768,13 @@ func (a *Account) IsAnthropicOAuthOrSetupToken() bool {
 }
 
 // IsTLSFingerprintEnabled 检查是否启用 TLS 指纹伪装
-// 仅适用于 Anthropic OAuth/SetupToken 类型账号
+// 仅适用于 Anthropic OAuth/SetupToken 与 opencode 账号
 // 启用后将模拟 Claude Code (Node.js) 客户端的 TLS 握手特征
 func (a *Account) IsTLSFingerprintEnabled() bool {
+	// opencode 账号默认启用 TLS 指纹伪装，规避上游 browser signature 检测。
+	if a != nil && a.IsOpencode() {
+		return true
+	}
 	// 仅支持 Anthropic OAuth/SetupToken 账号
 	if !a.IsAnthropicOAuthOrSetupToken() {
 		return false

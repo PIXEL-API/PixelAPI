@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"log/slog"
 	"math/rand/v2"
@@ -194,6 +195,7 @@ type UsageInfo struct {
 	UpdatedAt          *time.Time     `json:"updated_at,omitempty"`           // 更新时间
 	FiveHour           *UsageProgress `json:"five_hour"`                      // 5小时窗口
 	SevenDay           *UsageProgress `json:"seven_day,omitempty"`            // 7天窗口
+	ThirtyDay          *UsageProgress `json:"thirty_day,omitempty"`           // 30天窗口（opencode）
 	SevenDaySonnet     *UsageProgress `json:"seven_day_sonnet,omitempty"`     // 7天Sonnet窗口
 	SevenDayFable      *UsageProgress `json:"seven_day_fable,omitempty"`      // 7天Fable窗口（响应头 7d_oi）
 	GeminiSharedDaily  *UsageProgress `json:"gemini_shared_daily,omitempty"`  // Gemini shared pool RPD (Google One / Code Assist)
@@ -425,6 +427,10 @@ func (s *AccountUsageService) GetUsageForAccount(ctx context.Context, account *A
 		return usage, err
 	}
 
+	if account.IsOpencodeApiKey() {
+		return s.getOpencodeUsage(ctx, account, true)
+	}
+
 	// 只有oauth类型账号可以通过API获取usage（有profile scope）
 	if account.CanGetUsage() {
 		var apiResp *ClaudeUsageResponse
@@ -552,6 +558,8 @@ func (s *AccountUsageService) GetLocalUsageForAccount(ctx context.Context, accou
 		usage, err = s.getAntigravityLocalUsage(account)
 	case account.Platform == PlatformGrok:
 		usage, err = s.getGrokUsage(ctx, account, false)
+	case account.IsOpencodeApiKey():
+		usage, err = s.getOpencodeUsage(ctx, account, false)
 	case account.IsAnthropicOAuthOrSetupToken():
 		usage, err = s.GetPassiveUsageForAccount(ctx, account)
 	default:
@@ -712,6 +720,181 @@ func (s *AccountUsageService) getOpenAIUsageWithProbe(ctx context.Context, accou
 	}
 
 	return usage, nil
+}
+
+func (s *AccountUsageService) getOpencodeUsage(ctx context.Context, account *Account, allowProbe bool) (*UsageInfo, error) {
+	now := time.Now()
+	usage := &UsageInfo{UpdatedAt: &now}
+
+	if account == nil {
+		return usage, nil
+	}
+
+	usage.FiveHour = buildOpencodeUsageProgressFromExtra(account.Extra, OpencodeQuotaWindow5h, now)
+	usage.SevenDay = buildOpencodeUsageProgressFromExtra(account.Extra, OpencodeQuotaWindow7d, now)
+	usage.ThirtyDay = buildOpencodeUsageProgressFromExtra(account.Extra, OpencodeQuotaWindow30d, now)
+
+	if allowProbe && shouldProbeOpencodeUsage(account, usage, now) && s.shouldProbeOpencodeUsageThrottle(account.ID, now) {
+		if updates, err := s.probeOpencodeUsage(ctx, account); err == nil && len(updates) > 0 {
+			mergeAccountExtra(account, updates)
+			usage.FiveHour = buildOpencodeUsageProgressFromExtra(account.Extra, OpencodeQuotaWindow5h, now)
+			usage.SevenDay = buildOpencodeUsageProgressFromExtra(account.Extra, OpencodeQuotaWindow7d, now)
+			usage.ThirtyDay = buildOpencodeUsageProgressFromExtra(account.Extra, OpencodeQuotaWindow30d, now)
+		}
+	}
+
+	return usage, nil
+}
+
+func shouldProbeOpencodeUsage(account *Account, usage *UsageInfo, now time.Time) bool {
+	if account == nil || !account.IsOpencodeApiKey() {
+		return false
+	}
+	if usage == nil || usage.FiveHour == nil || usage.SevenDay == nil {
+		return true
+	}
+	if account.IsRateLimited() {
+		return true
+	}
+	return isOpencodeUsageSnapshotStale(account, now)
+}
+
+func isOpencodeUsageSnapshotStale(account *Account, now time.Time) bool {
+	if account == nil || !account.IsOpencodeApiKey() {
+		return false
+	}
+	if account.Extra == nil {
+		return true
+	}
+	raw, ok := account.Extra["opencode_usage_updated_at"]
+	if !ok {
+		return true
+	}
+	ts, err := parseTime(fmt.Sprint(raw))
+	if err != nil {
+		return true
+	}
+	return now.Sub(ts) >= openAIProbeCacheTTL
+}
+
+func (s *AccountUsageService) shouldProbeOpencodeUsageThrottle(accountID int64, now time.Time) bool {
+	if s == nil || s.cache == nil || accountID <= 0 {
+		return true
+	}
+	if cached, ok := s.cache.openAIProbeCache.Load(accountID); ok {
+		if ts, ok := cached.(time.Time); ok && now.Sub(ts) < openAIProbeCacheTTL {
+			return false
+		}
+	}
+	s.cache.openAIProbeCache.Store(accountID, now)
+	return true
+}
+
+// opencodeUsageProbeFlight 防止同一 opencode 账号并发派发多个用量拉取后台任务。
+var opencodeUsageProbeFlight sync.Map
+
+// ScheduleOpencodeUsageProbe 在调度到 opencode 账号时惰性刷新其 5h/7d/30d 用量窗口。
+// 不阻塞调用方：仅当快照已过期、且 throttle 与在飞任务守卫都放行时才派发后台任务。
+// 这是 opencode 订阅额度守卫的数据来源——不依赖全局定时器，改为「用到才拉」，
+// 数据随调度自然保持新鲜（最多 10 分钟 stale 窗口）。
+func (s *AccountUsageService) ScheduleOpencodeUsageProbe(account *Account) {
+	if s == nil || account == nil || !account.IsOpencodeApiKey() || s.accountRepo == nil || account.ID <= 0 {
+		return
+	}
+	now := time.Now()
+	if !isOpencodeUsageSnapshotStale(account, now) {
+		return
+	}
+	// throttle 保证同一账号 10 分钟内至多派发一次（含失败），避免坏账号热循环。
+	if !s.shouldProbeOpencodeUsageThrottle(account.ID, now) {
+		return
+	}
+	if _, loaded := opencodeUsageProbeFlight.LoadOrStore(account.ID, struct{}{}); loaded {
+		return
+	}
+	copyAccount := *account
+	copyAccount.Credentials = cloneCredentials(account.Credentials)
+	copyAccount.Extra = cloneCredentials(account.Extra)
+	go func() {
+		defer opencodeUsageProbeFlight.Delete(copyAccount.ID)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if _, err := s.probeOpencodeUsage(ctx, &copyAccount); err != nil {
+			slog.Debug("opencode_usage_probe_failed", "account_id", copyAccount.ID, "error", err)
+		}
+	}()
+}
+
+// probeOpencodeUsage 主动拉取 opencode 的 GET /zen/go/v1/usage 端点，
+// 解析三个用量窗口并回写账号 extra。端点格式未文档化，解析失败仅跳过更新。
+func (s *AccountUsageService) probeOpencodeUsage(ctx context.Context, account *Account) (map[string]any, error) {
+	if account == nil || !account.IsOpencodeApiKey() {
+		return nil, nil
+	}
+	apiKey := account.GetOpencodeApiKey()
+	if apiKey == "" {
+		return nil, fmt.Errorf("no opencode api key available")
+	}
+	targetURL := strings.TrimRight(account.GetOpencodeBaseURL(), "/") + "/usage"
+
+	reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	proxyURL := ""
+	if account.Proxy != nil {
+		proxyURL = account.Proxy.URL()
+	}
+	client, err := httppool.GetClient(httppool.Options{
+		ProxyURL:              proxyURL,
+		Timeout:               15 * time.Second,
+		ResponseHeaderTimeout: 10 * time.Second,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("build opencode usage probe client: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, targetURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create opencode usage request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("opencode usage request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		_, _ = io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+		return nil, fmt.Errorf("opencode usage returned status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read opencode usage response: %w", err)
+	}
+
+	updates := buildOpencodeUsageExtraUpdates(ParseOpencodeUsage(body), time.Now())
+	if len(updates) == 0 {
+		return nil, nil
+	}
+	s.persistOpencodeUsage(account.ID, updates)
+	return updates, nil
+}
+
+func (s *AccountUsageService) persistOpencodeUsage(accountID int64, updates map[string]any) {
+	if s == nil || s.accountRepo == nil || accountID <= 0 || len(updates) == 0 {
+		return
+	}
+	go func() {
+		updateCtx, updateCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer updateCancel()
+		if err := s.accountRepo.UpdateExtra(updateCtx, accountID, updates); err != nil {
+			slog.Warn("failed to update opencode usage snapshot", "account_id", accountID, "error", err)
+		}
+	}()
 }
 
 func applyWindowStatsCoverage(progress *UsageProgress, coverageStart *time.Time) {

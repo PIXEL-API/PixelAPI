@@ -36,6 +36,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 ) (*OpenAIForwardResult, error) {
 	resetOpenAIRequestIdentityState(c)
 	beginUpstreamResponseModelObservation(c)
+	if account.IsOpencode() {
+		return s.forwardAsRawAnthropicMessages(ctx, c, account, body, defaultMappedModel)
+	}
 	if account.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
 		return s.forwardAnthropicViaRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 	}

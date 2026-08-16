@@ -2,6 +2,7 @@ import type { AccountPlatform, ClaudeModel } from '@/types'
 
 export const DEFAULT_OPENAI_TEST_MODEL = 'gpt-5.5'
 export const DEFAULT_GROK_TEST_MODEL = 'grok-4.5'
+export const DEFAULT_OPENCODE_TEST_MODEL = 'kimi-k2.6'
 
 const PRIORITIZED_GEMINI_MODELS = [
   'gemini-2.5-flash',
@@ -50,6 +51,9 @@ export function selectDefaultAccountTestModel(
   }
   if (platform === 'grok') {
     return models.find((model) => model.id === DEFAULT_GROK_TEST_MODEL)?.id ?? models[0].id
+  }
+  if (platform === 'opencode') {
+    return models.find((model) => model.id === DEFAULT_OPENCODE_TEST_MODEL)?.id ?? models[0].id
   }
   if (platform === 'gemini' || platform === 'antigravity') return models[0].id
   return models.find((model) => model.id.includes('sonnet'))?.id ?? models[0].id

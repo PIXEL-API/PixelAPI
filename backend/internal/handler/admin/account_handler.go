@@ -2704,6 +2704,22 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 		return
 	}
 
+	// Handle Opencode accounts
+	if account.Platform == service.PlatformOpencode {
+		mapping := account.GetModelMapping()
+		models := make([]openai.Model, 0, len(mapping))
+		for requestedModel := range mapping {
+			models = append(models, openai.Model{
+				ID:          requestedModel,
+				Object:      "model",
+				Type:        "model",
+				DisplayName: requestedModel,
+			})
+		}
+		response.Success(c, models)
+		return
+	}
+
 	if !account.IsAnthropic() {
 		response.BadRequest(c, "Unsupported account platform: "+account.Platform)
 		return

@@ -288,6 +288,50 @@
       <div v-else class="text-xs text-gray-400">-</div>
     </template>
 
+    <!-- Opencode apikey accounts: 5h/7d/30d windows from /usage API -->
+    <template v-else-if="account.platform === 'opencode'">
+      <div v-if="error" role="alert" class="mb-1 text-xs text-red-500">
+        {{ error }}
+      </div>
+      <div v-if="usageInfo" class="space-y-1">
+        <UsageProgressBar
+          v-if="usageInfo.five_hour"
+          label="5h"
+          :utilization="usageInfo.five_hour.utilization"
+          :resets-at="usageInfo.five_hour.resets_at"
+          :window-stats="usageInfo.five_hour.window_stats"
+          :show-now-when-idle="true"
+          color="indigo"
+        />
+        <UsageProgressBar
+          v-if="usageInfo.seven_day"
+          label="7d"
+          :utilization="usageInfo.seven_day.utilization"
+          :resets-at="usageInfo.seven_day.resets_at"
+          :window-stats="usageInfo.seven_day.window_stats"
+          :show-now-when-idle="true"
+          color="emerald"
+        />
+        <UsageProgressBar
+          v-if="usageInfo.thirty_day"
+          label="30d"
+          :utilization="usageInfo.thirty_day.utilization"
+          :resets-at="usageInfo.thirty_day.resets_at"
+          :window-stats="usageInfo.thirty_day.window_stats"
+          :show-now-when-idle="true"
+          color="purple"
+        />
+      </div>
+      <div v-else-if="loading" class="space-y-1.5">
+        <div class="flex items-center gap-1">
+          <div class="h-3 w-[32px] animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
+          <div class="h-1.5 w-8 animate-pulse rounded-full bg-gray-200 dark:bg-gray-700"></div>
+          <div class="h-3 w-[32px] animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
+        </div>
+      </div>
+      <div v-else class="text-xs text-gray-400">-</div>
+    </template>
+
     <!-- Antigravity OAuth accounts: fetch usage from API -->
     <template v-else-if="account.platform === 'antigravity' && account.type === 'oauth'">
       <!-- 账户类型徽章 -->
@@ -750,6 +794,8 @@ let visibilityObserver: IntersectionObserver | null = null
 const showUsageWindows = computed(() => {
   // Gemini: we can always compute local usage windows from DB logs (simulated quotas).
   if (props.account.platform === 'gemini') return true
+  // Opencode: 5h/7d/30d windows are passively collected into account.extra.
+  if (props.account.platform === 'opencode') return true
   return props.account.type === 'oauth' || props.account.type === 'setup-token'
 })
 
@@ -768,6 +814,9 @@ const shouldFetchUsage = computed(() => {
   }
   if (props.account.platform === 'grok') {
     return props.account.type === 'oauth'
+  }
+  if (props.account.platform === 'opencode') {
+    return true
   }
   return false
 })

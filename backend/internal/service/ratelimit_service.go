@@ -1049,10 +1049,10 @@ func (s *RateLimitService) handle403(ctx context.Context, account *Account, upst
 	if account.Platform == PlatformAntigravity {
 		return s.handleAntigravity403(ctx, account, upstreamMsg, responseBody)
 	}
-	if account.Platform == PlatformOpenAI {
+	if account.Platform == PlatformOpenAI || account.Platform == PlatformOpencode {
 		return s.handleOpenAI403(ctx, account, upstreamMsg, responseBody)
 	}
-	// 非 Antigravity 平台：保持原有行为
+	// 非 Antigravity/OpenAI/Opencode 平台：保持原有行为
 	msg := buildForbiddenErrorMessage(
 		"Access forbidden (403):",
 		upstreamMsg,
@@ -1102,7 +1102,7 @@ func (s *RateLimitService) handleOpenAI403(ctx context.Context, account *Account
 	}
 
 	until := time.Now().Add(time.Duration(openAI403CooldownMinutesDefault) * time.Minute)
-	reason := fmt.Sprintf("OpenAI 403 temporary cooldown (%d/%d): %s", count, openAI403DisableThreshold, msg)
+	reason := fmt.Sprintf("Upstream 403 temporary cooldown (%d/%d): %s", count, openAI403DisableThreshold, msg)
 	if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason); err != nil {
 		slog.Warn("openai_403_set_temp_unschedulable_failed", "account_id", account.ID, "error", err)
 		s.handleAuthError(ctx, account, msg)
@@ -1223,7 +1223,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 	// 4. 如果响应头没有，尝试从响应体解析（OpenAI usage_limit_reached, Gemini）
 	if resetTimestamp == "" {
 		switch account.Platform {
-		case PlatformOpenAI:
+		case PlatformOpenAI, PlatformOpencode:
 			// 尝试解析 OpenAI 的 usage_limit_reached 错误
 			if resetAt := parseOpenAIRateLimitResetTime(responseBody); resetAt != nil {
 				resetTime := time.Unix(*resetAt, 0)

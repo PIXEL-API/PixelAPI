@@ -219,6 +219,8 @@ export interface UserBulkAccountResult {
   account_id: number
   success: boolean
   error?: string
+  reason?: string
+  message?: string
 }
 
 export interface UserBulkAccountOperationResponse {

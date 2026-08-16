@@ -3699,6 +3699,7 @@ const platformOptions = computed(() => [
   { value: "gemini", label: "Gemini" },
   { value: "antigravity", label: "Antigravity" },
   { value: "grok", label: "Grok" },
+  { value: "opencode", label: "OpenCode" },
 ]);
 
 const platformFilterOptions = computed(() => [
@@ -3708,6 +3709,7 @@ const platformFilterOptions = computed(() => [
   { value: "gemini", label: "Gemini" },
   { value: "antigravity", label: "Antigravity" },
   { value: "grok", label: "Grok" },
+  { value: "opencode", label: "OpenCode" },
 ]);
 
 const editStatusOptions = computed(() => [
@@ -5151,6 +5153,10 @@ watch(
     if (newVal !== "openai") {
       resetMessagesDispatchFormState(createForm);
     }
+    // opencode 同时支持 /messages（MiniMax/Qwen），默认开启调度。
+    if (newVal === "opencode") {
+      createForm.allow_messages_dispatch = true;
+    }
     if (!["openai", "antigravity", "anthropic", "gemini", "grok"].includes(newVal)) {
       createForm.require_oauth_only = false;
       createForm.require_privacy_set = false;
@@ -5173,6 +5179,10 @@ watch(
     if (newVal !== "openai") {
       resetMessagesDispatchFormState(editForm);
       editForm.default_mapped_model = "";
+    }
+    // opencode 同时支持 /messages（MiniMax/Qwen），默认开启调度。
+    if (newVal === "opencode") {
+      editForm.allow_messages_dispatch = true;
     }
     if (!["openai", "antigravity", "anthropic", "gemini", "grok"].includes(newVal)) {
       editForm.require_oauth_only = false;

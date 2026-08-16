@@ -369,6 +369,8 @@ const defaultClientTab = computed(() => {
       return 'grok'
     case 'gemini':
       return 'gemini'
+    case 'opencode':
+      return 'opencode'
     case 'antigravity':
       return 'claude'
     default:
@@ -496,6 +498,10 @@ const clientTabs = computed((): TabConfig[] => {
         { id: 'grok', label: t('keys.useKeyModal.cliTabs.grokCli'), icon: TerminalIcon },
         { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon }
       ]
+    case 'opencode':
+      return [
+        { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon }
+      ]
     default:
       return [
         { id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon },
@@ -545,6 +551,8 @@ const platformDescription = computed(() => {
       return t('keys.useKeyModal.antigravity.description')
     case 'grok':
       return t('keys.useKeyModal.grok.description')
+    case 'opencode':
+      return t('keys.useKeyModal.opencode.description')
     default:
       return t('keys.useKeyModal.description')
   }
@@ -628,6 +636,8 @@ const currentFiles = computed((): FileConfig[] => {
         ]
       case 'grok':
         return [generateOpenCodeConfig('grok', apiBase, apiKey)]
+      case 'opencode':
+        return [generateOpenCodeConfig('anthropic', apiBase, apiKey)]
       default:
         return [generateOpenCodeConfig('openai', apiBase, apiKey)]
     }

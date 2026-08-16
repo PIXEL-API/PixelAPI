@@ -3098,6 +3098,21 @@ func accountCodexQuotaProtectedPredicate() dbpredicate.Account {
 	})
 }
 
+func accountOpencodeQuotaProtectedPredicate() dbpredicate.Account {
+	return dbpredicate.Account(func(s *entsql.Selector) {
+		extraCol := s.C(dbaccount.FieldExtra)
+		s.Where(entsql.P(func(b *entsql.Builder) {
+			b.WriteString("(")
+			writeCodexQuotaWindowProtectedCondition(b, extraCol, "opencode_5h_used_percent", "opencode_5h_reset_at", "opencode_5h_limit_percent")
+			b.WriteString(" OR ")
+			writeCodexQuotaWindowProtectedCondition(b, extraCol, "opencode_7d_used_percent", "opencode_7d_reset_at", "opencode_7d_limit_percent")
+			b.WriteString(" OR ")
+			writeCodexQuotaWindowProtectedCondition(b, extraCol, "opencode_30d_used_percent", "opencode_30d_reset_at", "opencode_30d_limit_percent")
+			b.WriteString(")")
+		}))
+	})
+}
+
 func writeCodexQuotaWindowProtectedCondition(b *entsql.Builder, extraCol, usedKey, resetAtKey, limitKey string) {
 	b.WriteString("(")
 	writeNumericExtraOrDefault(b, extraCol, usedKey, "0")
@@ -3162,6 +3177,7 @@ func (r *accountRepository) listWithFilters(ctx context.Context, params paginati
 				),
 				accountTempUnschedulableInactivePredicate(),
 				dbaccount.Not(accountCodexQuotaProtectedPredicate()),
+				dbaccount.Not(accountOpencodeQuotaProtectedPredicate()),
 			)
 		case service.AccountListStatusRateLimited:
 			q = q.Where(
@@ -3191,6 +3207,17 @@ func (r *accountRepository) listWithFilters(ctx context.Context, params paginati
 					dbaccount.RateLimitResetAtLTE(time.Now()),
 				),
 				accountCodexQuotaProtectedPredicate(),
+			)
+		case service.AccountListStatusOpencodeQuotaProtected:
+			q = q.Where(
+				dbaccount.StatusEQ(service.StatusActive),
+				dbaccount.PlatformEQ(service.PlatformOpencode),
+				dbaccount.TypeEQ(service.AccountTypeAPIKey),
+				dbaccount.Or(
+					dbaccount.RateLimitResetAtIsNil(),
+					dbaccount.RateLimitResetAtLTE(time.Now()),
+				),
+				accountOpencodeQuotaProtectedPredicate(),
 			)
 		case service.AccountListStatusUnschedulable:
 			q = q.Where(

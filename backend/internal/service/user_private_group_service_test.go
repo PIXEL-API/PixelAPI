@@ -11,6 +11,8 @@ import (
 func TestDefaultPrivateGroupAllowMessagesDispatch(t *testing.T) {
 	require.True(t, defaultPrivateGroupAllowMessagesDispatch(PlatformOpenAI))
 	require.True(t, defaultPrivateGroupAllowMessagesDispatch(" OpenAI "))
+	require.True(t, defaultPrivateGroupAllowMessagesDispatch(PlatformOpencode))
+	require.True(t, defaultPrivateGroupAllowMessagesDispatch(" opencode "))
 
 	require.False(t, defaultPrivateGroupAllowMessagesDispatch(PlatformAnthropic))
 	require.False(t, defaultPrivateGroupAllowMessagesDispatch(PlatformGemini))
@@ -25,9 +27,11 @@ func TestSupportedUserPrivateGroupPlatformsIncludesAllAccountPlatforms(t *testin
 		PlatformGemini,
 		PlatformAntigravity,
 		PlatformGrok,
+		PlatformOpencode,
 	}, SupportedUserPrivateGroupPlatforms())
 	require.True(t, IsSupportedUserPrivateGroupPlatform(PlatformGrok))
 	require.True(t, IsSupportedUserPrivateGroupPlatform(" Grok "))
+	require.True(t, IsSupportedUserPrivateGroupPlatform(PlatformOpencode))
 	for _, platform := range SupportedUserPrivateGroupPlatforms() {
 		require.True(t, IsSupportedAccountPlatform(platform))
 	}

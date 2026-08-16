@@ -88,6 +88,7 @@ func TestGetFallbackPricing_ChineseProviders(t *testing.T) {
 
 		// 月之暗面 Kimi
 		{name: "kimi k3 exact", model: "kimi-k3", expectInput: 3e-6, expectOutput: 15e-6, expectCacheRead: 0.30e-6},
+		{name: "kimi k3 1m context suffix strips to k3", model: "kimi-k3[1m]", expectInput: 3e-6, expectOutput: 15e-6, expectCacheRead: 0.30e-6},
 		{name: "kimi k3 bare code alias", model: "k3", expectInput: 3e-6, expectOutput: 15e-6, expectCacheRead: 0.30e-6},
 		{name: "kimi k3 256k code alias", model: "k3-256k", expectInput: 3e-6, expectOutput: 15e-6, expectCacheRead: 0.30e-6},
 		{name: "kimi k3 path suffix", model: "moonshot/kimi-k3", expectInput: 3e-6, expectOutput: 15e-6, expectCacheRead: 0.30e-6},
@@ -183,7 +184,6 @@ func TestGetFallbackPricing_ChineseProviders_Whitelist(t *testing.T) {
 		"moonshot-v1-8k",   // Moonshot V1 多 tier，未收录
 		"kimi-k30",         // 不存在的型号，不能被 k3 规则误命中
 		"kimi-k3-turbo",    // 非官方 alias，不精确匹配则不兜底
-		"kimi-k3[1m]",      // Claude Code 上下文选择语法，不是模型 ID
 		"minimax-text-01",  // 非 M 系列
 		"deepseek-v3",      // V3 未收录
 		"glm-3-turbo",      // 老版本未收录

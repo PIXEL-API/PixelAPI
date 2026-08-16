@@ -77,9 +77,27 @@
         </p>
       </div>
 
+      <!-- User-scope OpenCode apikey: allow API key rotation (base URL is locked server-side) -->
+      <div v-if="isUserScope && account.platform === 'opencode' && account.type === 'apikey'" class="space-y-4">
+        <div>
+          <label class="input-label">{{ t('admin.accounts.apiKey') }}</label>
+          <input
+            v-model="editApiKey"
+            type="password"
+            class="input font-mono"
+            autocomplete="new-password"
+            data-1p-ignore
+            data-lpignore="true"
+            data-bwignore="true"
+            placeholder="sk-..."
+          />
+          <p class="input-hint">{{ t('admin.accounts.leaveEmptyToKeep') }}</p>
+        </div>
+      </div>
+
       <!-- API Key fields (only for apikey type) -->
       <div v-if="!isUserScope && account.type === 'apikey'" class="space-y-4">
-        <div>
+        <div v-if="account.platform !== 'opencode'">
           <label class="input-label">{{ t('admin.accounts.baseUrl') }}</label>
           <input
             v-model="editBaseUrl"
@@ -119,7 +137,7 @@
                 ? 'sk-proj-...'
                 : account.platform === 'gemini'
                   ? 'AIza...'
-                  : account.platform === 'antigravity'
+                  : account.platform === 'antigravity' || account.platform === 'opencode'
                     ? 'sk-...'
                     : 'sk-ant-...'
             "
@@ -2899,6 +2917,7 @@ const defaultBaseUrl = computed(() => {
   if (props.account?.platform === 'openai') return 'https://api.openai.com'
   if (props.account?.platform === 'gemini') return 'https://generativelanguage.googleapis.com'
   if (props.account?.platform === 'grok') return 'https://api.x.ai/v1'
+  if (props.account?.platform === 'opencode') return ''
   return 'https://api.anthropic.com'
 })
 
@@ -3330,7 +3349,9 @@ const syncFormFromAccount = (newAccount: Account | null) => {
           ? 'https://generativelanguage.googleapis.com'
           : newAccount.platform === 'grok'
             ? 'https://api.x.ai/v1'
-            : 'https://api.anthropic.com'
+            : newAccount.platform === 'opencode'
+              ? ''
+              : 'https://api.anthropic.com'
     editBaseUrl.value = (credentials.base_url as string) || platformDefaultUrl
 
     // Load model mappings and detect mode
@@ -4156,7 +4177,7 @@ const handleSubmit = async () => {
   if (!props.account) return
   const accountID = props.account.id
 
-  if (isUserScope.value && props.account.type !== 'oauth') {
+  if (isUserScope.value && props.account.type !== 'oauth' && props.account.platform !== 'opencode') {
     appStore.showError(t('userAccounts.typeNotAllowed'))
     return
   }
@@ -4210,10 +4231,11 @@ const handleSubmit = async () => {
       const newBaseUrl = editBaseUrl.value.trim() || defaultBaseUrl.value
       const shouldApplyModelMapping = !(props.account.platform === 'openai' && openaiPassthroughEnabled.value)
 
-      // Always update credentials for apikey type to handle model mapping changes
-      const newCredentials: Record<string, unknown> = {
-        ...currentCredentials,
-        base_url: newBaseUrl
+      // Always update credentials for apikey type to handle model mapping changes.
+      // Opencode's base URL is locked server-side, so never write it into credentials.
+      const newCredentials: Record<string, unknown> = { ...currentCredentials }
+      if (props.account.platform !== 'opencode') {
+        newCredentials.base_url = newBaseUrl
       }
 
       // Handle API key

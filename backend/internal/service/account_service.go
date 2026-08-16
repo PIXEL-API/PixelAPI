@@ -1477,8 +1477,12 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 	return account, nil
 }
 
-func isAllowedOwnedAccountType(accountType string) bool {
+func isAllowedOwnedAccountType(platform, accountType string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(accountType))
+	if platform == PlatformOpencode {
+		// opencode 是用户自有 apikey 账号，其余平台仅允许官方 OAuth。
+		return normalized == AccountTypeAPIKey
+	}
 	return normalized == AccountTypeOAuth
 }
 
@@ -1531,8 +1535,29 @@ func validateOwnedAccountSourceScoped(
 	credentials, extra map[string]any,
 	scope ownedAccountSourceScope,
 ) error {
-	if !isAllowedOwnedAccountType(accountType) {
+	if !isAllowedOwnedAccountType(platform, accountType) {
 		return ErrOwnedAccountTypeNotAllowed
+	}
+	if platform == PlatformOpencode && strings.EqualFold(strings.TrimSpace(accountType), AccountTypeAPIKey) {
+		if !hasNonEmptyStringField(credentials, "api_key") {
+			return ErrOwnedAccountCredentialsInvalid.WithMetadata(map[string]string{"field": "api_key"})
+		}
+		// 仅允许 api_key 字段，禁止夹带 base_url 等其他上游凭证。
+		safetyCredentials := mergeAccountMap(scope.credentialsToScan(credentials), nil)
+		removeImportMapField(safetyCredentials, "api_key")
+		if field, ok := findDisallowedOwnedAccountField(safetyCredentials); ok {
+			return ErrOwnedAccountCredentialsNotAllowed.WithMetadata(map[string]string{
+				"section": "credentials",
+				"field":   field,
+			})
+		}
+		if field, ok := findDisallowedOwnedAccountField(scope.extraToScan(extra)); ok {
+			return ErrOwnedAccountCredentialsNotAllowed.WithMetadata(map[string]string{
+				"section": "extra",
+				"field":   field,
+			})
+		}
+		return nil
 	}
 	isAgentIdentity := IsOpenAIAgentIdentityCredentials(credentials)
 	isPersonalAccessToken := IsOpenAIPersonalAccessTokenCredentials(credentials)
@@ -1749,6 +1774,19 @@ func ownedPersonalDefaultModelMapping(platform string) map[string]any {
 		for _, model := range antigravity.DefaultModels() {
 			models = append(models, model.ID)
 		}
+	case PlatformOpencode:
+		// OpenCode Go 订阅的裸模型 slug（API 的 model 字段不带 opencode-go/ 前缀）。
+		// GET /models 实测的完整清单（26 个）。
+		models = append(models,
+			"deepseek-v4-flash", "deepseek-v4-pro",
+			"glm-5", "glm-5.1", "glm-5.2", "glm-5.3",
+			"kimi-k2.5", "kimi-k2.6", "kimi-k2.7-code", "kimi-k3",
+			"minimax-m2.5", "minimax-m2.7", "minimax-m3",
+			"mimo-v2-pro", "mimo-v2-omni", "mimo-v2.5", "mimo-v2.5-pro",
+			"qwen3.5-plus", "qwen3.6-plus", "qwen3.7-plus", "qwen3.7-max", "qwen3.8-max",
+			"hy3", "hy3-preview",
+			"gpt-5.6-luna", "grok-4.5",
+		)
 	}
 	if len(models) == 0 {
 		return map[string]any{}
@@ -2897,6 +2935,11 @@ func accountDuplicateIdentityKeys(account *Account) []ownedAccountDuplicateKey {
 		if len(keys) == 0 {
 			addFolded("antigravity.email", account.GetCredential("email"))
 		}
+	case PlatformOpencode:
+		if account.Type != AccountTypeAPIKey {
+			return nil
+		}
+		addFolded("opencode.api_key", account.GetCredential("api_key"))
 	}
 	if len(keys) == 0 {
 		return nil
@@ -3424,17 +3467,24 @@ func (s *AccountService) ConvertOwnedExternalPlacement(ctx context.Context, owne
 					slog.Error("account.external_placement_restore_failed", "account_id", accountID, "error", restoreErr)
 				}
 			}()
-			// 切回「仅本人」跳过在途排空检查：离开公共号池/房间是收敛性操作，
-			// repo 层在同一事务内原子改写 placement 与分组，现有在途请求会自然结束，
-			// 等待「归零」既不必要、也会被公共调度流量永远拖住（热门账号的
-			// CurrentConcurrency 几乎恒 > 0，导致永远切不回去）。
+			// 跳过在途排空检查：private（离开公共号池/房间）与 room（进入房间）都是
+			// 收敛性操作——repo 层在同一事务内原子改写 placement 与分组，现有在途请求
+			// 会自然结束。等待「归零」既不必要、也会被公共调度流量永远拖住（热门账号
+			// 的 CurrentConcurrency 几乎恒 > 0，导致永远切不回去）。
 			//
-			// 非 private 目标（上线公共号池、转入房间）保留排空检查，但注意它只在
+			// 已知取舍（刻意的不对称）：room 目标与 public_pool 目标行为不同。public_pool
+			// 保留在途守卫，必须归零后才转换；room 跳过守卫，drain 到转换提交之间有一个
+			// 秒级窗口，公共调度快照（outbox 异步重建前的缓存）仍可能把该账号再派发一次。
+			// 这是可接受的：窗口短暂、被 repo 层 FOR UPDATE 锁保护不破坏状态机，且等待归零
+			// 会让热门号入房永久卡死——与其等不到归零，不如接受一次极短的交错。
+			//
+			// 这里刻意只保留 public_pool 目标：把公共池/房间账号挪进公共调度会把还在
+			// 跑请求的账号交给更复杂的调度状态，必须无在途。且 idle 检查只在
 			// drained=true 时执行——即账号本就持有 placement 行（public_pool/room 之间
 			// 互转、或退房后残留 room 行的再上线）。纯私有账号从未投放、无 placement
 			// 行时，BeginExternalPlacementDrain 会因无行短路返回 drained=false，本检查
 			// 不执行——这是本提交之前就有的行为，这里刻意不做改变。
-			if target != AccountExternalPlacementPrivate {
+			if target == AccountExternalPlacementPublicPool {
 				if err := s.ensureOwnedAccountExternalPlacementIdle(ctx, account); err != nil {
 					return nil, err
 				}

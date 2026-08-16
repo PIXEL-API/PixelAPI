@@ -241,6 +241,12 @@ type Account struct {
 	CodexQuotaProtectionReason  *string    `json:"codex_quota_protection_reason,omitempty"`
 	CodexQuotaProtectionResetAt *time.Time `json:"codex_quota_protection_reset_at,omitempty"`
 
+	Opencode5hLimitPercent         *float64   `json:"opencode_5h_limit_percent,omitempty"`
+	Opencode7dLimitPercent         *float64   `json:"opencode_7d_limit_percent,omitempty"`
+	Opencode30dLimitPercent        *float64   `json:"opencode_30d_limit_percent,omitempty"`
+	OpencodeQuotaProtectionReason  *string    `json:"opencode_quota_protection_reason,omitempty"`
+	OpencodeQuotaProtectionResetAt *time.Time `json:"opencode_quota_protection_reset_at,omitempty"`
+
 	TempUnschedulableUntil  *time.Time `json:"temp_unschedulable_until"`
 	TempUnschedulableReason string     `json:"temp_unschedulable_reason"`
 

@@ -43,6 +43,7 @@ const (
 	PlatformGemini      = domain.PlatformGemini
 	PlatformAntigravity = domain.PlatformAntigravity
 	PlatformGrok        = domain.PlatformGrok
+	PlatformOpencode    = domain.PlatformOpencode
 )
 
 // supportedAccountPlatforms is the single service-level source for account platform validation.
@@ -52,6 +53,7 @@ var supportedAccountPlatforms = [...]string{
 	PlatformGemini,
 	PlatformAntigravity,
 	PlatformGrok,
+	PlatformOpencode,
 }
 
 // SupportedAccountPlatforms returns all canonical account platforms.
@@ -328,6 +330,7 @@ const (
 	SettingKeyFallbackModelOpenAI      = "fallback_model_openai"
 	SettingKeyFallbackModelGemini      = "fallback_model_gemini"
 	SettingKeyFallbackModelAntigravity = "fallback_model_antigravity"
+	SettingKeyFallbackModelOpencode    = "fallback_model_opencode"
 
 	// Request identity patch (Claude -> Gemini systemInstruction injection)
 	SettingKeyEnableIdentityPatch = "enable_identity_patch"

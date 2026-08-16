@@ -899,6 +899,8 @@ func ProvideOpenAIGatewayService(
 	accountService *AccountService,
 	agentIdentityWSInvalidator *AgentIdentityWSInvalidatorProxy,
 	grokSchedulingBlockCleaner *GrokSchedulingBlockCleanerProxy,
+	accountUsageService *AccountUsageService,
+	tlsFPProfileService *TLSFingerprintProfileService,
 	accountShareModeServices ...*AccountShareModeService,
 ) *OpenAIGatewayService {
 	svc := NewOpenAIGatewayService(
@@ -927,6 +929,8 @@ func ProvideOpenAIGatewayService(
 		accountShareModeServices...,
 	)
 	svc.SetGrokTokenProvider(grokTokenProvider)
+	svc.SetAccountUsageService(accountUsageService)
+	svc.SetTLSFingerprintProfileService(tlsFPProfileService)
 	agentIdentityWSInvalidator.SetTarget(svc)
 	grokSchedulingBlockCleaner.SetTarget(svc)
 	return svc

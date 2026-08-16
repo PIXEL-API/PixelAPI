@@ -69,6 +69,9 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		// The established Grok Responses path below owns conversion, cache
 		// identity, search counting, idle handling and billing filters.
 	}
+	if account.IsOpencode() {
+		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
+	}
 	if account.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
 		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 	}

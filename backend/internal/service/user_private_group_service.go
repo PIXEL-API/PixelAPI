@@ -241,5 +241,10 @@ func normalizePrivateGroupPlatform(platform string) string {
 }
 
 func defaultPrivateGroupAllowMessagesDispatch(platform string) bool {
-	return normalizePrivateGroupPlatform(platform) == PlatformOpenAI
+	switch normalizePrivateGroupPlatform(platform) {
+	case PlatformOpenAI, PlatformOpencode:
+		return true
+	default:
+		return false
+	}
 }

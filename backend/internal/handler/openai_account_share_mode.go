@@ -29,20 +29,26 @@ func openAIAccountShareModeRequestContext(c *gin.Context, apiKey *service.APIKey
 }
 
 func openAICompatibleRoutingPlatform(apiKey *service.APIKey) string {
-	if apiKey != nil && apiKey.Group != nil && apiKey.Group.Platform == service.PlatformGrok {
-		return service.PlatformGrok
+	if apiKey != nil && apiKey.Group != nil {
+		switch apiKey.Group.Platform {
+		case service.PlatformGrok:
+			return service.PlatformGrok
+		case service.PlatformOpencode:
+			return service.PlatformOpencode
+		}
 	}
 	return service.PlatformOpenAI
 }
 
 func openAICompatibleRequestContext(ctx context.Context, apiKey *service.APIKey) context.Context {
-	if openAICompatibleRoutingPlatform(apiKey) != service.PlatformGrok {
+	routingPlatform := openAICompatibleRoutingPlatform(apiKey)
+	if routingPlatform != service.PlatformGrok && routingPlatform != service.PlatformOpencode {
 		return ctx
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return context.WithValue(ctx, ctxkey.ForcePlatform, service.PlatformGrok)
+	return context.WithValue(ctx, ctxkey.ForcePlatform, routingPlatform)
 }
 
 // openAIResponsesDispatchContext removes the routing-only deadline before the

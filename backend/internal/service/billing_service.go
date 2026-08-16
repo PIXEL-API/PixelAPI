@@ -601,6 +601,9 @@ func (s *BillingService) initFallbackPricing() {
 // getFallbackPricing 根据模型系列获取回退价格
 func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	modelLower := strings.ToLower(strings.TrimSpace(model))
+	// Claude Code 用 "[1m]" 表示 1M 上下文选择，统一剥离后再匹配，
+	// 使 kimi-k3[1m] 这类带后缀模型与裸 slug 走同一套精确匹配规则，避免漏计费。
+	modelLower = normalizeClaudeCodeLongContextModel(modelLower)
 	modelLower = strings.TrimPrefix(modelLower, "xai/")
 	modelLower = strings.TrimPrefix(modelLower, "x-ai/")
 	modelLower = strings.TrimPrefix(modelLower, "grok/")
@@ -711,8 +714,7 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 
 	// 月之暗面 Kimi（kimi-k3 / k3 / k3-256k / kimi-k2.6 / kimi-for-coding / kimi-k2.5 / kimi-k2-thinking / kimi-k2）
 	// K3 规则必须置于 K2 之前。K3 只接受精确名或 "/" 路径后缀，
-	// 避免 kimi-k30 之类未知型号被子串误命中。
-	// 注意：kimi-k3[1m] 是 Claude Code 的上下文选择语法，不是 Kimi API 模型 ID，不进入兜底。
+	// 避免 kimi-k30 之类未知型号被子串误命中。[1m] 上下文选择后缀已在入口剥离。
 	if strings.Contains(modelLower, "kimi-for-coding") {
 		return s.fallbackPrices["kimi-for-coding"]
 	}

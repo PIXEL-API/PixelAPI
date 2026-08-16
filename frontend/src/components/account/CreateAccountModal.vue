@@ -193,6 +193,19 @@
             <Icon name="bolt" size="sm" />
             Grok
           </button>
+          <button
+            type="button"
+            @click="form.platform = 'opencode'"
+            :class="[
+              'flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-all',
+              form.platform === 'opencode'
+                ? 'bg-white text-teal-600 shadow-sm dark:bg-dark-600 dark:text-teal-400'
+                : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
+            ]"
+          >
+            <Icon name="terminal" size="sm" />
+            OpenCode
+          </button>
         </div>
       </div>
       <div v-else>
@@ -1245,8 +1258,23 @@
         </div>
       </div>
 
+      <!-- Opencode API Key input (API key only, endpoint locked to official) -->
+      <div v-if="form.platform === 'opencode'" class="space-y-4">
+        <div>
+          <label class="input-label">{{ t('admin.accounts.apiKeyRequired') }}</label>
+          <input
+            v-model="apiKeyValue"
+            type="password"
+            required
+            class="input font-mono"
+            :placeholder="'opencode-go-api-key...'"
+          />
+          <p class="input-hint">{{ t('admin.accounts.opencode.apiKeyHint') }}</p>
+        </div>
+      </div>
+
       <!-- API Key input (only for apikey type, excluding Antigravity which has its own fields) -->
-      <div v-if="!isUserScope && form.type === 'apikey' && form.platform !== 'antigravity'" class="space-y-4">
+      <div v-if="!isUserScope && form.type === 'apikey' && form.platform !== 'antigravity' && form.platform !== 'opencode'" class="space-y-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.baseUrl') }}</label>
           <input
@@ -3530,6 +3558,9 @@ const { t } = useI18n()
 const authStore = useAuthStore()
 const adminSettingsStore = useAdminSettingsStore()
 
+// OpenCode Go 订阅官方端点，前端锁定不提供 base_url 输入。
+const OPENCODE_DEFAULT_BASE_URL = 'https://opencode.ai/zen/go/v1'
+
 const oauthStepTitle = computed(() => {
   if (form.platform === 'openai') return t('admin.accounts.oauth.openai.title')
   if (form.platform === 'gemini') return t('admin.accounts.oauth.gemini.title')
@@ -4155,6 +4186,14 @@ watch(
 watch(
   [accountCategory, addMethod, antigravityAccountType, () => form.platform, isUserScope],
   ([category, method, agType]) => {
+    // Opencode 仅支持 apikey（用户端自有账号），无 OAuth 流程。
+    if (form.platform === 'opencode') {
+      accountCategory.value = 'apikey'
+      addMethod.value = 'oauth'
+      antigravityAccountType.value = 'oauth'
+      form.type = 'apikey'
+      return
+    }
     if (isUserScope.value) {
       if (accountCategory.value !== 'oauth-based') {
         accountCategory.value = 'oauth-based'
@@ -4213,7 +4252,16 @@ watch(
           ? 'https://generativelanguage.googleapis.com'
           : newPlatform === 'grok'
             ? 'https://api.x.ai/v1'
-            : 'https://api.anthropic.com'
+            : newPlatform === 'opencode'
+              ? OPENCODE_DEFAULT_BASE_URL
+              : 'https://api.anthropic.com'
+    // Opencode 仅 apikey（用户端自有账号），无 OAuth / 上游分支。
+    if (newPlatform === 'opencode') {
+      accountCategory.value = 'apikey'
+      addMethod.value = 'oauth'
+      antigravityAccountType.value = 'oauth'
+      form.type = 'apikey'
+    }
     // Clear model-related settings
     allowedModels.value = []
     modelMappings.value = []
@@ -4995,7 +5043,7 @@ const handleVertexServiceAccountDrop = async (event: DragEvent) => {
 }
 
 const handleSubmit = async () => {
-  if (isUserScope.value && !isOAuthFlow.value) {
+  if (isUserScope.value && !isOAuthFlow.value && form.platform !== 'opencode') {
     accountCategory.value = 'oauth-based'
     addMethod.value = 'oauth'
     antigravityAccountType.value = 'oauth'
@@ -5149,6 +5197,24 @@ const handleSubmit = async () => {
       tier_id: 'vertex'
     }
     await createAccountAndFinish(form.platform, 'service_account' as AccountType, credentials)
+    return
+  }
+
+  // For Opencode (OpenCode Go 订阅), API key only with locked official endpoint.
+  if (form.platform === 'opencode') {
+    if (!form.name.trim()) {
+      appStore.showError(t('admin.accounts.pleaseEnterAccountName'))
+      return
+    }
+    if (!apiKeyValue.value.trim()) {
+      appStore.showError(t('admin.accounts.pleaseEnterApiKey'))
+      return
+    }
+    // 只传 api_key；base_url 由后端 GetOpencodeBaseURL 锁定官方地址，前端不传（后端凭证校验禁止 base_url 字段）。
+    const credentials: Record<string, unknown> = {
+      api_key: apiKeyValue.value.trim()
+    }
+    await createAccountAndFinish('opencode', 'apikey', credentials)
     return
   }
 

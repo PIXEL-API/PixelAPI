@@ -59,6 +59,11 @@ func (g *Group) ResolveMessagesDispatchModel(requestedModel string) string {
 	if g == nil {
 		return ""
 	}
+	// opencode 的 /messages 是原生 Anthropic 端点（minimax/qwen），模型名直接透传，
+	// 不做 claude→gpt 映射（那是 OpenAI 平台特有的兼容桥）。
+	if g.Platform == PlatformOpencode {
+		return ""
+	}
 	requestedModel = strings.TrimSpace(requestedModel)
 	if requestedModel == "" {
 		return ""
@@ -92,6 +97,13 @@ func (g *Group) ResolveMessagesDispatchModel(requestedModel string) string {
 
 func sanitizeGroupMessagesDispatchFields(g *Group) {
 	if g == nil || g.Platform == PlatformOpenAI {
+		return
+	}
+	if g.Platform == PlatformOpencode {
+		// opencode 的 /messages 是原生 Anthropic 端点（minimax/qwen）：放行入口，但清空 claude→gpt 映射。
+		g.AllowMessagesDispatch = true
+		g.DefaultMappedModel = ""
+		g.MessagesDispatchModelConfig = OpenAIMessagesDispatchModelConfig{}
 		return
 	}
 	g.AllowMessagesDispatch = false

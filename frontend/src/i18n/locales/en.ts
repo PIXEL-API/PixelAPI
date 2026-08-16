@@ -102,6 +102,7 @@ export default {
       gemini: "Gemini",
       antigravity: "Antigravity",
       grok: "Grok",
+      opencode: "OpenCode",
       more: "More",
     },
     // CTA section
@@ -952,8 +953,9 @@ export default {
       bulkHint: "Apply one mode to {count} selected account(s). Current modes stay unchanged unless enabled.",
       bulkLegend: "Set all selected accounts to",
       bulkRoomSamePlatform: "All selected accounts must use the same platform for platform account mode.",
-      baseSavedPlacementFailed: "Other account settings were saved, but the mode change failed: {error}",
+      baseSavedPlacementFailed: "Other account settings were saved, but the mode change failed: {error}. You can retry the mode change without re-saving the other settings.",
       bulkBaseSavedPlacementPartial: "Other settings were saved for {saved} account(s); mode changes succeeded for {success} and failed for {failed}.",
+      bulkConvertPartial: "Mode changes succeeded for {success} and failed for {failed}.",
       asyncBaseUpdatePending: "Other changes were submitted as a background task, so the account mode was not changed. Retry the mode update after the task finishes.",
       privateTitle: "Owner only",
       privateDescription: "Disable public pool or platform account mode while keeping owner access.",
@@ -1536,6 +1538,8 @@ export default {
       opencode: {
         title: "OpenCode Example",
         subtitle: "opencode.json",
+        description:
+          "Configure OpenCode CLI to route Anthropic Messages traffic through the current OpenCode group.",
         hint: "Config path: ~/.config/opencode/opencode.json (or opencode.jsonc), create if not exists. Use default providers (openai/anthropic/google) or custom provider_id. API Key can be configured directly or via /connect command. This is an example, adjust models and options as needed.",
       },
     },
@@ -1823,6 +1827,7 @@ export default {
       gemini: "Gemini",
       antigravity: "Antigravity",
       grok: "Grok",
+      opencode: "OpenCode",
     },
     extraModelsHeader: "Extra Models",
     extraModelsEmpty: "No extra models",
@@ -4026,6 +4031,7 @@ export default {
         gemini: "Gemini",
         antigravity: "Antigravity",
         grok: "Grok",
+        opencode: "OpenCode",
       },
       deleteConfirm:
         "Are you sure you want to delete '{name}'? All associated API keys will no longer belong to any group.",
@@ -5363,6 +5369,7 @@ export default {
         gemini: "Gemini",
         antigravity: "Antigravity",
         grok: "Grok",
+        opencode: "OpenCode",
       },
       types: {
         oauth: "OAuth",
@@ -6099,6 +6106,11 @@ export default {
         apiKeyHint: "API Key for the upstream service",
         pleaseEnterBaseUrl: "Please enter upstream Base URL",
         pleaseEnterApiKey: "Please enter upstream API Key",
+      },
+      // Opencode (OpenCode Go subscription, API key only, endpoint locked to official)
+      opencode: {
+        apiKeyHint:
+          "Only the OpenCode Go subscription API key is required; the endpoint is locked to the official Go endpoint (no Base URL needed).",
       },
       // OAuth flow
       oauth: {

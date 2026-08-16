@@ -1141,6 +1141,9 @@ func (s *defaultOpenAIAccountScheduler) filterOpenAIAccountsForLoadBalance(
 	loadReq := make([]AccountWithConcurrency, 0, len(accounts))
 	for i := range accounts {
 		account := &accounts[i]
+		// opencode 账号在调度时惰性刷新用量窗口，供额度守卫（IsSchedulable 内的
+		// IsOpencodeQuotaProtectionActiveAt）依据最新 percent 判定，不阻塞选号。
+		s.service.scheduleOpencodeUsageProbeIfStale(account)
 		if req.ExcludedIDs != nil {
 			if _, excluded := req.ExcludedIDs[account.ID]; excluded {
 				continue
@@ -1417,7 +1420,10 @@ func (s *OpenAIGatewayService) selectAccountShareModeBoundAccount(
 			if err != nil {
 				return nil, decision, true, err
 			}
-			if user.Balance < listing.MinBalanceRequired {
+			// 号主自用在 join 阶段已豁免余额校验（account_share_mode.go:3876），
+			// dispatch 路径必须保持一致：号主余额跌破自己房间的 min_balance 时，
+			// 自用请求不应被拒——否则自用闭环在余额不足时断链。
+			if !IsAccountShareModeOwnerSelfUse(membership, listing) && user.Balance < listing.MinBalanceRequired {
 				lastErr = ErrAccountShareBalanceBelowMinimum
 				retryCurrentMembership = true
 			}

@@ -716,7 +716,8 @@ const platformOptions = computed<Array<{ value: AccountPlatform; label: string }
   { value: 'openai', label: 'OpenAI' },
   { value: 'gemini', label: 'Gemini' },
   { value: 'antigravity', label: 'Antigravity' },
-  { value: 'grok', label: 'Grok' }
+  { value: 'grok', label: 'Grok' },
+  { value: 'opencode', label: 'OpenCode' }
 ])
 
 const typeOptions = computed<Array<{ value: AccountType; label: string }>>(() => [

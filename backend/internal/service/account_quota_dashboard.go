@@ -37,8 +37,9 @@ type AccountQuotaSummary struct {
 	ActiveAccountCount       int                          `json:"active_account_count"`
 	SchedulableAccountCount  int                          `json:"schedulable_account_count"`
 	RateLimitedAccountCount  int                          `json:"rate_limited_account_count"`
-	CodexQuotaProtectedCount int                          `json:"codex_quota_protected_account_count"`
-	ErrorAccountCount        int                          `json:"error_account_count"`
+	CodexQuotaProtectedCount    int                          `json:"codex_quota_protected_account_count"`
+	OpencodeQuotaProtectedCount int                          `json:"opencode_quota_protected_account_count"`
+	ErrorAccountCount           int                          `json:"error_account_count"`
 	DisabledAccountCount     int                          `json:"disabled_account_count"`
 	QuotaAccountCount        int                          `json:"quota_account_count"`
 	UnlimitedAccountCount    int                          `json:"unlimited_account_count"`
@@ -57,8 +58,9 @@ type AccountQuotaGroupSummary struct {
 	ActiveAccountCount       int                          `json:"active_account_count"`
 	SchedulableAccountCount  int                          `json:"schedulable_account_count"`
 	RateLimitedAccountCount  int                          `json:"rate_limited_account_count"`
-	CodexQuotaProtectedCount int                          `json:"codex_quota_protected_account_count"`
-	ErrorAccountCount        int                          `json:"error_account_count"`
+	CodexQuotaProtectedCount    int                          `json:"codex_quota_protected_account_count"`
+	OpencodeQuotaProtectedCount int                          `json:"opencode_quota_protected_account_count"`
+	ErrorAccountCount           int                          `json:"error_account_count"`
 	DisabledAccountCount     int                          `json:"disabled_account_count"`
 	QuotaAccountCount        int                          `json:"quota_account_count"`
 	UnlimitedAccountCount    int                          `json:"unlimited_account_count"`
@@ -565,8 +567,9 @@ func (a *accountQuotaGroupSummaryAccumulator) finalize() AccountQuotaGroupSummar
 		ActiveAccountCount:       summary.ActiveAccountCount,
 		SchedulableAccountCount:  summary.SchedulableAccountCount,
 		RateLimitedAccountCount:  summary.RateLimitedAccountCount,
-		CodexQuotaProtectedCount: summary.CodexQuotaProtectedCount,
-		ErrorAccountCount:        summary.ErrorAccountCount,
+		CodexQuotaProtectedCount:    summary.CodexQuotaProtectedCount,
+		OpencodeQuotaProtectedCount: summary.OpencodeQuotaProtectedCount,
+		ErrorAccountCount:           summary.ErrorAccountCount,
 		DisabledAccountCount:     summary.DisabledAccountCount,
 		QuotaAccountCount:        summary.QuotaAccountCount,
 		UnlimitedAccountCount:    summary.UnlimitedAccountCount,
@@ -650,6 +653,8 @@ func (a *accountQuotaSummaryAccumulator) addAccountWithSchedulability(account Ac
 		a.summary.RateLimitedAccountCount++
 	} else if account.IsCodexQuotaProtectionActiveAt(now) {
 		a.summary.CodexQuotaProtectedCount++
+	} else if account.IsOpencodeQuotaProtectionActiveAt(now) {
+		a.summary.OpencodeQuotaProtectedCount++
 	}
 	if schedulable {
 		a.summary.SchedulableAccountCount++
@@ -678,8 +683,12 @@ func (a *accountQuotaSummaryAccumulator) addAccountWithSchedulability(account Ac
 	}
 
 	if schedulable && account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth {
-		a.addOpenAIUsageWindow(account, "5h", now)
-		a.addOpenAIUsageWindow(account, "7d", now)
+		a.addUsageWindow(account, "5h", now, buildCodexUsageProgressFromExtra)
+		a.addUsageWindow(account, "7d", now, buildCodexUsageProgressFromExtra)
+	}
+	if schedulable && account.IsOpencode() {
+		a.addUsageWindow(account, "5h", now, buildOpencodeUsageProgressFromExtra)
+		a.addUsageWindow(account, "7d", now, buildOpencodeUsageProgressFromExtra)
 	}
 }
 
@@ -712,11 +721,11 @@ func accountSchedulableInQuotaGroup(account Account, now time.Time, groupStatus,
 	return true
 }
 
-func (a *accountQuotaSummaryAccumulator) addOpenAIUsageWindow(account Account, window string, now time.Time) {
+func (a *accountQuotaSummaryAccumulator) addUsageWindow(account Account, window string, now time.Time, buildProgress func(map[string]any, string, time.Time) *UsageProgress) {
 	agg := a.ensureUsageWindow(window)
 	agg.summary.AccountCount++
 
-	progress := buildCodexUsageProgressFromExtra(account.Extra, window, now)
+	progress := buildProgress(account.Extra, window, now)
 	if progress == nil {
 		return
 	}

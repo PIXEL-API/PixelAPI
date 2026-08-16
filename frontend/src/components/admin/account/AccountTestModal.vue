@@ -183,6 +183,7 @@ import type { Account, ClaudeModel } from '@/types'
 import {
   DEFAULT_GROK_TEST_MODEL,
   DEFAULT_OPENAI_TEST_MODEL,
+  DEFAULT_OPENCODE_TEST_MODEL,
   prepareAccountTestModels,
   selectDefaultAccountTestModel
 } from '@/utils/accountTestModels'
@@ -266,6 +267,8 @@ const getUserDefaultTestModels = (account: Account): ClaudeModel[] => {
       return [{ id: 'gemini-2.5-flash', type: 'model', display_name: 'gemini-2.5-flash', created_at: '' }]
     case 'grok':
       return [{ id: DEFAULT_GROK_TEST_MODEL, type: 'model', display_name: DEFAULT_GROK_TEST_MODEL, created_at: '' }]
+    case 'opencode':
+      return [{ id: DEFAULT_OPENCODE_TEST_MODEL, type: 'model', display_name: DEFAULT_OPENCODE_TEST_MODEL, created_at: '' }]
     default:
       return [{ id: 'claude-sonnet-4-5-20250929', type: 'model', display_name: 'Claude Sonnet 4.5', created_at: '' }]
   }

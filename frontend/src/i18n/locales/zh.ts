@@ -102,6 +102,7 @@ export default {
       gemini: "Gemini",
       antigravity: "Antigravity",
       grok: "Grok",
+      opencode: "OpenCode",
       more: "更多",
     },
     // CTA 区块
@@ -917,8 +918,9 @@ export default {
       bulkHint: "为选中的 {count} 个账号统一设置一个模式；未开启时不会修改账号当前模式。",
       bulkLegend: "统一设置为",
       bulkRoomSamePlatform: "平台账号模式要求所选账号全部属于同一平台。",
-      baseSavedPlacementFailed: "账号其他设置已保存，但模式切换失败：{error}",
+      baseSavedPlacementFailed: "账号其他设置已保存，但模式切换失败：{error}。可重试切换，无需重新保存其他设置。",
       bulkBaseSavedPlacementPartial: "普通设置已保存 {saved} 个账号；模式切换成功 {success} 个、失败 {failed} 个。",
+      bulkConvertPartial: "模式切换成功 {success} 个、失败 {failed} 个。",
       asyncBaseUpdatePending: "普通设置已进入后台任务，本次未切换账号模式；任务完成后请重新批量设置模式。",
       privateTitle: "仅本人",
       privateDescription: "停用公共号池或平台账号模式，仅保留号主自己的私有调用。",
@@ -1477,6 +1479,7 @@ export default {
       opencode: {
         title: "OpenCode 配置示例",
         subtitle: "opencode.json",
+        description: "配置 OpenCode CLI，将 Anthropic Messages 流量路由到当前 OpenCode 分组。",
         hint: "配置文件路径：~/.config/opencode/opencode.json（或 opencode.jsonc），不存在需手动创建。可使用默认 provider（openai/anthropic/google）或自定义 provider_id。API Key 支持直接配置或通过客户端 /connect 命令配置。示例仅供参考，模型与选项可按需调整。",
       },
     },
@@ -1757,6 +1760,7 @@ export default {
       gemini: "Gemini",
       antigravity: "Antigravity",
       grok: "Grok",
+      opencode: "OpenCode",
     },
     extraModelsHeader: "附加模型",
     extraModelsEmpty: "无附加模型",
@@ -3858,6 +3862,7 @@ export default {
         gemini: "Gemini",
         antigravity: "Antigravity",
         grok: "Grok",
+        opencode: "OpenCode",
       },
       saving: "保存中...",
       noGroups: "暂无分组",
@@ -5365,6 +5370,7 @@ export default {
         gemini: "Gemini",
         antigravity: "Antigravity",
         grok: "Grok",
+        opencode: "OpenCode",
       },
       types: {
         oauth: "OAuth",
@@ -6039,6 +6045,11 @@ export default {
         apiKeyHint: "上游服务的 API Key",
         pleaseEnterBaseUrl: "请输入上游 Base URL",
         pleaseEnterApiKey: "请输入上游 API Key",
+      },
+      // Opencode (OpenCode Go 订阅，仅 API Key，端点锁定官方地址)
+      opencode: {
+        apiKeyHint:
+          "仅需填写 OpenCode Go 订阅的 API Key，端点已锁定为官方 Go 订阅地址（无需填写 Base URL）。",
       },
       // OAuth flow
       oauth: {

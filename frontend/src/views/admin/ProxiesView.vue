@@ -1254,7 +1254,8 @@ const proxyPlatformOptions = computed(() => [
   { value: 'anthropic', label: 'Anthropic' },
   { value: 'gemini', label: 'Gemini' },
   { value: 'antigravity', label: 'Antigravity' },
-  { value: 'grok', label: 'Grok' }
+  { value: 'grok', label: 'Grok' },
+  { value: 'opencode', label: 'OpenCode' }
 ])
 
 // 账号等级选项是动态的：来自后台“OpenAI 账号等级”配置。空串=所有等级可用。

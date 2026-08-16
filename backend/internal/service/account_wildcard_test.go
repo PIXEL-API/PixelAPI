@@ -173,6 +173,17 @@ func TestAccountIsModelSupported(t *testing.T) {
 			requestedModel: "claude-opus-4-5",
 			expected:       false,
 		},
+		{
+			name:     "opencode 1m suffix strips to mapped slug",
+			platform: PlatformOpencode,
+			credentials: map[string]any{
+				"model_mapping": map[string]any{
+					"deepseek-v4-flash": "deepseek-v4-flash",
+				},
+			},
+			requestedModel: "deepseek-v4-flash[1m]",
+			expected:       true,
+		},
 
 		// 通配符匹配
 		{
@@ -415,6 +426,18 @@ func TestAccountResolveMappedModel(t *testing.T) {
 			requestedModel: "gpt-5.4",
 			expectedModel:  "gpt-5.4",
 			expectedMatch:  false,
+		},
+		{
+			name:     "opencode 1m suffix resolves to bare slug",
+			platform: PlatformOpencode,
+			credentials: map[string]any{
+				"model_mapping": map[string]any{
+					"deepseek-v4-flash": "deepseek-v4-flash",
+				},
+			},
+			requestedModel: "deepseek-v4-flash[1m]",
+			expectedModel:  "deepseek-v4-flash",
+			expectedMatch:  true,
 		},
 	}
 

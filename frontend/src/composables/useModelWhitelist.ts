@@ -169,6 +169,19 @@ const xaiModels = [
   'grok-video-1.5'
 ]
 
+// OpenCode Go 订阅（裸模型 slug，与后端 ownedPersonalDefaultModelMapping 保持一致）
+const opencodeModels = [
+  // GET /models 实测的完整清单（裸 slug，无 opencode-go/ 前缀）。
+  'deepseek-v4-flash', 'deepseek-v4-pro',
+  'glm-5', 'glm-5.1', 'glm-5.2', 'glm-5.3',
+  'kimi-k2.5', 'kimi-k2.6', 'kimi-k2.7-code', 'kimi-k3',
+  'minimax-m2.5', 'minimax-m2.7', 'minimax-m3',
+  'mimo-v2-pro', 'mimo-v2-omni', 'mimo-v2.5', 'mimo-v2.5-pro',
+  'qwen3.5-plus', 'qwen3.6-plus', 'qwen3.7-plus', 'qwen3.7-max', 'qwen3.8-max',
+  'hy3', 'hy3-preview',
+  'gpt-5.6-luna', 'grok-4.5'
+]
+
 // Cohere
 const cohereModels = [
   'command-a-03-2025',
@@ -249,6 +262,7 @@ const allModelsList: string[] = [
   ...mistralModels,
   ...metaModels,
   ...xaiModels,
+  ...opencodeModels,
   ...cohereModels,
   ...yiModels,
   ...moonshotModels,
@@ -434,6 +448,7 @@ export function getModelsByPlatform(platform: string): string[] {
     case 'meta': return metaModels
     case 'xai':
     case 'grok': return xaiModels
+    case 'opencode': return opencodeModels
     case 'cohere': return cohereModels
     case 'yi': return yiModels
     case 'moonshot': return moonshotModels

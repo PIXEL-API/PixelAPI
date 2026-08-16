@@ -55,6 +55,7 @@ const (
 	defaultGeminiTextTestPrompt  = "hi"
 	defaultOpenAIImageTestPrompt = "Generate a cute orange cat astronaut sticker on a clean pastel background."
 	defaultGrokTestModel         = "grok-4.5"
+	defaultOpencodeTestModel     = "kimi-k2.6"
 )
 
 // isOpenAIImageModel checks if the model is an OpenAI image generation model (e.g. gpt-image-2).
@@ -239,11 +240,104 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 		return s.routeAntigravityTest(c, account, modelID, prompt)
 	}
 
+	if account.IsOpencode() {
+		return s.testOpencodeAccountConnection(c, account, modelID)
+	}
+
 	if account.IsAnthropic() {
 		return s.testClaudeAccountConnection(c, account, modelID)
 	}
 
 	return s.sendErrorAndEnd(c, fmt.Sprintf("Unsupported account platform: %s", account.Platform))
+}
+
+// testOpencodeAccountConnection tests an OpenCode Go subscription account's connection.
+// opencode 走 /chat/completions（Authorization Bearer），非流式探测一次即可确认 api_key 有效。
+func (s *AccountTestService) testOpencodeAccountConnection(c *gin.Context, account *Account, modelID string) error {
+	ctx := c.Request.Context()
+	if s.httpUpstream == nil {
+		return s.sendErrorAndEnd(c, "HTTP upstream is not configured")
+	}
+
+	testModelID := strings.TrimSpace(modelID)
+	if testModelID == "" {
+		testModelID = defaultOpencodeTestModel
+	}
+	testModelID = account.GetMappedModel(testModelID)
+	if testModelID == "" {
+		testModelID = defaultOpencodeTestModel
+	}
+
+	authToken := account.GetOpencodeApiKey()
+	if authToken == "" {
+		return s.sendErrorAndEnd(c, "OpenCode API key is missing")
+	}
+
+	normalizedBaseURL, err := s.validateUpstreamBaseURL(account.GetOpencodeBaseURL())
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid OpenCode base URL: %s", err.Error()))
+	}
+	apiURL := buildOpenAIChatCompletionsURL(normalizedBaseURL)
+
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	c.Writer.Flush()
+
+	payload := map[string]any{
+		"model":    testModelID,
+		"messages": []map[string]string{{"role": "user", "content": "Reply with the single word: OK"}},
+		"stream":   false,
+	}
+	payloadBytes, _ := json.Marshal(payload)
+	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
+
+	req, err := http.NewRequestWithContext(WithHTTPUpstreamRedirectsDisabled(ctx), http.MethodPost, apiURL, bytes.NewReader(payloadBytes))
+	if err != nil {
+		return s.sendErrorAndEnd(c, "Failed to create OpenCode request")
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+authToken)
+	account.ApplyHeaderOverrides(req.Header)
+
+	proxyURL := ""
+	if account.ProxyID != nil && account.Proxy != nil {
+		proxyURL = account.Proxy.URL()
+	}
+	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
+
+	var resp *http.Response
+	if s.tlsFPProfileService == nil {
+		resp, err = s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, nil)
+	} else {
+		resp, err = s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+	}
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("OpenCode request failed: %s", err.Error()))
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+		return s.sendErrorAndEnd(c, fmt.Sprintf("OpenCode API returned %d: %s", resp.StatusCode, string(body)))
+	}
+
+	// 非流式响应：choices 有内容即视为连接成功。
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	var parsed struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil || len(parsed.Choices) == 0 {
+		return s.sendErrorAndEnd(c, "OpenCode returned an unexpected response")
+	}
+
+	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true, Text: "Connection test succeeded"})
+	return nil
 }
 
 // testClaudeAccountConnection tests an Anthropic Claude account's connection
