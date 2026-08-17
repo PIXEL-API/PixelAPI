@@ -31,8 +31,8 @@ func TestGetCodexFingerprintMode(t *testing.T) {
 		{name: "nil", want: codexFingerprintOff},
 		{name: "api key", account: &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}, want: codexFingerprintOff},
 		{name: "non openai", account: &Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth}, want: codexFingerprintOff},
-		{name: "missing defaults to session", account: newCodexFingerprintTestAccount(1, ""), want: codexFingerprintSession},
-		{name: "invalid defaults to session", account: newCodexFingerprintTestAccount(1, "invalid"), want: codexFingerprintSession},
+		{name: "missing defaults to device", account: newCodexFingerprintTestAccount(1, ""), want: codexFingerprintDevice},
+		{name: "invalid defaults to device", account: newCodexFingerprintTestAccount(1, "invalid"), want: codexFingerprintDevice},
 		{name: "explicit off", account: newCodexFingerprintTestAccount(1, "off"), want: codexFingerprintOff},
 		{name: "device", account: newCodexFingerprintTestAccount(1, "device"), want: codexFingerprintDevice},
 		{name: "session", account: newCodexFingerprintTestAccount(1, "session"), want: codexFingerprintSession},
@@ -58,7 +58,7 @@ func TestResolveCodexFingerprintIDsFromRequest(t *testing.T) {
 	headers := http.Header{"Session-Id": []string{"client-session"}}
 	ids := resolveCodexFingerprintIDsFromRequest(newCodexFingerprintTestAccount(17, "session"), headers)
 	require.NotNil(t, ids)
-	assert.Equal(t, resolveConvergedThreadID(newCodexFingerprintTestAccount(17, "session"), "client-session"), ids.threadID)
+	assert.Equal(t, resolveConvergedThreadID(ids.installationID, "client-session"), ids.threadID)
 	assert.NotEmpty(t, ids.turnID)
 	assert.Nil(t, resolveCodexFingerprintIDsFromRequest(newCodexFingerprintTestAccount(17, "off"), headers))
 	assert.Nil(t, resolveCodexFingerprintIDsFromRequest(&Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}, headers))
@@ -90,6 +90,7 @@ func TestCodexFingerprintStableIDsAreAccountScoped(t *testing.T) {
 
 func TestCodexFingerprintSessionAndFullThreadSemantics(t *testing.T) {
 	account := newCodexFingerprintTestAccount(21, "session")
+	account.Extra["openai_device_id"] = "device-21"
 	first := resolveCodexFingerprintIDsFromRequest(account, http.Header{"Session-Id": []string{"client-a"}})
 	second := resolveCodexFingerprintIDsFromRequest(account, http.Header{"Session-Id": []string{"client-b"}})
 	require.NotNil(t, first)
@@ -98,6 +99,7 @@ func TestCodexFingerprintSessionAndFullThreadSemantics(t *testing.T) {
 	assert.NotEqual(t, first.threadID, second.threadID)
 
 	fullAccount := newCodexFingerprintTestAccount(21, "full")
+	fullAccount.Extra["openai_device_id"] = "device-21"
 	fullFirst := resolveCodexFingerprintIDsFromRequest(fullAccount, http.Header{"Session-Id": []string{"client-a"}})
 	fullSecond := resolveCodexFingerprintIDsFromRequest(fullAccount, http.Header{"Session-Id": []string{"client-b"}})
 	require.NotNil(t, fullFirst)
@@ -239,6 +241,7 @@ func TestResolveCodexFingerprintIDsForTurnKeepsStableIDsAndRotatesTurn(t *testin
 	c := newCleanRelayGinContext(1, 1)
 	c.Request.Header.Set("session-id", "client-session")
 	account := newCodexFingerprintTestAccount(9, "session")
+	account.Extra["openai_device_id"] = "device-9"
 	first := resolveCodexFingerprintIDsForTurn(c, account)
 	second := resolveCodexFingerprintIDsForTurn(c, account)
 	require.NotNil(t, first)
@@ -438,4 +441,63 @@ func TestBuildOpenAIWSHeadersOffModePassesThroughClientFingerprint(t *testing.T)
 	assert.Equal(t, "client-thread", headers.Get("thread-id"))
 	assert.Equal(t, "client-request", headers.Get("x-client-request-id"))
 	assert.Equal(t, "client-window", headers.Get("x-codex-window-id"))
+}
+
+// deviceIDPersistRecorder 记录 ensureOpenAIDeviceID 的持久化调用，用于验证设备号
+// 「惰性生成 + 跨请求稳定」：首次生成写回 extra，后续复用不再重复持久化。
+type deviceIDPersistRecorder struct {
+	AccountRepository
+	calls []map[string]any
+}
+
+func (r *deviceIDPersistRecorder) UpdateExtra(_ context.Context, _ int64, updates map[string]any) error {
+	r.calls = append(r.calls, updates)
+	return nil
+}
+
+func TestEnsureOpenAIDeviceIDLazyGenerateAndStable(t *testing.T) {
+	repo := &deviceIDPersistRecorder{}
+	svc := &OpenAIGatewayService{accountRepo: repo}
+	account := newCodexFingerprintTestAccount(90, "")
+
+	require.Empty(t, account.GetOpenAIDeviceID())
+
+	// 首次：惰性生成随机 UUIDv4，写回内存并持久化一次。
+	first := svc.ensureOpenAIDeviceID(context.Background(), account)
+	require.NotEmpty(t, first)
+	require.Equal(t, first, account.GetOpenAIDeviceID())
+	require.Len(t, repo.calls, 1)
+	require.Equal(t, first, repo.calls[0]["openai_device_id"])
+	parsed, err := uuid.Parse(first)
+	require.NoError(t, err)
+	require.Equal(t, uuid.Version(4), parsed.Version())
+
+	// 同进程内再次调用：复用已生成值，不重复持久化。
+	require.Equal(t, first, svc.ensureOpenAIDeviceID(context.Background(), account))
+	require.Len(t, repo.calls, 1)
+
+	// 跨请求（账号重新从 DB 水合）：新对象携带已持久化的设备号，直接复用。
+	rehydrated := newCodexFingerprintTestAccount(90, "")
+	rehydrated.Extra["openai_device_id"] = first
+	require.Equal(t, first, svc.ensureOpenAIDeviceID(context.Background(), rehydrated))
+	require.Len(t, repo.calls, 1)
+}
+
+func TestEnsureOpenAIDeviceIDSkipsNonOAuthAndPrefilled(t *testing.T) {
+	repo := &deviceIDPersistRecorder{}
+	svc := &OpenAIGatewayService{accountRepo: repo}
+
+	// 非 OpenAI OAuth 账号：不生成、不持久化。
+	require.Empty(t, svc.ensureOpenAIDeviceID(context.Background(), &Account{ID: 91, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}))
+	require.Len(t, repo.calls, 0)
+
+	// 已预置设备号：直接复用，不重复持久化。
+	prefilled := newCodexFingerprintTestAccount(92, "")
+	prefilled.Extra["openai_device_id"] = "prefilled-device"
+	require.Equal(t, "prefilled-device", svc.ensureOpenAIDeviceID(context.Background(), prefilled))
+	require.Len(t, repo.calls, 0)
+
+	// nil 账号：返回空，不 panic、不持久化。
+	require.Empty(t, svc.ensureOpenAIDeviceID(context.Background(), nil))
+	require.Len(t, repo.calls, 0)
 }

@@ -430,7 +430,7 @@ func TestOpenAICleanRelay_PreselectFallsBackWhenCachedAccountUnavailable(t *test
 
 	c := newCleanRelayGinContext(101, groupID)
 	body := []byte(`{"model":"codex-auto-review","prompt_cache_key":"client-cache"}`)
-	mapping := newOpenAICleanRelayMapping(unavailableAccount.ID, 1, openAICleanRelayInstallationID(unavailableAccount.ID))
+	mapping := newOpenAICleanRelayMapping(unavailableAccount.ID, 1, resolveConvergedInstallationID(&unavailableAccount))
 	encoded, err := marshalOpenAICleanRelayMapping(mapping)
 	require.NoError(t, err)
 	cacheKey := openAICleanRelayCacheKey(101, groupID, "client-installation", "client-cache")
@@ -477,7 +477,7 @@ func TestOpenAICleanRelay_PreselectUsesCurrentRouteGroupForCacheKey(t *testing.T
 
 	c := newCleanRelayGinContext(101, originalGroupID)
 	body := []byte(`{"model":"codex-auto-review","prompt_cache_key":"client-cache"}`)
-	mapping := newOpenAICleanRelayMapping(account.ID, 1, openAICleanRelayInstallationID(account.ID))
+	mapping := newOpenAICleanRelayMapping(account.ID, 1, resolveConvergedInstallationID(&account))
 	encoded, err := marshalOpenAICleanRelayMapping(mapping)
 	require.NoError(t, err)
 	routeCacheKey := openAICleanRelayCacheKey(101, routeGroupID, "client-installation", "client-session")

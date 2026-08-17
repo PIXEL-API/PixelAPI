@@ -454,6 +454,7 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthStoreFalseByDefault(t *testing.T
 		},
 		Extra: map[string]any{
 			"responses_websockets_v2_enabled": true,
+			codexFingerprintModeExtraKey:      string(codexFingerprintSession),
 		},
 	}
 
@@ -470,9 +471,9 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthStoreFalseByDefault(t *testing.T
 	require.True(t, gjson.Get(requestJSON, "stream").Exists(), "WSv2 payload 应保留 stream 字段")
 	require.True(t, gjson.Get(requestJSON, "stream").Bool(), "OAuth Codex 规范化后应强制 stream=true")
 	require.Equal(t, openAIWSBetaV2Value, captureDialer.lastHeaders.Get("OpenAI-Beta"))
-	// OAuth 缺省使用 session 指纹模式，最终上游 session_id 应收敛到账号级稳定值；
+	// 账号显式启用 session 指纹模式，最终上游 session_id 应收敛到账号级稳定值；
 	// conversation_id 不属于该模式的收敛字段，仍沿用 API Key 隔离语义。
-	require.Equal(t, resolveConvergedSessionID(account), captureDialer.lastHeaders.Get("session_id"))
+	require.Equal(t, resolveConvergedSessionID(account.GetOpenAIDeviceID()), captureDialer.lastHeaders.Get("session_id"))
 	require.Equal(t, isolateOpenAISessionID(0, "conv-oauth-1"), captureDialer.lastHeaders.Get("conversation_id"))
 }
 
@@ -614,6 +615,7 @@ func TestOpenAIGatewayService_Forward_WSv2_HeaderSessionFallbackFromPromptCacheK
 		},
 		Extra: map[string]any{
 			"responses_websockets_v2_enabled": true,
+			codexFingerprintModeExtraKey:      string(codexFingerprintSession),
 		},
 	}
 
@@ -623,9 +625,9 @@ func TestOpenAIGatewayService_Forward_WSv2_HeaderSessionFallbackFromPromptCacheK
 	require.NotNil(t, result)
 	require.Equal(t, "resp_prompt_cache_key", result.RequestID)
 
-	// prompt_cache_key 仍可供 WS 会话解析使用，但缺省 session 指纹模式下，
+	// prompt_cache_key 仍可供 WS 会话解析使用，但在 session 指纹模式下，
 	// 最终对外发送的 session_id 必须收敛为账号级稳定值。
-	require.Equal(t, resolveConvergedSessionID(account), captureDialer.lastHeaders.Get("session_id"))
+	require.Equal(t, resolveConvergedSessionID(account.GetOpenAIDeviceID()), captureDialer.lastHeaders.Get("session_id"))
 	require.Empty(t, captureDialer.lastHeaders.Get("conversation_id"))
 	require.NotNil(t, captureConn.lastWrite)
 	require.True(t, gjson.Get(requestToJSONString(captureConn.lastWrite), "stream").Exists())

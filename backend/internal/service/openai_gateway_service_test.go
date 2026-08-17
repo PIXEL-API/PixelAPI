@@ -151,6 +151,21 @@ func (r stubOpenAIAccountRepo) ListSchedulableUngroupedByPlatform(ctx context.Co
 	return r.ListSchedulableByPlatform(ctx, platform)
 }
 
+func (r stubOpenAIAccountRepo) UpdateExtra(ctx context.Context, id int64, updates map[string]any) error {
+	for i := range r.accounts {
+		if r.accounts[i].ID == id {
+			if r.accounts[i].Extra == nil {
+				r.accounts[i].Extra = map[string]any{}
+			}
+			for key, value := range updates {
+				r.accounts[i].Extra[key] = value
+			}
+			break
+		}
+	}
+	return nil
+}
+
 type stubConcurrencyCache struct {
 	ConcurrencyCache
 	loadBatchErr    error

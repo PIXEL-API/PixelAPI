@@ -315,7 +315,7 @@ func (s *OpenAIGatewayService) resolveOpenAICleanRelayState(
 	}
 
 	accountID := account.ID
-	upstreamInstallationID := openAICleanRelayInstallationID(accountID)
+	upstreamInstallationID := s.ensureOpenAIDeviceID(ctx, account)
 	clientInstallationID := openAICleanRelayClientInstallationID(c, reqBody)
 	sessionSignal := openAICleanRelayClientSessionSignal(c, reqBody, bodyForSession)
 	return s.resolveOpenAICleanRelayStateFromSignals(ctx, c, accountID, upstreamInstallationID, clientInstallationID, sessionSignal)
@@ -332,7 +332,7 @@ func (s *OpenAIGatewayService) resolveOpenAICleanRelayStateFromBody(
 	}
 
 	accountID := account.ID
-	upstreamInstallationID := openAICleanRelayInstallationID(accountID)
+	upstreamInstallationID := s.ensureOpenAIDeviceID(ctx, account)
 	clientInstallationID := openAICleanRelayClientInstallationIDFromBody(c, bodyForSession)
 	sessionSignal := openAICleanRelayClientSessionSignalFromBody(c, bodyForSession)
 	return s.resolveOpenAICleanRelayStateFromSignals(ctx, c, accountID, upstreamInstallationID, clientInstallationID, sessionSignal)
@@ -445,10 +445,6 @@ func newOpenAICleanRelayMapping(accountID, epoch int64, installationID string) o
 		ConversationID: uuid.NewString(),
 		PromptCacheKey: "clean_relay:" + sessionID,
 	}
-}
-
-func openAICleanRelayInstallationID(accountID int64) string {
-	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("sub2api:openai:clean_relay:account:%d", accountID))).String()
 }
 
 func openAICleanRelayCacheKey(apiKeyID, groupID int64, clientInstallationID, sessionSignal string) string {

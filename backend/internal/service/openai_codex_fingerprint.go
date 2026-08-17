@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
@@ -32,8 +33,11 @@ const (
 )
 
 // GetCodexFingerprintMode returns the account-level convergence policy.
-// OpenAI OAuth accounts default to session convergence for backward-compatible
-// protection; only an explicit "off" disables it.
+// OpenAI OAuth accounts default to device-level convergence: the installation
+// ID is unified to a per-account value (a shared account looks like a single
+// device to upstream) while session/thread identifiers stay per-conversation,
+// preserving conversation continuity and upstream prompt-cache hits. Session
+// and full modes remain opt-in for accounts that need them.
 func (a *Account) GetCodexFingerprintMode() codexFingerprintMode {
 	if a == nil || !a.IsOpenAIOAuth() {
 		return codexFingerprintOff
@@ -43,7 +47,7 @@ func (a *Account) GetCodexFingerprintMode() codexFingerprintMode {
 	case codexFingerprintOff, codexFingerprintDevice, codexFingerprintSession, codexFingerprintFull:
 		return raw
 	default:
-		return codexFingerprintSession
+		return codexFingerprintDevice
 	}
 }
 
@@ -69,21 +73,48 @@ func resolveConvergedInstallationID(account *Account) string {
 	if deviceID := account.GetOpenAIDeviceID(); deviceID != "" {
 		return deviceID
 	}
-	return deriveStableUUIDv4(fmt.Sprintf("sub2api:codex-install-id:v1:%d", account.ID))
+	// 无持久化设备号时兜底返回随机 UUIDv4。请求路径由 ensureOpenAIDeviceID
+	// 在调用前持久化，这里仅在纯函数/测试场景兜底，避免确定性 f(account.ID)
+	// 派生导致多个 sub2api 实例对同一账号生成相同设备号。
+	return uuid.NewString()
 }
 
-func resolveConvergedSessionID(account *Account) string {
-	if account == nil {
+// ensureOpenAIDeviceID 确保账号拥有唯一、稳定的上游设备号（installation_id）。
+// 优先复用已持久化的 openai_device_id；缺失时惰性生成随机 UUIDv4 并写回 extra。
+// 相比确定性 f(account.ID) 派生，随机值保证同一账号在多个 sub2api 实例间不撞号，
+// 且不同账号的设备号彼此唯一，避免 OpenAI 将多账号指纹关联为同一设备。
+func (s *OpenAIGatewayService) ensureOpenAIDeviceID(ctx context.Context, account *Account) string {
+	if account == nil || !account.IsOpenAIOAuth() {
 		return ""
 	}
-	return deriveStableUUIDv4(fmt.Sprintf("sub2api:codex-session-id:v1:%d", account.ID))
+	if deviceID := account.GetOpenAIDeviceID(); deviceID != "" {
+		return deviceID
+	}
+	deviceID := uuid.NewString()
+	if account.Extra == nil {
+		account.Extra = map[string]any{}
+	}
+	account.Extra["openai_device_id"] = deviceID
+	if s.accountRepo != nil {
+		if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{"openai_device_id": deviceID}); err != nil {
+			logger.LegacyPrintf("service.openai_codex_fingerprint", "persist openai_device_id failed: account=%d err=%v", account.ID, err)
+		}
+	}
+	return deviceID
 }
 
-func resolveConvergedThreadID(account *Account, clientSessionID string) string {
-	if account == nil || strings.TrimSpace(clientSessionID) == "" {
+func resolveConvergedSessionID(installationID string) string {
+	if installationID == "" {
 		return ""
 	}
-	return deriveStableUUIDv4(fmt.Sprintf("sub2api:codex-thread-id:v1:%d:%s", account.ID, clientSessionID))
+	return deriveStableUUIDv4(fmt.Sprintf("sub2api:codex-session-id:v2:%s", installationID))
+}
+
+func resolveConvergedThreadID(installationID, clientSessionID string) string {
+	if installationID == "" || strings.TrimSpace(clientSessionID) == "" {
+		return ""
+	}
+	return deriveStableUUIDv4(fmt.Sprintf("sub2api:codex-thread-id:v2:%s:%s", installationID, clientSessionID))
 }
 
 type codexFingerprintIDs struct {
@@ -121,11 +152,11 @@ func resolveCodexFingerprintIDs(account *Account, clientSessionID string, mode c
 		return ids
 	}
 
-	ids.sessionID = resolveConvergedSessionID(account)
+	ids.sessionID = resolveConvergedSessionID(ids.installationID)
 	if mode == codexFingerprintFull {
 		ids.threadID = ids.sessionID
 	} else {
-		ids.threadID = resolveConvergedThreadID(account, clientSessionID)
+		ids.threadID = resolveConvergedThreadID(ids.installationID, clientSessionID)
 		if ids.threadID == "" {
 			ids.threadID = ids.sessionID
 		}
@@ -373,6 +404,9 @@ func (s *OpenAIGatewayService) applyCodexFingerprintToRequestBody(
 	account *Account,
 	reqBody map[string]any,
 ) (*codexFingerprintIDs, bool) {
+	if account != nil && account.GetCodexFingerprintMode() != codexFingerprintOff {
+		s.ensureOpenAIDeviceID(ctx, account)
+	}
 	ids := resolveCodexFingerprintIDsForTurn(c, account)
 	setCurrentCodexFingerprintIDs(c, ids)
 	if ids == nil {
@@ -387,6 +421,9 @@ func (s *OpenAIGatewayService) applyCodexFingerprintToRawBody(
 	account *Account,
 	body []byte,
 ) ([]byte, *codexFingerprintIDs, bool, error) {
+	if account != nil && account.GetCodexFingerprintMode() != codexFingerprintOff {
+		s.ensureOpenAIDeviceID(ctx, account)
+	}
 	ids := resolveCodexFingerprintIDsForTurn(c, account)
 	setCurrentCodexFingerprintIDs(c, ids)
 	if ids == nil {
