@@ -56,6 +56,18 @@
       >
         {{ selectedPlatformHint }}
       </div>
+      <div
+        v-if="selectedPlatform === 'openai' && selectedOpenAIAuthMode === 'oauth'"
+        class="flex justify-end"
+      >
+        <button
+          type="button"
+          class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400"
+          @click="switchToOAuthLogin"
+        >
+          {{ t('userAccounts.importSwitchToOAuthLogin') }}
+        </button>
+      </div>
       <div v-if="requiresCredentialImportProxy" class="space-y-2">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <label class="input-label mb-0">{{ t('userAccounts.importProxy') }}</label>
@@ -107,6 +119,16 @@
         :selected-level="selectedAccountLevel"
         @select="selectAccountLevel"
       />
+
+      <div class="flex justify-end">
+        <button
+          type="button"
+          class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400"
+          @click="switchToCredentialImport"
+        >
+          {{ t('userAccounts.importSwitchToCredential') }}
+        </button>
+      </div>
 
       <div class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
         {{ t('userAccounts.importOAuthOnlyHint') }}
@@ -236,6 +258,7 @@ const selectedPlatform = ref<ImportPlatform | ''>('')
 const selectedOpenAIAuthMode = ref<OpenAIImportAuthMode>('oauth')
 const selectedAccountLevel = ref<SelectableImportLevel | ''>('')
 const selectedProxyId = ref<number | null>(null)
+const selectedImportFlow = ref<'credential' | 'oauth_login'>('credential')
 const proxies = ref<Proxy[]>([])
 const proxyLoading = ref(false)
 const proxyLoadMessage = ref('')
@@ -258,15 +281,19 @@ const isPersonalAccessTokenImport = computed(() =>
   selectedPlatform.value === 'openai' && selectedOpenAIAuthMode.value === 'personal_access_token'
 )
 
-const requiresOAuthLogin = computed(() =>
-  selectedPlatform.value === 'openai' &&
-  selectedOpenAIAuthMode.value === 'oauth' &&
+// OAuth 登录流程只在用户显式切换时进入，不再因 pro 等级自动触发。
+const requiresOAuthLogin = computed(() => selectedImportFlow.value === 'oauth_login')
+
+const requiresPersonalAccessTokenProxy = computed(() =>
+  isPersonalAccessTokenImport.value &&
   selectableOpenAIAccountLevels(openAIAccountLevelConfigs.value)
     .some(level => level.key === selectedAccountLevel.value && level.requires_proxy_login)
 )
 
-const requiresPersonalAccessTokenProxy = computed(() =>
-  isPersonalAccessTokenImport.value &&
+// OpenAI OAuth 凭证导入时，pro 等需要代理登录的等级要求绑定代理。
+const requiresOpenAIOAuthCredentialProxy = computed(() =>
+  selectedPlatform.value === 'openai' &&
+  selectedOpenAIAuthMode.value === 'oauth' &&
   selectableOpenAIAccountLevels(openAIAccountLevelConfigs.value)
     .some(level => level.key === selectedAccountLevel.value && level.requires_proxy_login)
 )
@@ -276,7 +303,8 @@ const requiresCredentialImportProxy = computed(() =>
   selectedPlatform.value === 'gemini' ||
   selectedPlatform.value === 'antigravity' ||
   selectedPlatform.value === 'grok' ||
-  requiresPersonalAccessTokenProxy.value
+  requiresPersonalAccessTokenProxy.value ||
+  requiresOpenAIOAuthCredentialProxy.value
 )
 
 const canSubmitCredentialImport = computed(() => {
@@ -284,8 +312,8 @@ const canSubmitCredentialImport = computed(() => {
   if (selectedPlatform.value === 'grok' && !selectedAccountLevel.value) return false
   if (selectedPlatform.value === 'openai') {
     if (isAgentIdentityImport.value) return true
-    if (!selectedAccountLevel.value || requiresOAuthLogin.value) return false
-    if (requiresPersonalAccessTokenProxy.value) {
+    if (!selectedAccountLevel.value) return false
+    if (requiresCredentialImportProxy.value) {
       return Boolean(selectedProxyId.value && !selectedProxyCapacityMessage.value)
     }
     return true
@@ -322,6 +350,8 @@ const importWarningText = computed(() => {
       return t('userAccounts.importWarningAntigravity', { max: importLimit.value })
     case 'grok':
       return t('userAccounts.importWarningGrok', { max: importLimit.value })
+    case 'opencode':
+      return t('userAccounts.importWarningOpencode', { max: importLimit.value })
     default:
       return t('userAccounts.importWarningChoosePlatform', { max: importLimit.value })
   }
@@ -345,18 +375,19 @@ const importTextHint = computed(() => {
       return t('userAccounts.importTextHintAntigravity')
     case 'grok':
       return t('userAccounts.importTextHintGrok')
+    case 'opencode':
+      return t('userAccounts.importTextHintOpencode')
     default:
       return t('userAccounts.importTextHintChoosePlatform')
   }
 })
 
-const importTextPlaceholder = computed(() =>
-  isAgentIdentityImport.value
-    ? t('userAccounts.importTextPlaceholderAgentIdentity')
-    : isPersonalAccessTokenImport.value
-      ? t('userAccounts.importTextPlaceholderPersonalAccessToken')
-    : t('userAccounts.importTextPlaceholder')
-)
+const importTextPlaceholder = computed(() => {
+  if (isAgentIdentityImport.value) return t('userAccounts.importTextPlaceholderAgentIdentity')
+  if (isPersonalAccessTokenImport.value) return t('userAccounts.importTextPlaceholderPersonalAccessToken')
+  if (selectedPlatform.value === 'opencode') return t('userAccounts.importTextPlaceholderOpencode')
+  return t('userAccounts.importTextPlaceholder')
+})
 
 const importFileAccept = computed(() =>
   isAgentIdentityImport.value || isPersonalAccessTokenImport.value
@@ -380,6 +411,8 @@ const selectedPlatformHint = computed(() => {
       return t('userAccounts.importPlatformHintAntigravity')
     case 'grok':
       return t('userAccounts.importPlatformHintGrok')
+    case 'opencode':
+      return t('userAccounts.importPlatformHintOpencode')
     default:
       return ''
   }
@@ -436,7 +469,8 @@ const PlatformSelector = defineComponent({
       { value: 'openai', label: 'OpenAI', desc: t('userAccounts.importPlatformOpenAI') },
       { value: 'gemini', label: 'Gemini', desc: t('userAccounts.importPlatformGemini') },
       { value: 'antigravity', label: 'Antigravity', desc: t('userAccounts.importPlatformAntigravity') },
-      { value: 'grok', label: 'Grok', desc: t('userAccounts.importPlatformGrok') }
+      { value: 'grok', label: 'Grok', desc: t('userAccounts.importPlatformGrok') },
+      { value: 'opencode', label: 'OpenCode', desc: t('userAccounts.importPlatformOpencode') }
     ]
     return () => h('div', { class: 'space-y-2' }, [
       h('label', { class: 'input-label' }, t('userAccounts.importPlatform')),
@@ -629,7 +663,7 @@ watch(
     openaiOAuth.error.value = ''
     openaiOAuth.resetState()
     oauthFlowRef.value?.reset()
-    if (requiresCredentialImportProxy.value || (selectedPlatform.value === 'openai' && requiresOAuthLogin.value)) {
+    if (requiresCredentialImportProxy.value || requiresOAuthLogin.value) {
       loadProxies()
     } else {
       selectedProxyId.value = null
@@ -665,11 +699,13 @@ watch(
 
 function selectPlatform(platform: ImportPlatform): void {
   selectedPlatform.value = platform
+  selectedImportFlow.value = 'credential'
 }
 
 function selectOpenAIAuthMode(mode: OpenAIImportAuthMode): void {
   if (selectedOpenAIAuthMode.value === mode) return
   selectedOpenAIAuthMode.value = mode
+  selectedImportFlow.value = 'credential'
   selectedAccountLevel.value = ''
   selectedProxyId.value = null
   oauthAccountName.value = ''
@@ -681,6 +717,18 @@ function selectOpenAIAuthMode(mode: OpenAIImportAuthMode): void {
 
 function selectAccountLevel(level: SelectableImportLevel | ''): void {
   selectedAccountLevel.value = level
+}
+
+function switchToOAuthLogin(): void {
+  selectedImportFlow.value = 'oauth_login'
+  openaiOAuth.error.value = ''
+  openaiOAuth.resetState()
+  oauthFlowRef.value?.reset()
+  loadProxies(true)
+}
+
+function switchToCredentialImport(): void {
+  selectedImportFlow.value = 'credential'
 }
 
 function resetOAuthImportState(): void {

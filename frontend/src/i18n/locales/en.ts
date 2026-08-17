@@ -1178,6 +1178,8 @@ export default {
       "You can import up to {max} Antigravity accounts. Only official OAuth JSON with Antigravity platform metadata is accepted.",
     importWarningGrok:
       "You can import up to {max} Grok accounts. Only official OAuth JSON with Grok/xAI platform metadata is accepted.",
+    importWarningOpencode:
+      "You can import up to {max} OpenCode accounts. One API key per line; account names are masked as sk-xxx**xxx.",
     importPlatform: "Import Platform",
     importPlatformRequired: "Select the import platform first",
     importPlatformOpenAI: "ChatGPT / Codex account",
@@ -1185,6 +1187,7 @@ export default {
     importPlatformGemini: "Gemini official account",
     importPlatformAntigravity: "Antigravity official account",
     importPlatformGrok: "Grok / xAI official account",
+    importPlatformOpencode: "OpenCode subscription account",
     importAuthMode: "OpenAI authentication method",
     importAuthModeOAuth: "OAuth / Refresh Token",
     importAuthModeOAuthDesc:
@@ -1208,23 +1211,27 @@ export default {
       "Antigravity imports do not use OpenAI account levels. Import OAuth JSON containing platform: antigravity.",
     importPlatformHintGrok:
       "Select the Grok account level, then import OAuth JSON containing platform: grok or platform: xai.",
+    importPlatformHintOpencode:
+      "OpenCode only needs an API key (apikey type); names are masked automatically, no account level or proxy needed.",
     importAccountLevel: "OpenAI Account Level",
     importAccountLevelHint:
-      "Required only for OpenAI imports. OpenAI imports are checked strictly against the selected level; unconfirmed accounts follow the configured default rules; levels requiring proxy login must use account login.",
+      "Required only for OpenAI imports. OpenAI imports are checked strictly against the selected level; unconfirmed accounts follow the configured default rules; levels requiring a proxy must select a proxy IP first.",
     importAccountLevelRequired: "Select the OpenAI account level first",
     importGrokAccountLevel: "Grok Account Level",
     importGrokAccountLevelHint: "Grok credential imports must select Free or Heavy. Publicly shared accounts enter the matching Grok shared pool.",
     importGrokAccountLevelRequired: "Select the Grok account level first",
     importLevelFree: "Unconfirmed accounts go to Free",
     importLevelPlus: "Only actual Plus accounts",
-    importLevelPro: "Requires login and proxy IP",
+    importLevelPro: "Supports credential import with a proxy IP",
     importLevelTeam:
       "Supports JSON import and only accepts actual Team accounts",
     importLevelK12: "Supports JSON import and only accepts actual K12 accounts",
     importLevelDirect: "{level} supports credential import",
-    importLevelRequiresProxy: "{level} requires account login and proxy IP",
+    importLevelRequiresProxy: "{level} requires a proxy IP",
     importOAuthOnlyHint:
-      "This level can only be imported through OpenAI account login. Select a proxy IP, generate the login URL, then paste the callback result.",
+      "Import through OpenAI account login: select a proxy IP, generate the login URL, then paste the callback result.",
+    importSwitchToOAuthLogin: "Switch to OpenAI account login",
+    importSwitchToCredential: "Switch to credential import",
     importOAuthNamePlaceholder: "Optional; OpenAI email is used when blank",
     importProxy: "Proxy IP",
     importProxyHint:
@@ -1299,6 +1306,7 @@ export default {
       "Paste one token per line, or paste a complete JSON object / JSON array.",
     importTextPlaceholderAgentIdentity: "Paste complete Codex Agent Identity JSON or a JSON array",
     importTextPlaceholderPersonalAccessToken: "Paste a complete account export JSON containing an at-* PAT",
+    importTextPlaceholderOpencode: "One OpenCode API key per line, e.g. sk-abcdefghijklmnop",
     importTextHint:
       "Plain tokens are treated as OpenAI Refresh Tokens. Use the dedicated AT input or the JSON format below for OpenAI Access Tokens. Claude Session Keys are detected automatically.",
     importTextHintChoosePlatform:
@@ -1322,6 +1330,8 @@ export default {
       "Antigravity only accepts OAuth JSON with Antigravity platform metadata; plain tokens are not accepted.",
     importTextHintGrok:
       "Grok only accepts OAuth JSON with Grok/xAI platform metadata; plain tokens are not accepted.",
+    importTextHintOpencode:
+      "Paste one OpenCode API key per line; account names are masked as sk-xxx**xxx.",
     importTextRequired: "Please paste account data",
     importFile: "Data File",
     importSelectFile: "Select JSON or text data files",
@@ -1992,6 +2002,7 @@ export default {
       imageOutputPrice: "Image Output",
       perRequestPrice: "Per Request",
       intervals: "Tiered Pricing",
+      timeRanges: "Time-of-day Pricing (peak/off-peak)",
       unitPerMillion: "/ 1M tokens",
       unitPerRequest: "/ request",
     },

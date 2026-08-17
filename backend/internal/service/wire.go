@@ -741,10 +741,13 @@ func ProvideAccountService(
 	return svc
 }
 
-func ProvideOpenAIOAuthService(cfg *config.Config, proxyRepo ProxyRepository, oauthClient OpenAIOAuthClient) *OpenAIOAuthService {
+func ProvideOpenAIOAuthService(cfg *config.Config, proxyRepo ProxyRepository, oauthClient OpenAIOAuthClient, factory PrivacyClientFactory) *OpenAIOAuthService {
 	svc := NewOpenAIOAuthService(proxyRepo, oauthClient)
 	if cfg != nil {
 		svc.SetSessionTokenSecret(cfg.JWT.Secret)
+	}
+	if factory != nil {
+		svc.SetPrivacyClientFactory(factory)
 	}
 	return svc
 }

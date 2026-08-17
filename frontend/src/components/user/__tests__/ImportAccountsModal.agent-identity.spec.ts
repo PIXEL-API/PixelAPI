@@ -198,6 +198,23 @@ describe('ImportAccountsModal Agent Identity', () => {
     expect(wrapper.getComponent(CredentialImportModalStub).props('submitDisabled')).toBe(true)
   })
 
+  it('allows OAuth credential import for a proxy-login level without forcing account login', async () => {
+    const wrapper = mount(ImportAccountsModal, {
+      props: { show: true },
+      global: { stubs: basicStubs }
+    })
+
+    await selectOpenAI(wrapper)
+    await findButtonByText(wrapper, 'Pro').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    // Pro 不再强制切换到 OAuth 登录，而是停留在凭证导入并要求选择代理。
+    expect(wrapper.findComponent({ name: 'OAuthAuthorizationFlow' }).exists()).toBe(false)
+    expect(wrapper.findComponent({ name: 'ProxySelector' }).exists()).toBe(true)
+    expect(wrapper.getComponent(CredentialImportModalStub).props('submitDisabled')).toBe(true)
+    expect(wrapper.text()).toContain('userAccounts.importSwitchToOAuthLogin')
+  })
+
   it('imports Agent Identity as private by default without account level or OAuth flow', async () => {
     const wrapper = mount(ImportAccountsModal, {
       props: { show: true },

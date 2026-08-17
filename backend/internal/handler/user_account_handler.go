@@ -125,7 +125,7 @@ type createUserAccountRequest struct {
 
 type importUserAccountCredentialsRequest struct {
 	Contents           []string `json:"contents" binding:"required"`
-	Platform           string   `json:"platform" binding:"required,oneof=anthropic openai gemini antigravity grok"`
+	Platform           string   `json:"platform" binding:"required,oneof=anthropic openai gemini antigravity grok opencode"`
 	OpenAIAuthMode     string   `json:"openai_auth_mode" binding:"omitempty,oneof=oauth personal_access_token agent_identity"`
 	AccountLevel       string   `json:"account_level"`
 	ProxyID            *int64   `json:"proxy_id"`
@@ -488,6 +488,8 @@ func credentialImportSourcePlatform(source service.AccountCredentialImportSource
 		return service.PlatformOpenAI
 	case service.AccountCredentialImportKindClaudeSessionKey:
 		return service.PlatformAnthropic
+	case service.AccountCredentialImportKindOpencodeAPIKey:
+		return service.PlatformOpencode
 	default:
 		return strings.TrimSpace(source.Platform)
 	}
@@ -1336,6 +1338,9 @@ func (h *UserAccountHandler) ImportCredentials(c *gin.Context) {
 	}
 
 	sources, parseErrors := service.ParseAccountCredentialImportContents(req.Contents)
+	if req.Platform == service.PlatformOpencode {
+		sources, parseErrors = service.ParseOpencodeCredentialImportContents(req.Contents)
+	}
 	if len(sources) == 0 && len(parseErrors) == 0 {
 		response.BadRequest(c, "No importable account credentials found")
 		return
@@ -1428,9 +1433,11 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 	}
 
 	targetAccountLevel := service.AccountLevelUnknown
+	var levelConfigs []service.OpenAIAccountLevelConfig
 	isAgentIdentity := source.Kind == service.AccountCredentialImportKindOpenAIAgentIdentity
 	if credentialImportSourceIsOpenAI(source) && !isAgentIdentity {
-		levelConfigs, err := h.openAIAccountLevelConfigs(ctx)
+		var err error
+		levelConfigs, err = h.openAIAccountLevelConfigs(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -1481,6 +1488,11 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 	case service.AccountCredentialImportKindOAuthCredentials:
 		if req.Name == "" {
 			req.Name = service.DeriveAccountCredentialImportName(req.Platform, req.Credentials, req.Extra, sequence)
+		}
+		if req.Platform == service.PlatformOpenAI {
+			if err := h.verifyOwnedOpenAIOAuthImportLevel(ctx, ownerUserID, &req, defaults, targetAccountLevel, levelConfigs); err != nil {
+				return nil, err
+			}
 		}
 	case service.AccountCredentialImportKindOpenAIRefreshToken:
 		tokenInfo, err := h.openaiOAuthService.RefreshTokenWithClientID(ctx, source.Token, "", source.ClientID)
@@ -1555,6 +1567,14 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 		if req.Name == "" {
 			req.Name = fmt.Sprintf("Claude OAuth Account #%d", sequence)
 		}
+	case service.AccountCredentialImportKindOpencodeAPIKey:
+		req.Platform = service.PlatformOpencode
+		req.AccountLevel = service.AccountLevelUnknown
+		req.Type = service.AccountTypeAPIKey
+		req.Credentials = map[string]any{"api_key": source.Token}
+		if req.Name == "" {
+			req.Name = service.DeriveOpencodeAPIKeyImportName(source.Token)
+		}
 	default:
 		return nil, fmt.Errorf("unsupported credential import kind")
 	}
@@ -1595,6 +1615,82 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 	}
 	outcome.Account = account
 	return outcome, nil
+}
+
+// resolveOwnedOpenAIImportLevel 用探测到的真实 plan_type 严格匹配用户所选等级。
+// probeFailed 表示探测失败；探测失败时仅 free/unknown 放行，付费等级拒绝。
+// 探测成功但 plan_type 无法映射到已知等级时同样拒绝，避免给未知订阅发放付费等级。
+func resolveOwnedOpenAIImportLevel(
+	probePlanType string,
+	probeFailed bool,
+	targetAccountLevel string,
+	levelConfigs []service.OpenAIAccountLevelConfig,
+) (string, error) {
+	target := service.NormalizeAccountLevel(targetAccountLevel)
+	if probeFailed {
+		switch target {
+		case service.AccountLevelFree, service.AccountLevelUnknown:
+			return target, nil
+		default:
+			return "", infraerrors.BadRequest("OWNED_OPENAI_IMPORT_LEVEL_VERIFY_FAILED", "无法验证账号真实订阅等级，请稍后重试")
+		}
+	}
+	realLevel := service.NormalizeOpenAIPlanAccountLevelWithConfigs(probePlanType, levelConfigs)
+	if realLevel == service.AccountLevelUnknown {
+		return "", infraerrors.BadRequest("OWNED_OPENAI_IMPORT_LEVEL_UNRECOGNIZED", "无法识别账号真实订阅等级，请稍后重试")
+	}
+	if target != realLevel {
+		return "", infraerrors.BadRequest("OWNED_OPENAI_IMPORT_LEVEL_MISMATCH",
+			fmt.Sprintf("所选等级与账号真实订阅（%s）不符", strings.TrimSpace(probePlanType)))
+	}
+	return realLevel, nil
+}
+
+// verifyOwnedOpenAIOAuthImportLevel 对 OpenAI OAuth 凭证（access_token 直传）导入
+// 探测真实 plan_type 并严格匹配用户所选等级，防止用户手写 plan_type 伪装等级。
+func (h *UserAccountHandler) verifyOwnedOpenAIOAuthImportLevel(
+	ctx context.Context,
+	ownerUserID int64,
+	req *service.CreateAccountRequest,
+	defaults importUserAccountCredentialsRequest,
+	targetAccountLevel string,
+	levelConfigs []service.OpenAIAccountLevelConfig,
+) error {
+	if h.openaiOAuthService == nil {
+		return service.ErrServiceUnavailable
+	}
+	accessToken, _ := req.Credentials["access_token"].(string)
+	accessToken = strings.TrimSpace(accessToken)
+	if accessToken == "" {
+		return infraerrors.BadRequest("OWNED_OPENAI_IMPORT_LEVEL_REQUIRED", "账号凭证缺少 access_token")
+	}
+
+	proxyURL, err := h.openaiOAuthService.VisibleProxyURLForUser(
+		ctx,
+		service.NewOwnedProxyScope(service.PlatformOpenAI, targetAccountLevel, ownerUserID),
+		defaults.ProxyID,
+	)
+	if err != nil {
+		return err
+	}
+
+	probe, probeErr := h.openaiOAuthService.ProbeChatGPTAccountInfo(ctx, accessToken, proxyURL)
+	probePlanType := ""
+	if probe != nil {
+		probePlanType = strings.TrimSpace(probe.PlanType)
+	}
+	if _, err := resolveOwnedOpenAIImportLevel(probePlanType, probeErr != nil, targetAccountLevel, levelConfigs); err != nil {
+		return err
+	}
+
+	// 探测成功：用真实 plan_type 覆盖用户手写的值，防止假 plan_type 残留到后续推断。
+	if probePlanType != "" {
+		req.Credentials["plan_type"] = probePlanType
+		if _, ok := req.Credentials["chatgpt_plan_type"]; ok {
+			req.Credentials["chatgpt_plan_type"] = probePlanType
+		}
+	}
+	return nil
 }
 
 func (h *UserAccountHandler) Update(c *gin.Context) {

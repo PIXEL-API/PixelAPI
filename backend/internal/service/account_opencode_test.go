@@ -309,6 +309,49 @@ func TestOpencodeTLSFingerprintAndUserAgent(t *testing.T) {
 
 func floatPtr(v float64) *float64 { return &v }
 
+func TestDeriveOpencodeAPIKeyImportName(t *testing.T) {
+	cases := []struct {
+		key  string
+		want string
+	}{
+		{"sk-abcdefghijklmnop", "sk-abc**nop"},
+		{"abcdefghijklmnop", "sk-abc**nop"},
+		{"sk-abcdefgh", "sk-abc**fgh"},
+		{"sk-abc", "sk-abc"},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		if got := DeriveOpencodeAPIKeyImportName(tc.key); got != tc.want {
+			t.Fatalf("DeriveOpencodeAPIKeyImportName(%q) = %q, want %q", tc.key, got, tc.want)
+		}
+	}
+}
+
+func TestParseOpencodeCredentialImportContents(t *testing.T) {
+	sources, errs := ParseOpencodeCredentialImportContents([]string{
+		"sk-abcdefghijklmnop\nsk-qrstuvwxyz123456",
+	})
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors: %+v", errs)
+	}
+	if len(sources) != 2 {
+		t.Fatalf("sources = %d, want 2", len(sources))
+	}
+	first := sources[0]
+	if first.Kind != AccountCredentialImportKindOpencodeAPIKey {
+		t.Fatalf("kind = %q, want %q", first.Kind, AccountCredentialImportKindOpencodeAPIKey)
+	}
+	if first.Platform != PlatformOpencode {
+		t.Fatalf("platform = %q, want %q", first.Platform, PlatformOpencode)
+	}
+	if first.Token != "sk-abcdefghijklmnop" {
+		t.Fatalf("token = %q", first.Token)
+	}
+	if first.Name != "sk-abc**nop" {
+		t.Fatalf("name = %q, want sk-abc**nop", first.Name)
+	}
+}
+
 func TestRefreshOpencodeUsageIfStale_Guards(t *testing.T) {
 	svc := &AccountUsageService{
 		cache:       NewUsageCache(),

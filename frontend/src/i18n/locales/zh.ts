@@ -1134,6 +1134,8 @@ export default {
       "单次最多导入 {max} 个 Antigravity 账号。仅支持带 Antigravity 平台信息的官方 OAuth JSON。",
     importWarningGrok:
       "单次最多导入 {max} 个 Grok 账号。仅支持带 Grok/xAI 平台信息的官方 OAuth JSON。",
+    importWarningOpencode:
+      "单次最多导入 {max} 个 OpenCode 账号。每行一个 API Key，账号名称自动脱敏为 sk-前3位**后3位。",
     importPlatform: "导入平台",
     importPlatformRequired: "请先选择导入平台",
     importPlatformOpenAI: "ChatGPT / Codex 账号",
@@ -1141,6 +1143,7 @@ export default {
     importPlatformGemini: "Gemini 官方账号",
     importPlatformAntigravity: "Antigravity 官方账号",
     importPlatformGrok: "Grok / xAI 官方账号",
+    importPlatformOpencode: "OpenCode 订阅账号",
     importAuthMode: "OpenAI 认证方式",
     importAuthModeOAuth: "OAuth / Refresh Token",
     importAuthModeOAuthDesc:
@@ -1164,22 +1167,26 @@ export default {
       "Antigravity 导入不会使用 OpenAI 账号等级。请导入包含 platform: antigravity 的 OAuth JSON。",
     importPlatformHintGrok:
       "请选择 Grok 账号等级，并导入包含 platform: grok 或 platform: xai 的 OAuth JSON。",
+    importPlatformHintOpencode:
+      "OpenCode 仅需 API Key（apikey 类型），导入后账号名称自动脱敏，无需选择账号等级或代理。",
     importAccountLevel: "OpenAI 账号等级",
     importAccountLevelHint:
-      "仅导入 OpenAI 账号时需要选择。OpenAI 会按所选等级严格校验；无法确认等级时按后台默认规则处理；需要代理登录的等级必须通过账号登录导入。",
+      "仅导入 OpenAI 账号时需要选择。OpenAI 会按所选等级严格校验；无法确认等级时按后台默认规则处理；需要代理的等级必须先选择代理 IP。",
     importAccountLevelRequired: "请先选择 OpenAI 账号等级",
     importGrokAccountLevel: "Grok 账号等级",
     importGrokAccountLevelHint: "Grok 凭证导入必须手动选择 Free 或 Heavy；公开共享后会进入相同等级的 Grok 共享号池。",
     importGrokAccountLevelRequired: "请先选择 Grok 账号等级",
     importLevelFree: "无法确认等级时归入 Free",
     importLevelPlus: "只接受实际 Plus 账号",
-    importLevelPro: "必须账号登录并选择 IP",
+    importLevelPro: "支持凭证导入，需选择代理 IP",
     importLevelTeam: "支持 JSON 导入，仅接受实际 Team 账号",
     importLevelK12: "支持 JSON 导入，仅接受实际 K12 账号",
     importLevelDirect: "{level} 支持凭证导入",
-    importLevelRequiresProxy: "{level} 需要账号登录并选择代理 IP",
+    importLevelRequiresProxy: "{level} 需要选择代理 IP",
     importOAuthOnlyHint:
-      "当前等级只能通过 OpenAI 账号登录导入。请先选择代理 IP，再生成登录链接并粘贴回调结果。",
+      "通过 OpenAI 账号登录导入：请先选择代理 IP，再生成登录链接并粘贴回调结果。",
+    importSwitchToOAuthLogin: "改用 OpenAI 账号登录导入",
+    importSwitchToCredential: "改用粘贴凭证导入",
     importOAuthNamePlaceholder: "可选；留空则使用 OpenAI 邮箱",
     importProxy: "代理 IP",
     importProxyHint:
@@ -1250,6 +1257,7 @@ export default {
       "普通 Token 可每行一个；完整 JSON / JSON 数组可整段粘贴。",
     importTextPlaceholderAgentIdentity: "粘贴完整的 Codex Agent Identity JSON 或 JSON 数组",
     importTextPlaceholderPersonalAccessToken: "粘贴包含 at-* PAT 的完整账号导出 JSON",
+    importTextPlaceholderOpencode: "每行一个 OpenCode API Key，例如 sk-abcdefghijklmnop",
     importTextHint:
       "普通 Token 默认按 OpenAI Refresh Token 处理；OpenAI Access Token 请使用独立 AT 入口或下方 JSON 格式；Claude Session Key 会自动识别并兑换为 OAuth 凭证。",
     importTextHintChoosePlatform: "先选择平台后再粘贴对应平台的 OAuth 凭证。",
@@ -1272,6 +1280,8 @@ export default {
       "Antigravity 仅接受包含 Antigravity 平台信息的 OAuth JSON，不接收普通 Token。",
     importTextHintGrok:
       "Grok 仅接受包含 Grok/xAI 平台信息的 OAuth JSON，不接收普通 Token。",
+    importTextHintOpencode:
+      "每行粘贴一个 OpenCode API Key；导入后账号名称自动脱敏为 sk-前3位**后3位。",
     importTextRequired: "请粘贴账号数据",
     importFile: "数据文件",
     importSelectFile: "请选择 JSON 或 TXT 数据文件",
@@ -1921,6 +1931,7 @@ export default {
       imageOutputPrice: "图片输出",
       perRequestPrice: "每次请求",
       intervals: "阶梯定价",
+      timeRanges: "时间段价格（峰谷价）",
       unitPerMillion: "/ 1M token",
       unitPerRequest: "/ 次",
     },

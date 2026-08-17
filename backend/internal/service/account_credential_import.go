@@ -41,6 +41,7 @@ const (
 	AccountCredentialImportKindClaudeSessionKey          AccountCredentialImportKind = "claude_session_key"
 	AccountCredentialImportKindOpenAIAgentIdentity       AccountCredentialImportKind = "openai_agent_identity"
 	AccountCredentialImportKindOpenAIPersonalAccessToken AccountCredentialImportKind = "openai_personal_access_token"
+	AccountCredentialImportKindOpencodeAPIKey           AccountCredentialImportKind = "opencode_api_key"
 )
 
 type AccountCredentialImportSource struct {
@@ -98,6 +99,44 @@ func ParseAccountCredentialImportContents(contents []string) ([]AccountCredentia
 				sources = append(sources, source)
 				nextIndex++
 			}
+		}
+	}
+	return sources, errs
+}
+
+// ParseOpencodeCredentialImportContents 解析 opencode 的批量导入内容：每行一个 API key。
+// opencode 是 apikey-only 平台，不涉及 OAuth JSON 凭证，这里直接按行拆分，每行一个
+// opencode_api_key source，名称由 DeriveOpencodeAPIKeyImportName 脱敏生成。
+func ParseOpencodeCredentialImportContents(contents []string) ([]AccountCredentialImportSource, []AccountCredentialImportError) {
+	sources := make([]AccountCredentialImportSource, 0)
+	errs := make([]AccountCredentialImportError, 0)
+	nextIndex := 1
+
+	for _, content := range contents {
+		items, err := parseAccountCredentialImportContent(content)
+		if err != nil {
+			errs = append(errs, AccountCredentialImportError{Index: nextIndex, Message: err.Error()})
+			nextIndex++
+			continue
+		}
+		for _, item := range items {
+			text, ok := item.(string)
+			if !ok {
+				errs = append(errs, AccountCredentialImportError{Index: nextIndex, Message: "opencode import only supports one API key per line"})
+				nextIndex++
+				continue
+			}
+			key := strings.TrimSpace(text)
+			if key == "" {
+				continue
+			}
+			sources = append(sources, AccountCredentialImportSource{
+				Kind:     AccountCredentialImportKindOpencodeAPIKey,
+				Name:     DeriveOpencodeAPIKeyImportName(key),
+				Platform: PlatformOpencode,
+				Token:    key,
+			})
+			nextIndex++
 		}
 	}
 	return sources, errs
@@ -265,6 +304,24 @@ func DeriveAccountCredentialImportName(platform string, credentials, extra map[s
 	default:
 		return fmt.Sprintf("OpenAI OAuth Account #%d", sequence)
 	}
+}
+
+// DeriveOpencodeAPIKeyImportName 为 opencode API key 生成脱敏的账号名称。
+// 形如 sk-abc**xyz：去掉 sk- 前缀后取前 3 位 + ** + 后 3 位，便于批量导入时区分多个
+// key 又不在界面上泄露完整密钥。key 过短时原样返回（脱敏无意义）。
+func DeriveOpencodeAPIKeyImportName(apiKey string) string {
+	key := strings.TrimSpace(apiKey)
+	if key == "" {
+		return ""
+	}
+	body := key
+	if strings.HasPrefix(strings.ToLower(key), "sk-") {
+		body = key[3:]
+	}
+	if len(body) <= 6 {
+		return key
+	}
+	return fmt.Sprintf("sk-%s**%s", body[:3], body[len(body)-3:])
 }
 
 func parseAccountCredentialImportContent(content string) ([]any, error) {

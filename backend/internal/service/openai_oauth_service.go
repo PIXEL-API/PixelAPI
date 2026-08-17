@@ -493,6 +493,30 @@ func (s *OpenAIOAuthService) RefreshTokenWithClientID(ctx context.Context, refre
 	return tokenInfo, nil
 }
 
+// ProbeChatGPTAccountInfo 用 access_token 探测真实账号信息（plan_type 等），
+// 用于导入时的等级硬校验。与 enrichTokenInfo 的 best-effort 探测不同，探测失败会返回
+// 明确错误，绝不回退到信任用户提供的 plan_type。
+func (s *OpenAIOAuthService) ProbeChatGPTAccountInfo(ctx context.Context, accessToken, proxyURL string) (*ChatGPTAccountInfo, error) {
+	accessToken = strings.TrimSpace(accessToken)
+	if accessToken == "" {
+		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_ACCOUNT_PROBE_REQUIRED", "access token is required")
+	}
+	if s.privacyClientFactory == nil {
+		return nil, infraerrors.New(http.StatusServiceUnavailable, "OPENAI_ACCOUNT_PROBE_UNAVAILABLE", "account plan verification is unavailable")
+	}
+
+	orgID := ""
+	if atClaims, err := openai.DecodeIDToken(accessToken); err == nil && atClaims.OpenAIAuth != nil {
+		orgID = atClaims.OpenAIAuth.POID
+	}
+
+	info := fetchChatGPTAccountInfo(ctx, s.privacyClientFactory, accessToken, proxyURL, orgID)
+	if info == nil || strings.TrimSpace(info.PlanType) == "" {
+		return nil, infraerrors.New(http.StatusBadGateway, "OPENAI_ACCOUNT_PROBE_FAILED", "failed to verify account plan with OpenAI")
+	}
+	return info, nil
+}
+
 // enrichTokenInfo 通过 ChatGPT backend-api 补全 tokenInfo 并设置隐私（best-effort）。
 // 从 accounts/check 获取最新 plan_type、subscription_expires_at、email，
 // 然后尝试关闭训练数据共享。适用于所有获取/刷新 token 的路径。
