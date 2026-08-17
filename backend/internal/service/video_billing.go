@@ -1,6 +1,8 @@
 package service
 
 import (
+	"log/slog"
+	"sort"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
@@ -43,19 +45,50 @@ func NormalizeVideoModelPrices(input map[string]map[string]float64) map[string]m
 		return nil
 	}
 	result := make(map[string]map[string]float64)
-	for model, tiers := range input {
+	modelKeys := make([]string, 0, len(input))
+	for model := range input {
+		modelKeys = append(modelKeys, model)
+	}
+	sort.Strings(modelKeys)
+	for _, model := range modelKeys {
+		tiers := input[model]
 		family := CanonicalGrokImagineVideoPriceFamily(model)
 		if family == "" {
 			continue
 		}
-		for resolution, price := range tiers {
+		tierKeys := make([]string, 0, len(tiers))
+		for resolution := range tiers {
+			tierKeys = append(tierKeys, resolution)
+		}
+		sort.Strings(tierKeys)
+		for _, resolution := range tierKeys {
+			price := tiers[resolution]
 			if price < 0 {
+				continue
+			}
+			normalized, ok := NormalizeVideoBillingResolution(resolution)
+			if !ok {
+				slog.Warn(
+					"video_model_prices_unknown_resolution_dropped",
+					"model", model,
+					"family", family,
+					"resolution", resolution,
+				)
 				continue
 			}
 			if result[family] == nil {
 				result[family] = make(map[string]float64)
 			}
-			result[family][NormalizeVideoBillingResolutionOrDefault(resolution)] = price
+			if existing, exists := result[family][normalized]; exists && existing != price {
+				slog.Warn(
+					"video_model_prices_conflicting_tier_price",
+					"family", family,
+					"resolution", normalized,
+					"existing", existing,
+					"new", price,
+				)
+			}
+			result[family][normalized] = price
 		}
 	}
 	if len(result) == 0 {

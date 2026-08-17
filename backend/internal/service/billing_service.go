@@ -60,6 +60,7 @@ type ModelPricing struct {
 	CacheCreation1hPrice               float64 // 1小时缓存创建每token价格 (USD)
 	SupportsCacheBreakdown             bool    // 是否支持详细的缓存分类
 	LongContextInputThreshold          int     // 超过阈值后按整次会话提升输入价格
+	LongContextThresholdInclusive      bool    // xAI 达到阈值即应用（默认严格大于，兼容既有模型）
 	LongContextInputMultiplier         float64 // 长上下文整次会话输入倍率
 	LongContextOutputMultiplier        float64 // 长上下文整次会话输出倍率
 	ImageInputPricePerToken            float64 // 图片输入 token 价格 (USD)
@@ -200,16 +201,56 @@ func NewBillingService(cfg *config.Config, pricingService *PricingService) *Bill
 // initFallbackPricing 初始化硬编码回退价格（当动态价格不可用时使用）
 // 价格单位：USD per token（与LiteLLM格式一致）
 func (s *BillingService) initFallbackPricing() {
-	// xAI Grok 4.6: $2 input / $0.50 cached input / $6 output per MTok below
-	// 200k prompt tokens. At and above 200k, input/cache/output are doubled.
+	// xAI Grok 4.5: $2 input / $0.30 cached input / $6 output below 200k.
+	s.fallbackPrices["grok-4.5"] = &ModelPricing{
+		InputPricePerToken:            2e-6,
+		OutputPricePerToken:           6e-6,
+		CacheReadPricePerToken:        0.3e-6,
+		SupportsCacheBreakdown:        false,
+		LongContextInputThreshold:     200000,
+		LongContextThresholdInclusive: true,
+		LongContextInputMultiplier:    2,
+		LongContextOutputMultiplier:   2,
+	}
+
+	// xAI Grok 4.6 (docs.x.ai/developers/models: $2 input / $0.50 cached input /
+	// $6 output per MTok under 200k prompt tokens; ≥200k is 2× on input,
+	// cached input, and output).
 	s.fallbackPrices["grok-4.6"] = &ModelPricing{
-		InputPricePerToken:          2e-6,
-		OutputPricePerToken:         6e-6,
-		CacheReadPricePerToken:      0.5e-6,
-		SupportsCacheBreakdown:      false,
-		LongContextInputThreshold:   200000,
-		LongContextInputMultiplier:  2,
-		LongContextOutputMultiplier: 2,
+		InputPricePerToken:            2e-6,
+		OutputPricePerToken:           6e-6,
+		CacheReadPricePerToken:        0.5e-6,
+		SupportsCacheBreakdown:        false,
+		LongContextInputThreshold:     200000,
+		LongContextThresholdInclusive: true,
+		LongContextInputMultiplier:    2,
+		LongContextOutputMultiplier:   2,
+	}
+
+	// xAI Grok 4.3: $1.25 input / $0.20 cached / $2.50 output below 200k.
+	s.fallbackPrices["grok-4.3"] = &ModelPricing{
+		InputPricePerToken:            1.25e-6,
+		OutputPricePerToken:           2.5e-6,
+		CacheReadPricePerToken:        0.2e-6,
+		SupportsCacheBreakdown:        false,
+		LongContextInputThreshold:     200000,
+		LongContextThresholdInclusive: true,
+		LongContextInputMultiplier:    2,
+		LongContextOutputMultiplier:   2,
+	}
+	// xAI Grok Build 0.1 (official docs: $1 input / $0.20 cached input /
+	// $2 output per MTok). Composer is available only through Grok Build and
+	// has no standalone public API rate card, so its aliases use this coding
+	// model rate instead of silently billing at zero.
+	s.fallbackPrices["grok-build-0.1"] = &ModelPricing{
+		InputPricePerToken:            1e-6,
+		OutputPricePerToken:           2e-6,
+		CacheReadPricePerToken:        0.2e-6,
+		SupportsCacheBreakdown:        false,
+		LongContextInputThreshold:     200000,
+		LongContextThresholdInclusive: true,
+		LongContextInputMultiplier:    2,
+		LongContextOutputMultiplier:   2,
 	}
 
 	// Claude 4.5 Opus
@@ -608,8 +649,26 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	modelLower = strings.TrimPrefix(modelLower, "x-ai/")
 	modelLower = strings.TrimPrefix(modelLower, "grok/")
 
-	if modelLower == "grok-4.6" || modelLower == "grok-4.6-latest" {
+	switch modelLower {
+	case "grok", "grok-latest", "grok-4.5", "grok-4.5-latest":
+		return s.fallbackPrices["grok-4.5"]
+	case "grok-4.6", "grok-4.6-latest":
 		return s.fallbackPrices["grok-4.6"]
+	case "grok-4.3",
+		"grok-4.20-0309-reasoning",
+		"grok-4.20-0309-non-reasoning",
+		"grok-4.20-multi-agent-0309",
+		"grok-4.20-reasoning",
+		"grok-4.20-non-reasoning":
+		return s.fallbackPrices["grok-4.3"]
+	case "grok-build", "grok-build-latest", "grok-build-0.1", "grok-composer", "grok-composer-2.5-fast", "composer-2.5":
+		return s.fallbackPrices["grok-build-0.1"]
+	}
+
+	// Unknown Grok text IDs (grok-5, dated snapshots, provider-prefixed) inherit
+	// the current default text card so a new model cannot ship unbilled.
+	if pricing := s.grokUnknownTextFamilyFallback(modelLower); pricing != nil {
+		return pricing
 	}
 
 	// 按模型系列匹配
@@ -789,6 +848,46 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	}
 
 	return nil
+}
+
+func (s *BillingService) grokUnknownTextFamilyFallback(model string) *ModelPricing {
+	if s == nil || !isGrokUnknownTextFamilyModel(model) {
+		return nil
+	}
+	return s.fallbackPrices["grok-4.5"]
+}
+
+func isGrokUnknownTextFamilyModel(model string) bool {
+	native := strings.ToLower(strings.TrimSpace(xai.StripGrokProviderPrefix(model)))
+	if isGrokMediaFamilyModel(native) {
+		return false
+	}
+	switch {
+	case native == "grok", native == "grok-latest":
+		return true
+	case strings.HasPrefix(native, "grok-build"),
+		strings.HasPrefix(native, "grok-composer"),
+		strings.HasPrefix(native, "composer-"):
+		return true
+	case len(native) > 5 && strings.HasPrefix(native, "grok-"):
+		rest := native[len("grok-"):]
+		return rest[0] >= '0' && rest[0] <= '9'
+	default:
+		return false
+	}
+}
+
+// isGrokMediaFamilyModel matches ids that are billed per image/video/audio unit
+// rather than per token, so version-numbered media ids (grok-2-image-1212,
+// grok-5-video) cannot slip into the unknown-text fallback and pick up a token
+// card. "vision" is deliberately absent: multimodal chat models are token billed.
+func isGrokMediaFamilyModel(native string) bool {
+	for _, marker := range []string{"imagine", "image", "video", "audio", "speech", "tts", "transcribe", "realtime"} {
+		if strings.Contains(native, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // GetModelPricing 获取模型价格配置
@@ -1262,6 +1361,9 @@ func (s *BillingService) shouldApplySessionLongContextPricing(tokens UsageTokens
 	}
 	totalInputTokens := tokens.InputTokens + tokens.TextInputTokens + tokens.ImageInputTokens +
 		tokens.CacheCreationTokens + tokens.CacheReadTokens
+	if pricing.LongContextThresholdInclusive {
+		return totalInputTokens >= pricing.LongContextInputThreshold
+	}
 	return totalInputTokens > pricing.LongContextInputThreshold
 }
 
