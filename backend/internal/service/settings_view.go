@@ -188,6 +188,12 @@ type SystemSettings struct {
 	// User-owned account import limit
 	UserAccountImportLimit int `json:"user_account_import_limit"`
 
+	// Grok default text model for empty model fields / cross-client wildcard bridging.
+	GrokDefaultTextModel string `json:"grok_default_text_model"`
+
+	// Grok cross-client wildcard bridging (gpt-*/codex-*/o*/claude-* → default text model).
+	GrokCrossClientModelMapEnabled bool `json:"grok_cross_client_model_map_enabled"`
+
 	// Claude Code version check
 	MinClaudeCodeVersion string
 	MaxClaudeCodeVersion string

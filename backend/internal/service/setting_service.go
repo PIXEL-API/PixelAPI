@@ -20,6 +20,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/imroc/req/v3"
 	"golang.org/x/sync/singleflight"
 )
@@ -1962,6 +1963,13 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	// User-owned account import limit
 	updates[SettingKeyUserAccountImportLimit] = strconv.Itoa(NormalizeUserAccountCredentialImportLimit(settings.UserAccountImportLimit))
 
+	// Grok runtime model mapping
+	updates[SettingKeyGrokDefaultTextModel] = strings.TrimSpace(settings.GrokDefaultTextModel)
+	if updates[SettingKeyGrokDefaultTextModel] == "" {
+		updates[SettingKeyGrokDefaultTextModel] = "grok-4.5"
+	}
+	updates[SettingKeyGrokCrossClientModelMapEnabled] = strconv.FormatBool(settings.GrokCrossClientModelMapEnabled)
+
 	// Affiliate (邀请返利) feature switch
 	updates[SettingKeyAffiliateEnabled] = strconv.FormatBool(settings.AffiliateEnabled)
 
@@ -3020,6 +3028,10 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyUserAccountImportLimit: strconv.Itoa(DefaultUserAccountCredentialImportLimit),
 		SettingKeyOpenAIAccountLevels:    mustMarshalOpenAIAccountLevelConfigs(DefaultOpenAIAccountLevelConfigs()),
 
+		// Grok runtime model mapping defaults
+		SettingKeyGrokDefaultTextModel:           "grok-4.5",
+		SettingKeyGrokCrossClientModelMapEnabled: "true",
+
 		// Affiliate (邀请返利) feature (default disabled; opt-in)
 		SettingKeyAffiliateEnabled: "false",
 
@@ -3435,6 +3447,13 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		result.OpenAIAccountLevels = DefaultOpenAIAccountLevelConfigs()
 	}
 
+	// Grok runtime model mapping
+	result.GrokDefaultTextModel = strings.TrimSpace(settings[SettingKeyGrokDefaultTextModel])
+	if result.GrokDefaultTextModel == "" {
+		result.GrokDefaultTextModel = "grok-4.5"
+	}
+	result.GrokCrossClientModelMapEnabled = !isFalseSettingValue(settings[SettingKeyGrokCrossClientModelMapEnabled])
+
 	// Affiliate (邀请返利) feature (default: disabled; strict true)
 	result.AffiliateEnabled = settings[SettingKeyAffiliateEnabled] == "true"
 	result.InvoiceManagementEnabled = settings[SettingKeyInvoiceManagementEnabled] == "true"
@@ -3525,6 +3544,11 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	if result.AccountQuotaNotifyEmails == nil {
 		result.AccountQuotaNotifyEmails = []NotifyEmailEntry{}
 	}
+
+	xai.SetRuntimeModelMappingOptions(xai.ModelMappingOptions{
+		DefaultText:          result.GrokDefaultTextModel,
+		EnableCrossClientMap: result.GrokCrossClientModelMapEnabled,
+	})
 
 	return result
 }
@@ -3918,7 +3942,7 @@ func (s *SettingService) GetFallbackModel(ctx context.Context, platform string) 
 		defaultModel = "gemini-2.5-pro"
 	case PlatformOpencode:
 		key = SettingKeyFallbackModelOpencode
-		defaultModel = "kimi-k2.6"
+		defaultModel = "deepseek-v4-flash"
 	default:
 		return ""
 	}

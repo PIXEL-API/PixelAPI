@@ -1,6 +1,42 @@
 package xai
 
-import "strings"
+import (
+	"strings"
+	"sync/atomic"
+)
+
+// runtimeMappingOpts holds operator-configured defaults applied when Grok
+// accounts leave credentials.model_mapping empty. Updated from settings.
+var runtimeMappingOpts atomic.Value // ModelMappingOptions
+var runtimeMappingVersion atomic.Uint64
+
+func init() {
+	runtimeMappingOpts.Store(ModelMappingOptions{})
+	runtimeMappingVersion.Store(1)
+}
+
+// SetRuntimeModelMappingOptions updates process-wide defaults used by
+// DefaultModelMapping (e.g. after settings load). Safe for concurrent use.
+func SetRuntimeModelMappingOptions(opts ModelMappingOptions) {
+	runtimeMappingOpts.Store(opts)
+	runtimeMappingVersion.Add(1)
+}
+
+// RuntimeModelMappingVersion changes whenever runtime mapping options change.
+// Account-level caches include it so settings updates take effect without a restart.
+func RuntimeModelMappingVersion() uint64 {
+	return runtimeMappingVersion.Load()
+}
+
+// RuntimeModelMappingOptions returns the last options set via SetRuntimeModelMappingOptions.
+func RuntimeModelMappingOptions() ModelMappingOptions {
+	if v := runtimeMappingOpts.Load(); v != nil {
+		if opts, ok := v.(ModelMappingOptions); ok {
+			return opts
+		}
+	}
+	return ModelMappingOptions{}
+}
 
 const (
 	DefaultTextModel = "grok-4.5"
@@ -11,6 +47,25 @@ const (
 	DefaultImagineVideo15LegacyModel = "grok-imagine-video-1.5"
 	DefaultImagineVideo15Model       = "grok-imagine-video-1.5-preview"
 )
+
+// ModelMappingOptions controls optional expansions of the default mapping.
+// Cross-client wildcards (gpt-*/claude-*) default ON via settings
+// grok_cross_client_model_map_enabled so Codex/Claude clients keep working
+// against Grok groups (map to DefaultText / grok-4.5). Operators may disable.
+type ModelMappingOptions struct {
+	// DefaultText is the target for empty models and optional cross-client maps.
+	// Empty → DefaultTextModel (grok-4.5).
+	DefaultText string
+	// EnableCrossClientMap merges gpt-*/codex-*/o*/claude-* → DefaultText.
+	EnableCrossClientMap bool
+}
+
+func (o ModelMappingOptions) defaultText() string {
+	if t := strings.TrimSpace(o.DefaultText); t != "" {
+		return t
+	}
+	return DefaultTextModel
+}
 
 // Model describes an xAI model in OpenAI-compatible /models shape.
 type Model struct {
@@ -80,23 +135,55 @@ func DefaultModelIDs() []string {
 	return ids
 }
 
+// DefaultModelMapping returns native Grok/Imagine identity + aliases, using
+// runtime options (default text model / optional cross-client wildcards).
+// Does NOT enable gpt-*/claude-* unless SetRuntimeModelMappingOptions enables them.
 func DefaultModelMapping() map[string]string {
-	mapping := make(map[string]string, len(defaultModels)+len(grokTextResponsesModelAliases)+32)
+	return ModelMappingWithOptions(RuntimeModelMappingOptions())
+}
+
+// ModelMappingWithOptions builds the default Grok mapping with optional
+// cross-client wildcards and a configurable default text model.
+func ModelMappingWithOptions(opts ModelMappingOptions) map[string]string {
+	defaultText := opts.defaultText()
+	mapping := make(map[string]string, len(defaultModels)+len(grokTextResponsesModelAliases)+48)
 	for _, model := range defaultModels {
 		mapping[model.ID] = model.ID
 	}
 	for alias, canonical := range grokTextResponsesModelAliases {
-		mapping[alias] = canonical
+		// Remap aliases that pointed at DefaultTextModel constant to runtime default.
+		if canonical == DefaultTextModel {
+			mapping[alias] = defaultText
+		} else {
+			mapping[alias] = canonical
+		}
 	}
+	// Imagine aliases / legacy IDs → official catalog.
 	mapping["grok-imagine"] = DefaultImagineImageQualityModel
 	mapping["grok-imagine-1"] = DefaultImagineImageQualityModel
+	// Backward-compatible client alias; xAI exposes image editing through the
+	// image-quality model rather than a separate grok-imagine-edit model.
 	mapping["grok-imagine-edit"] = DefaultImagineImageQualityModel
-	mapping[DefaultImagineImageFastModel] = DefaultImagineImageFastModel
-	mapping[DefaultImagineImageQualityModel] = DefaultImagineImageQualityModel
-	mapping[DefaultImagineVideoModel] = DefaultImagineVideoModel
-	mapping[DefaultImagineVideo15LegacyModel] = DefaultImagineVideo15LegacyModel
-	mapping[DefaultImagineVideo15Model] = DefaultImagineVideo15Model
+	mapping["grok-imagine-image"] = DefaultImagineImageFastModel
+	mapping["grok-imagine-image-quality"] = DefaultImagineImageQualityModel
+	// Keep official IDs as identity so client-requested model strings are not
+	// rewritten on the wire (pricing still canonicalizes 1.5* via CanonicalImagineVideoModel).
+	mapping["grok-imagine-video"] = DefaultImagineVideoModel
+	mapping["grok-imagine-video-1.5"] = DefaultImagineVideo15LegacyModel
+	mapping["grok-imagine-video-1.5-preview"] = DefaultImagineVideo15Model
+	// Informal alias only:
 	mapping["grok-video-1.5"] = DefaultImagineVideo15Model
+
+	if opts.EnableCrossClientMap {
+		// Codex / OpenAI Responses client defaults (wildcard patterns).
+		mapping["gpt-*"] = defaultText
+		mapping["codex-*"] = defaultText
+		mapping["o1*"] = defaultText
+		mapping["o3*"] = defaultText
+		mapping["o4*"] = defaultText
+		// Claude Code defaults when operators intentionally enable bridging.
+		mapping["claude-*"] = defaultText
+	}
 	addGrokProviderPrefixedMappings(mapping)
 	return mapping
 }
@@ -160,6 +247,17 @@ func ResolveGrokTextResponsesModelID(model string, defaultText ...string) string
 		return canonical
 	}
 	return StripGrokProviderPrefix(trimmed)
+}
+
+// ResolveDefaultTextModel returns defaultText (or DefaultTextModel) when model is empty.
+func ResolveDefaultTextModel(model string, defaultText ...string) string {
+	if trimmed := strings.TrimSpace(model); trimmed != "" {
+		return trimmed
+	}
+	if len(defaultText) > 0 && strings.TrimSpace(defaultText[0]) != "" {
+		return strings.TrimSpace(defaultText[0])
+	}
+	return DefaultTextModel
 }
 
 func CanonicalImagineVideoModel(model string) string {

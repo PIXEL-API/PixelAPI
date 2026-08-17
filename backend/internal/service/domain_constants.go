@@ -384,6 +384,14 @@ const (
 	// SettingKeyUserAccountImportLimit controls the per-request import limit for user-owned accounts.
 	SettingKeyUserAccountImportLimit = "user_account_import_limit"
 
+	// SettingKeyGrokDefaultTextModel overrides the default Grok text model used for
+	// empty model fields and cross-client wildcard bridging (default grok-4.5).
+	SettingKeyGrokDefaultTextModel = "grok_default_text_model"
+
+	// SettingKeyGrokCrossClientModelMapEnabled enables gpt-*/codex-*/o*/claude-*
+	// wildcard bridging onto the Grok default text model for cross-client clients.
+	SettingKeyGrokCrossClientModelMapEnabled = "grok_cross_client_model_map_enabled"
+
 	// =========================
 	// Overload Cooldown (529)
 	// =========================
