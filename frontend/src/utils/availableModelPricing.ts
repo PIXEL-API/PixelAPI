@@ -1,6 +1,7 @@
 import type {
   UserAvailableGroup,
   UserPricingInterval,
+  UserPricingTimeRange,
   UserSupportedModel,
   UserSupportedModelPricing,
 } from '@/api/channels'
@@ -138,6 +139,29 @@ export function intervalHasPrice(interval: UserPricingInterval): boolean {
     interval.cache_read_price != null ||
     interval.per_request_price != null
   )
+}
+
+export function timeRangeHasPrice(range: UserPricingTimeRange): boolean {
+  return (
+    range.input_price != null ||
+    range.output_price != null ||
+    range.cache_write_price != null ||
+    range.cache_read_price != null ||
+    range.image_input_price != null ||
+    range.image_cache_read_price != null ||
+    range.image_output_price != null ||
+    range.per_request_price != null
+  )
+}
+
+function formatMinute(minute: number): string {
+  const h = Math.floor(minute / 60)
+  const m = minute % 60
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+}
+
+export function availableTimeRangeLabel(range: UserPricingTimeRange): string {
+  return `${formatMinute(range.start_minute)} - ${formatMinute(range.end_minute)}`
 }
 
 export function effectiveGroupRate(

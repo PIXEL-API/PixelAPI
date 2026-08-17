@@ -74,7 +74,8 @@ type userSupportedModelPricing struct {
 	PerRequestPrice                *float64                 `json:"per_request_price"`
 	LongContextPricingEnabled      *bool                    `json:"long_context_pricing_enabled"`
 	LongContextInputTokenThreshold *int                     `json:"long_context_input_token_threshold"`
-	Intervals                      []userPricingIntervalDTO `json:"intervals"`
+	Intervals                      []userPricingIntervalDTO  `json:"intervals"`
+	TimeRanges                     []userPricingTimeRangeDTO `json:"time_ranges"`
 }
 
 // userPricingIntervalDTO 定价区间白名单（去掉内部 ID、SortOrder 等前端不渲染的字段）。
@@ -87,6 +88,20 @@ type userPricingIntervalDTO struct {
 	CacheWritePrice *float64 `json:"cache_write_price"`
 	CacheReadPrice  *float64 `json:"cache_read_price"`
 	PerRequestPrice *float64 `json:"per_request_price"`
+}
+
+// userPricingTimeRangeDTO 时间段（峰谷）定价白名单，只保留前端渲染需要的字段。
+type userPricingTimeRangeDTO struct {
+	StartMinute         int      `json:"start_minute"`
+	EndMinute           int      `json:"end_minute"`
+	InputPrice          *float64 `json:"input_price"`
+	OutputPrice         *float64 `json:"output_price"`
+	CacheWritePrice     *float64 `json:"cache_write_price"`
+	CacheReadPrice      *float64 `json:"cache_read_price"`
+	ImageInputPrice     *float64 `json:"image_input_price"`
+	ImageCacheReadPrice *float64 `json:"image_cache_read_price"`
+	ImageOutputPrice    *float64 `json:"image_output_price"`
+	PerRequestPrice     *float64 `json:"per_request_price"`
 }
 
 // userSupportedModel 用户可见的支持模型条目。
@@ -270,6 +285,21 @@ func toUserPricing(p *service.ChannelModelPricing) *userSupportedModelPricing {
 			PerRequestPrice: iv.PerRequestPrice,
 		})
 	}
+	timeRanges := make([]userPricingTimeRangeDTO, 0, len(p.TimeRanges))
+	for _, tr := range p.TimeRanges {
+		timeRanges = append(timeRanges, userPricingTimeRangeDTO{
+			StartMinute:         tr.StartMinute,
+			EndMinute:           tr.EndMinute,
+			InputPrice:          tr.InputPrice,
+			OutputPrice:         tr.OutputPrice,
+			CacheWritePrice:     tr.CacheWritePrice,
+			CacheReadPrice:      tr.CacheReadPrice,
+			ImageInputPrice:     tr.ImageInputPrice,
+			ImageCacheReadPrice: tr.ImageCacheReadPrice,
+			ImageOutputPrice:    tr.ImageOutputPrice,
+			PerRequestPrice:     tr.PerRequestPrice,
+		})
+	}
 	billingMode := string(p.BillingMode)
 	if billingMode == "" {
 		billingMode = string(service.BillingModeToken)
@@ -287,5 +317,6 @@ func toUserPricing(p *service.ChannelModelPricing) *userSupportedModelPricing {
 		LongContextPricingEnabled:      p.LongContextPricingEnabled,
 		LongContextInputTokenThreshold: p.LongContextInputTokenThreshold,
 		Intervals:                      intervals,
+		TimeRanges:                     timeRanges,
 	}
 }

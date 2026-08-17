@@ -59,6 +59,36 @@
           </div>
         </div>
       </div>
+
+      <div
+        v-if="pricedTimeRanges.length"
+        class="mt-4 overflow-hidden rounded-xl border border-gray-200 dark:border-dark-700"
+      >
+        <div class="border-b border-gray-200 bg-gray-50/80 px-3 py-2.5 text-xs font-semibold text-gray-700 dark:border-dark-700 dark:bg-dark-900/60 dark:text-gray-300">
+          {{ t(`${pricingKeyPrefix}.timeRanges`) }}
+        </div>
+        <div class="divide-y divide-gray-100 dark:divide-dark-700">
+          <div
+            v-for="(range, index) in pricedTimeRanges"
+            :key="`${availableTimeRangeLabel(range)}-${index}`"
+            class="grid gap-2 px-3 py-3 text-xs text-gray-600 dark:text-gray-300 sm:grid-cols-2 lg:grid-cols-[minmax(8rem,1.2fr)_repeat(4,minmax(6rem,1fr))]"
+          >
+            <span class="font-medium text-gray-800 dark:text-gray-100">
+              {{ availableTimeRangeLabel(range) }}
+            </span>
+            <template v-if="usesTokenPricing">
+              <span>{{ t(`${pricingKeyPrefix}.inputPrice`) }} {{ formatIntervalPrice(range.input_price) }}</span>
+              <span>{{ t(`${pricingKeyPrefix}.outputPrice`) }} {{ formatIntervalPrice(range.output_price) }}</span>
+              <span>{{ t(`${pricingKeyPrefix}.cacheWritePrice`) }} {{ formatIntervalPrice(range.cache_write_price) }}</span>
+              <span>{{ t(`${pricingKeyPrefix}.cacheReadPrice`) }} {{ formatIntervalPrice(range.cache_read_price) }}</span>
+            </template>
+            <span v-else class="lg:col-span-4">
+              {{ intervalRequestLabel }}
+              {{ formatIntervalPrice(range.per_request_price, 1) }}
+            </span>
+          </div>
+        </div>
+      </div>
     </template>
   </section>
 </template>
@@ -72,8 +102,10 @@ import {
   TOKEN_PRICE_SCALE,
   availableIntervalLabel,
   availablePricingItems,
+  availableTimeRangeLabel,
   formatAvailablePrice,
   intervalHasPrice,
+  timeRangeHasPrice,
 } from '@/utils/availableModelPricing'
 
 const props = withDefaults(
@@ -103,6 +135,9 @@ const pricingItems = computed(() =>
 )
 const pricedIntervals = computed(() =>
   props.model.pricing?.intervals?.filter(intervalHasPrice) ?? [],
+)
+const pricedTimeRanges = computed(() =>
+  props.model.pricing?.time_ranges?.filter(timeRangeHasPrice) ?? [],
 )
 const usesTokenPricing = computed(
   () => props.model.pricing?.billing_mode === BILLING_MODE_TOKEN,

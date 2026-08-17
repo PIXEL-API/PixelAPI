@@ -122,6 +122,9 @@ func TestUserAvailableChannel_FieldWhitelist(t *testing.T) {
 		Intervals: []service.PricingInterval{
 			{ID: 7, MinTokens: 0, MaxTokens: nil, SortOrder: 3},
 		},
+		TimeRanges: []service.PricingTimeRange{
+			{ID: 9, StartMinute: 540, EndMinute: 1080, SortOrder: 1},
+		},
 	})
 	require.NotNil(t, pricing)
 	require.Equal(t, &pricingEnabled, pricing.LongContextPricingEnabled)
@@ -134,6 +137,21 @@ func TestUserAvailableChannel_FieldWhitelist(t *testing.T) {
 	for _, key := range []string{"id", "pricing_id", "sort_order"} {
 		_, exists := ivDecoded[key]
 		require.Falsef(t, exists, "user pricing interval must not expose %q", key)
+	}
+
+	// pricing time range 白名单：不应暴露 id / sort_order，但应暴露 start/end minute。
+	require.Len(t, pricing.TimeRanges, 1)
+	rawTr, err := json.Marshal(pricing.TimeRanges[0])
+	require.NoError(t, err)
+	var trDecoded map[string]any
+	require.NoError(t, json.Unmarshal(rawTr, &trDecoded))
+	for _, key := range []string{"id", "pricing_id", "sort_order"} {
+		_, exists := trDecoded[key]
+		require.Falsef(t, exists, "user pricing time range must not expose %q", key)
+	}
+	for _, key := range []string{"start_minute", "end_minute"} {
+		_, exists := trDecoded[key]
+		require.Truef(t, exists, "user pricing time range must expose %q", key)
 	}
 }
 
