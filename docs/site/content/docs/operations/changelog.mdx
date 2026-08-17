@@ -3,6 +3,13 @@ title: 更新日志
 description: 按版本记录 Pixel API 的主要功能更新。
 ---
 
+## v1.2.46
+
+- OpenCode 订阅额度窗口（5 小时 / 7 天 / 30 天）达到上限后立即停止调度该账号，修复此前窗口已满仍被调度的问题。
+- OpenCode 账号支持批量导入：每行一个 API Key，多个账号自动按 `sk-xxx**xxx` 格式命名。
+- OpenCode 账号的默认测试连接与校验模型改为 deepseek-v4-flash。
+- 渠道中心的分组价格查看新增时间段（峰谷）价格范围展示，与上下文长度区间价格并列。
+
 ## v1.2.38
 
 - 新增 OpenCode 平台：可添加 OpenCode Go 订阅账号（仅需 API Key，端点自动锁定官方地址），支持转发 OpenAI 兼容（chat/completions、responses）与 Anthropic 兼容（messages）请求。
