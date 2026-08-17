@@ -693,6 +693,31 @@ func (s *OpenAIGatewayService) forwardGrokRawChatCompletions(
 		}
 		return nil, err
 	}
+
+	token, tokenKind, err := s.GetRequestCredential(ctx, c, account)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(token) == "" {
+		return nil, fmt.Errorf("account %d returned an empty %s credential", account.ID, tokenKind)
+	}
+
+	var bridgeUsage OpenAIUsage
+	{
+		bridgedBody, usage, bridged, bridgeErr := s.bridgeGrokComposerImageInputs(ctx, c, account, upstreamBody, token)
+		if bridgeErr != nil {
+			var failoverErr *UpstreamFailoverError
+			if !errors.As(bridgeErr, &failoverErr) && c != nil && c.Writer != nil && !c.Writer.Written() {
+				writeChatCompletionsError(c, http.StatusBadGateway, "upstream_error", bridgeErr.Error())
+			}
+			return nil, bridgeErr
+		}
+		if bridged {
+			upstreamBody = bridgedBody
+			addOpenAIUsage(&bridgeUsage, usage)
+		}
+	}
+
 	serviceTier := extractOpenAIServiceTierFromBody(upstreamBody)
 	forwardResult := &OpenAIForwardResult{
 		Model:           originalModel,
@@ -715,13 +740,6 @@ func (s *OpenAIGatewayService) forwardGrokRawChatCompletions(
 	}
 	setOpsUpstreamRequestBody(c, upstreamBody)
 
-	token, tokenKind, err := s.GetRequestCredential(ctx, c, account)
-	if err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(token) == "" {
-		return nil, fmt.Errorf("account %d returned an empty %s credential", account.ID, tokenKind)
-	}
 	targetURL, err := buildGrokChatCompletionsURL(ctx, account, s.cfg, s.settingService)
 	if err != nil {
 		return nil, fmt.Errorf("build Grok Chat Completions URL: %w", err)
@@ -844,6 +862,9 @@ func (s *OpenAIGatewayService) forwardGrokRawChatCompletions(
 			searchCount = streamSearchCounter.Count()
 		}
 		result.SearchCount = searchCount
+		if bridgeUsage.InputTokens > 0 || bridgeUsage.OutputTokens > 0 {
+			addOpenAIUsage(&result.Usage, bridgeUsage)
+		}
 		if strings.TrimSpace(result.RequestID) == "" {
 			result.RequestID = firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("xai-request-id"))
 		}

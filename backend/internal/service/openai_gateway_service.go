@@ -9415,6 +9415,34 @@ func isEmptyBase64DataURI(raw string) bool {
 	return strings.TrimSpace(strings.TrimPrefix(rest, "base64,")) == ""
 }
 
+// openAIJSONValueMayContainImageInput recursively reports whether an OpenAI
+// payload value carries image input (input_image content or image_url), so
+// Composer bridge / grok-4.6 chat routing can decide whether to force the
+// Responses bridge instead of a raw chat-completions path that drops images.
+func openAIJSONValueMayContainImageInput(value gjson.Result) bool {
+	if !value.Exists() {
+		return false
+	}
+	if value.IsArray() {
+		found := false
+		value.ForEach(func(_, item gjson.Result) bool {
+			if openAIJSONValueMayContainImageInput(item) {
+				found = true
+				return false
+			}
+			return true
+		})
+		return found
+	}
+	if value.IsObject() {
+		if strings.TrimSpace(value.Get("type").String()) == "input_image" || value.Get("image_url").Exists() {
+			return true
+		}
+		return openAIJSONValueMayContainImageInput(value.Get("content"))
+	}
+	return false
+}
+
 func getOpenAIRequestBodyMap(_ *gin.Context, body []byte) (map[string]any, error) {
 	var reqBody map[string]any
 	if err := json.Unmarshal(body, &reqBody); err != nil {
