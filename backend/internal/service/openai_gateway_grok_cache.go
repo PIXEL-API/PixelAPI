@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -19,7 +20,6 @@ const (
 	grokFreeCacheNativeToolsJSON     = `[{"type":"web_search"},{"type":"x_search"}]`
 	grokFreeCacheDisabledToolChoice  = "none"
 	grokClientToolCacheOptInExtraKey = "grok_client_tool_cache_enabled"
-	grokFreeRolling24hTokenLimit     = int64(2_000_000)
 	grokBillingSnapshotCacheExtraKey = "grok_billing_snapshot"
 	openCodeSessionAffinityHeader    = "X-Session-Affinity"
 	openCodeSessionIDHeader          = "X-Session-Id"
@@ -295,6 +295,9 @@ func isKnownGrokFreeAccount(account *Account) bool {
 	if account == nil || !account.IsGrokOAuth() {
 		return false
 	}
+	if jwtTier := xai.SubscriptionTierFromJWT(account.GetCredential("access_token")); jwtTier != "" {
+		return isGrokFreeSubscriptionTier(jwtTier)
+	}
 
 	freeSignal, paidSignal, inferredFreeSignal := grokCacheBillingSignals(account.Extra)
 	if snapshot, err := grokQuotaSnapshotFromExtra(account.Extra); err == nil && snapshot != nil {
@@ -305,7 +308,7 @@ func isKnownGrokFreeAccount(account *Account) bool {
 				paidSignal = true
 			}
 		}
-		if snapshot.Tokens != nil && snapshot.Tokens.Limit != nil && *snapshot.Tokens.Limit == grokFreeRolling24hTokenLimit {
+		if snapshot.Tokens != nil && snapshot.Tokens.Limit != nil && xai.IsGrokFreeRolling24hTokenLimit(*snapshot.Tokens.Limit) {
 			inferredFreeSignal = true
 		}
 	}
@@ -357,8 +360,8 @@ func grokCacheBillingSignals(extra map[string]any) (free, paid, inferredFree boo
 }
 
 func isGrokFreeSubscriptionTier(tier string) bool {
-	switch strings.ToLower(strings.TrimSpace(tier)) {
-	case "free", "grok-free", "grok_free", "free-tier", "free_tier", "basic", "grok-basic", "grok_basic":
+	switch xai.NormalizeSubscriptionTier(tier) {
+	case "free", "x_basic":
 		return true
 	default:
 		return false
