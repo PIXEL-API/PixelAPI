@@ -575,7 +575,7 @@ import { ACCOUNT_STATUS_FILTER_OPTIONS } from '@/constants/account'
 import type { Account, AccountLevel, AccountPlatform, AccountType, AdminGroup, Group, Proxy, WindowStats } from '@/types'
 import type { Column } from '@/components/common/types'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
-import { extractApiErrorCode, extractApiErrorMessage, extractApiErrorMetadata } from '@/utils/apiError'
+import { extractApiErrorCode, extractApiErrorMessage, extractApiErrorMetadata, isAbortError } from '@/utils/apiError'
 
 type UserAccountStatus = 'active' | 'disabled'
 
@@ -1148,12 +1148,6 @@ function shareStatusBadgeClass(status?: string): string {
     default:
       return `${base} bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300`
   }
-}
-
-function isAbortError(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false
-  const { name, code } = error as { name?: string; code?: string }
-  return name === 'AbortError' || code === 'ERR_CANCELED'
 }
 
 async function loadAccounts(): Promise<void> {

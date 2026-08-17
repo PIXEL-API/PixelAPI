@@ -2,6 +2,7 @@ import { ref, reactive, onUnmounted, toRaw } from 'vue'
 import { useDebounceFn } from '@vueuse/core'
 import type { BasePaginationResponse, FetchOptions } from '@/types'
 import { getPersistedPageSize, setPersistedPageSize } from './usePersistedPageSize'
+import { isAbortError } from '@/utils/apiError'
 
 interface PaginationState {
   page: number
@@ -35,10 +36,6 @@ export function useTableLoader<T, P extends Record<string, any>>(options: TableL
   })
 
   let abortController: AbortController | null = null
-
-  const isAbortError = (error: any) => {
-    return error?.name === 'AbortError' || error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError'
-  }
 
   const load = async () => {
     if (abortController) {

@@ -515,7 +515,7 @@ import { useAppStore } from '@/stores/app'; import { adminAPI } from '@/api/admi
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { formatDateTime, formatReasoningEffort } from '@/utils/format'
 import { formatCacheHitRate } from '@/utils/formatters'
-import { extractApiErrorMessage } from '@/utils/apiError'
+import { extractApiErrorMessage, isAbortError } from '@/utils/apiError'
 import { resolveUsageRequestType, requestTypeToLegacyStream } from '@/utils/usageRequestType'
 import AppLayout from '@/components/layout/AppLayout.vue'; import Pagination from '@/components/common/Pagination.vue'; import Select from '@/components/common/Select.vue'; import DateRangePicker from '@/components/common/DateRangePicker.vue'; import DataTable from '@/components/common/DataTable.vue'
 import UsageStatsCards from '@/components/admin/usage/UsageStatsCards.vue'; import UsageFilters from '@/components/admin/usage/UsageFilters.vue'
@@ -1013,7 +1013,7 @@ const loadLogs = async () => {
       { signal: c.signal }
     )
     if(!c.signal.aborted) { usageLogs.value = res.items; pagination.total = res.total }
-  } catch (error: any) { if(error?.name !== 'AbortError') console.error('Failed to load usage logs:', error) } finally { if(abortController === c) loading.value = false }
+  } catch (error: any) { if(!isAbortError(error)) console.error('Failed to load usage logs:', error) } finally { if(abortController === c) loading.value = false }
 }
 
 const getClientTimezone = (): string | undefined => {
@@ -1058,28 +1058,38 @@ const loadBalanceLedger = async () => {
   ledgerAbortController = c
   ledgerLoading.value = true
   ledgerStatsLoading.value = true
-  try {
-    const [res, stats] = await Promise.all([
-      adminUsageAPI.listBalanceLedger(buildLedgerParams(), { signal: c.signal }),
-      adminUsageAPI.getBalanceLedgerStats(buildLedgerStatsParams(), { signal: c.signal })
-    ])
-    if (!c.signal.aborted) {
-      balanceLedger.value = res.items
-      balanceLedgerStats.value = stats
-      ledgerPagination.total = res.total
-      ledgerLoaded.value = true
-    }
-  } catch (error: any) {
-    if (error?.name !== 'AbortError') {
+
+  const loadList = async () => {
+    try {
+      const res = await adminUsageAPI.listBalanceLedger(buildLedgerParams(), { signal: c.signal })
+      if (!c.signal.aborted) {
+        balanceLedger.value = res.items
+        ledgerPagination.total = res.total
+        ledgerLoaded.value = true
+      }
+    } catch (error: any) {
+      if (c.signal.aborted || isAbortError(error)) return
       console.error('Failed to load balance ledger:', error)
       appStore.showError(t('usage.balanceLedger.failedToLoad'))
-    }
-  } finally {
-    if (ledgerAbortController === c) {
-      ledgerLoading.value = false
-      ledgerStatsLoading.value = false
+    } finally {
+      if (ledgerAbortController === c) ledgerLoading.value = false
     }
   }
+
+  const loadStats = async () => {
+    try {
+      const stats = await adminUsageAPI.getBalanceLedgerStats(buildLedgerStatsParams(), { signal: c.signal })
+      if (!c.signal.aborted) balanceLedgerStats.value = stats
+    } catch (error: any) {
+      if (c.signal.aborted || isAbortError(error)) return
+      console.error('Failed to load balance ledger stats:', error)
+      appStore.showError(t('usage.balanceLedger.failedToLoadStats'))
+    } finally {
+      if (ledgerAbortController === c) ledgerStatsLoading.value = false
+    }
+  }
+
+  await Promise.all([loadList(), loadStats()])
 }
 
 const loadStats = async () => {
@@ -1667,7 +1677,7 @@ const exportToExcel = async () => {
     const csvRows = [toCsvRow(headers)]
     while (true) {
       const res = await adminUsageAPI.list(
-        buildUsageListParams(p, 100, true),
+        buildUsageListParams(p, 100, p === 1),
         { signal: c.signal }
       )
       if (c.signal.aborted) break; if (p === 1) { total = res.total; exportProgress.total = total }
@@ -1696,7 +1706,11 @@ const exportToExcel = async () => {
       saveAs(new Blob([CSV_BOM, csvRows.join('\r\n')], { type: 'text/csv;charset=utf-8' }), `usage_${filters.value.start_date}_to_${filters.value.end_date}.csv`)
       appStore.showSuccess(t('usage.exportSuccess'))
     }
-  } catch (error) { console.error('Failed to export:', error); appStore.showError('Export Failed') }
+  } catch (error) {
+    if (c.signal.aborted || isAbortError(error)) return
+    console.error('Failed to export:', error)
+    appStore.showError(t('usage.exportExcelFailed'))
+  }
   finally { if(exportAbortController === c) { exportAbortController = null; exporting.value = false; exportProgress.show = false } }
 }
 

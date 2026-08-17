@@ -1235,6 +1235,7 @@ import { useSwipeSelect } from '@/composables/useSwipeSelect'
 import { useTableSelection } from '@/composables/useTableSelection'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { formatDateTime } from '@/utils/format'
+import { isAbortError } from '@/utils/apiError'
 import {
   dateTimeLocalToUnixSeconds,
   proxyExpiryBadgeClass,
@@ -1617,12 +1618,6 @@ const closeOwnerDropdownOnOutsideClick = (event: MouseEvent) => {
 }
 
 let abortController: AbortController | null = null
-
-const isAbortError = (error: unknown) => {
-  if (!error || typeof error !== 'object') return false
-  const maybeError = error as { name?: string; code?: string }
-  return maybeError.name === 'AbortError' || maybeError.code === 'ERR_CANCELED'
-}
 
 const toggleSelectRow = (id: number, event: Event) => {
   const target = event.target as HTMLInputElement

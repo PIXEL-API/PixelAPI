@@ -22,6 +22,21 @@ interface ApiErrorLike {
 }
 
 /**
+ * Detect a request cancellation/abort error.
+ *
+ * The axios client re-rejects aborted requests with its own `CanceledError`
+ * (`name: 'CanceledError'`, `code: 'ERR_CANCELED'`); native `AbortController`
+ * aborts surface as `AbortError`. Callers should treat both as "ignore, no
+ * user-facing error", since an aborted in-flight request is expected whenever
+ * a newer request supersedes it.
+ */
+export function isAbortError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false
+  const e = err as { name?: string; code?: string }
+  return e.name === 'AbortError' || e.name === 'CanceledError' || e.code === 'ERR_CANCELED'
+}
+
+/**
  * Extract the error code from an API error object.
  *
  * Prefers the string `reason` (e.g. "PAYMENT_PROVIDER_MISCONFIGURED") over the

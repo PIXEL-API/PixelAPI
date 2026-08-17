@@ -1540,7 +1540,7 @@ import { formatDateTime } from '@/utils/format'
 import { maskApiKey } from '@/utils/maskApiKey'
 import { buildCcSwitchImportDeeplink } from '@/utils/ccswitchImport'
 import { buildImagePlaygroundImportUrl } from '@/utils/imagePlaygroundImport'
-import { extractApiErrorCode, extractApiErrorMessage } from '@/utils/apiError'
+import { extractApiErrorCode, extractApiErrorMessage, isAbortError } from '@/utils/apiError'
 import {
   calculateExpirationPresetDate,
   resolveExpirationPresetBase
@@ -1842,12 +1842,6 @@ const ccSwitchDetectionTimers = new Set<ReturnType<typeof setTimeout>>()
 const getGroupSelectorPopoverId = (keyId: number) => `api-key-group-selector-${keyId}`
 const getGroupSelectorSearchId = (keyId: number) => `api-key-group-selector-search-${keyId}`
 const getGroupSelectorListId = (keyId: number) => `api-key-group-selector-list-${keyId}`
-
-const isAbortError = (error: unknown) => {
-  if (!error || typeof error !== 'object') return false
-  const { name, code } = error as { name?: string; code?: string }
-  return name === 'AbortError' || code === 'ERR_CANCELED'
-}
 
 const loadApiKeyUsageStats = async (keyIds: number[], signal: AbortSignal) => {
   const requestSequence = ++usageStatsRequestSequence

@@ -792,6 +792,7 @@ import type {
 } from '@/types'
 import type { Column } from '@/components/common/types'
 import { formatDateTime, formatReasoningEffort } from '@/utils/format'
+import { isAbortError } from '@/utils/apiError'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { formatCacheHitRate, formatCacheTokens, formatMultiplier } from '@/utils/formatters'
 import { formatTokenPricePerMillion } from '@/utils/usagePricing'
@@ -1227,11 +1228,6 @@ const buildUsageQueryParams = (
   page,
   page_size: pageSize
 })
-
-const isAbortError = (error: unknown): boolean => {
-  const abortError = error as { name?: string; code?: string }
-  return abortError?.name === 'AbortError' || abortError?.code === 'ERR_CANCELED'
-}
 
 const buildBalanceLedgerQueryParams = (page: number, pageSize: number): UserBalanceLedgerQueryParams => {
   const refID = Number(ledgerFilters.value.ref_id)
@@ -1885,7 +1881,9 @@ const exportToCSV = async () => {
       const link = document.createElement('a')
       link.href = url
       link.download = exportFilename
+      document.body.appendChild(link)
       link.click()
+      document.body.removeChild(link)
     } finally {
       window.URL.revokeObjectURL(url)
     }
