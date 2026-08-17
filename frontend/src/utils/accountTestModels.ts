@@ -2,7 +2,7 @@ import type { AccountPlatform, ClaudeModel } from '@/types'
 
 export const DEFAULT_OPENAI_TEST_MODEL = 'gpt-5.5'
 export const DEFAULT_GROK_TEST_MODEL = 'grok-4.5'
-export const DEFAULT_OPENCODE_TEST_MODEL = 'kimi-k2.6'
+export const DEFAULT_OPENCODE_TEST_MODEL = 'deepseek-v4-flash'
 
 const PRIORITIZED_GEMINI_MODELS = [
   'gemini-2.5-flash',

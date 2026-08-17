@@ -55,7 +55,7 @@ const (
 	defaultGeminiTextTestPrompt  = "hi"
 	defaultOpenAIImageTestPrompt = "Generate a cute orange cat astronaut sticker on a clean pastel background."
 	defaultGrokTestModel         = "grok-4.5"
-	defaultOpencodeTestModel     = "kimi-k2.6"
+	defaultOpencodeTestModel     = "deepseek-v4-flash"
 )
 
 // isOpenAIImageModel checks if the model is an OpenAI image generation model (e.g. gpt-image-2).
