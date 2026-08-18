@@ -885,6 +885,7 @@ func (h *AccountHandler) Create(c *gin.Context) {
 		h.adminService.ForceOpenAIPrivacy(ctx, account)
 		h.enqueueOwnedPublicShareValidation(account)
 		h.scheduleGrokImportProbe(account)
+		h.scheduleOpenAIResponsesProbe(account)
 		return h.buildAccountResponseWithRuntime(ctx, account), nil
 	})
 	if err != nil {
@@ -1039,7 +1040,31 @@ func (h *AccountHandler) Update(c *gin.Context) {
 	}
 
 	h.enqueueOwnedPublicShareValidation(account)
+	h.scheduleOpenAIResponsesProbe(account)
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
+}
+
+// scheduleOpenAIResponsesProbe 异步触发 OpenAI APIKey 账号的 Responses API 能力探测。
+//
+// 探测在后台 goroutine 中执行，不阻塞账号创建/更新。探测结果只影响后续路由优化
+// （是否把 /v1/responses 改走 /v1/chat/completions），失败时标记保持缺失，网关按
+// "现状即证据"默认走 Responses。探测错误仅记录日志，不向当前请求传播。
+func (h *AccountHandler) scheduleOpenAIResponsesProbe(account *service.Account) {
+	if account == nil || account.Platform != service.PlatformOpenAI || account.Type != service.AccountTypeAPIKey {
+		return
+	}
+	if h.accountTestService == nil {
+		return
+	}
+	accountID := account.ID
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("openai_responses_probe_panic", "account_id", accountID, "recover", r)
+			}
+		}()
+		h.accountTestService.ProbeOpenAIAPIKeyResponsesSupport(context.Background(), accountID)
+	}()
 }
 
 // Delete handles deleting an account
@@ -1923,6 +1948,7 @@ func (h *AccountHandler) BatchCreate(c *gin.Context) {
 			}
 			h.enqueueOwnedPublicShareValidation(account)
 			h.scheduleGrokImportProbe(account)
+			h.scheduleOpenAIResponsesProbe(account)
 			success++
 			results = append(results, gin.H{
 				"name":    item.Name,

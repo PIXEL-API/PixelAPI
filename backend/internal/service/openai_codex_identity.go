@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/google/uuid"
 )
 
 // codexUpstreamMinVersion is the minimum version header accepted by the
@@ -45,6 +46,15 @@ func ensureCodexIdentityHeaders(headers http.Header) {
 		headers.Set("version", codexCLIVersion)
 	}
 	headers.Set("OpenAI-Beta", "responses=experimental")
+}
+
+// applyOpenAICodexProbeHeaders 为合成探测请求补齐 Codex 身份和引擎指纹。
+func applyOpenAICodexProbeHeaders(h http.Header) {
+	if h == nil {
+		return
+	}
+	ensureCodexIdentityHeaders(h)
+	h.Set("X-Codex-Window-ID", uuid.NewString())
 }
 
 // enforceCodexIdentityHeaders pairs originator with the final outbound
