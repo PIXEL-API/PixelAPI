@@ -58,6 +58,13 @@ const (
 	defaultOpencodeTestModel     = "deepseek-v4-flash"
 )
 
+// opencodeTestModelFallbacks 是 opencode 校验测试的备选模型。
+// 首选 defaultOpencodeTestModel（deepseek-v4-flash 最新版在 opencode 仅中国区托管），
+// 国际区账号访问会返回 403 RegionError。fallback 用 opencode 国际通用的裸 slug，
+// 当首选模型因「模型不可用」类错误（区域限制/上游端点不可用）失败时按序重试，
+// 避免把 key 有效但模型区域不匹配的账号误判为校验失败。
+var opencodeTestModelFallbacks = []string{"gpt-5.6-luna", "grok-4.5"}
+
 // isOpenAIImageModel checks if the model is an OpenAI image generation model (e.g. gpt-image-2).
 func isOpenAIImageModel(model string) bool {
 	return strings.HasPrefix(strings.ToLower(model), "gpt-image-")
@@ -253,6 +260,8 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 
 // testOpencodeAccountConnection tests an OpenCode Go subscription account's connection.
 // opencode 走 /chat/completions（Authorization Bearer），非流式探测一次即可确认 api_key 有效。
+// 首选模型（默认 deepseek-v4-flash）在 opencode 国际区会返回 403 RegionError，故在「模型不可用」
+// 类错误时按序 fallback 到 opencodeTestModelFallbacks，避免把 key 有效但模型区域不匹配的账号误判为校验失败。
 func (s *AccountTestService) testOpencodeAccountConnection(c *gin.Context, account *Account, modelID string) error {
 	ctx := c.Request.Context()
 	if s.httpUpstream == nil {
@@ -285,17 +294,48 @@ func (s *AccountTestService) testOpencodeAccountConnection(c *gin.Context, accou
 	c.Writer.Header().Set("X-Accel-Buffering", "no")
 	c.Writer.Flush()
 
+	// 候选模型：首选 testModelID，遇模型级错误时按序 fallback。
+	candidates := append([]string{testModelID}, opencodeTestModelFallbacks...)
+	var lastStatus int
+	var lastBody string
+	for _, candidate := range candidates {
+		s.sendEvent(c, TestEvent{Type: "test_start", Model: candidate})
+
+		status, body, probeErr := s.probeOpencodeChatCompletions(ctx, account, apiURL, authToken, candidate)
+		if probeErr != nil {
+			return s.sendErrorAndEnd(c, fmt.Sprintf("OpenCode request failed: %s", probeErr.Error()))
+		}
+		lastStatus, lastBody = status, string(body)
+
+		if status == http.StatusOK {
+			// 非流式响应：choices 有内容即视为连接成功。
+			if opencodeChatCompletionsHasContent(body) {
+				s.sendEvent(c, TestEvent{Type: "test_complete", Success: true, Text: "Connection test succeeded"})
+				return nil
+			}
+			return s.sendErrorAndEnd(c, "OpenCode returned an unexpected response")
+		}
+		if opencodeTestErrorRetryableWithOtherModel(status, lastBody) {
+			continue
+		}
+		break
+	}
+	return s.sendErrorAndEnd(c, fmt.Sprintf("OpenCode API returned %d: %s", lastStatus, lastBody))
+}
+
+// probeOpencodeChatCompletions 对 opencode 发起一次非流式 chat/completions 探测。
+// 返回 HTTP 状态码与响应体（body 截断到 2MB）；网络/请求错误通过 error 返回。
+func (s *AccountTestService) probeOpencodeChatCompletions(ctx context.Context, account *Account, apiURL, authToken, model string) (int, []byte, error) {
 	payload := map[string]any{
-		"model":    testModelID,
+		"model":    model,
 		"messages": []map[string]string{{"role": "user", "content": "Reply with the single word: OK"}},
 		"stream":   false,
 	}
 	payloadBytes, _ := json.Marshal(payload)
-	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
 
 	req, err := http.NewRequestWithContext(WithHTTPUpstreamRedirectsDisabled(ctx), http.MethodPost, apiURL, bytes.NewReader(payloadBytes))
 	if err != nil {
-		return s.sendErrorAndEnd(c, "Failed to create OpenCode request")
+		return 0, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+authToken)
@@ -314,17 +354,16 @@ func (s *AccountTestService) testOpencodeAccountConnection(c *gin.Context, accou
 		resp, err = s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
 	}
 	if err != nil {
-		return s.sendErrorAndEnd(c, fmt.Sprintf("OpenCode request failed: %s", err.Error()))
+		return 0, nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-		return s.sendErrorAndEnd(c, fmt.Sprintf("OpenCode API returned %d: %s", resp.StatusCode, string(body)))
-	}
-
-	// 非流式响应：choices 有内容即视为连接成功。
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	return resp.StatusCode, body, nil
+}
+
+// opencodeChatCompletionsHasContent 判断非流式探测响应是否包含有效 choices（即连接成功）。
+func opencodeChatCompletionsHasContent(body []byte) bool {
 	var parsed struct {
 		Choices []struct {
 			Message struct {
@@ -332,12 +371,34 @@ func (s *AccountTestService) testOpencodeAccountConnection(c *gin.Context, accou
 			} `json:"message"`
 		} `json:"choices"`
 	}
-	if err := json.Unmarshal(body, &parsed); err != nil || len(parsed.Choices) == 0 {
-		return s.sendErrorAndEnd(c, "OpenCode returned an unexpected response")
-	}
+	return json.Unmarshal(body, &parsed) == nil && len(parsed.Choices) > 0
+}
 
-	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true, Text: "Connection test succeeded"})
-	return nil
+// opencodeTestErrorRetryableWithOtherModel 判断 opencode 探测失败是否属于「换一个模型可能成功」的
+// 模型级错误（区域限制 / 上游 provider 端点不可用 / 模型不存在），而非账号级硬错误（认证/计费/用量）。
+func opencodeTestErrorRetryableWithOtherModel(statusCode int, body string) bool {
+	if statusCode < 400 {
+		return false
+	}
+	// 401（认证/计费）、402（支付）、429（用量）是账号级硬错误，换模型无意义。
+	switch statusCode {
+	case http.StatusUnauthorized, http.StatusPaymentRequired, http.StatusTooManyRequests:
+		return false
+	}
+	lower := strings.ToLower(body)
+	for _, marker := range []string{
+		"regionerror",
+		"server_error",
+		"endpoint is unavailable",
+		"model not found",
+		"model does not exist",
+		"not supported for format",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // testClaudeAccountConnection tests an Anthropic Claude account's connection
