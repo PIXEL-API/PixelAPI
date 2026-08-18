@@ -1896,6 +1896,19 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 	if err != nil {
 		return nil, err
 	}
+	// 渠道模型限制：billing_model_source=upstream 时逐账号过滤上游模型不在定价列表的账号。
+	// load-aware 分支（LoadBatchEnabled=true 的生产默认路径）不像 legacy 分支
+	// （selectAccountWithMixedScheduling / selectAccountForModelWithPlatform）那样在候选循环里
+	// 调用 isUpstreamModelRestrictedByChannel，必须在此统一过滤，否则 restrict_models 对 upstream 基准失效。
+	if s.needsUpstreamChannelRestrictionCheck(ctx, groupID) {
+		filtered := accounts[:0]
+		for i := range accounts {
+			if !s.isUpstreamModelRestrictedByChannel(ctx, *groupID, &accounts[i], requestedModel) {
+				filtered = append(filtered, accounts[i])
+			}
+		}
+		accounts = filtered
+	}
 	if len(accounts) == 0 {
 		return nil, ErrNoAvailableAccounts
 	}

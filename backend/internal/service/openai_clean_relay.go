@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -128,6 +129,15 @@ func (s *OpenAIGatewayService) SelectAccountWithCleanRelayScheduler(
 	effectiveModel := strings.TrimSpace(routingModel)
 	if effectiveModel == "" {
 		effectiveModel = strings.TrimSpace(requestedModel)
+	}
+	// 渠道模型限制预检查（requested/channel_mapped 计费基准）。
+	// clean-relay 命中路径会直接返回绑定账号，绕过 selectAccountWithScheduler 的预检查，
+	// 必须在此统一拦截，否则 restrict_models 对 clean-relay 命中请求失效。
+	if s.checkChannelPricingRestriction(ctx, groupID, effectiveModel) {
+		slog.Warn("channel pricing restriction blocked request",
+			"group_id", derefGroupID(groupID),
+			"model", effectiveModel)
+		return nil, OpenAIAccountScheduleDecision{}, fmt.Errorf("%w supporting model: %s (channel pricing restriction)", ErrNoAvailableAccounts, effectiveModel)
 	}
 	if s.accountShareModeService != nil && groupID != nil && *groupID > 0 && s.accountShareModeService.IsModeGroup(ctx, *groupID) {
 		return s.SelectAccountWithScheduler(

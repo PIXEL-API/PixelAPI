@@ -4735,6 +4735,12 @@ func (s *OpenAIGatewayService) SelectAccountByPreviousResponseID(
 		_ = store.DeleteResponseAccount(ctx, derefGroupID(groupID), responseID)
 		return nil, nil
 	}
+	// 渠道模型限制：billing_model_source=upstream 时按账号上游模型过滤，
+	// 受限账号视为 miss，回落负载均衡层（该层会再次过滤）。
+	if s.isOpenAIAccountChannelRestricted(ctx, groupID, account, requestedModel, requireCompact) {
+		_ = store.DeleteResponseAccount(ctx, derefGroupID(groupID), responseID)
+		return nil, nil
+	}
 
 	result, acquireErr := s.tryAcquireAccountSlot(ctx, accountID, account.Concurrency)
 	if acquireErr == nil && result.Acquired {

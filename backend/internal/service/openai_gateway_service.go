@@ -806,6 +806,20 @@ func (s *OpenAIGatewayService) needsUpstreamChannelRestrictionCheck(ctx context.
 	return ch.BillingModelSource == BillingModelSourceUpstream
 }
 
+// isOpenAIAccountChannelRestricted 判断账号是否因渠道模型限制（billing_model_source=upstream）被排除。
+// 与 isUpstreamModelRestrictedByChannel 的区别：这里额外合并了 nil 守卫与 needsUpstreamChannelRestrictionCheck，
+// 供高级调度器等需要逐账号筛选的路径复用，避免到处内联多个条件导致遗漏。
+// requested/channel_mapped 基准不经过此函数，由调度入口的 checkChannelPricingRestriction 统一拦截。
+func (s *OpenAIGatewayService) isOpenAIAccountChannelRestricted(ctx context.Context, groupID *int64, account *Account, requestedModel string, requireCompact bool) bool {
+	if s == nil || s.channelService == nil || groupID == nil || account == nil {
+		return false
+	}
+	if !s.needsUpstreamChannelRestrictionCheck(ctx, groupID) {
+		return false
+	}
+	return s.isUpstreamModelRestrictedByChannel(ctx, *groupID, account, requestedModel, requireCompact)
+}
+
 // ReplaceModelInBody replaces the JSON model field in a request body.
 func (s *OpenAIGatewayService) ReplaceModelInBody(body []byte, newModel string) []byte {
 	return ReplaceModelInBody(body, newModel)

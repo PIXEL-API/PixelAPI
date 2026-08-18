@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"log/slog"
 	"math"
 	"sort"
 	"strconv"
@@ -371,7 +372,8 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 	}
 	account = s.service.recheckSelectedOpenAIAccountFromDB(ctx, req.GroupID, account, req.RequestedModel, req.RequireCompact)
 	if account == nil || !s.isAccountTransportCompatible(account, req.RequiredTransport) ||
-		!s.isAccountRequestCompatible(account, req) {
+		!s.isAccountRequestCompatible(account, req) ||
+		s.service.isOpenAIAccountChannelRestricted(ctx, req.GroupID, account, req.RequestedModel, req.RequireCompact) {
 		_ = s.service.deleteStickySessionAccountID(ctx, req.GroupID, sessionHash)
 		return nil, nil
 	}
@@ -1169,6 +1171,10 @@ func (s *defaultOpenAIAccountScheduler) filterOpenAIAccountsForLoadBalance(
 		if !s.isAccountTransportCompatible(account, req.RequiredTransport) {
 			continue
 		}
+		// 渠道模型限制：billing_model_source=upstream 时按账号上游模型过滤。
+		if s.service.isOpenAIAccountChannelRestricted(ctx, req.GroupID, account, req.RequestedModel, req.RequireCompact) {
+			continue
+		}
 		filtered = append(filtered, account)
 		loadReq = append(loadReq, AccountWithConcurrency{
 			ID:             account.ID,
@@ -1540,6 +1546,15 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 	requireCompact bool,
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
 	decision := OpenAIAccountScheduleDecision{}
+	// 渠道模型限制预检查（requested/channel_mapped 计费基准）。
+	// 高级调度器（defaultOpenAIAccountScheduler）自身不做该检查，必须在此统一拦截，
+	// 否则 openai_advanced_scheduler_enabled=true 时 restrict_models 会被静默绕过。
+	if s.checkChannelPricingRestriction(ctx, groupID, requestedModel) {
+		slog.Warn("channel pricing restriction blocked request",
+			"group_id", derefGroupID(groupID),
+			"model", requestedModel)
+		return nil, decision, fmt.Errorf("%w supporting model: %s (channel pricing restriction)", ErrNoAvailableAccounts, requestedModel)
+	}
 	if selection, accountModeDecision, handled, err := s.selectAccountShareModeBoundAccount(ctx, groupID, requestedModel, excludedIDs, requiredTransport, requiredImageCapability, requiredEndpointCapability, requireCompact); handled {
 		return selection, accountModeDecision, wrapAccountShareModeSelectionError(err)
 	}
