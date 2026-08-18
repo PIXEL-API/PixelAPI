@@ -203,6 +203,25 @@ describe('BulkEditAccountModal', () => {
     })
   })
 
+  it('个人账号侧 OAuth 账号清空白名单应提交空 model_mapping 而不是被清洗掉', async () => {
+    const wrapper = mountModal({
+      accountScope: 'user',
+      selectedPlatforms: ['openai'],
+      selectedTypes: ['oauth']
+    })
+
+    await wrapper.get('#bulk-edit-model-restriction-enabled').setValue(true)
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(accountsAPI.bulkUpdate).toHaveBeenCalledTimes(1)
+    expect(accountsAPI.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      credentials: {
+        model_mapping: {}
+      }
+    })
+  })
+
   it('OpenAI 账号批量编辑可开启自动透传', async () => {
     const wrapper = mountModal({
       selectedPlatforms: ['openai'],

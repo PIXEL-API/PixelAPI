@@ -2022,7 +2022,6 @@ const sanitizeBulkUpdatePayload = (payload: Record<string, unknown>) => {
       delete credentials.model_mapping
     }
     if (isUserScope.value) {
-      delete credentials.model_mapping
       delete credentials.base_url
       delete credentials.header_override_enabled
       delete credentials.header_overrides
