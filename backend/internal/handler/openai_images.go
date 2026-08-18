@@ -179,7 +179,7 @@ routeLoop:
 				return
 			}
 			reqLog.Debug("openai.images.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
-			selectionCtx := openAIAccountShareModeRequestContext(c, currentAPIKey)
+			selectionCtx := service.WithOpenAIImagesEndpoint(openAIAccountShareModeRequestContext(c, currentAPIKey))
 			if decision := h.checkCyberPreflightWithContext(selectionCtx, c, reqLog, currentAPIKey, subject, service.ContentModerationProtocolOpenAIImages, parsed.Model, body); decision != nil && decision.Blocked {
 				h.handleStreamingAwareError(c, contentModerationStatus(decision), cyberPreflightErrorCode(decision), decision.Message, streamStarted)
 				return

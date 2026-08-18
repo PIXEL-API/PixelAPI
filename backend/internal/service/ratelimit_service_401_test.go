@@ -51,8 +51,12 @@ func (r *rateLimitAccountRepoStub) UpdateCredentials(ctx context.Context, id int
 	return nil
 }
 
-func (r *rateLimitAccountRepoStub) SetModelRateLimit(ctx context.Context, id int64, modelKey string, resetAt time.Time) error {
-	r.modelRateLimitCalls = append(r.modelRateLimitCalls, modelRateLimitCall{accountID: id, modelKey: modelKey, resetAt: resetAt})
+func (r *rateLimitAccountRepoStub) SetModelRateLimit(ctx context.Context, id int64, modelKey string, resetAt time.Time, reason ...string) error {
+	reasonStr := ""
+	if len(reason) > 0 {
+		reasonStr = reason[0]
+	}
+	r.modelRateLimitCalls = append(r.modelRateLimitCalls, modelRateLimitCall{accountID: id, modelKey: modelKey, resetAt: resetAt, reason: reasonStr})
 	return nil
 }
 

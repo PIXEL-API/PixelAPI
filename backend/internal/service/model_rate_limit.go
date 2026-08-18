@@ -4,12 +4,31 @@ import (
 	"context"
 	"strings"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 )
 
 const (
 	modelRateLimitsKey         = "model_rate_limits"
 	anthropicFableRateLimitKey = "claude-fable-5"
 )
+
+// WithOpenAIImagesEndpoint 标记请求从 /v1/images/* 专用生图端点入站。
+func WithOpenAIImagesEndpoint(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, ctxkey.OpenAIImagesEndpoint, true)
+}
+
+// OpenAIImagesEndpointFromContext 报告请求是否来自 /v1/images/*。
+func OpenAIImagesEndpointFromContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	enabled, ok := ctx.Value(ctxkey.OpenAIImagesEndpoint).(bool)
+	return ok && enabled
+}
 
 // isRateLimitActiveForKey 检查指定 key 的限流是否生效
 func (a *Account) isRateLimitActiveForKey(key string) bool {

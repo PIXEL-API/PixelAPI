@@ -416,8 +416,15 @@ func applyOpenAIImagesDefaults(req *OpenAIImagesRequest) {
 }
 
 func isOpenAIImageGenerationModel(model string) bool {
+	return IsGPTImageGenerationModel(model) || isGrokImageGenerationModel(model)
+}
+
+// IsGPTImageGenerationModel 识别 GPT 原生生图模型族（gpt-image-*）。
+// 与 isOpenAIImageGenerationModel 的区别：后者还包含 Grok 生图模型，
+// 本函数只覆盖 OpenAI 自家 gpt-image-* 前缀，供 Codex plan-gated 冷却守卫使用。
+func IsGPTImageGenerationModel(model string) bool {
 	model = strings.ToLower(strings.TrimSpace(model))
-	return strings.HasPrefix(model, "gpt-image-") || isGrokImageGenerationModel(model)
+	return strings.HasPrefix(model, "gpt-image-")
 }
 
 func isGrokImageGenerationModel(model string) bool {

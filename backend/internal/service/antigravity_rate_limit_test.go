@@ -75,6 +75,7 @@ type modelRateLimitCall struct {
 	accountID int64
 	modelKey  string // 存储的 key（应该是官方模型 ID，如 "claude-sonnet-4-5"）
 	resetAt   time.Time
+	reason    string // 冷却原因（404 model-not-found / 400 codex plan-gated 等）
 }
 
 type extraUpdateCall struct {
@@ -94,8 +95,12 @@ func (s *stubAntigravityAccountRepo) SetRateLimited(ctx context.Context, id int6
 	return nil
 }
 
-func (s *stubAntigravityAccountRepo) SetModelRateLimit(ctx context.Context, id int64, modelKey string, resetAt time.Time) error {
-	s.modelRateLimitCalls = append(s.modelRateLimitCalls, modelRateLimitCall{accountID: id, modelKey: modelKey, resetAt: resetAt})
+func (s *stubAntigravityAccountRepo) SetModelRateLimit(ctx context.Context, id int64, modelKey string, resetAt time.Time, reason ...string) error {
+	reasonStr := ""
+	if len(reason) > 0 {
+		reasonStr = reason[0]
+	}
+	s.modelRateLimitCalls = append(s.modelRateLimitCalls, modelRateLimitCall{accountID: id, modelKey: modelKey, resetAt: resetAt, reason: reasonStr})
 	return nil
 }
 

@@ -420,7 +420,7 @@ func (s *ownedAccountDuplicateRepoStub) SetRateLimited(context.Context, int64, t
 	panic("unexpected SetRateLimited call")
 }
 
-func (s *ownedAccountDuplicateRepoStub) SetModelRateLimit(context.Context, int64, string, time.Time) error {
+func (s *ownedAccountDuplicateRepoStub) SetModelRateLimit(context.Context, int64, string, time.Time, ...string) error {
 	panic("unexpected SetModelRateLimit call")
 }
 

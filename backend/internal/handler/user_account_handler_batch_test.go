@@ -156,7 +156,7 @@ func (s *userAccountBatchRepoStub) ListSchedulableUngroupedByPlatforms(context.C
 func (s *userAccountBatchRepoStub) SetRateLimited(context.Context, int64, time.Time) error {
 	panic("unexpected SetRateLimited call")
 }
-func (s *userAccountBatchRepoStub) SetModelRateLimit(context.Context, int64, string, time.Time) error {
+func (s *userAccountBatchRepoStub) SetModelRateLimit(context.Context, int64, string, time.Time, ...string) error {
 	panic("unexpected SetModelRateLimit call")
 }
 func (s *userAccountBatchRepoStub) SetOverloaded(context.Context, int64, time.Time) error {

@@ -93,6 +93,10 @@ const (
 	openAI403CounterWindowMinutes   = 180
 	upstreamModelNotFoundCooldown   = 30 * time.Minute
 
+	upstreamModelNotFoundReason         = "upstream_404_model_not_found"
+	upstreamCodexPlanGatedModelCooldown = 30 * time.Minute
+	upstreamCodexPlanGatedModelReason   = "upstream_400_codex_plan_gated_model"
+
 	// openAITransientCapacityCounterGrace 瞬时容量错误连续计数的宽限期。
 	// 上一次冷却结束后超过该时长才再次命中，视为新一轮上游波动，重新从最短档开始。
 	openAITransientCapacityCounterGrace = time.Minute
@@ -404,20 +408,52 @@ func (s *RateLimitService) handleUpstreamModelNotFound(ctx context.Context, acco
 	if !account.ShouldHandleErrorCode(statusCode) {
 		return false
 	}
-	if !isUpstreamModelNotFoundError(statusCode, responseBody) {
+	var cooldown time.Duration
+	var reason string
+	switch {
+	case isUpstreamModelNotFoundError(statusCode, responseBody):
+		cooldown, reason = upstreamModelNotFoundCooldown, upstreamModelNotFoundReason
+	case account.IsOpenAIOAuth() && isOpenAICodexPlanGatedModelError(statusCode, responseBody):
+		cooldown, reason = upstreamCodexPlanGatedModelCooldown, upstreamCodexPlanGatedModelReason
+	default:
 		return false
 	}
 	modelKey := modelRateLimitKeyForUpstreamModelNotFound(ctx, account, requestedModel)
 	if modelKey == "" {
 		return false
 	}
-	resetAt := time.Now().Add(upstreamModelNotFoundCooldown)
-	if err := s.accountRepo.SetModelRateLimit(ctx, account.ID, modelKey, resetAt); err != nil {
-		slog.Warn("upstream_model_not_found_set_model_rate_limit_failed", "account_id", account.ID, "model", modelKey, "error", err)
+	if shouldSkipCodexPlanGatedImageModelCooldown(ctx, reason, requestedModel, modelKey) {
 		return true
 	}
-	slog.Info("upstream_model_not_found_model_rate_limited", "account_id", account.ID, "model", modelKey, "reset_at", resetAt)
+	resetAt := time.Now().Add(cooldown)
+	if err := s.accountRepo.SetModelRateLimit(ctx, account.ID, modelKey, resetAt, reason); err != nil {
+		slog.Warn("upstream_model_not_found_set_model_rate_limit_failed", "account_id", account.ID, "model", modelKey, "reason", reason, "error", err)
+		return true
+	}
+	slog.Info("upstream_model_not_found_model_rate_limited", "account_id", account.ID, "model", modelKey, "reason", reason, "reset_at", resetAt)
 	return true
+}
+
+// shouldSkipCodexPlanGatedImageModelCooldown 判断这次 Codex plan-gated 400 是否属于
+// "图片模型被文本端点拒绝"。
+//
+// 这类错误是确定性的端点错配，不是账号能力缺失：同一账号通过 /v1/images/* 依然能出图。
+// 在这里写 per-model 冷却，会让一次用错端点的请求把整个号池对正确的生图端点下线。
+//
+// 但请求本身就从 /v1/images/* 入站时不适用——那种情况下被拒说明账号确实不具备该模型
+// 能力，冷却是必要的刹车：没有它，每个生图请求都会完整走一遍号池，对上游形成无上界的
+// 400 放大。
+//
+// 请求模型与最终冷却键都要判：冷却键走的是 account.GetMappedModel，账号可能把文本别名
+// 映射到 gpt-image-*，只判请求模型会漏掉这种形态。
+func shouldSkipCodexPlanGatedImageModelCooldown(ctx context.Context, reason, requestedModel, modelKey string) bool {
+	if reason != upstreamCodexPlanGatedModelReason {
+		return false
+	}
+	if OpenAIImagesEndpointFromContext(ctx) {
+		return false
+	}
+	return IsGPTImageGenerationModel(requestedModel) || IsGPTImageGenerationModel(modelKey)
 }
 
 func isUpstreamModelNotFoundError(statusCode int, body []byte) bool {
@@ -431,6 +467,27 @@ func isUpstreamModelNotFoundError(statusCode int, body []byte) bool {
 	return strings.Contains(normalized, "model not found") ||
 		strings.Contains(normalized, "unknown model") ||
 		strings.Contains(normalized, "not found")
+}
+
+// openAICodexPlanGatedModelPhrase 匹配 ChatGPT OAuth 账号因套餐不含某模型而确定性返回的
+// Codex 400，例如 {"detail":"The 'gpt-5.6-sol' model is not supported when using Codex
+// with a ChatGPT account."}。短语针对 normalizeModelNotFoundBody 归一化后的 body
+// （小写、"_"/"-" 折叠为空格）做子串匹配，因此也能命中 error.message 风格的载荷。
+const openAICodexPlanGatedModelPhrase = "model is not supported when using codex"
+
+// isOpenAICodexPlanGatedModelError 判断上游响应是否为 ChatGPT OAuth 账号对
+// plan-gated 模型的确定性 Codex 400 拒绝。与瞬时故障不同，同一账号重试永远不可能
+// 成功，直到账号套餐变化为止；调用方应把它当作 model-not-found 处理，冷却
+// (account, model) 对而不是反复重选同一个账号。
+func isOpenAICodexPlanGatedModelError(statusCode int, body []byte) bool {
+	if statusCode != http.StatusBadRequest {
+		return false
+	}
+	normalized := normalizeModelNotFoundBody(body)
+	if normalized == "" {
+		return false
+	}
+	return strings.Contains(normalized, openAICodexPlanGatedModelPhrase)
 }
 
 func normalizeModelNotFoundBody(body []byte) string {

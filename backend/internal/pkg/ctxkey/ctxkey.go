@@ -34,6 +34,12 @@ const (
 
 	// ThinkingEnabled 标识当前请求是否开启 thinking（用于 Antigravity 最终模型名推导与模型维度限流）
 	ThinkingEnabled Key = "ctx_thinking_enabled"
+
+	// OpenAIImagesEndpoint 标识请求从 /v1/images/* 专用生图端点入站。
+	// 用于区分"图片模型被文本端点拒绝（用错端点）"与"图片模型在生图端点被拒（账号确实
+	// 不具备生图能力）"，二者在 Codex plan-gated 冷却上的处理不同。
+	OpenAIImagesEndpoint Key = "ctx_openai_images_endpoint"
+
 	// Group 认证后的分组信息，由 API Key 认证中间件设置
 	Group Key = "ctx_group"
 
