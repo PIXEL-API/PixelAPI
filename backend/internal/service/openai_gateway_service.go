@@ -5119,6 +5119,10 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithReasoning(
 		}
 		streamInterval = resolveGrokStreamIdleTimeout(configuredSeconds)
 	}
+	keepaliveInterval := time.Duration(0)
+	if s.cfg != nil && s.cfg.Gateway.StreamKeepaliveInterval > 0 {
+		keepaliveInterval = time.Duration(s.cfg.Gateway.StreamKeepaliveInterval) * time.Second
+	}
 	var streamIdleTimer *time.Timer
 	var streamIdleCh <-chan time.Time
 	if streamInterval > 0 {
@@ -5126,6 +5130,17 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithReasoning(
 		streamIdleCh = streamIdleTimer.C
 		defer streamIdleTimer.Stop()
 	}
+	var keepaliveTicker *time.Ticker
+	var keepaliveCh <-chan time.Time
+	if keepaliveInterval > 0 {
+		keepaliveTicker = time.NewTicker(keepaliveInterval)
+		keepaliveCh = keepaliveTicker.C
+		defer keepaliveTicker.Stop()
+	}
+	// lastDownstreamWriteAt 记录最近一次向下游写入的时间，用于 keepalive 判定。
+	// 与 lastUpstreamReadAt（上游是否活跃）不同：preamble 事件被首输出暂存区缓冲，
+	// 上游虽持续吐数据但下游长时间无字节，仍需发心跳保活。
+	lastDownstreamWriteAt := time.Now()
 	var lastUpstreamReadAt atomic.Int64
 	lastUpstreamReadAt.Store(time.Now().UnixNano())
 	type passthroughScanEvent struct {
@@ -5246,6 +5261,24 @@ streamLoop:
 				startDisconnectedDrain()
 			}
 			return resultWithUsage(), errors.New("stream data interval timeout")
+		case <-keepaliveCh:
+			if clientDisconnected {
+				continue
+			}
+			if time.Since(lastDownstreamWriteAt) < keepaliveInterval {
+				continue
+			}
+			// 首输出前也要保活（长思考场景），先提交响应头（幂等），再发 SSE 注释心跳。
+			applyAttemptResponseHeaders()
+			if _, err := fmt.Fprint(w, ":\n\n"); err != nil {
+				clientDisconnected = true
+				startDisconnectedDrain()
+				s.stopUpstreamOnClientDisconnect(ctx, resp.Body)
+				s.legacyLogClientDisconnectDrainDecision(ctx, "[OpenAI passthrough] Client disconnected during keepalive, continue draining upstream for usage: account=%d", account.ID)
+				continue
+			}
+			flusher.Flush()
+			lastDownstreamWriteAt = time.Now()
 		}
 		lineStartsClientOutput := false
 		forceFlushFailedEvent := false
@@ -5403,6 +5436,7 @@ streamLoop:
 			} else {
 				clientOutputStarted = true
 				flushPending = true
+				lastDownstreamWriteAt = time.Now()
 				if line == "" {
 					flushPendingOutput()
 				}
