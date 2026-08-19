@@ -506,6 +506,22 @@ func DefaultOverloadCooldownSettings() *OverloadCooldownSettings {
 	}
 }
 
+// RateLimit429CooldownSettings 429默认回避配置
+type RateLimit429CooldownSettings struct {
+	// Enabled 是否在无法解析上游重置时间时应用默认429回避
+	Enabled bool `json:"enabled"`
+	// CooldownSeconds 默认回避时长（秒）
+	CooldownSeconds int `json:"cooldown_seconds"`
+}
+
+// DefaultRateLimit429CooldownSettings 返回默认的429回避配置（启用，5秒）
+func DefaultRateLimit429CooldownSettings() *RateLimit429CooldownSettings {
+	return &RateLimit429CooldownSettings{
+		Enabled:         true,
+		CooldownSeconds: 5,
+	}
+}
+
 // DefaultBetaPolicySettings 返回默认的 Beta 策略配置。
 // Sonnet 5 的直连、Vertex 和 Bedrock 模型 ID 默认允许 1M context beta；
 // 其他模型继续过滤，避免把不受支持的 beta 透传到上游。
