@@ -365,6 +365,24 @@ func buildOpenAIMessagesURL(base string) string {
 	return normalized + "/v1/messages"
 }
 
+// anthropicInputTokensToOpenAI 把 Anthropic /messages 的 input_tokens 归一化为 OpenAI 语义
+// （InputTokens 含缓存），与 openAIUsageTokens 的减法口径一致。
+//
+// opencode 平台对不同上游模型返回的 input_tokens 语义不一致：国产模型（deepseek/qwen/kimi/
+// minimax/glm）返回 Anthropic 语义（input_tokens 与 cache_read/cache_creation 互斥，只含未命中
+// 缓存的新增）；OpenAI 模型（gpt-5.6-luna）返回 OpenAI 语义（input_tokens 已含 cache_read）。
+//
+// 仅当 cache_read > input_tokens 时判定为 Anthropic 语义（OpenAI 语义下 input_tokens 恒 ≥
+// cache_read），此时折叠 cache 回 InputTokens。对 OpenAI 语义不折叠，避免缓存被重复计数导致多计费。
+// 该启发式只修复"历史 > 新增"（多轮会话主流）的少计费；新增 ≥ 历史的少量 Anthropic 请求仍保守地
+// 少计，宁可少计也不多计。
+func anthropicInputTokensToOpenAI(inputTokens, cacheRead, cacheCreation int) int {
+	if cacheRead > inputTokens {
+		return inputTokens + cacheRead + cacheCreation
+	}
+	return inputTokens
+}
+
 // openAIUsageFromAnthropicMessagesPayload 解析非流式 Anthropic Messages 响应的
 // 顶层 usage，映射到 OpenAIUsage 计费结构。
 func openAIUsageFromAnthropicMessagesPayload(payload string) *OpenAIUsage {
@@ -375,11 +393,14 @@ func openAIUsageFromAnthropicMessagesPayload(payload string) *OpenAIUsage {
 	if !usageResult.Exists() || !usageResult.IsObject() {
 		return nil
 	}
+	cacheReadInputTokens := int(usageResult.Get("cache_read_input_tokens").Int())
+	cacheCreationInputTokens := int(usageResult.Get("cache_creation_input_tokens").Int())
 	return &OpenAIUsage{
-		InputTokens:              int(usageResult.Get("input_tokens").Int()),
+		InputTokens: anthropicInputTokensToOpenAI(
+			int(usageResult.Get("input_tokens").Int()), cacheReadInputTokens, cacheCreationInputTokens),
 		OutputTokens:             int(usageResult.Get("output_tokens").Int()),
-		CacheCreationInputTokens: int(usageResult.Get("cache_creation_input_tokens").Int()),
-		CacheReadInputTokens:     int(usageResult.Get("cache_read_input_tokens").Int()),
+		CacheCreationInputTokens: cacheCreationInputTokens,
+		CacheReadInputTokens:     cacheReadInputTokens,
 	}
 }
 
@@ -390,23 +411,30 @@ func mergeAnthropicStreamUsageInto(payload string, usage *OpenAIUsage) {
 		return
 	}
 	if msgUsage := gjson.Get(payload, "message.usage"); msgUsage.Exists() && msgUsage.IsObject() {
-		usage.InputTokens = int(msgUsage.Get("input_tokens").Int())
-		usage.CacheCreationInputTokens = int(msgUsage.Get("cache_creation_input_tokens").Int())
-		usage.CacheReadInputTokens = int(msgUsage.Get("cache_read_input_tokens").Int())
+		cacheRead := int(msgUsage.Get("cache_read_input_tokens").Int())
+		cacheCreation := int(msgUsage.Get("cache_creation_input_tokens").Int())
+		usage.InputTokens = anthropicInputTokensToOpenAI(int(msgUsage.Get("input_tokens").Int()), cacheRead, cacheCreation)
+		usage.CacheCreationInputTokens = cacheCreation
+		usage.CacheReadInputTokens = cacheRead
 	}
 	if deltaUsage := gjson.Get(payload, "usage"); deltaUsage.Exists() && deltaUsage.IsObject() {
 		// opencode 在 message_delta 的顶层 usage 里给完整用量（input/output/cache）。
+		// cache 桶缺失时沿用已累计值，保证 InputTokens 折叠口径一致。
+		cacheRead := usage.CacheReadInputTokens
+		if v := deltaUsage.Get("cache_read_input_tokens"); v.Exists() {
+			cacheRead = int(v.Int())
+		}
+		cacheCreation := usage.CacheCreationInputTokens
+		if v := deltaUsage.Get("cache_creation_input_tokens"); v.Exists() {
+			cacheCreation = int(v.Int())
+		}
 		if in := deltaUsage.Get("input_tokens"); in.Exists() {
-			usage.InputTokens = int(in.Int())
+			usage.InputTokens = anthropicInputTokensToOpenAI(int(in.Int()), cacheRead, cacheCreation)
 		}
 		if out := deltaUsage.Get("output_tokens"); out.Exists() {
 			usage.OutputTokens = int(out.Int())
 		}
-		if cacheRead := deltaUsage.Get("cache_read_input_tokens"); cacheRead.Exists() {
-			usage.CacheReadInputTokens = int(cacheRead.Int())
-		}
-		if cacheCreation := deltaUsage.Get("cache_creation_input_tokens"); cacheCreation.Exists() {
-			usage.CacheCreationInputTokens = int(cacheCreation.Int())
-		}
+		usage.CacheReadInputTokens = cacheRead
+		usage.CacheCreationInputTokens = cacheCreation
 	}
 }
