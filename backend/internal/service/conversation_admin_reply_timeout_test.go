@@ -45,7 +45,7 @@ func TestConversationAdminReplyTimeoutServiceRunOnceUsesConfiguredBoundary(t *te
 
 	repo.mu.Lock()
 	defer repo.mu.Unlock()
-	require.Equal(t, []time.Time{now.Add(-12 * time.Hour)}, repo.cutoffs)
+	require.Equal(t, []time.Time{now.Add(-AdminReplyTimeout)}, repo.cutoffs)
 	require.Equal(t, []int{100}, repo.limits)
 	require.Equal(t, []string{AdminReplyTimeoutNoticeText}, repo.content)
 }

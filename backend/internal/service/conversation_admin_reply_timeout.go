@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	AdminReplyTimeout             = 12 * time.Hour
+	AdminReplyTimeout             = 4 * time.Hour
 	AdminReplyTimeoutNoticeSource = "admin_reply_timeout"
 	AdminReplyTimeoutNoticeText   = "管理员超时未回复请加群咨询或联系群主！"
 
