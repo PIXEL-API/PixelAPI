@@ -17,6 +17,7 @@ import type {
   AccountUsageInfo,
   AccountUsageStatsResponse,
   AdminDataPayload,
+  ClaudeModel,
   CreateAccountRequest,
   OpenAIQuotaResetResult,
   OpenAIQuotaUsage,
@@ -111,6 +112,15 @@ export async function list(
 
 export async function getById(id: number): Promise<Account> {
   const { data } = await apiClient.get<Account>(`/accounts/${id}`)
+  return data
+}
+
+/**
+ * 获取账号「测试连接」可选模型列表，与管理员端保持同一口径。
+ * @param id - Account ID
+ */
+export async function getAvailableModels(id: number): Promise<ClaudeModel[]> {
+  const { data } = await apiClient.get<ClaudeModel[]>(`/accounts/${id}/models`)
   return data
 }
 
@@ -720,6 +730,7 @@ export async function refreshAntigravityToken(
 export const accountsAPI = {
   list,
   getById,
+  getAvailableModels,
   getQuotaDashboard,
   create,
   importAccount,

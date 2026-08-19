@@ -188,15 +188,10 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import Select from '@/components/common/Select.vue'
 import { Icon } from '@/components/icons'
 import { useClipboard } from '@/composables/useClipboard'
+import { accountsAPI } from '@/api'
 import { adminAPI } from '@/api/admin'
 import type { Account, ClaudeModel } from '@/types'
-import {
-  DEFAULT_GROK_TEST_MODEL,
-  DEFAULT_OPENAI_TEST_MODEL,
-  DEFAULT_OPENCODE_TEST_MODEL,
-  prepareAccountTestModels,
-  selectDefaultAccountTestModel
-} from '@/utils/accountTestModels'
+import { prepareAccountTestModels, selectDefaultAccountTestModel } from '@/utils/accountTestModels'
 
 const { t } = useI18n()
 const { copyToClipboard } = useClipboard()
@@ -258,7 +253,7 @@ const loadAvailableModels = async () => {
   selectedModelId.value = '' // Reset selection before loading
   try {
     const models = isUserScope.value
-      ? getUserDefaultTestModels(props.account)
+      ? await accountsAPI.getAvailableModels(props.account.id)
       : await adminAPI.accounts.getAvailableModels(props.account.id)
     availableModels.value = prepareAccountTestModels(models, props.account.platform)
     selectedModelId.value = selectDefaultAccountTestModel(
@@ -272,24 +267,6 @@ const loadAvailableModels = async () => {
     selectedModelId.value = ''
   } finally {
     loadingModels.value = false
-  }
-}
-
-const getUserDefaultTestModels = (account: Account): ClaudeModel[] => {
-  switch (account.platform) {
-    case 'openai':
-      return [{ id: DEFAULT_OPENAI_TEST_MODEL, type: 'model', display_name: DEFAULT_OPENAI_TEST_MODEL, created_at: '' }]
-    case 'gemini':
-    case 'antigravity':
-      return [{ id: 'gemini-2.5-flash', type: 'model', display_name: 'gemini-2.5-flash', created_at: '' }]
-    case 'grok':
-      return [{ id: DEFAULT_GROK_TEST_MODEL, type: 'model', display_name: DEFAULT_GROK_TEST_MODEL, created_at: '' }]
-    case 'opencode':
-      return [{ id: DEFAULT_OPENCODE_TEST_MODEL, type: 'model', display_name: DEFAULT_OPENCODE_TEST_MODEL, created_at: '' }]
-    case 'anthropic':
-      return [{ id: 'claude-sonnet-4-5-20250929', type: 'model', display_name: 'Claude Sonnet 4.5', created_at: '' }]
-    default:
-      throw new Error(`Unsupported account platform: ${account.platform}`)
   }
 }
 

@@ -150,6 +150,7 @@ func RegisterUserRoutes(
 			accounts.GET("/batch-tasks/:task_id", h.UserAccount.GetBatchTask)
 			accounts.POST("/external-placement:convert-batch", h.UserAccount.ConvertExternalPlacementBatch)
 			accounts.POST("/:id/test", h.UserAccount.Test)
+			accounts.GET("/:id/models", h.UserAccount.GetAvailableModels)
 			accounts.POST("/:id/recover-state", h.UserAccount.RecoverState)
 			accounts.POST("/:id/refresh", h.UserAccount.Refresh)
 			accounts.POST("/:id/set-privacy", h.UserAccount.SetPrivacy)

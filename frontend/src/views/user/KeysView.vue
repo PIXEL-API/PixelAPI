@@ -1987,25 +1987,28 @@ const onStatusFilterChange = (value: string | number | boolean | null) => {
   onFilterChange()
 }
 
-// Convert groups to Select options format with rate multiplier and subscription type
+// Convert groups to Select options format with rate multiplier and subscription type.
+// 私有分组（user_private）稳定沉底，其余保持后端 sort_order 顺序（依赖 Array.sort 的稳定性）。
 const groupOptions = computed<GroupOption[]>(() =>
-  groups.value.map((group) => {
-    const fallbackUserRate = userGroupRates.value[group.id] ?? null
-    return {
-      value: group.id,
-      label: group.name,
-      description: group.description,
-      rate: group.rate_multiplier,
-      userRate: fallbackUserRate,
-      effectiveRate: group.effective_rate_multiplier ?? fallbackUserRate,
-      rateSource: group.effective_rate_multiplier_source ?? (fallbackUserRate != null ? 'user_group' : 'group_default'),
-      subscriptionType: group.subscription_type,
-      platform: group.platform,
-      scope: group.scope,
-      apiKeyBadgeType: group.api_key_badge_type,
-      apiKeyBadgeText: group.api_key_badge_text
-    }
-  })
+  groups.value
+    .map((group) => {
+      const fallbackUserRate = userGroupRates.value[group.id] ?? null
+      return {
+        value: group.id,
+        label: group.name,
+        description: group.description,
+        rate: group.rate_multiplier,
+        userRate: fallbackUserRate,
+        effectiveRate: group.effective_rate_multiplier ?? fallbackUserRate,
+        rateSource: group.effective_rate_multiplier_source ?? (fallbackUserRate != null ? 'user_group' : 'group_default'),
+        subscriptionType: group.subscription_type,
+        platform: group.platform,
+        scope: group.scope,
+        apiKeyBadgeType: group.api_key_badge_type,
+        apiKeyBadgeText: group.api_key_badge_text
+      }
+    })
+    .sort((a, b) => (a.scope === 'user_private' ? 1 : 0) - (b.scope === 'user_private' ? 1 : 0))
 )
 
 // 平台隔离：同一把 Key 的多条路由必须落在同一平台。第一条选定分组的平台即锁定整条链，

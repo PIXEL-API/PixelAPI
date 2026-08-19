@@ -3,8 +3,9 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { defineComponent } from 'vue'
 import AccountTestModal from '../AccountTestModal.vue'
 
-const { getAvailableModelsMock } = vi.hoisted(() => ({
-  getAvailableModelsMock: vi.fn()
+const { getAvailableModelsMock, userGetAvailableModelsMock } = vi.hoisted(() => ({
+  getAvailableModelsMock: vi.fn(),
+  userGetAvailableModelsMock: vi.fn()
 }))
 
 vi.mock('@/api/admin', () => ({
@@ -12,6 +13,12 @@ vi.mock('@/api/admin', () => ({
     accounts: {
       getAvailableModels: getAvailableModelsMock
     }
+  }
+}))
+
+vi.mock('@/api', () => ({
+  accountsAPI: {
+    getAvailableModels: userGetAvailableModelsMock
   }
 }))
 
@@ -103,6 +110,11 @@ describe('AccountTestModal', () => {
       { id: 'gpt-5.5', display_name: 'GPT-5.5' },
       { id: 'gpt-5.4', display_name: 'GPT-5.4' }
     ])
+    userGetAvailableModelsMock.mockReset()
+    userGetAvailableModelsMock.mockResolvedValue([
+      { id: 'gpt-5.5', display_name: 'GPT-5.5' },
+      { id: 'gpt-5.4', display_name: 'GPT-5.4' }
+    ])
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       body: {
@@ -179,12 +191,17 @@ describe('AccountTestModal', () => {
   })
 
   it.each([
-    ['anthropic', 'claude-sonnet-4-5-20250929'],
-    ['openai', 'gpt-5.5'],
-    ['gemini', 'gemini-2.5-flash'],
-    ['antigravity', 'gemini-2.5-flash'],
-    ['grok', 'grok-4.5']
-  ])('uses the correct %s model for user-scoped account tests', async (platform, expectedModel) => {
+    ['anthropic'],
+    ['openai'],
+    ['gemini'],
+    ['antigravity'],
+    ['grok']
+  ])('loads a multi-select model list from the user API for %s accounts', async (platform) => {
+    userGetAvailableModelsMock.mockResolvedValue([
+      { id: 'model-a', type: 'model', display_name: 'Model A', created_at: '' },
+      { id: 'model-b', type: 'model', display_name: 'Model B', created_at: '' }
+    ])
+
     const wrapper = mount(AccountTestModal, {
       props: {
         show: false,
@@ -208,11 +225,13 @@ describe('AccountTestModal', () => {
     await wrapper.setProps({ show: true })
     await flushPromises()
 
+    expect(userGetAvailableModelsMock).toHaveBeenCalledWith(1)
     expect(getAvailableModelsMock).not.toHaveBeenCalled()
     expect((wrapper.vm as any).availableModels).toEqual([
-      expect.objectContaining({ id: expectedModel })
+      expect.objectContaining({ id: 'model-a' }),
+      expect.objectContaining({ id: 'model-b' })
     ])
-    expect((wrapper.vm as any).selectedModelId).toBe(expectedModel)
+    expect((wrapper.vm as any).selectedModelId).toBe('model-a')
 
     await (wrapper.vm as any).startTest()
     await flushPromises()
@@ -221,7 +240,7 @@ describe('AccountTestModal', () => {
     const [url, options] = (global.fetch as any).mock.calls[0]
     expect(url).toBe('/api/v1/accounts/1/test')
     expect(JSON.parse(options.body)).toMatchObject({
-      model_id: expectedModel,
+      model_id: 'model-a',
       mode: 'default'
     })
   })

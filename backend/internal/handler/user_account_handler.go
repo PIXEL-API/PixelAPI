@@ -2224,6 +2224,34 @@ func (h *UserAccountHandler) Test(c *gin.Context) {
 	}
 }
 
+// GetAvailableModels handles getting available models for a user-owned account.
+// GET /api/v1/accounts/:id/models
+// 复用 service.AvailableTestModels，与管理员端「测试连接」模型列表保持同一口径。
+func (h *UserAccountHandler) GetAvailableModels(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	account, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	models, supported := service.AvailableTestModels(account)
+	if !supported {
+		response.BadRequest(c, "Unsupported account platform: "+account.Platform)
+		return
+	}
+	response.Success(c, models)
+}
+
 func (h *UserAccountHandler) RecoverState(c *gin.Context) {
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
