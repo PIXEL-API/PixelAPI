@@ -276,12 +276,16 @@ const roomDisplayName = computed(() => (
 
 const roomPlatform = computed<AccountPlatform>(() => {
   const platform = props.listing?.platform
-  return platform === 'anthropic' ? 'anthropic' : 'openai'
+  if (platform === 'anthropic') return 'anthropic'
+  if (platform === 'opencode') return 'opencode'
+  return 'openai'
 })
 
-const roomPlatformLabel = computed(() => (
-  roomPlatform.value === 'anthropic' ? 'Anthropic' : 'OpenAI'
-))
+const roomPlatformLabel = computed(() => {
+  if (roomPlatform.value === 'anthropic') return 'Anthropic'
+  if (roomPlatform.value === 'opencode') return 'Opencode'
+  return 'OpenAI'
+})
 
 const roomAccountLevel = computed(() => (
   typeof props.listing?.account_level === 'string' && props.listing.account_level.trim()

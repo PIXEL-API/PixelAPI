@@ -1283,6 +1283,11 @@ export interface Account {
   codex_7d_limit_percent?: number | null;
   codex_quota_protection_reason?: "5h" | "7d" | string | null;
   codex_quota_protection_reset_at?: string | null;
+  opencode_5h_limit_percent?: number | null;
+  opencode_7d_limit_percent?: number | null;
+  opencode_30d_limit_percent?: number | null;
+  opencode_quota_protection_reason?: "5h" | "7d" | "30d" | string | null;
+  opencode_quota_protection_reset_at?: string | null;
   temp_unschedulable_until: string | null;
   temp_unschedulable_reason: string | null;
 
@@ -1373,6 +1378,7 @@ export interface AccountQuotaSummary {
   schedulable_account_count: number;
   rate_limited_account_count: number;
   codex_quota_protected_account_count: number;
+  opencode_quota_protected_account_count: number;
   error_account_count: number;
   disabled_account_count: number;
   quota_account_count: number;
@@ -1393,6 +1399,7 @@ export interface AccountQuotaGroupSummary {
   schedulable_account_count: number;
   rate_limited_account_count: number;
   codex_quota_protected_account_count: number;
+  opencode_quota_protected_account_count: number;
   error_account_count: number;
   disabled_account_count: number;
   quota_account_count: number;

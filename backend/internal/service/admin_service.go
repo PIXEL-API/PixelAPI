@@ -441,8 +441,9 @@ type BulkUpdateAccountResult struct {
 	Error     string `json:"error,omitempty"`
 	// Reason 携带结构化错误码（如 OWNED_ACCOUNT_PUBLIC_VALIDATION_FAILED），
 	// 供前端按错误码映射中文文案。Error 保留兼容：历史调用方只读 error 字符串。
-	Reason  string `json:"reason,omitempty"`
-	Message string `json:"message,omitempty"`
+	Reason   string            `json:"reason,omitempty"`
+	Message  string            `json:"message,omitempty"`
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 // AdminUpdateAPIKeyGroupIDResult is the result of AdminUpdateAPIKeyGroupID.

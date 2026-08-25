@@ -25,6 +25,9 @@ vi.mock('@/api/admin', () => ({
     accounts: {
       bulkUpdate: vi.fn(),
       checkMixedChannelRisk: vi.fn()
+    },
+    channels: {
+      getPricedModelOptions: vi.fn()
     }
   }
 }))
@@ -32,7 +35,8 @@ vi.mock('@/api/admin', () => ({
 vi.mock('@/api/accounts', () => ({
   accountsAPI: {
     bulkUpdate: vi.fn(),
-    convertExternalPlacementBatch: vi.fn()
+    convertExternalPlacementBatch: vi.fn(),
+    getModelOptions: vi.fn()
   }
 }))
 
@@ -133,8 +137,10 @@ describe('BulkEditAccountModal', () => {
     setActivePinia(createPinia())
     vi.mocked(adminAPI.accounts.bulkUpdate).mockReset()
     vi.mocked(adminAPI.accounts.checkMixedChannelRisk).mockReset()
+    vi.mocked(adminAPI.channels.getPricedModelOptions).mockReset()
     vi.mocked(accountsAPI.bulkUpdate).mockReset()
     vi.mocked(accountsAPI.convertExternalPlacementBatch).mockReset()
+    vi.mocked(accountsAPI.getModelOptions).mockReset()
 
     vi.mocked(adminAPI.accounts.bulkUpdate).mockResolvedValue({
       success: 2,
@@ -144,6 +150,12 @@ describe('BulkEditAccountModal', () => {
     vi.mocked(adminAPI.accounts.checkMixedChannelRisk).mockResolvedValue({
       has_risk: false
     } as any)
+    vi.mocked(adminAPI.channels.getPricedModelOptions).mockResolvedValue({
+      models: [
+        'gemini-3.1-flash-image',
+        'gemini-2.5-flash-image'
+      ]
+    })
     vi.mocked(accountsAPI.bulkUpdate).mockResolvedValue({
       success: 2,
       failed: 0,
@@ -159,6 +171,9 @@ describe('BulkEditAccountModal', () => {
         { account_id: 2, success: true }
       ]
     } as any)
+    vi.mocked(accountsAPI.getModelOptions).mockResolvedValue({
+      models: ['gpt-5.2', 'gpt-5.2-2025-12-11']
+    })
   })
 
   it('antigravity 白名单包含 Gemini 图片模型且过滤掉普通 GPT 模型', async () => {
@@ -171,6 +186,16 @@ describe('BulkEditAccountModal', () => {
     expect(wrapper.text()).toContain('gemini-3.1-flash-image')
     expect(wrapper.text()).toContain('gemini-2.5-flash-image')
     expect(wrapper.text()).not.toContain('gpt-5.3-codex')
+  })
+
+  it('明确选中多个账号时只使用渠道定价模型', async () => {
+    const wrapper = mountModal({ accountIds: [1, 2, 3] })
+    await flushPromises()
+
+    const selector = wrapper.findComponent(ModelWhitelistSelector)
+    await selector.find('div.cursor-pointer').trigger('click')
+    expect(wrapper.text()).toContain('gemini-3.1-flash-image')
+    expect(wrapper.text()).toContain('gemini-2.5-flash-image')
   })
 
   it('antigravity 映射预设包含图片映射并过滤 OpenAI 预设', async () => {
@@ -203,23 +228,58 @@ describe('BulkEditAccountModal', () => {
     })
   })
 
-  it('个人账号侧 OAuth 账号清空白名单应提交空 model_mapping 而不是被清洗掉', async () => {
+  it('个人账号侧 OAuth 账号白名单为空时阻止批量提交', async () => {
     const wrapper = mountModal({
       accountScope: 'user',
       selectedPlatforms: ['openai'],
       selectedTypes: ['oauth']
     })
+    await flushPromises()
 
     await wrapper.get('#bulk-edit-model-restriction-enabled').setValue(true)
     await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
     await flushPromises()
 
-    expect(accountsAPI.bulkUpdate).toHaveBeenCalledTimes(1)
+    expect(accountsAPI.bulkUpdate).not.toHaveBeenCalled()
+  })
+
+  it('个人账号侧仅允许从同平台渠道定价并集中选择并提交身份白名单', async () => {
+    const wrapper = mountModal({
+      accountScope: 'user',
+      selectedPlatforms: ['openai'],
+      selectedTypes: ['oauth']
+    })
+    await flushPromises()
+
+    expect(accountsAPI.getModelOptions).toHaveBeenCalledWith('openai')
+    const selector = wrapper.findComponent(ModelWhitelistSelector)
+    expect(selector.props('allowCustom')).toBe(false)
+    expect(selector.props('allowedOptions')).toEqual(['gpt-5.2', 'gpt-5.2-2025-12-11'])
+    selector.vm.$emit('update:modelValue', ['gpt-5.2'])
+    await wrapper.vm.$nextTick()
+
+    await wrapper.get('#bulk-edit-model-restriction-enabled').setValue(true)
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
     expect(accountsAPI.bulkUpdate).toHaveBeenCalledWith([1, 2], {
       credentials: {
-        model_mapping: {}
+        model_mapping: { 'gpt-5.2': 'gpt-5.2' }
       }
     })
+  })
+
+  it('个人账号侧混合平台不提供模型批量编辑入口', async () => {
+    const wrapper = mountModal({
+      accountScope: 'user',
+      selectedPlatforms: ['openai', 'grok'],
+      selectedTypes: ['oauth']
+    })
+    await flushPromises()
+
+    expect(wrapper.find('#bulk-edit-model-restriction-enabled').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="bulk-user-model-same-platform-hint"]').exists()).toBe(true)
+    expect(accountsAPI.getModelOptions).not.toHaveBeenCalled()
   })
 
   it('OpenAI 账号批量编辑可开启自动透传', async () => {

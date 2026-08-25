@@ -22,6 +22,17 @@ func TestAccountServiceCreateOwnedRejectsUnsupportedPlatform(t *testing.T) {
 	require.ErrorIs(t, err, ErrAccountPlatformUnsupported)
 }
 
+func TestApplyOwnedPersonalAccountTemplatePreservesModelWhitelist(t *testing.T) {
+	credentials, _ := applyOwnedPersonalAccountTemplateToMaps(PlatformOpenAI, map[string]any{
+		"access_token": "token",
+		"model_mapping": map[string]any{
+			"selected-model": "selected-model",
+		},
+	}, nil)
+
+	require.Equal(t, map[string]any{"selected-model": "selected-model"}, credentials["model_mapping"])
+}
+
 func (s *ownedAccountGroupRepoStub) GetByID(_ context.Context, id int64) (*Group, error) {
 	group := s.groups[id]
 	if group == nil {
@@ -33,6 +44,21 @@ func (s *ownedAccountGroupRepoStub) GetByID(_ context.Context, id int64) (*Group
 
 type ownedAccountUserSubRepoStub struct {
 	active map[int64]*UserSubscription
+}
+
+type ownedPricedModelCatalogStub struct {
+	modelsByPlatform map[string][]string
+	err              error
+}
+
+func (s *ownedPricedModelCatalogStub) ListPricedModelIDs(_ context.Context, platforms []string) ([]string, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	if len(platforms) == 0 {
+		return nil, nil
+	}
+	return append([]string(nil), s.modelsByPlatform[platforms[0]]...), nil
 }
 
 func (s *ownedAccountUserSubRepoStub) GetActiveByUserIDAndGroupID(_ context.Context, userID, groupID int64) (*UserSubscription, error) {
@@ -1577,7 +1603,7 @@ func TestAccountServiceUpdateOwnedRejectsClearingRequiredProxy(t *testing.T) {
 	require.Empty(t, repo.updatedAccounts)
 }
 
-func TestAccountServiceUpdateOwnedPreservesPersonalAccountHiddenConfig(t *testing.T) {
+func TestAccountServiceUpdateOwnedReplacesModelWhitelistAndPreservesHiddenConfig(t *testing.T) {
 	ownerID := int64(101)
 	loadFactor := 8
 	repo := &ownedAccountDuplicateRepoStub{
@@ -1613,7 +1639,12 @@ func TestAccountServiceUpdateOwnedPreservesPersonalAccountHiddenConfig(t *testin
 			},
 		},
 	}
-	svc := &AccountService{accountRepo: repo}
+	svc := &AccountService{
+		accountRepo: repo,
+		pricedModelCatalog: &ownedPricedModelCatalogStub{modelsByPlatform: map[string][]string{
+			PlatformOpenAI: {"default-model"},
+		}},
+	}
 	nextName := "after"
 	nextConcurrency := 12
 	autoPause := true
@@ -1647,13 +1678,152 @@ func TestAccountServiceUpdateOwnedPreservesPersonalAccountHiddenConfig(t *testin
 	require.Equal(t, 8, *account.LoadFactor)
 	require.False(t, account.AutoPauseOnExpired)
 	require.Equal(t, 7, account.Priority)
-	require.Equal(t, map[string]any{"custom-model": "custom-target"}, account.Credentials["model_mapping"])
+	require.Equal(t, map[string]any{"default-model": "default-model"}, account.Credentials["model_mapping"])
 	require.Equal(t, map[string]any{"compact-model": "compact-target"}, account.Credentials["compact_model_mapping"])
 	require.Equal(t, OpenAICompactModeForceOff, account.Extra["openai_compact_mode"])
 	require.Equal(t, true, account.Extra["openai_passthrough"])
 	require.Equal(t, 60.0, account.Extra["codex_5h_limit_percent"])
 	require.Equal(t, 70.0, account.Extra["codex_7d_limit_percent"])
 	require.Equal(t, true, account.Extra["session_id_masking_enabled"])
+}
+
+func TestAccountServiceUpdateOwnedRejectsInvalidModelWhitelist(t *testing.T) {
+	ownerID := int64(101)
+	newService := func() *AccountService {
+		return &AccountService{
+			accountRepo: &ownedAccountDuplicateRepoStub{getByIDAccounts: map[int64]*Account{
+				2: {
+					ID:          2,
+					Platform:    PlatformOpenAI,
+					Type:        AccountTypeOAuth,
+					OwnerUserID: &ownerID,
+					Credentials: map[string]any{
+						"access_token":  "token",
+						"model_mapping": map[string]any{"allowed-model": "allowed-model"},
+					},
+					Status:      StatusActive,
+					Concurrency: ownedPersonalDefaultConcurrency,
+					Priority:    ownedPersonalDefaultPriority,
+				},
+			}},
+			pricedModelCatalog: &ownedPricedModelCatalogStub{modelsByPlatform: map[string][]string{
+				PlatformOpenAI: {"allowed-model"},
+			}},
+		}
+	}
+
+	tests := []struct {
+		name    string
+		mapping map[string]any
+		wantErr error
+	}{
+		{name: "empty", mapping: map[string]any{}, wantErr: ErrOwnedAccountModelMappingInvalid},
+		{name: "custom target", mapping: map[string]any{"allowed-model": "other-model"}, wantErr: ErrOwnedAccountModelMappingInvalid},
+		{name: "wildcard", mapping: map[string]any{"allowed-*": "allowed-*"}, wantErr: ErrOwnedAccountModelMappingInvalid},
+		{name: "outside priced union", mapping: map[string]any{"unknown-model": "unknown-model"}, wantErr: ErrOwnedAccountModelNotSelectable},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			credentials := map[string]any{"model_mapping": tt.mapping}
+			account, err := newService().UpdateOwned(context.Background(), ownerID, 2, UpdateAccountRequest{Credentials: &credentials})
+			require.Nil(t, account)
+			require.ErrorIs(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestAccountServiceBulkUpdateOwnedReplacesModelWhitelist(t *testing.T) {
+	ownerID := int64(101)
+	credentials := ownedAgentIdentityImportRequest(t, "team-bulk-model", "member-bulk-model", "runtime-bulk-model", "team").Credentials
+	credentials["model_mapping"] = map[string]any{"old-model": "old-model"}
+	account := &Account{
+		ID:           2,
+		Platform:     PlatformOpenAI,
+		Type:         AccountTypeOAuth,
+		AccountLevel: AccountLevelTeam,
+		OwnerUserID:  &ownerID,
+		Credentials:  credentials,
+		Extra:        map[string]any{},
+		Status:       StatusActive,
+		Schedulable:  true,
+		Concurrency:  ownedPersonalDefaultConcurrency,
+		Priority:     ownedPersonalDefaultPriority,
+	}
+	repo := &ownedAccountDuplicateRepoStub{
+		getByIDAccounts:  map[int64]*Account{2: account},
+		getByIDsAccounts: map[int64]*Account{2: account},
+	}
+	svc := &AccountService{
+		accountRepo: repo,
+		pricedModelCatalog: &ownedPricedModelCatalogStub{modelsByPlatform: map[string][]string{
+			PlatformOpenAI: {"new-model"},
+		}},
+	}
+
+	result, err := svc.BulkUpdateOwned(context.Background(), ownerID, &BulkUpdateOwnedAccountsInput{
+		AccountIDs: []int64{2},
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{"new-model": "new-model"},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Success)
+	require.Equal(t, 0, result.Failed)
+	require.NotEmpty(t, repo.updatedAccounts)
+	require.Equal(t, map[string]any{"new-model": "new-model"}, repo.updatedAccounts[len(repo.updatedAccounts)-1].Credentials["model_mapping"])
+}
+
+func TestAccountServiceBulkUpdateOwnedPersonalAccessTokenModelWhitelistOnly(t *testing.T) {
+	ownerID := int64(101)
+	account := &Account{
+		ID:           3,
+		Platform:     PlatformOpenAI,
+		Type:         AccountTypeOAuth,
+		AccountLevel: AccountLevelPlus,
+		OwnerUserID:  &ownerID,
+		Credentials: map[string]any{
+			"access_token":               "at-bulk-token",
+			"auth_mode":                  OpenAIAuthModePersonalAccessToken,
+			"openai_auth_mode":           "personal_access_token",
+			"token_type":                 "Bearer",
+			"email":                      "bulk@example.com",
+			"chatgpt_user_id":            "bulk-user",
+			"chatgpt_account_id":         "bulk-account",
+			"chatgpt_account_is_fedramp": false,
+			"plan_type":                  "plus",
+			"model_mapping":              map[string]any{"old-model": "old-model"},
+		},
+		Extra:       map[string]any{},
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: ownedPersonalDefaultConcurrency,
+		Priority:    ownedPersonalDefaultPriority,
+	}
+	repo := &ownedAccountDuplicateRepoStub{
+		getByIDAccounts:  map[int64]*Account{3: account},
+		getByIDsAccounts: map[int64]*Account{3: account},
+	}
+	svc := &AccountService{
+		accountRepo: repo,
+		pricedModelCatalog: &ownedPricedModelCatalogStub{modelsByPlatform: map[string][]string{
+			PlatformOpenAI: []string{"new-model"},
+		}},
+	}
+
+	result, err := svc.BulkUpdateOwned(context.Background(), ownerID, &BulkUpdateOwnedAccountsInput{
+		AccountIDs: []int64{3},
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{"new-model": "new-model"},
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Success)
+	require.Equal(t, 0, result.Failed)
+	require.NotEmpty(t, repo.updatedAccounts)
+	updated := repo.updatedAccounts[len(repo.updatedAccounts)-1]
+	require.Equal(t, map[string]any{"new-model": "new-model"}, updated.Credentials["model_mapping"])
+	require.Equal(t, "at-bulk-token", updated.GetCredential("access_token"))
 }
 
 func TestAccountServiceUpdateOwnedLoadFactorDebitsOnlyNewPaidCeiling(t *testing.T) {

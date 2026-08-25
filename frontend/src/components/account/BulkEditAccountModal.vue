@@ -220,7 +220,7 @@
 
           <template v-else>
             <!-- Mode Toggle -->
-            <div class="mb-4 flex gap-2">
+            <div v-if="!isUserScope" class="mb-4 flex gap-2">
               <button
                 type="button"
                 :class="[
@@ -274,7 +274,7 @@
             </div>
 
             <!-- Whitelist Mode -->
-            <div v-if="modelRestrictionMode === 'whitelist'">
+            <div v-if="isUserScope || modelRestrictionMode === 'whitelist'">
               <div class="mb-3 rounded-lg bg-blue-50 p-3 dark:bg-blue-900/20">
                 <p class="text-xs text-blue-700 dark:text-blue-400">
                   <svg
@@ -297,11 +297,44 @@
               <ModelWhitelistSelector
                 v-model="allowedModels"
                 :platforms="targetSelectedPlatforms"
+                :allowed-options="channelPricingModels ?? []"
+                :allow-custom="false"
               />
 
-              <p class="text-xs text-gray-500 dark:text-gray-400">
+              <p
+                v-if="channelPricingModelsLoading"
+                class="mt-2 text-xs text-gray-500 dark:text-gray-400"
+              >
+                {{ t(isUserScope ? 'admin.accounts.userModelOptionsLoading' : 'admin.accounts.pricedModelsLoading') }}
+              </p>
+              <p
+                v-else-if="channelPricingModelsLoadError"
+                class="mt-2 text-xs text-red-600 dark:text-red-400"
+                role="alert"
+              >
+                {{ t(
+                  isUserScope
+                    ? 'admin.accounts.userModelOptionsLoadFailed'
+                    : 'admin.accounts.pricedModelsLoadFailed',
+                  { message: channelPricingModelsLoadError }
+                ) }}
+              </p>
+              <p
+                v-else-if="channelPricingModels !== null && channelPricingModels.length === 0"
+                class="mt-2 text-xs text-amber-600 dark:text-amber-400"
+              >
+                {{ t(isUserScope ? 'admin.accounts.userModelOptionsEmpty' : 'admin.accounts.pricedModelsEmpty') }}
+              </p>
+
+              <p
+                v-if="isUserScope && allowedModels.length === 0"
+                class="mt-2 text-xs text-amber-600 dark:text-amber-400"
+              >
+                {{ t('admin.accounts.userModelSelectionRequired') }}
+              </p>
+              <p v-else class="mt-2 text-xs text-gray-500 dark:text-gray-400">
                 {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
-                <span v-if="allowedModels.length === 0">{{
+                <span v-if="!isUserScope && allowedModels.length === 0">{{
                   t('admin.accounts.supportsAllModels')
                 }}</span>
               </p>
@@ -413,6 +446,13 @@
             </div>
           </template>
         </div>
+      </div>
+      <div
+        v-else-if="isUserScope && userTargetTypesSupportModelRestriction"
+        class="border-t border-gray-200 pt-4 text-sm text-amber-600 dark:border-dark-600 dark:text-amber-400"
+        data-testid="bulk-user-model-same-platform-hint"
+      >
+        {{ t('admin.accounts.userModelSamePlatformRequired') }}
       </div>
 
       <!-- Custom error codes -->
@@ -1438,11 +1478,21 @@ const bulkEditableGroups = computed<AdminGroup[]>(() => {
     return !group.require_oauth_only || selectedTypesAllowOAuthOnlyGroups.value
   })
 })
+const userTargetTypesSupportModelRestriction = computed(
+  () => targetSelectedTypes.value.length > 0 && (
+    targetSelectedTypes.value.every(type => type === 'oauth' || type === 'setup-token') ||
+    (
+      targetSelectedPlatforms.value.length === 1 &&
+      targetSelectedPlatforms.value[0] === 'opencode' &&
+      targetSelectedTypes.value.every(type => type === 'apikey')
+    )
+  )
+)
 const canManageModelRestriction = computed(
-  () =>
-    !isUserScope.value ||
-    (targetSelectedTypes.value.length > 0 &&
-      targetSelectedTypes.value.every(type => type === 'oauth' || type === 'setup-token'))
+  () => !isUserScope.value || (
+    userTargetTypesSupportModelRestriction.value &&
+    targetSelectedPlatforms.value.length === 1
+  )
 )
 const canManageCustomErrorCodes = computed(() => !isUserScope.value)
 const canManageAccountLevel = computed(() => !isUserScope.value && targetIsKnownOpenAIOnly.value)
@@ -1575,6 +1625,67 @@ const placementForceConfirmDisabled = computed(() => placementForceReason.value.
 const baseUrl = ref('')
 const modelRestrictionMode = ref<'whitelist' | 'mapping'>('whitelist')
 const allowedModels = ref<string[]>([])
+const channelPricingModels = ref<string[] | null>(null)
+const channelPricingModelsLoading = ref(false)
+const channelPricingModelsLoadError = ref('')
+let channelPricingRequestVersion = 0
+
+const loadChannelPricingModels = async () => {
+  const requestVersion = ++channelPricingRequestVersion
+  channelPricingModelsLoadError.value = ''
+
+  const selectedPlatforms = targetSelectedPlatforms.value
+  if (!props.show || selectedPlatforms.length === 0 || (isUserScope.value && selectedPlatforms.length !== 1)) {
+    channelPricingModels.value = null
+    channelPricingModelsLoading.value = false
+    return
+  }
+
+  channelPricingModelsLoading.value = true
+  channelPricingModels.value = null
+  try {
+    const result = isUserScope.value
+      ? await accountsAPI.getModelOptions(selectedPlatforms[0])
+      : await adminAPI.channels.getPricedModelOptions(selectedPlatforms)
+    if (requestVersion !== channelPricingRequestVersion) return
+    channelPricingModels.value = Array.from(
+      new Set(
+        (result.models || [])
+          .map(model => model.trim())
+          .filter(Boolean)
+      )
+    )
+  } catch (error: any) {
+    if (requestVersion !== channelPricingRequestVersion) return
+    channelPricingModels.value = []
+    channelPricingModelsLoadError.value = error?.message || t(
+      isUserScope.value
+        ? 'admin.accounts.userModelOptionsLoadFailedDefault'
+        : 'admin.accounts.pricedModelsLoadFailedDefault'
+    )
+    appStore.showError(
+      t(
+        isUserScope.value
+          ? 'admin.accounts.userModelOptionsLoadFailed'
+          : 'admin.accounts.pricedModelsLoadFailed',
+        { message: channelPricingModelsLoadError.value }
+      )
+    )
+  } finally {
+    if (requestVersion === channelPricingRequestVersion) {
+      channelPricingModelsLoading.value = false
+    }
+  }
+}
+
+watch(
+  [() => props.show, isUserScope, targetMode, targetSelectedPlatforms],
+  () => {
+    void loadChannelPricingModels()
+  },
+  { immediate: true }
+)
+
 const modelMappings = ref<ModelMapping[]>([])
 const selectedErrorCodes = ref<number[]>([])
 const customErrorCodeInput = ref<number | null>(null)
@@ -1855,9 +1966,8 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
 
   if (canManageModelRestriction.value && enableModelRestriction.value && !isOpenAIModelRestrictionDisabled.value) {
     // 统一使用 model_mapping 字段
-    if (modelRestrictionMode.value === 'whitelist') {
+    if (isUserScope.value || modelRestrictionMode.value === 'whitelist') {
       // 白名单模式：将模型转换为 model_mapping 格式（key=value）
-      // 空白名单表示“支持所有模型”，需显式发送空对象以覆盖已有限制。
       const mapping: Record<string, string> = {}
       for (const m of allowedModels.value) {
         mapping[m] = m
@@ -2066,6 +2176,14 @@ const handleSubmit = async () => {
     appStore.showError(t('admin.accounts.bulkEdit.noSelection'))
     return
   }
+  if (
+    isUserScope.value &&
+    enableModelRestriction.value &&
+    targetSelectedPlatforms.value.length !== 1
+  ) {
+    appStore.showError(t('admin.accounts.userModelSamePlatformRequired'))
+    return
+  }
   const hasAnyFieldEnabled =
     (canManageBaseUrl.value && enableBaseUrl.value) ||
     enableOpenAIPassthrough.value ||
@@ -2093,6 +2211,31 @@ const handleSubmit = async () => {
   if (!hasAnyFieldEnabled) {
     appStore.showError(t('admin.accounts.bulkEdit.noFieldsSelected'))
     return
+  }
+
+  if (isUserScope.value && enableModelRestriction.value) {
+    if (channelPricingModelsLoading.value || channelPricingModels.value === null) {
+      appStore.showError(t('admin.accounts.userModelOptionsNotReady'))
+      return
+    }
+    if (channelPricingModelsLoadError.value) {
+      appStore.showError(
+        t('admin.accounts.userModelOptionsLoadFailed', { message: channelPricingModelsLoadError.value })
+      )
+      return
+    }
+    if (allowedModels.value.length === 0) {
+      appStore.showError(t('admin.accounts.userModelSelectionRequired'))
+      return
+    }
+    const allowedSet = new Set(channelPricingModels.value)
+    const invalidModels = allowedModels.value.filter(model => !allowedSet.has(model))
+    if (invalidModels.length > 0) {
+      appStore.showError(
+        t('admin.accounts.userModelSelectionInvalid', { models: invalidModels.join(', ') })
+      )
+      return
+    }
   }
 
   if (!isUserScope.value && allTargetsGrok.value && enableBaseUrl.value) {

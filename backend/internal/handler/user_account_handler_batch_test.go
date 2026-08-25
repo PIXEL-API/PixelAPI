@@ -336,7 +336,10 @@ func TestUserAccountHandlerExecuteBatchTestConnectionRecoversSuccessfulAccount(t
 				Type:        service.AccountTypeOAuth,
 				Status:      service.StatusError,
 				Concurrency: 1,
-				Credentials: map[string]any{"access_token": "test-token"},
+				Credentials: map[string]any{
+					"access_token":  "test-token",
+					"model_mapping": map[string]any{"gpt-5.4": "gpt-5.4"},
+				},
 			},
 		},
 	}
@@ -368,9 +371,10 @@ func TestUserAccountHandlerExecuteBatchTestConnectionRecoversSuccessfulAccount(t
 	require.Equal(t, []int64{1}, repo.clearedErrorIDs)
 }
 
-func TestUserAccountConnectionTestModelMatchesUserModalDefaults(t *testing.T) {
-	require.Equal(t, userGeminiDefaultTestModel, userAccountConnectionTestModel(&service.Account{Platform: service.PlatformGemini}))
-	require.Equal(t, userGeminiDefaultTestModel, userAccountConnectionTestModel(&service.Account{Platform: service.PlatformAntigravity}))
+func TestUserAccountConnectionTestModelUsesFirstSelectedModel(t *testing.T) {
+	require.Equal(t, "model-a", userAccountConnectionTestModel(&service.Account{
+		Credentials: map[string]any{"model_mapping": map[string]any{"model-b": "model-b", "model-a": "model-a"}},
+	}))
 	require.Empty(t, userAccountConnectionTestModel(&service.Account{Platform: service.PlatformOpenAI}))
 	require.Empty(t, userAccountConnectionTestModel(nil))
 }

@@ -11,6 +11,11 @@
       <span class="text-[11px] text-gray-400 dark:text-gray-500">{{ codexQuotaResumeText }}</span>
     </div>
 
+    <div v-else-if="isOpencodeQuotaProtected" class="flex flex-col items-center gap-1">
+      <span class="badge text-xs badge-warning">{{ t('admin.accounts.status.opencodeQuotaProtected') }}</span>
+      <span class="text-[11px] text-gray-400 dark:text-gray-500">{{ opencodeQuotaResumeText }}</span>
+    </div>
+
     <!-- Overload Display (529) - Two-line layout -->
     <div v-else-if="isOverloaded" class="flex flex-col items-center gap-1">
       <span class="badge text-xs badge-danger">{{ t('admin.accounts.status.overloaded') }}</span>
@@ -104,6 +109,23 @@
         class="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-56 -translate-x-1/2 whitespace-normal rounded bg-gray-900 px-3 py-2 text-center text-xs leading-relaxed text-white opacity-0 transition-opacity group-hover:opacity-100 dark:bg-gray-700"
       >
         {{ t('admin.accounts.status.codexQuotaProtectedUntil', { window: codexQuotaReasonText, time: formatDateTime(codexQuotaResetAt) }) }}
+        <div
+          class="absolute left-1/2 top-full -translate-x-1/2 border-4 border-transparent border-t-gray-900 dark:border-t-gray-700"
+        ></div>
+      </div>
+    </div>
+
+    <div v-if="isOpencodeQuotaProtected" class="group relative">
+      <span
+        class="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+      >
+        <Icon name="exclamationTriangle" size="xs" :stroke-width="2" />
+        {{ opencodeQuotaReasonText }}
+      </span>
+      <div
+        class="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-56 -translate-x-1/2 whitespace-normal rounded bg-gray-900 px-3 py-2 text-center text-xs leading-relaxed text-white opacity-0 transition-opacity group-hover:opacity-100 dark:bg-gray-700"
+      >
+        {{ t('admin.accounts.status.opencodeQuotaProtectedUntil', { window: opencodeQuotaReasonText, time: formatDateTime(opencodeQuotaResetAt) }) }}
         <div
           class="absolute left-1/2 top-full -translate-x-1/2 border-4 border-transparent border-t-gray-900 dark:border-t-gray-700"
         ></div>
@@ -223,6 +245,19 @@ const isCodexQuotaProtected = computed(() => {
 const codexQuotaReasonText = computed(() => {
   const reason = props.account.codex_quota_protection_reason
   return reason === '7d' ? '7d' : '5h'
+})
+
+const opencodeQuotaResetAt = computed(() => props.account.opencode_quota_protection_reset_at || null)
+
+const isOpencodeQuotaProtected = computed(() => {
+  if (hasError.value) return false
+  if (!opencodeQuotaResetAt.value) return false
+  return new Date(opencodeQuotaResetAt.value) > new Date()
+})
+
+const opencodeQuotaReasonText = computed(() => {
+  const reason = props.account.opencode_quota_protection_reason
+  return reason === '7d' ? '7d' : reason === '30d' ? '30d' : '5h'
 })
 
 type AccountModelStatusItem = {
@@ -374,6 +409,15 @@ const codexQuotaResumeText = computed(() => {
   return t('admin.accounts.status.rateLimitedAutoResume', { time: codexQuotaCountdown.value })
 })
 
+const opencodeQuotaCountdown = computed(() => {
+  return formatCountdown(opencodeQuotaResetAt.value)
+})
+
+const opencodeQuotaResumeText = computed(() => {
+  if (!opencodeQuotaCountdown.value) return ''
+  return t('admin.accounts.status.rateLimitedAutoResume', { time: opencodeQuotaCountdown.value })
+})
+
 // Computed: countdown text for overload (529)
 const overloadCountdown = computed(() => {
   return formatCountdownWithSuffix(props.account.overload_until)
@@ -388,6 +432,9 @@ const statusClass = computed(() => {
     return 'badge-warning'
   }
   if (isCodexQuotaProtected.value) {
+    return 'badge-warning'
+  }
+  if (isOpencodeQuotaProtected.value) {
     return 'badge-warning'
   }
   if (props.account.status !== 'active') {
@@ -412,6 +459,9 @@ const statusText = computed(() => {
   }
   if (isCodexQuotaProtected.value) {
     return t('admin.accounts.status.codexQuotaProtected')
+  }
+  if (isOpencodeQuotaProtected.value) {
+    return t('admin.accounts.status.opencodeQuotaProtected')
   }
   if (props.account.status !== 'active') {
     return t(`admin.accounts.status.${props.account.status}`)

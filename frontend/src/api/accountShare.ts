@@ -297,6 +297,12 @@ export interface AccountShareListing {
   anthropic_5h_usage?: UsageProgress | null
   anthropic_7d_usage?: UsageProgress | null
   anthropic_usage_updated_at?: string
+  opencode_quota_protection_reason?: string
+  opencode_quota_protection_reset_at?: string
+  opencode_5h_usage?: UsageProgress | null
+  opencode_7d_usage?: UsageProgress | null
+  opencode_30d_usage?: UsageProgress | null
+  opencode_usage_updated_at?: string
   current_membership_id?: number
   current_api_key_id?: number
   current_api_key_name?: string
@@ -430,13 +436,16 @@ export interface AccountShareRoomAccountsBatchResult {
   account_id: number
   success: boolean
   error?: string
+  reason?: string
+  message?: string
+  metadata?: Record<string, string>
 }
 
 export interface AccountShareRoomAccountsBatchResponse {
   success: number
   failed: number
-  success_ids?: number[]
-  failed_ids?: number[]
+  success_ids: number[]
+  failed_ids: number[]
   results: AccountShareRoomAccountsBatchResult[]
 }
 
@@ -794,7 +803,7 @@ export interface AccountShareListingEditSessionRequest {
 
 export interface AccountShareListingFilters {
   tab?: AccountShareListingTab
-  platform?: 'openai' | 'anthropic'
+  platform?: 'openai' | 'anthropic' | 'opencode'
   seat_limit?: number
   seat_limits?: number[]
   search?: string

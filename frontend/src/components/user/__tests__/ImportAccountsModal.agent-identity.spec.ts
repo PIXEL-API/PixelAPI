@@ -3,13 +3,21 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
+  createAccountMock,
+  exchangeAuthCodeMock,
+  getModelOptionsMock,
   importCredentialContentsMock,
+  listProxiesMock,
   resetOAuthStateMock,
   showErrorMock,
   showSuccessMock,
   showWarningMock
 } = vi.hoisted(() => ({
+  createAccountMock: vi.fn(),
+  exchangeAuthCodeMock: vi.fn(),
+  getModelOptionsMock: vi.fn(),
   importCredentialContentsMock: vi.fn(),
+  listProxiesMock: vi.fn(),
   resetOAuthStateMock: vi.fn(),
   showErrorMock: vi.fn(),
   showSuccessMock: vi.fn(),
@@ -29,11 +37,12 @@ vi.mock('vue-i18n', async () => {
 
 vi.mock('@/api', () => ({
   accountsAPI: {
-    create: vi.fn(),
+    create: createAccountMock,
+    getModelOptions: getModelOptionsMock,
     importCredentialContents: importCredentialContentsMock
   },
   accountShareAPI: {
-    listProxies: vi.fn().mockResolvedValue([])
+    listProxies: listProxiesMock
   }
 }))
 
@@ -51,14 +60,14 @@ vi.mock('@/composables/useOpenAIOAuth', async () => {
   return {
     useOpenAIOAuth: () => ({
       authUrl: ref(''),
-      sessionId: ref(''),
+      sessionId: ref('oauth-session'),
       loading: ref(false),
       error: ref(''),
-      oauthState: ref(''),
+      oauthState: ref('oauth-state'),
       resetState: resetOAuthStateMock,
       generateAuthUrl: vi.fn(),
-      exchangeAuthCode: vi.fn(),
-      buildCredentials: vi.fn(() => ({})),
+      exchangeAuthCode: exchangeAuthCodeMock,
+      buildCredentials: vi.fn(() => ({ access_token: 'oauth-access-token' })),
       buildExtraInfo: vi.fn(() => ({}))
     })
   }
@@ -96,6 +105,44 @@ const CredentialImportModalStub = defineComponent({
   template: '<div v-if="show"><slot name="controls" /></div>'
 })
 
+const ModelWhitelistSelectorStub = defineComponent({
+  name: 'ModelWhitelistSelector',
+  props: {
+    modelValue: { type: Array, default: () => [] },
+    allowedOptions: { type: Array, default: () => [] },
+    allowCustom: { type: Boolean, default: true }
+  },
+  emits: ['update:modelValue'],
+  template: `
+    <div data-testid="import-model-selector" :data-allow-custom="String(allowCustom)">
+      <span data-testid="import-selected-models">{{ modelValue.join(',') }}</span>
+      <button type="button" data-testid="clear-import-models" @click="$emit('update:modelValue', [])">clear</button>
+    </div>
+  `
+})
+
+const ProxySelectorStub = defineComponent({
+  name: 'ProxySelector',
+  props: {
+    modelValue: { type: Number, default: null },
+    proxies: { type: Array, default: () => [] }
+  },
+  emits: ['update:modelValue'],
+  template: '<button type="button" data-testid="select-import-proxy" @click="$emit(\'update:modelValue\', 9)">proxy</button>'
+})
+
+const OAuthAuthorizationFlowStub = defineComponent({
+  name: 'OAuthAuthorizationFlow',
+  setup(_props, { expose }) {
+    expose({
+      authCode: 'oauth-auth-code',
+      oauthState: 'oauth-state',
+      reset: vi.fn()
+    })
+    return () => null
+  }
+})
+
 const basicStubs = {
   BaseDialog: BaseDialogStub,
   CredentialImportModal: CredentialImportModalStub,
@@ -117,6 +164,12 @@ async function selectOpenAI(wrapper: ReturnType<typeof mount>): Promise<void> {
 
 describe('ImportAccountsModal Agent Identity', () => {
   beforeEach(() => {
+    createAccountMock.mockReset()
+    createAccountMock.mockResolvedValue({ id: 1 })
+    exchangeAuthCodeMock.mockReset()
+    exchangeAuthCodeMock.mockResolvedValue({ email: 'owner@example.com' })
+    getModelOptionsMock.mockReset()
+    getModelOptionsMock.mockResolvedValue({ models: ['gpt-5.2', 'gpt-5.2-2025-12-11'] })
     importCredentialContentsMock.mockReset()
     importCredentialContentsMock.mockResolvedValue({
       total: 1,
@@ -126,6 +179,8 @@ describe('ImportAccountsModal Agent Identity', () => {
       errors: []
     })
     resetOAuthStateMock.mockReset()
+    listProxiesMock.mockReset()
+    listProxiesMock.mockResolvedValue([])
     showErrorMock.mockReset()
     showSuccessMock.mockReset()
     showWarningMock.mockReset()
@@ -213,6 +268,82 @@ describe('ImportAccountsModal Agent Identity', () => {
     expect(wrapper.findComponent({ name: 'ProxySelector' }).exists()).toBe(true)
     expect(wrapper.getComponent(CredentialImportModalStub).props('submitDisabled')).toBe(true)
     expect(wrapper.text()).toContain('userAccounts.importSwitchToOAuthLogin')
+  })
+
+  it('submits the selected priced-model identity whitelist through OAuth account login import', async () => {
+    listProxiesMock.mockResolvedValueOnce([
+      { id: 9, name: 'proxy', status: 'active', account_count: 0, max_accounts: 10 }
+    ])
+    const wrapper = mount(ImportAccountsModal, {
+      props: { show: true },
+      global: {
+        stubs: {
+          ...basicStubs,
+          ModelWhitelistSelector: ModelWhitelistSelectorStub,
+          ProxySelector: ProxySelectorStub,
+          OAuthAuthorizationFlow: OAuthAuthorizationFlowStub
+        }
+      }
+    })
+
+    await selectOpenAI(wrapper)
+    await findButtonByText(wrapper, 'Free').trigger('click')
+    await findButtonByText(wrapper, 'userAccounts.importSwitchToOAuthLogin').trigger('click')
+    await flushPromises()
+
+    expect(getModelOptionsMock).toHaveBeenCalledWith('openai')
+    const selector = wrapper.getComponent(ModelWhitelistSelectorStub)
+    expect(selector.props('allowedOptions')).toEqual(['gpt-5.2', 'gpt-5.2-2025-12-11'])
+    expect(selector.props('allowCustom')).toBe(false)
+    expect(wrapper.get('[data-testid="import-selected-models"]').text()).toBe(
+      'gpt-5.2,gpt-5.2-2025-12-11'
+    )
+
+    await wrapper.get('[data-testid="select-import-proxy"]').trigger('click')
+    await wrapper.get('#user-import-openai-oauth-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createAccountMock).toHaveBeenCalledWith(expect.objectContaining({
+      platform: 'openai',
+      type: 'oauth',
+      credentials: expect.objectContaining({
+        access_token: 'oauth-access-token',
+        model_mapping: {
+          'gpt-5.2': 'gpt-5.2',
+          'gpt-5.2-2025-12-11': 'gpt-5.2-2025-12-11'
+        }
+      })
+    }))
+  })
+
+  it('blocks OAuth account login import when the model whitelist is empty', async () => {
+    listProxiesMock.mockResolvedValueOnce([
+      { id: 9, name: 'proxy', status: 'active', account_count: 0, max_accounts: 10 }
+    ])
+    const wrapper = mount(ImportAccountsModal, {
+      props: { show: true },
+      global: {
+        stubs: {
+          ...basicStubs,
+          ModelWhitelistSelector: ModelWhitelistSelectorStub,
+          ProxySelector: ProxySelectorStub,
+          OAuthAuthorizationFlow: OAuthAuthorizationFlowStub
+        }
+      }
+    })
+
+    await selectOpenAI(wrapper)
+    await findButtonByText(wrapper, 'Free').trigger('click')
+    await findButtonByText(wrapper, 'userAccounts.importSwitchToOAuthLogin').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="select-import-proxy"]').trigger('click')
+    await wrapper.get('[data-testid="clear-import-models"]').trigger('click')
+    await wrapper.get('#user-import-openai-oauth-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(exchangeAuthCodeMock).not.toHaveBeenCalled()
+    expect(createAccountMock).not.toHaveBeenCalled()
+    expect(showErrorMock).toHaveBeenCalledWith('admin.accounts.userModelSelectionRequired')
   })
 
   it('imports Agent Identity as private by default without account level or OAuth flow', async () => {

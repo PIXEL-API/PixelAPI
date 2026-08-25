@@ -621,7 +621,10 @@ func TestOpenAISelectAccountWithLoadAwareness_AccountShareModeUsesMembershipAcco
 		Schedulable: true,
 		Concurrency: 20,
 		OwnerUserID: &ownerUserID,
-		GroupIDs:    []int64{privateGroupID},
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{"gpt-4": "gpt-4"},
+		},
+		GroupIDs: []int64{privateGroupID},
 		AccountGroups: []AccountGroup{
 			{AccountID: 416100, GroupID: privateGroupID},
 		},
@@ -954,6 +957,7 @@ func TestOpenAIGatewayServiceRevalidateSelectedAccountForDispatchUsesLatestPubli
 		ShareStatus:  AccountShareStatusApproved,
 		GroupIDs:     []int64{groupID},
 		AccountLevel: AccountLevelTeam,
+		Credentials:  map[string]any{"model_mapping": map[string]any{"gpt-5": "gpt-5"}},
 	}
 	repo := &stubOpenAIAccountRepo{accounts: []Account{account}}
 	svc := &OpenAIGatewayService{accountRepo: repo}
@@ -994,6 +998,7 @@ func TestOpenAIGatewayServiceRevalidateSelectedAccountForDispatchUsesModeMembers
 		ShareStatus:  AccountShareStatusApproved,
 		GroupIDs:     []int64{modeGroupID},
 		AccountLevel: AccountLevelTeam,
+		Credentials:  map[string]any{"model_mapping": map[string]any{"gpt-5": "gpt-5"}},
 	}
 	shareRepo := &accountShareModeRepoStub{
 		membership: &AccountShareMembership{ID: 1, AccountID: account.ID, ConsumerUserID: consumerUserID, APIKeyID: apiKeyID},

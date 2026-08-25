@@ -126,6 +126,7 @@ func RegisterUserRoutes(
 				heavy = panelRL.Heavy()
 			}
 			accounts.GET("", h.UserAccount.List)
+			accounts.GET("/model-options", h.UserAccount.GetModelOptions)
 			accounts.GET("/quota-dashboard", heavy, h.UserAccount.GetQuotaPoolDashboard)
 			accounts.GET("/data", heavy, h.UserAccount.ExportData)
 			accounts.POST("/today-stats/batch", heavy, h.UserAccount.GetBatchTodayStats)

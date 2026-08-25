@@ -149,17 +149,36 @@ type antigravityRetryLoopResult struct {
 }
 
 // resolveAntigravityForwardBaseURL 解析转发用 base URL。
-// 默认使用 daily（ForwardBaseURLs 的首个地址）；当环境变量为 prod 时使用第二个地址。
-func resolveAntigravityForwardBaseURL() string {
-	baseURLs := antigravity.ForwardBaseURLs()
+// 显式环境变量优先；未配置时 pro/ultra 账号使用 daily，其他账号使用 prod。
+func resolveAntigravityForwardBaseURL(account *Account) string {
+	baseURLs := antigravity.BaseURLs
 	if len(baseURLs) == 0 {
 		return ""
 	}
 	mode := strings.ToLower(strings.TrimSpace(os.Getenv(antigravityForwardBaseURLEnv)))
-	if mode == "prod" && len(baseURLs) > 1 {
+	if (mode == "daily" || mode == "sandbox") && len(baseURLs) > 1 {
+		return baseURLs[1]
+	}
+	if mode == "" && accountHasAntigravityPaidTier(account) && len(baseURLs) > 1 {
 		return baseURLs[1]
 	}
 	return baseURLs[0]
+}
+
+func accountHasAntigravityPaidTier(account *Account) bool {
+	if account == nil || account.Credentials == nil {
+		return false
+	}
+	planType, ok := account.Credentials["plan_type"].(string)
+	if !ok {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(planType)) {
+	case "pro", "ultra":
+		return true
+	default:
+		return false
+	}
 }
 
 // smartRetryAction 智能重试的处理结果
@@ -591,7 +610,7 @@ func (s *AntigravityGatewayService) antigravityRetryLoop(p antigravityRetryLoopP
 		}
 	}
 
-	baseURL := resolveAntigravityForwardBaseURL()
+	baseURL := resolveAntigravityForwardBaseURL(p.account)
 	if baseURL == "" {
 		return nil, errors.New("no antigravity forward base url configured")
 	}

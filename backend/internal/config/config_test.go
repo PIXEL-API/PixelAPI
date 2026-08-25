@@ -82,6 +82,13 @@ func resetViperWithJWTSecret(t *testing.T) {
 	t.Setenv("TOTP_ENCRYPTION_KEY", strings.Repeat("a", 64))
 }
 
+func TestLoadDefaultModelsListReadMaxBytes(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, DefaultModelsListReadMaxBytes, cfg.Gateway.ModelsListReadMaxBytes)
+}
+
 func resetViperWithEmptyConfig(t *testing.T) {
 	t.Helper()
 	viper.Reset()
@@ -1982,6 +1989,11 @@ func TestValidateConfigErrors(t *testing.T) {
 			name:    "gateway max body size",
 			mutate:  func(c *Config) { c.Gateway.MaxBodySize = 0 },
 			wantErr: "gateway.max_body_size",
+		},
+		{
+			name:    "gateway models list read limit",
+			mutate:  func(c *Config) { c.Gateway.ModelsListReadMaxBytes = 0 },
+			wantErr: "gateway.models_list_read_max_bytes",
 		},
 		{
 			name:    "gateway max idle conns",

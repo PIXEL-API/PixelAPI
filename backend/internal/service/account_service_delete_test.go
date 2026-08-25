@@ -163,7 +163,7 @@ func (r *detachRoomRepoStub) CreateRoomFromOwnedAccount(context.Context, int64, 
 func (r *detachRoomRepoStub) ListRoomAccounts(context.Context, int64, int64, bool) ([]AccountShareRoomAccount, error) {
 	panic("unexpected ListRoomAccounts call")
 }
-func (r *detachRoomRepoStub) AttachRoomAccountsAtomic(context.Context, BatchAccountShareRoomAccountsInput) error {
+func (r *detachRoomRepoStub) AttachRoomAccountsAtomic(context.Context, BatchAccountShareRoomAccountsInput) (*BulkUpdateAccountsResult, error) {
 	panic("unexpected AttachRoomAccountsAtomic call")
 }
 func (r *detachRoomRepoStub) HasRoomAccount(context.Context, int64, int64) (bool, error) {

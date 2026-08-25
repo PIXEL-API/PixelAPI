@@ -124,6 +124,26 @@ export async function getAvailableModels(id: number): Promise<ClaudeModel[]> {
   return data
 }
 
+export interface UserAccountModelOptionsResponse {
+  models: string[]
+}
+
+/**
+ * 获取当前用户在指定平台可用于个人账号白名单的渠道定价模型并集。
+ */
+export async function getModelOptions(platform: string): Promise<UserAccountModelOptionsResponse> {
+  const normalizedPlatform = platform.trim()
+  if (!normalizedPlatform) {
+    throw new Error('platform is required')
+  }
+
+  const { data } = await apiClient.get<UserAccountModelOptionsResponse>(
+    '/accounts/model-options',
+    { params: { platform: normalizedPlatform } }
+  )
+  return data
+}
+
 export async function getQuotaDashboard(options?: {
   signal?: AbortSignal
 }): Promise<UserAccountQuotaPoolDashboard> {
@@ -731,6 +751,7 @@ export const accountsAPI = {
   list,
   getById,
   getAvailableModels,
+  getModelOptions,
   getQuotaDashboard,
   create,
   importAccount,

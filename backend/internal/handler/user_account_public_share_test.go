@@ -309,6 +309,7 @@ func userAgentIdentityCredentials(t *testing.T, runtimeID, taskID string) map[st
 		"chatgpt_account_id": "team-handler-test",
 		"chatgpt_user_id":    "member-handler-test",
 		"plan_type":          service.AccountLevelTeam,
+		"model_mapping":      map[string]any{"gpt-5.4": "gpt-5.4"},
 	}
 }
 
@@ -386,6 +387,29 @@ func runUserAgentIdentityUpdateRequest(t *testing.T, handler *UserAccountHandler
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
 	return recorder
+}
+
+func TestUserAccountHandlerTestRejectsModelOutsideOwnerWhitelist(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ownerUserID := int64(101)
+	account := newUserAgentIdentityShareAccount(t, ownerUserID, service.AccountShareModePrivate, service.AccountShareStatusApproved)
+	account.Credentials["model_mapping"] = map[string]any{"selected-model": "selected-model"}
+	handler, _, upstream, _, _ := newUserAgentIdentityShareHandler(t, account, http.StatusOK, "")
+
+	router := gin.New()
+	router.POST("/accounts/:id/test", func(c *gin.Context) {
+		c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: ownerUserID})
+		handler.Test(c)
+	})
+	request := httptest.NewRequest(http.MethodPost, "/accounts/1/test", strings.NewReader(`{"model_id":"unselected-model"}`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
+	require.Contains(t, recorder.Body.String(), "OWNED_ACCOUNT_MODEL_NOT_SELECTABLE")
+	require.Zero(t, upstream.calls)
 }
 
 func TestIsOpenAIUsageLimitReachedValidationError(t *testing.T) {

@@ -1453,11 +1453,11 @@ func TestAccountShareModeRepositoryUpdateListingDoesNotSyncAllowedModelsToRoomAc
 	mock.ExpectQuery("SELECT account_id\\s+FROM account_share_room_accounts").
 		WithArgs(int64(7)).
 		WillReturnRows(sqlmock.NewRows([]string{"account_id"}).AddRow(int64(10)))
-	mock.ExpectQuery(`(?s)SELECT\s+a\.id, a\.name, a\.platform, a\.account_level, a\.concurrency, a\.priority,.*a\.auto_pause_on_expired.*AS schedulable`).
+	mock.ExpectQuery(`(?s)SELECT\s+a\.id, a\.name, a\.platform, a\.account_level, a\.concurrency, a\.priority,.*a\.auto_pause_on_expired.*AS unavailable_blocker`).
 		WithArgs(pq.Array([]int64{10}), int64(42)).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "name", "platform", "account_level", "concurrency", "priority",
-			"status", "schedulable", "type", "credentials", "extra",
+			"status", "unavailable_blocker", "type", "credentials", "extra",
 		}).AddRow(
 			int64(10),
 			"room-account",
@@ -1466,7 +1466,7 @@ func TestAccountShareModeRepositoryUpdateListingDoesNotSyncAllowedModelsToRoomAc
 			5,
 			1,
 			service.StatusActive,
-			true,
+			"",
 			service.AccountTypeOAuth,
 			`{"model_mapping":{"gpt-5.5":"gpt-5.5","gpt-5.4":"gpt-5.4"}}`,
 			`{}`,
@@ -1522,11 +1522,11 @@ func TestAccountShareModeRepositoryUpdateListingRejectsModelUnsupportedByCurrent
 	mock.ExpectQuery("SELECT account_id\\s+FROM account_share_room_accounts").
 		WithArgs(int64(7)).
 		WillReturnRows(sqlmock.NewRows([]string{"account_id"}).AddRow(int64(10)))
-	mock.ExpectQuery(`(?s)SELECT\s+a\.id, a\.name, a\.platform, a\.account_level, a\.concurrency, a\.priority,.*a\.auto_pause_on_expired.*AS schedulable`).
+	mock.ExpectQuery(`(?s)SELECT\s+a\.id, a\.name, a\.platform, a\.account_level, a\.concurrency, a\.priority,.*a\.auto_pause_on_expired.*AS unavailable_blocker`).
 		WithArgs(pq.Array([]int64{10}), int64(42)).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "name", "platform", "account_level", "concurrency", "priority",
-			"status", "schedulable", "type", "credentials", "extra",
+			"status", "unavailable_blocker", "type", "credentials", "extra",
 		}).AddRow(
 			int64(10),
 			"room-account",
@@ -1535,7 +1535,7 @@ func TestAccountShareModeRepositoryUpdateListingRejectsModelUnsupportedByCurrent
 			5,
 			1,
 			service.StatusActive,
-			true,
+			"",
 			service.AccountTypeOAuth,
 			`{"model_mapping":{"gpt-5.5":"gpt-5.5"}}`,
 			`{}`,

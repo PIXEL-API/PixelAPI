@@ -17,6 +17,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
 
@@ -831,6 +832,12 @@ func (a *Account) IsGeminiCodeAssist() bool {
 	return oauthType == "code_assist"
 }
 
+// IsGeminiGoogleOne reports whether the account uses the legacy consumer
+// Google One OAuth channel.
+func (a *Account) IsGeminiGoogleOne() bool {
+	return a != nil && a.Platform == PlatformGemini && a.Type == AccountTypeOAuth && a.GeminiOAuthType() == "google_one"
+}
+
 func (a *Account) CanGetUsage() bool {
 	return a.Type == AccountTypeOAuth
 }
@@ -1120,6 +1127,14 @@ func (a *Account) GetModelMapping() map[string]string {
 }
 
 func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]string {
+	// 个人账号的模型集合是号主的严格白名单：不得为 Grok/Antigravity
+	// 注入平台默认映射，也不得把缺失/空映射解释成全开放。
+	if a.OwnerUserID != nil {
+		if a.Credentials == nil {
+			return nil
+		}
+		return stringMappingFromRaw(a.Credentials["model_mapping"])
+	}
 	if a.Credentials == nil {
 		// Antigravity 平台使用默认映射
 		if a.Platform == domain.PlatformAntigravity {
@@ -1132,6 +1147,9 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 		return nil
 	}
 	if len(rawMapping) == 0 {
+		if a.IsGeminiGoogleOne() {
+			return geminicli.GoogleOneModelMapping()
+		}
 		// Antigravity 平台使用默认映射
 		if a.Platform == domain.PlatformAntigravity {
 			return domain.DefaultAntigravityModelMapping
@@ -1160,6 +1178,11 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 	}
 
 	// Antigravity 平台使用默认映射
+	if a.IsGeminiGoogleOne() {
+		// Google One 账号即使历史凭证中的 model_mapping 结构损坏，
+		// 也必须回退到保守目录，不能把空映射解释成平台账号的全开放模式。
+		return geminicli.GoogleOneModelMapping()
+	}
 	if a.Platform == domain.PlatformAntigravity {
 		return domain.DefaultAntigravityModelMapping
 	}
@@ -1264,12 +1287,12 @@ func resolveRequestedModelInMapping(mapping map[string]string, requestedModel st
 	return matchWildcardMappingResult(mapping, requestedModel)
 }
 
-// IsModelSupported 检查模型是否在 model_mapping 中（支持通配符）
-// 如果未配置 mapping，返回 true（允许所有模型）
+// IsModelSupported 检查模型是否在 model_mapping 中（支持通配符）。
+// 平台账号未配置 mapping 时保持历史兼容（允许所有）；个人账号的空白名单拒绝全部。
 func (a *Account) IsModelSupported(requestedModel string) bool {
 	mapping := a.GetModelMapping()
 	if len(mapping) == 0 {
-		return true // 无映射 = 允许所有
+		return a.OwnerUserID == nil
 	}
 	if mappingSupportsRequestedModel(mapping, requestedModel) {
 		return true

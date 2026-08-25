@@ -21,5 +21,24 @@ var DefaultModels = []Model{
 	{ID: "gemini-3.1-pro-preview", Type: "model", DisplayName: "Gemini 3.1 Pro Preview", CreatedAt: ""},
 }
 
+// GoogleOneModels is the conservative catalog supported by legacy Google One
+// OAuth accounts. Newer 3.x and image models are served through other Gemini
+// account types and must not be advertised for this channel.
+var GoogleOneModels = []Model{
+	{ID: "gemini-2.0-flash", Type: "model", DisplayName: "Gemini 2.0 Flash", CreatedAt: ""},
+	{ID: "gemini-2.5-flash", Type: "model", DisplayName: "Gemini 2.5 Flash", CreatedAt: ""},
+	{ID: "gemini-2.5-pro", Type: "model", DisplayName: "Gemini 2.5 Pro", CreatedAt: ""},
+}
+
+// GoogleOneModelMapping returns a new whitelist map for each caller so the
+// package-level catalog cannot be changed through a returned mapping.
+func GoogleOneModelMapping() map[string]string {
+	mapping := make(map[string]string, len(GoogleOneModels))
+	for _, model := range GoogleOneModels {
+		mapping[model.ID] = model.ID
+	}
+	return mapping
+}
+
 // DefaultTestModel is the default model to preselect in test flows.
 const DefaultTestModel = "gemini-2.0-flash"

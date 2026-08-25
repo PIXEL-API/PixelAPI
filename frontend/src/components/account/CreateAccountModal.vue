@@ -1142,7 +1142,7 @@
 
       <!-- Antigravity model restriction (applies to OAuth + Upstream) -->
       <!-- Antigravity 只支持模型映射模式，不支持白名单模式 -->
-      <div v-if="form.platform === 'antigravity'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+      <div v-if="!isUserScope && form.platform === 'antigravity'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
 
         <!-- Mapping Mode Only (no toggle for Antigravity) -->
@@ -2032,13 +2032,19 @@
 
       <!-- OpenAI-compatible OAuth Model Mapping (OAuth 类型没有 apikey 容器，需要独立的模型映射区域) -->
       <div
-        v-if="(form.platform === 'openai' || form.platform === 'grok') && accountCategory === 'oauth-based'"
+        v-if="isUserScope || ((form.platform === 'openai' || form.platform === 'grok') && accountCategory === 'oauth-based')"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
+        data-testid="create-model-whitelist-section"
       >
-        <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
+        <label class="input-label">
+          {{ isUserScope ? t('admin.accounts.modelWhitelist') : t('admin.accounts.modelRestriction') }}
+        </label>
+        <p v-if="isUserScope" class="mb-3 text-xs leading-5 text-gray-500 dark:text-gray-400">
+          {{ t('admin.accounts.userModelWhitelistHint') }}
+        </p>
 
         <div
-          v-if="isOpenAIModelRestrictionDisabled"
+          v-if="!isUserScope && isOpenAIModelRestrictionDisabled"
           class="mb-3 rounded-lg bg-amber-50 p-3 dark:bg-amber-900/20"
         >
           <p class="text-xs text-amber-700 dark:text-amber-400">
@@ -2048,7 +2054,7 @@
 
         <template v-else>
           <!-- Mode Toggle -->
-          <div class="mb-4 flex gap-2">
+          <div v-if="!isUserScope" class="mb-4 flex gap-2">
             <button
               type="button"
               @click="modelRestrictionMode = 'whitelist'"
@@ -2076,11 +2082,41 @@
           </div>
 
           <!-- Whitelist Mode -->
-          <div v-if="modelRestrictionMode === 'whitelist'">
-            <ModelWhitelistSelector v-model="allowedModels" :platform="form.platform" />
-            <p class="text-xs text-gray-500 dark:text-gray-400">
+          <div v-if="isUserScope || modelRestrictionMode === 'whitelist'">
+            <ModelWhitelistSelector
+              v-model="allowedModels"
+              :platform="form.platform"
+              :allowed-options="isUserScope ? (userModelOptions ?? []) : undefined"
+              :allow-custom="!isUserScope"
+            />
+            <p
+              v-if="isUserScope && userModelOptionsLoading"
+              class="mt-2 text-xs text-gray-500 dark:text-gray-400"
+            >
+              {{ t('admin.accounts.userModelOptionsLoading') }}
+            </p>
+            <p
+              v-else-if="isUserScope && userModelOptionsLoadError"
+              class="mt-2 text-xs text-red-600 dark:text-red-400"
+              role="alert"
+            >
+              {{ t('admin.accounts.userModelOptionsLoadFailed', { message: userModelOptionsLoadError }) }}
+            </p>
+            <p
+              v-else-if="isUserScope && userModelOptions !== null && userModelOptions.length === 0"
+              class="mt-2 text-xs text-amber-600 dark:text-amber-400"
+            >
+              {{ t('admin.accounts.userModelOptionsEmpty') }}
+            </p>
+            <p
+              v-else-if="isUserScope && allowedModels.length === 0"
+              class="mt-2 text-xs text-amber-600 dark:text-amber-400"
+            >
+              {{ t('admin.accounts.userModelSelectionRequired') }}
+            </p>
+            <p v-else class="mt-2 text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
-              <span v-if="allowedModels.length === 0">{{
+              <span v-if="!isUserScope && allowedModels.length === 0">{{
                 t('admin.accounts.supportsAllModels')
               }}</span>
             </p>
@@ -3517,7 +3553,6 @@ import {
   PERSONAL_ACCOUNT_DEFAULT_OPENAI_WS_MODE,
   PERSONAL_ACCOUNT_DEFAULT_PRIORITY,
   applyPersonalAccountTemplate,
-  buildPersonalAccountModelMapping,
   normalizePersonalAccountConcurrency
 } from '@/components/account/personalAccountTemplate'
 import { formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
@@ -3703,6 +3738,10 @@ const modelMappings = ref<ModelMapping[]>([])
 const openAICompactModelMappings = ref<ModelMapping[]>([])
 const modelRestrictionMode = ref<'whitelist' | 'mapping'>('whitelist')
 const allowedModels = ref<string[]>([])
+const userModelOptions = ref<string[] | null>(null)
+const userModelOptionsLoading = ref(false)
+const userModelOptionsLoadError = ref('')
+let userModelOptionsRequestVersion = 0
 const DEFAULT_POOL_MODE_RETRY_COUNT = 3
 const MAX_POOL_MODE_RETRY_COUNT = 10
 const poolModeEnabled = ref(false)
@@ -3949,6 +3988,74 @@ const form = reactive({
   expires_at: null as number | null
 })
 
+const loadUserModelOptions = async () => {
+  const requestVersion = ++userModelOptionsRequestVersion
+  userModelOptionsLoadError.value = ''
+
+  if (!props.show || !isUserScope.value) {
+    userModelOptions.value = null
+    userModelOptionsLoading.value = false
+    return
+  }
+
+  const platform = form.platform
+  const previousSelection = [...allowedModels.value]
+  userModelOptions.value = null
+  userModelOptionsLoading.value = true
+  try {
+    const result = await accountsAPI.getModelOptions(platform)
+    if (requestVersion !== userModelOptionsRequestVersion) return
+    const models = Array.from(
+      new Set((result.models || []).map(model => model.trim()).filter(Boolean))
+    )
+    userModelOptions.value = models
+    const allowedSet = new Set(models)
+    const retainedSelection = previousSelection.filter(model => allowedSet.has(model))
+    allowedModels.value = retainedSelection.length > 0 ? retainedSelection : [...models]
+  } catch (error: unknown) {
+    if (requestVersion !== userModelOptionsRequestVersion) return
+    userModelOptions.value = []
+    allowedModels.value = []
+    userModelOptionsLoadError.value = extractApiErrorMessage(
+      error,
+      t('admin.accounts.userModelOptionsLoadFailedDefault')
+    )
+  } finally {
+    if (requestVersion === userModelOptionsRequestVersion) {
+      userModelOptionsLoading.value = false
+    }
+  }
+}
+
+const validateUserModelSelection = (): boolean => {
+  if (!isUserScope.value) return true
+
+  if (userModelOptionsLoading.value || userModelOptions.value === null) {
+    appStore.showError(t('admin.accounts.userModelOptionsNotReady'))
+    return false
+  }
+  if (userModelOptionsLoadError.value) {
+    appStore.showError(
+      t('admin.accounts.userModelOptionsLoadFailed', { message: userModelOptionsLoadError.value })
+    )
+    return false
+  }
+  if (allowedModels.value.length === 0) {
+    appStore.showError(t('admin.accounts.userModelSelectionRequired'))
+    return false
+  }
+
+  const allowedSet = new Set(userModelOptions.value)
+  const invalidModels = allowedModels.value.filter(model => !allowedSet.has(model))
+  if (invalidModels.length > 0) {
+    appStore.showError(
+      t('admin.accounts.userModelSelectionInvalid', { models: invalidModels.join(', ') })
+    )
+    return false
+  }
+  return true
+}
+
 type UserOpenAIAccountLevelOption = {
   value: Exclude<AccountLevel, 'unknown'>
   label: string
@@ -4162,8 +4269,8 @@ watch(
         codex5hLimitPercent.value = CODEX_QUOTA_DEFAULT_LIMIT_PERCENT
         codex7dLimitPercent.value = CODEX_QUOTA_DEFAULT_LIMIT_PERCENT
       }
-      // Modal opened - fill related models
-      allowedModels.value = [...getModelsByPlatform(form.platform)]
+      // Modal opened - fill related models. User scope waits for the server-side priced-model union.
+      allowedModels.value = isUserScope.value ? [] : [...getModelsByPlatform(form.platform)]
       // Antigravity: 默认使用映射模式并填充默认映射
       if (form.platform === 'antigravity') {
         antigravityModelRestrictionMode.value = 'mapping'
@@ -4242,7 +4349,6 @@ watch(
       form.priority = PERSONAL_ACCOUNT_DEFAULT_PRIORITY
       autoPauseOnExpired.value = PERSONAL_ACCOUNT_DEFAULT_AUTO_PAUSE_ON_EXPIRED
       modelRestrictionMode.value = 'whitelist'
-      allowedModels.value = Object.keys(buildPersonalAccountModelMapping(newPlatform))
     }
     // Reset base URL based on platform
     apiKeyBaseUrl.value =
@@ -4335,6 +4441,14 @@ watch(
     antigravityOAuth.resetState()
     grokOAuth.resetState()
   }
+)
+
+watch(
+  [() => props.show, isUserScope, () => form.platform],
+  () => {
+    void loadUserModelOptions()
+  },
+  { immediate: true }
 )
 
 watch(
@@ -4699,9 +4813,15 @@ const sanitizeCreatePayload = (payload: CreateAccountRequest): CreateAccountRequ
     next.load_factor = undefined
     next.priority = PERSONAL_ACCOUNT_DEFAULT_PRIORITY
     next.auto_pause_on_expired = PERSONAL_ACCOUNT_DEFAULT_AUTO_PAUSE_ON_EXPIRED
+    const selectedModelMapping = Object.fromEntries(
+      allowedModels.value.map(model => [model, model])
+    )
     const templated = applyPersonalAccountTemplate(
       next.platform,
-      (next.credentials as Record<string, unknown>) || {},
+      {
+        ...((next.credentials as Record<string, unknown>) || {}),
+        model_mapping: selectedModelMapping
+      },
       next.extra as Record<string, unknown> | undefined
     )
     next.credentials = templated.credentials
@@ -4776,7 +4896,7 @@ const resetForm = () => {
   modelMappings.value = []
   openAICompactModelMappings.value = []
   modelRestrictionMode.value = 'whitelist'
-  allowedModels.value = [...claudeModels] // Default fill related models
+  allowedModels.value = isUserScope.value ? [] : [...claudeModels] // User scope waits for priced-model options.
 
   antigravityModelRestrictionMode.value = 'mapping'
   antigravityWhitelistModels.value = []
@@ -5049,6 +5169,9 @@ const handleSubmit = async () => {
     antigravityAccountType.value = 'oauth'
     form.type = 'oauth'
     appStore.showError(t('userAccounts.typeNotAllowed'))
+    return
+  }
+  if (!validateUserModelSelection()) {
     return
   }
   if (isUserScope.value && form.platform === 'openai') {
@@ -5441,6 +5564,7 @@ const handleOpenAIExchange = async (authCode: string) => {
     if (!tokenInfo) return
 
     const credentials = oauthClient.buildCredentials(tokenInfo)
+    applyOwnedUserModelWhitelist(credentials)
     const oauthExtra = oauthClient.buildExtraInfo(tokenInfo) as Record<string, unknown> | undefined
     const extra = buildOpenAIExtra(oauthExtra)
     const shouldCreateOpenAI = form.platform === 'openai'
@@ -5985,6 +6109,16 @@ const applyCurrentModelRestriction = (credentials: Record<string, unknown>) => {
   }
 }
 
+// 用户账号的模型权限始终来自已加载的渠道定价并集；各平台 OAuth 兑换
+// 入口统一在拿到上游凭据后写入 identity mapping，避免某个平台遗漏后由
+// 后端模板生成空白名单。
+const applyOwnedUserModelWhitelist = (credentials: Record<string, unknown>) => {
+  if (!isUserScope.value) return
+  credentials.model_mapping = Object.fromEntries(
+    allowedModels.value.map(model => [model, model])
+  )
+}
+
 const applyGrokAdminUpstreamConfig = (
   credentials: Record<string, unknown>,
   accountType: 'apikey' | 'oauth'
@@ -6247,6 +6381,7 @@ const handleGeminiExchange = async (authCode: string) => {
     if (!tokenInfo) return
 
     const credentials = geminiOAuth.buildCredentials(tokenInfo)
+    applyOwnedUserModelWhitelist(credentials)
     const extra = geminiOAuth.buildExtraInfo(tokenInfo)
     await createAccountAndFinish('gemini', 'oauth', credentials, extra)
   } catch (error: any) {
@@ -6284,6 +6419,7 @@ const handleGrokExchange = async (authCode: string) => {
 
     const credentials = grokOAuth.buildCredentials(tokenInfo)
     applyCurrentModelRestriction(credentials)
+    applyOwnedUserModelWhitelist(credentials)
     if (!applyGrokAdminUpstreamConfig(credentials, 'oauth')) {
       return
     }
@@ -6319,21 +6455,24 @@ const handleAntigravityExchange = async (authCode: string) => {
       state: stateToUse,
       proxyId: form.proxy_id
     })
-		if (!tokenInfo) return
+    if (!tokenInfo) return
 
-		const credentials = antigravityOAuth.buildCredentials(tokenInfo)
-		applyInterceptWarmup(credentials, interceptWarmupRequests.value, 'create')
-		// Antigravity 只使用映射模式
-		const antigravityModelMapping = buildModelMappingObject(
-			'mapping',
-			[],
-			antigravityModelMappings.value
-		)
-		if (antigravityModelMapping) {
-			credentials.model_mapping = antigravityModelMapping
-		}
-		const extra = buildAntigravityExtra()
-		await createAccountAndFinish('antigravity', 'oauth', credentials, extra)
+    const credentials = antigravityOAuth.buildCredentials(tokenInfo)
+    applyOwnedUserModelWhitelist(credentials)
+    applyInterceptWarmup(credentials, interceptWarmupRequests.value, 'create')
+    // 管理员使用映射模式；用户账号只能提交渠道定价并集中的 identity 白名单。
+    if (!isUserScope.value) {
+      const antigravityModelMapping = buildModelMappingObject(
+        'mapping',
+        [],
+        antigravityModelMappings.value
+      )
+      if (antigravityModelMapping) {
+        credentials.model_mapping = antigravityModelMapping
+      }
+    }
+    const extra = buildAntigravityExtra()
+    await createAccountAndFinish('antigravity', 'oauth', credentials, extra)
   } catch (error: any) {
     antigravityOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
     appStore.showError(antigravityOAuth.error.value)
@@ -6425,6 +6564,7 @@ const handleAnthropicExchange = async (authCode: string) => {
     }
 
     const credentials: Record<string, unknown> = { ...tokenInfo }
+    applyOwnedUserModelWhitelist(credentials)
     applyInterceptWarmup(credentials, interceptWarmupRequests.value, 'create')
     await createAccountAndFinish(form.platform, addMethod.value as AccountType, credentials, extra)
   } catch (error: any) {
@@ -6557,6 +6697,7 @@ const handleCookieAuth = async (sessionKey: string) => {
         const accountName = keys.length > 1 ? `${form.name} #${i + 1}` : form.name
 
         const credentials: Record<string, unknown> = { ...tokenInfo }
+        applyOwnedUserModelWhitelist(credentials)
         applyInterceptWarmup(credentials, interceptWarmupRequests.value, 'create')
         if (tempUnschedEnabled.value) {
           credentials.temp_unschedulable_enabled = true

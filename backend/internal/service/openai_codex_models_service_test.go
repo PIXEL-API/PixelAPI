@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/http2"
@@ -340,7 +341,7 @@ func TestFetchCodexModelsManifestCacheIsolationAndBodyLimits(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(3), calls.Load(), "account and client version must isolate cache entries")
 
-	tooLarge := strings.Repeat("x", int(codexModelsManifestBodyLimit+1))
+	tooLarge := strings.Repeat("x", int(config.DefaultModelsListReadMaxBytes+1))
 	largeUpstream := &codexModelsHTTPUpstreamStub{do: func(_ *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(tooLarge))}, nil
 	}}
@@ -476,6 +477,29 @@ func TestConvertOpenAIModelListToCodexManifest(t *testing.T) {
 	converted := convertOpenAIModelListToCodexManifest([]byte(`{"object":"list","data":[{"id":"gpt-5.6"},{"id":" "},{"id":"gpt-image-2"}]}`))
 	require.JSONEq(t, `{"models":[{"slug":"gpt-5.6"},{"slug":"gpt-image-2"}]}`, string(converted))
 	require.NoError(t, validateCodexModelsManifestEnvelope(converted))
+}
+
+func TestFetchCodexModelsManifestUsesConfiguredBodyLimit(t *testing.T) {
+	upstream := &codexModelsHTTPUpstreamStub{do: func(_ *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"models":[{"slug":"gpt-5.6"}]}`)),
+		}, nil
+	}}
+
+	s := newCodexModelsAPIKeyTestService(upstream)
+	s.cfg.Gateway.ModelsListReadMaxBytes = 8
+	_, err := s.FetchCodexModelsManifest(
+		context.Background(),
+		newCodexModelsAPIKeyTestAccount("https://upstream.example"),
+		"0.144.0",
+		"",
+	)
+	require.Error(t, err)
+	require.Equal(t, "OPENAI_CODEX_MODELS_UPSTREAM_FAILED", infraerrors.Reason(err))
+	require.Contains(t, err.Error(), "limit=8")
+	require.False(t, IsRetryableCodexModelsManifestError(err), "确定性响应体超限不应重复请求同一上游")
 }
 
 func TestFetchCodexModelsManifestOAuth401IsRetryable(t *testing.T) {

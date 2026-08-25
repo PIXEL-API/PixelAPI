@@ -1748,17 +1748,21 @@ const accountMatchesCurrentFilters = (account: Account) => {
     const isTempUnschedulable = Number.isFinite(tempUnschedUntil) && tempUnschedUntil > now
     const codexQuotaResetAt = account.codex_quota_protection_reset_at ? new Date(account.codex_quota_protection_reset_at).getTime() : Number.NaN
     const isCodexQuotaProtected = Number.isFinite(codexQuotaResetAt) && codexQuotaResetAt > now
+    const opencodeQuotaResetAt = account.opencode_quota_protection_reset_at ? new Date(account.opencode_quota_protection_reset_at).getTime() : Number.NaN
+    const isOpencodeQuotaProtected = Number.isFinite(opencodeQuotaResetAt) && opencodeQuotaResetAt > now
 
     if (filters.status === 'active') {
-      if (account.status !== 'active' || isRateLimited || isTempUnschedulable || isCodexQuotaProtected || !account.schedulable) return false
+      if (account.status !== 'active' || isRateLimited || isTempUnschedulable || isCodexQuotaProtected || isOpencodeQuotaProtected || !account.schedulable) return false
     } else if (filters.status === 'rate_limited') {
       if (account.status !== 'active' || !isRateLimited || isTempUnschedulable) return false
     } else if (filters.status === 'temp_unschedulable') {
-      if (account.status !== 'active' || !isTempUnschedulable || isCodexQuotaProtected) return false
+      if (account.status !== 'active' || !isTempUnschedulable || isCodexQuotaProtected || isOpencodeQuotaProtected) return false
     } else if (filters.status === 'codex_quota_protected') {
       if (account.status !== 'active' || !isCodexQuotaProtected || isRateLimited) return false
+    } else if (filters.status === 'opencode_quota_protected') {
+      if (account.status !== 'active' || !isOpencodeQuotaProtected || isRateLimited) return false
     } else if (filters.status === 'unschedulable') {
-      if (account.status !== 'active' || account.schedulable || isRateLimited || isTempUnschedulable || isCodexQuotaProtected) return false
+      if (account.status !== 'active' || account.schedulable || isRateLimited || isTempUnschedulable || isCodexQuotaProtected || isOpencodeQuotaProtected) return false
     } else if (account.status !== filters.status) {
       return false
     }

@@ -367,7 +367,10 @@ func TestOpenAICleanRelay_AccountShareModeUsesMembershipAccount(t *testing.T) {
 		Schedulable: true,
 		Concurrency: 20,
 		OwnerUserID: &ownerUserID,
-		GroupIDs:    []int64{privateGroupID},
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{"gpt-5.5": "gpt-5.5"},
+		},
+		GroupIDs: []int64{privateGroupID},
 		AccountGroups: []AccountGroup{
 			{AccountID: 416100, GroupID: privateGroupID},
 		},

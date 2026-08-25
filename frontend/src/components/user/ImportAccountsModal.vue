@@ -144,6 +144,47 @@
         />
       </div>
 
+      <section
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+        data-testid="oauth-import-model-whitelist"
+      >
+        <label class="input-label">{{ t('admin.accounts.modelWhitelist') }}</label>
+        <p class="mb-3 text-xs leading-5 text-gray-500 dark:text-gray-400">
+          {{ t('admin.accounts.userModelWhitelistHint') }}
+        </p>
+        <ModelWhitelistSelector
+          v-model="oauthAllowedModels"
+          platform="openai"
+          :allowed-options="oauthModelOptions ?? []"
+          :allow-custom="false"
+        />
+        <p v-if="oauthModelOptionsLoading" class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+          {{ t('admin.accounts.userModelOptionsLoading') }}
+        </p>
+        <p
+          v-else-if="oauthModelOptionsLoadError"
+          class="mt-2 text-xs text-red-600 dark:text-red-400"
+          role="alert"
+        >
+          {{ t('admin.accounts.userModelOptionsLoadFailed', { message: oauthModelOptionsLoadError }) }}
+        </p>
+        <p
+          v-else-if="oauthModelOptions !== null && oauthModelOptions.length === 0"
+          class="mt-2 text-xs text-amber-600 dark:text-amber-400"
+        >
+          {{ t('admin.accounts.userModelOptionsEmpty') }}
+        </p>
+        <p
+          v-else-if="oauthAllowedModels.length === 0"
+          class="mt-2 text-xs text-amber-600 dark:text-amber-400"
+        >
+          {{ t('admin.accounts.userModelSelectionRequired') }}
+        </p>
+        <p v-else class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+          {{ t('admin.accounts.selectedModels', { count: oauthAllowedModels.length }) }}
+        </p>
+      </section>
+
       <div>
         <div class="mb-2 flex items-center justify-between gap-3">
           <label class="input-label mb-0">{{ t('userAccounts.importProxy') }}</label>
@@ -215,6 +256,7 @@ import { accountsAPI, accountShareAPI } from '@/api'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import CredentialImportModal from '@/components/account/CredentialImportModal.vue'
+import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import OAuthAuthorizationFlow from '@/components/account/OAuthAuthorizationFlow.vue'
 import Icon from '@/components/icons/Icon.vue'
 import {
@@ -265,6 +307,86 @@ const proxyLoadMessage = ref('')
 const oauthAccountName = ref('')
 const oauthSubmitting = ref(false)
 const oauthFlowRef = ref<InstanceType<typeof OAuthAuthorizationFlow> | null>(null)
+const oauthAllowedModels = ref<string[]>([])
+const oauthModelOptions = ref<string[] | null>(null)
+const oauthModelOptionsLoading = ref(false)
+const oauthModelOptionsLoadError = ref('')
+let oauthModelOptionsRequestVersion = 0
+
+const oauthModelSelectionValid = computed(() => {
+  if (
+    oauthModelOptionsLoading.value ||
+    oauthModelOptions.value === null ||
+    oauthModelOptionsLoadError.value ||
+    oauthAllowedModels.value.length === 0
+  ) {
+    return false
+  }
+  const allowedSet = new Set(oauthModelOptions.value)
+  return oauthAllowedModels.value.every(model => allowedSet.has(model))
+})
+
+async function loadOAuthModelOptions(): Promise<void> {
+  const requestVersion = ++oauthModelOptionsRequestVersion
+  oauthModelOptionsLoadError.value = ''
+
+  if (!props.show || !requiresOAuthLogin.value || selectedPlatform.value !== 'openai') {
+    oauthModelOptions.value = null
+    oauthModelOptionsLoading.value = false
+    oauthAllowedModels.value = []
+    return
+  }
+
+  oauthModelOptions.value = null
+  oauthModelOptionsLoading.value = true
+  oauthAllowedModels.value = []
+  try {
+    const result = await accountsAPI.getModelOptions('openai')
+    if (requestVersion !== oauthModelOptionsRequestVersion) return
+    const models = Array.from(
+      new Set((result.models || []).map(model => model.trim()).filter(Boolean))
+    )
+    oauthModelOptions.value = models
+    oauthAllowedModels.value = [...models]
+  } catch (error: unknown) {
+    if (requestVersion !== oauthModelOptionsRequestVersion) return
+    oauthModelOptions.value = []
+    oauthModelOptionsLoadError.value = extractApiErrorMessage(
+      error,
+      t('admin.accounts.userModelOptionsLoadFailedDefault')
+    )
+  } finally {
+    if (requestVersion === oauthModelOptionsRequestVersion) {
+      oauthModelOptionsLoading.value = false
+    }
+  }
+}
+
+function validateOAuthModelSelection(): boolean {
+  if (oauthModelOptionsLoading.value || oauthModelOptions.value === null) {
+    appStore.showError(t('admin.accounts.userModelOptionsNotReady'))
+    return false
+  }
+  if (oauthModelOptionsLoadError.value) {
+    appStore.showError(
+      t('admin.accounts.userModelOptionsLoadFailed', { message: oauthModelOptionsLoadError.value })
+    )
+    return false
+  }
+  if (oauthAllowedModels.value.length === 0) {
+    appStore.showError(t('admin.accounts.userModelSelectionRequired'))
+    return false
+  }
+  const allowedSet = new Set(oauthModelOptions.value)
+  const invalidModels = oauthAllowedModels.value.filter(model => !allowedSet.has(model))
+  if (invalidModels.length > 0) {
+    appStore.showError(
+      t('admin.accounts.userModelSelectionInvalid', { models: invalidModels.join(', ') })
+    )
+    return false
+  }
+  return true
+}
 
 const importLimit = computed(() => {
   const configured = Number(appStore.cachedPublicSettings?.user_account_import_limit)
@@ -450,7 +572,8 @@ const canSubmitOAuthImport = computed(() => {
     !selectedProxyCapacityMessage.value &&
     openaiOAuth.sessionId.value &&
     String(authCode).trim() &&
-    String(oauthState).trim()
+    String(oauthState).trim() &&
+    oauthModelSelectionValid.value
   )
 })
 
@@ -697,6 +820,14 @@ watch(
   }
 )
 
+watch(
+  [() => props.show, requiresOAuthLogin, () => selectedPlatform.value],
+  () => {
+    void loadOAuthModelOptions()
+  },
+  { immediate: true }
+)
+
 function selectPlatform(platform: ImportPlatform): void {
   selectedPlatform.value = platform
   selectedImportFlow.value = 'credential'
@@ -709,6 +840,11 @@ function selectOpenAIAuthMode(mode: OpenAIImportAuthMode): void {
   selectedAccountLevel.value = ''
   selectedProxyId.value = null
   oauthAccountName.value = ''
+  oauthAllowedModels.value = []
+  oauthModelOptions.value = null
+  oauthModelOptionsLoading.value = false
+  oauthModelOptionsLoadError.value = ''
+  oauthModelOptionsRequestVersion++
   proxyLoadMessage.value = ''
   openaiOAuth.error.value = ''
   openaiOAuth.resetState()
@@ -873,6 +1009,9 @@ async function generateOAuthUrl(): Promise<void> {
     appStore.showError(selectedProxyCapacityMessage.value)
     return
   }
+  if (!validateOAuthModelSelection()) {
+    return
+  }
   await openaiOAuth.generateAuthUrl(selectedProxyId.value, { accountLevel: selectedAccountLevel.value })
 }
 
@@ -898,6 +1037,9 @@ async function submitOAuthImport(): Promise<void> {
     appStore.showError(selectedProxyCapacityMessage.value)
     return
   }
+  if (!validateOAuthModelSelection()) {
+    return
+  }
   const authCode = String(oauthFlowRef.value?.authCode || '').trim()
   const oauthState = String(oauthFlowRef.value?.oauthState || openaiOAuth.oauthState.value || '').trim()
   if (!authCode || !oauthState || !openaiOAuth.sessionId.value) {
@@ -918,7 +1060,12 @@ async function submitOAuthImport(): Promise<void> {
 
     const templated = applyPersonalAccountTemplate(
       'openai',
-      openaiOAuth.buildCredentials(tokenInfo),
+      {
+        ...openaiOAuth.buildCredentials(tokenInfo),
+        model_mapping: Object.fromEntries(
+          oauthAllowedModels.value.map(model => [model, model])
+        )
+      },
       openaiOAuth.buildExtraInfo(tokenInfo)
     )
     await accountsAPI.create({

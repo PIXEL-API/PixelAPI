@@ -1,12 +1,27 @@
 package service
 
 import (
+	"sort"
+
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
+
+func accountModelWhitelistKeys(account *Account) []string {
+	if account == nil {
+		return nil
+	}
+	mapping := account.GetModelMapping()
+	models := make([]string, 0, len(mapping))
+	for model := range mapping {
+		models = append(models, model)
+	}
+	sort.Strings(models)
+	return models
+}
 
 // AvailableTestModels 返回账号「测试连接」流程可选的模型列表，管理员端与用户端共用。
 //
@@ -16,6 +31,21 @@ import (
 func AvailableTestModels(account *Account) (models any, ok bool) {
 	// OpenAI：自动透传会绕过常规模型改写，测试/模型列表也回落到默认模型集。
 	if account.IsOpenAI() {
+		if account.OwnerUserID != nil {
+			models := accountModelWhitelistKeys(account)
+			out := make([]openai.Model, 0, len(models))
+			for _, requestedModel := range models {
+				model := openai.Model{ID: requestedModel, Object: "model", Type: "model", DisplayName: requestedModel}
+				for _, defaultModel := range openai.DefaultModels {
+					if defaultModel.ID == requestedModel {
+						model = defaultModel
+						break
+					}
+				}
+				out = append(out, model)
+			}
+			return out, true
+		}
 		if account.IsOpenAIPassthroughEnabled() {
 			return openai.DefaultModels, true
 		}
@@ -49,6 +79,23 @@ func AvailableTestModels(account *Account) (models any, ok bool) {
 
 	// Gemini
 	if account.IsGemini() {
+		// 个人账号始终使用号主严格白名单；平台管理的 Google One 账号
+		// 使用运行时解析后的显式 mapping 或保守默认目录。
+		if account.OwnerUserID != nil || account.IsGeminiGoogleOne() {
+			models := accountModelWhitelistKeys(account)
+			out := make([]geminicli.Model, 0, len(models))
+			for _, requestedModel := range models {
+				model := geminicli.Model{ID: requestedModel, Type: "model", DisplayName: requestedModel}
+				for _, defaultModel := range geminicli.DefaultModels {
+					if defaultModel.ID == requestedModel {
+						model = defaultModel
+						break
+					}
+				}
+				out = append(out, model)
+			}
+			return out, true
+		}
 		// OAuth 账号直接给默认模型集。
 		if account.IsOAuth() {
 			return geminicli.DefaultModels, true
@@ -83,11 +130,43 @@ func AvailableTestModels(account *Account) (models any, ok bool) {
 
 	// Antigravity：复用 antigravity.DefaultModels()，与 /v1/models 端点保持同步。
 	if account.Platform == PlatformAntigravity {
+		if account.OwnerUserID != nil {
+			models := accountModelWhitelistKeys(account)
+			defaults := antigravity.DefaultModels()
+			out := make([]antigravity.ClaudeModel, 0, len(models))
+			for _, requestedModel := range models {
+				model := antigravity.ClaudeModel{ID: requestedModel, Type: "model", DisplayName: requestedModel}
+				for _, defaultModel := range defaults {
+					if defaultModel.ID == requestedModel {
+						model = defaultModel
+						break
+					}
+				}
+				out = append(out, model)
+			}
+			return out, true
+		}
 		return antigravity.DefaultModels(), true
 	}
 
 	// Grok/xAI
 	if account.Platform == PlatformGrok {
+		if account.OwnerUserID != nil {
+			models := accountModelWhitelistKeys(account)
+			defaults := xai.DefaultModels()
+			out := make([]xai.Model, 0, len(models))
+			for _, requestedModel := range models {
+				model := xai.Model{ID: requestedModel, Object: "model", OwnedBy: "xai", DisplayName: requestedModel}
+				for _, defaultModel := range defaults {
+					if defaultModel.ID == requestedModel {
+						model = defaultModel
+						break
+					}
+				}
+				out = append(out, model)
+			}
+			return out, true
+		}
 		rawMapping, _ := account.Credentials["model_mapping"].(map[string]any)
 		if len(rawMapping) == 0 {
 			return xai.DefaultModels(), true
@@ -142,6 +221,21 @@ func AvailableTestModels(account *Account) (models any, ok bool) {
 
 	// Claude/Anthropic
 	// OAuth / Setup-Token 账号给默认模型集。
+	if account.OwnerUserID != nil {
+		models := accountModelWhitelistKeys(account)
+		out := make([]claude.Model, 0, len(models))
+		for _, requestedModel := range models {
+			model := claude.Model{ID: requestedModel, Type: "model", DisplayName: requestedModel}
+			for _, defaultModel := range claude.DefaultModels {
+				if defaultModel.ID == requestedModel {
+					model = defaultModel
+					break
+				}
+			}
+			out = append(out, model)
+		}
+		return out, true
+	}
 	if account.IsOAuth() {
 		return claude.DefaultModels, true
 	}

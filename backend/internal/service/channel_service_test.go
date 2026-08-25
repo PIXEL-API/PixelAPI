@@ -196,6 +196,32 @@ func newTestChannelServiceWithAuth(repo *mockChannelRepository, auth *mockChanne
 	return NewChannelService(repo, nil, auth, nil)
 }
 
+func TestChannelServiceListPricedModelIDsUsesActiveChannelPricingUnion(t *testing.T) {
+	repo := &mockChannelRepository{listAllFn: func(context.Context) ([]Channel, error) {
+		return []Channel{
+			{
+				Status: StatusActive,
+				ModelPricing: []ChannelModelPricing{
+					{Platform: PlatformOpenAI, Models: []string{" gpt-b ", "gpt-a", "gpt-a"}},
+					{Platform: PlatformAnthropic, Models: []string{"claude-a"}},
+				},
+				AccountStatsPricingRules: []AccountStatsPricingRule{{
+					Pricing: []ChannelModelPricing{{Platform: PlatformOpenAI, Models: []string{"gpt-c", ""}}},
+				}},
+			},
+			{
+				Status:       StatusDisabled,
+				ModelPricing: []ChannelModelPricing{{Platform: PlatformOpenAI, Models: []string{"disabled-model"}}},
+			},
+		}, nil
+	}}
+
+	models, err := newTestChannelService(repo).ListPricedModelIDs(context.Background(), []string{" OPENAI "})
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"gpt-a", "gpt-b", "gpt-c"}, models)
+}
+
 // makeStandardRepo returns a repo that serves one active channel with anthropic pricing
 // for group 1, with the given model pricing and model mapping.
 func makeStandardRepo(ch Channel, groupPlatforms map[int64]string) *mockChannelRepository {

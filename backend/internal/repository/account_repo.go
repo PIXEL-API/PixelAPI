@@ -2863,6 +2863,16 @@ func (r *accountRepository) listQuotaPoolAccountRows(ctx context.Context, ownerU
 			a.extra->>'codex_7d_reset_at',
 			a.extra->>'codex_7d_limit_percent',
 			a.extra->>'codex_usage_updated_at',
+			a.extra->>'opencode_5h_used_percent',
+			a.extra->>'opencode_5h_reset_at',
+			a.extra->>'opencode_5h_limit_percent',
+			a.extra->>'opencode_7d_used_percent',
+			a.extra->>'opencode_7d_reset_at',
+			a.extra->>'opencode_7d_limit_percent',
+			a.extra->>'opencode_30d_used_percent',
+			a.extra->>'opencode_30d_reset_at',
+			a.extra->>'opencode_30d_limit_percent',
+			a.extra->>'opencode_usage_updated_at',
 			a.extra->>'privacy_mode',
 			a.owner_user_id,
 			a.share_mode,
@@ -2895,6 +2905,10 @@ func (r *accountRepository) listQuotaPoolAccountRows(ctx context.Context, ownerU
 		var codex5hUsedPercent, codex5hResetAfterSeconds, codex5hResetAt, codex5hLimitPercent sql.NullString
 		var codex7dUsedPercent, codex7dResetAfterSeconds, codex7dResetAt, codex7dLimitPercent sql.NullString
 		var codexUsageUpdatedAt, privacyMode sql.NullString
+		var opencode5hUsedPercent, opencode5hResetAt, opencode5hLimitPercent sql.NullString
+		var opencode7dUsedPercent, opencode7dResetAt, opencode7dLimitPercent sql.NullString
+		var opencode30dUsedPercent, opencode30dResetAt, opencode30dLimitPercent sql.NullString
+		var opencodeUsageUpdatedAt sql.NullString
 		if err := rows.Scan(
 			&account.ID,
 			&account.Name,
@@ -2922,6 +2936,16 @@ func (r *accountRepository) listQuotaPoolAccountRows(ctx context.Context, ownerU
 			&codex7dResetAt,
 			&codex7dLimitPercent,
 			&codexUsageUpdatedAt,
+			&opencode5hUsedPercent,
+			&opencode5hResetAt,
+			&opencode5hLimitPercent,
+			&opencode7dUsedPercent,
+			&opencode7dResetAt,
+			&opencode7dLimitPercent,
+			&opencode30dUsedPercent,
+			&opencode30dResetAt,
+			&opencode30dLimitPercent,
+			&opencodeUsageUpdatedAt,
 			&privacyMode,
 			&ownerUserID,
 			&account.ShareMode,
@@ -2965,6 +2989,16 @@ func (r *accountRepository) listQuotaPoolAccountRows(ctx context.Context, ownerU
 		setNullStringExtra(account.Extra, "codex_7d_reset_at", codex7dResetAt)
 		setNullStringExtra(account.Extra, "codex_7d_limit_percent", codex7dLimitPercent)
 		setNullStringExtra(account.Extra, "codex_usage_updated_at", codexUsageUpdatedAt)
+		setNullStringExtra(account.Extra, "opencode_5h_used_percent", opencode5hUsedPercent)
+		setNullStringExtra(account.Extra, "opencode_5h_reset_at", opencode5hResetAt)
+		setNullStringExtra(account.Extra, "opencode_5h_limit_percent", opencode5hLimitPercent)
+		setNullStringExtra(account.Extra, "opencode_7d_used_percent", opencode7dUsedPercent)
+		setNullStringExtra(account.Extra, "opencode_7d_reset_at", opencode7dResetAt)
+		setNullStringExtra(account.Extra, "opencode_7d_limit_percent", opencode7dLimitPercent)
+		setNullStringExtra(account.Extra, "opencode_30d_used_percent", opencode30dUsedPercent)
+		setNullStringExtra(account.Extra, "opencode_30d_reset_at", opencode30dResetAt)
+		setNullStringExtra(account.Extra, "opencode_30d_limit_percent", opencode30dLimitPercent)
+		setNullStringExtra(account.Extra, "opencode_usage_updated_at", opencodeUsageUpdatedAt)
 		setNullStringExtra(account.Extra, "privacy_mode", privacyMode)
 		accounts = append(accounts, account)
 	}

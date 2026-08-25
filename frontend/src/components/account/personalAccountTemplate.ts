@@ -1,4 +1,3 @@
-import { getModelsByPlatform } from '@/composables/useModelWhitelist'
 import { OPENAI_WS_MODE_OFF } from '@/utils/openaiWsMode'
 import type { AccountPlatform, OpenAICompactMode } from '@/types'
 
@@ -37,25 +36,12 @@ export function normalizePersonalAccountLoadFactor(value: unknown): number {
   )
 }
 
-export function buildPersonalAccountModelMapping(platform: AccountPlatform | string): Record<string, string> {
-  const mapping: Record<string, string> = {}
-  for (const model of getModelsByPlatform(platform)) {
-    if (!model.includes('*')) {
-      mapping[model] = model
-    }
-  }
-  return mapping
-}
-
 export function applyPersonalAccountTemplate(
   platform: AccountPlatform | string,
   credentials: Record<string, unknown>,
   extra?: Record<string, unknown>
 ): { credentials: Record<string, unknown>; extra?: Record<string, unknown> } {
-  const nextCredentials: Record<string, unknown> = {
-    ...credentials,
-    model_mapping: buildPersonalAccountModelMapping(platform)
-  }
+  const nextCredentials: Record<string, unknown> = { ...credentials }
 
   const nextExtra: Record<string, unknown> = { ...(extra || {}) }
   if (platform === 'openai') {

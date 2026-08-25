@@ -16,6 +16,7 @@ import (
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
 )
 
 type accountShareUpdateRepositoryStub struct {
@@ -52,12 +53,13 @@ type accountShareRoomBatchHandlerRepoStub struct {
 	service.AccountShareModeRepository
 	service.AccountShareRoomRepository
 
-	attachInput service.BatchAccountShareRoomAccountsInput
-	attachCalls int
-	attachErr   error
-	detachInput service.BatchAccountShareRoomAccountsInput
-	detachCalls int
-	detachErr   error
+	attachInput  service.BatchAccountShareRoomAccountsInput
+	attachCalls  int
+	attachResult *service.BulkUpdateAccountsResult
+	attachErr    error
+	detachInput  service.BatchAccountShareRoomAccountsInput
+	detachCalls  int
+	detachErr    error
 }
 
 type accountShareRoomBatchConcurrencyCacheStub struct {
@@ -247,10 +249,25 @@ func (s *accountShareEndHandlerConcurrencyCache) GetAccountShareMembershipConcur
 func (s *accountShareRoomBatchHandlerRepoStub) AttachRoomAccountsAtomic(
 	_ context.Context,
 	input service.BatchAccountShareRoomAccountsInput,
-) error {
+) (*service.BulkUpdateAccountsResult, error) {
 	s.attachCalls++
 	s.attachInput = input
-	return s.attachErr
+	if s.attachErr != nil {
+		return nil, s.attachErr
+	}
+	if s.attachResult != nil {
+		return s.attachResult, nil
+	}
+	result := &service.BulkUpdateAccountsResult{
+		Success:    len(input.AccountIDs),
+		SuccessIDs: append([]int64(nil), input.AccountIDs...),
+		FailedIDs:  []int64{},
+		Results:    make([]service.BulkUpdateAccountResult, 0, len(input.AccountIDs)),
+	}
+	for _, accountID := range input.AccountIDs {
+		result.Results = append(result.Results, service.BulkUpdateAccountResult{AccountID: accountID, Success: true})
+	}
+	return result, nil
 }
 
 func (s *accountShareRoomBatchHandlerRepoStub) DetachRoomAccountsAtomic(
@@ -1119,6 +1136,51 @@ func TestAccountShareModeHandlerAttachBatchReturnsAllSuccessResponse(t *testing.
 			t.Fatalf("unexpected item result: %#v", item)
 		}
 	}
+}
+
+func TestAccountShareModeHandlerAttachBatchReturnsPartialSuccessResponse(t *testing.T) {
+	repo := &accountShareRoomBatchHandlerRepoStub{
+		attachResult: &service.BulkUpdateAccountsResult{
+			Success:    1,
+			Failed:     1,
+			SuccessIDs: []int64{10},
+			FailedIDs:  []int64{11},
+			Results: []service.BulkUpdateAccountResult{
+				{AccountID: 10, Success: true},
+				{
+					AccountID: 11,
+					Success:   false,
+					Error:     service.ErrAccountShareAccountUnavailable.Message,
+					Reason:    service.ErrAccountShareAccountUnavailable.Reason,
+					Message:   service.ErrAccountShareAccountUnavailable.Message,
+					Metadata:  map[string]string{"blocker": "overloaded"},
+				},
+			},
+		},
+	}
+	svc := service.NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
+	handler := NewAccountShareModeHandler(svc)
+
+	recorder := performAccountShareRoomBatchMutation(
+		t,
+		handler,
+		true,
+		`{"account_ids":[10,11],"idempotency_key":"attach-partial"}`,
+	)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	var envelope struct {
+		Data service.BulkUpdateAccountsResult `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &envelope))
+	require.Equal(t, 1, envelope.Data.Success)
+	require.Equal(t, 1, envelope.Data.Failed)
+	require.Equal(t, []int64{10}, envelope.Data.SuccessIDs)
+	require.Equal(t, []int64{11}, envelope.Data.FailedIDs)
+	require.Len(t, envelope.Data.Results, 2)
+	require.True(t, envelope.Data.Results[0].Success)
+	require.Equal(t, "ACCOUNT_SHARE_ACCOUNT_UNAVAILABLE", envelope.Data.Results[1].Reason)
+	require.Equal(t, "overloaded", envelope.Data.Results[1].Metadata["blocker"])
 }
 
 func TestAccountShareModeHandlerAttachBatchFailureReturnsErrorWithoutPartialData(t *testing.T) {

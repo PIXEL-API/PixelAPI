@@ -7,6 +7,7 @@ const {
   updateAccountMock,
   updateUserAccountMock,
   getUserAccountMock,
+  getUserModelOptionsMock,
   convertPlacementMock,
   convertAdminPlacementMock,
   checkMixedChannelRiskMock
@@ -14,6 +15,7 @@ const {
   updateAccountMock: vi.fn(),
   updateUserAccountMock: vi.fn(),
   getUserAccountMock: vi.fn(),
+  getUserModelOptionsMock: vi.fn(),
   convertPlacementMock: vi.fn(),
   convertAdminPlacementMock: vi.fn(),
   checkMixedChannelRiskMock: vi.fn()
@@ -61,7 +63,8 @@ vi.mock('@/api/admin/accounts', () => ({
 vi.mock('@/api/accounts', () => ({
   accountsAPI: {
     update: updateUserAccountMock,
-    getById: getUserAccountMock
+    getById: getUserAccountMock,
+    getModelOptions: getUserModelOptionsMock
   }
 }))
 
@@ -100,17 +103,43 @@ const ModelWhitelistSelectorStub = defineComponent({
     modelValue: {
       type: Array,
       default: () => []
+    },
+    allowedOptions: {
+      type: Array,
+      default: undefined
+    },
+    allowCustom: {
+      type: Boolean,
+      default: true
     }
   },
   emits: ['update:modelValue'],
   template: `
-    <div>
+    <div
+      data-testid="model-whitelist-selector"
+      :data-allow-custom="String(allowCustom)"
+      :data-allowed-options="Array.isArray(allowedOptions) ? allowedOptions.join(',') : ''"
+    >
       <button
         type="button"
         data-testid="rewrite-to-snapshot"
         @click="$emit('update:modelValue', ['gpt-5.2-2025-12-11'])"
       >
         rewrite
+      </button>
+      <button
+        type="button"
+        data-testid="clear-model-whitelist"
+        @click="$emit('update:modelValue', [])"
+      >
+        clear
+      </button>
+      <button
+        type="button"
+        data-testid="set-invalid-model-whitelist"
+        @click="$emit('update:modelValue', ['outside-priced-union'])"
+      >
+        invalid
       </button>
       <span data-testid="model-whitelist-value">
         {{ Array.isArray(modelValue) ? modelValue.join(',') : '' }}
@@ -201,10 +230,19 @@ function buildAccount() {
 }
 
 function mountModal(account = buildAccount(), extraProps: Record<string, unknown> = {}) {
+  const mountedAccount = extraProps.accountScope === 'user' && account.credentials?.model_mapping == null
+    ? {
+        ...account,
+        credentials: {
+          ...(account.credentials || {}),
+          model_mapping: { 'gpt-5.2': 'gpt-5.2' }
+        }
+      }
+    : account
   return mount(EditAccountModal, {
     props: {
       show: true,
-      account,
+      account: mountedAccount,
       proxies: [],
       groups: [],
       ...extraProps
@@ -228,6 +266,10 @@ describe('EditAccountModal', () => {
     convertPlacementMock.mockReset()
     convertAdminPlacementMock.mockReset()
     getUserAccountMock.mockReset()
+    getUserModelOptionsMock.mockReset()
+    getUserModelOptionsMock.mockResolvedValue({
+      models: ['gpt-5.2', 'gpt-5.2-2025-12-11', 'custom-model']
+    })
   })
 
   // 投放守卫：管理端命中"必须先转出投放"时，给出一键转私有并重放本次编辑的通路。
@@ -475,13 +517,13 @@ describe('EditAccountModal', () => {
     expect(wrapper.find('[data-testid="openai-plan-type-override"]').exists()).toBe(false)
   })
 
-  it('keeps account level read-only for user-scoped account edits', async () => {
+  it('keeps account level read-only and submits an editable identity whitelist for user-scoped account edits', async () => {
     const account = buildAccount()
     account.type = 'oauth'
     account.credentials = {
       access_token: 'oauth-token',
       model_mapping: {
-        'custom-model': 'custom-target'
+        'custom-model': 'custom-model'
       }
     }
     account.extra = {
@@ -500,7 +542,12 @@ describe('EditAccountModal', () => {
 
     const wrapper = mountModal(account)
     await wrapper.setProps({ accountScope: 'user' })
+    await flushPromises()
     expect(wrapper.find('[data-testid="openai-plan-type-override"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="user-model-whitelist-section"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="model-whitelist-selector"]').attributes('data-allow-custom')).toBe('false')
+    expect(wrapper.get('[data-testid="model-whitelist-value"]').text()).toBe('custom-model')
+    await wrapper.get('[data-testid="rewrite-to-snapshot"]').trigger('click')
     const concurrencyInput = wrapper.get('input[type="number"][min="1"][max="30"]')
     await concurrencyInput.setValue('')
     expect((concurrencyInput.element as HTMLInputElement).value).toBe('')
@@ -515,11 +562,50 @@ describe('EditAccountModal', () => {
     expect(payload).not.toHaveProperty('priority')
     expect(payload).not.toHaveProperty('auto_pause_on_expired')
     expect(payload?.credentials?.model_mapping).toEqual({
-      'custom-model': 'custom-target'
+      'gpt-5.2-2025-12-11': 'gpt-5.2-2025-12-11'
     })
     expect(payload?.extra?.openai_compact_mode).toBe('force_off')
     expect(payload?.extra?.openai_passthrough).toBe(true)
     expect(payload?.extra?.codex_5h_limit_percent).toBe(60)
+  })
+
+  it('blocks user-scoped updates when the whitelist is empty or outside the priced-model union', async () => {
+    const account = buildAccount()
+    account.type = 'oauth'
+    account.credentials = {
+      access_token: 'oauth-token',
+      model_mapping: { 'gpt-5.2': 'gpt-5.2' }
+    }
+    updateUserAccountMock.mockReset()
+    updateUserAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account, { accountScope: 'user' })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="clear-model-whitelist"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateUserAccountMock).not.toHaveBeenCalled()
+
+    await wrapper.get('[data-testid="set-invalid-model-whitelist"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateUserAccountMock).not.toHaveBeenCalled()
+  })
+
+  it('blocks user-scoped updates when priced-model options fail to load', async () => {
+    const account = buildAccount()
+    account.type = 'oauth'
+    account.credentials = {
+      access_token: 'oauth-token',
+      model_mapping: { 'gpt-5.2': 'gpt-5.2' }
+    }
+    getUserModelOptionsMock.mockRejectedValueOnce(new Error('network error'))
+    updateUserAccountMock.mockReset()
+
+    const wrapper = mountModal(account, { accountScope: 'user' })
+    await flushPromises()
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateUserAccountMock).not.toHaveBeenCalled()
   })
 
   it('submits OpenAI compact mode and compact-only model mapping', async () => {
@@ -686,6 +772,7 @@ describe('EditAccountModal', () => {
     expect(wrapper.find('[data-testid="grok-header-override"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="grok-client-tool-cache"]').exists()).toBe(false)
 
+    await flushPromises()
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
     await flushPromises()
 

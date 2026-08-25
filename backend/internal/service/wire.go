@@ -724,6 +724,7 @@ func ProvideAccountService(
 	concurrencyService *ConcurrencyService,
 	systemNoticeService *SystemNoticeService,
 	settingService *SettingService,
+	channelService *ChannelService,
 	agentIdentityWSInvalidator *AgentIdentityWSInvalidatorProxy,
 	accountShareModeService *AccountShareModeService,
 	rateLimitService *RateLimitService,
@@ -735,6 +736,7 @@ func ProvideAccountService(
 	svc.SetConcurrencyService(concurrencyService)
 	svc.SetSystemNoticeService(systemNoticeService)
 	svc.SetSettingService(settingService)
+	svc.SetPricedModelCatalog(channelService)
 	svc.SetAgentIdentityWSInvalidator(agentIdentityWSInvalidator)
 	svc.SetAccountShareBillingCacheInvalidator(accountShareModeService)
 	svc.SetGrokProxyCredentialRecovery(rateLimitService)

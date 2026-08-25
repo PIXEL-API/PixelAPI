@@ -28,6 +28,7 @@ import (
 const (
 	AccountShareModeGroupPlatformOpenAI    = PlatformOpenAI
 	AccountShareModeGroupPlatformAnthropic = PlatformAnthropic
+	AccountShareModeGroupPlatformOpencode  = PlatformOpencode
 
 	AccountShareListingStatusActive = "active"
 	AccountShareListingStatusPaused = "paused"
@@ -178,6 +179,34 @@ var accountShareModeAnthropicDefaultAllowedModels = []string{
 	"claude-fable-5",
 	"claude-opus-4-6",
 	"claude-haiku-4-5",
+}
+
+// accountShareModeOpencodeDefaultAllowedModels 是账号广场 opencode 房间的默认模型白名单。
+// 与自有账号默认模型映射（opencodeDefaultModelSlugs，26 个裸 slug）不同：这里只收录
+// OPENCODE 渠道（渠道中心）channel_model_pricing 里 platform=opencode 且配了价的 20 个模型，
+// 保证房间白名单与渠道定价一致，避免把渠道未配价的模型上架导致计费为 0。
+// 渠道关联后 dispatch 的 restrict_models 白名单会以同一份渠道定价兜底。
+var accountShareModeOpencodeDefaultAllowedModels = []string{
+	"deepseek-v4-flash",
+	"deepseek-v4-pro",
+	"glm-5.1",
+	"glm-5.2",
+	"glm-5.3",
+	"gpt-5.6-luna",
+	"grok-4.5",
+	"hy3",
+	"kimi-k2.7-code",
+	"kimi-k3",
+	"minimax-m2.5",
+	"minimax-m2.7",
+	"minimax-m3",
+	"mimo-v2.5",
+	"mimo-v2.5-pro",
+	"muse-spark-1.2-contributor",
+	"qwen3.6-plus",
+	"qwen3.7-max",
+	"qwen3.7-plus",
+	"qwen3.8-max",
 }
 
 var (
@@ -1240,7 +1269,7 @@ type AccountShareHistoryRepository interface {
 type AccountShareRoomRepository interface {
 	CreateRoomFromOwnedAccount(ctx context.Context, ownerUserID, accountID, modeGroupID int64, idempotencyKey string, listing *AccountShareListing) (*AccountShareListing, error)
 	ListRoomAccounts(ctx context.Context, listingID, viewerUserID int64, viewerIsAdmin bool) ([]AccountShareRoomAccount, error)
-	AttachRoomAccountsAtomic(ctx context.Context, input BatchAccountShareRoomAccountsInput) error
+	AttachRoomAccountsAtomic(ctx context.Context, input BatchAccountShareRoomAccountsInput) (*BulkUpdateAccountsResult, error)
 	DetachRoomAccountsAtomic(ctx context.Context, input BatchAccountShareRoomAccountsInput) (*AccountShareSeatBillingResult, error)
 	HasRoomAccount(ctx context.Context, ownerUserID, accountID int64) (bool, error)
 	GetExternalPlacement(ctx context.Context, ownerUserID, accountID int64) (*AccountExternalPlacement, error)
@@ -1610,9 +1639,9 @@ func (s *AccountShareModeService) processOrphanBindingCleanupBatch(ctx context.C
 	}
 }
 
-func (s *AccountShareModeService) processRoomLifecycleFinalizationOnce() {
+func (s *AccountShareModeService) processRoomLifecycleFinalizationOnce() error {
 	if s == nil || s.repo == nil {
-		return
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(s.seatBillingWorkerContext(), 2*time.Minute)
 	defer cancel()
@@ -1623,12 +1652,15 @@ func (s *AccountShareModeService) processRoomLifecycleFinalizationOnce() {
 		if err := guard.Check(taskCtx); err != nil {
 			return err
 		}
-		s.processRoomLifecycleOnce(taskCtx)
+		if err := s.processRoomLifecycleOnce(taskCtx, guard); err != nil {
+			return err
+		}
 		return guard.Check(taskCtx)
 	})
 	if err != nil {
 		log.Printf("account_share_mode: room lifecycle finalizer lease failed: %v", err)
 	}
+	return err
 }
 
 func (s *AccountShareModeService) processSeatBillingOnce() {
@@ -2008,7 +2040,7 @@ func (s *AccountShareModeService) ListModeGroups(ctx context.Context) ([]Account
 	if s == nil || s.repo == nil {
 		return nil, ErrAccountShareModeGroupUnavailable
 	}
-	platforms := [...]string{PlatformOpenAI, PlatformAnthropic}
+	platforms := [...]string{PlatformOpenAI, PlatformAnthropic, PlatformOpencode}
 	groups := make([]AccountShareModeGroup, 0, len(platforms))
 	for _, platform := range platforms {
 		group, err := s.repo.GetModeGroup(ctx, platform)
@@ -2494,7 +2526,8 @@ func (s *AccountShareModeService) CreateRoomFromOwnedAccount(ctx context.Context
 		}
 		accountLevel = NormalizeOpenAIAccountLevelWithConfigs(account.Platform, account.AccountLevel, account.Credentials, account.Extra, levelConfigs)
 	}
-	if accountLevel == AccountLevelUnknown {
+	// opencode 是 apikey-only 平台，没有账号等级概念，account_level 恒为 unknown，允许上架。
+	if accountLevel == AccountLevelUnknown && account.Platform != PlatformOpencode {
 		return nil, ErrAccountShareRoomUnknownLevel
 	}
 	if err := validateAccountShareListingConfig(
@@ -2603,8 +2636,9 @@ func (s *AccountShareModeService) mutateRoomAccounts(ctx context.Context, input 
 	}
 	input.AccountIDs = accountIDs
 	input.IdempotencyKey = idempotencyKey
+	var attachResult *BulkUpdateAccountsResult
 	if attach {
-		err = roomRepo.AttachRoomAccountsAtomic(ctx, input)
+		attachResult, err = roomRepo.AttachRoomAccountsAtomic(ctx, input)
 	} else {
 		if s.concurrencyService == nil {
 			return nil, ErrServiceUnavailable
@@ -2631,6 +2665,9 @@ func (s *AccountShareModeService) mutateRoomAccounts(ctx context.Context, input 
 	if err != nil {
 		return nil, err
 	}
+	if attach {
+		return orderAccountShareRoomBatchResult(accountIDs, attachResult)
+	}
 	result := &BulkUpdateAccountsResult{
 		Success:    len(accountIDs),
 		Failed:     0,
@@ -2645,6 +2682,45 @@ func (s *AccountShareModeService) mutateRoomAccounts(ctx context.Context, input 
 		})
 	}
 	return result, nil
+}
+
+func orderAccountShareRoomBatchResult(accountIDs []int64, unordered *BulkUpdateAccountsResult) (*BulkUpdateAccountsResult, error) {
+	if unordered == nil {
+		return nil, errors.New("account share room attach returned no result")
+	}
+	resultsByID := make(map[int64]BulkUpdateAccountResult, len(unordered.Results))
+	for _, item := range unordered.Results {
+		if item.AccountID <= 0 {
+			return nil, errors.New("account share room attach returned an invalid account id")
+		}
+		if _, exists := resultsByID[item.AccountID]; exists {
+			return nil, fmt.Errorf("account share room attach returned duplicate account %d", item.AccountID)
+		}
+		resultsByID[item.AccountID] = item
+	}
+	ordered := &BulkUpdateAccountsResult{
+		SuccessIDs: make([]int64, 0, len(accountIDs)),
+		FailedIDs:  make([]int64, 0, len(accountIDs)),
+		Results:    make([]BulkUpdateAccountResult, 0, len(accountIDs)),
+	}
+	for _, accountID := range accountIDs {
+		item, exists := resultsByID[accountID]
+		if !exists {
+			return nil, fmt.Errorf("account share room attach returned no result for account %d", accountID)
+		}
+		ordered.Results = append(ordered.Results, item)
+		if item.Success {
+			ordered.Success++
+			ordered.SuccessIDs = append(ordered.SuccessIDs, accountID)
+		} else {
+			ordered.Failed++
+			ordered.FailedIDs = append(ordered.FailedIDs, accountID)
+		}
+	}
+	if len(resultsByID) != len(accountIDs) {
+		return nil, errors.New("account share room attach returned results outside the request")
+	}
+	return ordered, nil
 }
 
 func (s *AccountShareModeService) ListListings(ctx context.Context, viewerUserID int64, viewerIsAdmin bool, filters AccountShareListingFilters, params pagination.PaginationParams) ([]AccountShareListing, *pagination.PaginationResult, error) {
@@ -3423,7 +3499,7 @@ func (s *AccountShareModeService) validateOwnerRelist(ctx context.Context, actor
 		return nil
 	}
 
-	modelID := firstAllowedModel(listing.AllowedModels)
+	modelID := accountShareRoomConnectivityTestModel(listing.Platform, listing.AllowedModels)
 	testCtx, cancel := context.WithTimeout(ctx, accountShareConnectivityTestTimeout(modelID))
 	defer cancel()
 	result, err := s.accountTestService.RunTestBackground(testCtx, listing.AccountID, modelID)
@@ -3469,6 +3545,17 @@ func accountShareConnectivityTestTimeout(modelID string) time.Duration {
 		return AccountShareModeImageConnectivityTestTimeout
 	}
 	return AccountShareModeConnectivityTestTimeout
+}
+
+// accountShareRoomConnectivityTestModel returns the model used by room health
+// validation. OpenCode rooms deliberately use the stable default probe instead
+// of the first room allow-list model, which may be unavailable independently of
+// the account credentials.
+func accountShareRoomConnectivityTestModel(platform string, allowedModels []string) string {
+	if strings.EqualFold(strings.TrimSpace(platform), PlatformOpencode) {
+		return defaultOpencodeTestModel
+	}
+	return firstAllowedModel(allowedModels)
 }
 
 func isTransientAccountShareConnectivityFailure(message string) bool {
@@ -4872,7 +4959,9 @@ func (s *AccountShareModeService) schedulePostCreateConnectivityTest(listing *Ac
 	}
 	validationListing := *listing
 	validationListing.AllowedModels = append([]string(nil), listing.AllowedModels...)
-	timeout := accountShareConnectivityTestTimeout(firstAllowedModel(validationListing.AllowedModels)) + time.Minute
+	timeout := accountShareConnectivityTestTimeout(
+		accountShareRoomConnectivityTestModel(validationListing.Platform, validationListing.AllowedModels),
+	) + time.Minute
 	go func() {
 		testCtx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
@@ -5123,6 +5212,8 @@ func DefaultAccountShareModeAllowedModelsForPlatform(platform string) []string {
 	switch strings.ToLower(strings.TrimSpace(platform)) {
 	case PlatformAnthropic:
 		return append([]string(nil), accountShareModeAnthropicDefaultAllowedModels...)
+	case PlatformOpencode:
+		return append([]string(nil), accountShareModeOpencodeDefaultAllowedModels...)
 	default:
 		return DefaultAccountShareModeAllowedModels()
 	}
@@ -5904,6 +5995,9 @@ func accountShareRecommendationQuotaRiskPenalty(listing AccountShareListing) flo
 			listing.Codex7dUsage,
 			listing.Anthropic5hUsage,
 			listing.Anthropic7dUsage,
+			listing.Opencode5hUsage,
+			listing.Opencode7dUsage,
+			listing.Opencode30dUsage,
 		}
 		for _, progress := range progresses {
 			if progress != nil {

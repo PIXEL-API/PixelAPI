@@ -824,6 +824,16 @@ func (u *rawChatResponsesUpstreamStub) Do(*http.Request, string, int64, int) (*h
 	return u.resp, nil
 }
 
+func (u *rawChatResponsesUpstreamStub) DoWithTLS(
+	*http.Request,
+	string,
+	int64,
+	int,
+	*tlsfingerprint.Profile,
+) (*http.Response, error) {
+	return u.resp, nil
+}
+
 func newGatewayBridgeStatusTestService(statusCode int) *GatewayService {
 	upstream := &gatewayBridgeStatusUpstream{resp: &http.Response{
 		StatusCode: statusCode,

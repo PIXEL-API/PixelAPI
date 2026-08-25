@@ -272,7 +272,7 @@ type accountShareLifecycleRepository interface {
 		actorIsAdmin bool,
 		listingID int64,
 	) (*AccountShareSeatBillingResult, error)
-	ListDrainingRoomIDs(ctx context.Context, afterID int64, limit int) ([]int64, error)
+	ListOpenRoomLifecycleListingIDs(ctx context.Context, afterID int64, limit int) ([]int64, error)
 	ListValidatingRoomIDs(ctx context.Context, staleBefore time.Time, limit int) ([]int64, error)
 	FindRoomDeleteOperation(
 		ctx context.Context,
@@ -807,60 +807,91 @@ func operationActorIsAdmin(operation *AccountShareRoomOperation) bool {
 	return operation != nil && operation.ActorRole == "admin"
 }
 
-func (s *AccountShareModeService) processRoomLifecycleOnce(ctx context.Context) {
+func (s *AccountShareModeService) processRoomLifecycleOnce(ctx context.Context, guard *ClusterLeaseGuard) error {
 	if s == nil {
-		return
+		return ErrServiceUnavailable
 	}
 	repo, err := s.lifecycleRepository()
 	if err != nil {
-		return
+		return err
 	}
 	afterID := s.roomLifecycleCursor()
-	listingIDs, err := repo.ListDrainingRoomIDs(ctx, afterID, AccountShareModeSeatBillingBatchSize)
+	listingIDs, err := repo.ListOpenRoomLifecycleListingIDs(ctx, afterID, AccountShareModeSeatBillingBatchSize)
 	if err != nil {
-		return
+		return fmt.Errorf("list open room lifecycle operations after listing %d: %w", afterID, err)
 	}
 	if len(listingIDs) == 0 && afterID > 0 {
 		s.setRoomLifecycleCursor(0)
-		listingIDs, err = repo.ListDrainingRoomIDs(ctx, 0, AccountShareModeSeatBillingBatchSize)
+		listingIDs, err = repo.ListOpenRoomLifecycleListingIDs(ctx, 0, AccountShareModeSeatBillingBatchSize)
 		if err != nil {
-			return
+			return fmt.Errorf("restart open room lifecycle operation scan: %w", err)
 		}
 	}
 	if len(listingIDs) > 0 {
 		s.setRoomLifecycleCursor(listingIDs[len(listingIDs)-1])
 	}
+	processingErrors := make([]error, 0)
 	for _, listingID := range listingIDs {
 		state, err := repo.GetRoomManagementState(ctx, 0, true, listingID)
-		if err != nil || state == nil || strings.TrimSpace(state.PendingOperationID) == "" {
+		if err != nil {
+			processingErrors = append(processingErrors, fmt.Errorf("load room lifecycle state for listing %d: %w", listingID, err))
+			continue
+		}
+		if state == nil || strings.TrimSpace(state.PendingOperationID) == "" {
+			processingErrors = append(processingErrors, fmt.Errorf("listing %d has an open lifecycle operation without a pending operation pointer", listingID))
 			continue
 		}
 		hydrateErr := s.hydrateRoomRuntimeState(ctx, state)
 		operation, err := repo.GetRoomOperation(ctx, 0, true, state.PendingOperationID)
-		if err != nil || operation == nil {
+		if err != nil {
+			processingErrors = append(processingErrors, fmt.Errorf("load room lifecycle operation %s for listing %d: %w", state.PendingOperationID, listingID, err))
+			continue
+		}
+		if operation == nil || operation.ListingID != listingID {
+			processingErrors = append(processingErrors, fmt.Errorf("listing %d lifecycle operation %s is inconsistent", listingID, state.PendingOperationID))
 			continue
 		}
 		switch operation.Action {
 		case AccountShareRoomOperationActionDelete:
 			if hydrateErr != nil {
+				processingErrors = append(processingErrors, fmt.Errorf("hydrate delete operation %s for listing %d: %w", operation.ID, listingID, hydrateErr))
 				continue
 			}
-			_, _ = s.tryFinalizeRoomDeletion(ctx, repo, operation)
+			if !roomDeletionReadyForOperation(state, operation.ID) {
+				continue
+			}
+			if leaseErr := guard.Check(ctx); leaseErr != nil {
+				return errors.Join(errors.Join(processingErrors...), leaseErr)
+			}
+			if _, finalizeErr := repo.FinalizeRoomDeletion(ctx, operation.ListingID, operation.ID); finalizeErr != nil &&
+				!isExpectedRoomLifecycleFinalizationError(finalizeErr) {
+				processingErrors = append(processingErrors, fmt.Errorf("finalize delete operation %s for listing %d: %w", operation.ID, listingID, finalizeErr))
+			}
 		case AccountShareRoomOperationActionDrain:
 			// 残留成员重清退：排空事务与"派发失败降级"并发时可能漏掉一个
 			// 恰在降级中的成员，这里幂等重跑清退直至归零。
 			if state.Blockers.QueuedMembershipCount > 0 || state.Blockers.ActiveMembershipCount > 0 {
+				if leaseErr := guard.Check(ctx); leaseErr != nil {
+					return errors.Join(errors.Join(processingErrors...), leaseErr)
+				}
 				billing, clearErr := repo.ClearRoomMembersForDrain(ctx, 0, true, listingID)
 				if clearErr != nil {
 					log.Printf("account_share_mode: drain member re-clearing failed: listing=%d err=%v", listingID, clearErr)
+					processingErrors = append(processingErrors, fmt.Errorf("re-clear drain members for listing %d: %w", listingID, clearErr))
 				} else {
 					s.invalidateSeatBillingCaches(billing)
 				}
 				continue
 			}
 			if hydrateErr == nil && roomDeletionReadyForOperation(state, operation.ID) {
-				if _, err := repo.FinalizeDrainingRoom(ctx, listingID, state.RowVersion); err != nil {
-					log.Printf("account_share_mode: drain finalize failed: listing=%d err=%v", listingID, err)
+				if leaseErr := guard.Check(ctx); leaseErr != nil {
+					return errors.Join(errors.Join(processingErrors...), leaseErr)
+				}
+				if _, finalizeErr := repo.FinalizeDrainingRoom(ctx, listingID, state.RowVersion); finalizeErr != nil {
+					log.Printf("account_share_mode: drain finalize failed: listing=%d err=%v", listingID, finalizeErr)
+					if !isExpectedRoomLifecycleFinalizationError(finalizeErr) {
+						processingErrors = append(processingErrors, fmt.Errorf("finalize drain operation %s for listing %d: %w", operation.ID, listingID, finalizeErr))
+					}
 				}
 				continue
 			}
@@ -872,14 +903,34 @@ func (s *AccountShareModeService) processRoomLifecycleOnce(ctx context.Context) 
 				state.Blockers.EndingMembershipCount == 0 &&
 				state.Blockers.SynchronousBillingPendingCount == 0 {
 				log.Printf("account_share_mode: drain force-finalize after timeout: listing=%d blockers=%v", listingID, state.Blockers.Metadata())
-				if _, err := repo.FinalizeDrainingRoom(ctx, listingID, state.RowVersion); err != nil {
-					log.Printf("account_share_mode: drain force-finalize failed: listing=%d err=%v", listingID, err)
+				if leaseErr := guard.Check(ctx); leaseErr != nil {
+					return errors.Join(errors.Join(processingErrors...), leaseErr)
+				}
+				if _, finalizeErr := repo.FinalizeDrainingRoom(ctx, listingID, state.RowVersion); finalizeErr != nil {
+					log.Printf("account_share_mode: drain force-finalize failed: listing=%d err=%v", listingID, finalizeErr)
+					if !isExpectedRoomLifecycleFinalizationError(finalizeErr) {
+						processingErrors = append(processingErrors, fmt.Errorf("force-finalize drain operation %s for listing %d: %w", operation.ID, listingID, finalizeErr))
+					}
 				}
 				continue
 			}
 			log.Printf("account_share_mode: drain finalize waiting: listing=%d hydrate_err=%v blockers=%v", listingID, hydrateErr, state.Blockers.Metadata())
+			if hydrateErr != nil {
+				processingErrors = append(processingErrors, fmt.Errorf("hydrate drain operation %s for listing %d: %w", operation.ID, listingID, hydrateErr))
+			}
+		default:
+			processingErrors = append(processingErrors, fmt.Errorf("listing %d has unsupported open lifecycle operation %s action %q", listingID, operation.ID, operation.Action))
 		}
 	}
+	return errors.Join(processingErrors...)
+}
+
+func isExpectedRoomLifecycleFinalizationError(err error) bool {
+	return errors.Is(err, ErrAccountShareRoomDeleteBlocked) ||
+		errors.Is(err, ErrAccountShareRoomOperationConflict) ||
+		errors.Is(err, ErrAccountShareVersionConflict) ||
+		errors.Is(err, ErrAccountShareRoomInvalidTransition) ||
+		errors.Is(err, ErrAccountShareRoomDeleted)
 }
 
 func (s *AccountShareModeService) roomLifecycleCursor() int64 {
@@ -1106,7 +1157,12 @@ func (s *AccountShareModeService) validateRoomActivation(
 		return ErrAccountShareRelistAccountUnavailable
 	}
 
-	connectivityModel := firstAllowedModel(allowedModels)
+	connectivityModel := accountShareRoomConnectivityTestModel(listing.Platform, allowedModels)
+	// OpenCode 房间的恢复校验只需要确认账号凭证和上游连通性，不应使用房间
+	// 白名单中的任意模型作为探针。白名单首项可能是区域、套餐或上游状态
+	// 不稳定的模型（例如 grok-4.5），会把模型级失败误判成账号不可用。
+	// OpenCode 账号测试服务的默认探针是 deepseek-v4-flash，这里显式固定
+	// 使用同一个模型，避免房间恢复流程传入首个白名单模型覆盖该默认值。
 	validationCtx, validationCancel := context.WithTimeout(
 		ctx,
 		accountShareConnectivityTestTimeout(connectivityModel),

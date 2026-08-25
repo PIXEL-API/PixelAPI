@@ -307,6 +307,85 @@ func TestConvertClaudeToolsToGeminiTools_PreservesWebSearchAlongsideFunctions(t 
 	require.Empty(t, googleSearch)
 }
 
+func TestIsClaudeWebSearchToolMap_FunctionNamedWebSearchStaysClientSide(t *testing.T) {
+	require.False(t, isClaudeWebSearchToolMap(map[string]any{
+		"type": "function",
+		"name": "web_search",
+	}))
+	require.True(t, isClaudeWebSearchToolMap(map[string]any{
+		"type": "web_search_20250305",
+		"name": "web_search",
+	}))
+}
+
+func TestCleanToolSchema_NormalizesGeminiUnsupportedSchemaFields(t *testing.T) {
+	schema := map[string]any{
+		"type":        "object",
+		"$defs":       map[string]any{"unused": map[string]any{"type": "string"}},
+		"definitions": map[string]any{"legacy": map[string]any{"type": "number"}},
+		"properties": map[string]any{
+			"path":  map[string]any{"type": []any{"string", "null"}},
+			"count": map[string]any{"type": []any{"null", "integer"}},
+			"empty": map[string]any{"type": []any{"null"}},
+		},
+	}
+
+	cleaned, ok := cleanToolSchema(schema).(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "OBJECT", cleaned["type"])
+	require.NotContains(t, cleaned, "$defs")
+	require.NotContains(t, cleaned, "definitions")
+	properties, ok := cleaned["properties"].(map[string]any)
+	require.True(t, ok)
+	pathSchema, ok := properties["path"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "STRING", pathSchema["type"])
+	countSchema, ok := properties["count"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "INTEGER", countSchema["type"])
+	emptySchema, ok := properties["empty"].(map[string]any)
+	require.True(t, ok)
+	require.NotContains(t, emptySchema, "type")
+}
+
+func TestCleanToolSchema_ConvertsIntegerExclusiveMinimumAndMixedScalarEnum(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"count": map[string]any{"type": "integer", "exclusiveMinimum": float64(0)},
+			"kind":  map[string]any{"enum": []any{"enabled", false, float64(1), nil}},
+		},
+	}
+	cleaned, ok := cleanToolSchema(schema).(map[string]any)
+	require.True(t, ok)
+	properties, ok := cleaned["properties"].(map[string]any)
+	require.True(t, ok)
+	count, ok := properties["count"].(map[string]any)
+	require.True(t, ok)
+	require.NotContains(t, count, "exclusiveMinimum")
+	require.Equal(t, float64(1), count["minimum"])
+	kind, ok := properties["kind"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, []any{"enabled", "false", "1", "null"}, kind["enum"])
+}
+
+func TestCleanToolSchema_DropsAmbiguousExclusiveMinimumAndObjectEnum(t *testing.T) {
+	for _, schema := range []map[string]any{
+		{"type": "number", "exclusiveMinimum": 0},
+		{"type": "integer", "exclusiveMinimum": 0.5},
+	} {
+		cleaned, ok := cleanToolSchema(schema).(map[string]any)
+		require.True(t, ok)
+		require.NotContains(t, cleaned, "exclusiveMinimum")
+		require.NotContains(t, cleaned, "minimum")
+	}
+	cleaned, ok := cleanToolSchema(map[string]any{
+		"enum": []any{"valid", map[string]any{"invalid": true}},
+	}).(map[string]any)
+	require.True(t, ok)
+	require.NotContains(t, cleaned, "enum")
+}
+
 func TestGeminiHandleNativeNonStreamingResponse_DebugDisabledDoesNotEmitHeaderLogs(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	logSink, restore := captureStructuredLog(t)

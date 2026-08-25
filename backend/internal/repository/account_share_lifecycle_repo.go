@@ -410,11 +410,26 @@ func (r *accountShareModeRepository) FinalizeDrainingRoom(
 	if listing.DeletedAt.Valid {
 		return nil, service.ErrAccountShareRoomDeleted
 	}
-	if listing.Status != service.AccountShareListingStatusDraining || !listing.PendingOperationID.Valid {
+	if (listing.Status != service.AccountShareListingStatusDraining &&
+		listing.Status != service.AccountShareListingStatusPaused) ||
+		!listing.PendingOperationID.Valid {
 		return nil, service.ErrAccountShareRoomInvalidTransition
 	}
 	if expectedVersion > 0 && listing.RowVersion != expectedVersion {
 		return nil, accountShareVersionConflict(expectedVersion, listing.RowVersion)
+	}
+
+	operationID := listing.PendingOperationID.String
+	operation, err := getAccountShareRoomOperationInTx(ctx, tx, operationID)
+	if err != nil {
+		return nil, err
+	}
+	if operation.ListingID != listing.ID ||
+		operation.Action != accountShareRoomOperationActionDrain ||
+		(operation.Status != accountShareRoomOperationStatusPending &&
+			operation.Status != "running" &&
+			operation.Status != "needs_attention") {
+		return nil, service.ErrAccountShareRoomOperationConflict
 	}
 	blockers, err := accountShareLifecycleDatabaseBlockersInTx(ctx, tx, listing.ID)
 	if err != nil {
@@ -433,7 +448,6 @@ func (r *accountShareModeRepository) FinalizeDrainingRoom(
 		return nil, service.ErrAccountShareRoomDeleteBlocked.WithMetadata(blockers.Metadata())
 	}
 
-	operationID := listing.PendingOperationID.String
 	result, err := tx.ExecContext(ctx, `
 		UPDATE account_share_listings
 		SET status = 'paused',
@@ -488,7 +502,7 @@ func (r *accountShareModeRepository) FinalizeDrainingRoom(
 	return r.GetListingByID(ctx, listing.ID, listing.OwnerUserID)
 }
 
-func (r *accountShareModeRepository) ListDrainingRoomIDs(ctx context.Context, afterID int64, limit int) ([]int64, error) {
+func (r *accountShareModeRepository) ListOpenRoomLifecycleListingIDs(ctx context.Context, afterID int64, limit int) ([]int64, error) {
 	if r == nil || r.db == nil {
 		return nil, service.ErrServiceUnavailable
 	}
@@ -499,13 +513,16 @@ func (r *accountShareModeRepository) ListDrainingRoomIDs(ctx context.Context, af
 		limit = 100
 	}
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id
-		FROM account_share_listings
-		WHERE status = 'draining'
-			AND pending_operation_id IS NOT NULL
-			AND deleted_at IS NULL
-			AND id > $1
-		ORDER BY id ASC
+		SELECT listing.id
+		FROM account_share_room_operations operation
+		JOIN account_share_listings listing
+			ON listing.pending_operation_id = operation.id
+		WHERE listing.status IN ('draining', 'paused')
+			AND listing.deleted_at IS NULL
+			AND listing.id > $1
+			AND operation.action IN ('drain_room', 'delete_room')
+			AND operation.status IN ('pending', 'running', 'needs_attention')
+		ORDER BY listing.id ASC
 		LIMIT $2
 	`, afterID, limit)
 	if err != nil {

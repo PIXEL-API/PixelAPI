@@ -217,7 +217,7 @@ func TestGeminiErrorPolicyIntegration(t *testing.T) {
 			expectHandleError: true,
 		},
 		{
-			name: "custom_codes_skipped_500_no_failover",
+			name: "custom_codes_skipped_500_failover",
 			account: &Account{
 				ID:       201,
 				Type:     AccountTypeAPIKey,
@@ -229,7 +229,7 @@ func TestGeminiErrorPolicyIntegration(t *testing.T) {
 			},
 			statusCode:        500,
 			respBody:          []byte(`{"error":"internal"}`),
-			expectFailover:    false,
+			expectFailover:    true,
 			expectHandleError: false,
 		},
 		{
@@ -252,7 +252,7 @@ func TestGeminiErrorPolicyIntegration(t *testing.T) {
 			statusCode:        503,
 			respBody:          []byte(`overloaded`),
 			expectFailover:    true,
-			expectHandleError: true,
+			expectHandleError: false,
 		},
 		{
 			name: "no_policy_429_failover_via_shouldFailover",
@@ -308,14 +308,18 @@ func TestGeminiErrorPolicyIntegration(t *testing.T) {
 			if svc.rateLimitService != nil {
 				switch svc.rateLimitService.CheckErrorPolicy(ctx, account, statusCode, respBody) {
 				case ErrorPolicySkipped:
-					// Skipped → return error directly (no handleGeminiUpstreamError, no failover)
-					gotFailover = false
+					// Skipped 只跳过账号状态标记；可 failover 状态仍换号。
+					gotFailover = svc.skippedErrorPolicyFailoverError(c, account, statusCode, respBody, "req-test") != nil
 					handleErrorCalled = false
 					goto verify
-				case ErrorPolicyMatched, ErrorPolicyTempUnscheduled:
+				case ErrorPolicyMatched:
 					svc.handleGeminiUpstreamError(ctx, account, statusCode, headers, respBody)
 					handleErrorCalled = true
-					gotFailover = true
+					gotFailover = svc.shouldFailoverGeminiUpstreamError(statusCode)
+					goto verify
+				case ErrorPolicyTempUnscheduled:
+					handleErrorCalled = false
+					gotFailover = svc.shouldFailoverGeminiUpstreamError(statusCode)
 					goto verify
 				}
 			}
@@ -337,6 +341,36 @@ func TestGeminiErrorPolicyIntegration(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSkippedErrorPolicyFailoverError_PoolRetryStatus(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &GeminiMessagesCompatService{}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	body := []byte(`{"error":{"message":"temporarily unavailable"}}`)
+
+	poolAccount := &Account{
+		ID:       301,
+		Platform: PlatformGemini,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"pool_mode":                    true,
+			"pool_mode_retry_status_codes": []any{float64(500)},
+		},
+	}
+	failoverErr := svc.skippedErrorPolicyFailoverError(c, poolAccount, http.StatusInternalServerError, body, "req-1")
+	require.NotNil(t, failoverErr)
+	require.Equal(t, http.StatusInternalServerError, failoverErr.StatusCode)
+	require.True(t, failoverErr.RetryableOnSameAccount)
+
+	poolAccount.Credentials["pool_mode_retry_status_codes"] = []any{float64(429)}
+	failoverErr = svc.skippedErrorPolicyFailoverError(c, poolAccount, http.StatusInternalServerError, body, "req-2")
+	require.NotNil(t, failoverErr)
+	require.False(t, failoverErr.RetryableOnSameAccount)
+
+	require.Nil(t, svc.skippedErrorPolicyFailoverError(c, poolAccount, http.StatusBadRequest, body, "req-3"))
 }
 
 // ---------------------------------------------------------------------------

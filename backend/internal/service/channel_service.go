@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -50,6 +51,62 @@ type ChannelRepository interface {
 	UpdateModelPricing(ctx context.Context, pricing *ChannelModelPricing) error
 	DeleteModelPricing(ctx context.Context, id int64) error
 	ReplaceModelPricing(ctx context.Context, channelID int64, pricingList []ChannelModelPricing) error
+}
+
+// ListPricedModelIDs returns the union of model identifiers configured in
+// active channel pricing (including group/account pricing rules).
+// An empty platforms slice includes every platform; otherwise matching is
+// case-insensitive and model names are returned in stable lexical order.
+func (s *ChannelService) ListPricedModelIDs(ctx context.Context, platforms []string) ([]string, error) {
+	if s == nil || s.repo == nil {
+		return nil, fmt.Errorf("channel service is not configured")
+	}
+
+	platformSet := make(map[string]struct{}, len(platforms))
+	for _, platform := range platforms {
+		if normalized := strings.ToLower(strings.TrimSpace(platform)); normalized != "" {
+			platformSet[normalized] = struct{}{}
+		}
+	}
+
+	channels, err := s.repo.ListAll(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list channels for priced model options: %w", err)
+	}
+
+	models := make(map[string]struct{})
+	addPricing := func(pricing []ChannelModelPricing) {
+		for _, entry := range pricing {
+			platform := strings.ToLower(strings.TrimSpace(entry.Platform))
+			if len(platformSet) > 0 {
+				if _, ok := platformSet[platform]; !ok {
+					continue
+				}
+			}
+			for _, model := range entry.Models {
+				if normalized := strings.TrimSpace(model); normalized != "" {
+					models[normalized] = struct{}{}
+				}
+			}
+		}
+	}
+
+	for _, channel := range channels {
+		if channel.Status != StatusActive {
+			continue
+		}
+		addPricing(channel.ModelPricing)
+		for _, rule := range channel.AccountStatsPricingRules {
+			addPricing(rule.Pricing)
+		}
+	}
+
+	result := make([]string, 0, len(models))
+	for model := range models {
+		result = append(result, model)
+	}
+	sort.Strings(result)
+	return result, nil
 }
 
 // channelModelKey 渠道缓存复合键（显式包含 platform 防止跨平台同名模型冲突）

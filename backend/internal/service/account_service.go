@@ -13,11 +13,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/domain"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 
 	"golang.org/x/sync/singleflight"
@@ -58,6 +54,9 @@ var (
 	ErrOwnedAgentIdentityWSInvalidatorUnavailable = infraerrors.InternalServer("OWNED_AGENT_IDENTITY_WS_INVALIDATOR_UNAVAILABLE", "Codex Agent Identity connection invalidation is unavailable")
 	ErrOwnedAccountShareModeBoundaryUnavailable   = infraerrors.InternalServer("OWNED_ACCOUNT_SHARE_MODE_BOUNDARY_UNAVAILABLE", "account share mode boundary check is unavailable")
 	ErrOwnedAccountProxyValidationUnavailable     = infraerrors.InternalServer("OWNED_ACCOUNT_PROXY_VALIDATION_UNAVAILABLE", "owned account proxy validation is unavailable")
+	ErrOwnedAccountModelCatalogUnavailable        = infraerrors.InternalServer("OWNED_ACCOUNT_MODEL_CATALOG_UNAVAILABLE", "priced model catalog is unavailable")
+	ErrOwnedAccountModelMappingInvalid            = infraerrors.BadRequest("OWNED_ACCOUNT_MODEL_MAPPING_INVALID", "personal account model whitelist must contain at least one exact model mapped to itself")
+	ErrOwnedAccountModelNotSelectable             = infraerrors.BadRequest("OWNED_ACCOUNT_MODEL_NOT_SELECTABLE", "personal account model is not available in active channel pricing")
 	ErrAccountDeletionBlocked                     = infraerrors.Conflict("ACCOUNT_DELETION_BLOCKED", "account cannot be deleted while account-share usage is still active")
 	ErrAccountDeletionGuardUnavailable            = infraerrors.InternalServer("ACCOUNT_DELETION_GUARD_UNAVAILABLE", "account deletion safety check is unavailable")
 	ErrAccountMutationBlocked                     = infraerrors.Conflict("ACCOUNT_MUTATION_BLOCKED_BY_ROOM", "account-sensitive settings cannot be changed while the account is assigned to an active room")
@@ -615,7 +614,14 @@ type AccountService struct {
 	grokProxyRecovery          interface {
 		RecoverGrokProxyCredentialFailure(context.Context, int64) (*SuccessfulTestRecoveryResult, error)
 	}
+	pricedModelCatalog pricedModelCatalog
 }
+
+type pricedModelCatalog interface {
+	ListPricedModelIDs(ctx context.Context, platforms []string) ([]string, error)
+}
+
+type ownedSelectableModelCacheContextKey struct{}
 
 type accountShareSeatBillingCacheInvalidator interface {
 	invalidateSeatBillingCaches(result *AccountShareSeatBillingResult)
@@ -761,6 +767,13 @@ func (s *AccountService) SetConcurrencyService(concurrencyService *ConcurrencySe
 		return
 	}
 	s.concurrencyService = concurrencyService
+}
+
+func (s *AccountService) SetPricedModelCatalog(catalog pricedModelCatalog) {
+	if s == nil {
+		return
+	}
+	s.pricedModelCatalog = catalog
 }
 
 func (s *AccountService) SetAccountShareBillingCacheInvalidator(invalidator accountShareSeatBillingCacheInvalidator) {
@@ -1236,6 +1249,7 @@ func (s *AccountService) updateOwnedAgentIdentityImport(
 	nextRuntimeID := importStringField(req.Credentials, "agent_runtime_id")
 
 	allowedCredentialKeys := []string{
+		"model_mapping",
 		"auth_mode",
 		"agent_runtime_id",
 		"agent_private_key",
@@ -1252,7 +1266,7 @@ func (s *AccountService) updateOwnedAgentIdentityImport(
 		}
 	}
 	for _, key := range allowedCredentialKeys {
-		if key == "task_id" {
+		if key == "task_id" || key == "model_mapping" {
 			continue
 		}
 		if value, exists := req.Credentials[key]; exists {
@@ -1344,6 +1358,7 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 	if isAgentIdentity {
 		req.Credentials = normalizeOwnedAgentIdentityCredentials(req.Credentials)
 	}
+	_, modelMappingProvided := req.Credentials["model_mapping"]
 	targetLevel := NormalizeAccountLevel(req.AccountLevel)
 	levelConfigs, err := s.openAIAccountLevelConfigs(ctx)
 	if err != nil {
@@ -1353,6 +1368,11 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 	proxyID := req.ProxyID
 	if err := applyOwnedPersonalAccountTemplateToCreate(&req); err != nil {
 		return nil, err
+	}
+	if modelMappingProvided {
+		if err := s.validateOwnedPersonalModelMapping(ctx, req.Platform, req.Credentials); err != nil {
+			return nil, err
+		}
 	}
 	if err := validateOwnedAccountSourceForPlatform(req.Platform, req.Type, req.Credentials, req.Extra); err != nil {
 		return nil, err
@@ -1757,49 +1777,23 @@ func normalizeLoadFactor(value *int) *int {
 	return &normalized
 }
 
-func ownedPersonalDefaultModelMapping(platform string) map[string]any {
-	models := make([]string, 0)
-	switch platform {
-	case PlatformOpenAI:
-		models = append(models, openai.DefaultModelIDs()...)
-		models = append(models, "gpt-5.2-2025-12-11", "gpt-5.2-chat-latest", "gpt-5.2-pro", "gpt-5.2-pro-2025-12-11", "gpt-5.4-2026-03-05", "gpt-4o-audio-preview", "gpt-4o-realtime-preview")
-	case PlatformAnthropic:
-		models = append(models, claude.DefaultModelIDs()...)
-		models = append(models, "claude-3-5-sonnet-20241022", "claude-3-5-sonnet-20240620", "claude-3-5-haiku-20241022", "claude-3-7-sonnet-20250219", "claude-sonnet-4-20250514", "claude-opus-4-20250514", "claude-opus-4-1-20250805")
-	case PlatformGemini:
-		for _, model := range geminicli.DefaultModels {
-			models = append(models, model.ID)
-		}
-	case PlatformAntigravity:
-		for _, model := range antigravity.DefaultModels() {
-			models = append(models, model.ID)
-		}
-	case PlatformOpencode:
-		// OpenCode Go 订阅的裸模型 slug（API 的 model 字段不带 opencode-go/ 前缀）。
-		// GET /models 实测的完整清单（26 个）。
-		models = append(models,
-			"deepseek-v4-flash", "deepseek-v4-pro",
-			"glm-5", "glm-5.1", "glm-5.2", "glm-5.3",
-			"kimi-k2.5", "kimi-k2.6", "kimi-k2.7-code", "kimi-k3",
-			"minimax-m2.5", "minimax-m2.7", "minimax-m3",
-			"mimo-v2-pro", "mimo-v2-omni", "mimo-v2.5", "mimo-v2.5-pro",
-			"qwen3.5-plus", "qwen3.6-plus", "qwen3.7-plus", "qwen3.7-max", "qwen3.8-max",
-			"hy3", "hy3-preview",
-			"gpt-5.6-luna", "grok-4.5",
-		)
-	}
-	if len(models) == 0 {
-		return map[string]any{}
-	}
-	mapping := make(map[string]any, len(models))
-	for _, model := range models {
-		model = strings.TrimSpace(model)
-		if model == "" || strings.Contains(model, "*") {
-			continue
-		}
-		mapping[model] = model
-	}
-	return mapping
+// opencodeDefaultModelSlugs 是 OpenCode Go 订阅的完整裸模型 slug 清单（GET /models 实测，26 个）。
+// 自有账号默认模型映射与账号广场默认模型白名单共用，避免两处漂移。
+var opencodeDefaultModelSlugs = []string{
+	"deepseek-v4-flash", "deepseek-v4-pro",
+	"glm-5", "glm-5.1", "glm-5.2", "glm-5.3",
+	"kimi-k2.5", "kimi-k2.6", "kimi-k2.7-code", "kimi-k3",
+	"minimax-m2.5", "minimax-m2.7", "minimax-m3",
+	"mimo-v2-pro", "mimo-v2-omni", "mimo-v2.5", "mimo-v2.5-pro",
+	"qwen3.5-plus", "qwen3.6-plus", "qwen3.7-plus", "qwen3.7-max", "qwen3.8-max",
+	"hy3", "hy3-preview",
+	"gpt-5.6-luna", "grok-4.5",
+}
+
+// OpencodeDefaultModelSlugs 返回 OpenCode Go 订阅的裸模型 slug 清单副本，
+// 供 handler 层 /v1/models 兜底等跨包调用使用。
+func OpencodeDefaultModelSlugs() []string {
+	return append([]string(nil), opencodeDefaultModelSlugs...)
 }
 
 func applyOwnedPersonalAccountTemplateToMaps(platform string, credentials, extra map[string]any) (map[string]any, map[string]any) {
@@ -1807,7 +1801,11 @@ func applyOwnedPersonalAccountTemplateToMaps(platform string, credentials, extra
 	for key, value := range credentials {
 		nextCredentials[key] = value
 	}
-	nextCredentials["model_mapping"] = ownedPersonalDefaultModelMapping(platform)
+	// 模型白名单是号主的显式选择，个人账号模板不得再用平台默认全集覆盖。
+	// 老调用方未提交该字段时写入空对象；运行时对个人账号的空白名单按拒绝全部处理。
+	if _, exists := nextCredentials["model_mapping"]; !exists {
+		nextCredentials["model_mapping"] = map[string]any{}
+	}
 	delete(nextCredentials, "compact_model_mapping")
 
 	nextExtra := make(map[string]any, len(extra)+6)
@@ -1825,6 +1823,115 @@ func applyOwnedPersonalAccountTemplateToMaps(platform string, credentials, extra
 		delete(nextExtra, "openai_ws_enabled")
 	}
 	return nextCredentials, nextExtra
+}
+
+func normalizeOwnedPersonalModelMapping(raw any) (map[string]any, []string, error) {
+	var values map[string]any
+	switch mapping := raw.(type) {
+	case map[string]any:
+		values = mapping
+	case map[string]string:
+		values = make(map[string]any, len(mapping))
+		for key, value := range mapping {
+			values[key] = value
+		}
+	default:
+		return nil, nil, ErrOwnedAccountModelMappingInvalid.WithMetadata(map[string]string{"field": "model_mapping"})
+	}
+
+	if len(values) == 0 {
+		return nil, nil, ErrOwnedAccountModelMappingInvalid.WithMetadata(map[string]string{"field": "model_mapping"})
+	}
+
+	normalized := make(map[string]any, len(values))
+	models := make([]string, 0, len(values))
+	for rawModel, rawTarget := range values {
+		model := strings.TrimSpace(rawModel)
+		target, ok := rawTarget.(string)
+		target = strings.TrimSpace(target)
+		if !ok || model == "" || target == "" || model != target || strings.ContainsAny(model, "*?") {
+			return nil, nil, ErrOwnedAccountModelMappingInvalid.WithMetadata(map[string]string{
+				"field": "model_mapping",
+				"model": model,
+			})
+		}
+		normalized[model] = model
+		models = append(models, model)
+	}
+	sort.Strings(models)
+	return normalized, models, nil
+}
+
+func (s *AccountService) listOwnedSelectableModelIDs(ctx context.Context, platform string) ([]string, error) {
+	platform = strings.ToLower(strings.TrimSpace(platform))
+	if !IsSupportedAccountPlatform(platform) {
+		return nil, ErrAccountPlatformUnsupported.WithMetadata(map[string]string{"platform": platform})
+	}
+	if cache, ok := ctx.Value(ownedSelectableModelCacheContextKey{}).(map[string][]string); ok {
+		if cached, exists := cache[platform]; exists {
+			return append([]string(nil), cached...), nil
+		}
+	}
+	if s == nil || s.pricedModelCatalog == nil {
+		return nil, ErrOwnedAccountModelCatalogUnavailable
+	}
+	models, err := s.pricedModelCatalog.ListPricedModelIDs(ctx, []string{platform})
+	if err != nil {
+		return nil, ErrOwnedAccountModelCatalogUnavailable.WithCause(err)
+	}
+	seen := make(map[string]struct{}, len(models))
+	result := make([]string, 0, len(models))
+	for _, rawModel := range models {
+		model := strings.TrimSpace(rawModel)
+		if model == "" || strings.ContainsAny(model, "*?") {
+			continue
+		}
+		if _, exists := seen[model]; exists {
+			continue
+		}
+		seen[model] = struct{}{}
+		result = append(result, model)
+	}
+	sort.Strings(result)
+	if cache, ok := ctx.Value(ownedSelectableModelCacheContextKey{}).(map[string][]string); ok {
+		cache[platform] = append([]string(nil), result...)
+	}
+	return result, nil
+}
+
+// ListOwnedSelectableModelIDs 返回号主可用于个人账号白名单的精确模型集合。
+// 它只暴露模型 ID，不泄露渠道、价格或分组配置。
+func (s *AccountService) ListOwnedSelectableModelIDs(ctx context.Context, platform string) ([]string, error) {
+	return s.listOwnedSelectableModelIDs(ctx, platform)
+}
+
+func (s *AccountService) validateOwnedPersonalModelMapping(ctx context.Context, platform string, credentials map[string]any) error {
+	raw, exists := credentials["model_mapping"]
+	if !exists {
+		return ErrOwnedAccountModelMappingInvalid.WithMetadata(map[string]string{"field": "model_mapping"})
+	}
+	normalized, models, err := normalizeOwnedPersonalModelMapping(raw)
+	if err != nil {
+		return err
+	}
+	selectableModels, err := s.listOwnedSelectableModelIDs(ctx, platform)
+	if err != nil {
+		return err
+	}
+	selectable := make(map[string]struct{}, len(selectableModels))
+	for _, model := range selectableModels {
+		selectable[model] = struct{}{}
+	}
+	for _, model := range models {
+		if _, ok := selectable[model]; !ok {
+			return ErrOwnedAccountModelNotSelectable.WithMetadata(map[string]string{
+				"platform": platform,
+				"model":    model,
+			})
+		}
+	}
+	credentials["model_mapping"] = normalized
+	return nil
 }
 
 func normalizeOwnedPersonalAccountConcurrency(concurrency int) int {
@@ -1905,7 +2012,7 @@ func applyOwnedPersonalAccountTemplateToCreate(req *CreateAccountRequest) error 
 	return nil
 }
 
-func sanitizeOwnedPersonalAccountUpdate(account *Account, req *UpdateAccountRequest) error {
+func (s *AccountService) sanitizeOwnedPersonalAccountUpdate(ctx context.Context, account *Account, req *UpdateAccountRequest) error {
 	if account == nil || req == nil {
 		return nil
 	}
@@ -1930,7 +2037,16 @@ func sanitizeOwnedPersonalAccountUpdate(account *Account, req *UpdateAccountRequ
 		if nextCredentials == nil {
 			nextCredentials = map[string]any{}
 		}
+		requestedModelMapping, modelMappingSubmitted := nextCredentials["model_mapping"]
+		storedModelMapping, storedModelMappingExists := account.Credentials["model_mapping"]
+		modelMappingChanged := modelMappingSubmitted &&
+			(!storedModelMappingExists || !reflect.DeepEqual(requestedModelMapping, storedModelMapping))
 		preserveOwnedPersonalCredentialPolicy(account, nextCredentials)
+		if modelMappingChanged {
+			if err := s.validateOwnedPersonalModelMapping(ctx, account.Platform, nextCredentials); err != nil {
+				return err
+			}
+		}
 		req.Credentials = &nextCredentials
 	}
 	if req.Extra != nil {
@@ -1958,7 +2074,6 @@ func ownedPersonalAccountRequiresProxy(account *Account, levelConfigs []OpenAIAc
 }
 
 var ownedPersonalLockedCredentialKeys = []string{
-	"model_mapping",
 	"compact_model_mapping",
 	CredentialKeyHeaderOverrideEnabled,
 	CredentialKeyHeaderOverrides,
@@ -2250,6 +2365,45 @@ func ownedAccountUpdateIsRetryable(req UpdateAccountRequest) bool {
 		req.AccountLevel == nil
 }
 
+// normalizeOwnedPersonalAccessTokenModelUpdate permits an owner to change only
+// the model whitelist of an already validated Codex PAT account. Response DTOs
+// omit sensitive values, so the client may submit either the complete redacted
+// credential object or only model_mapping. In both cases all non-model fields
+// are rebuilt from the trusted stored snapshot; any attempted credential change
+// still has to use the dedicated OpenAI validation/import path.
+func normalizeOwnedPersonalAccessTokenModelUpdate(account *Account, credentials *map[string]any) (*map[string]any, bool) {
+	if account == nil || credentials == nil || !account.IsOpenAIPersonalAccessToken() {
+		return credentials, false
+	}
+	incoming := *credentials
+	modelMapping, submitted := incoming["model_mapping"]
+	if !submitted {
+		return credentials, false
+	}
+	for key, value := range incoming {
+		if key == "model_mapping" {
+			continue
+		}
+		if IsSensitiveCredentialKey(key) {
+			storedValue, exists := account.Credentials[key]
+			if !exists || !reflect.DeepEqual(value, storedValue) {
+				return credentials, false
+			}
+			continue
+		}
+		storedValue, exists := account.Credentials[key]
+		if !exists || !reflect.DeepEqual(value, storedValue) {
+			return credentials, false
+		}
+	}
+	nextCredentials := mergeAccountMap(account.Credentials, nil)
+	if nextCredentials == nil {
+		nextCredentials = map[string]any{}
+	}
+	nextCredentials["model_mapping"] = modelMapping
+	return &nextCredentials, true
+}
+
 func (s *AccountService) updateOwnedOnce(ctx context.Context, ownerUserID, accountID int64, req UpdateAccountRequest) (*Account, error) {
 	if req.AccountLevel != nil {
 		return nil, ErrOwnedAccountLevelNotAllowed
@@ -2260,7 +2414,11 @@ func (s *AccountService) updateOwnedOnce(ctx context.Context, ownerUserID, accou
 	}
 	if account.IsOpenAIPersonalAccessToken() && req.Credentials != nil &&
 		strings.TrimSpace(req.MutationIntent) != AccountMutationIntentSystemTokenRefresh {
-		return nil, ErrOwnedPersonalAccessTokenValidationRequired
+		normalizedCredentials, modelMappingOnly := normalizeOwnedPersonalAccessTokenModelUpdate(account, req.Credentials)
+		if !modelMappingOnly {
+			return nil, ErrOwnedPersonalAccessTokenValidationRequired
+		}
+		req.Credentials = normalizedCredentials
 	}
 	before := cloneAccountForNotice(account)
 	recoverGrokProxyFailure := req.Credentials != nil && isGrokProxyCredentialFailureAccount(before)
@@ -2269,7 +2427,7 @@ func (s *AccountService) updateOwnedOnce(ctx context.Context, ownerUserID, accou
 	storedCredentials := mergeAccountMap(account.Credentials, nil)
 	storedExtra := mergeAccountMap(account.Extra, nil)
 	existingProxyID := account.ProxyID
-	if err := sanitizeOwnedPersonalAccountUpdate(account, &req); err != nil {
+	if err := s.sanitizeOwnedPersonalAccountUpdate(ctx, account, &req); err != nil {
 		return nil, err
 	}
 
@@ -3034,6 +3192,15 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 	if err := rejectOwnedAccountGrokManagedExtra(input.Extra); err != nil {
 		return nil, err
 	}
+	// 单次批量操作内按平台复用渠道模型目录，避免每个账号重复读取全部渠道。
+	ctx = context.WithValue(ctx, ownedSelectableModelCacheContextKey{}, make(map[string][]string))
+	if rawMapping, updatesModelMapping := input.Credentials["model_mapping"]; updatesModelMapping {
+		normalizedMapping, _, err := normalizeOwnedPersonalModelMapping(rawMapping)
+		if err != nil {
+			return nil, err
+		}
+		input.Credentials["model_mapping"] = normalizedMapping
+	}
 
 	accountIDs := normalizeOwnedBulkAccountIDs(input.AccountIDs)
 	result := &BulkUpdateAccountsResult{
@@ -3114,14 +3281,29 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 		if account == nil || account.OwnerUserID == nil || *account.OwnerUserID != ownerUserID {
 			return nil, ErrAccountNotFound
 		}
-		if account.IsOpenAIPersonalAccessToken() && len(input.Credentials) > 0 {
-			recordBulkFailure(accountID, ErrOwnedPersonalAccessTokenValidationRequired)
-			continue
+		credentialsForAccount := input.Credentials
+		if account.IsOpenAIPersonalAccessToken() && len(credentialsForAccount) > 0 {
+			normalizedCredentials, modelMappingOnly := normalizeOwnedPersonalAccessTokenModelUpdate(
+				account,
+				&credentialsForAccount,
+			)
+			if !modelMappingOnly {
+				recordBulkFailure(accountID, ErrOwnedPersonalAccessTokenValidationRequired)
+				continue
+			}
+			credentialsForAccount = *normalizedCredentials
 		}
 
-		nextCredentials := mergeAccountMap(account.Credentials, input.Credentials)
+		nextCredentials := mergeAccountMap(account.Credentials, credentialsForAccount)
 		nextExtra := mergeAccountMap(account.Extra, input.Extra)
-		nextCredentials, nextExtra = applyOwnedPersonalAccountTemplateToMaps(account.Platform, nextCredentials, nextExtra)
+		preserveOwnedPersonalCredentialPolicy(account, nextCredentials)
+		preserveOwnedPersonalExtraPolicy(account, nextExtra)
+		if _, updatesModelMapping := input.Credentials["model_mapping"]; updatesModelMapping {
+			if err := s.validateOwnedPersonalModelMapping(ctx, account.Platform, nextCredentials); err != nil {
+				recordBulkFailure(accountID, err)
+				continue
+			}
+		}
 		nextExtra, err = NormalizeCodexQuotaLimitExtra(account.Platform, account.Type, nextExtra)
 		if err != nil {
 			recordBulkFailure(accountID, err)
@@ -3225,12 +3407,12 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 				}
 				if len(input.Credentials) > 0 {
 					credentials := mergeAccountMap(account.Credentials, input.Credentials)
-					credentials, _ = applyOwnedPersonalAccountTemplateToMaps(account.Platform, credentials, account.Extra)
+					preserveOwnedPersonalCredentialPolicy(account, credentials)
 					updateReq.Credentials = &credentials
 				}
 				if len(input.Extra) > 0 {
 					extra := mergeAccountMap(account.Extra, input.Extra)
-					_, extra = applyOwnedPersonalAccountTemplateToMaps(account.Platform, account.Credentials, extra)
+					preserveOwnedPersonalExtraPolicy(account, extra)
 					extra, normalizeErr := NormalizeCodexQuotaLimitExtra(account.Platform, account.Type, extra)
 					if normalizeErr != nil {
 						return normalizeErr
@@ -3526,7 +3708,7 @@ func (s *AccountService) ConvertOwnedExternalPlacement(ctx context.Context, owne
 		if err != nil {
 			return nil, err
 		}
-		if accountLevel == AccountLevelUnknown {
+		if accountLevel == AccountLevelUnknown && account.Platform != PlatformOpencode {
 			return nil, ErrAccountShareRoomUnknownLevel
 		}
 		modeGroup, err := s.accountShareModeRepo.GetModeGroup(ctx, account.Platform)

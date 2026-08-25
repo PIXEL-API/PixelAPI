@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -110,6 +111,89 @@ func TestAccountHandlerGetAvailableModels_OpenAIOAuthPassthroughFallsBackToDefau
 		}
 	}
 	require.True(t, foundCodexAutoReview)
+}
+
+func TestAccountHandlerGetAvailableModels_GeminiGoogleOneRespectsMappingPrecedence(t *testing.T) {
+	ownerUserID := int64(7)
+	tests := []struct {
+		name        string
+		ownerUserID *int64
+		credentials map[string]any
+		wantIDs     []string
+	}{
+		{
+			name: "platform account uses conservative defaults",
+			credentials: map[string]any{
+				"oauth_type": "google_one",
+			},
+			wantIDs: []string{"gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.5-pro"},
+		},
+		{
+			name: "platform account preserves explicit mapping",
+			credentials: map[string]any{
+				"oauth_type": "google_one",
+				"model_mapping": map[string]any{
+					"custom-model": "gemini-2.5-flash",
+				},
+			},
+			wantIDs: []string{"custom-model"},
+		},
+		{
+			name:        "owned account uses strict whitelist",
+			ownerUserID: &ownerUserID,
+			credentials: map[string]any{
+				"oauth_type": "google_one",
+				"model_mapping": map[string]any{
+					"owner-model": "gemini-2.5-pro",
+				},
+			},
+			wantIDs: []string{"owner-model"},
+		},
+		{
+			name:        "owned account with empty whitelist returns no models",
+			ownerUserID: &ownerUserID,
+			credentials: map[string]any{
+				"oauth_type":    "google_one",
+				"model_mapping": map[string]any{},
+			},
+			wantIDs: []string{},
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &availableModelsAdminService{
+				stubAdminService: newStubAdminService(),
+				account: service.Account{
+					ID:          int64(45 + i),
+					Name:        "gemini-google-one",
+					Platform:    service.PlatformGemini,
+					Type:        service.AccountTypeOAuth,
+					Status:      service.StatusActive,
+					OwnerUserID: tt.ownerUserID,
+					Credentials: tt.credentials,
+				},
+			}
+			router := setupAvailableModelsRouter(svc)
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/"+strconv.Itoa(45+i)+"/models", nil)
+			router.ServeHTTP(rec, req)
+
+			require.Equal(t, http.StatusOK, rec.Code)
+			var resp struct {
+				Data []struct {
+					ID string `json:"id"`
+				} `json:"data"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+			ids := make([]string, 0, len(resp.Data))
+			for _, model := range resp.Data {
+				ids = append(ids, model.ID)
+			}
+			require.ElementsMatch(t, tt.wantIDs, ids)
+		})
+	}
 }
 
 func TestAccountHandlerGetAvailableModels_RejectsUnsupportedPlatform(t *testing.T) {

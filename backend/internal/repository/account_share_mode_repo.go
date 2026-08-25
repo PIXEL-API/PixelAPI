@@ -8774,7 +8774,7 @@ func accountShareMembershipIdleDeadline(membership *service.AccountShareMembersh
 	return base.UTC().Add(time.Duration(membership.IdleTimeoutMinutes) * time.Minute), true
 }
 
-func accountShareAccountUnavailableConditionSQL(nowExpr string) string {
+func accountShareAccountUnavailableBlockerSQL(nowExpr string) string {
 	codexProtectedSQL := fmt.Sprintf(`(
 		a.platform = '%s'
 		AND a.type = '%s'
@@ -8827,18 +8827,19 @@ func accountShareAccountUnavailableConditionSQL(nowExpr string) string {
 		accountShareCodexQuotaProtectedSQL("opencode_7d_used_percent", "opencode_7d_reset_at", "opencode_7d_limit_percent", nowExpr),
 		accountShareCodexQuotaProtectedSQL("opencode_30d_used_percent", "opencode_30d_reset_at", "opencode_30d_limit_percent", nowExpr),
 	)
-	return fmt.Sprintf(`(
-		a.status <> '%s'
-		OR a.schedulable = FALSE
-		OR a.concurrency <= 0
-		OR (a.auto_pause_on_expired = TRUE AND a.expires_at IS NOT NULL AND a.expires_at <= %s)
-		OR (a.overload_until IS NOT NULL AND a.overload_until > %s)
-		OR (a.rate_limit_reset_at IS NOT NULL AND a.rate_limit_reset_at > %s)
-		OR (a.temp_unschedulable_until IS NOT NULL AND a.temp_unschedulable_until > %s)
-		OR %s
-		OR %s
-		OR %s
-	)`,
+	return fmt.Sprintf(`(CASE
+		WHEN a.status <> '%s' THEN 'status_not_active'
+		WHEN a.schedulable = FALSE THEN 'scheduling_disabled'
+		WHEN a.concurrency <= 0 THEN 'non_positive_concurrency'
+		WHEN a.auto_pause_on_expired = TRUE AND a.expires_at IS NOT NULL AND a.expires_at <= %s THEN 'expired'
+		WHEN a.overload_until IS NOT NULL AND a.overload_until > %s THEN 'overloaded'
+		WHEN a.rate_limit_reset_at IS NOT NULL AND a.rate_limit_reset_at > %s THEN 'rate_limited'
+		WHEN a.temp_unschedulable_until IS NOT NULL AND a.temp_unschedulable_until > %s THEN 'temporarily_unschedulable'
+		WHEN %s THEN 'codex_quota_protected'
+		WHEN %s THEN 'anthropic_quota_protected'
+		WHEN %s THEN 'opencode_quota_protected'
+		ELSE NULL
+	END)`,
 		service.StatusActive,
 		nowExpr,
 		nowExpr,
@@ -8848,6 +8849,10 @@ func accountShareAccountUnavailableConditionSQL(nowExpr string) string {
 		anthropicProtectedSQL,
 		opencodeProtectedSQL,
 	)
+}
+
+func accountShareAccountUnavailableConditionSQL(nowExpr string) string {
+	return fmt.Sprintf(`(%s IS NOT NULL)`, accountShareAccountUnavailableBlockerSQL(nowExpr))
 }
 
 func accountShareListingAvailableConditionSQL(nowExpr string) string {

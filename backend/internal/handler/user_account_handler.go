@@ -294,16 +294,22 @@ type userTestAccountRequest struct {
 const userPublicShareValidationTimeout = 30 * time.Second
 const userAccountBatchConnectionTestTimeout = 90 * time.Second
 
-const userGeminiDefaultTestModel = "gemini-2.5-flash"
-
 func userAccountConnectionTestModel(account *service.Account) string {
 	if account == nil {
 		return ""
 	}
-	if account.Platform == service.PlatformGemini || account.Platform == service.PlatformAntigravity {
-		return userGeminiDefaultTestModel
+	mapping := account.GetModelMapping()
+	models := make([]string, 0, len(mapping))
+	for model := range mapping {
+		if normalized := strings.TrimSpace(model); normalized != "" {
+			models = append(models, normalized)
+		}
 	}
-	return ""
+	sort.Strings(models)
+	if len(models) == 0 {
+		return ""
+	}
+	return models[0]
 }
 
 func bindOptionalJSON(c *gin.Context, req any) bool {
@@ -674,7 +680,12 @@ func (h *UserAccountHandler) activateOwnedPublicShareIfRequested(ctx context.Con
 	} else {
 		testCtx, cancel := context.WithTimeout(ctx, userPublicShareValidationTimeout)
 		defer cancel()
-		result, err := h.accountTestService.RunTestBackground(testCtx, account.ID, "")
+		testModel := userAccountConnectionTestModel(account)
+		if testModel == "" {
+			reason = service.ErrOwnedAccountModelMappingInvalid.Message
+			return h.accountService.MarkOwnedPublicSharePending(ctx, ownerUserID, account.ID, reason)
+		}
+		result, err := h.accountTestService.RunTestBackground(testCtx, account.ID, testModel)
 		switch {
 		case err != nil:
 			reason = publicShareValidationErrorMessage(err)
@@ -745,9 +756,13 @@ func (h *UserAccountHandler) executeUserTestConnectionTaskItem(ctx context.Conte
 		return nil, err
 	}
 
+	testModel := userAccountConnectionTestModel(account)
+	if testModel == "" {
+		return nil, service.ErrOwnedAccountModelMappingInvalid
+	}
 	testCtx, cancel := context.WithTimeout(ctx, userAccountBatchConnectionTestTimeout)
 	defer cancel()
-	testResult, err := h.accountTestService.RunTestBackground(testCtx, item.AccountID, userAccountConnectionTestModel(account))
+	testResult, err := h.accountTestService.RunTestBackground(testCtx, item.AccountID, testModel)
 	if err != nil {
 		return nil, err
 	}
@@ -1000,6 +1015,26 @@ func (h *UserAccountHandler) List(c *gin.Context) {
 	}
 	out := h.buildAccountListResponseWithRuntime(c.Request.Context(), accounts)
 	response.Paginated(c, out, result.Total, page, pageSize)
+}
+
+// GetModelOptions 返回个人账号白名单可选的渠道定价模型并集。
+// GET /api/v1/accounts/model-options?platform=openai
+func (h *UserAccountHandler) GetModelOptions(c *gin.Context) {
+	if _, ok := middleware2.GetAuthSubjectFromContext(c); !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	platform := strings.ToLower(strings.TrimSpace(c.Query("platform")))
+	if platform == "" {
+		response.BadRequest(c, "platform is required")
+		return
+	}
+	models, err := h.accountService.ListOwnedSelectableModelIDs(c.Request.Context(), platform)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"models": models})
 }
 
 func (h *UserAccountHandler) GetQuotaPoolDashboard(c *gin.Context) {
@@ -2205,13 +2240,26 @@ func (h *UserAccountHandler) Test(c *gin.Context) {
 		response.BadRequest(c, "Invalid account ID")
 		return
 	}
-	if _, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, accountID); err != nil {
+	account, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, accountID)
+	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
 
 	var req userTestAccountRequest
 	_ = c.ShouldBindJSON(&req)
+	req.ModelID = strings.TrimSpace(req.ModelID)
+	if req.ModelID == "" {
+		response.BadRequest(c, "model_id is required")
+		return
+	}
+	if !account.IsModelSupported(req.ModelID) {
+		response.ErrorFrom(c, service.ErrOwnedAccountModelNotSelectable.WithMetadata(map[string]string{
+			"platform": account.Platform,
+			"model":    req.ModelID,
+		}))
+		return
+	}
 
 	if err := h.accountTestService.TestAccountConnection(c, accountID, req.ModelID, req.Prompt, req.Mode); err != nil {
 		return

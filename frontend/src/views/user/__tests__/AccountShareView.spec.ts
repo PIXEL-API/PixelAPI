@@ -604,6 +604,7 @@ describe('AccountShareView async snapshots and mode keys', () => {
     listModeGroups.mockResolvedValue([
       { group_id: 101, platform: 'openai' },
       { group_id: 202, platform: 'anthropic' },
+      { group_id: 303, platform: 'opencode' },
     ])
     getCapabilities.mockResolvedValue({
       can_create_room: true,

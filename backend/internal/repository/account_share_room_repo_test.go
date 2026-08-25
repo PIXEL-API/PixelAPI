@@ -157,16 +157,16 @@ func TestAttachRoomAccountsAtomicLocksSortedIDsAndKeepsPausedRoomPaused(t *testi
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("SELECT id, owner_user_id, platform, account_level, status, allowed_models").
 		WithArgs(int64(700)).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id", "platform", "account_level", "status", "allowed_models"}).
-			AddRow(int64(700), int64(42), service.PlatformOpenAI, service.AccountLevelPlus, service.AccountShareListingStatusPaused, `["gpt-5.5"]`))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id", "platform", "account_level", "status", "allowed_models", "pending_operation_id"}).
+			AddRow(int64(700), int64(42), service.PlatformOpenAI, service.AccountLevelPlus, service.AccountShareListingStatusPaused, `["gpt-5.5"]`, nil))
 	mock.ExpectQuery("SELECT\\s+a\\.id, a\\.name, a\\.platform, a\\.account_level, a\\.concurrency, a\\.priority").
 		WithArgs(pq.Array(accountIDs), int64(42)).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "name", "platform", "account_level", "concurrency", "priority",
-			"status", "schedulable", "type", "credentials", "extra",
+			"status", "unavailable_blocker", "type", "credentials", "extra",
 		}).
-			AddRow(int64(10), "room-account-10", service.PlatformOpenAI, service.AccountLevelPlus, 20, 3, service.StatusActive, true, service.AccountTypeOAuth, `{}`, `{}`).
-			AddRow(int64(11), "room-account-11", service.PlatformOpenAI, service.AccountLevelPlus, 30, 4, service.StatusActive, true, service.AccountTypeOAuth, `{}`, `{}`))
+			AddRow(int64(10), "room-account-10", service.PlatformOpenAI, service.AccountLevelPlus, 20, 3, service.StatusActive, "", service.AccountTypeOAuth, `{}`, `{}`).
+			AddRow(int64(11), "room-account-11", service.PlatformOpenAI, service.AccountLevelPlus, 30, 4, service.StatusActive, "", service.AccountTypeOAuth, `{}`, `{}`))
 	mock.ExpectQuery("SELECT account_id\\s+FROM account_external_placements").
 		WithArgs(pq.Array(accountIDs), int64(42), service.PlatformOpenAI).
 		WillReturnRows(sqlmock.NewRows([]string{"account_id"}).
@@ -219,7 +219,7 @@ func TestAttachRoomAccountsAtomicLocksSortedIDsAndKeepsPausedRoomPaused(t *testi
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	if err := repo.AttachRoomAccountsAtomic(context.Background(), service.BatchAccountShareRoomAccountsInput{
+	if _, err := repo.AttachRoomAccountsAtomic(context.Background(), service.BatchAccountShareRoomAccountsInput{
 		ListingID:      700,
 		AccountIDs:     []int64{11, 10, 11},
 		OwnerUserID:    42,
@@ -248,16 +248,16 @@ func TestAttachRoomAccountsAtomicRollsBackEarlierWritesWhenLaterAssignmentFails(
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("SELECT id, owner_user_id, platform, account_level, status, allowed_models").
 		WithArgs(int64(700)).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id", "platform", "account_level", "status", "allowed_models"}).
-			AddRow(int64(700), int64(42), service.PlatformOpenAI, service.AccountLevelPlus, service.AccountShareListingStatusActive, `["gpt-5.5"]`))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id", "platform", "account_level", "status", "allowed_models", "pending_operation_id"}).
+			AddRow(int64(700), int64(42), service.PlatformOpenAI, service.AccountLevelPlus, service.AccountShareListingStatusActive, `["gpt-5.5"]`, nil))
 	mock.ExpectQuery("SELECT\\s+a\\.id, a\\.name, a\\.platform, a\\.account_level, a\\.concurrency, a\\.priority").
 		WithArgs(pq.Array(accountIDs), int64(42)).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "name", "platform", "account_level", "concurrency", "priority",
-			"status", "schedulable", "type", "credentials", "extra",
+			"status", "unavailable_blocker", "type", "credentials", "extra",
 		}).
-			AddRow(int64(10), "room-account-10", service.PlatformOpenAI, service.AccountLevelPlus, 20, 3, service.StatusActive, true, service.AccountTypeOAuth, `{}`, `{}`).
-			AddRow(int64(11), "room-account-11", service.PlatformOpenAI, service.AccountLevelPlus, 30, 4, service.StatusActive, true, service.AccountTypeOAuth, `{}`, `{}`))
+			AddRow(int64(10), "room-account-10", service.PlatformOpenAI, service.AccountLevelPlus, 20, 3, service.StatusActive, "", service.AccountTypeOAuth, `{}`, `{}`).
+			AddRow(int64(11), "room-account-11", service.PlatformOpenAI, service.AccountLevelPlus, 30, 4, service.StatusActive, "", service.AccountTypeOAuth, `{}`, `{}`))
 	mock.ExpectQuery("SELECT account_id\\s+FROM account_external_placements").
 		WithArgs(pq.Array(accountIDs), int64(42), service.PlatformOpenAI).
 		WillReturnRows(sqlmock.NewRows([]string{"account_id"}).
@@ -329,7 +329,7 @@ func TestAttachRoomAccountsAtomicRollsBackEarlierWritesWhenLaterAssignmentFails(
 		WillReturnError(historyErr)
 	mock.ExpectRollback()
 
-	err = repo.AttachRoomAccountsAtomic(context.Background(), service.BatchAccountShareRoomAccountsInput{
+	_, err = repo.AttachRoomAccountsAtomic(context.Background(), service.BatchAccountShareRoomAccountsInput{
 		ListingID:      700,
 		AccountIDs:     []int64{11, 10},
 		OwnerUserID:    42,
@@ -343,46 +343,81 @@ func TestAttachRoomAccountsAtomicRollsBackEarlierWritesWhenLaterAssignmentFails(
 	}
 }
 
-func TestAttachRoomAccountsAtomicRejectsUnavailableOrModelIncompatibleAccounts(t *testing.T) {
+func TestAttachRoomAccountsAtomicReturnsPerAccountUnavailableOrModelFailure(t *testing.T) {
 	tests := []struct {
-		name          string
-		status        string
-		schedulable   bool
-		concurrency   int
-		credentials   string
-		expectedError error
+		name               string
+		status             string
+		unavailableBlocker string
+		concurrency        int
+		platform           string
+		accountLevel       string
+		credentials        string
+		expectedReason     string
+		expectedMetadata   map[string]string
 	}{
 		{
-			name:          "inactive account",
-			status:        service.StatusError,
-			schedulable:   true,
-			concurrency:   20,
-			credentials:   `{}`,
-			expectedError: service.ErrAccountShareAccountUnavailable,
+			name:               "inactive account",
+			status:             service.StatusError,
+			unavailableBlocker: "status_not_active",
+			concurrency:        20,
+			credentials:        `{}`,
+			expectedReason:     "ACCOUNT_SHARE_ACCOUNT_UNAVAILABLE",
+			expectedMetadata:   map[string]string{"blocker": "status_not_active"},
 		},
 		{
-			name:          "unschedulable account",
-			status:        service.StatusActive,
-			schedulable:   false,
-			concurrency:   20,
-			credentials:   `{}`,
-			expectedError: service.ErrAccountShareAccountUnavailable,
+			name:               "unschedulable account",
+			status:             service.StatusActive,
+			unavailableBlocker: "scheduling_disabled",
+			concurrency:        20,
+			credentials:        `{}`,
+			expectedReason:     "ACCOUNT_SHARE_ACCOUNT_UNAVAILABLE",
+			expectedMetadata:   map[string]string{"blocker": "scheduling_disabled"},
 		},
 		{
-			name:          "zero concurrency",
-			status:        service.StatusActive,
-			schedulable:   true,
-			concurrency:   0,
-			credentials:   `{}`,
-			expectedError: service.ErrAccountShareAccountUnavailable,
+			name:               "zero concurrency",
+			status:             service.StatusActive,
+			unavailableBlocker: "non_positive_concurrency",
+			concurrency:        0,
+			credentials:        `{}`,
+			expectedReason:     "ACCOUNT_SHARE_ACCOUNT_UNAVAILABLE",
+			expectedMetadata:   map[string]string{"blocker": "non_positive_concurrency"},
 		},
 		{
-			name:          "room model is not supported",
-			status:        service.StatusActive,
-			schedulable:   true,
-			concurrency:   20,
-			credentials:   `{"model_mapping":{"gpt-5.4":"gpt-5.4"}}`,
-			expectedError: service.ErrAccountShareModeUnsupportedModel,
+			name:             "room model is not supported",
+			status:           service.StatusActive,
+			concurrency:      20,
+			credentials:      `{"model_mapping":{"gpt-5.4":"gpt-5.4"}}`,
+			expectedReason:   "ACCOUNT_SHARE_MODE_UNSUPPORTED_MODEL",
+			expectedMetadata: map[string]string{"model": "gpt-5.5"},
+		},
+		{
+			name:             "platform mismatch",
+			status:           service.StatusActive,
+			concurrency:      20,
+			platform:         service.PlatformAnthropic,
+			accountLevel:     service.AccountLevelPlus,
+			credentials:      `{}`,
+			expectedReason:   "ACCOUNT_SHARE_ROOM_PLATFORM_MISMATCH",
+			expectedMetadata: map[string]string{"account_platform": service.PlatformAnthropic, "room_platform": service.PlatformOpenAI},
+		},
+		{
+			name:           "unknown account level",
+			status:         service.StatusActive,
+			concurrency:    20,
+			platform:       service.PlatformOpenAI,
+			accountLevel:   service.AccountLevelUnknown,
+			credentials:    `{}`,
+			expectedReason: "ACCOUNT_SHARE_ROOM_UNKNOWN_LEVEL",
+		},
+		{
+			name:             "account level mismatch",
+			status:           service.StatusActive,
+			concurrency:      20,
+			platform:         service.PlatformOpenAI,
+			accountLevel:     service.AccountLevelPro,
+			credentials:      `{}`,
+			expectedReason:   "ACCOUNT_SHARE_ROOM_LEVEL_MISMATCH",
+			expectedMetadata: map[string]string{"account_level": service.AccountLevelPro, "room_level": service.AccountLevelPlus},
 		},
 	}
 
@@ -393,6 +428,14 @@ func TestAttachRoomAccountsAtomicRejectsUnavailableOrModelIncompatibleAccounts(t
 			defer func() { _ = db.Close() }()
 			repo := &accountShareModeRepository{db: db}
 			accountIDs := []int64{10}
+			platform := test.platform
+			if platform == "" {
+				platform = service.PlatformOpenAI
+			}
+			accountLevel := test.accountLevel
+			if accountLevel == "" {
+				accountLevel = service.AccountLevelPlus
+			}
 
 			mock.ExpectBegin()
 			mock.ExpectExec("SELECT pg_advisory_xact_lock").
@@ -400,39 +443,136 @@ func TestAttachRoomAccountsAtomicRejectsUnavailableOrModelIncompatibleAccounts(t
 				WillReturnResult(sqlmock.NewResult(0, 1))
 			mock.ExpectQuery("SELECT id, owner_user_id, platform, account_level, status, allowed_models").
 				WithArgs(int64(700)).
-				WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id", "platform", "account_level", "status", "allowed_models"}).
-					AddRow(int64(700), int64(42), service.PlatformOpenAI, service.AccountLevelPlus, service.AccountShareListingStatusActive, `["gpt-5.5"]`))
-			mock.ExpectQuery(`(?s)SELECT\s+a\.id, a\.name, a\.platform, a\.account_level, a\.concurrency, a\.priority,.*a\.auto_pause_on_expired.*AS schedulable`).
+				WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id", "platform", "account_level", "status", "allowed_models", "pending_operation_id"}).
+					AddRow(int64(700), int64(42), service.PlatformOpenAI, service.AccountLevelPlus, service.AccountShareListingStatusActive, `["gpt-5.5"]`, nil))
+			mock.ExpectQuery(`(?s)SELECT\s+a\.id, a\.name, a\.platform, a\.account_level, a\.concurrency, a\.priority,.*a\.auto_pause_on_expired.*AS unavailable_blocker`).
 				WithArgs(pq.Array(accountIDs), int64(42)).
 				WillReturnRows(sqlmock.NewRows([]string{
 					"id", "name", "platform", "account_level", "concurrency", "priority",
-					"status", "schedulable", "type", "credentials", "extra",
+					"status", "unavailable_blocker", "type", "credentials", "extra",
 				}).AddRow(
 					int64(10),
 					"room-account-10",
-					service.PlatformOpenAI,
-					service.AccountLevelPlus,
+					platform,
+					accountLevel,
 					test.concurrency,
 					3,
 					test.status,
-					test.schedulable,
+					test.unavailableBlocker,
 					service.AccountTypeOAuth,
 					test.credentials,
 					`{}`,
 				))
-			mock.ExpectRollback()
+			mock.ExpectCommit()
 
-			err = repo.AttachRoomAccountsAtomic(context.Background(), service.BatchAccountShareRoomAccountsInput{
+			result, err := repo.AttachRoomAccountsAtomic(context.Background(), service.BatchAccountShareRoomAccountsInput{
 				ListingID:      700,
 				AccountIDs:     accountIDs,
 				OwnerUserID:    42,
 				IdempotencyKey: "attach-validation",
 			})
 
-			require.ErrorIs(t, err, test.expectedError)
+			require.NoError(t, err)
+			require.Equal(t, 0, result.Success)
+			require.Equal(t, 1, result.Failed)
+			require.Equal(t, []int64{10}, result.FailedIDs)
+			require.Len(t, result.Results, 1)
+			require.False(t, result.Results[0].Success)
+			require.Equal(t, test.expectedReason, result.Results[0].Reason)
+			require.Equal(t, test.expectedMetadata, result.Results[0].Metadata)
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 	}
+}
+
+func TestAttachRoomAccountsAtomicCommitsHealthyAccountsAndReportsMixedFailures(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	repo := &accountShareModeRepository{db: db}
+	accountIDs := []int64{10, 11, 12, 13, 14}
+	modeEligibleIDs := []int64{10, 13, 14}
+	afterModeIDs := []int64{10, 14}
+	projectionCreatedAt := time.Date(2026, 8, 24, 8, 0, 0, 0, time.UTC)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SELECT pg_advisory_xact_lock").
+		WithArgs("account_share_owner_quota:42").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("SELECT id, owner_user_id, platform, account_level, status, allowed_models").
+		WithArgs(int64(700)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id", "platform", "account_level", "status", "allowed_models", "pending_operation_id"}).
+			AddRow(int64(700), int64(42), service.PlatformOpenAI, service.AccountLevelPlus, service.AccountShareListingStatusActive, `["gpt-5.5"]`, nil))
+	mock.ExpectQuery(`(?s)SELECT\s+a\.id, a\.name, a\.platform, a\.account_level, a\.concurrency, a\.priority,.*AS unavailable_blocker`).
+		WithArgs(pq.Array(accountIDs), int64(42)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "name", "platform", "account_level", "concurrency", "priority",
+			"status", "unavailable_blocker", "type", "credentials", "extra",
+		}).
+			AddRow(int64(10), "healthy", service.PlatformOpenAI, service.AccountLevelPlus, 20, 1, service.StatusActive, "", service.AccountTypeOAuth, `{}`, `{}`).
+			AddRow(int64(11), "overloaded", service.PlatformOpenAI, service.AccountLevelPlus, 20, 2, service.StatusActive, "overloaded", service.AccountTypeOAuth, `{}`, `{}`).
+			AddRow(int64(12), "unsupported", service.PlatformOpenAI, service.AccountLevelPlus, 20, 3, service.StatusActive, "", service.AccountTypeOAuth, `{"model_mapping":{"gpt-5.4":"gpt-5.4"}}`, `{}`).
+			AddRow(int64(13), "mode-missing", service.PlatformOpenAI, service.AccountLevelPlus, 20, 4, service.StatusActive, "", service.AccountTypeOAuth, `{}`, `{}`).
+			AddRow(int64(14), "room-conflict", service.PlatformOpenAI, service.AccountLevelPlus, 20, 5, service.StatusActive, "", service.AccountTypeOAuth, `{}`, `{}`))
+	mock.ExpectQuery("SELECT account_id\\s+FROM account_external_placements").
+		WithArgs(pq.Array(modeEligibleIDs), int64(42), service.PlatformOpenAI).
+		WillReturnRows(sqlmock.NewRows([]string{"account_id"}).AddRow(int64(10)).AddRow(int64(14)))
+	mock.ExpectQuery("SELECT account_id, listing_id, state, created_at").
+		WithArgs(pq.Array(afterModeIDs)).
+		WillReturnRows(sqlmock.NewRows([]string{"account_id", "listing_id", "state", "created_at"}).
+			AddRow(int64(14), int64(999), "active", projectionCreatedAt))
+	mock.ExpectQuery("SELECT id, listing_id, account_id_snapshot").
+		WithArgs(pq.Array(afterModeIDs)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "listing_id", "account_id_snapshot"}))
+	expectDefaultAccountShareQuotaPolicy(mock, int64(42))
+	expectAccountShareQuotaUsage(mock, 42, service.AccountShareQuotaUsage{
+		LiveRooms:           1,
+		RoomCreates24Hours:  1,
+		OwnerRoomAccounts:   1,
+		LargestRoomAccounts: 1,
+	})
+	mock.ExpectQuery("FROM account_share_room_accounts room_account\\s+WHERE room_account\\.listing_id = \\$1").
+		WithArgs(int64(700)).
+		WillReturnRows(sqlmock.NewRows([]string{"room_accounts"}).AddRow(1))
+	mock.ExpectExec("INSERT INTO account_share_room_accounts").
+		WithArgs(int64(700), int64(10), int64(42), service.PlatformOpenAI, service.AccountLevelPlus, 1).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT INTO account_share_room_account_assignments").
+		WithArgs(int64(700), int64(10), int64(42), "healthy", service.PlatformOpenAI, service.AccountLevelPlus, 20, int64(42), "owner", "owner_attach").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("UPDATE account_share_listings\\s+SET updated_at = NOW\\(\\)").
+		WithArgs(int64(700), int64(42)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	result, err := repo.AttachRoomAccountsAtomic(context.Background(), service.BatchAccountShareRoomAccountsInput{
+		ListingID:      700,
+		AccountIDs:     []int64{14, 13, 12, 11, 10},
+		OwnerUserID:    42,
+		IdempotencyKey: "attach-partial",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Success)
+	require.Equal(t, 4, result.Failed)
+	require.Equal(t, []int64{10}, result.SuccessIDs)
+	require.Equal(t, []int64{11, 12, 13, 14}, result.FailedIDs)
+	require.Equal(t, []string{
+		"",
+		"ACCOUNT_SHARE_ACCOUNT_UNAVAILABLE",
+		"ACCOUNT_SHARE_MODE_UNSUPPORTED_MODEL",
+		"ACCOUNT_SHARE_ROOM_MODE_REQUIRED",
+		"ACCOUNT_SHARE_ROOM_ACCOUNT_CONFLICT",
+	}, []string{
+		result.Results[0].Reason,
+		result.Results[1].Reason,
+		result.Results[2].Reason,
+		result.Results[3].Reason,
+		result.Results[4].Reason,
+	})
+	require.Equal(t, "overloaded", result.Results[1].Metadata["blocker"])
+	require.Equal(t, "gpt-5.5", result.Results[2].Metadata["model"])
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestCreateRoomFromOwnedAccountRejectsDynamicallyUnavailableAccountInLockedTransaction(t *testing.T) {
@@ -520,11 +660,11 @@ func TestAttachRoomAccountsAtomicRejectsDrainingRoom(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("SELECT id, owner_user_id, platform, account_level, status, allowed_models").
 		WithArgs(int64(700)).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id", "platform", "account_level", "status", "allowed_models"}).
-			AddRow(int64(700), int64(42), service.PlatformOpenAI, service.AccountLevelPlus, service.AccountShareListingStatusDraining, `["gpt-5.5"]`))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id", "platform", "account_level", "status", "allowed_models", "pending_operation_id"}).
+			AddRow(int64(700), int64(42), service.PlatformOpenAI, service.AccountLevelPlus, service.AccountShareListingStatusDraining, `["gpt-5.5"]`, nil))
 	mock.ExpectRollback()
 
-	err = repo.AttachRoomAccountsAtomic(context.Background(), service.BatchAccountShareRoomAccountsInput{
+	_, err = repo.AttachRoomAccountsAtomic(context.Background(), service.BatchAccountShareRoomAccountsInput{
 		ListingID:      700,
 		AccountIDs:     []int64{10},
 		OwnerUserID:    42,
@@ -760,13 +900,13 @@ func TestAttachRoomAccountsAtomicBackfillsLegacyProjectionOnIdempotentTouch(t *t
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("SELECT id, owner_user_id, platform, account_level, status, allowed_models").
 		WithArgs(snapshot.ListingID).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id", "platform", "account_level", "status", "allowed_models"}).
-			AddRow(snapshot.ListingID, snapshot.OwnerUserID, snapshot.Platform, snapshot.AccountLevel, service.AccountShareListingStatusActive, `["gpt-5.5"]`))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id", "platform", "account_level", "status", "allowed_models", "pending_operation_id"}).
+			AddRow(snapshot.ListingID, snapshot.OwnerUserID, snapshot.Platform, snapshot.AccountLevel, service.AccountShareListingStatusActive, `["gpt-5.5"]`, nil))
 	mock.ExpectQuery("SELECT\\s+a\\.id, a\\.name, a\\.platform, a\\.account_level, a\\.concurrency, a\\.priority").
 		WithArgs(pq.Array(accountIDs), snapshot.OwnerUserID).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "name", "platform", "account_level", "concurrency", "priority",
-			"status", "schedulable", "type", "credentials", "extra",
+			"status", "unavailable_blocker", "type", "credentials", "extra",
 		}).AddRow(
 			snapshot.AccountID,
 			snapshot.AccountName,
@@ -775,7 +915,7 @@ func TestAttachRoomAccountsAtomicBackfillsLegacyProjectionOnIdempotentTouch(t *t
 			snapshot.ConfiguredConcurrency,
 			3,
 			service.StatusActive,
-			true,
+			"",
 			service.AccountTypeOAuth,
 			`{}`,
 			`{}`,
@@ -804,7 +944,7 @@ func TestAttachRoomAccountsAtomicBackfillsLegacyProjectionOnIdempotentTouch(t *t
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(900)))
 	mock.ExpectCommit()
 
-	err = repo.AttachRoomAccountsAtomic(context.Background(), service.BatchAccountShareRoomAccountsInput{
+	_, err = repo.AttachRoomAccountsAtomic(context.Background(), service.BatchAccountShareRoomAccountsInput{
 		ListingID:      snapshot.ListingID,
 		AccountIDs:     accountIDs,
 		OwnerUserID:    snapshot.OwnerUserID,
@@ -839,13 +979,13 @@ func TestDetachRoomAccountsAtomicBackfillsAndClosesHistoryBeforeProjectionDelete
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("SELECT id, owner_user_id, platform, account_level, status, allowed_models").
 		WithArgs(snapshot.ListingID).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id", "platform", "account_level", "status", "allowed_models"}).
-			AddRow(snapshot.ListingID, snapshot.OwnerUserID, snapshot.Platform, snapshot.AccountLevel, service.AccountShareListingStatusActive, `["gpt-5.5"]`))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id", "platform", "account_level", "status", "allowed_models", "pending_operation_id"}).
+			AddRow(snapshot.ListingID, snapshot.OwnerUserID, snapshot.Platform, snapshot.AccountLevel, service.AccountShareListingStatusActive, `["gpt-5.5"]`, nil))
 	mock.ExpectQuery("SELECT\\s+a\\.id, a\\.name, a\\.platform, a\\.account_level, a\\.concurrency, a\\.priority").
 		WithArgs(pq.Array(accountIDs), snapshot.OwnerUserID).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "name", "platform", "account_level", "concurrency", "priority",
-			"status", "schedulable", "type", "credentials", "extra",
+			"status", "unavailable_blocker", "type", "credentials", "extra",
 		}).AddRow(
 			snapshot.AccountID,
 			snapshot.AccountName,
@@ -854,7 +994,7 @@ func TestDetachRoomAccountsAtomicBackfillsAndClosesHistoryBeforeProjectionDelete
 			snapshot.ConfiguredConcurrency,
 			3,
 			service.StatusActive,
-			true,
+			"",
 			service.AccountTypeOAuth,
 			`{}`,
 			`{}`,
@@ -866,7 +1006,7 @@ func TestDetachRoomAccountsAtomicBackfillsAndClosesHistoryBeforeProjectionDelete
 			secondSnapshot.ConfiguredConcurrency,
 			4,
 			service.StatusActive,
-			true,
+			"",
 			service.AccountTypeOAuth,
 			`{}`,
 			`{}`,
@@ -974,13 +1114,13 @@ func TestDetachRoomAccountsAtomicRollsBackClosedHistoryWhenProjectionDeleteFails
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("SELECT id, owner_user_id, platform, account_level, status, allowed_models").
 		WithArgs(snapshot.ListingID).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id", "platform", "account_level", "status", "allowed_models"}).
-			AddRow(snapshot.ListingID, snapshot.OwnerUserID, snapshot.Platform, snapshot.AccountLevel, service.AccountShareListingStatusActive, `["gpt-5.5"]`))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id", "platform", "account_level", "status", "allowed_models", "pending_operation_id"}).
+			AddRow(snapshot.ListingID, snapshot.OwnerUserID, snapshot.Platform, snapshot.AccountLevel, service.AccountShareListingStatusActive, `["gpt-5.5"]`, nil))
 	mock.ExpectQuery("SELECT\\s+a\\.id, a\\.name, a\\.platform, a\\.account_level, a\\.concurrency, a\\.priority").
 		WithArgs(pq.Array(accountIDs), snapshot.OwnerUserID).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "name", "platform", "account_level", "concurrency", "priority",
-			"status", "schedulable", "type", "credentials", "extra",
+			"status", "unavailable_blocker", "type", "credentials", "extra",
 		}).AddRow(
 			snapshot.AccountID,
 			snapshot.AccountName,
@@ -989,7 +1129,7 @@ func TestDetachRoomAccountsAtomicRollsBackClosedHistoryWhenProjectionDeleteFails
 			snapshot.ConfiguredConcurrency,
 			3,
 			service.StatusActive,
-			true,
+			"",
 			service.AccountTypeOAuth,
 			`{}`,
 			`{}`,
@@ -2483,6 +2623,164 @@ func TestRebindRoomMembershipsRejectsLastAccountRemovalWithActiveMembership(t *t
 	}
 }
 
+func TestRebindRoomMembershipsKeepsDrainingLifecycleWithPendingOperationWhenLastAccountRemoved(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	repo := &accountShareModeRepository{db: db}
+	listingID := int64(700)
+	accountID := int64(10)
+	operationID := "fa2ac408-35ec-43bd-8308-4fb7f75e5ad6"
+
+	mock.ExpectBegin()
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	expectAccountShareRoomRebindScopeWithLifecycle(
+		mock,
+		listingID,
+		42,
+		service.PlatformOpenAI,
+		service.AccountLevelPlus,
+		service.AccountShareListingStatusDraining,
+		operationID,
+		[]int64{accountID},
+	)
+	mock.ExpectQuery("SELECT a\\.id\\s+FROM account_share_room_accounts").
+		WithArgs(listingID, pq.Array([]int64{accountID}), sqlmock.AnyArg()).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT id, listing_id, account_id, listing_revision_id").
+		WithArgs(listingID, pq.Array([]int64{accountID}), service.AccountShareMembershipStatusActive).
+		WillReturnRows(sqlmock.NewRows(accountShareMembershipRebindColumns()))
+	mock.ExpectRollback()
+
+	result, err := repo.rebindRoomMembershipsBeforePlacementRemovalInTx(
+		context.Background(),
+		tx,
+		listingID,
+		accountID,
+	)
+	if err != nil {
+		t.Fatalf("rebindRoomMembershipsBeforePlacementRemovalInTx: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected an empty seat billing result")
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestRebindRoomMembershipsFailsFastForUnsupportedLifecycle(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	repo := &accountShareModeRepository{db: db}
+	listingID := int64(700)
+	accountID := int64(10)
+
+	mock.ExpectBegin()
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	expectAccountShareRoomRebindScopeWithLifecycle(
+		mock,
+		listingID,
+		42,
+		service.PlatformOpenAI,
+		service.AccountLevelPlus,
+		service.AccountShareListingStatusSuspended,
+		nil,
+		[]int64{accountID},
+	)
+	mock.ExpectRollback()
+
+	result, err := repo.rebindRoomMembershipsBeforePlacementRemovalInTx(
+		context.Background(),
+		tx,
+		listingID,
+		accountID,
+	)
+	if result != nil {
+		t.Fatalf("result = %#v, want nil", result)
+	}
+	if !errors.Is(err, service.ErrAccountShareRoomOperationConflict) {
+		t.Fatalf("error = %v, want operation conflict", err)
+	}
+	appErr := infraerrors.FromError(err)
+	if appErr.Metadata["blocker"] != "room_lifecycle_conflict" ||
+		appErr.Metadata["lifecycle_status"] != service.AccountShareListingStatusSuspended {
+		t.Fatalf("unexpected conflict metadata: %#v", appErr.Metadata)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestAccountShareRoomPlacementRemovalLifecycle(t *testing.T) {
+	operationID := "fa2ac408-35ec-43bd-8308-4fb7f75e5ad6"
+	tests := []struct {
+		name              string
+		status            string
+		pendingOperation  sql.NullString
+		preserveLifecycle bool
+		wantConflict      bool
+	}{
+		{name: "active without operation can auto pause", status: service.AccountShareListingStatusActive},
+		{name: "paused without operation keeps auto pause behavior", status: service.AccountShareListingStatusPaused},
+		{
+			name:              "draining with operation preserves lifecycle",
+			status:            service.AccountShareListingStatusDraining,
+			pendingOperation:  sql.NullString{String: operationID, Valid: true},
+			preserveLifecycle: true,
+		},
+		{
+			name:         "draining without operation is inconsistent",
+			status:       service.AccountShareListingStatusDraining,
+			wantConflict: true,
+		},
+		{
+			name:             "active with operation is inconsistent",
+			status:           service.AccountShareListingStatusActive,
+			pendingOperation: sql.NullString{String: operationID, Valid: true},
+			wantConflict:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			preserveLifecycle, err := accountShareRoomPlacementRemovalLifecycle(&lockedAccountShareRoom{
+				Status:             tt.status,
+				PendingOperationID: tt.pendingOperation,
+			})
+			if tt.wantConflict {
+				if !errors.Is(err, service.ErrAccountShareRoomOperationConflict) {
+					t.Fatalf("error = %v, want operation conflict", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("accountShareRoomPlacementRemovalLifecycle: %v", err)
+			}
+			if preserveLifecycle != tt.preserveLifecycle {
+				t.Fatalf("preserveLifecycle = %v, want %v", preserveLifecycle, tt.preserveLifecycle)
+			}
+		})
+	}
+}
+
 func TestRebindRoomMembershipsIgnoresQueuedMembershipAndPausesEmptyRoom(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -2611,10 +2909,32 @@ func expectAccountShareRoomRebindScope(
 	accountLevel string,
 	accountIDs []int64,
 ) {
+	expectAccountShareRoomRebindScopeWithLifecycle(
+		mock,
+		listingID,
+		ownerUserID,
+		platform,
+		accountLevel,
+		service.AccountShareListingStatusActive,
+		nil,
+		accountIDs,
+	)
+}
+
+func expectAccountShareRoomRebindScopeWithLifecycle(
+	mock sqlmock.Sqlmock,
+	listingID int64,
+	ownerUserID int64,
+	platform string,
+	accountLevel string,
+	status string,
+	pendingOperationID any,
+	accountIDs []int64,
+) {
 	mock.ExpectQuery("SELECT id, owner_user_id, platform, account_level, status, allowed_models").
 		WithArgs(listingID).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id", "platform", "account_level", "status", "allowed_models"}).
-			AddRow(listingID, ownerUserID, platform, accountLevel, service.AccountShareListingStatusActive, `["gpt-5.5"]`))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id", "platform", "account_level", "status", "allowed_models", "pending_operation_id"}).
+			AddRow(listingID, ownerUserID, platform, accountLevel, status, `["gpt-5.5"]`, pendingOperationID))
 	roomAccountRows := sqlmock.NewRows([]string{"account_id"})
 	accountRows := sqlmock.NewRows([]string{"id"})
 	for _, accountID := range accountIDs {

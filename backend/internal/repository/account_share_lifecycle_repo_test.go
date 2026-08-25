@@ -885,6 +885,157 @@ func TestAccountShareModeRepositoryRoomDeletionFinalizeClosesProjectionInOrder(t
 	}
 }
 
+func TestAccountShareModeRepositoryListsPausedOpenLifecycleRecoveryCandidates(t *testing.T) {
+	repo, mock := newAccountShareLifecycleSQLMock(t)
+	mock.ExpectQuery("(?s)SELECT listing.id.*FROM account_share_room_operations operation.*JOIN account_share_listings listing.*WHERE listing.status IN \\('draining', 'paused'\\).*operation.action IN \\('drain_room', 'delete_room'\\).*operation.status IN \\('pending', 'running', 'needs_attention'\\)").
+		WithArgs(int64(2000), 100).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(2179)))
+
+	listingIDs, err := repo.ListOpenRoomLifecycleListingIDs(context.Background(), 2000, 100)
+
+	if err != nil {
+		t.Fatalf("ListOpenRoomLifecycleListingIDs failed: %v", err)
+	}
+	if !reflect.DeepEqual(listingIDs, []int64{2179}) {
+		t.Fatalf("listing ids = %v, want [2179]", listingIDs)
+	}
+}
+
+func TestAccountShareModeRepositoryDoesNotFinalizePausedDeleteAsDrain(t *testing.T) {
+	const listingID = int64(2179)
+	operationID := "44444444-4444-4444-8444-444444444444"
+	repo, mock := newAccountShareLifecycleSQLMock(t)
+
+	mock.ExpectBegin()
+	expectLifecycleListingLock(
+		mock,
+		listingID,
+		0,
+		true,
+		lifecycleLockedListingRows(
+			listingID,
+			42,
+			"lifecycle-room",
+			service.AccountShareListingStatusPaused,
+			41,
+			func(row *lifecycleLockedListingRowData) {
+				row.PendingOperationID = operationID
+			},
+		),
+	)
+	mock.ExpectQuery("SELECT\\s+id::text, listing_id, membership_id").
+		WithArgs(operationID).
+		WillReturnRows(lifecycleOperationRows(
+			operationID,
+			listingID,
+			42,
+			"owner",
+			accountShareRoomOperationActionDelete,
+			accountShareRoomOperationStatusPending,
+			time.Now().UTC(),
+		))
+	mock.ExpectRollback()
+
+	listing, err := repo.FinalizeDrainingRoom(context.Background(), listingID, 41)
+
+	if !errors.Is(err, service.ErrAccountShareRoomOperationConflict) {
+		t.Fatalf("FinalizeDrainingRoom error = %v, want operation conflict", err)
+	}
+	if listing != nil {
+		t.Fatalf("FinalizeDrainingRoom listing = %#v, want nil", listing)
+	}
+}
+
+func TestAccountShareModeRepositoryFinalizesPausedPendingDrainAtomically(t *testing.T) {
+	const (
+		listingID    = int64(2179)
+		ownerID      = int64(42)
+		accountID    = int64(99)
+		oldVersion   = int64(41)
+		finalVersion = int64(42)
+		revisionID   = int64(7042)
+	)
+	operationID := "fa2ac408-35ec-43bd-8308-4fb7f75e5ad6"
+	now := time.Date(2026, time.August, 25, 18, 46, 27, 0, time.Local)
+	repo, mock := newAccountShareLifecycleSQLMock(t)
+
+	mock.ExpectBegin()
+	expectLifecycleListingLock(
+		mock,
+		listingID,
+		0,
+		true,
+		lifecycleLockedListingRows(
+			listingID,
+			ownerID,
+			"lifecycle-room",
+			service.AccountShareListingStatusPaused,
+			oldVersion,
+			func(row *lifecycleLockedListingRowData) {
+				row.PendingOperationID = operationID
+			},
+		),
+	)
+	mock.ExpectQuery("SELECT\\s+id::text, listing_id, membership_id").
+		WithArgs(operationID).
+		WillReturnRows(lifecycleOperationRows(
+			operationID,
+			listingID,
+			ownerID,
+			"owner",
+			accountShareRoomOperationActionDrain,
+			accountShareRoomOperationStatusPending,
+			now,
+		))
+	expectLifecycleDatabaseBlockers(mock, listingID, 0, 0, 0, 0)
+	mock.ExpectExec("UPDATE account_share_listings\\s+SET status = 'paused'").
+		WithArgs(listingID, oldVersion, operationID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectLifecycleRevisionSuccess(
+		mock,
+		listingID,
+		finalVersion,
+		revisionID,
+		ownerID,
+		0,
+		false,
+		"lifecycle-room",
+		service.AccountShareListingStatusPaused,
+		"drain_finalize",
+		"",
+		"listing.drain_completed",
+		operationID,
+	)
+	mock.ExpectExec("UPDATE account_share_room_operations\\s+SET status = 'succeeded'").
+		WithArgs(finalVersion, sqlmock.AnyArg(), operationID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectQuery("SELECT\\s+l\\.id").
+		WithArgs(ownerID, listingID).
+		WillReturnRows(accountShareListingRows(
+			listingID,
+			accountID,
+			ownerID,
+			"",
+			time.Time{},
+			func(row *accountShareListingRowData) {
+				row.RowVersion = finalVersion
+				row.CurrentRevisionID = revisionID
+				row.RoomName = "lifecycle-room"
+				row.Status = service.AccountShareListingStatusPaused
+			},
+		))
+
+	listing, err := repo.FinalizeDrainingRoom(context.Background(), listingID, oldVersion)
+
+	if err != nil {
+		t.Fatalf("FinalizeDrainingRoom failed: %v", err)
+	}
+	if listing == nil || listing.RowVersion != finalVersion || listing.Status != service.AccountShareListingStatusPaused {
+		t.Fatalf("unexpected finalized listing: %#v", listing)
+	}
+}
+
 type lifecycleCapturedStringArgument struct {
 	value string
 }

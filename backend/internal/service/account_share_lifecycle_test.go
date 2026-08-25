@@ -67,7 +67,18 @@ type accountShareLifecycleRepoStub struct {
 	finalizeListingID   int64
 	finalizeOperationID string
 
-	roomOperation *AccountShareRoomOperation
+	openLifecycleListingIDs []int64
+	openLifecycleErr        error
+	openLifecycleCalls      int
+	finalizeDrainListingID  int64
+	finalizeDrainVersion    int64
+	finalizeDrainResult     *AccountShareListing
+	finalizeDrainErr        error
+	finalizeDrainCalls      int
+	clearDrainErr           error
+	clearDrainCalls         int
+	roomOperation           *AccountShareRoomOperation
+	roomOperationErr        error
 }
 
 var _ AccountShareModeRepository = (*accountShareLifecycleRepoStub)(nil)
@@ -161,11 +172,21 @@ func (r *accountShareLifecycleRepoStub) ListRoomAccounts(
 }
 
 func (r *accountShareLifecycleRepoStub) FinalizeDrainingRoom(
-	context.Context,
-	int64,
-	int64,
+	_ context.Context,
+	listingID int64,
+	expectedVersion int64,
 ) (*AccountShareListing, error) {
-	return nil, ErrAccountShareRoomInvalidTransition
+	r.finalizeDrainCalls++
+	r.finalizeDrainListingID = listingID
+	r.finalizeDrainVersion = expectedVersion
+	if r.finalizeDrainErr != nil {
+		return nil, r.finalizeDrainErr
+	}
+	if r.finalizeDrainResult == nil {
+		return nil, ErrAccountShareRoomInvalidTransition
+	}
+	cloned := *r.finalizeDrainResult
+	return &cloned, nil
 }
 
 func (r *accountShareLifecycleRepoStub) ClearRoomMembersForDrain(
@@ -174,11 +195,16 @@ func (r *accountShareLifecycleRepoStub) ClearRoomMembersForDrain(
 	bool,
 	int64,
 ) (*AccountShareSeatBillingResult, error) {
+	r.clearDrainCalls++
+	if r.clearDrainErr != nil {
+		return nil, r.clearDrainErr
+	}
 	return &AccountShareSeatBillingResult{}, nil
 }
 
-func (r *accountShareLifecycleRepoStub) ListDrainingRoomIDs(context.Context, int64, int) ([]int64, error) {
-	return nil, nil
+func (r *accountShareLifecycleRepoStub) ListOpenRoomLifecycleListingIDs(context.Context, int64, int) ([]int64, error) {
+	r.openLifecycleCalls++
+	return append([]int64(nil), r.openLifecycleListingIDs...), r.openLifecycleErr
 }
 
 func (r *accountShareLifecycleRepoStub) ListValidatingRoomIDs(
@@ -371,6 +397,9 @@ func (r *accountShareLifecycleRepoStub) GetRoomOperation(
 	bool,
 	string,
 ) (*AccountShareRoomOperation, error) {
+	if r.roomOperationErr != nil {
+		return nil, r.roomOperationErr
+	}
 	if r.roomOperation == nil {
 		return nil, ErrAccountShareRoomOperationConflict
 	}
@@ -452,6 +481,160 @@ func accountShareLifecycleTestRoomAccount(accountID int64) AccountShareRoomAccou
 
 func accountShareLifecycleTestAccountRepository(accounts ...*Account) AccountRepository {
 	return &accountShareOwnedAccountRepoStub{accounts: accounts}
+}
+
+func TestAccountShareRoomLifecycleFinalizerRecoversPausedPendingDrain(t *testing.T) {
+	operationID := "fa2ac408-35ec-43bd-8308-4fb7f75e5ad6"
+	repo := &accountShareLifecycleRepoStub{
+		accountShareModeRepoStub: &accountShareModeRepoStub{},
+		openLifecycleListingIDs:  []int64{2179},
+		managementStates: []AccountShareRoomManagementState{{
+			ListingID:          2179,
+			RowVersion:         41,
+			LifecycleStatus:    AccountShareListingStatusPaused,
+			PendingOperationID: operationID,
+			Blockers: AccountShareRoomBlockers{
+				ConflictingOperation:   true,
+				ConflictingOperationID: operationID,
+			},
+		}},
+		roomOperation: &AccountShareRoomOperation{
+			ID:        operationID,
+			ListingID: 2179,
+			Action:    AccountShareRoomOperationActionDrain,
+			Status:    "pending",
+			CreatedAt: time.Now().Add(-time.Minute),
+		},
+		finalizeDrainResult: &AccountShareListing{
+			ID:         2179,
+			RowVersion: 42,
+			Status:     AccountShareListingStatusPaused,
+		},
+	}
+	service := newAccountShareLifecycleTestService(repo, nil, nil, nil)
+
+	err := service.processRoomLifecycleOnce(context.Background(), &ClusterLeaseGuard{})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, repo.finalizeDrainCalls)
+	require.Equal(t, int64(2179), repo.finalizeDrainListingID)
+	require.Equal(t, int64(41), repo.finalizeDrainVersion)
+	require.Zero(t, repo.finalizeCalls)
+}
+
+func TestAccountShareRoomLifecycleFinalizerRoutesPausedPendingDeleteToDeletion(t *testing.T) {
+	operationID := "44444444-4444-4444-8444-444444444444"
+	repo := &accountShareLifecycleRepoStub{
+		accountShareModeRepoStub: &accountShareModeRepoStub{},
+		openLifecycleListingIDs:  []int64{88},
+		managementStates: []AccountShareRoomManagementState{{
+			ListingID:          88,
+			RowVersion:         9,
+			LifecycleStatus:    AccountShareListingStatusPaused,
+			PendingOperationID: operationID,
+			Blockers: AccountShareRoomBlockers{
+				ConflictingOperation:   true,
+				ConflictingOperationID: operationID,
+			},
+		}},
+		roomOperation: &AccountShareRoomOperation{
+			ID:        operationID,
+			ListingID: 88,
+			Action:    AccountShareRoomOperationActionDelete,
+			Status:    "pending",
+			CreatedAt: time.Now().Add(-time.Minute),
+		},
+		finalizeOperation: &AccountShareRoomOperation{
+			ID:        operationID,
+			ListingID: 88,
+			Action:    AccountShareRoomOperationActionDelete,
+			Status:    "succeeded",
+		},
+	}
+	service := newAccountShareLifecycleTestService(repo, nil, nil, nil)
+
+	err := service.processRoomLifecycleOnce(context.Background(), &ClusterLeaseGuard{})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, repo.finalizeCalls)
+	require.Equal(t, int64(88), repo.finalizeListingID)
+	require.Equal(t, operationID, repo.finalizeOperationID)
+	require.Zero(t, repo.finalizeDrainCalls)
+}
+
+func TestAccountShareRoomLifecycleFinalizerPropagatesScanFailureToClusterTask(t *testing.T) {
+	scanErr := errors.New("room lifecycle scan failed")
+	repo := &accountShareLifecycleRepoStub{
+		accountShareModeRepoStub: &accountShareModeRepoStub{},
+		openLifecycleErr:         scanErr,
+	}
+	service := newAccountShareLifecycleTestService(repo, nil, nil, nil)
+	service.taskExecutor = &ClusterTaskExecutor{}
+
+	err := service.processRoomLifecycleFinalizationOnce()
+
+	require.ErrorIs(t, err, scanErr)
+	require.Equal(t, 1, repo.openLifecycleCalls)
+}
+
+func TestAccountShareRoomLifecycleFinalizerChecksClusterLeaseBeforeMutation(t *testing.T) {
+	leaseErr := errors.New("room lifecycle lease lost")
+	operationID := "fa2ac408-35ec-43bd-8308-4fb7f75e5ad6"
+	tests := []struct {
+		name     string
+		action   string
+		blockers AccountShareRoomBlockers
+	}{
+		{name: "drain finalize", action: AccountShareRoomOperationActionDrain},
+		{
+			name:   "drain member clear",
+			action: AccountShareRoomOperationActionDrain,
+			blockers: AccountShareRoomBlockers{
+				ActiveMembershipCount: 1,
+			},
+		},
+		{name: "delete finalize", action: AccountShareRoomOperationActionDelete},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			blockers := tt.blockers
+			blockers.ConflictingOperation = true
+			blockers.ConflictingOperationID = operationID
+			repo := &accountShareLifecycleRepoStub{
+				accountShareModeRepoStub: &accountShareModeRepoStub{},
+				openLifecycleListingIDs:  []int64{2179},
+				managementStates: []AccountShareRoomManagementState{{
+					ListingID:          2179,
+					RowVersion:         41,
+					LifecycleStatus:    AccountShareListingStatusPaused,
+					PendingOperationID: operationID,
+					Blockers:           blockers,
+				}},
+				roomOperation: &AccountShareRoomOperation{
+					ID:        operationID,
+					ListingID: 2179,
+					Action:    tt.action,
+					Status:    "pending",
+					CreatedAt: time.Now().Add(-time.Minute),
+				},
+				finalizeDrainResult: &AccountShareListing{ID: 2179},
+				finalizeOperation:   &AccountShareRoomOperation{ID: operationID},
+			}
+			service := newAccountShareLifecycleTestService(repo, nil, nil, nil)
+			guard := &ClusterLeaseGuard{executor: &ClusterTaskExecutor{
+				clusterMode: true,
+				initErr:     leaseErr,
+			}}
+
+			err := service.processRoomLifecycleOnce(context.Background(), guard)
+
+			require.ErrorIs(t, err, leaseErr)
+			require.Zero(t, repo.finalizeDrainCalls)
+			require.Zero(t, repo.clearDrainCalls)
+			require.Zero(t, repo.finalizeCalls)
+		})
+	}
 }
 
 func TestCreateRoomFromOwnedAccountStartsValidatingAndCompletesAsyncValidation(t *testing.T) {
@@ -643,6 +826,59 @@ func TestAccountShareRoomActivationValidationPass(t *testing.T) {
 	require.Equal(t, int64(2), repo.transitionCalls[1].input.ExpectedVersion)
 	require.True(t, repo.transitionCalls[1].input.Confirmed)
 	require.Empty(t, repo.transitionCalls[1].input.Reason)
+}
+
+func TestAccountShareOpencodeRoomActivationUsesFixedConnectivityModel(t *testing.T) {
+	repo := &accountShareLifecycleRepoStub{
+		accountShareModeRepoStub: &accountShareModeRepoStub{},
+		managementStates: []AccountShareRoomManagementState{{
+			ListingID:       8,
+			OwnerUserID:     42,
+			RowVersion:      3,
+			LifecycleStatus: AccountShareListingStatusActive,
+		}},
+		transitionResults: map[string]*AccountShareListing{
+			AccountShareRoomActionActivate: {
+				ID:            8,
+				RowVersion:    2,
+				OwnerUserID:   42,
+				Status:        AccountShareListingStatusValidating,
+				Platform:      PlatformOpencode,
+				AllowedModels: []string{"grok-4.5", "deepseek-v4-flash"},
+			},
+			"validation-pass": {
+				ID:          8,
+				RowVersion:  3,
+				OwnerUserID: 42,
+				Platform:    PlatformOpencode,
+				Status:      AccountShareListingStatusActive,
+			},
+		},
+		roomAccounts: []AccountShareRoomAccount{accountShareLifecycleTestRoomAccount(199)},
+	}
+	tester := &accountShareModeTesterStub{}
+	recovery := &accountShareModeRecoveryStub{}
+	accountRepo := accountShareLifecycleTestAccountRepository(&Account{
+		ID:       199,
+		Platform: PlatformOpencode,
+	})
+	service := newAccountShareLifecycleTestService(repo, nil, tester, recovery, accountRepo)
+
+	state, err := service.ActivateRoom(
+		context.Background(),
+		42,
+		false,
+		8,
+		AccountShareRoomLifecycleCommandInput{ExpectedVersion: 1},
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, state)
+	require.Equal(t, AccountShareListingStatusActive, state.LifecycleStatus)
+	require.Equal(t, 1, tester.calls)
+	require.Equal(t, int64(199), tester.accountID)
+	require.Equal(t, defaultOpencodeTestModel, tester.modelID)
+	require.Equal(t, []string{defaultOpencodeTestModel}, tester.modelIDs)
 }
 
 func TestAccountShareRoomValidationWorkerUsesDedicatedClusterLease(t *testing.T) {

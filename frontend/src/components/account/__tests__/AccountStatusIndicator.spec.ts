@@ -184,4 +184,50 @@ describe('AccountStatusIndicator', () => {
     // AICredits 积分耗尽状态应显示
     expect(wrapper.text()).toContain('admin.accounts.status.creditsExhausted')
   })
+
+  it('opencode 5h/7d 限额达限 → 显示 opencode 限额保护徽章', () => {
+    const wrapper = mount(AccountStatusIndicator, {
+      props: {
+        account: makeAccount({
+          id: 5,
+          name: 'oc-1',
+          platform: 'opencode',
+          type: 'apikey',
+          opencode_5h_limit_percent: 100,
+          opencode_quota_protection_reason: '5h',
+          opencode_quota_protection_reset_at: '2099-03-15T00:00:00Z'
+        })
+      },
+      global: {
+        stubs: {
+          Icon: true
+        }
+      }
+    })
+
+    expect(wrapper.text()).toContain('admin.accounts.status.opencodeQuotaProtected')
+    expect(wrapper.text()).toContain('admin.accounts.status.rateLimitedAutoResume')
+  })
+
+  it('opencode 配额保护已过期 → 不显示限额保护徽章', () => {
+    const wrapper = mount(AccountStatusIndicator, {
+      props: {
+        account: makeAccount({
+          id: 6,
+          name: 'oc-2',
+          platform: 'opencode',
+          type: 'apikey',
+          opencode_quota_protection_reason: '7d',
+          opencode_quota_protection_reset_at: '2020-03-15T00:00:00Z'
+        })
+      },
+      global: {
+        stubs: {
+          Icon: true
+        }
+      }
+    })
+
+    expect(wrapper.text()).not.toContain('admin.accounts.status.opencodeQuotaProtected')
+  })
 })

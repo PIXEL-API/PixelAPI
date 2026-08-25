@@ -135,6 +135,7 @@ func TestAccountIsModelSupported(t *testing.T) {
 		name           string
 		platform       string
 		credentials    map[string]any
+		owned          bool
 		requestedModel string
 		expected       bool
 	}{
@@ -150,6 +151,20 @@ func TestAccountIsModelSupported(t *testing.T) {
 			credentials:    map[string]any{},
 			requestedModel: "any-model",
 			expected:       true,
+		},
+		{
+			name:           "owned account without mapping denies all",
+			owned:          true,
+			credentials:    nil,
+			requestedModel: "any-model",
+			expected:       false,
+		},
+		{
+			name:           "owned account with empty mapping denies all",
+			owned:          true,
+			credentials:    map[string]any{"model_mapping": map[string]any{}},
+			requestedModel: "any-model",
+			expected:       false,
 		},
 
 		// 精确匹配
@@ -171,6 +186,16 @@ func TestAccountIsModelSupported(t *testing.T) {
 				},
 			},
 			requestedModel: "claude-opus-4-5",
+			expected:       false,
+		},
+		{
+			name:     "owned grok account does not inject default models",
+			platform: PlatformGrok,
+			owned:    true,
+			credentials: map[string]any{
+				"model_mapping": map[string]any{"grok-selected": "grok-selected"},
+			},
+			requestedModel: "grok-unselected",
 			expected:       false,
 		},
 		{
@@ -232,9 +257,15 @@ func TestAccountIsModelSupported(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			var ownerUserID *int64
+			if tt.owned {
+				value := int64(1)
+				ownerUserID = &value
+			}
 			account := &Account{
 				Platform:    tt.platform,
 				Credentials: tt.credentials,
+				OwnerUserID: ownerUserID,
 			}
 			result := account.IsModelSupported(tt.requestedModel)
 			if result != tt.expected {
@@ -475,6 +506,110 @@ func TestAccountGetModelMapping_AntigravityEnsuresGeminiDefaultPassthroughs(t *t
 	if mapping["gemini-3.1-pro-low"] != "gemini-3.1-pro-low" {
 		t.Fatalf("expected gemini-3.1-pro-low passthrough to be auto-filled, got: %q", mapping["gemini-3.1-pro-low"])
 	}
+}
+
+func TestAccountGetModelMapping_GoogleOnePrecedence(t *testing.T) {
+	t.Run("platform account uses conservative defaults", func(t *testing.T) {
+		account := &Account{
+			Platform: PlatformGemini,
+			Type:     AccountTypeOAuth,
+			Credentials: map[string]any{
+				"oauth_type": "google_one",
+			},
+		}
+
+		mapping := account.GetModelMapping()
+		for _, model := range []string{"gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.5-pro"} {
+			if mapping[model] != model {
+				t.Fatalf("expected Google One model %q to map to itself, got %q", model, mapping[model])
+			}
+		}
+		if account.IsModelSupported("gemini-3.1-pro-preview") {
+			t.Fatal("Google One defaults must not enable unsupported 3.x models")
+		}
+	})
+
+	t.Run("platform account preserves explicit mapping", func(t *testing.T) {
+		account := &Account{
+			Platform: PlatformGemini,
+			Type:     AccountTypeOAuth,
+			Credentials: map[string]any{
+				"oauth_type": "google_one",
+				"model_mapping": map[string]any{
+					"custom-model": "gemini-2.5-flash",
+				},
+			},
+		}
+
+		mapping := account.GetModelMapping()
+		if len(mapping) != 1 || mapping["custom-model"] != "gemini-2.5-flash" {
+			t.Fatalf("expected explicit Google One mapping to win, got %v", mapping)
+		}
+	})
+
+	t.Run("platform account rejects malformed mapping by falling back to conservative defaults", func(t *testing.T) {
+		account := &Account{
+			Platform: PlatformGemini,
+			Type:     AccountTypeOAuth,
+			Credentials: map[string]any{
+				"oauth_type": "google_one",
+				"model_mapping": map[string]any{
+					"gemini-3.1-pro-preview": 123,
+				},
+			},
+		}
+
+		mapping := account.GetModelMapping()
+		if mapping["gemini-2.5-flash"] != "gemini-2.5-flash" {
+			t.Fatalf("expected malformed Google One mapping to fall back to conservative catalog, got %v", mapping)
+		}
+		if account.IsModelSupported("gemini-3.1-pro-preview") {
+			t.Fatal("malformed Google One mapping must not allow unsupported 3.x models")
+		}
+	})
+
+	t.Run("owned account keeps strict whitelist", func(t *testing.T) {
+		ownerUserID := int64(42)
+		account := &Account{
+			Platform:    PlatformGemini,
+			Type:        AccountTypeOAuth,
+			OwnerUserID: &ownerUserID,
+			Credentials: map[string]any{
+				"oauth_type": "google_one",
+				"model_mapping": map[string]any{
+					"owner-model": "gemini-2.5-pro",
+				},
+			},
+		}
+
+		mapping := account.GetModelMapping()
+		if len(mapping) != 1 || mapping["owner-model"] != "gemini-2.5-pro" {
+			t.Fatalf("expected owned Google One whitelist to stay authoritative, got %v", mapping)
+		}
+		if account.IsModelSupported("gemini-2.5-flash") {
+			t.Fatal("owned Google One account must not receive platform defaults")
+		}
+	})
+
+	t.Run("owned account with empty whitelist denies all", func(t *testing.T) {
+		ownerUserID := int64(42)
+		account := &Account{
+			Platform:    PlatformGemini,
+			Type:        AccountTypeOAuth,
+			OwnerUserID: &ownerUserID,
+			Credentials: map[string]any{
+				"oauth_type":    "google_one",
+				"model_mapping": map[string]any{},
+			},
+		}
+
+		if mapping := account.GetModelMapping(); len(mapping) != 0 {
+			t.Fatalf("expected empty owned whitelist, got %v", mapping)
+		}
+		if account.IsModelSupported("gemini-2.5-flash") {
+			t.Fatal("owned Google One account with empty whitelist must deny all")
+		}
+	})
 }
 
 func TestAccountGetModelMapping_AntigravityRespectsWildcardOverride(t *testing.T) {

@@ -409,6 +409,70 @@ describe('RoomAccountsDialog', () => {
       .toContain('accountShare.roomAccounts.addSuccess')
   })
 
+  it('reports every structured attach failure and keeps only failed accounts selected', async () => {
+    listRoomAccounts
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([roomAccount(41, '成功账号')])
+    listAccounts.mockResolvedValue(paginatedAccounts([
+      account(41, '成功账号'),
+      account(42, '缺模型账号'),
+      account(43, '限流账号'),
+    ]))
+    attachRoomAccounts.mockResolvedValueOnce({
+      success: 1,
+      failed: 2,
+      success_ids: [41],
+      failed_ids: [42, 43],
+      results: [
+        { account_id: 41, success: true },
+        {
+          account_id: 42,
+          success: false,
+          error: 'account share account does not support requested model',
+          reason: 'ACCOUNT_SHARE_MODE_UNSUPPORTED_MODEL',
+          message: 'account share account does not support requested model',
+          metadata: { model: 'glm-5.3' },
+        },
+        {
+          account_id: 43,
+          success: false,
+          error: 'account share account is unavailable',
+          reason: 'ACCOUNT_SHARE_ACCOUNT_UNAVAILABLE',
+          message: 'account share account is unavailable',
+          metadata: { blocker: 'rate_limited' },
+        },
+      ],
+    })
+    vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(
+      '66666666-6666-4666-8666-666666666666'
+    )
+
+    const wrapper = mountDialog()
+    await flushPromises()
+    await wrapper.get('[data-testid="room-accounts-add-tab"]').trigger('click')
+    await wrapper.get('[data-testid="select-all-room-candidates"]').trigger('click')
+    await wrapper.get('[data-testid="add-selected-room-accounts"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="room-accounts-operation-summary"]').text())
+      .toContain('accountShare.roomAccounts.addPartial')
+    expect(wrapper.text()).toContain('缺模型账号')
+    expect(wrapper.text()).toContain('缺少房间要求的模型「glm-5.3」')
+    expect(wrapper.text()).toContain('限流账号')
+    expect(wrapper.text()).toContain('账号正处于速率限制期')
+    expect(wrapper.text()).not.toContain('account share account does not support requested model')
+    expect(wrapper.emitted('changed')).toEqual([[
+      { operation: 'add', success: 1, failed: 2 },
+    ]])
+    expect(listRoomAccounts).toHaveBeenCalledTimes(2)
+    expect(listAccounts).toHaveBeenCalledTimes(2)
+
+    const setupState = (wrapper.vm as any).$?.setupState
+    expect(setupState.selectedCandidateIDs.has(41)).toBe(false)
+    expect(setupState.selectedCandidateIDs.has(42)).toBe(true)
+    expect(setupState.selectedCandidateIDs.has(43)).toBe(true)
+  })
+
   it('revalidates selected candidates immediately before submit and drops newly ineligible accounts', async () => {
     listRoomAccounts.mockResolvedValueOnce([])
     listAccounts.mockResolvedValue(paginatedAccounts([account(17, '资格变化账号')]))

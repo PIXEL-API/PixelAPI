@@ -186,5 +186,21 @@ export async function getModelDefaultPricing(model: string): Promise<ModelDefaul
   return data
 }
 
-const channelsAPI = { list, getById, create, update, remove, getModelDefaultPricing }
+export interface PricedModelOptionsResult {
+  models: string[]
+}
+
+/**
+ * 获取启用渠道及其分组定价中配置的模型并集。
+ * 账号模型限制使用该名单，避免在前端维护重复的硬编码模型列表。
+ */
+export async function getPricedModelOptions(platforms?: string[]): Promise<PricedModelOptionsResult> {
+  const normalizedPlatforms = (platforms || []).map(platform => platform.trim()).filter(Boolean)
+  const { data } = await apiClient.get<PricedModelOptionsResult>('/admin/channels/model-options', {
+    params: normalizedPlatforms.length > 0 ? { platforms: normalizedPlatforms.join(',') } : undefined
+  })
+  return data
+}
+
+const channelsAPI = { list, getById, create, update, remove, getModelDefaultPricing, getPricedModelOptions }
 export default channelsAPI

@@ -95,6 +95,51 @@
         </div>
       </div>
 
+      <section
+        v-if="canUserManageModelWhitelist"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+        data-testid="user-model-whitelist-section"
+      >
+        <label class="input-label">{{ t('admin.accounts.modelWhitelist') }}</label>
+        <p class="mb-3 text-xs leading-5 text-gray-500 dark:text-gray-400">
+          {{ t('admin.accounts.userModelWhitelistHint') }}
+        </p>
+        <ModelWhitelistSelector
+          v-model="allowedModels"
+          :platform="account.platform"
+          :allowed-options="userModelOptions ?? []"
+          :allow-custom="false"
+        />
+        <p
+          v-if="userModelOptionsLoading"
+          class="mt-2 text-xs text-gray-500 dark:text-gray-400"
+        >
+          {{ t('admin.accounts.userModelOptionsLoading') }}
+        </p>
+        <p
+          v-else-if="userModelOptionsLoadError"
+          class="mt-2 text-xs text-red-600 dark:text-red-400"
+          role="alert"
+        >
+          {{ t('admin.accounts.userModelOptionsLoadFailed', { message: userModelOptionsLoadError }) }}
+        </p>
+        <p
+          v-else-if="userModelOptions !== null && userModelOptions.length === 0"
+          class="mt-2 text-xs text-amber-600 dark:text-amber-400"
+        >
+          {{ t('admin.accounts.userModelOptionsEmpty') }}
+        </p>
+        <p
+          v-else-if="allowedModels.length === 0"
+          class="mt-2 text-xs text-amber-600 dark:text-amber-400"
+        >
+          {{ t('admin.accounts.userModelSelectionRequired') }}
+        </p>
+        <p v-else class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+          {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
+        </p>
+      </section>
+
       <!-- API Key fields (only for apikey type) -->
       <div v-if="!isUserScope && account.type === 'apikey'" class="space-y-4">
         <div v-if="account.platform !== 'opencode'">
@@ -2513,7 +2558,6 @@ import {
   PERSONAL_ACCOUNT_MAX_LOAD_FACTOR,
   PERSONAL_ACCOUNT_MIN_LOAD_FACTOR,
   PERSONAL_ACCOUNT_DEFAULT_PRIORITY,
-  buildPersonalAccountModelMapping,
   normalizePersonalAccountConcurrency,
   normalizePersonalAccountLoadFactor
 } from '@/components/account/personalAccountTemplate'
@@ -2572,6 +2616,11 @@ const authStore = useAuthStore()
 const adminSettingsStore = useAdminSettingsStore()
 const accountScope = computed(() => props.accountScope ?? 'admin')
 const isUserScope = computed(() => accountScope.value === 'user')
+const canUserManageModelWhitelist = computed(() => {
+  const account = props.account
+  if (!isUserScope.value || !account) return false
+  return account.type === 'oauth' || account.platform === 'opencode'
+})
 const isAccountShareModeOnly = computed(() => {
   const account = props.account
   if (!isUserScope.value || !account) return false
@@ -2709,6 +2758,71 @@ const modelMappings = ref<ModelMapping[]>([])
 const openAICompactModelMappings = ref<ModelMapping[]>([])
 const modelRestrictionMode = ref<'whitelist' | 'mapping'>('whitelist')
 const allowedModels = ref<string[]>([])
+const userModelOptions = ref<string[] | null>(null)
+const userModelOptionsLoading = ref(false)
+const userModelOptionsLoadError = ref('')
+let userModelOptionsRequestVersion = 0
+
+const loadUserModelOptions = async () => {
+  const requestVersion = ++userModelOptionsRequestVersion
+  userModelOptionsLoadError.value = ''
+
+  if (!props.show || !canUserManageModelWhitelist.value || !props.account) {
+    userModelOptions.value = null
+    userModelOptionsLoading.value = false
+    return
+  }
+
+  userModelOptions.value = null
+  userModelOptionsLoading.value = true
+  try {
+    const result = await accountsAPI.getModelOptions(props.account.platform)
+    if (requestVersion !== userModelOptionsRequestVersion) return
+    userModelOptions.value = Array.from(
+      new Set((result.models || []).map(model => model.trim()).filter(Boolean))
+    )
+  } catch (error: unknown) {
+    if (requestVersion !== userModelOptionsRequestVersion) return
+    userModelOptions.value = []
+    userModelOptionsLoadError.value = extractApiErrorMessage(
+      error,
+      t('admin.accounts.userModelOptionsLoadFailedDefault')
+    )
+  } finally {
+    if (requestVersion === userModelOptionsRequestVersion) {
+      userModelOptionsLoading.value = false
+    }
+  }
+}
+
+const validateUserModelSelection = (): boolean => {
+  if (!canUserManageModelWhitelist.value) return true
+
+  if (userModelOptionsLoading.value || userModelOptions.value === null) {
+    appStore.showError(t('admin.accounts.userModelOptionsNotReady'))
+    return false
+  }
+  if (userModelOptionsLoadError.value) {
+    appStore.showError(
+      t('admin.accounts.userModelOptionsLoadFailed', { message: userModelOptionsLoadError.value })
+    )
+    return false
+  }
+  if (allowedModels.value.length === 0) {
+    appStore.showError(t('admin.accounts.userModelSelectionRequired'))
+    return false
+  }
+
+  const allowedSet = new Set(userModelOptions.value)
+  const invalidModels = allowedModels.value.filter(model => !allowedSet.has(model))
+  if (invalidModels.length > 0) {
+    appStore.showError(
+      t('admin.accounts.userModelSelectionInvalid', { models: invalidModels.join(', ') })
+    )
+    return false
+  }
+  return true
+}
 const DEFAULT_POOL_MODE_RETRY_COUNT = 3
 const MAX_POOL_MODE_RETRY_COUNT = 10
 const poolModeEnabled = ref(false)
@@ -3512,7 +3626,12 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   }
   if (isUserScope.value) {
     modelRestrictionMode.value = 'whitelist'
-    allowedModels.value = Object.keys(buildPersonalAccountModelMapping(newAccount.platform))
+    const existingMappings = credentials?.model_mapping
+    allowedModels.value = existingMappings && typeof existingMappings === 'object'
+      ? Object.entries(existingMappings as Record<string, unknown>)
+        .filter(([from, to]) => typeof to === 'string' && from === to)
+        .map(([from]) => from)
+      : []
     modelMappings.value = []
     openAICompactModelMappings.value = []
   }
@@ -3533,12 +3652,12 @@ async function loadTLSProfiles() {
 }
 
 watch(
-  [() => props.show, () => props.account],
-  ([show, newAccount], [wasShow, previousAccount]) => {
+  [() => props.show, () => props.account, isUserScope],
+  ([show, newAccount, userScope], [wasShow, previousAccount, previousUserScope]) => {
     if (!show || !newAccount) {
       return
     }
-    if (!wasShow || newAccount !== previousAccount) {
+    if (!wasShow || newAccount !== previousAccount || userScope !== previousUserScope) {
       syncFormFromAccount(newAccount)
       loadTLSProfiles()
       // 全局开关按需加载；store 合并并发调用，已加载时不产生网络请求。
@@ -3548,6 +3667,14 @@ watch(
         loadQuotaNotifyGlobal()
       }
     }
+  },
+  { immediate: true }
+)
+
+watch(
+  [() => props.show, canUserManageModelWhitelist, () => props.account?.platform],
+  () => {
+    void loadUserModelOptions()
   },
   { immediate: true }
 )
@@ -4181,6 +4308,9 @@ const handleSubmit = async () => {
     appStore.showError(t('userAccounts.typeNotAllowed'))
     return
   }
+  if (!validateUserModelSelection()) {
+    return
+  }
 
   if (form.status !== 'active' && form.status !== 'inactive' && form.status !== 'disabled' && form.status !== 'error') {
     appStore.showError(t('admin.accounts.pleaseSelectStatus'))
@@ -4424,6 +4554,16 @@ const handleSubmit = async () => {
       }
 
       updatePayload.credentials = newCredentials
+    }
+
+    if (canUserManageModelWhitelist.value) {
+      const currentCredentials =
+        (updatePayload.credentials as Record<string, unknown> | undefined) ||
+        ((props.account.credentials as Record<string, unknown>) || {})
+      updatePayload.credentials = {
+        ...currentCredentials,
+        model_mapping: Object.fromEntries(allowedModels.value.map(model => [model, model]))
+      }
     }
 
     // OpenAI/Grok OAuth: persist model mapping to credentials

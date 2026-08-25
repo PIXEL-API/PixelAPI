@@ -19,6 +19,7 @@ export const ACCOUNT_STATUS_FILTER_OPTIONS = [
   { value: '', labelKey: 'admin.accounts.allStatus' },
   { value: 'active', labelKey: 'admin.accounts.status.active' },
   { value: 'codex_quota_protected', labelKey: 'admin.accounts.status.codexQuotaProtected' },
+  { value: 'opencode_quota_protected', labelKey: 'admin.accounts.status.opencodeQuotaProtected' },
   { value: 'rate_limited', labelKey: 'admin.accounts.status.rateLimited' },
   { value: 'temp_unschedulable', labelKey: 'admin.accounts.status.tempUnschedulable' },
   { value: 'unschedulable', labelKey: 'admin.accounts.status.unschedulable' },

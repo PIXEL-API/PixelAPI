@@ -179,6 +179,76 @@ func TestAccountServiceImportOwnedValidatedPersonalAccessTokenUpdatesAndPreserve
 	}
 }
 
+func TestAccountServiceUpdateOwnedPersonalAccessTokenModelWhitelistOnly(t *testing.T) {
+	repo := newOwnedAgentIdentityRepoStub()
+	svc, _ := newOwnedAgentIdentityService(repo)
+	svc.pricedModelCatalog = &ownedPricedModelCatalogStub{modelsByPlatform: map[string][]string{
+		PlatformOpenAI: []string{"gpt-5.2", "gpt-5.4"},
+	}}
+	created, err := svc.ImportOwnedValidatedPersonalAccessTokenWithResult(
+		context.Background(),
+		101,
+		ownedPATImportRequest(AccountLevelPlus),
+		validatedOwnedPATInfo("at-test-model-edit", "pat-user", "team-a", "plus"),
+	)
+	require.NoError(t, err)
+	storedAccessToken := created.Account.GetCredential("access_token")
+
+	modelMapping := map[string]any{"gpt-5.4": "gpt-5.4"}
+	updated, err := svc.UpdateOwned(context.Background(), 101, created.Account.ID, UpdateAccountRequest{
+		Credentials: &map[string]any{"model_mapping": modelMapping},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, modelMapping, updated.Credentials["model_mapping"])
+	require.Equal(t, storedAccessToken, updated.GetCredential("access_token"))
+	require.True(t, updated.IsOpenAIPersonalAccessToken())
+}
+
+func TestAccountServiceUpdateOwnedPersonalAccessTokenRejectsCredentialChangesWithModelWhitelist(t *testing.T) {
+	repo := newOwnedAgentIdentityRepoStub()
+	svc, _ := newOwnedAgentIdentityService(repo)
+	svc.pricedModelCatalog = &ownedPricedModelCatalogStub{modelsByPlatform: map[string][]string{
+		PlatformOpenAI: []string{"gpt-5.4"},
+	}}
+	created, err := svc.ImportOwnedValidatedPersonalAccessTokenWithResult(
+		context.Background(),
+		101,
+		ownedPATImportRequest(AccountLevelPlus),
+		validatedOwnedPATInfo("at-test-model-edit-guard", "pat-user", "team-a", "plus"),
+	)
+	require.NoError(t, err)
+
+	for _, test := range []struct {
+		name        string
+		credentials map[string]any
+	}{
+		{
+			name: "identity field",
+			credentials: map[string]any{
+				"email":         "attacker@example.com",
+				"model_mapping": map[string]any{"gpt-5.4": "gpt-5.4"},
+			},
+		},
+		{
+			name: "sensitive token",
+			credentials: map[string]any{
+				"access_token":  "at-forged-token",
+				"model_mapping": map[string]any{"gpt-5.4": "gpt-5.4"},
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, updateErr := svc.UpdateOwned(context.Background(), 101, created.Account.ID, UpdateAccountRequest{
+				Credentials: &test.credentials,
+			})
+
+			require.ErrorIs(t, updateErr, ErrOwnedPersonalAccessTokenValidationRequired)
+			require.Equal(t, "at-test-model-edit-guard", repo.accounts[created.Account.ID].GetCredential("access_token"))
+		})
+	}
+}
+
 func TestAccountServiceImportOwnedValidatedPersonalAccessTokenIsolatesOwnersAndUsers(t *testing.T) {
 	repo := newOwnedAgentIdentityRepoStub()
 	svc, _ := newOwnedAgentIdentityService(repo)

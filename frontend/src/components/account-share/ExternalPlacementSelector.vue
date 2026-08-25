@@ -100,11 +100,12 @@ const { t } = useI18n()
 const platformDisplayName = computed(() => {
   if (props.platform === 'openai') return 'OpenAI'
   if (props.platform === 'anthropic') return 'Anthropic'
+  if (props.platform === 'opencode') return 'Opencode'
   return props.platform ? String(props.platform) : ''
 })
 
 const supportsPlatformMode = computed(() => (
-  props.platform === 'openai' || props.platform === 'anthropic'
+  props.platform === 'openai' || props.platform === 'anthropic' || props.platform === 'opencode'
 ))
 
 function explicitDisabledReason(target: AccountExternalPlacementTarget): string {

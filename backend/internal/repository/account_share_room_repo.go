@@ -7,10 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/lib/pq"
@@ -32,6 +32,7 @@ type lockedAccountShareRoom struct {
 	Platform            string
 	AccountLevel        string
 	Status              string
+	PendingOperationID  sql.NullString
 	AllowedModels       []string
 	CodexCLIOnly        bool
 	Codex5hLimitPercent float64
@@ -49,13 +50,13 @@ type accountShareRoomAssignmentSnapshot struct {
 }
 
 type accountShareRoomAccountCandidate struct {
-	Snapshot    accountShareRoomAssignmentSnapshot
-	Priority    int
-	Status      string
-	Schedulable bool
-	AccountType string
-	Credentials map[string]any
-	Extra       map[string]any
+	Snapshot           accountShareRoomAssignmentSnapshot
+	Priority           int
+	Status             string
+	UnavailableBlocker string
+	AccountType        string
+	Credentials        map[string]any
+	Extra              map[string]any
 }
 
 type accountShareRoomAccountProjection struct {
@@ -213,7 +214,7 @@ func (r *accountShareModeRepository) CreateRoomFromOwnedAccount(ctx context.Cont
 		return r.GetListingByID(ctx, idempotentListingID, ownerUserID)
 	}
 	accountLevel = service.NormalizeAccountLevel(accountLevel)
-	if accountLevel == service.AccountLevelUnknown {
+	if accountLevel == service.AccountLevelUnknown && platform != service.PlatformOpencode {
 		return nil, service.ErrAccountShareRoomUnknownLevel
 	}
 	if accountStatus != service.StatusActive || !accountSchedulable {
@@ -554,19 +555,19 @@ func (r *accountShareModeRepository) ListRoomAccounts(ctx context.Context, listi
 func (r *accountShareModeRepository) AttachRoomAccountsAtomic(
 	ctx context.Context,
 	input service.BatchAccountShareRoomAccountsInput,
-) error {
+) (*service.BulkUpdateAccountsResult, error) {
 	accountIDs, err := normalizeAccountShareRoomBatchInput(input)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	if err := lockAccountShareOwnerQuotaInTx(ctx, tx, input.OwnerUserID); err != nil {
-		return err
+		return nil, err
 	}
 	room, err := lockAccountShareRoomIdentityInTx(
 		ctx,
@@ -574,14 +575,14 @@ func (r *accountShareModeRepository) AttachRoomAccountsAtomic(
 		input.ListingID,
 	)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if room.OwnerUserID != input.OwnerUserID {
-		return service.ErrAccountShareRoomOwnerMismatch
+		return nil, service.ErrAccountShareRoomOwnerMismatch
 	}
 	if room.Status != service.AccountShareListingStatusActive &&
 		room.Status != service.AccountShareListingStatusPaused {
-		return service.ErrAccountShareRoomOperationConflict.WithMetadata(map[string]string{
+		return nil, service.ErrAccountShareRoomOperationConflict.WithMetadata(map[string]string{
 			"blocker": "room_not_attachable",
 			"status":  room.Status,
 		})
@@ -596,34 +597,56 @@ func (r *accountShareModeRepository) AttachRoomAccountsAtomic(
 		false,
 	)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(candidates) != len(accountIDs) {
-		return service.ErrAccountShareRoomOwnerMismatch
+		// Missing, deleted, or foreign accounts stay request-level failures to avoid
+		// exposing whether an arbitrary account ID exists.
+		return nil, service.ErrAccountShareRoomOwnerMismatch
 	}
 	roomPlatform := strings.ToLower(strings.TrimSpace(room.Platform))
 	roomAccountLevel := service.NormalizeAccountLevel(room.AccountLevel)
+	if roomAccountLevel == service.AccountLevelUnknown && roomPlatform != service.PlatformOpencode {
+		return nil, service.ErrAccountShareRoomUnknownLevel
+	}
+
+	failedByID := make(map[int64]service.BulkUpdateAccountResult, len(accountIDs))
+	recordFailure := func(accountID int64, cause error, metadata map[string]string) {
+		if _, exists := failedByID[accountID]; exists {
+			return
+		}
+		failedByID[accountID] = accountShareRoomBatchFailure(accountID, cause, metadata)
+	}
+	candidatesByID := make(map[int64]accountShareRoomAccountCandidate, len(candidates))
 	for _, candidate := range candidates {
-		if candidate.Status != service.StatusActive ||
-			!candidate.Schedulable ||
-			candidate.Snapshot.ConfiguredConcurrency <= 0 {
-			return service.ErrAccountShareAccountUnavailable.WithMetadata(map[string]string{
-				"account_id": strconv.FormatInt(candidate.Snapshot.AccountID, 10),
-				"reason":     "account must be active, schedulable, and have positive concurrency",
-			})
-		}
+		accountID := candidate.Snapshot.AccountID
+		candidatesByID[accountID] = candidate
 		if candidate.Snapshot.Platform != roomPlatform {
-			return service.ErrAccountShareRoomPlatformMismatch
+			recordFailure(accountID, service.ErrAccountShareRoomPlatformMismatch, map[string]string{
+				"account_platform": candidate.Snapshot.Platform,
+				"room_platform":    roomPlatform,
+			})
+			continue
 		}
-		if candidate.Snapshot.AccountLevel == service.AccountLevelUnknown ||
-			roomAccountLevel == service.AccountLevelUnknown {
-			return service.ErrAccountShareRoomUnknownLevel
+		if candidate.Snapshot.AccountLevel == service.AccountLevelUnknown && roomPlatform != service.PlatformOpencode {
+			recordFailure(accountID, service.ErrAccountShareRoomUnknownLevel, nil)
+			continue
 		}
 		if candidate.Snapshot.AccountLevel != roomAccountLevel {
-			return service.ErrAccountShareRoomLevelMismatch
+			recordFailure(accountID, service.ErrAccountShareRoomLevelMismatch, map[string]string{
+				"account_level": candidate.Snapshot.AccountLevel,
+				"room_level":    roomAccountLevel,
+			})
+			continue
+		}
+		if candidate.UnavailableBlocker != "" {
+			recordFailure(accountID, service.ErrAccountShareAccountUnavailable, map[string]string{
+				"blocker": candidate.UnavailableBlocker,
+			})
+			continue
 		}
 		account := &service.Account{
-			ID:           candidate.Snapshot.AccountID,
+			ID:           accountID,
 			Platform:     candidate.Snapshot.Platform,
 			AccountLevel: candidate.Snapshot.AccountLevel,
 			Type:         candidate.AccountType,
@@ -634,61 +657,84 @@ func (r *accountShareModeRepository) AttachRoomAccountsAtomic(
 			if account.IsModelSupported(model) {
 				continue
 			}
-			return service.ErrAccountShareModeUnsupportedModel.WithMetadata(map[string]string{
-				"account_id": strconv.FormatInt(candidate.Snapshot.AccountID, 10),
-				"model":      model,
-			})
+			recordFailure(accountID, service.ErrAccountShareModeUnsupportedModel, map[string]string{"model": model})
+			break
 		}
 	}
 
-	eligibleAccountIDs, err := lockRoomModeAccountIDsInTx(
+	eligibleAccountIDs := accountShareRoomEligibleAccountIDs(accountIDs, failedByID)
+	if len(eligibleAccountIDs) == 0 {
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		return accountShareRoomBatchResult(accountIDs, failedByID, nil), nil
+	}
+	roomModeEligibleIDs, err := lockRoomModeAccountIDsInTx(
 		ctx,
 		tx,
 		input.OwnerUserID,
 		roomPlatform,
-		accountIDs,
+		eligibleAccountIDs,
 	)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if !samePositiveInt64Set(eligibleAccountIDs, accountIDs) {
-		return service.ErrAccountShareRoomModeRequired
+	roomModeAccountIDs := make(map[int64]struct{}, len(roomModeEligibleIDs))
+	for _, accountID := range roomModeEligibleIDs {
+		roomModeAccountIDs[accountID] = struct{}{}
 	}
-	projections, err := lockAccountShareRoomAccountProjectionsInTx(ctx, tx, accountIDs)
+	for _, accountID := range accountIDs {
+		if _, alreadyFailed := failedByID[accountID]; alreadyFailed {
+			continue
+		}
+		if _, eligible := roomModeAccountIDs[accountID]; !eligible {
+			recordFailure(accountID, service.ErrAccountShareRoomModeRequired, nil)
+		}
+	}
+	eligibleAccountIDs = accountShareRoomEligibleAccountIDs(accountIDs, failedByID)
+	if len(eligibleAccountIDs) == 0 {
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		return accountShareRoomBatchResult(accountIDs, failedByID, nil), nil
+	}
+	projections, err := lockAccountShareRoomAccountProjectionsInTx(ctx, tx, eligibleAccountIDs)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	openAssignments, err := lockAccountShareRoomOpenAssignmentsInTx(ctx, tx, accountIDs)
+	openAssignments, err := lockAccountShareRoomOpenAssignmentsInTx(ctx, tx, eligibleAccountIDs)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	additionalAccounts := 0
-	for _, candidate := range candidates {
-		accountID := candidate.Snapshot.AccountID
+	for _, accountID := range eligibleAccountIDs {
 		projection, hasProjection := projections[accountID]
 		assignment, hasAssignment := openAssignments[accountID]
 		if hasProjection {
 			if projection.ListingID != input.ListingID || projection.State != "active" {
-				return service.ErrAccountShareRoomAccountConflict
+				recordFailure(accountID, service.ErrAccountShareRoomAccountConflict, nil)
+				continue
 			}
 			if projection.CreatedAt.IsZero() {
-				return fmt.Errorf(
+				return nil, fmt.Errorf(
 					"account share room account %d in listing %d has no trustworthy projection timestamp",
 					accountID,
 					input.ListingID,
 				)
 			}
 			if hasAssignment && assignment.ListingID != input.ListingID {
-				return service.ErrAccountShareRoomAccountConflict
+				recordFailure(accountID, service.ErrAccountShareRoomAccountConflict, nil)
 			}
 			continue
 		}
 		if hasAssignment {
-			return service.ErrAccountShareRoomAccountConflict
+			recordFailure(accountID, service.ErrAccountShareRoomAccountConflict, nil)
+			continue
 		}
 		additionalAccounts++
 	}
+	eligibleAccountIDs = accountShareRoomEligibleAccountIDs(accountIDs, failedByID)
 	if additionalAccounts > 0 {
 		if err := r.enforceAccountShareRoomAccountQuotaForAdditionalInTx(
 			ctx,
@@ -697,12 +743,15 @@ func (r *accountShareModeRepository) AttachRoomAccountsAtomic(
 			input.ListingID,
 			additionalAccounts,
 		); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
-	for _, candidate := range candidates {
-		accountID := candidate.Snapshot.AccountID
+	for _, accountID := range eligibleAccountIDs {
+		candidate, exists := candidatesByID[accountID]
+		if !exists {
+			return nil, fmt.Errorf("locked account share room candidate %d disappeared", accountID)
+		}
 		projection, hasProjection := projections[accountID]
 		assignment, hasAssignment := openAssignments[accountID]
 		if hasProjection {
@@ -713,10 +762,10 @@ func (r *accountShareModeRepository) AttachRoomAccountsAtomic(
 					candidate.Snapshot,
 					projection.CreatedAt,
 				); err != nil {
-					return err
+					return nil, err
 				}
 			} else if assignment.ListingID != input.ListingID {
-				return service.ErrAccountShareRoomAccountConflict
+				return nil, service.ErrAccountShareRoomAccountConflict
 			}
 			continue
 		}
@@ -729,7 +778,7 @@ func (r *accountShareModeRepository) AttachRoomAccountsAtomic(
 			"owner",
 			"owner_attach",
 		); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if additionalAccounts > 0 {
@@ -741,21 +790,92 @@ func (r *accountShareModeRepository) AttachRoomAccountsAtomic(
 				AND deleted_at IS NULL
 		`, input.ListingID, input.OwnerUserID)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		affected, err := result.RowsAffected()
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if affected != 1 {
-			return fmt.Errorf(
+			return nil, fmt.Errorf(
 				"update account share room %d after atomic attach affected %d rows",
 				input.ListingID,
 				affected,
 			)
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return accountShareRoomBatchResult(accountIDs, failedByID, eligibleAccountIDs), nil
+}
+
+func accountShareRoomBatchFailure(accountID int64, cause error, metadata map[string]string) service.BulkUpdateAccountResult {
+	appErr := infraerrors.FromError(cause)
+	mergedMetadata := make(map[string]string, len(appErr.Metadata)+len(metadata))
+	for key, value := range appErr.Metadata {
+		mergedMetadata[key] = value
+	}
+	for key, value := range metadata {
+		mergedMetadata[key] = value
+	}
+	if len(mergedMetadata) == 0 {
+		mergedMetadata = nil
+	}
+	return service.BulkUpdateAccountResult{
+		AccountID: accountID,
+		Success:   false,
+		Error:     appErr.Message,
+		Reason:    appErr.Reason,
+		Message:   appErr.Message,
+		Metadata:  mergedMetadata,
+	}
+}
+
+func accountShareRoomEligibleAccountIDs(
+	accountIDs []int64,
+	failedByID map[int64]service.BulkUpdateAccountResult,
+) []int64 {
+	eligible := make([]int64, 0, len(accountIDs))
+	for _, accountID := range accountIDs {
+		if _, failed := failedByID[accountID]; !failed {
+			eligible = append(eligible, accountID)
+		}
+	}
+	return eligible
+}
+
+func accountShareRoomBatchResult(
+	accountIDs []int64,
+	failedByID map[int64]service.BulkUpdateAccountResult,
+	successIDs []int64,
+) *service.BulkUpdateAccountsResult {
+	successSet := make(map[int64]struct{}, len(successIDs))
+	for _, accountID := range successIDs {
+		successSet[accountID] = struct{}{}
+	}
+	result := &service.BulkUpdateAccountsResult{
+		SuccessIDs: make([]int64, 0, len(successIDs)),
+		FailedIDs:  make([]int64, 0, len(failedByID)),
+		Results:    make([]service.BulkUpdateAccountResult, 0, len(accountIDs)),
+	}
+	for _, accountID := range accountIDs {
+		if failure, failed := failedByID[accountID]; failed {
+			result.Failed++
+			result.FailedIDs = append(result.FailedIDs, accountID)
+			result.Results = append(result.Results, failure)
+			continue
+		}
+		if _, succeeded := successSet[accountID]; succeeded {
+			result.Success++
+			result.SuccessIDs = append(result.SuccessIDs, accountID)
+			result.Results = append(result.Results, service.BulkUpdateAccountResult{
+				AccountID: accountID,
+				Success:   true,
+			})
+		}
+	}
+	return result
 }
 
 func normalizeAccountShareRoomBatchInput(input service.BatchAccountShareRoomAccountsInput) ([]int64, error) {
@@ -787,7 +907,8 @@ func lockAccountShareRoomIdentityInTx(
 	room := &lockedAccountShareRoom{}
 	var allowedModelsRaw []byte
 	err := tx.QueryRowContext(ctx, `
-		SELECT id, owner_user_id, platform, account_level, status, allowed_models
+		SELECT id, owner_user_id, platform, account_level, status, allowed_models,
+			pending_operation_id::text
 		FROM account_share_listings
 		WHERE id = $1
 			AND deleted_at IS NULL
@@ -799,6 +920,7 @@ func lockAccountShareRoomIdentityInTx(
 		&room.AccountLevel,
 		&room.Status,
 		&allowedModelsRaw,
+		&room.PendingOperationID,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, service.ErrAccountShareListingNotFound
@@ -832,14 +954,15 @@ func lockAccountShareRoomAccountCandidatesInTx(
 	rows, err := tx.QueryContext(ctx, fmt.Sprintf(`
 		SELECT
 			a.id, a.name, a.platform, a.account_level, a.concurrency, a.priority,
-			a.status, NOT %s AS schedulable, a.type, a.credentials, a.extra
+			a.status, COALESCE(%s, '') AS unavailable_blocker,
+			a.type, a.credentials, a.extra
 		FROM accounts a
 		WHERE a.id = ANY($1)
 			AND a.owner_user_id = $2
 			%s
 		ORDER BY a.id ASC
 		FOR UPDATE
-	`, accountShareAccountUnavailableConditionSQL("NOW()"), deletedFilter), pq.Array(accountIDs), ownerUserID)
+	`, accountShareAccountUnavailableBlockerSQL("NOW()"), deletedFilter), pq.Array(accountIDs), ownerUserID)
 	if err != nil {
 		return nil, err
 	}
@@ -858,7 +981,7 @@ func lockAccountShareRoomAccountCandidatesInTx(
 			&candidate.Snapshot.ConfiguredConcurrency,
 			&candidate.Priority,
 			&candidate.Status,
-			&candidate.Schedulable,
+			&candidate.UnavailableBlocker,
 			&candidate.AccountType,
 			&credentialsRaw,
 			&extraRaw,
@@ -1739,7 +1862,7 @@ func (r *accountShareModeRepository) ConvertExternalPlacement(ctx context.Contex
 	}
 	platform = strings.ToLower(strings.TrimSpace(platform))
 	accountLevel = service.NormalizeAccountLevel(accountLevel)
-	if target == service.AccountExternalPlacementRoom && accountLevel == service.AccountLevelUnknown {
+	if target == service.AccountExternalPlacementRoom && accountLevel == service.AccountLevelUnknown && platform != service.PlatformOpencode {
 		return nil, service.ErrAccountShareRoomUnknownLevel
 	}
 
@@ -2002,7 +2125,7 @@ func (r *accountShareModeRepository) RebindMembershipToHealthyRoomAccount(ctx co
 		}
 	}()
 
-	if err := lockAccountShareMembershipRebindScopeInTx(ctx, tx, listingID); errors.Is(err, service.ErrAccountShareListingNotFound) {
+	if _, err := lockAccountShareMembershipRebindScopeInTx(ctx, tx, listingID); errors.Is(err, service.ErrAccountShareListingNotFound) {
 		return false, nil
 	} else if err != nil {
 		return false, err
@@ -2192,8 +2315,9 @@ func lockAccountShareRoomsInTx(ctx context.Context, tx *sql.Tx, roomIDs []int64)
 		return out, nil
 	}
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, owner_user_id, platform, account_level, status,
-			allowed_models, codex_cli_only, codex_5h_limit_percent, codex_7d_limit_percent
+		SELECT id, owner_user_id, platform, account_level, status, allowed_models,
+			pending_operation_id::text,
+			codex_cli_only, codex_5h_limit_percent, codex_7d_limit_percent
 		FROM account_share_listings
 		WHERE id = ANY($1)
 			AND deleted_at IS NULL
@@ -2214,6 +2338,7 @@ func lockAccountShareRoomsInTx(ctx context.Context, tx *sql.Tx, roomIDs []int64)
 			&room.AccountLevel,
 			&room.Status,
 			&allowedModelsRaw,
+			&room.PendingOperationID,
 			&room.CodexCLIOnly,
 			&room.Codex5hLimitPercent,
 			&room.Codex7dLimitPercent,
@@ -2362,7 +2487,12 @@ func (r *accountShareModeRepository) rebindRoomMembershipsBeforePlacementRemoval
 		return nil, service.ErrAccountShareRoomOperationConflict
 	}
 	now := time.Now().UTC()
-	if err := lockAccountShareMembershipRebindScopeInTx(ctx, tx, listingID); err != nil {
+	room, err := lockAccountShareMembershipRebindScopeInTx(ctx, tx, listingID)
+	if err != nil {
+		return nil, err
+	}
+	preserveLifecycle, err := accountShareRoomPlacementRemovalLifecycle(room)
+	if err != nil {
 		return nil, err
 	}
 
@@ -2389,6 +2519,9 @@ func (r *accountShareModeRepository) rebindRoomMembershipsBeforePlacementRemoval
 	if len(memberships) == 0 {
 		if replacementErr == nil {
 			return nil, nil
+		}
+		if preserveLifecycle {
+			return &service.AccountShareSeatBillingResult{}, nil
 		}
 		result, err := tx.ExecContext(ctx, `
 			UPDATE account_share_listings
@@ -2453,22 +2586,54 @@ func (r *accountShareModeRepository) rebindRoomMembershipsBeforePlacementRemoval
 	return nil, nil
 }
 
+func accountShareRoomPlacementRemovalLifecycle(room *lockedAccountShareRoom) (bool, error) {
+	if room == nil {
+		return false, service.ErrAccountShareRoomOperationConflict
+	}
+	pendingOperationID := strings.TrimSpace(room.PendingOperationID.String)
+	hasPendingOperation := room.PendingOperationID.Valid && pendingOperationID != ""
+	switch room.Status {
+	case service.AccountShareListingStatusActive,
+		service.AccountShareListingStatusPaused:
+		if !hasPendingOperation {
+			return false, nil
+		}
+	case service.AccountShareListingStatusDraining:
+		if hasPendingOperation {
+			return true, nil
+		}
+	}
+
+	metadata := map[string]string{
+		"blocker":          "room_lifecycle_conflict",
+		"lifecycle_status": room.Status,
+	}
+	if pendingOperationID != "" {
+		metadata["operation_id"] = pendingOperationID
+	}
+	return false, service.ErrAccountShareRoomOperationConflict.WithMetadata(metadata)
+}
+
 func lockAccountShareMembershipRebindScopeInTx(
 	ctx context.Context,
 	tx *sql.Tx,
 	listingID int64,
-) error {
+) (*lockedAccountShareRoom, error) {
 	if tx == nil || listingID <= 0 {
-		return service.ErrAccountShareRoomOperationConflict
+		return nil, service.ErrAccountShareRoomOperationConflict
 	}
-	if _, err := lockAccountShareRoomIdentityInTx(ctx, tx, listingID); err != nil {
-		return err
+	room, err := lockAccountShareRoomIdentityInTx(ctx, tx, listingID)
+	if err != nil {
+		return nil, err
 	}
 	accountIDs, err := lockAccountShareRoomProjectionInTx(ctx, tx, listingID)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return lockAccountShareAccountsInTx(ctx, tx, accountIDs)
+	if err := lockAccountShareAccountsInTx(ctx, tx, accountIDs); err != nil {
+		return nil, err
+	}
+	return room, nil
 }
 
 func lockAccountShareMembershipsForRebindInTx(

@@ -45,7 +45,7 @@
       </div>
       <div class="rounded-md bg-gray-50 p-2 dark:bg-dark-700/60">
         <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.quotaDashboard.codexQuotaProtectedAccounts') }}</div>
-        <div class="mt-1 text-lg font-semibold text-yellow-600 dark:text-yellow-300">{{ totals.codex_quota_protected_account_count }}</div>
+        <div class="mt-1 text-lg font-semibold text-yellow-600 dark:text-yellow-300">{{ totals.codex_quota_protected_account_count + totals.opencode_quota_protected_account_count }}</div>
       </div>
       <div class="rounded-md bg-gray-50 p-2 dark:bg-dark-700/60">
         <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.quotaDashboard.exceptionAccounts') }}</div>
@@ -262,7 +262,7 @@
               <div v-if="hasAvailabilityIssues(summary)" class="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
                 {{ t('admin.accounts.quotaDashboard.issueMeta', {
                   limited: summary.rate_limited_account_count,
-                  protected: summary.codex_quota_protected_account_count,
+                  protected: summary.codex_quota_protected_account_count + summary.opencode_quota_protected_account_count,
                   error: summary.error_account_count,
                   disabled: summary.disabled_account_count
                 }) }}
@@ -418,6 +418,7 @@ const totals = computed<AccountQuotaSummary>(() => props.dashboard?.totals ?? {
   schedulable_account_count: 0,
   rate_limited_account_count: 0,
   codex_quota_protected_account_count: 0,
+  opencode_quota_protected_account_count: 0,
   error_account_count: 0,
   disabled_account_count: 0,
   quota_account_count: 0,
@@ -556,6 +557,7 @@ function hasAvailabilityIssues(summary: AccountQuotaSummary | AccountQuotaGroupS
   return (
     summary.rate_limited_account_count > 0 ||
     summary.codex_quota_protected_account_count > 0 ||
+    summary.opencode_quota_protected_account_count > 0 ||
     summary.error_account_count > 0 ||
     summary.disabled_account_count > 0
   )
@@ -584,6 +586,13 @@ function accountStatusSegments(summary: AccountQuotaGroupSummary): AccountStatus
       legendLabel: t('admin.accounts.quotaDashboard.codexQuotaProtectedShort'),
       count: summary.codex_quota_protected_account_count,
       class: 'bg-yellow-400'
+    },
+    {
+      key: 'opencodeQuotaProtected',
+      label: t('admin.accounts.quotaDashboard.opencodeQuotaProtectedCount', { count: summary.opencode_quota_protected_account_count }),
+      legendLabel: t('admin.accounts.quotaDashboard.opencodeQuotaProtectedShort'),
+      count: summary.opencode_quota_protected_account_count,
+      class: 'bg-yellow-500'
     },
     {
       key: 'error',

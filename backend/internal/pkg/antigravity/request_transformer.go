@@ -152,6 +152,12 @@ func TransformClaudeToGeminiWithOptions(claudeReq *ClaudeRequest, projectID, map
 		// 总是生成 sessionId，基于用户消息内容
 		SessionID: generateStableSessionID(contents),
 	}
+	// 内置工具（googleSearch）与函数声明混用时，上游要求显式开启
+	// includeServerSideToolInvocations；单独使用任一类工具时不注入该字段。
+	if hasMixedToolInvocations(tools) {
+		enabled := true
+		innerRequest.ToolConfig.IncludeServerSideToolInvocations = &enabled
+	}
 
 	if systemInstruction != nil {
 		innerRequest.SystemInstruction = systemInstruction
@@ -685,6 +691,21 @@ func isWebSearchTool(tool ClaudeTool) bool {
 	default:
 		return false
 	}
+}
+
+// hasMixedToolInvocations 判断构建后的工具声明是否同时包含函数声明和 googleSearch。
+func hasMixedToolInvocations(declarations []GeminiToolDeclaration) bool {
+	hasFunctions := false
+	hasGoogleSearch := false
+	for _, declaration := range declarations {
+		if len(declaration.FunctionDeclarations) > 0 {
+			hasFunctions = true
+		}
+		if declaration.GoogleSearch != nil {
+			hasGoogleSearch = true
+		}
+	}
+	return hasFunctions && hasGoogleSearch
 }
 
 // buildTools 构建 tools

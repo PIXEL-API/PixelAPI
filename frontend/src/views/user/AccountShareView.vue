@@ -708,13 +708,14 @@
               type="button"
               class="create-source-option"
               :class="createSourceMode === 'oauth' && 'create-source-option-active'"
-              :disabled="creating"
+              :disabled="creating || createPlatform === 'opencode'"
+              :title="createPlatform === 'opencode' ? 'Opencode 为 API Key 平台，不支持 OAuth 登录' : ''"
               @click="selectCreateSourceMode('oauth')"
             >
               <span class="create-source-icon"><Icon name="login" size="sm" /></span>
               <span>
                 <strong>登录新账号</strong>
-                <small>仅在账号尚未登录时，使用 OAuth 创建新账号和房间。</small>
+                <small>{{ createPlatform === 'opencode' ? 'Opencode 为 API Key 平台，请选择已有账号创建房间。' : '仅在账号尚未登录时，使用 OAuth 创建新账号和房间。' }}</small>
               </span>
             </button>
           </div>
@@ -784,7 +785,7 @@
                       {{ option.label }}
                     </button>
                   </div>
-                  <small>所有账号模式仅支持 OAuth，授权前必须先选择代理。</small>
+                  <small>{{ createPlatform === 'opencode' ? 'Opencode 为 API Key 平台，仅支持选择已有账号创建房间。' : '所有账号模式仅支持 OAuth，授权前必须先选择代理。' }}</small>
                 </div>
 
                 <label class="field">
@@ -879,14 +880,18 @@
                 <span class="create-room-stage-index">3</span>
                 <div>
                   <span>模型与额度保护</span>
-                <small>{{ createPlatform === 'openai' ? '后端会强制账号模式、ctx_pool 和 Compact 配置，前端只提交可变策略。' : 'Anthropic 账号模式提交 OAuth 凭证、代理、模型白名单和 Claude 额度保护。' }}</small>
+                <small>{{ createPlatform === 'openai' ? '后端会强制账号模式、ctx_pool 和 Compact 配置，前端只提交可变策略。' : createPlatform === 'anthropic' ? 'Anthropic 账号模式提交 OAuth 凭证、代理、模型白名单和 Claude 额度保护。' : 'Opencode 账号模式提交模型白名单，沿用已有 API Key 账号的凭证与并发。' }}</small>
                 </div>
               </div>
               <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
                 <div class="field">
                   <span>模型白名单</span>
                   <div class="model-selector-shell">
-                    <ModelWhitelistSelector v-model="allowedModels" :platform="createPlatform" />
+                    <ModelWhitelistSelector
+                      v-model="allowedModels"
+                      :platform="createPlatform"
+                      :allowed-options="createPlatform === 'opencode' ? DEFAULT_ACCOUNT_SHARE_ALLOWED_MODELS_BY_PLATFORM.opencode : undefined"
+                    />
                   </div>
                   <small>复用“我的账号”新增账号的模型选择器，可搜索、多选并添加自定义模型。</small>
                 </div>
@@ -901,7 +906,7 @@
                     <input v-model.number="createForm.codex_7d_limit_percent" class="input" type="number" min="1" max="100" step="1" />
                   </label>
                 </div>
-                <div v-else class="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+                <div v-else-if="createPlatform === 'anthropic'" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
                   <label class="field">
                     <span>Claude 5h 保护 %</span>
                     <input v-model.number="createForm.anthropic_5h_limit_percent" class="input" type="number" min="1" max="100" step="1" />
@@ -1656,6 +1661,10 @@
             <div v-else-if="showAnthropicUsageWindows(listing)" class="metric">
               <span class="metric-label"><Icon name="lock" size="xs" />Claude保护</span>
               <strong>{{ anthropic5hLimitPercent(listing) }}% / {{ anthropic7dLimitPercent(listing) }}%</strong>
+            </div>
+            <div v-else-if="showOpencodeUsageWindows(listing)" class="metric">
+              <span class="metric-label"><Icon name="lock" size="xs" />Opencode用量</span>
+              <strong>{{ opencodeUsageLabel(listing) }}</strong>
             </div>
           </div>
 
@@ -3186,7 +3195,7 @@ interface OAuthFlowInstance {
 
 
 type AccountShareActionErrorAction = 'create-mode-key' | null
-type AccountSharePlatform = 'openai' | 'anthropic'
+type AccountSharePlatform = 'openai' | 'anthropic' | 'opencode'
 type RecommendationPresetKey = 'light' | 'balanced' | 'heavy' | 'history'
 type MySpendMetricTone = 'total' | 'request' | 'hourly' | 'usage'
 type MySpendMetricIcon = 'dollar' | 'creditCard' | 'clock' | 'chart'
@@ -3344,19 +3353,23 @@ const ACCOUNT_SHARE_MEMBER_LIMIT_HELP = '由房主设置，与账号数量/账�
 const ACCOUNT_SHARE_TRANSIENT_STATUS_REFRESH_INTERVAL_MS = 8_000
 const ACCOUNT_SHARE_PLATFORM_OPTIONS: Array<{ value: AccountSharePlatform; label: string }> = [
   { value: 'openai', label: 'OpenAI' },
-  { value: 'anthropic', label: 'Anthropic' }
+  { value: 'anthropic', label: 'Anthropic' },
+  { value: 'opencode', label: 'Opencode' }
 ]
 const ACCOUNT_NAME_BASE_BY_PLATFORM: Record<AccountSharePlatform, string> = {
   openai: 'OpenAI房间',
-  anthropic: 'Anthropic房间'
+  anthropic: 'Anthropic房间',
+  opencode: 'Opencode房间'
 }
 const ACCOUNT_MODE_GROUP_NAME_BY_PLATFORM: Record<AccountSharePlatform, string> = {
   openai: 'OpenAI账号模式',
-  anthropic: 'Anthropic账号模式'
+  anthropic: 'Anthropic账号模式',
+  opencode: 'Opencode账号模式'
 }
 const DEFAULT_ACCOUNT_SHARE_ALLOWED_MODELS_BY_PLATFORM: Record<AccountSharePlatform, string[]> = {
   openai: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'codex-auto-review'],
-  anthropic: ['claude-sonnet-4-6', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-fable-5', 'claude-opus-4-6', 'claude-haiku-4-5']
+  anthropic: ['claude-sonnet-4-6', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-fable-5', 'claude-opus-4-6', 'claude-haiku-4-5'],
+  opencode: ['deepseek-v4-flash', 'deepseek-v4-pro', 'glm-5.1', 'glm-5.2', 'glm-5.3', 'gpt-5.6-luna', 'grok-4.5', 'hy3', 'kimi-k2.7-code', 'kimi-k3', 'minimax-m2.5', 'minimax-m2.7', 'minimax-m3', 'mimo-v2.5', 'mimo-v2.5-pro', 'muse-spark-1.2-contributor', 'qwen3.6-plus', 'qwen3.7-max', 'qwen3.7-plus', 'qwen3.8-max']
 }
 const ACCOUNT_SHARE_RECOMMENDATION_LIMIT = 10
 const ACCOUNT_SHARE_RECOMMENDATION_PAGE_SIZE = 5
@@ -3603,7 +3616,9 @@ function filterForListingTab(tab: AccountShareListingTab): FilterOption {
 }
 
 function normalizeListingPlatform(value: unknown): AccountSharePlatform {
-  return value === 'anthropic' ? 'anthropic' : 'openai'
+  if (value === 'anthropic') return 'anthropic'
+  if (value === 'opencode') return 'opencode'
+  return 'openai'
 }
 
 function normalizeListingTab(value: unknown): AccountShareListingTab {
@@ -3931,23 +3946,28 @@ const idleTimeoutByListing = reactive<Record<number, number>>({})
 const savingIdleTimeoutId = ref<number | null>(null)
 const modeGroupIDsByPlatform = reactive<Record<AccountSharePlatform, number>>({
   openai: 0,
-  anthropic: 0
+  anthropic: 0,
+  opencode: 0
 })
 const modeApiKeysByPlatform = reactive<Record<AccountSharePlatform, ApiKey[]>>({
   openai: [],
-  anthropic: []
+  anthropic: [],
+  opencode: []
 })
 const modeKeysLoadingByPlatform = reactive<Record<AccountSharePlatform, boolean>>({
   openai: false,
-  anthropic: false
+  anthropic: false,
+  opencode: false
 })
 const modeKeysLoadedByPlatform = reactive<Record<AccountSharePlatform, boolean>>({
   openai: false,
-  anthropic: false
+  anthropic: false,
+  opencode: false
 })
 const modeKeysErrorByPlatform = reactive<Record<AccountSharePlatform, string>>({
   openai: '',
-  anthropic: ''
+  anthropic: '',
+  opencode: ''
 })
 const unavailableQueueSnapshotApiKeyIDs = ref<Set<number>>(new Set())
 const visibleQueueSnapshotWarning = ref('')
@@ -4093,7 +4113,7 @@ function defaultAllowedModelsForPlatform(platform: AccountSharePlatform): string
 }
 
 function listingPlatform(listing: AccountShareListing | null | undefined): AccountSharePlatform {
-  return listing?.platform === 'anthropic' ? 'anthropic' : 'openai'
+  return normalizeListingPlatform(listing?.platform)
 }
 
 function isOpenAIListing(listing: AccountShareListing | null | undefined): boolean {
@@ -4110,6 +4130,25 @@ function showOpenAIUsageWindows(listing: AccountShareListing | null | undefined)
 
 function showAnthropicUsageWindows(listing: AccountShareListing | null | undefined): boolean {
   return isAnthropicListing(listing)
+}
+
+function isOpencodeListing(listing: AccountShareListing | null | undefined): boolean {
+  return listingPlatform(listing) === 'opencode'
+}
+
+function showOpencodeUsageWindows(listing: AccountShareListing | null | undefined): boolean {
+  return isOpencodeListing(listing)
+}
+
+function opencodeUsageLabel(listing: AccountShareListing | null | undefined): string {
+  const parts: string[] = []
+  if (listing?.opencode_5h_usage) parts.push(`5h ${Math.round(listing.opencode_5h_usage.utilization)}%`)
+  if (listing?.opencode_7d_usage) parts.push(`7d ${Math.round(listing.opencode_7d_usage.utilization)}%`)
+  if (listing?.opencode_30d_usage) parts.push(`30d ${Math.round(listing.opencode_30d_usage.utilization)}%`)
+  const label = parts.join(' / ') || '—'
+  return listing?.opencode_quota_protection_reason
+    ? `${label}（保护:${listing.opencode_quota_protection_reason}）`
+    : label
 }
 
 function anthropic5hLimitPercent(listing: AccountShareListing | null | undefined): number {
@@ -4386,7 +4425,7 @@ const eligibleOwnedAccounts = computed(() => (
       if (account.platform.trim().toLowerCase() !== createPlatform.value) return false
       if (account.status !== 'active' || !account.schedulable) return false
       if (!Number.isFinite(Number(account.concurrency)) || Number(account.concurrency) <= 0) return false
-      if (!account.account_level || account.account_level.trim().toLowerCase() === 'unknown') return false
+      if (createPlatform.value !== 'opencode' && (!account.account_level || account.account_level.trim().toLowerCase() === 'unknown')) return false
       if (account.external_placement && account.external_placement.state !== 'active') return false
       const placementTarget = resolveAccountExternalPlacementTarget(account)
       if (placementTarget === 'room') {
@@ -7119,6 +7158,11 @@ function selectCreatePlatform(platform: AccountSharePlatform): void {
   const proxyID = createForm.proxy_id
   abortOwnedAccountsRequest()
   createPlatform.value = platform
+  // opencode 是 apikey-only 平台，没有 OAuth 换码路径，强制走「选择已有账号」。
+  if (platform === 'opencode' && createSourceMode.value === 'oauth') {
+    createSourceMode.value = 'existing'
+    resetOAuthState()
+  }
   Object.assign(createForm, buildDefaultCreateForm(), { proxy_id: proxyID })
   allowedModels.value = defaultAllowedModelsForPlatform(platform)
   createErrorMessage.value = ''
@@ -7137,6 +7181,8 @@ function selectCreatePlatform(platform: AccountSharePlatform): void {
 
 function selectCreateSourceMode(mode: 'existing' | 'oauth'): void {
   if (creating.value || generatingOAuthURL.value || createSourceMode.value === mode) return
+  // opencode 无 OAuth，只允许「选择已有账号」。
+  if (mode === 'oauth' && createPlatform.value === 'opencode') return
   createSourceMode.value = mode
   createErrorMessage.value = ''
   clearPendingCreateRoomIdempotencyKey()
@@ -7185,7 +7231,7 @@ function validateCreateConfig(): string {
   if (createPlatform.value === 'openai') {
     if (!Number.isFinite(Number(createForm.codex_5h_limit_percent)) || Number(createForm.codex_5h_limit_percent) < 1 || Number(createForm.codex_5h_limit_percent) > 100) return 'Codex 5h 保护必须在 1-100 之间'
     if (!Number.isFinite(Number(createForm.codex_7d_limit_percent)) || Number(createForm.codex_7d_limit_percent) < 1 || Number(createForm.codex_7d_limit_percent) > 100) return 'Codex 7d 保护必须在 1-100 之间'
-  } else {
+  } else if (createPlatform.value === 'anthropic') {
     if (!Number.isFinite(Number(createForm.anthropic_5h_limit_percent)) || Number(createForm.anthropic_5h_limit_percent) < 1 || Number(createForm.anthropic_5h_limit_percent) > 100) return 'Claude 5h 保护必须在 1-100 之间'
     if (!Number.isFinite(Number(createForm.anthropic_7d_limit_percent)) || Number(createForm.anthropic_7d_limit_percent) < 1 || Number(createForm.anthropic_7d_limit_percent) > 100) return 'Claude 7d 保护必须在 1-100 之间'
   }
@@ -8879,7 +8925,7 @@ function openHistoryReviewDialog(entry: AccountShareMembershipHistoryEntry): voi
   const normalizedPlatform = entry.platform.trim().toLowerCase()
   pendingReview.value = {
     membershipID: entry.membership_id,
-    platformLabel: normalizedPlatform === 'openai' || normalizedPlatform === 'anthropic'
+    platformLabel: normalizedPlatform === 'openai' || normalizedPlatform === 'anthropic' || normalizedPlatform === 'opencode'
       ? platformLabel(normalizedPlatform)
       : (entry.platform.trim() || '未知平台'),
     roomName: entry.room_name.trim() || `房间 #${entry.listing_id}`,

@@ -1231,9 +1231,27 @@ func defaultModelsForPlatform(platform string) any {
 		return antigravity.DefaultModels()
 	case service.PlatformGemini:
 		return geminiDefaultModelsClaudeShape()
+	case service.PlatformOpencode:
+		return opencodeDefaultModelsClaudeShape()
 	default:
 		return claude.DefaultModels
 	}
+}
+
+// opencodeDefaultModelsClaudeShape 把 opencode 的裸模型 slug 转成 Claude 形状，
+// 与 /v1/models 兜底（claude.DefaultModels）保持同一形状。
+func opencodeDefaultModelsClaudeShape() []claude.Model {
+	slugs := service.OpencodeDefaultModelSlugs()
+	models := make([]claude.Model, 0, len(slugs))
+	for _, slug := range slugs {
+		models = append(models, claude.Model{
+			ID:          slug,
+			Type:        "model",
+			DisplayName: slug,
+			CreatedAt:   fallbackModelCreatedAt,
+		})
+	}
+	return models
 }
 
 // geminiDefaultModelsClaudeShape 把 Gemini 的兜底模型列表转成 Claude 形状，

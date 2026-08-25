@@ -26,12 +26,11 @@ import (
 var chatgptCodexModelsURL = "https://chatgpt.com/backend-api/codex/models"
 
 const (
-	codexModelsManifestBodyLimit       int64 = 8 << 20
-	codexModelsManifestCacheBodyLimit        = 1 << 20
-	codexModelsManifestCacheMaxEntries       = 64
-	codexModelsManifestCacheTTL              = 30 * time.Second
-	codexModelsManifestCacheStaleTTL         = 5 * time.Minute
-	codexModelsManifestRequestTimeout        = 15 * time.Second
+	codexModelsManifestCacheBodyLimit  = 1 << 20
+	codexModelsManifestCacheMaxEntries = 64
+	codexModelsManifestCacheTTL        = 30 * time.Second
+	codexModelsManifestCacheStaleTTL   = 5 * time.Minute
+	codexModelsManifestRequestTimeout  = 15 * time.Second
 )
 
 // CodexModelsManifest contains the schema-agnostic upstream payload and cache
@@ -462,7 +461,7 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifestUpstream(ctx context.Cont
 		}
 	}
 
-	body, err := readUpstreamResponseBodyLimited(resp.Body, codexModelsManifestBodyLimit)
+	body, err := readUpstreamResponseBodyLimited(resp.Body, resolveModelsListReadLimit(s.cfg))
 	if err != nil {
 		return nil, &codexModelsManifestUpstreamError{
 			err:       infraerrors.Newf(http.StatusBadGateway, "OPENAI_CODEX_MODELS_UPSTREAM_FAILED", "read codex models manifest response: %v", err),

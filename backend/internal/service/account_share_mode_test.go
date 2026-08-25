@@ -151,7 +151,7 @@ func (r *accountShareBillingLifecycleRepoStub) FinalizeDrainingRoom(
 	return nil, ErrServiceUnavailable
 }
 
-func (r *accountShareBillingLifecycleRepoStub) ListDrainingRoomIDs(
+func (r *accountShareBillingLifecycleRepoStub) ListOpenRoomLifecycleListingIDs(
 	context.Context,
 	int64,
 	int,
@@ -253,6 +253,7 @@ type accountShareRoomRepoStub struct {
 	roomAccountsErr           error
 	attachBatchInput          BatchAccountShareRoomAccountsInput
 	attachBatchCalls          int
+	attachBatchResult         *BulkUpdateAccountsResult
 	attachBatchErr            error
 	detachBatchInput          BatchAccountShareRoomAccountsInput
 	detachBatchCalls          int
@@ -451,10 +452,25 @@ func (r *accountShareRoomRepoStub) ListRoomAccounts(_ context.Context, listingID
 func (r *accountShareRoomRepoStub) AttachRoomAccountsAtomic(
 	_ context.Context,
 	input BatchAccountShareRoomAccountsInput,
-) error {
+) (*BulkUpdateAccountsResult, error) {
 	r.attachBatchCalls++
 	r.attachBatchInput = input
-	return r.attachBatchErr
+	if r.attachBatchErr != nil {
+		return nil, r.attachBatchErr
+	}
+	if r.attachBatchResult != nil {
+		return r.attachBatchResult, nil
+	}
+	result := &BulkUpdateAccountsResult{
+		Success:    len(input.AccountIDs),
+		SuccessIDs: append([]int64(nil), input.AccountIDs...),
+		FailedIDs:  []int64{},
+		Results:    make([]BulkUpdateAccountResult, 0, len(input.AccountIDs)),
+	}
+	for _, accountID := range input.AccountIDs {
+		result.Results = append(result.Results, BulkUpdateAccountResult{AccountID: accountID, Success: true})
+	}
+	return result, nil
 }
 
 func (r *accountShareRoomRepoStub) DetachRoomAccountsAtomic(
@@ -963,6 +979,48 @@ func TestAttachRoomAccountsUsesOneAtomicRepositoryCallAndReturnsOnlySuccesses(t 
 	}, result.Results)
 }
 
+func TestAttachRoomAccountsOrdersPartialRepositoryResultByRequest(t *testing.T) {
+	repo := &accountShareRoomRepoStub{
+		accountShareModeRepoStub: &accountShareModeRepoStub{},
+		attachBatchResult: &BulkUpdateAccountsResult{
+			Success:    1,
+			Failed:     1,
+			SuccessIDs: []int64{11},
+			FailedIDs:  []int64{10},
+			Results: []BulkUpdateAccountResult{
+				{
+					AccountID: 10,
+					Success:   false,
+					Error:     ErrAccountShareAccountUnavailable.Message,
+					Reason:    ErrAccountShareAccountUnavailable.Reason,
+					Message:   ErrAccountShareAccountUnavailable.Message,
+					Metadata:  map[string]string{"blocker": "overloaded"},
+				},
+				{AccountID: 11, Success: true},
+			},
+		},
+	}
+	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
+
+	result, err := svc.AttachRoomAccounts(context.Background(), BatchAccountShareRoomAccountsInput{
+		ListingID:      700,
+		AccountIDs:     []int64{11, 10, 11},
+		OwnerUserID:    42,
+		IdempotencyKey: "attach-partial",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Success)
+	require.Equal(t, 1, result.Failed)
+	require.Equal(t, []int64{11}, result.SuccessIDs)
+	require.Equal(t, []int64{10}, result.FailedIDs)
+	require.Equal(t, []int64{11, 10}, []int64{result.Results[0].AccountID, result.Results[1].AccountID})
+	require.True(t, result.Results[0].Success)
+	require.False(t, result.Results[1].Success)
+	require.Equal(t, "ACCOUNT_SHARE_ACCOUNT_UNAVAILABLE", result.Results[1].Reason)
+	require.Equal(t, "overloaded", result.Results[1].Metadata["blocker"])
+}
+
 func TestAttachRoomAccountsAtomicFailureReturnsErrorWithoutPartialResult(t *testing.T) {
 	atomicErr := ErrAccountShareRoomLevelMismatch
 	repo := &accountShareRoomRepoStub{
@@ -1069,6 +1127,9 @@ func TestCreateRoomFromOwnedAccountPublicPoolSkipsIdleGuard(t *testing.T) {
 			Schedulable:  true,
 			Concurrency:  5,
 			ShareMode:    AccountShareModePublic,
+			Credentials: map[string]any{
+				"model_mapping": map[string]any{"claude-sonnet-4-20250514": "claude-sonnet-4-20250514"},
+			},
 			ExternalPlacement: &AccountExternalPlacement{
 				Target: AccountExternalPlacementPublicPool,
 				State:  "active",
@@ -2043,6 +2104,7 @@ func TestAccountShareModeListModeGroupsUsesReadOnlyLookup(t *testing.T) {
 	repo := &accountShareModeRepoStub{modeGroups: map[string]*Group{
 		PlatformOpenAI:    {ID: 101, Platform: PlatformOpenAI},
 		PlatformAnthropic: {ID: 202, Platform: PlatformAnthropic},
+		PlatformOpencode:  {ID: 303, Platform: PlatformOpencode},
 	}}
 	svc := &AccountShareModeService{repo: repo}
 
@@ -2050,10 +2112,10 @@ func TestAccountShareModeListModeGroupsUsesReadOnlyLookup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list mode groups failed: %v", err)
 	}
-	if len(groups) != 2 || groups[0].GroupID != 101 || groups[0].Platform != PlatformOpenAI || groups[1].GroupID != 202 || groups[1].Platform != PlatformAnthropic {
+	if len(groups) != 3 || groups[0].GroupID != 101 || groups[0].Platform != PlatformOpenAI || groups[1].GroupID != 202 || groups[1].Platform != PlatformAnthropic || groups[2].GroupID != 303 || groups[2].Platform != PlatformOpencode {
 		t.Fatalf("unexpected mode groups: %#v", groups)
 	}
-	if len(repo.modeGroupGetCalls) != 2 || repo.modeGroupGetCalls[0] != PlatformOpenAI || repo.modeGroupGetCalls[1] != PlatformAnthropic {
+	if len(repo.modeGroupGetCalls) != 3 || repo.modeGroupGetCalls[0] != PlatformOpenAI || repo.modeGroupGetCalls[1] != PlatformAnthropic || repo.modeGroupGetCalls[2] != PlatformOpencode {
 		t.Fatalf("unexpected read-only lookup calls: %#v", repo.modeGroupGetCalls)
 	}
 	if len(repo.modeGroupEnsureCalls) != 0 {

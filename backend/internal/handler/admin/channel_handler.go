@@ -143,6 +143,32 @@ type channelModelPricingResponse struct {
 	TimeRanges                     []pricingTimeRangeResponse `json:"time_ranges"`
 }
 
+// GetPricedModelOptions returns the union of model names configured in active
+// channel pricing. It is used by account editors as the single source of
+// selectable model names, so model availability can be controlled from channel
+// management instead of a duplicated frontend allowlist.
+// GET /api/v1/admin/channels/model-options?platforms=openai,anthropic
+func (h *ChannelHandler) GetPricedModelOptions(c *gin.Context) {
+	if h.channelService == nil {
+		response.InternalError(c, "Channel service is not configured")
+		return
+	}
+
+	var platforms []string
+	for _, raw := range strings.Split(c.Query("platforms"), ",") {
+		if platform := strings.TrimSpace(raw); platform != "" {
+			platforms = append(platforms, platform)
+		}
+	}
+
+	models, err := h.channelService.ListPricedModelIDs(c.Request.Context(), platforms)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"models": models})
+}
+
 type pricingIntervalResponse struct {
 	ID              int64    `json:"id"`
 	MinTokens       int      `json:"min_tokens"`

@@ -168,8 +168,16 @@ const availableOptions = computed(() => {
   // 受限可选集：调用方显式传入（如「编辑房间配置」传房间账号支持模型交集）时，
   // 只允许在这些模型里勾选，从源头避免选到账号不支持的模型。
   if (props.allowedOptions !== undefined) {
-    const allowed = new Set(props.allowedOptions)
-    return allModels.filter(model => allowed.has(model.value))
+    const knownOptions = new Map(allModels.map(model => [model.value, model]))
+    const seen = new Set<string>()
+    return props.allowedOptions
+      .map(model => model.trim())
+      .filter(model => {
+        if (!model || seen.has(model)) return false
+        seen.add(model)
+        return true
+      })
+      .map(model => knownOptions.get(model) ?? { value: model, label: model })
   }
 
   if (normalizedPlatforms.value.length === 0) {
@@ -228,11 +236,12 @@ const handleEnter = () => {
 
 const fillRelated = () => {
   const newModels = [...props.modelValue]
-  for (const platform of normalizedPlatforms.value) {
-    for (const model of getModelsByPlatform(platform)) {
-      if (!newModels.includes(model)) {
-        newModels.push(model)
-      }
+  const models = props.allowedOptions !== undefined
+    ? availableOptions.value.map(option => option.value)
+    : normalizedPlatforms.value.flatMap(platform => getModelsByPlatform(platform))
+  for (const model of models) {
+    if (!newModels.includes(model)) {
+      newModels.push(model)
     }
   }
   emit('update:modelValue', newModels)

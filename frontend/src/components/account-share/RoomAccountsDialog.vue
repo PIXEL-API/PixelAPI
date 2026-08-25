@@ -495,6 +495,7 @@ import {
   loadAllPaginatedItems,
   type AccountShareListing,
   type AccountShareRoomAccount,
+  type AccountShareRoomAccountsBatchResult,
   type AccountShareRoomAccountsBatchResponse
 } from '@/api/accountShare'
 import { accountsAPI } from '@/api/accounts'
@@ -517,12 +518,26 @@ const ROOM_ACCOUNT_ERROR_MESSAGES: Record<string, string> = {
   ACCOUNT_SHARE_ROOM_LEVEL_MISMATCH: '该账号等级与房间要求不一致',
   ACCOUNT_SHARE_ROOM_UNKNOWN_LEVEL: '该账号等级尚未识别，请先完成账号检测',
   ACCOUNT_SHARE_ROOM_MODE_REQUIRED: '该账号尚未处于可加入房间的账号模式',
+  ACCOUNT_SHARE_ACCOUNT_UNAVAILABLE: '该账号当前不可用，请处理账号状态后重试',
   ACCOUNT_SHARE_MODE_UNSUPPORTED_MODEL: '该账号不支持房间要求的全部模型，请先在"我的账号"中补齐该账号的模型白名单',
   OWNED_ACCOUNT_PLACEMENT_CONVERSION_REQUIRED: '该账号处于共享投放中，需先切换账号模式后再修改',
   ACCOUNT_SHARE_ROOM_ACCOUNT_CONFLICT: '该账号已加入其他房间或正在切换归属',
   ACCOUNT_SHARE_LISTING_NOT_FOUND: '房间不存在、已删除或当前无权管理',
   ACCOUNT_SHARE_ROOM_DELETED: '房间已经删除，不能再调整房间账号',
   IDEMPOTENCY_KEY_REQUIRED: '请求缺少安全幂等标识，请刷新页面后重试'
+}
+
+const ROOM_ACCOUNT_UNAVAILABLE_BLOCKER_MESSAGES: Record<string, string> = {
+  status_not_active: '账号状态不是正常状态，请先恢复账号',
+  scheduling_disabled: '账号调度已停用，请先开启账号调度',
+  non_positive_concurrency: '账号并发数必须大于 0',
+  expired: '账号凭据已过期，请先更新账号凭据',
+  overloaded: '账号正处于过载保护期，请稍后重试',
+  rate_limited: '账号正处于速率限制期，请等待限制解除后重试',
+  temporarily_unschedulable: '账号当前被临时暂停调度，请稍后重试',
+  codex_quota_protected: '账号正处于 Codex 额度保护期，请等待保护解除后重试',
+  anthropic_quota_protected: '账号正处于 Anthropic 额度保护期，请等待保护解除后重试',
+  opencode_quota_protected: '账号正处于 Opencode 额度保护期，请等待保护解除后重试'
 }
 
 interface OperationSummary {
@@ -627,8 +642,8 @@ const addableCandidateCount = computed(() => (
 
 const canCreateCompatibleAccount = computed(() => {
   const platform = normalizeComparableValue(props.listing?.platform)
-  return (platform === 'openai' || platform === 'anthropic')
-    && isKnownLevel(props.listing?.account_level)
+  return (platform === 'openai' || platform === 'anthropic' || platform === 'opencode')
+    && (platform === 'opencode' || isKnownLevel(props.listing?.account_level))
 })
 
 const allVisibleMembersSelected = computed(() => (
@@ -704,6 +719,10 @@ function normalizeComparableValue(value: unknown): string {
 function isKnownLevel(value: unknown): boolean {
   const level = normalizeComparableValue(value)
   return Boolean(level && level !== 'unknown')
+}
+
+function isOpencodePlatform(value: unknown): boolean {
+  return normalizeComparableValue(value) === 'opencode'
 }
 
 function isRoomAccountHealthy(account: AccountShareRoomAccount): boolean {
@@ -784,16 +803,19 @@ function candidateDisabledReason(account: Account): string {
     })
   }
 
-  if (!isKnownLevel(listing.account_level)) {
-    return t('accountShare.roomAccounts.roomLevelUnknown')
-  }
-  if (!isKnownLevel(account.account_level)) {
-    return t('accountShare.roomAccounts.accountLevelUnknown')
-  }
-  if (normalizeComparableValue(account.account_level) !== normalizeComparableValue(listing.account_level)) {
-    return t('accountShare.roomAccounts.levelMismatch', {
-      level: listing.account_level
-    })
+  // opencode 账号没有等级概念（account_level 恒为 unknown），跳过等级校验。
+  if (!isOpencodePlatform(listing.platform)) {
+    if (!isKnownLevel(listing.account_level)) {
+      return t('accountShare.roomAccounts.roomLevelUnknown')
+    }
+    if (!isKnownLevel(account.account_level)) {
+      return t('accountShare.roomAccounts.accountLevelUnknown')
+    }
+    if (normalizeComparableValue(account.account_level) !== normalizeComparableValue(listing.account_level)) {
+      return t('accountShare.roomAccounts.levelMismatch', {
+        level: listing.account_level
+      })
+    }
   }
 
   const availabilityReason = candidateAvailabilityDisabledReason(account)
@@ -824,7 +846,9 @@ function platformModeLabel(platform: unknown): string {
     ? 'OpenAI'
     : normalized === 'anthropic'
       ? 'Anthropic'
-      : String(platform || '')
+      : normalized === 'opencode'
+        ? 'Opencode'
+        : String(platform || '')
   return t('accountShare.roomAccounts.modePlatform', { platform: displayName })
 }
 
@@ -1000,7 +1024,7 @@ function collectOperationFailures(
     .map((item) => ({
       accountID: item.account_id,
       name: accountNameForOperation(operation, item.account_id),
-      error: roomAccountOperationFailureMessage(item.error)
+      error: roomAccountOperationFailureMessage(item)
     }))
 }
 
@@ -1023,10 +1047,37 @@ function describeRoomAccountOperationError(error: unknown, operation: RoomAccoun
   return `${who}缺少房间要求的模型「${model}」。请在"我的账号"中为该账号补上这个模型，或把它从房间允许模型中移除后再试。`
 }
 
-function roomAccountOperationFailureMessage(error?: string): string {
-  const normalized = error?.trim()
-  if (!normalized) return t('accountShare.roomAccounts.unknownFailure')
-  return ROOM_ACCOUNT_ERROR_MESSAGES[normalized] || normalized
+function roomAccountOperationFailureMessage(item: AccountShareRoomAccountsBatchResult): string {
+  const reason = item.reason?.trim() || ''
+  const metadata = item.metadata || {}
+
+  if (reason === 'ACCOUNT_SHARE_MODE_UNSUPPORTED_MODEL') {
+    const model = metadata.model?.trim()
+    if (model) {
+      return `缺少房间要求的模型「${model}」。请在"我的账号"中补上该模型，或将其从房间模型白名单移除后重试。`
+    }
+  }
+
+  if (reason === 'ACCOUNT_SHARE_ACCOUNT_UNAVAILABLE') {
+    const blocker = metadata.blocker?.trim()
+    if (blocker) {
+      return ROOM_ACCOUNT_UNAVAILABLE_BLOCKER_MESSAGES[blocker]
+        || `账号当前不可用（阻塞原因：${blocker}）`
+    }
+  }
+
+  if (reason && ROOM_ACCOUNT_ERROR_MESSAGES[reason]) {
+    return ROOM_ACCOUNT_ERROR_MESSAGES[reason]
+  }
+
+  const detail = item.message?.trim() || item.error?.trim() || ''
+  if (detail && ROOM_ACCOUNT_ERROR_MESSAGES[detail]) {
+    return ROOM_ACCOUNT_ERROR_MESSAGES[detail]
+  }
+  if (reason && detail) return `操作失败（错误码：${reason}）：${detail}`
+  if (reason) return `操作失败（错误码：${reason}）`
+  if (detail) return `操作失败：${detail}`
+  return t('accountShare.roomAccounts.unknownFailure')
 }
 
 async function submitBatchOperation(
@@ -1069,9 +1120,19 @@ async function submitBatchOperation(
     operationFailures.value = collectOperationFailures(operation, result)
 
     if ((result.success || 0) > 0) {
-      // 有成功项才清空选择，避免整体失败时把用户的选择也一并清掉、无法原样重试。
-      selectedMemberIDs.value = new Set()
-      selectedCandidateIDs.value = new Set()
+      // 仅移除已经成功的选择；部分失败项继续保留，方便用户处理阻塞原因后原样重试。
+      const successfulAccountIDs = new Set(result.success_ids)
+      if (operation === 'add') {
+        selectedCandidateIDs.value = new Set(
+          Array.from(selectedCandidateIDs.value)
+            .filter((accountID) => !successfulAccountIDs.has(accountID))
+        )
+      } else {
+        selectedMemberIDs.value = new Set(
+          Array.from(selectedMemberIDs.value)
+            .filter((accountID) => !successfulAccountIDs.has(accountID))
+        )
+      }
       emit('changed', {
         operation,
         success: result.success || 0,
