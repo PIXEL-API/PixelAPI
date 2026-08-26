@@ -1011,6 +1011,16 @@ func (s *AccountService) ImportOwnedWithResult(ctx context.Context, ownerUserID 
 		return nil, err
 	}
 	if !IsOpenAIAgentIdentityCredentials(req.Credentials) {
+		// 凭证文件导入没有单独的模型选择步骤。新建账号时若调用方未携带
+		// model_mapping，使用同一份活跃渠道定价并集生成 identity 白名单；
+		// 这不是平台默认模型兜底，且不会覆盖已有账号的白名单。
+		if !IsOpenAIPersonalAccessTokenCredentials(req.Credentials) {
+			credentials, err := s.ensureOwnedImportModelMapping(ctx, req.Platform, req.Credentials)
+			if err != nil {
+				return nil, err
+			}
+			req.Credentials = credentials
+		}
 		account, err := s.createOwned(ctx, ownerUserID, req, false)
 		if err != nil {
 			return nil, err
@@ -1040,6 +1050,9 @@ func (s *AccountService) ImportOwnedWithResult(ctx context.Context, ownerUserID 
 		return &OwnedAccountImportResult{Account: account, Updated: true}, nil
 	}
 
+	if req.Credentials, err = s.ensureOwnedImportModelMapping(ctx, req.Platform, req.Credentials); err != nil {
+		return nil, err
+	}
 	account, err := s.createOwned(ctx, ownerUserID, req, false)
 	if err == nil {
 		return &OwnedAccountImportResult{Account: account}, nil
@@ -1103,6 +1116,9 @@ func (s *AccountService) ImportOwnedValidatedPersonalAccessTokenWithResult(
 		return &OwnedAccountImportResult{Account: account, Updated: true}, nil
 	}
 
+	if req.Credentials, err = s.ensureOwnedImportModelMapping(ctx, req.Platform, req.Credentials); err != nil {
+		return nil, err
+	}
 	account, err := s.createOwned(ctx, ownerUserID, req, true)
 	if err == nil {
 		return &OwnedAccountImportResult{Account: account}, nil
@@ -1358,7 +1374,6 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 	if isAgentIdentity {
 		req.Credentials = normalizeOwnedAgentIdentityCredentials(req.Credentials)
 	}
-	_, modelMappingProvided := req.Credentials["model_mapping"]
 	targetLevel := NormalizeAccountLevel(req.AccountLevel)
 	levelConfigs, err := s.openAIAccountLevelConfigs(ctx)
 	if err != nil {
@@ -1368,11 +1383,6 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 	proxyID := req.ProxyID
 	if err := applyOwnedPersonalAccountTemplateToCreate(&req); err != nil {
 		return nil, err
-	}
-	if modelMappingProvided {
-		if err := s.validateOwnedPersonalModelMapping(ctx, req.Platform, req.Credentials); err != nil {
-			return nil, err
-		}
 	}
 	if err := validateOwnedAccountSourceForPlatform(req.Platform, req.Type, req.Credentials, req.Extra); err != nil {
 		return nil, err
@@ -1436,6 +1446,12 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 
 	accountLevel, err := resolveOwnedAccountLevel(req.Platform, targetLevel, req.Credentials, req.Extra, levelConfigs)
 	if err != nil {
+		return nil, err
+	}
+	// 个人账号只能使用非空、精确的服务端定价白名单。放在所有业务字段
+	// 校验之后、任何重复/容量检查和写入之前，既保持错误优先级，也确保
+	// 无效模型不会触发后续副作用。
+	if err := s.validateOwnedPersonalModelMapping(ctx, req.Platform, req.Credentials); err != nil {
 		return nil, err
 	}
 
@@ -1897,6 +1913,40 @@ func (s *AccountService) listOwnedSelectableModelIDs(ctx context.Context, platfo
 		cache[platform] = append([]string(nil), result...)
 	}
 	return result, nil
+}
+
+// ensureOwnedImportModelMapping supplies the compatibility mapping for a
+// credential-file import that does not have a UI model-selection step. The
+// generated mapping is always an identity whitelist from the current active
+// channel pricing union; platform DefaultModels are intentionally never used.
+func (s *AccountService) ensureOwnedImportModelMapping(
+	ctx context.Context,
+	platform string,
+	credentials map[string]any,
+) (map[string]any, error) {
+	next := mergeAccountMap(credentials, nil)
+	if next == nil {
+		next = make(map[string]any)
+	}
+	if _, exists := next["model_mapping"]; exists {
+		return next, nil
+	}
+	models, err := s.listOwnedSelectableModelIDs(ctx, platform)
+	if err != nil {
+		return nil, err
+	}
+	if len(models) == 0 {
+		return nil, ErrOwnedAccountModelMappingInvalid.WithMetadata(map[string]string{
+			"field":    "model_mapping",
+			"platform": strings.ToLower(strings.TrimSpace(platform)),
+		})
+	}
+	mapping := make(map[string]any, len(models))
+	for _, model := range models {
+		mapping[model] = model
+	}
+	next["model_mapping"] = mapping
+	return next, nil
 }
 
 // ListOwnedSelectableModelIDs 返回号主可用于个人账号白名单的精确模型集合。

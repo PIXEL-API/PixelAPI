@@ -553,6 +553,7 @@ describe('EditAccountModal', () => {
     expect((concurrencyInput.element as HTMLInputElement).value).toBe('')
     await concurrencyInput.setValue('25')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
 
     expect(updateUserAccountMock).toHaveBeenCalledTimes(1)
     const payload = updateUserAccountMock.mock.calls[0]?.[1]
@@ -588,6 +589,28 @@ describe('EditAccountModal', () => {
 
     await wrapper.get('[data-testid="set-invalid-model-whitelist"]').trigger('click')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateUserAccountMock).not.toHaveBeenCalled()
+  })
+
+  it('rechecks the priced-model whitelist immediately before a user-scoped update', async () => {
+    const account = buildAccount()
+    account.type = 'oauth'
+    account.credentials = {
+      access_token: 'oauth-token',
+      model_mapping: { 'gpt-5.2': 'gpt-5.2' }
+    }
+    updateUserAccountMock.mockReset()
+
+    const wrapper = mountModal(account, { accountScope: 'user' })
+    await flushPromises()
+    await wrapper.get('[data-testid="rewrite-to-snapshot"]').trigger('click')
+
+    const modelOptionCallsBeforeSubmit = getUserModelOptionsMock.mock.calls.length
+    getUserModelOptionsMock.mockResolvedValueOnce({ models: ['gpt-5.2'] })
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(getUserModelOptionsMock.mock.calls.length).toBeGreaterThan(modelOptionCallsBeforeSubmit)
     expect(updateUserAccountMock).not.toHaveBeenCalled()
   })
 
@@ -658,6 +681,7 @@ describe('EditAccountModal', () => {
     expect(wrapper.find('[data-testid="clear-proxy"]').exists()).toBe(false)
     await wrapper.get('[data-testid="select-proxy-9"]').trigger('click')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
 
     expect(updateUserAccountMock).toHaveBeenCalledTimes(1)
     expect(updateUserAccountMock.mock.calls[0]?.[1]?.proxy_id).toBe(9)
@@ -683,6 +707,7 @@ describe('EditAccountModal', () => {
     expect(wrapper.find('[data-testid="openai-plan-type-override"]').exists()).toBe(false)
     await wrapper.get('[data-testid="clear-proxy"]').trigger('click')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
 
     expect(updateUserAccountMock).toHaveBeenCalledTimes(1)
     const payload = updateUserAccountMock.mock.calls[0]?.[1]

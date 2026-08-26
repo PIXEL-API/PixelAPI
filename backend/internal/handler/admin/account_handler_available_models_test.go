@@ -35,14 +35,16 @@ func setupAvailableModelsRouter(adminSvc service.AdminService) *gin.Engine {
 }
 
 func TestAccountHandlerGetAvailableModels_OpenAIOAuthUsesExplicitModelMapping(t *testing.T) {
+	ownerUserID := int64(7)
 	svc := &availableModelsAdminService{
 		stubAdminService: newStubAdminService(),
 		account: service.Account{
-			ID:       42,
-			Name:     "openai-oauth",
-			Platform: service.PlatformOpenAI,
-			Type:     service.AccountTypeOAuth,
-			Status:   service.StatusActive,
+			ID:          42,
+			Name:        "openai-oauth",
+			Platform:    service.PlatformOpenAI,
+			Type:        service.AccountTypeOAuth,
+			Status:      service.StatusActive,
+			OwnerUserID: &ownerUserID,
 			Credentials: map[string]any{
 				"model_mapping": map[string]any{
 					"gpt-5": "gpt-5.1",
@@ -194,6 +196,36 @@ func TestAccountHandlerGetAvailableModels_GeminiGoogleOneRespectsMappingPreceden
 			require.ElementsMatch(t, tt.wantIDs, ids)
 		})
 	}
+}
+
+func TestAccountHandlerGetAvailableModels_OwnedOpenAIEmptyWhitelistReturnsNoModels(t *testing.T) {
+	ownerUserID := int64(7)
+	svc := &availableModelsAdminService{
+		stubAdminService: newStubAdminService(),
+		account: service.Account{
+			ID:          46,
+			Name:        "openai-owned-legacy",
+			Platform:    service.PlatformOpenAI,
+			Type:        service.AccountTypeOAuth,
+			Status:      service.StatusActive,
+			OwnerUserID: &ownerUserID,
+			Credentials: map[string]any{"model_mapping": map[string]any{}},
+		},
+	}
+	router := setupAvailableModelsRouter(svc)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/46/models", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Empty(t, resp.Data)
 }
 
 func TestAccountHandlerGetAvailableModels_RejectsUnsupportedPlatform(t *testing.T) {

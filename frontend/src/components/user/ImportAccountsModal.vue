@@ -326,9 +326,10 @@ const oauthModelSelectionValid = computed(() => {
   return oauthAllowedModels.value.every(model => allowedSet.has(model))
 })
 
-async function loadOAuthModelOptions(): Promise<void> {
+async function loadOAuthModelOptions(preserveSelectionForValidation = false): Promise<void> {
   const requestVersion = ++oauthModelOptionsRequestVersion
   oauthModelOptionsLoadError.value = ''
+  const previousSelection = [...oauthAllowedModels.value]
 
   if (!props.show || !requiresOAuthLogin.value || selectedPlatform.value !== 'openai') {
     oauthModelOptions.value = null
@@ -347,7 +348,15 @@ async function loadOAuthModelOptions(): Promise<void> {
       new Set((result.models || []).map(model => model.trim()).filter(Boolean))
     )
     oauthModelOptions.value = models
-    oauthAllowedModels.value = [...models]
+    const allowedSet = new Set(models)
+    const retainedSelection = previousSelection.filter(model => allowedSet.has(model))
+    // 最终兑换前保留用户的原始选择，让校验明确指出已失效模型，禁止静默裁剪。
+    // 普通首次加载没有历史选择时，才默认勾选当前服务端目录。
+    oauthAllowedModels.value = preserveSelectionForValidation
+      ? previousSelection
+      : previousSelection.length > 0
+        ? retainedSelection
+        : [...models]
   } catch (error: unknown) {
     if (requestVersion !== oauthModelOptionsRequestVersion) return
     oauthModelOptions.value = []
@@ -1015,6 +1024,11 @@ async function generateOAuthUrl(): Promise<void> {
   await openaiOAuth.generateAuthUrl(selectedProxyId.value, { accountLevel: selectedAccountLevel.value })
 }
 
+async function syncOAuthModelOptionsBeforeExchange(): Promise<boolean> {
+  await loadOAuthModelOptions(true)
+  return validateOAuthModelSelection()
+}
+
 function handleClose(): void {
   if (oauthSubmitting.value) return
   emit('close')
@@ -1037,7 +1051,7 @@ async function submitOAuthImport(): Promise<void> {
     appStore.showError(selectedProxyCapacityMessage.value)
     return
   }
-  if (!validateOAuthModelSelection()) {
+  if (!(await syncOAuthModelOptionsBeforeExchange())) {
     return
   }
   const authCode = String(oauthFlowRef.value?.authCode || '').trim()
@@ -1057,6 +1071,12 @@ async function submitOAuthImport(): Promise<void> {
       selectedAccountLevel.value
     )
     if (!tokenInfo) return
+
+    // 授权码兑换成功后立即清理输入和会话，避免创建失败时重复兑换同一个
+    // 一次性 code，后续重试必须重新生成授权链接。
+    oauthFlowRef.value?.reset()
+    openaiOAuth.resetState()
+    openaiOAuth.loading.value = true
 
     const templated = applyPersonalAccountTemplate(
       'openai',

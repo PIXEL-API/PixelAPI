@@ -3988,7 +3988,7 @@ const form = reactive({
   expires_at: null as number | null
 })
 
-const loadUserModelOptions = async () => {
+const loadUserModelOptions = async (preserveSelectionForValidation = false) => {
   const requestVersion = ++userModelOptionsRequestVersion
   userModelOptionsLoadError.value = ''
 
@@ -4011,7 +4011,13 @@ const loadUserModelOptions = async () => {
     userModelOptions.value = models
     const allowedSet = new Set(models)
     const retainedSelection = previousSelection.filter(model => allowedSet.has(model))
-    allowedModels.value = retainedSelection.length > 0 ? retainedSelection : [...models]
+    // 最终提交前保留用户的原始选择，让校验明确指出已失效模型，禁止静默裁剪。
+    // 普通首次加载没有历史选择时，才默认勾选当前服务端目录。
+    allowedModels.value = preserveSelectionForValidation
+      ? previousSelection
+      : previousSelection.length > 0
+        ? retainedSelection
+        : [...models]
   } catch (error: unknown) {
     if (requestVersion !== userModelOptionsRequestVersion) return
     userModelOptions.value = []
@@ -4522,13 +4528,18 @@ const handleSelectGeminiOAuthType = (oauthType: 'code_assist' | 'google_one' | '
   geminiOAuthType.value = oauthType
 }
 
-// Auto-fill related models when switching to whitelist mode or changing platform
+// 管理员账号可使用本地预置模型；用户账号的白名单必须来自服务端当前定价目录。
+// 用户作用域不能在这里回填 getModelsByPlatform，否则切换平台时会把已同步的白名单
+// 短暂覆盖成过期静态全集，并在 OAuth 提交时把旧模型发送给后端。
 watch(
   [modelRestrictionMode, () => form.platform],
   ([newMode]) => {
-    if (newMode === 'whitelist') {
-      allowedModels.value = [...getModelsByPlatform(form.platform)]
+    if (newMode !== 'whitelist') return
+    if (isUserScope.value) {
+      void loadUserModelOptions()
+      return
     }
+    allowedModels.value = [...getModelsByPlatform(form.platform)]
   }
 )
 
@@ -5563,6 +5574,13 @@ const handleOpenAIExchange = async (authCode: string) => {
     )
     if (!tokenInfo) return
 
+    // 授权码是一次性的。兑换成功后立即丢弃输入和会话，避免账号创建失败时
+    // 用户再次点击“完成授权”而把同一个 code 重新提交给上游，得到二次 502。
+    // 如果后续创建失败，用户需要重新生成授权链接和 code。
+    oauthFlowRef.value?.reset()
+    oauthClient.resetState()
+    oauthClient.loading.value = true
+
     const credentials = oauthClient.buildCredentials(tokenInfo)
     applyOwnedUserModelWhitelist(credentials)
     const oauthExtra = oauthClient.buildExtraInfo(tokenInfo) as Record<string, unknown> | undefined
@@ -5613,7 +5631,7 @@ const handleOpenAIExchange = async (authCode: string) => {
     emit('created', createdAccount ? [createdAccount] : undefined)
     handleClose(true)
   } catch (error: any) {
-    oauthClient.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+    oauthClient.error.value = extractApiErrorMessage(error, t('admin.accounts.oauth.authFailed'))
     appStore.showError(oauthClient.error.value)
   } finally {
     oauthClient.loading.value = false
@@ -6385,7 +6403,7 @@ const handleGeminiExchange = async (authCode: string) => {
     const extra = geminiOAuth.buildExtraInfo(tokenInfo)
     await createAccountAndFinish('gemini', 'oauth', credentials, extra)
   } catch (error: any) {
-    geminiOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+    geminiOAuth.error.value = extractApiErrorMessage(error, t('admin.accounts.oauth.authFailed'))
     appStore.showError(geminiOAuth.error.value)
   } finally {
     geminiOAuth.loading.value = false
@@ -6426,7 +6444,7 @@ const handleGrokExchange = async (authCode: string) => {
     const extra = grokOAuth.buildExtraInfo(tokenInfo)
     await createAccountAndFinish('grok', 'oauth', credentials, extra)
   } catch (error: any) {
-    grokOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+    grokOAuth.error.value = extractApiErrorMessage(error, t('admin.accounts.oauth.authFailed'))
     appStore.showError(grokOAuth.error.value)
   } finally {
     grokOAuth.loading.value = false
@@ -6474,7 +6492,7 @@ const handleAntigravityExchange = async (authCode: string) => {
     const extra = buildAntigravityExtra()
     await createAccountAndFinish('antigravity', 'oauth', credentials, extra)
   } catch (error: any) {
-    antigravityOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+    antigravityOAuth.error.value = extractApiErrorMessage(error, t('admin.accounts.oauth.authFailed'))
     appStore.showError(antigravityOAuth.error.value)
   } finally {
     antigravityOAuth.loading.value = false
@@ -6568,16 +6586,25 @@ const handleAnthropicExchange = async (authCode: string) => {
     applyInterceptWarmup(credentials, interceptWarmupRequests.value, 'create')
     await createAccountAndFinish(form.platform, addMethod.value as AccountType, credentials, extra)
   } catch (error: any) {
-    oauth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+    oauth.error.value = extractApiErrorMessage(error, t('admin.accounts.oauth.authFailed'))
     appStore.showError(oauth.error.value)
   } finally {
     oauth.loading.value = false
   }
 }
 
+// 在兑换一次性 OAuth code 之前重新读取当前平台的服务端白名单。
+// OAuth 页面可能打开较长时间，不能依赖进入第二步时的旧快照。
+const syncUserModelOptionsBeforeOAuthExchange = async (): Promise<boolean> => {
+  if (!isUserScope.value) return true
+  await loadUserModelOptions(true)
+  return validateUserModelSelection()
+}
+
 // 主入口：根据平台路由到对应处理函数
 const handleExchangeCode = async () => {
   if (!validateUserOAuthProxySelection()) return
+  if (!(await syncUserModelOptionsBeforeOAuthExchange())) return
   const authCode = oauthFlowRef.value?.authCode || ''
 
   switch (form.platform) {

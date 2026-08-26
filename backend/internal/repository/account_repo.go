@@ -4935,10 +4935,12 @@ func (r *accountRepository) queryAccountsByGroup(ctx context.Context, groupID in
 		requiredLevel := service.NormalizeRequiredAccountLevel(group.RequiredAccountLevel)
 		if group.Platform == service.PlatformOpenAI && requiredLevel != "" {
 			allowedLevels := service.OpenAISharedPoolAllowedAccountLevels(requiredLevel)
-			if len(allowedLevels) == 0 {
-				return []service.Account{}, nil
+			// The OpenAI Free pool is level-unrestricted but remains platform-bound.
+			// Strict pools add their exact allowed-level predicate below.
+			preds = append(preds, dbaccount.PlatformEQ(service.PlatformOpenAI))
+			if len(allowedLevels) > 0 {
+				preds = append(preds, dbaccount.AccountLevelIn(allowedLevels...))
 			}
-			preds = append(preds, dbaccount.PlatformEQ(service.PlatformOpenAI), dbaccount.AccountLevelIn(allowedLevels...))
 		} else if group.Platform == service.PlatformGrok && requiredLevel != "" {
 			if !service.IsUserSelectableGrokAccountLevel(requiredLevel) {
 				return []service.Account{}, nil

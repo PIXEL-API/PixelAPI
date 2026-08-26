@@ -2274,7 +2274,7 @@ func (h *UserAccountHandler) Test(c *gin.Context) {
 
 // GetAvailableModels handles getting available models for a user-owned account.
 // GET /api/v1/accounts/:id/models
-// 复用 service.AvailableTestModels，与管理员端「测试连接」模型列表保持同一口径。
+// 复用 service.AvailableTestModels，用户端严格遵守个人账号模型白名单。
 func (h *UserAccountHandler) GetAvailableModels(c *gin.Context) {
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {

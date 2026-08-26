@@ -3737,15 +3737,26 @@ const requiredAccountLevelOptions = (platform: GroupPlatform) => {
       ...GROK_ACCOUNT_LEVEL_OPTIONS,
     ];
   }
-  return openAIAccountLevelOptions(adminSettingsStore.openAIAccountLevels, {
-    includeEmpty: true,
-    emptyLabel: t("admin.groups.form.requiredAccountLevelAny"),
-  });
+  return openAIAccountLevelOptions(
+    adminSettingsStore.openAIAccountLevels,
+    {
+      includeEmpty: true,
+      emptyLabel: t("admin.groups.form.requiredAccountLevelAny"),
+    },
+  ).map((option) =>
+    option.value === "free"
+      ? {
+          ...option,
+          label: t("admin.groups.form.requiredAccountLevelFreeUniversal"),
+        }
+      : option,
+  );
 };
 
 const requiredAccountLevelLabel = (platform: GroupPlatform, level?: Exclude<AccountLevel, "unknown"> | "") => {
   if (!level) return "";
   if (platform === "grok") return grokAccountLevelLabel(level);
+  if (level === "free") return t("admin.groups.form.requiredAccountLevelFreeUniversal");
   return openAIAccountLevelLabel(level, adminSettingsStore.openAIAccountLevels);
 };
 

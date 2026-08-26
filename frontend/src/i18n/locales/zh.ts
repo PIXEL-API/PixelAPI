@@ -3839,8 +3839,9 @@ export default {
           "每用户在本分组每分钟最大请求数，0 = 不限制；一旦设置即接管该用户的限流（覆盖用户级 rpm_limit）",
         requiredAccountLevel: "账号等级",
         requiredAccountLevelAny: "不限制账号等级",
+        requiredAccountLevelFreeUniversal: "Free（通用基础池）",
         requiredAccountLevelHint:
-          "设置后，该共享号池只接受并调度相同平台、相同等级的账号。",
+          "OpenAI Free 是通用基础池，接受同平台任意等级及未识别等级的账号；其他等级池只接受并调度相同等级的账号。Grok 仍按 Free/Heavy 严格匹配。",
         exclusiveLabel: "专属分组",
         exclusiveHint: "专属分组，可以手动指定给用户",
         platformLabel: "平台限制",

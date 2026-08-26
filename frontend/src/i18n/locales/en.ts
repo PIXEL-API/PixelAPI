@@ -3956,8 +3956,9 @@ export default {
           "Max requests per minute for each user in this group; 0 = unlimited. Once set, it takes over per-user rate limiting in this group (overrides the user-level rpm_limit fallback).",
         requiredAccountLevel: "Account Level",
         requiredAccountLevelAny: "No level restriction",
+        requiredAccountLevelFreeUniversal: "Free (universal base pool)",
         requiredAccountLevelHint:
-          "When set, this shared pool only accepts and schedules accounts on the same platform and at the selected level.",
+          "The OpenAI Free pool accepts same-platform accounts at any detected or unknown level. Other level pools remain exact-match only, and Grok still matches Free/Heavy strictly.",
       },
       enterGroupName: "Enter group name",
       optionalDescription: "Optional description",

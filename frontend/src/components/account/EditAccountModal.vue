@@ -2823,6 +2823,12 @@ const validateUserModelSelection = (): boolean => {
   }
   return true
 }
+
+const syncUserModelOptionsBeforeSubmit = async (): Promise<boolean> => {
+  if (!canUserManageModelWhitelist.value) return true
+  await loadUserModelOptions()
+  return validateUserModelSelection()
+}
 const DEFAULT_POOL_MODE_RETRY_COUNT = 3
 const MAX_POOL_MODE_RETRY_COUNT = 10
 const poolModeEnabled = ref(false)
@@ -4308,7 +4314,7 @@ const handleSubmit = async () => {
     appStore.showError(t('userAccounts.typeNotAllowed'))
     return
   }
-  if (!validateUserModelSelection()) {
+  if (!(await syncUserModelOptionsBeforeSubmit())) {
     return
   }
 

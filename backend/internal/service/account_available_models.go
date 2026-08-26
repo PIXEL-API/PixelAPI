@@ -23,7 +23,8 @@ func accountModelWhitelistKeys(account *Account) []string {
 	return models
 }
 
-// AvailableTestModels 返回账号「测试连接」流程可选的模型列表，管理员端与用户端共用。
+// AvailableTestModels 返回账号「测试连接」流程可选的模型列表。
+// 对个人账号严格使用号主白名单，空白名单必须返回空集合。
 //
 // 返回值是各平台各自的模型切片类型（openai.Model / geminicli.Model / xai.Model /
 // claude.Model / antigravity.ClaudeModel），直接 JSON 序列化给前端即可——前端只依赖

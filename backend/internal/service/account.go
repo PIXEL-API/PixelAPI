@@ -344,6 +344,15 @@ func NormalizeOpenAISharedPoolRequiredLevel(level string) string {
 	return NormalizeRequiredAccountLevel(level)
 }
 
+// IsOpenAISharedPoolLevelUnrestricted reports whether an OpenAI shared pool
+// accepts every account level. The Free pool is the platform's common base
+// pool: accounts with a detected paid/custom level and accounts whose level is
+// unknown may all use it. Other non-empty level pools remain exact-match only.
+func IsOpenAISharedPoolLevelUnrestricted(requiredLevel string) bool {
+	required := NormalizeOpenAISharedPoolRequiredLevel(requiredLevel)
+	return required == "" || required == AccountLevelFree
+}
+
 func OpenAISharedPoolLevelRank(level string) int {
 	return OpenAISharedPoolLevelRankWithConfigs(level, DefaultOpenAIAccountLevelConfigs())
 }
@@ -364,7 +373,7 @@ func CanOpenAIAccountJoinSharedPool(accountLevel, requiredLevel string) bool {
 
 func CanOpenAIAccountJoinSharedPoolWithConfigs(accountLevel, requiredLevel string, configs []OpenAIAccountLevelConfig) bool {
 	required := NormalizeOpenAISharedPoolRequiredLevel(requiredLevel)
-	if required == "" {
+	if IsOpenAISharedPoolLevelUnrestricted(required) {
 		return true
 	}
 	account := NormalizeOpenAISharedPoolAccountLevel(accountLevel)
@@ -383,7 +392,10 @@ func OpenAISharedPoolAllowedAccountLevels(requiredLevel string) []string {
 
 func OpenAISharedPoolAllowedAccountLevelsWithConfigs(requiredLevel string, configs []OpenAIAccountLevelConfig) []string {
 	required := NormalizeOpenAISharedPoolRequiredLevel(requiredLevel)
-	if required == "" {
+	// nil means that the pool has no account-level predicate. Callers must still
+	// apply the OpenAI platform predicate so cross-platform stale bindings cannot
+	// enter scheduling.
+	if IsOpenAISharedPoolLevelUnrestricted(required) {
 		return nil
 	}
 	normalizedConfigs := NormalizeOpenAIAccountLevelConfigs(configs)
@@ -392,9 +404,6 @@ func OpenAISharedPoolAllowedAccountLevelsWithConfigs(requiredLevel string, confi
 		return []string{required}
 	}
 	levels := make([]string, 0, 6)
-	if required == AccountLevelFree {
-		levels = append(levels, AccountLevelUnknown)
-	}
 	for _, cfg := range normalizedConfigs {
 		if cfg.Enabled && CanOpenAIAccountJoinSharedPoolWithConfigs(cfg.Key, required, normalizedConfigs) {
 			levels = append(levels, cfg.Key)

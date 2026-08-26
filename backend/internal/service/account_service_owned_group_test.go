@@ -22,6 +22,65 @@ func TestAccountServiceCreateOwnedRejectsUnsupportedPlatform(t *testing.T) {
 	require.ErrorIs(t, err, ErrAccountPlatformUnsupported)
 }
 
+func TestAccountServiceCreateOwnedRejectsMissingModelWhitelist(t *testing.T) {
+	ownerID := int64(101)
+	repo := &ownedAccountDuplicateRepoStub{}
+	svc := &AccountService{
+		accountRepo: repo,
+		privateGroupProvisioner: &ownedPrivateGroupProvisionerStub{
+			group: &Group{ID: 99, Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopeUserPrivate},
+		},
+		pricedModelCatalog: &ownedPricedModelCatalogStub{modelsByPlatform: map[string][]string{
+			PlatformOpenAI: {"test-model"},
+		}},
+	}
+
+	account, err := svc.CreateOwned(context.Background(), ownerID, CreateAccountRequest{
+		Name:         "missing-whitelist",
+		Platform:     PlatformOpenAI,
+		Type:         AccountTypeOAuth,
+		AccountLevel: AccountLevelFree,
+		Credentials:  map[string]any{"access_token": "token", "plan_type": "free"},
+		Concurrency:  ownedPersonalDefaultConcurrency,
+		Priority:     1,
+	})
+
+	require.Nil(t, account)
+	require.ErrorIs(t, err, ErrOwnedAccountModelMappingInvalid)
+	require.Empty(t, repo.createdAccounts)
+}
+
+func TestAccountServiceImportOwnedGeneratesPricedModelIdentityWhitelist(t *testing.T) {
+	ownerID := int64(101)
+	repo := &ownedAccountDuplicateRepoStub{}
+	svc := &AccountService{
+		accountRepo: repo,
+		privateGroupProvisioner: &ownedPrivateGroupProvisionerStub{
+			group: &Group{ID: 99, Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopeUserPrivate},
+		},
+		pricedModelCatalog: &ownedPricedModelCatalogStub{modelsByPlatform: map[string][]string{
+			PlatformOpenAI: {"priced-b", "priced-a"},
+		}},
+	}
+
+	result, err := svc.ImportOwnedWithResult(context.Background(), ownerID, CreateAccountRequest{
+		Name:         "credential-import",
+		Platform:     PlatformOpenAI,
+		Type:         AccountTypeOAuth,
+		AccountLevel: AccountLevelFree,
+		Credentials:  map[string]any{"access_token": "token", "plan_type": "free"},
+		Concurrency:  ownedPersonalDefaultConcurrency,
+		Priority:     1,
+	})
+
+	require.NoError(t, err)
+	require.False(t, result.Updated)
+	require.Equal(t, map[string]any{
+		"priced-a": "priced-a",
+		"priced-b": "priced-b",
+	}, result.Account.Credentials["model_mapping"])
+}
+
 func TestApplyOwnedPersonalAccountTemplatePreservesModelWhitelist(t *testing.T) {
 	credentials, _ := applyOwnedPersonalAccountTemplateToMaps(PlatformOpenAI, map[string]any{
 		"access_token": "token",
@@ -597,6 +656,42 @@ func TestAccountServiceResolveOwnedPublicShareGroup(t *testing.T) {
 	require.Equal(t, int64(11), group.ID)
 }
 
+func TestOpenAIFreeSharedPoolAcceptsDetectedAndUnknownAccountLevels(t *testing.T) {
+	for _, accountLevel := range []string{
+		AccountLevelUnknown,
+		AccountLevelFree,
+		AccountLevelPlus,
+		AccountLevelPro,
+		AccountLevelTeam,
+		AccountLevelK12,
+		"custom-detected-level",
+	} {
+		require.Truef(
+			t,
+			CanOpenAIAccountJoinSharedPool(accountLevel, AccountLevelFree),
+			"OpenAI account level %q should be eligible for the universal Free pool",
+			accountLevel,
+		)
+	}
+	require.Nil(t, OpenAISharedPoolAllowedAccountLevels(AccountLevelFree))
+	require.False(t, CanOpenAIAccountJoinSharedPool(AccountLevelPro, AccountLevelPlus))
+}
+
+func TestAccountServiceResolveOwnedPublicShareGroupUsesFreePoolAsUniversalFallback(t *testing.T) {
+	svc := &AccountService{
+		groupRepo: &ownedPublicShareGroupRepoStub{
+			groups: []Group{
+				{ID: 10, Name: "FREE共享号池", Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopePublic, RequiredAccountLevel: AccountLevelFree},
+			},
+		},
+	}
+
+	group, err := svc.resolveOwnedPublicShareGroup(context.Background(), &Account{Platform: PlatformOpenAI, AccountLevel: AccountLevelPro})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(10), group.ID)
+}
+
 func TestAccountServiceResolveOwnedPublicShareGroupExcludesAccountModeGroups(t *testing.T) {
 	for _, platform := range []string{PlatformAnthropic, PlatformGemini, PlatformAntigravity} {
 		t.Run(platform, func(t *testing.T) {
@@ -960,6 +1055,9 @@ func TestAccountServiceCreateOwnedRejectsDuplicateOpenAIIdentity(t *testing.T) {
 		privateGroupProvisioner: &ownedPrivateGroupProvisionerStub{
 			group: &Group{ID: 99, Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopeUserPrivate},
 		},
+		pricedModelCatalog: &ownedPricedModelCatalogStub{modelsByPlatform: map[string][]string{
+			PlatformOpenAI: {"test-model"},
+		}},
 	}
 
 	account, err := svc.CreateOwned(context.Background(), ownerID, CreateAccountRequest{
@@ -967,9 +1065,14 @@ func TestAccountServiceCreateOwnedRejectsDuplicateOpenAIIdentity(t *testing.T) {
 		Platform:     PlatformOpenAI,
 		Type:         AccountTypeOAuth,
 		AccountLevel: AccountLevelFree,
-		Credentials:  map[string]any{"access_token": "token", "chatgpt_account_id": "acct-1", "plan_type": "free"},
-		Concurrency:  ownedPersonalDefaultConcurrency,
-		Priority:     1,
+		Credentials: map[string]any{
+			"access_token":       "token",
+			"chatgpt_account_id": "acct-1",
+			"plan_type":          "free",
+			"model_mapping":      map[string]any{"test-model": "test-model"},
+		},
+		Concurrency: ownedPersonalDefaultConcurrency,
+		Priority:    1,
 	})
 
 	require.Nil(t, account)
@@ -1032,6 +1135,9 @@ func TestAccountServiceCreateOwnedRejectsOpenAIProWhenProxyFull(t *testing.T) {
 			group: &Group{ID: 99, Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopeUserPrivate},
 		},
 		proxyRepo: proxyRepo,
+		pricedModelCatalog: &ownedPricedModelCatalogStub{modelsByPlatform: map[string][]string{
+			PlatformOpenAI: {"test-model"},
+		}},
 	}
 
 	account, err := svc.CreateOwned(context.Background(), ownerID, CreateAccountRequest{
@@ -1040,7 +1146,7 @@ func TestAccountServiceCreateOwnedRejectsOpenAIProWhenProxyFull(t *testing.T) {
 		Type:         AccountTypeOAuth,
 		AccountLevel: AccountLevelPro,
 		ProxyID:      &proxyID,
-		Credentials:  map[string]any{"access_token": "token", "plan_type": "pro"},
+		Credentials:  map[string]any{"access_token": "token", "plan_type": "pro", "model_mapping": map[string]any{"test-model": "test-model"}},
 		Concurrency:  ownedPersonalDefaultConcurrency,
 		Priority:     1,
 	})
@@ -1068,6 +1174,9 @@ func TestAccountServiceCreateOwnedAllowsOpenAIProWhenProxyHasCapacity(t *testing
 			group: &Group{ID: 99, Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopeUserPrivate},
 		},
 		proxyRepo: proxyRepo,
+		pricedModelCatalog: &ownedPricedModelCatalogStub{modelsByPlatform: map[string][]string{
+			PlatformOpenAI: {"test-model"},
+		}},
 	}
 
 	account, err := svc.CreateOwned(context.Background(), ownerID, CreateAccountRequest{
@@ -1076,7 +1185,7 @@ func TestAccountServiceCreateOwnedAllowsOpenAIProWhenProxyHasCapacity(t *testing
 		Type:         AccountTypeOAuth,
 		AccountLevel: AccountLevelPro,
 		ProxyID:      &proxyID,
-		Credentials:  map[string]any{"access_token": "token", "plan_type": "pro"},
+		Credentials:  map[string]any{"access_token": "token", "plan_type": "pro", "model_mapping": map[string]any{"test-model": "test-model"}},
 		Concurrency:  ownedPersonalDefaultConcurrency,
 		Priority:     1,
 	})
@@ -1101,6 +1210,9 @@ func TestAccountServiceCreateOwnedUsesAtomicProxyCapacityCreate(t *testing.T) {
 		privateGroupProvisioner: &ownedPrivateGroupProvisionerStub{
 			group: &Group{ID: 99, Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopeUserPrivate},
 		},
+		pricedModelCatalog: &ownedPricedModelCatalogStub{modelsByPlatform: map[string][]string{
+			PlatformOpenAI: {"test-model"},
+		}},
 	}
 
 	account, err := svc.CreateOwned(context.Background(), ownerID, CreateAccountRequest{
@@ -1109,7 +1221,7 @@ func TestAccountServiceCreateOwnedUsesAtomicProxyCapacityCreate(t *testing.T) {
 		Type:         AccountTypeOAuth,
 		AccountLevel: AccountLevelPro,
 		ProxyID:      &proxyID,
-		Credentials:  map[string]any{"access_token": "token", "plan_type": "pro"},
+		Credentials:  map[string]any{"access_token": "token", "plan_type": "pro", "model_mapping": map[string]any{"test-model": "test-model"}},
 		Concurrency:  ownedPersonalDefaultConcurrency,
 		Priority:     1,
 	})
@@ -1131,6 +1243,9 @@ func TestAccountServiceCreateOwnedRejectsOpenAILevelMismatch(t *testing.T) {
 		privateGroupProvisioner: &ownedPrivateGroupProvisionerStub{
 			group: &Group{ID: 99, Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopeUserPrivate},
 		},
+		pricedModelCatalog: &ownedPricedModelCatalogStub{modelsByPlatform: map[string][]string{
+			PlatformOpenAI: {"test-model"},
+		}},
 	}
 
 	account, err := svc.CreateOwned(context.Background(), ownerID, CreateAccountRequest{
@@ -1157,6 +1272,9 @@ func TestAccountServiceCreateOwnedAllowsOpenAITeamWithoutProxy(t *testing.T) {
 		privateGroupProvisioner: &ownedPrivateGroupProvisionerStub{
 			group: &Group{ID: 99, Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopeUserPrivate},
 		},
+		pricedModelCatalog: &ownedPricedModelCatalogStub{modelsByPlatform: map[string][]string{
+			PlatformOpenAI: {"test-model"},
+		}},
 	}
 
 	account, err := svc.CreateOwned(context.Background(), ownerID, CreateAccountRequest{
@@ -1164,7 +1282,7 @@ func TestAccountServiceCreateOwnedAllowsOpenAITeamWithoutProxy(t *testing.T) {
 		Platform:     PlatformOpenAI,
 		Type:         AccountTypeOAuth,
 		AccountLevel: AccountLevelTeam,
-		Credentials:  map[string]any{"access_token": "token", "plan_type": "team"},
+		Credentials:  map[string]any{"access_token": "token", "plan_type": "team", "model_mapping": map[string]any{"test-model": "test-model"}},
 		Concurrency:  ownedPersonalDefaultConcurrency,
 		Priority:     1,
 	})
@@ -1193,13 +1311,16 @@ func TestAccountServiceCreateOwnedKeepsAllowedPersonalConcurrency(t *testing.T) 
 			},
 			counts: map[int64]int64{proxyID: 0},
 		},
+		pricedModelCatalog: &ownedPricedModelCatalogStub{modelsByPlatform: map[string][]string{
+			PlatformAnthropic: {"test-model"},
+		}},
 	}
 
 	account, err := svc.CreateOwned(context.Background(), ownerID, CreateAccountRequest{
 		Name:        "personal",
 		Platform:    PlatformAnthropic,
 		Type:        AccountTypeOAuth,
-		Credentials: map[string]any{"access_token": "token"},
+		Credentials: map[string]any{"access_token": "token", "model_mapping": map[string]any{"test-model": "test-model"}},
 		ProxyID:     &proxyID,
 		Concurrency: ownedPersonalMaxConcurrency,
 		Priority:    ownedPersonalDefaultPriority,

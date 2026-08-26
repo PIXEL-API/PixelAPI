@@ -306,6 +306,9 @@ func newOwnedAgentIdentityService(repo *ownedAgentIdentityRepoStub) (*AccountSer
 		accountShareModeRepo:       placementRepo,
 		accountShareRoomRepo:       placementRepo,
 		agentIdentityWSInvalidator: invalidator,
+		pricedModelCatalog: &ownedPricedModelCatalogStub{modelsByPlatform: map[string][]string{
+			PlatformOpenAI: {"test-model"},
+		}},
 	}, invalidator
 }
 
@@ -413,6 +416,7 @@ func TestAccountServiceImportOwnedAgentIdentityCreatesPrivateOwnedAccount(t *tes
 	require.Nil(t, result.Account.ProxyID)
 	require.Nil(t, result.Account.ExpiresAt)
 	require.Equal(t, []int64{ownedAgentIdentityPrivateGroupID}, result.Account.GroupIDs)
+	require.Equal(t, map[string]any{"test-model": "test-model"}, result.Account.Credentials["model_mapping"])
 	require.Empty(t, invalidator.accountIDs)
 }
 

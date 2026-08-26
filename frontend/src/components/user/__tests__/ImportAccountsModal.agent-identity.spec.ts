@@ -300,9 +300,13 @@ describe('ImportAccountsModal Agent Identity', () => {
     )
 
     await wrapper.get('[data-testid="select-import-proxy"]').trigger('click')
+    const modelOptionCallsBeforeSubmit = getModelOptionsMock.mock.calls.length
+    const resetCallsBeforeSubmit = resetOAuthStateMock.mock.calls.length
     await wrapper.get('#user-import-openai-oauth-form').trigger('submit.prevent')
     await flushPromises()
 
+    expect(getModelOptionsMock.mock.calls.length).toBeGreaterThan(modelOptionCallsBeforeSubmit)
+    expect(resetOAuthStateMock.mock.calls.length).toBeGreaterThan(resetCallsBeforeSubmit)
     expect(createAccountMock).toHaveBeenCalledWith(expect.objectContaining({
       platform: 'openai',
       type: 'oauth',
@@ -314,6 +318,40 @@ describe('ImportAccountsModal Agent Identity', () => {
         }
       })
     }))
+  })
+
+  it('blocks OAuth exchange when the priced-model whitelist changes during authorization', async () => {
+    listProxiesMock.mockResolvedValueOnce([
+      { id: 9, name: 'proxy', status: 'active', account_count: 0, max_accounts: 10 }
+    ])
+    const wrapper = mount(ImportAccountsModal, {
+      props: { show: true },
+      global: {
+        stubs: {
+          ...basicStubs,
+          ModelWhitelistSelector: ModelWhitelistSelectorStub,
+          ProxySelector: ProxySelectorStub,
+          OAuthAuthorizationFlow: OAuthAuthorizationFlowStub
+        }
+      }
+    })
+
+    await selectOpenAI(wrapper)
+    await findButtonByText(wrapper, 'Free').trigger('click')
+    await findButtonByText(wrapper, 'userAccounts.importSwitchToOAuthLogin').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="select-import-proxy"]').trigger('click')
+
+    const modelOptionCallsBeforeSubmit = getModelOptionsMock.mock.calls.length
+    // 禁止把已经失效的选择静默裁剪后继续消费一次性 code。
+    getModelOptionsMock.mockResolvedValueOnce({ models: ['gpt-5.2'] })
+    await wrapper.get('#user-import-openai-oauth-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(getModelOptionsMock.mock.calls.length).toBeGreaterThan(modelOptionCallsBeforeSubmit)
+    expect(exchangeAuthCodeMock).not.toHaveBeenCalled()
+    expect(createAccountMock).not.toHaveBeenCalled()
+    expect(showErrorMock).toHaveBeenCalledWith(expect.stringContaining('gpt-5.2-2025-12-11'))
   })
 
   it('blocks OAuth account login import when the model whitelist is empty', async () => {

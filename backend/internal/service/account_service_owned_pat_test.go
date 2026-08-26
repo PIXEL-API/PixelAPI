@@ -60,6 +60,7 @@ func TestAccountServiceImportOwnedValidatedPersonalAccessTokenCreatesCanonicalAc
 	require.Equal(t, "personal_access_token", result.Account.GetCredential("openai_auth_mode"))
 	require.Equal(t, "Bearer", result.Account.GetCredential("token_type"))
 	require.NotContains(t, result.Account.Credentials, "refresh_token")
+	require.Equal(t, map[string]any{"test-model": "test-model"}, result.Account.Credentials["model_mapping"])
 	require.Nil(t, result.Account.ExpiresAt)
 	require.Equal(t, []int64{ownedAgentIdentityPrivateGroupID}, result.Account.GroupIDs)
 }
