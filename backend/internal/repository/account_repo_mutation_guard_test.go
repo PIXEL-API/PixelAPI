@@ -455,7 +455,10 @@ func TestAuthorizeAccountMutationAdminForceContractIsUnchanged(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			request := valid
 			test.mutate(&request)
-			require.ErrorIs(t, authorizeAccountMutation(request, targets, bindings, nil), service.ErrAccountMutationForceRequired)
+			err := authorizeAccountMutation(request, targets, bindings, nil)
+			require.ErrorIs(t, err, service.ErrAccountMutationForceRequired)
+			appErr := infraerrors.FromError(err)
+			require.JSONEq(t, `{"11":4}`, appErr.Metadata["expected_versions"])
 		})
 	}
 
@@ -463,6 +466,41 @@ func TestAuthorizeAccountMutationAdminForceContractIsUnchanged(t *testing.T) {
 	stale := valid
 	stale.ExpectedListingVersion = &staleVersion
 	require.ErrorIs(t, authorizeAccountMutation(stale, targets, bindings, nil), service.ErrAccountMutationVersionConflict)
+}
+
+func TestAuthorizeAccountMutationMixedPlacementReturnsRoomVersionChallengeFirst(t *testing.T) {
+	targets := accountMutationGuardSensitiveTargets(7)
+	targets[8] = accountMutationGuardSensitiveTargets(8)[8]
+	targets[9] = accountMutationGuardSensitiveTargets(9)[9]
+	bindings := []accountMutationRoomBinding{{
+		accountID:       7,
+		listingID:       11,
+		rowVersion:      4,
+		lifecycleStatus: service.AccountShareListingStatusActive,
+	}, {
+		accountID:       8,
+		listingID:       12,
+		rowVersion:      7,
+		lifecycleStatus: service.AccountShareListingStatusActive,
+	}}
+	placements := accountMutationGuardPublicPoolPlacements(9)
+	request := service.AccountMutationGuardRequest{
+		ActorUserID:  99,
+		ActorIsAdmin: true,
+		Intent:       service.AccountMutationIntentAdmin,
+	}
+
+	err := authorizeAccountMutation(request, targets, bindings, placements)
+	require.ErrorIs(t, err, service.ErrAccountMutationForceRequired)
+	appErr := infraerrors.FromError(err)
+	require.Equal(t, "force_active_edit", appErr.Metadata["missing"])
+	require.JSONEq(t, `{"11":4,"12":7}`, appErr.Metadata["expected_versions"])
+
+	request.ForceActiveEdit = true
+	request.Confirmed = true
+	request.Reason = "replace blocked upstream credentials"
+	request.ExpectedListingVersions = map[int64]int64{11: 4, 12: 7}
+	require.NoError(t, authorizeAccountMutation(request, targets, bindings, placements))
 }
 
 func accountMutationGuardSensitiveTargets(accountID int64) map[int64]*accountMutationLockedTarget {

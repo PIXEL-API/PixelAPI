@@ -8061,6 +8061,42 @@ func TestAccountShareModeRepositoryListsOnlyRecoverableUnavailableMemberships(t 
 	}
 }
 
+func TestAccountShareModeRepositoryRecoveryWorkerExcludesOnlyShortRateLimitWindows(t *testing.T) {
+	suspendable := strings.ToLower(strings.Join(
+		strings.Fields(accountShareMembershipSuspendableUnavailableConditionSQL("$1")),
+		" ",
+	))
+
+	for _, required := range []string{
+		"a.rate_limited_at is not null",
+		"a.rate_limit_reset_at - a.rate_limited_at <= interval '30 seconds'",
+	} {
+		if !strings.Contains(suspendable, required) {
+			t.Fatalf("recoverable worker must recognize short fallback rate-limit windows using %q:\n%s", required, suspendable)
+		}
+	}
+	if !strings.Contains(suspendable, "not (") {
+		t.Fatalf("recoverable worker must exclude, not select, the short rate-limit guard:\n%s", suspendable)
+	}
+	if !strings.Contains(suspendable, "l.status = 'paused'") ||
+		!strings.Contains(suspendable, "a.temp_unschedulable_until") ||
+		!strings.Contains(suspendable, "a.schedulable = false") {
+		t.Fatalf("long-lived recoverable blockers must remain eligible for suspension:\n%s", suspendable)
+	}
+
+	billingBlocker := strings.ToLower(strings.Join(
+		strings.Fields(accountShareMembershipRecoverablyUnavailableConditionSQL("$1")),
+		" ",
+	))
+	if !strings.Contains(billingBlocker, "a.rate_limit_reset_at is not null") ||
+		!strings.Contains(billingBlocker, "a.rate_limit_reset_at > $1") {
+		t.Fatalf("seat billing must still stop while any rate-limit window is active:\n%s", billingBlocker)
+	}
+	if strings.Contains(billingBlocker, "a.rate_limit_reset_at - a.rate_limited_at <= interval '30 seconds'") {
+		t.Fatalf("short-window suspension exception must not leak into the seat-billing blocker:\n%s", billingBlocker)
+	}
+}
+
 func TestAccountShareModeRepositorySeatBillingExcludesRecoverableUnavailableMemberships(t *testing.T) {
 	matcher := sqlmock.QueryMatcherFunc(func(expectedSQL, actualSQL string) error {
 		if expectedSQL != "seat billing candidates" {
@@ -8187,6 +8223,53 @@ func TestAccountShareModeRepositoryRecoverableSuspensionSkipsRecentlyActiveMembe
 	}
 }
 
+func TestAccountShareModeRepositoryRecoverableSuspensionPreservesBindingWhenHealthyReplacementExists(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	repo := &accountShareModeRepository{db: db}
+	now := time.Date(2026, 7, 11, 1, 2, 45, 0, time.UTC)
+	joinedAt := now.Add(-time.Minute)
+	paidUntil := now.Add(time.Minute)
+	membershipID := int64(73)
+	listingID := int64(513)
+	accountID := int64(405609)
+	ownerUserID := int64(7004)
+	consumerUserID := int64(5929)
+	apiKeyID := int64(15010)
+
+	mock.ExpectBegin()
+	expectRecoverableSuspensionResourceLocks(mock, membershipID, listingID, accountID)
+	mock.ExpectQuery("SELECT\\s+m\\.id, m\\.listing_id").
+		WithArgs(membershipID, service.AccountShareMembershipStatusActive).
+		WillReturnRows(sqlmock.NewRows(accountShareMembershipColumns()).AddRow(
+			membershipID, listingID, accountID, ownerUserID, consumerUserID, apiKeyID,
+			service.AccountShareMembershipStatusActive, 1, 0.2, 0.0, 0,
+			joinedAt, nil, nil, nil, paidUntil, now, now, 0, int64(0), nil,
+			nil, nil, joinedAt, joinedAt,
+		))
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs(listingID, accountID, now).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs(listingID, accountID, now).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectRollback()
+
+	membership, billing, err := repo.SuspendRecoverableUnavailableMembership(context.Background(), membershipID, now)
+	if err != nil {
+		t.Fatalf("SuspendRecoverableUnavailableMembership failed: %v", err)
+	}
+	if membership != nil || billing != nil {
+		t.Fatalf("healthy room replacement must preserve the active membership and binding, got membership=%#v billing=%#v", membership, billing)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func TestAccountShareModeRepositorySuspendsRecoverableUnavailableAndRefundsPrepay(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -8195,6 +8278,7 @@ func TestAccountShareModeRepositorySuspendsRecoverableUnavailableAndRefundsPrepa
 	defer func() { _ = db.Close() }()
 	repo := &accountShareModeRepository{db: db}
 	now := time.Date(2026, 7, 11, 1, 3, 0, 0, time.UTC)
+	cooldownUntil := now.Add(service.AccountShareModeDispatchCooldown)
 	joinedAt := now.Add(-time.Minute)
 	paidUntil := now.Add(30 * time.Minute)
 	membershipID := int64(18012)
@@ -8218,6 +8302,9 @@ func TestAccountShareModeRepositorySuspendsRecoverableUnavailableAndRefundsPrepa
 	mock.ExpectQuery("SELECT EXISTS").
 		WithArgs(listingID, accountID, now).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs(listingID, accountID, now).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectQuery("INSERT INTO account_share_mode_settlement_entries").
 		WithArgs(
 			membershipID, listingID, accountID, ownerUserID, consumerUserID, apiKeyID,
@@ -8237,12 +8324,12 @@ func TestAccountShareModeRepositorySuspendsRecoverableUnavailableAndRefundsPrepa
 		WithArgs(now, nil, "system", "membership_requeued", membershipID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("(?s)UPDATE account_share_memberships m.*dispatch_failed_at = \\$3::timestamptz.*queue_expires_at = \\$3::timestamptz \\+ make_interval\\(hours => \\$8\\)").
-		WithArgs(service.AccountShareMembershipStatusQueued, now, now, now, membershipID, service.AccountShareMembershipStatusActive, true, service.AccountShareModeQueueExpiryDuration.Hours()).
+		WithArgs(service.AccountShareMembershipStatusQueued, now, now, cooldownUntil, membershipID, service.AccountShareMembershipStatusActive, true, service.AccountShareModeQueueExpiryDuration.Hours()).
 		WillReturnRows(sqlmock.NewRows(accountShareMembershipColumns()).AddRow(
 			membershipID, listingID, nil, ownerUserID, consumerUserID, apiKeyID,
 			service.AccountShareMembershipStatusQueued, 1, 0.2, 0.0, 0,
 			joinedAt, nil, nil, nil, nil, now, now, 0, int64(0), nil,
-			now, now, joinedAt, now,
+			now, cooldownUntil, joinedAt, now,
 		))
 	mock.ExpectCommit()
 
@@ -8256,8 +8343,8 @@ func TestAccountShareModeRepositorySuspendsRecoverableUnavailableAndRefundsPrepa
 	if membership.PaidUntil != nil || membership.BilledUntil == nil || !membership.BilledUntil.Equal(now) {
 		t.Fatalf("unexpected billing timestamps after suspension: %#v", membership)
 	}
-	if membership.DispatchCooldownUntil == nil || !membership.DispatchCooldownUntil.Equal(now) {
-		t.Fatalf("recoverable suspension must be immediately eligible after recovery: %#v", membership.DispatchCooldownUntil)
+	if membership.DispatchCooldownUntil == nil || !membership.DispatchCooldownUntil.Equal(cooldownUntil) {
+		t.Fatalf("recoverable suspension must enforce the dispatch cooldown: %#v", membership.DispatchCooldownUntil)
 	}
 	if membership.AccountID != 0 {
 		t.Fatalf("requeued membership account id = %d, want no pre-bound account", membership.AccountID)
@@ -8312,15 +8399,31 @@ func TestAccountShareModeRepositoryRecoverableSuspensionRechecksAvailabilityAfte
 }
 
 func expectRecoverableSuspensionResourceLocks(mock sqlmock.Sqlmock, membershipID, listingID, accountID int64) {
-	mock.ExpectQuery("SELECT\\s+m\\.listing_id, m\\.account_id.*FOR UPDATE OF l").
+	mock.ExpectQuery("SELECT\\s+listing_id\\s+FROM account_share_memberships").
 		WithArgs(membershipID, service.AccountShareMembershipStatusActive).
-		WillReturnRows(sqlmock.NewRows([]string{"listing_id", "account_id"}).AddRow(listingID, accountID))
-	mock.ExpectQuery("SELECT\\s+id\\s+FROM accounts.*FOR UPDATE").
-		WithArgs(accountID).
+		WillReturnRows(sqlmock.NewRows([]string{"listing_id"}).AddRow(listingID))
+	mock.ExpectQuery("SELECT id, owner_user_id, platform, account_level, status, allowed_models").
+		WithArgs(listingID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "owner_user_id", "platform", "account_level", "status", "allowed_models", "pending_operation_id",
+		}).AddRow(
+			listingID,
+			int64(7000),
+			service.PlatformOpenAI,
+			service.AccountLevelPlus,
+			service.AccountShareListingStatusActive,
+			`["gpt-5.5"]`,
+			nil,
+		))
+	mock.ExpectQuery("SELECT account_id\\s+FROM account_share_room_accounts").
+		WithArgs(listingID).
+		WillReturnRows(sqlmock.NewRows([]string{"account_id"}).AddRow(accountID))
+	mock.ExpectQuery("SELECT id\\s+FROM accounts").
+		WithArgs(pq.Array([]int64{accountID})).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(accountID))
 }
 
-func TestAccountShareModeRepositoryActivationLocksCandidateListingsBeforeCapacityCheck(t *testing.T) {
+func TestAccountShareModeRepositoryActivationLocksCandidatesAndReportsRecoveringWhenTemporarilyUnavailable(t *testing.T) {
 	matcher := sqlmock.QueryMatcherFunc(func(expectedSQL, actualSQL string) error {
 		normalized := strings.ToLower(strings.Join(strings.Fields(actualSQL), " "))
 		switch expectedSQL {
@@ -8364,11 +8467,64 @@ func TestAccountShareModeRepositoryActivationLocksCandidateListingsBeforeCapacit
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "listing_id", "account_id", "owner_user_id", "listing_revision_id", "queue_rank", "idle_timeout_minutes",
 		}))
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs(userID, apiKeyID, service.AccountShareMembershipStatusActive, groupID).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectQuery("SELECT m\\.dispatch_cooldown_until").
+		WithArgs(userID, apiKeyID, service.AccountShareMembershipStatusQueued, groupID, now).
+		WillReturnRows(sqlmock.NewRows([]string{"dispatch_cooldown_until"}).AddRow(nil))
 	mock.ExpectRollback()
 
 	_, _, err = repo.ActivateNextQueuedMembershipForRequest(context.Background(), userID, apiKeyID, groupID, 0, now)
-	if !errors.Is(err, service.ErrAccountShareListingNotFound) {
-		t.Fatalf("expected no available candidate after locked-set recount, got %v", err)
+	if !errors.Is(err, service.ErrAccountShareModeRecovering) {
+		t.Fatalf("queued candidate must report recovering while activation is temporarily blocked, got %v", err)
+	}
+	if errors.Is(err, service.ErrAccountShareListingNotFound) || errors.Is(err, service.ErrAccountShareModeGroupUnbound) {
+		t.Fatalf("queued candidate must not be classified as a true unbound membership, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestAccountShareModeRepositoryReportsRecoveringForActiveMembershipAwaitingSeatRenewal(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	userID := int64(101)
+	apiKeyID := int64(202)
+	groupID := int64(303)
+	now := time.Date(2026, 7, 11, 1, 4, 30, 0, time.UTC)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs(userID, apiKeyID, service.AccountShareMembershipStatusActive, groupID).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectRollback()
+
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	err = accountShareMembershipRequestStateErrorInTx(
+		context.Background(),
+		tx,
+		userID,
+		apiKeyID,
+		groupID,
+		now,
+	)
+	if !errors.Is(err, service.ErrAccountShareModeRecovering) {
+		t.Fatalf("active membership waiting for recovery must not be reported as unbound: %v", err)
+	}
+	if errors.Is(err, service.ErrAccountShareListingNotFound) || errors.Is(err, service.ErrAccountShareModeGroupUnbound) {
+		t.Fatalf("active membership waiting for recovery must preserve its binding state: %v", err)
+	}
+	if rollbackErr := tx.Rollback(); rollbackErr != nil {
+		t.Fatalf("Rollback: %v", rollbackErr)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
@@ -8674,6 +8830,12 @@ func TestAccountShareModeRepositoryQueuedActivationFinalSeatGuardRollsBack(t *te
 			service.AccountShareMembershipStatusEnding,
 		).
 		WillReturnRows(sqlmock.NewRows(accountShareMembershipColumns()))
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs(userID, apiKeyID, service.AccountShareMembershipStatusActive, groupID).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectQuery("SELECT m\\.dispatch_cooldown_until").
+		WithArgs(userID, apiKeyID, service.AccountShareMembershipStatusQueued, groupID, now).
+		WillReturnRows(sqlmock.NewRows([]string{"dispatch_cooldown_until"}).AddRow(nil))
 	mock.ExpectRollback()
 
 	membership, listing, err := repo.ActivateNextQueuedMembershipForRequest(
@@ -8684,8 +8846,8 @@ func TestAccountShareModeRepositoryQueuedActivationFinalSeatGuardRollsBack(t *te
 		0,
 		now,
 	)
-	if !errors.Is(err, service.ErrAccountShareListingNotFound) {
-		t.Fatalf("expected final seat guard rejection, got membership=%#v listing=%#v err=%v", membership, listing, err)
+	if !errors.Is(err, service.ErrAccountShareModeRecovering) {
+		t.Fatalf("expected final seat guard rejection to preserve queued recovering state, got membership=%#v listing=%#v err=%v", membership, listing, err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)

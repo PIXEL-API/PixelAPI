@@ -89,8 +89,12 @@ const (
 	AccountShareModeRoomQueuePerSeat          = 10
 	// 排队成员的保留期限：入队/降级重排队后经过该时长仍未被激活则自动释放。
 	// 前端 queueIdleTimeoutSummary 的「预约最长保留 2 小时」文案与此对齐，改这里要同步改前端。
-	AccountShareModeQueueExpiryDuration           = 2 * time.Hour
-	AccountShareModeDispatchCooldown              = 5 * time.Minute
+	AccountShareModeQueueExpiryDuration = 2 * time.Hour
+	AccountShareModeDispatchCooldown    = 5 * time.Minute
+	// 秒级 429 fallback 仅表示当前请求暂时不可调度，不能据此关闭长期 membership/binding。
+	// 后台恢复任务只对超过该完整窗口的限流执行持久化重排队。
+	AccountShareModeTransientRateLimitGrace       = 30 * time.Second
+	AccountShareModeDefaultRecoveryRetryAfter     = 5
 	AccountShareModeConnectivityTestTimeout       = 90 * time.Second
 	AccountShareModeImageConnectivityTestTimeout  = 10 * time.Minute
 	AccountShareRecommendationDefaultLimit        = 5
@@ -211,6 +215,8 @@ var accountShareModeOpencodeDefaultAllowedModels = []string{
 
 var (
 	ErrAccountShareModeGroupUnbound             = infraerrors.New(http.StatusBadRequest, "ACCOUNT_SHARE_MODE_GROUP_UNBOUND", accountShareModeContextBindingMissingError)
+	ErrAccountShareModeRecovering               = infraerrors.ServiceUnavailable("ACCOUNT_SHARE_MODE_RECOVERING", "account share mode binding is temporarily unavailable")
+	ErrAccountShareMembershipIdleTimeout        = infraerrors.Conflict("ACCOUNT_SHARE_MEMBERSHIP_IDLE_TIMEOUT", "account share membership ended because of idle timeout")
 	ErrAccountShareModeGroupUnavailable         = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_GROUP_UNAVAILABLE", "account share mode group is not configured")
 	ErrAccountSharePrivateGroupUnavailable      = infraerrors.BadRequest("ACCOUNT_SHARE_PRIVATE_GROUP_UNAVAILABLE", "account owner private group is not configured")
 	ErrAccountShareListingNotFound              = infraerrors.NotFound("ACCOUNT_SHARE_LISTING_NOT_FOUND", "account share listing not found")
@@ -292,6 +298,17 @@ var (
 	ErrAccountShareRecommendationInvalid       = infraerrors.BadRequest("ACCOUNT_SHARE_RECOMMENDATION_INVALID", "账号推荐测算参数无效")
 	ErrAccountShareSpendInvalidRange           = infraerrors.BadRequest("ACCOUNT_SHARE_SPEND_INVALID_RANGE", "invalid account share spend range")
 )
+
+// NewAccountShareModeRecoveringError 返回可安全公开的恢复中错误。
+// metadata 只携带重试秒数，避免把账号、membership 或内部阻塞原因暴露给客户端。
+func NewAccountShareModeRecoveringError(retryAfterSeconds int) error {
+	if retryAfterSeconds <= 0 {
+		retryAfterSeconds = AccountShareModeDefaultRecoveryRetryAfter
+	}
+	return ErrAccountShareModeRecovering.WithMetadata(map[string]string{
+		"retry_after": strconv.Itoa(retryAfterSeconds),
+	})
+}
 
 func accountShareModeUnsupportedModelError(requestedModel string) error {
 	requestedModel = strings.TrimSpace(requestedModel)
@@ -1254,7 +1271,6 @@ type AccountShareModeRepository interface {
 	GetActiveMembershipForAPIKey(ctx context.Context, apiKeyID int64) (*AccountShareMembership, *AccountShareListing, error)
 	GetActiveMembershipForRequest(ctx context.Context, userID, apiKeyID, groupID int64) (*AccountShareMembership, *AccountShareListing, error)
 	ActivateNextQueuedMembershipForRequest(ctx context.Context, userID, apiKeyID, groupID int64, afterRank int, now time.Time) (*AccountShareMembership, *AccountShareListing, error)
-	SuspendMembershipForDispatchFailure(ctx context.Context, membershipID int64, failedAt time.Time, cooldownUntil time.Time) (*AccountShareMembership, *AccountShareSeatBillingResult, error)
 	ResolvePolicy(ctx context.Context) (*AccountSharePolicy, error)
 }
 
@@ -4689,6 +4705,11 @@ func (s *AccountShareModeService) ResolveActiveBindingForRequest(ctx context.Con
 			if errors.Is(err, ErrAccountShareListingNotFound) {
 				break
 			}
+			if errors.Is(err, ErrAccountShareModeRecovering) || errors.Is(err, ErrAccountShareMembershipIdleTimeout) {
+				if requestCtx, ok := AccountShareModeRequestFromContext(ctx); ok && requestCtx.state != nil {
+					requestCtx.state.set(userID, apiKeyID, groupID, nil, nil, err)
+				}
+			}
 			return nil, nil, err
 		}
 		if membership == nil || listing == nil {
@@ -4696,6 +4717,13 @@ func (s *AccountShareModeService) ResolveActiveBindingForRequest(ctx context.Con
 			break
 		}
 		if accountShareListingAccountUnavailableAt(listing, now) {
+			if retryAfterSeconds, recovering := accountShareListingShortRateLimitRecovery(listing, now); recovering {
+				recoveryErr := NewAccountShareModeRecoveringError(retryAfterSeconds)
+				if requestCtx, ok := AccountShareModeRequestFromContext(ctx); ok && requestCtx.state != nil {
+					requestCtx.state.set(userID, apiKeyID, groupID, nil, nil, recoveryErr)
+				}
+				return nil, nil, recoveryErr
+			}
 			rebound, err := s.rebindMembershipToHealthyRoomAccount(ctx, membership, now)
 			if err != nil {
 				return nil, nil, err
@@ -4704,12 +4732,12 @@ func (s *AccountShareModeService) ResolveActiveBindingForRequest(ctx context.Con
 				continue
 			}
 			afterRank = membership.QueueRank
-			result, suspended, err := s.suspendMembershipForDispatchFailure(ctx, membership, now)
+			result, suspended, err := s.suspendRecoverableUnavailableMembership(ctx, membership, now)
 			if err != nil {
 				return nil, nil, err
 			}
 			if !suspended {
-				lastErr = ErrNoAvailableAccounts
+				lastErr = NewAccountShareModeRecoveringError(AccountShareModeDefaultRecoveryRetryAfter)
 				break
 			}
 			s.invalidateSeatBillingCaches(result)
@@ -4720,8 +4748,8 @@ func (s *AccountShareModeService) ResolveActiveBindingForRequest(ctx context.Con
 			return nil, nil, err
 		}
 		if ended {
-			afterRank = membership.QueueRank
-			continue
+			lastErr = ErrAccountShareMembershipIdleTimeout
+			break
 		}
 		if requestCtx, ok := AccountShareModeRequestFromContext(ctx); ok && requestCtx.state != nil {
 			requestCtx.state.set(userID, apiKeyID, groupID, membership, listing, nil)
@@ -4791,7 +4819,9 @@ func (s *AccountShareModeService) resolveActiveOrActivateQueuedBinding(ctx conte
 	membership, listing, err = s.repo.ActivateNextQueuedMembershipForRequest(ctx, userID, apiKeyID, groupID, afterRank, now)
 	if err != nil {
 		activationErr := err
-		if !errors.Is(activationErr, ErrAccountShareAPIKeyAlreadyBound) && !errors.Is(activationErr, ErrAccountShareListingNotFound) {
+		if !errors.Is(activationErr, ErrAccountShareAPIKeyAlreadyBound) &&
+			!errors.Is(activationErr, ErrAccountShareListingNotFound) &&
+			!errors.Is(activationErr, ErrAccountShareModeRecovering) {
 			return nil, nil, activationErr
 		}
 		membership, listing, err = s.repo.GetActiveMembershipForRequest(ctx, userID, apiKeyID, groupID)
@@ -4806,25 +4836,7 @@ func (s *AccountShareModeService) resolveActiveOrActivateQueuedBinding(ctx conte
 	return membership, listing, nil
 }
 
-func (s *AccountShareModeService) deferMembershipForDispatchRetry(ctx context.Context, requestCtx AccountShareModeRequestContext, membership *AccountShareMembership, now time.Time) (bool, error) {
-	if s == nil || membership == nil || membership.ID <= 0 {
-		return false, nil
-	}
-	result, suspended, err := s.suspendMembershipForDispatchFailure(ctx, membership, now)
-	if err != nil {
-		return false, err
-	}
-	if !suspended {
-		return false, nil
-	}
-	s.invalidateSeatBillingCaches(result)
-	if requestCtx.state != nil {
-		requestCtx.state.clear()
-	}
-	return true, nil
-}
-
-func (s *AccountShareModeService) suspendMembershipForDispatchFailure(ctx context.Context, membership *AccountShareMembership, now time.Time) (*AccountShareSeatBillingResult, bool, error) {
+func (s *AccountShareModeService) suspendRecoverableUnavailableMembership(ctx context.Context, membership *AccountShareMembership, now time.Time) (*AccountShareSeatBillingResult, bool, error) {
 	if s == nil || s.repo == nil || membership == nil || membership.ID <= 0 {
 		return &AccountShareSeatBillingResult{}, false, nil
 	}
@@ -4836,7 +4848,7 @@ func (s *AccountShareModeService) suspendMembershipForDispatchFailure(ctx contex
 		log.Printf("account_share_mode: dispatch suspension skipped for active membership: membership_id=%d", membership.ID)
 		return &AccountShareSeatBillingResult{}, false, nil
 	}
-	suspended, billing, err := s.repo.SuspendMembershipForDispatchFailure(ctx, membership.ID, now, now.Add(AccountShareModeDispatchCooldown))
+	suspended, billing, err := s.repo.SuspendRecoverableUnavailableMembership(ctx, membership.ID, now)
 	if err != nil {
 		return nil, false, err
 	}
@@ -4901,6 +4913,16 @@ func accountShareListingAccountUnavailableAt(listing *AccountShareListing, now t
 	if listing == nil {
 		return false
 	}
+	if accountShareListingAccountUnavailableWithoutRateLimitAt(listing, now) {
+		return true
+	}
+	return listing.RateLimitResetAt != nil && now.Before(*listing.RateLimitResetAt)
+}
+
+func accountShareListingAccountUnavailableWithoutRateLimitAt(listing *AccountShareListing, now time.Time) bool {
+	if listing == nil {
+		return false
+	}
 	if listing.AccountStatus != "" {
 		if listing.AccountID > 0 && listing.RepresentativeAccountConcurrency <= 0 {
 			return true
@@ -4917,9 +4939,6 @@ func accountShareListingAccountUnavailableAt(listing *AccountShareListing, now t
 	if listing.OverloadUntil != nil && now.Before(*listing.OverloadUntil) {
 		return true
 	}
-	if listing.RateLimitResetAt != nil && now.Before(*listing.RateLimitResetAt) {
-		return true
-	}
 	if listing.TempUnschedulableUntil != nil && now.Before(*listing.TempUnschedulableUntil) {
 		return true
 	}
@@ -4930,6 +4949,25 @@ func accountShareListingAccountUnavailableAt(listing *AccountShareListing, now t
 		return listing.AnthropicQuotaProtectionResetAt == nil || now.Before(*listing.AnthropicQuotaProtectionResetAt)
 	}
 	return false
+}
+
+func accountShareListingShortRateLimitRecovery(listing *AccountShareListing, now time.Time) (int, bool) {
+	if listing == nil ||
+		listing.RateLimitedAt == nil ||
+		listing.RateLimitResetAt == nil ||
+		!now.Before(*listing.RateLimitResetAt) ||
+		accountShareListingAccountUnavailableWithoutRateLimitAt(listing, now) {
+		return 0, false
+	}
+	window := listing.RateLimitResetAt.Sub(*listing.RateLimitedAt)
+	if window <= 0 || window > AccountShareModeTransientRateLimitGrace {
+		return 0, false
+	}
+	retryAfterSeconds := int(math.Ceil(listing.RateLimitResetAt.Sub(now).Seconds()))
+	if retryAfterSeconds <= 0 {
+		retryAfterSeconds = 1
+	}
+	return retryAfterSeconds, true
 }
 
 func accountShareLogTimePtr(value *time.Time) string {

@@ -747,7 +747,49 @@ func TestGatewayServiceAccountShareModeUnsupportedModelDoesNotDeferMembership(t 
 	require.True(t, handled)
 	require.Nil(t, selection)
 	require.ErrorIs(t, err, ErrAccountShareModeUnsupportedModel)
-	require.Equal(t, 0, shareRepo.dispatchFailureCalls)
+	require.Equal(t, 0, shareRepo.recoverableCalls)
+	require.NotNil(t, shareRepo.membership)
+}
+
+func TestGatewayServiceAccountShareModeRequestExclusionDoesNotDeferMembership(t *testing.T) {
+	modeGroupID := int64(61714)
+	consumerUserID := int64(5583)
+	apiKeyID := int64(20106)
+	boundAccount := Account{
+		ID:          416106,
+		Platform:    PlatformAnthropic,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 20,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{"claude-sonnet-4-6": "claude-sonnet-4-6"},
+		},
+	}
+	shareRepo := &accountShareModeRepoStub{
+		membership: &AccountShareMembership{ID: 1, AccountID: boundAccount.ID, ConsumerUserID: consumerUserID, APIKeyID: apiKeyID},
+		listing:    &AccountShareListing{ID: 1, AccountID: boundAccount.ID, OwnerUserID: 1, Status: AccountShareListingStatusActive, AllowedModels: []string{"claude-sonnet-4-6"}},
+	}
+	svc := &GatewayService{
+		accountRepo:             stubOpenAIAccountRepo{accounts: []Account{boundAccount}},
+		accountShareModeService: &AccountShareModeService{repo: shareRepo},
+	}
+	ctx := WithAccountShareModeRequest(context.Background(), consumerUserID, apiKeyID)
+	excludedIDs := map[int64]struct{}{boundAccount.ID: {}}
+
+	selection, handled, err := svc.selectAccountShareModeBoundAccount(
+		ctx,
+		&modeGroupID,
+		"",
+		"claude-sonnet-4-6",
+		excludedIDs,
+	)
+
+	require.True(t, handled)
+	require.Nil(t, selection)
+	require.ErrorIs(t, err, ErrNoAvailableAccounts)
+	require.NotErrorIs(t, err, ErrAccountShareModeGroupUnbound)
+	require.Zero(t, shareRepo.recoverableCalls)
 	require.NotNil(t, shareRepo.membership)
 }
 
@@ -865,7 +907,7 @@ func TestOpenAISelectAccountWithLoadAwareness_AccountShareModeUnsupportedModelDo
 
 	require.Nil(t, selection)
 	require.ErrorIs(t, err, ErrAccountShareModeUnsupportedModel)
-	require.Equal(t, 0, shareRepo.dispatchFailureCalls)
+	require.Equal(t, 0, shareRepo.recoverableCalls)
 	require.NotNil(t, shareRepo.membership)
 }
 
@@ -902,7 +944,54 @@ func TestOpenAISelectAccountWithScheduler_AccountShareModeUnsupportedModelDoesNo
 	require.Nil(t, selection)
 	require.Equal(t, openAIAccountScheduleLayerAccountShareMode, decision.Layer)
 	require.ErrorIs(t, err, ErrAccountShareModeUnsupportedModel)
-	require.Equal(t, 0, shareRepo.dispatchFailureCalls)
+	require.Equal(t, 0, shareRepo.recoverableCalls)
+	require.NotNil(t, shareRepo.membership)
+}
+
+func TestOpenAISelectAccountWithScheduler_RequestExclusionDoesNotDeferMembership(t *testing.T) {
+	modeGroupID := int64(61715)
+	consumerUserID := int64(5584)
+	apiKeyID := int64(20107)
+	boundAccount := Account{
+		ID:          416107,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 20,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{"gpt-4o": "gpt-4o"},
+		},
+	}
+	shareRepo := &accountShareModeRepoStub{
+		membership: &AccountShareMembership{ID: 1, AccountID: boundAccount.ID, ConsumerUserID: consumerUserID, APIKeyID: apiKeyID},
+		listing:    &AccountShareListing{ID: 1, AccountID: boundAccount.ID, OwnerUserID: 1, Status: AccountShareListingStatusActive, AllowedModels: []string{"gpt-4o"}},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:             stubOpenAIAccountRepo{accounts: []Account{boundAccount}},
+		accountShareModeService: &AccountShareModeService{repo: shareRepo},
+	}
+	ctx := WithAccountShareModeRequest(context.Background(), consumerUserID, apiKeyID)
+	excludedIDs := map[int64]struct{}{boundAccount.ID: {}}
+
+	selection, decision, err := svc.selectAccountWithScheduler(
+		ctx,
+		&modeGroupID,
+		"",
+		"",
+		"gpt-4o",
+		excludedIDs,
+		OpenAIUpstreamTransportHTTPSSE,
+		"",
+		"",
+		false,
+	)
+
+	require.Nil(t, selection)
+	require.Equal(t, openAIAccountScheduleLayerAccountShareMode, decision.Layer)
+	require.ErrorIs(t, err, ErrNoAvailableAccounts)
+	require.NotErrorIs(t, err, ErrAccountShareModeGroupUnbound)
+	require.Zero(t, shareRepo.recoverableCalls)
 	require.NotNil(t, shareRepo.membership)
 }
 

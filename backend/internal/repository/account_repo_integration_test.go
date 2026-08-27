@@ -871,7 +871,7 @@ func (s *AccountRepoSuite) TestSetOverloaded() {
 
 func (s *AccountRepoSuite) TestSetRateLimited() {
 	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-rl"})
-	resetAt := time.Date(2025, 6, 15, 14, 0, 0, 0, time.UTC)
+	resetAt := time.Now().UTC().Add(time.Hour)
 
 	s.Require().NoError(s.repo.SetRateLimited(s.ctx, account.ID, resetAt))
 
@@ -880,6 +880,22 @@ func (s *AccountRepoSuite) TestSetRateLimited() {
 	s.Require().NotNil(got.RateLimitedAt)
 	s.Require().NotNil(got.RateLimitResetAt)
 	s.Require().WithinDuration(resetAt, *got.RateLimitResetAt, time.Second)
+	limitedAt := *got.RateLimitedAt
+
+	extendedResetAt := resetAt.Add(time.Hour)
+	s.Require().NoError(s.repo.SetRateLimited(s.ctx, account.ID, extendedResetAt))
+	extended, err := s.repo.GetByID(s.ctx, account.ID)
+	s.Require().NoError(err)
+	s.Require().NotNil(extended.RateLimitedAt)
+	s.Require().NotNil(extended.RateLimitResetAt)
+	s.Require().WithinDuration(limitedAt, *extended.RateLimitedAt, time.Millisecond, "连续限流必须保留本轮首次发生时间")
+	s.Require().WithinDuration(extendedResetAt, *extended.RateLimitResetAt, time.Second)
+
+	s.Require().NoError(s.repo.SetRateLimited(s.ctx, account.ID, resetAt))
+	notShortened, err := s.repo.GetByID(s.ctx, account.ID)
+	s.Require().NoError(err)
+	s.Require().NotNil(notShortened.RateLimitResetAt)
+	s.Require().WithinDuration(extendedResetAt, *notShortened.RateLimitResetAt, time.Second, "较旧响应不能缩短限流截止时间")
 }
 
 func (s *AccountRepoSuite) TestClearRateLimit() {

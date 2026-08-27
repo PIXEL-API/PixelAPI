@@ -2012,25 +2012,13 @@ func (h *GatewayHandler) handleStreamingAwareError(c *gin.Context, status int, e
 }
 
 func (h *GatewayHandler) handleAccountShareModeAnthropicError(c *gin.Context, err error, streamStarted bool) bool {
-	switch {
-	case errors.Is(err, service.ErrAccountShareModeGroupUnbound):
-		h.handleStreamingAwareError(c, http.StatusBadRequest, "invalid_request_error", "该分组未绑定账号", streamStarted)
-		return true
-	case errors.Is(err, service.ErrAccountShareBalanceBelowMinimum):
-		h.handleStreamingAwareError(c, http.StatusForbidden, "permission_error", "账户余额低于共享账号最低准入余额", streamStarted)
-		return true
-	case errors.Is(err, service.ErrAccountSharePerUserConcurrencyExceeded):
-		h.handleStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", "共享账号单用户并发已达上限", streamStarted)
-		return true
-	case errors.Is(err, service.ErrAccountShareModeUnsupportedModel):
-		h.handleStreamingAwareError(c, http.StatusBadRequest, "invalid_request_error", "模型不支持", streamStarted)
-		return true
-	case errors.Is(err, service.ErrAccountShareModeSelection):
-		h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "共享账号暂时不可用，请稍后重试", streamStarted)
-		return true
-	default:
+	details, ok := classifyAccountShareModeHTTPError(err)
+	if !ok {
 		return false
 	}
+	applyAccountShareModeRetryAfter(c, details)
+	h.handleStreamingAwareError(c, details.status, details.anthropicType, details.message, streamStarted)
+	return true
 }
 
 // ensureForwardErrorResponse 在 Forward 返回错误但尚未写响应时补写统一错误响应。

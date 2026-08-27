@@ -1412,8 +1412,31 @@
 
             <!-- Whitelist Mode -->
             <div v-if="modelRestrictionMode === 'whitelist'">
-              <ModelWhitelistSelector v-model="allowedModels" :platform="form.platform" />
-              <p class="text-xs text-gray-500 dark:text-gray-400">
+              <ModelWhitelistSelector
+                v-model="allowedModels"
+                :platform="form.platform"
+                :allowed-options="modelOptions ?? []"
+              />
+              <p
+                v-if="modelOptionsLoading"
+                class="mt-2 text-xs text-gray-500 dark:text-gray-400"
+              >
+                {{ t('admin.accounts.pricedModelsLoading') }}
+              </p>
+              <p
+                v-else-if="modelOptionsLoadError"
+                class="mt-2 text-xs text-red-600 dark:text-red-400"
+                role="alert"
+              >
+                {{ t('admin.accounts.pricedModelsLoadFailed', { message: modelOptionsLoadError }) }}
+              </p>
+              <p
+                v-else-if="modelOptions !== null && modelOptions.length === 0"
+                class="mt-2 text-xs text-amber-600 dark:text-amber-400"
+              >
+                {{ t('admin.accounts.pricedModelsEmpty') }}
+              </p>
+              <p v-else class="text-xs text-gray-500 dark:text-gray-400">
                 {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
                 <span v-if="allowedModels.length === 0">{{
                   t('admin.accounts.supportsAllModels')
@@ -1838,8 +1861,31 @@
 
           <!-- Whitelist Mode -->
           <div v-if="modelRestrictionMode === 'whitelist'">
-            <ModelWhitelistSelector v-model="allowedModels" platform="anthropic" />
-            <p class="text-xs text-gray-500 dark:text-gray-400">
+            <ModelWhitelistSelector
+              v-model="allowedModels"
+              platform="anthropic"
+              :allowed-options="modelOptions ?? []"
+            />
+            <p
+              v-if="modelOptionsLoading"
+              class="mt-2 text-xs text-gray-500 dark:text-gray-400"
+            >
+              {{ t('admin.accounts.pricedModelsLoading') }}
+            </p>
+            <p
+              v-else-if="modelOptionsLoadError"
+              class="mt-2 text-xs text-red-600 dark:text-red-400"
+              role="alert"
+            >
+              {{ t('admin.accounts.pricedModelsLoadFailed', { message: modelOptionsLoadError }) }}
+            </p>
+            <p
+              v-else-if="modelOptions !== null && modelOptions.length === 0"
+              class="mt-2 text-xs text-amber-600 dark:text-amber-400"
+            >
+              {{ t('admin.accounts.pricedModelsEmpty') }}
+            </p>
+            <p v-else class="text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
               <span v-if="allowedModels.length === 0">{{ t('admin.accounts.supportsAllModels') }}</span>
             </p>
@@ -2086,27 +2132,33 @@
             <ModelWhitelistSelector
               v-model="allowedModels"
               :platform="form.platform"
-              :allowed-options="isUserScope ? (userModelOptions ?? []) : undefined"
+              :allowed-options="modelOptions ?? []"
               :allow-custom="!isUserScope"
             />
             <p
-              v-if="isUserScope && userModelOptionsLoading"
+              v-if="modelOptionsLoading"
               class="mt-2 text-xs text-gray-500 dark:text-gray-400"
             >
-              {{ t('admin.accounts.userModelOptionsLoading') }}
+              {{ t(isUserScope
+                ? 'admin.accounts.userModelOptionsLoading'
+                : 'admin.accounts.pricedModelsLoading') }}
             </p>
             <p
-              v-else-if="isUserScope && userModelOptionsLoadError"
+              v-else-if="modelOptionsLoadError"
               class="mt-2 text-xs text-red-600 dark:text-red-400"
               role="alert"
             >
-              {{ t('admin.accounts.userModelOptionsLoadFailed', { message: userModelOptionsLoadError }) }}
+              {{ t(isUserScope
+                ? 'admin.accounts.userModelOptionsLoadFailed'
+                : 'admin.accounts.pricedModelsLoadFailed', { message: modelOptionsLoadError }) }}
             </p>
             <p
-              v-else-if="isUserScope && userModelOptions !== null && userModelOptions.length === 0"
+              v-else-if="modelOptions !== null && modelOptions.length === 0"
               class="mt-2 text-xs text-amber-600 dark:text-amber-400"
             >
-              {{ t('admin.accounts.userModelOptionsEmpty') }}
+              {{ t(isUserScope
+                ? 'admin.accounts.userModelOptionsEmpty'
+                : 'admin.accounts.pricedModelsEmpty') }}
             </p>
             <p
               v-else-if="isUserScope && allowedModels.length === 0"
@@ -3491,9 +3543,7 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useAdminSettingsStore } from '@/stores/adminSettings'
 import {
-  claudeModels,
   getPresetMappingsByPlatform,
-  getModelsByPlatform,
   commonErrorCodes,
   buildModelMappingObject,
   fetchAntigravityDefaultMappings,
@@ -3738,10 +3788,11 @@ const modelMappings = ref<ModelMapping[]>([])
 const openAICompactModelMappings = ref<ModelMapping[]>([])
 const modelRestrictionMode = ref<'whitelist' | 'mapping'>('whitelist')
 const allowedModels = ref<string[]>([])
-const userModelOptions = ref<string[] | null>(null)
-const userModelOptionsLoading = ref(false)
-const userModelOptionsLoadError = ref('')
-let userModelOptionsRequestVersion = 0
+const modelOptions = ref<string[] | null>(null)
+const modelOptionsLoading = ref(false)
+const modelOptionsLoadError = ref('')
+let modelOptionsRequestVersion = 0
+let loadedModelOptionsContext = ''
 const DEFAULT_POOL_MODE_RETRY_COUNT = 3
 const MAX_POOL_MODE_RETRY_COUNT = 10
 const poolModeEnabled = ref(false)
@@ -3988,47 +4039,60 @@ const form = reactive({
   expires_at: null as number | null
 })
 
-const loadUserModelOptions = async (preserveSelectionForValidation = false) => {
-  const requestVersion = ++userModelOptionsRequestVersion
-  userModelOptionsLoadError.value = ''
+const loadModelOptions = async (preserveSelectionForValidation = false) => {
+  const requestVersion = ++modelOptionsRequestVersion
+  modelOptionsLoadError.value = ''
 
-  if (!props.show || !isUserScope.value) {
-    userModelOptions.value = null
-    userModelOptionsLoading.value = false
+  if (
+    !props.show ||
+    (!isUserScope.value && (form.platform === 'antigravity' || form.platform === 'opencode'))
+  ) {
+    modelOptions.value = null
+    modelOptionsLoading.value = false
+    loadedModelOptionsContext = ''
     return
   }
 
   const platform = form.platform
+  const userScope = isUserScope.value
+  const context = `${userScope ? 'user' : 'admin'}:${platform}`
+  const hadLoadedCurrentOptions = loadedModelOptionsContext === context
   const previousSelection = [...allowedModels.value]
-  userModelOptions.value = null
-  userModelOptionsLoading.value = true
+  modelOptions.value = null
+  modelOptionsLoading.value = true
   try {
-    const result = await accountsAPI.getModelOptions(platform)
-    if (requestVersion !== userModelOptionsRequestVersion) return
+    const result = userScope
+      ? await accountsAPI.getModelOptions(platform)
+      : await adminAPI.channels.getPricedModelOptions([platform])
+    if (requestVersion !== modelOptionsRequestVersion) return
     const models = Array.from(
       new Set((result.models || []).map(model => model.trim()).filter(Boolean))
     )
-    userModelOptions.value = models
+    modelOptions.value = models
+    loadedModelOptionsContext = context
     const allowedSet = new Set(models)
     const retainedSelection = previousSelection.filter(model => allowedSet.has(model))
-    // 最终提交前保留用户的原始选择，让校验明确指出已失效模型，禁止静默裁剪。
-    // 普通首次加载没有历史选择时，才默认勾选当前服务端目录。
-    allowedModels.value = preserveSelectionForValidation
-      ? previousSelection
-      : previousSelection.length > 0
-        ? retainedSelection
-        : [...models]
+    // 首次加载（包括在初始请求完成前直接导入 RT）必须默认全选当前定价并集。
+    // 已加载后的提交前刷新保留原始选择，让用户端校验可以明确报告失效模型。
+    allowedModels.value = !hadLoadedCurrentOptions && previousSelection.length === 0
+      ? [...models]
+      : preserveSelectionForValidation
+        ? previousSelection
+        : retainedSelection
   } catch (error: unknown) {
-    if (requestVersion !== userModelOptionsRequestVersion) return
-    userModelOptions.value = []
+    if (requestVersion !== modelOptionsRequestVersion) return
+    modelOptions.value = []
     allowedModels.value = []
-    userModelOptionsLoadError.value = extractApiErrorMessage(
+    loadedModelOptionsContext = ''
+    modelOptionsLoadError.value = extractApiErrorMessage(
       error,
-      t('admin.accounts.userModelOptionsLoadFailedDefault')
+      t(userScope
+        ? 'admin.accounts.userModelOptionsLoadFailedDefault'
+        : 'admin.accounts.pricedModelsLoadFailedDefault')
     )
   } finally {
-    if (requestVersion === userModelOptionsRequestVersion) {
-      userModelOptionsLoading.value = false
+    if (requestVersion === modelOptionsRequestVersion) {
+      modelOptionsLoading.value = false
     }
   }
 }
@@ -4036,13 +4100,13 @@ const loadUserModelOptions = async (preserveSelectionForValidation = false) => {
 const validateUserModelSelection = (): boolean => {
   if (!isUserScope.value) return true
 
-  if (userModelOptionsLoading.value || userModelOptions.value === null) {
+  if (modelOptionsLoading.value || modelOptions.value === null) {
     appStore.showError(t('admin.accounts.userModelOptionsNotReady'))
     return false
   }
-  if (userModelOptionsLoadError.value) {
+  if (modelOptionsLoadError.value) {
     appStore.showError(
-      t('admin.accounts.userModelOptionsLoadFailed', { message: userModelOptionsLoadError.value })
+      t('admin.accounts.userModelOptionsLoadFailed', { message: modelOptionsLoadError.value })
     )
     return false
   }
@@ -4051,7 +4115,7 @@ const validateUserModelSelection = (): boolean => {
     return false
   }
 
-  const allowedSet = new Set(userModelOptions.value)
+  const allowedSet = new Set(modelOptions.value)
   const invalidModels = allowedModels.value.filter(model => !allowedSet.has(model))
   if (invalidModels.length > 0) {
     appStore.showError(
@@ -4060,6 +4124,42 @@ const validateUserModelSelection = (): boolean => {
     return false
   }
   return true
+}
+
+// 所有会把当前模型设置写入凭证的入口，都先同步当前渠道定价模型并集。
+// 这同时覆盖用户在弹窗初始请求完成前直接粘贴 RT、AT、Cookie 等凭证的场景。
+const ensureModelOptionsReady = async (): Promise<boolean> => {
+  const adminUsesCurrentWhitelist = (
+    accountCategory.value === 'apikey' ||
+    accountCategory.value === 'bedrock' ||
+    ((form.platform === 'openai' || form.platform === 'grok') &&
+      accountCategory.value === 'oauth-based')
+  )
+  const requiresModelOptions = isUserScope.value || (
+    adminUsesCurrentWhitelist &&
+    form.platform !== 'antigravity' &&
+    form.platform !== 'opencode' &&
+    modelRestrictionMode.value === 'whitelist' &&
+    !isOpenAIModelRestrictionDisabled.value
+  )
+  if (!requiresModelOptions) return true
+
+  await loadModelOptions(true)
+  if (modelOptionsLoading.value || modelOptions.value === null) {
+    appStore.showError(t(isUserScope.value
+      ? 'admin.accounts.userModelOptionsNotReady'
+      : 'admin.accounts.pricedModelsLoading'))
+    return false
+  }
+  if (modelOptionsLoadError.value) {
+    appStore.showError(
+      t(isUserScope.value
+        ? 'admin.accounts.userModelOptionsLoadFailed'
+        : 'admin.accounts.pricedModelsLoadFailed', { message: modelOptionsLoadError.value })
+    )
+    return false
+  }
+  return validateUserModelSelection()
 }
 
 type UserOpenAIAccountLevelOption = {
@@ -4275,8 +4375,8 @@ watch(
         codex5hLimitPercent.value = CODEX_QUOTA_DEFAULT_LIMIT_PERCENT
         codex7dLimitPercent.value = CODEX_QUOTA_DEFAULT_LIMIT_PERCENT
       }
-      // Modal opened - fill related models. User scope waits for the server-side priced-model union.
-      allowedModels.value = isUserScope.value ? [] : [...getModelsByPlatform(form.platform)]
+      // 模型目录由渠道定价接口加载；初始阶段保持空值，成功后统一默认全选。
+      allowedModels.value = []
       // Antigravity: 默认使用映射模式并填充默认映射
       if (form.platform === 'antigravity') {
         antigravityModelRestrictionMode.value = 'mapping'
@@ -4377,6 +4477,9 @@ watch(
     // Clear model-related settings
     allowedModels.value = []
     modelMappings.value = []
+    modelOptions.value = null
+    modelOptionsLoadError.value = ''
+    loadedModelOptionsContext = ''
     // Antigravity: 默认使用映射模式并填充默认映射
     if (newPlatform === 'antigravity') {
       antigravityModelRestrictionMode.value = 'mapping'
@@ -4452,7 +4555,7 @@ watch(
 watch(
   [() => props.show, isUserScope, () => form.platform],
   () => {
-    void loadUserModelOptions()
+    void loadModelOptions()
   },
   { immediate: true }
 )
@@ -4527,21 +4630,6 @@ const handleSelectGeminiOAuthType = (oauthType: 'code_assist' | 'google_one' | '
   }
   geminiOAuthType.value = oauthType
 }
-
-// 管理员账号可使用本地预置模型；用户账号的白名单必须来自服务端当前定价目录。
-// 用户作用域不能在这里回填 getModelsByPlatform，否则切换平台时会把已同步的白名单
-// 短暂覆盖成过期静态全集，并在 OAuth 提交时把旧模型发送给后端。
-watch(
-  [modelRestrictionMode, () => form.platform],
-  ([newMode]) => {
-    if (newMode !== 'whitelist') return
-    if (isUserScope.value) {
-      void loadUserModelOptions()
-      return
-    }
-    allowedModels.value = [...getModelsByPlatform(form.platform)]
-  }
-)
 
 watch(
   [antigravityModelRestrictionMode, () => form.platform],
@@ -4907,7 +4995,11 @@ const resetForm = () => {
   modelMappings.value = []
   openAICompactModelMappings.value = []
   modelRestrictionMode.value = 'whitelist'
-  allowedModels.value = isUserScope.value ? [] : [...claudeModels] // User scope waits for priced-model options.
+  allowedModels.value = []
+  modelOptions.value = null
+  modelOptionsLoading.value = false
+  modelOptionsLoadError.value = ''
+  loadedModelOptionsContext = ''
 
   antigravityModelRestrictionMode.value = 'mapping'
   antigravityWhitelistModels.value = []
@@ -5182,7 +5274,7 @@ const handleSubmit = async () => {
     appStore.showError(t('userAccounts.typeNotAllowed'))
     return
   }
-  if (!validateUserModelSelection()) {
+  if (!(await ensureModelOptionsReady())) {
     return
   }
   if (isUserScope.value && form.platform === 'openai') {
@@ -5721,6 +5813,8 @@ const handleOpenAIImportCodexSession = async (content: string) => {
     return
   }
 
+  if (!(await ensureModelOptionsReady())) return
+
   const credentialExtras = buildOpenAICodexImportCredentialExtras()
   if (credentialExtras === null) return
 
@@ -5801,6 +5895,8 @@ const handleOpenAIBatchRT = async (refreshTokenInput: string, clientId?: string)
     oauthClient.error.value = t('admin.accounts.oauth.openai.pleaseEnterRefreshToken')
     return
   }
+
+  if (!(await ensureModelOptionsReady())) return
 
   oauthClient.loading.value = true
   oauthClient.error.value = ''
@@ -5906,6 +6002,8 @@ const handleOpenAIImportCodexPAT = async (accessToken: string) => {
     return
   }
 
+  if (!(await ensureModelOptionsReady())) return
+
   const credentialExtras = buildOpenAICodexImportCredentialExtras()
   if (credentialExtras === null) return
 
@@ -5955,6 +6053,8 @@ const handleOpenAIImportAT = async (accessTokenInput: string) => {
     oauthClient.error.value = t('admin.accounts.oauth.openai.pleaseEnterAccessToken')
     return
   }
+
+  if (!(await ensureModelOptionsReady())) return
 
   oauthClient.loading.value = true
   oauthClient.error.value = ''
@@ -6042,6 +6142,8 @@ const handleAntigravityValidateRT = async (refreshTokenInput: string) => {
     antigravityOAuth.error.value = t('admin.accounts.oauth.antigravity.pleaseEnterRefreshToken')
     return
   }
+
+  if (!(await ensureModelOptionsReady())) return
 
   antigravityOAuth.loading.value = true
   antigravityOAuth.error.value = ''
@@ -6188,6 +6290,8 @@ const handleGrokValidateRT = async (refreshTokenInput: string) => {
     return
   }
 
+  if (!(await ensureModelOptionsReady())) return
+
   grokOAuth.loading.value = true
   grokOAuth.error.value = ''
 
@@ -6273,6 +6377,8 @@ const handleGrokImportSSO = async (ssoInput: string) => {
     .filter((token) => token)
   if (ssoTokens.length === 0) return
 
+  if (!(await ensureModelOptionsReady())) return
+
   grokOAuth.loading.value = true
   grokOAuth.error.value = ''
 
@@ -6347,6 +6453,8 @@ const handleGrokAuthorizePassword = async (input: { email: string; password: str
     grokOAuth.error.value = t('admin.accounts.oauth.grok.passwordAuthDisabled')
     return
   }
+
+  if (!(await ensureModelOptionsReady())) return
 
   const tokenInfo = await grokOAuth.authorizePassword(input.email, input.password, form.proxy_id)
   if (!tokenInfo) return
@@ -6593,18 +6701,10 @@ const handleAnthropicExchange = async (authCode: string) => {
   }
 }
 
-// 在兑换一次性 OAuth code 之前重新读取当前平台的服务端白名单。
-// OAuth 页面可能打开较长时间，不能依赖进入第二步时的旧快照。
-const syncUserModelOptionsBeforeOAuthExchange = async (): Promise<boolean> => {
-  if (!isUserScope.value) return true
-  await loadUserModelOptions(true)
-  return validateUserModelSelection()
-}
-
 // 主入口：根据平台路由到对应处理函数
 const handleExchangeCode = async () => {
   if (!validateUserOAuthProxySelection()) return
-  if (!(await syncUserModelOptionsBeforeOAuthExchange())) return
+  if (!(await ensureModelOptionsReady())) return
   const authCode = oauthFlowRef.value?.authCode || ''
 
   switch (form.platform) {
@@ -6633,6 +6733,8 @@ const handleCookieAuth = async (sessionKey: string) => {
       oauth.error.value = t('admin.accounts.oauth.pleaseEnterSessionKey')
       return
     }
+
+    if (!(await ensureModelOptionsReady())) return
 
     const tempUnschedPayload = tempUnschedEnabled.value
       ? buildTempUnschedRules(tempUnschedRules.value)

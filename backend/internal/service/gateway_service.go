@@ -2467,87 +2467,73 @@ func (s *GatewayService) selectAccountShareModeBoundAccount(ctx context.Context,
 	var listing *AccountShareListing
 	var account *Account
 	var lastErr error
-	for attempt := 0; attempt < AccountShareModeQueueMaxItems; attempt++ {
-		var err error
-		membership, listing, err = s.accountShareModeService.ResolveActiveBindingForRequest(ctx, reqCtx.UserID, reqCtx.APIKeyID, *groupID)
+	var err error
+	membership, listing, err = s.accountShareModeService.ResolveActiveBindingForRequest(ctx, reqCtx.UserID, reqCtx.APIKeyID, *groupID)
+	if err != nil {
+		return nil, true, err
+	}
+	if membership == nil || listing == nil {
+		return nil, true, ErrAccountShareModeGroupUnbound
+	}
+	accountID := membership.AccountID
+	if accountID <= 0 {
+		return nil, true, ErrNoAvailableAccounts
+	}
+	retryCurrentMembership := false
+	if excludedIDs != nil {
+		if _, excluded := excludedIDs[accountID]; excluded {
+			lastErr = ErrNoAvailableAccounts
+			retryCurrentMembership = true
+		}
+	}
+	if !retryCurrentMembership && s.userRepo != nil {
+		user, err := s.userRepo.GetByID(ctx, reqCtx.UserID)
 		if err != nil {
 			return nil, true, err
 		}
-		if membership == nil || listing == nil {
-			return nil, true, ErrAccountShareModeGroupUnbound
+		// 号主自用在 join 阶段已豁免余额校验，dispatch 路径保持一致。
+		if !IsAccountShareModeOwnerSelfUse(membership, listing) && user.Balance < listing.MinBalanceRequired {
+			lastErr = ErrAccountShareBalanceBelowMinimum
+			retryCurrentMembership = true
 		}
-		accountID := membership.AccountID
-		if accountID <= 0 {
-			return nil, true, ErrNoAvailableAccounts
+	}
+	if !retryCurrentMembership {
+		account, err = s.accountRepo.GetByID(ctx, accountID)
+		if err != nil {
+			return nil, true, err
 		}
-		retryCurrentMembership := false
-		if excludedIDs != nil {
-			if _, excluded := excludedIDs[accountID]; excluded {
-				lastErr = ErrNoAvailableAccounts
-				retryCurrentMembership = true
-			}
-		}
-		if !retryCurrentMembership && s.userRepo != nil {
-			user, err := s.userRepo.GetByID(ctx, reqCtx.UserID)
-			if err != nil {
-				return nil, true, err
-			}
-			// 号主自用在 join 阶段已豁免余额校验，dispatch 路径保持一致。
-			if !IsAccountShareModeOwnerSelfUse(membership, listing) && user.Balance < listing.MinBalanceRequired {
-				lastErr = ErrAccountShareBalanceBelowMinimum
-				retryCurrentMembership = true
-			}
-		}
-		if !retryCurrentMembership {
-			account, err = s.accountRepo.GetByID(ctx, accountID)
-			if err != nil {
-				return nil, true, err
-			}
-			if account == nil || account.ID != accountID || account.Platform != PlatformAnthropic || account.Type != AccountTypeOAuth || !s.isAccountSchedulableForSelection(account) {
-				lastErr = ErrNoAvailableAccounts
-				retryCurrentMembership = true
-			}
-		}
-		if !retryCurrentMembership && requestedModel != "" && !accountShareListingAllowsModel(listing, requestedModel) {
-			return nil, true, accountShareModeUnsupportedModelError(requestedModel)
-		}
-		if !retryCurrentMembership && requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, account, requestedModel) {
-			return nil, true, accountShareModeUnsupportedModelError(requestedModel)
-		}
-		if !retryCurrentMembership && !s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) {
+		if account == nil || account.ID != accountID || account.Platform != PlatformAnthropic || account.Type != AccountTypeOAuth || !s.isAccountSchedulableForSelection(account) {
 			lastErr = ErrNoAvailableAccounts
 			retryCurrentMembership = true
 		}
-		if !retryCurrentMembership && !s.isAccountSchedulableForQuota(account) {
-			lastErr = ErrNoAvailableAccounts
-			retryCurrentMembership = true
+	}
+	if !retryCurrentMembership && requestedModel != "" && !accountShareListingAllowsModel(listing, requestedModel) {
+		return nil, true, accountShareModeUnsupportedModelError(requestedModel)
+	}
+	if !retryCurrentMembership && requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, account, requestedModel) {
+		return nil, true, accountShareModeUnsupportedModelError(requestedModel)
+	}
+	if !retryCurrentMembership && !s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) {
+		lastErr = ErrNoAvailableAccounts
+		retryCurrentMembership = true
+	}
+	if !retryCurrentMembership && !s.isAccountSchedulableForQuota(account) {
+		lastErr = ErrNoAvailableAccounts
+		retryCurrentMembership = true
+	}
+	if !retryCurrentMembership && !s.isAccountSchedulableForWindowCost(ctx, account, false) {
+		lastErr = ErrNoAvailableAccounts
+		retryCurrentMembership = true
+	}
+	if !retryCurrentMembership && !s.isAccountSchedulableForRPM(ctx, account, false) {
+		lastErr = ErrNoAvailableAccounts
+		retryCurrentMembership = true
+	}
+	if retryCurrentMembership {
+		if lastErr != nil {
+			return nil, true, lastErr
 		}
-		if !retryCurrentMembership && !s.isAccountSchedulableForWindowCost(ctx, account, false) {
-			lastErr = ErrNoAvailableAccounts
-			retryCurrentMembership = true
-		}
-		if !retryCurrentMembership && !s.isAccountSchedulableForRPM(ctx, account, false) {
-			lastErr = ErrNoAvailableAccounts
-			retryCurrentMembership = true
-		}
-		if retryCurrentMembership {
-			now := time.Now().UTC()
-			deferred, err := s.accountShareModeService.deferMembershipForDispatchRetry(ctx, reqCtx, membership, now)
-			if err != nil {
-				return nil, true, err
-			}
-			if !deferred {
-				if lastErr != nil {
-					return nil, true, lastErr
-				}
-				return nil, true, ErrNoAvailableAccounts
-			}
-			membership = nil
-			listing = nil
-			account = nil
-			continue
-		}
-		break
+		return nil, true, ErrNoAvailableAccounts
 	}
 	if membership == nil || listing == nil || account == nil {
 		if lastErr != nil {

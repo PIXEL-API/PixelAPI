@@ -107,24 +107,24 @@
         <ModelWhitelistSelector
           v-model="allowedModels"
           :platform="account.platform"
-          :allowed-options="userModelOptions ?? []"
+          :allowed-options="modelOptions ?? []"
           :allow-custom="false"
         />
         <p
-          v-if="userModelOptionsLoading"
+          v-if="modelOptionsLoading"
           class="mt-2 text-xs text-gray-500 dark:text-gray-400"
         >
           {{ t('admin.accounts.userModelOptionsLoading') }}
         </p>
         <p
-          v-else-if="userModelOptionsLoadError"
+          v-else-if="modelOptionsLoadError"
           class="mt-2 text-xs text-red-600 dark:text-red-400"
           role="alert"
         >
-          {{ t('admin.accounts.userModelOptionsLoadFailed', { message: userModelOptionsLoadError }) }}
+          {{ t('admin.accounts.userModelOptionsLoadFailed', { message: modelOptionsLoadError }) }}
         </p>
         <p
-          v-else-if="userModelOptions !== null && userModelOptions.length === 0"
+          v-else-if="modelOptions !== null && modelOptions.length === 0"
           class="mt-2 text-xs text-amber-600 dark:text-amber-400"
         >
           {{ t('admin.accounts.userModelOptionsEmpty') }}
@@ -260,7 +260,20 @@
 
             <!-- Whitelist Mode -->
             <div v-if="modelRestrictionMode === 'whitelist'">
-              <ModelWhitelistSelector v-model="allowedModels" :platform="account?.platform || 'anthropic'" />
+              <ModelWhitelistSelector
+                v-model="allowedModels"
+                :platform="account?.platform || 'anthropic'"
+                :allowed-options="modelOptions ?? []"
+              />
+              <p v-if="modelOptionsLoading" class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.accounts.pricedModelsLoading') }}
+              </p>
+              <p v-else-if="modelOptionsLoadError" class="mt-2 text-xs text-red-600 dark:text-red-400" role="alert">
+                {{ t('admin.accounts.pricedModelsLoadFailed', { message: modelOptionsLoadError }) }}
+              </p>
+              <p v-else-if="modelOptions !== null && modelOptions.length === 0" class="mt-2 text-xs text-amber-600 dark:text-amber-400">
+                {{ t('admin.accounts.pricedModelsEmpty') }}
+              </p>
               <p class="text-xs text-gray-500 dark:text-gray-400">
                 {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
                 <span v-if="allowedModels.length === 0">{{
@@ -679,7 +692,20 @@
 
           <!-- Whitelist Mode -->
           <div v-if="modelRestrictionMode === 'whitelist'">
-            <ModelWhitelistSelector v-model="allowedModels" :platform="account?.platform || 'anthropic'" />
+            <ModelWhitelistSelector
+              v-model="allowedModels"
+              :platform="account?.platform || 'anthropic'"
+              :allowed-options="modelOptions ?? []"
+            />
+            <p v-if="modelOptionsLoading" class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.pricedModelsLoading') }}
+            </p>
+            <p v-else-if="modelOptionsLoadError" class="mt-2 text-xs text-red-600 dark:text-red-400" role="alert">
+              {{ t('admin.accounts.pricedModelsLoadFailed', { message: modelOptionsLoadError }) }}
+            </p>
+            <p v-else-if="modelOptions !== null && modelOptions.length === 0" class="mt-2 text-xs text-amber-600 dark:text-amber-400">
+              {{ t('admin.accounts.pricedModelsEmpty') }}
+            </p>
             <p class="text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
               <span v-if="allowedModels.length === 0">{{
@@ -891,7 +917,20 @@
 
           <!-- Whitelist Mode -->
           <div v-if="modelRestrictionMode === 'whitelist'">
-            <ModelWhitelistSelector v-model="allowedModels" :platform="account?.platform || 'anthropic'" />
+            <ModelWhitelistSelector
+              v-model="allowedModels"
+              :platform="account?.platform || 'anthropic'"
+              :allowed-options="modelOptions ?? []"
+            />
+            <p v-if="modelOptionsLoading" class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.pricedModelsLoading') }}
+            </p>
+            <p v-else-if="modelOptionsLoadError" class="mt-2 text-xs text-red-600 dark:text-red-400" role="alert">
+              {{ t('admin.accounts.pricedModelsLoadFailed', { message: modelOptionsLoadError }) }}
+            </p>
+            <p v-else-if="modelOptions !== null && modelOptions.length === 0" class="mt-2 text-xs text-amber-600 dark:text-amber-400">
+              {{ t('admin.accounts.pricedModelsEmpty') }}
+            </p>
             <p class="text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
               <span v-if="allowedModels.length === 0">{{
@@ -1113,7 +1152,20 @@
 
           <!-- Whitelist Mode -->
           <div v-if="modelRestrictionMode === 'whitelist'">
-            <ModelWhitelistSelector v-model="allowedModels" platform="anthropic" />
+            <ModelWhitelistSelector
+              v-model="allowedModels"
+              platform="anthropic"
+              :allowed-options="modelOptions ?? []"
+            />
+            <p v-if="modelOptionsLoading" class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.pricedModelsLoading') }}
+            </p>
+            <p v-else-if="modelOptionsLoadError" class="mt-2 text-xs text-red-600 dark:text-red-400" role="alert">
+              {{ t('admin.accounts.pricedModelsLoadFailed', { message: modelOptionsLoadError }) }}
+            </p>
+            <p v-else-if="modelOptions !== null && modelOptions.length === 0" class="mt-2 text-xs text-amber-600 dark:text-amber-400">
+              {{ t('admin.accounts.pricedModelsEmpty') }}
+            </p>
             <p class="text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
               <span v-if="allowedModels.length === 0">{{ t('admin.accounts.supportsAllModels') }}</span>
@@ -2563,6 +2615,10 @@ import {
 } from '@/components/account/personalAccountTemplate'
 import { formatDateTime, formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
 import { extractApiErrorMessage, extractI18nErrorMessage } from '@/utils/apiError'
+import {
+  extractAccountMutationVersionChallenge,
+  isConfirmedAccountMutationPayload
+} from '@/utils/accountMutationGuard'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
 import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
 import { openAIAccountLevelLabel, openAIAccountLevelOptions, selectableOpenAIAccountLevels } from '@/utils/openaiAccountLevels'
@@ -2758,39 +2814,65 @@ const modelMappings = ref<ModelMapping[]>([])
 const openAICompactModelMappings = ref<ModelMapping[]>([])
 const modelRestrictionMode = ref<'whitelist' | 'mapping'>('whitelist')
 const allowedModels = ref<string[]>([])
-const userModelOptions = ref<string[] | null>(null)
-const userModelOptionsLoading = ref(false)
-const userModelOptionsLoadError = ref('')
-let userModelOptionsRequestVersion = 0
+const modelOptions = ref<string[] | null>(null)
+const modelOptionsLoading = ref(false)
+const modelOptionsLoadError = ref('')
+let modelOptionsRequestVersion = 0
 
-const loadUserModelOptions = async () => {
-  const requestVersion = ++userModelOptionsRequestVersion
-  userModelOptionsLoadError.value = ''
+const canLoadPricedModelOptions = computed(() => {
+  const account = props.account
+  if (isUserScope.value || !account) return false
+  if (modelRestrictionMode.value !== 'whitelist') return false
+  if (account.platform === 'antigravity') return false
+  if (account.platform === 'openai' && openaiPassthroughEnabled.value) return false
+  return account.type === 'apikey' ||
+    account.type === 'bedrock' ||
+    account.type === 'service_account' ||
+    ((account.platform === 'openai' || account.platform === 'grok') && account.type === 'oauth')
+})
 
-  if (!props.show || !canUserManageModelWhitelist.value || !props.account) {
-    userModelOptions.value = null
-    userModelOptionsLoading.value = false
+const loadModelOptions = async () => {
+  const requestVersion = ++modelOptionsRequestVersion
+  const account = props.account
+  const userScope = isUserScope.value
+  const canLoad = userScope
+    ? canUserManageModelWhitelist.value
+    : canLoadPricedModelOptions.value
+  modelOptionsLoadError.value = ''
+
+  if (!props.show || !canLoad || !account) {
+    modelOptions.value = null
+    modelOptionsLoading.value = false
     return
   }
 
-  userModelOptions.value = null
-  userModelOptionsLoading.value = true
+  modelOptions.value = null
+  modelOptionsLoading.value = true
   try {
-    const result = await accountsAPI.getModelOptions(props.account.platform)
-    if (requestVersion !== userModelOptionsRequestVersion) return
-    userModelOptions.value = Array.from(
+    const result = userScope
+      ? await accountsAPI.getModelOptions(account.platform)
+      : await adminAPI.channels.getPricedModelOptions([account.platform])
+    if (requestVersion !== modelOptionsRequestVersion) return
+    modelOptions.value = Array.from(
       new Set((result.models || []).map(model => model.trim()).filter(Boolean))
     )
   } catch (error: unknown) {
-    if (requestVersion !== userModelOptionsRequestVersion) return
-    userModelOptions.value = []
-    userModelOptionsLoadError.value = extractApiErrorMessage(
+    if (requestVersion !== modelOptionsRequestVersion) return
+    modelOptions.value = []
+    modelOptionsLoadError.value = extractApiErrorMessage(
       error,
-      t('admin.accounts.userModelOptionsLoadFailedDefault')
+      t(userScope
+        ? 'admin.accounts.userModelOptionsLoadFailedDefault'
+        : 'admin.accounts.pricedModelsLoadFailedDefault')
     )
+    if (!userScope) {
+      appStore.showError(
+        t('admin.accounts.pricedModelsLoadFailed', { message: modelOptionsLoadError.value })
+      )
+    }
   } finally {
-    if (requestVersion === userModelOptionsRequestVersion) {
-      userModelOptionsLoading.value = false
+    if (requestVersion === modelOptionsRequestVersion) {
+      modelOptionsLoading.value = false
     }
   }
 }
@@ -2798,13 +2880,13 @@ const loadUserModelOptions = async () => {
 const validateUserModelSelection = (): boolean => {
   if (!canUserManageModelWhitelist.value) return true
 
-  if (userModelOptionsLoading.value || userModelOptions.value === null) {
+  if (modelOptionsLoading.value || modelOptions.value === null) {
     appStore.showError(t('admin.accounts.userModelOptionsNotReady'))
     return false
   }
-  if (userModelOptionsLoadError.value) {
+  if (modelOptionsLoadError.value) {
     appStore.showError(
-      t('admin.accounts.userModelOptionsLoadFailed', { message: userModelOptionsLoadError.value })
+      t('admin.accounts.userModelOptionsLoadFailed', { message: modelOptionsLoadError.value })
     )
     return false
   }
@@ -2813,7 +2895,7 @@ const validateUserModelSelection = (): boolean => {
     return false
   }
 
-  const allowedSet = new Set(userModelOptions.value)
+  const allowedSet = new Set(modelOptions.value)
   const invalidModels = allowedModels.value.filter(model => !allowedSet.has(model))
   if (invalidModels.length > 0) {
     appStore.showError(
@@ -2826,7 +2908,7 @@ const validateUserModelSelection = (): boolean => {
 
 const syncUserModelOptionsBeforeSubmit = async (): Promise<boolean> => {
   if (!canUserManageModelWhitelist.value) return true
-  await loadUserModelOptions()
+  await loadModelOptions()
   return validateUserModelSelection()
 }
 const DEFAULT_POOL_MODE_RETRY_COUNT = 3
@@ -3678,9 +3760,16 @@ watch(
 )
 
 watch(
-  [() => props.show, canUserManageModelWhitelist, () => props.account?.platform],
+  [
+    () => props.show,
+    isUserScope,
+    canUserManageModelWhitelist,
+    canLoadPricedModelOptions,
+    () => props.account?.platform,
+    () => props.account?.type
+  ],
   () => {
-    void loadUserModelOptions()
+    void loadModelOptions()
   },
   { immediate: true }
 )
@@ -4278,7 +4367,21 @@ const submitUpdateAccount = async (accountID: number, updatePayload: Record<stri
       return
     }
     const reasonCode = typeof error?.reason === 'string' ? error.reason : ''
+    if (!isUserScope.value && reasonCode === 'ACCOUNT_MUTATION_VERSION_CONFLICT') {
+      appStore.showError(t('admin.accounts.placementGuard.versionConflict'))
+      return
+    }
     if (!isUserScope.value && reasonCode === 'ACCOUNT_MUTATION_FORCE_REQUIRED') {
+      if (isConfirmedAccountMutationPayload(updatePayload)) {
+        appStore.showError(t('admin.accounts.placementGuard.confirmationFailed'))
+        return
+      }
+      const challenge = extractAccountMutationVersionChallenge(error?.metadata)
+      if (challenge.missingRequiredVersions) {
+        appStore.showError(t('admin.accounts.placementGuard.challengeInvalid'))
+        return
+      }
+      const expectedVersions = challenge.expectedVersions
       placementGuardFields.value = parsePlacementGuardFields(error?.metadata)
       placementForceReason.value = ''
       placementForceAction.value = async (reason: string) => {
@@ -4286,7 +4389,10 @@ const submitUpdateAccount = async (accountID: number, updatePayload: Record<stri
           ...updatePayload,
           force_active_edit: true,
           confirmed: true,
-          reason
+          reason,
+          ...(expectedVersions
+            ? { expected_versions: expectedVersions }
+            : {})
         })
       }
       showPlacementForceDialog.value = true

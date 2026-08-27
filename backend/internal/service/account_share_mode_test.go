@@ -27,6 +27,7 @@ type accountShareModeRepoStub struct {
 	isModeCalls          int
 	bindingCalls         int
 	activationCalls      int
+	activationErr        error
 	bindingResults       []accountShareModeBindingResult
 	membership           *AccountShareMembership
 	listing              *AccountShareListing
@@ -53,6 +54,8 @@ type accountShareModeRepoStub struct {
 	endInput             BeginAccountShareMembershipEndInput
 	endErr               error
 	endCalls             int
+	idleEndCalls         int
+	idleEndMembership    *AccountShareMembership
 	finalizeMembership   *AccountShareMembership
 	finalizeBilling      *AccountShareSeatBillingResult
 	finalizeDone         bool
@@ -74,11 +77,9 @@ type accountShareModeRepoStub struct {
 	waiverLateCalls      int
 	waiverLateQueue      []*AccountShareSeatWaiverBatch
 	waiverLateUsageSince []time.Time
-	unavailableCalls     int
 	recoverableIDs       []int64
 	recoverableSuspend   *AccountShareMembership
 	recoverableCalls     int
-	dispatchFailureCalls int
 	touchCalls           int
 	touchTimes           []time.Time
 	touchSignal          chan time.Time
@@ -1733,6 +1734,13 @@ func (r *accountShareModeRepoStub) ListIdleMembershipCandidates(context.Context,
 }
 
 func (r *accountShareModeRepoStub) EndIdleMembership(context.Context, int64, time.Time) (*AccountShareMembership, *AccountShareSeatBillingResult, error) {
+	r.idleEndCalls++
+	if r.idleEndMembership != nil {
+		membership := r.idleEndMembership
+		r.membership = nil
+		r.listing = nil
+		return membership, accountShareModeStubBillingResult(membership), nil
+	}
 	if r.endMembership != nil {
 		return r.endMembership, accountShareModeStubBillingResult(r.endMembership), nil
 	}
@@ -1749,6 +1757,10 @@ func (r *accountShareModeRepoStub) ListRecoverableUnavailableMembershipIDs(conte
 
 func (r *accountShareModeRepoStub) SuspendRecoverableUnavailableMembership(context.Context, int64, time.Time) (*AccountShareMembership, *AccountShareSeatBillingResult, error) {
 	r.recoverableCalls++
+	if r.recoverableSuspend != nil && r.membership != nil && r.recoverableSuspend.ID == r.membership.ID {
+		r.membership = nil
+		r.listing = nil
+	}
 	return r.recoverableSuspend, accountShareModeStubBillingResult(r.recoverableSuspend), nil
 }
 
@@ -1757,7 +1769,6 @@ func (r *accountShareModeRepoStub) DisablePermanentlyUnavailableListings(context
 }
 
 func (r *accountShareModeRepoStub) EndUnavailableAccountMemberships(context.Context, int64, time.Time, int) (*AccountShareSeatBillingResult, error) {
-	r.unavailableCalls++
 	return &AccountShareSeatBillingResult{EndedConsumerUserIDs: []int64{20}}, nil
 }
 
@@ -1820,24 +1831,15 @@ func (r *accountShareModeRepoStub) GetActiveMembershipForRequest(context.Context
 
 func (r *accountShareModeRepoStub) ActivateNextQueuedMembershipForRequest(context.Context, int64, int64, int64, int, time.Time) (*AccountShareMembership, *AccountShareListing, error) {
 	r.activationCalls++
+	if r.activationErr != nil {
+		return nil, nil, r.activationErr
+	}
 	if len(r.bindingResults) > 0 {
 		result := r.bindingResults[0]
 		r.bindingResults = r.bindingResults[1:]
 		return result.membership, result.listing, result.err
 	}
 	return nil, nil, ErrAccountShareListingNotFound
-}
-
-func (r *accountShareModeRepoStub) SuspendMembershipForDispatchFailure(context.Context, int64, time.Time, time.Time) (*AccountShareMembership, *AccountShareSeatBillingResult, error) {
-	r.dispatchFailureCalls++
-	r.unavailableCalls++
-	membership := r.membership
-	if membership == nil {
-		membership = &AccountShareMembership{ID: 11, ConsumerUserID: 20, APIKeyID: 30}
-	}
-	r.membership = nil
-	r.listing = nil
-	return membership, accountShareModeStubBillingResult(membership), nil
 }
 
 type accountShareModeRebindRepoStub struct {
@@ -4598,6 +4600,32 @@ func TestAccountShareModeResolveBindingRecoversConcurrentActivationWinner(t *tes
 	}
 }
 
+func TestAccountShareModeResolveBindingPreservesQueuedRecoveringState(t *testing.T) {
+	repo := &accountShareModeRepoStub{
+		bindingResults: []accountShareModeBindingResult{
+			{err: ErrAccountShareListingNotFound},
+			{err: ErrAccountShareListingNotFound},
+			{err: ErrAccountShareListingNotFound},
+			{err: ErrAccountShareModeRecovering},
+		},
+	}
+	svc := &AccountShareModeService{repo: repo}
+
+	membership, listing, err := svc.ResolveActiveBindingForRequest(
+		WithAccountShareModeRequest(context.Background(), 20, 30),
+		20,
+		30,
+		50,
+	)
+
+	require.Nil(t, membership)
+	require.Nil(t, listing)
+	require.ErrorIs(t, err, ErrAccountShareModeRecovering)
+	require.NotErrorIs(t, err, ErrAccountShareModeGroupUnbound)
+	require.Equal(t, 4, repo.bindingCalls)
+	require.Equal(t, 1, repo.activationCalls)
+}
+
 func TestAccountShareModeMembershipHeartbeatAndReleaseTouchCompletion(t *testing.T) {
 	repo := &accountShareModeRepoStub{touchSignal: make(chan time.Time, 4)}
 	svc := &AccountShareModeService{repo: repo}
@@ -4767,7 +4795,7 @@ func TestAccountShareModeAcquireMembershipSlotFailsClosedWithInvalidLeaseTTL(t *
 	require.Zero(t, cache.releaseCalls)
 }
 
-func TestAccountShareModeResolveBindingClearsUnavailableAccount(t *testing.T) {
+func TestAccountShareModeResolveBindingSuspendsDurableRateLimitAsRecovering(t *testing.T) {
 	resetAt := time.Now().UTC().Add(time.Hour)
 	repo := &accountShareModeRepoStub{
 		membership: &AccountShareMembership{ID: 11, AccountID: 99, ConsumerUserID: 20, APIKeyID: 30},
@@ -4782,29 +4810,128 @@ func TestAccountShareModeResolveBindingClearsUnavailableAccount(t *testing.T) {
 			CurrentMembershipID: accountShareModeInt64Ptr(11),
 			CurrentAPIKeyID:     accountShareModeInt64Ptr(30),
 		},
+		activationErr: ErrAccountShareModeRecovering,
 	}
+	repo.recoverableSuspend = repo.membership
 	svc := &AccountShareModeService{repo: repo}
 	selectionCtx := WithAccountShareModeRequest(context.Background(), 20, 30)
 
 	membership, listing, err := svc.ResolveActiveBindingForRequest(selectionCtx, 20, 30, 50)
-	if !errors.Is(err, ErrAccountShareModeGroupUnbound) {
-		t.Fatalf("expected unavailable account to return unbound, got membership=%#v listing=%#v err=%v", membership, listing, err)
+	if !errors.Is(err, ErrAccountShareModeRecovering) {
+		t.Fatalf("expected durable unavailable account to suspend and report recovering, got membership=%#v listing=%#v err=%v", membership, listing, err)
 	}
-	if repo.unavailableCalls != 1 {
-		t.Fatalf("expected one unavailable clear call, got %d", repo.unavailableCalls)
+	if repo.recoverableCalls != 1 {
+		t.Fatalf("expected one canonical recoverable suspension call, got %d", repo.recoverableCalls)
 	}
 
 	taskCtx := WithAccountShareModeRequestFromContext(context.Background(), selectionCtx)
 	_, _, err = svc.ResolveActiveBindingForRequest(taskCtx, 20, 30, 50)
-	if !errors.Is(err, ErrAccountShareModeGroupUnbound) {
-		t.Fatalf("expected cached unbound error, got %v", err)
+	if !errors.Is(err, ErrAccountShareModeRecovering) {
+		t.Fatalf("expected cached recovering error, got %v", err)
 	}
 	if repo.bindingCalls != 5 {
 		t.Fatalf("expected unavailable resolve to query active binding before retry, got %d", repo.bindingCalls)
 	}
-	if repo.unavailableCalls != 1 {
-		t.Fatalf("expected cached unavailable resolve to skip clear call, got %d", repo.unavailableCalls)
+	if repo.recoverableCalls != 1 {
+		t.Fatalf("expected cached unavailable resolve to skip suspension, got %d", repo.recoverableCalls)
 	}
+}
+
+func TestAccountShareModeResolveBindingKeepsActiveMembershipDuringShortRateLimitWindow(t *testing.T) {
+	now := time.Now().UTC()
+	rateLimitedAt := now.Add(-5 * time.Second)
+	resetAt := now.Add(20 * time.Second)
+	baseRepo := &accountShareModeRepoStub{
+		membership: &AccountShareMembership{
+			ID:             11,
+			AccountID:      99,
+			ConsumerUserID: 20,
+			APIKeyID:       30,
+			Status:         AccountShareMembershipStatusActive,
+		},
+		listing: &AccountShareListing{
+			ID:                               12,
+			AccountID:                        99,
+			OwnerUserID:                      40,
+			Status:                           AccountShareListingStatusActive,
+			AccountStatus:                    StatusActive,
+			AccountSchedulable:               true,
+			RepresentativeAccountConcurrency: 1,
+			RateLimitedAt:                    &rateLimitedAt,
+			RateLimitResetAt:                 &resetAt,
+			CurrentMembershipID:              accountShareModeInt64Ptr(11),
+			CurrentAPIKeyID:                  accountShareModeInt64Ptr(30),
+		},
+	}
+	repo := &accountShareModeRebindRepoStub{
+		accountShareModeRepoStub: baseRepo,
+		rebindToAccountID:        100,
+	}
+	svc := &AccountShareModeService{repo: repo}
+
+	membership, listing, err := svc.ResolveActiveBindingForRequest(
+		WithAccountShareModeRequest(context.Background(), 20, 30),
+		20,
+		30,
+		50,
+	)
+
+	require.Nil(t, membership)
+	require.Nil(t, listing)
+	require.ErrorIs(t, err, ErrAccountShareModeRecovering)
+	require.NotErrorIs(t, err, ErrAccountShareModeGroupUnbound)
+	require.Zero(t, repo.rebindCalls)
+	require.Zero(t, repo.recoverableCalls)
+	require.NotNil(t, repo.membership)
+	require.Equal(t, AccountShareMembershipStatusActive, repo.membership.Status)
+	require.Equal(t, int64(99), repo.membership.AccountID)
+}
+
+func TestAccountShareModeResolveBindingReportsIdleTimeoutInsteadOfUnbound(t *testing.T) {
+	lastRequestAt := time.Now().UTC().Add(-11 * time.Minute)
+	repo := &accountShareModeRepoStub{
+		membership: &AccountShareMembership{
+			ID:                 11,
+			AccountID:          99,
+			ConsumerUserID:     20,
+			APIKeyID:           30,
+			Status:             AccountShareMembershipStatusActive,
+			IdleTimeoutMinutes: 10,
+			JoinedAt:           lastRequestAt.Add(-time.Minute),
+			LastRequestAt:      &lastRequestAt,
+		},
+		listing: &AccountShareListing{
+			ID:                               12,
+			AccountID:                        99,
+			OwnerUserID:                      40,
+			Status:                           AccountShareListingStatusActive,
+			AccountStatus:                    StatusActive,
+			AccountSchedulable:               true,
+			RepresentativeAccountConcurrency: 1,
+		},
+		idleEndMembership: &AccountShareMembership{
+			ID:             11,
+			ConsumerUserID: 20,
+			APIKeyID:       30,
+			Status:         AccountShareMembershipStatusEnded,
+			EndedReason:    AccountShareMembershipEndReasonIdleTimeout,
+		},
+	}
+	svc := &AccountShareModeService{repo: repo}
+
+	membership, listing, err := svc.ResolveActiveBindingForRequest(
+		WithAccountShareModeRequest(context.Background(), 20, 30),
+		20,
+		30,
+		50,
+	)
+
+	require.Nil(t, membership)
+	require.Nil(t, listing)
+	require.ErrorIs(t, err, ErrAccountShareMembershipIdleTimeout)
+	require.NotErrorIs(t, err, ErrAccountShareModeGroupUnbound)
+	require.Equal(t, 1, repo.idleEndCalls)
+	require.Nil(t, repo.membership)
 }
 
 func TestAccountShareModeResolveBindingRebindsZeroConcurrencyAccountEvenWhenRoomHasCapacity(t *testing.T) {
@@ -4847,7 +4974,7 @@ func TestAccountShareModeResolveBindingRebindsZeroConcurrencyAccountEvenWhenRoom
 	require.Equal(t, int64(100), listing.AccountID)
 	require.Equal(t, 20, listing.AccountConcurrency)
 	require.Equal(t, 5, listing.RepresentativeAccountConcurrency)
-	require.Zero(t, repo.dispatchFailureCalls)
+	require.Zero(t, repo.recoverableCalls)
 }
 
 func TestAccountShareModeResolveBindingCachesNonModeGroup(t *testing.T) {

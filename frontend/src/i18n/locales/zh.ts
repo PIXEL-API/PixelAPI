@@ -6023,6 +6023,9 @@ export default {
         reasonPlaceholder: "例如：上游账号被封，更换凭证",
         reasonHint: "原因会连同变更前后快照一起写入审计记录",
         forceConfirm: "确认修改",
+        challengeInvalid: "确认所需的房间版本信息缺失或无效，请刷新账号列表后重试。",
+        confirmationFailed: "确认请求仍未通过安全校验，请刷新账号列表后重新操作。",
+        versionConflict: "确认期间房间状态已发生变化，请刷新账号列表后重新确认。",
         fields: {
           credentials: "账号凭证",
           extra: "扩展配置",

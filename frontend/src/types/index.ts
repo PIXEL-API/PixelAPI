@@ -1733,6 +1733,11 @@ export interface UpdateAccountRequest {
   expires_at?: number | null;
   auto_pause_on_expired?: boolean;
   confirm_mixed_channel_risk?: boolean;
+  force_active_edit?: boolean;
+  confirmed?: boolean;
+  reason?: string;
+  expected_version?: number;
+  expected_versions?: Record<string, number>;
 }
 
 export interface CheckMixedChannelRequest {

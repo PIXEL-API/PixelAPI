@@ -1370,6 +1370,10 @@ import {
 } from '@/utils/openaiWsMode'
 import { openAIAccountLevelOptions } from '@/utils/openaiAccountLevels'
 import { extractApiErrorMessage, extractI18nErrorMessage } from '@/utils/apiError'
+import {
+  extractAccountMutationVersionChallenge,
+  isConfirmedAccountMutationPayload
+} from '@/utils/accountMutationGuard'
 import type { OpenAIWSMode } from '@/utils/openaiWsMode'
 interface Props {
   show: boolean
@@ -1602,6 +1606,7 @@ const pendingUpdatesForConfirm = ref<Record<string, unknown> | null>(null)
 const showPlacementForceDialog = ref(false)
 const placementForceReason = ref('')
 const placementGuardFields = ref<string[]>([])
+const placementExpectedVersions = ref<Record<string, number> | null>(null)
 
 const parsePlacementGuardFields = (metadata: unknown): string[] => {
   if (!metadata || typeof metadata !== 'object') return []
@@ -2445,8 +2450,22 @@ const submitBulkUpdate = async (baseUpdates: Record<string, unknown> | null) => 
       return
     }
     const reasonCode = typeof error?.reason === 'string' ? error.reason : ''
+    if (!isUserScope.value && reasonCode === 'ACCOUNT_MUTATION_VERSION_CONFLICT') {
+      appStore.showError(t('admin.accounts.placementGuard.versionConflict'))
+      return
+    }
     if (!isUserScope.value && reasonCode === 'ACCOUNT_MUTATION_FORCE_REQUIRED') {
+      if (isConfirmedAccountMutationPayload(baseUpdates)) {
+        appStore.showError(t('admin.accounts.placementGuard.confirmationFailed'))
+        return
+      }
+      const challenge = extractAccountMutationVersionChallenge(error?.metadata)
+      if (challenge.missingRequiredVersions) {
+        appStore.showError(t('admin.accounts.placementGuard.challengeInvalid'))
+        return
+      }
       placementGuardFields.value = parsePlacementGuardFields(error?.metadata)
+      placementExpectedVersions.value = challenge.expectedVersions ?? null
       placementForceReason.value = ''
       pendingUpdatesForConfirm.value = baseUpdates
       showPlacementForceDialog.value = true
@@ -2476,12 +2495,16 @@ const handlePlacementForceConfirm = async () => {
   const reason = placementForceReason.value.trim()
   const updates = pendingUpdatesForConfirm.value
   if (!reason || !updates) return
-  showPlacementForceDialog.value = false
+  const expectedVersions = placementExpectedVersions.value
+  clearPlacementGuardDialog()
   await submitBulkUpdate({
     ...updates,
     force_active_edit: true,
     confirmed: true,
-    reason
+    reason,
+    ...(expectedVersions
+      ? { expected_versions: expectedVersions }
+      : {})
   })
 }
 
@@ -2489,6 +2512,7 @@ const clearPlacementGuardDialog = () => {
   showPlacementForceDialog.value = false
   placementForceReason.value = ''
   placementGuardFields.value = []
+  placementExpectedVersions.value = null
   pendingUpdatesForConfirm.value = null
 }
 
@@ -2574,6 +2598,10 @@ watch(
       mixedChannelWarningMessage.value = ''
       pendingUpdatesForConfirm.value = null
       mixedChannelConfirmed.value = false
+      showPlacementForceDialog.value = false
+      placementForceReason.value = ''
+      placementGuardFields.value = []
+      placementExpectedVersions.value = null
     }
   }
 )

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -5961,7 +5962,7 @@ func (r *accountShareModeRepository) ListRecoverableUnavailableMembershipIDs(ctx
 			AND %s
 		ORDER BY COALESCE(m.last_request_at, m.joined_at) ASC, m.id ASC
 		LIMIT $3
-	`, accountShareMembershipRecoverablyUnavailableConditionSQL("$2::timestamptz")), service.AccountShareMembershipStatusActive, now, limit)
+	`, accountShareMembershipSuspendableUnavailableConditionSQL("$2::timestamptz")), service.AccountShareMembershipStatusActive, now, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -5995,7 +5996,7 @@ func (r *accountShareModeRepository) SuspendRecoverableUnavailableMembership(ctx
 	}()
 
 	unavailableAt = unavailableAt.UTC()
-	if err := r.lockRecoverableUnavailableMembershipResourcesInTx(ctx, tx, membershipID); errors.Is(err, sql.ErrNoRows) {
+	if err := r.lockRecoverableUnavailableMembershipResourcesInTx(ctx, tx, membershipID); errors.Is(err, sql.ErrNoRows) || errors.Is(err, service.ErrAccountShareListingNotFound) {
 		return nil, nil, service.ErrAccountShareListingNotFound
 	} else if err != nil {
 		return nil, nil, err
@@ -6010,14 +6011,35 @@ func (r *accountShareModeRepository) SuspendRecoverableUnavailableMembership(ctx
 	if accountShareMembershipRecentlyActive(membership, unavailableAt) {
 		return nil, nil, nil
 	}
-	recoverable, err := r.accountShareMembershipRecoverablyUnavailableInTx(ctx, tx, membership.ListingID, membership.AccountID, unavailableAt)
+	recoverable, err := r.accountShareMembershipSuspendableUnavailableInTx(ctx, tx, membership.ListingID, membership.AccountID, unavailableAt)
 	if err != nil {
 		return nil, nil, err
 	}
 	if !recoverable {
 		return nil, nil, nil
 	}
-	membership, creditUserIDs, err := r.suspendActiveMembershipInTx(ctx, tx, membership, unavailableAt, unavailableAt)
+	replacementAvailable, err := r.accountShareMembershipHealthyReplacementAvailableInTx(
+		ctx,
+		tx,
+		membership.ListingID,
+		membership.AccountID,
+		unavailableAt,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	if replacementAvailable {
+		// 服务层会在下一次解析时执行正式重绑；这里必须保留 active/binding，
+		// 避免“检测后新增健康账号”的并发窗口仍把 membership 排队。
+		return nil, nil, nil
+	}
+	membership, creditUserIDs, err := r.suspendActiveMembershipInTx(
+		ctx,
+		tx,
+		membership,
+		unavailableAt,
+		unavailableAt.Add(service.AccountShareModeDispatchCooldown),
+	)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -6028,30 +6050,47 @@ func (r *accountShareModeRepository) SuspendRecoverableUnavailableMembership(ctx
 	return membership, accountShareMembershipBillingResult(membership, creditUserIDs), nil
 }
 
+func (r *accountShareModeRepository) accountShareMembershipHealthyReplacementAvailableInTx(ctx context.Context, tx *sql.Tx, listingID, currentAccountID int64, now time.Time) (bool, error) {
+	if tx == nil || listingID <= 0 || currentAccountID <= 0 {
+		return false, nil
+	}
+	query := fmt.Sprintf(`
+		SELECT EXISTS (
+			SELECT 1
+			FROM account_share_room_accounts room_account
+			JOIN accounts a ON a.id = room_account.account_id
+			WHERE room_account.listing_id = $1
+				AND room_account.account_id <> $2
+				AND room_account.state = 'active'
+				AND a.deleted_at IS NULL
+				AND NOT %s
+		)
+	`, accountShareAccountUnavailableConditionSQL("$3::timestamptz"))
+	var available bool
+	if err := tx.QueryRowContext(ctx, query, listingID, currentAccountID, now.UTC()).Scan(&available); err != nil {
+		return false, err
+	}
+	return available, nil
+}
+
 // lockRecoverableUnavailableMembershipResourcesInTx serializes recoverable suspension
-// with listing relists and account recovery. The lock order must remain
-// listing -> account -> membership to match UpdateListing and queued activation.
+// with room rebind, listing relists and account recovery. Listing discovery is read-only;
+// every mutable fact is rechecked after locking the canonical room rebind scope. The caller
+// locks the membership afterwards, preserving listing -> room projection/accounts ->
+// membership order without trusting a pre-lock account_id snapshot.
 func (r *accountShareModeRepository) lockRecoverableUnavailableMembershipResourcesInTx(ctx context.Context, tx *sql.Tx, membershipID int64) error {
-	var listingID, accountID int64
+	var listingID int64
 	if err := tx.QueryRowContext(ctx, `
-		SELECT m.listing_id, m.account_id
-		FROM account_share_memberships m
-		JOIN account_share_listings l ON l.id = m.listing_id
-		WHERE m.id = $1
-			AND m.status = $2
-			AND m.deleted_at IS NULL
-		FOR UPDATE OF l
-	`, membershipID, service.AccountShareMembershipStatusActive).Scan(&listingID, &accountID); err != nil {
+		SELECT listing_id
+		FROM account_share_memberships
+		WHERE id = $1
+			AND status = $2
+			AND deleted_at IS NULL
+	`, membershipID, service.AccountShareMembershipStatusActive).Scan(&listingID); err != nil {
 		return err
 	}
-
-	var lockedAccountID int64
-	return tx.QueryRowContext(ctx, `
-		SELECT id
-		FROM accounts
-		WHERE id = $1
-		FOR UPDATE
-	`, accountID).Scan(&lockedAccountID)
+	_, err := lockAccountShareMembershipRebindScopeInTx(ctx, tx, listingID)
+	return err
 }
 
 func (r *accountShareModeRepository) EndUnavailableAccountMemberships(ctx context.Context, accountID int64, endedAt time.Time, limit int) (*service.AccountShareSeatBillingResult, error) {
@@ -7303,6 +7342,33 @@ func (r *accountShareModeRepository) accountShareMembershipRecoverablyUnavailabl
 	return unavailable, nil
 }
 
+func (r *accountShareModeRepository) accountShareMembershipSuspendableUnavailableInTx(ctx context.Context, tx *sql.Tx, listingID, accountID int64, now time.Time) (bool, error) {
+	if listingID <= 0 || accountID <= 0 {
+		return false, nil
+	}
+	query := fmt.Sprintf(`
+		SELECT EXISTS (
+			SELECT 1
+			FROM account_share_listings l
+			JOIN account_share_room_accounts room_account
+				ON room_account.listing_id = l.id
+				AND room_account.account_id = $2
+				AND room_account.state IN ('active', 'draining')
+			JOIN accounts a ON a.id = room_account.account_id
+			WHERE l.id = $1
+				AND %s
+		)
+	`, accountShareMembershipSuspendableUnavailableConditionSQL("$3::timestamptz"))
+	var unavailable bool
+	if err := tx.QueryRowContext(ctx, query, listingID, accountID, now.UTC()).Scan(&unavailable); err != nil {
+		return false, err
+	}
+	if unavailable {
+		logger.LegacyPrintf("repository.account_share_mode", "account share membership suspendable unavailable matched: membership_listing_id=%d account_id=%d now=%s", listingID, accountID, now.UTC().Format(time.RFC3339))
+	}
+	return unavailable, nil
+}
+
 func (r *accountShareModeRepository) accountShareAccountUnavailableDetailsInTx(ctx context.Context, tx *sql.Tx, accountID int64, now time.Time) string {
 	query := fmt.Sprintf(`
 		SELECT
@@ -8139,7 +8205,7 @@ func (r *accountShareModeRepository) ActivateNextQueuedMembershipForRequest(ctx 
 		return nil, nil, err
 	}
 	if len(lockedListingIDs) == 0 {
-		return nil, nil, service.ErrAccountShareListingNotFound
+		return nil, nil, accountShareMembershipRequestStateErrorInTx(ctx, tx, userID, apiKeyID, groupID, now)
 	}
 
 	var membershipID, listingID, accountID, ownerUserID, listingRevisionID int64
@@ -8187,7 +8253,7 @@ func (r *accountShareModeRepository) ActivateNextQueuedMembershipForRequest(ctx 
 		&idleTimeoutMinutes,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil, service.ErrAccountShareListingNotFound
+		return nil, nil, accountShareMembershipRequestStateErrorInTx(ctx, tx, userID, apiKeyID, groupID, now)
 	}
 	if err != nil {
 		return nil, nil, err
@@ -8310,7 +8376,7 @@ func (r *accountShareModeRepository) ActivateNextQueuedMembershipForRequest(ctx 
 		service.AccountShareMembershipStatusEnding,
 	))
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil, service.ErrAccountShareListingNotFound
+		return nil, nil, accountShareMembershipRequestStateErrorInTx(ctx, tx, userID, apiKeyID, groupID, now)
 	}
 	if err != nil {
 		return nil, nil, translateAccountShareMembershipConflict(err)
@@ -8386,6 +8452,96 @@ func (r *accountShareModeRepository) ActivateNextQueuedMembershipForRequest(ctx 
 	return membership, listing, nil
 }
 
+func accountShareMembershipRequestStateErrorInTx(ctx context.Context, tx *sql.Tx, userID, apiKeyID, groupID int64, now time.Time) error {
+	if tx == nil {
+		return service.ErrAccountShareListingNotFound
+	}
+	now = now.UTC()
+	// queryActiveMembership 会在付费席位到期、尚未完成续扣时暂时隐藏 active
+	// membership。账号正处于短 429 等可恢复状态时，续扣会按设计暂停，因此这里
+	// 必须先识别仍然存在的 active 关系；否则后续既找不到 queued，也找不到 ended，
+	// 最终会把“恢复中”再次误报成“未绑定”。
+	var activeMembershipExists bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM account_share_memberships m
+			JOIN account_share_listings l ON l.id = m.listing_id
+			WHERE m.consumer_user_id = $1
+				AND m.api_key_id = $2
+				AND m.status = $3
+				AND m.deleted_at IS NULL
+				AND l.platform = (
+					SELECT mg.platform
+					FROM account_share_mode_groups mg
+					WHERE mg.group_id = $4
+				)
+		)
+	`, userID, apiKeyID, service.AccountShareMembershipStatusActive, groupID).Scan(&activeMembershipExists); err != nil {
+		return err
+	}
+	if activeMembershipExists {
+		return service.NewAccountShareModeRecoveringError(service.AccountShareModeDefaultRecoveryRetryAfter)
+	}
+
+	var dispatchCooldownUntil sql.NullTime
+	err := tx.QueryRowContext(ctx, `
+		SELECT m.dispatch_cooldown_until
+		FROM account_share_memberships m
+		JOIN account_share_listings l ON l.id = m.listing_id
+		WHERE m.consumer_user_id = $1
+			AND m.api_key_id = $2
+			AND m.status = $3
+			AND m.deleted_at IS NULL
+			AND m.queue_expires_at > $5
+			AND l.platform = (
+				SELECT mg.platform
+				FROM account_share_mode_groups mg
+				WHERE mg.group_id = $4
+			)
+		ORDER BY m.queue_rank ASC, m.id ASC
+		LIMIT 1
+	`, userID, apiKeyID, service.AccountShareMembershipStatusQueued, groupID, now).Scan(&dispatchCooldownUntil)
+	if err == nil {
+		retryAfterSeconds := service.AccountShareModeDefaultRecoveryRetryAfter
+		if dispatchCooldownUntil.Valid && dispatchCooldownUntil.Time.After(now) {
+			retryAfterSeconds = int(math.Ceil(dispatchCooldownUntil.Time.Sub(now).Seconds()))
+			if retryAfterSeconds <= 0 {
+				retryAfterSeconds = 1
+			}
+		}
+		return service.NewAccountShareModeRecoveringError(retryAfterSeconds)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+
+	var endedReason sql.NullString
+	err = tx.QueryRowContext(ctx, `
+		SELECT m.ended_reason
+		FROM account_share_memberships m
+		JOIN account_share_listings l ON l.id = m.listing_id
+		WHERE m.consumer_user_id = $1
+			AND m.api_key_id = $2
+			AND m.status = $3
+			AND m.deleted_at IS NULL
+			AND l.platform = (
+				SELECT mg.platform
+				FROM account_share_mode_groups mg
+				WHERE mg.group_id = $4
+			)
+		ORDER BY COALESCE(m.ended_at, m.updated_at) DESC, m.id DESC
+		LIMIT 1
+	`, userID, apiKeyID, service.AccountShareMembershipStatusEnded, groupID).Scan(&endedReason)
+	if err == nil && endedReason.Valid && endedReason.String == service.AccountShareMembershipEndReasonIdleTimeout {
+		return service.ErrAccountShareMembershipIdleTimeout
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	return service.ErrAccountShareListingNotFound
+}
+
 func (r *accountShareModeRepository) lockQueuedMembershipListingsForRequestInTx(ctx context.Context, tx *sql.Tx, userID, apiKeyID, groupID int64, now time.Time) ([]int64, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT l.id
@@ -8433,42 +8589,6 @@ func (r *accountShareModeRepository) lockQueuedMembershipListingsForRequestInTx(
 		return nil, err
 	}
 	return listingIDs, nil
-}
-
-func (r *accountShareModeRepository) SuspendMembershipForDispatchFailure(ctx context.Context, membershipID int64, failedAt time.Time, cooldownUntil time.Time) (*service.AccountShareMembership, *service.AccountShareSeatBillingResult, error) {
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer func() {
-		if tx != nil {
-			_ = tx.Rollback()
-		}
-	}()
-	failedAt = failedAt.UTC()
-	cooldownUntil = cooldownUntil.UTC()
-	membership, err := r.lockSeatBillingMembershipInTx(ctx, tx, membershipID, 0)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil, service.ErrAccountShareListingNotFound
-	}
-	if err != nil {
-		return nil, nil, err
-	}
-	// Slot acquisition and its heartbeat update last_request_at only after the
-	// membership is actually in use. Keep this check inside the membership row
-	// lock so a concurrent dispatch failure cannot queue an active stream.
-	if accountShareMembershipRecentlyActive(membership, failedAt) {
-		return nil, nil, nil
-	}
-	membership, creditUserIDs, err := r.suspendActiveMembershipInTx(ctx, tx, membership, failedAt, cooldownUntil)
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, nil, err
-	}
-	tx = nil
-	return membership, accountShareMembershipBillingResult(membership, creditUserIDs), nil
 }
 
 func (r *accountShareModeRepository) suspendActiveMembershipInTx(ctx context.Context, tx *sql.Tx, membership *service.AccountShareMembership, failedAt time.Time, cooldownUntil time.Time) (*service.AccountShareMembership, []int64, error) {
@@ -8775,6 +8895,22 @@ func accountShareMembershipIdleDeadline(membership *service.AccountShareMembersh
 }
 
 func accountShareAccountUnavailableBlockerSQL(nowExpr string) string {
+	return accountShareAccountUnavailableBlockerWithTransientRateLimitGraceSQL(nowExpr, 0)
+}
+
+func accountShareAccountUnavailableBlockerWithTransientRateLimitGraceSQL(nowExpr string, grace time.Duration) string {
+	rateLimitConditionSQL := fmt.Sprintf(
+		"a.rate_limit_reset_at IS NOT NULL AND a.rate_limit_reset_at > %s",
+		nowExpr,
+	)
+	if grace > 0 {
+		graceSeconds := int64(math.Ceil(grace.Seconds()))
+		rateLimitConditionSQL += fmt.Sprintf(` AND NOT (
+			a.rate_limited_at IS NOT NULL
+			AND a.rate_limit_reset_at > a.rate_limited_at
+			AND a.rate_limit_reset_at - a.rate_limited_at <= INTERVAL '%d seconds'
+		)`, graceSeconds)
+	}
 	codexProtectedSQL := fmt.Sprintf(`(
 		a.platform = '%s'
 		AND a.type = '%s'
@@ -8833,7 +8969,7 @@ func accountShareAccountUnavailableBlockerSQL(nowExpr string) string {
 		WHEN a.concurrency <= 0 THEN 'non_positive_concurrency'
 		WHEN a.auto_pause_on_expired = TRUE AND a.expires_at IS NOT NULL AND a.expires_at <= %s THEN 'expired'
 		WHEN a.overload_until IS NOT NULL AND a.overload_until > %s THEN 'overloaded'
-		WHEN a.rate_limit_reset_at IS NOT NULL AND a.rate_limit_reset_at > %s THEN 'rate_limited'
+		WHEN %s THEN 'rate_limited'
 		WHEN a.temp_unschedulable_until IS NOT NULL AND a.temp_unschedulable_until > %s THEN 'temporarily_unschedulable'
 		WHEN %s THEN 'codex_quota_protected'
 		WHEN %s THEN 'anthropic_quota_protected'
@@ -8843,7 +8979,7 @@ func accountShareAccountUnavailableBlockerSQL(nowExpr string) string {
 		service.StatusActive,
 		nowExpr,
 		nowExpr,
-		nowExpr,
+		rateLimitConditionSQL,
 		nowExpr,
 		codexProtectedSQL,
 		anthropicProtectedSQL,
@@ -8979,6 +9115,29 @@ func accountShareMembershipRecoverablyUnavailableConditionSQL(nowExpr string) st
 		accountShareMembershipPermanentlyUnavailableConditionSQL(nowExpr),
 		service.AccountShareListingStatusPaused,
 		accountShareAccountUnavailableConditionSQL(nowExpr),
+	)
+}
+
+// accountShareMembershipSuspendableUnavailableConditionSQL 仅用于把 active membership
+// 持久化重排队。短 429 仍会被 billing predicate 识别并阻止续扣，但不会关闭长期 binding。
+func accountShareMembershipSuspendableUnavailableConditionSQL(nowExpr string) string {
+	accountUnavailableSQL := fmt.Sprintf(
+		`(%s IS NOT NULL)`,
+		accountShareAccountUnavailableBlockerWithTransientRateLimitGraceSQL(
+			nowExpr,
+			service.AccountShareModeTransientRateLimitGrace,
+		),
+	)
+	return fmt.Sprintf(`(
+		NOT %s
+		AND (
+			l.status = '%s'
+			OR %s
+		)
+	)`,
+		accountShareMembershipPermanentlyUnavailableConditionSQL(nowExpr),
+		service.AccountShareListingStatusPaused,
+		accountUnavailableSQL,
 	)
 }
 

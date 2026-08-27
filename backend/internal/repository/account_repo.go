@@ -1333,10 +1333,19 @@ func authorizeAccountMutation(
 	placements []accountMutationPlacementBinding,
 ) error {
 	// 一批账号里可能同时有房间账号和公共池账号（placement_type 互斥，但批量操作
-	// 会把两类混在一起）。两类各自判定，不能用 else 短路掉其中一类。
-	if err := authorizePublicPoolPlacementMutation(request, targets, placements); err != nil {
+	// 会把两类混在一起）。房间确认还需要 row_version，因此先生成房间挑战，让前端
+	// 能在一次确认中同时满足两类守卫；不能先返回缺少版本快照的公共池挑战。
+	if err := authorizeRoomAccountMutation(request, targets, bindings); err != nil {
 		return err
 	}
+	return authorizePublicPoolPlacementMutation(request, targets, placements)
+}
+
+func authorizeRoomAccountMutation(
+	request service.AccountMutationGuardRequest,
+	targets map[int64]*accountMutationLockedTarget,
+	bindings []accountMutationRoomBinding,
+) error {
 	if len(bindings) == 0 {
 		return nil
 	}
@@ -1390,6 +1399,17 @@ func authorizeAccountMutation(
 	default:
 		return service.ErrAccountMutationSystemIntentInvalid.WithMetadata(metadata)
 	}
+	expectedVersions := make(map[string]int64, len(listingIDs))
+	for _, binding := range bindings {
+		expectedVersions[strconv.FormatInt(binding.listingID, 10)] = binding.rowVersion
+	}
+	encodedExpectedVersions, err := json.Marshal(expectedVersions)
+	if err != nil {
+		return service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{
+			"stage": "encode_expected_versions",
+		})
+	}
+	metadata["expected_versions"] = string(encodedExpectedVersions)
 
 	if !request.ActorIsAdmin || request.ActorUserID <= 0 {
 		return service.ErrAccountMutationForceRequired.WithMetadata(metadata)
@@ -4268,12 +4288,27 @@ func (r *accountRepository) ListSchedulableByGroupIDAndPlatforms(ctx context.Con
 }
 
 func (r *accountRepository) SetRateLimited(ctx context.Context, id int64, resetAt time.Time) error {
-	now := time.Now()
-	_, err := r.client.Account.Update().
-		Where(dbaccount.IDEQ(id)).
-		SetRateLimitedAt(now).
-		SetRateLimitResetAt(resetAt).
-		Save(ctx)
+	now := time.Now().UTC()
+	resetAt = resetAt.UTC()
+	// rate_limited_at 表示当前连续限流代的首次发生时间。连续 429 只延长
+	// reset_at，不能把起点重置为 now，否则短 fallback 会被永久误判为新故障。
+	_, err := r.sql.ExecContext(ctx, `
+		UPDATE accounts
+		SET rate_limited_at = CASE
+				WHEN rate_limited_at IS NOT NULL
+					AND rate_limit_reset_at IS NOT NULL
+					AND rate_limit_reset_at > $2
+				THEN rate_limited_at
+				ELSE $2
+			END,
+			rate_limit_reset_at = CASE
+				WHEN rate_limit_reset_at IS NULL OR rate_limit_reset_at < $3 THEN $3
+				ELSE rate_limit_reset_at
+			END,
+			updated_at = $2
+		WHERE id = $1
+			AND deleted_at IS NULL
+	`, id, now, resetAt)
 	if err != nil {
 		return err
 	}
@@ -4288,18 +4323,27 @@ func (r *accountRepository) SetRateLimited(ctx context.Context, id int64, resetA
 // requests may finish concurrently, so an older response must not overwrite a
 // later reset boundary observed by another request or instance.
 func (r *accountRepository) SetRateLimitedIfLater(ctx context.Context, id int64, resetAt time.Time) error {
-	now := time.Now()
-	updated, err := r.client.Account.Update().
-		Where(
-			dbaccount.IDEQ(id),
-			dbaccount.Or(
-				dbaccount.RateLimitResetAtIsNil(),
-				dbaccount.RateLimitResetAtLT(resetAt),
-			),
-		).
-		SetRateLimitedAt(now).
-		SetRateLimitResetAt(resetAt).
-		Save(ctx)
+	now := time.Now().UTC()
+	resetAt = resetAt.UTC()
+	result, err := r.sql.ExecContext(ctx, `
+		UPDATE accounts
+		SET rate_limited_at = CASE
+				WHEN rate_limited_at IS NOT NULL
+					AND rate_limit_reset_at IS NOT NULL
+					AND rate_limit_reset_at > $2
+				THEN rate_limited_at
+				ELSE $2
+			END,
+			rate_limit_reset_at = $3,
+			updated_at = $2
+		WHERE id = $1
+			AND deleted_at IS NULL
+			AND (rate_limit_reset_at IS NULL OR rate_limit_reset_at < $3)
+	`, id, now, resetAt)
+	if err != nil {
+		return err
+	}
+	updated, err := result.RowsAffected()
 	if err != nil {
 		return err
 	}

@@ -8,6 +8,7 @@ const {
   updateUserAccountMock,
   getUserAccountMock,
   getUserModelOptionsMock,
+  getPricedModelOptionsMock,
   convertPlacementMock,
   convertAdminPlacementMock,
   checkMixedChannelRiskMock
@@ -16,6 +17,7 @@ const {
   updateUserAccountMock: vi.fn(),
   getUserAccountMock: vi.fn(),
   getUserModelOptionsMock: vi.fn(),
+  getPricedModelOptionsMock: vi.fn(),
   convertPlacementMock: vi.fn(),
   convertAdminPlacementMock: vi.fn(),
   checkMixedChannelRiskMock: vi.fn()
@@ -45,6 +47,9 @@ vi.mock('@/api/admin', () => ({
       update: updateAccountMock,
       convertExternalPlacement: convertAdminPlacementMock,
       checkMixedChannelRisk: checkMixedChannelRiskMock
+    },
+    channels: {
+      getPricedModelOptions: getPricedModelOptionsMock
     },
     settings: {
       getWebSearchEmulationConfig: vi.fn().mockResolvedValue({ enabled: false, providers: [] }),
@@ -267,9 +272,109 @@ describe('EditAccountModal', () => {
     convertAdminPlacementMock.mockReset()
     getUserAccountMock.mockReset()
     getUserModelOptionsMock.mockReset()
+    getPricedModelOptionsMock.mockReset()
     getUserModelOptionsMock.mockResolvedValue({
       models: ['gpt-5.2', 'gpt-5.2-2025-12-11', 'custom-model']
     })
+    getPricedModelOptionsMock.mockResolvedValue({
+      models: ['gpt-5.2', 'gpt-5.2-2025-12-11']
+    })
+  })
+
+  it('管理端单账号模型白名单只展示当前平台渠道定价模型并集', async () => {
+    const account = buildAccount()
+    account.credentials = {
+      ...account.credentials,
+      model_mapping: { 'gpt-5.2': 'gpt-5.2' }
+    }
+    getPricedModelOptionsMock.mockResolvedValueOnce({
+      // 模拟多个渠道/分组汇总后的重复值；平台过滤由服务端保证。
+      models: ['gpt-5.2', 'gpt-5.2', 'gpt-5.4']
+    })
+
+    const wrapper = mountModal(account)
+    await flushPromises()
+
+    expect(getPricedModelOptionsMock).toHaveBeenCalledWith(['openai'])
+    expect(wrapper.get('[data-testid="model-whitelist-selector"]').attributes('data-allowed-options'))
+      .toBe('gpt-5.2,gpt-5.4')
+    expect(wrapper.get('[data-testid="model-whitelist-selector"]').attributes('data-allowed-options'))
+      .not.toContain('deepseek-v4-flash')
+  })
+
+  it('切换管理端单账号时重新加载平台定价模型并清除旧候选', async () => {
+    const openAIAccount = buildAccount()
+    const anthropicAccount = {
+      ...buildAccount(),
+      platform: 'anthropic',
+      type: 'apikey',
+      credentials: {
+        api_key: 'sk-anthropic',
+        base_url: 'https://api.anthropic.com',
+        model_mapping: { 'claude-sonnet-4': 'claude-sonnet-4' }
+      }
+    } as any
+    getPricedModelOptionsMock
+      .mockResolvedValueOnce({ models: ['gpt-5.2'] })
+      .mockResolvedValueOnce({ models: ['claude-sonnet-4'] })
+
+    const wrapper = mountModal(openAIAccount)
+    await flushPromises()
+    expect(wrapper.get('[data-testid="model-whitelist-selector"]').attributes('data-allowed-options'))
+      .toBe('gpt-5.2')
+
+    await wrapper.setProps({ account: anthropicAccount })
+    await flushPromises()
+
+    expect(getPricedModelOptionsMock).toHaveBeenLastCalledWith(['anthropic'])
+    expect(wrapper.get('[data-testid="model-whitelist-selector"]').attributes('data-allowed-options'))
+      .toBe('claude-sonnet-4')
+  })
+
+  it('渠道定价模型加载失败时不回退到静态模型列表', async () => {
+    getPricedModelOptionsMock.mockRejectedValueOnce(new Error('pricing unavailable'))
+
+    const wrapper = mountModal()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="model-whitelist-selector"]').attributes('data-allowed-options')).toBe('')
+    expect(wrapper.get('[data-testid="model-whitelist-selector"]').attributes('data-allowed-options'))
+      .not.toContain('deepseek-v4-flash')
+  })
+
+  it('管理端与用户端共用加载状态时按权限选择接口，并丢弃切换作用域前的旧响应', async () => {
+    const account = buildAccount()
+    account.type = 'oauth'
+    account.credentials = {
+      access_token: 'oauth-token',
+      model_mapping: { 'gpt-5.2': 'gpt-5.2' }
+    }
+    let resolveAdminRequest!: (value: { models: string[] }) => void
+    getPricedModelOptionsMock.mockImplementationOnce(
+      () => new Promise(resolve => {
+        resolveAdminRequest = resolve
+      })
+    )
+    getUserModelOptionsMock.mockResolvedValueOnce({
+      models: [' user-model ', 'user-model', '']
+    })
+
+    const wrapper = mountModal(account)
+    await flushPromises()
+    expect(getPricedModelOptionsMock).toHaveBeenCalledWith(['openai'])
+
+    await wrapper.setProps({ accountScope: 'user' })
+    await flushPromises()
+
+    expect(getUserModelOptionsMock).toHaveBeenCalledWith('openai')
+    expect(wrapper.get('[data-testid="model-whitelist-selector"]').attributes('data-allowed-options'))
+      .toBe('user-model')
+
+    resolveAdminRequest({ models: ['stale-admin-model'] })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="model-whitelist-selector"]').attributes('data-allowed-options'))
+      .toBe('user-model')
   })
 
   // 投放守卫：管理端命中"必须先转出投放"时，给出一键转私有并重放本次编辑的通路。
@@ -319,18 +424,23 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[1]?.[1]).not.toHaveProperty('group_ids')
   })
 
-  // 可以改但影响在用消费者的字段：要求填写理由并二次确认，然后带着强制标记重放。
-  it('管理端遇到需强制确认的字段时，填写理由后带强制标记重放', async () => {
+  // 可以改但影响在用消费者的字段：要求填写理由并二次确认，然后带着版本快照重放。
+  it('管理端修改房间投放账号时，填写理由后带版本快照和强制标记重放', async () => {
     const account = buildAccount()
     account.owner_user_id = 5112
-    account.external_placement = { target: 'public_pool', state: 'active', version: 3 }
+    account.external_placement = { target: 'room', room_id: 71, state: 'active', version: 3 }
 
     updateAccountMock.mockReset()
     updateAccountMock.mockRejectedValueOnce({
       status: 409,
       reason: 'ACCOUNT_MUTATION_FORCE_REQUIRED',
       message: 'force required',
-      metadata: { missing: 'force_active_edit', changed_fields: 'credentials' }
+      metadata: {
+        missing: 'force_active_edit',
+        listing_ids: '71',
+        changed_fields: 'credentials',
+        expected_versions: '{"71":6}'
+      }
     })
     updateAccountMock.mockResolvedValueOnce(account)
 
@@ -354,7 +464,10 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[1]?.[1]).toMatchObject({
       force_active_edit: true,
       confirmed: true,
-      reason: '上游账号被封，更换凭证'
+      reason: '上游账号被封，更换凭证',
+      expected_versions: {
+        71: 6
+      }
     })
   })
 

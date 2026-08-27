@@ -6084,6 +6084,12 @@ export default {
         reasonPlaceholder: "e.g. upstream account was banned, rotating credentials",
         reasonHint: "The reason is stored in the audit log together with a before/after snapshot",
         forceConfirm: "Apply change",
+        challengeInvalid:
+          "The room version information required for confirmation is missing or invalid. Refresh the account list and try again.",
+        confirmationFailed:
+          "The confirmed request still failed the safety check. Refresh the account list and try again.",
+        versionConflict:
+          "The room changed while you were confirming. Refresh the account list and confirm again.",
         fields: {
           credentials: "credentials",
           extra: "extra settings",

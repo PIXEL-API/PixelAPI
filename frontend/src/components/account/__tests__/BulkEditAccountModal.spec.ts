@@ -472,6 +472,132 @@ describe('BulkEditAccountModal', () => {
     })
   })
 
+  it('房间投放账号确认后应携带完整版本快照且只提交两次', async () => {
+    vi.mocked(adminAPI.accounts.bulkUpdate).mockRejectedValueOnce({
+      status: 409,
+      reason: 'ACCOUNT_MUTATION_FORCE_REQUIRED',
+      message: 'force required',
+      metadata: {
+        missing: 'force_active_edit',
+        listing_ids: '11,12',
+        changed_fields: 'concurrency',
+        expected_versions: '{"11":4,"12":7}'
+      }
+    })
+    vi.mocked(adminAPI.accounts.bulkUpdate).mockResolvedValueOnce({
+      success: 2,
+      failed: 0,
+      success_ids: [1, 2],
+      results: []
+    } as any)
+    const wrapper = mountModal({}, {
+      BaseDialog: {
+        props: ['show'],
+        template: '<div v-if="show"><slot /><slot name="footer" /></div>'
+      }
+    })
+
+    await wrapper.get('#bulk-edit-concurrency-enabled').setValue(true)
+    await wrapper.get('#bulk-edit-concurrency').setValue(8)
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    await wrapper.get('#bulk-placement-force-reason').setValue('上游账号被封，更换凭证')
+    const confirmButton = wrapper
+      .findAll('button')
+      .find(button => button.text() === 'admin.accounts.placementGuard.forceConfirm')
+    expect(confirmButton).toBeTruthy()
+    await confirmButton!.trigger('click')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledTimes(2)
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenNthCalledWith(2, [1, 2], {
+      concurrency: 8,
+      force_active_edit: true,
+      confirmed: true,
+      reason: '上游账号被封，更换凭证',
+      expected_versions: {
+        11: 4,
+        12: 7
+      }
+    })
+    expect(wrapper.emitted('updated')).toHaveLength(1)
+    expect(wrapper.emitted('close')).toHaveLength(1)
+    expect(wrapper.find('#bulk-placement-force-reason').exists()).toBe(false)
+  })
+
+  it('已确认请求仍被守卫拒绝时不得重新打开相同确认弹窗', async () => {
+    vi.mocked(adminAPI.accounts.bulkUpdate)
+      .mockRejectedValueOnce({
+        status: 409,
+        reason: 'ACCOUNT_MUTATION_FORCE_REQUIRED',
+        message: 'force required',
+        metadata: {
+          missing: 'force_active_edit',
+          listing_ids: '11',
+          changed_fields: 'concurrency',
+          expected_versions: '{"11":4}'
+        }
+      })
+      .mockRejectedValueOnce({
+        status: 409,
+        reason: 'ACCOUNT_MUTATION_FORCE_REQUIRED',
+        message: 'confirmed request rejected',
+        metadata: {
+          missing: 'expected_versions',
+          listing_ids: '11',
+          changed_fields: 'concurrency',
+          expected_versions: '{"11":4}'
+        }
+      })
+    const wrapper = mountModal({}, {
+      BaseDialog: {
+        props: ['show'],
+        template: '<div v-if="show"><slot /><slot name="footer" /></div>'
+      }
+    })
+
+    await wrapper.get('#bulk-edit-concurrency-enabled').setValue(true)
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    await wrapper.get('#bulk-placement-force-reason').setValue('核对投放配置')
+    const confirmButton = wrapper
+      .findAll('button')
+      .find(button => button.text() === 'admin.accounts.placementGuard.forceConfirm')
+    await confirmButton!.trigger('click')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('#bulk-placement-force-reason').exists()).toBe(false)
+  })
+
+  it('房间版本挑战无效时应停止确认流程而不是盲目重试', async () => {
+    vi.mocked(adminAPI.accounts.bulkUpdate).mockRejectedValueOnce({
+      status: 409,
+      reason: 'ACCOUNT_MUTATION_FORCE_REQUIRED',
+      message: 'force required',
+      metadata: {
+        missing: 'force_active_edit',
+        listing_ids: '11,12',
+        changed_fields: 'concurrency',
+        expected_versions: '{"11":4}'
+      }
+    })
+    const wrapper = mountModal({}, {
+      BaseDialog: {
+        props: ['show'],
+        template: '<div v-if="show"><slot /><slot name="footer" /></div>'
+      }
+    })
+
+    await wrapper.get('#bulk-edit-concurrency-enabled').setValue(true)
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('#bulk-placement-force-reason').exists()).toBe(false)
+  })
+
   it('用户作用域不再展示旧共享模式和分组入口', async () => {
     const wrapper = mountModal({
       accountScope: 'user',

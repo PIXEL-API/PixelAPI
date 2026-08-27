@@ -1401,102 +1401,88 @@ func (s *OpenAIGatewayService) selectAccountShareModeBoundAccount(
 	var listing *AccountShareListing
 	var account *Account
 	var lastErr error
-	for attempt := 0; attempt < AccountShareModeQueueMaxItems; attempt++ {
-		var err error
-		membership, listing, err = s.accountShareModeService.ResolveActiveBindingForRequest(ctx, reqCtx.UserID, reqCtx.APIKeyID, *groupID)
+	var err error
+	membership, listing, err = s.accountShareModeService.ResolveActiveBindingForRequest(ctx, reqCtx.UserID, reqCtx.APIKeyID, *groupID)
+	if err != nil {
+		return nil, decision, true, err
+	}
+	if membership == nil || listing == nil {
+		return nil, decision, true, ErrAccountShareModeGroupUnbound
+	}
+	accountID := membership.AccountID
+	if accountID <= 0 {
+		return nil, decision, true, ErrNoAvailableAccounts
+	}
+	decision.CandidateCount = 1
+	decision.SelectedAccountID = accountID
+	retryCurrentMembership := false
+	if excludedIDs != nil {
+		if _, excluded := excludedIDs[accountID]; excluded {
+			lastErr = ErrNoAvailableAccounts
+			retryCurrentMembership = true
+		}
+	}
+	if !retryCurrentMembership && s.userRepo != nil {
+		user, err := s.userRepo.GetByID(ctx, reqCtx.UserID)
 		if err != nil {
 			return nil, decision, true, err
 		}
-		if membership == nil || listing == nil {
-			return nil, decision, true, ErrAccountShareModeGroupUnbound
+		// 号主自用在 join 阶段已豁免余额校验（account_share_mode.go:3876），
+		// dispatch 路径必须保持一致：号主余额跌破自己房间的 min_balance 时，
+		// 自用请求不应被拒——否则自用闭环在余额不足时断链。
+		if !IsAccountShareModeOwnerSelfUse(membership, listing) && user.Balance < listing.MinBalanceRequired {
+			lastErr = ErrAccountShareBalanceBelowMinimum
+			retryCurrentMembership = true
 		}
-		accountID := membership.AccountID
-		if accountID <= 0 {
-			return nil, decision, true, ErrNoAvailableAccounts
+	}
+	if !retryCurrentMembership {
+		account, err = s.accountRepo.GetByID(ctx, accountID)
+		if err != nil {
+			return nil, decision, true, err
 		}
-		decision.CandidateCount = 1
-		decision.SelectedAccountID = accountID
-		retryCurrentMembership := false
-		if excludedIDs != nil {
-			if _, excluded := excludedIDs[accountID]; excluded {
-				lastErr = ErrNoAvailableAccounts
-				retryCurrentMembership = true
-			}
-		}
-		if !retryCurrentMembership && s.userRepo != nil {
-			user, err := s.userRepo.GetByID(ctx, reqCtx.UserID)
-			if err != nil {
-				return nil, decision, true, err
-			}
-			// 号主自用在 join 阶段已豁免余额校验（account_share_mode.go:3876），
-			// dispatch 路径必须保持一致：号主余额跌破自己房间的 min_balance 时，
-			// 自用请求不应被拒——否则自用闭环在余额不足时断链。
-			if !IsAccountShareModeOwnerSelfUse(membership, listing) && user.Balance < listing.MinBalanceRequired {
-				lastErr = ErrAccountShareBalanceBelowMinimum
-				retryCurrentMembership = true
-			}
-		}
-		if !retryCurrentMembership {
-			account, err = s.accountRepo.GetByID(ctx, accountID)
-			if err != nil {
-				return nil, decision, true, err
-			}
-			if account == nil {
-				lastErr = ErrNoAvailableAccounts
-				retryCurrentMembership = true
-			}
-		}
-		if !retryCurrentMembership {
-			decision.SelectedAccountType = account.Type
-			if account.ID != accountID || !account.IsOpenAICompatible() || !account.IsSchedulable() {
-				lastErr = ErrNoAvailableAccounts
-				retryCurrentMembership = true
-			}
-		}
-		if !retryCurrentMembership && requestedModel != "" && !accountShareListingAllowsModel(listing, requestedModel) {
-			return nil, decision, true, accountShareModeUnsupportedModelError(requestedModel)
-		}
-		if !retryCurrentMembership && requestedModel != "" && !account.IsModelSupported(requestedModel) {
-			return nil, decision, true, accountShareModeUnsupportedModelError(requestedModel)
-		}
-		if !retryCurrentMembership && (!isOpenAIAccountEligibleForRequest(account, requestedModel, requireCompact) || s.isOpenAIAccountRequestRuntimeBlocked(account, requestedModel)) {
+		if account == nil {
 			lastErr = ErrNoAvailableAccounts
 			retryCurrentMembership = true
 		}
-		if !retryCurrentMembership && !accountSupportsRequestedOpenAIImageCapability(account, boundImageCapability) {
+	}
+	if !retryCurrentMembership {
+		decision.SelectedAccountType = account.Type
+		if account.ID != accountID || !account.IsOpenAICompatible() || !account.IsSchedulable() {
 			lastErr = ErrNoAvailableAccounts
 			retryCurrentMembership = true
 		}
-		if !retryCurrentMembership && !account.SupportsOpenAIEndpointCapability(requiredEndpointCapability) {
-			lastErr = ErrNoAvailableAccounts
-			retryCurrentMembership = true
+	}
+	if !retryCurrentMembership && requestedModel != "" && !accountShareListingAllowsModel(listing, requestedModel) {
+		return nil, decision, true, accountShareModeUnsupportedModelError(requestedModel)
+	}
+	if !retryCurrentMembership && requestedModel != "" && !account.IsModelSupported(requestedModel) {
+		return nil, decision, true, accountShareModeUnsupportedModelError(requestedModel)
+	}
+	if !retryCurrentMembership && (!isOpenAIAccountEligibleForRequest(account, requestedModel, requireCompact) || s.isOpenAIAccountRequestRuntimeBlocked(account, requestedModel)) {
+		lastErr = ErrNoAvailableAccounts
+		retryCurrentMembership = true
+	}
+	if !retryCurrentMembership && !accountSupportsRequestedOpenAIImageCapability(account, boundImageCapability) {
+		lastErr = ErrNoAvailableAccounts
+		retryCurrentMembership = true
+	}
+	if !retryCurrentMembership && !account.SupportsOpenAIEndpointCapability(requiredEndpointCapability) {
+		lastErr = ErrNoAvailableAccounts
+		retryCurrentMembership = true
+	}
+	if !retryCurrentMembership && !s.isOpenAIAccountTransportCompatible(account, requiredTransport) {
+		lastErr = ErrNoAvailableAccounts
+		retryCurrentMembership = true
+	}
+	if !retryCurrentMembership && s.needsUpstreamChannelRestrictionCheck(ctx, groupID) && s.isUpstreamModelRestrictedByChannel(ctx, *groupID, account, requestedModel, requireCompact) {
+		lastErr = ErrNoAvailableAccounts
+		retryCurrentMembership = true
+	}
+	if retryCurrentMembership {
+		if lastErr != nil {
+			return nil, decision, true, lastErr
 		}
-		if !retryCurrentMembership && !s.isOpenAIAccountTransportCompatible(account, requiredTransport) {
-			lastErr = ErrNoAvailableAccounts
-			retryCurrentMembership = true
-		}
-		if !retryCurrentMembership && s.needsUpstreamChannelRestrictionCheck(ctx, groupID) && s.isUpstreamModelRestrictedByChannel(ctx, *groupID, account, requestedModel, requireCompact) {
-			lastErr = ErrNoAvailableAccounts
-			retryCurrentMembership = true
-		}
-		if retryCurrentMembership {
-			now := time.Now().UTC()
-			deferred, err := s.accountShareModeService.deferMembershipForDispatchRetry(ctx, reqCtx, membership, now)
-			if err != nil {
-				return nil, decision, true, err
-			}
-			if !deferred {
-				if lastErr != nil {
-					return nil, decision, true, lastErr
-				}
-				return nil, decision, true, ErrNoAvailableAccounts
-			}
-			membership = nil
-			listing = nil
-			account = nil
-			continue
-		}
-		break
+		return nil, decision, true, ErrNoAvailableAccounts
 	}
 	if membership == nil || listing == nil || account == nil {
 		if lastErr != nil {

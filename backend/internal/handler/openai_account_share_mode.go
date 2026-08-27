@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -62,52 +63,105 @@ func openAIResponsesDispatchContext(c *gin.Context, routingCtx context.Context, 
 	return openAICompatibleRequestContext(ctx, apiKey)
 }
 
-func (h *OpenAIGatewayHandler) handleAccountShareModeSelectionError(c *gin.Context, err error, streamStarted bool) bool {
+type accountShareModeHTTPErrorDetails struct {
+	status        int
+	openAIType    string
+	anthropicType string
+	message       string
+	retryAfter    int
+}
+
+func classifyAccountShareModeHTTPError(err error) (accountShareModeHTTPErrorDetails, bool) {
 	switch {
-	case errors.Is(err, service.ErrAccountShareMembershipEnding):
-		h.handleStreamingAwareError(c, http.StatusConflict, "account_share_membership_ending", "上一个房间的退出结算尚未完成，请稍候再发起请求", streamStarted)
-		return true
+	case errors.Is(err, service.ErrAccountShareMembershipIdleTimeout):
+		return accountShareModeHTTPErrorDetails{
+			status:        http.StatusConflict,
+			openAIType:    "account_share_idle_timeout",
+			anthropicType: "invalid_request_error",
+			message:       "账号房间绑定已因空闲超时结束，请重新加入房间",
+		}, true
 	case errors.Is(err, service.ErrAccountShareModeGroupUnbound):
-		h.handleStreamingAwareError(c, http.StatusBadRequest, "account_share_mode_unbound", "该分组未绑定账号", streamStarted)
-		return true
+		return accountShareModeHTTPErrorDetails{
+			status:        http.StatusBadRequest,
+			openAIType:    "account_share_mode_unbound",
+			anthropicType: "invalid_request_error",
+			message:       "该分组未绑定账号",
+		}, true
+	case errors.Is(err, service.ErrAccountShareModeRecovering):
+		retryAfter := service.RetryAfterSecondsFromError(err)
+		if retryAfter <= 0 {
+			retryAfter = service.AccountShareModeDefaultRecoveryRetryAfter
+		}
+		return accountShareModeHTTPErrorDetails{
+			status:        http.StatusServiceUnavailable,
+			openAIType:    "account_share_recovering",
+			anthropicType: "api_error",
+			message:       "共享账号正在恢复，请稍后重试",
+			retryAfter:    retryAfter,
+		}, true
+	case errors.Is(err, service.ErrAccountShareMembershipEnding):
+		return accountShareModeHTTPErrorDetails{
+			status:        http.StatusConflict,
+			openAIType:    "account_share_membership_ending",
+			anthropicType: "invalid_request_error",
+			message:       "上一个房间的退出结算尚未完成，请稍候再发起请求",
+		}, true
 	case errors.Is(err, service.ErrAccountShareBalanceBelowMinimum):
-		h.handleStreamingAwareError(c, http.StatusForbidden, "account_share_balance_below_minimum", "账户余额低于共享账号最低准入余额", streamStarted)
-		return true
+		return accountShareModeHTTPErrorDetails{
+			status:        http.StatusForbidden,
+			openAIType:    "account_share_balance_below_minimum",
+			anthropicType: "permission_error",
+			message:       "账户余额低于共享账号最低准入余额",
+		}, true
 	case errors.Is(err, service.ErrAccountSharePerUserConcurrencyExceeded):
-		h.handleStreamingAwareError(c, http.StatusTooManyRequests, "account_share_concurrency_exceeded", "共享账号单用户并发已达上限", streamStarted)
-		return true
+		return accountShareModeHTTPErrorDetails{
+			status:        http.StatusTooManyRequests,
+			openAIType:    "account_share_concurrency_exceeded",
+			anthropicType: "rate_limit_error",
+			message:       "共享账号单用户并发已达上限",
+		}, true
 	case errors.Is(err, service.ErrAccountShareModeUnsupportedModel):
-		h.handleStreamingAwareError(c, http.StatusBadRequest, "account_share_model_unsupported", "模型不支持", streamStarted)
-		return true
+		return accountShareModeHTTPErrorDetails{
+			status:        http.StatusBadRequest,
+			openAIType:    "account_share_model_unsupported",
+			anthropicType: "invalid_request_error",
+			message:       "模型不支持",
+		}, true
 	case errors.Is(err, service.ErrAccountShareModeSelection):
-		h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "account_share_unavailable", "共享账号暂时不可用，请稍后重试", streamStarted)
-		return true
+		return accountShareModeHTTPErrorDetails{
+			status:        http.StatusServiceUnavailable,
+			openAIType:    "account_share_unavailable",
+			anthropicType: "api_error",
+			message:       "共享账号暂时不可用，请稍后重试",
+		}, true
 	default:
-		return false
+		return accountShareModeHTTPErrorDetails{}, false
 	}
 }
 
-func (h *OpenAIGatewayHandler) handleAccountShareModeAnthropicError(c *gin.Context, err error, streamStarted bool) bool {
-	switch {
-	case errors.Is(err, service.ErrAccountShareMembershipEnding):
-		h.anthropicStreamingAwareError(c, http.StatusConflict, "invalid_request_error", "上一个房间的退出结算尚未完成，请稍候再发起请求", streamStarted)
-		return true
-	case errors.Is(err, service.ErrAccountShareModeGroupUnbound):
-		h.anthropicStreamingAwareError(c, http.StatusBadRequest, "invalid_request_error", "该分组未绑定账号", streamStarted)
-		return true
-	case errors.Is(err, service.ErrAccountShareBalanceBelowMinimum):
-		h.anthropicStreamingAwareError(c, http.StatusForbidden, "permission_error", "账户余额低于共享账号最低准入余额", streamStarted)
-		return true
-	case errors.Is(err, service.ErrAccountSharePerUserConcurrencyExceeded):
-		h.anthropicStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", "共享账号单用户并发已达上限", streamStarted)
-		return true
-	case errors.Is(err, service.ErrAccountShareModeUnsupportedModel):
-		h.anthropicStreamingAwareError(c, http.StatusBadRequest, "invalid_request_error", "模型不支持", streamStarted)
-		return true
-	case errors.Is(err, service.ErrAccountShareModeSelection):
-		h.anthropicStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "共享账号暂时不可用，请稍后重试", streamStarted)
-		return true
-	default:
+func applyAccountShareModeRetryAfter(c *gin.Context, details accountShareModeHTTPErrorDetails) {
+	if c == nil || details.retryAfter <= 0 || c.Writer == nil || c.Writer.Written() {
+		return
+	}
+	c.Header("Retry-After", strconv.Itoa(details.retryAfter))
+}
+
+func (h *OpenAIGatewayHandler) handleAccountShareModeSelectionError(c *gin.Context, err error, streamStarted bool) bool {
+	details, ok := classifyAccountShareModeHTTPError(err)
+	if !ok {
 		return false
 	}
+	applyAccountShareModeRetryAfter(c, details)
+	h.handleStreamingAwareError(c, details.status, details.openAIType, details.message, streamStarted)
+	return true
+}
+
+func (h *OpenAIGatewayHandler) handleAccountShareModeAnthropicError(c *gin.Context, err error, streamStarted bool) bool {
+	details, ok := classifyAccountShareModeHTTPError(err)
+	if !ok {
+		return false
+	}
+	applyAccountShareModeRetryAfter(c, details)
+	h.anthropicStreamingAwareError(c, details.status, details.anthropicType, details.message, streamStarted)
+	return true
 }

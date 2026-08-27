@@ -184,8 +184,9 @@ routeLoop:
 			selectionCtx := openAIAccountShareModeRequestContext(c, currentAPIKey)
 			selection, err := h.gatewayService.SelectAccountWithLoadAwareness(selectionCtx, currentAPIKey.GroupID, sessionHash, reqModel, fs.FailedAccountIDs, "", int64(0))
 			if err != nil {
-				if errors.Is(err, service.ErrAccountShareModeSelection) {
-					h.responsesErrorResponse(c, http.StatusServiceUnavailable, "account_share_unavailable", "共享账号暂时不可用，请稍后重试")
+				if details, handled := classifyAccountShareModeHTTPError(err); handled {
+					applyAccountShareModeRetryAfter(c, details)
+					h.responsesErrorResponse(c, details.status, details.openAIType, details.message)
 					return
 				}
 				if len(fs.FailedAccountIDs) == 0 {

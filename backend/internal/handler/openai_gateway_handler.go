@@ -48,6 +48,29 @@ type grokMediaEligibilityProber interface {
 
 const maxOpenAIFirstOutputTimeoutSwitches = 1
 
+func accountShareModeWSCloseDetails(err error) (coderws.StatusCode, string, bool) {
+	switch {
+	case errors.Is(err, service.ErrAccountShareMembershipIdleTimeout):
+		return coderws.StatusPolicyViolation, "账号房间绑定已因空闲超时结束，请重新加入房间", true
+	case errors.Is(err, service.ErrAccountShareModeGroupUnbound):
+		return coderws.StatusPolicyViolation, "该分组未绑定账号", true
+	case errors.Is(err, service.ErrAccountShareModeRecovering):
+		return coderws.StatusTryAgainLater, "共享账号正在恢复，请稍后重试", true
+	case errors.Is(err, service.ErrAccountShareMembershipEnding):
+		return coderws.StatusTryAgainLater, "上一个房间的退出结算尚未完成，请稍候再发起请求", true
+	case errors.Is(err, service.ErrAccountShareBalanceBelowMinimum):
+		return coderws.StatusPolicyViolation, "账户余额低于共享账号最低准入余额", true
+	case errors.Is(err, service.ErrAccountSharePerUserConcurrencyExceeded):
+		return coderws.StatusTryAgainLater, "共享账号单用户并发已达上限", true
+	case errors.Is(err, service.ErrAccountShareModeUnsupportedModel):
+		return coderws.StatusPolicyViolation, "模型不支持", true
+	case errors.Is(err, service.ErrAccountShareModeSelection):
+		return coderws.StatusTryAgainLater, "共享账号暂时不可用，请稍后重试", true
+	default:
+		return 0, "", false
+	}
+}
+
 func newOpenAIWSTurnClientRequestID(turn int, payloadHash string) string {
 	return fmt.Sprintf(
 		"openai-ws-turn:%d:%s:%s",
@@ -1986,20 +2009,8 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			zap.Error(selectErr),
 			zap.Int64p("group_id", currentAPIKey.GroupID),
 		)
-		if errors.Is(selectErr, service.ErrAccountShareModeGroupUnbound) {
-			closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "该分组未绑定账号")
-			return
-		}
-		if errors.Is(selectErr, service.ErrAccountShareBalanceBelowMinimum) {
-			closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "账户余额低于共享账号最低准入余额")
-			return
-		}
-		if errors.Is(selectErr, service.ErrAccountSharePerUserConcurrencyExceeded) {
-			closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "共享账号单用户并发已达上限")
-			return
-		}
-		if errors.Is(selectErr, service.ErrAccountShareModeSelection) {
-			closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "共享账号暂时不可用，请稍后重试")
+		if status, reason, handled := accountShareModeWSCloseDetails(selectErr); handled {
+			closeOpenAIClientWS(wsConn, status, reason)
 			return
 		}
 		if !routeCursor.switchToNext(apiKey.ID, "account_select_failed", reqLog, zap.Error(selectErr)) {
@@ -2186,6 +2197,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					)
 					if selectErr != nil {
 						releaseTurnSlots()
+						if status, reason, handled := accountShareModeWSCloseDetails(selectErr); handled {
+							return nil, service.NewOpenAIWSClientCloseError(status, reason, selectErr)
+						}
 						return nil, service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "shared account is temporarily unavailable; please reconnect", selectErr)
 					}
 					if nextSelection == nil || nextSelection.Account == nil || !nextSelection.AccountShareMode ||
@@ -2240,6 +2254,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			if revalidateErr != nil {
 				cancelTurn()
 				releaseTurnSlots()
+				if status, reason, handled := accountShareModeWSCloseDetails(revalidateErr); handled {
+					return nil, service.NewOpenAIWSClientCloseError(status, reason, revalidateErr)
+				}
 				return nil, service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "selected account is no longer available; please reconnect", revalidateErr)
 			}
 			if latest == nil || latest.ID != account.ID {
