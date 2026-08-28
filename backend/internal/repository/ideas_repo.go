@@ -115,7 +115,7 @@ func (r *ideasRepository) UpdateDraftRevision(ctx context.Context, input service
 	if post.AuthorUserID != input.UserID {
 		return nil, service.ErrIdeaPostNotAuthor
 	}
-	if post.Status != service.IdeaPostStatusDraft {
+	if post.Status != service.IdeaPostStatusDraft && post.Status != service.IdeaPostStatusRejected {
 		return nil, service.ErrIdeaPostInvalidState
 	}
 
@@ -1005,8 +1005,8 @@ func (r *ideasRepository) ClaimPendingIdeaModerations(ctx context.Context, now t
 			AND p.deleted_at IS NULL
 			AND (r.moderation_next_retry_at IS NULL OR r.moderation_next_retry_at <= $1)
 		ORDER BY r.id
-		FOR UPDATE OF r SKIP LOCKED
-		LIMIT $2`, now, limit)
+		LIMIT $2
+		FOR UPDATE OF r SKIP LOCKED`, now, limit)
 	if err != nil {
 		return nil, err
 	}

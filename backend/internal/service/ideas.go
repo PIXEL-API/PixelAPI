@@ -302,7 +302,7 @@ func (s *IdeasService) Update(ctx context.Context, input IdeaPostUpdateInput) (*
 		return nil, err
 	}
 	switch post.Status {
-	case IdeaPostStatusDraft:
+	case IdeaPostStatusDraft, IdeaPostStatusRejected:
 		return s.repo.UpdateDraftRevision(ctx, input, tags)
 	case IdeaPostStatusPublished:
 		return s.repo.EditPublishedRevision(ctx, input, tags)

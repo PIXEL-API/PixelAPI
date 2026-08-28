@@ -66,3 +66,8 @@ export async function adminUpdateTag(id: number, payload: { name?: string; statu
   const { data } = await apiClient.patch<IdeaTag>(`/admin/ideas/tags/${id}`, payload)
   return data
 }
+
+export async function adminMergeTags(sourceId: number, targetId: number) {
+  const { data } = await apiClient.post(`/admin/ideas/tags/${sourceId}/merge`, { target_tag_id: targetId })
+  return data
+}

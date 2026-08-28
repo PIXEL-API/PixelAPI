@@ -26,15 +26,24 @@ const props = withDefaults(defineProps<Props>(), {
 
 const customClass = computed(() => props.class || '')
 
+function normalizeSize(v: string | number | undefined): string | undefined {
+  if (v === undefined || v === null) return undefined
+  if (typeof v === 'number') return `${v}px`
+  const str = String(v).trim()
+  return /^\d+(\.\d+)?$/.test(str) ? `${str}px` : str
+}
+
 const style = computed(() => {
   const s: Record<string, string> = {}
-  
+
   if (props.width) {
-    s.width = typeof props.width === 'number' ? `${props.width}px` : props.width
+    const w = normalizeSize(props.width)
+    if (w) s.width = w
   }
-  
+
   if (props.height) {
-    s.height = typeof props.height === 'number' ? `${props.height}px` : props.height
+    const h = normalizeSize(props.height)
+    if (h) s.height = h
   } else if (props.variant === 'text') {
     s.height = '1em'
     s.marginTop = '0.25em'
