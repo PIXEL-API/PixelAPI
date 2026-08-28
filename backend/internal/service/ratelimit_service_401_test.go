@@ -308,3 +308,116 @@ func TestRateLimitService_HandleUpstreamError_OAuth401NoRefreshTokenSetsError(t 
 		require.Equal(t, 0, repo.tempCalls)
 	})
 }
+
+// OpenCode 将模型能力拒绝编码为 401，并在 Anthropic 兼容错误体中标注
+// provider error.type=ModelError。该响应说明当前模型不可用，不代表 API key
+// 已失效；因此必须只写 (account, model) 冷却，不能把整个账号置为 error。
+func TestRateLimitService_HandleUpstreamErrorForModel_OpencodeModelErrorUsesModelRateLimit(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		model string
+	}{
+		{name: "Hy3", model: "Hy3"},
+		{name: "DeepSeek-V4-Flash-Vision-Exp", model: "DeepSeek-V4-Flash-Vision-Exp"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			repo := &rateLimitAccountRepoStub{}
+			svc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+			account := &Account{
+				ID:          300,
+				Platform:    PlatformOpencode,
+				Type:        AccountTypeAPIKey,
+				Status:      StatusActive,
+				Schedulable: true,
+			}
+			body := []byte(`{"type":"error","error":{"type":"ModelError","message":"Model ` + tt.model + ` is not supported"}}`)
+
+			handled := svc.HandleUpstreamErrorForModel(
+				context.Background(),
+				account,
+				tt.model,
+				http.StatusUnauthorized,
+				http.Header{},
+				body,
+			)
+
+			require.True(t, handled, "模型级拒绝仍需触发当前请求转移到下一个账号")
+			require.Zero(t, repo.setErrorCalls, "模型不支持不能把 OpenCode API key 账号置为永久 error")
+			require.Empty(t, repo.tempCalls)
+			require.Empty(t, repo.rateLimitCalls)
+			require.Len(t, repo.modelRateLimitCalls, 1)
+			call := repo.modelRateLimitCalls[0]
+			require.Equal(t, account.ID, call.accountID)
+			require.Equal(t, tt.model, call.modelKey)
+			require.Equal(t, upstreamOpencodeModelNotSupportedReason, call.reason)
+			require.True(t, call.resetAt.After(time.Now()), "模型级冷却必须有未来的 reset_at")
+		})
+	}
+}
+
+// 只有明确的 ModelError 才能走模型级冷却；真正的 OpenCode 凭证 401
+// 仍必须保留账号级错误处理，避免把无效 API key 当成可重试的模型问题。
+func TestRateLimitService_HandleUpstreamErrorForModel_OpencodeAuthentication401SetsError(t *testing.T) {
+	t.Parallel()
+	repo := &rateLimitAccountRepoStub{}
+	svc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	account := &Account{
+		ID:       302,
+		Platform: PlatformOpencode,
+		Type:     AccountTypeAPIKey,
+		Status:   StatusActive,
+	}
+
+	handled := svc.HandleUpstreamErrorForModel(
+		context.Background(),
+		account,
+		"Hy3",
+		http.StatusUnauthorized,
+		http.Header{},
+		[]byte(`{"type":"error","error":{"type":"AuthenticationError","message":"Invalid API key"}}`),
+	)
+
+	require.True(t, handled)
+	require.Equal(t, 1, repo.setErrorCalls)
+	require.Empty(t, repo.modelRateLimitCalls)
+}
+
+// 网关层必须把 OpenCode 的模型级 401 原样转交给
+// RateLimitService.HandleUpstreamErrorForModel，不能在转发入口提前按通用
+// 认证失败处理。该契约覆盖 /v1/responses、/v1/chat/completions、/v1/messages
+// 共用的错误处理桥接点。
+func TestOpenAIGatewayService_HandleOpenAIAccountUpstreamErrorForModel_ForwardsOpencodeModelError(t *testing.T) {
+	t.Parallel()
+	repo := &rateLimitAccountRepoStub{}
+	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	gateway := &OpenAIGatewayService{rateLimitService: rateLimitService}
+	account := &Account{
+		ID:          301,
+		Platform:    PlatformOpencode,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+	}
+	body := []byte(`{"type":"error","error":{"type":"ModelError","message":"Model Hy3 is not supported"}}`)
+
+	handled := gateway.handleOpenAIAccountUpstreamErrorForModel(
+		context.Background(),
+		account,
+		"Hy3",
+		http.StatusUnauthorized,
+		http.Header{},
+		body,
+	)
+
+	require.True(t, handled)
+	require.Zero(t, repo.setErrorCalls)
+	require.Len(t, repo.modelRateLimitCalls, 1)
+	require.Equal(t, account.ID, repo.modelRateLimitCalls[0].accountID)
+	require.Equal(t, "Hy3", repo.modelRateLimitCalls[0].modelKey)
+	require.Equal(t, upstreamOpencodeModelNotSupportedReason, repo.modelRateLimitCalls[0].reason)
+}

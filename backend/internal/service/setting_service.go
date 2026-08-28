@@ -928,6 +928,8 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 
 		RiskControlEnabled: settings[SettingKeyRiskControlEnabled] == "true",
 
+		IdeasEnabled: isTrueSettingValue(settings[SettingKeyIdeasEnabled]),
+
 		InvoiceManagementEnabled:        settings[SettingKeyInvoiceManagementEnabled] == "true",
 		WithdrawalManagementEnabled:     !isFalseSettingValue(settings[SettingKeyWithdrawalManagementEnabled]),
 		WithdrawalRateLimitWindowDays:   withdrawalRateLimit.WindowDays,
@@ -1128,6 +1130,7 @@ type PublicSettingsInjectionPayload struct {
 	WithdrawalRateLimitWindowDays        int                        `json:"withdrawal_rate_limit_window_days"`
 	WithdrawalRateLimitMax               int                        `json:"withdrawal_rate_limit_max"`
 	WithdrawalRateLimitExemptAmount      float64                    `json:"withdrawal_rate_limit_exempt_amount"`
+	IdeasEnabled                         bool                       `json:"ideas_enabled"`
 }
 
 // GetPublicSettingsForInjection returns public settings in a format suitable for HTML injection.
@@ -1197,6 +1200,7 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		WithdrawalRateLimitWindowDays:        settings.WithdrawalRateLimitWindowDays,
 		WithdrawalRateLimitMax:               settings.WithdrawalRateLimitMax,
 		WithdrawalRateLimitExemptAmount:      settings.WithdrawalRateLimitExemptAmount,
+		IdeasEnabled:                         settings.IdeasEnabled,
 	}, nil
 }
 
@@ -1972,6 +1976,16 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 
 	// Affiliate (邀请返利) feature switch
 	updates[SettingKeyAffiliateEnabled] = strconv.FormatBool(settings.AffiliateEnabled)
+
+	// 「有个想法」内容板块开关
+	updates[SettingKeyIdeasEnabled] = strconv.FormatBool(settings.IdeasEnabled)
+	updates[SettingKeyIdeasModerationEnabled] = strconv.FormatBool(settings.IdeasModerationEnabled)
+	updates[SettingKeyIdeasRewardsPointsEnabled] = strconv.FormatBool(settings.IdeasRewardsPointsEnabled)
+	updates[SettingKeyIdeasRewardsBalanceEnabled] = strconv.FormatBool(settings.IdeasRewardsBalanceEnabled)
+	updates[SettingKeyIdeasRewardBalanceMaxAmount] = strconv.FormatFloat(settings.IdeasRewardBalanceMaxAmount, 'f', -1, 64)
+	updates[SettingKeyIdeasRewardPointsMaxAmount] = strconv.FormatFloat(settings.IdeasRewardPointsMaxAmount, 'f', -1, 64)
+	updates[SettingKeyIdeasOSSEnabled] = strconv.FormatBool(settings.IdeasOSSEnabled)
+	updates[SettingKeyIdeasTagBlacklist] = settings.IdeasTagBlacklist
 
 	// Functional module switches
 	updates[SettingKeyInvoiceManagementEnabled] = strconv.FormatBool(settings.InvoiceManagementEnabled)
@@ -3035,6 +3049,16 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		// Affiliate (邀请返利) feature (default disabled; opt-in)
 		SettingKeyAffiliateEnabled: "false",
 
+		// 「有个想法」内容板块（默认全关）
+		SettingKeyIdeasEnabled:                "false",
+		SettingKeyIdeasModerationEnabled:      "false",
+		SettingKeyIdeasRewardsPointsEnabled:   "false",
+		SettingKeyIdeasRewardsBalanceEnabled:  "false",
+		SettingKeyIdeasRewardBalanceMaxAmount: "5",
+		SettingKeyIdeasRewardPointsMaxAmount:  "100",
+		SettingKeyIdeasOSSEnabled:             "false",
+		SettingKeyIdeasTagBlacklist:           "",
+
 		// Functional modules
 		SettingKeyInvoiceManagementEnabled:        "false",
 		SettingKeyWithdrawalManagementEnabled:     "true",
@@ -3463,6 +3487,14 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.WithdrawalRateLimitMax = withdrawalRateLimit.MaxRequests
 	result.WithdrawalRateLimitExemptAmount = withdrawalRateLimit.ExemptAmount
 	result.RiskControlEnabled = settings[SettingKeyRiskControlEnabled] == "true"
+	result.IdeasEnabled = isTrueSettingValue(settings[SettingKeyIdeasEnabled])
+	result.IdeasModerationEnabled = isTrueSettingValue(settings[SettingKeyIdeasModerationEnabled])
+	result.IdeasRewardsPointsEnabled = isTrueSettingValue(settings[SettingKeyIdeasRewardsPointsEnabled])
+	result.IdeasRewardsBalanceEnabled = isTrueSettingValue(settings[SettingKeyIdeasRewardsBalanceEnabled])
+	result.IdeasRewardBalanceMaxAmount = parseIdeasRewardMaxAmount(settings[SettingKeyIdeasRewardBalanceMaxAmount], ideasRewardBalanceMaxAmountDefault)
+	result.IdeasRewardPointsMaxAmount = parseIdeasRewardMaxAmount(settings[SettingKeyIdeasRewardPointsMaxAmount], ideasRewardPointsMaxAmountDefault)
+	result.IdeasOSSEnabled = isTrueSettingValue(settings[SettingKeyIdeasOSSEnabled])
+	result.IdeasTagBlacklist = settings[SettingKeyIdeasTagBlacklist]
 	result.CyberSessionBlockEnabled = settings[SettingKeyCyberSessionBlockEnabled] == "true"
 	result.OpenAICyberPolicyEnforcedGroupIDs, _ = parseOpenAICyberPolicyEnforcedGroupIDs(settings[SettingKeyOpenAICyberPolicyEnforcedGroupIDs])
 	result.AccountShareCommentReviewEnabled = settings[SettingKeyAccountShareCommentReviewEnabled] == "true"
@@ -3653,6 +3685,181 @@ func isFalseSettingValue(value string) bool {
 	default:
 		return false
 	}
+}
+
+// isTrueSettingValue 判断「默认关」类开关是否被显式打开。
+func isTrueSettingValue(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "1", "on", "enabled":
+		return true
+	default:
+		return false
+	}
+}
+
+// IsIdeasEnabled 检查「有个想法」板块总开关（默认关）。
+func (s *SettingService) IsIdeasEnabled(ctx context.Context) bool {
+	if s == nil || s.settingRepo == nil {
+		return false
+	}
+	value, err := s.settingRepo.GetValue(ctx, SettingKeyIdeasEnabled)
+	if err != nil {
+		return false
+	}
+	return isTrueSettingValue(value)
+}
+
+// IsIdeasRewardsBalanceEnabled 检查余额打赏开关（默认关）。
+func (s *SettingService) IsIdeasRewardsBalanceEnabled(ctx context.Context) bool {
+	if s == nil || s.settingRepo == nil {
+		return false
+	}
+	value, err := s.settingRepo.GetValue(ctx, SettingKeyIdeasRewardsBalanceEnabled)
+	if err != nil {
+		return false
+	}
+	return isTrueSettingValue(value)
+}
+
+// IsIdeasRewardsPointsEnabled 检查积分打赏开关（默认关）。
+func (s *SettingService) IsIdeasRewardsPointsEnabled(ctx context.Context) bool {
+	if s == nil || s.settingRepo == nil {
+		return false
+	}
+	value, err := s.settingRepo.GetValue(ctx, SettingKeyIdeasRewardsPointsEnabled)
+	if err != nil {
+		return false
+	}
+	return isTrueSettingValue(value)
+}
+
+const (
+	ideasRewardBalanceMaxAmountDefault = 5.0
+	ideasRewardPointsMaxAmountDefault  = 100.0
+)
+
+// GetIdeasRewardBalanceMaxAmount 返回余额单次打赏上限（元，默认 5）。
+func (s *SettingService) GetIdeasRewardBalanceMaxAmount(ctx context.Context) float64 {
+	return s.getIdeasRewardMaxAmount(ctx, SettingKeyIdeasRewardBalanceMaxAmount, ideasRewardBalanceMaxAmountDefault)
+}
+
+// GetIdeasRewardPointsMaxAmount 返回积分单次打赏上限（默认 100）。
+func (s *SettingService) GetIdeasRewardPointsMaxAmount(ctx context.Context) float64 {
+	return s.getIdeasRewardMaxAmount(ctx, SettingKeyIdeasRewardPointsMaxAmount, ideasRewardPointsMaxAmountDefault)
+}
+
+func (s *SettingService) getIdeasRewardMaxAmount(ctx context.Context, key string, def float64) float64 {
+	if s == nil || s.settingRepo == nil {
+		return def
+	}
+	raw, err := s.settingRepo.GetValue(ctx, key)
+	if err != nil || strings.TrimSpace(raw) == "" {
+		return def
+	}
+	value, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil || value <= 0 {
+		return def
+	}
+	return value
+}
+
+// parseIdeasRewardMaxAmount 从已加载的设置 map 解析打赏上限（缺省/非法回退默认值）。
+func parseIdeasRewardMaxAmount(raw string, def float64) float64 {
+	if strings.TrimSpace(raw) == "" {
+		return def
+	}
+	value, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil || value <= 0 {
+		return def
+	}
+	return value
+}
+
+// GetIdeasModerationConfig 返回文章 AI 审核配置。复用账号广场评论审核的 endpoint/API Key/model，
+// 仅用独立的 ideas_moderation_enabled 开关控制是否启用。
+func (s *SettingService) GetIdeasModerationConfig(ctx context.Context) (IdeasModerationConfig, bool, error) {
+	if s == nil || s.settingRepo == nil {
+		return IdeasModerationConfig{}, false, nil
+	}
+	values, err := s.settingRepo.GetMultiple(ctx, []string{
+		SettingKeyIdeasModerationEnabled,
+		SettingKeyAccountShareCommentReviewURL,
+		SettingKeyAccountShareCommentReviewAPIKey,
+		SettingKeyAccountShareCommentReviewModel,
+	})
+	if err != nil {
+		return IdeasModerationConfig{}, false, err
+	}
+	cfg := IdeasModerationConfig{
+		Enabled: isTrueSettingValue(values[SettingKeyIdeasModerationEnabled]),
+		URL:     strings.TrimSpace(values[SettingKeyAccountShareCommentReviewURL]),
+		APIKey:  strings.TrimSpace(values[SettingKeyAccountShareCommentReviewAPIKey]),
+		Model:   strings.TrimSpace(values[SettingKeyAccountShareCommentReviewModel]),
+	}
+	ready := cfg.Enabled && cfg.URL != "" && cfg.APIKey != "" && cfg.Model != ""
+	return cfg, ready, nil
+}
+
+// GetIdeasTagBlacklist 返回标签黑名单（逗号分隔的标签名，规范化为 slug）。命中后文章转人工复核。
+func (s *SettingService) GetIdeasTagBlacklist(ctx context.Context) ([]string, error) {
+	if s == nil || s.settingRepo == nil {
+		return nil, nil
+	}
+	raw, err := s.settingRepo.GetValue(ctx, SettingKeyIdeasTagBlacklist)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if slug := SlugifyIdeaTag(part); slug != "" {
+			out = append(out, slug)
+		}
+	}
+	return out, nil
+}
+
+// GetIdeasOSSConfig 返回附件私有 OSS 配置（默认关闭）。
+func (s *SettingService) GetIdeasOSSConfig(ctx context.Context) (IdeasOSSConfig, bool, error) {
+	if s == nil || s.settingRepo == nil {
+		return IdeasOSSConfig{}, false, nil
+	}
+	values, err := s.settingRepo.GetMultiple(ctx, []string{
+		SettingKeyIdeasOSSEnabled,
+		SettingKeyIdeasOSSEndpoint,
+		SettingKeyIdeasOSSRegion,
+		SettingKeyIdeasOSSBucket,
+		SettingKeyIdeasOSSAccessKeyID,
+		SettingKeyIdeasOSSSecretAccessKey,
+		SettingKeyIdeasOSSPrefix,
+		SettingKeyIdeasOSSForcePathStyle,
+		SettingKeyIdeasOSSPresignExpireSeconds,
+	})
+	if err != nil {
+		return IdeasOSSConfig{}, false, err
+	}
+	prefix := strings.TrimSpace(values[SettingKeyIdeasOSSPrefix])
+	if prefix == "" {
+		prefix = "ideas"
+	}
+	presign := 0
+	if raw := strings.TrimSpace(values[SettingKeyIdeasOSSPresignExpireSeconds]); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil {
+			presign = v
+		}
+	}
+	cfg := IdeasOSSConfig{
+		Enabled:              isTrueSettingValue(values[SettingKeyIdeasOSSEnabled]),
+		Endpoint:             strings.TrimSpace(values[SettingKeyIdeasOSSEndpoint]),
+		Region:               strings.TrimSpace(values[SettingKeyIdeasOSSRegion]),
+		Bucket:               strings.TrimSpace(values[SettingKeyIdeasOSSBucket]),
+		AccessKeyID:          strings.TrimSpace(values[SettingKeyIdeasOSSAccessKeyID]),
+		SecretAccessKey:      strings.TrimSpace(values[SettingKeyIdeasOSSSecretAccessKey]),
+		Prefix:               prefix,
+		ForcePathStyle:       isTrueSettingValue(values[SettingKeyIdeasOSSForcePathStyle]),
+		PresignExpireSeconds: presign,
+	}
+	ready := cfg.Enabled && cfg.Endpoint != "" && cfg.Bucket != "" && cfg.AccessKeyID != "" && cfg.SecretAccessKey != ""
+	return cfg, ready, nil
 }
 
 func normalizeVisibleMethodSettingSource(method, source string, enabled bool) (string, error) {

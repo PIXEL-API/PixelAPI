@@ -109,6 +109,28 @@ func RegisterAdminRoutes(
 
 		// 邀请返利（专属用户管理）
 		registerAffiliateRoutes(admin, h)
+
+		// 「有个想法」内容治理
+		registerIdeasRoutes(admin, h)
+	}
+}
+
+func registerIdeasRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	ideas := admin.Group("/ideas")
+	{
+		ideas.GET("", h.Admin.Ideas.List)
+		ideas.GET("/tags", h.Admin.Ideas.ListTags)
+		ideas.POST("/tags", h.Admin.Ideas.CreateTag)
+		ideas.PATCH("/tags/:id", h.Admin.Ideas.UpdateTag)
+		ideas.POST("/tags/:id/merge", h.Admin.Ideas.MergeTags)
+		ideas.GET("/reports", h.Admin.Ideas.ListReports)
+		ideas.POST("/reports/:id/resolve", h.Admin.Ideas.ResolveReport)
+		ideas.GET("/:id", h.Admin.Ideas.Get)
+		ideas.POST("/:id/approve", h.Admin.Ideas.Approve)
+		ideas.POST("/:id/reject", h.Admin.Ideas.Reject)
+		ideas.POST("/:id/hide", h.Admin.Ideas.Hide)
+		ideas.POST("/:id/restore", h.Admin.Ideas.Restore)
+		ideas.POST("/:id/retry-moderation", h.Admin.Ideas.RetryModeration)
 	}
 }
 
@@ -440,6 +462,7 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		accounts.POST("/batch-refresh", h.Admin.Account.BatchRefresh)
 		accounts.POST("/batch-refresh/async", h.Admin.Account.CreateBatchRefreshTask)
 		accounts.POST("/batch-test/async", h.Admin.Account.CreateBatchTestConnectionTask)
+		accounts.POST("/batch-test/model-options", h.Admin.Account.GetBatchTestModelOptions)
 		accounts.GET("/batch-tasks/:task_id", h.Admin.Account.GetBatchTask)
 
 		// Antigravity 默认模型映射

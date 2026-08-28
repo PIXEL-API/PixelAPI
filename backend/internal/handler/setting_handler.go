@@ -92,6 +92,7 @@ func (h *SettingHandler) GetPublicSettings(c *gin.Context) {
 		AffiliateEnabled:                settings.AffiliateEnabled,
 		UserPrivateGroupCommissionRate:  settings.UserPrivateGroupCommissionRate,
 		RiskControlEnabled:              settings.RiskControlEnabled,
+		IdeasEnabled:                    settings.IdeasEnabled,
 		InvoiceManagementEnabled:        settings.InvoiceManagementEnabled,
 		WithdrawalManagementEnabled:     settings.WithdrawalManagementEnabled,
 		WithdrawalRateLimitWindowDays:   settings.WithdrawalRateLimitWindowDays,

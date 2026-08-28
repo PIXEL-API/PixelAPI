@@ -50,6 +50,7 @@ func ProvideAdminHandlers(
 	shopHandler *admin.ShopHandler,
 	affiliateHandler *admin.AffiliateHandler,
 	activityHandler *admin.ActivityHandler,
+	ideasHandler *admin.IdeasHandler,
 ) *AdminHandlers {
 	return &AdminHandlers{
 		Dashboard:              dashboardHandler,
@@ -92,6 +93,7 @@ func ProvideAdminHandlers(
 		Shop:                   shopHandler,
 		Affiliate:              affiliateHandler,
 		Activity:               activityHandler,
+		Ideas:                  ideasHandler,
 	}
 }
 
@@ -260,6 +262,7 @@ func ProvideHandlers(
 	invoiceHandler *InvoiceHandler,
 	shopHandler *ShopHandler,
 	activityHandler *ActivityHandler,
+	ideasHandler *IdeasHandler,
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
 	accountBatchTaskServices []*service.AccountBatchTaskService,
@@ -295,6 +298,7 @@ func ProvideHandlers(
 		Invoice:          invoiceHandler,
 		Shop:             shopHandler,
 		Activity:         activityHandler,
+		Ideas:            ideasHandler,
 	}
 }
 
@@ -325,6 +329,7 @@ var ProviderSet = wire.NewSet(
 	NewInvoiceHandler,
 	NewShopHandler,
 	NewActivityHandler,
+	NewIdeasHandler,
 
 	// Admin handlers
 	admin.NewDashboardHandler,
@@ -367,6 +372,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewShopHandler,
 	admin.NewAffiliateHandler,
 	admin.NewActivityHandler,
+	admin.NewIdeasHandler,
 
 	// AdminHandlers and Handlers constructors
 	ProvideAdminHandlers,

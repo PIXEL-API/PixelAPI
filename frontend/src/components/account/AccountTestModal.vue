@@ -53,6 +53,21 @@
           label-key="display_name"
           :placeholder="loadingModels ? t('common.loading') + '...' : t('admin.accounts.selectTestModel')"
         />
+        <p
+          v-if="modelsErrorMessage"
+          class="flex items-center gap-2 text-xs text-red-500 dark:text-red-400"
+        >
+          <Icon name="x" size="sm" :stroke-width="2" />
+          <span>{{ modelsErrorMessage }}</span>
+          <button
+            v-if="modelsErrorRetryable"
+            type="button"
+            class="font-medium underline hover:no-underline"
+            @click="loadAvailableModels"
+          >
+            {{ t('admin.accounts.retry') }}
+          </button>
+        </p>
       </div>
 
       <div v-if="isOpenAIAccount" class="space-y-1.5">
@@ -201,6 +216,15 @@ interface OutputLine {
   class: string
 }
 
+type ModelsLoadState =
+  | 'loading'
+  | 'ready'
+  | 'catalog-empty'
+  | 'whitelist-missing'
+  | 'no-intersection'
+  | 'protocol-no-models'
+  | 'load-failed'
+
 const props = defineProps<{
   show: boolean
   account: Account | null
@@ -221,6 +245,7 @@ const errorMessage = ref('')
 const availableModels = ref<ClaudeModel[]>([])
 const selectedModelId = ref('')
 const loadingModels = ref(false)
+const modelsLoadState = ref<ModelsLoadState>('loading')
 let abortController: AbortController | null = null
 const testMode = ref<'default' | 'compact'>('default')
 const isOpenAIAccount = computed(() => props.account?.platform === 'openai')
@@ -250,6 +275,7 @@ const loadAvailableModels = async () => {
   if (!props.account) return
 
   loadingModels.value = true
+  modelsLoadState.value = 'loading'
   selectedModelId.value = '' // Reset selection before loading
   try {
     const models = isUserScope.value
@@ -260,15 +286,51 @@ const loadAvailableModels = async () => {
       availableModels.value,
       props.account.platform
     )
+    modelsLoadState.value = 'ready'
   } catch (error) {
     console.error('Failed to load available models:', error)
-    // Fallback to empty list
     availableModels.value = []
     selectedModelId.value = ''
+    modelsLoadState.value = mapModelsLoadError(error)
   } finally {
     loadingModels.value = false
   }
 }
+
+function mapModelsLoadError(error: unknown): ModelsLoadState {
+  const reason = (error as { reason?: unknown } | null)?.reason
+  switch (reason) {
+    case 'ACCOUNT_TEST_MODEL_CATALOG_EMPTY':
+      return 'catalog-empty'
+    case 'ACCOUNT_TEST_MODEL_WHITELIST_MISSING':
+      return 'whitelist-missing'
+    case 'ACCOUNT_TEST_MODEL_NO_PRICED_INTERSECTION':
+      return 'no-intersection'
+    case 'ACCOUNT_TEST_PROTOCOL_NO_SUPPORTED_MODELS':
+      return 'protocol-no-models'
+    default:
+      return 'load-failed'
+  }
+}
+
+const modelsErrorMessage = computed(() => {
+  switch (modelsLoadState.value) {
+    case 'catalog-empty':
+      return t('admin.accounts.modelsCatalogEmpty')
+    case 'whitelist-missing':
+      return t('admin.accounts.modelsWhitelistMissing')
+    case 'no-intersection':
+      return t('admin.accounts.modelsNoPricedIntersection')
+    case 'protocol-no-models':
+      return t('admin.accounts.modelsProtocolNoModels')
+    case 'load-failed':
+      return t('admin.accounts.modelsLoadFailed')
+    default:
+      return ''
+  }
+})
+
+const modelsErrorRetryable = computed(() => modelsLoadState.value === 'load-failed')
 
 const resetState = () => {
   status.value = 'idle'

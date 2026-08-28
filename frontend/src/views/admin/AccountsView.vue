@@ -396,6 +396,7 @@
     <AccountBatchTestModal
       :show="showBulkTest"
       :representative-account="bulkTestRepresentativeAccount"
+      :account-ids="selIds"
       :selected-count="selIds.length"
       :submitting="submittingBulkTest"
       @close="closeBulkTestModal"

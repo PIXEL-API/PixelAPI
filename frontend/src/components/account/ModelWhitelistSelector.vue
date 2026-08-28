@@ -125,7 +125,7 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import ModelIcon from '@/components/common/ModelIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
-import { allModels, getModelsByPlatform } from '@/composables/useModelWhitelist'
+import { allModels } from '@/composables/useModelWhitelist'
 
 const { t } = useI18n()
 
@@ -147,26 +147,9 @@ const showDropdown = ref(false)
 const searchQuery = ref('')
 const customModel = ref('')
 const isComposing = ref(false)
-const normalizedPlatforms = computed(() => {
-  const rawPlatforms =
-    props.platforms && props.platforms.length > 0
-      ? props.platforms
-      : props.platform
-        ? [props.platform]
-        : []
-
-  return Array.from(
-    new Set(
-      rawPlatforms
-        .map(platform => platform?.trim())
-        .filter((platform): platform is string => Boolean(platform))
-    )
-  )
-})
-
 const availableOptions = computed(() => {
-  // 受限可选集：调用方显式传入（如「编辑房间配置」传房间账号支持模型交集）时，
-  // 只允许在这些模型里勾选，从源头避免选到账号不支持的模型。
+  // 受限可选集：调用方必须显式传入（如「房间创建」传定价目录、「编辑房间配置」传账号交集）。
+  // 不再回退硬编码平台全集；缺少 allowedOptions 时返回空，避免静默恢复已漂移的静态默认列表。
   if (props.allowedOptions !== undefined) {
     const knownOptions = new Map(allModels.map(model => [model.value, model]))
     const seen = new Set<string>()
@@ -180,18 +163,7 @@ const availableOptions = computed(() => {
       .map(model => knownOptions.get(model) ?? { value: model, label: model })
   }
 
-  if (normalizedPlatforms.value.length === 0) {
-    return allModels
-  }
-
-  const allowedModels = new Set<string>()
-  for (const platform of normalizedPlatforms.value) {
-    for (const model of getModelsByPlatform(platform)) {
-      allowedModels.add(model)
-    }
-  }
-
-  return allModels.filter(model => allowedModels.has(model.value))
+  return []
 })
 
 const filteredModels = computed(() => {
@@ -236,9 +208,7 @@ const handleEnter = () => {
 
 const fillRelated = () => {
   const newModels = [...props.modelValue]
-  const models = props.allowedOptions !== undefined
-    ? availableOptions.value.map(option => option.value)
-    : normalizedPlatforms.value.flatMap(platform => getModelsByPlatform(platform))
+  const models = availableOptions.value.map(option => option.value)
   for (const model of models) {
     if (!newModels.includes(model)) {
       newModels.push(model)

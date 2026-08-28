@@ -567,6 +567,17 @@ export async function getAvailableModels(id: number): Promise<ClaudeModel[]> {
   return data
 }
 
+/**
+ * 获取多个账号共同可测试的模型列表（批量测试用）。
+ * @param accountIds - 目标账号 ID 列表
+ */
+export async function getBatchTestModelOptions(accountIds: number[]): Promise<ClaudeModel[]> {
+  const { data } = await apiClient.post<ClaudeModel[]>('/admin/accounts/batch-test/model-options', {
+    account_ids: accountIds
+  })
+  return data
+}
+
 export interface CRSPreviewAccount {
   crs_account_id: string
   local_account_id?: number
@@ -919,6 +930,7 @@ export const accountsAPI = {
   createBatchRefreshTask,
   createBatchTestConnectionTask,
   getBatchTask,
+  getBatchTestModelOptions,
   setPrivacy,
   queryOpenAIQuota,
   resetOpenAIQuota

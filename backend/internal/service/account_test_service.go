@@ -83,6 +83,7 @@ type AccountTestService struct {
 	settingService             *SettingService
 	agentIdentityTaskMu        sync.Mutex
 	agentIdentityWSInvalidator agentIdentityWSConnectionInvalidator
+	modelResolver              *AccountTestModelResolver
 }
 
 // NewAccountTestService creates a new AccountTestService
@@ -138,6 +139,52 @@ func (s *AccountTestService) recoverAgentIdentityTask(ctx context.Context, accou
 
 func (s *AccountTestService) SetGrokTokenProvider(grokTokenProvider *GrokTokenProvider) {
 	s.grokTokenProvider = grokTokenProvider
+}
+
+// SetModelResolver 注入账号「测试连接」模型 resolver。
+func (s *AccountTestService) SetModelResolver(resolver *AccountTestModelResolver) {
+	s.modelResolver = resolver
+}
+
+// ResolveAvailableTestModels 委托 resolver 解析账号可测试模型列表。
+// 返回统一结构的 []claude.Model；非 ready 状态返回业务错误而非空数组。
+func (s *AccountTestService) ResolveAvailableTestModels(ctx context.Context, account *Account) ([]claude.Model, error) {
+	if s == nil || s.modelResolver == nil {
+		return nil, ErrOwnedAccountModelCatalogUnavailable
+	}
+	return s.modelResolver.ResolveTestModels(ctx, account)
+}
+
+// ResolveBatchTestModels 委托 resolver 解析多个账号共同可测试模型列表。
+func (s *AccountTestService) ResolveBatchTestModels(ctx context.Context, accounts []*Account) ([]claude.Model, error) {
+	if s == nil || s.modelResolver == nil {
+		return nil, ErrOwnedAccountModelCatalogUnavailable
+	}
+	return s.modelResolver.ResolveBatchTestModels(ctx, accounts)
+}
+
+// ValidateTestModel 校验模型是否仍在账号可测试集合中（供计划测试/runner 服务端校验）。
+func (s *AccountTestService) ValidateTestModel(ctx context.Context, accountID int64, modelID string) error {
+	if s == nil || s.modelResolver == nil {
+		return ErrOwnedAccountModelCatalogUnavailable
+	}
+	if s.accountRepo == nil {
+		return ErrOwnedAccountModelCatalogUnavailable
+	}
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	models, err := s.modelResolver.ResolveTestModels(ctx, account)
+	if err != nil {
+		return err
+	}
+	for _, model := range models {
+		if model.ID == modelID {
+			return nil
+		}
+	}
+	return ErrAccountTestModelNotAvailable
 }
 
 func (s *AccountTestService) validateUpstreamBaseURL(raw string) (string, error) {

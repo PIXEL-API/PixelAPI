@@ -135,6 +135,14 @@ type SystemSettings struct {
 	DefaultConcurrency                        int
 	DefaultBalance                            float64
 	RiskControlEnabled                        bool
+	IdeasEnabled                              bool
+	IdeasModerationEnabled                    bool
+	IdeasRewardsPointsEnabled                 bool
+	IdeasRewardsBalanceEnabled                bool
+	IdeasRewardBalanceMaxAmount               float64
+	IdeasRewardPointsMaxAmount                float64
+	IdeasOSSEnabled                           bool
+	IdeasTagBlacklist                         string
 	InvoiceManagementEnabled                  bool
 	WithdrawalManagementEnabled               bool
 	WithdrawalRateLimitWindowDays             int
@@ -335,6 +343,9 @@ type PublicSettings struct {
 
 	// 风控中心功能开关
 	RiskControlEnabled bool `json:"risk_control_enabled"`
+
+	// 「有个想法」内容板块开关（默认关）
+	IdeasEnabled bool `json:"ideas_enabled"`
 }
 
 type LoginAgreementDocument struct {

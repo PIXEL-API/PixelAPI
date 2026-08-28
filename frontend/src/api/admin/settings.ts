@@ -578,6 +578,16 @@ export interface SystemSettings {
   // Affiliate (邀请返利) feature switch
   affiliate_enabled: boolean;
 
+  // 「有个想法」内容板块
+  ideas_enabled: boolean;
+  ideas_moderation_enabled: boolean;
+  ideas_rewards_points_enabled: boolean;
+  ideas_rewards_balance_enabled: boolean;
+  ideas_reward_balance_max_amount: number;
+  ideas_reward_points_max_amount: number;
+  ideas_oss_enabled: boolean;
+  ideas_tag_blacklist: string;
+
   // Risk control feature switch
   risk_control_enabled: boolean;
   cyber_session_block_enabled: boolean;
@@ -820,6 +830,16 @@ export interface UpdateSettingsRequest {
 
   // Affiliate (邀请返利) feature switch
   affiliate_enabled?: boolean;
+
+  // 「有个想法」内容板块
+  ideas_enabled?: boolean;
+  ideas_moderation_enabled?: boolean;
+  ideas_rewards_points_enabled?: boolean;
+  ideas_rewards_balance_enabled?: boolean;
+  ideas_reward_balance_max_amount?: number;
+  ideas_reward_points_max_amount?: number;
+  ideas_oss_enabled?: boolean;
+  ideas_tag_blacklist?: string;
 
   // Risk control feature switch
   risk_control_enabled?: boolean;

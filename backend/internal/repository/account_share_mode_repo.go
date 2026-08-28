@@ -1332,7 +1332,8 @@ func (r *accountShareModeRepository) ListRoomAccountModelInfos(
 			room_account.listing_id,
 			a.id,
 			a.platform,
-			a.credentials
+			a.credentials,
+			a.owner_user_id
 		FROM account_share_room_accounts room_account
 		JOIN accounts a ON a.id = room_account.account_id
 		WHERE room_account.listing_id = ANY($1)
@@ -1350,12 +1351,16 @@ func (r *accountShareModeRepository) ListRoomAccountModelInfos(
 		var listingID, accountID int64
 		var platform string
 		var credentialsRaw []byte
-		if err := rows.Scan(&listingID, &accountID, &platform, &credentialsRaw); err != nil {
+		var ownerUserID sql.NullInt64
+		if err := rows.Scan(&listingID, &accountID, &platform, &credentialsRaw, &ownerUserID); err != nil {
 			return nil, err
 		}
 		account := &service.Account{
 			ID:       accountID,
 			Platform: strings.ToLower(strings.TrimSpace(platform)),
+		}
+		if ownerUserID.Valid {
+			account.OwnerUserID = &ownerUserID.Int64
 		}
 		if len(credentialsRaw) > 0 {
 			var credentials map[string]any

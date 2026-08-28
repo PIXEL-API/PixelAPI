@@ -350,6 +350,7 @@ const (
 	adminOwnedPublicShareValidationWorkers     = 2
 	adminOwnedPublicShareValidationTestTimeout = 30 * time.Second
 	adminAccountBatchConnectionTestTimeout     = 90 * time.Second
+	adminBatchTestModelOptionsMaxAccounts      = 100
 )
 
 type ownedPublicShareValidationJob struct {
@@ -1749,6 +1750,66 @@ func (h *AccountHandler) CreateBatchRefreshTask(c *gin.Context) {
 	response.Accepted(c, task)
 }
 
+// GetBatchTestModelOptions returns the models common to all target accounts for batch testing.
+// POST /api/v1/admin/accounts/batch-test/model-options
+func (h *AccountHandler) GetBatchTestModelOptions(c *gin.Context) {
+	if h.accountTestService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Account test service is unavailable")
+		return
+	}
+	var req struct {
+		AccountIDs []int64 `json:"account_ids"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	accountIDs := normalizeInt64IDList(req.AccountIDs)
+	if len(accountIDs) == 0 {
+		response.BadRequest(c, "account_ids is required")
+		return
+	}
+	if len(accountIDs) > adminBatchTestModelOptionsMaxAccounts {
+		response.BadRequest(c, fmt.Sprintf("account_ids exceeds the maximum of %d", adminBatchTestModelOptionsMaxAccounts))
+		return
+	}
+
+	accounts, err := h.adminService.GetAccountsByIDs(c.Request.Context(), accountIDs)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	accountsByID := make(map[int64]*service.Account, len(accounts))
+	for _, account := range accounts {
+		if account != nil {
+			accountsByID[account.ID] = account
+		}
+	}
+	ordered := make([]*service.Account, 0, len(accountIDs))
+	for _, accountID := range accountIDs {
+		account, ok := accountsByID[accountID]
+		if !ok {
+			response.BadRequest(c, fmt.Sprintf("account not found: %d", accountID))
+			return
+		}
+		ordered = append(ordered, account)
+	}
+	platform := ordered[0].Platform
+	for _, account := range ordered[1:] {
+		if account.Platform != platform {
+			response.BadRequest(c, "all accounts must use the same platform")
+			return
+		}
+	}
+
+	models, err := h.accountTestService.ResolveBatchTestModels(c.Request.Context(), ordered)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, models)
+}
+
 // CreateBatchTestConnectionTask creates an async account connection test task.
 // POST /api/v1/admin/accounts/batch-test/async
 func (h *AccountHandler) CreateBatchTestConnectionTask(c *gin.Context) {
@@ -1802,6 +1863,28 @@ func (h *AccountHandler) CreateBatchTestConnectionTask(c *gin.Context) {
 			response.BadRequest(c, "all accounts must use the same platform")
 			return
 		}
+	}
+
+	// 服务端校验：model_id 必须属于所有目标账号的共同可测试模型，不信任前端下拉值。
+	ordered := make([]*service.Account, 0, len(accountIDs))
+	for _, accountID := range accountIDs {
+		ordered = append(ordered, accountsByID[accountID])
+	}
+	testableModels, err := h.accountTestService.ResolveBatchTestModels(c.Request.Context(), ordered)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	modelAllowed := false
+	for _, m := range testableModels {
+		if m.ID == modelID {
+			modelAllowed = true
+			break
+		}
+	}
+	if !modelAllowed {
+		response.BadRequest(c, "model_id is not available for all selected accounts")
+		return
 	}
 
 	createdBy, ok := currentAdminUserID(c)
@@ -2604,9 +2687,9 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 		return
 	}
 
-	models, ok := service.AvailableTestModels(account)
-	if !ok {
-		response.BadRequest(c, "Unsupported account platform: "+account.Platform)
+	models, err := h.accountTestService.ResolveAvailableTestModels(c.Request.Context(), account)
+	if err != nil {
+		response.ErrorFrom(c, err)
 		return
 	}
 	response.Success(c, models)

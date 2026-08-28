@@ -303,5 +303,28 @@ func RegisterUserRoutes(
 			monitors.GET("/capacity-summary", h.ChannelMonitor.CapacitySummary)
 			monitors.GET("/:id/status", h.ChannelMonitor.GetStatus)
 		}
+
+		// 「有个想法」用户经验分享板块
+		ideas := authenticated.Group("/ideas")
+		{
+			ideas.GET("", h.Ideas.List)
+			ideas.GET("/tags", h.Ideas.ListTags)
+			ideas.GET("/mine", h.Ideas.Mine)
+			ideas.POST("", h.Ideas.Create)
+			ideas.GET("/:id", h.Ideas.Get)
+			ideas.PATCH("/:id", h.Ideas.Update)
+			ideas.DELETE("/:id", h.Ideas.Delete)
+			ideas.POST("/:id/publish", h.Ideas.Publish)
+			ideas.POST("/:id/like", h.Ideas.Like)
+			ideas.DELETE("/:id/like", h.Ideas.Unlike)
+			ideas.POST("/:id/favorite", h.Ideas.Favorite)
+			ideas.DELETE("/:id/favorite", h.Ideas.Unfavorite)
+			ideas.POST("/:id/view", h.Ideas.RecordView)
+			ideas.POST("/:id/rewards", h.Ideas.Reward)
+			ideas.POST("/:id/reports", h.Ideas.Report)
+			ideas.POST("/:id/assets", h.Ideas.UploadAsset)
+			ideas.GET("/:id/assets", h.Ideas.ListAssets)
+			ideas.GET("/:id/assets/:asset_id/url", h.Ideas.GetAssetURL)
+		}
 	}
 }

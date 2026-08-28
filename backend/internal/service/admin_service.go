@@ -685,6 +685,7 @@ type adminServiceImpl struct {
 		RecoverGrokProxyCredentialFailure(context.Context, int64) (*SuccessfulTestRecoveryResult, error)
 		ScheduleGrokProxyCredentialRecovery(proxyID int64)
 	}
+	pricedModelCatalog pricedModelCatalog
 }
 
 type userGroupRateBatchReader interface {
@@ -767,6 +768,53 @@ func SetAdminGrokProxyCredentialRecovery(svc AdminService, recovery interface {
 		impl.grokProxyRecovery = recovery
 	}
 	return svc
+}
+
+// SetAdminPricedModelCatalog 注入定价目录，供管理员创建/编辑个人账号时校验白名单完整性。
+func SetAdminPricedModelCatalog(svc AdminService, catalog pricedModelCatalog) AdminService {
+	if impl, ok := svc.(*adminServiceImpl); ok {
+		impl.pricedModelCatalog = catalog
+	}
+	return svc
+}
+
+// validateAdminOwnedModelMapping 校验个人账号的模型白名单完整性，
+// 与用户路径 AccountService.validateOwnedPersonalModelMapping 保持同一口径。
+// 仅用于账号「变为个人账号」的写入时机，避免误伤平台账号字段更新。
+func (s *adminServiceImpl) validateAdminOwnedModelMapping(ctx context.Context, platform string, credentials map[string]any) error {
+	if s == nil || s.pricedModelCatalog == nil {
+		return ErrOwnedAccountModelCatalogUnavailable
+	}
+	raw, exists := credentials["model_mapping"]
+	if !exists {
+		return ErrOwnedAccountModelMappingInvalid.WithMetadata(map[string]string{"field": "model_mapping"})
+	}
+	normalized, models, err := normalizeOwnedPersonalModelMapping(raw)
+	if err != nil {
+		return err
+	}
+	selectableModels, err := s.pricedModelCatalog.ListPricedModelIDs(ctx, []string{platform})
+	if err != nil {
+		return ErrOwnedAccountModelCatalogUnavailable.WithCause(err)
+	}
+	selectable := make(map[string]struct{}, len(selectableModels))
+	for _, rawModel := range selectableModels {
+		model := strings.TrimSpace(rawModel)
+		if model == "" || strings.ContainsAny(model, "*?") {
+			continue
+		}
+		selectable[model] = struct{}{}
+	}
+	for _, model := range models {
+		if _, ok := selectable[model]; !ok {
+			return ErrOwnedAccountModelNotSelectable.WithMetadata(map[string]string{
+				"platform": platform,
+				"model":    model,
+			})
+		}
+	}
+	credentials["model_mapping"] = normalized
+	return nil
 }
 
 func (s *adminServiceImpl) openAIAccountLevelConfigs(ctx context.Context) ([]OpenAIAccountLevelConfig, error) {
@@ -3633,6 +3681,12 @@ func (s *adminServiceImpl) prepareAccountCreate(ctx context.Context, input *Crea
 		}
 		account.LoadFactor = input.LoadFactor
 	}
+	// 管理员创建个人账号：必须提供合法的模型白名单，避免制造「个人账号但 mapping 为空」。
+	if account.OwnerUserID != nil {
+		if err := s.validateAdminOwnedModelMapping(ctx, account.Platform, account.Credentials); err != nil {
+			return nil, nil, err
+		}
+	}
 	return account, append([]int64(nil), groupIDs...), nil
 }
 
@@ -3884,6 +3938,12 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			account.OwnerUserID = nil
 		} else {
 			account.OwnerUserID = input.OwnerUserID
+		}
+	}
+	// 平台账号转个人账号：必须提供合法的模型白名单，避免在归属转换时制造空 mapping。
+	if before.OwnerUserID == nil && account.OwnerUserID != nil {
+		if err := s.validateAdminOwnedModelMapping(ctx, account.Platform, account.Credentials); err != nil {
+			return nil, err
 		}
 	}
 	// 专属代理只能绑定其归属用户的账号。仅在代理或账号归属发生变化时校验，

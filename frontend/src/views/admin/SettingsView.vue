@@ -6010,6 +6010,69 @@
                 <Toggle v-model="form.affiliate_enabled" />
               </div>
 
+              <div
+                class="flex items-center justify-between rounded-lg border border-gray-200 p-4 dark:border-dark-700"
+              >
+                <div>
+                  <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    「有个想法」板块
+                  </label>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    用户经验分享板块（文章 / 打赏 / AI 审核），默认关闭
+                  </p>
+                </div>
+                <Toggle v-model="form.ideas_enabled" />
+              </div>
+
+              <div v-if="form.ideas_enabled" class="space-y-4 rounded-lg border border-gray-200 p-4 dark:border-dark-700">
+                <div class="flex items-center justify-between">
+                  <span class="text-sm text-gray-700 dark:text-gray-300">AI 审核</span>
+                  <Toggle v-model="form.ideas_moderation_enabled" />
+                </div>
+                <div class="flex items-center justify-between">
+                  <span class="text-sm text-gray-700 dark:text-gray-300">积分打赏</span>
+                  <Toggle v-model="form.ideas_rewards_points_enabled" />
+                </div>
+                <div class="flex items-center justify-between">
+                  <span class="text-sm text-gray-700 dark:text-gray-300">余额打赏</span>
+                  <Toggle v-model="form.ideas_rewards_balance_enabled" />
+                </div>
+                <div class="flex items-center justify-between">
+                  <span class="text-sm text-gray-700 dark:text-gray-300">余额单次打赏上限（元）</span>
+                  <input
+                    v-model.number="form.ideas_reward_balance_max_amount"
+                    type="number"
+                    min="1"
+                    class="input w-32"
+                  />
+                </div>
+                <div class="flex items-center justify-between">
+                  <span class="text-sm text-gray-700 dark:text-gray-300">积分单次打赏上限</span>
+                  <input
+                    v-model.number="form.ideas_reward_points_max_amount"
+                    type="number"
+                    min="1"
+                    class="input w-32"
+                  />
+                </div>
+                <div class="flex items-center justify-between">
+                  <span class="text-sm text-gray-700 dark:text-gray-300">附件 OSS 存储</span>
+                  <Toggle v-model="form.ideas_oss_enabled" />
+                </div>
+                <div>
+                  <label class="text-sm text-gray-700 dark:text-gray-300">标签黑名单</label>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    逗号分隔的标签名，命中后文章转人工复核（留空表示不启用）
+                  </p>
+                  <input
+                    v-model="form.ideas_tag_blacklist"
+                    type="text"
+                    class="input mt-2 w-full"
+                    placeholder="联系方式, 广告, 代充"
+                  />
+                </div>
+              </div>
+
               <div v-if="form.affiliate_enabled" class="space-y-6">
                 <div>
                   <label class="input-label">
@@ -8287,6 +8350,15 @@ const form = reactive<SettingsForm>({
   withdrawal_rate_limit_exempt_amount: 500,
   // Affiliate (邀请返利) feature switch
   affiliate_enabled: false,
+  // 「有个想法」内容板块
+  ideas_enabled: false,
+  ideas_moderation_enabled: false,
+  ideas_rewards_points_enabled: false,
+  ideas_rewards_balance_enabled: false,
+  ideas_reward_balance_max_amount: 5,
+  ideas_reward_points_max_amount: 100,
+  ideas_oss_enabled: false,
+  ideas_tag_blacklist: '',
   // Risk control feature switch
   risk_control_enabled: false,
   cyber_session_block_enabled: false,
@@ -9867,6 +9939,15 @@ async function saveSettings() {
       account_share_comment_review_model: commentReviewModel,
       // Affiliate (邀请返利) feature switch
       affiliate_enabled: form.affiliate_enabled,
+      // 「有个想法」内容板块
+      ideas_enabled: form.ideas_enabled,
+      ideas_moderation_enabled: form.ideas_moderation_enabled,
+      ideas_rewards_points_enabled: form.ideas_rewards_points_enabled,
+      ideas_rewards_balance_enabled: form.ideas_rewards_balance_enabled,
+      ideas_reward_balance_max_amount: form.ideas_reward_balance_max_amount,
+      ideas_reward_points_max_amount: form.ideas_reward_points_max_amount,
+      ideas_oss_enabled: form.ideas_oss_enabled,
+      ideas_tag_blacklist: form.ideas_tag_blacklist,
     };
 
     // 仅当 openai_fast_policy_settings 已成功从后端加载时才回写，

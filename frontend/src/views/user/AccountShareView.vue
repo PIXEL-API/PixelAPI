@@ -890,10 +890,13 @@
                     <ModelWhitelistSelector
                       v-model="allowedModels"
                       :platform="createPlatform"
-                      :allowed-options="createPlatform === 'opencode' ? DEFAULT_ACCOUNT_SHARE_ALLOWED_MODELS_BY_PLATFORM.opencode : undefined"
+                      :allowed-options="roomCatalogModels ?? []"
                     />
                   </div>
-                  <small>复用“我的账号”新增账号的模型选择器，可搜索、多选并添加自定义模型。</small>
+                  <small v-if="roomCatalogLoading">正在加载该平台已定价模型…</small>
+                  <small v-else-if="roomCatalogError" class="text-red-600 dark:text-red-300">{{ roomCatalogError }}</small>
+                  <small v-else-if="roomCatalogModels !== null && roomCatalogModels.length === 0" class="text-red-600 dark:text-red-300">当前平台没有已定价模型，无法创建房间</small>
+                  <small v-else>复用“我的账号”新增账号的模型选择器，可搜索、多选并添加自定义模型。</small>
                 </div>
 
                 <div v-if="createPlatform === 'openai'" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
@@ -3029,6 +3032,7 @@ import {
   type AccountShareMembershipHistoryEntry,
   type AccountShareMySpendRange,
   type AccountShareMySpendSummary,
+  type AccountSharePlatform,
   type AccountShareRecommendationCandidate,
   type AccountShareRecommendationRequest,
   type AccountShareRecommendationResult,
@@ -3195,7 +3199,6 @@ interface OAuthFlowInstance {
 
 
 type AccountShareActionErrorAction = 'create-mode-key' | null
-type AccountSharePlatform = 'openai' | 'anthropic' | 'opencode'
 type RecommendationPresetKey = 'light' | 'balanced' | 'heavy' | 'history'
 type MySpendMetricTone = 'total' | 'request' | 'hourly' | 'usage'
 type MySpendMetricIcon = 'dollar' | 'creditCard' | 'clock' | 'chart'
@@ -3365,11 +3368,6 @@ const ACCOUNT_MODE_GROUP_NAME_BY_PLATFORM: Record<AccountSharePlatform, string> 
   openai: 'OpenAI账号模式',
   anthropic: 'Anthropic账号模式',
   opencode: 'Opencode账号模式'
-}
-const DEFAULT_ACCOUNT_SHARE_ALLOWED_MODELS_BY_PLATFORM: Record<AccountSharePlatform, string[]> = {
-  openai: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'codex-auto-review'],
-  anthropic: ['claude-sonnet-4-6', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-fable-5', 'claude-opus-4-6', 'claude-haiku-4-5'],
-  opencode: ['deepseek-v4-flash', 'deepseek-v4-pro', 'glm-5.1', 'glm-5.2', 'glm-5.3', 'gpt-5.6-luna', 'grok-4.5', 'hy3', 'kimi-k2.7-code', 'kimi-k3', 'minimax-m2.5', 'minimax-m2.7', 'minimax-m3', 'mimo-v2.5', 'mimo-v2.5-pro', 'muse-spark-1.2-contributor', 'qwen3.6-plus', 'qwen3.7-max', 'qwen3.7-plus', 'qwen3.8-max']
 }
 const ACCOUNT_SHARE_RECOMMENDATION_LIMIT = 10
 const ACCOUNT_SHARE_RECOMMENDATION_PAGE_SIZE = 5
@@ -3775,7 +3773,7 @@ function buildDefaultRecommendationForm(): RecommendationFormState {
   const preset = recommendationPresets[1]
   return {
     api_key_id: 0,
-    model: DEFAULT_ACCOUNT_SHARE_ALLOWED_MODELS_BY_PLATFORM.openai[0],
+    model: '',
     request_count: preset.request_count,
     active_hours: preset.active_hours,
     input_tokens_per_request: preset.input_tokens_per_request,
@@ -4047,7 +4045,11 @@ function buildDefaultCreateForm(): CreateFormState {
 
 const createForm = reactive<CreateFormState>(buildDefaultCreateForm())
 const editForm = reactive<CreateFormState>(buildDefaultCreateForm())
-const allowedModels = ref<string[]>(defaultAllowedModelsForPlatform(createPlatform.value))
+const allowedModels = ref<string[]>([])
+const roomCatalogModels = ref<string[] | null>(null)
+const roomCatalogLoading = ref(false)
+const roomCatalogError = ref('')
+let roomCatalogRequestVersion = 0
 
 function createDraftSnapshot(): CreateDraftSnapshot {
   return {
@@ -4108,8 +4110,27 @@ const visibleListingFeatureTagOptions = computed(() =>
   )
 )
 
-function defaultAllowedModelsForPlatform(platform: AccountSharePlatform): string[] {
-  return [...DEFAULT_ACCOUNT_SHARE_ALLOWED_MODELS_BY_PLATFORM[platform]]
+async function loadRoomCatalog(platform: AccountSharePlatform): Promise<void> {
+  const requestVersion = ++roomCatalogRequestVersion
+  roomCatalogError.value = ''
+  roomCatalogLoading.value = true
+  roomCatalogModels.value = null
+  try {
+    const result = await accountsAPI.getModelOptions(platform)
+    if (requestVersion !== roomCatalogRequestVersion) return
+    const models = Array.from(new Set((result.models || []).map(model => model.trim()).filter(Boolean)))
+    roomCatalogModels.value = models
+    allowedModels.value = [...models]
+  } catch (error) {
+    if (requestVersion !== roomCatalogRequestVersion) return
+    roomCatalogModels.value = []
+    allowedModels.value = []
+    roomCatalogError.value = extractApiErrorMessage(error, '加载模型目录失败，请重试')
+  } finally {
+    if (requestVersion === roomCatalogRequestVersion) {
+      roomCatalogLoading.value = false
+    }
+  }
 }
 
 function listingPlatform(listing: AccountShareListing | null | undefined): AccountSharePlatform {
@@ -4729,7 +4750,6 @@ const mySpendMetrics = computed<MySpendMetric[]>(() => {
 })
 const modelFilterOptions = computed(() => {
   const models = new Set<string>([
-    ...DEFAULT_ACCOUNT_SHARE_ALLOWED_MODELS_BY_PLATFORM[activeListingPlatform.value],
     ...listingFilters.models
   ])
   for (const listing of knownListings.value) {
@@ -7076,10 +7096,13 @@ function openCreateDialog(): void {
   showCreate.value = true
   if (createPlatform.value !== activeListingPlatform.value) {
     selectCreatePlatform(activeListingPlatform.value)
-  } else if (createSourceMode.value === 'existing') {
-    void loadOwnedAccounts()
   } else {
-    void loadProxies()
+    void loadRoomCatalog(createPlatform.value)
+    if (createSourceMode.value === 'existing') {
+      void loadOwnedAccounts()
+    } else {
+      void loadProxies()
+    }
   }
   void loadListingNameIndex()
   captureCreateDraftBaseline()
@@ -7108,7 +7131,8 @@ function resetOAuthState(): void {
 
 function resetCreateForm(): void {
   Object.assign(createForm, buildDefaultCreateForm())
-  allowedModels.value = defaultAllowedModelsForPlatform(createPlatform.value)
+  allowedModels.value = []
+  void loadRoomCatalog(createPlatform.value)
   createErrorMessage.value = ''
   clearPendingCreateRoomIdempotencyKey()
   resetOAuthState()
@@ -7164,7 +7188,8 @@ function selectCreatePlatform(platform: AccountSharePlatform): void {
     resetOAuthState()
   }
   Object.assign(createForm, buildDefaultCreateForm(), { proxy_id: proxyID })
-  allowedModels.value = defaultAllowedModelsForPlatform(platform)
+  allowedModels.value = []
+  void loadRoomCatalog(platform)
   createErrorMessage.value = ''
   selectedOwnedAccountID.value = 0
   ownedAccounts.value = []
@@ -7924,7 +7949,7 @@ function syncRecommendationApiKey(): void {
 }
 
 function syncRecommendationFormForPlatform(platform: AccountSharePlatform = activeListingPlatform.value): void {
-  const models = new Set<string>(DEFAULT_ACCOUNT_SHARE_ALLOWED_MODELS_BY_PLATFORM[platform])
+  const models = new Set<string>()
   for (const listing of [...knownListings.value, ...listings.value]) {
     if (listingPlatform(listing) !== platform) continue
     for (const model of listing.allowed_models) {
@@ -7933,7 +7958,7 @@ function syncRecommendationFormForPlatform(platform: AccountSharePlatform = acti
     }
   }
   if (!models.has(recommendationForm.model)) {
-    recommendationForm.model = DEFAULT_ACCOUNT_SHARE_ALLOWED_MODELS_BY_PLATFORM[platform][0]
+    recommendationForm.model = Array.from(models).sort((a, b) => a.localeCompare(b))[0] || ''
   }
   syncRecommendationApiKey()
 }

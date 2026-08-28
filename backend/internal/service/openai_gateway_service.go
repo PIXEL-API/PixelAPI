@@ -2418,6 +2418,9 @@ func (s *OpenAIGatewayService) resolveAccountShareModeBoundAccount(ctx context.C
 	if requestedModel != "" && !accountShareListingAllowsModel(listing, requestedModel) {
 		return nil, true, accountShareModeUnsupportedModelError(requestedModel)
 	}
+	if requestedModel != "" && !accountShareRoomModelIsPriced(ctx, s.channelService, listing.Platform, requestedModel) {
+		return nil, true, accountShareModeUnsupportedModelError(requestedModel)
+	}
 	if account.IsOpenAICompatible() && account.IsSchedulable() && requestedModel != "" && !account.IsModelSupported(requestedModel) {
 		return nil, true, accountShareModeUnsupportedModelError(requestedModel)
 	}

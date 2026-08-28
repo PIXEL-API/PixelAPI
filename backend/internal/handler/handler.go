@@ -46,6 +46,7 @@ type AdminHandlers struct {
 	Shop                   *admin.ShopHandler
 	Affiliate              *admin.AffiliateHandler
 	Activity               *admin.ActivityHandler
+	Ideas                  *admin.IdeasHandler
 }
 
 // Handlers contains all HTTP handlers
@@ -75,6 +76,7 @@ type Handlers struct {
 	Invoice          *InvoiceHandler
 	Shop             *ShopHandler
 	Activity         *ActivityHandler
+	Ideas            *IdeasHandler
 }
 
 // BuildInfo contains build-time information

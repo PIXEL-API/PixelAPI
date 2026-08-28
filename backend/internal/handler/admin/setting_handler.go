@@ -341,6 +341,15 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		UserAccountImportLimit: settings.UserAccountImportLimit,
 
 		AffiliateEnabled: settings.AffiliateEnabled,
+
+		IdeasEnabled:                settings.IdeasEnabled,
+		IdeasModerationEnabled:      settings.IdeasModerationEnabled,
+		IdeasRewardsPointsEnabled:   settings.IdeasRewardsPointsEnabled,
+		IdeasRewardsBalanceEnabled:  settings.IdeasRewardsBalanceEnabled,
+		IdeasRewardBalanceMaxAmount: settings.IdeasRewardBalanceMaxAmount,
+		IdeasRewardPointsMaxAmount:  settings.IdeasRewardPointsMaxAmount,
+		IdeasOSSEnabled:             settings.IdeasOSSEnabled,
+		IdeasTagBlacklist:           settings.IdeasTagBlacklist,
 	}
 
 	// OpenAI fast policy (stored under a dedicated setting key)
@@ -724,6 +733,16 @@ type UpdateSettingsRequest struct {
 
 	// Affiliate (邀请返利) feature switch
 	AffiliateEnabled *bool `json:"affiliate_enabled"`
+
+	// 「有个想法」内容板块开关
+	IdeasEnabled                *bool    `json:"ideas_enabled"`
+	IdeasModerationEnabled      *bool    `json:"ideas_moderation_enabled"`
+	IdeasRewardsPointsEnabled   *bool    `json:"ideas_rewards_points_enabled"`
+	IdeasRewardsBalanceEnabled  *bool    `json:"ideas_rewards_balance_enabled"`
+	IdeasRewardBalanceMaxAmount *float64 `json:"ideas_reward_balance_max_amount"`
+	IdeasRewardPointsMaxAmount  *float64 `json:"ideas_reward_points_max_amount"`
+	IdeasOSSEnabled             *bool    `json:"ideas_oss_enabled"`
+	IdeasTagBlacklist           *string  `json:"ideas_tag_blacklist"`
 
 	// OpenAI fast/flex policy (optional, only updated when provided)
 	OpenAIFastPolicySettings *dto.OpenAIFastPolicySettings `json:"openai_fast_policy_settings,omitempty"`
@@ -1888,6 +1907,39 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.AffiliateEnabled
 		}(),
+		IdeasEnabled: func() bool {
+			if req.IdeasEnabled != nil {
+				return *req.IdeasEnabled
+			}
+			return previousSettings.IdeasEnabled
+		}(),
+		IdeasModerationEnabled: func() bool {
+			if req.IdeasModerationEnabled != nil {
+				return *req.IdeasModerationEnabled
+			}
+			return previousSettings.IdeasModerationEnabled
+		}(),
+		IdeasRewardsPointsEnabled: func() bool {
+			if req.IdeasRewardsPointsEnabled != nil {
+				return *req.IdeasRewardsPointsEnabled
+			}
+			return previousSettings.IdeasRewardsPointsEnabled
+		}(),
+		IdeasRewardsBalanceEnabled: func() bool {
+			if req.IdeasRewardsBalanceEnabled != nil {
+				return *req.IdeasRewardsBalanceEnabled
+			}
+			return previousSettings.IdeasRewardsBalanceEnabled
+		}(),
+		IdeasRewardBalanceMaxAmount: float64ValueOrDefault(req.IdeasRewardBalanceMaxAmount, previousSettings.IdeasRewardBalanceMaxAmount),
+		IdeasRewardPointsMaxAmount:  float64ValueOrDefault(req.IdeasRewardPointsMaxAmount, previousSettings.IdeasRewardPointsMaxAmount),
+		IdeasOSSEnabled: func() bool {
+			if req.IdeasOSSEnabled != nil {
+				return *req.IdeasOSSEnabled
+			}
+			return previousSettings.IdeasOSSEnabled
+		}(),
+		IdeasTagBlacklist: stringValueOrDefault(req.IdeasTagBlacklist, previousSettings.IdeasTagBlacklist),
 	}
 
 	authSourceDefaults := &service.AuthSourceDefaultSettings{
@@ -2231,6 +2283,15 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		UserAccountImportLimit: updatedSettings.UserAccountImportLimit,
 
 		AffiliateEnabled: updatedSettings.AffiliateEnabled,
+
+		IdeasEnabled:                updatedSettings.IdeasEnabled,
+		IdeasModerationEnabled:      updatedSettings.IdeasModerationEnabled,
+		IdeasRewardsPointsEnabled:   updatedSettings.IdeasRewardsPointsEnabled,
+		IdeasRewardsBalanceEnabled:  updatedSettings.IdeasRewardsBalanceEnabled,
+		IdeasRewardBalanceMaxAmount: updatedSettings.IdeasRewardBalanceMaxAmount,
+		IdeasRewardPointsMaxAmount:  updatedSettings.IdeasRewardPointsMaxAmount,
+		IdeasOSSEnabled:             updatedSettings.IdeasOSSEnabled,
+		IdeasTagBlacklist:           updatedSettings.IdeasTagBlacklist,
 	}
 	if fastPolicy, err := h.settingService.GetOpenAIFastPolicySettings(c.Request.Context()); err != nil {
 		slog.Error("openai_fast_policy_settings_get_failed", "error", err)
@@ -3088,6 +3149,30 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.AffiliateEnabled != after.AffiliateEnabled {
 		changed = append(changed, "affiliate_enabled")
 	}
+	if before.IdeasEnabled != after.IdeasEnabled {
+		changed = append(changed, "ideas_enabled")
+	}
+	if before.IdeasModerationEnabled != after.IdeasModerationEnabled {
+		changed = append(changed, "ideas_moderation_enabled")
+	}
+	if before.IdeasRewardsPointsEnabled != after.IdeasRewardsPointsEnabled {
+		changed = append(changed, "ideas_rewards_points_enabled")
+	}
+	if before.IdeasRewardsBalanceEnabled != after.IdeasRewardsBalanceEnabled {
+		changed = append(changed, "ideas_rewards_balance_enabled")
+	}
+	if before.IdeasRewardBalanceMaxAmount != after.IdeasRewardBalanceMaxAmount {
+		changed = append(changed, "ideas_reward_balance_max_amount")
+	}
+	if before.IdeasRewardPointsMaxAmount != after.IdeasRewardPointsMaxAmount {
+		changed = append(changed, "ideas_reward_points_max_amount")
+	}
+	if before.IdeasOSSEnabled != after.IdeasOSSEnabled {
+		changed = append(changed, "ideas_oss_enabled")
+	}
+	if before.IdeasTagBlacklist != after.IdeasTagBlacklist {
+		changed = append(changed, "ideas_tag_blacklist")
+	}
 	changed = appendAuthSourceDefaultChanges(changed, beforeAuthSourceDefaults, afterAuthSourceDefaults)
 	return changed
 }
@@ -3182,6 +3267,13 @@ func intValueOrDefault(value *int, fallback int) int {
 }
 
 func boolValueOrDefault(value *bool, fallback bool) bool {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
+
+func stringValueOrDefault(value *string, fallback string) string {
 	if value == nil {
 		return fallback
 	}

@@ -918,6 +918,7 @@ const flagInvoiceManagement = makeSidebarFlag(FeatureFlags.invoiceManagement);
 const flagWithdrawalManagement = makeSidebarFlag(
   FeatureFlags.withdrawalManagement,
 );
+const flagIdeas = makeSidebarFlag(FeatureFlags.ideas);
 const flagOpsMonitoring = () => adminSettingsStore.opsMonitoringEnabled;
 const flagAdminPayment = () => adminSettingsStore.paymentEnabled;
 const flagAdminFinance = () =>
@@ -956,6 +957,13 @@ function buildSelfNavItems(withDashboard: boolean): NavItem[] {
       label: t("nav.accountShare"),
       icon: AccountShareIcon,
       hideInSimpleMode: true,
+    },
+    {
+      path: "/ideas",
+      label: t("nav.ideas"),
+      icon: ChatIcon,
+      hideInSimpleMode: true,
+      featureFlag: flagIdeas,
     },
     {
       path: "/usage",

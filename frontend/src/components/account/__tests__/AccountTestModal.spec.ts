@@ -244,4 +244,54 @@ describe('AccountTestModal', () => {
       mode: 'default'
     })
   })
+
+  it.each([
+    ['ACCOUNT_TEST_MODEL_CATALOG_EMPTY', 'catalog-empty'],
+    ['ACCOUNT_TEST_MODEL_WHITELIST_MISSING', 'whitelist-missing'],
+    ['ACCOUNT_TEST_MODEL_NO_PRICED_INTERSECTION', 'no-intersection'],
+    ['ACCOUNT_TEST_PROTOCOL_NO_SUPPORTED_MODELS', 'protocol-no-models']
+  ])('maps %s to the %s load state', async (reason, expectedState) => {
+    getAvailableModelsMock.mockRejectedValue({ reason })
+
+    const wrapper = mount(AccountTestModal, {
+      props: { show: false, account: buildAccount() },
+      global: {
+        stubs: {
+          BaseDialog: BaseDialogStub,
+          Select: SelectStub,
+          TextArea: TextAreaStub,
+          Icon: true
+        }
+      }
+    })
+
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    expect((wrapper.vm as any).modelsLoadState).toBe(expectedState)
+    expect((wrapper.vm as any).availableModels).toEqual([])
+  })
+
+  it('maps an error without a business reason to load-failed and is retryable', async () => {
+    getAvailableModelsMock.mockRejectedValue({ status: 500, message: 'internal error' })
+
+    const wrapper = mount(AccountTestModal, {
+      props: { show: false, account: buildAccount() },
+      global: {
+        stubs: {
+          BaseDialog: BaseDialogStub,
+          Select: SelectStub,
+          TextArea: TextAreaStub,
+          Icon: true
+        }
+      }
+    })
+
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    expect((wrapper.vm as any).modelsLoadState).toBe('load-failed')
+    expect((wrapper.vm as any).modelsErrorRetryable).toBe(true)
+    expect((wrapper.vm as any).modelsErrorMessage).toBe('admin.accounts.modelsLoadFailed')
+  })
 })

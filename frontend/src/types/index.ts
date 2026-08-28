@@ -441,6 +441,7 @@ export interface PublicSettings {
   openai_account_levels?: OpenAIAccountLevelConfig[];
   affiliate_enabled: boolean;
   user_private_group_commission_rate: number;
+  ideas_enabled?: boolean;
 }
 
 export interface AuthResponse {

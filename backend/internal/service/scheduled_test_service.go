@@ -12,8 +12,19 @@ var scheduledTestCronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom 
 
 // ScheduledTestService provides CRUD operations for scheduled test plans and results.
 type ScheduledTestService struct {
-	planRepo   ScheduledTestPlanRepository
-	resultRepo ScheduledTestResultRepository
+	planRepo       ScheduledTestPlanRepository
+	resultRepo     ScheduledTestResultRepository
+	modelValidator ScheduledTestModelValidator
+}
+
+// ScheduledTestModelValidator 校验计划模型是否仍在账号可测试集合中。
+type ScheduledTestModelValidator interface {
+	ValidateTestModel(ctx context.Context, accountID int64, modelID string) error
+}
+
+// SetModelValidator 注入计划模型校验器（AccountTestService 实现了该接口）。
+func (s *ScheduledTestService) SetModelValidator(validator ScheduledTestModelValidator) {
+	s.modelValidator = validator
 }
 
 // NewScheduledTestService creates a new ScheduledTestService.
@@ -29,6 +40,9 @@ func NewScheduledTestService(
 
 // CreatePlan validates the cron expression, computes next_run_at, and persists the plan.
 func (s *ScheduledTestService) CreatePlan(ctx context.Context, plan *ScheduledTestPlan) (*ScheduledTestPlan, error) {
+	if err := s.validatePlanModel(ctx, plan); err != nil {
+		return nil, err
+	}
 	nextRun, err := computeNextRun(plan.CronExpression, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("invalid cron expression: %w", err)
@@ -54,6 +68,9 @@ func (s *ScheduledTestService) ListPlansByAccount(ctx context.Context, accountID
 
 // UpdatePlan validates cron and updates the plan.
 func (s *ScheduledTestService) UpdatePlan(ctx context.Context, plan *ScheduledTestPlan) (*ScheduledTestPlan, error) {
+	if err := s.validatePlanModel(ctx, plan); err != nil {
+		return nil, err
+	}
 	nextRun, err := computeNextRun(plan.CronExpression, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("invalid cron expression: %w", err)
@@ -61,6 +78,15 @@ func (s *ScheduledTestService) UpdatePlan(ctx context.Context, plan *ScheduledTe
 	plan.NextRunAt = &nextRun
 
 	return s.planRepo.Update(ctx, plan)
+}
+
+// validatePlanModel 校验计划模型仍在账号可测试集合中。
+// validator 未注入时跳过（保持向后兼容，历史计划不受影响）。
+func (s *ScheduledTestService) validatePlanModel(ctx context.Context, plan *ScheduledTestPlan) error {
+	if s.modelValidator == nil || plan == nil {
+		return nil
+	}
+	return s.modelValidator.ValidateTestModel(ctx, plan.AccountID, plan.ModelID)
 }
 
 // DeletePlan removes a plan and its results (via CASCADE).

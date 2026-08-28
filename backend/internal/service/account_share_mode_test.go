@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -3646,23 +3645,6 @@ func TestAccountShareModeListingConfigRejectsAccountConcurrencyAboveLimit(t *tes
 	)
 	if !errors.Is(err, ErrAccountShareModeInvalidConcurrency) {
 		t.Fatalf("expected invalid concurrency, got %v", err)
-	}
-}
-
-func TestDefaultAccountShareModeAllowedModels(t *testing.T) {
-	got := DefaultAccountShareModeAllowedModels()
-	if strings.Join(got, ",") != "gpt-5.5,gpt-5.4,gpt-5.4-mini,codex-auto-review" {
-		t.Fatalf("unexpected default models: %#v", got)
-	}
-	got[0] = "changed"
-	again := DefaultAccountShareModeAllowedModels()
-	if again[0] != "gpt-5.5" {
-		t.Fatal("default model slice must not expose mutable backing array")
-	}
-
-	anthropic := DefaultAccountShareModeAllowedModelsForPlatform(PlatformAnthropic)
-	if !slices.Contains(anthropic, "claude-sonnet-5") {
-		t.Fatalf("anthropic defaults must include claude-sonnet-5: %#v", anthropic)
 	}
 }
 

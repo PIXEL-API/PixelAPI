@@ -131,6 +131,11 @@ export const FeatureFlags = {
     mode: "opt-out",
     label: "Withdrawal Management",
   }),
+  ideas: defineFlag({
+    key: "ideas_enabled",
+    mode: "opt-in",
+    label: "Ideas Plaza",
+  }),
 } as const;
 
 export type RegisteredFeatureFlag = keyof typeof FeatureFlags;

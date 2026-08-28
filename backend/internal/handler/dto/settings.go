@@ -285,6 +285,16 @@ type SystemSettings struct {
 	// Affiliate (邀请返利) feature switch
 	AffiliateEnabled bool `json:"affiliate_enabled"`
 
+	// 「有个想法」内容板块开关
+	IdeasEnabled                bool    `json:"ideas_enabled"`
+	IdeasModerationEnabled      bool    `json:"ideas_moderation_enabled"`
+	IdeasRewardsPointsEnabled   bool    `json:"ideas_rewards_points_enabled"`
+	IdeasRewardsBalanceEnabled  bool    `json:"ideas_rewards_balance_enabled"`
+	IdeasRewardBalanceMaxAmount float64 `json:"ideas_reward_balance_max_amount"`
+	IdeasRewardPointsMaxAmount  float64 `json:"ideas_reward_points_max_amount"`
+	IdeasOSSEnabled             bool    `json:"ideas_oss_enabled"`
+	IdeasTagBlacklist           string  `json:"ideas_tag_blacklist"`
+
 	// OpenAI fast/flex policy
 	OpenAIFastPolicySettings *OpenAIFastPolicySettings `json:"openai_fast_policy_settings,omitempty"`
 }
@@ -359,6 +369,7 @@ type PublicSettings struct {
 	WithdrawalRateLimitMax          int     `json:"withdrawal_rate_limit_max"`
 	WithdrawalRateLimitExemptAmount float64 `json:"withdrawal_rate_limit_exempt_amount"`
 	RiskControlEnabled              bool    `json:"risk_control_enabled"`
+	IdeasEnabled                    bool    `json:"ideas_enabled"`
 }
 
 type LoginAgreementDocument struct {

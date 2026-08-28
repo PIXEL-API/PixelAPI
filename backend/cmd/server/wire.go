@@ -109,6 +109,7 @@ func provideCleanup(
 	paymentOrderExpiry *service.PaymentOrderExpiryService,
 	channelMonitorRunner *service.ChannelMonitorRunner,
 	contentModeration *service.ContentModerationService,
+	ideasService *service.IdeasService,
 	clusterRuntime *service.ClusterRuntime,
 ) func(context.Context) error {
 	return func(ctx context.Context) error {
@@ -320,6 +321,12 @@ func provideCleanup(
 			{"ContentModerationCleanup", func() error {
 				if contentModeration != nil {
 					contentModeration.StopCleanupWorker()
+				}
+				return nil
+			}},
+			{"IdeasModeration", func() error {
+				if ideasService != nil {
+					ideasService.StopModerationWorker()
 				}
 				return nil
 			}},

@@ -532,8 +532,11 @@ func ProvideIdempotencyCleanupService(
 func ProvideScheduledTestService(
 	planRepo ScheduledTestPlanRepository,
 	resultRepo ScheduledTestResultRepository,
+	accountTestSvc *AccountTestService,
 ) *ScheduledTestService {
-	return NewScheduledTestService(planRepo, resultRepo)
+	svc := NewScheduledTestService(planRepo, resultRepo)
+	svc.SetModelValidator(accountTestSvc)
+	return svc
 }
 
 // ProvideScheduledTestRunnerService creates and starts ScheduledTestRunnerService.
@@ -771,6 +774,7 @@ func ProvideAccountShareModeService(
 	billingCacheService *BillingCacheService,
 	billingService *BillingService,
 	modelPricingResolver *ModelPricingResolver,
+	pricedModelCatalog PricedModelCatalog,
 	settingRepo SettingRepository,
 	settingService *SettingService,
 	taskExecutor *ClusterTaskExecutor,
@@ -782,6 +786,7 @@ func ProvideAccountShareModeService(
 	svc.SetRuntimeDependencies(concurrencyService, authCacheInvalidator, accountTestService, rateLimitService)
 	svc.SetBillingCacheService(billingCacheService)
 	svc.SetRecommendationPricingDependencies(billingService, modelPricingResolver)
+	svc.SetPricedModelCatalog(pricedModelCatalog)
 	svc.SetSettingService(settingService)
 	svc.SetRecommendationUsageProfileRepository(usageLogRepo)
 	svc.SetReviewModerationSettingRepository(settingRepo)
@@ -952,6 +957,7 @@ func ProvideAccountTestService(
 	settingService *SettingService,
 	grokTokenProvider *GrokTokenProvider,
 	agentIdentityWSInvalidator *AgentIdentityWSInvalidatorProxy,
+	channelService *ChannelService,
 ) *AccountTestService {
 	svc := NewAccountTestService(
 		accountRepo,
@@ -965,6 +971,7 @@ func ProvideAccountTestService(
 		agentIdentityWSInvalidator,
 	)
 	svc.SetGrokTokenProvider(grokTokenProvider)
+	svc.SetModelResolver(NewAccountTestModelResolver(channelService))
 	return svc
 }
 
@@ -1045,6 +1052,7 @@ func ProvideAdminService(
 	systemNoticeService *SystemNoticeService,
 	agentIdentityWSInvalidator *AgentIdentityWSInvalidatorProxy,
 	rateLimitService *RateLimitService,
+	channelService   *ChannelService,
 ) AdminService {
 	svc := NewAdminService(
 		userRepo,
@@ -1069,6 +1077,7 @@ func ProvideAdminService(
 	svc = SetAdminUserPrivateGroupProvisioner(svc, privateGroupProvisioner)
 	svc = SetAdminSystemNoticeService(svc, systemNoticeService)
 	svc = SetAdminAgentIdentityWSInvalidator(svc, agentIdentityWSInvalidator)
+	svc = SetAdminPricedModelCatalog(svc, channelService)
 	return SetAdminGrokProxyCredentialRecovery(svc, rateLimitService)
 }
 
@@ -1191,6 +1200,7 @@ var ProviderSet = wire.NewSet(
 	NewReceiptCodeService,
 	NewWithdrawalService,
 	NewInvoiceService,
+	ProvideIdeasService,
 	ProvideShopService,
 	NewActivityService,
 	ProvideActivityAutoDrawService,
@@ -1309,4 +1319,16 @@ func ProvideChannelMonitorRunner(
 	svc.SetScheduler(r)
 	r.Start()
 	return r
+}
+
+// ProvideIdeasService 创建 IdeasService，注入审核 worker 的集群任务执行器并启动后台审核循环。
+func ProvideIdeasService(
+	repo IdeasRepository,
+	settingService *SettingService,
+	taskExecutor *ClusterTaskExecutor,
+) *IdeasService {
+	svc := NewIdeasService(repo, settingService)
+	svc.SetModerationTaskExecutor(taskExecutor)
+	svc.StartModerationWorker()
+	return svc
 }

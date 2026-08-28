@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -137,6 +138,13 @@ func (s *ScheduledTestRunnerService) runOnePlan(ctx context.Context, guard *Clus
 		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d lease lost: %v", plan.ID, err)
 		return
 	}
+	// 执行前重新校验模型仍在可测试集合（定价/白名单可能已变更），
+	// 校验失败则保存明确失败结果并推进下次计划，不发上游请求、不改写计划模型。
+	if err := s.accountTestSvc.ValidateTestModel(ctx, plan.AccountID, plan.ModelID); err != nil {
+		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d model no longer testable: %v", plan.ID, err)
+		s.recordModelValidationFailure(ctx, guard, plan, err)
+		return
+	}
 	result, err := s.accountTestSvc.RunTestBackground(ctx, plan.AccountID, plan.ModelID)
 	if err != nil {
 		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d RunTestBackground error: %v", plan.ID, err)
@@ -172,6 +180,33 @@ func (s *ScheduledTestRunnerService) runOnePlan(ctx context.Context, guard *Clus
 	}
 	if err := s.planRepo.UpdateAfterRun(ctx, plan.ID, time.Now(), nextRun); err != nil {
 		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d UpdateAfterRun error: %v", plan.ID, err)
+	}
+}
+
+// recordModelValidationFailure 记录模型校验失败结果并推进下次计划，不发上游请求。
+func (s *ScheduledTestRunnerService) recordModelValidationFailure(ctx context.Context, guard *ClusterLeaseGuard, plan *ScheduledTestPlan, err error) {
+	now := time.Now()
+	failed := &ScheduledTestResult{
+		Status:       "failed",
+		ErrorMessage: fmt.Sprintf("model %s is not testable: %v", plan.ModelID, err),
+		StartedAt:    now,
+		FinishedAt:   now,
+	}
+	if saveErr := s.scheduledSvc.SaveResult(ctx, plan.ID, plan.MaxResults, failed); saveErr != nil {
+		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d SaveResult error: %v", plan.ID, saveErr)
+		return
+	}
+	if checkErr := guard.Check(ctx); checkErr != nil {
+		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d lease lost before finalizing: %v", plan.ID, checkErr)
+		return
+	}
+	nextRun, nextErr := computeNextRun(plan.CronExpression, time.Now())
+	if nextErr != nil {
+		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d computeNextRun error: %v", plan.ID, nextErr)
+		return
+	}
+	if updateErr := s.planRepo.UpdateAfterRun(ctx, plan.ID, time.Now(), nextRun); updateErr != nil {
+		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d UpdateAfterRun error: %v", plan.ID, updateErr)
 	}
 }
 

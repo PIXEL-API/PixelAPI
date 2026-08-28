@@ -167,57 +167,12 @@ const (
 	accountShareModeEndMembershipTokenAction      = "account_share_mode:end_membership:v2"
 )
 
-var accountShareModeDefaultAllowedModels = []string{
-	"gpt-5.5",
-	"gpt-5.4",
-	"gpt-5.4-mini",
-	"codex-auto-review",
-}
-
-var accountShareModeAnthropicDefaultAllowedModels = []string{
-	"claude-sonnet-5",
-	"claude-sonnet-4-6",
-	"claude-opus-5",
-	"claude-opus-4-8",
-	"claude-opus-4-7",
-	"claude-fable-5",
-	"claude-opus-4-6",
-	"claude-haiku-4-5",
-}
-
-// accountShareModeOpencodeDefaultAllowedModels 是账号广场 opencode 房间的默认模型白名单。
-// 与自有账号默认模型映射（opencodeDefaultModelSlugs，26 个裸 slug）不同：这里只收录
-// OPENCODE 渠道（渠道中心）channel_model_pricing 里 platform=opencode 且配了价的 20 个模型，
-// 保证房间白名单与渠道定价一致，避免把渠道未配价的模型上架导致计费为 0。
-// 渠道关联后 dispatch 的 restrict_models 白名单会以同一份渠道定价兜底。
-var accountShareModeOpencodeDefaultAllowedModels = []string{
-	"deepseek-v4-flash",
-	"deepseek-v4-pro",
-	"glm-5.1",
-	"glm-5.2",
-	"glm-5.3",
-	"gpt-5.6-luna",
-	"grok-4.5",
-	"hy3",
-	"kimi-k2.7-code",
-	"kimi-k3",
-	"minimax-m2.5",
-	"minimax-m2.7",
-	"minimax-m3",
-	"mimo-v2.5",
-	"mimo-v2.5-pro",
-	"muse-spark-1.2-contributor",
-	"qwen3.6-plus",
-	"qwen3.7-max",
-	"qwen3.7-plus",
-	"qwen3.8-max",
-}
-
 var (
 	ErrAccountShareModeGroupUnbound             = infraerrors.New(http.StatusBadRequest, "ACCOUNT_SHARE_MODE_GROUP_UNBOUND", accountShareModeContextBindingMissingError)
 	ErrAccountShareModeRecovering               = infraerrors.ServiceUnavailable("ACCOUNT_SHARE_MODE_RECOVERING", "account share mode binding is temporarily unavailable")
 	ErrAccountShareMembershipIdleTimeout        = infraerrors.Conflict("ACCOUNT_SHARE_MEMBERSHIP_IDLE_TIMEOUT", "account share membership ended because of idle timeout")
 	ErrAccountShareModeGroupUnavailable         = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_GROUP_UNAVAILABLE", "account share mode group is not configured")
+	ErrAccountShareModeCatalogEmpty             = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_CATALOG_EMPTY", "当前平台没有已定价模型，无法创建房间")
 	ErrAccountSharePrivateGroupUnavailable      = infraerrors.BadRequest("ACCOUNT_SHARE_PRIVATE_GROUP_UNAVAILABLE", "account owner private group is not configured")
 	ErrAccountShareListingNotFound              = infraerrors.NotFound("ACCOUNT_SHARE_LISTING_NOT_FOUND", "account share listing not found")
 	ErrAccountShareMembershipNotFound           = infraerrors.NotFound("ACCOUNT_SHARE_MEMBERSHIP_NOT_FOUND", "account share membership not found")
@@ -1378,6 +1333,7 @@ type AccountShareModeService struct {
 	billingCacheService  *BillingCacheService
 	billingService       *BillingService
 	modelPricingResolver *ModelPricingResolver
+	pricedModelCatalog   PricedModelCatalog
 	settingService       *SettingService
 	reviewSettingRepo    SettingRepository
 	reviewHTTPClient     *http.Client
@@ -1457,6 +1413,15 @@ func (s *AccountShareModeService) SetRecommendationPricingDependencies(billingSe
 	}
 	s.billingService = billingService
 	s.modelPricingResolver = resolver
+}
+
+// SetPricedModelCatalog 注入定价目录窄接口，供房间创建/编辑/运行时校验
+// 房间模型是否已定价（目录硬上限）。
+func (s *AccountShareModeService) SetPricedModelCatalog(catalog PricedModelCatalog) {
+	if s == nil {
+		return
+	}
+	s.pricedModelCatalog = catalog
 }
 
 func (s *AccountShareModeService) SetSettingService(settingService *SettingService) {
@@ -2150,7 +2115,11 @@ func (s *AccountShareModeService) ExchangeOpenAICodeAndCreateListing(ctx context
 	if err := validateAccountShareAccountName(input.Name); err != nil {
 		return nil, err
 	}
-	input.AllowedModels = normalizeAllowedModelsOrDefault(input.AllowedModels)
+	resolvedModels, err := s.resolveAccountShareRoomDefaultModels(ctx, PlatformOpenAI, input.AllowedModels)
+	if err != nil {
+		return nil, err
+	}
+	input.AllowedModels = resolvedModels
 	if err := validateAccountShareListingConfig(input.SeatLimit, input.RateMultiplier, input.AllowedModels, input.PerUserConcurrency, input.Concurrency, input.HourlyRate, input.HourlyFeeWaiverMinimum, minBalanceValue(input.MinBalanceRequired), input.Codex5hLimitPercent, input.Codex7dLimitPercent); err != nil {
 		return nil, err
 	}
@@ -2193,7 +2162,11 @@ func (s *AccountShareModeService) ExchangeAnthropicCodeAndCreateListing(ctx cont
 	if err := validateAccountShareAccountName(input.Name); err != nil {
 		return nil, err
 	}
-	input.AllowedModels = normalizeAllowedModelsOrDefaultForPlatform(PlatformAnthropic, input.AllowedModels)
+	resolvedModels, err := s.resolveAccountShareRoomDefaultModels(ctx, PlatformAnthropic, input.AllowedModels)
+	if err != nil {
+		return nil, err
+	}
+	input.AllowedModels = resolvedModels
 	input.Anthropic5hLimitPercent = normalizeAnthropicLimitPercent(input.Anthropic5hLimitPercent)
 	input.Anthropic7dLimitPercent = normalizeAnthropicLimitPercent(input.Anthropic7dLimitPercent)
 	if err := validateAccountShareListingConfig(input.SeatLimit, input.RateMultiplier, input.AllowedModels, input.PerUserConcurrency, input.Concurrency, input.HourlyRate, input.HourlyFeeWaiverMinimum, minBalanceValue(input.MinBalanceRequired), input.Anthropic5hLimitPercent, input.Anthropic7dLimitPercent); err != nil {
@@ -2235,7 +2208,11 @@ func (s *AccountShareModeService) CreateOpenAIListingFromToken(ctx context.Conte
 	if err := validateAccountShareAccountName(input.Name); err != nil {
 		return nil, err
 	}
-	input.AllowedModels = normalizeAllowedModelsOrDefault(input.AllowedModels)
+	resolvedModels, err := s.resolveAccountShareRoomDefaultModels(ctx, PlatformOpenAI, input.AllowedModels)
+	if err != nil {
+		return nil, err
+	}
+	input.AllowedModels = resolvedModels
 	if err := validateAccountShareListingConfig(input.SeatLimit, input.RateMultiplier, input.AllowedModels, input.PerUserConcurrency, input.Concurrency, input.HourlyRate, input.HourlyFeeWaiverMinimum, minBalanceValue(input.MinBalanceRequired), input.Codex5hLimitPercent, input.Codex7dLimitPercent); err != nil {
 		return nil, err
 	}
@@ -2356,7 +2333,11 @@ func (s *AccountShareModeService) CreateAnthropicListingFromToken(ctx context.Co
 	if err := validateAccountShareAccountName(input.Name); err != nil {
 		return nil, err
 	}
-	input.AllowedModels = normalizeAllowedModelsOrDefaultForPlatform(PlatformAnthropic, input.AllowedModels)
+	resolvedModels, err := s.resolveAccountShareRoomDefaultModels(ctx, PlatformAnthropic, input.AllowedModels)
+	if err != nil {
+		return nil, err
+	}
+	input.AllowedModels = resolvedModels
 	input.Anthropic5hLimitPercent = normalizeAnthropicLimitPercent(input.Anthropic5hLimitPercent)
 	input.Anthropic7dLimitPercent = normalizeAnthropicLimitPercent(input.Anthropic7dLimitPercent)
 	if err := validateAccountShareListingConfig(input.SeatLimit, input.RateMultiplier, input.AllowedModels, input.PerUserConcurrency, input.Concurrency, input.HourlyRate, input.HourlyFeeWaiverMinimum, minBalanceValue(input.MinBalanceRequired), input.Anthropic5hLimitPercent, input.Anthropic7dLimitPercent); err != nil {
@@ -2474,7 +2455,10 @@ func (s *AccountShareModeService) CreateRoomFromOwnedAccount(ctx context.Context
 	if account == nil || account.OwnerUserID == nil || *account.OwnerUserID != ownerUserID {
 		return nil, ErrAccountShareRoomOwnerMismatch
 	}
-	allowedModels := normalizeAllowedModelsOrDefaultForPlatform(account.Platform, input.AllowedModels)
+	allowedModels, err := s.resolveAccountShareRoomDefaultModels(ctx, account.Platform, input.AllowedModels)
+	if err != nil {
+		return nil, err
+	}
 	perUserConcurrency := normalizePositiveInt(input.PerUserConcurrency, AccountShareModeDefaultPerUserConcurrency)
 	codex5hLimitPercent := normalizeCodexLimitPercent(input.Codex5hLimitPercent)
 	codex7dLimitPercent := normalizeCodexLimitPercent(input.Codex7dLimitPercent)
@@ -3756,8 +3740,29 @@ func (s *AccountShareModeService) enrichListingsSupportedModels(
 		return
 	}
 	for i := range listings {
-		listings[i].SupportedModels = computeAccountShareSupportedModels(infosByListing[listings[i].ID])
+		infos := infosByListing[listings[i].ID]
+		accountModels := computeAccountShareSupportedModels(infos)
+		if accountModels == nil && len(infos) > 0 {
+			// 房间有账号但都未配置显式映射：平台账号的候选能力即平台定价目录，
+			// 用目录全集替代「不限」语义，避免前端回退到已漂移的静态默认列表。
+			accountModels = s.listRoomCatalogModels(ctx, listings[i].Platform)
+		}
+		listings[i].SupportedModels = s.applyAccountSharePricedCatalog(ctx, listings[i].Platform, accountModels)
 	}
+}
+
+// listRoomCatalogModels 返回平台定价目录全集，作为「账号均未配置显式映射」时房间的候选能力。
+// 目录未注入或读取失败返回 nil（保持「不限」降级，由前端兜底），目录为空返回空切片。
+func (s *AccountShareModeService) listRoomCatalogModels(ctx context.Context, platform string) []string {
+	if s == nil || s.pricedModelCatalog == nil {
+		return nil
+	}
+	models, err := s.pricedModelCatalog.ListSelectablePricedModelIDs(ctx, PricedModelQuery{Platform: platform})
+	if err != nil {
+		log.Printf("[AccountShareMode] list room catalog models failed: platform=%s err=%v", platform, err)
+		return nil
+	}
+	return models
 }
 
 // computeAccountShareSupportedModels 计算房间账号共同支持的模型交集。
@@ -3792,6 +3797,31 @@ func computeAccountShareSupportedModels(infos []AccountShareRoomModelInfo) []str
 	out := make([]string, 0, len(intersection))
 	for model := range intersection {
 		out = append(out, model)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// applyAccountSharePricedCatalog 将房间账号能力交集与定价目录求交。
+//
+// accountModels 为 nil 时保持 nil（无账号，或目录读取失败的降级），由前端兜底；
+// 非 nil 时逐个调用 pattern-aware IsModelPriced 过滤，使通配符定价也能正确授权。
+// 目录未注入或读取失败时保留原交集，不破坏现有展示。
+func (s *AccountShareModeService) applyAccountSharePricedCatalog(ctx context.Context, platform string, accountModels []string) []string {
+	if s == nil || s.pricedModelCatalog == nil || accountModels == nil {
+		return accountModels
+	}
+	out := make([]string, 0, len(accountModels))
+	for _, model := range accountModels {
+		priced, err := s.pricedModelCatalog.IsModelPriced(ctx, PricedModelQuery{Platform: platform}, model)
+		if err != nil {
+			log.Printf("[AccountShareMode] check priced model failed: platform=%s model=%s err=%v", platform, model, err)
+			out = append(out, model) // 目录读取失败不收缩交集，避免定价服务抖动破坏展示
+			continue
+		}
+		if priced {
+			out = append(out, model)
+		}
 	}
 	sort.Strings(out)
 	return out
@@ -5242,21 +5272,6 @@ func (s *AccountShareModeService) loadVisibleActiveProxyForScope(ctx context.Con
 	return proxy, nil
 }
 
-func DefaultAccountShareModeAllowedModels() []string {
-	return append([]string(nil), accountShareModeDefaultAllowedModels...)
-}
-
-func DefaultAccountShareModeAllowedModelsForPlatform(platform string) []string {
-	switch strings.ToLower(strings.TrimSpace(platform)) {
-	case PlatformAnthropic:
-		return append([]string(nil), accountShareModeAnthropicDefaultAllowedModels...)
-	case PlatformOpencode:
-		return append([]string(nil), accountShareModeOpencodeDefaultAllowedModels...)
-	default:
-		return DefaultAccountShareModeAllowedModels()
-	}
-}
-
 func AccountShareModeAllowedModelsMapping(models []string) map[string]any {
 	normalized := normalizeAllowedModels(models)
 	out := make(map[string]any, len(normalized))
@@ -5266,16 +5281,26 @@ func AccountShareModeAllowedModelsMapping(models []string) map[string]any {
 	return out
 }
 
-func normalizeAllowedModelsOrDefault(models []string) []string {
-	return normalizeAllowedModelsOrDefaultForPlatform(PlatformOpenAI, models)
-}
-
-func normalizeAllowedModelsOrDefaultForPlatform(platform string, models []string) []string {
+// resolveAccountShareRoomDefaultModels 解析房间默认模型白名单。
+//
+// 显式提供模型时直接归一化返回；未提供时回退到该平台的定价目录（目录硬上限），
+// 目录为空或不可用时返回错误，不再回退到已漂移的静态默认列表。
+func (s *AccountShareModeService) resolveAccountShareRoomDefaultModels(ctx context.Context, platform string, models []string) ([]string, error) {
 	normalized := normalizeAllowedModels(models)
 	if len(normalized) > 0 {
-		return normalized
+		return normalized, nil
 	}
-	return DefaultAccountShareModeAllowedModelsForPlatform(platform)
+	if s == nil || s.pricedModelCatalog == nil {
+		return nil, ErrServiceUnavailable
+	}
+	catalogModels, err := s.pricedModelCatalog.ListSelectablePricedModelIDs(ctx, PricedModelQuery{Platform: platform})
+	if err != nil {
+		return nil, fmt.Errorf("resolve room default models from pricing catalog: %w", err)
+	}
+	if len(catalogModels) == 0 {
+		return nil, ErrAccountShareModeCatalogEmpty
+	}
+	return catalogModels, nil
 }
 
 func normalizeAllowedModels(models []string) []string {
@@ -5721,6 +5746,24 @@ func accountShareListingAllowsModel(listing *AccountShareListing, model string) 
 		}
 	}
 	return false
+}
+
+// accountShareRoomModelIsPriced 判断房间请求模型是否仍在定价目录内（目录硬上限）。
+//
+// 房间白名单在创建/编辑时已校验过定价，但定价可能在之后被删除；dispatch 前再确认一次，
+// 保证「定价删除后的已有房间不会新发起未定价请求」。目录未注入或读取失败时放行（返回 true），
+// 避免定价服务抖动放大为房间请求故障；未定价返回 false，由调用方拒绝请求。
+func accountShareRoomModelIsPriced(ctx context.Context, catalog PricedModelCatalog, platform, model string) bool {
+	model = strings.TrimSpace(model)
+	if model == "" || catalog == nil {
+		return true
+	}
+	priced, err := catalog.IsModelPriced(ctx, PricedModelQuery{Platform: platform}, model)
+	if err != nil {
+		log.Printf("[AccountShareMode] check room model priced failed: platform=%s model=%s err=%v", platform, model, err)
+		return true
+	}
+	return priced
 }
 
 func accountShareListingSupportsRecommendationModel(listing AccountShareListing, model string) bool {

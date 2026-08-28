@@ -446,6 +446,38 @@ const routes: RouteRecordRaw[] = [
     },
   },
 
+  // ==================== Ideas Plaza ====================
+  {
+    path: "/ideas",
+    name: "Ideas",
+    component: () => import("@/views/ideas/IdeasListView.vue"),
+    meta: { requiresAuth: true, requiresAdmin: false, title: "有个想法" },
+  },
+  {
+    path: "/ideas/new",
+    name: "IdeaNew",
+    component: () => import("@/views/ideas/IdeaEditorView.vue"),
+    meta: { requiresAuth: true, requiresAdmin: false, title: "写文章" },
+  },
+  {
+    path: "/ideas/mine",
+    name: "MyIdeas",
+    component: () => import("@/views/ideas/MyIdeasView.vue"),
+    meta: { requiresAuth: true, requiresAdmin: false, title: "我的文章" },
+  },
+  {
+    path: "/ideas/:id/edit",
+    name: "IdeaEdit",
+    component: () => import("@/views/ideas/IdeaEditorView.vue"),
+    meta: { requiresAuth: true, requiresAdmin: false, title: "编辑文章" },
+  },
+  {
+    path: "/ideas/:id",
+    name: "IdeaDetail",
+    component: () => import("@/views/ideas/IdeaDetailView.vue"),
+    meta: { requiresAuth: true, requiresAdmin: false, title: "文章详情" },
+  },
+
   // ==================== Admin Routes ====================
   {
     path: "/admin",
@@ -751,6 +783,12 @@ const routes: RouteRecordRaw[] = [
       titleKey: "admin.revenue.title",
       descriptionKey: "admin.revenue.description",
     },
+  },
+  {
+    path: "/admin/ideas",
+    name: "AdminIdeas",
+    component: () => import("@/views/admin/ideas/AdminIdeasView.vue"),
+    meta: { requiresAuth: true, requiresAdmin: true, title: "有个想法管理" },
   },
 
   // ==================== Payment Admin Routes ====================

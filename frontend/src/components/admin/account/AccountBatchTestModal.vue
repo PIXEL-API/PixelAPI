@@ -75,7 +75,7 @@
         role="alert"
       >
         <span class="text-sm text-red-700 dark:text-red-300">
-          {{ t('admin.accounts.bulkTest.modelLoadFailed') }}
+          {{ t(modelLoadMessage || 'admin.accounts.bulkTest.modelLoadFailed') }}
         </span>
         <button
           type="button"
@@ -132,6 +132,7 @@ import {
 const props = defineProps<{
   show: boolean
   representativeAccount: Account | null
+  accountIds: number[]
   selectedCount: number
   submitting: boolean
 }>()
@@ -146,6 +147,7 @@ const availableModels = ref<ClaudeModel[]>([])
 const selectedModelId = ref('')
 const loadingModels = ref(false)
 const modelLoadFailed = ref(false)
+const modelLoadMessage = ref('')
 
 watch(
   () => props.show,
@@ -154,6 +156,7 @@ watch(
       availableModels.value = []
       selectedModelId.value = ''
       modelLoadFailed.value = false
+      modelLoadMessage.value = ''
       return
     }
     await loadAvailableModels()
@@ -162,28 +165,44 @@ watch(
 
 async function loadAvailableModels(): Promise<void> {
   const account = props.representativeAccount
-  if (!account) {
+  if (!props.accountIds.length || !account) {
     modelLoadFailed.value = true
+    modelLoadMessage.value = 'admin.accounts.bulkTest.modelLoadFailed'
     return
   }
 
   loadingModels.value = true
   modelLoadFailed.value = false
+  modelLoadMessage.value = ''
   selectedModelId.value = ''
   try {
-    const models = await adminAPI.accounts.getAvailableModels(account.id)
+    const models = await adminAPI.accounts.getBatchTestModelOptions(props.accountIds)
     availableModels.value = prepareAccountTestModels(models, account.platform)
-    selectedModelId.value = selectDefaultAccountTestModel(
-      availableModels.value,
-      account.platform
-    )
+    selectedModelId.value = selectDefaultAccountTestModel(availableModels.value, account.platform)
     modelLoadFailed.value = availableModels.value.length === 0
   } catch (error) {
     console.error('Failed to load models for batch account test:', error)
     availableModels.value = []
     modelLoadFailed.value = true
+    modelLoadMessage.value = mapBatchModelsLoadError(error)
   } finally {
     loadingModels.value = false
+  }
+}
+
+function mapBatchModelsLoadError(error: unknown): string {
+  const reason = (error as { reason?: unknown } | null)?.reason
+  switch (reason) {
+    case 'ACCOUNT_TEST_MODEL_CATALOG_EMPTY':
+      return 'admin.accounts.modelsCatalogEmpty'
+    case 'ACCOUNT_TEST_MODEL_WHITELIST_MISSING':
+      return 'admin.accounts.modelsWhitelistMissing'
+    case 'ACCOUNT_TEST_MODEL_NO_PRICED_INTERSECTION':
+      return 'admin.accounts.modelsNoPricedIntersection'
+    case 'ACCOUNT_TEST_PROTOCOL_NO_SUPPORTED_MODELS':
+      return 'admin.accounts.modelsProtocolNoModels'
+    default:
+      return 'admin.accounts.bulkTest.modelLoadFailed'
   }
 }
 

@@ -2292,9 +2292,9 @@ func (h *UserAccountHandler) GetAvailableModels(c *gin.Context) {
 		return
 	}
 
-	models, supported := service.AvailableTestModels(account)
-	if !supported {
-		response.BadRequest(c, "Unsupported account platform: "+account.Platform)
+	models, err := h.accountTestService.ResolveAvailableTestModels(c.Request.Context(), account)
+	if err != nil {
+		response.ErrorFrom(c, err)
 		return
 	}
 	response.Success(c, models)

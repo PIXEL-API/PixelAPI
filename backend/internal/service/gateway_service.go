@@ -1738,6 +1738,9 @@ func (s *GatewayService) resolveAccountShareModeBoundAccountForLookup(
 	if requestedModel != "" && !accountShareListingAllowsModel(listing, requestedModel) {
 		return nil, true, accountShareModeUnsupportedModelError(requestedModel)
 	}
+	if requestedModel != "" && !accountShareRoomModelIsPriced(ctx, s.channelService, listing.Platform, requestedModel) {
+		return nil, true, accountShareModeUnsupportedModelError(requestedModel)
+	}
 	if requestedModel != "" && account != nil && !s.isModelSupportedByAccountWithContext(ctx, account, requestedModel) {
 		return nil, true, accountShareModeUnsupportedModelError(requestedModel)
 	}
@@ -2508,6 +2511,9 @@ func (s *GatewayService) selectAccountShareModeBoundAccount(ctx context.Context,
 		}
 	}
 	if !retryCurrentMembership && requestedModel != "" && !accountShareListingAllowsModel(listing, requestedModel) {
+		return nil, true, accountShareModeUnsupportedModelError(requestedModel)
+	}
+	if !retryCurrentMembership && requestedModel != "" && !accountShareRoomModelIsPriced(ctx, s.channelService, listing.Platform, requestedModel) {
 		return nil, true, accountShareModeUnsupportedModelError(requestedModel)
 	}
 	if !retryCurrentMembership && requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, account, requestedModel) {
@@ -11518,8 +11524,9 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 		accounts = filtered
 	}
 
-	// Collect unique models from all accounts
-	modelSet := make(map[string]struct{})
+	// Collect unique models from all accounts, tracking each model's platform
+	// for the pricing-catalog intersection (目录硬上限).
+	modelPlatforms := make(map[string]string)
 	hasAnyMapping := false
 
 	for _, acc := range accounts {
@@ -11527,7 +11534,9 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 		if len(mapping) > 0 {
 			hasAnyMapping = true
 			for model := range mapping {
-				modelSet[model] = struct{}{}
+				if _, exists := modelPlatforms[model]; !exists {
+					modelPlatforms[model] = acc.Platform
+				}
 			}
 		}
 	}
@@ -11539,6 +11548,15 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 			modelsListCacheStoreTotal.Add(1)
 		}
 		return nil
+	}
+
+	// Intersect with the platform pricing catalog so unpriced-but-supported models
+	// never leak into /v1/models.
+	modelSet := make(map[string]struct{}, len(modelPlatforms))
+	for model, modelPlatform := range modelPlatforms {
+		if s.gatewayModelIsPriced(ctx, modelPlatform, model) {
+			modelSet[model] = struct{}{}
+		}
 	}
 
 	// Convert to slice
@@ -11553,6 +11571,19 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 		modelsListCacheStoreTotal.Add(1)
 	}
 	return cloneStringSlice(models)
+}
+
+// gatewayModelIsPriced 判断模型是否在平台定价目录内（目录硬上限）。
+// 目录未注入或读取失败时放行，避免定价服务抖动截断网关模型列表。
+func (s *GatewayService) gatewayModelIsPriced(ctx context.Context, platform, model string) bool {
+	if s == nil || s.channelService == nil || strings.TrimSpace(model) == "" {
+		return true
+	}
+	priced, err := s.channelService.IsModelPriced(ctx, PricedModelQuery{Platform: platform}, model)
+	if err != nil {
+		return true
+	}
+	return priced
 }
 
 func (s *GatewayService) InvalidateAvailableModelsCache(groupID *int64, platform string) {

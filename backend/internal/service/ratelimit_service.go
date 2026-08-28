@@ -98,9 +98,11 @@ const (
 	openAI403CounterWindowMinutes   = 180
 	upstreamModelNotFoundCooldown   = 30 * time.Minute
 
-	upstreamModelNotFoundReason         = "upstream_404_model_not_found"
-	upstreamCodexPlanGatedModelCooldown = 30 * time.Minute
-	upstreamCodexPlanGatedModelReason   = "upstream_400_codex_plan_gated_model"
+	upstreamModelNotFoundReason               = "upstream_404_model_not_found"
+	upstreamOpencodeModelNotSupportedCooldown = 30 * time.Minute
+	upstreamOpencodeModelNotSupportedReason   = "upstream_401_opencode_model_not_supported"
+	upstreamCodexPlanGatedModelCooldown       = 30 * time.Minute
+	upstreamCodexPlanGatedModelReason         = "upstream_400_codex_plan_gated_model"
 
 	// openAITransientCapacityCounterGrace 瞬时容量错误连续计数的宽限期。
 	// 上一次冷却结束后超过该时长才再次命中，视为新一轮上游波动，重新从最短档开始。
@@ -418,6 +420,8 @@ func (s *RateLimitService) handleUpstreamModelNotFound(ctx context.Context, acco
 	switch {
 	case isUpstreamModelNotFoundError(statusCode, responseBody):
 		cooldown, reason = upstreamModelNotFoundCooldown, upstreamModelNotFoundReason
+	case account.Platform == PlatformOpencode && isOpencodeModelNotSupportedError(statusCode, responseBody):
+		cooldown, reason = upstreamOpencodeModelNotSupportedCooldown, upstreamOpencodeModelNotSupportedReason
 	case account.IsOpenAIOAuth() && isOpenAICodexPlanGatedModelError(statusCode, responseBody):
 		cooldown, reason = upstreamCodexPlanGatedModelCooldown, upstreamCodexPlanGatedModelReason
 	default:
@@ -472,6 +476,31 @@ func isUpstreamModelNotFoundError(statusCode int, body []byte) bool {
 	return strings.Contains(normalized, "model not found") ||
 		strings.Contains(normalized, "unknown model") ||
 		strings.Contains(normalized, "not found")
+}
+
+// isOpencodeModelNotSupportedError identifies OpenCode's model-capability
+// rejection. OpenCode reports this deterministic model error as HTTP 401, so
+// treating every 401 as an authentication failure incorrectly marks a healthy
+// API key account as status=error. Keep the match scoped to OpenCode's explicit
+// provider error type and message shape so invalid credentials still use the
+// account-level authentication path.
+func isOpencodeModelNotSupportedError(statusCode int, body []byte) bool {
+	if statusCode != http.StatusUnauthorized || len(body) == 0 {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(gjson.GetBytes(body, "error.type").String()), "ModelError") {
+		return false
+	}
+
+	message := normalizeModelNotFoundBody([]byte(gjson.GetBytes(body, "error.message").String()))
+	const prefix = "model "
+	const unsupportedPhrase = " is not supported"
+	if !strings.HasPrefix(message, prefix) {
+		return false
+	}
+	modelName := strings.TrimSpace(strings.TrimPrefix(message, prefix))
+	unsupportedIndex := strings.Index(modelName, unsupportedPhrase)
+	return unsupportedIndex > 0
 }
 
 // openAICodexPlanGatedModelPhrase 匹配 ChatGPT OAuth 账号因套餐不含某模型而确定性返回的

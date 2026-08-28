@@ -9,6 +9,8 @@ import type {
   UsageProgress
 } from '@/types'
 
+export type AccountSharePlatform = 'openai' | 'anthropic' | 'opencode'
+
 export type AccountShareRoomLifecycleStatus =
   | 'active'
   | 'paused'
@@ -27,7 +29,7 @@ export type AccountShareMySpendRange = 'current_membership' | 'today' | '7d'
 
 export interface AccountShareModeGroup {
   group_id: number
-  platform: 'openai' | 'anthropic' | string
+  platform: AccountSharePlatform
 }
 
 export interface AccountShareQuotaValue {
@@ -247,7 +249,7 @@ export interface AccountShareListing {
   accounts?: AccountShareRoomAccount[]
   account_sample_scope?: 'representative'
   quota_summary?: AccountShareRoomQuotaSummary
-  platform: 'openai' | 'anthropic' | string
+  platform: AccountSharePlatform
   owner_user_id: number
   owner_username?: string
   account_name?: string
@@ -480,7 +482,7 @@ export interface CreateAccountShareRoomRequest {
 }
 
 export interface AccountShareRecommendationRequest {
-  platform: 'openai' | 'anthropic' | string
+  platform: AccountSharePlatform
   model: string
   api_key_id: number
   request_count: number
@@ -498,7 +500,7 @@ export interface AccountShareRecommendationRequest {
 }
 
 export interface AccountShareRecommendationUsageProfileRequest {
-  platform: 'openai' | 'anthropic' | string
+  platform: AccountSharePlatform
   model?: string
   days?: number
 }
@@ -648,7 +650,7 @@ export interface AccountShareMySpendListing {
   id: number
   account_id: number
   account_name?: string
-  platform: 'openai' | 'anthropic' | string
+  platform: AccountSharePlatform
   owner_user_id: number
   owner_username?: string
 }
