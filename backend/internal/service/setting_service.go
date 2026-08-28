@@ -800,6 +800,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyUserAccountImportLimit,
 		SettingKeyOpenAIAccountLevels,
 		SettingKeyAffiliateEnabled,
+		SettingKeyIdeasEnabled,
 		SettingKeyUserPrivateGroupCommissionRate,
 		SettingKeyRiskControlEnabled,
 		SettingKeyInvoiceManagementEnabled,

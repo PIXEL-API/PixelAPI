@@ -377,6 +377,7 @@ export default {
     myAccounts: "My Accounts",
     accountShare: "Account Plaza",
     ideas: "Ideas",
+    ideasManagement: "Ideas Management",
     proxies: "Proxies",
     redeemCodes: "Redeem Codes",
     ops: "Ops",
@@ -8694,6 +8695,24 @@ export default {
             "The first structured cyber_policy hit restricts access until 24:00 in the business timezone. Administrators can check and clear it in Risk Control; a new hit that day immediately restricts the user again.",
           cyberPolicyNoGroupsHint:
             "No groups are selected. Even with the master switch enabled, no group receives daily Cyber user restrictions.",
+        },
+        ideas: {
+          title: "Ideas",
+          description:
+            "Manage community posts, moderation, rewards, and attachments independently from invite income settings.",
+          enabled: "Enable Ideas",
+          enabledHint:
+            "When enabled, the Ideas entry appears in the user header and sidebar and the community becomes accessible.",
+          moderation: "AI Moderation",
+          pointsRewards: "Points Rewards",
+          balanceRewards: "Balance Rewards",
+          balanceRewardMax: "Maximum Balance Reward (CNY)",
+          pointsRewardMax: "Maximum Points Reward",
+          ossStorage: "Attachment OSS Storage",
+          tagBlacklist: "Tag Blacklist",
+          tagBlacklistHint:
+            "Separate tag names with commas. Matching posts are sent for manual review; leave blank to disable.",
+          tagBlacklistPlaceholder: "contact details, advertising, reselling",
         },
         affiliate: {
           title: "Invite Income",

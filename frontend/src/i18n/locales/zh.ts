@@ -374,6 +374,7 @@ export default {
     myAccounts: "我的账号",
     accountShare: "账号广场",
     ideas: "有个想法",
+    ideasManagement: "想法管理",
     proxies: "IP管理",
     redeemCodes: "兑换码",
     ops: "运维监控",
@@ -8493,6 +8494,24 @@ export default {
             "第一次结构化 cyber_policy 命中即限制到业务时区当天 24:00；管理员可在风控中心查询和解除。解除后当天再次命中会立即重新限制。",
           cyberPolicyNoGroupsHint:
             "当前没有选择分组。即使总开关已开启，也不会对任何分组执行 Cyber 用户当日限制。",
+        },
+        ideas: {
+          title: "有个想法",
+          description:
+            "独立管理用户经验分享、文章审核、打赏与附件能力，不与邀请收益配置混用。",
+          enabled: "启用有个想法",
+          enabledHint:
+            "开启后显示用户端顶部与侧边菜单入口，并允许用户访问想法广场。",
+          moderation: "AI 审核",
+          pointsRewards: "积分打赏",
+          balanceRewards: "余额打赏",
+          balanceRewardMax: "余额单次打赏上限（元）",
+          pointsRewardMax: "积分单次打赏上限",
+          ossStorage: "附件 OSS 存储",
+          tagBlacklist: "标签黑名单",
+          tagBlacklistHint:
+            "使用逗号分隔标签名，命中后文章转人工复核；留空表示不启用。",
+          tagBlacklistPlaceholder: "联系方式, 广告, 代充",
         },
         affiliate: {
           title: "邀请收益",

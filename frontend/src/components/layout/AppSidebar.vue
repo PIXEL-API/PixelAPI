@@ -1168,6 +1168,13 @@ const adminNavItems = computed((): NavItem[] => {
       hideInSimpleMode: true,
     },
     {
+      path: "/admin/ideas",
+      label: t("nav.ideasManagement"),
+      icon: ChatIcon,
+      hideInSimpleMode: true,
+      featureFlag: flagIdeas,
+    },
+    {
       path: "/admin/store",
       label: t("nav.storeManagement"),
       icon: GiftIcon,

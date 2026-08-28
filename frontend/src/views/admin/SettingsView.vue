@@ -5989,6 +5989,129 @@
               class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
             >
               <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t("admin.settings.features.ideas.title") }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t("admin.settings.features.ideas.description") }}
+              </p>
+            </div>
+            <div class="space-y-5 p-6">
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ t("admin.settings.features.ideas.enabled") }}
+                  </label>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.features.ideas.enabledHint") }}
+                  </p>
+                </div>
+                <Toggle
+                  v-model="form.ideas_enabled"
+                  :aria-label="t('admin.settings.features.ideas.enabled')"
+                />
+              </div>
+
+              <div
+                v-if="form.ideas_enabled"
+                class="space-y-4 border-t border-gray-100 pt-5 dark:border-dark-700"
+              >
+                <div class="flex items-center justify-between gap-4">
+                  <span class="text-sm text-gray-700 dark:text-gray-300">
+                    {{ t("admin.settings.features.ideas.moderation") }}
+                  </span>
+                  <Toggle
+                    v-model="form.ideas_moderation_enabled"
+                    :aria-label="t('admin.settings.features.ideas.moderation')"
+                  />
+                </div>
+                <div class="flex items-center justify-between gap-4">
+                  <span class="text-sm text-gray-700 dark:text-gray-300">
+                    {{ t("admin.settings.features.ideas.pointsRewards") }}
+                  </span>
+                  <Toggle
+                    v-model="form.ideas_rewards_points_enabled"
+                    :aria-label="t('admin.settings.features.ideas.pointsRewards')"
+                  />
+                </div>
+                <div class="flex items-center justify-between gap-4">
+                  <span class="text-sm text-gray-700 dark:text-gray-300">
+                    {{ t("admin.settings.features.ideas.balanceRewards") }}
+                  </span>
+                  <Toggle
+                    v-model="form.ideas_rewards_balance_enabled"
+                    :aria-label="t('admin.settings.features.ideas.balanceRewards')"
+                  />
+                </div>
+                <div
+                  class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
+                >
+                  <label
+                    for="ideas-reward-balance-max-amount"
+                    class="text-sm text-gray-700 dark:text-gray-300"
+                  >
+                    {{ t("admin.settings.features.ideas.balanceRewardMax") }}
+                  </label>
+                  <input
+                    id="ideas-reward-balance-max-amount"
+                    v-model.number="form.ideas_reward_balance_max_amount"
+                    type="number"
+                    min="1"
+                    class="input w-full sm:w-32"
+                  />
+                </div>
+                <div
+                  class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
+                >
+                  <label
+                    for="ideas-reward-points-max-amount"
+                    class="text-sm text-gray-700 dark:text-gray-300"
+                  >
+                    {{ t("admin.settings.features.ideas.pointsRewardMax") }}
+                  </label>
+                  <input
+                    id="ideas-reward-points-max-amount"
+                    v-model.number="form.ideas_reward_points_max_amount"
+                    type="number"
+                    min="1"
+                    class="input w-full sm:w-32"
+                  />
+                </div>
+                <div class="flex items-center justify-between gap-4">
+                  <span class="text-sm text-gray-700 dark:text-gray-300">
+                    {{ t("admin.settings.features.ideas.ossStorage") }}
+                  </span>
+                  <Toggle
+                    v-model="form.ideas_oss_enabled"
+                    :aria-label="t('admin.settings.features.ideas.ossStorage')"
+                  />
+                </div>
+                <div>
+                  <label
+                    for="ideas-tag-blacklist"
+                    class="text-sm text-gray-700 dark:text-gray-300"
+                  >
+                    {{ t("admin.settings.features.ideas.tagBlacklist") }}
+                  </label>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.features.ideas.tagBlacklistHint") }}
+                  </p>
+                  <input
+                    id="ideas-tag-blacklist"
+                    v-model="form.ideas_tag_blacklist"
+                    type="text"
+                    class="input mt-2 w-full"
+                    :placeholder="t('admin.settings.features.ideas.tagBlacklistPlaceholder')"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div
+              class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
+            >
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
                 {{ t("admin.settings.features.affiliate.title") }}
               </h2>
               <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
@@ -6008,69 +6131,6 @@
                   </p>
                 </div>
                 <Toggle v-model="form.affiliate_enabled" />
-              </div>
-
-              <div
-                class="flex items-center justify-between rounded-lg border border-gray-200 p-4 dark:border-dark-700"
-              >
-                <div>
-                  <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
-                    「有个想法」板块
-                  </label>
-                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-                    用户经验分享板块（文章 / 打赏 / AI 审核），默认关闭
-                  </p>
-                </div>
-                <Toggle v-model="form.ideas_enabled" />
-              </div>
-
-              <div v-if="form.ideas_enabled" class="space-y-4 rounded-lg border border-gray-200 p-4 dark:border-dark-700">
-                <div class="flex items-center justify-between">
-                  <span class="text-sm text-gray-700 dark:text-gray-300">AI 审核</span>
-                  <Toggle v-model="form.ideas_moderation_enabled" />
-                </div>
-                <div class="flex items-center justify-between">
-                  <span class="text-sm text-gray-700 dark:text-gray-300">积分打赏</span>
-                  <Toggle v-model="form.ideas_rewards_points_enabled" />
-                </div>
-                <div class="flex items-center justify-between">
-                  <span class="text-sm text-gray-700 dark:text-gray-300">余额打赏</span>
-                  <Toggle v-model="form.ideas_rewards_balance_enabled" />
-                </div>
-                <div class="flex items-center justify-between">
-                  <span class="text-sm text-gray-700 dark:text-gray-300">余额单次打赏上限（元）</span>
-                  <input
-                    v-model.number="form.ideas_reward_balance_max_amount"
-                    type="number"
-                    min="1"
-                    class="input w-32"
-                  />
-                </div>
-                <div class="flex items-center justify-between">
-                  <span class="text-sm text-gray-700 dark:text-gray-300">积分单次打赏上限</span>
-                  <input
-                    v-model.number="form.ideas_reward_points_max_amount"
-                    type="number"
-                    min="1"
-                    class="input w-32"
-                  />
-                </div>
-                <div class="flex items-center justify-between">
-                  <span class="text-sm text-gray-700 dark:text-gray-300">附件 OSS 存储</span>
-                  <Toggle v-model="form.ideas_oss_enabled" />
-                </div>
-                <div>
-                  <label class="text-sm text-gray-700 dark:text-gray-300">标签黑名单</label>
-                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-                    逗号分隔的标签名，命中后文章转人工复核（留空表示不启用）
-                  </p>
-                  <input
-                    v-model="form.ideas_tag_blacklist"
-                    type="text"
-                    class="input mt-2 w-full"
-                    placeholder="联系方式, 广告, 代充"
-                  />
-                </div>
               </div>
 
               <div v-if="form.affiliate_enabled" class="space-y-6">

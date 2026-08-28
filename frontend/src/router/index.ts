@@ -788,7 +788,12 @@ const routes: RouteRecordRaw[] = [
     path: "/admin/ideas",
     name: "AdminIdeas",
     component: () => import("@/views/admin/ideas/AdminIdeasView.vue"),
-    meta: { requiresAuth: true, requiresAdmin: true, title: "有个想法管理" },
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: "Ideas Management",
+      titleKey: "nav.ideasManagement",
+    },
   },
 
   // ==================== Payment Admin Routes ====================

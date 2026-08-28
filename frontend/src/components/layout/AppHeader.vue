@@ -23,11 +23,45 @@
 
       <!-- Right: Announcements + Invite + Docs + Language + Subscriptions + Balance + User Dropdown -->
       <div class="flex min-w-0 flex-1 flex-nowrap items-center justify-end gap-1 sm:flex-none sm:gap-2">
+        <!-- Discord Community -->
+        <a
+          href="https://discord.gg/5WVyJ3sNYc"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="header-action hidden lg:inline-flex"
+          aria-label="Discord"
+          title="Discord"
+        >
+          <svg
+            class="h-4 w-4 flex-none"
+            viewBox="0 0 16 16"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path
+              d="M13.545 2.907a13.227 13.227 0 0 0-3.257-1.011c.05.061.11.142.15.205a12.741 12.741 0 0 0-4.573 0 4.663 4.663 0 0 1 .152-.205 12.76 12.76 0 0 0-3.258 1.011C.695 5.98.138 8.973.418 11.929a13.543 13.543 0 0 0 3.993 2.016 9.655 9.655 0 0 0 .98-1.596 8.282 8.282 0 0 1-1.544-.734c.13-.095.255-.195.376-.293a9.183 9.183 0 0 0 7.841 0c.123.1.248.2.376.293-.49.287-1.005.53-1.545.733a9.455 9.455 0 0 0 .98 1.596 13.587 13.587 0 0 0 4.002-2.016c.33-3.429-.563-6.394-2.332-9.021ZM5.347 10.127c-.956 0-1.75-.87-1.75-1.938 0-1.067.778-1.938 1.75-1.938.971 0 1.767.87 1.75 1.938 0 1.067-.779 1.938-1.75 1.938Zm5.757 0c-.956 0-1.75-.87-1.75-1.938 0-1.067.779-1.938 1.75-1.938.972 0 1.767.87 1.75 1.938 0 1.067-.778 1.938-1.75 1.938Z"
+            />
+          </svg>
+          <span class="hidden xl:inline">Discord</span>
+        </a>
+
         <!-- Announcement Bell -->
         <AnnouncementBell v-if="user" />
 
         <!-- One-click Invite Link -->
         <HeaderInviteLink v-if="user" />
+
+        <!-- Ideas Plaza -->
+        <router-link
+          v-if="user && ideasEnabled"
+          to="/ideas"
+          class="header-action hidden lg:inline-flex"
+          :aria-label="t('nav.ideas')"
+          :title="t('nav.ideas')"
+        >
+          <Icon name="lightbulb" size="sm" />
+          <span class="hidden xl:inline">{{ t('nav.ideas') }}</span>
+        </router-link>
 
         <!-- Docs Link -->
         <a
@@ -240,6 +274,7 @@ import SubscriptionProgressMini from '@/components/common/SubscriptionProgressMi
 import AnnouncementBell from '@/components/common/AnnouncementBell.vue'
 import HeaderInviteLink from '@/components/layout/HeaderInviteLink.vue'
 import Icon from '@/components/icons/Icon.vue'
+import { FeatureFlags, isFeatureFlagEnabled } from '@/utils/featureFlags'
 
 const router = useRouter()
 const route = useRoute()
@@ -255,6 +290,7 @@ const dropdownRef = ref<HTMLElement | null>(null)
 const contactInfo = computed(() => appStore.contactInfo)
 const docUrl = computed(() => appStore.docUrl)
 const avatarUrl = computed(() => user.value?.avatar_url?.trim() || '')
+const ideasEnabled = computed(() => isFeatureFlagEnabled(FeatureFlags.ideas))
 
 // 只在标准模式的管理员下显示新手引导按钮
 const showOnboardingButton = computed(() => {
