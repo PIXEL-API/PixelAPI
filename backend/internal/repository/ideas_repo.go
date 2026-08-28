@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lib/pq"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
@@ -586,7 +587,7 @@ func replacePostTags(ctx context.Context, tx *sql.Tx, postID int64, tags []servi
 		SET usage_count = (SELECT COUNT(*) FROM idea_post_tags pt WHERE pt.tag_id = t.id),
 			updated_at = NOW()
 		WHERE t.id = ANY($1)`,
-		tagIDs(tags),
+		pq.Array(tagIDs(tags)),
 	); err != nil {
 		return err
 	}
@@ -626,7 +627,7 @@ func (r *ideasRepository) attachTags(ctx context.Context, items []service.IdeaPo
 		FROM idea_post_tags pt
 		JOIN idea_tags t ON t.id = pt.tag_id
 		WHERE pt.post_id = ANY($1)
-		ORDER BY t.sort_order DESC, t.id ASC`, ids)
+		ORDER BY t.sort_order DESC, t.id ASC`, pq.Array(ids))
 	if err != nil {
 		return err
 	}
@@ -1036,7 +1037,7 @@ func (r *ideasRepository) ClaimPendingIdeaModerations(ctx context.Context, now t
 		UPDATE idea_post_revisions
 		SET moderation_attempts = moderation_attempts + 1,
 			moderation_next_retry_at = NOW() + INTERVAL '5 minutes'
-		WHERE id = ANY($1)`, ids); err != nil {
+		WHERE id = ANY($1)`, pq.Array(ids)); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
