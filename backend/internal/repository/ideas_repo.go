@@ -27,7 +27,7 @@ const ideaPostColumns = `
 	p.id,
 	p.author_user_id,
 	COALESCE(u.username, '') AS author_name,
-	p.current_revision_id,
+	COALESCE(p.current_revision_id, 0) AS current_revision_id,
 	p.status,
 	p.published_at,
 	p.like_count,
@@ -124,8 +124,9 @@ func (r *ideasRepository) UpdateDraftRevision(ctx context.Context, input service
 	res, err := tx.ExecContext(ctx, `
 		UPDATE idea_post_revisions
 		SET title = $1, summary = $2, body = $3, body_hash = $4, created_by = $5
-		WHERE id = $6 AND moderation_status = $7`,
-		input.Title, input.Summary, input.Body, bodyHash, input.UserID, post.CurrentRevisionID, service.IdeaRevisionStatusDraft,
+		WHERE id = $6 AND moderation_status IN ($7, $8)`,
+		input.Title, input.Summary, input.Body, bodyHash, input.UserID, post.CurrentRevisionID,
+		service.IdeaRevisionStatusDraft, service.IdeaRevisionStatusRejected,
 	)
 	if err != nil {
 		return nil, err
@@ -287,6 +288,12 @@ func (r *ideasRepository) SoftDeletePost(ctx context.Context, postID, userID int
 // GetPost 返回「作者/管理员工作视图」：Revision 取最新版本。
 func (r *ideasRepository) GetPost(ctx context.Context, postID int64) (*service.IdeaPost, error) {
 	return r.getPost(ctx, postID, true)
+}
+
+// GetPublicPost 返回「公开视图」：Revision 采用 current_revision_id（已批准版本），
+// 用于用户公开阅读，避免展示未经审核或被拒的最新修订。
+func (r *ideasRepository) GetPublicPost(ctx context.Context, postID int64) (*service.IdeaPost, error) {
+	return r.getPost(ctx, postID, false)
 }
 
 // getPost 按 revisionMode 决定关联哪个版本：latest（工作视图）或 current（公开视图）。
@@ -666,11 +673,20 @@ func getIdeaPostForUpdate(ctx context.Context, tx *sql.Tx, postID int64) (*servi
 }
 
 func scanIdeaPost(row ideaRowScanner) (*service.IdeaPost, error) {
-	post, err := scanIdeaPostBase(row)
-	if err != nil {
-		return nil, err
-	}
+	var post service.IdeaPost
+	post.Revision = &service.IdeaRevision{}
 	if err := row.Scan(
+		&post.ID,
+		&post.AuthorUserID,
+		&post.AuthorName,
+		&post.CurrentRevisionID,
+		&post.Status,
+		&post.PublishedAt,
+		&post.LikeCount,
+		&post.FavoriteCount,
+		&post.ViewCount,
+		&post.CreatedAt,
+		&post.UpdatedAt,
 		&post.Revision.ID,
 		&post.Revision.PostID,
 		&post.Revision.RevisionNo,
@@ -686,7 +702,7 @@ func scanIdeaPost(row ideaRowScanner) (*service.IdeaPost, error) {
 	); err != nil {
 		return nil, err
 	}
-	return post, nil
+	return &post, nil
 }
 
 func scanIdeaPostBase(row ideaRowScanner) (*service.IdeaPost, error) {
@@ -888,12 +904,20 @@ func (r *ideasRepository) CreateReward(ctx context.Context, input service.IdeaRe
 
 	// 打赏业务记录
 	var rewardID int64
-	if err := tx.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, `
 		INSERT INTO idea_post_rewards (payer_user_id, recipient_user_id, post_id, revision_id, asset_type, amount, idempotency_key, status)
 		VALUES ($1, $2, $3, $4, $5, $6::numeric, $7, 'completed')
+		ON CONFLICT (idempotency_key) DO NOTHING
 		RETURNING id`,
 		input.PayerUserID, post.AuthorUserID, input.PostID, post.CurrentRevisionID, input.AssetType, decimalFromFloat(amount).StringFixed(10), input.IdempotencyKey,
-	).Scan(&rewardID); err != nil {
+	).Scan(&rewardID)
+	if errors.Is(err, sql.ErrNoRows) {
+		// 并发的同 key 打赏已提交: 回滚本事务并返回已存在记录, 不重复扣款。
+		if rbErr := tx.Rollback(); rbErr != nil {
+			return nil, rbErr
+		}
+		return r.GetRewardByIdempotencyKey(ctx, input.IdempotencyKey)
+	} else if err != nil {
 		return nil, err
 	}
 
@@ -1082,6 +1106,10 @@ func (r *ideasRepository) FailIdeaModeration(ctx context.Context, postID, revisi
 	}
 	defer rollbackUnlessDone(tx)
 
+	// 先锁 post 行, 与 SetPostStatus/PublishRevision 保持一致锁序(post -> revision), 避免 AB-BA 死锁。
+	if _, err := getIdeaPostForUpdate(ctx, tx, postID); err != nil {
+		return err
+	}
 	if err := insertIdeaModerationEventTx(ctx, tx, postID, revisionID, "ai", "failed", "", "", model, url, "", errMsg, 0); err != nil {
 		return err
 	}
@@ -1238,6 +1266,11 @@ func (r *ideasRepository) UpdateTag(ctx context.Context, tagID int64, name, stat
 	if _, err := r.db.ExecContext(ctx, `
 		UPDATE idea_tags SET name = $1, slug = $2, status = $3, updated_at = NOW() WHERE id = $4`,
 		t.Name, t.Slug, t.Status, tagID); err != nil {
+		// 改名后 slug 与既有标签冲突时转为参数错误, 避免裸 500。
+		var pgErr *pq.Error
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return nil, service.ErrIdeaTagNameInvalid
+		}
 		return nil, err
 	}
 	return &t, nil

@@ -193,6 +193,7 @@ type IdeasRepository interface {
 	EditPublishedRevision(ctx context.Context, input IdeaPostUpdateInput, tags []IdeaTag) (*IdeaPost, error)
 	SoftDeletePost(ctx context.Context, postID, userID int64) error
 	GetPost(ctx context.Context, postID int64) (*IdeaPost, error)
+	GetPublicPost(ctx context.Context, postID int64) (*IdeaPost, error)
 	ListPublished(ctx context.Context, params IdeaPostListParams) ([]IdeaPost, int64, error)
 	ListMine(ctx context.Context, userID int64, params IdeaPostListParams) ([]IdeaPost, int64, error)
 	ListAdmin(ctx context.Context, params IdeaPostListParams) ([]IdeaPost, int64, error)
@@ -335,7 +336,8 @@ func (s *IdeasService) Get(ctx context.Context, postID, userID int64) (*IdeaPost
 	if err := s.ensureEnabled(ctx); err != nil {
 		return nil, err
 	}
-	post, err := s.repo.GetPost(ctx, postID)
+	// 公开阅读采用 current_revision_id(已批准版本), 避免展示被拒/待审的最新修订。
+	post, err := s.repo.GetPublicPost(ctx, postID)
 	if err != nil {
 		return nil, err
 	}
