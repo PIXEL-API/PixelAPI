@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lib/pq"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/lib/pq"
 )
 
 type ideasRepository struct {
@@ -664,7 +664,7 @@ func getIdeaPostForUpdate(ctx context.Context, tx *sql.Tx, postID int64) (*servi
 		FROM idea_posts p
 		LEFT JOIN users u ON u.id = p.author_user_id
 		WHERE p.id = $1 AND p.deleted_at IS NULL
-		FOR UPDATE`, ideaPostColumns)
+		FOR UPDATE OF p`, ideaPostColumns)
 	post, err := scanIdeaPostBase(tx.QueryRowContext(ctx, query, postID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, service.ErrIdeaPostNotFound
