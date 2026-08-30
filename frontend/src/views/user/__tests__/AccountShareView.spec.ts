@@ -46,6 +46,7 @@ const {
   getRecommendationUsageProfile,
   listOwnerReviews,
   listAccounts,
+  getModelOptions,
   listKeys,
   fetchPublicSettings,
   publicSettings,
@@ -85,6 +86,7 @@ const {
   getRecommendationUsageProfile: vi.fn(),
   listOwnerReviews: vi.fn(),
   listAccounts: vi.fn(),
+  getModelOptions: vi.fn(),
   listKeys: vi.fn(),
   fetchPublicSettings: vi.fn(),
   publicSettings: {
@@ -142,6 +144,7 @@ vi.mock('@/api/accountShare', async (importOriginal) => {
 vi.mock('@/api', () => ({
   accountsAPI: {
     list: listAccounts,
+    getModelOptions,
     getById: vi.fn(),
     getStats: vi.fn(),
     recoverState: vi.fn(),
@@ -552,6 +555,7 @@ describe('AccountShareView async snapshots and mode keys', () => {
     getRecommendationUsageProfile.mockReset()
     listOwnerReviews.mockReset()
     listAccounts.mockReset()
+    getModelOptions.mockReset()
     listKeys.mockReset()
     fetchPublicSettings.mockReset()
     showSuccess.mockReset()
@@ -619,6 +623,7 @@ describe('AccountShareView async snapshots and mode keys', () => {
     listProxies.mockResolvedValue([])
     listOwnerReviews.mockResolvedValue(paginated([]))
     listAccounts.mockResolvedValue(paginated([]))
+    getModelOptions.mockResolvedValue({ models: ['gpt-5.5'] })
     createRoom.mockResolvedValue(listing({ owner_user_id: 9, room_name: '新房间' }))
     getRoomManagementState.mockResolvedValue(roomManagementState())
     drainRoom.mockResolvedValue(roomManagementState({
@@ -851,6 +856,7 @@ describe('AccountShareView async snapshots and mode keys', () => {
   })
 
   it('keeps the three-day usage profile scoped to user and platform and ignores a stale dialog response', async () => {
+    listListings.mockResolvedValue(paginated([listing()]))
     let resolveProfile!: (value: unknown) => void
     getRecommendationUsageProfile.mockReturnValueOnce(new Promise(resolve => {
       resolveProfile = resolve
@@ -1071,6 +1077,7 @@ describe('AccountShareView async snapshots and mode keys', () => {
   })
 
   it('fills authoritative image usage while preserving manually split cache fields', async () => {
+    listListings.mockResolvedValue(paginated([listing()]))
     listKeys.mockImplementation((_page: number, _pageSize: number, filters: { group_id: number }) =>
       Promise.resolve(paginated(
         filters.group_id === 101 ? [apiKey(1001, 101, '推荐 Key')] : []

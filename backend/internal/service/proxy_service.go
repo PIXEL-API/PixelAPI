@@ -12,6 +12,8 @@ import (
 var (
 	ErrProxyNotFound              = infraerrors.NotFound("PROXY_NOT_FOUND", "proxy not found")
 	ErrProxyInUse                 = infraerrors.Conflict("PROXY_IN_USE", "proxy is in use by accounts")
+	ErrProxyBackupInUse           = infraerrors.Conflict("PROXY_BACKUP_IN_USE", "proxy is configured as a backup by another proxy; clear or replace the fallback reference before deleting it")
+	ErrProxyMutationStale         = infraerrors.Conflict("PROXY_MUTATION_STALE", "the proxy changed after it was loaded; refresh and try again")
 	ErrProxyAccountLimitExceeded  = infraerrors.Conflict("PROXY_ACCOUNT_LIMIT_EXCEEDED", "proxy account binding limit exceeded")
 	ErrProxyFallbackModeInvalid   = infraerrors.BadRequest("PROXY_FALLBACK_MODE_INVALID", "fallback_mode must be one of none, direct, proxy")
 	ErrProxyBackupRequired        = infraerrors.BadRequest("PROXY_BACKUP_REQUIRED", "backup_proxy_id is required when fallback_mode is proxy")
@@ -26,6 +28,8 @@ var (
 	ErrProxyOwnerNotFound = infraerrors.NotFound("PROXY_OWNER_NOT_FOUND", "proxy owner user not found")
 	// ErrProxyOwnerConflict 代理已被其他用户的账号绑定，不能改归属；需先解绑再操作。
 	ErrProxyOwnerConflict = infraerrors.Conflict("PROXY_OWNER_CONFLICT", "proxy is bound to accounts owned by other users; unbind them before changing the owner")
+	// ErrProxyDeletionGuardUnavailable 原子删除能力缺失时 Fail-Fast，禁止退回事务外 Count→Delete。
+	ErrProxyDeletionGuardUnavailable = infraerrors.InternalServer("PROXY_DELETION_GUARD_UNAVAILABLE", "atomic proxy deletion safety check is unavailable")
 )
 
 type ProxyRepository interface {
@@ -55,6 +59,13 @@ type ProxyRepository interface {
 	// ResetRequiredAccountLevelNotIn 将 required_account_level 不在 keepLevels 内的代理
 	// 重置为 ''（所有等级可用），用于账号等级被管理员删除后同步代理。返回受影响的行数。
 	ResetRequiredAccountLevelNotIn(ctx context.Context, keepLevels []string) (int64, error)
+}
+
+// ProxyDeletionRepository 是管理端删除代理所需的最窄写能力。
+// 不并入通用 ProxyRepository，避免扩大 OAuth、配额查询等只读调用方及其测试替身；
+// 生产仓储必须实现它，调用方在缺失时 Fail-Fast，不能退回非原子的 Count→Delete。
+type ProxyDeletionRepository interface {
+	DeleteIfUnused(ctx context.Context, id int64) error
 }
 
 // CreateProxyRequest 创建代理请求
@@ -266,6 +277,26 @@ func proxyExpiryWarnDaysOrDefaultValue(value *int) int {
 }
 
 func validateProxyLifecycleWithRepository(ctx context.Context, repo ProxyRepository, candidate *Proxy) error {
+	if err := ValidateProxyLifecycleFields(candidate); err != nil {
+		return err
+	}
+	if candidate.BackupProxyID == nil {
+		return nil
+	}
+	if repo == nil {
+		return ErrProxyBackupInvalid
+	}
+	target, err := repo.GetByID(ctx, *candidate.BackupProxyID)
+	if err != nil {
+		return err
+	}
+	return ValidateProxyLifecycleCandidate(candidate, target)
+}
+
+// ValidateProxyLifecycleFields 校验不依赖持久化快照的代理生命周期字段。
+// Repository 在加锁前调用它快速拒绝无效输入，在锁定 backup 后再调用
+// ValidateProxyLifecycleCandidate 完成最终 owner 边界校验。
+func ValidateProxyLifecycleFields(candidate *Proxy) error {
 	if candidate == nil {
 		return ErrProxyNotFound
 	}
@@ -287,12 +318,18 @@ func validateProxyLifecycleWithRepository(ctx context.Context, repo ProxyReposit
 	if *candidate.BackupProxyID <= 0 || candidate.ID > 0 && *candidate.BackupProxyID == candidate.ID {
 		return ErrProxyBackupInvalid
 	}
-	if repo == nil {
-		return ErrProxyBackupInvalid
-	}
-	target, err := repo.GetByID(ctx, *candidate.BackupProxyID)
-	if err != nil {
+	return nil
+}
+
+// ValidateProxyLifecycleCandidate 使用调用方提供的 backup 快照校验引用和 owner 边界。
+// 持久化层必须传入同一事务内锁定后的 live backup；本函数刻意不要求 backup
+// 当前 active 或未过期，以保持现有“可沿过期/禁用中间节点继续解析”的链式语义。
+func ValidateProxyLifecycleCandidate(candidate, target *Proxy) error {
+	if err := ValidateProxyLifecycleFields(candidate); err != nil {
 		return err
+	}
+	if candidate.BackupProxyID == nil {
+		return nil
 	}
 	if target == nil {
 		return ErrProxyBackupInvalid

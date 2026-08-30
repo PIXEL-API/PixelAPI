@@ -63,7 +63,7 @@ const (
 // 国际区账号访问会返回 403 RegionError。fallback 用 opencode 国际通用的裸 slug，
 // 当首选模型因「模型不可用」类错误（区域限制/上游端点不可用）失败时按序重试，
 // 避免把 key 有效但模型区域不匹配的账号误判为校验失败。
-var opencodeTestModelFallbacks = []string{"gpt-5.6-luna", "grok-4.5"}
+var opencodeTestModelFallbacks = []string{"gpt-5.6-luna", "grok-4.6"}
 
 // isOpenAIImageModel checks if the model is an OpenAI image generation model (e.g. gpt-image-2).
 func isOpenAIImageModel(model string) bool {
@@ -306,7 +306,8 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 }
 
 // testOpencodeAccountConnection tests an OpenCode Go subscription account's connection.
-// opencode 走 /chat/completions（Authorization Bearer），非流式探测一次即可确认 api_key 有效。
+// OpenCode Go 的模型分属 chat/completions、messages、responses 三种协议。探测前必须先完成账号模型映射，
+// 再通过受审核目录解析最终上游模型和协议；未知模型直接失败，不能猜测协议。
 // 首选模型（默认 deepseek-v4-flash）在 opencode 国际区会返回 403 RegionError，故在「模型不可用」
 // 类错误时按序 fallback 到 opencodeTestModelFallbacks，避免把 key 有效但模型区域不匹配的账号误判为校验失败。
 func (s *AccountTestService) testOpencodeAccountConnection(c *gin.Context, account *Account, modelID string) error {
@@ -314,14 +315,13 @@ func (s *AccountTestService) testOpencodeAccountConnection(c *gin.Context, accou
 	if s.httpUpstream == nil {
 		return s.sendErrorAndEnd(c, "HTTP upstream is not configured")
 	}
-
-	testModelID := strings.TrimSpace(modelID)
-	if testModelID == "" {
-		testModelID = defaultOpencodeTestModel
+	if account == nil {
+		return s.sendErrorAndEnd(c, "OpenCode account is missing")
 	}
-	testModelID = account.GetMappedModel(testModelID)
-	if testModelID == "" {
-		testModelID = defaultOpencodeTestModel
+
+	candidates, err := resolveOpencodeTestCandidates(account, modelID)
+	if err != nil {
+		return s.sendErrorAndEnd(c, err.Error())
 	}
 
 	authToken := account.GetOpencodeApiKey()
@@ -333,7 +333,6 @@ func (s *AccountTestService) testOpencodeAccountConnection(c *gin.Context, accou
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid OpenCode base URL: %s", err.Error()))
 	}
-	apiURL := buildOpenAIChatCompletionsURL(normalizedBaseURL)
 
 	c.Writer.Header().Set("Content-Type", "text/event-stream")
 	c.Writer.Header().Set("Cache-Control", "no-cache")
@@ -341,26 +340,24 @@ func (s *AccountTestService) testOpencodeAccountConnection(c *gin.Context, accou
 	c.Writer.Header().Set("X-Accel-Buffering", "no")
 	c.Writer.Flush()
 
-	// 候选模型：首选 testModelID，遇模型级错误时按序 fallback。
-	candidates := append([]string{testModelID}, opencodeTestModelFallbacks...)
+	// 候选模型：首选映射后的最终模型，遇模型级错误时按序 fallback。
 	var lastStatus int
 	var lastBody string
 	for _, candidate := range candidates {
-		s.sendEvent(c, TestEvent{Type: "test_start", Model: candidate})
+		s.sendEvent(c, TestEvent{Type: "test_start", Model: candidate.ID})
 
-		status, body, probeErr := s.probeOpencodeChatCompletions(ctx, account, apiURL, authToken, candidate)
+		status, body, probeErr := s.probeOpencodeModel(ctx, account, normalizedBaseURL, authToken, candidate)
 		if probeErr != nil {
 			return s.sendErrorAndEnd(c, fmt.Sprintf("OpenCode request failed: %s", probeErr.Error()))
 		}
 		lastStatus, lastBody = status, string(body)
 
 		if status == http.StatusOK {
-			// 非流式响应：choices 有内容即视为连接成功。
-			if opencodeChatCompletionsHasContent(body) {
+			if opencodeProbeResponseIsValid(candidate.Protocol, body) {
 				s.sendEvent(c, TestEvent{Type: "test_complete", Success: true, Text: "Connection test succeeded"})
 				return nil
 			}
-			return s.sendErrorAndEnd(c, "OpenCode returned an unexpected response")
+			return s.sendErrorAndEnd(c, fmt.Sprintf("OpenCode returned an unexpected %s response for model %q", candidate.Protocol, candidate.ID))
 		}
 		if opencodeTestErrorRetryableWithOtherModel(status, lastBody) {
 			continue
@@ -370,22 +367,95 @@ func (s *AccountTestService) testOpencodeAccountConnection(c *gin.Context, accou
 	return s.sendErrorAndEnd(c, fmt.Sprintf("OpenCode API returned %d: %s", lastStatus, lastBody))
 }
 
-// probeOpencodeChatCompletions 对 opencode 发起一次非流式 chat/completions 探测。
-// 返回 HTTP 状态码与响应体（body 截断到 2MB）；网络/请求错误通过 error 返回。
-func (s *AccountTestService) probeOpencodeChatCompletions(ctx context.Context, account *Account, apiURL, authToken, model string) (int, []byte, error) {
-	payload := map[string]any{
-		"model":    model,
-		"messages": []map[string]string{{"role": "user", "content": "Reply with the single word: OK"}},
-		"stream":   false,
+// resolveOpencodeTestCandidates 对用户选择的模型执行账号映射，再与已经是上游裸 slug 的系统 fallback 一起
+// 完成 OpenCode provider 前缀规范化和协议目录解析。所有候选项都在发起网络请求前校验；任何未知模型
+// 都会直接失败，避免把请求发送到猜测的端点。
+func resolveOpencodeTestCandidates(account *Account, modelID string) ([]OpencodeGoModelSpec, error) {
+	if account == nil {
+		return nil, errors.New("OpenCode account is missing")
 	}
-	payloadBytes, _ := json.Marshal(payload)
+	requestedModel := strings.TrimSpace(modelID)
+	if requestedModel == "" {
+		requestedModel = defaultOpencodeTestModel
+	}
+	mappedRequestedModel := account.GetMappedModel(requestedModel)
+
+	rawCandidates := make([]string, 0, 1+len(opencodeTestModelFallbacks))
+	rawCandidates = append(rawCandidates, mappedRequestedModel)
+	rawCandidates = append(rawCandidates, opencodeTestModelFallbacks...)
+
+	candidates := make([]OpencodeGoModelSpec, 0, len(rawCandidates))
+	seen := make(map[string]struct{}, len(rawCandidates))
+	for index, rawCandidate := range rawCandidates {
+		normalizedModel := NormalizeOpencodeGoModelID(rawCandidate)
+		spec, ok := opencodeGoModelByID[normalizedModel]
+		if !ok {
+			sourceModel := rawCandidate
+			if index == 0 {
+				sourceModel = requestedModel
+			}
+			return nil, fmt.Errorf("OpenCode Go test model %q resolves to unknown upstream model %q", sourceModel, normalizedModel)
+		}
+		if _, duplicate := seen[spec.ID]; duplicate {
+			continue
+		}
+		seen[spec.ID] = struct{}{}
+		candidates = append(candidates, spec)
+	}
+	return candidates, nil
+}
+
+// probeOpencodeModel 对 OpenCode Go 发起一次与模型协议匹配的非流式探测。
+// 返回 HTTP 状态码与响应体（body 截断到 2MB）；网络/请求错误通过 error 返回。
+func (s *AccountTestService) probeOpencodeModel(ctx context.Context, account *Account, baseURL, authToken string, spec OpencodeGoModelSpec) (int, []byte, error) {
+	const prompt = "Reply with the single word: OK"
+
+	var apiURL string
+	var payload map[string]any
+	switch spec.Protocol {
+	case OpencodeGoProtocolChat:
+		apiURL = buildOpenAIChatCompletionsURL(baseURL)
+		payload = map[string]any{
+			"model":    spec.ID,
+			"messages": []map[string]string{{"role": "user", "content": prompt}},
+			"stream":   false,
+		}
+	case OpencodeGoProtocolMessages:
+		apiURL = buildOpenAIMessagesURL(baseURL)
+		payload = map[string]any{
+			"model":      spec.ID,
+			"messages":   []map[string]string{{"role": "user", "content": prompt}},
+			"max_tokens": 16,
+			"stream":     false,
+		}
+	case OpencodeGoProtocolResponses:
+		apiURL = buildOpenAIResponsesURL(baseURL)
+		payload = map[string]any{
+			"model":             spec.ID,
+			"input":             prompt,
+			"max_output_tokens": 64,
+			"stream":            false,
+		}
+	default:
+		return 0, nil, fmt.Errorf("unsupported OpenCode Go protocol %q for model %q", spec.Protocol, spec.ID)
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return 0, nil, fmt.Errorf("marshal OpenCode probe payload: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(WithHTTPUpstreamRedirectsDisabled(ctx), http.MethodPost, apiURL, bytes.NewReader(payloadBytes))
 	if err != nil {
 		return 0, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	if spec.Protocol == OpencodeGoProtocolMessages {
+		req.Header.Set("x-api-key", authToken)
+		req.Header.Set("anthropic-version", "2023-06-01")
+	} else {
+		req.Header.Set("Authorization", "Bearer "+authToken)
+	}
 	account.ApplyHeaderOverrides(req.Header)
 
 	proxyURL := ""
@@ -409,16 +479,29 @@ func (s *AccountTestService) probeOpencodeChatCompletions(ctx context.Context, a
 	return resp.StatusCode, body, nil
 }
 
-// opencodeChatCompletionsHasContent 判断非流式探测响应是否包含有效 choices（即连接成功）。
-func opencodeChatCompletionsHasContent(body []byte) bool {
-	var parsed struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
+// opencodeProbeResponseIsValid 校验三种非流式协议的最小成功响应结构，避免把空对象或错误页误判为成功。
+func opencodeProbeResponseIsValid(protocol OpencodeGoProtocol, body []byte) bool {
+	switch protocol {
+	case OpencodeGoProtocolChat:
+		var parsed struct {
+			Choices []json.RawMessage `json:"choices"`
+		}
+		return json.Unmarshal(body, &parsed) == nil && len(parsed.Choices) > 0
+	case OpencodeGoProtocolMessages:
+		var parsed struct {
+			Type    string            `json:"type"`
+			Content []json.RawMessage `json:"content"`
+		}
+		return json.Unmarshal(body, &parsed) == nil && parsed.Type == "message" && len(parsed.Content) > 0
+	case OpencodeGoProtocolResponses:
+		var parsed struct {
+			Object string            `json:"object"`
+			Output []json.RawMessage `json:"output"`
+		}
+		return json.Unmarshal(body, &parsed) == nil && parsed.Object == "response" && len(parsed.Output) > 0
+	default:
+		return false
 	}
-	return json.Unmarshal(body, &parsed) == nil && len(parsed.Choices) > 0
 }
 
 // opencodeTestErrorRetryableWithOtherModel 判断 opencode 探测失败是否属于「换一个模型可能成功」的

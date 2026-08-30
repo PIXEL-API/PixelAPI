@@ -180,6 +180,163 @@ func TestAccountServiceImportOwnedValidatedPersonalAccessTokenUpdatesAndPreserve
 	}
 }
 
+func TestAccountServiceImportOwnedValidatedPersonalAccessTokenRejectsProUpdateWithoutStoredProxy(t *testing.T) {
+	repo := newOwnedAgentIdentityRepoStub()
+	svc, _ := newOwnedAgentIdentityService(repo)
+	created, err := svc.ImportOwnedValidatedPersonalAccessTokenWithResult(
+		context.Background(),
+		101,
+		ownedPATImportRequest(AccountLevelTeam),
+		validatedOwnedPATInfo("at-test-team", "pat-user", "team-a", "team"),
+	)
+	require.NoError(t, err)
+
+	updated, err := svc.ImportOwnedValidatedPersonalAccessTokenWithResult(
+		context.Background(),
+		101,
+		ownedPATImportRequest(AccountLevelPro),
+		validatedOwnedPATInfo("at-test-pro", "pat-user", "team-a", "pro"),
+	)
+
+	require.Nil(t, updated)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "OWNED_CODEX_PAT_EXISTING_PROXY_REQUIRED")
+	require.Equal(t, AccountLevelTeam, repo.accounts[created.Account.ID].AccountLevel)
+	require.Equal(t, "at-test-team", repo.accounts[created.Account.ID].GetCredential("access_token"))
+	require.Zero(t, repo.updateCount)
+}
+
+func TestAccountServiceImportOwnedValidatedPersonalAccessTokenPreservesAndRevalidatesStoredProProxy(t *testing.T) {
+	const ownerUserID int64 = 101
+	proxyID := int64(7)
+	repo := newOwnedAgentIdentityRepoStub()
+	svc, _ := newOwnedAgentIdentityService(repo)
+	created, err := svc.ImportOwnedValidatedPersonalAccessTokenWithResult(
+		context.Background(),
+		ownerUserID,
+		ownedPATImportRequest(AccountLevelTeam),
+		validatedOwnedPATInfo("at-test-team", "pat-user", "team-a", "team"),
+	)
+	require.NoError(t, err)
+	repo.accounts[created.Account.ID].ProxyID = &proxyID
+	proxyRepo := &ownedAccountProxyRepoStub{
+		proxies: map[int64]*Proxy{
+			proxyID: {
+				ID:                   proxyID,
+				Platform:             PlatformOpenAI,
+				RequiredAccountLevel: AccountLevelPro,
+				Status:               StatusActive,
+				MaxAccounts:          1,
+			},
+		},
+		counts: map[int64]int64{proxyID: 1},
+	}
+	svc.proxyRepo = proxyRepo
+
+	reimportRequest := ownedPATImportRequest(AccountLevelPro)
+	reimportRequest.ProxyID = &proxyID
+	updated, err := svc.ImportOwnedValidatedPersonalAccessTokenWithResult(
+		context.Background(),
+		ownerUserID,
+		reimportRequest,
+		validatedOwnedPATInfo("at-test-pro", "pat-user", "team-a", "pro"),
+	)
+
+	require.NoError(t, err)
+	require.True(t, updated.Updated)
+	require.Equal(t, AccountLevelPro, updated.Account.AccountLevel)
+	require.NotNil(t, updated.Account.ProxyID)
+	require.Equal(t, proxyID, *updated.Account.ProxyID)
+	require.Equal(t, "at-test-pro", updated.Account.GetCredential("access_token"))
+	require.Equal(t, 1, proxyRepo.getVisibleCalls)
+	require.Zero(t, proxyRepo.countCalls, "preserving an existing binding must not consume capacity again")
+}
+
+func TestAccountServiceImportOwnedValidatedPersonalAccessTokenBindsRequestedProxyForProUpdate(t *testing.T) {
+	const ownerUserID int64 = 101
+	proxyID := int64(7)
+	repo := newOwnedAgentIdentityRepoStub()
+	svc, _ := newOwnedAgentIdentityService(repo)
+	created, err := svc.ImportOwnedValidatedPersonalAccessTokenWithResult(
+		context.Background(),
+		ownerUserID,
+		ownedPATImportRequest(AccountLevelTeam),
+		validatedOwnedPATInfo("at-test-team", "pat-user", "team-a", "team"),
+	)
+	require.NoError(t, err)
+	proxyRepo := &ownedAccountProxyRepoStub{
+		proxies: map[int64]*Proxy{
+			proxyID: {
+				ID:                   proxyID,
+				Platform:             PlatformOpenAI,
+				RequiredAccountLevel: AccountLevelPro,
+				Status:               StatusActive,
+				MaxAccounts:          2,
+			},
+		},
+		counts: map[int64]int64{proxyID: 1},
+	}
+	svc.proxyRepo = proxyRepo
+	reimportRequest := ownedPATImportRequest(AccountLevelPro)
+	reimportRequest.ProxyID = &proxyID
+
+	updated, err := svc.ImportOwnedValidatedPersonalAccessTokenWithResult(
+		context.Background(),
+		ownerUserID,
+		reimportRequest,
+		validatedOwnedPATInfo("at-test-pro", "pat-user", "team-a", "pro"),
+	)
+
+	require.NoError(t, err)
+	require.True(t, updated.Updated)
+	require.Equal(t, AccountLevelPro, updated.Account.AccountLevel)
+	require.NotNil(t, updated.Account.ProxyID)
+	require.Equal(t, proxyID, *updated.Account.ProxyID)
+	require.Equal(t, proxyID, *repo.accounts[created.Account.ID].ProxyID)
+	require.Equal(t, 1, proxyRepo.getVisibleCalls)
+	require.Equal(t, 1, proxyRepo.countCalls)
+}
+
+func TestAccountServiceImportOwnedValidatedPersonalAccessTokenRejectsProUpdateWithWrongScopeProxy(t *testing.T) {
+	const ownerUserID int64 = 101
+	proxyID := int64(7)
+	repo := newOwnedAgentIdentityRepoStub()
+	svc, _ := newOwnedAgentIdentityService(repo)
+	created, err := svc.ImportOwnedValidatedPersonalAccessTokenWithResult(
+		context.Background(),
+		ownerUserID,
+		ownedPATImportRequest(AccountLevelTeam),
+		validatedOwnedPATInfo("at-test-team", "pat-user", "team-a", "team"),
+	)
+	require.NoError(t, err)
+	svc.proxyRepo = &ownedAccountProxyRepoStub{
+		proxies: map[int64]*Proxy{
+			proxyID: {
+				ID:                   proxyID,
+				Platform:             PlatformOpenAI,
+				RequiredAccountLevel: AccountLevelTeam,
+				Status:               StatusActive,
+			},
+		},
+		counts: map[int64]int64{},
+	}
+	reimportRequest := ownedPATImportRequest(AccountLevelPro)
+	reimportRequest.ProxyID = &proxyID
+
+	updated, err := svc.ImportOwnedValidatedPersonalAccessTokenWithResult(
+		context.Background(),
+		ownerUserID,
+		reimportRequest,
+		validatedOwnedPATInfo("at-test-pro", "pat-user", "team-a", "pro"),
+	)
+
+	require.Nil(t, updated)
+	require.ErrorIs(t, err, ErrProxyNotFound)
+	require.Zero(t, repo.updateCount)
+	require.Equal(t, AccountLevelTeam, repo.accounts[created.Account.ID].AccountLevel)
+	require.Nil(t, repo.accounts[created.Account.ID].ProxyID)
+}
+
 func TestAccountServiceUpdateOwnedPersonalAccessTokenModelWhitelistOnly(t *testing.T) {
 	repo := newOwnedAgentIdentityRepoStub()
 	svc, _ := newOwnedAgentIdentityService(repo)

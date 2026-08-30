@@ -637,7 +637,7 @@ const currentFiles = computed((): FileConfig[] => {
       case 'grok':
         return [generateOpenCodeConfig('grok', apiBase, apiKey)]
       case 'opencode':
-        return [generateOpenCodeConfig('anthropic', apiBase, apiKey)]
+        return [generateOpenCodeGoConfig(apiBase, apiKey)]
       default:
         return [generateOpenCodeConfig('openai', apiBase, apiKey)]
     }
@@ -873,6 +873,56 @@ function generateCodexProviderConfig(
 base_url = "${baseUrl}"
 wire_api = "responses"${websocketConfig}
 ${authConfig}`
+}
+
+function generateOpenCodeGoConfig(baseUrl: string, apiKey: string): FileConfig {
+  const createModelOverrides = (modelIds: readonly string[], npm: string) =>
+    Object.fromEntries(modelIds.map((modelId) => [modelId, { provider: { npm } }]))
+
+  const models = {
+    ...createModelOverrides(
+      [
+        'minimax-m3',
+        'minimax-m2.7',
+        'minimax-m2.5',
+        'qwen3.7-max',
+        'qwen3.8-max',
+        'qwen3.8-flash',
+        'qwen3.7-plus',
+        'qwen3.6-plus'
+      ],
+      '@ai-sdk/anthropic'
+    ),
+    ...createModelOverrides(
+      ['gpt-5.6-luna', 'grok-4.5', 'grok-4.6', 'muse-spark-1.2-contributor'],
+      '@ai-sdk/openai'
+    )
+  }
+
+  const content = JSON.stringify(
+    {
+      provider: {
+        'opencode-go': {
+          name: 'OpenCode Go',
+          npm: '@ai-sdk/openai-compatible',
+          options: {
+            baseURL: baseUrl,
+            apiKey
+          },
+          models
+        }
+      },
+      $schema: 'https://opencode.ai/config.json'
+    },
+    null,
+    2
+  )
+
+  return {
+    path: 'opencode.json',
+    content,
+    hint: t('keys.useKeyModal.opencode.hint')
+  }
 }
 
 function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: string, pathLabel?: string): FileConfig {

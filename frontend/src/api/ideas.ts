@@ -15,6 +15,23 @@ export interface IdeaListParams {
   keyword?: string;
 }
 
+export type IdeaMineStatus =
+  | 'draft'
+  | 'pending_review'
+  | 'manual_review'
+  | 'published'
+  | 'pending_revision'
+  | 'rejected'
+  | 'hidden'
+  | 'moderation_failed'
+
+export interface MyIdeaListParams {
+  page?: number;
+  page_size?: number;
+  sort?: string;
+  status?: IdeaMineStatus;
+}
+
 export interface IdeaPostPayload {
   title: string;
   summary: string;
@@ -27,7 +44,7 @@ export async function listIdeas(params: IdeaListParams = {}) {
   return data
 }
 
-export async function listMyIdeas(params: { page?: number; page_size?: number; sort?: string } = {}) {
+export async function listMyIdeas(params: MyIdeaListParams = {}) {
   const { data } = await apiClient.get<PaginatedResponse<IdeaPost>>('/ideas/mine', { params })
   return data
 }

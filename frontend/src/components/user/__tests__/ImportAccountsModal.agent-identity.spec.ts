@@ -186,7 +186,7 @@ describe('ImportAccountsModal Agent Identity', () => {
     showWarningMock.mockReset()
   })
 
-  it('defaults OpenAI imports to OAuth and preserves the account-level request', async () => {
+  it('shows the Free fallback copy and preserves the server-side account-level detection request', async () => {
     const wrapper = mount(ImportAccountsModal, {
       props: { show: true },
       global: { stubs: basicStubs }
@@ -198,11 +198,27 @@ describe('ImportAccountsModal Agent Identity', () => {
     expect((oauthRadio.element as HTMLInputElement).checked).toBe(true)
     expect(wrapper.text()).toContain('userAccounts.importAccountLevel')
 
-    await findButtonByText(wrapper, 'Free').trigger('click')
+    const freeFallbackButton = findButtonByText(wrapper, 'userAccounts.importLevelFreeLabel')
+    expect(
+      freeFallbackButton.findAll('span').some(item => item.text() === 'userAccounts.importLevelFree')
+    ).toBe(true)
+    expect(zh.userAccounts.importLevelFreeLabel).toBe('自动识别 / Free 兜底')
+    expect(zh.userAccounts.importLevelFree).toContain('保存服务端识别到的真实等级')
+    expect(zh.userAccounts.importLevelFree).toContain('无精确池时才落入 Free 池')
+    expect(zh.userAccounts.importAccountLevelHint).toContain('其他显式等级仍严格匹配')
+    expect(zh.userAccounts.importAccountLevelHint).toContain('例如 Pro')
+    expect(en.userAccounts.importLevelFreeLabel).toBe('Auto-detect / Free fallback')
+    expect(en.userAccounts.importLevelFree).toContain('actual level detected by the server')
+    expect(en.userAccounts.importLevelFree).toContain('only when no exact pool is available')
+    expect(en.userAccounts.importAccountLevelHint).toContain('other explicit levels still require an exact match')
+    expect(en.userAccounts.importAccountLevelHint).toContain('for example, Pro')
+
+    await freeFallbackButton.trigger('click')
     const importer = wrapper.getComponent(CredentialImportModalStub).props('importer') as (contents: string[]) => Promise<unknown>
     await importer(['refresh-token'])
 
     expect(importCredentialContentsMock).toHaveBeenCalledWith(expect.objectContaining({
+      contents: ['refresh-token'],
       platform: 'openai',
       openai_auth_mode: 'oauth',
       account_level: 'free',

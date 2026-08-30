@@ -29,6 +29,7 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	body []byte,
 ) (*OpenAIForwardResult, error) {
 	beginUpstreamResponseModelObservation(c)
+	SetActualOpenAIUpstreamEndpoint(c, openAIChatRawEndpoint)
 	startTime := time.Now()
 
 	var responsesReq apicompat.ResponsesRequest

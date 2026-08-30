@@ -189,6 +189,15 @@ func ProxyAccountLimitExceededError(proxyID, current, limit, additional int64) e
 	)
 }
 
+// ProxyAccountLimitBelowCurrentError reports that a finite max_accounts value
+// cannot hold the proxy's already committed live account bindings.
+func ProxyAccountLimitBelowCurrentError(proxyID, current int64) error {
+	return infraerrors.BadRequest(
+		"PROXY_ACCOUNT_LIMIT_BELOW_CURRENT",
+		fmt.Sprintf("proxy %d already has %d bound accounts; max_accounts cannot be lower than current count unless set to 0", proxyID, current),
+	)
+}
+
 type ProxyAccountSummary struct {
 	ID       int64
 	Name     string

@@ -2,12 +2,48 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
 )
+
+type ownedGroupLevelSettingRepoStub struct {
+	value string
+}
+
+func (s *ownedGroupLevelSettingRepoStub) Get(context.Context, string) (*Setting, error) {
+	return nil, ErrSettingNotFound
+}
+
+func (s *ownedGroupLevelSettingRepoStub) GetValue(_ context.Context, key string) (string, error) {
+	if key == SettingKeyOpenAIAccountLevels {
+		return s.value, nil
+	}
+	return "", ErrSettingNotFound
+}
+
+func (s *ownedGroupLevelSettingRepoStub) Set(context.Context, string, string) error {
+	return nil
+}
+
+func (s *ownedGroupLevelSettingRepoStub) GetMultiple(context.Context, []string) (map[string]string, error) {
+	return map[string]string{}, nil
+}
+
+func (s *ownedGroupLevelSettingRepoStub) SetMultiple(context.Context, map[string]string) error {
+	return nil
+}
+
+func (s *ownedGroupLevelSettingRepoStub) GetAll(context.Context) (map[string]string, error) {
+	return map[string]string{}, nil
+}
+
+func (s *ownedGroupLevelSettingRepoStub) Delete(context.Context, string) error {
+	return nil
+}
 
 type ownedAccountGroupRepoStub struct {
 	groupRepoNoop
@@ -274,11 +310,15 @@ type ownedAccountAtomicProxyCreateRepoStub struct {
 	ownedAccountDuplicateRepoStub
 	atomicCreateCalls int
 	atomicOwnerUserID int64
+	atomicCreateErr   error
 }
 
 func (s *ownedAccountAtomicProxyCreateRepoStub) CreateOwnedWithProxyCapacity(ctx context.Context, ownerUserID int64, account *Account) error {
 	s.atomicCreateCalls++
 	s.atomicOwnerUserID = ownerUserID
+	if s.atomicCreateErr != nil {
+		return s.atomicCreateErr
+	}
 	return s.Create(ctx, account)
 }
 
@@ -690,6 +730,45 @@ func TestAccountServiceResolveOwnedPublicShareGroupUsesFreePoolAsUniversalFallba
 
 	require.NoError(t, err)
 	require.Equal(t, int64(10), group.ID)
+}
+
+func TestAccountServiceResolveOwnedPublicShareGroupPrefersExactLevelBeforeFreeRegardlessOfSortOrder(t *testing.T) {
+	configs := []OpenAIAccountLevelConfig{
+		{Key: AccountLevelTeam, Label: "Team", Aliases: []string{"team"}, SortOrder: 10, Enabled: true},
+		{Key: AccountLevelFree, Label: "Free", Aliases: []string{"free"}, SortOrder: 100, Enabled: true},
+	}
+	rawConfigs, err := json.Marshal(configs)
+	require.NoError(t, err)
+	settingService := &SettingService{settingRepo: &ownedGroupLevelSettingRepoStub{value: string(rawConfigs)}}
+
+	t.Run("exact Team pool wins even when Free has a higher rank", func(t *testing.T) {
+		svc := &AccountService{
+			settingService: settingService,
+			groupRepo: &ownedPublicShareGroupRepoStub{groups: []Group{
+				{ID: 10, Name: "FREE共享号池", Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopePublic, RequiredAccountLevel: AccountLevelFree},
+				{ID: 12, Name: "TEAM共享号池", Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopePublic, RequiredAccountLevel: AccountLevelTeam},
+			}},
+		}
+
+		group, err := svc.resolveOwnedPublicShareGroup(context.Background(), &Account{Platform: PlatformOpenAI, AccountLevel: AccountLevelTeam})
+
+		require.NoError(t, err)
+		require.Equal(t, int64(12), group.ID)
+	})
+
+	t.Run("Free remains the fallback when the exact pool is absent", func(t *testing.T) {
+		svc := &AccountService{
+			settingService: settingService,
+			groupRepo: &ownedPublicShareGroupRepoStub{groups: []Group{
+				{ID: 10, Name: "FREE共享号池", Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopePublic, RequiredAccountLevel: AccountLevelFree},
+			}},
+		}
+
+		group, err := svc.resolveOwnedPublicShareGroup(context.Background(), &Account{Platform: PlatformOpenAI, AccountLevel: AccountLevelTeam})
+
+		require.NoError(t, err)
+		require.Equal(t, int64(10), group.ID)
+	})
 }
 
 func TestAccountServiceResolveOwnedPublicShareGroupExcludesAccountModeGroups(t *testing.T) {
@@ -1122,19 +1201,14 @@ func TestAccountServiceCreateOwnedRejectsOpenAIProWithoutProxy(t *testing.T) {
 func TestAccountServiceCreateOwnedRejectsOpenAIProWhenProxyFull(t *testing.T) {
 	ownerID := int64(101)
 	proxyID := int64(7)
-	repo := &ownedAccountDuplicateRepoStub{}
-	proxyRepo := &ownedAccountProxyRepoStub{
-		proxies: map[int64]*Proxy{
-			proxyID: {ID: proxyID, Status: StatusActive, MaxAccounts: 2},
-		},
-		counts: map[int64]int64{proxyID: 2},
+	repo := &ownedAccountAtomicProxyCreateRepoStub{
+		atomicCreateErr: ErrProxyAccountLimitExceeded,
 	}
 	svc := &AccountService{
 		accountRepo: repo,
 		privateGroupProvisioner: &ownedPrivateGroupProvisionerStub{
 			group: &Group{ID: 99, Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopeUserPrivate},
 		},
-		proxyRepo: proxyRepo,
 		pricedModelCatalog: &ownedPricedModelCatalogStub{modelsByPlatform: map[string][]string{
 			PlatformOpenAI: {"test-model"},
 		}},
@@ -1154,26 +1228,19 @@ func TestAccountServiceCreateOwnedRejectsOpenAIProWhenProxyFull(t *testing.T) {
 	require.Nil(t, account)
 	require.ErrorIs(t, err, ErrProxyAccountLimitExceeded)
 	require.Empty(t, repo.createdAccounts)
-	require.Equal(t, 1, proxyRepo.getVisibleCalls)
-	require.Equal(t, 1, proxyRepo.countCalls)
+	require.Equal(t, 1, repo.atomicCreateCalls)
+	require.Equal(t, ownerID, repo.atomicOwnerUserID)
 }
 
 func TestAccountServiceCreateOwnedAllowsOpenAIProWhenProxyHasCapacity(t *testing.T) {
 	ownerID := int64(101)
 	proxyID := int64(7)
-	repo := &ownedAccountDuplicateRepoStub{}
-	proxyRepo := &ownedAccountProxyRepoStub{
-		proxies: map[int64]*Proxy{
-			proxyID: {ID: proxyID, Status: StatusActive, MaxAccounts: 2},
-		},
-		counts: map[int64]int64{proxyID: 1},
-	}
+	repo := &ownedAccountAtomicProxyCreateRepoStub{}
 	svc := &AccountService{
 		accountRepo: repo,
 		privateGroupProvisioner: &ownedPrivateGroupProvisionerStub{
 			group: &Group{ID: 99, Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopeUserPrivate},
 		},
-		proxyRepo: proxyRepo,
 		pricedModelCatalog: &ownedPricedModelCatalogStub{modelsByPlatform: map[string][]string{
 			PlatformOpenAI: {"test-model"},
 		}},
@@ -1197,8 +1264,8 @@ func TestAccountServiceCreateOwnedAllowsOpenAIProWhenProxyHasCapacity(t *testing
 	require.Len(t, repo.createdAccounts, 1)
 	require.NotNil(t, repo.createdAccounts[0].ProxyID)
 	require.Equal(t, proxyID, *repo.createdAccounts[0].ProxyID)
-	require.Equal(t, 1, proxyRepo.getVisibleCalls)
-	require.Equal(t, 1, proxyRepo.countCalls)
+	require.Equal(t, 1, repo.atomicCreateCalls)
+	require.Equal(t, ownerID, repo.atomicOwnerUserID)
 }
 
 func TestAccountServiceCreateOwnedUsesAtomicProxyCapacityCreate(t *testing.T) {
@@ -1233,6 +1300,40 @@ func TestAccountServiceCreateOwnedUsesAtomicProxyCapacityCreate(t *testing.T) {
 	require.Len(t, repo.createdAccounts, 1)
 	require.NotNil(t, repo.createdAccounts[0].ProxyID)
 	require.Equal(t, proxyID, *repo.createdAccounts[0].ProxyID)
+}
+
+func TestAccountServiceCreateOwnedFailsClosedWithoutAtomicProxyCreate(t *testing.T) {
+	ownerID := int64(101)
+	proxyID := int64(7)
+	repo := &ownedAccountDuplicateRepoStub{}
+	svc := &AccountService{
+		accountRepo: repo,
+		privateGroupProvisioner: &ownedPrivateGroupProvisionerStub{
+			group: &Group{ID: 99, Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopeUserPrivate},
+		},
+		pricedModelCatalog: &ownedPricedModelCatalogStub{modelsByPlatform: map[string][]string{
+			PlatformOpenAI: {"test-model"},
+		}},
+	}
+
+	account, err := svc.CreateOwned(context.Background(), ownerID, CreateAccountRequest{
+		Name:         "pro-without-atomic-repository",
+		Platform:     PlatformOpenAI,
+		Type:         AccountTypeOAuth,
+		AccountLevel: AccountLevelPro,
+		ProxyID:      &proxyID,
+		Credentials: map[string]any{
+			"access_token":  "token",
+			"plan_type":     "pro",
+			"model_mapping": map[string]any{"test-model": "test-model"},
+		},
+		Concurrency: ownedPersonalDefaultConcurrency,
+		Priority:    1,
+	})
+
+	require.Nil(t, account)
+	require.ErrorIs(t, err, ErrOwnedAccountProxyValidationUnavailable)
+	require.Empty(t, repo.createdAccounts)
 }
 
 func TestAccountServiceCreateOwnedRejectsOpenAILevelMismatch(t *testing.T) {
@@ -1299,17 +1400,11 @@ func TestAccountServiceCreateOwnedAllowsOpenAITeamWithoutProxy(t *testing.T) {
 func TestAccountServiceCreateOwnedKeepsAllowedPersonalConcurrency(t *testing.T) {
 	ownerID := int64(101)
 	proxyID := int64(7)
-	repo := &ownedAccountDuplicateRepoStub{}
+	repo := &ownedAccountAtomicProxyCreateRepoStub{}
 	svc := &AccountService{
 		accountRepo: repo,
 		privateGroupProvisioner: &ownedPrivateGroupProvisionerStub{
 			group: &Group{ID: 99, Platform: PlatformAnthropic, Status: StatusActive, Scope: GroupScopeUserPrivate},
-		},
-		proxyRepo: &ownedAccountProxyRepoStub{
-			proxies: map[int64]*Proxy{
-				proxyID: {ID: proxyID, Status: StatusActive, MaxAccounts: 2},
-			},
-			counts: map[int64]int64{proxyID: 0},
 		},
 		pricedModelCatalog: &ownedPricedModelCatalogStub{modelsByPlatform: map[string][]string{
 			PlatformAnthropic: {"test-model"},
@@ -1335,6 +1430,7 @@ func TestAccountServiceCreateOwnedKeepsAllowedPersonalConcurrency(t *testing.T) 
 	require.Equal(t, ownedPersonalMaxConcurrency, repo.createdAccounts[0].Concurrency)
 	require.NotNil(t, repo.createdAccounts[0].ProxyID)
 	require.Equal(t, proxyID, *repo.createdAccounts[0].ProxyID)
+	require.Equal(t, 1, repo.atomicCreateCalls)
 }
 
 func TestValidateOwnedAccountSourceAllowsOAuthMetadataURLs(t *testing.T) {

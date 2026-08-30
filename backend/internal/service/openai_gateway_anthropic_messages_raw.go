@@ -21,23 +21,6 @@ import (
 // opencodeMessagesRawEndpoint 是 OpenCode Go 订阅的 Anthropic 兼容端点路径。
 const opencodeMessagesRawEndpoint = "/v1/messages"
 
-// opencodeChatOnlyModels 列出 opencode 仅在 OpenAI chat/completions 格式提供、
-// 不支持 Anthropic /messages 格式的模型。这些模型的 /v1/messages 入站请求必须走
-// Anthropic→ChatCompletions 转换，直接透传上游会返回
-// 401 "Model <x> is not supported for format anthropic"。
-var opencodeChatOnlyModels = map[string]struct{}{
-	"grok-4.5": {},
-}
-
-// opencodeSupportsAnthropicMessagesFormat 判断模型是否支持 opencode 的
-// Anthropic /messages 原生格式（false = 需走 chat/completions 转换）。
-func opencodeSupportsAnthropicMessagesFormat(model string) bool {
-	model = strings.ToLower(strings.TrimSpace(model))
-	model = normalizeClaudeCodeLongContextModel(model)
-	_, chatOnly := opencodeChatOnlyModels[model]
-	return !chatOnly
-}
-
 // forwardAsRawAnthropicMessages 将 Anthropic Messages 请求体原样 POST 到
 // OpenCode Go 的 /messages 端点。opencode 账号只走这条 raw 转发路径，不做
 // Anthropic → OpenAI 协议转换，计费通过解析 Anthropic usage 映射到 OpenAIUsage。

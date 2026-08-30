@@ -43,6 +43,7 @@ var (
 	ErrIdeaBodyRequired        = infraerrors.BadRequest("IDEA_BODY_REQUIRED", "body is required")
 	ErrIdeaTooManyTags         = infraerrors.BadRequest("IDEA_TOO_MANY_TAGS", "too many tags")
 	ErrIdeaTagNameInvalid      = infraerrors.BadRequest("IDEA_TAG_NAME_INVALID", "tag name is invalid")
+	ErrIdeaPostStatusInvalid   = infraerrors.BadRequest("IDEA_POST_STATUS_INVALID", "idea post status is invalid")
 	ErrIdeaAlreadyRewarded     = infraerrors.Conflict("IDEA_REWARD_ALREADY", "you have already rewarded this post")
 	ErrIdeaInsufficientBalance = infraerrors.BadRequest("IDEA_REWARD_INSUFFICIENT_BALANCE", "insufficient balance")
 	ErrIdeaInsufficientPoints  = infraerrors.BadRequest("IDEA_REWARD_INSUFFICIENT_POINTS", "insufficient points")
@@ -143,6 +144,7 @@ type IdeaPostListParams struct {
 	Sort     string // latest | hot | featured
 	TagSlug  string
 	Keyword  string
+	Status   string
 }
 
 // 打赏资产类型
@@ -372,10 +374,35 @@ func (s *IdeasService) List(ctx context.Context, params IdeaPostListParams) ([]I
 }
 
 func (s *IdeasService) ListMine(ctx context.Context, userID int64, params IdeaPostListParams) ([]IdeaPost, int64, error) {
+	status, err := normalizeIdeaMineStatus(params.Status)
+	if err != nil {
+		return nil, 0, err
+	}
 	if err := s.ensureEnabled(ctx); err != nil {
 		return nil, 0, err
 	}
+	params.Status = status
 	return s.repo.ListMine(ctx, userID, params)
+}
+
+func normalizeIdeaMineStatus(status string) (string, error) {
+	status = strings.TrimSpace(status)
+	if status == "" {
+		return "", nil
+	}
+	switch status {
+	case IdeaPostStatusDraft,
+		IdeaPostStatusPendingReview,
+		IdeaPostStatusManualReview,
+		IdeaPostStatusPublished,
+		IdeaPostStatusPendingRevision,
+		IdeaPostStatusRejected,
+		IdeaPostStatusHidden,
+		IdeaPostStatusModerationFailed:
+		return status, nil
+	default:
+		return "", ErrIdeaPostStatusInvalid
+	}
 }
 
 func (s *IdeasService) Delete(ctx context.Context, postID, userID int64) error {

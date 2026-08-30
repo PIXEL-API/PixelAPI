@@ -15,6 +15,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/proxy"
 	"github.com/Wei-Shaw/sub2api/ent/user"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/lib/pq"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 
@@ -30,6 +31,8 @@ type proxyRepository struct {
 	sql    sqlQuerier
 }
 
+var _ service.ProxyDeletionRepository = (*proxyRepository)(nil)
+
 func NewProxyRepository(client *dbent.Client, sqlDB *sql.DB) service.ProxyRepository {
 	return newProxyRepositoryWithSQL(client, sqlDB)
 }
@@ -39,7 +42,54 @@ func newProxyRepositoryWithSQL(client *dbent.Client, sqlq sqlQuerier) *proxyRepo
 }
 
 func (r *proxyRepository) Create(ctx context.Context, proxyIn *service.Proxy) error {
-	builder := r.client.Proxy.Create().
+	if proxyIn == nil {
+		return errors.New("proxy create input is nil")
+	}
+	if r == nil || r.client == nil {
+		return errors.New("proxy create repository client is unavailable")
+	}
+
+	// Ent fills generated fields before the transaction commits. Keep them on a
+	// candidate so a commit failure cannot publish a phantom ID/timestamp to the
+	// caller. Outer transaction owners must likewise pass a staged object; CRS is
+	// the current production caller and publishes it only after its UoW commits.
+	candidate := *proxyIn
+	if strings.TrimSpace(candidate.FallbackMode) == "" {
+		candidate.FallbackMode = service.FallbackModeNone
+	}
+	if err := service.ValidateProxyLifecycleFields(&candidate); err != nil {
+		return err
+	}
+
+	err := r.withProxyWriteTransaction(ctx, "proxy create", func(
+		txCtx context.Context,
+		txClient *dbent.Client,
+		exec sqlQueryExecutor,
+	) error {
+		if candidate.BackupProxyID != nil {
+			locked, lockErr := lockProxyMutationTargets(txCtx, exec, []int64{*candidate.BackupProxyID})
+			if lockErr != nil {
+				return fmt.Errorf("lock backup proxy %d for create: %w", *candidate.BackupProxyID, lockErr)
+			}
+			backup, ok := locked[*candidate.BackupProxyID]
+			if !ok {
+				return service.ErrProxyBackupInvalid
+			}
+			if err := service.ValidateProxyLifecycleCandidate(&candidate, backup.serviceProxy()); err != nil {
+				return err
+			}
+		}
+		return r.createWithClient(txCtx, txClient, &candidate)
+	})
+	if err != nil {
+		return err
+	}
+	*proxyIn = candidate
+	return nil
+}
+
+func (r *proxyRepository) createWithClient(ctx context.Context, client *dbent.Client, proxyIn *service.Proxy) error {
+	builder := client.Proxy.Create().
 		SetName(proxyIn.Name).
 		SetProtocol(proxyIn.Protocol).
 		SetHost(proxyIn.Host).
@@ -69,8 +119,47 @@ func (r *proxyRepository) Create(ctx context.Context, proxyIn *service.Proxy) er
 	return err
 }
 
+func (r *proxyRepository) withProxyWriteTransaction(
+	ctx context.Context,
+	operation string,
+	mutate func(context.Context, *dbent.Client, sqlQueryExecutor) error,
+) error {
+	if r == nil || r.client == nil {
+		return fmt.Errorf("%s repository client is unavailable", operation)
+	}
+	if mutate == nil {
+		return fmt.Errorf("%s transaction callback is nil", operation)
+	}
+	if dbent.TxFromContext(ctx) != nil {
+		client := clientFromContext(ctx, r.client)
+		exec := sqlExecutorFromEntClient(client)
+		if exec == nil {
+			return fmt.Errorf("%s transaction SQL executor is unavailable", operation)
+		}
+		return mutate(ctx, client, exec)
+	}
+
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("begin %s transaction: %w", operation, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	txCtx := dbent.NewTxContext(ctx, tx)
+	exec := sqlExecutorFromEntClient(tx.Client())
+	if exec == nil {
+		return fmt.Errorf("%s transaction SQL executor is unavailable", operation)
+	}
+	if err := mutate(txCtx, tx.Client(), exec); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit %s transaction: %w", operation, err)
+	}
+	return nil
+}
+
 func (r *proxyRepository) GetByID(ctx context.Context, id int64) (*service.Proxy, error) {
-	m, err := r.client.Proxy.Get(ctx, id)
+	m, err := clientFromContext(ctx, r.client).Proxy.Get(ctx, id)
 	if err != nil {
 		if dbent.IsNotFound(err) {
 			return nil, service.ErrProxyNotFound
@@ -100,67 +189,231 @@ func (r *proxyRepository) ListByIDs(ctx context.Context, ids []int64) ([]service
 }
 
 func (r *proxyRepository) Update(ctx context.Context, proxyIn *service.Proxy) error {
-	return r.updateWithClient(ctx, r.client, proxyIn)
+	return r.updateAtomically(ctx, proxyIn, false)
 }
 
-// UpdateWithOwnerAssignment 在同一事务内锁定代理行、校验没有其他用户的账号绑定在该代理上，
-// 然后保存代理。行锁与用户建号路径（ensureOwnedProxyCapacityForCreateInTx）互斥，
-// 使"改归属"与"绑账号"无法交叉出「他人账号绑在专属代理上」的状态——那种状态下账号会在
-// 用户端重新鉴权时因代理不可见被拒。
+// UpdateWithOwnerAssignment 在通用原子更新守卫之外额外校验代理归属冲突。
 func (r *proxyRepository) UpdateWithOwnerAssignment(ctx context.Context, proxyIn *service.Proxy) error {
+	return r.updateAtomically(ctx, proxyIn, true)
+}
+
+// updateAtomically 统一代理更新的最终一致性守卫。所有写入口都先锁定 live proxy，
+// 再读取账号绑定数；该锁与账号创建、改绑、到期改投共用同一 proxy→account 顺序，
+// 因而降低 max_accounts 与并发新增绑定无法交叉产生超配状态。
+//
+// 已有 Ent 事务由调用方拥有，本方法只复用其 client/executor，不嵌套开启或提交事务。
+func (r *proxyRepository) updateAtomically(ctx context.Context, proxyIn *service.Proxy, checkOwnerAssignment bool) error {
 	if proxyIn == nil {
 		return service.ErrProxyNotFound
 	}
+	return r.withProxyWriteTransaction(ctx, "proxy update", func(
+		txCtx context.Context,
+		txClient *dbent.Client,
+		exec sqlQueryExecutor,
+	) error {
+		return r.updateLocked(txCtx, txClient, exec, proxyIn, checkOwnerAssignment)
+	})
+}
 
-	tx, err := r.client.Tx(ctx)
-	if err != nil {
-		return err
+type lockedProxyMutationTarget struct {
+	id          int64
+	ownerUserID *int64
+	updatedAt   time.Time
+}
+
+func (target lockedProxyMutationTarget) serviceProxy() *service.Proxy {
+	var ownerUserID *int64
+	if target.ownerUserID != nil {
+		value := *target.ownerUserID
+		ownerUserID = &value
 	}
-	defer func() { _ = tx.Rollback() }()
-	txCtx := dbent.NewTxContext(ctx, tx)
-	exec := sqlExecutorFromEntClient(tx.Client())
-	if exec == nil {
-		return fmt.Errorf("transaction sql executor is unavailable")
+	return &service.Proxy{
+		ID:          target.id,
+		OwnerUserID: ownerUserID,
+		UpdatedAt:   target.updatedAt,
+	}
+}
+
+// lockProxyMutationTargets acquires every proxy lock in ascending ID order.
+// Callers must collect the complete lock set before invoking it; taking a
+// source lock and then discovering a backup would deadlock for A→B / B→A.
+func lockProxyMutationTargets(
+	ctx context.Context,
+	exec sqlQueryExecutor,
+	ids []int64,
+) (targets map[int64]lockedProxyMutationTarget, err error) {
+	unique := make(map[int64]struct{}, len(ids))
+	ordered := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, exists := unique[id]; exists {
+			continue
+		}
+		unique[id] = struct{}{}
+		ordered = append(ordered, id)
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
+	targets = make(map[int64]lockedProxyMutationTarget, len(ordered))
+	if len(ordered) == 0 {
+		return targets, nil
 	}
 
-	var lockedID int64
-	if err := scanSingleRow(txCtx, exec, `
-		SELECT id
+	rows, err := exec.QueryContext(ctx, `
+		SELECT id, owner_user_id, updated_at
 		FROM proxies
-		WHERE id = $1
+		WHERE id = ANY($1)
 			AND deleted_at IS NULL
+		ORDER BY id ASC
 		FOR UPDATE
-	`, []any{proxyIn.ID}, &lockedID); errors.Is(err, sql.ErrNoRows) {
+	`, pq.Array(ordered))
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
+	}()
+
+	for rows.Next() {
+		var target lockedProxyMutationTarget
+		if err := rows.Scan(&target.id, &target.ownerUserID, &target.updatedAt); err != nil {
+			return nil, err
+		}
+		targets[target.id] = target
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return targets, nil
+}
+
+func (r *proxyRepository) updateLocked(
+	ctx context.Context,
+	client *dbent.Client,
+	exec sqlQueryExecutor,
+	proxyIn *service.Proxy,
+	checkOwnerAssignment bool,
+) error {
+	if err := service.ValidateProxyLifecycleFields(proxyIn); err != nil {
+		return err
+	}
+	lockIDs := []int64{proxyIn.ID}
+	if proxyIn.BackupProxyID != nil {
+		lockIDs = append(lockIDs, *proxyIn.BackupProxyID)
+	}
+	locked, err := lockProxyMutationTargets(ctx, exec, lockIDs)
+	if err != nil {
+		return fmt.Errorf("lock proxy lifecycle targets for update: %w", err)
+	}
+	source, ok := locked[proxyIn.ID]
+	if !ok {
 		return service.ErrProxyNotFound
-	} else if err != nil {
+	}
+	if proxyIn.UpdatedAt.IsZero() || !source.updatedAt.Equal(proxyIn.UpdatedAt) {
+		return service.ErrProxyMutationStale
+	}
+
+	var backup *service.Proxy
+	if proxyIn.BackupProxyID != nil {
+		lockedBackup, exists := locked[*proxyIn.BackupProxyID]
+		if !exists {
+			return service.ErrProxyBackupInvalid
+		}
+		backup = lockedBackup.serviceProxy()
+	}
+	if err := service.ValidateProxyLifecycleCandidate(proxyIn, backup); err != nil {
 		return err
 	}
 
-	if proxyIn.OwnerUserID != nil && *proxyIn.OwnerUserID > 0 {
-		var boundToOthers int64
-		if err := scanSingleRow(txCtx, exec, `
-			SELECT COUNT(*)
-			FROM accounts
-			WHERE proxy_id = $1
-				AND deleted_at IS NULL
-				AND owner_user_id IS NOT NULL
-				AND owner_user_id <> $2
-		`, []any{proxyIn.ID, *proxyIn.OwnerUserID}, &boundToOthers); err != nil {
-			return err
+	currentAccounts, err := countLiveProxyAccounts(ctx, exec, proxyIn.ID)
+	if err != nil {
+		return fmt.Errorf("count proxy %d accounts for update: %w", proxyIn.ID, err)
+	}
+	if proxyIn.MaxAccounts > 0 && currentAccounts > int64(proxyIn.MaxAccounts) {
+		return service.ProxyAccountLimitBelowCurrentError(proxyIn.ID, currentAccounts)
+	}
+
+	ownerAssignmentChanged := proxyOwnerID(source.ownerUserID) != proxyOwnerID(proxyIn.OwnerUserID)
+	if (checkOwnerAssignment || ownerAssignmentChanged) && proxyOwnerID(proxyIn.OwnerUserID) > 0 {
+		boundToOthers, countErr := countProxyOwnerAssignmentConflicts(
+			ctx,
+			exec,
+			proxyIn.ID,
+			proxyOwnerID(proxyIn.OwnerUserID),
+		)
+		if countErr != nil {
+			return countErr
 		}
 		if boundToOthers > 0 {
 			return service.ErrProxyOwnerConflict
 		}
 	}
 
-	if err := r.updateWithClient(txCtx, tx.Client(), proxyIn); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return r.updateWithClient(ctx, client, proxyIn, source.updatedAt)
 }
 
-func (r *proxyRepository) updateWithClient(ctx context.Context, client *dbent.Client, proxyIn *service.Proxy) error {
+func proxyOwnerID(ownerUserID *int64) int64 {
+	if ownerUserID == nil || *ownerUserID <= 0 {
+		return 0
+	}
+	return *ownerUserID
+}
+
+func countLiveProxyAccounts(ctx context.Context, exec sqlExecutor, proxyID int64) (int64, error) {
+	var count int64
+	err := scanSingleRow(ctx, exec, `
+		SELECT COUNT(*)
+		FROM accounts
+		WHERE proxy_id = $1
+			AND deleted_at IS NULL
+	`, []any{proxyID}, &count)
+	return count, err
+}
+
+func countLiveProxyBackupReferences(ctx context.Context, exec sqlExecutor, proxyID int64) (int64, error) {
+	var count int64
+	err := scanSingleRow(ctx, exec, `
+		SELECT COUNT(*)
+		FROM proxies
+		WHERE backup_proxy_id = $1
+			AND deleted_at IS NULL
+	`, []any{proxyID}, &count)
+	return count, err
+}
+
+// countProxyOwnerAssignmentConflicts 统计与目标专属归属不兼容的存量账号。
+// owner_user_id IS NULL 表示平台账号，同样不能继续占用某个用户的专属出口。
+func countProxyOwnerAssignmentConflicts(
+	ctx context.Context,
+	exec sqlExecutor,
+	proxyID int64,
+	ownerUserID int64,
+) (int64, error) {
+	var conflicts int64
+	err := scanSingleRow(ctx, exec, `
+		SELECT COUNT(*)
+		FROM accounts
+		WHERE proxy_id = $1
+			AND deleted_at IS NULL
+			AND (owner_user_id IS NULL OR owner_user_id <> $2)
+	`, []any{proxyID, ownerUserID}, &conflicts)
+	return conflicts, err
+}
+
+func (r *proxyRepository) updateWithClient(
+	ctx context.Context,
+	client *dbent.Client,
+	proxyIn *service.Proxy,
+	expectedUpdatedAt time.Time,
+) error {
 	builder := client.Proxy.UpdateOneID(proxyIn.ID).
+		Where(
+			proxy.UpdatedAtEQ(expectedUpdatedAt),
+			proxy.DeletedAtIsNil(),
+		).
 		SetName(proxyIn.Name).
 		SetProtocol(proxyIn.Protocol).
 		SetHost(proxyIn.Host).
@@ -203,14 +456,100 @@ func (r *proxyRepository) updateWithClient(ctx context.Context, client *dbent.Cl
 		return nil
 	}
 	if dbent.IsNotFound(err) {
-		return service.ErrProxyNotFound
+		return service.ErrProxyMutationStale
 	}
 	return err
 }
 
 func (r *proxyRepository) Delete(ctx context.Context, id int64) error {
-	_, err := r.client.Proxy.Delete().Where(proxy.IDEQ(id)).Exec(ctx)
-	return err
+	return r.DeleteIfUnused(ctx, id)
+}
+
+// DeleteIfUnused 将代理行锁、存量绑定检查和软删除收敛在同一事务中。
+// 所有账号绑定路径使用同一代理行锁后，删除与绑定只能串行生效，避免 live account
+// 最终指向已软删除代理。不存在或已删除的代理保持既有幂等删除语义。
+func (r *proxyRepository) DeleteIfUnused(ctx context.Context, id int64) error {
+	if r == nil || r.client == nil {
+		return fmt.Errorf("proxy deletion repository client is unavailable")
+	}
+	if dbent.TxFromContext(ctx) != nil {
+		client := clientFromContext(ctx, r.client)
+		exec := sqlExecutorFromEntClient(client)
+		if exec == nil {
+			return fmt.Errorf("proxy deletion transaction SQL executor is unavailable")
+		}
+		_, err := deleteProxyIfUnusedLocked(ctx, exec, id)
+		return err
+	}
+
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	txCtx := dbent.NewTxContext(ctx, tx)
+	exec := sqlExecutorFromEntClient(tx.Client())
+	if exec == nil {
+		return fmt.Errorf("proxy deletion transaction SQL executor is unavailable")
+	}
+	deleted, err := deleteProxyIfUnusedLocked(txCtx, exec, id)
+	if err != nil {
+		return err
+	}
+	if !deleted {
+		// Preserve the existing idempotent no-op behavior without committing an
+		// otherwise empty transaction; the deferred rollback releases it.
+		return nil
+	}
+	return tx.Commit()
+}
+
+func deleteProxyIfUnusedLocked(ctx context.Context, exec sqlQueryExecutor, id int64) (bool, error) {
+	var lockedID int64
+	err := scanSingleRow(ctx, exec, `
+		SELECT id
+		FROM proxies
+		WHERE id = $1 AND deleted_at IS NULL
+		FOR UPDATE
+	`, []any{id}, &lockedID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	accountCount, err := countLiveProxyAccounts(ctx, exec, id)
+	if err != nil {
+		return false, err
+	}
+	if accountCount > 0 {
+		return false, service.ErrProxyInUse
+	}
+	backupReferenceCount, err := countLiveProxyBackupReferences(ctx, exec, id)
+	if err != nil {
+		return false, err
+	}
+	if backupReferenceCount > 0 {
+		return false, service.ErrProxyBackupInUse
+	}
+
+	result, err := exec.ExecContext(ctx, `
+		UPDATE proxies
+		SET deleted_at = NOW(), updated_at = NOW()
+		WHERE id = $1 AND deleted_at IS NULL
+	`, id)
+	if err != nil {
+		return false, err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if updated != 1 {
+		return false, service.ErrProxyNotFound
+	}
+	return true, nil
 }
 
 func (r *proxyRepository) List(ctx context.Context, params pagination.PaginationParams) ([]service.Proxy, *pagination.PaginationResult, error) {
@@ -755,23 +1094,52 @@ func (r *proxyRepository) ListAllForFallback(ctx context.Context) ([]service.Pro
 	return out, nil
 }
 
-// SweepExpiredProxies 逐个事务处理到期代理。FOR UPDATE SKIP LOCKED 让多实例并行时
-// 同一代理只由一个 worker 处理；账号更新继续使用旧 proxy_id 谓词，避免覆盖管理员新选择。
+var errProxyExpiryPlanChanged = errors.New("proxy expiry fallback plan changed while acquiring locks")
+
+const maxProxyExpiryPlanRetries = 3
+
+// SweepExpiredProxies 逐个事务处理到期代理。每个事务先无锁发现完整 fallback 链，
+// 再把 source 与链上代理按 ID 升序统一锁定；账号锁只能出现在全部代理锁之后。
+// 锁后计划漂移时重新预览，禁止在已持有较大 ID 锁后动态追加较小 ID 锁。
 func (r *proxyRepository) SweepExpiredProxies(ctx context.Context, now time.Time) (int64, error) {
 	var total int64
+	planRetries := 0
 	for {
 		changed, processed, err := r.sweepNextExpiredProxy(ctx, now)
+		if errors.Is(err, errProxyExpiryPlanChanged) {
+			planRetries++
+			if planRetries >= maxProxyExpiryPlanRetries {
+				return total, err
+			}
+			continue
+		}
 		if err != nil {
 			return total, err
 		}
 		if !processed {
 			return total, nil
 		}
+		planRetries = 0
 		total += changed
 	}
 }
 
 func (r *proxyRepository) sweepNextExpiredProxy(ctx context.Context, now time.Time) (int64, bool, error) {
+	proxyID, found, err := r.nextExpiredProxyID(ctx, now)
+	if err != nil || !found {
+		return 0, false, err
+	}
+
+	preview, err := loadProxyExpirySnapshot(ctx, r.sql)
+	if err != nil {
+		return 0, false, err
+	}
+	previewStart, ok := preview[proxyID]
+	if !ok || !isProxyExpirySweepCandidate(previewStart, now) {
+		return 0, true, nil
+	}
+	previewPlan := buildProxyExpiryLockPlan(previewStart, preview, now)
+
 	tx, err := r.client.Tx(ctx)
 	if err != nil {
 		return 0, false, err
@@ -783,37 +1151,28 @@ func (r *proxyRepository) sweepNextExpiredProxy(ctx context.Context, now time.Ti
 		return 0, false, fmt.Errorf("proxy expiry transaction SQL executor is unavailable")
 	}
 
-	var proxyID int64
-	err = scanSingleRow(txCtx, exec, `
-		SELECT id
-		FROM proxies
-		WHERE deleted_at IS NULL AND status=$1
-			AND expires_at IS NOT NULL AND expires_at <= $2
-		ORDER BY expires_at ASC, id ASC
-		FOR UPDATE SKIP LOCKED
-		LIMIT 1
-	`, []any{service.StatusActive, now}, &proxyID)
-	if errors.Is(err, sql.ErrNoRows) {
+	locked, err := lockProxyExpiryPlan(txCtx, exec, previewPlan.proxyIDs)
+	if err != nil {
+		return 0, false, err
+	}
+	if !proxyExpirySnapshotContainsIDs(locked, previewPlan.proxyIDs) {
+		// 代理正被 mutation guard 或另一个 worker 使用，当前轮不等待、不持有部分锁。
 		return 0, false, nil
 	}
-	if err != nil {
-		return 0, false, err
-	}
 
-	allRows, err := tx.Client().Proxy.Query().All(txCtx)
+	current, err := loadProxyExpirySnapshot(txCtx, exec)
 	if err != nil {
 		return 0, false, err
 	}
-	byID := make(map[int64]service.Proxy, len(allRows))
-	for _, row := range allRows {
-		item := proxyEntityToService(row)
-		byID[item.ID] = *item
+	start, ok := current[proxyID]
+	if !ok || !isProxyExpirySweepCandidate(start, now) {
+		// 另一个事务已完成处理，或管理员在锁获取前取消了到期条件。
+		return 0, true, nil
 	}
-	start, ok := byID[proxyID]
-	if !ok {
-		return 0, false, service.ErrProxyNotFound
+	currentPlan := buildProxyExpiryLockPlan(start, current, now)
+	if !previewPlan.equal(currentPlan) {
+		return 0, false, errProxyExpiryPlanChanged
 	}
-	targetID, change := service.ResolveProxyFallbackTarget(start, byID, now)
 
 	result, err := exec.ExecContext(txCtx, `
 		UPDATE proxies SET status=$1, updated_at=NOW()
@@ -828,14 +1187,44 @@ func (r *proxyRepository) sweepNextExpiredProxy(ctx context.Context, now time.Ti
 		return 0, false, err
 	}
 	if updated == 0 {
-		return 0, false, nil
+		return 0, false, errProxyExpiryPlanChanged
 	}
 
 	changedIDs := make([]int64, 0)
-	if change && targetID == nil {
-		changedIDs, err = rerouteAccountsToDirect(txCtx, exec, proxyID)
-	} else if change {
-		changedIDs, err = r.rerouteAccountsToBackup(txCtx, tx.Client(), exec, proxyID, *targetID, now)
+	if currentPlan.change {
+		accounts, lockErr := tx.Client().Account.Query().
+			Where(dbaccount.ProxyIDEQ(proxyID), dbaccount.ProxyFallbackOriginIDIsNil()).
+			Order(dbent.Asc(dbaccount.FieldID)).
+			ForUpdate().
+			All(txCtx)
+		if lockErr != nil {
+			return 0, false, lockErr
+		}
+		if currentPlan.targetID == nil {
+			changedIDs, err = rerouteAccountsToDirect(txCtx, exec, proxyID)
+		} else {
+			target, targetExists := current[*currentPlan.targetID]
+			if !targetExists {
+				return 0, false, errProxyExpiryPlanChanged
+			}
+			var currentBindings int64
+			if countErr := scanSingleRow(txCtx, exec, `
+				SELECT COUNT(*)
+				FROM accounts
+				WHERE proxy_id = $1 AND deleted_at IS NULL
+			`, []any{target.ID}, &currentBindings); countErr != nil {
+				return 0, false, countErr
+			}
+			changedIDs, err = rerouteLockedAccountsToBackup(
+				txCtx,
+				exec,
+				accounts,
+				proxyID,
+				target,
+				currentBindings,
+				now,
+			)
+		}
 	}
 	if err != nil {
 		return 0, false, err
@@ -851,6 +1240,191 @@ func (r *proxyRepository) sweepNextExpiredProxy(ctx context.Context, now time.Ti
 		return 0, false, err
 	}
 	return int64(len(changedIDs)), true, nil
+}
+
+func (r *proxyRepository) nextExpiredProxyID(ctx context.Context, now time.Time) (int64, bool, error) {
+	if r.sql == nil {
+		return 0, false, fmt.Errorf("proxy expiry SQL executor is unavailable")
+	}
+	var proxyID int64
+	err := scanSingleRow(ctx, r.sql, `
+		SELECT id
+		FROM proxies
+		WHERE deleted_at IS NULL AND status=$1
+			AND expires_at IS NOT NULL AND expires_at <= $2
+		ORDER BY expires_at ASC, id ASC
+		LIMIT 1
+	`, []any{service.StatusActive, now}, &proxyID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	return proxyID, err == nil, err
+}
+
+type proxyExpiryLockPlan struct {
+	sourceID int64
+	path     []int64
+	proxyIDs []int64
+	targetID *int64
+	change   bool
+}
+
+func buildProxyExpiryLockPlan(
+	start service.Proxy,
+	byID map[int64]service.Proxy,
+	now time.Time,
+) proxyExpiryLockPlan {
+	plan := proxyExpiryLockPlan{
+		sourceID: start.ID,
+		path:     []int64{start.ID},
+		proxyIDs: []int64{start.ID},
+	}
+	seen := map[int64]struct{}{start.ID: {}}
+	current := start
+	for current.FallbackMode == service.FallbackModeProxy && current.BackupProxyID != nil {
+		nextID := *current.BackupProxyID
+		plan.path = append(plan.path, nextID)
+		if _, duplicate := seen[nextID]; duplicate {
+			break
+		}
+		seen[nextID] = struct{}{}
+		next, exists := byID[nextID]
+		if !exists {
+			break
+		}
+		plan.proxyIDs = append(plan.proxyIDs, nextID)
+		if next.Status == service.StatusActive && !next.IsExpired(now) {
+			break
+		}
+		current = next
+	}
+	plan.proxyIDs = sortedUniqueProxyExpiryAccountIDs(plan.proxyIDs)
+	plan.targetID, plan.change = service.ResolveProxyFallbackTarget(start, byID, now)
+	return plan
+}
+
+func (p proxyExpiryLockPlan) equal(other proxyExpiryLockPlan) bool {
+	if p.sourceID != other.sourceID || p.change != other.change ||
+		!sameOptionalInt64(p.targetID, other.targetID) {
+		return false
+	}
+	return equalInt64Slices(p.path, other.path) && equalInt64Slices(p.proxyIDs, other.proxyIDs)
+}
+
+func sameOptionalInt64(left, right *int64) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
+}
+
+func equalInt64Slices(left, right []int64) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func isProxyExpirySweepCandidate(proxy service.Proxy, now time.Time) bool {
+	return proxy.Status == service.StatusActive && proxy.ExpiresAt != nil && !proxy.ExpiresAt.After(now)
+}
+
+func loadProxyExpirySnapshot(ctx context.Context, queryer sqlQuerier) (map[int64]service.Proxy, error) {
+	if queryer == nil {
+		return nil, fmt.Errorf("proxy expiry SQL executor is unavailable")
+	}
+	rows, err := queryer.QueryContext(ctx, `
+		SELECT id, owner_user_id, platform, required_account_level, status,
+			max_accounts, expires_at, fallback_mode, backup_proxy_id
+		FROM proxies
+		WHERE deleted_at IS NULL
+	`)
+	if err != nil {
+		return nil, err
+	}
+	return scanProxyExpirySnapshot(rows)
+}
+
+func lockProxyExpiryPlan(
+	ctx context.Context,
+	exec sqlExecutor,
+	proxyIDs []int64,
+) (map[int64]service.Proxy, error) {
+	if len(proxyIDs) == 0 {
+		return map[int64]service.Proxy{}, nil
+	}
+	rows, err := exec.QueryContext(ctx, `
+		SELECT id, owner_user_id, platform, required_account_level, status,
+			max_accounts, expires_at, fallback_mode, backup_proxy_id
+		FROM proxies
+		WHERE deleted_at IS NULL AND id = ANY($1)
+		ORDER BY id ASC
+		FOR UPDATE SKIP LOCKED
+	`, pq.Array(proxyIDs))
+	if err != nil {
+		return nil, err
+	}
+	return scanProxyExpirySnapshot(rows)
+}
+
+func scanProxyExpirySnapshot(rows *sql.Rows) (map[int64]service.Proxy, error) {
+	if rows == nil {
+		return map[int64]service.Proxy{}, nil
+	}
+	defer func() { _ = rows.Close() }()
+	result := make(map[int64]service.Proxy)
+	for rows.Next() {
+		var (
+			item      service.Proxy
+			ownerID   sql.NullInt64
+			expiresAt sql.NullTime
+			backupID  sql.NullInt64
+		)
+		if err := rows.Scan(
+			&item.ID,
+			&ownerID,
+			&item.Platform,
+			&item.RequiredAccountLevel,
+			&item.Status,
+			&item.MaxAccounts,
+			&expiresAt,
+			&item.FallbackMode,
+			&backupID,
+		); err != nil {
+			return nil, err
+		}
+		if ownerID.Valid {
+			value := ownerID.Int64
+			item.OwnerUserID = &value
+		}
+		if expiresAt.Valid {
+			value := expiresAt.Time
+			item.ExpiresAt = &value
+		}
+		if backupID.Valid {
+			value := backupID.Int64
+			item.BackupProxyID = &value
+		}
+		result[item.ID] = item
+	}
+	return result, rows.Err()
+}
+
+func proxyExpirySnapshotContainsIDs(snapshot map[int64]service.Proxy, ids []int64) bool {
+	if len(snapshot) != len(ids) {
+		return false
+	}
+	for _, id := range ids {
+		if _, exists := snapshot[id]; !exists {
+			return false
+		}
+	}
+	return true
 }
 
 func rerouteAccountsToDirect(ctx context.Context, exec sqlExecutor, proxyID int64) ([]int64, error) {
@@ -869,42 +1443,19 @@ func rerouteAccountsToDirect(ctx context.Context, exec sqlExecutor, proxyID int6
 	return scanProxyExpiryAccountIDs(rows)
 }
 
-func (r *proxyRepository) rerouteAccountsToBackup(
+func rerouteLockedAccountsToBackup(
 	ctx context.Context,
-	client *dbent.Client,
 	exec sqlExecutor,
+	accounts []*dbent.Account,
 	sourceProxyID int64,
-	targetProxyID int64,
+	target service.Proxy,
+	currentBindings int64,
 	now time.Time,
 ) ([]int64, error) {
-	targetRow, err := client.Proxy.Query().Where(proxy.IDEQ(targetProxyID)).ForUpdate().Only(ctx)
-	if err != nil {
-		if dbent.IsNotFound(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	target := proxyEntityToService(targetRow)
-	if target == nil || target.Status != service.StatusActive || target.IsExpired(now) {
-		return nil, nil
-	}
-
-	accounts, err := client.Account.Query().
-		Where(dbaccount.ProxyIDEQ(sourceProxyID), dbaccount.ProxyFallbackOriginIDIsNil()).
-		ForUpdate().
-		All(ctx)
-	if err != nil {
-		return nil, err
-	}
-	currentBindings, err := client.Account.Query().Where(dbaccount.ProxyIDEQ(targetProxyID)).Count(ctx)
-	if err != nil {
-		return nil, err
-	}
-
 	changed := make([]int64, 0, len(accounts))
 	for _, row := range accounts {
 		account := accountEntityToService(row)
-		if account == nil || !service.CanAccountUseProxyFallback(*target, *account, int64(currentBindings), now) {
+		if account == nil || !service.CanAccountUseProxyFallback(target, *account, currentBindings, now) {
 			continue
 		}
 		rows, updateErr := exec.QueryContext(ctx, `
@@ -915,7 +1466,7 @@ func (r *proxyRepository) rerouteAccountsToBackup(
 				updated_at=NOW()
 			WHERE id=$3 AND proxy_id=$1 AND proxy_fallback_origin_id IS NULL AND deleted_at IS NULL
 			RETURNING id
-		`, sourceProxyID, targetProxyID, row.ID)
+		`, sourceProxyID, target.ID, row.ID)
 		if updateErr != nil {
 			return nil, updateErr
 		}

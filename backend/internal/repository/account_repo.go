@@ -117,73 +117,23 @@ func translateAccountPersistenceError(err error, notFound *infraerrors.Applicati
 }
 
 func (r *accountRepository) Create(ctx context.Context, account *service.Account) error {
+	if account == nil {
+		return service.ErrAccountNilInput
+	}
+	if accountPositiveProxyID(account) > 0 {
+		return r.createAccountInTransaction(ctx, accountCreateTransactionInput{account: account})
+	}
 	return r.createAccount(ctx, r.client, r.sql, account)
 }
 
 // CreateWithAccountGroups atomically persists a duplicated account, its exact
 // per-group priorities, and the scheduler outbox event for the new route.
 func (r *accountRepository) CreateWithAccountGroups(ctx context.Context, account *service.Account, groups []service.AccountGroup) error {
-	if account == nil {
-		return service.ErrAccountNilInput
-	}
-	tx, err := r.client.Tx(ctx)
-	if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
-		return err
-	}
-
-	txCtx := ctx
-	txClient := r.client
-	if tx != nil {
-		defer func() { _ = tx.Rollback() }()
-		txCtx = dbent.NewTxContext(ctx, tx)
-		txClient = tx.Client()
-	}
-	exec := sqlExecutorFromEntClient(txClient)
-	if exec == nil {
-		return fmt.Errorf("transaction sql executor is unavailable")
-	}
-
-	groupIDs := make([]int64, 0, len(groups))
-	seenGroupIDs := make(map[int64]struct{}, len(groups))
-	for _, group := range groups {
-		if group.GroupID <= 0 {
-			return fmt.Errorf("duplicate account group id must be positive")
-		}
-		if _, exists := seenGroupIDs[group.GroupID]; exists {
-			return fmt.Errorf("duplicate account group id %d", group.GroupID)
-		}
-		seenGroupIDs[group.GroupID] = struct{}{}
-		groupIDs = append(groupIDs, group.GroupID)
-	}
-	account.GroupIDs = append([]int64(nil), groupIDs...)
-	if err := r.createAccountRecord(txCtx, txClient, account); err != nil {
-		return err
-	}
-
-	if len(groups) > 0 {
-		builders := make([]*dbent.AccountGroupCreate, 0, len(groups))
-		for i := range groups {
-			groups[i].AccountID = account.ID
-			builders = append(builders, txClient.AccountGroup.Create().
-				SetAccountID(account.ID).
-				SetGroupID(groups[i].GroupID).
-				SetPriority(groups[i].Priority),
-			)
-		}
-		if _, err := txClient.AccountGroup.CreateBulk(builders...).Save(txCtx); err != nil {
-			return fmt.Errorf("create duplicate account groups: %w", err)
-		}
-	}
-	if err := enqueueSchedulerOutbox(txCtx, exec, service.SchedulerOutboxEventAccountChanged, &account.ID, nil, buildSchedulerGroupPayload(groupIDs)); err != nil {
-		return fmt.Errorf("enqueue duplicate account scheduler event: %w", err)
-	}
-	if tx != nil {
-		if err := tx.Commit(); err != nil {
-			return err
-		}
-	}
-	account.AccountGroups = append([]service.AccountGroup(nil), groups...)
-	return nil
+	return r.createAccountInTransaction(ctx, accountCreateTransactionInput{
+		account:       account,
+		groups:        groups,
+		persistGroups: true,
+	})
 }
 
 func (r *accountRepository) CreateOwnedWithProxyCapacity(ctx context.Context, ownerUserID int64, account *service.Account) error {
@@ -196,25 +146,302 @@ func (r *accountRepository) CreateOwnedWithProxyCapacity(ctx context.Context, ow
 	if account.ProxyID == nil || *account.ProxyID <= 0 {
 		return service.ErrProxyNotFound
 	}
+	if account.OwnerUserID == nil || *account.OwnerUserID != ownerUserID {
+		return service.ErrProxyOwnerConflict
+	}
+	return r.createAccountInTransaction(ctx, accountCreateTransactionInput{
+		account:          account,
+		ownedProxyGuard:  true,
+		proxyOwnerUserID: ownerUserID,
+	})
+}
 
-	tx, err := r.client.Tx(ctx)
+// WithCRSProxyAccountUnitOfWork keeps a CRS proxy mutation and the matching
+// account mutation on one Ent transaction. An existing transaction is reused;
+// only the repository that opened a transaction commits it.
+func (r *accountRepository) WithCRSProxyAccountUnitOfWork(ctx context.Context, mutate func(context.Context) error) error {
+	if mutate == nil {
+		return errors.New("CRS proxy-account unit of work callback is nil")
+	}
+	return r.withAccountCreateTransaction(ctx, func(txCtx context.Context, _ *dbent.Client, _ sqlQueryExecutor) error {
+		return mutate(txCtx)
+	})
+}
+
+type accountCreateTransactionInput struct {
+	account          *service.Account
+	groups           []service.AccountGroup
+	persistGroups    bool
+	ownedProxyGuard  bool
+	proxyOwnerUserID int64
+}
+
+func (r *accountRepository) createAccountInTransaction(ctx context.Context, input accountCreateTransactionInput) error {
+	if input.account == nil {
+		return service.ErrAccountNilInput
+	}
+	// Ent fills generated fields before the surrounding transaction commits. Keep
+	// them on a candidate so a group/outbox/commit failure cannot leak phantom
+	// persistence state to the caller. Outer UoW callers likewise pass a staged
+	// account because only the outer owner can observe its eventual commit.
+	original := input.account
+	candidate := cloneAccountForCreate(original)
+	groups := append([]service.AccountGroup(nil), input.groups...)
+	input.account = candidate
+	input.groups = groups
+
+	groupIDs := append([]int64(nil), candidate.GroupIDs...)
+	if input.persistGroups {
+		var err error
+		groupIDs, err = validateAccountCreateGroups(groups)
+		if err != nil {
+			return err
+		}
+		candidate.GroupIDs = append([]int64(nil), groupIDs...)
+	}
+
+	err := r.withAccountCreateTransaction(ctx, func(txCtx context.Context, txClient *dbent.Client, exec sqlQueryExecutor) error {
+		if accountPositiveProxyID(input.account) > 0 {
+			if err := ensureAccountCreateProxyBindingInTx(txCtx, exec, input); err != nil {
+				return err
+			}
+		}
+		if err := r.createAccountRecord(txCtx, txClient, input.account); err != nil {
+			return err
+		}
+		if input.persistGroups {
+			if err := createAccountGroupsInTx(txCtx, txClient, input.account.ID, input.groups); err != nil {
+				return err
+			}
+		}
+		if err := enqueueSchedulerOutbox(txCtx, exec, service.SchedulerOutboxEventAccountChanged, &input.account.ID, nil, buildSchedulerGroupPayload(groupIDs)); err != nil {
+			return fmt.Errorf("enqueue account create scheduler event: %w", err)
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
+	if input.persistGroups {
+		candidate.AccountGroups = append([]service.AccountGroup(nil), groups...)
+	}
+	*original = *candidate
+	return nil
+}
+
+func cloneAccountForCreate(account *service.Account) *service.Account {
+	if account == nil {
+		return nil
+	}
+	candidate := *account
+	candidate.GroupIDs = append([]int64(nil), account.GroupIDs...)
+	candidate.AccountGroups = append([]service.AccountGroup(nil), account.AccountGroups...)
+	candidate.Groups = append([]*service.Group(nil), account.Groups...)
+	return &candidate
+}
+
+func (r *accountRepository) withAccountCreateTransaction(
+	ctx context.Context,
+	mutate func(context.Context, *dbent.Client, sqlQueryExecutor) error,
+) error {
+	return r.withAccountWriteTransaction(ctx, "account create", mutate)
+}
+
+func (r *accountRepository) withAccountWriteTransaction(
+	ctx context.Context,
+	operation string,
+	mutate func(context.Context, *dbent.Client, sqlQueryExecutor) error,
+) error {
+	if r == nil || r.client == nil {
+		return errors.New("account repository client is unavailable")
+	}
+	if mutate == nil {
+		return fmt.Errorf("%s transaction callback is nil", operation)
+	}
+	if tx := dbent.TxFromContext(ctx); tx != nil {
+		txClient := clientFromContext(ctx, r.client)
+		exec := sqlExecutorFromEntClient(txClient)
+		if exec == nil {
+			return errors.New("transaction sql executor is unavailable")
+		}
+		return mutate(ctx, txClient, exec)
+	}
+
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("begin %s transaction: %w", operation, err)
+	}
 	defer func() { _ = tx.Rollback() }()
+
 	txCtx := dbent.NewTxContext(ctx, tx)
 	exec := sqlExecutorFromEntClient(tx.Client())
 	if exec == nil {
-		return fmt.Errorf("transaction sql executor is unavailable")
+		return errors.New("transaction sql executor is unavailable")
+	}
+	if err := mutate(txCtx, tx.Client(), exec); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit %s transaction: %w", operation, err)
+	}
+	return nil
+}
+
+func validateAccountCreateGroups(groups []service.AccountGroup) ([]int64, error) {
+	groupIDs := make([]int64, 0, len(groups))
+	seenGroupIDs := make(map[int64]struct{}, len(groups))
+	for _, group := range groups {
+		if group.GroupID <= 0 {
+			return nil, errors.New("duplicate account group id must be positive")
+		}
+		if _, exists := seenGroupIDs[group.GroupID]; exists {
+			return nil, fmt.Errorf("duplicate account group id %d", group.GroupID)
+		}
+		seenGroupIDs[group.GroupID] = struct{}{}
+		groupIDs = append(groupIDs, group.GroupID)
+	}
+	return groupIDs, nil
+}
+
+func createAccountGroupsInTx(ctx context.Context, client *dbent.Client, accountID int64, groups []service.AccountGroup) error {
+	if len(groups) == 0 {
+		return nil
+	}
+	builders := make([]*dbent.AccountGroupCreate, 0, len(groups))
+	for i := range groups {
+		groups[i].AccountID = accountID
+		builders = append(builders, client.AccountGroup.Create().
+			SetAccountID(accountID).
+			SetGroupID(groups[i].GroupID).
+			SetPriority(groups[i].Priority),
+		)
+	}
+	if _, err := client.AccountGroup.CreateBulk(builders...).Save(ctx); err != nil {
+		return fmt.Errorf("create duplicate account groups: %w", err)
+	}
+	return nil
+}
+
+func accountPositiveProxyID(account *service.Account) int64 {
+	if account == nil || account.ProxyID == nil || *account.ProxyID <= 0 {
+		return 0
+	}
+	return *account.ProxyID
+}
+
+func accountHasCRSSyncIdentity(account *service.Account) bool {
+	if account == nil || account.Extra == nil {
+		return false
+	}
+	crsAccountID, ok := account.Extra["crs_account_id"].(string)
+	return ok && strings.TrimSpace(crsAccountID) != ""
+}
+
+func accountPositiveOwnerUserID(account *service.Account) int64 {
+	if account == nil || account.OwnerUserID == nil || *account.OwnerUserID <= 0 {
+		return 0
+	}
+	return *account.OwnerUserID
+}
+
+func ownedProxyScopeForAccount(account *service.Account) service.ProxyScope {
+	if account == nil {
+		return service.NewOwnedProxyScope("", "", 0)
+	}
+	return service.NewOwnedProxyScope(account.Platform, account.AccountLevel, accountPositiveOwnerUserID(account))
+}
+
+func accountProxyCompatibilityScopeUnchanged(before, after *service.Account) bool {
+	return ownedProxyScopeForAccount(before) == ownedProxyScopeForAccount(after)
+}
+
+func ensureAccountCreateProxyBindingInTx(
+	ctx context.Context,
+	exec sqlQueryExecutor,
+	input accountCreateTransactionInput,
+) error {
+	if exec == nil {
+		return errors.New("transaction sql executor is unavailable")
+	}
+	account := input.account
+	proxyID := accountPositiveProxyID(account)
+	if proxyID <= 0 {
+		return nil
 	}
 
-	if err := ensureOwnedProxyCapacityForCreateInTx(txCtx, exec, ownerUserID, *account.ProxyID); err != nil {
+	proxy, err := lockLiveProxyForAccountCreate(ctx, exec, proxyID)
+	if err != nil {
 		return err
 	}
-	if err := r.createAccount(txCtx, tx.Client(), exec, account); err != nil {
-		return err
+	if proxy.IsExpired(time.Now()) {
+		return service.ErrProxyNotFound
 	}
-	return tx.Commit()
+	if accountHasCRSSyncIdentity(account) {
+		scope := service.NewProxyScope(account.Platform, account.AccountLevel)
+		if !proxy.IsActive() || proxy.OwnerUserID != nil || !scope.Allows(proxy) {
+			return service.ErrProxyNotFound
+		}
+	} else {
+		ownerUserID := accountPositiveOwnerUserID(account)
+		if input.ownedProxyGuard && ownerUserID != input.proxyOwnerUserID {
+			return service.ErrProxyOwnerConflict
+		}
+		if proxy.OwnerUserID != nil && !proxy.IsOwnedBy(ownerUserID) {
+			return service.ErrProxyOwnerConflict
+		}
+		scope := ownedProxyScopeForAccount(account)
+		if !proxy.IsActive() || !scope.Allows(proxy) {
+			return service.ErrProxyNotFound
+		}
+	}
+
+	if proxy.MaxAccounts <= 0 {
+		return nil
+	}
+	var current int64
+	if err := scanSingleRow(ctx, exec, `
+		SELECT COUNT(*)
+		FROM accounts
+		WHERE proxy_id = $1
+			AND deleted_at IS NULL
+	`, []any{proxyID}, &current); err != nil {
+		return fmt.Errorf("count proxy %d accounts for create: %w", proxyID, err)
+	}
+	if current+1 > int64(proxy.MaxAccounts) {
+		return service.ProxyAccountLimitExceededError(proxyID, current, int64(proxy.MaxAccounts), 1)
+	}
+	return nil
+}
+
+func lockLiveProxyForAccountCreate(ctx context.Context, exec sqlQueryExecutor, proxyID int64) (*service.Proxy, error) {
+	proxy := &service.Proxy{}
+	var ownerUserID sql.NullInt64
+	err := scanSingleRow(ctx, exec, `
+		SELECT id, owner_user_id, platform, required_account_level, status, max_accounts, expires_at
+		FROM proxies
+		WHERE id = $1
+			AND deleted_at IS NULL
+		FOR UPDATE
+	`, []any{proxyID},
+		&proxy.ID,
+		&ownerUserID,
+		&proxy.Platform,
+		&proxy.RequiredAccountLevel,
+		&proxy.Status,
+		&proxy.MaxAccounts,
+		&proxy.ExpiresAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, service.ErrProxyNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("lock proxy %d for account create: %w", proxyID, err)
+	}
+	if ownerUserID.Valid && ownerUserID.Int64 > 0 {
+		ownerID := ownerUserID.Int64
+		proxy.OwnerUserID = &ownerID
+	}
+	return proxy, nil
 }
 
 func (r *accountRepository) createAccount(ctx context.Context, client *dbent.Client, exec sqlExecutor, account *service.Account) error {
@@ -306,47 +533,6 @@ func (r *accountRepository) createAccountRecord(ctx context.Context, client *dbe
 		if err := r.syncAccountErrorSince(ctx, account.ID, account.Status); err != nil {
 			return err
 		}
-	}
-	return nil
-}
-
-func ensureOwnedProxyCapacityForCreateInTx(ctx context.Context, exec sqlQueryExecutor, ownerUserID, proxyID int64) error {
-	if ownerUserID <= 0 {
-		return service.ErrUserNotFound
-	}
-	if proxyID <= 0 {
-		return service.ErrProxyNotFound
-	}
-
-	var maxAccounts int
-	if err := scanSingleRow(ctx, exec, `
-		SELECT max_accounts
-		FROM proxies
-		WHERE id = $1
-			AND status = $2
-			AND deleted_at IS NULL
-			AND (owner_user_id IS NULL OR owner_user_id = $3)
-		FOR UPDATE
-	`, []any{proxyID, service.StatusActive, ownerUserID}, &maxAccounts); errors.Is(err, sql.ErrNoRows) {
-		return service.ErrProxyNotFound
-	} else if err != nil {
-		return err
-	}
-	if maxAccounts <= 0 {
-		return nil
-	}
-
-	var current int64
-	if err := scanSingleRow(ctx, exec, `
-		SELECT COUNT(*)
-		FROM accounts
-		WHERE proxy_id = $1
-			AND deleted_at IS NULL
-	`, []any{proxyID}, &current); err != nil {
-		return err
-	}
-	if current+1 > int64(maxAccounts) {
-		return service.ProxyAccountLimitExceededError(proxyID, current, int64(maxAccounts), 1)
 	}
 	return nil
 }
@@ -856,6 +1042,11 @@ type accountMutationLockedTarget struct {
 	impact  service.AccountPlacementImpact
 }
 
+type accountMutationProxyCapacityDelta struct {
+	additional int64
+	removed    int64
+}
+
 // accountMutationPlacementBinding 是「投放进广场公共号池」的账号。
 //
 // 房间账号通过 account_share_room_accounts 产生 room binding，天然进得了守卫；
@@ -898,15 +1089,16 @@ func (r *accountRepository) WithAccountMutationGuard(
 		return service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{"stage": "discovery_executor"})
 	}
 
-	// Discover room bindings before the transaction so the write path can keep
-	// the global lock order: listing -> account -> membership/binding. The
-	// bindings are re-read after account locks are acquired; a newly committed
-	// binding that was not covered by this pre-lock set fails fast and retries
-	// instead of taking a listing lock in reverse order.
+	// Discover room bindings before the transaction so the write path can keep the
+	// global lock order: listing -> target proxy -> account -> membership/binding.
+	// Target proxies come exclusively from the requested after-state and are always
+	// locked; an unlocked account snapshot must never be allowed to shrink the lock
+	// set needed by the final proxy-capacity decision.
 	discoveredRoomBindings, err := loadAccountMutationRoomBindings(ctx, r.sql, ids)
 	if err != nil {
 		return service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{"stage": "room_binding_discovery"}).WithCause(err)
 	}
+	targetProxyIDs := accountMutationTargetProxyIDs(targets)
 
 	tx, err := r.client.Tx(ctx)
 	if err != nil {
@@ -920,6 +1112,10 @@ func (r *accountRepository) WithAccountMutationGuard(
 		return service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{"stage": "transaction_executor"})
 	}
 	if err := lockAndHydrateAccountMutationRooms(txCtx, exec, discoveredRoomBindings); err != nil {
+		return err
+	}
+	lockedProxies, err := lockAccountMutationTargetProxies(txCtx, exec, targetProxyIDs)
+	if err != nil {
 		return err
 	}
 
@@ -971,6 +1167,13 @@ func (r *accountRepository) WithAccountMutationGuard(
 		if impact.RequiresForce() {
 			placementForceIDs = append(placementForceIDs, entity.ID)
 		}
+	}
+	proxyDeltas := accountMutationProxyCapacityDeltas(lockedTargets)
+	if err := validateAccountMutationTargetProxies(request, lockedTargets, lockedProxies, proxyDeltas); err != nil {
+		return err
+	}
+	if err := ensureAccountMutationProxyCapacities(txCtx, exec, lockedProxies, proxyDeltas); err != nil {
+		return err
 	}
 
 	roomBindings, err := loadAccountMutationRoomBindings(txCtx, exec, sensitiveIDs)
@@ -1025,6 +1228,223 @@ func normalizeAccountMutationTargets(
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 	return targets, ids, nil
+}
+
+func accountMutationTargetProxyIDs(
+	targets map[int64]service.AccountMutationGuardTarget,
+) []int64 {
+	proxyIDs := make([]int64, 0, len(targets))
+	for _, target := range targets {
+		nextProxyID := accountMutationPositiveProxyID(target.After)
+		if nextProxyID <= 0 {
+			continue
+		}
+		proxyIDs = append(proxyIDs, nextProxyID)
+	}
+	return uniqueSortedPositiveInt64s(proxyIDs)
+}
+
+func accountMutationPositiveProxyID(account *service.Account) int64 {
+	if account == nil || account.ProxyID == nil || *account.ProxyID <= 0 {
+		return 0
+	}
+	return *account.ProxyID
+}
+
+func lockAccountMutationTargetProxies(
+	ctx context.Context,
+	exec sqlQueryExecutor,
+	proxyIDs []int64,
+) (map[int64]*service.Proxy, error) {
+	locked := make(map[int64]*service.Proxy, len(proxyIDs))
+	if len(proxyIDs) == 0 {
+		return locked, nil
+	}
+	rows, err := exec.QueryContext(ctx, `
+		SELECT id, owner_user_id, platform, required_account_level, status, max_accounts, expires_at
+		FROM proxies
+		WHERE id = ANY($1)
+			AND deleted_at IS NULL
+		ORDER BY id
+		FOR UPDATE
+	`, pq.Array(proxyIDs))
+	if err != nil {
+		return nil, service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{"stage": "proxy_lock"}).WithCause(err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		proxy := &service.Proxy{}
+		var ownerUserID sql.NullInt64
+		if err := rows.Scan(
+			&proxy.ID,
+			&ownerUserID,
+			&proxy.Platform,
+			&proxy.RequiredAccountLevel,
+			&proxy.Status,
+			&proxy.MaxAccounts,
+			&proxy.ExpiresAt,
+		); err != nil {
+			return nil, err
+		}
+		if ownerUserID.Valid && ownerUserID.Int64 > 0 {
+			value := ownerUserID.Int64
+			proxy.OwnerUserID = &value
+		}
+		locked[proxy.ID] = proxy
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{"stage": "proxy_lock_close"}).WithCause(err)
+	}
+	if len(locked) != len(proxyIDs) {
+		return nil, service.ErrProxyNotFound
+	}
+	return locked, nil
+}
+
+func accountMutationProxyCapacityDeltas(
+	targets map[int64]*accountMutationLockedTarget,
+) map[int64]accountMutationProxyCapacityDelta {
+	deltas := make(map[int64]accountMutationProxyCapacityDelta)
+	for _, target := range targets {
+		if target == nil {
+			continue
+		}
+		beforeProxyID := accountMutationPositiveProxyID(target.before)
+		afterProxyID := accountMutationPositiveProxyID(target.request.After)
+		if beforeProxyID == afterProxyID {
+			continue
+		}
+		if beforeProxyID > 0 {
+			delta := deltas[beforeProxyID]
+			delta.removed++
+			deltas[beforeProxyID] = delta
+		}
+		if afterProxyID > 0 {
+			delta := deltas[afterProxyID]
+			delta.additional++
+			deltas[afterProxyID] = delta
+		}
+	}
+	return deltas
+}
+
+func validateAccountMutationTargetProxies(
+	request service.AccountMutationGuardRequest,
+	targets map[int64]*accountMutationLockedTarget,
+	lockedProxies map[int64]*service.Proxy,
+	deltas map[int64]accountMutationProxyCapacityDelta,
+) error {
+	now := time.Now()
+	for proxyID, delta := range deltas {
+		if delta.additional <= 0 {
+			continue
+		}
+		if lockedProxies[proxyID] == nil {
+			return service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{
+				"proxy_id": strconv.FormatInt(proxyID, 10),
+				"stage":    "proxy_lock_set",
+			})
+		}
+	}
+	for _, target := range targets {
+		if target == nil {
+			continue
+		}
+		afterProxyID := accountMutationPositiveProxyID(target.request.After)
+		if afterProxyID <= 0 {
+			continue
+		}
+		proxy := lockedProxies[afterProxyID]
+		if proxy == nil {
+			return service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{
+				"proxy_id": strconv.FormatInt(afterProxyID, 10),
+				"stage":    "proxy_lock_set",
+			})
+		}
+		after := target.request.After
+		if request.Intent == service.AccountMutationIntentOwner {
+			scope := ownedProxyScopeForAccount(after)
+			if !proxy.IsActive() || proxy.IsExpired(now) || !scope.Allows(proxy) {
+				return service.ErrProxyNotFound
+			}
+			continue
+		}
+		if accountHasCRSSyncIdentity(after) {
+			scope := service.NewProxyScope(after.Platform, after.AccountLevel)
+			if !proxy.IsActive() || proxy.IsExpired(now) || proxy.OwnerUserID != nil || !scope.Allows(proxy) {
+				return service.ErrProxyNotFound
+			}
+			continue
+		}
+		beforeProxyID := accountMutationPositiveProxyID(target.before)
+		if proxy.OwnerUserID != nil && (after.OwnerUserID == nil || *after.OwnerUserID != *proxy.OwnerUserID) {
+			return service.ErrProxyOwnerConflict
+		}
+		if beforeProxyID != afterProxyID || !accountProxyCompatibilityScopeUnchanged(target.before, after) {
+			scope := ownedProxyScopeForAccount(after)
+			if !proxy.IsActive() || proxy.IsExpired(now) || !scope.Allows(proxy) {
+				return service.ErrProxyNotFound
+			}
+		}
+	}
+	return nil
+}
+
+func ensureAccountMutationProxyCapacities(
+	ctx context.Context,
+	exec sqlQueryExecutor,
+	lockedProxies map[int64]*service.Proxy,
+	deltas map[int64]accountMutationProxyCapacityDelta,
+) error {
+	proxyIDs := make([]int64, 0, len(deltas))
+	for proxyID, delta := range deltas {
+		if delta.additional > 0 {
+			proxyIDs = append(proxyIDs, proxyID)
+		}
+	}
+	sort.Slice(proxyIDs, func(i, j int) bool { return proxyIDs[i] < proxyIDs[j] })
+	for _, proxyID := range proxyIDs {
+		proxy := lockedProxies[proxyID]
+		if proxy == nil || proxy.MaxAccounts <= 0 {
+			continue
+		}
+		var current int64
+		if err := scanSingleRow(ctx, exec, `
+			SELECT COUNT(*)
+			FROM accounts
+			WHERE proxy_id = $1
+				AND deleted_at IS NULL
+		`, []any{proxyID}, &current); err != nil {
+			return fmt.Errorf("count proxy %d accounts in mutation guard: %w", proxyID, err)
+		}
+		if err := validateAccountMutationProxyCapacity(proxyID, current, int64(proxy.MaxAccounts), deltas[proxyID]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateAccountMutationProxyCapacity(
+	proxyID, current, limit int64,
+	delta accountMutationProxyCapacityDelta,
+) error {
+	if limit <= 0 || delta.additional <= 0 {
+		return nil
+	}
+	remaining := current - delta.removed
+	if remaining < 0 {
+		return service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{
+			"proxy_id": strconv.FormatInt(proxyID, 10),
+			"stage":    "proxy_capacity_snapshot",
+		})
+	}
+	if remaining+delta.additional > limit {
+		return service.ProxyAccountLimitExceededError(proxyID, remaining, limit, delta.additional)
+	}
+	return nil
 }
 
 func loadAccountMutationRoomBindings(
@@ -1733,10 +2153,31 @@ func loadAccountGroupIDsWithClient(ctx context.Context, client *dbent.Client, ac
 
 func (r *accountRepository) Update(ctx context.Context, account *service.Account) error {
 	if account == nil {
-		return nil
+		return service.ErrAccountNilInput
+	}
+	guardMetadata := map[string]string{
+		"account_id": strconv.FormatInt(account.ID, 10),
+		"operation":  "broad_account_update",
+	}
+	if !service.AccountMutationGuardActive(ctx) {
+		guardMetadata["stage"] = "missing_guard"
+		return service.ErrAccountMutationGuardUnavailable.WithMetadata(guardMetadata)
+	}
+	if dbent.TxFromContext(ctx) == nil {
+		guardMetadata["stage"] = "missing_transaction"
+		return service.ErrAccountMutationGuardUnavailable.WithMetadata(guardMetadata)
+	}
+	if r == nil || r.client == nil {
+		guardMetadata["stage"] = "repository_unavailable"
+		return service.ErrAccountMutationGuardUnavailable.WithMetadata(guardMetadata)
 	}
 
 	client := clientFromContext(ctx, r.client)
+	exec := sqlExecutorFromEntClient(client)
+	if exec == nil {
+		guardMetadata["stage"] = "transaction_executor"
+		return service.ErrAccountMutationGuardUnavailable.WithMetadata(guardMetadata)
+	}
 	builder := applyAccountUpdateFields(client.Account.UpdateOneID(account.ID), account)
 
 	updated, err := builder.Save(ctx)
@@ -1747,13 +2188,8 @@ func (r *accountRepository) Update(ctx context.Context, account *service.Account
 	if err := r.syncAccountErrorSince(ctx, account.ID, account.Status); err != nil {
 		return err
 	}
-	if err := enqueueSchedulerOutbox(ctx, txAwareSQLExecutor(ctx, r.sql, r.client), service.SchedulerOutboxEventAccountChanged, &account.ID, nil, buildSchedulerGroupPayload(account.GroupIDs)); err != nil {
-		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue account update failed: account=%d err=%v", account.ID, err)
-	}
-	// 普通账号编辑（如 model_mapping / credentials）也需要立即刷新单账号快照，
-	// 否则网关在 outbox worker 延迟或异常时仍可能读到旧配置。
-	if dbent.TxFromContext(ctx) == nil {
-		r.syncSchedulerAccountSnapshot(ctx, account.ID)
+	if err := enqueueSchedulerOutbox(ctx, exec, service.SchedulerOutboxEventAccountChanged, &account.ID, nil, buildSchedulerGroupPayload(account.GroupIDs)); err != nil {
+		return fmt.Errorf("enqueue account update scheduler event: %w", err)
 	}
 	return nil
 }
@@ -2077,6 +2513,59 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 			nil,
 		)
 	})
+}
+
+// UpdateStatusAndError atomically updates only the account health fields and
+// appends the scheduler invalidation event. It deliberately does not accept an
+// Account snapshot, so a stale caller cannot overwrite proxy routing or other
+// unrelated account state.
+func (r *accountRepository) UpdateStatusAndError(ctx context.Context, id int64, status, errorMessage string) error {
+	if id <= 0 {
+		return service.ErrAccountNotFound
+	}
+	ownsTransaction := dbent.TxFromContext(ctx) == nil
+	err := r.withAccountWriteTransaction(ctx, "account status update", func(txCtx context.Context, _ *dbent.Client, exec sqlQueryExecutor) error {
+		result, err := exec.ExecContext(txCtx, `
+			UPDATE accounts
+			SET status = $2,
+				error_message = $3,
+				error_since = CASE
+					WHEN $2 = $4 THEN COALESCE(error_since, NOW())
+					ELSE NULL
+				END,
+				updated_at = NOW()
+			WHERE id = $1
+				AND deleted_at IS NULL
+		`, id, status, errorMessage, service.StatusError)
+		if err != nil {
+			return err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected == 0 {
+			return service.ErrAccountNotFound
+		}
+		if err := enqueueSchedulerOutbox(
+			txCtx,
+			exec,
+			service.SchedulerOutboxEventAccountChanged,
+			&id,
+			nil,
+			nil,
+		); err != nil {
+			return fmt.Errorf("enqueue account status scheduler event: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if ownsTransaction {
+		r.syncSchedulerAccountSnapshot(ctx, id)
+	}
+	return nil
 }
 
 func (r *accountRepository) Delete(ctx context.Context, id int64) error {
@@ -4068,13 +4557,10 @@ func (r *accountRepository) GetGroups(ctx context.Context, accountID int64) ([]s
 }
 
 func (r *accountRepository) BindGroups(ctx context.Context, accountID int64, groupIDs []int64) error {
-	existingGroupIDs, err := r.loadAccountGroupIDs(ctx, accountID)
-	if err != nil {
-		return err
-	}
 	var tx *dbent.Tx
 	txCtx := ctx
 	txClient := clientFromContext(ctx, r.client)
+	var err error
 	if dbent.TxFromContext(ctx) == nil {
 		tx, err = r.client.Tx(ctx)
 		if err != nil {
@@ -4083,6 +4569,18 @@ func (r *accountRepository) BindGroups(ctx context.Context, accountID int64, gro
 		defer func() { _ = tx.Rollback() }()
 		txClient = tx.Client()
 		txCtx = dbent.NewTxContext(ctx, tx)
+	}
+	exec := sqlExecutorFromEntClient(txClient)
+	if exec == nil {
+		return service.ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{
+			"account_id": strconv.FormatInt(accountID, 10),
+			"operation":  "bind_account_groups",
+			"stage":      "transaction_executor",
+		})
+	}
+	existingGroupIDs, err := loadAccountGroupIDsWithClient(txCtx, txClient, accountID)
+	if err != nil {
+		return err
 	}
 
 	if _, err := txClient.AccountGroup.Delete().Where(dbaccountgroup.AccountIDEQ(accountID)).Exec(txCtx); err != nil {
@@ -4105,7 +4603,7 @@ func (r *accountRepository) BindGroups(ctx context.Context, accountID int64, gro
 	}
 
 	payload := buildSchedulerGroupPayload(mergeGroupIDs(existingGroupIDs, groupIDs))
-	if err := enqueueSchedulerOutbox(txCtx, txAwareSQLExecutor(txCtx, r.sql, r.client), service.SchedulerOutboxEventAccountGroupsChanged, &accountID, nil, payload); err != nil {
+	if err := enqueueSchedulerOutbox(txCtx, exec, service.SchedulerOutboxEventAccountGroupsChanged, &accountID, nil, payload); err != nil {
 		return err
 	}
 	if tx != nil {

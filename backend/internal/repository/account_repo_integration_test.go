@@ -88,7 +88,7 @@ func (s *schedulerCacheRecorder) SetOutboxWatermark(ctx context.Context, id int6
 
 func (s *AccountRepoSuite) SetupTest() {
 	tx := testEntTx(s.T())
-	s.ctx = dbent.NewTxContext(context.Background(), tx)
+	s.ctx = service.WithAccountMutationGuardContext(dbent.NewTxContext(context.Background(), tx))
 	s.client = tx.Client()
 	s.repo = newAccountRepositoryWithSQL(s.client, tx, nil)
 }
@@ -147,7 +147,7 @@ func (s *AccountRepoSuite) TestUpdate_SyncSchedulerSnapshotOnDisabled() {
 	repo.schedulerCache = cacheRecorder
 
 	account.Status = service.StatusDisabled
-	err := repo.Update(context.Background(), account)
+	err := repo.UpdateStatusAndError(context.Background(), account.ID, account.Status, account.ErrorMessage)
 	s.Require().NoError(err, "Update")
 
 	s.Require().Len(cacheRecorder.setAccounts, 1)
@@ -177,7 +177,7 @@ func (s *AccountRepoSuite) TestUpdate_SyncSchedulerSnapshotOnCredentialsChange()
 			"gpt-5": "gpt-5.2",
 		},
 	}
-	err := repo.Update(context.Background(), account)
+	err := repo.UpdateCredentials(context.Background(), account.ID, account.Credentials)
 	s.Require().NoError(err, "Update")
 
 	s.Require().Len(cacheRecorder.setAccounts, 1)

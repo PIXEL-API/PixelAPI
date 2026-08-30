@@ -424,11 +424,11 @@ func persistAgentIdentityCredentials(ctx context.Context, repo AccountRepository
 			return fmt.Errorf("persist agent identity task: %w", err)
 		}
 	} else {
-		candidate := *account
-		candidate.Credentials = nextCredentials
-		if err := repo.Update(ctx, &candidate); err != nil {
-			return fmt.Errorf("persist agent identity task: %w", err)
-		}
+		return ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{
+			"account_id": fmt.Sprintf("%d", account.ID),
+			"operation":  "persist_agent_identity_credentials",
+			"stage":      "missing_narrow_capability",
+		})
 	}
 	account.Credentials = nextCredentials
 	return nil

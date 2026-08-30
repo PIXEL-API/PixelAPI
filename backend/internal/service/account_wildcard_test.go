@@ -209,6 +209,83 @@ func TestAccountIsModelSupported(t *testing.T) {
 			requestedModel: "deepseek-v4-flash[1m]",
 			expected:       true,
 		},
+		{
+			name:     "opencode go provider prefix matches bare slug",
+			platform: PlatformOpencode,
+			credentials: map[string]any{
+				"model_mapping": map[string]any{
+					"deepseek-v4-flash": "deepseek-v4-flash",
+				},
+			},
+			requestedModel: "opencode-go/deepseek-v4-flash[1m]",
+			expected:       true,
+		},
+		{
+			name:     "opencode provider prefix with 1m matches prefixed mapping",
+			platform: PlatformOpencode,
+			credentials: map[string]any{
+				"model_mapping": map[string]any{
+					"opencode-go/deepseek-v4-flash": "deepseek-v4-flash",
+				},
+			},
+			requestedModel: "opencode-go/deepseek-v4-flash[1m]",
+			expected:       true,
+		},
+		{
+			name:     "opencode provider prefix matches bare slug",
+			platform: PlatformOpencode,
+			credentials: map[string]any{
+				"model_mapping": map[string]any{
+					"grok-4.6": "grok-4.6",
+				},
+			},
+			requestedModel: "opencode/grok-4.6",
+			expected:       true,
+		},
+		{
+			name:     "opencode double provider prefix does not match bare slug",
+			platform: PlatformOpencode,
+			credentials: map[string]any{
+				"model_mapping": map[string]any{
+					"deepseek-v4-flash": "deepseek-v4-flash",
+				},
+			},
+			requestedModel: "opencode-go/opencode-go/deepseek-v4-flash",
+			expected:       false,
+		},
+		{
+			name:     "opencode double provider prefix does not match single prefix mapping",
+			platform: PlatformOpencode,
+			credentials: map[string]any{
+				"model_mapping": map[string]any{
+					"opencode-go/deepseek-v4-flash": "deepseek-v4-flash",
+				},
+			},
+			requestedModel: "opencode-go/opencode-go/deepseek-v4-flash",
+			expected:       false,
+		},
+		{
+			name:     "opencode explicit double prefix alias remains supported",
+			platform: PlatformOpencode,
+			credentials: map[string]any{
+				"model_mapping": map[string]any{
+					"opencode-go/opencode-go/deepseek-v4-flash": "deepseek-v4-flash",
+				},
+			},
+			requestedModel: "opencode-go/opencode-go/deepseek-v4-flash",
+			expected:       true,
+		},
+		{
+			name:     "non opencode platform keeps provider prefix",
+			platform: PlatformOpenAI,
+			credentials: map[string]any{
+				"model_mapping": map[string]any{
+					"deepseek-v4-flash": "deepseek-v4-flash",
+				},
+			},
+			requestedModel: "opencode-go/deepseek-v4-flash",
+			expected:       false,
+		},
 
 		// 通配符匹配
 		{
@@ -467,6 +544,55 @@ func TestAccountResolveMappedModel(t *testing.T) {
 				},
 			},
 			requestedModel: "deepseek-v4-flash[1m]",
+			expectedModel:  "deepseek-v4-flash",
+			expectedMatch:  true,
+		},
+		{
+			name:     "opencode provider prefix resolves through bare slug mapping",
+			platform: PlatformOpencode,
+			credentials: map[string]any{
+				"model_mapping": map[string]any{
+					"grok-4.6": "gpt-5.6-luna",
+				},
+			},
+			requestedModel: "opencode/grok-4.6[1m]",
+			expectedModel:  "gpt-5.6-luna",
+			expectedMatch:  true,
+		},
+		{
+			name:     "opencode prefixed mapping wins before bare slug mapping after 1m removal",
+			platform: PlatformOpencode,
+			credentials: map[string]any{
+				"model_mapping": map[string]any{
+					"opencode/grok-4.6": "gpt-5.6-luna",
+					"grok-4.6":          "grok-4.6",
+				},
+			},
+			requestedModel: "opencode/grok-4.6[1m]",
+			expectedModel:  "gpt-5.6-luna",
+			expectedMatch:  true,
+		},
+		{
+			name:     "opencode double prefix does not resolve through single prefix mapping",
+			platform: PlatformOpencode,
+			credentials: map[string]any{
+				"model_mapping": map[string]any{
+					"opencode-go/deepseek-v4-flash": "gpt-5.6-luna",
+				},
+			},
+			requestedModel: "opencode-go/opencode-go/deepseek-v4-flash",
+			expectedModel:  "opencode-go/opencode-go/deepseek-v4-flash",
+			expectedMatch:  false,
+		},
+		{
+			name:     "opencode explicit double prefix wildcard alias resolves normally",
+			platform: PlatformOpencode,
+			credentials: map[string]any{
+				"model_mapping": map[string]any{
+					"opencode-go/*": "deepseek-v4-flash",
+				},
+			},
+			requestedModel: "opencode-go/opencode-go/deepseek-v4-flash",
 			expectedModel:  "deepseek-v4-flash",
 			expectedMatch:  true,
 		},

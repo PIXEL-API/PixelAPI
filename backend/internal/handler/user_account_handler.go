@@ -1399,7 +1399,8 @@ func (h *UserAccountHandler) ImportCredentials(c *gin.Context) {
 	} else {
 		normalizeUserCredentialImportTargetLevel(&req, levelConfigs)
 	}
-	if !isAgentIdentityImport {
+	deferOpenAIProxyValidation := req.Platform == service.PlatformOpenAI && req.AccountLevel == service.AccountLevelFree
+	if !isAgentIdentityImport && !deferOpenAIProxyValidation {
 		if service.RequiresUserAccountOAuthProxyWithConfigs(req.Platform, req.AccountLevel, levelConfigs) {
 			if !h.requireUserOAuthProxy(c, userOAuthProxyScope(c, req.Platform, req.AccountLevel), req.ProxyID) {
 				return
@@ -1488,16 +1489,6 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 		}
 		targetAccountLevel = targetLevel
 	}
-	if err := enrichUserK12CredentialImportSource(&source, targetAccountLevel); err != nil {
-		slog.Debug(
-			"owned_k12_import_enrich_id_token_decode_failed",
-			"sequence",
-			sequence,
-			"error",
-			err,
-		)
-	}
-
 	req := service.CreateAccountRequest{
 		Name:               strings.TrimSpace(source.Name),
 		Notes:              source.Notes,
@@ -1521,22 +1512,44 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 
 	switch source.Kind {
 	case service.AccountCredentialImportKindOAuthCredentials:
-		if req.Name == "" {
-			req.Name = service.DeriveAccountCredentialImportName(req.Platform, req.Credentials, req.Extra, sequence)
-		}
 		if req.Platform == service.PlatformOpenAI {
-			if err := h.verifyOwnedOpenAIOAuthImportLevel(ctx, ownerUserID, &req, defaults, targetAccountLevel, levelConfigs); err != nil {
+			resolvedLevel, err := h.verifyOwnedOpenAIOAuthImportLevel(ctx, ownerUserID, &req, defaults, targetAccountLevel, levelConfigs)
+			if err != nil {
+				return nil, err
+			}
+			targetAccountLevel = resolvedLevel
+		}
+	case service.AccountCredentialImportKindOpenAIRefreshToken:
+		exchangeProxyURL := ""
+		if targetAccountLevel != service.AccountLevelFree {
+			var err error
+			exchangeProxyURL, err = h.openaiOAuthService.VisibleProxyURLForUser(
+				ctx,
+				service.NewOwnedProxyScope(service.PlatformOpenAI, targetAccountLevel, ownerUserID),
+				defaults.ProxyID,
+			)
+			if err != nil {
 				return nil, err
 			}
 		}
-	case service.AccountCredentialImportKindOpenAIRefreshToken:
-		tokenInfo, err := h.openaiOAuthService.RefreshTokenWithClientID(ctx, source.Token, "", source.ClientID)
+		tokenInfo, err := h.openaiOAuthService.RefreshTokenWithClientID(ctx, source.Token, exchangeProxyURL, source.ClientID)
 		if err != nil {
+			if targetAccountLevel == service.AccountLevelFree {
+				return nil, infraerrors.BadRequest(
+					"OWNED_ACCOUNT_IMPORT_OPENAI_REFRESH_AUTO_FAILED",
+					"OpenAI Refresh Token 自动识别失败；如该账号需要代理，请选择真实账号等级并配置代理后重试",
+				)
+			}
 			return nil, infraerrors.BadRequest("OWNED_ACCOUNT_IMPORT_OPENAI_REFRESH_FAILED", "OpenAI Refresh Token 校验失败，请检查账号凭证后重试")
 		}
 		req.Platform = service.PlatformOpenAI
 		req.Credentials = h.openaiOAuthService.BuildAccountCredentials(tokenInfo)
 		req.Extra = service.BuildOpenAIAccountCredentialImportExtra(tokenInfo)
+		resolvedLevel, err := resolveOwnedOpenAIImportLevel(tokenInfo.PlanType, false, targetAccountLevel, levelConfigs)
+		if err != nil {
+			return nil, err
+		}
+		targetAccountLevel = resolvedLevel
 		if defaults.Concurrency <= 0 {
 			req.Concurrency = userOwnedDefaultConcurrency
 		}
@@ -1550,22 +1563,37 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 		if h.openaiOAuthService == nil {
 			return nil, service.ErrServiceUnavailable
 		}
+		validationProxyID := defaults.ProxyID
+		if targetAccountLevel == service.AccountLevelFree {
+			validationProxyID = nil
+		}
 		proxyURL, err := h.openaiOAuthService.VisibleProxyURLForUser(
 			ctx,
 			service.NewOwnedProxyScope(service.PlatformOpenAI, targetAccountLevel, ownerUserID),
-			defaults.ProxyID,
+			validationProxyID,
 		)
 		if err != nil {
 			return nil, err
 		}
 		tokenInfo, err := h.openaiOAuthService.ValidateCodexPersonalAccessToken(ctx, source.Token, proxyURL)
 		if err != nil {
+			if targetAccountLevel == service.AccountLevelFree {
+				return nil, infraerrors.BadRequest(
+					"OWNED_CODEX_PAT_AUTO_VALIDATE_FAILED",
+					"Codex Personal Access Token 自动识别失败；如该账号需要代理，请选择真实账号等级并配置代理后重试",
+				)
+			}
 			return nil, infraerrors.BadRequest("OWNED_CODEX_PAT_VALIDATE_FAILED", "Codex Personal Access Token 校验失败，请检查令牌或代理后重试")
 		}
 		req.Platform = service.PlatformOpenAI
 		validatedPersonalAccessTokenInfo = tokenInfo
 		req.Credentials = service.BuildOpenAIPersonalAccessTokenCredentials(tokenInfo)
 		req.Extra = service.BuildOpenAIAccountCredentialImportExtra(tokenInfo)
+		resolvedLevel, err := resolveOwnedOpenAIImportLevel(tokenInfo.PlanType, false, targetAccountLevel, levelConfigs)
+		if err != nil {
+			return nil, err
+		}
+		targetAccountLevel = resolvedLevel
 		if req.Name == "" {
 			req.Name = strings.TrimSpace(tokenInfo.Email)
 		}
@@ -1616,6 +1644,27 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 
 	if req.Platform == service.PlatformOpenAI {
 		req.AccountLevel = targetAccountLevel
+		if source.Kind == service.AccountCredentialImportKindOAuthCredentials {
+			source.Credentials = req.Credentials
+			if err := enrichUserK12CredentialImportSource(&source, req.AccountLevel); err != nil {
+				slog.Debug(
+					"owned_k12_import_enrich_id_token_decode_failed",
+					"sequence",
+					sequence,
+					"error",
+					err,
+				)
+			}
+			req.Credentials = source.Credentials
+		}
+		if err := validateResolvedOpenAIImportProxy(
+			req.AccountLevel,
+			req.ProxyID,
+			levelConfigs,
+			source.Kind == service.AccountCredentialImportKindOpenAIPersonalAccessToken,
+		); err != nil {
+			return nil, err
+		}
 		if source.Kind != service.AccountCredentialImportKindOpenAIPersonalAccessToken {
 			resolvedExpiresAt, forceAutoPause, err := service.ResolveOpenAIAccessTokenOnlyLifecycle(
 				req.Credentials,
@@ -1630,6 +1679,9 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 				req.AutoPauseOnExpired = &enabled
 			}
 		}
+	}
+	if source.Kind == service.AccountCredentialImportKindOAuthCredentials && req.Name == "" {
+		req.Name = service.DeriveAccountCredentialImportName(req.Platform, req.Credentials, req.Extra, sequence)
 	}
 	if strings.TrimSpace(req.Name) == "" {
 		return nil, fmt.Errorf("account name is required")
@@ -1652,9 +1704,8 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 	return outcome, nil
 }
 
-// resolveOwnedOpenAIImportLevel 用探测到的真实 plan_type 严格匹配用户所选等级。
-// probeFailed 表示探测失败；探测失败时仅 free/unknown 放行，付费等级拒绝。
-// 探测成功但 plan_type 无法映射到已知等级时同样拒绝，避免给未知订阅发放付费等级。
+// resolveOwnedOpenAIImportLevel 将 free 解释为自动识别入口：能识别时保留真实等级，
+// 探测失败或 plan_type 未配置时安全降为 free。其他显式等级仍必须与真实等级严格匹配。
 func resolveOwnedOpenAIImportLevel(
 	probePlanType string,
 	probeFailed bool,
@@ -1663,26 +1714,73 @@ func resolveOwnedOpenAIImportLevel(
 ) (string, error) {
 	target := service.NormalizeAccountLevel(targetAccountLevel)
 	if probeFailed {
-		switch target {
-		case service.AccountLevelFree, service.AccountLevelUnknown:
-			return target, nil
-		default:
-			return "", infraerrors.BadRequest("OWNED_OPENAI_IMPORT_LEVEL_VERIFY_FAILED", "无法验证账号真实订阅等级，请稍后重试")
+		if target == service.AccountLevelFree {
+			return service.AccountLevelFree, nil
 		}
+		return "", infraerrors.BadRequest("OWNED_OPENAI_IMPORT_LEVEL_VERIFY_FAILED", "无法验证账号真实订阅等级，请稍后重试")
 	}
 	realLevel := service.NormalizeOpenAIPlanAccountLevelWithConfigs(probePlanType, levelConfigs)
 	if realLevel == service.AccountLevelUnknown {
+		if target == service.AccountLevelFree {
+			return service.AccountLevelFree, nil
+		}
 		return "", infraerrors.BadRequest("OWNED_OPENAI_IMPORT_LEVEL_UNRECOGNIZED", "无法识别账号真实订阅等级，请稍后重试")
 	}
-	if target != realLevel {
+	if target != service.AccountLevelFree && target != realLevel {
 		return "", infraerrors.BadRequest("OWNED_OPENAI_IMPORT_LEVEL_MISMATCH",
 			fmt.Sprintf("所选等级与账号真实订阅（%s）不符", strings.TrimSpace(probePlanType)))
 	}
 	return realLevel, nil
 }
 
+var openAIImportPlanDeclarationKeys = []string{"plan_type", "chatgpt_plan_type", "subscription_plan"}
+
+func replaceOpenAIImportPlanDeclarations(req *service.CreateAccountRequest, trustedPlanType string) {
+	if req == nil {
+		return
+	}
+	for _, values := range []map[string]any{req.Credentials, req.Extra} {
+		for _, key := range openAIImportPlanDeclarationKeys {
+			delete(values, key)
+		}
+	}
+	trustedPlanType = strings.TrimSpace(trustedPlanType)
+	if trustedPlanType == "" {
+		return
+	}
+	if req.Credentials == nil {
+		req.Credentials = make(map[string]any)
+	}
+	req.Credentials["plan_type"] = trustedPlanType
+}
+
+func validateResolvedOpenAIImportProxy(
+	accountLevel string,
+	proxyID *int64,
+	levelConfigs []service.OpenAIAccountLevelConfig,
+	mayPreserveExistingProxy bool,
+) error {
+	requiresProxy := service.RequiresUserOpenAIProxyLoginWithConfigs(accountLevel, levelConfigs)
+	if requiresProxy {
+		if mayPreserveExistingProxy || (proxyID != nil && *proxyID > 0) {
+			return nil
+		}
+		return infraerrors.BadRequest(
+			"OWNED_OPENAI_IMPORT_PROXY_REQUIRED",
+			fmt.Sprintf("自动识别账号等级为 %s，该等级导入必须选择可用代理", service.NormalizeAccountLevel(accountLevel)),
+		)
+	}
+	if proxyID != nil {
+		return infraerrors.BadRequest(
+			"OWNED_OPENAI_IMPORT_PROXY_NOT_ALLOWED",
+			fmt.Sprintf("自动识别账号等级为 %s，该等级无需代理，请移除代理后重试", service.NormalizeAccountLevel(accountLevel)),
+		)
+	}
+	return nil
+}
+
 // verifyOwnedOpenAIOAuthImportLevel 对 OpenAI OAuth 凭证（access_token 直传）导入
-// 探测真实 plan_type 并严格匹配用户所选等级，防止用户手写 plan_type 伪装等级。
+// 探测真实 plan_type，并在任何结果下先清除文件内用户可控的等级声明。
 func (h *UserAccountHandler) verifyOwnedOpenAIOAuthImportLevel(
 	ctx context.Context,
 	ownerUserID int64,
@@ -1690,23 +1788,30 @@ func (h *UserAccountHandler) verifyOwnedOpenAIOAuthImportLevel(
 	defaults importUserAccountCredentialsRequest,
 	targetAccountLevel string,
 	levelConfigs []service.OpenAIAccountLevelConfig,
-) error {
+) (string, error) {
 	if h.openaiOAuthService == nil {
-		return service.ErrServiceUnavailable
+		return "", service.ErrServiceUnavailable
 	}
 	accessToken, _ := req.Credentials["access_token"].(string)
 	accessToken = strings.TrimSpace(accessToken)
 	if accessToken == "" {
-		return infraerrors.BadRequest("OWNED_OPENAI_IMPORT_LEVEL_REQUIRED", "账号凭证缺少 access_token")
+		return "", infraerrors.BadRequest("OWNED_OPENAI_IMPORT_LEVEL_REQUIRED", "账号凭证缺少 access_token")
 	}
+	replaceOpenAIImportPlanDeclarations(req, "")
 
+	// free 是自动识别入口，此时代理的等级适用性必须等真实等级确定后再由
+	// AccountService 校验；探测本身使用直连，避免用错误的 free scope 拒绝 Pro 专用代理。
+	probeProxyID := defaults.ProxyID
+	if service.NormalizeAccountLevel(targetAccountLevel) == service.AccountLevelFree {
+		probeProxyID = nil
+	}
 	proxyURL, err := h.openaiOAuthService.VisibleProxyURLForUser(
 		ctx,
 		service.NewOwnedProxyScope(service.PlatformOpenAI, targetAccountLevel, ownerUserID),
-		defaults.ProxyID,
+		probeProxyID,
 	)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	probe, probeErr := h.openaiOAuthService.ProbeChatGPTAccountInfo(ctx, accessToken, proxyURL)
@@ -1714,18 +1819,18 @@ func (h *UserAccountHandler) verifyOwnedOpenAIOAuthImportLevel(
 	if probe != nil {
 		probePlanType = strings.TrimSpace(probe.PlanType)
 	}
-	if _, err := resolveOwnedOpenAIImportLevel(probePlanType, probeErr != nil, targetAccountLevel, levelConfigs); err != nil {
-		return err
+	resolvedLevel, err := resolveOwnedOpenAIImportLevel(probePlanType, probeErr != nil, targetAccountLevel, levelConfigs)
+	if err != nil {
+		return "", err
 	}
 
-	// 探测成功：用真实 plan_type 覆盖用户手写的值，防止假 plan_type 残留到后续推断。
-	if probePlanType != "" {
-		req.Credentials["plan_type"] = probePlanType
-		if _, ok := req.Credentials["chatgpt_plan_type"]; ok {
-			req.Credentials["chatgpt_plan_type"] = probePlanType
-		}
+	// 只写回探测成功后得到的可信 plan_type；探测失败时保持所有等级声明为空，
+	// 让服务层按 Free 创建，绝不回退信任导入文件中的付费等级。
+	if probeErr == nil {
+		replaceOpenAIImportPlanDeclarations(req, probePlanType)
 	}
-	return nil
+	req.AccountLevel = resolvedLevel
+	return resolvedLevel, nil
 }
 
 func (h *UserAccountHandler) Update(c *gin.Context) {

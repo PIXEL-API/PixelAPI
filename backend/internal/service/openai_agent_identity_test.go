@@ -256,6 +256,29 @@ func TestEnsureAgentIdentityTaskUsesExpectedTaskCASAndInvalidatesWS(t *testing.T
 	}
 }
 
+func TestPersistAgentIdentityCredentialsFailsClosedWithoutNarrowCapability(t *testing.T) {
+	account := &Account{
+		ID:          91,
+		Credentials: map[string]any{"task_id": "task-old"},
+	}
+	repo := &agentIdentityRepoWithoutCredentialUpdater{}
+
+	err := persistAgentIdentityCredentials(context.Background(), repo, account, map[string]any{"task_id": "task-new"})
+
+	if !errors.Is(err, ErrAccountMutationGuardUnavailable) {
+		t.Fatalf("expected missing narrow capability error, got %v", err)
+	}
+	if got := account.GetCredential("task_id"); got != "task-old" {
+		t.Fatalf("failed persistence mutated caller snapshot: task_id=%q", got)
+	}
+}
+
+// Deliberately omits UpdateCredentials so the persistence helper's fail-closed
+// behavior is tested without accidentally exercising the broad Update path.
+type agentIdentityRepoWithoutCredentialUpdater struct {
+	AccountRepository
+}
+
 func TestBuildOpenAIAuthenticationHeadersAndRedaction(t *testing.T) {
 	account := newAgentIdentityTestAccount(t, 0, "runtime-secret", "task-secret")
 	service := &OpenAIGatewayService{}

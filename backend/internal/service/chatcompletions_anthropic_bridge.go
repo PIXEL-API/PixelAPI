@@ -102,16 +102,11 @@ func AnthropicToChatCompletionsRequest(req *apicompat.AnthropicRequest) (*apicom
 		out.ToolChoice = tc
 	}
 
-	// Reasoning effort: output_config.effort maps 1:1 (max→xhigh). thinking.type
-	// itself is ignored (the Responses bridge behaves identically).
-	effort := "medium"
+	// Reasoning effort is forwarded only when the client explicitly requests it.
+	// Omitting the field preserves the selected Chat model's own default.
 	if req.OutputConfig != nil && req.OutputConfig.Effort != "" {
-		effort = req.OutputConfig.Effort
+		out.ReasoningEffort = mapAnthropicEffortToResponses(req.OutputConfig.Effort)
 	}
-	out.ReasoningEffort = mapAnthropicEffortToResponses(effort)
-
-	parallelToolCalls := true
-	out.ParallelToolCalls = &parallelToolCalls
 
 	return out, nil
 }
@@ -1038,8 +1033,10 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 	account *Account,
 	body []byte,
 	defaultMappedModel string,
+	resolvedModels ...OpencodeGoResolvedModel,
 ) (*OpenAIForwardResult, error) {
 	beginUpstreamResponseModelObservation(c)
+	SetActualOpenAIUpstreamEndpoint(c, openAIChatRawEndpoint)
 	startTime := time.Now()
 	var anthropicReq apicompat.AnthropicRequest
 	if err := json.Unmarshal(body, &anthropicReq); err != nil {
@@ -1051,7 +1048,12 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", "model is required")
 		return nil, errors.New("missing model in request")
 	}
-	applyOpenAICompatModelNormalization(&anthropicReq)
+	// OpenCode routing already resolved the exact catalog model before entering
+	// this bridge. Do not reinterpret a client alias suffix as an implicit
+	// output_config.effort; only the explicit Messages field may set it.
+	if len(resolvedModels) == 0 {
+		applyOpenAICompatModelNormalization(&anthropicReq)
+	}
 	clientStream := anthropicReq.Stream
 
 	chatReq, err := AnthropicToChatCompletionsRequest(&anthropicReq)
@@ -1061,13 +1063,19 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 	}
 	billingModel := resolveOpenAIForwardModel(account, anthropicReq.Model, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
+	if len(resolvedModels) > 0 {
+		billingModel = resolvedModels[0].BillingModel
+		upstreamModel = resolvedModels[0].UpstreamModel
+	}
 	chatReq.Model = upstreamModel
 	chatReq.Stream = clientStream
 	if clientStream {
 		chatReq.StreamOptions = &apicompat.ChatStreamOptions{IncludeUsage: true}
 	}
-	reasoningEffort := extractOpenAIReasoningEffortFromBody(body, upstreamModel, billingModel, originalModel)
-	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, billingModel)
+	var reasoningEffort *string
+	if effort := strings.TrimSpace(chatReq.ReasoningEffort); effort != "" {
+		reasoningEffort = &effort
+	}
 	serviceTier := extractOpenAIServiceTierFromBody(body)
 	forwardResult := &OpenAIForwardResult{
 		Model:           originalModel,

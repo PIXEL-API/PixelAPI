@@ -24,7 +24,7 @@ function mountUseKeyModal(
     show: boolean
     apiKey: string
     baseUrl: string
-    platform: 'openai' | 'grok'
+    platform: 'openai' | 'grok' | 'opencode'
     allowMessagesDispatch: boolean
   }> = {}
 ) {
@@ -293,6 +293,57 @@ describe('UseKeyModal', () => {
     expect(codeBlock.exists()).toBe(true)
     expect(codeBlock.text()).toContain('"name": "GPT-5.4 Mini"')
     expect(codeBlock.text()).not.toContain('"name": "GPT-5.4 Nano"')
+  })
+
+  it('renders protocol-aware OpenCode Go config with bare model slugs', () => {
+    const wrapper = mountUseKeyModal(undefined, {
+      platform: 'opencode',
+      baseUrl: 'https://example.com/v1'
+    })
+
+    const parsed = JSON.parse(wrapper.find('pre code').text())
+    expect(Object.keys(parsed.provider)).toEqual(['opencode-go'])
+
+    const provider = parsed.provider['opencode-go']
+    expect(provider.name).toBe('OpenCode Go')
+    expect(provider.npm).toBe('@ai-sdk/openai-compatible')
+    expect(provider.options).toEqual({
+      baseURL: 'https://example.com/v1',
+      apiKey: 'sk-test'
+    })
+    expect(provider.options.baseURL).not.toContain('/zen/go/v1')
+
+    const messagesModels = [
+      'minimax-m3',
+      'minimax-m2.7',
+      'minimax-m2.5',
+      'qwen3.7-max',
+      'qwen3.8-max',
+      'qwen3.8-flash',
+      'qwen3.7-plus',
+      'qwen3.6-plus'
+    ]
+    const responsesModels = [
+      'gpt-5.6-luna',
+      'grok-4.5',
+      'grok-4.6',
+      'muse-spark-1.2-contributor'
+    ]
+
+    for (const modelId of messagesModels) {
+      expect(provider.models[modelId]).toEqual({
+        provider: { npm: '@ai-sdk/anthropic' }
+      })
+    }
+    for (const modelId of responsesModels) {
+      expect(provider.models[modelId]).toEqual({
+        provider: { npm: '@ai-sdk/openai' }
+      })
+    }
+
+    expect(Object.keys(provider.models)).toEqual([...messagesModels, ...responsesModels])
+    expect(Object.keys(provider.models).every((modelId) => !modelId.startsWith('opencode-go/'))).toBe(true)
+    expect(provider.models['deepseek-v4-pro']).toBeUndefined()
   })
 
   it('resets Codex authentication mode when the modal reopens', async () => {

@@ -219,11 +219,12 @@ type AccountMutationGuardRequest struct {
 	OperationID             string
 }
 
-// AccountMutationGuardRepository owns the atomic account/room boundary. The
-// implementation discovers room bindings without locks, then locks referenced
-// live rooms before account rows in a stable order. It revalidates bindings and
-// optimistic versions inside the transaction, runs mutate, and appends
-// immutable room events for administrator-forced changes.
+// AccountMutationGuardRepository owns the atomic account/room/proxy boundary.
+// The implementation discovers room bindings and prospective proxy changes
+// without locks, then locks live rooms, target proxies, and account rows in a
+// stable order. It revalidates proxy capacity, bindings, and optimistic versions
+// inside the transaction, runs mutate, and appends immutable room events for
+// administrator-forced changes.
 type AccountMutationGuardRepository interface {
 	WithAccountMutationGuard(ctx context.Context, request AccountMutationGuardRequest, mutate func(context.Context) error) error
 }
@@ -1187,11 +1188,61 @@ func (s *AccountService) updateOwnedPersonalAccessTokenImport(
 	if err != nil {
 		return nil, err
 	}
+	proxyRequired := RequiresUserOpenAIProxyLoginWithConfigs(accountLevel, levelConfigs)
+	existingProxyID := account.ProxyID
+	var nextProxyID *int64
+	if existingProxyID != nil {
+		proxyID := *existingProxyID
+		nextProxyID = &proxyID
+	}
+	if req.ProxyID != nil {
+		switch {
+		case *req.ProxyID <= 0:
+			nextProxyID = nil
+		case existingProxyID != nil && *existingProxyID == *req.ProxyID:
+			if _, err := s.ensureOwnedProxyUsableForLogin(
+				ctx,
+				NewOwnedProxyScope(PlatformOpenAI, accountLevel, ownerUserID),
+				*req.ProxyID,
+			); err != nil {
+				return nil, err
+			}
+		default:
+			if err := s.ensureOwnedProxyAvailableForNewAccount(
+				ctx,
+				NewOwnedProxyScope(PlatformOpenAI, accountLevel, ownerUserID),
+				*req.ProxyID,
+			); err != nil {
+				return nil, err
+			}
+			proxyID := *req.ProxyID
+			nextProxyID = &proxyID
+		}
+	} else if proxyRequired && nextProxyID != nil && *nextProxyID > 0 {
+		// 未显式更换代理时保留原绑定，但必须按新识别的真实等级复核可用性。
+		if _, err := s.ensureOwnedProxyUsableForLogin(
+			ctx,
+			NewOwnedProxyScope(PlatformOpenAI, accountLevel, ownerUserID),
+			*nextProxyID,
+		); err != nil {
+			return nil, err
+		}
+	}
+	if proxyRequired && (nextProxyID == nil || *nextProxyID <= 0) {
+		return nil, infraerrors.BadRequest(
+			"OWNED_CODEX_PAT_EXISTING_PROXY_REQUIRED",
+			"该 Codex PAT 账号缺少当前等级所需代理，请选择可用代理后重试",
+		)
+	}
 
 	before := cloneAccountForNotice(account)
 	account.Credentials = nextCredentials
 	account.Extra = nextExtra
 	account.AccountLevel = accountLevel
+	account.ProxyID = nextProxyID
+	if req.ProxyID != nil {
+		account.ProxyFallbackOriginID = nil
+	}
 	account.ExpiresAt = nil
 	account.ErrorMessage = ""
 
@@ -1491,14 +1542,14 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 		return nil, err
 	}
 	if preserveProxy && account.ProxyID != nil {
-		if creator, ok := s.accountRepo.(ownedAccountProxyCapacityCreateRepository); ok {
-			if err := creator.CreateOwnedWithProxyCapacity(ctx, ownerUserID, account); err != nil {
-				return nil, err
-			}
-		} else if err := s.ensureOwnedProxyAvailableForNewAccount(ctx, NewOwnedProxyScope(account.Platform, account.AccountLevel, ownerUserID), *account.ProxyID); err != nil {
+		creator, ok := s.accountRepo.(ownedAccountProxyCapacityCreateRepository)
+		if !ok || creator == nil {
+			// 带代理的自有账号必须由仓储在同一事务内完成代理锁定、scope/归属/容量
+			// 复核与账号写入。缺少该能力时快速失败，禁止退化为事务外 Get/Count→Create。
+			return nil, ErrOwnedAccountProxyValidationUnavailable
+		}
+		if err := creator.CreateOwnedWithProxyCapacity(ctx, ownerUserID, account); err != nil {
 			return nil, err
-		} else if err := s.accountRepo.Create(ctx, account); err != nil {
-			return nil, fmt.Errorf("create account: %w", err)
 		}
 	} else if err := s.accountRepo.Create(ctx, account); err != nil {
 		return nil, fmt.Errorf("create account: %w", err)
@@ -1791,25 +1842,6 @@ func normalizeLoadFactor(value *int) *int {
 	}
 	normalized := *value
 	return &normalized
-}
-
-// opencodeDefaultModelSlugs 是 OpenCode Go 订阅的完整裸模型 slug 清单（GET /models 实测，26 个）。
-// 自有账号默认模型映射与账号广场默认模型白名单共用，避免两处漂移。
-var opencodeDefaultModelSlugs = []string{
-	"deepseek-v4-flash", "deepseek-v4-pro",
-	"glm-5", "glm-5.1", "glm-5.2", "glm-5.3",
-	"kimi-k2.5", "kimi-k2.6", "kimi-k2.7-code", "kimi-k3",
-	"minimax-m2.5", "minimax-m2.7", "minimax-m3",
-	"mimo-v2-pro", "mimo-v2-omni", "mimo-v2.5", "mimo-v2.5-pro",
-	"qwen3.5-plus", "qwen3.6-plus", "qwen3.7-plus", "qwen3.7-max", "qwen3.8-max",
-	"hy3", "hy3-preview",
-	"gpt-5.6-luna", "grok-4.5",
-}
-
-// OpencodeDefaultModelSlugs 返回 OpenCode Go 订阅的裸模型 slug 清单副本，
-// 供 handler 层 /v1/models 兜底等跨包调用使用。
-func OpencodeDefaultModelSlugs() []string {
-	return append([]string(nil), opencodeDefaultModelSlugs...)
 }
 
 func applyOwnedPersonalAccountTemplateToMaps(platform string, credentials, extra map[string]any) (map[string]any, map[string]any) {
@@ -2360,20 +2392,38 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 		}
 	}
 
-	// 执行更新
-	if err := s.accountRepo.Update(ctx, account); err != nil {
-		return nil, fmt.Errorf("update account: %w", err)
-	}
-
-	// 绑定分组
+	targetGroupIDs := append([]int64(nil), before.GroupIDs...)
 	if req.GroupIDs != nil {
-		if err := s.accountRepo.BindGroups(ctx, account.ID, *req.GroupIDs); err != nil {
-			return nil, fmt.Errorf("bind groups: %w", err)
-		}
-		account.GroupIDs = append([]int64(nil), *req.GroupIDs...)
+		targetGroupIDs = append([]int64(nil), (*req.GroupIDs)...)
 	}
-
-	s.notifyAccountChanged(ctx, before, account)
+	guardRequest := AccountMutationGuardRequest{
+		Targets: []AccountMutationGuardTarget{{
+			AccountID:         account.ID,
+			ExpectedUpdatedAt: before.UpdatedAt,
+			After:             account,
+			GroupIDs:          targetGroupIDs,
+		}},
+		Intent: AccountMutationIntentAdmin,
+	}
+	if err := s.withAccountMutationGuard(ctx, guardRequest, func(txCtx context.Context) error {
+		if err := s.accountRepo.Update(txCtx, account); err != nil {
+			return fmt.Errorf("update account: %w", err)
+		}
+		if req.GroupIDs != nil {
+			if err := s.accountRepo.BindGroups(txCtx, account.ID, targetGroupIDs); err != nil {
+				return fmt.Errorf("bind groups: %w", err)
+			}
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	if req.GroupIDs != nil {
+		account.GroupIDs = append([]int64(nil), targetGroupIDs...)
+	}
+	if !AccountMutationGuardActive(ctx) {
+		s.notifyAccountChanged(ctx, before, account)
+	}
 	return account, nil
 }
 
@@ -4009,30 +4059,57 @@ func (s *AccountService) MarkOwnedPublicSharePending(ctx context.Context, ownerU
 	if err != nil {
 		return nil, err
 	}
-	before := cloneAccountForNotice(account)
+	noticeBefore := cloneAccountForNotice(account)
 	if err := s.ensureAccountCanEnterPublicShare(ctx, account); err != nil {
 		return nil, err
 	}
+	if accountHasExternalPlacement(account) {
+		if err := s.convertOwnedExternalPlacementToPrivateForIdentityChange(ctx, ownerUserID, account); err != nil {
+			return nil, err
+		}
+		account, err = s.GetOwnedByID(ctx, ownerUserID, accountID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	mutationBefore := cloneAccountForNotice(account)
 	groupIDs, err := s.prepareOwnedPublicShareRevalidation(ctx, ownerUserID, account)
 	if err != nil {
 		return nil, err
 	}
 	account.ErrorMessage = strings.TrimSpace(reason)
-	shouldInvalidateAgentIdentityWS := ownedAgentIdentityPublicAccessRevoked(before, account)
+	shouldInvalidateAgentIdentityWS := ownedAgentIdentityPublicAccessRevoked(noticeBefore, account)
 	if shouldInvalidateAgentIdentityWS && s.agentIdentityWSInvalidator == nil {
 		return nil, ErrOwnedAgentIdentityWSInvalidatorUnavailable
 	}
-	if err := s.accountRepo.Update(ctx, account); err != nil {
-		return nil, fmt.Errorf("update account public share status: %w", err)
+	guardRequest := AccountMutationGuardRequest{
+		Targets: []AccountMutationGuardTarget{{
+			AccountID:         account.ID,
+			ExpectedUpdatedAt: mutationBefore.UpdatedAt,
+			After:             account,
+			GroupIDs:          append([]int64(nil), groupIDs...),
+		}},
+		ActorUserID: ownerUserID,
+		Intent:      AccountMutationIntentOwner,
 	}
-	if shouldInvalidateAgentIdentityWS {
-		s.agentIdentityWSInvalidator.InvalidateAgentIdentityWSConnections(account.ID)
-	}
-	if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
-		return nil, fmt.Errorf("bind pending account groups: %w", err)
+	if err := s.withAccountMutationGuard(ctx, guardRequest, func(txCtx context.Context) error {
+		if err := s.accountRepo.Update(txCtx, account); err != nil {
+			return fmt.Errorf("update account public share status: %w", err)
+		}
+		if err := s.accountRepo.BindGroups(txCtx, account.ID, groupIDs); err != nil {
+			return fmt.Errorf("bind pending account groups: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	account.GroupIDs = append([]int64(nil), groupIDs...)
-	s.notifyAccountChanged(ctx, before, account)
+	if !AccountMutationGuardActive(ctx) {
+		if shouldInvalidateAgentIdentityWS {
+			s.agentIdentityWSInvalidator.InvalidateAgentIdentityWSConnections(account.ID)
+		}
+		s.notifyAccountChanged(ctx, noticeBefore, account)
+	}
 	return account, nil
 }
 
@@ -4047,18 +4124,31 @@ func (s *AccountService) AutoRepairSuspectedOpenAIFreeAccount(ctx context.Contex
 	if !ShouldRepairSuspectedOpenAIFreeAccount(account, maxWeeklyLimitUSD, time.Now()) {
 		return account, false, nil
 	}
-	before := cloneAccountForNotice(account)
+	noticeBefore := cloneAccountForNotice(account)
+	// 外部投放转换会把账号重新读取为 private/approved。保留转换前的
+	// 公共分享事实，确保本次配额修复仍然暂停原来对消费者可见的分享，
+	// 而不是因为转换后的 private 快照丢失该业务语义。
+	wasPubliclyShared := noticeBefore != nil &&
+		NormalizeAccountShareMode(noticeBefore.ShareMode) == AccountShareModePublic
 
-	if accountHasExternalPlacement(before) {
+	if accountHasExternalPlacement(account) {
 		if account.OwnerUserID == nil {
 			return nil, false, ErrAccountExternalPlacementConflict
 		}
 		if err := s.convertOwnedExternalPlacementToPrivateForIdentityChange(ctx, *account.OwnerUserID, account); err != nil {
 			return nil, false, err
 		}
+		account, err = s.accountRepo.GetByID(ctx, accountID)
+		if err != nil {
+			return nil, false, fmt.Errorf("reload account after placement conversion: %w", err)
+		}
+		if !ShouldRepairSuspectedOpenAIFreeAccount(account, maxWeeklyLimitUSD, time.Now()) {
+			return account, false, nil
+		}
 	}
+	mutationBefore := cloneAccountForNotice(account)
 	account.AccountLevel = AccountLevelFree
-	if account.ShareMode == AccountShareModePublic {
+	if wasPubliclyShared || NormalizeAccountShareMode(account.ShareMode) == AccountShareModePublic {
 		account.ShareStatus = AccountShareStatusSuspended
 	}
 	message := strings.TrimSpace(reason)
@@ -4067,30 +4157,55 @@ func (s *AccountService) AutoRepairSuspectedOpenAIFreeAccount(ctx context.Contex
 	}
 	account.ErrorMessage = message
 
-	groupIDs := account.GroupIDs
+	groupIDs := append([]int64(nil), account.GroupIDs...)
 	if account.OwnerUserID != nil {
 		groupIDs, err = s.repairedOpenAIAccountGroupIDs(ctx, account)
 		if err != nil {
 			return nil, false, err
 		}
 	}
-	shouldInvalidateAgentIdentityWS := ownedAgentIdentityPublicAccessRevoked(before, account)
+	shouldInvalidateAgentIdentityWS := ownedAgentIdentityPublicAccessRevoked(noticeBefore, account)
 	if shouldInvalidateAgentIdentityWS && s.agentIdentityWSInvalidator == nil {
 		return nil, false, ErrOwnedAgentIdentityWSInvalidatorUnavailable
 	}
-	if err := s.accountRepo.Update(ctx, account); err != nil {
-		return nil, false, fmt.Errorf("update account suspected free repair: %w", err)
+	guardRequest := AccountMutationGuardRequest{
+		Targets: []AccountMutationGuardTarget{{
+			AccountID:         account.ID,
+			ExpectedUpdatedAt: mutationBefore.UpdatedAt,
+			After:             account,
+			GroupIDs:          append([]int64(nil), groupIDs...),
+		}},
+		ActorUserID: func() int64 {
+			if account.OwnerUserID == nil {
+				return 0
+			}
+			return *account.OwnerUserID
+		}(),
+		Intent: AccountMutationIntentOwner,
+		Reason: message,
 	}
-	if shouldInvalidateAgentIdentityWS {
-		s.agentIdentityWSInvalidator.InvalidateAgentIdentityWSConnections(account.ID)
+	if err := s.withAccountMutationGuard(ctx, guardRequest, func(txCtx context.Context) error {
+		if err := s.accountRepo.Update(txCtx, account); err != nil {
+			return fmt.Errorf("update account suspected free repair: %w", err)
+		}
+		if account.OwnerUserID != nil {
+			if err := s.accountRepo.BindGroups(txCtx, account.ID, groupIDs); err != nil {
+				return fmt.Errorf("bind repaired account groups: %w", err)
+			}
+		}
+		return nil
+	}); err != nil {
+		return nil, false, err
 	}
 	if account.OwnerUserID != nil {
-		if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
-			return nil, false, fmt.Errorf("bind repaired account groups: %w", err)
-		}
 		account.GroupIDs = append([]int64(nil), groupIDs...)
 	}
-	s.notifyAccountChanged(ctx, before, account)
+	if !AccountMutationGuardActive(ctx) {
+		if shouldInvalidateAgentIdentityWS {
+			s.agentIdentityWSInvalidator.InvalidateAgentIdentityWSConnections(account.ID)
+		}
+		s.notifyAccountChanged(ctx, noticeBefore, account)
+	}
 	return account, true, nil
 }
 
@@ -4226,8 +4341,8 @@ func (s *AccountService) resolveOwnedPublicShareGroup(ctx context.Context, accou
 				"account_level": accountLevel,
 			})
 		}
-		var matchedGroup *Group
-		bestRank := 0
+		var exactGroup *Group
+		var freeFallbackGroup *Group
 		for i := range groups {
 			group := groups[i]
 			requiredLevel := NormalizeOpenAISharedPoolRequiredLevel(group.RequiredAccountLevel)
@@ -4241,15 +4356,19 @@ func (s *AccountService) resolveOwnedPublicShareGroup(ctx context.Context, accou
 			if !eligible {
 				continue
 			}
-			requiredRank := OpenAISharedPoolLevelRankWithConfigs(requiredLevel, levelConfigs)
-			if matchedGroup == nil || requiredRank > bestRank {
-				candidate := group
-				matchedGroup = &candidate
-				bestRank = requiredRank
+			candidate := group
+			switch {
+			case requiredLevel == accountLevel && exactGroup == nil:
+				exactGroup = &candidate
+			case requiredLevel == AccountLevelFree && freeFallbackGroup == nil:
+				freeFallbackGroup = &candidate
 			}
 		}
-		if matchedGroup != nil {
-			return matchedGroup, nil
+		if exactGroup != nil {
+			return exactGroup, nil
+		}
+		if freeFallbackGroup != nil {
+			return freeFallbackGroup, nil
 		}
 		return nil, ErrOwnedAccountPublicPoolUnavailable.WithMetadata(map[string]string{
 			"platform":      platform,
@@ -4476,20 +4595,23 @@ func (s *AccountService) canUserBindOwnedAccountGroup(ctx context.Context, user 
 	return user.CanBindGroup(group.ID, group.IsExclusive), nil
 }
 
+type accountStatusAndErrorUpdater interface {
+	UpdateStatusAndError(ctx context.Context, id int64, status, errorMessage string) error
+}
+
 // UpdateStatus 更新账号状态
 func (s *AccountService) UpdateStatus(ctx context.Context, id int64, status string, errorMessage string) error {
-	account, err := s.accountRepo.GetByID(ctx, id)
-	if err != nil {
-		return fmt.Errorf("get account: %w", err)
+	updater, ok := any(s.accountRepo).(accountStatusAndErrorUpdater)
+	if !ok {
+		return ErrAccountMutationGuardUnavailable.WithMetadata(map[string]string{
+			"account_id": strconv.FormatInt(id, 10),
+			"operation":  "update_account_status",
+			"stage":      "missing_narrow_capability",
+		})
 	}
-
-	account.Status = status
-	account.ErrorMessage = errorMessage
-
-	if err := s.accountRepo.Update(ctx, account); err != nil {
-		return fmt.Errorf("update account: %w", err)
+	if err := updater.UpdateStatusAndError(ctx, id, status, errorMessage); err != nil {
+		return fmt.Errorf("update account status: %w", err)
 	}
-
 	return nil
 }
 

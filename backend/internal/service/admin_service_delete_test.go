@@ -250,10 +250,12 @@ func (s *groupRepoStub) UpdateSortOrders(ctx context.Context, updates []GroupSor
 }
 
 type proxyRepoStub struct {
-	deleteErr    error
-	countErr     error
-	accountCount int64
-	deletedIDs   []int64
+	deleteErr             error
+	deleteIfUnusedErrByID map[int64]error
+	countErr              error
+	accountCount          int64
+	deletedIDs            []int64
+	deleteIfUnusedIDs     []int64
 }
 
 func (s *proxyRepoStub) Create(ctx context.Context, proxy *Proxy) error {
@@ -275,6 +277,14 @@ func (s *proxyRepoStub) Update(ctx context.Context, proxy *Proxy) error {
 func (s *proxyRepoStub) Delete(ctx context.Context, id int64) error {
 	s.deletedIDs = append(s.deletedIDs, id)
 	return s.deleteErr
+}
+
+func (s *proxyRepoStub) DeleteIfUnused(_ context.Context, id int64) error {
+	s.deleteIfUnusedIDs = append(s.deleteIfUnusedIDs, id)
+	if s.deleteIfUnusedErrByID != nil {
+		return s.deleteIfUnusedErrByID[id]
+	}
+	return nil
 }
 
 func (s *proxyRepoStub) List(ctx context.Context, params pagination.PaginationParams) ([]Proxy, *pagination.PaginationResult, error) {
@@ -561,7 +571,8 @@ func TestAdminService_DeleteProxy_Success(t *testing.T) {
 
 	err := svc.DeleteProxy(context.Background(), 7)
 	require.NoError(t, err)
-	require.Equal(t, []int64{7}, repo.deletedIDs)
+	require.Equal(t, []int64{7}, repo.deleteIfUnusedIDs)
+	require.Empty(t, repo.deletedIDs, "management delete must not use the unguarded repository method")
 }
 
 func TestAdminService_DeleteProxy_Idempotent(t *testing.T) {
@@ -570,25 +581,60 @@ func TestAdminService_DeleteProxy_Idempotent(t *testing.T) {
 
 	err := svc.DeleteProxy(context.Background(), 404)
 	require.NoError(t, err)
-	require.Equal(t, []int64{404}, repo.deletedIDs)
+	require.Equal(t, []int64{404}, repo.deleteIfUnusedIDs)
 }
 
 func TestAdminService_DeleteProxy_InUse(t *testing.T) {
-	repo := &proxyRepoStub{accountCount: 2}
+	repo := &proxyRepoStub{deleteIfUnusedErrByID: map[int64]error{77: ErrProxyInUse}}
 	svc := &adminServiceImpl{proxyRepo: repo}
 
 	err := svc.DeleteProxy(context.Background(), 77)
 	require.ErrorIs(t, err, ErrProxyInUse)
+	require.Equal(t, []int64{77}, repo.deleteIfUnusedIDs)
 	require.Empty(t, repo.deletedIDs)
 }
 
 func TestAdminService_DeleteProxy_Error(t *testing.T) {
 	deleteErr := errors.New("delete failed")
-	repo := &proxyRepoStub{deleteErr: deleteErr}
+	repo := &proxyRepoStub{deleteIfUnusedErrByID: map[int64]error{33: deleteErr}}
 	svc := &adminServiceImpl{proxyRepo: repo}
 
 	err := svc.DeleteProxy(context.Background(), 33)
 	require.ErrorIs(t, err, deleteErr)
+}
+
+type proxyRepoWithoutDeletionGuard struct {
+	ProxyRepository
+}
+
+func TestAdminService_DeleteProxy_FailsClosedWithoutAtomicGuard(t *testing.T) {
+	svc := &adminServiceImpl{proxyRepo: &proxyRepoWithoutDeletionGuard{}}
+
+	err := svc.DeleteProxy(context.Background(), 7)
+
+	require.ErrorIs(t, err, ErrProxyDeletionGuardUnavailable)
+}
+
+func TestAdminService_BatchDeleteProxies_UsesAtomicGuardPerProxy(t *testing.T) {
+	repo := &proxyRepoStub{deleteIfUnusedErrByID: map[int64]error{2: ErrProxyInUse}}
+	svc := &adminServiceImpl{proxyRepo: repo}
+
+	result, err := svc.BatchDeleteProxies(context.Background(), []int64{1, 2, 3})
+
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 2, 3}, repo.deleteIfUnusedIDs)
+	require.Equal(t, []int64{1, 3}, result.DeletedIDs)
+	require.Equal(t, []ProxyBatchDeleteSkipped{{ID: 2, Reason: ErrProxyInUse.Error()}}, result.Skipped)
+	require.Empty(t, repo.deletedIDs)
+}
+
+func TestAdminService_BatchDeleteProxies_FailsClosedWithoutAtomicGuard(t *testing.T) {
+	svc := &adminServiceImpl{proxyRepo: &proxyRepoWithoutDeletionGuard{}}
+
+	result, err := svc.BatchDeleteProxies(context.Background(), []int64{1})
+
+	require.Nil(t, result)
+	require.ErrorIs(t, err, ErrProxyDeletionGuardUnavailable)
 }
 
 func TestAdminService_DeleteRedeemCode_Success(t *testing.T) {

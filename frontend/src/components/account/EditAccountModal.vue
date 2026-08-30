@@ -1573,16 +1573,51 @@
             {{ t('userAccounts.loadFactorCreditsInsufficient') }}
           </p>
         </div>
-        <div v-if="!isUserScope">
-          <label class="input-label">{{ t('admin.accounts.priority') }}</label>
+        <div>
+          <div class="mb-1 flex items-center">
+            <label for="account-priority" class="input-label mb-0">
+              {{ t('admin.accounts.priority') }}
+            </label>
+            <HelpTooltip trigger="click" width-class="w-80">
+              <template #trigger>
+                <button
+                  type="button"
+                  data-testid="account-priority-help"
+                  class="-m-3.5 inline-flex h-11 w-11 items-center justify-center rounded-full text-gray-400 transition-colors hover:text-primary-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:text-gray-500 dark:hover:text-primary-400 dark:focus-visible:ring-offset-dark-800"
+                  :aria-label="t('admin.accounts.priorityTooltip.ariaLabel')"
+                >
+                  <span class="inline-flex h-4 w-4 items-center justify-center rounded-full border border-current text-[10px] font-semibold leading-none" aria-hidden="true">?</span>
+                </button>
+              </template>
+              <div class="space-y-2 pr-4">
+                <p class="font-semibold text-white">
+                  {{ t('admin.accounts.priorityTooltip.title') }}
+                </p>
+                <ul class="list-disc space-y-1 pl-4 text-gray-200">
+                  <li>{{ t('admin.accounts.priorityTooltip.rule') }}</li>
+                  <li>{{ t('admin.accounts.priorityTooltip.scope') }}</li>
+                  <li>{{ t('admin.accounts.priorityTooltip.samePriority') }}</li>
+                  <li>{{ t('admin.accounts.priorityTooltip.fallback') }}</li>
+                  <li>{{ t('admin.accounts.priorityTooltip.advancedScheduler') }}</li>
+                </ul>
+              </div>
+            </HelpTooltip>
+          </div>
           <input
             v-model.number="form.priority"
+            id="account-priority"
             type="number"
             min="1"
+            step="1"
+            required
             class="input"
             data-tour="account-form-priority"
+            data-testid="account-priority"
+            aria-describedby="account-priority-hint"
           />
-          <p class="input-hint">{{ t('admin.accounts.priorityHint') }}</p>
+          <p id="account-priority-hint" class="input-hint">
+            {{ t('admin.accounts.priorityHint') }}
+          </p>
         </div>
         <div v-if="canManageBillingRate">
           <label class="input-label">{{ t('admin.accounts.billingRateMultiplier') }}</label>
@@ -2576,6 +2611,7 @@ import type {
 import type { AccountApiScope } from '@/composables/useAccountOAuth'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import ExternalPlacementSelector from '@/components/account-share/ExternalPlacementSelector.vue'
 import { resolveAccountExternalPlacementTarget } from '@/components/account-share/externalPlacement'
 import Select from '@/components/common/Select.vue'
@@ -4283,7 +4319,6 @@ const sanitizeUpdatePayload = (payload: Record<string, unknown>) => {
     delete next.status
     next.concurrency = normalizePersonalAccountConcurrency(next.concurrency)
     next.load_factor = normalizePersonalAccountLoadFactor(next.load_factor)
-    delete next.priority
     delete next.rate_multiplier
     delete next.auto_pause_on_expired
   }
@@ -4426,6 +4461,10 @@ const handleSubmit = async () => {
 
   if (form.status !== 'active' && form.status !== 'inactive' && form.status !== 'disabled' && form.status !== 'error') {
     appStore.showError(t('admin.accounts.pleaseSelectStatus'))
+    return
+  }
+  if (!Number.isInteger(form.priority) || form.priority < 1) {
+    appStore.showError(t('admin.accounts.priorityInvalid'))
     return
   }
   if (isUserScope.value && userLoadFactorCreditsInsufficient.value) {

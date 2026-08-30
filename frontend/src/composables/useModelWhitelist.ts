@@ -169,17 +169,16 @@ const xaiModels = [
   'grok-video-1.5'
 ]
 
-// OpenCode Go 订阅（裸模型 slug，与后端 ownedPersonalDefaultModelMapping 保持一致）
+// OpenCode Go 订阅（裸模型 slug，与后端 opencodeGoModelCatalog 的受审核快照保持一致）
 const opencodeModels = [
-  // GET /models 实测的完整清单（裸 slug，无 opencode-go/ 前缀）。
-  'deepseek-v4-flash', 'deepseek-v4-pro',
-  'glm-5', 'glm-5.1', 'glm-5.2', 'glm-5.3',
-  'kimi-k2.5', 'kimi-k2.6', 'kimi-k2.7-code', 'kimi-k3',
-  'minimax-m2.5', 'minimax-m2.7', 'minimax-m3',
-  'mimo-v2-pro', 'mimo-v2-omni', 'mimo-v2.5', 'mimo-v2.5-pro',
-  'qwen3.5-plus', 'qwen3.6-plus', 'qwen3.7-plus', 'qwen3.7-max', 'qwen3.8-max',
-  'hy3', 'hy3-preview',
-  'gpt-5.6-luna', 'grok-4.5'
+  'minimax-m3', 'minimax-m2.7', 'minimax-m2.5',
+  'kimi-k3', 'kimi-k2.7-code', 'kimi-k2.6', 'longcat-2.0', 'kimi-k2.5',
+  'glm-5.2', 'glm-5.3-flash', 'glm-5.3', 'glm-5.1', 'glm-5',
+  'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp',
+  'qwen3.7-max', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.7-plus', 'qwen3.6-plus', 'qwen3.5-plus',
+  'mimo-v2-pro', 'mimo-v2-omni', 'mimo-v2.5-pro', 'mimo-v2.5',
+  'hy4-preview', 'hy3', 'hy3-preview',
+  'gpt-5.6-luna', 'grok-4.5', 'grok-4.6', 'muse-spark-1.2-contributor'
 ]
 
 // Cohere

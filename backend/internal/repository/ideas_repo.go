@@ -333,8 +333,8 @@ func (r *ideasRepository) ListPublished(ctx context.Context, params service.Idea
 }
 
 func (r *ideasRepository) ListMine(ctx context.Context, userID int64, params service.IdeaPostListParams) ([]service.IdeaPost, int64, error) {
-	where := `p.deleted_at IS NULL AND p.author_user_id = $1`
-	args := []any{userID}
+	where := `p.deleted_at IS NULL AND p.author_user_id = $1 AND ($2 = '' OR p.status = $2)`
+	args := []any{userID, params.Status}
 	return r.list(ctx, where, args, params, true)
 }
 

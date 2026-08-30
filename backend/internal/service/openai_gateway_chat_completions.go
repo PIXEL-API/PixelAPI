@@ -54,6 +54,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	resetOpenAIRequestIdentityState(c)
 	SetActualOpenAIUpstreamEndpoint(c, "")
 	beginUpstreamResponseModelObservation(c)
+	var opencodeResolved *OpencodeGoResolvedModel
 	if account.IsGrok() {
 		useResponses := account.Type != AccountTypeAPIKey || openai_compat.ShouldUseResponsesAPI(account.Extra)
 		if !useResponses {
@@ -70,9 +71,30 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		// identity, search counting, idle handling and billing filters.
 	}
 	if account.IsOpencode() {
-		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
+		resolved, err := resolveOpencodeGoForwardModel(account, gjson.GetBytes(body, "model").String(), defaultMappedModel)
+		if err != nil {
+			return rejectOpencodeGoRoutingError(c, OpencodeGoProtocolChat, err)
+		}
+		switch resolved.Spec.Protocol {
+		case OpencodeGoProtocolChat:
+			return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
+		case OpencodeGoProtocolResponses:
+			if err := validateOpencodeChatToResponsesBridge(body, resolved); err != nil {
+				return rejectOpencodeGoRoutingError(c, OpencodeGoProtocolChat, err)
+			}
+			// Continue through the established Chat → Responses → Chat bridge.
+			SetActualOpenAIUpstreamEndpoint(c, opencodeResponsesRawEndpoint)
+			resolvedCopy := resolved
+			opencodeResolved = &resolvedCopy
+		case OpencodeGoProtocolMessages:
+			return rejectOpencodeGoRoutingError(c, OpencodeGoProtocolChat, newOpencodeGoProtocolMismatch(OpencodeGoProtocolChat, resolved))
+		default:
+			return nil, fmt.Errorf("unsupported OpenCode Go protocol %q for model %q", resolved.Spec.Protocol, resolved.UpstreamModel)
+		}
 	}
-	if account.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
+	// OpenCode Go 的协议由映射后的最终模型目录决定。普通 OpenAI API Key 的
+	// 账号级 Responses 探测/强制模式不得覆盖已经完成的 OpenCode 路由决策。
+	if account.Type == AccountTypeAPIKey && !account.IsOpencode() && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
 		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 	}
 
@@ -91,6 +113,10 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	// derive a stable seed from the final upstream model family.
 	billingModel := resolveOpenAIForwardModel(account, originalModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
+	if opencodeResolved != nil {
+		billingModel = opencodeResolved.BillingModel
+		upstreamModel = opencodeResolved.UpstreamModel
+	}
 
 	promptCacheKey = strings.TrimSpace(promptCacheKey)
 	compatPromptCacheInjected := false
@@ -267,7 +293,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		proxyURL = account.Proxy.URL()
 	}
 	upstreamReq = upstreamReq.WithContext(WithHTTPUpstreamProfile(upstreamReq.Context(), HTTPUpstreamProfileOpenAI))
-	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	resp, err := s.doOpenAIAccountUpstream(upstreamReq, proxyURL, account)
 	if err != nil {
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
 		setOpsUpstreamError(c, 0, safeErr, "")
@@ -352,6 +378,9 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 			result.ServiceTier = forwardedServiceTier
 		}
 		result.ReasoningEffort = reasoningEffort
+	}
+	if opencodeResolved != nil {
+		applyOpencodeGoResolvedModelToResult(result, *opencodeResolved)
 	}
 
 	// Extract and save Codex usage snapshot from response headers (for OAuth accounts)

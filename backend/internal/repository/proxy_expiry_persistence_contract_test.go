@@ -21,12 +21,23 @@ func TestProxyExpirySweepPersistenceIsIdempotentOwnerSafeAndEmitsPreciseOutbox(t
 
 	require.Contains(t, source, "func (r *proxyrepository) sweepexpiredproxies")
 	require.Contains(t, source, "for update skip locked", "multiple workers must not process one proxy concurrently")
+	require.Contains(t, source, "order by id asc for update skip locked", "all source and fallback proxies must be locked in ascending id order")
+	require.Contains(t, source, "order(dbent.asc(dbaccount.fieldid)). forupdate()", "accounts must be locked in ascending id order after proxies")
 	require.Contains(t, source, "proxy_fallback_origin_id is null", "a repeated sweep must not overwrite the original binding")
 	require.Contains(t, source, "proxy_id=$1", "a concurrent administrator update must make the stale sweep predicate miss")
 	require.Contains(t, source, "canaccountuseproxyfallback", "fallback assignment must enforce local owner/scope/capacity policy")
 	require.Contains(t, source, "returning id", "outbox payload must be based on rows actually changed")
 	require.Contains(t, source, "scheduleroutboxeventaccountbulkchanged")
 	require.Contains(t, source, "account_ids")
+}
+
+func TestProxyRepositoryCreateParticipatesInCallerTransaction(t *testing.T) {
+	source := readNormalizedRepositorySource(t, "proxy_repo.go")
+
+	require.Contains(t, source, "r.withproxywritetransaction(ctx, \"proxy create\"")
+	require.Contains(t, source, "client := clientfromcontext(ctx, r.client)")
+	require.Contains(t, source, "builder := client.proxy.create()")
+	require.Contains(t, source, "m, err := clientfromcontext(ctx, r.client).proxy.get(ctx, id)")
 }
 
 func TestProxyExpiryPersistenceKeepsLifecycleAndExistingLocalProxyFields(t *testing.T) {

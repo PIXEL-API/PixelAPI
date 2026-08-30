@@ -1010,6 +1010,9 @@ func normalizeOpenAIModelForUpstream(account *Account, model string) string {
 	if account == nil || account.IsOpenAIOAuth() {
 		return normalizeCodexModel(model)
 	}
+	if account.IsOpencode() {
+		return NormalizeOpencodeGoModelID(model)
+	}
 	// 剥离 Claude Code 的 [1m] 上下文选择后缀：即使账号未配置 model_mapping
 	// （选号放行但映射不命中），也不能把 [1m] 原样透传上游导致上游 404。
 	return normalizeClaudeCodeLongContextModel(strings.TrimSpace(model))

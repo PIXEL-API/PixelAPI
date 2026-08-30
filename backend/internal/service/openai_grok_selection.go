@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
@@ -57,6 +58,23 @@ func (s *OpenAIGatewayService) resolveOpenAIAccountTLSProfile(account *Account) 
 		return nil
 	}
 	return s.tlsFPProfileService.ResolveTLSProfile(account)
+}
+
+// doOpenAIAccountUpstream keeps the ordinary OpenAI/Grok transport unchanged,
+// while ensuring every OpenCode forwarding path uses the account's TLS
+// fingerprint profile. DoWithTLS deliberately degrades to Do when no profile
+// service is injected, which preserves lightweight unit-test construction.
+func (s *OpenAIGatewayService) doOpenAIAccountUpstream(req *http.Request, proxyURL string, account *Account) (*http.Response, error) {
+	if account.IsOpencode() {
+		return s.httpUpstream.DoWithTLS(
+			req,
+			proxyURL,
+			account.ID,
+			account.Concurrency,
+			s.resolveOpenAIAccountTLSProfile(account),
+		)
+	}
+	return s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
 }
 
 // refreshOpencodeUsageIfStale 在调度选号时同步刷新 opencode 账号的用量窗口（若 stale），

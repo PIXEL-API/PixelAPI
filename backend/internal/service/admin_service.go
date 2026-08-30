@@ -4946,10 +4946,7 @@ func proxyAccountLimitExceededError(proxyID, current, limit, additional int64) e
 }
 
 func proxyAccountLimitBelowCurrentError(proxyID, current int64) error {
-	return infraerrors.BadRequest(
-		"PROXY_ACCOUNT_LIMIT_BELOW_CURRENT",
-		fmt.Sprintf("proxy %d already has %d bound accounts; max_accounts cannot be lower than current count unless set to 0", proxyID, current),
-	)
+	return ProxyAccountLimitBelowCurrentError(proxyID, current)
 }
 
 func validateProxyMaxAccountsValue(maxAccounts int) error {
@@ -5259,14 +5256,11 @@ func (s *adminServiceImpl) resolveProxyOwnerUserID(ctx context.Context, ownerUse
 }
 
 func (s *adminServiceImpl) DeleteProxy(ctx context.Context, id int64) error {
-	count, err := s.proxyRepo.CountAccountsByProxyID(ctx, id)
+	repo, err := s.proxyDeletionRepository()
 	if err != nil {
 		return err
 	}
-	if count > 0 {
-		return ErrProxyInUse
-	}
-	return s.proxyRepo.Delete(ctx, id)
+	return repo.DeleteIfUnused(ctx, id)
 }
 
 func (s *adminServiceImpl) BatchDeleteProxies(ctx context.Context, ids []int64) (*ProxyBatchDeleteResult, error) {
@@ -5274,24 +5268,13 @@ func (s *adminServiceImpl) BatchDeleteProxies(ctx context.Context, ids []int64) 
 	if len(ids) == 0 {
 		return result, nil
 	}
+	repo, err := s.proxyDeletionRepository()
+	if err != nil {
+		return nil, err
+	}
 
 	for _, id := range ids {
-		count, err := s.proxyRepo.CountAccountsByProxyID(ctx, id)
-		if err != nil {
-			result.Skipped = append(result.Skipped, ProxyBatchDeleteSkipped{
-				ID:     id,
-				Reason: err.Error(),
-			})
-			continue
-		}
-		if count > 0 {
-			result.Skipped = append(result.Skipped, ProxyBatchDeleteSkipped{
-				ID:     id,
-				Reason: ErrProxyInUse.Error(),
-			})
-			continue
-		}
-		if err := s.proxyRepo.Delete(ctx, id); err != nil {
+		if err := repo.DeleteIfUnused(ctx, id); err != nil {
 			result.Skipped = append(result.Skipped, ProxyBatchDeleteSkipped{
 				ID:     id,
 				Reason: err.Error(),
@@ -5302,6 +5285,17 @@ func (s *adminServiceImpl) BatchDeleteProxies(ctx context.Context, ids []int64) 
 	}
 
 	return result, nil
+}
+
+func (s *adminServiceImpl) proxyDeletionRepository() (ProxyDeletionRepository, error) {
+	if s == nil || s.proxyRepo == nil {
+		return nil, ErrProxyDeletionGuardUnavailable
+	}
+	repo, ok := s.proxyRepo.(ProxyDeletionRepository)
+	if !ok || repo == nil {
+		return nil, ErrProxyDeletionGuardUnavailable
+	}
+	return repo, nil
 }
 
 func (s *adminServiceImpl) GetProxyAccounts(ctx context.Context, proxyID int64) ([]ProxyAccountSummary, error) {

@@ -2912,8 +2912,24 @@ func (s *OpenAIGatewayService) ForwardWithAnalysis(ctx context.Context, c *gin.C
 		return s.forwardGrokResponses(ctx, c, account, body, originalModel, reqStream, startTime)
 	}
 	if account != nil && account.IsOpencode() {
-		// OpenCode Go 订阅端点不提供 /responses，统一落到原生 chat/completions。
-		return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body)
+		resolved, resolveErr := resolveOpencodeGoForwardModel(account, reqModel, "")
+		if resolveErr != nil {
+			return rejectOpencodeGoRoutingError(c, OpencodeGoProtocolResponses, resolveErr)
+		}
+		switch resolved.Spec.Protocol {
+		case OpencodeGoProtocolResponses:
+			return s.forwardOpencodeRawResponses(ctx, c, account, body, resolved, reqStream, startTime)
+		case OpencodeGoProtocolChat:
+			if capabilityErr := validateOpencodeResponsesToChatBridge(body, resolved); capabilityErr != nil {
+				return rejectOpencodeGoRoutingError(c, OpencodeGoProtocolResponses, capabilityErr)
+			}
+			SetActualOpenAIUpstreamEndpoint(c, openAIChatRawEndpoint)
+			return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body)
+		case OpencodeGoProtocolMessages:
+			return rejectOpencodeGoRoutingError(c, OpencodeGoProtocolResponses, newOpencodeGoProtocolMismatch(OpencodeGoProtocolResponses, resolved))
+		default:
+			return nil, fmt.Errorf("unsupported OpenCode Go protocol %q for model %q", resolved.Spec.Protocol, resolved.UpstreamModel)
+		}
 	}
 	if account.Type == AccountTypeAPIKey && imageOnlyResponsesModel {
 		requestErr := fmt.Errorf("/v1/responses does not accept image-only model %q as the top-level model for API Key accounts; use /v1/images/generations, or use a Responses-compatible text model with the image_generation tool", reqModel)
@@ -3899,6 +3915,11 @@ func (s *OpenAIGatewayService) ForwardWithAnalysis(ctx context.Context, c *gin.C
 	}
 }
 
+type openAIPassthroughOptions struct {
+	preserveRequestBody             bool
+	useOpenAIUpstreamFailoverPolicy bool
+}
+
 func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	ctx context.Context,
 	c *gin.Context,
@@ -3909,84 +3930,110 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	reqStream bool,
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
-	ctx, firstOutputStart := ensureOpenAIFirstOutputStart(ctx)
-	cleanRelaySessionBody := body
-	upstreamPassthroughModel := ""
-	if isOpenAIResponsesCompactPath(c) {
-		compactMappedModel := resolveOpenAICompactForwardModel(account, reqModel)
-		if compactMappedModel != "" && compactMappedModel != reqModel {
-			nextBody, setErr := sjson.SetBytes(body, "model", compactMappedModel)
-			if setErr != nil {
-				return nil, fmt.Errorf("set compact passthrough model: %w", setErr)
-			}
-			body = nextBody
-			upstreamPassthroughModel = compactMappedModel
-		}
-	}
+	return s.forwardOpenAIPassthroughWithOptions(
+		ctx,
+		c,
+		account,
+		body,
+		reqModel,
+		reasoningEffort,
+		reqStream,
+		startTime,
+		openAIPassthroughOptions{},
+	)
+}
 
-	if account != nil && account.Type == AccountTypeOAuth {
-		normalizedBody, normalized, err := normalizeOpenAIPassthroughOAuthBody(body, isOpenAIResponsesCompactPath(c))
+func (s *OpenAIGatewayService) forwardOpenAIPassthroughWithOptions(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	body []byte,
+	reqModel string,
+	reasoningEffort *string,
+	reqStream bool,
+	startTime time.Time,
+	options openAIPassthroughOptions,
+) (*OpenAIForwardResult, error) {
+	ctx, firstOutputStart := ensureOpenAIFirstOutputStart(ctx)
+	upstreamPassthroughModel := ""
+	if !options.preserveRequestBody {
+		cleanRelaySessionBody := body
+		if isOpenAIResponsesCompactPath(c) {
+			compactMappedModel := resolveOpenAICompactForwardModel(account, reqModel)
+			if compactMappedModel != "" && compactMappedModel != reqModel {
+				nextBody, setErr := sjson.SetBytes(body, "model", compactMappedModel)
+				if setErr != nil {
+					return nil, fmt.Errorf("set compact passthrough model: %w", setErr)
+				}
+				body = nextBody
+				upstreamPassthroughModel = compactMappedModel
+			}
+		}
+
+		if account != nil && account.Type == AccountTypeOAuth {
+			normalizedBody, normalized, err := normalizeOpenAIPassthroughOAuthBody(body, isOpenAIResponsesCompactPath(c))
+			if err != nil {
+				return nil, err
+			}
+			if normalized {
+				body = normalizedBody
+			}
+			reqStream = gjson.GetBytes(body, "stream").Bool()
+
+			if rejectReason := detectOpenAIPassthroughInstructionsRejectReason(reqModel, body); rejectReason != "" {
+				rejectMsg := "OpenAI codex passthrough requires a non-empty instructions field"
+				setOpsUpstreamError(c, http.StatusForbidden, rejectMsg, "")
+				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					Platform:           account.Platform,
+					AccountID:          account.ID,
+					AccountName:        account.Name,
+					UpstreamStatusCode: http.StatusForbidden,
+					Passthrough:        true,
+					Kind:               "request_error",
+					Message:            rejectMsg,
+					Detail:             rejectReason,
+				})
+				logOpenAIPassthroughInstructionsRejected(ctx, c, account, reqModel, rejectReason, body)
+				c.JSON(http.StatusForbidden, gin.H{
+					"error": gin.H{
+						"type":    "forbidden_error",
+						"message": rejectMsg,
+					},
+				})
+				return nil, fmt.Errorf("openai passthrough rejected before upstream: %s", rejectReason)
+			}
+		}
+		if finalModel := strings.TrimSpace(gjson.GetBytes(body, "model").String()); finalModel != "" && finalModel != reqModel {
+			upstreamPassthroughModel = finalModel
+		}
+
+		sanitizedBody, sanitized, err := sanitizeEmptyBase64InputImagesInOpenAIBody(body)
 		if err != nil {
 			return nil, err
 		}
-		if normalized {
-			body = normalizedBody
+		if sanitized {
+			body = sanitizedBody
 		}
-		reqStream = gjson.GetBytes(body, "stream").Bool()
-
-		if rejectReason := detectOpenAIPassthroughInstructionsRejectReason(reqModel, body); rejectReason != "" {
-			rejectMsg := "OpenAI codex passthrough requires a non-empty instructions field"
-			setOpsUpstreamError(c, http.StatusForbidden, rejectMsg, "")
-			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
-				Platform:           account.Platform,
-				AccountID:          account.ID,
-				AccountName:        account.Name,
-				UpstreamStatusCode: http.StatusForbidden,
-				Passthrough:        true,
-				Kind:               "request_error",
-				Message:            rejectMsg,
-				Detail:             rejectReason,
-			})
-			logOpenAIPassthroughInstructionsRejected(ctx, c, account, reqModel, rejectReason, body)
-			c.JSON(http.StatusForbidden, gin.H{
-				"error": gin.H{
-					"type":    "forbidden_error",
-					"message": rejectMsg,
-				},
-			})
-			return nil, fmt.Errorf("openai passthrough rejected before upstream: %s", rejectReason)
+		if account != nil && account.Type == AccountTypeOAuth && !isOpenAIResponsesCompactPath(c) {
+			fingerprintedBody, _, _, fingerprintErr := s.applyCodexFingerprintToRawBody(ctx, c, account, body)
+			if fingerprintErr != nil {
+				return nil, fingerprintErr
+			}
+			body = fingerprintedBody
+		}
+		relayBody, cleanRelayState, _, relayErr := s.applyOpenAICleanRelayToRawBody(ctx, c, account, body, cleanRelaySessionBody)
+		if relayErr != nil {
+			return nil, relayErr
+		}
+		body = relayBody
+		if cleanRelayState != nil {
+			reqStream = gjson.GetBytes(body, "stream").Bool()
 		}
 	}
-	if finalModel := strings.TrimSpace(gjson.GetBytes(body, "model").String()); finalModel != "" && finalModel != reqModel {
-		upstreamPassthroughModel = finalModel
-	}
 
-	sanitizedBody, sanitized, err := sanitizeEmptyBase64InputImagesInOpenAIBody(body)
-	if err != nil {
-		return nil, err
-	}
-	if sanitized {
-		body = sanitizedBody
-	}
-	if account != nil && account.Type == AccountTypeOAuth && !isOpenAIResponsesCompactPath(c) {
-		fingerprintedBody, _, _, fingerprintErr := s.applyCodexFingerprintToRawBody(ctx, c, account, body)
-		if fingerprintErr != nil {
-			return nil, fingerprintErr
-		}
-		body = fingerprintedBody
-	}
-	var cleanRelayState *openAICleanRelayState
-	body, cleanRelayState, _, err = s.applyOpenAICleanRelayToRawBody(ctx, c, account, body, cleanRelaySessionBody)
-	if err != nil {
-		return nil, err
-	}
-	if cleanRelayState != nil {
-		reqStream = gjson.GetBytes(body, "stream").Bool()
-	}
-
-	// Apply OpenAI fast policy to the passthrough body (filter/block by service_tier).
-	// 缁熶竴浣跨敤 upstream 瑙嗚鐨?model锛氶€忎紶璺緞涓?body 宸茬粡杩?compact 鏄犲皠 +
-	// OAuth normalize锛宐ody 涓殑 model 瀛楁鍗充笂娓哥湡姝ｄ細鐪嬪埌鐨?slug銆?	// 杩欐牱鍙互涓?chat-completions / messages / native /responses 鍏ュ彛鐨?	// upstreamModel 淇濇寔涓€鑷达紝閬垮厤 whitelist 鍛戒腑宸紓銆傚綋 body 涓病鏈?	// model 瀛楁鏃堕€€鍥?reqModel銆?
+	// Fast policy is an administrative control, not a protocol transformation.
+	// It must therefore run even when the native OpenCode Responses body is
+	// otherwise preserved. Use the final upstream model slug for whitelist rules.
 	policyModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
 	if policyModel == "" {
 		policyModel = reqModel
@@ -4000,6 +4047,11 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		return nil, policyErr
 	}
 	body = updatedBody
+	if options.preserveRequestBody {
+		if finalModel := strings.TrimSpace(gjson.GetBytes(body, "model").String()); finalModel != "" && finalModel != reqModel {
+			upstreamPassthroughModel = finalModel
+		}
+	}
 	responseEndpoint := openAIResponsesEndpoint + openAIResponsesRequestPathSuffix(c)
 	imageBillingConfig := resolveOpenAIResponseImageBillingConfigFromBody(responseEndpoint, reqModel, body)
 	serviceTier := extractOpenAIServiceTierFromBody(body)
@@ -4115,7 +4167,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 
 		upstreamReq = upstreamReq.WithContext(WithHTTPUpstreamProfile(upstreamReq.Context(), HTTPUpstreamProfileOpenAI))
 		upstreamStart := time.Now()
-		resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+		resp, err := s.doOpenAIAccountUpstream(upstreamReq, proxyURL, account)
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 		if headerGuard != nil && headerGuard.stopHeaderWait() {
 			if resp != nil && resp.Body != nil {
@@ -4193,7 +4245,11 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 			// 閫忎紶妯″紡榛樿淇濇寔鍘熸牱浠ｇ悊锛涗絾瀹归噺/杩囪浇绫婚敊璇簲鍏堣Е鍙戝璐﹀彿
 			// failover 浠ョ淮鎸佸熀纭€ SLA銆?
-			if shouldFailoverOpenAIPassthroughResponse(resp.StatusCode, upstreamMsg, respBody) {
+			shouldFailover := shouldFailoverOpenAIPassthroughResponse(resp.StatusCode, upstreamMsg, respBody)
+			if options.useOpenAIUpstreamFailoverPolicy {
+				shouldFailover = s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, respBody)
+			}
+			if shouldFailover {
 				return nil, s.handleFailoverErrorResponsePassthrough(ctx, resp, c, account, body)
 			}
 			return nil, s.handleErrorResponsePassthrough(ctx, resp, c, account, body)
@@ -4308,13 +4364,10 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	case AccountTypeOAuth:
 		targetURL = chatgptCodexURL
 	case AccountTypeAPIKey:
-		baseURL := account.GetOpenAIBaseURL()
-		if baseURL != "" {
-			validatedURL, err := s.validateUpstreamBaseURL(baseURL)
-			if err != nil {
-				return nil, err
-			}
-			targetURL = buildOpenAIResponsesURL(validatedURL)
+		var err error
+		targetURL, err = s.resolveOpenAIAPIKeyResponsesURL(account)
+		if err != nil {
+			return nil, err
 		}
 	}
 	targetURL = appendOpenAIResponsesRequestPathSuffix(targetURL, openAIResponsesRequestPathSuffix(c))
@@ -5743,16 +5796,12 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 		// OAuth accounts use ChatGPT internal API
 		targetURL = chatgptCodexURL
 	case AccountTypeAPIKey:
-		// API Key accounts use Platform API or custom base URL
-		baseURL := account.GetOpenAIBaseURL()
-		if baseURL == "" {
-			targetURL = openaiPlatformAPIURL
-		} else {
-			validatedURL, err := s.validateUpstreamBaseURL(baseURL)
-			if err != nil {
-				return nil, err
-			}
-			targetURL = buildOpenAIResponsesURL(validatedURL)
+		// API Key accounts use Platform API or their validated custom base URL.
+		// OpenCode accounts resolve to the fixed Go subscription base URL.
+		var err error
+		targetURL, err = s.resolveOpenAIAPIKeyResponsesURL(account)
+		if err != nil {
+			return nil, err
 		}
 	default:
 		targetURL = openaiPlatformAPIURL

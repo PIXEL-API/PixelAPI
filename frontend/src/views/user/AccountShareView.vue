@@ -13595,7 +13595,7 @@ onBeforeUnmount(() => {
 }
 
 .listing-runtime-tile > svg {
-  color: rgb(107 114 128);
+  color: rgb(var(--ui-text-subtle));
 }
 
 .listing-runtime-summary {
@@ -13608,13 +13608,13 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.375rem;
-  color: rgb(75 85 99);
+  color: rgb(var(--ui-text-muted));
   font-size: 0.75rem;
   line-height: 1rem;
 }
 
 .listing-runtime-summary-content > strong {
-  color: rgb(17 24 39);
+  color: rgb(var(--ui-text));
   font-size: 0.8125rem;
   font-weight: 800;
 }
@@ -13707,7 +13707,7 @@ onBeforeUnmount(() => {
 .combined-availability-head {
   display: contents;
   font-size: 0.75rem;
-  color: rgb(75 85 99);
+  color: rgb(var(--ui-text-muted));
 }
 
 .combined-availability-head span {
@@ -13717,7 +13717,7 @@ onBeforeUnmount(() => {
 
 .combined-availability-head strong {
   grid-column: 3;
-  color: rgb(17 24 39);
+  color: rgb(var(--ui-text));
   font-size: 0.875rem;
   font-weight: 800;
 }
@@ -13865,10 +13865,6 @@ onBeforeUnmount(() => {
   background: rgb(39 39 42 / 0.45);
 }
 
-.dark .combined-availability-head {
-  color: rgb(161 161 170);
-}
-
 .dark .combined-availability-track {
   background: rgb(63 63 70);
 }
@@ -13883,7 +13879,6 @@ onBeforeUnmount(() => {
 }
 
 .dark .listing-runtime-value-row strong,
-.dark .combined-availability-head strong,
 .dark .capacity-panel strong {
   color: white;
 }

@@ -36,13 +36,37 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 ) (*OpenAIForwardResult, error) {
 	resetOpenAIRequestIdentityState(c)
 	beginUpstreamResponseModelObservation(c)
+	var opencodeResolved *OpencodeGoResolvedModel
 	if account.IsOpencode() {
-		if !opencodeSupportsAnthropicMessagesFormat(gjson.GetBytes(body, "model").String()) {
-			return s.forwardAnthropicViaRawChatCompletions(ctx, c, account, body, defaultMappedModel)
+		resolved, err := resolveOpencodeGoForwardModel(account, gjson.GetBytes(body, "model").String(), defaultMappedModel)
+		if err != nil {
+			return rejectOpencodeGoRoutingError(c, OpencodeGoProtocolMessages, err)
 		}
-		return s.forwardAsRawAnthropicMessages(ctx, c, account, body, defaultMappedModel)
+		switch resolved.Spec.Protocol {
+		case OpencodeGoProtocolMessages:
+			return s.forwardAsRawAnthropicMessages(ctx, c, account, body, defaultMappedModel)
+		case OpencodeGoProtocolChat:
+			if err := validateOpencodeMessagesToChatBridge(body, resolved); err != nil {
+				return rejectOpencodeGoRoutingError(c, OpencodeGoProtocolMessages, err)
+			}
+			SetActualOpenAIUpstreamEndpoint(c, openAIChatRawEndpoint)
+			return s.forwardAnthropicViaRawChatCompletions(ctx, c, account, body, defaultMappedModel, resolved)
+		case OpencodeGoProtocolResponses:
+			if err := validateOpencodeMessagesToResponsesBridge(body, resolved); err != nil {
+				return rejectOpencodeGoRoutingError(c, OpencodeGoProtocolMessages, err)
+			}
+			// Continue through the established Anthropic → Responses → Anthropic
+			// bridge. buildUpstreamRequest selects the OpenCode Go Responses URL.
+			SetActualOpenAIUpstreamEndpoint(c, opencodeResponsesRawEndpoint)
+			resolvedCopy := resolved
+			opencodeResolved = &resolvedCopy
+		default:
+			return nil, fmt.Errorf("unsupported OpenCode Go protocol %q for model %q", resolved.Spec.Protocol, resolved.UpstreamModel)
+		}
 	}
-	if account.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
+	// OpenCode Go 的协议由映射后的最终模型目录决定。普通 OpenAI API Key 的
+	// 账号级 Responses 探测/强制模式不得覆盖已经完成的 OpenCode 路由决策。
+	if account.Type == AccountTypeAPIKey && !account.IsOpencode() && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
 		return s.forwardAnthropicViaRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 	}
 
@@ -60,6 +84,10 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 
 	billingModel := resolveOpenAIForwardModel(account, normalizedModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
+	if opencodeResolved != nil {
+		billingModel = opencodeResolved.BillingModel
+		upstreamModel = opencodeResolved.UpstreamModel
+	}
 	if account.Platform == PlatformGrok {
 		ctx = withGrokRequestedModel(ctx, upstreamModel)
 	}
@@ -289,7 +317,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		proxyURL = account.Proxy.URL()
 	}
 	upstreamReq = upstreamReq.WithContext(WithHTTPUpstreamProfile(upstreamReq.Context(), HTTPUpstreamProfileOpenAI))
-	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	resp, err := s.doOpenAIAccountUpstream(upstreamReq, proxyURL, account)
 	if err != nil {
 		if account.Platform == PlatformGrok {
 			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
@@ -426,6 +454,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			result.ServiceTier = forwardedServiceTier
 		}
 		result.ReasoningEffort = reasoningEffort
+	}
+	if opencodeResolved != nil {
+		applyOpencodeGoResolvedModelToResult(result, *opencodeResolved)
 	}
 
 	// Extract and save Codex usage snapshot from response headers (for OAuth accounts)

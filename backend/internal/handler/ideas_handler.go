@@ -126,6 +126,7 @@ func (h *IdeasHandler) Mine(c *gin.Context) {
 		Page:     page,
 		PageSize: pageSize,
 		Sort:     c.Query("sort"),
+		Status:   c.Query("status"),
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)

@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 )
@@ -45,18 +46,143 @@ func TestOpencodeHelpersRejectNonOpencode(t *testing.T) {
 	}
 }
 
-func TestOpencodeSupportsAnthropicMessagesFormat(t *testing.T) {
-	if opencodeSupportsAnthropicMessagesFormat("grok-4.5") {
-		t.Fatal("grok-4.5 must be treated as chat-only (not anthropic-messages capable)")
+func TestNormalizeOpencodeGoModelID(t *testing.T) {
+	tests := []struct {
+		name  string
+		model string
+		want  string
+	}{
+		{name: "trim whitespace", model: "  deepseek-v4-flash  ", want: "deepseek-v4-flash"},
+		{name: "opencode prefix", model: "opencode/grok-4.6", want: "grok-4.6"},
+		{name: "opencode go prefix and long context", model: " opencode-go/grok-4.5[1m] ", want: "grok-4.5"},
+		{name: "repeated long context suffix", model: "qwen3.8-flash[1m][1M]", want: "qwen3.8-flash"},
+		{name: "ordinary slash is preserved", model: "custom/vendor-model", want: "custom/vendor-model"},
+		{name: "known prefix is removed only once", model: "opencode/opencode-go/grok-4.6", want: "opencode-go/grok-4.6"},
+		{name: "empty", model: "  ", want: ""},
 	}
-	if opencodeSupportsAnthropicMessagesFormat("grok-4.5[1m]") {
-		t.Fatal("grok-4.5[1m] should still route to chat-completions conversion")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := NormalizeOpencodeGoModelID(tt.model); got != tt.want {
+				t.Fatalf("NormalizeOpencodeGoModelID(%q) = %q, want %q", tt.model, got, tt.want)
+			}
+		})
 	}
-	if !opencodeSupportsAnthropicMessagesFormat("deepseek-v4-flash") {
-		t.Fatal("deepseek-v4-flash should keep the native anthropic messages path")
+}
+
+func TestResolveOpencodeGoModelSpec(t *testing.T) {
+	tests := []struct {
+		name       string
+		model      string
+		protocol   OpencodeGoProtocol
+		deprecated bool
+		found      bool
+	}{
+		{name: "chat", model: "deepseek-v4-flash", protocol: OpencodeGoProtocolChat, found: true},
+		{name: "messages", model: "opencode-go/minimax-m3[1m]", protocol: OpencodeGoProtocolMessages, found: true},
+		{name: "documented qwen messages", model: "opencode-go/qwen3.7-plus", protocol: OpencodeGoProtocolMessages, found: true},
+		{name: "responses", model: "opencode/grok-4.6", protocol: OpencodeGoProtocolResponses, found: true},
+		{name: "deprecated", model: "grok-4.5", protocol: OpencodeGoProtocolResponses, deprecated: true, found: true},
+		{name: "unknown", model: "future-model", found: false},
+		{name: "unknown slash model", model: "custom/deepseek-v4-flash", found: false},
+		{name: "empty", model: "", found: false},
 	}
-	if !opencodeSupportsAnthropicMessagesFormat("") {
-		t.Fatal("empty model should keep the native anthropic messages path")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spec, found := ResolveOpencodeGoModelSpec(tt.model)
+			if found != tt.found {
+				t.Fatalf("ResolveOpencodeGoModelSpec(%q) found = %v, want %v", tt.model, found, tt.found)
+			}
+			if !tt.found {
+				if spec != (OpencodeGoModelSpec{}) {
+					t.Fatalf("unknown model spec = %+v, want zero value", spec)
+				}
+				return
+			}
+			if spec.ID != NormalizeOpencodeGoModelID(tt.model) || spec.Protocol != tt.protocol || spec.Deprecated != tt.deprecated {
+				t.Fatalf("resolved spec = %+v, want protocol=%q deprecated=%v", spec, tt.protocol, tt.deprecated)
+			}
+		})
+	}
+}
+
+func TestOpencodeDefaultModelSlugs(t *testing.T) {
+	models := OpencodeDefaultModelSlugs()
+	wantModels := []string{
+		"minimax-m3", "minimax-m2.7", "minimax-m2.5",
+		"kimi-k3", "kimi-k2.7-code", "kimi-k2.6", "longcat-2.0", "kimi-k2.5",
+		"glm-5.2", "glm-5.3-flash", "glm-5.3", "glm-5.1", "glm-5",
+		"deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp",
+		"qwen3.7-max", "qwen3.8-max", "qwen3.8-flash", "qwen3.7-plus", "qwen3.6-plus", "qwen3.5-plus",
+		"mimo-v2-pro", "mimo-v2-omni", "mimo-v2.5-pro", "mimo-v2.5",
+		"hy4-preview", "hy3", "hy3-preview",
+		"gpt-5.6-luna", "grok-4.5", "grok-4.6", "muse-spark-1.2-contributor",
+	}
+	if !slices.Equal(models, wantModels) {
+		t.Fatalf("model snapshot mismatch\n got: %v\nwant: %v", models, wantModels)
+	}
+
+	seen := make(map[string]struct{}, len(models))
+	deprecated := make(map[string]bool, 7)
+	messagesModels := map[string]bool{
+		"minimax-m3":    true,
+		"minimax-m2.7":  true,
+		"minimax-m2.5":  true,
+		"qwen3.7-max":   true,
+		"qwen3.8-max":   true,
+		"qwen3.8-flash": true,
+		"qwen3.7-plus":  true,
+		"qwen3.6-plus":  true,
+	}
+	responsesModels := map[string]bool{
+		"gpt-5.6-luna":               true,
+		"grok-4.5":                   true,
+		"grok-4.6":                   true,
+		"muse-spark-1.2-contributor": true,
+	}
+	for _, model := range models {
+		if _, exists := seen[model]; exists {
+			t.Fatalf("duplicate model %q", model)
+		}
+		seen[model] = struct{}{}
+
+		spec, found := ResolveOpencodeGoModelSpec(model)
+		if !found {
+			t.Fatalf("catalog model %q cannot be resolved", model)
+		}
+		wantProtocol := OpencodeGoProtocolChat
+		if messagesModels[model] {
+			wantProtocol = OpencodeGoProtocolMessages
+		} else if responsesModels[model] {
+			wantProtocol = OpencodeGoProtocolResponses
+		}
+		if spec.Protocol != wantProtocol {
+			t.Fatalf("model %q protocol = %q, want %q", model, spec.Protocol, wantProtocol)
+		}
+		if spec.Deprecated {
+			deprecated[model] = true
+		}
+	}
+
+	for _, model := range []string{
+		"grok-4.5",
+		"minimax-m2.5",
+		"qwen3.5-plus",
+		"glm-5",
+		"kimi-k2.5",
+		"mimo-v2-pro",
+		"mimo-v2-omni",
+	} {
+		if !deprecated[model] {
+			t.Errorf("model %q must be marked deprecated", model)
+		}
+	}
+	if len(deprecated) != 7 {
+		t.Fatalf("deprecated model count = %d, want 7", len(deprecated))
+	}
+
+	models[0] = "mutated"
+	if fresh := OpencodeDefaultModelSlugs(); len(fresh) != 33 || fresh[0] == "mutated" {
+		t.Fatalf("OpencodeDefaultModelSlugs did not return an independent copy: %v", fresh)
 	}
 }
 

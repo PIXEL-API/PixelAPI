@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
+import { useRoute } from 'vue-router'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import {
@@ -16,14 +17,15 @@ import {
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import Skeleton from '@/components/common/Skeleton.vue'
+import IdeasHeader from '@/components/ideas/IdeasHeader.vue'
 import { useAppStore } from '@/stores/app'
 import type { IdeaPost } from '@/types/ideas'
 
 marked.setOptions({ breaks: true, gfm: true })
 
 const appStore = useAppStore()
+const { t, locale } = useI18n()
 const route = useRoute()
-const router = useRouter()
 const id = Number(route.params.id)
 const post = ref<IdeaPost | null>(null)
 const loading = ref(true)
@@ -40,6 +42,17 @@ const reportOpen = ref(false)
 const reportReason = ref('')
 const reportDetail = ref('')
 const reportSubmitting = ref(false)
+const rewardOptions = computed(() => [
+  { value: 'balance' as const, label: t('ideas.detail.rewardDialog.balance') },
+  { value: 'points' as const, label: t('ideas.detail.rewardDialog.points') },
+])
+const reportOptions = computed(() => [
+  { value: '垃圾广告', label: t('ideas.detail.reportDialog.reasons.spam') },
+  { value: '不实信息', label: t('ideas.detail.reportDialog.reasons.misinformation') },
+  { value: '侵权', label: t('ideas.detail.reportDialog.reasons.infringement') },
+  { value: '违法违规', label: t('ideas.detail.reportDialog.reasons.illegal') },
+  { value: '其他', label: t('ideas.detail.reportDialog.reasons.other') },
+])
 
 const renderedHtml = computed(() => {
   const body = post.value?.revision?.body || ''
@@ -50,13 +63,14 @@ const authorInitial = computed(() => (post.value?.author_name || '?').trim().cha
 
 function formatDate(s?: string) {
   if (!s) return ''
-  return new Date(s).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })
+  return new Date(s).toLocaleDateString(locale.value, { year: 'numeric', month: 'long', day: 'numeric' })
 }
 
 function formatCount(n: number) {
-  if (n >= 10000) return `${(n / 10000).toFixed(1)}w`
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
-  return String(n)
+  return new Intl.NumberFormat(locale.value, {
+    notation: n >= 1000 ? 'compact' : 'standard',
+    maximumFractionDigits: 1,
+  }).format(n)
 }
 
 async function load() {
@@ -66,7 +80,7 @@ async function load() {
     post.value = await getIdea(id)
     void recordIdeaView(id).catch(() => undefined)
   } catch (e: any) {
-    error.value = e?.message || '加载失败'
+    error.value = e?.message || t('ideas.detail.loadFailed')
   } finally {
     loading.value = false
   }
@@ -84,7 +98,7 @@ async function toggleLike() {
   } catch (e: any) {
     post.value.liked = prev.liked
     post.value.like_count = prev.count
-    appStore.showError(e?.message || '操作失败，请重试')
+    appStore.showError(e?.message || t('ideas.detail.actionFailed'))
   } finally {
     likePending.value = false
   }
@@ -102,7 +116,7 @@ async function toggleFavorite() {
   } catch (e: any) {
     post.value.favorited = prev.favorited
     post.value.favorite_count = prev.count
-    appStore.showError(e?.message || '操作失败，请重试')
+    appStore.showError(e?.message || t('ideas.detail.actionFailed'))
   } finally {
     favoritePending.value = false
   }
@@ -117,7 +131,7 @@ function openReward() {
 async function submitReward() {
   if (!post.value || rewardSubmitting.value) return
   if (!rewardAmount.value || rewardAmount.value <= 0) {
-    appStore.showWarning('请输入有效的打赏金额')
+    appStore.showWarning(t('ideas.detail.rewardAmountInvalid'))
     return
   }
   rewardSubmitting.value = true
@@ -125,9 +139,9 @@ async function submitReward() {
   try {
     await rewardIdea(id, { asset_type: rewardType.value, amount: rewardAmount.value }, key)
     rewardDialogOpen.value = false
-    appStore.showSuccess('打赏成功，感谢支持！')
+    appStore.showSuccess(t('ideas.detail.rewardSuccess'))
   } catch (e: any) {
-    appStore.showError(e?.message || '打赏失败')
+    appStore.showError(e?.message || t('ideas.detail.rewardFailed'))
   } finally {
     rewardSubmitting.value = false
   }
@@ -145,9 +159,9 @@ async function submitReport() {
   try {
     await reportIdea(id, { reason: reportReason.value.trim(), detail: reportDetail.value.trim() })
     reportOpen.value = false
-    appStore.showSuccess('举报已提交，我们会尽快处理')
+    appStore.showSuccess(t('ideas.detail.reportSuccess'))
   } catch (e: any) {
-    appStore.showError(e?.message || '举报失败')
+    appStore.showError(e?.message || t('ideas.detail.reportFailed'))
   } finally {
     reportSubmitting.value = false
   }
@@ -157,15 +171,16 @@ onMounted(load)
 </script>
 
 <template>
-  <div class="min-h-full bg-canvas text-content">
+  <div class="min-h-screen bg-canvas text-content">
+    <IdeasHeader />
     <div class="mx-auto max-w-4xl px-4 pb-16 pt-6 md:px-6">
-      <button
-        class="mb-6 inline-flex items-center gap-2 text-sm text-content-muted transition-colors hover:text-content"
-        @click="router.back()"
+      <RouterLink
+        to="/ideas"
+        class="mb-6 inline-flex min-h-11 items-center gap-2 rounded-control px-2 py-2 text-sm text-content-muted transition-colors hover:bg-surface-subtle hover:text-content"
       >
         <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" /></svg>
-        返回
-      </button>
+        {{ t('ideas.common.backToPlaza') }}
+      </RouterLink>
 
       <!-- Loading -->
       <div v-if="loading" class="rounded-panel border border-line bg-surface p-8">
@@ -177,14 +192,14 @@ onMounted(load)
 
       <!-- Error -->
       <div v-else-if="error" class="rounded-panel border border-line bg-surface p-10">
-        <EmptyState :title="error" description="这篇文章可能不存在或暂不可访问">
+        <EmptyState :title="error" :description="t('ideas.detail.unavailable')">
           <template #icon>
             <svg class="h-10 w-10 text-danger" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" /></svg>
           </template>
           <template #action>
             <button class="inline-flex h-10 items-center gap-2 rounded-control bg-brand px-5 text-sm font-semibold text-content-inverse transition-colors hover:bg-brand-strong" @click="load">
               <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" /></svg>
-              重试
+              {{ t('ideas.common.retry') }}
             </button>
           </template>
         </EmptyState>
@@ -209,7 +224,7 @@ onMounted(load)
               <span class="font-medium text-content">{{ post.author_name }}</span>
             </span>
             <span class="inline-flex items-center gap-1.5"><svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>{{ formatDate(post.published_at || post.created_at) }}</span>
-            <span class="inline-flex items-center gap-1.5"><svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178zM15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>{{ formatCount(post.view_count) }} 阅读</span>
+            <span class="inline-flex items-center gap-1.5"><svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178zM15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>{{ formatCount(post.view_count) }} {{ t('ideas.common.views') }}</span>
           </div>
         </div>
 
@@ -222,7 +237,7 @@ onMounted(load)
             @click="toggleLike"
           >
             <svg class="h-4 w-4" viewBox="0 0 24 24" :fill="post.liked ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8.25c0-2.485-2.099-4.5-4.688-4.5-1.935 0-3.597 1.126-4.312 2.733-.715-1.607-2.377-2.733-4.313-2.733C5.1 3.75 3 5.765 3 8.25c0 7.22 9 12 9 12s9-4.78 9-12z" /></svg>
-            赞 {{ formatCount(post.like_count) }}
+            {{ t('ideas.detail.like') }} {{ formatCount(post.like_count) }}
           </button>
           <button
             v-if="post.status === 'published'"
@@ -231,7 +246,7 @@ onMounted(load)
             @click="toggleFavorite"
           >
             <svg class="h-4 w-4" viewBox="0 0 24 24" :fill="post.favorited ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0111.186 0z" /></svg>
-            收藏 {{ formatCount(post.favorite_count) }}
+            {{ t('ideas.detail.favorite') }} {{ formatCount(post.favorite_count) }}
           </button>
           <button
             v-if="post.can_reward"
@@ -239,7 +254,7 @@ onMounted(load)
             @click="openReward"
           >
             <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.25v8.25a1.5 1.5 0 01-1.5 1.5H4.5a1.5 1.5 0 01-1.5-1.5v-8.25M12 4.875A2.625 2.625 0 109.375 7.5H12m0-2.625V7.5m0-2.625A2.625 2.625 0 1114.625 7.5H12m0 0V21m-8.625-9.75h18c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125h-18c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z" /></svg>
-            打赏
+            {{ t('ideas.detail.reward') }}
           </button>
           <span class="flex-1"></span>
           <RouterLink
@@ -248,14 +263,14 @@ onMounted(load)
             class="inline-flex h-9 items-center gap-1.5 rounded-panel border border-line bg-surface px-4 text-sm font-medium text-content-muted transition-colors hover:text-brand"
           >
             <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125" /></svg>
-            编辑
+            {{ t('ideas.common.edit') }}
           </RouterLink>
           <button
             class="inline-flex h-9 items-center gap-1.5 rounded-panel border border-line bg-surface px-4 text-sm font-medium text-content-muted transition-colors hover:text-danger"
             @click="openReport"
           >
             <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" /></svg>
-            举报
+            {{ t('ideas.detail.report') }}
           </button>
         </div>
 
@@ -264,76 +279,72 @@ onMounted(load)
 
         <!-- Footer -->
         <div class="flex flex-wrap items-center justify-between gap-3 border-t border-line bg-surface-subtle/60 px-6 py-4 md:px-10">
-          <span class="text-xs text-content-subtle">觉得有帮助？支持作者一份心意</span>
+          <span class="text-xs text-content-subtle">{{ t('ideas.detail.supportPrompt') }}</span>
           <button
             v-if="post.can_reward"
             class="inline-flex h-9 items-center gap-1.5 rounded-panel border border-brand/30 bg-brand-soft px-4 text-sm font-medium text-brand transition-colors hover:bg-brand/10"
             @click="openReward"
           >
             <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.25v8.25a1.5 1.5 0 01-1.5 1.5H4.5a1.5 1.5 0 01-1.5-1.5v-8.25M12 4.875A2.625 2.625 0 109.375 7.5H12m0-2.625V7.5m0-2.625A2.625 2.625 0 1114.625 7.5H12m0 0V21m-8.625-9.75h18c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125h-18c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z" /></svg>
-            打赏作者
+            {{ t('ideas.detail.rewardAuthor') }}
           </button>
         </div>
       </article>
 
       <!-- Reward Dialog -->
-      <BaseDialog :show="rewardDialogOpen" title="打赏作者" width="narrow" @close="rewardDialogOpen = false">
+      <BaseDialog :show="rewardDialogOpen" :title="t('ideas.detail.rewardAuthor')" width="narrow" @close="rewardDialogOpen = false">
         <div class="space-y-4">
-          <p class="text-sm text-content-muted">感谢你的支持！打赏将直接进入作者余额。</p>
+          <p class="text-sm text-content-muted">{{ t('ideas.detail.rewardDialog.description') }}</p>
           <div>
-            <label class="mb-1.5 block text-xs font-medium text-content-muted">奖励方式</label>
+            <label class="mb-1.5 block text-xs font-medium text-content-muted">{{ t('ideas.detail.rewardDialog.method') }}</label>
             <div class="grid grid-cols-2 gap-2">
               <button
-                v-for="opt in ([['balance', '余额'], ['points', '积分']] as const)"
-                :key="opt[0]"
+                v-for="opt in rewardOptions"
+                :key="opt.value"
                 class="rounded-control border px-3 py-2 text-sm font-medium transition-all"
-                :class="rewardType === opt[0] ? 'border-brand bg-brand-soft text-brand' : 'border-line bg-surface-subtle text-content-muted hover:border-brand/40'"
-                @click="rewardType = opt[0]"
-              >{{ opt[1] }}</button>
+                :class="rewardType === opt.value ? 'border-brand bg-brand-soft text-brand' : 'border-line bg-surface-subtle text-content-muted hover:border-brand/40'"
+                @click="rewardType = opt.value"
+              >{{ opt.label }}</button>
             </div>
           </div>
           <div>
-            <label class="mb-1.5 block text-xs font-medium text-content-muted">金额</label>
+            <label class="mb-1.5 block text-xs font-medium text-content-muted">{{ t('ideas.detail.rewardDialog.amount') }}</label>
             <div class="flex items-center gap-2 rounded-control border border-line bg-surface-subtle px-3">
               <span class="text-content-subtle">{{ rewardType === 'balance' ? '¥' : '' }}</span>
               <input v-model.number="rewardAmount" type="number" min="1" max="100" step="1" class="h-10 w-full bg-transparent text-sm text-content outline-none" />
-              <span class="text-content-subtle">{{ rewardType === 'points' ? '积分' : '' }}</span>
+              <span class="text-content-subtle">{{ rewardType === 'points' ? t('ideas.detail.rewardDialog.points') : '' }}</span>
             </div>
-            <p class="mt-1.5 text-xs text-content-subtle">单次上限由站点配置，请勿超过站点设置。</p>
+            <p class="mt-1.5 text-xs text-content-subtle">{{ t('ideas.detail.rewardDialog.limitHint') }}</p>
           </div>
           <div class="flex justify-end gap-2 pt-2">
-            <button class="inline-flex h-10 items-center rounded-control border border-line bg-surface px-5 text-sm font-medium text-content-muted transition-colors hover:text-content" @click="rewardDialogOpen = false">取消</button>
+            <button class="inline-flex h-10 items-center rounded-control border border-line bg-surface px-5 text-sm font-medium text-content-muted transition-colors hover:text-content" @click="rewardDialogOpen = false">{{ t('ideas.common.cancel') }}</button>
             <button class="inline-flex h-10 items-center gap-2 rounded-control bg-brand px-5 text-sm font-semibold text-content-inverse transition-colors hover:bg-brand-strong disabled:opacity-60" :disabled="rewardSubmitting" @click="submitReward">
               <span v-if="rewardSubmitting" class="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white"></span>
-              {{ rewardSubmitting ? '处理中…' : '确认打赏' }}
+              {{ rewardSubmitting ? t('ideas.detail.rewardDialog.processing') : t('ideas.detail.rewardDialog.confirm') }}
             </button>
           </div>
         </div>
       </BaseDialog>
 
       <!-- Report Dialog -->
-      <BaseDialog :show="reportOpen" title="举报这篇文章" width="narrow" @close="reportOpen = false">
+      <BaseDialog :show="reportOpen" :title="t('ideas.detail.reportDialog.title')" width="narrow" @close="reportOpen = false">
         <div class="space-y-4">
           <div>
-            <label class="mb-1.5 block text-xs font-medium text-content-muted">举报原因 <span class="text-danger">*</span></label>
+            <label class="mb-1.5 block text-xs font-medium text-content-muted">{{ t('ideas.detail.reportDialog.reason') }} <span class="text-danger">*</span></label>
             <select v-model="reportReason" class="h-10 w-full rounded-control border border-line bg-surface-subtle px-3 text-sm text-content outline-none focus:border-brand/60">
-              <option value="">请选择举报原因</option>
-              <option value="垃圾广告">垃圾广告</option>
-              <option value="不实信息">不实信息</option>
-              <option value="侵权">侵权</option>
-              <option value="违法违规">违法违规</option>
-              <option value="其他">其他</option>
+              <option value="">{{ t('ideas.detail.reportDialog.selectReason') }}</option>
+              <option v-for="option in reportOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
             </select>
           </div>
           <div>
-            <label class="mb-1.5 block text-xs font-medium text-content-muted">补充说明（可选）</label>
-            <textarea v-model="reportDetail" rows="3" placeholder="补充更多细节，便于我们核实" class="w-full rounded-control border border-line bg-surface-subtle px-3 py-2 text-sm text-content outline-none focus:border-brand/60"></textarea>
+            <label class="mb-1.5 block text-xs font-medium text-content-muted">{{ t('ideas.detail.reportDialog.detail') }}</label>
+            <textarea v-model="reportDetail" rows="3" :placeholder="t('ideas.detail.reportDialog.detailPlaceholder')" class="w-full rounded-control border border-line bg-surface-subtle px-3 py-2 text-sm text-content outline-none focus:border-brand/60"></textarea>
           </div>
           <div class="flex justify-end gap-2 pt-2">
-            <button class="inline-flex h-10 items-center rounded-control border border-line bg-surface px-5 text-sm font-medium text-content-muted transition-colors hover:text-content" @click="reportOpen = false">取消</button>
+            <button class="inline-flex h-10 items-center rounded-control border border-line bg-surface px-5 text-sm font-medium text-content-muted transition-colors hover:text-content" @click="reportOpen = false">{{ t('ideas.common.cancel') }}</button>
             <button class="inline-flex h-10 items-center gap-2 rounded-control bg-danger px-5 text-sm font-semibold text-content-inverse transition-colors hover:opacity-90 disabled:opacity-60" :disabled="!reportReason || reportSubmitting" @click="submitReport">
               <span v-if="reportSubmitting" class="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white"></span>
-              {{ reportSubmitting ? '提交中…' : '提交举报' }}
+              {{ reportSubmitting ? t('ideas.detail.reportDialog.submitting') : t('ideas.detail.reportDialog.submit') }}
             </button>
           </div>
         </div>

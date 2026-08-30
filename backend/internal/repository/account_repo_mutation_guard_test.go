@@ -3,13 +3,575 @@ package repository
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 )
+
+func mutationGuardProxyID(value int64) *int64 {
+	if value <= 0 {
+		return nil
+	}
+	return &value
+}
+
+func mutationGuardProxyTarget(accountID, beforeProxyID, afterProxyID int64) *accountMutationLockedTarget {
+	return &accountMutationLockedTarget{
+		before: &service.Account{ID: accountID, ProxyID: mutationGuardProxyID(beforeProxyID)},
+		request: service.AccountMutationGuardTarget{
+			AccountID: accountID,
+			After:     &service.Account{ID: accountID, ProxyID: mutationGuardProxyID(afterProxyID)},
+		},
+	}
+}
+
+func TestAccountMutationTargetProxyIDsLocksEveryRequestedTarget(t *testing.T) {
+	targets := map[int64]service.AccountMutationGuardTarget{
+		1: {AccountID: 1, After: &service.Account{ID: 1, ProxyID: mutationGuardProxyID(7)}},
+		2: {AccountID: 2, After: &service.Account{ID: 2, ProxyID: mutationGuardProxyID(8)}},
+		3: {AccountID: 3, After: &service.Account{ID: 3}},
+		4: {AccountID: 4, After: &service.Account{ID: 4, ProxyID: mutationGuardProxyID(7)}},
+	}
+
+	require.Equal(t, []int64{7, 8}, accountMutationTargetProxyIDs(targets))
+}
+
+func TestAccountMutationProxyCapacityDeltas(t *testing.T) {
+	tests := []struct {
+		name    string
+		targets map[int64]*accountMutationLockedTarget
+		want    map[int64]accountMutationProxyCapacityDelta
+	}{
+		{
+			name:    "unchanged proxy consumes no additional capacity",
+			targets: map[int64]*accountMutationLockedTarget{1: mutationGuardProxyTarget(1, 7, 7)},
+			want:    map[int64]accountMutationProxyCapacityDelta{},
+		},
+		{
+			name:    "nil to proxy adds one",
+			targets: map[int64]*accountMutationLockedTarget{1: mutationGuardProxyTarget(1, 0, 7)},
+			want:    map[int64]accountMutationProxyCapacityDelta{7: {additional: 1}},
+		},
+		{
+			name:    "proxy change removes old and adds new",
+			targets: map[int64]*accountMutationLockedTarget{1: mutationGuardProxyTarget(1, 6, 7)},
+			want: map[int64]accountMutationProxyCapacityDelta{
+				6: {removed: 1},
+				7: {additional: 1},
+			},
+		},
+		{
+			name:    "proxy to nil only removes capacity",
+			targets: map[int64]*accountMutationLockedTarget{1: mutationGuardProxyTarget(1, 6, 0)},
+			want:    map[int64]accountMutationProxyCapacityDelta{6: {removed: 1}},
+		},
+		{
+			name: "batch additions accumulate",
+			targets: map[int64]*accountMutationLockedTarget{
+				1: mutationGuardProxyTarget(1, 0, 7),
+				2: mutationGuardProxyTarget(2, 6, 7),
+			},
+			want: map[int64]accountMutationProxyCapacityDelta{
+				6: {removed: 1},
+				7: {additional: 2},
+			},
+		},
+		{
+			name: "same transaction removal offsets an addition",
+			targets: map[int64]*accountMutationLockedTarget{
+				1: mutationGuardProxyTarget(1, 7, 8),
+				2: mutationGuardProxyTarget(2, 6, 7),
+			},
+			want: map[int64]accountMutationProxyCapacityDelta{
+				6: {removed: 1},
+				7: {additional: 1, removed: 1},
+				8: {additional: 1},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := accountMutationProxyCapacityDeltas(test.targets)
+			if !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("deltas = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestValidateAccountMutationProxyCapacity(t *testing.T) {
+	tests := []struct {
+		name    string
+		current int64
+		limit   int64
+		delta   accountMutationProxyCapacityDelta
+		wantErr error
+	}{
+		{
+			name:    "zero limit is unlimited",
+			current: 99,
+			limit:   0,
+			delta:   accountMutationProxyCapacityDelta{additional: 3},
+		},
+		{
+			name:    "projected count at limit passes",
+			current: 2,
+			limit:   3,
+			delta:   accountMutationProxyCapacityDelta{additional: 1},
+		},
+		{
+			name:    "same transaction removal is excluded from current count",
+			current: 3,
+			limit:   3,
+			delta:   accountMutationProxyCapacityDelta{additional: 1, removed: 1},
+		},
+		{
+			name:    "projected count above limit fails",
+			current: 2,
+			limit:   3,
+			delta:   accountMutationProxyCapacityDelta{additional: 2},
+			wantErr: service.ErrProxyAccountLimitExceeded,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateAccountMutationProxyCapacity(7, test.current, test.limit, test.delta)
+			if test.wantErr == nil {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, test.wantErr)
+		})
+	}
+}
+
+func TestLockAccountMutationTargetProxiesLoadsSafetyFields(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	mock.ExpectQuery(`(?s)SELECT id, owner_user_id, platform, required_account_level, status, max_accounts, expires_at.*FROM proxies.*ORDER BY id.*FOR UPDATE`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "owner_user_id", "platform", "required_account_level", "status", "max_accounts", "expires_at",
+		}).AddRow(int64(7), int64(42), service.PlatformOpenAI, service.AccountLevelPro, service.StatusActive, 3, nil))
+
+	locked, err := lockAccountMutationTargetProxies(context.Background(), db, []int64{7})
+
+	require.NoError(t, err)
+	require.Contains(t, locked, int64(7))
+	require.NotNil(t, locked[7].OwnerUserID)
+	require.Equal(t, int64(42), *locked[7].OwnerUserID)
+	require.Equal(t, service.PlatformOpenAI, locked[7].Platform)
+	require.Equal(t, service.AccountLevelPro, locked[7].RequiredAccountLevel)
+	require.Equal(t, service.StatusActive, locked[7].Status)
+	require.Equal(t, 3, locked[7].MaxAccounts)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestValidateAccountMutationTargetProxiesAppliesCRSScopeToAdminIntent(t *testing.T) {
+	expiredAt := time.Now().Add(-time.Minute)
+	crsAfter := &service.Account{
+		ID:           7,
+		Platform:     service.PlatformOpenAI,
+		AccountLevel: service.AccountLevelPro,
+		ProxyID:      mutationGuardProxyID(9),
+		Extra:        map[string]any{"crs_account_id": "remote-7"},
+	}
+	targets := map[int64]*accountMutationLockedTarget{
+		7: {
+			before: &service.Account{ID: 7, ProxyID: mutationGuardProxyID(9)},
+			request: service.AccountMutationGuardTarget{
+				AccountID: 7,
+				After:     crsAfter,
+			},
+		},
+	}
+	deltas := map[int64]accountMutationProxyCapacityDelta{}
+	request := service.AccountMutationGuardRequest{Intent: service.AccountMutationIntentAdmin}
+
+	tests := []struct {
+		name  string
+		proxy *service.Proxy
+		want  error
+	}{
+		{
+			name: "active public matching proxy passes",
+			proxy: &service.Proxy{
+				ID:                   9,
+				Platform:             service.PlatformOpenAI,
+				RequiredAccountLevel: service.AccountLevelPro,
+				Status:               service.StatusActive,
+			},
+		},
+		{
+			name: "inactive proxy fails",
+			proxy: &service.Proxy{
+				ID:                   9,
+				Platform:             service.PlatformOpenAI,
+				RequiredAccountLevel: service.AccountLevelPro,
+				Status:               service.StatusDisabled,
+			},
+			want: service.ErrProxyNotFound,
+		},
+		{
+			name: "wrong platform fails",
+			proxy: &service.Proxy{
+				ID:                   9,
+				Platform:             service.PlatformGemini,
+				RequiredAccountLevel: service.AccountLevelPro,
+				Status:               service.StatusActive,
+			},
+			want: service.ErrProxyNotFound,
+		},
+		{
+			name: "wrong level fails",
+			proxy: &service.Proxy{
+				ID:                   9,
+				Platform:             service.PlatformOpenAI,
+				RequiredAccountLevel: service.AccountLevelTeam,
+				Status:               service.StatusActive,
+			},
+			want: service.ErrProxyNotFound,
+		},
+		{
+			name: "private proxy fails",
+			proxy: &service.Proxy{
+				ID:                   9,
+				OwnerUserID:          mutationGuardProxyID(41),
+				Platform:             service.PlatformOpenAI,
+				RequiredAccountLevel: service.AccountLevelPro,
+				Status:               service.StatusActive,
+			},
+			want: service.ErrProxyNotFound,
+		},
+		{
+			name: "expired proxy fails even while status is active",
+			proxy: &service.Proxy{
+				ID:                   9,
+				Platform:             service.PlatformOpenAI,
+				RequiredAccountLevel: service.AccountLevelPro,
+				Status:               service.StatusActive,
+				ExpiresAt:            &expiredAt,
+			},
+			want: service.ErrProxyNotFound,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateAccountMutationTargetProxies(
+				request,
+				targets,
+				map[int64]*service.Proxy{9: test.proxy},
+				deltas,
+			)
+			if test.want == nil {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, test.want)
+		})
+	}
+}
+
+func TestValidateAccountMutationTargetProxiesRequiresActiveScopeForAdminRebinding(t *testing.T) {
+	request := service.AccountMutationGuardRequest{Intent: service.AccountMutationIntentAdmin}
+	target := func(proxyID int64) map[int64]*accountMutationLockedTarget {
+		return map[int64]*accountMutationLockedTarget{
+			7: {
+				before: &service.Account{ID: 7},
+				request: service.AccountMutationGuardTarget{
+					AccountID: 7,
+					After: &service.Account{
+						ID:           7,
+						Platform:     service.PlatformOpenAI,
+						AccountLevel: service.AccountLevelPro,
+						ProxyID:      mutationGuardProxyID(proxyID),
+					},
+				},
+			},
+		}
+	}
+	deltas := map[int64]accountMutationProxyCapacityDelta{9: {additional: 1}}
+
+	tests := []struct {
+		name  string
+		proxy *service.Proxy
+		want  error
+	}{
+		{
+			name: "active matching proxy passes",
+			proxy: &service.Proxy{
+				ID:                   9,
+				Platform:             service.PlatformOpenAI,
+				RequiredAccountLevel: service.AccountLevelPro,
+				Status:               service.StatusActive,
+			},
+		},
+		{
+			name: "inactive proxy fails",
+			proxy: &service.Proxy{
+				ID:                   9,
+				Platform:             service.PlatformOpenAI,
+				RequiredAccountLevel: service.AccountLevelPro,
+				Status:               service.StatusDisabled,
+			},
+			want: service.ErrProxyNotFound,
+		},
+		{
+			name: "wrong platform fails",
+			proxy: &service.Proxy{
+				ID:                   9,
+				Platform:             service.PlatformGemini,
+				RequiredAccountLevel: service.AccountLevelPro,
+				Status:               service.StatusActive,
+			},
+			want: service.ErrProxyNotFound,
+		},
+		{
+			name: "wrong level fails",
+			proxy: &service.Proxy{
+				ID:                   9,
+				Platform:             service.PlatformOpenAI,
+				RequiredAccountLevel: service.AccountLevelTeam,
+				Status:               service.StatusActive,
+			},
+			want: service.ErrProxyNotFound,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateAccountMutationTargetProxies(
+				request,
+				target(9),
+				map[int64]*service.Proxy{9: test.proxy},
+				deltas,
+			)
+			if test.want == nil {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, test.want)
+		})
+	}
+}
+
+func TestValidateAccountMutationTargetProxiesKeepsUnchangedAdminProxyCompatibility(t *testing.T) {
+	targets := map[int64]*accountMutationLockedTarget{
+		7: {
+			before: &service.Account{
+				ID:           7,
+				Name:         "before-name",
+				Platform:     " OpenAI ",
+				AccountLevel: " PRO ",
+				ProxyID:      mutationGuardProxyID(9),
+			},
+			request: service.AccountMutationGuardTarget{
+				AccountID: 7,
+				After: &service.Account{
+					ID:           7,
+					Name:         "after-name",
+					Platform:     service.PlatformOpenAI,
+					AccountLevel: service.AccountLevelPro,
+					ProxyID:      mutationGuardProxyID(9),
+				},
+			},
+		},
+	}
+	proxy := &service.Proxy{
+		ID:                   9,
+		Platform:             service.PlatformGemini,
+		RequiredAccountLevel: service.AccountLevelTeam,
+		Status:               service.StatusDisabled,
+	}
+
+	err := validateAccountMutationTargetProxies(
+		service.AccountMutationGuardRequest{Intent: service.AccountMutationIntentAdmin},
+		targets,
+		map[int64]*service.Proxy{9: proxy},
+		map[int64]accountMutationProxyCapacityDelta{},
+	)
+
+	require.NoError(t, err)
+}
+
+func TestValidateAccountMutationTargetProxiesRechecksSameProxyAfterLevelChange(t *testing.T) {
+	targets := map[int64]*accountMutationLockedTarget{
+		7: {
+			before: &service.Account{
+				ID:           7,
+				Platform:     service.PlatformOpenAI,
+				AccountLevel: service.AccountLevelFree,
+				ProxyID:      mutationGuardProxyID(9),
+			},
+			request: service.AccountMutationGuardTarget{
+				AccountID: 7,
+				After: &service.Account{
+					ID:           7,
+					Platform:     service.PlatformOpenAI,
+					AccountLevel: service.AccountLevelPro,
+					ProxyID:      mutationGuardProxyID(9),
+				},
+			},
+		},
+	}
+	proxy := &service.Proxy{
+		ID:                   9,
+		Platform:             service.PlatformOpenAI,
+		RequiredAccountLevel: service.AccountLevelFree,
+		Status:               service.StatusActive,
+	}
+
+	err := validateAccountMutationTargetProxies(
+		service.AccountMutationGuardRequest{Intent: service.AccountMutationIntentAdmin},
+		targets,
+		map[int64]*service.Proxy{9: proxy},
+		map[int64]accountMutationProxyCapacityDelta{},
+	)
+
+	require.ErrorIs(t, err, service.ErrProxyNotFound)
+}
+
+func TestValidateAccountMutationTargetProxiesAllowsSameProxyAfterScopeChangeWhenStillCompatible(t *testing.T) {
+	targets := map[int64]*accountMutationLockedTarget{
+		7: {
+			before: &service.Account{
+				ID:           7,
+				Platform:     service.PlatformOpenAI,
+				AccountLevel: service.AccountLevelFree,
+				ProxyID:      mutationGuardProxyID(9),
+			},
+			request: service.AccountMutationGuardTarget{
+				AccountID: 7,
+				After: &service.Account{
+					ID:           7,
+					Platform:     service.PlatformOpenAI,
+					AccountLevel: service.AccountLevelPro,
+					ProxyID:      mutationGuardProxyID(9),
+				},
+			},
+		},
+	}
+	proxies := []struct {
+		name  string
+		proxy *service.Proxy
+	}{
+		{
+			name: "universal proxy",
+			proxy: &service.Proxy{
+				ID:     9,
+				Status: service.StatusActive,
+			},
+		},
+		{
+			name: "matching scoped proxy",
+			proxy: &service.Proxy{
+				ID:                   9,
+				Platform:             service.PlatformOpenAI,
+				RequiredAccountLevel: service.AccountLevelPro,
+				Status:               service.StatusActive,
+			},
+		},
+	}
+
+	for _, test := range proxies {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateAccountMutationTargetProxies(
+				service.AccountMutationGuardRequest{Intent: service.AccountMutationIntentAdmin},
+				targets,
+				map[int64]*service.Proxy{9: test.proxy},
+				map[int64]accountMutationProxyCapacityDelta{},
+			)
+
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestValidateAccountMutationTargetProxiesRechecksSameProxyAfterOwnerChange(t *testing.T) {
+	target := func(afterOwnerID int64) map[int64]*accountMutationLockedTarget {
+		return map[int64]*accountMutationLockedTarget{
+			7: {
+				before: &service.Account{
+					ID:           7,
+					Platform:     service.PlatformOpenAI,
+					AccountLevel: service.AccountLevelPro,
+					ProxyID:      mutationGuardProxyID(9),
+				},
+				request: service.AccountMutationGuardTarget{
+					AccountID: 7,
+					After: &service.Account{
+						ID:           7,
+						Platform:     service.PlatformOpenAI,
+						AccountLevel: service.AccountLevelPro,
+						OwnerUserID:  mutationGuardProxyID(afterOwnerID),
+						ProxyID:      mutationGuardProxyID(9),
+					},
+				},
+			},
+		}
+	}
+	tests := []struct {
+		name         string
+		afterOwnerID int64
+		proxy        *service.Proxy
+		want         error
+	}{
+		{
+			name:         "matching exclusive owner passes",
+			afterOwnerID: 41,
+			proxy: &service.Proxy{
+				ID:          9,
+				OwnerUserID: mutationGuardProxyID(41),
+				Status:      service.StatusActive,
+			},
+		},
+		{
+			name:         "different exclusive owner fails",
+			afterOwnerID: 42,
+			proxy: &service.Proxy{
+				ID:          9,
+				OwnerUserID: mutationGuardProxyID(41),
+				Status:      service.StatusActive,
+			},
+			want: service.ErrProxyOwnerConflict,
+		},
+		{
+			name:         "inactive public proxy is not grandfathered",
+			afterOwnerID: 41,
+			proxy: &service.Proxy{
+				ID:     9,
+				Status: service.StatusDisabled,
+			},
+			want: service.ErrProxyNotFound,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateAccountMutationTargetProxies(
+				service.AccountMutationGuardRequest{Intent: service.AccountMutationIntentAdmin},
+				target(test.afterOwnerID),
+				map[int64]*service.Proxy{9: test.proxy},
+				map[int64]accountMutationProxyCapacityDelta{},
+			)
+			if test.want == nil {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, test.want)
+		})
+	}
+}
 
 func TestHydrateAccountMutationBindingsFromPrelockedCopiesRoomVersion(t *testing.T) {
 	revisionID := int64(91)
@@ -131,6 +693,29 @@ func TestLockAndHydrateAccountMutationRoomsFailsClosedWhenBlockerQueryFails(t *t
 	appErr := infraerrors.FromError(err)
 	require.Equal(t, "room_blockers", appErr.Metadata["stage"])
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAccountRepositoryUpdateRequiresMutationGuardAndTransaction(t *testing.T) {
+	repo := &accountRepository{}
+	account := &service.Account{
+		ID:                    7,
+		ProxyID:               mutationGuardProxyID(91),
+		ProxyFallbackOriginID: mutationGuardProxyID(92),
+	}
+
+	err := repo.Update(context.Background(), account)
+
+	require.ErrorIs(t, err, service.ErrAccountMutationGuardUnavailable)
+	appErr := infraerrors.FromError(err)
+	require.Equal(t, "missing_guard", appErr.Metadata["stage"])
+	require.Equal(t, "broad_account_update", appErr.Metadata["operation"])
+
+	markerOnly := service.WithAccountMutationGuardContext(context.Background())
+	err = repo.Update(markerOnly, account)
+
+	require.ErrorIs(t, err, service.ErrAccountMutationGuardUnavailable)
+	appErr = infraerrors.FromError(err)
+	require.Equal(t, "missing_transaction", appErr.Metadata["stage"])
 }
 
 // ---------------------------------------------------------------------------

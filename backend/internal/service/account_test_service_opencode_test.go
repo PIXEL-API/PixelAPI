@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -43,17 +44,45 @@ func TestOpencodeTestErrorRetryableWithOtherModel(t *testing.T) {
 	}
 }
 
-func TestOpencodeChatCompletionsHasContent(t *testing.T) {
+func TestOpencodeProbeResponseIsValid(t *testing.T) {
 	t.Parallel()
-	require.True(t, opencodeChatCompletionsHasContent([]byte(`{"choices":[{"message":{"content":"OK"}}]}`)))
-	require.False(t, opencodeChatCompletionsHasContent([]byte(`{"choices":[]}`)))
-	require.False(t, opencodeChatCompletionsHasContent([]byte(`not-json`)))
+	tests := []struct {
+		name     string
+		protocol OpencodeGoProtocol
+		body     string
+		want     bool
+	}{
+		{name: "chat", protocol: OpencodeGoProtocolChat, body: `{"choices":[{"message":{"content":"OK"}}]}`, want: true},
+		{name: "chat empty", protocol: OpencodeGoProtocolChat, body: `{"choices":[]}`},
+		{name: "messages", protocol: OpencodeGoProtocolMessages, body: `{"type":"message","content":[{"type":"text","text":"OK"}]}`, want: true},
+		{name: "messages wrong type", protocol: OpencodeGoProtocolMessages, body: `{"type":"error","content":[{"type":"text","text":"OK"}]}`},
+		{name: "responses", protocol: OpencodeGoProtocolResponses, body: `{"object":"response","output":[{"type":"message"}]}`, want: true},
+		{name: "responses empty", protocol: OpencodeGoProtocolResponses, body: `{"object":"response","output":[]}`},
+		{name: "malformed", protocol: OpencodeGoProtocolChat, body: `not-json`},
+		{name: "unknown protocol", protocol: OpencodeGoProtocol("unknown"), body: `{}`},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tt.want, opencodeProbeResponseIsValid(tt.protocol, []byte(tt.body)))
+		})
+	}
 }
 
-// opencodeTestUpstream 是 HTTPUpstream 的测试替身，按请求体里的 model 返回预设响应。
+type opencodeTestRequest struct {
+	model   string
+	method  string
+	path    string
+	header  http.Header
+	payload map[string]any
+}
+
+// opencodeTestUpstream 是 HTTPUpstream 的测试替身，按请求体里的 model 返回预设响应并记录请求。
 type opencodeTestUpstream struct {
 	responses map[string]*http.Response
 	calls     []string
+	requests  []opencodeTestRequest
 }
 
 func (u *opencodeTestUpstream) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
@@ -62,22 +91,44 @@ func (u *opencodeTestUpstream) Do(req *http.Request, proxyURL string, accountID 
 
 func (u *opencodeTestUpstream) DoWithTLS(req *http.Request, _ string, _ int64, _ int, _ *tlsfingerprint.Profile) (*http.Response, error) {
 	bodyBytes, _ := io.ReadAll(req.Body)
-	var parsed struct {
-		Model string `json:"model"`
-	}
+	var parsed map[string]any
 	_ = json.Unmarshal(bodyBytes, &parsed)
-	u.calls = append(u.calls, parsed.Model)
-	if resp, ok := u.responses[parsed.Model]; ok {
+	model, _ := parsed["model"].(string)
+	u.calls = append(u.calls, model)
+	u.requests = append(u.requests, opencodeTestRequest{
+		model:   model,
+		method:  req.Method,
+		path:    req.URL.Path,
+		header:  req.Header.Clone(),
+		payload: parsed,
+	})
+	if resp, ok := u.responses[model]; ok {
 		return resp, nil
 	}
-	return newOpencodeOKResponse(), nil
+	return nil, fmt.Errorf("unexpected OpenCode test request for model %q", model)
 }
 
-func newOpencodeOKResponse() *http.Response {
+func newOpencodeChatOKResponse() *http.Response {
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     make(http.Header),
 		Body:       io.NopCloser(strings.NewReader(`{"choices":[{"message":{"content":"OK"}}]}`)),
+	}
+}
+
+func newOpencodeMessagesOKResponse() *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`{"type":"message","content":[{"type":"text","text":"OK"}]}`)),
+	}
+}
+
+func newOpencodeResponsesOKResponse() *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`{"object":"response","output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}]}`)),
 	}
 }
 
@@ -100,11 +151,149 @@ func opencodeTestGinContext(t *testing.T) *gin.Context {
 	return ginCtx
 }
 
+func TestOpencodeTestModelsAreInAuditedCatalog(t *testing.T) {
+	t.Parallel()
+	models := append([]string{defaultOpencodeTestModel}, opencodeTestModelFallbacks...)
+	for _, model := range models {
+		spec, ok := ResolveOpencodeGoModelSpec(model)
+		require.Truef(t, ok, "OpenCode test model %q must be present in the audited catalog", model)
+		require.Equal(t, model, spec.ID)
+		require.NotEmpty(t, spec.Protocol)
+		require.Falsef(t, spec.Deprecated, "OpenCode connection test must not depend on deprecated model %q", model)
+	}
+}
+
+func TestOpencodeAccountConnectionRoutesByFinalModelProtocol(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name               string
+		requestedModel     string
+		modelMapping       map[string]any
+		upstreamModel      string
+		protocol           OpencodeGoProtocol
+		path               string
+		response           *http.Response
+		wantBearer         bool
+		wantMessagesFields bool
+	}{
+		{
+			name:               "chat model with provider prefix",
+			requestedModel:     "opencode-go/deepseek-v4-flash[1m]",
+			upstreamModel:      "deepseek-v4-flash",
+			protocol:           OpencodeGoProtocolChat,
+			path:               "/zen/go/v1/chat/completions",
+			response:           newOpencodeChatOKResponse(),
+			wantBearer:         true,
+			wantMessagesFields: true,
+		},
+		{
+			name:               "messages model",
+			requestedModel:     "qwen3.8-flash",
+			upstreamModel:      "qwen3.8-flash",
+			protocol:           OpencodeGoProtocolMessages,
+			path:               "/zen/go/v1/messages",
+			response:           newOpencodeMessagesOKResponse(),
+			wantMessagesFields: true,
+		},
+		{
+			name:           "mapped responses model",
+			requestedModel: "client-model",
+			modelMapping: map[string]any{
+				"client-model": "opencode/grok-4.6",
+			},
+			upstreamModel: "grok-4.6",
+			protocol:      OpencodeGoProtocolResponses,
+			path:          "/zen/go/v1/responses",
+			response:      newOpencodeResponsesOKResponse(),
+			wantBearer:    true,
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			upstream := &opencodeTestUpstream{responses: map[string]*http.Response{
+				tt.upstreamModel: tt.response,
+			}}
+			credentials := map[string]any{"api_key": "opencode-secret"}
+			if tt.modelMapping != nil {
+				credentials["model_mapping"] = tt.modelMapping
+			}
+			account := &Account{
+				Platform:    PlatformOpencode,
+				Type:        AccountTypeAPIKey,
+				Credentials: credentials,
+			}
+
+			err := newOpencodeTestService(upstream).testOpencodeAccountConnection(opencodeTestGinContext(t), account, tt.requestedModel)
+			require.NoError(t, err)
+			require.Len(t, upstream.requests, 1)
+			request := upstream.requests[0]
+			require.Equal(t, http.MethodPost, request.method)
+			require.Equal(t, tt.path, request.path)
+			require.Equal(t, tt.upstreamModel, request.model)
+			require.Equal(t, false, request.payload["stream"])
+
+			if tt.wantBearer {
+				require.Equal(t, "Bearer opencode-secret", request.header.Get("Authorization"))
+				require.Empty(t, request.header.Get("x-api-key"))
+				require.Empty(t, request.header.Get("anthropic-version"))
+			} else {
+				require.Empty(t, request.header.Get("Authorization"))
+				require.Equal(t, "opencode-secret", request.header.Get("x-api-key"))
+				require.Equal(t, "2023-06-01", request.header.Get("anthropic-version"))
+			}
+
+			_, hasMessages := request.payload["messages"]
+			require.Equal(t, tt.wantMessagesFields, hasMessages)
+			_, hasInput := request.payload["input"]
+			require.Equal(t, tt.protocol == OpencodeGoProtocolResponses, hasInput)
+		})
+	}
+}
+
+func TestOpencodeAccountConnectionRejectsUnknownModelBeforeRequest(t *testing.T) {
+	t.Parallel()
+	upstream := &opencodeTestUpstream{responses: map[string]*http.Response{}}
+	account := &Account{
+		Platform: PlatformOpencode,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_key": "opencode-secret",
+		},
+	}
+
+	err := newOpencodeTestService(upstream).testOpencodeAccountConnection(opencodeTestGinContext(t), account, "future-model")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), `unknown upstream model "future-model"`)
+	require.Empty(t, upstream.requests)
+}
+
+func TestOpencodeAccountConnectionRejectsDoubleProviderPrefixBeforeRequest(t *testing.T) {
+	t.Parallel()
+	upstream := &opencodeTestUpstream{responses: map[string]*http.Response{}}
+	account := &Account{
+		Platform: PlatformOpencode,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_key": "opencode-secret",
+			"model_mapping": map[string]any{
+				"client-model": "opencode-go/opencode-go/deepseek-v4-flash",
+			},
+		},
+	}
+
+	err := newOpencodeTestService(upstream).testOpencodeAccountConnection(opencodeTestGinContext(t), account, "client-model")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), `unknown upstream model "opencode-go/deepseek-v4-flash"`)
+	require.Empty(t, upstream.requests)
+}
+
 func TestOpencodeAccountConnectionFallsBackOnRegionError(t *testing.T) {
 	t.Parallel()
 	upstream := &opencodeTestUpstream{responses: map[string]*http.Response{
 		"deepseek-v4-flash": newOpencodeErrorResponse(http.StatusForbidden, `{"type":"error","error":{"type":"RegionError","message":"only available hosted in China"}}`),
-		"gpt-5.6-luna":      newOpencodeOKResponse(),
+		"gpt-5.6-luna":      newOpencodeResponsesOKResponse(),
 	}}
 	svc := newOpencodeTestService(upstream)
 	account := &Account{
@@ -119,6 +308,8 @@ func TestOpencodeAccountConnectionFallsBackOnRegionError(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"deepseek-v4-flash", "gpt-5.6-luna"}, upstream.calls,
 		"should fall back from deepseek-v4-flash to gpt-5.6-luna on RegionError")
+	require.Equal(t, "/zen/go/v1/chat/completions", upstream.requests[0].path)
+	require.Equal(t, "/zen/go/v1/responses", upstream.requests[1].path)
 }
 
 func TestOpencodeAccountConnectionNoFallbackOnAuthError(t *testing.T) {

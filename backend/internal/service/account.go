@@ -1262,6 +1262,15 @@ func normalizeRequestedModelForLookup(platform, requestedModel string) string {
 	// 任何平台都不应拿带 [1m] 的模型名去做 model_mapping 精确匹配，否则
 	// 会因匹配不到裸 slug（如 deepseek-v4-flash）而误判 model_not_found。
 	trimmed = normalizeClaudeCodeLongContextModel(trimmed)
+	if platform == PlatformOpencode {
+		normalized := NormalizeOpencodeGoModelID(trimmed)
+		// 只允许自动剥离一次已知 provider 前缀。若剥离后仍是已知前缀，
+		// 保留双重前缀，避免规范化阶段将其降级为裸 slug 或单前缀别名。
+		if strings.HasPrefix(normalized, "opencode-go/") || strings.HasPrefix(normalized, "opencode/") {
+			return trimmed
+		}
+		return normalized
+	}
 	if platform != PlatformGemini && platform != PlatformAntigravity {
 		return trimmed
 	}
@@ -1269,6 +1278,30 @@ func normalizeRequestedModelForLookup(platform, requestedModel string) string {
 		return "gemini-3.1-pro-preview"
 	}
 	return trimmed
+}
+
+func requestedModelLookupCandidates(platform, requestedModel string) []string {
+	candidates := make([]string, 0, 3)
+	appendUnique := func(candidate string) {
+		if candidate == "" {
+			return
+		}
+		for _, existing := range candidates {
+			if existing == candidate {
+				return
+			}
+		}
+		candidates = append(candidates, candidate)
+	}
+
+	appendUnique(requestedModel)
+	if platform == PlatformOpencode {
+		// 先保留 provider 前缀，仅去掉客户端 [1m] 语法，以兼容已有的
+		// prefixed mapping；随后再追加一次 provider 归一化后的裸 slug。
+		appendUnique(normalizeClaudeCodeLongContextModel(strings.TrimSpace(requestedModel)))
+	}
+	appendUnique(normalizeRequestedModelForLookup(platform, requestedModel))
+	return candidates
 }
 
 func mappingSupportsRequestedModel(mapping map[string]string, requestedModel string) bool {
@@ -1303,11 +1336,12 @@ func (a *Account) IsModelSupported(requestedModel string) bool {
 	if len(mapping) == 0 {
 		return a.OwnerUserID == nil
 	}
-	if mappingSupportsRequestedModel(mapping, requestedModel) {
-		return true
+	for _, candidate := range requestedModelLookupCandidates(a.Platform, requestedModel) {
+		if mappingSupportsRequestedModel(mapping, candidate) {
+			return true
+		}
 	}
-	normalized := normalizeRequestedModelForLookup(a.Platform, requestedModel)
-	return normalized != requestedModel && mappingSupportsRequestedModel(mapping, normalized)
+	return false
 }
 
 // GetMappedModel 获取映射后的模型名（支持通配符，最长优先匹配）
@@ -1324,12 +1358,8 @@ func (a *Account) ResolveMappedModel(requestedModel string) (mappedModel string,
 	if len(mapping) == 0 {
 		return requestedModel, false
 	}
-	if mappedModel, matched := resolveRequestedModelInMapping(mapping, requestedModel); matched {
-		return mappedModel, true
-	}
-	normalized := normalizeRequestedModelForLookup(a.Platform, requestedModel)
-	if normalized != requestedModel {
-		if mappedModel, matched := resolveRequestedModelInMapping(mapping, normalized); matched {
+	for _, candidate := range requestedModelLookupCandidates(a.Platform, requestedModel) {
+		if mappedModel, matched := resolveRequestedModelInMapping(mapping, candidate); matched {
 			return mappedModel, true
 		}
 	}

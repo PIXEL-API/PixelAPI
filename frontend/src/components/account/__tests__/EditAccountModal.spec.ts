@@ -281,6 +281,20 @@ describe('EditAccountModal', () => {
     })
   })
 
+  it('rejects non-positive and non-integer account priorities before submitting', async () => {
+    updateAccountMock.mockReset()
+    const wrapper = mountModal()
+    const priorityInput = wrapper.get('[data-testid="account-priority"]')
+
+    await priorityInput.setValue('0')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock).not.toHaveBeenCalled()
+
+    await priorityInput.setValue('1.5')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock).not.toHaveBeenCalled()
+  })
+
   it('管理端单账号模型白名单只展示当前平台渠道定价模型并集', async () => {
     const account = buildAccount()
     account.credentials = {
@@ -661,6 +675,9 @@ describe('EditAccountModal', () => {
     expect(wrapper.get('[data-testid="model-whitelist-selector"]').attributes('data-allow-custom')).toBe('false')
     expect(wrapper.get('[data-testid="model-whitelist-value"]').text()).toBe('custom-model')
     await wrapper.get('[data-testid="rewrite-to-snapshot"]').trigger('click')
+    expect(wrapper.find('[data-testid="account-priority-help"]').exists()).toBe(true)
+    const priorityInput = wrapper.get('[data-testid="account-priority"]')
+    await priorityInput.setValue('7')
     const concurrencyInput = wrapper.get('input[type="number"][min="1"][max="30"]')
     await concurrencyInput.setValue('')
     expect((concurrencyInput.element as HTMLInputElement).value).toBe('')
@@ -673,7 +690,7 @@ describe('EditAccountModal', () => {
     expect(payload).not.toHaveProperty('account_level')
     expect(payload?.concurrency).toBe(25)
     expect(payload?.load_factor).toBe(10)
-    expect(payload).not.toHaveProperty('priority')
+    expect(payload?.priority).toBe(7)
     expect(payload).not.toHaveProperty('auto_pause_on_expired')
     expect(payload?.credentials?.model_mapping).toEqual({
       'gpt-5.2-2025-12-11': 'gpt-5.2-2025-12-11'

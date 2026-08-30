@@ -54,6 +54,29 @@ func TestHitsIdeaTagBlacklist(t *testing.T) {
 	}
 }
 
+func TestNormalizeIdeaMineStatus(t *testing.T) {
+	t.Run("accepts empty status as unfiltered", func(t *testing.T) {
+		status, err := normalizeIdeaMineStatus("   ")
+		require.NoError(t, err)
+		require.Empty(t, status)
+	})
+
+	t.Run("normalizes supported status", func(t *testing.T) {
+		status, err := normalizeIdeaMineStatus("  " + IdeaPostStatusPendingRevision + "  ")
+		require.NoError(t, err)
+		require.Equal(t, IdeaPostStatusPendingRevision, status)
+	})
+
+	for _, status := range []string{"all", IdeaPostStatusDeleted, "published' OR TRUE --"} {
+		status := status
+		t.Run("rejects_"+status, func(t *testing.T) {
+			got, err := normalizeIdeaMineStatus(status)
+			require.ErrorIs(t, err, ErrIdeaPostStatusInvalid)
+			require.Empty(t, got)
+		})
+	}
+}
+
 func TestIdeaAssetMimeHelpers(t *testing.T) {
 	require.Equal(t, "image/jpeg", normalizeIdeaAssetMime("", "a.JPG"))
 	require.Equal(t, "image/png", normalizeIdeaAssetMime("application/octet-stream", "a.png"))

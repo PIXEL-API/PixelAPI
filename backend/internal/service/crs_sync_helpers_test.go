@@ -26,6 +26,8 @@ type crsSyncAccountRepoStub struct {
 	previewSequence [][]CRSAccountPreviewSnapshot
 	previewErr      error
 	previewCalls    int
+	uowCalls        int
+	uowErr          error
 }
 
 func (r *crsSyncAccountRepoStub) GetByCRSAccountID(_ context.Context, crsAccountID string) (*Account, error) {
@@ -48,6 +50,17 @@ func (r *crsSyncAccountRepoStub) Create(_ context.Context, account *Account) err
 	return nil
 }
 
+func (r *crsSyncAccountRepoStub) WithCRSProxyAccountUnitOfWork(
+	ctx context.Context,
+	mutate func(context.Context) error,
+) error {
+	r.uowCalls++
+	if r.uowErr != nil {
+		return r.uowErr
+	}
+	return mutate(ctx)
+}
+
 func (r *crsSyncAccountRepoStub) ListCRSAccountPreviewSnapshots(
 	context.Context,
 ) ([]CRSAccountPreviewSnapshot, error) {
@@ -68,10 +81,15 @@ type crsPreviewMissingCapabilityRepoStub struct {
 	AccountRepository
 }
 
+type crsProxyUOWMissingAccountRepoStub struct {
+	AccountRepository
+}
+
 type crsSyncGuardedAccountRepoStub struct {
 	*crsSyncAccountRepoStub
-	requests []AccountMutationGuardRequest
-	guardErr error
+	requests       []AccountMutationGuardRequest
+	guardErr       error
+	afterMutateErr error
 }
 
 func (r *crsSyncGuardedAccountRepoStub) WithAccountMutationGuard(
@@ -90,7 +108,10 @@ func (r *crsSyncGuardedAccountRepoStub) WithAccountMutationGuard(
 			return ErrAccountMutationForceRequired
 		}
 	}
-	return mutate(WithAccountMutationGuardContext(ctx))
+	if err := mutate(WithAccountMutationGuardContext(ctx)); err != nil {
+		return err
+	}
+	return r.afterMutateErr
 }
 
 type crsSyncProxyRepoStub struct {
@@ -351,9 +372,12 @@ func TestCRSSyncUpdateExistingAccountForwardsCompleteAdminGuardContract(t *testi
 	require.Len(t, request.Targets, 1)
 	require.Equal(t, account.ID, request.Targets[0].AccountID)
 	require.Equal(t, updatedAt, request.Targets[0].ExpectedUpdatedAt)
-	require.Same(t, account, request.Targets[0].After)
+	require.NotSame(t, account, request.Targets[0].After, "guard must receive a staged account so commit failure cannot leak mutations")
+	require.Equal(t, *account, *request.Targets[0].After)
 	require.Equal(t, account.GroupIDs, request.Targets[0].GroupIDs)
-	require.Equal(t, []*Account{account}, repo.updates)
+	require.Len(t, repo.updates, 1)
+	require.Same(t, request.Targets[0].After, repo.updates[0])
+	require.Equal(t, *account, *repo.updates[0])
 }
 
 func TestCRSSyncExistingAccountBranchesUseGuardAndKeepPerItemFailureSemantics(t *testing.T) {
@@ -995,6 +1019,168 @@ func TestCRSSyncProxyWritesRespectNewAccountSelection(t *testing.T) {
 	}
 }
 
+func TestPlanCRSProxyReusesOnlyActivePublicMatchingScope(t *testing.T) {
+	now := time.Date(2026, time.August, 31, 4, 0, 0, 0, time.UTC)
+	future := now.Add(time.Hour)
+	past := now.Add(-time.Hour)
+	ownerUserID := int64(41)
+	source := &crsProxy{
+		Protocol: "http",
+		Host:     "10.0.0.8",
+		Port:     8080,
+		Username: "proxy-user",
+		Password: "proxy-password",
+	}
+	matching := func(id int64) Proxy {
+		return Proxy{
+			ID:       id,
+			Protocol: source.Protocol,
+			Host:     source.Host,
+			Port:     source.Port,
+			Username: source.Username,
+			Password: source.Password,
+			Status:   StatusActive,
+		}
+	}
+
+	tests := []struct {
+		name       string
+		cached     []Proxy
+		resolvedID int64
+	}{
+		{name: "universal proxy", cached: []Proxy{matching(1)}, resolvedID: 1},
+		{
+			name: "matching platform proxy",
+			cached: func() []Proxy {
+				proxy := matching(2)
+				proxy.Platform = PlatformOpenAI
+				return []Proxy{proxy}
+			}(),
+			resolvedID: 2,
+		},
+		{
+			name: "private proxy is not reused",
+			cached: func() []Proxy {
+				proxy := matching(3)
+				proxy.OwnerUserID = &ownerUserID
+				return []Proxy{proxy}
+			}(),
+		},
+		{
+			name: "wrong platform is not reused",
+			cached: func() []Proxy {
+				proxy := matching(4)
+				proxy.Platform = PlatformGemini
+				return []Proxy{proxy}
+			}(),
+		},
+		{
+			name: "required level is not reused for unknown CRS level",
+			cached: func() []Proxy {
+				proxy := matching(5)
+				proxy.RequiredAccountLevel = AccountLevelPro
+				return []Proxy{proxy}
+			}(),
+		},
+		{
+			name: "expired active proxy is not reused",
+			cached: func() []Proxy {
+				proxy := matching(6)
+				proxy.ExpiresAt = &past
+				return []Proxy{proxy}
+			}(),
+		},
+		{
+			name: "inactive proxy is not reused",
+			cached: func() []Proxy {
+				proxy := matching(7)
+				proxy.Status = StatusDisabled
+				return []Proxy{proxy}
+			}(),
+		},
+		{
+			name: "later safe duplicate endpoint can be reused",
+			cached: func() []Proxy {
+				privateProxy := matching(8)
+				privateProxy.OwnerUserID = &ownerUserID
+				publicProxy := matching(9)
+				publicProxy.Platform = PlatformOpenAI
+				publicProxy.ExpiresAt = &future
+				return []Proxy{privateProxy, publicProxy}
+			}(),
+			resolvedID: 9,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			plan := planCRSProxy(
+				true,
+				test.cached,
+				source,
+				"crs-openai",
+				NewProxyScope(PlatformOpenAI, AccountLevelUnknown),
+				now,
+			)
+
+			require.NotNil(t, plan)
+			if test.resolvedID > 0 {
+				require.NotNil(t, plan.resolvedID)
+				require.Equal(t, test.resolvedID, *plan.resolvedID)
+				require.Nil(t, plan.pending)
+				return
+			}
+			require.Nil(t, plan.resolvedID)
+			require.NotNil(t, plan.pending)
+			require.Nil(t, plan.pending.OwnerUserID)
+			require.Empty(t, plan.pending.Platform)
+			require.Empty(t, plan.pending.RequiredAccountLevel)
+			require.Equal(t, StatusActive, plan.pending.Status)
+		})
+	}
+}
+
+func TestCRSCreateWithPendingProxyFailsClosedWithoutUnitOfWork(t *testing.T) {
+	baseRepo := &crsSyncAccountRepoStub{}
+	accountRepo := &crsProxyUOWMissingAccountRepoStub{AccountRepository: baseRepo}
+	proxyRepo := &crsSyncProxyRepoStub{}
+	svc := NewCRSSyncService(accountRepo, proxyRepo, nil, nil, nil, newCRSSyncTestConfig())
+	cached := []Proxy{}
+	plan := &crsProxyPlan{pending: &Proxy{Name: "pending", Status: StatusActive}}
+	account := &Account{Platform: PlatformAnthropic, Extra: map[string]any{"crs_account_id": "missing-uow"}}
+
+	err := svc.createAccountWithProxyPlan(context.Background(), &cached, plan, account)
+
+	require.ErrorIs(t, err, ErrCRSProxyAccountUnitOfWorkUnavailable)
+	require.Zero(t, proxyRepo.createCalls)
+	require.Empty(t, baseRepo.creates)
+	require.Empty(t, cached)
+	require.Nil(t, plan.resolvedID)
+	require.NotNil(t, plan.pending)
+	require.Nil(t, account.ProxyID)
+}
+
+func TestCRSCreateWithPendingProxyPublishesOnlyAfterSuccessfulUnitOfWork(t *testing.T) {
+	createErr := errors.New("account insert failed")
+	accountRepo := &crsSyncAccountRepoStub{createErr: createErr}
+	proxyRepo := &crsSyncProxyRepoStub{}
+	svc := NewCRSSyncService(accountRepo, proxyRepo, nil, nil, nil, newCRSSyncTestConfig())
+	cached := []Proxy{}
+	plan := &crsProxyPlan{pending: &Proxy{Name: "pending", Status: StatusActive}}
+	account := &Account{Platform: PlatformAnthropic, Extra: map[string]any{"crs_account_id": "rollback"}}
+
+	err := svc.createAccountWithProxyPlan(context.Background(), &cached, plan, account)
+
+	require.ErrorIs(t, err, createErr)
+	require.Equal(t, 1, accountRepo.uowCalls)
+	require.Equal(t, 1, proxyRepo.createCalls)
+	require.Empty(t, cached, "rolled-back proxy must not be published to the shared cache")
+	require.Nil(t, plan.resolvedID)
+	require.NotNil(t, plan.pending)
+	require.Zero(t, plan.pending.ID, "repository-generated ID must stay on the staged copy")
+	require.Nil(t, account.ProxyID)
+}
+
 func TestCRSSyncRedactsSensitiveProxyFailureInInitialResult(t *testing.T) {
 	server := newCRSSyncServer(t, func(int) map[string]any {
 		return crsConsoleExportPayload(
@@ -1113,6 +1299,42 @@ func TestCRSSyncRoomGuardFailureLeavesNoNewProxy(t *testing.T) {
 	require.Zero(t, proxyRepo.createCalls)
 	require.Empty(t, baseRepo.updates)
 	require.Nil(t, account.ProxyID)
+}
+
+func TestCRSExistingUpdatePublishesPendingProxyOnlyAfterGuardCommit(t *testing.T) {
+	commitErr := errors.New("mutation guard commit failed")
+	account := &Account{
+		ID:        51,
+		Platform:  PlatformAnthropic,
+		Extra:     map[string]any{"crs_account_id": "commit-failure"},
+		UpdatedAt: time.Date(2026, time.July, 27, 8, 0, 0, 0, time.UTC),
+	}
+	baseRepo := &crsSyncAccountRepoStub{}
+	repo := &crsSyncGuardedAccountRepoStub{
+		crsSyncAccountRepoStub: baseRepo,
+		afterMutateErr:         commitErr,
+	}
+	proxyRepo := &crsSyncProxyRepoStub{}
+	svc := NewCRSSyncService(repo, proxyRepo, nil, nil, nil, newCRSSyncTestConfig())
+	cached := []Proxy{}
+	plan := &crsProxyPlan{pending: &Proxy{Name: "pending", Status: StatusActive}}
+
+	err := svc.updateExistingAccountWithProxy(
+		context.Background(),
+		SyncFromCRSInput{ActorAdminID: 91},
+		account,
+		&cached,
+		plan,
+	)
+
+	require.ErrorIs(t, err, commitErr)
+	require.Equal(t, 1, proxyRepo.createCalls)
+	require.Len(t, baseRepo.updates, 1, "mutation ran before the simulated commit failure")
+	require.Nil(t, account.ProxyID)
+	require.Empty(t, cached)
+	require.Nil(t, plan.resolvedID)
+	require.NotNil(t, plan.pending)
+	require.Zero(t, plan.pending.ID)
 }
 
 func crsConsoleExportAccount(id, name, proxyHost string) map[string]any {

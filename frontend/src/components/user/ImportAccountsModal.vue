@@ -713,10 +713,14 @@ const AccountLevelSelector = defineComponent({
       }
       return selectableOpenAIAccountLevels(appStore.cachedPublicSettings?.openai_account_levels).map(level => ({
         value: level.key as SelectableImportLevel,
-        label: level.label,
-        desc: level.requires_proxy_login
-          ? t('userAccounts.importLevelRequiresProxy', { level: level.label })
-          : t('userAccounts.importLevelDirect', { level: level.label })
+        label: level.key === 'free'
+          ? t('userAccounts.importLevelFreeLabel')
+          : level.label,
+        desc: level.key === 'free'
+          ? t('userAccounts.importLevelFree')
+          : level.requires_proxy_login
+            ? t('userAccounts.importLevelRequiresProxy', { level: level.label })
+            : t('userAccounts.importLevelDirect', { level: level.label })
       }))
     })
     return () => h('div', { class: 'space-y-2' }, [

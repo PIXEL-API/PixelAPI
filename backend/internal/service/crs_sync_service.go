@@ -65,6 +65,10 @@ var (
 		"CRS_EXPORT_INVALID",
 		"the CRS export contains invalid or duplicate account identifiers",
 	)
+	ErrCRSProxyAccountUnitOfWorkUnavailable = infraerrors.InternalServer(
+		"CRS_PROXY_ACCOUNT_UNIT_OF_WORK_UNAVAILABLE",
+		"CRS proxy and account transaction boundary is unavailable",
+	)
 )
 
 type CRSSyncService struct {
@@ -183,6 +187,10 @@ type crsProxy struct {
 type crsProxyPlan struct {
 	resolvedID *int64
 	pending    *Proxy
+}
+
+type crsProxyAccountUnitOfWorkRepository interface {
+	WithCRSProxyAccountUnitOfWork(ctx context.Context, mutate func(context.Context) error) error
 }
 
 type crsClaudeAccount struct {
@@ -878,6 +886,8 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			proxies,
 			src.Proxy,
 			fmt.Sprintf("crs-%s", src.Name),
+			NewProxyScope(PlatformAnthropic, AccountLevelUnknown),
+			now,
 		)
 
 		if existing == nil {
@@ -888,29 +898,20 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 				result.Items = append(result.Items, item)
 				continue
 			}
-			proxyID, err := s.resolveCRSProxyPlan(ctx, &proxies, proxyPlan)
-			if err != nil {
-				item.Action = "failed"
-				item.Error = boundedCRSSyncItemError("proxy sync failed: " + err.Error())
-				result.Failed++
-				result.Items = append(result.Items, item)
-				continue
-			}
 			account := &Account{
 				Name:        defaultName(src.Name, src.ID),
 				Platform:    PlatformAnthropic,
 				Type:        targetType,
 				Credentials: credentials,
 				Extra:       extra,
-				ProxyID:     proxyID,
 				Concurrency: concurrency,
 				Priority:    priority,
 				Status:      status,
 				Schedulable: src.Schedulable,
 			}
-			if err := s.accountRepo.Create(ctx, account); err != nil {
+			if err := s.createAccountWithProxyPlan(ctx, &proxies, proxyPlan, account); err != nil {
 				item.Action = "failed"
-				item.Error = boundedCRSSyncItemError("create failed: " + err.Error())
+				item.Error = boundedCRSSyncItemError(err.Error())
 				result.Failed++
 				result.Items = append(result.Items, item)
 				continue
@@ -1002,6 +1003,8 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			proxies,
 			src.Proxy,
 			fmt.Sprintf("crs-%s", src.Name),
+			NewProxyScope(PlatformAnthropic, AccountLevelUnknown),
+			now,
 		)
 
 		if existing == nil {
@@ -1012,29 +1015,20 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 				result.Items = append(result.Items, item)
 				continue
 			}
-			proxyID, err := s.resolveCRSProxyPlan(ctx, &proxies, proxyPlan)
-			if err != nil {
-				item.Action = "failed"
-				item.Error = boundedCRSSyncItemError("proxy sync failed: " + err.Error())
-				result.Failed++
-				result.Items = append(result.Items, item)
-				continue
-			}
 			account := &Account{
 				Name:        defaultName(src.Name, src.ID),
 				Platform:    PlatformAnthropic,
 				Type:        AccountTypeAPIKey,
 				Credentials: credentials,
 				Extra:       extra,
-				ProxyID:     proxyID,
 				Concurrency: concurrency,
 				Priority:    priority,
 				Status:      status,
 				Schedulable: src.Schedulable,
 			}
-			if err := s.accountRepo.Create(ctx, account); err != nil {
+			if err := s.createAccountWithProxyPlan(ctx, &proxies, proxyPlan, account); err != nil {
 				item.Action = "failed"
-				item.Error = boundedCRSSyncItemError("create failed: " + err.Error())
+				item.Error = boundedCRSSyncItemError(err.Error())
 				result.Failed++
 				result.Items = append(result.Items, item)
 				continue
@@ -1128,6 +1122,8 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			proxies,
 			src.Proxy,
 			fmt.Sprintf("crs-%s", src.Name),
+			NewProxyScope(PlatformOpenAI, AccountLevelUnknown),
+			now,
 		)
 
 		if existing == nil {
@@ -1138,29 +1134,20 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 				result.Items = append(result.Items, item)
 				continue
 			}
-			proxyID, err := s.resolveCRSProxyPlan(ctx, &proxies, proxyPlan)
-			if err != nil {
-				item.Action = "failed"
-				item.Error = boundedCRSSyncItemError("proxy sync failed: " + err.Error())
-				result.Failed++
-				result.Items = append(result.Items, item)
-				continue
-			}
 			account := &Account{
 				Name:        defaultName(src.Name, src.ID),
 				Platform:    PlatformOpenAI,
 				Type:        AccountTypeOAuth,
 				Credentials: credentials,
 				Extra:       extra,
-				ProxyID:     proxyID,
 				Concurrency: concurrency,
 				Priority:    priority,
 				Status:      status,
 				Schedulable: src.Schedulable,
 			}
-			if err := s.accountRepo.Create(ctx, account); err != nil {
+			if err := s.createAccountWithProxyPlan(ctx, &proxies, proxyPlan, account); err != nil {
 				item.Action = "failed"
-				item.Error = boundedCRSSyncItemError("create failed: " + err.Error())
+				item.Error = boundedCRSSyncItemError(err.Error())
 				result.Failed++
 				result.Items = append(result.Items, item)
 				continue
@@ -1250,6 +1237,8 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			proxies,
 			src.Proxy,
 			fmt.Sprintf("crs-%s", src.Name),
+			NewProxyScope(PlatformOpenAI, AccountLevelUnknown),
+			now,
 		)
 
 		if existing == nil {
@@ -1260,29 +1249,20 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 				result.Items = append(result.Items, item)
 				continue
 			}
-			proxyID, err := s.resolveCRSProxyPlan(ctx, &proxies, proxyPlan)
-			if err != nil {
-				item.Action = "failed"
-				item.Error = boundedCRSSyncItemError("proxy sync failed: " + err.Error())
-				result.Failed++
-				result.Items = append(result.Items, item)
-				continue
-			}
 			account := &Account{
 				Name:        defaultName(src.Name, src.ID),
 				Platform:    PlatformOpenAI,
 				Type:        AccountTypeAPIKey,
 				Credentials: credentials,
 				Extra:       extra,
-				ProxyID:     proxyID,
 				Concurrency: concurrency,
 				Priority:    priority,
 				Status:      status,
 				Schedulable: src.Schedulable,
 			}
-			if err := s.accountRepo.Create(ctx, account); err != nil {
+			if err := s.createAccountWithProxyPlan(ctx, &proxies, proxyPlan, account); err != nil {
 				item.Action = "failed"
-				item.Error = boundedCRSSyncItemError("create failed: " + err.Error())
+				item.Error = boundedCRSSyncItemError(err.Error())
 				result.Failed++
 				result.Items = append(result.Items, item)
 				continue
@@ -1367,6 +1347,8 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			proxies,
 			src.Proxy,
 			fmt.Sprintf("crs-%s", src.Name),
+			NewProxyScope(PlatformGemini, AccountLevelUnknown),
+			now,
 		)
 
 		if existing == nil {
@@ -1377,29 +1359,20 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 				result.Items = append(result.Items, item)
 				continue
 			}
-			proxyID, err := s.resolveCRSProxyPlan(ctx, &proxies, proxyPlan)
-			if err != nil {
-				item.Action = "failed"
-				item.Error = boundedCRSSyncItemError("proxy sync failed: " + err.Error())
-				result.Failed++
-				result.Items = append(result.Items, item)
-				continue
-			}
 			account := &Account{
 				Name:        defaultName(src.Name, src.ID),
 				Platform:    PlatformGemini,
 				Type:        AccountTypeOAuth,
 				Credentials: credentials,
 				Extra:       extra,
-				ProxyID:     proxyID,
 				Concurrency: 3,
 				Priority:    clampPriority(src.Priority),
 				Status:      mapCRSStatus(src.IsActive, src.Status),
 				Schedulable: src.Schedulable,
 			}
-			if err := s.accountRepo.Create(ctx, account); err != nil {
+			if err := s.createAccountWithProxyPlan(ctx, &proxies, proxyPlan, account); err != nil {
 				item.Action = "failed"
-				item.Error = boundedCRSSyncItemError("create failed: " + err.Error())
+				item.Error = boundedCRSSyncItemError(err.Error())
 				result.Failed++
 				result.Items = append(result.Items, item)
 				continue
@@ -1485,6 +1458,8 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			proxies,
 			src.Proxy,
 			fmt.Sprintf("crs-%s", src.Name),
+			NewProxyScope(PlatformGemini, AccountLevelUnknown),
+			now,
 		)
 
 		if existing == nil {
@@ -1495,29 +1470,20 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 				result.Items = append(result.Items, item)
 				continue
 			}
-			proxyID, err := s.resolveCRSProxyPlan(ctx, &proxies, proxyPlan)
-			if err != nil {
-				item.Action = "failed"
-				item.Error = boundedCRSSyncItemError("proxy sync failed: " + err.Error())
-				result.Failed++
-				result.Items = append(result.Items, item)
-				continue
-			}
 			account := &Account{
 				Name:        defaultName(src.Name, src.ID),
 				Platform:    PlatformGemini,
 				Type:        AccountTypeAPIKey,
 				Credentials: credentials,
 				Extra:       extra,
-				ProxyID:     proxyID,
 				Concurrency: 3,
 				Priority:    clampPriority(src.Priority),
 				Status:      mapCRSStatus(src.IsActive, src.Status),
 				Schedulable: src.Schedulable,
 			}
-			if err := s.accountRepo.Create(ctx, account); err != nil {
+			if err := s.createAccountWithProxyPlan(ctx, &proxies, proxyPlan, account); err != nil {
 				item.Action = "failed"
-				item.Error = boundedCRSSyncItemError("create failed: " + err.Error())
+				item.Error = boundedCRSSyncItemError(err.Error())
 				result.Failed++
 				result.Items = append(result.Items, item)
 				continue
@@ -1568,23 +1534,39 @@ func (s *CRSSyncService) updateExistingAccountWithProxy(
 	if account == nil {
 		return ErrAccountNilInput
 	}
-	guardSnapshot := account
-	if proxyPlan != nil {
-		snapshot := *account
-		if proxyPlan.resolvedID != nil {
-			proxyID := *proxyPlan.resolvedID
-			snapshot.ProxyID = &proxyID
+
+	// 数据库提交成功前，不发布 pending proxy 的 ID，也不改写调用方持有的账号对象。
+	// 这避免回滚后在同批同步的内存缓存中留下不存在的 phantom proxy。
+	activeCache := cachedProxies
+	activePlan := proxyPlan
+	var stagedCache []Proxy
+	var stagedPlan *crsProxyPlan
+	if proxyPlan != nil && proxyPlan.resolvedID == nil {
+		if cachedProxies == nil || proxyPlan.pending == nil {
+			return ErrCRSProxyAccountUnitOfWorkUnavailable
+		}
+		stagedCache = append([]Proxy(nil), (*cachedProxies)...)
+		stagedPending := *proxyPlan.pending
+		stagedPlan = &crsProxyPlan{pending: &stagedPending}
+		activeCache = &stagedCache
+		activePlan = stagedPlan
+	}
+
+	candidate := *account
+	if activePlan != nil {
+		if activePlan.resolvedID != nil {
+			proxyID := *activePlan.resolvedID
+			candidate.ProxyID = &proxyID
 		} else {
 			pendingProxyID := crsUnknownProxyIDForGuard
-			snapshot.ProxyID = &pendingProxyID
+			candidate.ProxyID = &pendingProxyID
 		}
-		guardSnapshot = &snapshot
 	}
 	request := AccountMutationGuardRequest{
 		Targets: []AccountMutationGuardTarget{{
 			AccountID:         account.ID,
 			ExpectedUpdatedAt: account.UpdatedAt,
-			After:             guardSnapshot,
+			After:             &candidate,
 			GroupIDs:          append([]int64(nil), account.GroupIDs...),
 		}},
 		ActorUserID:             input.ActorAdminID,
@@ -1598,19 +1580,29 @@ func (s *CRSSyncService) updateExistingAccountWithProxy(
 		OperationID:             input.OperationID,
 	}
 	mutate := func(mutationCtx context.Context) error {
-		if proxyPlan != nil {
-			proxyID, err := s.resolveCRSProxyPlan(mutationCtx, cachedProxies, proxyPlan)
+		if activePlan != nil {
+			proxyID, err := s.resolveCRSProxyPlan(mutationCtx, activeCache, activePlan)
 			if err != nil {
 				return fmt.Errorf("proxy sync failed: %w", err)
 			}
-			if proxyID != nil {
-				account.ProxyID = proxyID
-			}
+			candidate.ProxyID = proxyID
 		}
-		return s.accountRepo.Update(mutationCtx, account)
+		return s.accountRepo.Update(mutationCtx, &candidate)
 	}
 	if repo, ok := s.accountRepo.(AccountMutationGuardRepository); ok && repo != nil {
-		return repo.WithAccountMutationGuard(ctx, request, mutate)
+		if err := repo.WithAccountMutationGuard(ctx, request, mutate); err != nil {
+			return err
+		}
+		*account = candidate
+		if stagedPlan != nil {
+			*cachedProxies = stagedCache
+			proxyPlan.resolvedID = stagedPlan.resolvedID
+			proxyPlan.pending = nil
+		}
+		return nil
+	}
+	if proxyPlan != nil {
+		return ErrCRSProxyAccountUnitOfWorkUnavailable
 	}
 	if account.AccountShareModeListingID != nil ||
 		(account.ExternalPlacement != nil && account.ExternalPlacement.Target == AccountExternalPlacementRoom) {
@@ -1620,7 +1612,75 @@ func (s *CRSSyncService) updateExistingAccountWithProxy(
 	}
 	// Lightweight test/legacy repositories cannot contain the SQL room
 	// projection. Production accountRepository always implements the guard.
-	return mutate(ctx)
+	if err := mutate(ctx); err != nil {
+		return err
+	}
+	*account = candidate
+	return nil
+}
+
+func (s *CRSSyncService) createAccountWithProxyPlan(
+	ctx context.Context,
+	cachedProxies *[]Proxy,
+	proxyPlan *crsProxyPlan,
+	account *Account,
+) error {
+	if account == nil {
+		return ErrAccountNilInput
+	}
+	if proxyPlan == nil {
+		if err := s.accountRepo.Create(ctx, account); err != nil {
+			return fmt.Errorf("create failed: %w", err)
+		}
+		return nil
+	}
+
+	// 复用已存在代理时，Create 自身会在代理行锁内重验 active、公共归属、
+	// 平台/等级 scope 与容量；这里不再信任同步开始时取得的 active 快照。
+	if proxyPlan.resolvedID != nil {
+		candidate := *account
+		proxyID := *proxyPlan.resolvedID
+		candidate.ProxyID = &proxyID
+		if err := s.accountRepo.Create(ctx, &candidate); err != nil {
+			return fmt.Errorf("create failed: %w", err)
+		}
+		*account = candidate
+		return nil
+	}
+
+	// pending proxy 与账号必须作为一个工作单元提交。生产仓储提供该窄能力；
+	// 缺失时快速失败，禁止先提交 proxy 再尝试创建 account。
+	uow, ok := s.accountRepo.(crsProxyAccountUnitOfWorkRepository)
+	if !ok || uow == nil {
+		return ErrCRSProxyAccountUnitOfWorkUnavailable
+	}
+	if cachedProxies == nil || proxyPlan.pending == nil {
+		return ErrCRSProxyAccountUnitOfWorkUnavailable
+	}
+	// 共享缓存与 plan 只能在事务提交成功后发布；否则一次账号写入失败会把已回滚
+	// 的 proxy ID 泄漏给后续同步项。
+	stagedCache := append([]Proxy(nil), (*cachedProxies)...)
+	stagedPending := *proxyPlan.pending
+	stagedPlan := &crsProxyPlan{pending: &stagedPending}
+	candidate := *account
+	if err := uow.WithCRSProxyAccountUnitOfWork(ctx, func(txCtx context.Context) error {
+		proxyID, err := s.resolveCRSProxyPlan(txCtx, &stagedCache, stagedPlan)
+		if err != nil {
+			return fmt.Errorf("proxy sync failed: %w", err)
+		}
+		candidate.ProxyID = proxyID
+		if err := s.accountRepo.Create(txCtx, &candidate); err != nil {
+			return fmt.Errorf("create failed: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	*account = candidate
+	*cachedProxies = stagedCache
+	proxyPlan.resolvedID = stagedPlan.resolvedID
+	proxyPlan.pending = nil
+	return nil
 }
 
 func mergeMap(existing map[string]any, updates map[string]any) map[string]any {
@@ -1634,7 +1694,14 @@ func mergeMap(existing map[string]any, updates map[string]any) map[string]any {
 	return out
 }
 
-func planCRSProxy(enabled bool, cached []Proxy, src *crsProxy, defaultName string) *crsProxyPlan {
+func planCRSProxy(
+	enabled bool,
+	cached []Proxy,
+	src *crsProxy,
+	defaultName string,
+	scope ProxyScope,
+	now time.Time,
+) *crsProxyPlan {
 	if !enabled || src == nil {
 		return nil
 	}
@@ -1657,9 +1724,16 @@ func planCRSProxy(enabled bool, cached []Proxy, src *crsProxy, defaultName strin
 		return nil
 	}
 
-	// Find existing proxy (active only).
+	// Endpoint equality alone is not enough: the cache can contain an expired,
+	// user-owned, wrong-platform, or account-level-restricted proxy with identical
+	// connection fields. Filter it here to avoid selecting a candidate that the
+	// repository must later reject. The locked repository check remains the
+	// authoritative boundary because this snapshot can become stale.
 	for _, p := range cached {
-		if strings.EqualFold(p.Protocol, protocol) &&
+		if p.IsActive() &&
+			!p.IsExpired(now) &&
+			scope.Allows(&p) &&
+			strings.EqualFold(p.Protocol, protocol) &&
 			p.Host == host &&
 			p.Port == port &&
 			p.Username == username &&
