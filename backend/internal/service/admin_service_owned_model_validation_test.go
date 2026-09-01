@@ -6,6 +6,7 @@ import (
 	"context"
 	"testing"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -157,6 +158,93 @@ func TestAdminService_UpdatePlatformToOwned_ValidWhitelist(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, updated.OwnerUserID)
+}
+
+func TestAdminService_UpdateExistingOwnedOpencode_RejectsNonCanonicalModelMapping(t *testing.T) {
+	ownerID := int64(7)
+	repo := &accountRepoStubForBulkUpdate{getByIDAccounts: map[int64]*Account{
+		1: {
+			ID:          1,
+			Platform:    PlatformOpencode,
+			Type:        AccountTypeAPIKey,
+			Status:      StatusActive,
+			OwnerUserID: &ownerID,
+			Credentials: map[string]any{"model_mapping": map[string]any{"hy3": "hy3"}},
+		},
+	}}
+	svc := &adminServiceImpl{
+		accountRepo: repo,
+		pricedModelCatalog: &ownedPricedModelCatalogStub{modelsByPlatform: map[string][]string{
+			PlatformOpencode: {"hy3", "deepseek-v4-flash-vision-exp"},
+		}},
+	}
+
+	_, err := svc.UpdateAccount(context.Background(), 1, &UpdateAccountInput{
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{"Hy3": "Hy3"},
+		},
+	})
+
+	require.Error(t, err)
+	require.Equal(t, "OWNED_ACCOUNT_MODEL_MAPPING_INVALID", infraerrors.Reason(err))
+	require.Equal(t, "Hy3", infraerrors.FromError(err).Metadata["model"])
+	require.Equal(t, "hy3", infraerrors.FromError(err).Metadata["canonical_model"])
+	require.Nil(t, repo.updatedAccount)
+}
+
+func TestAdminService_UpdateExistingOwnedOpencode_UnrelatedEditSkipsLegacyMappingValidation(t *testing.T) {
+	ownerID := int64(7)
+	repo := &accountRepoStubForBulkUpdate{getByIDAccounts: map[int64]*Account{
+		1: {
+			ID:          1,
+			Platform:    PlatformOpencode,
+			Type:        AccountTypeAPIKey,
+			Status:      StatusActive,
+			OwnerUserID: &ownerID,
+			Credentials: map[string]any{"model_mapping": map[string]any{"Hy3": "Hy3"}},
+		},
+	}}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	updated, err := svc.UpdateAccount(context.Background(), 1, &UpdateAccountInput{Name: "renamed"})
+
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	require.Equal(t, "renamed", updated.Name)
+	require.NotNil(t, repo.updatedAccount)
+}
+
+func TestAdminService_BulkUpdateExistingOwnedOpencode_RejectsNonCanonicalModelMapping(t *testing.T) {
+	ownerID := int64(7)
+	repo := &accountRepoStubForBulkUpdate{
+		getByIDsAccounts: []*Account{{
+			ID:          1,
+			Platform:    PlatformOpencode,
+			Type:        AccountTypeAPIKey,
+			Status:      StatusActive,
+			OwnerUserID: &ownerID,
+			Credentials: map[string]any{"model_mapping": map[string]any{"hy3": "hy3"}},
+		}},
+	}
+	svc := &adminServiceImpl{
+		accountRepo: repo,
+		pricedModelCatalog: &ownedPricedModelCatalogStub{modelsByPlatform: map[string][]string{
+			PlatformOpencode: {"hy3", "deepseek-v4-flash-vision-exp"},
+		}},
+	}
+
+	result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs: []int64{1},
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{"Hy3": "Hy3"},
+		},
+	})
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.Equal(t, "OWNED_ACCOUNT_MODEL_MAPPING_INVALID", infraerrors.Reason(err))
+	require.Equal(t, "hy3", infraerrors.FromError(err).Metadata["canonical_model"])
+	require.Empty(t, repo.bulkUpdateIDs)
 }
 
 func TestAdminService_UpdatePlatformAccountOwnerUnchanged_SkipsValidation(t *testing.T) {

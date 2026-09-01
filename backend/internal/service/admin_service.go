@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -780,7 +781,8 @@ func SetAdminPricedModelCatalog(svc AdminService, catalog pricedModelCatalog) Ad
 
 // validateAdminOwnedModelMapping 校验个人账号的模型白名单完整性，
 // 与用户路径 AccountService.validateOwnedPersonalModelMapping 保持同一口径。
-// 仅用于账号「变为个人账号」的写入时机，避免误伤平台账号字段更新。
+// 仅在个人账号创建、模型白名单变更或账号转为个人账号时调用，避免误伤
+// 平台账号以及不涉及模型白名单的历史账号编辑。
 func (s *adminServiceImpl) validateAdminOwnedModelMapping(ctx context.Context, platform string, credentials map[string]any) error {
 	if s == nil || s.pricedModelCatalog == nil {
 		return ErrOwnedAccountModelCatalogUnavailable
@@ -791,6 +793,9 @@ func (s *adminServiceImpl) validateAdminOwnedModelMapping(ctx context.Context, p
 	}
 	normalized, models, err := normalizeOwnedPersonalModelMapping(raw)
 	if err != nil {
+		return err
+	}
+	if err := validateCanonicalOwnedOpencodeModelIDs(platform, models); err != nil {
 		return err
 	}
 	selectableModels, err := s.pricedModelCatalog.ListPricedModelIDs(ctx, []string{platform})
@@ -815,6 +820,15 @@ func (s *adminServiceImpl) validateAdminOwnedModelMapping(ctx context.Context, p
 	}
 	credentials["model_mapping"] = normalized
 	return nil
+}
+
+func modelMappingUpdateChanged(existing, incoming map[string]any) bool {
+	requested, submitted := incoming["model_mapping"]
+	if !submitted {
+		return false
+	}
+	stored, exists := existing["model_mapping"]
+	return !exists || !reflect.DeepEqual(requested, stored)
 }
 
 func (s *adminServiceImpl) openAIAccountLevelConfigs(ctx context.Context) ([]OpenAIAccountLevelConfig, error) {
@@ -3817,6 +3831,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if input.Notes != nil {
 		account.Notes = normalizeAccountNotes(input.Notes)
 	}
+	modelMappingChanged := modelMappingUpdateChanged(account.Credentials, input.Credentials)
 	if len(input.Credentials) > 0 {
 		account.Credentials = MergePreservingSensitiveCreds(account.Credentials, input.Credentials)
 		if err := NormalizeHeaderOverrideCredentials(account.Credentials); err != nil {
@@ -3940,8 +3955,12 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			account.OwnerUserID = input.OwnerUserID
 		}
 	}
-	// 平台账号转个人账号：必须提供合法的模型白名单，避免在归属转换时制造空 mapping。
-	if before.OwnerUserID == nil && account.OwnerUserID != nil {
+	// 个人账号创建/变更模型白名单时，必须使用当前定价目录中的 canonical 模型 ID。
+	// 对已有个人账号的无关编辑不重复校验，以免历史脏数据阻断改名、并发等操作；
+	// 平台账号转个人账号则始终校验，避免在归属转换时制造空 mapping。
+	if account.OwnerUserID != nil &&
+		(before.OwnerUserID == nil ||
+			(modelMappingChanged && strings.EqualFold(strings.TrimSpace(account.Platform), PlatformOpencode))) {
 		if err := s.validateAdminOwnedModelMapping(ctx, account.Platform, account.Credentials); err != nil {
 			return nil, err
 		}
@@ -4208,6 +4227,13 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			credentials := mergeAccountMapPreservingSensitiveCreds(account.Credentials, input.Credentials)
 			if err := NormalizeHeaderOverrideCredentials(credentials); err != nil {
 				return nil, invalidBulkAccountInput(err.Error())
+			}
+			if account.OwnerUserID != nil &&
+				strings.EqualFold(strings.TrimSpace(account.Platform), PlatformOpencode) &&
+				modelMappingUpdateChanged(account.Credentials, input.Credentials) {
+				if err := s.validateAdminOwnedModelMapping(ctx, account.Platform, credentials); err != nil {
+					return nil, err
+				}
 			}
 			extra := mergeAccountMap(account.Extra, input.Extra)
 			level := NormalizeOpenAIAccountLevelWithConfigs(account.Platform, account.AccountLevel, credentials, extra, levelConfigs)

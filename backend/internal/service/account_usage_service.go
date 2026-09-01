@@ -124,7 +124,7 @@ const (
 	// 也不让 usage 端点抖动拖垮选号。
 	opencodeUsageSyncProbeTimeout = 3 * time.Second
 	grokFreeQuotaWindow           = 24 * time.Hour
-	openAICodexProbeVersion       = "0.144.1"
+	openAICodexProbeVersion       = codexCLIVersion
 )
 
 // UsageCache 封装账户使用量相关的缓存

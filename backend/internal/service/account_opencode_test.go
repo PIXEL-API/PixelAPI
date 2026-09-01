@@ -105,6 +105,49 @@ func TestResolveOpencodeGoModelSpec(t *testing.T) {
 	}
 }
 
+func TestCanonicalOpencodeGoModelIDForValidationDoesNotRelaxRouting(t *testing.T) {
+	tests := []struct {
+		name      string
+		model     string
+		canonical string
+		found     bool
+	}{
+		{name: "canonical hy3", model: "hy3", canonical: "hy3", found: true},
+		{name: "mixed case hy3", model: "Hy3", canonical: "hy3", found: true},
+		{name: "mixed case deepseek", model: "DeepSeek-V4-Flash-Vision-Exp", canonical: "deepseek-v4-flash-vision-exp", found: true},
+		{name: "provider prefix remains an explicit alias", model: "opencode-go/Hy3", found: false},
+		{name: "unknown alias", model: "Custom-Model", found: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			canonical, found := canonicalOpencodeGoModelIDForValidation(tt.model)
+			if found != tt.found || canonical != tt.canonical {
+				t.Fatalf("canonicalOpencodeGoModelIDForValidation(%q) = (%q, %v), want (%q, %v)", tt.model, canonical, found, tt.canonical, tt.found)
+			}
+		})
+	}
+
+	if _, found := ResolveOpencodeGoModelSpec("Hy3"); found {
+		t.Fatal("strict gateway resolver must not accept a non-canonical model ID")
+	}
+}
+
+func TestValidateCanonicalOwnedOpencodeModelIDs(t *testing.T) {
+	if err := validateCanonicalOwnedOpencodeModelIDs(PlatformOpencode, []string{"hy3", "deepseek-v4-flash-vision-exp"}); err != nil {
+		t.Fatalf("canonical OpenCode model IDs were rejected: %v", err)
+	}
+	if err := validateCanonicalOwnedOpencodeModelIDs(PlatformOpencode, []string{"Hy3"}); err == nil {
+		t.Fatal("non-canonical OpenCode model ID was accepted")
+	}
+	if err := validateCanonicalOwnedOpencodeModelIDs(PlatformOpenAI, []string{"Hy3"}); err != nil {
+		t.Fatalf("non-OpenCode model IDs must remain outside this validation: %v", err)
+	}
+	if err := validateCanonicalOwnedOpencodeModelIDs(PlatformOpencode, []string{"Custom-Model"}); err != nil {
+		t.Fatalf("explicit unknown aliases must remain available to the normal mapping validation: %v", err)
+	}
+}
+
 func TestOpencodeDefaultModelSlugs(t *testing.T) {
 	models := OpencodeDefaultModelSlugs()
 	wantModels := []string{

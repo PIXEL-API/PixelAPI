@@ -1,7 +1,7 @@
 import type { GroupPlatform } from '@/types'
 
-export const OPENAI_CC_SWITCH_CODEX_MODEL = 'gpt-5.5'
-export const OPENAI_CC_SWITCH_REASONING_EFFORT = 'xhigh'
+export const OPENAI_CC_SWITCH_CODEX_MODEL = 'gpt-5.6-terra'
+export const OPENAI_CC_SWITCH_REASONING_EFFORT = 'medium'
 export const GROK_CC_SWITCH_MODEL = 'grok-4.5'
 
 export type CcSwitchClientType = 'claude' | 'gemini'
@@ -55,7 +55,6 @@ function buildOpenAICodexConfig(baseUrl: string, providerName: string): string {
   return `model_provider = ${tomlString(providerId)}
 model = ${tomlString(OPENAI_CC_SWITCH_CODEX_MODEL)}
 model_reasoning_effort = ${tomlString(OPENAI_CC_SWITCH_REASONING_EFFORT)}
-disable_response_storage = true
 
 [model_providers.${providerId}]
 name = ${tomlString(providerId)}

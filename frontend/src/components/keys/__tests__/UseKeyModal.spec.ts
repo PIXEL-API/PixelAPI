@@ -111,15 +111,51 @@ describe('UseKeyModal', () => {
     wrapper.unmount()
   })
 
+  it('uses ARIA radio semantics and roving focus for the Codex model selector', async () => {
+    const wrapper = mountUseKeyModal(document.body)
+    const radiogroup = wrapper.get('[data-testid="codex-model-selector"]')
+    const radios = radiogroup.findAll('[role="radio"]')
+    expect(radios).toHaveLength(3)
+    expect(radiogroup.classes()).toEqual(expect.arrayContaining(['grid-cols-1', 'sm:grid-cols-3']))
+    expect(radios.every((radio) => radio.classes().includes('min-h-11'))).toBe(true)
+    expect(radiogroup.attributes('aria-labelledby')).toBeTruthy()
+    expect(radiogroup.attributes('aria-describedby')).toBeTruthy()
+    expect(wrapper.get(`#${radiogroup.attributes('aria-labelledby')}`).exists()).toBe(true)
+    expect(wrapper.get(`#${radiogroup.attributes('aria-describedby')}`).exists()).toBe(true)
+    expect(radios[0].attributes('aria-checked')).toBe('false')
+    expect(radios[0].attributes('tabindex')).toBe('-1')
+    expect(radios[1].attributes('aria-checked')).toBe('true')
+    expect(radios[1].attributes('tabindex')).toBe('0')
+
+    radios[1].element.focus()
+    await radios[1].trigger('keydown', { key: 'ArrowRight' })
+    await nextTick()
+    expect(radios[2].attributes('aria-checked')).toBe('true')
+    expect(radios[2].attributes('tabindex')).toBe('0')
+    expect(document.activeElement).toBe(radios[2].element)
+    expect(wrapper.find('pre code').text()).toContain('model = "gpt-5.6-luna"')
+
+    await radios[2].trigger('keydown', { key: 'Home' })
+    await nextTick()
+    expect(radios[0].attributes('aria-checked')).toBe('true')
+    expect(wrapper.find('pre code').text()).toContain('model = "gpt-5.6-sol"')
+
+    await radios[0].trigger('keydown', { key: 'End' })
+    await nextTick()
+    expect(radios[2].attributes('aria-checked')).toBe('true')
+
+    wrapper.unmount()
+  })
+
   it('uses roving tabindex and arrow, Home, and End keys for Codex authentication mode', async () => {
     const wrapper = mountUseKeyModal(document.body)
-    const radios = wrapper.findAll('[role="radio"]')
+    const radiogroup = wrapper.get('[data-testid="codex-auth-mode-selector"]')
+    const radios = radiogroup.findAll('[role="radio"]')
     expect(radios).toHaveLength(2)
     expect(radios[0].attributes('aria-checked')).toBe('true')
     expect(radios[0].attributes('tabindex')).toBe('0')
     expect(radios[1].attributes('tabindex')).toBe('-1')
 
-    const radiogroup = wrapper.get('[role="radiogroup"]')
     expect(radiogroup.attributes('aria-describedby')).toBeTruthy()
     expect(wrapper.get(`#${radiogroup.attributes('aria-describedby')}`).exists()).toBe(true)
 
@@ -189,6 +225,26 @@ describe('UseKeyModal', () => {
     wrapper.unmount()
   })
 
+  it('clears copied feedback when the selected Codex model changes', async () => {
+    vi.useFakeTimers()
+    const wrapper = mountUseKeyModal()
+    const copyButton = wrapper.get('[data-testid="copy-code-block"]')
+
+    await copyButton.trigger('click')
+    await flushPromises()
+    expect(copyButton.text()).toContain('keys.useKeyModal.copied')
+
+    await wrapper.get('[data-testid="codex-model-gpt-5.6-sol"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('pre code').text()).toContain('model = "gpt-5.6-sol"')
+    expect(copyButton.text()).toContain('keys.useKeyModal.copy')
+    expect(copyButton.text()).not.toContain('keys.useKeyModal.copied')
+    expect(vi.getTimerCount()).toBe(0)
+
+    wrapper.unmount()
+  })
+
   it('ignores a deferred copy result after generated content changes', async () => {
     vi.useFakeTimers()
     let resolveCopy: (success: boolean) => void = () => undefined
@@ -228,23 +284,38 @@ describe('UseKeyModal', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  it('keeps legacy Codex authentication as the default', () => {
+  it('uses Terra with medium reasoning and the current Codex config contract by default', () => {
     const wrapper = mountUseKeyModal()
 
     const codeBlock = wrapper.find('pre code')
     expect(codeBlock.exists()).toBe(true)
-    expect(codeBlock.text()).toContain('model = "gpt-5.5"')
-    expect(codeBlock.text()).toContain('review_model = "gpt-5.5"')
+    expect(codeBlock.text()).toContain('model = "gpt-5.6-terra"')
+    expect(codeBlock.text()).toContain('model_reasoning_effort = "medium"')
+    expect(codeBlock.text()).not.toContain('review_model')
+    expect(codeBlock.text()).not.toContain('disable_response_storage')
+    expect(codeBlock.text()).not.toContain('network_access = "enabled"')
+    expect(codeBlock.text()).not.toContain('model_context_window')
+    expect(codeBlock.text()).not.toContain('model_auto_compact_token_limit')
+    expect(codeBlock.text()).not.toContain('windows_wsl_setup_acknowledged')
+    expect(codeBlock.text()).toContain('sandbox_mode = "workspace-write"')
+    expect(codeBlock.text()).toContain('[sandbox_workspace_write]')
+    expect(codeBlock.text()).toContain('network_access = true')
     expect(codeBlock.text()).toContain('[model_providers.OpenAI]')
     expect(codeBlock.text()).not.toContain('[model_providers.codex_local_access]')
     expect(codeBlock.text()).toContain('base_url = "https://example.com/v1"')
     expect(codeBlock.text()).toContain('wire_api = "responses"')
     expect(codeBlock.text()).toContain('requires_openai_auth = true')
+    expect(codeBlock.text()).not.toContain('env_key')
     expect(codeBlock.text()).not.toContain('x-openai-actor-authorization')
+    expect(codeBlock.text()).not.toContain('supports_websockets')
+    expect(codeBlock.text()).not.toContain('responses_websockets_v2')
+    expect(codeBlock.text()).not.toContain('sk-test')
+    expect(wrapper.findAll('pre code')[1].text()).toContain('"OPENAI_API_KEY": "sk-test"')
+    expect(wrapper.get('[data-testid="codex-model-gpt-5.6-terra"]').attributes('aria-checked')).toBe('true')
     expect(wrapper.get('[data-testid="codex-auth-mode-legacy"]').attributes('aria-checked')).toBe('true')
   })
 
-  it('renders image executor headers only in Codex API Key Mode', async () => {
+  it('uses an explicit environment key and omits auth.json in Codex API Key Mode', async () => {
     const wrapper = mountUseKeyModal()
 
     await wrapper.get('[data-testid="codex-auth-mode-api-key"]').trigger('click')
@@ -252,10 +323,51 @@ describe('UseKeyModal', () => {
 
     const codeBlock = wrapper.find('pre code')
     expect(codeBlock.text()).toContain('requires_openai_auth = false')
+    expect(codeBlock.text()).toContain('env_key = "SUB2API_API_KEY"')
     expect(codeBlock.text()).toContain(
       'http_headers = { "x-openai-actor-authorization" = "local-image-extension" }'
     )
+    expect(codeBlock.text()).not.toContain('sk-test')
+    expect(wrapper.findAll('pre code')).toHaveLength(2)
+    expect(wrapper.findAll('pre code')[1].text()).toBe("export SUB2API_API_KEY='sk-test'")
+    expect(wrapper.text()).not.toContain('auth.json')
     expect(wrapper.get('[data-testid="codex-auth-mode-api-key"]').attributes('aria-checked')).toBe('true')
+  })
+
+  it('renders the PowerShell environment command for Codex API Key Mode on Windows', async () => {
+    const wrapper = mountUseKeyModal()
+
+    const windowsTab = wrapper.findAll('[role="tab"]')
+      .find((tab) => tab.text().includes('Windows'))
+    expect(windowsTab).toBeDefined()
+    await windowsTab!.trigger('click')
+    await wrapper.get('[data-testid="codex-auth-mode-api-key"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.findAll('pre code')[1].text()).toBe("$env:SUB2API_API_KEY='sk-test'")
+    expect(wrapper.text()).not.toContain('auth.json')
+  })
+
+  it('escapes API keys in auth.json and both generated shell commands', async () => {
+    const apiKey = "sk-'quoted"
+    const wrapper = mountUseKeyModal(undefined, { apiKey })
+
+    expect(JSON.parse(wrapper.findAll('pre code')[1].text())).toEqual({ OPENAI_API_KEY: apiKey })
+
+    await wrapper.get('[data-testid="codex-auth-mode-api-key"]').trigger('click')
+    await nextTick()
+    expect(wrapper.findAll('pre code')[1].text()).toBe(
+      "export SUB2API_API_KEY='sk-'\"'\"'quoted'"
+    )
+
+    const windowsTab = wrapper.findAll('[role="tab"]')
+      .find((tab) => tab.text().includes('Windows'))
+    expect(windowsTab).toBeDefined()
+    await windowsTab!.trigger('click')
+    await nextTick()
+    expect(wrapper.findAll('pre code')[1].text()).toBe(
+      "$env:SUB2API_API_KEY='sk-''quoted'"
+    )
   })
 
   it('renders WebSocket Codex CLI config without local access provider alias', async () => {
@@ -274,8 +386,8 @@ describe('UseKeyModal', () => {
     expect(codeBlock.text()).toContain('[model_providers.OpenAI]')
     expect(codeBlock.text()).not.toContain('[model_providers.codex_local_access]')
     expect(codeBlock.text()).toContain('supports_websockets = true')
-    expect(codeBlock.text()).toContain('[features]')
-    expect(codeBlock.text()).toContain('responses_websockets_v2 = true')
+    expect(codeBlock.text()).not.toContain('[features]')
+    expect(codeBlock.text()).not.toContain('responses_websockets_v2')
   })
 
   it('renders GPT-5.4 mini entry in OpenCode config', async () => {
@@ -291,6 +403,10 @@ describe('UseKeyModal', () => {
 
     const codeBlock = wrapper.find('pre code')
     expect(codeBlock.exists()).toBe(true)
+    expect(codeBlock.text()).toContain('"name": "GPT-5.6 (Sol alias)"')
+    expect(codeBlock.text()).toContain('"name": "GPT-5.6 Sol"')
+    expect(codeBlock.text()).toContain('"name": "GPT-5.6 Terra"')
+    expect(codeBlock.text()).toContain('"name": "GPT-5.6 Luna"')
     expect(codeBlock.text()).toContain('"name": "GPT-5.4 Mini"')
     expect(codeBlock.text()).not.toContain('"name": "GPT-5.4 Nano"')
   })
@@ -313,6 +429,11 @@ describe('UseKeyModal', () => {
     })
     expect(provider.options.baseURL).not.toContain('/zen/go/v1')
 
+    const deepSeekChatModels = [
+      'deepseek-v4-pro',
+      'deepseek-v4-flash',
+      'deepseek-v4-flash-vision-exp'
+    ]
     const messagesModels = [
       'minimax-m3',
       'minimax-m2.7',
@@ -330,6 +451,11 @@ describe('UseKeyModal', () => {
       'muse-spark-1.2-contributor'
     ]
 
+    for (const modelId of deepSeekChatModels) {
+      expect(provider.models[modelId]).toEqual({
+        provider: { npm: '@ai-sdk/openai-compatible' }
+      })
+    }
     for (const modelId of messagesModels) {
       expect(provider.models[modelId]).toEqual({
         provider: { npm: '@ai-sdk/anthropic' }
@@ -341,20 +467,27 @@ describe('UseKeyModal', () => {
       })
     }
 
-    expect(Object.keys(provider.models)).toEqual([...messagesModels, ...responsesModels])
+    expect(Object.keys(provider.models)).toEqual([
+      ...deepSeekChatModels,
+      ...messagesModels,
+      ...responsesModels
+    ])
     expect(Object.keys(provider.models).every((modelId) => !modelId.startsWith('opencode-go/'))).toBe(true)
-    expect(provider.models['deepseek-v4-pro']).toBeUndefined()
+    expect(provider.models['deepseek-v4-flash'].provider.npm).not.toBe('@ai-sdk/anthropic')
   })
 
-  it('resets Codex authentication mode when the modal reopens', async () => {
+  it('resets Codex model and authentication mode when the modal reopens', async () => {
     const wrapper = mountUseKeyModal()
 
+    await wrapper.get('[data-testid="codex-model-gpt-5.6-sol"]').trigger('click')
     await wrapper.get('[data-testid="codex-auth-mode-api-key"]').trigger('click')
     await wrapper.setProps({ show: false })
     await wrapper.setProps({ show: true })
     await nextTick()
 
+    expect(wrapper.get('[data-testid="codex-model-gpt-5.6-terra"]').attributes('aria-checked')).toBe('true')
     expect(wrapper.get('[data-testid="codex-auth-mode-legacy"]').attributes('aria-checked')).toBe('true')
+    expect(wrapper.find('pre code').text()).toContain('model = "gpt-5.6-terra"')
     expect(wrapper.find('pre code').text()).toContain('requires_openai_auth = true')
   })
 

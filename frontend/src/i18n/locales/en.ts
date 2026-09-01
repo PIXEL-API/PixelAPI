@@ -1660,16 +1660,32 @@ export default {
       openai: {
         description:
           "Add the following configuration files to your Codex CLI config directory.",
+        modelTitle: "Codex model",
+        modelDescription:
+          "Choose a model available to your account. If access is unavailable, the upstream returns an explicit error instead of silently falling back.",
+        modelSol: "Sol",
+        modelSolDescription: "Capability-first for complex coding and difficult tasks.",
+        modelTerra: "Terra (migration recommended)",
+        modelTerraDescription:
+          "The smooth migration target from GPT-5.5, balancing quality, speed, and cost.",
+        modelLuna: "Luna",
+        modelLunaDescription:
+          "Speed- and cost-first for well-defined, high-throughput tasks.",
         authModeTitle: "Codex authentication mode",
         authModeDescription:
-          "Compatibility mode keeps the existing setup for older Codex clients. API Key Mode enables the client-side image executor.",
-        authModeLegacy: "Compatibility mode",
+          "Compatibility mode reads the key from auth.json. API Key Mode authenticates through SUB2API_API_KEY and enables the client-side image executor header.",
+        authModeLegacy: "auth.json mode",
         authModeApiKey: "API Key Mode",
         configTomlHint:
           "Make sure the following content is at the beginning of the config.toml file",
-        note: "Make sure the config directory exists. macOS/Linux users can run mkdir -p ~/.codex to create it.",
+        authJsonHint:
+          "auth.json contains a plaintext API key. Do not commit it, share it, or paste it into a public support ticket.",
+        apiKeyEnvironmentHint:
+          "Run this in the same terminal before starting Codex CLI. The variable only applies to the current session, and the command may remain in shell history; do not share it.",
+        note:
+          "Make sure the config directory exists. macOS/Linux users can run mkdir -p ~/.codex to create it. This setup allows Codex network access inside the workspace-write sandbox.",
         noteWindows:
-          "Press Win+R and enter %userprofile%\\.codex to open the config directory. Create it manually if it does not exist.",
+          "Press Win+R and enter %userprofile%\\.codex to open the config directory. Create it manually if it does not exist. This setup allows Codex network access inside the workspace-write sandbox.",
       },
       cliTabs: {
         claudeCode: "Claude Code",
@@ -1710,7 +1726,7 @@ export default {
         subtitle: "opencode.json",
         description:
           "Configure OpenCode CLI to route Chat Completions, Anthropic Messages, and OpenAI Responses traffic through the current OpenCode Go group according to each model's protocol.",
-        hint: "Config path: ~/.config/opencode/opencode.json (or opencode.jsonc); create it if it does not exist. Keep the provider ID as `opencode-go`: OpenCode uses it to load the complete Go model catalog from Models.dev. The model-level SDK overrides in this example handle Messages and Responses models; all other models inherit the Chat Completions default SDK. Use an OpenCode version that includes this catalog (verified with 1.18.25). The API key can also be configured with /connect.",
+        hint: "Config path: ~/.config/opencode/opencode.json (or opencode.jsonc); create it if it does not exist. If an older config placed this group under `provider.anthropic`, remove that legacy group config completely and replace it with the example's `provider.opencode-go` block instead of only appending it; otherwise OpenCode's recursive config merge can keep routing DeepSeek to `/v1/messages`. After saving, run `opencode debug config`, verify that `deepseek-v4-flash` uses `@ai-sdk/openai-compatible`, select `opencode-go/deepseek-v4-flash` from `/models`, and fully restart OpenCode. This example explicitly pins DeepSeek to the Chat Completions SDK while retaining model-level overrides for Messages and Responses models. Use an OpenCode version that includes this catalog (verified with 1.18.25). The API key can also be configured with `/connect`.",
       },
     },
     customKeyLabel: "Custom Key",
