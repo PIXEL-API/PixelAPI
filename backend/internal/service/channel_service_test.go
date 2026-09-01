@@ -7,6 +7,7 @@ import (
 	"errors"
 	"testing"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
 )
@@ -220,6 +221,134 @@ func TestChannelServiceListPricedModelIDsUsesActiveChannelPricingUnion(t *testin
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"gpt-a", "gpt-b", "gpt-c"}, models)
+}
+
+func TestChannelConfigRejectsNonCanonicalOpencodeModelIDs(t *testing.T) {
+	tests := []struct {
+		name       string
+		validate   func() error
+		wantError  bool
+		wantDetail string
+	}{
+		{
+			name: "pricing hy3",
+			validate: func() error {
+				return validateChannelConfig([]ChannelModelPricing{{Platform: PlatformOpencode, Models: []string{"Hy3"}}}, nil)
+			},
+			wantError:  true,
+			wantDetail: "hy3",
+		},
+		{
+			name: "account stats deepseek",
+			validate: func() error {
+				return validateAccountStatsPricingEntries([]ChannelModelPricing{{Platform: PlatformOpencode, Models: []string{"DeepSeek-V4-Flash-Vision-Exp"}}})
+			},
+			wantError:  true,
+			wantDetail: "deepseek-v4-flash-vision-exp",
+		},
+		{
+			name: "mapping source",
+			validate: func() error {
+				return validateChannelConfig(nil, map[string]map[string]string{PlatformOpencode: {"Hy3": "hy3"}})
+			},
+			wantError:  true,
+			wantDetail: "hy3",
+		},
+		{
+			name: "mapping target",
+			validate: func() error {
+				return validateChannelConfig(nil, map[string]map[string]string{PlatformOpencode: {"hy3-alias": "Hy3"}})
+			},
+			wantError:  true,
+			wantDetail: "hy3",
+		},
+		{
+			name: "canonical OpenCode values",
+			validate: func() error {
+				return validateChannelConfig(
+					[]ChannelModelPricing{{Platform: PlatformOpencode, Models: []string{"hy3", "deepseek-v4-flash-vision-exp"}}},
+					map[string]map[string]string{PlatformOpencode: {"hy3": "deepseek-v4-flash-vision-exp"}},
+				)
+			},
+		},
+		{
+			name: "unrelated platform",
+			validate: func() error {
+				return validateChannelConfig([]ChannelModelPricing{{Platform: PlatformOpenAI, Models: []string{"Hy3"}}}, nil)
+			},
+		},
+		{
+			name: "explicit alias",
+			validate: func() error {
+				return validateChannelConfig(nil, map[string]map[string]string{PlatformOpencode: {"opencode-go/Hy3": "hy3"}})
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.validate()
+			if tt.wantError {
+				require.Error(t, err)
+				require.ErrorContains(t, err, tt.wantDetail)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestChannelServiceCreateRejectsNonCanonicalOpencodePricingBeforeRepositoryWrite(t *testing.T) {
+	createCalls := 0
+	repo := &mockChannelRepository{
+		existsByNameFn: func(context.Context, string) (bool, error) {
+			return false, nil
+		},
+		createFn: func(context.Context, *Channel) error {
+			createCalls++
+			return nil
+		},
+	}
+
+	_, err := newTestChannelService(repo).Create(context.Background(), &CreateChannelInput{
+		Name: "opencode-channel",
+		ModelPricing: []ChannelModelPricing{{
+			Platform: PlatformOpencode,
+			Models:   []string{"Hy3"},
+		}},
+	})
+
+	require.Error(t, err)
+	require.Equal(t, "OPENCODE_MODEL_ID_NOT_CANONICAL", infraerrors.Reason(err))
+	require.Equal(t, 0, createCalls)
+}
+
+func TestChannelServiceUpdateRejectsNonCanonicalOpencodeAccountStatsPricingBeforeRepositoryWrite(t *testing.T) {
+	updateCalls := 0
+	existing := &Channel{ID: 1, Name: "opencode-channel", Status: StatusActive}
+	rules := []AccountStatsPricingRule{{
+		Pricing: []ChannelModelPricing{{
+			Platform: PlatformOpencode,
+			Models:   []string{"DeepSeek-V4-Flash-Vision-Exp"},
+		}},
+	}}
+	repo := &mockChannelRepository{
+		getByIDFn: func(context.Context, int64) (*Channel, error) {
+			return existing.Clone(), nil
+		},
+		updateFn: func(context.Context, *Channel) error {
+			updateCalls++
+			return nil
+		},
+	}
+
+	_, err := newTestChannelService(repo).Update(context.Background(), 1, &UpdateChannelInput{
+		AccountStatsPricingRules: &rules,
+	})
+
+	require.Error(t, err)
+	require.Equal(t, "OPENCODE_MODEL_ID_NOT_CANONICAL", infraerrors.Reason(err))
+	require.Equal(t, 0, updateCalls)
 }
 
 // makeStandardRepo returns a repo that serves one active channel with anthropic pricing

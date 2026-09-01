@@ -92,6 +92,21 @@ func ResolveOpencodeGoModelSpec(model string) (OpencodeGoModelSpec, bool) {
 	return spec, ok
 }
 
+// canonicalOpencodeGoModelIDForValidation 仅供配置写入校验生成明确的
+// canonical ID 提示。它以大小写不敏感方式识别已审核模型，但不会改变网关的
+// 严格解析语义：ResolveOpencodeGoModelSpec 仍只接受 canonical 小写 ID。
+func canonicalOpencodeGoModelIDForValidation(model string) (string, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	if normalized == "" {
+		return "", false
+	}
+	spec, ok := opencodeGoModelByID[normalized]
+	if !ok {
+		return "", false
+	}
+	return spec.ID, true
+}
+
 // OpencodeDefaultModelSlugs 返回受版本控制目录中的裸模型 ID 副本。
 func OpencodeDefaultModelSlugs() []string {
 	models := make([]string, 0, len(opencodeGoModelCatalog))

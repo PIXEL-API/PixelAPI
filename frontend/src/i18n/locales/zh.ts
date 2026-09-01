@@ -1603,15 +1603,29 @@ export default {
         "此 API 密钥尚未分配分组，请先在密钥列表中点击分组列进行分配，然后才能查看使用配置。",
       openai: {
         description: "将以下配置文件添加到 Codex CLI 配置目录中。",
+        modelTitle: "Codex 模型",
+        modelDescription:
+          "根据账号权限选择模型；未获得对应模型权限时，上游会直接返回错误，不会静默降级。",
+        modelSol: "Sol",
+        modelSolDescription: "能力优先，适合复杂编码与高难度任务。",
+        modelTerra: "Terra（平滑迁移推荐）",
+        modelTerraDescription: "GPT-5.5 的平滑迁移选择，兼顾质量、速度与成本。",
+        modelLuna: "Luna",
+        modelLunaDescription: "速度与成本优先，适合明确且高吞吐的任务。",
         authModeTitle: "Codex 认证模式",
         authModeDescription:
-          "兼容模式保留旧版 Codex 配置；API Key Mode 用于启用客户端图片执行器。",
-        authModeLegacy: "兼容模式",
+          "兼容模式通过 auth.json 读取密钥；API Key Mode 通过 SUB2API_API_KEY 环境变量认证，并启用客户端图片执行器请求头。",
+        authModeLegacy: "auth.json 模式",
         authModeApiKey: "API Key Mode",
         configTomlHint: "请确保以下内容位于 config.toml 文件的开头部分",
-        note: "请确保配置目录存在。macOS/Linux 用户可运行 mkdir -p ~/.codex 创建目录。",
+        authJsonHint:
+          "auth.json 包含明文 API Key，请勿提交到版本库、分享给他人或粘贴到公开工单。",
+        apiKeyEnvironmentHint:
+          "请在启动 Codex CLI 的同一终端中执行；该环境变量仅对当前会话生效，命令可能保留在终端历史中，请勿分享。",
+        note:
+          "请确保配置目录存在。macOS/Linux 用户可运行 mkdir -p ~/.codex 创建目录。此配置允许 Codex 在 workspace-write 沙箱中访问网络。",
         noteWindows:
-          "按 Win+R，输入 %userprofile%\\.codex 打开配置目录。如目录不存在，请先手动创建。",
+          "按 Win+R，输入 %userprofile%\\.codex 打开配置目录。如目录不存在，请先手动创建。此配置允许 Codex 在 workspace-write 沙箱中访问网络。",
       },
       cliTabs: {
         claudeCode: "Claude Code",
@@ -1651,7 +1665,7 @@ export default {
         subtitle: "opencode.json",
         description:
           "配置 OpenCode CLI，按模型协议将 Chat Completions、Anthropic Messages 和 OpenAI Responses 流量路由到当前 OpenCode Go 分组。",
-        hint: "配置文件路径：~/.config/opencode/opencode.json（或 opencode.jsonc），不存在需手动创建。请保留 provider ID `opencode-go`：OpenCode 会据此载入 Models.dev 的完整 Go 模型目录；示例中的模型级 SDK 覆盖负责 Messages 与 Responses 模型，其余模型继承 Chat Completions 默认 SDK。请使用包含该目录的 OpenCode 版本（已核验 1.18.25）。API Key 也可通过客户端 /connect 命令配置。",
+        hint: "配置文件路径：~/.config/opencode/opencode.json（或 opencode.jsonc），不存在需手动创建。如果旧配置把本分组写在 `provider.anthropic` 下，请完整删除该旧分组配置并替换为示例中的 `provider.opencode-go`，不要只追加；否则 OpenCode 的递归配置合并可能继续让 DeepSeek 走 `/v1/messages`。保存后运行 `opencode debug config`，确认 `deepseek-v4-flash` 的 SDK 是 `@ai-sdk/openai-compatible`，再从 `/models` 选择 `opencode-go/deepseek-v4-flash` 并完整重启 OpenCode。示例已为 DeepSeek 显式指定 Chat Completions SDK，并为 Messages 与 Responses 模型保留各自的模型级覆盖。请使用包含该目录的 OpenCode 版本（已核验 1.18.25）。API Key 也可通过客户端 `/connect` 命令配置。",
       },
     },
     customKeyLabel: "自定义密钥",

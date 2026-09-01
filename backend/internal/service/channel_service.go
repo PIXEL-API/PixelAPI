@@ -658,12 +658,18 @@ func validateChannelConfig(pricing []ChannelModelPricing, mapping map[string]map
 	if err := validatePricingEntries(pricing); err != nil {
 		return err
 	}
+	if err := validateCanonicalOpencodeMappings(mapping); err != nil {
+		return err
+	}
 	return validateNoConflictingMappings(mapping)
 }
 
 // validatePricingEntries 校验定价条目（冲突检测 + 区间校验 + 计费模式校验），
 // 同时用于主渠道定价和 account_stats_pricing_rules 的内部定价。
 func validatePricingEntries(pricing []ChannelModelPricing) error {
+	if err := validateCanonicalOpencodePricingModels(pricing); err != nil {
+		return err
+	}
 	if err := validateNoConflictingModels(pricing); err != nil {
 		return err
 	}
@@ -677,6 +683,48 @@ func validatePricingEntries(pricing []ChannelModelPricing) error {
 		return err
 	}
 	return validateLongContextPricingPolicies(pricing)
+}
+
+func validateCanonicalOpencodePricingModels(pricing []ChannelModelPricing) error {
+	for _, entry := range pricing {
+		if !strings.EqualFold(strings.TrimSpace(entry.Platform), PlatformOpencode) {
+			continue
+		}
+		for _, model := range entry.Models {
+			if err := validateCanonicalOpencodeConfiguredModelID("pricing model", model); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateCanonicalOpencodeMappings(mapping map[string]map[string]string) error {
+	for platform, platformMapping := range mapping {
+		if !strings.EqualFold(strings.TrimSpace(platform), PlatformOpencode) {
+			continue
+		}
+		for source, target := range platformMapping {
+			if err := validateCanonicalOpencodeConfiguredModelID("mapping source", source); err != nil {
+				return err
+			}
+			if err := validateCanonicalOpencodeConfiguredModelID("mapping target", target); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateCanonicalOpencodeConfiguredModelID(field, model string) error {
+	canonical, known := canonicalOpencodeGoModelIDForValidation(model)
+	if !known || strings.TrimSpace(model) == canonical {
+		return nil
+	}
+	return infraerrors.BadRequest(
+		"OPENCODE_MODEL_ID_NOT_CANONICAL",
+		fmt.Sprintf("OpenCode %s %q must use canonical lowercase ID %q", field, model, canonical),
+	)
 }
 
 // validateLongContextPricingPolicies 校验渠道长上下文三态策略：

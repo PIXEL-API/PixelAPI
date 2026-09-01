@@ -1910,6 +1910,24 @@ func normalizeOwnedPersonalModelMapping(raw any) (map[string]any, []string, erro
 	return normalized, models, nil
 }
 
+func validateCanonicalOwnedOpencodeModelIDs(platform string, models []string) error {
+	if !strings.EqualFold(strings.TrimSpace(platform), PlatformOpencode) {
+		return nil
+	}
+	for _, model := range models {
+		canonical, known := canonicalOpencodeGoModelIDForValidation(model)
+		if !known || strings.TrimSpace(model) == canonical {
+			continue
+		}
+		return ErrOwnedAccountModelMappingInvalid.WithMetadata(map[string]string{
+			"field":           "model_mapping",
+			"model":           model,
+			"canonical_model": canonical,
+		})
+	}
+	return nil
+}
+
 func (s *AccountService) listOwnedSelectableModelIDs(ctx context.Context, platform string) ([]string, error) {
 	platform = strings.ToLower(strings.TrimSpace(platform))
 	if !IsSupportedAccountPlatform(platform) {
@@ -1994,6 +2012,9 @@ func (s *AccountService) validateOwnedPersonalModelMapping(ctx context.Context, 
 	}
 	normalized, models, err := normalizeOwnedPersonalModelMapping(raw)
 	if err != nil {
+		return err
+	}
+	if err := validateCanonicalOwnedOpencodeModelIDs(platform, models); err != nil {
 		return err
 	}
 	selectableModels, err := s.listOwnedSelectableModelIDs(ctx, platform)

@@ -68,6 +68,52 @@
           :aria-labelledby="clientTabId(activeClientTab)"
           class="space-y-4"
         >
+          <!-- Codex Model -->
+          <div
+            v-if="showCodexAuthMode"
+            class="rounded-control border border-line bg-surface-subtle p-3"
+          >
+            <div class="mb-2">
+              <p :id="codexModelTitleId" class="text-sm font-medium text-content">
+                {{ t('keys.useKeyModal.openai.modelTitle') }}
+              </p>
+              <p :id="codexModelDescriptionId" class="mt-0.5 text-sm text-content-subtle">
+                {{ t('keys.useKeyModal.openai.modelDescription') }}
+              </p>
+            </div>
+            <div
+              data-testid="codex-model-selector"
+              class="grid grid-cols-1 gap-2 sm:grid-cols-3"
+              role="radiogroup"
+              :aria-labelledby="codexModelTitleId"
+              :aria-describedby="codexModelDescriptionId"
+            >
+              <button
+                v-for="(option, index) in codexModelOptions"
+                :key="option.id"
+                type="button"
+                role="radio"
+                :data-testid="`codex-model-${option.id}`"
+                :aria-checked="codexModel === option.id"
+                :aria-label="`${t(option.labelKey)}. ${t(option.descriptionKey)}`"
+                :tabindex="codexModel === option.id ? 0 : -1"
+                :class="[
+                  'min-h-11 rounded-lg px-3 py-2 text-left transition-colors',
+                  codexModel === option.id
+                    ? 'bg-surface text-brand shadow-sm ring-1 ring-line'
+                    : 'bg-surface-hover text-content-muted hover:text-content'
+                ]"
+                @click="codexModel = option.id"
+                @keydown="handleCodexModelKeydown($event, index)"
+              >
+                <span class="block text-sm font-semibold">{{ t(option.labelKey) }}</span>
+                <span class="mt-0.5 block text-sm leading-relaxed text-content-subtle">
+                  {{ t(option.descriptionKey) }}
+                </span>
+              </button>
+            </div>
+          </div>
+
           <!-- Codex Authentication Mode -->
           <div
             v-if="showCodexAuthMode"
@@ -77,11 +123,12 @@
               <p class="text-sm font-medium text-content">
                 {{ t('keys.useKeyModal.openai.authModeTitle') }}
               </p>
-              <p :id="codexAuthModeDescriptionId" class="mt-0.5 text-xs text-content-subtle">
+              <p :id="codexAuthModeDescriptionId" class="mt-0.5 text-sm text-content-subtle">
                 {{ t('keys.useKeyModal.openai.authModeDescription') }}
               </p>
             </div>
             <div
+              data-testid="codex-auth-mode-selector"
               class="grid grid-cols-1 gap-1 rounded-control bg-surface-hover p-1 sm:grid-cols-2"
               role="radiogroup"
               :aria-label="t('keys.useKeyModal.openai.authModeTitle')"
@@ -277,13 +324,40 @@ const { copyToClipboard: clipboardCopy } = useClipboard()
 const copiedIndex = ref<number | null>(null)
 const activeTab = ref<string>('unix')
 const activeClientTab = ref<string>('claude')
+const DEFAULT_CODEX_MODEL = 'gpt-5.6-terra'
+const CODEX_REASONING_EFFORT = 'medium'
+type CodexModel = 'gpt-5.6-sol' | 'gpt-5.6-terra' | 'gpt-5.6-luna'
 type CodexAuthMode = 'legacy' | 'api-key'
+const codexModel = ref<CodexModel>(DEFAULT_CODEX_MODEL)
 const codexAuthMode = ref<CodexAuthMode>('legacy')
+const codexModelOptions = [
+  {
+    id: 'gpt-5.6-sol',
+    labelKey: 'keys.useKeyModal.openai.modelSol',
+    descriptionKey: 'keys.useKeyModal.openai.modelSolDescription'
+  },
+  {
+    id: 'gpt-5.6-terra',
+    labelKey: 'keys.useKeyModal.openai.modelTerra',
+    descriptionKey: 'keys.useKeyModal.openai.modelTerraDescription'
+  },
+  {
+    id: 'gpt-5.6-luna',
+    labelKey: 'keys.useKeyModal.openai.modelLuna',
+    descriptionKey: 'keys.useKeyModal.openai.modelLunaDescription'
+  }
+] as const satisfies readonly {
+  id: CodexModel
+  labelKey: string
+  descriptionKey: string
+}[]
 const codexAuthModes = ['legacy', 'api-key'] as const satisfies readonly CodexAuthMode[]
 
 const componentId = `use-key-modal-${++useKeyModalInstanceCounter}`
 const clientTabPanelId = `${componentId}-client-panel`
 const shellTabPanelId = `${componentId}-shell-panel`
+const codexModelTitleId = `${componentId}-model-title`
+const codexModelDescriptionId = `${componentId}-model-description`
 const codexAuthModeDescriptionId = `${componentId}-auth-mode-description`
 const clientTabId = (tabId: string) => `${componentId}-client-tab-${tabId}`
 const shellTabId = (tabId: string) => `${componentId}-shell-tab-${tabId}`
@@ -360,6 +434,15 @@ function handleCodexAuthModeKeydown(event: KeyboardEvent, currentIndex: number):
   focusRovingItem(event, nextIndex, '[role="radio"]')
 }
 
+function handleCodexModelKeydown(event: KeyboardEvent, currentIndex: number): void {
+  const nextIndex = resolveRovingIndex(event, currentIndex, codexModelOptions.length, true)
+  if (nextIndex === null) return
+
+  event.preventDefault()
+  codexModel.value = codexModelOptions[nextIndex].id
+  focusRovingItem(event, nextIndex, '[role="radio"]')
+}
+
 // Reset tabs when platform changes
 const defaultClientTab = computed(() => {
   switch (props.platform) {
@@ -381,6 +464,7 @@ const defaultClientTab = computed(() => {
 watch(() => props.platform, () => {
   activeTab.value = 'unix'
   activeClientTab.value = defaultClientTab.value
+  codexModel.value = DEFAULT_CODEX_MODEL
   codexAuthMode.value = 'legacy'
 }, { immediate: true })
 
@@ -392,6 +476,7 @@ watch(() => props.allowMessagesDispatch, (allowMessagesDispatch) => {
 
 watch(() => props.show, (show) => {
   if (show) {
+    codexModel.value = DEFAULT_CODEX_MODEL
     codexAuthMode.value = 'legacy'
   } else {
     resetCopiedFeedback()
@@ -763,51 +848,55 @@ ${keyword('$env:')}${variable('GEMINI_MODEL')}${operator('=')}${string(`"${model
 }
 
 function generateOpenAIFiles(baseUrl: string, apiKey: string): FileConfig[] {
-  const isWindows = activeTab.value === 'windows'
-  const configDir = isWindows ? '%userprofile%\\.codex' : '~/.codex'
-
-  // config.toml content
-  const configContent = generateCodexConfigContent(baseUrl)
-
-  // auth.json content
-  const authContent = `{
-  "OPENAI_API_KEY": "${apiKey}"
-}`
-
-  return [
-    {
-      path: `${configDir}/config.toml`,
-      content: configContent,
-      hint: t('keys.useKeyModal.openai.configTomlHint')
-    },
-    {
-      path: `${configDir}/auth.json`,
-      content: authContent
-    }
-  ]
+  return generateCodexFiles(baseUrl, apiKey)
 }
 
 function generateOpenAIWsFiles(baseUrl: string, apiKey: string): FileConfig[] {
+  return generateCodexFiles(baseUrl, apiKey, { supportsWebsockets: true })
+}
+
+function quotePosixShellValue(value: string): string {
+  return `'${value.replace(/'/g, "'\"'\"'")}'`
+}
+
+function quotePowerShellValue(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`
+}
+
+function generateCodexFiles(
+  baseUrl: string,
+  apiKey: string,
+  options: { supportsWebsockets?: boolean } = {}
+): FileConfig[] {
   const isWindows = activeTab.value === 'windows'
   const configDir = isWindows ? '%userprofile%\\.codex' : '~/.codex'
+  const configFile: FileConfig = {
+    path: `${configDir}/config.toml`,
+    content: generateCodexConfigContent(baseUrl, options),
+    hint: t('keys.useKeyModal.openai.configTomlHint')
+  }
 
-  // config.toml content with WebSocket v2
-  const configContent = generateCodexConfigContent(baseUrl, { supportsWebsockets: true })
+  if (codexAuthMode.value === 'api-key') {
+    const environmentContent = isWindows
+      ? `$env:SUB2API_API_KEY=${quotePowerShellValue(apiKey)}`
+      : `export SUB2API_API_KEY=${quotePosixShellValue(apiKey)}`
 
-  // auth.json content
-  const authContent = `{
-  "OPENAI_API_KEY": "${apiKey}"
-}`
+    return [
+      configFile,
+      {
+        path: isWindows ? 'PowerShell' : 'Terminal',
+        content: environmentContent,
+        hint: t('keys.useKeyModal.openai.apiKeyEnvironmentHint')
+      }
+    ]
+  }
 
   return [
-    {
-      path: `${configDir}/config.toml`,
-      content: configContent,
-      hint: t('keys.useKeyModal.openai.configTomlHint')
-    },
+    configFile,
     {
       path: `${configDir}/auth.json`,
-      content: authContent
+      content: JSON.stringify({ OPENAI_API_KEY: apiKey }, null, 2),
+      hint: t('keys.useKeyModal.openai.authJsonHint')
     }
   ]
 }
@@ -840,24 +929,17 @@ function generateCodexConfigContent(
   options: { supportsWebsockets?: boolean } = {}
 ): string {
   const providerConfig = generateCodexProviderConfig(baseUrl, options)
-  const featureConfig = options.supportsWebsockets
-    ? `
-[features]
-responses_websockets_v2 = true`
-    : ''
 
   return `model_provider = "OpenAI"
-model = "gpt-5.5"
-review_model = "gpt-5.5"
-model_reasoning_effort = "xhigh"
-disable_response_storage = true
-network_access = "enabled"
-windows_wsl_setup_acknowledged = true
-model_context_window = 1000000
-model_auto_compact_token_limit = 900000
+model = "${codexModel.value}"
+model_reasoning_effort = "${CODEX_REASONING_EFFORT}"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+network_access = true
 
 [model_providers.OpenAI]
-${providerConfig}${featureConfig}`
+${providerConfig}`
 }
 
 function generateCodexProviderConfig(
@@ -866,7 +948,7 @@ function generateCodexProviderConfig(
 ): string {
   const websocketConfig = options.supportsWebsockets ? '\nsupports_websockets = true' : ''
   const authConfig = codexAuthMode.value === 'api-key'
-    ? 'requires_openai_auth = false\nhttp_headers = { "x-openai-actor-authorization" = "local-image-extension" }'
+    ? 'requires_openai_auth = false\nenv_key = "SUB2API_API_KEY"\nhttp_headers = { "x-openai-actor-authorization" = "local-image-extension" }'
     : 'requires_openai_auth = true'
 
   return `name = "OpenAI"
@@ -880,6 +962,13 @@ function generateOpenCodeGoConfig(baseUrl: string, apiKey: string): FileConfig {
     Object.fromEntries(modelIds.map((modelId) => [modelId, { provider: { npm } }]))
 
   const models = {
+    // Keep the DeepSeek protocol explicit. OpenCode recursively merges provider
+    // metadata, so relying only on the provider-level default can preserve a
+    // stale model-level Anthropic override from an older configuration.
+    ...createModelOverrides(
+      ['deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp'],
+      '@ai-sdk/openai-compatible'
+    ),
     ...createModelOverrides(
       [
         'minimax-m3',
@@ -934,7 +1023,50 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
       }
     }
   }
+  const codex56FullReasoningVariants = {
+    low: {},
+    medium: {},
+    high: {},
+    xhigh: {},
+    max: {},
+    ultra: {}
+  }
+  const codex56LunaReasoningVariants = {
+    low: {},
+    medium: {},
+    high: {},
+    xhigh: {},
+    max: {}
+  }
   const openaiModels = {
+    'gpt-5.6': {
+      name: 'GPT-5.6 (Sol alias)',
+      options: {
+        store: false
+      },
+      variants: codex56FullReasoningVariants
+    },
+    'gpt-5.6-sol': {
+      name: 'GPT-5.6 Sol',
+      options: {
+        store: false
+      },
+      variants: codex56FullReasoningVariants
+    },
+    'gpt-5.6-terra': {
+      name: 'GPT-5.6 Terra',
+      options: {
+        store: false
+      },
+      variants: codex56FullReasoningVariants
+    },
+    'gpt-5.6-luna': {
+      name: 'GPT-5.6 Luna',
+      options: {
+        store: false
+      },
+      variants: codex56LunaReasoningVariants
+    },
     'gpt-5.2': {
       name: 'GPT-5.2',
       limit: {

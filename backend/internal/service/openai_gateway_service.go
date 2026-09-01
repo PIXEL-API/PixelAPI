@@ -44,7 +44,8 @@ const (
 	// OpenAI Platform API for API Key accounts (fallback)
 	openaiPlatformAPIURL   = "https://api.openai.com/v1/responses"
 	openaiStickySessionTTL = time.Hour // 绮樻€т細璇漈TL
-	codexCLIUserAgent      = "codex_cli_rs/0.144.1"
+	codexCLIVersion        = "0.151.0"
+	codexCLIUserAgent      = "codex_cli_rs/" + codexCLIVersion
 	// codex_cli_only 鎷掔粷鏃跺崟涓姹傚ご鏃ュ織闀垮害涓婇檺锛堝瓧绗︼級
 	// codex_cli_only rejected request header values are truncated for diagnostics.
 	codexCLIOnlyHeaderValueMaxBytes = 256
@@ -58,7 +59,6 @@ const (
 	openAIUpstreamErrorBodyReadLimit   = 512 << 10
 	openAICompactSessionSeedKey        = "openai_compact_session_seed"
 	openAIUpstreamEndpointContextKey   = "openai_actual_upstream_endpoint"
-	codexCLIVersion                    = "0.144.1"
 	// Codex rate limit snapshots are throttled to avoid write amplification.
 	openAICodexSnapshotPersistMinInterval = 30 * time.Second
 )

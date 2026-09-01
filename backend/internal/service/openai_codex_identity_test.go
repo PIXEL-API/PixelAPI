@@ -8,6 +8,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCodexSynthesizedIdentityVersionIsConsistent(t *testing.T) {
+	require.Equal(t, "0.151.0", codexCLIVersion)
+	require.Equal(t, "codex_cli_rs/"+codexCLIVersion, codexCLIUserAgent)
+	require.Equal(t, codexCLIVersion, openAICodexProbeVersion)
+	require.Equal(t, "0.144.0", codexUpstreamMinVersion)
+}
+
 func TestEnsureCodexIdentityHeaders(t *testing.T) {
 	headers := make(http.Header)
 

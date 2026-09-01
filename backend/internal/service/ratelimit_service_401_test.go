@@ -318,8 +318,8 @@ func TestRateLimitService_HandleUpstreamErrorForModel_OpencodeModelErrorUsesMode
 		name  string
 		model string
 	}{
-		{name: "Hy3", model: "Hy3"},
-		{name: "DeepSeek-V4-Flash-Vision-Exp", model: "DeepSeek-V4-Flash-Vision-Exp"},
+		{name: "hy3", model: "hy3"},
+		{name: "deepseek-v4-flash-vision-exp", model: "deepseek-v4-flash-vision-exp"},
 	}
 
 	for _, tt := range tests {
@@ -376,7 +376,7 @@ func TestRateLimitService_HandleUpstreamErrorForModel_OpencodeAuthentication401S
 	handled := svc.HandleUpstreamErrorForModel(
 		context.Background(),
 		account,
-		"Hy3",
+		"hy3",
 		http.StatusUnauthorized,
 		http.Header{},
 		[]byte(`{"type":"error","error":{"type":"AuthenticationError","message":"Invalid API key"}}`),
@@ -403,12 +403,12 @@ func TestOpenAIGatewayService_HandleOpenAIAccountUpstreamErrorForModel_ForwardsO
 		Status:      StatusActive,
 		Schedulable: true,
 	}
-	body := []byte(`{"type":"error","error":{"type":"ModelError","message":"Model Hy3 is not supported"}}`)
+	body := []byte(`{"type":"error","error":{"type":"ModelError","message":"Model hy3 is not supported"}}`)
 
 	handled := gateway.handleOpenAIAccountUpstreamErrorForModel(
 		context.Background(),
 		account,
-		"Hy3",
+		"hy3",
 		http.StatusUnauthorized,
 		http.Header{},
 		body,
@@ -418,6 +418,6 @@ func TestOpenAIGatewayService_HandleOpenAIAccountUpstreamErrorForModel_ForwardsO
 	require.Zero(t, repo.setErrorCalls)
 	require.Len(t, repo.modelRateLimitCalls, 1)
 	require.Equal(t, account.ID, repo.modelRateLimitCalls[0].accountID)
-	require.Equal(t, "Hy3", repo.modelRateLimitCalls[0].modelKey)
+	require.Equal(t, "hy3", repo.modelRateLimitCalls[0].modelKey)
 	require.Equal(t, upstreamOpencodeModelNotSupportedReason, repo.modelRateLimitCalls[0].reason)
 }
