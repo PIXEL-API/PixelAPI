@@ -283,6 +283,7 @@ routeLoop:
 			clientIP := ip.GetSecurityClientIP(c)
 			inboundEndpoint := GetInboundEndpoint(c)
 			upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
+			parsedModel := parsed.Model
 			recordUsage := func(ctx context.Context, result *service.OpenAIForwardResult) error {
 				if result == nil {
 					return nil
@@ -299,7 +300,7 @@ routeLoop:
 					IPAddress:          clientIP,
 					RequestPayloadHash: requestPayloadHash,
 					APIKeyService:      h.apiKeyService,
-					ChannelUsageFields: channelMapping.ToUsageFields(parsed.Model, result.UpstreamModel),
+					ChannelUsageFields: channelMapping.ToUsageFields(parsedModel, result.UpstreamModel),
 				})
 			}
 			upstreamAttemptID := h.beginOpenAIUpstreamAttempt(c, currentAPIKey, account)
@@ -312,14 +313,14 @@ routeLoop:
 					return
 				}
 				h.submitUsageRecordTask(forwardCtx, func(ctx context.Context) {
-					usageCtx := service.WithAccountShareModeRequestFromContext(ctx, forwardCtx)
+					usageCtx := ctx
 					if err := recordUsage(usageCtx, result); err != nil {
 						logger.L().With(
 							zap.String("component", "handler.openai_gateway.images"),
 							zap.Int64("user_id", subject.UserID),
 							zap.Int64("api_key_id", currentAPIKey.ID),
 							zap.Any("group_id", currentAPIKey.GroupID),
-							zap.String("model", parsed.Model),
+							zap.String("model", parsedModel),
 							zap.Int64("account_id", account.ID),
 						).Error("openai.images.record_usage_failed", zap.Error(err))
 					}

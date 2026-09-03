@@ -264,7 +264,7 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 				return
 			}
 			h.submitUsageRecordTask(forwardCtx, func(ctx context.Context) {
-				usageCtx := service.WithAccountShareModeRequestFromContext(ctx, forwardCtx)
+				usageCtx := ctx
 				if err := recordUsage(usageCtx, result); err != nil {
 					logger.L().With(
 						zap.String("component", "handler.openai_gateway.alpha_search"),

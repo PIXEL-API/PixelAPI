@@ -312,7 +312,7 @@ routeLoop:
 					return
 				}
 				h.submitUsageRecordTask(forwardCtx, func(ctx context.Context) {
-					usageCtx := service.WithAccountShareModeRequestFromContext(ctx, forwardCtx)
+					usageCtx := ctx
 					if err := recordUsage(usageCtx, result); err != nil {
 						reqLog.Error("gateway.responses.record_usage_failed",
 							zap.Int64("account_id", account.ID),

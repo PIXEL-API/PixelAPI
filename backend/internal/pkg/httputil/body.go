@@ -29,6 +29,23 @@ func ReadRequestBodyWithPrealloc(req *http.Request) ([]byte, error) {
 		return nil, nil
 	}
 
+	enc := strings.ToLower(strings.TrimSpace(req.Header.Get("Content-Encoding")))
+	if enc != "" && enc != "identity" {
+		// Decode directly from the request stream. The previous implementation
+		// first buffered the complete compressed body and then allocated a second
+		// buffer for the decoded body, so a single request could retain both
+		// copies until the function returned. Streaming the decoder keeps the
+		// peak close to the decoded limit instead of compressed+decoded size.
+		decoded, err := decompressRequestBody(enc, req.Body)
+		if err != nil {
+			return nil, fmt.Errorf("decode Content-Encoding %q: %w", enc, err)
+		}
+		req.Header.Del("Content-Encoding")
+		req.Header.Del("Content-Length")
+		req.ContentLength = int64(len(decoded))
+		return decoded, nil
+	}
+
 	capHint := requestBodyReadInitCap
 	if req.ContentLength > 0 {
 		switch {
@@ -45,49 +62,64 @@ func ReadRequestBodyWithPrealloc(req *http.Request) ([]byte, error) {
 	if _, err := io.Copy(buf, req.Body); err != nil {
 		return nil, err
 	}
-	raw := buf.Bytes()
-
-	enc := strings.ToLower(strings.TrimSpace(req.Header.Get("Content-Encoding")))
-	if enc == "" || enc == "identity" {
-		return raw, nil
-	}
-
-	decoded, err := decompressRequestBody(enc, raw)
-	if err != nil {
-		return nil, fmt.Errorf("decode Content-Encoding %q: %w", enc, err)
-	}
-
-	req.Header.Del("Content-Encoding")
-	req.Header.Del("Content-Length")
-	req.ContentLength = int64(len(decoded))
-
-	return decoded, nil
+	return buf.Bytes(), nil
 }
 
-func decompressRequestBody(encoding string, raw []byte) ([]byte, error) {
+func decompressRequestBody(encoding string, source io.Reader) ([]byte, error) {
+	if source == nil {
+		return nil, errors.New("compressed request body is nil")
+	}
+
+	var reader io.Reader
+	var closeReader func()
 	switch encoding {
 	case "zstd":
-		dec, err := zstd.NewReader(bytes.NewReader(raw))
+		dec, err := zstd.NewReader(source)
 		if err != nil {
 			return nil, err
 		}
-		defer dec.Close()
-		return io.ReadAll(io.LimitReader(dec, maxDecompressedBodySize))
+		reader = dec
+		closeReader = dec.Close
 	case "gzip", "x-gzip":
-		gr, err := gzip.NewReader(bytes.NewReader(raw))
+		gr, err := gzip.NewReader(source)
 		if err != nil {
 			return nil, err
 		}
-		defer func() { _ = gr.Close() }()
-		return io.ReadAll(io.LimitReader(gr, maxDecompressedBodySize))
+		reader = gr
+		closeReader = func() { _ = gr.Close() }
 	case "deflate":
-		zr, err := zlib.NewReader(bytes.NewReader(raw))
+		zr, err := zlib.NewReader(source)
 		if err != nil {
 			return nil, err
 		}
-		defer func() { _ = zr.Close() }()
-		return io.ReadAll(io.LimitReader(zr, maxDecompressedBodySize))
+		reader = zr
+		closeReader = func() { _ = zr.Close() }
 	default:
 		return nil, errors.New("unsupported Content-Encoding")
 	}
+	if closeReader != nil {
+		defer closeReader()
+	}
+
+	return readBodyUpToLimit(reader, maxDecompressedBodySize)
+}
+
+func readBodyUpToLimit(reader io.Reader, limit int64) ([]byte, error) {
+	if reader == nil {
+		return nil, errors.New("body reader is nil")
+	}
+	if limit < 0 {
+		return nil, errors.New("body limit is negative")
+	}
+	// Read one byte beyond the limit so an oversized decoded payload is
+	// rejected instead of silently truncated into invalid JSON. Returning the
+	// standard error type lets gateway handlers consistently answer 413.
+	decoded, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(decoded)) > limit {
+		return nil, &http.MaxBytesError{Limit: limit}
+	}
+	return decoded, nil
 }

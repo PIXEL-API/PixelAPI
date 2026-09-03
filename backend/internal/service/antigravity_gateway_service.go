@@ -3094,7 +3094,7 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 		err  error
 	}
 	// 独立 goroutine 读取上游，避免读取阻塞影响超时处理
-	events := make(chan scanEvent, 16)
+	events := make(chan scanEvent, streamScanEventQueueSize)
 	done := make(chan struct{})
 	sendEvent := func(ev scanEvent) bool {
 		select {
@@ -3294,7 +3294,7 @@ func (s *AntigravityGatewayService) handleGeminiStreamToNonStreaming(c *gin.Cont
 	}
 
 	// 独立 goroutine 读取上游，避免读取阻塞影响超时处理
-	events := make(chan scanEvent, 16)
+	events := make(chan scanEvent, streamScanEventQueueSize)
 	done := make(chan struct{})
 	sendEvent := func(ev scanEvent) bool {
 		select {
@@ -3765,7 +3765,7 @@ func (s *AntigravityGatewayService) handleClaudeStreamToNonStreaming(c *gin.Cont
 	}
 
 	// 独立 goroutine 读取上游，避免读取阻塞影响超时处理
-	events := make(chan scanEvent, 16)
+	events := make(chan scanEvent, streamScanEventQueueSize)
 	done := make(chan struct{})
 	sendEvent := func(ev scanEvent) bool {
 		select {
@@ -3966,7 +3966,7 @@ func (s *AntigravityGatewayService) handleClaudeStreamingResponse(c *gin.Context
 		err  error
 	}
 	// 独立 goroutine 读取上游，避免读取阻塞影响超时处理
-	events := make(chan scanEvent, 16)
+	events := make(chan scanEvent, streamScanEventQueueSize)
 	done := make(chan struct{})
 	sendEvent := func(ev scanEvent) bool {
 		select {
@@ -4421,7 +4421,7 @@ func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp 
 		line string
 		err  error
 	}
-	events := make(chan scanEvent, 16)
+	events := make(chan scanEvent, streamScanEventQueueSize)
 	done := make(chan struct{})
 	sendEvent := func(ev scanEvent) bool {
 		select {

@@ -457,6 +457,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}
 			requestCtx, cancelForward := bindAccountSelectionForwardContext(requestCtx, selection)
 			requestPayloadHash := service.HashUsageRequestPayload(body)
+			parsedOutputEffort := parsedReq.OutputEffort
+			parsedThinkingEnabled := parsedReq.ThinkingEnabled
+			forceCacheBilling := fs.ForceCacheBilling
 			// 记录 Forward 前已写入字节数，Forward 后若增加则说明 SSE 内容已发，禁止 failover
 			writerSizeBeforeForward := c.Writer.Size()
 			if account.Platform == service.PlatformAntigravity {
@@ -474,9 +477,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					return
 				}
 				if result.ReasoningEffort == nil {
-					result.ReasoningEffort = service.NormalizeClaudeOutputEffort(parsedReq.OutputEffort)
+					result.ReasoningEffort = service.NormalizeClaudeOutputEffort(parsedOutputEffort)
 				}
-				if result.ReasoningEffort == nil && parsedReq.ThinkingEnabled {
+				if result.ReasoningEffort == nil && parsedThinkingEnabled {
 					protocolModel := result.UpstreamModel
 					if protocolModel == "" {
 						protocolModel = result.Model
@@ -484,10 +487,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					result.ReasoningEffort = service.DefaultEffortForThinkingEnabled(protocolModel)
 				}
 				h.submitUsageRecordTask(requestCtx, func(ctx context.Context) {
-					usageCtx := service.WithAccountShareModeRequestFromContext(ctx, requestCtx)
+					usageCtx := ctx
 					if err := h.gatewayService.RecordUsage(usageCtx, &service.RecordUsageInput{
 						Result:             result,
-						ParsedRequest:      parsedReq,
 						APIKey:             apiKey,
 						User:               apiKey.User,
 						Account:            account,
@@ -497,7 +499,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						UserAgent:          userAgent,
 						IPAddress:          clientIP,
 						RequestPayloadHash: requestPayloadHash,
-						ForceCacheBilling:  fs.ForceCacheBilling,
+						ForceCacheBilling:  forceCacheBilling,
 						APIKeyService:      h.apiKeyService,
 						ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
 					}); err != nil {
@@ -940,6 +942,14 @@ routeLoop:
 			}
 			requestCtx, cancelForward := bindAccountSelectionForwardContext(requestCtx, selection)
 			requestPayloadHash := service.HashUsageRequestPayload(routeBody)
+			parsedOutputEffort := parsedReq.OutputEffort
+			parsedThinkingEnabled := parsedReq.ThinkingEnabled
+			forceCacheBilling := fs.ForceCacheBilling
+			// Freeze the billing route for this attempt. currentAPIKey and
+			// currentSubscription are reassigned when failover advances, while the
+			// usage task may execute later on the worker pool.
+			usageAPIKey := currentAPIKey
+			usageSubscription := currentSubscription
 			userAgent := c.GetHeader("User-Agent")
 			clientIP := ip.GetSecurityClientIP(c)
 			inboundEndpoint := GetInboundEndpoint(c)
@@ -949,9 +959,9 @@ routeLoop:
 					return nil
 				}
 				if result.ReasoningEffort == nil {
-					result.ReasoningEffort = service.NormalizeClaudeOutputEffort(parsedReq.OutputEffort)
+					result.ReasoningEffort = service.NormalizeClaudeOutputEffort(parsedOutputEffort)
 				}
-				if result.ReasoningEffort == nil && parsedReq.ThinkingEnabled {
+				if result.ReasoningEffort == nil && parsedThinkingEnabled {
 					protocolModel := result.UpstreamModel
 					if protocolModel == "" {
 						protocolModel = result.Model
@@ -960,17 +970,16 @@ routeLoop:
 				}
 				return h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
 					Result:             result,
-					ParsedRequest:      parsedReq,
-					APIKey:             currentAPIKey,
-					User:               currentAPIKey.User,
+					APIKey:             usageAPIKey,
+					User:               usageAPIKey.User,
 					Account:            account,
-					Subscription:       currentSubscription,
+					Subscription:       usageSubscription,
 					InboundEndpoint:    inboundEndpoint,
 					UpstreamEndpoint:   upstreamEndpoint,
 					UserAgent:          userAgent,
 					IPAddress:          clientIP,
 					RequestPayloadHash: requestPayloadHash,
-					ForceCacheBilling:  fs.ForceCacheBilling,
+					ForceCacheBilling:  forceCacheBilling,
 					APIKeyService:      h.apiKeyService,
 					ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
 				})
@@ -981,13 +990,13 @@ routeLoop:
 					return
 				}
 				h.submitUsageRecordTask(requestCtx, func(ctx context.Context) {
-					usageCtx := service.WithAccountShareModeRequestFromContext(ctx, requestCtx)
+					usageCtx := ctx
 					if err := recordUsage(usageCtx, result); err != nil {
 						logger.L().With(
 							zap.String("component", "handler.gateway.messages"),
 							zap.Int64("user_id", subject.UserID),
-							zap.Int64("api_key_id", currentAPIKey.ID),
-							zap.Any("group_id", currentAPIKey.GroupID),
+							zap.Int64("api_key_id", usageAPIKey.ID),
+							zap.Any("group_id", usageAPIKey.GroupID),
 							zap.String("model", reqModel),
 							zap.Int64("account_id", account.ID),
 						).Error("gateway.record_usage_failed", zap.Error(err))
@@ -2483,6 +2492,7 @@ func (h *GatewayHandler) submitUsageRecordTask(requestCtx context.Context, task 
 	if task == nil {
 		return
 	}
+	task = detachUsageRecordTask(requestCtx, task)
 	if h.usageRecordWorkerPool != nil {
 		mode := h.usageRecordWorkerPool.Submit(task)
 		if mode != service.UsageRecordSubmitModeDropped {
@@ -2492,10 +2502,10 @@ func (h *GatewayHandler) submitUsageRecordTask(requestCtx context.Context, task 
 			zap.String("component", "handler.gateway.messages"),
 		).Warn("gateway.usage_record_task_dropped_sync_fallback")
 	}
-	runUsageRecordTaskSync(requestCtx, task, "handler.gateway.messages", "gateway.usage_record_task_panic_recovered")
+	runUsageRecordTaskSync(task, "handler.gateway.messages", "gateway.usage_record_task_panic_recovered")
 }
 
-func runUsageRecordTaskSync(requestCtx context.Context, task service.UsageRecordTask, component, panicEvent string) {
+func runUsageRecordTaskSync(task service.UsageRecordTask, component, panicEvent string) {
 	if task == nil {
 		return
 	}

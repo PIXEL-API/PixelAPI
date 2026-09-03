@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 )
@@ -22,6 +23,46 @@ func newUsageRecordTestPool(t *testing.T) *service.UsageRecordWorkerPool {
 	})
 	t.Cleanup(pool.Stop)
 	return pool
+}
+
+func TestUsageRecordContextSnapshotDetachesParentValues(t *testing.T) {
+	type parentKey struct{}
+	parent := context.WithValue(context.Background(), parentKey{}, "large-request-marker")
+	parent = context.WithValue(parent, ctxkey.ClientRequestID, " client-req ")
+	parent = context.WithValue(parent, ctxkey.RequestID, " request-id ")
+	parent = service.WithAccountShareModeRequest(parent, 21, 34)
+
+	snapshot := newUsageRecordContextSnapshot(parent)
+	workerCtx := context.WithValue(context.Background(), parentKey{}, "worker-marker")
+	got := snapshot.context(workerCtx)
+
+	require.Equal(t, "worker-marker", got.Value(parentKey{}))
+	require.Equal(t, "client-req", got.Value(ctxkey.ClientRequestID))
+	require.Equal(t, "request-id", got.Value(ctxkey.RequestID))
+	share, ok := service.AccountShareModeRequestFromContext(got)
+	require.True(t, ok)
+	require.Equal(t, int64(21), share.UserID)
+	require.Equal(t, int64(34), share.APIKeyID)
+}
+
+func TestGatewayHandlerSubmitUsageRecordTaskDetachesParentContext(t *testing.T) {
+	pool := newUsageRecordTestPool(t)
+	h := &GatewayHandler{usageRecordWorkerPool: pool}
+	type parentKey struct{}
+	parent := context.WithValue(context.Background(), parentKey{}, "must-not-leak")
+	parent = context.WithValue(parent, ctxkey.ClientRequestID, "client-req")
+	done := make(chan struct{})
+	result := make(chan bool, 1)
+	h.submitUsageRecordTask(parent, func(ctx context.Context) {
+		result <- ctx.Value(parentKey{}) == nil && ctx.Value(ctxkey.ClientRequestID) == "client-req"
+		close(done)
+	})
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("usage task did not run")
+	}
+	require.True(t, <-result)
 }
 
 func TestGatewayHandlerSubmitUsageRecordTask_WithPool(t *testing.T) {

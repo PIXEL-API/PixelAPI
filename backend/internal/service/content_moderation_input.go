@@ -2,22 +2,28 @@ package service
 
 import (
 	"crypto/sha256"
-	"fmt"
+	"encoding/binary"
 	"io"
 	randv2 "math/rand/v2"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/tidwall/gjson"
 )
 
+const maxModerationImageDigestEntries = 1024
+
 type moderationInputCollector struct {
-	text             strings.Builder
-	runeCount        int
-	image            string
-	imageDigests     [][sha256.Size]byte
-	seenImageDigests map[[sha256.Size]byte]struct{}
+	text                     strings.Builder
+	runeCount                int
+	image                    string
+	imageCount               int
+	imageDigests             [][sha256.Size]byte
+	seenImageDigests         map[[sha256.Size]byte]struct{}
+	imageDigestOverflow      [sha256.Size]byte
+	imageDigestOverflowCount uint64
 }
 
 func newModerationInputCollector() *moderationInputCollector {
@@ -33,13 +39,54 @@ func (c *moderationInputCollector) Input() ContentModerationInput {
 		return ContentModerationInput{}
 	}
 	out := ContentModerationInput{
-		Text:            c.text.String(),
-		allImageDigests: append([][sha256.Size]byte(nil), c.imageDigests...),
+		Text:                     c.text.String(),
+		allImageDigests:          append([][sha256.Size]byte(nil), c.imageDigests...),
+		imageDigestOverflow:      c.imageDigestOverflow,
+		imageDigestOverflowCount: c.imageDigestOverflowCount,
 	}
 	if c.image != "" {
 		out.Images = []string{c.image}
 	}
 	return out
+}
+
+// AppendInput merges an already bounded input into the collector. Exact image
+// digests stay bounded and any overflow is folded into the fixed-size summary;
+// only the reservoir-selected image data itself is retained. This is used by
+// the compatibility fallback that combines several protocol-shaped fields.
+func (c *moderationInputCollector) AppendInput(in ContentModerationInput) {
+	if c == nil {
+		return
+	}
+	c.AddText(in.Text)
+	if len(in.allImageDigests) == 0 {
+		for _, image := range in.Images {
+			c.AddImage(image)
+		}
+		return
+	}
+	var selectedImage string
+	if len(in.Images) > 0 {
+		selectedImage = in.Images[0]
+	}
+	if c.image == "" && selectedImage != "" {
+		// The source input exposes only its reservoir-selected image. Keep it as
+		// a safe fallback in case the merged reservoir chooses a digest whose
+		// original image bytes are intentionally not retained by that source.
+		c.image = strings.Clone(selectedImage)
+	}
+	selectedDigest := sha256.Sum256([]byte(selectedImage))
+	for _, digest := range in.allImageDigests {
+		if !c.shouldSelectImage(digest) {
+			continue
+		}
+		if selectedImage != "" && digest == selectedDigest {
+			c.image = strings.Clone(selectedImage)
+		}
+	}
+	if in.imageDigestOverflowCount > 0 {
+		c.addImageDigestOverflow(in.imageDigestOverflow, in.imageDigestOverflowCount)
+	}
 }
 
 // AddText 收录全部文本，不对 <system-reminder> 之类的标记做任何排除。
@@ -85,7 +132,10 @@ func (c *moderationInputCollector) AddImage(image string) {
 	}
 	digest := sha256.Sum256([]byte(image))
 	if c.shouldSelectImage(digest) {
-		c.image = image
+		// gjson results may be zero-copy views over the complete request body.
+		// Clone the one retained image so an async audit task cannot keep the
+		// entire body alive through a short substring.
+		c.image = strings.Clone(image)
 	}
 }
 
@@ -110,23 +160,50 @@ func (c *moderationInputCollector) AddImageData(mimeType, data string) {
 	}
 }
 
-// shouldSelectImage tracks every unique image by a fixed-size digest so Hash
-// keeps its previous all-image semantics without retaining every data URI.
-// Reservoir sampling preserves the previous uniform one-image audit behavior.
+// shouldSelectImage tracks a bounded exact digest prefix. Once the prefix is
+// full, later digests are folded into a fixed-size rolling summary. Exact
+// deduplication is intentionally limited to the prefix: maintaining an
+// attacker-controlled set for every image would merely move the leak from
+// image strings to the digest map. Reservoir sampling still retains at most
+// one image body for the moderation API.
 func (c *moderationInputCollector) shouldSelectImage(digest [sha256.Size]byte) bool {
 	if c == nil {
 		return false
 	}
 	if c.seenImageDigests == nil {
-		c.seenImageDigests = make(map[[sha256.Size]byte]struct{})
+		c.seenImageDigests = make(map[[sha256.Size]byte]struct{}, maxModerationImageDigestEntries)
 	}
 	if _, exists := c.seenImageDigests[digest]; exists {
 		return false
 	}
-	c.seenImageDigests[digest] = struct{}{}
-	c.imageDigests = append(c.imageDigests, digest)
-	imageCount := len(c.imageDigests)
-	return imageCount == 1 || randv2.IntN(imageCount) == 0
+	if len(c.imageDigests) < maxModerationImageDigestEntries {
+		c.seenImageDigests[digest] = struct{}{}
+		c.imageDigests = append(c.imageDigests, digest)
+		c.imageCount++
+	} else {
+		c.addImageDigestOverflow(digest, 1)
+	}
+	return c.imageCount == 1 || randv2.IntN(c.imageCount) == 0
+}
+
+func (c *moderationInputCollector) addImageDigestOverflow(digest [sha256.Size]byte, count uint64) {
+	if c == nil || count == 0 {
+		return
+	}
+	h := sha256.New()
+	_, _ = h.Write([]byte("content-moderation-image-overflow-v1:"))
+	_, _ = h.Write(c.imageDigestOverflow[:])
+	var encodedCount [8]byte
+	binary.BigEndian.PutUint64(encodedCount[:], count)
+	_, _ = h.Write(encodedCount[:])
+	_, _ = h.Write(digest[:])
+	h.Sum(c.imageDigestOverflow[:0])
+	c.imageDigestOverflowCount += count
+	if count > uint64(^uint(0)>>1)-uint64(c.imageCount) {
+		c.imageCount = int(^uint(0) >> 1)
+	} else {
+		c.imageCount += int(count)
+	}
 }
 
 func ExtractContentModerationText(protocol string, body []byte) string {
@@ -141,32 +218,36 @@ func ExtractContentModerationInput(protocol string, body []byte) ContentModerati
 }
 
 func extractContentModerationInputFromValidJSON(protocol string, body []byte) ContentModerationInput {
+	// Parse a zero-copy view of the already-buffered body. gjson.GetBytes
+	// deliberately copies matched JSON subtrees; messages/input/contents may be
+	// almost as large as the request itself. Retained text is copied into the
+	// bounded builder and retained images are explicitly cloned by AddImage.
+	root := gjson.Parse(unsafe.String(unsafe.SliceData(body), len(body)))
 	if protocol == ContentModerationProtocolOpenAIResponses {
-		return extractResponsesContentModerationInput(gjson.GetBytes(body, "input"))
+		return extractResponsesContentModerationInput(root.Get("input"))
 	}
-	var parts []string
-	var images []string
 	switch protocol {
 	case ContentModerationProtocolAnthropicMessages:
-		collectLastAnthropicUserMessage(gjson.GetBytes(body, "messages"), &parts, &images)
+		return extractLastRoleMessageBounded(root.Get("messages"), "user", true)
 	case ContentModerationProtocolOpenAIChat:
-		collectLastRoleMessage(gjson.GetBytes(body, "messages"), "user", &parts, &images)
+		return extractLastRoleMessageBounded(root.Get("messages"), "user", false)
 	case ContentModerationProtocolGemini:
-		collectLastGeminiContent(gjson.GetBytes(body, "contents"), &parts, &images)
+		return extractLastGeminiContentBounded(root.Get("contents"))
 	case ContentModerationProtocolOpenAIImages:
-		addModerationText(&parts, gjson.GetBytes(body, "prompt").String())
-		collectContentValue(gjson.GetBytes(body, "images"), &parts, &images)
+		collector := newModerationInputCollector()
+		collector.AddText(root.Get("prompt").String())
+		collectContentValueBounded(root.Get("images"), collector)
+		return collector.Input()
 	default:
-		collectLastResponsesInput(gjson.GetBytes(body, "input"), &parts, &images)
-		collectLastRoleMessage(gjson.GetBytes(body, "messages"), "user", &parts, &images)
-		collectLastGeminiContent(gjson.GetBytes(body, "contents"), &parts, &images)
+		// Unknown/legacy callers may send more than one protocol-shaped field.
+		// Merge each bounded result instead of building unbounded parts/images
+		// slices and joining them after the fact.
+		collector := newModerationInputCollector()
+		collector.AppendInput(extractResponsesContentModerationInput(root.Get("input")))
+		collector.AppendInput(extractLastRoleMessageBounded(root.Get("messages"), "user", false))
+		collector.AppendInput(extractLastGeminiContentBounded(root.Get("contents")))
+		return collector.Input()
 	}
-	out := ContentModerationInput{
-		Text:   normalizeContentModerationText(strings.Join(parts, "\n")),
-		Images: normalizeModerationImages(images),
-	}
-	out.Normalize()
-	return out
 }
 
 func extractResponsesContentModerationInput(input gjson.Result) ContentModerationInput {
@@ -178,17 +259,20 @@ func extractResponsesContentModerationInput(input gjson.Result) ContentModeratio
 		collector.AddText(input.String())
 		return collector.Input()
 	case input.IsArray():
-		items := input.Array()
-		for i := len(items) - 1; i >= 0; i-- {
-			item := items[i]
+		var latest *moderationInputCollector
+		input.ForEach(func(_, item gjson.Result) bool {
 			if !isResponsesModerationCandidate(item) {
-				continue
+				return true
 			}
 			collector := newModerationInputCollector()
 			collectResponsesItemModerationContentBounded(item, collector)
 			if !collector.IsEmpty() {
-				return collector.Input()
+				latest = collector
 			}
+			return true
+		})
+		if latest != nil {
+			return latest.Input()
 		}
 	case input.IsObject() && isResponsesModerationCandidate(input):
 		collector := newModerationInputCollector()
@@ -196,6 +280,65 @@ func extractResponsesContentModerationInput(input gjson.Result) ContentModeratio
 		return collector.Input()
 	}
 	return ContentModerationInput{}
+}
+
+// extractLastRoleMessageBounded returns the last non-empty message for role.
+// It keeps only one bounded collector (12k runes, one image plus fixed-size
+// digests) instead of materializing every text/image value in the message
+// history before selecting the last candidate.
+func extractLastRoleMessageBounded(messages gjson.Result, role string, anthropic bool) ContentModerationInput {
+	if !messages.IsArray() {
+		return ContentModerationInput{}
+	}
+	var latest *moderationInputCollector
+	messages.ForEach(func(_, msg gjson.Result) bool {
+		if strings.ToLower(strings.TrimSpace(msg.Get("role").String())) != role {
+			return true
+		}
+		collector := newModerationInputCollector()
+		if anthropic {
+			collectAnthropicUserContentValueBounded(msg.Get("content"), collector)
+		} else {
+			collectContentValueBounded(msg.Get("content"), collector)
+		}
+		if !collector.IsEmpty() {
+			latest = collector
+		}
+		return true
+	})
+	if latest == nil {
+		return ContentModerationInput{}
+	}
+	return latest.Input()
+}
+
+func extractLastGeminiContentBounded(contents gjson.Result) ContentModerationInput {
+	if !contents.IsArray() {
+		return ContentModerationInput{}
+	}
+	var latest *moderationInputCollector
+	contents.ForEach(func(_, content gjson.Result) bool {
+		role := strings.ToLower(strings.TrimSpace(content.Get("role").String()))
+		if role != "" && role != "user" {
+			return true
+		}
+		collector := newModerationInputCollector()
+		if arr := content.Get("parts"); arr.IsArray() {
+			arr.ForEach(func(_, part gjson.Result) bool {
+				collector.AddText(part.Get("text").String())
+				addGeminiModerationImageBounded(part, collector)
+				return true
+			})
+		}
+		if !collector.IsEmpty() {
+			latest = collector
+		}
+		return true
+	})
+	if latest == nil {
+		return ContentModerationInput{}
+	}
+	return latest.Input()
 }
 
 func isResponsesModerationCandidate(item gjson.Result) bool {
@@ -255,237 +398,51 @@ func collectContentValueBounded(value gjson.Result, collector *moderationInputCo
 	}
 }
 
-func collectLastRoleMessage(messages gjson.Result, role string, parts *[]string, images *[]string) {
-	if !messages.IsArray() {
+// collectAnthropicUserContentValueBounded mirrors the Anthropic-specific
+// content rules while writing directly into a bounded collector. In
+// particular, text attached to image blocks is not treated as prompt text.
+func collectAnthropicUserContentValueBounded(value gjson.Result, collector *moderationInputCollector) {
+	if collector == nil {
 		return
 	}
-	var lastParts []string
-	var lastImages []string
-	messages.ForEach(func(_, msg gjson.Result) bool {
-		if strings.ToLower(strings.TrimSpace(msg.Get("role").String())) == role {
-			var candidate []string
-			var candidateImages []string
-			collectContentValue(msg.Get("content"), &candidate, &candidateImages)
-			if normalizeContentModerationText(strings.Join(candidate, "\n")) != "" || len(candidateImages) > 0 {
-				lastParts = candidate
-				lastImages = candidateImages
-			}
-		}
-		return true
-	})
-	*parts = append(*parts, lastParts...)
-	*images = append(*images, lastImages...)
-}
-
-func collectLastAnthropicUserMessage(messages gjson.Result, parts *[]string, images *[]string) {
-	if !messages.IsArray() {
-		return
-	}
-	var lastParts []string
-	var lastImages []string
-	messages.ForEach(func(_, msg gjson.Result) bool {
-		if strings.ToLower(strings.TrimSpace(msg.Get("role").String())) == "user" {
-			var candidate []string
-			var candidateImages []string
-			collectAnthropicUserContentValue(msg.Get("content"), &candidate, &candidateImages)
-			if normalizeContentModerationText(strings.Join(candidate, "\n")) != "" || len(candidateImages) > 0 {
-				lastParts = candidate
-				lastImages = candidateImages
-			}
-		}
-		return true
-	})
-	*parts = append(*parts, lastParts...)
-	*images = append(*images, lastImages...)
-}
-
-func collectAnthropicUserContentValue(value gjson.Result, parts *[]string, images *[]string) {
 	switch {
 	case !value.Exists():
 		return
 	case value.Type == gjson.String:
-		addModerationText(parts, value.String())
+		collector.AddText(value.String())
 	case value.IsArray():
 		value.ForEach(func(_, item gjson.Result) bool {
-			collectAnthropicUserContentValue(item, parts, images)
+			collectAnthropicUserContentValueBounded(item, collector)
 			return true
 		})
 	case value.IsObject():
 		typ := strings.ToLower(strings.TrimSpace(value.Get("type").String()))
 		switch typ {
-		// Anthropic 原生 content block 不会出现 output_text，这里保持与
-		// collectContentValue 对称，纯防御性避免混合协议下的静默丢弃。
 		case "", "text", "input_text", "output_text", "message":
-			if value.Get("text").Exists() {
-				addModerationText(parts, value.Get("text").String())
+			if text := value.Get("text"); text.Exists() {
+				collector.AddText(text.String())
 			}
-			if value.Get("content").Exists() {
-				collectAnthropicUserContentValue(value.Get("content"), parts, images)
+			if content := value.Get("content"); content.Exists() {
+				collectAnthropicUserContentValueBounded(content, collector)
 			}
 		case "image_url", "input_image", "image":
-			collectContentValue(value, parts, images)
+			collectContentValueBounded(value, collector)
 		}
 	}
 }
 
-func collectLastResponsesInput(input gjson.Result, parts *[]string, images *[]string) {
-	switch {
-	case !input.Exists():
-		return
-	case input.Type == gjson.String:
-		addModerationText(parts, input.String())
-	case input.IsArray():
-		var lastParts []string
-		var lastImages []string
-		input.ForEach(func(_, item gjson.Result) bool {
-			if candidateParts, candidateImages, ok := collectResponsesUserTextItem(item); ok {
-				lastParts = candidateParts
-				lastImages = candidateImages
-			}
-			return true
-		})
-		*parts = append(*parts, lastParts...)
-		*images = append(*images, lastImages...)
-	case input.IsObject():
-		if candidateParts, candidateImages, ok := collectResponsesUserTextItem(input); ok {
-			*parts = append(*parts, candidateParts...)
-			*images = append(*images, candidateImages...)
-		}
-	}
-}
-
-func collectResponsesUserTextItem(item gjson.Result) ([]string, []string, bool) {
-	if isResponsesUserTextItem(item) {
-		return collectResponsesItemModerationContent(item)
-	}
-	role := strings.ToLower(strings.TrimSpace(item.Get("role").String()))
-	if role != "" {
-		return nil, nil, false
-	}
-	return collectResponsesItemModerationContent(item)
-}
-
-func isResponsesUserTextItem(item gjson.Result) bool {
-	return strings.ToLower(strings.TrimSpace(item.Get("role").String())) == "user"
-}
-
-func collectResponsesItemModerationContent(item gjson.Result) ([]string, []string, bool) {
-	var parts []string
-	var images []string
-	collectContentValue(item.Get("content"), &parts, &images)
-	if item.Get("type").String() == "input_text" || item.Get("text").Exists() {
-		collectContentValue(item, &parts, &images)
-	}
-	if normalizeContentModerationText(strings.Join(parts, "\n")) == "" && len(images) == 0 {
-		return nil, nil, false
-	}
-	return parts, images, true
-}
-
-func collectLastGeminiContent(contents gjson.Result, parts *[]string, images *[]string) {
-	if !contents.IsArray() {
+func addGeminiModerationImageBounded(part gjson.Result, collector *moderationInputCollector) {
+	if collector == nil {
 		return
 	}
-	var lastParts []string
-	var lastImages []string
-	contents.ForEach(func(_, content gjson.Result) bool {
-		role := strings.ToLower(strings.TrimSpace(content.Get("role").String()))
-		if role == "" || role == "user" {
-			var candidate []string
-			var candidateImages []string
-			if arr := content.Get("parts"); arr.IsArray() {
-				arr.ForEach(func(_, part gjson.Result) bool {
-					addModerationText(&candidate, part.Get("text").String())
-					addGeminiModerationImage(&candidateImages, part)
-					return true
-				})
-			}
-			if normalizeContentModerationText(strings.Join(candidate, "\n")) != "" || len(candidateImages) > 0 {
-				lastParts = candidate
-				lastImages = candidateImages
-			}
-		}
-		return true
-	})
-	*parts = append(*parts, lastParts...)
-	*images = append(*images, lastImages...)
-}
-
-func collectContentValue(value gjson.Result, parts *[]string, images *[]string) {
-	switch {
-	case !value.Exists():
-		return
-	case value.Type == gjson.String:
-		addModerationText(parts, value.String())
-	case value.IsArray():
-		value.ForEach(func(_, item gjson.Result) bool {
-			collectContentValue(item, parts, images)
-			return true
-		})
-	case value.IsObject():
-		typ := strings.ToLower(strings.TrimSpace(value.Get("type").String()))
-		addModerationImage(images, value.Get("image_url.url").String())
-		addModerationImage(images, value.Get("image_url").String())
-		addModerationImage(images, value.Get("url").String())
-		addModerationImageData(images, value.Get("source.media_type").String(), value.Get("source.data").String())
-		addModerationImageData(images, value.Get("source.mediaType").String(), value.Get("source.data").String())
-		addModerationImageData(images, value.Get("media_type").String(), value.Get("data").String())
-		addModerationImageData(images, value.Get("mime_type").String(), value.Get("data").String())
-		addModerationImageData(images, value.Get("mimeType").String(), value.Get("data").String())
-		addModerationImage(images, value.Get("source.data").String())
-		addModerationImage(images, value.Get("data").String())
-		addModerationImage(images, value.Get("base64").String())
-		switch typ {
-		// 与 collectContentValueBounded 保持一致：output_text 会被转换器透传给上游，
-		// 审计端不能漏收。
-		case "", "text", "input_text", "output_text", "message":
-			if value.Get("text").Exists() {
-				addModerationText(parts, value.Get("text").String())
-			}
-			if value.Get("content").Exists() {
-				collectContentValue(value.Get("content"), parts, images)
-			}
-		case "image_url", "input_image", "image":
-		}
-	}
-}
-
-func addGeminiModerationImage(images *[]string, part gjson.Result) {
 	if inlineData := part.Get("inline_data"); inlineData.IsObject() {
-		mimeType := strings.TrimSpace(inlineData.Get("mime_type").String())
-		data := strings.TrimSpace(inlineData.Get("data").String())
-		if mimeType != "" && data != "" {
-			addModerationImage(images, fmt.Sprintf("data:%s;base64,%s", mimeType, data))
-		}
+		collector.AddImageData(inlineData.Get("mime_type").String(), inlineData.Get("data").String())
 	}
 	if inlineData := part.Get("inlineData"); inlineData.IsObject() {
-		mimeType := strings.TrimSpace(inlineData.Get("mimeType").String())
-		data := strings.TrimSpace(inlineData.Get("data").String())
-		if mimeType != "" && data != "" {
-			addModerationImage(images, fmt.Sprintf("data:%s;base64,%s", mimeType, data))
-		}
+		collector.AddImageData(inlineData.Get("mimeType").String(), inlineData.Get("data").String())
 	}
-	addModerationImage(images, part.Get("file_data.file_uri").String())
-	addModerationImage(images, part.Get("fileData.fileUri").String())
-}
-
-func addModerationImageData(images *[]string, mimeType string, data string) {
-	mimeType = strings.TrimSpace(mimeType)
-	data = strings.TrimSpace(data)
-	if mimeType == "" || data == "" {
-		return
-	}
-	addModerationImage(images, fmt.Sprintf("data:%s;base64,%s", mimeType, data))
-}
-
-func addModerationImage(images *[]string, image string) {
-	image = strings.TrimSpace(image)
-	if image == "" {
-		return
-	}
-	if strings.HasPrefix(image, "data:") || strings.HasPrefix(image, "http://") || strings.HasPrefix(image, "https://") {
-		*images = append(*images, image)
-	}
+	collector.AddImage(part.Get("file_data.file_uri").String())
+	collector.AddImage(part.Get("fileData.fileUri").String())
 }
 
 func normalizeModerationImages(images []string) []string {
@@ -510,15 +467,6 @@ func limitContentModerationImages(images []string) []string {
 		return images
 	}
 	return []string{images[randv2.IntN(len(images))]}
-}
-
-// addModerationText 收录全部文本；排除规则见 moderationInputCollector.AddText 的说明。
-func addModerationText(parts *[]string, text string) {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return
-	}
-	*parts = append(*parts, text)
 }
 
 func normalizeContentModerationText(text string) string {

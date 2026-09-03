@@ -687,7 +687,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				return
 			}
 			h.submitUsageRecordTask(forwardCtx, func(ctx context.Context) {
-				usageCtx := service.WithAccountShareModeRequestFromContext(ctx, forwardCtx)
+				usageCtx := ctx
 				if err := recordUsage(usageCtx, result); err != nil {
 					logger.L().With(
 						zap.String("component", "handler.openai_gateway.responses"),
@@ -1320,7 +1320,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				return
 			}
 			h.submitUsageRecordTask(forwardCtx, func(ctx context.Context) {
-				usageCtx := service.WithAccountShareModeRequestFromContext(ctx, forwardCtx)
+				usageCtx := ctx
 				if err := recordUsage(usageCtx, result); err != nil {
 					logger.L().With(
 						zap.String("component", "handler.openai_gateway.messages"),
@@ -2325,7 +2325,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			recordUsage, _, _ := openAIWSTurnBillingDisposition(result, turnErr)
 			if recordUsage {
 				recordTurnUsage := func(taskCtx context.Context) error {
-					usageCtx := service.WithAccountShareModeRequestFromContext(taskCtx, turnCtx)
+					usageCtx := taskCtx
 					return h.gatewayService.RecordUsage(usageCtx, &service.OpenAIRecordUsageInput{
 						Result:             result,
 						APIKey:             turnAPIKey,
@@ -2554,6 +2554,7 @@ func (h *OpenAIGatewayHandler) submitUsageRecordTask(requestCtx context.Context,
 	if task == nil {
 		return
 	}
+	task = detachUsageRecordTask(requestCtx, task)
 	if h.usageRecordWorkerPool != nil {
 		mode := h.usageRecordWorkerPool.Submit(task)
 		if mode != service.UsageRecordSubmitModeDropped {
@@ -2563,7 +2564,7 @@ func (h *OpenAIGatewayHandler) submitUsageRecordTask(requestCtx context.Context,
 			zap.String("component", "handler.openai_gateway.responses"),
 		).Warn("openai.usage_record_task_dropped_sync_fallback")
 	}
-	runUsageRecordTaskSync(requestCtx, task, "handler.openai_gateway.responses", "openai.usage_record_task_panic_recovered")
+	runUsageRecordTaskSync(task, "handler.openai_gateway.responses", "openai.usage_record_task_panic_recovered")
 }
 
 // handleConcurrencyError distinguishes a gateway first-output budget from a

@@ -509,6 +509,7 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		requestPayloadHash := service.HashUsageRequestPayload(body)
 		inboundEndpoint := GetInboundEndpoint(c)
 		upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
+		forceCacheBilling := fs.ForceCacheBilling
 		h.submitUsageRecordTask(requestCtx, func(ctx context.Context) {
 			if err := h.gatewayService.RecordUsageWithLongContext(ctx, &service.RecordUsageLongContextInput{
 				Result:                result,
@@ -523,7 +524,7 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 				RequestPayloadHash:    requestPayloadHash,
 				LongContextThreshold:  200000, // Gemini 200K 阈值
 				LongContextMultiplier: 2.0,    // 超出部分双倍计费
-				ForceCacheBilling:     fs.ForceCacheBilling,
+				ForceCacheBilling:     forceCacheBilling,
 				APIKeyService:         h.apiKeyService,
 				ChannelUsageFields:    channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
 			}); err != nil {
