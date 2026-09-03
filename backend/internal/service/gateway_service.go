@@ -48,6 +48,10 @@ const (
 	claudeAPICountTokensURL = "https://api.anthropic.com/v1/messages/count_tokens?beta=true"
 	stickySessionTTL        = time.Hour // 粘性会话TTL
 	defaultMaxLineSize      = 40 * 1024 * 1024
+	// Scanner.Text copies every token. A deep read-ahead queue multiplies a
+	// legal large SSE line by the queue depth, so keep only one pending token
+	// and let the upstream reader apply natural backpressure.
+	streamScanEventQueueSize = 1
 	// Canonical Claude Code banner. Keep it EXACT (no trailing whitespace/newlines)
 	// to match real Claude CLI traffic as closely as possible. When we need a visual
 	// separator between system blocks, we add "\n\n" at concatenation time.
@@ -6568,7 +6572,7 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthroughWithMo
 		line string
 		err  error
 	}
-	events := make(chan scanEvent, 16)
+	events := make(chan scanEvent, streamScanEventQueueSize)
 	done := make(chan struct{})
 	sendEvent := func(ev scanEvent) bool {
 		select {
@@ -8740,7 +8744,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		err  error
 	}
 	// 独立 goroutine 读取上游，避免读取阻塞导致超时/keepalive无法处理
-	events := make(chan scanEvent, 16)
+	events := make(chan scanEvent, streamScanEventQueueSize)
 	done := make(chan struct{})
 	sendEvent := func(ev scanEvent) bool {
 		select {
@@ -9536,7 +9540,6 @@ func (s *GatewayService) getEffectiveGroupRateResolution(ctx context.Context, us
 // RecordUsageInput 记录使用量的输入参数
 type RecordUsageInput struct {
 	Result             *ForwardResult
-	ParsedRequest      *ParsedRequest
 	APIKey             *APIKey
 	User               *User
 	Account            *Account
@@ -10202,13 +10205,6 @@ func writeUsageLogBestEffort(ctx context.Context, repo UsageLogRepository, usage
 
 // recordUsageOpts 内部选项，参数化 RecordUsage 与 RecordUsageWithLongContext 的差异点。
 type recordUsageOpts struct {
-	// Claude Max 策略所需的 ParsedRequest（可选，仅 Claude 路径传入）
-	ParsedRequest *ParsedRequest
-
-	// EnableClaudePath 启用 Claude 路径特有逻辑：
-	// - Claude Max 缓存计费策略
-	EnableClaudePath bool
-
 	// 长上下文计费（仅 Gemini 路径需要）
 	LongContextThreshold  int
 	LongContextMultiplier float64
@@ -10231,9 +10227,7 @@ func (s *GatewayService) RecordUsage(ctx context.Context, input *RecordUsageInpu
 		APIKeyService:      input.APIKeyService,
 		ChannelUsageFields: input.ChannelUsageFields,
 	}
-	opts := &recordUsageOpts{
-		EnableClaudePath: true,
-	}
+	opts := &recordUsageOpts{}
 	return s.recordUsageCore(ctx, coreInput, opts)
 }
 
@@ -10299,9 +10293,8 @@ type recordUsageCoreInput struct {
 }
 
 // recordUsageCore 是 RecordUsage 和 RecordUsageWithLongContext 的统一实现。
-// opts 中的字段控制两者之间的差异行为：
-// - ParsedRequest != nil → 启用 Claude Max 缓存计费策略
-// - LongContextThreshold > 0 → Token 计费回退走 CalculateCostWithLongContext
+// opts 中的 LongContextThreshold > 0 时，Token 计费回退走
+// CalculateCostWithLongContext。
 func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsageCoreInput, opts *recordUsageOpts) error {
 	result := input.Result
 	apiKey := input.APIKey

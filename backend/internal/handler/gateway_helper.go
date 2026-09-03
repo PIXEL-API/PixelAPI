@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -22,6 +23,58 @@ var claudeCodeValidator = service.NewClaudeCodeValidator()
 const claudeCodeParsedRequestContextKey = "claude_code_parsed_request"
 
 const accountSharePreTerminalBillingTimeout = 20 * time.Second
+
+// usageRecordContextSnapshot contains only detached tracing values needed by
+// usage billing. It must never retain the parent HTTP context.
+type usageRecordContextSnapshot struct {
+	clientRequestID string
+	requestID       string
+	accountShare    service.AccountShareModeRequestSnapshot
+	accountShareOK  bool
+}
+
+func newUsageRecordContextSnapshot(ctx context.Context) usageRecordContextSnapshot {
+	snapshot := usageRecordContextSnapshot{}
+	if ctx == nil {
+		return snapshot
+	}
+	if value, ok := ctx.Value(ctxkey.ClientRequestID).(string); ok {
+		snapshot.clientRequestID = strings.TrimSpace(value)
+	}
+	if value, ok := ctx.Value(ctxkey.RequestID).(string); ok {
+		snapshot.requestID = strings.TrimSpace(value)
+	}
+	snapshot.accountShare, snapshot.accountShareOK = service.SnapshotAccountShareModeRequest(ctx)
+	return snapshot
+}
+
+func (s usageRecordContextSnapshot) context(base context.Context) context.Context {
+	ctx := base
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if s.clientRequestID != "" {
+		ctx = context.WithValue(ctx, ctxkey.ClientRequestID, s.clientRequestID)
+	}
+	if s.requestID != "" {
+		ctx = context.WithValue(ctx, ctxkey.RequestID, s.requestID)
+	}
+	if s.accountShareOK {
+		ctx = s.accountShare.Context(ctx)
+	}
+	return ctx
+}
+
+// detachUsageRecordTask snapshots request metadata before queueing so the
+// worker closure cannot retain the parent HTTP context.
+func detachUsageRecordTask(requestCtx context.Context, task service.UsageRecordTask) service.UsageRecordTask {
+	if task == nil {
+		return nil
+	}
+	snapshot := newUsageRecordContextSnapshot(requestCtx)
+	originalTask := task
+	return func(ctx context.Context) { originalTask(snapshot.context(ctx)) }
+}
 
 // SetClaudeCodeClientContext 检查请求是否来自 Claude Code 客户端，并设置到 context 中
 // 返回更新后的 context

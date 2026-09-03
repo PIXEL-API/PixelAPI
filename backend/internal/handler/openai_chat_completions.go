@@ -329,6 +329,11 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		userAgent := c.GetHeader("User-Agent")
 		clientIP := ip.GetSecurityClientIP(c)
 		inboundEndpoint := GetInboundEndpoint(c)
+		upstreamAttemptID := h.beginOpenAIUpstreamAttempt(c, currentAPIKey, account)
+		result, err := h.gatewayService.ForwardAsChatCompletions(forwardCtx, c, account, forwardBody, promptCacheKey, defaultMappedModel)
+		cancelForward()
+		cyberPolicyHit, _ := h.recordCyberPolicyHitForAttempt(selectionCtx, c, currentAPIKey, upstreamAttemptID)
+		upstreamEndpoint := resolveOpenAIUpstreamEndpoint(c, account, result)
 		recordUsage := func(ctx context.Context, result *service.OpenAIForwardResult) error {
 			if result == nil {
 				return nil
@@ -340,7 +345,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				Account:            account,
 				Subscription:       currentSubscription,
 				InboundEndpoint:    inboundEndpoint,
-				UpstreamEndpoint:   resolveOpenAIUpstreamEndpoint(c, account, result),
+				UpstreamEndpoint:   upstreamEndpoint,
 				UserAgent:          userAgent,
 				IPAddress:          clientIP,
 				RequestPayloadHash: requestPayloadHash,
@@ -348,10 +353,6 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
 			})
 		}
-		upstreamAttemptID := h.beginOpenAIUpstreamAttempt(c, currentAPIKey, account)
-		result, err := h.gatewayService.ForwardAsChatCompletions(forwardCtx, c, account, forwardBody, promptCacheKey, defaultMappedModel)
-		cancelForward()
-		cyberPolicyHit, _ := h.recordCyberPolicyHitForAttempt(selectionCtx, c, currentAPIKey, upstreamAttemptID)
 
 		forwardDurationMs := time.Since(forwardStart).Milliseconds()
 		recordUsageResult := func(result *service.OpenAIForwardResult) {
@@ -359,7 +360,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				return
 			}
 			h.submitUsageRecordTask(forwardCtx, func(ctx context.Context) {
-				usageCtx := service.WithAccountShareModeRequestFromContext(ctx, forwardCtx)
+				usageCtx := ctx
 				if err := recordUsage(usageCtx, result); err != nil {
 					logger.L().With(
 						zap.String("component", "handler.openai_gateway.chat_completions"),

@@ -289,6 +289,47 @@ type AccountShareModeRequestContext struct {
 	state    *accountShareModeRequestState
 }
 
+// AccountShareModeRequestSnapshot is a detached copy of the request identity
+// used by asynchronous usage recording. It intentionally does not retain the
+// parent context (which may reference the full HTTP request); the internal
+// state pointer only contains the resolved account-share binding cache.
+type AccountShareModeRequestSnapshot struct {
+	userID   int64
+	apiKeyID int64
+	state    *accountShareModeRequestState
+}
+
+// SnapshotAccountShareModeRequest copies the account-share identity and its
+// small resolved-binding cache from ctx without retaining ctx itself.
+func SnapshotAccountShareModeRequest(ctx context.Context) (AccountShareModeRequestSnapshot, bool) {
+	requestCtx, ok := AccountShareModeRequestFromContext(ctx)
+	if !ok {
+		return AccountShareModeRequestSnapshot{}, false
+	}
+	return AccountShareModeRequestSnapshot{
+		userID:   requestCtx.UserID,
+		apiKeyID: requestCtx.APIKeyID,
+		state:    requestCtx.state,
+	}, true
+}
+
+// Context attaches the detached identity to base. A fresh base context should
+// be supplied by the worker so cancellation/deadlines from the HTTP request
+// cannot be retained by the queued task.
+func (s AccountShareModeRequestSnapshot) Context(base context.Context) context.Context {
+	if base == nil {
+		base = context.Background()
+	}
+	if s.userID <= 0 || s.apiKeyID <= 0 {
+		return base
+	}
+	return context.WithValue(base, accountShareModeRequestContextKey{}, AccountShareModeRequestContext{
+		UserID:   s.userID,
+		APIKeyID: s.apiKeyID,
+		state:    s.state,
+	})
+}
+
 type accountShareModeRequestState struct {
 	mu         sync.RWMutex
 	userID     int64

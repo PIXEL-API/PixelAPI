@@ -865,7 +865,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		line string
 		err  error
 	}
-	events := make(chan scanEvent, 16)
+	events := make(chan scanEvent, streamScanEventQueueSize)
 	done := make(chan struct{})
 	sendEvent := func(ev scanEvent) bool {
 		select {

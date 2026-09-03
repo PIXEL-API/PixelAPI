@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"unsafe"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/tidwall/gjson"
@@ -143,37 +144,37 @@ func ExtractCyberPreflightInput(protocol string, body []byte) ContentModerationI
 	if len(body) == 0 || !gjson.ValidBytes(body) {
 		return ContentModerationInput{}
 	}
+	// Keep gjson results as views over the already-buffered request body. The
+	// GetBytes helper intentionally copies the selected Raw/Str values; doing
+	// that for a 256 MiB messages/contents array would briefly retain another
+	// body-sized allocation before the bounded collector can discard it.
+	root := gjson.Parse(unsafe.String(unsafe.SliceData(body), len(body)))
+	collector := newModerationInputCollector()
 	if protocol == ContentModerationProtocolOpenAIResponses {
-		return extractOpenAIResponsesCyberPreflightInput(
-			gjson.GetBytes(body, "instructions"),
-			gjson.GetBytes(body, "input"),
-		)
+		if instructions := root.Get("instructions"); instructions.Exists() {
+			collector.AddText(instructions.String())
+		}
+		collectAllResponsesInputsBounded(root.Get("input"), collector)
+		return collector.Input()
 	}
-	var parts []string
-	var images []string
 	switch protocol {
 	case ContentModerationProtocolAnthropicMessages:
-		addModerationText(&parts, gjson.GetBytes(body, "system").String())
-		collectAllAnthropicUserMessages(gjson.GetBytes(body, "messages"), &parts, &images)
+		collector.AddText(root.Get("system").String())
+		collectAllAnthropicUserMessagesBounded(root.Get("messages"), collector)
 	case ContentModerationProtocolOpenAIChat:
-		collectAllOpenAIChatMessages(gjson.GetBytes(body, "messages"), &parts, &images)
+		collectAllOpenAIChatMessagesBounded(root.Get("messages"), collector)
 	case ContentModerationProtocolGemini:
-		collectAllGeminiContents(gjson.GetBytes(body, "contents"), &parts, &images)
+		collectAllGeminiContentsBounded(root.Get("contents"), collector)
 	case ContentModerationProtocolOpenAIImages:
-		addModerationText(&parts, gjson.GetBytes(body, "prompt").String())
+		collector.AddText(root.Get("prompt").String())
 	default:
-		addModerationText(&parts, gjson.GetBytes(body, "instructions").String())
-		addModerationText(&parts, gjson.GetBytes(body, "system").String())
-		collectAllOpenAIChatMessages(gjson.GetBytes(body, "messages"), &parts, &images)
-		collectAllResponsesInputs(gjson.GetBytes(body, "input"), &parts, &images)
-		collectAllGeminiContents(gjson.GetBytes(body, "contents"), &parts, &images)
+		collector.AddText(root.Get("instructions").String())
+		collector.AddText(root.Get("system").String())
+		collectAllOpenAIChatMessagesBounded(root.Get("messages"), collector)
+		collectAllResponsesInputsBounded(root.Get("input"), collector)
+		collectAllGeminiContentsBounded(root.Get("contents"), collector)
 	}
-	out := ContentModerationInput{
-		Text:   normalizeContentModerationText(strings.Join(parts, "\n")),
-		Images: normalizeModerationImages(images),
-	}
-	out.Normalize()
-	return out
+	return collector.Input()
 }
 
 func EvaluateCyberPreflightTextWithRules(text string, rules ContentModerationCyberPreflightRulesConfig) CyberPreflightResult {
@@ -291,56 +292,30 @@ func validateCyberPreflightRulesConfig(rules ContentModerationCyberPreflightRule
 	return nil
 }
 
-func collectAllAnthropicUserMessages(messages gjson.Result, parts *[]string, images *[]string) {
-	if !messages.IsArray() {
+func collectAllAnthropicUserMessagesBounded(messages gjson.Result, collector *moderationInputCollector) {
+	if collector == nil || !messages.IsArray() {
 		return
 	}
 	messages.ForEach(func(_, msg gjson.Result) bool {
 		role := strings.ToLower(strings.TrimSpace(msg.Get("role").String()))
 		if role == "user" || role == "system" || role == "developer" {
-			collectAnthropicUserContentValue(msg.Get("content"), parts, images)
+			collectAnthropicUserContentValueBounded(msg.Get("content"), collector)
 		}
 		return true
 	})
 }
 
-func collectAllOpenAIChatMessages(messages gjson.Result, parts *[]string, images *[]string) {
-	if !messages.IsArray() {
+func collectAllOpenAIChatMessagesBounded(messages gjson.Result, collector *moderationInputCollector) {
+	if collector == nil || !messages.IsArray() {
 		return
 	}
 	messages.ForEach(func(_, msg gjson.Result) bool {
 		role := strings.ToLower(strings.TrimSpace(msg.Get("role").String()))
 		if role == "user" || role == "system" || role == "developer" {
-			collectContentValue(msg.Get("content"), parts, images)
+			collectContentValueBounded(msg.Get("content"), collector)
 		}
 		return true
 	})
-}
-
-func collectAllResponsesInputs(input gjson.Result, parts *[]string, images *[]string) {
-	switch {
-	case !input.Exists():
-		return
-	case input.Type == gjson.String:
-		addModerationText(parts, input.String())
-	case input.IsArray():
-		input.ForEach(func(_, item gjson.Result) bool {
-			if isResponsesUserTextItem(item) || isResponsesSystemTextItem(item) {
-				collectContentValue(item.Get("content"), parts, images)
-				if item.Get("type").String() == "input_text" || item.Get("text").Exists() {
-					collectContentValue(item, parts, images)
-				}
-			}
-			return true
-		})
-	case input.IsObject():
-		if isResponsesUserTextItem(input) || isResponsesSystemTextItem(input) {
-			collectContentValue(input.Get("content"), parts, images)
-			if input.Get("type").String() == "input_text" || input.Get("text").Exists() {
-				collectContentValue(input, parts, images)
-			}
-		}
-	}
 }
 
 func collectAllResponsesInputsBounded(input gjson.Result, collector *moderationInputCollector) {
@@ -374,13 +349,17 @@ func collectAllResponsesInputsBounded(input gjson.Result, collector *moderationI
 	}
 }
 
+func isResponsesUserTextItem(item gjson.Result) bool {
+	return strings.EqualFold(strings.TrimSpace(item.Get("role").String()), "user")
+}
+
 func isResponsesSystemTextItem(item gjson.Result) bool {
 	role := strings.ToLower(strings.TrimSpace(item.Get("role").String()))
 	return role == "system" || role == "developer"
 }
 
-func collectAllGeminiContents(contents gjson.Result, parts *[]string, images *[]string) {
-	if !contents.IsArray() {
+func collectAllGeminiContentsBounded(contents gjson.Result, collector *moderationInputCollector) {
+	if collector == nil || !contents.IsArray() {
 		return
 	}
 	contents.ForEach(func(_, content gjson.Result) bool {
@@ -388,8 +367,8 @@ func collectAllGeminiContents(contents gjson.Result, parts *[]string, images *[]
 		if role == "" || role == "user" || role == "system" || role == "developer" {
 			if arr := content.Get("parts"); arr.IsArray() {
 				arr.ForEach(func(_, part gjson.Result) bool {
-					addModerationText(parts, part.Get("text").String())
-					addGeminiModerationImage(images, part)
+					collector.AddText(part.Get("text").String())
+					addGeminiModerationImageBounded(part, collector)
 					return true
 				})
 			}

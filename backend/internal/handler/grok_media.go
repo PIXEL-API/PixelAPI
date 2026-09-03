@@ -646,6 +646,7 @@ func recordGrokMediaUsage(
 			payloadForHash = []byte(videoTaskID)
 		}
 	}
+	requestPayloadHash := service.HashUsageRequestPayload(payloadForHash)
 	h.submitUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
 		ctx = context.WithValue(ctx, ctxkey.ForcePlatform, service.PlatformGrok)
 		if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
@@ -658,7 +659,7 @@ func recordGrokMediaUsage(
 			UpstreamEndpoint:   upstreamEndpoint,
 			UserAgent:          userAgent,
 			IPAddress:          clientIP,
-			RequestPayloadHash: service.HashUsageRequestPayload(payloadForHash),
+			RequestPayloadHash: requestPayloadHash,
 			APIKeyService:      h.apiKeyService,
 			ChannelUsageFields: channelUsageFields,
 		}); err != nil {

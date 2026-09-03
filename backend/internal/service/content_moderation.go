@@ -341,14 +341,18 @@ type ContentModerationInputSource interface {
 }
 
 type ContentModerationInput struct {
-	Text            string
-	Images          []string
-	allImageDigests [][sha256.Size]byte
+	Text                     string
+	Images                   []string
+	allImageDigests          [][sha256.Size]byte
+	imageDigestOverflow      [sha256.Size]byte
+	imageDigestOverflowCount uint64
 }
 
 func (in ContentModerationInput) Clone() ContentModerationInput {
 	clone := ContentModerationInput{
-		Text: in.Text,
+		Text:                     in.Text,
+		imageDigestOverflow:      in.imageDigestOverflow,
+		imageDigestOverflowCount: in.imageDigestOverflowCount,
 	}
 	if len(in.Images) > 0 {
 		clone.Images = append([]string(nil), in.Images...)
@@ -405,6 +409,17 @@ func (in ContentModerationInput) Hash() string {
 		for _, image := range in.Images {
 			writeContentModerationImageDigest(h, sha256.Sum256([]byte(image)))
 		}
+	}
+	if in.imageDigestOverflowCount > 0 {
+		// Keep pathological image lists bounded without making all requests with
+		// the same retained prefix collide. Small/normal requests preserve the
+		// historical hash byte-for-byte; only overflow requests add this domain-
+		// separated rolling summary.
+		_, _ = h.Write([]byte("\nimage-overflow:"))
+		var count [8]byte
+		binary.BigEndian.PutUint64(count[:], in.imageDigestOverflowCount)
+		_, _ = h.Write(count[:])
+		_, _ = h.Write(in.imageDigestOverflow[:])
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

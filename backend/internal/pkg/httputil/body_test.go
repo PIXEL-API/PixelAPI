@@ -4,12 +4,41 @@ import (
 	"bytes"
 	"compress/gzip"
 	"compress/zlib"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/klauspost/compress/zstd"
 )
+
+func TestReadBodyUpToLimitRejectsOversizedInput(t *testing.T) {
+	t.Parallel()
+
+	_, err := readBodyUpToLimit(strings.NewReader("123456789"), 8)
+	if err == nil {
+		t.Fatal("expected oversized body error")
+	}
+	var maxErr *http.MaxBytesError
+	if !errors.As(err, &maxErr) {
+		t.Fatalf("error = %T %v, want *http.MaxBytesError", err, err)
+	}
+	if maxErr.Limit != 8 {
+		t.Fatalf("limit = %d, want 8", maxErr.Limit)
+	}
+}
+
+func TestReadBodyUpToLimitAcceptsExactLimit(t *testing.T) {
+	t.Parallel()
+
+	got, err := readBodyUpToLimit(strings.NewReader("12345678"), 8)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(got) != "12345678" {
+		t.Fatalf("body = %q, want exact input", got)
+	}
+}
 
 const samplePayload = `{"model":"gpt-5.5","input":"hi","stream":false}`
 
