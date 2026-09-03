@@ -10,6 +10,10 @@ type PageProps = {
   }>;
 };
 
+// 文档内容在构建时已经由 generateStaticParams 完整枚举。
+// 未收录的路径应直接返回 404，避免 Next.js 在只读发布目录中生成运行时缓存。
+export const dynamicParams = false;
+
 type DocsModule = 'guide' | 'wallet' | 'rewards' | 'api' | 'operations';
 
 function getDocsModule(slug?: string[]): DocsModule {
