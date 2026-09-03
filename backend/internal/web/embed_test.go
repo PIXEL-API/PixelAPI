@@ -38,6 +38,12 @@ func TestShouldBypassEmbeddedFrontendForBrandAssets(t *testing.T) {
 	}
 }
 
+func TestShouldBypassEmbeddedFrontendForHealthEndpoints(t *testing.T) {
+	for _, path := range []string{"/health", "/health/live", "/health/ready", "/health/ready?verbose=true"} {
+		require.True(t, shouldBypassEmbeddedFrontend(path), "path=%s", path)
+	}
+}
+
 // TestSafeBrandImageURL 直接覆盖 URL 白名单。
 //
 // 该函数决定什么值能被写进 HTML 的 <link rel="icon"> href，此前只有

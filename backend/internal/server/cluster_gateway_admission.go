@@ -40,9 +40,16 @@ func isGatewayRequestPath(path string) bool {
 		"/images/edits",
 		"/videos/generations",
 		"/videos/edits",
-		"/videos/extensions":
+		"/videos/extensions",
+		"/web_search",
+		"/x_search",
+		"/tts",
+		"/stt",
+		"/custom-voices",
+		"/realtime":
 		return true
 	}
 	return strings.HasPrefix(path, "/responses/") ||
-		strings.HasPrefix(path, "/videos/")
+		strings.HasPrefix(path, "/videos/") ||
+		strings.HasPrefix(path, "/custom-voices/")
 }
