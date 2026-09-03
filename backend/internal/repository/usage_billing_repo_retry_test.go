@@ -279,6 +279,64 @@ func TestLockAccountShareModeMembershipBeforeWalletUsesDeclaredMembershipAlias(t
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestApplyUsageBillingEffectsLocksMembershipBeforeUsageLog(t *testing.T) {
+	db, mock := newSQLMock(t)
+	mock.ExpectBegin()
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	snapshot := &service.AccountShareModeBillingSnapshot{
+		MembershipID:   11,
+		ListingID:      12,
+		AccountID:      13,
+		OwnerUserID:    14,
+		ConsumerUserID: 15,
+		APIKeyID:       16,
+	}
+	mock.ExpectQuery(`SELECT m\.id, m\.listing_id, m\.account_id, l\.owner_user_id, m\.consumer_user_id, m\.api_key_id\s+FROM account_share_memberships m\s+JOIN account_share_listings l ON l\.id = m\.listing_id\s+WHERE m\.id = \$1\s+FOR UPDATE OF m`).
+		WithArgs(snapshot.MembershipID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id",
+			"listing_id",
+			"account_id",
+			"owner_user_id",
+			"consumer_user_id",
+			"api_key_id",
+		}).AddRow(
+			snapshot.MembershipID,
+			snapshot.ListingID,
+			snapshot.AccountID,
+			snapshot.OwnerUserID,
+			snapshot.ConsumerUserID,
+			snapshot.APIKeyID,
+		))
+	mock.ExpectQuery(`INSERT INTO usage_logs`).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(int64(91), time.Now()))
+	mock.ExpectRollback()
+
+	cmd := &service.UsageBillingCommand{
+		UserID:                     snapshot.ConsumerUserID,
+		APIKeyID:                   snapshot.APIKeyID,
+		AccountID:                  snapshot.AccountID,
+		RequestID:                  "usage-lock-order",
+		AccountShareModeSettlement: snapshot,
+		UsageLog: &service.UsageLog{
+			UserID:    snapshot.ConsumerUserID,
+			APIKeyID:  snapshot.APIKeyID,
+			AccountID: snapshot.AccountID,
+			RequestID: "usage-lock-order",
+			Model:     "test-model",
+		},
+	}
+	result := &service.UsageBillingApplyResult{}
+	err = (&usageBillingRepository{}).applyUsageBillingEffects(context.Background(), tx, cmd, result)
+	require.NoError(t, err)
+	require.NotNil(t, result.UsageLogID)
+	require.Equal(t, int64(91), *result.UsageLogID)
+	require.NoError(t, tx.Rollback())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestDeductUsageBillingWalletUsesNoKeyUpdateLock(t *testing.T) {
 	db, mock := newSQLMock(t)
 	mock.ExpectBegin()

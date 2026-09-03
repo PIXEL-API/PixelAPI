@@ -262,6 +262,15 @@ func (r *usageBillingRepository) claimUsageBillingKey(ctx context.Context, tx *s
 }
 
 func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand, result *service.UsageBillingApplyResult) error {
+	// Account-share seat billing locks the membership row before it locks the
+	// consumer wallet row.  Acquire the same membership lock before inserting
+	// usage_logs: the INSERT takes KEY SHARE locks on its user/api-key/account
+	// foreign keys, and doing it first can otherwise form a
+	// users->membership / membership->users wait cycle with seat billing.
+	if err := lockAccountShareModeMembershipBeforeWallet(ctx, tx, cmd); err != nil {
+		return err
+	}
+
 	usageLogID, err := ensureUsageBillingLog(ctx, tx, cmd)
 	if err != nil {
 		return err
@@ -269,10 +278,6 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 	if usageLogID > 0 {
 		result.UsageLogID = &usageLogID
 	}
-	if err := lockAccountShareModeMembershipBeforeWallet(ctx, tx, cmd); err != nil {
-		return err
-	}
-
 	if cmd.SubscriptionCost > 0 && cmd.SubscriptionID != nil {
 		if err := incrementUsageBillingSubscription(ctx, tx, *cmd.SubscriptionID, cmd.SubscriptionCost); err != nil {
 			return err

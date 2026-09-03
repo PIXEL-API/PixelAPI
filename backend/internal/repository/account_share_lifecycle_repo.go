@@ -1411,9 +1411,33 @@ func (r *accountShareModeRepository) endLiveMembershipsForRoomDrainInTx(
 	actorRole string,
 ) (*service.AccountShareSeatBillingResult, error) {
 	result := &service.AccountShareSeatBillingResult{}
-	// 钱包行锁按 id 升序统一预锁（consumer/owner/inviter），与
-	// lockAccountShareEndBillingUsersInTx 的排序纪律一致，避免与并发的
-	// 单成员结算事务形成跨房间死锁环。
+	queuedConsumerIDs, err := lockAccountShareIDsInTx(ctx, tx, `
+		SELECT consumer_user_id
+		FROM account_share_memberships
+		WHERE listing_id = $1
+			AND status = 'queued'
+			AND deleted_at IS NULL
+		ORDER BY id ASC
+		FOR UPDATE
+	`, listingID)
+	if err != nil {
+		return nil, err
+	}
+	activeIDs, err := lockAccountShareIDsInTx(ctx, tx, `
+		SELECT id
+		FROM account_share_memberships
+		WHERE listing_id = $1
+			AND status = 'active'
+			AND deleted_at IS NULL
+		ORDER BY id ASC
+		FOR UPDATE
+	`, listingID)
+	if err != nil {
+		return nil, err
+	}
+	// 先按 membership id 升序持有全部成员行锁，再按 user id 升序持有
+	// 钱包行锁（consumer/owner/inviter）。这与单成员结算事务的
+	// membership → users 顺序一致，避免 drain 与 seat billing 形成环。
 	if _, err := lockAccountShareIDsInTx(ctx, tx, `
 		SELECT id
 		FROM users
@@ -1436,35 +1460,11 @@ func (r *accountShareModeRepository) endLiveMembershipsForRoomDrainInTx(
 	`, listingID); err != nil {
 		return nil, err
 	}
-	queuedConsumerIDs, err := lockAccountShareIDsInTx(ctx, tx, `
-		SELECT consumer_user_id
-		FROM account_share_memberships
-		WHERE listing_id = $1
-			AND status = 'queued'
-			AND deleted_at IS NULL
-		ORDER BY id ASC
-		FOR UPDATE
-	`, listingID)
-	if err != nil {
-		return nil, err
-	}
 	if err := endQueuedMembershipsForRoomDrainInTx(ctx, tx, listingID, actorUserID, actorRole); err != nil {
 		return nil, err
 	}
 	result.Processed += len(queuedConsumerIDs)
 	result.EndedConsumerUserIDs = append(result.EndedConsumerUserIDs, queuedConsumerIDs...)
-	activeIDs, err := lockAccountShareIDsInTx(ctx, tx, `
-		SELECT id
-		FROM account_share_memberships
-		WHERE listing_id = $1
-			AND status = 'active'
-			AND deleted_at IS NULL
-		ORDER BY id ASC
-		FOR UPDATE
-	`, listingID)
-	if err != nil {
-		return nil, err
-	}
 	now := time.Now().UTC()
 	for _, membershipID := range activeIDs {
 		membership, err := r.lockSeatBillingMembershipInTx(ctx, tx, membershipID, 0)

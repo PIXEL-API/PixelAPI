@@ -293,6 +293,49 @@ func TestEndQueuedMembershipsForRoomDrainUsesSupportedLifecycleReason(t *testing
 	}
 }
 
+func TestEndLiveMembershipsForRoomDrainLocksMembershipsBeforeWalletUsers(t *testing.T) {
+	const listingID = int64(7)
+	repo, mock := newAccountShareLifecycleSQLMock(t)
+
+	mock.ExpectBegin()
+	tx, err := repo.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	// The queued and active membership rows must be locked before the wallet
+	// pre-lock. SQLMock's ordered expectations make the lock-order contract
+	// explicit without requiring a live PostgreSQL instance.
+	mock.ExpectQuery("(?s)SELECT\\s+consumer_user_id\\s+FROM account_share_memberships.*status = 'queued'.*FOR UPDATE").
+		WithArgs(listingID).
+		WillReturnRows(sqlmock.NewRows([]string{"consumer_user_id"}))
+	mock.ExpectQuery("(?s)SELECT\\s+id\\s+FROM account_share_memberships.*status = 'active'.*FOR UPDATE").
+		WithArgs(listingID).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	mock.ExpectQuery("(?s)SELECT\\s+id\\s+FROM users.*ORDER BY id ASC\\s+FOR UPDATE").
+		WithArgs(listingID).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	// The queued-membership helper re-reads the rows before applying its
+	// terminal update; keep that query in the expected sequence as well.
+	mock.ExpectQuery("(?s)SELECT\\s+id\\s+FROM account_share_memberships.*status = 'queued'.*FOR UPDATE").
+		WithArgs(listingID).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+
+	result, err := repo.endLiveMembershipsForRoomDrainInTx(
+		context.Background(), tx, listingID, 42, "owner",
+	)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("endLiveMembershipsForRoomDrainInTx: %v", err)
+	}
+	if result == nil || result.Processed != 0 {
+		t.Fatalf("result = %#v, want an empty drain result", result)
+	}
+	mock.ExpectRollback()
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+}
+
 func TestAccountShareModeRepositoryRoomLifecycleRollsBackAfterRevisionFailure(t *testing.T) {
 	const (
 		listingID  = int64(7)
