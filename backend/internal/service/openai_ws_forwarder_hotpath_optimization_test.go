@@ -16,8 +16,12 @@ func TestParseOpenAIWSEventEnvelope(t *testing.T) {
 
 	eventType, responseID, response = parseOpenAIWSEventEnvelope([]byte(`{"type":"response.delta","id":"evt_1"}`))
 	require.Equal(t, "response.delta", eventType)
-	require.Equal(t, "evt_1", responseID)
+	require.Empty(t, responseID, "non-terminal top-level ids identify events, not responses")
 	require.False(t, response.Exists())
+
+	eventType, responseID, _ = parseOpenAIWSEventEnvelope([]byte(`{"type":"response.created","id":"evt_2","response":{"id":"resp_2"}}`))
+	require.Equal(t, "response.created", eventType)
+	require.Equal(t, "resp_2", responseID)
 }
 
 func TestParseOpenAIWSResponseUsageFromTerminalEvent(t *testing.T) {

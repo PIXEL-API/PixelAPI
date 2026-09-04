@@ -170,6 +170,7 @@ func (s *OpenAIGatewayService) describeGrokComposerImage(
 	if err != nil {
 		return "", OpenAIUsage{}, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 	}
+	resp.Request = nil
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {

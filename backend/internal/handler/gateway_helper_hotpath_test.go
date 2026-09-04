@@ -292,6 +292,125 @@ func TestWaitForSlotWithPingTimeout_AcquireError(t *testing.T) {
 	require.Nil(t, release)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "redis unavailable")
+	require.False(t, isAccountSlotCapacityError(err))
+}
+
+func TestWaitForSlotWithPingTimeout_ParentCancellationIsNotCapacity(t *testing.T) {
+	cache := &helperConcurrencyCacheStub{accountSeq: []bool{false}}
+	concurrency := service.NewConcurrencyService(cache)
+	helper := NewConcurrencyHelper(concurrency, SSEPingFormatNone, 5*time.Millisecond)
+	c, _ := newHelperTestContext(http.MethodPost, "/v1/messages")
+	requestCtx, cancel := context.WithCancel(c.Request.Context())
+	c.Request = c.Request.WithContext(requestCtx)
+	cancel()
+	streamStarted := false
+
+	release, err := helper.waitForSlotWithPingTimeout(c, "account", 1, 1, time.Second, false, &streamStarted, true)
+	require.Nil(t, release)
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, isAccountSlotCapacityError(err))
+}
+
+func TestIsAccountSlotCapacityError(t *testing.T) {
+	require.True(t, isAccountSlotCapacityError(&ConcurrencyError{SlotType: "account", IsTimeout: true}))
+	require.False(t, isAccountSlotCapacityError(&ConcurrencyError{SlotType: "user", IsTimeout: true}))
+	require.False(t, isAccountSlotCapacityError(&ConcurrencyError{SlotType: "account", IsTimeout: false}))
+	require.False(t, isAccountSlotCapacityError(context.DeadlineExceeded))
+	require.False(t, isAccountSlotCapacityError(errors.New("redis unavailable")))
+}
+
+func TestHandleConcurrencyErrorContract(t *testing.T) {
+	handlers := []struct {
+		name   string
+		handle func(*gin.Context, error, string)
+	}{
+		{
+			name: "gateway",
+			handle: func(c *gin.Context, err error, slotType string) {
+				(&GatewayHandler{}).handleConcurrencyError(c, err, slotType, false)
+			},
+		},
+		{
+			name: "openai_gateway",
+			handle: func(c *gin.Context, err error, slotType string) {
+				(&OpenAIGatewayHandler{}).handleConcurrencyError(c, err, slotType, false)
+			},
+		},
+	}
+	tests := []struct {
+		name         string
+		err          error
+		slotType     string
+		wantStatus   int
+		wantContains string
+	}{
+		{
+			name:         "user capacity timeout",
+			err:          &ConcurrencyError{SlotType: "user", IsTimeout: true},
+			slotType:     "user",
+			wantStatus:   http.StatusTooManyRequests,
+			wantContains: "Concurrency limit exceeded for user",
+		},
+		{
+			name:         "account capacity timeout",
+			err:          &ConcurrencyError{SlotType: "account", IsTimeout: true},
+			slotType:     "account",
+			wantStatus:   http.StatusTooManyRequests,
+			wantContains: "Concurrency limit exceeded for account",
+		},
+		{
+			name:         "wait queue full",
+			err:          &WaitQueueFullError{SlotType: "account"},
+			slotType:     "account",
+			wantStatus:   http.StatusTooManyRequests,
+			wantContains: "Too many pending requests",
+		},
+		{
+			name:         "routing budget exhausted",
+			err:          errors.Join(errors.New("waiting for slot"), service.ErrOpenAIFirstOutputRoutingBudgetExceeded),
+			slotType:     "account",
+			wantStatus:   http.StatusGatewayTimeout,
+			wantContains: "routing budget expired",
+		},
+		{
+			name:         "concurrency infrastructure error",
+			err:          errors.New("redis unavailable"),
+			slotType:     "account",
+			wantStatus:   http.StatusServiceUnavailable,
+			wantContains: "Concurrency service is temporarily unavailable",
+		},
+		{
+			name:         "capacity slot type mismatch",
+			err:          &ConcurrencyError{SlotType: "user", IsTimeout: true},
+			slotType:     "account",
+			wantStatus:   http.StatusServiceUnavailable,
+			wantContains: "Concurrency service is temporarily unavailable",
+		},
+	}
+
+	for _, handler := range handlers {
+		for _, test := range tests {
+			t.Run(handler.name+"/"+test.name, func(t *testing.T) {
+				c, recorder := newHelperTestContext(http.MethodPost, "/v1/messages")
+				handler.handle(c, test.err, test.slotType)
+
+				require.Equal(t, test.wantStatus, c.Writer.Status())
+				require.Contains(t, recorder.Body.String(), test.wantContains)
+			})
+		}
+
+		t.Run(handler.name+"/client cancellation", func(t *testing.T) {
+			c, recorder := newHelperTestContext(http.MethodPost, "/v1/messages")
+			requestCtx, cancel := context.WithCancel(c.Request.Context())
+			c.Request = c.Request.WithContext(requestCtx)
+			cancel()
+
+			handler.handle(c, errors.New("redis unavailable"), "account")
+
+			require.Equal(t, statusClientClosedRequest, c.Writer.Status())
+			require.Empty(t, recorder.Body.String())
+		})
+	}
 }
 
 func TestAcquireAccountSlotWithWaitTimeout_ImmediateAttemptBeforeBackoff(t *testing.T) {
@@ -309,6 +428,41 @@ func TestAcquireAccountSlotWithWaitTimeout_ImmediateAttemptBeforeBackoff(t *test
 	require.ErrorAs(t, err, &cErr)
 	require.True(t, cErr.IsTimeout)
 	require.GreaterOrEqual(t, cache.accountAcquireCalls, 1)
+}
+
+func TestWrapReleaseOnDone_ConcurrentCancelAndManualReleaseRunsExactlyOnce(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var mu sync.Mutex
+	releaseCalls := 0
+	release := wrapReleaseOnDone(ctx, func() {
+		mu.Lock()
+		releaseCalls++
+		mu.Unlock()
+	})
+	require.NotNil(t, release)
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			release()
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-start
+		cancel()
+	}()
+	close(start)
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, 1, releaseCalls)
 }
 
 type helperConcurrencyCacheStubWithError struct {

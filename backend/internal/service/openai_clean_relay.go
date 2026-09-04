@@ -20,7 +20,6 @@ import (
 
 const (
 	openAICleanRelayContextKey        = "openai_clean_relay_state"
-	openAICleanRelayGroupContextKey   = "openai_clean_relay_group_id"
 	openAICleanRelayInstallationField = "x-codex-installation-id"
 	openAICleanRelayCacheKeyPrefix    = "openai:clean_relay:"
 )
@@ -41,6 +40,34 @@ type openAICleanRelayState struct {
 	AllowBodyClientMetadata bool
 	bodyCleaned             bool
 	headersCleaned          bool
+}
+
+// ProjectOpenAICleanRelaySessionBody keeps only the request fields needed for
+// pre-selection cache lookup. In particular, it prevents a compact request's
+// pre-normalization body (which may contain large images or history) from being
+// retained throughout account selection and the upstream response lifecycle.
+func ProjectOpenAICleanRelaySessionBody(body []byte) ([]byte, error) {
+	if len(body) == 0 {
+		return nil, nil
+	}
+	if !gjson.ValidBytes(body) {
+		return nil, errors.New("openai clean relay project session body: invalid json")
+	}
+
+	projection := make(map[string]any, 2)
+	if promptCacheKey := strings.TrimSpace(gjson.GetBytes(body, "prompt_cache_key").String()); promptCacheKey != "" {
+		projection["prompt_cache_key"] = promptCacheKey
+	}
+	if installationID := strings.TrimSpace(gjson.GetBytes(body, "client_metadata."+openAICleanRelayInstallationField).String()); installationID != "" {
+		projection["client_metadata"] = map[string]string{
+			openAICleanRelayInstallationField: installationID,
+		}
+	}
+	projected, err := json.Marshal(projection)
+	if err != nil {
+		return nil, fmt.Errorf("openai clean relay project session body: %w", err)
+	}
+	return projected, nil
 }
 
 func (s *OpenAIGatewayService) applyOpenAICleanRelayToRequestBody(
@@ -125,36 +152,65 @@ func (s *OpenAIGatewayService) SelectAccountWithCleanRelayScheduler(
 	requireCompact bool,
 	bodyForSession []byte,
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
-	setOpenAICleanRelayGroupID(c, groupID)
+	setOpenAIEffectiveGroupID(c, groupID)
 	effectiveModel := strings.TrimSpace(routingModel)
 	if effectiveModel == "" {
 		effectiveModel = strings.TrimSpace(requestedModel)
 	}
+	if s.accountShareModeService != nil && groupID != nil && *groupID > 0 {
+		isModeGroup, modeErr := s.accountShareModeService.IsModeGroupChecked(ctx, *groupID)
+		if modeErr != nil {
+			return nil, OpenAIAccountScheduleDecision{}, fmt.Errorf("check OpenAI clean relay account share mode group: %w", modeErr)
+		}
+		if isModeGroup {
+			return s.SelectAccountWithScheduler(
+				ctx,
+				groupID,
+				previousResponseID,
+				sessionHash,
+				effectiveModel,
+				excludedIDs,
+				requiredTransport,
+				requireCompact,
+			)
+		}
+	}
 	// 渠道模型限制预检查（requested/channel_mapped 计费基准）。
 	// clean-relay 命中路径会直接返回绑定账号，绕过 selectAccountWithScheduler 的预检查，
 	// 必须在此统一拦截，否则 restrict_models 对 clean-relay 命中请求失效。
-	if s.checkChannelPricingRestriction(ctx, groupID, effectiveModel) {
+	responseID := strings.TrimSpace(previousResponseID)
+	channelRestricted := false
+	if responseID != "" {
+		var channelErr error
+		channelRestricted, channelErr = s.checkChannelPricingRestrictionStrict(ctx, groupID, effectiveModel)
+		if channelErr != nil {
+			return nil, OpenAIAccountScheduleDecision{}, fmt.Errorf("check continuation channel restriction: %w", channelErr)
+		}
+	} else {
+		channelRestricted = s.checkChannelPricingRestriction(ctx, groupID, effectiveModel)
+	}
+	if channelRestricted {
 		slog.Warn("channel pricing restriction blocked request",
 			"group_id", derefGroupID(groupID),
 			"model", effectiveModel)
-		return nil, OpenAIAccountScheduleDecision{}, fmt.Errorf("%w supporting model: %s (channel pricing restriction)", ErrNoAvailableAccounts, effectiveModel)
+		if responseID != "" {
+			return nil, OpenAIAccountScheduleDecision{}, newOpenAIContinuationUnavailableError(
+				ErrNoAvailableAccounts,
+				openAIContinuationRestartRequired,
+				responseID,
+				0,
+				"channel model restriction",
+			)
+		}
+		return nil, OpenAIAccountScheduleDecision{}, &noAvailableOpenAIAccountSelectionError{
+			message: fmt.Sprintf("no available OpenAI accounts supporting model: %s (channel pricing restriction)", effectiveModel),
+		}
 	}
-	if s.accountShareModeService != nil && groupID != nil && *groupID > 0 && s.accountShareModeService.IsModeGroup(ctx, *groupID) {
-		return s.SelectAccountWithScheduler(
-			ctx,
-			groupID,
-			previousResponseID,
-			sessionHash,
-			effectiveModel,
-			excludedIDs,
-			requiredTransport,
-			requireCompact,
-		)
-	}
-	selection, decision, hit, err := s.selectOpenAICleanRelayMappedAccount(
+	selection, decision, mappedAccountID, mappingHit, err := s.selectOpenAICleanRelayMappedAccount(
 		ctx,
 		c,
 		groupID,
+		previousResponseID,
 		effectiveModel,
 		excludedIDs,
 		requiredTransport,
@@ -164,8 +220,80 @@ func (s *OpenAIGatewayService) SelectAccountWithCleanRelayScheduler(
 	if err != nil {
 		return nil, decision, err
 	}
-	if hit {
-		return selection, decision, nil
+	if mappingHit {
+		if strings.TrimSpace(previousResponseID) != "" {
+			if selection == nil || selection.Account == nil {
+				return nil, decision, noAvailableOpenAISelectionError(effectiveModel, requireCompact)
+			}
+			return selection, decision, nil
+		}
+		if selection != nil && selection.Account != nil && (selection.Acquired || selection.WaitPlan == nil) {
+			return selection, decision, nil
+		}
+
+		// Clean relay can safely migrate a replayable session to another account.
+		// Treat a full mapped account as soft affinity: atomically probe the other
+		// eligible accounts before waiting, but keep the mapped wait plan when no
+		// alternative slot is available.
+		fallbackExcludedIDs := cloneExcludedAccountIDs(excludedIDs)
+		if fallbackExcludedIDs == nil {
+			fallbackExcludedIDs = make(map[int64]struct{}, 1)
+		}
+		fallbackExcludedIDs[mappedAccountID] = struct{}{}
+		fallbackAccounts, listErr := s.listSchedulableAccounts(ctx, groupID)
+		if listErr != nil {
+			return nil, decision, listErr
+		}
+		for i := range fallbackAccounts {
+			account := &fallbackAccounts[i]
+			if !s.isOpenAICleanRelayAccountCandidate(ctx, account) {
+				fallbackExcludedIDs[account.ID] = struct{}{}
+			}
+		}
+
+		for {
+			fallbackSelection, fallbackDecision, fallbackErr := s.SelectAccountWithScheduler(
+				ctx,
+				groupID,
+				previousResponseID,
+				sessionHash,
+				effectiveModel,
+				fallbackExcludedIDs,
+				requiredTransport,
+				requireCompact,
+			)
+			if fallbackErr != nil {
+				if errors.Is(fallbackErr, ErrNoAvailableAccounts) || errors.Is(fallbackErr, ErrNoAvailableCompactAccounts) {
+					if selection != nil && selection.Account != nil {
+						return selection, decision, nil
+					}
+				}
+				return nil, fallbackDecision, fallbackErr
+			}
+			if fallbackSelection == nil || fallbackSelection.Account == nil {
+				if selection != nil && selection.Account != nil {
+					return selection, decision, nil
+				}
+				return nil, fallbackDecision, noAvailableOpenAISelectionError(effectiveModel, requireCompact)
+			}
+			if !s.isOpenAICleanRelayAccountCandidate(ctx, fallbackSelection.Account) {
+				if fallbackSelection.ReleaseFunc != nil {
+					fallbackSelection.ReleaseFunc()
+				}
+				if _, alreadyExcluded := fallbackExcludedIDs[fallbackSelection.Account.ID]; alreadyExcluded {
+					return selection, decision, nil
+				}
+				fallbackExcludedIDs[fallbackSelection.Account.ID] = struct{}{}
+				continue
+			}
+			if fallbackSelection.Acquired {
+				return fallbackSelection, fallbackDecision, nil
+			}
+			if selection != nil && selection.Account != nil {
+				return selection, decision, nil
+			}
+			return fallbackSelection, fallbackDecision, nil
+		}
 	}
 	return s.SelectAccountWithScheduler(
 		ctx,
@@ -183,43 +311,54 @@ func (s *OpenAIGatewayService) selectOpenAICleanRelayMappedAccount(
 	ctx context.Context,
 	c *gin.Context,
 	groupID *int64,
+	previousResponseID string,
 	requestedModel string,
 	excludedIDs map[int64]struct{},
 	requiredTransport OpenAIUpstreamTransport,
 	requireCompact bool,
 	bodyForSession []byte,
-) (*AccountSelectionResult, OpenAIAccountScheduleDecision, bool, error) {
+) (*AccountSelectionResult, OpenAIAccountScheduleDecision, int64, bool, error) {
 	decision := OpenAIAccountScheduleDecision{Layer: openAIAccountScheduleLayerCleanRelay}
 	mapping, hit, err := s.loadOpenAICleanRelayCachedMapping(ctx, c, bodyForSession)
 	if err != nil || !hit {
-		return nil, decision, false, err
+		return nil, decision, 0, false, err
 	}
 	if mapping.AccountID <= 0 {
-		return nil, decision, false, nil
+		return nil, decision, 0, false, nil
 	}
 	if excludedIDs != nil {
 		if _, excluded := excludedIDs[mapping.AccountID]; excluded {
-			return nil, decision, false, nil
+			if responseID := strings.TrimSpace(previousResponseID); responseID != "" {
+				return nil, decision, mapping.AccountID, true, newOpenAIContinuationUnavailableError(
+					ErrNoAvailableAccounts,
+					openAIContinuationRetryLater,
+					responseID,
+					mapping.AccountID,
+					"account was excluded from this dispatch",
+				)
+			}
+			return nil, decision, mapping.AccountID, true, nil
 		}
 	}
 	selection, err := s.selectOpenAICleanRelayAccountByID(
 		ctx,
 		groupID,
 		mapping.AccountID,
+		previousResponseID,
 		requestedModel,
 		requiredTransport,
 		requireCompact,
 	)
 	if err != nil {
-		return nil, decision, true, err
+		return nil, decision, mapping.AccountID, true, err
 	}
 	if selection == nil || selection.Account == nil {
-		return nil, decision, false, nil
+		return nil, decision, mapping.AccountID, true, nil
 	}
 	decision.StickySessionHit = true
 	decision.SelectedAccountID = selection.Account.ID
 	decision.SelectedAccountType = selection.Account.Type
-	return selection, decision, true, nil
+	return selection, decision, mapping.AccountID, true, nil
 }
 
 func (s *OpenAIGatewayService) loadOpenAICleanRelayCachedMapping(
@@ -239,7 +378,7 @@ func (s *OpenAIGatewayService) loadOpenAICleanRelayCachedMapping(
 		return openAICleanRelayMapping{}, false, nil
 	}
 	apiKeyID := getAPIKeyIDFromContext(c)
-	groupID := getOpenAICleanRelayGroupID(c)
+	groupID := getOpenAIEffectiveGroupID(c)
 	cacheKey := openAICleanRelayCacheKey(apiKeyID, groupID, clientInstallationID, sessionSignal)
 	cacheCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()
@@ -268,28 +407,104 @@ func (s *OpenAIGatewayService) selectOpenAICleanRelayAccountByID(
 	ctx context.Context,
 	groupID *int64,
 	accountID int64,
+	previousResponseID string,
 	requestedModel string,
 	requiredTransport OpenAIUpstreamTransport,
 	requireCompact bool,
 ) (*AccountSelectionResult, error) {
+	responseID := strings.TrimSpace(previousResponseID)
+	restartRequired := func(reason string) error {
+		return newOpenAIContinuationUnavailableError(
+			ErrNoAvailableAccounts,
+			openAIContinuationRestartRequired,
+			responseID,
+			accountID,
+			reason,
+		)
+	}
+	retryLater := func(reason string) error {
+		return newOpenAIContinuationUnavailableError(
+			ErrNoAvailableAccounts,
+			openAIContinuationRetryLater,
+			responseID,
+			accountID,
+			reason,
+		)
+	}
 	account, err := s.getSchedulableAccount(ctx, accountID)
-	if err != nil || account == nil {
+	if err != nil {
+		if errors.Is(err, ErrAccountNotFound) {
+			if responseID != "" {
+				return nil, restartRequired("account was not found or is no longer authorized")
+			}
+			return nil, nil
+		}
+		return nil, err
+	}
+	if account == nil {
+		if responseID != "" {
+			return nil, retryLater("account state is unknown")
+		}
 		return nil, nil
 	}
 	if !s.isOpenAICleanRelayAccountCandidate(ctx, account) {
+		if responseID != "" {
+			if reason := openAIContinuationRestartRequiredReason(account, requestedModel, requireCompact, true, time.Now()); reason != "" {
+				return nil, restartRequired(reason)
+			}
+			return nil, retryLater("clean relay account is temporarily unavailable")
+		}
 		return nil, nil
 	}
 	if !s.isOpenAIAccountTransportCompatible(account, requiredTransport) {
+		if responseID != "" {
+			return nil, restartRequired("account transport is no longer compatible")
+		}
 		return nil, nil
 	}
-	account = s.recheckSelectedOpenAIAccountFromDB(ctx, groupID, account, requestedModel, requireCompact)
+	if responseID != "" {
+		account, err = s.recheckSelectedOpenAIContinuationAccountFromDBWithError(
+			ctx,
+			groupID,
+			account,
+			responseID,
+			requestedModel,
+			requireCompact,
+			true,
+		)
+	} else {
+		account, err = s.recheckSelectedOpenAIAccountFromDBWithError(ctx, groupID, account, requestedModel, requireCompact)
+	}
+	if err != nil {
+		if errors.Is(err, ErrAccountNotFound) {
+			if responseID != "" {
+				return nil, restartRequired("account was not found or is no longer authorized")
+			}
+			return nil, nil
+		}
+		return nil, err
+	}
 	if account == nil || !s.isOpenAICleanRelayAccountCandidate(ctx, account) {
+		if responseID != "" {
+			return nil, retryLater("clean relay account is temporarily unavailable")
+		}
 		return nil, nil
 	}
 	if !s.isOpenAIAccountTransportCompatible(account, requiredTransport) {
+		if responseID != "" {
+			return nil, restartRequired("account transport is no longer compatible")
+		}
 		return nil, nil
 	}
-	if groupID != nil && s.needsUpstreamChannelRestrictionCheck(ctx, groupID) &&
+	if responseID != "" {
+		restricted, restrictionErr := s.isOpenAIAccountChannelRestrictedStrict(ctx, groupID, account, requestedModel, requireCompact)
+		if restrictionErr != nil {
+			return nil, restrictionErr
+		}
+		if restricted {
+			return nil, restartRequired("channel model restriction")
+		}
+	} else if groupID != nil && s.needsUpstreamChannelRestrictionCheck(ctx, groupID) &&
 		s.isUpstreamModelRestrictedByChannel(ctx, *groupID, account, requestedModel, requireCompact) {
 		return nil, nil
 	}
@@ -371,7 +586,7 @@ func (s *OpenAIGatewayService) resolveOpenAICleanRelayStateFromSignals(
 	}
 
 	apiKeyID := getAPIKeyIDFromContext(c)
-	groupID := getOpenAICleanRelayGroupID(c)
+	groupID := getOpenAIEffectiveGroupID(c)
 	cacheKey := openAICleanRelayCacheKey(apiKeyID, groupID, clientInstallationID, sessionSignal)
 	cacheCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()
@@ -609,7 +824,9 @@ func applyOpenAICleanRelayMappingToRawBody(body []byte, state *openAICleanRelayS
 }
 
 func trimOpenAIEncryptedReasoningItemsInRawBody(body []byte) ([]byte, bool, error) {
-	input := gjson.GetBytes(body, "input")
+	// Keep the top-level input result as a view over body. gjson.GetBytes would
+	// copy input.Raw, which can be nearly the entire Responses payload.
+	input := parseRawJSONView(body).Get("input")
 	if !input.Exists() || !strings.Contains(input.Raw, `"encrypted_content"`) {
 		return body, false, nil
 	}
@@ -710,30 +927,12 @@ func (s *OpenAIGatewayService) currentOpenAICleanRelayState(
 	return state
 }
 
-func setOpenAICleanRelayGroupID(c *gin.Context, groupID *int64) {
-	if c != nil && groupID != nil && *groupID > 0 {
-		c.Set(openAICleanRelayGroupContextKey, *groupID)
-	}
-}
-
 func isOpenAICleanRelayCompactRequest(c *gin.Context) bool {
 	if c == nil || c.Request == nil {
 		return false
 	}
 	path := strings.TrimRight(strings.ToLower(strings.TrimSpace(c.Request.URL.Path)), "/")
 	return strings.HasSuffix(path, "/responses/compact")
-}
-
-func getOpenAICleanRelayGroupID(c *gin.Context) int64 {
-	if c == nil {
-		return 0
-	}
-	if value, exists := c.Get(openAICleanRelayGroupContextKey); exists {
-		if groupID, ok := value.(int64); ok && groupID > 0 {
-			return groupID
-		}
-	}
-	return getOpenAIGroupIDFromContext(c)
 }
 
 func getOpenAICleanRelayState(c *gin.Context) *openAICleanRelayState {

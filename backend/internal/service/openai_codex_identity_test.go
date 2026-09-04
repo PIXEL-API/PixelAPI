@@ -9,7 +9,7 @@ import (
 )
 
 func TestCodexSynthesizedIdentityVersionIsConsistent(t *testing.T) {
-	require.Equal(t, "0.151.0", codexCLIVersion)
+	require.Equal(t, "0.153.3", codexCLIVersion)
 	require.Equal(t, "codex_cli_rs/"+codexCLIVersion, codexCLIUserAgent)
 	require.Equal(t, codexCLIVersion, openAICodexProbeVersion)
 	require.Equal(t, "0.144.0", codexUpstreamMinVersion)

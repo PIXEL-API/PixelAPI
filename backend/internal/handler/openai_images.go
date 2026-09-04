@@ -110,7 +110,20 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 	sessionHash := h.gatewayService.GenerateExplicitSessionHash(c, body)
 
 	maxAccountSwitches := h.maxAccountSwitches
-	routeCursor := newAPIKeyGroupRouteCursor(apiKey)
+	routeCursor, _, routeErr := newAPIKeyGroupRouteCursorWithModeIsolation(
+		c.Request.Context(),
+		apiKey,
+		h.gatewayService.IsAccountShareModeGroup,
+		true,
+	)
+	if routeErr != nil {
+		if failoverClientGone(c) {
+			return
+		}
+		reqLog.Error("api_key_group_route.mode_classification_failed", zap.Error(routeErr))
+		h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Account routing service is temporarily unavailable", streamStarted)
+		return
+	}
 	stopJSONKeepalive := func() {}
 	jsonKeepaliveStarted := false
 	defer func() { stopJSONKeepalive() }()
@@ -171,6 +184,7 @@ routeLoop:
 		}
 		switchCount := 0
 		failedAccountIDs := make(map[int64]struct{})
+		dispatchInvalidationCount := 0
 		sameAccountRetryCount := make(map[int64]int)
 		var lastFailoverErr *service.UpstreamFailoverError
 
@@ -207,8 +221,24 @@ routeLoop:
 				if h.handleAccountShareModeSelectionError(c, err, streamStarted) {
 					return
 				}
+				if dispatchInvalidationCount > 0 {
+					if service.IsOpenAIAccountSelectionExhausted(err) {
+						if routeCursor.skipToNext("account_revalidation_exhausted", reqLog, zap.Error(err)) {
+							continue routeLoop
+						}
+						cls := classifyNoAccountErrorFromGin(c, h.gatewayService, currentAPIKey, selectionModel, parsed.Model, service.PlatformOpenAI)
+						h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
+						return
+					}
+					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Account selection is temporarily unavailable", streamStarted)
+					return
+				}
+				if !service.IsOpenAIAccountSelectionExhausted(err) {
+					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Account selection is temporarily unavailable", streamStarted)
+					return
+				}
 				if len(failedAccountIDs) == 0 {
-					if routeCursor.switchToNext(apiKey.ID, "account_select_failed", reqLog, zap.Error(err)) {
+					if service.IsOpenAIAccountSelectionExhausted(err) && routeCursor.switchToNext(apiKey.ID, "account_select_failed", reqLog, zap.Error(err)) {
 						continue routeLoop
 					}
 					cls := classifyNoAccountErrorFromGin(c, h.gatewayService, currentAPIKey, selectionModel, parsed.Model, service.PlatformOpenAI)
@@ -253,18 +283,28 @@ routeLoop:
 				return
 			}
 
-			freshAccount, accountReleaseFunc, acquired, retryRoute := h.acquireResponsesAccountSlot(c, selectionCtx, currentAPIKey.GroupID, sessionHash, service.OpenAIAccountDispatchRequirements{
+			freshAccount, accountReleaseFunc, acquired, slotDisposition := h.acquireResponsesAccountSlot(c, selectionCtx, currentAPIKey.GroupID, sessionHash, service.OpenAIAccountDispatchRequirements{
 				RequestedModel:          selectionModel,
 				RequiredTransport:       service.OpenAIUpstreamTransportHTTPSSE,
 				RequiredImageCapability: parsed.RequiredCapability,
 			}, selection, parsed.Stream, &streamStarted, routeCursor, reqLog)
-			if retryRoute {
+			switch slotDisposition {
+			case openAIAccountSlotRetrySameRoute:
+				if _, alreadyExcluded := failedAccountIDs[account.ID]; alreadyExcluded {
+					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Account selection retry made no progress", streamStarted)
+					return
+				}
+				failedAccountIDs[account.ID] = struct{}{}
+				dispatchInvalidationCount++
+				continue
+			case openAIAccountSlotRetryNextRoute:
 				// 当前分组并发打满，换下一条路由重试（未向客户端写任何响应）。
 				continue routeLoop
 			}
 			if !acquired {
 				return
 			}
+			dispatchInvalidationCount = 0
 			account = freshAccount
 
 			service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())

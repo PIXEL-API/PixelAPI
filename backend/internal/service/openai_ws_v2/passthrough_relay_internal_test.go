@@ -161,11 +161,13 @@ func TestRunUpstreamToClient_ErrorAndDropPaths(t *testing.T) {
 		drop.Store(false)
 		runUpstreamToClient(
 			context.Background(),
+			context.Background(),
 			newPassthroughTestFrameConn(nil, true),
 			func(_ coderws.MessageType, _ []byte) error { return nil },
 			time.Now(),
 			time.Now,
 			&relayState{},
+			nil,
 			nil,
 			nil,
 			nil,
@@ -189,6 +191,7 @@ func TestRunUpstreamToClient_ErrorAndDropPaths(t *testing.T) {
 		drop.Store(false)
 		runUpstreamToClient(
 			context.Background(),
+			context.Background(),
 			newPassthroughTestFrameConn([]passthroughTestFrame{
 				{msgType: coderws.MessageText, payload: []byte(`{"type":"response.output_text.delta","delta":"x"}`)},
 			}, true),
@@ -196,6 +199,7 @@ func TestRunUpstreamToClient_ErrorAndDropPaths(t *testing.T) {
 			time.Now(),
 			time.Now,
 			&relayState{},
+			nil,
 			nil,
 			nil,
 			nil,
@@ -219,6 +223,7 @@ func TestRunUpstreamToClient_ErrorAndDropPaths(t *testing.T) {
 		dropped := &atomic.Int64{}
 		runUpstreamToClient(
 			context.Background(),
+			context.Background(),
 			newPassthroughTestFrameConn([]passthroughTestFrame{
 				{
 					msgType: coderws.MessageText,
@@ -229,6 +234,7 @@ func TestRunUpstreamToClient_ErrorAndDropPaths(t *testing.T) {
 			time.Now(),
 			time.Now,
 			&relayState{},
+			nil,
 			nil,
 			nil,
 			nil,

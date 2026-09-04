@@ -538,6 +538,15 @@ type opsCaptureWriter struct {
 	buf   bytes.Buffer
 }
 
+// Unwrap lets net/http.ResponseController reach the original server writer
+// through this middleware wrapper (for example, to set request read deadlines).
+func (w *opsCaptureWriter) Unwrap() http.ResponseWriter {
+	if w == nil || w.ResponseWriter == nil {
+		return nil
+	}
+	return w.ResponseWriter
+}
+
 const opsCaptureWriterLimit = 64 * 1024
 
 var opsCaptureWriterPool = sync.Pool{

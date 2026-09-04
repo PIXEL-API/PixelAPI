@@ -693,6 +693,10 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 			}
 		}
 	}
+	// GrokMediaRequestInfo may own decoded data URIs or multipart uploads. Keep
+	// only scalar billing fields alive while the upstream response is read.
+	requestModel := requestInfo.Model
+	usageRequest := newGrokMediaUsageRequestSnapshot(requestInfo)
 	body, contentType, err = sanitizeGrokMediaForwardBody(endpoint, body, contentType)
 	if err != nil {
 		return nil, err
@@ -739,10 +743,10 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 	}
+	resp.Request = nil
 	defer func() { _ = resp.Body.Close() }()
 
 	requestIDHeader := firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("xai-request-id"))
-	requestModel := requestInfo.Model
 	if !isOpenAIUpstreamSuccessStatus(resp.StatusCode) {
 		if !isOpenAIUpstreamErrorStatus(resp.StatusCode) {
 			return rejectUnexpectedOpenAIUpstreamStatus(
@@ -761,7 +765,7 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 	if err != nil {
 		return nil, err
 	}
-	usage, err := grokMediaUsageFromResponse(endpoint, requestInfo, respBody)
+	usage, err := grokMediaUsageFromResponseSnapshot(endpoint, usageRequest, respBody)
 	if err != nil {
 		safeMessage := sanitizeUpstreamErrorMessage(err.Error())
 		setOpsUpstreamError(c, resp.StatusCode, safeMessage, "")
@@ -1275,9 +1279,33 @@ type grokMediaUsageMetadata struct {
 	VideoDurationSeconds int
 }
 
+type grokMediaUsageRequestSnapshot struct {
+	Size            string
+	SizeTier        string
+	Resolution      string
+	DurationSeconds int
+}
+
+func newGrokMediaUsageRequestSnapshot(requestInfo GrokMediaRequestInfo) grokMediaUsageRequestSnapshot {
+	return grokMediaUsageRequestSnapshot{
+		Size:            requestInfo.Size,
+		SizeTier:        requestInfo.SizeTier,
+		Resolution:      requestInfo.Resolution,
+		DurationSeconds: requestInfo.DurationSeconds,
+	}
+}
+
 func grokMediaUsageFromResponse(
 	endpoint GrokMediaEndpoint,
 	requestInfo GrokMediaRequestInfo,
+	responseBody []byte,
+) (grokMediaUsageMetadata, error) {
+	return grokMediaUsageFromResponseSnapshot(endpoint, newGrokMediaUsageRequestSnapshot(requestInfo), responseBody)
+}
+
+func grokMediaUsageFromResponseSnapshot(
+	endpoint GrokMediaEndpoint,
+	requestInfo grokMediaUsageRequestSnapshot,
 	responseBody []byte,
 ) (grokMediaUsageMetadata, error) {
 	usage, _ := extractOpenAIUsageFromJSONBytes(responseBody)

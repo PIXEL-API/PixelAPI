@@ -2,9 +2,11 @@ package repository
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
@@ -99,4 +101,28 @@ func TestIsCleanableSlotKey(t *testing.T) {
 	for _, key := range untouchable {
 		require.False(t, isCleanableSlotKey(key), "key %s 不得清理", key)
 	}
+}
+
+func TestGetAccountsLoadBatchDoesNotLetMissingWaitCounterMaskLaterRedisError(t *testing.T) {
+	cache, _ := newRuntimeLeaseCacheTest(t, 15*time.Minute)
+	ctx := context.Background()
+	const (
+		accountWithMissingWaitCounter int64 = 41
+		accountWithInvalidSlotKey     int64 = 42
+	)
+
+	// The first account's missing wait counter makes GET return redis.Nil. The
+	// second account must still surface its slot-key WRONGTYPE error instead of
+	// being reported as idle capacity.
+	require.NoError(t, cache.rdb.Set(ctx, accountSlotKey(accountWithInvalidSlotKey), "not-a-sorted-set", 0).Err())
+
+	load, err := cache.GetAccountsLoadBatch(ctx, []service.AccountWithConcurrency{
+		{ID: accountWithMissingWaitCounter, MaxConcurrency: 1},
+		{ID: accountWithInvalidSlotKey, MaxConcurrency: 1},
+	})
+
+	require.Error(t, err)
+	require.Nil(t, load)
+	require.Contains(t, err.Error(), "account 42")
+	require.Contains(t, strings.ToLower(err.Error()), "wrongtype")
 }

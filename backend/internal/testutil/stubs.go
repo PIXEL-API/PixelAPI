@@ -118,6 +118,9 @@ var _ service.SessionLimitCache = StubSessionLimitCache{}
 
 type StubSessionLimitCache struct{}
 
+func (c StubSessionLimitCache) CanRegisterSession(_ context.Context, _ int64, _ string, _ int, _ time.Duration) (bool, error) {
+	return true, nil
+}
 func (c StubSessionLimitCache) RegisterSession(_ context.Context, _ int64, _ string, _ int, _ time.Duration) (bool, error) {
 	return true, nil
 }

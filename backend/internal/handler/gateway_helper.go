@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"net/http"
@@ -211,6 +212,20 @@ func (e *WaitQueueFullError) Error() string {
 	return "Too many pending requests, please retry later"
 }
 
+// isAccountSlotCapacityError deliberately recognizes only a timeout produced by
+// the local account-slot wait loop. Redis/cache failures, request cancellation,
+// routing-budget exhaustion, and response-writer errors are infrastructure or
+// lifecycle failures and must never be used to advance a multi-group route.
+func isSlotCapacityError(err error, slotType string) bool {
+	var concurrencyErr *ConcurrencyError
+	return errors.As(err, &concurrencyErr) && concurrencyErr != nil &&
+		concurrencyErr.SlotType == slotType && concurrencyErr.IsTimeout
+}
+
+func isAccountSlotCapacityError(err error) bool {
+	return isSlotCapacityError(err, "account")
+}
+
 // ConcurrencyHelper provides common concurrency slot management for gateway handlers
 type ConcurrencyHelper struct {
 	concurrencyService *service.ConcurrencyService
@@ -247,20 +262,14 @@ func wrapReleaseOnDone(ctx context.Context, releaseFunc func()) func() {
 		return nil
 	}
 	var once sync.Once
-	var stop func() bool
-
-	release := func() {
-		once.Do(func() {
-			if stop != nil {
-				_ = stop()
-			}
-			releaseFunc()
-		})
+	releaseOnce := func() {
+		once.Do(releaseFunc)
 	}
-
-	stop = context.AfterFunc(ctx, release)
-
-	return release
+	stop := context.AfterFunc(ctx, releaseOnce)
+	return func() {
+		_ = stop()
+		releaseOnce()
+	}
 }
 
 // wrapAccountSelectionReleaseOnDone keeps account-share runtime leases alive
@@ -512,6 +521,9 @@ func (h *ConcurrencyHelper) waitForSlotWithPingTimeout(c *gin.Context, slotType 
 	for {
 		select {
 		case <-ctx.Done():
+			if cause := context.Cause(c.Request.Context()); cause != nil {
+				return nil, cause
+			}
 			if remaining, enabled := service.OpenAIFirstOutputBudgetRemaining(c.Request.Context()); enabled && remaining <= 0 {
 				return nil, fmt.Errorf("%w: slot_type=%s", service.ErrOpenAIFirstOutputRoutingBudgetExceeded, slotType)
 			}

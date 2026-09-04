@@ -1122,6 +1122,24 @@ func TestIsModelRestricted_NoChannel(t *testing.T) {
 	require.False(t, restricted)
 }
 
+func TestChannelStrictLookupsPropagateCacheLoadFailure(t *testing.T) {
+	lookupErr := errors.New("channel cache unavailable")
+	repo := &mockChannelRepository{
+		listAllFn: func(context.Context) ([]Channel, error) {
+			return nil, lookupErr
+		},
+	}
+	svc := newTestChannelService(repo)
+
+	mapping, err := svc.ResolveChannelMappingChecked(context.Background(), 10, "gpt-5.1")
+	require.ErrorIs(t, err, lookupErr)
+	require.Equal(t, "gpt-5.1", mapping.MappedModel)
+
+	restricted, err := svc.IsModelRestrictedChecked(context.Background(), 10, "gpt-5.1")
+	require.ErrorIs(t, err, lookupErr)
+	require.False(t, restricted)
+}
+
 func TestIsModelRestricted_RestrictDisabled(t *testing.T) {
 	ch := Channel{
 		ID:             1,
