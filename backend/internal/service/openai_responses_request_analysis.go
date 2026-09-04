@@ -16,6 +16,19 @@ var (
 	ErrOpenAIResponsesInvalidStreamFieldType = errors.New("invalid stream field type")
 )
 
+// OpenAIResponsesDuplicateFieldError rejects ambiguous object members before
+// different JSON parsers can apply conflicting first-value/last-value rules.
+type OpenAIResponsesDuplicateFieldError struct {
+	Field string
+}
+
+func (e *OpenAIResponsesDuplicateFieldError) Error() string {
+	if e == nil || strings.TrimSpace(e.Field) == "" {
+		return "duplicate request field"
+	}
+	return "duplicate request field: " + e.Field
+}
+
 type OpenAIResponsesRequestAnalysis struct {
 	Body                         []byte
 	Model                        string
@@ -49,46 +62,31 @@ func AnalyzeOpenAIResponsesRequest(body []byte) (*OpenAIResponsesRequestAnalysis
 
 	jsonView := unsafe.String(unsafe.SliceData(body), len(body))
 	root := gjson.Parse(jsonView)
+	if duplicateField, duplicate := findDuplicateOpenAIResponsesJSONField(root); duplicate {
+		return nil, &OpenAIResponsesDuplicateFieldError{Field: duplicateField}
+	}
 	var modelResult, streamResult, promptCacheKeyResult, previousResponseIDResult gjson.Result
 	var inputResult, instructionsResult, toolsResult, functionsResult, messagesResult gjson.Result
 	root.ForEach(func(key, value gjson.Result) bool {
 		switch key.Str {
 		case "model":
-			if !modelResult.Exists() {
-				modelResult = value
-			}
+			modelResult = value
 		case "stream":
-			if !streamResult.Exists() {
-				streamResult = value
-			}
+			streamResult = value
 		case "prompt_cache_key":
-			if !promptCacheKeyResult.Exists() {
-				promptCacheKeyResult = value
-			}
+			promptCacheKeyResult = value
 		case "previous_response_id":
-			if !previousResponseIDResult.Exists() {
-				previousResponseIDResult = value
-			}
+			previousResponseIDResult = value
 		case "input":
-			if !inputResult.Exists() {
-				inputResult = value
-			}
+			inputResult = value
 		case "instructions":
-			if !instructionsResult.Exists() {
-				instructionsResult = value
-			}
+			instructionsResult = value
 		case "tools":
-			if !toolsResult.Exists() {
-				toolsResult = value
-			}
+			toolsResult = value
 		case "functions":
-			if !functionsResult.Exists() {
-				functionsResult = value
-			}
+			functionsResult = value
 		case "messages":
-			if !messagesResult.Exists() {
-				messagesResult = value
-			}
+			messagesResult = value
 		}
 		return true
 	})
@@ -98,12 +96,14 @@ func AnalyzeOpenAIResponsesRequest(body []byte) (*OpenAIResponsesRequestAnalysis
 	if streamResult.Exists() && streamResult.Type != gjson.True && streamResult.Type != gjson.False {
 		return nil, ErrOpenAIResponsesInvalidStreamFieldType
 	}
-	promptCacheKey := strings.TrimSpace(promptCacheKeyResult.String())
-	previousResponseID := strings.TrimSpace(previousResponseIDResult.String())
+	// Routing and billing metadata can outlive this raw view. Copy only those
+	// scalars so a queued usage record cannot retain the complete request body.
+	promptCacheKey := strings.Clone(strings.TrimSpace(promptCacheKeyResult.String()))
+	previousResponseID := strings.Clone(strings.TrimSpace(previousResponseIDResult.String()))
 
 	return &OpenAIResponsesRequestAnalysis{
 		Body:                         body,
-		Model:                        modelResult.String(),
+		Model:                        strings.Clone(modelResult.String()),
 		ModelExists:                  modelResult.Exists(),
 		Stream:                       streamResult.Bool(),
 		PromptCacheKey:               promptCacheKey,
@@ -116,6 +116,38 @@ func AnalyzeOpenAIResponsesRequest(body []byte) (*OpenAIResponsesRequestAnalysis
 		messagesResult:               messagesResult,
 		topLevelResultsReady:         true,
 	}, nil
+}
+
+func findDuplicateOpenAIResponsesJSONField(value gjson.Result) (string, bool) {
+	if value.IsObject() {
+		seen := make(map[string]struct{})
+		duplicateField := ""
+		value.ForEach(func(key, child gjson.Result) bool {
+			if _, duplicate := seen[key.Str]; duplicate {
+				duplicateField = key.Str
+				return false
+			}
+			seen[key.Str] = struct{}{}
+			if nestedField, duplicate := findDuplicateOpenAIResponsesJSONField(child); duplicate {
+				duplicateField = nestedField
+				return false
+			}
+			return true
+		})
+		return duplicateField, duplicateField != ""
+	}
+	if value.IsArray() {
+		duplicateField := ""
+		value.ForEach(func(_, child gjson.Result) bool {
+			if nestedField, duplicate := findDuplicateOpenAIResponsesJSONField(child); duplicate {
+				duplicateField = nestedField
+				return false
+			}
+			return true
+		})
+		return duplicateField, duplicateField != ""
+	}
+	return "", false
 }
 
 func AnalyzeOpenAIResponsesSessionRequest(body []byte) *OpenAIResponsesRequestAnalysis {
@@ -131,7 +163,7 @@ func (a *OpenAIResponsesRequestAnalysis) WithBodyAndModel(body []byte, model str
 	}
 	next := *a
 	next.Body = body
-	next.Model = strings.TrimSpace(model)
+	next.Model = strings.Clone(strings.TrimSpace(model))
 	next.ModelExists = next.Model != ""
 	next.contentSessionSeed = ""
 	next.contentSeedReady = false

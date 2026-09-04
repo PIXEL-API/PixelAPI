@@ -562,6 +562,19 @@ type AccountLoadInfo struct {
 	LoadRate           int // 0-100+ (percent)
 }
 
+// accountHasAvailableSlotSnapshot uses the actual running-slot count rather
+// than LoadRate, which also includes queued requests. A waiting request must
+// not hide an otherwise free execution slot from the scheduler.
+func accountHasAvailableSlotSnapshot(account *Account, loadInfo *AccountLoadInfo) bool {
+	if account == nil {
+		return false
+	}
+	if account.Concurrency <= 0 || loadInfo == nil {
+		return true
+	}
+	return loadInfo.CurrentConcurrency < account.Concurrency
+}
+
 type UserLoadInfo struct {
 	UserID             int64
 	CurrentConcurrency int
@@ -799,9 +812,8 @@ func (s *ConcurrencyService) IncrementWaitCount(ctx context.Context, userID int6
 
 	result, err := s.cache.IncrementWaitCount(ctx, userID, maxWait)
 	if err != nil {
-		// On error, allow the request to proceed (fail open)
 		logger.LegacyPrintf("service.concurrency", "Warning: increment wait count failed for user %d: %v", userID, err)
-		return true, nil
+		return false, err
 	}
 	return result, nil
 }
@@ -831,7 +843,7 @@ func (s *ConcurrencyService) IncrementAccountWaitCount(ctx context.Context, acco
 	result, err := s.cache.IncrementAccountWaitCount(ctx, accountID, maxWait)
 	if err != nil {
 		logger.LegacyPrintf("service.concurrency", "Warning: increment wait count failed for account %d: %v", accountID, err)
-		return true, nil
+		return false, err
 	}
 	return result, nil
 }

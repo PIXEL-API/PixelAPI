@@ -90,12 +90,26 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 
 	searchID := strings.TrimSpace(gjson.GetBytes(body, "id").String())
 	sessionHash := h.gatewayService.GenerateSessionHashWithFallback(c, body, searchID)
-	routeCursor := newAPIKeyGroupRouteCursor(apiKey)
+	routeCursor, _, routeErr := newAPIKeyGroupRouteCursorWithModeIsolation(
+		c.Request.Context(),
+		apiKey,
+		h.gatewayService.IsAccountShareModeGroup,
+		true,
+	)
+	if routeErr != nil {
+		if failoverClientGone(c) {
+			return
+		}
+		reqLog.Error("api_key_group_route.mode_classification_failed", zap.Error(routeErr))
+		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Account routing service is temporarily unavailable")
+		return
+	}
 	if _, ok := routeCursor.current(); !ok {
 		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "No available API key group routes")
 		return
 	}
 	failedAccountIDs := make(map[int64]struct{})
+	dispatchInvalidationCount := 0
 	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
 	switchCount := 0
@@ -114,6 +128,7 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 		if currentAPIKey.Group == nil || currentAPIKey.Group.Platform != service.PlatformOpenAI {
 			if routeCursor.skipToNext("alpha_search_non_openai_group", reqLog) {
 				failedAccountIDs = make(map[int64]struct{})
+				dispatchInvalidationCount = 0
 				sameAccountRetryCount = make(map[int64]int)
 				switchCount = 0
 				lastFailoverErr = nil
@@ -128,6 +143,7 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 			retry, termErr := routeBillingGate.skipOrTerminate(routeCursor, subErr, "route_subscription_unavailable", reqLog)
 			if retry {
 				failedAccountIDs = make(map[int64]struct{})
+				dispatchInvalidationCount = 0
 				sameAccountRetryCount = make(map[int64]int)
 				switchCount = 0
 				lastFailoverErr = nil
@@ -145,6 +161,7 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 			retry, termErr := routeBillingGate.skipOrTerminate(routeCursor, err, "route_billing_ineligible", reqLog)
 			if retry {
 				failedAccountIDs = make(map[int64]struct{})
+				dispatchInvalidationCount = 0
 				sameAccountRetryCount = make(map[int64]int)
 				switchCount = 0
 				lastFailoverErr = nil
@@ -181,6 +198,27 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 			if selectErr != nil && h.handleAccountShareModeSelectionError(c, selectErr, streamStarted) {
 				return
 			}
+			if selectErr != nil && dispatchInvalidationCount > 0 {
+				if service.IsOpenAIAccountSelectionExhausted(selectErr) {
+					if routeCursor.skipToNext("alpha_search_account_revalidation_exhausted", reqLog, zap.Error(selectErr)) {
+						failedAccountIDs = make(map[int64]struct{})
+						dispatchInvalidationCount = 0
+						sameAccountRetryCount = make(map[int64]int)
+						switchCount = 0
+						lastFailoverErr = nil
+						continue
+					}
+					cls := classifyNoAccountErrorFromGin(c, h.gatewayService, currentAPIKey, selectionModel, requestedModel, service.PlatformOpenAI)
+					h.errorResponse(c, cls.Status, cls.ErrType, cls.Message)
+					return
+				}
+				h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Account selection is temporarily unavailable")
+				return
+			}
+			if selectErr != nil && !service.IsOpenAIAccountSelectionExhausted(selectErr) {
+				h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Account selection is temporarily unavailable")
+				return
+			}
 			if lastFailoverErr != nil && routeCursor.hasNext() && shouldSwitchAPIKeyGroupRoute(lastFailoverErr) && routeCursor.switchToNext(currentAPIKey.ID, "alpha_search_account_selection_exhausted", reqLog) {
 				failedAccountIDs = make(map[int64]struct{})
 				sameAccountRetryCount = make(map[int64]int)
@@ -189,6 +227,14 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 				continue
 			}
 			if len(failedAccountIDs) == 0 {
+				if selectErr != nil && routeCursor.switchToNext(currentAPIKey.ID, "alpha_search_account_select_failed", reqLog, zap.Error(selectErr)) {
+					failedAccountIDs = make(map[int64]struct{})
+					dispatchInvalidationCount = 0
+					sameAccountRetryCount = make(map[int64]int)
+					switchCount = 0
+					lastFailoverErr = nil
+					continue
+				}
 				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, currentAPIKey, selectionModel, requestedModel, service.PlatformOpenAI)
 				h.errorResponse(c, cls.Status, cls.ErrType, cls.Message)
 				return
@@ -203,13 +249,23 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 
 		account := selection.Account
 		setOpsSelectedAccount(c, account.ID, account.Platform)
-		freshAccount, accountRelease, acquired, retryRoute := h.acquireResponsesAccountSlot(c, selectionCtx, currentAPIKey.GroupID, sessionHash, service.OpenAIAccountDispatchRequirements{
+		freshAccount, accountRelease, acquired, slotDisposition := h.acquireResponsesAccountSlot(c, selectionCtx, currentAPIKey.GroupID, sessionHash, service.OpenAIAccountDispatchRequirements{
 			RequestedModel:    selectionModel,
 			RequiredTransport: service.OpenAIUpstreamTransportHTTPSSE,
 		}, selection, false, &streamStarted, routeCursor, reqLog)
-		if retryRoute {
+		switch slotDisposition {
+		case openAIAccountSlotRetrySameRoute:
+			if _, alreadyExcluded := failedAccountIDs[account.ID]; alreadyExcluded {
+				h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Account selection retry made no progress")
+				return
+			}
+			failedAccountIDs[account.ID] = struct{}{}
+			dispatchInvalidationCount++
+			continue
+		case openAIAccountSlotRetryNextRoute:
 			// 当前分组并发打满，换下一条路由重试（未向客户端写任何响应）。
 			failedAccountIDs = make(map[int64]struct{})
+			dispatchInvalidationCount = 0
 			sameAccountRetryCount = make(map[int64]int)
 			switchCount = 0
 			lastFailoverErr = nil
@@ -218,6 +274,7 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 		if !acquired {
 			return
 		}
+		dispatchInvalidationCount = 0
 		account = freshAccount
 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
 		writerSizeBeforeForward := c.Writer.Size()

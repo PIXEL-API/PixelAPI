@@ -33,6 +33,10 @@ func normalizeCodexCallID(id string) string {
 }
 
 var codexModelMap = map[string]string{
+	// gpt-6-astra is an upstream Codex model exposed by the channel catalog.
+	// Keep the identity mapping so OAuth normalization does not silently
+	// downgrade it to the legacy unknown-model fallback (gpt-5.4).
+	"gpt-6-astra":                "gpt-6-astra",
 	"gpt-5.6-sol":                "gpt-5.6-sol",
 	"gpt-5.6-terra":              "gpt-5.6-terra",
 	"gpt-5.6-luna":               "gpt-5.6-luna",
@@ -85,6 +89,7 @@ var codexVersionModelPrefixes = []struct {
 	prefix string
 	target string
 }{
+	{prefix: "gpt-6-astra", target: "gpt-6-astra"},
 	{prefix: "gpt-5.6-sol", target: "gpt-5.6-sol"},
 	{prefix: "gpt-5.6-terra", target: "gpt-5.6-terra"},
 	{prefix: "gpt-5.6-luna", target: "gpt-5.6-luna"},
@@ -529,6 +534,16 @@ func normalizeCodexModel(model string) string {
 	}
 	if mapped, ok := normalizeKnownCodexModel(model); ok {
 		return mapped
+	}
+	// New OpenAI/Codex model IDs are introduced through the channel pricing
+	// catalog before this compatibility table is updated. Preserve their
+	// canonical ID so the upstream can validate it instead of silently
+	// downgrading a newly configured model to gpt-5.4.
+	if modelID := lastOpenAIModelSegment(model); modelID != "" {
+		if canonical := canonicalizeOpenAIModelAliasSpelling(modelID); canonical != "" &&
+			(strings.HasPrefix(canonical, "gpt-") || strings.HasPrefix(canonical, "codex-")) {
+			return canonical
+		}
 	}
 	return "gpt-5.4"
 }

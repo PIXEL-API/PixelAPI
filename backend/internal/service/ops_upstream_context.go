@@ -211,6 +211,12 @@ func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 		}
 	}
 
+	// Error snapshots outlive forwarding and may wait in the asynchronous Ops
+	// queue. A trimmed string can still reference a much larger request/response;
+	// keep only the bytes represented by each captured field.
+	ev.UpstreamRequestBody = strings.Clone(ev.UpstreamRequestBody)
+	ev.UpstreamResponseBody = strings.Clone(ev.UpstreamResponseBody)
+	ev.Detail = strings.Clone(ev.Detail)
 	evCopy := ev
 	existing = append(existing, &evCopy)
 	c.Set(OpsUpstreamErrorsKey, existing)

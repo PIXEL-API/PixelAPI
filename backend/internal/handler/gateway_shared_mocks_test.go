@@ -12,10 +12,11 @@ import (
 // （原定义在 gateway_helper_fastpath_test.go / gateway_handler_account_share_mode_context_test.go，
 // 随 billing intent 机制删除后移植到本文件。）
 type concurrencyCacheMock struct {
-	acquireUserSlotFn    func(ctx context.Context, userID int64, maxConcurrency int, requestID string) (bool, error)
-	acquireAccountSlotFn func(ctx context.Context, accountID int64, maxConcurrency int, requestID string) (bool, error)
-	releaseUserCalled    int32
-	releaseAccountCalled int32
+	acquireUserSlotFn           func(ctx context.Context, userID int64, maxConcurrency int, requestID string) (bool, error)
+	acquireAccountSlotFn        func(ctx context.Context, accountID int64, maxConcurrency int, requestID string) (bool, error)
+	incrementAccountWaitCountFn func(ctx context.Context, accountID int64, maxWait int) (bool, error)
+	releaseUserCalled           int32
+	releaseAccountCalled        int32
 }
 
 func (m *concurrencyCacheMock) AcquireAccountSlot(ctx context.Context, accountID int64, maxConcurrency int, requestID string) (bool, error) {
@@ -43,6 +44,9 @@ func (m *concurrencyCacheMock) GetAccountConcurrencyBatch(ctx context.Context, a
 }
 
 func (m *concurrencyCacheMock) IncrementAccountWaitCount(ctx context.Context, accountID int64, maxWait int) (bool, error) {
+	if m.incrementAccountWaitCountFn != nil {
+		return m.incrementAccountWaitCountFn(ctx, accountID, maxWait)
+	}
 	return true, nil
 }
 

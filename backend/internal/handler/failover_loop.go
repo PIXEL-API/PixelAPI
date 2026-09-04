@@ -64,6 +64,23 @@ func NewFailoverState(maxSwitches int, hasBoundSession bool) *FailoverState {
 	}
 }
 
+// mergeAccountExclusionIDs keeps local scheduling rejections separate from
+// upstream failover state while presenting one immutable exclusion snapshot
+// to the selector.
+func mergeAccountExclusionIDs(primary, additional map[int64]struct{}) map[int64]struct{} {
+	if len(additional) == 0 {
+		return primary
+	}
+	merged := make(map[int64]struct{}, len(primary)+len(additional))
+	for accountID := range primary {
+		merged[accountID] = struct{}{}
+	}
+	for accountID := range additional {
+		merged[accountID] = struct{}{}
+	}
+	return merged
+}
+
 // HandleFailoverError 处理 UpstreamFailoverError，返回下一步动作。
 // 包含：缓存计费判断、同账号重试、临时封禁、切换计数、Antigravity 延时。
 func (s *FailoverState) HandleFailoverError(

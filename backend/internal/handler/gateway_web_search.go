@@ -168,9 +168,22 @@ func (h *GatewayHandler) WebSearch(c *gin.Context) {
 
 		release, acquireOK, acquireErr := h.acquireWebSearchAccountSlot(c, selected)
 		if !acquireOK {
-			if attempt == 0 && acquireErr != nil {
-				h.handleConcurrencyError(c, acquireErr, "account", false)
-				return
+			if acquireErr != nil {
+				if failoverClientGone(c) {
+					return
+				}
+				if errors.Is(acquireErr, service.ErrOpenAIFirstOutputRoutingBudgetExceeded) {
+					h.handleConcurrencyError(c, acquireErr, "account", false)
+					return
+				}
+				if !isAccountSlotCapacityError(acquireErr) {
+					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Account concurrency service is temporarily unavailable", false)
+					return
+				}
+				if attempt == 0 {
+					h.handleConcurrencyError(c, acquireErr, "account", false)
+					return
+				}
 			}
 			failedAccounts[selected.Account.ID] = struct{}{}
 			continue
@@ -293,6 +306,7 @@ func (h *GatewayHandler) acquireWebSearchAccountSlot(
 			zap.Int64("account_id", account.ID),
 			zap.Error(waitErr),
 		)
+		return nil, false, fmt.Errorf("increment web search account wait count: %w", waitErr)
 	} else if !canWait {
 		return nil, false, nil
 	} else {

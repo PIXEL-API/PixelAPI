@@ -147,6 +147,7 @@ type channelCache struct {
 	// 冷路径（CRUD 操作）
 	byID     map[int64]*Channel
 	loadedAt time.Time
+	loadErr  error
 }
 
 // ChannelMappingResult 渠道映射查找结果
@@ -321,12 +322,13 @@ func expandMappingToCache(cache *channelCache, ch *Channel, gid int64, platform 
 
 // storeErrorCache 存入短 TTL 空缓存，防止 DB 错误后紧密重试。
 // 通过回退 loadedAt 使剩余 TTL = channelErrorTTL。
-func (s *ChannelService) storeErrorCache(generation uint64) {
+func (s *ChannelService) storeErrorCache(generation uint64, loadErr error) {
 	if s.cacheGeneration.Load() != generation {
 		return
 	}
 	errorCache := newEmptyChannelCache()
 	errorCache.loadedAt = time.Now().Add(-(channelCacheTTL - channelErrorTTL))
+	errorCache.loadErr = loadErr
 	s.cache.Store(errorCache)
 }
 
@@ -354,7 +356,7 @@ func (s *ChannelService) fetchChannelData(ctx context.Context, generation uint64
 	channels, err := s.repo.ListAll(ctx)
 	if err != nil {
 		slog.Warn("failed to build channel cache", "error", err)
-		s.storeErrorCache(generation)
+		s.storeErrorCache(generation, err)
 		return nil, nil, fmt.Errorf("list all channels: %w", err)
 	}
 
@@ -368,7 +370,7 @@ func (s *ChannelService) fetchChannelData(ctx context.Context, generation uint64
 		groupPlatforms, err = s.repo.GetGroupPlatforms(ctx, allGroupIDs)
 		if err != nil {
 			slog.Warn("failed to load group platforms for channel cache", "error", err)
-			s.storeErrorCache(generation)
+			s.storeErrorCache(generation, err)
 			return nil, nil, fmt.Errorf("get group platforms: %w", err)
 		}
 	}
@@ -529,15 +531,33 @@ func (s *ChannelService) lookupGroupChannel(ctx context.Context, groupID int64) 
 	if err != nil {
 		return nil, err
 	}
+	return lookupGroupChannelFromCache(cache, groupID), nil
+}
+
+// lookupGroupChannelChecked preserves a cached load failure for strict
+// continuation validation. The ordinary lookup intentionally keeps the legacy
+// fail-open behavior during the short error-cache window.
+func (s *ChannelService) lookupGroupChannelChecked(ctx context.Context, groupID int64) (*channelLookup, error) {
+	cache, err := s.loadCache(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if cache.loadErr != nil {
+		return nil, cache.loadErr
+	}
+	return lookupGroupChannelFromCache(cache, groupID), nil
+}
+
+func lookupGroupChannelFromCache(cache *channelCache, groupID int64) *channelLookup {
 	ch, ok := cache.channelByGroupID[groupID]
 	if !ok || !ch.IsActive() {
-		return nil, nil
+		return nil
 	}
 	return &channelLookup{
 		cache:    cache,
 		channel:  ch,
 		platform: cache.groupPlatform[groupID],
-	}, nil
+	}
 }
 
 // GetChannelModelPricing 获取指定分组+模型的渠道定价（热路径 O(1)）。
@@ -568,11 +588,26 @@ func (s *ChannelService) ResolveChannelMapping(ctx context.Context, groupID int6
 	lk, err := s.lookupGroupChannel(ctx, groupID)
 	if err != nil {
 		slog.Warn("failed to load channel cache for mapping", "group_id", groupID, "error", err)
+		return ChannelMappingResult{MappedModel: model}
 	}
 	if lk == nil {
 		return ChannelMappingResult{MappedModel: model}
 	}
 	return resolveMapping(lk, groupID, model)
+}
+
+// ResolveChannelMappingChecked is the strict mapping lookup used by
+// continuation validation, where a cache failure must not be mistaken for an
+// unrestricted channel.
+func (s *ChannelService) ResolveChannelMappingChecked(ctx context.Context, groupID int64, model string) (ChannelMappingResult, error) {
+	lk, err := s.lookupGroupChannelChecked(ctx, groupID)
+	if err != nil {
+		return ChannelMappingResult{MappedModel: model}, err
+	}
+	if lk == nil {
+		return ChannelMappingResult{MappedModel: model}, nil
+	}
+	return resolveMapping(lk, groupID, model), nil
 }
 
 // IsModelRestricted 检查模型是否被渠道限制。
@@ -582,11 +617,26 @@ func (s *ChannelService) IsModelRestricted(ctx context.Context, groupID int64, m
 	lk, err := s.lookupGroupChannel(ctx, groupID)
 	if err != nil {
 		slog.Warn("failed to load channel cache for model restriction check", "group_id", groupID, "error", err)
+		return false
 	}
 	if lk == nil {
 		return false
 	}
 	return checkRestricted(lk, groupID, model)
+}
+
+// IsModelRestrictedChecked is the strict variant used by continuation owner
+// validation. Callers can distinguish an unrestricted channel from a channel
+// lookup failure instead of silently treating infrastructure errors as allow.
+func (s *ChannelService) IsModelRestrictedChecked(ctx context.Context, groupID int64, model string) (bool, error) {
+	lk, err := s.lookupGroupChannelChecked(ctx, groupID)
+	if err != nil {
+		return false, err
+	}
+	if lk == nil {
+		return false, nil
+	}
+	return checkRestricted(lk, groupID, model), nil
 }
 
 // ResolveChannelMappingAndRestrict 解析渠道映射。

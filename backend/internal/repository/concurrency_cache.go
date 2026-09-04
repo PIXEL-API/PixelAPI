@@ -626,6 +626,7 @@ func (c *concurrencyCache) GetAccountsLoadBatch(ctx context.Context, accounts []
 	type accountCmds struct {
 		id             int64
 		maxConcurrency int
+		cleanupCmd     *redis.IntCmd
 		zcardCmd       *redis.IntCmd
 		getCmd         *redis.StringCmd
 	}
@@ -633,27 +634,34 @@ func (c *concurrencyCache) GetAccountsLoadBatch(ctx context.Context, accounts []
 	for _, acc := range accounts {
 		slotKey := accountSlotKeyPrefix + strconv.FormatInt(acc.ID, 10)
 		waitKey := accountWaitKeyPrefix + strconv.FormatInt(acc.ID, 10)
-		pipe.ZRemRangeByScore(ctx, slotKey, "-inf", strconv.FormatInt(cutoffTime, 10))
 		ac := accountCmds{
 			id:             acc.ID,
 			maxConcurrency: acc.MaxConcurrency,
+			cleanupCmd:     pipe.ZRemRangeByScore(ctx, slotKey, "-inf", strconv.FormatInt(cutoffTime, 10)),
 			zcardCmd:       pipe.ZCard(ctx, slotKey),
 			getCmd:         pipe.Get(ctx, waitKey),
 		}
 		cmds = append(cmds, ac)
 	}
 
-	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
-		return nil, fmt.Errorf("pipeline exec: %w", err)
-	}
+	_, execErr := pipe.Exec(ctx)
 
 	loadMap := make(map[int64]*service.AccountLoadInfo, len(accounts))
 	for _, ac := range cmds {
-		currentConcurrency := int(ac.zcardCmd.Val())
-		waitingCount := 0
-		if v, err := ac.getCmd.Int(); err == nil {
-			waitingCount = v
+		if err := ac.cleanupCmd.Err(); err != nil {
+			return nil, fmt.Errorf("cleanup expired slots for account %d: %w", ac.id, err)
 		}
+		currentConcurrencyValue, err := ac.zcardCmd.Result()
+		if err != nil {
+			return nil, fmt.Errorf("read concurrency for account %d: %w", ac.id, err)
+		}
+		waitingCount, err := ac.getCmd.Int()
+		if errors.Is(err, redis.Nil) {
+			waitingCount = 0
+		} else if err != nil {
+			return nil, fmt.Errorf("read wait count for account %d: %w", ac.id, err)
+		}
+		currentConcurrency := int(currentConcurrencyValue)
 		loadRate := 0
 		if ac.maxConcurrency > 0 {
 			loadRate = (currentConcurrency + waitingCount) * 100 / ac.maxConcurrency
@@ -664,6 +672,9 @@ func (c *concurrencyCache) GetAccountsLoadBatch(ctx context.Context, accounts []
 			WaitingCount:       waitingCount,
 			LoadRate:           loadRate,
 		}
+	}
+	if execErr != nil && !errors.Is(execErr, redis.Nil) {
+		return nil, fmt.Errorf("pipeline exec: %w", execErr)
 	}
 
 	return loadMap, nil

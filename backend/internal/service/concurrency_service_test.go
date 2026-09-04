@@ -512,14 +512,14 @@ func TestIncrementWaitCount_QueueFull(t *testing.T) {
 	require.False(t, allowed)
 }
 
-func TestIncrementWaitCount_FailOpen(t *testing.T) {
-	// Redis 错误时应 fail-open（允许请求通过）
-	cache := &stubConcurrencyCacheForTest{waitErr: errors.New("redis timeout")}
+func TestIncrementWaitCount_PropagatesCacheError(t *testing.T) {
+	cacheErr := errors.New("redis timeout")
+	cache := &stubConcurrencyCacheForTest{waitErr: cacheErr}
 	svc := NewConcurrencyService(cache)
 
 	allowed, err := svc.IncrementWaitCount(context.Background(), 1, 25)
-	require.NoError(t, err, "Redis 错误不应传播")
-	require.True(t, allowed, "Redis 错误时应 fail-open")
+	require.ErrorIs(t, err, cacheErr)
+	require.False(t, allowed, "计数失败时不能假装已经登记，否则退出时可能误减其他等待者")
 }
 
 func TestIncrementWaitCount_NilCache(t *testing.T) {
@@ -576,13 +576,14 @@ func TestGetAccountConcurrencyBatch(t *testing.T) {
 	}
 }
 
-func TestIncrementAccountWaitCount_FailOpen(t *testing.T) {
-	cache := &stubConcurrencyCacheForTest{waitErr: errors.New("redis error")}
+func TestIncrementAccountWaitCount_PropagatesCacheError(t *testing.T) {
+	cacheErr := errors.New("redis error")
+	cache := &stubConcurrencyCacheForTest{waitErr: cacheErr}
 	svc := NewConcurrencyService(cache)
 
 	allowed, err := svc.IncrementAccountWaitCount(context.Background(), 1, 10)
-	require.NoError(t, err, "Redis 错误不应传播")
-	require.True(t, allowed, "Redis 错误时应 fail-open")
+	require.ErrorIs(t, err, cacheErr)
+	require.False(t, allowed, "计数失败时不能假装已经登记，否则退出时可能误减其他等待者")
 }
 
 func TestIncrementAccountWaitCount_NilCache(t *testing.T) {

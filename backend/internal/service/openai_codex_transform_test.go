@@ -881,6 +881,11 @@ func TestApplyCodexOAuthTransform_EmptyInput(t *testing.T) {
 
 func TestNormalizeCodexModel_Gpt53(t *testing.T) {
 	cases := map[string]string{
+		"gpt-6-astra":               "gpt-6-astra",
+		"gpt-6-astra-high":          "gpt-6-astra",
+		"gpt-5.7":                   "gpt-5.7",
+		"gpt-7-next":                "gpt-7-next",
+		"codex-next":                "codex-next",
 		"gpt-5.6-sol":               "gpt-5.6-sol",
 		"gpt-5.6-sol-high":          "gpt-5.6-sol",
 		"openai/gpt-5.6-terra":      "gpt-5.6-terra",

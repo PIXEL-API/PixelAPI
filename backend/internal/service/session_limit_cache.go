@@ -13,6 +13,10 @@ import (
 //
 // 会话在空闲超时后自动过期，无需手动清理
 type SessionLimitCache interface {
+	// CanRegisterSession 在不新增或刷新会话成员的前提下检查是否可注册。
+	// 用于并发等待计划的预检，避免尚未获得账号槽位就占用会话配额。
+	CanRegisterSession(ctx context.Context, accountID int64, sessionUUID string, maxSessions int, idleTimeout time.Duration) (allowed bool, err error)
+
 	// RegisterSession 注册会话活动
 	// - 如果会话已存在，刷新其时间戳并返回 true
 	// - 如果会话不存在且活跃会话数 < maxSessions，添加新会话并返回 true

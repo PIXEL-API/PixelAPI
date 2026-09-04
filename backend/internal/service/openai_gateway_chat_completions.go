@@ -294,6 +294,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	}
 	upstreamReq = upstreamReq.WithContext(WithHTTPUpstreamProfile(upstreamReq.Context(), HTTPUpstreamProfileOpenAI))
 	resp, err := s.doOpenAIAccountUpstream(upstreamReq, proxyURL, account)
+	releaseOpenAIRequestBodyReplay(upstreamReq)
 	if err != nil {
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
 		setOpsUpstreamError(c, 0, safeErr, "")

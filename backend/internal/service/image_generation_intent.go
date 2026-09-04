@@ -48,16 +48,35 @@ func IsImageGenerationIntent(endpoint string, requestedModel string, body []byte
 	if len(body) == 0 || !gjson.ValidBytes(body) {
 		return false
 	}
-	if model := strings.TrimSpace(gjson.GetBytes(body, "model").String()); isOpenAIImageGenerationModel(model) {
-		return true
-	}
-	if openAIJSONToolsContainImageGeneration(gjson.GetBytes(body, "tools")) {
-		return true
-	}
-	if openAIJSONInputContainsImageGenTool(gjson.GetBytes(body, "input")) {
-		return true
-	}
-	return openAIJSONToolChoiceSelectsImageGeneration(gjson.GetBytes(body, "tool_choice"))
+
+	var modelSeen, toolsSeen, inputSeen, toolChoiceSeen bool
+	imageIntent := false
+	parseRawJSONView(body).ForEach(func(key, value gjson.Result) bool {
+		switch key.Str {
+		case "model":
+			if !modelSeen {
+				modelSeen = true
+				imageIntent = isOpenAIImageGenerationModel(strings.TrimSpace(value.String()))
+			}
+		case "tools":
+			if !toolsSeen {
+				toolsSeen = true
+				imageIntent = openAIJSONToolsContainImageGeneration(value)
+			}
+		case "input":
+			if !inputSeen {
+				inputSeen = true
+				imageIntent = openAIJSONInputContainsImageGenTool(value)
+			}
+		case "tool_choice":
+			if !toolChoiceSeen {
+				toolChoiceSeen = true
+				imageIntent = openAIJSONToolChoiceSelectsImageGeneration(value)
+			}
+		}
+		return !imageIntent && (!modelSeen || !toolsSeen || !inputSeen || !toolChoiceSeen)
+	})
+	return imageIntent
 }
 
 // IsExplicitImageGenerationIntent only classifies request signals that
@@ -71,13 +90,30 @@ func IsExplicitImageGenerationIntent(endpoint string, requestedModel string, bod
 	if len(body) == 0 || !gjson.ValidBytes(body) {
 		return false
 	}
-	if model := strings.TrimSpace(gjson.GetBytes(body, "model").String()); isOpenAIImageGenerationModel(model) {
-		return true
-	}
-	if openAIJSONToolsContainNativeImageGeneration(gjson.GetBytes(body, "tools")) {
-		return true
-	}
-	return openAIJSONToolChoiceSelectsExplicitImageGeneration(gjson.GetBytes(body, "tool_choice"))
+
+	var modelSeen, toolsSeen, toolChoiceSeen bool
+	imageIntent := false
+	parseRawJSONView(body).ForEach(func(key, value gjson.Result) bool {
+		switch key.Str {
+		case "model":
+			if !modelSeen {
+				modelSeen = true
+				imageIntent = isOpenAIImageGenerationModel(strings.TrimSpace(value.String()))
+			}
+		case "tools":
+			if !toolsSeen {
+				toolsSeen = true
+				imageIntent = openAIJSONToolsContainNativeImageGeneration(value)
+			}
+		case "tool_choice":
+			if !toolChoiceSeen {
+				toolChoiceSeen = true
+				imageIntent = openAIJSONToolChoiceSelectsExplicitImageGeneration(value)
+			}
+		}
+		return !imageIntent && (!modelSeen || !toolsSeen || !toolChoiceSeen)
+	})
+	return imageIntent
 }
 
 // IsImageGenerationIntentMap is the map-backed variant used after service-side request mutation.

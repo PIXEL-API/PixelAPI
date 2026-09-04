@@ -210,14 +210,15 @@ return 1
 )
 
 type schedulerCache struct {
-	rdb            *redis.Client
-	mgetChunkSize  int
-	writeChunkSize int
-	indexedBuckets map[string]struct{}
-	localMu        sync.RWMutex
-	localSnapshots map[string]schedulerLocalSnapshot
-	localBuckets   map[int64]map[string]struct{}
-	localTTL       time.Duration
+	rdb              *redis.Client
+	mgetChunkSize    int
+	writeChunkSize   int
+	indexedBuckets   map[string]struct{}
+	localMu          sync.RWMutex
+	localSnapshots   map[string]schedulerLocalSnapshot
+	localBuckets     map[int64]map[string]struct{}
+	localTTL         time.Duration
+	localLastCleanup time.Time
 }
 
 type schedulerLocalSnapshot struct {
@@ -712,8 +713,20 @@ func (c *schedulerCache) getLocalSnapshot(cacheKey, activeVersion string) ([]*se
 	now := time.Now()
 	c.localMu.RLock()
 	entry, ok := c.localSnapshots[cacheKey]
-	if !ok || entry.activeVersion != activeVersion || now.After(entry.expiresAt) {
+	if !ok || entry.activeVersion != activeVersion {
 		c.localMu.RUnlock()
+		return nil, false
+	}
+	if !now.Before(entry.expiresAt) {
+		c.localMu.RUnlock()
+		c.localMu.Lock()
+		// A concurrent cache fill may have replaced the observed entry while
+		// upgrading the lock. Only remove the snapshot that was stale above.
+		current, exists := c.localSnapshots[cacheKey]
+		if exists && current.activeVersion == entry.activeVersion && current.expiresAt.Equal(entry.expiresAt) {
+			c.removeLocalSnapshotLocked(cacheKey)
+		}
+		c.localMu.Unlock()
 		return nil, false
 	}
 	accounts := cloneAccountPointerSlice(entry.accounts)
@@ -726,10 +739,12 @@ func (c *schedulerCache) setLocalSnapshot(cacheKey, activeVersion string, accoun
 		return
 	}
 	c.localMu.Lock()
+	now := time.Now()
+	c.cleanupExpiredLocalSnapshotsLocked(now)
 	c.removeLocalSnapshotLocked(cacheKey)
 	c.localSnapshots[cacheKey] = schedulerLocalSnapshot{
 		activeVersion: activeVersion,
-		expiresAt:     time.Now().Add(c.localTTL),
+		expiresAt:     now.Add(c.localTTL),
 		accounts:      cloneAccountPointerSlice(accounts),
 	}
 	c.indexLocalSnapshotLocked(cacheKey, accounts)
@@ -752,7 +767,22 @@ func (c *schedulerCache) clearLocalSnapshots() {
 	c.localMu.Lock()
 	c.localSnapshots = make(map[string]schedulerLocalSnapshot)
 	c.localBuckets = make(map[int64]map[string]struct{})
+	c.localLastCleanup = time.Time{}
 	c.localMu.Unlock()
+}
+
+// cleanupExpiredLocalSnapshotsLocked also reclaims cold buckets that are never
+// read again. Reuse the cache TTL to bound sweep frequency on the hot path.
+func (c *schedulerCache) cleanupExpiredLocalSnapshotsLocked(now time.Time) {
+	if !c.localLastCleanup.IsZero() && now.Sub(c.localLastCleanup) < c.localTTL {
+		return
+	}
+	for cacheKey, entry := range c.localSnapshots {
+		if !now.Before(entry.expiresAt) {
+			c.removeLocalSnapshotLocked(cacheKey)
+		}
+	}
+	c.localLastCleanup = now
 }
 
 func (c *schedulerCache) updateLocalSnapshotLastUsed(updates map[int64]time.Time) {
@@ -760,6 +790,8 @@ func (c *schedulerCache) updateLocalSnapshotLastUsed(updates map[int64]time.Time
 		return
 	}
 	c.localMu.Lock()
+	now := time.Now()
+	c.cleanupExpiredLocalSnapshotsLocked(now)
 	affected := make(map[string]struct{})
 	for id := range updates {
 		for cacheKey := range c.localBuckets[id] {
@@ -769,6 +801,10 @@ func (c *schedulerCache) updateLocalSnapshotLastUsed(updates map[int64]time.Time
 	for cacheKey := range affected {
 		entry, ok := c.localSnapshots[cacheKey]
 		if !ok {
+			continue
+		}
+		if !now.Before(entry.expiresAt) {
+			c.removeLocalSnapshotLocked(cacheKey)
 			continue
 		}
 		accounts := cloneAccountPointers(entry.accounts)

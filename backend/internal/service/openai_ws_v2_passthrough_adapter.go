@@ -60,8 +60,8 @@ func (c *openAIWSCyberDetectingFrameConn) Close() error {
 //   - _, _, err: a transport error other than block.
 type openAIWSPolicyEnforcingFrameConn struct {
 	inner   openaiwsv2.FrameConn
-	filter  func(msgType coderws.MessageType, payload []byte) ([]byte, *OpenAIFastBlockedError, error)
-	onBlock func(blocked *OpenAIFastBlockedError)
+	filter  func(ctx context.Context, msgType coderws.MessageType, payload []byte) ([]byte, *OpenAIFastBlockedError, error)
+	onBlock func(ctx context.Context, blocked *OpenAIFastBlockedError)
 }
 
 var _ openaiwsv2.FrameConn = (*openAIWSPolicyEnforcingFrameConn)(nil)
@@ -85,13 +85,13 @@ func (c *openAIWSPolicyEnforcingFrameConn) ReadFrame(ctx context.Context) (coder
 	if c.filter == nil {
 		return msgType, payload, nil
 	}
-	updated, blocked, filterErr := c.filter(msgType, payload)
+	updated, blocked, filterErr := c.filter(ctx, msgType, payload)
 	if filterErr != nil {
 		return msgType, payload, filterErr
 	}
 	if blocked != nil {
 		if c.onBlock != nil {
-			c.onBlock(blocked)
+			c.onBlock(ctx, blocked)
 		}
 		return msgType, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, blocked.Message, blocked)
 	}
@@ -137,8 +137,15 @@ func newOpenAIWSPassthroughTurnLifecycleWithContext(
 }
 
 func (l *openAIWSPassthroughTurnLifecycle) begin(payload ...[]byte) (int, error) {
+	return l.beginWithContext(l.ctx, payload...)
+}
+
+func (l *openAIWSPassthroughTurnLifecycle) beginWithContext(ctx context.Context, payload ...[]byte) (int, error) {
 	if l == nil {
 		return 0, errors.New("passthrough turn lifecycle is unavailable")
+	}
+	if ctx == nil {
+		ctx = l.ctx
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -158,7 +165,7 @@ func (l *openAIWSPassthroughTurnLifecycle) begin(payload ...[]byte) (int, error)
 		payloadBytes = payload[0]
 	}
 	turnPayload := cloneOpenAIWSPayloadBytes(payloadBytes)
-	turnCtx, err := beginOpenAIWSIngressTurn(l.ctx, l.hooks, turn, turnPayload)
+	turnCtx, err := beginOpenAIWSIngressTurn(ctx, l.hooks, turn, turnPayload)
 	if err != nil {
 		return 0, err
 	}
@@ -525,6 +532,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if cleanRelayState != nil {
 		firstClientMessage = cleanedFirst
 	}
+	if previousResponseID := strings.TrimSpace(gjson.GetBytes(firstClientMessage, "previous_response_id").String()); previousResponseID != "" {
+		if validateErr := s.ValidateOpenAIWSContinuationAccount(ctx, getAPIKeyIDFromContext(c), getOpenAIEffectiveGroupID(c), previousResponseID, account.ID); validateErr != nil {
+			return newOpenAIWSContinuationClientCloseError(validateErr)
+		}
+	}
 
 	// 在 policy filter 之后再提取 service_tier 用于 billing 上报：filter
 	// 命中时 service_tier 已经从 firstClientMessage 中删除，billing 应当
@@ -658,7 +670,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		// goroutine 中被调用（passthrough_relay.go: ReadFrame loop），
 		// capturedSessionModel 的读写都发生在该 goroutine 内，因此无需
 		// 加锁/原子化。
-		filter: func(msgType coderws.MessageType, payload []byte) ([]byte, *OpenAIFastBlockedError, error) {
+		filter: func(frameCtx context.Context, msgType coderws.MessageType, payload []byte) ([]byte, *OpenAIFastBlockedError, error) {
 			if msgType != coderws.MessageText {
 				return payload, nil, nil
 			}
@@ -697,23 +709,28 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			if permissionErr := openAIWSImageGenerationPermissionError(imageGenerationAllowed, model, payload); permissionErr != nil {
 				return payload, nil, permissionErr
 			}
-			out, blocked, policyErr := s.applyOpenAIFastPolicyToWSResponseCreate(ctx, account, model, payload)
+			out, blocked, policyErr := s.applyOpenAIFastPolicyToWSResponseCreate(frameCtx, account, model, payload)
 			if policyErr == nil && blocked == nil &&
 				strings.TrimSpace(gjson.GetBytes(out, "type").String()) == "response.create" {
-				fingerprintedOut, _, _, fingerprintErr := s.applyCodexFingerprintToRawBody(ctx, c, account, out)
+				fingerprintedOut, _, _, fingerprintErr := s.applyCodexFingerprintToRawBody(frameCtx, c, account, out)
 				if fingerprintErr != nil {
 					return out, nil, fingerprintErr
 				}
 				out = fingerprintedOut
-				cleanedOut, _, _, cleanRelayErr := s.applyOpenAICleanRelayToRawBody(ctx, c, account, out, payload)
+				cleanedOut, _, _, cleanRelayErr := s.applyOpenAICleanRelayToRawBody(frameCtx, c, account, out, payload)
 				if cleanRelayErr != nil {
 					return out, nil, cleanRelayErr
 				}
 				out = cleanedOut
+				if previousResponseID := strings.TrimSpace(gjson.GetBytes(out, "previous_response_id").String()); previousResponseID != "" {
+					if validateErr := s.ValidateOpenAIWSContinuationAccount(frameCtx, getAPIKeyIDFromContext(c), getOpenAIEffectiveGroupID(c), previousResponseID, account.ID); validateErr != nil {
+						return out, nil, newOpenAIWSContinuationClientCloseError(validateErr)
+					}
+				}
 			}
 			return out, blocked, policyErr
 		},
-		onBlock: func(blocked *OpenAIFastBlockedError) {
+		onBlock: func(frameCtx context.Context, blocked *OpenAIFastBlockedError) {
 			// See note above on Conn.Write being synchronous w.r.t. flush;
 			// no explicit flush is required to ensure the error event lands
 			// before the close frame.
@@ -721,7 +738,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			if eventBytes == nil {
 				return
 			}
-			writeCtx, cancel := context.WithTimeout(ctx, s.openAIWSWriteTimeout())
+			writeCtx, cancel := context.WithTimeout(frameCtx, s.openAIWSWriteTimeout())
 			_ = clientConn.Write(writeCtx, coderws.MessageText, eventBytes)
 			cancel()
 		},
@@ -748,15 +765,18 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		return turnResult
 	}
 	var completedTurnNo atomic.Int32
+	boundResponseOwners := make(map[string]struct{}, 4)
+	ownerBindCtx := openAIWSIngressClientLifecycleContext(ctx, hooks)
 	relayResult, relayExit := openaiwsv2.RunEntry(openaiwsv2.EntryInput{
 		Ctx:                ctx,
 		ClientConn:         policyClientConn,
 		UpstreamConn:       cyberDetectingUpstreamConn,
 		FirstClientMessage: firstClientMessage,
 		Options: openaiwsv2.RelayOptions{
-			WriteTimeout:     s.openAIWSWriteTimeout(),
-			IdleTimeout:      s.openAIWSPassthroughIdleTimeout(),
-			FirstMessageType: coderws.MessageText,
+			WriteTimeout:           s.openAIWSWriteTimeout(),
+			IdleTimeout:            s.openAIWSPassthroughIdleTimeout(),
+			DownstreamWriteContext: ownerBindCtx,
+			FirstMessageType:       coderws.MessageText,
 			OnUsageParseFailure: func(eventType string, usageRaw string) {
 				logOpenAIWSV2Passthrough(
 					"usage_parse_failed event_type=%s usage_raw=%s",
@@ -764,11 +784,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					truncateOpenAIWSLogValue(usageRaw, openAIWSLogValueMaxLen),
 				)
 			},
-			BeforeClientFrame: func(msgType coderws.MessageType, payload []byte) error {
+			BeforeClientFrame: func(frameCtx context.Context, msgType coderws.MessageType, payload []byte) error {
 				if msgType != coderws.MessageText || strings.TrimSpace(gjson.GetBytes(payload, "type").String()) != "response.create" {
 					return nil
 				}
-				if _, beginErr := turnLifecycle.begin(payload); beginErr != nil {
+				if _, beginErr := turnLifecycle.beginWithContext(frameCtx, payload); beginErr != nil {
 					return beginErr
 				}
 				// Update per-turn accounting only after lifecycle acquisition. A
@@ -782,7 +802,54 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				imageBillingConfigStore.Store(resolveOpenAIResponseImageBillingConfigFromBody(openAIResponsesEndpoint, frameModel, payload))
 				return nil
 			},
-			BeforeTerminalFrame: func(turn openaiwsv2.RelayTurnResult) error {
+			BeforeUpstreamFrame: func(frameCtx context.Context, _ coderws.MessageType, payload []byte, responseID string) error {
+				responseID = strings.TrimSpace(responseID)
+				if responseID == "" {
+					return nil
+				}
+				if _, alreadyBound := boundResponseOwners[responseID]; !alreadyBound {
+					if bindErr := s.bindOpenAIWSResponseOwnerBeforeDownstream(
+						frameCtx,
+						c,
+						getOpenAIEffectiveGroupID(c),
+						account.ID,
+						responseID,
+					); bindErr != nil {
+						return NewOpenAIWSClientCloseError(
+							coderws.StatusTryAgainLater,
+							"continuation state is unavailable; please retry",
+							bindErr,
+						)
+					}
+					boundResponseOwners[responseID] = struct{}{}
+					return nil
+				}
+				eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
+				if isOpenAIWSTerminalEvent(eventType) {
+					if refreshErr := s.refreshOpenAIWSResponseOwnerAtTerminal(
+						frameCtx,
+						c,
+						getOpenAIEffectiveGroupID(c),
+						account.ID,
+						responseID,
+					); refreshErr != nil {
+						// 首帧前的 owner bind 仍是必须成功的安全边界；terminal 处只是 TTL 续期。
+						// 续期失败不得吞掉已收到的完成帧，避免客户端误判断流后重放请求。
+						logOpenAIWSV2Passthrough(
+							"terminal_owner_refresh_degraded account_id=%d response_id=%s error=%s",
+							account.ID,
+							truncateOpenAIWSLogValue(responseID, openAIWSIDValueMaxLen),
+							normalizeOpenAIWSLogValue(refreshErr.Error()),
+						)
+					}
+				}
+				return nil
+			},
+			BeforeTerminalFrame: func(_ context.Context, turn openaiwsv2.RelayTurnResult) error {
+				responseID := strings.TrimSpace(turn.RequestID)
+				if _, wasBound := boundResponseOwners[responseID]; responseID != "" && wasBound {
+					delete(boundResponseOwners, responseID)
+				}
 				turnResult := buildCompletedTurnResult(turn)
 				var turnErr error
 				if strings.EqualFold(strings.TrimSpace(turn.TerminalEventType), "response.failed") {
@@ -795,10 +862,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 						strings.TrimSpace(turn.TerminalEventType),
 					)
 				}
-				if hookErr != nil {
-					return hookErr
-				}
 				completedTurnNo.Store(int32(turnNo))
+				if hookErr != nil {
+					// The upstream turn is already terminal and the lifecycle hook has
+					// finalized/released it. Preserve the accounting error, but do not
+					// hide response.completed from the client and trigger an unsafe replay.
+					return openaiwsv2.NewTerminalForwardThenCloseError(hookErr)
+				}
 				return nil
 			},
 			OnTurnComplete: func(turn openaiwsv2.RelayTurnResult) {
